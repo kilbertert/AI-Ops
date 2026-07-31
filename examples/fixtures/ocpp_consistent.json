@@ -1,0 +1,75 @@
+{
+  "orders": [
+    {
+      "id": "ORDER-ID-3",
+      "order_no": "TEST-OCPP-0003",
+      "tenant_id": "TENANT-DEMO",
+      "status": 1,
+      "type": 0,
+      "billing_type": 0,
+      "launch_type": "scan",
+      "is_test": true,
+      "device_id": "DEVICE-ID-3",
+      "device_code": "PILE-DEMO-03",
+      "child_device_id": "GUN-ID-3",
+      "child_device_code": "GUN-DEMO-03",
+      "site_id": "SITE-DEMO",
+      "device_protocol": "OCPP1.6-J",
+      "created_time": "2026-07-31 12:00:00",
+      "stop_time": "2026-07-31 12:30:00",
+      "electricity": "5.000",
+      "electricity_fee": "6.00",
+      "service_fee": "3.00",
+      "ds_electric_fee": "0.00",
+      "ds_service_fee": "0.00",
+      "launch_fee": "0.00",
+      "park_fee": "0.00",
+      "total_amount": "9.00",
+      "pay_amount": "9.00",
+      "is_pay": true,
+      "is_receive_tx_data": true,
+      "stopped_reason_code": "0",
+      "stopped_reason_content": "正常停止",
+      "balance_insufficient_stop": false,
+      "transaction_id": "30003",
+      "meter_start": "100000",
+      "meter_end": "105000",
+      "tx_data": {
+        "txSerialNo": "30003",
+        "meterBeginValue": 100000,
+        "meterEndValue": 105000,
+        "electricityQuantity": 5.0,
+        "totalFee": 0.0,
+        "stoppedReasonCode": "0",
+        "stoppedReasonContent": "正常停止"
+      }
+    }
+  ],
+  "fee_template_records": {
+    "TEST-OCPP-0003": {
+      "order_no": "TEST-OCPP-0003",
+      "tenant_id": "TENANT-DEMO",
+      "fee_template": {"name": "synthetic"},
+      "period_fee_detail": [{"type": "flat", "electricity": 5.0}]
+    }
+  },
+  "devices": [
+    {
+      "id": "DEVICE-ID-3",
+      "device_code": "PILE-DEMO-03",
+      "protocol": "OCPP1.6-J",
+      "online_status": 1,
+      "status": 1,
+      "work_status": 0,
+      "error_reason": null
+    }
+  ],
+  "gun_samples": [
+    {"_ts": "2026-07-31 12:00:00.000", "status": 3, "isInsert": 1, "power": 10.0, "errorCode": "0"},
+    {"_ts": "2026-07-31 12:30:00.000", "status": 2, "isInsert": 0, "power": 0.0, "errorCode": "0"}
+  ],
+  "comm_messages": [
+    {"_ts": "2026-07-31 12:30:00.000", "direction": 2, "code": "Stop", "decoded": "transaction ended"}
+  ],
+  "streams": []
+}
