@@ -16,9 +16,9 @@ from typing import ClassVar
 from urllib.parse import urlsplit
 
 GUN_COLUMNS = (
-    "_ts, txSerialNo, status, isReturn, isInsert, outputVoltage, outputCurrent, power, "
-    "chargingTime, chargingElectricityQuantity, soc, temperature, batteryMaxTemperature, "
-    "batteryMinTemperature, errorCode, errorReason, meterNow"
+    "_ts, `txSerialNo`, status, `isReturn`, `isInsert`, `outputVoltage`, `outputCurrent`, power, "
+    "`chargingTime`, `chargingElectricityQuantity`, soc, temperature, `batteryMaxTemperature`, "
+    "`batteryMinTemperature`, `errorCode`, `errorReason`, `meterNow`"
 )
 COMM_COLUMNS = "_ts, direction, code, decoded"
 SAFE_VALUE = r"[A-Za-z0-9_.:-]{1,128}"
@@ -28,7 +28,7 @@ GUN_QUERY = re.compile(
     rf"^SELECT {re.escape(GUN_COLUMNS)} FROM `charging-gun_property` "
     rf"WHERE device='(?P<device>{SAFE_VALUE})' AND _ts>='(?P<start>{TIME_VALUE})' "
     rf"AND _ts<='(?P<end>{TIME_VALUE})'"
-    rf"(?: AND txSerialNo='(?P<tx>{SAFE_VALUE})')? ORDER BY _ts ASC LIMIT (?P<limit>\d+)$"
+    rf"(?: AND `txSerialNo`='(?P<tx>{SAFE_VALUE})')? ORDER BY _ts ASC LIMIT (?P<limit>\d+)$"
 )
 COMM_QUERY = re.compile(
     rf"^SELECT {re.escape(COMM_COLUMNS)} FROM `charging-pile_comm` "

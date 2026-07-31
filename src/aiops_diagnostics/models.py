@@ -50,6 +50,7 @@ class DiagnosticReport:
     next_steps: list[str] = field(default_factory=list)
     limitations: list[str] = field(default_factory=list)
     queried_sources: list[str] = field(default_factory=list)
+    failed_sources: list[str] = field(default_factory=list)
     generated_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
 
     def to_dict(self) -> dict[str, Any]:

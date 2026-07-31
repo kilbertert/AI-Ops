@@ -1,7 +1,15 @@
+from datetime import datetime
+
 import pytest
 
 from aiops_diagnostics.config import Settings
-from aiops_diagnostics.sources import MySQLSource, TDengineSource, _safe_identifier, _safe_literal
+from aiops_diagnostics.sources import (
+    MySQLSource,
+    RedisSource,
+    TDengineSource,
+    _safe_identifier,
+    _safe_literal,
+)
 
 
 def test_tdengine_literal_rejects_injection_characters() -> None:
@@ -79,8 +87,6 @@ def test_tdengine_query_is_bounded_by_device_time_and_limit() -> None:
     captured = []
     source._query = lambda sql: captured.append(sql) or []  # type: ignore[method-assign]
 
-    from datetime import datetime
-
     source.get_gun_samples(
         "GUN-01",
         datetime.fromisoformat("2026-07-31 10:00:00"),
@@ -90,7 +96,8 @@ def test_tdengine_query_is_bounded_by_device_time_and_limit() -> None:
 
     sql = captured[0]
     assert "device='GUN-01'" in sql
-    assert "txSerialNo='TX-01'" in sql
+    assert "`txSerialNo`='TX-01'" in sql
+    assert "`batteryMaxTemperature`" in sql
     assert "_ts>='2026-07-31 10:00:00.000'" in sql
     assert "LIMIT 2000" in sql
 
@@ -120,3 +127,33 @@ def test_mysql_doctor_rejects_all_privileges(monkeypatch) -> None:
 
     assert details["read_only"] is False
     assert details["unsafe_privileges"] == ["ALL PRIVILEGES", "GRANT OPTION"]
+
+
+class _BinaryRedisClient:
+    def type(self, stream):
+        return b"stream" if stream == b"third.order.sync.queue" else b"none"
+
+    def xinfo_groups(self, stream):
+        return [{b"name": b"mall", b"consumers": 1, b"pending": 4, b"lag": 2}]
+
+    def xrevrange(self, stream, count):
+        return [(b"1-0", {b"payload": b"\x80binary TEST-ORDER-1234\xff"})]
+
+    def xlen(self, stream):
+        return 1
+
+    def close(self):
+        return None
+
+
+def test_redis_stream_inspection_handles_binary_values(monkeypatch) -> None:
+    settings = Settings.from_env()
+    settings.redis.password = "secret"
+    source = RedisSource(settings)
+    monkeypatch.setattr(source, "_client", lambda: _BinaryRedisClient())
+
+    result = source.inspect_streams("TEST-ORDER-1234")
+
+    assert result[0]["matches"] == 1
+    assert result[0]["groups"][0]["name"] == "mall"
+    assert result[1]["type"] == "none"

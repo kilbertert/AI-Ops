@@ -30,27 +30,50 @@ class DiagnosticEngine:
             report.next_steps.append("确认订单号、环境和租户范围是否正确")
             return report
         if len(orders) > 1:
-            report.summary = "同一订单号匹配到多条记录，必须指定 tenant_id 后才能继续"
-            report.classifications.append("ambiguous_order")
+            tenant_count = len({item.get("tenant_id") for item in orders})
+            cross_tenant = tenant_count > 1
+            report.summary = (
+                "同一订单号跨租户匹配到多条记录，必须指定 tenant_id 后才能继续"
+                if cross_tenant
+                else "同一租户内存在重复订单记录，无法可靠选择诊断对象"
+            )
+            report.classifications.append("ambiguous_order" if cross_tenant else "duplicate_order_record")
             report.evidence.append(
                 Evidence(
                     source="mysql",
                     title="订单号不唯一",
                     observation=f"命中 {len(orders)} 条记录",
                     severity=Severity.CRITICAL,
-                    facts={"tenant_count": len({item.get("tenant_id") for item in orders})},
+                    facts={"row_count": len(orders), "tenant_count": tenant_count},
                 )
             )
-            report.next_steps.append("使用 --tenant-id 限定租户，避免跨租户误诊")
+            report.next_steps.append(
+                "使用 --tenant-id 限定租户，避免跨租户误诊"
+                if cross_tenant
+                else "核对重复记录的主键、创建时间和数据来源，确认唯一有效订单"
+            )
             return report
 
         order = orders[0]
+        two_wheel = _to_int(order.get("type")) == 1
+        operator_order = _is_operator_order(order)
         report.order_facts = _public_order_facts(order)
         self._analyze_status(order, report)
-        tx_data, tx_serial_no = self._analyze_transaction(order, report)
-        self._inspect_fee_snapshot(order, report)
+        tx_data, tx_serial_no = self._analyze_transaction(order, report, analyze_amounts=not two_wheel)
+        if two_wheel:
+            _append_once(report.classifications, "unsupported_order_type")
+            report.evidence.append(
+                Evidence(
+                    source="business_rules",
+                    title="订单车型支持范围",
+                    observation="当前版本尚未实现两轮车结束事件和计费规则，仅保留通用只读证据",
+                    severity=Severity.WARNING,
+                )
+            )
+        elif not operator_order:
+            self._inspect_fee_snapshot(order, report)
         self._inspect_device(order, report)
-        self._inspect_tdengine(order, tx_serial_no, report)
+        self._inspect_tdengine(order, tx_serial_no, report, inspect_gun=not two_wheel)
         self._inspect_redis(order, report)
         self._finalize(order, tx_data, report)
         return report
@@ -119,6 +142,23 @@ class DiagnosticEngine:
         if stop.abnormal:
             _append_once(report.classifications, stop.classification)
 
+        inconsistent = (status == 5 and stop.abnormal is False) or (status == 1 and stop.abnormal is True)
+        if inconsistent:
+            _append_once(report.classifications, "status_stop_reason_inconsistent")
+            report.evidence.append(
+                Evidence(
+                    source="mysql+business_rules",
+                    title="状态与停止原因一致性",
+                    observation="订单状态与协议停止原因的正常/异常含义不一致",
+                    severity=Severity.WARNING,
+                    facts={
+                        "status": status,
+                        "stop_reason_abnormal": stop.abnormal,
+                        "stop_classification": stop.classification,
+                    },
+                )
+            )
+
         if _to_bool(order.get("balance_insufficient_stop")):
             _append_once(report.classifications, "balance_insufficient")
             report.evidence.append(
@@ -131,22 +171,35 @@ class DiagnosticEngine:
             )
 
     def _analyze_transaction(
-        self, order: dict[str, Any], report: DiagnosticReport
+        self,
+        order: dict[str, Any],
+        report: DiagnosticReport,
+        *,
+        analyze_amounts: bool = True,
     ) -> tuple[dict[str, Any] | None, str | None]:
         tx_data = _json_object(order.get("tx_data"))
         received = _to_bool(order.get("is_receive_tx_data"))
-        if not received:
-            report.classifications.append("missing_tx_data")
+        status = _to_int(order.get("status"))
+        if tx_data is not None:
+            severity = Severity.INFO
+            observation = "设备交易数据已入库"
+            if not received:
+                _append_once(report.classifications, "tx_receive_flag_inconsistent")
+                severity = Severity.WARNING
+                observation = "tx_data 已入库，但 is_receive_tx_data=0，字段状态不一致"
             report.evidence.append(
                 Evidence(
                     source="mysql",
                     title="交易结束数据",
-                    observation="is_receive_tx_data=0，平台未确认收到设备交易数据",
-                    severity=Severity.CRITICAL,
+                    observation=observation,
+                    severity=severity,
+                    facts={"field_count": len(tx_data), "receive_flag": received},
                 )
             )
-        elif tx_data is None:
-            report.classifications.append("tx_data_inconsistent")
+            if analyze_amounts:
+                self._check_amounts(order, tx_data, report)
+        elif received:
+            _append_once(report.classifications, "tx_data_inconsistent")
             report.evidence.append(
                 Evidence(
                     source="mysql",
@@ -155,22 +208,37 @@ class DiagnosticEngine:
                     severity=Severity.CRITICAL,
                 )
             )
-        else:
+        elif status == 0:
             report.evidence.append(
                 Evidence(
                     source="mysql",
                     title="交易结束数据",
-                    observation="设备交易数据已入库",
-                    facts={"field_count": len(tx_data)},
+                    observation="订单仍在充电中，尚未收到结束交易数据属于预期状态",
+                    facts={"receive_flag": received},
                 )
             )
-            self._check_amounts(order, tx_data, report)
+        else:
+            _append_once(report.classifications, "missing_tx_data")
+            report.evidence.append(
+                Evidence(
+                    source="mysql",
+                    title="交易结束数据",
+                    observation="订单已非充电中，但平台未保存设备交易结束数据",
+                    severity=Severity.CRITICAL,
+                    facts={"receive_flag": received},
+                )
+            )
 
-        tx_serial_no = None
-        if tx_data:
-            tx_serial_no = _clean_string(tx_data.get("txSerialNo"))
-        if not tx_serial_no:
+        protocol = str(order.get("device_protocol") or "").upper()
+        if protocol.startswith("OCPP"):
             tx_serial_no = _clean_string(order.get("transaction_id"))
+            serial_source = "transaction_id"
+            if not tx_serial_no and tx_data:
+                tx_serial_no = _clean_string(tx_data.get("txSerialNo"))
+                serial_source = "tx_data.txSerialNo"
+        else:
+            tx_serial_no = _clean_string(order.get("order_no"))
+            serial_source = "order_no"
         report.evidence.append(
             Evidence(
                 source="mysql",
@@ -179,11 +247,7 @@ class DiagnosticEngine:
                 if tx_serial_no
                 else "未取得流水号，将仅按设备和时间查询",
                 severity=Severity.INFO if tx_serial_no else Severity.WARNING,
-                facts={
-                    "source": "tx_data.txSerialNo"
-                    if tx_data and tx_data.get("txSerialNo")
-                    else "transaction_id_or_none"
-                },
+                facts={"source": serial_source if tx_serial_no else "none"},
             )
         )
         return tx_data, tx_serial_no
@@ -206,11 +270,12 @@ class DiagnosticEngine:
             if value is not None and value < 0:
                 negative_fields.append(field)
 
+        operator_order = _is_operator_order(order)
         protocol = str(order.get("device_protocol") or "")
         server_billing = is_server_billing(protocol)
         order_energy = _decimal(order.get("electricity"))
         tx_energy = _decimal(tx_data.get("electricityQuantity"))
-        if tx_energy is None and not server_billing:
+        if tx_energy is None and (operator_order or not server_billing):
             missing_fields.append("electricityQuantity")
         if not _near(order_energy, tx_energy, ENERGY_TOLERANCE):
             mismatches.append("设备总电量与订单电量不一致")
@@ -224,7 +289,16 @@ class DiagnosticEngine:
             for field in ("tipFee", "peakFee", "flatFee", "valleyFee")
         )
 
-        if not server_billing and tx_total is not None:
+        if operator_order:
+            stored_total = _decimal(order.get("total_amount"))
+            if tx_total is None:
+                missing_fields.append("totalFee")
+            if stored_total is None:
+                missing_fields.append("total_amount")
+            if not _near(tx_total, stored_total, AMOUNT_TOLERANCE):
+                mismatches.append("运维订单 total_amount 与设备 totalFee 不一致")
+            expected_total = tx_total
+        elif not server_billing and tx_total is not None:
             if not _near(tx_total, platform_core_fee, AMOUNT_TOLERANCE):
                 mismatches.append("桩上报总费用与平台电费加服务费不一致")
             if period_total and not _near(tx_total, period_total, AMOUNT_TOLERANCE):
@@ -234,28 +308,36 @@ class DiagnosticEngine:
         elif not server_billing:
             missing_fields.append("totalFee")
 
-        expected_total = sum(
-            (_decimal(order.get(field)) or Decimal(0))
-            for field in (
-                "electricity_fee",
-                "service_fee",
-                "launch_fee",
-                "park_fee",
-                "ds_electric_fee",
-                "ds_service_fee",
-            )
-        ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
-        stored_total = _decimal(order.get("total_amount"))
-        if stored_total is not None and not _near(expected_total, stored_total, AMOUNT_TOLERANCE):
-            mismatches.append("订单 total_amount 与源码 collectFee 汇总公式不一致")
+        if not operator_order:
+            expected_total = sum(
+                (_decimal(order.get(field)) or Decimal(0))
+                for field in (
+                    "electricity_fee",
+                    "service_fee",
+                    "launch_fee",
+                    "park_fee",
+                    "ds_electric_fee",
+                    "ds_service_fee",
+                )
+            ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            stored_total = _decimal(order.get("total_amount"))
+            if stored_total is None:
+                missing_fields.append("total_amount")
+            elif not _near(expected_total, stored_total, AMOUNT_TOLERANCE):
+                mismatches.append("订单 total_amount 与源码 collectFee 汇总公式不一致")
 
-        if server_billing:
+        if server_billing and not operator_order:
             meter_start = _decimal(order.get("meter_start"))
-            meter_end = _decimal(order.get("meter_end")) or _decimal(tx_data.get("meterEndValue"))
-            if meter_start is not None and meter_end is not None and meter_end >= meter_start:
-                meter_energy = (meter_end - meter_start) / Decimal(1000)
-                if not _near(meter_energy, order_energy, Decimal("0.02")):
-                    mismatches.append("服务端计费电表差值与订单电量不一致")
+            meter_end = _decimal(order.get("meter_end"))
+            if meter_end is None:
+                meter_end = _decimal(tx_data.get("meterEndValue"))
+            if meter_start is not None and meter_end is not None:
+                if meter_end < meter_start:
+                    mismatches.append("服务端计费结束电表值小于开始电表值")
+                else:
+                    meter_energy = (meter_end - meter_start) / Decimal(1000)
+                    if not _near(meter_energy, order_energy, Decimal("0.02")):
+                        mismatches.append("服务端计费电表差值与订单电量不一致")
             elif tx_energy is None:
                 missing_fields.append("electricityQuantity_or_meter_values")
 
@@ -279,7 +361,9 @@ class DiagnosticEngine:
                 ),
                 severity=severity,
                 facts={
-                    "billing_side": "server" if server_billing else "pile",
+                    "billing_side": (
+                        "operator" if operator_order else "server" if server_billing else "pile"
+                    ),
                     "negative_fields": negative_fields,
                     "missing_fields": missing_fields,
                     "expected_total_amount": expected_total,
@@ -292,7 +376,7 @@ class DiagnosticEngine:
             record = self.sources.get_fee_template_record(report.request.order_no, report.request.tenant_id)
             report.queried_sources.append("mysql:ch_fee_template_record")
         except SourceError as exc:
-            report.limitations.append(str(exc))
+            _record_source_failure(report, "mysql:ch_fee_template_record", exc)
             return
         if record:
             report.evidence.append(
@@ -323,7 +407,7 @@ class DiagnosticEngine:
             )
             report.queried_sources.append("mysql:iot_charging_device")
         except SourceError as exc:
-            report.limitations.append(str(exc))
+            _record_source_failure(report, "mysql:iot_charging_device", exc)
             return
         if not device:
             report.evidence.append(
@@ -352,7 +436,12 @@ class DiagnosticEngine:
         )
 
     def _inspect_tdengine(
-        self, order: dict[str, Any], tx_serial_no: str | None, report: DiagnosticReport
+        self,
+        order: dict[str, Any],
+        tx_serial_no: str | None,
+        report: DiagnosticReport,
+        *,
+        inspect_gun: bool = True,
     ) -> None:
         window = _order_window(order, self.safety.max_order_window_hours)
         if not window:
@@ -365,15 +454,17 @@ class DiagnosticEngine:
             )
 
         child_device = _clean_string(order.get("child_device_code"))
-        if child_device:
+        if inspect_gun and child_device:
             try:
                 samples = self.sources.get_gun_samples(child_device, start_time, end_time, tx_serial_no)
                 report.queried_sources.append("tdengine:charging-gun_property")
                 self._analyze_gun_samples(samples, report)
             except (SourceError, ValueError) as exc:
-                report.limitations.append(str(exc))
-        else:
+                _record_source_failure(report, "tdengine:charging-gun_property", exc)
+        elif inspect_gun:
             report.limitations.append("订单缺少 child_device_code，未查询枪时序")
+        else:
+            report.limitations.append("两轮车不适用四轮充电枪时序查询")
 
         device = _clean_string(order.get("device_code"))
         if device:
@@ -382,7 +473,7 @@ class DiagnosticEngine:
                 report.queried_sources.append("tdengine:charging-pile_comm")
                 self._analyze_comm(messages, report)
             except (SourceError, ValueError) as exc:
-                report.limitations.append(str(exc))
+                _record_source_failure(report, "tdengine:charging-pile_comm", exc)
         else:
             report.limitations.append("订单缺少 device_code，未查询通讯报文")
 
@@ -485,7 +576,7 @@ class DiagnosticEngine:
             streams = self.sources.inspect_streams(report.request.order_no)
             report.queried_sources.append("redis:order_sync_streams")
         except SourceError as exc:
-            report.limitations.append(str(exc))
+            _record_source_failure(report, "redis:order_sync_streams", exc)
             return
         for stream in streams:
             matches = int(stream.get("matches") or 0)
@@ -496,8 +587,8 @@ class DiagnosticEngine:
                     source="redis",
                     title=f"订单同步 Stream: {stream.get('stream')}",
                     observation=(
-                        f"最近受限范围内命中订单 {matches} 次，消费组 pending={pending}；"
-                        "Stream 保留消息，命中不等于仍未消费"
+                        f"最近受限范围内命中订单 {matches} 次，消费组全局 pending={pending}；"
+                        "pending 属于整个消费组，不能据此认定当前订单仍待消费"
                     ),
                     severity=severity,
                     facts={
@@ -508,8 +599,10 @@ class DiagnosticEngine:
                     },
                 )
             )
+            if matches:
+                _append_once(report.classifications, "sync_message_observed")
             if pending:
-                _append_once(report.classifications, "sync_pending")
+                _append_once(report.classifications, "stream_backlog_observed")
         if report.request.intent == Intent.SYNC and not any(
             int(item.get("matches") or 0) for item in streams
         ):
@@ -521,14 +614,16 @@ class DiagnosticEngine:
         self, order: dict[str, Any], tx_data: dict[str, Any] | None, report: DiagnosticReport
     ) -> None:
         priority = [
+            "unsupported_order_type",
             "missing_tx_data",
             "uncontrollable_exception",
+            "status_stop_reason_inconsistent",
             "controlled_abnormal_end",
             "start_failure",
             "amount_inconsistent",
             "communication_missing",
             "device_error_reported",
-            "sync_pending",
+            "sync_message_observed",
             "transaction_data_incomplete",
         ]
         if report.request.intent == Intent.AMOUNT:
@@ -536,17 +631,19 @@ class DiagnosticEngine:
         elif report.request.intent == Intent.START_FAILURE:
             priority = ["start_failure", "missing_tx_data", *priority]
         elif report.request.intent == Intent.SYNC:
-            priority = ["sync_pending", *priority]
+            priority = ["sync_message_observed", *priority]
         primary = next((item for item in priority if item in report.classifications), None)
         summaries = {
+            "unsupported_order_type": "当前版本尚未实现两轮车专项诊断规则，本报告只能提供通用只读证据",
             "missing_tx_data": "平台未确认收到设备交易结束数据，优先沿通讯和设备上报链路排查",
             "uncontrollable_exception": "订单属于不可控异常，需结合时序和通讯证据判断断网、离线或断电",
+            "status_stop_reason_inconsistent": "订单状态与协议停止原因不一致，需要核对结束事件处理链路",
             "controlled_abnormal_end": "设备已上报结束事件，但停止原因被业务代码判定为异常结束",
             "start_failure": "订单停止原因指向启动失败",
             "amount_inconsistent": "订单金额或电量在设备上报与平台结果之间存在不一致",
             "communication_missing": "订单时间范围内未发现设备通讯报文",
             "device_error_reported": "充电枪时序记录了设备故障码",
-            "sync_pending": "Redis 消费组存在待确认的订单同步消息",
+            "sync_message_observed": "Redis 最近保留消息中发现该订单，但仅凭 Stream 快照不能确认消费结果",
             "transaction_data_incomplete": "设备交易数据字段不完整，无法完成全部金额和电量核对",
         }
         report.summary = summaries.get(primary, "全链路只读检查未发现可由现有规则确认的明显异常")
@@ -569,6 +666,16 @@ class DiagnosticEngine:
         elif source_coverage >= 1:
             report.confidence = "medium"
         else:
+            report.confidence = "low"
+        if report.confidence == "high" and (
+            report.limitations
+            or report.failed_sources
+            or (report.request.intent == Intent.AMOUNT and "fee_snapshot_missing" in report.classifications)
+        ):
+            report.confidence = "medium"
+        if "unsupported_order_type" in report.classifications or (
+            report.request.intent == Intent.SYNC and "redis:order_sync_streams" in report.failed_sources
+        ):
             report.confidence = "low"
 
         if "missing_tx_data" in report.classifications:
@@ -650,7 +757,8 @@ def _decimal(value: Any) -> Decimal | None:
     if value in (None, ""):
         return None
     try:
-        return Decimal(str(value))
+        result = Decimal(str(value))
+        return result if result.is_finite() else None
     except (InvalidOperation, ValueError):
         return None
 
@@ -659,6 +767,15 @@ def _near(left: Decimal | None, right: Decimal | None, tolerance: Decimal) -> bo
     if left is None or right is None:
         return True
     return abs(left - right) <= tolerance
+
+
+def _is_operator_order(order: dict[str, Any]) -> bool:
+    return str(order.get("launch_type") or "").lower() == "operator"
+
+
+def _record_source_failure(report: DiagnosticReport, source: str, error: Exception) -> None:
+    _append_once(report.failed_sources, source)
+    report.limitations.append(str(error))
 
 
 def _to_bool(value: Any) -> bool:

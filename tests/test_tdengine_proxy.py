@@ -59,6 +59,23 @@ def test_runtime_queries_match_proxy_allowlist() -> None:
     assert all(is_allowed_sql(query, proxy) for query in queries)
 
 
+def test_gun_query_quotes_case_sensitive_tdengine_columns() -> None:
+    settings = Settings.from_env()
+    source = TDengineSource(settings)
+    queries = []
+    source._query = lambda sql: queries.append(sql) or []  # type: ignore[method-assign]
+
+    source.get_gun_samples(
+        "GUN-01",
+        datetime.fromisoformat("2026-07-31 10:00:00"),
+        datetime.fromisoformat("2026-07-31 10:30:00"),
+        "TX-01",
+    )
+
+    assert "`txSerialNo`" in queries[0]
+    assert "`errorReason`" in queries[0]
+
+
 @pytest.mark.parametrize(
     "sql",
     [

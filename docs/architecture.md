@@ -22,11 +22,15 @@ The language-facing layer only extracts the order number and problem intent. It 
 The initial rules were derived from the supplied backend snapshot:
 
 - Order status: `CommonConstant` and `ChOrderInfo` define status 2 as uncontrollable exception, 3 as handled exception, and 5 as a reported but abnormal end.
-- Transaction matching: OCPP orders use `transaction_id`; most other protocols use the order number, while the final TDengine correlation value is taken from `tx_data.txSerialNo` when present.
+- Transaction matching: OCPP orders use `transaction_id`; AYK, YKC, and other non-OCPP protocols use the order number, matching the backend event lookup path.
 - Billing side: `FourPriceComputeComponent` uses server billing for OCPP and AYK, and pile billing for other protocols.
+- Operator orders: `launch_type=operator` bypasses the standard stop-charging billing flow. Their stored total is checked directly against `tx_data.totalFee`; fee-template and standard settlement checks do not apply.
 - Pile billing: platform electricity fee is calculated from period electricity and the fee template; service fee is `max(tx_data.totalFee - electricity_fee, 0)`.
 - Total amount: `ChOrderInfo.collectFee()` sums electricity fee, service fee, launch fee, park fee, electric-loss electricity fee, and electric-loss service fee.
 - YKC abnormal end: codes 64-73 are treated as normal end; other reported codes are generally marked status 5.
+- Transaction completeness: parseable `tx_data` is treated as received evidence even when the separate receive flag disagrees. Charging orders do not require end data before they finish.
+- Two-wheel orders: the current release reports them as unsupported and keeps confidence low instead of applying four-wheel billing or gun-timeseries rules.
+- Confidence: failed or skipped evidence sources and missing amount snapshots cap confidence rather than allowing a partial evidence chain to report high certainty.
 
 ## Deployment Boundary
 

@@ -17,7 +17,7 @@ The runtime extracts the order number and intent, executes bounded queries again
 - Credentials come only from environment variables and are always redacted from output.
 - Reports omit user IDs, VINs, card numbers, plate numbers, and raw protocol payloads.
 
-The production service account discovered during inventory is over-privileged and must not be used by this runtime. Create dedicated MySQL, Redis, and SSH identities before production use. TDengine Community Edition requires the strict loopback-only query proxy described in `ops/` because it cannot grant a database-level read-only role.
+The production service account discovered during inventory is over-privileged and is not used by this runtime. The verified deployment uses dedicated MySQL, Redis, and SSH identities. TDengine Community Edition requires the strict loopback-only query proxy described in `ops/` because it cannot grant a database-level read-only role.
 
 ## Commands
 
@@ -70,4 +70,4 @@ The backend snapshot is deliberately ignored by this repository. It remains a re
 
 ## Known Validation Gap
 
-There are currently no human-verified incident orders. Automated tests use synthetic fixtures, so production accuracy cannot be accepted until several real orders and their confirmed conclusions pass end-to-end comparison.
+There are currently no human-verified incident conclusions. Automated tests and bounded production replays verify implementation consistency, but production accuracy cannot be accepted until several real incidents and their engineer-confirmed conclusions pass end-to-end comparison. Two-wheel charging remains explicitly unsupported in the first release.

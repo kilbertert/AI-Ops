@@ -226,12 +226,12 @@ class TDengineSource:
         tx_serial_no: str | None,
     ) -> list[dict[str, Any]]:
         device_literal = _safe_literal(device)
-        tx_filter = f" AND txSerialNo='{_safe_literal(tx_serial_no)}'" if tx_serial_no else ""
+        tx_filter = f" AND `txSerialNo`='{_safe_literal(tx_serial_no)}'" if tx_serial_no else ""
         limit = int(self.settings.safety.tdengine_max_rows)
         sql = (
-            "SELECT _ts, txSerialNo, status, isReturn, isInsert, outputVoltage, outputCurrent, power, "
-            "chargingTime, chargingElectricityQuantity, soc, temperature, batteryMaxTemperature, "
-            "batteryMinTemperature, errorCode, errorReason, meterNow "
+            "SELECT _ts, `txSerialNo`, status, `isReturn`, `isInsert`, `outputVoltage`, "
+            "`outputCurrent`, power, `chargingTime`, `chargingElectricityQuantity`, soc, temperature, "
+            "`batteryMaxTemperature`, `batteryMinTemperature`, `errorCode`, `errorReason`, `meterNow` "
             "FROM `charging-gun_property` "
             f"WHERE device='{device_literal}' AND _ts>='{_format_time(start_time)}' "
             f"AND _ts<='{_format_time(end_time)}'{tx_filter} ORDER BY _ts ASC LIMIT {limit}"
@@ -281,7 +281,7 @@ class RedisSource:
             password=cfg.password,
             socket_connect_timeout=self.settings.safety.query_timeout_seconds,
             socket_timeout=self.settings.safety.query_timeout_seconds,
-            decode_responses=True,
+            decode_responses=False,
         )
 
     def inspect_streams(self, order_no: str) -> list[dict[str, Any]]:
@@ -289,26 +289,27 @@ class RedisSource:
         results: list[dict[str, Any]] = []
         try:
             for stream in self.STREAMS:
-                stream_type = client.type(stream)
+                stream_key = stream.encode("utf-8")
+                stream_type = _decode_text(client.type(stream_key))
                 if stream_type != "stream":
                     results.append(
                         {"stream": stream, "type": stream_type, "length": 0, "groups": [], "matches": 0}
                     )
                     continue
-                groups = client.xinfo_groups(stream)
-                messages = client.xrevrange(stream, count=self.settings.safety.redis_max_messages)
-                matches = sum(order_no in json.dumps(fields, ensure_ascii=False) for _, fields in messages)
+                groups = client.xinfo_groups(stream_key)
+                messages = client.xrevrange(stream_key, count=self.settings.safety.redis_max_messages)
+                matches = sum(_stream_fields_contain(fields, order_no) for _, fields in messages)
                 results.append(
                     {
                         "stream": stream,
                         "type": stream_type,
-                        "length": client.xlen(stream),
+                        "length": client.xlen(stream_key),
                         "groups": [
                             {
-                                "name": group.get("name"),
-                                "consumers": group.get("consumers"),
-                                "pending": group.get("pending"),
-                                "lag": group.get("lag"),
+                                "name": _decode_text(_mapping_get(group, "name")),
+                                "consumers": _mapping_get(group, "consumers"),
+                                "pending": _mapping_get(group, "pending"),
+                                "lag": _mapping_get(group, "lag"),
                             }
                             for group in groups
                         ],
@@ -328,8 +329,8 @@ class RedisSource:
             info = client.info("server")
             return {
                 "ping": client.ping(),
-                "version": info.get("redis_version"),
-                "mode": info.get("redis_mode"),
+                "version": _decode_text(_mapping_get(info, "redis_version")),
+                "mode": _decode_text(_mapping_get(info, "redis_mode")),
                 "database": self.settings.redis.database,
             }
         except Exception as exc:
@@ -543,3 +544,25 @@ def _normalize_row(row: dict[str, Any] | None) -> dict[str, Any]:
                 value = json.loads(value)
         normalized[str(key)] = value
     return normalized
+
+
+def _mapping_get(mapping: dict[Any, Any], key: str) -> Any:
+    return mapping.get(key, mapping.get(key.encode("utf-8")))
+
+
+def _decode_text(value: Any) -> Any:
+    if isinstance(value, (bytes, bytearray)):
+        return bytes(value).decode("utf-8", errors="replace")
+    return value
+
+
+def _stream_fields_contain(fields: dict[Any, Any], token: str) -> bool:
+    token_bytes = token.encode("utf-8")
+    for key, value in fields.items():
+        for candidate in (key, value):
+            if isinstance(candidate, (bytes, bytearray)):
+                if token_bytes in bytes(candidate):
+                    return True
+            elif token in str(candidate):
+                return True
+    return False
