@@ -32,9 +32,15 @@ The initial rules were derived from the supplied backend snapshot:
 
 The project can run directly on a permission-scoped diagnostics host or through OpenSSH local forwarding. SSH password automation is intentionally unsupported; production should use a dedicated account and key with restricted forwarding destinations.
 
+TDengine Community Edition 3.4 does not implement `GRANT READ`, and a non-superuser can write to an
+existing database. Production therefore routes TDengine requests through the loopback-only proxy in
+`ops/`. The proxy recognizes only the exact bounded queries emitted by `TDengineSource`; the SSH account
+cannot forward directly to TDengine's native REST port.
+
 ## Required Production Identities
 
 - MySQL account: SELECT only on explicit diagnostic tables and views.
-- TDengine account: read access only to the `iot` database.
+- TDengine proxy backend account: localhost only, with `CREATEDB 0` and `SYSINFO 0`; its write-capable
+  credential is held only by the strict read-only proxy because Community Edition lacks database grants.
 - Redis account: read-only ACL limited to the two order synchronization streams and required metadata commands.
 - SSH account: no shell administration rights; port forwarding limited to approved database endpoints.

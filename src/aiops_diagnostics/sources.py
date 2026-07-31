@@ -174,7 +174,7 @@ class MySQLSource:
     def doctor(self) -> dict[str, Any]:
         with self._cursor() as cursor:
             cursor.execute(
-                "SELECT VERSION() AS version, CURRENT_USER() AS current_user, @@time_zone AS time_zone"
+                "SELECT VERSION() AS version, CURRENT_USER() AS `current_user`, @@time_zone AS time_zone"
             )
             details = _normalize_row(cursor.fetchone())
             cursor.execute("SHOW GRANTS FOR CURRENT_USER()")

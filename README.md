@@ -17,7 +17,7 @@ The runtime extracts the order number and intent, executes bounded queries again
 - Credentials come only from environment variables and are always redacted from output.
 - Reports omit user IDs, VINs, card numbers, plate numbers, and raw protocol payloads.
 
-The production service account discovered during inventory is over-privileged and must not be used by this runtime. Create dedicated read-only MySQL, TDengine, Redis, and SSH identities before production use.
+The production service account discovered during inventory is over-privileged and must not be used by this runtime. Create dedicated MySQL, Redis, and SSH identities before production use. TDengine Community Edition requires the strict loopback-only query proxy described in `ops/` because it cannot grant a database-level read-only role.
 
 ## Commands
 
@@ -36,6 +36,9 @@ uv run aiops diagnose "订单 TEST-YKC-0001 金额异常" --fixture examples/fix
 Check live data-source connectivity without reading an order:
 
 ```bash
+set -a
+source /path/to/production.env
+set +a
 uv run aiops doctor
 ```
 

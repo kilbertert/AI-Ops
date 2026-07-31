@@ -9,7 +9,7 @@ description = "Read-only charging order diagnostic runtime"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-  "pymysql>=1.1.1,<2",
+  "pymysql[rsa]>=1.1.1,<2",
   "redis>=5.2,<7",
   "rich>=13.9,<15",
   "typer>=0.15,<1",
@@ -17,6 +17,7 @@ dependencies = [
 
 [project.scripts]
 aiops = "aiops_diagnostics.cli:app"
+aiops-tdengine-proxy = "aiops_diagnostics.tdengine_proxy:main"
 
 [dependency-groups]
 dev = [

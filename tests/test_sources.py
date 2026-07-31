@@ -104,6 +104,7 @@ def test_mysql_doctor_detects_write_privileges(monkeypatch) -> None:
 
     details = MySQLSource(settings).doctor()
 
+    assert "CURRENT_USER() AS `current_user`" in connection.fake_cursor.calls[2][0]
     assert details["read_only"] is False
     assert details["unsafe_privileges"] == ["UPDATE"]
 

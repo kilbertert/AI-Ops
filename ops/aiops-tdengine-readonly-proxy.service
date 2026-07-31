@@ -1,0 +1,35 @@
+[Unit]
+Description=AI-Ops TDengine read-only query proxy
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aiopsdiagproxy
+Group=aiopsdiagproxy
+EnvironmentFile=/etc/aiops-diagnostics/tdengine-proxy.env
+ExecStart=/usr/local/bin/python3 /usr/local/libexec/aiops_tdengine_proxy.py
+Restart=on-failure
+RestartSec=2
+TimeoutStopSec=5
+TasksMax=64
+MemoryMax=192M
+UMask=0077
+NoNewPrivileges=true
+PrivateDevices=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelModules=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target
