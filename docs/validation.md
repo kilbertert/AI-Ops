@@ -60,7 +60,20 @@
 - Windows stdout/stderr UTF-8、当前用户 owner、受保护 DACL 和冻结 launcher 子进程路径均经过真实失败后修复。
 - 最终 ZIP 从源码目录之外解压，以最小 PATH 运行 `--help`、`init`、`paths`、`key-install`、`agent-doctor`、Codex 0.144.4 和三份 fixture。
 - 私有配置、key、Codex home 和 run 目录的权限检查通过；制品不存在 `.key`、`production.env` 或 `auth.json`。
-- Windows artifact 已上传并保留 7 天；用户本机 `D:\AI-Ops` 的 Codex Remote 通道尚未执行成功，不能冒充本机验收完成。
+- Windows artifact 已上传并保留 7 天；用户本机最终 ZIP 验收见下节。
+
+### Windows 便携包最终本机验收（2026-08-04）
+
+在用户 Windows `D:\AI-Ops` 上从提交 `581c396` 构建最终 ZIP，并在源码目录之外的
+`D:\AI-Ops-Portable-Acceptance-20260804` 解压运行：
+
+- `--help`、`init`、`paths` 和 `agent-doctor --key-slot primary` 均通过。
+- `agent-doctor` 返回 `base_url=https://api.psydo.top/`、`windows_sandbox=unelevated`、`business_mutations=disabled`。
+- 最终冻结包使用外部私有 `primary` key 调用真实 provider，执行 `ykc_amount_mismatch.json` 合成 fixture；run `run-20260803T165338Z-65cd657e-269e` 完成 `diagnosed/medium`，摘要识别出设备 `totalFee=1.00` 与平台 `total_amount=1.20` 的 0.20 差异。
+- 解压制品未发现 `.git`、`.key`、`auth.json` 或 `production.env`；运行事件文件未发现 `sk-` 密钥内容。
+- ZIP：`D:\AI-Ops\dist\aiops-diagnostics-0.1.0-windows-x86_64.zip`；SHA-256：`22A16A2B105767493DB82F03862C9B3143D410817EFCBDCCA31FE62830062FEE`。
+
+这证明 Windows 便携包、外部 key slot、API provider 和只读诊断链路可以在目标机运行；fixture 是合成数据，不能写成真实故障业务验收或准确率结论。
 
 ## M4 文档治理验证
 
