@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from aiops_diagnostics.codex_launcher import _clean_environment
+from aiops_diagnostics.codex_launcher import _clean_environment, _execute_codex
 from aiops_diagnostics.codex_runtime import (
     codex_launch_args,
     prepare_runtime_home,
@@ -45,6 +45,27 @@ def test_clean_codex_environment_drops_business_credentials() -> None:
     assert "AIOPS_MYSQL_PASSWORD" not in clean
     assert "OPENAI_API_KEY" not in clean
     assert "mysql-secret" not in json.dumps(clean)
+
+
+def test_windows_launcher_uses_child_process_instead_of_execve(monkeypatch) -> None:
+    launched: list[tuple[list[str], dict[str, str]]] = []
+
+    def fake_call(command, *, env):
+        launched.append((command, env))
+        return 23
+
+    monkeypatch.setattr("aiops_diagnostics.codex_launcher.subprocess.call", fake_call)
+    environment = {"CODEX_HOME": "C:\\runtime"}
+
+    exit_code = _execute_codex(
+        "C:\\bundle\\codex.exe",
+        ["--version"],
+        environment,
+        platform_name="nt",
+    )
+
+    assert exit_code == 23
+    assert launched == [(["C:\\bundle\\codex.exe", "--version"], environment)]
 
 
 def test_prepare_runtime_home_writes_api_provider_profile(tmp_path: Path) -> None:
