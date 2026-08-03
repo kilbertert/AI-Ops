@@ -3,23 +3,41 @@ from __future__ import annotations
 import os
 import re
 import shutil
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
+from dotenv import dotenv_values
 
-def _env(name: str, default: str = "") -> str:
-    return os.getenv(name, default).strip()
+from aiops_diagnostics.platform_paths import (
+    default_codex_home,
+    default_config_file,
+    default_key_dir,
+    default_run_root,
+)
+from aiops_diagnostics.private_files import PrivatePathError, validate_private_file
 
 
-def _env_int(name: str, default: int) -> int:
-    raw = _env(name)
+def _env(name: str, default: str = "", values: Mapping[str, str | None] | None = None) -> str:
+    raw = os.getenv(name)
+    if raw is None and values is not None:
+        raw = values.get(name)
+    return (raw if raw is not None else default).strip()
+
+
+def _env_int(name: str, default: int, values: Mapping[str, str | None] | None = None) -> int:
+    raw = _env(name, values=values)
     return int(raw) if raw else default
 
 
-def _env_bool(name: str, default: bool = False) -> bool:
-    raw = _env(name)
+def _env_bool(
+    name: str,
+    default: bool = False,
+    values: Mapping[str, str | None] | None = None,
+) -> bool:
+    raw = _env(name, values=values)
     if not raw:
         return default
     return raw.lower() in {"1", "true", "yes", "on"}
@@ -32,7 +50,7 @@ def _default_codex_bin() -> str:
 
         return str(bundled_codex_path())
     except (ImportError, AttributeError):
-        return shutil.which("codex") or "/home/claude/.local/bin/codex"
+        return shutil.which("codex") or ("codex.exe" if os.name == "nt" else "codex")
 
 
 def canonical_provider_base_url(value: str) -> str:
@@ -92,6 +110,7 @@ class RedisSettings:
 @dataclass(slots=True)
 class SSHSettings:
     enabled: bool = False
+    ssh_bin: str = field(default_factory=lambda: shutil.which("ssh") or "ssh")
     host: str = ""
     port: int = 22
     user: str = "diagnostic"
@@ -108,6 +127,9 @@ class SSHSettings:
             return
         if not self.host or not self.user or not self.key_file:
             raise ValueError("SSH 隧道需要 host、user 和 key_file")
+        ssh_bin = Path(self.ssh_bin).expanduser()
+        if not ssh_bin.is_file() and shutil.which(self.ssh_bin) is None:
+            raise ValueError(f"SSH 客户端不可执行: {self.ssh_bin}")
         if self.user.startswith("-"):
             raise ValueError("SSH user 不能以连字符开头")
         for name, port in (
@@ -146,18 +168,19 @@ class SafetySettings:
 @dataclass(slots=True)
 class AgentSettings:
     codex_bin: str = field(default_factory=_default_codex_bin)
-    codex_runtime_home: str = str(Path.home() / ".local/share/aiops-diagnostics/codex-home")
+    codex_runtime_home: str = field(default_factory=lambda: str(default_codex_home()))
     api_base_url: str = "https://api.psydo.top/"
     api_key_env: str = "AIOPS_CODEX_API_KEY"
     api_key_file: str = ""
-    key_dir: str = str(Path.home() / ".config/aiops-diagnostics/keys")
+    key_dir: str = field(default_factory=lambda: str(default_key_dir()))
     key_slot: str = "default"
-    run_root: str = ".aiops/runs"
+    run_root: str = field(default_factory=lambda: str(default_run_root()))
     model: str = ""
     max_turns: int = 8
     max_tool_calls: int = 16
     max_validation_retries: int = 2
     turn_timeout_seconds: int = 600
+    windows_sandbox: str = "unelevated"
 
     def validate(self) -> None:
         codex_bin = Path(self.codex_bin).expanduser()
@@ -167,10 +190,11 @@ class AgentSettings:
         canonical_provider_base_url(self.api_base_url)
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", self.api_key_env):
             raise ValueError("Codex API key 环境变量名无效")
-        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", self.key_slot):
-            raise ValueError("Codex key slot 只能包含字母、数字、点、下划线或连字符")
+        validate_key_slot_name(self.key_slot)
         if runtime_home == Path(self.key_dir).expanduser().resolve():
             raise ValueError("Codex runtime home 与 key_dir 必须隔离")
+        if self.windows_sandbox not in {"elevated", "unelevated"}:
+            raise ValueError("Windows Codex sandbox 必须是 elevated 或 unelevated")
         limits = {
             "max_turns": (self.max_turns, 2, 20),
             "max_tool_calls": (self.max_tool_calls, 1, 50),
@@ -193,70 +217,97 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> Settings:
+        return cls._from_values(None)
+
+    @classmethod
+    def from_config(cls, config_file: Path | None = None) -> Settings:
+        selected = selected_config_file(config_file)
+        values: Mapping[str, str | None] | None = None
+        if selected.is_file():
+            try:
+                validate_private_file(selected)
+            except PrivatePathError as exc:
+                raise ValueError(str(exc)) from exc
+            values = dotenv_values(selected, interpolate=False)
+        elif config_file is not None or os.getenv("AIOPS_CONFIG_FILE", "").strip():
+            raise ValueError(f"配置文件不存在: {selected}")
+        return cls._from_values(values)
+
+    @classmethod
+    def _from_values(cls, values: Mapping[str, str | None] | None) -> Settings:
+        def env(name: str, default: str = "") -> str:
+            return _env(name, default, values)
+
+        def env_int(name: str, default: int) -> int:
+            return _env_int(name, default, values)
+
+        def env_bool(name: str, default: bool = False) -> bool:
+            return _env_bool(name, default, values)
+
+        portable_home = env("AIOPS_HOME")
+        config_home = env("AIOPS_CONFIG_HOME") or portable_home
+        data_home = env("AIOPS_DATA_HOME") or portable_home
+        key_dir_default = Path(config_home) / "keys" if config_home else default_key_dir()
+        codex_home_default = Path(data_home) / "codex-home" if data_home else default_codex_home()
+        run_root_default = Path(data_home) / "runs" if data_home else default_run_root()
+
         return cls(
             mysql=MySQLSettings(
-                host=_env("AIOPS_MYSQL_HOST", "127.0.0.1"),
-                port=_env_int("AIOPS_MYSQL_PORT", 3306),
-                user=_env("AIOPS_MYSQL_USER"),
-                password=_env("AIOPS_MYSQL_PASSWORD"),
-                database=_env("AIOPS_MYSQL_DATABASE", "cloud_charging_pile"),
+                host=env("AIOPS_MYSQL_HOST", "127.0.0.1"),
+                port=env_int("AIOPS_MYSQL_PORT", 3306),
+                user=env("AIOPS_MYSQL_USER"),
+                password=env("AIOPS_MYSQL_PASSWORD"),
+                database=env("AIOPS_MYSQL_DATABASE", "cloud_charging_pile"),
             ),
             tdengine=TDengineSettings(
-                url=_env("AIOPS_TDENGINE_URL", "http://127.0.0.1:16041"),
-                user=_env("AIOPS_TDENGINE_USER"),
-                password=_env("AIOPS_TDENGINE_PASSWORD"),
-                database=_env("AIOPS_TDENGINE_DATABASE", "iot"),
+                url=env("AIOPS_TDENGINE_URL", "http://127.0.0.1:16041"),
+                user=env("AIOPS_TDENGINE_USER"),
+                password=env("AIOPS_TDENGINE_PASSWORD"),
+                database=env("AIOPS_TDENGINE_DATABASE", "iot"),
             ),
             redis=RedisSettings(
-                host=_env("AIOPS_REDIS_HOST", "127.0.0.1"),
-                port=_env_int("AIOPS_REDIS_PORT", 6379),
-                database=_env_int("AIOPS_REDIS_DATABASE", 0),
-                user=_env("AIOPS_REDIS_USER"),
-                password=_env("AIOPS_REDIS_PASSWORD"),
+                host=env("AIOPS_REDIS_HOST", "127.0.0.1"),
+                port=env_int("AIOPS_REDIS_PORT", 6379),
+                database=env_int("AIOPS_REDIS_DATABASE", 0),
+                user=env("AIOPS_REDIS_USER"),
+                password=env("AIOPS_REDIS_PASSWORD"),
             ),
             ssh=SSHSettings(
-                enabled=_env_bool("AIOPS_SSH_ENABLED"),
-                host=_env("AIOPS_SSH_HOST"),
-                port=_env_int("AIOPS_SSH_PORT", 22),
-                user=_env("AIOPS_SSH_USER", "diagnostic"),
-                key_file=_env("AIOPS_SSH_KEY_FILE"),
-                mysql_host=_env("AIOPS_SSH_MYSQL_HOST", "127.0.0.1"),
-                mysql_port=_env_int("AIOPS_SSH_MYSQL_PORT", 3306),
-                tdengine_host=_env("AIOPS_SSH_TDENGINE_HOST", "127.0.0.1"),
-                tdengine_port=_env_int("AIOPS_SSH_TDENGINE_PORT", 16041),
-                redis_host=_env("AIOPS_SSH_REDIS_HOST", "127.0.0.1"),
-                redis_port=_env_int("AIOPS_SSH_REDIS_PORT", 6379),
+                enabled=env_bool("AIOPS_SSH_ENABLED"),
+                ssh_bin=env("AIOPS_SSH_BIN") or shutil.which("ssh") or "ssh",
+                host=env("AIOPS_SSH_HOST"),
+                port=env_int("AIOPS_SSH_PORT", 22),
+                user=env("AIOPS_SSH_USER", "diagnostic"),
+                key_file=env("AIOPS_SSH_KEY_FILE"),
+                mysql_host=env("AIOPS_SSH_MYSQL_HOST", "127.0.0.1"),
+                mysql_port=env_int("AIOPS_SSH_MYSQL_PORT", 3306),
+                tdengine_host=env("AIOPS_SSH_TDENGINE_HOST", "127.0.0.1"),
+                tdengine_port=env_int("AIOPS_SSH_TDENGINE_PORT", 16041),
+                redis_host=env("AIOPS_SSH_REDIS_HOST", "127.0.0.1"),
+                redis_port=env_int("AIOPS_SSH_REDIS_PORT", 6379),
             ),
             safety=SafetySettings(
-                query_timeout_seconds=_env_int("AIOPS_QUERY_TIMEOUT_SECONDS", 8),
-                mysql_max_execution_ms=_env_int("AIOPS_MYSQL_MAX_EXECUTION_MS", 3000),
-                tdengine_max_rows=_env_int("AIOPS_TDENGINE_MAX_ROWS", 2000),
-                redis_max_messages=_env_int("AIOPS_REDIS_MAX_MESSAGES", 200),
-                max_order_window_hours=_env_int("AIOPS_MAX_ORDER_WINDOW_HOURS", 72),
+                query_timeout_seconds=env_int("AIOPS_QUERY_TIMEOUT_SECONDS", 8),
+                mysql_max_execution_ms=env_int("AIOPS_MYSQL_MAX_EXECUTION_MS", 3000),
+                tdengine_max_rows=env_int("AIOPS_TDENGINE_MAX_ROWS", 2000),
+                redis_max_messages=env_int("AIOPS_REDIS_MAX_MESSAGES", 200),
+                max_order_window_hours=env_int("AIOPS_MAX_ORDER_WINDOW_HOURS", 72),
             ),
             agent=AgentSettings(
-                codex_bin=_env(
-                    "AIOPS_CODEX_BIN",
-                    _default_codex_bin(),
-                ),
-                codex_runtime_home=_env(
-                    "AIOPS_CODEX_RUNTIME_HOME",
-                    str(Path.home() / ".local/share/aiops-diagnostics/codex-home"),
-                ),
-                api_base_url=_env("AIOPS_CODEX_BASE_URL", "https://api.psydo.top/"),
-                api_key_env=_env("AIOPS_CODEX_API_KEY_ENV", "AIOPS_CODEX_API_KEY"),
-                api_key_file=_env("AIOPS_CODEX_API_KEY_FILE"),
-                key_dir=_env(
-                    "AIOPS_CODEX_KEY_DIR",
-                    str(Path.home() / ".config/aiops-diagnostics/keys"),
-                ),
-                key_slot=_env("AIOPS_CODEX_KEY_SLOT", "default"),
-                run_root=_env("AIOPS_AGENT_RUN_ROOT", ".aiops/runs"),
-                model=_env("AIOPS_AGENT_MODEL"),
-                max_turns=_env_int("AIOPS_AGENT_MAX_TURNS", 8),
-                max_tool_calls=_env_int("AIOPS_AGENT_MAX_TOOL_CALLS", 16),
-                max_validation_retries=_env_int("AIOPS_AGENT_MAX_VALIDATION_RETRIES", 2),
-                turn_timeout_seconds=_env_int("AIOPS_AGENT_TURN_TIMEOUT_SECONDS", 600),
+                codex_bin=env("AIOPS_CODEX_BIN") or _default_codex_bin(),
+                codex_runtime_home=env("AIOPS_CODEX_RUNTIME_HOME") or str(codex_home_default),
+                api_base_url=env("AIOPS_CODEX_BASE_URL", "https://api.psydo.top/"),
+                api_key_env=env("AIOPS_CODEX_API_KEY_ENV", "AIOPS_CODEX_API_KEY"),
+                api_key_file=env("AIOPS_CODEX_API_KEY_FILE"),
+                key_dir=env("AIOPS_CODEX_KEY_DIR") or str(key_dir_default),
+                key_slot=env("AIOPS_CODEX_KEY_SLOT", "default"),
+                run_root=env("AIOPS_AGENT_RUN_ROOT") or str(run_root_default),
+                model=env("AIOPS_AGENT_MODEL"),
+                max_turns=env_int("AIOPS_AGENT_MAX_TURNS", 8),
+                max_tool_calls=env_int("AIOPS_AGENT_MAX_TOOL_CALLS", 16),
+                max_validation_retries=env_int("AIOPS_AGENT_MAX_VALIDATION_RETRIES", 2),
+                turn_timeout_seconds=env_int("AIOPS_AGENT_TURN_TIMEOUT_SECONDS", 600),
+                windows_sandbox=env("AIOPS_WINDOWS_SANDBOX", "unelevated"),
             ),
         )
 
@@ -283,3 +334,16 @@ def _redact_url_credentials(value: str) -> str:
         return urlunsplit((parsed.scheme, "REDACTED@" + hostname, parsed.path, parsed.query, parsed.fragment))
     except ValueError:
         return "REDACTED"
+
+
+def selected_config_file(config_file: Path | None = None) -> Path:
+    if config_file is not None:
+        return config_file.expanduser().resolve()
+    configured = os.getenv("AIOPS_CONFIG_FILE", "").strip()
+    return Path(configured).expanduser().resolve() if configured else default_config_file().resolve()
+
+
+def validate_key_slot_name(value: str) -> str:
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", value):
+        raise ValueError("Codex key slot 只能包含字母、数字、点、下划线或连字符")
+    return value

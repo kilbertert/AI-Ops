@@ -497,7 +497,7 @@ def _ssh_tunnel(settings: Settings) -> Iterator[Settings]:
     local_mysql, local_tdengine, local_redis = (_available_port() for _ in range(3))
     ssh = settings.ssh
     command = [
-        "ssh",
+        ssh.ssh_bin,
         "-N",
         "-o",
         "BatchMode=yes",

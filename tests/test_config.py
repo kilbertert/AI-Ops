@@ -1,6 +1,10 @@
+import os
+from pathlib import Path
+
 import pytest
 
 from aiops_diagnostics.config import Settings, SSHSettings
+from aiops_diagnostics.private_files import write_private_text
 
 
 def test_redacted_config_never_returns_password(monkeypatch) -> None:
@@ -44,3 +48,34 @@ def test_ssh_rejects_option_like_usernames() -> None:
 
     with pytest.raises(ValueError, match="连字符"):
         settings.validate()
+
+
+def test_private_config_file_loads_values_but_environment_wins(tmp_path: Path, monkeypatch) -> None:
+    config = tmp_path / "production.env"
+    write_private_text(
+        config,
+        "AIOPS_MYSQL_HOST=from-file\nAIOPS_MYSQL_PORT=3307\nAIOPS_MYSQL_PASSWORD=abc#def\nAIOPS_CODEX_BIN=\n",
+    )
+    monkeypatch.setenv("AIOPS_MYSQL_HOST", "from-environment")
+
+    settings = Settings.from_config(config)
+
+    assert settings.mysql.host == "from-environment"
+    assert settings.mysql.port == 3307
+    assert settings.mysql.password == "abc#def"
+    assert settings.agent.codex_bin
+
+
+def test_windows_style_home_override_is_platform_independent(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("AIOPS_HOME", str(tmp_path / "portable-home"))
+    monkeypatch.delenv("AIOPS_CONFIG_HOME", raising=False)
+    monkeypatch.delenv("AIOPS_DATA_HOME", raising=False)
+
+    settings = Settings.from_env()
+
+    assert Path(settings.agent.key_dir) == tmp_path / "portable-home" / "keys"
+    assert Path(settings.agent.codex_runtime_home) == tmp_path / "portable-home" / "codex-home"
+    assert Path(settings.agent.run_root) == tmp_path / "portable-home" / "runs"
+    assert settings.agent.windows_sandbox == "unelevated"
+    if os.name != "nt":
+        assert settings.ssh.ssh_bin

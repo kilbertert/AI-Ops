@@ -37,6 +37,17 @@ Install dependencies:
 uv sync --dev
 ```
 
+Initialize platform-native private paths and install a pluggable provider key:
+
+```bash
+uv run aiops init
+uv run aiops key-install primary
+uv run aiops agent-doctor --key-slot primary
+```
+
+Use `aiops --config /path/to/production.env ...` to select another private
+configuration file. `aiops paths` prints the resolved non-secret locations.
+
 Run an offline synthetic example:
 
 ```bash
@@ -89,6 +100,26 @@ Start the interactive shell:
 ```bash
 uv run aiops shell
 ```
+
+## Portable Windows And Linux Bundle
+
+The portable build contains the Python application, staged diagnostic
+references, synthetic fixtures, and the platform-specific native Codex runtime
+pinned by the Python SDK. It does not contain API keys or production database
+credentials.
+
+Build on the target operating system:
+
+```bash
+uv sync --locked --dev
+uv run python packaging/build_portable.py
+```
+
+The command creates `dist/aiops/` and a versioned zip, then smoke-tests the
+packaged executable with an isolated temporary home and an offline OCPP case.
+Windows 11 is the recommended deployment baseline; see
+[`docs/portable.md`](docs/portable.md) for OpenSSH, sandbox, ACL, and first-run
+requirements.
 
 ## Current Rule Sources
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -17,12 +18,30 @@ from aiops_diagnostics.codex_runtime import (
     provider_key_fingerprint,
     resolve_provider_api_key,
 )
-from aiops_diagnostics.config import Settings, canonical_provider_base_url, require_same_provider_base_url
+from aiops_diagnostics.config import (
+    Settings,
+    canonical_provider_base_url,
+    require_same_provider_base_url,
+    selected_config_file,
+    validate_key_slot_name,
+)
 from aiops_diagnostics.diagnostic_tools import DiagnosticToolExecutor
 from aiops_diagnostics.engine import DiagnosticEngine
 from aiops_diagnostics.journal import EvidenceJournal
 from aiops_diagnostics.models import DiagnosticRequest, Intent
 from aiops_diagnostics.parsing import parse_request
+from aiops_diagnostics.platform_paths import (
+    data_root,
+    default_codex_home,
+    default_key_dir,
+    default_run_root,
+    reference_root,
+)
+from aiops_diagnostics.private_files import (
+    PrivatePathError,
+    ensure_private_directory,
+    write_private_text,
+)
 from aiops_diagnostics.render import render_agent_diagnosis, render_doctor, render_report
 from aiops_diagnostics.sources import DiagnosticSources, FixtureSources, SourceError, live_sources
 
@@ -33,6 +52,115 @@ app = typer.Typer(
     pretty_exceptions_show_locals=False,
 )
 console = Console()
+_CONFIG_FILE_OVERRIDE: Path | None = None
+
+
+@app.callback()
+def configure_cli(
+    context: typer.Context,
+    config_file: Annotated[
+        Path | None,
+        typer.Option("--config", help="使用指定的私有 production.env 配置文件"),
+    ] = None,
+) -> None:
+    global _CONFIG_FILE_OVERRIDE
+    context.ensure_object(dict)
+    context.obj["config_file"] = config_file
+    _CONFIG_FILE_OVERRIDE = config_file
+
+
+@app.command("init")
+def init_runtime(
+    overwrite: Annotated[
+        bool,
+        typer.Option("--overwrite", help="明确覆盖现有配置模板，不会覆盖 key slot"),
+    ] = False,
+) -> None:
+    """Initialize platform-native private configuration and runtime directories."""
+    config_path = _selected_config_path()
+    template = reference_root() / ".env.example"
+    try:
+        ensure_private_directory(config_path.parent)
+        ensure_private_directory(default_key_dir())
+        ensure_private_directory(default_codex_home())
+        ensure_private_directory(default_run_root())
+        if config_path.exists() and not overwrite:
+            console.print(f"配置已存在，未覆盖: {config_path}")
+        else:
+            write_private_text(config_path, template.read_text(encoding="utf-8"))
+            console.print(f"已创建私有配置模板: {config_path}")
+    except (OSError, PrivatePathError, FileNotFoundError) as exc:
+        console.print(f"[bold red]初始化失败:[/bold red] {exc}")
+        raise typer.Exit(code=2) from exc
+    console.print_json(
+        data={
+            "config_file": str(config_path),
+            "key_dir": str(default_key_dir()),
+            "codex_home": str(default_codex_home()),
+            "run_root": str(default_run_root()),
+        }
+    )
+
+
+@app.command("key-install")
+def key_install(
+    slot: Annotated[str, typer.Argument(help="密钥槽名称，例如 primary 或 backup")],
+    source_file: Annotated[
+        Path | None,
+        typer.Option("--from-file", exists=True, dir_okay=False, help="从文件读取密钥，避免命令行明文"),
+    ] = None,
+    replace_existing: Annotated[
+        bool,
+        typer.Option("--replace", help="明确替换同名密钥槽"),
+    ] = False,
+) -> None:
+    """Install one provider key into the platform-native private slot store."""
+    try:
+        validate_key_slot_name(slot)
+        settings = _load_settings()
+        key_dir = ensure_private_directory(Path(settings.agent.key_dir).expanduser().resolve())
+        target = key_dir / f"{slot}.key"
+        if target.exists() and not replace_existing:
+            raise ValueError(f"密钥槽已存在，使用 --replace 才能替换: {slot}")
+        if source_file is not None:
+            if source_file.is_symlink():
+                raise ValueError("密钥来源文件不得是符号链接")
+            key = source_file.read_text(encoding="utf-8").strip()
+        else:
+            key = typer.prompt("API key", hide_input=True, confirmation_prompt=True).strip()
+        if not key:
+            raise ValueError("API key 不能为空")
+        write_private_text(target, key + "\n")
+    except (OSError, PrivatePathError, ValueError) as exc:
+        console.print(f"[bold red]密钥安装失败:[/bold red] {exc}")
+        raise typer.Exit(code=2) from exc
+    console.print_json(
+        data={
+            "ok": True,
+            "key_slot": slot,
+            "key_fingerprint": provider_key_fingerprint(key),
+            "key_dir": str(key_dir),
+        }
+    )
+
+
+@app.command("paths")
+def show_paths() -> None:
+    """Show resolved local paths without exposing credentials."""
+    settings = _load_settings()
+    console.print_json(
+        data={
+            "platform": sys.platform,
+            "frozen": bool(getattr(sys, "frozen", False)),
+            "config_file": str(_selected_config_path()),
+            "data_root": str(data_root()),
+            "key_dir": settings.agent.key_dir,
+            "codex_home": settings.agent.codex_runtime_home,
+            "run_root": settings.agent.run_root,
+            "codex_bin": settings.agent.codex_bin,
+            "ssh_bin": settings.ssh.ssh_bin,
+        }
+    )
 
 
 @app.command("agent-diagnose")
@@ -58,7 +186,7 @@ def agent_diagnose(
     _validate_agent_settings(settings)
     manifest = IncidentManifest.from_request(request)
     project_root = _project_root()
-    run_root = _run_root(project_root, settings.agent.run_root)
+    run_root = _run_root(settings.agent.run_root)
     workspace: AgentWorkspace | None = None
     try:
         workspace = AgentWorkspace.create(
@@ -91,8 +219,7 @@ def agent_resume(
 ) -> None:
     """Resume the same Codex thread and immutable incident workspace."""
     settings = _load_settings()
-    project_root = _project_root()
-    workspace = AgentWorkspace.open(_run_root(project_root, settings.agent.run_root), run_id)
+    workspace = AgentWorkspace.open(_run_root(settings.agent.run_root), run_id)
     manifest = workspace.load_manifest()
     state = workspace.load_state()
     try:
@@ -154,6 +281,7 @@ def agent_doctor(
             "permission_profile": "aiops-diagnostic",
             "network": "disabled for model-generated commands",
             "business_mutations": "disabled",
+            "windows_sandbox": settings.agent.windows_sandbox,
         }
     )
 
@@ -251,7 +379,7 @@ def _shell_loop(engine: DiagnosticEngine, tenant_id: str | None) -> None:
 
 def _load_settings() -> Settings:
     try:
-        return Settings.from_env()
+        return Settings.from_config(_config_file_override())
     except ValueError as exc:
         console.print(f"[bold red]配置无效:[/bold red] {exc}")
         raise typer.Exit(code=2) from exc
@@ -311,19 +439,20 @@ def _render_agent_output(result, run_id: str, as_json: bool) -> None:
 
 
 def _project_root() -> Path:
-    current = Path.cwd().resolve()
-    for candidate in (current, *current.parents):
-        if (candidate / "pyproject.toml").is_file() and (candidate / "src/aiops_diagnostics").is_dir():
-            return candidate
-    source_root = Path(__file__).resolve().parents[2]
-    if (source_root / "pyproject.toml").is_file():
-        return source_root
-    raise ValueError("无法定位 AI-Ops 项目根目录")
+    return reference_root()
 
 
-def _run_root(project_root: Path, configured: str) -> Path:
+def _run_root(configured: str) -> Path:
     path = Path(configured).expanduser()
-    return path.resolve() if path.is_absolute() else (project_root / path).resolve()
+    return path.resolve() if path.is_absolute() else (Path.cwd() / path).resolve()
+
+
+def _config_file_override() -> Path | None:
+    return _CONFIG_FILE_OVERRIDE
+
+
+def _selected_config_path() -> Path:
+    return selected_config_file(_config_file_override())
 
 
 def _validate_agent_settings(settings: Settings) -> None:
