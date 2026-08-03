@@ -75,6 +75,17 @@
 
 这证明 Windows 便携包、外部 key slot、API provider 和只读诊断链路可以在目标机运行；fixture 是合成数据，不能写成真实故障业务验收或准确率结论。
 
+### Windows 便携包重复验收（2026-08-04）
+
+在新的源码外解压目录 `D:\AI-Ops-Acceptance-20260804-2` 重复执行完整验收：
+
+- ZIP SHA-256 仍为 `22A16A2B105767493DB82F03862C9B3143D410817EFCBDCCA31FE62830062FEE`；解压 196 个文件，未发现 `.git`、`.key`、`auth.json` 或 `production.env`。
+- `agent-doctor` 再次确认 `base_url=https://api.psydo.top/`、`key_slot=primary`、`windows_sandbox=unelevated` 和 `business_mutations=disabled`。
+- 三次真实 provider fixture run 均完成：OCPP `run-20260803T175242Z-3da3f4e6-7f74` 为 `diagnosed/high`（正常计费）；YKC `run-20260803T174918Z-06f526e0-db9a` 为 `diagnosed/medium`（0.20 金额差异）；交易数据缺失 `run-20260803T175424Z-64e42afe-19b9` 为 `diagnosed/medium`。
+- 三个 run 均有 `diagnosis_completed` 事件；事件日志未发现 `sk-`、退款/重算/补发/重启/订单修改/消息重放等执行痕迹；验收结束后没有残留 `aiops.exe` 进程，primary key ACL 仍归当前 Windows 用户。
+
+SSH 调试通道直接传入中文字面量会受远程代码页影响；本轮真实 provider 调用使用显式 `--order-no`，不将该传输限制误判为便携程序问题。构建 smoke test 和 Windows 进程内部中文解析已覆盖中文输出与反馈路径。
+
 ## M4 文档治理验证
 
 2026-08-03 在 `docs/chinese-governance` 分支完成：
