@@ -78,16 +78,16 @@ def classify_stop_reason(protocol: str | None, code: object, content: str | None
         numeric = _parse_stop_code(code_text)
         if numeric is not None:
             description = YKC_STOP_REASONS.get(numeric, content_text or f"YKC 停止码 {numeric}")
-            if 64 <= numeric <= 73:
-                return StopReason("normal_stop", description, False)
             if numeric in {78, 110}:
                 return StopReason("balance_insufficient", description, True)
-            if numeric in {83, 116, 124, 126, 128}:
+            if 74 <= numeric <= 102:
+                return StopReason("start_failure", description, True)
+            if 64 <= numeric <= 73:
+                return StopReason("normal_stop", description, False)
+            if numeric in {116, 124, 126, 128}:
                 return StopReason("over_temperature", description, True)
             if numeric == 131:
                 return StopReason("power_loss", description, True)
-            if 74 <= numeric <= 102:
-                return StopReason("start_failure", description, True)
             if numeric >= 106:
                 return StopReason("device_or_vehicle_fault", description, True)
 

@@ -5,7 +5,7 @@ from typing import Any
 import pytest
 
 from aiops_diagnostics.config import SafetySettings
-from aiops_diagnostics.engine import DiagnosticEngine
+from aiops_diagnostics.engine import DiagnosticEngine, _normalize_error_code
 from aiops_diagnostics.parsing import parse_request
 from aiops_diagnostics.sources import FixtureSources, SourceError
 
@@ -259,6 +259,14 @@ def test_non_finite_transaction_values_do_not_crash_amount_checks() -> None:
     assert "transaction_data_incomplete" in report.classifications
 
 
+def test_error_code_normalization_deduplicates_numbers_and_preserves_protocol_codes() -> None:
+    assert _normalize_error_code(5) == "5"
+    assert _normalize_error_code(5.0) == "5"
+    assert _normalize_error_code("5.0") == "5"
+    assert _normalize_error_code("E116") == "E116"
+    assert _normalize_error_code(0) is None
+
+
 def test_server_billing_rejects_reversed_meter_values_even_with_tx_energy() -> None:
     report, _ = _diagnose_order(
         _base_order(device_protocol="OCPP1.6-J", transaction_id="38192", meter_start=12000, meter_end=11000)
@@ -292,6 +300,20 @@ def test_source_failure_and_missing_fee_snapshot_cap_confidence() -> None:
     assert report.confidence != "high"
     assert "tdengine:charging-gun_property" in report.failed_sources
     assert "redis:order_sync_streams" in report.failed_sources
+
+
+@pytest.mark.parametrize(
+    ("created_time", "stop_time"),
+    [
+        ("2026-07-31 10:00:00", "2026-07-31T10:30:00+08:00"),
+        ("2026-07-31T10:00:00+08:00", "2026-07-31 10:30:00"),
+    ],
+)
+def test_mixed_timezone_order_window_does_not_crash(created_time: str, stop_time: str) -> None:
+    report, sources = _diagnose_order(_base_order(created_time=created_time, stop_time=stop_time))
+
+    assert sources.gun_calls == ["TEST-ORDER-1234"]
+    assert "order_not_found" not in report.classifications
 
 
 def test_global_stream_pending_is_not_attributed_to_current_order() -> None:

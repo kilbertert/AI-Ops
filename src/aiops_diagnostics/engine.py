@@ -492,9 +492,9 @@ class DiagnosticEngine:
         statuses = _unique_sequence(_to_int(row.get("status")) for row in samples)
         errors = sorted(
             {
-                str(row.get("errorCode"))
+                normalized
                 for row in samples
-                if row.get("errorCode") not in (None, "", "0", 0, 0.0)
+                if (normalized := _normalize_error_code(row.get("errorCode"))) is not None
             }
         )
         temperatures = [_to_float(row.get("temperature")) for row in samples]
@@ -698,6 +698,12 @@ def _order_window(order: dict[str, Any], max_hours: int) -> tuple[datetime, date
     if not created:
         return None
     stopped = _datetime(order.get("stop_time")) or datetime.now(tz=created.tzinfo)
+    if created.tzinfo is None and stopped.tzinfo is not None:
+        created = created.replace(tzinfo=stopped.tzinfo)
+    elif created.tzinfo is not None and stopped.tzinfo is None:
+        stopped = stopped.replace(tzinfo=created.tzinfo)
+    elif created.tzinfo is not None and stopped.tzinfo is not None:
+        stopped = stopped.astimezone(created.tzinfo)
     start = created - timedelta(minutes=5)
     end = stopped + timedelta(minutes=5)
     maximum_end = start + timedelta(hours=max_hours)
@@ -789,6 +795,16 @@ def _to_int(value: Any) -> int | None:
         return int(float(value))
     except (TypeError, ValueError):
         return None
+
+
+def _normalize_error_code(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    numeric = _to_int(value)
+    if numeric is not None:
+        return str(numeric) if numeric != 0 else None
+    text = str(value).strip()
+    return text or None
 
 
 def _to_float(value: Any) -> float | None:

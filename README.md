@@ -17,7 +17,7 @@ The runtime extracts the order number and intent, executes bounded queries again
 - Credentials come only from environment variables and are always redacted from output.
 - Reports omit user IDs, VINs, card numbers, plate numbers, and raw protocol payloads.
 
-The production service account discovered during inventory is over-privileged and is not used by this runtime. The verified deployment uses dedicated MySQL, Redis, and SSH identities. TDengine Community Edition requires the strict loopback-only query proxy described in `ops/` because it cannot grant a database-level read-only role.
+The production application account discovered during inventory is over-privileged and is not used by this runtime. The verified deployment uses dedicated MySQL, Redis, and SSH identities. Changing the application account requires a separate dependency audit and credential rotation; this diagnostic project must never inherit it as a shortcut. TDengine Community Edition requires the strict loopback-only query proxy described in `ops/` because it cannot grant a database-level read-only role.
 
 ## Commands
 
@@ -51,7 +51,7 @@ uv run aiops diagnose "订单 2079842220423700481 中途停止" --tenant-id TENA
 Emit machine-readable output:
 
 ```bash
-uv run aiops diagnose "订单 2079842220423700481 金额异常" --json
+uv run aiops diagnose "订单 2079842220423700481 金额异常" --tenant-id TENANT_ID --json
 ```
 
 Start the interactive shell:

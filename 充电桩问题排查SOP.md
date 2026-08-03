@@ -170,7 +170,7 @@ create table ch_order_info
     comment '充电订单表' charset = utf8mb4;
 ```
 
-tx_dat数据结构
+tx_data数据结构
 
 ```json
 {
@@ -378,11 +378,11 @@ public class ChargingGunProperties implements Serializable {
 	 */
 	private Integer isInsert;
 	/**
-	 * 输出电压 A
+		 * 输出电压 V
 	 */
 	private Double outputVoltage;
 	/**
-	 * 输出电流 V
+		 * 输出电流 A
 	 */
 	private Double outputCurrent;
 	/**
@@ -495,7 +495,18 @@ CREATE STABLE `charging-pile_comm` (`_ts` TIMESTAMP, `raw` VARCHAR(512), `decode
 
 ### 2.1.当电量或金额是一些不符合常量的值的时候
 
-当收到充电订单号时候执行sql查询订单数据：`select * from cloud_charging_pile.ch_order_info where order_no='订单编号';`
+当收到充电订单号时，使用数据库驱动绑定 `:tenant_id` 和 `:order_no`，执行有界查询：
+
+```sql
+SELECT order_no, tenant_id, status, type, launch_type, device_id, device_code,
+       child_device_code, device_protocol, created_time, stop_time, electricity,
+       electricity_fee, service_fee, total_amount, is_receive_tx_data,
+       stopped_reason_code, stopped_reason_content, error_info, transaction_id, tx_data
+FROM cloud_charging_pile.ch_order_info
+WHERE tenant_id = :tenant_id AND order_no = :order_no
+ORDER BY created_time DESC
+LIMIT 3;
+```
 
 device_protocol：设备协议，以YKC开通的是云快充协议，通常有YKC1.6、YKC1.8、YKC2.1这3种云快充协议
 
@@ -512,10 +523,26 @@ device_protocol：设备协议，以YKC开通的是云快充协议，通常有YK
 结合订单的 `device_code,created_time,stop_time` 按以下的sql通常可以再时序数据库中查询出所有过程中数据
 
 ```sql
-# 查询订单编号充电过程中的时序数据
-select * from `charging-gun_property` WHERE `txSerialNo`='177424259930902407';
+# 查询订单充电过程中的时序数据，时间参数取订单实际 created_time/stop_time
+SELECT _ts, `txSerialNo`, status, `isReturn`, `isInsert`, `outputVoltage`,
+       `outputCurrent`, power, `chargingTime`, `chargingElectricityQuantity`, soc,
+       temperature, `batteryMaxTemperature`, `batteryMinTemperature`, `errorCode`,
+       `errorReason`, `meterNow`
+FROM `charging-gun_property`
+WHERE device = :device_code
+  AND _ts >= :created_time
+  AND _ts <= :stop_time
+  AND `txSerialNo` = :tx_serial_no
+ORDER BY _ts ASC
+LIMIT 2000;
 
 # 查询指定设备某段时间内的原始报文
-select * from  `charging-pile_comm` WHERE device='37112220250003' and _ts>='2026-06-13 03:52:28' and _ts<='2026-06-13 03:52:50'
+SELECT _ts, direction, code, decoded
+FROM `charging-pile_comm`
+WHERE device = :device_code
+  AND _ts >= :created_time
+  AND _ts <= :stop_time
+ORDER BY _ts ASC
+LIMIT 2000;
 
 ```

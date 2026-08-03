@@ -40,8 +40,8 @@ The business hardening pass on 2026-07-31 completed without business-data mutati
   surfaces this as a status/stop-reason inconsistency instead of silently accepting it.
 - The production TDengine proxy still rejected a DDL request with HTTP 403 after deployment.
 
-This replay establishes rule consistency against current stored data. It is not a substitute for an engineer's
-confirmed incident conclusion.
+This replay establishes rule consistency against the sampled 30-day data. It is not a substitute for an
+engineer's confirmed incident conclusion.
 
 ## Business Acceptance Pending
 

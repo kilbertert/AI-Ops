@@ -13,7 +13,13 @@ import pytest
 
 from aiops_diagnostics.config import Settings
 from aiops_diagnostics.sources import TDengineSource
-from aiops_diagnostics.tdengine_proxy import ProxyConfigError, ProxySettings, is_allowed_sql, make_server
+from aiops_diagnostics.tdengine_proxy import (
+    ProxyConfigError,
+    ProxySettings,
+    _authorized,
+    is_allowed_sql,
+    make_server,
+)
 
 
 def _settings(**overrides) -> ProxySettings:
@@ -103,12 +109,24 @@ def test_proxy_rejects_large_or_reversed_windows() -> None:
     )
     assert not is_allowed_sql(oversized, _settings())
 
+    too_wide = sql.replace("2026-07-31 11:00:00.000", "2026-07-24 00:00:00.000").replace(
+        "2026-07-31 10:00:00.000", "2026-07-31 01:00:00.000"
+    )
+    assert not is_allowed_sql(too_wide, _settings())
+
 
 def test_proxy_requires_loopback_endpoints() -> None:
     with pytest.raises(ProxyConfigError, match="loopback"):
         _settings(listen_host="0.0.0.0").validate()
     with pytest.raises(ProxyConfigError, match="loopback"):
         _settings(upstream_url="http://192.168.0.40:6041").validate()
+
+
+def test_proxy_basic_auth_supports_utf8_credentials() -> None:
+    settings = _settings(client_user="诊断", client_password="只读密码")
+    token = base64.b64encode("诊断:只读密码".encode()).decode("ascii")
+
+    assert _authorized(f"Basic {token}", settings)
 
 
 def test_http_proxy_forwards_allowed_query_and_rejects_mutation() -> None:

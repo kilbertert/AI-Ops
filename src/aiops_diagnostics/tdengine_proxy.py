@@ -248,12 +248,12 @@ def _authorized(header: str | None, settings: ProxySettings) -> bool:
         scheme, encoded = header.split(" ", 1)
         if scheme.lower() != "basic":
             return False
-        decoded = base64.b64decode(encoded, validate=True).decode("utf-8")
-        user, password = decoded.split(":", 1)
-    except (ValueError, UnicodeDecodeError, binascii.Error):
+        decoded = base64.b64decode(encoded, validate=True)
+        user, password = decoded.split(b":", 1)
+    except (ValueError, binascii.Error):
         return False
-    return hmac.compare_digest(user, settings.client_user) and hmac.compare_digest(
-        password, settings.client_password
+    return hmac.compare_digest(user, settings.client_user.encode("utf-8")) and hmac.compare_digest(
+        password, settings.client_password.encode("utf-8")
     )
 
 

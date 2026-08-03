@@ -4,6 +4,7 @@ import json
 from typing import Any
 
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
@@ -15,8 +16,8 @@ def render_report(report: DiagnosticReport, console: Console | None = None) -> N
     confidence_style = {"high": "green", "medium": "yellow", "low": "red"}.get(report.confidence, "white")
     console.print(
         Panel.fit(
-            f"[bold]{report.summary}[/bold]\n"
-            f"订单: {report.request.order_no}  意图: {report.request.intent.value}  "
+            f"[bold]{escape(report.summary)}[/bold]\n"
+            f"订单: {escape(report.request.order_no)}  意图: {escape(report.request.intent.value)}  "
             f"置信度: [{confidence_style}]{report.confidence}[/{confidence_style}]",
             title="AI Ops 只读诊断",
         )
@@ -26,7 +27,7 @@ def render_report(report: DiagnosticReport, console: Console | None = None) -> N
     facts.add_column("字段", style="cyan", no_wrap=True)
     facts.add_column("值")
     for key, value in report.order_facts.items():
-        facts.add_row(key, _format_value(value))
+        facts.add_row(escape(key), escape(_format_value(value)))
     console.print(facts)
 
     evidence = Table(title="证据链", expand=True)
@@ -41,21 +42,24 @@ def render_report(report: DiagnosticReport, console: Console | None = None) -> N
             Severity.CRITICAL: "bold red",
         }[item.severity]
         evidence.add_row(
-            f"[{style}]{item.severity.value}[/{style}]", item.source, item.title, item.observation
+            f"[{style}]{escape(item.severity.value)}[/{style}]",
+            escape(item.source),
+            escape(item.title),
+            escape(item.observation),
         )
     console.print(evidence)
 
     if report.classifications:
-        console.print("[bold]分类:[/bold] " + ", ".join(report.classifications))
+        console.print("[bold]分类:[/bold] " + escape(", ".join(report.classifications)))
     if report.next_steps:
         console.print("\n[bold]建议人工下一步[/bold]")
         for index, step in enumerate(report.next_steps, start=1):
-            console.print(f"{index}. {step}")
+            console.print(f"{index}. {escape(step)}")
     if report.limitations:
         console.print("\n[bold yellow]限制与未确认项[/bold yellow]")
         for item in report.limitations:
-            console.print(f"- {item}")
-    console.print("\n[dim]已查询: " + ", ".join(report.queried_sources) + "[/dim]")
+            console.print(f"- {escape(str(item))}")
+    console.print("\n[dim]已查询: " + escape(", ".join(report.queried_sources)) + "[/dim]")
 
 
 def render_doctor(result: dict[str, Any], console: Console | None = None) -> None:
@@ -67,7 +71,11 @@ def render_doctor(result: dict[str, Any], console: Console | None = None) -> Non
     for name, item in result.items():
         ok = bool(item.get("ok"))
         details = item.get("details") if ok else {"error": item.get("error"), "details": item.get("details")}
-        table.add_row(name, "[green]OK[/green]" if ok else "[red]FAIL[/red]", _format_value(details))
+        table.add_row(
+            escape(name),
+            "[green]OK[/green]" if ok else "[red]FAIL[/red]",
+            escape(_format_value(details)),
+        )
     console.print(table)
 
 

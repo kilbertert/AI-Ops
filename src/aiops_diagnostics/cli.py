@@ -36,7 +36,11 @@ def diagnose(
         raise typer.BadParameter(str(exc)) from exc
     settings = _load_settings()
     if fixture:
-        report = DiagnosticEngine(FixtureSources(fixture), settings.safety).diagnose(request)
+        try:
+            report = DiagnosticEngine(FixtureSources(fixture), settings.safety).diagnose(request)
+        except (SourceError, ValueError, OSError) as exc:
+            console.print(f"[bold red]初始化失败:[/bold red] {exc}")
+            raise typer.Exit(code=2) from exc
     else:
         try:
             with live_sources(settings) as sources:
@@ -75,7 +79,11 @@ def interactive_shell(
     settings = _load_settings()
     console.print("[bold]AI Ops 只读诊断 Shell[/bold]，输入 exit 或 quit 退出。")
     if fixture:
-        _shell_loop(DiagnosticEngine(FixtureSources(fixture), settings.safety), tenant_id)
+        try:
+            _shell_loop(DiagnosticEngine(FixtureSources(fixture), settings.safety), tenant_id)
+        except (SourceError, ValueError, OSError) as exc:
+            console.print(f"[bold red]初始化失败:[/bold red] {exc}")
+            raise typer.Exit(code=2) from exc
         return
     try:
         with live_sources(settings) as sources:

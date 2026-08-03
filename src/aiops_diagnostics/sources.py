@@ -118,8 +118,10 @@ class MySQLSource:
         except Exception as exc:
             raise SourceError(f"MySQL 只读查询失败: {exc.__class__.__name__}") from exc
         finally:
-            connection.rollback()
-            connection.close()
+            with contextlib.suppress(Exception):
+                connection.rollback()
+            with contextlib.suppress(Exception):
+                connection.close()
 
     def get_orders(self, order_no: str, tenant_id: str | None = None) -> list[dict[str, Any]]:
         where = "order_no=%s"
@@ -178,17 +180,28 @@ class MySQLSource:
             )
             details = _normalize_row(cursor.fetchone())
             cursor.execute("SHOW GRANTS FOR CURRENT_USER()")
-            grant_rows = [str(value).upper() for row in cursor.fetchall() for value in row.values()]
+            grant_rows = [str(value) for row in cursor.fetchall() for value in row.values()]
+            assigned_roles, has_unparsed_role_assignment = _assigned_roles(grant_rows)
+            unresolved_roles: list[str] = ["ASSIGNMENT"] if has_unparsed_role_assignment else []
+            if assigned_roles:
+                try:
+                    cursor.execute(f"SHOW GRANTS FOR CURRENT_USER() USING {', '.join(assigned_roles)}")
+                    grant_rows.extend(str(value) for row in cursor.fetchall() for value in row.values())
+                except Exception:
+                    unresolved_roles.extend(assigned_roles)
             granted_privileges: set[str] = set()
             for grant in grant_rows:
-                match = re.search(r"\bGRANT\s+(.+?)\s+ON\s+", grant)
+                grant_upper = grant.upper()
+                match = re.search(r"\bGRANT\s+(.+?)\s+ON\s+", grant_upper)
                 if match:
                     granted_privileges.update(item.strip() for item in match.group(1).split(","))
-                if "WITH GRANT OPTION" in grant:
+                if "WITH GRANT OPTION" in grant_upper:
                     granted_privileges.add("GRANT OPTION")
+            granted_privileges.update(f"UNRESOLVED ROLE {role}" for role in unresolved_roles)
             unsafe_privileges = granted_privileges.difference({"SELECT", "SHOW VIEW", "USAGE"})
             details["read_only"] = not unsafe_privileges
             details["unsafe_privileges"] = sorted(unsafe_privileges)
+            details["assigned_roles"] = assigned_roles
             return details
 
 
@@ -523,9 +536,29 @@ def _safe_identifier(value: str) -> str:
 
 
 def _safe_literal(value: str | None) -> str:
-    if value is None or not SAFE_VALUE.fullmatch(value):
+    if value is None or not SAFE_VALUE.fullmatch(value) or "--" in value:
         raise ValueError("TDengine 查询值包含不允许的字符")
     return value
+
+
+_ROLE_ACCOUNT = re.compile(r"`(?P<name>[A-Za-z0-9_.:-]{1,128})`@`(?P<host>[A-Za-z0-9_.:%*-]{1,255})`")
+
+
+def _assigned_roles(grants: list[str]) -> tuple[list[str], bool]:
+    roles: list[str] = []
+    has_unparsed_assignment = False
+    for grant in grants:
+        match = re.match(r"\s*GRANT\s+(.+?)\s+TO\s+", grant, re.IGNORECASE)
+        if not match or re.search(r"\bON\b", match.group(1), re.IGNORECASE):
+            continue
+        role_text = match.group(1)
+        tokens = list(_ROLE_ACCOUNT.finditer(role_text))
+        compact_roles = ",".join(token.group(0) for token in tokens)
+        if not tokens or compact_roles != re.sub(r"\s+", "", role_text):
+            has_unparsed_assignment = True
+            continue
+        roles.extend(token.group(0) for token in tokens)
+    return list(dict.fromkeys(roles)), has_unparsed_assignment
 
 
 def _format_time(value: datetime) -> str:

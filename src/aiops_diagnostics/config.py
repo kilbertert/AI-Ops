@@ -4,6 +4,7 @@ import os
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 
 def _env(name: str, default: str = "") -> str:
@@ -33,7 +34,7 @@ class MySQLSettings:
 
 @dataclass(slots=True)
 class TDengineSettings:
-    url: str = "http://127.0.0.1:6041"
+    url: str = "http://127.0.0.1:16041"
     user: str = ""
     password: str = ""
     database: str = "iot"
@@ -58,7 +59,7 @@ class SSHSettings:
     mysql_host: str = "127.0.0.1"
     mysql_port: int = 3306
     tdengine_host: str = "127.0.0.1"
-    tdengine_port: int = 6041
+    tdengine_port: int = 16041
     redis_host: str = "127.0.0.1"
     redis_port: int = 6379
 
@@ -67,6 +68,16 @@ class SSHSettings:
             return
         if not self.host or not self.user or not self.key_file:
             raise ValueError("SSH 隧道需要 host、user 和 key_file")
+        if self.user.startswith("-"):
+            raise ValueError("SSH user 不能以连字符开头")
+        for name, port in (
+            ("SSH port", self.port),
+            ("MySQL forwarded port", self.mysql_port),
+            ("TDengine forwarded port", self.tdengine_port),
+            ("Redis forwarded port", self.redis_port),
+        ):
+            if not 1 <= port <= 65535:
+                raise ValueError(f"{name} 必须在 1-65535 之间")
         if not Path(self.key_file).expanduser().is_file():
             raise ValueError("SSH 私钥文件不存在")
 
@@ -83,7 +94,7 @@ class SafetySettings:
         limits = {
             "query_timeout_seconds": (self.query_timeout_seconds, 1, 60),
             "mysql_max_execution_ms": (self.mysql_max_execution_ms, 100, 30_000),
-            "tdengine_max_rows": (self.tdengine_max_rows, 1, 10_000),
+            "tdengine_max_rows": (self.tdengine_max_rows, 1, 2_000),
             "redis_max_messages": (self.redis_max_messages, 1, 1_000),
             "max_order_window_hours": (self.max_order_window_hours, 1, 168),
         }
@@ -111,7 +122,7 @@ class Settings:
                 database=_env("AIOPS_MYSQL_DATABASE", "cloud_charging_pile"),
             ),
             tdengine=TDengineSettings(
-                url=_env("AIOPS_TDENGINE_URL", "http://127.0.0.1:6041"),
+                url=_env("AIOPS_TDENGINE_URL", "http://127.0.0.1:16041"),
                 user=_env("AIOPS_TDENGINE_USER"),
                 password=_env("AIOPS_TDENGINE_PASSWORD"),
                 database=_env("AIOPS_TDENGINE_DATABASE", "iot"),
@@ -132,7 +143,7 @@ class Settings:
                 mysql_host=_env("AIOPS_SSH_MYSQL_HOST", "127.0.0.1"),
                 mysql_port=_env_int("AIOPS_SSH_MYSQL_PORT", 3306),
                 tdengine_host=_env("AIOPS_SSH_TDENGINE_HOST", "127.0.0.1"),
-                tdengine_port=_env_int("AIOPS_SSH_TDENGINE_PORT", 6041),
+                tdengine_port=_env_int("AIOPS_SSH_TDENGINE_PORT", 16041),
                 redis_host=_env("AIOPS_SSH_REDIS_HOST", "127.0.0.1"),
                 redis_port=_env_int("AIOPS_SSH_REDIS_PORT", 6379),
             ),
@@ -148,6 +159,23 @@ class Settings:
     def redacted(self) -> dict[str, Any]:
         data = asdict(self)
         data["mysql"]["password"] = "REDACTED" if self.mysql.password else ""
+        data["tdengine"]["url"] = _redact_url_credentials(self.tdengine.url)
         data["tdengine"]["password"] = "REDACTED" if self.tdengine.password else ""
         data["redis"]["password"] = "REDACTED" if self.redis.password else ""
         return data
+
+
+def _redact_url_credentials(value: str) -> str:
+    """Remove URL userinfo before configuration is rendered or logged."""
+    try:
+        parsed = urlsplit(value)
+        if parsed.username is None and parsed.password is None:
+            return value
+        hostname = parsed.hostname or ""
+        if ":" in hostname and not hostname.startswith("["):
+            hostname = f"[{hostname}]"
+        if parsed.port is not None:
+            hostname = f"{hostname}:{parsed.port}"
+        return urlunsplit((parsed.scheme, "REDACTED@" + hostname, parsed.path, parsed.query, parsed.fragment))
+    except ValueError:
+        return "REDACTED"

@@ -22,7 +22,7 @@
 库：`cloud_charging_pile`，核心关键字段：
 | 字段 | 作用 |
 | ---- | ---- |
-| order_no | 订单唯一编号，排查主索引 |
+| order_no | 业务订单编号，必须与 tenant_id 联合定位 |
 | device_code/child_device_code | 桩+枪编号，用于查TD时序 |
 | tx_data | JSON，硬件上报原始交易电量、费用、停机原因 |
 | stopped_reason_code/content | 停机编码+文字描述 |
@@ -45,8 +45,16 @@
 # 二、通用标准化排查总流程（全故障通用步骤）
 ## Step1 根据订单号查询MySQL基础订单数据
 ```sql
-SELECT * FROM cloud_charging_pile.ch_order_info WHERE order_no = '输入订单号';
+SELECT order_no, tenant_id, status, type, launch_type, device_id, device_code,
+       child_device_code, device_protocol, created_time, stop_time, electricity,
+       electricity_fee, service_fee, total_amount, is_receive_tx_data,
+       stopped_reason_code, stopped_reason_content, error_info, transaction_id, tx_data
+FROM cloud_charging_pile.ch_order_info
+WHERE tenant_id = :tenant_id AND order_no = :order_no
+ORDER BY created_time DESC
+LIMIT 3;
 ```
+`:tenant_id` 和 `:order_no` 必须通过数据库驱动绑定，不得字符串拼接。若同一租户返回多行，先按重复订单处理，不得任意选取一行。
 核查要点：
 1. 订单状态status：充电中/已结束/异常
 2. 提取关键参数：device_code、child_device_code、txSerialNo、created_time、stop_time、device_protocol、tx_data
@@ -55,10 +63,11 @@ SELECT * FROM cloud_charging_pile.ch_order_info WHERE order_no = '输入订单�
 
 ## Step2 核对硬件上报tx_data与平台订单计算数据
 ### 2.2.1 判定标准
-平台计费逻辑：
-总电费 = 分时尖峰平谷电费求和
-服务费 = 硬件上报totalFee - 总电费
-> 异常判定：服务费 ≤ 0 大概率是硬件上报电量/金额异常
+计费逻辑必须先按订单类型和协议分支：
+1. `launch_type=operator`：以运营商订单总额路径核对，不套用桩侧服务费公式。
+2. OCPP/AYK 等平台计费协议：以电表起止值、计费模板快照和平台分时计算为主，`tx_data.totalFee` 不是最终金额依据。
+3. 非运营商 YKC 桩计费：总电费为尖峰平谷电费之和，服务费可与 `tx_data.totalFee - 总电费` 交叉核对。
+4. 服务费为 0 或负数只是异常信号，必须结合计费模板、订单费用字段和原始交易数据确认，不能单独下结论。
 
 核对项：
 1. tx_data总电量`electricityQuantity` 和订单表`electricity`是否一致
@@ -73,7 +82,17 @@ SELECT * FROM cloud_charging_pile.ch_order_info WHERE order_no = '输入订单�
 ## Step3 TDengine查询时序过程数据（定位充电过程异常）
 ### 3.3.1 查询单订单全流程实时枪状态
 ```sql
-SELECT * FROM `charging-gun_property` WHERE txSerialNo = '交易流水号';
+SELECT _ts, `txSerialNo`, status, `isReturn`, `isInsert`, `outputVoltage`,
+       `outputCurrent`, power, `chargingTime`, `chargingElectricityQuantity`, soc,
+       temperature, `batteryMaxTemperature`, `batteryMinTemperature`, `errorCode`,
+       `errorReason`, `meterNow`
+FROM `charging-gun_property`
+WHERE device = :device_code
+  AND _ts >= :created_time
+  AND _ts <= :stop_time
+  AND `txSerialNo` = :tx_serial_no
+ORDER BY _ts ASC
+LIMIT 2000;
 ```
 核查内容：
 1. status状态流转：2空闲→3充电中→2空闲，是否存在中途切故障1
@@ -83,10 +102,13 @@ SELECT * FROM `charging-gun_property` WHERE txSerialNo = '交易流水号';
 
 ### 3.3.2 查询设备原始通讯报文（时序区间取自订单created_time~stop_time）
 ```sql
-SELECT * FROM `charging-pile_comm`
-WHERE device='设备编码'
-AND _ts >= '2026-01-01 00:00:00'
-AND _ts <= '2026-01-01 01:00:00';
+SELECT _ts, direction, code, decoded
+FROM `charging-pile_comm`
+WHERE device = :device_code
+  AND _ts >= :created_time
+  AND _ts <= :stop_time
+ORDER BY _ts ASC
+LIMIT 2000;
 ```
 排查点：
 1. 上行报文是否缺失：桩没上报充电数据
@@ -96,16 +118,17 @@ AND _ts <= '2026-01-01 01:00:00';
 ## Step4 Redis消息队列排查（订单同步、消息丢失场景）
 队列Key：`third.order.sync.queue`
 适用场景：订单生成但下游商城/对账系统无数据、同步延迟
-1. 查看队列全部消息
+1. 从最新消息开始检查有界窗口
 ```redis
-XRANGE third.order.sync.queue - + COUNT 100
+XREVRANGE third.order.sync.queue + - COUNT 100
 ```
-2. 消费组说明：`mall.third.order.sync.group`，lag=0代表无未消费消息
+2. 使用 `XINFO GROUPS third.order.sync.queue` 查看消费组。`lag` 是尚未投递的全局消息数，`pending` 是已投递但未确认的全局消息数；二者都不能单独证明当前订单阻塞。
 3. 问题判定：
-    - 订单同步消息存在队列：下游消费者阻塞，需手动消费/重置游标
+    - 有界窗口内存在当前订单且消费组积压：记录证据后由工程师结合消费者日志判断
     - 队列无对应订单消息：订单发送逻辑异常，服务未推送消息
 
 ## Step5 根因分类判定 & 对应处理方案
+> 第一版运行时只负责诊断。下文涉及重算、补推、手动消费、重置游标、退款、修改配置或重启服务的内容，仅是人工处置参考，均不属于自动化能力，必须由工程师另行审批和执行。
 # 三、分场景专项排查SOP
 ## 场景1：订单电量/金额异常（负数、0、金额偏差、服务费为0）
 1. 执行Step1拉取订单，提取tx_data
@@ -139,7 +162,7 @@ XRANGE third.order.sync.queue - + COUNT 100
 ## 场景4：设备离线、通讯中断
 1. TD时序`charging-gun_property`最新上报时间，长时间无数据判定离线
 2. 报文表无上下行数据：桩网络故障（4G/网线）
-3. 服务器侧排查：防火墙6041端口是否放行、设备接入服务运行状态
+3. 服务器侧排查：只读诊断验证本机 16041 代理健康和设备接入服务状态；不得为诊断开放或直连 TDengine 原生 6041 端口
 
 ## 场景5：订单同步下游丢失（商城对账无数据）
 1. Redis Stream查看`third.order.sync.queue`是否存在该订单同步消息
@@ -167,18 +190,31 @@ XRANGE third.order.sync.queue - + COUNT 100
 ```sql
 -- 按设备查当日所有异常订单
 SELECT order_no,stopped_reason_code,error_info FROM ch_order_info
-WHERE device_code='xxx' AND status=2 AND DATE(created_time) = CURDATE();
+WHERE device_code = :device_code
+  AND status = 2
+  AND created_time >= CURRENT_DATE
+  AND created_time < CURRENT_DATE + INTERVAL 1 DAY
+ORDER BY created_time DESC
+LIMIT 200;
 ```
 ### TDengine
 ```sql
--- 查询设备当日全部原始报文
-SELECT * FROM `charging-pile_comm` WHERE device='xxx' AND _ts >= 'created_time' and _ts<='stop_time';
+-- 使用订单实际起止时间绑定 :created_time 和 :stop_time
+SELECT _ts, direction, code, decoded
+FROM `charging-pile_comm`
+WHERE device = :device_code
+  AND _ts >= :created_time
+  AND _ts <= :stop_time
+ORDER BY _ts ASC
+LIMIT 2000;
 ```
 ### Redis Stream
 ```redis
-# 查看异步订单是否有消息堆积
+# 查看 Stream 长度和消费组全局状态；仍需在有界消息窗口内匹配订单号
 XLEN  third.order.sync.queue
 XLEN  third.order.sync.notify.queue
+XINFO GROUPS third.order.sync.queue
+XINFO GROUPS third.order.sync.notify.queue
 ```
 
 ## 附录2：停机原因编码快速说明

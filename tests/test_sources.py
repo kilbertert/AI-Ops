@@ -15,6 +15,8 @@ from aiops_diagnostics.sources import (
 def test_tdengine_literal_rejects_injection_characters() -> None:
     with pytest.raises(ValueError):
         _safe_literal("device' OR 1=1 --")
+    with pytest.raises(ValueError):
+        _safe_literal("PILE--01")
 
 
 def test_database_identifier_is_restricted() -> None:
@@ -24,9 +26,16 @@ def test_database_identifier_is_restricted() -> None:
 
 
 class _FakeCursor:
-    def __init__(self, grants: str = "GRANT SELECT ON cloud_charging_pile.* TO diagnostic") -> None:
+    def __init__(
+        self,
+        grants: str | list[str] = "GRANT SELECT ON cloud_charging_pile.* TO diagnostic",
+        role_grants: str | list[str] | None = None,
+        role_error: bool = False,
+    ) -> None:
         self.calls = []
-        self.grants = grants
+        self.grants = [grants] if isinstance(grants, str) else grants
+        self.role_grants = [role_grants] if isinstance(role_grants, str) else role_grants or []
+        self.role_error = role_error
 
     def __enter__(self):
         return self
@@ -36,10 +45,14 @@ class _FakeCursor:
 
     def execute(self, sql, params=None):
         self.calls.append((sql, params))
+        if " USING " in sql and self.role_error:
+            raise RuntimeError("role expansion denied")
 
     def fetchall(self):
+        if " USING " in self.calls[-1][0]:
+            return [{"Grants": grant} for grant in self.role_grants]
         if self.calls[-1][0] == "SHOW GRANTS FOR CURRENT_USER()":
-            return [{"Grants": self.grants}]
+            return [{"Grants": grant} for grant in self.grants]
         return [{"order_no": "ORDER-123456", "tx_data": '{"txSerialNo":"TX-1"}'}]
 
     def fetchone(self):
@@ -47,16 +60,25 @@ class _FakeCursor:
 
 
 class _FakeConnection:
-    def __init__(self, grants: str = "GRANT SELECT ON cloud_charging_pile.* TO diagnostic") -> None:
-        self.fake_cursor = _FakeCursor(grants)
+    def __init__(
+        self,
+        grants: str | list[str] = "GRANT SELECT ON cloud_charging_pile.* TO diagnostic",
+        role_grants: str | list[str] | None = None,
+        role_error: bool = False,
+        rollback_error: bool = False,
+    ) -> None:
+        self.fake_cursor = _FakeCursor(grants, role_grants, role_error)
         self.rolled_back = False
         self.closed = False
+        self.rollback_error = rollback_error
 
     def cursor(self):
         return self.fake_cursor
 
     def rollback(self):
         self.rolled_back = True
+        if self.rollback_error:
+            raise RuntimeError("connection lost")
 
     def close(self):
         self.closed = True
@@ -77,6 +99,19 @@ def test_mysql_order_query_is_parameterized_and_read_only(monkeypatch) -> None:
     assert statements[2][1] == ["ORDER-123456", "TENANT-1"]
     assert rows[0]["tx_data"]["txSerialNo"] == "TX-1"
     assert connection.rolled_back and connection.closed
+
+
+def test_mysql_connection_closes_when_rollback_fails(monkeypatch) -> None:
+    settings = Settings.from_env()
+    settings.mysql.user = "readonly"
+    settings.mysql.password = "secret"
+    connection = _FakeConnection(rollback_error=True)
+    monkeypatch.setattr("aiops_diagnostics.sources.pymysql.connect", lambda **kwargs: connection)
+
+    MySQLSource(settings).get_orders("ORDER-123456", "TENANT-1")
+
+    assert connection.rolled_back is True
+    assert connection.closed is True
 
 
 def test_tdengine_query_is_bounded_by_device_time_and_limit() -> None:
@@ -127,6 +162,52 @@ def test_mysql_doctor_rejects_all_privileges(monkeypatch) -> None:
 
     assert details["read_only"] is False
     assert details["unsafe_privileges"] == ["ALL PRIVILEGES", "GRANT OPTION"]
+
+
+def test_mysql_doctor_expands_assigned_roles(monkeypatch) -> None:
+    settings = Settings.from_env()
+    settings.mysql.user = "diagnostic"
+    settings.mysql.password = "secret"
+    connection = _FakeConnection(
+        "GRANT `app_readwrite`@`%` TO `diagnostic`@`%`",
+        "GRANT SELECT, UPDATE ON cloud_charging_pile.* TO `app_readwrite`@`%`",
+    )
+    monkeypatch.setattr("aiops_diagnostics.sources.pymysql.connect", lambda **kwargs: connection)
+
+    details = MySQLSource(settings).doctor()
+
+    assert details["assigned_roles"] == ["`app_readwrite`@`%`"]
+    assert details["read_only"] is False
+    assert details["unsafe_privileges"] == ["UPDATE"]
+
+
+def test_mysql_doctor_treats_unresolved_roles_as_unsafe(monkeypatch) -> None:
+    settings = Settings.from_env()
+    settings.mysql.user = "diagnostic"
+    settings.mysql.password = "secret"
+    connection = _FakeConnection(
+        "GRANT `app_readonly`@`%` TO `diagnostic`@`%`",
+        role_error=True,
+    )
+    monkeypatch.setattr("aiops_diagnostics.sources.pymysql.connect", lambda **kwargs: connection)
+
+    details = MySQLSource(settings).doctor()
+
+    assert details["read_only"] is False
+    assert details["unsafe_privileges"] == ["UNRESOLVED ROLE `app_readonly`@`%`"]
+
+
+def test_mysql_doctor_treats_unparsed_role_assignments_as_unsafe(monkeypatch) -> None:
+    settings = Settings.from_env()
+    settings.mysql.user = "diagnostic"
+    settings.mysql.password = "secret"
+    connection = _FakeConnection("GRANT `read only`@`%` TO `diagnostic`@`%`")
+    monkeypatch.setattr("aiops_diagnostics.sources.pymysql.connect", lambda **kwargs: connection)
+
+    details = MySQLSource(settings).doctor()
+
+    assert details["read_only"] is False
+    assert details["unsafe_privileges"] == ["UNRESOLVED ROLE ASSIGNMENT"]
 
 
 class _BinaryRedisClient:
