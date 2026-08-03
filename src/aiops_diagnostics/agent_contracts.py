@@ -146,7 +146,27 @@ class RunState(BaseModel):
 
 
 def agent_turn_schema() -> dict[str, Any]:
-    return AgentTurn.model_json_schema()
+    schema = AgentTurn.model_json_schema()
+    _make_strict_response_schema(schema)
+    return schema
+
+
+def _make_strict_response_schema(node: Any) -> None:
+    """Normalize Pydantic output for strict Responses API providers."""
+    if isinstance(node, list):
+        for item in node:
+            _make_strict_response_schema(item)
+        return
+    if not isinstance(node, dict):
+        return
+
+    node.pop("default", None)
+    properties = node.get("properties")
+    if isinstance(properties, dict):
+        node["additionalProperties"] = False
+        node["required"] = list(properties)
+    for value in node.values():
+        _make_strict_response_schema(value)
 
 
 def _incident_source_hash(order_no: str, tenant_id: str | None, problem: str, intent: str) -> str:

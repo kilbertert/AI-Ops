@@ -25,6 +25,16 @@ def _env_bool(name: str, default: bool = False) -> bool:
     return raw.lower() in {"1", "true", "yes", "on"}
 
 
+def _default_codex_bin() -> str:
+    """Prefer the SDK-pinned native runtime over a shell wrapper on PATH."""
+    try:
+        from codex_cli_bin import bundled_codex_path
+
+        return str(bundled_codex_path())
+    except (ImportError, AttributeError):
+        return shutil.which("codex") or "/home/claude/.local/bin/codex"
+
+
 def canonical_provider_base_url(value: str) -> str:
     """Validate and normalize the non-secret model provider endpoint."""
     candidate = value.strip()
@@ -135,7 +145,7 @@ class SafetySettings:
 
 @dataclass(slots=True)
 class AgentSettings:
-    codex_bin: str = field(default_factory=lambda: shutil.which("codex") or "/home/claude/.local/bin/codex")
+    codex_bin: str = field(default_factory=_default_codex_bin)
     codex_runtime_home: str = str(Path.home() / ".local/share/aiops-diagnostics/codex-home")
     api_base_url: str = "https://api.psydo.top/"
     api_key_env: str = "AIOPS_CODEX_API_KEY"
@@ -227,7 +237,7 @@ class Settings:
             agent=AgentSettings(
                 codex_bin=_env(
                     "AIOPS_CODEX_BIN",
-                    shutil.which("codex") or "/home/claude/.local/bin/codex",
+                    _default_codex_bin(),
                 ),
                 codex_runtime_home=_env(
                     "AIOPS_CODEX_RUNTIME_HOME",

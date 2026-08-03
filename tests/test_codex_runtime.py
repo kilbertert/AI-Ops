@@ -57,6 +57,7 @@ def test_prepare_runtime_home_writes_api_provider_profile(tmp_path: Path) -> Non
     assert 'model_provider = "aiops-api"' in config
     assert 'base_url = "https://proxy.example/"' in config
     assert 'env_key = "AIOPS_CODEX_PROVIDER_KEY"' in config
+    assert '"/usr/bin/true" = "read"' in config
     assert "multi_agent = false" in config
     assert '"state.json" = "deny"' in config
     assert '".inputs/**" = "deny"' in config

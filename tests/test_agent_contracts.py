@@ -1,7 +1,7 @@
 import pytest
 from pydantic import ValidationError
 
-from aiops_diagnostics.agent_contracts import AgentTurn, IncidentManifest
+from aiops_diagnostics.agent_contracts import AgentTurn, IncidentManifest, agent_turn_schema
 from aiops_diagnostics.parsing import parse_request
 from aiops_diagnostics.redaction import redact_text
 
@@ -47,9 +47,34 @@ def test_agent_turn_requires_payload_matching_kind() -> None:
         )
 
 
+def test_agent_turn_schema_is_strict_for_responses_api() -> None:
+    schema = agent_turn_schema()
+
+    assert schema["required"] == ["kind", "tool_requests", "diagnosis"]
+    assert schema["additionalProperties"] is False
+    _assert_strict_objects(schema)
+
+
 def test_free_text_redaction_removes_bearer_and_openai_style_keys() -> None:
     api_key = "sk-" + "abcdefghijklmnopqrstuvwxyz123456"
     rendered = redact_text("Authorization: Bearer abcdefghijklmnopqrstuvwxyz and " + api_key)
 
     assert "abcdefghijklmnopqrstuvwxyz" not in rendered
     assert "Bearer REDACTED" in rendered
+
+
+def _assert_strict_objects(node: object) -> None:
+    if isinstance(node, list):
+        for item in node:
+            _assert_strict_objects(item)
+        return
+    if not isinstance(node, dict):
+        return
+
+    assert "default" not in node
+    properties = node.get("properties")
+    if isinstance(properties, dict):
+        assert node.get("additionalProperties") is False
+        assert node.get("required") == list(properties)
+    for value in node.values():
+        _assert_strict_objects(value)

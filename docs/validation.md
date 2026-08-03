@@ -86,9 +86,33 @@ The thin-harness implementation was validated without business mutation:
   database/API secrets were absent from staged references, events, journals,
   and evidence artifacts.
 
-The configured Responses API endpoint accepted the provider key and returned
-an explicit `429 INSUFFICIENT_BALANCE` response. The real Codex turn therefore
-could not complete. The failure was delivered without a traceback or secret,
-the run state became `interrupted`, and `agent-resume` reused the same thread.
-Real-model business validation remains pending provider balance restoration or
-selection of another funded key slot, followed by engineer-confirmed incidents.
+An earlier provider slot returned an explicit `429 INSUFFICIENT_BALANCE` response;
+that failure was delivered without a traceback or secret, the run state became
+`interrupted`, and `agent-resume` reused the same thread.
+
+## Real Provider Validation (2026-08-03)
+
+A separate funded key slot was used against the same pinned provider endpoint.
+The first live turn exposed two integration defects before any business query:
+the Responses API required every schema property to be listed in `required`, and
+the default server `codex` command was a credential-injecting wrapper whose
+native sandbox target was not visible to the restricted profile. Both issues were
+fixed and covered by regression tests. The runtime now uses the Python SDK's
+pinned native Codex binary, grants the profile read access to that exact binary,
+and never passes the server wrapper to the diagnostic process.
+
+- Three real-model fixture runs completed: YKC amount mismatch was diagnosed with
+  medium confidence, missing transaction data was diagnosed with high confidence
+  after three direct evidence classes, and internally consistent OCPP billing was
+  correctly returned as inconclusive.
+- Three sanitized production read-only runs completed across YKC1.8 operator,
+  YKC1.6 remote, and OCPP paths. The model selected tools autonomously, kept
+  evidence citations and confidence aligned with empty/limited sources, and made
+  no mutation claims.
+- All six runs ended in `completed` state. Evidence hashes, `0700` workspaces,
+  `0600` files, and secret/PII scans passed; MySQL, TDengine, and Redis remained
+  read-only throughout.
+
+These are real provider and production-path validations, not engineer-confirmed
+incident acceptances. Business acceptance remains pending the human-confirmed
+cases listed above.

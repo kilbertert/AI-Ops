@@ -44,6 +44,7 @@ description = "Read only access to one private AI-Ops diagnostic run workspace."
 
 [permissions.aiops-diagnostic.filesystem]
 ":minimal" = "read"
+{codex_bin_path} = "read"
 
 [permissions.aiops-diagnostic.filesystem.":workspace_roots"]
 "." = "read"
@@ -235,7 +236,11 @@ def prepare_runtime_home(settings: AgentSettings) -> Path:
 
 def runtime_config(settings: AgentSettings) -> str:
     base_url = canonical_provider_base_url(settings.api_base_url)
-    return RUNTIME_CONFIG_TEMPLATE.format(base_url=json.dumps(base_url, ensure_ascii=False))
+    codex_bin_path = json.dumps(str(Path(settings.codex_bin).expanduser().resolve()), ensure_ascii=False)
+    return RUNTIME_CONFIG_TEMPLATE.format(
+        base_url=json.dumps(base_url, ensure_ascii=False),
+        codex_bin_path=codex_bin_path,
+    )
 
 
 def resolve_provider_api_key(settings: AgentSettings) -> str:
