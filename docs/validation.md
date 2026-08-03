@@ -80,8 +80,9 @@
 - Git bundle 恢复到提交 `0c15d87`，本地分支为 `test/windows-runner-validation-v2`；新增的 key、`auth.json`、`artifacts`、`runs` 和 `.aiops` 均已加入本地 `.gitignore`。
 - `uv sync --locked --dev`、CLI help、155 项 pytest、`uv lock --check`、`uv pip check` 和 `compileall` 通过。
 - `agent-doctor --key-slot primary` 通过，确认 `base_url=https://api.psydo.top/`、Windows `unelevated`、业务 mutation disabled；没有使用 Windows Codex App 官方账号额度。
-- `run-20260803T124243Z-65cd657e-5a88` 和临时 `elevated` 对照 run `run-20260803T124847Z-65cd657e-11d3` 均成功采集 order/fee evidence，但最终被本地 staged-artifact 读取失败阻断；没有业务写入。
-- 修复待在本分支完成后重新分发并复跑；当前不能宣称 Windows 真实业务诊断已通过。
+- `run-20260803T124243Z-65cd657e-5a88` 和临时 `elevated` 对照 run `run-20260803T124847Z-65cd657e-11d3` 均成功采集 order/fee evidence，但最终被本地 staged-artifact 读取失败阻断；没有业务写入。该失败促成了 payload 交付修复。
+- 修复分支 `fix/windows-model-evidence-delivery` 分发后，`run-20260803T130133Z-65cd657e-d07d` 在默认 `unelevated` Windows sandbox 下完成 `diagnosed/medium`；结果引用 `ev-001`、`ev-002`、`ev-003`，状态 `completed`，事件日志不包含 evidence payload 或 API key。
+- 该 run 证明 Windows provider、Codex native runtime、只读工具、脱敏 payload 交付和结果验证链路可工作；它仍是合成 fixture，不是工程师确认的真实故障业务验收。
 
 ## 业务验收待办
 

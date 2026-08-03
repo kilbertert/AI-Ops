@@ -32,6 +32,7 @@ Codex 决定请求哪些证据以及如何组合证据。harness 不选择最终
 - `AgentWorkspace` 是私有目录（POSIX 为 `0700`，Windows 使用当前用户保护 DACL），包含暂存 SOP/业务参考，不包含生产凭据或跨运行原始状态。
 - 合成 fixture 会复制到隐藏且带哈希校验的输入路径，恢复运行时不能悄悄读取变化后的测试数据。
 - `EvidenceJournal` 为每个工具结果保存不可变 artifact、SHA-256、有界请求元数据和来源状态；依赖性读取会重新校验哈希。
+- tool result 同时携带从 artifact 读取、已脱敏且有限大小的 evidence payload，模型不必依赖本地 sandbox 回读私有文件；artifact 仍是审计源，事件日志不重复写入 payload。
 - `DiagnosticToolExecutor` 只提供订单、费用、设备、TDengine、Redis 和 advisory runbook 工具。不提供 SQL 输入、任意表选择、生产 shell 路径或业务动作。
 - `AgentResultValidator` 拒绝身份漂移、缺少证据引用、只引用 known runbook 的结论、来源失败后的高置信度、密钥泄露和声称已执行禁用动作。它不会替模型重写根因。
 - provider 失败、超时、格式错误或进程中断后，原有 `thread_id` 和 `run_id` 仍可恢复。
