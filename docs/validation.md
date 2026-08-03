@@ -73,6 +73,16 @@
 - 本轮确定性检查：`uv run pytest -q`（155 项通过）、`uv run ruff check .`、`uv run ruff format --check .`、`uv lock --check`、`uv pip check`、`uv run python -m compileall -q src tests packaging` 和 `git diff --check` 均通过。
 - OpenCodeReview delegation preview 将 Markdown、`.env.example` 和新增 `AGENTS.md` 标记为 `unsupported_ext`（0 个可自动选取的 reviewable 文件）；已按同一默认规则完成人工差异审查，未发现需要修复的文档、安全或边界问题。
 
+## M5 Windows runner 证据交付验证
+
+2026-08-03 在 `D:\AI-Ops` 真实 Windows 源码工作区执行：
+
+- Git bundle 恢复到提交 `0c15d87`，本地分支为 `test/windows-runner-validation-v2`；新增的 key、`auth.json`、`artifacts`、`runs` 和 `.aiops` 均已加入本地 `.gitignore`。
+- `uv sync --locked --dev`、CLI help、155 项 pytest、`uv lock --check`、`uv pip check` 和 `compileall` 通过。
+- `agent-doctor --key-slot primary` 通过，确认 `base_url=https://api.psydo.top/`、Windows `unelevated`、业务 mutation disabled；没有使用 Windows Codex App 官方账号额度。
+- `run-20260803T124243Z-65cd657e-5a88` 和临时 `elevated` 对照 run `run-20260803T124847Z-65cd657e-11d3` 均成功采集 order/fee evidence，但最终被本地 staged-artifact 读取失败阻断；没有业务写入。
+- 修复待在本分支完成后重新分发并复跑；当前不能宣称 Windows 真实业务诊断已通过。
+
 ## 业务验收待办
 
 生产业务验收仍需要每条支持路径至少三笔由工程师确认结论的真实故障：

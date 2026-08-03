@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -38,6 +40,7 @@ class ToolOutcome:
     artifact: str
     source: str
     reused: bool = False
+    model_payload: Any | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -262,8 +265,12 @@ class DiagnosticToolExecutor:
             "tenant_id": self.request.tenant_id,
         }
 
-    @staticmethod
-    def _outcome(tool: ToolName, entry: JournalEntry, *, reused: bool = False) -> ToolOutcome:
+    def _outcome(self, tool: ToolName, entry: JournalEntry, *, reused: bool = False) -> ToolOutcome:
+        model_payload: Any | None = None
+        with contextlib.suppress(ValueError):
+            # The journal remains the audit source of truth, but Windows Codex
+            # sandboxes may not be able to read the private workspace back.
+            model_payload = _bound_model_payload(self.journal.load_payload(entry))
         return ToolOutcome(
             tool=tool,
             status=entry.status,
@@ -271,6 +278,7 @@ class DiagnosticToolExecutor:
             artifact=entry.artifact,
             source=entry.source,
             reused=reused,
+            model_payload=model_payload,
         )
 
 
@@ -286,3 +294,29 @@ def _transaction_serial(order: dict[str, Any]) -> str | None:
         return None
     value = order.get("order_no")
     return str(value) if value not in (None, "") else None
+
+
+def _bound_model_payload(payload: Any, *, max_items: int = 200, max_chars: int = 48_000) -> Any:
+    """Keep sanitized evidence usable when the model cannot read workspace files."""
+
+    def bound(value: Any) -> Any:
+        if isinstance(value, dict):
+            return {str(key): bound(item) for key, item in value.items()}
+        if isinstance(value, list):
+            items = [bound(item) for item in value[:max_items]]
+            if len(value) > max_items:
+                items.append({"_truncated_items": len(value) - max_items})
+            return items
+        if isinstance(value, str) and len(value) > 4_000:
+            return value[:4_000] + "...[truncated]"
+        return value
+
+    bounded = bound(payload)
+    encoded = json.dumps(bounded, ensure_ascii=False, default=str)
+    if len(encoded) <= max_chars:
+        return bounded
+    return {
+        "_truncated": True,
+        "_notice": "证据内容超过模型上下文上限，请结合 evidence_id 和后续工具结果判断。",
+        "preview": encoded[:max_chars],
+    }

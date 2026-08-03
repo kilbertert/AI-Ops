@@ -112,6 +112,7 @@ def test_coordinator_keeps_codex_in_control_of_tool_selection(tmp_path: Path) ->
     assert result.status.value == "diagnosed"
     assert [entry.tool for entry in journal.entries()] == ["order_snapshot"]
     assert "Tool outcomes" in session.prompts[1]
+    assert '"payload"' in session.prompts[1]
     assert workspace.load_state().thread_id == "thread-test"
     assert workspace.load_state().phase == "completed"
     assert session.closed is True
