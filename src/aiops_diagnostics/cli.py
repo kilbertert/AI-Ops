@@ -25,6 +25,7 @@ from aiops_diagnostics.config import (
     selected_config_file,
     validate_key_slot_name,
 )
+from aiops_diagnostics.console_encoding import configure_windows_stdio
 from aiops_diagnostics.diagnostic_tools import DiagnosticToolExecutor
 from aiops_diagnostics.engine import DiagnosticEngine
 from aiops_diagnostics.journal import EvidenceJournal
@@ -44,6 +45,8 @@ from aiops_diagnostics.private_files import (
 )
 from aiops_diagnostics.render import render_agent_diagnosis, render_doctor, render_report
 from aiops_diagnostics.sources import DiagnosticSources, FixtureSources, SourceError, live_sources
+
+configure_windows_stdio()
 
 app = typer.Typer(
     name="aiops",
