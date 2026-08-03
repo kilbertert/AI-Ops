@@ -1,0 +1,52 @@
+{
+  "orders": [
+    {
+      "id": "ORDER-ID-2",
+      "order_no": "TEST-MISSING-0002",
+      "tenant_id": "TENANT-DEMO",
+      "status": 2,
+      "type": 0,
+      "billing_type": 0,
+      "launch_type": "scan",
+      "is_test": true,
+      "device_id": "DEVICE-ID-2",
+      "device_code": "PILE-DEMO-02",
+      "child_device_id": "GUN-ID-2",
+      "child_device_code": "GUN-DEMO-02",
+      "site_id": "SITE-DEMO",
+      "device_protocol": "YKC1.8",
+      "created_time": "2026-07-31 11:00:00",
+      "stop_time": "2026-07-31 11:20:00",
+      "electricity": "0.500",
+      "electricity_fee": "0.60",
+      "service_fee": "0.20",
+      "ds_electric_fee": "0.00",
+      "ds_service_fee": "0.00",
+      "launch_fee": "0.00",
+      "park_fee": "0.00",
+      "total_amount": "0.80",
+      "pay_amount": "0.80",
+      "is_pay": false,
+      "is_receive_tx_data": false,
+      "stopped_reason_code": null,
+      "stopped_reason_content": null,
+      "balance_insufficient_stop": false,
+      "tx_data": null
+    }
+  ],
+  "fee_template_records": {},
+  "devices": [
+    {
+      "id": "DEVICE-ID-2",
+      "device_code": "PILE-DEMO-02",
+      "protocol": "YKC1.8",
+      "online_status": 0,
+      "status": 0,
+      "work_status": 0,
+      "error_reason": "offline"
+    }
+  ],
+  "gun_samples": [],
+  "comm_messages": [],
+  "streams": []
+}
