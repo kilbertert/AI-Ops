@@ -43,6 +43,8 @@ def test_codex_selected_tools_enforce_dependencies_and_reuse_evidence(tmp_path: 
     assert reused.evidence_id == order.evidence_id
     assert order.model_payload["orders"]  # type: ignore[index]
     assert reused.model_payload == order.model_payload
+    assert "model_payload" not in order.to_dict()
+    assert "payload" not in order.to_dict()
     assert len(journal.entries()) == 3
     payload = journal.load_payload(journal.get(gun.evidence_id))  # type: ignore[arg-type]
     assert "samples" in payload
