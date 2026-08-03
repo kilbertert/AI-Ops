@@ -115,8 +115,10 @@ uv sync --locked --dev
 uv run python packaging/build_portable.py
 ```
 
-The command creates `dist/aiops/` and a versioned zip, then smoke-tests the
-packaged executable with an isolated temporary home and an offline OCPP case.
+The command creates `dist/aiops/` and a versioned zip, extracts that zip outside
+the source tree, then smoke-tests the packaged executable with a minimal PATH,
+an isolated private home, the bundled Codex runtime, and all three offline
+fixtures.
 Windows 11 is the recommended deployment baseline; see
 [`docs/portable.md`](docs/portable.md) for OpenSSH, sandbox, ACL, and first-run
 requirements.

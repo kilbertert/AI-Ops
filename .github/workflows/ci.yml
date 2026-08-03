@@ -73,3 +73,11 @@ jobs:
 
       - name: Build and smoke-test Windows portable bundle
         run: uv run python packaging/build_portable.py
+
+      - name: Upload accepted Windows portable bundle
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: aiops-diagnostics-windows-${{ github.sha }}
+          path: dist/aiops-diagnostics-*-windows-*.zip
+          if-no-files-found: error
+          retention-days: 7

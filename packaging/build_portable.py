@@ -4,10 +4,12 @@ import argparse
 import os
 import platform
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 import tomllib
+import zipfile
 from pathlib import Path
 
 
@@ -34,56 +36,6 @@ def main() -> None:
     distribution = project_root / "dist" / "aiops"
     _materialize_user_files(distribution)
     _assert_bundled_references(distribution)
-    executable = distribution / ("aiops.exe" if os.name == "nt" else "aiops")
-    fixture = distribution / "examples" / "fixtures" / "ocpp_consistent.json"
-    if not executable.is_file() or not fixture.is_file():
-        raise SystemExit("portable distribution is missing the executable or smoke fixture")
-
-    with tempfile.TemporaryDirectory(prefix="aiops-portable-smoke-") as temporary_home:
-        temporary_root = Path(temporary_home)
-        environment = os.environ.copy()
-        environment["AIOPS_HOME"] = str(temporary_root / "home")
-        environment["PYTHONUTF8"] = "1"
-        _run([str(executable), "--help"], environment, distribution)
-        _run([str(executable), "init"], environment, distribution)
-        _run([str(executable), "paths"], environment, distribution)
-        smoke_key = temporary_root / "provider.key"
-        smoke_key.write_text("portable-smoke-provider-key\n", encoding="utf-8")
-        _run(
-            [str(executable), "key-install", "smoke", "--from-file", str(smoke_key)],
-            environment,
-            distribution,
-        )
-        _run(
-            [str(executable), "agent-doctor", "--key-slot", "smoke"],
-            environment,
-            distribution,
-        )
-        bundled_codex = (
-            distribution
-            / "_internal"
-            / "codex_cli_bin"
-            / "bin"
-            / ("codex.exe" if os.name == "nt" else "codex")
-        )
-        _run(
-            [str(executable), "__codex-launcher", str(bundled_codex), "--version"],
-            environment,
-            distribution,
-        )
-        _run(
-            [
-                str(executable),
-                "diagnose",
-                "订单 TEST-OCPP-0003 金额是否正常",
-                "--fixture",
-                str(fixture),
-                "--json",
-            ],
-            environment,
-            distribution,
-        )
-
     _assert_no_embedded_secrets(distribution)
     version = _project_version(project_root / "pyproject.toml")
     system = platform.system().lower()
@@ -93,11 +45,112 @@ def main() -> None:
     if archive.exists():
         archive.unlink()
     shutil.make_archive(str(archive_base), "zip", distribution.parent, distribution.name)
+    _smoke_test_archive(archive)
     print(f"portable archive: {archive}")
 
 
 def _run(command: list[str], environment: dict[str, str], cwd: Path) -> None:
     subprocess.run(command, cwd=cwd, env=environment, check=True)
+
+
+def _smoke_test_archive(archive: Path) -> None:
+    with tempfile.TemporaryDirectory(prefix="aiops-portable-acceptance-") as temporary:
+        temporary_root = Path(temporary)
+        extraction_root = temporary_root / "extracted"
+        shutil.unpack_archive(archive, extraction_root)
+        distribution = extraction_root / "aiops"
+        _restore_archive_modes(archive, extraction_root)
+        _assert_bundled_references(distribution)
+        _assert_no_embedded_secrets(distribution)
+        _smoke_test_distribution(distribution, temporary_root)
+
+
+def _restore_archive_modes(archive: Path, extraction_root: Path) -> None:
+    if os.name == "nt":
+        return
+    with zipfile.ZipFile(archive) as handle:
+        executable_entries = {
+            entry.filename: entry.external_attr >> 16
+            for entry in handle.infolist()
+            if not entry.is_dir() and (entry.external_attr >> 16) & 0o111
+        }
+    if "aiops/aiops" not in executable_entries:
+        raise SystemExit("Linux portable archive did not preserve the executable bit")
+    for relative, archived_mode in executable_entries.items():
+        os.chmod(extraction_root.joinpath(*relative.split("/")), stat.S_IMODE(archived_mode))
+
+
+def _smoke_test_distribution(distribution: Path, temporary_root: Path) -> None:
+    executable = distribution / ("aiops.exe" if os.name == "nt" else "aiops")
+    if not executable.is_file():
+        raise SystemExit("extracted portable distribution is missing the executable")
+    environment = {name: value for name, value in os.environ.items() if not name.startswith("AIOPS_")}
+    home = temporary_root / "home"
+    environment.update(
+        {
+            "AIOPS_HOME": str(home),
+            "PATH": _minimal_path(environment),
+            "PYTHONIOENCODING": "utf-8",
+            "PYTHONUTF8": "1",
+        }
+    )
+    _run([str(executable), "--help"], environment, distribution)
+    _run([str(executable), "init"], environment, distribution)
+    _run([str(executable), "paths"], environment, distribution)
+    smoke_key = temporary_root / "provider.key"
+    smoke_key.write_text("portable-smoke-provider-key\n", encoding="utf-8")
+    _run(
+        [str(executable), "key-install", "smoke", "--from-file", str(smoke_key)],
+        environment,
+        distribution,
+    )
+    _run(
+        [str(executable), "agent-doctor", "--key-slot", "smoke"],
+        environment,
+        distribution,
+    )
+    bundled_codex = (
+        distribution / "_internal" / "codex_cli_bin" / "bin" / ("codex.exe" if os.name == "nt" else "codex")
+    )
+    _run(
+        [str(executable), "__codex-launcher", str(bundled_codex), "--version"],
+        environment,
+        distribution,
+    )
+    fixture_cases = (
+        ("ocpp_consistent.json", "订单 TEST-OCPP-0003 金额是否正常"),
+        ("ykc_amount_mismatch.json", "订单 TEST-YKC-0001 金额是否正常"),
+        ("missing_tx_data.json", "订单 TEST-MISSING-0002 为什么异常"),
+    )
+    for fixture_name, problem in fixture_cases:
+        fixture = distribution / "examples" / "fixtures" / fixture_name
+        _run(
+            [str(executable), "diagnose", problem, "--fixture", str(fixture), "--json"],
+            environment,
+            distribution,
+        )
+    _validate_smoke_paths(home)
+    print(f"portable OpenSSH client: {shutil.which('ssh', path=environment['PATH']) or 'not found'}")
+
+
+def _minimal_path(environment: dict[str, str]) -> str:
+    if os.name != "nt":
+        return "/usr/bin:/bin"
+    system_root = Path(environment.get("SYSTEMROOT") or environment.get("WINDIR") or "C:/Windows")
+    return os.pathsep.join((str(system_root / "System32"), str(system_root / "System32/OpenSSH")))
+
+
+def _validate_smoke_paths(home: Path) -> None:
+    from aiops_diagnostics.private_files import validate_private_directory, validate_private_file
+
+    for directory in (home, home / "keys", home / "codex-home", home / "runs"):
+        validate_private_directory(directory)
+    for file in (
+        home / "production.env",
+        home / "keys" / "smoke.key",
+        home / "codex-home" / "config.toml",
+    ):
+        validate_private_file(file)
 
 
 def _materialize_user_files(distribution: Path) -> None:

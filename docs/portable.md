@@ -53,9 +53,12 @@ uv sync --locked --dev
 uv run python packaging/build_portable.py
 ```
 
-The build creates `dist/aiops/` and a versioned zip archive. The build command
-then launches the packaged binary, initializes an isolated temporary home,
-prints resolved paths, and runs an offline OCPP fixture diagnosis.
+The build creates `dist/aiops/` and a versioned zip archive. It then extracts
+the archive outside the source tree and launches it with a minimal PATH. The
+acceptance run initializes an isolated private home, checks the provider key
+slot and bundled Codex runtime, validates private path permissions, rejects
+embedded secret files, and diagnoses the OCPP, YKC mismatch, and missing
+transaction-data fixtures.
 
 ## Security Boundary
 
