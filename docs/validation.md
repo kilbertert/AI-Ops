@@ -55,3 +55,40 @@ Production acceptance still requires at least three human-confirmed incidents fo
 6. Redis downstream synchronization issue.
 
 For every case, compare the generated summary, classification, evidence, and recommended next step with the engineer's final incident conclusion. False certainty is a failure even when the recommended action happens to be correct.
+
+## Codex-Native Harness Validation (2026-08-03)
+
+The thin-harness implementation was validated without business mutation:
+
+- The automated suite covers immutable incident identity, private workspaces,
+  evidence hashes, PII/secret redaction, bounded tool dependencies, result
+  validation, malformed output repair, timeout/provider interruption, resume,
+  and pluggable API key slots.
+- Three independent scripted-agent runs for each YKC amount mismatch, missing
+  transaction data, and OCPP server-billing fixture produced the same incident
+  identity, tool sequence, evidence IDs, conclusion class, confidence, and
+  limitations. Scripted turns validate harness repeatability; they are not a
+  substitute for a real model's business judgment.
+- Failure injection covered a TDengine outage, malformed structured output,
+  a timed-out turn, and a provider-side failure. Failed evidence remained in
+  the journal, high confidence was rejected, and the same thread/run remained
+  resumable.
+- Production `agent-doctor` dependencies remained read-only: MySQL 8.4.7
+  reported no unsafe privileges or unresolved roles, TDengine exposed both
+  required stables through the strict proxy, and Redis 6.2.7 was reachable.
+- A bounded 30-day aggregate sample returned 1,252 candidate rows. Ten
+  representative paths covered YKC1.8, YKC1.6, OCPP, HLHT, HW104,
+  operator/remote/admin launches, order types 0/1, and statuses 0/1/2/3/5.
+  All ten deterministic shadow reports completed without a failed source.
+- The thin evidence pipeline was then run against three sanitized production
+  paths (YKC1.8, YKC1.6, OCPP). All six tools completed for each path; every
+  artifact hash verified, workspaces were mode `0700`, and exact runtime
+  database/API secrets were absent from staged references, events, journals,
+  and evidence artifacts.
+
+The configured Responses API endpoint accepted the provider key and returned
+an explicit `429 INSUFFICIENT_BALANCE` response. The real Codex turn therefore
+could not complete. The failure was delivered without a traceback or secret,
+the run state became `interrupted`, and `agent-resume` reused the same thread.
+Real-model business validation remains pending provider balance restoration or
+selection of another funded key slot, followed by engineer-confirmed incidents.

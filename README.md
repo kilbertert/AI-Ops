@@ -8,6 +8,13 @@ This project is a read-only diagnostic runtime for charging order incidents. An 
 
 The runtime extracts the order number and intent, executes bounded queries against MySQL, TDengine, and Redis, applies rules derived from the production backend source, and returns an evidence-based report.
 
+The Codex-native path (`agent-diagnose`) inverts control: Codex selects the
+read-only evidence tools and makes the causal judgment, while the harness keeps
+the incident identity, query limits, evidence journal, redaction, confidence
+caps, structured result contract, and resume state immutable. The existing
+`diagnose` command remains a deterministic known-runbook fast path and advisory
+comparison source.
+
 ## Safety Contract
 
 - No UPDATE, DELETE, INSERT, DDL, refund, recalculation, message replay, or service restart capability exists.
@@ -16,6 +23,9 @@ The runtime extracts the order number and intent, executes bounded queries again
 - Redis inspection uses metadata and bounded reverse-range reads only.
 - Credentials come only from environment variables and are always redacted from output.
 - Reports omit user IDs, VINs, card numbers, plate numbers, and raw protocol payloads.
+- Codex runs through a pluggable Responses API provider. `AIOPS_CODEX_BASE_URL`
+  is non-secret and `--key-slot` selects a private `0600` key file under
+  `AIOPS_CODEX_KEY_DIR`; no API key is stored in Git or run artifacts.
 
 The production application account discovered during inventory is over-privileged and is not used by this runtime. The verified deployment uses dedicated MySQL, Redis, and SSH identities. Changing the application account requires a separate dependency audit and credential rotation; this diagnostic project must never inherit it as a shortcut. TDengine Community Edition requires the strict loopback-only query proxy described in `ops/` because it cannot grant a database-level read-only role.
 
@@ -54,6 +64,26 @@ Emit machine-readable output:
 uv run aiops diagnose "订单 2079842220423700481 金额异常" --tenant-id TENANT_ID --json
 ```
 
+Run the Codex-native diagnostic agent against a synthetic case:
+
+```bash
+uv run aiops agent-diagnose "订单 TEST-YKC-0001 金额异常" \
+  --fixture examples/fixtures/ykc_amount_mismatch.json \
+  --key-slot default --json
+```
+
+Resume the same incident/thread after an interruption, or switch to another
+key for the same provider endpoint:
+
+```bash
+uv run aiops agent-resume RUN_ID --key-slot backup --json
+```
+
+Resume compares the configured `AIOPS_CODEX_BASE_URL` with the endpoint
+recorded for the run and refuses to redirect a stored key to another host. A
+fixture is copied into the private run workspace and hash-checked on resume;
+the model sandbox cannot read the fixture or harness control files.
+
 Start the interactive shell:
 
 ```bash
@@ -71,3 +101,8 @@ The backend snapshot is deliberately ignored by this repository. It remains a re
 ## Known Validation Gap
 
 There are currently no human-verified incident conclusions. Automated tests and bounded production replays verify implementation consistency, but production accuracy cannot be accepted until several real incidents and their engineer-confirmed conclusions pass end-to-end comparison. Two-wheel charging remains explicitly unsupported in the first release.
+
+The Codex provider is configured through the OpenAI-compatible Responses API
+settings in `.env.example`. A provider can reject requests because of quota or
+model policy even when the harness is healthy; such failures remain in the run
+event journal and are resumable without changing the incident manifest.

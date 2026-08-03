@@ -12,6 +12,7 @@ dist/
 build/
 *.egg-info/
 reports/
+.aiops/
 
 # Read-only production source snapshot used to derive diagnostic rules.
 backend-v2-domestic/

@@ -101,6 +101,20 @@ def test_mysql_order_query_is_parameterized_and_read_only(monkeypatch) -> None:
     assert connection.rolled_back and connection.closed
 
 
+def test_mysql_device_query_is_tenant_scoped(monkeypatch) -> None:
+    settings = Settings.from_env()
+    settings.mysql.user = "readonly"
+    settings.mysql.password = "secret"
+    connection = _FakeConnection()
+    monkeypatch.setattr("aiops_diagnostics.sources.pymysql.connect", lambda **kwargs: connection)
+
+    MySQLSource(settings).get_device(None, "PILE-01", "TENANT-1")
+
+    sql, params = connection.fake_cursor.calls[2]
+    assert "device_code=%s AND tenant_id=%s" in sql
+    assert params == ["PILE-01", "TENANT-1"]
+
+
 def test_mysql_connection_closes_when_rollback_fails(monkeypatch) -> None:
     settings = Settings.from_env()
     settings.mysql.user = "readonly"

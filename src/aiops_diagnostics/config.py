@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import re
+import shutil
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -21,6 +23,34 @@ def _env_bool(name: str, default: bool = False) -> bool:
     if not raw:
         return default
     return raw.lower() in {"1", "true", "yes", "on"}
+
+
+def canonical_provider_base_url(value: str) -> str:
+    """Validate and normalize the non-secret model provider endpoint."""
+    candidate = value.strip()
+    try:
+        parsed = urlsplit(candidate)
+        _ = parsed.port
+    except ValueError as exc:
+        raise ValueError("Codex API base_url 无效") from exc
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise ValueError("Codex API base_url 必须是完整的 http 或 https 地址")
+    if parsed.scheme == "http" and parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
+        raise ValueError("远程 Codex API base_url 必须使用 https")
+    if parsed.username is not None or parsed.password is not None:
+        raise ValueError("Codex API base_url 不得包含认证信息")
+    if parsed.query or parsed.fragment:
+        raise ValueError("Codex API base_url 不得包含 query 或 fragment")
+    return candidate.rstrip("/") + "/"
+
+
+def require_same_provider_base_url(configured: str, persisted: str) -> str:
+    """Resume may rotate credentials, but it must not redirect them to another provider."""
+    configured_url = canonical_provider_base_url(configured)
+    persisted_url = canonical_provider_base_url(persisted)
+    if configured_url != persisted_url:
+        raise ValueError("恢复运行的 Codex API base_url 与当前配置不一致；只允许切换同一端点的 key slot")
+    return configured_url
 
 
 @dataclass(slots=True)
@@ -104,12 +134,52 @@ class SafetySettings:
 
 
 @dataclass(slots=True)
+class AgentSettings:
+    codex_bin: str = field(default_factory=lambda: shutil.which("codex") or "/home/claude/.local/bin/codex")
+    codex_runtime_home: str = str(Path.home() / ".local/share/aiops-diagnostics/codex-home")
+    api_base_url: str = "https://api.psydo.top/"
+    api_key_env: str = "AIOPS_CODEX_API_KEY"
+    api_key_file: str = ""
+    key_dir: str = str(Path.home() / ".config/aiops-diagnostics/keys")
+    key_slot: str = "default"
+    run_root: str = ".aiops/runs"
+    model: str = ""
+    max_turns: int = 8
+    max_tool_calls: int = 16
+    max_validation_retries: int = 2
+    turn_timeout_seconds: int = 600
+
+    def validate(self) -> None:
+        codex_bin = Path(self.codex_bin).expanduser()
+        if not codex_bin.is_file() or not os.access(codex_bin, os.X_OK):
+            raise ValueError(f"Codex CLI 不可执行: {codex_bin}")
+        runtime_home = Path(self.codex_runtime_home).expanduser().resolve()
+        canonical_provider_base_url(self.api_base_url)
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", self.api_key_env):
+            raise ValueError("Codex API key 环境变量名无效")
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", self.key_slot):
+            raise ValueError("Codex key slot 只能包含字母、数字、点、下划线或连字符")
+        if runtime_home == Path(self.key_dir).expanduser().resolve():
+            raise ValueError("Codex runtime home 与 key_dir 必须隔离")
+        limits = {
+            "max_turns": (self.max_turns, 2, 20),
+            "max_tool_calls": (self.max_tool_calls, 1, 50),
+            "max_validation_retries": (self.max_validation_retries, 0, 5),
+            "turn_timeout_seconds": (self.turn_timeout_seconds, 30, 1800),
+        }
+        for name, (value, minimum, maximum) in limits.items():
+            if not minimum <= value <= maximum:
+                raise ValueError(f"{name} 必须在 {minimum}-{maximum} 之间")
+
+
+@dataclass(slots=True)
 class Settings:
     mysql: MySQLSettings = field(default_factory=MySQLSettings)
     tdengine: TDengineSettings = field(default_factory=TDengineSettings)
     redis: RedisSettings = field(default_factory=RedisSettings)
     ssh: SSHSettings = field(default_factory=SSHSettings)
     safety: SafetySettings = field(default_factory=SafetySettings)
+    agent: AgentSettings = field(default_factory=AgentSettings)
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -153,6 +223,30 @@ class Settings:
                 tdengine_max_rows=_env_int("AIOPS_TDENGINE_MAX_ROWS", 2000),
                 redis_max_messages=_env_int("AIOPS_REDIS_MAX_MESSAGES", 200),
                 max_order_window_hours=_env_int("AIOPS_MAX_ORDER_WINDOW_HOURS", 72),
+            ),
+            agent=AgentSettings(
+                codex_bin=_env(
+                    "AIOPS_CODEX_BIN",
+                    shutil.which("codex") or "/home/claude/.local/bin/codex",
+                ),
+                codex_runtime_home=_env(
+                    "AIOPS_CODEX_RUNTIME_HOME",
+                    str(Path.home() / ".local/share/aiops-diagnostics/codex-home"),
+                ),
+                api_base_url=_env("AIOPS_CODEX_BASE_URL", "https://api.psydo.top/"),
+                api_key_env=_env("AIOPS_CODEX_API_KEY_ENV", "AIOPS_CODEX_API_KEY"),
+                api_key_file=_env("AIOPS_CODEX_API_KEY_FILE"),
+                key_dir=_env(
+                    "AIOPS_CODEX_KEY_DIR",
+                    str(Path.home() / ".config/aiops-diagnostics/keys"),
+                ),
+                key_slot=_env("AIOPS_CODEX_KEY_SLOT", "default"),
+                run_root=_env("AIOPS_AGENT_RUN_ROOT", ".aiops/runs"),
+                model=_env("AIOPS_AGENT_MODEL"),
+                max_turns=_env_int("AIOPS_AGENT_MAX_TURNS", 8),
+                max_tool_calls=_env_int("AIOPS_AGENT_MAX_TOOL_CALLS", 16),
+                max_validation_retries=_env_int("AIOPS_AGENT_MAX_VALIDATION_RETRIES", 2),
+                turn_timeout_seconds=_env_int("AIOPS_AGENT_TURN_TIMEOUT_SECONDS", 600),
             ),
         )
 
