@@ -24,6 +24,7 @@
 - [Gateway 架构与部署](docs/gateway.md)
 - [Codex thin harness](docs/thin-harness.md)
 - [便携部署](docs/portable.md)
+- [打包与下载](docs/打包与下载.md)
 
 ## 安全边界
 
@@ -121,7 +122,7 @@ uv sync --locked --dev
 uv run python packaging/build_portable.py
 ```
 
-命令会生成 `dist/aiops/` 和版本化 ZIP，并在源码目录之外解压后，以最小 `PATH`、隔离私有 home、内置 Codex runtime、三份离线 fixture 和本地 mock Gateway 做烟测；Gateway 烟测覆盖 `remote enroll/doctor/runs`。Windows 11 是推荐部署基线；OpenSSH、sandbox、ACL 和首次运行要求见[便携部署文档](docs/portable.md)。
+命令会生成 `dist/aiops/` 和版本化 ZIP，并在源码目录之外解压后，以最小 `PATH`、隔离私有 home、内置 Codex runtime、三份离线 fixture 和本地 mock Gateway 做烟测；Gateway 烟测覆盖 `remote enroll/doctor/runs`。Windows 11 是推荐部署基线；OpenSSH、sandbox、ACL 和首次运行要求见[便携部署文档](docs/portable.md)。构建新包与从 CI 下载 Windows 制品的完整步骤见[打包与下载](docs/打包与下载.md)。
 
 Windows 便携包连接中央 Gateway 的最短操作路径：
 
