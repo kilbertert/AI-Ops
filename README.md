@@ -123,6 +123,19 @@ uv run python packaging/build_portable.py
 
 命令会生成 `dist/aiops/` 和版本化 ZIP，并在源码目录之外解压后，以最小 `PATH`、隔离私有 home、内置 Codex runtime、三份离线 fixture 和本地 mock Gateway 做烟测；Gateway 烟测覆盖 `remote enroll/doctor/runs`。Windows 11 是推荐部署基线；OpenSSH、sandbox、ACL 和首次运行要求见[便携部署文档](docs/portable.md)。
 
+Windows 便携包连接中央 Gateway 的最短操作路径：
+
+```cmd
+cd /d D:\aiops
+dir D:\gateway-enrollment-ops.code
+aiops.exe remote enroll --url https://aiops.example.com --code-file D:\gateway-enrollment-ops.code
+aiops.exe remote doctor
+aiops.exe remote runs
+aiops.exe remote diagnose "订单 123 金额异常" --json
+```
+
+`remote enroll` 只运行一次；`remote doctor` 只检查公开健康端点，`remote runs` 才验证设备令牌。完整的 Windows 路径、注册码、结果查看与错误追溯说明见[快速上手](docs/快速上手.md)和[便携部署文档](docs/portable.md)。
+
 ## 业务规则来源
 
 - `SOP.md`
