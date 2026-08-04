@@ -116,11 +116,33 @@ SSH 调试通道直接传入中文字面量会受远程代码页影响；本轮�
 - 将终端输出拆分为 stdout/stderr 后，stdout 通过 `jq` 解析为单一 JSON；stderr 实时输出启动、thread、turn、工具批次、合同修复、完成和 144 个心跳。
 - 同一批事件同时写入私有 `events.jsonl`；事件仅含状态、计数和标识元数据，不含 evidence payload、API key 或数据库密码。
 - 运行目录为 `0700`，事件和证据日志为 `0600`；`--no-progress` 的行为由代码路径保留事件、隐藏显示。
-- 改基前 CI run `30870111118` 的 Windows job 通过，Linux job 在 `test_agent_cli_exposes_progress_toggle` 失败。失败来自 GitHub runner 的 ANSI 样式码使原始 help `stdout` 断言不稳定，不是选项缺失；回归测试现强制 `color=True` 并使用 Rich `Text.from_ansi` 归一化后检查两个开关。
-- 本地分别以 `COLUMNS=60/80/120` 运行目标测试均通过，覆盖窄终端和常规终端宽度。
 - 当前 159 项 pytest、Ruff、格式、compileall、锁文件和 diff 检查通过。
 
 这证明了运行可观测性和追溯链路，不代表 fixture 或模型调用已经完成真实故障业务验收。
+
+## Gateway MVP 集成验收
+
+2026-08-04 在服务器本机启动临时 Gateway（仅监听 `127.0.0.1`），使用服务器私有 provider key 和 YKC 合成 fixture 完成端到端验证：
+
+- 一次性 enrollment code 兑换成功；SQLite/WAL 只保存 code/token 哈希，客户端 token 在 Linux 测试环境以私有文件 fallback 保存，未进入源码或制品。
+- 客户端通过 `GatewayClient` 创建 run、轮询增量事件并读取最终结果；run `run-20260804T020540Z-9a56710a-06cb` 完成 `diagnosed/high`，事件 34 条，包含 heartbeat、tool batch 和完成事件。
+- `aiops remote doctor`、`aiops remote runs` 通过同一设备 profile 查询 Gateway；同 workspace 的第二设备可读取相同 run/event 数据，跨租户请求返回 `403`。
+- Gateway API 测试覆盖健康检查、一次性注册、设备撤销、workspace 隔离、租户隔离、增量事件和 SSE 结束事件；新增 profile 路径穿越与 run 元数据脱敏回归测试，当前测试套件为 169 项通过。
+- GitHub Actions CI run `30876603911` 的 Linux `verify` 与 Windows `windows-verify` 均通过；Windows runner 从最终 ZIP 完成构建、解压烟测并上传 artifact `8879776016`。
+
+该验证没有连接生产数据库，也没有真实故障案例；它证明 Gateway 的身份、状态同步、真实 provider 执行和只读边界可以工作。公网生产部署仍需 TLS、OIDC Device Flow/mTLS、Vault/KMS、PostgreSQL、速率限制和审计保留策略。
+
+## Gateway 受控跨端 Windows/Linux 验收
+
+2026-08-04 使用服务器 Tailscale 节点和 Windows 节点 `rl` 完成受控跨端入口验收。服务器临时使用 Tailscale CA 签发的 Let’s Encrypt 证书监听独立 `9444` TLS 端口；原有 `8443 -> 8093` 路由未修改，验收结束后临时监听、注册码、设备令牌、Gateway DB 和证书私钥均已清理。
+
+- Windows 节点 `rl` 在线，服务器通过 tailnet 连续收到 3 次 ping；当前链路经 DERP 转发，未建立 direct connection。
+- Linux 客户端通过真实 HTTPS URL 完成 `remote enroll`、`remote doctor` 和 `remote diagnose`。首个 provider key slot 返回 `429` 后，切换同一 base URL 下的受控 `psydo-funded` slot；run `run-20260804T035406Z-32305a3c-9390` 完成 `diagnosed/medium`，同步 36 条事件并识别设备总费用与平台金额相差 `0.20`。
+- 第二个登记为 Windows 平台的设备身份通过同一 GatewayClient 协议读取同 workspace 的 run 和事件；跨租户创建 run 返回 `403`，撤销设备后返回 `401`，重复兑换注册码返回 `400`。
+- Gateway DB 和客户端私有目录权限分别为 `0700/0600`；数据库未发现注册码、设备 token、provider key 明文，诊断合同没有 evidence payload 或服务器绝对路径。
+- 最终 ZIP 烟测新增 `remote --help`，并通过本地 mock Gateway 完成 `remote enroll`、`remote doctor`、`remote runs`，同时校验 Gateway profile/token 私有权限；Linux 与 Windows 源码外解压 ZIP 均通过。
+
+结论：Gateway 的 TLS 入口、设备注册、跨设备 run/event 同步、租户隔离和撤销链路验收通过。该结论不等于用户 Windows 本机最终 ZIP 已完成实机运行，也不等于真实故障业务准确率验收；用户 Windows 本机运行与问题反馈是下一阶段。
 
 ## 业务验收待办
 

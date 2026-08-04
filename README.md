@@ -18,6 +18,7 @@
 - [开发进度](docs/开发进度.md)
 - [验证与验收](docs/validation.md)
 - [系统架构](docs/architecture.md)
+- [Gateway 架构与部署](docs/gateway.md)
 - [Codex thin harness](docs/thin-harness.md)
 - [便携部署](docs/portable.md)
 
@@ -117,7 +118,7 @@ uv sync --locked --dev
 uv run python packaging/build_portable.py
 ```
 
-命令会生成 `dist/aiops/` 和版本化 ZIP，并在源码目录之外解压后，以最小 `PATH`、隔离私有 home、内置 Codex runtime 和三份离线 fixture 做烟测。Windows 11 是推荐部署基线；OpenSSH、sandbox、ACL 和首次运行要求见[便携部署文档](docs/portable.md)。
+命令会生成 `dist/aiops/` 和版本化 ZIP，并在源码目录之外解压后，以最小 `PATH`、隔离私有 home、内置 Codex runtime、三份离线 fixture 和本地 mock Gateway 做烟测；Gateway 烟测覆盖 `remote enroll/doctor/runs`。Windows 11 是推荐部署基线；OpenSSH、sandbox、ACL 和首次运行要求见[便携部署文档](docs/portable.md)。
 
 ## 业务规则来源
 
@@ -132,3 +133,7 @@ uv run python packaging/build_portable.py
 目前没有工程师确认的真实故障结论。自动化测试、生产只读回放、真实 provider 调用和便携制品验收只能证明实现一致性与运行边界，不能替代业务准确性验收。必须取得真实案例并由工程师确认摘要、分类、证据和下一步建议后，才能记录业务验收结果。第一版仍明确不支持两轮车完整规则。
 
 provider 使用 `.env.example` 中的 OpenAI-compatible Responses API 配置。provider 可能因额度或模型策略拒绝请求；这类失败会写入运行事件日志，并可在不改变事件 manifest 的前提下恢复。
+
+## 多端 Gateway 模式
+
+便携包不应直接携带数据库、SSH 或 provider 凭据。推荐由固定服务器运行 `aiops-gateway`，Windows/Linux 客户端通过一次性注册连接同一 workspace，使用 `remote runs` 和 `remote events` 同步 run 进度。详细的安全边界、配置和生产硬化要求见 [Gateway 架构与部署](docs/gateway.md)。

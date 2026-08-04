@@ -38,7 +38,7 @@ uv sync --locked --dev
 uv run python packaging/build_portable.py
 ```
 
-构建会生成 `dist/aiops/` 和版本化 ZIP，然后在源码目录之外解压 ZIP，并以最小 PATH 启动它。验收会初始化隔离私有 home，检查 key slot 和内置 Codex runtime，验证私有路径权限，拒绝制品中的秘密文件，并诊断 OCPP、YKC 金额不一致和交易数据缺失三份 fixture。
+构建会生成 `dist/aiops/` 和版本化 ZIP，然后在源码目录之外解压 ZIP，并以最小 PATH 启动它。验收会初始化隔离私有 home，检查 key slot 和内置 Codex runtime，验证私有路径权限，拒绝制品中的秘密文件，并诊断 OCPP、YKC 金额不一致和交易数据缺失三份 fixture。Gateway 客户端还会连接本地 mock Gateway，完成 `remote enroll`、`remote doctor` 和 `remote runs`，并校验 profile/token 私有权限。
 
 GitHub Windows runner 的通过制品会作为 CI artifact 保留 7 天；artifact 不是生产凭据存储，也不替代企业制品仓库。
 
@@ -48,3 +48,7 @@ GitHub Windows runner 的通过制品会作为 CI artifact 保留 7 天；artifa
 - Windows 的配置、key、Codex home 和 run 路径使用当前用户保护 DACL；POSIX 使用 owner-only 的 `0700` 和 `0600`。
 - 便携进程通过和源码运行时相同的环境清洗 launcher 启动 SDK 固定版本的原生 Codex runtime。
 - 便携包只暴露有界的只读诊断工具，不增加退款、重算、重放、订单修改或服务控制能力。
+
+## 多端运行
+
+需要在多台 Windows/Linux 电脑之间共享 run 进度时，使用中央 `AI-Ops Gateway` 模式，不要向每台电脑分发数据库密码或 SSH 私钥。客户端命令见 [Gateway 架构与部署](gateway.md)：先注册设备，再使用 `aiops remote diagnose`、`remote runs` 和 `remote events`。Gateway 的生产 TLS、OIDC/mTLS、Vault 和 PostgreSQL 硬化要求同样是正式上线前置条件。

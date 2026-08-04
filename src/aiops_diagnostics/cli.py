@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import sys
-from collections.abc import Iterator
-from contextlib import contextmanager
 from pathlib import Path
 from typing import Annotated
 
@@ -10,7 +8,8 @@ import typer
 from rich.console import Console
 
 from aiops_diagnostics.agent_contracts import AgentDiagnosis, DiagnosisStatus, IncidentManifest
-from aiops_diagnostics.agent_engine import AgentCoordinator, ProgressCallback
+from aiops_diagnostics.agent_engine import ProgressCallback
+from aiops_diagnostics.agent_runner import run_agent_diagnosis
 from aiops_diagnostics.agent_workspace import AgentWorkspace
 from aiops_diagnostics.codex_runtime import (
     AgentRuntimeError,
@@ -26,9 +25,8 @@ from aiops_diagnostics.config import (
     validate_key_slot_name,
 )
 from aiops_diagnostics.console_encoding import configure_windows_stdio
-from aiops_diagnostics.diagnostic_tools import DiagnosticToolExecutor
 from aiops_diagnostics.engine import DiagnosticEngine
-from aiops_diagnostics.journal import EvidenceJournal
+from aiops_diagnostics.gateway_cli import remote_app
 from aiops_diagnostics.models import DiagnosticRequest, Intent
 from aiops_diagnostics.parsing import parse_request
 from aiops_diagnostics.platform_paths import (
@@ -49,7 +47,7 @@ from aiops_diagnostics.render import (
     render_progress_event,
     render_report,
 )
-from aiops_diagnostics.sources import DiagnosticSources, FixtureSources, SourceError, live_sources
+from aiops_diagnostics.sources import FixtureSources, SourceError, live_sources
 
 configure_windows_stdio()
 
@@ -61,6 +59,7 @@ app = typer.Typer(
 )
 console = Console()
 _CONFIG_FILE_OVERRIDE: Path | None = None
+app.add_typer(remote_app, name="remote")
 
 
 @app.callback()
@@ -421,41 +420,13 @@ def _run_agent(
     *,
     progress_callback: ProgressCallback | None = None,
 ) -> AgentDiagnosis:
-    manifest = workspace.load_manifest()
-    provider_key = resolve_provider_api_key(settings.agent)
-    journal = EvidenceJournal(workspace, manifest)
-    with _agent_sources(settings, fixture) as sources:
-        tools = DiagnosticToolExecutor(
-            sources,
-            request,
-            manifest,
-            journal,
-            safety=settings.safety,
-        )
-        coordinator = AgentCoordinator(
-            workspace,
-            manifest,
-            journal,
-            tools,
-            settings.agent,
-            sensitive_values=(
-                settings.mysql.password,
-                settings.tdengine.password,
-                settings.redis.password,
-                provider_key,
-            ),
-            progress_callback=progress_callback,
-        )
-        return coordinator.run()
-
-
-@contextmanager
-def _agent_sources(settings: Settings, fixture: Path | None) -> Iterator[DiagnosticSources]:
-    if fixture:
-        yield FixtureSources(fixture)
-        return
-    with live_sources(settings) as sources:
-        yield sources
+    return run_agent_diagnosis(
+        workspace,
+        request,
+        settings,
+        fixture,
+        progress_callback=progress_callback,
+    )
 
 
 def _render_agent_output(result: AgentDiagnosis, workspace: AgentWorkspace, as_json: bool) -> None:

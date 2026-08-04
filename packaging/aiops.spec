@@ -12,6 +12,7 @@ bundle_datas = [
     (str(project_root / "SOP.md"), "aiops_diagnostics/_bundle"),
     (str(project_root / "充电桩问题排查SOP.md"), "aiops_diagnostics/_bundle"),
     (str(project_root / "docs/architecture.md"), "aiops_diagnostics/_bundle/docs"),
+    (str(project_root / "docs/gateway.md"), "aiops_diagnostics/_bundle/docs"),
     (
         str(project_root / "src/aiops_diagnostics/engine.py"),
         "aiops_diagnostics/_bundle/src/aiops_diagnostics",
