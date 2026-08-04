@@ -133,7 +133,16 @@ def _smoke_test_distribution(distribution: Path, temporary_root: Path) -> None:
     for fixture_name, problem in fixture_cases:
         fixture = distribution / "examples" / "fixtures" / fixture_name
         _run(
-            [str(executable), "diagnose", problem, "--fixture", str(fixture), "--json"],
+            [
+                str(executable),
+                "diagnose",
+                problem,
+                "--mode",
+                "deterministic",
+                "--fixture",
+                str(fixture),
+                "--json",
+            ],
             environment,
             distribution,
         )

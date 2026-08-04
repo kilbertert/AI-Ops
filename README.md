@@ -10,10 +10,10 @@
 
 > 第一次使用？看 [快速上手](docs/快速上手.md)，5 分钟从安装到跑出第一份离线诊断报告。
 
-当前包含两条入口：
+当前以 `aiops diagnose` 为统一入口：
 
-- `diagnose` 是确定性的已知 runbook 快速路径，用于稳定复现规则结果和作为对照。
-- `agent-diagnose` 是 Codex-native 路径。Codex 选择受限的只读证据工具并作出因果判断；Python harness 只负责事件身份、查询上限、证据日志、脱敏、置信度上限、结构化结果校验和恢复。
+- 默认走 Codex-native agent 路径：Codex 选择受限的只读证据工具并作出因果判断；Python harness 只负责事件身份、查询上限、证据日志、脱敏、置信度上限、结构化结果校验和恢复。
+- `--mode deterministic` 是确定性已知 runbook 快速路径，用于稳定复现规则结果、离线 fixture、CI 回归，以及模型 provider 不可用时的基准对照。
 
 开发进度、验证证据和未完成事项以以下文档为准：
 
@@ -57,10 +57,10 @@ uv run aiops agent-doctor --key-slot primary
 
 ## 诊断命令
 
-运行离线合成示例：
+运行离线合成示例（确定性，无需 provider key）：
 
 ```bash
-uv run aiops diagnose "订单 TEST-YKC-0001 金额异常" --fixture examples/fixtures/ykc_amount_mismatch.json
+uv run aiops diagnose "订单 TEST-YKC-0001 金额异常" --mode deterministic --fixture examples/fixtures/ykc_amount_mismatch.json
 ```
 
 只检查实时数据源连通性，不读取订单：
@@ -72,27 +72,27 @@ set +a
 uv run aiops doctor
 ```
 
-诊断实时订单：
+诊断实时订单（默认走 Codex agent，需已安装 provider key）：
 
 ```bash
-uv run aiops diagnose "订单 2079842220423700481 中途停止" --tenant-id TENANT_ID
+uv run aiops diagnose "订单 2079842220423700481 中途停止" --tenant-id TENANT_ID --key-slot primary
 ```
 
 输出机器可读 JSON：
 
 ```bash
-uv run aiops diagnose "订单 2079842220423700481 金额异常" --tenant-id TENANT_ID --json
+uv run aiops diagnose "订单 2079842220423700481 金额异常" --tenant-id TENANT_ID --key-slot primary --json
 ```
 
-对合成案例运行 Codex-native 诊断 agent：
+对合成案例运行 Codex-native 诊断（`diagnose` 默认即 agent 模式，加 `--mode deterministic` 可切换确定性规则）：
 
 ```bash
-uv run aiops agent-diagnose "订单 TEST-YKC-0001 金额异常" \
+uv run aiops diagnose "订单 TEST-YKC-0001 金额异常" \
   --fixture examples/fixtures/ykc_amount_mismatch.json \
   --key-slot default --json
 ```
 
-`agent-diagnose` 默认把运行阶段、工具批次、合同修复和 Codex 心跳输出到终端；`--no-progress` 只关闭当前终端显示，不会关闭私有 `events.jsonl` 记录。使用 `--json` 时，诊断 JSON 保持在 stdout，进度改写到 stderr，并在结果中返回 `events_path` 和 `evidence_journal_path`。
+`diagnose` 默认把运行阶段、工具批次、合同修复和 Codex 心跳输出到终端；`--no-progress` 只关闭当前终端显示，不会关闭私有 `events.jsonl` 记录。使用 `--json` 时，诊断 JSON 保持在 stdout，进度改写到 stderr，并在结果中返回 `events_path` 和 `evidence_journal_path`。
 
 心跳间隔由私有配置中的 `AIOPS_AGENT_HEARTBEAT_INTERVAL_SECONDS` 控制，默认 10 秒。事件日志不包含 evidence payload，只保留阶段、状态、turn、工具名称和计数等追溯元数据。
 

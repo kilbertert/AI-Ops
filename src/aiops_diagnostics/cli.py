@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sys
+from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
 
@@ -60,6 +61,11 @@ app = typer.Typer(
 console = Console()
 _CONFIG_FILE_OVERRIDE: Path | None = None
 app.add_typer(remote_app, name="remote")
+
+
+class DiagnoseMode(StrEnum):
+    agent = "agent"
+    deterministic = "deterministic"
 
 
 @app.callback()
@@ -170,31 +176,26 @@ def show_paths() -> None:
     )
 
 
-@app.command("agent-diagnose")
-def agent_diagnose(
-    problem: Annotated[str, typer.Argument(help="用户反馈，例如：订单 123 金额异常")],
-    order_no: Annotated[str | None, typer.Option("--order-no", help="明确指定订单号")] = None,
-    tenant_id: Annotated[str | None, typer.Option("--tenant-id", help="生产诊断应明确指定租户")] = None,
-    fixture: Annotated[Path | None, typer.Option("--fixture", exists=True, dir_okay=False)] = None,
-    key_slot: Annotated[
-        str | None,
-        typer.Option("--key-slot", help="选择同一 API base_url 下的密钥槽"),
-    ] = None,
-    as_json: Annotated[bool, typer.Option("--json", help="输出 JSON 诊断合同")] = False,
-    progress: Annotated[
-        bool,
-        typer.Option("--progress/--no-progress", help="显示运行中的日志与心跳；JSON 结果写入 stdout"),
-    ] = True,
+def _diagnose_agent(
+    request: DiagnosticRequest,
+    settings: Settings,
+    fixture: Path | None,
+    key_slot: str | None,
+    as_json: bool,
+    progress: bool,
 ) -> None:
-    """Run a Codex-native, evidence-journaled read-only diagnosis."""
-    try:
-        request = parse_request(problem, order_no=order_no, tenant_id=tenant_id)
-    except ValueError as exc:
-        raise typer.BadParameter(str(exc)) from exc
-    settings = _load_settings()
+    """Run the Codex-native, evidence-journaled read-only diagnosis."""
     if key_slot:
         settings.agent.key_slot = key_slot
     _validate_agent_settings(settings)
+    try:
+        resolve_provider_api_key(settings.agent)
+    except (AgentRuntimeError, ValueError, OSError) as exc:
+        console.print(f"[bold red]Codex 诊断中断:[/bold red] {exc}")
+        console.print(
+            "[yellow]提示：未配置 provider key；离线 fixture 或回归诊断可改用 --mode deterministic。[/yellow]"
+        )
+        raise typer.Exit(code=2) from exc
     manifest = IncidentManifest.from_request(request)
     project_root = _project_root()
     run_root = _run_root(settings.agent.run_root)
@@ -208,12 +209,12 @@ def agent_diagnose(
             provider_base_url=canonical_provider_base_url(settings.agent.api_base_url),
             key_slot=settings.agent.key_slot,
         )
-        fixture = workspace.resolve_fixture()
+        resolved_fixture = workspace.resolve_fixture()
         result = _run_agent(
             workspace,
             request,
             settings,
-            fixture,
+            resolved_fixture,
             progress_callback=_progress_callback(progress, as_json),
         )
     except (AgentRuntimeError, SourceError, ValueError, OSError) as exc:
@@ -223,6 +224,32 @@ def agent_diagnose(
         raise typer.Exit(code=2) from exc
     assert workspace is not None
     _render_agent_output(result, workspace, as_json)
+
+
+def _diagnose_deterministic(
+    request: DiagnosticRequest,
+    settings: Settings,
+    fixture: Path | None,
+    as_json: bool,
+) -> None:
+    """Run the deterministic rule-engine diagnosis (offline fixtures, regression)."""
+    if fixture:
+        try:
+            report = DiagnosticEngine(FixtureSources(fixture), settings.safety).diagnose(request)
+        except (SourceError, ValueError, OSError) as exc:
+            console.print(f"[bold red]初始化失败:[/bold red] {exc}")
+            raise typer.Exit(code=2) from exc
+    else:
+        try:
+            with live_sources(settings) as sources:
+                report = DiagnosticEngine(sources, settings.safety).diagnose(request)
+        except (SourceError, ValueError) as exc:
+            console.print(f"[bold red]初始化失败:[/bold red] {exc}")
+            raise typer.Exit(code=2) from exc
+    if as_json:
+        console.print_json(report.to_json())
+    else:
+        render_report(report, console)
 
 
 @app.command("agent-resume")
@@ -319,31 +346,37 @@ def diagnose(
     order_no: Annotated[str | None, typer.Option("--order-no", help="明确指定订单号")] = None,
     tenant_id: Annotated[str | None, typer.Option("--tenant-id", help="跨租户环境建议明确指定")] = None,
     fixture: Annotated[Path | None, typer.Option("--fixture", exists=True, dir_okay=False)] = None,
-    as_json: Annotated[bool, typer.Option("--json", help="输出 JSON 报告")] = False,
+    mode: Annotated[
+        DiagnoseMode,
+        typer.Option(
+            "--mode", help="诊断模式：agent=Codex 原生（默认）；deterministic=确定性规则，离线/回归"
+        ),
+    ] = DiagnoseMode.agent,
+    key_slot: Annotated[
+        str | None,
+        typer.Option("--key-slot", help="agent 模式选择同一 API base_url 下的密钥槽"),
+    ] = None,
+    as_json: Annotated[bool, typer.Option("--json", help="输出 JSON 报告或诊断合同")] = False,
+    progress: Annotated[
+        bool,
+        typer.Option(
+            "--progress/--no-progress", help="agent 模式显示运行中的日志与心跳；JSON 结果写入 stdout"
+        ),
+    ] = True,
 ) -> None:
-    """Diagnose one order without executing any business-side action."""
+    """Diagnose one order without executing any business-side action.
+
+    默认走 Codex-native agent 路径；加 --mode deterministic 走确定性规则路径（离线 fixture、CI 回归）。
+    """
     try:
         request = parse_request(problem, order_no=order_no, tenant_id=tenant_id)
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
     settings = _load_settings()
-    if fixture:
-        try:
-            report = DiagnosticEngine(FixtureSources(fixture), settings.safety).diagnose(request)
-        except (SourceError, ValueError, OSError) as exc:
-            console.print(f"[bold red]初始化失败:[/bold red] {exc}")
-            raise typer.Exit(code=2) from exc
+    if mode is DiagnoseMode.agent:
+        _diagnose_agent(request, settings, fixture, key_slot, as_json, progress)
     else:
-        try:
-            with live_sources(settings) as sources:
-                report = DiagnosticEngine(sources, settings.safety).diagnose(request)
-        except (SourceError, ValueError) as exc:
-            console.print(f"[bold red]初始化失败:[/bold red] {exc}")
-            raise typer.Exit(code=2) from exc
-    if as_json:
-        console.print_json(report.to_json())
-    else:
-        render_report(report, console)
+        _diagnose_deterministic(request, settings, fixture, as_json)
 
 
 @app.command()
