@@ -128,6 +128,7 @@ SSH 调试通道直接传入中文字面量会受远程代码页影响；本轮�
 - 客户端通过 `GatewayClient` 创建 run、轮询增量事件并读取最终结果；run `run-20260804T020540Z-9a56710a-06cb` 完成 `diagnosed/high`，事件 34 条，包含 heartbeat、tool batch 和完成事件。
 - `aiops remote doctor`、`aiops remote runs` 通过同一设备 profile 查询 Gateway；同 workspace 的第二设备可读取相同 run/event 数据，跨租户请求返回 `403`。
 - Gateway API 测试覆盖健康检查、一次性注册、设备撤销、workspace 隔离、租户隔离、增量事件和 SSE 结束事件；新增 profile 路径穿越与 run 元数据脱敏回归测试，当前测试套件为 169 项通过。
+- GitHub Actions CI run `30873678715` 的 Linux `verify` 与 Windows `windows-verify` 均通过；Windows runner 从最终 ZIP 完成构建、解压烟测并上传 artifact `8878765270`。
 
 该验证没有连接生产数据库，也没有真实故障案例；它证明 Gateway 的身份、状态同步、真实 provider 执行和只读边界可以工作。公网生产部署仍需 TLS、OIDC Device Flow/mTLS、Vault/KMS、PostgreSQL、速率限制和审计保留策略。
 
