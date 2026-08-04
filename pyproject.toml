@@ -10,17 +10,21 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
   "openai-codex>=0.144.4,<0.145",
+  "fastapi>=0.115,<1",
+  "keyring>=25,<26",
   "python-dotenv>=1.0,<2",
   "pymysql[rsa]>=1.1.1,<2",
   "pywin32>=308; sys_platform == 'win32'",
   "redis>=5.2,<7",
   "rich>=13.9,<15",
   "typer>=0.15,<1",
+  "uvicorn>=0.34,<1",
 ]
 
 [project.scripts]
 aiops = "aiops_diagnostics.cli:app"
 aiops-tdengine-proxy = "aiops_diagnostics.tdengine_proxy:main"
+aiops-gateway = "aiops_diagnostics.gateway_server:main"
 
 [dependency-groups]
 dev = [
@@ -28,6 +32,7 @@ dev = [
   "pytest>=8.3,<9",
   "pytest-cov>=6,<7",
   "ruff>=0.12,<1",
+  "httpx>=0.28,<1",
 ]
 
 [tool.hatch.build.targets.wheel]
@@ -38,6 +43,7 @@ packages = ["src/aiops_diagnostics"]
 "SOP.md" = "aiops_diagnostics/_bundle/SOP.md"
 "充电桩问题排查SOP.md" = "aiops_diagnostics/_bundle/充电桩问题排查SOP.md"
 "docs/architecture.md" = "aiops_diagnostics/_bundle/docs/architecture.md"
+"docs/gateway.md" = "aiops_diagnostics/_bundle/docs/gateway.md"
 "src/aiops_diagnostics/engine.py" = "aiops_diagnostics/_bundle/src/aiops_diagnostics/engine.py"
 "src/aiops_diagnostics/rules.py" = "aiops_diagnostics/_bundle/src/aiops_diagnostics/rules.py"
 "examples/fixtures" = "aiops_diagnostics/_bundle/examples/fixtures"

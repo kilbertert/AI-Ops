@@ -120,6 +120,17 @@ SSH 调试通道直接传入中文字面量会受远程代码页影响；本轮�
 
 这证明了运行可观测性和追溯链路，不代表 fixture 或模型调用已经完成真实故障业务验收。
 
+## Gateway MVP 集成验收
+
+2026-08-04 在服务器本机启动临时 Gateway（仅监听 `127.0.0.1`），使用服务器私有 provider key 和 YKC 合成 fixture 完成端到端验证：
+
+- 一次性 enrollment code 兑换成功；SQLite/WAL 只保存 code/token 哈希，客户端 token 在 Linux 测试环境以私有文件 fallback 保存，未进入源码或制品。
+- 客户端通过 `GatewayClient` 创建 run、轮询增量事件并读取最终结果；run `run-20260804T020540Z-9a56710a-06cb` 完成 `diagnosed/high`，事件 34 条，包含 heartbeat、tool batch 和完成事件。
+- `aiops remote doctor`、`aiops remote runs` 通过同一设备 profile 查询 Gateway；同 workspace 的第二设备可读取相同 run/event 数据，跨租户请求返回 `403`。
+- Gateway API 测试覆盖健康检查、一次性注册、设备撤销、workspace 隔离、租户隔离、增量事件和 SSE 结束事件；新增 profile 路径穿越与 run 元数据脱敏回归测试，当前测试套件为 169 项通过。
+
+该验证没有连接生产数据库，也没有真实故障案例；它证明 Gateway 的身份、状态同步、真实 provider 执行和只读边界可以工作。公网生产部署仍需 TLS、OIDC Device Flow/mTLS、Vault/KMS、PostgreSQL、速率限制和审计保留策略。
+
 ## 业务验收待办
 
 生产业务验收仍需要每条支持路径至少三笔由工程师确认结论的真实故障：

@@ -48,3 +48,7 @@ GitHub Windows runner 的通过制品会作为 CI artifact 保留 7 天；artifa
 - Windows 的配置、key、Codex home 和 run 路径使用当前用户保护 DACL；POSIX 使用 owner-only 的 `0700` 和 `0600`。
 - 便携进程通过和源码运行时相同的环境清洗 launcher 启动 SDK 固定版本的原生 Codex runtime。
 - 便携包只暴露有界的只读诊断工具，不增加退款、重算、重放、订单修改或服务控制能力。
+
+## 多端运行
+
+需要在多台 Windows/Linux 电脑之间共享 run 进度时，使用中央 `AI-Ops Gateway` 模式，不要向每台电脑分发数据库密码或 SSH 私钥。客户端命令见 [Gateway 架构与部署](gateway.md)：先注册设备，再使用 `aiops remote diagnose`、`remote runs` 和 `remote events`。Gateway 的生产 TLS、OIDC/mTLS、Vault 和 PostgreSQL 硬化要求同样是正式上线前置条件。

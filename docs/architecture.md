@@ -44,6 +44,8 @@ flowchart LR
 
 项目可以直接运行在权限受限的诊断主机上，也可以通过 OpenSSH 本地转发运行。刻意不支持 SSH 密码自动化；生产环境必须使用专用账号和 key，并限制可转发目标。
 
+多端便携部署时，推荐将上述数据库访问边界放入固定服务器上的 `AI-Ops Gateway`，客户端只通过 HTTPS 设备令牌提交诊断请求和同步事件。Gateway 方案、注册、秘密管理和跨设备 run 同步见 [gateway.md](gateway.md)。
+
 TDengine Community Edition 3.4 不支持 `GRANT READ`，非超级用户仍可能写入已有数据库。因此生产请求必须经过 `ops/` 中的 loopback-only 代理。代理只识别 `TDengineSource` 发出的精确有界查询，SSH 账号不能直接转发到 TDengine 原生 REST 端口。
 
 ## 必需的生产身份

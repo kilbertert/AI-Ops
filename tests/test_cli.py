@@ -73,3 +73,12 @@ def test_agent_cli_exposes_progress_toggle() -> None:
     assert result.exit_code == 0
     assert "--progress" in result.stdout
     assert "--no-progress" in result.stdout
+
+
+def test_cli_exposes_remote_gateway_commands() -> None:
+    result = CliRunner().invoke(app, ["remote", "--help"])
+
+    assert result.exit_code == 0
+    assert "enroll" in result.stdout
+    assert "diagnose" in result.stdout
+    assert "events" in result.stdout

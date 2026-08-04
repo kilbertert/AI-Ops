@@ -172,6 +172,7 @@ def _assert_bundled_references(distribution: Path) -> None:
         "SOP.md",
         "充电桩问题排查SOP.md",
         "docs/architecture.md",
+        "docs/gateway.md",
         "src/aiops_diagnostics/engine.py",
         "src/aiops_diagnostics/rules.py",
         "examples/fixtures/ocpp_consistent.json",
