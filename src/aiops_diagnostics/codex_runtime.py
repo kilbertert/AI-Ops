@@ -373,4 +373,9 @@ exactly. Every hypothesis and causal conclusion must cite evidence IDs.
 Distinguish absent data, blocked dependencies, and failed sources. A failed
 source limits confidence. Never claim that recalculation, refund, replay,
 resend, order modification, service restart, or another mutation was executed.
+
+Write every human-facing field in Simplified Chinese: summary, root_cause,
+each hypothesis title and explanation, and each next_steps entry. Keep order
+numbers, tenant IDs, field names, tool names, evidence IDs, and other code
+identifiers in their original form without translation.
 """

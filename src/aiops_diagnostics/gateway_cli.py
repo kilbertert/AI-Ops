@@ -112,7 +112,13 @@ def diagnose(
         if as_json:
             console.print_json(data=run)
         else:
-            _render_run(run)
+            evidence = None
+            if wait:
+                try:
+                    evidence = client.list_evidence(run["run_id"]).get("evidence")
+                except (GatewayClientError, OSError, ValueError):
+                    evidence = None
+            _render_run(run, evidence=evidence)
     except (GatewayClientError, OSError, ValueError) as exc:
         console.print(f"[bold red]Gateway 诊断失败:[/bold red] {exc}")
         raise typer.Exit(code=2) from exc
@@ -159,6 +165,20 @@ def events(
         raise typer.Exit(code=2) from exc
 
 
+@remote_app.command("evidence")
+def evidence(
+    run_id: str,
+    profile: Annotated[str, typer.Option("--profile")] = "default",
+    url: Annotated[str | None, typer.Option("--url", envvar="AIOPS_GATEWAY_URL")] = None,
+) -> None:
+    """List redacted evidence metadata for a run (tool, status, row count, error)."""
+    try:
+        console.print_json(data=_client(profile, url).list_evidence(run_id))
+    except (GatewayClientError, OSError, ValueError) as exc:
+        console.print(f"[bold red]Gateway 查询失败:[/bold red] {exc}")
+        raise typer.Exit(code=2) from exc
+
+
 @remote_app.command("logout")
 def logout(profile: Annotated[str, typer.Option("--profile")] = "default") -> None:
     delete_token(profile)
@@ -183,14 +203,30 @@ def _token_for_profile(profile_name: str) -> str:
     return load_token(profile_name)
 
 
-def _render_run(run: dict[str, object]) -> None:
+def _render_run(run: dict[str, object], *, evidence: list[dict[str, object]] | None = None) -> None:
     console.print(f"运行 ID: {run.get('run_id', '')}")
     console.print(f"状态: {run.get('status', '')}")
     if run.get("confidence"):
         console.print(f"置信度: {run['confidence']}")
     if run.get("summary"):
         console.print(f"摘要: {run['summary']}")
+    result = run.get("result")
+    if isinstance(result, dict) and result.get("root_cause"):
+        console.print(f"根因: {result['root_cause']}")
     if run.get("error_type"):
         console.print(f"错误类型: {run['error_type']}")
     if run.get("error_message"):
         console.print(f"错误原因: {run['error_message']}")
+    if evidence:
+        console.print("证据:")
+        for item in evidence:
+            line = f"  {item.get('evidence_id', '')}: {item.get('tool', '')} -> {item.get('status', '')}"
+            if item.get("row_count") is not None:
+                line += f"，命中 {item['row_count']} 行"
+            if item.get("error"):
+                line += f"（{item['error']}）"
+            console.print(line)
+    if isinstance(result, dict) and result.get("next_steps"):
+        console.print("下一步建议:")
+        for step in result["next_steps"]:
+            console.print(f"  - {step}")

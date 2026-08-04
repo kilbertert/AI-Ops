@@ -12,6 +12,7 @@ from aiops_diagnostics.codex_runtime import AgentRuntimeError
 from aiops_diagnostics.config import Settings, canonical_provider_base_url, validate_key_slot_name
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_store import GatewayDevice, GatewayStore
+from aiops_diagnostics.journal import EvidenceJournal
 from aiops_diagnostics.parsing import parse_request
 from aiops_diagnostics.platform_paths import reference_root
 from aiops_diagnostics.redaction import redact_text
@@ -63,6 +64,7 @@ class GatewayRuntime:
         fixture_name: str | None,
     ) -> dict[str, Any]:
         effective_tenant = self._tenant_for_device(device, tenant_id)
+        allowed_tenants = {effective_tenant} if effective_tenant else None
         selected_key_slot = validate_key_slot_name(key_slot or self.diagnostic_settings.agent.key_slot)
         if selected_key_slot not in self.allowed_key_slots:
             raise ValueError("requested key slot is not allowed by the gateway")
@@ -97,6 +99,7 @@ class GatewayRuntime:
             workspace,
             request,
             fixture,
+            allowed_tenants,
         )
         self._futures[workspace.run_id] = future
         future.add_done_callback(lambda _: self._futures.pop(workspace.run_id, None))
@@ -105,11 +108,34 @@ class GatewayRuntime:
     def shutdown(self) -> None:
         self._executor.shutdown(wait=False, cancel_futures=False)
 
+    def list_evidence(self, run_id: str) -> list[dict[str, Any]]:
+        """Return redacted evidence metadata for a run (no business payloads)."""
+        run_root = Path(self.diagnostic_settings.agent.run_root).expanduser().resolve()
+        try:
+            workspace = AgentWorkspace.open(run_root, run_id)
+            manifest = workspace.load_manifest()
+        except (FileNotFoundError, ValueError, OSError):
+            return []
+        journal = EvidenceJournal(workspace, manifest)
+        return [
+            {
+                "evidence_id": entry.evidence_id,
+                "tool": entry.tool,
+                "source": entry.source,
+                "status": entry.status,
+                "request": entry.request,
+                "row_count": entry.row_count,
+                "error": entry.error,
+            }
+            for entry in journal.entries()
+        ]
+
     def _execute_run(
         self,
         workspace: AgentWorkspace,
         request,
         fixture: Path | None,
+        allowed_tenants: set[str] | None = None,
     ) -> None:
         run_id = workspace.run_id
         self.store.update_run(run_id, status="running")
@@ -124,6 +150,7 @@ class GatewayRuntime:
                 settings,
                 fixture,
                 progress_callback=lambda event: self.store.append_event(run_id, _public_event(event)),
+                allowed_tenants=allowed_tenants,
             )
         except (AgentRuntimeError, SourceError) as exc:
             error_message = _public_error_message(exc, request.order_no)
