@@ -190,3 +190,7 @@ def _render_run(run: dict[str, object]) -> None:
         console.print(f"置信度: {run['confidence']}")
     if run.get("summary"):
         console.print(f"摘要: {run['summary']}")
+    if run.get("error_type"):
+        console.print(f"错误类型: {run['error_type']}")
+    if run.get("error_message"):
+        console.print(f"错误原因: {run['error_message']}")

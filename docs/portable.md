@@ -52,3 +52,18 @@ GitHub Windows runner 的通过制品会作为 CI artifact 保留 7 天；artifa
 ## 多端运行
 
 需要在多台 Windows/Linux 电脑之间共享 run 进度时，使用中央 `AI-Ops Gateway` 模式，不要向每台电脑分发数据库密码或 SSH 私钥。客户端命令见 [Gateway 架构与部署](gateway.md)：先注册设备，再使用 `aiops remote diagnose`、`remote runs` 和 `remote events`。Gateway 的生产 TLS、OIDC/mTLS、Vault 和 PostgreSQL 硬化要求同样是正式上线前置条件。
+
+### Windows 客户端操作清单
+
+在 `cmd.exe` 中使用便携包时，命令和路径按 Windows 规则书写；`cmd.exe` 没有 `ls`，请使用 `dir`。注册码是一次性凭据，文件名必须与实际文件一致：
+
+```cmd
+cd /d D:\aiops
+dir D:\gateway-enrollment-ops.code
+aiops.exe remote enroll --url https://aiops.example.com --code-file D:\gateway-enrollment-ops.code
+aiops.exe remote doctor
+aiops.exe remote runs
+aiops.exe remote diagnose "订单 123 金额异常" --json
+```
+
+也可以省略 `--code-file` 交互输入注册码。注册成功后删除注册码文件，后续不要重复执行 `remote enroll`。`remote doctor` 只检查网关 liveness；`remote runs`、`remote show` 和 `remote events` 使用设备令牌访问受保护数据。

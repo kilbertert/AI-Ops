@@ -211,6 +211,7 @@ class GatewayStore:
         summary: str | None = None,
         result: dict[str, Any] | None = None,
         error_type: str | None = None,
+        error_message: str | None = None,
     ) -> None:
         now = _iso(_utc_now())
         started_at = now if status == "running" else None
@@ -222,6 +223,7 @@ class GatewayStore:
                     status = ?, confidence = COALESCE(?, confidence),
                     summary = COALESCE(?, summary), result_json = COALESCE(?, result_json),
                     error_type = COALESCE(?, error_type),
+                    error_message = COALESCE(?, error_message),
                     started_at = COALESCE(started_at, ?),
                     completed_at = COALESCE(completed_at, ?), updated_at = ?
                 WHERE run_id = ?
@@ -232,6 +234,7 @@ class GatewayStore:
                     summary,
                     json.dumps(result, ensure_ascii=False) if result is not None else None,
                     error_type,
+                    error_message,
                     started_at,
                     completed_at,
                     now,
@@ -363,6 +366,7 @@ class GatewayStore:
                     summary TEXT,
                     result_json TEXT,
                     error_type TEXT,
+                    error_message TEXT,
                     created_by_device TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
@@ -383,6 +387,9 @@ class GatewayStore:
                 );
                 """
             )
+            columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(runs)").fetchall()}
+            if "error_message" not in columns:
+                connection.execute("ALTER TABLE runs ADD COLUMN error_message TEXT")
         protect_private_file(self.path)
 
     @contextmanager

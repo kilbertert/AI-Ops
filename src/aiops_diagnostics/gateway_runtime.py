@@ -126,25 +126,37 @@ class GatewayRuntime:
                 progress_callback=lambda event: self.store.append_event(run_id, _public_event(event)),
             )
         except (AgentRuntimeError, SourceError) as exc:
+            error_message = _public_error_message(exc, request.order_no)
             self.store.update_run(
                 run_id,
                 status="interrupted",
                 error_type=exc.__class__.__name__,
+                error_message=error_message,
             )
             self.store.append_event(
                 run_id,
-                {"type": "gateway_run_interrupted", "error_type": exc.__class__.__name__},
+                {
+                    "type": "gateway_run_interrupted",
+                    "error_type": exc.__class__.__name__,
+                    "error_message": error_message,
+                },
             )
             return
         except Exception as exc:
+            error_message = _public_error_message(exc, request.order_no)
             self.store.update_run(
                 run_id,
                 status="failed",
                 error_type=exc.__class__.__name__,
+                error_message=error_message,
             )
             self.store.append_event(
                 run_id,
-                {"type": "gateway_run_failed", "error_type": exc.__class__.__name__},
+                {
+                    "type": "gateway_run_failed",
+                    "error_type": exc.__class__.__name__,
+                    "error_message": error_message,
+                },
             )
             return
         self.store.update_run(
@@ -196,6 +208,7 @@ def _public_event(event: dict[str, Any]) -> dict[str, Any]:
         "attempt",
         "status",
         "error_type",
+        "error_message",
     }
     result = {key: value for key, value in event.items() if key in allowed}
     outcomes = event.get("outcomes")
@@ -206,6 +219,12 @@ def _public_event(event: dict[str, Any]) -> dict[str, Any]:
             if isinstance(item, dict)
         ]
     return result
+
+
+def _public_error_message(error: Exception, order_no: str | None) -> str:
+    """Expose a bounded, redacted diagnostic reason without server secrets."""
+    message = redact_text(str(error), preserve=(order_no or "",))
+    return message[:1000] if message else error.__class__.__name__
 
 
 def close_gateway_runtime(runtime: GatewayRuntime) -> None:

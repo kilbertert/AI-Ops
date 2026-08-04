@@ -49,19 +49,44 @@ uv run aiops-gateway serve
 
 Gateway 进程通过 `AIOPS_GATEWAY_SERVER_CONFIG_FILE` 加载服务器私有 `production.env`。该文件只应存在于固定服务器，不应复制到便携包。
 
+用户级 systemd 服务必须显式固定应用配置和数据根目录，不能依赖用户管理器继承的通用 `XDG_CONFIG_HOME/XDG_DATA_HOME`。否则 key slot 可能错误解析到 `$XDG_CONFIG_HOME/keys`：
+
+```env
+AIOPS_CONFIG_HOME=/home/claude/.config/aiops-diagnostics
+AIOPS_DATA_HOME=/home/claude/.local/share/aiops-diagnostics
+AIOPS_GATEWAY_SERVER_CONFIG_FILE=/home/claude/.config/aiops-diagnostics/production.env
+AIOPS_CODEX_KEY_SLOT=psydo-primary
+```
+
 ### 客户端
 
 新电脑只需一次注册：
 
 ```powershell
-.\aiops.exe remote enroll --url https://aiops.example.com
+.\aiops.exe remote enroll --url https://aiops.example.com --code-file C:\secure\gateway-enrollment.code
 .\aiops.exe remote doctor
+.\aiops.exe remote runs
 .\aiops.exe remote diagnose "订单 123 金额异常" --json
 ```
+
+Windows `cmd.exe` 示例（便携包解压到 `D:\aiops`）：
+
+```cmd
+cd /d D:\aiops
+dir D:\gateway-enrollment-ops.code
+aiops.exe remote enroll --url https://aiops.example.com --code-file D:\gateway-enrollment-ops.code
+aiops.exe remote doctor
+aiops.exe remote runs
+aiops.exe remote diagnose "订单 123 金额异常" --json
+```
+
+注册码只能兑换一次。若文件名或路径不正确，客户端会在本地文件检查阶段返回 `File ... does not exist`，此时注册码尚未被兑换；使用 `dir` 检查实际文件名后重试。也可以省略 `--code-file`，让客户端隐藏提示输入注册码。注册成功后删除本地注册码文件，不要再次运行 `remote enroll`。
 
 注册后，客户端只保存 Gateway URL、设备 ID、workspace ID 等 profile，以及设备令牌。令牌优先使用 Windows Credential Locker / Linux Secret Service，通过 `keyring` 访问；没有系统凭据库时才回退到当前用户私有文件，并保留 `0600/Windows DACL` 校验。
 
 同一 workspace 的 Windows 和 Linux 设备查询同一套 run/event 数据，因此换设备后仍能用 `remote runs`、`remote show` 和 `remote events` 查看进度。
+
+`remote doctor` 只调用公开的 `/health` liveness 接口，不证明设备令牌仍有效；要验证注册后的身份，请执行 `remote runs`。诊断出现 `interrupted` 或 `failed` 时，`remote show RUN_ID` 会显示脱敏的 `error_type` 和 `error_message`，`remote events RUN_ID --after 0` 可追溯排队、worker 启动、provider 调用和中断原因。
 
 ## 安全边界
 

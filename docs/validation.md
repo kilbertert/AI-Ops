@@ -144,6 +144,20 @@ SSH 调试通道直接传入中文字面量会受远程代码页影响；本轮�
 
 结论：Gateway 的 TLS 入口、设备注册、跨设备 run/event 同步、租户隔离和撤销链路验收通过。该结论不等于用户 Windows 本机最终 ZIP 已完成实机运行，也不等于真实故障业务准确率验收；用户 Windows 本机运行与问题反馈是下一阶段。
 
+## Windows Gateway 实机反馈与错误可见性回归
+
+2026-08-04 用户在 `D:\aiops` 执行 `remote enroll` 时把实际文件 `D:\gateway-enrollment-ops.code` 写成了不存在的 `D:\gateway-enrollment.code`。Typer 在本地文件检查阶段返回 `File ... does not exist`，注册码没有因此被消费；随后使用正确文件名完成了 `DESKTOP-O8VJDOO` Windows 设备注册。
+
+同一设备执行 `remote diagnose "订单号2084483071036829697有问题"` 时，客户端只显示 `gateway_run_queued`、`gateway_worker_started`、`gateway_run_interrupted` 和 `状态: interrupted`。根因是 Gateway 过去只持久化 `error_type`，未向 run 结果返回脱敏错误消息。修复后新增 `error_message` 字段、事件字段和客户端渲染，并增加旧 SQLite 表的自动迁移。
+
+新增回归：Gateway store/API/client 相关测试 `11 passed`，全套测试 `173 passed`；测试覆盖错误类型和错误消息持久化与脱敏限长、注册码哈希、设备撤销、workspace/tenant 隔离、SSE 和 profile 权限。
+
+服务端进一步确认首次中断发生在 Codex key 解析前：用户级 systemd 环境的 `XDG_CONFIG_HOME=/home/claude/.config` 使默认 key 目录被解析为 `/home/claude/.config/keys`，而实际私有 key 位于 `/home/claude/.config/aiops-diagnostics/keys`。Gateway 私有环境现已显式设置 `AIOPS_CONFIG_HOME` 和 `AIOPS_DATA_HOME`，重启后可进入 Codex thread 和证据工具执行。
+
+真实 provider 回归中，`psydo-funded` 返回明确的 `401 API_KEY_DISABLED`，新版客户端/JSON 已显示脱敏错误原因；切换同一 base URL 下的 `psydo-primary` 后，run `run-20260804T112825Z-564b81e3-6402` 成功执行生产只读 `order_snapshot`，最终返回 `inconclusive/low`：在 `tenant-a` 范围内未找到订单 `2084483071036829697`。这证明错误可见性、provider 切换和生产只读入口已恢复，不代表该订单的业务故障已经验收。
+
+边界：该订单号尚未连接真实故障案例并完成工程师结论比对；本节只记录客户端操作问题和错误追溯修复，不构成业务准确率验收。
+
 ## 业务验收待办
 
 生产业务验收仍需要每条支持路径至少三笔由工程师确认结论的真实故障：

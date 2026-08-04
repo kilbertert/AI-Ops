@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from aiops_diagnostics.gateway_runtime import _public_error_message
 from aiops_diagnostics.gateway_store import (
     AuthenticationError,
     EnrollmentError,
@@ -95,6 +96,39 @@ def test_run_problem_is_redacted_before_gateway_persistence(tmp_path: Path) -> N
     )
     stored = store.get_run("run-redacted", enrolled.device.workspace_id)
     assert stored["problem"] == "订单 ORDER-1 手机号=REDACTED，token=REDACTED"
+
+
+def test_run_error_message_is_persisted_for_operator_visibility(tmp_path: Path) -> None:
+    store = GatewayStore(tmp_path / "gateway.db")
+    enrolled = _enroll(store, "workspace-a", "device-a")
+    store.create_run(
+        run_id="run-error",
+        workspace_id=enrolled.device.workspace_id,
+        incident_id="incident-error",
+        problem="provider unavailable",
+        order_no="ORDER-1",
+        tenant_id=None,
+        key_slot="primary",
+        fixture_name=None,
+        created_by_device=enrolled.device.device_id,
+    )
+    store.update_run(
+        "run-error",
+        status="interrupted",
+        error_type="AgentRuntimeError",
+        error_message="provider returned 429",
+    )
+    stored = store.get_run("run-error", enrolled.device.workspace_id)
+    assert stored["error_type"] == "AgentRuntimeError"
+    assert stored["error_message"] == "provider returned 429"
+
+
+def test_public_error_message_is_redacted_and_bounded() -> None:
+    error = RuntimeError("provider token=sk-1234567890abcdef password=hunter2 " + "x" * 1500)
+    message = _public_error_message(error, "ORDER-1")
+    assert "sk-1234567890abcdef" not in message
+    assert "hunter2" not in message
+    assert len(message) == 1000
 
 
 def _enroll(store: GatewayStore, workspace_id: str, device_name: str):
