@@ -116,6 +116,8 @@ SSH 调试通道直接传入中文字面量会受远程代码页影响；本轮�
 - 将终端输出拆分为 stdout/stderr 后，stdout 通过 `jq` 解析为单一 JSON；stderr 实时输出启动、thread、turn、工具批次、合同修复、完成和 144 个心跳。
 - 同一批事件同时写入私有 `events.jsonl`；事件仅含状态、计数和标识元数据，不含 evidence payload、API key 或数据库密码。
 - 运行目录为 `0700`，事件和证据日志为 `0600`；`--no-progress` 的行为由代码路径保留事件、隐藏显示。
+- 改基前 CI run `30870111118` 的 Windows job 通过，Linux job 在 `test_agent_cli_exposes_progress_toggle` 失败。失败来自 GitHub runner 的 ANSI 样式码使原始 help `stdout` 断言不稳定，不是选项缺失；回归测试现强制 `color=True` 并使用 Rich `Text.from_ansi` 归一化后检查两个开关。
+- 本地分别以 `COLUMNS=60/80/120` 运行目标测试均通过，覆盖窄终端和常规终端宽度。
 - 当前 159 项 pytest、Ruff、格式、compileall、锁文件和 diff 检查通过。
 
 这证明了运行可观测性和追溯链路，不代表 fixture 或模型调用已经完成真实故障业务验收。
