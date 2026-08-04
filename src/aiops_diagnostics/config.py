@@ -180,6 +180,7 @@ class AgentSettings:
     max_tool_calls: int = 16
     max_validation_retries: int = 2
     turn_timeout_seconds: int = 600
+    heartbeat_interval_seconds: int = 10
     windows_sandbox: str = "unelevated"
 
     def validate(self) -> None:
@@ -200,6 +201,7 @@ class AgentSettings:
             "max_tool_calls": (self.max_tool_calls, 1, 50),
             "max_validation_retries": (self.max_validation_retries, 0, 5),
             "turn_timeout_seconds": (self.turn_timeout_seconds, 30, 1800),
+            "heartbeat_interval_seconds": (self.heartbeat_interval_seconds, 1, 120),
         }
         for name, (value, minimum, maximum) in limits.items():
             if not minimum <= value <= maximum:
@@ -307,6 +309,7 @@ class Settings:
                 max_tool_calls=env_int("AIOPS_AGENT_MAX_TOOL_CALLS", 16),
                 max_validation_retries=env_int("AIOPS_AGENT_MAX_VALIDATION_RETRIES", 2),
                 turn_timeout_seconds=env_int("AIOPS_AGENT_TURN_TIMEOUT_SECONDS", 600),
+                heartbeat_interval_seconds=env_int("AIOPS_AGENT_HEARTBEAT_INTERVAL_SECONDS", 10),
                 windows_sandbox=env("AIOPS_WINDOWS_SANDBOX", "unelevated"),
             ),
         )

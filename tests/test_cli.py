@@ -2,6 +2,7 @@ import json
 import os
 from pathlib import Path
 
+from rich.text import Text
 from typer.testing import CliRunner
 
 from aiops_diagnostics.cli import app
@@ -65,3 +66,12 @@ def test_cli_initializes_portable_home_and_installs_key(tmp_path: Path) -> None:
     assert key_file.read_text(encoding="utf-8").strip() == "provider-secret"
     if os.name != "nt":
         assert key_file.stat().st_mode & 0o077 == 0
+
+
+def test_agent_cli_exposes_progress_toggle() -> None:
+    result = CliRunner().invoke(app, ["agent-diagnose", "--help"], color=True)
+    output = Text.from_ansi(result.stdout).plain
+
+    assert result.exit_code == 0
+    assert "--progress" in output
+    assert "--no-progress" in output

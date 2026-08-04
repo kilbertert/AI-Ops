@@ -122,13 +122,14 @@ class AgentWorkspace:
         target = self._resolve(relative)
         return write_private_text(target, content)
 
-    def append_event(self, event: dict[str, Any]) -> None:
+    def append_event(self, event: dict[str, Any]) -> dict[str, Any]:
         payload = {
             "at": datetime.now(UTC).isoformat(),
             **event,
         }
         target = self._resolve("events.jsonl")
         append_private_text(target, json.dumps(payload, ensure_ascii=False, default=str) + "\n")
+        return payload
 
     def read_json(self, relative: str) -> Any:
         return json.loads(self._resolve(relative).read_text(encoding="utf-8"))

@@ -21,6 +21,10 @@ flowchart LR
 
 第一版 agent 路径反转了决策边界：持久 Codex thread 请求受限的证据工具，读取运行目录中暂存的 SOP 和业务参考，负责选择假设并给出因果解释。harness 只保留不可变身份、只读上限、证据哈希、脱敏、置信度上限、结果验证和恢复状态。详见 [thin-harness.md](thin-harness.md)。
 
+运行过程由统一事件 sink 记录到私有 `events.jsonl`，并可通过进度回调实时送给
+终端或上层服务。事件 sink 不携带证据 payload 或数据库凭据；证据正文只进入
+带哈希的 evidence artifact。JSON 调用的 stdout 保持机器合同不变，进度走 stderr。
+
 ## 基于后端的业务规则
 
 初始规则来自用户提供的后端快照：

@@ -88,6 +88,10 @@ uv run aiops agent-diagnose "订单 TEST-YKC-0001 金额异常" \
   --key-slot default --json
 ```
 
+`agent-diagnose` 默认把运行阶段、工具批次、合同修复和 Codex 心跳输出到终端；`--no-progress` 只关闭当前终端显示，不会关闭私有 `events.jsonl` 记录。使用 `--json` 时，诊断 JSON 保持在 stdout，进度改写到 stderr，并在结果中返回 `events_path` 和 `evidence_journal_path`。
+
+心跳间隔由私有配置中的 `AIOPS_AGENT_HEARTBEAT_INTERVAL_SECONDS` 控制，默认 10 秒。事件日志不包含 evidence payload，只保留阶段、状态、turn、工具名称和计数等追溯元数据。
+
 中断后恢复同一事件/thread，也可以在同一 provider endpoint 下切换另一把 key：
 
 ```bash

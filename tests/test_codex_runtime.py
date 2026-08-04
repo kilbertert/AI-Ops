@@ -1,13 +1,17 @@
 import json
 import os
 import sys
+import threading
+import time
 import tomllib
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from aiops_diagnostics.codex_launcher import _clean_environment, _execute_codex
 from aiops_diagnostics.codex_runtime import (
+    SDKCodexSession,
     codex_launch_args,
     prepare_runtime_home,
     resolve_provider_api_key,
@@ -165,6 +169,37 @@ def test_provider_base_url_is_canonical_and_resume_cannot_redirect_key() -> None
         require_same_provider_base_url("https://api.example/v1/", "https://attacker.example/v1/")
     with pytest.raises(ValueError, match="认证信息"):
         canonical_provider_base_url("https://user:secret@api.example/v1/")
+
+
+def test_codex_heartbeat_is_persisted_and_forwarded() -> None:
+    class _Workspace:
+        def __init__(self) -> None:
+            self.events = []
+
+        def append_event(self, event):
+            payload = {"at": "2026-08-04T00:00:00+00:00", **event}
+            self.events.append(payload)
+            return payload
+
+    workspace = _Workspace()
+    settings = AgentSettings(codex_bin=sys.executable, heartbeat_interval_seconds=1)
+    settings.heartbeat_interval_seconds = 0.01
+    session = object.__new__(SDKCodexSession)
+    session.workspace = workspace
+    session.settings = settings
+    session._thread = SimpleNamespace(id="thread-test")
+    forwarded = []
+    session._progress_callback = forwarded.append
+    stop = threading.Event()
+    worker = threading.Thread(target=session._heartbeat_loop, args=(stop, "turn-test"))
+
+    worker.start()
+    time.sleep(0.04)
+    stop.set()
+    worker.join(timeout=1)
+
+    assert any(event["type"] == "codex_turn_heartbeat" for event in workspace.events)
+    assert any(event["type"] == "codex_turn_heartbeat" for event in forwarded)
 
 
 def stat_mode(path: Path) -> int:

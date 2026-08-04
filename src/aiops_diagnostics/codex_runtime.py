@@ -5,6 +5,9 @@ import hashlib
 import json
 import os
 import sys
+import threading
+import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
@@ -102,6 +105,8 @@ class CodexSession(Protocol):
 
     def run(self, prompt: str) -> CodexTurnOutput: ...
 
+    def set_progress_callback(self, callback: Callable[[dict[str, Any]], None] | None) -> None: ...
+
     def close(self) -> None: ...
 
 
@@ -115,6 +120,7 @@ class SDKCodexSession:
     ) -> None:
         self.workspace = workspace
         self.settings = settings
+        self._progress_callback: Callable[[dict[str, Any]], None] | None = None
         provider_key = ""
         codex: Codex | None = None
         try:
@@ -160,19 +166,28 @@ class SDKCodexSession:
     def thread_id(self) -> str:
         return self._thread.id
 
+    def set_progress_callback(self, callback: Callable[[dict[str, Any]], None] | None) -> None:
+        self._progress_callback = callback
+
     def run(self, prompt: str) -> CodexTurnOutput:
         handle = self._thread.turn(prompt, output_schema=agent_turn_schema())
-        self.workspace.append_event(
-            {"type": "codex_turn_started", "thread_id": self.thread_id, "turn_id": handle.id}
-        )
+        self._record_event({"type": "codex_turn_started", "thread_id": self.thread_id, "turn_id": handle.id})
         executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="aiops-codex-turn")
         future = executor.submit(handle.run)
+        heartbeat_stop = threading.Event()
+        heartbeat_thread = threading.Thread(
+            target=self._heartbeat_loop,
+            args=(heartbeat_stop, handle.id),
+            name="aiops-codex-heartbeat",
+            daemon=True,
+        )
+        heartbeat_thread.start()
         try:
             result = future.result(timeout=self.settings.turn_timeout_seconds)
         except FutureTimeoutError as exc:
             with contextlib.suppress(Exception):
                 handle.interrupt()
-            self.workspace.append_event(
+            self._record_event(
                 {"type": "codex_turn_timeout", "thread_id": self.thread_id, "turn_id": handle.id}
             )
             raise AgentTurnTimeout(
@@ -180,7 +195,7 @@ class SDKCodexSession:
             ) from exc
         except Exception as exc:
             message = str(exc).replace(self._provider_key, "REDACTED")
-            self.workspace.append_event(
+            self._record_event(
                 {
                     "type": "codex_turn_failed",
                     "thread_id": self.thread_id,
@@ -191,6 +206,8 @@ class SDKCodexSession:
             )
             raise AgentRuntimeError(f"Codex turn {handle.id} failed: {message}") from exc
         finally:
+            heartbeat_stop.set()
+            heartbeat_thread.join(timeout=1)
             executor.shutdown(wait=False, cancel_futures=True)
         if not result.final_response:
             raise AgentRuntimeError(f"Codex turn {handle.id} returned no final response")
@@ -199,7 +216,7 @@ class SDKCodexSession:
             if result.usage and hasattr(result.usage, "model_dump")
             else {}
         )
-        self.workspace.append_event(
+        self._record_event(
             {
                 "type": "codex_turn_completed",
                 "thread_id": self.thread_id,
@@ -213,6 +230,26 @@ class SDKCodexSession:
             final_response=result.final_response,
             usage=usage,
         )
+
+    def _heartbeat_loop(self, stop: threading.Event, turn_id: str) -> None:
+        started = time.monotonic()
+        interval = self.settings.heartbeat_interval_seconds
+        while not stop.wait(interval):
+            self._record_event(
+                {
+                    "type": "codex_turn_heartbeat",
+                    "thread_id": self.thread_id,
+                    "turn_id": turn_id,
+                    "elapsed_seconds": int(time.monotonic() - started),
+                }
+            )
+
+    def _record_event(self, event: dict[str, Any]) -> dict[str, Any]:
+        payload = self.workspace.append_event(event)
+        if self._progress_callback is not None:
+            with contextlib.suppress(Exception):
+                self._progress_callback(payload)
+        return payload
 
     def close(self) -> None:
         self._codex.__exit__(None, None, None)

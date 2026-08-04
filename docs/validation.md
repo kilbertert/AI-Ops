@@ -18,7 +18,7 @@
 
 2026-07-31 的业务加固回放无业务数据写入：
 
-- 历史加固阶段完成了 88 项自动化测试，包括 17 个针对性回归和 40-case 协议/状态/launch type 矩阵；当前仓库主测试套件已经扩展到 155 项。
+- 历史加固阶段完成了 88 项自动化测试，包括 17 个针对性回归和 40-case 协议/状态/launch type 矩阵；当前分支测试套件已经扩展到 159 项。
 - 生产 TDengine schema 已直接核对。camelCase 字段必须使用反引号，严格代理和 runtime 使用相同的 allowlist 查询。
 - Redis Stream payload 可能包含非 UTF-8 字节；runtime 现在对有界原始字节匹配订单号，只暴露数量和元数据，并成功匹配保留的生产消息。
 - 30 天有界回放覆盖 1,012 笔订单。已有 `tx_data` 的 operator 订单不再误判为 `missing_tx_data`，特殊计费路径也不再产生之前的宽泛金额不一致。
@@ -107,6 +107,20 @@ SSH 调试通道直接传入中文字面量会受远程代码页影响；本轮�
 - `run-20260803T124243Z-65cd657e-5a88` 和临时 `elevated` 对照 run `run-20260803T124847Z-65cd657e-11d3` 均成功采集 order/fee evidence，但最终被本地 staged-artifact 读取失败阻断；没有业务写入。该失败促成了 payload 交付修复。
 - 修复分支 `fix/windows-model-evidence-delivery` 分发后，`run-20260803T130133Z-65cd657e-d07d` 在默认 `unelevated` Windows sandbox 下完成 `diagnosed/medium`；结果引用 `ev-001`、`ev-002`、`ev-003`，状态 `completed`，事件日志不包含 evidence payload 或 API key。
 - 该 run 证明 Windows provider、Codex native runtime、只读工具、脱敏 payload 交付和结果验证链路可工作；它仍是合成 fixture，不是工程师确认的真实故障业务验收。
+
+## 运行中进度与心跳验证
+
+2026-08-04 使用真实 provider 对 OCPP 合成 fixture 做了进度流 smoke test：
+
+- 运行 `run-20260803T194509Z-de1ce5e2-263c` 完成 5 个 Codex turn、3 个工具批次和 1 次结构化结果合同修复；最终状态为 `inconclusive`，符合 fixture 的业务边界。
+- 将终端输出拆分为 stdout/stderr 后，stdout 通过 `jq` 解析为单一 JSON；stderr 实时输出启动、thread、turn、工具批次、合同修复、完成和 144 个心跳。
+- 同一批事件同时写入私有 `events.jsonl`；事件仅含状态、计数和标识元数据，不含 evidence payload、API key 或数据库密码。
+- 运行目录为 `0700`，事件和证据日志为 `0600`；`--no-progress` 的行为由代码路径保留事件、隐藏显示。
+- 改基前 CI run `30870111118` 的 Windows job 通过，Linux job 在 `test_agent_cli_exposes_progress_toggle` 失败。失败来自 GitHub runner 的 ANSI 样式码使原始 help `stdout` 断言不稳定，不是选项缺失；回归测试现强制 `color=True` 并使用 Rich `Text.from_ansi` 归一化后检查两个开关。
+- 本地分别以 `COLUMNS=60/80/120` 运行目标测试均通过，覆盖窄终端和常规终端宽度。
+- 当前 159 项 pytest、Ruff、格式、compileall、锁文件和 diff 检查通过。
+
+这证明了运行可观测性和追溯链路，不代表 fixture 或模型调用已经完成真实故障业务验收。
 
 ## 业务验收待办
 

@@ -98,6 +98,7 @@ def _diagnosis(manifest: IncidentManifest, evidence_id: str = "ev-001") -> str:
 def test_coordinator_keeps_codex_in_control_of_tool_selection(tmp_path: Path) -> None:
     _, manifest, workspace, journal, tools, settings = _context(tmp_path)
     session = _FakeSession([_tool_request(), _diagnosis(manifest)])
+    progress_events = []
     coordinator = AgentCoordinator(
         workspace,
         manifest,
@@ -105,6 +106,7 @@ def test_coordinator_keeps_codex_in_control_of_tool_selection(tmp_path: Path) ->
         tools,
         settings,
         session_factory=lambda *_: session,
+        progress_callback=progress_events.append,
     )
 
     result = coordinator.run()
@@ -116,6 +118,12 @@ def test_coordinator_keeps_codex_in_control_of_tool_selection(tmp_path: Path) ->
     assert workspace.load_state().thread_id == "thread-test"
     assert workspace.load_state().phase == "completed"
     assert session.closed is True
+    event_types = [event["type"] for event in progress_events]
+    assert event_types[:3] == ["diagnosis_started", "codex_session_starting", "codex_thread_ready"]
+    assert "codex_turn_waiting" in event_types
+    assert "tool_batch_started" in event_types
+    assert "tool_batch_completed" in event_types
+    assert event_types[-1] == "diagnosis_completed"
 
 
 def test_coordinator_requests_contract_repair_on_invalid_identity(tmp_path: Path) -> None:

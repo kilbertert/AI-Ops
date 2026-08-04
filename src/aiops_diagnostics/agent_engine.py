@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import json
 from collections.abc import Callable, Iterable
+from typing import Any
 
 from pydantic import ValidationError
 
@@ -29,6 +30,7 @@ from aiops_diagnostics.diagnostic_tools import (
 from aiops_diagnostics.journal import EvidenceJournal
 
 SessionFactory = Callable[[AgentWorkspace, AgentSettings, str | None], CodexSession]
+ProgressCallback = Callable[[dict[str, Any]], None]
 
 
 class AgentCoordinator:
@@ -42,6 +44,7 @@ class AgentCoordinator:
         *,
         sensitive_values: Iterable[str] = (),
         session_factory: SessionFactory | None = None,
+        progress_callback: ProgressCallback | None = None,
     ) -> None:
         self.workspace = workspace
         self.manifest = manifest
@@ -54,6 +57,7 @@ class AgentCoordinator:
             sensitive_values=sensitive_values,
         )
         self.session_factory = session_factory or _default_session_factory
+        self.progress_callback = progress_callback
 
     def run(self) -> AgentDiagnosis:
         state = self.workspace.load_state()
@@ -69,12 +73,34 @@ class AgentCoordinator:
             state = state.model_copy(update={"next_prompt": self._initial_prompt()})
             self.workspace.save_state(state)
 
+        self._record_event(
+            {
+                "type": "diagnosis_started",
+                "run_id": self.workspace.run_id,
+                "incident_id": self.manifest.incident_id,
+                "resumed": bool(state.thread_id),
+                "events_path": str(self.workspace.path / "events.jsonl"),
+            }
+        )
+
         session: CodexSession | None = None
         try:
+            self._record_event({"type": "codex_session_starting"})
             session = self.session_factory(self.workspace, self.settings, state.thread_id)
+            set_progress_callback = getattr(session, "set_progress_callback", None)
+            if callable(set_progress_callback):
+                set_progress_callback(self.progress_callback)
             state = state.model_copy(update={"thread_id": session.thread_id, "phase": "running"})
             self.workspace.save_state(state)
+            self._record_event({"type": "codex_thread_ready", "thread_id": session.thread_id})
             while state.turn_count < self.settings.max_turns:
+                self._record_event(
+                    {
+                        "type": "codex_turn_waiting",
+                        "turn_number": state.turn_count + 1,
+                        "max_turns": self.settings.max_turns,
+                    }
+                )
                 try:
                     output = session.run(state.next_prompt)
                 except AgentTurnTimeout:
@@ -95,8 +121,14 @@ class AgentCoordinator:
                     requested = len(turn.tool_requests)
                     if state.tool_call_count + requested > self.settings.max_tool_calls:
                         return self._finish_blocked(state, "Codex 请求的工具调用超过运行上限")
+                    self._record_event(
+                        {
+                            "type": "tool_batch_started",
+                            "tools": [item.tool.value for item in turn.tool_requests],
+                        }
+                    )
                     outcomes = self.tools.execute_many(turn.tool_requests)
-                    self.workspace.append_event(
+                    self._record_event(
                         {
                             "type": "tool_batch_completed",
                             "outcomes": [item.to_dict() for item in outcomes],
@@ -129,9 +161,7 @@ class AgentCoordinator:
         except AgentRuntimeError as exc:
             state = self.workspace.load_state().model_copy(update={"phase": "interrupted"})
             self.workspace.save_state(state)
-            self.workspace.append_event(
-                {"type": "diagnosis_interrupted", "error_type": exc.__class__.__name__}
-            )
+            self._record_event({"type": "diagnosis_interrupted", "error_type": exc.__class__.__name__})
             raise
         finally:
             if session is not None:
@@ -149,24 +179,29 @@ class AgentCoordinator:
             "inconclusive/blocked diagnosis.\n\nValidation errors:\n- " + "\n- ".join(errors)
         )
         updated = state.model_copy(update={"validation_attempts": attempts, "next_prompt": next_prompt})
-        self.workspace.append_event(
-            {"type": "diagnosis_validation_failed", "attempt": attempts, "errors": errors}
-        )
+        self._record_event({"type": "diagnosis_validation_failed", "attempt": attempts, "errors": errors})
         self.workspace.save_state(updated)
         return updated
 
     def _finish_success(self, state: RunState, result: AgentDiagnosis) -> AgentDiagnosis:
         self.workspace.save_result(result)
         self.workspace.save_state(state.model_copy(update={"phase": "completed", "next_prompt": ""}))
-        self.workspace.append_event({"type": "diagnosis_completed", "status": result.status.value})
+        self._record_event({"type": "diagnosis_completed", "status": result.status.value})
         return result
 
     def _finish_blocked(self, state: RunState, reason: str) -> AgentDiagnosis:
         result = self.validator.blocked_result(reason)
         self.workspace.save_result(result)
         self.workspace.save_state(state.model_copy(update={"phase": "blocked", "next_prompt": ""}))
-        self.workspace.append_event({"type": "diagnosis_blocked", "reason": reason})
+        self._record_event({"type": "diagnosis_blocked", "reason": reason})
         return result
+
+    def _record_event(self, event: dict[str, Any]) -> dict[str, Any]:
+        payload = self.workspace.append_event(event)
+        if self.progress_callback is not None:
+            with contextlib.suppress(Exception):
+                self.progress_callback(payload)
+        return payload
 
     def _initial_prompt(self) -> str:
         tools = "\n".join(f"- {name.value}: {description}" for name, description in TOOL_DESCRIPTIONS.items())

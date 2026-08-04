@@ -37,6 +37,22 @@ Codex 决定请求哪些证据以及如何组合证据。harness 不选择最终
 - `AgentResultValidator` 拒绝身份漂移、缺少证据引用、只引用 known runbook 的结论、来源失败后的高置信度、密钥泄露和声称已执行禁用动作。它不会替模型重写根因。
 - provider 失败、超时、格式错误或进程中断后，原有 `thread_id` 和 `run_id` 仍可恢复。
 
+## 运行中可观测性
+
+每个运行目录都会追加私有 `events.jsonl`。事件先落盘，再通过可选的
+`progress_callback` 推送给 CLI 或上层服务，因此终端显示和事后追溯使用同一
+事件源。当前事件包括：
+
+- 诊断启动、Codex session/thread 就绪和每个 turn 等待/开始/完成。
+- Codex turn 心跳（默认每 10 秒，可由 `AIOPS_AGENT_HEARTBEAT_INTERVAL_SECONDS`
+  调整），只含 elapsed seconds、turn id 和线程 id。
+- 工具批次开始时记录工具名，完成时记录状态和 evidence id；不输出模型 reason 或 evidence payload。
+- 结构化结果合同修复、完成、阻断和中断。
+
+人类终端默认看到这些阶段日志；`--no-progress` 只隐藏终端输出，仍保留事件。
+机器调用使用 `--json` 时，stdout 只返回最终诊断合同和两个追溯文件路径，阶段
+日志写入 stderr，避免破坏 JSON 管道。
+
 ## Provider 与 key slot
 
 provider 写入生成的私有 Codex home，使用以下配置：
