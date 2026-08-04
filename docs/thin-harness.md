@@ -2,8 +2,8 @@
 
 ## 控制权反转
 
-`aiops diagnose` 仍然是确定性的已知 runbook 快速路径。
-`aiops agent-diagnose` 使用持久 Codex thread 作为诊断主体：
+`aiops diagnose --mode deterministic` 是确定性的已知 runbook 快速路径。
+`aiops diagnose`（默认 agent 模式）使用持久 Codex thread 作为诊断主体：
 
 ```text
 工程师反馈
