@@ -71,6 +71,7 @@ Gateway 进程通过 `AIOPS_GATEWAY_SERVER_CONFIG_FILE` 加载服务器私有 `p
 - 租户绑定在注册码上；设备请求其他租户时被拒绝。
 - 服务端 key slot 通过 `AIOPS_GATEWAY_ALLOWED_KEY_SLOTS` 白名单限制，恢复和执行仍比较固定 provider endpoint。
 - Gateway 只同步状态和证据 ID 等元数据，不同步 evidence payload、密码或内部绝对路径。
+- run 元数据中的用户反馈会在服务端持久化前脱敏；客户端 `show` 只得到诊断合同结果，不得到服务器证据正文。
 
 ## 生产硬化要求
 
