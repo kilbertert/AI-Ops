@@ -16,10 +16,18 @@ class GatewayClientError(RuntimeError):
 
 
 class GatewayClient:
-    def __init__(self, base_url: str, token: str | None = None, *, timeout: float = 20) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        token: str | None = None,
+        *,
+        timeout: float = 20,
+        max_retries: int = 4,
+    ) -> None:
         self.base_url = canonical_gateway_url(base_url)
         self.token = token
         self.timeout = timeout
+        self.max_retries = max_retries
 
     def health(self) -> dict[str, Any]:
         return self._request("GET", "/health", authenticated=False)
@@ -114,14 +122,29 @@ class GatewayClient:
             headers=headers,
             method=method,
         )
-        try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                raw = response.read().decode("utf-8")
-        except urllib.error.HTTPError as exc:
-            detail = _error_detail(exc)
-            raise GatewayClientError(f"gateway HTTP {exc.code}: {detail}") from exc
-        except (urllib.error.URLError, TimeoutError) as exc:
-            raise GatewayClientError(f"gateway connection failed: {exc.__class__.__name__}") from exc
+        # Retry transient connection errors (Tailscale/VPN blips, momentary
+        # unreachable Gateway). HTTP errors (404/401/5xx) are not retried: they
+        # reflect a deliberate Gateway response, not a transport failure. A run
+        # keeps executing on the server, so retrying a poll is always safe.
+        last_connection_error: Exception | None = None
+        raw: str | None = None
+        for attempt in range(self.max_retries + 1):
+            try:
+                with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                    raw = response.read().decode("utf-8")
+                last_connection_error = None
+                break
+            except urllib.error.HTTPError as exc:
+                detail = _error_detail(exc)
+                raise GatewayClientError(f"gateway HTTP {exc.code}: {detail}") from exc
+            except (urllib.error.URLError, TimeoutError) as exc:
+                last_connection_error = exc
+                if attempt < self.max_retries:
+                    time.sleep(min(2**attempt, 8))
+        if last_connection_error is not None:
+            raise GatewayClientError(
+                f"gateway connection failed: {last_connection_error.__class__.__name__}"
+            ) from last_connection_error
         try:
             result = json.loads(raw)
         except json.JSONDecodeError as exc:

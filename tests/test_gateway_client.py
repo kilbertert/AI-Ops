@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -40,3 +41,65 @@ def test_profile_name_cannot_escape_private_config_root(monkeypatch, tmp_path: P
         save_token("../outside", "aops-secret")
     with pytest.raises(ValueError):
         load_profile("../outside")
+
+
+def _fake_response(payload: dict):
+    from unittest.mock import MagicMock
+
+    resp = MagicMock()
+    resp.__enter__.return_value = resp
+    resp.__exit__.return_value = False
+    resp.read.return_value = json.dumps(payload).encode("utf-8")
+    return resp
+
+
+def test_gateway_client_retries_transient_url_errors(monkeypatch) -> None:
+    import urllib.error
+
+    client = GatewayClient("https://gateway.example.test", token="t", max_retries=3)
+    calls = {"n": 0}
+
+    def fake_urlopen(request, timeout):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise urllib.error.URLError("transient blip")
+        return _fake_response({"runs": []})
+
+    monkeypatch.setattr("aiops_diagnostics.gateway_client.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("aiops_diagnostics.gateway_client.time.sleep", lambda s: None)
+
+    assert client.list_runs() == []
+    assert calls["n"] == 3  # two transient failures, then success
+
+
+def test_gateway_client_gives_up_after_retries(monkeypatch) -> None:
+    import urllib.error
+
+    client = GatewayClient("https://gateway.example.test", token="t", max_retries=2)
+
+    def fake_urlopen(request, timeout):
+        raise urllib.error.URLError("down")
+
+    monkeypatch.setattr("aiops_diagnostics.gateway_client.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("aiops_diagnostics.gateway_client.time.sleep", lambda s: None)
+
+    with pytest.raises(GatewayClientError):
+        client.list_runs()
+
+
+def test_gateway_client_does_not_retry_http_errors(monkeypatch) -> None:
+    import urllib.error
+
+    client = GatewayClient("https://gateway.example.test", token="t", max_retries=3)
+    calls = {"n": 0}
+
+    def fake_urlopen(request, timeout):
+        calls["n"] += 1
+        raise urllib.error.HTTPError(request.full_url, 404, "Not Found", {}, None)
+
+    monkeypatch.setattr("aiops_diagnostics.gateway_client.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("aiops_diagnostics.gateway_client.time.sleep", lambda s: None)
+
+    with pytest.raises(GatewayClientError):
+        client.list_runs()
+    assert calls["n"] == 1  # HTTP errors are not retried
