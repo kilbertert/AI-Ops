@@ -1,118 +1,87 @@
-# Validation Plan
+# 验证与验收计划
 
-Synthetic fixtures verify deterministic behavior but do not establish production accuracy.
+合成 fixture 可以验证确定性行为，但不能证明生产故障结论准确。所有“通过”都必须说明验证范围，不能把自动化回放写成工程师确认的业务验收。
 
-## Infrastructure Boundary Verified
+## 基础设施边界
 
-The production access path was verified on 2026-07-31 with dedicated identities and no business-data
-mutation:
+2026-07-31 已使用专用身份、无业务写入地验证生产访问路径：
 
-- `aiops doctor` connected successfully to MySQL 8.4.7, TDengine 3.4, and Redis 6.2.7 through the
-  restricted SSH tunnel.
-- MySQL reported only `USAGE` plus `SELECT` on the three diagnostic tables; a query against an ungranted
-  business table was denied.
-- The TDengine proxy returned both required stable names and rejected a DDL request with HTTP 403. Direct
-  SSH forwarding to the native TDengine REST port was administratively prohibited.
-- Redis allowed the bounded Stream metadata/read commands and denied access to a key outside the two
-  configured Stream patterns.
-- The SSH identity rejected shell execution and permits local forwarding only to the approved MySQL,
-  TDengine proxy, and Redis endpoints.
+- `aiops doctor` 通过受限 SSH 隧道连接 MySQL 8.4.7、TDengine 3.4 和 Redis 6.2.7。
+- MySQL 只报告三个诊断表的 `USAGE` 和 `SELECT`；未授权业务表查询被拒绝。
+- TDengine 代理返回所需 stable，并以 HTTP 403 拒绝 DDL；禁止直接 SSH 转发原生 TDengine REST 端口。
+- Redis 允许有界 Stream 元数据和读取命令，访问配置范围外的 key 被拒绝。
+- SSH 身份拒绝 shell 执行，只允许向批准的 MySQL、TDengine 代理和 Redis 端点做本地转发。
 
-This verifies connectivity and the permission boundary. It does not validate diagnostic conclusions for
-real incidents.
+这只证明连接性和权限边界，不证明真实故障结论。
 
-## Automated And Read-Only Replay
+## 自动化与只读回放
 
-The business hardening pass on 2026-07-31 completed without business-data mutation:
+2026-07-31 的业务加固回放无业务数据写入：
 
-- 88 automated tests passed, including 17 targeted regressions and a 40-case protocol/status/launch-type
-  matrix.
-- The production TDengine schema was checked directly. Camel-case columns require quoted identifiers;
-  the restricted proxy and runtime now use the same exact allowlisted query.
-- Redis Stream payloads contain non-UTF-8 bytes. The runtime now matches order numbers against bounded raw
-  bytes and exposes only counts and metadata; a retained production message was matched successfully.
-- A bounded 30-day replay covered 1,012 orders. Operator orders with stored `tx_data` no longer become
-  `missing_tx_data`, and their special billing path no longer produces the previous broad amount mismatch.
-- Production samples covered operator YKC1.8, remote YKC1.6, OCPP, AYK, two-wheel, and status-2 paths.
-  MySQL, TDengine, and Redis all completed without source failures.
-- The replay found 178 operator orders whose status says normal finish while the YKC stop code says abnormal.
-  The backend operator path sets status 1 after its abnormal-status handler, so the diagnostic report now
-  surfaces this as a status/stop-reason inconsistency instead of silently accepting it.
-- The production TDengine proxy still rejected a DDL request with HTTP 403 after deployment.
+- 历史加固阶段完成了 88 项自动化测试，包括 17 个针对性回归和 40-case 协议/状态/launch type 矩阵；当前仓库主测试套件已经扩展到 155 项。
+- 生产 TDengine schema 已直接核对。camelCase 字段必须使用反引号，严格代理和 runtime 使用相同的 allowlist 查询。
+- Redis Stream payload 可能包含非 UTF-8 字节；runtime 现在对有界原始字节匹配订单号，只暴露数量和元数据，并成功匹配保留的生产消息。
+- 30 天有界回放覆盖 1,012 笔订单。已有 `tx_data` 的 operator 订单不再误判为 `missing_tx_data`，特殊计费路径也不再产生之前的宽泛金额不一致。
+- 生产样本覆盖 operator YKC1.8、remote YKC1.6、OCPP、AYK、两轮车和状态 2 路径；MySQL、TDengine、Redis 均未出现来源失败。
+- 回放发现 178 笔 operator 订单的状态写成正常结束，但 YKC 停止码显示异常。报告现在会展示状态/停止原因矛盾，而不是静默接受。
+- 生产 TDengine 代理部署后仍以 HTTP 403 拒绝 DDL。
 
-This replay establishes rule consistency against the sampled 30-day data. It is not a substitute for an
-engineer's confirmed incident conclusion.
+这证明了规则和抽样数据的一致性，不替代工程师确认的故障结论。
 
-## Business Acceptance Pending
+## Codex-native Harness 验证
 
-Production acceptance still requires at least three human-confirmed incidents for each supported path:
+2026-08-03 已在不产生业务写入的条件下验证 thin harness：
 
-1. YKC amount or electricity mismatch.
-2. Missing transaction data after an order ends.
-3. Status 2 uncontrollable exception.
-4. Status 5 protocol-reported abnormal end.
-5. OCPP server-side billing.
-6. Redis downstream synchronization issue.
+- 测试覆盖不可变 incident identity、私有 workspace、证据哈希、PII/密钥脱敏、有界工具依赖、结果验证、格式错误修复、超时/provider 中断、恢复和可插拔 key slot。
+- YKC 金额不一致、交易数据缺失、OCPP 服务端计费三类 fixture 各执行三轮 scripted-agent 验证，incident identity、工具序列、证据 ID、结论类别、置信度和限制保持一致。脚本验证的是 harness 可重复性，不是模型业务判断。
+- 注入 TDengine 故障、结构化输出错误、turn 超时和 provider 失败；失败证据会保留，来源失败后不允许高置信度，原 thread/run 可恢复。
+- `agent-doctor` 依赖保持只读：MySQL 无不安全权限或未解析角色，TDengine 所需 stable 通过严格代理暴露，Redis 可达。
+- 30 天有界聚合样本返回 1,252 个候选行；十条代表性路径覆盖 YKC1.8、YKC1.6、OCPP、HLHT、HW104、operator/remote/admin launch、order type 0/1 和 status 0/1/2/3/5。
+- 三条脱敏生产只读路径（YKC1.8、YKC1.6、OCPP）完成证据管线；artifact 哈希、`0700` workspace、密钥和真实数据库/API secret 扫描通过。
 
-For every case, compare the generated summary, classification, evidence, and recommended next step with the engineer's final incident conclusion. False certainty is a failure even when the recommended action happens to be correct.
+此前某个 provider slot 返回过明确的 `429 INSUFFICIENT_BALANCE`。该失败无 traceback、无密钥泄露，run 状态进入 `interrupted`，`agent-resume` 成功复用同一 thread。
 
-## Codex-Native Harness Validation (2026-08-03)
+## 真实 Provider 验证
 
-The thin-harness implementation was validated without business mutation:
+2026-08-03 使用独立的有额度 key slot 对同一 provider endpoint 验证：
 
-- The automated suite covers immutable incident identity, private workspaces,
-  evidence hashes, PII/secret redaction, bounded tool dependencies, result
-  validation, malformed output repair, timeout/provider interruption, resume,
-  and pluggable API key slots.
-- Three independent scripted-agent runs for each YKC amount mismatch, missing
-  transaction data, and OCPP server-billing fixture produced the same incident
-  identity, tool sequence, evidence IDs, conclusion class, confidence, and
-  limitations. Scripted turns validate harness repeatability; they are not a
-  substitute for a real model's business judgment.
-- Failure injection covered a TDengine outage, malformed structured output,
-  a timed-out turn, and a provider-side failure. Failed evidence remained in
-  the journal, high confidence was rejected, and the same thread/run remained
-  resumable.
-- Production `agent-doctor` dependencies remained read-only: MySQL 8.4.7
-  reported no unsafe privileges or unresolved roles, TDengine exposed both
-  required stables through the strict proxy, and Redis 6.2.7 was reachable.
-- A bounded 30-day aggregate sample returned 1,252 candidate rows. Ten
-  representative paths covered YKC1.8, YKC1.6, OCPP, HLHT, HW104,
-  operator/remote/admin launches, order types 0/1, and statuses 0/1/2/3/5.
-  All ten deterministic shadow reports completed without a failed source.
-- The thin evidence pipeline was then run against three sanitized production
-  paths (YKC1.8, YKC1.6, OCPP). All six tools completed for each path; every
-  artifact hash verified, workspaces were mode `0700`, and exact runtime
-  database/API secrets were absent from staged references, events, journals,
-  and evidence artifacts.
+- 首次 live turn 发现 Responses API schema 的 `required` 约束，以及服务器默认 `codex` credential-injecting wrapper 对受限 sandbox 不可见的问题；两者均已修复并加入回归测试。
+- runtime 改用 Python SDK 固定版本的原生 Codex binary，权限 profile 只读取该确切 binary，不再把服务器 wrapper 传给诊断进程。
+- 三次真实模型 fixture 运行完成：YKC 金额不一致为中置信度，交易数据缺失在三类直接证据后为高置信度，内部一致的 OCPP 计费正确返回 inconclusive。
+- 三次脱敏生产只读运行覆盖 YKC1.8 operator、YKC1.6 remote 和 OCPP；模型自主选择工具，证据引用和置信度与空/受限来源一致，没有业务写入声明。
+- 六次运行均进入 `completed`；证据哈希、`0700` workspace、`0600` 文件和 secret/PII 扫描通过，MySQL、TDengine、Redis 始终只读。
 
-An earlier provider slot returned an explicit `429 INSUFFICIENT_BALANCE` response;
-that failure was delivered without a traceback or secret, the run state became
-`interrupted`, and `agent-resume` reused the same thread.
+这些是 provider 和生产路径验证，不是工程师确认的真实故障验收。
 
-## Real Provider Validation (2026-08-03)
+## Windows/Linux 便携包验收
 
-A separate funded key slot was used against the same pinned provider endpoint.
-The first live turn exposed two integration defects before any business query:
-the Responses API required every schema property to be listed in `required`, and
-the default server `codex` command was a credential-injecting wrapper whose
-native sandbox target was not visible to the restricted profile. Both issues were
-fixed and covered by regression tests. The runtime now uses the Python SDK's
-pinned native Codex binary, grants the profile read access to that exact binary,
-and never passes the server wrapper to the diagnostic process.
+最终便携化 PR 的 GitHub Windows runner 已通过：
 
-- Three real-model fixture runs completed: YKC amount mismatch was diagnosed with
-  medium confidence, missing transaction data was diagnosed with high confidence
-  after three direct evidence classes, and internally consistent OCPP billing was
-  correctly returned as inconclusive.
-- Three sanitized production read-only runs completed across YKC1.8 operator,
-  YKC1.6 remote, and OCPP paths. The model selected tools autonomously, kept
-  evidence citations and confidence aligned with empty/limited sources, and made
-  no mutation claims.
-- All six runs ended in `completed` state. Evidence hashes, `0700` workspaces,
-  `0600` files, and secret/PII scans passed; MySQL, TDengine, and Redis remained
-  read-only throughout.
+- Windows stdout/stderr UTF-8、当前用户 owner、受保护 DACL 和冻结 launcher 子进程路径均经过真实失败后修复。
+- 最终 ZIP 从源码目录之外解压，以最小 PATH 运行 `--help`、`init`、`paths`、`key-install`、`agent-doctor`、Codex 0.144.4 和三份 fixture。
+- 私有配置、key、Codex home 和 run 目录的权限检查通过；制品不存在 `.key`、`production.env` 或 `auth.json`。
+- Windows artifact 已上传并保留 7 天；用户本机 `D:\AI-Ops` 的 Codex Remote 通道尚未执行成功，不能冒充本机验收完成。
 
-These are real provider and production-path validations, not engineer-confirmed
-incident acceptances. Business acceptance remains pending the human-confirmed
-cases listed above.
+## M4 文档治理验证
+
+2026-08-03 在 `docs/chinese-governance` 分支完成：
+
+- 根目录 `README.md`、`docs/`、`ops/README.md` 和 `.env.example` 注释改为中文优先，命令、环境变量、JSON 字段和代码标识保持可复制、可检索。
+- 新增仓库级 `AGENTS.md`，强制每个里程碑同步 `docs/开发进度.md`、`docs/validation.md`，并在入口、配置、部署或安全边界变化时同步 README、架构和部署文档。
+- 进度文档已记录本次分支、里程碑状态、既有 CI/artifact 证据、`D:\AI-Ops` 未完成状态和下一步；本节的确定性检查结果将在提交前以实际命令输出为准。
+- 本轮只修改文档、配置模板注释和治理规则，不改变业务代码、数据库权限或诊断动作边界；没有新增真实故障业务验收结论。
+- 本轮确定性检查：`uv run pytest -q`（155 项通过）、`uv run ruff check .`、`uv run ruff format --check .`、`uv lock --check`、`uv pip check`、`uv run python -m compileall -q src tests packaging` 和 `git diff --check` 均通过。
+- OpenCodeReview delegation preview 将 Markdown、`.env.example` 和新增 `AGENTS.md` 标记为 `unsupported_ext`（0 个可自动选取的 reviewable 文件）；已按同一默认规则完成人工差异审查，未发现需要修复的文档、安全或边界问题。
+
+## 业务验收待办
+
+生产业务验收仍需要每条支持路径至少三笔由工程师确认结论的真实故障：
+
+1. YKC 金额或电量不一致。
+2. 订单结束后缺少交易数据。
+3. 状态 2 不可控异常。
+4. 状态 5 协议上报异常结束。
+5. OCPP 服务端计费。
+6. Redis 下游同步问题。
+
+每个案例都要比较生成的摘要、分类、证据和下一步建议与工程师最终结论。即使建议碰巧正确，错误的高置信度仍然算失败。
