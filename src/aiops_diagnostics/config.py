@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 import re
 import shutil
-from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -50,7 +49,7 @@ def _default_codex_bin() -> str:
 
         return str(bundled_codex_path())
     except (ImportError, AttributeError):
-        return shutil.which("codex") or ("codex.exe" if os.name == "nt" else "codex")
+        return shutil.which("codex") or "/home/claude/.local/bin/codex"
 
 
 def canonical_provider_base_url(value: str) -> str:
@@ -168,19 +167,18 @@ class SafetySettings:
 @dataclass(slots=True)
 class AgentSettings:
     codex_bin: str = field(default_factory=_default_codex_bin)
-    codex_runtime_home: str = field(default_factory=lambda: str(default_codex_home()))
+    codex_runtime_home: str = str(Path.home() / ".local/share/aiops-diagnostics/codex-home")
     api_base_url: str = "https://api.psydo.top/"
     api_key_env: str = "AIOPS_CODEX_API_KEY"
     api_key_file: str = ""
-    key_dir: str = field(default_factory=lambda: str(default_key_dir()))
+    key_dir: str = str(Path.home() / ".config/aiops-diagnostics/keys")
     key_slot: str = "default"
-    run_root: str = field(default_factory=lambda: str(default_run_root()))
+    run_root: str = ".aiops/runs"
     model: str = ""
     max_turns: int = 8
     max_tool_calls: int = 16
     max_validation_retries: int = 2
     turn_timeout_seconds: int = 600
-    windows_sandbox: str = "unelevated"
 
     def validate(self) -> None:
         codex_bin = Path(self.codex_bin).expanduser()
@@ -190,11 +188,10 @@ class AgentSettings:
         canonical_provider_base_url(self.api_base_url)
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", self.api_key_env):
             raise ValueError("Codex API key 环境变量名无效")
-        validate_key_slot_name(self.key_slot)
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,63}", self.key_slot):
+            raise ValueError("Codex key slot 只能包含字母、数字、点、下划线或连字符")
         if runtime_home == Path(self.key_dir).expanduser().resolve():
             raise ValueError("Codex runtime home 与 key_dir 必须隔离")
-        if self.windows_sandbox not in {"elevated", "unelevated"}:
-            raise ValueError("Windows Codex sandbox 必须是 elevated 或 unelevated")
         limits = {
             "max_turns": (self.max_turns, 2, 20),
             "max_tool_calls": (self.max_tool_calls, 1, 50),
@@ -308,6 +305,30 @@ class Settings:
                 max_validation_retries=env_int("AIOPS_AGENT_MAX_VALIDATION_RETRIES", 2),
                 turn_timeout_seconds=env_int("AIOPS_AGENT_TURN_TIMEOUT_SECONDS", 600),
                 windows_sandbox=env("AIOPS_WINDOWS_SANDBOX", "unelevated"),
+            ),
+            agent=AgentSettings(
+                codex_bin=_env(
+                    "AIOPS_CODEX_BIN",
+                    _default_codex_bin(),
+                ),
+                codex_runtime_home=_env(
+                    "AIOPS_CODEX_RUNTIME_HOME",
+                    str(Path.home() / ".local/share/aiops-diagnostics/codex-home"),
+                ),
+                api_base_url=_env("AIOPS_CODEX_BASE_URL", "https://api.psydo.top/"),
+                api_key_env=_env("AIOPS_CODEX_API_KEY_ENV", "AIOPS_CODEX_API_KEY"),
+                api_key_file=_env("AIOPS_CODEX_API_KEY_FILE"),
+                key_dir=_env(
+                    "AIOPS_CODEX_KEY_DIR",
+                    str(Path.home() / ".config/aiops-diagnostics/keys"),
+                ),
+                key_slot=_env("AIOPS_CODEX_KEY_SLOT", "default"),
+                run_root=_env("AIOPS_AGENT_RUN_ROOT", ".aiops/runs"),
+                model=_env("AIOPS_AGENT_MODEL"),
+                max_turns=_env_int("AIOPS_AGENT_MAX_TURNS", 8),
+                max_tool_calls=_env_int("AIOPS_AGENT_MAX_TOOL_CALLS", 16),
+                max_validation_retries=_env_int("AIOPS_AGENT_MAX_VALIDATION_RETRIES", 2),
+                turn_timeout_seconds=_env_int("AIOPS_AGENT_TURN_TIMEOUT_SECONDS", 600),
             ),
         )
 

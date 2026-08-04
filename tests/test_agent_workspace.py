@@ -1,5 +1,4 @@
 import json
-import os
 import stat
 from pathlib import Path
 
@@ -10,7 +9,6 @@ from aiops_diagnostics.agent_contracts import IncidentManifest, ToolName
 from aiops_diagnostics.agent_workspace import AgentWorkspace
 from aiops_diagnostics.journal import EvidenceJournal
 from aiops_diagnostics.parsing import parse_request
-from aiops_diagnostics.private_files import validate_private_directory, validate_private_file
 
 
 def _manifest() -> IncidentManifest:
@@ -22,11 +20,8 @@ def test_workspace_is_private_and_stages_references(tmp_path: Path) -> None:
 
     workspace = AgentWorkspace.create(project_root, tmp_path, _manifest())
 
-    validate_private_directory(workspace.path)
-    validate_private_file(workspace.path / "incident.json")
-    if os.name != "nt":
-        assert stat.S_IMODE(workspace.path.stat().st_mode) == 0o700
-        assert stat.S_IMODE((workspace.path / "incident.json").stat().st_mode) == 0o600
+    assert stat.S_IMODE(workspace.path.stat().st_mode) == 0o700
+    assert stat.S_IMODE((workspace.path / "incident.json").stat().st_mode) == 0o600
     assert (workspace.path / "references/SOP.md").is_file()
     assert (workspace.path / "references/INDEX.md").is_file()
     assert "causal diagnostic actor" in (workspace.path / "AGENTS.md").read_text()

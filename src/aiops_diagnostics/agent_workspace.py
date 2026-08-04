@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import secrets
 import shutil
 from dataclasses import dataclass
@@ -10,13 +11,6 @@ from pathlib import Path
 from typing import Any
 
 from aiops_diagnostics.agent_contracts import AgentDiagnosis, IncidentManifest, RunState
-from aiops_diagnostics.private_files import (
-    append_private_text,
-    ensure_private_directory,
-    protect_private_file,
-    validate_private_directory,
-    write_private_text,
-)
 
 BACKEND_REFERENCES = (
     "backend-v2-domestic/cloud-charging-pile/cloud-charging-pile-core/src/main/java/"
@@ -49,9 +43,10 @@ class AgentWorkspace:
         timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         run_id = f"run-{timestamp}-{manifest.source_hash[:8]}-{secrets.token_hex(2)}"
         path = run_root.expanduser().resolve() / run_id
-        ensure_private_directory(path)
+        path.mkdir(parents=True, mode=0o700)
+        os.chmod(path, 0o700)
         for child in ("evidence", "references"):
-            ensure_private_directory(path / child)
+            (path / child).mkdir(mode=0o700)
         workspace = cls(run_id=run_id, path=path)
         workspace.write_json("incident.json", manifest.model_dump(mode="json"))
         workspace._stage_references(project_root.resolve())
@@ -79,7 +74,9 @@ class AgentWorkspace:
             raise PermissionError(f"诊断运行目录不得是符号链接: {run_id}")
         if not path.is_dir():
             raise FileNotFoundError(f"诊断运行不存在: {run_id}")
-        validate_private_directory(path)
+        path_stat = path.stat()
+        if path_stat.st_uid != os.getuid() or path_stat.st_mode & 0o077:
+            raise PermissionError(f"诊断运行目录所有权或权限不安全: {run_id}")
         return cls(run_id=run_id, path=path)
 
     def load_manifest(self) -> IncidentManifest:
@@ -120,7 +117,13 @@ class AgentWorkspace:
 
     def write_text(self, relative: str, content: str) -> Path:
         target = self._resolve(relative)
-        return write_private_text(target, content)
+        target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        temporary = target.with_name(target.name + ".tmp")
+        temporary.write_text(content, encoding="utf-8")
+        os.chmod(temporary, 0o600)
+        temporary.replace(target)
+        os.chmod(target, 0o600)
+        return target
 
     def append_event(self, event: dict[str, Any]) -> None:
         payload = {
@@ -128,7 +131,14 @@ class AgentWorkspace:
             **event,
         }
         target = self._resolve("events.jsonl")
-        append_private_text(target, json.dumps(payload, ensure_ascii=False, default=str) + "\n")
+        descriptor = os.open(target, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
+        try:
+            os.write(
+                descriptor,
+                (json.dumps(payload, ensure_ascii=False, default=str) + "\n").encode(),
+            )
+        finally:
+            os.close(descriptor)
 
     def read_json(self, relative: str) -> Any:
         return json.loads(self._resolve(relative).read_text(encoding="utf-8"))
@@ -156,9 +166,9 @@ class AgentWorkspace:
                 missing.append(relative)
                 continue
             target = self._resolve(f"references/{relative}")
-            ensure_private_directory(target.parent)
+            target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             shutil.copyfile(source, target)
-            protect_private_file(target)
+            os.chmod(target, 0o600)
             copied.append(relative)
         self.write_text(
             "references/INDEX.md",
@@ -180,9 +190,9 @@ class AgentWorkspace:
             raise FileNotFoundError(f"诊断 fixture 不存在: {source}")
         relative = ".inputs/fixture.json"
         target = self._resolve(relative)
-        ensure_private_directory(target.parent)
+        target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         shutil.copyfile(source, target)
-        protect_private_file(target)
+        os.chmod(target, 0o600)
         return relative, hashlib.sha256(target.read_bytes()).hexdigest()
 
 

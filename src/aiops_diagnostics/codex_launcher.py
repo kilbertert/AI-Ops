@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
 from urllib.parse import urlsplit
 
@@ -11,43 +10,17 @@ def main() -> None:
         raise SystemExit("usage: codex_launcher REAL_CODEX [ARGS...]")
     real_codex = sys.argv[1]
     clean_env = _clean_environment(os.environ)
-    raise SystemExit(_execute_codex(real_codex, sys.argv[2:], clean_env))
-
-
-def _execute_codex(
-    real_codex: str,
-    arguments: list[str],
-    environment: dict[str, str],
-    *,
-    platform_name: str | None = None,
-) -> int:
-    command = [real_codex, *arguments]
-    if (platform_name if platform_name is not None else os.name) == "nt":
-        return subprocess.call(command, env=environment)
-    os.execve(real_codex, command, environment)
-    return 127
+    os.execve(real_codex, [real_codex, *sys.argv[2:]], clean_env)
 
 
 def _clean_environment(source: os._Environ[str] | dict[str, str]) -> dict[str, str]:
     allowed = (
         "HOME",
-        "USERPROFILE",
-        "HOMEDRIVE",
-        "HOMEPATH",
         "PATH",
-        "PATHEXT",
         "LANG",
         "LC_ALL",
         "TERM",
         "TMPDIR",
-        "TEMP",
-        "TMP",
-        "SYSTEMROOT",
-        "WINDIR",
-        "COMSPEC",
-        "LOCALAPPDATA",
-        "APPDATA",
-        "PROGRAMDATA",
         "SSL_CERT_FILE",
         "SSL_CERT_DIR",
         "CODEX_HOME",

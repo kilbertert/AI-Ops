@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -9,7 +10,6 @@ from typing import Any, Literal
 
 from aiops_diagnostics.agent_contracts import IncidentManifest, ToolName
 from aiops_diagnostics.agent_workspace import AgentWorkspace
-from aiops_diagnostics.private_files import append_private_text
 from aiops_diagnostics.redaction import sanitize_data
 
 
@@ -77,10 +77,14 @@ class EvidenceJournal:
             error=sanitize_data(error, preserve=(self.manifest.order_no,)) if error else None,
             created_at=datetime.now(UTC).isoformat(),
         )
-        append_private_text(
-            self.path,
-            json.dumps(asdict(entry), ensure_ascii=False, default=str) + "\n",
-        )
+        descriptor = os.open(self.path, os.O_APPEND | os.O_CREAT | os.O_WRONLY, 0o600)
+        try:
+            os.write(
+                descriptor,
+                (json.dumps(asdict(entry), ensure_ascii=False, default=str) + "\n").encode(),
+            )
+        finally:
+            os.close(descriptor)
         return entry
 
     def entries(self) -> list[JournalEntry]:
