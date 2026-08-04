@@ -5,7 +5,6 @@ import hashlib
 import json
 import os
 import sys
-import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeoutError
 from dataclasses import dataclass
@@ -17,6 +16,13 @@ from openai_codex import ApprovalMode, Codex, CodexConfig
 from aiops_diagnostics.agent_contracts import agent_turn_schema
 from aiops_diagnostics.agent_workspace import AgentWorkspace
 from aiops_diagnostics.config import AgentSettings, canonical_provider_base_url
+from aiops_diagnostics.private_files import (
+    PrivatePathError,
+    ensure_private_directory,
+    validate_private_directory,
+    validate_private_file,
+    write_private_text,
+)
 
 PROVIDER_ID = "aiops-api"
 PROVIDER_KEY_ENV = "AIOPS_CODEX_PROVIDER_KEY"
@@ -43,6 +49,7 @@ ignore_default_excludes = false
 description = "Read only access to one private AI-Ops diagnostic run workspace."
 
 [permissions.aiops-diagnostic.filesystem]
+glob_scan_max_depth = 4
 ":minimal" = "read"
 {codex_bin_path} = "read"
 
@@ -60,6 +67,9 @@ enabled = false
 
 [features]
 multi_agent = false
+
+[windows]
+sandbox = {windows_sandbox}
 
 [model_providers.aiops-api]
 name = "AI-Ops pluggable API provider"
@@ -111,15 +121,7 @@ class SDKCodexSession:
             provider_key = resolve_provider_api_key(settings)
             self._provider_key = provider_key
             runtime_home = prepare_runtime_home(settings)
-            launch_args = (
-                sys.executable,
-                "-m",
-                "aiops_diagnostics.codex_launcher",
-                str(Path(settings.codex_bin).expanduser().resolve()),
-                "app-server",
-                "--listen",
-                "stdio://",
-            )
+            launch_args = codex_launch_args(settings)
             config = CodexConfig(
                 launch_args_override=launch_args,
                 cwd=str(workspace.path),
@@ -225,12 +227,17 @@ class SDKCodexSession:
 def prepare_runtime_home(settings: AgentSettings) -> Path:
     settings.validate()
     runtime_home = Path(settings.codex_runtime_home).expanduser().resolve()
-    runtime_home.mkdir(parents=True, exist_ok=True, mode=0o700)
-    os.chmod(runtime_home, 0o700)
+    try:
+        ensure_private_directory(runtime_home)
+    except PrivatePathError as exc:
+        raise AgentRuntimeError(str(exc)) from exc
     auth_link = runtime_home / "auth.json"
     if auth_link.exists() or auth_link.is_symlink():
         raise AgentRuntimeError("API provider runtime home 不得包含 auth.json")
-    _write_private(runtime_home / "config.toml", runtime_config(settings))
+    try:
+        write_private_text(runtime_home / "config.toml", runtime_config(settings))
+    except PrivatePathError as exc:
+        raise AgentRuntimeError(str(exc)) from exc
     return runtime_home
 
 
@@ -240,6 +247,20 @@ def runtime_config(settings: AgentSettings) -> str:
     return RUNTIME_CONFIG_TEMPLATE.format(
         base_url=json.dumps(base_url, ensure_ascii=False),
         codex_bin_path=codex_bin_path,
+        windows_sandbox=json.dumps(settings.windows_sandbox),
+    )
+
+
+def codex_launch_args(settings: AgentSettings) -> tuple[str, ...]:
+    codex_bin = str(Path(settings.codex_bin).expanduser().resolve())
+    app_server_args = (codex_bin, "app-server", "--listen", "stdio://")
+    if getattr(sys, "frozen", False):
+        return (sys.executable, "__codex-launcher", *app_server_args)
+    return (
+        sys.executable,
+        "-m",
+        "aiops_diagnostics.codex_launcher",
+        *app_server_args,
     )
 
 
@@ -258,27 +279,26 @@ def resolve_provider_api_key(settings: AgentSettings) -> str:
         if configured_dir.is_symlink():
             raise AgentRuntimeError(f"Codex key slot 目录不得是符号链接: {configured_dir}")
         key_dir = configured_dir.resolve()
-        _validate_private_key_directory(key_dir)
+        try:
+            validate_private_directory(key_dir)
+        except PrivatePathError as exc:
+            raise AgentRuntimeError(str(exc)) from exc
         key_path = key_dir / f"{settings.key_slot}.key"
     if key_path.is_symlink() or not key_path.is_file():
         raise AgentRuntimeError(
             f"Codex API key 不存在: slot={settings.key_slot}; 请设置 {settings.api_key_env} 或受限 key 文件"
         )
-    parent_stat = key_path.parent.stat()
-    if parent_stat.st_mode & 0o022:
-        raise AgentRuntimeError(f"Codex API key 父目录可被其他用户写入: {key_path.parent}")
+    try:
+        validate_private_directory(key_path.parent)
+        validate_private_file(key_path)
+    except PrivatePathError as exc:
+        raise AgentRuntimeError(str(exc)) from exc
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     try:
         descriptor = os.open(key_path, flags)
     except OSError as exc:
         raise AgentRuntimeError(f"Codex API key 文件无法安全打开: {key_path}") from exc
     try:
-        file_stat = os.fstat(descriptor)
-        mode = file_stat.st_mode & 0o777
-        if file_stat.st_uid != os.getuid():
-            raise AgentRuntimeError(f"Codex API key 文件不属于当前用户: {key_path}")
-        if mode & 0o077:
-            raise AgentRuntimeError(f"Codex API key 文件权限过宽: {key_path} mode={mode:o}")
         with os.fdopen(descriptor, encoding="utf-8") as key_file:
             descriptor = -1
             value = key_file.read().strip()
@@ -292,31 +312,6 @@ def resolve_provider_api_key(settings: AgentSettings) -> str:
 
 def provider_key_fingerprint(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()[:12]
-
-
-def _validate_private_key_directory(path: Path) -> None:
-    if not path.is_dir() or path.is_symlink():
-        raise AgentRuntimeError(f"Codex key slot 目录不存在或不安全: {path}")
-    file_stat = path.stat()
-    mode = file_stat.st_mode & 0o777
-    if file_stat.st_uid != os.getuid():
-        raise AgentRuntimeError(f"Codex key slot 目录不属于当前用户: {path}")
-    if mode & 0o077:
-        raise AgentRuntimeError(f"Codex key slot 目录权限过宽: {path} mode={mode:o}")
-
-
-def _write_private(path: Path, content: str) -> None:
-    descriptor, temporary_name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=path.parent)
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            handle.write(content)
-        os.chmod(temporary, 0o600)
-        temporary.replace(path)
-        os.chmod(path, 0o600)
-    finally:
-        with contextlib.suppress(FileNotFoundError):
-            temporary.unlink()
 
 
 def _developer_instructions() -> str:

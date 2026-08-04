@@ -10,7 +10,9 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
   "openai-codex>=0.144.4,<0.145",
+  "python-dotenv>=1.0,<2",
   "pymysql[rsa]>=1.1.1,<2",
+  "pywin32>=308; sys_platform == 'win32'",
   "redis>=5.2,<7",
   "rich>=13.9,<15",
   "typer>=0.15,<1",
@@ -22,6 +24,7 @@ aiops-tdengine-proxy = "aiops_diagnostics.tdengine_proxy:main"
 
 [dependency-groups]
 dev = [
+  "pyinstaller>=6.15,<7",
   "pytest>=8.3,<9",
   "pytest-cov>=6,<7",
   "ruff>=0.12,<1",
@@ -29,6 +32,15 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/aiops_diagnostics"]
+
+[tool.hatch.build.targets.wheel.force-include]
+".env.example" = "aiops_diagnostics/_bundle/.env.example"
+"SOP.md" = "aiops_diagnostics/_bundle/SOP.md"
+"充电桩问题排查SOP.md" = "aiops_diagnostics/_bundle/充电桩问题排查SOP.md"
+"docs/architecture.md" = "aiops_diagnostics/_bundle/docs/architecture.md"
+"src/aiops_diagnostics/engine.py" = "aiops_diagnostics/_bundle/src/aiops_diagnostics/engine.py"
+"src/aiops_diagnostics/rules.py" = "aiops_diagnostics/_bundle/src/aiops_diagnostics/rules.py"
+"examples/fixtures" = "aiops_diagnostics/_bundle/examples/fixtures"
 
 [tool.pytest.ini_options]
 addopts = "-q"
