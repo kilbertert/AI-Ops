@@ -1,6 +1,6 @@
 # Architecture
 
-## Runtime Flow
+## Deterministic Fast Path
 
 ```mermaid
 flowchart LR
@@ -16,6 +16,14 @@ flowchart LR
 ```
 
 The language-facing layer only extracts the order number and problem intent. It cannot submit SQL, select arbitrary tables, or invoke business actions. The engine owns the runbook and calls fixed read-only adapters.
+
+## Codex-Native Thin Harness
+
+The first-release agent path reverses the decision boundary. A persistent Codex
+thread requests narrow evidence tools, reads the staged SOP/backend references,
+and owns hypothesis selection and causal explanation. The harness keeps only
+immutable identity, read-only limits, journal hashes, redaction, confidence
+caps, result validation, and resume state. See [thin-harness.md](thin-harness.md).
 
 ## Backend-Derived Rules
 

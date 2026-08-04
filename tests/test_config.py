@@ -31,6 +31,14 @@ def test_tdengine_defaults_use_read_only_proxy() -> None:
     assert settings.ssh.tdengine_port == 16041
 
 
+def test_agent_default_uses_sdk_pinned_codex_runtime(monkeypatch) -> None:
+    from codex_cli_bin import bundled_codex_path
+
+    monkeypatch.delenv("AIOPS_CODEX_BIN", raising=False)
+
+    assert Settings.from_env().agent.codex_bin == str(bundled_codex_path())
+
+
 def test_ssh_rejects_option_like_usernames() -> None:
     settings = SSHSettings(enabled=True, host="example.test", user="-oProxyCommand", key_file="missing")
 

@@ -8,6 +8,7 @@ from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 
+from aiops_diagnostics.agent_contracts import AgentDiagnosis
 from aiops_diagnostics.models import DiagnosticReport, Severity
 
 
@@ -77,6 +78,49 @@ def render_doctor(result: dict[str, Any], console: Console | None = None) -> Non
             escape(_format_value(details)),
         )
     console.print(table)
+
+
+def render_agent_diagnosis(
+    result: AgentDiagnosis,
+    run_id: str,
+    console: Console | None = None,
+) -> None:
+    console = console or Console()
+    confidence_style = {"high": "green", "medium": "yellow", "low": "red"}.get(
+        result.confidence.value,
+        "white",
+    )
+    console.print(
+        Panel.fit(
+            f"[bold]{escape(result.summary)}[/bold]\n"
+            f"订单: {escape(result.order_no)}  状态: {escape(result.status.value)}  "
+            f"置信度: [{confidence_style}]{escape(result.confidence.value)}[/{confidence_style}]\n"
+            f"运行: {escape(run_id)}",
+            title="AI Ops Codex 诊断",
+        )
+    )
+    console.print("[bold]根因结论[/bold]")
+    console.print(escape(result.root_cause))
+    if result.hypotheses:
+        table = Table(title="假设与证据", expand=True)
+        table.add_column("假设", width=24)
+        table.add_column("解释")
+        table.add_column("证据", width=20)
+        for hypothesis in result.hypotheses:
+            table.add_row(
+                escape(hypothesis.title),
+                escape(hypothesis.explanation),
+                escape(", ".join(hypothesis.evidence_ids)),
+            )
+        console.print(table)
+    if result.limitations:
+        console.print("[bold yellow]限制[/bold yellow]")
+        for item in result.limitations:
+            console.print(f"- {escape(item)}")
+    if result.next_steps:
+        console.print("[bold]建议人工下一步[/bold]")
+        for index, item in enumerate(result.next_steps, start=1):
+            console.print(f"{index}. {escape(item)}")
 
 
 def _format_value(value: Any) -> str:

@@ -37,7 +37,12 @@ class DiagnosticSources(Protocol):
         self, order_no: str, tenant_id: str | None = None
     ) -> dict[str, Any] | None: ...
 
-    def get_device(self, device_id: str | None, device_code: str | None) -> dict[str, Any] | None: ...
+    def get_device(
+        self,
+        device_id: str | None,
+        device_code: str | None,
+        tenant_id: str | None = None,
+    ) -> dict[str, Any] | None: ...
 
     def get_gun_samples(
         self,
@@ -154,7 +159,12 @@ class MySQLSource:
             row = cursor.fetchone()
             return _normalize_row(row) if row else None
 
-    def get_device(self, device_id: str | None, device_code: str | None) -> dict[str, Any] | None:
+    def get_device(
+        self,
+        device_id: str | None,
+        device_code: str | None,
+        tenant_id: str | None = None,
+    ) -> dict[str, Any] | None:
         if device_id:
             where = "id=%s"
             value = device_id
@@ -163,13 +173,17 @@ class MySQLSource:
             value = device_code
         else:
             return None
+        params: list[Any] = [value]
+        if tenant_id:
+            where += " AND tenant_id=%s"
+            params.append(tenant_id)
         sql = (
             f"SELECT id, tenant_id, site_id, device_code, protocol, online_status, status, work_status, "
             f"error_reason, fee_template_id FROM `{self.database}`.`iot_charging_device` "
             f"WHERE {where} LIMIT 1"
         )
         with self._cursor() as cursor:
-            cursor.execute(sql, (value,))
+            cursor.execute(sql, params)
             row = cursor.fetchone()
             return _normalize_row(row) if row else None
 
@@ -364,8 +378,13 @@ class LiveSources:
     def get_fee_template_record(self, order_no: str, tenant_id: str | None = None) -> dict[str, Any] | None:
         return self.mysql.get_fee_template_record(order_no, tenant_id)
 
-    def get_device(self, device_id: str | None, device_code: str | None) -> dict[str, Any] | None:
-        return self.mysql.get_device(device_id, device_code)
+    def get_device(
+        self,
+        device_id: str | None,
+        device_code: str | None,
+        tenant_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        return self.mysql.get_device(device_id, device_code, tenant_id)
 
     def get_gun_samples(
         self,
@@ -421,11 +440,17 @@ class FixtureSources:
             return None
         return copy.deepcopy(record)
 
-    def get_device(self, device_id: str | None, device_code: str | None) -> dict[str, Any] | None:
+    def get_device(
+        self,
+        device_id: str | None,
+        device_code: str | None,
+        tenant_id: str | None = None,
+    ) -> dict[str, Any] | None:
         for device in self.payload.get("devices", []):
-            if (device_id and device.get("id") == device_id) or (
-                device_code and device.get("device_code") == device_code
-            ):
+            if (
+                (device_id and device.get("id") == device_id)
+                or (device_code and device.get("device_code") == device_code)
+            ) and (not tenant_id or not device.get("tenant_id") or device.get("tenant_id") == tenant_id):
                 return copy.deepcopy(device)
         return None
 

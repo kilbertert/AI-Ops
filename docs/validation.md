@@ -55,3 +55,64 @@ Production acceptance still requires at least three human-confirmed incidents fo
 6. Redis downstream synchronization issue.
 
 For every case, compare the generated summary, classification, evidence, and recommended next step with the engineer's final incident conclusion. False certainty is a failure even when the recommended action happens to be correct.
+
+## Codex-Native Harness Validation (2026-08-03)
+
+The thin-harness implementation was validated without business mutation:
+
+- The automated suite covers immutable incident identity, private workspaces,
+  evidence hashes, PII/secret redaction, bounded tool dependencies, result
+  validation, malformed output repair, timeout/provider interruption, resume,
+  and pluggable API key slots.
+- Three independent scripted-agent runs for each YKC amount mismatch, missing
+  transaction data, and OCPP server-billing fixture produced the same incident
+  identity, tool sequence, evidence IDs, conclusion class, confidence, and
+  limitations. Scripted turns validate harness repeatability; they are not a
+  substitute for a real model's business judgment.
+- Failure injection covered a TDengine outage, malformed structured output,
+  a timed-out turn, and a provider-side failure. Failed evidence remained in
+  the journal, high confidence was rejected, and the same thread/run remained
+  resumable.
+- Production `agent-doctor` dependencies remained read-only: MySQL 8.4.7
+  reported no unsafe privileges or unresolved roles, TDengine exposed both
+  required stables through the strict proxy, and Redis 6.2.7 was reachable.
+- A bounded 30-day aggregate sample returned 1,252 candidate rows. Ten
+  representative paths covered YKC1.8, YKC1.6, OCPP, HLHT, HW104,
+  operator/remote/admin launches, order types 0/1, and statuses 0/1/2/3/5.
+  All ten deterministic shadow reports completed without a failed source.
+- The thin evidence pipeline was then run against three sanitized production
+  paths (YKC1.8, YKC1.6, OCPP). All six tools completed for each path; every
+  artifact hash verified, workspaces were mode `0700`, and exact runtime
+  database/API secrets were absent from staged references, events, journals,
+  and evidence artifacts.
+
+An earlier provider slot returned an explicit `429 INSUFFICIENT_BALANCE` response;
+that failure was delivered without a traceback or secret, the run state became
+`interrupted`, and `agent-resume` reused the same thread.
+
+## Real Provider Validation (2026-08-03)
+
+A separate funded key slot was used against the same pinned provider endpoint.
+The first live turn exposed two integration defects before any business query:
+the Responses API required every schema property to be listed in `required`, and
+the default server `codex` command was a credential-injecting wrapper whose
+native sandbox target was not visible to the restricted profile. Both issues were
+fixed and covered by regression tests. The runtime now uses the Python SDK's
+pinned native Codex binary, grants the profile read access to that exact binary,
+and never passes the server wrapper to the diagnostic process.
+
+- Three real-model fixture runs completed: YKC amount mismatch was diagnosed with
+  medium confidence, missing transaction data was diagnosed with high confidence
+  after three direct evidence classes, and internally consistent OCPP billing was
+  correctly returned as inconclusive.
+- Three sanitized production read-only runs completed across YKC1.8 operator,
+  YKC1.6 remote, and OCPP paths. The model selected tools autonomously, kept
+  evidence citations and confidence aligned with empty/limited sources, and made
+  no mutation claims.
+- All six runs ended in `completed` state. Evidence hashes, `0700` workspaces,
+  `0600` files, and secret/PII scans passed; MySQL, TDengine, and Redis remained
+  read-only throughout.
+
+These are real provider and production-path validations, not engineer-confirmed
+incident acceptances. Business acceptance remains pending the human-confirmed
+cases listed above.

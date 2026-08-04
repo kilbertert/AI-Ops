@@ -50,7 +50,12 @@ class _EmptySources:
     def get_fee_template_record(self, order_no: str, tenant_id: str | None = None):
         raise AssertionError("not called")
 
-    def get_device(self, device_id: str | None, device_code: str | None):
+    def get_device(
+        self,
+        device_id: str | None,
+        device_code: str | None,
+        tenant_id: str | None = None,
+    ):
         raise AssertionError("not called")
 
     def get_gun_samples(self, device, start_time, end_time, tx_serial_no):
@@ -135,7 +140,12 @@ class _StaticSources:
         self.fee_calls += 1
         return copy.deepcopy(self.fee_record)
 
-    def get_device(self, device_id: str | None, device_code: str | None):
+    def get_device(
+        self,
+        device_id: str | None,
+        device_code: str | None,
+        tenant_id: str | None = None,
+    ):
         return {"online_status": 1, "protocol": self.orders[0].get("device_protocol")}
 
     def get_gun_samples(self, device, start_time, end_time, tx_serial_no):

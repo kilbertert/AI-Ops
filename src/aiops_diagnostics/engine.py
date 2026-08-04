@@ -403,7 +403,9 @@ class DiagnosticEngine:
     def _inspect_device(self, order: dict[str, Any], report: DiagnosticReport) -> None:
         try:
             device = self.sources.get_device(
-                _clean_string(order.get("device_id")), _clean_string(order.get("device_code"))
+                _clean_string(order.get("device_id")),
+                _clean_string(order.get("device_code")),
+                _clean_string(order.get("tenant_id")),
             )
             report.queried_sources.append("mysql:iot_charging_device")
         except SourceError as exc:
