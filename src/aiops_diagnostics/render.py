@@ -84,6 +84,9 @@ def render_agent_diagnosis(
     result: AgentDiagnosis,
     run_id: str,
     console: Console | None = None,
+    *,
+    events_path: str | None = None,
+    evidence_journal_path: str | None = None,
 ) -> None:
     console = console or Console()
     confidence_style = {"high": "green", "medium": "yellow", "low": "red"}.get(
@@ -121,6 +124,65 @@ def render_agent_diagnosis(
         console.print("[bold]建议人工下一步[/bold]")
         for index, item in enumerate(result.next_steps, start=1):
             console.print(f"{index}. {escape(item)}")
+    if events_path or evidence_journal_path:
+        console.print("[dim]追溯文件[/dim]")
+        if events_path:
+            console.print(f"[dim]事件日志: {escape(events_path)}[/dim]")
+        if evidence_journal_path:
+            console.print(f"[dim]证据日志: {escape(evidence_journal_path)}[/dim]")
+
+
+def render_progress_event(event: dict[str, Any], console: Console | None = None) -> None:
+    """Render one persisted runtime event without exposing evidence payloads."""
+    console = console or Console()
+    event_type = str(event.get("type", "runtime_event"))
+    timestamp = str(event.get("at", ""))
+    stamp = timestamp[11:19] if len(timestamp) >= 19 else timestamp
+    turn_id = str(event.get("turn_id", ""))
+    if event_type == "diagnosis_started":
+        message = f"开始诊断 {event.get('run_id', '')}".rstrip()
+        if event.get("events_path"):
+            message += f"；事件日志 {event['events_path']}"
+    elif event_type == "codex_session_starting":
+        message = "正在连接 Codex provider"
+    elif event_type == "codex_thread_ready":
+        message = "Codex thread 已就绪"
+    elif event_type == "codex_turn_waiting":
+        message = f"等待 Codex 第 {event.get('turn_number', '?')}/{event.get('max_turns', '?')} 轮"
+    elif event_type == "codex_turn_started":
+        message = f"Codex turn 已开始 {turn_id}"
+    elif event_type == "codex_turn_heartbeat":
+        message = f"心跳: Codex turn {turn_id} 已运行 {event.get('elapsed_seconds', '?')} 秒"
+    elif event_type == "codex_turn_completed":
+        message = f"Codex turn 已完成 {turn_id}"
+    elif event_type == "codex_turn_timeout":
+        message = f"Codex turn 超时 {turn_id}"
+    elif event_type == "codex_turn_failed":
+        message = f"Codex turn 失败 {turn_id}"
+    elif event_type == "tool_batch_started":
+        tools = event.get("tools", [])
+        labels = [str(item) for item in tools] if isinstance(tools, list) else []
+        message = "开始执行证据工具: " + (", ".join(labels) or "无")
+    elif event_type == "tool_batch_completed":
+        outcomes = event.get("outcomes", [])
+        labels = [
+            f"{item.get('tool', '?')}={item.get('status', '?')}"
+            for item in outcomes
+            if isinstance(item, dict)
+        ]
+        message = "证据工具完成: " + (", ".join(labels) or "无")
+    elif event_type == "diagnosis_validation_failed":
+        message = f"结果合同校验未通过，将请求第 {event.get('attempt', '?')} 次修复"
+    elif event_type == "diagnosis_completed":
+        message = f"诊断完成: {event.get('status', '?')}"
+    elif event_type == "diagnosis_blocked":
+        message = "诊断被阻断，保留当前证据与事件日志"
+    elif event_type == "diagnosis_interrupted":
+        message = "诊断中断，可使用相同 run 恢复"
+    else:
+        message = event_type
+    prefix = f"[dim]{escape(stamp)}[/dim] " if stamp else ""
+    console.print(prefix + escape(message))
 
 
 def _format_value(value: Any) -> str:

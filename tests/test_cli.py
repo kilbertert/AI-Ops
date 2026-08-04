@@ -65,3 +65,11 @@ def test_cli_initializes_portable_home_and_installs_key(tmp_path: Path) -> None:
     assert key_file.read_text(encoding="utf-8").strip() == "provider-secret"
     if os.name != "nt":
         assert key_file.stat().st_mode & 0o077 == 0
+
+
+def test_agent_cli_exposes_progress_toggle() -> None:
+    result = CliRunner().invoke(app, ["agent-diagnose", "--help"])
+
+    assert result.exit_code == 0
+    assert "--progress" in result.stdout
+    assert "--no-progress" in result.stdout

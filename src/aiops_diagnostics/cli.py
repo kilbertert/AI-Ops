@@ -9,8 +9,8 @@ from typing import Annotated
 import typer
 from rich.console import Console
 
-from aiops_diagnostics.agent_contracts import DiagnosisStatus, IncidentManifest
-from aiops_diagnostics.agent_engine import AgentCoordinator
+from aiops_diagnostics.agent_contracts import AgentDiagnosis, DiagnosisStatus, IncidentManifest
+from aiops_diagnostics.agent_engine import AgentCoordinator, ProgressCallback
 from aiops_diagnostics.agent_workspace import AgentWorkspace
 from aiops_diagnostics.codex_runtime import (
     AgentRuntimeError,
@@ -43,7 +43,12 @@ from aiops_diagnostics.private_files import (
     ensure_private_directory,
     write_private_text,
 )
-from aiops_diagnostics.render import render_agent_diagnosis, render_doctor, render_report
+from aiops_diagnostics.render import (
+    render_agent_diagnosis,
+    render_doctor,
+    render_progress_event,
+    render_report,
+)
 from aiops_diagnostics.sources import DiagnosticSources, FixtureSources, SourceError, live_sources
 
 configure_windows_stdio()
@@ -177,6 +182,10 @@ def agent_diagnose(
         typer.Option("--key-slot", help="选择同一 API base_url 下的密钥槽"),
     ] = None,
     as_json: Annotated[bool, typer.Option("--json", help="输出 JSON 诊断合同")] = False,
+    progress: Annotated[
+        bool,
+        typer.Option("--progress/--no-progress", help="显示运行中的日志与心跳；JSON 结果写入 stdout"),
+    ] = True,
 ) -> None:
     """Run a Codex-native, evidence-journaled read-only diagnosis."""
     try:
@@ -201,14 +210,20 @@ def agent_diagnose(
             key_slot=settings.agent.key_slot,
         )
         fixture = workspace.resolve_fixture()
-        result = _run_agent(workspace, request, settings, fixture)
+        result = _run_agent(
+            workspace,
+            request,
+            settings,
+            fixture,
+            progress_callback=_progress_callback(progress, as_json),
+        )
     except (AgentRuntimeError, SourceError, ValueError, OSError) as exc:
         console.print(f"[bold red]Codex 诊断中断:[/bold red] {exc}")
         if workspace is not None:
             console.print(f"运行 ID: {workspace.run_id}，可使用 agent-resume 恢复")
         raise typer.Exit(code=2) from exc
     assert workspace is not None
-    _render_agent_output(result, workspace.run_id, as_json)
+    _render_agent_output(result, workspace, as_json)
 
 
 @app.command("agent-resume")
@@ -219,6 +234,10 @@ def agent_resume(
         typer.Option("--key-slot", help="恢复时切换到同一 base_url 下的备用密钥槽"),
     ] = None,
     as_json: Annotated[bool, typer.Option("--json", help="输出 JSON 诊断合同")] = False,
+    progress: Annotated[
+        bool,
+        typer.Option("--progress/--no-progress", help="显示运行中的日志与心跳；JSON 结果写入 stdout"),
+    ] = True,
 ) -> None:
     """Resume the same Codex thread and immutable incident workspace."""
     settings = _load_settings()
@@ -249,11 +268,17 @@ def agent_resume(
     )
     try:
         fixture = workspace.resolve_fixture()
-        result = _run_agent(workspace, request, settings, fixture)
+        result = _run_agent(
+            workspace,
+            request,
+            settings,
+            fixture,
+            progress_callback=_progress_callback(progress, as_json),
+        )
     except (AgentRuntimeError, SourceError, ValueError, OSError) as exc:
         console.print(f"[bold red]Codex 恢复失败:[/bold red] {exc}")
         raise typer.Exit(code=2) from exc
-    _render_agent_output(result, workspace.run_id, as_json)
+    _render_agent_output(result, workspace, as_json)
 
 
 @app.command("agent-doctor")
@@ -393,7 +418,9 @@ def _run_agent(
     request: DiagnosticRequest,
     settings: Settings,
     fixture: Path | None,
-):
+    *,
+    progress_callback: ProgressCallback | None = None,
+) -> AgentDiagnosis:
     manifest = workspace.load_manifest()
     provider_key = resolve_provider_api_key(settings.agent)
     journal = EvidenceJournal(workspace, manifest)
@@ -417,6 +444,7 @@ def _run_agent(
                 settings.redis.password,
                 provider_key,
             ),
+            progress_callback=progress_callback,
         )
         return coordinator.run()
 
@@ -430,15 +458,41 @@ def _agent_sources(settings: Settings, fixture: Path | None) -> Iterator[Diagnos
         yield sources
 
 
-def _render_agent_output(result, run_id: str, as_json: bool) -> None:
+def _render_agent_output(result: AgentDiagnosis, workspace: AgentWorkspace, as_json: bool) -> None:
+    events_path = str(workspace.path / "events.jsonl")
+    evidence_journal_path = str(workspace.path / "evidence-journal.jsonl")
     if as_json:
-        console.print_json(data={"run_id": run_id, "diagnosis": result.model_dump(mode="json")})
+        console.print_json(
+            data={
+                "run_id": workspace.run_id,
+                "diagnosis": result.model_dump(mode="json"),
+                "events_path": events_path,
+                "evidence_journal_path": evidence_journal_path,
+            }
+        )
     else:
-        render_agent_diagnosis(result, run_id, console)
+        render_agent_diagnosis(
+            result,
+            workspace.run_id,
+            console,
+            events_path=events_path,
+            evidence_journal_path=evidence_journal_path,
+        )
     if result.status == DiagnosisStatus.INCONCLUSIVE:
         raise typer.Exit(code=3)
     if result.status == DiagnosisStatus.BLOCKED:
         raise typer.Exit(code=4)
+
+
+def _progress_callback(enabled: bool, as_json: bool) -> ProgressCallback | None:
+    if not enabled:
+        return None
+    progress_console = Console(stderr=as_json)
+
+    def callback(event: dict[str, object]) -> None:
+        render_progress_event(event, progress_console)
+
+    return callback
 
 
 def _project_root() -> Path:

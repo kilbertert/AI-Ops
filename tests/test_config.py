@@ -43,6 +43,14 @@ def test_agent_default_uses_sdk_pinned_codex_runtime(monkeypatch) -> None:
     assert Settings.from_env().agent.codex_bin == str(bundled_codex_path())
 
 
+def test_heartbeat_interval_is_bounded(monkeypatch) -> None:
+    monkeypatch.setenv("AIOPS_AGENT_HEARTBEAT_INTERVAL_SECONDS", "0")
+
+    settings = Settings.from_env()
+    with pytest.raises(ValueError, match="heartbeat_interval_seconds"):
+        settings.agent.validate()
+
+
 def test_ssh_rejects_option_like_usernames() -> None:
     settings = SSHSettings(enabled=True, host="example.test", user="-oProxyCommand", key_file="missing")
 
