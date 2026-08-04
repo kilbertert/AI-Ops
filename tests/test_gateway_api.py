@@ -2,9 +2,15 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from aiops_diagnostics.agent_contracts import IncidentManifest, ToolName
+from aiops_diagnostics.agent_workspace import AgentWorkspace
+from aiops_diagnostics.config import Settings
 from aiops_diagnostics.gateway_api import create_gateway_app
 from aiops_diagnostics.gateway_config import GatewayServerSettings
+from aiops_diagnostics.gateway_runtime import GatewayRuntime
 from aiops_diagnostics.gateway_store import GatewayStore
+from aiops_diagnostics.journal import EvidenceJournal
+from aiops_diagnostics.models import DiagnosticRequest, Intent
 
 
 class _FakeRuntime:
@@ -38,6 +44,9 @@ class _FakeRuntime:
 
     def shutdown(self) -> None:
         pass
+
+    def list_evidence(self, run_id: str) -> list[dict]:
+        return []
 
 
 def test_gateway_enrollment_and_cross_device_run_sync(tmp_path: Path) -> None:
@@ -117,3 +126,74 @@ def test_gateway_rejects_cross_tenant_requests(tmp_path: Path) -> None:
             json={"problem": "amount mismatch", "order_no": "ORDER-1", "tenant_id": "tenant-b"},
         )
         assert rejected.status_code == 403
+
+
+def test_gateway_evidence_endpoint_requires_run_and_auth(tmp_path: Path) -> None:
+    database = tmp_path / "gateway.db"
+    config = tmp_path / "production.env"
+    config.write_text("# test config\n", encoding="utf-8")
+    settings = GatewayServerSettings(
+        data_home=tmp_path,
+        database_file=database,
+        server_config_file=config,
+    )
+    store = GatewayStore(database)
+    app = create_gateway_app(settings=settings, store=store, runtime=_FakeRuntime(store))
+
+    with TestClient(app) as client:
+        code = store.issue_enrollment(workspace_id="ops", tenant_id="tenant-a")
+        token = client.post(
+            "/v1/enroll",
+            json={"code": code, "device_name": "windows", "platform": "win32"},
+        ).json()["token"]
+        headers = {"Authorization": f"Bearer {token}"}
+        run_id = client.post(
+            "/v1/runs", headers=headers, json={"problem": "amount", "order_no": "O1"}
+        ).json()["run_id"]
+
+        ok = client.get(f"/v1/runs/{run_id}/evidence", headers=headers)
+        assert ok.status_code == 200
+        assert ok.json()["evidence"] == []
+
+        missing = client.get("/v1/runs/run-nope/evidence", headers=headers)
+        assert missing.status_code == 404
+
+        unauth = client.get(f"/v1/runs/{run_id}/evidence")
+        assert unauth.status_code == 401
+
+
+def test_gateway_runtime_list_evidence_returns_metadata_without_payload(tmp_path: Path) -> None:
+    database = tmp_path / "gateway.db"
+    config = tmp_path / "production.env"
+    config.write_text("# test config\n", encoding="utf-8")
+    gateway_settings = GatewayServerSettings(
+        data_home=tmp_path,
+        database_file=database,
+        server_config_file=config,
+    )
+    store = GatewayStore(database)
+    runtime = GatewayRuntime(store, gateway_settings, Settings())
+
+    request = DiagnosticRequest(order_no="O1", tenant_id="t1", problem="p", intent=Intent("general"))
+    manifest = IncidentManifest.from_request(request)
+    workspace = AgentWorkspace.create(Path(__file__).parents[1], tmp_path / "runs", manifest)
+    journal = EvidenceJournal(workspace, manifest)
+    journal.record(
+        tool=ToolName.ORDER_SNAPSHOT,
+        source="mysql:ch_order_info",
+        status="success",
+        request={"order_no": "O1", "tenant_id": "t1"},
+        payload={"orders": [{"order_no": "O1", "tenant_id": "t1", "status": 2}]},
+        row_count=1,
+    )
+
+    evidence = runtime.list_evidence(workspace.run_id)
+    assert len(evidence) == 1
+    entry = evidence[0]
+    assert entry["evidence_id"] == "ev-001"
+    assert entry["tool"] == "order_snapshot"
+    assert entry["status"] == "success"
+    assert entry["row_count"] == 1
+    # Business payload (order rows) must NOT be exposed to the client.
+    assert "orders" not in entry
+    assert "payload" not in entry

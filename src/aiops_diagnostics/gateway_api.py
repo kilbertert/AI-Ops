@@ -179,6 +179,17 @@ def create_gateway_app(
             "next_after": events[-1]["sequence"] if events else after,
         }
 
+    @app.get("/v1/runs/{run_id}/evidence")
+    def list_run_evidence(
+        run_id: str,
+        device: GatewayDevice = Depends(authenticated_device),  # noqa: B008
+    ) -> dict[str, Any]:
+        try:
+            context.store.get_run(run_id, device.workspace_id)
+        except RunNotFoundError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="run not found") from exc
+        return {"evidence": context.runtime.list_evidence(run_id)}
+
     @app.get("/v1/runs/{run_id}/events/stream")
     async def stream_events(
         request: Request,

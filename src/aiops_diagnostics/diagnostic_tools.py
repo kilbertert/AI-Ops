@@ -12,7 +12,7 @@ from aiops_diagnostics.models import DiagnosticRequest
 from aiops_diagnostics.sources import DiagnosticSources, SourceError
 
 TOOL_DESCRIPTIONS: dict[ToolName, str] = {
-    ToolName.ORDER_SNAPSHOT: "MySQL order rows scoped by immutable order_no and optional tenant_id.",
+    ToolName.ORDER_SNAPSHOT: "MySQL order rows by order_no; tenant learned from the order, scope-checked.",
     ToolName.FEE_SNAPSHOT: "MySQL fee-template snapshot for amount and tariff verification.",
     ToolName.DEVICE_SNAPSHOT: "MySQL device protocol, online, work-status, and error metadata.",
     ToolName.GUN_TIMESERIES: "Bounded TDengine gun status and telemetry for the order time window.",
@@ -62,12 +62,20 @@ class DiagnosticToolExecutor:
         journal: EvidenceJournal,
         *,
         safety: Any,
+        allowed_tenants: set[str] | None = None,
     ) -> None:
         self.sources = sources
         self.request = request
         self.manifest = manifest
         self.journal = journal
         self.safety = safety
+        self.allowed_tenants = allowed_tenants
+        # Tenant learned from order_snapshot discovery; falls back to the
+        # request's tenant until the order is located.
+        self.effective_tenant: str | None = request.tenant_id
+
+    def _tenant(self) -> str | None:
+        return self.effective_tenant or self.request.tenant_id
 
     def execute_many(self, requests: list[ToolRequest]) -> list[ToolOutcome]:
         return [self.execute(item.tool) for item in requests]
@@ -110,7 +118,27 @@ class DiagnosticToolExecutor:
         return self._outcome(tool, entry)
 
     def _order_snapshot(self) -> JournalEntry:
-        rows = self.sources.get_orders(self.request.order_no, self.request.tenant_id)
+        # Discover by order_no without a tenant filter: the tenant is learned
+        # from the order row, not pre-bound. This lets an engineer diagnose an
+        # order without knowing its tenant, while allowed_tenants still enforces
+        # the device's authorized scope.
+        rows = self.sources.get_orders(self.request.order_no, None)
+        if rows and self.allowed_tenants is not None:
+            blocked_tenants = sorted(
+                {row.get("tenant_id") for row in rows if row.get("tenant_id") not in self.allowed_tenants}
+            )
+            if blocked_tenants:
+                return self.journal.record(
+                    tool=ToolName.ORDER_SNAPSHOT,
+                    source="harness:tenant_scope",
+                    status="blocked",
+                    request=self._identity_request(),
+                    payload={"orders": [], "discovered_tenant_ids": blocked_tenants},
+                    error=f"订单属于租户 {', '.join(blocked_tenants)}，不在本设备授权租户范围内",
+                )
+            rows = [row for row in rows if row.get("tenant_id") in self.allowed_tenants]
+        if rows:
+            self.effective_tenant = rows[0].get("tenant_id") or self.effective_tenant
         return self.journal.record(
             tool=ToolName.ORDER_SNAPSHOT,
             source=TOOL_SOURCES[ToolName.ORDER_SNAPSHOT],
@@ -121,12 +149,12 @@ class DiagnosticToolExecutor:
         )
 
     def _fee_snapshot(self) -> JournalEntry:
-        _, blocked = self._single_order(ToolName.FEE_SNAPSHOT)
+        order, blocked = self._single_order(ToolName.FEE_SNAPSHOT)
         if blocked:
             return blocked
         record = self.sources.get_fee_template_record(
             self.request.order_no,
-            self.request.tenant_id,
+            order.get("tenant_id"),
         )
         return self.journal.record(
             tool=ToolName.FEE_SNAPSHOT,
@@ -229,7 +257,13 @@ class DiagnosticToolExecutor:
         _, blocked = self._single_order(ToolName.KNOWN_RUNBOOK)
         if blocked:
             return blocked
-        report = DiagnosticEngine(self.sources, self.safety).diagnose(self.request)
+        runbook_request = DiagnosticRequest(
+            order_no=self.request.order_no,
+            tenant_id=self._tenant(),
+            problem=self.request.problem,
+            intent=self.request.intent,
+        )
+        report = DiagnosticEngine(self.sources, self.safety).diagnose(runbook_request)
         return self.journal.record(
             tool=ToolName.KNOWN_RUNBOOK,
             source=TOOL_SOURCES[ToolName.KNOWN_RUNBOOK],
@@ -262,7 +296,7 @@ class DiagnosticToolExecutor:
     def _identity_request(self) -> dict[str, Any]:
         return {
             "order_no": self.request.order_no,
-            "tenant_id": self.request.tenant_id,
+            "tenant_id": self._tenant(),
         }
 
     def _outcome(self, tool: ToolName, entry: JournalEntry, *, reused: bool = False) -> ToolOutcome:

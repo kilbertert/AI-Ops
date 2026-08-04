@@ -66,6 +66,9 @@ class GatewayClient:
             f"/v1/runs/{_path_part(run_id)}/events?after={after}&limit={limit}",
         )
 
+    def list_evidence(self, run_id: str) -> dict[str, Any]:
+        return self._request("GET", f"/v1/runs/{_path_part(run_id)}/evidence")
+
     def wait_for_run(
         self,
         run_id: str,

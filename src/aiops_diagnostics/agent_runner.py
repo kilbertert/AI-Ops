@@ -22,6 +22,7 @@ def run_agent_diagnosis(
     fixture: Path | None,
     *,
     progress_callback: ProgressCallback | None = None,
+    allowed_tenants: set[str] | None = None,
 ) -> AgentDiagnosis:
     """Run the shared read-only agent path for local CLI and gateway workers."""
     manifest = workspace.load_manifest()
@@ -34,6 +35,7 @@ def run_agent_diagnosis(
             manifest,
             journal,
             safety=settings.safety,
+            allowed_tenants=allowed_tenants,
         )
         coordinator = AgentCoordinator(
             workspace,

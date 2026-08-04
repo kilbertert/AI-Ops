@@ -37,6 +37,7 @@ flowchart LR
 - `GET /v1/runs`、`GET /v1/runs/{run_id}`：按 workspace 隔离的 run 查询。
 - `GET /v1/runs/{run_id}/events`：按 sequence 增量同步事件。
 - `GET /v1/runs/{run_id}/events/stream`：SSE 实时同步事件。
+- `GET /v1/runs/{run_id}/evidence`：按 run 返回脱敏证据元数据（工具、状态、请求骨架、行数、错误），不含业务正文。
 
 服务端 SQLite 只保存注册码哈希、设备令牌哈希、run 元数据、脱敏结果和事件元数据，不保存原始 API key。证据正文仍保留在服务器私有 run workspace，不通过 Gateway 事件接口暴露。
 
@@ -67,7 +68,10 @@ AIOPS_CODEX_KEY_SLOT=psydo-primary
 .\aiops.exe remote doctor
 .\aiops.exe remote runs
 .\aiops.exe remote diagnose "订单 123 金额异常" --json
+.\aiops.exe remote evidence RUN_ID
 ```
+
+`order_snapshot` 按 `order_no` 发现订单并从订单行学习 tenant，再校验是否在设备授权租户内；不匹配时返回明确的租户范围错误而非空结果。诊断结果与证据默认用中文输出；`remote evidence RUN_ID` 列出每条证据的工具、状态、命中行数和错误，用于追溯结论来源（证据正文仍只在服务端）。
 
 Windows `cmd.exe` 示例（便携包解压到 `D:\aiops`）：
 
