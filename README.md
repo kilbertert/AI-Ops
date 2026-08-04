@@ -73,16 +73,16 @@ set +a
 uv run aiops doctor
 ```
 
-诊断实时订单（默认走 Codex agent，需已安装 provider key）：
+诊断实时订单（默认走 Codex agent，需已安装 provider key；无需传 `--tenant-id`，工具按订单号自动发现租户）：
 
 ```bash
-uv run aiops diagnose "订单 2079842220423700481 中途停止" --tenant-id TENANT_ID --key-slot primary
+uv run aiops diagnose "订单 2079842220423700481 中途停止" --key-slot primary
 ```
 
 输出机器可读 JSON：
 
 ```bash
-uv run aiops diagnose "订单 2079842220423700481 金额异常" --tenant-id TENANT_ID --key-slot primary --json
+uv run aiops diagnose "订单 2079842220423700481 金额异常" --key-slot primary --json
 ```
 
 对合成案例运行 Codex-native 诊断（`diagnose` 默认即 agent 模式，加 `--mode deterministic` 可切换确定性规则）：
