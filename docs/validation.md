@@ -132,6 +132,18 @@ SSH 调试通道直接传入中文字面量会受远程代码页影响；本轮�
 
 该验证没有连接生产数据库，也没有真实故障案例；它证明 Gateway 的身份、状态同步、真实 provider 执行和只读边界可以工作。公网生产部署仍需 TLS、OIDC Device Flow/mTLS、Vault/KMS、PostgreSQL、速率限制和审计保留策略。
 
+## Gateway 受控跨端 Windows/Linux 验收
+
+2026-08-04 使用服务器 Tailscale 节点和 Windows 节点 `rl` 完成受控跨端入口验收。服务器临时使用 Tailscale CA 签发的 Let’s Encrypt 证书监听独立 `9444` TLS 端口；原有 `8443 -> 8093` 路由未修改，验收结束后临时监听、注册码、设备令牌、Gateway DB 和证书私钥均已清理。
+
+- Windows 节点 `rl` 在线，服务器通过 tailnet 连续收到 3 次 ping；当前链路经 DERP 转发，未建立 direct connection。
+- Linux 客户端通过真实 HTTPS URL 完成 `remote enroll`、`remote doctor` 和 `remote diagnose`。首个 provider key slot 返回 `429` 后，切换同一 base URL 下的受控 `psydo-funded` slot；run `run-20260804T035406Z-32305a3c-9390` 完成 `diagnosed/medium`，同步 36 条事件并识别设备总费用与平台金额相差 `0.20`。
+- 第二个登记为 Windows 平台的设备身份通过同一 GatewayClient 协议读取同 workspace 的 run 和事件；跨租户创建 run 返回 `403`，撤销设备后返回 `401`，重复兑换注册码返回 `400`。
+- Gateway DB 和客户端私有目录权限分别为 `0700/0600`；数据库未发现注册码、设备 token、provider key 明文，诊断合同没有 evidence payload 或服务器绝对路径。
+- 最终 ZIP 烟测新增 `remote --help`，并通过本地 mock Gateway 完成 `remote enroll`、`remote doctor`、`remote runs`，同时校验 Gateway profile/token 私有权限。Linux 源码外解压 ZIP 已通过；Windows runner 结果在本次提交后重新验证。
+
+结论：Gateway 的 TLS 入口、设备注册、跨设备 run/event 同步、租户隔离和撤销链路验收通过。该结论不等于用户 Windows 本机最终 ZIP 已完成实机运行，也不等于真实故障业务准确率验收；用户 Windows 本机运行与问题反馈是下一阶段。
+
 ## 业务验收待办
 
 生产业务验收仍需要每条支持路径至少三笔由工程师确认结论的真实故障：

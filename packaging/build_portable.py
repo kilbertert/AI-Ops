@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import platform
 import shutil
@@ -8,8 +9,12 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import tomllib
 import zipfile
+from collections.abc import Iterator
+from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 
@@ -89,14 +94,17 @@ def _smoke_test_distribution(distribution: Path, temporary_root: Path) -> None:
     environment.update(
         {
             "AIOPS_HOME": str(home),
+            "AIOPS_GATEWAY_TOKEN_STORE": "file",
             "PATH": _minimal_path(environment),
             "PYTHONIOENCODING": "utf-8",
             "PYTHONUTF8": "1",
         }
     )
     _run([str(executable), "--help"], environment, distribution)
+    _run([str(executable), "remote", "--help"], environment, distribution)
     _run([str(executable), "init"], environment, distribution)
     _run([str(executable), "paths"], environment, distribution)
+    _smoke_test_gateway_client(executable, environment, distribution, temporary_root)
     smoke_key = temporary_root / "provider.key"
     smoke_key.write_text("portable-smoke-provider-key\n", encoding="utf-8")
     _run(
@@ -140,15 +148,126 @@ def _minimal_path(environment: dict[str, str]) -> str:
     return os.pathsep.join((str(system_root / "System32"), str(system_root / "System32/OpenSSH")))
 
 
+def _smoke_test_gateway_client(
+    executable: Path,
+    environment: dict[str, str],
+    distribution: Path,
+    temporary_root: Path,
+) -> None:
+    enrollment_code = temporary_root / "gateway-enrollment.code"
+    enrollment_code.write_text("portable-smoke-enrollment-code\n", encoding="utf-8")
+    with _gateway_smoke_server() as gateway_url:
+        _run(
+            [
+                str(executable),
+                "remote",
+                "enroll",
+                "--url",
+                gateway_url,
+                "--profile",
+                "portable-smoke",
+                "--device-name",
+                "portable-smoke",
+                "--code-file",
+                str(enrollment_code),
+            ],
+            environment,
+            distribution,
+        )
+        _run(
+            [str(executable), "remote", "doctor", "--profile", "portable-smoke"],
+            environment,
+            distribution,
+        )
+        _run(
+            [str(executable), "remote", "runs", "--profile", "portable-smoke"],
+            environment,
+            distribution,
+        )
+
+
+@contextmanager
+def _gateway_smoke_server() -> Iterator[str]:
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _GatewaySmokeHandler)
+    thread = threading.Thread(target=server.serve_forever, name="gateway-smoke", daemon=True)
+    thread.start()
+    try:
+        host, port = server.server_address
+        yield f"http://{host}:{port}"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+class _GatewaySmokeHandler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def do_GET(self) -> None:  # noqa: N802
+        if self.path == "/health":
+            self._respond(
+                {
+                    "ok": True,
+                    "service": "aiops-gateway-smoke",
+                    "api_version": "v1",
+                    "business_mutations": "disabled",
+                }
+            )
+            return
+        if self.path.startswith("/v1/runs") and self.headers.get("Authorization") == "Bearer smoke-token":
+            self._respond({"runs": []})
+            return
+        self._respond({"detail": "request rejected"}, status=404)
+
+    def do_POST(self) -> None:  # noqa: N802
+        if self.path != "/v1/enroll":
+            self._respond({"detail": "request rejected"}, status=404)
+            return
+        length = int(self.headers.get("Content-Length", "0"))
+        payload = json.loads(self.rfile.read(length).decode("utf-8"))
+        if payload.get("code") != "portable-smoke-enrollment-code":
+            self._respond({"detail": "invalid enrollment code"}, status=400)
+            return
+        self._respond(
+            {
+                "device_id": "dev_portable_smoke",
+                "workspace_id": "portable-smoke",
+                "tenant_id": None,
+                "token": "smoke-token",
+            },
+            status=201,
+        )
+
+    def log_message(self, format: str, *args: object) -> None:
+        return
+
+    def _respond(self, payload: dict[str, object], *, status: int = 200) -> None:
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
 def _validate_smoke_paths(home: Path) -> None:
     from aiops_diagnostics.private_files import validate_private_directory, validate_private_file
 
-    for directory in (home, home / "keys", home / "codex-home", home / "runs"):
+    for directory in (
+        home,
+        home / "keys",
+        home / "codex-home",
+        home / "runs",
+        home / "gateway-profiles",
+        home / "gateway-tokens",
+    ):
         validate_private_directory(directory)
     for file in (
         home / "production.env",
         home / "keys" / "smoke.key",
         home / "codex-home" / "config.toml",
+        home / "gateway-profiles" / "portable-smoke.json",
+        home / "gateway-tokens" / "portable-smoke.token",
     ):
         validate_private_file(file)
 
