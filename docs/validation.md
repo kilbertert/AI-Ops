@@ -128,7 +128,7 @@ SSH 调试通道直接传入中文字面量会受远程代码页影响；本轮�
 - 客户端通过 `GatewayClient` 创建 run、轮询增量事件并读取最终结果；run `run-20260804T020540Z-9a56710a-06cb` 完成 `diagnosed/high`，事件 34 条，包含 heartbeat、tool batch 和完成事件。
 - `aiops remote doctor`、`aiops remote runs` 通过同一设备 profile 查询 Gateway；同 workspace 的第二设备可读取相同 run/event 数据，跨租户请求返回 `403`。
 - Gateway API 测试覆盖健康检查、一次性注册、设备撤销、workspace 隔离、租户隔离、增量事件和 SSE 结束事件；新增 profile 路径穿越与 run 元数据脱敏回归测试，当前测试套件为 169 项通过。
-- GitHub Actions CI run `30873678715` 的 Linux `verify` 与 Windows `windows-verify` 均通过；Windows runner 从最终 ZIP 完成构建、解压烟测并上传 artifact `8878765270`。
+- GitHub Actions CI run `30876603911` 的 Linux `verify` 与 Windows `windows-verify` 均通过；Windows runner 从最终 ZIP 完成构建、解压烟测并上传 artifact `8879776016`。
 
 该验证没有连接生产数据库，也没有真实故障案例；它证明 Gateway 的身份、状态同步、真实 provider 执行和只读边界可以工作。公网生产部署仍需 TLS、OIDC Device Flow/mTLS、Vault/KMS、PostgreSQL、速率限制和审计保留策略。
 
@@ -140,7 +140,7 @@ SSH 调试通道直接传入中文字面量会受远程代码页影响；本轮�
 - Linux 客户端通过真实 HTTPS URL 完成 `remote enroll`、`remote doctor` 和 `remote diagnose`。首个 provider key slot 返回 `429` 后，切换同一 base URL 下的受控 `psydo-funded` slot；run `run-20260804T035406Z-32305a3c-9390` 完成 `diagnosed/medium`，同步 36 条事件并识别设备总费用与平台金额相差 `0.20`。
 - 第二个登记为 Windows 平台的设备身份通过同一 GatewayClient 协议读取同 workspace 的 run 和事件；跨租户创建 run 返回 `403`，撤销设备后返回 `401`，重复兑换注册码返回 `400`。
 - Gateway DB 和客户端私有目录权限分别为 `0700/0600`；数据库未发现注册码、设备 token、provider key 明文，诊断合同没有 evidence payload 或服务器绝对路径。
-- 最终 ZIP 烟测新增 `remote --help`，并通过本地 mock Gateway 完成 `remote enroll`、`remote doctor`、`remote runs`，同时校验 Gateway profile/token 私有权限。Linux 源码外解压 ZIP 已通过；Windows runner 结果在本次提交后重新验证。
+- 最终 ZIP 烟测新增 `remote --help`，并通过本地 mock Gateway 完成 `remote enroll`、`remote doctor`、`remote runs`，同时校验 Gateway profile/token 私有权限；Linux 与 Windows 源码外解压 ZIP 均通过。
 
 结论：Gateway 的 TLS 入口、设备注册、跨设备 run/event 同步、租户隔离和撤销链路验收通过。该结论不等于用户 Windows 本机最终 ZIP 已完成实机运行，也不等于真实故障业务准确率验收；用户 Windows 本机运行与问题反馈是下一阶段。
 
