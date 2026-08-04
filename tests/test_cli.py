@@ -68,7 +68,7 @@ def test_cli_initializes_portable_home_and_installs_key(tmp_path: Path) -> None:
 
 
 def test_agent_cli_exposes_progress_toggle() -> None:
-    result = CliRunner().invoke(app, ["agent-diagnose", "--help"])
+    result = CliRunner().invoke(app, ["agent-diagnose", "--help"], terminal_width=120)
 
     assert result.exit_code == 0
     assert "--progress" in result.stdout
@@ -76,7 +76,7 @@ def test_agent_cli_exposes_progress_toggle() -> None:
 
 
 def test_cli_exposes_remote_gateway_commands() -> None:
-    result = CliRunner().invoke(app, ["remote", "--help"])
+    result = CliRunner().invoke(app, ["remote", "--help"], terminal_width=120)
 
     assert result.exit_code == 0
     assert "enroll" in result.stdout
