@@ -44,9 +44,13 @@ flowchart LR
 当前 MVP 的注册码由服务器管理员本地签发：
 
 ```bash
-uv run aiops-gateway issue-enrollment --workspace ops --tenant-id tenant-a
+# 工作区级注册（推荐）：不传 --tenant-id，注册后的设备可诊断任意订单，
+# 由 order_snapshot 按订单号自动发现租户。适合可信内部运维团队。
+uv run aiops-gateway issue-enrollment --workspace ops
 uv run aiops-gateway serve
 ```
+
+`--tenant-id` 是可选的：不传即工作区级（设备不绑定租户，任意订单可查）；仅当需要把某台设备限制到单一租户时才传（例如多外部运营商必须互不可见的场景）。诊断时运维只需提交订单号，无需查找或输入租户——`order_snapshot` 会按 `order_no` 发现订单及其租户。
 
 Gateway 进程通过 `AIOPS_GATEWAY_SERVER_CONFIG_FILE` 加载服务器私有 `production.env`。该文件只应存在于固定服务器，不应复制到便携包。
 
