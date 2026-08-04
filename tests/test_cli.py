@@ -2,6 +2,7 @@ import json
 import os
 from pathlib import Path
 
+from rich.text import Text
 from typer.testing import CliRunner
 
 from aiops_diagnostics.cli import app
@@ -68,11 +69,12 @@ def test_cli_initializes_portable_home_and_installs_key(tmp_path: Path) -> None:
 
 
 def test_agent_cli_exposes_progress_toggle() -> None:
-    result = CliRunner().invoke(app, ["agent-diagnose", "--help"], terminal_width=120)
+    result = CliRunner().invoke(app, ["agent-diagnose", "--help"], color=True)
+    output = Text.from_ansi(result.stdout).plain
 
     assert result.exit_code == 0
-    assert "--progress" in result.stdout
-    assert "--no-progress" in result.stdout
+    assert "--progress" in output
+    assert "--no-progress" in output
 
 
 def test_cli_exposes_remote_gateway_commands() -> None:
