@@ -189,7 +189,13 @@ Return only the structured response required by the output schema.
 
     @staticmethod
     def _tool_results_prompt(outcomes: list[ToolOutcome]) -> str:
-        payload = json.dumps([item.to_dict() for item in outcomes], ensure_ascii=False, indent=2)
+        serialized = []
+        for item in outcomes:
+            result = item.to_dict()
+            if item.model_payload is not None:
+                result["payload"] = item.model_payload
+            serialized.append(result)
+        payload = json.dumps(serialized, ensure_ascii=False, indent=2)
         return f"""The harness completed your bounded read-only tool requests.
 
 Tool outcomes:
@@ -197,7 +203,10 @@ Tool outcomes:
 {payload}
 ```
 
-Read each referenced artifact inside the run workspace.
+The `payload` field contains the sanitized evidence contents needed for causal
+reasoning. The referenced artifact remains the audit source of truth. Do not
+assume that a local sandbox can read the artifact path; use the payload above
+and request another bounded tool if the payload is truncated.
 Treat `failed` as unavailable evidence and `blocked` as an unmet dependency,
 not as proof that business data is absent. Request more tools if needed;
 otherwise return the final diagnosis with evidence citations.

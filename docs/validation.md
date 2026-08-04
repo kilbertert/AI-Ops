@@ -60,7 +60,31 @@
 - Windows stdout/stderr UTF-8、当前用户 owner、受保护 DACL 和冻结 launcher 子进程路径均经过真实失败后修复。
 - 最终 ZIP 从源码目录之外解压，以最小 PATH 运行 `--help`、`init`、`paths`、`key-install`、`agent-doctor`、Codex 0.144.4 和三份 fixture。
 - 私有配置、key、Codex home 和 run 目录的权限检查通过；制品不存在 `.key`、`production.env` 或 `auth.json`。
-- Windows artifact 已上传并保留 7 天；用户本机 `D:\AI-Ops` 的 Codex Remote 通道尚未执行成功，不能冒充本机验收完成。
+- Windows artifact 已上传并保留 7 天；用户本机最终 ZIP 验收见下节。
+
+### Windows 便携包最终本机验收（2026-08-04）
+
+在用户 Windows `D:\AI-Ops` 上从提交 `581c396` 构建最终 ZIP，并在源码目录之外的
+`D:\AI-Ops-Portable-Acceptance-20260804` 解压运行：
+
+- `--help`、`init`、`paths` 和 `agent-doctor --key-slot primary` 均通过。
+- `agent-doctor` 返回 `base_url=https://api.psydo.top/`、`windows_sandbox=unelevated`、`business_mutations=disabled`。
+- 最终冻结包使用外部私有 `primary` key 调用真实 provider，执行 `ykc_amount_mismatch.json` 合成 fixture；run `run-20260803T165338Z-65cd657e-269e` 完成 `diagnosed/medium`，摘要识别出设备 `totalFee=1.00` 与平台 `total_amount=1.20` 的 0.20 差异。
+- 解压制品未发现 `.git`、`.key`、`auth.json` 或 `production.env`；运行事件文件未发现 `sk-` 密钥内容。
+- ZIP：`D:\AI-Ops\dist\aiops-diagnostics-0.1.0-windows-x86_64.zip`；SHA-256：`22A16A2B105767493DB82F03862C9B3143D410817EFCBDCCA31FE62830062FEE`。
+
+这证明 Windows 便携包、外部 key slot、API provider 和只读诊断链路可以在目标机运行；fixture 是合成数据，不能写成真实故障业务验收或准确率结论。
+
+### Windows 便携包重复验收（2026-08-04）
+
+在新的源码外解压目录 `D:\AI-Ops-Acceptance-20260804-2` 重复执行完整验收：
+
+- ZIP SHA-256 仍为 `22A16A2B105767493DB82F03862C9B3143D410817EFCBDCCA31FE62830062FEE`；解压 196 个文件，未发现 `.git`、`.key`、`auth.json` 或 `production.env`。
+- `agent-doctor` 再次确认 `base_url=https://api.psydo.top/`、`key_slot=primary`、`windows_sandbox=unelevated` 和 `business_mutations=disabled`。
+- 三次真实 provider fixture run 均完成：OCPP `run-20260803T175242Z-3da3f4e6-7f74` 为 `diagnosed/high`（正常计费）；YKC `run-20260803T174918Z-06f526e0-db9a` 为 `diagnosed/medium`（0.20 金额差异）；交易数据缺失 `run-20260803T175424Z-64e42afe-19b9` 为 `diagnosed/medium`。
+- 三个 run 均有 `diagnosis_completed` 事件；事件日志未发现 `sk-`、退款/重算/补发/重启/订单修改/消息重放等执行痕迹；验收结束后没有残留 `aiops.exe` 进程，primary key ACL 仍归当前 Windows 用户。
+
+SSH 调试通道直接传入中文字面量会受远程代码页影响；本轮真实 provider 调用使用显式 `--order-no`，不将该传输限制误判为便携程序问题。构建 smoke test 和 Windows 进程内部中文解析已覆盖中文输出与反馈路径。
 
 ## M4 文档治理验证
 
@@ -72,6 +96,17 @@
 - 本轮只修改文档、配置模板注释和治理规则，不改变业务代码、数据库权限或诊断动作边界；没有新增真实故障业务验收结论。
 - 本轮确定性检查：`uv run pytest -q`（155 项通过）、`uv run ruff check .`、`uv run ruff format --check .`、`uv lock --check`、`uv pip check`、`uv run python -m compileall -q src tests packaging` 和 `git diff --check` 均通过。
 - OpenCodeReview delegation preview 将 Markdown、`.env.example` 和新增 `AGENTS.md` 标记为 `unsupported_ext`（0 个可自动选取的 reviewable 文件）；已按同一默认规则完成人工差异审查，未发现需要修复的文档、安全或边界问题。
+
+## M5 Windows runner 证据交付验证
+
+2026-08-03 在 `D:\AI-Ops` 真实 Windows 源码工作区执行：
+
+- Git bundle 恢复到提交 `0c15d87`，本地分支为 `test/windows-runner-validation-v2`；新增的 key、`auth.json`、`artifacts`、`runs` 和 `.aiops` 均已加入本地 `.gitignore`。
+- `uv sync --locked --dev`、CLI help、155 项 pytest、`uv lock --check`、`uv pip check` 和 `compileall` 通过。
+- `agent-doctor --key-slot primary` 通过，确认 `base_url=https://api.psydo.top/`、Windows `unelevated`、业务 mutation disabled；没有使用 Windows Codex App 官方账号额度。
+- `run-20260803T124243Z-65cd657e-5a88` 和临时 `elevated` 对照 run `run-20260803T124847Z-65cd657e-11d3` 均成功采集 order/fee evidence，但最终被本地 staged-artifact 读取失败阻断；没有业务写入。该失败促成了 payload 交付修复。
+- 修复分支 `fix/windows-model-evidence-delivery` 分发后，`run-20260803T130133Z-65cd657e-d07d` 在默认 `unelevated` Windows sandbox 下完成 `diagnosed/medium`；结果引用 `ev-001`、`ev-002`、`ev-003`，状态 `completed`，事件日志不包含 evidence payload 或 API key。
+- 该 run 证明 Windows provider、Codex native runtime、只读工具、脱敏 payload 交付和结果验证链路可工作；它仍是合成 fixture，不是工程师确认的真实故障业务验收。
 
 ## 业务验收待办
 
