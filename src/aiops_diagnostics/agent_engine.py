@@ -39,11 +39,15 @@ _JSON_FENCE = re.compile(r"```(?:json)?\s*\n?(.*?)```", re.DOTALL)
 def _parse_agent_turn(final_response: str) -> AgentTurn:
     """Parse the agent's structured turn, tolerating non-OpenAI output styles.
 
-    OpenAI Responses honors ``output_schema`` and returns raw JSON. Other
-    providers (e.g. GLM via Volcengine Ark) often wrap the JSON in a markdown
-    code fence and may prefix reasoning prose. Try the raw response, each
-    fenced block, and the outermost ``{...}`` span before giving up so the
-    repair path only triggers on genuinely malformed output.
+    OpenAI Responses honors ``output_schema`` and returns the wrapped
+    ``{kind, tool_requests, diagnosis}`` object as raw JSON. Other providers
+    (e.g. GLM via Volcengine Ark) deviate in two ways: they wrap the JSON in a
+    markdown code fence (with optional prose prefix), and they may return the
+    inner ``AgentDiagnosis`` or ``tool_requests`` payload unwrapped (without the
+    ``kind`` discriminator). Try the raw response, each fenced block, and the
+    outermost ``{...}`` span; for each, also try wrapping an unwrapped payload
+    so the run reaches the contract validator with useful feedback instead of
+    failing on ``extra_forbidden``.
     """
     text = final_response.strip()
     candidates: list[str] = [text]
@@ -57,8 +61,49 @@ def _parse_agent_turn(final_response: str) -> AgentTurn:
             return AgentTurn.model_validate_json(candidate)
         except (ValidationError, ValueError) as exc:
             last_error = exc
+        wrapped = _wrap_unstructured_turn(candidate)
+        if wrapped is not None:
+            try:
+                return AgentTurn.model_validate(wrapped)
+            except (ValidationError, ValueError) as exc:
+                last_error = exc
     assert last_error is not None
     raise last_error
+
+
+_DIAGNOSIS_FIELDS = frozenset(AgentDiagnosis.model_fields)
+
+
+def _wrap_unstructured_turn(candidate: str) -> dict[str, Any] | None:
+    """Normalize a provider turn object into the AgentTurn shape.
+
+    GLM and other non-OpenAI providers deviate from the strict
+    ``{kind, tool_requests, diagnosis}`` schema in two ways: they omit the
+    ``kind`` discriminator, and/or they flatten the inner ``AgentDiagnosis``
+    fields to the top level instead of nesting them under ``diagnosis``. This
+    rebuilds the canonical shape by extracting the diagnosis (nested or
+    flattened) and tool_requests so validation can proceed with useful
+    feedback. Returns ``None`` when the candidate is not a JSON object or
+    cannot be shaped into a turn.
+    """
+    try:
+        obj = json.loads(candidate)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(obj, dict):
+        return None
+    kind = obj.get("kind")
+    diagnosis = obj.get("diagnosis") if isinstance(obj.get("diagnosis"), dict) else None
+    if diagnosis is None and (_DIAGNOSIS_FIELDS & obj.keys()):
+        diagnosis = {key: value for key, value in obj.items() if key in _DIAGNOSIS_FIELDS}
+    tool_requests = obj.get("tool_requests") if isinstance(obj.get("tool_requests"), list) else []
+    if kind in ("diagnosis", "tool_requests"):
+        return {"kind": kind, "tool_requests": tool_requests, "diagnosis": diagnosis}
+    if diagnosis is not None:
+        return {"kind": "diagnosis", "tool_requests": [], "diagnosis": diagnosis}
+    if tool_requests:
+        return {"kind": "tool_requests", "tool_requests": tool_requests, "diagnosis": None}
+    return None
 
 
 class AgentCoordinator:

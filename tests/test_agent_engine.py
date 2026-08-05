@@ -284,3 +284,81 @@ def test_parse_agent_turn_rejects_genuinely_invalid_output() -> None:
         _parse_agent_turn("this is not json at all")
     with pytest.raises((ValidationError, ValueError)):
         _parse_agent_turn("```json\n{not valid json}\n```")
+
+
+def _diagnosis_payload() -> dict:
+    """The inner AgentDiagnosis object, unwrapped (no kind discriminator)."""
+    return {
+        "schema_version": "1.0",
+        "incident_id": "incident-abc123",
+        "order_no": "ORDER-1",
+        "tenant_id": None,
+        "status": "diagnosed",
+        "summary": "正常结束",
+        "root_cause": "后端异常结束",
+        "confidence": "high",
+        "evidence_ids": ["ev-1"],
+        "hypotheses": [{"title": "通信中断", "explanation": "遥测停止", "evidence_ids": ["ev-1"]}],
+        "limitations": [],
+        "failed_sources": [],
+        "next_steps": ["检查通信链路"],
+    }
+
+
+def test_parse_agent_turn_accepts_unwrapped_diagnosis() -> None:
+    from aiops_diagnostics.agent_engine import _parse_agent_turn
+
+    turn = _parse_agent_turn(json.dumps(_diagnosis_payload(), ensure_ascii=False))
+    assert turn.kind == "diagnosis"
+    assert turn.diagnosis is not None
+    assert turn.diagnosis.root_cause == "后端异常结束"
+
+
+def test_parse_agent_turn_accepts_unwrapped_diagnosis_in_fence() -> None:
+    from aiops_diagnostics.agent_engine import _parse_agent_turn
+
+    text = "```json\n" + json.dumps(_diagnosis_payload(), ensure_ascii=False) + "\n```"
+    turn = _parse_agent_turn(text)
+    assert turn.kind == "diagnosis"
+    assert turn.diagnosis.confidence.value == "high"
+
+
+def test_parse_agent_turn_accepts_unwrapped_tool_requests() -> None:
+    from aiops_diagnostics.agent_engine import _parse_agent_turn
+
+    payload = {"tool_requests": [{"tool": "order_snapshot", "reason": "需要订单快照"}]}
+    turn = _parse_agent_turn(json.dumps(payload, ensure_ascii=False))
+    assert turn.kind == "tool_requests"
+    assert turn.tool_requests[0].tool.value == "order_snapshot"
+
+
+def test_parse_agent_turn_does_not_wrap_arbitrary_json() -> None:
+    from pydantic import ValidationError
+
+    from aiops_diagnostics.agent_engine import _parse_agent_turn
+
+    # an object that is neither a wrapped turn nor an unwrapped payload
+    with pytest.raises((ValidationError, ValueError)):
+        _parse_agent_turn(json.dumps({"unrelated": "field"}))
+
+
+def test_parse_agent_turn_accepts_flattened_diagnosis_with_kind() -> None:
+    """GLM may emit kind=diagnosis but flatten the diagnosis fields at top level."""
+    from aiops_diagnostics.agent_engine import _parse_agent_turn
+
+    payload = {"kind": "diagnosis", **_diagnosis_payload()}
+    turn = _parse_agent_turn(json.dumps(payload, ensure_ascii=False))
+    assert turn.kind == "diagnosis"
+    assert turn.diagnosis is not None
+    assert turn.diagnosis.summary == "正常结束"
+    assert turn.diagnosis.root_cause == "后端异常结束"
+
+
+def test_parse_agent_turn_accepts_flattened_diagnosis_in_fence_with_prose() -> None:
+    from aiops_diagnostics.agent_engine import _parse_agent_turn
+
+    payload = {"kind": "diagnosis", **_diagnosis_payload()}
+    text = "Here is the diagnosis.\n\n```json\n" + json.dumps(payload, ensure_ascii=False) + "\n```"
+    turn = _parse_agent_turn(text)
+    assert turn.kind == "diagnosis"
+    assert turn.diagnosis.confidence.value == "high"
