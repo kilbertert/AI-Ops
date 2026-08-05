@@ -223,3 +223,64 @@ def test_coordinator_marks_session_initialization_failure_interrupted(tmp_path: 
         coordinator.run()
 
     assert workspace.load_state().phase == "interrupted"
+
+
+def _diagnosis_json() -> str:
+    return json.dumps(
+        {
+            "kind": "diagnosis",
+            "diagnosis": {
+                "schema_version": "1.0",
+                "incident_id": "incident-abc123",
+                "order_no": "ORDER-1",
+                "tenant_id": None,
+                "status": "diagnosed",
+                "summary": "正常结束",
+                "root_cause": "后端异常结束",
+                "confidence": "high",
+                "evidence_ids": ["ev-1"],
+                "hypotheses": [{"title": "通信中断", "explanation": "遥测停止", "evidence_ids": ["ev-1"]}],
+                "limitations": [],
+                "failed_sources": [],
+                "next_steps": ["检查通信链路"],
+            },
+        },
+        ensure_ascii=False,
+    )
+
+
+def test_parse_agent_turn_accepts_raw_json() -> None:
+    from aiops_diagnostics.agent_engine import _parse_agent_turn
+
+    turn = _parse_agent_turn(_diagnosis_json())
+    assert turn.kind == "diagnosis"
+    assert turn.diagnosis is not None
+    assert turn.diagnosis.summary == "正常结束"
+
+
+def test_parse_agent_turn_accepts_markdown_fenced_json() -> None:
+    from aiops_diagnostics.agent_engine import _parse_agent_turn
+
+    fenced = "```json\n" + _diagnosis_json() + "\n```"
+    turn = _parse_agent_turn(fenced)
+    assert turn.kind == "diagnosis"
+
+
+def test_parse_agent_turn_accepts_prose_prefix_with_fenced_json() -> None:
+    from aiops_diagnostics.agent_engine import _parse_agent_turn
+
+    text = "Based on the SOP, I need to return the diagnosis.\n\n```json\n" + _diagnosis_json() + "\n```"
+    turn = _parse_agent_turn(text)
+    assert turn.kind == "diagnosis"
+    assert turn.diagnosis.confidence.value == "high"
+
+
+def test_parse_agent_turn_rejects_genuinely_invalid_output() -> None:
+    from pydantic import ValidationError
+
+    from aiops_diagnostics.agent_engine import _parse_agent_turn
+
+    with pytest.raises((ValidationError, ValueError)):
+        _parse_agent_turn("this is not json at all")
+    with pytest.raises((ValidationError, ValueError)):
+        _parse_agent_turn("```json\n{not valid json}\n```")
