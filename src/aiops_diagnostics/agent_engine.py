@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import re
 from collections.abc import Callable, Iterable
 from typing import Any
 
@@ -31,6 +32,33 @@ from aiops_diagnostics.journal import EvidenceJournal
 
 SessionFactory = Callable[[AgentWorkspace, AgentSettings, ProviderConfig | None, str | None], CodexSession]
 ProgressCallback = Callable[[dict[str, Any]], None]
+
+_JSON_FENCE = re.compile(r"```(?:json)?\s*\n?(.*?)```", re.DOTALL)
+
+
+def _parse_agent_turn(final_response: str) -> AgentTurn:
+    """Parse the agent's structured turn, tolerating non-OpenAI output styles.
+
+    OpenAI Responses honors ``output_schema`` and returns raw JSON. Other
+    providers (e.g. GLM via Volcengine Ark) often wrap the JSON in a markdown
+    code fence and may prefix reasoning prose. Try the raw response, each
+    fenced block, and the outermost ``{...}`` span before giving up so the
+    repair path only triggers on genuinely malformed output.
+    """
+    text = final_response.strip()
+    candidates: list[str] = [text]
+    candidates.extend(match.group(1).strip() for match in _JSON_FENCE.finditer(text))
+    start, end = text.find("{"), text.rfind("}")
+    if start != -1 and end > start:
+        candidates.append(text[start : end + 1])
+    last_error: ValidationError | ValueError | None = None
+    for candidate in candidates:
+        try:
+            return AgentTurn.model_validate_json(candidate)
+        except (ValidationError, ValueError) as exc:
+            last_error = exc
+    assert last_error is not None
+    raise last_error
 
 
 class AgentCoordinator:
@@ -112,7 +140,7 @@ class AgentCoordinator:
                 state = state.model_copy(update={"turn_count": state.turn_count + 1})
                 self.workspace.save_state(state)
                 try:
-                    turn = AgentTurn.model_validate_json(output.final_response)
+                    turn = _parse_agent_turn(output.final_response)
                 except (ValidationError, ValueError) as exc:
                     state = self._request_contract_repair(state, [f"结构化输出无效: {exc}"])
                     if state.phase == "blocked":
