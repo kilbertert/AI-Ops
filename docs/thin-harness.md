@@ -55,15 +55,30 @@ Codex 决定请求哪些证据以及如何组合证据。harness 不选择最终
 
 ## Provider 与 key slot
 
-provider 写入生成的私有 Codex home，使用以下配置：
+诊断 agent 通过可插拔的 Responses API provider 运行。支持多 provider 注册表，
+默认 provider 自动用于每次诊断，`--provider`（CLI）或 `provider`（Gateway API）可按运行切换。
 
-- `AIOPS_CODEX_BASE_URL`：非密钥的 Responses API 地址。
-- `AIOPS_CODEX_API_KEY`：可选的一次性环境变量覆盖。
-- `AIOPS_CODEX_API_KEY_FILE`：可选的显式私有 key 文件。
+注册表通过环境变量配置（`<SUFFIX>` 由 provider 名称转成大写、非字母数字替换为 `_`）：
+
+- `AIOPS_PROVIDERS=glm-ark,gpt-psydo`：启用的 provider 名称列表。
+- `AIOPS_DEFAULT_PROVIDER=glm-ark`：默认 provider；未设置时取列表第一个。
+- `AIOPS_PROVIDER_<SUFFIX>_BASE_URL`：必填，非密钥的 Responses API 地址。
+- `AIOPS_PROVIDER_<SUFFIX>_MODEL`：该 provider 的默认模型。
+- `AIOPS_PROVIDER_<SUFFIX>_KEY_ENV`：可选，读取 provider key 的环境变量名。
+- `AIOPS_PROVIDER_<SUFFIX>_KEY_SLOT`：可选，默认与 provider 名称相同。
+- `AIOPS_PROVIDER_<SUFFIX>_WIRE_API`：可选，默认 `responses`。
+
+留空 `AIOPS_PROVIDERS` 时回退到遗留单 provider 配置：`AIOPS_CODEX_BASE_URL`、
+`AIOPS_CODEX_API_KEY_ENV`、`AIOPS_AGENT_MODEL`，合成名为 `aiops-api` 的 provider。
+
+所有 provider 的 Codex 侧 `env_key` 统一为 `AIOPS_CODEX_PROVIDER_KEY`：每个 provider
+解析自己的凭据并注入该变量，供 Codex app-server 使用。key 来源优先级：
+
+- `AIOPS_PROVIDER_<SUFFIX>_KEY_ENV` 指向的环境变量（可选覆盖）。
 - `AIOPS_CODEX_KEY_DIR/<slot>.key`：默认的可插拔 key slot 存储。
-- `--key-slot`：在不改代码的情况下切换同一 base URL 的另一把 key。
+- `--key-slot`：在不改代码的情况下切换同一 provider 的另一把 key。
 
-POSIX key 文件必须属于当前开发账号且为 `0600`；Windows key 文件使用当前用户保护 DACL。key 只作为内部 provider 变量传给 Codex app-server，模型生成的 shell 命令收到的是过滤后的环境，不包含业务密钥。运行状态和日志只记录 slot 名称，`agent-doctor` 只记录短的一次性指纹。恢复运行会拒绝不同 base URL，只允许切换 key slot。
+POSIX key 文件必须属于当前开发账号且为 `0600`；Windows key 文件使用当前用户保护 DACL。key 只作为内部 provider 变量传给 Codex app-server，模型生成的 shell 命令收到的是过滤后的环境，不包含业务密钥。运行状态和日志只记录 slot 名称，`agent-doctor` 只记录短的一次性指纹。恢复运行会校验 provider 与 base_url 一致，禁止把已存 key 重定向到别的主机，只允许切换同一端点的 key slot。
 
 ## 明确不做的事情
 

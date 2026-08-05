@@ -63,6 +63,26 @@ AIOPS_GATEWAY_SERVER_CONFIG_FILE=/home/claude/.config/aiops-diagnostics/producti
 AIOPS_CODEX_KEY_SLOT=psydo-primary
 ```
 
+### Model provider
+
+Gateway 在服务端运行 Codex session，因此 provider 选择是服务端行为：切换默认 provider
+后，已注册的 Windows 客户端立即生效，无需重新打包。在 `production.env` 中配置多 provider
+注册表，默认 provider 用于每次 `remote diagnose`：
+
+```env
+AIOPS_PROVIDERS=glm-ark,gpt-psydo
+AIOPS_DEFAULT_PROVIDER=glm-ark
+AIOPS_PROVIDER_GLM_ARK_BASE_URL=https://ark.cn-beijing.volces.com/api/coding/v3/
+AIOPS_PROVIDER_GLM_ARK_MODEL=glm-5-2-260617
+AIOPS_PROVIDER_GLM_ARK_KEY_SLOT=glm-ark
+AIOPS_PROVIDER_GPT_PSYDO_BASE_URL=https://api.psydo.top/
+AIOPS_PROVIDER_GPT_PSYDO_KEY_SLOT=psydo-primary
+```
+
+`AIOPS_GATEWAY_ALLOWED_KEY_SLOTS` 必须包含每个 provider 的 key slot。客户端可用
+`remote diagnose --provider gpt-psydo` 按运行切换 fallback provider；不传则用默认。
+`agent-doctor --provider <name>` 可单独验证某个 provider 的 key 与 runtime。
+
 ### 客户端
 
 新电脑只需一次注册：

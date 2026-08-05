@@ -38,6 +38,7 @@ class RunCreateRequest(BaseModel):
     order_no: str | None = Field(default=None, max_length=128)
     tenant_id: str | None = Field(default=None, max_length=128)
     key_slot: str | None = Field(default=None, max_length=64)
+    provider: str | None = Field(default=None, max_length=64)
     fixture_name: str | None = Field(default=None, max_length=128)
 
 
@@ -136,6 +137,7 @@ def create_gateway_app(
                 order_no=payload.order_no,
                 tenant_id=payload.tenant_id,
                 key_slot=payload.key_slot,
+                provider=payload.provider,
                 fixture_name=payload.fixture_name,
             )
         except ValueError as exc:

@@ -83,6 +83,10 @@ def diagnose(
     order_no: Annotated[str | None, typer.Option("--order-no")] = None,
     tenant_id: Annotated[str | None, typer.Option("--tenant-id")] = None,
     key_slot: Annotated[str | None, typer.Option("--key-slot")] = None,
+    provider: Annotated[
+        str | None,
+        typer.Option("--provider", help="选择 model provider，默认使用 Gateway 配置的默认 provider"),
+    ] = None,
     fixture: Annotated[
         str | None, typer.Option("--fixture", help="仅接受 Gateway 白名单 fixture 名称")
     ] = None,
@@ -99,6 +103,7 @@ def diagnose(
             order_no=order_no,
             tenant_id=tenant_id,
             key_slot=key_slot,
+            provider=provider,
             fixture_name=fixture,
         )
         if wait:
@@ -206,6 +211,8 @@ def _token_for_profile(profile_name: str) -> str:
 def _render_run(run: dict[str, object], *, evidence: list[dict[str, object]] | None = None) -> None:
     console.print(f"运行 ID: {run.get('run_id', '')}")
     console.print(f"状态: {run.get('status', '')}")
+    if run.get("provider"):
+        console.print(f"Provider: {run['provider']}")
     if run.get("confidence"):
         console.print(f"置信度: {run['confidence']}")
     if run.get("summary"):

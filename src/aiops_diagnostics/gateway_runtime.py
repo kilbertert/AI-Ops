@@ -61,11 +61,13 @@ class GatewayRuntime:
         order_no: str | None,
         tenant_id: str | None,
         key_slot: str | None,
+        provider: str | None,
         fixture_name: str | None,
     ) -> dict[str, Any]:
         effective_tenant = self._tenant_for_device(device, tenant_id)
         allowed_tenants = {effective_tenant} if effective_tenant else None
-        selected_key_slot = validate_key_slot_name(key_slot or self.diagnostic_settings.agent.key_slot)
+        selected_provider = self.diagnostic_settings.agent.select_provider(provider)
+        selected_key_slot = validate_key_slot_name(key_slot or selected_provider.resolved_key_slot())
         if selected_key_slot not in self.allowed_key_slots:
             raise ValueError("requested key slot is not allowed by the gateway")
         request = parse_request(problem, order_no=order_no, tenant_id=effective_tenant)
@@ -76,7 +78,8 @@ class GatewayRuntime:
             Path(self.diagnostic_settings.agent.run_root),
             manifest,
             fixture_path=fixture,
-            provider_base_url=canonical_provider_base_url(self.diagnostic_settings.agent.api_base_url),
+            provider_base_url=canonical_provider_base_url(selected_provider.base_url),
+            provider=selected_provider.name,
             key_slot=selected_key_slot,
         )
         run = self.store.create_run(
@@ -87,6 +90,7 @@ class GatewayRuntime:
             order_no=request.order_no,
             tenant_id=request.tenant_id,
             key_slot=selected_key_slot,
+            provider=selected_provider.name,
             fixture_name=fixture_name,
             created_by_device=device.device_id,
         )
@@ -100,6 +104,7 @@ class GatewayRuntime:
             request,
             fixture,
             allowed_tenants,
+            selected_provider.name,
         )
         self._futures[workspace.run_id] = future
         future.add_done_callback(lambda _: self._futures.pop(workspace.run_id, None))
@@ -136,13 +141,15 @@ class GatewayRuntime:
         request,
         fixture: Path | None,
         allowed_tenants: set[str] | None = None,
+        provider: str | None = None,
     ) -> None:
         run_id = workspace.run_id
         self.store.update_run(run_id, status="running")
         self.store.append_event(run_id, {"type": "gateway_worker_started", "run_id": run_id})
         settings = Settings.from_config(self.gateway_settings.server_config_file)
         settings.agent.run_root = self.diagnostic_settings.agent.run_root
-        settings.agent.key_slot = workspace.load_state().key_slot
+        state_key_slot = workspace.load_state().key_slot
+        settings.agent.key_slot = state_key_slot
         try:
             result = run_agent_diagnosis(
                 workspace,
@@ -151,6 +158,8 @@ class GatewayRuntime:
                 fixture,
                 progress_callback=lambda event: self.store.append_event(run_id, _public_event(event)),
                 allowed_tenants=allowed_tenants,
+                provider=provider,
+                key_slot=state_key_slot,
             )
         except (AgentRuntimeError, SourceError) as exc:
             error_message = _public_error_message(exc, request.order_no)

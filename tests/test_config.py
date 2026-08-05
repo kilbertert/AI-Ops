@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from aiops_diagnostics.config import Settings, SSHSettings
+from aiops_diagnostics.config import ProviderConfig, Settings, SSHSettings
 from aiops_diagnostics.private_files import write_private_text
 
 
@@ -87,3 +87,94 @@ def test_windows_style_home_override_is_platform_independent(tmp_path: Path, mon
     assert settings.agent.windows_sandbox == "unelevated"
     if os.name != "nt":
         assert settings.ssh.ssh_bin
+
+
+def _provider_env(monkeypatch) -> None:
+    monkeypatch.setenv("AIOPS_PROVIDERS", "glm-ark,gpt-psydo")
+    monkeypatch.setenv("AIOPS_DEFAULT_PROVIDER", "glm-ark")
+    monkeypatch.setenv("AIOPS_PROVIDER_GLM_ARK_BASE_URL", "https://ark.cn-beijing.volces.com/api/coding/v3/")
+    monkeypatch.setenv("AIOPS_PROVIDER_GLM_ARK_MODEL", "glm-5-2-260617")
+    monkeypatch.setenv("AIOPS_PROVIDER_GLM_ARK_KEY_ENV", "AIOPS_PROVIDER_GLM_ARK_KEY")
+    monkeypatch.setenv("AIOPS_PROVIDER_GPT_PSYDO_BASE_URL", "https://api.psydo.top/")
+    monkeypatch.setenv("AIOPS_PROVIDER_GPT_PSYDO_MODEL", "gpt-5")
+
+
+def test_provider_registry_parses_from_env(monkeypatch) -> None:
+    _provider_env(monkeypatch)
+    settings = Settings.from_env()
+    names = settings.agent.provider_names()
+    assert names == ("glm-ark", "gpt-psydo")
+
+    glm = settings.agent.select_provider("glm-ark")
+    assert glm.base_url == "https://ark.cn-beijing.volces.com/api/coding/v3/"
+    assert glm.model == "glm-5-2-260617"
+    assert glm.api_key_env == "AIOPS_PROVIDER_GLM_ARK_KEY"
+    assert glm.wire_api == "responses"
+    assert glm.resolved_key_slot() == "glm-ark"
+
+    psydo = settings.agent.select_provider("gpt-psydo")
+    assert psydo.base_url == "https://api.psydo.top/"
+    assert psydo.model == "gpt-5"
+    assert psydo.resolved_key_slot() == "gpt-psydo"
+
+
+def test_default_provider_selected_when_name_omitted(monkeypatch) -> None:
+    _provider_env(monkeypatch)
+    settings = Settings.from_env()
+    assert settings.agent.select_provider(None).name == "glm-ark"
+
+
+def test_default_provider_defaults_to_first_when_unset(monkeypatch) -> None:
+    monkeypatch.setenv("AIOPS_PROVIDERS", "glm-ark,gpt-psydo")
+    monkeypatch.setenv("AIOPS_PROVIDER_GLM_ARK_BASE_URL", "https://ark.example/")
+    monkeypatch.setenv("AIOPS_PROVIDER_GPT_PSYDO_BASE_URL", "https://psydo.example/")
+    settings = Settings.from_env()
+    assert settings.agent.default_provider == "glm-ark"
+
+
+def test_select_provider_rejects_unknown_name(monkeypatch) -> None:
+    _provider_env(monkeypatch)
+    settings = Settings.from_env()
+    with pytest.raises(ValueError, match="未知"):
+        settings.agent.select_provider("unknown-provider")
+
+
+def test_registry_rejects_duplicate_and_missing_base_url(monkeypatch) -> None:
+    monkeypatch.setenv("AIOPS_PROVIDERS", "glm-ark,glm-ark")
+    monkeypatch.setenv("AIOPS_PROVIDER_GLM_ARK_BASE_URL", "https://ark.example/")
+    settings = Settings.from_env()
+    with pytest.raises(ValueError, match="重复"):
+        settings.agent.validate()
+
+    monkeypatch.setenv("AIOPS_PROVIDERS", "glm-ark")
+    monkeypatch.delenv("AIOPS_PROVIDER_GLM_ARK_BASE_URL", raising=False)
+    with pytest.raises(ValueError, match="缺少"):
+        Settings.from_env()
+
+
+def test_legacy_single_provider_synthesized_without_registry() -> None:
+    from aiops_diagnostics.config import AgentSettings
+
+    settings = AgentSettings(codex_bin="codex", api_base_url="https://proxy.example/", model="gpt-5")
+    provider = settings.select_provider(None)
+    assert provider.name == "aiops-api"
+    assert provider.base_url == "https://proxy.example/"
+    assert provider.model == "gpt-5"
+    assert provider.api_key_env == settings.api_key_env
+
+
+def test_registry_validation_requires_default_in_list(monkeypatch) -> None:
+    monkeypatch.setenv("AIOPS_PROVIDERS", "glm-ark,gpt-psydo")
+    monkeypatch.setenv("AIOPS_DEFAULT_PROVIDER", "missing")
+    monkeypatch.setenv("AIOPS_PROVIDER_GLM_ARK_BASE_URL", "https://ark.example/")
+    monkeypatch.setenv("AIOPS_PROVIDER_GPT_PSYDO_BASE_URL", "https://psydo.example/")
+    settings = Settings.from_env()
+    with pytest.raises(ValueError, match="不在注册表"):
+        settings.agent.validate()
+
+
+def test_provider_config_resolved_key_slot_falls_back_to_name() -> None:
+    provider = ProviderConfig(name="glm-ark", base_url="https://ark.example/")
+    assert provider.resolved_key_slot() == "glm-ark"
+    explicit = ProviderConfig(name="glm-ark", base_url="https://ark.example/", default_key_slot="primary")
+    assert explicit.resolved_key_slot() == "primary"

@@ -34,7 +34,7 @@
 - Redis 只允许读取元数据和有界的反向范围；不消费游标。
 - 凭据只能来自环境变量或私有配置，所有输出都会脱敏。
 - 报告不输出用户 ID、VIN、卡号、车牌号和原始协议 payload。
-- Codex 通过可插拔的 Responses API provider 运行。`AIOPS_CODEX_BASE_URL` 不是密钥，`--key-slot` 选择 `AIOPS_CODEX_KEY_DIR` 下权限为 `0600` 的私有 key 文件；API key 不会进入 Git 或运行制品。
+- Codex 通过可插拔的 Responses API provider 运行，支持多 provider 注册表（`AIOPS_PROVIDERS`）与默认 provider；默认不绑定单一供应商。`--key-slot` 选择 `AIOPS_CODEX_KEY_DIR` 下权限为 `0600` 的私有 key 文件；API key 不会进入 Git 或运行制品。
 
 资产盘点发现的生产应用账号权限过大，本运行时不会使用它。已验证的部署使用专用 MySQL、Redis 和 SSH 身份；更换应用账号必须单独完成依赖审计和凭据轮换。TDengine Community Edition 无法提供数据库级只读角色，因此生产诊断必须使用 `ops/` 中的严格 loopback-only 查询代理。
 

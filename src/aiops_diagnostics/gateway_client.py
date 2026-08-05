@@ -52,6 +52,7 @@ class GatewayClient:
         order_no: str | None = None,
         tenant_id: str | None = None,
         key_slot: str | None = None,
+        provider: str | None = None,
         fixture_name: str | None = None,
     ) -> dict[str, Any]:
         return self._request(
@@ -62,6 +63,7 @@ class GatewayClient:
                 "order_no": order_no,
                 "tenant_id": tenant_id,
                 "key_slot": key_slot,
+                "provider": provider,
                 "fixture_name": fixture_name,
             },
         )

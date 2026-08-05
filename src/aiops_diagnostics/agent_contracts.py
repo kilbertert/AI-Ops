@@ -142,6 +142,7 @@ class RunState(BaseModel):
     fixture_path: str | None = None
     fixture_sha256: str | None = None
     provider_base_url: str
+    provider: str = ""
     key_slot: str
 
 
