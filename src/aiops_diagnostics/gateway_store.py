@@ -174,6 +174,7 @@ class GatewayStore:
         order_no: str,
         tenant_id: str | None,
         key_slot: str,
+        provider: str | None,
         fixture_name: str | None,
         created_by_device: str,
     ) -> dict[str, Any]:
@@ -183,8 +184,8 @@ class GatewayStore:
                 """
                 INSERT INTO runs (
                     run_id, workspace_id, incident_id, problem, order_no, tenant_id,
-                    key_slot, fixture_name, status, created_by_device, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)
+                    key_slot, provider, fixture_name, status, created_by_device, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -194,6 +195,7 @@ class GatewayStore:
                     order_no,
                     tenant_id,
                     key_slot,
+                    provider,
                     fixture_name,
                     created_by_device,
                     now,
@@ -360,6 +362,7 @@ class GatewayStore:
                     order_no TEXT NOT NULL,
                     tenant_id TEXT,
                     key_slot TEXT NOT NULL,
+                    provider TEXT,
                     fixture_name TEXT,
                     status TEXT NOT NULL,
                     confidence TEXT,
@@ -390,6 +393,8 @@ class GatewayStore:
             columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(runs)").fetchall()}
             if "error_message" not in columns:
                 connection.execute("ALTER TABLE runs ADD COLUMN error_message TEXT")
+            if "provider" not in columns:
+                connection.execute("ALTER TABLE runs ADD COLUMN provider TEXT")
         protect_private_file(self.path)
 
     @contextmanager

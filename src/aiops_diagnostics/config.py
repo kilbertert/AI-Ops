@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -43,6 +43,33 @@ def _env_bool(
     return raw.lower() in {"1", "true", "yes", "on"}
 
 
+def _parse_providers(env: Callable[[str, str], str]) -> tuple[ProviderConfig, ...]:
+    """Parse the ``AIOPS_PROVIDERS`` registry from env or config-file values."""
+    raw = env("AIOPS_PROVIDERS", "")
+    if not raw:
+        return ()
+    providers: list[ProviderConfig] = []
+    for name in raw.split(","):
+        name = name.strip()
+        if not name:
+            continue
+        suffix = provider_env_suffix(name)
+        base_url = env(f"AIOPS_PROVIDER_{suffix}_BASE_URL", "")
+        if not base_url:
+            raise ValueError(f"provider {name} 缺少 AIOPS_PROVIDER_{suffix}_BASE_URL")
+        providers.append(
+            ProviderConfig(
+                name=name,
+                base_url=base_url,
+                wire_api=env(f"AIOPS_PROVIDER_{suffix}_WIRE_API", "responses"),
+                api_key_env=env(f"AIOPS_PROVIDER_{suffix}_KEY_ENV", ""),
+                model=env(f"AIOPS_PROVIDER_{suffix}_MODEL", ""),
+                default_key_slot=env(f"AIOPS_PROVIDER_{suffix}_KEY_SLOT", "") or name,
+            )
+        )
+    return tuple(providers)
+
+
 def _default_codex_bin() -> str:
     """Prefer the SDK-pinned native runtime over a shell wrapper on PATH."""
     try:
@@ -79,6 +106,33 @@ def require_same_provider_base_url(configured: str, persisted: str) -> str:
     if configured_url != persisted_url:
         raise ValueError("恢复运行的 Codex API base_url 与当前配置不一致；只允许切换同一端点的 key slot")
     return configured_url
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderConfig:
+    """A registered, selectable Responses API model provider.
+
+    The Codex-side ``env_key`` is always ``AIOPS_CODEX_PROVIDER_KEY``: every
+    provider resolves its own credential and the harness injects it into that
+    single env var for the Codex subprocess. ``api_key_env`` is the optional
+    environment-variable *source* for the key override; when empty the key is
+    read from the private ``keys/<key_slot>.key`` file.
+    """
+
+    name: str
+    base_url: str
+    wire_api: str = "responses"
+    api_key_env: str = ""
+    model: str = ""
+    default_key_slot: str = ""
+
+    def resolved_key_slot(self) -> str:
+        return self.default_key_slot or self.name
+
+
+def provider_env_suffix(name: str) -> str:
+    """Map a provider name to its env-var token, e.g. ``glm-ark`` -> ``GLM_ARK``."""
+    return re.sub(r"[^A-Za-z0-9]", "_", name).upper()
 
 
 @dataclass(slots=True)
@@ -182,15 +236,60 @@ class AgentSettings:
     turn_timeout_seconds: int = 600
     heartbeat_interval_seconds: int = 10
     windows_sandbox: str = "unelevated"
+    providers: tuple[ProviderConfig, ...] = ()
+    default_provider: str = "aiops-api"
+
+    def select_provider(self, name: str | None) -> ProviderConfig:
+        """Return the named provider, the default, or a legacy single provider.
+
+        When ``providers`` is empty the instance is in legacy single-provider
+        mode and synthesizes an ``aiops-api`` provider from ``api_base_url``,
+        ``api_key_env``, ``model`` and ``key_slot`` so existing configurations
+        keep working without a registry.
+        """
+        if not self.providers:
+            if name and name != "aiops-api":
+                raise ValueError(f"未知的 model provider: {name}")
+            return ProviderConfig(
+                name="aiops-api",
+                base_url=self.api_base_url,
+                wire_api="responses",
+                api_key_env=self.api_key_env,
+                model=self.model,
+                default_key_slot=self.key_slot or "default",
+            )
+        target = name or self.default_provider
+        for provider in self.providers:
+            if provider.name == target:
+                return provider
+        available = ", ".join(provider.name for provider in self.providers)
+        raise ValueError(f"未知的 model provider: {target}; 可用: {available}")
+
+    def provider_names(self) -> tuple[str, ...]:
+        return tuple(provider.name for provider in self.providers)
 
     def validate(self) -> None:
         codex_bin = Path(self.codex_bin).expanduser()
         if not codex_bin.is_file() or not os.access(codex_bin, os.X_OK):
             raise ValueError(f"Codex CLI 不可执行: {codex_bin}")
         runtime_home = Path(self.codex_runtime_home).expanduser().resolve()
-        canonical_provider_base_url(self.api_base_url)
-        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", self.api_key_env):
-            raise ValueError("Codex API key 环境变量名无效")
+        if self.providers:
+            names = [provider.name for provider in self.providers]
+            if len(names) != len(set(names)):
+                raise ValueError("provider 名称不能重复")
+            for provider in self.providers:
+                validate_key_slot_name(provider.name)
+                canonical_provider_base_url(provider.base_url)
+                if provider.wire_api not in {"responses", "chat"}:
+                    raise ValueError(f"provider {provider.name} 的 wire_api 必须是 responses 或 chat")
+                if provider.api_key_env and not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", provider.api_key_env):
+                    raise ValueError(f"provider {provider.name} 的 key_env 环境变量名无效")
+            if self.default_provider not in names:
+                raise ValueError(f"default_provider {self.default_provider} 不在注册表中")
+        else:
+            canonical_provider_base_url(self.api_base_url)
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", self.api_key_env):
+                raise ValueError("Codex API key 环境变量名无效")
         validate_key_slot_name(self.key_slot)
         if runtime_home == Path(self.key_dir).expanduser().resolve():
             raise ValueError("Codex runtime home 与 key_dir 必须隔离")
@@ -253,6 +352,9 @@ class Settings:
         codex_home_default = Path(data_home) / "codex-home" if data_home else default_codex_home()
         run_root_default = Path(data_home) / "runs" if data_home else default_run_root()
 
+        providers = _parse_providers(env)
+        default_provider = env("AIOPS_DEFAULT_PROVIDER") or (providers[0].name if providers else "aiops-api")
+
         return cls(
             mysql=MySQLSettings(
                 host=env("AIOPS_MYSQL_HOST", "127.0.0.1"),
@@ -311,6 +413,8 @@ class Settings:
                 turn_timeout_seconds=env_int("AIOPS_AGENT_TURN_TIMEOUT_SECONDS", 600),
                 heartbeat_interval_seconds=env_int("AIOPS_AGENT_HEARTBEAT_INTERVAL_SECONDS", 10),
                 windows_sandbox=env("AIOPS_WINDOWS_SANDBOX", "unelevated"),
+                providers=providers,
+                default_provider=default_provider,
             ),
         )
 

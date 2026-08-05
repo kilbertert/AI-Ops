@@ -23,10 +23,13 @@ def run_agent_diagnosis(
     *,
     progress_callback: ProgressCallback | None = None,
     allowed_tenants: set[str] | None = None,
+    provider: str | None = None,
+    key_slot: str | None = None,
 ) -> AgentDiagnosis:
     """Run the shared read-only agent path for local CLI and gateway workers."""
     manifest = workspace.load_manifest()
-    provider_key = resolve_provider_api_key(settings.agent)
+    selected_provider = settings.agent.select_provider(provider)
+    provider_key = resolve_provider_api_key(settings.agent, provider=selected_provider, key_slot=key_slot)
     journal = EvidenceJournal(workspace, manifest)
     with _agent_sources(settings, fixture) as sources:
         tools = DiagnosticToolExecutor(
@@ -43,6 +46,7 @@ def run_agent_diagnosis(
             journal,
             tools,
             settings.agent,
+            provider=selected_provider,
             sensitive_values=(
                 settings.mysql.password,
                 settings.tdengine.password,

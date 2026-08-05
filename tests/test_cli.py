@@ -92,6 +92,7 @@ def test_diagnose_unified_exposes_mode_and_progress() -> None:
     assert "deterministic" in output
     assert "--progress" in output
     assert "--no-progress" in output
+    assert "--provider" in output
 
 
 def test_agent_diagnose_command_removed() -> None:

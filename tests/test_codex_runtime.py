@@ -19,6 +19,7 @@ from aiops_diagnostics.codex_runtime import (
 )
 from aiops_diagnostics.config import (
     AgentSettings,
+    ProviderConfig,
     canonical_provider_base_url,
     require_same_provider_base_url,
 )
@@ -204,3 +205,49 @@ def test_codex_heartbeat_is_persisted_and_forwarded() -> None:
 
 def stat_mode(path: Path) -> int:
     return os.stat(path).st_mode & 0o777
+
+
+def test_runtime_config_writes_named_multi_provider(tmp_path: Path) -> None:
+    glm = ProviderConfig(
+        name="glm-ark",
+        base_url="https://ark.cn-beijing.volces.com/api/coding/v3/",
+        wire_api="responses",
+        model="glm-5-2-260617",
+    )
+    settings = AgentSettings(
+        codex_bin=sys.executable,
+        codex_runtime_home=str(tmp_path / "runtime"),
+        providers=(glm,),
+        default_provider="glm-ark",
+    )
+
+    config = runtime_config(settings, provider=glm)
+    parsed = tomllib.loads(config)
+
+    assert parsed["model_provider"] == "glm-ark"
+    assert parsed["model_providers"]["glm-ark"]["base_url"] == (
+        "https://ark.cn-beijing.volces.com/api/coding/v3/"
+    )
+    assert parsed["model_providers"]["glm-ark"]["env_key"] == "AIOPS_CODEX_PROVIDER_KEY"
+    assert parsed["model_providers"]["glm-ark"]["wire_api"] == "responses"
+    assert "aiops-api" not in parsed["model_providers"]
+    # default provider is selected when none is passed
+    assert runtime_config(settings) == config
+
+
+def test_resolve_provider_key_uses_provider_key_slot(tmp_path: Path) -> None:
+    key_dir = tmp_path / "keys"
+    ensure_private_directory(key_dir)
+    write_private_text(key_dir / "glm-ark.key", "ark-secret")
+    glm = ProviderConfig(name="glm-ark", base_url="https://ark.example/", model="glm-5-2")
+    settings = AgentSettings(
+        codex_bin=sys.executable,
+        key_dir=str(key_dir),
+        providers=(glm,),
+        default_provider="glm-ark",
+    )
+
+    assert resolve_provider_api_key(settings, provider=glm) == "ark-secret"
+    # key_slot override reads a different slot file for the same provider
+    write_private_text(key_dir / "glm-backup.key", "backup-secret")
+    assert resolve_provider_api_key(settings, provider=glm, key_slot="glm-backup") == "backup-secret"

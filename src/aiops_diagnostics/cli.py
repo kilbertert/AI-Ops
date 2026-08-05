@@ -8,7 +8,12 @@ from typing import Annotated
 import typer
 from rich.console import Console
 
-from aiops_diagnostics.agent_contracts import AgentDiagnosis, DiagnosisStatus, IncidentManifest
+from aiops_diagnostics.agent_contracts import (
+    AgentDiagnosis,
+    DiagnosisStatus,
+    IncidentManifest,
+    RunState,
+)
 from aiops_diagnostics.agent_engine import ProgressCallback
 from aiops_diagnostics.agent_runner import run_agent_diagnosis
 from aiops_diagnostics.agent_workspace import AgentWorkspace
@@ -19,6 +24,8 @@ from aiops_diagnostics.codex_runtime import (
     resolve_provider_api_key,
 )
 from aiops_diagnostics.config import (
+    AgentSettings,
+    ProviderConfig,
     Settings,
     canonical_provider_base_url,
     require_same_provider_base_url,
@@ -183,13 +190,19 @@ def _diagnose_agent(
     key_slot: str | None,
     as_json: bool,
     progress: bool,
+    provider: str | None = None,
 ) -> None:
     """Run the Codex-native, evidence-journaled read-only diagnosis."""
-    if key_slot:
-        settings.agent.key_slot = key_slot
+    try:
+        selected_provider = settings.agent.select_provider(provider)
+    except ValueError as exc:
+        console.print(f"[bold red]Codex 诊断中断:[/bold red] {exc}")
+        raise typer.Exit(code=2) from exc
+    effective_key_slot = key_slot or selected_provider.resolved_key_slot()
+    settings.agent.key_slot = effective_key_slot
     _validate_agent_settings(settings)
     try:
-        resolve_provider_api_key(settings.agent)
+        resolve_provider_api_key(settings.agent, provider=selected_provider, key_slot=effective_key_slot)
     except (AgentRuntimeError, ValueError, OSError) as exc:
         console.print(f"[bold red]Codex 诊断中断:[/bold red] {exc}")
         console.print(
@@ -206,8 +219,9 @@ def _diagnose_agent(
             run_root,
             manifest,
             fixture_path=fixture,
-            provider_base_url=canonical_provider_base_url(settings.agent.api_base_url),
-            key_slot=settings.agent.key_slot,
+            provider_base_url=canonical_provider_base_url(selected_provider.base_url),
+            provider=selected_provider.name,
+            key_slot=effective_key_slot,
         )
         resolved_fixture = workspace.resolve_fixture()
         result = _run_agent(
@@ -215,6 +229,8 @@ def _diagnose_agent(
             request,
             settings,
             resolved_fixture,
+            provider=selected_provider.name,
+            key_slot=effective_key_slot,
             progress_callback=_progress_callback(progress, as_json),
         )
     except (AgentRuntimeError, SourceError, ValueError, OSError) as exc:
@@ -271,21 +287,20 @@ def agent_resume(
     manifest = workspace.load_manifest()
     state = workspace.load_state()
     try:
-        settings.agent.api_base_url = require_same_provider_base_url(
-            settings.agent.api_base_url,
-            state.provider_base_url,
-        )
+        selected_provider = _resume_provider(settings.agent, state)
+        require_same_provider_base_url(selected_provider.base_url, state.provider_base_url)
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
-    settings.agent.key_slot = key_slot or state.key_slot
+    effective_key_slot = key_slot or state.key_slot
+    settings.agent.key_slot = effective_key_slot
     _validate_agent_settings(settings)
-    if settings.agent.key_slot != state.key_slot:
+    if effective_key_slot != state.key_slot:
         try:
-            resolve_provider_api_key(settings.agent)
+            resolve_provider_api_key(settings.agent, provider=selected_provider, key_slot=effective_key_slot)
         except (AgentRuntimeError, ValueError, OSError) as exc:
             console.print(f"[bold red]Codex runtime 无效:[/bold red] {exc}")
             raise typer.Exit(code=2) from exc
-        workspace.save_state(state.model_copy(update={"key_slot": settings.agent.key_slot}))
+        workspace.save_state(state.model_copy(update={"key_slot": effective_key_slot}))
     request = DiagnosticRequest(
         order_no=manifest.order_no,
         tenant_id=manifest.tenant_id,
@@ -299,6 +314,8 @@ def agent_resume(
             request,
             settings,
             fixture,
+            provider=selected_provider.name,
+            key_slot=effective_key_slot,
             progress_callback=_progress_callback(progress, as_json),
         )
     except (AgentRuntimeError, SourceError, ValueError, OSError) as exc:
@@ -313,14 +330,25 @@ def agent_doctor(
         str | None,
         typer.Option("--key-slot", help="检查指定 API 密钥槽"),
     ] = None,
+    provider: Annotated[
+        str | None,
+        typer.Option("--provider", help="检查指定 model provider"),
+    ] = None,
 ) -> None:
     """Verify the isolated Codex runtime without exposing authentication data."""
     settings = _load_settings()
-    if key_slot:
-        settings.agent.key_slot = key_slot
     try:
-        provider_key = resolve_provider_api_key(settings.agent)
-        runtime_home = prepare_runtime_home(settings.agent)
+        selected_provider = settings.agent.select_provider(provider)
+    except ValueError as exc:
+        console.print(f"[bold red]Codex runtime 无效:[/bold red] {exc}")
+        raise typer.Exit(code=2) from exc
+    effective_key_slot = key_slot or selected_provider.resolved_key_slot()
+    settings.agent.key_slot = effective_key_slot
+    try:
+        provider_key = resolve_provider_api_key(
+            settings.agent, provider=selected_provider, key_slot=effective_key_slot
+        )
+        runtime_home = prepare_runtime_home(settings.agent, provider=selected_provider)
     except (AgentRuntimeError, ValueError, OSError) as exc:
         console.print(f"[bold red]Codex runtime 无效:[/bold red] {exc}")
         raise typer.Exit(code=2) from exc
@@ -329,8 +357,11 @@ def agent_doctor(
             "ok": True,
             "codex_bin": str(Path(settings.agent.codex_bin).expanduser()),
             "runtime_home": str(runtime_home),
-            "base_url": settings.agent.api_base_url,
-            "key_slot": settings.agent.key_slot,
+            "provider": selected_provider.name,
+            "base_url": selected_provider.base_url,
+            "model": selected_provider.model,
+            "wire_api": selected_provider.wire_api,
+            "key_slot": effective_key_slot,
             "key_fingerprint": provider_key_fingerprint(provider_key),
             "permission_profile": "aiops-diagnostic",
             "network": "disabled for model-generated commands",
@@ -356,6 +387,10 @@ def diagnose(
         str | None,
         typer.Option("--key-slot", help="agent 模式选择同一 API base_url 下的密钥槽"),
     ] = None,
+    provider: Annotated[
+        str | None,
+        typer.Option("--provider", help="agent 模式选择 model provider，默认使用配置中的默认 provider"),
+    ] = None,
     as_json: Annotated[bool, typer.Option("--json", help="输出 JSON 报告或诊断合同")] = False,
     progress: Annotated[
         bool,
@@ -374,7 +409,7 @@ def diagnose(
         raise typer.BadParameter(str(exc)) from exc
     settings = _load_settings()
     if mode is DiagnoseMode.agent:
-        _diagnose_agent(request, settings, fixture, key_slot, as_json, progress)
+        _diagnose_agent(request, settings, fixture, key_slot, as_json, progress, provider)
     else:
         _diagnose_deterministic(request, settings, fixture, as_json)
 
@@ -451,6 +486,8 @@ def _run_agent(
     settings: Settings,
     fixture: Path | None,
     *,
+    provider: str | None = None,
+    key_slot: str | None = None,
     progress_callback: ProgressCallback | None = None,
 ) -> AgentDiagnosis:
     return run_agent_diagnosis(
@@ -458,6 +495,8 @@ def _run_agent(
         request,
         settings,
         fixture,
+        provider=provider,
+        key_slot=key_slot,
         progress_callback=progress_callback,
     )
 
@@ -522,3 +561,21 @@ def _validate_agent_settings(settings: Settings) -> None:
     except ValueError as exc:
         console.print(f"[bold red]Codex 配置无效:[/bold red] {exc}")
         raise typer.Exit(code=2) from exc
+
+
+def _resume_provider(agent_settings: AgentSettings, state: RunState) -> ProviderConfig:
+    """Select the provider a run was started on, preserving the redirect invariant.
+
+    Runs created before the provider field existed (``state.provider`` empty) are
+    matched against the registered providers by base_url; if none match, the
+    default provider is returned and the caller's base_url comparison rejects a
+    silent redirect to a different host.
+    """
+    if state.provider:
+        return agent_settings.select_provider(state.provider)
+    for candidate in agent_settings.providers:
+        if canonical_provider_base_url(candidate.base_url) == canonical_provider_base_url(
+            state.provider_base_url
+        ):
+            return candidate
+    return agent_settings.select_provider(None)

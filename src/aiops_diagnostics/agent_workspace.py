@@ -44,6 +44,7 @@ class AgentWorkspace:
         *,
         fixture_path: Path | None = None,
         provider_base_url: str = "",
+        provider: str = "",
         key_slot: str = "default",
     ) -> AgentWorkspace:
         timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
@@ -65,6 +66,7 @@ class AgentWorkspace:
                 fixture_path=staged_fixture,
                 fixture_sha256=fixture_sha256,
                 provider_base_url=provider_base_url,
+                provider=provider,
                 key_slot=key_slot,
             )
         )

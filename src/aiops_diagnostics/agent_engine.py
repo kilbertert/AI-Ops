@@ -21,7 +21,7 @@ from aiops_diagnostics.codex_runtime import (
     CodexSession,
     SDKCodexSession,
 )
-from aiops_diagnostics.config import AgentSettings
+from aiops_diagnostics.config import AgentSettings, ProviderConfig
 from aiops_diagnostics.diagnostic_tools import (
     TOOL_DESCRIPTIONS,
     DiagnosticToolExecutor,
@@ -29,7 +29,7 @@ from aiops_diagnostics.diagnostic_tools import (
 )
 from aiops_diagnostics.journal import EvidenceJournal
 
-SessionFactory = Callable[[AgentWorkspace, AgentSettings, str | None], CodexSession]
+SessionFactory = Callable[[AgentWorkspace, AgentSettings, ProviderConfig | None, str | None], CodexSession]
 ProgressCallback = Callable[[dict[str, Any]], None]
 
 
@@ -42,6 +42,7 @@ class AgentCoordinator:
         tools: DiagnosticToolExecutor,
         settings: AgentSettings,
         *,
+        provider: ProviderConfig | None = None,
         sensitive_values: Iterable[str] = (),
         session_factory: SessionFactory | None = None,
         progress_callback: ProgressCallback | None = None,
@@ -51,6 +52,7 @@ class AgentCoordinator:
         self.journal = journal
         self.tools = tools
         self.settings = settings
+        self._provider = provider
         self.validator = AgentResultValidator(
             manifest,
             journal,
@@ -86,7 +88,7 @@ class AgentCoordinator:
         session: CodexSession | None = None
         try:
             self._record_event({"type": "codex_session_starting"})
-            session = self.session_factory(self.workspace, self.settings, state.thread_id)
+            session = self.session_factory(self.workspace, self.settings, self._provider, state.thread_id)
             set_progress_callback = getattr(session, "set_progress_callback", None)
             if callable(set_progress_callback):
                 set_progress_callback(self.progress_callback)
@@ -251,6 +253,7 @@ otherwise return the final diagnosis with evidence citations.
 def _default_session_factory(
     workspace: AgentWorkspace,
     settings: AgentSettings,
+    provider: ProviderConfig | None,
     thread_id: str | None,
 ) -> CodexSession:
-    return SDKCodexSession(workspace, settings, thread_id=thread_id)
+    return SDKCodexSession(workspace, settings, provider=provider, thread_id=thread_id)

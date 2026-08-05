@@ -18,7 +18,7 @@ from openai_codex import ApprovalMode, Codex, CodexConfig
 
 from aiops_diagnostics.agent_contracts import agent_turn_schema
 from aiops_diagnostics.agent_workspace import AgentWorkspace
-from aiops_diagnostics.config import AgentSettings, canonical_provider_base_url
+from aiops_diagnostics.config import AgentSettings, ProviderConfig, canonical_provider_base_url
 from aiops_diagnostics.private_files import (
     PrivatePathError,
     ensure_private_directory,
@@ -32,7 +32,7 @@ PROVIDER_KEY_ENV = "AIOPS_CODEX_PROVIDER_KEY"
 
 RUNTIME_CONFIG_TEMPLATE = """web_search = "disabled"
 default_permissions = "aiops-diagnostic"
-model_provider = "aiops-api"
+model_provider = "{provider_name}"
 project_root_markers = []
 
 [analytics]
@@ -74,11 +74,11 @@ multi_agent = false
 [windows]
 sandbox = {windows_sandbox}
 
-[model_providers.aiops-api]
+[model_providers.{provider_name}]
 name = "AI-Ops pluggable API provider"
 base_url = {base_url}
 env_key = "AIOPS_CODEX_PROVIDER_KEY"
-wire_api = "responses"
+wire_api = "{wire_api}"
 request_max_retries = 3
 stream_max_retries = 3
 """
@@ -116,17 +116,19 @@ class SDKCodexSession:
         workspace: AgentWorkspace,
         settings: AgentSettings,
         *,
+        provider: ProviderConfig | None = None,
         thread_id: str | None = None,
     ) -> None:
         self.workspace = workspace
         self.settings = settings
+        self._provider = provider or settings.select_provider(None)
         self._progress_callback: Callable[[dict[str, Any]], None] | None = None
         provider_key = ""
         codex: Codex | None = None
         try:
-            provider_key = resolve_provider_api_key(settings)
+            provider_key = resolve_provider_api_key(settings, provider=self._provider)
             self._provider_key = provider_key
-            runtime_home = prepare_runtime_home(settings)
+            runtime_home = prepare_runtime_home(settings, provider=self._provider)
             launch_args = codex_launch_args(settings)
             config = CodexConfig(
                 launch_args_override=launch_args,
@@ -145,10 +147,10 @@ class SDKCodexSession:
                 "approval_mode": ApprovalMode.deny_all,
                 "cwd": str(workspace.path),
                 "developer_instructions": _developer_instructions(),
-                "model_provider": PROVIDER_ID,
+                "model_provider": self._provider.name,
             }
-            if settings.model:
-                kwargs["model"] = settings.model
+            if self._provider.model:
+                kwargs["model"] = self._provider.model
             if thread_id:
                 self._thread = self._codex.thread_resume(thread_id, **kwargs)
             else:
@@ -261,7 +263,8 @@ class SDKCodexSession:
         self.close()
 
 
-def prepare_runtime_home(settings: AgentSettings) -> Path:
+def prepare_runtime_home(settings: AgentSettings, *, provider: ProviderConfig | None = None) -> Path:
+    selected = provider or settings.select_provider(None)
     settings.validate()
     runtime_home = Path(settings.codex_runtime_home).expanduser().resolve()
     try:
@@ -272,17 +275,20 @@ def prepare_runtime_home(settings: AgentSettings) -> Path:
     if auth_link.exists() or auth_link.is_symlink():
         raise AgentRuntimeError("API provider runtime home 不得包含 auth.json")
     try:
-        write_private_text(runtime_home / "config.toml", runtime_config(settings))
+        write_private_text(runtime_home / "config.toml", runtime_config(settings, provider=selected))
     except PrivatePathError as exc:
         raise AgentRuntimeError(str(exc)) from exc
     return runtime_home
 
 
-def runtime_config(settings: AgentSettings) -> str:
-    base_url = canonical_provider_base_url(settings.api_base_url)
+def runtime_config(settings: AgentSettings, *, provider: ProviderConfig | None = None) -> str:
+    selected = provider or settings.select_provider(None)
+    base_url = canonical_provider_base_url(selected.base_url)
     codex_bin_path = json.dumps(str(Path(settings.codex_bin).expanduser().resolve()), ensure_ascii=False)
     return RUNTIME_CONFIG_TEMPLATE.format(
+        provider_name=selected.name,
         base_url=json.dumps(base_url, ensure_ascii=False),
+        wire_api=selected.wire_api,
         codex_bin_path=codex_bin_path,
         windows_sandbox=json.dumps(settings.windows_sandbox),
     )
@@ -301,17 +307,25 @@ def codex_launch_args(settings: AgentSettings) -> tuple[str, ...]:
     )
 
 
-def resolve_provider_api_key(settings: AgentSettings) -> str:
+def resolve_provider_api_key(
+    settings: AgentSettings,
+    *,
+    provider: ProviderConfig | None = None,
+    key_slot: str | None = None,
+) -> str:
+    selected = provider or settings.select_provider(None)
     settings.validate()
-    value = os.getenv(settings.api_key_env, "").strip()
-    if value:
-        return value
+    if selected.api_key_env:
+        value = os.getenv(selected.api_key_env, "").strip()
+        if value:
+            return value
     if settings.api_key_file:
         configured_path = Path(settings.api_key_file).expanduser()
         if configured_path.is_symlink():
             raise AgentRuntimeError(f"Codex API key 文件不得是符号链接: {configured_path}")
         key_path = configured_path.resolve()
     else:
+        effective_slot = key_slot or selected.resolved_key_slot()
         configured_dir = Path(settings.key_dir).expanduser()
         if configured_dir.is_symlink():
             raise AgentRuntimeError(f"Codex key slot 目录不得是符号链接: {configured_dir}")
@@ -320,7 +334,7 @@ def resolve_provider_api_key(settings: AgentSettings) -> str:
             validate_private_directory(key_dir)
         except PrivatePathError as exc:
             raise AgentRuntimeError(str(exc)) from exc
-        key_path = key_dir / f"{settings.key_slot}.key"
+        key_path = key_dir / f"{effective_slot}.key"
     if key_path.is_symlink() or not key_path.is_file():
         raise AgentRuntimeError(
             f"Codex API key 不存在: slot={settings.key_slot}; 请设置 {settings.api_key_env} 或受限 key 文件"

@@ -59,6 +59,7 @@ def test_runs_and_events_are_isolated_by_workspace(tmp_path: Path) -> None:
         order_no="ORDER-1",
         tenant_id=None,
         key_slot="primary",
+        provider=None,
         fixture_name=None,
         created_by_device=first.device.device_id,
     )
@@ -91,6 +92,7 @@ def test_run_problem_is_redacted_before_gateway_persistence(tmp_path: Path) -> N
         order_no="ORDER-1",
         tenant_id=None,
         key_slot="primary",
+        provider=None,
         fixture_name=None,
         created_by_device=enrolled.device.device_id,
     )
@@ -109,6 +111,7 @@ def test_run_error_message_is_persisted_for_operator_visibility(tmp_path: Path) 
         order_no="ORDER-1",
         tenant_id=None,
         key_slot="primary",
+        provider=None,
         fixture_name=None,
         created_by_device=enrolled.device.device_id,
     )
@@ -134,3 +137,42 @@ def test_public_error_message_is_redacted_and_bounded() -> None:
 def _enroll(store: GatewayStore, workspace_id: str, device_name: str):
     code = store.issue_enrollment(workspace_id=workspace_id)
     return store.redeem_enrollment(code, device_name=device_name, platform="test")
+
+
+def test_run_persists_provider_for_audit_visibility(tmp_path: Path) -> None:
+    store = GatewayStore(tmp_path / "gateway.db")
+    enrolled = _enroll(store, "workspace-a", "device-a")
+    store.create_run(
+        run_id="run-provider",
+        workspace_id=enrolled.device.workspace_id,
+        incident_id="incident-provider",
+        problem="amount mismatch",
+        order_no="ORDER-1",
+        tenant_id=None,
+        key_slot="glm-ark",
+        provider="glm-ark",
+        fixture_name=None,
+        created_by_device=enrolled.device.device_id,
+    )
+    stored = store.get_run("run-provider", enrolled.device.workspace_id)
+    assert stored["provider"] == "glm-ark"
+    assert stored["key_slot"] == "glm-ark"
+
+
+def test_legacy_run_without_provider_returns_null(tmp_path: Path) -> None:
+    store = GatewayStore(tmp_path / "gateway.db")
+    enrolled = _enroll(store, "workspace-a", "device-a")
+    store.create_run(
+        run_id="run-legacy",
+        workspace_id=enrolled.device.workspace_id,
+        incident_id="incident-legacy",
+        problem="amount mismatch",
+        order_no="ORDER-1",
+        tenant_id=None,
+        key_slot="primary",
+        provider=None,
+        fixture_name=None,
+        created_by_device=enrolled.device.device_id,
+    )
+    stored = store.get_run("run-legacy", enrolled.device.workspace_id)
+    assert stored["provider"] is None

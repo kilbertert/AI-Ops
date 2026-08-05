@@ -18,7 +18,7 @@ class _FakeRuntime:
         self.store = store
         self.counter = 0
 
-    def start_run(self, device, *, problem, order_no, tenant_id, key_slot, fixture_name):
+    def start_run(self, device, *, problem, order_no, tenant_id, key_slot, provider, fixture_name):
         self.counter += 1
         run_id = f"run-fake-{self.counter}"
         run = self.store.create_run(
@@ -29,6 +29,7 @@ class _FakeRuntime:
             order_no=order_no or "ORDER-UNKNOWN",
             tenant_id=tenant_id,
             key_slot=key_slot or "primary",
+            provider=provider,
             fixture_name=fixture_name,
             created_by_device=device.device_id,
         )
