@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import http.client
 import json
+import random
 import time
 import urllib.error
 import urllib.request
@@ -27,7 +29,10 @@ class GatewayClient:
         self.base_url = canonical_gateway_url(base_url)
         self.token = token
         self.timeout = timeout
-        self.max_retries = max_retries
+        # Retries only apply to idempotent GET requests. Clamp to a non-negative
+        # budget so a negative value means "one attempt, no retries" rather than
+        # an empty loop that leaves the response unset.
+        self.max_retries = max(0, max_retries)
 
     def health(self) -> dict[str, Any]:
         return self._request("GET", "/health", authenticated=False)
@@ -65,13 +70,21 @@ class GatewayClient:
         payload = self._request("GET", f"/v1/runs?limit={limit}")
         return list(payload.get("runs", []))
 
-    def get_run(self, run_id: str) -> dict[str, Any]:
-        return self._request("GET", f"/v1/runs/{_path_part(run_id)}")
+    def get_run(self, run_id: str, *, deadline: float | None = None) -> dict[str, Any]:
+        return self._request("GET", f"/v1/runs/{_path_part(run_id)}", deadline=deadline)
 
-    def list_events(self, run_id: str, *, after: int = 0, limit: int = 200) -> dict[str, Any]:
+    def list_events(
+        self,
+        run_id: str,
+        *,
+        after: int = 0,
+        limit: int = 200,
+        deadline: float | None = None,
+    ) -> dict[str, Any]:
         return self._request(
             "GET",
             f"/v1/runs/{_path_part(run_id)}/events?after={after}&limit={limit}",
+            deadline=deadline,
         )
 
     def list_evidence(self, run_id: str) -> dict[str, Any]:
@@ -88,12 +101,12 @@ class GatewayClient:
         deadline = time.monotonic() + timeout_seconds
         sequence = 0
         while time.monotonic() < deadline:
-            event_payload = self.list_events(run_id, after=sequence)
+            event_payload = self.list_events(run_id, after=sequence, deadline=deadline)
             for event in event_payload.get("events", []):
                 sequence = max(sequence, int(event.get("sequence", sequence)))
                 if on_event:
                     on_event(event)
-            run = self.get_run(run_id)
+            run = self.get_run(run_id, deadline=deadline)
             if run.get("status") in {"diagnosed", "inconclusive", "blocked", "interrupted", "failed"}:
                 return run
             time.sleep(poll_seconds)
@@ -106,6 +119,7 @@ class GatewayClient:
         payload: dict[str, Any] | None = None,
         *,
         authenticated: bool = True,
+        deadline: float | None = None,
     ) -> dict[str, Any]:
         body = None
         headers = {"Accept": "application/json"}
@@ -122,13 +136,18 @@ class GatewayClient:
             headers=headers,
             method=method,
         )
-        # Retry transient connection errors (Tailscale/VPN blips, momentary
-        # unreachable Gateway). HTTP errors (404/401/5xx) are not retried: they
-        # reflect a deliberate Gateway response, not a transport failure. A run
-        # keeps executing on the server, so retrying a poll is always safe.
+        # Retry only idempotent GET requests for transient connection errors
+        # (Tailscale/VPN blips, momentary unreachable Gateway). POST enroll and
+        # create_run are non-idempotent: the Gateway acts before responding, so a
+        # retry after a dropped connection could redeem a single-use enrollment
+        # code twice or create a duplicate diagnostic run. HTTP errors
+        # (404/401/5xx) are never retried: they reflect a deliberate Gateway
+        # response, not a transport failure. When polling, wait_for_run forwards
+        # its deadline so a slow connection cannot retry far past the timeout.
+        attempts = self.max_retries + 1 if method == "GET" else 1
         last_connection_error: Exception | None = None
         raw: str | None = None
-        for attempt in range(self.max_retries + 1):
+        for attempt in range(attempts):
             try:
                 with urllib.request.urlopen(request, timeout=self.timeout) as response:
                     raw = response.read().decode("utf-8")
@@ -137,11 +156,15 @@ class GatewayClient:
             except urllib.error.HTTPError as exc:
                 detail = _error_detail(exc)
                 raise GatewayClientError(f"gateway HTTP {exc.code}: {detail}") from exc
-            except (urllib.error.URLError, TimeoutError) as exc:
+            except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.IncompleteRead) as exc:
                 last_connection_error = exc
-                if attempt < self.max_retries:
-                    time.sleep(min(2**attempt, 8))
-        if last_connection_error is not None:
+                past_deadline = deadline is not None and time.monotonic() >= deadline
+                if attempt + 1 >= attempts or past_deadline:
+                    break
+                # Exponential backoff with jitter so simultaneous clients do not
+                # retry in lockstep after a shared gateway restart.
+                time.sleep(min(2**attempt, 8) + random.uniform(0, 1))
+        if raw is None:
             raise GatewayClientError(
                 f"gateway connection failed: {last_connection_error.__class__.__name__}"
             ) from last_connection_error
