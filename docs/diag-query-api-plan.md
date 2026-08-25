@@ -218,6 +218,8 @@ AI-Ops (sources.py 增加 HttpSources,镜像现有 Protocol)
 
 约束:最多 20 条,按 `startTime DESC`;`order_no` 为空时需提供 `order_id`,二者必居其一。
 
+> 关联键语义(已确认):`orderId` = 充电订单主键(`ChOrderInfo.id`,雪花 ID),`orderNo` = 充电订单业务编号(`ChOrderInfo.orderNo`),二者指向**同一**充电订单。因此 `order_no` 参数查 `WHERE order_no=?`,`order_id` 参数查 `WHERE orderId=?`。证据:`OccupyOrderTxDataHandler.java:109-110`(`setOrderId(chOrderInfo.getId())` / `setOrderNo(chOrderInfo.getOrderNo())`)。
+
 ### 6.5 `GET /diag/redis-stream` —— 同步队列检查
 
 对应 `redis_sync`。
@@ -362,7 +364,7 @@ Feature: 诊断查询接口
 | 1 | tsdata 密钥与 Spring 配置的一致性 | 若独立密钥,轮换需双处管理 | 推荐共享 `internal-token` 密钥 |
 | 2 | `@SysLog` 无登录态适配 | 审计"操作人"缺省 | 审计切面取鉴权调用方标识 `internal:AIOps` |
 | 3 | 充电服务 `GatewayCheckProperties` 与 `/diag/*` 路径关系 | 拦截器行为不确定性 | 控制器自校验令牌为权威门槛,不依赖拦截器 |
-| 4 | 占位费订单关联键确认 | `orderId` 与 `order_no` 是否一致可反查 | 实现前确认 `ChOccupyOrderInfo` 两字段映射(快照中两者均存在) |
+| 4 | 占位费订单关联键确认 | 已确认:`orderId`=充电订单主键(`ChOrderInfo.id`),`orderNo`=充电订单业务编号(`ChOrderInfo.orderNo`),指向同一充电订单 | 已解决(`OccupyOrderTxDataHandler.java:109-110`) |
 | 5 | 生产 Java 仓库在远端 | 本地无法直接实现/验证 Java 改动 | 本文档为交付物;实现走团队仓库 |
 | 6 | 默认 secret `qushiyun-internal-secret-2024` | 若已被泄露,内部令牌形同虚设 | 上线即轮换,从配置下发新 secret |
 | 7 | Spring Security OAuth2 资源服务器被注释 | 若平台后续强推 OAuth2,方案需调整 | 本次不启用;留作演进选项,不阻塞 |
