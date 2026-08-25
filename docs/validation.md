@@ -158,6 +158,14 @@ SSH 调试通道直接传入中文字面量会受远程代码页影响；本轮�
 
 边界：该订单号尚未连接真实故障案例并完成工程师结论比对；本节只记录客户端操作问题和错误追溯修复，不构成业务准确率验收。
 
+## AFK 工作流脚手架验证（2026-08-26）
+
+纯工具链变更，不触碰诊断逻辑、打包产物或安全边界：
+
+- 自动化检查：`pnpm install`（pnpm 11.15.1）通过，esbuild 的 build-script 门禁在 `pnpm-workspace.yaml` 的 `allowBuilds` 下通过；`pnpm afk` 无参数返回预期用法守卫、`pnpm ralph` 可加载并启动，证明 tsx + @ai-hero/sandcastle 依赖链可用。
+- 镜像内容核验：`docker run sandcastle:ai-ops` 确认 python 3.11.2、uv 0.12.5、gh、claude-code、codex 0.146.1 就位，与 python 版 Dockerfile 一致（避免 agent 无法在容器内自检而误报 `<promise>BLOCKED</promise>`）。
+- 未完成业务验收：AFK 是开发工作流工具，与订单诊断的业务准确率验收无关；真实故障案例验收仍按「业务验收待办」执行，不因脚手架合入而变更。
+
 ## 业务验收待办
 
 生产业务验收仍需要每条支持路径至少三笔由工程师确认结论的真实故障：
