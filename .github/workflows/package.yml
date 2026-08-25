@@ -45,3 +45,4 @@ jobs:
           name: aiops-diagnostics-${{ matrix.artifact }}
           path: dist/aiops-diagnostics-*.zip
           if-no-files-found: error
+          retention-days: 7
