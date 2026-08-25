@@ -13,6 +13,7 @@ build/
 *.egg-info/
 reports/
 .aiops/
+node_modules/
 
 # Read-only production source snapshot used to derive diagnostic rules.
 backend-v2-domestic/
