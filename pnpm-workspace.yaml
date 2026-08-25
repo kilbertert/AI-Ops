@@ -1,0 +1,5 @@
+# pnpm 11 blocks unreviewed dependency build scripts (strictDepBuilds).
+# esbuild's postinstall is required by tsx; allow it so `pnpm install`
+# (auto-run by the AFK runner's dependency preflight) succeeds.
+allowBuilds:
+  esbuild: true
