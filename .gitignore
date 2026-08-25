@@ -18,3 +18,6 @@ node_modules/
 # Read-only production source snapshot used to derive diagnostic rules.
 backend-v2-domestic/
 backend-v2-domestic.zip
+
+# AFK runner (package.json) dependencies
+node_modules/

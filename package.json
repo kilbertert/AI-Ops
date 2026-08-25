@@ -1,0 +1,17 @@
+{
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "afk": "tsx .sandcastle/main.ts",
+    "ralph": "tsx .sandcastle/planner.ts",
+    "prd:to-issues": "tsx .sandcastle/to-issues-prd/to-issues-prd.ts"
+  },
+  "dependencies": {
+    "tsx": "^4.20.0"
+  },
+  "devDependencies": {
+    "@ai-hero/sandcastle": "^0.12.0",
+    "@types/node": "^24.0.0"
+  },
+  "name": "AI-Ops"
+}
