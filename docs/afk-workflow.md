@@ -26,8 +26,10 @@ idea
 2. **Spec** — `/to-spec`: turn the idea into a PRD (a GitHub **parent issue**),
    concrete enough for a sub-issue agent to implement without re-deriving.
 3. **Tickets** — `/to-tickets`: break the PRD into flat, execution-ordered
-   **native sub-issues**. Label the parent `agent:to-issues` (or run
-   `pnpm prd:to-issues -- <PRD>`).
+   **native sub-issues**. Use `ready-for-agent` on the sub-issues you want the
+   planner (`pnpm ralph`) to pick up. (The legacy `agent:to-issues` parent
+   label is deprecated; sub-issues are tagged `agent:implement` directly and
+   dispatched explicitly — see the table below.)
 4. **Implement** — label a `ready-for-agent` issue `agent:implement` (self-hosted
    runner → branch → draft PR → `agent:review`); or `pnpm ralph` (planner loop);
    or `pnpm afk -- <issue>` (controlled single issue, host delivers).
@@ -48,10 +50,9 @@ trigger — nothing implements your issues until you run an engine.
 Rules:
 - One issue, one engine: label `ready-for-agent` for the planner; or run
   `pnpm afk -- <issue>` for a single controlled issue (no label).
-- Split a PRD by labeling the parent `agent:to-issues`, then `ready-for-agent`
-  the sub-issues you want the planner to implement.
 - `agent:implement` never auto-runs; dispatch it explicitly if you want the PR
-  flow.
+  flow. (Legacy `agent:to-issues` parent label no longer auto-spawns
+  implementers — it is kept for search-history only.)
 
 
 ## Rules
