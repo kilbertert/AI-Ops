@@ -167,8 +167,8 @@ class RedisSettings:
     password: str = ""
 
 
-def _validate_token_expire_seconds(value: int | None) -> None:
-    if value is not None and not 60 <= value <= 600:
+def _validate_token_expire_seconds(value: int) -> None:
+    if not 60 <= value <= 600:
         raise ValueError("Diag API 令牌有效期必须在 60-600 秒之间")
 
 

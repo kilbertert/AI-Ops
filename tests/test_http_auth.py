@@ -45,6 +45,32 @@ def test_validate_internal_token_rejects_expired_timestamps() -> None:
     assert not validate_internal_token(token, timestamp, "shared-secret", now=timestamp - 301)
 
 
+def test_validate_internal_token_accepts_clock_window_boundaries() -> None:
+    timestamp = 1760000000
+    token = build_internal_token("shared-secret", timestamp)
+    assert validate_internal_token(token, timestamp, "shared-secret", now=timestamp + 300)
+    assert validate_internal_token(token, timestamp, "shared-secret", now=timestamp - 300)
+
+
+def test_validate_internal_token_rejects_invalid_clock_and_expiry() -> None:
+    timestamp = 1760000000
+    token = build_internal_token("shared-secret", timestamp)
+
+    assert not validate_internal_token(token, "not-a-timestamp", "shared-secret", now=timestamp)
+    assert not validate_internal_token(token, timestamp, "shared-secret", now="not-a-timestamp")
+    assert not validate_internal_token(token, timestamp, "shared-secret", expire_seconds=0, now=timestamp)
+    assert not validate_internal_token(token, timestamp, "shared-secret", expire_seconds=-1, now=timestamp)
+
+
+def test_validate_internal_token_rejects_missing_secrets_without_raising() -> None:
+    timestamp = 1760000000
+    token = build_internal_token("shared-secret", timestamp)
+
+    assert not validate_internal_token(token, timestamp, None, now=timestamp)
+    assert not validate_internal_token(token, timestamp, (), now=timestamp)
+    assert not validate_internal_token(token, timestamp, "", now=timestamp)
+
+
 def test_validate_internal_token_supports_dual_key_rotation() -> None:
     timestamp = 1760000000
     old_token = build_internal_token("old-secret", timestamp)

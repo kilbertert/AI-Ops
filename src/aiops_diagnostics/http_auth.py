@@ -17,8 +17,16 @@ def _coerce_timestamp(value: str | int | None) -> int | None:
         return None
 
 
-def _coerce_secrets(secrets: str | Iterable[str]) -> tuple[str, ...]:
-    candidates = (secrets,) if isinstance(secrets, str) else tuple(secrets)
+def _coerce_secrets(secrets: str | Iterable[str] | None) -> tuple[str, ...]:
+    if secrets is None:
+        return ()
+    if isinstance(secrets, str):
+        candidates = (secrets,)
+    else:
+        try:
+            candidates = tuple(secrets)
+        except TypeError:
+            return ()
     if not candidates or any(not isinstance(secret, str) or not secret for secret in candidates):
         return ()
     return candidates
@@ -56,7 +64,7 @@ def build_internal_token_headers(
 def validate_internal_token(
     token: str | None,
     timestamp: str | int | None,
-    secrets: str | Iterable[str],
+    secrets: str | Iterable[str] | None,
     *,
     expire_seconds: int = DEFAULT_INTERNAL_TOKEN_EXPIRE_SECONDS,
     now: str | int | None = None,
@@ -64,8 +72,9 @@ def validate_internal_token(
     """Validate a platform internal token against one or more configured secrets.
 
     ``secrets`` may contain both the new and the previous key during rotation;
-    a token signed by any candidate is accepted. The timestamp must be within
-    ``expire_seconds`` of ``now``, mirroring ``InternalTokenManager``'s window.
+    a token signed by any candidate is accepted. Missing or empty secrets fail
+    closed. The timestamp must be within ``expire_seconds`` of ``now``,
+    mirroring ``InternalTokenManager``'s window.
     """
     request_timestamp = _coerce_timestamp(timestamp)
     now_timestamp = _coerce_timestamp(now if now is not None else int(time.time()))

@@ -223,6 +223,20 @@ def test_http_settings_new_env_names_override_legacy_names(monkeypatch) -> None:
     assert settings.http.timeout_seconds == 12
 
 
+def test_http_settings_legacy_env_names_still_work(monkeypatch) -> None:
+    monkeypatch.setenv("AIOPS_DIAG_API_BASE_URL", "https://legacy.example.test")
+    monkeypatch.setenv("AIOPS_DIAG_API_TOKEN_SECRET", "legacy-secret")
+    monkeypatch.setenv("AIOPS_DIAG_API_TOKEN_EXPIRE_SECONDS", "180")
+    monkeypatch.setenv("AIOPS_DIAG_API_TIMEOUT_SECONDS", "12")
+
+    settings = Settings.from_env()
+
+    assert settings.http.base_url == "https://legacy.example.test"
+    assert settings.http.internal_token.secret == "legacy-secret"
+    assert settings.http.internal_token.expire_seconds == 180
+    assert settings.http.timeout_seconds == 12
+
+
 def test_http_settings_token_expire_setter_still_validates() -> None:
     settings = Settings.from_env()
 
