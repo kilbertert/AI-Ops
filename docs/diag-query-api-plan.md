@@ -1,7 +1,7 @@
 # 充电业务诊断查询接口方案(需求 + 技术设计)
 
-- 状态:Draft(待评审)
-- 日期:2026-08-25
+- 状态:已锁定(D 方案,2026-08-27);TDengine 段暂留直连,待 tsdata 补洞后回收
+- 日期:2026-08-25(初稿);2026-08-27(D 方案锁定同步)
 - 文档分支:`docs/diag-query-api-plan`
 - 范围所有者:AI-Ops(调用方)/ 充电桩 Java 服务(宿主)
 - 实现提示:生产 Java 仓库在远端(124.243.178.156),本地 `backend-v2-domestic/` 是 gitignored 只读快照,仅供引用;本文档描述的 Java 侧改动需在团队仓库落地。
@@ -11,6 +11,8 @@
 ## 1. 背景与目标
 
 AI-Ops(充电订单只读诊断运行时)目前持有生产库凭据,直连 MySQL `cloud_charging_pile`、TDengine `iot`、Redis 完成充电订单、设备报文、过程时序的排查查询。直查库带来三个问题:凭据散落、无鉴权通道(tsdata)、无审计。
+
+> **方案状态**:本方案最终采用 D 方案(2026-08-27 锁定),TDengine 段暂留直连,Java 侧不动,tsdata 侧不动。
 
 本次目标:把这些查询正式化为**走 Java 平台现有鉴权体系的受控接口**,收回 AI-Ops 的生产库凭据,使数据出口受控、可审计。
 
@@ -71,9 +73,9 @@ tsdata 的 `/tdadmin/data/query` 是表名透传 + 动态 SQL(`QueryRequest.buil
 
 ## 3. 范围
 
-**进**:充电订单、原始报文、过程时序、占位费订单、Redis 同步队列、设备信息 6 类只读查询接口;tsdata 补鉴权;AI-Ops 切流量 + 收凭据。
+**进**:充电订单(含计费模板快照)、设备信息、Redis 同步队列、占位费订单 4 类只读查询接口;AI-Ops 切流量 + 分阶段收凭据。
 
-**不进**:`iot_device_log`;写操作;通用表透传查询;OAuth2 化;对外部开放。
+**不进(本轮)**:TDengine 段两个查询方法(`/diag/comm-message` 原始报文、`/diag/gun-property` 过程时序)暂不进,等 tsdata 补洞后追加;`iot_device_log`;写操作;通用表透传查询;OAuth2 化;对外部开放。
 
 ---
 
@@ -95,6 +97,8 @@ AI-Ops (sources.py 增加 HttpSources,镜像现有 Protocol)
        ▼
   R<T> 统一响应, 审计日志(@SysLog 适配无登录态, §8)
 ```
+
+> **本轮边界**:上图 TDengine 分支(`charging-pile_comm` / `charging-gun_property` 经 tsdata)是 Phase 3b 目标;本轮 4 个 `/diag/*` 接口只覆盖 MySQL / Redis 查询,TDengine 段继续由 AI-Ops 直连(§3、§10)。
 
 ### 4.2 宿主决策
 
@@ -178,6 +182,8 @@ AI-Ops (sources.py 增加 HttpSources,镜像现有 Protocol)
 
 对应 `comm_messages`。
 
+> **暂不进本轮**:TDengine 段暂留直连,本接口等 tsdata 补洞后由 Java 侧追加(§3、§10 Phase 3b)。
+
 | 参数 | 必填 | 说明 |
 |---|---|---|
 | `device` | 是 | 设备标识(超级表 tag) |
@@ -194,6 +200,8 @@ AI-Ops (sources.py 增加 HttpSources,镜像现有 Protocol)
 ### 6.3 `GET /diag/gun-property` —— 充电过程时序
 
 对应 `gun_timeseries`。
+
+> **暂不进本轮**:TDengine 段暂留直连,本接口等 tsdata 补洞后由 Java 侧追加(§3、§10 Phase 3b)。
 
 | 参数 | 必填 | 说明 |
 |---|---|---|
@@ -279,6 +287,8 @@ AI-Ops (sources.py 增加 HttpSources,镜像现有 Protocol)
 
 ## 10. 收口 / 迁移计划
 
+本节按 D 方案改写为分阶段收凭据:**2/3 凭据 → 1/3 凭据 → 0/3 凭据**。凭据删除动作由后续收口任务执行,本 PR 只同步方案文档。
+
 ### Phase 1 —— 接口实现与自测(充电桩服务 + tsdata)
 
 - 充电桩服务:`DiagQueryController` + 令牌校验 + 审计切面;tsdata 补令牌校验
@@ -291,13 +301,21 @@ AI-Ops (sources.py 增加 HttpSources,镜像现有 Protocol)
 - 用三份 fixture(`examples/fixtures/`:ykc_amount_mismatch / ocpp_consistent / missing_tx_data)对**直连源 vs HTTP 源**回放比对,输出一致
 - 验收:§11.3 通过
 
-### Phase 3 —— 收凭据
+### Phase 3a(本 PR 后删 MySQL+Redis 凭据)
 
-- 删除 `production.env` 中 MySQL / TDengine / Redis 凭据及 SSH 隧道直连配置;`sources.py` 移除直连代码路径(或经开关彻底禁用)
-- `doctor()` 断言:三库不再可直连、无直连凭据残留
-- 验收:§11.4 通过;`aiops-gateway` 功能回归(诊断运行不受影响)
+- 删除 `production.env` 中 MySQL / Redis 凭据及对应直连配置;TDengine 凭据与 SSH 隧道直连配置暂时保留。
+- `sources.py` 移除 MySQL / Redis 直连代码路径(或经开关彻底禁用),TDengine 直连路径继续保留。
+- `doctor()` 分类断言:HTTP 段与 TDengine 直连段可用,MySQL / Redis 已退役或未配置。
+- 验收:Phase 3a 完成后持有 **1/3 凭据**(仅 TDengine);`aiops-gateway` 功能回归不受影响。
 
-> **回滚预案**:Phase 3 保留切换前凭据备份(仓库外);异常时恢复直连源配置,逐条回滚。
+### Phase 3b(待 tsdata 补洞后删 TDengine 凭据)
+
+- 前置条件:tsdata 真正补完令牌校验,且充电桩 Java 服务实装 `/diag/comm-message` `/diag/gun-property`。
+- 删除 `production.env` 中 TDengine 凭据及 SSH 隧道直连配置;`sources.py` 移除 TDengine 直连代码路径。
+- `doctor()` 断言:三库不再可直连、无直连凭据残留。
+- 验收:Phase 3b 完成后持有 **0/3 凭据**;`aiops-gateway` 功能回归不受影响。
+
+> **回滚预案**:Phase 3a 保留删除前 MySQL / Redis 凭据备份(仓库外);Phase 3b 保留 TDengine 凭据备份,异常时逐段回滚。
 
 ---
 
@@ -352,7 +370,8 @@ Feature: 诊断查询接口
 
 ### 11.4 收口
 
-- `production.env` 无三库凭据;`doctor()` 直连断言失败即"已收口"
+- **Phase 3a**:`production.env` 无 MySQL / Redis 凭据;`doctor()` 断言 HTTP 段与 TDengine 直连段可用,MySQL / Redis 已退役或未配置。
+- **Phase 3b**:`production.env` 无三库凭据;`doctor()` 直连断言失败即"已收口"。
 - 审计日志中出现新增接口调用记录(调用方、参数、结果)
 
 ---
@@ -368,6 +387,8 @@ Feature: 诊断查询接口
 | 5 | 生产 Java 仓库在远端 | 本地无法直接实现/验证 Java 改动 | 本文档为交付物;实现走团队仓库 |
 | 6 | 默认 secret `qushiyun-internal-secret-2024` | 若已被泄露,内部令牌形同虚设 | 上线即轮换,从配置下发新 secret |
 | 7 | Spring Security OAuth2 资源服务器被注释 | 若平台后续强推 OAuth2,方案需调整 | 本次不启用;留作演进选项,不阻塞 |
+| 8 | TDengine 段仍直连 | 当前生产环境 AI-Ops 仍持有 TDengine 凭据,直到 Phase 3b 完成;tsdata 真正补洞之前 TDengine 段仍直连 | Phase 3a 只删 MySQL+Redis 凭据;Phase 3b 完成后才删 TDengine 凭据 |
+| 9 | D 方案不解决 tsdata 自身访问控制 | D 方案不解决 tsdata 自身被任意人访问的问题,tsdata 的无鉴权访问通道仍未关闭 | tsdata 保持内网隔离与现有运维限制;补洞后作为 Phase 3b 前置条件 |
 
 ---
 

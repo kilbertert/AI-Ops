@@ -198,6 +198,15 @@ SSH 调试通道直接传入中文字面量会受远程代码页影响；本轮�
 - 任务约定 `uv sync --extra dev` 在本仓库失败，因 dev 依赖声明于 `[dependency-groups]`，实际执行等价命令 `uv sync --group dev`；未跳过检查。
 
 未完成业务验收：本分支没有连接真实 `/diag/*` 服务或生产网络回放，2 路 TDengine 查询仍为直连；不据此宣称业务查询准确率已经验收。
+## 方案文档 / AFK 工作流与 D 方案同步（2026-08-27）
+
+对应 issue #52，纯文档变更，不改变运行时行为、生产凭据或用户入口：
+
+- `docs/diag-query-api-plan.md` 已标注 D 方案为“已锁定”，并把收口计划从一次性删三库凭据改为分阶段 `2/3 → 1/3 → 0/3`；TDengine 段两个查询方法明确标记为“暂不进，等 tsdata 补洞后追加”，并在 §4 架构图、§6.2/6.3 接口和 §11.4 收口验收中保持一致。
+- 新建 `docs/afk-cutover/decisions.md`，把团队记忆 `mem-20260827-ranlei-005` 明确标注为“候选期，待人工批准”，不把候选记忆写成正式决策结论。
+- `docs/afk-workflow.md` 的 `ready-for-agent → dispatch-only` 文案已由 main 上的 PR #48 落地，本里程碑只确认同步，未再次修改该文件。
+- 自动化验证：任务约定的 `uv sync --extra dev` 在本仓库因 `pyproject.toml` 无 `optional-dependencies.extra=dev` 而失败，按仓库既有约束改用等价命令 `uv sync --group dev`；合并后 `uv run pytest` 全套 **258 项通过**、`uv run ruff check` 通过、`git diff --check` 通过。
+- 未完成业务验收：本里程碑没有真实 tsdata 补洞、没有生产凭据删除、也没有生产只读回放；不据此宣称 D 方案已经完成数据出口收敛。
 
 ## 业务验收待办
 
