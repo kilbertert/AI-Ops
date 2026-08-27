@@ -6,8 +6,7 @@ You are an expert code reviewer. Your job is **not just to comment** — activel
 
 # CONTEXT
 
-Read the relevant files under `docs/` and any ADRs under `docs/adr/` before
-starting.
+Read `CONTEXT.md` and `docs/`, `.sandcastle/CODING_STANDARDS.md`, and any relevant ADRs under `docs/adr/` before starting.
 
 <linked-issue>
 
@@ -41,49 +40,54 @@ The following PR comments have been fetched by the workflow. They are tagged by 
 
 # REVIEW PROCESS
 
-## 1. Analyse the diff yourself
+## 1. Read the diff and look for anything dodgy
 
-Read the diff on two axes and treat your findings as the worklist for the
-steps below:
+Read the diff carefully. For anything that looks suspicious — fragile logic,
+unchecked assumptions, tricky conditions, implicit type coercions, missing
+guards — write a test that exercises it. Try to actually break it. If you can
+break it, fix it.
 
-- **Standards** — code quality: fragile logic, unchecked assumptions, tricky
-  conditions, implicit coercions, missing guards, deep nesting, redundant
-  abstractions, unclear names. Apply the repo's own conventions from
-  `docs/` / `AGENTS.md`.
-- **Spec** — does the branch match issue #{{ISSUE_NUMBER}}? Missing coverage,
-  scope creep, or misinterpretation should be called out (in the summary /
-  inline comments) for the human reviewer, not silently "fixed" by adding
-  code yourself.
+## 2. Stress-test edge cases
 
-For every changed code path, stress-test the edge cases: empty/zero/negative
-inputs, missing optional fields, null/undefined, off-by-one, races, and
-regressions in adjacent functionality.
+Go beyond the happy path. For every changed code path, think about what inputs
+or states could cause problems: empty arrays, empty strings, zero, negative
+numbers, missing optional fields, null/undefined, rapid repeated calls, races,
+off-by-one, regressions in adjacent functionality. Write tests for anything not
+already covered.
 
-## 2. Act on your findings
+## 3. Analyze for code quality improvements
 
-Work through the findings from step 1 and resolve each one on this branch:
+Look for opportunities to reduce unnecessary complexity and nesting, eliminate
+redundant code and abstractions, improve readability through clear names,
+consolidate related logic, avoid nested ternaries (prefer if/else or switch),
+and choose clarity over brevity.
 
-- For any **correctness/robustness** finding, write a test that exercises it and try to actually break it. If you can break it, fix it. Cover the edge cases the skill flagged (empty/zero/negative inputs, missing optional fields, null/undefined, off-by-one, races, regressions in adjacent code).
-- For any **quality/standards** finding, improve the code: reduce nesting, eliminate redundancy, improve names, consolidate related logic, drop comments that restate obvious code, avoid nested ternaries (prefer if/else or switch), choose clarity over brevity. 
-- For any **spec** finding (missing coverage, scope creep, misinterpretation), do **not** silently "fix" missing spec coverage by adding code yourself — call it out in the `summary` and (where line-anchored) the inline comments for the human reviewer to decide.
+## 4. Maintain balance
 
-**Preserve functionality.** When improving code, never change what it does — only how it does it. All original features, outputs, and behaviours must remain intact.
+Avoid over-simplification that reduces clarity, creates overly clever
+solutions, combines too many concerns, or removes helpful abstractions.
 
-# RESPONDING TO HUMAN COMMENTS
+## 5. Apply project standards
 
-For each unresolved `review_thread` and each `issue_comment` directed at the code, choose one:
+Follow the project's `.sandcastle/CODING_STANDARDS.md`.
 
-- **Address** — make a code change in your commit, then reply in-thread (or with an issue comment) explaining what you did. Use the comment's `commentId` for in-thread replies.
-- **Decline** — don't change the code, but reply explaining your reasoning. Use Decline when you have a substantive disagreement (the suggestion would break something, conflicts with project standards, is out of scope).
-- **Defer** — do nothing, no reply. Only valid when the comment isn't a code-review request (jokes, off-topic banter, stale comments about already-fixed code, side conversations between humans).
+## 6. Preserve functionality
 
-Default to Address. Decline when you have a real reason. Defer only when a reply would be noise.
+Never change what the code does — only how it does it. All original features,
+outputs, and behaviours must remain intact.
 
 # EXECUTION
 
-1. Run `uv sync --extra dev && uv run pytest && uv run ruff check` — confirm the current state passes.
-2. Make improvements + write any new edge-case tests. Stage and commit them as a **single squashed commit** on this branch with a Conventional Commit message (e.g. `refactor: review improvements for #{{ISSUE_NUMBER}}`).
-3. Run `uv sync --extra dev && uv run pytest && uv run ruff check` again. If either fails, fix it before continuing — do not leave the branch broken.
-4. Decide which inline review comments to leave (line-anchored notes about your changes or remaining findings) and which thread replies to make.
+1. Run `npm run check` — confirm the current state passes.
+2. Attempt to reproduce the original bug with new test cases — if you can, fix it.
+3. Write edge-case tests that stress the implementation.
+4. Make any code quality improvements directly on this branch.
+5. Run `npm run check` again to ensure nothing is broken.
+6. **If you changed anything**, commit with a Conventional Commit message
+   (`refactor:`, `test:`, `fix:`). **If the code is already clean,
+   well-tested, and handles edge cases properly, do nothing — make no commit.**
+
+Once complete, output `<promise>COMPLETE</promise>`. If a blocker needs a human
+decision, output `<promise>BLOCKED</promise>`.
 
 If the code is already clean and there are no human comments to address, make no commits.
