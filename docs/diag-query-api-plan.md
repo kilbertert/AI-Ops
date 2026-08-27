@@ -98,6 +98,8 @@ AI-Ops (sources.py 增加 HttpSources,镜像现有 Protocol)
   R<T> 统一响应, 审计日志(@SysLog 适配无登录态, §8)
 ```
 
+> **本轮边界**:上图 TDengine 分支(`charging-pile_comm` / `charging-gun_property` 经 tsdata)是 Phase 3b 目标;本轮 4 个 `/diag/*` 接口只覆盖 MySQL / Redis 查询,TDengine 段继续由 AI-Ops 直连(§3、§10)。
+
 ### 4.2 宿主决策
 
 - **新接口宿主:充电桩 Java 服务(cloud-charging-pile-web)**。理由:已持有三张业务表 + `ch_occupy_order_info` 的 MyBatis-Plus 映射、已有调 tsdata 的先例(`IndexV2Controller`)、与内部令牌机制同仓库、形成统一审计点。
@@ -180,6 +182,8 @@ AI-Ops (sources.py 增加 HttpSources,镜像现有 Protocol)
 
 对应 `comm_messages`。
 
+> **暂不进本轮**:TDengine 段暂留直连,本接口等 tsdata 补洞后由 Java 侧追加(§3、§10 Phase 3b)。
+
 | 参数 | 必填 | 说明 |
 |---|---|---|
 | `device` | 是 | 设备标识(超级表 tag) |
@@ -196,6 +200,8 @@ AI-Ops (sources.py 增加 HttpSources,镜像现有 Protocol)
 ### 6.3 `GET /diag/gun-property` —— 充电过程时序
 
 对应 `gun_timeseries`。
+
+> **暂不进本轮**:TDengine 段暂留直连,本接口等 tsdata 补洞后由 Java 侧追加(§3、§10 Phase 3b)。
 
 | 参数 | 必填 | 说明 |
 |---|---|---|
@@ -364,7 +370,8 @@ Feature: 诊断查询接口
 
 ### 11.4 收口
 
-- `production.env` 无三库凭据;`doctor()` 直连断言失败即"已收口"
+- **Phase 3a**:`production.env` 无 MySQL / Redis 凭据;`doctor()` 断言 HTTP 段与 TDengine 直连段可用,MySQL / Redis 已退役或未配置。
+- **Phase 3b**:`production.env` 无三库凭据;`doctor()` 直连断言失败即"已收口"。
 - 审计日志中出现新增接口调用记录(调用方、参数、结果)
 
 ---
@@ -380,8 +387,8 @@ Feature: 诊断查询接口
 | 5 | 生产 Java 仓库在远端 | 本地无法直接实现/验证 Java 改动 | 本文档为交付物;实现走团队仓库 |
 | 6 | 默认 secret `qushiyun-internal-secret-2024` | 若已被泄露,内部令牌形同虚设 | 上线即轮换,从配置下发新 secret |
 | 7 | Spring Security OAuth2 资源服务器被注释 | 若平台后续强推 OAuth2,方案需调整 | 本次不启用;留作演进选项,不阻塞 |
-| 8 | TDengine 段仍直连 | TDengine 段仍直连,直到 tsdata 真正补洞之前 AI-Ops 仍持有 TDengine 凭据;当前生产环境凭据回收不完整 | Phase 3a 只删 MySQL+Redis 凭据;Phase 3b 完成后才删 TDengine 凭据 |
-| 9 | D 方案不解决 tsdata 自身访问控制 | D 方案不解决 tsdata 自身被任意人访问的问题,无鉴权通道仍未关闭 | tsdata 保持内网隔离与现有运维限制;补洞后作为 Phase 3b 前置条件 |
+| 8 | TDengine 段仍直连 | 当前生产环境 AI-Ops 仍持有 TDengine 凭据,直到 Phase 3b 完成;tsdata 真正补洞之前 TDengine 段仍直连 | Phase 3a 只删 MySQL+Redis 凭据;Phase 3b 完成后才删 TDengine 凭据 |
+| 9 | D 方案不解决 tsdata 自身访问控制 | D 方案不解决 tsdata 自身被任意人访问的问题,tsdata 的无鉴权访问通道仍未关闭 | tsdata 保持内网隔离与现有运维限制;补洞后作为 Phase 3b 前置条件 |
 
 ---
 
