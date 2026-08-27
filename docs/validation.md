@@ -229,6 +229,15 @@ SSH 调试通道直接传入中文字面量会受远程代码页影响；本轮�
 - 自动化检查：`uv sync --group dev`；`uv run pytest` 全套 **268 项通过**；`uv run ruff check`、`uv run ruff format --check .`、`uv lock --check`、`uv pip check`、`git diff --check` 全部通过。
 - 命令兼容性：任务约定的 `uv sync --extra dev` 在本仓库失败，因 dev 依赖声明于 `[dependency-groups]`；实际执行等价命令 `uv sync --group dev`，未跳过测试或静态检查。
 - 未完成业务验收：HTTP doctor 探针未连接真实 `/diag/*` 服务，TDengine 段仍未回收凭据；不把离线分类测试写成真实故障或真实环境验收结论。
+## Java `/diag/occupy-order` 工件契约验证（2026-08-27）
+
+生产 Java 仓库仍在远端，本仓库没有 JDK/Spring 构建链，因此 T4 的可验证边界与
+T1 一致，是团队仓库中的源码工件契约，而非部署服务后的真实环境行为：
+
+- 自动化检查：新增 `tests/test_diag_occupy_order_contract.py` 的 14 项契约测试通过；全套 `uv run pytest` **292 项通过**，`uv run ruff check` 通过，`git diff --check` 通过。
+- 固定契约点：`GET /diag/occupy-order` 路由、内部令牌自校验与 401 拒绝、`order_no` / `order_id` 恰二选一、`order_no → order_no` 与 `order_id → orderId` 列映射、`tenant_id` / `status` 可选过滤、`SAFE_VALUE` 注入拦截且先于查询执行、SQL 占位符与绑定参数数量一致、`R<T>` 列表响应、全字段列清单、`ORDER BY startTime DESC LIMIT 20`。
+- 命令兼容性：任务约定命令 `uv sync --extra dev` 仍因 `pyproject.toml` 使用 `[dependency-groups]` 而失败（Extra `dev` 未定义），实际执行等价命令 `uv sync --group dev`，未跳过测试或静态检查。
+- 未完成业务验收：Java 工件未编译、未部署、未对真实 `cloud-charging-pile-web` 执行 Gherkin 场景；不据此宣称占位费订单查询业务准确率已经验收，也不把契约测试写成真实故障结论。
 
 ## 业务验收待办
 
