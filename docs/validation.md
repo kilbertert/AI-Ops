@@ -166,6 +166,16 @@ SSH 调试通道直接传入中文字面量会受远程代码页影响；本轮�
 - 镜像内容核验：`docker run sandcastle:ai-ops` 确认 python 3.11.2、uv 0.12.5、gh、claude-code、codex 0.146.1 就位，与 python 版 Dockerfile 一致（避免 agent 无法在容器内自检而误报 `<promise>BLOCKED</promise>`）。
 - 未完成业务验收：AFK 是开发工作流工具，与订单诊断的业务准确率验收无关；真实故障案例验收仍按「业务验收待办」执行，不因脚手架合入而变更。
 
+## Java `/diag/order` 工件契约验证（2026-08-27）
+
+生产 Java 仓库远端部署，本仓库没有 JDK/Spring 构建链，因此 T1 的可验证边界是
+团队仓库中的源码工件契约，而非部署服务后的真实环境行为：
+
+- 自动化检查：`uv sync --dev` 安装 dev 依赖；`uv run pytest` 全套 **220 项通过**；`uv run ruff check` 通过；`git diff --check` 通过。
+- 新增 `tests/test_diag_order_contract.py` 的 11 项测试固定：`GET /diag/order` 路由、`X-Internal-Token` + `X-Request-Timestamp` 自校验、401 拒绝、`SAFE_VALUE` 注入拦截、`R<T>` 响应、`orders` 全字段、`fee_template.occupy_fee_template`、`LIMIT 3` 排序上限、审计切面调用方/参数/结果且不落响应体、无默认硬编码 secret。
+- 命令兼容性：`uv sync --extra dev` 在本仓库失败（错误为 `Extra dev is not defined in optional-dependencies`），因为 `pyproject.toml` 将开发依赖声明在 `[dependency-groups]`，实际以等价命令 `uv sync --dev` 执行，未跳过测试或静态检查。
+- 未完成业务验收：Java 工件未编译、未部署、未对真实 `cloud-charging-pile-web` 执行 `docs/diag-query-api-plan.md` §11 的 Gherkin 场景；不把源码契约测试写成真实故障结论。
+
 ## 业务验收待办
 
 生产业务验收仍需要每条支持路径至少三笔由工程师确认结论的真实故障：
