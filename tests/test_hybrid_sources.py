@@ -140,6 +140,12 @@ def test_safe_http_param_allows_expected_values() -> None:
     assert _safe_http_param("2026-07-31T10:00:00.000") == "2026-07-31T10:00:00.000"
 
 
+def test_safe_http_param_enforces_length_boundary() -> None:
+    assert _safe_http_param("A" * 128) == "A" * 128
+    with pytest.raises(ValueError):
+        _safe_http_param("A" * 129)
+
+
 @pytest.mark.parametrize("value", ["ORDER\r\nInjected", "PILE--01", "GUN' OR 1=1 --", "ORDER 1"])
 def test_safe_http_param_rejects_unsafe_values(value: str) -> None:
     with pytest.raises(ValueError):

@@ -166,14 +166,18 @@ class RedisSettings:
     password: str = ""
 
 
+def _validate_token_expire_seconds(value: int | None) -> None:
+    if value is not None and not 60 <= value <= 600:
+        raise ValueError("Diag API 令牌有效期必须在 60-600 秒之间")
+
+
 @dataclass(slots=True)
 class InternalTokenSettings:
     secret: str | None = None
     expire_seconds: int | None = None
 
     def __post_init__(self) -> None:
-        if self.expire_seconds is not None and not 60 <= self.expire_seconds <= 600:
-            raise ValueError("Diag API 令牌有效期必须在 60-600 秒之间")
+        _validate_token_expire_seconds(self.expire_seconds)
 
 
 @dataclass(slots=True)
@@ -208,6 +212,7 @@ class HttpSettings:
 
     @token_expire_seconds.setter
     def token_expire_seconds(self, value: int | None) -> None:
+        _validate_token_expire_seconds(value)
         self.internal_token.expire_seconds = value
 
 

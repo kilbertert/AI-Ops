@@ -757,13 +757,7 @@ SAFE_HTTP_PARAM = re.compile(r"^[A-Za-z0-9_.:+-]{1,128}$")
 
 def _safe_http_param(value: str | None) -> str:
     """Whitelist query values before they are interpolated into ``/diag/*`` URLs."""
-    if (
-        value is None
-        or not SAFE_HTTP_PARAM.fullmatch(value)
-        or "--" in value
-        or "\r" in value
-        or "\n" in value
-    ):
+    if value is None or not SAFE_HTTP_PARAM.fullmatch(value) or "--" in value:
         raise ValueError("HTTP 查询值包含不允许的字符")
     return value
 

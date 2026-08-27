@@ -193,8 +193,8 @@ SSH 调试通道直接传入中文字面量会受远程代码页影响；本轮�
 
 对应 issue #50 / PR-A，验证范围是 AI-Ops 侧离线等价行为，不涉及生产 `production.env`、Java 服务或 tsdata：
 
-- 新增 `tests/test_http_auth.py` 覆盖内部令牌算法与请求头；新增 `tests/test_hybrid_sources.py` 覆盖 HTTP/TDengine 路由、SQL 字面量、doctor 分类、`_safe_http_param` 白名单与三份 fixture 逐字段等价；`tests/test_config.py` 覆盖 `Settings.http` 缺省、新环境变量读取与脱敏。
-- 自动化检查：`uv sync --group dev`、`uv run pytest` **255 项通过**、`uv run ruff check`、`uv run ruff format --check .`、`uv lock --check`、`uv pip check`、`git diff --check` 全部通过。
+- 新增 `tests/test_http_auth.py` 覆盖内部令牌算法与请求头；新增 `tests/test_hybrid_sources.py` 覆盖 HTTP/TDengine 路由、SQL 字面量、doctor 分类、`_safe_http_param` 白名单、长度边界与三份 fixture 逐字段等价；`tests/test_config.py` 覆盖 `Settings.http` 缺省、新旧环境变量优先级、令牌有效期下界校验与脱敏。
+- 自动化检查：`uv sync --group dev`、`uv run pytest` **258 项通过**、`uv run ruff check`、`uv run ruff format --check .`、`uv lock --check`、`uv pip check`、`git diff --check` 全部通过。
 - 任务约定 `uv sync --extra dev` 在本仓库失败，因 dev 依赖声明于 `[dependency-groups]`，实际执行等价命令 `uv sync --group dev`；未跳过检查。
 
 未完成业务验收：本分支没有连接真实 `/diag/*` 服务或生产网络回放，2 路 TDengine 查询仍为直连；不据此宣称业务查询准确率已经验收。

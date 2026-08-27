@@ -203,3 +203,33 @@ def test_http_settings_internal_token_is_redacted() -> None:
     assert redacted["http"]["internal_token"]["secret"] == "REDACTED"
     assert redacted["diag_api"]["token_secret"] == "REDACTED"
     assert "http-secret" not in str(redacted)
+
+
+def test_http_settings_new_env_names_override_legacy_names(monkeypatch) -> None:
+    monkeypatch.setenv("AIOPS_HTTP_BASE_URL", "https://http.example.test")
+    monkeypatch.setenv("AIOPS_DIAG_API_BASE_URL", "https://legacy.example.test")
+    monkeypatch.setenv("AIOPS_HTTP_INTERNAL_TOKEN_SECRET", "http-secret")
+    monkeypatch.setenv("AIOPS_DIAG_API_TOKEN_SECRET", "legacy-secret")
+    monkeypatch.setenv("AIOPS_HTTP_INTERNAL_TOKEN_EXPIRE_SECONDS", "120")
+    monkeypatch.setenv("AIOPS_DIAG_API_TOKEN_EXPIRE_SECONDS", "300")
+    monkeypatch.setenv("AIOPS_HTTP_TIMEOUT_SECONDS", "12")
+    monkeypatch.setenv("AIOPS_DIAG_API_TIMEOUT_SECONDS", "24")
+
+    settings = Settings.from_env()
+
+    assert settings.http.base_url == "https://http.example.test"
+    assert settings.http.internal_token.secret == "http-secret"
+    assert settings.http.internal_token.expire_seconds == 120
+    assert settings.http.timeout_seconds == 12
+
+
+def test_http_settings_token_expire_setter_still_validates() -> None:
+    settings = Settings.from_env()
+
+    settings.http.token_expire_seconds = 600
+    assert settings.http.token_expire_seconds == 600
+    settings.http.token_expire_seconds = None
+    assert settings.http.token_expire_seconds is None
+
+    with pytest.raises(ValueError, match="令牌有效期"):
+        settings.http.token_expire_seconds = 601
