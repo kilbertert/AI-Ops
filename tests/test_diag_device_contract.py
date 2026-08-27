@@ -30,21 +30,42 @@ JAVA_ROOT = (
     / "web"
 )
 CONTROLLER = JAVA_ROOT / "controller" / "DiagQueryController.java"
+ASPECT = JAVA_ROOT / "aspect" / "DiagQueryAuditAspect.java"
+
+DEVICE_COLUMNS = [
+    "id",
+    "tenant_id",
+    "site_id",
+    "device_code",
+    "protocol",
+    "online_status",
+    "status",
+    "work_status",
+    "error_reason",
+    "fee_template_id",
+]
 
 
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def _device_columns() -> list[str]:
+def _device_columns(sql_name: str = "DEVICE_BY_ID_SQL") -> list[str]:
     source = _read(CONTROLLER)
     match = re.search(
-        r'String DEVICE_BY_ID_SQL = """\s*SELECT (.*?)\s*FROM iot_charging_device',
+        rf'String {re.escape(sql_name)} = """\s*SELECT (.*?)\s*FROM iot_charging_device',
         source,
         re.DOTALL,
     )
     assert match is not None
     return [column for column in re.split(r"[\s,]+", match.group(1).replace("\n", " ")) if column]
+
+
+def _sql_block(sql_name: str) -> str:
+    source = _read(CONTROLLER)
+    match = re.search(rf'String {re.escape(sql_name)} = """(.*?)""";', source, re.DOTALL)
+    assert match is not None
+    return match.group(1)
 
 
 def test_controller_routes_get_device_under_diag_root() -> None:
@@ -70,18 +91,7 @@ def test_invalid_token_returns_http_401_and_r_envelope() -> None:
 def test_device_payload_uses_r_envelope_and_pinned_fields() -> None:
     source = _read(CONTROLLER)
     assert 'ResponseEntity<R<Map<String, Object>>>' in source
-    assert _device_columns() == [
-        "id",
-        "tenant_id",
-        "site_id",
-        "device_code",
-        "protocol",
-        "online_status",
-        "status",
-        "work_status",
-        "error_reason",
-        "fee_template_id",
-    ]
+    assert _device_columns() == DEVICE_COLUMNS
 
 
 def test_device_lookup_requires_exactly_one_of_device_id_or_device_code() -> None:
@@ -116,3 +126,38 @@ def test_blank_tenant_id_is_normalized_to_cross_tenant_null() -> None:
     source = _read(CONTROLLER)
     assert 'String queryTenantId = blankToNull(tenantId);' in source
     assert 'queryForList(deviceSql, deviceValue, queryTenantId, queryTenantId)' in source
+
+
+def test_device_sql_variants_pin_same_columns_and_only_filter_by_unique_lookup() -> None:
+    id_sql = _sql_block("DEVICE_BY_ID_SQL")
+    code_sql = _sql_block("DEVICE_BY_CODE_SQL")
+    assert _device_columns("DEVICE_BY_ID_SQL") == DEVICE_COLUMNS
+    assert _device_columns("DEVICE_BY_CODE_SQL") == DEVICE_COLUMNS
+    assert 'WHERE id = ?' in id_sql
+    assert 'WHERE device_code = ?' in code_sql
+    assert id_sql.replace("WHERE id = ?", "WHERE device_code = ?") == code_sql
+
+
+def test_each_device_lookup_binds_three_placeholders() -> None:
+    for sql_name in ("DEVICE_BY_ID_SQL", "DEVICE_BY_CODE_SQL"):
+        assert _sql_block(sql_name).count("?") == 3
+
+
+def test_device_miss_returns_null_data() -> None:
+    source = _read(CONTROLLER)
+    assert 'devices.isEmpty() ? null : devices.get(0)' in source
+
+
+def test_blank_device_keys_are_normalized_before_exactly_one_guard() -> None:
+    source = _read(CONTROLLER)
+    guard = "(normalizedDeviceId == null) == (normalizedDeviceCode == null)"
+    assert source.index("String normalizedDeviceId = blankToNull(deviceId);") < source.index(guard)
+    assert source.index("String normalizedDeviceCode = blankToNull(deviceCode);") < source.index(guard)
+
+
+def test_audit_aspect_counts_single_device_payload_as_one_row() -> None:
+    source = _read(ASPECT)
+    assert 'body.path("orders")' in source
+    assert 'body.isObject()' in source
+    assert 'return body.size() > 0 ? 1 : 0' in source
+    assert 'return body.isArray() ? body.size() : 0' not in source

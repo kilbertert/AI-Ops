@@ -20,10 +20,11 @@ import java.util.Map;
 import java.util.regex.Pattern;
 
 /**
- * /diag 系列的 T1 tracer bullet。
+ * /diag 系列的诊断查询接口。
  *
- * <p>确立后续接口共用的模式：控制器自校验内部令牌、参数白名单拦截注入、统一
- * R&lt;T&gt; 响应、有界只读查询，以及 {@code DiagQueryAuditAspect} 的调用留痕。</p>
+ * <p>包含 T1 {@code GET /diag/order} 与 T6 {@code GET /diag/device}，两者沿用
+ * 同一模式：控制器自校验内部令牌、参数白名单拦截注入、统一 R&lt;T&gt; 响应、
+ * 有界只读查询，以及 {@code DiagQueryAuditAspect} 的调用留痕。</p>
  */
 @RestController
 @RequestMapping("/diag")

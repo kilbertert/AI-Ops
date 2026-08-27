@@ -194,8 +194,9 @@ SSH 调试通道直接传入中文字面量会受远程代码页影响；本轮�
 生产 Java 仓库远端部署，本仓库没有 JDK/Spring 构建链，因此 T6 的可验证边界同样是
 团队仓库中的源码工件契约，而非部署服务后的真实环境行为：
 
-- 自动化检查：`uv sync --extra dev` 仍因 `pyproject.toml` 使用 `[dependency-groups]` 而失败，改用等价命令 `uv sync --group dev` 安装 dev 依赖；`uv run pytest -q` 全套 **249 项通过**，`uv run ruff check` 通过，`git diff --check` 通过。
-- 新增 `tests/test_diag_device_contract.py` 的 8 项测试固定：`GET /diag/device` 路由、`X-Internal-Token` + `X-Request-Timestamp` 自校验、401 拒绝、`R<T>` 响应、`iot_charging_device` 十字段快照、`device_id`/`device_code` 二选一必填、`SAFE_VALUE` 注入拦截在查询前执行、`tenant_id` 可空过滤和 `LIMIT 1` 有界查询。
+- 自动化检查：`uv sync --extra dev` 仍因 `pyproject.toml` 使用 `[dependency-groups]` 而失败，改用等价命令 `uv sync --group dev` 安装 dev 依赖；`uv run pytest -q` 全套 **254 项通过**，`uv run ruff check` 通过，`git diff --check` 通过。
+- 新增 `tests/test_diag_device_contract.py` 的 13 项测试固定：`GET /diag/device` 路由、`X-Internal-Token` + `X-Request-Timestamp` 自校验、401 拒绝、`R<T>` 响应、`iot_charging_device` 十字段快照、`device_id`/`device_code` 二选一必填、`SAFE_VALUE` 注入拦截在查询前执行、`tenant_id` 可空过滤和 `LIMIT 1` 有界查询；并补强两种 SQL 字段/占位符一致性、未命中 `data=null`、空白查询键在校验顺序前归一、审计单对象行数。
+- 复查新增的审计行数契约测试初跑失败，暴露 `DiagQueryAuditAspect.rowsOf` 对 `/diag/device` 返回的单个对象记为 `rows=0`；已修复为数组按元素计数、非空对象按 1 行计数。该结论属于源码契约失败与修复，不代表真实生产故障。
 - Java 侧行为对应 `docs/diag-query-api-plan.md` §6.6：按 id 或 device_code 单个查询、`tenant_id` 为可选跨租户过滤、未命中时 `data` 为 `null`。
 - 未完成业务验收：Java 工件未编译、未部署、未对真实 `cloud-charging-pile-web` 执行 §11 的 Gherkin 场景；不把源码契约测试写成真实故障结论。
 
