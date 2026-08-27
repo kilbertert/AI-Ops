@@ -18,6 +18,7 @@ from test_http_sources import (
     _RawResponse,
 )
 
+from aiops_diagnostics.config import Settings
 from aiops_diagnostics.sources import (
     FixtureSources,
     HybridSources,
@@ -290,3 +291,78 @@ def test_live_sources_defaults_to_hybrid_sources_and_direct_sources_remains() ->
 
     with direct_sources(settings) as sources:
         assert isinstance(sources, LiveSources)
+
+
+def _fake_ssh_runtime(monkeypatch, tmp_path) -> tuple[Settings, list[list[str]]]:
+    settings = _http_settings()
+    settings.ssh.enabled = True
+    settings.ssh.ssh_bin = str(tmp_path / "ssh")
+    settings.ssh.host = "bastion.example.test"
+    settings.ssh.user = "diagnostic"
+    settings.ssh.key_file = str(tmp_path / "id_ed25519")
+    settings.ssh.mysql_host = "mysql.internal"
+    settings.ssh.mysql_port = 3307
+    settings.ssh.tdengine_host = "tdengine.internal"
+    settings.ssh.tdengine_port = 16041
+    settings.ssh.redis_host = "redis.internal"
+    settings.ssh.redis_port = 6380
+    (tmp_path / "ssh").write_text("")
+    (tmp_path / "id_ed25519").write_text("")
+
+    commands: list[list[str]] = []
+
+    class FakePopen:
+        def __init__(self, command: list[str], **_: Any) -> None:
+            commands.append(list(command))
+            self.stderr = io.StringIO("")
+
+        def poll(self) -> int:
+            return 0
+
+        def terminate(self) -> None:
+            return None
+
+        def wait(self, timeout: float = 3) -> int:
+            return 0
+
+        def kill(self) -> None:
+            raise AssertionError("SSH 隧道进程不应被强制结束")
+
+    monkeypatch.setattr("aiops_diagnostics.sources.subprocess.Popen", FakePopen)
+    monkeypatch.setattr("aiops_diagnostics.sources._wait_for_port", lambda *args, **kwargs: None)
+    ports = iter([10101, 10102, 10103])
+    monkeypatch.setattr("aiops_diagnostics.sources._available_port", lambda: next(ports))
+    return settings, commands
+
+
+def test_live_sources_ssh_tunnel_forwards_only_tdengine(monkeypatch, tmp_path) -> None:
+    settings, commands = _fake_ssh_runtime(monkeypatch, tmp_path)
+
+    with live_sources(settings) as sources:
+        assert isinstance(sources, HybridSources)
+
+    assert len(commands) == 1
+    forwards = [commands[0][index + 1] for index, token in enumerate(commands[0]) if token == "-L"]
+    assert forwards == ["127.0.0.1:10101:tdengine.internal:16041"]
+    assert "mysql.internal" not in " ".join(commands[0])
+    assert "redis.internal" not in " ".join(commands[0])
+
+
+def test_direct_sources_ssh_tunnel_keeps_rollback_forwards(monkeypatch, tmp_path) -> None:
+    settings, commands = _fake_ssh_runtime(monkeypatch, tmp_path)
+
+    with direct_sources(settings) as sources:
+        assert isinstance(sources, LiveSources)
+        assert sources.tdengine.settings.tdengine.url == "http://127.0.0.1:10102"
+        assert sources.mysql.settings.mysql.host == "127.0.0.1"
+        assert sources.mysql.settings.mysql.port == 10101
+        assert sources.redis.settings.redis.host == "127.0.0.1"
+        assert sources.redis.settings.redis.port == 10103
+
+    assert len(commands) == 1
+    forwards = [commands[0][index + 1] for index, token in enumerate(commands[0]) if token == "-L"]
+    assert forwards == [
+        "127.0.0.1:10101:mysql.internal:3307",
+        "127.0.0.1:10102:tdengine.internal:16041",
+        "127.0.0.1:10103:redis.internal:6380",
+    ]

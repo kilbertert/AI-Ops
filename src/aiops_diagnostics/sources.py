@@ -755,18 +755,39 @@ def direct_sources(settings: Settings) -> Iterator[LiveSources]:
 @contextlib.contextmanager
 def live_sources(settings: Settings) -> Iterator[HybridSources]:
     """Return the current partial-cutover default source set."""
-    with _ssh_tunnel(settings) as effective:
+    with _ssh_tunnel(settings, include_direct_backends=False) as effective:
         yield HybridSources(effective)
 
 
 @contextlib.contextmanager
-def _ssh_tunnel(settings: Settings) -> Iterator[Settings]:
+def _ssh_tunnel(
+    settings: Settings,
+    *,
+    include_direct_backends: bool = True,
+) -> Iterator[Settings]:
+    """Open only the SSH forwards required by the selected source set.
+
+    The Phase 3a production path uses ``HybridSources`` and only needs the
+    TDengine forward, so it must not request MySQL / Redis forwards that the
+    tightened SSH ``permitopen`` policy no longer allows. The explicit
+    rollback path keeps all three direct backends available.
+    """
     if not settings.ssh.enabled:
         yield settings
         return
+
     settings.ssh.validate()
-    local_mysql, local_tdengine, local_redis = (_available_port() for _ in range(3))
     ssh = settings.ssh
+    if include_direct_backends:
+        forwards = [
+            ("mysql", ssh.mysql_host, ssh.mysql_port),
+            ("tdengine", ssh.tdengine_host, ssh.tdengine_port),
+            ("redis", ssh.redis_host, ssh.redis_port),
+        ]
+    else:
+        forwards = [("tdengine", ssh.tdengine_host, ssh.tdengine_port)]
+
+    local_ports = [_available_port() for _ in forwards]
     command = [
         ssh.ssh_bin,
         "-N",
@@ -780,22 +801,23 @@ def _ssh_tunnel(settings: Settings) -> Iterator[Settings]:
         str(ssh.port),
         "-i",
         str(Path(ssh.key_file).expanduser()),
-        "-L",
-        f"127.0.0.1:{local_mysql}:{ssh.mysql_host}:{ssh.mysql_port}",
-        "-L",
-        f"127.0.0.1:{local_tdengine}:{ssh.tdengine_host}:{ssh.tdengine_port}",
-        "-L",
-        f"127.0.0.1:{local_redis}:{ssh.redis_host}:{ssh.redis_port}",
-        f"{ssh.user}@{ssh.host}",
     ]
+    for (_name, remote_host, remote_port), local_port in zip(forwards, local_ports, strict=True):
+        command.extend(["-L", f"127.0.0.1:{local_port}:{remote_host}:{remote_port}"])
+    command.append(f"{ssh.user}@{ssh.host}")
+
     process = subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
     try:
-        for port in (local_mysql, local_tdengine, local_redis):
+        for port in local_ports:
             _wait_for_port(port, process, settings.safety.query_timeout_seconds)
         effective = copy.deepcopy(settings)
-        effective.mysql = replace(effective.mysql, host="127.0.0.1", port=local_mysql)
-        effective.tdengine = replace(effective.tdengine, url=f"http://127.0.0.1:{local_tdengine}")
-        effective.redis = replace(effective.redis, host="127.0.0.1", port=local_redis)
+        for (name, _remote_host, _remote_port), local_port in zip(forwards, local_ports, strict=True):
+            if name == "mysql":
+                effective.mysql = replace(effective.mysql, host="127.0.0.1", port=local_port)
+            elif name == "tdengine":
+                effective.tdengine = replace(effective.tdengine, url=f"http://127.0.0.1:{local_port}")
+            elif name == "redis":
+                effective.redis = replace(effective.redis, host="127.0.0.1", port=local_port)
         yield effective
     finally:
         process.terminate()

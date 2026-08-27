@@ -264,7 +264,8 @@ T1 一致，是团队仓库中的源码工件契约，而非部署服务后的�
 
 - 新增 `tests/test_env_example.py` 的 Phase 3a 模板断言，固定 `.env.example` 不含活动 `AIOPS_MYSQL_*`、`AIOPS_REDIS_*`、`AIOPS_SSH_MYSQL_*`、`AIOPS_SSH_REDIS_*` 配置，同时仍保留 `AIOPS_HTTP_*` 和 `AIOPS_TDENGINE_*` / `AIOPS_SSH_TDENGINE_*`。
 - `HybridSources.doctor()` 的 MySQL / Redis 段改为“已收口”，测试固定其 `ok=true, status=deprecated`，即 `http=ok tdengine=ok mysql=deprecated redis=deprecated` 的非阻断语义；`live_sources()` 保持默认 `HybridSources`，`direct_sources()` 仅保留为回退路径。
-- 自动化检查：任务约定命令 `uv sync --extra dev && uv run pytest && uv run ruff check` 直接通过；`uv run pytest` 全套 **325 项通过**，`uv run ruff check` 通过，`git diff --check` 通过。
+- 新增 SSH 隧道回归测试，固定 `live_sources()` 只建立 TDengine 转发、`direct_sources()` 仍保留 MySQL / TDengine / Redis 三条回滚转发，与 Phase 3a 收紧后的 `permitopen` 策略一致。
+- 自动化检查：任务约定命令 `uv sync --extra dev && uv run pytest && uv run ruff check` 直接通过；`uv run pytest` 全套 **327 项通过**，`uv run ruff check` 通过，`git diff --check` 通过。
 - 未完成业务验收：本里程碑未连接真实 `/diag/*` 服务、未在多 provider 服务端执行 `aiops-gateway` fixture 端到端冒烟，也未直接删除生产主机上的 `production.env`；生产凭据删除前的备份和实际删除只能在备好仓库外备份路径与生产访问权限后执行。
 
 ## 业务验收待办
