@@ -7,8 +7,10 @@
 ## 文件
 
 - `cloud-charging-pile-web/src/main/java/com/qushiyun/cloud/charging/pile/web/controller/DiagQueryController.java`
-  —— `GET /diag/order` T1 tracer bullet：控制器自校验 `X-Internal-Token`、`order_no`/`tenant_id`
-  参数白名单校验、`R<T>` 响应、`ch_order_info` 全字段与 `ch_fee_template_record` 快照、`LIMIT 3` 行数上限。
+  —— `/diag/*` 受控只读查询：T1 `GET /diag/order` 按 `order_no` 返回 `ch_order_info`
+  全字段与 `ch_fee_template_record` 快照、`LIMIT 3`；T4 `GET /diag/occupy-order` 按
+  `order_no` 或 `order_id` 反查 `ch_occupy_order_info` 全字段、`LIMIT 20`。两个端点均
+  控制器自校验 `X-Internal-Token`、参数白名单校验并返回 `R<T>`。
 - `cloud-charging-pile-web/src/main/java/com/qushiyun/cloud/charging/pile/web/aspect/DiagQueryAuditAspect.java`
   —— `/diag/*` 审计切面：记录调用方 `internal:AIOps`、脱敏后的查询参数摘要、返回行数、耗时与成功/失败，不落响应体。
 

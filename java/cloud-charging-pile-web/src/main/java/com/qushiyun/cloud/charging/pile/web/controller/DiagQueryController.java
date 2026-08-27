@@ -20,10 +20,11 @@ import java.util.Map;
 import java.util.regex.Pattern;
 
 /**
- * /diag 系列的 T1 tracer bullet。
+ * /diag 系列的受控只读查询接口。
  *
- * <p>确立后续接口共用的模式：控制器自校验内部令牌、参数白名单拦截注入、统一
- * R&lt;T&gt; 响应、有界只读查询，以及 {@code DiagQueryAuditAspect} 的调用留痕。</p>
+ * <p>T1 (GET /diag/order) 确立了后续接口共用的模式：控制器自校验内部令牌、
+ * 参数白名单拦截注入、统一 R&lt;T&gt; 响应、有界只读查询，以及
+ * {@code DiagQueryAuditAspect} 的调用留痕；T4 (GET /diag/occupy-order) 沿用该模式。</p>
  */
 @RestController
 @RequestMapping("/diag")
@@ -65,6 +66,34 @@ public class DiagQueryController {
         LIMIT 1
         """;
 
+    private static final String OCCUPY_ORDER_BY_ORDER_NO_SQL = """
+        SELECT id, orderId, order_no, device_id, device_code, child_device_id,
+               child_device_code, site_id, userId, free_time, timeout, occupy_amount,
+               pay_amount, status, out_trade_no, is_pay, is_sync_mall_order, pay_time,
+               tenant_id, startTime, endTime, operator_id, refund_status, refund_amount,
+               refund_time, refundRemark
+        FROM ch_occupy_order_info
+        WHERE order_no = ?
+          AND (? IS NULL OR tenant_id = ?)
+          AND (? IS NULL OR status = ?)
+        ORDER BY startTime DESC
+        LIMIT 20
+        """;
+
+    private static final String OCCUPY_ORDER_BY_ORDER_ID_SQL = """
+        SELECT id, orderId, order_no, device_id, device_code, child_device_id,
+               child_device_code, site_id, userId, free_time, timeout, occupy_amount,
+               pay_amount, status, out_trade_no, is_pay, is_sync_mall_order, pay_time,
+               tenant_id, startTime, endTime, operator_id, refund_status, refund_amount,
+               refund_time, refundRemark
+        FROM ch_occupy_order_info
+        WHERE orderId = ?
+          AND (? IS NULL OR tenant_id = ?)
+          AND (? IS NULL OR status = ?)
+        ORDER BY startTime DESC
+        LIMIT 20
+        """;
+
     private final InternalTokenManager internalTokenManager;
     private final JdbcTemplate jdbcTemplate;
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -98,6 +127,49 @@ public class DiagQueryController {
         return ResponseEntity.ok(R.ok(new DiagOrderResponse(orders, feeTemplate)));
     }
 
+    @GetMapping("/occupy-order")
+    @Transactional(readOnly = true, timeout = 5)
+    public ResponseEntity<R<List<Map<String, Object>>>> occupyOrder(
+            @RequestHeader(value = "X-Internal-Token", required = false) String token,
+            @RequestHeader(value = "X-Request-Timestamp", required = false) Long requestTimestamp,
+            @RequestParam(value = "order_no", required = false) String orderNo,
+            @RequestParam(value = "order_id", required = false) String orderId,
+            @RequestParam(value = "tenant_id", required = false) String tenantId,
+            @RequestParam(value = "status", required = false) String status) {
+        if (!internalTokenManager.validateToken(token, requestTimestamp)) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(R.failed(401, "令牌无效或过期"));
+        }
+        String queryTenantId = blankToNull(tenantId);
+        String queryStatus = blankToNull(status);
+        boolean hasOrderNo = orderNo != null && !orderNo.isBlank();
+        boolean hasOrderId = orderId != null && !orderId.isBlank();
+        if (!hasExactlyOneLookupKey(orderNo, orderId)
+                || !isSafeValueOrBlank(orderNo)
+                || !isSafeValueOrBlank(orderId)
+                || !isSafeValueOrBlank(queryTenantId)
+                || !isSafeValueOrBlank(queryStatus)) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(R.failed(400, "非法参数"));
+        }
+
+        List<Map<String, Object>> orders = hasOrderNo
+                ? jdbcTemplate.queryForList(
+                        OCCUPY_ORDER_BY_ORDER_NO_SQL,
+                        orderNo,
+                        queryTenantId,
+                        queryTenantId,
+                        queryStatus,
+                        queryStatus)
+                : jdbcTemplate.queryForList(
+                        OCCUPY_ORDER_BY_ORDER_ID_SQL,
+                        orderId,
+                        queryTenantId,
+                        queryTenantId,
+                        queryStatus,
+                        queryStatus);
+
+        return ResponseEntity.ok(R.ok(orders));
+    }
+
     private DiagOrderResponse.FeeTemplateSnapshot queryFeeTemplate(String orderNo, String tenantId) {
         return jdbcTemplate.query(
                 FEE_TEMPLATE_SQL,
@@ -126,6 +198,16 @@ public class DiagQueryController {
         } catch (Exception exception) {
             return Map.of("_raw", value);
         }
+    }
+
+    private static boolean hasExactlyOneLookupKey(String orderNo, String orderId) {
+        boolean hasOrderNo = orderNo != null && !orderNo.isBlank();
+        boolean hasOrderId = orderId != null && !orderId.isBlank();
+        return hasOrderNo ^ hasOrderId;
+    }
+
+    private static boolean isSafeValueOrBlank(String value) {
+        return value == null || value.isBlank() || SAFE_VALUE.matcher(value).matches();
     }
 
     private static boolean isSafeValue(String value) {
