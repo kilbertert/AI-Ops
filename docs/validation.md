@@ -238,6 +238,15 @@ T1 一致，是团队仓库中的源码工件契约，而非部署服务后的�
 - 固定契约点：`GET /diag/occupy-order` 路由、内部令牌自校验与 401 拒绝、`order_no` / `order_id` 恰二选一、`order_no → order_no` 与 `order_id → orderId` 列映射、`tenant_id` / `status` 可选过滤、`SAFE_VALUE` 注入拦截且先于查询执行、SQL 占位符与绑定参数数量一致、`R<T>` 列表响应、全字段列清单、`ORDER BY startTime DESC LIMIT 20`。
 - 命令兼容性：任务约定命令 `uv sync --extra dev` 仍因 `pyproject.toml` 使用 `[dependency-groups]` 而失败（Extra `dev` 未定义），实际执行等价命令 `uv sync --group dev`，未跳过测试或静态检查。
 - 未完成业务验收：Java 工件未编译、未部署、未对真实 `cloud-charging-pile-web` 执行 Gherkin 场景；不据此宣称占位费订单查询业务准确率已经验收，也不把契约测试写成真实故障结论。
+## Java `/diag/redis-stream` 工件契约验证（2026-08-27）
+
+对应 issue #40 / PRD T5，只在无 JDK/Spring 工具链的团队仓库内验证源码工件契约，不验证远端服务：
+
+- 新增 `tests/test_diag_redis_stream_contract.py` 16 项测试，固定 `GET /diag/redis-stream` 路由、`X-Internal-Token` + `X-Request-Timestamp` 自校验、401 拒绝、白名单 Stream 校验与非法 Stream 400 拒绝、`max_messages` 1000 上限与非正值保护、有界 `XREVRANGE`、`R<List<...>>` 响应字段、消费组 `name/consumers/pending/lag` 字段与缺失 Key/畸形 `lastDeliveredId` 的空值防护。
+- `order_no` 匹配计数继续在 `SAFE_VALUE` 白名单校验之后执行，且只扫描 `max_messages` 截断的消息窗口。
+- 检查命令：`uv run pytest tests/test_diag_redis_stream_contract.py tests/test_diag_order_contract.py -q` 通过（16 + 15 项）；全套 `uv run pytest` **257 项通过**，`uv run ruff check` 通过，`git diff --check` 通过。
+- 命令兼容性：`uv sync --extra dev` 仍因 `Extra dev is not defined in optional-dependencies` 失败；本仓库开发依赖位于 `[dependency-groups]`，实际以 `uv sync --group dev` 同步等价依赖后执行全部检查，未跳过测试。
+- 未完成业务验收：本节只有自动化源码契约证据，未编译、未部署 Java 服务，未执行 `docs/diag-query-api-plan.md` §11 的 Redis Gherkin 场景，也不能据此宣称生产同步队列诊断准确率已经验收。
 
 ## 业务验收待办
 
