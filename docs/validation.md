@@ -189,6 +189,16 @@ SSH 调试通道直接传入中文字面量会受远程代码页影响；本轮�
 - 命令兼容性：任务约定命令 `uv sync --extra dev` 在本仓库失败（错误为 `Extra dev is not defined in optional-dependencies`），因为 `pyproject.toml` 将开发依赖声明在 `[dependency-groups]`，实际执行等价命令 `uv sync --group dev`，未跳过测试或静态检查。
 - 未完成业务验收：Java 工件未编译、未部署、未对真实 `cloud-charging-pile-web` 执行 `docs/diag-query-api-plan.md` §11 的 Gherkin 场景；不把源码契约测试写成真实故障结论。
 
+## Java `/diag/device` 工件契约验证（2026-08-27）
+
+生产 Java 仓库远端部署，本仓库没有 JDK/Spring 构建链，因此 T6 的可验证边界同样是
+团队仓库中的源码工件契约，而非部署服务后的真实环境行为：
+
+- 自动化检查：`uv sync --extra dev` 仍因 `pyproject.toml` 使用 `[dependency-groups]` 而失败，改用等价命令 `uv sync --group dev` 安装 dev 依赖；`uv run pytest -q` 全套 **249 项通过**，`uv run ruff check` 通过，`git diff --check` 通过。
+- 新增 `tests/test_diag_device_contract.py` 的 8 项测试固定：`GET /diag/device` 路由、`X-Internal-Token` + `X-Request-Timestamp` 自校验、401 拒绝、`R<T>` 响应、`iot_charging_device` 十字段快照、`device_id`/`device_code` 二选一必填、`SAFE_VALUE` 注入拦截在查询前执行、`tenant_id` 可空过滤和 `LIMIT 1` 有界查询。
+- Java 侧行为对应 `docs/diag-query-api-plan.md` §6.6：按 id 或 device_code 单个查询、`tenant_id` 为可选跨租户过滤、未命中时 `data` 为 `null`。
+- 未完成业务验收：Java 工件未编译、未部署、未对真实 `cloud-charging-pile-web` 执行 §11 的 Gherkin 场景；不把源码契约测试写成真实故障结论。
+
 ## 业务验收待办
 
 生产业务验收仍需要每条支持路径至少三笔由工程师确认结论的真实故障：

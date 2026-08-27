@@ -65,6 +65,24 @@ public class DiagQueryController {
         LIMIT 1
         """;
 
+    private static final String DEVICE_BY_ID_SQL = """
+        SELECT id, tenant_id, site_id, device_code, protocol, online_status,
+               status, work_status, error_reason, fee_template_id
+        FROM iot_charging_device
+        WHERE id = ?
+          AND (? IS NULL OR tenant_id = ?)
+        LIMIT 1
+        """;
+
+    private static final String DEVICE_BY_CODE_SQL = """
+        SELECT id, tenant_id, site_id, device_code, protocol, online_status,
+               status, work_status, error_reason, fee_template_id
+        FROM iot_charging_device
+        WHERE device_code = ?
+          AND (? IS NULL OR tenant_id = ?)
+        LIMIT 1
+        """;
+
     private final InternalTokenManager internalTokenManager;
     private final JdbcTemplate jdbcTemplate;
     private final ObjectMapper objectMapper = new ObjectMapper();
@@ -96,6 +114,33 @@ public class DiagQueryController {
                 : null;
 
         return ResponseEntity.ok(R.ok(new DiagOrderResponse(orders, feeTemplate)));
+    }
+
+    @GetMapping("/device")
+    @Transactional(readOnly = true, timeout = 5)
+    public ResponseEntity<R<Map<String, Object>>> device(
+            @RequestHeader(value = "X-Internal-Token", required = false) String token,
+            @RequestHeader(value = "X-Request-Timestamp", required = false) Long requestTimestamp,
+            @RequestParam(value = "device_id", required = false) String deviceId,
+            @RequestParam(value = "device_code", required = false) String deviceCode,
+            @RequestParam(value = "tenant_id", required = false) String tenantId) {
+        if (!internalTokenManager.validateToken(token, requestTimestamp)) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(R.failed(401, "令牌无效或过期"));
+        }
+        String normalizedDeviceId = blankToNull(deviceId);
+        String normalizedDeviceCode = blankToNull(deviceCode);
+        String queryTenantId = blankToNull(tenantId);
+        if ((normalizedDeviceId == null) == (normalizedDeviceCode == null)) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(R.failed(400, "非法参数"));
+        }
+        String deviceValue = normalizedDeviceId != null ? normalizedDeviceId : normalizedDeviceCode;
+        if (!isSafeValue(deviceValue)
+                || (queryTenantId != null && !isSafeValue(queryTenantId))) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(R.failed(400, "非法参数"));
+        }
+        String deviceSql = normalizedDeviceId != null ? DEVICE_BY_ID_SQL : DEVICE_BY_CODE_SQL;
+        List<Map<String, Object>> devices = jdbcTemplate.queryForList(deviceSql, deviceValue, queryTenantId, queryTenantId);
+        return ResponseEntity.ok(R.ok(devices.isEmpty() ? null : devices.get(0)));
     }
 
     private DiagOrderResponse.FeeTemplateSnapshot queryFeeTemplate(String orderNo, String tenantId) {
