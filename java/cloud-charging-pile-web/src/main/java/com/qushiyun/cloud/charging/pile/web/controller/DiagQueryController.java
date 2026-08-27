@@ -143,7 +143,7 @@ public class DiagQueryController {
         String queryStatus = blankToNull(status);
         boolean hasOrderNo = orderNo != null && !orderNo.isBlank();
         boolean hasOrderId = orderId != null && !orderId.isBlank();
-        if (!hasExactlyOneLookupKey(orderNo, orderId)
+        if (!hasExactlyOneLookupKey(hasOrderNo, hasOrderId)
                 || !isSafeValueOrBlank(orderNo)
                 || !isSafeValueOrBlank(orderId)
                 || !isSafeValueOrBlank(queryTenantId)
@@ -151,21 +151,17 @@ public class DiagQueryController {
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(R.failed(400, "非法参数"));
         }
 
-        List<Map<String, Object>> orders = hasOrderNo
-                ? jdbcTemplate.queryForList(
-                        OCCUPY_ORDER_BY_ORDER_NO_SQL,
-                        orderNo,
-                        queryTenantId,
-                        queryTenantId,
-                        queryStatus,
-                        queryStatus)
-                : jdbcTemplate.queryForList(
-                        OCCUPY_ORDER_BY_ORDER_ID_SQL,
-                        orderId,
-                        queryTenantId,
-                        queryTenantId,
-                        queryStatus,
-                        queryStatus);
+        String lookupValue = hasOrderNo ? orderNo : orderId;
+        String occupyOrderSql = hasOrderNo
+                ? OCCUPY_ORDER_BY_ORDER_NO_SQL
+                : OCCUPY_ORDER_BY_ORDER_ID_SQL;
+        List<Map<String, Object>> orders = jdbcTemplate.queryForList(
+                occupyOrderSql,
+                lookupValue,
+                queryTenantId,
+                queryTenantId,
+                queryStatus,
+                queryStatus);
 
         return ResponseEntity.ok(R.ok(orders));
     }
@@ -200,10 +196,8 @@ public class DiagQueryController {
         }
     }
 
-    private static boolean hasExactlyOneLookupKey(String orderNo, String orderId) {
-        boolean hasOrderNo = orderNo != null && !orderNo.isBlank();
-        boolean hasOrderId = orderId != null && !orderId.isBlank();
-        return hasOrderNo ^ hasOrderId;
+    private static boolean hasExactlyOneLookupKey(boolean hasOrderNo, boolean hasOrderId) {
+        return hasOrderNo != hasOrderId;
     }
 
     private static boolean isSafeValueOrBlank(String value) {

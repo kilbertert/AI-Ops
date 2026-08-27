@@ -77,6 +77,23 @@ def _columns(source: str, block_name: str) -> list[str]:
     return [column for column in re.split(r"[\s,]+", match.group(1)) if column]
 
 
+def _occupy_method(source: str) -> str:
+    return source.split('@GetMapping("/occupy-order")', 1)[1].split("private DiagOrderResponse", 1)[0]
+
+
+def _sql_body(source: str, block_name: str) -> str:
+    match = re.search(rf'String {block_name} = """(.*?)"""', source, re.DOTALL)
+    assert match is not None, f"missing {block_name}"
+    return match.group(1)
+
+
+def _query_for_list_bound_arguments(method: str) -> list[str]:
+    match = re.search(r"jdbcTemplate\.queryForList\((.*?)\);", method, re.DOTALL)
+    assert match is not None, "missing queryForList call"
+    arguments = [argument.strip() for argument in match.group(1).split(",") if argument.strip()]
+    return arguments[1:]
+
+
 def test_t4_java_deliverable_exists() -> None:
     assert CONTROLLER.is_file()
     assert ASPECT.is_file()
@@ -146,6 +163,21 @@ def test_occupy_order_rejects_injection_characters_before_query() -> None:
     assert 'isSafeValue' in source
     assert 'HttpStatus.BAD_REQUEST' in source
     assert 'R.failed(400, "非法参数")' in source
+
+
+def test_occupy_order_validates_lookup_keys_before_query_execution() -> None:
+    method = _occupy_method(_read(CONTROLLER))
+    assert method.index("isSafeValueOrBlank(orderNo)") < method.index("queryForList")
+    assert method.index("isSafeValueOrBlank(orderId)") < method.index("queryForList")
+    assert method.index("isSafeValueOrBlank(queryTenantId)") < method.index("queryForList")
+    assert method.index("isSafeValueOrBlank(queryStatus)") < method.index("queryForList")
+
+
+def test_occupy_order_sql_placeholders_match_bound_arguments() -> None:
+    source = _read(CONTROLLER)
+    bound_arguments = _query_for_list_bound_arguments(_occupy_method(source))
+    for block_name in ("OCCUPY_ORDER_BY_ORDER_NO_SQL", "OCCUPY_ORDER_BY_ORDER_ID_SQL"):
+        assert _sql_body(source, block_name).count("?") == len(bound_arguments)
 
 
 def test_occupy_order_normalizes_blank_tenant_and_status_to_null() -> None:
