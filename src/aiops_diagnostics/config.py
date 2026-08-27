@@ -175,10 +175,11 @@ def _validate_token_expire_seconds(value: int) -> None:
 @dataclass(slots=True)
 class InternalTokenSettings:
     secret: str | None = None
-    expire_seconds: int = DEFAULT_INTERNAL_TOKEN_EXPIRE_SECONDS
+    expire_seconds: int | None = DEFAULT_INTERNAL_TOKEN_EXPIRE_SECONDS
 
     def __post_init__(self) -> None:
-        _validate_token_expire_seconds(self.expire_seconds)
+        if self.expire_seconds is not None:
+            _validate_token_expire_seconds(self.expire_seconds)
 
 
 @dataclass(slots=True)
@@ -208,12 +209,13 @@ class HttpSettings:
         self.internal_token.secret = value
 
     @property
-    def token_expire_seconds(self) -> int:
+    def token_expire_seconds(self) -> int | None:
         return self.internal_token.expire_seconds
 
     @token_expire_seconds.setter
-    def token_expire_seconds(self, value: int) -> None:
-        _validate_token_expire_seconds(value)
+    def token_expire_seconds(self, value: int | None) -> None:
+        if value is not None:
+            _validate_token_expire_seconds(value)
         self.internal_token.expire_seconds = value
 
 

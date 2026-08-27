@@ -219,6 +219,17 @@ SSH 调试通道直接传入中文字面量会受远程代码页影响；本轮�
 
 未完成业务验收：双 key 轮换未在真实 Java 服务上配合轮换演练，300s 窗口也未用真实服务和时钟偏移场景验收；不据此宣称生产密钥轮换已经完成。
 
+## doctor() 分类与 .env.example 注释化验证（2026-08-27）
+
+对应 issue #51 / PR-B，验证范围限定在 AI-Ops 的离线 doctor 分类与示例模板注释，不涉及生产 `production.env`：
+
+- 补充 `tests/test_hybrid_sources.py` 用例覆盖 `HybridSources.doctor()` 的 `http` / `tdengine` / `mysql` / `redis` 四段结构，以及 HTTP 探针的 `http.config_missing`、`http.auth_failed`、`http.http_unreachable` 分类（含 JSON 响应体 401/403/500 与缺失密钥/有效期场景）；失败结果不包含测试 secret 或 Diag base URL 字符串。
+- 新增 `tests/test_env_example.py` 固定 `.env.example` 中三个 `AIOPS_HTTP_*` 新变量，以及 PR-B 要求的 TDengine `WARNING` 和 MySQL/Redis `DEPRECATED` 注释。
+- 补充 `tests/test_render.py` 用例固定 `render_doctor()` 将 `deprecated` 渲染为 `DEPRECATED`。
+- 自动化检查：`uv sync --group dev`；`uv run pytest` 全套 **268 项通过**；`uv run ruff check`、`uv run ruff format --check .`、`uv lock --check`、`uv pip check`、`git diff --check` 全部通过。
+- 命令兼容性：任务约定的 `uv sync --extra dev` 在本仓库失败，因 dev 依赖声明于 `[dependency-groups]`；实际执行等价命令 `uv sync --group dev`，未跳过测试或静态检查。
+- 未完成业务验收：HTTP doctor 探针未连接真实 `/diag/*` 服务，TDengine 段仍未回收凭据；不把离线分类测试写成真实故障或真实环境验收结论。
+
 ## 业务验收待办
 
 生产业务验收仍需要每条支持路径至少三笔由工程师确认结论的真实故障：

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import copy
+import io
+import json
+import urllib.error
 from datetime import datetime
 from typing import Any
 from urllib.parse import urlsplit
@@ -12,6 +15,7 @@ from test_http_sources import (
     _fixture_tx_serial,
     _fixture_window,
     _http_settings,
+    _RawResponse,
 )
 
 from aiops_diagnostics.sources import (
@@ -114,6 +118,10 @@ def test_hybrid_sources_tdengine_sql_matches_live_sources(monkeypatch) -> None:
 def test_hybrid_sources_doctor_classification(monkeypatch) -> None:
     source = HybridSources(_http_settings())
     monkeypatch.setattr(
+        "aiops_diagnostics.sources.urllib.request.urlopen",
+        _FakeDiagTransport({"streams": []}),
+    )
+    monkeypatch.setattr(
         source.tdengine,
         "_query",
         lambda _sql: [
@@ -123,17 +131,139 @@ def test_hybrid_sources_doctor_classification(monkeypatch) -> None:
     )
 
     success = source.doctor()
-    assert success["diag_api"]["ok"] is True
+    assert list(success) == ["http", "tdengine", "mysql", "redis"]
+    assert success["http"]["ok"] is True
+    assert success["http"]["status"] == "ok"
+    assert success["http"]["details"]["token_configured"] is True
     assert success["tdengine"]["ok"] is True
     assert success["tdengine"]["details"]["charging_gun_property"] is True
+    assert success["tdengine"]["details"]["cutover"] == "partial"
+    assert success["mysql"] == {
+        "ok": True,
+        "status": "deprecated",
+        "details": {"message": "改由 /diag/* HTTP 接口访问；本仓 HybridSources 仍能 fallback，但生产应禁用"},
+    }
+    assert success["redis"] == success["mysql"]
 
     def fail(_sql: str) -> list[dict[str, Any]]:
         raise SourceError("TDengine 查询失败: URLError")
 
     monkeypatch.setattr(source.tdengine, "_query", fail)
     failed = source.doctor()
-    assert failed["diag_api"]["ok"] is True
-    assert failed["tdengine"] == {"ok": False, "error": "TDengine 查询失败: URLError"}
+    assert failed["http"]["ok"] is True
+    assert failed["tdengine"] == {
+        "ok": False,
+        "status": "error",
+        "error": "TDengine 查询失败: URLError",
+    }
+    assert failed["mysql"]["status"] == "deprecated"
+
+
+def test_hybrid_sources_doctor_http_config_missing(monkeypatch) -> None:
+    settings = _http_settings()
+    settings.http.base_url = ""
+    source = HybridSources(settings)
+    monkeypatch.setattr(source.tdengine, "_query", lambda _sql: [])
+
+    def forbidden(request: Any, timeout: int | None = None) -> None:
+        raise AssertionError("HTTP must not be called when Diag API config is missing")
+
+    monkeypatch.setattr("aiops_diagnostics.sources.urllib.request.urlopen", forbidden)
+
+    result = source.doctor()
+
+    assert result["http"]["ok"] is False
+    assert result["http"]["status"] == "error"
+    assert result["http"]["error"] == "http.config_missing"
+
+
+@pytest.mark.parametrize(
+    ("field", "missing_field"),
+    [
+        ("token_secret", "internal_token_secret"),
+        ("token_expire_seconds", "internal_token_expire_seconds"),
+    ],
+)
+def test_hybrid_sources_doctor_http_config_incomplete(monkeypatch, field: str, missing_field: str) -> None:
+    settings = _http_settings()
+    setattr(settings.diag_api, field, None)
+    source = HybridSources(settings)
+    monkeypatch.setattr(source.tdengine, "_query", lambda _sql: [])
+
+    def forbidden(request: Any, timeout: int | None = None) -> None:
+        raise AssertionError("HTTP must not be called when Diag API config is missing")
+
+    monkeypatch.setattr("aiops_diagnostics.sources.urllib.request.urlopen", forbidden)
+
+    result = source.doctor()
+
+    assert result["http"]["ok"] is False
+    assert result["http"]["status"] == "error"
+    assert result["http"]["error"] == "http.config_missing"
+    assert missing_field in result["http"]["details"]["missing"]
+
+
+@pytest.mark.parametrize(
+    ("payload_code", "expected_error"),
+    [
+        (401, "http.auth_failed"),
+        (403, "http.auth_failed"),
+        (500, "http.http_unreachable"),
+    ],
+)
+def test_hybrid_sources_doctor_http_json_failure(monkeypatch, payload_code: int, expected_error: str) -> None:
+    source = HybridSources(_http_settings())
+    monkeypatch.setattr(source.tdengine, "_query", lambda _sql: [])
+
+    def failing_api(request: Any, timeout: int | None = None) -> _RawResponse:
+        body = json.dumps({"code": payload_code, "msg": "拒绝查询"}, ensure_ascii=False).encode("utf-8")
+        return _RawResponse(body)
+
+    monkeypatch.setattr("aiops_diagnostics.sources.urllib.request.urlopen", failing_api)
+
+    result = source.doctor()
+
+    assert result["http"]["ok"] is False
+    assert result["http"]["status"] == "error"
+    assert result["http"]["error"] == expected_error
+    assert result["http"]["details"]["message"]
+    assert "test-secret" not in str(result)
+    assert "diag.example.test" not in str(result)
+
+
+def test_hybrid_sources_doctor_http_auth_failed(monkeypatch) -> None:
+    source = HybridSources(_http_settings())
+    monkeypatch.setattr(source.tdengine, "_query", lambda _sql: [])
+
+    def auth_failed(request: Any, timeout: int | None = None) -> _FakeDiagTransport:
+        body = json.dumps({"code": 401, "msg": "令牌无效或过期"}).encode("utf-8")
+        raise urllib.error.HTTPError(request.full_url, 401, "Unauthorized", {}, io.BytesIO(body))
+
+    monkeypatch.setattr("aiops_diagnostics.sources.urllib.request.urlopen", auth_failed)
+
+    result = source.doctor()
+
+    assert result["http"]["ok"] is False
+    assert result["http"]["error"] == "http.auth_failed"
+    assert "test-secret" not in str(result)
+    assert "diag.example.test" not in str(result)
+
+
+def test_hybrid_sources_doctor_http_unreachable(monkeypatch) -> None:
+    source = HybridSources(_http_settings())
+    monkeypatch.setattr(source.tdengine, "_query", lambda _sql: [])
+
+    def unreachable(request: Any, timeout: int | None = None) -> _FakeDiagTransport:
+        raise urllib.error.URLError("network down")
+
+    monkeypatch.setattr("aiops_diagnostics.sources.urllib.request.urlopen", unreachable)
+
+    result = source.doctor()
+
+    assert result["http"]["ok"] is False
+    assert result["http"]["error"] == "http.http_unreachable"
+    assert "test-secret" not in str(result)
+    assert "diag.example.test" not in str(result)
 
 
 def test_safe_http_param_allows_expected_values() -> None:
