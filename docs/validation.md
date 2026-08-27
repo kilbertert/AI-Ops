@@ -158,6 +158,19 @@ SSH 调试通道直接传入中文字面量会受远程代码页影响；本轮�
 
 边界：该订单号尚未连接真实故障案例并完成工程师结论比对；本节只记录客户端操作问题和错误追溯修复，不构成业务准确率验收。
 
+## HttpSources 与 fixture 等价测试（2026-08-27）
+
+对应 issue #36 / PRD T9，只验证 AI-Ops 侧 HTTP 客户端与离线等价行为：
+
+- 新增 `tests/test_http_sources.py` 17 项自动化检查，覆盖 `/diag/order`、`/diag/device`、`/diag/gun-property`、`/diag/comm-message`、`/diag/redis-stream` 的路径、查询参数、`X-Internal-Token` HMAC-SHA256 与 `X-Request-Timestamp` 请求头、401/403 令牌失败、非成功 `code`、非法 UTF-8 响应封装、缺配置禁止发请求和非法标识符注入拒绝。
+- `DiagApiSettings` 拒绝非 http/https 地址、URL 认证信息、query/fragment 以及越界的超时或令牌有效期。
+- 三份 `examples/fixtures/`（ykc_amount_mismatch / ocpp_consistent / missing_tx_data）通过 mock HTTP transport 与 `FixtureSources` 对 orders / fee_template / device / gun_samples / comm_messages / streams 逐字段比对，结果一致。
+- `AIOPS_DIAG_API_TOKEN_SECRET` 已加入 `Settings.redacted()` 回归，脱敏输出不含 secret。
+- 检查命令：`uv run pytest tests/test_http_sources.py tests/test_sources.py tests/test_config.py tests/test_engine.py -q` 全部通过；`uv run ruff check` 通过；`git diff --check` 通过。
+- 全套 `uv run pytest -q` 在合并验证前暴露出主线已有 `tests/test_gateway_client.py::test_gateway_client_does_not_retry_http_errors`：测试用 `HTTPError(..., fp=None)`，其 `.read()` 在 Python 3.11 返回 `str`，而 `_error_detail()` 原先按 `bytes.decode` 处理。已在合并中修复为兼容 `str`/`bytes`；重新运行全套 `uv run pytest -q` **241 项通过**。
+
+未完成业务验收：本里程碑没有真实 Java `/diag/*` 服务或生产网络回放，不据此宣称业务查询准确率已经验收。
+
 ## AFK 工作流脚手架验证（2026-08-26）
 
 纯工具链变更，不触碰诊断逻辑、打包产物或安全边界：
@@ -171,9 +184,9 @@ SSH 调试通道直接传入中文字面量会受远程代码页影响；本轮�
 生产 Java 仓库远端部署，本仓库没有 JDK/Spring 构建链，因此 T1 的可验证边界是
 团队仓库中的源码工件契约，而非部署服务后的真实环境行为：
 
-- 自动化检查：`uv sync --dev` 安装 dev 依赖；`uv run pytest` 全套 **224 项通过**；`uv run ruff check` 通过；`git diff --check` 通过。
+- 自动化检查：`uv sync --group dev` 安装 dev 依赖；在合并 HttpSources 前 `uv run pytest` 全套 **224 项通过**，合并后最终 `uv run pytest` 全套 **241 项通过**；`uv run ruff check` 通过；`git diff --check` 通过。
 - 新增 `tests/test_diag_order_contract.py` 的 15 项测试固定：`GET /diag/order` 路由、`X-Internal-Token` + `X-Request-Timestamp` 自校验、401 拒绝、`SAFE_VALUE` 注入拦截、`R<T>` 响应、`orders` 全字段且与 `sources.py` 参考列逐一一致、空 `tenant_id` 归一为跨租户 `null`、`fee_template.occupy_fee_template`、`LIMIT 3` 排序上限、审计切面按 `@RequestHeader` 排除请求头、HTTP 错误响应记为 failure、不落响应体、无默认硬编码 secret。
-- 命令兼容性：`uv sync --extra dev` 在本仓库失败（错误为 `Extra dev is not defined in optional-dependencies`），因为 `pyproject.toml` 将开发依赖声明在 `[dependency-groups]`，实际以等价命令 `uv sync --dev` 执行，未跳过测试或静态检查。
+- 命令兼容性：任务约定命令 `uv sync --extra dev` 在本仓库失败（错误为 `Extra dev is not defined in optional-dependencies`），因为 `pyproject.toml` 将开发依赖声明在 `[dependency-groups]`，实际执行等价命令 `uv sync --group dev`，未跳过测试或静态检查。
 - 未完成业务验收：Java 工件未编译、未部署、未对真实 `cloud-charging-pile-web` 执行 `docs/diag-query-api-plan.md` §11 的 Gherkin 场景；不把源码契约测试写成真实故障结论。
 
 ## 业务验收待办

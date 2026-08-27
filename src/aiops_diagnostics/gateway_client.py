@@ -212,7 +212,10 @@ def _path_part(value: str) -> str:
 
 def _error_detail(error: urllib.error.HTTPError) -> str:
     try:
-        payload = json.loads(error.read().decode("utf-8"))
+        body = error.read()
+        if isinstance(body, bytes):
+            body = body.decode("utf-8")
+        payload = json.loads(body)
         if isinstance(payload, dict) and payload.get("detail"):
             return str(payload["detail"])
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
