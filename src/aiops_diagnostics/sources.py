@@ -296,6 +296,8 @@ class HttpSources:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
         self.api = settings.http
+        if not self.api.internal_token.secret:
+            raise SourceError("Diag API 内部令牌密钥未配置")
 
     def _headers(self) -> dict[str, str]:
         return build_internal_token_headers(

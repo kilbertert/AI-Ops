@@ -184,7 +184,7 @@ def test_http_settings_defaults_and_env_names(monkeypatch) -> None:
     settings = Settings.from_env()
     assert settings.http.base_url is None
     assert settings.http.internal_token.secret is None
-    assert settings.http.internal_token.expire_seconds is None
+    assert settings.http.internal_token.expire_seconds == 300
     assert settings.diag_api is settings.http
 
     monkeypatch.setenv("AIOPS_HTTP_BASE_URL", "https://diag.example.test")
@@ -228,8 +228,8 @@ def test_http_settings_token_expire_setter_still_validates() -> None:
 
     settings.http.token_expire_seconds = 600
     assert settings.http.token_expire_seconds == 600
-    settings.http.token_expire_seconds = None
-    assert settings.http.token_expire_seconds is None
+    settings.http.token_expire_seconds = 300
+    assert settings.http.token_expire_seconds == 300
 
     with pytest.raises(ValueError, match="令牌有效期"):
         settings.http.token_expire_seconds = 601

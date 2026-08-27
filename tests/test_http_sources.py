@@ -239,7 +239,7 @@ def test_http_sources_wraps_non_utf8_success_body(monkeypatch) -> None:
         source.get_orders("TEST-YKC-0001")
 
 
-def test_http_sources_requires_diag_api_config_before_request(monkeypatch) -> None:
+def test_http_sources_requires_internal_token_secret_before_request(monkeypatch) -> None:
     requested: list[str] = []
 
     def forbidden_transport(request: Any, timeout: int | None = None) -> _RawResponse:
@@ -247,12 +247,28 @@ def test_http_sources_requires_diag_api_config_before_request(monkeypatch) -> No
         raise AssertionError("Diag API must not be called before configuration is validated")
 
     monkeypatch.setattr("aiops_diagnostics.sources.urllib.request.urlopen", forbidden_transport)
-    for field, value in (("base_url", ""), ("token_secret", ""), ("token_expire_seconds", None)):
-        settings = _http_settings()
-        setattr(settings.diag_api, field, value)
+    settings = _http_settings()
+    settings.diag_api.token_secret = ""
 
-        with pytest.raises(SourceError):
-            HttpSources(settings).get_orders("TEST-YKC-0001")
+    with pytest.raises(SourceError, match="Diag API 内部令牌密钥未配置"):
+        HttpSources(settings)
+
+    assert requested == []
+
+
+def test_http_sources_requires_diag_api_base_url_before_request(monkeypatch) -> None:
+    requested: list[str] = []
+
+    def forbidden_transport(request: Any, timeout: int | None = None) -> _RawResponse:
+        requested.append(request.full_url)
+        raise AssertionError("Diag API must not be called before configuration is validated")
+
+    monkeypatch.setattr("aiops_diagnostics.sources.urllib.request.urlopen", forbidden_transport)
+    settings = _http_settings()
+    settings.diag_api.base_url = ""
+
+    with pytest.raises(SourceError, match="Diag API 地址未配置"):
+        HttpSources(settings).get_orders("TEST-YKC-0001")
 
     assert requested == []
 

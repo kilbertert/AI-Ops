@@ -208,6 +208,17 @@ SSH 调试通道直接传入中文字面量会受远程代码页影响；本轮�
 - 自动化验证：任务约定的 `uv sync --extra dev` 在本仓库因 `pyproject.toml` 无 `optional-dependencies.extra=dev` 而失败，按仓库既有约束改用等价命令 `uv sync --group dev`；合并后 `uv run pytest` 全套 **258 项通过**、`uv run ruff check` 通过、`git diff --check` 通过。
 - 未完成业务验收：本里程碑没有真实 tsdata 补洞、没有生产凭据删除、也没有生产只读回放；不据此宣称 D 方案已经完成数据出口收敛。
 
+## 内部令牌密钥配置化验证（2026-08-27）
+
+对应 issue #42，验证范围是 AI-Ops 内部令牌密钥从配置读取、缺密钥启动报错、300s 验证窗口与双 key 过渡的离线行为；未连接真实 `/diag/*` 服务：
+
+- 新增 `validate_internal_token()`，测试覆盖当前令牌通过、301s 过期拒绝、伪造/缺失头拒绝、旧 key 与新 key 双 key 轮换；`Settings.http.internal_token` 默认窗口为 300s，密钥 `None` 且未回退到任何硬编码默认。
+- `HttpSources` 构造时校验 secret，未配置 secret 时直接报 `Diag API 内部令牌密钥未配置`，测试确认不会发出 HTTP 请求。
+- 自动化检查：`uv sync --group dev`、`uv run pytest` **264 项通过**、`uv run ruff check`、`uv run ruff format --check .`、`uv pip check`、`uv lock --check`、`git diff --check` 全部通过。
+- 任务约定 `uv sync --extra dev` 在本仓库失败，失败原因为 `extra 'dev'` 不在 `optional-dependencies` 中；按仓库既有约束使用等价命令 `uv sync --group dev`，未跳过检查。
+
+未完成业务验收：双 key 轮换未在真实 Java 服务上配合轮换演练，300s 窗口也未用真实服务和时钟偏移场景验收；不据此宣称生产密钥轮换已经完成。
+
 ## 业务验收待办
 
 生产业务验收仍需要每条支持路径至少三笔由工程师确认结论的真实故障：

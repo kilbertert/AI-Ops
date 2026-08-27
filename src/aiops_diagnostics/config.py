@@ -11,6 +11,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 from dotenv import dotenv_values
 
+from aiops_diagnostics.http_auth import DEFAULT_INTERNAL_TOKEN_EXPIRE_SECONDS
 from aiops_diagnostics.platform_paths import (
     default_codex_home,
     default_config_file,
@@ -174,7 +175,7 @@ def _validate_token_expire_seconds(value: int | None) -> None:
 @dataclass(slots=True)
 class InternalTokenSettings:
     secret: str | None = None
-    expire_seconds: int | None = None
+    expire_seconds: int = DEFAULT_INTERNAL_TOKEN_EXPIRE_SECONDS
 
     def __post_init__(self) -> None:
         _validate_token_expire_seconds(self.expire_seconds)
@@ -207,11 +208,11 @@ class HttpSettings:
         self.internal_token.secret = value
 
     @property
-    def token_expire_seconds(self) -> int | None:
+    def token_expire_seconds(self) -> int:
         return self.internal_token.expire_seconds
 
     @token_expire_seconds.setter
-    def token_expire_seconds(self, value: int | None) -> None:
+    def token_expire_seconds(self, value: int) -> None:
         _validate_token_expire_seconds(value)
         self.internal_token.expire_seconds = value
 
@@ -428,6 +429,8 @@ class Settings:
         http_expire_seconds = env_int_optional("AIOPS_HTTP_INTERNAL_TOKEN_EXPIRE_SECONDS")
         if http_expire_seconds is None:
             http_expire_seconds = env_int_optional("AIOPS_DIAG_API_TOKEN_EXPIRE_SECONDS")
+        if http_expire_seconds is None:
+            http_expire_seconds = DEFAULT_INTERNAL_TOKEN_EXPIRE_SECONDS
         http_timeout_seconds = env_int_optional("AIOPS_HTTP_TIMEOUT_SECONDS")
         if http_timeout_seconds is None:
             http_timeout_seconds = env_int_optional("AIOPS_DIAG_API_TIMEOUT_SECONDS")
