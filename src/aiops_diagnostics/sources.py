@@ -3,6 +3,8 @@ from __future__ import annotations
 import base64
 import contextlib
 import copy
+import hashlib
+import hmac
 import json
 import re
 import socket
@@ -15,6 +17,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
+from urllib.parse import urlencode
 
 import pymysql
 import redis
@@ -287,6 +290,136 @@ class TDengineSource:
             "charging_gun_property": "charging-gun_property" in names,
             "charging_pile_comm": "charging-pile_comm" in names,
             "stable_count": len(rows),
+        }
+
+
+def _internal_token(secret: str, timestamp: str, expire_seconds: int) -> str:
+    message = f"{timestamp}:{expire_seconds}"
+    return hmac.new(secret.encode("utf-8"), message.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+class HttpSources:
+    def __init__(self, settings: Settings) -> None:
+        self.settings = settings
+        self.api = settings.diag_api
+
+    def _headers(self) -> dict[str, str]:
+        timestamp = str(int(time.time()))
+        return {
+            "X-Internal-Token": _internal_token(
+                self.api.token_secret,
+                timestamp,
+                self.api.token_expire_seconds,
+            ),
+            "X-Request-Timestamp": timestamp,
+        }
+
+    def _get(self, endpoint: str, params: dict[str, str]) -> Any:
+        if not self.api.base_url:
+            raise SourceError("Diag API 地址未配置")
+        if not self.api.token_secret:
+            raise SourceError("Diag API 内部令牌密钥未配置")
+        url = self.api.base_url.rstrip("/") + endpoint
+        if params:
+            url = f"{url}?{urlencode(sorted(params.items()))}"
+        request = urllib.request.Request(url, method="GET")
+        for name, value in self._headers().items():
+            request.add_header(name, value)
+        request.add_header("Accept", "application/json")
+        try:
+            with urllib.request.urlopen(request, timeout=self.api.timeout_seconds) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            detail = _http_error_message(exc)
+            if exc.code in (401, 403):
+                raise SourceError(detail or "Diag API 令牌无效或过期") from exc
+            raise SourceError(f"Diag API 请求失败: {detail or f'HTTP {exc.code}'}") from exc
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+            raise SourceError(f"Diag API 请求失败: {exc.__class__.__name__}") from exc
+        if not isinstance(payload, dict) or payload.get("code") not in (0, 200):
+            detail = payload.get("msg") if isinstance(payload, dict) else "invalid response"
+            raise SourceError(f"Diag API 拒绝查询: {detail}")
+        return payload.get("data")
+
+    def get_orders(self, order_no: str, tenant_id: str | None = None) -> list[dict[str, Any]]:
+        params = {"order_no": _safe_literal(order_no), "include_fee_template": "false"}
+        if tenant_id:
+            params["tenant_id"] = _safe_literal(tenant_id)
+        data = self._get("/diag/order", params)
+        return copy.deepcopy(data.get("orders") or []) if isinstance(data, dict) else []
+
+    def get_fee_template_record(self, order_no: str, tenant_id: str | None = None) -> dict[str, Any] | None:
+        params = {"order_no": _safe_literal(order_no), "include_fee_template": "true"}
+        if tenant_id:
+            params["tenant_id"] = _safe_literal(tenant_id)
+        data = self._get("/diag/order", params)
+        if not isinstance(data, dict):
+            return None
+        return copy.deepcopy(data.get("fee_template"))
+
+    def get_device(
+        self,
+        device_id: str | None,
+        device_code: str | None,
+        tenant_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        params: dict[str, str] = {}
+        if device_id:
+            params["device_id"] = _safe_literal(device_id)
+        elif device_code:
+            params["device_code"] = _safe_literal(device_code)
+        else:
+            return None
+        if tenant_id:
+            params["tenant_id"] = _safe_literal(tenant_id)
+        data = self._get("/diag/device", params)
+        return copy.deepcopy(data) if isinstance(data, dict) else None
+
+    def get_gun_samples(
+        self,
+        device: str,
+        start_time: datetime,
+        end_time: datetime,
+        tx_serial_no: str | None,
+    ) -> list[dict[str, Any]]:
+        params = {
+            "device": _safe_literal(device),
+            "start_time": _format_http_time(start_time),
+            "end_time": _format_http_time(end_time),
+        }
+        if tx_serial_no:
+            params["tx_serial_no"] = _safe_literal(tx_serial_no)
+        data = self._get("/diag/gun-property", params)
+        return copy.deepcopy(data) if isinstance(data, list) else []
+
+    def get_comm_messages(
+        self,
+        device: str,
+        start_time: datetime,
+        end_time: datetime,
+    ) -> list[dict[str, Any]]:
+        params = {
+            "device": _safe_literal(device),
+            "start_time": _format_http_time(start_time),
+            "end_time": _format_http_time(end_time),
+        }
+        data = self._get("/diag/comm-message", params)
+        return copy.deepcopy(data) if isinstance(data, list) else []
+
+    def inspect_streams(self, order_no: str) -> list[dict[str, Any]]:
+        data = self._get("/diag/redis-stream", {"order_no": _safe_literal(order_no)})
+        return copy.deepcopy(data) if isinstance(data, list) else []
+
+    def doctor(self) -> dict[str, Any]:
+        return {
+            "diag_api": {
+                "ok": bool(self.api.base_url and self.api.token_secret),
+                "details": {
+                    "base_url": self.api.base_url,
+                    "token_configured": bool(self.api.token_secret),
+                    "token_expire_seconds": self.api.token_expire_seconds,
+                },
+            }
         }
 
 
@@ -588,6 +721,18 @@ def _assigned_roles(grants: list[str]) -> tuple[list[str], bool]:
 
 def _format_time(value: datetime) -> str:
     return value.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+
+
+def _format_http_time(value: datetime) -> str:
+    return value.isoformat(timespec="milliseconds")
+
+
+def _http_error_message(exc: urllib.error.HTTPError) -> str:
+    with contextlib.suppress(Exception):
+        payload = json.loads(exc.read().decode("utf-8", errors="replace"))
+        if isinstance(payload, dict) and payload.get("msg"):
+            return str(payload["msg"])
+    return ""
 
 
 def _normalize_row(row: dict[str, Any] | None) -> dict[str, Any]:

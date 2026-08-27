@@ -162,6 +162,23 @@ class RedisSettings:
 
 
 @dataclass(slots=True)
+class DiagApiSettings:
+    base_url: str = "http://127.0.0.1:8080"
+    token_secret: str = ""
+    token_expire_seconds: int = 300
+    timeout_seconds: int = 8
+
+    def __post_init__(self) -> None:
+        parsed = urlsplit(self.base_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ValueError("Diag API base_url 必须是完整的 http 或 https 地址")
+        if not 1 <= self.timeout_seconds <= 60:
+            raise ValueError("Diag API 超时必须在 1-60 秒之间")
+        if not 60 <= self.token_expire_seconds <= 600:
+            raise ValueError("Diag API 令牌有效期必须在 60-600 秒之间")
+
+
+@dataclass(slots=True)
 class SSHSettings:
     enabled: bool = False
     ssh_bin: str = field(default_factory=lambda: shutil.which("ssh") or "ssh")
@@ -312,6 +329,7 @@ class Settings:
     mysql: MySQLSettings = field(default_factory=MySQLSettings)
     tdengine: TDengineSettings = field(default_factory=TDengineSettings)
     redis: RedisSettings = field(default_factory=RedisSettings)
+    diag_api: DiagApiSettings = field(default_factory=DiagApiSettings)
     ssh: SSHSettings = field(default_factory=SSHSettings)
     safety: SafetySettings = field(default_factory=SafetySettings)
     agent: AgentSettings = field(default_factory=AgentSettings)
@@ -376,6 +394,12 @@ class Settings:
                 user=env("AIOPS_REDIS_USER"),
                 password=env("AIOPS_REDIS_PASSWORD"),
             ),
+            diag_api=DiagApiSettings(
+                base_url=env("AIOPS_DIAG_API_BASE_URL", "http://127.0.0.1:8080"),
+                token_secret=env("AIOPS_DIAG_API_TOKEN_SECRET"),
+                token_expire_seconds=env_int("AIOPS_DIAG_API_TOKEN_EXPIRE_SECONDS", 300),
+                timeout_seconds=env_int("AIOPS_DIAG_API_TIMEOUT_SECONDS", 8),
+            ),
             ssh=SSHSettings(
                 enabled=env_bool("AIOPS_SSH_ENABLED"),
                 ssh_bin=env("AIOPS_SSH_BIN") or shutil.which("ssh") or "ssh",
@@ -424,6 +448,9 @@ class Settings:
         data["tdengine"]["url"] = _redact_url_credentials(self.tdengine.url)
         data["tdengine"]["password"] = "REDACTED" if self.tdengine.password else ""
         data["redis"]["password"] = "REDACTED" if self.redis.password else ""
+        data["diag_api"]["token_secret"] = (
+            "REDACTED" if self.diag_api.token_secret else ""
+        )
         return data
 
 
