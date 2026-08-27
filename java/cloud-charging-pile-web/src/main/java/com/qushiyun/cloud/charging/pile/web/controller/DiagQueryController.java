@@ -5,6 +5,13 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.qushiyun.cloud.common.auth.component.InternalTokenManager;
 import com.qushiyun.cloud.common.core.util.R;
+import org.springframework.data.domain.Range;
+import org.springframework.data.redis.connection.DataType;
+import org.springframework.data.redis.connection.Limit;
+import org.springframework.data.redis.connection.stream.MapRecord;
+import org.springframework.data.redis.connection.stream.StreamInfo;
+import org.springframework.data.redis.core.StreamOperations;
+import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -15,8 +22,10 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.regex.Pattern;
 
 /**
@@ -30,6 +39,11 @@ import java.util.regex.Pattern;
 public class DiagQueryController {
 
     private static final Pattern SAFE_VALUE = Pattern.compile("^[A-Za-z0-9_.:-]{1,128}$");
+    private static final String REDIS_STREAM_QUEUE = "third.order.sync.queue";
+    private static final String REDIS_STREAM_NOTIFY_QUEUE = "third.order.sync.notify.queue";
+    private static final Set<String> REDIS_STREAM_WHITELIST =
+            Set.of(REDIS_STREAM_QUEUE, REDIS_STREAM_NOTIFY_QUEUE);
+    private static final int REDIS_STREAM_MAX_MESSAGES = 1000;
 
     private static final String ORDER_SQL = """
         SELECT id, order_no, tenant_id, status, type, billing_type, launch_type, is_test,
@@ -67,11 +81,16 @@ public class DiagQueryController {
 
     private final InternalTokenManager internalTokenManager;
     private final JdbcTemplate jdbcTemplate;
+    private final StringRedisTemplate stringRedisTemplate;
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    public DiagQueryController(InternalTokenManager internalTokenManager, JdbcTemplate jdbcTemplate) {
+    public DiagQueryController(
+            InternalTokenManager internalTokenManager,
+            JdbcTemplate jdbcTemplate,
+            StringRedisTemplate stringRedisTemplate) {
         this.internalTokenManager = internalTokenManager;
         this.jdbcTemplate = jdbcTemplate;
+        this.stringRedisTemplate = stringRedisTemplate;
     }
 
     @GetMapping("/order")
@@ -96,6 +115,115 @@ public class DiagQueryController {
                 : null;
 
         return ResponseEntity.ok(R.ok(new DiagOrderResponse(orders, feeTemplate)));
+    }
+
+    @GetMapping("/redis-stream")
+    public ResponseEntity<R<List<DiagQueryController.DiagRedisStreamResponse>>> redisStream(
+            @RequestHeader(value = "X-Internal-Token", required = false) String token,
+            @RequestHeader(value = "X-Request-Timestamp", required = false) Long requestTimestamp,
+            @RequestParam(value = "stream", required = false) String stream,
+            @RequestParam(value = "order_no", required = false) String orderNo,
+            @RequestParam(value = "max_messages", defaultValue = "1000") int maxMessages) {
+        if (!internalTokenManager.validateToken(token, requestTimestamp)) {
+            return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(R.failed(401, "令牌无效或过期"));
+        }
+        if (stream != null && !isAllowedStream(stream)) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(R.failed(400, "非白名单 Stream"));
+        }
+        String queryOrderNo = blankToNull(orderNo);
+        if (queryOrderNo != null && !isSafeValue(queryOrderNo)) {
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(R.failed(400, "非法参数"));
+        }
+        List<String> streams = stream == null
+                ? List.of(REDIS_STREAM_QUEUE, REDIS_STREAM_NOTIFY_QUEUE)
+                : List.of(stream);
+        int limit = Math.max(1, Math.min(maxMessages, REDIS_STREAM_MAX_MESSAGES));
+
+        StreamOperations<String, String, String> streamOperations = stringRedisTemplate.opsForStream();
+        List<DiagRedisStreamResponse> responses = new ArrayList<>();
+        for (String streamName : streams) {
+            responses.add(inspectStream(streamOperations, streamName, queryOrderNo, limit));
+        }
+        return ResponseEntity.ok(R.ok(responses));
+    }
+
+    private DiagRedisStreamResponse inspectStream(
+            StreamOperations<String, String, String> streamOperations,
+            String streamName,
+            String orderNo,
+            int limit) {
+        DataType dataType = stringRedisTemplate.type(streamName);
+        if (dataType != DataType.STREAM) {
+            return new DiagRedisStreamResponse(streamName, dataType.code(), 0L, List.of(), 0, 0);
+        }
+        Long rawLength = streamOperations.size(streamName);
+        long length = rawLength == null ? 0L : rawLength;
+        List<DiagRedisStreamGroupResponse> groups = readGroups(streamOperations, streamName, length);
+        List<MapRecord<String, String, String>> messages = streamOperations.reverseRange(
+                streamName, Range.<String>unbounded(), Limit.limit().count(limit));
+        int inspectedMessages = messages == null ? 0 : messages.size();
+        int matches = countOrderMatches(messages, orderNo);
+        return new DiagRedisStreamResponse(
+                streamName, "stream", length, groups, inspectedMessages, matches);
+    }
+
+    private List<DiagRedisStreamGroupResponse> readGroups(
+            StreamOperations<String, String, String> streamOperations,
+            String streamName,
+            long length) {
+        StreamInfo.XInfoGroups groupInfos = streamOperations.groups(streamName);
+        if (groupInfos == null || groupInfos.isEmpty()) {
+            return List.of();
+        }
+        List<DiagRedisStreamGroupResponse> groups = new ArrayList<>();
+        for (StreamInfo.XInfoGroup group : groupInfos) {
+            groups.add(new DiagRedisStreamGroupResponse(
+                    group.groupName(),
+                    group.consumerCount(),
+                    group.pendingCount(),
+                    streamLag(length, group.lastDeliveredId())));
+        }
+        return groups;
+    }
+
+    private static int countOrderMatches(
+            List<MapRecord<String, String, String>> messages,
+            String orderNo) {
+        if (orderNo == null || orderNo.isBlank() || messages == null || messages.isEmpty()) {
+            return 0;
+        }
+        int matches = 0;
+        for (MapRecord<String, String, String> message : messages) {
+            Map<String, String> fields = message.getValue();
+            if (fields == null) {
+                continue;
+            }
+            for (Map.Entry<String, String> field : fields.entrySet()) {
+                if ((field.getKey() != null && field.getKey().contains(orderNo))
+                        || (field.getValue() != null && field.getValue().contains(orderNo))) {
+                    matches += 1;
+                    break;
+                }
+            }
+        }
+        return matches;
+    }
+
+    private static long streamLag(long length, String lastDeliveredId) {
+        if (length <= 0 || lastDeliveredId == null || lastDeliveredId.isBlank()
+                || "0-0".equals(lastDeliveredId)) {
+            return length;
+        }
+        int separator = lastDeliveredId.lastIndexOf('-');
+        if (separator < 0 || separator == lastDeliveredId.length() - 1) {
+            return length;
+        }
+        try {
+            long deliveredSequence = Long.parseLong(lastDeliveredId.substring(separator + 1));
+            return Math.max(0L, length - deliveredSequence);
+        } catch (NumberFormatException ignored) {
+            return length;
+        }
     }
 
     private DiagOrderResponse.FeeTemplateSnapshot queryFeeTemplate(String orderNo, String tenantId) {
@@ -132,6 +260,10 @@ public class DiagQueryController {
         return value != null && SAFE_VALUE.matcher(value).matches();
     }
 
+    private static boolean isAllowedStream(String stream) {
+        return stream != null && REDIS_STREAM_WHITELIST.contains(stream);
+    }
+
     private static String blankToNull(String value) {
         return value == null || value.isBlank() ? null : value;
     }
@@ -154,6 +286,106 @@ public class DiagQueryController {
 
         public FeeTemplateSnapshot getFeeTemplate() {
             return feeTemplate;
+        }
+    }
+
+    public static class DiagRedisStreamResponse {
+        @JsonProperty("stream")
+        private final String stream;
+
+        @JsonProperty("type")
+        private final String type;
+
+        @JsonProperty("length")
+        private final long length;
+
+        @JsonProperty("groups")
+        private final List<DiagRedisStreamGroupResponse> groups;
+
+        @JsonProperty("inspected_messages")
+        private final int inspectedMessages;
+
+        @JsonProperty("matches")
+        private final int matches;
+
+        public DiagRedisStreamResponse(
+                String stream,
+                String type,
+                long length,
+                List<DiagRedisStreamGroupResponse> groups,
+                int inspectedMessages,
+                int matches) {
+            this.stream = stream;
+            this.type = type;
+            this.length = length;
+            this.groups = groups;
+            this.inspectedMessages = inspectedMessages;
+            this.matches = matches;
+        }
+
+        public String getStream() {
+            return stream;
+        }
+
+        public String getType() {
+            return type;
+        }
+
+        public long getLength() {
+            return length;
+        }
+
+        public List<DiagRedisStreamGroupResponse> getGroups() {
+            return groups;
+        }
+
+        public int getInspectedMessages() {
+            return inspectedMessages;
+        }
+
+        public int getMatches() {
+            return matches;
+        }
+    }
+
+    public static class DiagRedisStreamGroupResponse {
+        @JsonProperty("name")
+        private final String name;
+
+        @JsonProperty("consumers")
+        private final Long consumers;
+
+        @JsonProperty("pending")
+        private final Long pending;
+
+        @JsonProperty("lag")
+        private final long lag;
+
+        public DiagRedisStreamGroupResponse(
+                String name,
+                Long consumers,
+                Long pending,
+                long lag) {
+            this.name = name;
+            this.consumers = consumers;
+            this.pending = pending;
+            this.lag = lag;
+        }
+
+        public String getName() {
+            return name;
+        }
+
+        public Long getConsumers() {
+            return consumers;
+        }
+
+        public Long getPending() {
+            return pending;
+        }
+
+        public long getLag() {
+            return lag;
         }
     }
 
