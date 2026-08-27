@@ -5,7 +5,7 @@ from rich.console import Console
 from aiops_diagnostics.config import SafetySettings
 from aiops_diagnostics.engine import DiagnosticEngine
 from aiops_diagnostics.parsing import parse_request
-from aiops_diagnostics.render import render_progress_event, render_report
+from aiops_diagnostics.render import render_doctor, render_progress_event, render_report
 from aiops_diagnostics.sources import FixtureSources
 
 
@@ -43,3 +43,16 @@ def test_render_progress_event_shows_heartbeat_without_payload() -> None:
     assert "心跳" in output
     assert "turn-1" in output
     assert "must not be rendered" not in output
+
+
+def test_render_doctor_shows_deprecated_status() -> None:
+    console = Console(record=True, force_terminal=False, width=120)
+
+    render_doctor(
+        {"mysql": {"ok": True, "status": "deprecated", "details": {"message": "已退役"}}},
+        console,
+    )
+
+    output = console.export_text()
+    assert "DEPRECATED" in output
+    assert "已退役" in output

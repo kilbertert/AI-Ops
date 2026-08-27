@@ -31,6 +31,10 @@ SAFE_VALUE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 class SourceError(RuntimeError):
     """A bounded read-only data-source operation failed."""
 
+    def __init__(self, message: str, *, code: str | None = None) -> None:
+        super().__init__(message)
+        self.code = code
+
 
 class DiagnosticSources(Protocol):
     def get_orders(self, order_no: str, tenant_id: str | None = None) -> list[dict[str, Any]]: ...
@@ -306,11 +310,11 @@ class HttpSources:
 
     def _get(self, endpoint: str, params: dict[str, str]) -> Any:
         if not self.api.base_url:
-            raise SourceError("Diag API 地址未配置")
+            raise SourceError("Diag API 地址未配置", code="http.config_missing")
         if not self.api.internal_token.secret:
-            raise SourceError("Diag API 内部令牌密钥未配置")
+            raise SourceError("Diag API 内部令牌密钥未配置", code="http.config_missing")
         if not self.api.internal_token.expire_seconds:
-            raise SourceError("Diag API 内部令牌有效期未配置")
+            raise SourceError("Diag API 内部令牌有效期未配置", code="http.config_missing")
         url = self.api.base_url.rstrip("/") + endpoint
         if params:
             url = f"{url}?{urlencode(sorted(params.items()))}"
@@ -324,13 +328,21 @@ class HttpSources:
         except urllib.error.HTTPError as exc:
             detail = _http_error_message(exc)
             if exc.code in (401, 403):
-                raise SourceError(detail or "Diag API 令牌无效或过期") from exc
-            raise SourceError(f"Diag API 请求失败: {detail or f'HTTP {exc.code}'}") from exc
+                raise SourceError(detail or "Diag API 令牌无效或过期", code="http.auth_failed") from exc
+            raise SourceError(
+                f"Diag API 请求失败: {detail or f'HTTP {exc.code}'}",
+                code="http.http_unreachable",
+            ) from exc
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, UnicodeDecodeError) as exc:
-            raise SourceError(f"Diag API 请求失败: {exc.__class__.__name__}") from exc
+            raise SourceError(
+                f"Diag API 请求失败: {exc.__class__.__name__}",
+                code="http.http_unreachable",
+            ) from exc
         if not isinstance(payload, dict) or payload.get("code") not in (0, 200):
             detail = payload.get("msg") if isinstance(payload, dict) else "invalid response"
-            raise SourceError(f"Diag API 拒绝查询: {detail}")
+            is_auth_failure = isinstance(payload, dict) and payload.get("code") in (401, 403)
+            code = "http.auth_failed" if is_auth_failure else "http.http_unreachable"
+            raise SourceError(f"Diag API 拒绝查询: {detail}", code=code)
         return payload.get("data")
 
     def get_orders(self, order_no: str, tenant_id: str | None = None) -> list[dict[str, Any]]:
@@ -403,19 +415,45 @@ class HttpSources:
         return copy.deepcopy(data) if isinstance(data, list) else []
 
     def doctor(self) -> dict[str, Any]:
-        return {
-            "diag_api": {
-                "ok": bool(
-                    self.api.base_url
-                    and self.api.internal_token.secret
-                    and self.api.internal_token.expire_seconds
-                ),
-                "details": {
-                    "base_url": self.api.base_url,
-                    "token_configured": bool(self.api.internal_token.secret),
-                    "token_expire_seconds": self.api.internal_token.expire_seconds,
-                },
+        missing = [
+            name
+            for name, configured in (
+                ("base_url", bool(self.api.base_url)),
+                ("internal_token_secret", bool(self.api.internal_token.secret)),
+                ("internal_token_expire_seconds", bool(self.api.internal_token.expire_seconds)),
+            )
+            if not configured
+        ]
+        if missing:
+            return {
+                "ok": False,
+                "status": "error",
+                "error": "http.config_missing",
+                "details": {"message": "Diag HTTP 配置不完整", "missing": missing},
             }
+        try:
+            self._get("/diag/redis-stream", {})
+        except SourceError as exc:
+            code = exc.code or "http.http_unreachable"
+            message = {
+                "http.config_missing": "Diag HTTP 配置不完整",
+                "http.auth_failed": "Diag HTTP 鉴权失败",
+                "http.http_unreachable": "Diag HTTP 服务不可达或响应异常",
+            }.get(code, "Diag HTTP 检查失败")
+            return {
+                "ok": False,
+                "status": "error",
+                "error": code,
+                "details": {"message": message},
+            }
+        return {
+            "ok": True,
+            "status": "ok",
+            "details": {
+                "token_configured": bool(self.api.internal_token.secret),
+                "token_expire_seconds": self.api.internal_token.expire_seconds,
+                "cutover": "partial",
+            },
         }
 
 
@@ -460,12 +498,25 @@ class HybridSources:
         return self.http.inspect_streams(order_no)
 
     def doctor(self) -> dict[str, Any]:
-        http = self.http.doctor()
+        result: dict[str, Any] = {"http": self.http.doctor()}
         try:
             details = self.tdengine.doctor()
         except SourceError as exc:
-            return {"diag_api": http["diag_api"], "tdengine": {"ok": False, "error": str(exc)}}
-        return {"diag_api": http["diag_api"], "tdengine": {"ok": True, "details": details}}
+            result["tdengine"] = {"ok": False, "status": "error", "error": str(exc)}
+        else:
+            details["cutover"] = "partial"
+            result["tdengine"] = {"ok": True, "status": "ok", "details": details}
+        result["mysql"] = _deprecated_doctor()
+        result["redis"] = _deprecated_doctor()
+        return result
+
+
+def _deprecated_doctor() -> dict[str, Any]:
+    return {
+        "ok": True,
+        "status": "deprecated",
+        "details": {"message": "改由 /diag/* HTTP 接口访问；本仓 HybridSources 仍能 fallback，但生产应禁用"},
+    }
 
 
 class RedisSource:

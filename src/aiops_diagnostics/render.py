@@ -71,10 +71,17 @@ def render_doctor(result: dict[str, Any], console: Console | None = None) -> Non
     table.add_column("详情")
     for name, item in result.items():
         ok = bool(item.get("ok"))
+        status = str(item.get("status") or ("ok" if ok else "error"))
         details = item.get("details") if ok else {"error": item.get("error"), "details": item.get("details")}
+        if status == "deprecated":
+            label, style = "DEPRECATED", "yellow"
+        elif status == "ok":
+            label, style = "OK", "green"
+        else:
+            label, style = "FAIL", "red"
         table.add_row(
             escape(name),
-            "[green]OK[/green]" if ok else "[red]FAIL[/red]",
+            f"[{style}]{label}[/{style}]",
             escape(_format_value(details)),
         )
     console.print(table)
