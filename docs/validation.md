@@ -158,6 +158,18 @@ SSH 调试通道直接传入中文字面量会受远程代码页影响；本轮�
 
 边界：该订单号尚未连接真实故障案例并完成工程师结论比对；本节只记录客户端操作问题和错误追溯修复，不构成业务准确率验收。
 
+## HttpSources 与 fixture 等价测试（2026-08-27）
+
+对应 issue #36 / PRD T9，只验证 AI-Ops 侧 HTTP 客户端与离线等价行为：
+
+- 新增 `tests/test_http_sources.py` 13 项自动化检查，覆盖 `/diag/order`、`/diag/device`、`/diag/gun-property`、`/diag/comm-message`、`/diag/redis-stream` 的路径、查询参数、`X-Internal-Token` HMAC-SHA256 与 `X-Request-Timestamp` 请求头、401 令牌失败、非成功 `code` 和非法标识符注入拒绝。
+- 三份 `examples/fixtures/`（ykc_amount_mismatch / ocpp_consistent / missing_tx_data）通过 mock HTTP transport 与 `FixtureSources` 对 orders / fee_template / device / gun_samples / comm_messages / streams 逐字段比对，结果一致。
+- `AIOPS_DIAG_API_TOKEN_SECRET` 已加入 `Settings.redacted()` 回归，脱敏输出不含 secret。
+- 检查命令：`uv run pytest tests/test_http_sources.py tests/test_sources.py tests/test_config.py tests/test_engine.py -q` 全部通过；`uv run ruff check` 通过；`git diff --check` 通过。
+- 全套 `uv run pytest -q` 中 `tests/test_gateway_client.py::test_gateway_client_does_not_retry_http_errors` 失败：测试用 `HTTPError(..., fp=None)`，其 `.read()` 在 Python 3.11 返回 `str`，`_error_detail()` 按 `bytes.decode` 处理而抛出 `AttributeError`。该失败在干净 `HEAD` 工作树中可稳定复现，属于本次变更前已有测试缺陷。
+
+未完成业务验收：本里程碑没有真实 Java `/diag/*` 服务或生产网络回放，不据此宣称业务查询准确率已经验收。
+
 ## AFK 工作流脚手架验证（2026-08-26）
 
 纯工具链变更，不触碰诊断逻辑、打包产物或安全边界：
