@@ -19,6 +19,15 @@ dependencies = [
     { name = "uvicorn" },
 ]
 
+[package.optional-dependencies]
+dev = [
+    { name = "httpx" },
+    { name = "pyinstaller" },
+    { name = "pytest" },
+    { name = "pytest-cov" },
+    { name = "ruff" },
+]
+
 [package.dev-dependencies]
 dev = [
     { name = "httpx" },
@@ -31,16 +40,22 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.115,<1" },
+    { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.28,<1" },
     { name = "keyring", specifier = ">=25,<26" },
     { name = "openai-codex", specifier = ">=0.144.4,<0.145" },
+    { name = "pyinstaller", marker = "extra == 'dev'", specifier = ">=6.15,<7" },
     { name = "pymysql", extras = ["rsa"], specifier = ">=1.1.1,<2" },
+    { name = "pytest", marker = "extra == 'dev'", specifier = ">=8.3,<9" },
+    { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=6,<7" },
     { name = "python-dotenv", specifier = ">=1.0,<2" },
     { name = "pywin32", marker = "sys_platform == 'win32'", specifier = ">=308" },
     { name = "redis", specifier = ">=5.2,<7" },
     { name = "rich", specifier = ">=13.9,<15" },
+    { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.12,<1" },
     { name = "typer", specifier = ">=0.15,<1" },
     { name = "uvicorn", specifier = ">=0.34,<1" },
 ]
+provides-extras = ["dev"]
 
 [package.metadata.requires-dev]
 dev = [
