@@ -452,9 +452,7 @@ class Settings:
         data["tdengine"]["url"] = _redact_url_credentials(self.tdengine.url)
         data["tdengine"]["password"] = "REDACTED" if self.tdengine.password else ""
         data["redis"]["password"] = "REDACTED" if self.redis.password else ""
-        data["diag_api"]["token_secret"] = (
-            "REDACTED" if self.diag_api.token_secret else ""
-        )
+        data["diag_api"]["token_secret"] = "REDACTED" if self.diag_api.token_secret else ""
         return data
 
 

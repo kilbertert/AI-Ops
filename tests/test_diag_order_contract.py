@@ -65,15 +65,15 @@ def test_t1_java_deliverable_exists() -> None:
 
 def test_landing_README_records_local_verification_boundary() -> None:
     source = _read(LANDING_README)
-    assert '未编译' in source
-    assert '待验证' in source
-    assert 'DiagQueryController.java' in source
-    assert 'DiagQueryAuditAspect.java' in source
+    assert "未编译" in source
+    assert "待验证" in source
+    assert "DiagQueryController.java" in source
+    assert "DiagQueryAuditAspect.java" in source
 
 
 def test_controller_routes_get_order_under_diag_root() -> None:
     source = _read(CONTROLLER)
-    assert '@RestController' in source
+    assert "@RestController" in source
     assert '@RequestMapping("/diag")' in source
     assert '@GetMapping("/order")' in source
 
@@ -82,19 +82,19 @@ def test_controller_self_validates_internal_token_headers() -> None:
     source = _read(CONTROLLER)
     assert '@RequestHeader(value = "X-Internal-Token", required = false)' in source
     assert '@RequestHeader(value = "X-Request-Timestamp", required = false)' in source
-    assert 'internalTokenManager.validateToken(' in source
+    assert "internalTokenManager.validateToken(" in source
 
 
 def test_invalid_token_returns_http_401_and_r_envelope() -> None:
     source = _read(CONTROLLER)
-    assert 'HttpStatus.UNAUTHORIZED' in source
+    assert "HttpStatus.UNAUTHORIZED" in source
     assert 'R.failed(401, "令牌无效或过期")' in source
 
 
 def test_order_payload_uses_r_envelope_and_full_order_fields() -> None:
     source = _read(CONTROLLER)
-    assert 'ResponseEntity<R<DiagQueryController.DiagOrderResponse>>' in source
-    assert 'ch_order_info' in source
+    assert "ResponseEntity<R<DiagQueryController.DiagOrderResponse>>" in source
+    assert "ch_order_info" in source
     for column in (
         "order_no",
         "tenant_id",
@@ -126,66 +126,66 @@ def test_java_order_select_matches_python_reference_columns() -> None:
 
 def test_order_query_is_parameterized_ordered_and_capped_at_three() -> None:
     source = _read(CONTROLLER)
-    assert 'ORDER BY created_time DESC' in source
-    assert 'LIMIT 3' in source
-    assert 'WHERE order_no = ?' in source
-    assert 'AND (? IS NULL OR tenant_id = ?)' in source
-    assert '@Transactional(readOnly = true' in source
+    assert "ORDER BY created_time DESC" in source
+    assert "LIMIT 3" in source
+    assert "WHERE order_no = ?" in source
+    assert "AND (? IS NULL OR tenant_id = ?)" in source
+    assert "@Transactional(readOnly = true" in source
 
 
 def test_order_parameter_rejects_injection_characters_before_query() -> None:
     source = _read(CONTROLLER)
-    assert '^[A-Za-z0-9_.:-]{1,128}$' in source
-    assert 'isSafeValue(orderNo)' in source
-    assert 'HttpStatus.BAD_REQUEST' in source
+    assert "^[A-Za-z0-9_.:-]{1,128}$" in source
+    assert "isSafeValue(orderNo)" in source
+    assert "HttpStatus.BAD_REQUEST" in source
     assert 'R.failed(400, "非法参数")' in source
-    assert source.index('isSafeValue(orderNo)') < source.index('queryForList')
+    assert source.index("isSafeValue(orderNo)") < source.index("queryForList")
 
 
 def test_blank_tenant_id_is_normalized_to_cross_tenant_null() -> None:
     source = _read(CONTROLLER)
-    assert 'blankToNull' in source
-    assert 'queryForList(ORDER_SQL, orderNo, tenantId, tenantId)' not in source
-    assert 'queryFeeTemplate(orderNo, tenantId)' not in source
+    assert "blankToNull" in source
+    assert "queryForList(ORDER_SQL, orderNo, tenantId, tenantId)" not in source
+    assert "queryFeeTemplate(orderNo, tenantId)" not in source
 
 
 def test_fee_template_snapshot_includes_occupy_fee_template() -> None:
     source = _read(CONTROLLER)
-    assert 'ch_fee_template_record' in source
+    assert "ch_fee_template_record" in source
     assert '@JsonProperty("order_no")' in source
     assert '@JsonProperty("tenant_id")' in source
     assert '@JsonProperty("fee_template")' in source
     assert '@JsonProperty("occupy_fee_template")' in source
     assert '@JsonProperty("period_fee_detail")' in source
-    assert 'include_fee_template' in source
+    assert "include_fee_template" in source
 
 
 def test_audit_aspect_records_caller_params_and_result_without_wire_body() -> None:
     source = _read(ASPECT)
-    assert '@Aspect' in source
-    assert 'internal:AIOps' in source
-    assert 'ProceedingJoinPoint' in source
-    assert 'elapsedMs' in source
-    assert 'result' in source
-    assert 'responseBody' not in source
-    assert 'queryArgs' in source
+    assert "@Aspect" in source
+    assert "internal:AIOps" in source
+    assert "ProceedingJoinPoint" in source
+    assert "elapsedMs" in source
+    assert "result" in source
+    assert "responseBody" not in source
+    assert "queryArgs" in source
 
 
 def test_audit_aspect_filters_request_headers_by_annotation() -> None:
     source = _read(ASPECT)
-    assert 'RequestHeader.class' in source
-    assert 'getParameters()' in source
-    assert 'isAnnotationPresent' in source
+    assert "RequestHeader.class" in source
+    assert "getParameters()" in source
+    assert "isAnnotationPresent" in source
 
 
 def test_audit_aspect_records_http_error_responses_as_failure() -> None:
     source = _read(ASPECT)
-    assert 'getStatusCode().isError()' in source
+    assert "getStatusCode().isError()" in source
     assert '"failure"' in source
-    assert 'outcome(result)' in source
+    assert "outcome(result)" in source
 
 
 def test_java_artifact_does_not_hardcode_internal_token_secret() -> None:
     source = _read(CONTROLLER)
-    assert 'qushiyun-internal-secret-2024' not in source
-    assert 'InternalTokenManager' in source
+    assert "qushiyun-internal-secret-2024" not in source
+    assert "InternalTokenManager" in source
