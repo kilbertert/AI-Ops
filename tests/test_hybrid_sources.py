@@ -141,7 +141,7 @@ def test_hybrid_sources_doctor_classification(monkeypatch) -> None:
     assert success["mysql"] == {
         "ok": True,
         "status": "deprecated",
-        "details": {"message": "改由 /diag/* HTTP 接口访问；本仓 HybridSources 仍能 fallback，但生产应禁用"},
+        "details": {"message": "已收口：证据改由 /diag/* HTTP 接口返回，生产配置不应保留直连凭据"},
     }
     assert success["redis"] == success["mysql"]
 
