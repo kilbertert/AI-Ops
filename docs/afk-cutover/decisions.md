@@ -48,7 +48,7 @@
 - **#50** PR-A → `docs/afk-cutover/pr-a-spec.md`（HybridSources 部分切流量 + fixture 等价）
 - **#51** PR-B → `docs/afk-cutover/pr-b-spec.md`（doctor 分类 + `.env.example` 注释化）
 - **#52** PR-C → `docs/afk-cutover/pr-c-spec.md`（方案文档与 AFK 工作流同步）
-- PR-D：MySQL+Redis 凭据回收、TDengine 留口子；待后续以新 issue 落地，本文不落 PR 清单
+- #43 PR-D → `docs/afk-cutover/pr-d-spec.md`（Phase 3a：删 MySQL+Redis 直连凭据，TDengine 留口子；Phase 3b 待 tsdata 补洞后以新 issue 启动）
 
 ## 5. 关键不变量（D 方案前后都必须成立）
 

@@ -6,12 +6,10 @@
 flowchart LR
     U[工程师反馈] --> P[输入解析]
     P --> E[诊断引擎]
-    E --> M[MySQL 固定查询]
+    E --> H[/diag/* HTTP 只读接口]
     E --> T[TDengine 有界查询]
-    E --> R[Redis 有界检查]
-    M --> Q[证据与规则]
+    H --> Q[证据与规则]
     T --> Q
-    R --> Q
     Q --> O[终端与 JSON 报告]
 ```
 
@@ -42,7 +40,7 @@ flowchart LR
 
 ## 部署边界
 
-项目可以直接运行在权限受限的诊断主机上，也可以通过 OpenSSH 本地转发运行。刻意不支持 SSH 密码自动化；生产环境必须使用专用账号和 key，并限制可转发目标。
+项目可以直接运行在权限受限的诊断主机上，也可以通过 OpenSSH 本地转发访问 TDengine 严格只读代理。刻意不支持 SSH 密码自动化；生产环境必须使用专用账号和 key，并限制可转发目标。订单、费用、设备和 Redis 队列证据改由充电桩 `/diag/*` HTTP 接口读取，本仓不再配置 MySQL / Redis 直连凭据。
 
 多端便携部署时，推荐将上述数据库访问边界放入固定服务器上的 `AI-Ops Gateway`，客户端只通过 HTTPS 设备令牌提交诊断请求和同步事件。Gateway 方案、注册、秘密管理和跨设备 run 同步见 [gateway.md](gateway.md)。
 
@@ -50,10 +48,9 @@ TDengine Community Edition 3.4 不支持 `GRANT READ`，非超级用户仍可能
 
 ## 必需的生产身份
 
-- MySQL 账号：只对明确的诊断表和视图拥有 `SELECT`。
+- `/diag/*` HTTP 内部令牌：只允许访问已实现的白名单诊断端点，并在 300 秒窗口内完成验签。
 - TDengine 代理后端账号：仅限 localhost，`CREATEDB 0`、`SYSINFO 0`；由于 Community Edition 缺少数据库级只读授权，具备写能力的凭据只能由严格只读代理持有。
-- Redis 账号：只读 ACL 限制到两个订单同步 Stream 和必要的元数据命令。
-- SSH 账号：无 shell 管理权限，只能转发到批准的数据库端点。
+- SSH 账号：无 shell 管理权限，Phase 3a 后只能转发到 TDengine 只读代理端点。
 
 ## 参考资料边界
 

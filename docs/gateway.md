@@ -2,18 +2,19 @@
 
 ## 目标
 
-便携包只负责客户端交互和进度显示。固定服务器上的 Gateway 才负责数据库访问、SSH 隧道、Codex provider、运行状态和事件存储。
+便携包只负责客户端交互和进度显示。固定服务器上的 Gateway 才负责 `/diag/*` HTTP 查询、TDengine 直连代理、SSH 隧道、Codex provider、运行状态和事件存储。
 
 ```mermaid
 flowchart LR
     W[Windows 便携包] -->|HTTPS + 设备令牌| G[AI-Ops Gateway]
     L[Linux 便携包] -->|HTTPS + 设备令牌| G
-    G --> DB[(MySQL / TDengine / Redis)]
+    G --> H[/diag/* HTTP 只读接口/]
+    G --> T[(TDengine 严格只读代理)]
     G --> C[Codex API]
     G --> S[(run / event 持久存储)]
 ```
 
-客户端永远不接触数据库密码、SSH 私钥或 provider API key。数据库访问仍复用现有固定参数化查询、TDengine 严格只读代理、Redis ACL 和 Codex thin harness。
+客户端永远不接触数据库密码、SSH 私钥或 provider API key。订单、费用、设备和 Redis 队列证据经 `/diag/*` HTTP 读取，TDengine 仍走严格只读代理；Phase 3a 后服务器私有 `production.env` 不再保存 MySQL / Redis 直连凭据。
 
 ## 行业依据
 
@@ -52,7 +53,7 @@ uv run aiops-gateway serve
 
 `--tenant-id` 是可选的：不传即工作区级（设备不绑定租户，任意订单可查）；仅当需要把某台设备限制到单一租户时才传（例如多外部运营商必须互不可见的场景）。诊断时运维只需提交订单号，无需查找或输入租户——`order_snapshot` 会按 `order_no` 发现订单及其租户。
 
-Gateway 进程通过 `AIOPS_GATEWAY_SERVER_CONFIG_FILE` 加载服务器私有 `production.env`。该文件只应存在于固定服务器，不应复制到便携包。
+Gateway 进程通过 `AIOPS_GATEWAY_SERVER_CONFIG_FILE` 加载服务器私有 `production.env`。该文件只应存在于固定服务器，不应复制到便携包；Phase 3a 后其中只保留 `/diag/*` HTTP 内部令牌、TDengine 直连代理、provider key 和 Gateway 配置。
 
 用户级 systemd 服务必须显式固定应用配置和数据根目录，不能依赖用户管理器继承的通用 `XDG_CONFIG_HOME/XDG_DATA_HOME`。否则 key slot 可能错误解析到 `$XDG_CONFIG_HOME/keys`：
 

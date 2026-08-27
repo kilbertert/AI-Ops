@@ -6,7 +6,7 @@
 订单 2079842220423700481 金额不对，帮我排查
 ```
 
-运行时会提取订单号和问题意图，在 MySQL、TDengine、Redis 上执行有界查询，结合生产后端源码整理出的业务规则，最后返回带证据的诊断报告。
+运行时会提取订单号和问题意图，经 `/diag/*` HTTP 诊断接口查询订单、费用、设备与 Redis 队列证据，并在 TDengine 上执行有界查询，结合生产后端源码整理出的业务规则，最后返回带证据的诊断报告。
 
 > 第一次使用？看 [快速上手](docs/快速上手.md)，5 分钟从安装到跑出第一份离线诊断报告。
 
@@ -29,14 +29,13 @@
 ## 安全边界
 
 - 不提供 `UPDATE`、`DELETE`、`INSERT`、DDL、退款、重算、补发、消息重放或服务重启能力。
-- MySQL 查询在只读事务中执行，并使用固定的参数化 SQL。
-- TDengine 查询必须包含设备、时间范围、选定列和 `LIMIT`。
-- Redis 只允许读取元数据和有界的反向范围；不消费游标。
+- 订单、费用、设备和 Redis 队列证据改由充电桩 `/diag/*` HTTP 接口只读查询，本运行时不再保存 MySQL / Redis 直连凭据。
+- TDengine 查询必须包含设备、时间范围、选定列和 `LIMIT`；TDengine 直连凭据暂时保留，待 tsdata 补齐 token 校验后再回收。
 - 凭据只能来自环境变量或私有配置，所有输出都会脱敏。
 - 报告不输出用户 ID、VIN、卡号、车牌号和原始协议 payload。
 - Codex 通过可插拔的 Responses API provider 运行，支持多 provider 注册表（`AIOPS_PROVIDERS`）与默认 provider；默认不绑定单一供应商。`--key-slot` 选择 `AIOPS_CODEX_KEY_DIR` 下权限为 `0600` 的私有 key 文件；API key 不会进入 Git 或运行制品。
 
-资产盘点发现的生产应用账号权限过大，本运行时不会使用它。已验证的部署使用专用 MySQL、Redis 和 SSH 身份；更换应用账号必须单独完成依赖审计和凭据轮换。TDengine Community Edition 无法提供数据库级只读角色，因此生产诊断必须使用 `ops/` 中的严格 loopback-only 查询代理。
+资产盘点发现的生产应用账号权限过大，本运行时不会使用它。Phase 3a 后生产只保留 TDengine 直连代理和 `/diag/*` HTTP 内部令牌；MySQL / Redis 凭据已从生产配置中删除。TDengine Community Edition 无法提供数据库级只读角色，因此生产诊断必须使用 `ops/` 中的严格 loopback-only 查询代理。
 
 ## 安装与配置
 

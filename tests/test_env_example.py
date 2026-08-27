@@ -13,4 +13,15 @@ def test_env_example_documents_partial_cutover_classification() -> None:
         "# WARNING: TDENGINE 直连凭据保留,等 git.qushiyun.com/iot/tsdata 补完 token 校验后回收(D 方案)"
         in text
     )
-    assert "# DEPRECATED: 改由 /diag/* HTTP 接口访问,本仓 HybridSources 仍能 fallback,但生产应禁用" in text
+    assert "# REMOVED (Phase 3a): 不再配置 MySQL 直连凭据；/diag/* HTTP 接口已接管" in text
+
+
+def test_env_example_phase_3a_removes_mysql_and_redis_direct_configuration() -> None:
+    text = (Path(__file__).parents[1] / ".env.example").read_text(encoding="utf-8")
+    active_lines = [line.split(" #", 1)[0] for line in text.splitlines() if line.strip() and "=" in line]
+
+    for prefix in ("AIOPS_MYSQL_", "AIOPS_REDIS_", "AIOPS_SSH_MYSQL_", "AIOPS_SSH_REDIS_"):
+        assert not [line for line in active_lines if line.startswith(prefix)]
+
+    assert any(line.startswith("AIOPS_TDENGINE_URL=") for line in active_lines)
+    assert any(line.startswith("AIOPS_SSH_TDENGINE_HOST=") for line in active_lines)
