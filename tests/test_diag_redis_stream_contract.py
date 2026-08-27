@@ -45,7 +45,7 @@ def test_t5_java_deliverable_exists() -> None:
 
 def test_controller_routes_get_redis_stream_under_diag_root() -> None:
     source = _read(CONTROLLER)
-    assert '@RestController' in source
+    assert "@RestController" in source
     assert '@RequestMapping("/diag")' in source
     assert '@GetMapping("/redis-stream")' in source
 
@@ -54,12 +54,12 @@ def test_controller_self_validates_internal_token_headers() -> None:
     source = _read(CONTROLLER)
     assert '@RequestHeader(value = "X-Internal-Token", required = false)' in source
     assert '@RequestHeader(value = "X-Request-Timestamp", required = false)' in source
-    assert 'internalTokenManager.validateToken(' in source
+    assert "internalTokenManager.validateToken(" in source
 
 
 def test_invalid_token_returns_http_401_and_r_envelope() -> None:
     source = _read(CONTROLLER)
-    assert 'HttpStatus.UNAUTHORIZED' in source
+    assert "HttpStatus.UNAUTHORIZED" in source
     assert 'R.failed(401, "令牌无效或过期")' in source
 
 
@@ -67,40 +67,40 @@ def test_redis_stream_only_allows_the_two_whitelisted_streams() -> None:
     source = _read(CONTROLLER)
     assert '"third.order.sync.queue"' in source
     assert '"third.order.sync.notify.queue"' in source
-    assert 'isAllowedStream(' in source
+    assert "isAllowedStream(" in source
 
 
 def test_non_whitelisted_stream_is_rejected_before_redis_access() -> None:
     source = _read(CONTROLLER)
-    assert 'HttpStatus.BAD_REQUEST' in source
+    assert "HttpStatus.BAD_REQUEST" in source
     assert 'R.failed(400, "非白名单 Stream")' in source
-    assert source.index('isAllowedStream(') < source.index('opsForStream()')
+    assert source.index("isAllowedStream(") < source.index("opsForStream()")
 
 
 def test_missing_token_is_rejected_before_parameter_or_redis_checks() -> None:
     source = _read(CONTROLLER)
-    assert source.index('internalTokenManager.validateToken(') < source.index('isAllowedStream(')
+    assert source.index("internalTokenManager.validateToken(") < source.index("isAllowedStream(")
 
 
 def test_max_messages_has_a_hard_server_side_cap() -> None:
     source = _read(CONTROLLER)
-    assert 'REDIS_STREAM_MAX_MESSAGES = 1000' in source
+    assert "REDIS_STREAM_MAX_MESSAGES = 1000" in source
     assert '@RequestParam(value = "max_messages", defaultValue = "1000")' in source
-    assert 'Math.min(' in source
+    assert "Math.min(" in source
 
 
 def test_redis_stream_uses_bounded_reverse_range_query() -> None:
     source = _read(CONTROLLER)
-    assert 'StringRedisTemplate' in source
-    assert 'opsForStream()' in source
-    assert 'reverseRange(' in source
-    assert 'Limit.limit().count(' in source
-    assert 'Range.<String>unbounded()' in source
+    assert "StringRedisTemplate" in source
+    assert "opsForStream()" in source
+    assert "reverseRange(" in source
+    assert "Limit.limit().count(" in source
+    assert "Range.<String>unbounded()" in source
 
 
 def test_redis_stream_payload_uses_r_envelope_and_contract_fields() -> None:
     source = _read(CONTROLLER)
-    assert 'ResponseEntity<R<List<DiagQueryController.DiagRedisStreamResponse>>>' in source
+    assert "ResponseEntity<R<List<DiagQueryController.DiagRedisStreamResponse>>>" in source
     assert '@JsonProperty("stream")' in source
     assert '@JsonProperty("type")' in source
     assert '@JsonProperty("length")' in source
@@ -120,19 +120,19 @@ def test_redis_stream_group_payload_uses_contract_fields() -> None:
 def test_order_no_matching_is_validated_and_counts_message_fields() -> None:
     source = _read(CONTROLLER)
     assert '@RequestParam(value = "order_no", required = false)' in source
-    assert 'isSafeValue(orderNo)' in source
-    assert 'getValue()' in source
-    assert 'contains(' in source
+    assert "isSafeValue(orderNo)" in source
+    assert "getValue()" in source
+    assert "contains(" in source
 
 
 def test_missing_or_non_stream_redis_keys_are_reported_without_empty_groups() -> None:
     source = _read(CONTROLLER)
-    assert 'DataType.STREAM' in source
-    assert 'dataType.code()' in source
-    assert 'length' in source
+    assert "DataType.STREAM" in source
+    assert "dataType.code()" in source
+    assert "length" in source
 
 
 def test_audit_aspect_also_covers_redis_stream_endpoint() -> None:
     source = _read(ASPECT)
-    assert 'DiagQueryController' in source
-    assert '@Around' in source
+    assert "DiagQueryController" in source
+    assert "@Around" in source
