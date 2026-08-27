@@ -83,8 +83,7 @@ class _FakeDiagTransport:
             orders = [
                 row
                 for row in self.payload.get("orders", [])
-                if row.get("order_no") == order_no
-                and (not tenant_id or row.get("tenant_id") == tenant_id)
+                if row.get("order_no") == order_no and (not tenant_id or row.get("tenant_id") == tenant_id)
             ]
             fee_template = None
             if params.get("include_fee_template") == "true":
@@ -101,9 +100,7 @@ class _FakeDiagTransport:
                 if (
                     (device_id and device.get("id") == device_id)
                     or (device_code and device.get("device_code") == device_code)
-                ) and (
-                    not tenant_id or not device.get("tenant_id") or device.get("tenant_id") == tenant_id
-                ):
+                ) and (not tenant_id or not device.get("tenant_id") or device.get("tenant_id") == tenant_id):
                     return device
             return None
 
@@ -155,9 +152,7 @@ def test_http_sources_uses_frozen_diag_endpoint_contract(monkeypatch) -> None:
     requests = []
     for url, _ in transport.requests:
         split = urlsplit(url)
-        requests.append(
-            (split.path, {key: values[-1] for key, values in parse_qs(split.query).items()})
-        )
+        requests.append((split.path, {key: values[-1] for key, values in parse_qs(split.query).items()}))
 
     assert requests[0] == (
         "/diag/order",
@@ -204,6 +199,7 @@ def test_http_sources_uses_frozen_diag_endpoint_contract(monkeypatch) -> None:
 
 def test_http_sources_rejects_failed_or_expired_token(monkeypatch) -> None:
     for status in (401, 403):
+
         def raise_http_error(request: Any, timeout: int | None = None, status: int = status) -> None:
             body = json.dumps({"code": status, "msg": "令牌无效或过期"}).encode("utf-8")
             raise urllib.error.HTTPError(
@@ -364,9 +360,7 @@ def test_http_sources_match_fixture_sources_field_by_field(monkeypatch, fixture_
         ) == fixture.get_gun_samples(device, start, end, _fixture_tx_serial(order))
         assert source.get_comm_messages(
             order.get("device_code") or order.get("child_device_code"), start, end
-        ) == fixture.get_comm_messages(
-            order.get("device_code") or order.get("child_device_code"), start, end
-        )
+        ) == fixture.get_comm_messages(order.get("device_code") or order.get("child_device_code"), start, end)
         assert source.inspect_streams(order_no) == fixture.inspect_streams(order_no)
 
 
