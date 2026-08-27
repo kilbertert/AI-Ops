@@ -9,7 +9,7 @@ For each branch:
 1. Run `git merge <branch> --no-edit`
 2. If there are merge conflicts, resolve them intelligently by reading both
    sides and choosing the correct resolution
-3. After resolving conflicts, run `uv sync --extra dev && uv run pytest && uv run ruff check` to verify everything works
+3. After resolving conflicts, run `npm run check` to verify everything works
 4. If tests fail, fix the issues before proceeding to the next branch
 
 After all branches are merged, make a single Conventional Commit summarizing
@@ -42,7 +42,11 @@ Here are all the issues:
 
 {{ISSUES}}
 
-Use `gh issue close <number> --comment "..."` for each.
+For each issue you close, also strip its queue label so a CLOSED issue never
+lingers in the planner's `ready-for-agent` queue (GitHub keeps labels on close):
+`gh issue close <number> --comment "..."` then
+`gh issue edit <number> --remove-label ready-for-agent`. If the label removal
+fails (network / already removed), ignore and continue.
 
 Once you've merged, verified, pushed, and closed everything you can, output
 `<promise>COMPLETE</promise>`. If a blocker needs a human decision, output
