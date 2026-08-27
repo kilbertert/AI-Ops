@@ -26,6 +26,15 @@ aiops = "aiops_diagnostics.cli:app"
 aiops-tdengine-proxy = "aiops_diagnostics.tdengine_proxy:main"
 aiops-gateway = "aiops_diagnostics.gateway_server:main"
 
+[project.optional-dependencies]
+dev = [
+  "pyinstaller>=6.15,<7",
+  "pytest>=8.3,<9",
+  "pytest-cov>=6,<7",
+  "ruff>=0.12,<1",
+  "httpx>=0.28,<1",
+]
+
 [dependency-groups]
 dev = [
   "pyinstaller>=6.15,<7",

@@ -102,7 +102,13 @@ public class DiagQueryAuditAspect {
             if (orders.isArray()) {
                 return orders.size();
             }
-            return body.isArray() ? body.size() : 0;
+            if (body.isArray()) {
+                return body.size();
+            }
+            if (body.isObject()) {
+                return body.size() > 0 ? 1 : 0;
+            }
+            return 0;
         } catch (Exception exception) {
             return -1;
         }

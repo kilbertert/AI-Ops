@@ -247,6 +247,16 @@ T1 一致，是团队仓库中的源码工件契约，而非部署服务后的�
 - 检查命令：`uv run pytest tests/test_diag_redis_stream_contract.py tests/test_diag_order_contract.py -q` 通过（16 + 15 项）；全套 `uv run pytest` **257 项通过**，`uv run ruff check` 通过，`git diff --check` 通过。
 - 命令兼容性：`uv sync --extra dev` 仍因 `Extra dev is not defined in optional-dependencies` 失败；本仓库开发依赖位于 `[dependency-groups]`，实际以 `uv sync --group dev` 同步等价依赖后执行全部检查，未跳过测试。
 - 未完成业务验收：本节只有自动化源码契约证据，未编译、未部署 Java 服务，未执行 `docs/diag-query-api-plan.md` §11 的 Redis Gherkin 场景，也不能据此宣称生产同步队列诊断准确率已经验收。
+## Java `/diag/device` 工件契约验证（2026-08-27）
+
+生产 Java 仓库远端部署，本仓库没有 JDK/Spring 构建链，因此 T6 的可验证边界同样是
+团队仓库中的源码工件契约，而非部署服务后的真实环境行为：
+
+- 自动化检查：新增 `[project.optional-dependencies] dev`（与 `[dependency-groups] dev` 同清单）后，任务约定命令 `uv sync --extra dev && uv run pytest && uv run ruff check` 直接通过；合并后全套 `uv run pytest` **324 项通过**，`uv run ruff check` 通过，`git diff --check` 通过，`uv.lock` 同步更新。
+- 新增 `tests/test_diag_device_contract.py` 的 16 项测试固定：`GET /diag/device` 路由、`X-Internal-Token` + `X-Request-Timestamp` 自校验、401 拒绝、`R<T>` 响应、`iot_charging_device` 十字段快照、`device_id`/`device_code` 二选一必填、`SAFE_VALUE` 注入拦截在查询前执行、`tenant_id` 可空过滤和 `LIMIT 1` 有界查询；并补强两种 SQL 字段/占位符一致性、未命中 `data=null`、空白查询键与租户键在校验顺序前归一、`tenant_id` 不安全值查询前拒绝、查询 SQL 分支选择、审计单对象/数组行数。
+- 复查新增的审计行数契约测试初跑失败，暴露 `DiagQueryAuditAspect.rowsOf` 对 `/diag/device` 返回的单个对象记为 `rows=0`；已修复为数组按元素计数、非空对象按 1 行计数。该结论属于源码契约失败与修复，不代表真实生产故障。
+- Java 侧行为对应 `docs/diag-query-api-plan.md` §6.6：按 id 或 device_code 单个查询、`tenant_id` 为可选跨租户过滤、未命中时 `data` 为 `null`。
+- 未完成业务验收：Java 工件未编译、未部署、未对真实 `cloud-charging-pile-web` 执行 §11 的 Gherkin 场景；不把源码契约测试写成真实故障结论。
 
 ## 业务验收待办
 
