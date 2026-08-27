@@ -32,6 +32,11 @@ def _env_int(name: str, default: int, values: Mapping[str, str | None] | None = 
     return int(raw) if raw else default
 
 
+def _env_int_optional(name: str, values: Mapping[str, str | None] | None = None) -> int | None:
+    raw = _env(name, values=values)
+    return int(raw) if raw else None
+
+
 def _env_bool(
     name: str,
     default: bool = False,
@@ -162,24 +167,52 @@ class RedisSettings:
 
 
 @dataclass(slots=True)
-class DiagApiSettings:
-    base_url: str = "http://127.0.0.1:8080"
-    token_secret: str = ""
-    token_expire_seconds: int = 300
+class InternalTokenSettings:
+    secret: str | None = None
+    expire_seconds: int | None = None
+
+    def __post_init__(self) -> None:
+        if self.expire_seconds is not None and not 60 <= self.expire_seconds <= 600:
+            raise ValueError("Diag API 令牌有效期必须在 60-600 秒之间")
+
+
+@dataclass(slots=True)
+class HttpSettings:
+    base_url: str | None = None
+    internal_token: InternalTokenSettings = field(default_factory=InternalTokenSettings)
     timeout_seconds: int = 8
 
     def __post_init__(self) -> None:
-        parsed = urlsplit(self.base_url)
-        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
-            raise ValueError("Diag API base_url 必须是完整的 http 或 https 地址")
-        if parsed.username is not None or parsed.password is not None:
-            raise ValueError("Diag API base_url 不得包含认证信息")
-        if parsed.query or parsed.fragment:
-            raise ValueError("Diag API base_url 不得包含 query 或 fragment")
+        if self.base_url is not None:
+            parsed = urlsplit(self.base_url)
+            if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+                raise ValueError("Diag API base_url 必须是完整的 http 或 https 地址")
+            if parsed.username is not None or parsed.password is not None:
+                raise ValueError("Diag API base_url 不得包含认证信息")
+            if parsed.query or parsed.fragment:
+                raise ValueError("Diag API base_url 不得包含 query 或 fragment")
         if not 1 <= self.timeout_seconds <= 60:
             raise ValueError("Diag API 超时必须在 1-60 秒之间")
-        if not 60 <= self.token_expire_seconds <= 600:
-            raise ValueError("Diag API 令牌有效期必须在 60-600 秒之间")
+
+    @property
+    def token_secret(self) -> str | None:
+        return self.internal_token.secret
+
+    @token_secret.setter
+    def token_secret(self, value: str | None) -> None:
+        self.internal_token.secret = value
+
+    @property
+    def token_expire_seconds(self) -> int | None:
+        return self.internal_token.expire_seconds
+
+    @token_expire_seconds.setter
+    def token_expire_seconds(self, value: int | None) -> None:
+        self.internal_token.expire_seconds = value
+
+
+# Deprecated flat name kept as an alias so existing callers/tests keep working.
+DiagApiSettings = HttpSettings
 
 
 @dataclass(slots=True)
@@ -333,10 +366,15 @@ class Settings:
     mysql: MySQLSettings = field(default_factory=MySQLSettings)
     tdengine: TDengineSettings = field(default_factory=TDengineSettings)
     redis: RedisSettings = field(default_factory=RedisSettings)
-    diag_api: DiagApiSettings = field(default_factory=DiagApiSettings)
+    http: HttpSettings = field(default_factory=HttpSettings)
     ssh: SSHSettings = field(default_factory=SSHSettings)
     safety: SafetySettings = field(default_factory=SafetySettings)
     agent: AgentSettings = field(default_factory=AgentSettings)
+
+    @property
+    def diag_api(self) -> HttpSettings:
+        """Deprecated flat alias for ``http``; kept for existing callers and tests."""
+        return self.http
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -364,6 +402,9 @@ class Settings:
         def env_int(name: str, default: int) -> int:
             return _env_int(name, default, values)
 
+        def env_int_optional(name: str) -> int | None:
+            return _env_int_optional(name, values)
+
         def env_bool(name: str, default: bool = False) -> bool:
             return _env_bool(name, default, values)
 
@@ -376,6 +417,17 @@ class Settings:
 
         providers = _parse_providers(env)
         default_provider = env("AIOPS_DEFAULT_PROVIDER") or (providers[0].name if providers else "aiops-api")
+
+        http_base_url = env("AIOPS_HTTP_BASE_URL") or env("AIOPS_DIAG_API_BASE_URL") or None
+        http_secret = env("AIOPS_HTTP_INTERNAL_TOKEN_SECRET") or env("AIOPS_DIAG_API_TOKEN_SECRET") or None
+        http_expire_seconds = env_int_optional("AIOPS_HTTP_INTERNAL_TOKEN_EXPIRE_SECONDS")
+        if http_expire_seconds is None:
+            http_expire_seconds = env_int_optional("AIOPS_DIAG_API_TOKEN_EXPIRE_SECONDS")
+        http_timeout_seconds = env_int_optional("AIOPS_HTTP_TIMEOUT_SECONDS")
+        if http_timeout_seconds is None:
+            http_timeout_seconds = env_int_optional("AIOPS_DIAG_API_TIMEOUT_SECONDS")
+        if http_timeout_seconds is None:
+            http_timeout_seconds = 8
 
         return cls(
             mysql=MySQLSettings(
@@ -398,11 +450,13 @@ class Settings:
                 user=env("AIOPS_REDIS_USER"),
                 password=env("AIOPS_REDIS_PASSWORD"),
             ),
-            diag_api=DiagApiSettings(
-                base_url=env("AIOPS_DIAG_API_BASE_URL", "http://127.0.0.1:8080"),
-                token_secret=env("AIOPS_DIAG_API_TOKEN_SECRET"),
-                token_expire_seconds=env_int("AIOPS_DIAG_API_TOKEN_EXPIRE_SECONDS", 300),
-                timeout_seconds=env_int("AIOPS_DIAG_API_TIMEOUT_SECONDS", 8),
+            http=HttpSettings(
+                base_url=http_base_url,
+                internal_token=InternalTokenSettings(
+                    secret=http_secret,
+                    expire_seconds=http_expire_seconds,
+                ),
+                timeout_seconds=http_timeout_seconds,
             ),
             ssh=SSHSettings(
                 enabled=env_bool("AIOPS_SSH_ENABLED"),
@@ -452,7 +506,13 @@ class Settings:
         data["tdengine"]["url"] = _redact_url_credentials(self.tdengine.url)
         data["tdengine"]["password"] = "REDACTED" if self.tdengine.password else ""
         data["redis"]["password"] = "REDACTED" if self.redis.password else ""
-        data["diag_api"]["token_secret"] = "REDACTED" if self.diag_api.token_secret else ""
+        data["http"]["internal_token"]["secret"] = "REDACTED" if self.http.internal_token.secret else ""
+        data["diag_api"] = {
+            "base_url": self.http.base_url,
+            "token_secret": "REDACTED" if self.http.token_secret else "",
+            "token_expire_seconds": self.http.token_expire_seconds,
+            "timeout_seconds": self.http.timeout_seconds,
+        }
         return data
 
 

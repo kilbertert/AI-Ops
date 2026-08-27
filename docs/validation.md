@@ -189,6 +189,16 @@ SSH 调试通道直接传入中文字面量会受远程代码页影响；本轮�
 - 命令兼容性：任务约定命令 `uv sync --extra dev` 在本仓库失败（错误为 `Extra dev is not defined in optional-dependencies`），因为 `pyproject.toml` 将开发依赖声明在 `[dependency-groups]`，实际执行等价命令 `uv sync --group dev`，未跳过测试或静态检查。
 - 未完成业务验收：Java 工件未编译、未部署、未对真实 `cloud-charging-pile-web` 执行 `docs/diag-query-api-plan.md` §11 的 Gherkin 场景；不把源码契约测试写成真实故障结论。
 
+## HybridSources 部分切流量验证（2026-08-27）
+
+对应 issue #50 / PR-A，验证范围是 AI-Ops 侧离线等价行为，不涉及生产 `production.env`、Java 服务或 tsdata：
+
+- 新增 `tests/test_http_auth.py` 覆盖内部令牌算法与请求头；新增 `tests/test_hybrid_sources.py` 覆盖 HTTP/TDengine 路由、SQL 字面量、doctor 分类、`_safe_http_param` 白名单与三份 fixture 逐字段等价；`tests/test_config.py` 覆盖 `Settings.http` 缺省、新环境变量读取与脱敏。
+- 自动化检查：`uv sync --group dev`、`uv run pytest` **255 项通过**、`uv run ruff check`、`uv run ruff format --check .`、`uv lock --check`、`uv pip check`、`git diff --check` 全部通过。
+- 任务约定 `uv sync --extra dev` 在本仓库失败，因 dev 依赖声明于 `[dependency-groups]`，实际执行等价命令 `uv sync --group dev`；未跳过检查。
+
+未完成业务验收：本分支没有连接真实 `/diag/*` 服务或生产网络回放，2 路 TDengine 查询仍为直连；不据此宣称业务查询准确率已经验收。
+
 ## 业务验收待办
 
 生产业务验收仍需要每条支持路径至少三笔由工程师确认结论的真实故障：

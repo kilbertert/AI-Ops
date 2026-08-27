@@ -178,3 +178,28 @@ def test_provider_config_resolved_key_slot_falls_back_to_name() -> None:
     assert provider.resolved_key_slot() == "glm-ark"
     explicit = ProviderConfig(name="glm-ark", base_url="https://ark.example/", default_key_slot="primary")
     assert explicit.resolved_key_slot() == "primary"
+
+
+def test_http_settings_defaults_and_env_names(monkeypatch) -> None:
+    settings = Settings.from_env()
+    assert settings.http.base_url is None
+    assert settings.http.internal_token.secret is None
+    assert settings.http.internal_token.expire_seconds is None
+    assert settings.diag_api is settings.http
+
+    monkeypatch.setenv("AIOPS_HTTP_BASE_URL", "https://diag.example.test")
+    monkeypatch.setenv("AIOPS_HTTP_INTERNAL_TOKEN_SECRET", "http-secret")
+    monkeypatch.setenv("AIOPS_HTTP_INTERNAL_TOKEN_EXPIRE_SECONDS", "120")
+    settings = Settings.from_env()
+    assert settings.http.base_url == "https://diag.example.test"
+    assert settings.http.internal_token.secret == "http-secret"
+    assert settings.http.internal_token.expire_seconds == 120
+
+
+def test_http_settings_internal_token_is_redacted() -> None:
+    settings = Settings.from_env()
+    settings.http.internal_token.secret = "http-secret"
+    redacted = settings.redacted()
+    assert redacted["http"]["internal_token"]["secret"] == "REDACTED"
+    assert redacted["diag_api"]["token_secret"] == "REDACTED"
+    assert "http-secret" not in str(redacted)
