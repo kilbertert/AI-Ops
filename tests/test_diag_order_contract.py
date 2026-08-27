@@ -11,9 +11,11 @@ acceptance scenarios in `docs/diag-query-api-plan.md`.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PY_SOURCES = PROJECT_ROOT / "src" / "aiops_diagnostics" / "sources.py"
 JAVA_ROOT = (
     PROJECT_ROOT
     / "java"
@@ -35,6 +37,24 @@ LANDING_README = PROJECT_ROOT / "java" / "README.md"
 
 def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def _order_columns(select: str) -> list[str]:
+    return [column for column in re.split(r"[\s,]+", select) if column]
+
+
+def _python_order_columns() -> list[str]:
+    source = _read(PY_SOURCES)
+    match = re.search(r'ORDER_COLUMNS = """(.*?)"""', source, re.DOTALL)
+    assert match is not None
+    return _order_columns(match.group(1).replace("\n", " "))
+
+
+def _java_order_columns() -> list[str]:
+    source = _read(CONTROLLER)
+    match = re.search(r'String ORDER_SQL = """\s*SELECT (.*?)\s*FROM ch_order_info', source, re.DOTALL)
+    assert match is not None
+    return _order_columns(match.group(1).replace("\n", " "))
 
 
 def test_t1_java_deliverable_exists() -> None:
@@ -100,6 +120,10 @@ def test_order_payload_uses_r_envelope_and_full_order_fields() -> None:
         assert column in source
 
 
+def test_java_order_select_matches_python_reference_columns() -> None:
+    assert _java_order_columns() == _python_order_columns()
+
+
 def test_order_query_is_parameterized_ordered_and_capped_at_three() -> None:
     source = _read(CONTROLLER)
     assert 'ORDER BY created_time DESC' in source
@@ -116,6 +140,13 @@ def test_order_parameter_rejects_injection_characters_before_query() -> None:
     assert 'HttpStatus.BAD_REQUEST' in source
     assert 'R.failed(400, "非法参数")' in source
     assert source.index('isSafeValue(orderNo)') < source.index('queryForList')
+
+
+def test_blank_tenant_id_is_normalized_to_cross_tenant_null() -> None:
+    source = _read(CONTROLLER)
+    assert 'blankToNull' in source
+    assert 'queryForList(ORDER_SQL, orderNo, tenantId, tenantId)' not in source
+    assert 'queryFeeTemplate(orderNo, tenantId)' not in source
 
 
 def test_fee_template_snapshot_includes_occupy_fee_template() -> None:
@@ -138,6 +169,20 @@ def test_audit_aspect_records_caller_params_and_result_without_wire_body() -> No
     assert 'result' in source
     assert 'responseBody' not in source
     assert 'queryArgs' in source
+
+
+def test_audit_aspect_filters_request_headers_by_annotation() -> None:
+    source = _read(ASPECT)
+    assert 'RequestHeader.class' in source
+    assert 'getParameters()' in source
+    assert 'isAnnotationPresent' in source
+
+
+def test_audit_aspect_records_http_error_responses_as_failure() -> None:
+    source = _read(ASPECT)
+    assert 'getStatusCode().isError()' in source
+    assert '"failure"' in source
+    assert 'outcome(result)' in source
 
 
 def test_java_artifact_does_not_hardcode_internal_token_secret() -> None:

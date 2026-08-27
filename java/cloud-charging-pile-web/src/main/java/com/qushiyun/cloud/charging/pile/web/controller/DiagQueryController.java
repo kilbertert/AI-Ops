@@ -30,7 +30,6 @@ import java.util.regex.Pattern;
 public class DiagQueryController {
 
     private static final Pattern SAFE_VALUE = Pattern.compile("^[A-Za-z0-9_.:-]{1,128}$");
-    private static final int ORDER_LIMIT = 3;
 
     private static final String ORDER_SQL = """
         SELECT id, order_no, tenant_id, status, type, billing_type, launch_type, is_test,
@@ -86,13 +85,14 @@ public class DiagQueryController {
         if (!internalTokenManager.validateToken(token, requestTimestamp)) {
             return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(R.failed(401, "令牌无效或过期"));
         }
-        if (!isSafeValue(orderNo) || (tenantId != null && !tenantId.isBlank() && !isSafeValue(tenantId))) {
+        String queryTenantId = blankToNull(tenantId);
+        if (!isSafeValue(orderNo) || (queryTenantId != null && !isSafeValue(queryTenantId))) {
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(R.failed(400, "非法参数"));
         }
 
-        List<Map<String, Object>> orders = jdbcTemplate.queryForList(ORDER_SQL, orderNo, tenantId, tenantId);
+        List<Map<String, Object>> orders = jdbcTemplate.queryForList(ORDER_SQL, orderNo, queryTenantId, queryTenantId);
         DiagOrderResponse.FeeTemplateSnapshot feeTemplate = includeFeeTemplate
-                ? queryFeeTemplate(orderNo, tenantId)
+                ? queryFeeTemplate(orderNo, queryTenantId)
                 : null;
 
         return ResponseEntity.ok(R.ok(new DiagOrderResponse(orders, feeTemplate)));
@@ -130,6 +130,10 @@ public class DiagQueryController {
 
     private static boolean isSafeValue(String value) {
         return value != null && SAFE_VALUE.matcher(value).matches();
+    }
+
+    private static String blankToNull(String value) {
+        return value == null || value.isBlank() ? null : value;
     }
 
     public static class DiagOrderResponse {
