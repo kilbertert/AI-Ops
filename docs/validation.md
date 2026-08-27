@@ -189,6 +189,16 @@ SSH 调试通道直接传入中文字面量会受远程代码页影响；本轮�
 - 命令兼容性：任务约定命令 `uv sync --extra dev` 在本仓库失败（错误为 `Extra dev is not defined in optional-dependencies`），因为 `pyproject.toml` 将开发依赖声明在 `[dependency-groups]`，实际执行等价命令 `uv sync --group dev`，未跳过测试或静态检查。
 - 未完成业务验收：Java 工件未编译、未部署、未对真实 `cloud-charging-pile-web` 执行 `docs/diag-query-api-plan.md` §11 的 Gherkin 场景；不把源码契约测试写成真实故障结论。
 
+## Java `/diag/redis-stream` 工件契约验证（2026-08-27）
+
+对应 issue #40 / PRD T5，只在无 JDK/Spring 工具链的团队仓库内验证源码工件契约，不验证远端服务：
+
+- 新增 `tests/test_diag_redis_stream_contract.py` 14 项测试，固定 `GET /diag/redis-stream` 路由、`X-Internal-Token` + `X-Request-Timestamp` 自校验、401 拒绝、白名单 Stream 校验与非法 Stream 400 拒绝、`max_messages` 1000 上限、有界 `XREVRANGE`、`R<List<...>>` 响应字段与消费组 `name/consumers/pending/lag` 字段。
+- `order_no` 匹配计数继续在 `SAFE_VALUE` 白名单校验之后执行，且只扫描 `max_messages` 截断的消息窗口。
+- 检查命令：`uv run pytest tests/test_diag_redis_stream_contract.py tests/test_diag_order_contract.py -q` 通过（14 + 15 项）；全套 `uv run pytest` **255 项通过**，`uv run ruff check` 通过，`git diff --check` 通过。
+- 命令兼容性：`uv sync --extra dev` 仍因 `Extra dev is not defined in optional-dependencies` 失败；本仓库开发依赖位于 `[dependency-groups]`，实际以 `uv sync --group dev` 同步等价依赖后执行全部检查，未跳过测试。
+- 未完成业务验收：本节只有自动化源码契约证据，未编译、未部署 Java 服务，未执行 `docs/diag-query-api-plan.md` §11 的 Redis Gherkin 场景，也不能据此宣称生产同步队列诊断准确率已经验收。
+
 ## 业务验收待办
 
 生产业务验收仍需要每条支持路径至少三笔由工程师确认结论的真实故障：
