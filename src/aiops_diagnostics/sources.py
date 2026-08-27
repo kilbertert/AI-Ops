@@ -27,6 +27,16 @@ from aiops_diagnostics.http_auth import build_internal_token_headers
 SAFE_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 SAFE_VALUE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 
+_HTTP_ERROR_CONFIG_MISSING = "http.config_missing"
+_HTTP_ERROR_AUTH_FAILED = "http.auth_failed"
+_HTTP_ERROR_UNREACHABLE = "http.http_unreachable"
+
+_HTTP_ERROR_MESSAGES = {
+    _HTTP_ERROR_CONFIG_MISSING: "Diag HTTP 配置不完整",
+    _HTTP_ERROR_AUTH_FAILED: "Diag HTTP 鉴权失败",
+    _HTTP_ERROR_UNREACHABLE: "Diag HTTP 服务不可达或响应异常",
+}
+
 
 class SourceError(RuntimeError):
     """A bounded read-only data-source operation failed."""
@@ -310,11 +320,11 @@ class HttpSources:
 
     def _get(self, endpoint: str, params: dict[str, str]) -> Any:
         if not self.api.base_url:
-            raise SourceError("Diag API 地址未配置", code="http.config_missing")
+            raise SourceError("Diag API 地址未配置", code=_HTTP_ERROR_CONFIG_MISSING)
         if not self.api.internal_token.secret:
-            raise SourceError("Diag API 内部令牌密钥未配置", code="http.config_missing")
+            raise SourceError("Diag API 内部令牌密钥未配置", code=_HTTP_ERROR_CONFIG_MISSING)
         if not self.api.internal_token.expire_seconds:
-            raise SourceError("Diag API 内部令牌有效期未配置", code="http.config_missing")
+            raise SourceError("Diag API 内部令牌有效期未配置", code=_HTTP_ERROR_CONFIG_MISSING)
         url = self.api.base_url.rstrip("/") + endpoint
         if params:
             url = f"{url}?{urlencode(sorted(params.items()))}"
@@ -328,20 +338,20 @@ class HttpSources:
         except urllib.error.HTTPError as exc:
             detail = _http_error_message(exc)
             if exc.code in (401, 403):
-                raise SourceError(detail or "Diag API 令牌无效或过期", code="http.auth_failed") from exc
+                raise SourceError(detail or "Diag API 令牌无效或过期", code=_HTTP_ERROR_AUTH_FAILED) from exc
             raise SourceError(
                 f"Diag API 请求失败: {detail or f'HTTP {exc.code}'}",
-                code="http.http_unreachable",
+                code=_HTTP_ERROR_UNREACHABLE,
             ) from exc
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, UnicodeDecodeError) as exc:
             raise SourceError(
                 f"Diag API 请求失败: {exc.__class__.__name__}",
-                code="http.http_unreachable",
+                code=_HTTP_ERROR_UNREACHABLE,
             ) from exc
         if not isinstance(payload, dict) or payload.get("code") not in (0, 200):
             detail = payload.get("msg") if isinstance(payload, dict) else "invalid response"
             is_auth_failure = isinstance(payload, dict) and payload.get("code") in (401, 403)
-            code = "http.auth_failed" if is_auth_failure else "http.http_unreachable"
+            code = _HTTP_ERROR_AUTH_FAILED if is_auth_failure else _HTTP_ERROR_UNREACHABLE
             raise SourceError(f"Diag API 拒绝查询: {detail}", code=code)
         return payload.get("data")
 
@@ -428,23 +438,18 @@ class HttpSources:
             return {
                 "ok": False,
                 "status": "error",
-                "error": "http.config_missing",
+                "error": _HTTP_ERROR_CONFIG_MISSING,
                 "details": {"message": "Diag HTTP 配置不完整", "missing": missing},
             }
         try:
             self._get("/diag/redis-stream", {})
         except SourceError as exc:
-            code = exc.code or "http.http_unreachable"
-            message = {
-                "http.config_missing": "Diag HTTP 配置不完整",
-                "http.auth_failed": "Diag HTTP 鉴权失败",
-                "http.http_unreachable": "Diag HTTP 服务不可达或响应异常",
-            }.get(code, "Diag HTTP 检查失败")
+            code = exc.code or _HTTP_ERROR_UNREACHABLE
             return {
                 "ok": False,
                 "status": "error",
                 "error": code,
-                "details": {"message": message},
+                "details": {"message": _HTTP_ERROR_MESSAGES.get(code, "Diag HTTP 检查失败")},
             }
         return {
             "ok": True,

@@ -15,6 +15,7 @@ from test_http_sources import (
     _fixture_tx_serial,
     _fixture_window,
     _http_settings,
+    _RawResponse,
 )
 
 from aiops_diagnostics.sources import (
@@ -174,6 +175,60 @@ def test_hybrid_sources_doctor_http_config_missing(monkeypatch) -> None:
     assert result["http"]["ok"] is False
     assert result["http"]["status"] == "error"
     assert result["http"]["error"] == "http.config_missing"
+
+
+@pytest.mark.parametrize(
+    ("field", "missing_field"),
+    [
+        ("token_secret", "internal_token_secret"),
+        ("token_expire_seconds", "internal_token_expire_seconds"),
+    ],
+)
+def test_hybrid_sources_doctor_http_config_incomplete(monkeypatch, field: str, missing_field: str) -> None:
+    settings = _http_settings()
+    setattr(settings.diag_api, field, None)
+    source = HybridSources(settings)
+    monkeypatch.setattr(source.tdengine, "_query", lambda _sql: [])
+
+    def forbidden(request: Any, timeout: int | None = None) -> None:
+        raise AssertionError("HTTP must not be called when Diag API config is missing")
+
+    monkeypatch.setattr("aiops_diagnostics.sources.urllib.request.urlopen", forbidden)
+
+    result = source.doctor()
+
+    assert result["http"]["ok"] is False
+    assert result["http"]["status"] == "error"
+    assert result["http"]["error"] == "http.config_missing"
+    assert missing_field in result["http"]["details"]["missing"]
+
+
+@pytest.mark.parametrize(
+    ("payload_code", "expected_error"),
+    [
+        (401, "http.auth_failed"),
+        (403, "http.auth_failed"),
+        (500, "http.http_unreachable"),
+    ],
+)
+def test_hybrid_sources_doctor_http_json_failure(monkeypatch, payload_code: int, expected_error: str) -> None:
+    source = HybridSources(_http_settings())
+    monkeypatch.setattr(source.tdengine, "_query", lambda _sql: [])
+
+    def failing_api(request: Any, timeout: int | None = None) -> _RawResponse:
+        body = json.dumps({"code": payload_code, "msg": "拒绝查询"}, ensure_ascii=False).encode("utf-8")
+        return _RawResponse(body)
+
+    monkeypatch.setattr("aiops_diagnostics.sources.urllib.request.urlopen", failing_api)
+
+    result = source.doctor()
+
+    assert result["http"]["ok"] is False
+    assert result["http"]["status"] == "error"
+    assert result["http"]["error"] == expected_error
+    assert result["http"]["details"]["message"]
+    assert "test-secret" not in str(result)
+    assert "diag.example.test" not in str(result)
 
 
 def test_hybrid_sources_doctor_http_auth_failed(monkeypatch) -> None:

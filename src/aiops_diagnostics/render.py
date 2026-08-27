@@ -71,7 +71,13 @@ def render_doctor(result: dict[str, Any], console: Console | None = None) -> Non
     table.add_column("详情")
     for name, item in result.items():
         ok = bool(item.get("ok"))
-        status = str(item.get("status") or ("ok" if ok else "error"))
+        raw_status = item.get("status")
+        if raw_status:
+            status = str(raw_status)
+        elif ok:
+            status = "ok"
+        else:
+            status = "error"
         details = item.get("details") if ok else {"error": item.get("error"), "details": item.get("details")}
         if status == "deprecated":
             label, style = "DEPRECATED", "yellow"
