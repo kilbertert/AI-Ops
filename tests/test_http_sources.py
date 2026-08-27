@@ -41,6 +41,20 @@ class _FakeResponse:
         return self._body
 
 
+class _RawResponse:
+    def __init__(self, body: bytes) -> None:
+        self._body = body
+
+    def __enter__(self) -> _RawResponse:
+        return self
+
+    def __exit__(self, exc_type: Any, exc_value: Any, traceback: Any) -> bool:
+        return False
+
+    def read(self) -> bytes:
+        return self._body
+
+
 _EMPTY_FIXTURE: dict[str, Any] = {
     "orders": [],
     "fee_template_records": {},
@@ -189,20 +203,22 @@ def test_http_sources_uses_frozen_diag_endpoint_contract(monkeypatch) -> None:
 
 
 def test_http_sources_rejects_failed_or_expired_token(monkeypatch) -> None:
-    def raise_http_error(request: Any, timeout: int | None = None) -> None:
-        raise urllib.error.HTTPError(
-            request.full_url,
-            401,
-            "Unauthorized",
-            {},
-            io.BytesIO(b'{"code":401,"msg":"\xe4\xbb\xa4\xe7\x89\x8c\xe6\x97\xa0\xe6\x95\x88\xe6\x88\x96\xe8\xbf\x87\xe6\x9c\x9f"}'),
-        )
+    for status in (401, 403):
+        def raise_http_error(request: Any, timeout: int | None = None, status: int = status) -> None:
+            body = json.dumps({"code": status, "msg": "令牌无效或过期"}).encode("utf-8")
+            raise urllib.error.HTTPError(
+                request.full_url,
+                status,
+                "Unauthorized",
+                {},
+                io.BytesIO(body),
+            )
 
-    monkeypatch.setattr("aiops_diagnostics.sources.urllib.request.urlopen", raise_http_error)
-    source = HttpSources(_http_settings())
+        monkeypatch.setattr("aiops_diagnostics.sources.urllib.request.urlopen", raise_http_error)
+        source = HttpSources(_http_settings())
 
-    with pytest.raises(SourceError, match="令牌无效或过期"):
-        source.get_orders("TEST-YKC-0001")
+        with pytest.raises(SourceError, match="令牌无效或过期"):
+            source.get_orders("TEST-YKC-0001")
 
 
 def test_http_sources_rejects_api_failure_codes(monkeypatch) -> None:
@@ -214,6 +230,66 @@ def test_http_sources_rejects_api_failure_codes(monkeypatch) -> None:
 
     with pytest.raises(SourceError, match="订单查询失败"):
         source.get_orders("TEST-YKC-0001")
+
+
+def test_http_sources_wraps_non_utf8_success_body(monkeypatch) -> None:
+    def invalid_utf8_transport(request: Any, timeout: int | None = None) -> _RawResponse:
+        return _RawResponse(b"\xff\xfe")
+
+    monkeypatch.setattr("aiops_diagnostics.sources.urllib.request.urlopen", invalid_utf8_transport)
+    source = HttpSources(_http_settings())
+
+    with pytest.raises(SourceError, match="UnicodeDecodeError"):
+        source.get_orders("TEST-YKC-0001")
+
+
+def test_http_sources_requires_diag_api_config_before_request(monkeypatch) -> None:
+    requested: list[str] = []
+
+    def forbidden_transport(request: Any, timeout: int | None = None) -> _RawResponse:
+        requested.append(request.full_url)
+        raise AssertionError("Diag API must not be called before configuration is validated")
+
+    monkeypatch.setattr("aiops_diagnostics.sources.urllib.request.urlopen", forbidden_transport)
+    for field in ("base_url", "token_secret"):
+        settings = _http_settings()
+        setattr(settings.diag_api, field, "")
+
+        with pytest.raises(SourceError):
+            HttpSources(settings).get_orders("TEST-YKC-0001")
+
+    assert requested == []
+
+
+def test_diag_api_base_url_rejects_unsafe_components(monkeypatch) -> None:
+    for base_url in (
+        "ftp://127.0.0.1:8080",
+        "https://user:pass@diag.example.test",
+        "https://diag.example.test?from=proxy",
+        "https://diag.example.test#debug",
+    ):
+        monkeypatch.setenv("AIOPS_DIAG_API_BASE_URL", base_url)
+        with pytest.raises(ValueError, match="Diag API base_url"):
+            Settings.from_env()
+
+
+def test_diag_api_settings_enforce_numeric_bounds(monkeypatch) -> None:
+    monkeypatch.setenv("AIOPS_DIAG_API_TIMEOUT_SECONDS", "0")
+    with pytest.raises(ValueError, match="超时"):
+        Settings.from_env()
+
+    monkeypatch.setenv("AIOPS_DIAG_API_TIMEOUT_SECONDS", "61")
+    with pytest.raises(ValueError, match="超时"):
+        Settings.from_env()
+
+    monkeypatch.setenv("AIOPS_DIAG_API_TIMEOUT_SECONDS", "8")
+    monkeypatch.setenv("AIOPS_DIAG_API_TOKEN_EXPIRE_SECONDS", "59")
+    with pytest.raises(ValueError, match="令牌有效期"):
+        Settings.from_env()
+
+    monkeypatch.setenv("AIOPS_DIAG_API_TOKEN_EXPIRE_SECONDS", "601")
+    with pytest.raises(ValueError, match="令牌有效期"):
+        Settings.from_env()
 
 
 @pytest.mark.parametrize(

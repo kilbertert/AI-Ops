@@ -172,6 +172,10 @@ class DiagApiSettings:
         parsed = urlsplit(self.base_url)
         if parsed.scheme not in {"http", "https"} or not parsed.hostname:
             raise ValueError("Diag API base_url 必须是完整的 http 或 https 地址")
+        if parsed.username is not None or parsed.password is not None:
+            raise ValueError("Diag API base_url 不得包含认证信息")
+        if parsed.query or parsed.fragment:
+            raise ValueError("Diag API base_url 不得包含 query 或 fragment")
         if not 1 <= self.timeout_seconds <= 60:
             raise ValueError("Diag API 超时必须在 1-60 秒之间")
         if not 60 <= self.token_expire_seconds <= 600:

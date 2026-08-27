@@ -162,7 +162,8 @@ SSH 调试通道直接传入中文字面量会受远程代码页影响；本轮�
 
 对应 issue #36 / PRD T9，只验证 AI-Ops 侧 HTTP 客户端与离线等价行为：
 
-- 新增 `tests/test_http_sources.py` 13 项自动化检查，覆盖 `/diag/order`、`/diag/device`、`/diag/gun-property`、`/diag/comm-message`、`/diag/redis-stream` 的路径、查询参数、`X-Internal-Token` HMAC-SHA256 与 `X-Request-Timestamp` 请求头、401 令牌失败、非成功 `code` 和非法标识符注入拒绝。
+- 新增 `tests/test_http_sources.py` 17 项自动化检查，覆盖 `/diag/order`、`/diag/device`、`/diag/gun-property`、`/diag/comm-message`、`/diag/redis-stream` 的路径、查询参数、`X-Internal-Token` HMAC-SHA256 与 `X-Request-Timestamp` 请求头、401/403 令牌失败、非成功 `code`、非法 UTF-8 响应封装、缺配置禁止发请求和非法标识符注入拒绝。
+- `DiagApiSettings` 拒绝非 http/https 地址、URL 认证信息、query/fragment 以及越界的超时或令牌有效期。
 - 三份 `examples/fixtures/`（ykc_amount_mismatch / ocpp_consistent / missing_tx_data）通过 mock HTTP transport 与 `FixtureSources` 对 orders / fee_template / device / gun_samples / comm_messages / streams 逐字段比对，结果一致。
 - `AIOPS_DIAG_API_TOKEN_SECRET` 已加入 `Settings.redacted()` 回归，脱敏输出不含 secret。
 - 检查命令：`uv run pytest tests/test_http_sources.py tests/test_sources.py tests/test_config.py tests/test_engine.py -q` 全部通过；`uv run ruff check` 通过；`git diff --check` 通过。

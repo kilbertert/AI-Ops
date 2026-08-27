@@ -334,7 +334,7 @@ class HttpSources:
             if exc.code in (401, 403):
                 raise SourceError(detail or "Diag API 令牌无效或过期") from exc
             raise SourceError(f"Diag API 请求失败: {detail or f'HTTP {exc.code}'}") from exc
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, UnicodeDecodeError) as exc:
             raise SourceError(f"Diag API 请求失败: {exc.__class__.__name__}") from exc
         if not isinstance(payload, dict) or payload.get("code") not in (0, 200):
             detail = payload.get("msg") if isinstance(payload, dict) else "invalid response"
@@ -695,7 +695,7 @@ def _safe_identifier(value: str) -> str:
 
 def _safe_literal(value: str | None) -> str:
     if value is None or not SAFE_VALUE.fullmatch(value) or "--" in value:
-        raise ValueError("TDengine 查询值包含不允许的字符")
+        raise ValueError("查询值包含不允许的字符")
     return value
 
 
