@@ -25,3 +25,7 @@ node_modules/
 # pnpm lockfiles (repo uses npm)
 pnpm-lock.yaml
 pnpm-workspace.yaml
+
+# Local working copies of upstream repos used as read-only references
+.scratch/
+gitlab_token.txt
