@@ -131,15 +131,17 @@ public class DiagQueryController {
         String normalizedDeviceId = blankToNull(deviceId);
         String normalizedDeviceCode = blankToNull(deviceCode);
         String queryTenantId = blankToNull(tenantId);
-        if ((normalizedDeviceId == null) == (normalizedDeviceCode == null)) {
+        boolean hasDeviceId = normalizedDeviceId != null;
+        boolean hasDeviceCode = normalizedDeviceCode != null;
+        if (hasDeviceId == hasDeviceCode) {
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(R.failed(400, "非法参数"));
         }
-        String deviceValue = normalizedDeviceId != null ? normalizedDeviceId : normalizedDeviceCode;
+        String deviceValue = hasDeviceId ? normalizedDeviceId : normalizedDeviceCode;
         if (!isSafeValue(deviceValue)
                 || (queryTenantId != null && !isSafeValue(queryTenantId))) {
             return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(R.failed(400, "非法参数"));
         }
-        String deviceSql = normalizedDeviceId != null ? DEVICE_BY_ID_SQL : DEVICE_BY_CODE_SQL;
+        String deviceSql = hasDeviceId ? DEVICE_BY_ID_SQL : DEVICE_BY_CODE_SQL;
         List<Map<String, Object>> devices = jdbcTemplate.queryForList(deviceSql, deviceValue, queryTenantId, queryTenantId);
         return ResponseEntity.ok(R.ok(devices.isEmpty() ? null : devices.get(0)));
     }

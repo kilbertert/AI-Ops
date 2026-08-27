@@ -98,7 +98,9 @@ def test_device_lookup_requires_exactly_one_of_device_id_or_device_code() -> Non
     source = _read(CONTROLLER)
     assert '@RequestParam(value = "device_id", required = false)' in source
     assert '@RequestParam(value = "device_code", required = false)' in source
-    assert '(normalizedDeviceId == null) == (normalizedDeviceCode == null)' in source
+    assert 'boolean hasDeviceId = normalizedDeviceId != null;' in source
+    assert 'boolean hasDeviceCode = normalizedDeviceCode != null;' in source
+    assert 'if (hasDeviceId == hasDeviceCode)' in source
     assert 'R.failed(400, "非法参数")' in source
 
 
@@ -128,6 +130,18 @@ def test_blank_tenant_id_is_normalized_to_cross_tenant_null() -> None:
     assert 'queryForList(deviceSql, deviceValue, queryTenantId, queryTenantId)' in source
 
 
+def test_tenant_id_is_optional_and_rejected_before_query_if_unsafe() -> None:
+    source = _read(CONTROLLER)
+    assert '@RequestParam(value = "tenant_id", required = false)' in source
+    assert '(queryTenantId != null && !isSafeValue(queryTenantId))' in source
+    assert source.index('String queryTenantId = blankToNull(tenantId);') < source.index(
+        'isSafeValue(deviceValue)'
+    )
+    assert source.index('isSafeValue(queryTenantId)') < source.index(
+        'jdbcTemplate.queryForList(deviceSql'
+    )
+
+
 def test_device_sql_variants_pin_same_columns_and_only_filter_by_unique_lookup() -> None:
     id_sql = _sql_block("DEVICE_BY_ID_SQL")
     code_sql = _sql_block("DEVICE_BY_CODE_SQL")
@@ -143,6 +157,15 @@ def test_each_device_lookup_binds_three_placeholders() -> None:
         assert _sql_block(sql_name).count("?") == 3
 
 
+def test_device_lookup_reuses_selected_sql_after_key_normalization() -> None:
+    source = _read(CONTROLLER)
+    assert 'String deviceValue = hasDeviceId ? normalizedDeviceId : normalizedDeviceCode;' in source
+    assert 'String deviceSql = hasDeviceId ? DEVICE_BY_ID_SQL : DEVICE_BY_CODE_SQL;' in source
+    assert source.index('String deviceSql = hasDeviceId') < source.index(
+        'jdbcTemplate.queryForList(deviceSql'
+    )
+
+
 def test_device_miss_returns_null_data() -> None:
     source = _read(CONTROLLER)
     assert 'devices.isEmpty() ? null : devices.get(0)' in source
@@ -150,9 +173,16 @@ def test_device_miss_returns_null_data() -> None:
 
 def test_blank_device_keys_are_normalized_before_exactly_one_guard() -> None:
     source = _read(CONTROLLER)
-    guard = "(normalizedDeviceId == null) == (normalizedDeviceCode == null)"
-    assert source.index("String normalizedDeviceId = blankToNull(deviceId);") < source.index(guard)
-    assert source.index("String normalizedDeviceCode = blankToNull(deviceCode);") < source.index(guard)
+    guard = "if (hasDeviceId == hasDeviceCode)"
+    assert source.index("String normalizedDeviceId = blankToNull(deviceId);") < source.index(
+        "boolean hasDeviceId"
+    )
+    assert source.index("String normalizedDeviceCode = blankToNull(deviceCode);") < source.index(
+        "boolean hasDeviceCode"
+    )
+    assert source.index("boolean hasDeviceCode = normalizedDeviceCode != null;") < source.index(
+        guard
+    )
 
 
 def test_audit_aspect_counts_single_device_payload_as_one_row() -> None:
@@ -161,3 +191,12 @@ def test_audit_aspect_counts_single_device_payload_as_one_row() -> None:
     assert 'body.isObject()' in source
     assert 'return body.size() > 0 ? 1 : 0' in source
     assert 'return body.isArray() ? body.size() : 0' not in source
+
+
+def test_audit_aspect_keeps_existing_order_and_array_row_counts() -> None:
+    source = _read(ASPECT)
+    assert 'JsonNode orders = body.path("orders");' in source
+    assert 'if (orders.isArray())' in source
+    assert 'if (body.isArray())' in source
+    assert 'return orders.size()' in source
+    assert 'return body.size()' in source
