@@ -193,9 +193,9 @@ SSH 调试通道直接传入中文字面量会受远程代码页影响；本轮�
 
 对应 issue #40 / PRD T5，只在无 JDK/Spring 工具链的团队仓库内验证源码工件契约，不验证远端服务：
 
-- 新增 `tests/test_diag_redis_stream_contract.py` 14 项测试，固定 `GET /diag/redis-stream` 路由、`X-Internal-Token` + `X-Request-Timestamp` 自校验、401 拒绝、白名单 Stream 校验与非法 Stream 400 拒绝、`max_messages` 1000 上限、有界 `XREVRANGE`、`R<List<...>>` 响应字段与消费组 `name/consumers/pending/lag` 字段。
+- 新增 `tests/test_diag_redis_stream_contract.py` 16 项测试，固定 `GET /diag/redis-stream` 路由、`X-Internal-Token` + `X-Request-Timestamp` 自校验、401 拒绝、白名单 Stream 校验与非法 Stream 400 拒绝、`max_messages` 1000 上限与非正值保护、有界 `XREVRANGE`、`R<List<...>>` 响应字段、消费组 `name/consumers/pending/lag` 字段与缺失 Key/畸形 `lastDeliveredId` 的空值防护。
 - `order_no` 匹配计数继续在 `SAFE_VALUE` 白名单校验之后执行，且只扫描 `max_messages` 截断的消息窗口。
-- 检查命令：`uv run pytest tests/test_diag_redis_stream_contract.py tests/test_diag_order_contract.py -q` 通过（14 + 15 项）；全套 `uv run pytest` **255 项通过**，`uv run ruff check` 通过，`git diff --check` 通过。
+- 检查命令：`uv run pytest tests/test_diag_redis_stream_contract.py tests/test_diag_order_contract.py -q` 通过（16 + 15 项）；全套 `uv run pytest` **257 项通过**，`uv run ruff check` 通过，`git diff --check` 通过。
 - 命令兼容性：`uv sync --extra dev` 仍因 `Extra dev is not defined in optional-dependencies` 失败；本仓库开发依赖位于 `[dependency-groups]`，实际以 `uv sync --group dev` 同步等价依赖后执行全部检查，未跳过测试。
 - 未完成业务验收：本节只有自动化源码契约证据，未编译、未部署 Java 服务，未执行 `docs/diag-query-api-plan.md` §11 的 Redis Gherkin 场景，也不能据此宣称生产同步队列诊断准确率已经验收。
 

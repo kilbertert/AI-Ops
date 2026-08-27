@@ -153,8 +153,9 @@ public class DiagQueryController {
             String orderNo,
             int limit) {
         DataType dataType = stringRedisTemplate.type(streamName);
+        String type = dataType == null ? DataType.NONE.code() : dataType.code();
         if (dataType != DataType.STREAM) {
-            return new DiagRedisStreamResponse(streamName, dataType.code(), 0L, List.of(), 0, 0);
+            return new DiagRedisStreamResponse(streamName, type, 0L, List.of(), 0, 0);
         }
         Long rawLength = streamOperations.size(streamName);
         long length = rawLength == null ? 0L : rawLength;
@@ -164,7 +165,7 @@ public class DiagQueryController {
         int inspectedMessages = messages == null ? 0 : messages.size();
         int matches = countOrderMatches(messages, orderNo);
         return new DiagRedisStreamResponse(
-                streamName, "stream", length, groups, inspectedMessages, matches);
+                streamName, type, length, groups, inspectedMessages, matches);
     }
 
     private List<DiagRedisStreamGroupResponse> readGroups(

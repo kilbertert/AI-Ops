@@ -89,6 +89,11 @@ def test_max_messages_has_a_hard_server_side_cap() -> None:
     assert "Math.min(" in source
 
 
+def test_max_messages_rejects_non_positive_values() -> None:
+    source = _read(CONTROLLER)
+    assert "Math.max(1, Math.min(maxMessages, REDIS_STREAM_MAX_MESSAGES))" in source
+
+
 def test_redis_stream_uses_bounded_reverse_range_query() -> None:
     source = _read(CONTROLLER)
     assert "StringRedisTemplate" in source
@@ -123,13 +128,26 @@ def test_order_no_matching_is_validated_and_counts_message_fields() -> None:
     assert "isSafeValue(orderNo)" in source
     assert "getValue()" in source
     assert "contains(" in source
+    assert "messages == null" in source
+    assert "if (fields == null)" in source
+    assert "field.getKey() != null" in source
+    assert "field.getValue() != null" in source
 
 
 def test_missing_or_non_stream_redis_keys_are_reported_without_empty_groups() -> None:
     source = _read(CONTROLLER)
     assert "DataType.STREAM" in source
+    assert "DataType.NONE" in source
+    assert "dataType == null" in source
     assert "dataType.code()" in source
     assert "length" in source
+
+
+def test_stream_lag_tolerates_malformed_last_delivered_ids() -> None:
+    source = _read(CONTROLLER)
+    assert '"0-0".equals(lastDeliveredId)' in source
+    assert "lastDeliveredId.lastIndexOf('-')" in source
+    assert "NumberFormatException" in source
 
 
 def test_audit_aspect_also_covers_redis_stream_endpoint() -> None:
