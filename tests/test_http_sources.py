@@ -247,9 +247,9 @@ def test_http_sources_requires_diag_api_config_before_request(monkeypatch) -> No
         raise AssertionError("Diag API must not be called before configuration is validated")
 
     monkeypatch.setattr("aiops_diagnostics.sources.urllib.request.urlopen", forbidden_transport)
-    for field in ("base_url", "token_secret"):
+    for field, value in (("base_url", ""), ("token_secret", ""), ("token_expire_seconds", None)):
         settings = _http_settings()
-        setattr(settings.diag_api, field, "")
+        setattr(settings.diag_api, field, value)
 
         with pytest.raises(SourceError):
             HttpSources(settings).get_orders("TEST-YKC-0001")

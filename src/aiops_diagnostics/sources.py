@@ -3,8 +3,6 @@ from __future__ import annotations
 import base64
 import contextlib
 import copy
-import hashlib
-import hmac
 import json
 import re
 import socket
@@ -24,6 +22,7 @@ import redis
 from pymysql.cursors import DictCursor
 
 from aiops_diagnostics.config import Settings
+from aiops_diagnostics.http_auth import build_internal_token_headers
 
 SAFE_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 SAFE_VALUE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
@@ -293,32 +292,25 @@ class TDengineSource:
         }
 
 
-def _internal_token(secret: str, timestamp: str, expire_seconds: int) -> str:
-    message = f"{timestamp}:{expire_seconds}"
-    return hmac.new(secret.encode("utf-8"), message.encode("utf-8"), hashlib.sha256).hexdigest()
-
-
 class HttpSources:
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        self.api = settings.diag_api
+        self.api = settings.http
 
     def _headers(self) -> dict[str, str]:
-        timestamp = str(int(time.time()))
-        return {
-            "X-Internal-Token": _internal_token(
-                self.api.token_secret,
-                timestamp,
-                self.api.token_expire_seconds,
-            ),
-            "X-Request-Timestamp": timestamp,
-        }
+        return build_internal_token_headers(
+            self.api.internal_token.secret,
+            self.api.internal_token.expire_seconds,
+            int(time.time()),
+        )
 
     def _get(self, endpoint: str, params: dict[str, str]) -> Any:
         if not self.api.base_url:
             raise SourceError("Diag API 地址未配置")
-        if not self.api.token_secret:
+        if not self.api.internal_token.secret:
             raise SourceError("Diag API 内部令牌密钥未配置")
+        if not self.api.internal_token.expire_seconds:
+            raise SourceError("Diag API 内部令牌有效期未配置")
         url = self.api.base_url.rstrip("/") + endpoint
         if params:
             url = f"{url}?{urlencode(sorted(params.items()))}"
@@ -342,16 +334,16 @@ class HttpSources:
         return payload.get("data")
 
     def get_orders(self, order_no: str, tenant_id: str | None = None) -> list[dict[str, Any]]:
-        params = {"order_no": _safe_literal(order_no), "include_fee_template": "false"}
+        params = {"order_no": _safe_http_param(order_no), "include_fee_template": "false"}
         if tenant_id:
-            params["tenant_id"] = _safe_literal(tenant_id)
+            params["tenant_id"] = _safe_http_param(tenant_id)
         data = self._get("/diag/order", params)
         return copy.deepcopy(data.get("orders") or []) if isinstance(data, dict) else []
 
     def get_fee_template_record(self, order_no: str, tenant_id: str | None = None) -> dict[str, Any] | None:
-        params = {"order_no": _safe_literal(order_no), "include_fee_template": "true"}
+        params = {"order_no": _safe_http_param(order_no), "include_fee_template": "true"}
         if tenant_id:
-            params["tenant_id"] = _safe_literal(tenant_id)
+            params["tenant_id"] = _safe_http_param(tenant_id)
         data = self._get("/diag/order", params)
         if not isinstance(data, dict):
             return None
@@ -365,13 +357,13 @@ class HttpSources:
     ) -> dict[str, Any] | None:
         params: dict[str, str] = {}
         if device_id:
-            params["device_id"] = _safe_literal(device_id)
+            params["device_id"] = _safe_http_param(device_id)
         elif device_code:
-            params["device_code"] = _safe_literal(device_code)
+            params["device_code"] = _safe_http_param(device_code)
         else:
             return None
         if tenant_id:
-            params["tenant_id"] = _safe_literal(tenant_id)
+            params["tenant_id"] = _safe_http_param(tenant_id)
         data = self._get("/diag/device", params)
         return copy.deepcopy(data) if isinstance(data, dict) else None
 
@@ -383,12 +375,12 @@ class HttpSources:
         tx_serial_no: str | None,
     ) -> list[dict[str, Any]]:
         params = {
-            "device": _safe_literal(device),
+            "device": _safe_http_param(device),
             "start_time": _format_http_time(start_time),
             "end_time": _format_http_time(end_time),
         }
         if tx_serial_no:
-            params["tx_serial_no"] = _safe_literal(tx_serial_no)
+            params["tx_serial_no"] = _safe_http_param(tx_serial_no)
         data = self._get("/diag/gun-property", params)
         return copy.deepcopy(data) if isinstance(data, list) else []
 
@@ -399,7 +391,7 @@ class HttpSources:
         end_time: datetime,
     ) -> list[dict[str, Any]]:
         params = {
-            "device": _safe_literal(device),
+            "device": _safe_http_param(device),
             "start_time": _format_http_time(start_time),
             "end_time": _format_http_time(end_time),
         }
@@ -407,20 +399,73 @@ class HttpSources:
         return copy.deepcopy(data) if isinstance(data, list) else []
 
     def inspect_streams(self, order_no: str) -> list[dict[str, Any]]:
-        data = self._get("/diag/redis-stream", {"order_no": _safe_literal(order_no)})
+        data = self._get("/diag/redis-stream", {"order_no": _safe_http_param(order_no)})
         return copy.deepcopy(data) if isinstance(data, list) else []
 
     def doctor(self) -> dict[str, Any]:
         return {
             "diag_api": {
-                "ok": bool(self.api.base_url and self.api.token_secret),
+                "ok": bool(
+                    self.api.base_url
+                    and self.api.internal_token.secret
+                    and self.api.internal_token.expire_seconds
+                ),
                 "details": {
                     "base_url": self.api.base_url,
-                    "token_configured": bool(self.api.token_secret),
-                    "token_expire_seconds": self.api.token_expire_seconds,
+                    "token_configured": bool(self.api.internal_token.secret),
+                    "token_expire_seconds": self.api.internal_token.expire_seconds,
                 },
             }
         }
+
+
+class HybridSources:
+    def __init__(self, settings: Settings) -> None:
+        self.settings = settings
+        self.http = HttpSources(settings)
+        self.tdengine = TDengineSource(settings)
+
+    def get_orders(self, order_no: str, tenant_id: str | None = None) -> list[dict[str, Any]]:
+        return self.http.get_orders(order_no, tenant_id)
+
+    def get_fee_template_record(self, order_no: str, tenant_id: str | None = None) -> dict[str, Any] | None:
+        return self.http.get_fee_template_record(order_no, tenant_id)
+
+    def get_device(
+        self,
+        device_id: str | None,
+        device_code: str | None,
+        tenant_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        return self.http.get_device(device_id, device_code, tenant_id)
+
+    def get_gun_samples(
+        self,
+        device: str,
+        start_time: datetime,
+        end_time: datetime,
+        tx_serial_no: str | None,
+    ) -> list[dict[str, Any]]:
+        return self.tdengine.get_gun_samples(device, start_time, end_time, tx_serial_no)
+
+    def get_comm_messages(
+        self,
+        device: str,
+        start_time: datetime,
+        end_time: datetime,
+    ) -> list[dict[str, Any]]:
+        return self.tdengine.get_comm_messages(device, start_time, end_time)
+
+    def inspect_streams(self, order_no: str) -> list[dict[str, Any]]:
+        return self.http.inspect_streams(order_no)
+
+    def doctor(self) -> dict[str, Any]:
+        http = self.http.doctor()
+        try:
+            details = self.tdengine.doctor()
+        except SourceError as exc:
+            return {"diag_api": http["diag_api"], "tdengine": {"ok": False, "error": str(exc)}}
+        return {"diag_api": http["diag_api"], "tdengine": {"ok": True, "details": details}}
 
 
 class RedisSource:
@@ -612,13 +657,21 @@ class FixtureSources:
 
 
 @contextlib.contextmanager
-def live_sources(settings: Settings) -> Iterator[LiveSources]:
+def direct_sources(settings: Settings) -> Iterator[LiveSources]:
+    """Keep the all-direct source set available for explicit rollback/fallback."""
     with _ssh_tunnel(settings) as effective:
         yield LiveSources(
             mysql=MySQLSource(effective),
             tdengine=TDengineSource(effective),
             redis=RedisSource(effective),
         )
+
+
+@contextlib.contextmanager
+def live_sources(settings: Settings) -> Iterator[HybridSources]:
+    """Return the current partial-cutover default source set."""
+    with _ssh_tunnel(settings) as effective:
+        yield HybridSources(effective)
 
 
 @contextlib.contextmanager
@@ -696,6 +749,16 @@ def _safe_identifier(value: str) -> str:
 def _safe_literal(value: str | None) -> str:
     if value is None or not SAFE_VALUE.fullmatch(value) or "--" in value:
         raise ValueError("查询值包含不允许的字符")
+    return value
+
+
+SAFE_HTTP_PARAM = re.compile(r"^[A-Za-z0-9_.:+-]{1,128}$")
+
+
+def _safe_http_param(value: str | None) -> str:
+    """Whitelist query values before they are interpolated into ``/diag/*`` URLs."""
+    if value is None or not SAFE_HTTP_PARAM.fullmatch(value) or "--" in value:
+        raise ValueError("HTTP 查询值包含不允许的字符")
     return value
 
 
