@@ -34,8 +34,8 @@ For each conflicting hunk:
 2. **Pick the resolution that preserves both intents** wherever possible. Where the intents are incompatible, pick the one that best matches the PR's stated goal (in `<pr-view>` above) and note the trade-off in your comment.
 3. **Do not invent new behaviour.** Your job is reconciliation, not feature work. If a sensible resolution requires writing new logic that wasn't on either side, that's a signal to flag uncertainty rather than to be creative.
 
-After resolving, run whatever checks you think are warranted — `npm run check` is fast and catches most resolution mistakes; `npm run check` if you want stronger confidence. You decide. If something is broken, fix what you can; if you can't, push what you have and flag it clearly in the comment.
+After resolving, run whatever checks you think are warranted — `uv sync --extra dev && uv run pytest && uv run ruff check` is fast and catches most resolution mistakes; `uv sync --extra dev && uv run pytest && uv run ruff check` if you want stronger confidence. You decide. If something is broken, fix what you can; if you can't, push what you have and flag it clearly in the comment.
 
 # COMMIT
 
-Stage everything and finish the merge with a single commit. Conventional-commit style, e.g. `chore: merge origin/{{BASE_REF}} into {{BRANCH}}`. The wrapper will push whatever you commit.
+Run `node .sandcastle/policy-check.mjs commit`, then stage everything and finish the merge with a single commit. Conventional-commit style, e.g. `chore: merge origin/{{BASE_REF}} into {{BRANCH}}`. The wrapper will push whatever you commit.

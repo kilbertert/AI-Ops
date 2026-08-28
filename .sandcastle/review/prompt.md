@@ -78,12 +78,13 @@ outputs, and behaviours must remain intact.
 
 # EXECUTION
 
-1. Run `npm run check` — confirm the current state passes.
-2. Attempt to reproduce the original bug with new test cases — if you can, fix it.
-3. Write edge-case tests that stress the implementation.
-4. Make any code quality improvements directly on this branch.
-5. Run `npm run check` again to ensure nothing is broken.
-6. **If you changed anything**, commit with a Conventional Commit message
+1. Run `uv sync --extra dev && uv run pytest && uv run ruff check` — confirm the current state passes.
+2. Run `node .sandcastle/policy-check.mjs commit` — confirm the branch and metadata are valid.
+3. Attempt to reproduce the original bug with new test cases — if you can, fix it.
+4. Write edge-case tests that stress the implementation.
+5. Make any code quality improvements directly on this branch.
+6. Run `uv sync --extra dev && uv run pytest && uv run ruff check` again to ensure nothing is broken.
+7. **If you changed anything**, run `node .sandcastle/policy-check.mjs commit`, then commit with a Conventional Commit message
    (`refactor:`, `test:`, `fix:`). **If the code is already clean,
    well-tested, and handles edge cases properly, do nothing — make no commit.**
 

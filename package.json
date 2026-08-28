@@ -4,7 +4,8 @@
   "scripts": {
     "afk": "tsx .sandcastle/main.ts",
     "ralph": "tsx .sandcastle/planner.ts",
-    "prd:to-issues": "tsx .sandcastle/to-issues-prd/to-issues-prd.ts"
+    "prd:to-issues": "tsx .sandcastle/to-issues-prd/to-issues-prd.ts",
+    "afk:policy": "node .sandcastle/policy-check.mjs all"
   },
   "dependencies": {
     "tsx": "^4.20.0",
