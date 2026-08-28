@@ -59,12 +59,17 @@ jobs:
           if [ -d .git ]; then
             git remote remove origin 2>/dev/null || true
             git remote add origin "https://github.com/${GH_REPO}.git"
+            # Stale-runner safety: discard local tracked + untracked leftovers.
+            git reset --hard HEAD 2>/dev/null || true
+            git clean -fd 2>/dev/null || true
             git fetch --depth 1 origin main
             git checkout -B main FETCH_HEAD
             git branch --list 'agent/*' 'sandcastle/*' | xargs -r git branch -D 2>/dev/null || true
           else
             git clone --branch main --depth 1 "https://github.com/${GH_REPO}.git" .
           fi
+
+      - name: Setup Node.js 22
         uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -73,6 +78,7 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Run architecture-review.ts
         env:
           AFK_PROFILE: ${{ vars.AFK_PROFILE || 'psydo' }}
           OUTPUT_DIR: ${{ runner.temp }}

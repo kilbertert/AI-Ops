@@ -10,7 +10,7 @@ const issue = process.argv.slice(2).find((arg, index) =>
   /^\d+$/.test(arg) && (profileIndex < 0 || index + 2 !== profileIndex + 1),
 );
 if (!issue || !/^\d+$/.test(issue)) {
-  throw new Error("Usage: npm run afk -- [--profile claude|claude-ark|psydo|aliyun-deepseek] <issue-number>");
+  throw new Error("Usage: npm run afk -- [--profile claude|claude-ark|agentrouter|psydo|aliyun-deepseek] <issue-number>");
 }
 
 const root = resolve(import.meta.dirname, "..");
@@ -20,15 +20,12 @@ if (!existsSync(envFile) && !profile) {
   throw new Error("Missing .sandcastle/.env; select an existing profile or configure an explicit credential.");
 }
 
-// Base the task worktree on origin/<default>, not the current checkout HEAD,
-// so an AFK run never inherits an unrelated in-progress branch. This file is
-// the copy-verbatim baseline for bootstrap-afk.sh, so the fix propagates to
-// every bootstrapped project too. Ensure origin/main is current first; the
-// sandcastle library falls back to HEAD if baseBranch is omitted.
+// Base the task worktree on origin/main, not the current checkout HEAD, so an
+// AFK run never inherits an unrelated in-progress branch.
 execSync("git fetch --prune origin", { cwd: root, stdio: "inherit" });
 const result = await run({
   cwd: root,
-  name: `auto-test-issue-${issue}`,
+  name: `afk-issue-${issue}`,
   ...claudeProfile(profile),
   branchStrategy: { type: "branch", branch, baseBranch: "origin/main" },
   promptFile: ".sandcastle/implement.md",
