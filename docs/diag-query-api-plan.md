@@ -14,6 +14,13 @@ AI-Ops(充电订单只读诊断运行时)目前持有生产库凭据,直连 MySQ
 
 > **方案状态**:本方案最终采用 D 方案(2026-08-27 锁定),TDengine 段暂留直连,Java 侧不动,tsdata 侧不动。
 
+> **P0 阻断(2026-08-28 查实并标注)**:D 方案的 HTTP 段(经充电桩 Java 服务 `/diag/*` 访问 MySQL/Redis)**无法在当前生产生效**,因为 **Java 侧 `/diag/*` 从未合并/部署**:
+> - 本机 `backend-v2-domestic/` 快照(2026-07-07)中 **没有** 任何 `/diag` Controller;唯一的 `/diag/*` 实现是 AI-Ops 仓库内 `java/cloud-charging-pile-web/.../DiagQueryController.java`(待落地工件,`java/README.md` 明示"未编译/未部署/待验证")。
+> - `.env.example` 默认 `AIOPS_HTTP_BASE_URL=http://127.0.0.1:8080` 指向的是 `web-chuhai-upscaler.service`(一个 Python 静态站,`Server: SimpleHTTP/0.6`),**不是充电桩 Java 服务**;`/diag/order` 在该端口返回 404。
+> - 生产主机 `124.243.178.156` 上有 SSH alias(`prod-charge-124`),但本机只读访问被拒(Permission denied),无法确认其上 `/diag/*` 是否已跑。
+>
+> **因此**:HTTP 段当前**不可用**。生产 `production.env` 尚不能填 `AIOPS_HTTP_BASE_URL` / `AIOPS_HTTP_INTERNAL_TOKEN_SECRET`(填了也打不到真实 `/diag/*`)。**本方案暂按"Java 侧未落地 → HTTP 段回退直连"处理**:AI-Ops 继续直连 MySQL/Redis/TDengine,`production.env` 不启用 HTTP 段。待 Java 侧 `/diag/*` 真正合并并部署后,再启用 HTTP 段并回收直连凭据。
+
 本次目标:把这些查询正式化为**走 Java 平台现有鉴权体系的受控接口**,收回 AI-Ops 的生产库凭据,使数据出口受控、可审计。
 
 ### 目标
@@ -289,6 +296,14 @@ AI-Ops (sources.py 增加 HttpSources,镜像现有 Protocol)
 
 本节按 D 方案改写为分阶段收凭据:**2/3 凭据 → 1/3 凭据 → 0/3 凭据**。凭据删除动作由后续收口任务执行,本 PR 只同步方案文档。
 
+> **收口现状标注(P0,2026-08-28)**:**Java 侧 `/diag/*` 未合并/部署 → HTTP 段当前不可用 → 各阶段实际执行状态如下**:
+> - **Phase 1(接口实现)**:未完成。`DiagQueryController` 仅作为 AI-Ops `java/` 下的待落地工件存在,未合并进真实 Java 仓库,未编译部署。
+> - **Phase 2(AI-Ops 切流量)**:未完成。`HttpSources`/`HybridSources` 代码已合入 main,但因 Java 侧 `/diag/*` 不存在,切流量无目标。
+> - **Phase 3a(删 MySQL+Redis 凭据)**:**未执行,且不应执行**。`production.env` 不可填 `AIOPS_HTTP_BASE_URL`/`AIOPS_HTTP_INTERNAL_TOKEN_SECRET`;填了也打不到真实 `/diag/*`(默认 8080 是 `web-chuhai-upscaler` 静态站)。当前 `production.env` 仍完整持有 MySQL/Redis/TDengine 直连凭据——尽管 `.env.example` 已标注"Phase 3a 后 REMOVED",那仅是模板,生产未变。
+> - **Phase 3b(删 TDengine 凭据)**:同未执行,依赖 tsdata 补洞 + Java 侧 `/diag/*` 实装。
+>
+> **当前生产唯一真实状态** = AI-Ops **继续直连** MySQL/Redis/TDengine,HTTP 段**回退暂停**,D 方案安全收益**尚未在生产发生**。启用 HTTP 段并回收凭据,必须先让 Java 侧 `/diag/*` 真实落地(新 issue / 团队仓库合并部署)。
+
 ### Phase 1 —— 接口实现与自测(充电桩服务 + tsdata)
 
 - 充电桩服务:`DiagQueryController` + 令牌校验 + 审计切面;tsdata 补令牌校验
@@ -389,6 +404,7 @@ Feature: 诊断查询接口
 | 7 | Spring Security OAuth2 资源服务器被注释 | 若平台后续强推 OAuth2,方案需调整 | 本次不启用;留作演进选项,不阻塞 |
 | 8 | TDengine 段仍直连 | 当前生产环境 AI-Ops 仍持有 TDengine 凭据,直到 Phase 3b 完成;tsdata 真正补洞之前 TDengine 段仍直连 | Phase 3a 只删 MySQL+Redis 凭据;Phase 3b 完成后才删 TDengine 凭据 |
 | 9 | D 方案不解决 tsdata 自身访问控制 | D 方案不解决 tsdata 自身被任意人访问的问题,tsdata 的无鉴权访问通道仍未关闭 | tsdata 保持内网隔离与现有运维限制;补洞后作为 Phase 3b 前置条件 |
+| 10 | **Java 侧 `/diag/*` 未落地(P0)** | D 方案 HTTP 段依赖充电桩 Java 服务 `/diag/*`;当前该服务未合并/部署(唯一工件在 AI-Ops `java/`,`java/README.md` 明示未编译/未验证);`.env.example` 默认 8080 是无关 Python 静态站;生产 124 只读 SSH 被拒,无法确认真实部署 | **回退直连**:AI-Ops 继续直连 MySQL/Redis/TDengine,`production.env` 不启用 HTTP 段;待 Java 侧 `/diag/*` 真实合并并部署后,再启用 HTTP 段并回收直连凭据(Phase 3b / 新 issue) |
 
 ---
 
