@@ -13,8 +13,9 @@ Requirements:
    behavior you change.
 3. Run `uv sync --extra dev && uv run pytest && uv run ruff check` before
    committing. Do not weaken or skip checks.
-4. Inspect `git diff --check` and the changed-file list before committing.
-5. Commit the completed work with a Conventional Commit message.
+4. Run `node .sandcastle/policy-check.mjs commit` before committing.
+5. Inspect `git diff --check` and the changed-file list before committing.
+6. Commit the completed work with a Conventional Commit message.
 
 If the issue is complete, print `<promise>COMPLETE</promise>` after the commit.
 If a required human decision, credential, or external environment is missing,

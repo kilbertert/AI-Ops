@@ -38,7 +38,7 @@ Use red-green-refactor where applicable.
 4. REFACTOR
 
 Before committing, run `uv sync --extra dev`, `uv run pytest`, and
-`uv run ruff check`.
+`uv run ruff check`, then `node .sandcastle/policy-check.mjs commit`.
 
 # COMMIT
 
