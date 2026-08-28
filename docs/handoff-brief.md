@@ -77,3 +77,17 @@ T10  #43 收口(切流量+删凭据)                    ╎ needs #34, #37-41, #
 _Next: after the T7/T8/T10 decisions, re-run `pnpm ralph` to drive the newly
 unblocked sub-issues in dependency order; the planner already proved the
 dependency-graph → parallel → merge → close loop on #34/#36._
+## Execution paths (sanity for any agent reading this)
+
+- **Planner (`pnpm ralph`)** uses the upstream-identical docker-worktree
+  sandbox (`createSandbox` + `docker()` + `close()`); per-issue worktree is
+  auto-cleaned. `.sandcastle/worktrees/` is gitignored.
+- **Label-Action implement/review** runs on the self-hosted runner's **persistent
+  workspace** (`git checkout -b` + a `docker()` container for isolation/profile).
+  This is NOT a per-issue worktree; `agent/*` branches persist between runs and
+  can accumulate (upstream has the same property on self-hosted). Clean them up
+  explicitly — the stale-runner checkout now `reset --hard` + `clean` first.
+- Do **not** read the label-Action docker container as "we diverged from the
+  reference" — the reference's label-Action uses `noSandbox`; ours uses
+  `docker()` as a deliberate isolation/profile-injection enhancement, and both
+  run on a persistent runner workspace.
