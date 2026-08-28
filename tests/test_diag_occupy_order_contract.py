@@ -102,7 +102,7 @@ def test_t4_java_deliverable_exists() -> None:
 
 def test_controller_routes_get_occupy_order_under_diag_root() -> None:
     source = _read(CONTROLLER)
-    assert '@RestController' in source
+    assert "@RestController" in source
     assert '@RequestMapping("/diag")' in source
     assert '@GetMapping("/occupy-order")' in source
 
@@ -111,35 +111,35 @@ def test_occupy_order_self_validates_internal_token_headers() -> None:
     source = _read(CONTROLLER)
     assert '@RequestHeader(value = "X-Internal-Token", required = false)' in source
     assert '@RequestHeader(value = "X-Request-Timestamp", required = false)' in source
-    assert 'internalTokenManager.validateToken(' in source
+    assert "internalTokenManager.validateToken(" in source
 
 
 def test_invalid_token_returns_http_401_and_r_envelope() -> None:
     source = _read(CONTROLLER)
-    assert 'HttpStatus.UNAUTHORIZED' in source
+    assert "HttpStatus.UNAUTHORIZED" in source
     assert 'R.failed(401, "令牌无效或过期")' in source
 
 
 def test_occupy_order_returns_r_envelope_with_list_data() -> None:
     source = _read(CONTROLLER)
-    assert 'public ResponseEntity<R<List<Map<String, Object>>>> occupyOrder(' in source
-    assert 'ch_occupy_order_info' in source
-    assert 'R.ok(' in source
+    assert "public ResponseEntity<R<List<Map<String, Object>>>> occupyOrder(" in source
+    assert "ch_occupy_order_info" in source
+    assert "R.ok(" in source
 
 
 def test_occupy_order_requires_exactly_one_lookup_key() -> None:
     source = _read(CONTROLLER)
-    assert 'hasExactlyOneLookupKey(' in source
-    assert 'HttpStatus.BAD_REQUEST' in source
+    assert "hasExactlyOneLookupKey(" in source
+    assert "HttpStatus.BAD_REQUEST" in source
     assert 'R.failed(400, "非法参数")' in source
 
 
 def test_occupy_order_maps_order_no_and_order_id_to_the_right_columns() -> None:
     source = _read(CONTROLLER)
-    assert 'WHERE order_no = ?' in source
-    assert 'WHERE orderId = ?' in source
-    assert 'OCCUPY_ORDER_BY_ORDER_NO_SQL' in source
-    assert 'OCCUPY_ORDER_BY_ORDER_ID_SQL' in source
+    assert "WHERE order_no = ?" in source
+    assert "WHERE orderId = ?" in source
+    assert "OCCUPY_ORDER_BY_ORDER_NO_SQL" in source
+    assert "OCCUPY_ORDER_BY_ORDER_ID_SQL" in source
 
 
 def test_occupy_order_selects_full_reference_columns() -> None:
@@ -150,18 +150,18 @@ def test_occupy_order_selects_full_reference_columns() -> None:
 
 def test_occupy_order_is_parameterized_ordered_and_capped_at_twenty() -> None:
     source = _read(CONTROLLER)
-    assert 'ORDER BY startTime DESC' in source
-    assert 'LIMIT 20' in source
-    assert '@Transactional(readOnly = true' in source
-    assert 'AND (? IS NULL OR tenant_id = ?)' in source
-    assert 'AND (? IS NULL OR status = ?)' in source
+    assert "ORDER BY startTime DESC" in source
+    assert "LIMIT 20" in source
+    assert "@Transactional(readOnly = true" in source
+    assert "AND (? IS NULL OR tenant_id = ?)" in source
+    assert "AND (? IS NULL OR status = ?)" in source
 
 
 def test_occupy_order_rejects_injection_characters_before_query() -> None:
     source = _read(CONTROLLER)
-    assert '^[A-Za-z0-9_.:-]{1,128}$' in source
-    assert 'isSafeValue' in source
-    assert 'HttpStatus.BAD_REQUEST' in source
+    assert "^[A-Za-z0-9_.:-]{1,128}$" in source
+    assert "isSafeValue" in source
+    assert "HttpStatus.BAD_REQUEST" in source
     assert 'R.failed(400, "非法参数")' in source
 
 
@@ -182,12 +182,12 @@ def test_occupy_order_sql_placeholders_match_bound_arguments() -> None:
 
 def test_occupy_order_normalizes_blank_tenant_and_status_to_null() -> None:
     source = _read(CONTROLLER)
-    assert 'blankToNull' in source
-    assert 'queryTenantId' in source
-    assert 'queryStatus' in source
+    assert "blankToNull" in source
+    assert "queryTenantId" in source
+    assert "queryStatus" in source
 
 
 def test_java_artifact_does_not_hardcode_internal_token_secret() -> None:
     source = _read(CONTROLLER)
-    assert 'qushiyun-internal-secret-2024' not in source
-    assert 'InternalTokenManager' in source
+    assert "qushiyun-internal-secret-2024" not in source
+    assert "InternalTokenManager" in source
