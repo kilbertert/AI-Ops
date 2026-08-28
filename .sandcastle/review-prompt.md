@@ -8,6 +8,8 @@ and maintainability while preserving exact functionality.
 
 # CONTEXT
 
+Read `CONTEXT.md` (domain language) and apply `.sandcastle/CODING_STANDARDS.md`.
+
 <issue>
 
 !`gh issue view {{ISSUE_NUMBER}}`
@@ -44,6 +46,9 @@ Write tests for anything that isn't already covered.
 
 ## 3. Analyze for code quality improvements
 
+Apply the project's `.sandcastle/CODING_STANDARDS.md` alongside these
+opportunities:
+
 Look for opportunities to:
 
 - Reduce unnecessary complexity and nesting
@@ -65,11 +70,11 @@ outputs, and behaviors must remain intact.
 
 # EXECUTION
 
-1. Run `uv sync --extra dev && uv run pytest && uv run ruff check` first to confirm the current state passes.
+1. Run `npm run check` first to confirm the current state passes.
 2. Attempt to reproduce the original bug with new test cases — if you can, fix it.
 3. Write edge-case tests that stress the implementation.
 4. Make code quality improvements directly on this branch.
-5. Run `uv sync --extra dev && uv run pytest && uv run ruff check` again to ensure nothing is broken.
+5. Run `npm run check` again to ensure nothing is broken.
 6. Commit with a Conventional Commit message (`refactor:`, `test:`, `fix:`)
    describing the refinements.
 

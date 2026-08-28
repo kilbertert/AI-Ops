@@ -7,10 +7,10 @@ PRD, pull that in too. Only work on the issue specified.
 
 # CONTEXT
 
-Read the relevant files under `docs/` and any ADRs under `docs/adr/` before
-starting. Explore the repo and fill your context window with the parts
-relevant to this issue — especially test files that touch the area you'll
-change.
+Read `CONTEXT.md` (domain language) and the relevant files under `docs/` and any ADRs under `docs/adr/` before
+starting. Apply the project's `.sandcastle/CODING_STANDARDS.md`. Explore the
+repo and fill your context window with the parts relevant to this issue —
+especially test files that touch the area you'll change.
 
 # EXPLORATION
 
@@ -28,7 +28,7 @@ Use red-green-refactor where applicable:
 
 # FEEDBACK LOOPS
 
-Before committing, run `uv sync --extra dev && uv run pytest && uv run ruff check` (typecheck + tests + build) and
+Before committing, run `npm run check` (typecheck + tests + build) and
 `git diff --check` to ensure everything passes. Do not weaken or skip checks.
 
 # COMMIT

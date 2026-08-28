@@ -2,7 +2,7 @@
 
 Implement exactly GitHub issue {{ISSUE_NUMBER}}: {{ISSUE_TITLE}}.
 
-Read `AGENTS.md`, the issue, `docs/`, and the smallest set of relevant source
+Read `CONTEXT.md`, `AGENTS.md`, the issue, `docs/`, `.sandcastle/CODING_STANDARDS.md`, and the smallest set of relevant source
 and tests before editing. Work on one issue only.
 
 Requirements:

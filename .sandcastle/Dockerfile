@@ -34,11 +34,17 @@ RUN npm install --global @anthropic-ai/claude-code \
     'set -eu' \
     'case "${AFK_PROFILE:-claude}" in' \
     '  claude) exec /usr/local/bin/claude-real "$@" ;;' \
-    '  claude-ark|psydo) args=(); while [ "$#" -gt 0 ]; do if [ "$1" = "--model" ]; then shift 2; else args+=("$1"); shift; fi; done; exec env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_BASE_URL -u ANTHROPIC_MODEL -u ANTHROPIC_REASONING_MODEL -u ANTHROPIC_DEFAULT_OPUS_MODEL -u ANTHROPIC_DEFAULT_SONNET_MODEL -u ANTHROPIC_DEFAULT_HAIKU_MODEL CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT=1 /usr/local/bin/claude-real --settings /home/agent/.afk-profile-settings.json "${args[@]}" ;;' \
+    '  claude-ark|agentrouter|psydo) args=(); while [ "$#" -gt 0 ]; do if [ "$1" = "--model" ]; then shift 2; else args+=("$1"); shift; fi; done; exec env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_BASE_URL -u ANTHROPIC_MODEL -u ANTHROPIC_REASONING_MODEL -u ANTHROPIC_DEFAULT_OPUS_MODEL -u ANTHROPIC_DEFAULT_SONNET_MODEL -u ANTHROPIC_DEFAULT_HAIKU_MODEL CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT=1 /usr/local/bin/claude-real --settings /home/agent/.afk-profile-settings.json "${args[@]}" ;;' \
     '  *) echo "unsupported AFK_PROFILE" >&2; exit 2 ;;' \
     'esac' > /usr/local/bin/claude \
   && chmod 755 /usr/local/bin/claude \
   && npm cache clean --force
+
+# code-review skill (two-axis Standards/Spec review via parallel sub-agents),
+# used by the review prompts. Source lives in .sandcastle/skills/code-review.
+COPY skills/code-review /opt/code-review
+RUN mkdir -p /home/agent/.claude/skills && cp -r /opt/code-review /home/agent/.claude/skills/code-review \
+  && chown -R ${AGENT_UID}:${AGENT_GID} /home/agent/.claude
 
 USER ${AGENT_UID}:${AGENT_GID}
 WORKDIR /home/agent
