@@ -27,4 +27,16 @@
 - 预期：使用当前 main，通过 controller/candidate/delivery 隔离完成审核且没有 blocked 标签。
 - 清理：关闭一次性 PR，删除临时分支和标签。
 
-AFK-B10/B11 在合并前记录提交、环境、时间戳和命令证据；AFK-B12 在模板合并后执行。workflow YAML 不适用复杂度或 mutation 工具；安全状态机由模板动态测试覆盖，本仓负责静态门和部署一致性。
+AFK-B10：已通过，时间 `2026-08-30T03:09:18+08:00`，提交
+`5641b0e5996ef1c27f70a44e231c81d822b00874`，Linux x86_64，Python
+3.13.13、Node v24.15.0、actionlint 1.7.12、ShellCheck 0.11.0。证据：`uv run
+ruff check .`、`uv run ruff format --check .`、`uv run pytest -q`、compileall、
+`uv pip check`、policy checker、actionlint、ShellCheck、`git diff --check` 全部通过；
+受管文件与模板逐字节一致。
+
+AFK-B11：已通过，复用模板提交 `7973f255059c4e71de67ae9375bc0fb28b584824` 的
+`bash test/trusted-pr-delivery.sh`，覆盖 stale main、bundle 提交保留和远端竞态拒绝。
+
+AFK-B12：待模板合并后在 AI-Ops 在线 self-hosted runner 执行 owner-authored
+`agent:review` canary，保留 workflow URL、review、标签和清理证据后再标记通过。
+workflow YAML 不适用复杂度或 mutation 工具；安全状态机由模板动态测试覆盖，本仓负责静态门和部署一致性。
