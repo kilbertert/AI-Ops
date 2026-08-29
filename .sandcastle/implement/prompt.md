@@ -22,7 +22,7 @@ Use red-green-refactor where applicable.
 3. REPEAT until the issue is done
 4. REFACTOR
 
-Before committing, run `uv sync --extra dev && uv run pytest && uv run ruff check`, then
+Before committing, run `npm run check`, then
 `node .sandcastle/policy-check.mjs commit`.
 
 # COMMIT

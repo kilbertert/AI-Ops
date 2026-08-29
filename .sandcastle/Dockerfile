@@ -40,12 +40,6 @@ RUN npm install --global @anthropic-ai/claude-code \
   && chmod 755 /usr/local/bin/claude \
   && npm cache clean --force
 
-# code-review skill (two-axis Standards/Spec review via parallel sub-agents),
-# used by the review prompts. Source lives in .sandcastle/skills/code-review.
-COPY skills/code-review /opt/code-review
-RUN mkdir -p /home/agent/.claude/skills && cp -r /opt/code-review /home/agent/.claude/skills/code-review \
-  && chown -R ${AGENT_UID}:${AGENT_GID} /home/agent/.claude
-
 USER ${AGENT_UID}:${AGENT_GID}
 WORKDIR /home/agent
 ENTRYPOINT ["sleep", "infinity"]
