@@ -102,7 +102,7 @@ export function claudeProfile(
       // produces (defaultImageName = sandcastle:<repo>). A hardcoded custom
       // name here means rebuilds target a different tag and the sandbox keeps
       // running a stale image — the cause of repeated false BLOCKEDs.
-      imageName: process.env.AFK_IMAGE ?? "sandcastle:ai-ops",
+      imageName: process.env.AFK_IMAGE ?? "sandcastle:ai-ops-governance",
       env: {
         ...safeEnv,
         // AFK_PROFILE lives in the sandbox env (not the agent env) so that

@@ -28,3 +28,17 @@
 - 代码、配置、打包或文档流程变更都要运行与风险匹配的 formatter、静态检查、测试和构建检查。
 - Windows 便携包必须在 Windows runner 上构建，并从最终 ZIP 的解压目录验证，不能只运行源码目录或 `dist/` 目录。
 - 每次 PR 只解决一个逻辑任务；AI 审查是建议，不替代确定性 CI 和人工判断。
+
+<!-- afk-bootstrap:managed:start -->
+## AFK workflow gate
+
+For idea or planning work, read `docs/afk-workflow.md` and the applicable
+files under `docs/agents/` first.
+
+`/grill-with-docs` ends only when its frontier is empty: report
+`GRILLING_COMPLETE`, summarize the shared understanding, ask the user to
+confirm it, and stop. Confirmation completes grilling only. Wait for the user
+to explicitly invoke `/to-spec`, `/to-tickets`, `/implement`, or
+`/implement-spec`; do not enter another phase automatically. Multi-session
+work uses `/to-spec` then `/to-tickets` before implementation.
+<!-- afk-bootstrap:managed:end -->
