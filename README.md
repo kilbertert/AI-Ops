@@ -28,6 +28,7 @@
 
 ## 安全边界
 
+- AFK 的 `pull_request_target` 变更任务仅接受仓库所有者创建的同仓库 PR。宿主从当前 `main` 加载可信 controller，候选代码只在带只读 token 的 Docker 沙箱执行，结果经 Git bundle 导入干净 delivery checkout 后才使用短时写 token 推送；交付凭据缺失时 fail closed。
 - 不提供 `UPDATE`、`DELETE`、`INSERT`、DDL、退款、重算、补发、消息重放或服务重启能力。
 - 订单、费用、设备和 Redis 队列证据改由充电桩 `/diag/*` HTTP 接口只读查询，本运行时不再保存 MySQL / Redis 直连凭据。
 - TDengine 查询必须包含设备、时间范围、选定列和 `LIMIT`；TDengine 直连凭据暂时保留，待 tsdata 补齐 token 校验后再回收。

@@ -44,6 +44,8 @@ flowchart LR
 
 多端便携部署时，推荐将上述数据库访问边界放入固定服务器上的 `AI-Ops Gateway`，客户端只通过 HTTPS 设备令牌提交诊断请求和同步事件。Gateway 方案、注册、秘密管理和跨设备 run 同步见 [gateway.md](gateway.md)。
 
+AFK 开发自动化使用独立的可信控制面：`pull_request_target` 只接受仓库所有者创建的同仓库 PR；宿主依赖、Sandcastle controller 和 policy checker 来自当前 `main`，候选 checkout 只挂载到带只读 GitHub token 的 Docker 沙箱。变更结果通过 Git bundle 交给干净 delivery checkout，并在推送前校验远端 head 未发生竞态。`AGENT_PAT` 只出现在标签、评论和最终推送步骤，缺失或失败时进入 `agent:blocked`。
+
 TDengine Community Edition 3.4 不支持 `GRANT READ`，非超级用户仍可能写入已有数据库。因此生产请求必须经过 `ops/` 中的 loopback-only 代理。代理只识别 `TDengineSource` 发出的精确有界查询，SSH 账号不能直接转发到 TDengine 原生 REST 端口。
 
 ## 必需的生产身份

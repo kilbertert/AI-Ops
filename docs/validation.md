@@ -280,3 +280,9 @@ T1 一致，是团队仓库中的源码工件契约，而非部署服务后的�
 6. Redis 下游同步问题。
 
 每个案例都要比较生成的摘要、分类、证据和下一步建议与工程师最终结论。即使建议碰巧正确，错误的高置信度仍然算失败。
+
+## AFK 模板 1.1.1 可信交付验证
+
+本次变更把 AFK 的 PR 自动化拆为当前 `main` 的 controller、只读候选 Docker 沙箱和干净 delivery checkout。仓库内 `node .sandcastle/policy-check.mjs workflows` 静态锁定 owner-only 同仓库 gate、controller 执行、候选 token 边界、bundle 交付和 AGENT_PAT fail-closed；afk-bootstrap 的 `test/trusted-pr-delivery.sh` 动态覆盖 stale main、提交保留和远端竞态拒绝。
+
+合并前必须记录 AFK-B10/B11 的提交、环境、时间戳和命令结果。合并后在在线 self-hosted runner 上执行 owner-authored `agent:review` canary，保留 workflow URL，并确认没有 `agent:blocked`。该验证只覆盖开发交付边界，不改变或证明 AI-Ops 业务诊断准确率。
