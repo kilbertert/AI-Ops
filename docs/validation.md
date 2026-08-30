@@ -292,3 +292,21 @@ ShellCheck 0.11.0），policy checker、actionlint、ShellCheck、pytest、ruff�
 compileall、依赖检查和模板 bundle 回归均通过。合并后仍须在在线 self-hosted
 runner 上执行 owner-authored `agent:review` canary，保留 workflow URL，并确认
 没有 `agent:blocked`；该验证只覆盖开发交付边界，不改变或证明 AI-Ops 业务诊断准确率。
+
+## AFK 模板 1.1.2 工程经济契约验证（2026-08-31）
+
+本次验证范围是项目挂载进 Sandcastle 容器的 AFK 标准与 prompt，不涉及业务运行时：
+
+- `.sandcastle/CODING_STANDARDS.md` 包含同一份 Economy ladder，并明确根因修复、
+  现有代码/标准库/平台/已装依赖/成熟依赖/最小自研的选择顺序。
+- 单 issue、PRD sub-issue、planner、PR 反馈修复和双轴 review 路径均引用该契约；
+  Standards 轴会检查不必要的兼容层、配置、依赖、抽象和 seam。
+- 自动化检查：`uv sync --extra dev`、全套 `uv run pytest` **327 项通过**、
+  `uv run ruff check`、`uv run ruff format --check .`、`uv lock --check`、
+  `uv pip check`、`node .sandcastle/policy-check.mjs all`、
+  `node --check .sandcastle/review/review.ts` 和 `git diff --check` 全部通过。
+- Dockerfile、镜像工具链和 provider 配置没有变化；规则由项目 worktree 挂载进入
+  容器，因此本次不重建镜像。
+
+未完成业务验收：没有连接真实 `/diag/*` 服务、生产数据源或真实故障案例；本节只证明
+AFK 治理契约已部署并通过确定性检查，不代表诊断准确率或生产安全边界获得新的验收。
