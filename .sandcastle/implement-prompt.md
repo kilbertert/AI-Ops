@@ -11,6 +11,8 @@ Read `CONTEXT.md` (domain language) and the relevant files under `docs/` and any
 starting. Apply the project's `.sandcastle/CODING_STANDARDS.md`. Explore the
 repo and fill your context window with the parts relevant to this issue —
 especially test files that touch the area you'll change.
+Run the Economy ladder before choosing an implementation; stop at the first
+option that fully satisfies the issue and its acceptance contract.
 
 # EXPLORATION
 
@@ -28,7 +30,7 @@ Use red-green-refactor where applicable:
 
 # FEEDBACK LOOPS
 
-Before committing, run `npm run check` (typecheck + tests + build) and
+Before committing, run `uv sync --extra dev && uv run pytest && uv run ruff check` (typecheck + tests + build) and
 `git diff --check` to ensure everything passes. Then run
 `node .sandcastle/policy-check.mjs commit`. Do not weaken or skip checks.
 
