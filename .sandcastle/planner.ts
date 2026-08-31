@@ -99,28 +99,6 @@ function nativeSubIssueCount(number: number): number {
   );
 }
 
-function parentIssueNumber(number: number): string {
-  const [owner, repo] = requiredRepository().split("/");
-  return execFileSync(
-    "gh",
-    [
-      "api",
-      "graphql",
-      "-f",
-      "query=query($owner:String!,$repo:String!,$number:Int!){repository(owner:$owner,name:$repo){issue(number:$number){parent{number}}}}",
-      "-f",
-      `owner=${owner}`,
-      "-f",
-      `repo=${repo}`,
-      "-F",
-      `number=${number}`,
-      "--jq",
-      ".data.repository.issue.parent.number // empty",
-    ],
-    { encoding: "utf8" },
-  ).trim();
-}
-
 function openNativeBlockerCount(number: number): number {
   return Number(
     execFileSync("gh", ["api", `repos/${requiredRepository()}/issues/${number}/dependencies/blocked_by`, "--jq", "[.[] | select(.state == \"open\")] | length"], {
@@ -133,12 +111,17 @@ function requiredRepository(): string {
   return process.env.GH_REPO ?? execFileSync("gh", ["repo", "view", "--json", "nameWithOwner", "--jq", ".nameWithOwner"], { encoding: "utf8" }).trim();
 }
 
+// Eligibility = "an agent can implement this issue now": not the PRD itself,
+// not a container issue (it has sub-issues decomposing it), and not blocked.
+// A leaf sub-issue of a PRD IS eligible: the PRD excludes itself via
+// isPrdIssue/nativeSubIssueCount, and its leaves are exactly the work items
+// the plan prompt tells the model to select. Having a parent must NOT
+// disqualify an issue, or every decomposed PRD becomes unrunnable.
 function eligibleReadyIssueNumbers(candidates: ReadyIssue[]): Set<number> {
   const eligible = new Set<number>();
   for (const issue of candidates) {
     if (isPrdIssue(issue.title, issue.body)) continue;
     if (nativeSubIssueCount(issue.number) !== 0) continue;
-    if (parentIssueNumber(issue.number) !== "") continue;
     if (openNativeBlockerCount(issue.number) !== 0) continue;
     eligible.add(issue.number);
   }
