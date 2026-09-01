@@ -60,6 +60,12 @@ class RunCreateRequest(BaseModel):
     fixture_name: str | None = Field(default=None, max_length=128)
 
 
+class HealthReportJobRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    order_no: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.:-]+$")
+
+
 class GatewayAPI:
     def __init__(
         self,
@@ -238,6 +244,59 @@ def create_gateway_app(
             "scope_fingerprint": caller.scope_fingerprint,
         }
 
+    @app.post("/v1/health-report-jobs", status_code=status.HTTP_202_ACCEPTED)
+    def create_health_report_job(
+        payload: HealthReportJobRequest,
+        caller: ScopeContext = Depends(authenticated_caller),  # noqa: B008
+    ) -> dict[str, Any]:
+        try:
+            allowed = context.order_authorizer.can_access(caller, payload.order_no)
+        except (CallerAuthError, ScopeError, SourceError, ValueError) as exc:
+            raise StandardAPIError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "ORDER_AUTHORIZATION_UNAVAILABLE",
+                "order authorization unavailable",
+                retryable=True,
+            ) from exc
+        if not allowed:
+            raise StandardAPIError(
+                status.HTTP_404_NOT_FOUND,
+                "ORDER_NOT_FOUND",
+                "order not found",
+            )
+        try:
+            job = context.runtime.start_health_report(caller, payload.order_no)
+        except (ValueError, RuntimeError) as exc:
+            raise StandardAPIError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "REPORT_JOB_UNAVAILABLE",
+                "health report job unavailable",
+                retryable=True,
+            ) from exc
+        return _health_job_response(job)
+
+    @app.get("/v1/health-report-jobs/{job_id}")
+    def get_health_report_job(
+        job_id: str,
+        caller: ScopeContext = Depends(authenticated_caller),  # noqa: B008
+    ) -> dict[str, Any]:
+        try:
+            job = context.runtime.get_health_report(caller, job_id)
+        except (ValueError, RuntimeError) as exc:
+            raise StandardAPIError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "REPORT_JOB_UNAVAILABLE",
+                "health report job unavailable",
+                retryable=True,
+            ) from exc
+        if job is None:
+            raise StandardAPIError(
+                status.HTTP_404_NOT_FOUND,
+                "REPORT_JOB_NOT_FOUND",
+                "health report job not found",
+            )
+        return _health_job_response(job)
+
     @app.post("/v1/enroll", status_code=status.HTTP_201_CREATED)
     def enroll(payload: EnrollRequest) -> dict[str, Any]:
         try:
@@ -385,3 +444,27 @@ def _caller_resolver(settings: GatewayServerSettings) -> CallerContextResolver:
             timeout_seconds=settings.introspection_timeout_seconds,
         )
     )
+
+
+def _health_job_response(job: dict[str, Any]) -> dict[str, Any]:
+    status_value = str(job["status"])
+    return {
+        "job_id": job["job_id"],
+        "order_no": job["order_no"],
+        "rule_version": job["rule_version"],
+        "status": status_value,
+        "retry_after_ms": 1000 if status_value in {"queued", "running"} else None,
+        "report": job.get("report"),
+        "error": (
+            {
+                "code": job.get("error_code") or "REPORT_FAILED",
+                "message": job.get("error_message") or "health report failed",
+                "retryable": job.get("error_code") in {"SOURCE_UNAVAILABLE", "REPORT_TIMEOUT"},
+            }
+            if status_value == "failed"
+            else None
+        ),
+        "created_at": job["created_at"],
+        "updated_at": job["updated_at"],
+        "completed_at": job.get("completed_at"),
+    }

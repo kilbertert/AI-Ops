@@ -18,6 +18,11 @@ from aiops_diagnostics.redaction import redact_text
 
 SAFE_SCOPE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 TERMINAL_RUN_STATUSES = frozenset({"diagnosed", "inconclusive", "blocked", "interrupted", "failed"})
+ACTIVE_HEALTH_JOB_STATUSES = frozenset({"queued", "running"})
+TERMINAL_HEALTH_JOB_STATUSES = frozenset({"completed", "failed", "expired"})
+HEALTH_JOB_COMPLETED_RETENTION = timedelta(minutes=15)
+HEALTH_JOB_FAILED_RETENTION = timedelta(minutes=5)
+HEALTH_JOB_DEADLINE = timedelta(seconds=30)
 
 
 class GatewayStoreError(RuntimeError):
@@ -163,6 +168,135 @@ class GatewayStore:
                 (_iso(_utc_now()), device_id),
             )
         return updated.rowcount == 1
+
+    def create_or_reuse_health_job(
+        self,
+        scope_fingerprint: str,
+        order_no: str,
+        rule_version: str,
+    ) -> tuple[dict[str, Any], bool]:
+        scope_fingerprint = _scope(scope_fingerprint, "scope_fingerprint")
+        order_no = _scope(order_no, "order_no")
+        rule_version = _scope(rule_version, "rule_version")
+        now = _utc_now()
+        with self._connection(write=True) as connection:
+            self._expire_health_jobs(connection, now)
+            row = connection.execute(
+                """
+                SELECT * FROM health_report_jobs
+                WHERE scope_fingerprint = ? AND order_no = ? AND rule_version = ?
+                  AND status IN ('queued', 'running', 'completed')
+                ORDER BY created_at DESC LIMIT 1
+                """,
+                (scope_fingerprint, order_no, rule_version),
+            ).fetchone()
+            if row is not None:
+                return _health_job_from_row(row), False
+
+            job_id = "hrj_" + uuid.uuid4().hex
+            connection.execute(
+                """
+                INSERT INTO health_report_jobs (
+                    job_id, scope_fingerprint, order_no, rule_version, status,
+                    created_at, updated_at, deadline_at
+                ) VALUES (?, ?, ?, ?, 'queued', ?, ?, ?)
+                """,
+                (
+                    job_id,
+                    scope_fingerprint,
+                    order_no,
+                    rule_version,
+                    _iso(now),
+                    _iso(now),
+                    _iso(now + HEALTH_JOB_DEADLINE),
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM health_report_jobs WHERE job_id = ?",
+                (job_id,),
+            ).fetchone()
+        return _health_job_from_row(row), True
+
+    def update_health_job(
+        self,
+        job_id: str,
+        *,
+        status: str,
+        report: dict[str, Any] | None = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
+    ) -> bool:
+        if status not in ACTIVE_HEALTH_JOB_STATUSES | TERMINAL_HEALTH_JOB_STATUSES:
+            raise ValueError("invalid health-report job status")
+        now = _utc_now()
+        completed_at = now if status in TERMINAL_HEALTH_JOB_STATUSES else None
+        expires_at = (
+            now + HEALTH_JOB_COMPLETED_RETENTION
+            if status == "completed"
+            else now + HEALTH_JOB_FAILED_RETENTION
+            if status == "failed"
+            else now
+            if status == "expired"
+            else None
+        )
+        with self._connection(write=True) as connection:
+            updated = connection.execute(
+                """
+                UPDATE health_report_jobs SET
+                    status = ?, report_json = COALESCE(?, report_json),
+                    error_code = COALESCE(?, error_code),
+                    error_message = COALESCE(?, error_message),
+                    started_at = COALESCE(started_at, ?),
+                    completed_at = COALESCE(completed_at, ?),
+                    expires_at = COALESCE(?, expires_at), updated_at = ?
+                WHERE job_id = ? AND status NOT IN ('completed', 'failed', 'expired')
+                """,
+                (
+                    status,
+                    json.dumps(report, ensure_ascii=False) if report is not None else None,
+                    error_code,
+                    redact_text(error_message or "")[:1000] if error_message else None,
+                    _iso(now) if status == "running" else None,
+                    _iso(completed_at) if completed_at else None,
+                    _iso(expires_at) if expires_at else None,
+                    _iso(now),
+                    job_id,
+                ),
+            )
+        return updated.rowcount == 1
+
+    def get_health_job(self, job_id: str, scope_fingerprint: str) -> dict[str, Any] | None:
+        with self._connection(write=True) as connection:
+            self._expire_health_jobs(connection, _utc_now())
+            row = connection.execute(
+                "SELECT * FROM health_report_jobs WHERE job_id = ? AND scope_fingerprint = ?",
+                (job_id, scope_fingerprint),
+            ).fetchone()
+        return _health_job_from_row(row) if row is not None else None
+
+    def count_health_jobs(self) -> int:
+        with self._connection() as connection:
+            row = connection.execute("SELECT COUNT(*) AS count FROM health_report_jobs").fetchone()
+        return int(row["count"])
+
+    @staticmethod
+    def _expire_health_jobs(connection: sqlite3.Connection, now: datetime) -> None:
+        now_text = _iso(now)
+        connection.execute(
+            """
+            UPDATE health_report_jobs SET status = 'expired', completed_at = COALESCE(completed_at, ?),
+                expires_at = COALESCE(expires_at, ?), updated_at = ?
+            WHERE status IN ('queued', 'running') AND deadline_at <= ?
+            """,
+            (now_text, now_text, now_text, now_text),
+        )
+        connection.execute(
+            """
+            UPDATE health_report_jobs SET status = 'expired', updated_at = ?
+            WHERE status IN ('completed', 'failed') AND expires_at <= ?
+            """,
+            (now_text, now_text),
+        )
 
     def create_run(
         self,
@@ -388,6 +522,24 @@ class GatewayStore:
                     PRIMARY KEY(run_id, sequence),
                     FOREIGN KEY(run_id) REFERENCES runs(run_id) ON DELETE CASCADE
                 );
+                CREATE TABLE IF NOT EXISTS health_report_jobs (
+                    job_id TEXT PRIMARY KEY,
+                    scope_fingerprint TEXT NOT NULL,
+                    order_no TEXT NOT NULL,
+                    rule_version TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    report_json TEXT,
+                    error_code TEXT,
+                    error_message TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    deadline_at TEXT NOT NULL,
+                    started_at TEXT,
+                    completed_at TEXT,
+                    expires_at TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_health_jobs_reuse
+                    ON health_report_jobs(scope_fingerprint, order_no, rule_version, created_at DESC);
                 """
             )
             columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(runs)").fetchall()}
@@ -395,6 +547,15 @@ class GatewayStore:
                 connection.execute("ALTER TABLE runs ADD COLUMN error_message TEXT")
             if "provider" not in columns:
                 connection.execute("ALTER TABLE runs ADD COLUMN provider TEXT")
+            now = _iso(_utc_now())
+            connection.execute(
+                """
+                UPDATE health_report_jobs SET status = 'expired', completed_at = COALESCE(completed_at, ?),
+                    expires_at = COALESCE(expires_at, ?), updated_at = ?
+                WHERE status IN ('queued', 'running')
+                """,
+                (now, now, now),
+            )
         protect_private_file(self.path)
 
     @contextmanager
@@ -431,6 +592,13 @@ def _run_from_row(row: sqlite3.Row) -> dict[str, Any]:
     result = dict(row)
     raw_result = result.pop("result_json", None)
     result["result"] = json.loads(raw_result) if raw_result else None
+    return result
+
+
+def _health_job_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    result = dict(row)
+    raw_report = result.pop("report_json", None)
+    result["report"] = json.loads(raw_report) if raw_report else None
     return result
 
 
