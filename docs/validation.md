@@ -413,3 +413,23 @@ Redis 适配器与离线 fixture，不连接任何生产服务：
 未完成业务验收：未连接真实 UPMS/Dis/生产库；`--scope-json` 的调用者凭证校验属
 Java 网关职责，本仓库只消费已解析范围。真实环境验收按 `qa-plan.md` SCP 用例执行，
 fixture 与 fake 不能替代。
+
+## 生产 /user/ds 缺陷降级验证（2026-09-01）
+
+本次验证范围是 `UpmsDirectory.data_scope()` 在平台 `/user/ds` 故障时的降级
+推导，输入为伪造传输层与真实生产 UPMS（经 124 内网隧道）：
+
+- `tests/test_scope_context_ds_fallback.py`（11 项）：服务错误降级为角色
+  `dsType` + `dsScope` + `/shopuser/getShops` 推导（all/本级及子级/自定义/
+  多角色取最宽/忽略非本人角色）；凭证失败（401）不进入降级；无角色、未知
+  `dsType`、非法响应形状、UPMS 不可达均保持 `scope.upms_unavailable`
+  fail closed；`/user/ds` 成功时不触发降级。
+- 真实生产验证：`/user/ds` 对 `testadmin` 返回 `系统错误！`（根因为
+  `SysOrganMapper.getBizData` 空 IN 子句 + `biz_data` 全空），降级推导得
+  `DataScope(type=all)`（角色 `dsType=0`），端到端 `ScopeContext`/`QueryScope`
+  正常产出且未扩大平台授予的范围。
+- 全套 **442 项通过**；`ruff check`/`format --check`/`compileall`/`pip check`/
+  `lock --check`/`policy-check` 全部通过。
+
+未完成业务验收：平台 `/user/ds` 本身修复仍需上游处理；降级路径在组织/店铺
+粒度场景仅由契约测试守护。
