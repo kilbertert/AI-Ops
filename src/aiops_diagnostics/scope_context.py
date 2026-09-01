@@ -49,6 +49,8 @@ USER_INFO_PATH = "/user/info"
 DATA_SCOPE_PATH = "/user/ds"
 USER_BY_B_ID_PATH = "/user/inside/byId"
 USER_BY_C_USER_ID_PATH = "/user/inside/byUserId"
+ROLE_LIST_PATH = "/role/list"
+SHOP_USER_PATH = "/shopuser/getShops"
 
 _SCOPE_TYPE_BY_PLATFORM_CODE = {
     0: SCOPE_TYPE_ALL,
@@ -377,7 +379,15 @@ class UpmsDirectory:
         return tuple(_parse_subject(item) for item in records)
 
     def data_scope(self, credential: str) -> DataScope:
-        data = self._get(DATA_SCOPE_PATH, credential)
+        try:
+            data = self._get(DATA_SCOPE_PATH, credential)
+        except ScopeError as exc:
+            # 平台 ``/user/ds`` 存在缺陷（组织 ID 列表为空时生成非法
+            # ``IN ()`` SQL，对所有用户 500）。凭证问题仍然直接失败关闭；
+            # 服务侧错误降级为「角色数据权限 + 店铺归属」推导，不扩大范围。
+            if exc.code == SCOPE_ERROR_AUTH_FAILED:
+                raise
+            return self._derive_data_scope_from_roles(credential)
         if not isinstance(data, dict):
             raise ScopeError("UPMS 数据范围响应无效", code=SCOPE_ERROR_UPMS_UNAVAILABLE)
         return DataScope(
@@ -387,7 +397,63 @@ class UpmsDirectory:
             site_ids=_parse_id_tuple(data.get("siteIds")),
         )
 
-    def _get(self, path: str, credential: str) -> Any:
+    def _derive_data_scope_from_roles(self, credential: str) -> DataScope:
+        """``/user/ds`` 不可用时的降级推导。
+
+        仍然使用平台既有数据范围机制：角色 ``dsType``（``DataScopeTypeEnum``：
+        0=全部、1=自定义、2=本级及子级、3=本级）决定范围类型；``dsScope``
+        （自定义范围 ID，逗号分隔）提供组织集合；``/shopuser/getShops``
+        提供店铺集合。取调用者角色中最宽的一个 ``dsType``；调用者角色不可
+        识别或无法推导时以 ``SCOPE_ERROR_UPMS_UNAVAILABLE`` 失败关闭。
+        """
+        info = self._get(USER_INFO_PATH, credential)
+        if not isinstance(info, dict):
+            raise ScopeError("UPMS 用户信息响应无效", code=SCOPE_ERROR_UPMS_UNAVAILABLE)
+        sys_user = info.get("sysUser") or {}
+        caller_role_ids = {str(item) for item in (sys_user.get("roleIds") or []) if _optional_text(item)}
+        caller_b_user_id = _optional_text(sys_user.get("id"))
+        caller_organ_id = _optional_text(sys_user.get("organId"))
+        if not caller_b_user_id:
+            raise ScopeError("UPMS 用户对象缺少 B 端用户 ID", code=SCOPE_ERROR_UPMS_UNAVAILABLE)
+        if not caller_role_ids:
+            raise ScopeError("UPMS 用户角色不可识别，无法推导数据范围", code=SCOPE_ERROR_UPMS_UNAVAILABLE)
+
+        roles_payload = self._request(ROLE_LIST_PATH, credential)
+        if not isinstance(roles_payload, list):
+            raise ScopeError("UPMS 角色列表响应无效", code=SCOPE_ERROR_UPMS_UNAVAILABLE)
+        ds_type: int | None = None
+        custom_ids: tuple[str, ...] = ()
+        for item in roles_payload:
+            if not isinstance(item, dict):
+                raise ScopeError("UPMS 角色列表响应无效", code=SCOPE_ERROR_UPMS_UNAVAILABLE)
+            if str(item.get("id") or "") not in caller_role_ids:
+                continue
+            item_type = _optional_text(item.get("dsType"))
+            if item_type is None:
+                continue
+            value = _to_int(item_type)
+            if value is None or value not in _SCOPE_TYPE_BY_PLATFORM_CODE:
+                raise ScopeError(
+                    f"UPMS 角色数据权限类型无法识别: {item_type}",
+                    code=SCOPE_ERROR_UPMS_UNAVAILABLE,
+                )
+            if ds_type is None or value < ds_type:
+                ds_type = value
+                custom_ids = _parse_id_list(item.get("dsScope"))
+        if ds_type is None:
+            raise ScopeError("UPMS 角色未配置数据权限类型", code=SCOPE_ERROR_UPMS_UNAVAILABLE)
+
+        shops = self._get(f"{SHOP_USER_PATH}?userId={_safe_path_segment(caller_b_user_id)}", credential)
+        shop_ids = _parse_id_list(shops)
+
+        scope_type = _SCOPE_TYPE_BY_PLATFORM_CODE[ds_type]
+        organ_ids: tuple[str, ...] = ()
+        if scope_type == SCOPE_TYPE_ORGAN:
+            organ_ids = custom_ids if ds_type == 1 else ((caller_organ_id,) if caller_organ_id else ())
+        return DataScope(type=scope_type, organ_ids=organ_ids, shop_ids=shop_ids, site_ids=())
+
+    def _request(self, path: str, credential: str) -> Any:
+        """Fetch one UPMS path and return the raw payload envelope."""
         base_url = self.settings.base_url
         if not base_url:
             raise ScopeError("UPMS 服务地址未配置", code=SCOPE_ERROR_CONFIG_MISSING)
@@ -399,7 +465,7 @@ class UpmsDirectory:
         request.add_header("Accept", "application/json")
         try:
             with urllib.request.urlopen(request, timeout=self.settings.timeout_seconds) as response:
-                payload = json.loads(response.read().decode("utf-8"))
+                return json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             if exc.code in (401, 403):
                 raise ScopeError("UPMS 拒绝平台凭证", code=SCOPE_ERROR_AUTH_FAILED) from exc
@@ -408,6 +474,9 @@ class UpmsDirectory:
             raise ScopeError(
                 f"UPMS 请求失败: {exc.__class__.__name__}", code=SCOPE_ERROR_UPMS_UNAVAILABLE
             ) from exc
+
+    def _get(self, path: str, credential: str) -> Any:
+        payload = self._request(path, credential)
         if not isinstance(payload, dict) or payload.get("code") not in (0, 200):
             detail = payload.get("msg") if isinstance(payload, dict) else "invalid response"
             is_auth_failure = isinstance(payload, dict) and payload.get("code") in (401, 403)
@@ -557,6 +626,18 @@ def _parse_id_tuple(value: Any) -> tuple[str, ...]:
         if text not in result:
             result.append(text)
     return tuple(result)
+
+
+def _parse_id_list(value: Any) -> tuple[str, ...]:
+    """Parse IDs from a JSON array or a comma-separated string (role dsScope)."""
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        parts = [item.strip() for item in value.split(",") if item.strip()]
+        return tuple(dict.fromkeys(parts))
+    if isinstance(value, list):
+        return _parse_id_tuple(value)
+    raise ScopeError("UPMS 范围 ID 响应无效", code=SCOPE_ERROR_UPMS_UNAVAILABLE)
 
 
 def _normalize_scope_type(value: Any) -> str:
