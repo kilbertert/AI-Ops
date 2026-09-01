@@ -386,9 +386,31 @@ class MySQLSource:
 
 
 class TDengineSource:
-    def __init__(self, settings: Settings) -> None:
+    """TDengine 只读查询；可选携带单次运行冻结的允许设备集合。
+
+    携带 ``allowed_devices``（非空）时，每个查询的 ``device`` 必须在集合内，
+    否则拒绝且不发起 TDengine 请求。``None`` 表示由上游订单 scope 已约束
+    设备（订单本身来自受信任的 MySQL scope 查询），但仍走固定的超表/字段/
+    时间窗/LIMIT 构造，不接受客户端透传表名、字段或 SQL。
+    """
+
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        allowed_devices: frozenset[str] | None = None,
+    ) -> None:
         self.settings = settings
+        self.allowed_devices = allowed_devices
         self.database = _safe_identifier(settings.tdengine.database)
+
+    def _check_device_allowed(self, device: str) -> None:
+        """请求设备不在允许集合内时 fail closed：拒绝且不发起 TDengine 请求。"""
+        if self.allowed_devices is not None and device not in self.allowed_devices:
+            raise SourceError(
+                f"设备不在当前权限范围: {device}",
+                code="tdengine.device_forbidden",
+            )
 
     def _query(self, sql: str) -> list[dict[str, Any]]:
         cfg = self.settings.tdengine
@@ -418,6 +440,7 @@ class TDengineSource:
         end_time: datetime,
         tx_serial_no: str | None,
     ) -> list[dict[str, Any]]:
+        self._check_device_allowed(device)
         device_literal = _safe_literal(device)
         tx_filter = f" AND `txSerialNo`='{_safe_literal(tx_serial_no)}'" if tx_serial_no else ""
         limit = int(self.settings.safety.tdengine_max_rows)
@@ -437,6 +460,7 @@ class TDengineSource:
         start_time: datetime,
         end_time: datetime,
     ) -> list[dict[str, Any]]:
+        self._check_device_allowed(device)
         limit = int(self.settings.safety.tdengine_max_rows)
         sql = (
             "SELECT _ts, direction, code, decoded FROM `charging-pile_comm` "
@@ -615,9 +639,14 @@ class HttpSources:
 
 
 class HybridSources:
-    def __init__(self, settings: Settings) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        allowed_devices: frozenset[str] | None = None,
+    ) -> None:
         self.settings = settings
-        self.tdengine = TDengineSource(settings)
+        self.tdengine = TDengineSource(settings, allowed_devices=allowed_devices)
 
     @property
     def http(self) -> HttpSources:
@@ -931,10 +960,17 @@ def direct_sources(settings: Settings) -> Iterator[LiveSources]:
 
 
 @contextlib.contextmanager
-def live_sources(settings: Settings) -> Iterator[HybridSources]:
-    """Return the current partial-cutover default source set."""
+def live_sources(
+    settings: Settings,
+    *,
+    allowed_devices: frozenset[str] | None = None,
+) -> Iterator[HybridSources]:
+    """Return the current partial-cutover default source set.
+
+    ``allowed_devices`` 非空时，TDengine 查询只允许该设备集合内的设备。
+    """
     with _ssh_tunnel(settings, include_direct_backends=False) as effective:
-        yield HybridSources(effective)
+        yield HybridSources(effective, allowed_devices=allowed_devices)
 
 
 @contextlib.contextmanager

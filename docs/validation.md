@@ -359,3 +359,20 @@ AFK 治理契约已部署并通过确定性检查，不代表诊断准确率或�
 未完成业务验收：未调用真实 `cloud-upms`/`dis`，端点契约以 Java `DisFeignClient` 与
 PRD #23 记录为依据并由离线测试守护；`QueryScope` 尚未接入诊断运行时（T3/T4/T5）。
 真实环境验收按 PRD #23 的验收任务执行，fixture 与模拟响应不能替代。
+
+## T3 TDengine 受限查询验证（2026-09-01）
+
+本次验证范围是 issue #73 的 TDengine 设备集合约束，输入为伪造 `_query` 捕获，
+不连接任何生产服务：
+
+- `tests/test_tdengine_scope.py`（7 项）：允许设备查询执行、越权设备拒绝且不发
+  起 TDengine 请求（捕获列表为空）、无 allowed 集合时允许任意安全设备、枪属性/
+  报文固定超表与固定字段、强制时间窗与 `LIMIT 2000`、设备标识注入拦截。
+- `TDengineSource`/`HybridSources`/`live_sources` 的设备集合透传回归覆盖在
+  既有 `test_sources.py`、`test_tdengine_scope.py`。
+- 命令 `uv sync --extra dev && uv run pytest && uv run ruff check`、
+  `uv run ruff format --check .`、`git diff --check`、
+  `node .sandcastle/policy-check.mjs commit` 全部通过，全套 **414 项通过**。
+
+未完成业务验收：未连接真实 TDengine，设备集合校验未接入运行时（T5）；真实环境
+验收按 PRD #23 的验收任务执行，fixture 与模拟响应不能替代。
