@@ -13,6 +13,7 @@ from aiops_diagnostics.codex_runtime import AgentRuntimeError
 from aiops_diagnostics.config import Settings, canonical_provider_base_url, validate_key_slot_name
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_store import GatewayDevice, GatewayStore
+from aiops_diagnostics.health_curves import build_curves
 from aiops_diagnostics.health_report import (
     HEALTH_RULE_VERSION,
     HealthReportError,
@@ -27,6 +28,15 @@ from aiops_diagnostics.scope_context import ScopeContext
 from aiops_diagnostics.sources import SourceError, scoped_live_sources
 
 FIXTURE_NAMES = frozenset({"ocpp_consistent.json", "ykc_amount_mismatch.json", "missing_tx_data.json"})
+
+
+def _as_datetime(value):
+    from datetime import UTC, datetime
+
+    if isinstance(value, datetime):
+        return value if value.tzinfo else value.replace(tzinfo=UTC)
+    parsed = datetime.fromisoformat(str(value))
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
 
 
 class GatewayRuntime:
@@ -237,6 +247,21 @@ class GatewayRuntime:
                     order_no,
                     self.diagnostic_settings.safety,
                 )
+                order = sources.get_orders(order_no)[0]
+                device = str(order.get("child_device_code") or order.get("device_code"))
+                try:
+                    samples = sources.get_gun_samples(
+                        device,
+                        _as_datetime(order["created_time"]),
+                        _as_datetime(order["stop_time"]),
+                        None,
+                    )
+                except SourceError:
+                    samples = []
+                    report["source_summary"]["telemetry"] = "unavailable"
+                else:
+                    report["source_summary"]["telemetry"] = "available" if samples else "unavailable"
+                report["curves"] = build_curves(samples)
             if time.monotonic() - started > 30:
                 self.store.update_health_job(
                     job_id,

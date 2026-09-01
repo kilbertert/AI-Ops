@@ -195,3 +195,22 @@ Feature: 标准单问诊断与主体级历史查询
       When 调用者 B 使用相同 diagnosis_id 查询或列出历史
       Then 返回统一 DIAGNOSIS_NOT_FOUND 或空列表
       And 不泄露诊断问题、状态或结果
+
+Feature: 标准健康报告曲线与来源摘要
+  健康报告使用完整受限时序数据计算，并返回有界、可追溯的曲线响应。
+
+  Rule: 曲线响应有界且不伪造缺失数据
+
+    Scenario: 大量时序数据降采样
+      Given 订单有超过 300 个有效时序点
+      When 获取健康报告
+      Then 每条曲线最多返回 300 个有序点
+      And 保留首点、末点与极值
+      And 指标计算使用完整输入点
+
+    Scenario: 遥测不可用时报告仍可部分完成
+      Given 订单授权有效但遥测源不可用
+      When 获取健康报告
+      Then 报告仍可 completed
+      And 曲线为空且 source_summary.telemetry 为 unavailable
+      And 不使用伪造点替代缺失遥测
