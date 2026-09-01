@@ -136,3 +136,36 @@ Feature: 标准调用者认证与订单授权
       When 调用现有 runs 接口
       Then 行为与标准认证上线前一致
       And 该 token 不能访问标准订单接口
+
+Feature: 最小异步充电健康报告
+  标准调用方可以为授权且已结束的订单创建短生命周期报告作业，
+  并通过轮询获得确定性最小报告。
+
+  Rule: 报告以异步作业交付
+
+    Scenario: 授权订单完成最小报告
+      Given Bearer token 有订单读取 scope
+      And 订单已结束且时间窗口有效
+      When 创建并轮询健康报告作业
+      Then 作业经过 queued 与 running 后 completed
+      And 报告包含确定性摘要、停止原因指标、rule_version、data_as_of 与 completeness
+
+    Scenario: 重复请求复用活动作业
+      Given 同一调用者范围、订单和规则版本已有活动作业
+      When 再次创建健康报告作业
+      Then 返回同一个 job_id
+      And 不重复提交后台计算
+
+  Rule: 作业有界且失败关闭
+
+    Scenario: 无权订单不创建作业
+      Given 订单不在调用者范围
+      When 创建健康报告作业
+      Then 返回统一 ORDER_NOT_FOUND
+      And 不保存报告作业
+
+    Scenario: 过期或重启中的作业可重建
+      Given 作业超过 deadline 或服务在 queued/running 时重启
+      When 查询或重新创建作业
+      Then 旧作业状态为 expired
+      And 新请求可以创建新 job_id
