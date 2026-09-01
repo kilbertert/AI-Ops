@@ -18,6 +18,11 @@ from aiops_diagnostics.redaction import redact_text
 
 SAFE_SCOPE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 TERMINAL_RUN_STATUSES = frozenset({"diagnosed", "inconclusive", "blocked", "interrupted", "failed"})
+ACTIVE_DIAGNOSIS_STATUSES = frozenset({"queued", "running"})
+TERMINAL_DIAGNOSIS_STATUSES = frozenset({"completed", "inconclusive", "failed", "expired"})
+DIAGNOSIS_COMPLETED_RETENTION = timedelta(minutes=15)
+DIAGNOSIS_FAILED_RETENTION = timedelta(minutes=5)
+DIAGNOSIS_DEADLINE = timedelta(seconds=30)
 
 
 class GatewayStoreError(RuntimeError):
@@ -163,6 +168,158 @@ class GatewayStore:
                 (_iso(_utc_now()), device_id),
             )
         return updated.rowcount == 1
+
+    def create_standard_diagnosis(
+        self,
+        scope_fingerprint: str,
+        order_no: str,
+        question: str,
+        indicator_code: str | None,
+    ) -> dict[str, Any]:
+        scope_fingerprint = _scope(scope_fingerprint, "scope_fingerprint")
+        order_no = _scope(order_no, "order_no")
+        question = _question(question, "question")
+        indicator_code = _optional_question(indicator_code, "indicator_code")
+        now = _utc_now()
+        diagnosis_id = "dx_" + uuid.uuid4().hex
+        with self._connection(write=True) as connection:
+            self._expire_diagnoses(connection, now)
+            connection.execute(
+                """
+                INSERT INTO standard_diagnoses (
+                    diagnosis_id, scope_fingerprint, order_no, question, indicator_code,
+                    status, created_at, updated_at, deadline_at
+                ) VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?)
+                """,
+                (
+                    diagnosis_id,
+                    scope_fingerprint,
+                    order_no,
+                    redact_text(question),
+                    indicator_code,
+                    _iso(now),
+                    _iso(now),
+                    _iso(now + DIAGNOSIS_DEADLINE),
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM standard_diagnoses WHERE diagnosis_id = ?",
+                (diagnosis_id,),
+            ).fetchone()
+        return _standard_diagnosis_from_row(row)
+
+    def update_standard_diagnosis(
+        self,
+        diagnosis_id: str,
+        *,
+        status: str,
+        result: dict[str, Any] | None = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
+    ) -> bool:
+        if status not in ACTIVE_DIAGNOSIS_STATUSES | TERMINAL_DIAGNOSIS_STATUSES:
+            raise ValueError("invalid standard-diagnosis status")
+        now = _utc_now()
+        completed_at = now if status in TERMINAL_DIAGNOSIS_STATUSES else None
+        if status == "completed":
+            expires_at = now + DIAGNOSIS_COMPLETED_RETENTION
+        elif status == "failed":
+            expires_at = now + DIAGNOSIS_FAILED_RETENTION
+        else:
+            expires_at = now
+        with self._connection(write=True) as connection:
+            updated = connection.execute(
+                """
+                UPDATE standard_diagnoses SET
+                    status = ?, result_json = COALESCE(?, result_json),
+                    error_code = COALESCE(?, error_code),
+                    error_message = COALESCE(?, error_message),
+                    started_at = COALESCE(started_at, ?),
+                    completed_at = COALESCE(completed_at, ?),
+                    expires_at = COALESCE(?, expires_at), updated_at = ?
+                WHERE diagnosis_id = ? AND status NOT IN ('completed', 'inconclusive', 'failed', 'expired')
+                """,
+                (
+                    status,
+                    json.dumps(result, ensure_ascii=False) if result is not None else None,
+                    error_code,
+                    redact_text(error_message or "")[:1000] if error_message else None,
+                    _iso(now) if status == "running" else None,
+                    _iso(completed_at) if completed_at else None,
+                    _iso(expires_at),
+                    _iso(now),
+                    diagnosis_id,
+                ),
+            )
+        return updated.rowcount == 1
+
+    def get_standard_diagnosis(self, diagnosis_id: str, scope_fingerprint: str) -> dict[str, Any] | None:
+        if not diagnosis_id.startswith("dx_"):
+            return None
+        with self._connection(write=True) as connection:
+            self._expire_diagnoses(connection, _utc_now())
+            row = connection.execute(
+                """
+                SELECT * FROM standard_diagnoses
+                WHERE diagnosis_id = ? AND scope_fingerprint = ?
+                """,
+                (diagnosis_id, scope_fingerprint),
+            ).fetchone()
+        return _standard_diagnosis_from_row(row) if row is not None else None
+
+    def list_standard_diagnoses(self, scope_fingerprint: str, *, limit: int = 50) -> list[dict[str, Any]]:
+        if not 1 <= limit <= 200:
+            raise ValueError("limit must be between 1 and 200")
+        with self._connection(write=True) as connection:
+            self._expire_diagnoses(connection, _utc_now())
+            rows = connection.execute(
+                """
+                SELECT diagnosis_id, order_no, question, indicator_code, status,
+                       created_at, updated_at
+                FROM standard_diagnoses
+                WHERE scope_fingerprint = ?
+                ORDER BY created_at DESC LIMIT ?
+                """,
+                (scope_fingerprint, limit),
+            ).fetchall()
+        return [
+            {
+                "diagnosis_id": str(row["diagnosis_id"]),
+                "order_no": str(row["order_no"]),
+                "question": str(row["question"]),
+                "indicator_code": str(row["indicator_code"]) if row["indicator_code"] else None,
+                "status": str(row["status"]),
+                "created_at": str(row["created_at"]),
+                "updated_at": str(row["updated_at"]),
+            }
+            for row in rows
+        ]
+
+    def count_standard_diagnoses(self) -> int:
+        with self._connection() as connection:
+            row = connection.execute("SELECT COUNT(*) AS count FROM standard_diagnoses").fetchone()
+        return int(row["count"])
+
+    @staticmethod
+    def _expire_diagnoses(connection: sqlite3.Connection, now: datetime) -> None:
+        now_text = _iso(now)
+        connection.execute(
+            """
+            UPDATE standard_diagnoses
+            SET status = 'expired', completed_at = COALESCE(completed_at, ?),
+                expires_at = COALESCE(expires_at, ?), updated_at = ?
+            WHERE status IN ('queued', 'running') AND deadline_at <= ?
+            """,
+            (now_text, now_text, now_text, now_text),
+        )
+        connection.execute(
+            """
+            UPDATE standard_diagnoses
+            SET status = 'expired', updated_at = ?
+            WHERE status IN ('completed', 'inconclusive', 'failed') AND expires_at <= ?
+            """,
+            (now_text, now_text),
+        )
 
     def create_run(
         self,
@@ -388,6 +545,25 @@ class GatewayStore:
                     PRIMARY KEY(run_id, sequence),
                     FOREIGN KEY(run_id) REFERENCES runs(run_id) ON DELETE CASCADE
                 );
+                CREATE TABLE IF NOT EXISTS standard_diagnoses (
+                    diagnosis_id TEXT PRIMARY KEY,
+                    scope_fingerprint TEXT NOT NULL,
+                    order_no TEXT NOT NULL,
+                    question TEXT NOT NULL,
+                    indicator_code TEXT,
+                    status TEXT NOT NULL,
+                    result_json TEXT,
+                    error_code TEXT,
+                    error_message TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    deadline_at TEXT NOT NULL,
+                    started_at TEXT,
+                    completed_at TEXT,
+                    expires_at TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_standard_diagnoses_scope_created
+                    ON standard_diagnoses(scope_fingerprint, created_at DESC);
                 """
             )
             columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(runs)").fetchall()}
@@ -395,6 +571,16 @@ class GatewayStore:
                 connection.execute("ALTER TABLE runs ADD COLUMN error_message TEXT")
             if "provider" not in columns:
                 connection.execute("ALTER TABLE runs ADD COLUMN provider TEXT")
+            now = _iso(_utc_now())
+            connection.execute(
+                """
+                UPDATE standard_diagnoses
+                SET status = 'expired', completed_at = COALESCE(completed_at, ?),
+                    expires_at = COALESCE(expires_at, ?), updated_at = ?
+                WHERE status IN ('queued', 'running')
+                """,
+                (now, now, now),
+            )
         protect_private_file(self.path)
 
     @contextmanager
@@ -434,6 +620,30 @@ def _run_from_row(row: sqlite3.Row) -> dict[str, Any]:
     return result
 
 
+def _standard_diagnosis_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    result = dict(row)
+    raw_result = result.pop("result_json", None)
+    result["result"] = json.loads(raw_result) if raw_result else None
+    for key in (
+        "diagnosis_id",
+        "order_no",
+        "question",
+        "indicator_code",
+        "status",
+        "error_code",
+        "error_message",
+        "created_at",
+        "updated_at",
+        "deadline_at",
+        "started_at",
+        "completed_at",
+        "expires_at",
+    ):
+        if key in result and result[key] is not None:
+            result[key] = str(result[key])
+    return result
+
+
 def _secret_hash(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
@@ -447,6 +657,27 @@ def _scope(value: str, name: str) -> str:
 
 def _optional_scope(value: str | None, name: str) -> str | None:
     return _scope(value, name) if value and value.strip() else None
+
+
+QUESTION_MAX_LEN = 4000
+INDICATOR_CODE_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+
+
+def _question(value: str, name: str) -> str:
+    candidate = (value or "").strip()
+    if not candidate:
+        raise ValueError(f"{name} must not be empty")
+    if len(candidate) > QUESTION_MAX_LEN:
+        raise ValueError(f"{name} exceeds the {QUESTION_MAX_LEN}-character limit")
+    return candidate
+
+
+def _optional_question(value: str | None, name: str) -> str | None:
+    if value is None or not value.strip():
+        return None
+    if not INDICATOR_CODE_PATTERN.fullmatch(value.strip()):
+        raise ValueError(f"{name} is not a valid indicator code")
+    return value.strip()
 
 
 def _label(value: str, name: str) -> str:

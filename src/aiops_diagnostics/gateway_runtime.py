@@ -16,6 +16,7 @@ from aiops_diagnostics.journal import EvidenceJournal
 from aiops_diagnostics.parsing import parse_request
 from aiops_diagnostics.platform_paths import reference_root
 from aiops_diagnostics.redaction import redact_text
+from aiops_diagnostics.scope_context import ScopeContext
 from aiops_diagnostics.sources import SourceError
 
 FIXTURE_NAMES = frozenset({"ocpp_consistent.json", "ykc_amount_mismatch.json", "missing_tx_data.json"})
@@ -112,6 +113,63 @@ class GatewayRuntime:
 
     def shutdown(self) -> None:
         self._executor.shutdown(wait=False, cancel_futures=False)
+
+    def start_standard_diagnosis(
+        self,
+        context: ScopeContext,
+        order_no: str,
+        question: str,
+        indicator_code: str | None,
+    ) -> dict[str, Any]:
+        """Create a standard one-shot diagnosis and dispatch it to the worker pool.
+
+        The caller context is reduced to an opaque ``scope_fingerprint`` so that
+        the resulting ``diagnosis_id`` is only resolvable from the same caller;
+        device workspace, provider, fixture, and other internal identifiers do
+        not leak to the API response.
+        """
+        job = self.store.create_standard_diagnosis(
+            context.scope_fingerprint,
+            order_no,
+            question,
+            indicator_code,
+        )
+        future = self._executor.submit(
+            self._execute_standard_diagnosis, job["diagnosis_id"], context, order_no, question
+        )
+        self._futures[job["diagnosis_id"]] = future
+        future.add_done_callback(lambda _: self._futures.pop(job["diagnosis_id"], None))
+        return job
+
+    def get_standard_diagnosis(self, context: ScopeContext, diagnosis_id: str) -> dict[str, Any] | None:
+        return self.store.get_standard_diagnosis(diagnosis_id, context.scope_fingerprint)
+
+    def list_standard_diagnoses(self, context: ScopeContext, *, limit: int = 50) -> list[dict[str, Any]]:
+        return self.store.list_standard_diagnoses(context.scope_fingerprint, limit=limit)
+
+    def _execute_standard_diagnosis(
+        self,
+        diagnosis_id: str,
+        context: ScopeContext,
+        order_no: str,
+        question: str,
+    ) -> None:
+        if not self.store.update_standard_diagnosis(diagnosis_id, status="running"):
+            return
+        # Real Codex/agent execution is wired in a follow-up task; the v1 contract
+        # only requires that the job lifecycle is correct and that the response
+        # surfaces the same fields a real run produces. We complete it as
+        # inconclusive so the caller can observe a stable terminal state.
+        self.store.update_standard_diagnosis(
+            diagnosis_id,
+            status="inconclusive",
+            result={
+                "status": "inconclusive",
+                "confidence": "low",
+                "summary": "诊断执行尚未在生产接通",
+                "evidence_count": 0,
+            },
+        )
 
     def list_evidence(self, run_id: str) -> list[dict[str, Any]]:
         """Return redacted evidence metadata for a run (no business payloads)."""
