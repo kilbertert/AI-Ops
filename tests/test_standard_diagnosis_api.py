@@ -30,6 +30,10 @@ class _Resolver:
         self.b_user_id = b_user_id
 
     def resolve(self, token: str, *, required_scope: str) -> ScopeContext:
+        if token == "orders-only":
+            from aiops_diagnostics.caller_auth import CallerAuthError
+
+            raise CallerAuthError("scope missing", code="caller_auth.forbidden")
         subject = SubjectRecord(b_user_id=self.b_user_id, c_user_id="C-1", tenant_id="T-1")
         return ScopeContext.build(
             caller=subject,
@@ -329,3 +333,18 @@ def test_create_diagnosis_rejects_excessive_payload(tmp_path: Path) -> None:
         )
 
     assert response.status_code == 422
+
+
+def test_create_diagnosis_requires_diagnosis_scope(tmp_path: Path) -> None:
+    client, store, runtime = _client(tmp_path, resolver=_Resolver())
+    with client:
+        response = client.post(
+            "/v1/standard/diagnoses",
+            headers={"Authorization": "Bearer orders-only"},
+            json={"order_no": "O-1", "question": "why"},
+        )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "INSUFFICIENT_SCOPE"
+    assert store.count_standard_diagnoses() == 0
+    assert runtime.started == []

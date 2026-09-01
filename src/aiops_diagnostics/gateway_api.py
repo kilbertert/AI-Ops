@@ -214,6 +214,38 @@ def create_gateway_app(
                 retryable=exc.retryable,
             ) from exc
 
+    def authenticated_diagnosis_caller(
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> ScopeContext:
+        if not authorization or not authorization.startswith("Bearer "):
+            raise StandardAPIError(
+                status.HTTP_401_UNAUTHORIZED,
+                "ACCESS_TOKEN_REQUIRED",
+                "access token required",
+            )
+        token = authorization.removeprefix("Bearer ").strip()
+        if token.startswith("aops_"):
+            raise StandardAPIError(
+                status.HTTP_401_UNAUTHORIZED,
+                "INVALID_ACCESS_TOKEN",
+                "access token validation failed",
+            )
+        try:
+            return context.caller_resolver.resolve(token, required_scope=STANDARD_DIAGNOSIS_SCOPE)
+        except CallerAuthError as exc:
+            if exc.code == CALLER_AUTH_FORBIDDEN:
+                raise StandardAPIError(
+                    status.HTTP_403_FORBIDDEN,
+                    "INSUFFICIENT_SCOPE",
+                    "access token validation failed",
+                ) from exc
+            raise StandardAPIError(
+                status.HTTP_503_SERVICE_UNAVAILABLE if exc.retryable else status.HTTP_401_UNAUTHORIZED,
+                "ACCESS_TOKEN_VALIDATION_UNAVAILABLE" if exc.retryable else "INVALID_ACCESS_TOKEN",
+                "access token validation failed",
+                retryable=exc.retryable,
+            ) from exc
+
     @app.get("/health")
     def health() -> dict[str, Any]:
         return {
@@ -313,7 +345,7 @@ def create_gateway_app(
     @app.post("/v1/standard/diagnoses", status_code=status.HTTP_202_ACCEPTED)
     def create_standard_diagnosis(
         payload: StandardDiagnosisRequest,
-        caller: ScopeContext = Depends(authenticated_caller),  # noqa: B008
+        caller: ScopeContext = Depends(authenticated_diagnosis_caller),  # noqa: B008
     ) -> dict[str, Any]:
         try:
             allowed = context.order_authorizer.can_access(caller, payload.order_no)
@@ -349,7 +381,7 @@ def create_gateway_app(
     @app.get("/v1/standard/diagnoses/{diagnosis_id}")
     def get_standard_diagnosis(
         diagnosis_id: str,
-        caller: ScopeContext = Depends(authenticated_caller),  # noqa: B008
+        caller: ScopeContext = Depends(authenticated_diagnosis_caller),  # noqa: B008
     ) -> dict[str, Any]:
         try:
             diagnosis = context.runtime.get_standard_diagnosis(caller, diagnosis_id)
@@ -371,7 +403,7 @@ def create_gateway_app(
     @app.get("/v1/standard/diagnoses")
     def list_standard_diagnoses(
         limit: Annotated[int, Query(ge=1, le=200)] = 50,
-        caller: ScopeContext = Depends(authenticated_caller),  # noqa: B008
+        caller: ScopeContext = Depends(authenticated_diagnosis_caller),  # noqa: B008
     ) -> dict[str, Any]:
         diagnoses = context.runtime.list_standard_diagnoses(caller, limit=limit)
         return {"diagnoses": diagnoses}

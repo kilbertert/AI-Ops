@@ -169,3 +169,29 @@ Feature: 最小异步充电健康报告
       When 查询或重新创建作业
       Then 旧作业状态为 expired
       And 新请求可以创建新 job_id
+
+Feature: 标准单问诊断与主体级历史查询
+  标准调用方可以针对授权订单提交一次独立问题，并查询自身范围内的诊断资源。
+
+  Rule: 诊断运行使用现有受限 Agent 路径
+
+    Scenario: 自由文本问题完成一次诊断
+      Given Bearer token 有诊断写入 scope
+      And 订单属于调用者的不可变权限上下文
+      When 提交一个自由文本问题
+      Then 返回 202、opaque diagnosis_id 和 retry_after_ms
+      And 后台使用现有受限诊断运行生成 completed 或 inconclusive 结果
+
+    Scenario: 指标上下文不接受客户端伪造结果
+      Given 调用方提交 indicator_code
+      When 同时提交伪造的 score、curve 或完整 health report
+      Then 伪造字段被拒绝或忽略
+      And 诊断只使用服务端重新读取的受限证据
+
+  Rule: 历史诊断按调用者范围隔离
+
+    Scenario: 其他主体不能读取诊断
+      Given 诊断由调用者 A 创建
+      When 调用者 B 使用相同 diagnosis_id 查询或列出历史
+      Then 返回统一 DIAGNOSIS_NOT_FOUND 或空列表
+      And 不泄露诊断问题、状态或结果

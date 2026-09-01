@@ -310,11 +310,13 @@ class GatewayStore:
         order_no: str,
         question: str,
         indicator_code: str | None,
+        internal_run_id: str | None = None,
     ) -> dict[str, Any]:
         scope_fingerprint = _scope(scope_fingerprint, "scope_fingerprint")
         order_no = _scope(order_no, "order_no")
         question = _question(question, "question")
         indicator_code = _optional_indicator_code(indicator_code)
+        internal_run_id = _optional_scope(internal_run_id, "internal_run_id")
         now = _utc_now()
         diagnosis_id = "dx_" + uuid.uuid4().hex
         with self._connection(write=True) as connection:
@@ -323,8 +325,8 @@ class GatewayStore:
                 """
                 INSERT INTO standard_diagnoses (
                     diagnosis_id, scope_fingerprint, order_no, question, indicator_code,
-                    status, created_at, updated_at, deadline_at
-                ) VALUES (?, ?, ?, ?, ?, 'queued', ?, ?, ?)
+                    internal_run_id, status, created_at, updated_at, deadline_at
+                ) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)
                 """,
                 (
                     diagnosis_id,
@@ -332,6 +334,7 @@ class GatewayStore:
                     order_no,
                     redact_text(question),
                     indicator_code,
+                    internal_run_id,
                     _iso(now),
                     _iso(now),
                     _iso(now + DIAGNOSIS_DEADLINE),
@@ -706,6 +709,7 @@ class GatewayStore:
                     order_no TEXT NOT NULL,
                     question TEXT NOT NULL,
                     indicator_code TEXT,
+                    internal_run_id TEXT,
                     status TEXT NOT NULL,
                     result_json TEXT,
                     error_code TEXT,
