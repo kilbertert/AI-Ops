@@ -232,3 +232,12 @@ Feature: 完整充电健康指标
       When 获取健康报告
       Then capacity 评分和 SOH 为 unavailable
       And 不使用 VIN 后缀或车型模糊匹配推断容量
+
+Feature: 统一标准 API 契约
+  健康报告和单问诊断使用同一 Bearer、错误和资源隔离约定，但彼此独立。
+
+  Scenario: 两类资源独立返回
+    Given 调用方具备对应 scope
+    When 分别创建健康报告作业和单问诊断
+    Then 两者返回各自 opaque ID、状态和 retry_after_ms
+    And 任一资源失败不修改另一资源

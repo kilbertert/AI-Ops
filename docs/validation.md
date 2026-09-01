@@ -502,3 +502,6 @@ JWT 验签后端尚未实现，需先批准并引入 JOSE 依赖。当前证据�
 - `acceptance.feature` 新增完整指标 Feature；`qa-plan.md` 新增 METRIC-01..02。
 
 未完成业务验收：未连接真实 TDengine、车辆档案或协议告警码表；当前证据只证明公式实现。
+## 统一标准 API 契约验证（2026-09-02）
+
+本次验证范围是 issue #91 的健康报告/单问诊断统一外部契约，使用离线 TestClient 和 fake runtime：`tests/test_standard_api_contract.py` 验证两类资源共享 Bearer/错误结构、opaque ID、独立状态和不泄露内部字段；未完成真实环境业务验收。
