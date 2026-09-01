@@ -456,3 +456,25 @@ fixture 与 fake 不能替代。
 未完成业务验收：没有调用真实 access-token issuer/introspection，也没有查询真实订单；
 JWT 验签后端尚未实现，需先批准并引入 JOSE 依赖。当前证据只证明 introspection 合同、
 失败关闭、范围授权接线和旧接口兼容性，不能代表生产认证或业务准确率验收。
+
+## 最小异步充电健康报告验证（2026-09-02）
+
+本次验证范围是 issue #87 的标准健康报告作业、最小确定性报告和调用者范围隔离，
+输入为离线订单、caller resolver/order authorizer fake 与临时 Gateway SQLite：
+
+- `tests/test_health_report.py`：已结束订单生成停止原因指标、确定性摘要、完整度、
+  `health-v1` 与数据时间；停止原因缺失逐项 unavailable；订单不存在、充电中、缺设备、
+  时间无效和窗口超限使用稳定错误码。
+- `tests/test_health_report_jobs.py`：queued/running/completed 复用、scope 隔离、失败后
+  重建、启动时遗留作业过期、终态不被迟到更新覆盖。
+- `tests/test_health_report_api.py`：Bearer 调用方创建和轮询、202/retry_after 合同、
+  越权订单不落库、其他 caller 与随机 job ID 不可读、响应不泄露 scope fingerprint。
+- `acceptance.feature` 新增“最小异步充电健康报告”Feature；`qa-plan.md` 新增
+  HRJ-01..05，覆盖生命周期、复用、准入、超时/重启和隐私。
+- 全套 **471 项 pytest 通过**。新增 deadline 回归证明迟到 completion 被拒绝，作业
+  保持 expired 且不保存迟到报告。PR #94 的其余同一代码曾通过 Linux/Windows CI、Workflow
+  policy 和 CodeRabbit minimal-risk review；PR #98 的撤销原因是会话治理回滚，不是
+  验证失败。本次恢复后重新执行全部确定性检查。
+
+未完成业务验收：没有连接真实 access-token issuer、生产订单、TDengine 或 Redis；
+最小报告仅验证接口和状态机，不代表完整健康评估，更不能宣称业务准确率通过。

@@ -240,6 +240,7 @@ class GatewayStore:
             else None
         )
         with self._connection(write=True) as connection:
+            self._expire_health_jobs(connection, now)
             updated = connection.execute(
                 """
                 UPDATE health_report_jobs SET
