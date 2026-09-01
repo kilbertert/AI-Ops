@@ -183,6 +183,26 @@ class InternalTokenSettings:
 
 
 @dataclass(slots=True)
+class UpmsSettings:
+    """平台 UPMS 只读服务边界；权限上下文解析使用，不承载任何业务数据查询。"""
+
+    base_url: str | None = None
+    timeout_seconds: int = 8
+
+    def __post_init__(self) -> None:
+        if self.base_url is not None:
+            parsed = urlsplit(self.base_url)
+            if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+                raise ValueError("UPMS base_url 必须是完整的 http 或 https 地址")
+            if parsed.username is not None or parsed.password is not None:
+                raise ValueError("UPMS base_url 不得包含认证信息")
+            if parsed.query or parsed.fragment:
+                raise ValueError("UPMS base_url 不得包含 query 或 fragment")
+        if not 1 <= self.timeout_seconds <= 60:
+            raise ValueError("UPMS 超时必须在 1-60 秒之间")
+
+
+@dataclass(slots=True)
 class HttpSettings:
     base_url: str | None = None
     internal_token: InternalTokenSettings = field(default_factory=InternalTokenSettings)
@@ -375,6 +395,7 @@ class Settings:
     tdengine: TDengineSettings = field(default_factory=TDengineSettings)
     redis: RedisSettings = field(default_factory=RedisSettings)
     http: HttpSettings = field(default_factory=HttpSettings)
+    upms: UpmsSettings = field(default_factory=UpmsSettings)
     ssh: SSHSettings = field(default_factory=SSHSettings)
     safety: SafetySettings = field(default_factory=SafetySettings)
     agent: AgentSettings = field(default_factory=AgentSettings)
@@ -467,6 +488,10 @@ class Settings:
                     expire_seconds=http_expire_seconds,
                 ),
                 timeout_seconds=http_timeout_seconds,
+            ),
+            upms=UpmsSettings(
+                base_url=env("AIOPS_UPMS_BASE_URL") or None,
+                timeout_seconds=env_int("AIOPS_UPMS_TIMEOUT_SECONDS", 8),
             ),
             ssh=SSHSettings(
                 enabled=env_bool("AIOPS_SSH_ENABLED"),

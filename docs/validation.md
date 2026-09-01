@@ -310,3 +310,29 @@ runner 上执行 owner-authored `agent:review` canary，保留 workflow URL，�
 
 未完成业务验收：没有连接真实 `/diag/*` 服务、生产数据源或真实故障案例；本节只证明
 AFK 治理契约已部署并通过确定性检查，不代表诊断准确率或生产安全边界获得新的验收。
+
+## T1 权限上下文解析验证（2026-08-31）
+
+本次验证范围是 issue #71 的 `ScopeContext` 与身份映射，输入为模拟 UPMS 响应和
+平台凭证，不连接任何生产服务：
+
+- `tests/test_scope_context.py`（29 项）用内存目录服务固定解析语义：有效调用者
+  解析、目标主体与调用者分离、B 端/C 端 ID 显式映射、未知主体与映射歧义 fail
+  closed、越权代查在目标查询之前被拒（不产生后续解析调用）、普通调用者租户越权
+  拒绝、平台管理员角色显式切换租户、空业务数据范围 fail closed、角色继承展开、
+  `ScopeContext` 不可变、范围指纹确定且防篡改、审计摘要不含凭证与权限副本。
+- `tests/test_scope_context_http.py`（12 项）用假传输层守护 UPMS HTTP 契约：
+  凭证 Bearer 透传、四类端点固定、数据范围类型归一化、UPMS 不可达/HTTP 401/
+  拒绝响应/畸形响应分别映射到 fail closed 错误码、用户 ID 路径注入拦截、错误
+  消息不泄露凭证。
+- `tests/test_config.py`、`tests/test_env_example.py` 固定 `AIOPS_UPMS_*` 配置
+  解析、边界校验和模板约束（无 UPMS 凭证项）。
+- 命令 `uv sync --extra dev && uv run pytest && uv run ruff check`、
+  `uv run ruff format --check .`、`git diff --check`、
+  `node .sandcastle/policy-check.mjs commit` 全部通过，全套 **371 项通过**。
+
+未完成业务验收：未调用真实 `cloud-upms`，端点路径与响应字段契约以 PRD #23 记录
+的能力为依据并由离线契约测试守护；`ScopePolicy` 的平台真实代查权限码与管理角色
+码未配置，生产接入前代查与租户切换保持关闭；`ScopeContext` 尚未接入诊断运行时
+（T2/T3/T4/T5）。真实环境验收按 PRD #23 的验收任务执行，fixture 与模拟响应不能
+替代。

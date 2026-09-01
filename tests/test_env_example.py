@@ -16,6 +16,16 @@ def test_env_example_documents_partial_cutover_classification() -> None:
     assert "# REMOVED (Phase 3a): 不再配置 MySQL 直连凭据；/diag/* HTTP 接口已接管" in text
 
 
+def test_env_example_documents_upms_permission_context_boundary() -> None:
+    text = (Path(__file__).parents[1] / ".env.example").read_text(encoding="utf-8")
+
+    assert "AIOPS_UPMS_BASE_URL=" in text
+    assert "AIOPS_UPMS_TIMEOUT_SECONDS=" in text
+    assert "调用者平台凭证由运维入口透传，不在本文件配置" in text
+    active_lines = [line.split(" #", 1)[0] for line in text.splitlines() if line.strip() and "=" in line]
+    assert not [line for line in active_lines if "UPMS" in line and "TOKEN" in line]
+
+
 def test_env_example_phase_3a_removes_mysql_and_redis_direct_configuration() -> None:
     text = (Path(__file__).parents[1] / ".env.example").read_text(encoding="utf-8")
     active_lines = [line.split(" #", 1)[0] for line in text.splitlines() if line.strip() and "=" in line]
