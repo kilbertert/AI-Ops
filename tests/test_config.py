@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from aiops_diagnostics.config import ProviderConfig, Settings, SSHSettings
+from aiops_diagnostics.config import ProviderConfig, Settings, SSHSettings, UpmsSettings
 from aiops_diagnostics.private_files import write_private_text
 
 
@@ -247,3 +247,27 @@ def test_http_settings_token_expire_setter_still_validates() -> None:
 
     with pytest.raises(ValueError, match="令牌有效期"):
         settings.http.token_expire_seconds = 601
+
+
+def test_upms_settings_defaults_and_env_names(monkeypatch) -> None:
+    settings = Settings.from_env()
+    assert settings.upms.base_url is None
+    assert settings.upms.timeout_seconds == 8
+
+    monkeypatch.setenv("AIOPS_UPMS_BASE_URL", "https://upms.example.test")
+    monkeypatch.setenv("AIOPS_UPMS_TIMEOUT_SECONDS", "12")
+    settings = Settings.from_env()
+    assert settings.upms.base_url == "https://upms.example.test"
+    assert settings.upms.timeout_seconds == 12
+    assert settings.upms.base_url in str(settings.redacted())
+
+
+def test_upms_settings_rejects_credential_bearing_or_unbounded_values() -> None:
+    with pytest.raises(ValueError, match="UPMS base_url"):
+        UpmsSettings(base_url="https://user:pass@upms.example.test")
+    with pytest.raises(ValueError, match="UPMS base_url"):
+        UpmsSettings(base_url="not-a-url")
+    with pytest.raises(ValueError, match="UPMS 超时"):
+        UpmsSettings(timeout_seconds=0)
+    with pytest.raises(ValueError, match="UPMS 超时"):
+        UpmsSettings(timeout_seconds=61)
