@@ -270,3 +270,14 @@ workflow YAML 不适用复杂度或 mutation 工具；安全状态机由模板�
 - 清理：无。
 
 证据要求：METRIC-01..02 当前为离线公式验证，未完成真实业务验收。
+
+## 统一标准 API QA 计划
+
+## CONTRACT-01 资源与错误统一契约
+
+- 环境：AI-Ops 本地 TestClient。
+- 前置：标准 caller/order/runtime fake。
+- 数据：健康报告、单问诊断、非法请求、越权资源。
+- 动作：分别创建和查询两类资源。
+- 预期：共享 Bearer 与稳定 error.code/message/retryable 形状；资源 ID、状态和结果互不串扰；客户端不会看到内部字段。
+- 清理：删除临时 SQLite。
