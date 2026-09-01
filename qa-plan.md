@@ -249,3 +249,24 @@ workflow YAML 不适用复杂度或 mutation 工具；安全状态机由模板�
 - 清理：删除临时 SQLite 和 run workspace。
 
 证据要求：CURVE-01..02 当前为离线契约验证，未连接真实 TDengine，未完成业务验收。
+
+## 完整健康指标 QA 计划
+
+## METRIC-01 公式边界与单位
+
+- 环境：AI-Ops 本地确定性计算模块。
+- 前置：构造各公式分段端点、SOC 百分点、能量和温度/电压输入。
+- 数据：完整与异常物理值。
+- 动作：计算五维 radar 和 SOH。
+- 预期：分段边界、0..100 分数、SOC 单位换算和 rule_version 与规范一致；异常值不可用。
+- 清理：无。
+
+## METRIC-02 权威容量限制
+
+- 环境：健康报告 worker fake source。
+- 前置：遥测完整但 nominal capacity 缺失、模糊 VIN/车型候选存在。
+- 动作：构建报告。
+- 预期：SOH 与 capacity score unavailable，不执行模糊匹配；其他指标继续返回。
+- 清理：无。
+
+证据要求：METRIC-01..02 当前为离线公式验证，未完成真实业务验收。

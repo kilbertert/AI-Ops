@@ -214,3 +214,21 @@ Feature: 标准健康报告曲线与来源摘要
       Then 报告仍可 completed
       And 曲线为空且 source_summary.telemetry 为 unavailable
       And 不使用伪造点替代缺失遥测
+
+Feature: 完整充电健康指标
+  健康报告按已确认确定性公式返回雷达评分和 SOH，缺少权威输入时逐项不可用。
+
+  Rule: 评分和单位由服务端确定
+
+    Scenario: 完整输入返回五维评分
+      Given 订单有完整温度、SOC、电压和权威容量输入
+      When 获取健康报告
+      Then 返回五个稳定 radar code
+      And 每个 score 在 0 到 100 之间
+      And rule_version 为当前公式版本
+
+    Scenario: 无权威容量不生成 SOH
+      Given 订单有遥测但没有权威标称容量
+      When 获取健康报告
+      Then capacity 评分和 SOH 为 unavailable
+      And 不使用 VIN 后缀或车型模糊匹配推断容量
