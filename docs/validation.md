@@ -478,3 +478,15 @@ JWT 验签后端尚未实现，需先批准并引入 JOSE 依赖。当前证据�
 
 未完成业务验收：没有连接真实 access-token issuer、生产订单、TDengine 或 Redis；
 最小报告仅验证接口和状态机，不代表完整健康评估，更不能宣称业务准确率通过。
+
+## 标准单问诊断验证（2026-09-02）
+
+本次验证范围是 issue #88 的标准诊断 API、主体隔离、生命周期和现有 Agent 接线，输入为离线 caller/order fake、临时 SQLite、模拟 AgentDiagnosis，不连接生产服务：
+
+- `tests/test_standard_diagnosis_api.py` 覆盖 202 创建、状态查询、列表范围、随机/跨主体 404、extra 字段拒绝和响应内部字段隔离。
+- `tests/test_standard_diagnosis_runtime.py` 覆盖 runtime 创建私有 workspace、调用 `run_agent_diagnosis(scope=...)`、diagnosed→completed、inconclusive 保留与迟到 completion 过期。
+- `acceptance.feature` 新增标准单问诊断 Feature；`qa-plan.md` 新增 DX-01..04。
+- 诊断 API scope 回归：`aiops:orders:read` 不足以创建诊断，必须具备
+  `aiops:diagnoses:write`，缺失时返回 403 `INSUFFICIENT_SCOPE` 且不落库。
+
+未完成业务验收：未连接真实 access-token issuer、生产订单、provider 或真实模型；当前证据只证明标准 API、范围隔离和 Agent 接线，不代表真实故障诊断准确率。

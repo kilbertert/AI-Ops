@@ -187,3 +187,43 @@ workflow YAML 不适用复杂度或 mutation 工具；安全状态机由模板�
 - 清理：删除临时 Gateway SQLite。
 
 证据要求：HRJ-01..05 仅使用离线订单与 fake caller；未连接真实订单/遥测，未完成业务验收。
+
+## 标准单问诊断 QA 计划
+
+## DX-01 自由文本诊断
+
+- 环境：AI-Ops 本地 TestClient，caller resolver/order authorizer fake，Agent 接缝 fake。
+- 前置：有效 Bearer token 与诊断写入 scope。
+- 数据：授权订单、自由文本问题。
+- 动作：POST 标准诊断，GET 诊断直到终态。
+- 预期：202 + opaque diagnosis_id + retry_after_ms；后台调用受限 Agent 接缝；终态为 completed 或 inconclusive，结果不含内部资源。
+- 清理：删除临时 Gateway SQLite 和私有 run workspace。
+
+## DX-02 指标上下文与输入拒绝
+
+- 环境：AI-Ops 本地 TestClient。
+- 前置：标准诊断请求模型启用 extra=forbid。
+- 数据：合法 indicator_code、score、curve、health_report、裸 user_id/tenant_id。
+- 动作：提交指标提问与伪造字段。
+- 预期：合法指标作为上下文；伪造字段返回 422 或不进入 Agent prompt；裸身份字段不改变 ScopeContext。
+- 清理：无。
+
+## DX-03 历史诊断主体隔离
+
+- 环境：AI-Ops 本地 TestClient，两个不同 scope fingerprint 的 resolver。
+- 前置：调用者 A 已创建诊断。
+- 数据：A 的 diagnosis_id、调用者 B、随机 diagnosis_id。
+- 动作：B 查询详情和列表；A 查询列表。
+- 预期：B 对详情统一 404、列表为空；A 只能看到自身诊断摘要；不泄露问题、结果或内部字段。
+- 清理：删除临时 Gateway SQLite。
+
+## DX-04 诊断生命周期与重启
+
+- 环境：GatewayStore/GatewayRuntime 离线测试。
+- 前置：diagnosis deadline 30 秒、完成保留 15 分钟、失败保留 5 分钟。
+- 数据：queued/running/completed/inconclusive/failed/expired 诊断。
+- 动作：模拟 worker、迟到 completion 和服务重启。
+- 预期：终态不可覆盖；inconclusive 保留；超时/重启转 expired；失败或过期后可重新创建。
+- 清理：删除临时 Gateway SQLite 和 run workspace。
+
+证据要求：DX-01..04 仅证明标准 API、Agent 接线和隔离合同；未连接真实 access-token issuer、生产订单或真实模型，未完成业务验收。
