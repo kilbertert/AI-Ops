@@ -376,3 +376,19 @@ PRD #23 记录为依据并由离线测试守护；`QueryScope` 尚未接入诊�
 
 未完成业务验收：未连接真实 TDengine，设备集合校验未接入运行时（T5）；真实环境
 验收按 PRD #23 的验收任务执行，fixture 与模拟响应不能替代。
+
+## T4 Redis Stream 受限查询验证（2026-09-01）
+
+本次验证范围是 issue #72 的 Redis Stream 租户归属过滤，输入为伪造 Redis 客户端
+（记录 XREVRANGE 调用、返回可配置消息），不连接生产服务：
+
+- `tests/test_redis_scope.py`（9 项）：租户命中计数、跨租户消息排除、无租户字段
+  消息排除、无 scope 谓词时按订单号匹配、有界读取（`redis_max_messages`）与白名单
+  Stream、不返回原始消息正文、非 Stream 类型安全空证据、谓词对 `tenantId`/
+  `tenant_id`（str/bytes）的断言。
+- 命令 `uv sync --extra dev && uv run pytest && uv run ruff check`、
+  `uv run ruff format --check .`、`git diff --check`、
+  `node .sandcastle/policy-check.mjs commit` 全部通过，全套 **416 项通过**。
+
+未完成业务验收：未连接真实 Redis，归属谓词未接入运行时（T5）；真实环境验收按
+PRD #23 的验收任务执行，fixture 与模拟响应不能替代。

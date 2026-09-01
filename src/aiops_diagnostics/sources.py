@@ -10,7 +10,7 @@ import subprocess
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
@@ -735,8 +735,20 @@ def _deprecated_doctor() -> dict[str, Any]:
 class RedisSource:
     STREAMS = ("third.order.sync.queue", "third.order.sync.notify.queue")
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        order_in_scope: Callable[[Mapping[Any, Any]], bool] | None = None,
+    ) -> None:
+        """白名单 Stream 只读检查。
+
+        ``order_in_scope`` 为可选的归属验证谓词：只有谓词判定为 True 的消息
+        才被计为该订单的匹配。无法验证租户/站点/订单归属时保持返回元数据而不
+        返回原始消息正文；越权消息不计入匹配。
+        """
         self.settings = settings
+        self.order_in_scope = order_in_scope
 
     def _client(self) -> redis.Redis:
         cfg = self.settings.redis
@@ -767,7 +779,10 @@ class RedisSource:
                     continue
                 groups = client.xinfo_groups(stream_key)
                 messages = client.xrevrange(stream_key, count=self.settings.safety.redis_max_messages)
-                matches = sum(_stream_fields_contain(fields, order_no) for _, fields in messages)
+                matches = sum(
+                    _stream_fields_contain(fields, order_no) and _order_in_scope(self.order_in_scope, fields)
+                    for _, fields in messages
+                )
                 results.append(
                     {
                         "stream": stream,
@@ -1153,3 +1168,37 @@ def _stream_fields_contain(fields: dict[Any, Any], token: str) -> bool:
             elif token in str(candidate):
                 return True
     return False
+
+
+def _order_in_scope(
+    predicate: Callable[[Mapping[Any, Any]], bool] | None,
+    fields: Mapping[Any, Any],
+) -> bool:
+    """归属验证：无谓词时视为在范围内；有谓词时必须返回 True 才匹配。"""
+    return predicate is None or predicate(fields)
+
+
+def make_redis_order_in_scope(
+    scope: QueryScope,
+) -> Callable[[Mapping[Any, Any]], bool]:
+    """从 ``QueryScope`` 构造 Redis 归属验证谓词。
+
+    消息字段必须包含匹配 ``scope.tenant_id`` 的租户字段（``tenantId`` /
+    ``tenant_id``，支持 str/bytes），才被计为范围内命中；无法从消息验证租户
+    归属时不返回原始正文、不计数。站点/用户范围不直接用于 Redis 过滤——订单
+    若已通过 MySQL scope 约束，则其同步消息即可被安全关联。
+    """
+
+    expected = scope.tenant_id
+
+    def predicate(fields: Mapping[Any, Any]) -> bool:
+        for key, value in fields.items():
+            text_key = _decode_text(key)
+            if text_key not in {"tenantId", "tenant_id"}:
+                continue
+            text_value = _decode_text(value)
+            if text_value and text_value == expected:
+                return True
+        return False
+
+    return predicate
