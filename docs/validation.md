@@ -392,3 +392,24 @@ PRD #23 记录为依据并由离线测试守护；`QueryScope` 尚未接入诊�
 
 未完成业务验收：未连接真实 Redis，归属谓词未接入运行时（T5）；真实环境验收按
 PRD #23 的验收任务执行，fixture 与模拟响应不能替代。
+
+## T5 运行时集成与审计验证（2026-09-01）
+
+本次验证范围是 issue #75 的 ScopeContext 接入诊断运行时，输入为伪造 MySQL/TDengine/
+Redis 适配器与离线 fixture，不连接任何生产服务：
+
+- `tests/test_scope_runtime.py`（8 项）：`DeviceGate` 从订单元数据收集允许设备、
+  未 seed 为空集合；`ScopedSources` 把 `QueryScope` 下推到 MySQL 并接通 TDengine
+  设备集合与 Redis 租户归属谓词；越权设备拒绝且不发请求；`scoped_live_sources`
+  构造受 MySQL/ TDengine/ Redis 顶层约束的源；`live_sources` 无 scope 保持既有
+  HybridSources 行为；`--scope-json` 解析失败拒绝。
+- `acceptance.feature` 新增“基于权限上下文的受限直连诊断运行时”Feature（身份、
+  目标主体、租户、受限查询、审计与失败语义 Rule 及 11 个 Scenario）；`qa-plan.md`
+  新增 SCP-01..05 可执行 QA 用例。
+- 命令 `uv sync --extra dev && uv run pytest && uv run ruff check`、
+  `uv run ruff format --check .`、`git diff --check`、
+  `node .sandcastle/policy-check.mjs commit` 全部通过，全套 **431 项通过**。
+
+未完成业务验收：未连接真实 UPMS/Dis/生产库；`--scope-json` 的调用者凭证校验属
+Java 网关职责，本仓库只消费已解析范围。真实环境验收按 `qa-plan.md` SCP 用例执行，
+fixture 与 fake 不能替代。

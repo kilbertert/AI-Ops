@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 from enum import StrEnum
 from pathlib import Path
@@ -49,13 +50,14 @@ from aiops_diagnostics.private_files import (
     ensure_private_directory,
     write_private_text,
 )
+from aiops_diagnostics.query_scope import QueryScope
 from aiops_diagnostics.render import (
     render_agent_diagnosis,
     render_doctor,
     render_progress_event,
     render_report,
 )
-from aiops_diagnostics.sources import FixtureSources, SourceError, live_sources
+from aiops_diagnostics.sources import FixtureSources, SourceError, live_sources, scoped_live_sources
 
 configure_windows_stdio()
 
@@ -191,6 +193,8 @@ def _diagnose_agent(
     as_json: bool,
     progress: bool,
     provider: str | None = None,
+    *,
+    scope: QueryScope | None = None,
 ) -> None:
     """Run the Codex-native, evidence-journaled read-only diagnosis."""
     try:
@@ -232,6 +236,7 @@ def _diagnose_agent(
             provider=selected_provider.name,
             key_slot=effective_key_slot,
             progress_callback=_progress_callback(progress, as_json),
+            scope=scope,
         )
     except (AgentRuntimeError, SourceError, ValueError, OSError) as exc:
         console.print(f"[bold red]Codex 诊断中断:[/bold red] {exc}")
@@ -247,6 +252,8 @@ def _diagnose_deterministic(
     settings: Settings,
     fixture: Path | None,
     as_json: bool,
+    *,
+    scope: QueryScope | None = None,
 ) -> None:
     """Run the deterministic rule-engine diagnosis (offline fixtures, regression)."""
     if fixture:
@@ -257,8 +264,12 @@ def _diagnose_deterministic(
             raise typer.Exit(code=2) from exc
     else:
         try:
-            with live_sources(settings) as sources:
-                report = DiagnosticEngine(sources, settings.safety).diagnose(request)
+            if scope is not None:
+                with scoped_live_sources(settings, scope=scope) as sources:
+                    report = DiagnosticEngine(sources, settings.safety).diagnose(request)
+            else:
+                with live_sources(settings) as sources:
+                    report = DiagnosticEngine(sources, settings.safety).diagnose(request)
         except (SourceError, ValueError) as exc:
             console.print(f"[bold red]初始化失败:[/bold red] {exc}")
             raise typer.Exit(code=2) from exc
@@ -266,6 +277,35 @@ def _diagnose_deterministic(
         console.print_json(report.to_json())
     else:
         render_report(report, console)
+
+
+def _parse_scope_json(value: str | None) -> QueryScope | None:
+    """解析受权限约束的诊断范围 JSON（QueryScope）。
+
+    由已认证运维入口透传；本工具不信任前端裸传的权限字段，解析失败即拒绝。
+    """
+    if value is None or not value.strip():
+        return None
+    try:
+        payload = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise typer.BadParameter(f"--scope-json 不是有效 JSON: {exc}") from exc
+    if not isinstance(payload, dict):
+        raise typer.BadParameter("--scope-json 必须是对象")
+    tenant_raw = payload.get("tenant_id")
+    if not isinstance(tenant_raw, str) or not tenant_raw.strip():
+        raise typer.BadParameter("--scope-json 缺少有效 tenant_id")
+    site_raw = payload.get("site_ids")
+    if site_raw is None:
+        sites: tuple[str, ...] | None = None
+    elif isinstance(site_raw, list) and all(isinstance(item, str) for item in site_raw):
+        sites = tuple(site_raw)
+    else:
+        raise typer.BadParameter("--scope-json site_ids 必须是字符串数组或 null")
+    user_raw = payload.get("user_id")
+    if user_raw is not None and not isinstance(user_raw, str):
+        raise typer.BadParameter("--scope-json user_id 必须是字符串或 null")
+    return QueryScope(tenant_id=tenant_raw.strip(), site_ids=sites, user_id=user_raw)
 
 
 @app.command("agent-resume")
@@ -391,6 +431,15 @@ def diagnose(
         str | None,
         typer.Option("--provider", help="agent 模式选择 model provider，默认使用配置中的默认 provider"),
     ] = None,
+    scope_json: Annotated[
+        str | None,
+        typer.Option(
+            "--scope-json",
+            help="受权限约束的诊断范围 JSON（QueryScope）："
+            ' {"tenant_id":"T", "site_ids":["S1"], "user_id":null}。'
+            " 由已认证运维入口透传，本工具不信任前端裸传权限字段",
+        ),
+    ] = None,
     as_json: Annotated[bool, typer.Option("--json", help="输出 JSON 报告或诊断合同")] = False,
     progress: Annotated[
         bool,
@@ -408,10 +457,11 @@ def diagnose(
     except ValueError as exc:
         raise typer.BadParameter(str(exc)) from exc
     settings = _load_settings()
+    scope = _parse_scope_json(scope_json)
     if mode is DiagnoseMode.agent:
-        _diagnose_agent(request, settings, fixture, key_slot, as_json, progress, provider)
+        _diagnose_agent(request, settings, fixture, key_slot, as_json, progress, provider, scope=scope)
     else:
-        _diagnose_deterministic(request, settings, fixture, as_json)
+        _diagnose_deterministic(request, settings, fixture, as_json, scope=scope)
 
 
 @app.command()
@@ -489,6 +539,7 @@ def _run_agent(
     provider: str | None = None,
     key_slot: str | None = None,
     progress_callback: ProgressCallback | None = None,
+    scope: QueryScope | None = None,
 ) -> AgentDiagnosis:
     return run_agent_diagnosis(
         workspace,
@@ -498,6 +549,7 @@ def _run_agent(
         provider=provider,
         key_slot=key_slot,
         progress_callback=progress_callback,
+        scope=scope,
     )
 
 

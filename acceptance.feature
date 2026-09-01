@@ -21,3 +21,85 @@ Feature: AFK 拉取请求可信交付
       When PR 被添加 AFK 变更标签
       Then 工作流不报告成功交付
       And 凭据失败时记录 agent:blocked
+
+Feature: 基于权限上下文的受限直连诊断运行时
+  AI-Ops 诊断必须先建立不可变 ScopeContext，再在受限范围内直连 MySQL/TDengine/Redis，
+  不信任前端裸传权限字段，UPMS/Dis 不可用或缺权限时 fail closed。
+
+  Rule: 调用者身份只能来自已验证平台凭证
+
+    Scenario: 有效凭证解析调用者身份与范围
+      Given 已认证调用者提供平台凭证
+      When 解析 ScopeContext
+      Then 得到调用者身份、有效租户与业务数据范围
+      And 产生可审计的范围指纹
+
+    Scenario: 未知凭证或空凭证失败关闭
+      Given 调用者凭证为空或无效
+      When 解析 ScopeContext
+      Then 以 ScopeError fail closed
+      And 不触发任何数据库查询
+
+  Rule: 目标主体与调用者分离
+
+    Scenario: 无代查权限时目标主体被拒
+      Given 调用者不具备代查/管理权限
+      When 请求通过 target_b_user_id / target_c_user_id 指定目标主体
+      Then 以 delegation_denied fail closed
+      And 不执行目标主体查询
+
+    Scenario: 有代查权限时目标主体可解析
+      Given 调用者具备平台代查权限
+      When 指定存在且不歧义的目标主体
+      Then ScopeContext 明确区分 caller 与 subject
+      And 有效租户按调用者或目标主体确定
+
+  Rule: 租户选择不能扩大授权范围
+
+    Scenario: 普通调用者指定他人租户被拒
+      Given 调用者有效租户为 TENANT-A
+      When 请求指定 tenant_id=TENANT-B
+      Then 以 tenant_forbidden fail closed
+
+    Scenario: 平台管理员显式切换租户被允许
+      Given 调用者具备平台管理员角色
+      When 请求显式切换租户
+      Then ScopeContext 使用请求租户为有效租户
+
+  Rule: 受限直连查询只访问允许范围
+
+    Scenario: MySQL 订单查询下推租户/站点/用户
+      Given 已建立带 QueryScope 的 ScopeContext
+      When 执行订单/费用/占位费/设备查询
+      Then SQL 过滤条件包含有效租户与可见站点
+      And 不信任调用方传入的裸 tenant_id
+
+    Scenario: 站点范围为空时短路返回空证据
+      Given 可见站点集合为空
+      When 执行范围查询
+      Then 不发起 SQL，返回空结果或空证据
+
+    Scenario: TDengine 请求设备不在允许集合时拒绝
+      Given 已由订单元数据 seed 允许设备集合
+      When 查询集合外设备
+      Then 以 device_forbidden 拒绝
+      And 不发起 TDengine 请求
+
+    Scenario: Redis Stream 只统计租户归属可验证的消息
+      Given 已构造租户归属谓词
+      When 检查白名单 Stream
+      Then 只对租户一致的消息计数
+      And 无法验证归属时不返回原始消息正文
+
+  Rule: 审计与失败语义
+
+    Scenario: 审计摘要记录凭据外的范围与指纹
+      Given 完成一次受限诊断运行
+      When 生成本次运行审计记录
+      Then 记录调用者、目标主体、有效租户与范围指纹
+      And 不记录平台凭证、数据库口令或完整权限副本
+
+    Scenario: 权限失败不误报为无业务数据
+      Given UPMS/Dis 不可用、主体不存在或权限不足
+      When 诊断运行结束
+      Then 以权限失败类型区分数据源失败与空结果
