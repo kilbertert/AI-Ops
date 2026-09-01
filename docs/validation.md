@@ -505,3 +505,6 @@ JWT 验签后端尚未实现，需先批准并引入 JOSE 依赖。当前证据�
 ## 统一标准 API 契约验证（2026-09-02）
 
 本次验证范围是 issue #91 的健康报告/单问诊断统一外部契约，使用离线 TestClient 和 fake runtime：`tests/test_standard_api_contract.py` 验证两类资源共享 Bearer/错误结构、opaque ID、独立状态和不泄露内部字段；未完成真实环境业务验收。
+## 标准 API 真实环境验收准备（2026-09-02）
+
+已新增 `qa-plan.md` 的 REAL-API-01..04，覆盖完整订单、部分数据、越权资源、诊断与性能。经环境盘点，当前没有标准 API issuer/introspection 配置、批准调用方 token、部署入口或本 PRD 可用真实订单，因此四项均记录为 blocked；既有 PRD #23 真实验收资料不作为本次通过证据。解除条件和证据格式已写入 QA 计划。
