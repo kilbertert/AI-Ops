@@ -279,9 +279,7 @@ def _dis_directory() -> DisHttpDirectory:
 
 
 def test_dis_http_directory_forwards_token_and_tenant_headers(monkeypatch: pytest.MonkeyPatch) -> None:
-    transport = _FakeDisTransport(
-        b'{"code":0,"msg":"ok","data":[{"pointId":"P-1"},{"pointId":"P-2"}]}'
-    )
+    transport = _FakeDisTransport(b'{"code":0,"msg":"ok","data":[{"pointId":"P-1"},{"pointId":"P-2"}]}')
     monkeypatch.setattr("aiops_diagnostics.query_scope.urllib.request.urlopen", transport)
     directory = _dis_directory()
 

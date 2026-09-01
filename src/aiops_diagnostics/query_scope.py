@@ -69,9 +69,7 @@ class QueryScope:
         if not self.tenant_id:
             raise ValueError("QueryScope 缺少有效租户")
         if self.site_ids is not None and len(self.site_ids) > MAX_SCOPE_IDS:
-            raise ScopeError(
-                f"范围站点数量超过上限 {MAX_SCOPE_IDS}", code=SCOPE_ERROR_SCOPE_TOO_LARGE
-            )
+            raise ScopeError(f"范围站点数量超过上限 {MAX_SCOPE_IDS}", code=SCOPE_ERROR_SCOPE_TOO_LARGE)
 
     @property
     def empty_site_scope(self) -> bool:
@@ -143,9 +141,7 @@ class DisHttpDirectory:
             if text:
                 point_ids.append(text)
         if len(point_ids) > MAX_SCOPE_IDS:
-            raise ScopeError(
-                f"Dis 返回点位数量超过上限 {MAX_SCOPE_IDS}", code=SCOPE_ERROR_SCOPE_TOO_LARGE
-            )
+            raise ScopeError(f"Dis 返回点位数量超过上限 {MAX_SCOPE_IDS}", code=SCOPE_ERROR_SCOPE_TOO_LARGE)
         return tuple(point_ids)
 
 
@@ -182,7 +178,8 @@ class _StaticMapper:
 
 
 def static_site_mapper(
-    *, sites_by_shop: dict[str, tuple[str, ...]] | None = None,
+    *,
+    sites_by_shop: dict[str, tuple[str, ...]] | None = None,
     sites_by_point: dict[str, tuple[str, ...]] | None = None,
 ) -> SiteScopeMapper:
     """构造内存站点归属映射，供离线 fixture 与测试使用。"""
@@ -207,9 +204,7 @@ def resolve_query_scope(
     data_scope = context.data_scope
 
     if len(data_scope.site_ids) > MAX_SCOPE_IDS or len(data_scope.shop_ids) > MAX_SCOPE_IDS:
-        raise ScopeError(
-            f"数据范围 ID 数量超过上限 {MAX_SCOPE_IDS}", code=SCOPE_ERROR_SCOPE_TOO_LARGE
-        )
+        raise ScopeError(f"数据范围 ID 数量超过上限 {MAX_SCOPE_IDS}", code=SCOPE_ERROR_SCOPE_TOO_LARGE)
 
     if data_scope.type == SCOPE_TYPE_SELF:
         # self 范围 = 仅本人记录，按主体 C 端用户过滤；站点过滤无意义且不发起 Dis。
@@ -250,9 +245,7 @@ def resolve_query_scope(
 
 def _require_bounded(count: int, label: str) -> None:
     if count > MAX_SCOPE_IDS:
-        raise ScopeError(
-            f"{label}数量超过上限 {MAX_SCOPE_IDS}", code=SCOPE_ERROR_SCOPE_TOO_LARGE
-        )
+        raise ScopeError(f"{label}数量超过上限 {MAX_SCOPE_IDS}", code=SCOPE_ERROR_SCOPE_TOO_LARGE)
 
 
 def _safe_path_segment(value: str) -> str:

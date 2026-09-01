@@ -239,8 +239,7 @@ class MySQLSource:
             # 存在性检查，保证单独查询不会扩大可见范围。
             assert self.scope is not None
             exists_sql = (
-                f"SELECT 1 FROM `{self.database}`.`ch_order_info` "
-                f"WHERE order_no=%s AND {scope_where} LIMIT 1"
+                f"SELECT 1 FROM `{self.database}`.`ch_order_info` WHERE order_no=%s AND {scope_where} LIMIT 1"
             )
             fee_sql = sql + "AND tenant_id=%s ORDER BY created_time DESC LIMIT 1"
             fee_params: list[Any] = [order_no, self.scope.tenant_id]
@@ -340,9 +339,7 @@ class MySQLSource:
             return ()
         return self._site_ids_by_column("dis_point_id", point_ids, tenant_id)
 
-    def _site_ids_by_column(
-        self, column: str, values: tuple[str, ...], tenant_id: str
-    ) -> tuple[str, ...]:
+    def _site_ids_by_column(self, column: str, values: tuple[str, ...], tenant_id: str) -> tuple[str, ...]:
         if not all(SAFE_VALUE.fullmatch(value) for value in values):
             raise ValueError("范围 ID 包含不允许的字符")
         sql = (
