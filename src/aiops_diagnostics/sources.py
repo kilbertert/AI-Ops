@@ -889,6 +889,116 @@ class LiveSources:
         return result
 
 
+class DeviceGate:
+    """收集订单设备集合，供 TDengine 查询按权限范围校验。
+
+    单次诊断运行内，先由受限 MySQL 订单查询把允许设备（``device_code`` /
+    ``child_device_code``）写入本门；``TDengineSource`` 的 ``allowed_devices``
+    在 seed 后生效。未 seed 任何设备时返回空集合，TDengine 查询保持拒绝
+    （fail closed），不会退化为无范围直连。
+    """
+
+    def __init__(self) -> None:
+        self._devices: set[str] = set()
+
+    def seed_from_orders(self, orders: list[dict[str, Any]]) -> None:
+        for order in orders:
+            for key in ("device_code", "child_device_code"):
+                code = str(order.get(key) or "").strip()
+                if code:
+                    self._devices.add(code)
+
+    def allowed_devices(self) -> frozenset[str]:
+        return frozenset(self._devices)
+
+
+class ScopedSources:
+    """受限直连诊断源：MySQL/TDengine/Redis 全部受同一 ``QueryScope`` 约束。
+
+    ``device_gate`` 由订单元数据 seed，TDengine 只允许该设备集合内的设备；
+    ``order_in_scope`` 由 ``make_redis_order_in_scope`` 构造，Redis 只统计租户
+    归属可验证的消息。任一步骤缺失时 fail closed，不退回无范围直连。
+    """
+
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        mysql: MySQLSource,
+        tdengine: TDengineSource,
+        redis: RedisSource,
+        device_gate: DeviceGate | None = None,
+    ) -> None:
+        self.settings = settings
+        self.mysql = mysql
+        self.tdengine = tdengine
+        self.redis = redis
+        self.device_gate = device_gate
+
+    def get_orders(self, order_no: str, tenant_id: str | None = None) -> list[dict[str, Any]]:
+        orders = self.mysql.get_orders(order_no, tenant_id)
+        if self.device_gate is not None:
+            self.device_gate.seed_from_orders(orders)
+            self.tdengine.allowed_devices = self.device_gate.allowed_devices()
+        return orders
+
+    def get_fee_template_record(self, order_no: str, tenant_id: str | None = None) -> dict[str, Any] | None:
+        return self.mysql.get_fee_template_record(order_no, tenant_id)
+
+    def get_occupy_orders(
+        self,
+        order_id: str | None = None,
+        order_no: str | None = None,
+        tenant_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        return self.mysql.get_occupy_orders(order_id, order_no, tenant_id)
+
+    def get_device(
+        self,
+        device_id: str | None,
+        device_code: str | None,
+        tenant_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        return self.mysql.get_device(device_id, device_code, tenant_id)
+
+    def get_gun_samples(
+        self,
+        device: str,
+        start_time: datetime,
+        end_time: datetime,
+        tx_serial_no: str | None,
+    ) -> list[dict[str, Any]]:
+        return self.tdengine.get_gun_samples(device, start_time, end_time, tx_serial_no)
+
+    def get_comm_messages(
+        self,
+        device: str,
+        start_time: datetime,
+        end_time: datetime,
+    ) -> list[dict[str, Any]]:
+        return self.tdengine.get_comm_messages(device, start_time, end_time)
+
+    def inspect_streams(self, order_no: str) -> list[dict[str, Any]]:
+        return self.redis.inspect_streams(order_no)
+
+    def doctor(self) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for name, source in (("mysql", self.mysql), ("tdengine", self.tdengine), ("redis", self.redis)):
+            try:
+                details = source.doctor()
+                if name == "mysql" and details.get("read_only") is False:
+                    result[name] = {
+                        "ok": False,
+                        "error": "MySQL 账号包含写权限，拒绝作为诊断运行时账号",
+                        "details": details,
+                    }
+                else:
+                    result[name] = {"ok": True, "details": details}
+            except SourceError as exc:
+                result[name] = {"ok": False, "error": str(exc)}
+        return result
+
+
 class FixtureSources:
     def __init__(self, path: Path) -> None:
         self.payload = json.loads(path.read_text(encoding="utf-8"))
@@ -986,6 +1096,32 @@ def live_sources(
     """
     with _ssh_tunnel(settings, include_direct_backends=False) as effective:
         yield HybridSources(effective, allowed_devices=allowed_devices)
+
+
+@contextlib.contextmanager
+def scoped_live_sources(
+    settings: Settings,
+    *,
+    scope: QueryScope,
+) -> Iterator[ScopedSources]:
+    """Return a fully scope-constrained direct source set for one run.
+
+    MySQL 按 ``scope`` 下推租户/站点/用户；TDengine 只允许订单元数据里的设备
+    （经 ``DeviceGate`` seed，未 seed 时拒绝）；Redis 只统计租户归属可验证的
+    消息。SSH 隧道按直连回退路径建立三条转发（与 ``direct_sources`` 一致）。
+    """
+    device_gate = DeviceGate()
+    with _ssh_tunnel(settings, include_direct_backends=True) as effective:
+        yield ScopedSources(
+            effective,
+            mysql=MySQLSource(effective, scope=scope),
+            tdengine=TDengineSource(effective, allowed_devices=frozenset()),
+            redis=RedisSource(
+                effective,
+                order_in_scope=make_redis_order_in_scope(scope),
+            ),
+            device_gate=device_gate,
+        )
 
 
 @contextlib.contextmanager

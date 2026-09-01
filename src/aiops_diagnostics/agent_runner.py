@@ -12,7 +12,13 @@ from aiops_diagnostics.config import Settings
 from aiops_diagnostics.diagnostic_tools import DiagnosticToolExecutor
 from aiops_diagnostics.journal import EvidenceJournal
 from aiops_diagnostics.models import DiagnosticRequest
-from aiops_diagnostics.sources import DiagnosticSources, FixtureSources, live_sources
+from aiops_diagnostics.query_scope import QueryScope
+from aiops_diagnostics.sources import (
+    DiagnosticSources,
+    FixtureSources,
+    live_sources,
+    scoped_live_sources,
+)
 
 
 def run_agent_diagnosis(
@@ -25,13 +31,14 @@ def run_agent_diagnosis(
     allowed_tenants: set[str] | None = None,
     provider: str | None = None,
     key_slot: str | None = None,
+    scope: QueryScope | None = None,
 ) -> AgentDiagnosis:
     """Run the shared read-only agent path for local CLI and gateway workers."""
     manifest = workspace.load_manifest()
     selected_provider = settings.agent.select_provider(provider)
     provider_key = resolve_provider_api_key(settings.agent, provider=selected_provider, key_slot=key_slot)
     journal = EvidenceJournal(workspace, manifest)
-    with _agent_sources(settings, fixture) as sources:
+    with _agent_sources(settings, fixture, scope=scope) as sources:
         tools = DiagnosticToolExecutor(
             sources,
             request,
@@ -59,9 +66,18 @@ def run_agent_diagnosis(
 
 
 @contextmanager
-def _agent_sources(settings: Settings, fixture: Path | None) -> Iterator[DiagnosticSources]:
+def _agent_sources(
+    settings: Settings,
+    fixture: Path | None,
+    *,
+    scope: QueryScope | None = None,
+) -> Iterator[DiagnosticSources]:
     if fixture:
         yield FixtureSources(fixture)
+        return
+    if scope is not None:
+        with scoped_live_sources(settings, scope=scope) as sources:
+            yield sources
         return
     with live_sources(settings) as sources:
         yield sources
