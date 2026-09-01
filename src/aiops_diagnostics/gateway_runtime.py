@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import contextlib
-import time
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -13,18 +12,11 @@ from aiops_diagnostics.codex_runtime import AgentRuntimeError
 from aiops_diagnostics.config import Settings, canonical_provider_base_url, validate_key_slot_name
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_store import GatewayDevice, GatewayStore
-from aiops_diagnostics.health_report import (
-    HEALTH_RULE_VERSION,
-    HealthReportError,
-    build_minimal_health_report,
-)
 from aiops_diagnostics.journal import EvidenceJournal
 from aiops_diagnostics.parsing import parse_request
 from aiops_diagnostics.platform_paths import reference_root
-from aiops_diagnostics.query_scope import resolve_query_scope
 from aiops_diagnostics.redaction import redact_text
-from aiops_diagnostics.scope_context import ScopeContext
-from aiops_diagnostics.sources import SourceError, scoped_live_sources
+from aiops_diagnostics.sources import SourceError
 
 FIXTURE_NAMES = frozenset({"ocpp_consistent.json", "ykc_amount_mismatch.json", "missing_tx_data.json"})
 
@@ -121,22 +113,6 @@ class GatewayRuntime:
     def shutdown(self) -> None:
         self._executor.shutdown(wait=False, cancel_futures=False)
 
-    def start_health_report(self, context: ScopeContext, order_no: str) -> dict[str, Any]:
-        job, created = self.store.create_or_reuse_health_job(
-            context.scope_fingerprint,
-            order_no,
-            HEALTH_RULE_VERSION,
-        )
-        if not created:
-            return job
-        future = self._executor.submit(self._execute_health_report, job["job_id"], context, order_no)
-        self._futures[job["job_id"]] = future
-        future.add_done_callback(lambda _: self._futures.pop(job["job_id"], None))
-        return job
-
-    def get_health_report(self, context: ScopeContext, job_id: str) -> dict[str, Any] | None:
-        return self.store.get_health_job(job_id, context.scope_fingerprint)
-
     def list_evidence(self, run_id: str) -> list[dict[str, Any]]:
         """Return redacted evidence metadata for a run (no business payloads)."""
         run_root = Path(self.diagnostic_settings.agent.run_root).expanduser().resolve()
@@ -158,47 +134,6 @@ class GatewayRuntime:
             }
             for entry in journal.entries()
         ]
-
-    def _execute_health_report(
-        self,
-        job_id: str,
-        context: ScopeContext,
-        order_no: str,
-    ) -> None:
-        if not self.store.update_health_job(job_id, status="running"):
-            return
-        started = time.monotonic()
-        try:
-            scope = resolve_query_scope(context)
-            with scoped_live_sources(self.diagnostic_settings, scope=scope) as sources:
-                report = build_minimal_health_report(
-                    sources,
-                    order_no,
-                    self.diagnostic_settings.safety,
-                )
-            if time.monotonic() - started > 30:
-                self.store.update_health_job(
-                    job_id,
-                    status="failed",
-                    error_code="REPORT_TIMEOUT",
-                    error_message="health report timed out",
-                )
-                return
-            self.store.update_health_job(job_id, status="completed", report=report)
-        except HealthReportError as exc:
-            self.store.update_health_job(
-                job_id,
-                status="failed",
-                error_code=exc.code,
-                error_message=str(exc),
-            )
-        except (SourceError, ValueError) as exc:
-            self.store.update_health_job(
-                job_id,
-                status="failed",
-                error_code="SOURCE_UNAVAILABLE",
-                error_message=f"{exc.__class__.__name__}: {exc}",
-            )
 
     def _execute_run(
         self,
