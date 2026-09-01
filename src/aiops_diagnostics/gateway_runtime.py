@@ -14,6 +14,7 @@ from aiops_diagnostics.config import Settings, canonical_provider_base_url, vali
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_store import GatewayDevice, GatewayStore
 from aiops_diagnostics.health_curves import build_curves
+from aiops_diagnostics.health_metrics import enrich_report
 from aiops_diagnostics.health_report import (
     HEALTH_RULE_VERSION,
     HealthReportError,
@@ -262,6 +263,7 @@ class GatewayRuntime:
                 else:
                     report["source_summary"]["telemetry"] = "available" if samples else "unavailable"
                 report["curves"] = build_curves(samples)
+                report = enrich_report(report, samples, order)
             if time.monotonic() - started > 30:
                 self.store.update_health_job(
                     job_id,

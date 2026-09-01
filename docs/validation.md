@@ -493,3 +493,12 @@ JWT 验签后端尚未实现，需先批准并引入 JOSE 依赖。当前证据�
 ## 标准健康报告曲线验证（2026-09-02）
 
 本次验证范围是 issue #89 的曲线、降采样和来源摘要，输入为离线时序 fake，不连接真实 TDengine：`tests/test_health_curves.py` 覆盖 400 点降采样、数值时间排序、重复时间、首末点、极值、缺失值和不伪造系列；worker 将 telemetry SourceError 转为部分完成、空曲线和 unavailable 来源状态。未完成业务验收，真实字段映射留给 #92。
+## 完整充电健康指标验证（2026-09-02）
+
+本次验证范围是 issue #90 的公式边界、SOC/SOH 单位和缺容量语义，输入为离线数据：
+
+- `tests/test_health_metrics.py` 覆盖五类评分边界、SOH 浅充拒绝、物理范围、缺权威容量和 radar unavailable。
+- 健康报告 worker 复用完整时序输入计算指标，曲线降采样不参与指标计算。
+- `acceptance.feature` 新增完整指标 Feature；`qa-plan.md` 新增 METRIC-01..02。
+
+未完成业务验收：未连接真实 TDengine、车辆档案或协议告警码表；当前证据只证明公式实现。
