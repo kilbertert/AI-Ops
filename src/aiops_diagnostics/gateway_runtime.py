@@ -137,6 +137,67 @@ class GatewayRuntime:
     def get_health_report(self, context: ScopeContext, job_id: str) -> dict[str, Any] | None:
         return self.store.get_health_job(job_id, context.scope_fingerprint)
 
+    def start_standard_diagnosis(
+        self,
+        context: ScopeContext,
+        order_no: str,
+        question: str,
+        indicator_code: str | None,
+    ) -> dict[str, Any]:
+        selected_provider = self.diagnostic_settings.agent.select_provider(None)
+        selected_key_slot = validate_key_slot_name(selected_provider.resolved_key_slot())
+        if selected_key_slot not in self.allowed_key_slots:
+            raise ValueError("default key slot is not allowed by the gateway")
+        problem = f"指标 {indicator_code}：{question}" if indicator_code else question
+        request = parse_request(
+            problem,
+            order_no=order_no,
+            tenant_id=context.effective_tenant_id,
+        )
+        manifest = IncidentManifest.from_request(request)
+        workspace = AgentWorkspace.create(
+            reference_root(),
+            Path(self.diagnostic_settings.agent.run_root),
+            manifest,
+            provider_base_url=canonical_provider_base_url(selected_provider.base_url),
+            provider=selected_provider.name,
+            key_slot=selected_key_slot,
+        )
+        diagnosis = self.store.create_standard_diagnosis(
+            context.scope_fingerprint,
+            order_no,
+            question,
+            indicator_code,
+            internal_run_id=workspace.run_id,
+        )
+        future = self._executor.submit(
+            self._execute_standard_diagnosis,
+            diagnosis["diagnosis_id"],
+            workspace,
+            request,
+            context,
+            selected_provider.name,
+            selected_key_slot,
+        )
+        self._futures[diagnosis["diagnosis_id"]] = future
+        future.add_done_callback(lambda _: self._futures.pop(diagnosis["diagnosis_id"], None))
+        return diagnosis
+
+    def get_standard_diagnosis(
+        self,
+        context: ScopeContext,
+        diagnosis_id: str,
+    ) -> dict[str, Any] | None:
+        return self.store.get_standard_diagnosis(diagnosis_id, context.scope_fingerprint)
+
+    def list_standard_diagnoses(
+        self,
+        context: ScopeContext,
+        *,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        return self.store.list_standard_diagnoses(context.scope_fingerprint, limit=limit)
+
     def list_evidence(self, run_id: str) -> list[dict[str, Any]]:
         """Return redacted evidence metadata for a run (no business payloads)."""
         run_root = Path(self.diagnostic_settings.agent.run_root).expanduser().resolve()
@@ -199,6 +260,46 @@ class GatewayRuntime:
                 error_code="SOURCE_UNAVAILABLE",
                 error_message=f"{exc.__class__.__name__}: {exc}",
             )
+
+    def _execute_standard_diagnosis(
+        self,
+        diagnosis_id: str,
+        workspace: AgentWorkspace,
+        request,
+        context: ScopeContext,
+        provider: str,
+        key_slot: str,
+    ) -> None:
+        if not self.store.update_standard_diagnosis(diagnosis_id, status="running"):
+            return
+        settings = Settings.from_config(self.gateway_settings.server_config_file)
+        settings.agent.run_root = self.diagnostic_settings.agent.run_root
+        try:
+            query_scope = resolve_query_scope(context)
+            result = run_agent_diagnosis(
+                workspace,
+                request,
+                settings,
+                None,
+                allowed_tenants={context.effective_tenant_id},
+                provider=provider,
+                key_slot=key_slot,
+                scope=query_scope,
+            )
+        except (AgentRuntimeError, SourceError, ValueError) as exc:
+            self.store.update_standard_diagnosis(
+                diagnosis_id,
+                status="failed",
+                error_code="DIAGNOSIS_FAILED",
+                error_message=_public_error_message(exc, request.order_no),
+            )
+            return
+        public_status = "completed" if result.status.value == "diagnosed" else "inconclusive"
+        self.store.update_standard_diagnosis(
+            diagnosis_id,
+            status=public_status,
+            result=result.model_dump(mode="json"),
+        )
 
     def _execute_run(
         self,

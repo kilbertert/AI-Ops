@@ -38,6 +38,7 @@ from aiops_diagnostics.scope_context import ScopeContext, ScopeError
 from aiops_diagnostics.sources import SourceError
 
 STANDARD_ORDER_READ_SCOPE = "aiops:orders:read"
+STANDARD_DIAGNOSIS_SCOPE = "aiops:diagnoses:write"
 SAFE_ORDER_NO = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 
 
@@ -64,6 +65,18 @@ class HealthReportJobRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     order_no: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.:-]+$")
+
+
+class StandardDiagnosisRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    order_no: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.:-]+$")
+    question: str = Field(min_length=1, max_length=4000)
+    indicator_code: str | None = Field(
+        default=None,
+        max_length=64,
+        pattern=r"^[a-z][a-z0-9_]{0,63}$",
+    )
 
 
 class GatewayAPI:
@@ -297,6 +310,72 @@ def create_gateway_app(
             )
         return _health_job_response(job)
 
+    @app.post("/v1/standard/diagnoses", status_code=status.HTTP_202_ACCEPTED)
+    def create_standard_diagnosis(
+        payload: StandardDiagnosisRequest,
+        caller: ScopeContext = Depends(authenticated_caller),  # noqa: B008
+    ) -> dict[str, Any]:
+        try:
+            allowed = context.order_authorizer.can_access(caller, payload.order_no)
+        except (CallerAuthError, ScopeError, SourceError, ValueError) as exc:
+            raise StandardAPIError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "ORDER_AUTHORIZATION_UNAVAILABLE",
+                "order authorization unavailable",
+                retryable=True,
+            ) from exc
+        if not allowed:
+            raise StandardAPIError(
+                status.HTTP_404_NOT_FOUND,
+                "ORDER_NOT_FOUND",
+                "order not found",
+            )
+        try:
+            diagnosis = context.runtime.start_standard_diagnosis(
+                caller,
+                payload.order_no,
+                payload.question,
+                payload.indicator_code,
+            )
+        except (ValueError, RuntimeError) as exc:
+            raise StandardAPIError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "DIAGNOSIS_UNAVAILABLE",
+                "diagnosis unavailable",
+                retryable=True,
+            ) from exc
+        return _standard_diagnosis_response(diagnosis)
+
+    @app.get("/v1/standard/diagnoses/{diagnosis_id}")
+    def get_standard_diagnosis(
+        diagnosis_id: str,
+        caller: ScopeContext = Depends(authenticated_caller),  # noqa: B008
+    ) -> dict[str, Any]:
+        try:
+            diagnosis = context.runtime.get_standard_diagnosis(caller, diagnosis_id)
+        except (ValueError, RuntimeError) as exc:
+            raise StandardAPIError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "DIAGNOSIS_UNAVAILABLE",
+                "diagnosis unavailable",
+                retryable=True,
+            ) from exc
+        if diagnosis is None:
+            raise StandardAPIError(
+                status.HTTP_404_NOT_FOUND,
+                "DIAGNOSIS_NOT_FOUND",
+                "diagnosis not found",
+            )
+        return _standard_diagnosis_response(diagnosis)
+
+    @app.get("/v1/standard/diagnoses")
+    def list_standard_diagnoses(
+        limit: Annotated[int, Query(ge=1, le=200)] = 50,
+        caller: ScopeContext = Depends(authenticated_caller),  # noqa: B008
+    ) -> dict[str, Any]:
+        diagnoses = context.runtime.list_standard_diagnoses(caller, limit=limit)
+        return {"diagnoses": diagnoses}
+
     @app.post("/v1/enroll", status_code=status.HTTP_201_CREATED)
     def enroll(payload: EnrollRequest) -> dict[str, Any]:
         try:
@@ -467,4 +546,30 @@ def _health_job_response(job: dict[str, Any]) -> dict[str, Any]:
         "created_at": job["created_at"],
         "updated_at": job["updated_at"],
         "completed_at": job.get("completed_at"),
+    }
+
+
+def _standard_diagnosis_response(diagnosis: dict[str, Any]) -> dict[str, Any]:
+    status_value = str(diagnosis["status"])
+    is_terminal = status_value in {"completed", "inconclusive", "failed", "expired"}
+    return {
+        "diagnosis_id": diagnosis["diagnosis_id"],
+        "order_no": diagnosis["order_no"],
+        "question": diagnosis.get("question"),
+        "indicator_code": diagnosis.get("indicator_code"),
+        "status": status_value,
+        "retry_after_ms": None if is_terminal else 1000,
+        "result": diagnosis.get("result") if status_value in {"completed", "inconclusive"} else None,
+        "error": (
+            {
+                "code": diagnosis.get("error_code") or "DIAGNOSIS_FAILED",
+                "message": diagnosis.get("error_message") or "diagnosis failed",
+                "retryable": status_value in {"failed", "expired"},
+            }
+            if status_value in {"failed", "expired"}
+            else None
+        ),
+        "created_at": diagnosis.get("created_at"),
+        "updated_at": diagnosis.get("updated_at"),
+        "completed_at": diagnosis.get("completed_at"),
     }
