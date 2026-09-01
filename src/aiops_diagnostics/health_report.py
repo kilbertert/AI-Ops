@@ -75,6 +75,8 @@ def build_minimal_health_report(
             "started_at": started_at.astimezone(UTC).isoformat(),
             "stopped_at": stopped_at.astimezone(UTC).isoformat(),
         },
+        "device_code": order.get("child_device_code") or order.get("device_code"),
+        "order_status": _integer(order.get("status")),
         "summary": summary,
         "indicators": [indicator],
         "completeness": completeness,

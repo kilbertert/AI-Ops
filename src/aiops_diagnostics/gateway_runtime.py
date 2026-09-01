@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,7 @@ from aiops_diagnostics.codex_runtime import AgentRuntimeError
 from aiops_diagnostics.config import Settings, canonical_provider_base_url, validate_key_slot_name
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_store import GatewayDevice, GatewayStore
+from aiops_diagnostics.health_curves import build_curves_and_summary
 from aiops_diagnostics.health_report import (
     HEALTH_RULE_VERSION,
     HealthReportError,
@@ -176,6 +178,7 @@ class GatewayRuntime:
                     order_no,
                     self.diagnostic_settings.safety,
                 )
+                report = self._augment_with_curves(report, sources)
             if time.monotonic() - started > 30:
                 self.store.update_health_job(
                     job_id,
@@ -199,6 +202,36 @@ class GatewayRuntime:
                 error_code="SOURCE_UNAVAILABLE",
                 error_message=f"{exc.__class__.__name__}: {exc}",
             )
+
+    def _augment_with_curves(
+        self,
+        report: dict[str, Any],
+        sources: Any,
+    ) -> dict[str, Any]:
+        """Append the T4 #89 curves and source summary to the #87 base report.
+
+        Curves and source summary are derived separately so the
+        ``build_minimal_health_report`` contract stays untouched. Calculation
+        uses the full TDengine telemetry; only the wire representation is
+        downsampled.
+        """
+        started_at = datetime.fromisoformat(report["order_window"]["started_at"])
+        stopped_at = datetime.fromisoformat(report["order_window"]["stopped_at"])
+        device = report.get("device_code")
+        if not device:
+            return report
+        curves_payload = build_curves_and_summary(
+            sources=sources,
+            order_no=report["order_no"],
+            device=device,
+            started_at=started_at,
+            stopped_at=stopped_at,
+            safety_max_window_hours=self.diagnostic_settings.safety.max_order_window_hours,
+            order_status=report.get("order_status"),
+        )
+        report["curves"] = curves_payload["curves"]
+        report["source_summary"] = curves_payload["source_summary"]
+        return report
 
     def _execute_run(
         self,
