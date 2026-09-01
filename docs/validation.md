@@ -433,3 +433,26 @@ fixture 与 fake 不能替代。
 
 未完成业务验收：平台 `/user/ds` 本身修复仍需上游处理；降级路径在组织/店铺
 粒度场景仅由契约测试守护。
+
+## 标准调用者认证与订单授权验证（2026-09-01）
+
+本次验证范围是 issue #86 的标准 Bearer token → `ScopeContext` → 订单授权链路，
+输入为离线 introspection transport、caller resolver 与订单 authorizer fake，不连接
+真实 issuer、introspection 或生产数据库：
+
+- `tests/test_caller_auth.py`：有效 introspection 生成不可变上下文；inactive、错误
+  audience、缺 scope、过期、缺主体/租户、非法数据范围均 fail closed；网络失败返回
+  可重试错误且不泄露 token/client secret。
+- `tests/test_standard_caller_api.py`：有效订单授权、范围外/不存在订单统一 404、缺失
+  Bearer、设备 token、非法订单号在查询前拒绝；响应只包含订单号、可访问标记与范围
+  指纹。
+- `tests/test_gateway_api.py` 回归证明既有 enroll/create/list/get/evidence 与租户拒绝
+  行为不受标准认证接缝影响。
+- `acceptance.feature` 新增“标准调用者认证与订单授权”Feature；`qa-plan.md` 新增
+  SAPI-01..05，覆盖 token、注入、跨主体/租户、introspection 与兼容性。
+- 全套 **456 项 pytest 通过**；Ruff、format、compileall、`uv pip check`、
+  `uv lock --check`、policy check、`git diff --check` 通过。
+
+未完成业务验收：没有调用真实 access-token issuer/introspection，也没有查询真实订单；
+JWT 验签后端尚未实现，需先批准并引入 JOSE 依赖。当前证据只证明 introspection 合同、
+失败关闭、范围授权接线和旧接口兼容性，不能代表生产认证或业务准确率验收。

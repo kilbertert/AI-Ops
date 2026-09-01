@@ -23,6 +23,11 @@ class GatewayServerSettings:
     max_workers: int = 2
     allowed_key_slots: tuple[str, ...] = ()
     event_poll_interval_seconds: float = 0.5
+    introspection_url: str = ""
+    introspection_client_id: str = ""
+    introspection_client_secret: str = ""
+    standard_api_audience: str = "aiops-api"
+    introspection_timeout_seconds: int = 5
 
     @classmethod
     def from_env(cls) -> GatewayServerSettings:
@@ -48,6 +53,11 @@ class GatewayServerSettings:
             max_workers=_env_int("AIOPS_GATEWAY_MAX_WORKERS", 2),
             allowed_key_slots=slots,
             event_poll_interval_seconds=_env_float("AIOPS_GATEWAY_EVENT_POLL_SECONDS", 0.5),
+            introspection_url=_env("AIOPS_GATEWAY_INTROSPECTION_URL"),
+            introspection_client_id=_env("AIOPS_GATEWAY_INTROSPECTION_CLIENT_ID"),
+            introspection_client_secret=_env("AIOPS_GATEWAY_INTROSPECTION_CLIENT_SECRET"),
+            standard_api_audience=_env("AIOPS_GATEWAY_STANDARD_API_AUDIENCE", "aiops-api"),
+            introspection_timeout_seconds=_env_int("AIOPS_GATEWAY_INTROSPECTION_TIMEOUT_SECONDS", 5),
         )
 
     def validate(self) -> None:
@@ -59,6 +69,8 @@ class GatewayServerSettings:
             raise ValueError("AIOPS_GATEWAY_MAX_WORKERS must be between 1 and 16")
         if not 0.1 <= self.event_poll_interval_seconds <= 10:
             raise ValueError("AIOPS_GATEWAY_EVENT_POLL_SECONDS must be between 0.1 and 10")
+        if not 1 <= self.introspection_timeout_seconds <= 30:
+            raise ValueError("AIOPS_GATEWAY_INTROSPECTION_TIMEOUT_SECONDS must be between 1 and 30")
         if self.server_config_file is None or not self.server_config_file.is_file():
             raise ValueError("gateway server production.env does not exist")
 

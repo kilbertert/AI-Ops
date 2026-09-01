@@ -103,3 +103,36 @@ Feature: 基于权限上下文的受限直连诊断运行时
       Given UPMS/Dis 不可用、主体不存在或权限不足
       When 诊断运行结束
       Then 以权限失败类型区分数据源失败与空结果
+
+Feature: 标准调用者认证与订单授权
+  AI-Ops 标准资源接口必须从验证后的 Bearer token 建立调用者上下文，
+  不接受设备令牌或裸身份字段代替授权。
+
+  Rule: 标准接口只信任验证后的调用者上下文
+
+    Scenario: 有效 access token 可以验证有权订单
+      Given token resolver 返回当前调用者、租户、scope 与数据范围
+      And 订单属于该不可变权限上下文
+      When 调用订单授权探针
+      Then 返回订单可访问
+      And 返回范围指纹但不返回 token
+
+    Scenario: token 无效或 scope 不足时失败关闭
+      Given Bearer token 过期、audience 错误或缺少 required scope
+      When 调用订单授权探针
+      Then 返回稳定 401 或 403 错误码
+      And 不触发订单数据源查询
+
+    Scenario: 订单不在调用者范围时隐藏资源存在性
+      Given token 有效但订单属于其他主体或租户
+      When 调用订单授权探针
+      Then 返回统一 ORDER_NOT_FOUND
+      And 不泄露订单是否真实存在
+
+  Rule: 现有设备接口保持兼容
+
+    Scenario: device token 仍只访问既有 run 接口
+      Given 已注册设备持有 aops_ token
+      When 调用现有 runs 接口
+      Then 行为与标准认证上线前一致
+      And 该 token 不能访问标准订单接口

@@ -39,6 +39,33 @@ flowchart LR
 - `GET /v1/runs/{run_id}/events`：按 sequence 增量同步事件。
 - `GET /v1/runs/{run_id}/events/stream`：SSE 实时同步事件。
 - `GET /v1/runs/{run_id}/evidence`：按 run 返回脱敏证据元数据（工具、状态、请求骨架、行数、错误），不含业务正文。
+- `GET /v1/orders/{order_no}/access`：标准 Bearer token 的订单授权探针；只返回
+  `order_no`、可访问标记和范围指纹，不返回订单正文。该端点是后续标准健康报告与
+  单问诊断 API 的认证 tracer bullet。
+
+### 标准资源 API 认证
+
+标准资源接口与既有 `aops_*` 设备接口并存，二者不能互换。标准接口只接受
+`Authorization: Bearer <access_token>`，通过可配置的 caller-context resolver 建立
+不可变 `ScopeContext`，再复用现有 `QueryScope` 与 `ScopedSources` 做订单范围校验。
+请求中的裸 `user_id`、`tenant_id`、设备令牌或内部 HMAC 都不能扩大授权范围。
+
+第一版提供 OAuth 2.0 token introspection 适配器：验证 `active`、`sub`、租户、
+AI-Ops audience、过期时间、required scope 和业务数据范围。资源接口只依赖 resolver
+协议，未来可在引入经过批准的 JOSE 依赖后增加 JWT 验签实现，不手写不完整的 JWT
+签名校验。
+
+```env
+AIOPS_GATEWAY_INTROSPECTION_URL=https://auth.example.com/oauth2/introspect
+AIOPS_GATEWAY_INTROSPECTION_CLIENT_ID=aiops
+AIOPS_GATEWAY_INTROSPECTION_CLIENT_SECRET=REDACTED
+AIOPS_GATEWAY_STANDARD_API_AUDIENCE=aiops-api
+AIOPS_GATEWAY_INTROSPECTION_TIMEOUT_SECONDS=5
+```
+
+未配置 introspection 时，既有设备接口照常工作，标准资源接口以稳定 503 错误
+`ACCESS_TOKEN_VALIDATION_UNAVAILABLE` fail closed。远程 introspection endpoint 必须使用
+HTTPS；client secret 不得进入便携包、日志或 API 响应。
 
 服务端 SQLite 只保存注册码哈希、设备令牌哈希、run 元数据、脱敏结果和事件元数据，不保存原始 API key。证据正文仍保留在服务器私有 run workspace，不通过 Gateway 事件接口暴露。
 
@@ -123,6 +150,8 @@ aiops.exe remote diagnose "订单 123 金额异常" --json
 - 客户端不能提交任意 provider URL、任意数据库查询、任意 fixture 路径或业务动作。
 - 设备注册 code 和设备 token 只在传输/兑换时出现，服务端只存 SHA-256 哈希。
 - 租户绑定在注册码上；设备请求其他租户时被拒绝。
+- 标准资源接口验证 access token 的 audience、有效期和 required scope，并按不可变
+  调用者范围重新查询订单；知道订单号或资源 ID 不能单独获得访问权。
 - 服务端 key slot 通过 `AIOPS_GATEWAY_ALLOWED_KEY_SLOTS` 白名单限制，恢复和执行仍比较固定 provider endpoint。
 - Gateway 只同步状态和证据 ID 等元数据，不同步 evidence payload、密码或内部绝对路径。
 - run 元数据中的用户反馈会在服务端持久化前脱敏；客户端 `show` 只得到诊断合同结果，不得到服务器证据正文。

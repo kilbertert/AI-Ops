@@ -89,3 +89,52 @@ workflow YAML 不适用复杂度或 mutation 工具；安全状态机由模板�
 - 清理：无。
 
 证据要求：每项记录提交/构建身份、环境、时间戳与日志或报告制品；未连接真实 UPMS/Dis/生产库，fixture 与 fake 不能冒充真实环境验收。
+
+## 标准调用者认证 QA 计划
+
+## SAPI-01 有效 token 与订单范围
+
+- 环境：AI-Ops 本地 TestClient，caller resolver 与订单授权器使用离线 fake。
+- 前置：标准订单授权接口启用，existing device API 保持可用。
+- 数据：有效 Bearer token、SELF 范围调用者、范围内订单 O-ALLOW。
+- 动作：调用订单授权探针。
+- 预期：HTTP 200，返回 O-ALLOW 与 scope fingerprint，不返回 token、VIN、权限副本或内部凭据。
+- 清理：删除临时 Gateway SQLite。
+
+## SAPI-02 token 失败与注入
+
+- 环境：AI-Ops 本地 TestClient。
+- 前置：fake resolver 可记录是否被调用，fake order authorizer 可记录查询次数。
+- 数据：缺失 Bearer、错误 scheme、无效/过期 token、缺 scope token、裸 user_id/tenant_id 注入、aops_ device token。
+- 动作：逐一调用标准订单授权探针。
+- 预期：稳定 401/403；token 解析失败时不查询订单；裸身份字段不改变调用者上下文；device token 不获得标准接口权限。
+- 清理：无。
+
+## SAPI-03 跨主体与跨租户订单
+
+- 环境：AI-Ops 本地 TestClient，离线授权 fake。
+- 前置：调用者上下文已验证。
+- 数据：同租户其他主体订单、跨租户订单、不存在订单。
+- 动作：逐一调用订单授权探针。
+- 预期：全部统一返回 HTTP 404 + ORDER_NOT_FOUND，不泄露资源存在性。
+- 清理：无。
+
+## SAPI-04 Introspection 合同
+
+- 环境：AI-Ops 本地，HTTP transport fake。
+- 前置：配置 HTTPS introspection endpoint、client credentials、AI-Ops audience 与 required scope。
+- 数据：active 响应、inactive、错误 audience、过期、缺 subject/tenant/scope、HTTP 401、网络失败和畸形 JSON。
+- 动作：解析 access token。
+- 预期：有效响应生成不可变 ScopeContext；所有无效响应 fail closed，错误不包含 token/client secret。
+- 清理：无。
+
+## SAPI-05 兼容性回归
+
+- 环境：AI-Ops 本地 TestClient。
+- 前置：既有 enroll/run 测试数据。
+- 数据：合法和非法 aops_ device token。
+- 动作：执行 enroll、create/list/get run 与标准订单授权探针。
+- 预期：既有接口行为不变；device token 不能访问标准接口。
+- 清理：删除临时 Gateway SQLite。
+
+证据要求：SAPI-01..05 当前只证明离线合同和权限失败语义；真实 issuer/introspection、真实订单范围与生产调用方尚未完成业务验收。
