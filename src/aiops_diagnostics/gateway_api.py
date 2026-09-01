@@ -3,14 +3,27 @@ from __future__ import annotations
 import asyncio
 import json
 import platform
+import re
 from contextlib import asynccontextmanager
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from aiops_diagnostics import __version__
+from aiops_diagnostics.caller_auth import (
+    CALLER_AUTH_CONFIG_MISSING,
+    CALLER_AUTH_FORBIDDEN,
+    CallerAuthError,
+    CallerContextResolver,
+    DisabledCallerResolver,
+    DisabledOrderAuthorizer,
+    IntrospectionCallerResolver,
+    IntrospectionSettings,
+    OrderAuthorizer,
+    ScopedOrderAuthorizer,
+)
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_runtime import GatewayRuntime, close_gateway_runtime
 from aiops_diagnostics.gateway_store import (
@@ -21,6 +34,11 @@ from aiops_diagnostics.gateway_store import (
     GatewayStore,
     RunNotFoundError,
 )
+from aiops_diagnostics.scope_context import ScopeContext, ScopeError
+from aiops_diagnostics.sources import SourceError
+
+STANDARD_ORDER_READ_SCOPE = "aiops:orders:read"
+SAFE_ORDER_NO = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 
 
 class EnrollRequest(BaseModel):
@@ -48,10 +66,30 @@ class GatewayAPI:
         settings: GatewayServerSettings,
         store: GatewayStore,
         runtime: GatewayRuntime,
+        caller_resolver: CallerContextResolver,
+        order_authorizer: OrderAuthorizer,
     ) -> None:
         self.settings = settings
         self.store = store
         self.runtime = runtime
+        self.caller_resolver = caller_resolver
+        self.order_authorizer = order_authorizer
+
+
+class StandardAPIError(RuntimeError):
+    def __init__(
+        self,
+        status_code: int,
+        code: str,
+        message: str,
+        *,
+        retryable: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.code = code
+        self.message = message
+        self.retryable = retryable
 
 
 def create_gateway_app(
@@ -59,12 +97,27 @@ def create_gateway_app(
     settings: GatewayServerSettings | None = None,
     store: GatewayStore | None = None,
     runtime: GatewayRuntime | None = None,
+    caller_resolver: CallerContextResolver | None = None,
+    order_authorizer: OrderAuthorizer | None = None,
 ) -> FastAPI:
     selected_settings = settings or GatewayServerSettings.from_env()
     selected_settings.validate()
     selected_store = store or GatewayStore(selected_settings.database_file)
     selected_runtime = runtime or GatewayRuntime.from_settings(selected_store, selected_settings)
-    context = GatewayAPI(selected_settings, selected_store, selected_runtime)
+    selected_resolver = caller_resolver or _caller_resolver(selected_settings)
+    diagnostic_settings = getattr(selected_runtime, "diagnostic_settings", None)
+    selected_authorizer = order_authorizer or (
+        ScopedOrderAuthorizer(diagnostic_settings)
+        if diagnostic_settings is not None
+        else DisabledOrderAuthorizer()
+    )
+    context = GatewayAPI(
+        selected_settings,
+        selected_store,
+        selected_runtime,
+        selected_resolver,
+        selected_authorizer,
+    )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
@@ -81,6 +134,19 @@ def create_gateway_app(
     )
     app.state.gateway = context
 
+    @app.exception_handler(StandardAPIError)
+    async def standard_api_error_handler(_: Request, exc: StandardAPIError) -> JSONResponse:
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={
+                "error": {
+                    "code": exc.code,
+                    "message": exc.message,
+                    "retryable": exc.retryable,
+                }
+            },
+        )
+
     def authenticated_device(
         authorization: Annotated[str | None, Header()] = None,
     ) -> GatewayDevice:
@@ -92,6 +158,43 @@ def create_gateway_app(
         except AuthenticationError as exc:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
 
+    def authenticated_caller(
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> ScopeContext:
+        if not authorization or not authorization.startswith("Bearer "):
+            raise StandardAPIError(
+                status.HTTP_401_UNAUTHORIZED,
+                "ACCESS_TOKEN_REQUIRED",
+                "access token required",
+            )
+        token = authorization.removeprefix("Bearer ").strip()
+        if token.startswith("aops_"):
+            raise StandardAPIError(
+                status.HTTP_401_UNAUTHORIZED,
+                "INVALID_ACCESS_TOKEN",
+                "access token validation failed",
+            )
+        try:
+            return context.caller_resolver.resolve(token, required_scope=STANDARD_ORDER_READ_SCOPE)
+        except CallerAuthError as exc:
+            if exc.code == CALLER_AUTH_FORBIDDEN:
+                status_code = status.HTTP_403_FORBIDDEN
+                code = "INSUFFICIENT_SCOPE"
+            elif exc.code == CALLER_AUTH_CONFIG_MISSING:
+                status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+                code = "ACCESS_TOKEN_VALIDATION_UNAVAILABLE"
+            else:
+                status_code = (
+                    status.HTTP_503_SERVICE_UNAVAILABLE if exc.retryable else status.HTTP_401_UNAUTHORIZED
+                )
+                code = "ACCESS_TOKEN_VALIDATION_UNAVAILABLE" if exc.retryable else "INVALID_ACCESS_TOKEN"
+            raise StandardAPIError(
+                status_code,
+                code,
+                "access token validation failed",
+                retryable=exc.retryable,
+            ) from exc
+
     @app.get("/health")
     def health() -> dict[str, Any]:
         return {
@@ -101,6 +204,38 @@ def create_gateway_app(
             "api_version": "v1",
             "platform": platform.system().lower(),
             "business_mutations": "disabled",
+        }
+
+    @app.get("/v1/orders/{order_no}/access")
+    def order_access(
+        order_no: str,
+        caller: ScopeContext = Depends(authenticated_caller),  # noqa: B008
+    ) -> dict[str, Any]:
+        if not SAFE_ORDER_NO.fullmatch(order_no):
+            raise StandardAPIError(
+                status.HTTP_400_BAD_REQUEST,
+                "INVALID_ORDER_NO",
+                "invalid order number",
+            )
+        try:
+            allowed = context.order_authorizer.can_access(caller, order_no)
+        except (CallerAuthError, ScopeError, SourceError, ValueError) as exc:
+            raise StandardAPIError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "ORDER_AUTHORIZATION_UNAVAILABLE",
+                "order authorization unavailable",
+                retryable=True,
+            ) from exc
+        if not allowed:
+            raise StandardAPIError(
+                status.HTTP_404_NOT_FOUND,
+                "ORDER_NOT_FOUND",
+                "order not found",
+            )
+        return {
+            "order_no": order_no,
+            "accessible": True,
+            "scope_fingerprint": caller.scope_fingerprint,
         }
 
     @app.post("/v1/enroll", status_code=status.HTTP_201_CREATED)
@@ -236,3 +371,17 @@ def _sse(event: dict[str, Any]) -> str:
     event_type = str(event.get("type", "message"))
     data = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
     return f"id: {sequence}\nevent: {event_type}\ndata: {data}\n\n"
+
+
+def _caller_resolver(settings: GatewayServerSettings) -> CallerContextResolver:
+    if not settings.introspection_url:
+        return DisabledCallerResolver()
+    return IntrospectionCallerResolver(
+        IntrospectionSettings(
+            url=settings.introspection_url,
+            client_id=settings.introspection_client_id,
+            client_secret=settings.introspection_client_secret,
+            audience=settings.standard_api_audience,
+            timeout_seconds=settings.introspection_timeout_seconds,
+        )
+    )
