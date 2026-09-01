@@ -23,6 +23,7 @@ from pymysql.cursors import DictCursor
 
 from aiops_diagnostics.config import Settings
 from aiops_diagnostics.http_auth import build_internal_token_headers
+from aiops_diagnostics.query_scope import QueryScope
 
 SAFE_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 SAFE_VALUE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
@@ -52,6 +53,13 @@ class DiagnosticSources(Protocol):
     def get_fee_template_record(
         self, order_no: str, tenant_id: str | None = None
     ) -> dict[str, Any] | None: ...
+
+    def get_occupy_orders(
+        self,
+        order_id: str | None = None,
+        order_no: str | None = None,
+        tenant_id: str | None = None,
+    ) -> list[dict[str, Any]]: ...
 
     def get_device(
         self,
@@ -100,11 +108,63 @@ white_flag, balance_insufficient_stop, start_soc, end_soc, device_protocol,
 created_time, stop_time, draw_gun_time, tx_data
 """.replace("\n", " ").strip()
 
+OCCUPY_ORDER_COLUMNS = """
+id, orderId, order_no, device_id, device_code, child_device_id,
+child_device_code, site_id, userId, free_time, timeout, occupy_amount,
+pay_amount, status, out_trade_no, is_pay, is_sync_mall_order, pay_time,
+tenant_id, startTime, endTime, operator_id, refund_status, refund_amount,
+refund_time, refundRemark
+""".replace("\n", " ").strip()
+
+OCCUPY_ORDER_LIMIT = 20
+
+#: 站点归属解析（ch_site）单次返回行数上限。
+SITE_SCOPE_MAX_ROWS = 1000
+
+
+def _placeholders(count: int) -> str:
+    return ", ".join("%s" for _ in range(count))
+
 
 class MySQLSource:
-    def __init__(self, settings: Settings) -> None:
+    """直连 MySQL 诊断查询；可选携带单次运行冻结的 ``QueryScope``。
+
+    携带 ``scope`` 时，租户/站点/用户范围以 SQL 过滤条件下推（参数绑定），
+    调用方传入的 ``tenant_id`` 被忽略，不信任前端裸传的权限字段；最终可见
+    站点为空时所有范围查询短路返回空结果，不发起 SQL。
+    """
+
+    def __init__(self, settings: Settings, scope: QueryScope | None = None) -> None:
         self.settings = settings
+        self.scope = scope
         self.database = _safe_identifier(settings.mysql.database)
+
+    def _scope_where(
+        self,
+        *,
+        site_column: str | None = "site_id",
+        user_column: str | None = "user_id",
+    ) -> tuple[str, list[Any]]:
+        """构造 scope 下推的 WHERE 片段（不含前导 AND，调用方自行拼接）。
+
+        站点/用户列名来自固定表结构常量，不是客户端输入；值一律参数绑定。
+        """
+        scope = self.scope
+        if scope is None:
+            return "", []
+        fragments: list[str] = ["tenant_id=%s"]
+        params: list[Any] = [scope.tenant_id]
+        if scope.site_ids is not None and site_column:
+            fragments.append(f"{site_column} IN ({_placeholders(len(scope.site_ids))})")
+            params.extend(scope.site_ids)
+        if scope.user_id and user_column:
+            fragments.append(f"{user_column}=%s")
+            params.append(scope.user_id)
+        return " AND ".join(fragments), params
+
+    def _scope_blocked(self) -> bool:
+        """最终可见站点为空：短路返回空结果，不发起 SQL。"""
+        return self.scope is not None and self.scope.empty_site_scope
 
     @contextlib.contextmanager
     def _cursor(self) -> Iterator[DictCursor]:
@@ -145,9 +205,15 @@ class MySQLSource:
                 connection.close()
 
     def get_orders(self, order_no: str, tenant_id: str | None = None) -> list[dict[str, Any]]:
+        if self._scope_blocked():
+            return []
         where = "order_no=%s"
         params: list[Any] = [order_no]
-        if tenant_id:
+        scope_where, scope_params = self._scope_where()
+        if scope_where:
+            where += f" AND {scope_where}"
+            params.extend(scope_params)
+        elif tenant_id:
             where += " AND tenant_id=%s"
             params.append(tenant_id)
         sql = (
@@ -160,20 +226,73 @@ class MySQLSource:
             return [_normalize_row(row) for row in cursor.fetchall()]
 
     def get_fee_template_record(self, order_no: str, tenant_id: str | None = None) -> dict[str, Any] | None:
-        where = "order_no=%s"
-        params: list[Any] = [order_no]
-        if tenant_id:
-            where += " AND tenant_id=%s"
-            params.append(tenant_id)
+        if self._scope_blocked():
+            return None
+        scope_where, scope_params = self._scope_where()
         sql = (
             f"SELECT order_no, tenant_id, fee_template, occupy_fee_template, period_fee_detail "
-            f"FROM `{self.database}`.`ch_fee_template_record` WHERE {where} "
-            "ORDER BY created_time DESC LIMIT 1"
+            f"FROM `{self.database}`.`ch_fee_template_record` WHERE order_no=%s "
         )
+        params: list[Any] = [order_no]
+        if scope_where:
+            # 计费模板表没有站点/用户列；先用与订单完全相同的范围谓词做订单
+            # 存在性检查，保证单独查询不会扩大可见范围。
+            assert self.scope is not None
+            exists_sql = (
+                f"SELECT 1 FROM `{self.database}`.`ch_order_info` "
+                f"WHERE order_no=%s AND {scope_where} LIMIT 1"
+            )
+            fee_sql = sql + "AND tenant_id=%s ORDER BY created_time DESC LIMIT 1"
+            fee_params: list[Any] = [order_no, self.scope.tenant_id]
+            with self._cursor() as cursor:
+                cursor.execute(exists_sql, [order_no, *scope_params])
+                if cursor.fetchone() is None:
+                    return None
+                cursor.execute(fee_sql, fee_params)
+                row = cursor.fetchone()
+                return _normalize_row(row) if row else None
+        if tenant_id:
+            sql += "AND tenant_id=%s "
+            params.append(tenant_id)
+        sql += "ORDER BY created_time DESC LIMIT 1"
         with self._cursor() as cursor:
             cursor.execute(sql, params)
             row = cursor.fetchone()
             return _normalize_row(row) if row else None
+
+    def get_occupy_orders(
+        self,
+        order_id: str | None = None,
+        order_no: str | None = None,
+        tenant_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """占位费订单：``order_id``（充电订单主键关联）与 ``order_no`` 二选一。
+
+        关联键与业务侧一致：``orderId`` 存充电订单 ``ch_order_info.id``，
+        ``order_no`` 为业务编号（源码 ``OccupyOrderTxDataHandler``）。
+        """
+        has_order_id = bool(order_id and order_id.strip())
+        has_order_no = bool(order_no and order_no.strip())
+        if has_order_id == has_order_no:
+            raise ValueError("占位费订单查询必须且只能提供 order_id 或 order_no 之一")
+        if self._scope_blocked():
+            return []
+        where = "orderId=%s" if has_order_id else "order_no=%s"
+        params: list[Any] = [order_id if has_order_id else order_no]
+        scope_where, scope_params = self._scope_where(user_column="userId")
+        if scope_where:
+            where += f" AND {scope_where}"
+            params.extend(scope_params)
+        elif tenant_id:
+            where += " AND tenant_id=%s"
+            params.append(tenant_id)
+        sql = (
+            f"SELECT {OCCUPY_ORDER_COLUMNS} FROM `{self.database}`.`ch_occupy_order_info` "
+            f"WHERE {where} ORDER BY startTime DESC LIMIT {OCCUPY_ORDER_LIMIT}"
+        )
+        with self._cursor() as cursor:
+            cursor.execute(sql, params)
+            return [_normalize_row(row) for row in cursor.fetchall()]
 
     def get_device(
         self,
@@ -189,8 +308,14 @@ class MySQLSource:
             value = device_code
         else:
             return None
+        if self._scope_blocked():
+            return None
         params: list[Any] = [value]
-        if tenant_id:
+        scope_where, scope_params = self._scope_where(user_column=None)
+        if scope_where:
+            where += f" AND {scope_where}"
+            params.extend(scope_params)
+        elif tenant_id:
             where += " AND tenant_id=%s"
             params.append(tenant_id)
         sql = (
@@ -202,6 +327,34 @@ class MySQLSource:
             cursor.execute(sql, params)
             row = cursor.fetchone()
             return _normalize_row(row) if row else None
+
+    def site_ids_by_shops(self, shop_ids: tuple[str, ...], tenant_id: str) -> tuple[str, ...]:
+        """站点归属解析：``ch_site.shop_id`` → 站点 ID（只读、参数绑定、有界）。"""
+        if not shop_ids:
+            return ()
+        return self._site_ids_by_column("shop_id", shop_ids, tenant_id)
+
+    def site_ids_by_points(self, point_ids: tuple[str, ...], tenant_id: str) -> tuple[str, ...]:
+        """站点归属解析：``ch_site.dis_point_id`` → 站点 ID（Dis 点位归属）。"""
+        if not point_ids:
+            return ()
+        return self._site_ids_by_column("dis_point_id", point_ids, tenant_id)
+
+    def _site_ids_by_column(
+        self, column: str, values: tuple[str, ...], tenant_id: str
+    ) -> tuple[str, ...]:
+        if not all(SAFE_VALUE.fullmatch(value) for value in values):
+            raise ValueError("范围 ID 包含不允许的字符")
+        sql = (
+            f"SELECT id FROM `{self.database}`.`ch_site` "
+            f"WHERE tenant_id=%s AND {column} IN ({_placeholders(len(values))}) "
+            f"ORDER BY id LIMIT {SITE_SCOPE_MAX_ROWS}"
+        )
+        params: list[Any] = [tenant_id, *values]
+        with self._cursor() as cursor:
+            cursor.execute(sql, params)
+            rows = cursor.fetchall()
+        return tuple(str(row["id"]) for row in rows if row.get("id") is not None)
 
     def doctor(self) -> dict[str, Any]:
         with self._cursor() as cursor:
@@ -641,6 +794,14 @@ class LiveSources:
     def get_fee_template_record(self, order_no: str, tenant_id: str | None = None) -> dict[str, Any] | None:
         return self.mysql.get_fee_template_record(order_no, tenant_id)
 
+    def get_occupy_orders(
+        self,
+        order_id: str | None = None,
+        order_no: str | None = None,
+        tenant_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        return self.mysql.get_occupy_orders(order_id, order_no, tenant_id)
+
     def get_device(
         self,
         device_id: str | None,
@@ -702,6 +863,26 @@ class FixtureSources:
         if record and tenant_id and record.get("tenant_id") != tenant_id:
             return None
         return copy.deepcopy(record)
+
+    def get_occupy_orders(
+        self,
+        order_id: str | None = None,
+        order_no: str | None = None,
+        tenant_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        has_order_id = bool(order_id and order_id.strip())
+        has_order_no = bool(order_no and order_no.strip())
+        if has_order_id == has_order_no:
+            raise ValueError("占位费订单查询必须且只能提供 order_id 或 order_no 之一")
+        records = [
+            row
+            for row in self.payload.get("occupy_orders", [])
+            if (has_order_id and row.get("orderId") == order_id)
+            or (has_order_no and row.get("order_no") == order_no)
+        ]
+        if tenant_id:
+            records = [row for row in records if row.get("tenant_id") == tenant_id]
+        return copy.deepcopy(records[:OCCUPY_ORDER_LIMIT])
 
     def get_device(
         self,

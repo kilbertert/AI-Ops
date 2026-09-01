@@ -336,3 +336,26 @@ AFK 治理契约已部署并通过确定性检查，不代表诊断准确率或�
 码未配置，生产接入前代查与租户切换保持关闭；`ScopeContext` 尚未接入诊断运行时
 （T2/T3/T4/T5）。真实环境验收按 PRD #23 的验收任务执行，fixture 与模拟响应不能
 替代。
+
+## T2 MySQL 受限查询验证（2026-09-01）
+
+本次验证范围是 issue #74 的 ScopeContext → 查询范围下推，输入为模拟 UPMS/Dis
+响应与伪造 MySQL 游标，不连接任何生产服务：
+
+- `tests/test_query_scope.py`（17 项）：`QueryScope` 解析（organ/all/self、
+  店铺→站点展开、Dis 目标点位交集、self 按用户过滤、空站点短路标记、范围 ID
+  超限 fail closed、不可变、`DisHttpDirectory` 令牌与租户头透传、Dis 401/不可达/
+  畸形响应 fail closed、路径注入拦截、审计摘要无凭证）。
+- `tests/test_mysql_scope.py`（16 项）：订单/费用/占位费/设备查询的租户+站点+用户
+  scope 下推、忽略调用方裸 `tenant_id`、空站点短路不发起 SQL、计费模板订单存在性
+  检查、占位费订单 `orderId`/`order_no` 二选一、`site_ids_by_shops`/`site_ids_by_points`
+  站点归属解析（参数绑定、LIMIT 1000、非法输入拒绝）。
+- `tests/test_config.py`、`tests/test_env_example.py` 固定 `AIOPS_DIS_*` 配置解析、
+  边界校验、`redacted()` 脱敏与模板约束。
+- 命令 `uv sync --extra dev && uv run pytest && uv run ruff check`、
+  `uv run ruff format --check .`、`git diff --check`、
+  `node .sandcastle/policy-check.mjs commit` 全部通过，全套 **413 项通过**。
+
+未完成业务验收：未调用真实 `cloud-upms`/`dis`，端点契约以 Java `DisFeignClient` 与
+PRD #23 记录为依据并由离线测试守护；`QueryScope` 尚未接入诊断运行时（T3/T4/T5）。
+真实环境验收按 PRD #23 的验收任务执行，fixture 与模拟响应不能替代。

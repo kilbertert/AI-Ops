@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from aiops_diagnostics.config import ProviderConfig, Settings, SSHSettings, UpmsSettings
+from aiops_diagnostics.config import DisSettings, ProviderConfig, Settings, SSHSettings, UpmsSettings
 from aiops_diagnostics.private_files import write_private_text
 
 
@@ -271,3 +271,32 @@ def test_upms_settings_rejects_credential_bearing_or_unbounded_values() -> None:
         UpmsSettings(timeout_seconds=0)
     with pytest.raises(ValueError, match="UPMS 超时"):
         UpmsSettings(timeout_seconds=61)
+
+
+def test_dis_settings_defaults_and_env_names(monkeypatch) -> None:
+    settings = Settings.from_env()
+    assert settings.dis.base_url is None
+    assert settings.dis.token is None
+    assert settings.dis.timeout_seconds == 8
+
+    monkeypatch.setenv("AIOPS_DIS_BASE_URL", "https://dis.example.test")
+    monkeypatch.setenv("AIOPS_DIS_TOKEN", "dis-service-token")
+    monkeypatch.setenv("AIOPS_DIS_TIMEOUT_SECONDS", "12")
+    settings = Settings.from_env()
+    assert settings.dis.base_url == "https://dis.example.test"
+    assert settings.dis.token == "dis-service-token"
+    assert settings.dis.timeout_seconds == 12
+    redacted = str(settings.redacted())
+    assert "dis-service-token" not in redacted
+    assert "REDACTED" in redacted
+
+
+def test_dis_settings_rejects_credential_bearing_or_unbounded_values() -> None:
+    with pytest.raises(ValueError, match="Dis base_url"):
+        DisSettings(base_url="https://user:pass@dis.example.test")
+    with pytest.raises(ValueError, match="Dis base_url"):
+        DisSettings(base_url="not-a-url")
+    with pytest.raises(ValueError, match="Dis 超时"):
+        DisSettings(timeout_seconds=0)
+    with pytest.raises(ValueError, match="Dis 超时"):
+        DisSettings(timeout_seconds=61)
