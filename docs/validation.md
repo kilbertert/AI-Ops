@@ -490,3 +490,6 @@ JWT 验签后端尚未实现，需先批准并引入 JOSE 依赖。当前证据�
   `aiops:diagnoses:write`，缺失时返回 403 `INSUFFICIENT_SCOPE` 且不落库。
 
 未完成业务验收：未连接真实 access-token issuer、生产订单、provider 或真实模型；当前证据只证明标准 API、范围隔离和 Agent 接线，不代表真实故障诊断准确率。
+## 标准健康报告曲线验证（2026-09-02）
+
+本次验证范围是 issue #89 的曲线、降采样和来源摘要，输入为离线时序 fake，不连接真实 TDengine：`tests/test_health_curves.py` 覆盖 400 点降采样、数值时间排序、重复时间、首末点、极值、缺失值和不伪造系列；worker 将 telemetry SourceError 转为部分完成、空曲线和 unavailable 来源状态。未完成业务验收，真实字段映射留给 #92。

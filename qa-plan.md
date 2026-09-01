@@ -227,3 +227,25 @@ workflow YAML 不适用复杂度或 mutation 工具；安全状态机由模板�
 - 清理：删除临时 Gateway SQLite 和 run workspace。
 
 证据要求：DX-01..04 仅证明标准 API、Agent 接线和隔离合同；未连接真实 access-token issuer、生产订单或真实模型，未完成业务验收。
+
+## 标准健康报告曲线 QA 计划
+
+## CURVE-01 降采样与极值
+
+- 环境：AI-Ops 本地健康报告计算模块。
+- 前置：构造 400 个乱序时序点，包含重复时间和显著极值。
+- 数据：功率、电压、温度字段及缺失字段。
+- 动作：构建曲线响应。
+- 预期：每条曲线最多 300 点，时间有序，保留首末点与极值，缺失系列为空。
+- 清理：无。
+
+## CURVE-02 完整输入与来源状态
+
+- 环境：Gateway health-report worker fake sources。
+- 前置：报告计算使用完整采样，遥测源可切换成功/失败。
+- 数据：大于 300 点数据、空数据、SourceError。
+- 动作：执行报告作业。
+- 预期：指标计算不依赖降采样；遥测失败时作业仍可部分完成，source_summary.telemetry 为 unavailable，响应不含内部字段。
+- 清理：删除临时 SQLite 和 run workspace。
+
+证据要求：CURVE-01..02 当前为离线契约验证，未连接真实 TDengine，未完成业务验收。

@@ -80,6 +80,12 @@ def build_minimal_health_report(
         "completeness": completeness,
         "rule_version": HEALTH_RULE_VERSION,
         "data_as_of": datetime.now(UTC).isoformat(),
+        "source_summary": {
+            "order_snapshot": "available",
+            "telemetry": "not_requested",
+            "protocol": "not_requested",
+            "vehicle_capacity": "not_requested",
+        },
     }
 
 
