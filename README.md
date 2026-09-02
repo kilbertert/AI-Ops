@@ -21,11 +21,21 @@
 - [开发进度](docs/开发进度.md)
 - [验证与验收](docs/validation.md)
 - [系统架构](docs/architecture.md)
-- [架构展示（可交互 HTML）](docs/architecture/ai-ops-architecture.html)
+- [架构展示（PNG）](docs/architecture/ai-ops-architecture.png) · [可交互 HTML](docs/architecture/ai-ops-architecture.html)
 - [Gateway 架构与部署](docs/gateway.md)
 - [Codex thin harness](docs/thin-harness.md)
 - [便携部署](docs/portable.md)
 - [打包与下载](docs/打包与下载.md)
+
+## 架构展示
+
+![AI-Ops 架构](docs/architecture/ai-ops-architecture.png)
+
+运行时架构的可视化:[PNG](docs/architecture/ai-ops-architecture.png) ·
+[SVG](docs/architecture/ai-ops-architecture.svg) ·
+[可交互 HTML](docs/architecture/ai-ops-architecture.html)（含主题切换、
+平移缩放、视图聚焦、关系追溯）。生成规格见
+[`docs/architecture/ai-ops-architecture.json`](docs/architecture/ai-ops-architecture.json)。
 
 ## 安全边界
 
