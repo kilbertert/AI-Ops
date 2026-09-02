@@ -24,7 +24,9 @@ from aiops_diagnostics.caller_auth import (
     IntrospectionSettings,
     OrderAuthorizer,
     ScopedOrderAuthorizer,
+    UpmsCallerResolver,
 )
+from aiops_diagnostics.config import Settings
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_runtime import GatewayRuntime, close_gateway_runtime
 from aiops_diagnostics.gateway_store import (
@@ -560,7 +562,10 @@ def _sse(event: dict[str, Any]) -> str:
 
 def _caller_resolver(settings: GatewayServerSettings) -> CallerContextResolver:
     if not settings.introspection_url:
-        return DisabledCallerResolver()
+        try:
+            return UpmsCallerResolver(Settings.from_config(settings.server_config_file))
+        except (ValueError, OSError):
+            return DisabledCallerResolver()
     return IntrospectionCallerResolver(
         IntrospectionSettings(
             url=settings.introspection_url,
