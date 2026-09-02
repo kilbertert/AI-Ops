@@ -508,3 +508,8 @@ JWT 验签后端尚未实现，需先批准并引入 JOSE 依赖。当前证据�
 ## 标准 API 真实环境验收准备（2026-09-02）
 
 已新增 `qa-plan.md` 的 REAL-API-01..04，覆盖完整订单、部分数据、越权资源、诊断与性能。经环境盘点，当前没有标准 API issuer/introspection 配置、批准调用方 token、部署入口或本 PRD 可用真实订单，因此四项均记录为 blocked；既有 PRD #23 真实验收资料不作为本次通过证据。解除条件和证据格式已写入 QA 计划。
+## 标准 API 结构仿真数据验证（2026-09-02）
+
+新增 `examples/synthetic-acceptance/` 和两个 runner：生成器输出完整、部分和越权三类生产结构仿真数据；执行器调用现有 `FixtureSources`、健康报告、曲线和指标逻辑，断言完整订单 400 点降采样为 300 点、部分订单 telemetry unavailable、跨租户订单 ORDER_NOT_FOUND。runner 通过，数据敏感字段扫描无命中。
+
+该结果只证明离线链路和数据契约可运行，不能替代 REAL-API-01..04 的真实 issuer、调用方、生产订单和业务人员验收。

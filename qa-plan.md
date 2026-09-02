@@ -315,6 +315,14 @@ workflow YAML 不适用复杂度或 mutation 工具；安全状态机由模板�
 - 原因：当前工作区没有标准 API issuer/introspection 配置、批准的调用方 access token、可用于本 PRD 的真实订单和部署入口；已有真实验收资料只覆盖 PRD #23 受限直连，不能冒充本次标准 API 验收。
 - 解除条件：提供批准的集成环境、短期调用凭据、测试订单/主体范围和日志保留位置后，逐项执行并记录提交/构建身份、环境、时间和制品。
 
+## 合成数据离线验收
+
+- 数据制品：`examples/synthetic-acceptance/synthetic_acceptance.json` 与 `manifest.json`。
+- 生成：`uv run python tools/generate_synthetic_acceptance_data.py`。
+- 执行：`uv run python tools/run_synthetic_acceptance.py`。
+- 预期：完整订单 400 点曲线被限制为 300 点；部分订单报告保留但 telemetry unavailable；跨租户订单返回 ORDER_NOT_FOUND。
+- 状态：离线仿真通过，不解除 REAL-API-01..04 的真实环境 blocked 状态。
+
 ## 统一标准 API QA 计划
 
 ## CONTRACT-01 资源与错误统一契约
