@@ -12,7 +12,15 @@ from urllib.parse import quote, urlencode, urlsplit
 
 from aiops_diagnostics.config import Settings
 from aiops_diagnostics.query_scope import resolve_query_scope
-from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
+from aiops_diagnostics.scope_context import (
+    DataScope,
+    ScopeContext,
+    ScopeError,
+    ScopeRequest,
+    ScopeResolver,
+    SubjectRecord,
+    UpmsDirectory,
+)
 from aiops_diagnostics.sources import scoped_live_sources
 
 CALLER_AUTH_INVALID = "caller_auth.invalid"
@@ -74,6 +82,25 @@ class DisabledCallerResolver:
             "standard access-token validation is not configured",
             code=CALLER_AUTH_CONFIG_MISSING,
         )
+
+
+class UpmsCallerResolver:
+    """Validate company Bearer tokens through the existing UPMS boundary."""
+
+    def __init__(self, settings: Settings) -> None:
+        if not settings.upms.base_url:
+            raise ValueError("UPMS caller validation requires AIOPS_UPMS_BASE_URL")
+        self.resolver = ScopeResolver(UpmsDirectory(settings.upms))
+
+    def resolve(self, token: str, *, required_scope: str) -> ScopeContext:
+        try:
+            context = self.resolver.resolve(ScopeRequest(credential=token))
+        except ScopeError as exc:
+            raise CallerAuthError("platform access token rejected", code=CALLER_AUTH_INVALID) from exc
+        # ponytail: cloud-auth currently exposes platform permissions, not resource scopes.
+        if not context.permissions and required_scope:
+            raise CallerAuthError("platform caller has no permissions", code=CALLER_AUTH_FORBIDDEN)
+        return context
 
 
 class IntrospectionCallerResolver:

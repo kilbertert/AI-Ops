@@ -139,6 +139,25 @@ workflow YAML 不适用复杂度或 mutation 工具；安全状态机由模板�
 
 证据要求：SAPI-01..05 当前只证明离线合同和权限失败语义；真实 issuer/introspection、真实订单范围与生产调用方尚未完成业务验收。
 
+## 公司 cloud-auth Bearer 适配 QA 计划
+
+## CLOUD-AUTH-01 现有 token 解析
+
+- 环境：本机现有 cloud-auth/UPMS 隧道，使用短期测试 token。
+- 前置：`AIOPS_UPMS_BASE_URL` 指向已批准的认证/UPMS 入口。
+- 数据：有效 cloud-auth Bearer token、过期 token、伪造 token。
+- 动作：调用标准订单授权接口。
+- 预期：有效 token 经 UPMS 生成 ScopeContext；无效 token fail closed；不复制 HS256 密钥。
+- 清理：删除临时 token 和日志。
+
+## CLOUD-AUTH-02 user_id 注入
+
+- 环境：同上。
+- 数据：无 Bearer、`X-User-Id`、`user_id`、`tenant_id` 裸字段。
+- 动作：调用标准订单接口。
+- 预期：统一 401/403；不触发订单数据源查询。
+- 清理：无。
+
 ## 最小异步健康报告 QA 计划
 
 ## HRJ-01 创建、轮询与完成

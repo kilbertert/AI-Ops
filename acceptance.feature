@@ -137,6 +137,21 @@ Feature: 标准调用者认证与订单授权
       Then 行为与标准认证上线前一致
       And 该 token 不能访问标准订单接口
 
+Feature: 公司 cloud-auth Bearer 适配
+  标准 API 使用公司现有 cloud-auth 签发的 Bearer token，不复制签名密钥。
+
+  Scenario: cloud-auth token 通过 UPMS 建立范围
+    Given Bearer token 可被 UPMS /user/info 与 /user/ds 验证
+    When 调用标准订单接口
+    Then AI-Ops 建立不可变 ScopeContext
+    And 订单查询使用该上下文的受限范围
+
+  Scenario: 伪造 user_id 不能替代 token
+    Given 调用方只有裸 user_id 或 tenant_id，没有有效 Bearer token
+    When 调用标准订单接口
+    Then 请求被拒绝
+    And 不触发订单查询
+
 Feature: 最小异步充电健康报告
   标准调用方可以为授权且已结束的订单创建短生命周期报告作业，
   并通过轮询获得确定性最小报告。
