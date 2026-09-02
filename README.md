@@ -21,6 +21,7 @@
 - [开发进度](docs/开发进度.md)
 - [验证与验收](docs/validation.md)
 - [系统架构](docs/architecture.md)
+- [架构展示（可交互 HTML）](docs/architecture/ai-ops-architecture.html)
 - [Gateway 架构与部署](docs/gateway.md)
 - [Codex thin harness](docs/thin-harness.md)
 - [便携部署](docs/portable.md)
