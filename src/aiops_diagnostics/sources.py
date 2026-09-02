@@ -184,6 +184,7 @@ class MySQLSource:
                 write_timeout=self.settings.safety.query_timeout_seconds,
                 cursorclass=DictCursor,
                 autocommit=False,
+                server_public_key=True,
             )
         except Exception as exc:
             raise SourceError(f"MySQL 连接失败: {exc.__class__.__name__}") from exc
