@@ -1,0 +1,26 @@
+{
+  "kind": "production-shaped-synthetic",
+  "generated_at": "2026-09-02T01:20:37.155474+00:00",
+  "source": "local deterministic generator",
+  "contains_production_data": false,
+  "scenarios": [
+    {
+      "id": "SYN-COMPLETE",
+      "order_no": "SYNTH-ORDER-001",
+      "tenant_id": "SYNTH-TENANT-A",
+      "expected": "complete telemetry"
+    },
+    {
+      "id": "SYN-PARTIAL",
+      "order_no": "SYNTH-ORDER-002",
+      "tenant_id": "SYNTH-TENANT-A",
+      "expected": "partial telemetry"
+    },
+    {
+      "id": "SYN-FORBIDDEN",
+      "order_no": "SYNTH-ORDER-003",
+      "tenant_id": "SYNTH-TENANT-B",
+      "expected": "outside caller scope"
+    }
+  ]
+}
