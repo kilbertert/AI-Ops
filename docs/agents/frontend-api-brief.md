@@ -551,7 +551,7 @@ def build_health_report(
     order_no: str,
     *,
     safety: SafetySettings,
-    asset_db: Path,                # 车型库 SQLite 资产
+    asset_db: Path,  # 车型库 SQLite 资产
 ) -> HealthReport: ...
 ```
 
