@@ -98,6 +98,23 @@ def test_mysql_order_query_is_parameterized_and_read_only(monkeypatch) -> None:
     assert "order_no=%s AND tenant_id=%s" in statements[2][0]
     assert statements[2][1] == ["ORDER-123456", "TENANT-1"]
     assert rows[0]["tx_data"]["txSerialNo"] == "TX-1"
+
+
+def test_mysql_connection_requests_server_public_key(monkeypatch) -> None:
+    settings = Settings.from_env()
+    settings.mysql.user = "readonly"
+    settings.mysql.password = "secret"
+    connection = _FakeConnection()
+    captured = {}
+
+    def connect(**kwargs):
+        captured.update(kwargs)
+        return connection
+
+    monkeypatch.setattr("aiops_diagnostics.sources.pymysql.connect", connect)
+    MySQLSource(settings).get_orders("ORDER-123456", "TENANT-1")
+
+    assert captured["server_public_key"] is True
     assert connection.rolled_back and connection.closed
 
 
