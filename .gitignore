@@ -35,3 +35,7 @@ gitlab_token.txt
 
 # AFK runner (package.json) dependencies
 node_modules/
+
+# 内部真实环境验收记录（含生产拓扑与账号处置，默认私有，不入库）
+docs/qa-plan-real.md
+docs/real-acceptance-results.md

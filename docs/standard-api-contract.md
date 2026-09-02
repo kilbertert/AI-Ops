@@ -11,7 +11,38 @@ AI-Ops 提供的是消费端无关的标准后端 HTTP API。调用方可以是�
 
 健康报告不是故障根因结论；诊断报告也不会把客户端提交的分数或曲线当成证据。两者可以被同一个上层产品同时展示，但接口和生命周期彼此独立。
 
-## 2. 谁调用接口
+## 1.1 访问地址
+
+标准 API 的测试环境基础地址（Base URL）是：
+
+```text
+https://aiops-api-test.ranlei.work
+```
+
+健康检查地址为：
+
+```text
+GET https://aiops-api-test.ranlei.work/health
+```
+
+调用时统一携带：
+
+```http
+Authorization: Bearer <cloud-auth_access_token>
+Content-Type: application/json
+```
+
+示例：
+
+```bash
+curl --fail-with-body \
+  -H "Authorization: Bearer $AIOPS_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"order_no":"2094370061724549120"}' \
+  https://aiops-api-test.ranlei.work/v1/health-report-jobs
+```
+
+## 2. 调用接口
 
 调用方必须使用公司现有 `cloud-auth` 签发的 Bearer token：
 
@@ -303,28 +334,3 @@ Authorization: Bearer <access_token>
 5. 用户主动提问时调用 POST /v1/standard/diagnoses
 6. 使用 diagnosis_id 轮询诊断状态
 ```
-
-调用方不需要知道：
-
-- MySQL、TDengine、Redis 地址或凭据；
-- `ScopeContext` 的内部类结构；
-- Gateway SQLite、ThreadPoolExecutor 或 AgentWorkspace；
-- 小程序页面、推荐问、语音、车标或 BFF 细节。
-
-## 8. 当前验收状态
-
-标准 API 已完成代码、合成数据和离线链路验证。当前服务器已部署测试入口：
-
-```text
-https://aiops-api-test.ranlei.work
-```
-
-当前已验证：Gateway 健康检查、FRP 转发、cloud-auth 真实 token、MySQL 只读账号和跨主体拒绝。仍待真实业务验收的部分是：用有权测试主体访问真实订单、完整/部分数据订单的健康报告、真实 provider 诊断和性能测量。
-
-真实验收所需的输入不是重新设计接口，而是：
-
-- 一个有权访问测试订单的 cloud-auth 主体；
-- 一笔完整订单、一笔部分数据订单和一笔越权订单；
-- 允许测试 provider 的环境。
-
-在这些输入到位前，合成数据只能证明链路可运行，不能证明业务准确率。
