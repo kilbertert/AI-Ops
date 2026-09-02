@@ -1,0 +1,124 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "AI-Ops 架构",
+    "subtitle": "Read-only 充电订单诊断运行时 · 确定性 + Codex-native Agent 双路径",
+    "output": "ai-ops-architecture.html",
+    "quality_profile": "standard",
+    "visual_preset": "signal-flow",
+    "viewBox": [1640, 700],
+    "views": [
+      {
+        "id": "diagnostic-flow",
+        "label": "诊断运行主路径",
+        "focus": ["operator", "gateway", "engine", "report", "agent_runner"],
+        "note": "订单事件 → Gateway/CLI → DiagnosticEngine → Evidence + DiagnosticReport"
+      },
+      {
+        "id": "agent-path",
+        "label": "Agent 路径",
+        "focus": ["agent_runner", "codex_runtime", "agent_ws"],
+        "note": "Codex-native 受限工具调用,与确定性路径共用 Evidence / Journal 落点"
+      },
+      {
+        "id": "sources-and-boundary",
+        "label": "数据源与只读边界",
+        "focus": ["sources", "mysql", "tdengine", "redis"],
+        "note": "DiagnosticSources 只读;TDengine 经只读代理;任何写入都被拒绝"
+      }
+    ]
+  },
+  "components": [
+    { "id": "operator",     "type": "external", "label": "运维 / 售后",   "sublabel": "owner",              "pos": [40,   140], "size": [160, 64] },
+    { "id": "order_event",  "type": "external", "label": "订单事件",       "sublabel": "order_no + device",  "pos": [40,   260], "size": [160, 64] },
+
+    { "id": "gateway",      "type": "cloud",    "label": "aiops-gateway",  "sublabel": "FastAPI · tokens",   "pos": [280,  100], "size": [200, 64], "tag": "serve" },
+    { "id": "cli",          "type": "frontend", "label": "aiops CLI",      "sublabel": "python -m",          "pos": [280,  220], "size": [200, 64] },
+
+    { "id": "engine",       "type": "backend",  "label": "DiagnosticEngine", "sublabel": "engine.diagnose",  "pos": [560,  100], "size": [220, 70], "tag": "确定性 + rules" },
+    { "id": "agent_runner", "type": "backend",  "label": "agent_runner",   "sublabel": "受限 Codex call",    "pos": [560,  230], "size": [220, 70], "tag": "Agent 路径" },
+
+    { "id": "codex_runtime","type": "external", "label": "Codex runtime", "sublabel": "openai-codex",       "pos": [860,  220], "size": [180, 60] },
+    { "id": "agent_ws",     "type": "database", "label": "agent_workspace","sublabel": "isolated home",      "pos": [860,  330], "size": [180, 60] },
+
+    { "id": "sources",      "type": "backend",  "label": "DiagnosticSources","sublabel": "只读",            "pos": [860,   80], "size": [180, 60] },
+
+    { "id": "mysql",        "type": "database", "label": "MySQL",          "sublabel": "ch_order_info",      "pos": [1140,  60], "size": [160, 60] },
+    { "id": "tdengine",     "type": "database", "label": "TDengine",       "sublabel": "charging-gun_property","pos": [1140, 160], "size": [160, 60] },
+    { "id": "redis",        "type": "database", "label": "Redis",          "sublabel": "sync queue",         "pos": [1140, 260], "size": [160, 60] },
+
+    { "id": "journal",      "type": "database", "label": "Evidence Journal","sublabel": "journal.py",       "pos": [1380, 100], "size": [160, 60] },
+    { "id": "report",       "type": "security", "label": "DiagnosticReport","sublabel": "result contract",   "pos": [1380, 280], "size": [160, 60], "tag": "summary + next_steps" }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "AI-Ops 进程内(aiops-diagnostics Python 包)",
+      "wraps": ["gateway", "cli", "engine", "agent_runner", "codex_runtime", "agent_ws", "sources", "journal", "report"]
+    }
+  ],
+  "connections": [
+    { "id": "op-gateway",       "from": "operator",     "to": "gateway",       "label": "注册" },
+    { "id": "op-cli",           "from": "operator",     "to": "cli",           "label": "本地" },
+    { "id": "event-gateway",    "from": "order_event",  "to": "gateway",       "label": "remote", "labelAt": [220, 140] },
+    { "id": "event-cli",        "from": "order_event",  "to": "cli",           "label": "local",  "labelAt": [220, 250] },
+
+    { "id": "gateway-engine",   "from": "gateway",      "to": "engine",        "label": "dispatch" },
+    { "id": "gateway-agent",    "from": "gateway",      "to": "agent_runner",  "label": "dispatch" },
+    { "id": "cli-engine",       "from": "cli",          "to": "engine",        "label": "call" },
+    { "id": "cli-agent",        "from": "cli",          "to": "agent_runner",  "label": "call" },
+
+    { "id": "engine-sources",   "from": "engine",       "to": "sources",       "label": "evidence" },
+    { "id": "agent-sources",    "from": "agent_runner", "to": "sources",       "label": "evidence" },
+    { "id": "agent-codex",      "from": "agent_runner", "to": "codex_runtime", "label": "exec" },
+    { "id": "agent-ws",         "from": "agent_runner", "to": "agent_ws",      "label": "isolate" },
+
+    { "id": "src-mysql",        "from": "sources",      "to": "mysql",         "label": "pymysql" },
+    { "id": "src-td",           "from": "sources",      "to": "tdengine",      "label": "client" },
+    { "id": "src-redis",        "from": "sources",      "to": "redis",         "label": "redis-py" },
+
+    { "id": "engine-journal",   "from": "engine",       "to": "journal",       "label": "append" },
+    { "id": "agent-journal",    "from": "agent_runner", "to": "journal",       "label": "append",     "labelAt": [1560, 80],  "via": [[780, 230], [780, 420], [1560, 420], [1560, 130]] },
+    { "id": "engine-report",    "from": "engine",       "to": "report",        "label": "settle" },
+    { "id": "agent-report",     "from": "agent_runner", "to": "report",        "label": "settle",     "labelAt": [1080, 460], "via": [[780, 290], [780, 460], [1380, 460], [1380, 310]] }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "诊断运行主路径",
+      "items": [
+        "订单事件 → Gateway/CLI → DiagnosticEngine / agent_runner",
+        "确定性路径与 Agent 路径两条独立但结果契约相同",
+        "Evidence Journal 记录每次证据抓取,顺序可追溯"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "Gateway · 只读诊断服务边界",
+      "items": [
+        "aiops-gateway serve 启动 FastAPI + uvicorn",
+        "gateway_tokens 提供 internal token auth",
+        "为远程客户端提供注册 / 运行查询 / 证据同步 — 不做数据库代理"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Agent 路径(Codex-native 受限)",
+      "items": [
+        "agent_runner 调用 Codex runtime(openai-codex>=0.144.4,<0.145)",
+        "agent_workspace 提供每次运行隔离的 home + config",
+        "evidence 仍走 sources + journal;结果落入 DiagnosticReport"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "数据源 · 只读边界",
+      "items": [
+        "MySQL · ch_order_info / TDengine · charging-gun_property / Redis · 同步队列",
+        "TDengine 经 tdengine-proxy systemd unit 的只读代理",
+        "DiagnosticSources 不允许 UPDATE / DELETE;任何写操作直接拒绝"
+      ]
+    }
+  ]
+}
