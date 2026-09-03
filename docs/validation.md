@@ -513,6 +513,13 @@ JWT 验签后端尚未实现，需先批准并引入 JOSE 依赖。当前证据�
 新增 `examples/synthetic-acceptance/` 和两个 runner：生成器输出完整、部分和越权三类生产结构仿真数据；执行器调用现有 `FixtureSources`、健康报告、曲线和指标逻辑，断言完整订单 400 点降采样为 300 点、部分订单 telemetry unavailable、跨租户订单 ORDER_NOT_FOUND。runner 通过，数据敏感字段扫描无命中。
 
 该结果只证明离线链路和数据契约可运行，不能替代 REAL-API-01..04 的真实 issuer、调用方、生产订单和业务人员验收。
+## C 端 thirdSession Redis 适配验证（2026-09-03）
+
+真实 Redis key 前缀为 `app:3rd_session:`，值为 Java 序列化外壳内嵌 JSON，支持 login 指针
+到 wx 会话。AI-Ops 只读解析，不执行 Java 反序列化；截图 token
+`76ea8a54-12d7-4889-823e-edded054a7218` 的直接键和 login 键均不存在，真实验收未完成。
+本地全量 pytest/Ruff 与真实 Redis ACL 连接均通过。阻塞条件是当前有效 C 端会话及其有权订单。
+
 ## 公司 cloud-auth Bearer 适配验证（2026-09-02）
 
 新增 `UpmsCallerResolver`：Bearer token 原样交给现有 UPMS 用户/数据范围接口，解析为 ScopeContext；未配置 introspection 时标准 API 不再静默禁用，平台凭证失败仍 fail closed。没有复制 HS256 密钥或信任裸身份字段。当前仅完成离线/平台契约接线，真实 token 和订单验证待服务部署后执行。

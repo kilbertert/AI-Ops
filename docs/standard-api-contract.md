@@ -25,18 +25,20 @@ https://aiops-api-test.ranlei.work
 GET https://aiops-api-test.ranlei.work/health
 ```
 
-调用时统一携带：
+业务后端直接调用 AI-Ops 时统一携带：
 
 ```http
-Authorization: Bearer <cloud-auth_access_token>
+Authorization: Bearer <aiops_service_token>
 Content-Type: application/json
+X-Third-Session: <thirdSession>
 ```
 
 示例：
 
 ```bash
 curl --fail-with-body \
-  -H "Authorization: Bearer $AIOPS_ACCESS_TOKEN" \
+  -H "Authorization: Bearer $AIOPS_SERVICE_TOKEN" \
+  -H "X-Third-Session: $THIRD_SESSION" \
   -H "Content-Type: application/json" \
   -d '{"order_no":"2094370061724549120"}' \
   https://aiops-api-test.ranlei.work/v1/health-report-jobs
@@ -44,10 +46,15 @@ curl --fail-with-body \
 
 ## 2. 调用接口
 
-调用方必须使用公司现有 `cloud-auth` 签发的 Bearer token：
+调用方（Java 业务后端/BFF）必须使用 AI-Ops 服务 Bearer，并同时转发已由 Java 鉴权的
+C 端 `thirdSession`：
 
 ```http
-Authorization: Bearer <access_token>
+Authorization: Bearer <aiops_service_token>
+X-Third-Session: <thirdSession>
+
+`thirdSession` 不是 JWT 或服务凭据。AI-Ops 通过只读 Redis 查询
+`app:3rd_session:<thirdSession>`，解析会话后建立 `ScopeContext`；小程序不直接调用 AI-Ops。
 ```
 
 `access_token` 是凭据，`user_id` 只是认证成功后解析出的身份标识。调用方不得用以下内容代替 token：
