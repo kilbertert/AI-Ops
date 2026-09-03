@@ -28,6 +28,11 @@ class GatewayServerSettings:
     introspection_client_secret: str = ""
     standard_api_audience: str = "aiops-api"
     introspection_timeout_seconds: int = 5
+    delegation_redemption_url: str = ""
+    delegation_caller_token: str = ""
+    delegation_redemption_token: str = ""
+    delegation_service_id: str = "java-bff"
+    delegation_timeout_seconds: int = 5
 
     @classmethod
     def from_env(cls) -> GatewayServerSettings:
@@ -58,6 +63,11 @@ class GatewayServerSettings:
             introspection_client_secret=_env("AIOPS_GATEWAY_INTROSPECTION_CLIENT_SECRET"),
             standard_api_audience=_env("AIOPS_GATEWAY_STANDARD_API_AUDIENCE", "aiops-api"),
             introspection_timeout_seconds=_env_int("AIOPS_GATEWAY_INTROSPECTION_TIMEOUT_SECONDS", 5),
+            delegation_redemption_url=_env("AIOPS_GATEWAY_DELEGATION_REDEMPTION_URL"),
+            delegation_caller_token=_env("AIOPS_GATEWAY_DELEGATION_CALLER_TOKEN"),
+            delegation_redemption_token=_env("AIOPS_GATEWAY_DELEGATION_REDEMPTION_TOKEN"),
+            delegation_service_id=_env("AIOPS_GATEWAY_DELEGATION_SERVICE_ID", "java-bff"),
+            delegation_timeout_seconds=_env_int("AIOPS_GATEWAY_DELEGATION_TIMEOUT_SECONDS", 5),
         )
 
     def validate(self) -> None:

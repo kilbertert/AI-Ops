@@ -67,6 +67,26 @@ AIOPS_GATEWAY_INTROSPECTION_TIMEOUT_SECONDS=5
 `ACCESS_TOKEN_VALIDATION_UNAVAILABLE` fail closed。远程 introspection endpoint 必须使用
 HTTPS；client secret 不得进入便携包、日志或 API 响应。
 
+### C 端 `thirdSession` 委托适配
+
+小程序的 `thirdSession` 只在 Java 业务后端验证，并不会传给 AI-Ops。Java 为当前请求签发
+短生命周期、一次性不透明句柄，通过独立服务身份调用标准 API，并在
+`X-AIOps-Delegation` 请求头中携带该句柄。Gateway 通过私有回查接口原子兑换句柄，映射为
+现有 `ScopeContext` 后再执行订单范围校验。
+
+委托配置只存在 Gateway 和 Java 服务端私有运行配置中：
+
+```env
+AIOPS_GATEWAY_DELEGATION_REDEMPTION_URL=https://business.example.com/internal/aiops/delegations/redeem
+AIOPS_GATEWAY_DELEGATION_CALLER_TOKEN=REDACTED
+AIOPS_GATEWAY_DELEGATION_REDEMPTION_TOKEN=REDACTED
+AIOPS_GATEWAY_DELEGATION_SERVICE_ID=java-bff
+AIOPS_GATEWAY_DELEGATION_TIMEOUT_SECONDS=5
+```
+
+委托句柄不是 OAuth token，也不是 `user_id`/`tenant_id` 的替代字段；客户端不得取得或构造
+它。没有完整配置时适配器 fail closed，不回退到设备 token 或裸身份。
+
 服务端 SQLite 只保存注册码哈希、设备令牌哈希、run 元数据、脱敏结果和事件元数据，不保存原始 API key。证据正文仍保留在服务器私有 run workspace，不通过 Gateway 事件接口暴露。
 
 当前 MVP 的注册码由服务器管理员本地签发：

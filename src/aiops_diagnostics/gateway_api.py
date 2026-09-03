@@ -18,6 +18,8 @@ from aiops_diagnostics.caller_auth import (
     CALLER_AUTH_FORBIDDEN,
     CallerAuthError,
     CallerContextResolver,
+    DelegatedCallerResolver,
+    DelegationSettings,
     DisabledCallerResolver,
     DisabledOrderAuthorizer,
     IntrospectionCallerResolver,
@@ -196,6 +198,7 @@ def create_gateway_app(
 
     def authenticated_caller(
         authorization: Annotated[str | None, Header()] = None,
+        x_aiops_delegation: Annotated[str | None, Header()] = None,
     ) -> ScopeContext:
         if not authorization or not authorization.startswith("Bearer "):
             raise StandardAPIError(
@@ -211,7 +214,10 @@ def create_gateway_app(
                 "access token validation failed",
             )
         try:
-            return context.caller_resolver.resolve(token, required_scope=STANDARD_ORDER_READ_SCOPE)
+            kwargs = {"required_scope": STANDARD_ORDER_READ_SCOPE}
+            if x_aiops_delegation is not None:
+                kwargs["delegation_handle"] = x_aiops_delegation
+            return context.caller_resolver.resolve(token, **kwargs)
         except CallerAuthError as exc:
             if exc.code == CALLER_AUTH_FORBIDDEN:
                 status_code = status.HTTP_403_FORBIDDEN
@@ -233,6 +239,7 @@ def create_gateway_app(
 
     def authenticated_diagnosis_caller(
         authorization: Annotated[str | None, Header()] = None,
+        x_aiops_delegation: Annotated[str | None, Header()] = None,
     ) -> ScopeContext:
         if not authorization or not authorization.startswith("Bearer "):
             raise StandardAPIError(
@@ -248,7 +255,10 @@ def create_gateway_app(
                 "access token validation failed",
             )
         try:
-            return context.caller_resolver.resolve(token, required_scope=STANDARD_DIAGNOSIS_SCOPE)
+            kwargs = {"required_scope": STANDARD_DIAGNOSIS_SCOPE}
+            if x_aiops_delegation is not None:
+                kwargs["delegation_handle"] = x_aiops_delegation
+            return context.caller_resolver.resolve(token, **kwargs)
         except CallerAuthError as exc:
             if exc.code == CALLER_AUTH_FORBIDDEN:
                 raise StandardAPIError(
@@ -563,18 +573,34 @@ def _sse(event: dict[str, Any]) -> str:
 def _caller_resolver(settings: GatewayServerSettings) -> CallerContextResolver:
     if not settings.introspection_url:
         try:
-            return UpmsCallerResolver(Settings.from_config(settings.server_config_file))
+            resolver: CallerContextResolver = UpmsCallerResolver(
+                Settings.from_config(settings.server_config_file)
+            )
         except (ValueError, OSError):
-            return DisabledCallerResolver()
-    return IntrospectionCallerResolver(
-        IntrospectionSettings(
-            url=settings.introspection_url,
-            client_id=settings.introspection_client_id,
-            client_secret=settings.introspection_client_secret,
-            audience=settings.standard_api_audience,
-            timeout_seconds=settings.introspection_timeout_seconds,
+            resolver = DisabledCallerResolver()
+    else:
+        resolver = IntrospectionCallerResolver(
+            IntrospectionSettings(
+                url=settings.introspection_url,
+                client_id=settings.introspection_client_id,
+                client_secret=settings.introspection_client_secret,
+                audience=settings.standard_api_audience,
+                timeout_seconds=settings.introspection_timeout_seconds,
+            )
         )
-    )
+    if settings.delegation_redemption_url:
+        return DelegatedCallerResolver(
+            DelegationSettings(
+                redemption_url=settings.delegation_redemption_url,
+                caller_token=settings.delegation_caller_token,
+                redemption_token=settings.delegation_redemption_token,
+                audience=settings.standard_api_audience,
+                service_id=settings.delegation_service_id,
+                timeout_seconds=settings.delegation_timeout_seconds,
+            ),
+            fallback=resolver,
+        )
+    return resolver
 
 
 def _health_job_response(job: dict[str, Any]) -> dict[str, Any]:

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import base64
+import hmac
 import json
+import re
 import urllib.error
 import urllib.request
 from collections.abc import Mapping
@@ -37,7 +39,9 @@ class CallerAuthError(RuntimeError):
 
 
 class CallerContextResolver(Protocol):
-    def resolve(self, token: str, *, required_scope: str) -> ScopeContext: ...
+    def resolve(
+        self, token: str, *, required_scope: str, delegation_handle: str | None = None
+    ) -> ScopeContext: ...
 
 
 class OrderAuthorizer(Protocol):
@@ -76,8 +80,10 @@ class IntrospectionSettings:
 
 
 class DisabledCallerResolver:
-    def resolve(self, token: str, *, required_scope: str) -> ScopeContext:
-        del token, required_scope
+    def resolve(
+        self, token: str, *, required_scope: str, delegation_handle: str | None = None
+    ) -> ScopeContext:
+        del token, required_scope, delegation_handle
         raise CallerAuthError(
             "standard access-token validation is not configured",
             code=CALLER_AUTH_CONFIG_MISSING,
@@ -92,7 +98,10 @@ class UpmsCallerResolver:
             raise ValueError("UPMS caller validation requires AIOPS_UPMS_BASE_URL")
         self.resolver = ScopeResolver(UpmsDirectory(settings.upms))
 
-    def resolve(self, token: str, *, required_scope: str) -> ScopeContext:
+    def resolve(
+        self, token: str, *, required_scope: str, delegation_handle: str | None = None
+    ) -> ScopeContext:
+        del delegation_handle
         try:
             context = self.resolver.resolve(ScopeRequest(credential=token))
         except ScopeError as exc:
@@ -108,7 +117,10 @@ class IntrospectionCallerResolver:
         settings.validate()
         self.settings = settings
 
-    def resolve(self, token: str, *, required_scope: str) -> ScopeContext:
+    def resolve(
+        self, token: str, *, required_scope: str, delegation_handle: str | None = None
+    ) -> ScopeContext:
+        del delegation_handle
         if not token or token.startswith("aops_"):
             raise CallerAuthError("invalid access token", code=CALLER_AUTH_INVALID)
         payload = self._introspect(token)
@@ -185,6 +197,105 @@ class IntrospectionCallerResolver:
             ) from exc
         if not isinstance(payload, Mapping):
             raise CallerAuthError("invalid introspection response", code=CALLER_AUTH_INVALID)
+        return payload
+
+
+_DELEGATION_HANDLE = re.compile(r"^[A-Za-z0-9._~-]{20,256}$")
+
+
+@dataclass(frozen=True, slots=True)
+class DelegationSettings:
+    redemption_url: str
+    caller_token: str = field(repr=False)
+    redemption_token: str = field(repr=False)
+    audience: str = "aiops-api"
+    service_id: str = "java-bff"
+    timeout_seconds: int = 5
+
+    def validate(self) -> None:
+        parsed = urlsplit(self.redemption_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ValueError("delegation redemption URL must be complete")
+        if parsed.scheme == "http" and parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
+            raise ValueError("remote delegation redemption URL must use HTTPS")
+        if parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise ValueError("delegation redemption URL must not contain credentials, query, or fragment")
+        if not self.caller_token or not self.redemption_token or not self.audience or not self.service_id:
+            raise ValueError("delegation credentials, audience and service id are required")
+        if not 1 <= self.timeout_seconds <= 30:
+            raise ValueError("delegation timeout must be between 1 and 30 seconds")
+
+
+class DelegatedCallerResolver:
+    def __init__(
+        self, settings: DelegationSettings, *, fallback: CallerContextResolver | None = None
+    ) -> None:
+        settings.validate()
+        self.settings = settings
+        self.fallback = fallback
+
+    def resolve(
+        self,
+        token: str,
+        *,
+        required_scope: str,
+        delegation_handle: str | None = None,
+    ) -> ScopeContext:
+        if delegation_handle is None and self.fallback is not None:
+            return self.fallback.resolve(token, required_scope=required_scope)
+        if not hmac.compare_digest(token, self.settings.caller_token):
+            raise CallerAuthError("delegating service rejected", code=CALLER_AUTH_INVALID)
+        if not delegation_handle or not _DELEGATION_HANDLE.fullmatch(delegation_handle):
+            raise CallerAuthError("invalid delegation handle", code=CALLER_AUTH_INVALID)
+        payload = self._redeem(delegation_handle, required_scope)
+        if payload.get("active") is not True:
+            raise CallerAuthError("inactive delegation", code=CALLER_AUTH_INVALID)
+        if _text(payload.get("audience")) != self.settings.audience:
+            raise CallerAuthError("delegation audience is not accepted", code=CALLER_AUTH_INVALID)
+        if _text(payload.get("purpose")) != required_scope:
+            raise CallerAuthError("delegation purpose is insufficient", code=CALLER_AUTH_FORBIDDEN)
+        subject = payload.get("subject")
+        if not isinstance(subject, Mapping):
+            raise CallerAuthError("delegation subject is missing", code=CALLER_AUTH_INVALID)
+        c_user_id, tenant_id = _text(subject.get("user_id")), _text(subject.get("tenant_id"))
+        if not c_user_id or not tenant_id:
+            raise CallerAuthError("delegation subject is invalid", code=CALLER_AUTH_INVALID)
+        caller = SubjectRecord(b_user_id=f"service:{self.settings.service_id}", tenant_id=tenant_id)
+        target = SubjectRecord(b_user_id=f"delegated:{c_user_id}", c_user_id=c_user_id, tenant_id=tenant_id)
+        return ScopeContext.build(
+            caller=caller,
+            subject=target,
+            delegated=True,
+            effective_tenant_id=tenant_id,
+            data_scope=DataScope(type="self"),
+            roles=frozenset(),
+            permissions=frozenset({required_scope}),
+        )
+
+    def _redeem(self, handle: str, required_scope: str) -> Mapping[str, Any]:
+        body = json.dumps(
+            {"handle": handle, "audience": self.settings.audience, "purpose": required_scope},
+            separators=(",", ":"),
+        ).encode()
+        request = urllib.request.Request(self.settings.redemption_url, data=body, method="POST")
+        request.add_header("Authorization", f"Bearer {self.settings.redemption_token}")
+        request.add_header("Accept", "application/json")
+        request.add_header("Content-Type", "application/json")
+        try:
+            with urllib.request.urlopen(request, timeout=self.settings.timeout_seconds) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            if exc.code in {400, 401, 403, 404, 409, 410}:
+                raise CallerAuthError("delegation rejected", code=CALLER_AUTH_INVALID) from exc
+            raise CallerAuthError(
+                "delegation service is unavailable", code=CALLER_AUTH_UNAVAILABLE, retryable=True
+            ) from exc
+        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+            raise CallerAuthError(
+                "delegation service is unavailable", code=CALLER_AUTH_UNAVAILABLE, retryable=True
+            ) from exc
+        if not isinstance(payload, Mapping):
+            raise CallerAuthError("invalid delegation response", code=CALLER_AUTH_INVALID)
         return payload
 
 

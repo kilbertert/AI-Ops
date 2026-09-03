@@ -513,6 +513,16 @@ JWT 验签后端尚未实现，需先批准并引入 JOSE 依赖。当前证据�
 新增 `examples/synthetic-acceptance/` 和两个 runner：生成器输出完整、部分和越权三类生产结构仿真数据；执行器调用现有 `FixtureSources`、健康报告、曲线和指标逻辑，断言完整订单 400 点降采样为 300 点、部分订单 telemetry unavailable、跨租户订单 ORDER_NOT_FOUND。runner 通过，数据敏感字段扫描无命中。
 
 该结果只证明离线链路和数据契约可运行，不能替代 REAL-API-01..04 的真实 issuer、调用方、生产订单和业务人员验收。
+## C 端 thirdSession 委托适配验证（2026-09-03）
+
+验证范围：#111 的 AI-Ops 委托接收端和标准健康报告认证接缝。环境为本地 Python 3.13、临时 SQLite、HTTP TestClient；委托回查使用离线 transport fake，不连接公司 Java/BFF、真实 Redis、真实 thirdSession 或生产订单。
+
+- 新增 `tests/test_delegated_caller_auth.py`，覆盖有效句柄兑换建立 `ScopeContext`、服务身份校验、句柄格式、active/audience/purpose/主体字段校验、回查网络失败及裸身份注入。
+- 标准健康报告和诊断接口支持可选 `X-AIOps-Delegation`，无该头时保持现有 cloud-auth/UPMS fallback；资源契约和错误形状不变。
+- 结果：全套 **500+ pytest 通过**，Ruff 检查通过。
+
+未完成业务验收：Java/BFF 正式仓库和真实兑换端点尚未接入；不能将本次 fake 回查结果写成真实 C 端身份或订单权限验收结论。
+
 ## 公司 cloud-auth Bearer 适配验证（2026-09-02）
 
 新增 `UpmsCallerResolver`：Bearer token 原样交给现有 UPMS 用户/数据范围接口，解析为 ScopeContext；未配置 introspection 时标准 API 不再静默禁用，平台凭证失败仍 fail closed。没有复制 HS256 密钥或信任裸身份字段。当前仅完成离线/平台契约接线，真实 token 和订单验证待服务部署后执行。
