@@ -39,6 +39,7 @@ from aiops_diagnostics.gateway_store import (
 )
 from aiops_diagnostics.scope_context import ScopeContext, ScopeError
 from aiops_diagnostics.sources import SourceError
+from aiops_diagnostics.third_session_auth import RedisThirdSessionResolver, ThirdSessionSettings
 
 STANDARD_ORDER_READ_SCOPE = "aiops:orders:read"
 STANDARD_DIAGNOSIS_SCOPE = "aiops:diagnoses:write"
@@ -196,6 +197,7 @@ def create_gateway_app(
 
     def authenticated_caller(
         authorization: Annotated[str | None, Header()] = None,
+        x_third_session: Annotated[str | None, Header()] = None,
     ) -> ScopeContext:
         if not authorization or not authorization.startswith("Bearer "):
             raise StandardAPIError(
@@ -211,7 +213,11 @@ def create_gateway_app(
                 "access token validation failed",
             )
         try:
-            return context.caller_resolver.resolve(token, required_scope=STANDARD_ORDER_READ_SCOPE)
+            if x_third_session is None:
+                return context.caller_resolver.resolve(token, required_scope=STANDARD_ORDER_READ_SCOPE)
+            return context.caller_resolver.resolve(
+                token, required_scope=STANDARD_ORDER_READ_SCOPE, third_session=x_third_session
+            )
         except CallerAuthError as exc:
             if exc.code == CALLER_AUTH_FORBIDDEN:
                 status_code = status.HTTP_403_FORBIDDEN
@@ -233,6 +239,7 @@ def create_gateway_app(
 
     def authenticated_diagnosis_caller(
         authorization: Annotated[str | None, Header()] = None,
+        x_third_session: Annotated[str | None, Header()] = None,
     ) -> ScopeContext:
         if not authorization or not authorization.startswith("Bearer "):
             raise StandardAPIError(
@@ -248,7 +255,11 @@ def create_gateway_app(
                 "access token validation failed",
             )
         try:
-            return context.caller_resolver.resolve(token, required_scope=STANDARD_DIAGNOSIS_SCOPE)
+            if x_third_session is None:
+                return context.caller_resolver.resolve(token, required_scope=STANDARD_DIAGNOSIS_SCOPE)
+            return context.caller_resolver.resolve(
+                token, required_scope=STANDARD_DIAGNOSIS_SCOPE, third_session=x_third_session
+            )
         except CallerAuthError as exc:
             if exc.code == CALLER_AUTH_FORBIDDEN:
                 raise StandardAPIError(
@@ -561,6 +572,22 @@ def _sse(event: dict[str, Any]) -> str:
 
 
 def _caller_resolver(settings: GatewayServerSettings) -> CallerContextResolver:
+    if settings.third_session_service_token:
+        try:
+            runtime = Settings.from_config(settings.server_config_file)
+            return RedisThirdSessionResolver(
+                ThirdSessionSettings(
+                    host=runtime.redis.host,
+                    port=runtime.redis.port,
+                    database=runtime.redis.database,
+                    username=runtime.redis.user,
+                    password=runtime.redis.password,
+                    service_token=settings.third_session_service_token,
+                    key_prefix=settings.third_session_key_prefix,
+                )
+            )
+        except (ValueError, OSError):
+            return DisabledCallerResolver()
     if not settings.introspection_url:
         try:
             return UpmsCallerResolver(Settings.from_config(settings.server_config_file))

@@ -1,0 +1,106 @@
+from __future__ import annotations
+
+import json
+import secrets
+from dataclasses import dataclass, field
+from typing import Any
+
+import redis
+
+from aiops_diagnostics.caller_auth import (
+    CALLER_AUTH_INVALID,
+    CALLER_AUTH_UNAVAILABLE,
+    CallerAuthError,
+)
+from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
+
+
+@dataclass(frozen=True, slots=True)
+class ThirdSessionSettings:
+    host: str
+    port: int
+    database: int
+    username: str = ""
+    password: str = field(repr=False, default="")
+    service_token: str = field(repr=False, default="")
+    key_prefix: str = "app:3rd_session:"
+    timeout_seconds: int = 5
+
+
+class RedisThirdSessionResolver:
+    def __init__(self, settings: ThirdSessionSettings) -> None:
+        if not settings.password or not settings.service_token:
+            raise ValueError("thirdSession Redis and service credentials are required")
+        self.settings = settings
+
+    def resolve(self, token: str, *, required_scope: str, third_session: str | None = None) -> ScopeContext:
+        if not secrets.compare_digest(token, self.settings.service_token):
+            raise CallerAuthError("service authentication failed", code=CALLER_AUTH_INVALID)
+        if not third_session or len(third_session) > 256 or any(c in third_session for c in "\r\n"):
+            raise CallerAuthError("thirdSession is invalid", code=CALLER_AUTH_INVALID)
+        try:
+            client = redis.Redis(
+                host=self.settings.host,
+                port=self.settings.port,
+                db=self.settings.database,
+                username=self.settings.username or None,
+                password=self.settings.password,
+                decode_responses=False,
+                socket_connect_timeout=self.settings.timeout_seconds,
+                socket_timeout=self.settings.timeout_seconds,
+            )
+            raw = client.get(f"{self.settings.key_prefix}{third_session}")
+            if raw and b"{" not in raw:
+                pointer = _decode_java_string(raw)
+                if pointer.startswith(self.settings.key_prefix):
+                    pointer = pointer[len(self.settings.key_prefix) :]
+                if pointer and pointer.startswith("wx:"):
+                    raw = client.get(f"{self.settings.key_prefix}{pointer}")
+        except redis.RedisError as exc:
+            raise CallerAuthError(
+                "thirdSession store unavailable", code=CALLER_AUTH_UNAVAILABLE, retryable=True
+            ) from exc
+        if not raw:
+            raise CallerAuthError("thirdSession invalid or expired", code=CALLER_AUTH_INVALID)
+        try:
+            payload: Any = _decode_session_payload(raw)
+        except json.JSONDecodeError as exc:
+            raise CallerAuthError("thirdSession payload invalid", code=CALLER_AUTH_INVALID) from exc
+        if not isinstance(payload, dict):
+            raise CallerAuthError("thirdSession payload invalid", code=CALLER_AUTH_INVALID)
+        user_id = str(payload.get("userId") or payload.get("user_id") or "").strip()
+        tenant_id = str(payload.get("tenantId") or payload.get("tenant_id") or "").strip()
+        if not user_id or not tenant_id:
+            raise CallerAuthError("thirdSession subject invalid", code=CALLER_AUTH_INVALID)
+        subject = SubjectRecord(b_user_id=f"c:{user_id}", c_user_id=user_id, tenant_id=tenant_id)
+        caller = SubjectRecord(b_user_id="service:java-bff", tenant_id=tenant_id)
+        return ScopeContext.build(
+            caller=caller,
+            subject=subject,
+            delegated=True,
+            effective_tenant_id=tenant_id,
+            data_scope=DataScope(type="self"),
+            roles=frozenset(),
+            permissions=frozenset({required_scope}),
+        )
+
+
+def _decode_session_payload(raw: str | bytes) -> dict[str, Any]:
+    """Read the JSON string embedded by Java ObjectOutputStream without deserializing objects."""
+    data = raw if isinstance(raw, bytes) else raw.encode("utf-8")
+    start = data.find(b"{")
+    end = data.rfind(b"}")
+    if start < 0 or end < start:
+        raise json.JSONDecodeError("session JSON not found", data.decode("utf-8", "ignore"), 0)
+    payload = json.loads(data[start : end + 1].decode("utf-8"))
+    if not isinstance(payload, dict):
+        raise json.JSONDecodeError("session JSON is not an object", "", 0)
+    return payload
+
+
+def _decode_java_string(raw: bytes) -> str:
+    start = raw.find(b"t\x00")
+    if start < 0:
+        return ""
+    size = raw[start + 2]
+    return raw[start + 3 : start + 3 + size].decode("utf-8", "ignore")

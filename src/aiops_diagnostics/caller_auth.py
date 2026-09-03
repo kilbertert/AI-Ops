@@ -37,7 +37,9 @@ class CallerAuthError(RuntimeError):
 
 
 class CallerContextResolver(Protocol):
-    def resolve(self, token: str, *, required_scope: str) -> ScopeContext: ...
+    def resolve(
+        self, token: str, *, required_scope: str, third_session: str | None = None
+    ) -> ScopeContext: ...
 
 
 class OrderAuthorizer(Protocol):
