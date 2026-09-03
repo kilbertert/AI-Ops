@@ -45,17 +45,11 @@ class RedisThirdSessionResolver:
                 db=self.settings.database,
                 username=self.settings.username or None,
                 password=self.settings.password,
-                decode_responses=False,
+                decode_responses=True,
                 socket_connect_timeout=self.settings.timeout_seconds,
                 socket_timeout=self.settings.timeout_seconds,
             )
             raw = client.get(f"{self.settings.key_prefix}{third_session}")
-            if raw and b"{" not in raw:
-                pointer = _decode_java_string(raw)
-                if pointer.startswith(self.settings.key_prefix):
-                    pointer = pointer[len(self.settings.key_prefix) :]
-                if pointer and pointer.startswith("wx:"):
-                    raw = client.get(f"{self.settings.key_prefix}{pointer}")
         except redis.RedisError as exc:
             raise CallerAuthError(
                 "thirdSession store unavailable", code=CALLER_AUTH_UNAVAILABLE, retryable=True
@@ -96,11 +90,3 @@ def _decode_session_payload(raw: str | bytes) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise json.JSONDecodeError("session JSON is not an object", "", 0)
     return payload
-
-
-def _decode_java_string(raw: bytes) -> str:
-    start = raw.find(b"t\x00")
-    if start < 0:
-        return ""
-    size = raw[start + 2]
-    return raw[start + 3 : start + 3 + size].decode("utf-8", "ignore")
