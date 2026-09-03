@@ -111,6 +111,14 @@ AIOPS_PROVIDER_GPT_PSYDO_KEY_SLOT=psydo-primary
 `remote diagnose --provider gpt-psydo` 按运行切换 fallback provider；不传则用默认。
 `agent-doctor --provider <name>` 可单独验证某个 provider 的 key 与 runtime。
 
+### C 端 thirdSession 调用
+
+小程序继续调用 Java 业务后端，不需要获取 `cloud-auth JWT`。Java 验证 `thirdSession` 后调用
+AI-Ops，携带 `Authorization: Bearer <service-token>` 和 `X-Third-Session: <thirdSession>`。
+Gateway 使用只读 Redis 读取 `app:3rd_session:<thirdSession>`；Java 序列化外壳内嵌的 JSON
+只被提取解析，不执行 Java 对象反序列化。截图 token `76ea8a54-12d7-4889-823e-edded054a7218`
+在测试业务 Redis 中不存在，判定为过期或其他环境 token，不能用于真实验收。
+
 ### 客户端
 
 新电脑只需一次注册：
