@@ -29,7 +29,7 @@ class GatewayServerSettings:
     standard_api_audience: str = "aiops-api"
     introspection_timeout_seconds: int = 5
     third_session_service_token: str = ""
-    third_session_key_prefix: str = "third_session:"
+    third_session_key_prefix: str = "app:3rd_session:"
 
     @classmethod
     def from_env(cls) -> GatewayServerSettings:
@@ -61,7 +61,7 @@ class GatewayServerSettings:
             standard_api_audience=_env("AIOPS_GATEWAY_STANDARD_API_AUDIENCE", "aiops-api"),
             introspection_timeout_seconds=_env_int("AIOPS_GATEWAY_INTROSPECTION_TIMEOUT_SECONDS", 5),
             third_session_service_token=_env("AIOPS_GATEWAY_THIRD_SESSION_SERVICE_TOKEN"),
-            third_session_key_prefix=_env("AIOPS_GATEWAY_THIRD_SESSION_KEY_PREFIX", "third_session:"),
+            third_session_key_prefix=_env("AIOPS_GATEWAY_THIRD_SESSION_KEY_PREFIX", "app:3rd_session:"),
         )
 
     def validate(self) -> None:
