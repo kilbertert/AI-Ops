@@ -78,8 +78,8 @@ class IntrospectionSettings:
 
 
 class DisabledCallerResolver:
-    def resolve(self, token: str, *, required_scope: str) -> ScopeContext:
-        del token, required_scope
+    def resolve(self, token: str, *, required_scope: str, third_session: str | None = None) -> ScopeContext:
+        del token, required_scope, third_session
         raise CallerAuthError(
             "standard access-token validation is not configured",
             code=CALLER_AUTH_CONFIG_MISSING,
@@ -94,7 +94,8 @@ class UpmsCallerResolver:
             raise ValueError("UPMS caller validation requires AIOPS_UPMS_BASE_URL")
         self.resolver = ScopeResolver(UpmsDirectory(settings.upms))
 
-    def resolve(self, token: str, *, required_scope: str) -> ScopeContext:
+    def resolve(self, token: str, *, required_scope: str, third_session: str | None = None) -> ScopeContext:
+        del third_session
         try:
             context = self.resolver.resolve(ScopeRequest(credential=token))
         except ScopeError as exc:
@@ -110,7 +111,8 @@ class IntrospectionCallerResolver:
         settings.validate()
         self.settings = settings
 
-    def resolve(self, token: str, *, required_scope: str) -> ScopeContext:
+    def resolve(self, token: str, *, required_scope: str, third_session: str | None = None) -> ScopeContext:
+        del third_session
         if not token or token.startswith("aops_"):
             raise CallerAuthError("invalid access token", code=CALLER_AUTH_INVALID)
         payload = self._introspect(token)
