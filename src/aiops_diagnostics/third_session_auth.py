@@ -23,7 +23,7 @@ class ThirdSessionSettings:
     username: str = ""
     password: str = field(repr=False, default="")
     service_token: str = field(repr=False, default="")
-    key_prefix: str = "third_session:"
+    key_prefix: str = "app:3rd_session:"
     timeout_seconds: int = 5
 
 
@@ -57,7 +57,7 @@ class RedisThirdSessionResolver:
         if not raw:
             raise CallerAuthError("thirdSession invalid or expired", code=CALLER_AUTH_INVALID)
         try:
-            payload: Any = json.loads(raw)
+            payload: Any = _decode_session_payload(raw)
         except json.JSONDecodeError as exc:
             raise CallerAuthError("thirdSession payload invalid", code=CALLER_AUTH_INVALID) from exc
         if not isinstance(payload, dict):
@@ -77,3 +77,16 @@ class RedisThirdSessionResolver:
             roles=frozenset(),
             permissions=frozenset({required_scope}),
         )
+
+
+def _decode_session_payload(raw: str | bytes) -> dict[str, Any]:
+    """Read the JSON string embedded by Java ObjectOutputStream without deserializing objects."""
+    data = raw if isinstance(raw, bytes) else raw.encode("utf-8")
+    start = data.find(b"{")
+    end = data.rfind(b"}")
+    if start < 0 or end < start:
+        raise json.JSONDecodeError("session JSON not found", data.decode("utf-8", "ignore"), 0)
+    payload = json.loads(data[start : end + 1].decode("utf-8"))
+    if not isinstance(payload, dict):
+        raise json.JSONDecodeError("session JSON is not an object", "", 0)
+    return payload
