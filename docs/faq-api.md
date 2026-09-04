@@ -6,6 +6,8 @@
 
 业务后端或 BFF 调用 AI-Ops 时使用服务 Bearer，并转发已验证的 `thirdSession`。对于可能同时存在客户端和管家端关联的 C 端用户，BFF 还必须传递可信的 `X-Business-Entry`：`consumer` 或 `operator`。这个请求头只应由服务端设置，不能让小程序直接控制。
 
+前端联调责任、旧接口迁移和页面分流见 [固定问答前端联调简报](agents/frontend-api-brief.md)。
+
 测试环境 Base URL：`https://aiops-api-test.ranlei.work`
 
 公共请求头：
@@ -18,9 +20,17 @@ X-Business-Entry: consumer
 
 ## 接口
 
+完整测试 URL：
+
+- `GET https://aiops-api-test.ranlei.work/v1/faq/recommendations`
+- `GET https://aiops-api-test.ranlei.work/v1/faq/catalog`
+- `POST https://aiops-api-test.ranlei.work/v1/faq/answer`
+
+上述 URL 供受信任业务后端/BFF 联调。前端不得直接持有 `aiops-service-token`；前端实际地址由 BFF 暴露。
+
 ### `GET /v1/faq/recommendations`
 
-返回当前平台的推荐问题。推荐项只有展示字段，不包含答案。
+返回当前平台的完整推荐候选。推荐项只有展示字段，不包含答案；前端可随版本选择其中一部分展示。
 
 ```json
 {
@@ -90,3 +100,9 @@ X-Business-Entry: consumer
 ## 内容版本
 
 目录制品由 `tools/generate_faq_catalog.py` 从本地业务 DOCX 生成。DOCX 被 `.gitignore` 忽略，不能提交；生成后的 JSON 是服务运行时制品。内容变更通过代码评审、自动化校验和版本发布完成，废弃的 `question_id` 不复用。
+
+## 真实验收状态
+
+2026-09-04 使用测试 Gateway 和当前有效真实 C 端会话完成 consumer 推荐、目录和固定答案调用，均返回 HTTP 200；跨平台问题 ID 返回 404 `FAQ_NOT_FOUND`，无 B 端映射时 operator 入口返回 503 `PLATFORM_UNAVAILABLE`。验收过程未记录会话、用户或租户原文。
+
+当前可解析会话集合中未找到唯一 B 端主体映射，operator 成功链路待有效管家用户会话，不将 consumer 通过结果扩写为管家端验收通过。
