@@ -27,6 +27,17 @@ from aiops_diagnostics.caller_auth import (
     UpmsCallerResolver,
 )
 from aiops_diagnostics.config import Settings
+from aiops_diagnostics.faq import (
+    FAQ_NOT_FOUND,
+    PLATFORM_AMBIGUOUS,
+    PLATFORM_FORBIDDEN,
+    PLATFORM_UNAVAILABLE,
+    FAQCatalog,
+    FAQError,
+    MySQLPlatformDirectory,
+    PlatformDirectoryError,
+    PlatformIdentityResolver,
+)
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_runtime import GatewayRuntime, close_gateway_runtime
 from aiops_diagnostics.gateway_store import (
@@ -43,6 +54,7 @@ from aiops_diagnostics.third_session_auth import RedisThirdSessionResolver, Thir
 
 STANDARD_ORDER_READ_SCOPE = "aiops:orders:read"
 STANDARD_DIAGNOSIS_SCOPE = "aiops:diagnoses:write"
+STANDARD_FAQ_SCOPE = "aiops:faq:read"
 SAFE_ORDER_NO = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
 
 
@@ -83,6 +95,12 @@ class StandardDiagnosisRequest(BaseModel):
     )
 
 
+class FAQAnswerRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    question_id: str = Field(min_length=1, max_length=128, pattern=r"^[a-z]+\.[a-z0-9-]+\.q[0-9]{3}$")
+
+
 class GatewayAPI:
     def __init__(
         self,
@@ -91,12 +109,16 @@ class GatewayAPI:
         runtime: GatewayRuntime,
         caller_resolver: CallerContextResolver,
         order_authorizer: OrderAuthorizer,
+        platform_resolver: PlatformIdentityResolver,
+        faq_catalog: FAQCatalog,
     ) -> None:
         self.settings = settings
         self.store = store
         self.runtime = runtime
         self.caller_resolver = caller_resolver
         self.order_authorizer = order_authorizer
+        self.platform_resolver = platform_resolver
+        self.faq_catalog = faq_catalog
 
 
 class StandardAPIError(RuntimeError):
@@ -122,6 +144,8 @@ def create_gateway_app(
     runtime: GatewayRuntime | None = None,
     caller_resolver: CallerContextResolver | None = None,
     order_authorizer: OrderAuthorizer | None = None,
+    platform_resolver: PlatformIdentityResolver | None = None,
+    faq_catalog: FAQCatalog | None = None,
 ) -> FastAPI:
     selected_settings = settings or GatewayServerSettings.from_env()
     selected_settings.validate()
@@ -134,12 +158,25 @@ def create_gateway_app(
         if diagnostic_settings is not None
         else DisabledOrderAuthorizer()
     )
+    if platform_resolver is not None:
+        selected_platform_resolver = platform_resolver
+    else:
+        try:
+            platform_settings = Settings.from_config(selected_settings.server_config_file)
+        except (ValueError, OSError):
+            # Keep existing non-FAQ endpoints bootable; FAQ requests fail closed
+            # when the production identity configuration is unavailable.
+            platform_settings = Settings()
+        selected_platform_resolver = PlatformIdentityResolver(MySQLPlatformDirectory(platform_settings))
+    selected_faq_catalog = faq_catalog or FAQCatalog.bundled()
     context = GatewayAPI(
         selected_settings,
         selected_store,
         selected_runtime,
         selected_resolver,
         selected_authorizer,
+        selected_platform_resolver,
+        selected_faq_catalog,
     )
 
     @asynccontextmanager
@@ -274,6 +311,44 @@ def create_gateway_app(
                 retryable=exc.retryable,
             ) from exc
 
+    def authenticated_faq_caller(
+        authorization: Annotated[str | None, Header()] = None,
+        x_third_session: Annotated[str | None, Header()] = None,
+    ) -> ScopeContext:
+        return _authenticate_caller(
+            context.caller_resolver,
+            authorization,
+            x_third_session,
+            required_scope=STANDARD_FAQ_SCOPE,
+        )
+
+    def faq_identity(
+        caller: ScopeContext = Depends(authenticated_faq_caller),  # noqa: B008
+        business_entry: Annotated[str | None, Header(alias="X-Business-Entry")] = None,
+    ) -> tuple[ScopeContext, Any]:
+        try:
+            decision = context.platform_resolver.resolve(caller, business_entry)
+        except FAQError as exc:
+            status_code = {
+                PLATFORM_AMBIGUOUS: status.HTTP_409_CONFLICT,
+                PLATFORM_FORBIDDEN: status.HTTP_403_FORBIDDEN,
+                PLATFORM_UNAVAILABLE: status.HTTP_503_SERVICE_UNAVAILABLE,
+            }.get(exc.code, status.HTTP_503_SERVICE_UNAVAILABLE)
+            raise StandardAPIError(
+                status_code,
+                exc.code,
+                str(exc),
+                retryable=exc.code == PLATFORM_UNAVAILABLE,
+            ) from exc
+        except PlatformDirectoryError as exc:
+            raise StandardAPIError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                PLATFORM_UNAVAILABLE,
+                "platform identity unavailable",
+                retryable=True,
+            ) from exc
+        return caller, decision
+
     @app.get("/health")
     def health() -> dict[str, Any]:
         return {
@@ -283,6 +358,45 @@ def create_gateway_app(
             "api_version": "v1",
             "platform": platform.system().lower(),
             "business_mutations": "disabled",
+        }
+
+    @app.get("/v1/faq/recommendations")
+    def faq_recommendations(identity: tuple[ScopeContext, Any] = Depends(faq_identity)):  # noqa: B008
+        _, decision = identity
+        return {
+            **decision.public(),
+            "faq_version": context.faq_catalog.version,
+            "recommendations": context.faq_catalog.recommendations(decision.platform),
+        }
+
+    @app.get("/v1/faq/catalog")
+    def faq_catalog(identity: tuple[ScopeContext, Any] = Depends(faq_identity)):  # noqa: B008
+        _, decision = identity
+        return {
+            **decision.public(),
+            "faq_version": context.faq_catalog.version,
+            "entries": context.faq_catalog.catalog(decision.platform),
+        }
+
+    @app.post("/v1/faq/answer")
+    def faq_answer(
+        payload: FAQAnswerRequest,
+        identity: tuple[ScopeContext, Any] = Depends(faq_identity),  # noqa: B008
+    ):
+        _, decision = identity
+        try:
+            answer = context.faq_catalog.answer(decision.platform, payload.question_id)
+        except FAQError as exc:
+            raise StandardAPIError(
+                status.HTTP_404_NOT_FOUND, FAQ_NOT_FOUND, "FAQ question was not found"
+            ) from exc
+        return {
+            **decision.public(),
+            "faq_version": context.faq_catalog.version,
+            "question_id": answer["question_id"],
+            "question": answer["question"],
+            "answer": answer["answer"],
+            "format": answer["format"],
         }
 
     @app.get("/v1/orders/{order_no}/access")
@@ -602,6 +716,41 @@ def _caller_resolver(settings: GatewayServerSettings) -> CallerContextResolver:
             timeout_seconds=settings.introspection_timeout_seconds,
         )
     )
+
+
+def _authenticate_caller(
+    resolver: CallerContextResolver,
+    authorization: str | None,
+    third_session: str | None,
+    *,
+    required_scope: str,
+) -> ScopeContext:
+    if not authorization or not authorization.startswith("Bearer "):
+        raise StandardAPIError(status.HTTP_401_UNAUTHORIZED, "ACCESS_TOKEN_REQUIRED", "access token required")
+    token = authorization.removeprefix("Bearer ").strip()
+    if token.startswith("aops_"):
+        raise StandardAPIError(
+            status.HTTP_401_UNAUTHORIZED,
+            "INVALID_ACCESS_TOKEN",
+            "access token validation failed",
+        )
+    try:
+        if third_session is None:
+            return resolver.resolve(token, required_scope=required_scope)
+        return resolver.resolve(token, required_scope=required_scope, third_session=third_session)
+    except CallerAuthError as exc:
+        if exc.code == CALLER_AUTH_FORBIDDEN:
+            status_code, code = status.HTTP_403_FORBIDDEN, "INSUFFICIENT_SCOPE"
+        elif exc.code == CALLER_AUTH_CONFIG_MISSING:
+            status_code, code = status.HTTP_503_SERVICE_UNAVAILABLE, "ACCESS_TOKEN_VALIDATION_UNAVAILABLE"
+        else:
+            status_code = (
+                status.HTTP_503_SERVICE_UNAVAILABLE if exc.retryable else status.HTTP_401_UNAUTHORIZED
+            )
+            code = "ACCESS_TOKEN_VALIDATION_UNAVAILABLE" if exc.retryable else "INVALID_ACCESS_TOKEN"
+        raise StandardAPIError(
+            status_code, code, "access token validation failed", retryable=exc.retryable
+        ) from exc
 
 
 def _health_job_response(job: dict[str, Any]) -> dict[str, Any]:
