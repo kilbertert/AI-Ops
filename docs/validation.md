@@ -9,6 +9,7 @@
 - 真实只读探查确认 `qumall_upms.sys_user`、`sys_user_role`、`sys_role` 的关联字段可用；`client_type` 观察到 `admin`、`tenant-app`、`MA`、`supply-admin`，同一 C 用户存在多个 B 主体的真实记录。
 - 生成器从未追踪的 `用户端.docx`、`管家端.docx` 提取 28/17 条固定问答，生成版本化目录与推荐 JSON；DOCX 不进入 Git。
 - `tests/test_faq.py` 和 `tests/test_faq_gateway_api.py` 覆盖无 B 绑定、唯一/多 B 主体、入口隔离、前缀校验、额外字段拒绝、同步答案和无诊断副作用。
+- #132 加固继续覆盖未知角色、跨租户映射、非法业务入口和不可信 `platform` 查询参数；身份与答案采用零缓存，避免陈旧授权。
 
 当前结果：离线实现验证通过；真实 BFF 请求、真实 C 端会话和前端联调尚未完成，不能宣称生产平台权限或业务验收通过。
 

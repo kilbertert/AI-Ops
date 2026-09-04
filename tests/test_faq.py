@@ -56,7 +56,7 @@ def test_consumer_identity_without_b_binding_is_available() -> None:
 
 
 def test_operator_entry_requires_one_operator_subject() -> None:
-    records = (PlatformRoleRecord("B-1", "C-1", "T-1", "admin"),)
+    records = (PlatformRoleRecord("B-1", "C-1", "T-1", "ADMIN"),)
     decision = PlatformIdentityResolver(_Directory(records)).resolve(_context(), "operator")
     assert decision.platform == PLATFORM_OPERATOR
     assert decision.b_subject_ids == ("B-1",)
@@ -89,6 +89,37 @@ def test_b_identity_cannot_use_consumer_entry() -> None:
         assert exc.code == PLATFORM_FORBIDDEN
     else:
         raise AssertionError("expected consumer platform rejection")
+
+
+def test_unknown_role_does_not_create_operator_platform() -> None:
+    records = (PlatformRoleRecord("B-1", "C-1", "T-1", "unknown"),)
+    decision = PlatformIdentityResolver(_Directory(records)).resolve(_context(), "consumer")
+    assert decision.available_platforms == (PLATFORM_CONSUMER,)
+    try:
+        PlatformIdentityResolver(_Directory(records)).resolve(_context(), "operator")
+    except FAQError as exc:
+        assert exc.code == "PLATFORM_UNAVAILABLE"
+    else:
+        raise AssertionError("expected operator rejection")
+
+
+def test_cross_tenant_mapping_fails_closed() -> None:
+    records = (PlatformRoleRecord("B-1", "C-1", "T-OTHER", "admin"),)
+    try:
+        PlatformIdentityResolver(_Directory(records)).resolve(_context(), "consumer")
+    except FAQError as exc:
+        assert exc.code == "PLATFORM_UNAVAILABLE"
+    else:
+        raise AssertionError("expected cross-tenant rejection")
+
+
+def test_invalid_business_entry_is_forbidden() -> None:
+    try:
+        PlatformIdentityResolver(_Directory()).resolve(_context(), "operator-admin")
+    except FAQError as exc:
+        assert exc.code == PLATFORM_FORBIDDEN
+    else:
+        raise AssertionError("expected invalid entry rejection")
 
 
 def test_catalog_is_bundled_and_platform_prefixed() -> None:

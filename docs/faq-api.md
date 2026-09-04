@@ -83,6 +83,10 @@ X-Business-Entry: consumer
 | 404 | `FAQ_NOT_FOUND` | 未知、下线或跨平台问题 ID |
 | 503 | `PLATFORM_UNAVAILABLE` | UPMS/只读身份依赖不可用或角色无法解析 |
 
+## 缓存策略
+
+身份判定和答案默认不做服务端缓存（等价于 TTL 0），避免角色或租户权限变化时使用陈旧结果；如果后续有明确性能需求，只允许按身份摘要、`faq_version` 和 `question_id` 做私有缓存，TTL 不超过 60 秒。
+
 ## 内容版本
 
 目录制品由 `tools/generate_faq_catalog.py` 从本地业务 DOCX 生成。DOCX 被 `.gitignore` 忽略，不能提交；生成后的 JSON 是服务运行时制品。内容变更通过代码评审、自动化校验和版本发布完成，废弃的 `question_id` 不复用。
