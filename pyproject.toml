@@ -56,6 +56,8 @@ packages = ["src/aiops_diagnostics"]
 "src/aiops_diagnostics/engine.py" = "aiops_diagnostics/_bundle/src/aiops_diagnostics/engine.py"
 "src/aiops_diagnostics/rules.py" = "aiops_diagnostics/_bundle/src/aiops_diagnostics/rules.py"
 "examples/fixtures" = "aiops_diagnostics/_bundle/examples/fixtures"
+"src/aiops_diagnostics/faq_catalog.json" = "aiops_diagnostics/faq_catalog.json"
+"src/aiops_diagnostics/faq_recommendations.json" = "aiops_diagnostics/faq_recommendations.json"
 
 [tool.pytest.ini_options]
 addopts = "-q"
