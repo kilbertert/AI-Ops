@@ -352,3 +352,34 @@ workflow YAML 不适用复杂度或 mutation 工具；安全状态机由模板�
 - 动作：分别创建和查询两类资源。
 - 预期：共享 Bearer 与稳定 error.code/message/retryable 形状；资源 ID、状态和结果互不串扰；客户端不会看到内部字段。
 - 清理：删除临时 SQLite。
+
+## 固定问答与 C/B 平台 QA 计划
+
+## FAQ-01 目录生成
+
+- 环境：本地 AI-Ops checkout，使用业务 DOCX 文件作为未追踪输入。
+- 前置：两个 DOCX 可读；输出目录为空或已有上一版目录。
+- 数据：用户端和管家端 DOCX。
+- 动作：运行 `uv run python tools/generate_faq_catalog.py`，校验 JSON 语法、版本、数量、前缀和推荐字段边界。
+- 预期：生成 28 条 consumer、17 条 operator；推荐项不含答案；原文换行、数字和符号保留；重复/冲突统计可见。
+- 清理：删除临时输出；不把 DOCX 加入 Git。
+
+## FAQ-02 平台判定
+
+- 环境：本地 TestClient，fake thirdSession caller 与 fake UPMS 目录。
+- 前置：C 端无 B 绑定、唯一 B 绑定、多 B 绑定和未知角色数据。
+- 数据：consumer/operator 入口及缺失入口。
+- 动作：调用推荐和目录接口。
+- 预期：客户端入口返回 consumer；唯一管家主体返回 operator；多主体返回 409 `PLATFORM_AMBIGUOUS`；错误不泄露凭据。
+- 清理：删除临时 SQLite。
+
+## FAQ-03 答案与隔离
+
+- 环境：本地 TestClient。
+- 前置：已加载版本化 FAQ 制品。
+- 数据：有效 question_id、未知 ID、跨平台 ID、带额外字段的请求。
+- 动作：调用推荐、目录和答案接口。
+- 预期：推荐不含答案；答案同步 200 且保留原文；跨平台/未知 ID 为 404 `FAQ_NOT_FOUND`；额外字段为 422 `INVALID_REQUEST`；不产生诊断资源。
+- 清理：删除临时 SQLite。
+
+证据要求：FAQ-01..03 记录提交、环境、时间戳和测试日志；不把目录 fixture 或离线身份 fake 写成真实业务权限验收。

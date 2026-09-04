@@ -119,6 +119,13 @@ Gateway 使用只读 Redis 读取 `app:3rd_session:<thirdSession>`；Java 序列
 只被提取解析，不执行 Java 对象反序列化。截图 token `76ea8a54-12d7-4889-823e-edded054a7218`
 在测试业务 Redis 中不存在，判定为过期或其他环境 token，不能用于真实验收。
 
+### 固定问答调用
+
+业务后端可使用服务 Bearer、`X-Third-Session` 和可信的 `X-Business-Entry` 调用
+`/v1/faq/recommendations`、`/v1/faq/catalog` 与 `/v1/faq/answer`。平台由 AI-Ops
+根据 C/B 身份关联和 UPMS 角色判定，前端不传 `platform` 或裸身份字段。完整输入输出见
+[固定问答标准接口](faq-api.md)。
+
 ### 客户端
 
 新电脑只需一次注册：
