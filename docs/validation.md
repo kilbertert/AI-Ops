@@ -17,6 +17,10 @@
 
 测试部署证据：2026-09-04T04:07:31Z，用户级 `aiops-gateway.service` 运行部署提交 `a4702fa`。`https://aiops-api-test.ranlei.work/health` 返回 200；使用私有服务令牌、无效 thirdSession 和 `X-Business-Entry: consumer` 调用 `/v1/faq/recommendations` 返回 401 `INVALID_ACCESS_TOKEN`。这证明公网入口、服务令牌配置读取和 thirdSession 失效语义，未证明有效 C 端会话或生产 FAQ 内容权限。
 
+真实 C 端补充验收：2026-09-04 使用当前业务 Redis 中有效会话（仅保留脱敏审计摘要）调用同一公网地址。consumer 推荐、目录和 `consumer.faq.q001` 答案分别返回 200，数量为 28/28，答案格式为 `text`；以 consumer 身份请求 `operator.faq.q001` 返回 404 `FAQ_NOT_FOUND`；请求 operator 入口返回 503 `PLATFORM_UNAVAILABLE`。固定问答过程中未创建诊断资源、未查询订单、未调用模型。
+
+当前可解析会话中未找到唯一 B 端主体映射，operator 成功路径仍为阻塞，不能宣称管家端真实业务验收完成。
+
 ## 基础设施边界
 
 2026-07-31 已使用专用身份、无业务写入地验证生产访问路径：
