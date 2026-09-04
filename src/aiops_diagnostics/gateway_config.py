@@ -6,8 +6,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from dotenv import dotenv_values
+
 from aiops_diagnostics.config import selected_config_file, validate_key_slot_name
 from aiops_diagnostics.platform_paths import config_root, data_root
+from aiops_diagnostics.private_files import PrivatePathError, validate_private_file
 
 SAFE_PROFILE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 
@@ -36,6 +39,12 @@ class GatewayServerSettings:
         data_home = Path(_env("AIOPS_GATEWAY_DATA_HOME") or data_root() / "gateway").expanduser()
         database_file = Path(_env("AIOPS_GATEWAY_DATABASE_FILE") or data_home / "gateway.db").expanduser()
         configured_server_file = _env("AIOPS_GATEWAY_SERVER_CONFIG_FILE")
+        server_config_file = (
+            Path(configured_server_file).expanduser().resolve()
+            if configured_server_file
+            else selected_config_file()
+        )
+        file_values = _private_config_values(server_config_file)
         slots = tuple(
             validate_key_slot_name(item.strip())
             for item in _env("AIOPS_GATEWAY_ALLOWED_KEY_SLOTS").split(",")
@@ -60,8 +69,10 @@ class GatewayServerSettings:
             introspection_client_secret=_env("AIOPS_GATEWAY_INTROSPECTION_CLIENT_SECRET"),
             standard_api_audience=_env("AIOPS_GATEWAY_STANDARD_API_AUDIENCE", "aiops-api"),
             introspection_timeout_seconds=_env_int("AIOPS_GATEWAY_INTROSPECTION_TIMEOUT_SECONDS", 5),
-            third_session_service_token=_env("AIOPS_GATEWAY_THIRD_SESSION_SERVICE_TOKEN"),
-            third_session_key_prefix=_env("AIOPS_GATEWAY_THIRD_SESSION_KEY_PREFIX", "app:3rd_session:"),
+            third_session_service_token=_env("AIOPS_GATEWAY_THIRD_SESSION_SERVICE_TOKEN")
+            or _file_value(file_values, "AIOPS_GATEWAY_THIRD_SESSION_SERVICE_TOKEN"),
+            third_session_key_prefix=_env("AIOPS_GATEWAY_THIRD_SESSION_KEY_PREFIX")
+            or _file_value(file_values, "AIOPS_GATEWAY_THIRD_SESSION_KEY_PREFIX", "app:3rd_session:"),
         )
 
     def validate(self) -> None:
@@ -147,3 +158,17 @@ def _env_bool(name: str, default: bool = False) -> bool:
     if not raw:
         return default
     return raw.lower() in {"1", "true", "yes", "on"}
+
+
+def _private_config_values(path: Path) -> dict[str, str | None]:
+    if not path.is_file():
+        return {}
+    try:
+        validate_private_file(path)
+    except PrivatePathError:
+        return {}
+    return dict(dotenv_values(path))
+
+
+def _file_value(values: dict[str, str | None], name: str, default: str = "") -> str:
+    return (values.get(name) or default).strip()

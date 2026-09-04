@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from aiops_diagnostics.config import DisSettings, ProviderConfig, Settings, SSHSettings, UpmsSettings
+from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.private_files import write_private_text
 
 
@@ -72,6 +73,23 @@ def test_private_config_file_loads_values_but_environment_wins(tmp_path: Path, m
     assert settings.mysql.port == 3307
     assert settings.mysql.password == "abc#def"
     assert settings.agent.codex_bin
+
+
+def test_gateway_reads_third_session_token_from_private_server_config(tmp_path: Path, monkeypatch) -> None:
+    config = tmp_path / "gateway.env"
+    write_private_text(
+        config,
+        "AIOPS_GATEWAY_THIRD_SESSION_SERVICE_TOKEN=service-token\n"
+        "AIOPS_GATEWAY_THIRD_SESSION_KEY_PREFIX=app:test-session:\n",
+    )
+    monkeypatch.setenv("AIOPS_GATEWAY_SERVER_CONFIG_FILE", str(config))
+    monkeypatch.delenv("AIOPS_GATEWAY_THIRD_SESSION_SERVICE_TOKEN", raising=False)
+    monkeypatch.delenv("AIOPS_GATEWAY_THIRD_SESSION_KEY_PREFIX", raising=False)
+
+    settings = GatewayServerSettings.from_env()
+
+    assert settings.third_session_service_token == "service-token"
+    assert settings.third_session_key_prefix == "app:test-session:"
 
 
 def test_windows_style_home_override_is_platform_independent(tmp_path: Path, monkeypatch) -> None:
