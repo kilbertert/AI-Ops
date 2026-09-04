@@ -6,7 +6,7 @@
 
 业务后端或 BFF 调用 AI-Ops 时使用服务 Bearer，并转发已验证的 `thirdSession`。对于可能同时存在客户端和管家端关联的 C 端用户，BFF 还必须传递可信的 `X-Business-Entry`：`consumer` 或 `operator`。这个请求头只应由服务端设置，不能让小程序直接控制。
 
-前端联调责任、旧接口迁移和页面分流见 [固定问答前端联调简报](agents/frontend-api-brief.md)。
+前端联调责任、旧接口迁移和页面分流见 [前端联调总览](agents/frontend-api-brief.md)。
 
 测试环境 Base URL：`https://aiops-api-test.ranlei.work`
 

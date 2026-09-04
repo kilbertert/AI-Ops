@@ -1,86 +1,98 @@
-# AI-Ops 固定问答前端联调简报
+# AI-Ops 前端联调总览
 
 > 状态：当前有效，2026-09-04。
-> 范围：客户端/管家端固定推荐问与固定答案，不包含页面样式、健康报告或自由文本诊断。
-> 权威接口契约：[固定问答标准接口](../faq-api.md)。
+> 读者：前端组、BFF/Java 组、联调测试。
+> 权威契约：固定问答见 [固定问答标准接口](../faq-api.md)；健康报告与单问诊断见 [标准后端接口报告](../standard-api-contract.md)。本文是三者的前端视角总览，冲突时以两份契约文档为准。
 
-## 1. 联调边界
-
-AI-Ops 提供标准后端接口，不允许小程序或浏览器保存服务令牌并直接调用。真实调用链是：
+## 0. 一图看懂：谁调谁
 
 ```text
-小程序/前端
-  -> 现有业务后端或 BFF，携带现有登录态 thirdSession
-  -> BFF 验证登录态，并按访问入口确定 consumer 或 operator
-  -> BFF 以服务身份调用 AI-Ops，转发 thirdSession 和可信入口
-  -> AI-Ops 再次解析会话、判定 C/B 身份映射并隔离 FAQ 内容
+小程序/浏览器
+    │  只带现有登录态（thirdSession），不持有任何 AI-Ops 令牌
+    ▼
+业务 BFF / Java 后端
+    │  1. 验证用户登录态
+    │  2. 按访问入口决定 X-Business-Entry: consumer | operator
+    │  3. 以服务身份调用 AI-Ops，转发 thirdSession
+    ▼
+AI-Ops（https://aiops-api-test.ranlei.work）
+    │  解析会话 → 判定平台身份 → 隔离内容域 → 返回数据
+    ▼
+前端拿到数据渲染
 ```
 
-前端只处理 `question_id`、标题、排序和答案文本。以下内容不能由前端提交或推断：
+**前端绝对不做**的事：
 
-- AI-Ops 服务 Bearer；
-- `platform`、`user_id`、`tenant_id`、角色或权限；
-- B 端主体 ID；
-- 固定答案正文。
+- 不保存、不打印、不打包 AI-Ops 服务令牌（`aops_*` 也不行）；
+- 不提交 `platform`、`user_id`、`tenant_id`、角色、B 端主体 ID——这些全部由 BFF/AI-Ops 从会话推导；
+- 不直接连 AI-Ops 测试域名；前端实际 Base URL 由 BFF 决定。
 
-当前没有修改 Java/BFF 仓库。前端正式接入前，调用方需要使用已有 BFF 通用代理或网关配置暴露前端可访问的同名路由；若现有 BFF 没有这项转发能力，需要由 BFF 维护方另行接线，不能把服务令牌下发给前端代替。
+## 1. 三条业务线怎么选
 
-## 2. 相比旧方案的变化
+| 用户动作 | 走哪条线 | 接口 | 同步/异步 |
+|---|---|---|---|
+| 点击推荐快捷问 | 固定问答 | `POST /v1/faq/answer` | **同步**，直接拿答案 |
+| 打开 FAQ 页 | 固定问答 | `GET /v1/faq/recommendations`、`GET /v1/faq/catalog` | 同步 |
+| 查看充电体检报告 | 健康报告 | `POST /v1/health-report-jobs` + 轮询 | **异步**（作业模型） |
+| 自由输入/订单问题提问 | 单问诊断 | `POST /v1/standard/diagnoses` + 轮询 | **异步**（作业模型） |
 
-以下旧草案接口或行为不再用于固定问答联调：
+分流口诀：**点击固定问题 → FAQ 同步答案；自由文本/订单问题 → 单问诊断；报告 → 健康报告作业。** 不可混用：不能把自由文本塞进 FAQ 接口，不能把固定推荐转成模型问题。
 
-| 旧设想 | 当前契约 |
-|---|---|
-| 前端持有 `aops_*` 设备令牌直连 Gateway | BFF 持有 AI-Ops 服务令牌，前端只使用现有登录态 |
-| `GET /v1/recommendations?category=quick_question` | `GET /v1/faq/recommendations` |
-| 点击推荐后调用 `POST /v1/runs` | 点击后调用同步 `POST /v1/faq/answer` |
-| 推荐问题触发模型或订单诊断 | 固定问答不调用模型、不查订单、不创建诊断资源 |
-| 前端传 `platform` | AI-Ops 根据会话、入口与 C/B 映射判定平台 |
-| 一次 `runs` 代表一段会话 | 固定问答是一问一答；自由文本诊断仍是独立资源 |
+## 2. 公共约定（三条线通用）
 
-`GET /v1/reports/pending`、`GET /v1/reports/charging-health` 和页面级待办设计也不属于本次固定问答契约。健康报告与单问诊断使用 [标准后端接口报告](../standard-api-contract.md)。
+### 2.1 BFF 调 AI-Ops 的请求头
 
-## 3. 测试地址
+```http
+Authorization: Bearer <aiops-service-token>     # BFF 的服务身份，不给前端
+X-Third-Session: <当前用户的有效 thirdSession>   # BFF 验证后原样转发
+X-Business-Entry: consumer                       # consumer | operator，按访问入口设置
+Content-Type: application/json                   # POST 时
+```
 
-AI-Ops 后端到后端测试 Base URL：
+- `X-Business-Entry` 由 BFF 根据用户从哪个入口进来设置，**不是前端传的选项**。只允许 `consumer` / `operator`。
+- 身份只有一个可用平台时可省略；联调阶段建议 BFF 始终显式设置，避免双平台用户得到 `409 PLATFORM_AMBIGUOUS`。
+- 前端实际调用的 URL、鉴权方式由 BFF 决定；建议 BFF 保留 `/v1/*` 路径与响应体结构原样透传，前端零转换。
+
+### 2.2 错误响应统一形状
+
+```json
+{"error": {"code": "FAQ_NOT_FOUND", "message": "...", "retryable": false}}
+```
+
+| HTTP | 通用处理 |
+|---:|---|
+| 401 | 登录态/服务认证失效 → 引导重新登录 |
+| 403 | 入口与身份不符 → 返回业务入口页 |
+| 404 | 资源不存在或不在授权范围 → 提示"未找到"，不区分原因 |
+| 409 | 平台无法唯一确定 → 联系 BFF 排查，前端不要自行切换 |
+| 422 | 请求字段错误 → 修正后重发，不要原样重试 |
+| 429 | 限流 → 稍后重试 |
+| 503 | 依赖暂时不可用 → `retryable: true`，稍后重试并保留关联 ID |
+
+### 2.3 状态字段（异步线通用）
+
+健康报告作业与单问诊断都是"创建 → 轮询"模型：
 
 ```text
-https://aiops-api-test.ranlei.work
+queued → running → completed | inconclusive | failed | expired   （诊断）
+queued → running → completed | failed | expired                  （报告作业）
 ```
 
-健康检查：
+- 创建响应都带 `retry_after_ms`，按它节流轮询；不要密集轮询。
+- 只有 `completed`/`inconclusive` 时 `result`/`report` 才有值。
+- `expired` 表示结果超过保留期，让用户重新发起。
 
-```http
-GET https://aiops-api-test.ranlei.work/health
-```
+## 3. 固定问答（FAQ）
 
-这不是允许前端携带服务令牌直连的公共用户接口。前端实际使用的 Base URL 由业务 BFF 决定；建议 BFF 保留 `/v1/faq/*` 路径和响应体，减少二次转换。
+> 详见 [固定问答标准接口](../faq-api.md)。一问一答，不建会话、不查订单、不调模型、无 `job_id`/`diagnosis_id`。
 
-## 4. BFF 调用约定
-
-BFF 调用三条 FAQ 接口时统一设置：
-
-```http
-Authorization: Bearer <aiops-service-token>
-X-Third-Session: <当前用户的有效 thirdSession>
-X-Business-Entry: consumer
-```
-
-`X-Business-Entry` 只允许 `consumer` 或 `operator`。它由 BFF 根据用户访问的业务入口设置，不是前端提交的平台选择器。
-
-如果当前身份只有一个可用平台，可以省略 `X-Business-Entry`；联调阶段仍建议 BFF 明确设置，避免用户同时存在两个内容域时得到 `PLATFORM_AMBIGUOUS`。
-
-## 5. 前端调用流程
-
-### 5.1 页面加载推荐问题
-
-业务 BFF 转发：
+### 3.1 推荐问题（页面加载）
 
 ```http
 GET /v1/faq/recommendations
 ```
 
-AI-Ops 当前返回所在平台的完整推荐候选清单：客户端 28 条，管家端 17 条。前端可随自身版本按 `question_id` 选择其中一部分展示，并自行调整展示顺序；不得把答案打包进推荐配置。
+返回当前平台的完整候选清单（客户端 28 条 / 管家端 17 条），前端可按 `question_id` 自选子集与顺序，但**不得**把答案预存进推荐配置。
 
 ```json
 {
@@ -88,29 +100,21 @@ AI-Ops 当前返回所在平台的完整推荐候选清单：客户端 28 条，
   "available_platforms": ["consumer"],
   "faq_version": "2026.09.04",
   "recommendations": [
-    {
-      "question_id": "consumer.faq.q001",
-      "title": "快充桩、超充桩与慢充桩有什么区别？我的车应该选哪种？",
-      "sort": 1
-    }
+    {"question_id": "consumer.faq.q001", "title": "快充桩、超充桩与慢充桩有什么区别？我的车应该选哪种？", "sort": 1}
   ]
 }
 ```
 
-前端发布时也可以使用仓库制品 `src/aiops_diagnostics/faq_recommendations.json` 选择固定推荐项，但页面进入后仍应以接口返回的平台和当前版本为准。
-
-### 5.2 点击推荐问题
-
-前端只把所点击的 `question_id` 交给 BFF：
+### 3.2 点击推荐 → 同步答案
 
 ```http
 POST /v1/faq/answer
 Content-Type: application/json
 
-{"question_id":"consumer.faq.q001"}
+{"question_id": "consumer.faq.q001"}
 ```
 
-同步成功返回 HTTP 200：
+`200` 直接返回答案，无轮询：
 
 ```json
 {
@@ -124,43 +128,83 @@ Content-Type: application/json
 }
 ```
 
-前端直接把 `answer` 作为普通文本消息渲染，并保留换行。该响应没有 `job_id`、`diagnosis_id` 或轮询过程。
+`answer` 按纯文本渲染、保留换行，不作为 HTML。
 
-### 5.3 完整 FAQ 页
-
-需要完整 FAQ 列表时调用：
+### 3.3 完整目录（FAQ 页）
 
 ```http
 GET /v1/faq/catalog
 ```
 
-响应字段为 `platform`、`available_platforms`、`faq_version` 和 `entries`。普通推荐区不需要调用该接口。
+响应字段：`platform`、`available_platforms`、`faq_version`、`entries`。普通推荐区不需要调它。
 
-### 5.4 自由输入分流
-
-```text
-点击固定推荐 -> question_id -> POST /v1/faq/answer -> 同步固定答案
-自由文本/订单问题 -> POST /v1/standard/diagnoses -> 异步单问诊断
-```
-
-第一版不提供多轮会话。前端不能把自由文本塞入 FAQ 答案接口，也不能把固定推荐转换成模型问题。
-
-## 6. 错误处理
-
-错误统一为：
-
-```json
-{"error":{"code":"FAQ_NOT_FOUND","message":"FAQ question was not found","retryable":false}}
-```
+### 3.4 FAQ 专属错误
 
 | HTTP | `error.code` | 前端处理 |
 |---:|---|---|
-| 401 | `ACCESS_TOKEN_REQUIRED` / `INVALID_ACCESS_TOKEN` | BFF 登录态或服务认证失效；重新登录或由后端排查 |
-| 403 | `PLATFORM_FORBIDDEN` | 当前入口与身份不符；返回业务入口页 |
-| 409 | `PLATFORM_AMBIGUOUS` | BFF 未能唯一确定平台/主体；不要让前端自行切换 |
-| 404 | `FAQ_NOT_FOUND` | ID 未知、已下线或属于另一平台；刷新推荐列表 |
-| 422 | `INVALID_REQUEST` | 前端/BFF 请求字段错误；不要重试同一请求 |
-| 503 | `PLATFORM_UNAVAILABLE` | 身份映射或只读依赖不可用；可以稍后重试并保留关联 ID |
+| 404 | `FAQ_NOT_FOUND` | ID 未知/下线/跨平台 → 刷新推荐列表 |
+| 403 | `PLATFORM_FORBIDDEN` | 当前入口与身份不符 → 返回业务入口页 |
+| 409 | `PLATFORM_AMBIGUOUS` | 多主体无法唯一确定 → 联系 BFF 排查 |
+| 503 | `PLATFORM_UNAVAILABLE` | 身份映射依赖不可用 → 稍后重试 |
+
+## 4. 健康报告（充电体检单）
+
+> 详见 [标准后端接口报告 §4](../standard-api-contract.md)。确定性计算，非模型生成。
+
+**流程**：`POST /v1/health-report-jobs`（带 `order_no`）→ 拿 `job_id` → 按 `retry_after_ms` 轮询 `GET /v1/health-report-jobs/{job_id}` → `status=completed` 读 `report`。
+
+`report` 关键字段：
+
+| 字段 | 说明 |
+|---|---|
+| `summary` | 固定模板摘要文本，可直接展示 |
+| `indicators[]` | 单项指标，`status` 只会是 `normal / attention / abnormal / unavailable`，按状态渲染，不解析中文阈值 |
+| `radar[]` | 五维评分；缺数据时该维 `score=null`、`status=unavailable` |
+| `curves` | 功率/电压/温度曲线，每 series ≤300 点，格式 `[[t, v], ...]` |
+| `health_metrics` | 中间计算值（`soh`、`soc_delta` 等） |
+| `completeness` | 数据完整度 `0..1` |
+| `source_summary` | 各数据源可用状态 |
+| `rule_version` | 计算公式版本 |
+
+**专属错误**：`404 REPORT_JOB_NOT_FOUND`（作业不存在/不属于当前调用者）、`503 REPORT_JOB_UNAVAILABLE`。
+
+**典型耗时**：秒级；轮询间隔按 `retry_after_ms`（约 1s）。
+
+## 5. 单问诊断（自由文本/订单问题）
+
+> 详见 [标准后端接口报告 §5](../standard-api-contract.md)。一问一诊断，非多轮会话。
+
+**流程**：`POST /v1/standard/diagnoses`（`order_no` + `question`，可选 `indicator_code`）→ 拿 `diagnosis_id` → 轮询 `GET /v1/standard/diagnoses/{diagnosis_id}` → `completed`/`inconclusive` 读 `result`。
+
+- `question` 最多 4000 字符；不能提交 `score`、曲线、报告、`user_id`、`tenant_id` 作为可信输入。
+- 历史列表：`GET /v1/standard/diagnoses?limit=50`。
+- 诊断结果不暴露证据 ID、内部 run、provider、SQL、原始报文。
+
+**专属错误**：`404 DIAGNOSIS_NOT_FOUND`、`503 DIAGNOSIS_UNAVAILABLE`。
+
+**典型耗时**：几十秒到分钟级；轮询间隔按 `retry_after_ms`。
+
+## 6. 端到端时序（小程序典型流）
+
+```text
+1. 打开智能客服页
+   GET /v1/faq/recommendations          → 渲染推荐快捷问（同步，秒回）
+
+2. 用户点击某推荐问
+   POST /v1/faq/answer                  → 同步拿到 answer，直接渲染成消息气泡
+
+3. 用户自由输入"这次充电为什么提前停了"，选了订单
+   POST /v1/standard/diagnoses          → 202，拿 diagnosis_id
+   GET  /v1/standard/diagnoses/{id}     → 按 retry_after_ms 轮询
+   status=completed → 渲染诊断结果
+
+4. 用户点开该订单的"充电体检单"
+   POST /v1/health-report-jobs           → 202，拿 job_id
+   GET  /v1/health-report-jobs/{id}     → 按 retry_after_ms 轮询
+   status=completed → 渲染报告/雷达/曲线
+```
+
+以上每一步的 Authorization 头都由 BFF 注入，前端只传业务参数。
 
 ## 7. 联调检查表
 
@@ -168,12 +212,21 @@ GET /v1/faq/catalog
 - [ ] BFF 验证现有 thirdSession，并转发同一值。
 - [ ] BFF 根据路由入口设置 `X-Business-Entry`，前端请求体没有 `platform`。
 - [ ] 推荐配置只保存 `question_id/title/sort`，不保存答案。
-- [ ] 点击推荐只调用答案接口，成功响应不轮询。
+- [ ] 点击推荐只调 FAQ 答案接口，成功响应不轮询。
 - [ ] 答案按纯文本保留换行，不作为 HTML 渲染。
 - [ ] `FAQ_NOT_FOUND` 会刷新清单，不显示另一平台内容。
-- [ ] 自由输入与订单问题走标准单问诊断，不走 FAQ。
+- [ ] 自由输入与订单问题走 `/v1/standard/diagnoses`，不走 FAQ。
+- [ ] 异步作业按 `retry_after_ms` 节流轮询，不密集轮询。
+- [ ] 报告 `indicators.status` 按枚举渲染，不解析中文阈值、不自行重算。
 
-## 8. 当前真实验收状态
+## 8. 常见坑（来自真实验收）
+
+- **`aops_*` 设备令牌会被拒绝**：标准 API 侧收到 `aops_` 前缀 token 一律 401。那是旧 Gateway 设备流（`/v1/runs`），三条标准业务线都不用它。
+- **Apifox 手测 422**：请求体多一个字段都不行（`extra="forbid"`），且 `Content-Type: application/json` 必须放在 Headers，不能塞 Query 参数。
+- **404 不区分"不存在"与"无权限"**：这是故意的资源存在性隐藏，前端统一提示"未找到"即可。
+- **旧接口迁移**：`GET /v1/recommendations?category=...` → `GET /v1/faq/recommendations`；点击推荐 → `POST /v1/runs` 改为 `POST /v1/faq/answer`；`GET /v1/reports/pending`、`GET /v1/reports/charging-health` 不在当前契约，改走 `/v1/health-report-jobs`。
+
+## 9. 当前真实验收状态（2026-09-04）
 
 测试 Gateway 已部署，公网健康检查通过。使用当前真实有效 C 端会话完成：
 
