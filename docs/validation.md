@@ -15,6 +15,8 @@
 
 本轮 #133 交付验收证据：2026-09-04T03:30:06Z，提交 `370edf1` 的独立 checkout；FAQ 目录生成 28/17 条、专项测试 15 项、全量 pytest 511 项均通过，且构建制品包含两个 FAQ JSON。真实 BFF/生产会话仍待联调，未将离线 fake 当作真实权限结论。
 
+测试部署证据：2026-09-04T04:07:31Z，用户级 `aiops-gateway.service` 运行部署提交 `a4702fa`。`https://aiops-api-test.ranlei.work/health` 返回 200；使用私有服务令牌、无效 thirdSession 和 `X-Business-Entry: consumer` 调用 `/v1/faq/recommendations` 返回 401 `INVALID_ACCESS_TOKEN`。这证明公网入口、服务令牌配置读取和 thirdSession 失效语义，未证明有效 C 端会话或生产 FAQ 内容权限。
+
 ## 基础设施边界
 
 2026-07-31 已使用专用身份、无业务写入地验证生产访问路径：
