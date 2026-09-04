@@ -2,7 +2,7 @@
 
 > 状态：当前有效，2026-09-04。
 > 读者：前端组、BFF/Java 组、联调测试。
-> 权威契约：固定问答见 [固定问答标准接口](../faq-api.md)；健康报告与单问诊断见 [标准后端接口报告](../standard-api-contract.md)。本文是三者的前端视角总览，冲突时以两份契约文档为准。
+> 权威契约：固定问答见 [固定问答标准接口](../faq-api.md)；健康报告与单问诊断见 [标准后端接口报告](../standard-api-contract.md)。本文含三条线的完整输入/输出定义，冲突时以两份契约文档为准。
 
 ## 0. 一图看懂：谁调谁
 
@@ -81,18 +81,32 @@ queued → running → completed | failed | expired                  （报告�
 - 创建响应都带 `retry_after_ms`，按它节流轮询；不要密集轮询。
 - 只有 `completed`/`inconclusive` 时 `result`/`report` 才有值。
 - `expired` 表示结果超过保留期，让用户重新发起。
+- 重复创建同一订单的报告作业会复用未过期作业（幂等），不会重复计算。
 
 ## 3. 固定问答（FAQ）
 
 > 详见 [固定问答标准接口](../faq-api.md)。一问一答，不建会话、不查订单、不调模型、无 `job_id`/`diagnosis_id`。
 
-### 3.1 推荐问题（页面加载）
-
-```http
-GET /v1/faq/recommendations
-```
+### 3.1 GET /v1/faq/recommendations — 推荐问题（页面加载）
 
 返回当前平台的完整候选清单（客户端 28 条 / 管家端 17 条），前端可按 `question_id` 自选子集与顺序，但**不得**把答案预存进推荐配置。
+
+**响应字段**：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `platform` | string | 本次请求判定的平台：`consumer` \| `operator` |
+| `available_platforms` | string[] | 当前身份可用的内容域集合；仅元数据，不代表可跨平台访问 |
+| `faq_version` | string | 目录版本（如 `2026.09.04`） |
+| `recommendations[]` | object[] | 推荐项列表 |
+
+`recommendations[]` 元素：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `question_id` | string | 稳定问题标识，格式 `<platform>.faq.qNNN` |
+| `title` | string | 展示标题 |
+| `sort` | int | 后端默认排序；前端可自行调整 |
 
 ```json
 {
@@ -105,16 +119,29 @@ GET /v1/faq/recommendations
 }
 ```
 
-### 3.2 点击推荐 → 同步答案
+### 3.2 POST /v1/faq/answer — 点击推荐 → 同步答案
 
-```http
-POST /v1/faq/answer
-Content-Type: application/json
+**请求体**（`Content-Type: application/json`，多余字段直接 422）：
 
+| 字段 | 类型 | 必填 | 约束 |
+|---|---|---|---|
+| `question_id` | string | 是 | 1–128 字符，格式 `^[a-z]+\.[a-z0-9-]+\.q[0-9]{3}$`（如 `consumer.faq.q001`） |
+
+```json
 {"question_id": "consumer.faq.q001"}
 ```
 
-`200` 直接返回答案，无轮询：
+**响应** `200`，字段：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `platform` | string | 同 3.1 |
+| `available_platforms` | string[] | 同 3.1 |
+| `faq_version` | string | 同 3.1 |
+| `question_id` | string | 回显请求的问题 ID |
+| `question` | string | 问题完整文本 |
+| `answer` | string | **固定纯文本**答案，含换行；按文本渲染，不作为 HTML |
+| `format` | string | 当前固定为 `text` |
 
 ```json
 {
@@ -123,20 +150,30 @@ Content-Type: application/json
   "faq_version": "2026.09.04",
   "question_id": "consumer.faq.q001",
   "question": "快充桩、超充桩与慢充桩有什么区别？我的车应该选哪种？",
-  "answer": "固定纯文本答案",
+  "answer": "场站内的充电桩主要分为以下三类……",
   "format": "text"
 }
 ```
 
-`answer` 按纯文本渲染、保留换行，不作为 HTML。
+### 3.3 GET /v1/faq/catalog — 完整目录（FAQ 页）
 
-### 3.3 完整目录（FAQ 页）
+**响应字段**：
 
-```http
-GET /v1/faq/catalog
-```
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `platform` / `available_platforms` / `faq_version` | — | 同 3.1 |
+| `entries[]` | object[] | 当前平台全部条目 |
 
-响应字段：`platform`、`available_platforms`、`faq_version`、`entries`。普通推荐区不需要调它。
+`entries[]` 元素（比推荐项多了答案正文）：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `question_id` | string | 同 3.1 |
+| `question` | string | 问题完整文本 |
+| `answer` | string | 固定纯文本答案 |
+| `format` | string | `text` |
+
+普通推荐区不需要调它。
 
 ### 3.4 FAQ 专属错误
 
@@ -151,36 +188,157 @@ GET /v1/faq/catalog
 
 > 详见 [标准后端接口报告 §4](../standard-api-contract.md)。确定性计算，非模型生成。
 
-**流程**：`POST /v1/health-report-jobs`（带 `order_no`）→ 拿 `job_id` → 按 `retry_after_ms` 轮询 `GET /v1/health-report-jobs/{job_id}` → `status=completed` 读 `report`。
+### 4.1 POST /v1/health-report-jobs — 创建计算作业
 
-`report` 关键字段：
+**请求体**（多余字段直接 422）：
 
-| 字段 | 说明 |
-|---|---|
-| `summary` | 固定模板摘要文本，可直接展示 |
-| `indicators[]` | 单项指标，`status` 只会是 `normal / attention / abnormal / unavailable`，按状态渲染，不解析中文阈值 |
-| `radar[]` | 五维评分；缺数据时该维 `score=null`、`status=unavailable` |
-| `curves` | 功率/电压/温度曲线，每 series ≤300 点，格式 `[[t, v], ...]` |
-| `health_metrics` | 中间计算值（`soh`、`soc_delta` 等） |
-| `completeness` | 数据完整度 `0..1` |
-| `source_summary` | 各数据源可用状态 |
-| `rule_version` | 计算公式版本 |
+| 字段 | 类型 | 必填 | 约束 |
+|---|---|---|---|
+| `order_no` | string | 是 | 1–128 字符，只允许字母/数字/`_`/`.`/`:`/`-` |
 
-**专属错误**：`404 REPORT_JOB_NOT_FOUND`（作业不存在/不属于当前调用者）、`503 REPORT_JOB_UNAVAILABLE`。
+```json
+{"order_no": "2094370061724549120"}
+```
 
-**典型耗时**：秒级；轮询间隔按 `retry_after_ms`（约 1s）。
+**响应** `202`，字段：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `job_id` | string | 作业标识，`hrj_` 前缀；轮询用它 |
+| `order_no` | string | 回显订单号 |
+| `rule_version` | string | 计算规则版本（如 `health-v2`） |
+| `status` | string | `queued` \| `running` \| `completed` \| `failed` \| `expired` |
+| `retry_after_ms` | int \| null | 轮询间隔；非终态固定 1000，终态为 null |
+| `report` | object \| null | 仅 `completed` 时有值，见 4.3 |
+| `error` | object \| null | 仅 `failed` 时有值：`{code, message, retryable}` |
+| `created_at` / `updated_at` / `completed_at` | string | ISO 8601 时间戳 |
+
+```json
+{
+  "job_id": "hrj_9f2c...",
+  "order_no": "2094370061724549120",
+  "rule_version": "health-v2",
+  "status": "queued",
+  "retry_after_ms": 1000,
+  "report": null,
+  "error": null,
+  "created_at": "2026-09-04T10:00:00+00:00",
+  "updated_at": "2026-09-04T10:00:00+00:00",
+  "completed_at": null
+}
+```
+
+### 4.2 GET /v1/health-report-jobs/{job_id} — 轮询作业
+
+路径参数 `job_id`；响应结构与 4.1 完全相同。`status=completed` 时读 `report`。
+
+**专属错误**：`404 REPORT_JOB_NOT_FOUND`（作业不存在/不属于当前调用者）、`503 REPORT_JOB_UNAVAILABLE`、`503 ORDER_AUTHORIZATION_UNAVAILABLE`。
+
+### 4.3 report 对象字段
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `order_no` | string | 订单号 |
+| `order_window` | object | `{started_at, stopped_at}`，订单起止时间（ISO 8601） |
+| `summary` | string | 固定模板摘要，可直接展示 |
+| `indicators[]` | object[] | 单项指标，见下表 |
+| `completeness` | number | 数据完整度 `0..1` |
+| `rule_version` | string | 计算公式版本 |
+| `data_as_of` | string | 本次计算实际使用数据的时间 |
+| `source_summary` | object | 各数据源可用状态：`order_snapshot` / `telemetry` / `protocol` / `vehicle_capacity` → `available` \| `not_requested` \| `unavailable` |
+
+`indicators[]` 元素：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `code` | string | 稳定指标代码（如 `stop_reason`） |
+| `status` | string | `normal` \| `attention` \| `abnormal` \| `unavailable`，按此渲染，**不解析中文阈值** |
+| `value` | string \| number | 指标值 |
+| `unit` | string \| null | 单位 |
+| `reference` | string \| null | 参考条件 |
+| `reason_code` | string \| null | 不可用/异常的原因代码 |
+
+**典型耗时**：秒级；轮询间隔按 `retry_after_ms`（1s）。
 
 ## 5. 单问诊断（自由文本/订单问题）
 
 > 详见 [标准后端接口报告 §5](../standard-api-contract.md)。一问一诊断，非多轮会话。
 
-**流程**：`POST /v1/standard/diagnoses`（`order_no` + `question`，可选 `indicator_code`）→ 拿 `diagnosis_id` → 轮询 `GET /v1/standard/diagnoses/{diagnosis_id}` → `completed`/`inconclusive` 读 `result`。
+### 5.1 POST /v1/standard/diagnoses — 创建诊断
 
-- `question` 最多 4000 字符；不能提交 `score`、曲线、报告、`user_id`、`tenant_id` 作为可信输入。
-- 历史列表：`GET /v1/standard/diagnoses?limit=50`。
-- 诊断结果不暴露证据 ID、内部 run、provider、SQL、原始报文。
+**请求体**（多余字段直接 422）：
+
+| 字段 | 类型 | 必填 | 约束 |
+|---|---|---|---|
+| `order_no` | string | 是 | 1–128 字符，同 4.1 格式 |
+| `question` | string | 是 | 1–4000 字符 |
+| `indicator_code` | string | 否 | ≤64 字符，`^[a-z][a-z0-9_]{0,63}$`；仅提供提问上下文 |
+
+```json
+{
+  "order_no": "2094370061724549120",
+  "question": "为什么这次充电提前停止？",
+  "indicator_code": "temperature_balance"
+}
+```
+
+不能提交 `score`、曲线、报告、`user_id`、`tenant_id` 作为可信输入。
+
+**响应** `202`，字段：
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `diagnosis_id` | string | 诊断标识，`dx_` 前缀；轮询用它 |
+| `order_no` | string | 回显 |
+| `question` | string | 回显 |
+| `indicator_code` | string \| null | 回显 |
+| `status` | string | `queued` \| `running` \| `completed` \| `inconclusive` \| `failed` \| `expired` |
+| `retry_after_ms` | int \| null | 非终态 1000 |
+| `result` | object \| null | 仅 `completed`/`inconclusive` 有值，见 5.3 |
+| `error` | object \| null | 仅 `failed`/`expired` 有值 |
+| `created_at` / `updated_at` / `completed_at` | string | ISO 8601 |
+
+```json
+{
+  "diagnosis_id": "dx_5b8a...",
+  "order_no": "2094370061724549120",
+  "question": "为什么这次充电提前停止？",
+  "indicator_code": null,
+  "status": "queued",
+  "retry_after_ms": 1000,
+  "result": null,
+  "error": null,
+  "created_at": "2026-09-04T10:01:00+00:00",
+  "updated_at": "2026-09-04T10:01:00+00:00",
+  "completed_at": null
+}
+```
+
+### 5.2 GET /v1/standard/diagnoses/{diagnosis_id} — 轮询诊断
+
+响应结构同 5.1。历史列表：`GET /v1/standard/diagnoses?limit=50`（默认 limit=50，返回 `diagnoses[]` 摘要数组，字段为 `diagnosis_id/order_no/question/indicator_code/status/created_at/updated_at`）。
 
 **专属错误**：`404 DIAGNOSIS_NOT_FOUND`、`503 DIAGNOSIS_UNAVAILABLE`。
+
+### 5.3 result 对象字段（AgentDiagnosis）
+
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `schema_version` | string | `"1.0"` |
+| `incident_id` | string | 事件标识 |
+| `order_no` | string | 订单号 |
+| `tenant_id` | string \| null | 租户（已脱敏语境） |
+| `status` | string | 诊断结论状态 |
+| `summary` | string | 摘要（≤2000 字符），可直接展示 |
+| `root_cause` | string | 根因分析（≤4000 字符） |
+| `confidence` | string | 置信度等级 |
+| `evidence_ids[]` | string[] | 证据引用 ID（仅引用，不含原始数据） |
+| `hypotheses[]` | object[] | 假设列表（≤10 条） |
+| `limitations[]` | string[] | 本次诊断的限制说明（≤30 条） |
+| `failed_sources[]` | string[] | 不可用数据源清单（≤20 个） |
+| `next_steps[]` | string[] | 建议后续步骤（≤20 条） |
+
+诊断结果不暴露内部 run、provider、SQL、原始报文、凭据。
 
 **典型耗时**：几十秒到分钟级；轮询间隔按 `retry_after_ms`。
 
