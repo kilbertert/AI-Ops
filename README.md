@@ -23,6 +23,7 @@
 - [系统架构](docs/architecture.md)
 - [架构展示（PNG）](docs/architecture/ai-ops-architecture.png) · [可交互 HTML](docs/architecture/ai-ops-architecture.html)
 - [Gateway 架构与部署](docs/gateway.md)
+- [固定问答标准接口](docs/faq-api.md)
 - [Codex thin harness](docs/thin-harness.md)
 - [便携部署](docs/portable.md)
 - [打包与下载](docs/打包与下载.md)

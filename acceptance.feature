@@ -256,3 +256,42 @@ Feature: 统一标准 API 契约
     When 分别创建健康报告作业和单问诊断
     Then 两者返回各自 opaque ID、状态和 retry_after_ms
     And 任一资源失败不修改另一资源
+
+Feature: C/B 平台隔离固定问答
+  固定问答按服务端判定的平台内容域返回，不依赖订单或模型。
+
+  Rule: 平台身份来自可信上下文
+
+    Scenario: C 端入口返回客户端推荐
+      Given 服务 Bearer 和有效 thirdSession 已通过认证
+      And 入口上下文为 consumer
+      When 调用固定问答推荐接口
+      Then 返回 platform consumer 和 question_id/title/sort 展示字段
+      And 推荐响应不包含答案或身份详情
+
+    Scenario: 管家入口需要唯一 B 端主体
+      Given C 端身份关联一个同租户且具备管家端角色的 B 端主体
+      And 入口上下文为 operator
+      When 调用固定问答目录接口
+      Then 返回 platform operator 的正式目录
+      And 不返回客户端目录内容
+
+    Scenario: 多个 B 端主体拒绝歧义请求
+      Given C 端身份关联多个具备管家端角色的 B 端主体
+      When 未提供入口或请求 operator 内容
+      Then 返回 409 PLATFORM_AMBIGUOUS
+      And 不随机选择 B 端主体
+
+  Rule: 固定答案与诊断链路隔离
+
+    Scenario: 点击推荐同步返回确定性答案
+      Given 当前平台推荐 question_id 有正式固定答案
+      When POST 固定问答答案接口
+      Then 返回 200、纯文本答案和 faq_version
+      And 不创建 job_id 或 diagnosis_id
+      And 不调用模型、不查询订单
+
+    Scenario: 跨平台问题标识隐藏内容
+      Given 当前平台为 consumer
+      When 提交 operator 前缀的 question_id
+      Then 返回 404 FAQ_NOT_FOUND
