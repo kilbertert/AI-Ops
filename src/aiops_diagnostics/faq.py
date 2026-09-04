@@ -103,6 +103,7 @@ class MySQLPlatformDirectory:
                      AND (r.del_flag IS NULL OR r.del_flag = 0)
                     WHERE {identity_where} AND u.tenant_id=%s
                       AND (u.del_flag IS NULL OR u.del_flag = 0)
+                    LIMIT 1000
                     """,
                     identity,
                 )
@@ -111,7 +112,9 @@ class MySQLPlatformDirectory:
                         b_user_id=str(row["b_user_id"]),
                         c_user_id=str(row["c_user_id"]) if row.get("c_user_id") else None,
                         tenant_id=str(row["tenant_id"]),
-                        client_type=str(row["client_type"]).strip() if row.get("client_type") else None,
+                        client_type=(
+                            str(row["client_type"]).strip().lower() if row.get("client_type") else None
+                        ),
                     )
                     for row in cursor.fetchall()
                 )
@@ -146,7 +149,9 @@ class PlatformIdentityResolver:
         operator_client_types: tuple[str, ...] = ("admin", "tenant-app", "MA", "supply-admin"),
     ) -> None:
         self.directory = directory
-        self.operator_client_types = frozenset(item.strip() for item in operator_client_types if item.strip())
+        self.operator_client_types = frozenset(
+            item.strip().lower() for item in operator_client_types if item.strip()
+        )
 
     def resolve(self, context: ScopeContext, entry: str | None = None) -> PlatformDecision:
         entry = (entry or "").strip().lower() or None
@@ -163,7 +168,9 @@ class PlatformIdentityResolver:
             if record.tenant_id != tenant_id:
                 raise FAQError("identity mapping crosses tenant boundary", code=PLATFORM_UNAVAILABLE)
         operator_records = tuple(
-            record for record in records if record.client_type in self.operator_client_types
+            record
+            for record in records
+            if record.client_type and record.client_type.strip().lower() in self.operator_client_types
         )
         available: list[str] = []
         if c_user_id:

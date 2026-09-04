@@ -107,3 +107,13 @@ def test_faq_api_requires_service_authentication(tmp_path: Path) -> None:
         response = client.get("/v1/faq/catalog", headers={"X-Business-Entry": "consumer"})
     assert response.status_code == 401
     assert response.json()["error"]["code"] == "ACCESS_TOKEN_REQUIRED"
+
+
+def test_faq_api_ignores_untrusted_platform_query_parameter(tmp_path: Path) -> None:
+    with _client(tmp_path) as client:
+        response = client.get(
+            "/v1/faq/recommendations?platform=operator",
+            headers={"Authorization": "Bearer service", "X-Business-Entry": "consumer"},
+        )
+    assert response.status_code == 200
+    assert response.json()["platform"] == "consumer"
