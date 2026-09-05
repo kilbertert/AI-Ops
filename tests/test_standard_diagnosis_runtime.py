@@ -103,3 +103,29 @@ def test_inconclusive_diagnosis_is_retained_and_late_completion_is_rejected(tmp_
         result={"summary": "迟到"},
     )
     assert store.get_standard_diagnosis(late["diagnosis_id"], "scope-1")["status"] == "expired"
+
+
+def test_diagnosis_deadline_covers_real_agent_runtime() -> None:
+    """The deadline must exceed real agent runs (observed ~7 minutes on the
+    120-world link, 2026-09-05). A short deadline expires still-running
+    diagnoses before the worker can record completed/inconclusive."""
+    from aiops_diagnostics.gateway_store import DIAGNOSIS_DEADLINE
+
+    assert timedelta(minutes=15) <= DIAGNOSIS_DEADLINE
+
+
+def test_diagnosis_survives_long_running_worker(tmp_path: Path) -> None:
+    """A worker finishing after the API-contract "tens of seconds to minutes"
+    window must still be able to record its result before the deadline."""
+    store = GatewayStore(tmp_path / "gateway.db")
+    diagnosis = store.create_standard_diagnosis("scope-1", "O-1", "问题", None)
+    stored = store.get_standard_diagnosis(diagnosis["diagnosis_id"], "scope-1")
+    created = datetime.fromisoformat(stored["created_at"])
+    from aiops_diagnostics.gateway_store import DIAGNOSIS_DEADLINE
+
+    with store._connection(write=True) as connection:
+        row = connection.execute(
+            "SELECT deadline_at FROM standard_diagnoses WHERE diagnosis_id = ?",
+            (diagnosis["diagnosis_id"],),
+        ).fetchone()
+    assert datetime.fromisoformat(row[0]) - created >= DIAGNOSIS_DEADLINE

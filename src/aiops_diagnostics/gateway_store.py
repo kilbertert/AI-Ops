@@ -27,7 +27,11 @@ ACTIVE_DIAGNOSIS_STATUSES = frozenset({"queued", "running"})
 TERMINAL_DIAGNOSIS_STATUSES = frozenset({"completed", "inconclusive", "failed", "expired"})
 DIAGNOSIS_COMPLETED_RETENTION = timedelta(minutes=15)
 DIAGNOSIS_FAILED_RETENTION = timedelta(minutes=5)
-DIAGNOSIS_DEADLINE = timedelta(seconds=30)
+# The diagnosis deadline must cover real agent runs, which the API contract
+# documents as tens of seconds to minutes (observed: ~7 minutes on the real
+# 120-world link). A short deadline marks still-running diagnoses as expired
+# before the worker can record its result.
+DIAGNOSIS_DEADLINE = timedelta(minutes=15)
 
 
 class GatewayStoreError(RuntimeError):
