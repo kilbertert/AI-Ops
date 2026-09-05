@@ -51,6 +51,7 @@ Content-Type: application/json                   # POST 时
 
 - `X-Business-Entry` 由 BFF 根据用户从哪个入口进来设置，**不是前端传的选项**。只允许 `consumer` / `operator`。
 - 身份只有一个可用平台时可省略；联调阶段建议 BFF 始终显式设置，避免双平台用户得到 `409 PLATFORM_AMBIGUOUS`。
+- **`Authorization` 与 `X-Third-Session` 二者缺一即 `401 INVALID_ACCESS_TOKEN`**——仅带服务令牌、漏传用户会话时，网关按"访问令牌校验失败"整体拒绝（实测确认），不是降级为匿名或仅服务身份调用。
 - 前端实际调用的 URL、鉴权方式由 BFF 决定；建议 BFF 保留 `/v1/*` 路径与响应体结构原样透传，前端零转换。
 
 ### 2.2 错误响应统一形状
@@ -68,6 +69,8 @@ Content-Type: application/json                   # POST 时
 | 422 | 请求字段错误 → 修正后重发，不要原样重试 |
 | 429 | 限流 → 稍后重试 |
 | 503 | 依赖暂时不可用 → `retryable: true`，稍后重试并保留关联 ID |
+
+> 字段类校验失败(缺失、格式错误、多余字段、类型不符)**一律 422**,不存在 400 分支——三条业务线的请求体都走 Pydantic 校验,任何一项不满足都映射为 `INVALID_REQUEST`。两份契约文档中"400/422"的写法以本条为准(实测确认)。
 
 ### 2.3 状态字段（异步线通用）
 
