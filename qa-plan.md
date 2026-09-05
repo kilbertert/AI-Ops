@@ -239,7 +239,7 @@ workflow YAML 不适用复杂度或 mutation 工具；安全状态机由模板�
 ## DX-04 诊断生命周期与重启
 
 - 环境：GatewayStore/GatewayRuntime 离线测试。
-- 前置：diagnosis deadline 30 秒、完成保留 15 分钟、失败保留 5 分钟。
+- 前置：diagnosis deadline 15 分钟（真实 Agent 链路实测约 7 分钟，2026-09-05 联调发现 30 秒 deadline 会把运行中的诊断提前判 expired）、完成保留 15 分钟、失败保留 5 分钟。
 - 数据：queued/running/completed/inconclusive/failed/expired 诊断。
 - 动作：模拟 worker、迟到 completion 和服务重启。
 - 预期：终态不可覆盖；inconclusive 保留；超时/重启转 expired；失败或过期后可重新创建。
