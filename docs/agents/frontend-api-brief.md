@@ -398,3 +398,52 @@ queued → running → completed | failed | expired                  （报告�
 - 同一用户请求 operator 入口返回 503 `PLATFORM_UNAVAILABLE`。
 
 当前可解析会话中尚未找到具备唯一 B 端主体映射的真实样本，因此管家端成功响应仍待一个有效管家用户会话。该缺口不影响客户端联调，也不能通过伪造 `platform` 或临时扩大权限绕过。
+
+## 10. 前端真实链路诊断（2026-09-05，Pyrovolt Move 1.0.3 APK 实测）
+
+> 背景：前端反馈"都没按要求传参、最基础的推荐问题用不了"。经对 APK（`pyrovolt.move.qushiyun`，PGYer v1.0.3 build 5）逆向与服务器实测，**根因不在前端传参，在部署链路**。诊断明细见 GitHub issue《前端真实链路三断点》。
+
+### 10.1 前端实际架构（已确认）
+
+- APK 为 uni-app 原生打包，AI 客服页面（`aiPackage/pages/chat/chat`、`aiPackage/pages/batteryReport/batteryReport`）**打包进 APK 本体**，不在服务器 H5 上；
+- AI 客户端模块 `aiPackage/api/aiops.js`，`APIURL = https://xyh5.xyseeker.com`（"95 环境"移动云），`tenantId = 2019588094906601472`（平高充电桩）；
+- 请求头：`tenant-id` / `third-session`（登录响应 `thirdSession` 字段存 storage 后回传）/ `client-type: APP` 等，**不含** `Authorization`，**不含** `X-Business-Entry`；
+- 接口封装与本文档契约完全一致：`/v1/faq/recommendations|catalog|answer`、`/v1/health-report-jobs`、`/v1/standard/diagnoses`，字段名 `question_id`/`order_no`/`indicator_code` 均正确。
+
+### 10.2 三个断点
+
+| # | 断点 | 实测证据 | 后果 |
+|---|---|---|---|
+| 1 | **`xyh5.xyseeker.com` 没有部署 `/v1/*` 服务**（致命） | `GET /v1/faq/recommendations` 返回 200 但 body 是宝塔默认页 HTML；`POST /v1/standard/diagnoses` 被 nginx 405。同域名的 Java BFF（`/work/router/rest`、`/charging-pile/*`、`/mallapi/*`）均在线，唯独 `/v1/*` 无反代 | 前端永远拿不到 JSON，表现为"传参错误/接口用不了" |
+| 2 | **APK 直连 BFF 域名，缺服务身份头** | APK 不发 `Authorization`；即使 BFF 反代 `/v1/*`，纯 nginx 转发也会因缺 `Authorization`（→401 `ACCESS_TOKEN_REQUIRED`）与 `X-Third-Session` 头名不匹配（APK 发的是 `third-session`）而全部 401 | 必须在 Java/BFF 层注入服务令牌并做头名映射，不能纯 nginx 转发 |
+| 3 | **前端 UI 未接线（半成品）** | chat 页 `onLoad` 调 `getFaqRecommendations().catch(()=>{})` 后**丢弃响应**，推荐列表用硬编码 10 条 questionPool；点击问题/语音后只跑打字机动画，不调 `getFaqAnswer`/`createDiagnosis`；电池报告页未接 `health-report-jobs` | 接口封装层已就绪且正确，UI 接线是前端侧剩余工作 |
+
+### 10.3 BFF 侧修复方案（可直接执行）
+
+```nginx
+# xyh5.xyseeker.com（或其 Java 网关）新增：
+location /v1/ {
+    proxy_pass https://aiops-api-test.ranlei.work;
+    proxy_set_header Authorization "Bearer <AI-Ops 服务令牌>";  # 服务端注入，不下发前端
+    proxy_set_header X-Third-Session $http_third_session;       # APK 的 third-session 头原样改名转发
+    proxy_set_header X-Business-Entry "consumer";               # C 端 APP 入口固定 consumer
+}
+```
+
+若在 Java 网关（Spring Cloud Gateway / Nacos 体系）实现，语义相同：路由 `/v1/**` 到 AI-Ops，加请求头改写过滤器。`third-session` 值无需变换——它就是登录响应中的 `thirdSession`，AI-Ops 侧用同一值直查 Redis 会话。
+
+### 10.4 后端接口本体已验证正常（平高租户实测）
+
+使用从 Redis 收割的 2 个平高租户（2019588094906601472）活跃 C 端会话实测：
+
+- `GET /v1/faq/recommendations`（consumer）→ 200，28 条；
+- `POST /v1/faq/answer`（`consumer.faq.q001`）→ 200，text 答案。
+
+即：**断点修复（BFF 反代 + 头注入）完成后，FAQ 线立即可用**；健康报告/单问诊断另受 #113 测试数据缺口（需"已登录+有订单"账号）约束。
+
+### 10.5 前端剩余工作（断点 1、2 修复后）
+
+1. chat 页消费 `getFaqRecommendations()` 响应，用 `recommendations[].title` 替换硬编码 questionPool（保留 `question_id` 供点击时传给 `getFaqAnswer`）；
+2. 点击推荐问题/发送自由文本时真正调用 `getFaqAnswer(question_id)` / `createDiagnosis({order_no, question})`，替换当前打字机假回复；
+3. 电池报告页接 `createHealthReportJob(order_no)` + 按 `retry_after_ms` 轮询 `getHealthReportJob(job_id)`；
+4. 错误分支按 §2.2 处理（422 不原样重试、401 引导重新登录、503 稍后重试）。
