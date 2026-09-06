@@ -8,7 +8,7 @@
 
 前端联调责任、旧接口迁移和页面分流见 [前端联调总览](agents/frontend-api-brief.md)。
 
-测试环境 Base URL：`https://aiops-api-test.ranlei.work`
+前端/BFF 统一 Base URL：`https://api.qumall.qushiyun.com`（AI 接口为同域 `/v1/*`，2026-09-06 服务迁移后由公司 120 直接承载，见迁移记录 issue #147）
 
 公共请求头：
 
@@ -22,9 +22,9 @@ X-Business-Entry: consumer
 
 完整测试 URL：
 
-- `GET https://aiops-api-test.ranlei.work/v1/faq/recommendations`
-- `GET https://aiops-api-test.ranlei.work/v1/faq/catalog`
-- `POST https://aiops-api-test.ranlei.work/v1/faq/answer`
+- `GET https://api.qumall.qushiyun.com/v1/faq/recommendations`
+- `GET https://api.qumall.qushiyun.com/v1/faq/catalog`
+- `POST https://api.qumall.qushiyun.com/v1/faq/answer`
 
 上述 URL 供受信任业务后端/BFF 联调。前端不得直接持有 `aiops-service-token`；前端实际地址由 BFF 暴露。
 

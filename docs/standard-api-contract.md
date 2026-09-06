@@ -16,13 +16,13 @@ AI-Ops 提供的是消费端无关的标准后端 HTTP API。调用方可以是�
 标准 API 的测试环境基础地址（Base URL）是：
 
 ```text
-https://aiops-api-test.ranlei.work
+https://api.qumall.qushiyun.com
 ```
 
 健康检查地址为：
 
 ```text
-GET https://aiops-api-test.ranlei.work/health
+GET https://api.qumall.qushiyun.com/health
 ```
 
 业务后端直接调用 AI-Ops 时统一携带：
@@ -41,7 +41,7 @@ curl --fail-with-body \
   -H "X-Third-Session: $THIRD_SESSION" \
   -H "Content-Type: application/json" \
   -d '{"order_no":"2094370061724549120"}' \
-  https://aiops-api-test.ranlei.work/v1/health-report-jobs
+  https://api.qumall.qushiyun.com/v1/health-report-jobs
 ```
 
 ## 2. 调用接口

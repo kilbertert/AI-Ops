@@ -10,12 +10,12 @@
 小程序/浏览器
     │  只带现有登录态（thirdSession），不持有任何 AI-Ops 令牌
     ▼
-业务 BFF / Java 后端
+业务 BFF / Java 后端（https://api.qumall.qushiyun.com）
     │  1. 验证用户登录态
     │  2. 按访问入口决定 X-Business-Entry: consumer | operator
     │  3. 以服务身份调用 AI-Ops，转发 thirdSession
     ▼
-AI-Ops（https://aiops-api-test.ranlei.work）
+AI-Ops（120 本机, 经同域名 /v1/* 反代接入, 见 §10.6）
     │  解析会话 → 判定平台身份 → 隔离内容域 → 返回数据
     ▼
 前端拿到数据渲染
@@ -25,7 +25,7 @@ AI-Ops（https://aiops-api-test.ranlei.work）
 
 - 不保存、不打印、不打包 AI-Ops 服务令牌（`aops_*` 也不行）；
 - 不提交 `platform`、`user_id`、`tenant_id`、角色、B 端主体 ID——这些全部由 BFF/AI-Ops 从会话推导；
-- 不直接连 AI-Ops 测试域名；前端实际 Base URL 由 BFF 决定。
+- 不直连 AI-Ops 网关地址；前端 Base URL 统一走 BFF 域名（`https://api.qumall.qushiyun.com`，AI 接口为同域 `/v1/*`）。
 
 ## 1. 三条业务线怎么选
 
@@ -418,19 +418,24 @@ queued → running → completed | failed | expired                  （报告�
 | 2 | **APK 直连 BFF 域名，缺服务身份头** | APK 不发 `Authorization`；即使 BFF 反代 `/v1/*`，纯 nginx 转发也会因缺 `Authorization`（→401 `ACCESS_TOKEN_REQUIRED`）与 `X-Third-Session` 头名不匹配（APK 发的是 `third-session`）而全部 401 | 必须在 Java/BFF 层注入服务令牌并做头名映射，不能纯 nginx 转发 |
 | 3 | **前端 UI 未接线（半成品）** | chat 页 `onLoad` 调 `getFaqRecommendations().catch(()=>{})` 后**丢弃响应**，推荐列表用硬编码 10 条 questionPool；点击问题/语音后只跑打字机动画，不调 `getFaqAnswer`/`createDiagnosis`；电池报告页未接 `health-report-jobs` | 接口封装层已就绪且正确，UI 接线是前端侧剩余工作 |
 
-### 10.3 BFF 侧修复方案（可直接执行）
+### 10.3 BFF 侧修复方案（2026-09-06 已实施，方案 A 落在 120）
+
+断点 1+2 已按以下形态实施于公司 120 服务器（issue #147 完成服务迁移后为同机反代）：
 
 ```nginx
-# xyh5.xyseeker.com（或其 Java 网关）新增：
+# api.qumall.qushiyun.com（120 nginx, /www/server/panel/vhost/rewrite/）：
 location /v1/ {
-    proxy_pass https://aiops-api-test.ranlei.work;
+    proxy_pass http://127.0.0.1:8788;                            # 120 本机 AI-Ops 网关（生产）
     proxy_set_header Authorization "Bearer <AI-Ops 服务令牌>";  # 服务端注入，不下发前端
     proxy_set_header X-Third-Session $http_third_session;       # APK 的 third-session 头原样改名转发
     proxy_set_header X-Business-Entry "consumer";               # C 端 APP 入口固定 consumer
 }
 ```
 
-若在 Java 网关（Spring Cloud Gateway / Nacos 体系）实现，语义相同：路由 `/v1/**` 到 AI-Ops，加请求头改写过滤器。`third-session` 值无需变换——它就是登录响应中的 `thirdSession`，AI-Ops 侧用同一值直查 Redis 会话。
+实施说明：
+- 反代与头注入在 **`api.qumall.qushiyun.com`**（公司 BFF 域名）上，不在 xyh5（xyh5 是前端同事的独立调试环境，其数据与公司库零交叉，2026-09-05 实测）。
+- **前端侧唯一必改项**：APK 的 `APIURL` 从 `https://xyh5.xyseeker.com` 改为 `https://api.qumall.qushiyun.com`。该变量是全局 basePath，业务接口（mallapi/charging-pile）会一并切换——已实测该域名上业务接口与 AI 接口均可用且为同一数据世界。
+- 若在 Java 网关（Spring Cloud Gateway / Nacos 体系）实现，语义相同：路由 `/v1/**` 到 AI-Ops，加请求头改写过滤器。`third-session` 值无需变换——它就是登录响应中的 `thirdSession`，AI-Ops 侧用同一值直查 Redis 会话。
 
 ### 10.4 后端接口本体已验证正常（平高租户实测）
 
@@ -440,6 +445,19 @@ location /v1/ {
 - `POST /v1/faq/answer`（`consumer.faq.q001`）→ 200，text 答案。
 
 即：**断点修复（BFF 反代 + 头注入）完成后，FAQ 线立即可用**；健康报告/单问诊断另受 #113 测试数据缺口（需"已登录+有订单"账号）约束。
+
+### 10.6 链路现状（2026-09-06，服务迁移后）
+
+断点 1+2 已修复并通过 S1/S2/S3 三轮验收（issue #147）：服务本体于 2026-09-06 从原测试服务器迁至公司 120（同机反代，0 跨机房）。当前链路：
+
+```text
+APK / 前端 → https://api.qumall.qushiyun.com/v1/*（120 nginx 反代 + 头注入）
+           → 120 本机 AI-Ops 网关（127.0.0.1:8788, systemd aiops-gateway.service）
+           → 内网直连数据源（MySQL 0.39 / 本机 Redis / TDengine / UPMS 5999）
+```
+
+- 三线验收状态：FAQ 200（28 条）、健康报告 202→completed、单问诊断 202→执行面正常（终态复验待模型配额，glm-ark 月配额 2026-09-21 重置）
+- 前端剩余工作见 §10.5；APIURL 切换后 FAQ 与健康报告线立即可用
 
 ### 10.5 前端剩余工作（断点 1、2 修复后）
 
