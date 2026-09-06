@@ -542,3 +542,13 @@ JWT 验签后端尚未实现，需先批准并引入 JOSE 依赖。当前证据�
 ## 公司 cloud-auth Bearer 适配验证（2026-09-02）
 
 新增 `UpmsCallerResolver`：Bearer token 原样交给现有 UPMS 用户/数据范围接口，解析为 ScopeContext；未配置 introspection 时标准 API 不再静默禁用，平台凭证失败仍 fail closed。没有复制 HS256 密钥或信任裸身份字段。当前仅完成离线/平台契约接线，真实 token 和订单验证待服务部署后执行。
+
+## 服务迁移至公司 120 验收（2026-09-06，issue #147）
+
+生产实例迁至公司 120 服务器（root systemd `aiops-gateway.service`，`127.0.0.1:8788`，开机自启），公网入口统一为 `https://api.qumall.qushiyun.com/v1/*`（120 nginx 同机反代 + 服务身份头注入）。原 ranlei 服务器侧网关与 SSH 隧道单元停用（单元文件保留为冷备；FRP 域名保留为回滚入口，不再承载 `/v1` 流量）。
+
+S1 影子验收（120 本机）：健康检查 200；FAQ 推荐 200（28 条）与答案 200；无 Authorization 头返回 401 `INVALID_ACCESS_TOKEN`；真实订单健康报告 202→completed（indicators=[stop_reason]）。
+S2 切流验收（公网入口）：FAQ/答案 200；401/422 错误语义透传；真实订单健康报告 completed；单问诊断创建 202；120 实例日志逐条对应本次请求，原服务器 `/v1` 请求归零。
+S3 退役验收（公网入口 + 开机自启）：FAQ 200（28 条）、健康报告 completed、诊断历史按主体隔离可见 3 条；单元改名后重启竞态（旧进程占用 8788）已由 systemd `Restart=on-failure` 自动恢复，重启后公网验收通过。
+
+遗留：单问诊断终态复验受模型供应商配额限制（glm-ark 月配额 2026-09-21 重置；psydo key 池停用），诊断执行面已通过（202 + Agent 管线事件完整）。2026-09-04/05 记录的 ranlei 域名与 FRP 链路为迁移前历史状态。
