@@ -12,48 +12,37 @@ from __future__ import annotations
 
 from aiops_diagnostics.agent_contracts import ToolName
 
-# Tools that resolve against order-scoped business data (MySQL/TDengine/Redis).
-# A zero-order toolset must never expose these to a model.
-_ORDER_AFFINE_TOOLS: frozenset[ToolName] = frozenset(
-    {
-        ToolName.ORDER_SNAPSHOT,
-        ToolName.FEE_SNAPSHOT,
-        ToolName.DEVICE_SNAPSHOT,
-        ToolName.GUN_TIMESERIES,
-        ToolName.COMM_MESSAGES,
-        ToolName.REDIS_SYNC,
-        # KNOWN_RUNBOOK runs the deterministic DiagnosisEngine, which itself
-        # reads orders/fees/streams — treat it as order-affine for now. A
-        # references-only runbook variant (if needed) is a separate decision.
-        ToolName.KNOWN_RUNBOOK,
-    }
-)
+# The zero-order toolset is strict allow-list (default-deny): ONLY tools listed
+# here may appear. Everything else — every order-affine tool AND any unknown or
+# future ToolName not yet enumerated — is rejected, so the boundary cannot be
+# quietly widened by adding a ToolName elsewhere without deliberately adding it
+# here. This is fail-closed by construction, never by a maintained deny-list.
+ZERO_ORDER_ALLOWED_TOOLS: frozenset[ToolName] = frozenset()
 
 _ZERO_ORDER_BLOCKED_REASON = (
-    "tool is order-scoped; not available to the zero-order (general question) toolset"
+    "tool is not in the zero-order allow-list; order-scoped or unknown tools are denied for "
+    "the general-question (zero-order) toolset"
 )
 
 
 class ZeroOrderBlockedError(ValueError):
-    """Raised when order-scoped tool use is attempted against the zero-order boundary."""
+    """Raised when a tool outside the zero-order allow-list is attempted."""
 
 
 def assert_zero_order_toolset_allowed(
     tools: frozenset[ToolName] | set[ToolName] | tuple[ToolName, ...],
 ) -> None:
-    """Fail closed if the proposed toolset exposes any order-affine tool.
+    """Fail closed unless every proposed tool is in the zero-order allow-list.
 
-    The zero-order toolset may only grow tools that are provably free of
+    The zero-order toolset may only hold tools that are provably free of
     order-scoped reads (e.g. references-backed answers added by a later
-    ticket). If any order-affine tool sneaks in, this raises — the boundary is
-    fail-closed by construction, never by convention.
+    ticket). Any other tool — including any future/unknown ToolName not yet
+    enumerated — raises, so the boundary cannot silently widen. Accepts str
+    members as well as ToolName for a robust error path.
     """
-    forbidden = _ORDER_AFFINE_TOOLS.intersection(tools)
-    if forbidden:
-        names = ", ".join(sorted(t.value for t in forbidden))
+    non_allowed = set(tools) - set(ZERO_ORDER_ALLOWED_TOOLS)
+    if non_allowed:
+        names = ", ".join(sorted(str(t) for t in non_allowed))
         raise ZeroOrderBlockedError(
-            f"zero-order toolset exposed order-scoped tool(s): {names}. {_ZERO_ORDER_BLOCKED_REASON}"
+            f"zero-order toolset exposed non-allowed tool(s): {names}. {_ZERO_ORDER_BLOCKED_REASON}"
         )
-
-
-ZERO_ORDER_ALLOWED_TOOLS: frozenset[ToolName] = frozenset()

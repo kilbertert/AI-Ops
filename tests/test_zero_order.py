@@ -9,11 +9,11 @@ from aiops_diagnostics.zero_order import (
     assert_zero_order_toolset_allowed,
 )
 
-# Every order-scoped tool that exists today. If this list becomes stale
-# (a new order-affine ToolName is added and not listed here), the test below
-# will not catch it directly — but the boundary itself is fail-closed by
-# intersection, so a new tool that IS listed is blocked automatically.
-_ALL_ORDER_AFFINE = {
+# Every tool that exists today. The boundary is now strict allow-list
+# (default-deny): ALL of these must be rejected, because the allow-list is
+# intentionally empty. This is stronger than a deny-list — even a future
+# ToolName not in this list is rejected automatically.
+_ALL_EXISTING_TOOLS = {
     ToolName.ORDER_SNAPSHOT,
     ToolName.FEE_SNAPSHOT,
     ToolName.DEVICE_SNAPSHOT,
@@ -29,19 +29,27 @@ def test_zero_order_toolset_starts_empty() -> None:
     assert frozenset() == ZERO_ORDER_ALLOWED_TOOLS
 
 
-@pytest.mark.parametrize("tool", [t for t in _ALL_ORDER_AFFINE])
-def test_each_order_affine_tool_is_blocked(tool: ToolName) -> None:
-    """No single order-affine tool may enter a zero-order toolset."""
+@pytest.mark.parametrize("tool", [t for t in _ALL_EXISTING_TOOLS])
+def test_each_existing_tool_is_blocked(tool: ToolName) -> None:
+    """No single existing tool may enter a zero-order toolset (allow-list empty)."""
     with pytest.raises(ZeroOrderBlockedError):
         assert_zero_order_toolset_allowed({tool})
 
 
-def test_any_mix_with_order_tool_fails_closed() -> None:
-    """A mixed set containing even one order-affine tool is rejected wholesale."""
+def test_mix_with_any_tool_fails_closed() -> None:
+    """A mixed set containing even one non-allowed tool is rejected wholesale."""
     with pytest.raises(ZeroOrderBlockedError):
         assert_zero_order_toolset_allowed({ToolName.ORDER_SNAPSHOT})
     with pytest.raises(ZeroOrderBlockedError):
         assert_zero_order_toolset_allowed({ToolName.GUN_TIMESERIES, ToolName.REDIS_SYNC})
+
+
+def test_unknown_future_tool_is_rejected() -> None:
+    """Strict default-deny: even a hypothetical future ToolName not enumerated
+    today cannot enter the zero-order toolset — the boundary widens only by
+    deliberately extending the allow-list, never by forgetfulness."""
+    with pytest.raises(ZeroOrderBlockedError):
+        assert_zero_order_toolset_allowed({"order_snapshot"})  # str form, not ToolName
 
 
 def test_empty_toolset_is_valid_zero_order_surface() -> None:
