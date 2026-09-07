@@ -42,17 +42,27 @@ AI-Ops（120 本机, 经同域名 /v1/* 反代接入, 见 §10.6）
 
 ### 2.1 BFF 调 AI-Ops 的请求头
 
+**⚠️ 头名大小写有坑（2026-09-07 实测修正）**：会话头**必须用 `third-session`（全小写连字符）**，不能写成 `X-Third-Session`。公司 120 的 nginx 默认丢弃带下划线的自定义请求头（`underscores_in_headers off`），`X-Third-Session` 会被静默丢掉 → 网关收不到会话 → **401 `INVALID_ACCESS_TOKEN`**。`Authorization` 头不受此限制（无下划线）。
+
 ```http
+# 前端/客户端 → BFF（或直连 BFF 域名）的最小正确载荷（实测 200）：
+third-session: <当前用户的有效 thirdSession>     # 全小写连字符！不能写 X-Third-Session
+tenant-id: <租户ID>                               # 例如 2019588094906601472
+```
+
+```http
+# BFF → AI-Ops（BFF 层注入服务身份，不下发给前端）：
 Authorization: Bearer <aiops-service-token>     # BFF 的服务身份，不给前端
-X-Third-Session: <当前用户的有效 thirdSession>   # BFF 验证后原样转发
+third-session: <当前用户的有效 thirdSession>     # BFF 验证后原样转发（同样全小写）
 X-Business-Entry: consumer                       # consumer | operator，按访问入口设置
 Content-Type: application/json                   # POST 时
 ```
 
-- `X-Business-Entry` 由 BFF 根据用户从哪个入口进来设置，**不是前端传的选项**。只允许 `consumer` / `operator`。
+- **`X-Business-Entry` 由 BFF 根据用户从哪个入口进来设置**，不是前端传的选项。只允许 `consumer` / `operator`。
 - 身份只有一个可用平台时可省略；联调阶段建议 BFF 始终显式设置，避免双平台用户得到 `409 PLATFORM_AMBIGUOUS`。
-- **`Authorization` 与 `X-Third-Session` 二者缺一即 `401 INVALID_ACCESS_TOKEN`**——仅带服务令牌、漏传用户会话时，网关按"访问令牌校验失败"整体拒绝（实测确认），不是降级为匿名或仅服务身份调用。
+- **`Authorization` 与 `third-session` 二者缺一即 `401 INVALID_ACCESS_TOKEN`**——仅带服务令牌、漏传用户会话时，网关按"访问令牌校验失败"整体拒绝（实测确认），不是降级为匿名或仅服务身份调用。
 - 前端实际调用的 URL、鉴权方式由 BFF 决定；建议 BFF 保留 `/v1/*` 路径与响应体结构原样透传，前端零转换。
+- 实测对照（2026-09-07，公网 `api.qumall.qushiyun.com`，同一有效 thirdSession）：`third-session` → 200；`X-Third-Session` → 401。网关错误码一律下划线格式（`INVALID_ACCESS_TOKEN`），**不会出现带空格的 `INVALID ACCESS TOKEN`**——若收到那个，是中间 BFF/网关自己返的，不是 AI-Ops。
 
 ### 2.2 错误响应统一形状
 
@@ -427,9 +437,11 @@ queued → running → completed | failed | expired                  （报告�
 location /v1/ {
     proxy_pass http://127.0.0.1:8788;                            # 120 本机 AI-Ops 网关（生产）
     proxy_set_header Authorization "Bearer <AI-Ops 服务令牌>";  # 服务端注入，不下发前端
-    proxy_set_header X-Third-Session $http_third_session;       # APK 的 third-session 头原样改名转发
+    proxy_set_header X-Third-Session $http_third_session;       # 透传前端 third-session 头（nginx 内部可大写，网关侧 ASCII 头不区分大小写）
     proxy_set_header X-Business-Entry "consumer";               # C 端 APP 入口固定 consumer
 }
+# 注意：$http_third_session 取的是入站请求的 third-session 小写头——前端仍必须发小写 third-session，
+# 若发 X-Third-Session（带下划线）nginx 默认丢弃（underscores_in_headers off），此处会拿到空值。
 ```
 
 实施说明：
@@ -458,6 +470,21 @@ APK / 前端 → https://api.qumall.qushiyun.com/v1/*（120 nginx 反代 + 头�
 
 - 三线验收状态：FAQ 200（28 条）、健康报告 202→completed、单问诊断 202→执行面正常（终态复验待模型配额，glm-ark 月配额 2026-09-21 重置）
 - 前端剩余工作见 §10.5；APIURL 切换后 FAQ 与健康报告线立即可用
+
+### 10.7 前端最小验证命令（改完直接跑，无需后端配合）
+
+```bash
+curl -i "https://api.qumall.qushiyun.com/v1/faq/recommendations" \
+  -H "tenant-id: 2019588094906601472" \
+  -H "third-session: <你的有效 thirdSession>"   # 全小写连字符，不是 X-Third-Session
+# 期望：HTTP/1.1 200 + recommendations 数组（28 条）
+```
+
+要点：
+- **只有 `tenant-id` + `third-session` 两个头就够**，不需要 `Authorization`（公网 nginx 已注入服务令牌），不需要 `X-Business-Entry`（单手台消费者身份自动判定）。
+- 若用 `X-Third-Session`（大写）→ **401 `INVALID_ACCESS_TOKEN`**（头被 nginx 丢弃，实测对照）。
+- 若收到**带空格**的错误码（如 `INVALID ACCESS TOKEN`）→ 那是中间 BFF/网关自己返的，**不是 AI-Ops**；先检查有没有 IP/端口转发链在中间拦截。
+
 
 ### 10.5 前端剩余工作（断点 1、2 修复后）
 

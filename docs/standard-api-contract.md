@@ -30,7 +30,7 @@ GET https://api.qumall.qushiyun.com/health
 ```http
 Authorization: Bearer <aiops_service_token>
 Content-Type: application/json
-X-Third-Session: <thirdSession>
+third-session: <thirdSession>   # 全小写；X-Third-Session 会被 nginx 丢弃
 ```
 
 示例：
@@ -38,7 +38,7 @@ X-Third-Session: <thirdSession>
 ```bash
 curl --fail-with-body \
   -H "Authorization: Bearer $AIOPS_SERVICE_TOKEN" \
-  -H "X-Third-Session: $THIRD_SESSION" \
+  -H "third-session: $THIRD_SESSION" \
   -H "Content-Type: application/json" \
   -d '{"order_no":"2094370061724549120"}' \
   https://api.qumall.qushiyun.com/v1/health-report-jobs
@@ -51,7 +51,7 @@ C 端 `thirdSession`：
 
 ```http
 Authorization: Bearer <aiops_service_token>
-X-Third-Session: <thirdSession>
+third-session: <thirdSession>   # 全小写；X-Third-Session 会被 nginx 丢弃
 
 `thirdSession` 不是 JWT 或服务凭据。AI-Ops 通过只读 Redis 查询
 `app:3rd_session:<thirdSession>`，解析会话后建立 `ScopeContext`；小程序不直接调用 AI-Ops。
