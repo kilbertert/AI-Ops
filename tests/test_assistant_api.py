@@ -6,7 +6,7 @@ from fastapi.testclient import TestClient
 
 from aiops_diagnostics.caller_auth import CALLER_AUTH_FORBIDDEN, CallerAuthError
 from aiops_diagnostics.faq import FAQCatalog, PlatformIdentityResolver, PlatformRoleRecord
-from aiops_diagnostics.gateway_api import create_gateway_app
+from aiops_diagnostics.gateway_api import _extract_order_no, create_gateway_app
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_store import GatewayStore
 from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
@@ -219,3 +219,45 @@ def test_assistant_faq_read_only_token_cannot_use_diagnosis_branch(tmp_path: Pat
     )
     assert resp.status_code in (401, 403)
     assert runtime.calls == []
+
+
+def test_extract_order_no_recognizes_owned_19digit(tmp_path: Path) -> None:
+    """A 19-digit standalone token is extracted (order id pattern)."""
+    assert _extract_order_no("查到啦，订单 2096164064667852801 怎么还没退押金") == "2096164064667852801"
+
+
+def test_extract_order_no_ignores_short_digits_and_phone(tmp_path: Path) -> None:
+    """Pure-digit runs shorter than 15 chars are NOT treated as orders."""
+    assert _extract_order_no("我的手机号是13800001111，帮我查一下") is None
+    assert _extract_order_no("价格是50元") is None
+
+
+def test_assistant_text_embedded_owned_order_routes_to_diagnosis(tmp_path: Path) -> None:
+    """A question containing the caller's own order id routes to diagnosis."""
+    client, runtime = _client(tmp_path)  # fixture allows 2096164064667852801
+    resp = client.post(
+        "/v1/assistant/questions",
+        json={"question": "订单 2096164064667852801 为什么充电突然停了"},
+        headers=_headers(),
+    )
+    assert resp.status_code == 202
+    body = resp.json()
+    assert body["type"] == "diagnosis"
+    assert body["order_no"] == "2096164064667852801"
+    assert body["order_no_extracted"] == "2096164064667852801"
+    assert runtime.calls == [("2096164064667852801", "订单 2096164064667852801 为什么充电突然停了")]
+
+
+def test_assistant_text_embedded_unowned_order_falls_through(tmp_path: Path) -> None:
+    """A question with an order id the caller does NOT own falls through to the
+    general answer (NOT a hard 404), because no ownership was asserted."""
+    client, runtime = _client(tmp_path, allowed_orders={"other-only"})
+    resp = client.post(
+        "/v1/assistant/questions",
+        json={"question": "订单 2096164064667852801 怎么还没退款"},
+        headers=_headers(),
+    )
+    assert resp.status_code == 202
+    body = resp.json()
+    assert body["type"] == "qa"
+    assert runtime.calls == []  # no diagnosis started

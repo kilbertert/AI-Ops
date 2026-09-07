@@ -504,6 +504,40 @@ def create_gateway_app(
             base = _standard_diagnosis_response(diagnosis)
             return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content={**base, "type": "diagnosis"})
 
+        # Route 1b: text-embedded order number → diagnosis if authorizable.
+        # The caller did not pass order_no explicitly, but the question text
+        # contains a plausible order id. Verify ownership first; only then
+        # route to order diagnosis. If ownership fails, fall through to the
+        # generic answer — this is NOT a hard 404, because the caller did not
+        # assert ownership of a specific order (T4/#154).
+        if not payload.order_no:
+            embedded = _extract_order_no(payload.question)
+            if embedded:
+                try:
+                    owns = context.order_authorizer.can_access(caller, embedded)
+                except (CallerAuthError, ScopeError, SourceError, ValueError):
+                    owns = False
+                if owns:
+                    try:
+                        diagnosis = context.runtime.start_standard_diagnosis(
+                            caller,
+                            embedded,
+                            payload.question,
+                            None,
+                        )
+                    except (ValueError, RuntimeError) as exc:
+                        raise StandardAPIError(
+                            status.HTTP_503_SERVICE_UNAVAILABLE,
+                            "DIAGNOSIS_UNAVAILABLE",
+                            "diagnosis unavailable",
+                            retryable=True,
+                        ) from exc
+                    base = _standard_diagnosis_response(diagnosis)
+                    return JSONResponse(
+                        status_code=status.HTTP_202_ACCEPTED,
+                        content={**base, "type": "diagnosis", "order_no_extracted": embedded},
+                    )
+
         # Route 2: FAQ short-circuit (deterministic, zero-order, zero-model).
         faq_id = _faq_hit_by_keywords(decision.platform, context.faq_catalog, payload.question)
         if faq_id is not None:
@@ -1055,6 +1089,33 @@ def _faq_hit_by_keywords(platform: str, faq_catalog: FAQCatalog, question: str) 
             break
     containment = len(qsigs & title_sigs) / len(qsigs)
     return best_qid if containment >= _FAQ_MIN_CONTAINMENT else None
+
+
+_ORDER_TOKEN = re.compile(r"(?<![A-Za-z0-9])[A-Za-z0-9_.:-]{6,64}(?![A-Za-z0-9])")
+
+
+def _extract_order_no(text: str) -> str | None:
+    """Extract the first plausible order number from free text, or None.
+
+    Order numbers look like long alphanumeric/token runs (e.g. 19-digit
+    IDs or dashed codes). We match standalone tokens of 6-64 safe chars
+    (letters/digits/_.:-), which is a much stronger signal than bare digits
+    (which would also hit phone numbers). This is a cheap deterministic first
+    pass; a model disambiguation layer can refine it later.
+    """
+    if not text:
+        return None
+    for match in _ORDER_TOKEN.finditer(text):
+        candidate = match.group(0)
+        # Skip pure-digit tokens that are too short to be order ids and could
+        # be phone numbers (<6 digits already excluded by length, but a long
+        # pure-digit run like a phone would be 11 digits — still ambiguous;
+        # order numbers in this system are >=15 chars). To be conservative,
+        # only treat pure-digit runs >=15 as order candidates.
+        if candidate.isdigit() and len(candidate) < 15:
+            continue
+        return candidate
+    return None
 
 
 def _standard_diagnosis_response(diagnosis: dict[str, Any]) -> dict[str, Any]:
