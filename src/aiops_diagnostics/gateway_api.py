@@ -83,6 +83,25 @@ class HealthReportJobRequest(BaseModel):
     order_no: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.:-]+$")
 
 
+class AssistantQuestionRequest(BaseModel):
+    """Free-text question for the unified assistant entry point.
+
+    ``order_no`` is OPTIONAL here — unlike the order diagnosis endpoint. When
+    absent, the classifier routes to a generic (zero-order) answer or a FAQ
+    short-circuit. When present, it is honored as an explicit order diagnosis.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    question: str = Field(min_length=1, max_length=4000)
+    order_no: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9_.:-]+$",
+    )
+
+
 class StandardDiagnosisRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -349,6 +368,41 @@ def create_gateway_app(
             ) from exc
         return caller, decision
 
+    def assistant_identity(
+        caller: ScopeContext = Depends(authenticated_diagnosis_caller),  # noqa: B008
+        business_entry: Annotated[str | None, Header(alias="X-Business-Entry")] = None,
+    ) -> tuple[ScopeContext, Any]:
+        """Assistant endpoint identity: diagnoses:write callers + platform decision.
+
+        The assistant endpoint can trigger a full order diagnosis (a write
+        action) on its order branch, so it must authenticate with the same
+        scope as /v1/standard/diagnoses (aiops:diagnoses:write) — NOT the
+        weaker faq:read used by the pure-FAQ endpoints. The authenticated
+        caller then resolves the platform content domain for the FAQ branch.
+        """
+        try:
+            decision = context.platform_resolver.resolve(caller, business_entry)
+        except FAQError as exc:
+            status_code = {
+                PLATFORM_AMBIGUOUS: status.HTTP_409_CONFLICT,
+                PLATFORM_FORBIDDEN: status.HTTP_403_FORBIDDEN,
+                PLATFORM_UNAVAILABLE: status.HTTP_503_SERVICE_UNAVAILABLE,
+            }.get(exc.code, status.HTTP_503_SERVICE_UNAVAILABLE)
+            raise StandardAPIError(
+                status_code,
+                exc.code,
+                str(exc),
+                retryable=exc.code == PLATFORM_UNAVAILABLE,
+            ) from exc
+        except PlatformDirectoryError as exc:
+            raise StandardAPIError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                PLATFORM_UNAVAILABLE,
+                "platform identity unavailable",
+                retryable=True,
+            ) from exc
+        return caller, decision
+
     @app.get("/health")
     def health() -> dict[str, Any]:
         return {
@@ -398,6 +452,86 @@ def create_gateway_app(
             "answer": answer["answer"],
             "format": answer["format"],
         }
+
+    @app.post("/v1/assistant/questions")
+    def assistant_questions(
+        payload: AssistantQuestionRequest,
+        identity: tuple[ScopeContext, Any] = Depends(assistant_identity),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Unified assistant entry point with optional order_no (T2/#152).
+
+        Classifier routes:
+          - explicit order_no        → type=diagnosis (defer to the order
+            diagnosis semantics: authorize then start_standard_diagnosis)
+          - FAQ keyword short-circuit → type=faq (sync, deterministic)
+          - else                     → type=qa (generic zero-order answer);
+            this ticket returns a queued placeholder that the T3 ticket fills
+            with a real zero-order Agent job.
+        """
+        caller, decision = identity
+
+        # Route 1: explicit order → diagnosis semantics.
+        if payload.order_no:
+            try:
+                allowed = context.order_authorizer.can_access(caller, payload.order_no)
+            except (CallerAuthError, ScopeError, SourceError, ValueError) as exc:
+                raise StandardAPIError(
+                    status.HTTP_503_SERVICE_UNAVAILABLE,
+                    "ORDER_AUTHORIZATION_UNAVAILABLE",
+                    "order authorization unavailable",
+                    retryable=True,
+                ) from exc
+            if not allowed:
+                raise StandardAPIError(
+                    status.HTTP_404_NOT_FOUND,
+                    "ORDER_NOT_FOUND",
+                    "order not found",
+                )
+            try:
+                diagnosis = context.runtime.start_standard_diagnosis(
+                    caller,
+                    payload.order_no,
+                    payload.question,
+                    None,
+                )
+            except (ValueError, RuntimeError) as exc:
+                raise StandardAPIError(
+                    status.HTTP_503_SERVICE_UNAVAILABLE,
+                    "DIAGNOSIS_UNAVAILABLE",
+                    "diagnosis unavailable",
+                    retryable=True,
+                ) from exc
+            base = _standard_diagnosis_response(diagnosis)
+            return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content={**base, "type": "diagnosis"})
+
+        # Route 2: FAQ short-circuit (deterministic, zero-order, zero-model).
+        faq_id = _faq_hit_by_keywords(decision.platform, context.faq_catalog, payload.question)
+        if faq_id is not None:
+            answer = context.faq_catalog.answer(decision.platform, faq_id)
+            return {
+                **decision.public(),
+                "type": "faq",
+                "faq_version": context.faq_catalog.version,
+                "question_id": answer["question_id"],
+                "question": answer["question"],
+                "answer": answer["answer"],
+                "format": answer["format"],
+            }
+
+        # Route 3: generic zero-order answer. Placeholder queue until T3 wires
+        # the real zero-order Agent job; the shape is the async contract.
+        return JSONResponse(
+            status_code=status.HTTP_202_ACCEPTED,
+            content={
+                "type": "qa",
+                "status": "queued",
+                "retry_after_ms": 1000,
+                "result": None,
+                "error": None,
+                "question": payload.question,
+                "order_no": None,
+            },
+        )
 
     @app.get("/v1/orders/{order_no}/access")
     def order_access(
@@ -775,6 +909,113 @@ def _health_job_response(job: dict[str, Any]) -> dict[str, Any]:
         "updated_at": job["updated_at"],
         "completed_at": job.get("completed_at"),
     }
+
+
+_FAQ_GENERIC_CHARS = frozenset(
+    {
+        # Sentence-final / filler CJK that carries almost no discriminative
+        # signal in this catalog. Without dropping these, "怎么办" (which ends
+        # nearly every consumer title) swamps the matcher and every question
+        # collapses onto the first title.
+        "的",
+        "了",
+        "吗",
+        "呢",
+        "呀",
+        "啊",
+        "在",
+        "有",
+        "可",
+        "以",
+        "能",
+        "会",
+        "是",
+        "怎",
+        "么",
+        "办",
+        "如",
+        "何",
+        "为",
+        "什",
+        "一",
+        "下",
+        "不",
+        "没",
+        "很",
+        "请",
+    }
+)
+# Fraction of the question's significant chars that must appear in the title.
+# Containment (not raw overlap) prevents a generic question ("续航里程...")
+# from matching a title merely by sharing common chars (充/电/程) across many
+# entries. A query that shares only a single char (e.g. just "枪") must not
+# be enough; require at least MIN_OVERLAP distinct chars too.
+_FAQ_MIN_CONTAINMENT = 0.5
+_FAQ_MIN_OVERLAP = 2
+
+
+def _normalize_keywords(text: str) -> set[str]:
+    """Deterministic CJK char set for FAQ short-circuiting.
+
+    Keeps significant single CJK chars (generic filler/sentence-tail dropped)
+    plus whole Latin runs. Used for char-set containment against a candidate
+    title: the question's distinctive chars must mostly be present in the
+    title, which isolates genuinely related titles without a real tokenizer
+    while resisting the "怎么办" tail and shared single-char noise.
+    """
+    lowered = text.lower()
+    significant: set[str] = set()
+    latin = ""
+    for ch in lowered:
+        if "一" <= ch <= "鿿":
+            if latin:
+                significant.add(latin)
+                latin = ""
+            if ch not in _FAQ_GENERIC_CHARS:
+                significant.add(ch)
+        elif ch.isalnum():
+            latin += ch
+        else:
+            if latin:
+                significant.add(latin)
+                latin = ""
+    if latin:
+        significant.add(latin)
+    return significant
+
+
+def _faq_hit_by_keywords(platform: str, faq_catalog: FAQCatalog, question: str) -> str | None:
+    """Return a question_id whose title best matches the free question, or None.
+
+    Char-set containment: score = |question_sig ∩ title_sig| / |question_sig|,
+    requiring the question's significant chars to be mostly present in the
+    title. Deterministic, zero-model; a later ticket adds model disambiguation
+    for ambiguous text.
+    """
+    qsigs = _normalize_keywords(question)
+    if not qsigs:
+        return None
+    best_qid: str | None = None
+    best_overlap = 0
+    for entry in faq_catalog.catalog(platform):
+        title_sigs = _normalize_keywords(str(entry.get("question") or ""))
+        if not title_sigs:
+            continue
+        overlap = len(qsigs & title_sigs)
+        if overlap > best_overlap:
+            best_overlap = overlap
+            best_qid = entry["question_id"]
+    # Require at least MIN_OVERLAP distinct chars AND a strong containment,
+    # so single-char ties ("枪") or generic overlap ("充/电/程") never fire.
+    if best_overlap < _FAQ_MIN_OVERLAP or best_qid is None:
+        return None
+    title_sigs = _normalize_keywords(str(faq_catalog.catalog(platform)[0]["question"]))
+    for entry in faq_catalog.catalog(platform):
+        if entry["question_id"] == best_qid:
+            title_sigs = _normalize_keywords(str(entry.get("question") or ""))
+            break
+    containment = len(qsigs & title_sigs) / len(qsigs)
+    return best_qid if containment >= _FAQ_MIN_CONTAINMENT else None
 
 
 def _standard_diagnosis_response(diagnosis: dict[str, Any]) -> dict[str, Any]:
