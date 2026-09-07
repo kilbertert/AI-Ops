@@ -14,7 +14,7 @@
 
 ```http
 Authorization: Bearer <aiops-service-token>
-X-Third-Session: <verified-third-session>
+third-session: <verified-third-session>   # 全小写连字符；不能写 X-Third-Session（nginx 会丢带下划线头）
 X-Business-Entry: consumer
 ```
 
