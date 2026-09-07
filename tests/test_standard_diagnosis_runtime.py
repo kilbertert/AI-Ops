@@ -77,6 +77,44 @@ def test_standard_diagnosis_runs_existing_agent_path(tmp_path: Path, monkeypatch
     assert current["internal_run_id"].startswith("run-")
 
 
+def test_blocked_diagnosis_is_failed_with_model_output_code(tmp_path: Path, monkeypatch) -> None:
+    """A blocked run (model could not produce structured output) is surfaced as
+    failed DIAGNOSIS_BLOCKED, NOT a generic inconclusive — so the frontend can
+    distinguish provider/task failure from insufficient evidence."""
+    runtime, store, settings = _runtime(tmp_path)
+
+    def diagnose(workspace, request, selected_settings, fixture, **kwargs):
+        del workspace, request, selected_settings, fixture, kwargs
+        return AgentDiagnosis(
+            incident_id="incident-x",
+            order_no="ORDER-1",
+            tenant_id="T-1",
+            status=DiagnosisStatus.BLOCKED,
+            summary="诊断未能生成结论",
+            root_cause="Codex 多次返回无效结构化输出",
+            confidence=Confidence.LOW,
+            evidence_ids=[],
+            hypotheses=[],
+            limitations=["Codex 多次返回无效结构化输出"],
+            failed_sources=[],
+            next_steps=[],
+        )
+
+    monkeypatch.setattr("aiops_diagnostics.gateway_runtime.Settings.from_config", lambda *_: settings)
+    monkeypatch.setattr("aiops_diagnostics.gateway_runtime.run_agent_diagnosis", diagnose)
+
+    created = runtime.start_standard_diagnosis(_scope(), "ORDER-1", "为什么跳枪", None)
+    deadline = time.monotonic() + 2
+    current = created
+    while current["status"] not in {"completed", "failed", "inconclusive"}:
+        assert time.monotonic() < deadline
+        time.sleep(0.01)
+        current = store.get_standard_diagnosis(created["diagnosis_id"], _scope().scope_fingerprint)
+    runtime.shutdown()
+    assert current["status"] == "failed"
+    assert current["error_code"] == "DIAGNOSIS_BLOCKED"
+
+
 def test_inconclusive_diagnosis_is_retained_and_late_completion_is_rejected(tmp_path: Path) -> None:
     store = GatewayStore(tmp_path / "gateway.db")
     diagnosis = store.create_standard_diagnosis("scope-1", "O-1", "问题", None)
