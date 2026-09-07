@@ -606,6 +606,32 @@ def create_gateway_app(
             "error": None,
         }
 
+    @app.get("/v1/assistant/questions")
+    def list_assistant_questions(
+        identity: tuple[ScopeContext, Any] = Depends(assistant_identity),  # noqa: B008
+        limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    ) -> dict[str, Any]:
+        """List this caller's general-question history (T5/#155).
+
+        Kept separate from /v1/standard/diagnoses (order diagnostics): the
+        QA history contains only zero-order answers, each typed `qa`.
+        """
+        caller, _ = identity
+        try:
+            questions = context.runtime.list_assistant_qa(caller, limit=limit)
+        except (ValueError, RuntimeError) as exc:
+            raise StandardAPIError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "QA_UNAVAILABLE",
+                "general answer unavailable",
+                retryable=True,
+            ) from exc
+        return {
+            "type": "qa_list",
+            "count": len(questions),
+            "questions": questions,
+        }
+
     @app.get("/v1/orders/{order_no}/access")
     def order_access(
         order_no: str,

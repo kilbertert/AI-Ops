@@ -492,3 +492,51 @@ curl -i "https://api.qumall.qushiyun.com/v1/faq/recommendations" \
 2. 点击推荐问题/发送自由文本时真正调用 `getFaqAnswer(question_id)` / `createDiagnosis({order_no, question})`，替换当前打字机假回复；
 3. 电池报告页接 `createHealthReportJob(order_no)` + 按 `retry_after_ms` 轮询 `getHealthReportJob(job_id)`；
 4. 错误分支按 §2.2 处理（422 不原样重试、401 引导重新登录、503 稍后重试）。
+
+## 10.8 智能问答调用示例（前端可直接照抄）
+
+统一入口 `POST /v1/assistant/questions`（`order_no` 可选）。三种场景：
+
+### 场景 A：快捷问 / FAQ 命中 —— 同步返回答案
+
+```http
+POST https://api.qumall.qushiyun.com/v1/assistant/questions
+third-session: <当前登录态>   tenant-id: <租户>   X-Business-Entry: consumer
+Content-Type: application/json
+
+{"question": "无法拔枪怎么办"}
+```
+→ `200` `{type:"faq", question_id, answer, ...}` **直接渲染答案**。
+
+### 场景 B：自由提问（任意问题）—— 异步 job，轮询
+
+```http
+POST https://api.qumall.qushiyun.com/v1/assistant/questions
+{"question": "磷酸铁锂电池怎么保养充电"}
+
+→ 202 {type:"qa", qa_id, status:"queued"}
+
+GET https://api.qumall.qushiyun.com/v1/assistant/questions/{qa_id}
+   （按 retry_after_ms 轮询）
+   status=completed → {result: {text, reminder}}
+   status=failed    → error（多为模型限流，稍后重试）
+```
+
+### 场景 C：带订单的自由提问 —— 走订单诊断
+
+```http
+POST https://api.qumall.qushiyun.com/v1/assistant/questions
+{"question": "这个订单为什么提前停了", "order_no": "2096164064667852801"}
+
+→ 202 {type:"diagnosis", diagnosis_id, status:"queued"}
+  轮询 GET /v1/standard/diagnoses/{diagnosis_id} 到 completed
+```
+
+也可在 `question` 里直接带订单号（如"订单 209616...怎么还没退押金"），后端自动提取并归属校验后走订单诊断（非本人订单回落通用问答，不泄露）。
+
+### 历史分离
+
+- **通用问答历史**：`GET /v1/assistant/questions?limit=50` → `{type:"qa_list", questions:[{qa_id,question,status,...}]}`
+- **订单诊断历史**：`GET /v1/standard/diagnoses?limit=50`（独立）
+
+两者按调用者隔离，前端"我的问答"与"我的诊断"分开展示。
