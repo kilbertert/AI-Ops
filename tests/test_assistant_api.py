@@ -4,6 +4,7 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from aiops_diagnostics.caller_auth import CALLER_AUTH_FORBIDDEN, CallerAuthError
 from aiops_diagnostics.faq import FAQCatalog, PlatformIdentityResolver, PlatformRoleRecord
 from aiops_diagnostics.gateway_api import create_gateway_app
 from aiops_diagnostics.gateway_config import GatewayServerSettings
@@ -12,7 +13,16 @@ from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectReco
 
 
 class _Caller:
+    """Mimics an introspection resolver: a token named "narrow" may only hold
+    aiops:faq:read, everything else is granted the requested scope. Requests
+    for aiops:diagnoses:write under "narrow" raise CALLER_AUTH_FORBIDDEN, like
+    a real introspection server. This lets the auth-downgrade regression prove
+    that a faq:read-only caller CANNOT use the diagnosis branch of the
+    assistant endpoint."""
+
     def resolve(self, token: str, *, required_scope: str, third_session: str | None = None) -> ScopeContext:
+        if token == "narrow" and required_scope not in {"aiops:faq:read"}:
+            raise CallerAuthError("insufficient scope", code=CALLER_AUTH_FORBIDDEN)
         subject = SubjectRecord(b_user_id="c:C-1", c_user_id="C-1", tenant_id="T-1")
         return ScopeContext.build(
             caller=subject,
@@ -93,12 +103,13 @@ def _headers() -> dict[str, str]:
 def test_assistant_faq_shortcircuit_returns_sync_answer(tmp_path: Path) -> None:
     """FAQ-keyword hit returns a deterministic, zero-order sync answer."""
     client, _ = _client(tmp_path)
-    # "无法拔枪" should keyword-hit a FAQ title (q010).
+    # "无法拔枪" must keyword-hit q010 (拔不出充电枪), NOT q007 or another
+    # title merely because they share the generic tail "怎么办".
     resp = client.post("/v1/assistant/questions", json={"question": "无法拔枪怎么办"}, headers=_headers())
     assert resp.status_code == 200
     body = resp.json()
     assert body["type"] == "faq"
-    assert body["question_id"].startswith("consumer.faq.")
+    assert body["question_id"] == "consumer.faq.q010"
     assert body["answer"]
 
 
@@ -168,3 +179,19 @@ def test_assistant_missing_auth_is_401(tmp_path: Path) -> None:
     client, _ = _client(tmp_path)
     resp = client.post("/v1/assistant/questions", json={"question": "hi"}, headers={})
     assert resp.status_code == 401
+
+
+def test_assistant_faq_read_only_token_cannot_use_diagnosis_branch(tmp_path: Path) -> None:
+    """Auth-downgrade regression: a caller holding only aiops:faq:read (which
+    WOULD pass the pure-FAQ faq_identity) must NOT be able to start an order
+    diagnosis through the assistant endpoint. The assistant entry point
+    requires aiops:diagnoses:write, like /v1/standard/diagnoses."""
+    client, runtime = _client(tmp_path)
+    headers = {"Authorization": "Bearer narrow", "X-Business-Entry": "consumer"}
+    resp = client.post(
+        "/v1/assistant/questions",
+        json={"question": "你好", "order_no": "2096164064667852801"},
+        headers=headers,
+    )
+    assert resp.status_code in (401, 403)
+    assert runtime.calls == []
