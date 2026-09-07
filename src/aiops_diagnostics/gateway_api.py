@@ -83,6 +83,25 @@ class HealthReportJobRequest(BaseModel):
     order_no: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_.:-]+$")
 
 
+class AssistantQuestionRequest(BaseModel):
+    """Free-text question for the unified assistant entry point.
+
+    ``order_no`` is OPTIONAL here — unlike the order diagnosis endpoint. When
+    absent, the classifier routes to a generic (zero-order) answer or a FAQ
+    short-circuit. When present, it is honored as an explicit order diagnosis.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    question: str = Field(min_length=1, max_length=4000)
+    order_no: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9_.:-]+$",
+    )
+
+
 class StandardDiagnosisRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -398,6 +417,86 @@ def create_gateway_app(
             "answer": answer["answer"],
             "format": answer["format"],
         }
+
+    @app.post("/v1/assistant/questions")
+    def assistant_questions(
+        payload: AssistantQuestionRequest,
+        identity: tuple[ScopeContext, Any] = Depends(faq_identity),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Unified assistant entry point with optional order_no (T2/#152).
+
+        Classifier routes:
+          - explicit order_no        → type=diagnosis (defer to the order
+            diagnosis semantics: authorize then start_standard_diagnosis)
+          - FAQ keyword short-circuit → type=faq (sync, deterministic)
+          - else                     → type=qa (generic zero-order answer);
+            this ticket returns a queued placeholder that the T3 ticket fills
+            with a real zero-order Agent job.
+        """
+        caller, decision = identity
+
+        # Route 1: explicit order → diagnosis semantics.
+        if payload.order_no:
+            try:
+                allowed = context.order_authorizer.can_access(caller, payload.order_no)
+            except (CallerAuthError, ScopeError, SourceError, ValueError) as exc:
+                raise StandardAPIError(
+                    status.HTTP_503_SERVICE_UNAVAILABLE,
+                    "ORDER_AUTHORIZATION_UNAVAILABLE",
+                    "order authorization unavailable",
+                    retryable=True,
+                ) from exc
+            if not allowed:
+                raise StandardAPIError(
+                    status.HTTP_404_NOT_FOUND,
+                    "ORDER_NOT_FOUND",
+                    "order not found",
+                )
+            try:
+                diagnosis = context.runtime.start_standard_diagnosis(
+                    caller,
+                    payload.order_no,
+                    payload.question,
+                    None,
+                )
+            except (ValueError, RuntimeError) as exc:
+                raise StandardAPIError(
+                    status.HTTP_503_SERVICE_UNAVAILABLE,
+                    "DIAGNOSIS_UNAVAILABLE",
+                    "diagnosis unavailable",
+                    retryable=True,
+                ) from exc
+            base = _standard_diagnosis_response(diagnosis)
+            return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content={**base, "type": "diagnosis"})
+
+        # Route 2: FAQ short-circuit (deterministic, zero-order, zero-model).
+        faq_id = _faq_hit_by_keywords(decision.platform, context.faq_catalog, payload.question)
+        if faq_id is not None:
+            answer = context.faq_catalog.answer(decision.platform, faq_id)
+            return {
+                **decision.public(),
+                "type": "faq",
+                "faq_version": context.faq_catalog.version,
+                "question_id": answer["question_id"],
+                "question": answer["question"],
+                "answer": answer["answer"],
+                "format": answer["format"],
+            }
+
+        # Route 3: generic zero-order answer. Placeholder queue until T3 wires
+        # the real zero-order Agent job; the shape is the async contract.
+        return JSONResponse(
+            status_code=status.HTTP_202_ACCEPTED,
+            content={
+                "type": "qa",
+                "status": "queued",
+                "retry_after_ms": 1000,
+                "result": None,
+                "error": None,
+                "question": payload.question,
+                "order_no": None,
+            },
+        )
 
     @app.get("/v1/orders/{order_no}/access")
     def order_access(
@@ -775,6 +874,84 @@ def _health_job_response(job: dict[str, Any]) -> dict[str, Any]:
         "updated_at": job["updated_at"],
         "completed_at": job.get("completed_at"),
     }
+
+
+_FAQ_KEYWORD_STOPWORDS = frozenset(
+    {
+        "的",
+        "了",
+        "怎么",
+        "如何",
+        "为什么",
+        "一下",
+        "吗",
+        "呢",
+        "呀",
+        "啊",
+        "在",
+        "有",
+        "可以",
+        "能",
+        "会",
+        "是",
+        "you",
+        "the",
+        "a",
+        "an",
+    }
+)
+
+
+def _normalize_keywords(text: str) -> set[str]:
+    """Lowercase + alnum tokenize, drop stopwords, keep meaningful terms.
+
+    Deterministic rule used by the assistant classifier to short-circuit a
+    free question to a FAQ title. Deliberately simple: this is the cheap
+    first-cut of the two-stage classifier (rules, then model disambiguation in
+    later tickets).
+    """
+    lowered = text.lower()
+    tokens: set[str] = set()
+    current = ""
+    for ch in lowered:
+        if ch.isalnum():
+            current += ch
+        else:
+            if current and current not in _FAQ_KEYWORD_STOPWORDS:
+                tokens.add(current)
+            current = ""
+    if current and current not in _FAQ_KEYWORD_STOPWORDS:
+        tokens.add(current)
+    return tokens
+
+
+def _faq_hit_by_keywords(platform: str, faq_catalog: FAQCatalog, question: str) -> str | None:
+    """Return a question_id whose title best matches the free question, or None.
+
+    Matches when a significant keyword is a substring of a title token (or the
+    reverse), so "拔枪" hits "拔不出充电枪" even though tokenization splits them
+    differently. Deterministic, zero-model; a later ticket adds model
+    disambiguation when rules are ambiguous.
+    """
+    qkws = _normalize_keywords(question)
+    if not qkws:
+        return None
+    best_qid: str | None = None
+    best_score = 0
+    for entry in faq_catalog.catalog(platform):
+        title_kws = _normalize_keywords(str(entry.get("question") or ""))
+        if not title_kws:
+            continue
+        score = 0
+        for qk in qkws:
+            for tk in title_kws:
+                if qk == tk or qk in tk or tk in qk:
+                    score += 1
+                    break
+        if score > best_score:
+            best_score = score
+            best_qid = entry["question_id"]
+    return best_qid if best_score >= 1 else None
 
 
 def _standard_diagnosis_response(diagnosis: dict[str, Any]) -> dict[str, Any]:
