@@ -544,8 +544,9 @@ def create_gateway_app(
     @app.get("/v1/assistant/questions/{qa_id}")
     def get_assistant_question(
         qa_id: str,
-        caller: ScopeContext = Depends(assistant_identity),  # noqa: B008
+        identity: tuple[ScopeContext, Any] = Depends(assistant_identity),  # noqa: B008
     ) -> dict[str, Any]:
+        caller, _ = identity
         try:
             qa = context.runtime.get_assistant_qa(caller, qa_id)
         except (ValueError, RuntimeError) as exc:
