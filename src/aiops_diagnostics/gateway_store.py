@@ -445,6 +445,137 @@ class GatewayStore:
             row = connection.execute("SELECT COUNT(*) AS count FROM standard_diagnoses").fetchone()
         return int(row["count"])
 
+    # ------------------------------------------------------------------
+    # assistant_questions (general-question jobs, T3/#153)
+    # ------------------------------------------------------------------
+
+    def create_assistant_question(
+        self,
+        scope_fingerprint: str,
+        question: str,
+        *,
+        internal_run_id: str | None = None,
+    ) -> dict[str, Any]:
+        scope_fingerprint = _scope(scope_fingerprint, "scope_fingerprint")
+        question = _question(question, "question")
+        now = _utc_now()
+        qa_id = "qa_" + uuid.uuid4().hex
+        with self._connection(write=True) as connection:
+            self._expire_assistant_questions(connection, now)
+            connection.execute(
+                """
+                INSERT INTO assistant_questions (
+                    qa_id, scope_fingerprint, question, internal_run_id,
+                    status, created_at, updated_at, deadline_at
+                ) VALUES (?, ?, ?, ?, 'queued', ?, ?, ?)
+                """,
+                (
+                    qa_id,
+                    scope_fingerprint,
+                    redact_text(question),
+                    internal_run_id,
+                    _iso(now),
+                    _iso(now),
+                    _iso(now + DIAGNOSIS_DEADLINE),
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM assistant_questions WHERE qa_id = ?",
+                (qa_id,),
+            ).fetchone()
+        return _assistant_question_from_row(row)
+
+    def update_assistant_question(
+        self,
+        qa_id: str,
+        *,
+        status: str,
+        result: dict[str, Any] | None = None,
+        error_code: str | None = None,
+        error_message: str | None = None,
+    ) -> bool:
+        if status not in ACTIVE_DIAGNOSIS_STATUSES | TERMINAL_DIAGNOSIS_STATUSES:
+            raise ValueError("invalid assistant-question status")
+        now = _utc_now()
+        completed_at = now if status in TERMINAL_DIAGNOSIS_STATUSES else None
+        expires_at = (
+            now + DIAGNOSIS_COMPLETED_RETENTION
+            if status in {"completed", "inconclusive"}
+            else now + DIAGNOSIS_FAILED_RETENTION
+            if status == "failed"
+            else now
+            if status == "expired"
+            else None
+        )
+        with self._connection(write=True) as connection:
+            self._expire_assistant_questions(connection, now)
+            updated = connection.execute(
+                """
+                UPDATE assistant_questions SET
+                    status = ?, result_json = COALESCE(?, result_json),
+                    error_code = COALESCE(?, error_code),
+                    error_message = COALESCE(?, error_message),
+                    started_at = COALESCE(started_at, ?),
+                    completed_at = COALESCE(completed_at, ?),
+                    expires_at = COALESCE(?, expires_at), updated_at = ?
+                WHERE qa_id = ? AND status IN ('queued', 'running')
+                """,
+                (
+                    status,
+                    json.dumps(result, ensure_ascii=False) if result is not None else None,
+                    error_code,
+                    redact_text(error_message or "")[:1000] if error_message else None,
+                    _iso(now) if status == "running" else None,
+                    _iso(completed_at) if completed_at else None,
+                    _iso(expires_at) if expires_at else None,
+                    _iso(now),
+                    qa_id,
+                ),
+            )
+        return updated.rowcount > 0
+
+    def get_assistant_question(
+        self,
+        qa_id: str,
+        scope_fingerprint: str,
+    ) -> dict[str, Any] | None:
+        with self._connection(write=True) as connection:
+            self._expire_assistant_questions(connection, _utc_now())
+            row = connection.execute(
+                """
+                SELECT * FROM assistant_questions
+                WHERE qa_id = ? AND scope_fingerprint = ?
+                """,
+                (qa_id, scope_fingerprint),
+            ).fetchone()
+        return _assistant_question_from_row(row) if row is not None else None
+
+    def list_assistant_questions(
+        self,
+        scope_fingerprint: str,
+        *,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        if not 1 <= limit <= 200:
+            raise ValueError("limit must be between 1 and 200")
+        with self._connection(write=True) as connection:
+            self._expire_assistant_questions(connection, _utc_now())
+            rows = connection.execute(
+                """
+                SELECT qa_id, question, status, created_at, updated_at
+                FROM assistant_questions
+                WHERE scope_fingerprint = ?
+                ORDER BY created_at DESC LIMIT ?
+                """,
+                (scope_fingerprint, limit),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def count_assistant_questions(self) -> int:
+        with self._connection() as connection:
+            row = connection.execute("SELECT COUNT(*) AS count FROM assistant_questions").fetchone()
+        return int(row["count"])
+
     @staticmethod
     def _expire_diagnoses(connection: sqlite3.Connection, now: datetime) -> None:
         now_text = _iso(now)
@@ -460,6 +591,26 @@ class GatewayStore:
         connection.execute(
             """
             UPDATE standard_diagnoses SET status = 'expired', updated_at = ?
+            WHERE status IN ('completed', 'inconclusive', 'failed') AND expires_at <= ?
+            """,
+            (now_text, now_text),
+        )
+
+    @staticmethod
+    def _expire_assistant_questions(connection: sqlite3.Connection, now: datetime) -> None:
+        now_text = _iso(now)
+        connection.execute(
+            """
+            UPDATE assistant_questions
+            SET status = 'expired', completed_at = COALESCE(completed_at, ?),
+                expires_at = COALESCE(expires_at, ?), updated_at = ?
+            WHERE status IN ('queued', 'running') AND deadline_at <= ?
+            """,
+            (now_text, now_text, now_text, now_text),
+        )
+        connection.execute(
+            """
+            UPDATE assistant_questions SET status = 'expired', updated_at = ?
             WHERE status IN ('completed', 'inconclusive', 'failed') AND expires_at <= ?
             """,
             (now_text, now_text),
@@ -727,6 +878,24 @@ class GatewayStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_standard_diagnoses_scope_created
                     ON standard_diagnoses(scope_fingerprint, created_at DESC);
+                CREATE TABLE IF NOT EXISTS assistant_questions (
+                    qa_id TEXT PRIMARY KEY,
+                    scope_fingerprint TEXT NOT NULL,
+                    question TEXT NOT NULL,
+                    internal_run_id TEXT,
+                    status TEXT NOT NULL,
+                    result_json TEXT,
+                    error_code TEXT,
+                    error_message TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    deadline_at TEXT NOT NULL,
+                    started_at TEXT,
+                    completed_at TEXT,
+                    expires_at TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_assistant_questions_scope_created
+                    ON assistant_questions(scope_fingerprint, created_at DESC);
                 """
             )
             columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(runs)").fetchall()}
@@ -799,6 +968,13 @@ def _health_job_from_row(row: sqlite3.Row) -> dict[str, Any]:
 
 
 def _standard_diagnosis_from_row(row: sqlite3.Row) -> dict[str, Any]:
+    result = dict(row)
+    raw_result = result.pop("result_json", None)
+    result["result"] = json.loads(raw_result) if raw_result else None
+    return result
+
+
+def _assistant_question_from_row(row: sqlite3.Row) -> dict[str, Any]:
     result = dict(row)
     raw_result = result.pop("result_json", None)
     result["result"] = json.loads(raw_result) if raw_result else None

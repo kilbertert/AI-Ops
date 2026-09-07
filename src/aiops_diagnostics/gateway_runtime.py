@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from aiops_diagnostics.agent_contracts import IncidentManifest
-from aiops_diagnostics.agent_runner import run_agent_diagnosis
+from aiops_diagnostics.agent_runner import run_agent_diagnosis, run_zero_order_answer
 from aiops_diagnostics.agent_workspace import AgentWorkspace
 from aiops_diagnostics.codex_runtime import AgentRuntimeError
 from aiops_diagnostics.config import Settings, canonical_provider_base_url, validate_key_slot_name
@@ -209,6 +209,55 @@ class GatewayRuntime:
     ) -> list[dict[str, Any]]:
         return self.store.list_standard_diagnoses(context.scope_fingerprint, limit=limit)
 
+    def start_assistant_qa(
+        self,
+        context: ScopeContext,
+        question: str,
+    ) -> dict[str, Any]:
+        """Start a zero-order general-question job (T3/#153)."""
+        selected_provider = self.diagnostic_settings.agent.select_provider(None)
+        selected_key_slot = validate_key_slot_name(selected_provider.resolved_key_slot())
+        if selected_key_slot not in self.allowed_key_slots:
+            raise ValueError("default key slot is not allowed by the gateway")
+        workspace = AgentWorkspace.create_qa(
+            reference_root(),
+            Path(self.diagnostic_settings.agent.run_root),
+            provider_base_url=canonical_provider_base_url(selected_provider.base_url),
+            provider=selected_provider.name,
+            key_slot=selected_key_slot,
+        )
+        qa = self.store.create_assistant_question(
+            context.scope_fingerprint,
+            question,
+            internal_run_id=workspace.run_id,
+        )
+        future = self._executor.submit(
+            self._execute_assistant_qa,
+            qa["qa_id"],
+            workspace,
+            question,
+            selected_provider.name,
+            selected_key_slot,
+        )
+        self._futures[qa["qa_id"]] = future
+        future.add_done_callback(lambda _: self._futures.pop(qa["qa_id"], None))
+        return qa
+
+    def get_assistant_qa(
+        self,
+        context: ScopeContext,
+        qa_id: str,
+    ) -> dict[str, Any] | None:
+        return self.store.get_assistant_question(qa_id, context.scope_fingerprint)
+
+    def list_assistant_qa(
+        self,
+        context: ScopeContext,
+        *,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        return self.store.list_assistant_questions(context.scope_fingerprint, limit=limit)
+
     def list_evidence(self, run_id: str) -> list[dict[str, Any]]:
         """Return redacted evidence metadata for a run (no business payloads)."""
         run_root = Path(self.diagnostic_settings.agent.run_root).expanduser().resolve()
@@ -326,6 +375,39 @@ class GatewayRuntime:
             diagnosis_id,
             status=public_status,
             result=result.model_dump(mode="json"),
+        )
+
+    def _execute_assistant_qa(
+        self,
+        qa_id: str,
+        workspace: AgentWorkspace,
+        question: str,
+        provider: str,
+        key_slot: str,
+    ) -> None:
+        if not self.store.update_assistant_question(qa_id, status="running"):
+            return
+        settings = Settings.from_config(self.gateway_settings.server_config_file)
+        settings.agent.run_root = self.diagnostic_settings.agent.run_root
+        try:
+            answer = run_zero_order_answer(
+                question,
+                settings,
+                provider=provider,
+                key_slot=key_slot,
+            )
+        except (AgentRuntimeError, SourceError, ValueError) as exc:
+            self.store.update_assistant_question(
+                qa_id,
+                status="failed",
+                error_code="QA_FAILED",
+                error_message=_public_error_message(exc, ""),
+            )
+            return
+        self.store.update_assistant_question(
+            qa_id,
+            status="completed",
+            result=answer,
         )
 
     def _execute_run(

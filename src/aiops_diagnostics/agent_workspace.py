@@ -73,6 +73,47 @@ class AgentWorkspace:
         return workspace
 
     @classmethod
+    def create_qa(
+        cls,
+        project_root: Path,
+        run_root: Path,
+        *,
+        provider_base_url: str = "",
+        provider: str = "",
+        key_slot: str = "default",
+    ) -> AgentWorkspace:
+        """Zero-order (general-question) workspace: references staged, no order
+        incident manifest.
+
+        Used by the assistant's general-question line (T3/#153): the model has
+        access to the staged SOP/backend references but no order identity, so
+        it cannot touch any order-scoped data. There is no incident.json —
+        the workspace is a plain references-toolbox for a single answer turn.
+        """
+        timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+        run_id = f"run-{timestamp}-qa-{secrets.token_hex(2)}"
+        path = run_root.expanduser().resolve() / run_id
+        ensure_private_directory(path)
+        for child in ("evidence", "references"):
+            ensure_private_directory(path / child)
+        workspace = cls(run_id=run_id, path=path)
+        workspace._stage_references(project_root.resolve())
+        workspace.write_text("AGENTS.md", _qa_runtime_instructions())
+        workspace.save_state(
+            RunState(
+                run_id=run_id,
+                incident_id="",
+                next_prompt="",
+                fixture_path=None,
+                fixture_sha256=None,
+                provider_base_url=provider_base_url,
+                provider=provider,
+                key_slot=key_slot,
+            )
+        )
+        return workspace
+
+    @classmethod
     def open(cls, run_root: Path, run_id: str) -> AgentWorkspace:
         if not run_id.startswith("run-") or "/" in run_id or ".." in run_id:
             raise ValueError("非法 run_id")
@@ -204,4 +245,23 @@ def _runtime_instructions() -> str:
 - Distinguish missing data from a failed or blocked source. Never raise confidence
   when a required source failed.
 - The first release may recommend an engineer action, but it must never claim that an action was executed.
+"""
+
+
+def _qa_runtime_instructions() -> str:
+    return """# AI-Ops General Assistant Runtime
+
+- This workspace contains general charging/new-energy references ONLY. There is
+  NO order incident — do not invent or assume an order number, and do not query
+  any order data (you cannot reach it).
+- Answer the user's general charging/EV question using the staged references
+  (SOP, backend docs) plus your own knowledge. If the question is about a
+  SPECIFIC order, bill, or refund, do not fabricate an answer: give general
+  guidance and tell the user that providing an order number enables an exact
+  diagnosis, then end with the reminder line exactly:
+  "提供订单号可获得更精确的结果哦。"
+- Read only files inside this run workspace. Do not inspect parent directories,
+  home directories, credentials, or host configuration. No network access.
+- Return a single `text` answer in Simplified Chinese. The `reminder` field is
+  always true.
 """

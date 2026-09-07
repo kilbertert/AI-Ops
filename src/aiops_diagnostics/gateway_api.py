@@ -518,20 +518,58 @@ def create_gateway_app(
                 "format": answer["format"],
             }
 
-        # Route 3: generic zero-order answer. Placeholder queue until T3 wires
-        # the real zero-order Agent job; the shape is the async contract.
+        # Route 3: generic zero-order answer — start a real QA job (T3/#153).
+        try:
+            qa = context.runtime.start_assistant_qa(caller, payload.question)
+        except (ValueError, RuntimeError) as exc:
+            raise StandardAPIError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "QA_UNAVAILABLE",
+                "general answer unavailable",
+                retryable=True,
+            ) from exc
         return JSONResponse(
             status_code=status.HTTP_202_ACCEPTED,
             content={
                 "type": "qa",
-                "status": "queued",
+                "qa_id": qa["qa_id"],
+                "question": qa["question"],
+                "status": qa["status"],
                 "retry_after_ms": 1000,
-                "result": None,
+                "result": qa.get("result"),
                 "error": None,
-                "question": payload.question,
-                "order_no": None,
             },
         )
+
+    @app.get("/v1/assistant/questions/{qa_id}")
+    def get_assistant_question(
+        qa_id: str,
+        caller: ScopeContext = Depends(assistant_identity),  # noqa: B008
+    ) -> dict[str, Any]:
+        try:
+            qa = context.runtime.get_assistant_qa(caller, qa_id)
+        except (ValueError, RuntimeError) as exc:
+            raise StandardAPIError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "QA_UNAVAILABLE",
+                "general answer unavailable",
+                retryable=True,
+            ) from exc
+        if qa is None:
+            raise StandardAPIError(
+                status.HTTP_404_NOT_FOUND,
+                "QA_NOT_FOUND",
+                "assistant question not found",
+            )
+        return {
+            "type": "qa",
+            "qa_id": qa["qa_id"],
+            "question": qa["question"],
+            "status": qa["status"],
+            "retry_after_ms": 1000 if qa["status"] in {"queued", "running"} else None,
+            "result": qa.get("result"),
+            "error": None,
+        }
 
     @app.get("/v1/orders/{order_no}/access")
     def order_access(
