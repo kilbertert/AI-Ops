@@ -86,6 +86,14 @@ class _Runtime:
         del context
         return self._qa.get(qa_id)
 
+    def list_assistant_qa(self, context: ScopeContext, *, limit: int = 50):
+        del context
+        items = [
+            {"qa_id": k, "question": v["question"], "status": v["status"], "created_at": "t"}
+            for k, v in self._qa.items()
+        ]
+        return items[:limit]
+
 
 def _client(tmp_path: Path, *, allowed_orders: set[str] | None = None) -> tuple[TestClient, _Runtime]:
     settings = GatewayServerSettings(
@@ -219,6 +227,23 @@ def test_assistant_faq_read_only_token_cannot_use_diagnosis_branch(tmp_path: Pat
     )
     assert resp.status_code in (401, 403)
     assert runtime.calls == []
+
+
+def test_assistant_history_list_separate_from_diagnoses(tmp_path: Path) -> None:
+    """After asking a general question, the QA list shows it (typed qa_list),
+    distinct from the order-diagnosis history endpoint."""
+    client, runtime = _client(tmp_path)
+    client.post(
+        "/v1/assistant/questions",
+        json={"question": "为什么我的车充满电之后续航里程总是比官方标注少这么多"},
+        headers=_headers(),
+    )
+    lst = client.get("/v1/assistant/questions", headers=_headers())
+    assert lst.status_code == 200
+    body = lst.json()
+    assert body["type"] == "qa_list"
+    assert body["count"] == 1
+    assert body["questions"][0]["question"].startswith("为什么我的车")
 
 
 def test_extract_order_no_recognizes_owned_19digit(tmp_path: Path) -> None:
