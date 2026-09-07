@@ -152,6 +152,25 @@ def agent_turn_schema() -> dict[str, Any]:
     return schema
 
 
+QA_TURN_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "text": {"type": "string", "description": "回答正文，简体中文"},
+        "reminder": {
+            "type": "boolean",
+            "description": "是否在回答末尾提示用户提供订单号可获得更精确结果",
+        },
+    },
+    "required": ["text", "reminder"],
+    "additionalProperties": False,
+}
+
+
+def qa_turn_schema() -> dict[str, Any]:
+    """Strict structured-output schema for the zero-order general assistant."""
+    return QA_TURN_SCHEMA
+
+
 def _make_strict_response_schema(node: Any) -> None:
     """Normalize Pydantic output for strict Responses API providers."""
     if isinstance(node, list):

@@ -54,6 +54,7 @@ class _Authorizer:
 class _Runtime:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []
+        self._qa = {}  # qa_id -> record
 
     def shutdown(self) -> None:
         pass
@@ -74,6 +75,16 @@ class _Runtime:
             "updated_at": "2026-09-07T00:00:00+00:00",
             "completed_at": None,
         }
+
+    def start_assistant_qa(self, context: ScopeContext, question: str):
+        del context
+        qa_id = "qa_test00000000000000000000000000000001"
+        self._qa[qa_id] = {"qa_id": qa_id, "question": question, "status": "queued", "result": None}
+        return self._qa[qa_id]
+
+    def get_assistant_qa(self, context: ScopeContext, qa_id: str):
+        del context
+        return self._qa.get(qa_id)
 
 
 def _client(tmp_path: Path, *, allowed_orders: set[str] | None = None) -> tuple[TestClient, _Runtime]:
@@ -141,8 +152,8 @@ def test_assistant_explicit_order_unowned_returns_404(tmp_path: Path) -> None:
     assert runtime.calls == []
 
 
-def test_assistant_generic_returns_queued_placeholder(tmp_path: Path) -> None:
-    """No order_no and no FAQ hit -> queued generic answer (T3 wires the job)."""
+def test_assistant_generic_returns_queued_job(tmp_path: Path) -> None:
+    """No order_no and no FAQ hit -> real QA job created (202) then pollable."""
     client, runtime = _client(tmp_path)
     resp = client.post(
         "/v1/assistant/questions",
@@ -152,10 +163,23 @@ def test_assistant_generic_returns_queued_placeholder(tmp_path: Path) -> None:
     assert resp.status_code == 202
     body = resp.json()
     assert body["type"] == "qa"
+    assert body["qa_id"].startswith("qa_")
     assert body["status"] == "queued"
     assert body["retry_after_ms"] == 1000
     assert body["result"] is None
-    assert runtime.calls == []
+    # poll returns the same job (still queued in stub)
+    poll = client.get(f"/v1/assistant/questions/{body['qa_id']}", headers=_headers())
+    assert poll.status_code == 200
+    assert poll.json()["qa_id"] == body["qa_id"]
+    assert poll.json()["status"] == "queued"
+
+
+def test_assistant_qa_poll_unknown_is_404(tmp_path: Path) -> None:
+    """Polling a qa_id outside the caller scope is refused."""
+    client, _ = _client(tmp_path)
+    poll = client.get("/v1/assistant/questions/qa_nonexistent000000000000000000000001", headers=_headers())
+    assert poll.status_code == 404
+    assert poll.json()["error"]["code"] == "QA_NOT_FOUND"
 
 
 def test_assistant_invalid_body_is_422(tmp_path: Path) -> None:
