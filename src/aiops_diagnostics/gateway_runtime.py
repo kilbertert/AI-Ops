@@ -370,6 +370,20 @@ class GatewayRuntime:
                 error_message=_public_error_message(exc, request.order_no),
             )
             return
+        # A blocked run means the model could not produce the structured
+        # diagnostic output (e.g. the provider does not honor strict
+        # output_schema), or the run was blocked for a hard reason — that is a
+        # failure of the diagnosis task, not "insufficient evidence". Surface
+        # it as failed with an explicit error code so the frontend can
+        # distinguish provider/task failure from a genuine inconclusive result.
+        if result.status.value == "blocked":
+            self.store.update_standard_diagnosis(
+                diagnosis_id,
+                status="failed",
+                error_code="DIAGNOSIS_BLOCKED",
+                error_message="diagnosis could not complete",
+            )
+            return
         public_status = "completed" if result.status.value == "diagnosed" else "inconclusive"
         self.store.update_standard_diagnosis(
             diagnosis_id,
