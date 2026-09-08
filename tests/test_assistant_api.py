@@ -76,6 +76,10 @@ class _Runtime:
             "completed_at": None,
         }
 
+    def get_standard_diagnosis(self, context: ScopeContext, diagnosis_id: str):
+        del context, diagnosis_id
+        return None
+
     def start_assistant_qa(self, context: ScopeContext, question: str):
         del context
         qa_id = "qa_test00000000000000000000000000000001"
@@ -188,6 +192,32 @@ def test_assistant_qa_poll_unknown_is_404(tmp_path: Path) -> None:
     poll = client.get("/v1/assistant/questions/qa_nonexistent000000000000000000000001", headers=_headers())
     assert poll.status_code == 404
     assert poll.json()["error"]["code"] == "QA_NOT_FOUND"
+
+
+def test_diagnosis_poll_with_qa_id_gets_pointed_hint(tmp_path: Path) -> None:
+    """Polling the order-diagnosis endpoint with a qa_ id (the frontend mistake
+    that produced bare 'diagnosis not found') returns a 404 whose message
+    names the correct poll path for the general-question job."""
+    client, _ = _client(tmp_path)
+    resp = client.get(
+        "/v1/standard/diagnoses/qa_9a5d1f49ea0743fba1234567890abcd",
+        headers=_headers(),
+    )
+    assert resp.status_code == 404
+    body = resp.json()
+    assert body["error"]["code"] == "DIAGNOSIS_NOT_FOUND"
+    assert "/v1/assistant/questions/qa_9a5d1f49ea0743fba1234567890abcd" in body["error"]["message"]
+
+
+def test_diagnosis_poll_with_unknown_dx_id_keeps_plain_404(tmp_path: Path) -> None:
+    """An unknown dx_ id keeps the plain 'diagnosis not found' 404."""
+    client, _ = _client(tmp_path)
+    resp = client.get(
+        "/v1/standard/diagnoses/dx_nonexistent000000000000000000000001",
+        headers=_headers(),
+    )
+    assert resp.status_code == 404
+    assert resp.json()["error"]["message"] == "diagnosis not found"
 
 
 def test_assistant_invalid_body_is_422(tmp_path: Path) -> None:

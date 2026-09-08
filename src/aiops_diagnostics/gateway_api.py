@@ -768,6 +768,19 @@ def create_gateway_app(
                 retryable=True,
             ) from exc
         if diagnosis is None:
+            # A qa_ id here means the caller created a general-question job
+            # (POST /v1/assistant/questions returned type=qa) but is polling
+            # the order-diagnosis endpoint. Point them at the right poll path
+            # instead of a bare "not found", so the wrong-endpoint mistake is
+            # self-explanatory (observed in real frontend integration).
+            if diagnosis_id.startswith("qa_"):
+                raise StandardAPIError(
+                    status.HTTP_404_NOT_FOUND,
+                    "DIAGNOSIS_NOT_FOUND",
+                    "this is a general-question job (type=qa); poll GET /v1/assistant/questions/"
+                    + diagnosis_id
+                    + " instead",
+                )
             raise StandardAPIError(
                 status.HTTP_404_NOT_FOUND,
                 "DIAGNOSIS_NOT_FOUND",
