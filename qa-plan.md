@@ -383,3 +383,48 @@ workflow YAML 不适用复杂度或 mutation 工具；安全状态机由模板�
 - 清理：删除临时 SQLite。
 
 证据要求：FAQ-01..03 记录提交、环境、时间戳和测试日志；不把目录 fixture 或离线身份 fake 写成真实业务权限验收。
+
+## 受限知识检索与媒体协议 QA 计划
+
+### RAG-MEDIA-01 检索白名单与调用上限
+
+- 环境：AI-Ops 本地 Python 3.13，pytest，fake `kb-service` client。
+- 前置条件：已发布智能体版本绑定 `KB-A`；fake 响应包含 `KB-A` 与其他知识库结果。
+- 测试数据：一条带 `image_id` 的图片分段、一条视频分段、一个越权知识库分段。
+- 有序动作：调用 `knowledge_search`；检查返回分段和请求参数；重复调用至第三次。
+- 预期结果：只返回绑定知识库；Codex 不能指定 `kb_id/top_k`；第三次返回 `limited` 且不再访问 fake client。
+- 清理：释放内存 fake，无持久化数据。
+- 结果：PASS（2026-09-09，分支 `feat/knowledge-search-media`，提交待记录）。
+
+### RAG-MEDIA-02 检索结果规范化
+
+- 环境：同 RAG-MEDIA-01。
+- 前置条件：fake RAGFlow 响应使用 `content_with_weight`、`similarity`、`image_id`、`doc_type_kwd` 原始字段。
+- 测试数据：PNG 图片分段、MP4 视频分段、无内容分段、无效 MIME 分段。
+- 有序动作：执行结果规范化并读取 `blocks` 资源字段。
+- 预期结果：文本脱敏；返回不透明资源 ID、相对媒体地址、引用 ID 和允许 MIME；不暴露内部 image/object/token；无效分段不产生媒体。
+- 清理：释放内存 fake。
+- 结果：PASS（2026-09-09，pytest `tests/test_knowledge_retrieval.py`）。
+
+### RAG-MEDIA-03 媒体授权、TTL 与 Range
+
+- 环境：AI-Ops 本地媒体代理，内存资源签发器和 bytes fetcher。
+- 前置条件：签发租户 A、智能体版本和会话绑定的 MP4 资源，TTL 60 秒。
+- 测试数据：10 字节媒体对象；租户 B、过期时间和主动失效资源各一组。
+- 有序动作：完整读取；请求 `bytes=2-5`；跨租户读取；过期读取；失效后读取。
+- 预期结果：完整读取 200；Range 返回 206、`video/mp4`、`Content-Range`、`Accept-Ranges` 和对应字节；越权/过期/失效返回 403 且 fetcher 不读取对象。
+- 清理：清空内存签发器。
+- 结果：PASS（2026-09-09，pytest `tests/test_knowledge_retrieval.py`）。
+
+### RAG-MEDIA-04 依赖不可用降级
+
+- 环境：同 RAG-MEDIA-01。
+- 前置条件：fake client 抛出超时/上游不可用异常。
+- 测试数据：一条普通问题。
+- 有序动作：调用 `knowledge_search`。
+- 预期结果：返回 `retrieval_status=unavailable`、空分段和空媒体；异常不泄露上游 token、URL 或堆栈。
+- 清理：释放 fake。
+- 结果：PASS（2026-09-09，pytest `tests/test_knowledge_retrieval.py`）。
+
+证据边界：RAG-MEDIA-01..04 是 AI-Ops 协议和安全边界的离线自动化验证；未连接生产
+`kb-service`、RAGFlow、真实租户或真实浏览器，因此**未完成业务媒体验收**。
