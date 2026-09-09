@@ -552,3 +552,14 @@ S2 切流验收（公网入口）：FAQ/答案 200；401/422 错误语义透传�
 S3 退役验收（公网入口 + 开机自启）：FAQ 200（28 条）、健康报告 completed、诊断历史按主体隔离可见 3 条；单元改名后重启竞态（旧进程占用 8788）已由 systemd `Restart=on-failure` 自动恢复，重启后公网验收通过。
 
 遗留：单问诊断终态复验受模型供应商配额限制（glm-ark 月配额 2026-09-21 重置；psydo key 池停用），诊断执行面已通过（202 + Agent 管线事件完整）。2026-09-04/05 记录的 ranlei 域名与 FRP 链路为迁移前历史状态。
+
+## T2 智能体生命周期验证（issue #169，2026-09-09）
+
+验证范围：AI-Ops `AgentStore`/`AgentManager` 草稿、发布、停用、删除与版本快照协议，以及管理 API 的 Bearer scope/角色接缝；不包含真实 UPMS、Java BFF、后台浏览器页面或生产知识库状态。
+
+- 自动化测试：`tests/test_agent_lifecycle.py` 4 项通过。
+- 覆盖行为：租户隔离与统一未找到、角色权限、草稿 revision 乐观并发、模型与知识库发布校验、不可变 version snapshot、发布版本派生新草稿、停用保留历史版本、已发布智能体不可删除、管理 API 生命周期响应。
+- 全套回归：pytest 550 项通过；Ruff、格式、compileall、`uv lock --check`、`uv pip check`、`git diff --check` 通过。
+- 结果：生命周期协议验证通过；草稿允许保存待审核模型，发布时才执行后端 allowlist；默认未注入真实知识库 resolver 时对有绑定的发布请求 fail closed。
+
+未完成业务验收：当前使用临时 SQLite、fake resolver 和 fake caller，不能宣称真实后台角色、知识库解析状态或 Java BFF 链路已验收。

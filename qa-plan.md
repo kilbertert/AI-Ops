@@ -383,3 +383,38 @@ workflow YAML 不适用复杂度或 mutation 工具；安全状态机由模板�
 - 清理：删除临时 SQLite。
 
 证据要求：FAQ-01..03 记录提交、环境、时间戳和测试日志；不把目录 fixture 或离线身份 fake 写成真实业务权限验收。
+
+## 智能体生命周期 QA 计划（T2）
+
+### AGENT-LIFE-01 草稿租户与角色隔离
+
+- 环境：AI-Ops 本地 Python 3.13，临时 SQLite，`AgentStore` 生命周期服务。
+- 前置条件：准备 tenant-a 的智能体管理员、发布管理员、普通角色和 tenant-b 管理员。
+- 测试数据：客服与运维草稿各一份。
+- 有序动作：管理员创建、读取、编辑、列出；普通角色和 tenant-b 读取同一 ID。
+- 预期结果：管理员成功且 revision 增加；其他调用者得到统一拒绝，不泄露资源存在性。
+- 清理：删除临时 SQLite。
+- 结果：PASS（2026-09-09，本地 pytest `tests/test_agent_lifecycle.py`）。
+
+### AGENT-LIFE-02 发布依赖校验与不可变快照
+
+- 环境：同 AGENT-LIFE-01，fake 知识库状态 resolver。
+- 前置条件：草稿绑定 ready、parsing、missing 知识库；模型/输出合同包含 allowlist 与非法值。
+- 测试数据：带 Prompt、开场问题、快捷指令、媒体输出合同的客服草稿。
+- 有序动作：尝试非法依赖发布；修正依赖后按 revision 发布；再编辑草稿并读取旧版本。
+- 预期结果：非法依赖不生成版本；成功发布 version_no=1；旧快照字段不随草稿编辑变化；过期 revision 返回冲突。
+- 补充动作：从 version_no=1 派生新草稿、修改配置并发布。
+- 补充预期：旧版本字段保持不变，新发布版本为 version_no=2。
+- 清理：删除临时 SQLite。
+- 结果：PASS（2026-09-09，本地 pytest `tests/test_agent_lifecycle.py`）。
+
+### AGENT-LIFE-03 停用与删除边界
+
+- 环境：同 AGENT-LIFE-01。
+- 前置条件：一个未发布草稿和一个已有 version_no=1 的智能体。
+- 有序动作：删除未发布草稿；停用已发布智能体；查询状态和版本；尝试删除已发布智能体。
+- 预期结果：未发布草稿删除后统一未找到；停用后状态为 disabled，历史快照仍可读，已发布智能体不能删除。
+- 清理：删除临时 SQLite。
+- 结果：PASS（2026-09-09，本地 pytest `tests/test_agent_lifecycle.py`）。
+
+证据边界：AGENT-LIFE-01..03 验证 AI-Ops 生命周期协议和权限边界；后台 Java BFF、真实 UPMS 角色、知识库生产状态与浏览器页面由 #171/#170/#173 接入，未完成业务验收。

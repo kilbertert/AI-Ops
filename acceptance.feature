@@ -295,3 +295,58 @@ Feature: C/B 平台隔离固定问答
       Given 当前平台为 consumer
       When 提交 operator 前缀的 question_id
       Then 返回 404 FAQ_NOT_FOUND
+
+Feature: 智能体草稿、发布、停用与不可变版本
+  管理员在已授权租户内维护智能体草稿；已发布版本是运行时不可变快照。
+
+  Rule: 草稿只能由当前租户的智能体管理员维护
+
+    Scenario: 管理员创建并编辑客服草稿
+      Given 当前调用者属于租户 tenant-a 且拥有 ROLE_AGENT_ADMIN
+      When 创建客服智能体草稿并提交业务 Prompt、知识库绑定、模型和 blocks-v1 输出合同
+      Then 返回 opaque agent_id、draft 状态和 revision
+      And 编辑草稿后 revision 增加
+      And 草稿内容不会出现在其他租户的列表中
+
+    Scenario: 非管理员或跨租户读取被拒绝
+      Given 智能体属于 tenant-a
+      When tenant-b 调用者或没有 ROLE_AGENT_ADMIN 的调用者读取智能体
+      Then 返回统一的未授权结果
+      And 不泄露智能体是否存在
+
+  Rule: 发布校验并生成不可变快照
+
+    Scenario: 发布生成可追溯版本快照
+      Given 草稿的知识库属于当前租户且状态为 ready
+      And 模型和输出合同在后端 allowlist 中
+      When 管理员按当前 revision 发布草稿
+      Then 返回 published 状态和 version_no=1
+      And 快照包含 Prompt、知识库、模型、输出合同、发布者和发布时间
+      And 后续编辑草稿不会改变 version_no=1 的快照
+
+    Scenario: 从已发布版本派生新草稿
+      Given 智能体当前发布 version_no=1
+      When 管理员按当前 revision 创建新草稿并修改知识库绑定
+      Then 旧版本仍保持可运行且内容不变
+      And 新草稿发布后生成 version_no=2
+
+    Scenario: 发布拒绝无效依赖或过期 revision
+      Given 草稿绑定的知识库仍在解析或模型不在 allowlist
+      When 管理员发布草稿
+      Then 返回明确的发布校验错误且不生成新版本
+      When 使用旧 revision 再次保存或发布
+      Then 返回版本冲突且不覆盖其他人的修改
+
+  Rule: 停用阻止新运行但保留历史快照
+
+    Scenario: 停用智能体
+      Given 智能体已有已发布版本
+      When 发布管理员停用智能体
+      Then 智能体状态为 disabled 且不能再发布新回合
+      And 已发布版本快照仍可按 version_no 查询
+
+    Scenario: 只能删除未发布草稿
+      Given 一个智能体从未发布过版本
+      When 管理员删除该草稿
+      Then 后续读取返回统一未找到
+      And 已发布智能体不能被删除

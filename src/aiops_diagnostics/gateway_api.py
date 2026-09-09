@@ -13,6 +13,16 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from aiops_diagnostics import __version__
+from aiops_diagnostics.agent_lifecycle import (
+    AGENT_MANAGE_SCOPE,
+    AgentConfig,
+    AgentConflict,
+    AgentError,
+    AgentForbidden,
+    AgentManager,
+    AgentNotFound,
+    AgentStore,
+)
 from aiops_diagnostics.caller_auth import (
     CALLER_AUTH_CONFIG_MISSING,
     CALLER_AUTH_FORBIDDEN,
@@ -120,6 +130,44 @@ class FAQAnswerRequest(BaseModel):
     question_id: str = Field(min_length=1, max_length=128, pattern=r"^[a-z]+\.[a-z0-9-]+\.q[0-9]{3}$")
 
 
+class AgentConfigRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    agent_type: str = Field(min_length=1, max_length=32)
+    prompt: str = Field(min_length=1, max_length=8000)
+    knowledge_base_ids: list[str] = Field(default_factory=list, max_length=20)
+    model: str = Field(min_length=1, max_length=128)
+    output_contract: str = Field(min_length=1, max_length=64)
+    opening_questions: list[str] = Field(default_factory=list, max_length=20)
+    quick_commands: list[str] = Field(default_factory=list, max_length=20)
+
+    def to_config(self) -> AgentConfig:
+        return AgentConfig(
+            agent_type=self.agent_type,
+            prompt=self.prompt,
+            knowledge_base_ids=tuple(self.knowledge_base_ids),
+            model=self.model,
+            output_contract=self.output_contract,
+            opening_questions=tuple(self.opening_questions),
+            quick_commands=tuple(self.quick_commands),
+        )
+
+
+class AgentCreateRequest(AgentConfigRequest):
+    name: str = Field(min_length=1, max_length=128)
+    description: str = Field(default="", max_length=1000)
+
+
+class AgentUpdateRequest(AgentCreateRequest):
+    expected_revision: int = Field(ge=1)
+
+
+class AgentActionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_revision: int = Field(ge=1)
+
+
 class GatewayAPI:
     def __init__(
         self,
@@ -130,6 +178,7 @@ class GatewayAPI:
         order_authorizer: OrderAuthorizer,
         platform_resolver: PlatformIdentityResolver,
         faq_catalog: FAQCatalog,
+        agent_manager: AgentManager | None = None,
     ) -> None:
         self.settings = settings
         self.store = store
@@ -138,6 +187,7 @@ class GatewayAPI:
         self.order_authorizer = order_authorizer
         self.platform_resolver = platform_resolver
         self.faq_catalog = faq_catalog
+        self.agent_manager = agent_manager
 
 
 class StandardAPIError(RuntimeError):
@@ -165,6 +215,7 @@ def create_gateway_app(
     order_authorizer: OrderAuthorizer | None = None,
     platform_resolver: PlatformIdentityResolver | None = None,
     faq_catalog: FAQCatalog | None = None,
+    agent_manager: AgentManager | None = None,
 ) -> FastAPI:
     selected_settings = settings or GatewayServerSettings.from_env()
     selected_settings.validate()
@@ -188,6 +239,20 @@ def create_gateway_app(
             platform_settings = Settings()
         selected_platform_resolver = PlatformIdentityResolver(MySQLPlatformDirectory(platform_settings))
     selected_faq_catalog = faq_catalog or FAQCatalog.bundled()
+    if agent_manager is None:
+        configured_models = tuple(
+            provider.model
+            for provider in getattr(diagnostic_settings, "providers", ())
+            if getattr(provider, "model", "")
+        )
+        if not configured_models and diagnostic_settings is not None:
+            configured_models = (diagnostic_settings.model or "aiops-api",)
+        selected_agent_manager = AgentManager(
+            AgentStore(selected_store.path),
+            allowed_models=configured_models or ("aiops-api",),
+        )
+    else:
+        selected_agent_manager = agent_manager
     context = GatewayAPI(
         selected_settings,
         selected_store,
@@ -196,6 +261,7 @@ def create_gateway_app(
         selected_authorizer,
         selected_platform_resolver,
         selected_faq_catalog,
+        selected_agent_manager,
     )
 
     @asynccontextmanager
@@ -339,6 +405,17 @@ def create_gateway_app(
             authorization,
             x_third_session,
             required_scope=STANDARD_FAQ_SCOPE,
+        )
+
+    def authenticated_agent_caller(
+        authorization: Annotated[str | None, Header()] = None,
+        x_third_session: Annotated[str | None, Header()] = None,
+    ) -> ScopeContext:
+        return _authenticate_caller(
+            context.caller_resolver,
+            authorization,
+            x_third_session,
+            required_scope=AGENT_MANAGE_SCOPE,
         )
 
     def faq_identity(
@@ -795,6 +872,141 @@ def create_gateway_app(
     ) -> dict[str, Any]:
         diagnoses = context.runtime.list_standard_diagnoses(caller, limit=limit)
         return {"diagnoses": diagnoses}
+
+    def _agent_error(exc: AgentError) -> StandardAPIError:
+        if isinstance(exc, AgentNotFound):
+            return StandardAPIError(status.HTTP_404_NOT_FOUND, "AGENT_NOT_FOUND", "agent not found")
+        if isinstance(exc, AgentForbidden):
+            return StandardAPIError(
+                status.HTTP_403_FORBIDDEN, "AGENT_FORBIDDEN", "agent access is not permitted"
+            )
+        if isinstance(exc, AgentConflict):
+            return StandardAPIError(
+                status.HTTP_409_CONFLICT, "AGENT_REVISION_CONFLICT", "agent revision conflict"
+            )
+        return StandardAPIError(status.HTTP_422_UNPROCESSABLE_ENTITY, exc.code, str(exc))
+
+    @app.post("/v1/agents", status_code=status.HTTP_201_CREATED)
+    def create_agent(
+        payload: AgentCreateRequest,
+        caller: ScopeContext = Depends(authenticated_agent_caller),  # noqa: B008
+    ) -> dict[str, Any]:
+        try:
+            agent = context.agent_manager.create(
+                caller,
+                name=payload.name,
+                description=payload.description,
+                config=payload.to_config(),
+            )
+        except AgentError as exc:
+            raise _agent_error(exc) from exc
+        return agent.to_dict()
+
+    @app.get("/v1/agents")
+    def list_agents(
+        caller: ScopeContext = Depends(authenticated_agent_caller),  # noqa: B008
+    ) -> dict[str, Any]:
+        try:
+            agents = context.agent_manager.list(caller)
+        except AgentError as exc:
+            raise _agent_error(exc) from exc
+        return {"agents": [agent.to_dict() for agent in agents]}
+
+    @app.get("/v1/agents/{agent_id}")
+    def get_agent(
+        agent_id: str,
+        caller: ScopeContext = Depends(authenticated_agent_caller),  # noqa: B008
+    ) -> dict[str, Any]:
+        try:
+            agent = context.agent_manager.get(caller, agent_id)
+        except AgentError as exc:
+            raise _agent_error(exc) from exc
+        return agent.to_dict()
+
+    @app.put("/v1/agents/{agent_id}")
+    def update_agent(
+        agent_id: str,
+        payload: AgentUpdateRequest,
+        caller: ScopeContext = Depends(authenticated_agent_caller),  # noqa: B008
+    ) -> dict[str, Any]:
+        try:
+            agent = context.agent_manager.update(
+                caller,
+                agent_id,
+                expected_revision=payload.expected_revision,
+                name=payload.name,
+                description=payload.description,
+                config=payload.to_config(),
+            )
+        except AgentError as exc:
+            raise _agent_error(exc) from exc
+        return agent.to_dict()
+
+    @app.post("/v1/agents/{agent_id}/publish")
+    def publish_agent(
+        agent_id: str,
+        payload: AgentActionRequest,
+        caller: ScopeContext = Depends(authenticated_agent_caller),  # noqa: B008
+    ) -> dict[str, Any]:
+        try:
+            version = context.agent_manager.publish(
+                caller, agent_id, expected_revision=payload.expected_revision
+            )
+        except AgentError as exc:
+            raise _agent_error(exc) from exc
+        return version.to_dict()
+
+    @app.post("/v1/agents/{agent_id}/draft")
+    def fork_agent_draft(
+        agent_id: str,
+        payload: AgentActionRequest,
+        caller: ScopeContext = Depends(authenticated_agent_caller),  # noqa: B008
+    ) -> dict[str, Any]:
+        try:
+            agent = context.agent_manager.fork_draft(
+                caller, agent_id, expected_revision=payload.expected_revision
+            )
+        except AgentError as exc:
+            raise _agent_error(exc) from exc
+        return agent.to_dict()
+
+    @app.post("/v1/agents/{agent_id}/disable")
+    def disable_agent(
+        agent_id: str,
+        payload: AgentActionRequest,
+        caller: ScopeContext = Depends(authenticated_agent_caller),  # noqa: B008
+    ) -> dict[str, Any]:
+        try:
+            agent = context.agent_manager.disable(
+                caller, agent_id, expected_revision=payload.expected_revision
+            )
+        except AgentError as exc:
+            raise _agent_error(exc) from exc
+        return agent.to_dict()
+
+    @app.delete("/v1/agents/{agent_id}")
+    def delete_agent(
+        agent_id: str,
+        payload: AgentActionRequest,
+        caller: ScopeContext = Depends(authenticated_agent_caller),  # noqa: B008
+    ) -> dict[str, bool]:
+        try:
+            context.agent_manager.delete(caller, agent_id, expected_revision=payload.expected_revision)
+        except AgentError as exc:
+            raise _agent_error(exc) from exc
+        return {"deleted": True}
+
+    @app.get("/v1/agents/{agent_id}/versions/{version_no}")
+    def get_agent_version(
+        agent_id: str,
+        version_no: int,
+        caller: ScopeContext = Depends(authenticated_agent_caller),  # noqa: B008
+    ) -> dict[str, Any]:
+        try:
+            version = context.agent_manager.version(caller, agent_id, version_no)
+        except AgentError as exc:
+            raise _agent_error(exc) from exc
+        return version.to_dict()
 
     @app.post("/v1/enroll", status_code=status.HTTP_201_CREATED)
     def enroll(payload: EnrollRequest) -> dict[str, Any]:
