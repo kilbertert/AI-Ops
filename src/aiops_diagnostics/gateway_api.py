@@ -37,6 +37,7 @@ from aiops_diagnostics.caller_auth import (
     ScopedOrderAuthorizer,
     UpmsCallerResolver,
 )
+from aiops_diagnostics.codex_runtime import AgentRuntimeError
 from aiops_diagnostics.config import Settings
 from aiops_diagnostics.conversation_store import (
     ConversationBusy,
@@ -184,6 +185,14 @@ class AgentActionRequest(BaseModel):
     expected_revision: int = Field(ge=1)
 
 
+class AgentDebugRunRequest(BaseModel):
+    """One draft debug turn (T5/#171): question in, blocks preview out."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    question: str = Field(min_length=1, max_length=4000)
+
+
 class ConversationCreateRequest(BaseModel):
     """Create a conversation bound to caller, entry, and agent version (T4/#172).
 
@@ -282,8 +291,23 @@ def create_gateway_app(
         )
         if not configured_models and diagnostic_settings is not None:
             configured_models = (diagnostic_settings.model or "aiops-api",)
+        knowledge_resolver = None
+        if selected_settings.kb_service_base_url:
+            # Real publish validation (T5/#171): bindings must resolve against
+            # live kb-service. Without a kb URL the manager keeps the
+            # fail-closed default (bindings never publish).
+            from aiops_diagnostics.agent_debug import KbBindingResolver, KbServiceKnowledgeClient
+
+            knowledge_resolver = KbBindingResolver(
+                KbServiceKnowledgeClient(
+                    selected_settings.kb_service_base_url,
+                    tenant_id="aiops",  # rebound per publish by the manager caller's tenant
+                    timeout=selected_settings.kb_service_timeout_seconds,
+                )
+            )
         selected_agent_manager = AgentManager(
             AgentStore(selected_store.path),
+            knowledge_resolver=knowledge_resolver,  # type: ignore[arg-type]  # None keeps fail-closed default
             allowed_models=configured_models or ("aiops-api",),
         )
     else:
@@ -1267,6 +1291,49 @@ def create_gateway_app(
             raise _agent_error(exc) from exc
         return version.to_dict()
 
+    @app.post("/v1/agents/{agent_id}/debug-run")
+    def debug_run_agent(
+        agent_id: str,
+        payload: AgentDebugRunRequest,
+        caller: ScopeContext = Depends(authenticated_agent_caller),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Isolated draft preview (T5/#171): runs the draft config through the
+        production customer-QA harness without touching conversations or
+        orders. Only draft-config customer agents are debuggable."""
+        from aiops_diagnostics.agent_lifecycle import EDIT_ROLES
+
+        if not frozenset(getattr(caller, "roles", ())).intersection(EDIT_ROLES):
+            raise StandardAPIError(
+                status.HTTP_403_FORBIDDEN, "AGENT_FORBIDDEN", "agent access is not permitted"
+            )
+        try:
+            agent = context.agent_manager.get(caller, agent_id)
+        except AgentError as exc:
+            raise _agent_error(exc) from exc
+        if agent.status != "draft" or agent.config.agent_type != "customer":
+            raise StandardAPIError(
+                status.HTTP_409_CONFLICT,
+                "AGENT_DEBUG_STATE_INVALID",
+                "only a draft customer agent can be debug-run",
+            )
+        runner = getattr(context.runtime, "run_agent_debug", None)
+        if runner is None:
+            raise StandardAPIError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "AGENT_DEBUG_UNAVAILABLE",
+                "agent debug-run is not configured",
+                retryable=True,
+            )
+        try:
+            return runner(caller, agent_id, payload.question)
+        except AgentRuntimeError as exc:
+            raise StandardAPIError(
+                status.HTTP_502_BAD_GATEWAY,
+                "AGENT_DEBUG_FAILED",
+                _debug_public_error(exc),
+                retryable=True,
+            ) from exc
+
     @app.post("/v1/enroll", status_code=status.HTTP_201_CREATED)
     def enroll(payload: EnrollRequest) -> dict[str, Any]:
         try:
@@ -1433,6 +1500,14 @@ def _caller_resolver(settings: GatewayServerSettings) -> CallerContextResolver:
             timeout_seconds=settings.introspection_timeout_seconds,
         )
     )
+
+
+def _debug_public_error(error: Exception) -> str:
+    """Bounded, redacted reason for a failed debug-run (server stays opaque)."""
+    from aiops_diagnostics.redaction import redact_text
+
+    message = redact_text(str(error))
+    return message[:500] if message else error.__class__.__name__
 
 
 def _authenticate_caller(

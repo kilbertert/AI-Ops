@@ -604,3 +604,14 @@ S3 退役验收（公网入口 + 开机自启）：FAQ 200（28 条）、健康�
 - 结果：协议和安全边界验证通过；测试环境为本地 Python 3.13、内存 fake、时间 `2026-09-09`；源提交 `efcaf29` 已通过 PR #176 squash 合并为 `c8be858`。
 
 未完成业务验收：没有连接真实知识库或实际前端，不能把本次 fake/协议测试写成图片视频业务链路已验收。
+
+## T5 管理与草稿调试验证（issue #171，2026-09-10）
+
+本次分支 `feat/agent-debug-run`，接口级口径（范围决定见 qa-plan.md ADMIN 节）。
+
+- 单元/协议测试：`tests/test_agent_debug.py` 11 项通过。覆盖 KbBindingResolver 四态（DONE 放行、RUNNING/UNSTART 拒绝含"解析中"、FAIL 拒绝含"解析失败"、kb 详情 502 拒绝含"不存在"、kb 不可达 fail closed 含"不可用"、空绑定零调用、发布租户重绑）、`run_agent_debug_answer`（blocks 预览 + draft 版本标记 + 授权图片块）、`POST /v1/agents/{id}/debug-run`（admin 200 / viewer 403 / 跨租户 404 / 非草稿 409）。
+- 契约依据：kb-service GET 面按 `~/Playground/experiments/kb-service-design/app.py` 与 RAGFlow v0.27.1 源码核实——`GET /kb/knowledge-bases/{kb}`（`accessible()` 租户判定，越权/不存在统一 502 upstream_error）、`GET /kb/knowledge-bases/{kb}/documents`（`docs[].run` 为 TaskStatus 名 UNSTART/RUNNING/CANCEL/DONE/FAIL/SCHEDULE）。
+- 回归：全量 pytest 589 项通过（578 基线）；Ruff、ruff format、compileall 通过。
+- 行为变化声明：`create_gateway_app` 默认 AgentManager 在配置 `AIOPS_GATEWAY_KB_SERVICE_BASE_URL` 时从 fail-closed `UnavailableKnowledgeBindingResolver` 切换为 `KbBindingResolver`——此前该配置下发布必被拒，本票起为真实校验；未配置 kb URL 的部署保持 fail-closed 不变。
+
+未完成业务验收：ADMIN-REAL 真实 kb-service canary BLOCKED（120 KB 栈 2026-09-09 起停机，重启为人工决策点）；qumall-admin 浏览器页面验收范围外。fake GET client 结果不替代真实发布校验验收。

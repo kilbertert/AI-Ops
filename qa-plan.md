@@ -578,3 +578,54 @@ ScopeContext（UPMS/Dis）行为由 T1-T3 既有真实验收线覆盖。
 - 预期结果：前端只收到 BFF 合同，QA 返回 `blocks[]`，图片可渲染、视频可播放，文本/引用在媒体失败时保留，所有越权请求拒绝。
 - 清理：删除测试会话和临时授权，不修改业务数据。
 - 结果：BLOCKED（2026-09-10）。原因：#170/#171/#173 尚未完成，当前无批准真实环境和真实媒体数据；不得把本地 fake 结果写成业务验收通过。
+
+## 后台智能体管理与草稿调试 QA 计划（T5/#171，接口级验收）
+
+> 范围决定（2026-09-10，业务方）：qumall-admin 页面/菜单/角色接线与 Java 管理
+> BFF 仓库为范围外；交付口径为 AI-Ops 管理/调试 API 完整闭环 + 接口工具
+> （apifox/curl）级验收，公网链路沿用同域反代 `api.qumall.qushiyun.com/v1/*`。
+
+### ADMIN-01 发布前知识库绑定校验
+
+- 环境：本地 Python 3.13，pytest，fake kb-service GET client（按 kb-service/RAGFlow v0.27.1 源码核实的 GET 契约）。
+- 前置条件：租户草稿智能体绑定 kb-a。
+- 测试数据：文档 run 状态 DONE / RUNNING / FAIL 组、kb 详情 502（不存在/跨租户）、kb 完全不可达各一组。
+- 有序动作：分别对四组状态执行发布校验。
+- 预期结果：DONE 组通过；RUNNING/UNSTART/SCHEDULE 组拒绝并含"解析中"原因；FAIL 组拒绝并含"解析失败"原因；502 组拒绝并含"不存在"原因；不可达组拒绝并含"不可用"原因（fail closed）。
+- 清理：释放 fake。
+- 结果：PASS（2026-09-10，pytest `tests/test_agent_debug.py`）。
+
+### ADMIN-02 草稿隔离调试运行
+
+- 环境：同 QA-RAG-01（脚本化 Codex session + fake 检索 + 内存媒体签发器）。
+- 前置条件：租户有 customer 草稿（revision=3，绑定 kb-a）；检索命中 PNG 图片分段。
+- 有序动作：调用 `run_agent_debug_answer` 提问"怎么拔枪"；读取返回。
+- 预期结果：返回 `blocks[]`（text+image）、`retrieval_status`、`debug=true`、`agent_version=agt_…#draft-r3`；不创建任何会话轮次（conversation_store 无写入）；媒体块带本轮签发的 `/v1/media/` URL。
+- 清理：释放 fake 与临时 run 目录。
+- 结果：PASS（2026-09-10，pytest `tests/test_agent_debug.py`）。
+
+### ADMIN-03 debug-run API 角色与隔离
+
+- 环境：本地 FastAPI TestClient + 临时 SQLite + fake runtime。
+- 前置条件：admin（ROLE_AGENT_ADMIN）、viewer（ROLE_AGENT_VIEWER）、跨租户 caller 各一。
+- 有序动作：admin 创建草稿并 debug-run；viewer 对同草稿 debug-run；跨租户 caller debug-run；对已发布智能体 debug-run。
+- 预期结果：admin 200（含 debug 标记与草稿版本）；viewer 403；跨租户 404（无存在性泄露）；非草稿/非客服 409 AGENT_DEBUG_STATE_INVALID。
+- 清理：临时目录自动回收。
+- 结果：PASS（2026-09-10，pytest `tests/test_agent_debug.py`）。
+
+### ADMIN-04 生命周期回归
+
+- 环境：既有 agent lifecycle / QA RAG / conversation 测试套件。
+- 有序动作：全量 pytest。
+- 预期结果：578 基线全过 + 新增 11 项（共 589），既有 create/publish/disable/delete/fork 行为与租户隔离零变化。
+- 清理：无。
+- 结果：PASS（2026-09-10，全量 pytest 589 项；Ruff、格式、compileall 通过）。
+
+### ADMIN-REAL 真实链路 canary（120 栈恢复后）
+
+- 环境：120 真实 kb-service/RAGFlow + 公网 `api.qumall.qushiyun.com/v1/agents/*`（同域反代）+ apifox/curl。
+- 前置条件：KB 栈重启（人工决策点）、canary 租户建临时知识库并上传含图 docx + MP4（素材已在 `docs/知识库材料/`）。
+- 有序动作：接口工具走 创建草稿 → 绑定知识库 → debug-run 预览（看 blocks[]/图片/视频块/引用/检索状态）→ 发布 → （发布后重复 debug-run 应 409）→ 停用 → 删除草稿；对解析中知识库发布验证拒绝原因。
+- 预期结果：全链路 API 可用；发布校验返回真实原因；debug 媒体 URL 600s 内可用。
+- 清理：删除 canary 知识库与智能体（租户映射固定复用 `aiops-canary`）。
+- 结果：BLOCKED（2026-09-10）。原因：120 KB 栈停机中（502），重启为人工决策点（docs/agents/kb-service-test-env.md §1/§6.1）；不得把 fake 结果记为业务验收。

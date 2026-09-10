@@ -517,6 +517,52 @@ class GatewayRuntime:
         )
         _finish_turn(answer)
 
+    def run_agent_debug(
+        self,
+        context: Any,
+        agent_id: str,
+        question: str,
+    ) -> dict[str, Any]:
+        """Isolated draft preview turn (T5/#171).
+
+        Runs the draft config through the production customer-QA harness with
+        the per-tenant kb client; never creates an assistant job, a
+        conversation turn, or touches order data. Raises ``AgentRuntimeError``
+        subclass failures for the API layer to map.
+        """
+        from aiops_diagnostics.agent_debug import run_agent_debug_answer
+        from aiops_diagnostics.agent_lifecycle import AgentNotFound
+
+        assert isinstance(self.kb_search_client, KbServiceClient)
+        assert self.media_signer is not None
+        agent = self.agent_store.get(agent_id, context.effective_tenant_id)  # type: ignore[union-attr]
+        if agent.status != "draft":
+            raise ValueError("only a draft agent can be debug-run")
+        tenant_id = context.effective_tenant_id
+        settings = Settings.from_config(self.gateway_settings.server_config_file)
+        settings.agent.run_root = self.diagnostic_settings.agent.run_root
+        selected_provider = settings.agent.select_provider(None)
+        key_slot = validate_key_slot_name(selected_provider.resolved_key_slot())
+        try:
+            return run_agent_debug_answer(
+                question,
+                agent_id=agent.agent_id,
+                revision=agent.revision,
+                prompt=agent.config.prompt,
+                knowledge_base_ids=agent.config.knowledge_base_ids,
+                agent_settings=settings.agent,
+                search_client=self.kb_search_client.for_tenant(tenant_id),
+                media_signer=self.media_signer,
+                tenant_id=tenant_id,
+                provider=selected_provider,
+                key_slot=key_slot,
+                project_root=reference_root(),
+            )
+        except KnowledgeSearchUnavailable as exc:
+            raise AgentRuntimeError("kb-service is unavailable for the debug run") from exc
+        except AgentNotFound as exc:
+            raise AgentRuntimeError("draft agent binding is invalid") from exc
+
     def _try_customer_rag(
         self,
         qa_id: str,
