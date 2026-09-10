@@ -552,3 +552,14 @@ S2 切流验收（公网入口）：FAQ/答案 200；401/422 错误语义透传�
 S3 退役验收（公网入口 + 开机自启）：FAQ 200（28 条）、健康报告 completed、诊断历史按主体隔离可见 3 条；单元改名后重启竞态（旧进程占用 8788）已由 systemd `Restart=on-failure` 自动恢复，重启后公网验收通过。
 
 遗留：单问诊断终态复验受模型供应商配额限制（glm-ark 月配额 2026-09-21 重置；psydo key 池停用），诊断执行面已通过（202 + Agent 管线事件完整）。2026-09-04/05 记录的 ranlei 域名与 FRP 链路为迁移前历史状态。
+
+## T1 受限知识检索与媒体资源协议验证（issue #168，2026-09-09）
+
+验证范围：AI-Ops 内部 `knowledge_search` guard、RAGFlow 字段规范化和媒体资源授权协议；不包含生产 `kb-service`、RAGFlow、Java BFF 或浏览器部署。
+
+- 自动化测试：`tests/test_knowledge_retrieval.py` 4 项通过。
+- 回归测试：assistant API、assistant QA store、Agent contracts、diagnostic tools 共 29 项通过。
+- 覆盖行为：租户/智能体版本知识库白名单、`top_k` 隐藏、每轮两次检索上限、图片/视频 MIME 白名单、TTL、主动失效、跨租户拒绝、Range 206、依赖不可用降级。
+- 结果：协议和安全边界验证通过；测试环境为本地 Python 3.13、内存 fake、时间 `2026-09-09`，提交身份待最终 commit 记录。
+
+未完成业务验收：没有连接真实知识库或实际前端，不能把本次 fake/协议测试写成图片视频业务链路已验收。
