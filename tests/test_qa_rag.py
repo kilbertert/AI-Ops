@@ -397,13 +397,37 @@ def test_found_claim_without_retrieval_is_downgraded(tmp_path: Path) -> None:
     assert result["retrieval_status"] == "not_found"
 
 
+class _PublishOkResolver:
+    """Knowledge binding resolver that accepts publishes (test fixture)."""
+
+    def validate(self, tenant_id: str, knowledge_base_ids: tuple[str, ...]) -> None:
+        del tenant_id, knowledge_base_ids
+
+
+def _publish_ok() -> _PublishOkResolver:
+    return _PublishOkResolver()
+
+
+def _admin_context():
+    from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
+
+    subject = SubjectRecord(b_user_id="B-1", tenant_id="tenant-a")
+    return ScopeContext.build(
+        caller=subject,
+        subject=subject,
+        delegated=False,
+        effective_tenant_id="tenant-a",
+        data_scope=DataScope(type="self"),
+        roles=frozenset({"ROLE_AGENT_ADMIN"}),
+        permissions=frozenset({"aiops:agents:manage"}),
+    )
+
+
 def test_select_customer_agent_requires_published_customer(tmp_path: Path) -> None:
     """Only a published customer agent with KBs serves the RAG path."""
-    from tests.test_agent_lifecycle import _context, _Knowledge
-
     store = AgentStore(tmp_path / "gateway.db")
-    manager = AgentManager(store, knowledge_resolver=_Knowledge())
-    admin = _context()
+    manager = AgentManager(store, knowledge_resolver=_publish_ok())
+    admin = _admin_context()
     agent = manager.create(admin, name="客服", description="", config=_customer_config())
     assert select_customer_agent(store, "tenant-a") is None  # draft — not served
     manager.publish(admin, agent.agent_id, expected_revision=agent.revision)
@@ -418,11 +442,9 @@ def test_select_customer_agent_requires_published_customer(tmp_path: Path) -> No
 
 def test_select_customer_agent_skips_operations_type(tmp_path: Path) -> None:
     """A published operations agent never serves the customer QA path."""
-    from tests.test_agent_lifecycle import _context, _Knowledge
-
     store = AgentStore(tmp_path / "gateway.db")
-    manager = AgentManager(store, knowledge_resolver=_Knowledge())
-    admin = _context()
+    manager = AgentManager(store, knowledge_resolver=_publish_ok())
+    admin = _admin_context()
     ops = manager.create(
         admin,
         name="运维",
@@ -441,11 +463,9 @@ def test_select_customer_agent_skips_operations_type(tmp_path: Path) -> None:
 
 def test_disabled_agent_is_not_selected(tmp_path: Path) -> None:
     """A disabled published agent stops serving new questions."""
-    from tests.test_agent_lifecycle import _context, _Knowledge
-
     store = AgentStore(tmp_path / "gateway.db")
-    manager = AgentManager(store, knowledge_resolver=_Knowledge())
-    admin = _context()
+    manager = AgentManager(store, knowledge_resolver=_publish_ok())
+    admin = _admin_context()
     agent = manager.create(admin, name="客服", description="", config=_customer_config())
     manager.publish(admin, agent.agent_id, expected_revision=agent.revision)
     published = manager.get(admin, agent.agent_id)
