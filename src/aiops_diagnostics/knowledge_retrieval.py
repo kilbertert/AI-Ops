@@ -399,6 +399,19 @@ class KbServiceClient:
         self.service_token = service_token.strip()
         self.timeout = timeout
 
+    def for_tenant(self, tenant_id: str) -> KbServiceClient:
+        """A copy bound to another tenant header (same base/token/timeout).
+
+        The runtime builds one client per gateway process but the customer QA
+        path serves multiple tenants; each job rebinds before searching.
+        """
+        return KbServiceClient(
+            self.base_url,
+            tenant_id=tenant_id,
+            service_token=self.service_token,
+            timeout=self.timeout,
+        )
+
     def search(self, knowledge_base_ids: tuple[str, ...], question: str, top_k: int) -> list[dict[str, Any]]:
         if not knowledge_base_ids:
             return []

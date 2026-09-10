@@ -395,3 +395,69 @@ Feature: 受限知识检索与媒体资源协议
       When harness 执行 knowledge_search
       Then 返回 retrieval_status unavailable
       And 不产生媒体资源引用
+
+Feature: 客服 QA RAG 单轮运行接入统一入口
+  统一问答入口的 qa 路径按已发布客服智能体运行，异步完成后返回稳定 blocks[] 内容块与
+  检索状态；FAQ 与订单诊断行为保持不变，媒体块只能引用本轮受授权检索结果。
+
+  Rule: 分流行为保持回归
+
+    Scenario: FAQ 命中仍同步返回固定答案
+      Given 一个命中的固定问题
+      When 用户通过统一入口提问
+      Then 同步返回固定答案且不调用知识库或模型
+
+    Scenario: 无订单业务问题创建 qa 作业
+      Given 当前租户存在已发布客服智能体
+      When 用户提出无订单号的业务问题
+      Then 返回 202、qa_id 和轮询地址
+      And 轮询完成后 result 含 blocks[] 和 retrieval_status
+
+  Rule: blocks 内容块合同
+
+    Scenario: 命中图片的分段返回 image 块
+      Given 本轮检索命中携带 PNG 图片的分段
+      When 智能体完成回答
+      Then blocks 含 image 块及本轮签发的媒体资源描述
+      And 不暴露 RAGFlow 标识、对象存储路径或外部 URL
+
+    Scenario: 命中视频的分段返回 video 块
+      Given 本轮检索命中 MP4 视频文档分段
+      When 智能体完成回答
+      Then blocks 含 video 块与可播放的媒体资源描述
+
+    Scenario: 模型伪造媒体或引用被丢弃
+      Given 智能体返回的 image/video 块引用本轮未签发的资源
+      When harness 校验回答
+      Then 该媒体块被移除且文本块保留
+      And 引用未返回分段号的 reference 块同样被移除
+
+  Rule: 检索状态诚实汇报
+
+    Scenario: 无知识库命中返回 not_found
+      Given knowledge_search 返回空分段
+      When 智能体完成回答
+      Then retrieval_status 为 not_found 且文本仍可交付
+
+    Scenario: 知识库依赖不可用返回 unavailable
+      Given kb-service 请求失败
+      When 智能体完成回答
+      Then retrieval_status 为 unavailable 且文本仍可交付
+
+    Scenario: 模型声称 found 但无检索依据被降级
+      Given 智能体未经检索直接声称 found
+      When harness 校验回答
+      Then retrieval_status 被修正为 not_found
+
+  Rule: 漏检索时 harness 要求补检索
+
+    Scenario: 业务问题漏检索触发一次补检索
+      Given 用户提出业务知识问题且智能体首轮未请求 knowledge_search
+      When harness 收到无检索依据的直接回答
+      Then harness 要求补充一次检索后再接受回答
+      And 单轮总检索次数不超过两次
+
+    Scenario: 寒暄问题不触发补检索
+      Given 用户提出简单寒暄
+      When 智能体直接回答
+      Then harness 不强制检索且正常完成

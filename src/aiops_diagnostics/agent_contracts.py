@@ -171,6 +171,161 @@ def qa_turn_schema() -> dict[str, Any]:
     return QA_TURN_SCHEMA
 
 
+class QaBlock(BaseModel):
+    """One `blocks[]` content block in the customer QA output contract (blocks-v1).
+
+    `kind` selects the shape:
+      - text: `text` carries the prose (Simplified Chinese).
+      - image / video: `resource_id` must name a media resource issued to THIS
+        turn by the harness's knowledge_search tool; the model may not invent
+        URLs. `title` is optional display metadata.
+      - reference: `reference_id` must name a chunk returned by THIS turn's
+        knowledge_search; `title` is the source document name.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["text", "image", "video", "reference"]
+    text: str = ""
+    resource_id: str = ""
+    reference_id: str = ""
+    title: str = ""
+
+    @model_validator(mode="after")
+    def validate_payload(self) -> QaBlock:
+        if self.kind == "text":
+            if not self.text.strip():
+                raise ValueError("text block requires non-empty text")
+            if self.resource_id or self.reference_id:
+                raise ValueError("text block must not carry resource/reference ids")
+        elif self.kind in ("image", "video"):
+            if not self.resource_id.startswith("media_"):
+                raise ValueError(f"{self.kind} block requires a harness-issued media resource id")
+            if self.text:
+                raise ValueError(f"{self.kind} block must not carry text")
+        else:
+            if not self.reference_id:
+                raise ValueError("reference block requires a reference id")
+            if self.text or self.resource_id:
+                raise ValueError("reference block must not carry text or resource ids")
+        return self
+
+    def to_dict(self) -> dict[str, Any]:
+        payload: dict[str, Any] = {"kind": self.kind}
+        if self.kind == "text":
+            payload["text"] = self.text
+        elif self.kind in ("image", "video"):
+            payload["resource_id"] = self.resource_id
+            if self.title:
+                payload["title"] = self.title
+        else:
+            payload["reference_id"] = self.reference_id
+            if self.title:
+                payload["title"] = self.title
+        return payload
+
+
+class QaAnswer(BaseModel):
+    """The blocks-v1 customer QA answer the harness stores for the qa job."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    blocks: list[QaBlock] = Field(min_length=1, max_length=40)
+    retrieval_status: Literal["found", "not_found", "unavailable", "limited"]
+
+    @model_validator(mode="after")
+    def validate_blocks(self) -> QaAnswer:
+        if not any(block.kind == "text" for block in self.blocks):
+            raise ValueError("blocks must contain at least one text block")
+        return self
+
+    def to_public_dict(self, *, media_by_id: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
+        """Public `result` payload for the assistant QA poll response.
+
+        Media blocks are enriched with the signed media resource descriptor from
+        this turn's retrieval so the frontend can render without parsing URLs.
+        `media_by_id` maps resource_id -> MediaResource.to_dict().
+        """
+        media_by_id = media_by_id or {}
+        blocks: list[dict[str, Any]] = []
+        for block in self.blocks:
+            payload = block.to_dict()
+            if block.kind in ("image", "video"):
+                resource = media_by_id.get(block.resource_id)
+                if resource is not None:
+                    payload["media"] = resource
+                else:
+                    # The referenced grant expired or was invalidated mid-run;
+                    # keep the block but flag it unavailable so text survives.
+                    payload["media"] = None
+                    payload["unavailable"] = True
+            blocks.append(payload)
+        return {
+            "blocks": blocks,
+            "retrieval_status": self.retrieval_status,
+        }
+
+
+QA_RAG_TURN_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "kind": {
+            "type": "string",
+            "enum": ["tool_requests", "answer"],
+        },
+        "tool_requests": {
+            "type": "array",
+            "maxItems": 2,
+            "items": {
+                "type": "object",
+                "properties": {
+                    "tool": {"type": "string", "enum": ["knowledge_search"]},
+                    "reason": {"type": "string", "maxLength": 500},
+                    "query": {"type": "string", "maxLength": 400},
+                },
+                "required": ["tool", "reason", "query"],
+                "additionalProperties": False,
+            },
+        },
+        "answer": {
+            "type": "object",
+            "properties": {
+                "blocks": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 40,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "kind": {"type": "string", "enum": ["text", "image", "video", "reference"]},
+                            "text": {"type": "string"},
+                            "resource_id": {"type": "string"},
+                            "reference_id": {"type": "string"},
+                            "title": {"type": "string"},
+                        },
+                        "required": ["kind", "text", "resource_id", "reference_id", "title"],
+                        "additionalProperties": False,
+                    },
+                },
+                "retrieval_status": {
+                    "type": "string",
+                    "enum": ["found", "not_found", "unavailable", "limited"],
+                },
+            },
+            "required": ["blocks", "retrieval_status"],
+            "additionalProperties": False,
+        },
+    },
+    "required": ["kind", "tool_requests", "answer"],
+    "additionalProperties": False,
+}
+
+
+def qa_rag_turn_schema() -> dict[str, Any]:
+    """Strict structured-output schema for the customer QA RAG harness turn."""
+    return QA_RAG_TURN_SCHEMA
+
+
 def _make_strict_response_schema(node: Any) -> None:
     """Normalize Pydantic output for strict Responses API providers."""
     if isinstance(node, list):

@@ -171,8 +171,8 @@ class SDKCodexSession:
     def set_progress_callback(self, callback: Callable[[dict[str, Any]], None] | None) -> None:
         self._progress_callback = callback
 
-    def run(self, prompt: str) -> CodexTurnOutput:
-        handle = self._thread.turn(prompt, output_schema=agent_turn_schema())
+    def run(self, prompt: str, *, output_schema: dict[str, Any] | None = None) -> CodexTurnOutput:
+        handle = self._thread.turn(prompt, output_schema=output_schema or agent_turn_schema())
         self._record_event({"type": "codex_turn_started", "thread_id": self.thread_id, "turn_id": handle.id})
         executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="aiops-codex-turn")
         future = executor.submit(handle.run)

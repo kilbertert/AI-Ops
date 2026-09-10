@@ -463,6 +463,59 @@ workflow YAML 不适用复杂度或 mutation 工具；安全状态机由模板�
 证据边界：RAG-MEDIA-01..04 是 AI-Ops 协议和安全边界的离线自动化验证；未连接生产
 `kb-service`、RAGFlow、真实租户或真实浏览器，因此**未完成业务媒体验收**。
 
+## 客服 QA RAG 单轮运行 QA 计划（T3/#170）
+
+### QA-RAG-01 blocks 合同与媒体授权
+
+- 环境：AI-Ops 本地 Python 3.13，pytest，脚本化 Codex session + fake kb-service client + 内存媒体签发器。
+- 前置条件：租户有已发布客服智能体（绑定 KB-A）；检索命中含 PNG 图片分段和 MP4 视频分段。
+- 测试数据：图片分段（`image_id`/`image/png`）、视频分段（`doc_type_kwd=video`/`video/mp4`）、伪造媒体 ID、伪造引用 ID 各一组。
+- 有序动作：发起业务问题；模型请求 `knowledge_search`；harness 注入检索结果；模型返回引用媒体的回答。
+- 预期结果：`blocks[]` 含 text/image/video/reference 块；image 块带本轮签发的媒体描述（`media_/…` URL、MIME），不含 RAGFlow 标识或对象路径；伪造媒体/引用块被丢弃且文本保留。
+- 清理：释放内存 fake 与临时 run 目录。
+- 结果：PASS（2026-09-10，pytest `tests/test_qa_rag.py`）。
+
+### QA-RAG-02 检索状态三态与降级
+
+- 环境：同 QA-RAG-01。
+- 前置条件：fake client 分别返回空分段、抛上游不可用异常、模型声称 found 但零检索。
+- 测试数据：一条普通业务问题。
+- 有序动作：执行三组独立运行并读取 `retrieval_status`。
+- 预期结果：空命中 → `not_found`；kb 不可用 → `unavailable`（文本仍交付）；零检索声称 found → 被修正为 `not_found`。
+- 清理：释放 fake。
+- 结果：PASS（2026-09-10，pytest `tests/test_qa_rag.py`）。
+
+### QA-RAG-03 补检索与调用上限
+
+- 环境：同 QA-RAG-01。
+- 前置条件：模型首轮直接回答不检索（业务问题）；另一组模型连续请求三次检索。
+- 测试数据：业务问题"怎么拔出充电枪"；寒暄"你好"。
+- 有序动作：业务问题观察 harness 是否拒绝首轮无检索回答并要求补检索；连续三次请求观察第三次行为；寒暄观察是否免检索。
+- 预期结果：业务问题触发一次补检索后完成（总检索 ≤ 2）；第三次检索被 guard 拒绝且状态为 limited；寒暄直接完成且检索次数为 0。
+- 清理：释放 fake。
+- 结果：PASS（2026-09-10，pytest `tests/test_qa_rag.py`）。
+
+### QA-RAG-04 智能体选择边界
+
+- 环境：本地 SQLite AgentStore + 内存知识绑定 resolver。
+- 前置条件：草稿、已发布客服、已发布运维、已停用客服智能体各一。
+- 有序动作：依次调用选择器并交叉用其他租户调用。
+- 预期结果：只有已发布客服智能体被选中；草稿/运维/停用不服务；跨租户统一不选中（无存在性泄露）。
+- 清理：删除临时数据库。
+- 结果：PASS（2026-09-10，pytest `tests/test_qa_rag.py`）。
+
+### QA-RAG-05 统一入口回归
+
+- 环境：本地 FastAPI TestClient，fake runtime。
+- 有序动作：跑既有 assistant API 测试套件（FAQ 短路同步答案、显式订单 202 诊断、qa 202+轮询、422/401/409 行为）。
+- 预期结果：全部既有行为不变；新增 RAG 路径不改变 FAQ 与 diagnosis 分流。
+- 清理：临时目录自动回收。
+- 结果：PASS（2026-09-10，pytest `tests/test_assistant_api.py` 全量 568 项含回归通过）。
+
+证据边界：QA-RAG-01..05 为 mock-first 协议级验证。真实 kb-service/RAGFlow canary、
+Java BFF 透传与前端 blocks[] 渲染属 #171/#173 及真实媒体验收范围（见 P0-E2E-REAL），
+本票不把 fake 结果记为业务验收。
+
 ## P0-E2E 本地集成与真实链路状态
 
 ### P0-E2E-LOCAL 本地 AI-Ops 集成
