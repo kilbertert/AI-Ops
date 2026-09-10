@@ -46,3 +46,7 @@ docs/智能客服相关文档及数据/
 # Local business reference documents (not tracked)
 docs/用户端.docx
 docs/管家端.docx
+
+# 本地产品原型与验收脚本（不进入仓库）
+docs/原型/
+scripts/
