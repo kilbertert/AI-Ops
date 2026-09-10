@@ -50,3 +50,7 @@ docs/管家端.docx
 # 本地产品原型与验收脚本（不进入仓库）
 docs/原型/
 scripts/
+
+# 知识库联调素材（业务方提供的原始 docx/mp4，仅上传 kb-service 用）
+docs/知识库材料/
+*.netcatty-*.part
