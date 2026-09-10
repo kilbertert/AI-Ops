@@ -583,6 +583,17 @@ S3 退役验收（公网入口 + 开机自启）：FAQ 200（28 条）、健康�
 - 配置接缝：`AIOPS_GATEWAY_KB_SERVICE_BASE_URL`/`AIOPS_GATEWAY_MEDIA_SIGNING_SECRET` 注入运行时（`KbServiceClient.for_tenant` 按请求租户重绑定）；两者留空即维持旧行为。
 
 未完成业务验收：mock-first 协议级验证不等于真实媒体链路验收；生产 kb-service/RAGFlow canary（当前停机，见 docs/agents/kb-service-test-env.md）、Java BFF blocks 透传与前端渲染由 #171/#173 及 P0-E2E-REAL 覆盖。
+
+## T4 会话与活跃订单上下文验证（issue #172，2026-09-10）
+
+验证范围：会话 CRUD、scope/入口/智能体版本绑定隔离、8 轮/8k token 双上限上下文窗口、30 天保留、活跃订单每轮重校验与分流、409 CONVERSATION_BUSY、取消轮次不留答案；不包含真实多设备前端续聊与 BFF 透传（#173/P0-E2E-REAL）。
+
+- 自动化测试：`tests/test_conversation_api.py` 10 项通过。
+- 全量回归：pytest 578 项通过（568 基线 + 10 新增）；Ruff、格式、compileall、`uv lock --check`、`uv pip check`、`git diff --check` 通过。
+- 已验证：跨租户身份层拒绝、跨入口统一 404（含 GET/DELETE/active-order 端点）；绑定活跃订单必须归属校验（未授权统一 404）；follow-up 省略订单号复用活跃订单走 diagnosis，归属撤销后清除绑定走 qa；知识问题始终 qa+RAG；并发 409 且无会话提问不受影响；崩溃锁 120s 自过期；取消/无答案轮次不保留、不进上下文；窗口取 8 轮与 8k 较小者（单条超预算轮次单独保留不返回空上下文）；30 天过期不可见。
+- 版本语义：会话记录 agent_version_key；`select_customer_agent` 每回合现查最新已发布版本（新回合新版本），执行中回合持 #170 的 selection 快照（原版本），双向满足 #172 版本切换验收。
+
+未完成业务验收：前端刷新/跨设备续聊的真实轮询体验、BFF 会话字段透传、真实"停止生成"按钮链路属 #173；未连接生产环境，不把 fake 结果记为业务验收。
 ## T1 受限知识检索与媒体资源协议验证（issue #168，2026-09-09）
 
 验证范围：AI-Ops 内部 `knowledge_search` guard、RAGFlow 字段规范化和媒体资源授权协议；不包含生产 `kb-service`、RAGFlow、Java BFF 或浏览器部署。

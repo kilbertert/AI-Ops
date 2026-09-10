@@ -80,8 +80,15 @@ class _Runtime:
         del context, diagnosis_id
         return None
 
-    def start_assistant_qa(self, context: ScopeContext, question: str):
-        del context
+    def start_assistant_qa(
+        self,
+        context: ScopeContext,
+        question: str,
+        *,
+        conversation=None,
+        conversation_turn_no=None,
+    ):
+        del conversation, conversation_turn_no
         qa_id = "qa_test00000000000000000000000000000001"
         self._qa[qa_id] = {"qa_id": qa_id, "question": question, "status": "queued", "result": None}
         return self._qa[qa_id]
