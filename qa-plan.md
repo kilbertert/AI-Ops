@@ -384,6 +384,40 @@ workflow YAML 不适用复杂度或 mutation 工具；安全状态机由模板�
 
 证据要求：FAQ-01..03 记录提交、环境、时间戳和测试日志；不把目录 fixture 或离线身份 fake 写成真实业务权限验收。
 
+## 智能体生命周期 QA 计划（T2）
+
+### AGENT-LIFE-01 草稿租户与角色隔离
+
+- 环境：AI-Ops 本地 Python 3.13，临时 SQLite，`AgentStore` 生命周期服务。
+- 前置条件：准备 tenant-a 的智能体管理员、发布管理员、普通角色和 tenant-b 管理员。
+- 测试数据：客服与运维草稿各一份。
+- 有序动作：管理员创建、读取、编辑、列出；普通角色和 tenant-b 读取同一 ID。
+- 预期结果：管理员成功且 revision 增加；其他调用者得到统一拒绝，不泄露资源存在性。
+- 清理：删除临时 SQLite。
+- 结果：PASS（2026-09-09，本地 pytest `tests/test_agent_lifecycle.py`）。
+
+### AGENT-LIFE-02 发布依赖校验与不可变快照
+
+- 环境：同 AGENT-LIFE-01，fake 知识库状态 resolver。
+- 前置条件：草稿绑定 ready、parsing、missing 知识库；模型/输出合同包含 allowlist 与非法值。
+- 测试数据：带 Prompt、开场问题、快捷指令、媒体输出合同的客服草稿。
+- 有序动作：尝试非法依赖发布；修正依赖后按 revision 发布；再编辑草稿并读取旧版本。
+- 预期结果：非法依赖不生成版本；成功发布 version_no=1；旧快照字段不随草稿编辑变化；过期 revision 返回冲突。
+- 补充动作：从 version_no=1 派生新草稿、修改配置并发布。
+- 补充预期：旧版本字段保持不变，新发布版本为 version_no=2。
+- 清理：删除临时 SQLite。
+- 结果：PASS（2026-09-09，本地 pytest `tests/test_agent_lifecycle.py`）。
+
+### AGENT-LIFE-03 停用与删除边界
+
+- 环境：同 AGENT-LIFE-01。
+- 前置条件：一个未发布草稿和一个已有 version_no=1 的智能体。
+- 有序动作：删除未发布草稿；停用已发布智能体；查询状态和版本；尝试删除已发布智能体。
+- 预期结果：未发布草稿删除后统一未找到；停用后状态为 disabled，历史快照仍可读，已发布智能体不能删除。
+- 清理：删除临时 SQLite。
+- 结果：PASS（2026-09-09，本地 pytest `tests/test_agent_lifecycle.py`）。
+
+证据边界：AGENT-LIFE-01..03 验证 AI-Ops 生命周期协议和权限边界；后台 Java BFF、真实 UPMS 角色、知识库生产状态与浏览器页面由 #171/#170/#173 接入，未完成业务验收。
 ## 受限知识检索与媒体协议 QA 计划
 
 ### RAG-MEDIA-01 检索白名单与调用上限
@@ -394,7 +428,7 @@ workflow YAML 不适用复杂度或 mutation 工具；安全状态机由模板�
 - 有序动作：调用 `knowledge_search`；检查返回分段和请求参数；重复调用至第三次。
 - 预期结果：只返回绑定知识库；Codex 不能指定 `kb_id/top_k`；第三次返回 `limited` 且不再访问 fake client。
 - 清理：释放内存 fake，无持久化数据。
-- 结果：PASS（2026-09-09，分支 `feat/knowledge-search-media`，提交待记录）。
+- 结果：PASS（2026-09-09，源提交 `efcaf29`，PR #176 merge commit `c8be858`）。
 
 ### RAG-MEDIA-02 检索结果规范化
 
@@ -428,3 +462,23 @@ workflow YAML 不适用复杂度或 mutation 工具；安全状态机由模板�
 
 证据边界：RAG-MEDIA-01..04 是 AI-Ops 协议和安全边界的离线自动化验证；未连接生产
 `kb-service`、RAGFlow、真实租户或真实浏览器，因此**未完成业务媒体验收**。
+
+## P0-E2E 本地集成与真实链路状态
+
+### P0-E2E-LOCAL 本地 AI-Ops 集成
+
+- 环境：本地 Python 3.13、FastAPI `TestClient`、临时 SQLite、fake caller、fake 知识库和内存媒体对象。
+- 前置条件：T1 媒体协议和 T2 智能体生命周期已合并到同一任务分支。
+- 有序动作：运行 T1 媒体协议、T2 生命周期、统一问答 API、QA store、Gateway API 专项测试；再运行全量 pytest、Ruff、格式、compileall、锁文件和依赖检查。
+- 预期结果：专项 31 项通过；全量 pytest 554 项通过；所有确定性检查通过。
+- 清理：测试使用临时目录，进程退出后删除。
+- 结果：PASS（2026-09-10，T1 merge `c8be858` + T2 commit `f564832`/同步提交 `1b73f96`）。
+
+### P0-E2E-REAL 真实客服媒体闭环
+
+- 环境：Java BFF、`qumall-admin`/客服浏览器、AI-Ops Gateway、真实 `kb-service/RAGFlow`、批准的租户和含 PNG/MP4 数据集。
+- 前置条件：#170 QA RAG 接线、#171/#173 BFF/前端接线完成，并提供可保留日志的集成环境。
+- 有序动作：后台发布客服智能体；绑定知识库；客服端提问；轮询 QA；渲染图片；播放视频并请求 Range；多轮追问；验证跨租户、过期、媒体失败降级。
+- 预期结果：前端只收到 BFF 合同，QA 返回 `blocks[]`，图片可渲染、视频可播放，文本/引用在媒体失败时保留，所有越权请求拒绝。
+- 清理：删除测试会话和临时授权，不修改业务数据。
+- 结果：BLOCKED（2026-09-10）。原因：#170/#171/#173 尚未完成，当前无批准真实环境和真实媒体数据；不得把本地 fake 结果写成业务验收通过。
