@@ -647,3 +647,22 @@ S3 退役验收（公网入口 + 开机自启）：FAQ 200（28 条）、健康�
 - 镜像传输：Docker Hub 在两台主机均不可达；经 120 `docker save | gzip` + 逐 128MB 块 md5 校验推送（3.5GB ragflow + 948MB infinity + 三个小镜像），最终 md5 全部与源一致。
 - 验证：`/healthz` 200；kb-service→RAGFlow 搜索链路实响（RAGFlow code=102 业务应答证明上游活了）；canary 租户无残留知识库（符合临时库纪律）；`aiops-canary` 映射在位；网关 `/health` 200 且媒体面配置生效（坏 ID 得到签名器 403 而非未配置 404）。
 - 未完成/边界（如实声明）：①120 网关与 nginx 域名（api.qumall.qushiyun.com）**未切流**——36 目前仅内网/SSH 可达，公网入口、TLS 与前端 BFF 指向切换是人工决策点，等用户确认后再动；②诊断数据面在 36 不可达（见上）；③kb-service 图片透传端点仍缺（视频 download 已可用）；④RAGFlow 视频解析需租户配 VISION 模型。120 侧所有服务与回滚快照原样保留，未删除任何东西。
+## P0 真实 canary 执行手册编制（T6/T8 可交付部分，2026-09-10）
+
+本次分支 `feat/p0-canary-docs`（媒体端点代码与并行会话的 PR #181 重叠，
+发现后本分支收缩为纯文档交付；两侧技术评审互检见两 PR 对话）。
+
+- `docs/agents/p0-media-canary.md`：真实媒体 canary 执行手册——环境与人工
+  决策点（KB 栈已随 PR #181 全栈迁移至移动云 36 并实测活通；剩余人工
+  决策点为 36 公网入口/TLS/BFF 切流与 kb-service 图片透传端点）、
+  `aiops-canary` 租户与素材、C1-C7 执行序列（发布校验、草稿调试、QA
+  blocks、图片 200、视频 Range 206/416、多轮与忙碌、降级与越权、监控
+  核对）、清理纪律、#173 验收项到证据映射。
+- qa-plan.md `P0-E2E-REAL` 更新为接口级口径并指向该手册。
+- 评审互检产出（已在 #181 评审意见留档）：`verify_signed` 对非 ASCII URL
+  id 在格式校验前直接 `encode("ascii")`/`compare_digest`，公网可达 500
+  （应统一 403 no-store）；修复与回归测试建议见 #181 评审意见，随本条
+  作为独立修复票跟进。
+- 回归：本分支最终仅含文档与验收工件变更，基线 pytest 全绿。
+- 真实 canary 执行：手册就绪，环境侧仅剩 36 公网切流与图片端点两个人工
+  决策点（视频链路已可用）。
