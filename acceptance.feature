@@ -350,3 +350,48 @@ Feature: 智能体草稿、发布、停用与不可变版本
       When 管理员删除该草稿
       Then 后续读取返回统一未找到
       And 已发布智能体不能被删除
+Feature: 受限知识检索与媒体资源协议
+  Codex 只能通过 AI-Ops harness 的受限知识检索工具获取当前已发布智能体允许的知识库资料，
+  图片和视频必须通过短时授权的媒体资源协议交付，不能暴露 RAGFlow 内部标识。
+
+  Rule: 检索范围与调用次数由 harness 控制
+
+    Scenario: 检索只使用已发布智能体绑定的知识库
+      Given 当前租户的客服智能体版本只绑定知识库 KB-A
+      And 检索响应同时包含 KB-A 和其他租户知识库的分段
+      When Codex 请求 knowledge_search
+      Then 只返回 KB-A 的脱敏分段和引用
+      And 请求方不能通过参数选择其他知识库或 top_k
+
+    Scenario: 单轮检索达到上限后返回受限状态
+      Given 当前回合已执行两次 knowledge_search
+      When Codex 再次请求 knowledge_search
+      Then 返回 retrieval_status limited
+      And 不再调用知识库服务
+
+  Rule: 媒体资源可授权渲染且不越权
+
+    Scenario: 命中图片和视频生成短时资源引用
+      Given 检索分段关联一个 PNG 图片和一个 MP4 文档
+      When harness 规范化检索结果
+      Then 返回 image/video 内容资源引用和 BFF 可转发的相对地址
+      And 不返回 RAGFlow image_id、对象存储路径或租户 token
+
+    Scenario: 视频代理支持浏览器 Range 请求
+      Given 当前用户持有仍有效的视频资源授权
+      When 媒体代理收到 bytes=2-5 的 Range 请求
+      Then 返回 206、video/mp4、Content-Range 和对应字节
+      And 返回 inline 与 Accept-Ranges 响应头
+
+    Scenario: 媒体授权跨租户或过期后失效
+      Given 媒体资源属于租户 A 或已超过 TTL
+      When 租户 B 或过期会话请求该资源
+      Then 返回 403 且不读取媒体内容
+
+  Rule: 依赖失败不伪造知识依据
+
+    Scenario: 知识库服务不可用
+      Given kb-service 请求超时或返回非法响应
+      When harness 执行 knowledge_search
+      Then 返回 retrieval_status unavailable
+      And 不产生媒体资源引用

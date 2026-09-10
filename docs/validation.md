@@ -563,3 +563,13 @@ S3 退役验收（公网入口 + 开机自启）：FAQ 200（28 条）、健康�
 - 结果：生命周期协议验证通过；草稿允许保存待审核模型，发布时才执行后端 allowlist；默认未注入真实知识库 resolver 时对有绑定的发布请求 fail closed。
 
 未完成业务验收：当前使用临时 SQLite、fake resolver 和 fake caller，不能宣称真实后台角色、知识库解析状态或 Java BFF 链路已验收。
+## T1 受限知识检索与媒体资源协议验证（issue #168，2026-09-09）
+
+验证范围：AI-Ops 内部 `knowledge_search` guard、RAGFlow 字段规范化和媒体资源授权协议；不包含生产 `kb-service`、RAGFlow、Java BFF 或浏览器部署。
+
+- 自动化测试：`tests/test_knowledge_retrieval.py` 4 项通过。
+- 回归测试：assistant API、assistant QA store、Agent contracts、diagnostic tools 共 29 项通过。
+- 覆盖行为：租户/智能体版本知识库白名单、`top_k` 隐藏、每轮两次检索上限、图片/视频 MIME 白名单、TTL、主动失效、跨租户拒绝、Range 206、依赖不可用降级。
+- 结果：协议和安全边界验证通过；测试环境为本地 Python 3.13、内存 fake、时间 `2026-09-09`；源提交 `efcaf29` 已通过 PR #176 squash 合并为 `c8be858`。
+
+未完成业务验收：没有连接真实知识库或实际前端，不能把本次 fake/协议测试写成图片视频业务链路已验收。
