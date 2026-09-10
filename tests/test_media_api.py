@@ -385,3 +385,24 @@ def test_runtime_serve_media_rechecks_published_agent_liveness(tmp_path: Path) -
     manager.disable(admin, agent.agent_id, expected_revision=current.revision)
     response = runtime.serve_media(signed_id)
     assert response is not None and response.status_code == 403
+
+
+def test_media_route_maps_non_ascii_ids_to_uniform_403(tmp_path: Path) -> None:
+    """Non-ASCII URL ids must hit the uniform 403, never a 500 (public path).
+
+    Regression for the cross-review finding on #181: `media_中文.sig` used to
+    raise UnicodeEncodeError from encode("ascii") before any format check,
+    surfacing as a 500 instead of 403 no-store.
+    """
+    signer = MediaResourceSigner("secret", ttl_seconds=600)
+    _issue(signer)
+    client = _client(tmp_path, _Runtime(signer=signer, fetch=lambda _grant: b"x"))
+
+    # URL-encoded CJK id ("media_中文.sig") and an oversized id.
+    resp = client.get("/v1/media/media_%E4%B8%AD.sig")
+    assert resp.status_code == 403
+    assert resp.headers["cache-control"] == "no-store"
+
+    oversized = "media_" + "a" * 200 + ".deadbeefdeadbeefdeadbeef"
+    resp = client.get(f"/v1/media/{oversized}")
+    assert resp.status_code == 403
