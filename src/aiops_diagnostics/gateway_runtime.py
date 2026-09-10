@@ -21,6 +21,12 @@ from aiops_diagnostics.health_report import (
     build_minimal_health_report,
 )
 from aiops_diagnostics.journal import EvidenceJournal
+from aiops_diagnostics.knowledge_retrieval import (
+    KbServiceClient,
+    KnowledgeSearchClient,
+    KnowledgeSearchUnavailable,
+    MediaResourceSigner,
+)
 from aiops_diagnostics.parsing import parse_request
 from aiops_diagnostics.platform_paths import reference_root
 from aiops_diagnostics.query_scope import resolve_query_scope
@@ -48,6 +54,10 @@ class GatewayRuntime:
         store: GatewayStore,
         gateway_settings: GatewayServerSettings,
         diagnostic_settings: Settings,
+        *,
+        kb_search_client: KnowledgeSearchClient | None = None,
+        media_signer: MediaResourceSigner | None = None,
+        agent_store: Any = None,
     ) -> None:
         self.store = store
         self.gateway_settings = gateway_settings
@@ -55,6 +65,12 @@ class GatewayRuntime:
         self.diagnostic_settings.agent.run_root = str(gateway_settings.data_home / "runs")
         allowed = gateway_settings.allowed_key_slots or (diagnostic_settings.agent.key_slot,)
         self.allowed_key_slots = frozenset(allowed)
+        # Customer QA RAG path (T3/#170): bounded kb-service search + signed
+        # media. Both stay None unless configured, in which case the QA branch
+        # keeps the plain zero-order answer (no knowledge, no media).
+        self.kb_search_client = kb_search_client
+        self.media_signer = media_signer
+        self.agent_store = agent_store
         self._executor = ThreadPoolExecutor(
             max_workers=gateway_settings.max_workers,
             thread_name_prefix="aiops-gateway-run",
@@ -67,10 +83,32 @@ class GatewayRuntime:
         store: GatewayStore,
         gateway_settings: GatewayServerSettings,
     ) -> GatewayRuntime:
+        from aiops_diagnostics.agent_lifecycle import AgentStore
+
         diagnostic_settings = Settings.from_config(gateway_settings.server_config_file)
         diagnostic_settings.agent.validate()
         diagnostic_settings.ssh.validate()
-        return cls(store, gateway_settings, diagnostic_settings)
+        kb_client = None
+        if gateway_settings.kb_service_base_url:
+            kb_client = KbServiceClient(
+                gateway_settings.kb_service_base_url,
+                tenant_id="aiops",  # per-request tenant is applied by the QA worker
+                timeout=gateway_settings.kb_service_timeout_seconds,
+            )
+        media_signer = None
+        if gateway_settings.media_signing_secret:
+            media_signer = MediaResourceSigner(
+                gateway_settings.media_signing_secret,
+                ttl_seconds=gateway_settings.media_ttl_seconds,
+            )
+        return cls(
+            store,
+            gateway_settings,
+            diagnostic_settings,
+            kb_search_client=kb_client,
+            media_signer=media_signer,
+            agent_store=AgentStore(store.path),
+        )
 
     def start_run(
         self,
@@ -238,6 +276,7 @@ class GatewayRuntime:
             question,
             selected_provider.name,
             selected_key_slot,
+            context.effective_tenant_id or None,
         )
         self._futures[qa["qa_id"]] = future
         future.add_done_callback(lambda _: self._futures.pop(qa["qa_id"], None))
@@ -398,11 +437,17 @@ class GatewayRuntime:
         question: str,
         provider: str,
         key_slot: str,
+        tenant_id: str | None = None,
     ) -> None:
         if not self.store.update_assistant_question(qa_id, status="running"):
             return
         settings = Settings.from_config(self.gateway_settings.server_config_file)
         settings.agent.run_root = self.diagnostic_settings.agent.run_root
+        rag_result = None
+        if tenant_id and self.kb_search_client is not None and self.media_signer is not None:
+            rag_result = self._try_customer_rag(qa_id, question, tenant_id, settings, provider, key_slot)
+        if rag_result is not None:
+            return
         try:
             answer = run_zero_order_answer(
                 question,
@@ -423,6 +468,67 @@ class GatewayRuntime:
             status="completed",
             result=answer,
         )
+
+    def _try_customer_rag(
+        self,
+        qa_id: str,
+        question: str,
+        tenant_id: str,
+        settings: Settings,
+        provider: str,
+        key_slot: str,
+    ) -> dict[str, Any] | None:
+        """Run the published customer agent path (T3/#170) or fall back.
+
+        Returns the completed job record when the RAG path produced a result;
+        None when there is no published customer agent for this tenant or the
+        kb dependency is unavailable, letting the caller keep the existing
+        zero-order behavior.
+        """
+        from aiops_diagnostics.qa_rag import run_customer_qa_answer, select_customer_agent
+
+        if self.agent_store is None:
+            return None
+        try:
+            selection = select_customer_agent(self.agent_store, tenant_id)
+        except Exception:
+            selection = None
+        if selection is None:
+            return None
+        assert isinstance(self.kb_search_client, KbServiceClient)
+        try:
+            result = run_customer_qa_answer(
+                question,
+                selection,
+                settings.agent,
+                search_client=self.kb_search_client.for_tenant(tenant_id),
+                media_signer=self.media_signer,
+                tenant_id=tenant_id,
+                provider=None,
+                key_slot=key_slot,
+                project_root=reference_root(),
+            )
+        except KnowledgeSearchUnavailable:
+            # Retrieval dependency is down: per the T1/T3 contract the model
+            # can still answer from its own knowledge with
+            # retrieval_status=unavailable — but the runtime cannot reach the
+            # model without the search guard either, so degrade to the plain
+            # zero-order answer instead of failing the job.
+            return None
+        except (AgentRuntimeError, ValueError) as exc:
+            self.store.update_assistant_question(
+                qa_id,
+                status="failed",
+                error_code="QA_FAILED",
+                error_message=_public_error_message(exc, ""),
+            )
+            return {"status": "failed"}
+        self.store.update_assistant_question(
+            qa_id,
+            status="completed",
+            result=result,
+        )
+        return result
 
     def _execute_run(
         self,

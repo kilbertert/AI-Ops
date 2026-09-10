@@ -572,6 +572,17 @@ S3 退役验收（公网入口 + 开机自启）：FAQ 200（28 条）、健康�
 - 已验证：媒体授权/Range、租户隔离、草稿发布版本、停用/删除边界、统一问答既有入口回归。
 
 真实端到端验收仍未完成：#170 尚未把受限检索接入 QA 运行时，当前工作区也没有 Java BFF、`qumall-admin` 浏览器环境、真实 `kb-service/RAGFlow` 和可批准的图片/视频知识库数据；本地 fake 集成结果不能替代真实媒体验收。
+
+## T3 客服 QA RAG 运行时验证（issue #170，2026-09-10）
+
+验证范围：AI-Ops 统一问答入口 `qa` 路径按已发布客服智能体运行的 harness 接线与 blocks-v1 合同；不包含生产 `kb-service`、RAGFlow、Java BFF 透传改造或浏览器渲染。
+
+- 自动化测试：`tests/test_qa_rag.py` 14 项通过（blocks 合同、媒体授权、引用校验、状态三态、补检索、调用上限、寒暄免检索、智能体选择边界）。
+- 全量回归：pytest 568 项通过（554 基线 + 14 新增）；Ruff、格式、compileall、`uv lock --check`、`uv pip check`、`git diff --check` 通过。
+- 已验证：仅已发布客服智能体服务 qa 作业（草稿/运维/停用/跨租户不选中）；模型漏检索业务问题时 harness 强制一次补检索（总上限两次）；image/video/reference 块只能引用本轮检索签发的资源与分段，伪造即丢弃；`found` 无依据被降级 `not_found`；kb 不可用降级 `unavailable` 且文本保留；未配置 kb-service 或无已发布智能体时回退既有零订单回答路径。
+- 配置接缝：`AIOPS_GATEWAY_KB_SERVICE_BASE_URL`/`AIOPS_GATEWAY_MEDIA_SIGNING_SECRET` 注入运行时（`KbServiceClient.for_tenant` 按请求租户重绑定）；两者留空即维持旧行为。
+
+未完成业务验收：mock-first 协议级验证不等于真实媒体链路验收；生产 kb-service/RAGFlow canary（当前停机，见 docs/agents/kb-service-test-env.md）、Java BFF blocks 透传与前端渲染由 #171/#173 及 P0-E2E-REAL 覆盖。
 ## T1 受限知识检索与媒体资源协议验证（issue #168，2026-09-09）
 
 验证范围：AI-Ops 内部 `knowledge_search` guard、RAGFlow 字段规范化和媒体资源授权协议；不包含生产 `kb-service`、RAGFlow、Java BFF 或浏览器部署。

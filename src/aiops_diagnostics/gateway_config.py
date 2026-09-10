@@ -33,6 +33,10 @@ class GatewayServerSettings:
     introspection_timeout_seconds: int = 5
     third_session_service_token: str = ""
     third_session_key_prefix: str = "app:3rd_session:"
+    kb_service_base_url: str = ""
+    kb_service_timeout_seconds: float = 10.0
+    media_signing_secret: str = ""
+    media_ttl_seconds: int = 600
 
     @classmethod
     def from_env(cls) -> GatewayServerSettings:
@@ -73,6 +77,12 @@ class GatewayServerSettings:
             or _file_value(file_values, "AIOPS_GATEWAY_THIRD_SESSION_SERVICE_TOKEN"),
             third_session_key_prefix=_env("AIOPS_GATEWAY_THIRD_SESSION_KEY_PREFIX")
             or _file_value(file_values, "AIOPS_GATEWAY_THIRD_SESSION_KEY_PREFIX", "app:3rd_session:"),
+            kb_service_base_url=_env("AIOPS_GATEWAY_KB_SERVICE_BASE_URL")
+            or _file_value(file_values, "AIOPS_GATEWAY_KB_SERVICE_BASE_URL"),
+            kb_service_timeout_seconds=_env_float("AIOPS_GATEWAY_KB_SERVICE_TIMEOUT_SECONDS", 10.0),
+            media_signing_secret=_env("AIOPS_GATEWAY_MEDIA_SIGNING_SECRET")
+            or _file_value(file_values, "AIOPS_GATEWAY_MEDIA_SIGNING_SECRET"),
+            media_ttl_seconds=_env_int("AIOPS_GATEWAY_MEDIA_TTL_SECONDS", 600),
         )
 
     def validate(self) -> None:
