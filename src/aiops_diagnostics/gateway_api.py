@@ -1875,7 +1875,7 @@ def _begin_conversation_turn(
         _record_route_metric(
             context,
             caller,
-            route_type="qa",
+            route_type=kind,  # "qa" | "diagnosis" — never misattribute a busy turn
             outcome="busy",
             error_code="CONVERSATION_BUSY",
             conversation_id=conversation.get("conversation_id"),

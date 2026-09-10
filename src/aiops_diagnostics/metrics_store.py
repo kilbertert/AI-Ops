@@ -53,6 +53,17 @@ def _iso(value: datetime) -> str:
     return value.isoformat()
 
 
+_EXPIRE_SWEEP = {"at": datetime(1970, 1, 1, tzinfo=UTC)}
+
+
+def _last_expire() -> datetime:
+    return _EXPIRE_SWEEP["at"]
+
+
+def _mark_expire(now: datetime) -> None:
+    _EXPIRE_SWEEP["at"] = now
+
+
 class MetricsStore:
     """agent_run_metrics table sharing the gateway SQLite file."""
 
@@ -86,6 +97,8 @@ class MetricsStore:
                     ON agent_run_metrics(tenant_id, created_at DESC);
                 CREATE INDEX IF NOT EXISTS idx_agent_metrics_agent
                     ON agent_run_metrics(agent_id, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_agent_metrics_created
+                    ON agent_run_metrics(created_at);
                 """
             )
         protect_private_file(self.path)
@@ -148,8 +161,13 @@ class MetricsStore:
             raise MetricsValidationError("duration_ms must be non-negative")
         now = created_at or _utc_now()
         metric_id = "mtr_" + uuid.uuid4().hex
+        # ponytail: throttle expiry to one sweep per 10 minutes per process —
+        # a DELETE on every insert was a per-write full scan under load.
+        if now - _last_expire() > timedelta(minutes=10):
+            with self._connection(write=True) as connection:
+                self._expire(connection, now)
+            _mark_expire(now)
         with self._connection(write=True) as connection:
-            self._expire(connection, now)
             connection.execute(
                 """
                 INSERT INTO agent_run_metrics (

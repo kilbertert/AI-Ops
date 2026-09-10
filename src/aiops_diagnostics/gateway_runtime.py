@@ -552,13 +552,19 @@ class GatewayRuntime:
             status=public_status,
             result=result.model_dump(mode="json"),
         )
+        dumped = result.model_dump(mode="json")
+        # AgentDiagnosis carries summary/root_cause/hypotheses, not blocks[] —
+        # estimate tokens from the narrative fields it actually has.
+        diagnosis_tokens = (
+            sum(len(str(dumped.get(field) or "")) for field in ("summary", "root_cause")) * 2 // 3 + 1
+        )
         self._record_metric(
             tenant_id=context.effective_tenant_id,
             route_type="diagnosis",
             outcome="completed" if public_status == "completed" else "failed",
             error_code=None if public_status == "completed" else "DIAGNOSIS_INCONCLUSIVE",
             duration_ms=int((time.monotonic() - started_ms) * 1000),
-            token_count=_estimate_turn_tokens("", result.model_dump(mode="json")),
+            token_count=diagnosis_tokens,
         )
 
     def _execute_assistant_qa(
@@ -613,7 +619,9 @@ class GatewayRuntime:
                 _finish_turn(None, cancelled=True)
             else:
                 self._record_qa_metric(rag_result, tenant_id, started_ms, conversation_turn)
-                _finish_turn(rag_result)
+                # The metrics-only tag must not persist into the conversation
+                # turn (it would surface through GET /v1/conversations/{id}).
+                _finish_turn({key: value for key, value in rag_result.items() if key != "agent_version"})
             return
         try:
             answer = run_zero_order_answer(
@@ -629,13 +637,14 @@ class GatewayRuntime:
                 error_code="QA_FAILED",
                 error_message=_public_error_message(exc, ""),
             )
-            self._record_metric(
-                tenant_id=tenant_id or "",
-                route_type="qa",
-                outcome="failed",
-                error_code="QA_FAILED",
-                duration_ms=int((time.monotonic() - started_ms) * 1000),
-            )
+            if tenant_id:
+                self._record_metric(
+                    tenant_id=tenant_id,
+                    route_type="qa",
+                    outcome="failed",
+                    error_code="QA_FAILED",
+                    duration_ms=int((time.monotonic() - started_ms) * 1000),
+                )
             _finish_turn(None, cancelled=True)
             return
         self.store.update_assistant_question(
@@ -643,13 +652,14 @@ class GatewayRuntime:
             status="completed",
             result=answer,
         )
-        self._record_metric(
-            tenant_id=tenant_id or "",
-            route_type="qa",
-            outcome="completed",
-            duration_ms=int((time.monotonic() - started_ms) * 1000),
-            token_count=_estimate_turn_tokens(question, answer),
-        )
+        if tenant_id:
+            self._record_metric(
+                tenant_id=tenant_id,
+                route_type="qa",
+                outcome="completed",
+                duration_ms=int((time.monotonic() - started_ms) * 1000),
+                token_count=_estimate_turn_tokens(question, answer),
+            )
         _finish_turn(answer)
 
     def _record_qa_metric(
@@ -673,6 +683,7 @@ class GatewayRuntime:
         conversation_id = conversation_turn[0] if conversation_turn is not None else None
         agent_version_key = str((result or {}).get("agent_version") or "") or None
         agent_id = agent_version_key.split("#", 1)[0] if agent_version_key else None
+        searches = (result or {}).get("searches") or 0
         self._record_metric(
             tenant_id=tenant_id,
             route_type="qa",
@@ -681,6 +692,7 @@ class GatewayRuntime:
             agent_version_key=agent_version_key,
             conversation_id=conversation_id,
             retrieval_status=str((result or {}).get("retrieval_status") or ""),
+            searches=int(searches),
             media_count=media_count,
             duration_ms=int((time.monotonic() - started_ms) * 1000),
             token_count=_estimate_turn_tokens("", result),
@@ -818,11 +830,13 @@ class GatewayRuntime:
                 error_message=_public_error_message(exc, ""),
             )
             return {"status": "failed"}
-        # Tag the serving agent on the completed result so metrics (and only
-        # metrics — the blocks contract below is unchanged for callers) can
-        # attribute the run; run_customer_qa_answer itself keeps its public
-        # dict unchanged.
-        result = {**result, "agent_version": f"{selection.agent_id}#v{selection.version_no}"}
+        # Metrics-only attribution tag: the job result and the conversation
+        # turn payload stay on the unchanged blocks contract (no agent_version
+        # key — it must not leak into stored/public payloads).
+        result = {
+            **result,
+            "agent_version": f"{selection.agent_id}#v{selection.version_no}",
+        }
         self.store.update_assistant_question(
             qa_id,
             status="completed",

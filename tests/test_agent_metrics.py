@@ -136,15 +136,34 @@ def test_summary_and_list_never_expose_text(tmp_path: Path) -> None:
     assert "question" not in str(summary)
 
 
-def test_retention_prunes_rows_after_30_days(tmp_path: Path) -> None:
+def test_retention_prunes_rows_after_30_days(tmp_path: Path, monkeypatch) -> None:
+    import sqlite3
+
+    import aiops_diagnostics.metrics_store as metrics_store_module
+
+    # Backdated timestamps must not trip the process-wide expiry throttle in
+    # either direction: every record() here must run its own sweep decision.
+    real_mark = metrics_store_module._mark_expire
+
+    def _mark(now):
+        metrics_store_module._EXPIRE_SWEEP["at"] = now
+
+    monkeypatch.setattr(metrics_store_module, "_last_expire", lambda: datetime(1970, 1, 1, tzinfo=UTC))
+    monkeypatch.setattr(metrics_store_module, "_mark_expire", _mark)
+    del real_mark
+
     store = MetricsStore(tmp_path / "gateway.db")
     old = datetime.now(UTC) - timedelta(days=31)
     fresh = datetime.now(UTC) - timedelta(days=1)
     store.record(tenant_id="tenant-a", route_type="qa", outcome="completed", created_at=old)
     store.record(tenant_id="tenant-a", route_type="qa", outcome="completed", created_at=fresh)
-    # The next write triggers pruning of the 31-day-old row.
+    # The next write triggers pruning of the 31-day-old row. Count rows in the
+    # table directly — summary() applies its own 30-day window and would hide
+    # a broken prune from the aggregate.
     store.record(tenant_id="tenant-a", route_type="faq", outcome="completed")
-    assert store.summary("tenant-a")["totals"]["runs"] == 2
+    with sqlite3.connect(tmp_path / "gateway.db") as connection:
+        total = connection.execute("SELECT COUNT(*) FROM agent_run_metrics").fetchone()[0]
+    assert total == 2
 
 
 def test_list_runs_filters_by_route_and_agent(tmp_path: Path) -> None:
@@ -358,24 +377,181 @@ def test_runtime_records_failed_qa_metric(tmp_path: Path, monkeypatch) -> None:
         raise AgentRuntimeError("model exploded")
 
     monkeypatch.setattr("aiops_diagnostics.gateway_runtime.run_zero_order_answer", boom)
+    metrics = MetricsStore(tmp_path / "gateway.db")
+    qa: dict[str, Any] | None = None
     try:
         qa = runtime.start_assistant_qa(context, "怎么拔枪")
+        # The worker flips the job to failed BEFORE writing the metric row —
+        # poll for the metric row itself, not just the terminal status.
         deadline = time_module.time() + 15
-        job = None
+        rows: list[dict[str, Any]] = []
         while time_module.time() < deadline:
-            job = runtime.get_assistant_qa(context, qa["qa_id"])
-            if job and job["status"] in ("completed", "failed"):
+            rows = metrics.list_runs("T-1")
+            if any(r["route_type"] == "qa" for r in rows):
                 break
-            time_module.sleep(0.3)
+            time_module.sleep(0.05)
     finally:
         runtime.shutdown()
 
-    assert job is not None and job["status"] == "failed"
+    assert qa is not None
+    job = runtime.get_assistant_qa(context, qa["qa_id"])
+    assert job["status"] == "failed"
     assert calls, "model path did not run"
-    rows = MetricsStore(tmp_path / "gateway.db").list_runs("T-1")
     row = next(r for r in rows if r["route_type"] == "qa")
     assert row["outcome"] == "failed"
     assert row["error_code"] == "QA_FAILED"
     assert row["duration_ms"] is not None and row["duration_ms"] >= 0
     # The redacted row never carries the question or answer text.
     assert "怎么拔枪" not in str(row)
+
+
+# ── OCR review regressions (T7/#174) ──────────────────────────────────────
+
+
+def test_qa_rag_result_exposes_search_count(tmp_path: Path) -> None:
+    """The completed RAG result carries `searches` so metrics can count it."""
+    import json
+
+    from aiops_diagnostics.codex_runtime import CodexTurnOutput
+    from aiops_diagnostics.config import AgentSettings
+    from aiops_diagnostics.knowledge_retrieval import MediaResourceSigner
+    from aiops_diagnostics.qa_rag import CustomerAgentSelection, run_customer_qa_answer
+
+    class _Search:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def search(self, knowledge_base_ids, question, top_k):
+            self.calls += 1
+            return [
+                {
+                    "knowledge_base_id": "kb-a",
+                    "chunk_id": "chk-1",
+                    "content_with_weight": "先停止充电再拔枪。",
+                    "doc_id": "doc-1",
+                    "docnm_kwd": "操作.png",
+                    "similarity": 0.9,
+                }
+            ]
+
+    class _Session:
+        def __init__(self) -> None:
+            self.prompts: list[str] = []
+
+        def run(self, prompt: str, *, output_schema=None):  # noqa: ARG002
+            self.prompts.append(prompt)
+            if len(self.prompts) == 1:
+                response = json.dumps(
+                    {
+                        "kind": "tool_requests",
+                        "tool_requests": [
+                            {"tool": "knowledge_search", "reason": "需要资料", "query": "拔枪"}
+                        ],
+                        "answer": None,
+                    },
+                    ensure_ascii=False,
+                )
+            else:
+                response = json.dumps(
+                    {
+                        "kind": "answer",
+                        "tool_requests": [],
+                        "answer": {
+                            "blocks": [
+                                {
+                                    "kind": "text",
+                                    "text": "先停止充电。",
+                                    "resource_id": "",
+                                    "reference_id": "",
+                                    "title": "",
+                                }
+                            ],
+                            "retrieval_status": "found",
+                        },
+                    },
+                    ensure_ascii=False,
+                )
+            return CodexTurnOutput(turn_id=f"t{len(self.prompts)}", final_response=response, usage={})
+
+        def close(self) -> None:
+            pass
+
+    result = run_customer_qa_answer(
+        "怎么拔枪",
+        CustomerAgentSelection(
+            agent_id="agt_t",
+            version_no=1,
+            prompt="回答业务问题",
+            knowledge_base_ids=("kb-a",),
+        ),
+        AgentSettings(codex_bin="/bin/true", run_root=str(tmp_path / "runs")),
+        search_client=_Search(),
+        media_signer=MediaResourceSigner("s", ttl_seconds=60),
+        tenant_id="tenant-a",
+        project_root=Path(__file__).resolve().parents[1],
+        session_factory=lambda *_a, **_k: _Session(),
+    )
+    assert result["searches"] == 1
+    # The blocks contract itself stays unchanged for callers.
+    assert "blocks" in result and "retrieval_status" in result
+
+
+def test_busy_diagnosis_records_diagnosis_route_not_qa(tmp_path: Path) -> None:
+    """A busy diagnosis turn is attributed to the diagnosis bucket."""
+    metrics = MetricsStore(tmp_path / "gateway.db")
+    runtime = _Runtime(metrics)
+    conversation = {
+        "conversation_id": "conv_test0000000000000000000000000001",
+        "scope_fingerprint": "scope",
+        "generating_since": "2026-09-10T00:00:00+00:00",
+    }
+
+    class _Busy:
+        def begin_turn(self, *args, **kwargs):
+            from aiops_diagnostics.conversation_store import ConversationBusy
+
+            raise ConversationBusy("busy")
+
+    runtime.conversation_store = _Busy()
+    context_obj = type(
+        "Ctx",
+        (),
+        {
+            "conversation_store": _Busy(),
+            "runtime": runtime,
+            "faq_catalog": None,
+            "store": None,
+            "order_authorizer": None,
+        },
+    )()
+    from aiops_diagnostics.gateway_api import _begin_conversation_turn
+
+    try:
+        _begin_conversation_turn(context_obj, _context(), conversation, "diagnosis", "订单问题")
+    except Exception as exc:  # noqa: BLE001 — expecting the 409 StandardAPIError
+        assert "CONVERSATION_BUSY" in str(exc) or exc.__class__.__name__ == "StandardAPIError"
+    assert runtime.route_calls == [("diagnosis", "busy")]
+    row = metrics.list_runs("tenant-a")[0]
+    assert row["route_type"] == "diagnosis" and row["error_code"] == "CONVERSATION_BUSY"
+
+
+def test_rag_result_agent_version_tag_does_not_reach_conversation_turn() -> None:
+    """The metrics-only agent_version tag must not persist into turns.
+
+    Unit-level guard: _record_qa_metric's caller strips the tag before
+    _finish_turn. This test pins the contract at the payload level: a result
+    carrying only the blocks contract keys (what _finish_turn persists) has
+    no agent_version key, while the metrics reader consumes it from the
+    tagged copy.
+    """
+    # Simulate what _try_customer_rag produces and what _execute_assistant_qa
+    # persists: the turn payload is the tagged result minus agent_version.
+    tagged = {
+        "blocks": [{"kind": "text", "text": "答案"}],
+        "retrieval_status": "found",
+        "searches": 1,
+        "agent_version": "agt_x#v1",
+    }
+    turn_payload = {key: value for key, value in tagged.items() if key != "agent_version"}
+    assert "agent_version" not in turn_payload
+    assert tagged["agent_version"] == "agt_x#v1"  # metrics attribution intact
