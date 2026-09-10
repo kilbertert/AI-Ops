@@ -615,3 +615,15 @@ S3 退役验收（公网入口 + 开机自启）：FAQ 200（28 条）、健康�
 - 行为变化声明：`create_gateway_app` 默认 AgentManager 在配置 `AIOPS_GATEWAY_KB_SERVICE_BASE_URL` 时从 fail-closed `UnavailableKnowledgeBindingResolver` 切换为 `KbBindingResolver`——此前该配置下发布必被拒，本票起为真实校验；未配置 kb URL 的部署保持 fail-closed 不变。
 
 未完成业务验收：ADMIN-REAL 真实 kb-service canary BLOCKED（120 KB 栈 2026-09-09 起停机，重启为人工决策点）；qumall-admin 浏览器页面验收范围外。fake GET client 结果不替代真实发布校验验收。
+
+## T7 监控与脱敏审计验证（issue #174，2026-09-10）
+
+本次分支 `feat/agent-metrics`。
+
+- 单元/协议测试：`tests/test_agent_metrics.py` 12 项通过。覆盖 MetricsStore 聚合回读（runs/completed/failed/busy/tokens/media、by_route/by_retrieval/by_error 分桶、agent 过滤、租户互不可见）、枚举与字段严格校验（未知 route/outcome/retrieval、空租户、小写错误码、负计数全拒绝）、脱敏字段集断言（行字段白名单，无 question/answer/prompt/media URL）、30 天写时清理、API 面（admin/viewer 200、无角色 403、跨租户隔离、未认证 401、非法过滤 422）。
+- 真实运行时集成：真实 GatewayRuntime + 共用 SQLite，monkeypatch 模型抛错 → 作业 failed 且指标行 (qa, failed, QA_FAILED, duration) 落库，行内无问题原文（METRICS-06）。
+- 失败码覆盖映射：QA_FAILED（qa 模型/检索失败）、DIAGNOSIS_FAILED/DIAGNOSIS_BLOCKED（诊断失败/受阻，inconclusive 以 DIAGNOSIS_INCONCLUSIVE 计入失败桶）、CONVERSATION_BUSY（会话忙碌）、KB_UNAVAILABLE（调试时 kb 不可达）；检索 not_found/unavailable 由 retrieval_status 维度区分。
+- 回归：全量 pytest 601 项通过（589 基线）；Ruff、ruff format、compileall 通过。
+- 行为变化声明：`_try_customer_rag` 在完成结果上追加 `agent_version` 标签用于指标归因，但落库与对外的 blocks 合同保持不变（存储时剥离该标签）；新增端点为只读查询，无破坏性变更。
+
+未完成业务验收：METRICS-REAL 生产流量监控验收 BLOCKED（待 #173 真实 canary 与 KB 栈恢复）；监控页面属范围外（接口级口径）。

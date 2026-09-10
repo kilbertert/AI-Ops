@@ -75,6 +75,11 @@ class GatewayRuntime:
         from aiops_diagnostics.conversation_store import ConversationStore
 
         self.conversation_store = ConversationStore(store.path)
+        # Redacted run metrics (T7/#174): same DB file, lazy-built. Writes are
+        # best-effort — a metrics failure must never fail the run itself.
+        from aiops_diagnostics.metrics_store import MetricsStore
+
+        self.metrics_store = MetricsStore(store.path)
         self._executor = ThreadPoolExecutor(
             max_workers=gateway_settings.max_workers,
             thread_name_prefix="aiops-gateway-run",
@@ -251,6 +256,90 @@ class GatewayRuntime:
     ) -> list[dict[str, Any]]:
         return self.store.list_standard_diagnoses(context.scope_fingerprint, limit=limit)
 
+    def _record_metric(self, **fields: Any) -> None:
+        """Best-effort redacted metric row (T7/#174); never fails the run."""
+        with contextlib.suppress(Exception):
+            self.metrics_store.record(**fields)
+
+    def record_route_metric(
+        self,
+        context: ScopeContext,
+        route_type: str,
+        outcome: str,
+        *,
+        agent_id: str | None = None,
+        agent_version_key: str | None = None,
+        conversation_id: str | None = None,
+        retrieval_status: str = "",
+        searches: int = 0,
+        media_count: int = 0,
+        duration_ms: int | None = None,
+        token_count: int = 0,
+        error_code: str | None = None,
+    ) -> None:
+        """Record one redacted interaction row scoped to the caller's tenant.
+
+        The tenant always comes from the authenticated scope — callers never
+        submit it. An empty tenant (unauthenticated edge) records nothing.
+        """
+        tenant_id = getattr(context, "effective_tenant_id", "") or ""
+        if not tenant_id:
+            return
+        self._record_metric(
+            tenant_id=tenant_id,
+            route_type=route_type,
+            outcome=outcome,
+            agent_id=agent_id,
+            agent_version_key=agent_version_key,
+            conversation_id=conversation_id,
+            retrieval_status=retrieval_status,
+            searches=searches,
+            media_count=media_count,
+            duration_ms=duration_ms,
+            token_count=token_count,
+            error_code=error_code,
+        )
+
+    def get_agent_metrics_summary(
+        self,
+        context: ScopeContext,
+        *,
+        agent_id: str | None = None,
+        window_hours: int = 720,
+    ) -> dict[str, Any]:
+        """Tenant-scoped aggregate for the monitoring API (VIEW_ROLES gate
+        happens at the API layer; the tenant is taken from the scope)."""
+        from aiops_diagnostics.agent_lifecycle import VIEW_ROLES
+
+        effective_roles = frozenset(getattr(context, "roles", ()))
+        if not effective_roles.intersection(VIEW_ROLES):
+            raise AgentRuntimeError("agent access is not permitted")
+        return self.metrics_store.summary(
+            getattr(context, "effective_tenant_id", "") or "",
+            agent_id=agent_id,
+            limit_hours=window_hours,
+        )
+
+    def list_agent_metrics_runs(
+        self,
+        context: ScopeContext,
+        *,
+        agent_id: str | None = None,
+        route_type: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        from aiops_diagnostics.agent_lifecycle import VIEW_ROLES
+
+        effective_roles = frozenset(getattr(context, "roles", ()))
+        if not effective_roles.intersection(VIEW_ROLES):
+            raise AgentRuntimeError("agent access is not permitted")
+        return self.metrics_store.list_runs(
+            getattr(context, "effective_tenant_id", "") or "",
+            agent_id=agent_id,
+            route_type=route_type,
+            limit=limit,
+        )
+
     def start_assistant_qa(
         self,
         context: ScopeContext,
@@ -406,6 +495,7 @@ class GatewayRuntime:
     ) -> None:
         if not self.store.update_standard_diagnosis(diagnosis_id, status="running"):
             return
+        started_ms = time.monotonic()
         settings = Settings.from_config(self.gateway_settings.server_config_file)
         settings.agent.run_root = self.diagnostic_settings.agent.run_root
         try:
@@ -427,6 +517,13 @@ class GatewayRuntime:
                 error_code="DIAGNOSIS_FAILED",
                 error_message=_public_error_message(exc, request.order_no),
             )
+            self._record_metric(
+                tenant_id=context.effective_tenant_id,
+                route_type="diagnosis",
+                outcome="failed",
+                error_code="DIAGNOSIS_FAILED",
+                duration_ms=int((time.monotonic() - started_ms) * 1000),
+            )
             return
         # A blocked run means the model could not produce the structured
         # diagnostic output (e.g. the provider does not honor strict
@@ -441,12 +538,27 @@ class GatewayRuntime:
                 error_code="DIAGNOSIS_BLOCKED",
                 error_message="diagnosis could not complete",
             )
+            self._record_metric(
+                tenant_id=context.effective_tenant_id,
+                route_type="diagnosis",
+                outcome="failed",
+                error_code="DIAGNOSIS_BLOCKED",
+                duration_ms=int((time.monotonic() - started_ms) * 1000),
+            )
             return
         public_status = "completed" if result.status.value == "diagnosed" else "inconclusive"
         self.store.update_standard_diagnosis(
             diagnosis_id,
             status=public_status,
             result=result.model_dump(mode="json"),
+        )
+        self._record_metric(
+            tenant_id=context.effective_tenant_id,
+            route_type="diagnosis",
+            outcome="completed" if public_status == "completed" else "failed",
+            error_code=None if public_status == "completed" else "DIAGNOSIS_INCONCLUSIVE",
+            duration_ms=int((time.monotonic() - started_ms) * 1000),
+            token_count=_estimate_turn_tokens("", result.model_dump(mode="json")),
         )
 
     def _execute_assistant_qa(
@@ -483,6 +595,7 @@ class GatewayRuntime:
         if not self.store.update_assistant_question(qa_id, status="running"):
             _finish_turn(None, cancelled=True)
             return
+        started_ms = time.monotonic()
         settings = Settings.from_config(self.gateway_settings.server_config_file)
         settings.agent.run_root = self.diagnostic_settings.agent.run_root
         rag_result = None
@@ -490,8 +603,16 @@ class GatewayRuntime:
             rag_result = self._try_customer_rag(qa_id, question, tenant_id, settings, provider, key_slot)
         if rag_result is not None:
             if isinstance(rag_result, dict) and rag_result.get("status") == "failed":
+                self._record_metric(
+                    tenant_id=tenant_id,
+                    route_type="qa",
+                    outcome="failed",
+                    error_code="QA_FAILED",
+                    duration_ms=int((time.monotonic() - started_ms) * 1000),
+                )
                 _finish_turn(None, cancelled=True)
             else:
+                self._record_qa_metric(rag_result, tenant_id, started_ms, conversation_turn)
                 _finish_turn(rag_result)
             return
         try:
@@ -508,6 +629,13 @@ class GatewayRuntime:
                 error_code="QA_FAILED",
                 error_message=_public_error_message(exc, ""),
             )
+            self._record_metric(
+                tenant_id=tenant_id or "",
+                route_type="qa",
+                outcome="failed",
+                error_code="QA_FAILED",
+                duration_ms=int((time.monotonic() - started_ms) * 1000),
+            )
             _finish_turn(None, cancelled=True)
             return
         self.store.update_assistant_question(
@@ -515,7 +643,48 @@ class GatewayRuntime:
             status="completed",
             result=answer,
         )
+        self._record_metric(
+            tenant_id=tenant_id or "",
+            route_type="qa",
+            outcome="completed",
+            duration_ms=int((time.monotonic() - started_ms) * 1000),
+            token_count=_estimate_turn_tokens(question, answer),
+        )
         _finish_turn(answer)
+
+    def _record_qa_metric(
+        self,
+        result: dict[str, Any] | None,
+        tenant_id: str | None,
+        started_ms: float,
+        conversation_turn: tuple[str, str, int] | None,
+    ) -> None:
+        """Record a completed RAG QA run from its result payload.
+
+        Only redacted aggregates are read from the result: retrieval status,
+        block-kind counts, and the runtime-tagged agent_version. The agent
+        id/version/conversation come from the run's own identifiers, never
+        from model text.
+        """
+        if not tenant_id:
+            return
+        blocks = (result or {}).get("blocks") or []
+        media_count = sum(1 for block in blocks if block.get("kind") in ("image", "video"))
+        conversation_id = conversation_turn[0] if conversation_turn is not None else None
+        agent_version_key = str((result or {}).get("agent_version") or "") or None
+        agent_id = agent_version_key.split("#", 1)[0] if agent_version_key else None
+        self._record_metric(
+            tenant_id=tenant_id,
+            route_type="qa",
+            outcome="completed",
+            agent_id=agent_id,
+            agent_version_key=agent_version_key,
+            conversation_id=conversation_id,
+            retrieval_status=str((result or {}).get("retrieval_status") or ""),
+            media_count=media_count,
+            duration_ms=int((time.monotonic() - started_ms) * 1000),
+            token_count=_estimate_turn_tokens("", result),
+        )
 
     def run_agent_debug(
         self,
@@ -543,8 +712,9 @@ class GatewayRuntime:
         settings.agent.run_root = self.diagnostic_settings.agent.run_root
         selected_provider = settings.agent.select_provider(None)
         key_slot = validate_key_slot_name(selected_provider.resolved_key_slot())
+        started_ms = time.monotonic()
         try:
-            return run_agent_debug_answer(
+            result = run_agent_debug_answer(
                 question,
                 agent_id=agent.agent_id,
                 revision=agent.revision,
@@ -559,9 +729,40 @@ class GatewayRuntime:
                 project_root=reference_root(),
             )
         except KnowledgeSearchUnavailable as exc:
+            self._record_metric(
+                tenant_id=tenant_id,
+                route_type="debug",
+                outcome="failed",
+                agent_id=agent.agent_id,
+                error_code="KB_UNAVAILABLE",
+                duration_ms=int((time.monotonic() - started_ms) * 1000),
+            )
             raise AgentRuntimeError("kb-service is unavailable for the debug run") from exc
         except AgentNotFound as exc:
             raise AgentRuntimeError("draft agent binding is invalid") from exc
+        except AgentRuntimeError:
+            self._record_metric(
+                tenant_id=tenant_id,
+                route_type="debug",
+                outcome="failed",
+                agent_id=agent.agent_id,
+                error_code="AGENT_DEBUG_FAILED",
+                duration_ms=int((time.monotonic() - started_ms) * 1000),
+            )
+            raise
+        blocks = result.get("blocks") or []
+        self._record_metric(
+            tenant_id=tenant_id,
+            route_type="debug",
+            outcome="completed",
+            agent_id=agent.agent_id,
+            agent_version_key=str(result.get("agent_version") or ""),
+            retrieval_status=str(result.get("retrieval_status") or ""),
+            media_count=sum(1 for block in blocks if block.get("kind") in ("image", "video")),
+            duration_ms=int((time.monotonic() - started_ms) * 1000),
+            token_count=_estimate_turn_tokens("", result),
+        )
+        return result
 
     def _try_customer_rag(
         self,
@@ -617,10 +818,15 @@ class GatewayRuntime:
                 error_message=_public_error_message(exc, ""),
             )
             return {"status": "failed"}
+        # Tag the serving agent on the completed result so metrics (and only
+        # metrics — the blocks contract below is unchanged for callers) can
+        # attribute the run; run_customer_qa_answer itself keeps its public
+        # dict unchanged.
+        result = {**result, "agent_version": f"{selection.agent_id}#v{selection.version_no}"}
         self.store.update_assistant_question(
             qa_id,
             status="completed",
-            result=result,
+            result={key: value for key, value in result.items() if key != "agent_version"},
         )
         return result
 
