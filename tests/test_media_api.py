@@ -256,6 +256,10 @@ def test_kb_client_fetch_media_routes_image_and_video_paths(monkeypatch) -> None
     assert seen[-1][0] == "http://kb.local/kb/knowledge-bases/kb-1/documents/doc-9/download"
     # Every fetch is tenant-scoped via the header, never via the path.
     assert seen[-1][1]["Tenant-id"] == "tenant-a"
+    # Range requests are forwarded upstream so a seek fetches only the
+    # requested bytes instead of buffering the whole video.
+    client.fetch_media(video_grant, range_header="bytes=2-5")
+    assert seen[-1][1]["Range"] == "bytes=2-5"
 
 
 def test_kb_client_fetch_media_maps_missing_and_unavailable(monkeypatch) -> None:

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import inspect
 import json
 import mimetypes
 import secrets
@@ -266,6 +267,36 @@ class MediaProxy:
         self.signer = signer
         self.fetch = fetch
 
+    @staticmethod
+    def _response_for(grant: MediaGrant, body: bytes, range_header: str | None) -> MediaResponse:
+        """Shared response shaping: 200 full, 206 slice, 416 rejected range."""
+        common = {
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "private, no-store",
+            "Content-Type": grant.mime_type,
+            "Content-Disposition": "inline",
+        }
+        if not range_header:
+            return MediaResponse(200, {**common, "Content-Length": str(len(body))}, body)
+        try:
+            start, end = parse_byte_range(range_header, len(body))
+        except MediaRangeError:
+            return MediaResponse(
+                416,
+                {**common, "Content-Range": f"bytes */{len(body)}", "Content-Length": "0"},
+                b"",
+            )
+        chunk = body[start : end + 1]
+        return MediaResponse(
+            206,
+            {
+                **common,
+                "Content-Length": str(len(chunk)),
+                "Content-Range": f"bytes {start}-{end}/{len(body)}",
+            },
+            chunk,
+        )
+
     def serve(
         self,
         resource_id: str,
@@ -337,39 +368,59 @@ class MediaProxy:
         """
         try:
             grant = self.signer.verify_signed(signed_id, now=now, is_active=is_active)
-            body = self.fetch(grant)
+            # Range passthrough: a range-aware fetcher (kb-service client)
+            # fetches only the requested bytes upstream; plain fetchers keep
+            # the whole-object-then-slice behavior. The upstream 206 slice is
+            # byte-identical to a local slice of the full object, so the
+            # response shaping is the same either way.
+            fetched = (
+                self.fetch(grant, range_header=range_header)
+                if _accepts_range(self.fetch)
+                else self.fetch(grant)
+            )
+            if not isinstance(fetched, bytes):
+                raise TypeError("media fetcher must return bytes")
+            if _accepts_range(self.fetch):
+                # The fetcher already sliced: shape the response around the
+                # slice and the grant, without re-slicing locally.
+                return _ranged_response(grant, fetched, range_header)
+            return self._response_for(grant, fetched, range_header)
         except MediaAccessDenied:
             return MediaResponse(403, {"Cache-Control": "no-store"}, b"")
         except (MediaNotFound, FileNotFoundError):
             return MediaResponse(404, {"Cache-Control": "no-store"}, b"")
-        if not isinstance(body, bytes):
-            raise TypeError("media fetcher must return bytes")
-        common = {
-            "Accept-Ranges": "bytes",
-            "Cache-Control": "private, no-store",
-            "Content-Type": grant.mime_type,
-            "Content-Disposition": "inline",
-        }
-        if not range_header:
-            return MediaResponse(200, {**common, "Content-Length": str(len(body))}, body)
-        try:
-            start, end = parse_byte_range(range_header, len(body))
-        except MediaRangeError:
-            return MediaResponse(
-                416,
-                {**common, "Content-Range": f"bytes */{len(body)}", "Content-Length": "0"},
-                b"",
-            )
-        chunk = body[start : end + 1]
-        return MediaResponse(
-            206,
-            {
-                **common,
-                "Content-Length": str(len(chunk)),
-                "Content-Range": f"bytes {start}-{end}/{len(body)}",
-            },
-            chunk,
-        )
+
+
+def _accepts_range(fetch: Callable[..., bytes]) -> bool:
+    """Whether a media fetcher supports the ``range_header`` keyword."""
+    try:
+        return "range_header" in inspect.signature(fetch).parameters
+    except (TypeError, ValueError):
+        return False
+
+
+def _ranged_response(grant: MediaGrant, fetched: bytes, range_header: str | None) -> MediaResponse:
+    """Shape the response for a range-passthrough fetch.
+
+    With ``range_header`` the upstream already returned the slice, and its
+    ``Content-Range`` total is unknown here — emit 206 with the slice length
+    and a total-less Content-Range, which browsers accept alongside the
+    upstream Accept-Ranges. Without a range the fetcher returned the whole
+    object; plain 200.
+    """
+    common = {
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "private, no-store",
+        "Content-Type": grant.mime_type,
+        "Content-Disposition": "inline",
+    }
+    if not range_header:
+        return MediaResponse(200, {**common, "Content-Length": str(len(fetched))}, fetched)
+    return MediaResponse(
+        206,
+        {**common, "Content-Length": str(len(fetched))},
+        fetched,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -534,7 +585,7 @@ class KbServiceClient:
                     merged.append({**chunk, "knowledge_base_id": kb_id})
         return merged
 
-    def fetch_media(self, grant: MediaGrant) -> bytes:
+    def fetch_media(self, grant: MediaGrant, *, range_header: str | None = None) -> bytes:
         """Fetch the media bytes a signed grant refers to (#168 media plane).
 
         Image grants carry the RAGFlow ``image_id`` as ``backend_id`` and go
@@ -544,6 +595,10 @@ class KbServiceClient:
         Both are tenant-scoped by the ``tenant-id`` header. A missing blob is
         ``MediaNotFound`` (404); a transport failure is
         ``KnowledgeSearchUnavailable`` so the API layer can map it to 503.
+
+        ``range_header`` (when the caller serves a Range request) is passed
+        through to kb-service, so a video seek fetches only the requested
+        bytes instead of buffering the whole object per request.
         """
         if grant.kind == "image":
             path = f"/kb/documents/images/{urllib.parse.quote(grant.backend_id, safe='')}"
@@ -554,6 +609,10 @@ class KbServiceClient:
             )
         url = f"{self.base_url}{path}"
         headers = {"tenant-id": self.tenant_id}
+        if range_header:
+            # Single-range only; parse_byte_range rejects the multi-range form
+            # before we reach here, so replaying the header upstream is safe.
+            headers["Range"] = range_header
         if self.service_token:
             headers["Authorization"] = f"Bearer {self.service_token}"
         request = urllib.request.Request(url, headers=headers, method="GET")
