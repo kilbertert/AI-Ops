@@ -389,6 +389,8 @@ queued → running → completed | failed | expired                  （报告�
 - [ ] 自由输入与订单问题走 `/v1/standard/diagnoses`，不走 FAQ。
 - [ ] 异步作业按 `retry_after_ms` 节流轮询，不密集轮询。
 - [ ] 报告 `indicators.status` 按枚举渲染，不解析中文阈值、不自行重算。
+- [ ] QA 结果按 `blocks[]` 类型分派渲染，**不解析 Markdown、不从文本提取 URL**。
+- [ ] 媒体 `media.url` 直接当 `src`；`media: null` + `unavailable: true` 时保留文本与引用并显示"资源不可用"。
 
 ## 8. 常见坑（来自真实验收）
 
@@ -396,6 +398,7 @@ queued → running → completed | failed | expired                  （报告�
 - **Apifox 手测 422**：请求体多一个字段都不行（`extra="forbid"`），且 `Content-Type: application/json` 必须放在 Headers，不能塞 Query 参数。
 - **404 不区分"不存在"与"无权限"**：这是故意的资源存在性隐藏，前端统一提示"未找到"即可。
 - **旧接口迁移**：`GET /v1/recommendations?category=...` → `GET /v1/faq/recommendations`；点击推荐 → `POST /v1/runs` 改为 `POST /v1/faq/answer`；`GET /v1/reports/pending`、`GET /v1/reports/charging-health` 不在当前契约，改走 `/v1/health-report-jobs`。
+- **媒体 URL 会过期**：`/v1/media/...` 签名有效期约 10 分钟，且智能体停用/重新发布后立即失效——**不要缓存媒体 URL**，每轮渲染用当轮 `blocks[]` 里的新 URL；过期拿到 403/404 时显示占位即可，不要重放旧 URL。
 
 ## 9. 当前真实验收状态（2026-09-04）
 
@@ -408,6 +411,13 @@ queued → running → completed | failed | expired                  （报告�
 - 同一用户请求 operator 入口返回 503 `PLATFORM_UNAVAILABLE`。
 
 当前可解析会话中尚未找到具备唯一 B 端主体映射的真实样本，因此管家端成功响应仍待一个有效管家用户会话。该缺口不影响客户端联调，也不能通过伪造 `platform` 或临时扩大权限绕过。
+
+## 9.5 QA + blocks[] 媒体验收状态（2026-09-10）
+
+- `qa` 作业返回 `blocks[]` + `retrieval_status`（合同已合并 #179，本日补齐 `/v1/media` 路由后媒体 URL 可直接加载）。
+- `/v1/media/{id}` 支持 Range（视频分段播放）、短时签名（约 10 分钟）、停用即失效。
+- 多轮会话 `/v1/conversations`（#180）可用，含 active-order 绑定与 409 忙碌语义。
+- **真实环境注意事项**：生产网关部署位置与 KB 栈（RAGFlow/kb-service）恢复状态见 `docs/agents/kb-service-test-env.md`；未配置 KB 栈的租户提问会回落纯文本（`blocks[]` 只有 text 块，无 media）。前端验收需要服务端先完成该租户的智能体发布与知识库绑定。
 
 ## 10. 前端真实链路诊断（2026-09-05，Pyrovolt Move 1.0.3 APK 实测）
 
@@ -508,19 +518,53 @@ Content-Type: application/json
 ```
 → `200` `{type:"faq", question_id, answer, ...}` **直接渲染答案**。
 
-### 场景 B：自由提问（任意问题）—— 异步 job，轮询
+### 场景 B：自由提问（任意问题）—— 异步 job，轮询，返回 blocks[]
 
 ```http
 POST https://api.qumall.qushiyun.com/v1/assistant/questions
-{"question": "磷酸铁锂电池怎么保养充电"}
+{"question": "充电桩怎么拔枪？有没有演示视频"}
 
 → 202 {type:"qa", qa_id, status:"queued"}
 
 GET https://api.qumall.qushiyun.com/v1/assistant/questions/{qa_id}
-   （按 retry_after_ms 轮询）
-   status=completed → {result: {text, reminder}}
-   status=failed    → error（多为模型限流，稍后重试）
+   （按 retry_after_ms 轮询，1s 一次）
 ```
+
+`status=completed` 时 `result` 是 **blocks-v1 内容块合同**（不要解析 Markdown、不要从文本里提取 URL）：
+
+```json
+{
+  "blocks": [
+    {"kind": "text", "text": "请先停止充电，再按下枪柄卡扣拔出。"},
+    {"kind": "image", "resource_id": "media_xxx", "title": "拔枪示意.png",
+     "media": {"resource_id": "media_xxx",
+                "url": "/v1/media/media_xxx.<24位签名>",
+                "kind": "image", "mime_type": "image/png",
+                "title": "拔枪示意.png", "reference_id": "chunk-1"}},
+    {"kind": "video", "resource_id": "media_yyy", "title": "拔枪演示.mp4",
+     "media": {"url": "/v1/media/media_yyy.<24位签名>",
+                "kind": "video", "mime_type": "video/mp4", ...}},
+    {"kind": "reference", "reference_id": "chunk-1", "title": "充电操作手册.docx"}
+  ],
+  "retrieval_status": "found"
+}
+```
+
+**四种块的渲染规则**：
+
+| kind | 字段 | 前端行为 |
+|---|---|---|
+| `text` | `text` | 按顺序渲染段落 |
+| `image` | `media.url` | `<img src={media.url}>`，按 `media.mime_type`（png/jpeg/webp） |
+| `video` | `media.url` | `<video src={media.url}>` 直接播放（服务端已支持 Range 分段） |
+| `reference` | `title` | 显示来源文件名（折叠区/角标） |
+
+**媒体 URL 规则（重要）**：
+
+- `media.url` 是**同域相对路径**（`/v1/media/...`），直接当 `src` 用，**不需要 Authorization 头**——短时签名就在 URL 里，有效期约 10 分钟。
+- 媒体块失效时 `media: null` 且带 `unavailable: true`：**保留文本与引用**，显示"资源不可用"，不要整条消息报错。
+- `retrieval_status`：`found`（命中知识库）/ `not_found`（无命中，通用回答）/ `unavailable`（检索依赖故障，文本仍可交付）/ `limited`（达检索上限）。
+- `status=failed` → error（多为模型限流，稍后重试）。
 
 ### 场景 C：带订单的自由提问 —— 走订单诊断
 
@@ -540,3 +584,24 @@ POST https://api.qumall.qushiyun.com/v1/assistant/questions
 - **订单诊断历史**：`GET /v1/standard/diagnoses?limit=50`（独立）
 
 两者按调用者隔离，前端"我的问答"与"我的诊断"分开展示。
+
+### 多轮会话（conversation_id，#172 合同）
+
+场景 B 可选带 `conversation_id` 连续追问；订单确认后 follow-up 可省订单号：
+
+```http
+POST /v1/conversations {"agent_version_key": "agt_xxxx#v1"}
+                                                → 201 {conversation_id, business_entry, active_order_no: null, is_generating, ...}
+POST /v1/assistant/questions {"question": "...", "conversation_id": "conv_xxx"}
+POST /v1/conversations/{id}/active-order {"order_no": "2096..."}   → 绑定归属校验通过的订单
+POST /v1/assistant/questions {"question": "这个订单为什么提前停了", "conversation_id": "conv_xxx"}
+                                                → follow-up 无需再传 order_no
+GET    /v1/conversations                        → 会话列表（刷新/换设备可续）
+GET    /v1/conversations/{id}                    → 单会话（含历史轮次）
+DELETE /v1/conversations/{id}                    → 删除
+```
+
+- 上下文窗口：最近 **8 轮或 8k token**（取小者），保留 **30 天**。
+- 同会话并发提问 → **409 `CONVERSATION_BUSY`**，提示"上一条还在生成"。
+- 每轮重新鉴权：权限/订单归属撤销后绑定自动失效，follow-up 回落通用问答。
+- 非本人/过期会话 → 统一 404，无存在性泄露。
