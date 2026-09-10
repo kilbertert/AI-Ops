@@ -516,6 +516,49 @@ workflow YAML 不适用复杂度或 mutation 工具；安全状态机由模板�
 Java BFF 透传与前端 blocks[] 渲染属 #171/#173 及真实媒体验收范围（见 P0-E2E-REAL），
 本票不把 fake 结果记为业务验收。
 
+## 会话与活跃订单上下文 QA 计划（T4/#172）
+
+### CONV-01 会话隔离与生命周期
+
+- 环境：AI-Ops 本地 Python 3.13，FastAPI TestClient，临时 SQLite，fake caller/目录/授权器。
+- 前置条件：用户 A（租户 T-1，consumer 入口）创建会话。
+- 测试数据：另一租户 token、operator 入口头、faq:read-only token 各一组。
+- 有序动作：创建/列表/详情/删除；跨租户 GET；同用户 operator 入口 GET；重复 DELETE；faq:read-only 创建。
+- 预期结果：创建 201 且绑定入口与智能体版本；跨租户在身份层被拒（不可见）；跨入口统一 404；删除后 GET/重复 DELETE 均 404；faq:read-only 401/403。
+- 清理：临时目录自动回收。
+- 结果：PASS（2026-09-10，pytest `tests/test_conversation_api.py`）。
+
+### CONV-02 活跃订单绑定与省略订单号
+
+- 环境：同 CONV-01。
+- 前置条件：授权器允许订单 2096164064667852801。
+- 测试数据：订单 follow-up（"我刚才那笔充电订单为什么突然停了"）、知识问题（"会员积分商城什么时候上线呀"）、未授权订单。
+- 有序动作：绑定活跃订单（校验归属）；绑定未授权订单；带 conversation_id 提 follow-up 不带订单号；授权器撤销后再提 follow-up；带 conversation_id 提知识问题。
+- 预期结果：绑定需归属校验（未授权统一 404）；follow-up 复用活跃订单走 diagnosis（响应带 order_no_from_context）；撤销后清绑定走 qa 且响应 type=qa；知识问题始终 qa 且不触发诊断。
+- 清理：同上。
+- 结果：PASS（2026-09-10，pytest `tests/test_conversation_api.py`）。
+
+### CONV-03 上下文窗口与保留期
+
+- 环境：本地 ConversationStore（直接驱动）。
+- 测试数据：12 个完成轮次（token=100）+ 8 个大轮次（token=2500）+ 会话过期 31 天。
+- 有序动作：context_turns 读取；backdate expires_at 后 GET/LIST。
+- 预期结果：轮次窗口 ≤8；大轮次下 token 预算先生效（窗口 <8，总数 ≤8k+单轮）；无答案轮次不进入窗口；过期会话不可见。
+- 清理：删除临时数据库。
+- 结果：PASS（2026-09-10，pytest `tests/test_conversation_api.py`）。
+
+### CONV-04 并发忙与取消语义
+
+- 环境：同 CONV-01。
+- 有序动作：begin_turn 占用生成槽后同会话再提问；构造过期 BUSY 锁后新提问；完成轮次后取消一轮。
+- 预期结果：占用时同会话 409 CONVERSATION_BUSY（无会话的提问不受影响）；崩溃锁 120s 自过期可重新提问；取消/无答案轮次不保留且释放槽位，不进入后续上下文。
+- 清理：同上。
+- 结果：PASS（2026-09-10，pytest `tests/test_conversation_api.py`）。
+
+证据边界：CONV-01..04 为 mock-first 协议级验证。真实多设备续聊（前端轮询/刷新）、
+BFF 会话透传、停止生成的真实取消链路由 #173 前端票与 P0-E2E-REAL 覆盖；真实
+ScopeContext（UPMS/Dis）行为由 T1-T3 既有真实验收线覆盖。
+
 ## P0-E2E 本地集成与真实链路状态
 
 ### P0-E2E-LOCAL 本地 AI-Ops 集成

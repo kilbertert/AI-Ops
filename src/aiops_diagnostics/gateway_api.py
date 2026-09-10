@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import platform
 import re
@@ -37,6 +38,11 @@ from aiops_diagnostics.caller_auth import (
     UpmsCallerResolver,
 )
 from aiops_diagnostics.config import Settings
+from aiops_diagnostics.conversation_store import (
+    ConversationBusy,
+    ConversationError,
+    ConversationStore,
+)
 from aiops_diagnostics.faq import (
     FAQ_NOT_FOUND,
     PLATFORM_AMBIGUOUS,
@@ -99,6 +105,10 @@ class AssistantQuestionRequest(BaseModel):
     ``order_no`` is OPTIONAL here — unlike the order diagnosis endpoint. When
     absent, the classifier routes to a generic (zero-order) answer or a FAQ
     short-circuit. When present, it is honored as an explicit order diagnosis.
+    ``conversation_id`` (T4/#172) optionally binds the question to a
+    conversation: its confirmed ``active_order`` lets follow-up order
+    questions omit the order number (ownership re-verified every turn), and
+    the turn is recorded in the conversation history.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -109,6 +119,12 @@ class AssistantQuestionRequest(BaseModel):
         min_length=1,
         max_length=128,
         pattern=r"^[A-Za-z0-9_.:-]+$",
+    )
+    conversation_id: str | None = Field(
+        default=None,
+        min_length=8,
+        max_length=64,
+        pattern=r"^conv_[A-Za-z0-9]{1,57}$",
     )
 
 
@@ -168,6 +184,22 @@ class AgentActionRequest(BaseModel):
     expected_revision: int = Field(ge=1)
 
 
+class ConversationCreateRequest(BaseModel):
+    """Create a conversation bound to caller, entry, and agent version (T4/#172).
+
+    Defined at module level (not inside create_gateway_app) so FastAPI sees a
+    real BaseModel annotation under `from __future__ import annotations`.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent_version_key: str = Field(
+        min_length=6,
+        max_length=80,
+        pattern=r"^agt_[A-Za-z0-9]{8,64}#v\d{1,6}$",
+    )
+
+
 class GatewayAPI:
     def __init__(
         self,
@@ -188,6 +220,9 @@ class GatewayAPI:
         self.platform_resolver = platform_resolver
         self.faq_catalog = faq_catalog
         self.agent_manager = agent_manager
+        # Conversation store shares the gateway database file (its own
+        # tables); lazy so existing embedders (tests) need no new argument.
+        self.conversation_store = ConversationStore(store.path)
 
 
 class StandardAPIError(RuntimeError):
@@ -547,6 +582,14 @@ def create_gateway_app(
         """
         caller, decision = identity
 
+        # Conversation binding (T4/#172): resolve BEFORE routing so every
+        # branch can consult the confirmed active_order. A conversation that
+        # is missing, expired, or belongs to another user/tenant/entry is a
+        # uniform 404 — no existence leak.
+        conversation: dict[str, Any] | None = None
+        if payload.conversation_id:
+            conversation = _resolve_conversation(context, caller, decision, payload.conversation_id)
+
         # Route 1: explicit order → diagnosis semantics.
         if payload.order_no:
             try:
@@ -595,6 +638,7 @@ def create_gateway_app(
                 except (CallerAuthError, ScopeError, SourceError, ValueError):
                     owns = False
                 if owns:
+                    turn_no = _begin_conversation_turn(context, conversation, "diagnosis", payload.question)
                     try:
                         diagnosis = context.runtime.start_standard_diagnosis(
                             caller,
@@ -603,17 +647,77 @@ def create_gateway_app(
                             None,
                         )
                     except (ValueError, RuntimeError) as exc:
+                        _release_conversation_turn(context, conversation, turn_no)
                         raise StandardAPIError(
                             status.HTTP_503_SERVICE_UNAVAILABLE,
                             "DIAGNOSIS_UNAVAILABLE",
                             "diagnosis unavailable",
                             retryable=True,
                         ) from exc
+                    if conversation is not None and embedded == conversation.get("active_order_no"):
+                        _keep_conversation_turn(context, conversation, turn_no)
+                    else:
+                        _release_conversation_turn(context, conversation, turn_no)
                     base = _standard_diagnosis_response(diagnosis)
                     return JSONResponse(
                         status_code=status.HTTP_202_ACCEPTED,
-                        content={**base, "type": "diagnosis", "order_no_extracted": embedded},
+                        content={
+                            **base,
+                            "type": "diagnosis",
+                            "order_no_extracted": embedded,
+                            **({"conversation_id": conversation["conversation_id"]} if conversation else {}),
+                        },
                     )
+
+        # Route 1c (T4/#172): order question against the conversation's
+        # CONFIRMED active order — the follow-up that may omit the order
+        # number. Only fires when the question clearly involves that order
+        # (the same explicitness bar as Route 1b); ownership is re-verified
+        # EVERY turn because permissions change between requests. On any
+        # failure the question falls through to qa+RAG — never a hard 404,
+        # since the caller did not name an order this turn.
+        if not payload.order_no and conversation is not None:
+            active_order = conversation.get("active_order_no")
+            if active_order and _question_involves_active_order(payload.question):
+                try:
+                    still_owned = context.order_authorizer.can_access(caller, active_order)
+                except (CallerAuthError, ScopeError, SourceError, ValueError):
+                    still_owned = False
+                if still_owned:
+                    turn_no = _begin_conversation_turn(context, conversation, "diagnosis", payload.question)
+                    try:
+                        diagnosis = context.runtime.start_standard_diagnosis(
+                            caller,
+                            active_order,
+                            payload.question,
+                            None,
+                        )
+                    except (ValueError, RuntimeError) as exc:
+                        _release_conversation_turn(context, conversation, turn_no)
+                        raise StandardAPIError(
+                            status.HTTP_503_SERVICE_UNAVAILABLE,
+                            "DIAGNOSIS_UNAVAILABLE",
+                            "diagnosis unavailable",
+                            retryable=True,
+                        ) from exc
+                    _keep_conversation_turn(context, conversation, turn_no)
+                    base = _standard_diagnosis_response(diagnosis)
+                    return JSONResponse(
+                        status_code=status.HTTP_202_ACCEPTED,
+                        content={
+                            **base,
+                            "type": "diagnosis",
+                            "order_no_from_context": active_order,
+                            "conversation_id": conversation["conversation_id"],
+                        },
+                    )
+                # Ownership lost since confirmation: clear the stale binding
+                # and answer as a plain knowledge question (qa+RAG).
+                with contextlib.suppress(ConversationError):
+                    context.conversation_store.set_active_order(
+                        conversation["conversation_id"], caller.scope_fingerprint, None
+                    )
+                conversation = {**conversation, "active_order_no": None}
 
         # Route 2: FAQ short-circuit (deterministic, zero-order, zero-model).
         faq_id = _faq_hit_by_keywords(decision.platform, context.faq_catalog, payload.question)
@@ -630,9 +734,20 @@ def create_gateway_app(
             }
 
         # Route 3: generic zero-order answer — start a real QA job (T3/#153).
+        # With a conversation: claim its generation slot first (409 busy),
+        # and record the turn so follow-ups see it in context.
+        turn_no: int | None = None
+        if conversation is not None:
+            turn_no = _begin_conversation_turn(context, conversation, "qa", payload.question)
         try:
-            qa = context.runtime.start_assistant_qa(caller, payload.question)
+            qa = context.runtime.start_assistant_qa(
+                caller,
+                payload.question,
+                conversation=conversation if turn_no is not None else None,
+                conversation_turn_no=turn_no,
+            )
         except (ValueError, RuntimeError) as exc:
+            _release_conversation_turn(context, conversation, turn_no)
             raise StandardAPIError(
                 status.HTTP_503_SERVICE_UNAVAILABLE,
                 "QA_UNAVAILABLE",
@@ -649,6 +764,11 @@ def create_gateway_app(
                 "retry_after_ms": 1000,
                 "result": qa.get("result"),
                 "error": None,
+                **(
+                    {"conversation_id": conversation["conversation_id"], "turn_no": turn_no}
+                    if conversation
+                    else {}
+                ),
             },
         )
 
@@ -708,6 +828,145 @@ def create_gateway_app(
             "count": len(questions),
             "questions": questions,
         }
+
+    # ------------------------------------------------------------------
+    # Conversations (T4/#172)
+    # ------------------------------------------------------------------
+
+    @app.post("/v1/conversations")
+    def create_conversation(
+        payload: ConversationCreateRequest,
+        identity: tuple[ScopeContext, Any] = Depends(assistant_identity),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Create a conversation bound to this caller, entry, and agent."""
+        caller, decision = identity
+        conversation = context.conversation_store.create(
+            scope_fingerprint=caller.scope_fingerprint,
+            business_entry=str(decision.platform),
+            agent_version_key=payload.agent_version_key,
+        )
+        return JSONResponse(
+            status_code=status.HTTP_201_CREATED,
+            content=_conversation_response(conversation),
+        )
+
+    @app.get("/v1/conversations")
+    def list_conversations(
+        identity: tuple[ScopeContext, Any] = Depends(assistant_identity),  # noqa: B008
+        limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    ) -> dict[str, Any]:
+        caller, _ = identity
+        conversations = context.conversation_store.list(caller.scope_fingerprint, limit=limit)
+        return {
+            "type": "conversation_list",
+            "count": len(conversations),
+            "conversations": [_conversation_response(item) for item in conversations],
+        }
+
+    @app.get("/v1/conversations/{conversation_id}")
+    def get_conversation(
+        conversation_id: str,
+        identity: tuple[ScopeContext, Any] = Depends(assistant_identity),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Conversation detail including the full turn history (answers
+        included only for finished turns — the caller re-polls job ids for
+        in-flight ones)."""
+        caller, decision = identity
+        conversation = _require_conversation(context, caller, conversation_id)
+        if conversation.get("business_entry") != str(decision.platform):
+            # Entry is part of the conversation binding (T4/#172): reading
+            # from a different entry is a uniform 404.
+            raise StandardAPIError(
+                status.HTTP_404_NOT_FOUND,
+                "CONVERSATION_NOT_FOUND",
+                "conversation not found",
+            )
+        history = context.conversation_store.turns(conversation["conversation_id"], caller.scope_fingerprint)
+        return {
+            **_conversation_response(conversation),
+            "turns": [
+                {
+                    "turn_no": item["turn_no"],
+                    "kind": item["kind"],
+                    "question": item["question"],
+                    "answer": item["answer"],
+                    "created_at": item["created_at"],
+                }
+                for item in history
+            ],
+        }
+
+    @app.delete("/v1/conversations/{conversation_id}")
+    def delete_conversation(
+        conversation_id: str,
+        identity: tuple[ScopeContext, Any] = Depends(assistant_identity),  # noqa: B008
+    ) -> dict[str, Any]:
+        caller, decision = identity
+        conversation = _require_conversation(context, caller, conversation_id)
+        if conversation.get("business_entry") != str(decision.platform):
+            raise StandardAPIError(
+                status.HTTP_404_NOT_FOUND,
+                "CONVERSATION_NOT_FOUND",
+                "conversation not found",
+            )
+        context.conversation_store.delete(conversation_id, caller.scope_fingerprint)
+        return {"type": "conversation_deleted", "conversation_id": conversation_id}
+
+    @app.post("/v1/conversations/{conversation_id}/active-order")
+    def set_conversation_active_order(
+        conversation_id: str,
+        order_no: str | None = None,
+        body: dict[str, Any] | None = None,
+        identity: tuple[ScopeContext, Any] = Depends(assistant_identity),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Bind (or clear) the conversation's confirmed active order.
+
+        The order must be owned by the caller — ownership is re-verified HERE,
+        every bind; chat text can never replace this check (#172).
+        """
+        caller, decision = identity
+        conversation = _require_conversation(context, caller, conversation_id)
+        if conversation.get("business_entry") != str(decision.platform):
+            raise StandardAPIError(
+                status.HTTP_404_NOT_FOUND,
+                "CONVERSATION_NOT_FOUND",
+                "conversation not found",
+            )
+        if body is None:
+            body = {}
+        candidate = body.get("order_no", order_no)
+        if candidate is None:
+            conversation = context.conversation_store.set_active_order(
+                conversation_id, caller.scope_fingerprint, None
+            )
+            return _conversation_response(conversation)
+        candidate = str(candidate)
+        if not SAFE_ORDER_NO.fullmatch(candidate):
+            raise StandardAPIError(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                "INVALID_REQUEST",
+                "order_no is invalid",
+            )
+        try:
+            allowed = context.order_authorizer.can_access(caller, candidate)
+        except (CallerAuthError, ScopeError, SourceError, ValueError) as exc:
+            raise StandardAPIError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "ORDER_AUTHORIZATION_UNAVAILABLE",
+                "order authorization unavailable",
+                retryable=True,
+            ) from exc
+        if not allowed:
+            # Unowned order: uniform 404, never an ownership oracle.
+            raise StandardAPIError(
+                status.HTTP_404_NOT_FOUND,
+                "ORDER_NOT_FOUND",
+                "order not found",
+            )
+        conversation = context.conversation_store.set_active_order(
+            conversation_id, caller.scope_fingerprint, candidate
+        )
+        return _conversation_response(conversation)
 
     @app.get("/v1/orders/{order_no}/access")
     def order_access(
@@ -1367,6 +1626,148 @@ def _extract_order_no(text: str) -> str | None:
             continue
         return candidate
     return None
+
+
+def _require_conversation(
+    context: Any,
+    caller: ScopeContext,
+    conversation_id: str,
+) -> dict[str, Any]:
+    """Load a scope-owned conversation or raise the uniform 404."""
+    try:
+        return context.conversation_store.get(conversation_id, caller.scope_fingerprint)
+    except ConversationError as exc:
+        raise StandardAPIError(
+            status.HTTP_404_NOT_FOUND,
+            "CONVERSATION_NOT_FOUND",
+            "conversation not found",
+        ) from exc
+
+
+def _conversation_response(conversation: dict[str, Any]) -> dict[str, Any]:
+    """Public conversation shape (no internal fingerprints)."""
+    return {
+        "conversation_id": conversation["conversation_id"],
+        "business_entry": conversation["business_entry"],
+        "agent_version_key": conversation["agent_version_key"],
+        "active_order_no": conversation["active_order_no"],
+        "is_generating": conversation["is_generating"],
+        "created_at": conversation["created_at"],
+        "updated_at": conversation["updated_at"],
+        "expires_at": conversation["expires_at"],
+    }
+
+
+def _resolve_conversation(
+    context: Any,
+    caller: ScopeContext,
+    decision: Any,
+    conversation_id: str,
+) -> dict[str, Any]:
+    """Load the conversation for this caller, enforcing scope AND entry.
+
+    Entry is part of the binding (T4/#172): the same user switching from the
+    consumer entry to the operator entry gets a fresh conversation set, and a
+    mismatched or missing conversation is a uniform 404 — indistinguishable
+    from never-existing.
+    """
+    try:
+        conversation = context.conversation_store.get(conversation_id, caller.scope_fingerprint)
+    except ConversationError as exc:
+        raise StandardAPIError(
+            status.HTTP_404_NOT_FOUND,
+            "CONVERSATION_NOT_FOUND",
+            "conversation not found",
+        ) from exc
+    if conversation.get("business_entry") != str(getattr(decision, "platform", "")):
+        # The platform decision IS the resolved business entry for this call.
+        raise StandardAPIError(
+            status.HTTP_404_NOT_FOUND,
+            "CONVERSATION_NOT_FOUND",
+            "conversation not found",
+        )
+    return conversation
+
+
+def _begin_conversation_turn(
+    context: Any,
+    conversation: dict[str, Any] | None,
+    kind: str,
+    question: str,
+) -> int | None:
+    """Claim the conversation's generation slot; 409 when busy."""
+    if conversation is None:
+        return None
+    try:
+        return context.conversation_store.begin_turn(
+            conversation["conversation_id"],
+            conversation["scope_fingerprint"],
+            kind=kind,
+            question=question,
+        )
+    except ConversationBusy as exc:
+        raise StandardAPIError(
+            status.HTTP_409_CONFLICT,
+            "CONVERSATION_BUSY",
+            "this conversation is already generating a reply",
+            retryable=False,
+        ) from exc
+    except ConversationError as exc:
+        raise StandardAPIError(
+            status.HTTP_404_NOT_FOUND,
+            "CONVERSATION_NOT_FOUND",
+            "conversation not found",
+        ) from exc
+
+
+def _release_conversation_turn(
+    context: Any,
+    conversation: dict[str, Any] | None,
+    turn_no: int | None,
+) -> None:
+    """Drop an unfinished turn row and free the slot (best effort)."""
+    if conversation is None or turn_no is None:
+        return
+    with contextlib.suppress(ConversationError):
+        context.conversation_store.release_turn(
+            conversation["conversation_id"], conversation["scope_fingerprint"], turn_no
+        )
+
+
+def _keep_conversation_turn(
+    context: Any,
+    conversation: dict[str, Any] | None,
+    turn_no: int | None,
+) -> None:
+    """Mark the claimed turn as persisted-without-answer (pending fill).
+
+    The turn's answer arrives asynchronously (job worker); the row keeps the
+    question and slot state. Job completion later writes the answer through
+    the same store; for now the row marks the turn as asked.
+    """
+    if conversation is None or turn_no is None:
+        return
+    with contextlib.suppress(ConversationError):
+        context.conversation_store.complete_turn(
+            conversation["conversation_id"],
+            conversation["scope_fingerprint"],
+            turn_no,
+            answer=None,
+            token_count=0,
+        )
+
+
+_ACTIVE_ORDER_CUES = re.compile(r"订单|充值|充电|退款|押金|金额|费用|订单号|为什么.*停|怎么还没")
+
+
+def _question_involves_active_order(question: str) -> bool:
+    """Heuristic: does this follow-up clearly involve the active order?
+
+    Deliberately conservative — only order-business words trigger the
+    active_order shortcut. Plain knowledge questions ("怎么申请会员") fall
+    through to qa+RAG even with an active order bound (#172 acceptance).
+    """
+    return bool(_ACTIVE_ORDER_CUES.search(question or ""))
 
 
 def _standard_diagnosis_response(diagnosis: dict[str, Any]) -> dict[str, Any]:

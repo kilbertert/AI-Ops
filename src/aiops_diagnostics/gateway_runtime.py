@@ -71,6 +71,10 @@ class GatewayRuntime:
         self.kb_search_client = kb_search_client
         self.media_signer = media_signer
         self.agent_store = agent_store
+        # Conversation turn backfill (T4/#172): same DB file, lazy-built.
+        from aiops_diagnostics.conversation_store import ConversationStore
+
+        self.conversation_store = ConversationStore(store.path)
         self._executor = ThreadPoolExecutor(
             max_workers=gateway_settings.max_workers,
             thread_name_prefix="aiops-gateway-run",
@@ -251,8 +255,16 @@ class GatewayRuntime:
         self,
         context: ScopeContext,
         question: str,
+        *,
+        conversation: dict[str, Any] | None = None,
+        conversation_turn_no: int | None = None,
     ) -> dict[str, Any]:
-        """Start a zero-order general-question job (T3/#153)."""
+        """Start a zero-order general-question job (T3/#153).
+
+        With ``conversation`` + ``conversation_turn_no`` (T4/#172) the finished
+        answer is written back into the conversation's turn row; failures drop
+        the turn so an interrupted generation never survives as a reply.
+        """
         selected_provider = self.diagnostic_settings.agent.select_provider(None)
         selected_key_slot = validate_key_slot_name(selected_provider.resolved_key_slot())
         if selected_key_slot not in self.allowed_key_slots:
@@ -277,6 +289,13 @@ class GatewayRuntime:
             selected_provider.name,
             selected_key_slot,
             context.effective_tenant_id or None,
+            (
+                conversation["conversation_id"],
+                conversation["scope_fingerprint"],
+                conversation_turn_no,
+            )
+            if conversation is not None and conversation_turn_no is not None
+            else None,
         )
         self._futures[qa["qa_id"]] = future
         future.add_done_callback(lambda _: self._futures.pop(qa["qa_id"], None))
@@ -438,8 +457,31 @@ class GatewayRuntime:
         provider: str,
         key_slot: str,
         tenant_id: str | None = None,
+        conversation_turn: tuple[str, str, int] | None = None,
     ) -> None:
+        def _finish_turn(answer: dict[str, Any] | None, *, cancelled: bool = False) -> None:
+            """Write the finished answer into the conversation turn (if any).
+
+            Cancelled/failed turns drop their row: an interrupted generation
+            never survives as a complete reply (#172).
+            """
+            if conversation_turn is None:
+                return
+            from aiops_diagnostics.conversation_store import ConversationError
+
+            conversation_id, scope_fingerprint, turn_no = conversation_turn
+            with contextlib.suppress(ConversationError):
+                self.conversation_store.complete_turn(
+                    conversation_id,
+                    scope_fingerprint,
+                    turn_no,
+                    answer=answer,
+                    token_count=_estimate_turn_tokens(question, answer),
+                    cancelled=cancelled or answer is None,
+                )
+
         if not self.store.update_assistant_question(qa_id, status="running"):
+            _finish_turn(None, cancelled=True)
             return
         settings = Settings.from_config(self.gateway_settings.server_config_file)
         settings.agent.run_root = self.diagnostic_settings.agent.run_root
@@ -447,6 +489,10 @@ class GatewayRuntime:
         if tenant_id and self.kb_search_client is not None and self.media_signer is not None:
             rag_result = self._try_customer_rag(qa_id, question, tenant_id, settings, provider, key_slot)
         if rag_result is not None:
+            if isinstance(rag_result, dict) and rag_result.get("status") == "failed":
+                _finish_turn(None, cancelled=True)
+            else:
+                _finish_turn(rag_result)
             return
         try:
             answer = run_zero_order_answer(
@@ -462,12 +508,14 @@ class GatewayRuntime:
                 error_code="QA_FAILED",
                 error_message=_public_error_message(exc, ""),
             )
+            _finish_turn(None, cancelled=True)
             return
         self.store.update_assistant_question(
             qa_id,
             status="completed",
             result=answer,
         )
+        _finish_turn(answer)
 
     def _try_customer_rag(
         self,
@@ -621,6 +669,20 @@ class GatewayRuntime:
         if requested and requested != device.tenant_id:
             raise ValueError("requested tenant does not match the enrolled device scope")
         return device.tenant_id
+
+
+def _estimate_turn_tokens(question: str, answer: dict[str, Any] | None) -> int:
+    """Rough token estimate for the conversation context budget (#172).
+
+    CJK text runs ~1.5 chars/token; this approximation only decides how many
+    history turns fit the 8k window — never a billing number.
+    """
+    text = question or ""
+    if answer:
+        for block in answer.get("blocks") or []:
+            text += str(block.get("text") or "")
+        text += str(answer.get("text") or "")
+    return max(1, len(text) * 2 // 3)
 
 
 def _public_event(event: dict[str, Any]) -> dict[str, Any]:
