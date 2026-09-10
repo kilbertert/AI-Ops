@@ -629,3 +629,58 @@ ScopeContext（UPMS/Dis）行为由 T1-T3 既有真实验收线覆盖。
 - 预期结果：全链路 API 可用；发布校验返回真实原因；debug 媒体 URL 600s 内可用。
 - 清理：删除 canary 知识库与智能体（租户映射固定复用 `aiops-canary`）。
 - 结果：BLOCKED（2026-09-10）。原因：120 KB 栈停机中（502），重启为人工决策点（docs/agents/kb-service-test-env.md §1/§6.1）；不得把 fake 结果记为业务验收。
+
+## 智能体运行监控与脱敏审计 QA 计划（T7/#174）
+
+### METRICS-01 记录与聚合回读
+
+- 环境：本地 Python 3.13，pytest，临时 SQLite MetricsStore。
+- 测试数据：qa 完成（含检索命中/媒体/Token/延迟）、qa 失败、faq 完成、diagnosis 完成、会话忙碌、租户 B 记录各一。
+- 有序动作：写入六类行后分别查询本租户汇总、另一租户汇总、按 agent 过滤汇总。
+- 预期结果：totals 各计数正确（runs=5、completed=3、failed=1、busy=1、tokens、media）；by_route/by_retrieval/by_error 分桶正确；租户 B 只见自己的 1 条；agent 过滤后 1 条。
+- 清理：临时目录自动回收。
+- 结果：PASS（2026-09-10，pytest `tests/test_agent_metrics.py`）。
+
+### METRICS-02 枚举与字段校验
+
+- 环境：同上。
+- 有序动作：以未知 route_type/outcome/retrieval_status、空租户、小写失败码、负计数分别写入。
+- 预期结果：全部拒绝（MetricsValidationError），非法值不落库。
+- 结果：PASS（2026-09-10）。
+
+### METRICS-03 脱敏边界
+
+- 环境：同上。
+- 有序动作：写入明细后检查行的字段集合与序列化文本。
+- 预期结果：行字段固定为枚举/ID/计数/时间，不含 question/answer/prompt/media URL/对象路径；汇总序列化同样不含。
+- 结果：PASS（2026-09-10）。
+
+### METRICS-04 保留清理
+
+- 环境：同上，时钟可控。
+- 有序动作：写入 31 天前与 1 天前两条，再写一条新记录触发清理。
+- 预期结果：31 天前记录被删除，剩 2 条。
+- 结果：PASS（2026-09-10）。
+
+### METRICS-05 API 角色与租户隔离
+
+- 环境：FastAPI TestClient + fake runtime（metrics 接缝）。
+- 有序动作：admin 查汇总/明细；viewer 查汇总；无 agent 角色查两个端点；跨租户 caller 查询；无 Authorization 查询；非法 route_type 过滤。
+- 预期结果：admin/viewer 200；无角色 403；跨租户只见本租户；未认证 401；非法过滤 422。
+- 结果：PASS（2026-09-10）。
+
+### METRICS-06 真实运行时集成（失败路径）
+
+- 环境：真实 GatewayRuntime + GatewayStore + MetricsStore（同一 SQLite），monkeypatch 模型函数抛 AgentRuntimeError。
+- 有序动作：创建 qa 作业等待终态，读监控明细行。
+- 预期结果：作业 failed/QA_FAILED 且指标行 (qa, failed, QA_FAILED) 带 duration_ms；行内无问题原文。
+- 结果：PASS（2026-09-10）。
+- 说明：取消/超时的完整真实链路（用户停止、模型超时）归 #173/P0-E2E-REAL 真实链路验收；本票在失败码枚举与记录接缝上覆盖其落点（CONVERSATION_BUSY/DIAGNOSIS_BLOCKED/QA_FAILED/KB_UNAVAILABLE）。
+
+### METRICS-REAL 真实环境监控（部署后）
+
+- 环境：120 生产网关 + 公网 `/v1/agent-metrics/*`（同域反代）+ apifox。
+- 前置条件：#173 真实链路 canary 产生流量。
+- 有序动作：走真实 FAQ/QA/诊断提问后查监控汇总与明细。
+- 预期结果：计数与真实操作对应，跨租户隔离，脱敏字段核对。
+- 结果：BLOCKED（2026-09-10）。原因：KB 栈停机 + #173 真实 canary 未跑；不得用 fake 流量充当生产监控验收。

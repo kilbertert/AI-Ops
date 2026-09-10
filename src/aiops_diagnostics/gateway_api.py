@@ -65,6 +65,7 @@ from aiops_diagnostics.gateway_store import (
     GatewayStore,
     RunNotFoundError,
 )
+from aiops_diagnostics.metrics_store import MetricsValidationError
 from aiops_diagnostics.scope_context import ScopeContext, ScopeError
 from aiops_diagnostics.sources import SourceError
 from aiops_diagnostics.third_session_auth import RedisThirdSessionResolver, ThirdSessionSettings
@@ -662,7 +663,9 @@ def create_gateway_app(
                 except (CallerAuthError, ScopeError, SourceError, ValueError):
                     owns = False
                 if owns:
-                    turn_no = _begin_conversation_turn(context, conversation, "diagnosis", payload.question)
+                    turn_no = _begin_conversation_turn(
+                        context, caller, conversation, "diagnosis", payload.question
+                    )
                     try:
                         diagnosis = context.runtime.start_standard_diagnosis(
                             caller,
@@ -708,7 +711,9 @@ def create_gateway_app(
                 except (CallerAuthError, ScopeError, SourceError, ValueError):
                     still_owned = False
                 if still_owned:
-                    turn_no = _begin_conversation_turn(context, conversation, "diagnosis", payload.question)
+                    turn_no = _begin_conversation_turn(
+                        context, caller, conversation, "diagnosis", payload.question
+                    )
                     try:
                         diagnosis = context.runtime.start_standard_diagnosis(
                             caller,
@@ -747,6 +752,7 @@ def create_gateway_app(
         faq_id = _faq_hit_by_keywords(decision.platform, context.faq_catalog, payload.question)
         if faq_id is not None:
             answer = context.faq_catalog.answer(decision.platform, faq_id)
+            _record_route_metric(context, caller, route_type="faq", outcome="completed")
             return {
                 **decision.public(),
                 "type": "faq",
@@ -762,7 +768,7 @@ def create_gateway_app(
         # and record the turn so follow-ups see it in context.
         turn_no: int | None = None
         if conversation is not None:
-            turn_no = _begin_conversation_turn(context, conversation, "qa", payload.question)
+            turn_no = _begin_conversation_turn(context, caller, conversation, "qa", payload.question)
         try:
             qa = context.runtime.start_assistant_qa(
                 caller,
@@ -1334,6 +1340,61 @@ def create_gateway_app(
                 retryable=True,
             ) from exc
 
+    @app.get("/v1/agent-metrics/summary")
+    def agent_metrics_summary(
+        agent_id: Annotated[str | None, Query(max_length=128)] = None,
+        window_hours: Annotated[int, Query(ge=1, le=720)] = 720,
+        caller: ScopeContext = Depends(authenticated_agent_caller),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Tenant-scoped redacted run aggregate (T7/#174).
+
+        The tenant always comes from the authenticated scope; agent_id
+        optionally narrows to one agent. Cross-tenant data is unreachable by
+        construction, and rows never carry question/answer/prompt text.
+        """
+        from aiops_diagnostics.agent_lifecycle import VIEW_ROLES
+
+        if not frozenset(getattr(caller, "roles", ())).intersection(VIEW_ROLES):
+            raise StandardAPIError(
+                status.HTTP_403_FORBIDDEN, "AGENT_FORBIDDEN", "agent access is not permitted"
+            )
+        try:
+            return context.runtime.get_agent_metrics_summary(
+                caller, agent_id=agent_id, window_hours=window_hours
+            )
+        except AgentRuntimeError as exc:
+            raise StandardAPIError(
+                status.HTTP_403_FORBIDDEN, "AGENT_FORBIDDEN", "agent access is not permitted"
+            ) from exc
+        except (ValueError, MetricsValidationError) as exc:
+            raise StandardAPIError(status.HTTP_422_UNPROCESSABLE_ENTITY, "METRICS_INVALID", str(exc)) from exc
+
+    @app.get("/v1/agent-metrics/runs")
+    def agent_metrics_runs(
+        agent_id: Annotated[str | None, Query(max_length=128)] = None,
+        route_type: Annotated[str | None, Query(max_length=16)] = None,
+        limit: Annotated[int, Query(ge=1, le=200)] = 50,
+        caller: ScopeContext = Depends(authenticated_agent_caller),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Recent redacted run rows (T7/#174) for the caller's tenant only."""
+        from aiops_diagnostics.agent_lifecycle import VIEW_ROLES
+
+        if not frozenset(getattr(caller, "roles", ())).intersection(VIEW_ROLES):
+            raise StandardAPIError(
+                status.HTTP_403_FORBIDDEN, "AGENT_FORBIDDEN", "agent access is not permitted"
+            )
+        try:
+            runs = context.runtime.list_agent_metrics_runs(
+                caller, agent_id=agent_id, route_type=route_type, limit=limit
+            )
+        except AgentRuntimeError as exc:
+            raise StandardAPIError(
+                status.HTTP_403_FORBIDDEN, "AGENT_FORBIDDEN", "agent access is not permitted"
+            ) from exc
+        except (ValueError, MetricsValidationError) as exc:
+            raise StandardAPIError(status.HTTP_422_UNPROCESSABLE_ENTITY, "METRICS_INVALID", str(exc)) from exc
+        return {"runs": runs}
+
     @app.post("/v1/enroll", status_code=status.HTTP_201_CREATED)
     def enroll(payload: EnrollRequest) -> dict[str, Any]:
         try:
@@ -1764,8 +1825,38 @@ def _resolve_conversation(
     return conversation
 
 
+def _record_route_metric(
+    context: Any,
+    caller: ScopeContext | None,
+    *,
+    route_type: str,
+    outcome: str,
+    agent_id: str | None = None,
+    agent_version_key: str | None = None,
+    conversation_id: str | None = None,
+    error_code: str | None = None,
+) -> None:
+    """Best-effort redacted route metric (T7/#174); never fails the request."""
+    if caller is None:
+        return
+    recorder = getattr(context.runtime, "record_route_metric", None)
+    if recorder is None:
+        return
+    with contextlib.suppress(Exception):
+        recorder(
+            caller,
+            route_type,
+            outcome,
+            agent_id=agent_id,
+            agent_version_key=agent_version_key,
+            conversation_id=conversation_id,
+            error_code=error_code,
+        )
+
+
 def _begin_conversation_turn(
     context: Any,
+    caller: ScopeContext | None,
     conversation: dict[str, Any] | None,
     kind: str,
     question: str,
@@ -1781,6 +1872,14 @@ def _begin_conversation_turn(
             question=question,
         )
     except ConversationBusy as exc:
+        _record_route_metric(
+            context,
+            caller,
+            route_type=kind,  # "qa" | "diagnosis" — never misattribute a busy turn
+            outcome="busy",
+            error_code="CONVERSATION_BUSY",
+            conversation_id=conversation.get("conversation_id"),
+        )
         raise StandardAPIError(
             status.HTTP_409_CONFLICT,
             "CONVERSATION_BUSY",

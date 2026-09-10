@@ -574,3 +574,41 @@ Feature: 后台智能体管理与草稿隔离调试
       Given 另一租户的管理员
       When 对其他租户的智能体发起调试
       Then 返回 404 且不泄露智能体存在性
+
+Feature: 智能体运行监控与脱敏审计
+  每次问答路由交互（faq/qa/diagnosis/debug）在完成点记录一行脱敏指标：
+  租户、路由类型、结果、智能体与版本、会话、检索状态、检索数、媒体数、
+  延迟、Token 与失败码。长期监控数据不含问题原文、回答原文、Prompt、
+  知识库内容、媒体 URL 或任何内部凭据。
+
+  Rule: 监控查询按租户与角色隔离
+
+    Scenario: 租户管理员查询本租户聚合
+      Given 管理员持有 agent 查看角色且其租户存在运行记录
+      When 管理员查询监控汇总
+      Then 返回本租户的调用量、成功/失败、延迟、Token、检索与媒体计数
+
+    Scenario: 跨租户与无权限查询被拒绝
+      Given 查询者无 agent 查看角色或查询其他租户
+      When 查询监控接口
+      Then 无权限返回 403，跨租户数据按租户隔离不可达且不泄露存在性
+
+  Rule: 记录区分路由与失败形态
+
+    Scenario: 失败码区分检索、模型、媒体、忙碌与取消
+      Given qa 失败、诊断受阻、会话忙碌、kb 不可用各发生一次
+      When 监控数据落库后查询
+      Then QA_FAILED、DIAGNOSIS_BLOCKED、CONVERSATION_BUSY、KB_UNAVAILABLE
+      And 检索未命中与检索不可用按 not_found/unavailable 区分
+
+  Rule: 脱敏与保留
+
+    Scenario: 监控行不含原文与内部标识
+      Given 一次问答运行完成
+      When 查看监控明细行
+      Then 行内只有枚举与计数字段，不含问题、回答、Prompt、媒体 URL 或对象路径
+
+    Scenario: 监控数据按保留期清理
+      Given 监控行超过 30 天保留期
+      When 新指标写入触发清理
+      Then 过期行被删除且不影响其他数据

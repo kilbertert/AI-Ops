@@ -247,7 +247,11 @@ def _finalize(answer: dict[str, Any], retrieval: _TurnRetrieval) -> dict[str, An
 
     cleaned = QaAnswer(blocks=blocks, retrieval_status=status)
     media_by_id = {key: value.to_dict() for key, value in retrieval.media_by_id.items()}
-    return cleaned.to_public_dict(media_by_id=media_by_id)
+    payload = cleaned.to_public_dict(media_by_id=media_by_id)
+    # Runtime-owned run metadata (harness search budget usage) alongside the
+    # blocks contract; callers ignore it, the metrics seam reads it.
+    payload["searches"] = retrieval.searches_used
+    return payload
 
 
 def _parse_rag_turn(final_response: str) -> dict[str, Any] | None:
