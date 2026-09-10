@@ -25,7 +25,10 @@ from aiops_diagnostics.knowledge_retrieval import (
     KbServiceClient,
     KnowledgeSearchClient,
     KnowledgeSearchUnavailable,
+    MediaGrant,
+    MediaProxy,
     MediaResourceSigner,
+    MediaResponse,
 )
 from aiops_diagnostics.parsing import parse_request
 from aiops_diagnostics.platform_paths import reference_root
@@ -71,6 +74,10 @@ class GatewayRuntime:
         self.kb_search_client = kb_search_client
         self.media_signer = media_signer
         self.agent_store = agent_store
+        # Lazy media proxy (T3/#170 follow-up): built on first /v1/media hit;
+        # without the kb-service + media-signing configuration it stays None
+        # and the route answers a uniform 404.
+        self._media_proxy: MediaProxy | None = None
         # Conversation turn backfill (T4/#172): same DB file, lazy-built.
         from aiops_diagnostics.conversation_store import ConversationStore
 
@@ -843,6 +850,47 @@ class GatewayRuntime:
             result={key: value for key, value in result.items() if key != "agent_version"},
         )
         return result
+
+    def serve_media(
+        self,
+        signed_id: str,
+        *,
+        range_header: str | None = None,
+    ) -> MediaResponse | None:
+        """Serve a signed media URL (#168 media protocol, /v1/media route).
+
+        Returns None when the media plane is not configured (no kb-service or
+        no signing secret) so the API layer can answer a uniform 404. The
+        URL's HMAC authenticates the request (browsers cannot attach Bearer
+        headers to <img>/<video>); the grant's own tenant scope plus the
+        ``is_active`` liveness check below re-verify that the tenant's
+        customer agent is still published at the same version and still
+        bound to the knowledge base the grant cites — so a disabled segment,
+        an unpublished agent, or an unbound KB invalidates URLs immediately.
+        """
+        if self.media_signer is None or self.kb_search_client is None:
+            return None
+        if self._media_proxy is None:
+            self._media_proxy = MediaProxy(self.media_signer, self.kb_search_client.fetch_media)
+        from aiops_diagnostics.qa_rag import select_customer_agent
+
+        def _is_active(grant: MediaGrant) -> bool:
+            if self.agent_store is None:
+                return False
+            try:
+                selection = select_customer_agent(self.agent_store, grant.tenant_id)
+            except Exception:
+                return False
+            if selection is None:
+                return False
+            if f"{selection.agent_id}#v{selection.version_no}" != grant.agent_version:
+                return False
+            return grant.knowledge_base_id in selection.knowledge_base_ids
+
+        try:
+            return self._media_proxy.serve_signed(signed_id, range_header=range_header, is_active=_is_active)
+        except KnowledgeSearchUnavailable:
+            return MediaResponse(503, {"Cache-Control": "no-store"}, b"")
 
     def _execute_run(
         self,

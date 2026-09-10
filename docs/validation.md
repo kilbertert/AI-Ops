@@ -627,3 +627,23 @@ S3 退役验收（公网入口 + 开机自启）：FAQ 200（28 条）、健康�
 - 行为变化声明：`_try_customer_rag` 在完成结果上追加 `agent_version` 标签用于指标归因，但落库与对外的 blocks 合同保持不变（存储时剥离该标签）；新增端点为只读查询，无破坏性变更。
 
 未完成业务验收：METRICS-REAL 生产流量监控验收 BLOCKED（待 #173 真实 canary 与 KB 栈恢复）；监控页面属范围外（接口级口径）。
+
+## /v1/media 媒体代理路由验证（#170 媒体面收口，2026-09-10）
+
+验证范围：`MediaProxy.serve_signed` + `verify_signed` 原语、`GET /v1/media/{signed_id}` 路由、URL-HMAC 浏览器面鉴权、Range 语义、运行时 liveness 复查、kb-service 字节面取数路径与错误映射；不包含真实 RAGFlow 图片字节回源（kb-service 图片透传端点待补，属 kb-service 仓库）。
+
+- 自动化测试：`tests/test_media_api.py` 6 项 + `tests/test_knowledge_retrieval.py` 新增 1 项；全量 586 通过。
+- 已验证：无 Authorization 头访问 200（签名即凭证）；视频 Range 206/416；篡改 ID/过期/失效统一 403；媒体面未配置统一 404 `MEDIA_NOT_FOUND`（无存在性泄露）；真实 `GatewayRuntime.serve_media` 对真实 `AgentStore` 的 liveness——已发布智能体在位 200，停用后 URL 立即 403（先于 600s TTL）；`KbServiceClient.fetch_media` 图片走 `/kb/documents/images/{image_id}`、视频走文档 download，`tenant-id` 头租户隔离，404→`MediaNotFound`、传输故障→`KnowledgeSearchUnavailable`→503。
+- 首启缺陷修复：`create_gateway_app` 读 `settings.agent.providers`（原误读 Settings 根属性）导致无 agent_manager 的新部署 `AttributeError` 崩溃；120 旧实例未踩中仅因其代码先于智能体功能。已随 PR #181 修复并加测。
+
+## 移动云 36 全栈迁移验证（2026-09-10，产品侧紧急验收准备）
+
+背景：120 内存长期偏紧且 KB 栈停机，产品需要前端立即可验收 RAG 媒体回答闭环。经授权将 AI-Ops 网关 + kb-service + RAGFlow 全栈迁往公司移动云主机（36，30G/16C，宝塔托管，与公司 Java 生产栈同机）。
+
+- 迁移内容：RAGFlow 5 容器（v0.27.1 + infinity + mysql8 + minio + valkey，数据卷 `ragflow-kb_*` 共约 480MB）、kb-service（`/opt/ragflow-kb/kb-service`，venv 重建，tenancy.db 19 个租户映射完整）、AI-Ops 网关（`/home/aiops/AI-Ops` editable 安装，gateway.db/运行记录/模型供应商密钥 `keys/` 700 迁移，含 #181 媒体路由代码）。
+- systemd：`kb-service.service`（127.0.0.1:9380）与 `aiops-gateway.service`（127.0.0.1:8788，`aiops` 用户，120 同款加固），均 enabled 开机自启。
+- 媒体面新配置：`AIOPS_GATEWAY_KB_SERVICE_BASE_URL=http://127.0.0.1:9380` + 新生成 `AIOPS_GATEWAY_MEDIA_SIGNING_SECRET`（600s TTL）——36 网关自此具备 blocks[] 媒体签发与 `/v1/media` 回源能力。
+- 网络事实（重要）：36 与 120/124 虽同用 192.168.0.0/24 网段但**互不互通**（不同 VPC）。数据面诊断源（MySQL 192.168.0.39、UPMS、TDengine、Redis）在 36 的 acceptance.env 中**当前不可达**——诊断线（diagnosis）在 36 实例不可用属预期，需公网桥或保留 120 网关承载诊断线；本任务范围（QA+RAG 媒体闭环）不依赖这些源，模型供应商出网（volces/aliyun/psydo）已实测可达。
+- 镜像传输：Docker Hub 在两台主机均不可达；经 120 `docker save | gzip` + 逐 128MB 块 md5 校验推送（3.5GB ragflow + 948MB infinity + 三个小镜像），最终 md5 全部与源一致。
+- 验证：`/healthz` 200；kb-service→RAGFlow 搜索链路实响（RAGFlow code=102 业务应答证明上游活了）；canary 租户无残留知识库（符合临时库纪律）；`aiops-canary` 映射在位；网关 `/health` 200 且媒体面配置生效（坏 ID 得到签名器 403 而非未配置 404）。
+- 未完成/边界（如实声明）：①120 网关与 nginx 域名（api.qumall.qushiyun.com）**未切流**——36 目前仅内网/SSH 可达，公网入口、TLS 与前端 BFF 指向切换是人工决策点，等用户确认后再动；②诊断数据面在 36 不可达（见上）；③kb-service 图片透传端点仍缺（视频 download 已可用）；④RAGFlow 视频解析需租户配 VISION 模型。120 侧所有服务与回滚快照原样保留，未删除任何东西。

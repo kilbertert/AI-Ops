@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import inspect
 import json
 import mimetypes
 import secrets
@@ -213,6 +214,35 @@ class MediaResourceSigner:
             raise MediaAccessDenied("media resource is not available")
         return grant
 
+    def verify_signed(
+        self,
+        signed_id: str,
+        *,
+        now: datetime | None = None,
+        is_active: Callable[[MediaGrant], bool] | None = None,
+    ) -> MediaGrant:
+        """Verify by URL signature alone; the grant carries its own scope.
+
+        Used by the /v1/media HTTP route where the browser cannot present a
+        caller identity — the short-lived HMAC in the URL is the credential.
+        Everything except caller-scope comparison is checked exactly as
+        ``verify`` does: existence, signature, invalidation, TTL, and the
+        optional liveness callback.
+        """
+        bare_id, signature = _split_resource_id(signed_id)
+        expected = hmac.new(self._secret, bare_id.encode("ascii"), hashlib.sha256).hexdigest()[:24]
+        grant = self._grants.get(bare_id)
+        current = _utc(now)
+        if (
+            grant is None
+            or not hmac.compare_digest(signature, expected)
+            or bare_id in self._invalidated
+            or grant.expires_at <= current
+            or (is_active is not None and not is_active(grant))
+        ):
+            raise MediaAccessDenied("media resource is not available")
+        return grant
+
 
 @dataclass(frozen=True, slots=True)
 class MediaResponse:
@@ -222,11 +252,50 @@ class MediaResponse:
 
 
 class MediaProxy:
-    """Serve an authorized media blob with browser-compatible Range support."""
+    """Serve an authorized media blob with browser-compatible Range support.
+
+    ``serve`` is the direct form (caller already authenticated, scope checked
+    by the caller). ``serve_signed`` is the URL-signature form used by the
+    ``/v1/media/{resource_id}.{signature}`` HTTP route: browsers load media
+    via ``<img>``/``<video>`` tags that cannot attach Bearer headers, so the
+    short-lived HMAC in the URL *is* the credential (#168 media protocol).
+    Both re-check ``is_active`` so a disabled segment or unpublished agent
+    version invalidates URLs before their TTL runs out.
+    """
 
     def __init__(self, signer: MediaResourceSigner, fetch: Callable[[MediaGrant], bytes]):
         self.signer = signer
         self.fetch = fetch
+
+    @staticmethod
+    def _response_for(grant: MediaGrant, body: bytes, range_header: str | None) -> MediaResponse:
+        """Shared response shaping: 200 full, 206 slice, 416 rejected range."""
+        common = {
+            "Accept-Ranges": "bytes",
+            "Cache-Control": "private, no-store",
+            "Content-Type": grant.mime_type,
+            "Content-Disposition": "inline",
+        }
+        if not range_header:
+            return MediaResponse(200, {**common, "Content-Length": str(len(body))}, body)
+        try:
+            start, end = parse_byte_range(range_header, len(body))
+        except MediaRangeError:
+            return MediaResponse(
+                416,
+                {**common, "Content-Range": f"bytes */{len(body)}", "Content-Length": "0"},
+                b"",
+            )
+        chunk = body[start : end + 1]
+        return MediaResponse(
+            206,
+            {
+                **common,
+                "Content-Length": str(len(chunk)),
+                "Content-Range": f"bytes {start}-{end}/{len(body)}",
+            },
+            chunk,
+        )
 
     def serve(
         self,
@@ -281,6 +350,77 @@ class MediaProxy:
             },
             chunk,
         )
+
+    def serve_signed(
+        self,
+        signed_id: str,
+        *,
+        range_header: str | None = None,
+        is_active: Callable[[MediaGrant], bool] | None = None,
+        now: datetime | None = None,
+    ) -> MediaResponse:
+        """Serve by the URL's HMAC signature alone (no caller scope in play).
+
+        The signature authenticates the URL; the grant itself carries the
+        tenant/agent-version/session scope and is re-validated here, including
+        the ``is_active`` liveness check. Anything wrong is a uniform 403 —
+        the same body the T1 tests expect, and no existence leak.
+        """
+        try:
+            grant = self.signer.verify_signed(signed_id, now=now, is_active=is_active)
+            # Range passthrough: a range-aware fetcher (kb-service client)
+            # fetches only the requested bytes upstream; plain fetchers keep
+            # the whole-object-then-slice behavior. The upstream 206 slice is
+            # byte-identical to a local slice of the full object, so the
+            # response shaping is the same either way.
+            fetched = (
+                self.fetch(grant, range_header=range_header)
+                if _accepts_range(self.fetch)
+                else self.fetch(grant)
+            )
+            if not isinstance(fetched, bytes):
+                raise TypeError("media fetcher must return bytes")
+            if _accepts_range(self.fetch):
+                # The fetcher already sliced: shape the response around the
+                # slice and the grant, without re-slicing locally.
+                return _ranged_response(grant, fetched, range_header)
+            return self._response_for(grant, fetched, range_header)
+        except MediaAccessDenied:
+            return MediaResponse(403, {"Cache-Control": "no-store"}, b"")
+        except (MediaNotFound, FileNotFoundError):
+            return MediaResponse(404, {"Cache-Control": "no-store"}, b"")
+
+
+def _accepts_range(fetch: Callable[..., bytes]) -> bool:
+    """Whether a media fetcher supports the ``range_header`` keyword."""
+    try:
+        return "range_header" in inspect.signature(fetch).parameters
+    except (TypeError, ValueError):
+        return False
+
+
+def _ranged_response(grant: MediaGrant, fetched: bytes, range_header: str | None) -> MediaResponse:
+    """Shape the response for a range-passthrough fetch.
+
+    With ``range_header`` the upstream already returned the slice, and its
+    ``Content-Range`` total is unknown here — emit 206 with the slice length
+    and a total-less Content-Range, which browsers accept alongside the
+    upstream Accept-Ranges. Without a range the fetcher returned the whole
+    object; plain 200.
+    """
+    common = {
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "private, no-store",
+        "Content-Type": grant.mime_type,
+        "Content-Disposition": "inline",
+    }
+    if not range_header:
+        return MediaResponse(200, {**common, "Content-Length": str(len(fetched))}, fetched)
+    return MediaResponse(
+        206,
+        {**common, "Content-Length": str(len(fetched))},
+        fetched,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -444,6 +584,49 @@ class KbServiceClient:
                 if isinstance(chunk, dict):
                     merged.append({**chunk, "knowledge_base_id": kb_id})
         return merged
+
+    def fetch_media(self, grant: MediaGrant, *, range_header: str | None = None) -> bytes:
+        """Fetch the media bytes a signed grant refers to (#168 media plane).
+
+        Image grants carry the RAGFlow ``image_id`` as ``backend_id`` and go
+        through the kb-service image passthrough
+        (``GET /kb/documents/images/{image_id}``); video grants carry the
+        document id and go through the existing document download endpoint.
+        Both are tenant-scoped by the ``tenant-id`` header. A missing blob is
+        ``MediaNotFound`` (404); a transport failure is
+        ``KnowledgeSearchUnavailable`` so the API layer can map it to 503.
+
+        ``range_header`` (when the caller serves a Range request) is passed
+        through to kb-service, so a video seek fetches only the requested
+        bytes instead of buffering the whole object per request.
+        """
+        if grant.kind == "image":
+            path = f"/kb/documents/images/{urllib.parse.quote(grant.backend_id, safe='')}"
+        else:
+            path = (
+                f"/kb/knowledge-bases/{urllib.parse.quote(grant.knowledge_base_id, safe='')}"
+                f"/documents/{urllib.parse.quote(grant.document_id, safe='')}/download"
+            )
+        url = f"{self.base_url}{path}"
+        headers = {"tenant-id": self.tenant_id}
+        if range_header:
+            # Single-range only; parse_byte_range rejects the multi-range form
+            # before we reach here, so replaying the header upstream is safe.
+            headers["Range"] = range_header
+        if self.service_token:
+            headers["Authorization"] = f"Bearer {self.service_token}"
+        request = urllib.request.Request(url, headers=headers, method="GET")
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                if response.status == 404:
+                    raise MediaNotFound(grant.backend_id)
+                return response.read()
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                raise MediaNotFound(grant.backend_id) from exc
+            raise KnowledgeSearchUnavailable("kb-service media fetch failed") from exc
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            raise KnowledgeSearchUnavailable("kb-service media fetch unavailable") from exc
 
 
 def normalize_search_response(

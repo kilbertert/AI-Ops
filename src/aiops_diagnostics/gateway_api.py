@@ -8,7 +8,7 @@ import re
 from contextlib import asynccontextmanager
 from typing import Annotated, Any
 
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, status
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
@@ -285,13 +285,14 @@ def create_gateway_app(
         selected_platform_resolver = PlatformIdentityResolver(MySQLPlatformDirectory(platform_settings))
     selected_faq_catalog = faq_catalog or FAQCatalog.bundled()
     if agent_manager is None:
+        agent_settings = getattr(diagnostic_settings, "agent", None)
         configured_models = tuple(
             provider.model
-            for provider in getattr(diagnostic_settings, "providers", ())
+            for provider in getattr(agent_settings, "providers", ())
             if getattr(provider, "model", "")
         )
-        if not configured_models and diagnostic_settings is not None:
-            configured_models = (diagnostic_settings.model or "aiops-api",)
+        if not configured_models and agent_settings is not None:
+            configured_models = (getattr(agent_settings, "model", "") or "aiops-api",)
         knowledge_resolver = None
         if selected_settings.kb_service_base_url:
             # Real publish validation (T5/#171): bindings must resolve against
@@ -862,6 +863,33 @@ def create_gateway_app(
     # ------------------------------------------------------------------
     # Conversations (T4/#172)
     # ------------------------------------------------------------------
+
+    @app.get("/v1/media/{signed_id}")
+    def get_media(
+        signed_id: str,
+        range_header: Annotated[str | None, Header(alias="Range")] = None,
+    ) -> Response:
+        """Serve a signed media resource (#168 media protocol, T3/#170 data plane).
+
+        No Authorization dependency: browsers load media through <img>/<video>
+        tags that cannot attach Bearer headers, so the short-lived HMAC in the
+        URL is the credential. The runtime re-validates the grant's tenant /
+        agent-version / KB-binding scope and its liveness on every hit. Media
+        plane unconfigured or any scope mismatch is a uniform 404 with no body
+        detail — no existence leak (#170 acceptance).
+        """
+        response = context.runtime.serve_media(signed_id, range_header=range_header)
+        if response is None:
+            raise StandardAPIError(
+                status.HTTP_404_NOT_FOUND,
+                "MEDIA_NOT_FOUND",
+                "media resource not found",
+            )
+        return Response(
+            status_code=response.status_code,
+            headers=response.headers,
+            content=response.body,
+        )
 
     @app.post("/v1/conversations")
     def create_conversation(
