@@ -285,13 +285,14 @@ def create_gateway_app(
         selected_platform_resolver = PlatformIdentityResolver(MySQLPlatformDirectory(platform_settings))
     selected_faq_catalog = faq_catalog or FAQCatalog.bundled()
     if agent_manager is None:
+        agent_settings = getattr(diagnostic_settings, "agent", None)
         configured_models = tuple(
             provider.model
-            for provider in getattr(diagnostic_settings, "providers", ())
+            for provider in getattr(agent_settings, "providers", ())
             if getattr(provider, "model", "")
         )
-        if not configured_models and diagnostic_settings is not None:
-            configured_models = (diagnostic_settings.model or "aiops-api",)
+        if not configured_models and agent_settings is not None:
+            configured_models = (getattr(agent_settings, "model", "") or "aiops-api",)
         knowledge_resolver = None
         if selected_settings.kb_service_base_url:
             # Real publish validation (T5/#171): bindings must resolve against
