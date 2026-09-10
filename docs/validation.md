@@ -559,10 +559,19 @@ S3 退役验收（公网入口 + 开机自启）：FAQ 200（28 条）、健康�
 
 - 自动化测试：`tests/test_agent_lifecycle.py` 4 项通过。
 - 覆盖行为：租户隔离与统一未找到、角色权限、草稿 revision 乐观并发、模型与知识库发布校验、不可变 version snapshot、发布版本派生新草稿、停用保留历史版本、已发布智能体不可删除、管理 API 生命周期响应。
-- 全套回归：pytest 550 项通过；Ruff、格式、compileall、`uv lock --check`、`uv pip check`、`git diff --check` 通过。
+- 全套回归：pytest 554 项通过（T1 合并后）；Ruff、格式、compileall、`uv lock --check`、`uv pip check`、`git diff --check` 通过。
 - 结果：生命周期协议验证通过；草稿允许保存待审核模型，发布时才执行后端 allowlist；默认未注入真实知识库 resolver 时对有绑定的发布请求 fail closed。
 
 未完成业务验收：当前使用临时 SQLite、fake resolver 和 fake caller，不能宣称真实后台角色、知识库解析状态或 Java BFF 链路已验收。
+
+## T1/T2 合并后 AI-Ops 本地集成验收（2026-09-10）
+
+- 环境：本地 Python 3.13、FastAPI `TestClient`、临时 SQLite、fake caller、fake 知识库和内存媒体对象。
+- 专项结果：T1 媒体协议、T2 智能体生命周期、统一问答 API、QA store、Gateway API 共 31 项通过。
+- 全量结果：pytest 554 项通过；Ruff、格式、compileall、`uv lock --check`、`uv pip check`、`git diff --check` 通过。
+- 已验证：媒体授权/Range、租户隔离、草稿发布版本、停用/删除边界、统一问答既有入口回归。
+
+真实端到端验收仍未完成：#170 尚未把受限检索接入 QA 运行时，当前工作区也没有 Java BFF、`qumall-admin` 浏览器环境、真实 `kb-service/RAGFlow` 和可批准的图片/视频知识库数据；本地 fake 集成结果不能替代真实媒体验收。
 ## T1 受限知识检索与媒体资源协议验证（issue #168，2026-09-09）
 
 验证范围：AI-Ops 内部 `knowledge_search` guard、RAGFlow 字段规范化和媒体资源授权协议；不包含生产 `kb-service`、RAGFlow、Java BFF 或浏览器部署。
