@@ -227,3 +227,49 @@ def test_byte_range_parser_supports_suffix_and_rejects_multiple_ranges() -> None
         pass
     else:
         raise AssertionError("multiple ranges must be rejected")
+
+
+def test_serve_signed_authenticates_by_url_signature_and_honors_liveness() -> None:
+    """The /v1/media data plane: URL HMAC is the credential, grant scope still
+    re-validated, liveness callback can revoke before TTL expiry."""
+    now = datetime(2026, 9, 10, tzinfo=UTC)
+    signer = MediaResourceSigner("test-secret", ttl_seconds=60)
+    resource = signer.issue(
+        tenant_id="tenant-a",
+        agent_version="agent-v1",
+        session_id="conversation-1",
+        knowledge_base_id="kb-a",
+        document_id="doc-1",
+        chunk_id="chunk-1",
+        backend_id="object-1",
+        kind="image",
+        mime_type="image/png",
+        title="拔枪示意.png",
+        reference_id="chunk-1",
+        now=now,
+    )
+    proxy = MediaProxy(signer, lambda _grant: b"0123456789")
+    signed_id = resource.url.rsplit("/", 1)[-1]
+
+    full = proxy.serve_signed(signed_id, now=now)
+    assert full.status_code == 200
+    assert full.headers["Content-Type"] == "image/png"
+    assert full.body == b"0123456789"
+
+    partial = proxy.serve_signed(signed_id, range_header="bytes=2-5", now=now)
+    assert partial.status_code == 206
+    assert partial.body == b"2345"
+    assert partial.headers["Content-Range"] == "bytes 2-5/10"
+
+    # Bad signature, expired grant, and inactive liveness all 403 uniformly.
+    assert proxy.serve_signed("media_badid.000000000000000000000000", now=now).status_code == 403
+    assert proxy.serve_signed(signed_id, now=now + timedelta(seconds=61)).status_code == 403
+    assert proxy.serve_signed(signed_id, now=now, is_active=lambda _grant: False).status_code == 403
+
+    # A missing blob is 404, distinct from access denial.
+    assert (
+        MediaProxy(signer, lambda _grant: (_ for _ in ()).throw(FileNotFoundError("gone")))
+        .serve_signed(signed_id, now=now)
+        .status_code
+        == 404
+    )
