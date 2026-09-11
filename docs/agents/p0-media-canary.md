@@ -8,18 +8,14 @@
 > canary 纪律；36 侧迁移记录见 `docs/validation.md` §移动云 36）。
 > 敏感边界：本文不含任何密钥/密码；服务令牌只存在于部署配置。
 
-## 0. 人工决策点（不满足即对应步骤 BLOCKED，不得跳过）
+## 0. 人工决策点（2026-09-11 执行状态）
 
-1. **36 公网入口/TLS/BFF 切流**（已落地 → C3-C6 走公网域名执行；未落地 →
-   从 36 本机/SSH 隧道直打 `127.0.0.1:8788` 执行，接口语义等价，但
-   "前端只调 BFF 域名"一项要等切流后补录）。120 侧网关与 nginx 域名
-   未切流，原样保留。
-2. **kb-service 补图片透传端点**（`GET /kb/documents/images/{image_id}`，
-   ~15 行，参照 `download_document` 模式；代码在 36 `/opt/ragflow-kb/
-   kb-service/app.py` 与 Playground 双副本，改完 `systemctl restart
-   kb-service`）。属 kb-service 仓库改动。**没有它，图片 canary 走到
-   fetch 即降级——"媒体失败不阻断文本"可按 C6 验收，但"图片可渲染"
-   不能算过；视频链路（文档 download）已可用。**
+1. ✅ **36 公网切流已落地**（2026-09-11）：`api.qumall.qushiyun.com/v1/*` →
+   120 nginx → 36:8789 → 36 网关；C3-C6 已按公网域名执行。
+2. ✅ **kb-service 图片透传端点已补**（部署 36 并实测真实字节；源码入库
+   Playground 沙箱仓库）。
+3. ⏳ **36 部署 #187/#188/#190**（媒体回源错误映射/Range 切片/瞬时重试）——
+   部署后复跑 C4 视频整段/Range；当前 36 为 #185 基线 + #186 归一 hotfix。
 3. ~~KB 栈重启~~（已随 36 迁移解决）：36 上 kb-service(9380) + RAGFlow
    (19380) + AI-Ops 网关(8788) 均已运行且开机自启；`AIOPS_GATEWAY_KB_
    SERVICE_BASE_URL` 与媒体签名密钥已配置。

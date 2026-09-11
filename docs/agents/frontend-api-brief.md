@@ -412,12 +412,13 @@ queued → running → completed | failed | expired                  （报告�
 
 当前可解析会话中尚未找到具备唯一 B 端主体映射的真实样本，因此管家端成功响应仍待一个有效管家用户会话。该缺口不影响客户端联调，也不能通过伪造 `platform` 或临时扩大权限绕过。
 
-## 9.5 QA + blocks[] 媒体验收状态（2026-09-10）
+## 9.5 QA + blocks[] 媒体验收状态（2026-09-11 更新，可联调）
 
-- `qa` 作业返回 `blocks[]` + `retrieval_status`（合同已合并 #179，本日补齐 `/v1/media` 路由后媒体 URL 可直接加载）。
-- `/v1/media/{id}` 支持 Range（视频分段播放）、短时签名（约 10 分钟）、停用即失效。
-- 多轮会话 `/v1/conversations`（#180）可用，含 active-order 绑定与 409 忙碌语义。
-- **真实环境注意事项**：生产网关部署位置与 KB 栈（RAGFlow/kb-service）恢复状态见 `docs/agents/kb-service-test-env.md`；未配置 KB 栈的租户提问会回落纯文本（`blocks[]` 只有 text 块，无 media）。前端验收需要服务端先完成该租户的智能体发布与知识库绑定。
+- **联调环境已就绪**：`api.qumall.qushiyun.com` 已切到真实 RAG 链路（KB 栈在移动云 36，公网切流 2026-09-11 完成）。联调租户的客服智能体已发布并绑定含图片（PNG）与视频（MP4）的知识库——前端按 §场景 B 合同提问即可拿到含 media 块的真实 `blocks[]`。
+- 联调用 C 端会话（thirdSession）与测试问题由服务侧提供（会话有时效，失效时向运维索取新的）。
+- `qa` 作业返回 `blocks[]` + `retrieval_status`；`/v1/media/{id}` 支持 Range（视频分段播放）、短时签名（约 10 分钟）、停用即失效。多轮会话 `/v1/conversations`（#180）可用，含 active-order 绑定与 409 忙碌语义。
+- **已知收尾项（不阻塞按合同开发）**：视频块的**字节回源**在服务端最后一轮修复（#187/#188/#190）部署完成前可能返回错误包——text/image/reference 块已真实验收，视频 `<video>` 标签先接好，播放验证等服务端确认。
+- 未配置 KB 栈的租户提问会回落纯文本（`blocks[]` 只有 text 块，无 media）；每个租户需要服务侧先完成智能体发布与知识库绑定。
 
 ## 10. 前端真实链路诊断（2026-09-05，Pyrovolt Move 1.0.3 APK 实测）
 

@@ -667,6 +667,39 @@ S3 退役验收（公网入口 + 开机自启）：FAQ 200（28 条）、健康�
 - 真实 canary 执行：手册就绪，环境侧仅剩 36 公网切流与图片端点两个人工
   决策点（视频链路已可用）。
 
+## 公网切流与真实链路 canary C1-C3（2026-09-11）
+
+执行会话：切流与验收（另一会话并行交付 #187-#190 修复）。环境口径见
+`docs/agents/p0-media-canary.md` 与 `docs/agents/kb-service-test-env.md` §1。
+
+- **公网切流（业务方授权"切流"）**：`api.qumall.qushiyun.com/v1/*` 经 120 nginx
+  反代 36:8789（TLS 复用 120 证书，仅收 120 IP）→ 36 网关 8788。DNS/TLS/前端零改动；
+  回滚 = 120 rewrite 改回一行。实测：公网 FAQ 200（真实 thirdSession + 平台身份判定成功，
+  MySQL/Redis/UPMS 经 36→120 restricted SSH 隧道访问）。
+- **kb-service 图片透传端点**：`GET /kb/documents/images/{image_id}` 部署 36 并实测
+  真实 image_id 返回 200 image/jpeg（RAGFlow 存储为 JPEG 缩略图属上游行为）；业务层
+  "不存在"（HTTP 200 + code!=0）映射 404。源码记录入库 Playground 沙箱仓库
+  （`experiments/kb-service-design/`，commit 7fd63a7）。
+- **36 网关部署更新**：#182-#185（agent_debug/metrics_store/媒体 ASCII 403）部署生效，
+  #186 answer 归一以 hotfix 同步。
+- **C1 发布智能体**：`agt_7156d07adad44e1bb70c7946eeddf99c` v3（customer/blocks-v1，
+  绑定真实租户 KB `4f4bc674…`，含 PNG+MP4 chunk）；发布校验真实生效——绑定不存在的
+  KB 被拒且原因明确（"知识库 kb_nonexistent 不存在或不在当前租户下"）。附带发现：
+  KB 建在错误租户时发布被正确拒绝（T5 resolver 真实环境生效证据）。
+- **C3 真实 QA RAG 闭环**：公网 `POST /v1/assistant/questions`（真实 thirdSession，
+  2026-09-11T15:27+08:00，qa_0a2cb9f5f62e49b9abb0d455fe541bf4）→ completed，
+  `result.blocks[]` = text×4 + video（签名 URL `/v1/media/media_Jd2dtXj7….a285f5…`，
+  video/mp4）+ reference（源文档名），`retrieval_status=found`、`searches=1`。
+- **C4 部分**：伪造签名 id → 403 no-store ✅；视频整段 GET 得 200/`video/mp4` 但仅
+  44 字节（RAGFlow `code=102 document not found` 业务错误包）→ 根因与修复见下节
+  （#187/#188/#190），**修复部署 36 后需复跑 C4**。
+- **过程缺陷与修复（真实 canary 发现）**：#185 非 ASCII URL id 公网 500；#186 真实
+  模型 answer turn 顶层形状（无 answer 包裹 + type≠kind + 多余字段）导致整条 QA
+  判废——归一层修复；kb-service 图片端点缺失。
+- **环境事实**：公司 Codex key 全失效（alibaba-maas 封锁/glm-ark 配额 9-21/psydo
+  余额不足），canary 期以 canary-dashscope provider 顶替；RAGFlow 视频解析 ≤128MB；
+  picture 解析需租户 VISION 模型（两个 canary 租户已配）。
+
 ## 真实媒体阻塞修复验证（2026-09-11）
 
 验证范围：C4 视频/图片媒体回源、C6 无命中与知识库不可用降级；不扩大 C7 的管理权限边界。
