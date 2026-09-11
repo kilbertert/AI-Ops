@@ -162,8 +162,8 @@ def run_customer_qa_answer(
                 searched = True
                 prompt = _search_results_prompt(results)
                 continue
-            answer = turn.get("answer")
-            if not isinstance(answer, dict):
+            answer = _normalize_answer_turn(turn)
+            if answer is None:
                 raise AgentRuntimeError("answer turn carried no answer payload")
             # Business question but the model skipped retrieval: force one
             # supplementary search before accepting the answer (T1/T3 rule).
@@ -272,6 +272,47 @@ def _parse_rag_turn(final_response: str) -> dict[str, Any] | None:
         if isinstance(parsed, dict):
             return parsed
     return None
+
+
+def _normalize_answer_turn(turn: dict[str, Any]) -> dict[str, Any] | None:
+    """Extract the answer payload from a parsed answer turn, tolerantly.
+
+    The blocks-v1 wire contract is ``{"kind": "answer", "answer": {"blocks":
+    [...], "retrieval_status": ...}}``. Real models on some providers emit
+    close-but-different shapes even under output_schema: the answer fields at
+    turn top level (no ``answer`` wrapper) and block discriminators as
+    ``"type"`` instead of ``"kind"`` (found in the P0 real canary, 2026-09-11).
+    Normalize both variants to the contract shape; anything still shapeless
+    returns None and the run fails as before.
+    """
+    answer = turn.get("answer")
+    if isinstance(answer, dict):
+        return answer
+    blocks = turn.get("blocks")
+    if not isinstance(blocks, list) or not blocks:
+        return None
+    normalized_blocks: list[dict[str, Any]] = []
+    for block in blocks:
+        if not isinstance(block, dict):
+            continue
+        normalized = dict(block)
+        if not normalized.get("kind") and normalized.get("type"):
+            normalized["kind"] = normalized.pop("type")
+        # Real models add display metadata the strict blocks-v1 contract does
+        # not carry (mime_type, caption, ...) — keep only contract fields so
+        # pydantic's extra=forbid guard stays strict downstream.
+        normalized = {
+            key: normalized[key]
+            for key in ("kind", "text", "resource_id", "reference_id", "title")
+            if key in normalized
+        }
+        normalized_blocks.append(normalized)
+    if not normalized_blocks:
+        return None
+    return {
+        "blocks": normalized_blocks,
+        "retrieval_status": turn.get("retrieval_status"),
+    }
 
 
 def _needs_retrieval(question: str) -> bool:
