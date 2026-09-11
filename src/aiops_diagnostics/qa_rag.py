@@ -156,10 +156,33 @@ def run_customer_qa_answer(
                 raise AgentRuntimeError("customer QA turn returned invalid JSON")
             if turn.get("kind") == "tool_requests":
                 requests = turn.get("tool_requests") or []
+                empty_request = not requests
                 if not requests:
-                    raise AgentRuntimeError("tool_requests turn carried no requests")
+                    if searched:
+                        return _fallback_result(
+                            retrieval.last_status,
+                            searches=retrieval.searches_used,
+                        )
+                    # A few providers emit the tool discriminator without a
+                    # payload. Use the user's question as a bounded fallback
+                    # query once, then keep the normal answer contract.
+                    requests = [
+                        {
+                            "tool": KNOWLEDGE_SEARCH_TOOL,
+                            "query": question,
+                            "reason": "model emitted an empty tool request",
+                        }
+                    ]
                 results = _execute_searches(guard, retrieval, requests)
                 searched = True
+                if empty_request and retrieval.last_status in {
+                    RetrievalStatus.NOT_FOUND,
+                    RetrievalStatus.UNAVAILABLE,
+                }:
+                    return _fallback_result(
+                        retrieval.last_status,
+                        searches=retrieval.searches_used,
+                    )
                 prompt = _search_results_prompt(results)
                 continue
             answer = _normalize_answer_turn(turn)
@@ -358,10 +381,26 @@ knowledge_search is required before you answer. Request it now with a focused
 """
 
 
-def _fallback_result() -> dict[str, Any]:
+def _fallback_result(status: RetrievalStatus | None = None, *, searches: int = 0) -> dict[str, Any]:
+    status = (
+        status
+        if status
+        in {
+            RetrievalStatus.NOT_FOUND,
+            RetrievalStatus.UNAVAILABLE,
+            RetrievalStatus.LIMITED,
+        }
+        else RetrievalStatus.LIMITED
+    )
+    messages = {
+        RetrievalStatus.NOT_FOUND: "知识库中没有找到与当前问题直接相关的资料，暂时无法提供有依据的回答。",
+        RetrievalStatus.UNAVAILABLE: "当前知识库暂时不可用，本次回答无法基于知识库确认，请稍后重试。",
+        RetrievalStatus.LIMITED: "本次检索未能完成，请稍后重试或换个问法。",
+    }
     return {
-        "blocks": [{"kind": "text", "text": "很抱歉，本次回答未能完成，请稍后重试或换个问法。"}],
-        "retrieval_status": RetrievalStatus.LIMITED.value,
+        "blocks": [{"kind": "text", "text": messages[status]}],
+        "retrieval_status": status.value,
+        "searches": searches,
     }
 
 

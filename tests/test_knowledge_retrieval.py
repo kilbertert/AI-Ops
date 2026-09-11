@@ -273,3 +273,38 @@ def test_serve_signed_authenticates_by_url_signature_and_honors_liveness() -> No
         .status_code
         == 404
     )
+
+
+def test_media_proxy_sniffs_actual_mime_and_slices_ignored_upstream_range() -> None:
+    now = datetime(2026, 9, 10, tzinfo=UTC)
+    signer = MediaResourceSigner("test-secret", ttl_seconds=60)
+    resource = signer.issue(
+        tenant_id="tenant-a",
+        agent_version="agent-v1",
+        session_id=None,
+        knowledge_base_id="kb-a",
+        document_id="doc-1",
+        chunk_id=None,
+        backend_id="doc-1",
+        kind="image",
+        mime_type="image/png",
+        title="guide.png",
+        reference_id="doc-1",
+        now=now,
+    )
+    # JPEG bytes are returned even though the grant was inferred as PNG.
+    body = b"\xff\xd8\xff" + b"x" * 20
+    proxy = MediaProxy(signer, lambda _grant, range_header=None: body)
+    signed_id = resource.url.rsplit("/", 1)[-1]
+
+    full = proxy.serve_signed(signed_id, now=now)
+    assert full.status_code == 200
+    assert full.headers["Content-Type"] == "image/jpeg"
+
+    partial = proxy.serve_signed(signed_id, range_header="bytes=2-5", now=now)
+    assert partial.status_code == 206
+    assert partial.body == body[2:6]
+    assert partial.headers["Content-Range"] == "bytes 2-5/23"
+
+    bad = proxy.serve_signed(signed_id, range_header="bytes=999-", now=now)
+    assert bad.status_code == 416
