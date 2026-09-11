@@ -402,6 +402,13 @@ Feature: 受限知识检索与媒体资源协议
       Then 该媒体请求返回 404
       And 不把错误 JSON 当作视频字节返回
 
+    Scenario: 视频文档短暂 not found 后恢复
+      Given RAGFlow 对已存在的视频文档第一次返回 code=102
+      And 后续请求返回真实视频字节
+      When AI-Ops 媒体代理回源
+      Then 代理有限重试并返回真实视频字节
+      And 不把瞬时错误暴露给前端
+
     Scenario: 上游忽略 Range 时代理仍正确切片
       Given 视频上游返回完整对象而忽略 Range 请求
       When 媒体代理收到 bytes=0-1023

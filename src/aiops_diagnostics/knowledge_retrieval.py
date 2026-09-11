@@ -14,6 +14,7 @@ import inspect
 import json
 import mimetypes
 import secrets
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -635,21 +636,36 @@ class KbServiceClient:
         if self.service_token:
             headers["Authorization"] = f"Bearer {self.service_token}"
         request = urllib.request.Request(url, headers=headers, method="GET")
-        try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                if response.status == 404:
-                    raise MediaNotFound(grant.backend_id)
-                body = response.read()
-                _raise_for_media_error_body(body)
-                return body
-        except MediaNotFound:
-            raise
-        except urllib.error.HTTPError as exc:
-            if exc.code == 404:
-                raise MediaNotFound(grant.backend_id) from exc
-            raise KnowledgeSearchUnavailable("kb-service media fetch failed") from exc
-        except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            raise KnowledgeSearchUnavailable("kb-service media fetch unavailable") from exc
+
+        def fetch_once() -> bytes:
+            try:
+                with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                    if response.status == 404:
+                        raise MediaNotFound(grant.backend_id)
+                    body = response.read()
+                    _raise_for_media_error_body(body)
+                    return body
+            except MediaNotFound:
+                raise
+            except urllib.error.HTTPError as exc:
+                if exc.code == 404:
+                    raise MediaNotFound(grant.backend_id) from exc
+                raise KnowledgeSearchUnavailable("kb-service media fetch failed") from exc
+            except (urllib.error.URLError, TimeoutError, OSError) as exc:
+                raise KnowledgeSearchUnavailable("kb-service media fetch unavailable") from exc
+
+        # RAGFlow can briefly report an existing video document as code=102
+        # while its document index settles. Retry only that video-not-found
+        # signal once; real missing media still ends as 404.
+        attempts = 2 if grant.kind == "video" else 1
+        for attempt in range(attempts):
+            try:
+                return fetch_once()
+            except MediaNotFound:
+                if attempt + 1 == attempts:
+                    raise
+                time.sleep(0.25)
+        raise AssertionError("media fetch retry loop did not return")
 
 
 def normalize_search_response(

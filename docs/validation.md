@@ -676,3 +676,10 @@ S3 退役验收（公网入口 + 开机自启）：FAQ 200（28 条）、健康�
 - 36 环境恢复证据：`aiops-gateway`、`kb-service` 均为 active，`/health` 与 `/healthz` 均返回 200；图片透传端点返回 200，真实字节可读取。
 - 真实问题证据：此前视频媒体 URL 曾返回 HTTP 200、`video/mp4`、44 字节 RAGFlow `code=102 document not found`；此前无命中/KB 不可用会因空工具请求落为 `QA_FAILED`。上述两类已在本分支锁定回归测试，待部署后复跑真实公网 canary。
 - 未完成业务验收：修复版本部署后的真实视频 200/206/416、图片 MIME 一致性、无命中/不可用降级尚未形成 PASS 证据；C7 指标接口仍缺 `VIEW_ROLES` 管理测试身份。不得把本地回归结果写成真实 canary 通过。
+
+## 视频回源瞬时错误重试验证（2026-09-11）
+
+- 根因证据：RAGFlow 对同一已存在视频文档曾短暂返回 HTTP 200 + `code=102 document not found`，随后恢复为完整 MP4。
+- 修复：视频媒体回源仅对该类 `MediaNotFound` 做一次 250ms 重试；第二次仍失败则按 404 处理，不隐藏永久缺失。
+- 自动化结果：新增重试回归测试；全量 pytest、Ruff、格式和 `git diff --check` 通过。
+- 真实状态：待部署本提交后复跑公网 C4，验证真实整段、Range 和错误边界。
