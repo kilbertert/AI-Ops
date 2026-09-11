@@ -481,3 +481,86 @@ def _customer_config() -> AgentConfig:
         model="aiops-api",
         output_contract="blocks-v1",
     )
+
+
+def test_answer_turn_top_level_shape_is_normalized() -> None:
+    """Real-model variant (P0 canary, 2026-09-11): the answer fields arrive at
+    turn top level without the `answer` wrapper, and blocks carry `type`
+    instead of `kind`. The harness must accept and normalize the shape."""
+    from aiops_diagnostics.qa_rag import _normalize_answer_turn
+
+    turn = {
+        "kind": "answer",
+        "reminder": True,
+        "retrieval_status": "found",
+        "blocks": [
+            {"type": "text", "text": "新加坡无人电动巴士是……"},
+            {
+                "type": "video",
+                "resource_id": "media_x",
+                "title": "bus.mp4",
+                "mime_type": "video/mp4",
+                "caption": "新加坡无人电动巴士项目视频",
+            },
+        ],
+    }
+    answer = _normalize_answer_turn(turn)
+    assert answer is not None
+    assert answer["retrieval_status"] == "found"
+    kinds = [block.get("kind") for block in answer["blocks"]]
+    assert kinds == ["text", "video"]
+    # Display metadata outside the contract is stripped before the strict
+    # pydantic validation (extra=forbid) — mime_type/caption never pass through.
+    assert set(answer["blocks"][1]) == {"kind", "resource_id", "title"}
+
+
+def test_answer_turn_contract_shape_unchanged() -> None:
+    from aiops_diagnostics.qa_rag import _normalize_answer_turn
+
+    turn = {
+        "kind": "answer",
+        "tool_requests": [],
+        "answer": {"blocks": [{"kind": "text", "text": "好"}], "retrieval_status": "found"},
+    }
+    answer = _normalize_answer_turn(turn)
+    assert answer == {"blocks": [{"kind": "text", "text": "好"}], "retrieval_status": "found"}
+
+
+def test_answer_turn_shapeless_is_rejected() -> None:
+    from aiops_diagnostics.qa_rag import _normalize_answer_turn
+
+    assert _normalize_answer_turn({"kind": "answer"}) is None
+    assert _normalize_answer_turn({"kind": "answer", "answer": "not-a-dict"}) is None
+    assert _normalize_answer_turn({"kind": "answer", "blocks": []}) is None
+
+
+def test_full_run_accepts_top_level_answer_turn(tmp_path: Path) -> None:
+    """End-to-end through run_customer_qa_answer with a real-model-shaped turn."""
+    client = _SearchClient([[dict(_IMAGE_CHUNK)]])
+    session = _FakeSession(
+        [
+            _tool_request(),
+            json.dumps(
+                {
+                    "kind": "answer",
+                    "retrieval_status": "found",
+                    "blocks": [
+                        {"type": "text", "text": "先停止充电再拔枪。"},
+                    ],
+                },
+                ensure_ascii=False,
+            ),
+        ]
+    )
+    result = run_customer_qa_answer(
+        "怎么拔枪",
+        _selection(),
+        _settings(tmp_path),
+        search_client=client,
+        media_signer=_signer(),
+        tenant_id="tenant-a",
+        project_root=_PROJECT_ROOT,
+        session_factory=lambda *_args, **_kw: session,
+    )
+    assert result["retrieval_status"] == "found"
+    assert any(block["kind"] == "text" for block in result["blocks"])
