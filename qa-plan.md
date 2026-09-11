@@ -597,6 +597,15 @@ ScopeContext（UPMS/Dis）行为由 T1-T3 既有真实验收线覆盖。
 - 清理：恢复 kb-service、删除临时会话/知识库，保留脱敏日志。
 - 结果：待部署后复测。
 
+### P0-FIX-03 视频回源瞬时错误重试
+
+- 环境：AI-Ops `KbServiceClient` 与临时 HTTP 响应 fake。
+- 前置条件：视频授权有效；第一次响应为 HTTP 200 + `code=102`，第二次为 MP4 字节。
+- 有序动作：调用视频媒体回源一次。
+- 预期结果：只重试一次并返回 MP4；永久 404 最终映射为 `MediaNotFound`；图片回源不重试。
+- 清理：释放 fake。
+- 结果：PASS（本分支，pytest `tests/test_media_api.py`）。
+
 ## 后台智能体管理与草稿调试 QA 计划（T5/#171，接口级验收）
 
 > 范围决定（2026-09-10，业务方）：qumall-admin 页面/菜单/角色接线与 Java 管理

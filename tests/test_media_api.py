@@ -347,6 +347,52 @@ def test_kb_client_maps_http_200_business_error_body_to_not_found(monkeypatch) -
         raise AssertionError("HTTP 200 business error must map to MediaNotFound")
 
 
+def test_kb_client_retries_transient_video_not_found(monkeypatch) -> None:
+    client = KbServiceClient("http://kb.local", tenant_id="tenant-a")
+    grant = MediaGrant(
+        resource_id="media_x",
+        tenant_id="tenant-a",
+        agent_version="agent-v1",
+        session_id=None,
+        knowledge_base_id="kb-1",
+        document_id="doc-1",
+        chunk_id=None,
+        backend_id="doc-1",
+        kind="video",
+        mime_type="video/mp4",
+        title="video.mp4",
+        reference_id="doc-1",
+        expires_at=None,  # type: ignore[arg-type]
+    )
+    calls = 0
+
+    class _Response:
+        status = 200
+
+        def __init__(self, body: bytes) -> None:
+            self.body = body
+
+        def read(self) -> bytes:
+            return self.body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def fake_urlopen(request, timeout=None):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return _Response(b'{"code":102,"message":"document not found"}')
+        return _Response(b"\x00\x00\x00\x18ftypisom")
+
+    monkeypatch.setattr("aiops_diagnostics.knowledge_retrieval.urllib.request.urlopen", fake_urlopen)
+    assert client.fetch_media(grant).startswith(b"\x00\x00\x00\x18ftyp")
+    assert calls == 2
+
+
 def test_kb_client_maps_http_200_unknown_business_error_to_unavailable(monkeypatch) -> None:
     client = KbServiceClient("http://kb.local", tenant_id="tenant-a")
     grant = MediaGrant(
