@@ -602,7 +602,7 @@ ScopeContext（UPMS/Dis）行为由 T1-T3 既有真实验收线覆盖。
 - 环境：AI-Ops `KbServiceClient` 与临时 HTTP 响应 fake。
 - 前置条件：视频授权有效；第一次响应为 HTTP 200 + `code=102`，第二次为 MP4 字节。
 - 有序动作：调用视频媒体回源一次。
-- 预期结果：只重试一次并返回 MP4；永久 404 最终映射为 `MediaNotFound`；图片回源不重试。
+- 预期结果：在重试预算内返回 MP4；永久 404 最终映射为 `MediaNotFound`；图片回源不重试。
 - 清理：释放 fake。
 - 结果：PASS（本分支，pytest `tests/test_media_api.py`）。
 
