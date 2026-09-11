@@ -396,6 +396,23 @@ Feature: 受限知识检索与媒体资源协议
       Then 返回 retrieval_status unavailable
       And 不产生媒体资源引用
 
+    Scenario: 媒体上游以 HTTP 200 返回业务错误
+      Given 视频下载接口返回 HTTP 200 和 code=102 的 JSON 错误包
+      When AI-Ops 媒体代理回源
+      Then 该媒体请求返回 404
+      And 不把错误 JSON 当作视频字节返回
+
+    Scenario: 上游忽略 Range 时代理仍正确切片
+      Given 视频上游返回完整对象而忽略 Range 请求
+      When 媒体代理收到 bytes=0-1023
+      Then 返回 206 和仅对应范围的字节
+      And Content-Range 反映完整对象长度
+
+    Scenario: 媒体响应 MIME 与实际字节一致
+      Given 图片授权声明为 image/png 但上游返回 JPEG 魔数
+      When 媒体代理返回图片
+      Then Content-Type 为 image/jpeg
+
 Feature: 客服 QA RAG 单轮运行接入统一入口
   统一问答入口的 qa 路径按已发布客服智能体运行，异步完成后返回稳定 blocks[] 内容块与
   检索状态；FAQ 与订单诊断行为保持不变，媒体块只能引用本轮受授权检索结果。
@@ -461,6 +478,12 @@ Feature: 客服 QA RAG 单轮运行接入统一入口
       Given 用户提出简单寒暄
       When 智能体直接回答
       Then harness 不强制检索且正常完成
+
+    Scenario: 模型返回空工具请求时仍交付检索状态
+      Given 模型返回 tool_requests 但请求数组为空
+      When harness 处理业务问题
+      Then harness 使用当前问题执行一次受限检索
+      And 无命中或依赖不可用时分别交付 not_found 或 unavailable 文本
 
 Feature: 智能体会话与活跃订单上下文
   会话绑定用户主体、租户、入口和智能体版本，保存有限上下文并每轮重新校验；
