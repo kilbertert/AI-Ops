@@ -744,7 +744,19 @@ def _split_resource_id(value: str) -> tuple[str, str]:
     if "." not in candidate:
         raise MediaAccessDenied("media resource is not available")
     bare, signature = candidate.rsplit(".", 1)
-    if not bare.startswith("media_") or not signature:
+    # Format gate BEFORE any caller can encode()/compare_digest() the parts:
+    # a public URL path may carry non-ASCII bytes (GET /v1/media/media_中文.sig
+    # → UnicodeEncodeError, a non-ASCII signature → TypeError), which would
+    # surface as a 500 instead of the uniform 403. Ids are always
+    # "media_" + urlsafe-ascii + "." + 24 hex chars.
+    if (
+        not bare.startswith("media_")
+        or not signature
+        or not bare.isascii()
+        or not signature.isascii()
+        or len(bare) > 128
+        or len(signature) > 64
+    ):
         raise MediaAccessDenied("media resource is not available")
     return bare, signature
 
