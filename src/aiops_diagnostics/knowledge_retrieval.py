@@ -656,15 +656,16 @@ class KbServiceClient:
 
         # RAGFlow can briefly report an existing video document as code=102
         # while its document index settles. Retry only that video-not-found
-        # signal once; real missing media still ends as 404.
-        attempts = 2 if grant.kind == "video" else 1
+        # signal with bounded exponential backoff; real missing media still
+        # ends as 404 after the budget is exhausted.
+        attempts = 6 if grant.kind == "video" else 1
         for attempt in range(attempts):
             try:
                 return fetch_once()
             except MediaNotFound:
                 if attempt + 1 == attempts:
                     raise
-                time.sleep(0.25)
+                time.sleep(0.25 * (2**attempt))
         raise AssertionError("media fetch retry loop did not return")
 
 
