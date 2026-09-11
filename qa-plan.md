@@ -579,6 +579,24 @@ ScopeContext（UPMS/Dis）行为由 T1-T3 既有真实验收线覆盖。
 - 清理：删临时知识库、停用 canary 智能体、删会话；租户映射复用不删（canary 纪律）。
 - 结果：BLOCKED（2026-09-10）。原因：120 KB 栈停机（人工决策点未落地）；不得把本地 fake 结果写成业务验收通过。
 
+### P0-FIX-01 媒体错误包、MIME 与空工具请求回归
+
+- 环境：AI-Ops 本地 Python 3.13，临时 SQLite/TestClient，fake kb-service 与脚本化 Codex session。
+- 前置条件：媒体签名器、视频/图片授权对象和 QA harness 可用。
+- 有序动作：回放 HTTP 200 `code=102` 媒体错误包；回放上游忽略 Range 的完整视频；回放 JPEG 魔数但声明 PNG 的图片；回放空 `tool_requests` 的无命中与依赖不可用场景。
+- 预期结果：错误包映射为 `MediaNotFound`；Range 返回正确 206/416 和完整对象范围；响应 MIME 按字节校正；空工具请求不再产生 `QA_FAILED`，而是交付 `not_found`/`unavailable` 文本。
+- 清理：释放 fake 与临时 run 目录。
+- 结果：PASS（本分支，pytest 相关媒体/QA 测试与全量回归）。
+
+### P0-FIX-02 真实 36 媒体回归
+
+- 环境：移动云 36，公网 `api.qumall.qushiyun.com/v1/*`，真实 kb-service/RAGFlow 与 `aiops-canary` 租户。
+- 前置条件：修复版本已部署，视频/图片文档解析状态为 DONE。
+- 有序动作：重新提问获取新签名 URL；验证视频整段、`Range: bytes=0-1023`、不可满足 Range、伪造/过期 URL；验证图片字节与 MIME；分别注入 KB 不可用和无命中。
+- 预期结果：真实视频 200/206/416、图片 200 且 MIME 与字节一致；错误包不再以 200 媒体返回；无命中/不可用均保留文本并返回对应检索状态。
+- 清理：恢复 kb-service、删除临时会话/知识库，保留脱敏日志。
+- 结果：待部署后复测。
+
 ## 后台智能体管理与草稿调试 QA 计划（T5/#171，接口级验收）
 
 > 范围决定（2026-09-10，业务方）：qumall-admin 页面/菜单/角色接线与 Java 管理

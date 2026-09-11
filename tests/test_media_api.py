@@ -20,6 +20,7 @@ from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_store import GatewayStore
 from aiops_diagnostics.knowledge_retrieval import (
     KbServiceClient,
+    KnowledgeSearchUnavailable,
     MediaGrant,
     MediaNotFound,
     MediaProxy,
@@ -301,6 +302,91 @@ def test_kb_client_fetch_media_maps_missing_and_unavailable(monkeypatch) -> None
         assert type(exc).__name__ == "KnowledgeSearchUnavailable"
     else:
         raise AssertionError("transport failure must not be swallowed")
+
+
+def test_kb_client_maps_http_200_business_error_body_to_not_found(monkeypatch) -> None:
+    """RAGFlow can return document-not-found as HTTP 200 JSON."""
+    client = KbServiceClient("http://kb.local", tenant_id="tenant-a")
+    grant = MediaGrant(
+        resource_id="media_x",
+        tenant_id="tenant-a",
+        agent_version="agent-v1",
+        session_id=None,
+        knowledge_base_id="kb-1",
+        document_id="doc-1",
+        chunk_id=None,
+        backend_id="doc-1",
+        kind="video",
+        mime_type="video/mp4",
+        title="video.mp4",
+        reference_id="doc-1",
+        expires_at=None,  # type: ignore[arg-type]
+    )
+
+    class _Response:
+        status = 200
+
+        def read(self) -> bytes:
+            return b'{"code":102,"message":"document not found"}\n'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(
+        "aiops_diagnostics.knowledge_retrieval.urllib.request.urlopen",
+        lambda request, timeout=None: _Response(),
+    )
+    try:
+        client.fetch_media(grant)
+    except MediaNotFound:
+        pass
+    else:
+        raise AssertionError("HTTP 200 business error must map to MediaNotFound")
+
+
+def test_kb_client_maps_http_200_unknown_business_error_to_unavailable(monkeypatch) -> None:
+    client = KbServiceClient("http://kb.local", tenant_id="tenant-a")
+    grant = MediaGrant(
+        resource_id="media_x",
+        tenant_id="tenant-a",
+        agent_version="agent-v1",
+        session_id=None,
+        knowledge_base_id="kb-1",
+        document_id="doc-1",
+        chunk_id=None,
+        backend_id="doc-1",
+        kind="video",
+        mime_type="video/mp4",
+        title="video.mp4",
+        reference_id="doc-1",
+        expires_at=None,  # type: ignore[arg-type]
+    )
+
+    class _Response:
+        status = 200
+
+        def read(self) -> bytes:
+            return b'{"code":500,"message":"upstream unavailable"}\n'
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(
+        "aiops_diagnostics.knowledge_retrieval.urllib.request.urlopen",
+        lambda request, timeout=None: _Response(),
+    )
+    try:
+        client.fetch_media(grant)
+    except KnowledgeSearchUnavailable:
+        pass
+    else:
+        raise AssertionError("unknown HTTP 200 business error must be unavailable")
 
 
 def test_runtime_serve_media_rechecks_published_agent_liveness(tmp_path: Path) -> None:

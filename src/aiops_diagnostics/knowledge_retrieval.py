@@ -54,6 +54,41 @@ class MediaRangeError(ValueError):
     """A Range header is malformed or cannot be served."""
 
 
+def _raise_for_media_error_body(body: bytes) -> None:
+    """Map RAGFlow's HTTP-200 JSON error envelope to media exceptions."""
+    candidate = body.lstrip()
+    if not candidate.startswith(b"{"):
+        return
+    try:
+        payload = json.loads(candidate.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        return
+    if not isinstance(payload, dict) or "code" not in payload:
+        return
+    code = str(payload.get("code") or "")
+    if code in {"", "0"}:
+        return
+    message = str(payload.get("message") or payload.get("msg") or "").strip()
+    if code == "102" or "not found" in message.lower():
+        raise MediaNotFound(message or "media not found")
+    raise KnowledgeSearchUnavailable("kb-service returned a media error")
+
+
+def _sniff_media_mime(body: bytes, declared: str) -> str:
+    """Prefer the actual media signature over a stale document extension."""
+    if body.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if body.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if len(body) >= 12 and body[:4] == b"RIFF" and body[8:12] == b"WEBP":
+        return "image/webp"
+    if body.startswith(b"\x1a\x45\xdf\xa3"):
+        return "video/webm"
+    if len(body) >= 8 and body[4:8] == b"ftyp":
+        return "video/mp4"
+    return declared
+
+
 class KnowledgeSearchClient(Protocol):
     def search(self, knowledge_base_ids: tuple[str, ...], question: str, top_k: int) -> Any: ...
 
@@ -273,7 +308,7 @@ class MediaProxy:
         common = {
             "Accept-Ranges": "bytes",
             "Cache-Control": "private, no-store",
-            "Content-Type": grant.mime_type,
+            "Content-Type": _sniff_media_mime(body, grant.mime_type),
             "Content-Disposition": "inline",
         }
         if not range_header:
@@ -324,32 +359,7 @@ class MediaProxy:
             return MediaResponse(404, {"Cache-Control": "no-store"}, b"")
         if not isinstance(body, bytes):
             raise TypeError("media fetcher must return bytes")
-        common = {
-            "Accept-Ranges": "bytes",
-            "Cache-Control": "private, no-store",
-            "Content-Type": grant.mime_type,
-            "Content-Disposition": "inline",
-        }
-        if not range_header:
-            return MediaResponse(200, {**common, "Content-Length": str(len(body))}, body)
-        try:
-            start, end = parse_byte_range(range_header, len(body))
-        except MediaRangeError:
-            return MediaResponse(
-                416,
-                {**common, "Content-Range": f"bytes */{len(body)}", "Content-Length": "0"},
-                b"",
-            )
-        chunk = body[start : end + 1]
-        return MediaResponse(
-            206,
-            {
-                **common,
-                "Content-Length": str(len(chunk)),
-                "Content-Range": f"bytes {start}-{end}/{len(body)}",
-            },
-            chunk,
-        )
+        return self._response_for(grant, body, range_header)
 
     def serve_signed(
         self,
@@ -381,8 +391,17 @@ class MediaProxy:
             if not isinstance(fetched, bytes):
                 raise TypeError("media fetcher must return bytes")
             if _accepts_range(self.fetch):
-                # The fetcher already sliced: shape the response around the
-                # slice and the grant, without re-slicing locally.
+                # Some kb-service versions ignore Range and return the full
+                # object. Detect that shape and slice locally; a range-aware
+                # upstream still gets the lighter response path.
+                if not range_header:
+                    return self._response_for(grant, fetched, None)
+                try:
+                    start, end = parse_byte_range(range_header, len(fetched))
+                except MediaRangeError:
+                    return self._response_for(grant, fetched, range_header)
+                if len(fetched) != end - start + 1:
+                    return self._response_for(grant, fetched, range_header)
                 return _ranged_response(grant, fetched, range_header)
             return self._response_for(grant, fetched, range_header)
         except MediaAccessDenied:
@@ -411,7 +430,7 @@ def _ranged_response(grant: MediaGrant, fetched: bytes, range_header: str | None
     common = {
         "Accept-Ranges": "bytes",
         "Cache-Control": "private, no-store",
-        "Content-Type": grant.mime_type,
+        "Content-Type": _sniff_media_mime(fetched, grant.mime_type),
         "Content-Disposition": "inline",
     }
     if not range_header:
@@ -620,7 +639,11 @@ class KbServiceClient:
             with urllib.request.urlopen(request, timeout=self.timeout) as response:
                 if response.status == 404:
                     raise MediaNotFound(grant.backend_id)
-                return response.read()
+                body = response.read()
+                _raise_for_media_error_body(body)
+                return body
+        except MediaNotFound:
+            raise
         except urllib.error.HTTPError as exc:
             if exc.code == 404:
                 raise MediaNotFound(grant.backend_id) from exc

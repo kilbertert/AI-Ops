@@ -135,6 +135,13 @@ def _tool_request(query: str = "拔枪步骤") -> str:
     )
 
 
+def _empty_tool_request() -> str:
+    return json.dumps(
+        {"kind": "tool_requests", "tool_requests": [], "answer": None},
+        ensure_ascii=False,
+    )
+
+
 def _text_block(text: str) -> dict[str, Any]:
     return {"kind": "text", "text": text, "resource_id": "", "reference_id": "", "title": ""}
 
@@ -310,6 +317,37 @@ def test_kb_unavailable_still_delivers_text(tmp_path: Path) -> None:
     )
     result = _run(tmp_path, session, client)
     assert result["retrieval_status"] == "unavailable"
+    assert result["blocks"][0]["kind"] == "text"
+
+
+def test_empty_tool_request_uses_question_for_bounded_search(tmp_path: Path) -> None:
+    client = _SearchClient([[dict(_IMAGE_CHUNK)]])
+    session = _FakeSession(
+        [
+            _empty_tool_request(),
+            _answer([_text_block("依据知识库的回答。")], "found"),
+        ]
+    )
+    result = _run(tmp_path, session, client, question="怎么拔枪")
+    assert result["retrieval_status"] == "found"
+    assert client.calls == [(("kb-a",), "怎么拔枪", 5)]
+
+
+def test_empty_tool_request_after_unavailable_returns_unavailable_text(tmp_path: Path) -> None:
+    client = _SearchClient([KnowledgeSearchUnavailable("down")])
+    session = _FakeSession([_empty_tool_request()])
+    result = _run(tmp_path, session, client, question="知识库故障时怎么办")
+    assert result["retrieval_status"] == "unavailable"
+    assert result["searches"] == 1
+    assert result["blocks"][0]["kind"] == "text"
+
+
+def test_empty_tool_request_after_not_found_returns_not_found_text(tmp_path: Path) -> None:
+    client = _SearchClient([[]])
+    session = _FakeSession([_empty_tool_request()])
+    result = _run(tmp_path, session, client, question="不存在的业务问题")
+    assert result["retrieval_status"] == "not_found"
+    assert result["searches"] == 1
     assert result["blocks"][0]["kind"] == "text"
 
 
