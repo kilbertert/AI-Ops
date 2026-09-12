@@ -323,3 +323,47 @@ def test_assistant_text_embedded_unowned_order_falls_through(tmp_path: Path) -> 
     body = resp.json()
     assert body["type"] == "qa"
     assert runtime.calls == []  # no diagnosis started
+
+
+def test_assistant_responses_echo_resolved_language(tmp_path: Path) -> None:
+    """Every assistant entry echoes the Accept-Language resolution (L1/#201)."""
+    client, _ = _client(tmp_path)
+
+    faq = client.post(
+        "/v1/assistant/questions",
+        json={"question": "无法拔枪怎么办"},
+        headers={**_headers(), "Accept-Language": "en-US,en;q=0.9"},
+    )
+    assert faq.status_code == 200
+    assert faq.json()["type"] == "faq"
+    assert faq.json()["language"] == "en"
+
+    qa = client.post(
+        "/v1/assistant/questions",
+        json={"question": "为什么我的车充满电之后续航里程总是比官方标注少这么多"},
+        headers={**_headers(), "Accept-Language": "pt-BR"},
+    )
+    assert qa.status_code == 202
+    assert qa.json()["type"] == "qa"
+    assert qa.json()["language"] == "pt"
+
+    poll = client.get(
+        f"/v1/assistant/questions/{qa.json()['qa_id']}",
+        headers={**_headers(), "Accept-Language": "fr"},
+    )
+    assert poll.status_code == 200
+    assert poll.json()["language"] == "fr"
+
+    listed = client.get("/v1/assistant/questions", headers=_headers())
+    assert listed.status_code == 200
+    assert listed.json()["type"] == "qa_list"
+    assert listed.json()["language"] == "zh"
+
+    diagnosis = client.post(
+        "/v1/assistant/questions",
+        json={"question": "为什么充电突然停了", "order_no": "2096164064667852801"},
+        headers={**_headers(), "Accept-Language": "de"},
+    )
+    assert diagnosis.status_code == 202
+    assert diagnosis.json()["type"] == "diagnosis"
+    assert diagnosis.json()["language"] == "de"

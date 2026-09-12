@@ -65,6 +65,7 @@ from aiops_diagnostics.gateway_store import (
     GatewayStore,
     RunNotFoundError,
 )
+from aiops_diagnostics.i18n import resolve_language
 from aiops_diagnostics.metrics_store import MetricsValidationError
 from aiops_diagnostics.scope_context import ScopeContext, ScopeError
 from aiops_diagnostics.sources import SourceError
@@ -249,6 +250,19 @@ class StandardAPIError(RuntimeError):
         self.code = code
         self.message = message
         self.retryable = retryable
+
+
+def request_language(
+    accept_language: Annotated[str | None, Header(alias="Accept-Language")] = None,
+) -> str:
+    """Resolve the presentation language for one request (L1/#201).
+
+    A separate dependency instead of widening the identity tuple: language is
+    orthogonal to authentication and platform resolution, and conversation
+    endpoints share ``assistant_identity`` without needing it. Presentation
+    only — never part of auth, routing, or the incident manifest.
+    """
+    return resolve_language(accept_language)
 
 
 def create_gateway_app(
@@ -553,19 +567,27 @@ def create_gateway_app(
         }
 
     @app.get("/v1/faq/recommendations")
-    def faq_recommendations(identity: tuple[ScopeContext, Any] = Depends(faq_identity)):  # noqa: B008
+    def faq_recommendations(
+        identity: tuple[ScopeContext, Any] = Depends(faq_identity),  # noqa: B008
+        language: str = Depends(request_language),  # noqa: B008
+    ):
         _, decision = identity
         return {
             **decision.public(),
+            "language": language,
             "faq_version": context.faq_catalog.version,
             "recommendations": context.faq_catalog.recommendations(decision.platform),
         }
 
     @app.get("/v1/faq/catalog")
-    def faq_catalog(identity: tuple[ScopeContext, Any] = Depends(faq_identity)):  # noqa: B008
+    def faq_catalog(
+        identity: tuple[ScopeContext, Any] = Depends(faq_identity),  # noqa: B008
+        language: str = Depends(request_language),  # noqa: B008
+    ):
         _, decision = identity
         return {
             **decision.public(),
+            "language": language,
             "faq_version": context.faq_catalog.version,
             "entries": context.faq_catalog.catalog(decision.platform),
         }
@@ -574,6 +596,7 @@ def create_gateway_app(
     def faq_answer(
         payload: FAQAnswerRequest,
         identity: tuple[ScopeContext, Any] = Depends(faq_identity),  # noqa: B008
+        language: str = Depends(request_language),  # noqa: B008
     ):
         _, decision = identity
         try:
@@ -584,6 +607,7 @@ def create_gateway_app(
             ) from exc
         return {
             **decision.public(),
+            "language": language,
             "faq_version": context.faq_catalog.version,
             "question_id": answer["question_id"],
             "question": answer["question"],
@@ -595,6 +619,7 @@ def create_gateway_app(
     def assistant_questions(
         payload: AssistantQuestionRequest,
         identity: tuple[ScopeContext, Any] = Depends(assistant_identity),  # noqa: B008
+        language: str = Depends(request_language),  # noqa: B008
     ) -> dict[str, Any]:
         """Unified assistant entry point with optional order_no (T2/#152).
 
@@ -648,7 +673,10 @@ def create_gateway_app(
                     retryable=True,
                 ) from exc
             base = _standard_diagnosis_response(diagnosis)
-            return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content={**base, "type": "diagnosis"})
+            return JSONResponse(
+                status_code=status.HTTP_202_ACCEPTED,
+                content={**base, "type": "diagnosis", "language": language},
+            )
 
         # Route 1b: text-embedded order number → diagnosis if authorizable.
         # The caller did not pass order_no explicitly, but the question text
@@ -692,6 +720,7 @@ def create_gateway_app(
                         content={
                             **base,
                             "type": "diagnosis",
+                            "language": language,
                             "order_no_extracted": embedded,
                             **({"conversation_id": conversation["conversation_id"]} if conversation else {}),
                         },
@@ -737,6 +766,7 @@ def create_gateway_app(
                         content={
                             **base,
                             "type": "diagnosis",
+                            "language": language,
                             "order_no_from_context": active_order,
                             "conversation_id": conversation["conversation_id"],
                         },
@@ -757,6 +787,7 @@ def create_gateway_app(
             return {
                 **decision.public(),
                 "type": "faq",
+                "language": language,
                 "faq_version": context.faq_catalog.version,
                 "question_id": answer["question_id"],
                 "question": answer["question"],
@@ -789,6 +820,7 @@ def create_gateway_app(
             status_code=status.HTTP_202_ACCEPTED,
             content={
                 "type": "qa",
+                "language": language,
                 "qa_id": qa["qa_id"],
                 "question": qa["question"],
                 "status": qa["status"],
@@ -807,6 +839,7 @@ def create_gateway_app(
     def get_assistant_question(
         qa_id: str,
         identity: tuple[ScopeContext, Any] = Depends(assistant_identity),  # noqa: B008
+        language: str = Depends(request_language),  # noqa: B008
     ) -> dict[str, Any]:
         caller, _ = identity
         try:
@@ -826,6 +859,7 @@ def create_gateway_app(
             )
         return {
             "type": "qa",
+            "language": language,
             "qa_id": qa["qa_id"],
             "question": qa["question"],
             "status": qa["status"],
@@ -837,6 +871,7 @@ def create_gateway_app(
     @app.get("/v1/assistant/questions")
     def list_assistant_questions(
         identity: tuple[ScopeContext, Any] = Depends(assistant_identity),  # noqa: B008
+        language: str = Depends(request_language),  # noqa: B008
         limit: Annotated[int, Query(ge=1, le=200)] = 50,
     ) -> dict[str, Any]:
         """List this caller's general-question history (T5/#155).
@@ -856,6 +891,7 @@ def create_gateway_app(
             ) from exc
         return {
             "type": "qa_list",
+            "language": language,
             "count": len(questions),
             "questions": questions,
         }

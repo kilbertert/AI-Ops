@@ -2,6 +2,15 @@
 
 合成 fixture 可以验证确定性行为，但不能证明生产故障结论准确。所有“通过”都必须说明验证范围，不能把自动化回放写成工程师确认的业务验收。
 
+## 助手输出国际化 L1：Accept-Language 解析（2026-09-12）
+
+#201（PRD #200 的 L1 切片）交付语言解析横切。本轮为离线实现验证，真实环境五语实测按计划属于 #204，未完成前不宣称业务验收：
+
+- `tests/test_i18n.py` 28 项解析矩阵：q 值排序、区域/文字折叠（`en-US`/`pt-BR`/`zh-Hans-CN`）、大小写、同权重先出现优先、`q=0` 排除、`*` 通配、不支持语言（ja/ko）、非法权重（`q=abc`/越界）与缺失/空头全部回退 `zh`。
+- `tests/test_faq_gateway_api.py`、`tests/test_assistant_api.py` 新增端点回显测试：faq 三端点与 assistant 五条返回路径（faq 短路 200、qa 202、qa 轮询、qa 列表、diagnosis 202）均回显解析后的 `language`；无头回退 `zh`。
+- 全量确定性检查（与 `ci.yml` Linux 检查项一致）：`ruff check` 0 违规、`ruff format --check` 通过、`pytest` 660 项全部通过、`compileall` 通过。
+- 未完成业务验收：本切片未触碰多语言内容与模型提示词，也没有生产环境调用；`Accept-Language` 的真实 BFF 透传与多语言内容正确性待 #202–#204 交付后在真实环境验证。
+
 ## C/B 固定问答接口验证（2026-09-04）
 
 本轮实现使用真实 UPMS 只读数据库结构和离线 HTTP fake 验证平台边界：

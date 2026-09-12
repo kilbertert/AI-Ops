@@ -117,3 +117,36 @@ def test_faq_api_ignores_untrusted_platform_query_parameter(tmp_path: Path) -> N
         )
     assert response.status_code == 200
     assert response.json()["platform"] == "consumer"
+
+
+def test_faq_responses_echo_resolved_language(tmp_path: Path) -> None:
+    """FAQ read endpoints resolve Accept-Language and echo it (L1/#201)."""
+    with _client(tmp_path) as client:
+        recommendations = client.get(
+            "/v1/faq/recommendations",
+            headers={
+                "Authorization": "Bearer service",
+                "X-Business-Entry": "consumer",
+                "Accept-Language": "en-US,en;q=0.9",
+            },
+        )
+        catalog = client.get(
+            "/v1/faq/catalog",
+            headers={
+                "Authorization": "Bearer service",
+                "X-Business-Entry": "consumer",
+                "Accept-Language": "fr",
+            },
+        )
+        answer = client.post(
+            "/v1/faq/answer",
+            headers={"Authorization": "Bearer service", "X-Business-Entry": "consumer"},
+            json={"question_id": "consumer.faq.q001"},
+        )
+    assert recommendations.status_code == 200
+    assert recommendations.json()["language"] == "en"
+    assert catalog.status_code == 200
+    assert catalog.json()["language"] == "fr"
+    # A missing Accept-Language header falls back to the default language.
+    assert answer.status_code == 200
+    assert answer.json()["language"] == "zh"
