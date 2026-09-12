@@ -290,6 +290,19 @@ class FAQCatalog:
             "format": entry["format"],
         }
 
+    def title_variants(self, platform: str, question_id: str) -> tuple[str, ...]:
+        """All localized title variants of one entry: zh authoritative first.
+
+        Used by the deterministic FAQ matcher so a question in any supported
+        language can hit the same entry (L3/#203).
+        """
+        if question_id not in self._entries[platform]:
+            raise FAQError("FAQ question was not found")
+        entry = self._entries[platform][question_id]
+        variants = [entry["question"]]
+        variants.extend(fields["question"] for fields in self._i18n[platform].get(question_id, {}).values())
+        return tuple(variants)
+
     def recommendations(self, platform: str, language: str | None = None) -> list[dict[str, Any]]:
         return [
             {

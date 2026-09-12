@@ -384,3 +384,37 @@ def test_assistant_faq_branch_returns_localized_answer(tmp_path: Path) -> None:
     assert body["question_id"] == "consumer.faq.q010"
     assert body["question"] == "Connector Stuck? Emergency Cable Release Guide"
     assert body["answer"].startswith("Do NOT yank it")
+
+
+def test_assistant_faq_shortcircuit_matches_multilingual_questions(tmp_path: Path) -> None:
+    """Questions in any supported language hit the same entry as zh (L3/#203)."""
+    catalog = FAQCatalog.bundled()
+    zh_q011 = catalog.answer("consumer", "consumer.faq.q011")["question"]
+    cases = {
+        "Why did charging stop unexpectedly?": "consumer.faq.q011",
+        "Warum hat der Ladevorgang unerwartet gestoppt?": "consumer.faq.q011",
+        "Pourquoi la charge s'est-elle arrêtée inopinément ?": "consumer.faq.q011",
+        "¿Por qué se detuvo la recarga inesperadamente?": "consumer.faq.q011",
+        "Por que o carregamento parou inesperadamente?": "consumer.faq.q011",
+        # zh full question still hits via the authoritative title.
+        zh_q011: "consumer.faq.q011",
+    }
+    for question, expected_qid in cases.items():
+        client, runtime = _client(tmp_path)
+        resp = client.post("/v1/assistant/questions", json={"question": question}, headers=_headers())
+        assert resp.status_code == 200, question
+        body = resp.json()
+        assert body["type"] == "faq", question
+        assert body["question_id"] == expected_qid, question
+        assert runtime.calls == []
+        client.close()
+
+
+def test_assistant_faq_shortcircuit_ignores_generic_single_tokens(tmp_path: Path) -> None:
+    """A lone generic Latin token must not trigger a FAQ hit (L3/#203)."""
+    client, runtime = _client(tmp_path)
+    for question in ("charging", "Charger", "refund"):
+        resp = client.post("/v1/assistant/questions", json={"question": question}, headers=_headers())
+        assert resp.status_code == 202, question
+        assert resp.json()["type"] == "qa", question
+    assert runtime.calls == []
