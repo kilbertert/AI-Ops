@@ -9,6 +9,7 @@ from typing import Annotated
 import typer
 from rich.console import Console
 
+from aiops_diagnostics.admin_cli import admin_app
 from aiops_diagnostics.agent_contracts import (
     AgentDiagnosis,
     DiagnosisStatus,
@@ -70,6 +71,7 @@ app = typer.Typer(
 console = Console()
 _CONFIG_FILE_OVERRIDE: Path | None = None
 app.add_typer(remote_app, name="remote")
+app.add_typer(admin_app, name="admin")
 
 
 class DiagnoseMode(StrEnum):

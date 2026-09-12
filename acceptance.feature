@@ -678,3 +678,43 @@ Feature: 41 环境 Gateway 切换
       When 使用无效 X-Third-Session 调用 GET /v1/faq/recommendations
       Then 返回 HTTP 401
       And 错误码为 INVALID_ACCESS_TOKEN
+
+Feature: 环境清单驱动的 Agent 收敛
+
+  Rule: aiops admin reconcile 走生产代码路径幂等收敛
+
+    Scenario: 首次按清单创建并发布 agent
+      Given 一个包含已发布客服 agent 的环境清单
+      When 管理员运行 aiops admin reconcile
+      Then agent 通过 AgentManager 创建并发布
+      And 发布前对 kb-service 执行知识库活性校验
+      And created_by 与 published_by 记录为 aiops-admin
+
+    Scenario: 重复执行相同清单是幂等无操作
+      Given 清单已成功收敛一次
+      When 管理员再次运行 aiops admin reconcile
+      Then 所有 agent 报告 unchanged
+      And 不产生新的发布版本
+
+    Scenario: 配置漂移通过 fork/update/publish 收敛
+      Given 已发布 agent 的 prompt 与清单不一致
+      When 管理员运行 aiops admin reconcile
+      Then agent 产生新的不可变版本且内容与清单一致
+
+    Scenario: 非白名单模型在任何写入前失败
+      Given 清单中的模型不在 Settings 允许列表
+      When 管理员运行 aiops admin reconcile
+      Then 命令以错误退出
+      And 数据库未发生任何变更
+
+    Scenario: prune 仅禁用清单租户内的多余 agent
+      Given 清单租户存在清单外 agent 且另一租户也存在 agent
+      When 管理员运行 aiops admin reconcile --prune
+      Then 清单租户的清单外已发布 agent 被禁用
+      And 清单外租户的 agent 保持不变
+
+    Scenario: 预演模式零写入
+      Given 尚未收敛的环境清单
+      When 管理员运行 aiops admin reconcile --dry-run
+      Then 输出与实收敛相同的计划报告
+      And gateway 数据库零变更

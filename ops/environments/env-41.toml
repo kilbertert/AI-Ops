@@ -1,0 +1,35 @@
+# 41 环境（api.mall.qushiyun.com，47.97.160.153）已发布客服 agent 清单。
+# 收敛命令（41 on-box）：
+#   aiops --config /etc/aiops-41/production.env admin reconcile \
+#     ops/environments/env-41.toml --kb-url http://127.0.0.1:29380
+# 首次执行应全部报告 unchanged —— 出现 drift 说明清单转写有误，先修清单再收敛。
+# 本文件从 41 gateway.db（2026-09-13）机械转写；schema 见 ops/README.md。
+
+[[agents]]
+tenant_id = "1783022023241633792"
+name = "canary-客服"
+description = "P0 媒体闭环 canary"
+agent_type = "customer"
+prompt = "你是新能源充电业务的客服智能体。用简体中文回答用户关于充电桩使用、充电业务、宣传材料的问题。必须引用知识库内容回答。"
+knowledge_base_ids = ["4f4bc674ad8911f1ae704bfc8c544ea6"]
+model = "qwen3.8-max-0902"
+output_contract = "blocks-v1"
+opening_questions = ["新加坡无人电动巴士是什么？"]
+quick_commands = ["充电桩怎么操作"]
+
+[[agents]]
+tenant_id = "1942105476598861824"
+name = "canary-客服"
+description = "P0 媒体闭环 canary"
+agent_type = "customer"
+prompt = "你是新能源充电业务的客服智能体。用简体中文回答用户关于充电桩使用、充电业务、宣传材料的问题。必须引用知识库内容回答。"
+knowledge_base_ids = ["17e946e2aede11f18637d95f7710e3a3"]
+model = "qwen3.8-max-0902"
+output_contract = "blocks-v1"
+opening_questions = ["新加坡无人电动巴士是什么？"]
+quick_commands = ["充电桩怎么操作"]
+
+[kb]
+# 可选：收敛 agent 前先对下列租户执行 kb-service POST /kb/tenants/repair
+# （补齐 embedding/chat/rerank/vision 默认模型，幂等；需 --kb-url）
+repair_tenant_ids = ["1783022023241633792", "1942105476598861824"]
