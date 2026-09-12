@@ -747,3 +747,13 @@ ScopeContext（UPMS/Dis）行为由 T1-T3 既有真实验收线覆盖。
   `cloud_charging_pile`（及必要 UPMS 库）授予
   `SELECT/SHOW VIEW` 的专用账号，并补齐或明确接受协议报文缺口后，才能评估切换。
 - 清理：临时 SSH 转发已关闭；41 主机未发生服务或配置变更。
+
+## 环境 Agent 收敛 QA（ADM）
+
+| ID | 环境 | 前置 | 操作 | 预期结果 | 清理 |
+|---|---|---|---|---|---|
+| ADM-01 | 本地 dev | tmp gateway.db + 假 KB resolver | `uv run pytest tests/test_agent_manifest.py -q` | 10 项全过（create+publish/幂等/漂移 v2/draft/白名单前置失败/manual-action/prune 作用域/disabled/dry-run） | tmp_path 自动清理 |
+| ADM-02 | 本地 dev | AIOPS_HOME 覆盖 + tmp 清单 + --db | `aiops --config <tmp> admin reconcile <manifest> --db <tmp>` 连续两次 | 首次 `created`，二次全 `unchanged`；JSON 报告可解析 | tmp_path 自动清理 |
+| ADM-03 | 本地 dev | 清单模型不在白名单 | 同上（模型写 gpt-4o） | exit 2 + “不在白名单”，gateway.db 零写入 | 同上 |
+| ADM-04 | 41 实机 | /etc/aiops-41/production.env + ops/environments/env-41.toml | `aiops --config /etc/aiops-41/production.env admin reconcile ops/environments/env-41.toml --kb-url http://127.0.0.1:29380`（先 `--dry-run` 再实跑；跑前 `cp gateway.db gateway.db.bak-<date>`） | 首跑全 `unchanged`（转写回环验证；出现 `updated` = 清单转写有误，停手修清单）；KB 活性校验真实触达 36 kb-service | 保留服务与备份 |
+| ADM-05 | 41 实机 | ADM-04 通过 | 修改清单 prompt（实验性漂移）后再 reconcile | 报告 `updated` 且产生 v2；确认后把清单改回并再收敛恢复 | 用备份或再次收敛恢复 |

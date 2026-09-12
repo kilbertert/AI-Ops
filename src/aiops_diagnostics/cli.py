@@ -9,6 +9,7 @@ from typing import Annotated
 import typer
 from rich.console import Console
 
+from aiops_diagnostics.admin_cli import admin_app
 from aiops_diagnostics.agent_contracts import (
     AgentDiagnosis,
     DiagnosisStatus,
@@ -33,7 +34,6 @@ from aiops_diagnostics.config import (
     selected_config_file,
     validate_key_slot_name,
 )
-from aiops_diagnostics.admin_cli import admin_app
 from aiops_diagnostics.console_encoding import configure_windows_stdio
 from aiops_diagnostics.engine import DiagnosticEngine
 from aiops_diagnostics.gateway_cli import remote_app
