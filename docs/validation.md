@@ -51,6 +51,11 @@
 - **客服智能体**：41 Gateway 数据库原为空，无法进入 `blocks[]` 媒体路径。已在备份后
   迁入 36 上同租户的已发布客服智能体及 3 个版本快照；不复制 RAGFlow 数据，不改变 36
   数据库。41 当前租户绑定复用 36 的 KB 隧道。
+- **同 key 核对**：RAGFlow `aiops-canary` 租户的 `Tongyi-Qianwen/maas` 实例默认
+  embedding 为 `text-embedding-v3`，其 API key 指纹与 41 `canary-dashscope` key
+  一致。2026-09-13 当前时间直调该 key 的 `/embeddings` 与 `/chat/completions` 均返回
+  百炼 `400 Arrearage`；因此不是 41 与 RAGFlow 使用了两份 key，而是该 key 所属
+  百炼账户/项目的上游可用状态或授权尚未恢复。
 - **自由 QA 历史结果与当前状态**：配置切换后曾使用 41 H5 会话取得
   `202→completed` 且 `result.text` 非空的结果；但 2026-09-13 复跑时上游已返回百炼
   `400 code=Arrearage`，两个非 FAQ 问题均以 `QA_FAILED` 结束。当前不能把历史成功结果当作

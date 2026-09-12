@@ -798,7 +798,7 @@ ScopeContext（UPMS/Dis）行为由 T1-T3 既有真实验收线覆盖。
 - 有序动作：启用 41 `canary-dashscope` 默认 provider；迁入已发布客服智能体；使用新 H5 会话发起自由 QA 和媒体问题，轮询至终态。
 - 预期结果：自由 QA `202→completed`；媒体问题返回含 `blocks[]` 的检索结果，图片可下载、视频支持 `206/416`。
 - 清理：不保存会话；保留 41 provider/数据库备份；不改业务订单。
-- 结果：BLOCKED（2026-09-13 Asia/Shanghai）。自由 QA 与媒体问题均创建 `202`，但 RAGFlow 向量/模型调用真实返回百炼 `400 Arrearage`，终态 `QA_FAILED`，未生成媒体块。41 Gateway、KB 隧道和 `/healthz` 均正常；待恢复百炼账户或替换 embedding provider 后复跑媒体验收。
+- 结果：BLOCKED（2026-09-13 Asia/Shanghai）。自由 QA 与媒体问题均创建 `202`，但 RAGFlow 向量/模型调用真实返回百炼 `400 Arrearage`，终态 `QA_FAILED`，未生成媒体块。已核对 RAGFlow `aiops-canary` 的 `Tongyi-Qianwen/maas` 实例 key 指纹与 41 `canary-dashscope` 一致，排除 key 不一致；待上游账户/项目恢复或替换 embedding provider 后复跑媒体验收。
 
 ### CUTOVER-41-07 多语言实现接入与真实验收
 
