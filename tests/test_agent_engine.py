@@ -362,3 +362,72 @@ def test_parse_agent_turn_accepts_flattened_diagnosis_in_fence_with_prose() -> N
     turn = _parse_agent_turn(text)
     assert turn.kind == "diagnosis"
     assert turn.diagnosis.confidence.value == "high"
+
+
+def test_parse_agent_turn_accepts_identity_echo_on_tool_requests() -> None:
+    """Regression 2026-09-11 (canary-dashscope qwen3.8-max, diagnosis dx_70c4fb27):
+
+    A provider echoed incident_id/order_no/tenant_id (which are also
+    AgentDiagnosis fields) on a valid tool_requests turn. The strict parse
+    rejected it on extra keys and the wrap misread the echo as a flattened
+    diagnosis, failing with a misleading "diagnosis fields missing" error
+    three times until the run blocked. The echo must be ignored and the
+    requests honored.
+    """
+    from aiops_diagnostics.agent_engine import _parse_agent_turn
+
+    payload = {
+        "kind": "tool_requests",
+        "incident_id": "incident-abc123",
+        "order_no": "ORDER-1",
+        "tenant_id": None,
+        "tool_requests": [{"tool": "order_snapshot", "reason": "取证"}],
+    }
+    turn = _parse_agent_turn("```json\n" + json.dumps(payload, ensure_ascii=False) + "\n```")
+    assert turn.kind == "tool_requests"
+    assert len(turn.tool_requests) == 1
+    assert turn.tool_requests[0].tool.value == "order_snapshot"
+    assert turn.diagnosis is None
+
+
+def test_parse_agent_turn_recovers_requests_key_rename() -> None:
+    """Regression 2026-09-11: a provider named the array "requests" instead
+    of "tool_requests". Recover the payload instead of failing the turn."""
+    from aiops_diagnostics.agent_engine import _parse_agent_turn
+
+    payload = {
+        "kind": "tool_requests",
+        "requests": [{"tool": "order_snapshot", "reason": "取证"}],
+    }
+    turn = _parse_agent_turn(json.dumps(payload, ensure_ascii=False))
+    assert turn.kind == "tool_requests"
+    assert len(turn.tool_requests) == 1
+
+
+def test_parse_agent_turn_drops_interim_diagnosis_on_tool_requests() -> None:
+    """Regression 2026-09-11: a provider attached a status=blocked interim
+    diagnosis alongside valid tool_requests. The requests win; the note is
+    dropped instead of failing the turn (previously a value_error on
+    "tool_requests turn requires requests and no diagnosis")."""
+    from aiops_diagnostics.agent_engine import _parse_agent_turn
+
+    payload = {
+        "kind": "tool_requests",
+        "tool_requests": [{"tool": "order_snapshot", "reason": "取证"}],
+        "diagnosis": {**_diagnosis_payload(), "status": "blocked", "extra_note": "ignored"},
+    }
+    turn = _parse_agent_turn(json.dumps(payload, ensure_ascii=False))
+    assert turn.kind == "tool_requests"
+    assert len(turn.tool_requests) == 1
+    assert turn.diagnosis is None
+
+
+def test_parse_agent_turn_still_rejects_identity_echo_without_requests() -> None:
+    """Identity keys alone (no payload fields, no requests) are not a turn."""
+    from pydantic import ValidationError
+
+    from aiops_diagnostics.agent_engine import _parse_agent_turn
+
+    payload = {"kind": "tool_requests", "incident_id": "incident-abc123"}
+    with pytest.raises((ValidationError, ValueError)):
+        _parse_agent_turn(json.dumps(payload))

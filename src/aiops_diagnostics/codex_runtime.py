@@ -388,6 +388,20 @@ Distinguish absent data, blocked dependencies, and failed sources. A failed
 source limits confidence. Never claim that recalculation, refund, replay,
 resend, order modification, service restart, or another mutation was executed.
 
+The delivery contract is validated mechanically; deviations are rejected and
+cost a retry. Comply exactly:
+- tool_requests turn: {"kind": "tool_requests", "tool_requests": [...]} where
+  each entry is {"tool": "<name>", "reason": "..."} and the reason is at most
+  500 characters.
+- diagnosis turn: {"kind": "diagnosis", "diagnosis": {...}} where the inner
+  object carries every required field: schema_version "1.0", incident_id,
+  order_no, tenant_id, status, summary, root_cause, confidence, evidence_ids,
+  hypotheses, limitations, failed_sources, next_steps. Omitting any of them
+  invalidates the turn.
+- diagnosis.status MUST be exactly one of "diagnosed", "inconclusive",
+  "blocked" — no synonyms ("conclusive", "done", "resolved" are rejected).
+- diagnosis.confidence MUST be exactly one of "high", "medium", "low".
+
 Write every human-facing field in Simplified Chinese: summary, root_cause,
 each hypothesis title and explanation, and each next_steps entry. Keep order
 numbers, tenant IDs, field names, tool names, evidence IDs, and other code

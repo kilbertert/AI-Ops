@@ -749,3 +749,36 @@ S3 退役验收（公网入口 + 开机自启）：FAQ 200（28 条）、健康�
 结论：AI-Ops 媒体签名、图片回源、MIME 校正、文本降级和视频永久缺失的 404 映射均有
 真实证据；剩余阻塞是 36 知识库视频对象恢复、36 运维命令通道，以及 C7 管理身份，均不
 通过修改客户端渲染或放宽鉴权来规避。
+
+## 36 标准诊断链路修复验证（2026-09-12，PR #194）
+
+本轮在 36 生产网关用真实订单 `2094239732383256577` 与真实 C 端 thirdSession
+（所有者会话，未写入仓库）连续执行 6 次标准诊断，逐层验证修复：
+
+- **沙箱层修复前**（run-20260911T090050Z-d2c1d695-082c）：Codex 全部
+  exec_command 返回 `bwrap: loopback: Failed RTM_NEWADDR: Operation not
+  permitted`，模型无法读取 workspace，`tool_call_count=0`，三轮格式修复耗尽后
+  blocked。根因为 36 ECS `kernel.apparmor_restrict_unprivileged_userns=1`。
+- **沙箱层修复后**（run-20260911T144722Z-2c997ff0-b2f3）：模型正常读取
+  AGENTS.md/SOP/架构文档；但三轮合法 tool_requests turn 均被
+  `_wrap_unstructured_turn` 拒绝（身份回显 + `requests` 键名 + interim
+  diagnosis 三种真实偏差），`tool_call_count` 仍为 0。该 run 提供了全部三种
+  偏差的原始 rollout，直接转化为本 PR 的 4 个回归测试。
+- **解析层修复后**（run-20260912T010959Z-2c997ff0-3637）：6/6 证据源全部成功
+  （order_snapshot、gun_timeseries、comm_messages、device_snapshot、
+  fee_snapshot、known_runbook），其中 TDengine 两个源为 16041 隧道修复后首次
+  取证成功。最终 diagnosis turn 因 `status="conclusive"` 非法枚举（第 3 次
+  尝试，无修复机会）blocked。
+- **语义校验层**（run-20260912T013952Z-2c997ff0-afd7）：4 工具单批并发取证
+  成功后，校验器正确拒绝"假设未引用非 known_runbook 直接证据"与"声称执行禁止
+  业务变更动作"，修复 turn 已发出；随后供应商 400 Arrearage 断供，run 以
+  DIAGNOSIS_FAILED 终止。
+
+确定性检查：全量 pytest 628 项通过（含 4 个新回归测试）、Ruff 通过；测试对象为
+真实 rollout 原文，非 fixture 拼造。
+
+结论边界：沙箱、数据面、解析、语义校验四层均有真实证据；但端到端
+`status=completed` 的业务验收尚未取得——剩余阻塞为阿里云百炼账户 Arrearage
+（2026-09-12 09:45 CST 复现，账户侧需充值/清欠），以及 APK 前端把 failed 终态
+渲染为"diagnosis completed"的显示缺陷（APP 侧任务）。不得在复跑取得 completed
+前宣称标准诊断业务验收完成。

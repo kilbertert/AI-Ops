@@ -72,19 +72,30 @@ def _parse_agent_turn(final_response: str) -> AgentTurn:
 
 
 _DIAGNOSIS_FIELDS = frozenset(AgentDiagnosis.model_fields)
+# Substantive AgentDiagnosis content — present only when a provider actually
+# flattened a diagnosis payload, as opposed to echoing incident identity on a
+# tool_requests turn (incident_id/order_no/tenant_id are diagnosis fields too).
+_DIAGNOSIS_PAYLOAD_FIELDS = frozenset(
+    {"status", "summary", "root_cause", "confidence", "evidence_ids", "hypotheses"}
+)
 
 
 def _wrap_unstructured_turn(candidate: str) -> dict[str, Any] | None:
     """Normalize a provider turn object into the AgentTurn shape.
 
     GLM and other non-OpenAI providers deviate from the strict
-    ``{kind, tool_requests, diagnosis}`` schema in two ways: they omit the
-    ``kind`` discriminator, and/or they flatten the inner ``AgentDiagnosis``
-    fields to the top level instead of nesting them under ``diagnosis``. This
-    rebuilds the canonical shape by extracting the diagnosis (nested or
-    flattened) and tool_requests so validation can proceed with useful
-    feedback. Returns ``None`` when the candidate is not a JSON object or
-    cannot be shaped into a turn.
+    ``{kind, tool_requests, diagnosis}`` schema in three ways: they omit the
+    ``kind`` discriminator, they may flatten the inner ``AgentDiagnosis``
+    fields to the top level instead of nesting them under ``diagnosis``, and
+    they may echo read-only identity context (``incident_id``, ``order_no``,
+    ``tenant_id``, ``source_hash``) alongside a valid payload. ``AgentTurn``
+    is ``extra="forbid"``, so those extra keys fail validation even when the
+    payload itself is well-formed (observed 2026-09-11 on canary-dashscope
+    qwen3.8-max: three valid ``tool_requests`` turns rejected with a
+    misleading "diagnosis fields missing" error). This rebuilds the canonical
+    shape by extracting the diagnosis (nested or flattened, stripped to
+    contract fields) and tool_requests. Returns ``None`` when the candidate
+    is not a JSON object or cannot be shaped into a turn.
     """
     try:
         obj = json.loads(candidate)
@@ -94,10 +105,27 @@ def _wrap_unstructured_turn(candidate: str) -> dict[str, Any] | None:
         return None
     kind = obj.get("kind")
     diagnosis = obj.get("diagnosis") if isinstance(obj.get("diagnosis"), dict) else None
-    if diagnosis is None and (_DIAGNOSIS_FIELDS & obj.keys()):
+    if diagnosis is not None:
+        diagnosis = {key: value for key, value in diagnosis.items() if key in _DIAGNOSIS_FIELDS}
+    elif _DIAGNOSIS_PAYLOAD_FIELDS & obj.keys():
+        # Only treat the top level as a flattened diagnosis when it carries
+        # substantive payload fields (status/summary/root_cause/...). Mere
+        # identity echoes (incident_id/order_no/tenant_id) accompany valid
+        # tool_requests turns and must not be mistaken for a diagnosis.
         diagnosis = {key: value for key, value in obj.items() if key in _DIAGNOSIS_FIELDS}
     tool_requests = obj.get("tool_requests") if isinstance(obj.get("tool_requests"), list) else []
     if kind in ("diagnosis", "tool_requests"):
+        if kind == "tool_requests" and not tool_requests and "requests" in obj:
+            # Providers occasionally rename the array (observed "requests");
+            # recover the payload instead of failing the whole turn.
+            alt = obj["requests"] if isinstance(obj["requests"], list) else []
+            tool_requests = [item for item in alt if isinstance(item, dict)]
+        if kind == "tool_requests":
+            # A tool_requests turn carrying an (interim) diagnosis is a valid
+            # intermediate answer in the agent loop's contract in practice:
+            # models attach a status=blocked/inconclusive progress note. The
+            # requests win; the note is dropped.
+            diagnosis = None
         return {"kind": kind, "tool_requests": tool_requests, "diagnosis": diagnosis}
     if diagnosis is not None:
         return {"kind": "diagnosis", "tool_requests": [], "diagnosis": diagnosis}
