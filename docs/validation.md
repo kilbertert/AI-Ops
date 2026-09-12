@@ -746,9 +746,35 @@ S3 退役验收（公网入口 + 开机自启）：FAQ 200（28 条）、健康�
   负向权限边界 PASS；成功路径仍 BLOCKED，需要业务方提供真实带 `VIEW_ROLES` 的管理
   身份，不能用 C 端会话伪造。
 
-结论：AI-Ops 媒体签名、图片回源、MIME 校正、文本降级和视频永久缺失的 404 映射均有
-真实证据；剩余阻塞是 36 知识库视频对象恢复、36 运维命令通道，以及 C7 管理身份，均不
-通过修改客户端渲染或放宽鉴权来规避。
+结论：以上旧记录保留历史事实；随后已完成租户绑定修复并重新取得有效视频对象，见下节
+“真实媒体回归收口”。
+
+## 真实媒体回归收口（2026-09-12，PR #196）
+
+本轮在 36 部署 `fix/media-fetch-tenant-scope` 的热修版本（代码提交 `fc073be`，PR
+`#196`）后，以公网 `https://api.qumall.qushiyun.com/v1/*` 重新执行 C4/C6。凭据与
+签名 URL 未写入仓库或证据文件。
+
+- **C4 视频 PASS**：新鲜 QA `qa_7ef0906d4f49448d852ba94a366820b1` 返回 video
+  block。整段 GET 为 `200 video/mp4`、`82,348,365` 字节，文件头为有效 `ftyp/isom`；
+  `Range: bytes=0-1023` 为 `206`、`Content-Range: bytes 0-1023/82348365`、1024
+  字节；超范围为 `416`/空 body；伪造签名为 `403`。根因修复是媒体回源按 grant 的
+  tenant 重新绑定 kb-service client，不再使用中性的 `aiops` tenant。
+- **反代 Range PASS**：36 网关直连已能返回 `206`；公网入口最初因两层 Nginx 未显式
+  转发 `Range` 而复测到 `200` 全量。已在 120 `/v1/` 与 36 `8789` location 增加
+  `proxy_set_header Range $http_range`，两处配置均通过 `nginx -t` 并平滑 reload；
+  同一新鲜签名经公网复测得到 `206/416`。
+- **C6 无命中 PASS**：沿用真实公网 QA，结果为 `status=completed`、
+  `retrieval_status=not_found`，保留文本块。
+- **C6 KB 不可用 PASS**：停止 36 `kb-service` 后 `/healthz` 不可达，真实 QA
+  `qa_f3d5eab75cda46ef8a8039f8bceaa7f3` 完成并返回 `retrieval_status=unavailable`
+  及诚实降级文本；随后立即启动服务，`/healthz=200` 且单元为 `active`。
+- **C7 边界保持**：真实 C 端会话访问监控汇总仍为 `403 AGENT_FORBIDDEN`；成功路径
+  仍需带 `VIEW_ROLES` 的管理身份，未用普通会话替代。
+
+主机配置备份分别保留在 120 的 `api.qumall.qushiyun.com.conf.bak-range-20260912`
+和 36 的 `api.qumall.internal-8789.conf.bak-range-20260912`；本仓库只记录变更事实，
+不把主机密钥或令牌写入证据。
 
 ## 36 标准诊断链路修复验证（2026-09-12，PR #194）
 

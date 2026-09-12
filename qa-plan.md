@@ -577,7 +577,7 @@ ScopeContext（UPMS/Dis）行为由 T1-T3 既有真实验收线覆盖。
 - 有序动作：发布客服智能体（真实校验拒绝原因）→ 草稿调试 → 提问 → blocks[] → 图片 200 / 视频 Range 206/416 → 多轮与忙碌 → 无命中/不可用/媒体失效降级 → 监控计数核对。
 - 预期结果：QA 返回 `blocks[]`，图片可渲染、视频可播放（Range 生效），文本/引用在媒体失败时保留，越权/TTL/失效拒绝，监控计数吻合且无原文。
 - 清理：删临时知识库、停用 canary 智能体、删会话；租户映射复用不删（canary 纪律）。
-- 结果：PARTIAL（2026-09-12）。C1/C3 PASS；C4 图片 PASS（新鲜 image QA，GET 200、`image/jpeg`、11469 字节、JPEG 魔数），伪造媒体 403 PASS；C4 视频仍 BLOCKED（新鲜 QA 完成后立即整段/Range 均 404，上游 44 字节 `code=102 document not found`，检索索引仍指向已不存在的视频文档）。C5 PASS；C6 无命中 PASS（真实 QA `retrieval_status=not_found` 且保留文本），KB 不可用仍 BLOCKED（当前 SSH 远端命令与 36 本机服务转发不可用，无法执行 stop/start 与恢复检查）；C7 BLOCKED（缺少真实 `VIEW_ROLES` 管理身份）。不得把本地 fake 结果写成业务验收通过。
+- 结果：PARTIAL（2026-09-12）。C1/C3/C5 PASS；C4 图片 PASS（新鲜 image QA，GET 200、`image/jpeg`、11469 字节、JPEG 魔数），视频 PASS（新鲜 QA `qa_7ef0906d4f49448d852ba94a366820b1`：整段 `200 video/mp4`、82,348,365 字节，`Range: bytes=0-1023` 为 `206`/1024 字节，超范围为 `416`，伪造签名为 `403`）。C6 无命中与 KB 不可用均 PASS（真实 QA 分别为 `not_found` 与 `unavailable`，均保留文本；停止 `kb-service` 后已恢复 `/healthz=200` 且单元 active）。C7 仍 BLOCKED（缺少真实 `VIEW_ROLES` 管理身份）。视频 Range 证据包含 120 与 36 两层 Nginx 显式透传 `Range` 的热修，配置备份留在主机；不得把 C7 管理成功路径写成已验收。
 
 ### P0-FIX-01 媒体错误包、MIME 与空工具请求回归
 
@@ -595,7 +595,7 @@ ScopeContext（UPMS/Dis）行为由 T1-T3 既有真实验收线覆盖。
 - 有序动作：重新提问获取新签名 URL；验证视频整段、`Range: bytes=0-1023`、不可满足 Range、伪造/过期 URL；验证图片字节与 MIME；分别注入 KB 不可用和无命中。
 - 预期结果：真实视频 200/206/416、图片 200 且 MIME 与字节一致；错误包不再以 200 媒体返回；无命中/不可用均保留文本并返回对应检索状态。
 - 清理：恢复 kb-service、删除临时会话/知识库，保留脱敏日志。
-- 结果：PARTIAL（2026-09-12）。图片真实回源 PASS；视频真实回源 404 BLOCKED，需先恢复/重解析 36 上视频文档，再复测 200/206/416；无命中真实降级 PASS；KB 不可用因无法安全停止并恢复 36 `kb-service` 暂不判定。
+- 结果：PASS（2026-09-12，真实公网链路）。图片真实回源 PASS；视频真实回源 PASS（整段 `200`/有效 MP4，`Range` `206`、超范围 `416`，伪造签名 `403`）；无命中真实降级 PASS；KB 不可用真实注入 QA `qa_f3d5eab75cda46ef8a8039f8bceaa7f3` 返回 `retrieval_status=unavailable`，随后 `kb-service` 恢复并 `/healthz=200` 且单元 active。120 `/v1/` 与 36 `8789` 反代均新增显式 `proxy_set_header Range $http_range`，两处均通过 `nginx -t` 后平滑 reload。C7 管理指标成功路径不在本用例范围内，仍由 METRICS-REAL 阻塞项跟踪。
 
 ### P0-FIX-03 视频回源瞬时错误重试
 
