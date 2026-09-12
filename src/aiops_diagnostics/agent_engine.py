@@ -28,6 +28,7 @@ from aiops_diagnostics.diagnostic_tools import (
     DiagnosticToolExecutor,
     ToolOutcome,
 )
+from aiops_diagnostics.i18n import DEFAULT_LANGUAGE, language_name
 from aiops_diagnostics.journal import EvidenceJournal
 
 SessionFactory = Callable[[AgentWorkspace, AgentSettings, ProviderConfig | None, str | None], CodexSession]
@@ -147,6 +148,7 @@ class AgentCoordinator:
         sensitive_values: Iterable[str] = (),
         session_factory: SessionFactory | None = None,
         progress_callback: ProgressCallback | None = None,
+        language: str = DEFAULT_LANGUAGE,
     ) -> None:
         self.workspace = workspace
         self.manifest = manifest
@@ -154,6 +156,7 @@ class AgentCoordinator:
         self.tools = tools
         self.settings = settings
         self._provider = provider
+        self.language = language
         self.validator = AgentResultValidator(
             manifest,
             journal,
@@ -322,6 +325,9 @@ Available read-only evidence tools:
 {tools}
 
 Choose the smallest useful evidence set. Normally request `order_snapshot` first.
+Write every human-readable output field (summary, root_cause, evidence notes,
+recommendations) in {language_name(self.language)}. Keep identifiers, codes,
+numbers and quoted evidence verbatim regardless of output language.
 Return only the structured response required by the output schema.
 """
 

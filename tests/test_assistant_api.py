@@ -59,7 +59,9 @@ class _Runtime:
     def shutdown(self) -> None:
         pass
 
-    def start_standard_diagnosis(self, context: ScopeContext, order_no: str, question: str, indicator_code):
+    def start_standard_diagnosis(
+        self, context: ScopeContext, order_no: str, question: str, indicator_code, language="zh"
+    ):
         del context, indicator_code
         self.calls.append((order_no, question))
         return {
@@ -87,6 +89,7 @@ class _Runtime:
         *,
         conversation=None,
         conversation_turn_no=None,
+        language="zh",
     ):
         del conversation, conversation_turn_no
         qa_id = "qa_test00000000000000000000000000000001"
@@ -367,3 +370,54 @@ def test_assistant_responses_echo_resolved_language(tmp_path: Path) -> None:
     assert diagnosis.status_code == 202
     assert diagnosis.json()["type"] == "diagnosis"
     assert diagnosis.json()["language"] == "de"
+
+
+def test_assistant_faq_branch_returns_localized_answer(tmp_path: Path) -> None:
+    """A zh question with Accept-Language=en still hits FAQ and gets the en entry."""
+    client, _ = _client(tmp_path)
+    resp = client.post(
+        "/v1/assistant/questions",
+        json={"question": "无法拔枪怎么办"},
+        headers={**_headers(), "Accept-Language": "en"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["type"] == "faq"
+    assert body["language"] == "en"
+    assert body["question_id"] == "consumer.faq.q010"
+    assert body["question"] == "Connector Stuck? Emergency Cable Release Guide"
+    assert body["answer"].startswith("Do NOT yank it")
+
+
+def test_assistant_faq_shortcircuit_matches_multilingual_questions(tmp_path: Path) -> None:
+    """Questions in any supported language hit the same entry as zh (L3/#203)."""
+    catalog = FAQCatalog.bundled()
+    zh_q011 = catalog.answer("consumer", "consumer.faq.q011")["question"]
+    cases = {
+        "Why did charging stop unexpectedly?": "consumer.faq.q011",
+        "Warum hat der Ladevorgang unerwartet gestoppt?": "consumer.faq.q011",
+        "Pourquoi la charge s'est-elle arrêtée inopinément ?": "consumer.faq.q011",
+        "¿Por qué se detuvo la recarga inesperadamente?": "consumer.faq.q011",
+        "Por que o carregamento parou inesperadamente?": "consumer.faq.q011",
+        # zh full question still hits via the authoritative title.
+        zh_q011: "consumer.faq.q011",
+    }
+    for question, expected_qid in cases.items():
+        client, runtime = _client(tmp_path)
+        resp = client.post("/v1/assistant/questions", json={"question": question}, headers=_headers())
+        assert resp.status_code == 200, question
+        body = resp.json()
+        assert body["type"] == "faq", question
+        assert body["question_id"] == expected_qid, question
+        assert runtime.calls == []
+        client.close()
+
+
+def test_assistant_faq_shortcircuit_ignores_generic_single_tokens(tmp_path: Path) -> None:
+    """A lone generic Latin token must not trigger a FAQ hit (L3/#203)."""
+    client, runtime = _client(tmp_path)
+    for question in ("charging", "Charger", "refund"):
+        resp = client.post("/v1/assistant/questions", json={"question": question}, headers=_headers())
+        assert resp.status_code == 202, question
+        assert resp.json()["type"] == "qa", question
+    assert runtime.calls == []

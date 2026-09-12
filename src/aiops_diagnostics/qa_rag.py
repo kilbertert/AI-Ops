@@ -31,6 +31,7 @@ from aiops_diagnostics.agent_lifecycle import AgentStore
 from aiops_diagnostics.agent_workspace import AgentWorkspace
 from aiops_diagnostics.codex_runtime import AgentRuntimeError, SDKCodexSession
 from aiops_diagnostics.config import AgentSettings, ProviderConfig
+from aiops_diagnostics.i18n import DEFAULT_LANGUAGE, QA_FALLBACK_MESSAGES, language_name
 from aiops_diagnostics.knowledge_retrieval import (
     KNOWLEDGE_SEARCH_TOOL,
     KnowledgeSearchClient,
@@ -115,6 +116,7 @@ def run_customer_qa_answer(
     key_slot: str | None = None,
     project_root: Path | None = None,
     session_factory: Any | None = None,
+    language: str = DEFAULT_LANGUAGE,
 ) -> dict[str, Any]:
     """Answer one customer question via the published agent + bounded retrieval.
 
@@ -147,7 +149,7 @@ def run_customer_qa_answer(
             session = session_factory(workspace, agent_settings, selected_provider, None)
         else:
             session = SDKCodexSession(workspace, agent_settings, provider=selected_provider)
-        prompt = _initial_prompt(selection, question)
+        prompt = _initial_prompt(selection, question, language)
         searched = False
         for _ in range(_MAX_RUNS):
             output = session.run(prompt, output_schema=qa_rag_turn_schema())
@@ -162,6 +164,7 @@ def run_customer_qa_answer(
                         return _fallback_result(
                             retrieval.last_status,
                             searches=retrieval.searches_used,
+                            language=language,
                         )
                     # A few providers emit the tool discriminator without a
                     # payload. Use the user's question as a bounded fallback
@@ -182,8 +185,9 @@ def run_customer_qa_answer(
                     return _fallback_result(
                         retrieval.last_status,
                         searches=retrieval.searches_used,
+                        language=language,
                     )
-                prompt = _search_results_prompt(results)
+                prompt = _search_results_prompt(results, language)
                 continue
             answer = _normalize_answer_turn(turn)
             if answer is None:
@@ -191,10 +195,10 @@ def run_customer_qa_answer(
             # Business question but the model skipped retrieval: force one
             # supplementary search before accepting the answer (T1/T3 rule).
             if not searched and _needs_retrieval(question):
-                prompt = _forced_search_prompt(question)
+                prompt = _forced_search_prompt(question, language)
                 continue
             return _finalize(answer, retrieval)
-        return _fallback_result()
+        return _fallback_result(language=language)
     finally:
         if session is not None:
             with contextlib.suppress(Exception):
@@ -348,12 +352,30 @@ def _needs_retrieval(question: str) -> bool:
     text = question.strip()
     if not text:
         return False
-    casual = ("你好", "在吗", "谢谢", "再见", "hello", "hi")
+    casual = (
+        "你好",
+        "在吗",
+        "谢谢",
+        "再见",
+        "hello",
+        "hi",
+        "hola",
+        "olá",
+        "bonjour",
+        "salut",
+        "hallo",
+        "danke",
+        "merci",
+        "gracias",
+        "obrigado",
+        "obrigada",
+    )
     return not (len(text) <= 6 and any(word in text.lower() for word in casual))
 
 
-def _search_results_prompt(results: list[dict[str, Any]]) -> str:
+def _search_results_prompt(results: list[dict[str, Any]], language: str) -> str:
     payload = json.dumps(results, ensure_ascii=False, indent=2)
+    output_language = language_name(language)
     return f"""The harness executed your bounded knowledge_search requests.
 
 Search outcomes:
@@ -368,20 +390,28 @@ describing authorized resources. Return the final `answer` turn now: build
 citing the chunks' `reference_id`. If retrieval was empty or unavailable, say
 so honestly in text and set `retrieval_status` to `not_found` or `unavailable`
 as reported. Do not invent media ids or external URLs.
+Write every `text` block in {output_language}.
 """
 
 
-def _forced_search_prompt(question: str) -> str:
+def _forced_search_prompt(question: str, language: str) -> str:
     return f"""Your previous answer skipped knowledge retrieval, but this
 question looks like it needs business knowledge. One supplementary
 knowledge_search is required before you answer. Request it now with a focused
 `query` derived from the customer question:
 
 \"\"\"{question}\"\"\"
+
+The final `answer` turn must be written in {language_name(language)}.
 """
 
 
-def _fallback_result(status: RetrievalStatus | None = None, *, searches: int = 0) -> dict[str, Any]:
+def _fallback_result(
+    status: RetrievalStatus | None = None,
+    *,
+    searches: int = 0,
+    language: str = DEFAULT_LANGUAGE,
+) -> dict[str, Any]:
     status = (
         status
         if status
@@ -392,19 +422,16 @@ def _fallback_result(status: RetrievalStatus | None = None, *, searches: int = 0
         }
         else RetrievalStatus.LIMITED
     )
-    messages = {
-        RetrievalStatus.NOT_FOUND: "知识库中没有找到与当前问题直接相关的资料，暂时无法提供有依据的回答。",
-        RetrievalStatus.UNAVAILABLE: "当前知识库暂时不可用，本次回答无法基于知识库确认，请稍后重试。",
-        RetrievalStatus.LIMITED: "本次检索未能完成，请稍后重试或换个问法。",
-    }
+    messages = QA_FALLBACK_MESSAGES.get(language) or QA_FALLBACK_MESSAGES[DEFAULT_LANGUAGE]
     return {
-        "blocks": [{"kind": "text", "text": messages[status]}],
+        "blocks": [{"kind": "text", "text": messages[status.value]}],
         "retrieval_status": status.value,
         "searches": searches,
     }
 
 
-def _initial_prompt(selection: CustomerAgentSelection, question: str) -> str:
+def _initial_prompt(selection: CustomerAgentSelection, question: str, language: str) -> str:
+    output_language = language_name(language)
     return f"""Answer the customer's charging/new-energy question as the
 published customer service agent defined below. You have ONE bounded tool:
 `knowledge_search` — request it with a `reason` and a focused `query` when the
@@ -414,11 +441,17 @@ Simple greetings or chit-chat need no retrieval.
 Agent business behavior instructions (authoritative for tone and scope):
 \"\"\"{selection.prompt}\"\"\"
 
-Customer question (Simplified Chinese):
+Customer question (may arrive in any language):
 \"\"\"{question}\"\"\"
+
+Output language: every customer-facing `text` block MUST be written in
+{output_language}. The agent instructions above are the authoritative business
+script — their facts, policies and numbers stay binding regardless of output
+language. Knowledge-base excerpts may keep their original language; never
+translate identifiers, prices or status codes.
 
 Return a structured turn: either `kind=tool_requests` with up to one
 `knowledge_search` request, or `kind=answer` with `blocks[]` (at least one
-`text` block in Simplified Chinese) and the honest `retrieval_status`.
+`text` block in {output_language}) and the honest `retrieval_status`.
 Media and reference blocks may ONLY cite ids returned by this turn's searches.
 """

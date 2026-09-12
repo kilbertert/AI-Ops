@@ -576,7 +576,7 @@ def create_gateway_app(
             **decision.public(),
             "language": language,
             "faq_version": context.faq_catalog.version,
-            "recommendations": context.faq_catalog.recommendations(decision.platform),
+            "recommendations": context.faq_catalog.recommendations(decision.platform, language),
         }
 
     @app.get("/v1/faq/catalog")
@@ -589,7 +589,7 @@ def create_gateway_app(
             **decision.public(),
             "language": language,
             "faq_version": context.faq_catalog.version,
-            "entries": context.faq_catalog.catalog(decision.platform),
+            "entries": context.faq_catalog.catalog(decision.platform, language),
         }
 
     @app.post("/v1/faq/answer")
@@ -600,7 +600,7 @@ def create_gateway_app(
     ):
         _, decision = identity
         try:
-            answer = context.faq_catalog.answer(decision.platform, payload.question_id)
+            answer = context.faq_catalog.answer(decision.platform, payload.question_id, language)
         except FAQError as exc:
             raise StandardAPIError(
                 status.HTTP_404_NOT_FOUND, FAQ_NOT_FOUND, "FAQ question was not found"
@@ -664,6 +664,7 @@ def create_gateway_app(
                     payload.order_no,
                     payload.question,
                     None,
+                    language=language,
                 )
             except (ValueError, RuntimeError) as exc:
                 raise StandardAPIError(
@@ -701,6 +702,7 @@ def create_gateway_app(
                             embedded,
                             payload.question,
                             None,
+                            language=language,
                         )
                     except (ValueError, RuntimeError) as exc:
                         _release_conversation_turn(context, conversation, turn_no)
@@ -750,6 +752,7 @@ def create_gateway_app(
                             active_order,
                             payload.question,
                             None,
+                            language=language,
                         )
                     except (ValueError, RuntimeError) as exc:
                         _release_conversation_turn(context, conversation, turn_no)
@@ -782,7 +785,7 @@ def create_gateway_app(
         # Route 2: FAQ short-circuit (deterministic, zero-order, zero-model).
         faq_id = _faq_hit_by_keywords(decision.platform, context.faq_catalog, payload.question)
         if faq_id is not None:
-            answer = context.faq_catalog.answer(decision.platform, faq_id)
+            answer = context.faq_catalog.answer(decision.platform, faq_id, language)
             _record_route_metric(context, caller, route_type="faq", outcome="completed")
             return {
                 **decision.public(),
@@ -807,6 +810,7 @@ def create_gateway_app(
                 payload.question,
                 conversation=conversation if turn_no is not None else None,
                 conversation_turn_no=turn_no,
+                language=language,
             )
         except (ValueError, RuntimeError) as exc:
             _release_conversation_turn(context, conversation, turn_no)
@@ -1151,6 +1155,7 @@ def create_gateway_app(
     def create_standard_diagnosis(
         payload: StandardDiagnosisRequest,
         caller: ScopeContext = Depends(authenticated_diagnosis_caller),  # noqa: B008
+        language: str = Depends(request_language),  # noqa: B008
     ) -> dict[str, Any]:
         try:
             allowed = context.order_authorizer.can_access(caller, payload.order_no)
@@ -1173,6 +1178,7 @@ def create_gateway_app(
                 payload.order_no,
                 payload.question,
                 payload.indicator_code,
+                language=language,
             )
         except (ValueError, RuntimeError) as exc:
             raise StandardAPIError(
@@ -1767,37 +1773,47 @@ def _normalize_keywords(text: str) -> set[str]:
     return significant
 
 
-def _faq_hit_by_keywords(platform: str, faq_catalog: FAQCatalog, question: str) -> str | None:
-    """Return a question_id whose title best matches the free question, or None.
+def _faq_title_union_sigs(faq_catalog: FAQCatalog, platform: str, question_id: str) -> set[str]:
+    """Signatures over ALL language variants of one entry's title (L3/#203).
 
-    Char-set containment: score = |question_sig ∩ title_sig| / |question_sig|,
-    requiring the question's significant chars to be mostly present in the
-    title. Deterministic, zero-model; a later ticket adds model disambiguation
-    for ambiguous text.
+    zh full question first, then the en/de/fr/es/pt compressed titles from the
+    wide table — a question in any supported language matches the entry whose
+    variant union it overlaps, without weakening per-entry determinism.
+    """
+    sigs: set[str] = set()
+    for variant in faq_catalog.title_variants(platform, question_id):
+        sigs |= _normalize_keywords(variant)
+    return sigs
+
+
+def _faq_hit_by_keywords(platform: str, faq_catalog: FAQCatalog, question: str) -> str | None:
+    """Return a question_id whose multilingual titles best match the question.
+
+    Set-containment over the union of a title's language variants: score =
+    |question_sig ∩ title_union|, with a containment bar on the same union, so
+    the question's significant tokens must sit mostly inside ONE entry across
+    its languages. Deterministic, zero-model; a later ticket adds model
+    disambiguation for ambiguous text.
     """
     qsigs = _normalize_keywords(question)
     if not qsigs:
         return None
+    unions = {
+        entry["question_id"]: _faq_title_union_sigs(faq_catalog, platform, entry["question_id"])
+        for entry in faq_catalog.catalog(platform)
+    }
     best_qid: str | None = None
     best_overlap = 0
-    for entry in faq_catalog.catalog(platform):
-        title_sigs = _normalize_keywords(str(entry.get("question") or ""))
-        if not title_sigs:
-            continue
+    for question_id, title_sigs in unions.items():
         overlap = len(qsigs & title_sigs)
         if overlap > best_overlap:
             best_overlap = overlap
-            best_qid = entry["question_id"]
-    # Require at least MIN_OVERLAP distinct chars AND a strong containment,
-    # so single-char ties ("枪") or generic overlap ("充/电/程") never fire.
+            best_qid = question_id
+    # Require at least MIN_OVERLAP distinct tokens AND a strong containment,
+    # so single-token ties ("枪") or generic overlap ("充/电/程") never fire.
     if best_overlap < _FAQ_MIN_OVERLAP or best_qid is None:
         return None
-    title_sigs = _normalize_keywords(str(faq_catalog.catalog(platform)[0]["question"]))
-    for entry in faq_catalog.catalog(platform):
-        if entry["question_id"] == best_qid:
-            title_sigs = _normalize_keywords(str(entry.get("question") or ""))
-            break
-    containment = len(qsigs & title_sigs) / len(qsigs)
+    containment = len(qsigs & unions[best_qid]) / len(qsigs)
     return best_qid if containment >= _FAQ_MIN_CONTAINMENT else None
 
 

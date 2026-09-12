@@ -22,6 +22,34 @@
 - 全量确定性检查（与 `ci.yml` Linux 检查项一致）：`ruff check` 0 违规、`ruff format --check` 通过、`pytest` 660 项全部通过、`compileall` 通过。
 - 未完成业务验收：本切片未触碰多语言内容与模型提示词，也没有生产环境调用；`Accept-Language` 的真实 BFF 透传与多语言内容正确性待 #202–#204 交付后在真实环境验证。
 
+## 助手输出国际化 L2：FAQ 目录五语化（2026-09-12）
+
+#202（PRD #200 的 L2 切片）交付预设问题宽表落地与答案五语翻译。本轮为离线实现验证：
+
+- 目录一致性测试（`tests/test_faq.py`）：28 条 consumer 条目 × en/de/fr/es/pt 问题与答案全量非空、`question_id` 对齐 `consumer.faq.q001–q028`；内部 i18n 结构不泄露进对外 entry；operator 与未知语言回退 zh；非法 i18n 语言校验失败。
+- 合并工具校验（`tools/merge_faq_i18n.py`）：逐行比对宽表 zh 列与目录原文（空白归一），28 行 × 5 语言任一缺失/为空即报错退出；本次运行输出 `{consumer: 28, languages: 5, version: 2026.09.12}`。
+- 端点本地化测试：`Accept-Language: en` 下 recommendations 返回英文标题（"Differences between AC…"）、faq/answer 返回英文问答、catalog 以 `pt-BR` 折叠为 pt 返回葡语条目；assistant faq 短路分支中文提问 + `en` 头返回 q010 英文问答。
+- 全量确定性检查：`ruff check` 0 违规、`ruff format --check` 通过、`pytest` 665 项全部通过、`compileall` 通过。
+- 未完成事项：答案五语文案的产品抽查确认待完成（PR 内已请产品复核）；FAQ 短路匹配的多语言命中属 #203；真实环境五语实测属 #204，未完成前不宣称业务验收。
+
+## 助手输出国际化 L3：短路匹配多语言化（2026-09-12）
+
+#203（PRD #200 的 L3 切片）交付 FAQ 关键词短路的多语言命中。确定性零模型不变：
+
+- 五语命中矩阵（`tests/test_assistant_api.py`）：英/德/法/西/葡自然问句（含各语言标题同源措辞）经统一入口命中与中文提问相同的 `consumer.faq.q011`；中文完整问句回归命中不变；命中路径未创建诊断任务。
+- 泛化防护：单独拉丁泛化词（`charging`/`Charger`/`refund`）重叠不足回落 qa（202），不误触 FAQ；`_FAQ_MIN_OVERLAP`/`_FAQ_MIN_CONTAINMENT` 阈值语义保持。
+- 全量确定性检查：`ruff check` 0 违规、`ruff format --check` 通过、`pytest` 667 项全部通过、`compileall` 通过。
+- 未完成事项：真实环境五语提问的端到端命中属 #204，未完成前不宣称业务验收。
+
+## 助手输出国际化 L4：提示词语言注入（2026-09-12）
+
+#204（PRD #200 的 L4 切片）交付 qa 与诊断两条模型链路的输出语言注入。本轮为离线协议级验证：
+
+- 提示词注入断言（`tests/test_qa_rag.py`、`tests/test_agent_engine.py`）：qa 初始回合与知识检索回合的提示词均含目标语言名（English/German/Simplified Chinese）；检索未命中时 harness 兜底文案随请求语言切换（未知语言回退 zh）；诊断初始提示词含目标语言名且 incident manifest 原样嵌入（证据快照不混语言元数据）。
+- 合同保持：`blocks[]` 结构、检索两次上限、媒体授权校验、只读工具边界、`202 + 轮询`、`error.code` 英文语义全部不变；`run_zero_order_answer` 回落路径同步注入输出语言。
+- 全量确定性检查：`ruff check` 0 违规、`ruff format --check` 通过、`pytest` 672 项全部通过、`compileall` 通过。
+- **未完成业务验收（如实记录）**：真实环境五语实测（生产 `Accept-Language: en/de/fr/es/pt` 的 faq/qa 实调）尚未执行。前置条件是持有与公网网关同一会话库的有效 thirdSession——2026-09-12 前序复测已闭环确认此前抓包会话属于另一会话环境（36 网关真实 Redis 解析为 `caller_auth.invalid`，见上方 41 数据源边界记录），因此本轮不重复使用该会话发起无效调用。待业务方提供新会话后，按 `docs/agents/frontend-api-brief.md` 合同复跑并补充记录。
+
 ## C/B 固定问答接口验证（2026-09-04）
 
 本轮实现使用真实 UPMS 只读数据库结构和离线 HTTP fake 验证平台边界：

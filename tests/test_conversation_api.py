@@ -79,7 +79,7 @@ class _Runtime:
     def shutdown(self) -> None:
         pass
 
-    def start_standard_diagnosis(self, context, order_no: str, question: str, indicator_code):
+    def start_standard_diagnosis(self, context, order_no: str, question: str, indicator_code, language="zh"):
         del context, indicator_code
         self.calls.append((order_no, question))
         return {
@@ -107,6 +107,7 @@ class _Runtime:
         *,
         conversation=None,
         conversation_turn_no=None,
+        language="zh",
     ):
         # Simulate the 409 surface: the API layer raises busy BEFORE us, so
         # reaching here means the slot was claimable. Record and answer async.

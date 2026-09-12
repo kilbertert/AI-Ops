@@ -19,12 +19,14 @@ import pytest
 from aiops_diagnostics.agent_lifecycle import AgentConfig, AgentManager, AgentStore
 from aiops_diagnostics.codex_runtime import AgentRuntimeError, CodexTurnOutput
 from aiops_diagnostics.config import AgentSettings
+from aiops_diagnostics.i18n import QA_FALLBACK_MESSAGES
 from aiops_diagnostics.knowledge_retrieval import (
     KnowledgeSearchUnavailable,
     MediaResourceSigner,
 )
 from aiops_diagnostics.qa_rag import (
     CustomerAgentSelection,
+    _initial_prompt,
     run_customer_qa_answer,
     select_customer_agent,
 )
@@ -163,6 +165,7 @@ def _run(
     session: _FakeSession,
     client: _SearchClient,
     question: str = "怎么拔枪",
+    language: str | None = None,
 ) -> dict[str, Any]:
     return run_customer_qa_answer(
         question,
@@ -173,6 +176,7 @@ def _run(
         tenant_id="tenant-a",
         project_root=_PROJECT_ROOT,
         session_factory=lambda *_args, **_kw: session,
+        **({"language": language} if language is not None else {}),
     )
 
 
@@ -602,3 +606,38 @@ def test_full_run_accepts_top_level_answer_turn(tmp_path: Path) -> None:
     )
     assert result["retrieval_status"] == "found"
     assert any(block["kind"] == "text" for block in result["blocks"])
+
+
+def test_output_language_rides_prompts_and_fallback_copy(tmp_path: Path) -> None:
+    """An en request carries the output-language directive through every turn
+    and localizes the harness fallback copy (#204)."""
+    client = _SearchClient([[]])
+    session = _FakeSession([_tool_request("gun"), _empty_tool_request()])
+    result = _run(
+        tmp_path,
+        session,
+        client,
+        question="Why can't I pull out the connector?",
+        language="en",
+    )
+    assert "English" in session.prompts[0]
+    assert "English" in session.prompts[1]
+    assert result["retrieval_status"] == "not_found"
+    assert result["blocks"][0]["text"] == QA_FALLBACK_MESSAGES["en"]["not_found"]
+
+
+def test_unknown_language_falls_back_to_zh_fallback_copy(tmp_path: Path) -> None:
+    client = _SearchClient([[]])
+    session = _FakeSession([_empty_tool_request()])
+    result = _run(tmp_path, session, client, question="怎么拔枪", language="ja")
+    assert result["blocks"][0]["text"] == QA_FALLBACK_MESSAGES["zh"]["not_found"]
+
+
+def test_initial_prompt_names_output_language() -> None:
+    """The initial prompt names the output language; zh stays authoritative."""
+    selection = CustomerAgentSelection(
+        agent_id="agt", version_no=1, prompt="话术", knowledge_base_ids=("kb",)
+    )
+    assert "English" in _initial_prompt(selection, "question", "en")
+    assert "German" in _initial_prompt(selection, "Frage", "de")
+    assert "Simplified Chinese" in _initial_prompt(selection, "问题", "zh")
