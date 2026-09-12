@@ -1,7 +1,8 @@
 # AI-Ops 前端联调总览
 
-> 状态：当前有效，2026-09-12。当前 `/v1/*` 公网入口已切到 41（`47.97.160.153`）；
+> 状态：当前有效，2026-09-12。`api.mall.qushiyun.com` 的 `/v1/*` 公网入口已切到 41（`47.97.160.153`）；
 > 41 的 KB/RAG 通过受限回环隧道复用移动云 36 单实例，诊断数据源留在 41。
+> `api.qumall.qushiyun.com` 是 95 环境入口，继续使用 95 自己的 Gateway、会话库和诊断数据源。
 > 读者：前端组、BFF/Java 组、联调测试。
 > 权威契约：固定问答见 [固定问答标准接口](../faq-api.md)；健康报告与单问诊断见 [标准后端接口报告](../standard-api-contract.md)。本文含三条线的完整输入/输出定义，冲突时以两份契约文档为准。
 
@@ -11,13 +12,13 @@
 小程序/浏览器
     │  只带现有登录态（thirdSession），不持有任何 AI-Ops 令牌
     ▼
-业务 BFF / Java 后端（https://api.qumall.qushiyun.com）
+业务 BFF / Java 后端（41：https://api.mall.qushiyun.com；95：https://api.qumall.qushiyun.com）
     │  1. 验证用户登录态
     │  2. 按访问入口决定 X-Business-Entry: consumer | operator
     │  3. 以服务身份调用 AI-Ops，转发 thirdSession
     ▼
-120 Nginx（同域 /v1/*，注入服务身份）
-    │  `/v1/*` 到 41:8788 的受限反代
+对应环境 Nginx（同域 /v1/*，注入服务身份）
+    │  41: api.mall.qushiyun.com → 41:8788；95: api.qumall.qushiyun.com → 95:8788
     ▼
 AI-Ops（41 本机 127.0.0.1:8788）
     │  解析会话 → 判定平台身份 → 隔离内容域 → 返回数据
@@ -29,7 +30,8 @@ AI-Ops（41 本机 127.0.0.1:8788）
 
 - 不保存、不打印、不打包 AI-Ops 服务令牌（`aops_*` 也不行）；
 - 不提交 `platform`、`user_id`、`tenant_id`、角色、B 端主体 ID——这些全部由 BFF/AI-Ops 从会话推导；
-- 不直连 AI-Ops 网关地址；前端 Base URL 统一走 BFF 域名（`https://api.qumall.qushiyun.com`，AI 接口为同域 `/v1/*`）。
+- 不直连 AI-Ops 网关地址；前端 Base URL 必须按业务环境选择 BFF 域名（41 使用
+  `https://api.mall.qushiyun.com`，95 使用 `https://api.qumall.qushiyun.com`）。
 
 ## 1. 三条业务线怎么选
 
@@ -427,21 +429,23 @@ queued → running → completed | failed | expired                  （报告�
 
 ## 9.5 QA + blocks[] 媒体验收状态（2026-09-12 更新，可联调）
 
-- **联调环境已就绪**：`api.qumall.qushiyun.com` 与兼容入口 `api.mall.qushiyun.com` 的 `/v1/*`
-  已切到 41 Gateway；41 通过受限隧道复用移动云 36 的 RAG/KB 单实例。联调租户的客服智能体
-  已发布并绑定含图片（PNG）与视频（MP4）的知识库——前端按 §场景 B 合同提问即可拿到含
-  media 块的真实 `blocks[]`。
+- **联调环境已就绪**：41 的 `api.mall.qushiyun.com/v1/*` 已切到 41 Gateway；95 的
+  `api.qumall.qushiyun.com/v1/*` 保持 95 Gateway 和独立数据面。41 通过受限隧道复用移动云
+  36 的 RAG/KB 单实例。41 已迁入联调租户的已发布客服智能体及绑定的图片（PNG）/视频
+  （MP4）知识库；但当前 RAGFlow embedding 与模型调用均返回百炼 `Arrearage`，当前
+  自由 QA 和媒体 `blocks[]` 需恢复 provider 后才能复验。
 - 联调用 C 端会话（thirdSession）与测试问题由服务侧提供（会话有时效，失效时向运维索取新的）。
 - `qa` 作业返回 `blocks[]` + `retrieval_status`；`/v1/media/{id}` 支持 Range（视频分段播放）、短时签名（约 10 分钟）、停用即失效。多轮会话 `/v1/conversations`（#180）可用，含 active-order 绑定与 409 忙碌语义。
-- **视频播放已验收**：服务端租户绑定修复（PR #196）与两层反代 Range 透传已部署。
-  新鲜 QA 的 video block 在公网返回 `206`、1024 字节与正确 `Content-Range`；超范围
-  返回 `416`。前端可直接用 `<video src={media.url}>`，仍不得缓存短时签名 URL。
+- **视频播放历史证据**：36/95 入口的服务端租户绑定修复（PR #196）与两层反代 Range
+  透传曾验收 `206/416`；该证据不等于当前 41 的媒体链路已通过。41 需在 embedding
+  provider 恢复后重新取得 video block，再复验 `<video src={media.url}>`。
 - 未配置 KB 栈的租户提问会回落纯文本（`blocks[]` 只有 text 块，无 media）；每个租户需要服务侧先完成智能体发布与知识库绑定。
 
 ## 9.6 C 端接口消费者复验（2026-09-12）
 
-环境：2026-09-12T14:50:05+08:00，公网 `https://api.qumall.qushiyun.com`，已合并的
-PR #196 运行版本；请求只带前端应有的 `third-session` 与 `tenant-id`，不带服务令牌。
+环境：2026-09-12T14:50:05+08:00，公网 `https://api.qumall.qushiyun.com`（95/36 历史
+canary 入口），已合并的 PR #196 运行版本；请求只带前端应有的 `third-session` 与
+`tenant-id`，不带服务令牌。当前 41 结果见本页 §9.5 及 `docs/validation.md`。
 
 - FAQ：推荐、目录均为 `200`/28 条；固定答案为 `200`/`text`；统一助手的快捷问分支为
   `200 type=faq`，可同步渲染。
@@ -511,26 +515,29 @@ location /v1/ {
 
 ### 10.6 链路现状（2026-09-12）
 
-断点 1+2 已修复；36 公网切流与 C 端接口消费者复验已完成。当前链路：
+断点 1+2 已修复；当前正式链路按环境隔离。41 的链路为：
 
 ```text
-APK / 前端 → https://api.qumall.qushiyun.com/v1/*（120 nginx 反代 + 头注入）
+APK / 前端 → https://api.mall.qushiyun.com/v1/*（41 入口 + 头注入）
            → 41 本机 AI-Ops 网关（127.0.0.1:8788, systemd aiops-gateway-41.service）
            → 41:29380 SSH 回环隧道 → 36 本机 kb-service/RAGFlow（127.0.0.1:9380）
            → 41 本机 MySQL/Redis/TDengine 诊断数据源
 ```
 
-- C 端验收状态：FAQ、统一助手 QA、视频 Range、会话生命周期通过（见 §9.6）；当前会话的
-  健康报告和单问诊断成功路径仍需一笔已授权订单，不能用未授权订单或历史他人诊断替代。
+95 使用 `https://api.qumall.qushiyun.com/v1/*` 和 95 自己的 Gateway、会话库及诊断数据源。
+
+- C 端验收状态：41 FAQ 已通过；自由 QA 当前受百炼 `Arrearage` 阻塞，媒体 blocks 同样
+  未生成。95/36 的视频 Range 通过记录仅作历史参考；41 当前会话的健康报告和
+  单问诊断成功路径仍需一笔已授权订单，不能用未授权订单或历史他人诊断替代。
 - 前端剩余工作见 §10.5；接口消费者只需切换 APIURL，并保留 `third-session` 小写头。
 
 ### 10.7 前端最小验证命令（改完直接跑，无需后端配合）
 
 ```bash
-curl -i "https://api.qumall.qushiyun.com/v1/faq/recommendations" \
+curl -i "https://api.mall.qushiyun.com/v1/faq/recommendations" \
   -H "tenant-id: 2019588094906601472" \
   -H "third-session: <你的有效 thirdSession>"   # 全小写连字符，不是 X-Third-Session
-# 期望：HTTP/1.1 200 + recommendations 数组（28 条）
+# 41 使用 api.mall.qushiyun.com；95 使用 api.qumall.qushiyun.com。期望：HTTP/1.1 200 + recommendations 数组（28 条）
 ```
 
 要点：

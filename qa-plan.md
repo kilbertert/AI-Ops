@@ -755,7 +755,15 @@ ScopeContext（UPMS/Dis）行为由 T1-T3 既有真实验收线覆盖。
 - 有序动作：使用无效 `third-session` 调用 FAQ，再用 H5 登录接口获取新会话调用推荐、目录、固定答案和助手问答。
 - 预期结果：无效会话为 `401 INVALID_ACCESS_TOKEN`；有效会话的推荐/目录/答案为 `200`，推荐数量为 28；助手自由问答创建为 `202` 并可轮询终态。
 - 清理：不保存会话；不创建订单或修改业务数据。
-- 结果：PASS（2026-09-12 Asia/Shanghai）。无效会话 `401`；有效会话推荐 `200/28`、目录 `200`、固定答案 `200`；自由问答 `202` 后终态 `failed`（模型/运行依赖失败，非路由 404），订单列表 `200 total=0`。
+- 结果：PARTIAL（2026-09-13 Asia/Shanghai）。41 无效会话 `401`；有效会话推荐 `200/28`、目录 `200`、固定答案 `200`。配置切换后曾有历史自由问答 `202→completed` 记录，但本次复跑两个非 FAQ 问题均因百炼真实 `400 Arrearage` 以 `QA_FAILED` 结束；待恢复可用 provider 后复验。
+
+### CUTOVER-41-05 95/41 域名与数据面隔离
+
+- 环境：95 `120.55.45.59` 的 `api.qumall.qushiyun.com`；41 `47.97.160.153` 的 `api.mall.qushiyun.com`。
+- 有序动作：分别访问两个入口的 `/v1/faq/catalog`，不携带有效会话；检查 95 本机 8788、41 本机 8788 及两侧服务状态。
+- 预期结果：两个入口均返回 `401 INVALID_ACCESS_TOKEN`；95 入口只由 95 Gateway 响应，41 入口只由 41 Gateway 响应；不得把任一域名反代到另一环境的会话库或诊断数据源。
+- 清理：保留 95 Nginx 原配置备份和 41 隧道配置备份。
+- 结果：PASS（2026-09-12 Asia/Shanghai）。两个公网入口均为 `401 INVALID_ACCESS_TOKEN`；95 Gateway active、41 Gateway active；95 `/v1/` 已指向本机 `127.0.0.1:8788`，41 `/v1/` 仍指向 41 Gateway。
 
 ### CUTOVER-41-02 共享 KB 受限隧道
 
@@ -782,4 +790,12 @@ ScopeContext（UPMS/Dis）行为由 T1-T3 既有真实验收线覆盖。
 - 有序动作：检查 MySQL 授权、Redis ping、TDengine stable 清单。
 - 预期结果：MySQL 仅具 `SELECT/SHOW VIEW`；Redis 可达；TDengine 所需超表齐全。
 - 清理：无写入。
-- 结果：BLOCKED（2026-09-12 Asia/Shanghai）。Redis 可达；TDengine 缺少 `charging-pile_comm`；MySQL `read_only=false` 且含高权限 `ALL PRIVILEGES` 等，不能作为合规运行时账号。待业务方提供最小只读账号并补齐/接受报文缺口。
+- 结果：BLOCKED（2026-09-12 Asia/Shanghai）。Redis `PING` 成功且会话键可读；TDengine 认证查询成功但缺少 `charging-pile_comm`；MySQL 认证查询成功但当前账号 `read_only=false` 且含高权限 `ALL PRIVILEGES` 等，不能作为合规运行时账号。待业务方提供最小只读账号并补齐/接受报文缺口。
+
+### CUTOVER-41-06 provider 与客服媒体链路
+
+- 环境：41 `47.97.160.153`、公网 `https://api.mall.qushiyun.com`、共享 KB 隧道到 36。
+- 有序动作：启用 41 `canary-dashscope` 默认 provider；迁入已发布客服智能体；使用新 H5 会话发起自由 QA 和媒体问题，轮询至终态。
+- 预期结果：自由 QA `202→completed`；媒体问题返回含 `blocks[]` 的检索结果，图片可下载、视频支持 `206/416`。
+- 清理：不保存会话；保留 41 provider/数据库备份；不改业务订单。
+- 结果：BLOCKED（2026-09-13 Asia/Shanghai）。自由 QA 与媒体问题均创建 `202`，但 RAGFlow 向量/模型调用真实返回百炼 `400 Arrearage`，终态 `QA_FAILED`，未生成媒体块。41 Gateway、KB 隧道和 `/healthz` 均正常；待恢复百炼账户或替换 embedding provider 后复跑媒体验收。

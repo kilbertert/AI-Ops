@@ -1,6 +1,7 @@
 # kb-service 测试环境与协议样例（面向 #170 及后续票）
 
-> 状态：当前有效，2026-09-12 修订（KB 栈已迁移动云 36 并完成公网切流，见 §1）。
+> 状态：当前有效，2026-09-13 修订（KB 栈集中在移动云 36，由 41 通过受限隧道复用；95
+> 入口保持独立，见 §1）。
 > 读者：#170 实现者（Codex/AFK）、#171/#173 联调负责人。
 > 来源：2026-09-08~09 全链路浏览器验收 + RAGFlow v0.27.1 源码级核实（部署版本与
 > `~/Playground/.ragflow-study` 研究副本一致，适配层 md5 已比对）。
@@ -14,11 +15,11 @@
 浏览器/前端
     │  third-session（全小写连字符）
     ▼
-api.qumall.qushiyun.com（120.55.45.59 Nginx，TLS/域名不动）
-    │  /v1/* 注入服务身份 Authorization → 反代 36.156.159.175:8789（仅收 120）
+api.mall.qushiyun.com（41 环境入口）
+    │  /v1/* 注入服务身份 Authorization → 41 Gateway:8788
     ▼
-AI-Ops 网关（36 本机 127.0.0.1:8788，systemd aiops-gateway.service）
-    │  KbServiceClient 直调 http://127.0.0.1:9380
+AI-Ops 网关（41 本机 127.0.0.1:8788，systemd aiops-gateway-41.service）
+    │  KbServiceClient → 41:29380（受限隧道）→ 36:127.0.0.1:9380
     ▼
 kb-service（36，systemd 单元，127.0.0.1:9380，仅回环）
     │  tenant-id → tenancy.db 映射 → ragflow token
@@ -30,7 +31,7 @@ admin.qumall.qushiyun.com（120 Nginx）/kb/** → cloud-gateway(120:9999, Nacos
     → 文档记录的历史目标为 124.243.178.156:9380（不是 41 环境；运行配置须单独复核）
 ```
 
-AI-Ops 的位置：41 Gateway 承载 `/v1/*` 与订单诊断，诊断数据源留在 41；RAGFlow/KB
+AI-Ops 的位置：41 Gateway 承载 `api.mall.qushiyun.com` 的 `/v1/*` 与订单诊断，诊断数据源留在 41；RAGFlow/KB
 仍在 36，通过 41 的受限回环隧道复用。36 与 41 内网不互通，41 只通过隧道访问已批准的
 KB 回环端口，不复制重型容器栈。36 仍通过既有受限路径访问会话 Redis/UPMS MySQL/UPMS API
 （systemd 单元 `aiops-session-redis-tunnel`，127.0.0.1:26379/23306/25999，
@@ -39,7 +40,7 @@ restricted authorized_keys + permitopen 白名单）。
 **环境标识更正（2026-09-12）**：41 环境的实际地址是 `47.97.160.153`。旧提交
 `e4c58c4` 记录的是 `124.243.178.156` 上的本机只读验证；此前把 124 标为“41”的写法
 错误，不能把该记录当作 41 的旧部署或验收证据。当前正式决策已覆盖此前“不切 41”的结论：
-41（`47.97.160.153`）承载 AI-Ops Gateway 与 `/v1/*` 入口；RAGFlow/KB 仍集中在 36，
+41（`47.97.160.153`）承载 AI-Ops Gateway 与 `api.mall.qushiyun.com` 的 `/v1/*` 入口；RAGFlow/KB 仍集中在 36，
 通过 41 的受限回环隧道复用。管理后台 `/kb/**` 仍不直接改到 36 `127.0.0.1:9380`，
 继续遵守公司网关 OAuth/租户鉴权边界。
 
@@ -48,7 +49,8 @@ restricted authorized_keys + permitopen 白名单）。
 **KB 栈已随 PR #181 全栈迁移至移动云 36（36.156.159.175，SSH 别名 `yidong-36`）并实测活通**：
 网关 `/health` 200（36 本机 127.0.0.1:8788）、kb-service `/healthz` 200（127.0.0.1:9380）、
 kb→RAGFlow 搜索实响、媒体签名配置生效。当前 41 公网 `/v1/*` 经受限入口到 41 网关，
-41 再经 `aiops-36-kb-tunnel.service` 访问 36:9380；36 的历史公网入口保留为兼容回滚路径。
+41 再经 `aiops-36-kb-tunnel.service` 访问 36:9380；95 公网入口不进入 41。当前复验发现
+RAGFlow embedding 请求受百炼 `Arrearage` 阻塞，媒体 blocks 需恢复 embedding provider 后复跑。
 回滚快照原样保留（回滚 = 120 rewrite 配置改回 `proxy_pass http://127.0.0.1:8788` 一行）。
 历史停机记录（2026-09-09 人为停机 120 栈、回滚快照 `/opt/ragflow-kb/rollback-20260909_151325/`）
 已被迁移取代。
@@ -70,7 +72,7 @@ kb→RAGFlow 搜索实响、媒体签名配置生效。当前 41 公网 `/v1/*` 
   （媒体回源业务错误映射、Range 本地切片、瞬时 not found 重试）已合并 main 但待部署 36**，
   部署后需重验 C4（视频整段/Range）。
 - **供应商 key 状态**（Codex agent 链）：alibaba-maas 被供应商封锁（API-key is blocked，
-  需业务方轮换）；glm-ark 月配额 2026-09-21 重置；psydo 余额不足。canary 期间以
+  需业务方轮换）；glm-ark 月配额 2026-09-21 重置；psydo 余额不足。41 当前以
   `canary-dashscope` provider（DashScope key + `qwen3.8-max-0902`，wire_api=responses）
   临时顶替——注意该 provider 的 `wire_api=chat` 已被 Codex CLI 弃用，且 DashScope
   compatible-mode 对 tool 往返仅在 `qwen3.8-max-*` 系列验证可用。
@@ -206,4 +208,5 @@ T1 的媒体块只是**不透明 ID + 短时签名授权**（`MediaResourceSigne
    cloud-gateway/OAuth 的方式替换。需单独设计并批准 120→36 的受限代理、身份与租户映射、
    路由授权、审计与回滚后再实施。UPMS 还需建 `ROLE_AGENT_ADMIN` 角色族并
    授权管理账号（管理面 HTTP 化的前提，当前管理操作走 on-box 方式）；业务方轮换被
-   封锁的 alibaba-maas key（canary-dashscope 为临时 provider）。
+   封锁的 alibaba-maas key；41 Gateway 当前默认使用 `canary-dashscope`，但 36 RAGFlow
+   embedding 仍需恢复可用的百炼账户或替换 provider。

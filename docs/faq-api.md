@@ -8,7 +8,11 @@
 
 前端联调责任、旧接口迁移和页面分流见 [前端联调总览](agents/frontend-api-brief.md)。
 
-前端/BFF 统一 Base URL：`https://api.qumall.qushiyun.com`（AI 接口为同域 `/v1/*`，2026-09-06 服务迁移后由公司 120 直接承载，见迁移记录 issue #147）
+环境入口：`https://api.qumall.qushiyun.com` 为 95 环境，使用 95 自己的 Gateway、会话库和
+诊断数据源；`https://api.mall.qushiyun.com` 为 41 环境，使用 41 自己的 Gateway、会话库和
+诊断数据源。两套环境的 `/v1/*` 合同相同，但请求不得跨环境转发或混用会话。
+
+前端/BFF 选择与业务环境一致的 Base URL；AI 接口为同域 `/v1/*`。
 
 公共请求头：
 
@@ -22,9 +26,10 @@ X-Business-Entry: consumer
 
 完整测试 URL：
 
-- `GET https://api.qumall.qushiyun.com/v1/faq/recommendations`
-- `GET https://api.qumall.qushiyun.com/v1/faq/catalog`
-- `POST https://api.qumall.qushiyun.com/v1/faq/answer`
+- 95：`https://api.qumall.qushiyun.com/v1/faq/{recommendations|catalog|answer}`
+- 41：`https://api.mall.qushiyun.com/v1/faq/{recommendations|catalog|answer}`
+
+三类路径分别对应 `GET`、`GET`、`POST`；请求必须使用同一环境的会话。
 
 上述 URL 供受信任业务后端/BFF 联调。前端不得直接持有 `aiops-service-token`；前端实际地址由 BFF 暴露。
 

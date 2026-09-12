@@ -5,17 +5,19 @@
 - 41 `aiops-gateway-41.service` enabled/active；本机 `GET /health` 返回 `200`，
   `business_mutations=disabled`。
 - 41 MySQL、Redis、TDengine 连接探针均通过；未执行写业务数据、配置或消费游标操作。
-- 120 `aiops-41-tunnel.service` active，`127.0.0.1:28789/health` 返回 `200`；公网
-  `/v1/faq/recommendations` 携带无效 `X-Third-Session` 返回 `401 INVALID_ACCESS_TOKEN`。
-- 120 原 `/v1/*` rewrite 已保存为 `*.bak-aiops41-*` 备份，可独立回滚。
+- 41 `aiops-gateway-41.service` active，`127.0.0.1:8788/health` 返回 `200`；公网
+  `api.mall.qushiyun.com/v1/*` 携带无效 `X-Third-Session` 返回 `401 INVALID_ACCESS_TOKEN`。
+- 95 `aiops-gateway.service` active，95 主机 Nginx `api.qumall.qushiyun.com/v1/*`
+  已恢复指向 95 本机 `127.0.0.1:8788`；95 与 41 不共享 Gateway、会话库、MySQL、Redis、TDengine 或 UPMS。
+- 95 原错误路由已保留为主机侧带时间戳备份，可独立回滚。
 - 41 没有 kb-service/RAGFlow，未复制重型容器栈；Gateway 使用 36 的受限 KB 入口。
 - FAQ 成功路径已在 2026-09-12 用新 H5 会话完成；健康报告与诊断成功路径仍待订单所有权和
   模型运行依赖满足后验收。
 
 ## 41 真实会话与共享 KB 验收（2026-09-12）
 
-- 41 `47.97.160.153` 的 `aiops-gateway-41.service` 与公网 `api.qumall.qushiyun.com/v1/*`
-  及兼容入口 `api.mall.qushiyun.com/v1/*` 已实测连通；无效会话返回 `401 INVALID_ACCESS_TOKEN`，不再是 Nginx `404`。通过 H5 登录
+- 41 `47.97.160.153` 的 `aiops-gateway-41.service` 与公网 `api.mall.qushiyun.com/v1/*`
+  已实测连通；无效会话返回 `401 INVALID_ACCESS_TOKEN`，不再是 Nginx `404`。通过 H5 登录
   接口在内存中取得新会话（仅保留脱敏指纹）后，FAQ 推荐返回 `200` 且 28 条，FAQ 目录/固定
   答案返回 `200`。
 - 自由问答创建返回 `202`，轮询终态为 `failed`，属于模型/运行依赖失败，不能写成问答业务
@@ -27,12 +29,44 @@
   后服务仍 active，隧道健康探针为 HTTP 200。主机备份：
   `/etc/aiops-41/production.env.bak-kb-tunnel-20260912`（不入库）。
 - 验收边界：当前会话没有订单，故健康报告/标准诊断成功终态未完成；自由问答成功终态还受
-  模型运行依赖影响。不能以 FAQ 成功、健康探针或错误合同替代这两项业务验收。
+  模型运行依赖影响。41 Ark key 的真实上游响应为 `429 AccountQuotaExceeded`，Psydo 也为
+  `429`；已配置百炼 key 探针为 `401 InvalidApiKey`。不能以 FAQ 成功、健康探针或错误合同替代这两项业务验收。
 - 诊断数据源合规性：在 41 以 `direct_sources` 做只读探针时，Redis `ping=true`，TDengine
   `stable_count=18` 但 `charging-pile_comm=false`；MySQL 连接成功但 `read_only=false`，
   且授权含 `ALL PRIVILEGES`、`PROCESS`、`REPLICATION CLIENT`、`REPLICATION SLAVE`，
   因此该账号不能作为合规的 AI-Ops 运行时凭据。需替换为最小 `SELECT/SHOW VIEW` 账号后
   再做诊断成功路径验收。
+- 共享 KB 真实检索：41 经 `127.0.0.1:29380` 隧道访问 36 `kb-service`，`aiops-canary`
+  知识库返回真实 `video` 文档“新加坡无人电动巴士.mp4”和真实 `image` 文档
+  `canary_charge_guide.png` 的命中分段；图片下载返回 PNG 字节，视频文档状态为 DONE 且
+  内容可检索。原始视频下载接口当前不做 Range 切片，未把该适配层下载结果写成媒体代理
+  的 206/416 验收通过；AI-Ops 媒体签名链路仍需通过已发布客服智能体拿到 blocks[] 后复验。
+
+## 41 provider 与客服智能体复验（2026-09-13）
+
+- **配置修复**：41 原先只注册 Ark/Psydo，默认 Psydo；其真实请求返回 429。已从 36
+  复制已验证的 `canary-dashscope` provider 配置和私有 key 到 41，设置为默认 provider，
+  并将 key 槽加入 Gateway 白名单。41 `aiops-gateway-41.service` 重启后保持 active，
+  `127.0.0.1:8788/health` 返回 200；配置备份保留在 41 主机，不入库。
+- **客服智能体**：41 Gateway 数据库原为空，无法进入 `blocks[]` 媒体路径。已在备份后
+  迁入 36 上同租户的已发布客服智能体及 3 个版本快照；不复制 RAGFlow 数据，不改变 36
+  数据库。41 当前租户绑定复用 36 的 KB 隧道。
+- **自由 QA 历史结果与当前状态**：配置切换后曾使用 41 H5 会话取得
+  `202→completed` 且 `result.text` 非空的结果；但 2026-09-13 复跑时上游已返回百炼
+  `400 code=Arrearage`，两个非 FAQ 问题均以 `QA_FAILED` 结束。当前不能把历史成功结果当作
+  线上持续可用，需恢复可用 provider 后重新验收。
+- **媒体链路 BLOCKED**：使用已发布客服智能体提问“新加坡无人电动巴士是什么？”时，
+  41→36 隧道和 `kb-service /healthz=200` 均正常，但 RAGFlow 向量检索收到同一百炼真实
+  `400 code=Arrearage`，QA 终态为 `QA_FAILED`，未产生 `blocks[]`。这不是 404、路由或
+  会话问题；需要恢复该百炼账户状态（或提供可用的 RAGFlow embedding provider）后，
+  才能继续验收图片/视频块、签名媒体 `200/206/416`。
+- **隔离复核**：`api.mall.qushiyun.com` 的 41 请求与 41 Gateway/会话库/诊断源对应；
+  `api.qumall.qushiyun.com` 的 95 请求仍由 95 Gateway 和 95 数据面处理，两入口无效会话
+  均返回 `401 INVALID_ACCESS_TOKEN`。未把 95 请求导入 41，也未把 41 数据源写入 95。
+
+当前结论：41 入口、FAQ、共享 KB 隧道和配置回滚面已可用；自由 QA 当前受百炼账户状态
+阻塞，媒体 `blocks[]`、
+健康报告/标准诊断成功路径仍未全部通过，不能宣称全链路业务验收完成。
 
 合成 fixture 可以验证确定性行为，但不能证明生产故障结论准确。所有“通过”都必须说明验证范围，不能把自动化回放写成工程师确认的业务验收。
 

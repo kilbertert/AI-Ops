@@ -690,9 +690,32 @@ Feature: 41 环境 Gateway 切换
 
     Scenario: 41 公网 FAQ 业务链路可用
       Given H5 登录接口返回与 41 会话库匹配的有效 thirdSession
-      When 通过 https://api.qumall.qushiyun.com/v1/faq/recommendations 调用 FAQ
+      When 通过 https://api.mall.qushiyun.com/v1/faq/recommendations 调用 FAQ
       Then 返回 HTTP 200 且包含 28 条 consumer 推荐
       And 请求不返回 Nginx 404
+
+    Scenario: 41 自由问答使用可用模型 provider
+      Given 41 Gateway 默认 provider 已配置为可用的百炼兼容 provider
+      And H5 登录接口返回与 41 会话库匹配的有效 thirdSession
+      When 通过 https://api.mall.qushiyun.com/v1/assistant/questions 提交不命中 FAQ 的问题
+      Then 返回 HTTP 202
+      And 轮询终态为 completed 且 result.text 非空
+
+    Scenario: 41 客服问答返回多媒体检索块
+      Given 41 租户存在已发布且绑定图片和视频知识库的客服智能体
+      And RAGFlow embedding provider 可用
+      When 通过 https://api.mall.qushiyun.com/v1/assistant/questions 提交媒体相关问题
+      Then 返回或轮询结果包含 blocks[] 的 image 或 video 块
+      And 每个媒体块携带短时签名 URL
+      And 视频签名 URL 支持 HTTP 206 与超范围 416
+
+    Scenario: 95 与 41 公网入口保持数据面隔离
+      Given api.qumall.qushiyun.com 是 95 环境入口
+      And api.mall.qushiyun.com 是 41 环境入口
+      When 分别使用对应环境的无效 thirdSession 调用 FAQ
+      Then 两个入口均返回 HTTP 401 INVALID_ACCESS_TOKEN
+      And 95 的请求不会进入 41 Gateway 或 41 会话库
+      And 41 的请求不会进入 95 Gateway 或 95 会话库
 
     Scenario: 41 没有用户订单时不伪造诊断成功
       Given 当前 H5 会话的订单列表 total 为 0
