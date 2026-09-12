@@ -108,13 +108,34 @@ white_flag, balance_insufficient_stop, start_soc, end_soc, device_protocol,
 created_time, stop_time, draw_gun_time, tx_data
 """.replace("\n", " ").strip()
 
-OCCUPY_ORDER_COLUMNS = """
-id, orderId, order_no, device_id, device_code, child_device_id,
-child_device_code, site_id, userId, free_time, timeout, occupy_amount,
-pay_amount, status, out_trade_no, is_pay, is_sync_mall_order, pay_time,
-tenant_id, startTime, endTime, operator_id, refund_status, refund_amount,
-refund_time, refundRemark
-""".replace("\n", " ").strip()
+_OCCUPY_COLUMN_CANDIDATES: dict[str, tuple[str, ...]] = {
+    "id": ("id",),
+    "orderId": ("orderId", "order_id"),
+    "order_no": ("order_no",),
+    "device_id": ("device_id",),
+    "device_code": ("device_code",),
+    "child_device_id": ("child_device_id",),
+    "child_device_code": ("child_device_code",),
+    "site_id": ("site_id",),
+    "userId": ("userId", "user_id"),
+    "free_time": ("free_time",),
+    "timeout": ("timeout",),
+    "occupy_amount": ("occupy_amount",),
+    "pay_amount": ("pay_amount",),
+    "status": ("status",),
+    "out_trade_no": ("out_trade_no",),
+    "is_pay": ("is_pay",),
+    "is_sync_mall_order": ("is_sync_mall_order",),
+    "pay_time": ("pay_time",),
+    "tenant_id": ("tenant_id",),
+    "startTime": ("startTime", "start_time"),
+    "endTime": ("endTime", "end_time"),
+    "operator_id": ("operator_id",),
+    "refund_status": ("refund_status",),
+    "refund_amount": ("refund_amount",),
+    "refund_time": ("refund_time",),
+    "refundRemark": ("refundRemark", "refund_remark"),
+}
 
 OCCUPY_ORDER_LIMIT = 20
 
@@ -277,22 +298,49 @@ class MySQLSource:
             raise ValueError("占位费订单查询必须且只能提供 order_id 或 order_no 之一")
         if self._scope_blocked():
             return []
-        where = "orderId=%s" if has_order_id else "order_no=%s"
-        params: list[Any] = [order_id if has_order_id else order_no]
-        scope_where, scope_params = self._scope_where(user_column="userId")
-        if scope_where:
-            where += f" AND {scope_where}"
-            params.extend(scope_params)
-        elif tenant_id:
-            where += " AND tenant_id=%s"
-            params.append(tenant_id)
-        sql = (
-            f"SELECT {OCCUPY_ORDER_COLUMNS} FROM `{self.database}`.`ch_occupy_order_info` "
-            f"WHERE {where} ORDER BY startTime DESC LIMIT {OCCUPY_ORDER_LIMIT}"
-        )
         with self._cursor() as cursor:
+            columns = self._occupy_columns(cursor)
+            lookup_column = columns["orderId"] if has_order_id else columns["order_no"]
+            tenant_column = columns["tenant_id"]
+            start_column = columns["startTime"]
+            where = f"{lookup_column}=%s"
+            params: list[Any] = [order_id if has_order_id else order_no]
+            scope_where, scope_params = self._scope_where(user_column=columns["userId"])
+            if scope_where:
+                where += f" AND {scope_where}"
+                params.extend(scope_params)
+            elif tenant_id:
+                where += f" AND {tenant_column}=%s"
+                params.append(tenant_id)
+            select_columns = ", ".join(
+                f"`{actual}` AS `{contract}`" if actual != contract else f"`{actual}`"
+                for contract, actual in columns.items()
+            )
+            sql = (
+                f"SELECT {select_columns} FROM `{self.database}`.`ch_occupy_order_info` "
+                f"WHERE {where} ORDER BY `{start_column}` DESC LIMIT {OCCUPY_ORDER_LIMIT}"
+            )
             cursor.execute(sql, params)
             return [_normalize_row(row) for row in cursor.fetchall()]
+
+    def _occupy_columns(self, cursor: DictCursor) -> dict[str, str]:
+        cursor.execute(
+            "SELECT COLUMN_NAME AS column_name FROM information_schema.columns "
+            "WHERE TABLE_SCHEMA=%s AND TABLE_NAME=%s",
+            [self.database, "ch_occupy_order_info"],
+        )
+        available = {
+            str(row.get("column_name") or row.get("COLUMN_NAME"))
+            for row in cursor.fetchall()
+            if row.get("column_name") or row.get("COLUMN_NAME")
+        }
+        columns: dict[str, str] = {}
+        for contract, candidates in _OCCUPY_COLUMN_CANDIDATES.items():
+            actual = next((candidate for candidate in candidates if candidate in available), None)
+            if actual is None:
+                raise SourceError(f"占位费订单表缺少字段: {contract}")
+            columns[contract] = actual
+        return columns
 
     def get_device(
         self,

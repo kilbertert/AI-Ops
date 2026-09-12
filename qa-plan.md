@@ -713,3 +713,26 @@ ScopeContext（UPMS/Dis）行为由 T1-T3 既有真实验收线覆盖。
 - 结果：BLOCKED（2026-09-12）。#173 真实 canary 已产生公网 FAQ/QA/媒体流量；普通 C
   端会话访问汇总正确返回 `403 AGENT_FORBIDDEN`。管理成功路径仍缺带 `VIEW_ROLES` 的真实
   管理身份，不得以 C 端会话、fake 流量或临时放宽角色替代。
+
+## 41 环境演示数据源评估（只读）
+
+### DATA-41-READONLY
+
+- 环境：41 主机 `47.97.160.153`；经临时 SSH 转发访问 RDS
+  `rm-bp1130phekugksn8c8o.mysql.rds.aliyuncs.com`；本地 Python 3.13 + `pymysql`。
+- 前置条件：仅使用用户提供的临时凭据；不在 41 安装依赖、不启动/停止服务、不改配置。
+- 有序动作：只读检查 `cloud_charging_pile` 的目标表和字段、近期开单聚合、Redis 白名单
+  Stream 元数据、TDengine `iot` 稳定表和聚合计数；随后关闭临时转发。
+- 预期结果：确认可读性、字段覆盖和数据面缺口；高权限账号不得成为运行时凭据。
+- 结果：PASS（2026-09-12T15:47:28+08:00，提交前分支）。MySQL 8.0.28 的
+  `cloud_charging_pile` 中订单/费率/设备/站点所需字段完整；最近 500 单覆盖 8 个租户，
+  费率记录匹配 494/500；`ch_occupy_order_info` 使用 `order_id/user_id/start_time/
+  end_time/refund_remark` 蛇形列，代码已增加固定候选列映射。Redis 两个白名单 Stream
+  类型正确，长度分别为 1/0；TDengine `iot` 有 18 个稳定表，`charging-gun_property`
+  聚合计数 3,281,797，但 `charging-pile_comm` 不存在。另以不存在的探针订单调用真实
+  `MySQLSource.get_occupy_orders`，蛇形列映射成功且返回 0 行。
+- 安全结论：`mall@%` 具备多个库的 `ALL PRIVILEGES`，RDS `@@read_only=0`；本轮查询虽
+  显式使用只读事务，该账号仍不得写入 AI-Ops 运行配置。需要业务方提供仅对
+  `cloud_charging_pile`（及必要 UPMS 库）授予
+  `SELECT/SHOW VIEW` 的专用账号，并补齐或明确接受协议报文缺口后，才能评估切换。
+- 清理：临时 SSH 转发已关闭；41 主机未发生服务或配置变更。
