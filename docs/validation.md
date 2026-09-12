@@ -826,6 +826,40 @@ S3 退役验收（公网入口 + 开机自启）：FAQ 200（28 条）、健康�
 - **验证命令**：`uv run ruff format --check .`、`uv run ruff check .`、`uv run pytest`
   均通过；全量测试 `630 passed`（8 个既有依赖弃用警告）。
 
+## 前端联调接口复测与 41 数据源边界（2026-09-12）
+
+- **测试环境**：2026-09-12（Asia/Shanghai），公网 BFF 入口
+  `https://api.qumall.qushiyun.com`；本地源码提交 `88af99b`。41 数据源指
+  `47.97.160.153`，未对该主机部署、重启或写入任何服务。
+- **真实公网请求**：`/v1/faq/recommendations`、`/v1/faq/catalog`、
+  `POST /v1/faq/answer`、健康报告创建/查询、标准诊断创建/列表/查询，在缺失、仅伪造
+  Bearer、仅伪造 `third-session`、错误 `X-Third-Session` 四种无效认证组合下均返回
+  `401` 与统一体 `INVALID_ACCESS_TOKEN`；未泄露 FAQ、订单、作业或诊断数据。
+- **健康检查缺口**：文档声明的 `GET /health` 实测返回 nginx `403`（`/health/` 同样
+  `403`，`/v1/health` 为 `404`），因此前端/BFF 不能依赖当前公网健康检查契约；需由
+  120 网关负责人确认并修复路由或同步更新契约。
+- **确定性回归**：`uv run pytest -q tests/test_faq_gateway_api.py
+  tests/test_health_report_api.py tests/test_standard_diagnosis_api.py
+  tests/test_standard_api_contract.py` 通过，`20 passed`（仅 FastAPI/Starlette 既有弃用警告）。
+- **未完成业务验收**：当前机器没有获授权的 41 `third-session`、UPMS/BFF 服务身份及其
+  有权访问的演示订单；且 41 缺 `charging-pile_comm`。因此无法执行 FAQ 成功路径、健康报告
+  `202→completed` 或诊断 `202→completed/inconclusive` 的真实 41 联调，不把认证拒绝和
+  本地测试写成业务目标已验收。业务方提供上述最小联调数据后，应按
+  `docs/agents/frontend-api-brief.md` 的分流与轮询合同复跑。
+- **前端抓包复验**：用户提供的 H5 请求使用的 `/aiops/v1/assistant/questions` 当前返回
+  nginx `404`；同一请求改为当前合同的 `/v1/assistant/questions` 后返回
+  `401 INVALID_ACCESS_TOKEN`，表明截图中的 `third-session` 已失效。请求包含的
+  `Accept-Language` 只影响内容语言，不是认证或 41 数据源选择条件。不得复用或记录该会话。
+- **新会话复验**：用户随后提供的新 `third-session` 在最小合同头、以及完整补齐 H5 浏览器
+  头（`Origin`、`Referer`、UA、空 `app-id` 与 Client Hints）两种请求下，均由
+  `POST /v1/assistant/questions` 返回 `401 INVALID_ACCESS_TOKEN`。因此不是少传浏览器头，
+  而是当前 AI-Ops 标准入口无法解析该会话；未创建任何诊断作业，也没有保存会话或订单值。
+- **根因闭环**：120 Nginx `/v1/` 反代与服务身份注入存在；120 注入令牌与 36 网关实际
+  `acceptance.env` 的令牌指纹一致，排除服务令牌漂移。36 `aiops-gateway.service` 为
+  `active`，使用同一会话键前缀对真实运行 Redis 做只读解析，该会话稳定返回
+  `caller_auth.invalid`。结论是会话不在 36 当前会话库（属于另一环境/另一 Redis 或已过期），
+  不是请求头、语言标识、订单号或诊断实现问题。
+
 ## C 端接口消费者复验（2026-09-12）
 
 环境：2026-09-12T14:50:05+08:00，公网 `https://api.qumall.qushiyun.com`，36 运行
