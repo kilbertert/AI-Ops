@@ -63,9 +63,7 @@ def reconcile(
 
     # 与 gateway_api.create_gateway_app 相同的 allowed_models 推导
     agent_settings = settings.agent
-    configured_models = tuple(
-        provider.model for provider in agent_settings.providers if provider.model
-    )
+    configured_models = tuple(provider.model for provider in agent_settings.providers if provider.model)
     if not configured_models:
         configured_models = (agent_settings.model or "aiops-api",)
 
@@ -81,14 +79,14 @@ def reconcile(
     )
 
     try:
-        reports: list[Any] = reconcile_manifest(
-            manager, environment, prune=prune, dry_run=dry_run
-        )
+        reports: list[Any] = reconcile_manifest(manager, environment, prune=prune, dry_run=dry_run)
     except ManifestError as exc:
         typer.secho(f"收敛中止（库未变更）: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=2) from exc
-    typer.echo(json.dumps(
-        {"dry_run": dry_run, "reports": [dataclasses.asdict(report) for report in reports]},
-        ensure_ascii=False,
-        indent=2,
-    ))
+    typer.echo(
+        json.dumps(
+            {"dry_run": dry_run, "reports": [dataclasses.asdict(report) for report in reports]},
+            ensure_ascii=False,
+            indent=2,
+        )
+    )

@@ -140,8 +140,7 @@ def _preflight(manager: AgentManager, manifest: EnvironmentManifest) -> None:
     if bad_models:
         allowed = ", ".join(sorted(manager.allowed_models))
         raise ManifestError(
-            f"模型不在白名单（先改 manifest 或 Settings.providers）: {'; '.join(bad_models)}"
-            f"；允许: {allowed}"
+            f"模型不在白名单（先改 manifest 或 Settings.providers）: {'; '.join(bad_models)}；允许: {allowed}"
         )
 
 
@@ -177,9 +176,7 @@ def _converge_one(
     if existing is None:
         if dry_run:
             return report("created", None, "dry-run")
-        created = manager.create(
-            context, name=agent.name, description=agent.description, config=agent.config
-        )
+        created = manager.create(context, name=agent.name, description=agent.description, config=agent.config)
         version = manager.publish(context, created.agent_id, expected_revision=created.revision)
         return report("created", version.version_no)
 
@@ -240,26 +237,30 @@ def _prune_tenant(
         if agent.status == "published":
             if dry_run:
                 reports.append(
-                    ReconcileReport(tenant_id, agent.name, agent.agent_id, "pruned-disabled",
-                                    agent.published_version, "dry-run")
+                    ReconcileReport(
+                        tenant_id,
+                        agent.name,
+                        agent.agent_id,
+                        "pruned-disabled",
+                        agent.published_version,
+                        "dry-run",
+                    )
                 )
                 continue
             manager.disable(context, agent.agent_id, expected_revision=agent.revision)
             reports.append(
-                ReconcileReport(tenant_id, agent.name, agent.agent_id, "pruned-disabled",
-                                agent.published_version)
+                ReconcileReport(
+                    tenant_id, agent.name, agent.agent_id, "pruned-disabled", agent.published_version
+                )
             )
         elif agent.status == "draft" and agent.published_version is None:
             if dry_run:
                 reports.append(
-                    ReconcileReport(tenant_id, agent.name, agent.agent_id, "pruned-deleted",
-                                    None, "dry-run")
+                    ReconcileReport(tenant_id, agent.name, agent.agent_id, "pruned-deleted", None, "dry-run")
                 )
                 continue
             manager.delete(context, agent.agent_id, expected_revision=agent.revision)
-            reports.append(
-                ReconcileReport(tenant_id, agent.name, agent.agent_id, "pruned-deleted", None)
-            )
+            reports.append(ReconcileReport(tenant_id, agent.name, agent.agent_id, "pruned-deleted", None))
     return reports
 
 

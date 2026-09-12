@@ -137,11 +137,10 @@ def test_admin_reconcile_end_to_end(tmp_path: Path) -> None:
     config = portable_home / "production.env"
     environment = {"AIOPS_HOME": str(portable_home)}
     config.parent.mkdir(parents=True)
-    config.write_text(
-        "AIOPS_AGENT_MODEL=aiops-api\n", encoding="utf-8"
-    )
+    config.write_text("AIOPS_AGENT_MODEL=aiops-api\n", encoding="utf-8")
     if os.name != "nt":
         import stat as _stat
+
         config.chmod(_stat.S_IRUSR | _stat.S_IWUSR)
     manifest = tmp_path / "env.toml"
     manifest.write_text(
@@ -185,6 +184,7 @@ def test_admin_reconcile_unknown_model_exits_two(tmp_path: Path) -> None:
     config.write_text("AIOPS_AGENT_MODEL=aiops-api\n", encoding="utf-8")
     if os.name != "nt":
         import stat as _stat
+
         config.chmod(_stat.S_IRUSR | _stat.S_IWUSR)
     manifest = tmp_path / "bad.toml"
     manifest.write_text(
