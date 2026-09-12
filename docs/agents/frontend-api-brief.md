@@ -105,7 +105,7 @@ queued → running → completed | failed | expired                  （报告�
 - 解析规则：按 RFC 7231 取 q 值最高的受支持语言；区域/文字子标签折叠（`en-US → en`、`pt-BR → pt`）；受支持集合 `zh/en/de/fr/es/pt`；缺失、为空、`*` 通配或不受支持的语言一律回退 `zh`，同权重取先出现者。
 - 响应回显：FAQ 三个只读端点（recommendations/catalog/answer）与统一问答入口（faq 200、qa 202、qa 轮询、qa 列表、diagnosis 202）均带 `language` 字段，前端可据此核对生效语言。
 - FAQ 内容已按语言输出（2026-09-12 起）：recommendations 的 `title`、catalog 的条目、answer 与 faq 短路分支的 `question/answer` 会返回 `Accept-Language` 对应语言（en/de/fr/es/pt）；中文（zh）为权威回退，operator 端与缺失翻译条目保持中文。
-- 模型回答（qa 自由提问、订单诊断）的多语言输出由后续工单（#204）交付，当前仍为按提示词生成的简体中文。
+- 模型回答已支持按语言输出（2026-09-12 起）：qa 自由提问与订单诊断的模型提示词会注入输出语言指令——`text`/summary/root_cause 等人类可读内容用 `Accept-Language` 对应语言书写；知识库片段与证据原文（id、编号、代码、数字）保持原样；检索未命中/不可用的兜底提示同样本地化。
 - `error.code` 与 HTTP 语义不受语言影响（保持英文）。
 
 ## 3. 固定问答（FAQ）

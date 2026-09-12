@@ -13,6 +13,7 @@ from aiops_diagnostics.agent_workspace import AgentWorkspace
 from aiops_diagnostics.codex_runtime import AgentRuntimeError, resolve_provider_api_key
 from aiops_diagnostics.config import Settings
 from aiops_diagnostics.diagnostic_tools import DiagnosticToolExecutor
+from aiops_diagnostics.i18n import DEFAULT_LANGUAGE, language_name
 from aiops_diagnostics.journal import EvidenceJournal
 from aiops_diagnostics.models import DiagnosticRequest
 from aiops_diagnostics.query_scope import QueryScope
@@ -35,6 +36,7 @@ def run_agent_diagnosis(
     provider: str | None = None,
     key_slot: str | None = None,
     scope: QueryScope | None = None,
+    language: str = DEFAULT_LANGUAGE,
 ) -> AgentDiagnosis:
     """Run the shared read-only agent path for local CLI and gateway workers."""
     manifest = workspace.load_manifest()
@@ -64,6 +66,7 @@ def run_agent_diagnosis(
                 provider_key,
             ),
             progress_callback=progress_callback,
+            language=language,
         )
         return coordinator.run()
 
@@ -75,6 +78,7 @@ def run_zero_order_answer(
     provider: str | None = None,
     key_slot: str | None = None,
     project_root: Path | None = None,
+    language: str = DEFAULT_LANGUAGE,
 ) -> dict[str, Any]:
     """Answer a general (zero-order) question via the shared read-only Agent.
 
@@ -102,7 +106,8 @@ def run_zero_order_answer(
         )
         prompt = (
             "请回答用户的这个一般问题，只输出 JSON（遵循结构化输出 schema），"
-            "text 字段为简体中文回答，reminder 字段为 true。\n\n问题：" + question
+            f"text 字段必须使用{language_name(language)}书写（面向用户的呈现语言），"
+            "reminder 字段为 true。\n\n问题：" + question
         )
         result = session.run(prompt)
         payload = json.loads(result.final_response)

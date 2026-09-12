@@ -11,6 +11,86 @@ from __future__ import annotations
 SUPPORTED_LANGUAGES: tuple[str, ...] = ("zh", "en", "de", "fr", "es", "pt")
 DEFAULT_LANGUAGE = "zh"
 
+# Human-readable names used inside model prompts (qa/diagnosis, #204).
+LANGUAGE_NAMES: dict[str, str] = {
+    "zh": "Simplified Chinese",
+    "en": "English",
+    "de": "German",
+    "fr": "French",
+    "es": "Spanish",
+    "pt": "Portuguese",
+}
+
+# Presentation copy for the qa retrieval fallback per language (#204).
+# zh is authoritative: a missing language falls back to the zh strings.
+QA_FALLBACK_MESSAGES: dict[str, dict[str, str]] = {
+    "zh": {
+        "not_found": "知识库中没有找到与当前问题直接相关的资料，暂时无法提供有依据的回答。",
+        "unavailable": "当前知识库暂时不可用，本次回答无法基于知识库确认，请稍后重试。",
+        "limited": "本次检索未能完成，请稍后重试或换个问法。",
+    },
+    "en": {
+        "not_found": (
+            "No directly relevant material was found in the knowledge base; "
+            "no evidence-backed answer is available."
+        ),
+        "unavailable": (
+            "The knowledge base is temporarily unavailable and the answer "
+            "could not be verified. Please retry later."
+        ),
+        "limited": "This lookup could not be completed. Please try again or rephrase your question.",
+    },
+    "de": {
+        "not_found": (
+            "In der Wissensbasis fand sich kein passendes Material; "
+            "eine belegte Antwort ist derzeit nicht möglich."
+        ),
+        "unavailable": (
+            "Die Wissensbasis ist vorübergehend nicht erreichbar; "
+            "die Antwort blieb unverifiziert. Bitte später erneut versuchen."
+        ),
+        "limited": "Diese Suche konnte nicht abgeschlossen werden. Bitte später erneut versuchen.",
+    },
+    "fr": {
+        "not_found": (
+            "Aucun document pertinent n'a été trouvé dans la base de connaissances ; "
+            "pas de réponse étayée pour l'instant."
+        ),
+        "unavailable": (
+            "La base de connaissances est momentanément indisponible ; "
+            "la réponse n'a pu y être vérifiée. Réessayez plus tard."
+        ),
+        "limited": "Cette recherche n'a pas abouti. Réessayez plus tard ou reformulez la question.",
+    },
+    "es": {
+        "not_found": (
+            "No se halló material pertinente en la base de conocimiento; "
+            "no hay respuesta con respaldo por ahora."
+        ),
+        "unavailable": (
+            "La base de conocimiento no está disponible y la respuesta "
+            "no pudo verificarse. Inténtelo más tarde."
+        ),
+        "limited": "No se pudo completar la búsqueda. Inténtelo de nuevo o formule la pregunta otra vez.",
+    },
+    "pt": {
+        "not_found": (
+            "Nada de pertinente foi encontrado na base de conhecimento; "
+            "não há resposta fundamentada neste momento."
+        ),
+        "unavailable": (
+            "A base de conhecimento está indisponível e a resposta "
+            "não pôde ser verificada. Tente novamente mais tarde."
+        ),
+        "limited": "Não foi possível concluir a busca. Tente novamente ou reformule a sua pergunta.",
+    },
+}
+
+
+def language_name(language: str) -> str:
+    """English display name of a supported language for prompt injection."""
+    return LANGUAGE_NAMES.get(language, LANGUAGE_NAMES[DEFAULT_LANGUAGE])
+
 
 def resolve_language(accept_language: str | None) -> str:
     """Resolve one supported language tag from an ``Accept-Language`` header.

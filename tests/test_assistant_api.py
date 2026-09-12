@@ -59,7 +59,9 @@ class _Runtime:
     def shutdown(self) -> None:
         pass
 
-    def start_standard_diagnosis(self, context: ScopeContext, order_no: str, question: str, indicator_code):
+    def start_standard_diagnosis(
+        self, context: ScopeContext, order_no: str, question: str, indicator_code, language="zh"
+    ):
         del context, indicator_code
         self.calls.append((order_no, question))
         return {
@@ -87,6 +89,7 @@ class _Runtime:
         *,
         conversation=None,
         conversation_turn_no=None,
+        language="zh",
     ):
         del conversation, conversation_turn_no
         qa_id = "qa_test00000000000000000000000000000001"
