@@ -538,3 +538,103 @@ def test_media_route_maps_non_ascii_ids_to_uniform_403(tmp_path: Path) -> None:
     oversized = "media_" + "a" * 200 + ".deadbeefdeadbeefdeadbeef"
     resp = client.get(f"/v1/media/{oversized}")
     assert resp.status_code == 403
+
+
+
+def test_runtime_serve_media_fetches_through_grant_tenant(tmp_path: Path) -> None:
+    """Regression (#175 C4 video canary, 2026-09-12): the media fetch must be
+    re-bound to the grant's tenant. The process-level kb client is bound to
+    the neutral "aiops" tenant; fetching through it made kb-service answer
+    {"code":102,"document not found"} for documents owned by real tenants —
+    deterministic 404 on every signed video URL while the same doc_id
+    downloaded fine under the owning tenant's header."""
+    from aiops_diagnostics.agent_lifecycle import AgentConfig, AgentManager, AgentStore
+    from aiops_diagnostics.config import Settings
+    from aiops_diagnostics.gateway_runtime import GatewayRuntime
+    from aiops_diagnostics.scope_context import DataScope, SubjectRecord
+
+    class _TenantRecordingClient:
+        bound_tenant = "aiops"
+
+        def __init__(self) -> None:
+            self.fetches: list[tuple[str, str]] = []  # (client tenant, grant tenant)
+
+        def for_tenant(self, tenant_id: str) -> "_TenantRecordingClient":
+            clone = _TenantRecordingClient.__new__(_TenantRecordingClient)
+            clone.fetches = self.fetches  # shared record across clones
+            clone.bound_tenant = tenant_id
+            return clone
+
+        def fetch_media(self, grant: MediaGrant, *, range_header: str | None = None) -> bytes:
+            self.fetches.append((self.bound_tenant, grant.tenant_id))
+            return b"MP4DATA"
+
+    settings = GatewayServerSettings(
+        data_home=tmp_path,
+        database_file=tmp_path / "gateway.db",
+        server_config_file=tmp_path / "production.env",
+    )
+    settings.server_config_file.write_text("# test\n", encoding="utf-8")
+    store = GatewayStore(settings.database_file)
+    agent_store = AgentStore(settings.database_file)
+    kb_client = _TenantRecordingClient()
+    runtime = GatewayRuntime(
+        store,
+        settings,
+        Settings(agent=Settings().agent),  # type: ignore[arg-type]
+        kb_search_client=kb_client,  # type: ignore[arg-type]
+        media_signer=MediaResourceSigner("secret", ttl_seconds=600),
+        agent_store=agent_store,
+    )
+
+    admin_subject = SubjectRecord(b_user_id="B-1", tenant_id="tenant-video")
+    admin = ScopeContext.build(
+        caller=admin_subject,
+        subject=admin_subject,
+        delegated=False,
+        effective_tenant_id="tenant-video",
+        data_scope=DataScope(type="self"),
+        roles=frozenset({"ROLE_AGENT_ADMIN"}),
+        permissions=frozenset({"aiops:agents:manage"}),
+    )
+    manager = AgentManager(
+        agent_store,
+        allowed_models=("aiops-api",),
+        knowledge_resolver=_AlwaysValidKnowledge(),
+    )
+    agent = manager.create(
+        admin,
+        name="客服",
+        description="客服助手",
+        config=AgentConfig(
+            agent_type="customer",
+            prompt="回答必须引用已授权的业务资料。",
+            knowledge_base_ids=("kb-1",),
+            model="aiops-api",
+            output_contract="blocks-v1",
+            opening_questions=("怎么处理？",),
+            quick_commands=("查看步骤",),
+        ),
+    )
+    published = manager.publish(admin, agent.agent_id, expected_revision=agent.revision)
+
+    resource = runtime.media_signer.issue(  # type: ignore[union-attr]
+        tenant_id="tenant-video",
+        agent_version=f"{agent.agent_id}#v{published.version_no}",
+        session_id=None,
+        knowledge_base_id="kb-1",
+        document_id="doc-1",
+        chunk_id="chunk-1",
+        backend_id="doc-1",
+        kind="video",
+        mime_type="video/mp4",
+        title="视频.mp4",
+        reference_id="chunk-1",
+    )
+    signed_id = resource.url.rsplit("/", 1)[-1]
+    response = runtime.serve_media(signed_id)
+    assert response is not None and response.status_code == 200
+    assert response.body == b"MP4DATA"
+    # The fetch reached kb-service under the grant's tenant, never under the
+    # process-level neutral "aiops" binding.
+    assert kb_client.fetches == [("tenant-video", "tenant-video")]

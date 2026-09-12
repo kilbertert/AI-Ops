@@ -870,8 +870,19 @@ class GatewayRuntime:
         """
         if self.media_signer is None or self.kb_search_client is None:
             return None
+
+        def _fetch_for_tenant(grant: MediaGrant, **kwargs: Any) -> bytes:
+            # The process-level client is bound to the neutral "aiops" tenant;
+            # the media document belongs to the grant's tenant, so kb-service
+            # must see that tenant's header/token or the download misses
+            # (code=102 document not found, observed as deterministic 404s in
+            # the #175 C4 video canary on 2026-09-12).
+            client = self.kb_search_client
+            bound = client.for_tenant(grant.tenant_id) if hasattr(client, "for_tenant") else client
+            return bound.fetch_media(grant, **kwargs)
+
         if self._media_proxy is None:
-            self._media_proxy = MediaProxy(self.media_signer, self.kb_search_client.fetch_media)
+            self._media_proxy = MediaProxy(self.media_signer, _fetch_for_tenant)
         from aiops_diagnostics.qa_rag import select_customer_agent
 
         def _is_active(grant: MediaGrant) -> bool:
