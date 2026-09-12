@@ -149,6 +149,7 @@ class AgentCoordinator:
         session_factory: SessionFactory | None = None,
         progress_callback: ProgressCallback | None = None,
         language: str = DEFAULT_LANGUAGE,
+        environment_notes: tuple[str, ...] = (),
     ) -> None:
         self.workspace = workspace
         self.manifest = manifest
@@ -157,6 +158,7 @@ class AgentCoordinator:
         self.settings = settings
         self._provider = provider
         self.language = language
+        self.environment_notes = tuple(environment_notes)
         self.validator = AgentResultValidator(
             manifest,
             journal,
@@ -312,6 +314,14 @@ class AgentCoordinator:
     def _initial_prompt(self) -> str:
         tools = "\n".join(f"- {name.value}: {description}" for name, description in TOOL_DESCRIPTIONS.items())
         incident = json.dumps(self.manifest.model_dump(mode="json"), ensure_ascii=False, indent=2)
+        notes_block = ""
+        if self.environment_notes:
+            notes = "\n".join(f"- {note}" for note in self.environment_notes)
+            notes_block = f"""
+环境能力预检（advisory）——以下证据通道在本环境已知缺失，请从第一轮规划起绕开，
+并将其影响写入 limitations 与 next_steps；如仍需请求，工具会自然失败：
+{notes}
+"""
         return f"""Diagnose the immutable incident below.
 Start by reading `incident.json`, `AGENTS.md`, and `references/INDEX.md`.
 Then inspect only the staged references that are relevant.
@@ -323,7 +333,7 @@ Incident manifest:
 
 Available read-only evidence tools:
 {tools}
-
+{notes_block}
 Choose the smallest useful evidence set. Normally request `order_snapshot` first.
 Write every human-readable output field (summary, root_cause, evidence notes,
 recommendations) in {language_name(self.language)}. Keep identifiers, codes,

@@ -757,3 +757,12 @@ ScopeContext（UPMS/Dis）行为由 T1-T3 既有真实验收线覆盖。
 | ADM-03 | 本地 dev | 清单模型不在白名单 | 同上（模型写 gpt-4o） | exit 2 + “不在白名单”，gateway.db 零写入 | 同上 |
 | ADM-04 | 41 实机 | /etc/aiops-41/production.env + ops/environments/env-41.toml | `aiops --config /etc/aiops-41/production.env admin reconcile ops/environments/env-41.toml --kb-url http://127.0.0.1:29380`（先 `--dry-run` 再实跑；跑前 `cp gateway.db gateway.db.bak-<date>`） | 首跑全 `unchanged`（转写回环验证；出现 `updated` = 清单转写有误，停手修清单）；KB 活性校验真实触达 36 kb-service | 保留服务与备份 |
 | ADM-05 | 41 实机 | ADM-04 通过 | 修改清单 prompt（实验性漂移）后再 reconcile | 报告 `updated` 且产生 v2；确认后把清单改回并再收敛恢复 | 用备份或再次收敛恢复 |
+
+## 诊断置信阶梯与环境预检 QA（LADDER）
+
+| ID | 环境 | 前置 | 操作 | 预期结果 | 清理 |
+|---|---|---|---|---|---|
+| LADDER-01 | 本地 dev | 合成 fixture | `uv run pytest tests/test_agent_scenarios.py tests/test_diagnostic_tools.py tests/test_hybrid_sources.py tests/test_codex_runtime.py -q` | 全过：阶梯场景(gun 失败+计费完整→diagnosed+medium)、doctor 列探测、预检 blocked/容错/不短路、提示词文本 pin | 无 |
+| LADDER-02 | 41 实机 | PR-C 部署后 | 用订单属主 session 对 2098849284776484865 重新发起诊断 | run 内 events 出现 环境能力预检 注记与 blocked 预检条目（charging-pile_comm 表不存在、batteryMinTemperature 缺列）；结论预期仍 inconclusive（计量矛盾确需遥测）但 limitations 点名具体通道 | 会话数据保留 |
+| LADDER-03 | 41 实机 | 同上 | 找一个 MySQL 证据完整、问题只涉计费的订单发起诊断 | 结果 completed（diagnosed）+ medium + failed_sources 声明 TDengine 通道——此前这类单易被降为 inconclusive | 保留 |
+| LADDER-04 | 回归 | — | `uv run pytest -q` 全量 | 既有 685+ 测试零回归 | 无 |
