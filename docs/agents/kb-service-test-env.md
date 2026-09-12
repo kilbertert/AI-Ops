@@ -1,6 +1,6 @@
 # kb-service 测试环境与协议样例（面向 #170 及后续票）
 
-> 状态：当前有效，2026-09-11 修订（KB 栈已迁移动云 36 并完成公网切流，见 §1）。
+> 状态：当前有效，2026-09-12 修订（KB 栈已迁移动云 36 并完成公网切流，见 §1）。
 > 读者：#170 实现者（Codex/AFK）、#171/#173 联调负责人。
 > 来源：2026-09-08~09 全链路浏览器验收 + RAGFlow v0.27.1 源码级核实（部署版本与
 > `~/Playground/.ragflow-study` 研究副本一致，适配层 md5 已比对）。
@@ -25,9 +25,9 @@ kb-service（36，systemd 单元，127.0.0.1:9380，仅回环）
     ▼
 RAGFlow v0.27.1（36，5 容器 compose 项目 ragflow-kb，API 127.0.0.1:19380，仅回环）
 
-【管理后台链路（历史拓扑，公司侧待修）】
+【管理后台链路（已归档，非当前可用路径）】
 admin.qumall.qushiyun.com（120 Nginx）/kb/** → cloud-gateway(120:9999, Nacos id=kb)
-    → 仍指向 124.243.178.156:9380（已停机的旧主机）——需公司侧把 /kb/ 改指 36:9380
+    → 仍指向 124.243.178.156:9380（旧 41 部署路径，决策已作废）
 ```
 
 AI-Ops 的位置：QA/RAG 主链路上，AI-Ops 网关与 kb-service 同在 36，内网回环直连。
@@ -35,6 +35,11 @@ AI-Ops 的位置：QA/RAG 主链路上，AI-Ops 网关与 kb-service 同在 36�
 内网不互通（同段不同 VPC），36 通过 120 的 SSH 隧道访问会话 Redis/UPMS MySQL/UPMS API
 （systemd 单元 `aiops-session-redis-tunnel`，127.0.0.1:26379/23306/25999，
 restricted authorized_keys + permitopen 白名单）。
+
+旧 41 路径曾完成本机只读验证，但因资源不足，2026-09-12 已正式撤销部署与切流决策。
+它不是可用生产入口，且不能把 `/kb/` 直接改到 36 的 `127.0.0.1:9380`：那会绕过
+公司网关原有 OAuth/租户鉴权边界。若要恢复管理后台 `/kb/**`，公司侧必须另行批准并交付
+120→36 的受限传输、身份与租户头映射、路由授权和回滚方案，再执行端到端验收。
 
 ## 1. 当前可用状态（2026-09-11 修订）
 
@@ -194,7 +199,8 @@ T1 的媒体块只是**不透明 ID + 短时签名授权**（`MediaResourceSigne
 2. ~~kb-service 补图片透传端点~~ **已完成**（2026-09-11 部署 36 并实测；源码记录在
    Playground 沙箱仓库，见 §1）。
 3. **公司侧待办（非 AI-Ops 仓库）**：admin 域名 120 nginx 的 `/kb/` location 仍指向
-   已停的 124.243.178.156:9380，需改指 36（kb-service 9380 仅回环，需经 36 本机
-   nginx 或隧道暴露给公司网关，方案待公司侧定）；UPMS 建 `ROLE_AGENT_ADMIN` 角色族
-   并授权管理账号（管理面 HTTP 化的前提，当前管理操作走 on-box 方式）；业务方轮换
-   被封锁的 alibaba-maas key（canary-dashscope 为临时 provider）。
+   旧 41 路径 `124.243.178.156:9380`，而该部署决策已作废。不得以直连 36 回环端口或
+   绕过 cloud-gateway/OAuth 的方式替换；需单独设计并批准 120→36 的受限代理、身份与
+   租户映射、路由授权、审计与回滚后再实施。UPMS 还需建 `ROLE_AGENT_ADMIN` 角色族并
+   授权管理账号（管理面 HTTP 化的前提，当前管理操作走 on-box 方式）；业务方轮换被
+   封锁的 alibaba-maas key（canary-dashscope 为临时 provider）。
