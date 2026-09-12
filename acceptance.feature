@@ -701,6 +701,14 @@ Feature: 41 环境 Gateway 切换
       Then 返回 HTTP 202
       And 轮询终态为 completed 且 result.text 非空
 
+    Scenario: 41 多语言 FAQ 主链路按请求语言返回
+      Given 41 运行副本已部署 Accept-Language、FAQ 五语目录和短路匹配实现
+      And H5 登录接口返回与 41 会话库匹配的有效 thirdSession
+      When 使用 zh-CN、en-US、de、fr、es、pt-BR 分别请求 FAQ 推荐、固定答案和统一入口快捷问
+      Then 每次响应均返回 HTTP 200
+      And language 字段分别解析为 zh、en、de、fr、es、pt
+      And 标题和答案使用对应语言，未跨环境读取会话或数据
+
     Scenario: 41 客服问答返回多媒体检索块
       Given 41 租户存在已发布且绑定图片和视频知识库的客服智能体
       And RAGFlow embedding provider 可用

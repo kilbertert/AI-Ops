@@ -799,3 +799,11 @@ ScopeContext（UPMS/Dis）行为由 T1-T3 既有真实验收线覆盖。
 - 预期结果：自由 QA `202→completed`；媒体问题返回含 `blocks[]` 的检索结果，图片可下载、视频支持 `206/416`。
 - 清理：不保存会话；保留 41 provider/数据库备份；不改业务订单。
 - 结果：BLOCKED（2026-09-13 Asia/Shanghai）。自由 QA 与媒体问题均创建 `202`，但 RAGFlow 向量/模型调用真实返回百炼 `400 Arrearage`，终态 `QA_FAILED`，未生成媒体块。41 Gateway、KB 隧道和 `/healthz` 均正常；待恢复百炼账户或替换 embedding provider 后复跑媒体验收。
+
+### CUTOVER-41-07 多语言实现接入与真实验收
+
+- 环境：41 `47.97.160.153`、公网 `https://api.mall.qushiyun.com`；源码同步自 `origin/main@ef79e58`。
+- 有序动作：备份 41 运行副本后同步主线 `src`/FAQ 制品并重启 Gateway；使用同一有效 H5 会话，分别以 `zh-CN`、`en-US`、`de`、`fr`、`es`、`pt-BR` 调用 FAQ 推荐、固定答案和统一入口快捷问；再提交英文非 FAQ 问题并轮询。
+- 预期结果：FAQ 与快捷问返回 200、`language` 正确折叠、标题/答案对应语言；非 FAQ 返回 202 并在完成态返回目标语言文本。
+- 清理：不保存会话；保留 41 主机源码回滚包；不写业务订单。
+- 结果：PARTIAL（2026-09-13 Asia/Shanghai）。六种语言 FAQ 推荐均 `200/28` 且正确回显 `zh/en/de/fr/es/pt`；固定答案五语均 `200`/`text`/非空；统一入口快捷问五语均 `200 type=faq` 且未创建异步作业。英文非 FAQ 已返回 `202 type=qa` 且 `language=en`，轮询因百炼真实 `400 Arrearage` 以 `QA_FAILED` 结束，未取得多语言 completed 文本。待恢复 provider 后复跑 QA/媒体/诊断成功路径。

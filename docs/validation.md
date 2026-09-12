@@ -68,6 +68,26 @@
 阻塞，媒体 `blocks[]`、
 健康报告/标准诊断成功路径仍未全部通过，不能宣称全链路业务验收完成。
 
+## 41 多语言主链路接入复验（2026-09-13）
+
+- **运行副本同步**：41 `/opt/aiops-41/src` 原为早期 L1 版本，缺少目录五语化、短路多语言
+  匹配和完整输出语言注入。已先备份 `src` 与 Gateway 数据，再从 `origin/main@ef79e58`
+  同步运行源码和 FAQ 制品；远端关键文件哈希与主线一致，重启后
+  `aiops-gateway-41.service` 保持 active，`/health=200`。回滚包仅保留在 41 主机
+  `/var/backups/aiops-41/`，未写入仓库。
+- **真实 FAQ 五语通过**：使用同一有效 41 H5 会话，`Accept-Language` 为 `zh-CN`、
+  `en-US`、`de`、`fr`、`es`、`pt-BR` 时，推荐接口均返回 `200/28`，`language` 分别为
+  `zh/en/de/fr/es/pt`，标题已本地化；固定答案五种非中文请求均返回 `200`、`format=text`、
+  非空对应语言答案。
+- **真实统一入口短路通过**：用中文快捷问题配合 `Accept-Language: en/de/fr/es/pt`，
+  均返回 `200 type=faq`，`language` 与答案语言对应，未创建 QA/诊断作业。
+- **非 FAQ 语言链路仍受外部依赖阻塞**：英文非 FAQ 问题返回 `202 type=qa` 且携带
+  `language=en`，轮询随后因百炼真实 `400 Arrearage` 结束，尚未取得 completed 的多语言
+  `result.text` 或媒体 `blocks[]`。这证明语言透传已进入主链路，未证明模型供应商已恢复。
+
+当前多语言结论：41 的语言解析、FAQ 内容输出和 FAQ 短路主链路已通过真实验收；自由 QA
+完成态、媒体检索和诊断完成态仍需恢复百炼/RAGFlow provider 与诊断数据前置条件后复跑。
+
 合成 fixture 可以验证确定性行为，但不能证明生产故障结论准确。所有“通过”都必须说明验证范围，不能把自动化回放写成工程师确认的业务验收。
 
 ## 助手输出国际化 L1：Accept-Language 解析（2026-09-12）
