@@ -1,6 +1,6 @@
 # AI-Ops 前端联调总览
 
-> 状态：当前有效，2026-09-04。
+> 状态：当前有效，2026-09-12。
 > 读者：前端组、BFF/Java 组、联调测试。
 > 权威契约：固定问答见 [固定问答标准接口](../faq-api.md)；健康报告与单问诊断见 [标准后端接口报告](../standard-api-contract.md)。本文含三条线的完整输入/输出定义，冲突时以两份契约文档为准。
 
@@ -15,7 +15,10 @@
     │  2. 按访问入口决定 X-Business-Entry: consumer | operator
     │  3. 以服务身份调用 AI-Ops，转发 thirdSession
     ▼
-AI-Ops（120 本机, 经同域名 /v1/* 反代接入, 见 §10.6）
+120 Nginx（同域 /v1/*，注入服务身份）
+    │  仅到 36:8789 的受限 TLS 反代
+    ▼
+AI-Ops（36 本机 127.0.0.1:8788，见 §10.6）
     │  解析会话 → 判定平台身份 → 隔离内容域 → 返回数据
     ▼
 前端拿到数据渲染
@@ -412,13 +415,31 @@ queued → running → completed | failed | expired                  （报告�
 
 当前可解析会话中尚未找到具备唯一 B 端主体映射的真实样本，因此管家端成功响应仍待一个有效管家用户会话。该缺口不影响客户端联调，也不能通过伪造 `platform` 或临时扩大权限绕过。
 
-## 9.5 QA + blocks[] 媒体验收状态（2026-09-11 更新，可联调）
+## 9.5 QA + blocks[] 媒体验收状态（2026-09-12 更新，可联调）
 
 - **联调环境已就绪**：`api.qumall.qushiyun.com` 已切到真实 RAG 链路（KB 栈在移动云 36，公网切流 2026-09-11 完成）。联调租户的客服智能体已发布并绑定含图片（PNG）与视频（MP4）的知识库——前端按 §场景 B 合同提问即可拿到含 media 块的真实 `blocks[]`。
 - 联调用 C 端会话（thirdSession）与测试问题由服务侧提供（会话有时效，失效时向运维索取新的）。
 - `qa` 作业返回 `blocks[]` + `retrieval_status`；`/v1/media/{id}` 支持 Range（视频分段播放）、短时签名（约 10 分钟）、停用即失效。多轮会话 `/v1/conversations`（#180）可用，含 active-order 绑定与 409 忙碌语义。
-- **已知收尾项（不阻塞按合同开发）**：视频块的**字节回源**在服务端最后一轮修复（#187/#188/#190）部署完成前可能返回错误包——text/image/reference 块已真实验收，视频 `<video>` 标签先接好，播放验证等服务端确认。
+- **视频播放已验收**：服务端租户绑定修复（PR #196）与两层反代 Range 透传已部署。
+  新鲜 QA 的 video block 在公网返回 `206`、1024 字节与正确 `Content-Range`；超范围
+  返回 `416`。前端可直接用 `<video src={media.url}>`，仍不得缓存短时签名 URL。
 - 未配置 KB 栈的租户提问会回落纯文本（`blocks[]` 只有 text 块，无 media）；每个租户需要服务侧先完成智能体发布与知识库绑定。
+
+## 9.6 C 端接口消费者复验（2026-09-12）
+
+环境：2026-09-12T14:50:05+08:00，公网 `https://api.qumall.qushiyun.com`，已合并的
+PR #196 运行版本；请求只带前端应有的 `third-session` 与 `tenant-id`，不带服务令牌。
+
+- FAQ：推荐、目录均为 `200`/28 条；固定答案为 `200`/`text`；统一助手的快捷问分支为
+  `200 type=faq`，可同步渲染。
+- QA：自由问返回 `202`，轮询至 `completed/found`，`blocks[]` 含 text、video、reference；
+  QA 历史可读且包含新作业。签名视频 Range 为 `206`，超范围为 `416`。
+- 会话：创建 `201`、列表可见、删除 `200`、删除后读取统一 `404 CONVERSATION_NOT_FOUND`。
+- 错误头：将 `third-session` 错写为 `X-Third-Session` 得到 `401 INVALID_ACCESS_TOKEN`，
+  前端/BFF 必须继续使用全小写连字符头。
+- 订单线边界：当前联调会话对测试订单创建健康报告得到 `404 ORDER_NOT_FOUND`，诊断历史为空；
+  这是授权隔离的正确行为，不代表健康报告或诊断成功路径已通过。补验需要业务方提供该会话
+  有权访问的一笔订单，不应通过伪造订单号或扩大数据范围绕过。
 
 ## 10. 前端真实链路诊断（2026-09-05，Pyrovolt Move 1.0.3 APK 实测）
 
@@ -439,17 +460,22 @@ queued → running → completed | failed | expired                  （报告�
 | 2 | **APK 直连 BFF 域名，缺服务身份头** | APK 不发 `Authorization`；即使 BFF 反代 `/v1/*`，纯 nginx 转发也会因缺 `Authorization`（→401 `ACCESS_TOKEN_REQUIRED`）与 `X-Third-Session` 头名不匹配（APK 发的是 `third-session`）而全部 401 | 必须在 Java/BFF 层注入服务令牌并做头名映射，不能纯 nginx 转发 |
 | 3 | **前端 UI 未接线（半成品）** | chat 页 `onLoad` 调 `getFaqRecommendations().catch(()=>{})` 后**丢弃响应**，推荐列表用硬编码 10 条 questionPool；点击问题/语音后只跑打字机动画，不调 `getFaqAnswer`/`createDiagnosis`；电池报告页未接 `health-report-jobs` | 接口封装层已就绪且正确，UI 接线是前端侧剩余工作 |
 
-### 10.3 BFF 侧修复方案（2026-09-06 已实施，方案 A 落在 120）
+### 10.3 BFF 侧修复方案（2026-09-12 当前形态）
 
-断点 1+2 已按以下形态实施于公司 120 服务器（issue #147 完成服务迁移后为同机反代）：
+断点 1+2 已由 120 公网入口向 36 受限入口反代：
 
 ```nginx
 # api.qumall.qushiyun.com（120 nginx, /www/server/panel/vhost/rewrite/）：
 location /v1/ {
-    proxy_pass http://127.0.0.1:8788;                            # 120 本机 AI-Ops 网关（生产）
+    proxy_pass https://36.156.159.175:8789;                      # 36 受限 AI-Ops 入口
+    proxy_ssl_server_name on;
+    proxy_ssl_name api.qumall.qushiyun.com;
+    proxy_http_version 1.1;
     proxy_set_header Authorization "Bearer <AI-Ops 服务令牌>";  # 服务端注入，不下发前端
     proxy_set_header X-Third-Session $http_third_session;       # 透传前端 third-session 头（nginx 内部可大写，网关侧 ASCII 头不区分大小写）
+    proxy_set_header Range $http_range;                          # 保证 video 元素的 seek/Range 合同
     proxy_set_header X-Business-Entry "consumer";               # C 端 APP 入口固定 consumer
+    proxy_set_header Host $host;
 }
 # 注意：$http_third_session 取的是入站请求的 third-session 小写头——前端仍必须发小写 third-session，
 # 若发 X-Third-Session（带下划线）nginx 默认丢弃（underscores_in_headers off），此处会拿到空值。
@@ -469,18 +495,20 @@ location /v1/ {
 
 即：**断点修复（BFF 反代 + 头注入）完成后，FAQ 线立即可用**；健康报告/单问诊断另受 #113 测试数据缺口（需"已登录+有订单"账号）约束。
 
-### 10.6 链路现状（2026-09-06，服务迁移后）
+### 10.6 链路现状（2026-09-12）
 
-断点 1+2 已修复并通过 S1/S2/S3 三轮验收（issue #147）：服务本体于 2026-09-06 从原测试服务器迁至公司 120（同机反代，0 跨机房）。当前链路：
+断点 1+2 已修复；36 公网切流与 C 端接口消费者复验已完成。当前链路：
 
 ```text
 APK / 前端 → https://api.qumall.qushiyun.com/v1/*（120 nginx 反代 + 头注入）
-           → 120 本机 AI-Ops 网关（127.0.0.1:8788, systemd aiops-gateway.service）
-           → 内网直连数据源（MySQL 0.39 / 本机 Redis / TDengine / UPMS 5999）
+           → 36 受限 TLS 入口（:8789，仅收 120）
+           → 36 本机 AI-Ops 网关（127.0.0.1:8788, systemd aiops-gateway.service）
+           → 36 本机 kb-service/RAGFlow；会话与诊断数据面经受限隧道访问 120
 ```
 
-- 三线验收状态：FAQ 200（28 条）、健康报告 202→completed、单问诊断 202→执行面正常（终态复验待模型配额，glm-ark 月配额 2026-09-21 重置）
-- 前端剩余工作见 §10.5；APIURL 切换后 FAQ 与健康报告线立即可用
+- C 端验收状态：FAQ、统一助手 QA、视频 Range、会话生命周期通过（见 §9.6）；当前会话的
+  健康报告和单问诊断成功路径仍需一笔已授权订单，不能用未授权订单或历史他人诊断替代。
+- 前端剩余工作见 §10.5；接口消费者只需切换 APIURL，并保留 `third-session` 小写头。
 
 ### 10.7 前端最小验证命令（改完直接跑，无需后端配合）
 

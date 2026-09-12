@@ -706,8 +706,10 @@ ScopeContext（UPMS/Dis）行为由 T1-T3 既有真实验收线覆盖。
 
 ### METRICS-REAL 真实环境监控（部署后）
 
-- 环境：120 生产网关 + 公网 `/v1/agent-metrics/*`（同域反代）+ apifox。
+- 环境：36 生产网关 + 公网 `/v1/agent-metrics/*`（120 同域反代）+ apifox。
 - 前置条件：#173 真实链路 canary 产生流量。
 - 有序动作：走真实 FAQ/QA/诊断提问后查监控汇总与明细。
 - 预期结果：计数与真实操作对应，跨租户隔离，脱敏字段核对。
-- 结果：BLOCKED（2026-09-10）。原因：KB 栈停机 + #173 真实 canary 未跑；不得用 fake 流量充当生产监控验收。
+- 结果：BLOCKED（2026-09-12）。#173 真实 canary 已产生公网 FAQ/QA/媒体流量；普通 C
+  端会话访问汇总正确返回 `403 AGENT_FORBIDDEN`。管理成功路径仍缺带 `VIEW_ROLES` 的真实
+  管理身份，不得以 C 端会话、fake 流量或临时放宽角色替代。
