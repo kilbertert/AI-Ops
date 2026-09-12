@@ -642,3 +642,24 @@ Feature: 智能体运行监控与脱敏审计
       Given 监控行超过 30 天保留期
       When 新指标写入触发清理
       Then 过期行被删除且不影响其他数据
+
+Feature: 41 环境演示数据源只读门禁
+  41 环境用于演示数据读取时，必须保持环境标识正确、数据面一致和只读凭据边界。
+
+  Rule: 41 环境的业务数据面必须可验证
+
+    Scenario: 41 环境提供诊断所需的 MySQL、Redis 和部分 TDengine 数据
+      Given 41 环境地址为 47.97.160.153
+      When 通过只读事务检查 cloud_charging_pile 及其依赖数据面
+      Then ch_order_info、ch_fee_template_record、iot_charging_device 和 ch_site 的所需字段完整
+      And Redis 白名单 Stream 可认证读取其类型与长度元数据
+      And charging-gun_property 超表存在且可返回聚合计数
+      And 缺失 charging-pile_comm 时必须标记协议证据不可用
+
+  Rule: 不安全凭据或不完整数据面不得切换生产服务
+
+    Scenario: 41 的高权限账号不能作为 AI-Ops 运行时账号
+      Given 数据库账号拥有写权限或全库权限
+      When 操作者准备将 AI-Ops 数据源切换到 41
+      Then 切换被阻止并要求独立的最小只读账号
+      And 不修改 41 环境中的服务、配置或数据

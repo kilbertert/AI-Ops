@@ -24,6 +24,7 @@ class _ScopedConnection:
         occupy: list[dict[str, Any]] | None = None,
         device: dict[str, Any] | None = None,
         sites: list[dict[str, Any]] | None = None,
+        occupy_columns: list[str] | None = None,
         exists_first_row: bool = True,
     ) -> None:
         self.orders = orders or []
@@ -31,6 +32,34 @@ class _ScopedConnection:
         self.occupy = occupy or []
         self.device = device
         self.sites = sites or [{"id": "SITE-A-1"}, {"id": "SITE-A-2"}]
+        self.occupy_columns = occupy_columns or [
+            "id",
+            "orderId",
+            "order_no",
+            "device_id",
+            "device_code",
+            "child_device_id",
+            "child_device_code",
+            "site_id",
+            "userId",
+            "free_time",
+            "timeout",
+            "occupy_amount",
+            "pay_amount",
+            "status",
+            "out_trade_no",
+            "is_pay",
+            "is_sync_mall_order",
+            "pay_time",
+            "tenant_id",
+            "startTime",
+            "endTime",
+            "operator_id",
+            "refund_status",
+            "refund_amount",
+            "refund_time",
+            "refundRemark",
+        ]
         self.exists_first_row = exists_first_row
         self.executed: list[tuple[str, list[Any]]] = []
 
@@ -48,6 +77,8 @@ class _ScopedConnection:
 
     def fetchall(self):
         last_sql = self.executed[-1][0]
+        if "information_schema.columns" in last_sql:
+            return [{"column_name": column} for column in self.occupy_columns]
         if "ch_site" in last_sql:
             return self.sites
         if "ch_occupy_order_info" in last_sql:
@@ -172,6 +203,48 @@ def test_scoped_occupy_orders_lookup_by_order_id_and_scope() -> None:
     sql, params = conn.executed[-1]
     assert "orderId=%s" in sql
     assert "userId=%s" not in sql  # user 过滤仅 self 范围才下推
+    assert params == ["100", TENANT, "SITE-A-1", "SITE-A-2"]
+
+
+def test_occupy_orders_maps_snake_case_columns_to_contract_names() -> None:
+    snake_columns = [
+        "id",
+        "order_id",
+        "order_no",
+        "device_id",
+        "device_code",
+        "child_device_id",
+        "child_device_code",
+        "site_id",
+        "user_id",
+        "free_time",
+        "timeout",
+        "occupy_amount",
+        "pay_amount",
+        "status",
+        "out_trade_no",
+        "is_pay",
+        "is_sync_mall_order",
+        "pay_time",
+        "tenant_id",
+        "start_time",
+        "end_time",
+        "operator_id",
+        "refund_status",
+        "refund_amount",
+        "refund_time",
+        "refund_remark",
+    ]
+    connection = _ScopedConnection(occupy_columns=snake_columns)
+    source, conn = _source(connection, QueryScope(tenant_id=TENANT, site_ids=SITES, user_id=None))
+
+    source.get_occupy_orders(order_id="100")
+
+    sql, params = conn.executed[-1]
+    assert "order_id=%s" in sql
+    assert "`order_id` AS `orderId`" in sql
+    assert "`start_time`" in sql
+    assert "`user_id` AS `userId`" in sql
     assert params == ["100", TENANT, "SITE-A-1", "SITE-A-2"]
 
 
