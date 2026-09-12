@@ -33,6 +33,7 @@ from aiops_diagnostics.config import (
     selected_config_file,
     validate_key_slot_name,
 )
+from aiops_diagnostics.admin_cli import admin_app
 from aiops_diagnostics.console_encoding import configure_windows_stdio
 from aiops_diagnostics.engine import DiagnosticEngine
 from aiops_diagnostics.gateway_cli import remote_app
@@ -70,6 +71,7 @@ app = typer.Typer(
 console = Console()
 _CONFIG_FILE_OVERRIDE: Path | None = None
 app.add_typer(remote_app, name="remote")
+app.add_typer(admin_app, name="admin")
 
 
 class DiagnoseMode(StrEnum):
