@@ -556,7 +556,7 @@ def test_runtime_serve_media_fetches_through_grant_tenant(tmp_path: Path) -> Non
         bound_tenant = "aiops"
 
         def __init__(self) -> None:
-            self.fetches: list[tuple[str, str]] = []  # (client tenant, grant tenant)
+            self.fetches: list[tuple[str, str, str | None]] = []  # (client tenant, grant tenant, range)
 
         def for_tenant(self, tenant_id: str) -> _TenantRecordingClient:
             clone = _TenantRecordingClient.__new__(_TenantRecordingClient)
@@ -565,7 +565,7 @@ def test_runtime_serve_media_fetches_through_grant_tenant(tmp_path: Path) -> Non
             return clone
 
         def fetch_media(self, grant: MediaGrant, *, range_header: str | None = None) -> bytes:
-            self.fetches.append((self.bound_tenant, grant.tenant_id))
+            self.fetches.append((self.bound_tenant, grant.tenant_id, range_header))
             return b"MP4DATA"
 
     settings = GatewayServerSettings(
@@ -631,9 +631,9 @@ def test_runtime_serve_media_fetches_through_grant_tenant(tmp_path: Path) -> Non
         reference_id="chunk-1",
     )
     signed_id = resource.url.rsplit("/", 1)[-1]
-    response = runtime.serve_media(signed_id)
-    assert response is not None and response.status_code == 200
-    assert response.body == b"MP4DATA"
+    response = runtime.serve_media(signed_id, range_header="bytes=0-2")
+    assert response is not None and response.status_code == 206
+    assert response.body == b"MP4"
     # The fetch reached kb-service under the grant's tenant, never under the
     # process-level neutral "aiops" binding.
-    assert kb_client.fetches == [("tenant-video", "tenant-video")]
+    assert kb_client.fetches == [("tenant-video", "tenant-video", "bytes=0-2")]
