@@ -1,5 +1,16 @@
 # 验证与验收计划
 
+## 41 Gateway 与公网入口切换验证（2026-09-12）
+
+- 41 `aiops-gateway-41.service` enabled/active；本机 `GET /health` 返回 `200`，
+  `business_mutations=disabled`。
+- 41 MySQL、Redis、TDengine 连接探针均通过；未执行写业务数据、配置或消费游标操作。
+- 120 `aiops-41-tunnel.service` active，`127.0.0.1:28789/health` 返回 `200`；公网
+  `/v1/faq/recommendations` 携带无效 `X-Third-Session` 返回 `401 INVALID_ACCESS_TOKEN`。
+- 120 原 `/v1/*` rewrite 已保存为 `*.bak-aiops41-*` 备份，可独立回滚。
+- 41 没有 kb-service/RAGFlow，未复制重型容器栈；Gateway 使用 36 的受限 KB 入口。
+- 未完成 41 真实会话、FAQ 成功路径、健康报告和诊断成功路径业务验收。
+
 合成 fixture 可以验证确定性行为，但不能证明生产故障结论准确。所有“通过”都必须说明验证范围，不能把自动化回放写成工程师确认的业务验收。
 
 ## 助手输出国际化 L1：Accept-Language 解析（2026-09-12）

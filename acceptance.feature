@@ -663,3 +663,18 @@ Feature: 41 环境演示数据源只读门禁
       When 操作者准备将 AI-Ops 数据源切换到 41
       Then 切换被阻止并要求独立的最小只读账号
       And 不修改 41 环境中的服务、配置或数据
+Feature: 41 环境 Gateway 切换
+
+  Rule: 切换后公网标准 API 保持可用且只读
+
+    Scenario: Gateway 健康检查
+      Given 41 的 aiops-gateway-41.service 已启用
+      When 调用 41 Gateway 的 GET /health
+      Then 返回 HTTP 200
+      And business_mutations 为 disabled
+
+    Scenario: 公网入口保持认证错误合同
+      Given 120 Nginx /v1/* 已通过受限隧道指向 41 Gateway
+      When 使用无效 X-Third-Session 调用 GET /v1/faq/recommendations
+      Then 返回 HTTP 401
+      And 错误码为 INVALID_ACCESS_TOKEN
