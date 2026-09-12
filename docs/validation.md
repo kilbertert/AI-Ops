@@ -716,3 +716,34 @@ S3 退役验收（公网入口 + 开机自启）：FAQ 200（28 条）、健康�
 - 修复：视频媒体回源仅对该类 `MediaNotFound` 做最多 6 次指数退避重试（总等待约 7.75 秒）；预算耗尽仍按 404 处理，不隐藏永久缺失。
 - 自动化结果：新增重试回归测试；全量 pytest、Ruff、格式和 `git diff --check` 通过。
 - 真实状态：待部署本提交后复跑公网 C4，验证真实整段、Range 和错误边界。
+
+## 真实媒体复测与剩余阻塞（2026-09-12）
+
+本轮使用仍有效的 C 端 `thirdSession` 经公网
+`https://api.qumall.qushiyun.com/v1/*` 复测，凭据未写入仓库或证据文件。
+
+- **图片媒体 PASS**：新鲜 QA 返回 `image` block；无 Authorization 头 GET 签名 URL
+  返回 `200`、`Content-Type: image/jpeg`、`Content-Length: 11469`，响应字节魔数为
+  JPEG（`ffd8ffe0…`），`Accept-Ranges: bytes` 与 `Cache-Control: private, no-store`
+  生效。RAGFlow 存储格式与声明的 `image/png` 不一致时，网关按字节返回真实 MIME，符合
+  媒体代理安全边界。
+- **视频媒体 BLOCKED**：新鲜 QA 仍返回 `retrieval_status=found`、video block；QA
+  终态后数秒内访问同一签名 URL，整段 GET、`Range: bytes=0-1023` 和超范围 Range
+  均返回 `404`、空 body。上游下载面可复现 HTTP 200、44 字节 JSON
+  `{"code":102,"message":"document not found"}`，不是有效 MP4。该证据说明检索
+  索引仍引用已不存在或已脱离当前 RAGFlow 租户的数据对象；继续增加重试不能修复永久缺失。
+  需要在 36 上恢复/重新解析《新加坡无人电动巴士.mp4》并确认文档 `run=DONE` 后再复测
+  200/206/416。当前 36 SSH 公钥认证成功但远端命令通道不返回，无法由本轮安全执行
+  文档恢复或 `kb-service` 重启。
+- **无命中 PASS**：真实 QA 返回 `status=completed`、`retrieval_status=not_found`，
+  `blocks[]` 保留 1 个文本块，无媒体或引用伪造。该结果证明空工具请求降级修复已进入
+  公网运行链路。
+- **知识库不可用 BLOCKED**：旧的失败记录不能替代验收；本轮没有停止 36
+  `kb-service`，因此没有把 `retrieval_status=unavailable` 或恢复后的 `/healthz=200`
+  写成通过。
+- **监控 C7 BLOCKED**：普通 C 端访问管理指标接口仍应为 `403 AGENT_FORBIDDEN`；
+  成功路径需要业务方提供真实带 `VIEW_ROLES` 的管理身份，不能用 C 端会话伪造。
+
+结论：AI-Ops 媒体签名、图片回源、MIME 校正、文本降级和视频永久缺失的 404 映射均有
+真实证据；剩余阻塞是 36 知识库视频对象恢复、36 运维命令通道，以及 C7 管理身份，均不
+通过修改客户端渲染或放宽鉴权来规避。

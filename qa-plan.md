@@ -577,7 +577,7 @@ ScopeContext（UPMS/Dis）行为由 T1-T3 既有真实验收线覆盖。
 - 有序动作：发布客服智能体（真实校验拒绝原因）→ 草稿调试 → 提问 → blocks[] → 图片 200 / 视频 Range 206/416 → 多轮与忙碌 → 无命中/不可用/媒体失效降级 → 监控计数核对。
 - 预期结果：QA 返回 `blocks[]`，图片可渲染、视频可播放（Range 生效），文本/引用在媒体失败时保留，越权/TTL/失效拒绝，监控计数吻合且无原文。
 - 清理：删临时知识库、停用 canary 智能体、删会话；租户映射复用不删（canary 纪律）。
-- 结果：PARTIAL（2026-09-11）。C1（发布+真实校验拒绝原因）与 C3（真实公网 QA → blocks[]，text×4+video 签名 URL+reference，found/searches=1，qa_0a2cb9f5…）PASS；C4 伪造 403 PASS，视频字节回源在 #187/#188/#190 部署 36 后复跑；C5-C7 待执行（C7 需具备 VIEW_ROLES 的管理身份）。不得把本地 fake 结果写成业务验收通过。
+- 结果：PARTIAL（2026-09-12）。C1/C3 PASS；C4 图片 PASS（新鲜 image QA，GET 200、`image/jpeg`、11469 字节、JPEG 魔数），伪造媒体 403 PASS；C4 视频仍 BLOCKED（新鲜 QA 完成后立即整段/Range 均 404，上游 44 字节 `code=102 document not found`，检索索引仍指向已不存在的视频文档）。C5 PASS；C6 无命中 PASS（真实 QA `retrieval_status=not_found` 且保留文本），KB 不可用仍 BLOCKED（当前 SSH 远端命令与 36 本机服务转发不可用，无法执行 stop/start 与恢复检查）；C7 BLOCKED（缺少真实 `VIEW_ROLES` 管理身份）。不得把本地 fake 结果写成业务验收通过。
 
 ### P0-FIX-01 媒体错误包、MIME 与空工具请求回归
 
@@ -595,7 +595,7 @@ ScopeContext（UPMS/Dis）行为由 T1-T3 既有真实验收线覆盖。
 - 有序动作：重新提问获取新签名 URL；验证视频整段、`Range: bytes=0-1023`、不可满足 Range、伪造/过期 URL；验证图片字节与 MIME；分别注入 KB 不可用和无命中。
 - 预期结果：真实视频 200/206/416、图片 200 且 MIME 与字节一致；错误包不再以 200 媒体返回；无命中/不可用均保留文本并返回对应检索状态。
 - 清理：恢复 kb-service、删除临时会话/知识库，保留脱敏日志。
-- 结果：待部署后复测。
+- 结果：PARTIAL（2026-09-12）。图片真实回源 PASS；视频真实回源 404 BLOCKED，需先恢复/重解析 36 上视频文档，再复测 200/206/416；无命中真实降级 PASS；KB 不可用因无法安全停止并恢复 36 `kb-service` 暂不判定。
 
 ### P0-FIX-03 视频回源瞬时错误重试
 
