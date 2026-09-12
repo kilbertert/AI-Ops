@@ -741,8 +741,10 @@ S3 退役验收（公网入口 + 开机自启）：FAQ 200（28 条）、健康�
 - **知识库不可用 BLOCKED**：旧的失败记录不能替代验收；本轮没有停止 36
   `kb-service`，因此没有把 `retrieval_status=unavailable` 或恢复后的 `/healthz=200`
   写成通过。
-- **监控 C7 BLOCKED**：普通 C 端访问管理指标接口仍应为 `403 AGENT_FORBIDDEN`；
-  成功路径需要业务方提供真实带 `VIEW_ROLES` 的管理身份，不能用 C 端会话伪造。
+- **监控 C7 PARTIAL**：2026-09-12 09:37（Asia/Shanghai）使用真实 C 端会话访问
+  `/v1/agent-metrics/summary?window_hours=24`，实际返回 `403 AGENT_FORBIDDEN`，
+  负向权限边界 PASS；成功路径仍 BLOCKED，需要业务方提供真实带 `VIEW_ROLES` 的管理
+  身份，不能用 C 端会话伪造。
 
 结论：AI-Ops 媒体签名、图片回源、MIME 校正、文本降级和视频永久缺失的 404 映射均有
 真实证据；剩余阻塞是 36 知识库视频对象恢复、36 运维命令通道，以及 C7 管理身份，均不
