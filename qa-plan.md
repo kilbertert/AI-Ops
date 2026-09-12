@@ -1,5 +1,16 @@
 # AFK 可信交付 QA 计划
 
+## 41 切换 QA
+
+| ID | 环境 | 操作 | 预期结果 | 清理 |
+|---|---|---|---|---|
+| CUTOVER-41-01 | 41 | `curl http://127.0.0.1:8788/health` | 200，`business_mutations=disabled` | 保留服务 |
+| CUTOVER-41-02 | 120→41 | `curl http://127.0.0.1:28789/health` | 200 | 保留隧道 |
+| CUTOVER-41-03 | 公网 | 无效会话调用 `/v1/faq/recommendations` | 401 `INVALID_ACCESS_TOKEN` | 不产生业务数据 |
+| CUTOVER-41-04 | 41 | MySQL、Redis、TDengine 只读连接探针 | 三项连接成功 | 不执行写操作 |
+
+真实 41 会话、演示订单和成功路径待业务授权后执行，当前不标记为通过。
+
 ## AFK-B10 可信工作流静态门
 
 - 环境：AI-Ops AFK 任务分支。
