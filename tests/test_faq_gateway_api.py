@@ -150,3 +150,47 @@ def test_faq_responses_echo_resolved_language(tmp_path: Path) -> None:
     # A missing Accept-Language header falls back to the default language.
     assert answer.status_code == 200
     assert answer.json()["language"] == "zh"
+
+
+def test_faq_endpoints_return_localized_content(tmp_path: Path) -> None:
+    """FAQ read endpoints return localized titles/answers per Accept-Language (L2/#202)."""
+    with _client(tmp_path) as client:
+        recommendations = client.get(
+            "/v1/faq/recommendations",
+            headers={
+                "Authorization": "Bearer service",
+                "X-Business-Entry": "consumer",
+                "Accept-Language": "en",
+            },
+        )
+        assert recommendations.status_code == 200
+        assert recommendations.json()["language"] == "en"
+        assert recommendations.json()["recommendations"][0]["title"].startswith("Differences between AC")
+
+        answer = client.post(
+            "/v1/faq/answer",
+            headers={
+                "Authorization": "Bearer service",
+                "X-Business-Entry": "consumer",
+                "Accept-Language": "en",
+            },
+            json={"question_id": "consumer.faq.q001"},
+        )
+        assert answer.status_code == 200
+        body = answer.json()
+        assert body["language"] == "en"
+        assert body["question"] == "Differences between AC, DC & HPC Chargers"
+        assert body["answer"].startswith("Charging points")
+
+        catalog = client.get(
+            "/v1/faq/catalog",
+            headers={
+                "Authorization": "Bearer service",
+                "X-Business-Entry": "consumer",
+                "Accept-Language": "pt-BR",
+            },
+        )
+        assert catalog.json()["language"] == "pt"
+        assert catalog.json()["entries"][0]["question"] == (
+            "Diferença entre carregador rápido, ultra e lento"
+        )

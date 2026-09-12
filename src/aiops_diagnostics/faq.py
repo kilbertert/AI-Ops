@@ -13,12 +13,13 @@ from typing import Any, Protocol
 import pymysql
 
 from aiops_diagnostics.config import Settings
+from aiops_diagnostics.i18n import DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES
 from aiops_diagnostics.scope_context import ScopeContext
 
 PLATFORM_CONSUMER = "consumer"
 PLATFORM_OPERATOR = "operator"
 PLATFORMS = (PLATFORM_CONSUMER, PLATFORM_OPERATOR)
-DEFAULT_FAQ_VERSION = "2026.09.04"
+DEFAULT_FAQ_VERSION = "2026.09.12"
 FAQ_NOT_FOUND = "FAQ_NOT_FOUND"
 PLATFORM_AMBIGUOUS = "PLATFORM_AMBIGUOUS"
 PLATFORM_FORBIDDEN = "PLATFORM_FORBIDDEN"
@@ -207,17 +208,25 @@ class PlatformIdentityResolver:
 
 
 class FAQCatalog:
+    """固定问答目录（zh 权威原文）+ 可选 i18n（en/de/fr/es/pt，#200/#202）。
+
+    i18n 数据保存在独立的 ``_i18n`` 结构里，不进入对外返回的 entry dict；
+    任一语言缺条目或缺字段时按 zh 回退，目录永不返回空文案。
+    """
+
     def __init__(self, payload: dict[str, Any]) -> None:
         self.version = str(payload.get("faq_version") or DEFAULT_FAQ_VERSION)
         raw_platforms = payload.get("platforms")
         if not isinstance(raw_platforms, dict):
             raise ValueError("FAQ catalog platforms are invalid")
         self._entries: dict[str, dict[str, dict[str, Any]]] = {}
+        self._i18n: dict[str, dict[str, dict[str, dict[str, str]]]] = {}
         for platform in PLATFORMS:
             entries = raw_platforms.get(platform)
             if not isinstance(entries, list):
                 raise ValueError(f"FAQ catalog is missing {platform}")
             parsed: dict[str, dict[str, Any]] = {}
+            localized: dict[str, dict[str, dict[str, str]]] = {}
             for entry in entries:
                 if not isinstance(entry, dict):
                     raise ValueError("FAQ catalog entry is invalid")
@@ -234,29 +243,72 @@ class FAQCatalog:
                     "answer": answer,
                     "format": "text",
                 }
+                localized[question_id] = self._parse_i18n(entry.get("i18n"))
             self._entries[platform] = parsed
+            self._i18n[platform] = localized
+
+    @staticmethod
+    def _parse_i18n(raw: Any) -> dict[str, dict[str, str]]:
+        if raw is None:
+            return {}
+        if not isinstance(raw, dict):
+            raise ValueError("FAQ catalog i18n is invalid")
+        parsed: dict[str, dict[str, str]] = {}
+        for lang, fields in raw.items():
+            if lang not in SUPPORTED_LANGUAGES or lang == DEFAULT_LANGUAGE:
+                raise ValueError(f"FAQ catalog i18n language is invalid: {lang}")
+            if not isinstance(fields, dict):
+                raise ValueError(f"FAQ catalog i18n fields are invalid for {lang}")
+            question = str(fields.get("question") or "")
+            answer = str(fields.get("answer") or "")
+            if not question or not answer:
+                raise ValueError(f"FAQ catalog i18n question/answer are required for {lang}")
+            parsed[lang] = {"question": question, "answer": answer}
+        return parsed
 
     @classmethod
     def bundled(cls) -> FAQCatalog:
         raw = files("aiops_diagnostics").joinpath("faq_catalog.json").read_text(encoding="utf-8")
         return cls(json.loads(raw))
 
-    def recommendations(self, platform: str) -> list[dict[str, Any]]:
-        return [
-            {"question_id": entry["question_id"], "title": entry["question"], "sort": index}
-            for index, entry in enumerate(self._entries[platform].values(), 1)
-        ]
-
-    def catalog(self, platform: str) -> list[dict[str, Any]]:
-        return [dict(entry) for entry in self._entries[platform].values()]
-
-    def answer(self, platform: str, question_id: str) -> dict[str, Any]:
-        if not isinstance(question_id, str) or not question_id.startswith(f"{platform}."):
-            raise FAQError("FAQ question was not found")
+    def _localized(
+        self,
+        platform: str,
+        question_id: str,
+        language: str | None,
+    ) -> dict[str, Any]:
         entry = self._entries[platform].get(question_id)
         if entry is None:
             raise FAQError("FAQ question was not found")
-        return dict(entry)
+        fields = self._i18n[platform].get(question_id, {}).get(language or "")
+        if fields is None:
+            return dict(entry)
+        return {
+            "question_id": question_id,
+            "question": fields.get("question") or entry["question"],
+            "answer": fields.get("answer") or entry["answer"],
+            "format": entry["format"],
+        }
+
+    def recommendations(self, platform: str, language: str | None = None) -> list[dict[str, Any]]:
+        return [
+            {
+                "question_id": entry["question_id"],
+                "title": self._localized(platform, entry["question_id"], language)["question"],
+                "sort": index,
+            }
+            for index, entry in enumerate(self._entries[platform].values(), 1)
+        ]
+
+    def catalog(self, platform: str, language: str | None = None) -> list[dict[str, Any]]:
+        return [self._localized(platform, question_id, language) for question_id in self._entries[platform]]
+
+    def answer(self, platform: str, question_id: str, language: str | None = None) -> dict[str, Any]:
+        if not isinstance(question_id, str) or not question_id.startswith(f"{platform}."):
+            raise FAQError("FAQ question was not found")
+        if question_id not in self._entries[platform]:
+            raise FAQError("FAQ question was not found")
+        return self._localized(platform, question_id, language)
 
 
 def _hash(value: str) -> str:

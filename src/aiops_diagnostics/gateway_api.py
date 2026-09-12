@@ -576,7 +576,7 @@ def create_gateway_app(
             **decision.public(),
             "language": language,
             "faq_version": context.faq_catalog.version,
-            "recommendations": context.faq_catalog.recommendations(decision.platform),
+            "recommendations": context.faq_catalog.recommendations(decision.platform, language),
         }
 
     @app.get("/v1/faq/catalog")
@@ -589,7 +589,7 @@ def create_gateway_app(
             **decision.public(),
             "language": language,
             "faq_version": context.faq_catalog.version,
-            "entries": context.faq_catalog.catalog(decision.platform),
+            "entries": context.faq_catalog.catalog(decision.platform, language),
         }
 
     @app.post("/v1/faq/answer")
@@ -600,7 +600,7 @@ def create_gateway_app(
     ):
         _, decision = identity
         try:
-            answer = context.faq_catalog.answer(decision.platform, payload.question_id)
+            answer = context.faq_catalog.answer(decision.platform, payload.question_id, language)
         except FAQError as exc:
             raise StandardAPIError(
                 status.HTTP_404_NOT_FOUND, FAQ_NOT_FOUND, "FAQ question was not found"
@@ -782,7 +782,7 @@ def create_gateway_app(
         # Route 2: FAQ short-circuit (deterministic, zero-order, zero-model).
         faq_id = _faq_hit_by_keywords(decision.platform, context.faq_catalog, payload.question)
         if faq_id is not None:
-            answer = context.faq_catalog.answer(decision.platform, faq_id)
+            answer = context.faq_catalog.answer(decision.platform, faq_id, language)
             _record_route_metric(context, caller, route_type="faq", outcome="completed")
             return {
                 **decision.public(),

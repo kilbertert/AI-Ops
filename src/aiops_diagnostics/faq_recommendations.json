@@ -1,146 +1,622 @@
 {
-  "faq_version": "2026.09.04",
+  "faq_version": "2026.09.12",
   "platforms": {
     "consumer": [
       {
         "question_id": "consumer.faq.q001",
         "title": "快充桩、超充桩与慢充桩有什么区别？我的车应该选哪种？",
-        "sort": 1
+        "sort": 1,
+        "i18n": {
+          "en": {
+            "title": "Differences between AC, DC & HPC Chargers"
+          },
+          "de": {
+            "title": "Unterschied AC-, DC- & HPC-Laden"
+          },
+          "fr": {
+            "title": "Différence bornes AC, DC et HPC"
+          },
+          "es": {
+            "title": "Diferencia entre carga rápida, ultrarrápida y lenta"
+          },
+          "pt": {
+            "title": "Diferença entre carregador rápido, ultra e lento"
+          }
+        }
       },
       {
         "question_id": "consumer.faq.q002",
         "title": "在场站充电可以享受免费停车吗？停车费如何减免？",
-        "sort": 2
+        "sort": 2,
+        "i18n": {
+          "en": {
+            "title": "Free Parking & Fee Validation Rules"
+          },
+          "de": {
+            "title": "Kostenloses Parken & Gebührenerlass"
+          },
+          "fr": {
+            "title": "Gratuité du stationnement et validation"
+          },
+          "es": {
+            "title": "Aparcamiento gratuito y validación"
+          },
+          "pt": {
+            "title": "Estacionamento gratuito e isenção"
+          }
+        }
       },
       {
         "question_id": "consumer.faq.q003",
         "title": "可以提前预约锁定充电桩吗？预约收费吗？爽约怎么处理？",
-        "sort": 3
+        "sort": 3,
+        "i18n": {
+          "en": {
+            "title": "Charger Reservation & Cancellation Rules"
+          },
+          "de": {
+            "title": "Ladeplatz-Reservierung & Stornogebühren"
+          },
+          "fr": {
+            "title": "Réservation de borne et pénalité d'absence"
+          },
+          "es": {
+            "title": "Reserva de punto de carga y cancelación"
+          },
+          "pt": {
+            "title": "Reserva de ponto de carga e não comparecimento"
+          }
+        }
       },
       {
         "question_id": "consumer.faq.q004",
         "title": "场站车位被燃油车占位或非充电车占用怎么办？",
-        "sort": 4
+        "sort": 4,
+        "i18n": {
+          "en": {
+            "title": "Charging Bay Blocked by ICE / Non-charging Vehicle"
+          },
+          "de": {
+            "title": "Ladeplatz durch Verbrenner / Falschparker blockiert"
+          },
+          "fr": {
+            "title": "Place bloquée par véhicule thermique ou non-recharge"
+          },
+          "es": {
+            "title": "Plaza ocupada por vehículo de combustión / no recarga"
+          },
+          "pt": {
+            "title": "Vaga bloqueada por carro a combustão / não carregando"
+          }
+        }
       },
       {
         "question_id": "consumer.faq.q005",
         "title": "场站有休息室、卫生间或 WiFi 吗？夜间进场是否有门禁？",
-        "sort": 5
+        "sort": 5,
+        "i18n": {
+          "en": {
+            "title": "Station Amenities & Night Gate Access"
+          },
+          "de": {
+            "title": "Stationsausstattung & Nachtzugang"
+          },
+          "fr": {
+            "title": "Équipements de la station et accès de nuit"
+          },
+          "es": {
+            "title": "Instalaciones de la estación y acceso nocturno"
+          },
+          "pt": {
+            "title": "Comodidades da estação e acesso noturno"
+          }
+        }
       },
       {
         "question_id": "consumer.faq.q006",
         "title": "标准的插枪与扫码充电步骤是怎样的？",
-        "sort": 6
+        "sort": 6,
+        "i18n": {
+          "en": {
+            "title": "Standard Plug-in & Scan-to-Charge Guide"
+          },
+          "de": {
+            "title": "Anleitung: Einstecken & Ladevorgang starten"
+          },
+          "fr": {
+            "title": "Étapes pour brancher et lancer la charge"
+          },
+          "es": {
+            "title": "Pasos para conectar y escanear para cargar"
+          },
+          "pt": {
+            "title": "Passo a passo para plugar e iniciar recarga"
+          }
+        }
       },
       {
         "question_id": "consumer.faq.q007",
         "title": "插枪扫码后，设备没有反应或提示“启动失败”怎么办？",
-        "sort": 7
+        "sort": 7,
+        "i18n": {
+          "en": {
+            "title": "Charging Won't Start or Start Failed"
+          },
+          "de": {
+            "title": "Ladevorgang startet nicht / Fehlerbehebung"
+          },
+          "fr": {
+            "title": "La charge ne démarre pas / Échec au démarrage"
+          },
+          "es": {
+            "title": "La recarga no inicia o falla al arrancar"
+          },
+          "pt": {
+            "title": "Falha ao iniciar ou carregador sem resposta"
+          }
+        }
       },
       {
         "question_id": "consumer.faq.q008",
         "title": "什么是“即插即充”？如何开通与使用？",
-        "sort": 8
+        "sort": 8,
+        "i18n": {
+          "en": {
+            "title": "What is Autocharge / Plug & Charge & How to Enable"
+          },
+          "de": {
+            "title": "Autocharge / Plug & Charge aktivieren & nutzen"
+          },
+          "fr": {
+            "title": "Qu'est-ce que l'Autocharge et comment l'activer"
+          },
+          "es": {
+            "title": "Qué es Autocharge / Plug & Charge y cómo activarlo"
+          },
+          "pt": {
+            "title": "Como funciona e ativar o Autocharge (Plug & Charge)"
+          }
+        }
       },
       {
         "question_id": "consumer.faq.q009",
         "title": "物理充电卡（RFID卡）如何绑定、充值与刷卡充电？",
-        "sort": 9
+        "sort": 9,
+        "i18n": {
+          "en": {
+            "title": "RFID Card Pairing & Tap-to-Charge Guide"
+          },
+          "de": {
+            "title": "RFID-Ladekarte verknüpfen & Ladevorgang starten"
+          },
+          "fr": {
+            "title": "Associer une carte RFID et lancer la charge"
+          },
+          "es": {
+            "title": "Vincular tarjeta RFID y cargar por proximidad"
+          },
+          "pt": {
+            "title": "Vincular cartão RFID e iniciar por aproximação"
+          }
+        }
       },
       {
         "question_id": "consumer.faq.q010",
         "title": "充电结束后拔不出充电枪怎么办？（应急解锁全指南）",
-        "sort": 10
+        "sort": 10,
+        "i18n": {
+          "en": {
+            "title": "Connector Stuck? Emergency Cable Release Guide"
+          },
+          "de": {
+            "title": "Ladekabel klemmt? Notentriegelung Anleitung"
+          },
+          "fr": {
+            "title": "Câble coincé ? Guide de déverrouillage d'urgence"
+          },
+          "es": {
+            "title": "¿Cable atascado? Guía de desbloqueo de emergencia"
+          },
+          "pt": {
+            "title": "Conector travado? Guia de desbloqueio de emergência"
+          }
+        }
       },
       {
         "question_id": "consumer.faq.q011",
         "title": "充电过程中突然自动停止（意外跳枪）是什么原因？",
-        "sort": 11
+        "sort": 11,
+        "i18n": {
+          "en": {
+            "title": "Why Did Charging Stop Unexpectedly?"
+          },
+          "de": {
+            "title": "Warum hat der Ladevorgang unerwartet gestoppt?"
+          },
+          "fr": {
+            "title": "Pourquoi la charge s'est-elle arrêtée inopinément ?"
+          },
+          "es": {
+            "title": "¿Por qué se detuvo la recarga inesperadamente?"
+          },
+          "pt": {
+            "title": "Por que o carregamento parou inesperadamente?"
+          }
+        }
       },
       {
         "question_id": "consumer.faq.q012",
         "title": "为什么实际充电功率比标称慢很多？标称 120kW 为什么实际只有 30kW？",
-        "sort": 12
+        "sort": 12,
+        "i18n": {
+          "en": {
+            "title": "Why Is Charging Power Slower Than Advertised?"
+          },
+          "de": {
+            "title": "Warum ist die Ladeleistung langsamer als angegeben?"
+          },
+          "fr": {
+            "title": "Pourquoi la puissance est-elle inférieure à celle annoncée ?"
+          },
+          "es": {
+            "title": "¿Por qué la potencia de recarga es menor a la anunciada?"
+          },
+          "pt": {
+            "title": "Por que a potência de recarga é menor que a indicada?"
+          }
+        }
       },
       {
         "question_id": "consumer.faq.q013",
         "title": "充电过程中如何提前主动停止充电？",
-        "sort": 13
+        "sort": 13,
+        "i18n": {
+          "en": {
+            "title": "How to Stop Charging Early"
+          },
+          "de": {
+            "title": "Ladevorgang vorzeitig beenden"
+          },
+          "fr": {
+            "title": "Comment arrêter la charge avant la fin"
+          },
+          "es": {
+            "title": "Cómo detener la recarga antes de tiempo"
+          },
+          "pt": {
+            "title": "Como encerrar a recarga antes do término"
+          }
+        }
       },
       {
         "question_id": "consumer.faq.q014",
         "title": "可以在车内开着空调充电吗？对电池和充电速度有影响吗？",
-        "sort": 14
+        "sort": 14,
+        "i18n": {
+          "en": {
+            "title": "Can I Run AC/Heating While Charging?"
+          },
+          "de": {
+            "title": "Klimaanlage während des Ladens nutzen?"
+          },
+          "fr": {
+            "title": "Peut-on laisser la climatisation pendant la charge ?"
+          },
+          "es": {
+            "title": "¿Puedo poner el aire acondicionado mientras cargo?"
+          },
+          "pt": {
+            "title": "Posso ligar o ar-condicionado durante a recarga?"
+          }
+        }
       },
       {
         "question_id": "consumer.faq.q015",
         "title": "充电费用是怎么计算的？什么是尖峰平谷分时电价？",
-        "sort": 15
+        "sort": 15,
+        "i18n": {
+          "en": {
+            "title": "Pricing Breakdown & Time-of-Use (TOU) Rates"
+          },
+          "de": {
+            "title": "Tarifstruktur & Zeitvariable Stromtarife (TOU)"
+          },
+          "fr": {
+            "title": "Composition des tarifs et tarification heures pleines/creuses"
+          },
+          "es": {
+            "title": "Desglose de tarifas y tarifas por tramos horarios (TOU)"
+          },
+          "pt": {
+            "title": "Composição de tarifas e taxas por horário de uso (TOU)"
+          }
+        }
       },
       {
         "question_id": "consumer.faq.q016",
         "title": "什么是超时占位费？计费标准与日封顶是多少？",
-        "sort": 16
+        "sort": 16,
+        "i18n": {
+          "en": {
+            "title": "Idle Fees: Rates, Grace Period & Daily Caps"
+          },
+          "de": {
+            "title": "Blockiergebühr: Tarife, Kulanzzeit & Tageslimit"
+          },
+          "fr": {
+            "title": "Frais d'inoccupation : Barème, tolérance et plafond"
+          },
+          "es": {
+            "title": "Tasa por ocupación: Tarifas, período de gracia y tope"
+          },
+          "pt": {
+            "title": "Taxa de ociosidade: Tarifas, tolerância e limite diário"
+          }
+        }
       },
       {
         "question_id": "consumer.faq.q017",
         "title": "充电前支付的预授权/预充值金额，什么时候退回？",
-        "sort": 17
+        "sort": 17,
+        "i18n": {
+          "en": {
+            "title": "When Will the Pre-authorization Hold Be Released?"
+          },
+          "de": {
+            "title": "Wann wird der reservierte Vorab-Betrag erstattet?"
+          },
+          "fr": {
+            "title": "Quand l'empreinte bancaire / caution est-elle libérée ?"
+          },
+          "es": {
+            "title": "¿Cuándo se reembolsa la preautorización retenida?"
+          },
+          "pt": {
+            "title": "Quando a pré-autorização é estornada?"
+          }
+        }
       },
       {
         "question_id": "consumer.faq.q018",
         "title": "优惠券使用规则是什么？为什么结账时没有抵扣？",
-        "sort": 18
+        "sort": 18,
+        "i18n": {
+          "en": {
+            "title": "Voucher Usage Rules & Deduction Troubleshooting"
+          },
+          "de": {
+            "title": "Gutschein-Bedingungen & Warum kein Rabatt angerechnet wurde"
+          },
+          "fr": {
+            "title": "Règles d'utilisation des coupons et problèmes de réduction"
+          },
+          "es": {
+            "title": "Condiciones del cupón y por qué no se aplicó el descuento"
+          },
+          "pt": {
+            "title": "Regras de cupons e por que o desconto não foi aplicado"
+          }
+        }
       },
       {
         "question_id": "consumer.faq.q019",
         "title": "充电订单如何开具发票？可以开专票吗？支持合并开票吗？",
-        "sort": 19
+        "sort": 19,
+        "i18n": {
+          "en": {
+            "title": "How to Request Invoices / VAT Receipts"
+          },
+          "de": {
+            "title": "Rechnung / MwSt.-Beleg anfordern & Sammelrechnung"
+          },
+          "fr": {
+            "title": "Facturation / Reçu TVA et facturation groupée"
+          },
+          "es": {
+            "title": "Cómo solicitar factura / recibo de IVA y facturación conjunta"
+          },
+          "pt": {
+            "title": "Como emitir nota fiscal / recibo com impostos"
+          }
+        }
       },
       {
         "question_id": "consumer.faq.q020",
         "title": "因充电枪卡死拔不出导致被扣超时占位费，如何申请退款？",
-        "sort": 20
+        "sort": 20,
+        "i18n": {
+          "en": {
+            "title": "Connector Stuck Idle Fee Refund Request"
+          },
+          "de": {
+            "title": "Rückerstattung bei unverschuldeter Blockiergebühr (Kabel blockiert)"
+          },
+          "fr": {
+            "title": "Remboursement des frais d'inoccupation dus à un câble coincé"
+          },
+          "es": {
+            "title": "Reembolso de tasa de ocupación por cable atascado"
+          },
+          "pt": {
+            "title": "Reembolso de taxa de ociosidade por conector travado"
+          }
+        }
       },
       {
         "question_id": "consumer.faq.q021",
         "title": "扣费成功了但其实根本没充上电，怎么退款？",
-        "sort": 21
+        "sort": 21,
+        "i18n": {
+          "en": {
+            "title": "Charged but Failed to Receive Power? Refund Guide"
+          },
+          "de": {
+            "title": "Abgebucht ohne Ladeleistung? Sofort-Rückerstattung"
+          },
+          "fr": {
+            "title": "Débité sans avoir chargé ? Guide de remboursement"
+          },
+          "es": {
+            "title": "Cobrado pero no cargó electricidad: Guía de reembolso"
+          },
+          "pt": {
+            "title": "Cobrado sem receber carga? Como solicitar reembolso"
+          }
+        }
       },
       {
         "question_id": "consumer.faq.q022",
         "title": "怀疑充电桩电表计量不准（虚标电量）怎么办？",
-        "sort": 22
+        "sort": 22,
+        "i18n": {
+          "en": {
+            "title": "Inaccurate Metering Concern & Calibration Check"
+          },
+          "de": {
+            "title": "Zweifel an der Zählergenauigkeit & Überprüfung"
+          },
+          "fr": {
+            "title": "Doute sur la mesure du compteur et vérification de perte"
+          },
+          "es": {
+            "title": "Dudas sobre la medición del contador y calibración"
+          },
+          "pt": {
+            "title": "Dúvidas sobre a medição do contador e calibração"
+          }
+        }
       },
       {
         "question_id": "consumer.faq.q023",
         "title": "在场站充电时车辆发生刮蹭或设备损坏怎么处理？",
-        "sort": 23
+        "sort": 23,
+        "i18n": {
+          "en": {
+            "title": "Vehicle Scratch or Equipment Damage Incident SOP"
+          },
+          "de": {
+            "title": "Fahrzeugschaden oder Gerätedefekt an der Station"
+          },
+          "fr": {
+            "title": "Accrochage de véhicule ou dégât matériel en station"
+          },
+          "es": {
+            "title": "Roces en el vehículo o daños en el equipo en la estación"
+          },
+          "pt": {
+            "title": "Arranhões no veículo ou danos no equipamento na estação"
+          }
+        }
       },
       {
         "question_id": "consumer.faq.q024",
         "title": "⚠️ 【最高安全警示】充电设备冒烟、起火、异味或漏电紧急处置",
-        "sort": 24
+        "sort": 24,
+        "i18n": {
+          "en": {
+            "title": "⚠️ Emergency: Smoke, Fire, Odor or Electric Leakage"
+          },
+          "de": {
+            "title": "⚠️ Notfall: Rauch, Brand, Geruch oder Stromschlaggefahr"
+          },
+          "fr": {
+            "title": "⚠️ Urgence : Fumée, incendie, odeur ou fuite de courant"
+          },
+          "es": {
+            "title": "⚠️ Emergencia: Humo, fuego, olor a quemado o fuga eléctrica"
+          },
+          "pt": {
+            "title": "⚠️ Emergência: Fumaça, fogo, cheiro de queimado ou fuga elétrica"
+          }
+        }
       },
       {
         "question_id": "consumer.faq.q025",
         "title": "下暴雨、打雷或路面积水时，可以在户外露天充电吗？",
-        "sort": 25
+        "sort": 25,
+        "i18n": {
+          "en": {
+            "title": "Charging in Heavy Rain, Thunderstorms or Waterlogging"
+          },
+          "de": {
+            "title": "Laden bei Starkregen, Gewitter & Wasseransammlungen"
+          },
+          "fr": {
+            "title": "Recharge sous forte pluie, orage ou sol inondé"
+          },
+          "es": {
+            "title": "Cargar bajo lluvia torrencial, tormentas o charcos"
+          },
+          "pt": {
+            "title": "Carregar sob chuva forte, tempestades ou poças d'água"
+          }
+        }
       },
       {
         "question_id": "consumer.faq.q026",
         "title": "夏季高温酷暑暴晒天气充电，需要注意什么？",
-        "sort": 26
+        "sort": 26,
+        "i18n": {
+          "en": {
+            "title": "Tips for EV Fast Charging in Extreme Summer Heat"
+          },
+          "de": {
+            "title": "Hinweise zum Laden bei extremer Sommerhitze"
+          },
+          "fr": {
+            "title": "Conseils de recharge par temps de canicule estivale"
+          },
+          "es": {
+            "title": "Consejos para cargar con calor extremo y sol directo"
+          },
+          "pt": {
+            "title": "Dicas de recarga sob calor extremo e sol forte"
+          }
+        }
       },
       {
         "question_id": "consumer.faq.q027",
         "title": "如何更换注册手机号、修改密码或注销平台账号？",
-        "sort": 27
+        "sort": 27,
+        "i18n": {
+          "en": {
+            "title": "Change Phone Number, Password or Delete Account"
+          },
+          "de": {
+            "title": "Telefonnummer ändern, Passwort & Konto löschen"
+          },
+          "fr": {
+            "title": "Changer de numéro, mot de passe ou supprimer le compte"
+          },
+          "es": {
+            "title": "Cambiar número de teléfono, contraseña o cancelar cuenta"
+          },
+          "pt": {
+            "title": "Trocar número de celular, senha ou excluir conta"
+          }
+        }
       },
       {
         "question_id": "consumer.faq.q028",
         "title": "什么时候可以联系人工客服？人工客服服务时间是怎样的？",
-        "sort": 28
+        "sort": 28,
+        "i18n": {
+          "en": {
+            "title": "Live Support Hours & How to Reach an Agent"
+          },
+          "de": {
+            "title": "Kundenservice-Zeiten & Kontakt zu Mitarbeitern"
+          },
+          "fr": {
+            "title": "Horaires du service client humain et comment les joindre"
+          },
+          "es": {
+            "title": "Horarios de atención humana y cómo contactar"
+          },
+          "pt": {
+            "title": "Horário de atendimento humano e como falar com suporte"
+          }
+        }
       }
     ],
     "operator": [
