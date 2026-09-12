@@ -122,14 +122,27 @@ def test_hybrid_sources_doctor_classification(monkeypatch) -> None:
         "aiops_diagnostics.sources.urllib.request.urlopen",
         _FakeDiagTransport({"streams": []}),
     )
-    monkeypatch.setattr(
-        source.tdengine,
-        "_query",
-        lambda _sql: [
-            {"stable_name": "charging-gun_property"},
-            {"stable_name": "charging-pile_comm"},
-        ],
-    )
+
+    def routing_query(sql: str) -> list[dict[str, Any]]:
+        if sql.startswith("SHOW STABLES"):
+            return [
+                {"stable_name": "charging-gun_property"},
+                {"stable_name": "charging-pile_comm"},
+            ]
+        if sql.startswith("DESCRIBE"):
+            # 41 环境形态：缺 batteryMinTemperature，其余列齐全
+            return [
+                {"field": name}
+                for name in (
+                    "_ts", "txSerialNo", "status", "isReturn", "isInsert",
+                    "outputVoltage", "outputCurrent", "power", "chargingTime",
+                    "chargingElectricityQuantity", "soc", "temperature",
+                    "batteryMaxTemperature", "errorCode", "errorReason", "meterNow",
+                )
+            ]
+        return []
+
+    monkeypatch.setattr(source.tdengine, "_query", routing_query)
 
     success = source.doctor()
     assert list(success) == ["http", "tdengine", "mysql", "redis"]
@@ -139,6 +152,9 @@ def test_hybrid_sources_doctor_classification(monkeypatch) -> None:
     assert success["tdengine"]["ok"] is True
     assert success["tdengine"]["details"]["charging_gun_property"] is True
     assert success["tdengine"]["details"]["cutover"] == "partial"
+    assert success["tdengine"]["details"]["gun_columns"]["batteryMinTemperature"] is False
+    assert success["tdengine"]["details"]["gun_columns"]["errorCode"] is True
+    assert success["tdengine"]["details"]["gun_columns_checked"] is True
     assert success["mysql"] == {
         "ok": True,
         "status": "deprecated",

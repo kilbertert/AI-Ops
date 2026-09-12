@@ -718,3 +718,36 @@ Feature: 环境清单驱动的 Agent 收敛
       When 管理员运行 aiops admin reconcile --dry-run
       Then 输出与实收敛相同的计划报告
       And gateway 数据库零变更
+
+Feature: 意图相关的诊断置信阶梯与环境预检
+
+  Rule: 降级由所问问题需要的证据决定，而非数据源失败本身
+
+    Scenario: 外围数据源失败但订单费用证据完整时给出诊断
+      Given MySQL 订单/费用/设备证据完整且自洽
+      And TDengine 遥测源查询失败
+      When Agent 完成诊断
+      Then 结果状态为 diagnosed 且置信度为 medium
+      And 失败源进入 failed_sources 与 limitations
+      And 不因外围源失败扣留结论
+
+    Scenario: 问题本身依赖缺失的遥测时保持 inconclusive
+      Given 订单电表起止值矛盾且需要枪遥测裁决
+      And 枪遥测稳定表在本环境不存在
+      When Agent 完成诊断
+      Then 结果状态为 inconclusive 且在 limitations 中说明缺失通道
+
+    Scenario: 订单主数据失败时结果 blocked 且 low
+
+    Scenario: 预检缺口记入证据日志并出现在初始提示
+      Given 预检发现 charging-gun_property 缺少列 batteryMinTemperature
+      When 诊断运行开始
+      Then 证据日志记录该工具的 blocked 条目且错误文本含 预检
+      And 初始提示包含 环境能力预检 说明
+      And blocked 条目不进入 failed_sources
+
+    Scenario: 预检不拦截模型工具请求
+      Given 预检已记录 blocked 条目
+      When 模型仍请求该工具
+      Then 工具真实执行并按实际结果记录
+      And 预检不代答、不短路执行器
