@@ -104,8 +104,9 @@ queued → running → completed | failed | expired                  （报告�
 - 前端按当前用户语言在请求头携带 `Accept-Language`（现有行为保留，如 `en`、`zh-CN`），AI-Ops 以此判断输出语言。
 - 解析规则：按 RFC 7231 取 q 值最高的受支持语言；区域/文字子标签折叠（`en-US → en`、`pt-BR → pt`）；受支持集合 `zh/en/de/fr/es/pt`；缺失、为空、`*` 通配或不受支持的语言一律回退 `zh`，同权重取先出现者。
 - 响应回显：FAQ 三个只读端点（recommendations/catalog/answer）与统一问答入口（faq 200、qa 202、qa 轮询、qa 列表、diagnosis 202）均带 `language` 字段，前端可据此核对生效语言。
+- FAQ 内容已按语言输出（2026-09-12 起）：recommendations 的 `title`、catalog 的条目、answer 与 faq 短路分支的 `question/answer` 会返回 `Accept-Language` 对应语言（en/de/fr/es/pt）；中文（zh）为权威回退，operator 端与缺失翻译条目保持中文。
+- 模型回答（qa 自由提问、订单诊断）的多语言输出由后续工单（#204）交付，当前仍为按提示词生成的简体中文。
 - `error.code` 与 HTTP 语义不受语言影响（保持英文）。
-- 当前仅回显生效语言；预设问题/答案与模型回答的按语言输出由后续工单（#202–#204）交付，交付前内容仍为简体中文。
 
 ## 3. 固定问答（FAQ）
 

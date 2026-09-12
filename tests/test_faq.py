@@ -144,3 +144,54 @@ def test_catalog_generator_excludes_conflicting_answers(tmp_path: Path) -> None:
     assert entries == []
     assert duplicates == 0
     assert conflicts == 1
+
+
+def test_bundled_catalog_carries_full_i18n_for_consumer() -> None:
+    """28 consumer entries × 5 languages, aligned and non-empty (L2/#202)."""
+    catalog = FAQCatalog.bundled()
+    assert catalog.version >= "2026.09.12"
+    entries = catalog.catalog("consumer")
+    assert len(entries) == 28
+    assert [entry["question_id"] for entry in entries] == [
+        f"consumer.faq.q{index:03d}" for index in range(1, 29)
+    ]
+    # Internal i18n never leaks into the public entry shape.
+    assert set(entries[0]) == {"question_id", "question", "answer", "format"}
+    zh = catalog.answer("consumer", "consumer.faq.q001")
+    for lang in ("en", "de", "fr", "es", "pt"):
+        localized = catalog.answer("consumer", "consumer.faq.q001", lang)
+        assert localized["question"] and localized["answer"]
+        assert localized["question"] != zh["question"]
+        assert localized["answer"] != zh["answer"]
+
+
+def test_catalog_falls_back_to_zh_for_missing_language() -> None:
+    """operator entries carry no i18n; unknown/None languages fall back to zh."""
+    catalog = FAQCatalog.bundled()
+    zh = catalog.answer("operator", "operator.faq.q001")
+    for language in (None, "en", "ja"):
+        assert catalog.answer("operator", "operator.faq.q001", language) == zh
+    assert catalog.recommendations("operator", "en") == catalog.recommendations("operator")
+    assert catalog.catalog("operator", "en") == catalog.catalog("operator")
+
+
+def test_catalog_rejects_invalid_i18n_language() -> None:
+    """Only supported non-default languages may appear in catalog i18n."""
+    import pytest
+
+    payload = {
+        "faq_version": "2026.09.12",
+        "platforms": {
+            "consumer": [
+                {
+                    "question_id": "consumer.faq.q001",
+                    "question": "问题？",
+                    "answer": "答案。",
+                    "i18n": {"xx": {"question": "Q", "answer": "A"}},
+                }
+            ],
+            "operator": [],
+        },
+    }
+    with pytest.raises(ValueError, match="i18n language is invalid"):
+        FAQCatalog(payload)

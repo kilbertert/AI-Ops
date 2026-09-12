@@ -367,3 +367,20 @@ def test_assistant_responses_echo_resolved_language(tmp_path: Path) -> None:
     assert diagnosis.status_code == 202
     assert diagnosis.json()["type"] == "diagnosis"
     assert diagnosis.json()["language"] == "de"
+
+
+def test_assistant_faq_branch_returns_localized_answer(tmp_path: Path) -> None:
+    """A zh question with Accept-Language=en still hits FAQ and gets the en entry."""
+    client, _ = _client(tmp_path)
+    resp = client.post(
+        "/v1/assistant/questions",
+        json={"question": "无法拔枪怎么办"},
+        headers={**_headers(), "Accept-Language": "en"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["type"] == "faq"
+    assert body["language"] == "en"
+    assert body["question_id"] == "consumer.faq.q010"
+    assert body["question"] == "Connector Stuck? Emergency Cable Release Guide"
+    assert body["answer"].startswith("Do NOT yank it")
