@@ -251,3 +251,17 @@ def test_resolve_provider_key_uses_provider_key_slot(tmp_path: Path) -> None:
     # key_slot override reads a different slot file for the same provider
     write_private_text(key_dir / "glm-backup.key", "backup-secret")
     assert resolve_provider_api_key(settings, provider=glm, key_slot="glm-backup") == "backup-secret"
+
+
+def test_developer_instructions_describe_intent_relative_ladder() -> None:
+    """提示词合同必须保留意图相关置信阶梯（防未来提示词改动误回退）。"""
+    from aiops_diagnostics.codex_runtime import _developer_instructions
+
+    text = _developer_instructions()
+    assert "intent-relative ladder" in text
+    for phrase in ("status=\"diagnosed\"", "\"medium\"", "\"inconclusive\"", "\"blocked\"", "failed_sources"):
+        assert phrase in text, f"阶梯缺少 {phrase}"
+    assert "A failed source limits confidence" not in text, "旧的单句劝退必须删除"
+    assert "never justifies inconclusive" in text
+    # 机械交付合同（结构化输出）原样保留
+    assert "The delivery contract is validated mechanically" in text

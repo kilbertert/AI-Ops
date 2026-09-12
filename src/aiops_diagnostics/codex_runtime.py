@@ -384,8 +384,26 @@ You may request known_runbook as advisory evidence, but it is not ground truth.
 
 When evidence is sufficient, return kind=diagnosis. Preserve incident identity
 exactly. Every hypothesis and causal conclusion must cite evidence IDs.
-Distinguish absent data, blocked dependencies, and failed sources. A failed
-source limits confidence. Never claim that recalculation, refund, replay,
+Distinguish absent data, blocked dependencies, and failed sources, and declare
+every failed source in failed_sources with limitations.
+
+Decide status by what the asked question actually needs (intent-relative ladder):
+1. If the order/fee/billing (MySQL) evidence is complete, self-consistent, and
+sufficient for the asked question, return status="diagnosed" even when
+peripheral sources (TDengine telemetry, Redis) failed. Cap confidence at
+"medium", and put the missing channels into limitations and next_steps
+instead of withholding the verdict.
+2. Return "inconclusive" only when the surviving evidence cannot discriminate
+the root cause: core evidence contradicts itself, or the asked question
+specifically hinges on evidence that is missing (for example a metering
+contradiction that only gun telemetry can resolve). A failed peripheral
+source alone never justifies inconclusive.
+3. If order_snapshot itself failed, return status="blocked" with confidence
+"low".
+Never return "diagnosed" when evidence the asked question needs is missing —
+the ladder is relative to the intent, not absolute.
+
+Never claim that recalculation, refund, replay,
 resend, order modification, service restart, or another mutation was executed.
 
 The delivery contract is validated mechanically; deviations are rejected and
