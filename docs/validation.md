@@ -782,3 +782,26 @@ S3 退役验收（公网入口 + 开机自启）：FAQ 200（28 条）、健康�
 （2026-09-12 09:45 CST 复现，账户侧需充值/清欠），以及 APK 前端把 failed 终态
 渲染为"diagnosis completed"的显示缺陷（APP 侧任务）。不得在复跑取得 completed
 前宣称标准诊断业务验收完成。
+
+## 标准诊断端到端 completed 验收（2026-09-12，#194 后续复跑）
+
+2026-09-12 10:50–10:58（Asia/Shanghai），36 生产网关，真实订单
+`2094239732383256577` + 所有者真实 thirdSession，diagnosis
+`dx_e9008bee78804405bcca9deaf6164848`：
+
+- **终态 `completed`**（8 次轮询内，全程 7 分 39 秒）；API 返回完整
+  `result`：`status=diagnosed`、`confidence=medium`、8 个假设全部引用
+  evidence_ids、`failed_sources=["redis:order_sync_streams"]` 如实申报、
+  9 条 limitations、8 条工程师 next_steps。
+- **取证面**：6/6 success——order_snapshot、known_runbook、gun_timeseries、
+  comm_messages、device_snapshot、fee_snapshot；其中 TDengine 两源为 16041
+  数据面修复后首次纳入成功取证。
+- **格式合同**：instructions 补写枚举/必填字段/reason 上限后，模型首轮即产出
+  合法 turn，validation retries 零消耗（对照修复前三次 run 均耗尽重试）。
+- **诚实边界**：Redis 同步流源因 36 侧 `aiops_third_session` 用户无 Stream 读
+  权限而失败（NoPermissionError），诊断按规则压低置信度并列入 next_steps；
+  TDengine 窗口 0 行、协议冲突、电表倒挂为业务数据质量问题。这些不构成验收
+  阻塞，但以 medium 置信度交付，未拔高为 high。
+- **用户可见链路**：该 completed 终态即 APK 轮询取得的最终响应，result 非空，
+  修复前"analysing→diagnosis completed→无内容"的根因（后端 blocked + 前端
+  不区分终态）已在后端侧消除；前端文案缺陷仍需 APP 侧修复。
