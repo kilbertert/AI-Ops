@@ -67,9 +67,7 @@ def preflight_environment(
     if not details.get("charging_gun_property"):
         gaps.append((ToolName.GUN_TIMESERIES, "charging-gun_property 表不存在"))
     else:
-        missing_columns = [
-            column for column in TDengineSource.GUN_COLUMNS if not gun_columns.get(column)
-        ]
+        missing_columns = [column for column in TDengineSource.GUN_COLUMNS if not gun_columns.get(column)]
         if missing_columns:
             gaps.append(
                 (ToolName.GUN_TIMESERIES, f"charging-gun_property 缺少列 {'、'.join(missing_columns)}")

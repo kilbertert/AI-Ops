@@ -134,10 +134,22 @@ def test_hybrid_sources_doctor_classification(monkeypatch) -> None:
             return [
                 {"field": name}
                 for name in (
-                    "_ts", "txSerialNo", "status", "isReturn", "isInsert",
-                    "outputVoltage", "outputCurrent", "power", "chargingTime",
-                    "chargingElectricityQuantity", "soc", "temperature",
-                    "batteryMaxTemperature", "errorCode", "errorReason", "meterNow",
+                    "_ts",
+                    "txSerialNo",
+                    "status",
+                    "isReturn",
+                    "isInsert",
+                    "outputVoltage",
+                    "outputCurrent",
+                    "power",
+                    "chargingTime",
+                    "chargingElectricityQuantity",
+                    "soc",
+                    "temperature",
+                    "batteryMaxTemperature",
+                    "errorCode",
+                    "errorReason",
+                    "meterNow",
                 )
             ]
         return []

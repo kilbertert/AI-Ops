@@ -259,7 +259,7 @@ def test_developer_instructions_describe_intent_relative_ladder() -> None:
 
     text = _developer_instructions()
     assert "intent-relative ladder" in text
-    for phrase in ("status=\"diagnosed\"", "\"medium\"", "\"inconclusive\"", "\"blocked\"", "failed_sources"):
+    for phrase in ('status="diagnosed"', '"medium"', '"inconclusive"', '"blocked"', "failed_sources"):
         assert phrase in text, f"阶梯缺少 {phrase}"
     assert "A failed source limits confidence" not in text, "旧的单句劝退必须删除"
     assert "never justifies inconclusive" in text

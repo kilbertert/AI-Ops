@@ -446,11 +446,22 @@ class TDengineSource:
     # get_gun_samples 的完整 SELECT 列表（41 环境曾缺 batteryMinTemperature，
     # doctor 按此逐列探测，环境 schema 漂移在预检阶段即可见）。
     GUN_COLUMNS: tuple[str, ...] = (
-        "txSerialNo", "status", "isReturn", "isInsert",
-        "outputVoltage", "outputCurrent", "power", "chargingTime",
-        "chargingElectricityQuantity", "soc", "temperature",
-        "batteryMaxTemperature", "batteryMinTemperature",
-        "errorCode", "errorReason", "meterNow",
+        "txSerialNo",
+        "status",
+        "isReturn",
+        "isInsert",
+        "outputVoltage",
+        "outputCurrent",
+        "power",
+        "chargingTime",
+        "chargingElectricityQuantity",
+        "soc",
+        "temperature",
+        "batteryMaxTemperature",
+        "batteryMinTemperature",
+        "errorCode",
+        "errorReason",
+        "meterNow",
     )
 
     def __init__(

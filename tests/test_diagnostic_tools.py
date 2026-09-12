@@ -131,13 +131,19 @@ def test_preflight_records_blocked_entries_and_notes(tmp_path: Path) -> None:
     from aiops_diagnostics.diagnostic_tools import preflight_environment
 
     request, journal = _journal_for(tmp_path)
-    sources = _DoctorSources(FIXTURE, {
-        "tdengine": {"ok": True, "details": {
-            "charging_gun_property": False,
-            "charging_pile_comm": False,
-            "gun_columns": {},
-        }},
-    })
+    sources = _DoctorSources(
+        FIXTURE,
+        {
+            "tdengine": {
+                "ok": True,
+                "details": {
+                    "charging_gun_property": False,
+                    "charging_pile_comm": False,
+                    "gun_columns": {},
+                },
+            },
+        },
+    )
     notes = preflight_environment(sources, request, journal)
     assert len(notes) == 2
     assert "charging-gun_property 表不存在" in notes[0]
@@ -157,13 +163,19 @@ def test_preflight_column_gap_blocks_gun_only(tmp_path: Path) -> None:
     request, journal = _journal_for(tmp_path)
     columns = {name: True for name in TDengineSource.GUN_COLUMNS}
     columns["batteryMinTemperature"] = False
-    sources = _DoctorSources(FIXTURE, {
-        "tdengine": {"ok": True, "details": {
-            "charging_gun_property": True,
-            "charging_pile_comm": True,
-            "gun_columns": columns,
-        }},
-    })
+    sources = _DoctorSources(
+        FIXTURE,
+        {
+            "tdengine": {
+                "ok": True,
+                "details": {
+                    "charging_gun_property": True,
+                    "charging_pile_comm": True,
+                    "gun_columns": columns,
+                },
+            },
+        },
+    )
     notes = preflight_environment(sources, request, journal)
     assert len(notes) == 1
     assert "batteryMinTemperature" in notes[0]
@@ -195,13 +207,19 @@ def test_execute_still_runs_after_preflight(tmp_path: Path) -> None:
     request, journal = _journal_for(tmp_path)
     columns = {name: True for name in TDengineSource.GUN_COLUMNS}
     columns["batteryMinTemperature"] = False
-    sources = _DoctorSources(FIXTURE, {
-        "tdengine": {"ok": True, "details": {
-            "charging_gun_property": True,
-            "charging_pile_comm": True,
-            "gun_columns": columns,
-        }},
-    })
+    sources = _DoctorSources(
+        FIXTURE,
+        {
+            "tdengine": {
+                "ok": True,
+                "details": {
+                    "charging_gun_property": True,
+                    "charging_pile_comm": True,
+                    "gun_columns": columns,
+                },
+            },
+        },
+    )
     preflight_environment(sources, request, journal)
     manifest = _current_manifest()
     executor = DiagnosticToolExecutor(sources, request, manifest, journal, safety=SafetySettings())
