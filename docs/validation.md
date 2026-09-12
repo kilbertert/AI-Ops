@@ -30,6 +30,15 @@
 - 全量确定性检查：`ruff check` 0 违规、`ruff format --check` 通过、`pytest` 667 项全部通过、`compileall` 通过。
 - 未完成事项：真实环境五语提问的端到端命中属 #204，未完成前不宣称业务验收。
 
+## 助手输出国际化 L4：提示词语言注入（2026-09-12）
+
+#204（PRD #200 的 L4 切片）交付 qa 与诊断两条模型链路的输出语言注入。本轮为离线协议级验证：
+
+- 提示词注入断言（`tests/test_qa_rag.py`、`tests/test_agent_engine.py`）：qa 初始回合与知识检索回合的提示词均含目标语言名（English/German/Simplified Chinese）；检索未命中时 harness 兜底文案随请求语言切换（未知语言回退 zh）；诊断初始提示词含目标语言名且 incident manifest 原样嵌入（证据快照不混语言元数据）。
+- 合同保持：`blocks[]` 结构、检索两次上限、媒体授权校验、只读工具边界、`202 + 轮询`、`error.code` 英文语义全部不变；`run_zero_order_answer` 回落路径同步注入输出语言。
+- 全量确定性检查：`ruff check` 0 违规、`ruff format --check` 通过、`pytest` 672 项全部通过、`compileall` 通过。
+- **未完成业务验收（如实记录）**：真实环境五语实测（生产 `Accept-Language: en/de/fr/es/pt` 的 faq/qa 实调）尚未执行。前置条件是持有与公网网关同一会话库的有效 thirdSession——2026-09-12 前序复测已闭环确认此前抓包会话属于另一会话环境（36 网关真实 Redis 解析为 `caller_auth.invalid`，见上方 41 数据源边界记录），因此本轮不重复使用该会话发起无效调用。待业务方提供新会话后，按 `docs/agents/frontend-api-brief.md` 合同复跑并补充记录。
+
 ## C/B 固定问答接口验证（2026-09-04）
 
 本轮实现使用真实 UPMS 只读数据库结构和离线 HTTP fake 验证平台边界：

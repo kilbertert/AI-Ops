@@ -20,6 +20,7 @@ from aiops_diagnostics.health_report import (
     HealthReportError,
     build_minimal_health_report,
 )
+from aiops_diagnostics.i18n import DEFAULT_LANGUAGE
 from aiops_diagnostics.journal import EvidenceJournal
 from aiops_diagnostics.knowledge_retrieval import (
     KbServiceClient,
@@ -208,6 +209,7 @@ class GatewayRuntime:
         order_no: str,
         question: str,
         indicator_code: str | None,
+        language: str = DEFAULT_LANGUAGE,
     ) -> dict[str, Any]:
         selected_provider = self.diagnostic_settings.agent.select_provider(None)
         selected_key_slot = validate_key_slot_name(selected_provider.resolved_key_slot())
@@ -243,6 +245,7 @@ class GatewayRuntime:
             context,
             selected_provider.name,
             selected_key_slot,
+            language,
         )
         self._futures[diagnosis["diagnosis_id"]] = future
         future.add_done_callback(lambda _: self._futures.pop(diagnosis["diagnosis_id"], None))
@@ -354,6 +357,7 @@ class GatewayRuntime:
         *,
         conversation: dict[str, Any] | None = None,
         conversation_turn_no: int | None = None,
+        language: str = DEFAULT_LANGUAGE,
     ) -> dict[str, Any]:
         """Start a zero-order general-question job (T3/#153).
 
@@ -392,6 +396,7 @@ class GatewayRuntime:
             )
             if conversation is not None and conversation_turn_no is not None
             else None,
+            language,
         )
         self._futures[qa["qa_id"]] = future
         future.add_done_callback(lambda _: self._futures.pop(qa["qa_id"], None))
@@ -499,6 +504,7 @@ class GatewayRuntime:
         context: ScopeContext,
         provider: str,
         key_slot: str,
+        language: str = DEFAULT_LANGUAGE,
     ) -> None:
         if not self.store.update_standard_diagnosis(diagnosis_id, status="running"):
             return
@@ -516,6 +522,7 @@ class GatewayRuntime:
                 provider=provider,
                 key_slot=key_slot,
                 scope=query_scope,
+                language=language,
             )
         except (AgentRuntimeError, SourceError, ValueError) as exc:
             self.store.update_standard_diagnosis(
@@ -583,6 +590,7 @@ class GatewayRuntime:
         key_slot: str,
         tenant_id: str | None = None,
         conversation_turn: tuple[str, str, int] | None = None,
+        language: str = DEFAULT_LANGUAGE,
     ) -> None:
         def _finish_turn(answer: dict[str, Any] | None, *, cancelled: bool = False) -> None:
             """Write the finished answer into the conversation turn (if any).
@@ -613,7 +621,9 @@ class GatewayRuntime:
         settings.agent.run_root = self.diagnostic_settings.agent.run_root
         rag_result = None
         if tenant_id and self.kb_search_client is not None and self.media_signer is not None:
-            rag_result = self._try_customer_rag(qa_id, question, tenant_id, settings, provider, key_slot)
+            rag_result = self._try_customer_rag(
+                qa_id, question, tenant_id, settings, provider, key_slot, language
+            )
         if rag_result is not None:
             if isinstance(rag_result, dict) and rag_result.get("status") == "failed":
                 self._record_metric(
@@ -636,6 +646,7 @@ class GatewayRuntime:
                 settings,
                 provider=provider,
                 key_slot=key_slot,
+                language=language,
             )
         except (AgentRuntimeError, SourceError, ValueError) as exc:
             self.store.update_assistant_question(
@@ -791,6 +802,7 @@ class GatewayRuntime:
         settings: Settings,
         provider: str,
         key_slot: str,
+        language: str = DEFAULT_LANGUAGE,
     ) -> dict[str, Any] | None:
         """Run the published customer agent path (T3/#170) or fall back.
 
@@ -821,6 +833,7 @@ class GatewayRuntime:
                 provider=None,
                 key_slot=key_slot,
                 project_root=reference_root(),
+                language=language,
             )
         except KnowledgeSearchUnavailable:
             # Retrieval dependency is down: per the T1/T3 contract the model

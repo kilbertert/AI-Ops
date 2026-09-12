@@ -664,6 +664,7 @@ def create_gateway_app(
                     payload.order_no,
                     payload.question,
                     None,
+                    language=language,
                 )
             except (ValueError, RuntimeError) as exc:
                 raise StandardAPIError(
@@ -701,6 +702,7 @@ def create_gateway_app(
                             embedded,
                             payload.question,
                             None,
+                            language=language,
                         )
                     except (ValueError, RuntimeError) as exc:
                         _release_conversation_turn(context, conversation, turn_no)
@@ -750,6 +752,7 @@ def create_gateway_app(
                             active_order,
                             payload.question,
                             None,
+                            language=language,
                         )
                     except (ValueError, RuntimeError) as exc:
                         _release_conversation_turn(context, conversation, turn_no)
@@ -807,6 +810,7 @@ def create_gateway_app(
                 payload.question,
                 conversation=conversation if turn_no is not None else None,
                 conversation_turn_no=turn_no,
+                language=language,
             )
         except (ValueError, RuntimeError) as exc:
             _release_conversation_turn(context, conversation, turn_no)
@@ -1151,6 +1155,7 @@ def create_gateway_app(
     def create_standard_diagnosis(
         payload: StandardDiagnosisRequest,
         caller: ScopeContext = Depends(authenticated_diagnosis_caller),  # noqa: B008
+        language: str = Depends(request_language),  # noqa: B008
     ) -> dict[str, Any]:
         try:
             allowed = context.order_authorizer.can_access(caller, payload.order_no)
@@ -1173,6 +1178,7 @@ def create_gateway_app(
                 payload.order_no,
                 payload.question,
                 payload.indicator_code,
+                language=language,
             )
         except (ValueError, RuntimeError) as exc:
             raise StandardAPIError(

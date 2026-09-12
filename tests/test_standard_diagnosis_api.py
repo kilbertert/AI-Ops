@@ -71,6 +71,7 @@ class _Runtime:
         order_no: str,
         question: str,
         indicator_code: str | None,
+        language: str = "zh",
     ) -> dict:
         self.started.append(order_no)
         return self.store.create_standard_diagnosis(

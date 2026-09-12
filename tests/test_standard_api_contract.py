@@ -39,7 +39,7 @@ class _Runtime:
     def get_health_report(self, context: ScopeContext, job_id: str):
         return self.store.get_health_job(job_id, context.scope_fingerprint)
 
-    def start_standard_diagnosis(self, context, order_no, question, indicator_code):
+    def start_standard_diagnosis(self, context, order_no, question, indicator_code, language="zh"):
         return self.store.create_standard_diagnosis(
             context.scope_fingerprint, order_no, question, indicator_code
         )

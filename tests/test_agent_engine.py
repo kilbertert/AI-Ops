@@ -431,3 +431,42 @@ def test_parse_agent_turn_still_rejects_identity_echo_without_requests() -> None
     payload = {"kind": "tool_requests", "incident_id": "incident-abc123"}
     with pytest.raises((ValidationError, ValueError)):
         _parse_agent_turn(json.dumps(payload))
+
+
+def test_coordinator_injects_output_language_into_prompts(tmp_path: Path) -> None:
+    """The diagnosis initial prompt carries the output-language directive (#204)."""
+    _, manifest, workspace, journal, tools, settings = _context(tmp_path)
+    session = _FakeSession([_tool_request(), _diagnosis(manifest)])
+    coordinator = AgentCoordinator(
+        workspace,
+        manifest,
+        journal,
+        tools,
+        settings,
+        session_factory=lambda *_: session,
+        language="de",
+    )
+
+    result = coordinator.run()
+
+    assert result.status.value == "diagnosed"
+    assert "German" in session.prompts[0]
+    # The incident manifest (evidence snapshot) is embedded verbatim.
+    assert manifest.order_no in session.prompts[0]
+
+
+def test_coordinator_default_language_is_simplified_chinese(tmp_path: Path) -> None:
+    _, manifest, workspace, journal, tools, settings = _context(tmp_path)
+    session = _FakeSession([_tool_request(), _diagnosis(manifest)])
+    coordinator = AgentCoordinator(
+        workspace,
+        manifest,
+        journal,
+        tools,
+        settings,
+        session_factory=lambda *_: session,
+    )
+
+    coordinator.run()
+
+    assert "Simplified Chinese" in session.prompts[0]
