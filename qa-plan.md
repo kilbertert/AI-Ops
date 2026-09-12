@@ -747,3 +747,39 @@ ScopeContext（UPMS/Dis）行为由 T1-T3 既有真实验收线覆盖。
   `cloud_charging_pile`（及必要 UPMS 库）授予
   `SELECT/SHOW VIEW` 的专用账号，并补齐或明确接受协议报文缺口后，才能评估切换。
 - 清理：临时 SSH 转发已关闭；41 主机未发生服务或配置变更。
+
+### CUTOVER-41-01 41 Gateway 与公网入口
+
+- 环境：41 `47.97.160.153`、公网 `https://api.mall.qushiyun.com`。
+- 前置条件：`aiops-gateway-41.service` enabled/active；Nginx `/v1/` 指向 41。
+- 有序动作：使用无效 `third-session` 调用 FAQ，再用 H5 登录接口获取新会话调用推荐、目录、固定答案和助手问答。
+- 预期结果：无效会话为 `401 INVALID_ACCESS_TOKEN`；有效会话的推荐/目录/答案为 `200`，推荐数量为 28；助手自由问答创建为 `202` 并可轮询终态。
+- 清理：不保存会话；不创建订单或修改业务数据。
+- 结果：PASS（2026-09-12 Asia/Shanghai）。无效会话 `401`；有效会话推荐 `200/28`、目录 `200`、固定答案 `200`；自由问答 `202` 后终态 `failed`（模型/运行依赖失败，非路由 404），订单列表 `200 total=0`。
+
+### CUTOVER-41-02 共享 KB 受限隧道
+
+- 环境：41 `aiops-36-kb-tunnel.service` → 36 `kb-service.service`。
+- 前置条件：36 `127.0.0.1:9380/healthz=200`；41 隧道身份为 `aiops-kb-tunnel`。
+- 有序动作：检查服务状态、回环监听和 `/healthz`；重启 41 Gateway 后复查。
+- 预期结果：41 `127.0.0.1:29380/healthz=200`；服务 enabled/active；目标固定为 36 `127.0.0.1:9380`。
+- 清理：保留开机自启隧道；保留 41 配置备份 `/etc/aiops-41/production.env.bak-kb-tunnel-20260912`。
+- 结果：PASS（2026-09-12 Asia/Shanghai）。SSH 指纹已核验，健康探针 `200`，41 Gateway 重启后 active。
+
+### CUTOVER-41-03 诊断授权边界
+
+- 环境：41 公网 API；H5 测试账号。
+- 前置条件：登录成功但订单列表 `total=0`。
+- 有序动作：使用不存在/无权订单创建健康报告。
+- 预期结果：`404 ORDER_NOT_FOUND`，不泄露订单存在性，不创建成功报告。
+- 清理：无业务写入。
+- 结果：PASS（2026-09-12 Asia/Shanghai）。返回 `404 ORDER_NOT_FOUND`；真实诊断成功路径待提供订单所有者会话或授权演示订单。
+
+### CUTOVER-41-04 诊断数据源合规性
+
+- 环境：41 `aiops-gateway-41.service` 的本地 MySQL、Redis、TDengine 配置。
+- 前置条件：以 `direct_sources` 执行只读 doctor，不执行写入或消费游标。
+- 有序动作：检查 MySQL 授权、Redis ping、TDengine stable 清单。
+- 预期结果：MySQL 仅具 `SELECT/SHOW VIEW`；Redis 可达；TDengine 所需超表齐全。
+- 清理：无写入。
+- 结果：BLOCKED（2026-09-12 Asia/Shanghai）。Redis 可达；TDengine 缺少 `charging-pile_comm`；MySQL `read_only=false` 且含高权限 `ALL PRIVILEGES` 等，不能作为合规运行时账号。待业务方提供最小只读账号并补齐/接受报文缺口。

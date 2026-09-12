@@ -1,6 +1,7 @@
 # AI-Ops 前端联调总览
 
-> 状态：当前有效，2026-09-12。
+> 状态：当前有效，2026-09-12。当前 `/v1/*` 公网入口已切到 41（`47.97.160.153`）；
+> 41 的 KB/RAG 通过受限回环隧道复用移动云 36 单实例，诊断数据源留在 41。
 > 读者：前端组、BFF/Java 组、联调测试。
 > 权威契约：固定问答见 [固定问答标准接口](../faq-api.md)；健康报告与单问诊断见 [标准后端接口报告](../standard-api-contract.md)。本文含三条线的完整输入/输出定义，冲突时以两份契约文档为准。
 
@@ -16,9 +17,9 @@
     │  3. 以服务身份调用 AI-Ops，转发 thirdSession
     ▼
 120 Nginx（同域 /v1/*，注入服务身份）
-    │  仅到 36:8789 的受限 TLS 反代
+    │  `/v1/*` 到 41:8788 的受限反代
     ▼
-AI-Ops（36 本机 127.0.0.1:8788，见 §10.6）
+AI-Ops（41 本机 127.0.0.1:8788）
     │  解析会话 → 判定平台身份 → 隔离内容域 → 返回数据
     ▼
 前端拿到数据渲染
@@ -426,7 +427,10 @@ queued → running → completed | failed | expired                  （报告�
 
 ## 9.5 QA + blocks[] 媒体验收状态（2026-09-12 更新，可联调）
 
-- **联调环境已就绪**：`api.qumall.qushiyun.com` 已切到真实 RAG 链路（KB 栈在移动云 36，公网切流 2026-09-11 完成）。联调租户的客服智能体已发布并绑定含图片（PNG）与视频（MP4）的知识库——前端按 §场景 B 合同提问即可拿到含 media 块的真实 `blocks[]`。
+- **联调环境已就绪**：`api.qumall.qushiyun.com` 与兼容入口 `api.mall.qushiyun.com` 的 `/v1/*`
+  已切到 41 Gateway；41 通过受限隧道复用移动云 36 的 RAG/KB 单实例。联调租户的客服智能体
+  已发布并绑定含图片（PNG）与视频（MP4）的知识库——前端按 §场景 B 合同提问即可拿到含
+  media 块的真实 `blocks[]`。
 - 联调用 C 端会话（thirdSession）与测试问题由服务侧提供（会话有时效，失效时向运维索取新的）。
 - `qa` 作业返回 `blocks[]` + `retrieval_status`；`/v1/media/{id}` 支持 Range（视频分段播放）、短时签名（约 10 分钟）、停用即失效。多轮会话 `/v1/conversations`（#180）可用，含 active-order 绑定与 409 忙碌语义。
 - **视频播放已验收**：服务端租户绑定修复（PR #196）与两层反代 Range 透传已部署。
@@ -469,9 +473,10 @@ PR #196 运行版本；请求只带前端应有的 `third-session` 与 `tenant-i
 | 2 | **APK 直连 BFF 域名，缺服务身份头** | APK 不发 `Authorization`；即使 BFF 反代 `/v1/*`，纯 nginx 转发也会因缺 `Authorization`（→401 `ACCESS_TOKEN_REQUIRED`）与 `X-Third-Session` 头名不匹配（APK 发的是 `third-session`）而全部 401 | 必须在 Java/BFF 层注入服务令牌并做头名映射，不能纯 nginx 转发 |
 | 3 | **前端 UI 未接线（半成品）** | chat 页 `onLoad` 调 `getFaqRecommendations().catch(()=>{})` 后**丢弃响应**，推荐列表用硬编码 10 条 questionPool；点击问题/语音后只跑打字机动画，不调 `getFaqAnswer`/`createDiagnosis`；电池报告页未接 `health-report-jobs` | 接口封装层已就绪且正确，UI 接线是前端侧剩余工作 |
 
-### 10.3 BFF 侧修复方案（2026-09-12 当前形态）
+### 10.3 BFF 侧修复方案（历史：36 入口切换阶段）
 
-断点 1+2 已由 120 公网入口向 36 受限入口反代：
+断点 1+2 在 36 入口切换阶段由 120 公网入口向 36 受限入口反代；当前正式入口已按 §10.6
+切换到 41，下面配置仅保留为历史证据：
 
 ```nginx
 # api.qumall.qushiyun.com（120 nginx, /www/server/panel/vhost/rewrite/）：
@@ -510,9 +515,9 @@ location /v1/ {
 
 ```text
 APK / 前端 → https://api.qumall.qushiyun.com/v1/*（120 nginx 反代 + 头注入）
-           → 36 受限 TLS 入口（:8789，仅收 120）
-           → 36 本机 AI-Ops 网关（127.0.0.1:8788, systemd aiops-gateway.service）
-           → 36 本机 kb-service/RAGFlow；会话与诊断数据面经受限隧道访问 120
+           → 41 本机 AI-Ops 网关（127.0.0.1:8788, systemd aiops-gateway-41.service）
+           → 41:29380 SSH 回环隧道 → 36 本机 kb-service/RAGFlow（127.0.0.1:9380）
+           → 41 本机 MySQL/Redis/TDengine 诊断数据源
 ```
 
 - C 端验收状态：FAQ、统一助手 QA、视频 Range、会话生命周期通过（见 §9.6）；当前会话的

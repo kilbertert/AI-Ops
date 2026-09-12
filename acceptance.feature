@@ -678,3 +678,23 @@ Feature: 41 环境 Gateway 切换
       When 使用无效 X-Third-Session 调用 GET /v1/faq/recommendations
       Then 返回 HTTP 401
       And 错误码为 INVALID_ACCESS_TOKEN
+
+  Rule: 41 复用共享 KB 栈
+
+    Scenario: 41 Gateway 通过受限回环隧道访问共享 kb-service
+      Given 36 的 kb-service 监听 127.0.0.1:9380
+      And 41 的 aiops-36-kb-tunnel.service 已启用
+      When 从 41 调用本地 KB 健康端点
+      Then 127.0.0.1:29380/healthz 返回 HTTP 200
+      And 隧道只允许转发到 36 的 127.0.0.1:9380
+
+    Scenario: 41 公网 FAQ 业务链路可用
+      Given H5 登录接口返回与 41 会话库匹配的有效 thirdSession
+      When 通过 https://api.qumall.qushiyun.com/v1/faq/recommendations 调用 FAQ
+      Then 返回 HTTP 200 且包含 28 条 consumer 推荐
+      And 请求不返回 Nginx 404
+
+    Scenario: 41 没有用户订单时不伪造诊断成功
+      Given 当前 H5 会话的订单列表 total 为 0
+      When 使用该会话创建健康报告
+      Then 返回 HTTP 404 且错误码为 ORDER_NOT_FOUND
