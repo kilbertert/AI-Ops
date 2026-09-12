@@ -540,7 +540,6 @@ def test_media_route_maps_non_ascii_ids_to_uniform_403(tmp_path: Path) -> None:
     assert resp.status_code == 403
 
 
-
 def test_runtime_serve_media_fetches_through_grant_tenant(tmp_path: Path) -> None:
     """Regression (#175 C4 video canary, 2026-09-12): the media fetch must be
     re-bound to the grant's tenant. The process-level kb client is bound to
@@ -559,7 +558,7 @@ def test_runtime_serve_media_fetches_through_grant_tenant(tmp_path: Path) -> Non
         def __init__(self) -> None:
             self.fetches: list[tuple[str, str]] = []  # (client tenant, grant tenant)
 
-        def for_tenant(self, tenant_id: str) -> "_TenantRecordingClient":
+        def for_tenant(self, tenant_id: str) -> _TenantRecordingClient:
             clone = _TenantRecordingClient.__new__(_TenantRecordingClient)
             clone.fetches = self.fetches  # shared record across clones
             clone.bound_tenant = tenant_id
