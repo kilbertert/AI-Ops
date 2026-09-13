@@ -443,6 +443,27 @@ class TDengineSource:
     时间窗/LIMIT 构造，不接受客户端透传表名、字段或 SQL。
     """
 
+    # get_gun_samples 的完整 SELECT 列表（41 环境曾缺 batteryMinTemperature，
+    # doctor 按此逐列探测，环境 schema 漂移在预检阶段即可见）。
+    GUN_COLUMNS: tuple[str, ...] = (
+        "txSerialNo",
+        "status",
+        "isReturn",
+        "isInsert",
+        "outputVoltage",
+        "outputCurrent",
+        "power",
+        "chargingTime",
+        "chargingElectricityQuantity",
+        "soc",
+        "temperature",
+        "batteryMaxTemperature",
+        "batteryMinTemperature",
+        "errorCode",
+        "errorReason",
+        "meterNow",
+    )
+
     def __init__(
         self,
         settings: Settings,
@@ -521,10 +542,25 @@ class TDengineSource:
     def doctor(self) -> dict[str, Any]:
         rows = self._query("SHOW STABLES")
         names = {str(value) for row in rows for value in row.values()}
+        gun_present = "charging-gun_property" in names
+        gun_columns: dict[str, bool] = {column: False for column in self.GUN_COLUMNS}
+        gun_columns_checked = False
+        if gun_present:
+            try:
+                described = self._query("DESCRIBE `charging-gun_property`")
+                # REST 返回行按 column_meta zip 成 dict，`field` 值即列名
+                present = {str(row.get("field")) for row in described}
+                gun_columns = {column: column in present for column in self.GUN_COLUMNS}
+                gun_columns_checked = True
+            except SourceError:
+                # doctor 不得因 SHOW 找到的 stable 而抛错；列未核实即视为不可用
+                pass
         return {
             "database": self.database,
-            "charging_gun_property": "charging-gun_property" in names,
+            "charging_gun_property": gun_present,
             "charging_pile_comm": "charging-pile_comm" in names,
+            "gun_columns": gun_columns,
+            "gun_columns_checked": gun_columns_checked,
             "stable_count": len(rows),
         }
 

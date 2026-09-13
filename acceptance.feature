@@ -729,3 +729,97 @@ Feature: 41 环境 Gateway 切换
       Given 当前 H5 会话的订单列表 total 为 0
       When 使用该会话创建健康报告
       Then 返回 HTTP 404 且错误码为 ORDER_NOT_FOUND
+
+Feature: 环境清单驱动的 Agent 收敛
+
+  Rule: aiops admin reconcile 走生产代码路径幂等收敛
+
+    Scenario: 首次按清单创建并发布 agent
+      Given 一个包含已发布客服 agent 的环境清单
+      When 管理员运行 aiops admin reconcile
+      Then agent 通过 AgentManager 创建并发布
+      And 发布前对 kb-service 执行知识库活性校验
+      And created_by 与 published_by 记录为 aiops-admin
+
+    Scenario: 重复执行相同清单是幂等无操作
+      Given 清单已成功收敛一次
+      When 管理员再次运行 aiops admin reconcile
+      Then 所有 agent 报告 unchanged
+      And 不产生新的发布版本
+
+    Scenario: 配置漂移通过 fork/update/publish 收敛
+      Given 已发布 agent 的 prompt 与清单不一致
+      When 管理员运行 aiops admin reconcile
+      Then agent 产生新的不可变版本且内容与清单一致
+
+    Scenario: 非白名单模型在任何写入前失败
+      Given 清单中的模型不在 Settings 允许列表
+      When 管理员运行 aiops admin reconcile
+      Then 命令以错误退出
+      And 数据库未发生任何变更
+
+    Scenario: prune 仅禁用清单租户内的多余 agent
+      Given 清单租户存在清单外 agent 且另一租户也存在 agent
+      When 管理员运行 aiops admin reconcile --prune
+      Then 清单租户的清单外已发布 agent 被禁用
+      And 清单外租户的 agent 保持不变
+
+    Scenario: 预演模式零写入
+      Given 尚未收敛的环境清单
+      When 管理员运行 aiops admin reconcile --dry-run
+      Then 输出与实收敛相同的计划报告
+      And gateway 数据库零变更
+
+
+  Rule: 客服提示词的业务行为契约随清单演进
+
+    Scenario: 知识库命中时以知识库为唯一事实来源
+      Given 提示词已收敛到清单版本且用户问题在知识库命中
+      When 客服智能体完成回答
+      Then 回答基于知识库内容组织且不添加知识库没有的政策数字或承诺
+      And 自身认知与知识库冲突时以知识库为准
+
+    Scenario: 未命中的通用常识回答声明非官方政策
+      Given 用户提出充电领域通用公开常识问题且知识库未命中
+      When 客服智能体完成回答
+      Then 回答先说明通用常识参考且非平台官方政策
+      And 不编造具体数据政策或参数
+
+    Scenario: 超出能力边界的问题按固定话术拒答
+      Given 用户提出金融医疗法律等非领域问题或本人订单扣费问题
+      When 客服智能体完成回答
+      Then 使用提示词中的固定拒答话术或引导诊断人工客服
+      And 不猜测订单状态或扣费原因
+
+Feature: 意图相关的诊断置信阶梯与环境预检
+
+  Rule: 降级由所问问题需要的证据决定，而非数据源失败本身
+
+    Scenario: 外围数据源失败但订单费用证据完整时给出诊断
+      Given MySQL 订单/费用/设备证据完整且自洽
+      And TDengine 遥测源查询失败
+      When Agent 完成诊断
+      Then 结果状态为 diagnosed 且置信度为 medium
+      And 失败源进入 failed_sources 与 limitations
+      And 不因外围源失败扣留结论
+
+    Scenario: 问题本身依赖缺失的遥测时保持 inconclusive
+      Given 订单电表起止值矛盾且需要枪遥测裁决
+      And 枪遥测稳定表在本环境不存在
+      When Agent 完成诊断
+      Then 结果状态为 inconclusive 且在 limitations 中说明缺失通道
+
+    Scenario: 订单主数据失败时结果 blocked 且 low
+
+    Scenario: 预检缺口记入证据日志并出现在初始提示
+      Given 预检发现 charging-gun_property 缺少列 batteryMinTemperature
+      When 诊断运行开始
+      Then 证据日志记录该工具的 blocked 条目且错误文本含 预检
+      And 初始提示包含 环境能力预检 说明
+      And blocked 条目不进入 failed_sources
+
+    Scenario: 预检不拦截模型工具请求
+      Given 预检已记录 blocked 条目
+      When 模型仍请求该工具
+      Then 工具真实执行并按实际结果记录
+      And 预检不代答、不短路执行器

@@ -165,3 +165,67 @@ def test_source_outage_caps_confidence_and_is_not_false_high(tmp_path: Path) -> 
     assert result.confidence.value == "medium"
     assert result.failed_sources == ["tdengine:charging-gun_property"]
     assert journal.entries()[-1].status == "failed"
+
+
+def test_ladder_scenario_diagnosed_with_failed_peripheral_source(tmp_path: Path) -> None:
+    """外围 TDengine 源失败但订单/费用证据完整自洽时，诊断仍是 diagnosed+medium
+    （意图相关阶梯的核心验收形态；validator 只封 high，不封结论本身）。"""
+    result, journal, _ = _run_scenario(
+        tmp_path / "ladder",
+        "ocpp_consistent",
+        ["order_snapshot", "fee_snapshot", "device_snapshot", "gun_timeseries"],
+        failing=True,
+    )
+    assert result.status.value == "diagnosed", "外围源失败不扣留结论"
+    assert result.confidence.value == "medium", "有失败源时置信度封顶 medium"
+    assert "tdengine:charging-gun_property" in result.failed_sources
+    assert result.limitations, "缺失通道必须写入 limitations"
+
+
+def test_initial_prompt_includes_environment_notes(tmp_path: Path) -> None:
+    """环境预检注记进入初始提示（第一轮规划即可绕开缺失通道）。"""
+    request = parse_request("订单 TEST-OCPP-0003 金额异常")
+    manifest = IncidentManifest.from_request(request)
+    workspace = AgentWorkspace.create(Path(__file__).parents[1], tmp_path, manifest)
+    journal = EvidenceJournal(workspace, manifest)
+    source = FixtureSources(FIXTURES / "ocpp_consistent.json")
+    executor = DiagnosticToolExecutor(source, request, manifest, journal, safety=SafetySettings())
+    session = _ScriptedSession(["order_snapshot"])
+    session.bind_manifest(manifest)
+    settings = AgentSettings(codex_bin="/bin/true", max_turns=2)
+
+    AgentCoordinator(
+        workspace,
+        manifest,
+        journal,
+        executor,
+        settings,
+        session_factory=lambda *_: session,
+        environment_notes=("环境数据面缺口: charging-gun_property 缺少列 batteryMinTemperature（预检）",),
+    ).run()
+
+    first_prompt = session.prompts[0]
+    assert "环境能力预检" in first_prompt
+    assert "batteryMinTemperature" in first_prompt
+
+    # 无注记时不出现该段
+    session2 = _ScriptedSession(["order_snapshot"])
+    session2.bind_manifest(manifest)
+    workspace2 = AgentWorkspace.create(Path(__file__).parents[1], tmp_path / "plain", manifest)
+    journal2 = EvidenceJournal(workspace2, manifest)
+    executor2 = DiagnosticToolExecutor(
+        FixtureSources(FIXTURES / "ocpp_consistent.json"),
+        request,
+        manifest,
+        journal2,
+        safety=SafetySettings(),
+    )
+    AgentCoordinator(
+        workspace2,
+        manifest,
+        journal2,
+        executor2,
+        settings,
+        session_factory=lambda *_: session2,
+    ).run()
+    assert "环境能力预检" not in session2.prompts[0]

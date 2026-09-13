@@ -129,3 +129,86 @@ def test_cli_exposes_remote_gateway_commands() -> None:
     assert "enroll" in result.stdout
     assert "diagnose" in result.stdout
     assert "events" in result.stdout
+
+
+def test_admin_reconcile_end_to_end(tmp_path: Path) -> None:
+    runner = CliRunner()
+    portable_home = tmp_path / "portable-home"
+    config = portable_home / "production.env"
+    environment = {"AIOPS_HOME": str(portable_home)}
+    config.parent.mkdir(parents=True)
+    config.write_text("AIOPS_AGENT_MODEL=aiops-api\n", encoding="utf-8")
+    if os.name != "nt":
+        import stat as _stat
+
+        config.chmod(_stat.S_IRUSR | _stat.S_IWUSR)
+    manifest = tmp_path / "env.toml"
+    manifest.write_text(
+        """
+[[agents]]
+tenant_id = "tenant-a"
+name = "客服助手"
+description = "d"
+agent_type = "customer"
+prompt = "回答必须引用已授权的业务资料。"
+knowledge_base_ids = []
+model = "aiops-api"
+""",
+        encoding="utf-8",
+    )
+    db = tmp_path / "gateway.db"
+
+    first = runner.invoke(
+        app,
+        ["--config", str(config), "admin", "reconcile", str(manifest), "--db", str(db)],
+        env=environment,
+    )
+    assert first.exit_code == 0, first.output
+    payload = json.loads(first.stdout)
+    assert [item["action"] for item in payload["reports"]] == ["created"]
+
+    second = runner.invoke(
+        app,
+        ["--config", str(config), "admin", "reconcile", str(manifest), "--db", str(db)],
+        env=environment,
+    )
+    assert second.exit_code == 0
+    assert [item["action"] for item in json.loads(second.stdout)["reports"]] == ["unchanged"]
+
+
+def test_admin_reconcile_unknown_model_exits_two(tmp_path: Path) -> None:
+    runner = CliRunner()
+    portable_home = tmp_path / "portable-home"
+    config = portable_home / "production.env"
+    config.parent.mkdir(parents=True)
+    config.write_text("AIOPS_AGENT_MODEL=aiops-api\n", encoding="utf-8")
+    if os.name != "nt":
+        import stat as _stat
+
+        config.chmod(_stat.S_IRUSR | _stat.S_IWUSR)
+    manifest = tmp_path / "bad.toml"
+    manifest.write_text(
+        """
+[[agents]]
+tenant_id = "tenant-a"
+name = "客服助手"
+agent_type = "customer"
+prompt = "p"
+knowledge_base_ids = []
+model = "gpt-4o"
+""",
+        encoding="utf-8",
+    )
+    result = runner.invoke(
+        app,
+        ["--config", str(config), "admin", "reconcile", str(manifest), "--db", str(tmp_path / "g.db")],
+        env={"AIOPS_HOME": str(portable_home)},
+    )
+    assert result.exit_code == 2, result.output
+    assert "不在白名单" in result.output
+
+
+def test_admin_group_exposed() -> None:
+    result = CliRunner().invoke(app, ["admin", "--help"])
+    assert result.exit_code == 0
+    assert "reconcile" in result.output

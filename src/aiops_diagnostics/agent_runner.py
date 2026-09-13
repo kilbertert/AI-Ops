@@ -12,7 +12,7 @@ from aiops_diagnostics.agent_engine import AgentCoordinator, ProgressCallback
 from aiops_diagnostics.agent_workspace import AgentWorkspace
 from aiops_diagnostics.codex_runtime import AgentRuntimeError, resolve_provider_api_key
 from aiops_diagnostics.config import Settings
-from aiops_diagnostics.diagnostic_tools import DiagnosticToolExecutor
+from aiops_diagnostics.diagnostic_tools import DiagnosticToolExecutor, preflight_environment
 from aiops_diagnostics.i18n import DEFAULT_LANGUAGE, language_name
 from aiops_diagnostics.journal import EvidenceJournal
 from aiops_diagnostics.models import DiagnosticRequest
@@ -52,12 +52,14 @@ def run_agent_diagnosis(
             safety=settings.safety,
             allowed_tenants=allowed_tenants,
         )
+        environment_notes = preflight_environment(sources, request, journal)
         coordinator = AgentCoordinator(
             workspace,
             manifest,
             journal,
             tools,
             settings.agent,
+            environment_notes=environment_notes,
             provider=selected_provider,
             sensitive_values=(
                 settings.mysql.password,

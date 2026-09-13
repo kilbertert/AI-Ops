@@ -1,5 +1,24 @@
 # 验证与验收计划
 
+## 客服提示词业务契约验收（2026-09-14）
+
+对应 #215（`872559a`），PROMPT-01 完成，PROMPT-02 如实记录为阻塞：
+
+- **PROMPT-01（reconcile 收敛新提示词，41 实机）**：`--dry-run` 报 2×`updated`；实跑 1783 租户 `agt_7156d07a` published **v4**、1942 租户 `agt_7dbe2665` updated **v2**（与 QA 计划预期一致）；二跑 2×`unchanged` 幂等成立。DB 只读复核：v4/v2 快照均携带 759 字符「小趋」prompt，`published_version` 指向正确，运行时下一条 QA 即读新版本（提示词每次请求重读库，无需重启 gateway）。
+- **PROMPT-02（公网三类问题实测）**：**blocked**——三问（知识库命中/通用常识/超边界订单扣费）均 202 进 qa 路由后 `QA_FAILED`，assistant_questions 表 error_message 实拍 `code:"Arrearage"`（阿里云百炼账户欠费 400）。供应商通道断供同时打挂两条链路：模型调用直接 400；KB 检索的 embedding 通道（RAGFlow `encode_queries` 400 → kb-service 502 code=102），直连探测两个租户 KB search 均 502。非本次变更引入的缺陷——上会话 mem-20260912 已记录同一供应商反复欠费。业务方充值后重发三问即可闭环。
+- **KB 活性校验写前拦截生效**：实跑 reconcile 首次尝试报 `AgentPublishError: 知识库 4f4bc674… 不存在或不在当前租户下`（活性校验触达检索时撞 502），零写入退出；重试通过后产出正确版本。预检按设计 fail closed。
+- 局限：充值后重跑 PROMPT-02 前不宣称提示词业务行为验收通过；三问结果将记入本节。
+
+## 环境清单 admin reconcile 与诊断置信阶梯（2026-09-13）
+
+对应 #211（`ec2fc04`）与 #212（`63e3dd2`），实机验收于 41（`/opt/aiops-41`，gateway 部署 18 文件 sha 逐一核对后重启 healthy）：
+
+- **ADM-04（reconcile on 41）**：`aiops --config /etc/aiops-41/production.env admin reconcile ops/environments/env-41.toml --db /var/lib/aiops-41/gateway/gateway.db --kb-url http://127.0.0.1:29380`，`--dry-run` 与实跑均 2×`unchanged`（`agt_7156…` v3 / `agt_7dbe…` v1 精确匹配），清单转写回环成立，KB 活性校验真实触达 36 kb-service。
+- **LADDER-02（回放计量矛盾单 `dx_7d28c5d7`）**：结果 `inconclusive` + low——meterBeginValue=10000 > meterEndValue 倒挂矛盾确需遥测仲裁，阶梯第 2 档正确不越权；生产 journal 实拍两条环境预检 blocked 条目，精确点名 `batteryMinTemperature 缺列` / `charging-pile_comm 表不存在`；模型在 limitations 明言“按预检指引本次未重复请求该通道”，预检注记真实改变了规划行为；next_steps 具体到 transaction_id=269 取证路径。
+- **LADDER-03（billing 场景）**：`inconclusive` + medium，非误降——41 全部 5 个真实订单均为“20 秒短会话 + meter 倒挂”演示形态，“金额是否正确”落在电量真实性仲裁上（恰需缺失遥测）；模型明确交付 firm 部分：计费公式与模板快照一致（0.4003×6.00=2.40，无错分时段/重复计费）。billing-clean 单待业务侧正常订单数据。
+- **真实故障与修复（`--db` XDG 陷阱）**：on-box 不 source `production.env` 直接执行 reconcile 时，`GatewayServerSettings.from_env()` 回退 XDG 默认路径**静默新建空库**（`~/.local/share/aiops-diagnostics/gateway/gateway.db`），收敛报告全 `created` 而非 `unchanged`。根因：`--config` 只喂 `Settings.from_config`（模型白名单），数据库路径走独立的 `from_env()` 只读进程环境变量。修复：显式 `--db`，已文档化（PR #213 `162bb19`）。
+- 局限：41 on-box runtime venv 无 pytest，on-box 测试只能 import smoke；本地全量确定性检查已过（#211 685 项、#212 680 项）。
+
 ## 41 Gateway 与公网入口切换验证（2026-09-12）
 
 - 41 `aiops-gateway-41.service` enabled/active；本机 `GET /health` 返回 `200`，

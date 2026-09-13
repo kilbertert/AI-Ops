@@ -9,7 +9,7 @@ from aiops_diagnostics.agent_contracts import IncidentManifest, ToolName, ToolRe
 from aiops_diagnostics.engine import DiagnosticEngine, _order_window
 from aiops_diagnostics.journal import EvidenceJournal, JournalEntry
 from aiops_diagnostics.models import DiagnosticRequest
-from aiops_diagnostics.sources import DiagnosticSources, SourceError
+from aiops_diagnostics.sources import DiagnosticSources, SourceError, TDengineSource
 
 TOOL_DESCRIPTIONS: dict[ToolName, str] = {
     ToolName.ORDER_SNAPSHOT: "MySQL order rows by order_no; tenant learned from the order, scope-checked.",
@@ -30,6 +30,64 @@ TOOL_SOURCES: dict[ToolName, str] = {
     ToolName.REDIS_SYNC: "redis:order_sync_streams",
     ToolName.KNOWN_RUNBOOK: "deterministic:known_runbook",
 }
+
+
+def preflight_environment(
+    sources: DiagnosticSources,
+    request: DiagnosticRequest,
+    journal: EvidenceJournal,
+) -> tuple[str, ...]:
+    """Run start environment preflight: one doctor() consultation.
+
+    Records a ``blocked`` journal entry for every evidence channel the doctor
+    already knows is absent (missing stable / missing column) and returns
+    advisory notes for the initial prompt, so the model plans around the gaps
+    from turn 1 instead of spending a turn hitting a guaranteed SourceError.
+
+    Advisory only: ``DiagnosticToolExecutor.execute`` never refuses — a tool
+    the model still requests runs for real and fails naturally (the journal
+    then carries the honest ``failed`` entry). A doctor that raises or is
+    absent (FixtureSources) disables the preflight entirely; tools then fail
+    naturally as before.
+    """
+    doctor = getattr(sources, "doctor", None)
+    if doctor is None:
+        return ()
+    try:
+        report = doctor()
+    except Exception:
+        return ()
+    tdengine = report.get("tdengine") if isinstance(report, dict) else None
+    details = tdengine.get("details") if isinstance(tdengine, dict) else None
+    if not isinstance(details, dict):
+        return ()
+    gun_columns = details.get("gun_columns") or {}
+
+    gaps: list[tuple[ToolName, str]] = []
+    if not details.get("charging_gun_property"):
+        gaps.append((ToolName.GUN_TIMESERIES, "charging-gun_property 表不存在"))
+    else:
+        missing_columns = [column for column in TDengineSource.GUN_COLUMNS if not gun_columns.get(column)]
+        if missing_columns:
+            gaps.append(
+                (ToolName.GUN_TIMESERIES, f"charging-gun_property 缺少列 {'、'.join(missing_columns)}")
+            )
+    if not details.get("charging_pile_comm"):
+        gaps.append((ToolName.COMM_MESSAGES, "charging-pile_comm 表不存在"))
+
+    notes: list[str] = []
+    for tool, reason in gaps:
+        error = f"环境数据面缺口: {reason}（预检）"
+        journal.record(
+            tool=tool,
+            source=TOOL_SOURCES[tool],
+            status="blocked",
+            request={"order_no": request.order_no, "tenant_id": request.tenant_id},
+            payload={"reason": reason, "preflight": True},
+            error=error,
+        )
+        notes.append(error)
+    return tuple(notes)
 
 
 @dataclass(frozen=True, slots=True)

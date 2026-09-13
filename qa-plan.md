@@ -807,3 +807,32 @@ ScopeContext（UPMS/Dis）行为由 T1-T3 既有真实验收线覆盖。
 - 预期结果：FAQ 与快捷问返回 200、`language` 正确折叠、标题/答案对应语言；非 FAQ 返回 202 并在完成态返回目标语言文本。
 - 清理：不保存会话；保留 41 主机源码回滚包；不写业务订单。
 - 结果：PARTIAL（2026-09-13 Asia/Shanghai）。六种语言 FAQ 推荐均 `200/28` 且正确回显 `zh/en/de/fr/es/pt`；固定答案五语均 `200`/`text`/非空；统一入口快捷问五语均 `200 type=faq` 且未创建异步作业。英文非 FAQ 已返回 `202 type=qa` 且 `language=en`，轮询因百炼真实 `400 Arrearage` 以 `QA_FAILED` 结束，未取得多语言 completed 文本。待恢复 provider 后复跑 QA/媒体/诊断成功路径。
+
+## 环境 Agent 收敛 QA（ADM）
+
+| ID | 环境 | 前置 | 操作 | 预期结果 | 清理 |
+|---|---|---|---|---|---|
+| ADM-01 | 本地 dev | tmp gateway.db + 假 KB resolver | `uv run pytest tests/test_agent_manifest.py -q` | 10 项全过（create+publish/幂等/漂移 v2/draft/白名单前置失败/manual-action/prune 作用域/disabled/dry-run） | tmp_path 自动清理 |
+| ADM-02 | 本地 dev | AIOPS_HOME 覆盖 + tmp 清单 + --db | `aiops --config <tmp> admin reconcile <manifest> --db <tmp>` 连续两次 | 首次 `created`，二次全 `unchanged`；JSON 报告可解析 | tmp_path 自动清理 |
+| ADM-03 | 本地 dev | 清单模型不在白名单 | 同上（模型写 gpt-4o） | exit 2 + “不在白名单”，gateway.db 零写入 | 同上 |
+| ADM-04 | 41 实机 | /etc/aiops-41/production.env + ops/environments/env-41.toml | `aiops --config /etc/aiops-41/production.env admin reconcile ops/environments/env-41.toml --kb-url http://127.0.0.1:29380`（先 `--dry-run` 再实跑；跑前 `cp gateway.db gateway.db.bak-<date>`） | 首跑全 `unchanged`（转写回环验证；出现 `updated` = 清单转写有误，停手修清单）；KB 活性校验真实触达 36 kb-service | 保留服务与备份 |
+| ADM-05 | 41 实机 | ADM-04 通过 | 修改清单 prompt（实验性漂移）后再 reconcile | 报告 `updated` 且产生 v2；确认后把清单改回并再收敛恢复 | 用备份或再次收敛恢复 |
+
+## 诊断置信阶梯与环境预检 QA（LADDER）
+
+| ID | 环境 | 前置 | 操作 | 预期结果 | 清理 |
+|---|---|---|---|---|---|
+| LADDER-01 | 本地 dev | 合成 fixture | `uv run pytest tests/test_agent_scenarios.py tests/test_diagnostic_tools.py tests/test_hybrid_sources.py tests/test_codex_runtime.py -q` | 全过：阶梯场景(gun 失败+计费完整→diagnosed+medium)、doctor 列探测、预检 blocked/容错/不短路、提示词文本 pin | 无 |
+| LADDER-02 | 41 实机 | PR-C 部署后 | 用订单属主 session 对 2098849284776484865 重新发起诊断 | run 内 events 出现 环境能力预检 注记与 blocked 预检条目（charging-pile_comm 表不存在、batteryMinTemperature 缺列）；结论预期仍 inconclusive（计量矛盾确需遥测）但 limitations 点名具体通道 | 会话数据保留 |
+| LADDER-03 | 41 实机 | 同上 | 找一个 MySQL 证据完整、问题只涉计费的订单发起诊断 | 结果 completed（diagnosed）+ medium + failed_sources 声明 TDengine 通道——此前这类单易被降为 inconclusive | 保留 |
+| LADDER-04 | 回归 | — | `uv run pytest -q` 全量 | 既有 685+ 测试零回归 | 无 |
+
+## 客服提示词业务契约 QA（PROMPT）
+
+PROMPT-01/02 为 41 实机验收（清单收敛 + 公网问答），PROMPT-03 本地清单合同回归。
+
+| ID | 环境 | 前置 | 操作 | 预期 | 清理 |
+|---|---|---|---|---|---|
+| PROMPT-01 | 41 实机 | PR 合并、`admin reconcile` 待执行 | `aiops --config /etc/aiops-41/production.env admin reconcile ops/environments/env-41.toml --db /var/lib/aiops-41/gateway/gateway.db --kb-url http://127.0.0.1:29380 --dry-run` 后实跑 | 2×`updated`（1783 租户产 v4、1942 租户产 v2）；再跑 2×`unchanged`；下一条 QA 即用新提示词 | 无（清单收敛幂等） |
+| PROMPT-02 | 41 公网 | PROMPT-01 完成、有效 thirdSession | 三类问题各一发：①知识库命中题（新加坡无人电动巴士）②通用常识题（充电桩 AC/DC 区别）③超边界题（帮我看看订单扣费对不对） | ①基于知识库作答 ②先声明通用常识非官方政策 ③固定拒答话术或引导诊断/人工，不猜测订单 | 无（只产生问答记录） |
+| PROMPT-03 | 本地 dev | 清单已更新 | `uv run pytest tests/test_agent_manifest.py -q` + `tomllib` 解析 | 10 项通过、TOML 可解析、两个 agent prompt 均为 759 字符定稿 | tmp 自动清理 |
