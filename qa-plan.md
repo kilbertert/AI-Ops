@@ -748,6 +748,66 @@ ScopeContext（UPMS/Dis）行为由 T1-T3 既有真实验收线覆盖。
   `SELECT/SHOW VIEW` 的专用账号，并补齐或明确接受协议报文缺口后，才能评估切换。
 - 清理：临时 SSH 转发已关闭；41 主机未发生服务或配置变更。
 
+### CUTOVER-41-01 41 Gateway 与公网入口
+
+- 环境：41 `47.97.160.153`、公网 `https://api.mall.qushiyun.com`。
+- 前置条件：`aiops-gateway-41.service` enabled/active；Nginx `/v1/` 指向 41。
+- 有序动作：使用无效 `third-session` 调用 FAQ，再用 H5 登录接口获取新会话调用推荐、目录、固定答案和助手问答。
+- 预期结果：无效会话为 `401 INVALID_ACCESS_TOKEN`；有效会话的推荐/目录/答案为 `200`，推荐数量为 28；助手自由问答创建为 `202` 并可轮询终态。
+- 清理：不保存会话；不创建订单或修改业务数据。
+- 结果：PARTIAL（2026-09-13 Asia/Shanghai）。41 无效会话 `401`；有效会话推荐 `200/28`、目录 `200`、固定答案 `200`。配置切换后曾有历史自由问答 `202→completed` 记录，但本次复跑两个非 FAQ 问题均因百炼真实 `400 Arrearage` 以 `QA_FAILED` 结束；待恢复可用 provider 后复验。
+
+### CUTOVER-41-05 95/41 域名与数据面隔离
+
+- 环境：95 `120.55.45.59` 的 `api.qumall.qushiyun.com`；41 `47.97.160.153` 的 `api.mall.qushiyun.com`。
+- 有序动作：分别访问两个入口的 `/v1/faq/catalog`，不携带有效会话；检查 95 本机 8788、41 本机 8788 及两侧服务状态。
+- 预期结果：两个入口均返回 `401 INVALID_ACCESS_TOKEN`；95 入口只由 95 Gateway 响应，41 入口只由 41 Gateway 响应；不得把任一域名反代到另一环境的会话库或诊断数据源。
+- 清理：保留 95 Nginx 原配置备份和 41 隧道配置备份。
+- 结果：PASS（2026-09-12 Asia/Shanghai）。两个公网入口均为 `401 INVALID_ACCESS_TOKEN`；95 Gateway active、41 Gateway active；95 `/v1/` 已指向本机 `127.0.0.1:8788`，41 `/v1/` 仍指向 41 Gateway。
+
+### CUTOVER-41-02 共享 KB 受限隧道
+
+- 环境：41 `aiops-36-kb-tunnel.service` → 36 `kb-service.service`。
+- 前置条件：36 `127.0.0.1:9380/healthz=200`；41 隧道身份为 `aiops-kb-tunnel`。
+- 有序动作：检查服务状态、回环监听和 `/healthz`；重启 41 Gateway 后复查。
+- 预期结果：41 `127.0.0.1:29380/healthz=200`；服务 enabled/active；目标固定为 36 `127.0.0.1:9380`。
+- 清理：保留开机自启隧道；保留 41 配置备份 `/etc/aiops-41/production.env.bak-kb-tunnel-20260912`。
+- 结果：PASS（2026-09-12 Asia/Shanghai）。SSH 指纹已核验，健康探针 `200`，41 Gateway 重启后 active。
+
+### CUTOVER-41-03 诊断授权边界
+
+- 环境：41 公网 API；H5 测试账号。
+- 前置条件：登录成功但订单列表 `total=0`。
+- 有序动作：使用不存在/无权订单创建健康报告。
+- 预期结果：`404 ORDER_NOT_FOUND`，不泄露订单存在性，不创建成功报告。
+- 清理：无业务写入。
+- 结果：PASS（2026-09-12 Asia/Shanghai）。返回 `404 ORDER_NOT_FOUND`；真实诊断成功路径待提供订单所有者会话或授权演示订单。
+
+### CUTOVER-41-04 诊断数据源合规性
+
+- 环境：41 `aiops-gateway-41.service` 的本地 MySQL、Redis、TDengine 配置。
+- 前置条件：以 `direct_sources` 执行只读 doctor，不执行写入或消费游标。
+- 有序动作：检查 MySQL 授权、Redis ping、TDengine stable 清单。
+- 预期结果：MySQL 仅具 `SELECT/SHOW VIEW`；Redis 可达；TDengine 所需超表齐全。
+- 清理：无写入。
+- 结果：BLOCKED（2026-09-12 Asia/Shanghai）。Redis `PING` 成功且会话键可读；TDengine 认证查询成功但缺少 `charging-pile_comm`；MySQL 认证查询成功但当前账号 `read_only=false` 且含高权限 `ALL PRIVILEGES` 等，不能作为合规运行时账号。待业务方提供最小只读账号并补齐/接受报文缺口。
+
+### CUTOVER-41-06 provider 与客服媒体链路
+
+- 环境：41 `47.97.160.153`、公网 `https://api.mall.qushiyun.com`、共享 KB 隧道到 36。
+- 有序动作：启用 41 `canary-dashscope` 默认 provider；迁入已发布客服智能体；使用新 H5 会话发起自由 QA 和媒体问题，轮询至终态。
+- 预期结果：自由 QA `202→completed`；媒体问题返回含 `blocks[]` 的检索结果，图片可下载、视频支持 `206/416`。
+- 清理：不保存会话；保留 41 provider/数据库备份；不改业务订单。
+- 结果：BLOCKED（2026-09-13 Asia/Shanghai）。自由 QA 与媒体问题均创建 `202`，但 RAGFlow 向量/模型调用真实返回百炼 `400 Arrearage`，终态 `QA_FAILED`，未生成媒体块。已核对 RAGFlow `aiops-canary` 的 `Tongyi-Qianwen/maas` 实例 key 指纹与 41 `canary-dashscope` 一致，排除 key 不一致；待上游账户/项目恢复或替换 embedding provider 后复跑媒体验收。
+
+### CUTOVER-41-07 多语言实现接入与真实验收
+
+- 环境：41 `47.97.160.153`、公网 `https://api.mall.qushiyun.com`；源码同步自 `origin/main@ef79e58`。
+- 有序动作：备份 41 运行副本后同步主线 `src`/FAQ 制品并重启 Gateway；使用同一有效 H5 会话，分别以 `zh-CN`、`en-US`、`de`、`fr`、`es`、`pt-BR` 调用 FAQ 推荐、固定答案和统一入口快捷问；再提交英文非 FAQ 问题并轮询。
+- 预期结果：FAQ 与快捷问返回 200、`language` 正确折叠、标题/答案对应语言；非 FAQ 返回 202 并在完成态返回目标语言文本。
+- 清理：不保存会话；保留 41 主机源码回滚包；不写业务订单。
+- 结果：PARTIAL（2026-09-13 Asia/Shanghai）。六种语言 FAQ 推荐均 `200/28` 且正确回显 `zh/en/de/fr/es/pt`；固定答案五语均 `200`/`text`/非空；统一入口快捷问五语均 `200 type=faq` 且未创建异步作业。英文非 FAQ 已返回 `202 type=qa` 且 `language=en`，轮询因百炼真实 `400 Arrearage` 以 `QA_FAILED` 结束，未取得多语言 completed 文本。待恢复 provider 后复跑 QA/媒体/诊断成功路径。
+
 ## 环境 Agent 收敛 QA（ADM）
 
 | ID | 环境 | 前置 | 操作 | 预期结果 | 清理 |

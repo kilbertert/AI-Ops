@@ -119,6 +119,15 @@ Gateway 使用只读 Redis 读取 `app:3rd_session:<thirdSession>`；Java 序列
 只被提取解析，不执行 Java 对象反序列化。截图 token `76ea8a54-12d7-4889-823e-edded054a7218`
 在测试业务 Redis 中不存在，判定为过期或其他环境 token，不能用于真实验收。
 
+### 多环境与共享 KB 部署
+
+环境切换只移动 Gateway、入口反代和本环境诊断数据源；RAGFlow/KB 属于重资产，保持在
+移动云 36 单实例。41 不复制 RAGFlow 或 `kb-service`，而是通过 `aiops-36-kb-tunnel.service`
+以 `aiops41` 身份访问 36 的回环 `127.0.0.1:9380`，本机只暴露 `127.0.0.1:29380`。
+隧道 SSH key 在 36 使用 `command=/bin/false`、`permitopen=127.0.0.1:9380`，不开放 shell
+或其他端口；41 Gateway 只配置 `AIOPS_GATEWAY_KB_SERVICE_BASE_URL=http://127.0.0.1:29380`。
+这保持单一知识库资产、租户映射和模型配置，同时让 41 的会话/订单/诊断数据源独立。
+
 ### 固定问答调用
 
 业务后端可使用服务 Bearer、`third-session` 和可信的 `X-Business-Entry` 调用

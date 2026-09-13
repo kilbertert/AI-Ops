@@ -16,13 +16,17 @@ AI-Ops 提供的是消费端无关的标准后端 HTTP API。调用方可以是�
 标准 API 的测试环境基础地址（Base URL）是：
 
 ```text
-https://api.qumall.qushiyun.com
+95 环境：`https://api.qumall.qushiyun.com`
+41 环境：`https://api.mall.qushiyun.com`
+
+两套入口使用各自环境的 Gateway、会话库和诊断数据源；接口路径和响应合同一致，禁止跨环境混用会话或数据源。
 ```
 
 健康检查地址为：
 
 ```text
-GET https://api.qumall.qushiyun.com/health
+95：GET https://api.qumall.qushiyun.com/health
+41：GET https://api.mall.qushiyun.com/health
 ```
 
 业务后端直接调用 AI-Ops 时统一携带：
@@ -41,8 +45,10 @@ curl --fail-with-body \
   -H "third-session: $THIRD_SESSION" \
   -H "Content-Type: application/json" \
   -d '{"order_no":"2094370061724549120"}' \
-  https://api.qumall.qushiyun.com/v1/health-report-jobs
+  https://api.mall.qushiyun.com/v1/health-report-jobs
 ```
+
+上例使用 41 入口；95 环境替换为 `api.qumall.qushiyun.com`，订单和会话必须属于 95。
 
 ## 2. 调用接口
 

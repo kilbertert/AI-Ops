@@ -24,13 +24,19 @@
    注意：36 与 120/124 内网不互通（诊断数据面在 36 不可达属预期）；
    诊断线继续由 120 网关承载，不在本 canary 范围。
 
+> 环境口径：本文早期 C1-C7 记录使用 `api.qumall.qushiyun.com` 的历史 36 canary 入口；
+> 当前正式分流为 95 `api.qumall.qushiyun.com`、41 `api.mall.qushiyun.com`。在 41 复跑时必须使用
+> `api.mall.qushiyun.com` 及 41 会话，不能把 95 请求导入 41。
+
 ## 1. 链路（按 §0.1 决策点二选一）
 
 **A. 切流后（公网）**：
 ```text
-https://api.qumall.qushiyun.com/v1/*   (nginx 反代 → 36 网关)
+https://api.mall.qushiyun.com/v1/*   (41 入口 → 41 网关 → 36 KB 隧道)
     │  注入服务身份 Authorization；转发 third-session（全小写连字符！）
 ```
+历史 36 canary 记录使用 `https://api.qumall.qushiyun.com/v1/*`，该域名当前已恢复为 95 环境，
+不得继续作为 41 验收入口。
 请求头（所有 /v1 调用）：
 ```http
 third-session: <有效 thirdSession>    # 全小写；X-Third-Session 会被 nginx 丢弃

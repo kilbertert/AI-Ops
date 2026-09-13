@@ -679,6 +679,57 @@ Feature: 41 环境 Gateway 切换
       Then 返回 HTTP 401
       And 错误码为 INVALID_ACCESS_TOKEN
 
+  Rule: 41 复用共享 KB 栈
+
+    Scenario: 41 Gateway 通过受限回环隧道访问共享 kb-service
+      Given 36 的 kb-service 监听 127.0.0.1:9380
+      And 41 的 aiops-36-kb-tunnel.service 已启用
+      When 从 41 调用本地 KB 健康端点
+      Then 127.0.0.1:29380/healthz 返回 HTTP 200
+      And 隧道只允许转发到 36 的 127.0.0.1:9380
+
+    Scenario: 41 公网 FAQ 业务链路可用
+      Given H5 登录接口返回与 41 会话库匹配的有效 thirdSession
+      When 通过 https://api.mall.qushiyun.com/v1/faq/recommendations 调用 FAQ
+      Then 返回 HTTP 200 且包含 28 条 consumer 推荐
+      And 请求不返回 Nginx 404
+
+    Scenario: 41 自由问答使用可用模型 provider
+      Given 41 Gateway 默认 provider 已配置为可用的百炼兼容 provider
+      And H5 登录接口返回与 41 会话库匹配的有效 thirdSession
+      When 通过 https://api.mall.qushiyun.com/v1/assistant/questions 提交不命中 FAQ 的问题
+      Then 返回 HTTP 202
+      And 轮询终态为 completed 且 result.text 非空
+
+    Scenario: 41 多语言 FAQ 主链路按请求语言返回
+      Given 41 运行副本已部署 Accept-Language、FAQ 五语目录和短路匹配实现
+      And H5 登录接口返回与 41 会话库匹配的有效 thirdSession
+      When 使用 zh-CN、en-US、de、fr、es、pt-BR 分别请求 FAQ 推荐、固定答案和统一入口快捷问
+      Then 每次响应均返回 HTTP 200
+      And language 字段分别解析为 zh、en、de、fr、es、pt
+      And 标题和答案使用对应语言，未跨环境读取会话或数据
+
+    Scenario: 41 客服问答返回多媒体检索块
+      Given 41 租户存在已发布且绑定图片和视频知识库的客服智能体
+      And RAGFlow embedding provider 可用
+      When 通过 https://api.mall.qushiyun.com/v1/assistant/questions 提交媒体相关问题
+      Then 返回或轮询结果包含 blocks[] 的 image 或 video 块
+      And 每个媒体块携带短时签名 URL
+      And 视频签名 URL 支持 HTTP 206 与超范围 416
+
+    Scenario: 95 与 41 公网入口保持数据面隔离
+      Given api.qumall.qushiyun.com 是 95 环境入口
+      And api.mall.qushiyun.com 是 41 环境入口
+      When 分别使用对应环境的无效 thirdSession 调用 FAQ
+      Then 两个入口均返回 HTTP 401 INVALID_ACCESS_TOKEN
+      And 95 的请求不会进入 41 Gateway 或 41 会话库
+      And 41 的请求不会进入 95 Gateway 或 95 会话库
+
+    Scenario: 41 没有用户订单时不伪造诊断成功
+      Given 当前 H5 会话的订单列表 total 为 0
+      When 使用该会话创建健康报告
+      Then 返回 HTTP 404 且错误码为 ORDER_NOT_FOUND
+
 Feature: 环境清单驱动的 Agent 收敛
 
   Rule: aiops admin reconcile 走生产代码路径幂等收敛

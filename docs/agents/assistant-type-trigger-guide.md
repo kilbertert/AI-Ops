@@ -1,6 +1,7 @@
 # 智能问答三类 type 触发与联调指南（前端专用）
 
-> 日期：2026-09-08。环境：生产 `https://api.qumall.qushiyun.com`。
+> 日期：2026-09-08。历史 95 环境入口为 `https://api.qumall.qushiyun.com`；当前 41 环境
+> 请使用 `https://api.mall.qushiyun.com`，两者不得混用会话或数据源。
 > 本文档所有示例问题均已在生产环境实测，触发结果与标注一致。
 > 背景 issue：#150（智能问答统一入口）。
 
