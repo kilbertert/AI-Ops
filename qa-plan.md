@@ -766,3 +766,13 @@ ScopeContext（UPMS/Dis）行为由 T1-T3 既有真实验收线覆盖。
 | LADDER-02 | 41 实机 | PR-C 部署后 | 用订单属主 session 对 2098849284776484865 重新发起诊断 | run 内 events 出现 环境能力预检 注记与 blocked 预检条目（charging-pile_comm 表不存在、batteryMinTemperature 缺列）；结论预期仍 inconclusive（计量矛盾确需遥测）但 limitations 点名具体通道 | 会话数据保留 |
 | LADDER-03 | 41 实机 | 同上 | 找一个 MySQL 证据完整、问题只涉计费的订单发起诊断 | 结果 completed（diagnosed）+ medium + failed_sources 声明 TDengine 通道——此前这类单易被降为 inconclusive | 保留 |
 | LADDER-04 | 回归 | — | `uv run pytest -q` 全量 | 既有 685+ 测试零回归 | 无 |
+
+## 客服提示词业务契约 QA（PROMPT）
+
+PROMPT-01/02 为 41 实机验收（清单收敛 + 公网问答），PROMPT-03 本地清单合同回归。
+
+| ID | 环境 | 前置 | 操作 | 预期 | 清理 |
+|---|---|---|---|---|---|
+| PROMPT-01 | 41 实机 | PR 合并、`admin reconcile` 待执行 | `aiops --config /etc/aiops-41/production.env admin reconcile ops/environments/env-41.toml --db /var/lib/aiops-41/gateway/gateway.db --kb-url http://127.0.0.1:29380 --dry-run` 后实跑 | 2×`updated`（1783 租户产 v4、1942 租户产 v2）；再跑 2×`unchanged`；下一条 QA 即用新提示词 | 无（清单收敛幂等） |
+| PROMPT-02 | 41 公网 | PROMPT-01 完成、有效 thirdSession | 三类问题各一发：①知识库命中题（新加坡无人电动巴士）②通用常识题（充电桩 AC/DC 区别）③超边界题（帮我看看订单扣费对不对） | ①基于知识库作答 ②先声明通用常识非官方政策 ③固定拒答话术或引导诊断/人工，不猜测订单 | 无（只产生问答记录） |
+| PROMPT-03 | 本地 dev | 清单已更新 | `uv run pytest tests/test_agent_manifest.py -q` + `tomllib` 解析 | 10 项通过、TOML 可解析、两个 agent prompt 均为 759 字符定稿 | tmp 自动清理 |
