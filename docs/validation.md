@@ -1,5 +1,14 @@
 # 验证与验收计划
 
+## 客服提示词业务契约验收（2026-09-14）
+
+对应 #215（`872559a`），PROMPT-01 完成，PROMPT-02 如实记录为阻塞：
+
+- **PROMPT-01（reconcile 收敛新提示词，41 实机）**：`--dry-run` 报 2×`updated`；实跑 1783 租户 `agt_7156d07a` published **v4**、1942 租户 `agt_7dbe2665` updated **v2**（与 QA 计划预期一致）；二跑 2×`unchanged` 幂等成立。DB 只读复核：v4/v2 快照均携带 759 字符「小趋」prompt，`published_version` 指向正确，运行时下一条 QA 即读新版本（提示词每次请求重读库，无需重启 gateway）。
+- **PROMPT-02（公网三类问题实测）**：**blocked**——三问（知识库命中/通用常识/超边界订单扣费）均 202 进 qa 路由后 `QA_FAILED`，assistant_questions 表 error_message 实拍 `code:"Arrearage"`（阿里云百炼账户欠费 400）。供应商通道断供同时打挂两条链路：模型调用直接 400；KB 检索的 embedding 通道（RAGFlow `encode_queries` 400 → kb-service 502 code=102），直连探测两个租户 KB search 均 502。非本次变更引入的缺陷——上会话 mem-20260912 已记录同一供应商反复欠费。业务方充值后重发三问即可闭环。
+- **KB 活性校验写前拦截生效**：实跑 reconcile 首次尝试报 `AgentPublishError: 知识库 4f4bc674… 不存在或不在当前租户下`（活性校验触达检索时撞 502），零写入退出；重试通过后产出正确版本。预检按设计 fail closed。
+- 局限：充值后重跑 PROMPT-02 前不宣称提示词业务行为验收通过；三问结果将记入本节。
+
 ## 环境清单 admin reconcile 与诊断置信阶梯（2026-09-13）
 
 对应 #211（`ec2fc04`）与 #212（`63e3dd2`），实机验收于 41（`/opt/aiops-41`，gateway 部署 18 文件 sha 逐一核对后重启 healthy）：
