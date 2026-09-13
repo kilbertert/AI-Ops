@@ -34,8 +34,16 @@ on-box 收敛（41 为例）：
 
 ```bash
 aiops --config /etc/aiops-41/production.env admin reconcile \
-  ops/environments/env-41.toml --kb-url http://127.0.0.1:29380
+  ops/environments/env-41.toml \
+  --db /var/lib/aiops-41/gateway/gateway.db \
+  --kb-url http://127.0.0.1:29380
 ```
+
+`--db` 必须显式给出：`--config` 只喂 Settings（模型白名单等），数据库
+路径走 `GatewayServerSettings.from_env()`，仅读进程环境变量。不 source
+production.env 就执行时，会回退 XDG 默认
+（`~/.local/share/aiops-diagnostics/gateway/gateway.db`）**静默新建空库**，
+收敛结果全 `created` 而非预期 的 `unchanged`。
 
 - 首跑应全部 `unchanged`；出现 `updated` 说明清单转写有误，停手修清单。
 - `--prune` 仅作用于清单中出现过的租户（多余 published → disable，未发布

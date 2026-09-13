@@ -1,7 +1,10 @@
 # 41 环境（api.mall.qushiyun.com，47.97.160.153）已发布客服 agent 清单。
 # 收敛命令（41 on-box）：
 #   aiops --config /etc/aiops-41/production.env admin reconcile \
-#     ops/environments/env-41.toml --kb-url http://127.0.0.1:29380
+#     ops/environments/env-41.toml \
+#     --db /var/lib/aiops-41/gateway/gateway.db \
+#     --kb-url http://127.0.0.1:29380
+# --db 必须显式给出（不 source production.env 时 from_env 回退 XDG 建空库）。
 # 首次执行应全部报告 unchanged —— 出现 drift 说明清单转写有误，先修清单再收敛。
 # 本文件从 41 gateway.db（2026-09-13）机械转写；schema 见 ops/README.md。
 
