@@ -1,5 +1,28 @@
 # 验证与验收计划
 
+## 多语言 FAQ 确定性验收面复核（2026-09-14，PRD #200 / #204 收口）
+
+41 公网 `https://api.mall.qushiyun.com/v1/*`、真实 H5 thirdSession（租户 1942）、
+`Accept-Language` 六语轮测，全部确定性零模型路径：
+
+- **L1 语言解析**：`en-US/de/fr/es/pt-BR` 请求 FAQ 推荐均 `200/28`，`language` 正确折叠为
+  `en/de/fr/es/pt`。
+- **L2 目录与答案五语化**：五语推荐首条标题均为对应语言本地化文本（如 en
+  "Differences between AC, DC & HPC Chargers"、de "Unterschied AC-, DC- & HPC-Laden"）；
+  `consumer.faq.q011` 固定答案五语均 `200 format=text` 且答案为对应语言非空文本。
+- **L3 短路多语言命中**：de "Wann wird der reservierte Vorab-Betrag erstattet?"、
+  en "When will the pre-authorization hold be released?"、zh
+  "充电前支付的预授权金额什么时候退回" 三种语言自然问句经统一入口均命中同一
+  `consumer.faq.q017`（`type=faq`，答案语言跟随请求头）；中文回归不变。
+- **L4 自由 QA 完成态**：仍 BLOCKED——百炼 `400 Arrearage`（同日探针
+  `qa_8e5d437cfb10412dae8dd0a0e40a3793` 复现，error_message 实拍）。语言透传本身
+  已证明（英文非 FAQ 问题 `202 type=qa language=en` 正确进入 qa 路由），仅模型完成态
+  待供应商恢复。与 PROMPT-02 同一阻塞，恢复后一并复跑。
+
+结论：PRD #200 的 FAQ 确定性验收面（L1/L2/L3 全链路 + L4 语言透传）已具备真实环境
+验收证据；自由 QA 模型完成态与媒体 blocks 验收按 #204/PROMPT-02 继续挂起于供应商。
+PR #210 已将 41 切流、95/41 隔离、共享 KB 隧道与 CUTOVER-41 系列案例合并入 main。
+
 ## 客服提示词业务契约验收（2026-09-14）
 
 对应 #215（`872559a`），PROMPT-01 完成，PROMPT-02 如实记录为阻塞：
