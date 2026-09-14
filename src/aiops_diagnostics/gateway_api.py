@@ -792,6 +792,20 @@ def create_gateway_app(
                 "format": answer["format"],
             }
 
+        # Do not send an order/billing dispute without an order context into
+        # generic QA; ask for the missing business identifier synchronously.
+        risk = _missing_order_context(payload.question) if _extract_order_no(payload.question) is None else None
+        if risk is not None:
+            _record_route_metric(context, caller, route_type="clarification", outcome="completed")
+            return {
+                **decision.public(),
+                "type": "clarification",
+                "language": language,
+                "question": payload.question,
+                "missing_fields": ["order_no"],
+                "message": risk,
+            }
+
         # Greetings are deterministic and must not enqueue a model job.
         if _is_greeting(payload.question):
             _record_route_metric(context, caller, route_type="qa", outcome="completed")
@@ -2027,6 +2041,7 @@ def _keep_conversation_turn(
 
 
 _ACTIVE_ORDER_CUES = re.compile(r"订单|充值|充电|退款|押金|金额|费用|订单号|为什么.*停|怎么还没")
+_HIGH_RISK_ORDER_CUES = re.compile(r"扣费|扣款|扣错|费用异常|金额不对|退款|退费|订单异常|订单问题|账单")
 
 
 def _question_involves_active_order(question: str) -> bool:
@@ -2037,6 +2052,12 @@ def _question_involves_active_order(question: str) -> bool:
     through to qa+RAG even with an active order bound (#172 acceptance).
     """
     return bool(_ACTIVE_ORDER_CUES.search(question or ""))
+
+
+def _missing_order_context(question: str) -> str | None:
+    if _HIGH_RISK_ORDER_CUES.search(question or ""):
+        return "请提供需要核查的订单号后，我才能继续处理。"
+    return None
 
 
 def _is_greeting(question: str) -> bool:
