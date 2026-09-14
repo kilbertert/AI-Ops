@@ -863,7 +863,15 @@ def create_gateway_app(
             "status": qa["status"],
             "retry_after_ms": 1000 if qa["status"] in {"queued", "running"} else None,
             "result": qa.get("result"),
-            "error": None,
+            "error": (
+                {
+                    "code": qa.get("error_code") or "QA_FAILED",
+                    "message": qa.get("error_message") or "answer generation failed",
+                    "retryable": True,
+                }
+                if qa["status"] in {"failed", "expired"}
+                else None
+            ),
         }
 
     @app.get("/v1/assistant/questions")
