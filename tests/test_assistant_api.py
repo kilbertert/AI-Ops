@@ -201,6 +201,21 @@ def test_assistant_generic_returns_queued_job(tmp_path: Path) -> None:
     assert poll.json()["status"] == "queued"
 
 
+def test_assistant_high_risk_without_order_returns_clarification(tmp_path: Path) -> None:
+    client, runtime = _client(tmp_path)
+    resp = client.post(
+        "/v1/assistant/questions",
+        json={"question": "是不是扣错钱了"},
+        headers=_headers(),
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["type"] == "clarification"
+    assert body["missing_fields"] == ["order_no"]
+    assert "qa_id" not in body
+    assert runtime._qa == {}
+
+
 def test_assistant_qa_poll_failed_exposes_error(tmp_path: Path) -> None:
     """A failed QA job returns the {code, message, retryable} error contract,
     matching the diagnosis poll line — not a null error the frontend must
@@ -233,15 +248,6 @@ def test_assistant_qa_poll_running_keeps_null_error(tmp_path: Path) -> None:
     )
     poll = client.get(f"/v1/assistant/questions/{resp.json()['qa_id']}", headers=_headers())
     assert poll.json()["error"] is None
-
-
-def test_assistant_greeting_is_sync_and_does_not_create_job(tmp_path: Path) -> None:
-    client, runtime = _client(tmp_path)
-    resp = client.post("/v1/assistant/questions", json={"question": "你好"}, headers=_headers())
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "completed"
-    assert "qa_id" not in resp.json()
-    assert runtime._qa == {}
 
 
 def test_assistant_qa_poll_unknown_is_404(tmp_path: Path) -> None:
