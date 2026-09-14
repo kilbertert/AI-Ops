@@ -69,6 +69,15 @@ from aiops_diagnostics.gateway_store import (
 from aiops_diagnostics.i18n import resolve_language
 from aiops_diagnostics.metrics_store import MetricsValidationError
 from aiops_diagnostics.scope_context import ScopeContext, ScopeError
+from aiops_diagnostics.shortcut_lifecycle import (
+    SHORTCUT_MANAGE_SCOPE,
+    ShortcutConflict,
+    ShortcutError,
+    ShortcutForbidden,
+    ShortcutManager,
+    ShortcutNotFound,
+    ShortcutStore,
+)
 from aiops_diagnostics.sources import SourceError
 from aiops_diagnostics.third_session_auth import RedisThirdSessionResolver, ThirdSessionSettings
 
@@ -212,6 +221,40 @@ class ConversationCreateRequest(BaseModel):
     )
 
 
+class ShortcutFieldsRequest(BaseModel):
+    """Shortcut draft fields shared by create and update (#230)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    intent: str = Field(min_length=1, max_length=32)
+    requires_order: bool = False
+    sort_order: int = Field(default=100, ge=0, le=9999)
+    labels: dict[str, str] = Field(min_length=1, max_length=6)
+    descriptions: dict[str, str] = Field(default_factory=dict, max_length=6)
+    question_templates: dict[str, str] = Field(default_factory=dict, max_length=6)
+    target_agent_version: str | None = Field(
+        default=None,
+        min_length=6,
+        max_length=80,
+        pattern=r"^agt_[A-Za-z0-9]{8,64}#v\d{1,6}$",
+    )
+
+
+class ShortcutCreateRequest(ShortcutFieldsRequest):
+    business_entry: str = Field(min_length=1, max_length=32, pattern=r"^(consumer|operator)$")
+    code: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$")
+
+
+class ShortcutUpdateRequest(ShortcutFieldsRequest):
+    expected_revision: int = Field(ge=1)
+
+
+class ShortcutActionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_revision: int = Field(ge=1)
+
+
 class GatewayAPI:
     def __init__(
         self,
@@ -223,6 +266,7 @@ class GatewayAPI:
         platform_resolver: PlatformIdentityResolver,
         faq_catalog: FAQCatalog,
         agent_manager: AgentManager | None = None,
+        shortcut_manager: ShortcutManager | None = None,
     ) -> None:
         self.settings = settings
         self.store = store
@@ -232,6 +276,9 @@ class GatewayAPI:
         self.platform_resolver = platform_resolver
         self.faq_catalog = faq_catalog
         self.agent_manager = agent_manager
+        # Shortcut store shares the gateway database file (its own tables);
+        # lazy so existing embedders (tests) need no new argument (#230).
+        self.shortcut_manager = shortcut_manager or ShortcutManager(ShortcutStore(store.path))
         # Conversation store shares the gateway database file (its own
         # tables); lazy so existing embedders (tests) need no new argument.
         self.conversation_store = ConversationStore(store.path)
@@ -276,6 +323,7 @@ def create_gateway_app(
     platform_resolver: PlatformIdentityResolver | None = None,
     faq_catalog: FAQCatalog | None = None,
     agent_manager: AgentManager | None = None,
+    shortcut_manager: ShortcutManager | None = None,
 ) -> FastAPI:
     selected_settings = settings or GatewayServerSettings.from_env()
     selected_settings.validate()
@@ -331,6 +379,7 @@ def create_gateway_app(
         selected_platform_resolver,
         selected_faq_catalog,
         selected_agent_manager,
+        shortcut_manager,
     )
 
     @asynccontextmanager
@@ -485,6 +534,17 @@ def create_gateway_app(
             authorization,
             x_third_session,
             required_scope=AGENT_MANAGE_SCOPE,
+        )
+
+    def authenticated_shortcut_caller(
+        authorization: Annotated[str | None, Header()] = None,
+        x_third_session: Annotated[str | None, Header()] = None,
+    ) -> ScopeContext:
+        return _authenticate_caller(
+            context.caller_resolver,
+            authorization,
+            x_third_session,
+            required_scope=SHORTCUT_MANAGE_SCOPE,
         )
 
     def faq_identity(
@@ -1455,6 +1515,187 @@ def create_gateway_app(
                 _debug_public_error(exc),
                 retryable=True,
             ) from exc
+
+    # ------------------------------------------------------------------
+    # Product-entry shortcuts (#230)
+    # ------------------------------------------------------------------
+
+    def _shortcut_error(exc: ShortcutError) -> StandardAPIError:
+        if isinstance(exc, ShortcutNotFound):
+            return StandardAPIError(status.HTTP_404_NOT_FOUND, "SHORTCUT_NOT_FOUND", "shortcut not found")
+        if isinstance(exc, ShortcutForbidden):
+            return StandardAPIError(
+                status.HTTP_403_FORBIDDEN, "SHORTCUT_FORBIDDEN", "shortcut access is not permitted"
+            )
+        if isinstance(exc, ShortcutConflict):
+            return StandardAPIError(
+                status.HTTP_409_CONFLICT, "SHORTCUT_REVISION_CONFLICT", "shortcut revision conflict"
+            )
+        return StandardAPIError(status.HTTP_422_UNPROCESSABLE_ENTITY, exc.code, str(exc))
+
+    def shortcut_identity(
+        caller: ScopeContext = Depends(authenticated_shortcut_caller),  # noqa: B008
+        business_entry: Annotated[str | None, Header(alias="X-Business-Entry")] = None,
+    ) -> tuple[ScopeContext, str]:
+        """Shortcut listing identity: any assistant-scope caller + resolved entry.
+
+        The listing renders the product home for every authenticated user, so
+        it requires no admin role — but the entry comes from the SAME platform
+        decision the assistant uses (never a client self-report), and tenant
+        isolation is enforced inside the store by the caller's effective
+        tenant.
+        """
+        try:
+            decision = context.platform_resolver.resolve(caller, business_entry)
+        except FAQError as exc:
+            status_code = {
+                PLATFORM_AMBIGUOUS: status.HTTP_409_CONFLICT,
+                PLATFORM_FORBIDDEN: status.HTTP_403_FORBIDDEN,
+                PLATFORM_UNAVAILABLE: status.HTTP_503_SERVICE_UNAVAILABLE,
+            }.get(exc.code, status.HTTP_503_SERVICE_UNAVAILABLE)
+            raise StandardAPIError(
+                status_code,
+                exc.code,
+                str(exc),
+                retryable=exc.code == PLATFORM_UNAVAILABLE,
+            ) from exc
+        except PlatformDirectoryError as exc:
+            raise StandardAPIError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                PLATFORM_UNAVAILABLE,
+                "platform identity unavailable",
+                retryable=True,
+            ) from exc
+        return caller, str(decision.platform)
+
+    @app.get("/v1/shortcuts")
+    def list_shortcuts(
+        identity: tuple[ScopeContext, str] = Depends(shortcut_identity),  # noqa: B008
+        language: str = Depends(request_language),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Published product-entry shortcuts for this caller's tenant+entry.
+
+        Drafts are invisible, disabled rows are gone, other tenants/entries
+        are unreachable. Each item carries the stable ``code`` the client
+        wires behavior to (e.g. order picker for requires_order=True), plus
+        copy localized in the request language (zh fallback).
+        """
+        caller, entry = identity
+        try:
+            shortcuts = context.shortcut_manager.list_published(caller, business_entry=entry)
+        except ShortcutError as exc:
+            raise _shortcut_error(exc) from exc
+        return {
+            "type": "shortcut_list",
+            "language": language,
+            "count": len(shortcuts),
+            "shortcuts": [item.public(language) for item in shortcuts],
+        }
+
+    @app.post("/v1/shortcuts", status_code=status.HTTP_201_CREATED)
+    def create_shortcut(
+        payload: ShortcutCreateRequest,
+        caller: ScopeContext = Depends(authenticated_shortcut_caller),  # noqa: B008
+    ) -> dict[str, Any]:
+        try:
+            shortcut = context.shortcut_manager.create(caller, payload.model_dump())
+        except ShortcutError as exc:
+            raise _shortcut_error(exc) from exc
+        return shortcut.to_dict()
+
+    @app.get("/v1/shortcut-admin/{business_entry}")
+    def list_shortcut_admin(
+        business_entry: str,
+        caller: ScopeContext = Depends(authenticated_shortcut_caller),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Management listing (all statuses, full multilingual fields)."""
+        try:
+            shortcuts = context.shortcut_manager.list(caller, business_entry=business_entry)
+        except ShortcutError as exc:
+            raise _shortcut_error(exc) from exc
+        return {
+            "type": "shortcut_admin_list",
+            "count": len(shortcuts),
+            "shortcuts": [s.to_dict() for s in shortcuts],
+        }
+
+    @app.get("/v1/shortcuts/{shortcut_id}/versions/{version_no}")
+    def get_shortcut_version(
+        shortcut_id: str,
+        version_no: int,
+        caller: ScopeContext = Depends(authenticated_shortcut_caller),  # noqa: B008
+    ) -> dict[str, Any]:
+        try:
+            version = context.shortcut_manager.version(caller, shortcut_id, version_no)
+        except ShortcutError as exc:
+            raise _shortcut_error(exc) from exc
+        return version.to_dict()
+
+    @app.put("/v1/shortcuts/{shortcut_id}")
+    def update_shortcut(
+        shortcut_id: str,
+        payload: ShortcutUpdateRequest,
+        caller: ScopeContext = Depends(authenticated_shortcut_caller),  # noqa: B008
+    ) -> dict[str, Any]:
+        try:
+            shortcut = context.shortcut_manager.update(caller, shortcut_id, payload.model_dump())
+        except ShortcutError as exc:
+            raise _shortcut_error(exc) from exc
+        return shortcut.to_dict()
+
+    @app.post("/v1/shortcuts/{shortcut_id}/publish")
+    def publish_shortcut(
+        shortcut_id: str,
+        payload: ShortcutActionRequest,
+        caller: ScopeContext = Depends(authenticated_shortcut_caller),  # noqa: B008
+    ) -> dict[str, Any]:
+        try:
+            version = context.shortcut_manager.publish(
+                caller, shortcut_id, expected_revision=payload.expected_revision
+            )
+        except ShortcutError as exc:
+            raise _shortcut_error(exc) from exc
+        return version.to_dict()
+
+    @app.post("/v1/shortcuts/{shortcut_id}/draft")
+    def fork_shortcut_draft(
+        shortcut_id: str,
+        payload: ShortcutActionRequest,
+        caller: ScopeContext = Depends(authenticated_shortcut_caller),  # noqa: B008
+    ) -> dict[str, Any]:
+        try:
+            shortcut = context.shortcut_manager.fork_draft(
+                caller, shortcut_id, expected_revision=payload.expected_revision
+            )
+        except ShortcutError as exc:
+            raise _shortcut_error(exc) from exc
+        return shortcut.to_dict()
+
+    @app.post("/v1/shortcuts/{shortcut_id}/disable")
+    def disable_shortcut(
+        shortcut_id: str,
+        payload: ShortcutActionRequest,
+        caller: ScopeContext = Depends(authenticated_shortcut_caller),  # noqa: B008
+    ) -> dict[str, Any]:
+        try:
+            shortcut = context.shortcut_manager.disable(
+                caller, shortcut_id, expected_revision=payload.expected_revision
+            )
+        except ShortcutError as exc:
+            raise _shortcut_error(exc) from exc
+        return shortcut.to_dict()
+
+    @app.delete("/v1/shortcuts/{shortcut_id}")
+    def delete_shortcut(
+        shortcut_id: str,
+        payload: ShortcutActionRequest,
+        caller: ScopeContext = Depends(authenticated_shortcut_caller),  # noqa: B008
+    ) -> dict[str, bool]:
+        try:
+            context.shortcut_manager.delete(caller, shortcut_id, expected_revision=payload.expected_revision)
+        except ShortcutError as exc:
+            raise _shortcut_error(exc) from exc
+        return {"deleted": True}
 
     @app.get("/v1/agent-metrics/summary")
     def agent_metrics_summary(
