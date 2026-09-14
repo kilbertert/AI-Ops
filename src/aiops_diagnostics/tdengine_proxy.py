@@ -15,11 +15,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import ClassVar
 from urllib.parse import urlsplit
 
-# 代理授权的 gun 列清单与 sources.TDengineSource.GUN_COLUMNS 同源（外加 _ts）：
-# 列变化时两处同时变，由 test_tdengine_proxy 的同源 pin 测试兜底。
-from aiops_diagnostics.sources import GUN_COLUMN_NAMES
+# 代理授权的 gun SELECT 列串与 sources.get_gun_samples 生成的 SQL 逐字节同源：
+# 同一函数派生、由 pin 测试兜底。代理是独立部署的 root 服务，SQL 形状漂移
+# 会在滚动窗口内被生产代理拒绝，因此这里必须与 sources 严格共享而非复制。
+from aiops_diagnostics.sources import GUN_COLUMNS_SQL
 
-GUN_COLUMNS = "_ts, " + ", ".join(f"`{column}`" for column in GUN_COLUMN_NAMES)
+GUN_COLUMNS = GUN_COLUMNS_SQL
 COMM_COLUMNS = "_ts, direction, code, decoded"
 SAFE_VALUE = r"[A-Za-z0-9_.:-]{1,128}"
 TIME_VALUE = r"\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}"

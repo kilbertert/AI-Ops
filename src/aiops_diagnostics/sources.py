@@ -457,6 +457,21 @@ GUN_COLUMN_NAMES: tuple[str, ...] = (
 )
 
 
+def _gun_columns_sql() -> str:
+    """与现网 SQL 逐字节一致的 SELECT 列串：仅含大写的 camelCase 列加反引号
+    （TDengine 大小写敏感标识符），全小写列裸写。tdengine_proxy 白名单正则
+    与 get_gun_samples 共用本函数，代理是独立部署的 root 服务——SQL 形状
+    漂移会在滚动窗口内被生产代理拒绝，所以这里必须保持字节级稳定。"""
+
+    def quote(column: str) -> str:
+        return f"`{column}`" if column != column.lower() else column
+
+    return "_ts, " + ", ".join(quote(column) for column in GUN_COLUMN_NAMES)
+
+
+GUN_COLUMNS_SQL = _gun_columns_sql()
+
+
 class TDengineSource:
     """TDengine 只读查询；可选携带单次运行冻结的允许设备集合。
 
@@ -521,11 +536,8 @@ class TDengineSource:
         device_literal = _safe_literal(device)
         tx_filter = f" AND `txSerialNo`='{_safe_literal(tx_serial_no)}'" if tx_serial_no else ""
         limit = int(self.settings.safety.tdengine_max_rows)
-        # 列清单唯一来源是 GUN_COLUMNS（doctor 逐列探测同一清单）；
-        # SELECT 从它派生，杜绝清单与 SQL 各自维护漂移
-        select_list = "_ts, " + ", ".join(f"`{column}`" for column in self.GUN_COLUMNS)
         sql = (
-            f"SELECT {select_list} "
+            f"SELECT {GUN_COLUMNS_SQL} "
             "FROM `charging-gun_property` "
             f"WHERE device='{device_literal}' AND _ts>='{_format_time(start_time)}' "
             f"AND _ts<='{_format_time(end_time)}'{tx_filter} ORDER BY _ts ASC LIMIT {limit}"

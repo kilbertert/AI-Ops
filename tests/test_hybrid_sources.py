@@ -397,10 +397,12 @@ def test_direct_sources_ssh_tunnel_keeps_rollback_forwards(monkeypatch, tmp_path
 
 
 def test_gun_select_derived_from_gun_columns_and_passes_proxy_guard(monkeypatch) -> None:
-    """评审发现 #5 的 pin:gun SELECT 现在从 GUN_COLUMNS 派生,派生结果必须
-    ① 与生产 TDengine 只读代理的正则白名单完全匹配(列漂移会当场被代理拒绝,
-    而不是部署后才发现);② 与 doctor 逐列探测清单同源。"""
-    from aiops_diagnostics.sources import TDengineSource
+    """评审发现 #5 的 pin:gun SELECT 从 GUN_COLUMN_NAMES 派生,派生结果必须
+    ① 与生产 TDengine 只读代理的正则白名单完全匹配(代理是独立部署服务,
+    SQL 漂移会在滚动窗口内被拒);② 与既有线上 SQL 逐字节一致(加列或改
+    引号风格都必须伴随代理同步部署,不允许静默改变 SQL 形状);③ 与
+    doctor 逐列探测清单同源。"""
+    from aiops_diagnostics.sources import GUN_COLUMNS_SQL, TDengineSource
     from aiops_diagnostics.tdengine_proxy import GUN_QUERY
 
     source = TDengineSource(_http_settings())
@@ -421,3 +423,9 @@ def test_gun_select_derived_from_gun_columns_and_passes_proxy_guard(monkeypatch)
     assert match is not None, f"派生 SELECT 未通过只读代理白名单: {sql}"
     assert match.group("device") == "GUN-01"
     assert match.group("tx") == "TX-01"
+    # 与线上 SQL 逐字节一致:只给含大写的列加反引号,全小写列裸写
+    assert GUN_COLUMNS_SQL == (
+        "_ts, `txSerialNo`, status, `isReturn`, `isInsert`, `outputVoltage`, `outputCurrent`, power, "
+        "`chargingTime`, `chargingElectricityQuantity`, soc, temperature, `batteryMaxTemperature`, "
+        "`batteryMinTemperature`, `errorCode`, `errorReason`, `meterNow`"
+    )
