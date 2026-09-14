@@ -402,6 +402,7 @@ class AgentManager:
         self.store = store
         self.knowledge_resolver = knowledge_resolver or UnavailableKnowledgeBindingResolver()
         self.allowed_models = frozenset(item.strip() for item in allowed_models if item and item.strip())
+
     def create(self, context: Any, *, name: str, description: str, config: AgentConfig) -> Agent:
         self._require(context, EDIT_ROLES)
         self._validate_config(config, enforce_model=False)
