@@ -23,6 +23,7 @@ from aiops_diagnostics.agent_lifecycle import (
     AgentManager,
     AgentNotFound,
     AgentStore,
+    allowed_models_from_settings,
 )
 from aiops_diagnostics.caller_auth import (
     CALLER_AUTH_CONFIG_MISSING,
@@ -299,14 +300,7 @@ def create_gateway_app(
         selected_platform_resolver = PlatformIdentityResolver(MySQLPlatformDirectory(platform_settings))
     selected_faq_catalog = faq_catalog or FAQCatalog.bundled()
     if agent_manager is None:
-        agent_settings = getattr(diagnostic_settings, "agent", None)
-        configured_models = tuple(
-            provider.model
-            for provider in getattr(agent_settings, "providers", ())
-            if getattr(provider, "model", "")
-        )
-        if not configured_models and agent_settings is not None:
-            configured_models = (getattr(agent_settings, "model", "") or "aiops-api",)
+        configured_models = allowed_models_from_settings(diagnostic_settings)
         knowledge_resolver = None
         if selected_settings.kb_service_base_url:
             # Real publish validation (T5/#171): bindings must resolve against

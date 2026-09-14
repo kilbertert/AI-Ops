@@ -92,9 +92,6 @@ def test_load_manifest_defaults_and_required_fields(tmp_path: Path) -> None:
             prompt = "你是客服"
             knowledge_base_ids = ["kb-1"]
             model = "aiops-api"
-
-            [kb]
-            repair_tenant_ids = ["t1", "t2"]
             """
         ),
         encoding="utf-8",
@@ -104,7 +101,6 @@ def test_load_manifest_defaults_and_required_fields(tmp_path: Path) -> None:
     agent = manifest.agents[0]
     assert agent.config.output_contract == "blocks-v1", "customer 默认 blocks-v1"
     assert agent.state == "published"
-    assert manifest.kb_repair_tenant_ids == ("t1", "t2")
 
     path.write_text(
         textwrap.dedent(
@@ -223,3 +219,17 @@ def test_reconcile_dry_run_writes_nothing(tmp_path: Path) -> None:
     assert _actions(reports) == ["created"]
     assert all(report.note == "dry-run" for report in reports)
     assert manager.list(_context()) == [], "dry-run 零 mutation"
+
+
+def test_allowed_models_from_settings_single_derivation() -> None:
+    """gateway HTTP 面与 admin reconcile 共用的白名单推导：providers 优先、
+    agent.model 兜底、最终 aiops-api——防止两处推导漂移（评审发现 #4）。"""
+    from types import SimpleNamespace
+
+    from aiops_diagnostics.agent_lifecycle import allowed_models_from_settings
+
+    providers = SimpleNamespace(providers=[SimpleNamespace(model="qwen3.8-max"), SimpleNamespace(model="")])
+    assert allowed_models_from_settings(SimpleNamespace(agent=providers)) == ("qwen3.8-max",)
+    fallback = SimpleNamespace(providers=[], model="agent-default")
+    assert allowed_models_from_settings(SimpleNamespace(agent=fallback)) == ("agent-default",)
+    assert allowed_models_from_settings(SimpleNamespace(agent=None)) == ("aiops-api",)

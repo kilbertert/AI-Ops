@@ -16,7 +16,7 @@ from __future__ import annotations
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from aiops_diagnostics.agent_lifecycle import (
     AgentConfig,
@@ -41,9 +41,18 @@ class ManifestAgent:
 @dataclass(frozen=True, slots=True)
 class EnvironmentManifest:
     agents: tuple[ManifestAgent, ...]
-    # Phase-2 (optional): tenants whose kb-service models should be repaired
-    # via POST /kb/tenants/repair before converging agents.
-    kb_repair_tenant_ids: tuple[str, ...] = ()
+
+
+ReconcileAction = Literal[
+    "created",
+    "published",
+    "updated",
+    "unchanged",
+    "disabled",
+    "manual-action-required",
+    "pruned-disabled",
+    "pruned-deleted",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,7 +60,7 @@ class ReconcileReport:
     tenant_id: str
     name: str
     agent_id: str
-    action: str  # created/published/updated/unchanged/disabled/manual-action-required/pruned-*
+    action: ReconcileAction
     version: int | None
     note: str = ""
 
@@ -70,8 +79,7 @@ def load_manifest(path: Path) -> EnvironmentManifest:
             agents.append(_manifest_agent(entry))
         except (KeyError, TypeError, ValueError) as exc:
             raise ManifestError(f"agents[{index}]: {exc}") from exc
-    repair_ids = tuple(str(item) for item in data.get("kb", {}).get("repair_tenant_ids", []))
-    return EnvironmentManifest(agents=tuple(agents), kb_repair_tenant_ids=repair_ids)
+    return EnvironmentManifest(agents=tuple(agents))
 
 
 def _manifest_agent(entry: dict[str, Any]) -> ManifestAgent:
