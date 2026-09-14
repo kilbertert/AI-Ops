@@ -132,6 +132,7 @@ def test_create_diagnosis_returns_202_with_opaque_id_and_retry_after(tmp_path: P
     body = response.json()
     assert body["diagnosis_id"].startswith("dx_")
     assert body["order_no"] == "O-1"
+    assert body["language"] == "zh"
     assert body["status"] == "queued"
     assert body["retry_after_ms"] == 1000
     assert "scope_fingerprint" not in body

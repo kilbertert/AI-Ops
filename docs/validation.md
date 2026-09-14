@@ -1,29 +1,5 @@
 # 验证与验收计划
 
-## QA 失败错误合同修复的三环境部署同步（2026-09-14 下午，#221 部署记录）
-
-PR #221（merge `a35851f`：`GET /v1/assistant/questions/{qa_id}` 失败终态返回
-`error: {code, message, retryable}`，与诊断线同形状）合并后，三个网关环境的运行
-副本逐一同步并验证：
-
-- **41**（`api.mall.qushiyun.com` 生产入口）：运行副本与 main `a35851f` 逐文件
-  sha 一致（`gateway_api.py` = `c773bb9d…`，51 个源文件全匹配；12:55 同步通道
-  落盘、13:19 `aiops-gateway-41.service` 重启），health 200、启动日志零错误。
-  公网 `/v1/assistant/questions` 401 合同正常（端点存活）。
-- **36**（共享 KB 宿主）：原副本停在 2026-09-11（无 i18n）。备份
-  `src-backup-*.tar.gz` + `gateway.db.bak-*`（`/var/backups/aiops-36/`）后整包
-  同步至 `a35851f`（包摘要 `c5861ae5…` 与主线一致），14:50 重启 active、
-  health 200；36 kb-service 与 41→36 隧道（`29380/healthz=200`）不受影响。
-- **120**（"95 环境" `api.qumall.qushiyun.com` 入口）：原副本停在 2026-09-04
-  （无 assistant 端点，公网实测 404）。备份后同步至 `a35851f`（包摘要一致），
-  15:04 重启 active、health 200；公网 `/v1/assistant/questions` 从 404 变为
-  expected `401 INVALID_ACCESS_TOKEN`（端点已加载）。
-
-验收边界：三环境均为代码同步 + 服务重启验证；QA failed 终态携带 `error.message`
-的公网真实验收待下一次真实失败样本（当前百炼已恢复，QA 均 completed）。120 同步
-引入的 assistant/faq 多语言端点在此前 120 副本上不存在，该入口的业务验收仍按
-`frontend-api-brief.md` 由前端在 95 环境复验。
-
 ## 供应商恢复后的遗留项闭环（2026-09-14 下午，#218 收口）
 
 百炼账户恢复后（KB embedding 与模型通道实测活通：36 kb-service `/search` 返回真实

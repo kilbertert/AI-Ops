@@ -314,12 +314,14 @@ class GatewayStore:
         order_no: str,
         question: str,
         indicator_code: str | None,
+        language: str = "zh",
         internal_run_id: str | None = None,
     ) -> dict[str, Any]:
         scope_fingerprint = _scope(scope_fingerprint, "scope_fingerprint")
         order_no = _scope(order_no, "order_no")
         question = _question(question, "question")
         indicator_code = _optional_indicator_code(indicator_code)
+        language = _language(language)
         internal_run_id = _optional_scope(internal_run_id, "internal_run_id")
         now = _utc_now()
         diagnosis_id = "dx_" + uuid.uuid4().hex
@@ -328,9 +330,9 @@ class GatewayStore:
             connection.execute(
                 """
                 INSERT INTO standard_diagnoses (
-                    diagnosis_id, scope_fingerprint, order_no, question, indicator_code,
+                    diagnosis_id, scope_fingerprint, order_no, question, indicator_code, language,
                     internal_run_id, status, created_at, updated_at, deadline_at
-                ) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)
                 """,
                 (
                     diagnosis_id,
@@ -338,6 +340,7 @@ class GatewayStore:
                     order_no,
                     redact_text(question),
                     indicator_code,
+                    language,
                     internal_run_id,
                     _iso(now),
                     _iso(now),
@@ -864,6 +867,7 @@ class GatewayStore:
                     order_no TEXT NOT NULL,
                     question TEXT NOT NULL,
                     indicator_code TEXT,
+                    language TEXT NOT NULL DEFAULT 'zh',
                     internal_run_id TEXT,
                     status TEXT NOT NULL,
                     result_json TEXT,
@@ -876,6 +880,7 @@ class GatewayStore:
                     completed_at TEXT,
                     expires_at TEXT
                 );
+                
                 CREATE INDEX IF NOT EXISTS idx_standard_diagnoses_scope_created
                     ON standard_diagnoses(scope_fingerprint, created_at DESC);
                 CREATE TABLE IF NOT EXISTS assistant_questions (
@@ -903,6 +908,12 @@ class GatewayStore:
                 connection.execute("ALTER TABLE runs ADD COLUMN error_message TEXT")
             if "provider" not in columns:
                 connection.execute("ALTER TABLE runs ADD COLUMN provider TEXT")
+            diagnosis_columns = {
+                str(row[1])
+                for row in connection.execute("PRAGMA table_info(standard_diagnoses)").fetchall()
+            }
+            if "language" not in diagnosis_columns:
+                connection.execute("ALTER TABLE standard_diagnoses ADD COLUMN language TEXT NOT NULL DEFAULT 'zh'")
             now = _iso(_utc_now())
             connection.execute(
                 """
@@ -1016,6 +1027,13 @@ def _optional_indicator_code(value: str | None) -> str | None:
     if not INDICATOR_CODE_PATTERN.fullmatch(candidate):
         raise ValueError("indicator_code is not valid")
     return candidate
+
+
+def _language(value: str) -> str:
+    candidate = (value or "zh").strip().lower()
+    if not re.fullmatch(r"[a-z]{2,8}(?:-[a-z0-9]{2,8})?", candidate):
+        raise ValueError("language is invalid")
+    return candidate.split("-", 1)[0]
 
 
 def _label(value: str, name: str) -> str:
