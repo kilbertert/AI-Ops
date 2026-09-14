@@ -128,6 +128,65 @@ def run_zero_order_answer(
                 session.close()
 
 
+def classify_lightweight(
+    question: str,
+    settings: Settings,
+    *,
+    provider: str | None = None,
+    key_slot: str | None = None,
+    project_root: Path | None = None,
+    language: str = DEFAULT_LANGUAGE,
+) -> dict[str, Any]:
+    """Classify an unknown question without business retrieval or tools."""
+    from aiops_diagnostics.codex_runtime import SDKCodexSession
+
+    selected_provider = settings.agent.select_provider(provider)
+    workspace = AgentWorkspace.create_qa(
+        project_root or Path(__file__).resolve().parents[1],
+        Path(settings.agent.run_root).expanduser().resolve(),
+        provider_base_url=selected_provider.base_url,
+        provider=selected_provider.name,
+        key_slot=key_slot or selected_provider.resolved_key_slot(),
+    )
+    session: SDKCodexSession | None = None
+    try:
+        session = SDKCodexSession(workspace, settings, provider=selected_provider)
+        prompt = (
+            "Classify the user request. Return JSON only with intent (knowledge, casual, "
+            "order_issue, report_fault, case_exploration, solution_discovery), confidence "
+            "(high, medium, low), risk (low, high), and optional answer. "
+            f"If intent is casual, answer in {language_name(language)}; do not claim real-time data.\n\n"
+            f"User request: {question}"
+        )
+        result = session.run(prompt)
+        raw = result.final_response
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            start, end = raw.find("{"), raw.rfind("}")
+            payload = json.loads(raw[start : end + 1]) if start >= 0 and end > start else None
+        if not isinstance(payload, dict):
+            raise AgentRuntimeError("lightweight classifier returned invalid JSON")
+        if payload.get("intent") not in {
+            "knowledge",
+            "casual",
+            "order_issue",
+            "report_fault",
+            "case_exploration",
+            "solution_discovery",
+        }:
+            raise AgentRuntimeError("lightweight classifier returned invalid intent")
+        if payload.get("confidence") not in {"high", "medium", "low"}:
+            raise AgentRuntimeError("lightweight classifier returned invalid confidence")
+        if payload.get("risk") not in {"low", "high"}:
+            raise AgentRuntimeError("lightweight classifier returned invalid risk")
+        return {key: payload[key] for key in ("intent", "confidence", "risk", "answer") if key in payload}
+    finally:
+        if session is not None:
+            with contextlib.suppress(Exception):
+                session.close()
+
+
 @contextmanager
 def _agent_sources(
     settings: Settings,

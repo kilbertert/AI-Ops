@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from aiops_diagnostics.agent_contracts import IncidentManifest
-from aiops_diagnostics.agent_runner import run_agent_diagnosis, run_zero_order_answer
+from aiops_diagnostics.agent_runner import classify_lightweight, run_agent_diagnosis, run_zero_order_answer
 from aiops_diagnostics.agent_workspace import AgentWorkspace
 from aiops_diagnostics.codex_runtime import AgentRuntimeError
 from aiops_diagnostics.config import Settings, canonical_provider_base_url, validate_key_slot_name
@@ -402,6 +402,12 @@ class GatewayRuntime:
         self._futures[qa["qa_id"]] = future
         future.add_done_callback(lambda _: self._futures.pop(qa["qa_id"], None))
         return qa
+
+    def classify_lightweight(self, question: str, *, language: str = DEFAULT_LANGUAGE) -> dict[str, Any]:
+        settings = Settings.from_config(self.gateway_settings.server_config_file)
+        settings.agent.run_root = self.diagnostic_settings.agent.run_root
+        provider = settings.agent.select_provider(None)
+        return classify_lightweight(question, settings, provider=provider.name, language=language)
 
     def get_assistant_qa(
         self,
