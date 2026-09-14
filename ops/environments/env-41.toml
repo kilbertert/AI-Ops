@@ -67,8 +67,3 @@ model = "qwen3.8-max-0902"
 output_contract = "blocks-v1"
 opening_questions = ["新加坡无人电动巴士是什么？"]
 quick_commands = ["充电桩怎么操作"]
-
-[kb]
-# 可选：收敛 agent 前先对下列租户执行 kb-service POST /kb/tenants/repair
-# （补齐 embedding/chat/rerank/vision 默认模型，幂等；需 --kb-url）
-repair_tenant_ids = ["1783022023241633792", "1942105476598861824"]
