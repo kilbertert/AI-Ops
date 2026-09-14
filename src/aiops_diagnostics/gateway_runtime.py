@@ -235,6 +235,7 @@ class GatewayRuntime:
             order_no,
             question,
             indicator_code,
+            language=language,
             internal_run_id=workspace.run_id,
         )
         future = self._executor.submit(
