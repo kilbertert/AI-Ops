@@ -794,7 +794,9 @@ def create_gateway_app(
 
         # Do not send an order/billing dispute without an order context into
         # generic QA; ask for the missing business identifier synchronously.
-        risk = _missing_order_context(payload.question) if _extract_order_no(payload.question) is None else None
+        risk = (
+            _missing_order_context(payload.question) if _extract_order_no(payload.question) is None else None
+        )
         if risk is not None:
             _record_route_metric(context, caller, route_type="clarification", outcome="completed")
             return {
@@ -804,19 +806,6 @@ def create_gateway_app(
                 "question": payload.question,
                 "missing_fields": ["order_no"],
                 "message": risk,
-            }
-
-        # Greetings are deterministic and must not enqueue a model job.
-        if _is_greeting(payload.question):
-            _record_route_metric(context, caller, route_type="qa", outcome="completed")
-            return {
-                **decision.public(),
-                "type": "qa",
-                "language": language,
-                "question": payload.question,
-                "status": "completed",
-                "result": {"blocks": [{"kind": "text", "text": _greeting(language)}]},
-                "error": None,
             }
 
         # Route 3: generic zero-order answer — start a real QA job (T3/#153).
@@ -2058,15 +2047,6 @@ def _missing_order_context(question: str) -> str | None:
     if _HIGH_RISK_ORDER_CUES.search(question or ""):
         return "请提供需要核查的订单号后，我才能继续处理。"
     return None
-
-
-def _is_greeting(question: str) -> bool:
-    text = re.sub(r"[\\s\\W_]+", "", question or "", flags=re.UNICODE).lower()
-    return text in {"你好", "您好", "hello", "hi", "hola", "bonjour", "salut", "hallo"}
-
-
-def _greeting(language: str) -> str:
-    return {"en": "Hello! How can I help you?", "de": "Hallo! Wie kann ich helfen?", "fr": "Bonjour ! Comment puis-je vous aider ?", "es": "¡Hola! ¿Cómo puedo ayudarte?", "pt": "Olá! Como posso ajudar?"}.get(language, "你好！请问有什么可以帮您？")
 
 
 def _standard_diagnosis_response(diagnosis: dict[str, Any]) -> dict[str, Any]:

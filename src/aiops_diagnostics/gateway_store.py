@@ -909,11 +909,12 @@ class GatewayStore:
             if "provider" not in columns:
                 connection.execute("ALTER TABLE runs ADD COLUMN provider TEXT")
             diagnosis_columns = {
-                str(row[1])
-                for row in connection.execute("PRAGMA table_info(standard_diagnoses)").fetchall()
+                str(row[1]) for row in connection.execute("PRAGMA table_info(standard_diagnoses)").fetchall()
             }
             if "language" not in diagnosis_columns:
-                connection.execute("ALTER TABLE standard_diagnoses ADD COLUMN language TEXT NOT NULL DEFAULT 'zh'")
+                connection.execute(
+                    "ALTER TABLE standard_diagnoses ADD COLUMN language TEXT NOT NULL DEFAULT 'zh'"
+                )
             now = _iso(_utc_now())
             connection.execute(
                 """
