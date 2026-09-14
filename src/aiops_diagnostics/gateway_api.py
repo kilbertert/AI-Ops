@@ -810,6 +810,32 @@ def create_gateway_app(
                 "message": risk,
             }
 
+        classifier = getattr(context.runtime, "classify_lightweight", None)
+        if classifier is not None:
+            try:
+                classified = classifier(payload.question, language=language)
+            except (ValueError, RuntimeError):
+                classified = None
+            if classified and classified.get("intent") == "casual" and classified.get("answer"):
+                return {
+                    **decision.public(),
+                    "type": "qa",
+                    "language": language,
+                    "question": payload.question,
+                    "status": "completed",
+                    "result": {"text": classified["answer"], "reminder": True},
+                    "error": None,
+                }
+            if classified and classified.get("risk") == "high" and classified.get("confidence") != "high":
+                return {
+                    **decision.public(),
+                    "type": "clarification",
+                    "language": language,
+                    "question": payload.question,
+                    "missing_fields": ["context"],
+                    "message": "请补充订单或设备等必要信息后，我才能继续处理。",
+                }
+
         # Route 3: generic zero-order answer — start a real QA job (T3/#153).
         # With a conversation: claim its generation slot first (409 busy),
         # and record the turn so follow-ups see it in context.
