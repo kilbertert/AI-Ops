@@ -394,3 +394,30 @@ def test_direct_sources_ssh_tunnel_keeps_rollback_forwards(monkeypatch, tmp_path
         "127.0.0.1:10102:tdengine.internal:16041",
         "127.0.0.1:10103:redis.internal:6380",
     ]
+
+
+def test_gun_select_derived_from_gun_columns_and_passes_proxy_guard(monkeypatch) -> None:
+    """评审发现 #5 的 pin:gun SELECT 现在从 GUN_COLUMNS 派生,派生结果必须
+    ① 与生产 TDengine 只读代理的正则白名单完全匹配(列漂移会当场被代理拒绝,
+    而不是部署后才发现);② 与 doctor 逐列探测清单同源。"""
+    from aiops_diagnostics.sources import TDengineSource
+    from aiops_diagnostics.tdengine_proxy import GUN_QUERY
+
+    source = TDengineSource(_http_settings())
+    start = datetime.fromisoformat("2026-07-31 10:00:00")
+    end = datetime.fromisoformat("2026-07-31 10:30:00")
+
+    captured: list[str] = []
+
+    def fake_query(sql: str) -> list[dict[str, Any]]:
+        captured.append(sql)
+        return []
+
+    monkeypatch.setattr(source, "_query", fake_query)
+    source.get_gun_samples("GUN-01", start, end, "TX-01")
+
+    sql = captured[0]
+    match = GUN_QUERY.fullmatch(sql)
+    assert match is not None, f"派生 SELECT 未通过只读代理白名单: {sql}"
+    assert match.group("device") == "GUN-01"
+    assert match.group("tx") == "TX-01"

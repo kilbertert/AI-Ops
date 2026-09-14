@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 from dataclasses import dataclass
 from typing import Any
 
@@ -10,6 +11,8 @@ from aiops_diagnostics.engine import DiagnosticEngine, _order_window
 from aiops_diagnostics.journal import EvidenceJournal, JournalEntry
 from aiops_diagnostics.models import DiagnosticRequest
 from aiops_diagnostics.sources import DiagnosticSources, SourceError, TDengineSource
+
+_LOGGER = logging.getLogger("aiops.diagnostic_tools")
 
 TOOL_DESCRIPTIONS: dict[ToolName, str] = {
     ToolName.ORDER_SNAPSHOT: "MySQL order rows by order_no; tenant learned from the order, scope-checked.",
@@ -56,6 +59,9 @@ def preflight_environment(
     try:
         report = doctor()
     except Exception:
+        # 预检保持 advisory（不让 doctor 故障挡诊断），但静默失效必须留痕：
+        # server-side 一行日志，避免"预检为何没生效"成为盲区
+        _LOGGER.warning("环境预检 doctor 调用失败，本次运行跳过预检: %s", request.order_no, exc_info=True)
         return ()
     tdengine = report.get("tdengine") if isinstance(report, dict) else None
     details = tdengine.get("details") if isinstance(tdengine, dict) else None

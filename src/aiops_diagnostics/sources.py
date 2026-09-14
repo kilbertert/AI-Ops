@@ -434,6 +434,29 @@ class MySQLSource:
             return details
 
 
+# charging-gun_property 查询列的唯一权威清单：
+# TDengineSource.get_gun_samples 的 SELECT、doctor 逐列探测、
+# tdengine_proxy 只读白名单全部从这里派生，防止三处各自维护漂移。
+GUN_COLUMN_NAMES: tuple[str, ...] = (
+    "txSerialNo",
+    "status",
+    "isReturn",
+    "isInsert",
+    "outputVoltage",
+    "outputCurrent",
+    "power",
+    "chargingTime",
+    "chargingElectricityQuantity",
+    "soc",
+    "temperature",
+    "batteryMaxTemperature",
+    "batteryMinTemperature",
+    "errorCode",
+    "errorReason",
+    "meterNow",
+)
+
+
 class TDengineSource:
     """TDengine 只读查询；可选携带单次运行冻结的允许设备集合。
 
@@ -445,24 +468,8 @@ class TDengineSource:
 
     # get_gun_samples 的完整 SELECT 列表（41 环境曾缺 batteryMinTemperature，
     # doctor 按此逐列探测，环境 schema 漂移在预检阶段即可见）。
-    GUN_COLUMNS: tuple[str, ...] = (
-        "txSerialNo",
-        "status",
-        "isReturn",
-        "isInsert",
-        "outputVoltage",
-        "outputCurrent",
-        "power",
-        "chargingTime",
-        "chargingElectricityQuantity",
-        "soc",
-        "temperature",
-        "batteryMaxTemperature",
-        "batteryMinTemperature",
-        "errorCode",
-        "errorReason",
-        "meterNow",
-    )
+    # 清单唯一来源是模块级 GUN_COLUMN_NAMES；tdengine_proxy 白名单也从它派生。
+    GUN_COLUMNS: tuple[str, ...] = GUN_COLUMN_NAMES
 
     def __init__(
         self,
@@ -514,10 +521,11 @@ class TDengineSource:
         device_literal = _safe_literal(device)
         tx_filter = f" AND `txSerialNo`='{_safe_literal(tx_serial_no)}'" if tx_serial_no else ""
         limit = int(self.settings.safety.tdengine_max_rows)
+        # 列清单唯一来源是 GUN_COLUMNS（doctor 逐列探测同一清单）；
+        # SELECT 从它派生，杜绝清单与 SQL 各自维护漂移
+        select_list = "_ts, " + ", ".join(f"`{column}`" for column in self.GUN_COLUMNS)
         sql = (
-            "SELECT _ts, `txSerialNo`, status, `isReturn`, `isInsert`, `outputVoltage`, "
-            "`outputCurrent`, power, `chargingTime`, `chargingElectricityQuantity`, soc, temperature, "
-            "`batteryMaxTemperature`, `batteryMinTemperature`, `errorCode`, `errorReason`, `meterNow` "
+            f"SELECT {select_list} "
             "FROM `charging-gun_property` "
             f"WHERE device='{device_literal}' AND _ts>='{_format_time(start_time)}' "
             f"AND _ts<='{_format_time(end_time)}'{tx_filter} ORDER BY _ts ASC LIMIT {limit}"
