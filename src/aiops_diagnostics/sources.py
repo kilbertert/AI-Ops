@@ -434,6 +434,44 @@ class MySQLSource:
             return details
 
 
+# charging-gun_property 查询列的唯一权威清单：
+# TDengineSource.get_gun_samples 的 SELECT、doctor 逐列探测、
+# tdengine_proxy 只读白名单全部从这里派生，防止三处各自维护漂移。
+GUN_COLUMN_NAMES: tuple[str, ...] = (
+    "txSerialNo",
+    "status",
+    "isReturn",
+    "isInsert",
+    "outputVoltage",
+    "outputCurrent",
+    "power",
+    "chargingTime",
+    "chargingElectricityQuantity",
+    "soc",
+    "temperature",
+    "batteryMaxTemperature",
+    "batteryMinTemperature",
+    "errorCode",
+    "errorReason",
+    "meterNow",
+)
+
+
+def _gun_columns_sql() -> str:
+    """与现网 SQL 逐字节一致的 SELECT 列串：仅含大写的 camelCase 列加反引号
+    （TDengine 大小写敏感标识符），全小写列裸写。tdengine_proxy 白名单正则
+    与 get_gun_samples 共用本函数，代理是独立部署的 root 服务——SQL 形状
+    漂移会在滚动窗口内被生产代理拒绝，所以这里必须保持字节级稳定。"""
+
+    def quote(column: str) -> str:
+        return f"`{column}`" if column != column.lower() else column
+
+    return "_ts, " + ", ".join(quote(column) for column in GUN_COLUMN_NAMES)
+
+
+GUN_COLUMNS_SQL = _gun_columns_sql()
+
+
 class TDengineSource:
     """TDengine 只读查询；可选携带单次运行冻结的允许设备集合。
 
@@ -445,24 +483,8 @@ class TDengineSource:
 
     # get_gun_samples 的完整 SELECT 列表（41 环境曾缺 batteryMinTemperature，
     # doctor 按此逐列探测，环境 schema 漂移在预检阶段即可见）。
-    GUN_COLUMNS: tuple[str, ...] = (
-        "txSerialNo",
-        "status",
-        "isReturn",
-        "isInsert",
-        "outputVoltage",
-        "outputCurrent",
-        "power",
-        "chargingTime",
-        "chargingElectricityQuantity",
-        "soc",
-        "temperature",
-        "batteryMaxTemperature",
-        "batteryMinTemperature",
-        "errorCode",
-        "errorReason",
-        "meterNow",
-    )
+    # 清单唯一来源是模块级 GUN_COLUMN_NAMES；tdengine_proxy 白名单也从它派生。
+    GUN_COLUMNS: tuple[str, ...] = GUN_COLUMN_NAMES
 
     def __init__(
         self,
@@ -515,9 +537,7 @@ class TDengineSource:
         tx_filter = f" AND `txSerialNo`='{_safe_literal(tx_serial_no)}'" if tx_serial_no else ""
         limit = int(self.settings.safety.tdengine_max_rows)
         sql = (
-            "SELECT _ts, `txSerialNo`, status, `isReturn`, `isInsert`, `outputVoltage`, "
-            "`outputCurrent`, power, `chargingTime`, `chargingElectricityQuantity`, soc, temperature, "
-            "`batteryMaxTemperature`, `batteryMinTemperature`, `errorCode`, `errorReason`, `meterNow` "
+            f"SELECT {GUN_COLUMNS_SQL} "
             "FROM `charging-gun_property` "
             f"WHERE device='{device_literal}' AND _ts>='{_format_time(start_time)}' "
             f"AND _ts<='{_format_time(end_time)}'{tx_filter} ORDER BY _ts ASC LIMIT {limit}"

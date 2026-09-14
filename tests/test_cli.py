@@ -212,3 +212,50 @@ def test_admin_group_exposed() -> None:
     result = CliRunner().invoke(app, ["admin", "--help"])
     assert result.exit_code == 0
     assert "reconcile" in result.output
+
+
+def test_admin_reconcile_requires_explicit_db(tmp_path: Path) -> None:
+    """XDG 陷阱守卫：不显式给 --db 时拒绝执行，绝不静默新建空库（M55 事故回归）。"""
+    runner = CliRunner()
+    portable_home = tmp_path / "portable-home"
+    config = portable_home / "production.env"
+    config.parent.mkdir(parents=True)
+    config.write_text("AIOPS_AGENT_MODEL=aiops-api\n", encoding="utf-8")
+    if os.name != "nt":
+        import stat as _stat
+
+        config.chmod(_stat.S_IRUSR | _stat.S_IWUSR)
+    manifest = tmp_path / "env.toml"
+    manifest.write_text(
+        """
+[[agents]]
+tenant_id = "tenant-a"
+name = "客服助手"
+agent_type = "customer"
+prompt = "p"
+knowledge_base_ids = []
+model = "aiops-api"
+""",
+        encoding="utf-8",
+    )
+    result = runner.invoke(
+        app,
+        ["--config", str(config), "admin", "reconcile", str(manifest)],
+        env={"AIOPS_HOME": str(portable_home)},
+    )
+    assert result.exit_code == 2, result.output
+    assert "缺少 --db" in result.output
+    # 显式环境变量是合法的显式配置：不再拒绝
+    result_env = runner.invoke(
+        app,
+        ["--config", str(config), "admin", "reconcile", str(manifest)],
+        env={
+            "AIOPS_HOME": str(portable_home),
+            "AIOPS_GATEWAY_DATABASE_FILE": str(tmp_path / "explicit.db"),
+        },
+    )
+    assert result_env.exit_code == 0, result_env.output
+    # 守卫先于任何 store 写入：XDG 默认路径下没有新建任何 gateway.db
+    assert not (portable_home / "gateway").exists() or not list(
+        (portable_home / "gateway").glob("gateway.db")
+    )
