@@ -376,6 +376,21 @@ class AgentStore:
             connection.close()
 
 
+def allowed_models_from_settings(settings: Any) -> tuple[str, ...]:
+    """Derive the AgentManager model whitelist from Settings — the single
+    derivation shared by the gateway HTTP app and ``aiops admin reconcile``
+    (providers' models, else the agent default, else ``aiops-api``)."""
+    agent_settings = getattr(settings, "agent", None)
+    configured = tuple(
+        provider.model
+        for provider in getattr(agent_settings, "providers", ())
+        if getattr(provider, "model", "")
+    )
+    if not configured and agent_settings is not None:
+        configured = (getattr(agent_settings, "model", "") or "aiops-api",)
+    return configured or ("aiops-api",)
+
+
 class AgentManager:
     def __init__(
         self,
