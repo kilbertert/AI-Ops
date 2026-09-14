@@ -40,7 +40,7 @@ PR #210 已将 41 切流、95/41 隔离、共享 KB 隧道与 CUTOVER-41 系列�
 - **LADDER-02（回放计量矛盾单 `dx_7d28c5d7`）**：结果 `inconclusive` + low——meterBeginValue=10000 > meterEndValue 倒挂矛盾确需遥测仲裁，阶梯第 2 档正确不越权；生产 journal 实拍两条环境预检 blocked 条目，精确点名 `batteryMinTemperature 缺列` / `charging-pile_comm 表不存在`；模型在 limitations 明言“按预检指引本次未重复请求该通道”，预检注记真实改变了规划行为；next_steps 具体到 transaction_id=269 取证路径。
 - **LADDER-03（billing 场景）**：`inconclusive` + medium，非误降——41 全部 5 个真实订单均为“20 秒短会话 + meter 倒挂”演示形态，“金额是否正确”落在电量真实性仲裁上（恰需缺失遥测）；模型明确交付 firm 部分：计费公式与模板快照一致（0.4003×6.00=2.40，无错分时段/重复计费）。billing-clean 单待业务侧正常订单数据。
 - **真实故障与修复（`--db` XDG 陷阱）**：on-box 不 source `production.env` 直接执行 reconcile 时，`GatewayServerSettings.from_env()` 回退 XDG 默认路径**静默新建空库**（`~/.local/share/aiops-diagnostics/gateway/gateway.db`），收敛报告全 `created` 而非 `unchanged`。根因：`--config` 只喂 `Settings.from_config`（模型白名单），数据库路径走独立的 `from_env()` 只读进程环境变量。修复：显式 `--db`，已文档化（PR #213 `162bb19`）。
-- 局限：41 on-box runtime venv 无 pytest，on-box 测试只能 import smoke；本地全量确定性检查已过（#211 685 项、#212 680 项）。
+- 局限：41 on-box runtime venv 无 pytest，on-box 测试只能 import smoke；本地全量确定性检查已过（#211 685 项、#212 693 项——评审复核时重跑 63e3dd2 全量为 693，原记录 680 与实际不符，以复核为准）。
 
 ## 41 Gateway 与公网入口切换验证（2026-09-12）
 

@@ -810,6 +810,10 @@ Feature: 意图相关的诊断置信阶梯与环境预检
       Then 结果状态为 inconclusive 且在 limitations 中说明缺失通道
 
     Scenario: 订单主数据失败时结果 blocked 且 low
+      Given Agent 诊断运行中订单主数据源（order_snapshot）查询失败
+      When Agent 完成诊断
+      Then 结果状态为 blocked 且置信度为 low
+      And 不会以 inconclusive 或 diagnosed 掩盖主数据不可用
 
     Scenario: 预检缺口记入证据日志并出现在初始提示
       Given 预检发现 charging-gun_property 缺少列 batteryMinTemperature
