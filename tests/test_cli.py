@@ -245,7 +245,17 @@ model = "aiops-api"
     )
     assert result.exit_code == 2, result.output
     assert "缺少 --db" in result.output
-    # 守卫先于任何 store 写入：tmp_path 下没有新建任何 gateway.db
+    # 显式环境变量是合法的显式配置：不再拒绝
+    result_env = runner.invoke(
+        app,
+        ["--config", str(config), "admin", "reconcile", str(manifest)],
+        env={
+            "AIOPS_HOME": str(portable_home),
+            "AIOPS_GATEWAY_DATABASE_FILE": str(tmp_path / "explicit.db"),
+        },
+    )
+    assert result_env.exit_code == 0, result_env.output
+    # 守卫先于任何 store 写入：XDG 默认路径下没有新建任何 gateway.db
     assert not (portable_home / "gateway").exists() or not list(
         (portable_home / "gateway").glob("gateway.db")
     )

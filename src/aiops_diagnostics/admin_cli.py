@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
 from pathlib import Path
 from typing import Annotated, Any
 
 import typer
 
 from aiops_diagnostics.config import Settings, selected_config_file
+from aiops_diagnostics.gateway_config import GatewayServerSettings
 
 admin_app = typer.Typer(name="admin", help="AI-Ops 网关管理操作（环境清单收敛）", no_args_is_help=True)
 
@@ -61,18 +63,18 @@ def reconcile(
         typer.secho(f"清单无效: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=2) from exc
     settings = _reconcile_settings(ctx.obj.get("config_file") if ctx.obj else None)
-    if db is None:
-        # XDG 陷阱守卫（41 实机事故，见 docs/validation.md M55）：缺省会静默回退
-        # GatewayServerSettings.from_env() 的 XDG 路径并新建空库，收敛全 created。
-        # --config 只喂 Settings（模型白名单），数据库路径只认 --db 或网关环境变量。
+    # XDG 陷阱守卫（41 实机事故，见 docs/validation.md M55）：完全不显式给库时，
+    # 缺省会静默回退 GatewayServerSettings.from_env() 的 XDG 路径并新建空库，
+    # 收敛全 created。显式 --db 或显式 AIOPS_GATEWAY_DATABASE_FILE 才执行。
+    database = db or GatewayServerSettings.from_env().database_file
+    if db is None and not os.environ.get("AIOPS_GATEWAY_DATABASE_FILE"):
         typer.secho(
             "缺少 --db：--config 不会解析数据库路径，缺省会静默回退 XDG 默认并新建空库。"
-            "请显式给出 --db <gateway.db>（或先 export AIOPS_GATEWAY_DATABASE_FILE）。",
+            "请显式给出 --db <gateway.db>，或 export AIOPS_GATEWAY_DATABASE_FILE=<gateway.db>。",
             fg=typer.colors.RED,
             err=True,
         )
         raise typer.Exit(code=2)
-    database = db
 
     knowledge_resolver = None
     if kb_url:
