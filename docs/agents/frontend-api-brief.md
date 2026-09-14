@@ -614,7 +614,20 @@ GET https://api.qumall.qushiyun.com/v1/assistant/questions/{qa_id}
 - `media.url` 是**同域相对路径**（`/v1/media/...`），直接当 `src` 用，**不需要 Authorization 头**——短时签名就在 URL 里，有效期约 10 分钟。
 - 媒体块失效时 `media: null` 且带 `unavailable: true`：**保留文本与引用**，显示"资源不可用"，不要整条消息报错。
 - `retrieval_status`：`found`（命中知识库）/ `not_found`（无命中，通用回答）/ `unavailable`（检索依赖故障，文本仍可交付）/ `limited`（达检索上限）。
-- `status=failed` 时轮询响应带 `error: {code, message, retryable}`（与订单诊断线同形状，多为模型限流）。前端应展示 `error.message` 并按 `retryable: true` 提供"稍后重试"，**不要**把失败兜底显示成"未找到"——那是 404 的语义，不是失败作业的语义。
+- **`status=failed` 处理（重要）**：failed 是**终态**——收到即**停止轮询该 `qa_id`**（failed 的作业永远不会变成 completed）。轮询响应此时带 `error: {code, message, retryable}`（与订单诊断线同形状，多为模型限流）：
+
+```json
+{
+  "type": "qa",
+  "qa_id": "qa_7478808279b2493f8984753c65b9b766",
+  "status": "failed",
+  "retry_after_ms": null,
+  "result": null,
+  "error": {"code": "QA_FAILED", "message": "模型服务暂时不可用，请稍后重试", "retryable": true}
+}
+```
+
+  前端在气泡里渲染 `error.message`（服务端脱敏后的真实原因）。**"稍后重试"指重新发起一次新提问**——用同一个 question 再 POST `/v1/assistant/questions`，产生新 `qa_id`，而不是继续轮询旧作业；失败原因多为暂时性（限流/供应商欠费），过一会儿重问通常即成功。`retryable: true` 时展示"稍后重试"按钮，点击执行重新 POST。**不要**把失败兜底显示成"未找到"——那是 404 的语义，不是失败作业的语义。
 
 ### 场景 C：带订单的自由提问 —— 走订单诊断
 
