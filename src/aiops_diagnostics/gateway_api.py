@@ -795,7 +795,9 @@ def create_gateway_app(
         # Do not send an order/billing dispute without an order context into
         # generic QA; ask for the missing business identifier synchronously.
         risk = (
-            _missing_order_context(payload.question) if _extract_order_no(payload.question) is None else None
+            _missing_order_context(payload.question)
+            if conversation is None and _extract_order_no(payload.question) is None
+            else None
         )
         if risk is not None:
             _record_route_metric(context, caller, route_type="clarification", outcome="completed")
