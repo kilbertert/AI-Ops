@@ -25,9 +25,6 @@ model                       # 必须在 Settings.providers 白名单内
 output_contract             # 可省，按 agent_type 推导（customer→blocks-v1）
 opening_questions / quick_commands = [...]   # 可省
 state = "published"         # published | disabled，默认 published
-
-[kb]                        # 可选：收敛前对下列租户调 kb-service POST /kb/tenants/repair
-repair_tenant_ids = [...]   # 补齐默认模型（embedding/chat/rerank/vision），幂等；需 --kb-url
 ```
 
 on-box 收敛（41 为例）：

@@ -15,7 +15,6 @@ from typing import Annotated, Any
 import typer
 
 from aiops_diagnostics.config import Settings, selected_config_file
-from aiops_diagnostics.gateway_config import GatewayServerSettings
 
 admin_app = typer.Typer(name="admin", help="AI-Ops 网关管理操作（环境清单收敛）", no_args_is_help=True)
 
@@ -31,7 +30,10 @@ def reconcile(
     manifest: Annotated[Path, typer.Argument(exists=True, dir_okay=False, help="环境清单 TOML")],
     db: Annotated[
         Path | None,
-        typer.Option("--db", help="gateway 数据库文件（默认取 Gateway 环境配置解析）"),
+        typer.Option(
+            "--db",
+            help="gateway 数据库文件（必填：--config 不喂数据库路径，缺省会回退 XDG 默认新建空库）",
+        ),
     ] = None,
     kb_url: Annotated[
         str | None,
@@ -49,7 +51,7 @@ def reconcile(
 ) -> None:
     """按环境清单收敛 gateway agent（幂等；走 AgentManager 生产代码路径）。"""
     from aiops_diagnostics.agent_debug import KbBindingResolver, KbServiceKnowledgeClient
-    from aiops_diagnostics.agent_lifecycle import AgentManager, AgentStore
+    from aiops_diagnostics.agent_lifecycle import AgentManager, AgentStore, allowed_models_from_settings
     from aiops_diagnostics.agent_manifest import ManifestError, load_manifest
     from aiops_diagnostics.agent_manifest import reconcile as reconcile_manifest
 
@@ -59,13 +61,18 @@ def reconcile(
         typer.secho(f"清单无效: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=2) from exc
     settings = _reconcile_settings(ctx.obj.get("config_file") if ctx.obj else None)
-    database = db or GatewayServerSettings.from_env().database_file
-
-    # 与 gateway_api.create_gateway_app 相同的 allowed_models 推导
-    agent_settings = settings.agent
-    configured_models = tuple(provider.model for provider in agent_settings.providers if provider.model)
-    if not configured_models:
-        configured_models = (agent_settings.model or "aiops-api",)
+    if db is None:
+        # XDG 陷阱守卫（41 实机事故，见 docs/validation.md M55）：缺省会静默回退
+        # GatewayServerSettings.from_env() 的 XDG 路径并新建空库，收敛全 created。
+        # --config 只喂 Settings（模型白名单），数据库路径只认 --db 或网关环境变量。
+        typer.secho(
+            "缺少 --db：--config 不会解析数据库路径，缺省会静默回退 XDG 默认并新建空库。"
+            "请显式给出 --db <gateway.db>（或先 export AIOPS_GATEWAY_DATABASE_FILE）。",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    database = db
 
     knowledge_resolver = None
     if kb_url:
@@ -75,7 +82,7 @@ def reconcile(
     manager = AgentManager(
         AgentStore(database),
         knowledge_resolver=knowledge_resolver,
-        allowed_models=configured_models or ("aiops-api",),
+        allowed_models=allowed_models_from_settings(settings),
     )
 
     try:
