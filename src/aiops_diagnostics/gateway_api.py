@@ -792,19 +792,6 @@ def create_gateway_app(
                 "format": answer["format"],
             }
 
-        # Greetings are deterministic and must not enqueue a model job.
-        if _is_greeting(payload.question):
-            _record_route_metric(context, caller, route_type="qa", outcome="completed")
-            return {
-                **decision.public(),
-                "type": "qa",
-                "language": language,
-                "question": payload.question,
-                "status": "completed",
-                "result": {"blocks": [{"kind": "text", "text": _greeting(language)}]},
-                "error": None,
-            }
-
         # Route 3: generic zero-order answer — start a real QA job (T3/#153).
         # With a conversation: claim its generation slot first (409 busy),
         # and record the turn so follow-ups see it in context.
@@ -2037,15 +2024,6 @@ def _question_involves_active_order(question: str) -> bool:
     through to qa+RAG even with an active order bound (#172 acceptance).
     """
     return bool(_ACTIVE_ORDER_CUES.search(question or ""))
-
-
-def _is_greeting(question: str) -> bool:
-    text = re.sub(r"[\\s\\W_]+", "", question or "", flags=re.UNICODE).lower()
-    return text in {"你好", "您好", "hello", "hi", "hola", "bonjour", "salut", "hallo"}
-
-
-def _greeting(language: str) -> str:
-    return {"en": "Hello! How can I help you?", "de": "Hallo! Wie kann ich helfen?", "fr": "Bonjour ! Comment puis-je vous aider ?", "es": "¡Hola! ¿Cómo puedo ayudarte?", "pt": "Olá! Como posso ajudar?"}.get(language, "你好！请问有什么可以帮您？")
 
 
 def _standard_diagnosis_response(diagnosis: dict[str, Any]) -> dict[str, Any]:

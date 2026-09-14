@@ -228,20 +228,11 @@ def test_assistant_qa_poll_running_keeps_null_error(tmp_path: Path) -> None:
     client, _ = _client(tmp_path)
     resp = client.post(
         "/v1/assistant/questions",
-        json={"question": "电动车续航为什么下降"},
+        json={"question": "你好"},
         headers=_headers(),
     )
     poll = client.get(f"/v1/assistant/questions/{resp.json()['qa_id']}", headers=_headers())
     assert poll.json()["error"] is None
-
-
-def test_assistant_greeting_is_sync_and_does_not_create_job(tmp_path: Path) -> None:
-    client, runtime = _client(tmp_path)
-    resp = client.post("/v1/assistant/questions", json={"question": "你好"}, headers=_headers())
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "completed"
-    assert "qa_id" not in resp.json()
-    assert runtime._qa == {}
 
 
 def test_assistant_qa_poll_unknown_is_404(tmp_path: Path) -> None:
