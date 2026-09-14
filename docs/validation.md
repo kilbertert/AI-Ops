@@ -1,5 +1,43 @@
 # 验证与验收计划
 
+## 供应商恢复后的遗留项闭环（2026-09-14 下午，#218 收口）
+
+百炼账户恢复后（KB embedding 与模型通道实测活通：36 kb-service `/search` 返回真实
+chunk，41 隧道 `29380` 探针 200），41 网关同步部署 main `405d691`（58 文件 sha 逐一
+核对一致、备份 `/opt/aiops-41/src/aiops_diagnostics.bak-20260914-405d691`、重启
+healthy），随后经公网 `api.mall.qushiyun.com` 用真实会话复跑全部遗留项：
+
+- **PROMPT-02（公网三问，租户 1942 真实 H5 thirdSession）**：三问全部 **completed**
+  ——①知识库命中（新加坡无人电动巴士）：`retrieval_status=found`，回答组织自知识库
+  内容；②通用常识（电动车长期停放电量）：回答先声明「以下为通用常识参考，非平台
+  官方政策」；③超边界订单扣费：「小趋」固定拒答话术+引导诊断/人工，不猜测订单。
+  「小趋」提示词（#215）业务行为契约三场景在公网成立。
+- **L4 多语言 QA 完成态（#200/#204）**：英文自由提问 `Accept-Language: en` →
+  `202 type=qa language=en` → 轮询 **completed**，`result.blocks[0].text` 为英文
+  「Hello, this is Xiao Qu~ …」知识库回答（blocks-v1，`retrieval_status=found`）。
+  #200 Testing Decisions 的「对 qa 各实测一发」多语言完成态闭环。
+- **非 zh 订单诊断实测（#218 第 2 项）**：订单属主会话 + `Accept-Language: en` 对
+  LADDER-02 同一订单 2098849284776484865 发起诊断（`dx_74a304cb…`）→ **completed**，
+  summary/root_cause/limitations/next_steps 全英文书写、confidence=medium、
+  failed_sources 声明两个 TDengine 通道、id/编号保持原样。且本次结论从 09-13 的
+  inconclusive 升为 completed（diagnosed）——OCPP remote-stop 的订单侧证据自洽即下
+  诊断，阶梯第 1 档真实生效；预检 blocked 条目与「模型仍请求工具、真实失败」的不
+  短路语义均按设计工作（#212）。
+- **LADDER-03（billing-clean 单，#218 第 3 项）**：41 已出现真实正常计费订单
+  （2099370189776707585，30 分钟 25.241 kWh / 20.19 元，meter_start/end 为 null 的
+  设备结算帧形态）。订单属主会话（租户 1960）发起「电费金额算得对不对」→
+  `dx_6a25e7e3…` **completed + medium + failed_sources=['tdengine:charging-gun_property']**
+  ——模型核对尖时段 25.241×0.8000=20.19 与 fee_snapshot/分项/总金额全闭环，
+  limitations 如实声明枪遥测缺失影响与单一来源电量边界。qa-plan LADDER-03 期待
+  的「billing 类问题在外围遥测缺失下仍给出 diagnosed+medium」形态在真实数据成立。
+- **媒体 blocks**（挂起项顺带核验）：英文知识库问返回 blocks-v1 三块（text 满长度
+  + 引用），视频/图片块在本次问答未触发；媒体面专项验收维持 #204 记录不变。
+
+结论：#218 三项遗留（多语言 QA 完成态、非 zh 诊断实测、billing-clean 阶梯单）全部
+具备真实环境完成态证据；#200 与 #212 的验收义务闭环。诊断结论 language 字段在
+`GET /v1/standard/diagnoses/{id}` 响应中未回显（result 人类可读字段已英文化），该
+字段合同差异另行记录，不阻塞本收口。
+
 ## 多语言 FAQ 确定性验收面复核（2026-09-14，PRD #200 / #204 收口）
 
 41 公网 `https://api.mall.qushiyun.com/v1/*`、真实 H5 thirdSession（租户 1942）、
