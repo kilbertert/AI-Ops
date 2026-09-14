@@ -100,6 +100,11 @@ class _Runtime:
         del context
         return self._qa.get(qa_id)
 
+    def fail_assistant_qa(self, qa_id: str, error_code: str = "QA_FAILED", error_message: str = ""):
+        self._qa[qa_id]["status"] = "failed"
+        self._qa[qa_id]["error_code"] = error_code
+        self._qa[qa_id]["error_message"] = error_message
+
     def list_assistant_qa(self, context: ScopeContext, *, limit: int = 50):
         del context
         items = [
@@ -194,6 +199,40 @@ def test_assistant_generic_returns_queued_job(tmp_path: Path) -> None:
     assert poll.status_code == 200
     assert poll.json()["qa_id"] == body["qa_id"]
     assert poll.json()["status"] == "queued"
+
+
+def test_assistant_qa_poll_failed_exposes_error(tmp_path: Path) -> None:
+    """A failed QA job returns the {code, message, retryable} error contract,
+    matching the diagnosis poll line — not a null error the frontend must
+    guess at (bare '未找到')."""
+    client, runtime = _client(tmp_path)
+    resp = client.post(
+        "/v1/assistant/questions",
+        json={"question": "新加坡电动巴士"},
+        headers=_headers(),
+    )
+    qa_id = resp.json()["qa_id"]
+    runtime.fail_assistant_qa(qa_id, error_message="model provider quota exceeded")
+    poll = client.get(f"/v1/assistant/questions/{qa_id}", headers=_headers())
+    assert poll.status_code == 200
+    body = poll.json()
+    assert body["status"] == "failed"
+    assert body["error"]["code"] == "QA_FAILED"
+    assert body["error"]["message"] == "model provider quota exceeded"
+    assert body["error"]["retryable"] is True
+    assert body["result"] is None
+
+
+def test_assistant_qa_poll_running_keeps_null_error(tmp_path: Path) -> None:
+    """Non-terminal statuses keep error: null — the field only appears on failures."""
+    client, _ = _client(tmp_path)
+    resp = client.post(
+        "/v1/assistant/questions",
+        json={"question": "你好"},
+        headers=_headers(),
+    )
+    poll = client.get(f"/v1/assistant/questions/{resp.json()['qa_id']}", headers=_headers())
+    assert poll.json()["error"] is None
 
 
 def test_assistant_qa_poll_unknown_is_404(tmp_path: Path) -> None:
