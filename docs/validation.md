@@ -1,16 +1,61 @@
 # 验证与验收计划
 
+## 统一助手意图路由与快捷动作真实复跑（2026-09-15，#227/#232 闭环）
+
+41 部署同步：main `621490d` 全量 55 个 git 跟踪文件 sha 逐一核对一致部署到
+`/opt/aiops-41`（备份 `/var/backups/aiops-41/backup-20260915-pre-621490d`），
+`aiops-gateway-41.service` 重启 healthy。资源创建走生产代码路径：宣传 agent
+`agt_ed443cae…` v1 经 `admin reconcile`（env-41.toml 清单追加，发布前 KB 活性
+校验真实触达 36 kb-service，复跑 3×unchanged 幂等）；4 条快捷动作
+（case_exploration 绑定 `agt_ed443cae…#v1`、solution_discovery 无绑定、
+smart_diagnosis、report_fault）经 ShortcutManager 创建并发布。真实 H5 thirdSession
+（租户 1942105476598861824）经公网 `api.mall.qushiyun.com` 复跑 INTENT-01..08：
+
+- **INTENT-01 寒暄**：`你好` → 202 qa → completed，`retrieval_status=not_found`，
+  由客服 agent「小趋」回答，不进业务 KB、不建诊断（选择器修复后回归客服路径）。
+- **INTENT-02 闲聊边界**：`你是谁呀` → completed，明确声明"知识库未检索到条目、
+  以下介绍仅基于角色定位"，不编造。`今天天气怎么样` 被 FAQ 目录 `q026`（夏季高温
+  充电）关键词误命中走 FAQ——已知 FAQ 匹配假阳性，记录为独立遗留，不属意图路由缺陷。
+- **INTENT-03 FAQ 命中**：`充电枪拔不出来怎么办` → 200 `type=faq`
+  `consumer.faq.q010` 同步答案，未建异步作业。
+- **INTENT-04 订单诊断**：文本内嵌已归属订单 `订单2099211664421249025为什么提前停止
+  充电了`（会话 93c03a38…，订单属 ch_order_info 真实记录）→ 202
+  `type=diagnosis` `dx_0f44d09f…`，`order_no_extracted` 回显；轮询终态
+  **completed/diagnosed/medium**（远程启动 OCPP1.6-J 会话 20 秒 0.4 kWh 结论）。
+  前置发现：非本人订单（1955824…）正确回落 FAQ/通用路径，无存在性泄露。
+- **INTENT-05 高风险缺订单号**：`是不是扣错钱了` → 200 `type=clarification`，
+  `missing_fields=["order_no"]`，未创建任何异步作业。
+- **INTENT-06 快捷动作清单**：`GET /v1/shortcuts` → `type=shortcut_list` 4 条
+  （code/intent/requires_order/本地化 label），case_exploration 带
+  `target_agent_version` 且不泄露内部运行信息。
+- **INTENT-07 故障上报收集**：`我要上报一个故障` → 202 qa → completed，
+  agent 收集故障类型/桩号/时间/安全信息（fault_description 语义），不创建工单，
+  无业务写操作。
+- **INTENT-08 宣传卡片**（#231 核心验收）：`我想看看新加坡无人巴士的客户案例`
+  → 202 qa（promo 桶指标行：route_type=promo、agent_id=agt_ed443cae…、
+  searches=1）→ 轮询 **completed/`retrieval_status=found`**，四段式结构化卡片
+  （标题/行业痛点/破局方案/商业成果与标杆意义）全部来自真实 KB 检索的新加坡无人
+  电动巴士 chunk，附 video + reference 块；`shortcut_code=case_exploration` 路由
+  同路径。无场景关键词的 `有没有公交充电的客户案例` → completed/not_found，诚实
+  "无可用案例"卡片 + 引导换关键词，不编造客户；`solution_discovery`（无绑定
+  target）→ completed/not_found 本地化空卡片（i18n PROMO_EMPTY_MESSAGES zh）。
+
+真实复跑暴露并修复三个替身测不出的契约缺口（PR #238，本地 719 passed）：
+①真实模型把整段 `reason` 当检索词污染 embedding（RAGFlow match_text 证实）→
+prompt 强制 `query` 3-8 词；②寒暄无检索回答自报 `retrieval_status="not_needed"`
+被公共 Literal 拒收整单 QA_FAILED → harness 归一化 not_found；③新建宣传 agent 因
+`created_at DESC` 抢占 `select_customer_agent` 服务全部客服问题 → 快捷绑定 pin
+的 agent 从客服选择中排除。修复逐一在 41 重验：宣传卡片 found、你好回归小趋、
+promo 指标桶正确归因。
+
+真实验收边界（如实记录）：宣传 KB 当前唯一素材为新加坡无人电动巴士演示视频，
+"公交/港口/重卡"等行业场景在库中无对应资料——空检索路径的真实行为已验收
+（诚实拒答），有料行业场景需业务方补充宣传资料后再补跑；FAQ 关键词对
+"天气""提前停止"的假阳性（q026/q013）为 FAQ 目录匹配的独立遗留问题，
+不在 #227-232 范围；INTENT-07 预期形态（clarification）与实际（qa 完成态
+收集信息）的差异已按实际行为记录，工单写操作本就不在本期范围。
+
 ## 供应商恢复后的遗留项闭环（2026-09-14 下午，#218 收口）
-
-## 统一助手意图路由与快捷动作（#227/#232）
-
-- 自动化验证：`uv run pytest -q`，当前提交环境全量通过；Ruff、格式检查和
-  `git diff --check` 通过。
-- 覆盖范围：高风险缺少订单号的 `clarification`、快捷动作/宣传路由的 `promo` 指标桶、
-  FAQ/QA/diagnosis 既有合同回归，以及宣传 Agent 的语言、关键词和空检索测试。
-- 真实业务验收：未完成业务验收。测试替身、fixture 和本地模型替身不代表公网真实
-  会话、真实知识库或真实模型链路；供应商/测试身份恢复后需按 `acceptance.feature`
-  和 `qa-plan.md` 复跑。
 
 百炼账户恢复后（KB embedding 与模型通道实测活通：36 kb-service `/search` 返回真实
 chunk，41 隧道 `29380` 探针 200），41 网关同步部署 main `405d691`（58 文件 sha 逐一
