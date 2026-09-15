@@ -139,6 +139,12 @@ class AssistantQuestionRequest(BaseModel):
         max_length=64,
         pattern=r"^conv_[A-Za-z0-9]{1,57}$",
     )
+    shortcut_code: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$",
+    )
 
 
 class StandardDiagnosisRequest(BaseModel):
@@ -836,7 +842,18 @@ def create_gateway_app(
                     )
                 conversation = {**conversation, "active_order_no": None}
 
-        # Route 2: FAQ short-circuit (deterministic, zero-order, zero-model).
+        # Route 2: promotional routing (#231) — BEFORE the FAQ short-circuit.
+        # PRD #227 orders FAQ above a passive shortcut context, but a user who
+        # CLICKED a product-entry button or explicitly asks for cases/solutions
+        # must never land in the customer-service FAQ (#231 acceptance:
+        # 案例不进入 FAQ). Only explicit promotional signals take this branch.
+        promo_target, promo_intent = _promo_route(context, caller, decision, payload)
+        if promo_intent is not None:
+            return _start_promo_qa(
+                context, caller, conversation, payload, language, promo_target, promo_intent
+            )
+
+        # Route 2b: FAQ short-circuit (deterministic, zero-order, zero-model).
         faq_id = _faq_hit_by_keywords(decision.platform, context.faq_catalog, payload.question)
         if faq_id is not None:
             answer = context.faq_catalog.answer(decision.platform, faq_id, language)
@@ -895,6 +912,20 @@ def create_gateway_app(
                     "missing_fields": ["context"],
                     "message": "请补充订单或设备等必要信息后，我才能继续处理。",
                 }
+            # Classifier-returned promotional intent (#229 protocol): same
+            # promotional route as the explicit cues, resolved against the
+            # caller's own published shortcut rows.
+            if classified and classified.get("intent") in {"case_exploration", "solution_discovery"}:
+                promo_target, promo_intent = _promo_route(
+                    context,
+                    caller,
+                    decision,
+                    payload,
+                    forced_intent=str(classified.get("intent")),
+                )
+                return _start_promo_qa(
+                    context, caller, conversation, payload, language, promo_target, promo_intent
+                )
 
         # Route 3: generic zero-order answer — start a real QA job (T3/#153).
         # With a conversation: claim its generation slot first (409 busy),
@@ -2316,6 +2347,118 @@ def _missing_order_context(question: str) -> str | None:
     if _HIGH_RISK_ORDER_CUES.search(question or ""):
         return "请提供需要核查的订单号后，我才能继续处理。"
     return None
+
+
+def _promo_route(
+    context: Any,
+    caller: ScopeContext,
+    decision: Any,
+    payload: AssistantQuestionRequest,
+    *,
+    forced_intent: str | None = None,
+) -> tuple[str | None, str | None]:
+    """Resolve the promotional route for this request, or (None, None).
+
+    Two entry signals (#231): an explicit ``shortcut_code`` from a clicked
+    product-entry button, or free text that deterministically NAMES case
+    exploration / solution discovery. ``forced_intent`` is the classifier's
+    promotional intent when the cue matcher stayed silent. The promotional
+    target always comes from the caller's own published shortcut row — the
+    frontend can never self-report an agent. A missing target still routes
+    to the promotional intent so the runtime can serve the honest empty card.
+    """
+    from aiops_diagnostics.promo_agents import PROMO_INTENTS, promo_intent_from_text
+    from aiops_diagnostics.shortcut_lifecycle import ShortcutError
+
+    intent: str | None = None
+    shortcut = None
+    try:
+        if payload.shortcut_code:
+            shortcut = context.shortcut_manager.store.find_by_code(
+                caller.effective_tenant_id,
+                str(decision.platform),
+                payload.shortcut_code,
+            )
+            if shortcut is not None and shortcut.status == "published":
+                intent = shortcut.intent if shortcut.intent in PROMO_INTENTS else None
+        if intent is None:
+            intent = (
+                forced_intent if forced_intent in PROMO_INTENTS else promo_intent_from_text(payload.question)
+            )
+    except ShortcutError:
+        return None, None
+    if intent is None:
+        return None, None
+    target = getattr(shortcut, "target_agent_version", None) if shortcut is not None else None
+    if not target:
+        target = _published_promo_target(context, caller, str(decision.platform), intent)
+    return target, intent
+
+
+def _published_promo_target(context: Any, caller: ScopeContext, platform: str, intent: str) -> str | None:
+    """Pin the first published shortcut of this promotional intent, if any."""
+    from aiops_diagnostics.shortcut_lifecycle import ShortcutError
+
+    try:
+        rows = context.shortcut_manager.store.list_published(caller.effective_tenant_id, platform)
+    except ShortcutError:
+        return None
+    for row in rows:
+        if row.intent == intent and row.target_agent_version:
+            return row.target_agent_version
+    return None
+
+
+def _start_promo_qa(
+    context: Any,
+    caller: ScopeContext,
+    conversation: dict[str, Any] | None,
+    payload: AssistantQuestionRequest,
+    language: str,
+    promo_target: str | None,
+    promo_intent: str,
+) -> JSONResponse:
+    """Start a promotional card QA job (#231): the public `qa` contract
+    unchanged (202 + poll), served by the pinned promotional agent."""
+    turn_no: int | None = None
+    if conversation is not None:
+        turn_no = _begin_conversation_turn(context, caller, conversation, "qa", payload.question)
+    try:
+        qa = context.runtime.start_assistant_qa(
+            caller,
+            payload.question,
+            conversation=conversation if turn_no is not None else None,
+            conversation_turn_no=turn_no,
+            language=language,
+            promo_target=promo_target,
+            promo_intent=promo_intent,
+        )
+    except (ValueError, RuntimeError) as exc:
+        _release_conversation_turn(context, conversation, turn_no)
+        raise StandardAPIError(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "QA_UNAVAILABLE",
+            "general answer unavailable",
+            retryable=True,
+        ) from exc
+    return JSONResponse(
+        status_code=status.HTTP_202_ACCEPTED,
+        content={
+            "type": "qa",
+            "language": language,
+            "qa_id": qa["qa_id"],
+            "question": qa["question"],
+            "status": qa["status"],
+            "retry_after_ms": 1000,
+            "result": qa.get("result"),
+            "error": None,
+            **(
+                {"conversation_id": conversation["conversation_id"], "turn_no": turn_no}
+                if conversation
+                else {}
+            ),
+        },
+    )
 
 
 def _standard_diagnosis_response(diagnosis: dict[str, Any]) -> dict[str, Any]:

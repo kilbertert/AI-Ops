@@ -86,6 +86,18 @@ QA_FALLBACK_MESSAGES: dict[str, dict[str, str]] = {
     },
 }
 
+# Honest empty promotional card when the pinned agent/KB has no match (#231).
+PROMO_EMPTY_MESSAGES: dict[str, dict[str, str]] = {
+    "zh": {
+        "case_exploration": "当前没有可用的客户案例，未检索到匹配的宣传资料。",
+        "solution_discovery": "当前没有可用的行业方案，未检索到匹配的宣传资料。",
+    },
+    "en": {
+        "case_exploration": "No matching customer case is available in the promotional library.",
+        "solution_discovery": "No matching industry solution is available in the promotional library.",
+    },
+}
+
 
 def language_name(language: str) -> str:
     """English display name of a supported language for prompt injection."""

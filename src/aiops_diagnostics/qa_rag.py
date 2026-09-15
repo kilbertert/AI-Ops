@@ -117,13 +117,16 @@ def run_customer_qa_answer(
     project_root: Path | None = None,
     session_factory: Any | None = None,
     language: str = DEFAULT_LANGUAGE,
+    initial_prompt: str | None = None,
 ) -> dict[str, Any]:
     """Answer one customer question via the published agent + bounded retrieval.
 
     Returns the public QA result dict: ``{"blocks": [...], "retrieval_status":
     ...}`` where media blocks carry the signed media descriptor for this turn.
     Raises ``AgentRuntimeError`` on harness-level failures (the caller maps
-    that to a failed job).
+    that to a failed job). ``initial_prompt`` (#231) replaces the built-in
+    customer prompt when the promotional agent serves the run — same harness
+    contract, different instructions and knowledge bases.
     """
     root = project_root or Path(__file__).resolve().parents[1]
     selected_provider = agent_settings.select_provider(provider.name if provider else None)
@@ -149,7 +152,7 @@ def run_customer_qa_answer(
             session = session_factory(workspace, agent_settings, selected_provider, None)
         else:
             session = SDKCodexSession(workspace, agent_settings, provider=selected_provider)
-        prompt = _initial_prompt(selection, question, language)
+        prompt = initial_prompt or _initial_prompt(selection, question, language)
         searched = False
         for _ in range(_MAX_RUNS):
             output = session.run(prompt, output_schema=qa_rag_turn_schema())
