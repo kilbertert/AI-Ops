@@ -64,15 +64,23 @@ def select_customer_agent(
     The store is tenant-scoped: a missing or cross-tenant agent is
     indistinguishable (absent), so no existence is leaked. Disabled agents and
     drafts are never selected; agents without knowledge bases cannot serve
-    the RAG path.
+    the RAG path. Agents pinned as a published shortcut's promotional target
+    (#231) never serve plain customer QA — that path belongs to the
+    customer-service agent; a promotional agent answers only via the
+    promotional route.
     """
     from aiops_diagnostics.agent_lifecycle import AgentNotFound
 
+    promo_targets = _pinned_promo_agents(store, tenant_id)
     try:
         agents = store.list(tenant_id)
     except Exception:  # store unavailable — fall back to the zero-order path
         return None
     for agent in agents:
+        if agent.agent_id in promo_targets:
+            continue
+        if agent.status != "published" or agent.published_version is None:
+            continue
         if agent.status != "published" or agent.published_version is None:
             continue
         try:
@@ -92,6 +100,27 @@ def select_customer_agent(
             knowledge_base_ids=kb_ids,
         )
     return None
+
+
+def _pinned_promo_agents(store: AgentStore, tenant_id: str) -> frozenset[str]:
+    """Agent ids pinned by any published shortcut as a promotional target.
+
+    #231 follow-up: a promotional agent is distinguishable from the
+    customer-service agent by its shortcut pin, so no extra agent field is
+    needed. Store failures degrade to the empty set (old selection behavior).
+    """
+    from aiops_diagnostics.shortcut_lifecycle import ShortcutStore
+
+    try:
+        rows = ShortcutStore(store.path).list_published(tenant_id, "consumer")
+    except Exception:  # noqa: BLE001 - absent shortcut table keeps old behavior
+        return frozenset()
+    pinned = set()
+    for row in rows:
+        target = row.target_agent_version or ""
+        if target.startswith("agt_"):
+            pinned.add(target.partition("#")[0])
+    return frozenset(pinned)
 
 
 @dataclass(slots=True)
@@ -252,7 +281,13 @@ def _finalize(answer: dict[str, Any], retrieval: _TurnRetrieval) -> dict[str, An
         parsed = QaAnswer.model_validate(
             {
                 "blocks": answer.get("blocks") or [],
-                "retrieval_status": answer.get("retrieval_status"),
+                # A greeting-style answer legitimately needs no retrieval, but
+                # the public contract has no "not_needed" value — a model that
+                # self-reports it (real-model behavior) is normalized here to
+                # not_found instead of failing the whole run.
+                "retrieval_status": answer.get("retrieval_status")
+                if answer.get("retrieval_status") in {"found", "not_found", "unavailable", "limited"}
+                else RetrievalStatus.NOT_FOUND.value,
             }
         )
     except ValidationError as exc:
@@ -437,9 +472,11 @@ def _initial_prompt(selection: CustomerAgentSelection, question: str, language: 
     output_language = language_name(language)
     return f"""Answer the customer's charging/new-energy question as the
 published customer service agent defined below. You have ONE bounded tool:
-`knowledge_search` — request it with a `reason` and a focused `query` when the
-question needs business knowledge (policies, operations, product usage).
-Simple greetings or chit-chat need no retrieval.
+`knowledge_search` — request it when the question needs business knowledge
+(policies, operations, product usage). `query` is REQUIRED and must be a
+SHORT keyword phrase (3-8 words) from the user's question, never a full
+sentence; `reason` stays to one brief sentence. Simple greetings or
+chit-chat need no retrieval.
 
 Agent business behavior instructions (authoritative for tone and scope):
 \"\"\"{selection.prompt}\"\"\"

@@ -292,6 +292,19 @@ def test_greeting_needs_no_search(tmp_path: Path) -> None:
     assert client.calls == []
 
 
+def test_greeting_model_says_not_needed_is_normalized(tmp_path: Path) -> None:
+    """Real-model regression (41 live, 2026-09-15): a greeting answered without
+    retrieval came back with retrieval_status="not_needed", which the public
+    QaAnswer contract rejects — the whole run failed QA_FAILED. The harness now
+    normalizes any non-contract status to not_found; text survives."""
+    client = _SearchClient([])
+    session = _FakeSession([_answer([_text_block("你好！请问有什么可以帮你？")], "not_needed")])
+    result = _run(tmp_path, session, client, question="你好")
+    assert result["retrieval_status"] == "not_found"
+    assert result["blocks"][0]["text"].startswith("你好")
+    assert client.calls == []
+
+
 def test_search_cap_is_two_calls(tmp_path: Path) -> None:
     """The guard refuses a third search; the run reports limited, text remains."""
     client = _SearchClient([[dict(_IMAGE_CHUNK)], []])
@@ -480,6 +493,47 @@ def test_select_customer_agent_requires_published_customer(tmp_path: Path) -> No
     assert selection.version_no == 1
     # Another tenant sees nothing (tenant scope, no existence leak).
     assert select_customer_agent(store, "tenant-b") is None
+
+
+def test_select_customer_agent_skips_promo_pinned_agent(tmp_path: Path) -> None:
+    """A promotional agent pinned by a published shortcut never serves the
+    plain customer QA path (41 live regression, 2026-09-15): creating a newer
+    promotional agent made `select_customer_agent` hand the customer-service
+    questions to the promo agent because list() orders by created_at DESC."""
+    from aiops_diagnostics.shortcut_lifecycle import ShortcutManager, ShortcutStore
+
+    store = AgentStore(tmp_path / "gateway.db")
+    manager = AgentManager(store, knowledge_resolver=_publish_ok())
+    admin = _admin_context()
+    service = manager.create(admin, name="客服", description="", config=_customer_config())
+    manager.publish(admin, service.agent_id, expected_revision=service.revision)
+    promo = manager.create(admin, name="宣传", description="", config=_customer_config())
+    manager.publish(admin, promo.agent_id, expected_revision=promo.revision)
+
+    # Without a shortcut pin the newest (promo) agent still serves — old behavior.
+    selection = select_customer_agent(store, "tenant-a")
+    assert selection is not None and selection.agent_id == promo.agent_id
+
+    # Pin the promo agent via a published shortcut: customer QA returns to the
+    # customer-service agent, and the promo agent serves only its promo route.
+    shortcut_manager = ShortcutManager(ShortcutStore(store.path))
+    shortcut = shortcut_manager.create(
+        admin,
+        {
+            "business_entry": "consumer",
+            "code": "case_exploration",
+            "intent": "case_exploration",
+            "requires_order": False,
+            "sort_order": 10,
+            "labels": {"zh": "客户案例"},
+            "descriptions": {"zh": "说明"},
+            "question_templates": {"zh": "我想看看客户案例"},
+            "target_agent_version": f"{promo.agent_id}#v1",
+        },
+    )
+    shortcut_manager.publish(admin, shortcut.shortcut_id, expected_revision=shortcut.revision)
+    selection = select_customer_agent(store, "tenant-a")
+    assert selection is not None and selection.agent_id == service.agent_id
 
 
 def test_select_customer_agent_skips_operations_type(tmp_path: Path) -> None:
