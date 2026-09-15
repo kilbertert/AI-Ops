@@ -30,7 +30,7 @@ class _Caller:
             delegated=False,
             effective_tenant_id="T-1",
             data_scope=DataScope(type="self"),
-            roles=frozenset(),
+            roles=frozenset({"ROLE_AGENT_ADMIN"}),
             permissions=frozenset({required_scope}),
         )
 
@@ -213,6 +213,42 @@ def test_assistant_high_risk_without_order_returns_clarification(tmp_path: Path)
     assert body["type"] == "clarification"
     assert body["missing_fields"] == ["order_no"]
     assert "qa_id" not in body
+    assert runtime._qa == {}
+
+
+def test_order_bound_shortcut_requires_order_context(tmp_path: Path) -> None:
+    client, runtime = _client(tmp_path)
+    created = client.post(
+        "/v1/shortcuts",
+        headers=_headers(),
+        json={
+            "business_entry": "consumer",
+            "code": "smart_diagnosis",
+            "intent": "order_issue",
+            "requires_order": True,
+            "labels": {"zh": "智能检测"},
+        },
+    )
+    assert created.status_code == 201, created.text
+    shortcut = created.json()
+    published = client.post(
+        f"/v1/shortcuts/{shortcut['shortcut_id']}/publish",
+        headers=_headers(),
+        json={"expected_revision": shortcut["revision"]},
+    )
+    assert published.status_code == 200, published.text
+    resp = client.post(
+        "/v1/assistant/questions",
+        json={
+            "question": "帮我检测这个订单的充电异常",
+            "shortcut_code": "smart_diagnosis",
+        },
+        headers=_headers(),
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["type"] == "clarification"
+    assert body["missing_fields"] == ["order_no"]
     assert runtime._qa == {}
 
 
