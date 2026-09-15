@@ -720,6 +720,28 @@ def create_gateway_app(
         if payload.conversation_id:
             conversation = _resolve_conversation(context, caller, decision, payload.conversation_id)
 
+        # A clicked order-bound shortcut must not silently fall through to
+        # generic QA when the frontend omitted the order context. The listing
+        # metadata is a UI hint; this server-side guard is the authorization
+        # boundary that keeps smart_diagnosis on the order path.
+        if payload.shortcut_code and not payload.order_no:
+            try:
+                shortcut = context.shortcut_manager.store.find_effective_by_code(
+                    caller.effective_tenant_id, str(decision.platform), payload.shortcut_code
+                )
+            except ShortcutError:
+                shortcut = None
+            if shortcut is not None and shortcut.status == "published" and shortcut.requires_order:
+                _record_route_metric(context, caller, route_type="clarification", outcome="completed")
+                return {
+                    **decision.public(),
+                    "type": "clarification",
+                    "language": language,
+                    "question": payload.question,
+                    "missing_fields": ["order_no"],
+                    "message": "请先选择需要检测的订单后，我才能继续处理。",
+                }
+
         # Route 1: explicit order → diagnosis semantics.
         if payload.order_no:
             try:
