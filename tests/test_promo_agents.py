@@ -30,6 +30,7 @@ from aiops_diagnostics.promo_agents import (
     select_promo_agent,
 )
 from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
+from aiops_diagnostics.shortcut_lifecycle import ShortcutManager, ShortcutStore
 
 # ---------------------------------------------------------------------------
 # Unit layer: intent cues, scenario keywords, empty card, target resolution.
@@ -98,6 +99,54 @@ def test_select_promo_agent_pins_published_version(tmp_path: Path) -> None:
     assert select_promo_agent(store, "tenant-a", f"{agent_id}#v99") is None
     assert select_promo_agent(store, "tenant-a", "not-a-ref") is None
     assert select_promo_agent(store, "tenant-a", None) is None
+
+
+def test_global_promo_action_uses_only_current_tenant_binding(tmp_path: Path) -> None:
+    agent_store, target = _promo_store(tmp_path)
+    shortcut_store = ShortcutStore(tmp_path / "gateway.db")
+    shortcut_manager = ShortcutManager(shortcut_store)
+    platform_context = type(
+        "Ctx", (), {"effective_tenant_id": "__platform__", "roles": {"ROLE_PLATFORM_ADMIN"}}
+    )()
+    platform = shortcut_store.create(
+        "__platform__",
+        "consumer",
+        "case_exploration",
+        intent="case_exploration",
+        requires_order=False,
+        sort_order=10,
+        labels={"zh": "客户案例"},
+        descriptions={},
+        question_templates={},
+        target_agent_version=None,
+        created_by="platform",
+    )
+    shortcut_manager.publish(
+        platform_context, platform.shortcut_id, expected_revision=platform.revision, scope="platform"
+    )
+
+    tenant_context = type("Ctx", (), {"effective_tenant_id": "tenant-a", "roles": {"ROLE_AGENT_ADMIN"}})()
+    override = shortcut_store.create(
+        "tenant-a",
+        "consumer",
+        "case_exploration",
+        intent="case_exploration",
+        requires_order=False,
+        sort_order=10,
+        labels={"zh": "客户案例"},
+        descriptions={},
+        question_templates={},
+        target_agent_version=target,
+        created_by="tenant-a",
+    )
+    shortcut_manager.publish(tenant_context, override.shortcut_id, expected_revision=override.revision)
+
+    effective_a = shortcut_store.find_effective_by_code("tenant-a", "consumer", "case_exploration")
+    effective_b = shortcut_store.find_effective_by_code("tenant-b", "consumer", "case_exploration")
+    assert effective_a is not None and effective_a.target_agent_version == target
+    assert effective_b is not None and effective_b.target_agent_version is None
+    assert select_promo_agent(agent_store, "tenant-a", effective_a.target_agent_version) is not None
+    assert select_promo_agent(agent_store, "tenant-b", effective_a.target_agent_version) is None
 
 
 def test_promo_prompt_injects_keywords_and_language(tmp_path: Path) -> None:
