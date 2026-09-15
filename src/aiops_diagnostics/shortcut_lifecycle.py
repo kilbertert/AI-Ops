@@ -348,6 +348,19 @@ class ShortcutStore:
             ).fetchall()
         return [_shortcut_from_row(row) for row in rows]
 
+    def list_published_for_entry(self, business_entry: str) -> list[Shortcut]:
+        """List published tenant rows for migration/admin inspection only."""
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT * FROM shortcuts
+                WHERE business_entry = ? AND status = 'published' AND tenant_id != ?
+                ORDER BY business_entry, code, created_at, tenant_id
+                """,
+                (business_entry, PLATFORM_TENANT_ID),
+            ).fetchall()
+        return [_shortcut_from_row(row) for row in rows]
+
     def list_effective(self, tenant_id: str, business_entry: str) -> list[Shortcut]:
         """Resolve the published platform defaults and tenant rows.
 

@@ -21,6 +21,42 @@ from aiops_diagnostics.gateway_config import GatewayServerSettings
 admin_app = typer.Typer(name="admin", help="AI-Ops 网关管理操作（环境清单收敛）", no_args_is_help=True)
 
 
+def _platform_migration_context() -> Any:
+    from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
+
+    subject = SubjectRecord(b_user_id="platform-shortcut-migration", tenant_id="platform")
+    return ScopeContext.build(
+        caller=subject,
+        subject=subject,
+        delegated=False,
+        effective_tenant_id="platform",
+        data_scope=DataScope(type="all"),
+        roles=frozenset({"ROLE_PLATFORM_ADMIN"}),
+        permissions=frozenset({"aiops:shortcuts:manage"}),
+    )
+
+
+@admin_app.command("migrate-shortcuts")
+def migrate_shortcuts(
+    db: Annotated[Path, typer.Option("--db", exists=True, dir_okay=False, help="gateway 数据库文件")],
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="只输出计划，零写入")] = False,
+) -> None:
+    """将租户复制的快捷动作幂等收敛为平台默认 + 租户覆盖。"""
+    from aiops_diagnostics.shortcut_lifecycle import ShortcutManager, ShortcutStore
+    from aiops_diagnostics.shortcut_migration import migrate_shortcuts as run_migration
+
+    reports = run_migration(
+        ShortcutManager(ShortcutStore(db)), _platform_migration_context(), dry_run=dry_run
+    )
+    typer.echo(
+        json.dumps(
+            {"dry_run": dry_run, "reports": [dataclasses.asdict(report) for report in reports]},
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+
+
 def _reconcile_settings(config_file: Path | None) -> Settings:
     path = config_file if config_file is not None else selected_config_file()
     return Settings.from_config(path)

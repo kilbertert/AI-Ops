@@ -1,5 +1,17 @@
 # 验证与验收计划
 
+## #247 41 快捷动作迁移（实现阶段，真实部署待执行）
+
+实现已加入 `aiops admin migrate-shortcuts --db <gateway.db> [--dry-run]`。命令按
+`consumer/operator + code` 扫描已发布租户动作，通过 `ShortcutManager` 创建并发布平台默认；平台
+版本不携带租户专属 Agent/version，原租户行和历史版本保留。发布异常会删除刚创建的平台草稿，避免
+半完成状态；重复执行只返回 `unchanged:published`。
+
+本地证据：`tests/test_shortcut_migration.py` 与 `tests/test_shortcut_api.py` 已通过；全量 pytest、
+Ruff、格式和 `git diff --check` 将在提交前复跑。以上是 fixture/本地合同证据，**尚未部署 41，不能
+替代真实业务验收**。真实验收必须先对精确 Gateway SQLite 备份，再 dry-run、真实迁移、幂等复跑和
+隔离副本恢复；记录提交/构建身份、环境、时间戳、脱敏 HTTP 摘要及服务日志。未完成前状态保持“待验证”。
+
 ## #246 宣传动作租户内绑定（本地实现/验收补强阶段）
 
 全局 `case_exploration`/`solution_discovery` 动作通过 #244 的有效解析对租户可见；具体宣传

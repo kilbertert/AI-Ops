@@ -880,3 +880,13 @@ PROMPT-01/02 为 41 实机验收（清单收敛 + 公网问答），PROMPT-03 �
 | SHORTCUT-PROMO-TENANT-01 | 本地 dev | 平台 case_exploration；租户 A 有已发布宣传 Agent，租户 B 无绑定 | 两个租户用同一 shortcut_code 提交案例问题 | A 使用本租户 Agent；B 返回诚实空卡片，不跨租户回退 | 临时 SQLite |
 | SHORTCUT-PROMO-TENANT-02 | 本地 dev | 租户 A 覆盖引用租户 B 的 Agent/version | 租户 A 执行案例快捷动作 | 绑定解析失败并诚实降级；不返回 B 的内容、媒体或内部标识 | 临时 SQLite |
 | SHORTCUT-PROMO-TENANT-03 | 41 实机 | #245 合并部署；两个真实会话租户和宣传资料就绪 | 公网分别执行 global case_exploration，并轮询 QA | 结果按租户隔离；有绑定得到本租户卡片，无绑定得到空卡片；保留部署提交、响应摘要和日志 | 保留数据与备份 |
+
+## 41 快捷动作迁移 QA（SHORTCUT-MIGRATION-41）
+
+| ID | 环境 | 前置条件与数据 | 有序动作 | 预期可观察结果 | 清理/证据 |
+|---|---|---|---|---|---|
+| SHORTCUT-MIGRATION-01 | 41 实机 | `aiops-gateway-41.service` active；确认精确 `gateway.db` 路径；至少两个租户有 published 动作 | 记录提交/时间；`cp --reflink=auto gateway.db gateway.db.bak-<timestamp>`；记录 SHA-256；运行 `aiops admin migrate-shortcuts --dry-run --db gateway.db` | JSON 计划可解析；无写入，备份可用且数据库 SHA-256 不变 | 保留备份、命令输出和服务日志；不保存会话/凭据 |
+| SHORTCUT-MIGRATION-02 | 41 实机 | SHORTCUT-MIGRATION-01 通过 | 运行真实迁移；重启服务仅在部署需要时执行；公网读取两个真实租户 `GET /v1/shortcuts` | 平台默认已发布；原租户动作/版本仍存在；无覆盖租户看到默认；响应为 HTTP 200、`type=shortcut_list` | 保留迁移 JSON、部署提交、时间戳和脱敏 HTTP 摘要 |
+| SHORTCUT-MIGRATION-03 | 41 实机 | SHORTCUT-MIGRATION-02 已成功 | 再运行一次迁移；比较平台版本号、租户行数与第一次结果 | 报告均为 `unchanged:published`；无新版本、无重复有效 code、无额外租户记录 | 保留二次输出与 SQLite 只读对比 |
+| SHORTCUT-MIGRATION-04 | 41 实机 | 备份文件、迁移成功库和停机窗口已获批准 | 在隔离副本恢复备份；运行只读 `list_effective`/API 对比恢复前动作和版本 | 恢复副本可读；既有租户动作、绑定和审计版本与备份一致；不直接改生产库 | 删除隔离副本；保留校验和、对比报告和回滚日志 |
+| SHORTCUT-MIGRATION-05 | 41 实机 | SHORTCUT-MIGRATION-02；有覆盖/无覆盖双租户和有效会话 | 分别用 consumer/operator 读取；A 发布/验证覆盖、停用；A/B 执行 `case_exploration` 与 `smart_diagnosis` | 入口隔离；覆盖优先；停用仅 A；宣传不跨租户；智能检测仍要求并校验订单；记录 HTTP 与轮询终态 | 保留脱敏响应、服务日志、QA 时间戳；不写订单/工单 |

@@ -941,3 +941,39 @@ Feature: 统一助手业务意图路由与产品快捷动作
       When 租户 A 执行全局 case_exploration
       Then 服务端返回诚实空卡片或不可用结果
       And 不返回租户 B 的内容、媒体、指标或内部标识
+
+Feature: 41 快捷动作数据迁移
+  迁移将既有租户复制动作收敛为平台默认与租户覆盖，保留审计和回滚能力。
+
+  Rule: 迁移安全且可重复
+
+    Scenario: 迁移前备份并预演
+      Given 41 Gateway 使用已确认的 SQLite 数据库
+      When 管理员先创建精确数据库备份并运行 aiops admin migrate-shortcuts --dry-run
+      Then 备份文件可恢复且预演只输出待创建动作
+      And SQLite 数据库内容与文件校验和不变
+
+    Scenario: 已发布租户动作收敛为平台默认
+      Given 两个租户均有同一 consumer code 的已发布复制动作
+      And 至少一个复制动作绑定了租户专属宣传 Agent/version
+      When 管理员运行 aiops admin migrate-shortcuts
+      Then 创建一个已发布平台默认且平台版本不携带租户 Agent/version
+      And 原租户动作及其历史发布版本保持不变
+
+    Scenario: 迁移失败不留下半完成平台草稿
+      Given 平台默认尚不存在且发布操作失败
+      When 管理员运行迁移
+      Then 迁移报告失败且平台作用域不留下 draft 或 disabled 残留
+      And 原租户动作保持可读
+
+    Scenario: 重复迁移与恢复
+      Given 一次迁移已成功完成
+      When 管理员再次运行迁移并按备份执行恢复演练
+      Then 二次运行不产生新平台动作、版本漂移或租户记录
+      And 恢复后既有租户动作和发布版本仍可通过有效列表读取
+
+    Scenario: 41 双租户公网验收
+      Given 迁移提交已部署到 41 且存在有覆盖与无覆盖的真实会话租户
+      When 分别读取 consumer/operator 快捷动作并执行宣传与 smart_diagnosis 入口
+      Then 无覆盖租户看到平台默认，有覆盖租户覆盖优先，停用只影响自身
+      And 宣传 Agent/知识库不跨租户，smart_diagnosis 仍执行订单归属校验
