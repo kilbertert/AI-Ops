@@ -359,12 +359,17 @@ class GatewayRuntime:
         conversation: dict[str, Any] | None = None,
         conversation_turn_no: int | None = None,
         language: str = DEFAULT_LANGUAGE,
+        promo_target: str | None = None,
+        promo_intent: str | None = None,
     ) -> dict[str, Any]:
         """Start a zero-order general-question job (T3/#153).
 
         With ``conversation`` + ``conversation_turn_no`` (T4/#172) the finished
         answer is written back into the conversation's turn row; failures drop
         the turn so an interrupted generation never survives as a reply.
+        ``promo_target`` + ``promo_intent`` (#231) pin a published promotional
+        agent version (``agt_xxx#vN``) and the card kind (case/solution) its
+        knowledge bases serve instead of the customer-service agent.
         """
         selected_provider = self.diagnostic_settings.agent.select_provider(None)
         selected_key_slot = validate_key_slot_name(selected_provider.resolved_key_slot())
@@ -398,6 +403,8 @@ class GatewayRuntime:
             if conversation is not None and conversation_turn_no is not None
             else None,
             language,
+            promo_target,
+            promo_intent,
         )
         self._futures[qa["qa_id"]] = future
         future.add_done_callback(lambda _: self._futures.pop(qa["qa_id"], None))
@@ -598,6 +605,8 @@ class GatewayRuntime:
         tenant_id: str | None = None,
         conversation_turn: tuple[str, str, int] | None = None,
         language: str = DEFAULT_LANGUAGE,
+        promo_target: str | None = None,
+        promo_intent: str | None = None,
     ) -> None:
         def _finish_turn(answer: dict[str, Any] | None, *, cancelled: bool = False) -> None:
             """Write the finished answer into the conversation turn (if any).
@@ -627,9 +636,22 @@ class GatewayRuntime:
         settings = Settings.from_config(self.gateway_settings.server_config_file)
         settings.agent.run_root = self.diagnostic_settings.agent.run_root
         rag_result = None
-        if tenant_id and self.kb_search_client is not None and self.media_signer is not None:
+        if promo_intent and (not tenant_id or self.kb_search_client is None or self.media_signer is None):
+            from aiops_diagnostics.promo_agents import promo_empty_result
+
+            rag_result = promo_empty_result(language, promo_intent)
+            self.store.update_assistant_question(qa_id, status="completed", result=rag_result)
+        elif tenant_id and self.kb_search_client is not None and self.media_signer is not None:
             rag_result = self._try_customer_rag(
-                qa_id, question, tenant_id, settings, provider, key_slot, language
+                qa_id,
+                question,
+                tenant_id,
+                settings,
+                provider,
+                key_slot,
+                language,
+                promo_target=promo_target,
+                promo_intent=promo_intent,
             )
         if rag_result is not None:
             if isinstance(rag_result, dict) and rag_result.get("status") == "failed":
@@ -810,22 +832,45 @@ class GatewayRuntime:
         provider: str,
         key_slot: str,
         language: str = DEFAULT_LANGUAGE,
+        *,
+        promo_target: str | None = None,
+        promo_intent: str | None = None,
     ) -> dict[str, Any] | None:
         """Run the published customer agent path (T3/#170) or fall back.
 
         Returns the completed job record when the RAG path produced a result;
         None when there is no published customer agent for this tenant or the
         kb dependency is unavailable, letting the caller keep the existing
-        zero-order behavior.
+        zero-order behavior. With ``promo_intent`` (#231) the pinned
+        promotional agent serves instead of the customer-service agent; an
+        unresolvable target or empty library returns the honest empty card
+        and never falls through to FAQ/customer QA.
         """
         from aiops_diagnostics.qa_rag import run_customer_qa_answer, select_customer_agent
 
-        if self.agent_store is None:
-            return None
-        try:
-            selection = select_customer_agent(self.agent_store, tenant_id)
-        except Exception:
-            selection = None
+        selection = None
+        promo_prompt_text: str | None = None
+        if promo_intent:
+            from aiops_diagnostics.promo_agents import promo_empty_result, promo_prompt, select_promo_agent
+
+            promo = (
+                select_promo_agent(self.agent_store, tenant_id, promo_target)
+                if self.agent_store is not None
+                else None
+            )
+            if promo is None:
+                result = promo_empty_result(language, promo_intent)
+                self.store.update_assistant_question(qa_id, status="completed", result=result)
+                return result
+            selection = promo
+            promo_prompt_text = promo_prompt(promo, question, language=language, intent=promo_intent)
+        if selection is None:
+            if self.agent_store is None:
+                return None
+            try:
+                selection = select_customer_agent(self.agent_store, tenant_id)
+            except Exception:
+                selection = None
         if selection is None:
             return None
         assert isinstance(self.kb_search_client, KbServiceClient)
@@ -841,8 +886,15 @@ class GatewayRuntime:
                 key_slot=key_slot,
                 project_root=reference_root(),
                 language=language,
+                initial_prompt=promo_prompt_text,
             )
         except KnowledgeSearchUnavailable:
+            if promo_intent:
+                from aiops_diagnostics.promo_agents import promo_empty_result
+
+                result = promo_empty_result(language, promo_intent)
+                self.store.update_assistant_question(qa_id, status="completed", result=result)
+                return result
             # Retrieval dependency is down: per the T1/T3 contract the model
             # can still answer from its own knowledge with
             # retrieval_status=unavailable — but the runtime cannot reach the
