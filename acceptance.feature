@@ -889,6 +889,24 @@ Feature: 统一助手业务意图路由与产品快捷动作
       Then case_exploration 不出现在 operator 有效动作列表
       And 修改 tenant-id 或入口请求头不能改变有效租户和入口
 
+    Scenario: 租户覆盖优先于平台默认
+      Given 平台已发布 case_exploration 且租户尚无覆盖
+      When 租户管理员发布同 code 的本地文案覆盖
+      Then 该租户读取列表返回本地覆盖
+      And 其他租户仍返回平台默认文案
+
+    Scenario: 租户停用只抑制本租户动作
+      Given 平台已发布 report_fault 且租户尚无覆盖
+      When 租户管理员发布该 code 的租户级停用
+      Then 该租户有效列表不返回 report_fault
+      And 其他租户仍可看到 report_fault
+
+    Scenario: 草稿覆盖不改变线上有效结果
+      Given 平台已发布 smart_diagnosis
+      When 租户管理员创建同 code 的覆盖草稿但未发布
+      Then 该租户仍返回平台默认版本
+      And 草稿不出现在有效列表
+
     Scenario: 智能检测要求先选择订单
       Given 已发布 smart_diagnosis 快捷动作且 requires_order 为 true
       When 前端读取 GET /v1/shortcuts

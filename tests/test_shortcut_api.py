@@ -500,6 +500,70 @@ def test_effective_shortcut_resolution_prefers_published_tenant_row(tmp_path: Pa
     assert [row.labels["zh"] for row in store.list_effective("T-2", "consumer")] == ["平台"]
 
 
+def test_tenant_override_and_suppression_do_not_affect_other_tenants(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    platform = client.post(
+        "/v1/shortcuts?scope=platform",
+        headers=_PLATFORM_HEADERS,
+        json={
+            "business_entry": "consumer",
+            "code": "case_exploration",
+            "intent": "case_exploration",
+            "requires_order": False,
+            "sort_order": 10,
+            "labels": {"zh": "平台"},
+        },
+    ).json()
+    assert (
+        client.post(
+            f"/v1/shortcuts/{platform['shortcut_id']}/publish?scope=platform",
+            headers=_PLATFORM_HEADERS,
+            json={"expected_revision": platform["revision"]},
+        ).status_code
+        == 200
+    )
+
+    override = client.post(
+        "/v1/shortcuts",
+        headers=_HEADERS,
+        json={
+            "business_entry": "consumer",
+            "code": "case_exploration",
+            "intent": "case_exploration",
+            "requires_order": False,
+            "sort_order": 5,
+            "labels": {"zh": "租户覆盖"},
+        },
+    )
+    assert override.status_code == 201
+    assert (
+        client.post(
+            f"/v1/shortcuts/{override.json()['shortcut_id']}/publish",
+            headers=_HEADERS,
+            json={"expected_revision": override.json()["revision"]},
+        ).status_code
+        == 200
+    )
+    assert client.get("/v1/shortcuts", headers=_HEADERS).json()["shortcuts"][0]["label"] == "租户覆盖"
+    assert client.get("/v1/shortcuts", headers=_TENANT_2_HEADERS).json()["shortcuts"][0]["label"] == "平台"
+
+    suppressed = client.post("/v1/shortcut-admin/consumer/case_exploration/suppress", headers=_HEADERS)
+    assert suppressed.status_code == 200, suppressed.text
+    assert suppressed.json()["status"] == "disabled"
+    assert client.get("/v1/shortcuts", headers=_HEADERS).json()["count"] == 0
+    assert client.get("/v1/shortcuts", headers=_TENANT_2_HEADERS).json()["count"] == 1
+
+    restored = client.post("/v1/shortcut-admin/consumer/case_exploration/restore", headers=_HEADERS)
+    assert restored.status_code == 200, restored.text
+    assert client.get("/v1/shortcuts", headers=_HEADERS).json()["shortcuts"][0]["label"] == "租户覆盖"
+
+
+def test_tenant_cannot_suppress_platform_scope_or_other_entry(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    denied = client.post("/v1/shortcut-admin/operator/case_exploration/suppress", headers=_TENANT_2_HEADERS)
+    assert denied.status_code == 403
+
+
 def test_store_seed_bundled_is_idempotent(tmp_path: Path) -> None:
     store = ShortcutStore(tmp_path / "gateway.db")
 
