@@ -827,3 +827,65 @@ Feature: 意图相关的诊断置信阶梯与环境预检
       When 模型仍请求该工具
       Then 工具真实执行并按实际结果记录
       And 预检不代答、不短路执行器
+
+Feature: 统一助手业务意图路由与产品快捷动作
+
+  Rule: 低风险输入不进入订单诊断或业务知识检索
+
+    Scenario: 普通问候不创建重型作业
+      Given 用户已通过消费者入口认证
+      When 用户提交“你好”
+      Then 返回普通问答或轻量回答结果
+      And 不创建订单诊断作业
+      And 不调用业务知识库检索
+
+    Scenario: 无实时工具时天气问题诚实说明能力边界
+      Given 当前服务未配置实时天气工具
+      When 用户提交“今天天气怎么样”
+      Then 不调用业务知识库检索
+      And 回答明确说明无法查询实时天气
+      And 不伪造当前天气数据
+
+    Scenario: FAQ 问题保持同步确定性路径
+      Given 固定问答目录包含“充电枪拔不出来怎么办”
+      When 用户通过统一助手入口提交该问题
+      Then 返回 HTTP 200 且 type 为 faq
+      And 不创建异步 QA 或诊断作业
+
+  Rule: 高风险订单问题必须先完成业务上下文校验
+
+    Scenario: 已授权订单问题进入诊断
+      Given 用户拥有订单 123 的访问权限
+      When 用户提交“订单 123 为什么提前结束”
+      Then 返回 HTTP 202 且 type 为 diagnosis
+      And 返回 diagnosis_id 供诊断轮询
+
+    Scenario: 缺少订单号时返回澄清
+      Given 用户未在请求中提供订单号
+      When 用户提交“是不是扣错钱了”
+      Then 返回 HTTP 200 且 type 为 clarification
+      And missing_fields 包含 order_no
+      And 不创建诊断作业
+
+  Rule: 产品快捷动作只声明入口，执行复用统一助手协议
+
+    Scenario: 智能检测要求先选择订单
+      Given 已发布 smart_diagnosis 快捷动作且 requires_order 为 true
+      When 前端读取 GET /v1/shortcuts
+      Then 返回该动作的稳定 code 和 requires_order 元数据
+      And 前端选择订单后复用 POST /v1/assistant/questions
+
+    Scenario: 故障上报第一版只收集故障描述
+      Given 已发布 report_fault 快捷动作
+      When 用户点击该动作但未提供故障描述
+      Then 返回需要 fault_description 的 clarification
+      And 不创建工单或其他业务写入
+
+  Rule: 宣传内容与客服 FAQ 隔离
+
+    Scenario: 客户案例走宣传知识库卡片
+      Given 已发布 case_exploration 快捷动作和宣传 Agent
+      When 用户点击案例入口或提交客户案例问题
+      Then 返回结构化案例卡片或可轮询的宣传 QA 结果
+      And 不进入客服 FAQ
+      And 结果不泄露知识库内部标识

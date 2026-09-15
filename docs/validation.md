@@ -2,6 +2,16 @@
 
 ## 供应商恢复后的遗留项闭环（2026-09-14 下午，#218 收口）
 
+## 统一助手意图路由与快捷动作（#227/#232）
+
+- 自动化验证：`uv run pytest -q`，当前提交环境全量通过；Ruff、格式检查和
+  `git diff --check` 通过。
+- 覆盖范围：高风险缺少订单号的 `clarification`、快捷动作/宣传路由的 `promo` 指标桶、
+  FAQ/QA/diagnosis 既有合同回归，以及宣传 Agent 的语言、关键词和空检索测试。
+- 真实业务验收：未完成业务验收。测试替身、fixture 和本地模型替身不代表公网真实
+  会话、真实知识库或真实模型链路；供应商/测试身份恢复后需按 `acceptance.feature`
+  和 `qa-plan.md` 复跑。
+
 百炼账户恢复后（KB embedding 与模型通道实测活通：36 kb-service `/search` 返回真实
 chunk，41 隧道 `29380` 探针 200），41 网关同步部署 main `405d691`（58 文件 sha 逐一
 核对一致、备份 `/opt/aiops-41/src/aiops_diagnostics.bak-20260914-405d691`、重启

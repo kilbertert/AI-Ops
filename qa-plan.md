@@ -836,3 +836,16 @@ PROMPT-01/02 为 41 实机验收（清单收敛 + 公网问答），PROMPT-03 �
 | PROMPT-01 | 41 实机 | PR 合并、`admin reconcile` 待执行 | `aiops --config /etc/aiops-41/production.env admin reconcile ops/environments/env-41.toml --db /var/lib/aiops-41/gateway/gateway.db --kb-url http://127.0.0.1:29380 --dry-run` 后实跑 | 2×`updated`（1783 租户产 v4、1942 租户产 v2）；再跑 2×`unchanged`；下一条 QA 即用新提示词 | 无（清单收敛幂等） |
 | PROMPT-02 | 41 公网 | PROMPT-01 完成、有效 thirdSession | 三类问题各一发：①知识库命中题（新加坡无人电动巴士）②通用常识题（充电桩 AC/DC 区别）③超边界题（帮我看看订单扣费对不对） | ①基于知识库作答 ②先声明通用常识非官方政策 ③固定拒答话术或引导诊断/人工，不猜测订单 | 无（只产生问答记录） |
 | PROMPT-03 | 本地 dev | 清单已更新 | `uv run pytest tests/test_agent_manifest.py -q` + `tomllib` 解析 | 10 项通过、TOML 可解析、两个 agent prompt 均为 759 字符定稿 | tmp 自动清理 |
+
+## 统一助手意图路由 QA（INTENT）
+
+| ID | 环境 | 前置 | 操作 | 预期 | 清理 |
+|---|---|---|---|---|---|
+| INTENT-01 | 本地 dev | TestClient + 替身 runtime | 提交“你好” | 不创建 diagnosis；不触发 KB；返回轻量/普通回答 | tmp 自动清理 |
+| INTENT-02 | 本地 dev | 无天气工具 | 提交“今天天气怎么样” | 不检索业务 KB；明确无法查询实时天气；不伪造天气 | tmp 自动清理 |
+| INTENT-03 | 本地 dev | FAQ fixture | 提交“充电枪拔不出来怎么办” | `200 type=faq`，不创建异步作业 | tmp 自动清理 |
+| INTENT-04 | 本地 dev | 已授权订单 123 | 提交“订单 123 为什么提前结束” | `202 type=diagnosis`，返回 diagnosis_id | tmp 自动清理 |
+| INTENT-05 | 本地 dev | 无订单上下文 | 提交“是不是扣错钱了” | `200 type=clarification`，missing_fields 含 order_no | tmp 自动清理 |
+| INTENT-06 | 本地 dev | 已发布 smart_diagnosis | 读取快捷动作并选择订单后提交统一入口 | 返回稳定 code/requires_order；执行走 assistant questions | tmp 自动清理 |
+| INTENT-07 | 本地 dev | 已发布 report_fault | 不提供故障描述触发动作 | clarification 要求 fault_description；不创建工单 | tmp 自动清理 |
+| INTENT-08 | 本地 dev | 已发布 case_exploration + 宣传 Agent | 点击案例入口并轮询 | 结构化宣传卡片；不进入 FAQ；不泄露内部标识 | tmp 自动清理 |

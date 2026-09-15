@@ -28,7 +28,7 @@ from aiops_diagnostics.private_files import ensure_private_directory, protect_pr
 
 METRICS_RETENTION_DAYS = 30
 
-ROUTE_TYPES = frozenset({"faq", "qa", "diagnosis", "debug"})
+ROUTE_TYPES = frozenset({"faq", "qa", "diagnosis", "debug", "clarification", "promo"})
 RETRIEVAL_STATUSES = frozenset({"", "found", "not_found", "unavailable", "limited"})
 OUTCOME_TYPES = frozenset({"completed", "failed", "cancelled", "busy"})
 
@@ -252,7 +252,7 @@ class MetricsStore:
             f"""
             SELECT retrieval_status, COUNT(*) AS runs
             FROM agent_run_metrics
-            WHERE {where} AND route_type IN ('qa', 'debug')
+            WHERE {where} AND route_type IN ('qa', 'promo', 'debug')
             GROUP BY retrieval_status ORDER BY retrieval_status
             """
         )

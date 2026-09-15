@@ -113,6 +113,25 @@ def test_store_rejects_unknown_enum_values(tmp_path: Path) -> None:
         store.record(tenant_id="tenant-a", route_type="qa", outcome="completed", media_count=-1)
 
 
+def test_intent_route_types_are_aggregated_and_promo_retrieval_is_visible(tmp_path: Path) -> None:
+    store = MetricsStore(tmp_path / "gateway.db")
+    store.record(tenant_id="tenant-a", route_type="clarification", outcome="completed")
+    store.record(
+        tenant_id="tenant-a",
+        route_type="promo",
+        outcome="completed",
+        retrieval_status="found",
+        searches=1,
+    )
+
+    summary = store.summary("tenant-a")
+    routes = {row["route_type"]: row for row in summary["by_route"]}
+    assert routes["clarification"]["runs"] == 1
+    assert routes["promo"]["completed"] == 1
+    retrieval = {row["retrieval_status"]: row["runs"] for row in summary["by_retrieval"]}
+    assert retrieval["found"] == 1
+
+
 def test_summary_and_list_never_expose_text(tmp_path: Path) -> None:
     store = MetricsStore(tmp_path / "gateway.db")
     store.record(tenant_id="tenant-a", route_type="qa", outcome="completed")

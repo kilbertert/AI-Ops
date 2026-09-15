@@ -639,6 +639,22 @@ POST https://api.qumall.qushiyun.com/v1/assistant/questions
   轮询 GET /v1/standard/diagnoses/{diagnosis_id} 到 completed
 ```
 
+### 产品快捷动作与澄清
+
+读取当前业务入口的已发布快捷动作：
+
+```http
+GET /v1/shortcuts
+```
+
+响应为 `type=shortcut_list`，每项带稳定 `code`、本地化 `label`/`description`、
+`intent` 与 `requires_order`。`smart_diagnosis` 为 `requires_order=true`，前端先选
+当前用户订单，再将 `order_no` 和问题提交到统一助手入口；快捷动作没有独立执行协议。
+
+高风险问题缺少订单或设备上下文时，统一入口同步返回 `type=clarification`、
+`missing_fields` 和 `message`，不创建 QA/diagnosis 作业。第一版 `report_fault` 只收集
+`fault_description`，不创建工单。
+
 也可在 `question` 里直接带订单号（如"订单 209616...怎么还没退押金"），后端自动提取并归属校验后走订单诊断（非本人订单回落通用问答，不泄露）。
 
 ### 历史分离
