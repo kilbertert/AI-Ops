@@ -872,3 +872,11 @@ PROMPT-01/02 为 41 实机验收（清单收敛 + 公网问答），PROMPT-03 �
 | SHORTCUT-TENANT-02 | 本地 dev | 平台 report_fault 已发布；租户 A 无覆盖 | 租户 A 发布该 code 的租户级停用，读取 A/B 列表 | A 不返回该动作，B 仍返回；平台默认未被修改 | 临时 SQLite |
 | SHORTCUT-TENANT-03 | 本地 dev | 平台 smart_diagnosis 已发布 | 租户 A 创建同 code 草稿但不发布 | A 仍返回平台版本；草稿不进入有效列表 | 临时 SQLite |
 | SHORTCUT-TENANT-04 | 本地 dev | 平台管理员、租户管理员、普通用户各一 | 尝试跨租户读取/修改平台与租户覆盖 | 仅对应作用域角色成功；跨租户和平台写入返回 403/404，不泄露版本 | 临时 SQLite |
+
+## 宣传动作租户绑定 QA（SHORTCUT-PROMO-TENANT）
+
+| ID | 环境 | 前置 | 操作 | 预期 | 清理 |
+|---|---|---|---|---|---|
+| SHORTCUT-PROMO-TENANT-01 | 本地 dev | 平台 case_exploration；租户 A 有已发布宣传 Agent，租户 B 无绑定 | 两个租户用同一 shortcut_code 提交案例问题 | A 使用本租户 Agent；B 返回诚实空卡片，不跨租户回退 | 临时 SQLite |
+| SHORTCUT-PROMO-TENANT-02 | 本地 dev | 租户 A 覆盖引用租户 B 的 Agent/version | 租户 A 执行案例快捷动作 | 绑定解析失败并诚实降级；不返回 B 的内容、媒体或内部标识 | 临时 SQLite |
+| SHORTCUT-PROMO-TENANT-03 | 41 实机 | #245 合并部署；两个真实会话租户和宣传资料就绪 | 公网分别执行 global case_exploration，并轮询 QA | 结果按租户隔离；有绑定得到本租户卡片，无绑定得到空卡片；保留部署提交、响应摘要和日志 | 保留数据与备份 |

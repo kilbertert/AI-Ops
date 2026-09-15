@@ -927,3 +927,17 @@ Feature: 统一助手业务意图路由与产品快捷动作
       Then 返回结构化案例卡片或可轮询的宣传 QA 结果
       And 不进入客服 FAQ
       And 结果不泄露知识库内部标识
+
+    Scenario: 全局宣传动作按租户绑定执行
+      Given 平台已发布 case_exploration 且租户 A 有自己的已发布宣传 Agent
+      And 租户 B 没有宣传绑定
+      When A 和 B 使用同一 shortcut_code 提交客户案例问题
+      Then A 只使用租户 A 的 Agent/知识库
+      And B 返回本地化诚实空卡片
+      And B 不回退到租户 A 的 Agent、知识库或媒体
+
+    Scenario: 错误宣传绑定不跨租户兜底
+      Given 租户 A 的覆盖引用了只属于租户 B 的 Agent/version
+      When 租户 A 执行全局 case_exploration
+      Then 服务端返回诚实空卡片或不可用结果
+      And 不返回租户 B 的内容、媒体、指标或内部标识
