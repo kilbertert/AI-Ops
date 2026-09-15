@@ -1,5 +1,27 @@
 # 验证与验收计划
 
+## 41 前端快捷动作会话租户差异与演示数据（2026-09-15 17:08）
+
+前端提供的 H5 调用按公网正式路径 `GET https://api.mall.qushiyun.com/v1/shortcuts`
+复核：`/v1/shortcuts` 返回 HTTP 200，`/aiops/v1/shortcuts` 返回 404，故后者不是 41 的
+AI-Ops 公网 API。调用最初返回 `shortcut_list/count=0`，但 41 运行库只读盘点显示租户
+`1942105476598861824`、`consumer` 已有 4 条 published 动作；服务 healthy，数据库路径与
+Gateway 进程一致。
+
+根因是该 H5 `third-session` 的 Redis 会话解析出的实际租户为 `1899282205965029376`。
+请求头 `tenant-id=1942105476598861824` 不会覆盖会话身份，读取接口按认证后的有效租户隔离，
+所以没有读取到另一租户的 4 条动作。这是身份/演示数据错位，不是快捷动作查询或发布状态
+故障。
+
+经精确 SQLite 备份后，使用生产 `ShortcutManager` 生命周期在实际会话租户的 `consumer`
+入口创建并发布 `case_exploration`、`solution_discovery`、`smart_diagnosis`、`report_fault`
+4 条演示动作；未直接写表、未重启服务、未写订单/工单/退款/配置。随后用同一公网 H5 会话
+复测：HTTP 200，`type=shortcut_list`、`language=zh`、`count=4`，四个 code 均返回。
+
+边界：本租户未配置宣传 Agent 或宣传知识库，以上数据仅验收快捷动作列表和统一入口元数据；
+客户案例卡片的真实内容验收仍以租户 `1942105476598861824` 的 INTENT-08 证据为准。会话令牌、
+Redis 密码和数据库凭据未记录在本文。
+
 ## 统一助手意图路由与快捷动作真实复跑（2026-09-15，#227/#232 闭环）
 
 41 部署同步：main `621490d` 全量 55 个 git 跟踪文件 sha 逐一核对一致部署到
