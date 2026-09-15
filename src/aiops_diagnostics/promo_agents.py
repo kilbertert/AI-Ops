@@ -1,10 +1,10 @@
 """Promotional case/solution routing (#231).
 
-`case_exploration` and `solution_discovery` run through their own published
-promotional Agent + knowledge bases — never the customer-service FAQ agent.
-The shortcut row's ``target_agent_version`` (``agt_xxx#vN``) pins one
-immutable published version; free-text questions reach the same path via
-named-intent cues or the lightweight classifier.
+`case_exploration` and `solution_discovery` run through the current tenant's
+published promotional Agent + knowledge bases — never the customer-service FAQ
+agent. A tenant shortcut override may pin one immutable published version;
+platform defaults never carry a tenant-owned target. Free-text questions reach
+the same path via named-intent cues or the lightweight classifier.
 
 The promotional knowledge base is the single source of truth for card facts.
 An empty retrieval honestly returns "no available case/solution".
