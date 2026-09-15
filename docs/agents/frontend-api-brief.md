@@ -639,23 +639,113 @@ POST https://api.qumall.qushiyun.com/v1/assistant/questions
   轮询 GET /v1/standard/diagnoses/{diagnosis_id} 到 completed
 ```
 
-### 产品快捷动作与澄清
+### 场景 D：产品快捷动作（shortcut）与澄清（clarification）
 
-读取当前业务入口的已发布快捷动作：
+#### D.1 GET /v1/shortcuts — 读取当前入口的已发布快捷动作
+
+页面加载时调用一次（产品首页按钮的渲染源）。**任何通过助手鉴权的调用者都可读**，
+不需要管理角色。
 
 ```http
 GET /v1/shortcuts
+third-session: <当前用户的有效 thirdSession>   # 全小写连字符（§2.1 的坑）
+tenant-id: <租户ID>
+X-Business-Entry: consumer                       # 建议始终显式（§2.1）
+Accept-Language: zh                              # 可选，影响 label/description 语言
 ```
 
-响应为 `type=shortcut_list`，每项带稳定 `code`、本地化 `label`/`description`、
-`intent` 与 `requires_order`。`smart_diagnosis` 为 `requires_order=true`，前端先选
-当前用户订单，再将 `order_no` 和问题提交到统一助手入口；快捷动作没有独立执行协议。
+响应 `200`（2026-09-15 41 公网真实返回）：
 
-高风险问题缺少订单或设备上下文时，统一入口同步返回 `type=clarification`、
-`missing_fields` 和 `message`，不创建 QA/diagnosis 作业。第一版 `report_fault` 只收集
-`fault_description`，不创建工单。
+```json
+{
+  "type": "shortcut_list",
+  "language": "zh",
+  "count": 4,
+  "shortcuts": [
+    {
+      "code": "case_exploration",
+      "intent": "case_exploration",
+      "requires_order": false,
+      "sort_order": 10,
+      "label": "客户案例",
+      "description": "查看充电运营标杆案例",
+      "question_template": "我想看看客户案例",
+      "target_agent_version": "agt_ed443cae10ac4ba78c81b9d1b43fd91d#v1"
+    },
+    {
+      "code": "smart_diagnosis",
+      "intent": "order_issue",
+      "requires_order": true,
+      "sort_order": 20,
+      "label": "智能检测",
+      "description": "选择订单后自动诊断充电异常",
+      "question_template": "帮我检测这个订单的充电异常",
+      "target_agent_version": null
+    }
+  ]
+}
+```
 
-也可在 `question` 里直接带订单号（如"订单 209616...怎么还没退押金"），后端自动提取并归属校验后走订单诊断（非本人订单回落通用问答，不泄露）。
+**字段语义（前端怎么用）**：
+
+| 字段 | 用途 |
+|---|---|
+| `code` | **稳定标识**，前端把交互行为绑到它，不要绑 `label`（文案会改）；点击时原样回传（见 D.2） |
+| `intent` | 服务端内部意图（`case_exploration`/`solution_discovery`/`order_issue`/`report_fault` 等），仅供前端区分展示形态，**不需要回传** |
+| `requires_order` | `true` → 点击后先弹**订单选择器**（用户订单列表由 BFF 既有接口提供），选完再把 `order_no`+问题提交统一入口；`false` → 直接提交 |
+| `sort_order` | 按升序渲染按钮 |
+| `label` / `description` / `question_template` | 按 `Accept-Language` 本地化（缺失翻译回退中文）；`question_template` 可作为默认问题文案预填输入框 |
+| `target_agent_version` | 宣传类快捷动作绑定的已发布 agent 版本，**前端不需要理解，原样忽略**（服务端路由用；不要展示给用户） |
+
+- 列表**只含已发布**行：草稿不可见、已停用即消失——前端不需要、也无法感知管理端变更以外的状态。
+- `language` 回显实际生效语言（§2.4 同一规则），可据此核对。
+- 只列当前租户+当前业务入口的行，跨端/跨租户天然隔离。
+
+错误：401/403/409/503 与 §2.2 通用处理一致（409=平台无法唯一确定，同 FAQ 线）。
+
+#### D.2 快捷动作的执行 —— 没有独立执行协议，走统一助手入口
+
+点击快捷动作后，把 `question`（用 `question_template` 或用户输入）和 **`shortcut_code`** 提交到场景 B 的统一入口：
+
+```http
+POST /v1/assistant/questions
+{
+  "question": "我想看看客户案例",
+  "shortcut_code": "case_exploration"
+}
+```
+
+- `shortcut_code` 可选字段（1-64 字符，`[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}`）；传了且命中已发布行 → 服务端按该行的意图路由（宣传类 → 独立宣传 agent；订单类 → 诊断）。
+- **`requires_order=true` 的动作（如 smart_diagnosis）**：先弹订单选择器，`question` 里带订单或显式传 `order_no`（场景 C 合同），服务端做归属校验。
+- **`requires_order=false` 的宣传类动作（案例/方案）**：直接提交 → `202 type=qa` → 按 `retry_after_ms` 轮询（场景 B 完全相同的合同）；completed 后 `result.blocks[]` 是四段式卡片（标题/行业痛点/破局方案/商业成果），按块渲染即可（不解析文本）。
+- 未传 `shortcut_code` 时，用户自由输入里明确出现"客户案例/行业解决方案"等词也会命中宣传路由；普通问题走场景 B。
+- 过期/未发布的 `shortcut_code` 被服务端忽略，按普通问题处理（不报错）。
+
+#### D.3 type=clarification —— 同步澄清（不建作业）
+
+高风险问题（扣费/订单争议类）缺少订单上下文时，统一入口**同步**返回：
+
+```json
+{
+  "type": "clarification",
+  "language": "zh",
+  "question": "是不是扣错钱了",
+  "missing_fields": ["order_no"],
+  "message": "请提供需要核查的订单号后，我才能继续处理。"
+}
+```
+
+- HTTP 200，**没有 qa_id/diagnosis_id，不轮询**——渲染 `message` 并按 `missing_fields` 引导补信息（`order_no` → 弹订单选择器）后重新提交。
+- `report_fault` 第一版只收集故障描述，**不创建工单**。
+
+#### D.4 响应 type 速查（统一入口 POST /v1/assistant/questions）
+
+| type | HTTP | 含义 | 前端动作 |
+|---|---:|---|---|
+| `faq` | 200 | FAQ 命中 | 直接渲染 answer（场景 A） |
+| `clarification` | 200 | 缺关键信息 | 渲染 message + 按 missing_fields 补信息（D.3） |
+| `qa` | 202 | 问答/宣传卡片作业 | 按 retry_after_ms 轮询（场景 B） |
+| `diagnosis` | 202 | 订单诊断 | 轮询诊断线（场景 C） |
 
 ### 历史分离
 
