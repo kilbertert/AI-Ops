@@ -487,6 +487,20 @@ class ShortcutStore:
                 self._raise_update_error(connection, shortcut_id, tenant_id, expected_revision)
         return self.get(shortcut_id, tenant_id)
 
+    def enable(self, shortcut_id: str, tenant_id: str, expected_revision: int) -> Shortcut:
+        now = _iso(datetime.now(UTC))
+        with self._connection(write=True) as connection:
+            updated = connection.execute(
+                """
+                UPDATE shortcuts SET status = 'published', revision = revision + 1, updated_at = ?
+                WHERE shortcut_id = ? AND tenant_id = ? AND status = 'disabled' AND revision = ?
+                """,
+                (now, shortcut_id, tenant_id, expected_revision),
+            )
+            if updated.rowcount != 1:
+                self._raise_update_error(connection, shortcut_id, tenant_id, expected_revision)
+        return self.get(shortcut_id, tenant_id)
+
     def delete_draft(self, shortcut_id: str, tenant_id: str, expected_revision: int) -> None:
         with self._connection(write=True) as connection:
             deleted = connection.execute(
@@ -674,6 +688,48 @@ class ShortcutManager:
     ) -> Shortcut:
         tenant_id = self._scope_tenant(context, scope, EDIT_ROLES)
         return self.store.fork_draft(_id(shortcut_id), tenant_id, expected_revision)
+
+    def suppress(self, context: Any, *, business_entry: str, code: str) -> Shortcut:
+        """Publish a tenant-only disabled override for a platform action."""
+        tenant_id = self._scope_tenant(context, TENANT_SCOPE, PUBLISH_ROLES)
+        entry = _entry(business_entry)
+        stable_code = _code(code)
+        existing = self.store.find_by_code(tenant_id, entry, stable_code)
+        if existing is not None:
+            if existing.status == "disabled":
+                return existing
+            if existing.status != "published":
+                raise ShortcutConflict("shortcut override is not published")
+            return self.store.disable(existing.shortcut_id, tenant_id, existing.revision)
+        platform = self.store.find_by_code(PLATFORM_TENANT_ID, entry, stable_code)
+        if platform is None or platform.status != "published":
+            raise ShortcutNotFound("platform shortcut not found")
+        created = self.store.create(
+            tenant_id,
+            entry,
+            stable_code,
+            intent=platform.intent,
+            requires_order=platform.requires_order,
+            sort_order=platform.sort_order,
+            labels=platform.labels,
+            descriptions=platform.descriptions,
+            question_templates=platform.question_templates,
+            target_agent_version=None,
+            created_by=_actor(context),
+        )
+        self.publish(context, created.shortcut_id, expected_revision=created.revision)
+        published = self.store.get(created.shortcut_id, tenant_id)
+        return self.store.disable(published.shortcut_id, tenant_id, published.revision)
+
+    def restore(self, context: Any, *, business_entry: str, code: str) -> Shortcut:
+        """Restore the previous tenant override after a tenant suppression."""
+        tenant_id = self._scope_tenant(context, TENANT_SCOPE, PUBLISH_ROLES)
+        existing = self.store.find_by_code(tenant_id, _entry(business_entry), _code(code))
+        if existing is None:
+            raise ShortcutNotFound("tenant shortcut override not found")
+        if existing.status != "disabled":
+            return existing
+        return self.store.enable(existing.shortcut_id, tenant_id, existing.revision)
 
     def rollback(
         self,

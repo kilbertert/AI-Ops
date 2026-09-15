@@ -863,3 +863,12 @@ PROMPT-01/02 为 41 实机验收（清单收敛 + 公网问答），PROMPT-03 �
 | SHORTCUT-GLOBAL-03 | 本地 dev | 平台 smart_diagnosis 已发布 | 通过统一助手提交 shortcut_code，并使用无订单上下文 | 解析到全局动作后仍按当前租户返回订单上下文要求；不接受自报租户 | 临时 SQLite |
 | SHORTCUT-GLOBAL-04 | 本地 dev | 平台管理员与普通租户角色各一 | 平台管理员执行全局生命周期；租户管理员尝试同操作 | 平台操作成功；租户管理员返回 403；发布快照不可变 | 临时 SQLite |
 | SHORTCUT-GLOBAL-05 | 41 实机 | #244 部署完成；至少两个会话租户 | 公网读取 consumer/operator 列表并提交一个全局动作 | 全局动作对无覆盖租户可见；入口隔离、会话租户隔离和现有订单授权不回退；保留 HTTP 响应摘要和日志 | 保留数据与备份 |
+
+## 租户快捷动作覆盖 QA（SHORTCUT-TENANT）
+
+| ID | 环境 | 前置 | 操作 | 预期 | 清理 |
+|---|---|---|---|---|---|
+| SHORTCUT-TENANT-01 | 本地 dev | 平台 consumer 动作已发布；两个租户均无覆盖 | 租户 A 发布同 code 的文案/排序覆盖，分别读取 A/B 列表 | A 返回覆盖，B 返回平台默认；每个 code 只有一条有效结果 | 临时 SQLite |
+| SHORTCUT-TENANT-02 | 本地 dev | 平台 report_fault 已发布；租户 A 无覆盖 | 租户 A 发布该 code 的租户级停用，读取 A/B 列表 | A 不返回该动作，B 仍返回；平台默认未被修改 | 临时 SQLite |
+| SHORTCUT-TENANT-03 | 本地 dev | 平台 smart_diagnosis 已发布 | 租户 A 创建同 code 草稿但不发布 | A 仍返回平台版本；草稿不进入有效列表 | 临时 SQLite |
+| SHORTCUT-TENANT-04 | 本地 dev | 平台管理员、租户管理员、普通用户各一 | 尝试跨租户读取/修改平台与租户覆盖 | 仅对应作用域角色成功；跨租户和平台写入返回 403/404，不泄露版本 | 临时 SQLite |

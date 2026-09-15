@@ -1746,6 +1746,30 @@ def create_gateway_app(
             raise _shortcut_error(exc) from exc
         return version.to_dict()
 
+    @app.post("/v1/shortcut-admin/{business_entry}/{code}/suppress")
+    def suppress_shortcut(
+        business_entry: str,
+        code: str,
+        caller: ScopeContext = Depends(authenticated_shortcut_caller),  # noqa: B008
+    ) -> dict[str, Any]:
+        try:
+            shortcut = context.shortcut_manager.suppress(caller, business_entry=business_entry, code=code)
+        except ShortcutError as exc:
+            raise _shortcut_error(exc) from exc
+        return shortcut.to_dict()
+
+    @app.post("/v1/shortcut-admin/{business_entry}/{code}/restore")
+    def restore_shortcut(
+        business_entry: str,
+        code: str,
+        caller: ScopeContext = Depends(authenticated_shortcut_caller),  # noqa: B008
+    ) -> dict[str, Any]:
+        try:
+            shortcut = context.shortcut_manager.restore(caller, business_entry=business_entry, code=code)
+        except ShortcutError as exc:
+            raise _shortcut_error(exc) from exc
+        return shortcut.to_dict()
+
     @app.post("/v1/shortcuts/{shortcut_id}/disable")
     def disable_shortcut(
         shortcut_id: str,
