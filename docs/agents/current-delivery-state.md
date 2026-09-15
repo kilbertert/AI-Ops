@@ -5,7 +5,8 @@
 > `docs/开发进度.md`，逐项证据在 `docs/validation.md`。
 >
 > **最后核验**：2026-09-15 17:08（Asia/Shanghai）
-> **仓库基线**：`origin/main@12dca31`（PR #240，承接 PR #239）
+> **仓库基线**：读取时在 canonical checkout 执行 `git rev-parse origin/main`；最近固化的
+> 状态索引变更为 PR #241（承接 PR #240、#239）。
 
 ## 一分钟结论
 
