@@ -869,6 +869,26 @@ Feature: 统一助手业务意图路由与产品快捷动作
 
   Rule: 产品快捷动作只声明入口，执行复用统一助手协议
 
+    Scenario: 平台发布的动作对新租户默认可见
+      Given 平台管理员已在 consumer 入口发布全局快捷动作 case_exploration
+      And 租户没有该 code 的本地覆盖
+      When 该租户通过 GET /v1/shortcuts 读取快捷动作
+      Then 返回已发布的 case_exploration 稳定 code 和本地化文案
+      And 结果不要求为该租户复制一条默认数据库记录
+
+    Scenario: 全局动作仍按当前租户解析执行
+      Given 平台已发布 smart_diagnosis 快捷动作
+      And 用户来自已验证的租户上下文
+      When 用户提交 shortcut_code=smart_diagnosis
+      Then 服务端使用当前会话租户和入口解析动作
+      And 仍要求该用户提供并通过归属校验的订单上下文
+
+    Scenario: 平台入口与租户入口隔离
+      Given 平台仅在 consumer 入口发布 case_exploration
+      When 用户从 operator 入口读取 GET /v1/shortcuts
+      Then case_exploration 不出现在 operator 有效动作列表
+      And 修改 tenant-id 或入口请求头不能改变有效租户和入口
+
     Scenario: 智能检测要求先选择订单
       Given 已发布 smart_diagnosis 快捷动作且 requires_order 为 true
       When 前端读取 GET /v1/shortcuts

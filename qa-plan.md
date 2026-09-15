@@ -853,3 +853,13 @@ PROMPT-01/02 为 41 实机验收（清单收敛 + 公网问答），PROMPT-03 �
 | INTENT-06 | 本地 dev | 已发布 smart_diagnosis | 读取快捷动作并选择订单后提交统一入口 | 返回稳定 code/requires_order；执行走 assistant questions | PASS：GET /v1/shortcuts 4 条含 requires_order；case_exploration 带 target_agent_version |
 | INTENT-07 | 本地 dev | 已发布 report_fault | 不提供故障描述触发动作 | clarification 要求 fault_description；不创建工单 | PASS（形态差异）：实际为 qa 完成态收集故障信息（类型/桩号/时间/安全），不建工单；clarification 形态待后续 |
 | INTENT-08 | 本地 dev | 已发布 case_exploration + 宣传 Agent | 点击案例入口并轮询 | 结构化宣传卡片；不进入 FAQ；不泄露内部标识 | PASS：新加坡无人巴士案例 found 四段卡片+video+reference；无料场景 not_found 诚实空卡片；solution_discovery 本地化空卡片；promo 指标桶正确归因 |
+
+## 平台级快捷动作目录 QA（SHORTCUT-GLOBAL）
+
+| ID | 环境 | 前置 | 操作 | 预期 | 清理 |
+|---|---|---|---|---|---|
+| SHORTCUT-GLOBAL-01 | 本地 dev | 平台 consumer 动作已发布；租户无覆盖 | 以两个不同租户读取 GET /v1/shortcuts | 两个租户均看到同一已发布 code、排序和本地化文案；无租户复制要求 | 临时 SQLite |
+| SHORTCUT-GLOBAL-02 | 本地 dev | consumer 已发布、operator 未发布同 code | 分别从 consumer/operator 入口读取列表 | consumer 返回动作；operator 不返回；入口请求不能跨域 | 临时 SQLite |
+| SHORTCUT-GLOBAL-03 | 本地 dev | 平台 smart_diagnosis 已发布 | 通过统一助手提交 shortcut_code，并使用无订单上下文 | 解析到全局动作后仍按当前租户返回订单上下文要求；不接受自报租户 | 临时 SQLite |
+| SHORTCUT-GLOBAL-04 | 本地 dev | 平台管理员与普通租户角色各一 | 平台管理员执行全局生命周期；租户管理员尝试同操作 | 平台操作成功；租户管理员返回 403；发布快照不可变 | 临时 SQLite |
+| SHORTCUT-GLOBAL-05 | 41 实机 | #244 部署完成；至少两个会话租户 | 公网读取 consumer/operator 列表并提交一个全局动作 | 全局动作对无覆盖租户可见；入口隔离、会话租户隔离和现有订单授权不回退；保留 HTTP 响应摘要和日志 | 保留数据与备份 |
