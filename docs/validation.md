@@ -1,16 +1,40 @@
 # 验证与验收计划
 
-## #247 41 快捷动作迁移（实现阶段，真实部署待执行）
+## #247 41 快捷动作迁移（2026-09-15，真实部署与部分验收完成）
 
 实现已加入 `aiops admin migrate-shortcuts --db <gateway.db> [--dry-run]`。命令按
 `consumer/operator + code` 扫描已发布租户动作，通过 `ShortcutManager` 创建并发布平台默认；平台
 版本不携带租户专属 Agent/version，原租户行和历史版本保留。发布异常会删除刚创建的平台草稿，避免
 半完成状态；重复执行只返回 `unchanged:published`。
 
-本地证据：`tests/test_shortcut_migration.py` 与 `tests/test_shortcut_api.py` 已通过；全量 pytest、
-Ruff、格式和 `git diff --check` 将在提交前复跑。以上是 fixture/本地合同证据，**尚未部署 41，不能
-替代真实业务验收**。真实验收必须先对精确 Gateway SQLite 备份，再 dry-run、真实迁移、幂等复跑和
-隔离副本恢复；记录提交/构建身份、环境、时间戳、脱敏 HTTP 摘要及服务日志。未完成前状态保持“待验证”。
+本地证据：PR #251（合并提交 `1f7088880105d5364a26bb470ca4d3a5959aa6e9`）的 Linux
+`verify`、Windows `windows-verify`、Workflow policy 均通过；本地全量 `pytest`、Ruff、格式和
+`git diff --check` 通过。以上 fixture/本地合同证据不能替代真实业务验收。
+
+真实 41 操作（`47.97.160.153`，`aiops-gateway-41.service`，2026-09-15 20:47~20:58
+Asia/Shanghai）如下：
+
+- 备份 `/var/lib/aiops-41/gateway/gateway.db.bak-shortcut-migration-20260915T204739+0800`，
+  备份前源库 SHA-256 为 `8ab82625dfb68423994b1359ce6ae87fb9086875642b06180f3c2f924e1ab812`；
+  服务重启后 `/health` 为 200，`business_mutations=disabled`。部署时发现旧运行副本源文件属主为
+  `www:www` 且服务用户不可读，已将 `/opt/aiops-41/src/aiops_diagnostics` 恢复为
+  `aiops41:aiops41` 可读权限后 healthy；该问题和修复已由 journal 保留。
+- `--dry-run` 返回 4 个 `create` 且源库 SHA-256 保持不变；真实迁移创建 consumer 平台默认
+  `case_exploration`、`solution_discovery`、`smart_diagnosis`、`report_fault` 各 1 条，平台
+  snapshot 均不含租户 Agent/version；两个原租户各自 4 条已发布行和历史版本保留。
+- 第二次运行返回 4 个 `unchanged:published`，未产生新平台版本或重复有效 code。隔离副本恢复
+  演练 `PRAGMA integrity_check=ok`，恢复副本平台行数为 0、两租户各 4 条，证明备份可恢复且不
+  直接修改生产库。
+- 使用既有真实 H5 会话通过公网 `https://api.mall.qushiyun.com/v1/shortcuts` 复测：
+  `consumer` HTTP 200、`type=shortcut_list`、`language=zh`、`count=4`，四个稳定 code 均返回；
+  `case_exploration` 的租户绑定元数据仍存在。该会话不具备 operator B 端主体，发送
+  `X-Business-Entry: operator` 不能作为 operator 成功验收；需业务方提供唯一有效 operator 会话，
+  当前不将其标记为通过。当前两个真实租户均保留原动作覆盖，因此“无覆盖新租户公网可见”也待
+  业务方提供新租户会话后补跑。
+
+结论：迁移安全性、幂等性、备份恢复和已有 H5 consumer 列表已取得真实证据；operator 入口、
+无覆盖新租户、租户停用以及宣传/诊断双租户公网动作执行仍为 **待验证**。fixture/数据库只读检查
+不能冒充这些业务验收。
 
 ## #246 宣传动作租户内绑定（本地实现/验收补强阶段）
 
