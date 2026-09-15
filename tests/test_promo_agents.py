@@ -334,7 +334,12 @@ def _admin_context() -> ScopeContext:
     )
 
 
-def _publish_ok():
-    from tests.test_qa_rag import _PublishOkResolver
+class _PublishOkResolver:
+    """Knowledge binding resolver that accepts publishes (test fixture)."""
 
+    def validate(self, tenant_id: str, knowledge_base_ids: tuple[str, ...]) -> None:
+        del tenant_id, knowledge_base_ids
+
+
+def _publish_ok():
     return _PublishOkResolver()
