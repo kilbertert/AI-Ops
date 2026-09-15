@@ -1,5 +1,35 @@
 # 验证与验收计划
 
+## #247 真实验收续测（2026-09-15 21:27~21:45，部分通过）
+
+本轮基于已合并的快捷动作迁移 `1f708888` 与订单快捷动作修复 `48cfb2c`，环境为 41
+（`47.97.160.153`、`aiops-gateway-41.service`、公网 `https://api.mall.qushiyun.com`）。
+所有公网请求均使用真实 H5 会话；会话值不写入仓库或验收记录。
+
+- **入口隔离缺陷已定位并修复**：公网 Nginx `/v1/` 原先硬编码
+  `proxy_set_header X-Business-Entry "consumer"`，导致 `operator` 被错误路由到 consumer。
+  已备份 `/www/server/panel/vhost/rewrite/api.mall.qushiyun.com.conf.bak-shortcut-entry-20260915T212737`，
+  改为透传请求头、缺省回退 consumer；`nginx -t` 成功，使用面板 init 脚本 reload。该主机
+  配置变更未写入代码仓库。
+- **公网复测**：同一真实会话发送 `X-Business-Entry: consumer` 得到 HTTP 200、
+  `type=shortcut_list`、`language=zh`、`count=4`，含 `case_exploration`、
+  `solution_discovery`、`smart_diagnosis`、`report_fault`；发送 `operator` 得到 HTTP 503、
+  `PLATFORM_UNAVAILABLE/operator identity is unavailable`；发送非法入口得到 HTTP 403、
+  `PLATFORM_FORBIDDEN`。这证明入口头已被正确透传，当前会话确实没有唯一 B 端 operator 主体。
+- **订单动作真实复测**：部署 `48cfb2c` 后，`shortcut_code=smart_diagnosis` 且无
+  `order_no` 返回 HTTP 200 `type=clarification`、`missing_fields=["order_no"]`，无 `qa_id`；
+  该行为通过公网确认。尝试使用已知历史订单号时，当前真实会话返回统一 HTTP 404
+  `ORDER_NOT_FOUND`，未创建诊断，符合订单属主隔离；当前没有可用于成功诊断的订单属主会话。
+- **宣传动作真实复测**：`shortcut_code=case_exploration` 能创建 HTTP 202 QA 作业，
+  但轮询终态为 `failed/QA_FAILED`，错误为供应商百炼 `400 Arrearage`（欠费/账户状态），
+  未取得宣传卡片；这属于外部 provider 阻塞，不能记录为业务通过。
+- 41 服务仍 `active`，本机 `/health=200`、`business_mutations=disabled`；部署后
+  `gateway_api.py` SHA-256 为 `8a3f0e3790ed4db7d8349b40d4ba029d4e553ad7b0a0051909dbb5ace8bf46ce`。
+
+结论：入口隔离和 smart_diagnosis 缺订单保护已真实通过；宣传内容完成态、operator 正向
+身份、无覆盖新租户、租户停用/恢复及有订单 smart_diagnosis 仍待业务身份、数据和供应商恢复，
+因此 #247 继续保持 OPEN。
+
 ## #247 41 快捷动作迁移（2026-09-15，真实部署与部分验收完成）
 
 实现已加入 `aiops admin migrate-shortcuts --db <gateway.db> [--dry-run]`。命令按
