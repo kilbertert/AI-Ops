@@ -641,7 +641,7 @@ POST https://api.qumall.qushiyun.com/v1/assistant/questions
 
 ### 场景 D：产品快捷动作（shortcut）与澄清（clarification）
 
-#### D.1 GET /v1/shortcuts — 读取当前入口的已发布快捷动作
+#### D.1 GET /v1/shortcuts — 读取当前入口的有效快捷动作
 
 页面加载时调用一次（产品首页按钮的渲染源）。**任何通过助手鉴权的调用者都可读**，
 不需要管理角色。
@@ -653,6 +653,9 @@ tenant-id: <租户ID>
 X-Business-Entry: consumer                       # 建议始终显式（§2.1）
 Accept-Language: zh                              # 可选，影响 label/description 语言
 ```
+
+该读取接口复用助手只读权限；创建、发布、停用等管理操作继续需要
+`aiops:shortcuts:manage`，并额外校验对应管理角色。
 
 响应 `200`（2026-09-15 41 公网真实返回）：
 
@@ -697,9 +700,11 @@ Accept-Language: zh                              # 可选，影响 label/descrip
 | `label` / `description` / `question_template` | 按 `Accept-Language` 本地化（缺失翻译回退中文）；`question_template` 可作为默认问题文案预填输入框 |
 | `target_agent_version` | 宣传类快捷动作绑定的已发布 agent 版本，**前端不需要理解，原样忽略**（服务端路由用；不要展示给用户） |
 
-- 列表**只含已发布**行：草稿不可见、已停用即消失——前端不需要、也无法感知管理端变更以外的状态。
+- 列表是当前入口的**有效合并结果**：平台已发布默认动作对所有租户可见；租户已发布覆盖优先，
+  租户级停用抑制平台默认；草稿不可见。前端不需要感知管理端的作用域细节。
 - `language` 回显实际生效语言（§2.4 同一规则），可据此核对。
-- 只列当前租户+当前业务入口的行，跨端/跨租户天然隔离。
+- 只列当前认证租户的有效结果和当前业务入口；平台默认可以跨租户可见，但订单、Agent、知识库、
+  媒体和执行数据仍按当前租户隔离。
 
 错误：401/403/409/503 与 §2.2 通用处理一致（409=平台无法唯一确定，同 FAQ 线）。
 

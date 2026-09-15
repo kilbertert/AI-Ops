@@ -13,7 +13,7 @@
 | 交付项 | 当前状态 | 证据/边界 |
 |---|---|---|
 | 意图路由 | 已实现并在 41 真实复跑 | 寒暄/FAQ/订单诊断/缺订单号澄清/宣传路由见 `validation.md` 的 INTENT-01..08。`今天天气怎么样` 的 FAQ 关键词假阳性仍是独立遗留。 |
-| 快捷动作 API | 已实现 | `GET /v1/shortcuts` 仅返回会话解析出的 `tenant + business_entry` 下的 `published` 行；管理生命周期为 draft → published → disabled。前端合同见 [frontend-api-brief.md](frontend-api-brief.md#d1-get-v1shortcuts--读取当前入口的已发布快捷动作)。 |
+| 快捷动作 API | 已实现，平台默认目录待 41 部署 | #244 已加入平台默认 + 租户有效合并解析；`GET /v1/shortcuts` 仍按会话租户和 `business_entry` 返回有效结果。平台默认对所有租户可见，租户覆盖/停用优先；41 迁移和真实验收留给 #247。 |
 | 1942105476598861824/consumer | 已有 4 条已发布动作 | `case_exploration`、`solution_discovery`、`smart_diagnosis`、`report_fault`；前两者中的 `case_exploration` 已绑定宣传 Agent 版本。 |
 | 当前前端会话演示 | 已补齐 | 2026-09-15 发现某 H5 `third-session` 实际解析为租户 `1899282205965029376`，请求头 `tenant-id` 不能覆盖该身份；已在其 `consumer` 入口创建并发布同样 4 条动作，公网复测 HTTP 200、`count=4`。 |
 | 宣传内容点击验收 | 仅 1942105476598861824 有真实素材闭环 | 当前 H5 演示租户的 4 条动作仅用于列表与入口流程，未配置本租户宣传 Agent/知识库；不要宣称其客户案例卡片已完成真实内容验收。 |
