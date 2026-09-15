@@ -1,7 +1,8 @@
-"""Tenant-scoped shortcut drafts and immutable published versions (#230).
+"""Platform and tenant shortcut drafts with immutable published versions (#230/#244).
 
 Independent product-entry resource — NOT the Agent ``quick_commands`` model.
-Identity is ``(tenant_id, business_entry, code)``; the lifecycle mirrors
+Tenant identity is ``(tenant_id, business_entry, code)``; platform defaults use
+an internal platform scope. The lifecycle mirrors
 agent_lifecycle (draft -> published -> disabled) so operators already know
 the semantics, but the store, permission scope, and version snapshots are
 separate. Editing a draft never mutates a snapshot an in-flight client may
@@ -34,6 +35,11 @@ SHORTCUT_INTENTS = frozenset(
     {"knowledge", "casual", "order_issue", "report_fault", "case_exploration", "solution_discovery"}
 )
 SHORTCUT_STATUSES = frozenset({"draft", "published", "disabled"})
+PLATFORM_SCOPE = "platform"
+TENANT_SCOPE = "tenant"
+PLATFORM_TENANT_ID = "__platform__"
+SHORTCUT_SCOPES = frozenset({PLATFORM_SCOPE, TENANT_SCOPE})
+PLATFORM_ROLES = frozenset({"ROLE_PLATFORM_ADMIN"})
 # Stable codes the frontend may hard-wire behavior to (order picker etc.).
 STABLE_CODES = frozenset({"case_exploration", "smart_diagnosis", "report_fault"})
 
@@ -139,6 +145,7 @@ class Shortcut:
     created_by: str
     created_at: str
     updated_at: str
+    scope: str = TENANT_SCOPE
 
     def public(self, language: str) -> dict[str, Any]:
         """Public listing shape: stable code + localized text for ONE language.
@@ -179,6 +186,7 @@ class Shortcut:
             "created_by": self.created_by,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "scope": self.scope,
         }
 
 
@@ -339,6 +347,29 @@ class ShortcutStore:
                 (tenant_id, business_entry),
             ).fetchall()
         return [_shortcut_from_row(row) for row in rows]
+
+    def list_effective(self, tenant_id: str, business_entry: str) -> list[Shortcut]:
+        """Resolve the published platform defaults and tenant rows.
+
+        A published tenant row replaces the platform row with the same code.
+        A disabled tenant row suppresses that code; drafts do not affect the
+        effective result. The merge is the single seam shared by listing and
+        shortcut execution.
+        """
+        if tenant_id == PLATFORM_TENANT_ID:
+            raise ShortcutValidationError("tenant id is reserved")
+        platform_rows = self.list_published(PLATFORM_TENANT_ID, business_entry)
+        tenant_rows = self.list_all(tenant_id, business_entry)
+        effective = {row.code: row for row in platform_rows}
+        for row in tenant_rows:
+            if row.status == "published":
+                effective[row.code] = row
+            elif row.status == "disabled":
+                effective.pop(row.code, None)
+        return sorted(effective.values(), key=lambda row: (row.sort_order, row.code))
+
+    def find_effective_by_code(self, tenant_id: str, business_entry: str, code: str) -> Shortcut | None:
+        return next((row for row in self.list_effective(tenant_id, business_entry) if row.code == code), None)
 
     def update(
         self,
@@ -556,11 +587,13 @@ class ShortcutManager:
     def __init__(self, store: ShortcutStore) -> None:
         self.store = store
 
-    def create(self, context: Any, payload: dict[str, Any]) -> Shortcut:
-        self._require(context, EDIT_ROLES)
+    def create(self, context: Any, payload: dict[str, Any], *, scope: str = TENANT_SCOPE) -> Shortcut:
+        tenant_id = self._scope_tenant(context, scope, EDIT_ROLES)
         fields = self._validated_fields(payload, for_publish=False)
+        if scope == PLATFORM_SCOPE and fields["target_agent_version"] is not None:
+            raise ShortcutValidationError("platform shortcuts cannot bind a tenant agent version")
         return self.store.create(
-            context.effective_tenant_id,
+            tenant_id,
             _entry(payload.get("business_entry")),
             _code(payload.get("code")),
             intent=fields["intent"],
@@ -573,10 +606,10 @@ class ShortcutManager:
             created_by=_actor(context),
         )
 
-    def list(self, context: Any, *, business_entry: str | None) -> list[Shortcut]:
+    def list(self, context: Any, *, business_entry: str | None, scope: str = TENANT_SCOPE) -> list[Shortcut]:
         """Management listing (all statuses) for the caller's tenant+entry."""
-        self._require(context, VIEW_ROLES)
-        return self.store.list_all(context.effective_tenant_id, _entry(business_entry))
+        tenant_id = self._scope_tenant(context, scope, VIEW_ROLES)
+        return self.store.list_all(tenant_id, _entry(business_entry))
 
     def list_published(self, context: Any, *, business_entry: str) -> list[Shortcut]:
         """Public listing — authenticated callers, roles NOT required (#230).
@@ -590,16 +623,26 @@ class ShortcutManager:
             raise ShortcutValidationError("business_entry is invalid")
         return self.store.list_published(context.effective_tenant_id, entry)
 
-    def get(self, context: Any, shortcut_id: str) -> Shortcut:
-        self._require(context, VIEW_ROLES)
-        return self.store.get(_id(shortcut_id), context.effective_tenant_id)
+    def list_effective(self, context: Any, *, business_entry: str) -> list[Shortcut]:
+        entry = (business_entry or "").strip().lower()
+        if entry not in {"consumer", "operator"}:
+            raise ShortcutValidationError("business_entry is invalid")
+        return self.store.list_effective(context.effective_tenant_id, entry)
 
-    def update(self, context: Any, shortcut_id: str, payload: dict[str, Any]) -> Shortcut:
-        self._require(context, EDIT_ROLES)
+    def get(self, context: Any, shortcut_id: str, *, scope: str = TENANT_SCOPE) -> Shortcut:
+        tenant_id = self._scope_tenant(context, scope, VIEW_ROLES)
+        return self.store.get(_id(shortcut_id), tenant_id)
+
+    def update(
+        self, context: Any, shortcut_id: str, payload: dict[str, Any], *, scope: str = TENANT_SCOPE
+    ) -> Shortcut:
+        tenant_id = self._scope_tenant(context, scope, EDIT_ROLES)
         fields = self._validated_fields(payload, for_publish=False)
+        if scope == PLATFORM_SCOPE and fields["target_agent_version"] is not None:
+            raise ShortcutValidationError("platform shortcuts cannot bind a tenant agent version")
         return self.store.update(
             _id(shortcut_id),
-            context.effective_tenant_id,
+            tenant_id,
             int(payload.get("expected_revision") or 0),
             intent=fields["intent"],
             requires_order=fields["requires_order"],
@@ -610,37 +653,95 @@ class ShortcutManager:
             target_agent_version=fields["target_agent_version"],
         )
 
-    def publish(self, context: Any, shortcut_id: str, *, expected_revision: int) -> ShortcutVersion:
-        self._require(context, PUBLISH_ROLES)
-        shortcut = self.store.get(_id(shortcut_id), context.effective_tenant_id)
+    def publish(
+        self, context: Any, shortcut_id: str, *, expected_revision: int, scope: str = TENANT_SCOPE
+    ) -> ShortcutVersion:
+        tenant_id = self._scope_tenant(context, scope, PUBLISH_ROLES)
+        shortcut = self.store.get(_id(shortcut_id), tenant_id)
         if shortcut.revision != expected_revision or shortcut.status != "draft":
             raise ShortcutConflict("shortcut revision or state changed")
         snapshot = shortcut.to_dict()
         return self.store.publish(
             shortcut.shortcut_id,
-            context.effective_tenant_id,
+            tenant_id,
             expected_revision,
             snapshot,
             _actor(context),
         )
 
-    def fork_draft(self, context: Any, shortcut_id: str, *, expected_revision: int) -> Shortcut:
-        self._require(context, EDIT_ROLES)
-        return self.store.fork_draft(_id(shortcut_id), context.effective_tenant_id, expected_revision)
+    def fork_draft(
+        self, context: Any, shortcut_id: str, *, expected_revision: int, scope: str = TENANT_SCOPE
+    ) -> Shortcut:
+        tenant_id = self._scope_tenant(context, scope, EDIT_ROLES)
+        return self.store.fork_draft(_id(shortcut_id), tenant_id, expected_revision)
 
-    def disable(self, context: Any, shortcut_id: str, *, expected_revision: int) -> Shortcut:
-        self._require(context, PUBLISH_ROLES)
-        return self.store.disable(_id(shortcut_id), context.effective_tenant_id, expected_revision)
-
-    def delete(self, context: Any, shortcut_id: str, *, expected_revision: int) -> None:
-        self._require(context, EDIT_ROLES)
-        self.store.delete_draft(_id(shortcut_id), context.effective_tenant_id, expected_revision)
-
-    def version(self, context: Any, shortcut_id: str, version_no: int) -> ShortcutVersion:
-        self._require(context, VIEW_ROLES)
+    def rollback(
+        self,
+        context: Any,
+        shortcut_id: str,
+        *,
+        version_no: int,
+        expected_revision: int,
+        scope: str = TENANT_SCOPE,
+    ) -> ShortcutVersion:
+        tenant_id = self._scope_tenant(context, scope, EDIT_ROLES)
         if version_no < 1:
             raise ShortcutValidationError("version_no must be positive")
-        return self.store.version(_id(shortcut_id), context.effective_tenant_id, version_no)
+        current = self.store.get(_id(shortcut_id), tenant_id)
+        if current.status != "published" or current.revision != expected_revision:
+            raise ShortcutConflict("shortcut revision or state changed")
+        target = self.store.version(current.shortcut_id, tenant_id, version_no)
+        fields = self._validated_fields(target.snapshot, for_publish=False)
+        if scope == PLATFORM_SCOPE and fields["target_agent_version"] is not None:
+            raise ShortcutValidationError("platform shortcuts cannot bind a tenant agent version")
+        draft = self.store.fork_draft(current.shortcut_id, tenant_id, expected_revision)
+        updated = self.store.update(
+            draft.shortcut_id,
+            tenant_id,
+            draft.revision,
+            intent=fields["intent"],
+            requires_order=fields["requires_order"],
+            sort_order=fields["sort_order"],
+            labels=fields["labels"],
+            descriptions=fields["descriptions"],
+            question_templates=fields["question_templates"],
+            target_agent_version=fields["target_agent_version"],
+        )
+        return self.publish(context, updated.shortcut_id, expected_revision=updated.revision, scope=scope)
+
+    def disable(
+        self, context: Any, shortcut_id: str, *, expected_revision: int, scope: str = TENANT_SCOPE
+    ) -> Shortcut:
+        tenant_id = self._scope_tenant(context, scope, PUBLISH_ROLES)
+        return self.store.disable(_id(shortcut_id), tenant_id, expected_revision)
+
+    def delete(
+        self, context: Any, shortcut_id: str, *, expected_revision: int, scope: str = TENANT_SCOPE
+    ) -> None:
+        tenant_id = self._scope_tenant(context, scope, EDIT_ROLES)
+        self.store.delete_draft(_id(shortcut_id), tenant_id, expected_revision)
+
+    def version(
+        self, context: Any, shortcut_id: str, version_no: int, *, scope: str = TENANT_SCOPE
+    ) -> ShortcutVersion:
+        tenant_id = self._scope_tenant(context, scope, VIEW_ROLES)
+        if version_no < 1:
+            raise ShortcutValidationError("version_no must be positive")
+        return self.store.version(_id(shortcut_id), tenant_id, version_no)
+
+    @staticmethod
+    def _scope_tenant(context: Any, scope: str, roles: frozenset[str]) -> str:
+        if scope not in SHORTCUT_SCOPES:
+            raise ShortcutValidationError("scope is invalid")
+        if scope == PLATFORM_SCOPE:
+            ShortcutManager._require(context, roles | PLATFORM_ROLES)
+            if not frozenset(getattr(context, "roles", ())).intersection(PLATFORM_ROLES):
+                raise ShortcutForbidden("platform shortcut access is not permitted")
+            return PLATFORM_TENANT_ID
+        ShortcutManager._require(context, roles)
+        if getattr(context, "effective_tenant_id", "") == PLATFORM_TENANT_ID:
+            raise ShortcutValidationError("tenant id is reserved")
+        return context.effective_tenant_id
 
     @staticmethod
     def _require(context: Any, roles: frozenset[str]) -> None:
@@ -703,6 +804,7 @@ def _shortcut_from_row(row: sqlite3.Row) -> Shortcut:
         created_by=str(row["created_by"]),
         created_at=str(row["created_at"]),
         updated_at=str(row["updated_at"]),
+        scope=PLATFORM_SCOPE if str(row["tenant_id"]) == PLATFORM_TENANT_ID else TENANT_SCOPE,
     )
 
 

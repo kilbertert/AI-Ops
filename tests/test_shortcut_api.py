@@ -20,21 +20,28 @@ class _Caller:
         del third_session
         if token == "narrow" and required_scope != "aiops:faq:read":
             raise CallerAuthError("insufficient scope", code=CALLER_AUTH_FORBIDDEN)
-        subject = SubjectRecord(b_user_id="c:C-1", c_user_id="C-1", tenant_id="T-1")
+        tenant_id = "T-2" if token == "tenant-2" else "T-1"
+        roles = (
+            {"ROLE_PLATFORM_ADMIN"}
+            if token == "platform"
+            else ({"ROLE_AGENT_ADMIN"} if token != "tenant-2" else set())
+        )
+        subject = SubjectRecord(b_user_id=f"c:{tenant_id}", c_user_id=tenant_id, tenant_id=tenant_id)
         return ScopeContext.build(
             caller=subject,
             subject=subject,
             delegated=False,
-            effective_tenant_id="T-1",
+            effective_tenant_id=tenant_id,
             data_scope=DataScope(type="self"),
-            roles=frozenset({"ROLE_AGENT_ADMIN"}),
+            roles=frozenset(roles),
             permissions=frozenset({required_scope}),
         )
 
 
 class _Directory:
     def roles_for_c_user(self, c_user_id: str, tenant_id: str):
-        return (PlatformRoleRecord("B-1", "C-1", "T-1", "admin"),)
+        client_type = "admin" if tenant_id == "T-1" else "consumer"
+        return (PlatformRoleRecord(f"B-{tenant_id}", c_user_id, tenant_id, client_type),)
 
     def roles_for_b_user(self, b_user_id: str, tenant_id: str):
         return ()
@@ -65,6 +72,8 @@ def _client(tmp_path: Path) -> TestClient:
 
 
 _HEADERS = {"Authorization": "Bearer service", "X-Business-Entry": "consumer"}
+_TENANT_2_HEADERS = {"Authorization": "Bearer tenant-2", "X-Business-Entry": "consumer"}
+_PLATFORM_HEADERS = {"Authorization": "Bearer platform", "X-Business-Entry": "consumer"}
 
 
 def _publish_initial(client: TestClient, code: str) -> dict:
@@ -269,6 +278,11 @@ def test_management_requires_scope_and_roles(tmp_path: Path) -> None:
     ok = client.get("/v1/shortcuts", headers=_HEADERS)
     assert ok.status_code == 200
 
+    read_allowed = client.get(
+        "/v1/shortcuts", headers={"Authorization": "Bearer narrow", "X-Business-Entry": "consumer"}
+    )
+    assert read_allowed.status_code == 200
+
 
 def test_published_version_is_immutable_snapshot(tmp_path: Path) -> None:
     client = _client(tmp_path)
@@ -310,6 +324,180 @@ def test_published_version_is_immutable_snapshot(tmp_path: Path) -> None:
     v1 = client.get(f"/v1/shortcuts/{shortcut['shortcut_id']}/versions/1", headers=_HEADERS)
     assert v1.status_code == 200
     assert v1.json()["snapshot"]["labels"]["zh"] == "按钮"
+
+
+def test_platform_published_shortcut_is_visible_to_tenants_without_copy(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    created = client.post(
+        "/v1/shortcuts?scope=platform",
+        headers=_PLATFORM_HEADERS,
+        json={
+            "business_entry": "consumer",
+            "code": "case_exploration",
+            "intent": "case_exploration",
+            "requires_order": False,
+            "sort_order": 10,
+            "labels": {"zh": "平台案例", "en": "Platform Cases"},
+        },
+    )
+    assert created.status_code == 201, created.text
+    shortcut = created.json()
+    assert shortcut["scope"] == "platform"
+    published = client.post(
+        f"/v1/shortcuts/{shortcut['shortcut_id']}/publish?scope=platform",
+        headers=_PLATFORM_HEADERS,
+        json={"expected_revision": shortcut["revision"]},
+    )
+    assert published.status_code == 200, published.text
+
+    first = client.get("/v1/shortcuts", headers=_HEADERS)
+    second = client.get("/v1/shortcuts", headers=_TENANT_2_HEADERS)
+    assert first.status_code == second.status_code == 200
+    assert first.json()["shortcuts"] == second.json()["shortcuts"]
+    assert first.json()["shortcuts"][0]["code"] == "case_exploration"
+    operator = client.get("/v1/shortcuts", headers={**_HEADERS, "X-Business-Entry": "operator"})
+    assert operator.status_code == 200
+    assert operator.json()["count"] == 0
+
+    bad_target = client.post(
+        "/v1/shortcuts?scope=platform",
+        headers=_PLATFORM_HEADERS,
+        json={
+            "business_entry": "consumer",
+            "code": "solution_discovery",
+            "intent": "solution_discovery",
+            "labels": {"zh": "方案"},
+            "target_agent_version": "agt_12345678#v1",
+        },
+    )
+    assert bad_target.status_code == 422
+    assert bad_target.json()["error"]["code"] == "SHORTCUT_VALIDATION_FAILED"
+
+
+def test_platform_management_requires_platform_role(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    denied = client.post(
+        "/v1/shortcuts?scope=platform",
+        headers=_TENANT_2_HEADERS,
+        json={
+            "business_entry": "consumer",
+            "code": "case_exploration",
+            "intent": "case_exploration",
+            "requires_order": False,
+            "labels": {"zh": "无权"},
+        },
+    )
+    assert denied.status_code == 403
+    assert denied.json()["error"]["code"] == "SHORTCUT_FORBIDDEN"
+
+
+def test_platform_rollback_publishes_an_immutable_previous_snapshot(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    created = client.post(
+        "/v1/shortcuts?scope=platform",
+        headers=_PLATFORM_HEADERS,
+        json={
+            "business_entry": "consumer",
+            "code": "case_exploration",
+            "intent": "case_exploration",
+            "requires_order": False,
+            "labels": {"zh": "v1"},
+        },
+    )
+    assert created.status_code == 201
+    shortcut = created.json()
+    published = client.post(
+        f"/v1/shortcuts/{shortcut['shortcut_id']}/publish?scope=platform",
+        headers=_PLATFORM_HEADERS,
+        json={"expected_revision": shortcut["revision"]},
+    )
+    assert published.status_code == 200
+    current = client.get("/v1/shortcut-admin/consumer?scope=platform", headers=_PLATFORM_HEADERS).json()
+    assert current["shortcuts"][0]["revision"] == 2
+
+    draft = client.post(
+        f"/v1/shortcuts/{shortcut['shortcut_id']}/draft?scope=platform",
+        headers=_PLATFORM_HEADERS,
+        json={"expected_revision": 2},
+    )
+    updated = client.put(
+        f"/v1/shortcuts/{shortcut['shortcut_id']}?scope=platform",
+        headers=_PLATFORM_HEADERS,
+        json={
+            "expected_revision": draft.json()["revision"],
+            "intent": "case_exploration",
+            "requires_order": False,
+            "labels": {"zh": "v2"},
+        },
+    )
+    republished = client.post(
+        f"/v1/shortcuts/{shortcut['shortcut_id']}/publish?scope=platform",
+        headers=_PLATFORM_HEADERS,
+        json={"expected_revision": updated.json()["revision"]},
+    )
+    assert republished.status_code == 200
+    current = client.get("/v1/shortcut-admin/consumer?scope=platform", headers=_PLATFORM_HEADERS).json()
+    assert current["shortcuts"][0]["revision"] == 5
+
+    rollback = client.post(
+        f"/v1/shortcuts/{shortcut['shortcut_id']}/rollback?scope=platform",
+        headers=_PLATFORM_HEADERS,
+        json={"expected_revision": 5, "version_no": 1},
+    )
+    assert rollback.status_code == 200, rollback.text
+    listed = client.get("/v1/shortcuts", headers=_HEADERS).json()
+    assert listed["shortcuts"][0]["label"] == "v1"
+    assert rollback.json()["version_no"] == 3
+
+
+def test_effective_shortcut_resolution_prefers_published_tenant_row(tmp_path: Path) -> None:
+    store = ShortcutStore(tmp_path / "gateway.db")
+    from aiops_diagnostics.shortcut_lifecycle import ShortcutManager
+
+    manager = ShortcutManager(store)
+    store.create(
+        "__platform__",
+        "consumer",
+        "case_exploration",
+        intent="case_exploration",
+        requires_order=False,
+        sort_order=10,
+        labels={"zh": "平台"},
+        descriptions={},
+        question_templates={},
+        target_agent_version=None,
+        created_by="platform",
+    )
+    platform_row = store.find_by_code("__platform__", "consumer", "case_exploration")
+    assert platform_row is not None
+    manager.publish(
+        type("Ctx", (), {"effective_tenant_id": "__platform__", "roles": {"ROLE_PLATFORM_ADMIN"}})(),
+        platform_row.shortcut_id,
+        expected_revision=platform_row.revision,
+        scope="platform",
+    )
+    store.create(
+        "T-1",
+        "consumer",
+        "case_exploration",
+        intent="case_exploration",
+        requires_order=False,
+        sort_order=5,
+        labels={"zh": "租户"},
+        descriptions={},
+        question_templates={},
+        target_agent_version=None,
+        created_by="tenant",
+    )
+    tenant_row = store.find_by_code("T-1", "consumer", "case_exploration")
+    assert tenant_row is not None
+    manager.publish(
+        type("Ctx", (), {"effective_tenant_id": "T-1", "roles": {"ROLE_AGENT_ADMIN"}})(),
+        tenant_row.shortcut_id,
+        expected_revision=tenant_row.revision,
+    )
+    assert [row.labels["zh"] for row in store.list_effective("T-1", "consumer")] == ["租户"]
+    assert [row.labels["zh"] for row in store.list_effective("T-2", "consumer")] == ["平台"]
 
 
 def test_store_seed_bundled_is_idempotent(tmp_path: Path) -> None:
