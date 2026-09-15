@@ -839,13 +839,17 @@ PROMPT-01/02 为 41 实机验收（清单收敛 + 公网问答），PROMPT-03 �
 
 ## 统一助手意图路由 QA（INTENT）
 
-| ID | 环境 | 前置 | 操作 | 预期 | 清理 |
+本地 dev 场景（TestClient + 替身）随 PR 全量通过。2026-09-15 在 41 公网
+（`api.mall.qushiyun.com`、真实 H5 thirdSession、真实 kb-service、main `621490d`
++ PR #238 修复）完成真实复跑，证据见 `docs/validation.md`：
+
+| ID | 环境 | 前置 | 操作 | 预期 | 真实结果（2026-09-15） |
 |---|---|---|---|---|---|
-| INTENT-01 | 本地 dev | TestClient + 替身 runtime | 提交“你好” | 不创建 diagnosis；不触发 KB；返回轻量/普通回答 | tmp 自动清理 |
-| INTENT-02 | 本地 dev | 无天气工具 | 提交“今天天气怎么样” | 不检索业务 KB；明确无法查询实时天气；不伪造天气 | tmp 自动清理 |
-| INTENT-03 | 本地 dev | FAQ fixture | 提交“充电枪拔不出来怎么办” | `200 type=faq`，不创建异步作业 | tmp 自动清理 |
-| INTENT-04 | 本地 dev | 已授权订单 123 | 提交“订单 123 为什么提前结束” | `202 type=diagnosis`，返回 diagnosis_id | tmp 自动清理 |
-| INTENT-05 | 本地 dev | 无订单上下文 | 提交“是不是扣错钱了” | `200 type=clarification`，missing_fields 含 order_no | tmp 自动清理 |
-| INTENT-06 | 本地 dev | 已发布 smart_diagnosis | 读取快捷动作并选择订单后提交统一入口 | 返回稳定 code/requires_order；执行走 assistant questions | tmp 自动清理 |
-| INTENT-07 | 本地 dev | 已发布 report_fault | 不提供故障描述触发动作 | clarification 要求 fault_description；不创建工单 | tmp 自动清理 |
-| INTENT-08 | 本地 dev | 已发布 case_exploration + 宣传 Agent | 点击案例入口并轮询 | 结构化宣传卡片；不进入 FAQ；不泄露内部标识 | tmp 自动清理 |
+| INTENT-01 | 本地 dev | TestClient + 替身 runtime | 提交“你好” | 不创建 diagnosis；不触发 KB；返回轻量/普通回答 | PASS：completed/not_found，小趋回答，无诊断无 KB |
+| INTENT-02 | 本地 dev | 无天气工具 | 提交“今天天气怎么样” | 不检索业务 KB；明确无法查询实时天气；不伪造天气 | PASS（变体“你是谁呀”）：completed，声明无检索不编造。“天气”原题被 FAQ q026 关键词误命中（FAQ 假阳性，独立遗留） |
+| INTENT-03 | 本地 dev | FAQ fixture | 提交“充电枪拔不出来怎么办” | `200 type=faq`，不创建异步作业 | PASS：200 type=faq consumer.faq.q010 同步答案 |
+| INTENT-04 | 本地 dev | 已授权订单 123 | 提交“订单 123 为什么提前结束” | `202 type=diagnosis`，返回 diagnosis_id | PASS：内嵌真实归属订单 2099211664421249025 → 202 diagnosis，终态 completed/diagnosed/medium；非本人订单正确回落 |
+| INTENT-05 | 本地 dev | 无订单上下文 | 提交“是不是扣错钱了” | `200 type=clarification`，missing_fields 含 order_no | PASS：200 type=clarification missing_fields=[order_no] |
+| INTENT-06 | 本地 dev | 已发布 smart_diagnosis | 读取快捷动作并选择订单后提交统一入口 | 返回稳定 code/requires_order；执行走 assistant questions | PASS：GET /v1/shortcuts 4 条含 requires_order；case_exploration 带 target_agent_version |
+| INTENT-07 | 本地 dev | 已发布 report_fault | 不提供故障描述触发动作 | clarification 要求 fault_description；不创建工单 | PASS（形态差异）：实际为 qa 完成态收集故障信息（类型/桩号/时间/安全），不建工单；clarification 形态待后续 |
+| INTENT-08 | 本地 dev | 已发布 case_exploration + 宣传 Agent | 点击案例入口并轮询 | 结构化宣传卡片；不进入 FAQ；不泄露内部标识 | PASS：新加坡无人巴士案例 found 四段卡片+video+reference；无料场景 not_found 诚实空卡片；solution_discovery 本地化空卡片；promo 指标桶正确归因 |
