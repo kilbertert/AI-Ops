@@ -889,4 +889,4 @@ PROMPT-01/02 为 41 实机验收（清单收敛 + 公网问答），PROMPT-03 �
 | SHORTCUT-MIGRATION-02 | 41 实机 | #251 `1f708888` 已部署 | 运行真实迁移并公网读取快捷动作 | PASS（迁移）：4 条 consumer 平台默认已发布，原租户行/版本保留；H5 consumer `200/type=shortcut_list/count=4`。无覆盖新租户待会话 | 保留迁移 JSON、提交和脱敏 HTTP 摘要 |
 | SHORTCUT-MIGRATION-03 | 41 实机 | SHORTCUT-MIGRATION-02 成功 | 再运行迁移并比较版本/行数 | PASS：4×`unchanged:published`，无重复有效 code/新版本 | 二次输出与只读对比已保留 |
 | SHORTCUT-MIGRATION-04 | 41 实机 | 精确备份已生成 | 在隔离副本恢复备份并做只读检查 | PASS：`integrity_check=ok`，恢复副本平台行数 0、两租户各 4 条 | 隔离副本已清理，生产备份保留 |
-| SHORTCUT-MIGRATION-05 | 41 实机 | 需要 operator B 端和无覆盖新租户会话 | consumer/operator 读取；停用；宣传与 smart_diagnosis 执行 | PARTIAL：consumer 已通过；当前 H5 无 operator 身份，两个现有租户均有覆盖；operator、无覆盖租户、停用和双租户执行待补 | 不把当前 partial 写成全量通过；不保存会话凭据 |
+| SHORTCUT-MIGRATION-05 | 41 实机 | 需要 operator B 端和无覆盖新租户会话 | consumer/operator 读取；停用；宣传与 smart_diagnosis 执行 | PARTIAL（2026-09-15）：Nginx 入口头透传后 consumer 200/4、operator 正确 503 `PLATFORM_UNAVAILABLE`、非法入口 403；smart_diagnosis 缺订单 clarification 通过；宣传 QA 被百炼 `Arrearage` 阻塞；operator 正向身份、无覆盖租户、停用/恢复、双租户宣传和有订单诊断待补 | 不把当前 partial 写成全量通过；Nginx 备份和脱敏响应已记录，不保存会话凭据 |
