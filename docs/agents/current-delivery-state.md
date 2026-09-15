@@ -5,7 +5,7 @@
 > `docs/开发进度.md`，逐项证据在 `docs/validation.md`。
 >
 > **最后核验**：2026-09-15 17:08（Asia/Shanghai）
-> **仓库基线**：`origin/main@6087da3`（PR #239）
+> **仓库基线**：`origin/main@12dca31`（PR #240，承接 PR #239）
 
 ## 一分钟结论
 
