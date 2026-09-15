@@ -4,7 +4,7 @@
 > 41 前，先读本页；再按链接查看完整证据。本文只保留当前可行动结论，历史过程在
 > `docs/开发进度.md`，逐项证据在 `docs/validation.md`。
 >
-> **最后核验**：2026-09-15 20:59（Asia/Shanghai）
+> **最后核验**：2026-09-15 21:45（Asia/Shanghai）
 > **仓库基线**：读取时在 canonical checkout 执行 `git rev-parse origin/main`；最近固化的
 > 状态索引变更为 PR #241（承接 PR #240、#239）。
 
