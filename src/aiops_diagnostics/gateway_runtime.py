@@ -633,6 +633,8 @@ class GatewayRuntime:
             _finish_turn(None, cancelled=True)
             return
         started_ms = time.monotonic()
+        # #232 route metric: promotional card runs get their own bucket.
+        route_tag = "promo" if promo_intent else "qa"
         settings = Settings.from_config(self.gateway_settings.server_config_file)
         settings.agent.run_root = self.diagnostic_settings.agent.run_root
         rag_result = None
@@ -657,14 +659,16 @@ class GatewayRuntime:
             if isinstance(rag_result, dict) and rag_result.get("status") == "failed":
                 self._record_metric(
                     tenant_id=tenant_id,
-                    route_type="qa",
+                    route_type=route_tag,
                     outcome="failed",
                     error_code="QA_FAILED",
                     duration_ms=int((time.monotonic() - started_ms) * 1000),
                 )
                 _finish_turn(None, cancelled=True)
             else:
-                self._record_qa_metric(rag_result, tenant_id, started_ms, conversation_turn)
+                self._record_qa_metric(
+                    rag_result, tenant_id, started_ms, conversation_turn, route_type=route_tag
+                )
                 # The metrics-only tag must not persist into the conversation
                 # turn (it would surface through GET /v1/conversations/{id}).
                 _finish_turn({key: value for key, value in rag_result.items() if key != "agent_version"})
@@ -687,7 +691,7 @@ class GatewayRuntime:
             if tenant_id:
                 self._record_metric(
                     tenant_id=tenant_id,
-                    route_type="qa",
+                    route_type=route_tag,
                     outcome="failed",
                     error_code="QA_FAILED",
                     duration_ms=int((time.monotonic() - started_ms) * 1000),
@@ -702,7 +706,7 @@ class GatewayRuntime:
         if tenant_id:
             self._record_metric(
                 tenant_id=tenant_id,
-                route_type="qa",
+                route_type=route_tag,
                 outcome="completed",
                 duration_ms=int((time.monotonic() - started_ms) * 1000),
                 token_count=_estimate_turn_tokens(question, answer),
@@ -715,6 +719,8 @@ class GatewayRuntime:
         tenant_id: str | None,
         started_ms: float,
         conversation_turn: tuple[str, str, int] | None,
+        *,
+        route_type: str = "qa",
     ) -> None:
         """Record a completed RAG QA run from its result payload.
 
@@ -733,7 +739,7 @@ class GatewayRuntime:
         searches = (result or {}).get("searches") or 0
         self._record_metric(
             tenant_id=tenant_id,
-            route_type="qa",
+            route_type=route_type,
             outcome="completed",
             agent_id=agent_id,
             agent_version_key=agent_version_key,
