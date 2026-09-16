@@ -245,6 +245,11 @@ class ShortcutFieldsRequest(BaseModel):
         max_length=80,
         pattern=r"^agt_[A-Za-z0-9]{8,64}#v\d{1,6}$",
     )
+    jump_path: str | None = Field(
+        default=None,
+        max_length=512,
+        pattern=r"^/.*$",
+    )
 
 
 class ShortcutCreateRequest(ShortcutFieldsRequest):

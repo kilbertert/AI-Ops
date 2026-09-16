@@ -43,6 +43,10 @@ PLATFORM_ROLES = frozenset({"ROLE_PLATFORM_ADMIN"})
 # Stable codes the frontend may hard-wire behavior to (order picker etc.).
 STABLE_CODES = frozenset({"case_exploration", "smart_diagnosis", "report_fault"})
 
+# Product default for the fault-reporting jump action. The path is an
+# in-app route, so it is not localized: one path per action, not per language.
+REPORT_FAULT_JUMP_PATH = "/charge/pages/faultReport/faultReportList"
+
 VIEW_ROLES = frozenset(
     {"ROLE_AGENT_VIEWER", "ROLE_AGENT_ADMIN", "ROLE_AGENT_PUBLISHER", "ROLE_PLATFORM_ADMIN"}
 )
@@ -104,6 +108,11 @@ _BUNDLED_SHORTCUTS: tuple[tuple[str, dict[str, dict[str, Any]]], ...] = (
                     "zh": "我要上报一个故障",
                     "en": "I want to report a fault",
                 },
+                # The product's default fault-reporting entry is the in-app
+                # form, not a preset prompt. Kept here as the versioned
+                # definition so the path is a repo asset, not a magic string
+                # in an ad-hoc migration command.
+                "jump_path": REPORT_FAULT_JUMP_PATH,
             },
         },
     ),
@@ -141,6 +150,10 @@ class Shortcut:
     descriptions: dict[str, str]
     question_templates: dict[str, str]
     target_agent_version: str | None  # "agt_xxx#vN" for promotional targets
+    # In-app route the client navigates to on click. A non-empty path IS the
+    # discriminator: it makes this a jump action, which never reaches the
+    # unified assistant entry. None keeps the prompt action behavior.
+    jump_path: str | None
     published_version: int | None
     created_by: str
     created_at: str
@@ -165,6 +178,7 @@ class Shortcut:
                 self.question_templates.get(language) or self.question_templates.get("zh", "")
             ),
             "target_agent_version": self.target_agent_version,
+            "jump_path": self.jump_path,
         }
 
     def to_dict(self) -> dict[str, Any]:
@@ -182,6 +196,7 @@ class Shortcut:
             "descriptions": dict(self.descriptions),
             "question_templates": dict(self.question_templates),
             "target_agent_version": self.target_agent_version,
+            "jump_path": self.jump_path,
             "published_version": self.published_version,
             "created_by": self.created_by,
             "created_at": self.created_at,
@@ -244,6 +259,7 @@ class ShortcutStore:
                         descriptions=spec["descriptions"],
                         question_templates=spec["question_templates"],
                         target_agent_version=None,
+                        jump_path=spec.get("jump_path"),
                         created_by=_actor(context),
                     )
                 )
@@ -262,6 +278,7 @@ class ShortcutStore:
         descriptions: dict[str, str],
         question_templates: dict[str, str],
         target_agent_version: str | None,
+        jump_path: str | None = None,
         created_by: str,
     ) -> Shortcut:
         shortcut_id = "sct_" + uuid.uuid4().hex
@@ -271,6 +288,7 @@ class ShortcutStore:
             "descriptions": descriptions,
             "question_templates": question_templates,
             "target_agent_version": target_agent_version,
+            "jump_path": jump_path,
         }
         with self._connection(write=True) as connection:
             try:
@@ -397,6 +415,7 @@ class ShortcutStore:
         descriptions: dict[str, str],
         question_templates: dict[str, str],
         target_agent_version: str | None,
+        jump_path: str | None = None,
     ) -> Shortcut:
         now = _iso(datetime.now(UTC))
         payload = {
@@ -404,6 +423,7 @@ class ShortcutStore:
             "descriptions": descriptions,
             "question_templates": question_templates,
             "target_agent_version": target_agent_version,
+            "jump_path": jump_path,
         }
         with self._connection(write=True) as connection:
             updated = connection.execute(
@@ -630,6 +650,7 @@ class ShortcutManager:
             descriptions=fields["descriptions"],
             question_templates=fields["question_templates"],
             target_agent_version=fields["target_agent_version"],
+            jump_path=fields["jump_path"],
             created_by=_actor(context),
         )
 
@@ -678,6 +699,7 @@ class ShortcutManager:
             descriptions=fields["descriptions"],
             question_templates=fields["question_templates"],
             target_agent_version=fields["target_agent_version"],
+            jump_path=fields["jump_path"],
         )
 
     def publish(
@@ -728,6 +750,7 @@ class ShortcutManager:
             descriptions=platform.descriptions,
             question_templates=platform.question_templates,
             target_agent_version=None,
+            jump_path=platform.jump_path,
             created_by=_actor(context),
         )
         self.publish(context, created.shortcut_id, expected_revision=created.revision)
@@ -775,6 +798,7 @@ class ShortcutManager:
             descriptions=fields["descriptions"],
             question_templates=fields["question_templates"],
             target_agent_version=fields["target_agent_version"],
+            jump_path=fields["jump_path"],
         )
         return self.publish(context, updated.shortcut_id, expected_revision=updated.revision, scope=scope)
 
@@ -850,6 +874,7 @@ class ShortcutManager:
             "descriptions": descriptions,
             "question_templates": question_templates,
             "target_agent_version": target,
+            "jump_path": _jump_path(payload.get("jump_path")),
         }
 
 
@@ -869,6 +894,7 @@ def _shortcut_from_row(row: sqlite3.Row) -> Shortcut:
         descriptions={str(k): str(v) for k, v in dict(fields.get("descriptions") or {}).items()},
         question_templates={str(k): str(v) for k, v in dict(fields.get("question_templates") or {}).items()},
         target_agent_version=fields.get("target_agent_version"),
+        jump_path=fields.get("jump_path") or None,
         published_version=int(row["published_version"]) if row["published_version"] is not None else None,
         created_by=str(row["created_by"]),
         created_at=str(row["created_at"]),
@@ -886,6 +912,32 @@ def _version_from_row(row: sqlite3.Row) -> ShortcutVersion:
         published_by=str(row["published_by"]),
         published_at=str(row["published_at"]),
     )
+
+
+_JUMP_PATH_MAX = 512
+
+
+def _jump_path(value: Any) -> str | None:
+    """Validate the optional in-app route for a jump action.
+
+    Only the format the product states is enforced (must start with ``/``).
+    There is deliberately NO route allowlist: the repository holds no
+    authoritative H5 route convention, so a whitelist here would copy the
+    client's router into the backend and need a backend release per new page.
+    Whether the page exists is the client's acceptance scope.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ShortcutValidationError("jump_path is invalid")
+    candidate = value.strip()
+    if not candidate:
+        return None
+    if not candidate.startswith("/") or len(candidate) > _JUMP_PATH_MAX:
+        raise ShortcutValidationError(
+            f"jump_path must start with '/' and be at most {_JUMP_PATH_MAX} characters"
+        )
+    return candidate
 
 
 def _localized(value: Any, name: str, *, require_zh: bool) -> dict[str, str]:

@@ -578,3 +578,211 @@ def test_store_seed_bundled_is_idempotent(tmp_path: Path) -> None:
     assert sorted(s.code for s in first) == ["case_exploration", "report_fault", "smart_diagnosis"]
     # Second run creates nothing.
     assert store.seed_bundled(_Ctx(), manager) == []  # type: ignore[arg-type]
+
+
+def _publish_jump_shortcut(client: TestClient, code: str, jump_path: str) -> dict:
+    created = client.post(
+        "/v1/shortcuts",
+        headers=_HEADERS,
+        json={
+            "business_entry": "consumer",
+            "code": code,
+            "intent": "report_fault",
+            "requires_order": False,
+            "sort_order": 30,
+            "labels": {"zh": "故障上报", "en": "Report a Fault"},
+            "question_templates": {"zh": "我要上报一个故障"},
+            "jump_path": jump_path,
+        },
+    )
+    assert created.status_code == 201, created.text
+    shortcut = created.json()
+    published = client.post(
+        f"/v1/shortcuts/{shortcut['shortcut_id']}/publish",
+        headers=_HEADERS,
+        json={"expected_revision": shortcut["revision"]},
+    )
+    assert published.status_code == 200, published.text
+    return shortcut
+
+
+def test_jump_path_round_trips_and_non_jump_actions_are_null(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _publish_jump_shortcut(client, "report_fault", "/charge/pages/faultReport/faultReportList")
+    _publish_initial(client, "case_exploration")
+
+    listed = client.get("/v1/shortcuts", headers=_HEADERS).json()
+    by_code = {item["code"]: item for item in listed["shortcuts"]}
+
+    # Present and equal on the jump action.
+    assert by_code["report_fault"]["jump_path"] == "/charge/pages/faultReport/faultReportList"
+    # Present-but-null on the prompt action: the frontend must not need to
+    # distinguish "absent" from "empty".
+    assert "jump_path" in by_code["case_exploration"]
+    assert by_code["case_exploration"]["jump_path"] is None
+
+
+def test_jump_path_absent_in_request_reads_as_null(tmp_path: Path) -> None:
+    """Existing published rows predate the field and must not need a republish."""
+    client = _client(tmp_path)
+    _publish_initial(client, "case_exploration")  # helper never sends jump_path
+
+    listed = client.get("/v1/shortcuts", headers=_HEADERS).json()
+    assert listed["shortcuts"][0]["jump_path"] is None
+    # Everything else is unchanged.
+    assert listed["shortcuts"][0]["code"] == "case_exploration"
+
+
+def test_jump_path_must_start_with_slash_and_respect_length(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+
+    def _create(jump_path: object) -> object:
+        return client.post(
+            "/v1/shortcuts",
+            headers=_HEADERS,
+            json={
+                "business_entry": "consumer",
+                "code": "report_fault",
+                "intent": "report_fault",
+                "requires_order": False,
+                "sort_order": 30,
+                "labels": {"zh": "故障上报"},
+                "jump_path": jump_path,
+            },
+        )
+
+    no_slash = _create("charge/pages/faultReport")
+    assert no_slash.status_code == 422
+
+    too_long = _create("/" + "a" * 512)
+    assert too_long.status_code == 422
+
+    at_limit = _create("/" + "a" * 511)
+    assert at_limit.status_code == 201, at_limit.text
+
+    # Omitted entirely is valid and means a prompt action.
+    omitted = client.post(
+        "/v1/shortcuts",
+        headers={**_HEADERS, "X-Business-Entry": "operator"},
+        json={
+            "business_entry": "operator",
+            "code": "report_fault",
+            "intent": "report_fault",
+            "requires_order": False,
+            "sort_order": 30,
+            "labels": {"zh": "故障上报"},
+        },
+    )
+    assert omitted.status_code == 201, omitted.text
+    assert omitted.json()["jump_path"] is None
+
+
+def test_jump_path_is_frozen_into_version_and_change_needs_new_version(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    shortcut = _publish_jump_shortcut(client, "report_fault", "/charge/pages/faultReport/faultReportList")
+
+    v1 = client.get(f"/v1/shortcuts/{shortcut['shortcut_id']}/versions/1", headers=_HEADERS).json()
+    assert v1["snapshot"]["jump_path"] == "/charge/pages/faultReport/faultReportList"
+
+    # Editing a published action requires forking a draft first, so the
+    # already-published snapshot keeps rendering for in-flight clients.
+    forked = client.post(
+        f"/v1/shortcuts/{shortcut['shortcut_id']}/draft",
+        headers=_HEADERS,
+        json={"expected_revision": shortcut["revision"] + 1},
+    )
+    assert forked.status_code == 200, forked.text
+    draft = forked.json()
+    assert draft["jump_path"] == "/charge/pages/faultReport/faultReportList"
+
+    updated = client.put(
+        f"/v1/shortcuts/{shortcut['shortcut_id']}",
+        headers=_HEADERS,
+        json={
+            "expected_revision": draft["revision"],
+            "intent": "report_fault",
+            "requires_order": False,
+            "sort_order": 30,
+            "labels": {"zh": "故障上报"},
+            "jump_path": "/charge/pages/faultReport/other",
+        },
+    )
+    assert updated.status_code == 200, updated.text
+
+    # A forked draft contributes nothing to the effective merge, so a
+    # tenant-only action is absent from the listing during the edit window.
+    # (Pre-existing lifecycle semantics, not introduced by jump_path: with a
+    # published platform default present, that default shows through instead.)
+    during_edit = client.get("/v1/shortcuts", headers=_HEADERS).json()
+    assert during_edit["count"] == 0
+
+    promoted = client.post(
+        f"/v1/shortcuts/{shortcut['shortcut_id']}/publish",
+        headers=_HEADERS,
+        json={"expected_revision": updated.json()["revision"]},
+    )
+    assert promoted.status_code == 200, promoted.text
+    listed = client.get("/v1/shortcuts", headers=_HEADERS).json()
+    assert listed["shortcuts"][0]["jump_path"] == "/charge/pages/faultReport/other"
+
+    # v1 is immutable.
+    v1_again = client.get(f"/v1/shortcuts/{shortcut['shortcut_id']}/versions/1", headers=_HEADERS).json()
+    assert v1_again["snapshot"]["jump_path"] == "/charge/pages/faultReport/faultReportList"
+
+
+def test_jump_path_validation_rejects_non_string(tmp_path: Path) -> None:
+    store = ShortcutStore(tmp_path / "gateway.db")
+    from aiops_diagnostics.shortcut_lifecycle import (
+        ShortcutManager,
+        ShortcutValidationError,
+    )
+
+    manager = ShortcutManager(store)
+
+    class _Ctx:
+        effective_tenant_id = "T-1"
+        roles = frozenset({"ROLE_AGENT_ADMIN"})
+        caller = type("C", (), {"b_user_id": "admin"})()
+
+    for bad in (123, "", "  ", "/x"):
+        payload = {
+            "intent": "report_fault",
+            "requires_order": False,
+            "sort_order": 1,
+            "labels": {"zh": "故障上报"},
+            "jump_path": bad,
+        }
+        if bad in ("", "  "):
+            # Whitespace-only is treated as "no path", not an error.
+            fields = manager._validated_fields(payload, for_publish=False)
+            assert fields["jump_path"] is None
+        elif bad == "/x":
+            fields = manager._validated_fields(payload, for_publish=False)
+            assert fields["jump_path"] == "/x"
+        else:
+            try:
+                manager._validated_fields(payload, for_publish=False)
+            except ShortcutValidationError:
+                pass
+            else:  # pragma: no cover
+                raise AssertionError("non-string jump_path must be rejected")
+
+
+def test_bundled_seed_carries_the_product_fault_report_path(tmp_path: Path) -> None:
+    """The product default path is a repo asset, not an ad-hoc migration string."""
+    from aiops_diagnostics.shortcut_lifecycle import REPORT_FAULT_JUMP_PATH
+
+    store = ShortcutStore(tmp_path / "gateway.db")
+
+    class _Ctx:
+        effective_tenant_id = "T-1"
+        caller = type("C", (), {"b_user_id": "seed-user"})()
+
+    from aiops_diagnostics.shortcut_lifecycle import ShortcutManager
+
+    seeded = store.seed_bundled(_Ctx(), ShortcutManager(store))  # type: ignore[arg-type]
+    by_code = {s.code: s for s in seeded}
+    assert by_code["report_fault"].jump_path == REPORT_FAULT_JUMP_PATH
+    # The prompt actions stay prompt actions.
+    assert by_code["case_exploration"].jump_path is None
+    assert by_code["smart_diagnosis"].jump_path is None
