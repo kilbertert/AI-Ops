@@ -245,6 +245,23 @@ class ShortcutFieldsRequest(BaseModel):
         max_length=80,
         pattern=r"^agt_[A-Za-z0-9]{8,64}#v\d{1,6}$",
     )
+    jump_path: str | None = Field(
+        default=None,
+        max_length=512,
+        # Must be a path-absolute route, not a network-path reference. Per RFC
+        # 3986 §4.2 a leading "//" starts an authority, so "//evil.com" is a
+        # cross-host reference — a classic open-redirect vector once a client
+        # hands it to its navigator. This form is used instead of a "(?!/)"
+        # lookahead because Pydantic v2 compiles patterns with the Rust regex
+        # crate, which does not support lookaround at all (it fails at import).
+        # It accepts exactly "/" plus a non-"/" start plus a non-space tail.
+        #
+        # Raw whitespace is also rejected: it cannot appear in a URL path (it
+        # is "%20" once encoded), and without \S a trailing space or newline
+        # would pass here and then be silently normalized away by the
+        # lifecycle validator, leaving the two layers disagreeing.
+        pattern=r"^/(?:[^/]\S*)?$",
+    )
 
 
 class ShortcutCreateRequest(ShortcutFieldsRequest):
@@ -720,34 +737,57 @@ def create_gateway_app(
         if payload.conversation_id:
             conversation = _resolve_conversation(context, caller, decision, payload.conversation_id)
 
-        # A clicked order-bound shortcut must not silently fall through to
-        # generic QA when the frontend omitted the order context. The listing
-        # metadata is a UI hint; this server-side guard is the authorization
-        # boundary that keeps smart_diagnosis on the order path.
-        #
-        # The order may arrive either as the explicit ``order_no`` field OR
-        # embedded in the question text (the frontend sends the order picker
-        # result inside the sentence, e.g. "帮我检测（2099…）这个订单的充电
-        # 异常"). Only when NEITHER carries a candidate do we ask for one —
-        # otherwise this guard would shadow Route 1b and reject a perfectly
-        # diagnosable request.
-        if payload.shortcut_code and not payload.order_no and _extract_order_no(payload.question) is None:
+        # Two server-side guards over the clicked shortcut. The listing
+        # metadata is a UI hint; these guards are the boundary that keeps a
+        # clicked action on its own path instead of leaking into generic QA.
+        if payload.shortcut_code:
             try:
                 shortcut = context.shortcut_manager.store.find_effective_by_code(
                     caller.effective_tenant_id, str(decision.platform), payload.shortcut_code
                 )
             except ShortcutError:
                 shortcut = None
-            if shortcut is not None and shortcut.status == "published" and shortcut.requires_order:
-                _record_route_metric(context, caller, route_type="clarification", outcome="completed")
-                return {
-                    **decision.public(),
-                    "type": "clarification",
-                    "language": language,
-                    "question": payload.question,
-                    "missing_fields": ["order_no"],
-                    "message": "请先选择需要检测的订单后，我才能继续处理。",
-                }
+            if shortcut is not None and shortcut.status == "published":
+                # (a) A jump action is not the assistant entry's business: the
+                # client was supposed to navigate. If it arrives here anyway,
+                # answer plainly and create NO job. Checked before the order
+                # guard and regardless of order context, because a jump action
+                # must never produce an answer or a diagnosis.
+                if shortcut.jump_path:
+                    _record_route_metric(context, caller, route_type="clarification", outcome="completed")
+                    return {
+                        **decision.public(),
+                        "type": "clarification",
+                        "language": language,
+                        "question": payload.question,
+                        "missing_fields": [],
+                        "message": "请点击页面上的快捷按钮进入对应页面。",
+                    }
+
+                # (b) A clicked order-bound shortcut must not silently fall
+                # through to generic QA when the frontend omitted the order
+                # context.
+                #
+                # The order may arrive either as the explicit ``order_no``
+                # field OR embedded in the question text (the frontend sends
+                # the order picker result inside the sentence, e.g. "帮我检测
+                # （2099…）这个订单的充电异常"). Only when NEITHER carries a
+                # candidate do we ask for one — otherwise this guard would
+                # shadow Route 1b and reject a perfectly diagnosable request.
+                if (
+                    shortcut.requires_order
+                    and not payload.order_no
+                    and _extract_order_no(payload.question) is None
+                ):
+                    _record_route_metric(context, caller, route_type="clarification", outcome="completed")
+                    return {
+                        **decision.public(),
+                        "type": "clarification",
+                        "language": language,
+                        "question": payload.question,
+                        "missing_fields": ["order_no"],
+                        "message": "请先选择需要检测的订单后，我才能继续处理。",
+                    }
 
         # Route 1: explicit order → diagnosis semantics.
         if payload.order_no:

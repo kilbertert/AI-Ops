@@ -578,3 +578,435 @@ def test_store_seed_bundled_is_idempotent(tmp_path: Path) -> None:
     assert sorted(s.code for s in first) == ["case_exploration", "report_fault", "smart_diagnosis"]
     # Second run creates nothing.
     assert store.seed_bundled(_Ctx(), manager) == []  # type: ignore[arg-type]
+
+
+def _publish_jump_shortcut(client: TestClient, code: str, jump_path: str) -> dict:
+    created = client.post(
+        "/v1/shortcuts",
+        headers=_HEADERS,
+        json={
+            "business_entry": "consumer",
+            "code": code,
+            "intent": "report_fault",
+            "requires_order": False,
+            "sort_order": 30,
+            "labels": {"zh": "故障上报", "en": "Report a Fault"},
+            "question_templates": {"zh": "我要上报一个故障"},
+            "jump_path": jump_path,
+        },
+    )
+    assert created.status_code == 201, created.text
+    shortcut = created.json()
+    published = client.post(
+        f"/v1/shortcuts/{shortcut['shortcut_id']}/publish",
+        headers=_HEADERS,
+        json={"expected_revision": shortcut["revision"]},
+    )
+    assert published.status_code == 200, published.text
+    return shortcut
+
+
+def test_jump_path_round_trips_and_non_jump_actions_are_null(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    _publish_jump_shortcut(client, "report_fault", "/charge/pages/faultReport/faultReportList")
+    _publish_initial(client, "case_exploration")
+
+    listed = client.get("/v1/shortcuts", headers=_HEADERS).json()
+    by_code = {item["code"]: item for item in listed["shortcuts"]}
+
+    # Present and equal on the jump action.
+    assert by_code["report_fault"]["jump_path"] == "/charge/pages/faultReport/faultReportList"
+    # Present-but-null on the prompt action: the frontend must not need to
+    # distinguish "absent" from "empty".
+    assert "jump_path" in by_code["case_exploration"]
+    assert by_code["case_exploration"]["jump_path"] is None
+
+
+def test_jump_path_absent_in_request_reads_as_null(tmp_path: Path) -> None:
+    """Existing published rows predate the field and must not need a republish."""
+    client = _client(tmp_path)
+    _publish_initial(client, "case_exploration")  # helper never sends jump_path
+
+    listed = client.get("/v1/shortcuts", headers=_HEADERS).json()
+    assert listed["shortcuts"][0]["jump_path"] is None
+    # Everything else is unchanged.
+    assert listed["shortcuts"][0]["code"] == "case_exploration"
+
+
+def test_jump_path_must_start_with_slash_and_respect_length(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+
+    def _create(jump_path: object) -> object:
+        return client.post(
+            "/v1/shortcuts",
+            headers=_HEADERS,
+            json={
+                "business_entry": "consumer",
+                "code": "report_fault",
+                "intent": "report_fault",
+                "requires_order": False,
+                "sort_order": 30,
+                "labels": {"zh": "故障上报"},
+                "jump_path": jump_path,
+            },
+        )
+
+    no_slash = _create("charge/pages/faultReport")
+    assert no_slash.status_code == 422
+
+    too_long = _create("/" + "a" * 512)
+    assert too_long.status_code == 422
+
+    at_limit = _create("/" + "a" * 511)
+    assert at_limit.status_code == 201, at_limit.text
+
+    # Omitted entirely is valid and means a prompt action.
+    omitted = client.post(
+        "/v1/shortcuts",
+        headers={**_HEADERS, "X-Business-Entry": "operator"},
+        json={
+            "business_entry": "operator",
+            "code": "report_fault",
+            "intent": "report_fault",
+            "requires_order": False,
+            "sort_order": 30,
+            "labels": {"zh": "故障上报"},
+        },
+    )
+    assert omitted.status_code == 201, omitted.text
+    assert omitted.json()["jump_path"] is None
+
+
+def test_jump_path_is_frozen_into_version_and_change_needs_new_version(tmp_path: Path) -> None:
+    client = _client(tmp_path)
+    shortcut = _publish_jump_shortcut(client, "report_fault", "/charge/pages/faultReport/faultReportList")
+
+    v1 = client.get(f"/v1/shortcuts/{shortcut['shortcut_id']}/versions/1", headers=_HEADERS).json()
+    assert v1["snapshot"]["jump_path"] == "/charge/pages/faultReport/faultReportList"
+
+    # Editing a published action requires forking a draft first, so the
+    # already-published snapshot keeps rendering for in-flight clients.
+    forked = client.post(
+        f"/v1/shortcuts/{shortcut['shortcut_id']}/draft",
+        headers=_HEADERS,
+        json={"expected_revision": shortcut["revision"] + 1},
+    )
+    assert forked.status_code == 200, forked.text
+    draft = forked.json()
+    assert draft["jump_path"] == "/charge/pages/faultReport/faultReportList"
+
+    updated = client.put(
+        f"/v1/shortcuts/{shortcut['shortcut_id']}",
+        headers=_HEADERS,
+        json={
+            "expected_revision": draft["revision"],
+            "intent": "report_fault",
+            "requires_order": False,
+            "sort_order": 30,
+            "labels": {"zh": "故障上报"},
+            "jump_path": "/charge/pages/faultReport/other",
+        },
+    )
+    assert updated.status_code == 200, updated.text
+
+    # A forked draft contributes nothing to the effective merge, so a
+    # tenant-only action is absent from the listing during the edit window.
+    # (Pre-existing lifecycle semantics, not introduced by jump_path: with a
+    # published platform default present, that default shows through instead.)
+    during_edit = client.get("/v1/shortcuts", headers=_HEADERS).json()
+    assert during_edit["count"] == 0
+
+    promoted = client.post(
+        f"/v1/shortcuts/{shortcut['shortcut_id']}/publish",
+        headers=_HEADERS,
+        json={"expected_revision": updated.json()["revision"]},
+    )
+    assert promoted.status_code == 200, promoted.text
+    listed = client.get("/v1/shortcuts", headers=_HEADERS).json()
+    assert listed["shortcuts"][0]["jump_path"] == "/charge/pages/faultReport/other"
+
+    # v1 is immutable.
+    v1_again = client.get(f"/v1/shortcuts/{shortcut['shortcut_id']}/versions/1", headers=_HEADERS).json()
+    assert v1_again["snapshot"]["jump_path"] == "/charge/pages/faultReport/faultReportList"
+
+
+def test_jump_path_validation_rejects_non_string(tmp_path: Path) -> None:
+    store = ShortcutStore(tmp_path / "gateway.db")
+    from aiops_diagnostics.shortcut_lifecycle import (
+        ShortcutManager,
+        ShortcutValidationError,
+    )
+
+    manager = ShortcutManager(store)
+
+    class _Ctx:
+        effective_tenant_id = "T-1"
+        roles = frozenset({"ROLE_AGENT_ADMIN"})
+        caller = type("C", (), {"b_user_id": "admin"})()
+
+    for bad in (123, "", "  ", "/x"):
+        payload = {
+            "intent": "report_fault",
+            "requires_order": False,
+            "sort_order": 1,
+            "labels": {"zh": "故障上报"},
+            "jump_path": bad,
+        }
+        if bad in ("", "  "):
+            # Whitespace-only is treated as "no path", not an error.
+            fields = manager._validated_fields(payload, for_publish=False)
+            assert fields["jump_path"] is None
+        elif bad == "/x":
+            fields = manager._validated_fields(payload, for_publish=False)
+            assert fields["jump_path"] == "/x"
+        else:
+            try:
+                manager._validated_fields(payload, for_publish=False)
+            except ShortcutValidationError:
+                pass
+            else:  # pragma: no cover
+                raise AssertionError("non-string jump_path must be rejected")
+
+
+def test_bundled_seed_carries_the_product_fault_report_path(tmp_path: Path) -> None:
+    """The product default path is a repo asset, not an ad-hoc migration string."""
+    from aiops_diagnostics.shortcut_lifecycle import REPORT_FAULT_JUMP_PATH
+
+    store = ShortcutStore(tmp_path / "gateway.db")
+
+    class _Ctx:
+        effective_tenant_id = "T-1"
+        caller = type("C", (), {"b_user_id": "seed-user"})()
+
+    from aiops_diagnostics.shortcut_lifecycle import ShortcutManager
+
+    seeded = store.seed_bundled(_Ctx(), ShortcutManager(store))  # type: ignore[arg-type]
+    by_code = {s.code: s for s in seeded}
+    assert by_code["report_fault"].jump_path == REPORT_FAULT_JUMP_PATH
+    # The prompt actions stay prompt actions.
+    assert by_code["case_exploration"].jump_path is None
+    assert by_code["smart_diagnosis"].jump_path is None
+
+
+def test_jump_path_and_promo_target_are_mutually_exclusive(tmp_path: Path) -> None:
+    """A jump action never reaches its agent, so a promo pin would be dead
+    config with a live side effect: the pin marks an agent promotional, so it
+    would keep excluding that agent from customer-agent selection for a
+    response nothing ever fetches."""
+    client = _client(tmp_path)
+    both = client.post(
+        "/v1/shortcuts",
+        headers=_HEADERS,
+        json={
+            "business_entry": "consumer",
+            "code": "case_exploration",
+            "intent": "case_exploration",
+            "requires_order": False,
+            "sort_order": 10,
+            "labels": {"zh": "客户案例"},
+            "target_agent_version": "agt_12345678#v1",
+            "jump_path": "/charge/pages/cases/list",
+        },
+    )
+    assert both.status_code == 422
+    assert both.json()["error"]["code"] == "SHORTCUT_VALIDATION_FAILED"
+
+    # Either one alone is still fine.
+    promo_only = client.post(
+        "/v1/shortcuts",
+        headers=_HEADERS,
+        json={
+            "business_entry": "consumer",
+            "code": "case_exploration",
+            "intent": "case_exploration",
+            "requires_order": False,
+            "sort_order": 10,
+            "labels": {"zh": "客户案例"},
+            "target_agent_version": "agt_12345678#v1",
+        },
+    )
+    assert promo_only.status_code == 201, promo_only.text
+
+    jump_only = client.post(
+        "/v1/shortcuts",
+        headers={**_HEADERS, "X-Business-Entry": "operator"},
+        json={
+            "business_entry": "operator",
+            "code": "report_fault",
+            "intent": "report_fault",
+            "requires_order": False,
+            "sort_order": 30,
+            "labels": {"zh": "故障上报"},
+            "jump_path": "/charge/pages/faultReport/faultReportList",
+        },
+    )
+    assert jump_only.status_code == 201, jump_only.text
+
+
+def test_update_omitting_jump_path_preserves_it(tmp_path: Path) -> None:
+    """Regression: the request model defaults jump_path to None, so an
+    unchanged edit used to silently demote a jump action to a prompt action —
+    the one field that discriminates the two destroyed by editing a label."""
+    client = _client(tmp_path)
+    created = _publish_jump_shortcut(client, "report_fault", "/charge/pages/faultReport/faultReportList")
+    forked = client.post(
+        f"/v1/shortcuts/{created['shortcut_id']}/draft",
+        headers=_HEADERS,
+        json={"expected_revision": created["revision"] + 1},
+    ).json()
+
+    # Change ONLY the copy; do not mention jump_path at all.
+    updated = client.put(
+        f"/v1/shortcuts/{created['shortcut_id']}",
+        headers=_HEADERS,
+        json={
+            "expected_revision": forked["revision"],
+            "intent": "report_fault",
+            "requires_order": False,
+            "sort_order": 30,
+            "labels": {"zh": "故障上报（新文案）"},
+        },
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["jump_path"] == "/charge/pages/faultReport/faultReportList"
+
+    promoted = client.post(
+        f"/v1/shortcuts/{created['shortcut_id']}/publish",
+        headers=_HEADERS,
+        json={"expected_revision": updated.json()["revision"]},
+    )
+    assert promoted.status_code == 200, promoted.text
+    listed = client.get("/v1/shortcuts", headers=_HEADERS).json()
+    assert listed["shortcuts"][0]["jump_path"] == "/charge/pages/faultReport/faultReportList"
+    assert listed["shortcuts"][0]["label"] == "故障上报（新文案）"
+
+
+def test_update_jump_path_semantics_preserve_vs_clear(tmp_path: Path) -> None:
+    """The three spellings must be coherent, since they differ in meaning:
+    absent = unchanged, explicit None or whitespace = clear (a prompt action),
+    a real path = set. Absent is the one the HTTP model can send by accident,
+    so it is the one that must not destroy state."""
+    store = ShortcutStore(tmp_path / "gateway.db")
+    from aiops_diagnostics.shortcut_lifecycle import ShortcutManager
+
+    manager = ShortcutManager(store)
+
+    class _Ctx:
+        effective_tenant_id = "T-1"
+        roles = frozenset({"ROLE_AGENT_ADMIN"})
+        caller = type("C", (), {"b_user_id": "admin"})()
+
+    ctx = _Ctx()
+    base = {
+        "business_entry": "consumer",
+        "code": "report_fault",
+        "intent": "report_fault",
+        "requires_order": False,
+        "sort_order": 30,
+        "labels": {"zh": "故障上报"},
+        "jump_path": "/charge/pages/faultReport/faultReportList",
+    }
+    created = manager.create(ctx, base)  # type: ignore[arg-type]
+
+    def _edit(payload: dict, revision: int):
+        # update is replace-semantics: every other field must be resent, which
+        # is exactly the situation that made the omission bug reachable.
+        return manager.update(
+            ctx,  # type: ignore[arg-type]
+            created.shortcut_id,
+            {
+                "expected_revision": revision,
+                "intent": "report_fault",
+                "requires_order": False,
+                "sort_order": 30,
+                "labels": {"zh": "改"},
+                **payload,
+            },
+        )
+
+    # (a) key absent -> unchanged  (the case the HTTP model sends by accident)
+    step = _edit({}, created.revision)
+    assert step.jump_path == "/charge/pages/faultReport/faultReportList"
+    # (b) whitespace-only -> cleared, per the documented "no path" meaning
+    step = _edit({"jump_path": "   "}, step.revision)
+    assert step.jump_path is None
+    # (c) explicit None -> cleared (already clear, stays clear)
+    step = _edit({"jump_path": None}, step.revision)
+    assert step.jump_path is None
+    # (d) new path -> set
+    step = _edit({"jump_path": "/charge/pages/other"}, step.revision)
+    assert step.jump_path == "/charge/pages/other"
+
+
+def test_http_layer_rejects_whitespace_in_jump_path(tmp_path: Path) -> None:
+    """Both layers must agree: raw whitespace is not a valid URL path."""
+    client = _client(tmp_path)
+    for probe in ("", "  ", "/x ", " /x", "/x\n"):
+        r = client.post(
+            "/v1/shortcuts",
+            headers=_HEADERS,
+            json={
+                "business_entry": "consumer",
+                "code": "report_fault",
+                "intent": "report_fault",
+                "requires_order": False,
+                "labels": {"zh": "x"},
+                "jump_path": probe,
+            },
+        )
+        assert r.status_code == 422, f"{probe!r} should be rejected, got {r.status_code}"
+
+
+def test_jump_path_rejects_network_path_reference(tmp_path: Path) -> None:
+    """RFC 3986 §4.2: a leading "//" is an authority, not a path, so
+    "//evil.com" is a cross-host reference — a classic open-redirect vector
+    once a client hands it to its navigator. Only path-absolute routes are
+    acceptable for an in-app jump."""
+    client = _client(tmp_path)
+
+    def _create(jump_path: str, code: str):
+        return client.post(
+            "/v1/shortcuts",
+            headers=_HEADERS,
+            json={
+                "business_entry": "consumer",
+                "code": code,
+                "intent": "report_fault",
+                "requires_order": False,
+                "labels": {"zh": "故障上报"},
+                "jump_path": jump_path,
+            },
+        )
+
+    for index, hostile in enumerate(("//evil.com", "//evil.com/path", "//", "///x")):
+        r = _create(hostile, f"hostile_{index}")
+        assert r.status_code == 422, f"{hostile!r} must be rejected, got {r.status_code}"
+
+    # A legitimate path-absolute route still works, including one with an
+    # internal double slash (only the leading "//" is an authority).
+    assert _create("/charge/pages/faultReport/faultReportList", "ok_a").status_code == 201
+    assert _create("/x//y", "ok_b").status_code == 201
+
+
+def test_lifecycle_validator_also_rejects_network_path_reference(tmp_path: Path) -> None:
+    """The operator runbook calls the lifecycle layer directly, bypassing HTTP,
+    so the same guard must live there too."""
+    from aiops_diagnostics.shortcut_lifecycle import (
+        ShortcutManager,
+        ShortcutValidationError,
+    )
+
+    manager = ShortcutManager(ShortcutStore(tmp_path / "gateway.db"))
+    payload = {
+        "intent": "report_fault",
+        "requires_order": False,
+        "sort_order": 30,
+        "labels": {"zh": "故障上报"},
+        "jump_path": "//evil.com",
+    }
+    try:
+        manager._validated_fields(payload, for_publish=False)
+    except ShortcutValidationError:
+        pass
+    else:  # pragma: no cover
+        raise AssertionError("//evil.com must be rejected by the lifecycle validator")

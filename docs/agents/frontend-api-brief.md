@@ -673,7 +673,8 @@ Accept-Language: zh                              # 可选，影响 label/descrip
       "label": "客户案例",
       "description": "查看充电运营标杆案例",
       "question_template": "我想看看客户案例",
-      "target_agent_version": "agt_ed443cae10ac4ba78c81b9d1b43fd91d#v1"
+      "target_agent_version": "agt_ed443cae10ac4ba78c81b9d1b43fd91d#v1",
+      "jump_path": null
     },
     {
       "code": "smart_diagnosis",
@@ -683,7 +684,19 @@ Accept-Language: zh                              # 可选，影响 label/descrip
       "label": "智能检测",
       "description": "选择订单后自动诊断充电异常",
       "question_template": "帮我检测这个订单的充电异常",
-      "target_agent_version": null
+      "target_agent_version": null,
+      "jump_path": null
+    },
+    {
+      "code": "report_fault",
+      "intent": "report_fault",
+      "requires_order": false,
+      "sort_order": 30,
+      "label": "故障上报",
+      "description": "描述故障现象，由平台跟进处理",
+      "question_template": "我要上报一个故障",
+      "target_agent_version": null,
+      "jump_path": "/charge/pages/faultReport/faultReportList"
     }
   ]
 }
@@ -698,7 +711,12 @@ Accept-Language: zh                              # 可选，影响 label/descrip
 | `requires_order` | `true` → 点击后先弹**订单选择器**（用户订单列表由 BFF 既有接口提供），选完再把 `order_no`+问题提交统一入口；`false` → 直接提交 |
 | `sort_order` | 按升序渲染按钮 |
 | `label` / `description` / `question_template` | 按 `Accept-Language` 本地化（缺失翻译回退中文）；`question_template` 可作为默认问题文案预填输入框 |
-| `target_agent_version` | 宣传类快捷动作绑定的已发布 agent 版本，**前端不需要理解，原样忽略**（服务端路由用；不要展示给用户） |
+| `target_agent_version` | 宣传类快捷动作绑定的已发布 agent 版本，**前端不需要理解，原样忽略**（服务端路由用；不要展示给用户）。与 `jump_path` **互斥**：跳转动作不会到达 agent，因此不允许同时绑定 |
+| `jump_path` | **跳转动作的唯一判别依据**，见 D.2a。**该字段恒存在**：非 `null` → 点击后导航到该路径；`null` → 走的提示动作流程（D.2）。不要区分"字段缺失"与"字段为空" |
+
+**两种动作形态**：每条动作要么是**提示动作**（`jump_path` 为 `null`，点击后把问题提交统一入口），
+要么是**跳转动作**（`jump_path` 非 `null`，点击后本地导航）。判别只看这一个字段——
+服务端不下发额外的类型字段，也不要按 `intent` 或 `code` 去猜。
 
 - 列表是当前入口的**有效合并结果**：平台已发布默认动作对所有租户可见；租户已发布覆盖优先，
   租户级停用抑制平台默认；草稿不可见。前端不需要感知管理端的作用域细节。
@@ -708,9 +726,30 @@ Accept-Language: zh                              # 可选，影响 label/descrip
 
 错误：401/403/409/503 与 §2.2 通用处理一致（409=平台无法唯一确定，同 FAQ 线）。
 
+#### D.2a 跳转动作 —— 本地导航，不经过统一入口
+
+`jump_path` **非 `null`** 的动作是**跳转动作**。点击后**不要**调用统一助手入口，直接本地导航：
+
+```js
+if (shortcut.jump_path) {
+  uni.navigateTo({ url: shortcut.jump_path })   // 路径由服务端下发，原样使用
+} else {
+  submitToAssistant(shortcut)                   // 见 D.2
+}
+```
+
+规则：
+
+- **路径原样使用**，不要拼接、改写或加参数。跨语言是同一个路径（`jump_path` 不做国际化）。
+- **忽略该动作的 `question_template`**。产品规则是两者互斥（面板文案：「填写路径链接后用户点击将导航到对应界面，预设提示词不起作用」），但服务端仍会返回该字段的历史值；跳转动作**不得**拿它去填输入框或提交提问。
+- **跳转动作不会产生任何响应 `type`**。别去 D.4 那张表里找它——它根本不走统一入口。
+- **不要为了"保险"仍然提交一次入口**。服务端对误投的跳转动作会同步返回 `type=clarification`、`message="请点击页面上的快捷按钮进入对应页面。"`、`missing_fields` 为空，**且不创建任何作业**。那只是一个兜底，不是正常流程。
+- **tabBar 页面**：`uni.navigateTo` 无法跳转 tabBar 页面，需要 `uni.switchTab`。具体路径属于 tabBar 与否由前端确认。
+- **服务端不校验页面是否存在**。路径是客户端路由的键，可达性由前端验收；后端只保证格式（以 `/` 开头、长度上限）与如实下发。
+
 #### D.2 快捷动作的执行 —— 没有独立执行协议，走统一助手入口
 
-点击快捷动作后，把 `question`（用 `question_template` 或用户输入）和 **`shortcut_code`** 提交到场景 B 的统一入口：
+适用于 `jump_path` 为 `null` 的**提示动作**（含下面的 `requires_order` 规则）。点击后把 `question`（用 `question_template` 或用户输入）和 **`shortcut_code`** 提交到场景 B 的统一入口：
 
 ```http
 POST /v1/assistant/questions
@@ -754,6 +793,9 @@ POST /v1/assistant/questions
 | `clarification` | 200 | 缺关键信息 | 渲染 message + 按 missing_fields 补信息（D.3） |
 | `qa` | 202 | 问答/宣传卡片作业 | 按 retry_after_ms 轮询（场景 B） |
 | `diagnosis` | 202 | 订单诊断 | 轮询诊断线（场景 C） |
+
+**注意**：这张表只覆盖**走统一入口**的响应。**跳转动作不在其中**——它由客户端本地导航
+（D.2a），不调用统一入口，因此没有响应 `type`。
 
 ### 历史分离
 

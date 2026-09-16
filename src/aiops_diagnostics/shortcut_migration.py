@@ -71,6 +71,11 @@ def migrate_shortcuts(
                     "descriptions": source.descriptions,
                     "question_templates": source.question_templates,
                     "target_agent_version": None,
+                    # A tenant row shadows the platform default in the
+                    # effective merge, so a platform default that dropped this
+                    # would be silently ineffective for every tenant that
+                    # already has a copy.
+                    "jump_path": source.jump_path,
                 },
                 scope=PLATFORM_SCOPE,
             )

@@ -890,3 +890,21 @@ PROMPT-01/02 为 41 实机验收（清单收敛 + 公网问答），PROMPT-03 �
 | SHORTCUT-MIGRATION-03 | 41 实机 | SHORTCUT-MIGRATION-02 成功 | 再运行迁移并比较版本/行数 | PASS：4×`unchanged:published`，无重复有效 code/新版本 | 二次输出与只读对比已保留 |
 | SHORTCUT-MIGRATION-04 | 41 实机 | 精确备份已生成 | 在隔离副本恢复备份并做只读检查 | PASS：`integrity_check=ok`，恢复副本平台行数 0、两租户各 4 条 | 隔离副本已清理，生产备份保留 |
 | SHORTCUT-MIGRATION-05 | 41 实机 | 需要 operator B 端和无覆盖新租户会话 | consumer/operator 读取；停用；宣传与 smart_diagnosis 执行 | PARTIAL（2026-09-15）：Nginx 入口头透传后 consumer 200/4、operator 正确 503 `PLATFORM_UNAVAILABLE`、非法入口 403；smart_diagnosis 缺订单 clarification 通过；宣传 QA 被百炼 `Arrearage` 阻塞；operator 正向身份、无覆盖租户、停用/恢复、双租户宣传和有订单诊断待补 | 不把当前 partial 写成全量通过；Nginx 备份和脱敏响应已记录，不保存会话凭据 |
+
+## 快捷动作跳转路径 QA（SHORTCUT-JUMP）
+
+| ID | 环境 | 前置条件与数据 | 有序动作 | 预期可观察结果 | 清理/证据 |
+|---|---|---|---|---|---|
+| SHORTCUT-JUMP-01 | 本地 dev | 临时 SQLite；一个租户 | 发布一条带 `jump_path` 的 report_fault；发布一条不带路径的 case_exploration；读取 `GET /v1/shortcuts` | 跳转动作返回配置路径；提示动作 `jump_path` 存在且为 `null`；客户端无需区分缺失与空 | 临时 SQLite |
+| SHORTCUT-JUMP-02 | 本地 dev | 已发布动作存在 | 省略 `jump_path` 创建并发布动作后读取列表 | `jump_path` 为 `null`，其余字段与多语言回显不变；无需重发布既有动作 | 临时 SQLite |
+| SHORTCUT-JUMP-03 | 本地 dev | 一个租户 | 分别提交 `jump_path` 为 `charge/pages/faultReport`、511 字符、512 字符、省略；以及非字符串 | 不以 `/` 开头与超长被拒（`SHORTCUT_VALIDATION_FAILED`）；511 字符与省略被接受；非字符串被拒 | 临时 SQLite |
+| SHORTCUT-JUMP-04 | 本地 dev | 一条已发布跳转动作 | 读取 version 1 快照；派生草稿改路径并发布；再读 version 1 | 发布后有效列表返回新路径；version 1 快照仍为旧路径 | 临时 SQLite |
+| SHORTCUT-JUMP-05 | 本地 dev | 一条已发布跳转动作；一个属于本人的订单 | 以该 `shortcut_code` 提交统一助手入口，分别不带与带上订单号 | 两种情形均同步返回 `type=clarification` 且 `missing_fields` 为空；不创建问答或诊断作业 | 临时 SQLite |
+| SHORTCUT-JUMP-06 | 本地 dev | 已发布 smart_diagnosis（提示动作） | 缺订单提交；订单齐备提交 | 缺订单仍 `clarification` + `missing_fields=["order_no"]`；齐备仍 `202 type=diagnosis`；无回归 | 临时 SQLite |
+| SHORTCUT-JUMP-07b | 本地 dev | 一个 consumer 入口 | 提交同时带 `jump_path` 与 `target_agent_version` 的创建/更新请求；再分别只带其一 | 同时带两者被拒（`SHORTCUT_VALIDATION_FAILED`）；单独其一组各自成功 | 临时 SQLite |
+| SHORTCUT-JUMP-07 | 本地 dev | 未发布的 `shortcut_code` | 提交该 code 的普通问题 | code 被忽略，问题按普通提问处理 | 临时 SQLite |
+| SHORTCUT-JUMP-08 | 41 实机 | `aiops-gateway-41.service` active；精确库 `/var/lib/aiops-41/gateway/gateway.db`；平台默认与演示租户两条 report_fault 记录 | 先做精确 SQLite 备份并验证完整性；经生产生命周期把两条就地改造为跳转动作（路径 `/charge/pages/faultReport/faultReportList`）；公网读取 `GET /v1/shortcuts` | 该动作返回约定路径，同响应其他动作为 `null`；其余动作与语言回显不回退；旧发布版本快照可回滚 | 保留备份路径、部署提交、时间戳与脱敏 HTTP 摘要 |
+| SHORTCUT-JUMP-09 | 41 实机 | SHORTCUT-JUMP-08 完成 | 公网以该 action 的 code 提交统一助手入口（不带订单） | 同步返回 `type=clarification`；无作业 id；不产生问答或诊断记录 | 保留脱敏响应摘要 |
+| SHORTCUT-JUMP-10 | 41 实机 | SHORTCUT-JUMP-08 完成 | 以非中文 `Accept-Language` 读取列表 | 该动作名称按语言本地化（缺失回退 zh），路径保持同一字符串 | 保留脱敏响应摘要 |
+
+**边界声明**：SHORTCUT-JUMP-08/09/10 **不验证**跳转目标页面在客户端是否真实存在、能否打开、是否按语言渲染。仓库内不存在权威 H5 路由约定文档，页面属前端资产；该边界必须在验收记录中如实标注为未验，不得写成通过。
