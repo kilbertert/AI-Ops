@@ -565,3 +565,130 @@ def test_assistant_faq_shortcircuit_ignores_generic_single_tokens(tmp_path: Path
         assert resp.status_code == 202, question
         assert resp.json()["type"] == "qa", question
     assert runtime.calls == []
+
+
+def _publish_shortcut(client: TestClient, body: dict) -> dict:
+    created = client.post("/v1/shortcuts", headers=_headers(), json=body)
+    assert created.status_code == 201, created.text
+    shortcut = created.json()
+    published = client.post(
+        f"/v1/shortcuts/{shortcut['shortcut_id']}/publish",
+        headers=_headers(),
+        json={"expected_revision": shortcut["revision"]},
+    )
+    assert published.status_code == 200, published.text
+    return shortcut
+
+
+def test_jump_shortcut_at_entry_returns_clarification_and_creates_no_job(tmp_path: Path) -> None:
+    """A jump action belongs to the client, not the assistant entry. If a
+    client sends one here anyway (it was supposed to navigate), the answer
+    must be plain and must NOT spawn a QA or diagnosis job — otherwise a
+    button click silently buys a model run."""
+    client, runtime = _client(tmp_path)
+    _publish_shortcut(
+        client,
+        {
+            "business_entry": "consumer",
+            "code": "report_fault",
+            "intent": "report_fault",
+            "requires_order": False,
+            "labels": {"zh": "故障上报", "en": "Report a Fault"},
+            "jump_path": "/charge/pages/faultReport/faultReportList",
+        },
+    )
+
+    resp = client.post(
+        "/v1/assistant/questions",
+        json={"question": "我要上报一个故障", "shortcut_code": "report_fault"},
+        headers=_headers(),
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["type"] == "clarification"
+    assert body["missing_fields"] == []
+    # No job of either kind was created.
+    assert runtime._qa == {}
+    assert runtime.calls == []
+
+
+def test_jump_shortcut_creates_no_job_even_with_an_owned_order(tmp_path: Path) -> None:
+    """The jump guard must precede the order routes: a jump action must not
+    start a diagnosis just because an order happened to be attached."""
+    client, runtime = _client(tmp_path)  # fixture allows 2096164064667852801
+    _publish_shortcut(
+        client,
+        {
+            "business_entry": "consumer",
+            "code": "report_fault",
+            "intent": "report_fault",
+            "requires_order": False,
+            "labels": {"zh": "故障上报"},
+            "jump_path": "/charge/pages/faultReport/faultReportList",
+        },
+    )
+
+    resp = client.post(
+        "/v1/assistant/questions",
+        json={
+            "question": "帮我检测（2096164064667852801）这个订单的充电异常",
+            "shortcut_code": "report_fault",
+        },
+        headers=_headers(),
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["type"] == "clarification"
+    assert runtime.calls == []
+    assert runtime._qa == {}
+
+
+def test_prompt_shortcuts_are_unaffected_by_the_jump_guard(tmp_path: Path) -> None:
+    """Regression: the two prompt actions keep their exact behavior."""
+    client, runtime = _client(tmp_path)
+    _publish_shortcut(
+        client,
+        {
+            "business_entry": "consumer",
+            "code": "smart_diagnosis",
+            "intent": "order_issue",
+            "requires_order": True,
+            "labels": {"zh": "智能检测"},
+        },
+    )
+
+    # Order-bound prompt action without an order: unchanged clarification.
+    missed = client.post(
+        "/v1/assistant/questions",
+        json={"question": "帮我检测这个订单的充电异常", "shortcut_code": "smart_diagnosis"},
+        headers=_headers(),
+    )
+    assert missed.status_code == 200
+    assert missed.json()["type"] == "clarification"
+    assert missed.json()["missing_fields"] == ["order_no"]
+    assert runtime._qa == {}
+
+    # Order-bound prompt action WITH the order: still reaches diagnosis.
+    reached = client.post(
+        "/v1/assistant/questions",
+        json={
+            "question": "帮我检测（2096164064667852801）这个订单的充电异常",
+            "shortcut_code": "smart_diagnosis",
+        },
+        headers=_headers(),
+    )
+    assert reached.status_code == 202, reached.text
+    assert reached.json()["type"] == "diagnosis"
+
+
+def test_unknown_shortcut_code_still_falls_through_to_qa(tmp_path: Path) -> None:
+    """An unpublished or unknown code keeps the existing safe fallback: it is
+    ignored and the question is handled as an ordinary one."""
+    client, runtime = _client(tmp_path)
+    question = "为什么我的车充满电之后续航里程总是比官方标注少这么多"
+    resp = client.post(
+        "/v1/assistant/questions",
+        json={"question": question, "shortcut_code": "not_published_yet"},
+        headers=_headers(),
+    )
+    assert resp.status_code == 202, resp.text
+    assert resp.json()["type"] == "qa"
