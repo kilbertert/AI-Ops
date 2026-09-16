@@ -641,6 +641,8 @@ POST https://api.qumall.qushiyun.com/v1/assistant/questions
 
 ### 场景 D：产品快捷动作（shortcut）与澄清（clarification）
 
+> **跳转类动作的联调交接**见 [frontend-jump-path-handoff.md](./frontend-jump-path-handoff.md)：含 41 真实响应样例、一个分支的判别写法、以及 8 个易踩点。
+
 #### D.1 GET /v1/shortcuts — 读取当前入口的有效快捷动作
 
 页面加载时调用一次（产品首页按钮的渲染源）。**任何通过助手鉴权的调用者都可读**，
