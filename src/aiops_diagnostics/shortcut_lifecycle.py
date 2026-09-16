@@ -860,12 +860,19 @@ class ShortcutManager:
         question_templates = _localized(
             payload.get("question_templates"), "question_templates", require_zh=False
         )
+        jump_path = _jump_path(payload.get("jump_path"))
         target = payload.get("target_agent_version")
         if target is not None:
             if not isinstance(target, str) or not _AGENT_VERSION.fullmatch(target):
                 raise ShortcutValidationError("target_agent_version is invalid")
             if intent not in {"case_exploration", "solution_discovery"}:
                 raise ShortcutValidationError("target_agent_version is only allowed for promotional intents")
+            if jump_path is not None:
+                # A jump action never reaches the agent, so a pin would be dead
+                # config with a live side effect: the pin is what marks an agent
+                # promotional, so it would keep excluding that agent from
+                # customer-agent selection for a response nobody ever fetches.
+                raise ShortcutValidationError("jump_path and target_agent_version are mutually exclusive")
         return {
             "intent": intent,
             "requires_order": requires_order,
@@ -874,7 +881,7 @@ class ShortcutManager:
             "descriptions": descriptions,
             "question_templates": question_templates,
             "target_agent_version": target,
-            "jump_path": _jump_path(payload.get("jump_path")),
+            "jump_path": jump_path,
         }
 
 

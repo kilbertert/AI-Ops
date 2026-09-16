@@ -786,3 +786,58 @@ def test_bundled_seed_carries_the_product_fault_report_path(tmp_path: Path) -> N
     # The prompt actions stay prompt actions.
     assert by_code["case_exploration"].jump_path is None
     assert by_code["smart_diagnosis"].jump_path is None
+
+
+def test_jump_path_and_promo_target_are_mutually_exclusive(tmp_path: Path) -> None:
+    """A jump action never reaches its agent, so a promo pin would be dead
+    config with a live side effect: the pin marks an agent promotional, so it
+    would keep excluding that agent from customer-agent selection for a
+    response nothing ever fetches."""
+    client = _client(tmp_path)
+    both = client.post(
+        "/v1/shortcuts",
+        headers=_HEADERS,
+        json={
+            "business_entry": "consumer",
+            "code": "case_exploration",
+            "intent": "case_exploration",
+            "requires_order": False,
+            "sort_order": 10,
+            "labels": {"zh": "客户案例"},
+            "target_agent_version": "agt_12345678#v1",
+            "jump_path": "/charge/pages/cases/list",
+        },
+    )
+    assert both.status_code == 422
+    assert both.json()["error"]["code"] == "SHORTCUT_VALIDATION_FAILED"
+
+    # Either one alone is still fine.
+    promo_only = client.post(
+        "/v1/shortcuts",
+        headers=_HEADERS,
+        json={
+            "business_entry": "consumer",
+            "code": "case_exploration",
+            "intent": "case_exploration",
+            "requires_order": False,
+            "sort_order": 10,
+            "labels": {"zh": "客户案例"},
+            "target_agent_version": "agt_12345678#v1",
+        },
+    )
+    assert promo_only.status_code == 201, promo_only.text
+
+    jump_only = client.post(
+        "/v1/shortcuts",
+        headers={**_HEADERS, "X-Business-Entry": "operator"},
+        json={
+            "business_entry": "operator",
+            "code": "report_fault",
+            "intent": "report_fault",
+            "requires_order": False,
+            "sort_order": 30,
+            "labels": {"zh": "故障上报"},
+            "jump_path": "/charge/pages/faultReport/faultReportList",
+        },
+    )
+    assert jump_only.status_code == 201, jump_only.text
