@@ -2,7 +2,7 @@
 
 > **用途**：让任何 agent/工程师在不依赖会话记忆的前提下，能独立完成 41
 > （`api.mall.qushiyun.com`）的**部署、真实资源创建、真实端到端验收**。
-> **最后核验**：2026-09-16（对 main `84409a6` 实测）。
+> **最后核验**：2026-09-16（对 main `b0b3856` 实测；新增 §1.1 密钥登录）。
 >
 > **凭据纪律**：本文件只写方法与位置，**不写任何口令/令牌/thirdSession 明文**。
 > 凭据读取一律从 41 主机的 root 权限环境变量现场取，不落库、不入仓库、不贴聊天。
@@ -24,16 +24,41 @@
 
 ## 1. 访问 41
 
-41 使用 root 登录（口令从环境变量现场取，**不写进任何文件**）：
+### 1.1 首选：密钥登录（2026-09-16 起已配置）
 
 ```bash
-SSHPASS='<现场从受控来源取得>' sshpass -e ssh -o StrictHostKeyChecking=no root@47.97.160.153 '<命令>'
+ssh aiops-41 '<命令>'          # 别名：47.97.160.153, user root, key id_ed25519_41_aiops
 ```
+
+别名定义在 `~/.ssh/config`；私钥 `~/.ssh/id_ed25519_41_aiops`（公钥已装到 41 的
+`/root/.ssh/authorized_keys`）。**不需要口令，可直接用于自动化。** 验证：
+
+```bash
+ssh -o BatchMode=yes aiops-41 'echo OK; hostname'
+```
+
+若 `Permission denied (publickey)`：说明公钥未装或私钥缺失，按 §1.2 用一次性口令装回公钥。
+
+### 1.2 一次性口令（仅用于装回公钥；口令现场从受控来源取，不写进任何文件）
+
+```bash
+PUB=$(cat ~/.ssh/id_ed25519_41_aiops.pub)
+SSHPASS='<现场从受控来源取得>' sshpass -e ssh -o StrictHostKeyChecking=no root@47.97.160.153 "
+  mkdir -p /root/.ssh && chmod 700 /root/.ssh
+  touch /root/.ssh/authorized_keys && chmod 600 /root/.ssh/authorized_keys
+  grep -qF '$PUB' /root/.ssh/authorized_keys || echo '$PUB' >> /root/.ssh/authorized_keys
+  echo KEY_INSTALLED"
+```
+
+**注意**：不要把口令写进命令行参数以外的地方（不写文件、不贴聊天）。装好公钥后一律走 §1.1。
+
+### 1.3 执行约定
 
 - 所有需要读 `production.env` 凭据的命令都用 `root`（`aiops41` 用户读不到 env 明文）。
 - 应用进程内执行（reconcile、ShortcutManager）用 `runuser -u aiops41 -- ...`，
   工作目录必须在 `/opt/aiops-41`（否则 `.venv` 找不到 `pyproject.toml`，报
   `PermissionError: /root/pyproject.toml`）。
+- **41 上没有 `sqlite3` CLI**；查库用 `/opt/aiops-41/.venv/bin/python -c "import sqlite3; ..."`。
 
 ## 2. 部署（源码同步到 41）
 
@@ -44,10 +69,10 @@ SSHPASS='<现场从受控来源取得>' sshpass -e ssh -o StrictHostKeyChecking=
 tar czf /tmp/aiops-sync.tar.gz src/aiops_diagnostics/
 
 # 2) 上传
-SSHPASS='<...>' sshpass -e scp -o StrictHostKeyChecking=no /tmp/aiops-sync.tar.gz root@47.97.160.153:/tmp/
+scp /tmp/aiops-sync.tar.gz aiops-41:/tmp/
 
 # 3) 在 41 上：先备份，再解到临时目录核对，最后 rsync 覆盖
-SSHPASS='<...>' sshpass -e ssh -o StrictHostKeyChecking=no root@47.97.160.153 '
+ssh aiops-41 '
 set -e
 mkdir -p /var/backups/aiops-41/backup-$(date +%Y%m%d-%H%M%S)
 cp -a /opt/aiops-41/src /var/backups/aiops-41/backup-$(date +%Y%m%d-%H%M%S)/
@@ -66,7 +91,7 @@ rm -rf /tmp/sync-check /tmp/aiops-sync.tar.gz'
 # 本地
 for f in $(git ls-files src/aiops_diagnostics/); do echo "$f $(sha256sum "$f" | cut -c1-16)"; done | sort > /tmp/local.txt
 # 41（排除 __pycache__）
-SSHPASS='<...>' sshpass -e ssh root@47.97.160.153 'cd /opt/aiops-41 && for f in $(find src/aiops_diagnostics -type f -not -path "*__pycache__*" | sort); do echo "$f $(sha256sum "$f" | cut -c1-16)"; done' | sort > /tmp/remote.txt
+ssh aiops-41 'cd /opt/aiops-41 && for f in $(find src/aiops_diagnostics -type f -not -path "*__pycache__*" | sort); do echo "$f $(sha256sum "$f" | cut -c1-16)"; done' | sort > /tmp/remote.txt
 diff /tmp/local.txt /tmp/remote.txt && echo "41 == main"
 ```
 
@@ -79,7 +104,7 @@ diff /tmp/local.txt /tmp/remote.txt && echo "41 == main"
 清单追加 `[[agents]]`（字段见 `ops/README.md`）后：
 
 ```bash
-SSHPASS='<...>' sshpass -e ssh root@47.97.160.153 '
+ssh aiops-41 '
 install -o aiops41 -g aiops41 -m 0640 /tmp/env-41.toml /opt/aiops-41/ops/environments/env-41.toml.new
 cd /opt/aiops-41
 runuser -u aiops41 -- /opt/aiops-41/.venv/bin/python -m aiops_diagnostics \
@@ -153,7 +178,7 @@ manager.publish(admin, updated.shortcut_id, expected_revision=updated.revision)
 会话键在公司会话 Redis，41 本机 `127.0.0.1:6379`，前缀 `app:3rd_session:`：
 
 ```bash
-SSHPASS='<...>' sshpass -e ssh root@47.97.160.153 '
+ssh aiops-41 '
 PW=$(grep -oE "^AIOPS_REDIS_PASSWORD=.*" /etc/aiops-41/production.env | cut -d= -f2)
 for K in $(redis-cli -h 127.0.0.1 -p 6379 -a "$PW" --no-auth-warning --scan --pattern "app:3rd_session:*"); do
   V=$(redis-cli -h 127.0.0.1 -p 6379 -a "$PW" --no-auth-warning get "$K" | tr -d "\000-\010")
