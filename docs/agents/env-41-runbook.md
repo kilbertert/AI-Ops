@@ -127,6 +127,25 @@ manager.publish(admin, s.shortcut_id, expected_revision=s.revision)
 
 创建后**必须**用公网 `GET /v1/shortcuts` 验收（见 §5）。
 
+**改造一条已发布动作为跳转动作**（不新增行，`jump_path` 非空即跳转）：
+
+```text
+# 派生草稿 → 改 jump_path → 发布。旧发布版本快照保留，可 rollback。
+draft = manager.fork_draft(admin, shortcut_id, expected_revision=current.revision)
+manager.update(admin, draft.shortcut_id, {
+    "expected_revision": draft.revision,
+    "intent": "report_fault", "requires_order": False, "sort_order": 30,
+    "labels": {"zh": "故障上报", "en": "Report a Fault"},
+    "descriptions": {…}, "question_templates": {…},   # 保留原值
+    "jump_path": "/charge/pages/faultReport/faultReportList",
+})
+manager.publish(admin, updated.shortcut_id, expected_revision=updated.revision)
+```
+
+- `jump_path` 必须 `/` 开头、≤512 字符；留空/省略即提示动作。
+- **平台默认行与租户行都要改**：`list_effective` 中租户已发布行覆盖平台默认行，只改一条会分叉。
+- 改前先做精确 SQLite 备份（见 §5 的备份纪律）。
+
 ## 4. 真实会话与数据（验收前置）
 
 ### 4.1 取有效 thirdSession

@@ -977,3 +977,74 @@ Feature: 41 快捷动作数据迁移
       When 分别读取 consumer/operator 快捷动作并执行宣传与 smart_diagnosis 入口
       Then 无覆盖租户看到平台默认，有覆盖租户覆盖优先，停用只影响自身
       And 宣传 Agent/知识库不跨租户，smart_diagnosis 仍执行订单归属校验
+
+Feature: 快捷动作跳转站内页面
+  一条产品快捷动作可以携带可选的站内跳转路径。路径非空即跳转动作：由客户端导航到
+  对应页面，不经过统一助手入口、不创建任何作业；路径为空即既有提示动作。
+
+  Rule: 跳转路径是跳转动作的唯一判别依据
+
+    Scenario: 列表对跳转与提示动作返回同一形状
+      Given 租户已发布一条带跳转路径的 report_fault 动作
+      And 租户已发布一条不带跳转路径的 case_exploration 动作
+      When 客户端读取 GET /v1/shortcuts
+      Then report_fault 的 jump_path 等于配置的站内路径
+      And case_exploration 的 jump_path 字段存在且为 null
+      And 客户端无需区分“字段缺失”与“字段为空”
+
+    Scenario: 既有动作不因新字段改变行为
+      Given 41 上已发布四条不含 jump_path 的历史动作
+      When 客户端读取 GET /v1/shortcuts
+      Then 每条动作的 jump_path 均为 null
+      And 其余字段、多语言文案与 language 回显与变更前一致
+      And 不需要重新发布这些动作
+
+    Scenario: 跳转路径在发布后不可变
+      Given 一条已发布动作的 jump_path 为路径 A
+      When 管理员派生根草稿后将其改为路径 B 并发布
+      Then 有效列表返回路径 B
+      And 历史发布版本快照仍记录路径 A
+
+  Rule: 跳转路径格式受限但不做存在性校验
+
+    Scenario: 路径必须以斜杠开头
+      Given 管理员提交 jump_path 为 charge/pages/faultReport
+      When 调用创建或更新快捷动作接口
+      Then 请求被拒绝且错误码为 SHORTCUT_VALIDATION_FAILED
+
+    Scenario: 路径留空表示提示动作
+      Given 管理员创建动作时省略 jump_path
+      When 读取该动作
+      Then jump_path 为 null 且该动作按提示动作工作
+
+    Scenario: 后端不校验页面是否存在
+      Given 管理员提交一个格式合法但客户端并不存在的站内路径
+      When 读取 GET /v1/shortcuts
+      Then 服务端原样返回该路径且不报错
+      And 页面可达性由客户端验收，不属于后端验收范围
+
+  Rule: 跳转动作永不经过统一助手入口
+
+    Scenario: 跳转动作误打入口时同步澄清且不建作业
+      Given 用户点击了一条跳转动作
+      And 客户端错误地把该动作提交到 POST /v1/assistant/questions
+      When 服务端处理该请求
+      Then 返回 HTTP 200 且 type 为 clarification
+      And 不创建问答作业也不创建诊断作业
+
+    Scenario: 跳转动作不会因为带订单上下文而启动诊断
+      Given 请求同时携带跳转动作的 shortcut_code 和一个属于本人的订单号
+      When 服务端处理该请求
+      Then 仍返回 type 为 clarification
+      And 不启动诊断作业
+
+    Scenario: 提示动作行为无回归
+      Given 用户点击智能检测（requires_order 的提示动作）
+      When 请求缺少订单上下文
+      Then 仍返回 type 为 clarification 且 missing_fields 包含 order_no
+      And 当订单上下文齐备且属于本人时仍返回 type 为 diagnosis
+
+    Scenario: 未知或未发布的 code 保持既有回退
+      Given 用户提交一个未发布的 shortcut_code
+      When 服务端处理该请求
+      Then 该 code 被忽略且问题按普通提问处理
