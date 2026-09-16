@@ -724,7 +724,18 @@ def create_gateway_app(
         # generic QA when the frontend omitted the order context. The listing
         # metadata is a UI hint; this server-side guard is the authorization
         # boundary that keeps smart_diagnosis on the order path.
-        if payload.shortcut_code and not payload.order_no:
+        #
+        # The order may arrive either as the explicit ``order_no`` field OR
+        # embedded in the question text (the frontend sends the order picker
+        # result inside the sentence, e.g. "帮我检测（2099…）这个订单的充电
+        # 异常"). Only when NEITHER carries a candidate do we ask for one —
+        # otherwise this guard would shadow Route 1b and reject a perfectly
+        # diagnosable request.
+        if (
+            payload.shortcut_code
+            and not payload.order_no
+            and _extract_order_no(payload.question) is None
+        ):
             try:
                 shortcut = context.shortcut_manager.store.find_effective_by_code(
                     caller.effective_tenant_id, str(decision.platform), payload.shortcut_code
