@@ -1388,3 +1388,34 @@ INVALID_ACCESS_TOKEN`，符合公开合同。
 - 规格 #260；切片 #261（字段）、#262（入口守卫）、#263（契约/领域模型/ADR）、#264（本验收）。
 - 领域模型变更见 `CONTEXT.md`「提示动作/跳转动作」与 `docs/adr/0006-shortcut-actions-extend-to-in-app-navigation.md`。
 - 前端契约见 `docs/agents/frontend-api-brief.md` D.1/D.2a。
+
+## 宣传动作「空库」误报修复与 41 实测（2026-09-16，PR #270）
+
+**问题（前端反馈）**：点击「客户案例」「行业方案」时前端显示案例/方案找不到。
+
+**排查结论 —— 前端把两个不同的问题看成了一个**：
+
+| 快捷动作 | 实际表现 | 性质 |
+|---|---|---|
+| `solution_discovery` | `completed`，`retrieval_status=not_found`，文案「当前没有可用的行业方案，未检索到匹配的宣传资料。」 | **误报**：该动作未绑定宣传 Agent，**根本没发起检索** |
+| `case_exploration` | `failed`，`error.code=QA_FAILED`，detail 含百炼 `Arrearage` | 供应商欠费导致的**硬失败**（另见下方未修项） |
+
+**根因**：`promo_empty_result` 把 `retrieval_status` 写死为 `not_found`，三处调用点无论是否真的检索过都用它，于是"没检索"与"检索了但没有"共用同一句话——系统对**它从未查看过的库**做出了内容判断。
+
+**修复**：拆成两种状态、两套文案（zh/en）——`not_found`（确实检索过且无结果）与 `unavailable`（未检索：无可解析目标、未接入检索能力、依赖失败）。三处调用点（无检索能力分支、目标不可解析分支、`KnowledgeSearchUnavailable` 分支）全部改为 `unavailable`。
+
+**41 实测（部署后）**：
+
+```
+qa_id=qa_ed656c4f105a47218d2a1fe46c30a3dc
+status: completed
+retrieval_status: unavailable
+text: 行业方案检索服务暂时不可用，请稍后重试。
+error: None
+```
+
+不再声称"未检索到匹配的宣传资料"。部署前源码已备份（`/var/backups/aiops-41/promo-fix-*`）。
+
+**测试过程中的一次自我纠正**：第一版回归测试**在回退修复后仍然通过**，说明它根本没覆盖被改的代码（`run_customer_qa_answer` 内部吞掉了该失败、从不抛出）。该测试已删除，改为驱动真实 `GatewayRuntime` 的测试，并**验证其在无修复时失败、有修复时通过**。这条记录在此，是因为"测试通过"与"覆盖了改动"是两件事。
+
+**未修项（已记录，未擅自更改）**：`case_exploration` 绑定了宣传 Agent，模型调用遇 `Arrearage` 时整单 `QA_FAILED` 硬失败，未按"宣传动作不可用应返回诚实卡片"的约定降级。**是否让一次宣传点击在模型不可用时暴露硬错误属于产品决策**，且与本次"误报"是不同缺陷。#270 未改动它。
