@@ -39,7 +39,17 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@bd01e18f51369d5a26f1651c3cb451d3417e3bba # v6.3.1
         with:
-          enable-cache: true
+          # Cache save is disabled on the self-hosted runner. Its post-job step
+          # runs `uv cache prune` against the SAME uv cache this host's
+          # development work uses (~/.cache/uv, ~900M, concurrently held by live
+          # processes), so the step contends, hangs for its full timeout, and
+          # then fails the job. Worse than slow, it is destructive: a CI job
+          # pruning the developer's cache is not something to leave armed.
+          #
+          # No speed is lost: `uv sync` below still reads that local cache
+          # directly (the install step measured ~11s), and the action's own
+          # cache is only a GitHub-side copy we do not need here.
+          enable-cache: false
           python-version: "3.13"
 
       - name: Install locked dependencies
