@@ -15,8 +15,21 @@ concurrency:
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Self-hosted, NOT ubuntu-latest: the GitHub-hosted minutes for this
+    # repository were exhausted, which stopped every job from starting at all
+    # ("recent account payments have failed or your spending limit needs to be
+    # increased"). The repository's own runner is online and unlimited, and the
+    # other workflows already use it.
+    #
+    # SECURITY BOUNDARY: self-hosted runners must never run untrusted code.
+    # This job runs pull-request code with repository secrets and a persistent
+    # filesystem, so it is only safe while every PR author is trusted and fork
+    # PRs never reach it. If this repository ever accepts outside
+    # contributions, this job must go back to a GitHub-hosted runner and the
+    # fork gate below is not sufficient on its own.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: self-hosted
+    timeout-minutes: 20
     steps:
       - name: Check out repository
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
