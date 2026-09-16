@@ -98,19 +98,24 @@ PROMO_EMPTY_MESSAGES: dict[str, dict[str, str]] = {
     },
 }
 
-# Promotional retrieval dependency is down. Deliberately NOT the messages
+# The promotional surface could not be produced. Deliberately NOT the messages
 # above: those assert "the library holds nothing matching this", which is a
-# claim about content. When the search itself failed we know nothing about the
-# content, so claiming an empty library would be a false statement to the user
-# (and a misleading one to whoever debugs it later).
+# claim about content. When nothing was searched — no resolvable target, no
+# search capability, a dependency failure, or an unreachable model — we know
+# nothing about the content, so claiming an empty library would be a false
+# statement to the user (and a misleading one to whoever debugs it later).
+#
+# Wording stays subsystem-neutral on purpose: the same copy covers a search
+# outage and a model outage, and naming "检索" for a model failure would be a
+# fresh inaccuracy of exactly the kind this table exists to prevent.
 PROMO_UNAVAILABLE_MESSAGES: dict[str, dict[str, str]] = {
     "zh": {
-        "case_exploration": "客户案例检索服务暂时不可用，请稍后重试。",
-        "solution_discovery": "行业方案检索服务暂时不可用，请稍后重试。",
+        "case_exploration": "客户案例服务暂时不可用，请稍后重试。",
+        "solution_discovery": "行业方案服务暂时不可用，请稍后重试。",
     },
     "en": {
-        "case_exploration": "Customer case search is temporarily unavailable. Please try again later.",
-        "solution_discovery": "Industry solution search is temporarily unavailable. Please try again later.",
+        "case_exploration": "Customer cases are temporarily unavailable. Please try again later.",
+        "solution_discovery": "Industry solutions are temporarily unavailable. Please try again later.",
     },
 }
 

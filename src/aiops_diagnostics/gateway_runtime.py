@@ -922,6 +922,21 @@ class GatewayRuntime:
             # zero-order answer instead of failing the job.
             return None
         except (AgentRuntimeError, ValueError) as exc:
+            if promo_intent:
+                # A promotional click is a product surface, not a diagnostic
+                # run. When the model is unreachable (41 live: the provider
+                # account in arrears made every case_exploration click a hard
+                # QA_FAILED), the promotion contract promises an honest card,
+                # so report the outage as a card instead of an error the user
+                # cannot act on.
+                from aiops_diagnostics.promo_agents import promo_empty_result
+
+                self.store.update_assistant_question(
+                    qa_id,
+                    status="completed",
+                    result=promo_empty_result(language, promo_intent, retrieval_status="unavailable"),
+                )
+                return {"status": "completed"}
             self.store.update_assistant_question(
                 qa_id,
                 status="failed",
