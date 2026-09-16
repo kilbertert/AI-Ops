@@ -1341,3 +1341,50 @@ INVALID_ACCESS_TOKEN`，符合公开合同。
 - **用户可见链路**：该 completed 终态即 APK 轮询取得的最终响应，result 非空，
   修复前"analysing→diagnosis completed→无内容"的根因（后端 blocked + 前端
   不区分终态）已在后端侧消除；前端文案缺陷仍需 APP 侧修复。
+
+## 快捷动作跳转路径：41 部署与公网真实验收（2026-09-16，#261/#262/#263/#264）
+
+**部署提交**：`d2c35f522730d118008341e02b5969b8fb8d2618`（PR #265 合并后 main）
+**环境**：41 `47.97.160.153`，公网入口 `https://api.mall.qushiyun.com`
+**时间**：2026-09-16 15:51–15:55 (+0800)
+**备份**：`/var/backups/aiops-41/jump-path-20260916-155133/`（含 `gateway.db` 与 `src/`）
+**数据库完整性**：备份副本 `PRAGMA integrity_check` = `ok`
+
+### 部署
+
+- 源码打包 → scp → 解到临时目录核对（`jump_path` 命中：`shortcut_lifecycle.py` 24 处、`gateway_api.py` 2 处）→ `rsync -a --delete` → `chown aiops41` → 重启 `aiops-gateway-41.service` → 服务 `active`，`/health` 返回 `ok`。
+- **逐文件 sha 校验**：本地 56 个文件与 41 逐一比对，`diff` 无差异 —— 41 == `d2c35f5`。
+
+### 数据变更（走生产生命周期，未直接写表）
+
+`report_fault` 就地改造为跳转动作（`jump_path = /charge/pages/faultReport/faultReportList`），经 `fork_draft → update → publish`：
+
+| 记录 | 结果 |
+|---|---|
+| `__platform__`（平台默认） | `published`，`published_version=2` |
+| `1942105476598861824` | `published`，`published_version=2` |
+| `1899282205965029376` | `published`，`published_version=2` |
+
+**三条都改了**，不只是两条：`list_effective` 中租户已发布行覆盖平台默认行，所以演示租户看到的其实是各自的租户行；平台默认行若单独遗留会让将来新租户拿到旧的提示行为。`question_templates` 保留未删（字段留着，只是不再被按钮使用）。旧版本快照（v1）保留，可 rollback。
+
+### 公网验收结果
+
+| 用例 | 结果 |
+|---|---|
+| SHORTCUT-JUMP-08 列表契约 | **PASS**：`type=shortcut_list`、`count=4`、`language=zh`；`report_fault.jump_path='/charge/pages/faultReport/faultReportList'`，其余三条均为 `null` |
+| SHORTCUT-JUMP-09 入口防御分支 | **PASS**：跳转动作投递统一入口 → `200 type=clarification`、`missing_fields=[]`、`message="请点击页面上的快捷按钮进入对应页面。"` |
+| SHORTCUT-JUMP-09 无作业 | **PASS**：请求后查库，最新 `assistant_questions` 行为 `05:55:22Z`，最新 `standard_diagnoses` 为 `05:52:18Z`，两次请求发生于 `07:53Z` —— **本次请求未创建任何作业** |
+| SHORTCUT-JUMP-09 提示动作无回归 | **PASS**：对照请求 `smart_diagnosis` 缺订单 → 仍 `clarification` + `missing_fields=["order_no"]`，原有守卫未削弱 |
+| SHORTCUT-JUMP-10 本地化 | **PASS**：`Accept-Language: en` → `label='Report a Fault'`；`de` → 回退 `'故障上报'`；两种语言下 `jump_path` 均为同一字符串（路径按设计不国际化） |
+
+使用的真实会话来自 41 本机会话 Redis（`app:3rd_session:*`），与会话租户一致；**会话令牌不外泄、不入库、不写入本文档**。
+
+### 验收边界（未验项，如实声明）
+
+**跳转目标页面 `/charge/pages/faultReport/faultReportList` 在 H5/APK 客户端上是否真实存在、能否打开、是否按语言渲染，本次未验证。** 仓库内不存在权威 H5 路由约定文档，该页面属前端资产；后端只保证格式校验（`/` 开头、非 `//`、长度上限）与如实下发，不做存在性校验。此边界需在交付说明中保留，不得写成通过。
+
+### 关联
+
+- 规格 #260；切片 #261（字段）、#262（入口守卫）、#263（契约/领域模型/ADR）、#264（本验收）。
+- 领域模型变更见 `CONTEXT.md`「提示动作/跳转动作」与 `docs/adr/0006-shortcut-actions-extend-to-in-app-navigation.md`。
+- 前端契约见 `docs/agents/frontend-api-brief.md` D.1/D.2a。
