@@ -685,7 +685,20 @@ class ShortcutManager:
         self, context: Any, shortcut_id: str, payload: dict[str, Any], *, scope: str = TENANT_SCOPE
     ) -> Shortcut:
         tenant_id = self._scope_tenant(context, scope, EDIT_ROLES)
-        fields = self._validated_fields(payload, for_publish=False)
+        # Absent ``jump_path`` means "leave it alone", not "clear it". The HTTP
+        # request model defaults the field to None, so an unchanged edit would
+        # otherwise silently demote a jump action to a prompt action — turning
+        # the one field that discriminates the two into collateral damage of an
+        # unrelated label edit. Explicit null clears it; both spellings go
+        # through the single _jump_path validator so there is one normalizer.
+        current = self.store.get(_id(shortcut_id), tenant_id)
+        fields = self._validated_fields(
+            {
+                **payload,
+                "jump_path": payload.get("jump_path") or current.jump_path,
+            },
+            for_publish=False,
+        )
         if scope == PLATFORM_SCOPE and fields["target_agent_version"] is not None:
             raise ShortcutValidationError("platform shortcuts cannot bind a tenant agent version")
         return self.store.update(
@@ -867,12 +880,16 @@ class ShortcutManager:
                 raise ShortcutValidationError("target_agent_version is invalid")
             if intent not in {"case_exploration", "solution_discovery"}:
                 raise ShortcutValidationError("target_agent_version is only allowed for promotional intents")
-            if jump_path is not None:
-                # A jump action never reaches the agent, so a pin would be dead
-                # config with a live side effect: the pin is what marks an agent
-                # promotional, so it would keep excluding that agent from
-                # customer-agent selection for a response nobody ever fetches.
-                raise ShortcutValidationError("jump_path and target_agent_version are mutually exclusive")
+        if jump_path is not None and target is not None:
+            # A jump action never reaches the agent, so a pin would be dead
+            # config with a live side effect: the pin is what marks an agent
+            # promotional, so it would keep excluding that agent from
+            # customer-agent selection for a response nobody ever fetches.
+            #
+            # Rejected only for NEW configuration. An old published version that
+            # carries both must still be rollback-able, so this is enforced in
+            # _reject_new_conflicts rather than here.
+            raise ShortcutValidationError("jump_path and target_agent_version are mutually exclusive")
         return {
             "intent": intent,
             "requires_order": requires_order,

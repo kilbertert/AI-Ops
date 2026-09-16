@@ -248,7 +248,11 @@ class ShortcutFieldsRequest(BaseModel):
     jump_path: str | None = Field(
         default=None,
         max_length=512,
-        pattern=r"^/.*$",
+        # Raw whitespace in a URL path is invalid (it is "%20" when encoded),
+        # so rejecting it here keeps this layer and the lifecycle validator
+        # agreeing on what a path is. Without \S, a trailing space or newline
+        # would be accepted here and then silently normalized away there.
+        pattern=r"^/\S*$",
     )
 
 

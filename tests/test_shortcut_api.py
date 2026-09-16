@@ -841,3 +841,117 @@ def test_jump_path_and_promo_target_are_mutually_exclusive(tmp_path: Path) -> No
         },
     )
     assert jump_only.status_code == 201, jump_only.text
+
+
+def test_update_omitting_jump_path_preserves_it(tmp_path: Path) -> None:
+    """Regression: the request model defaults jump_path to None, so an
+    unchanged edit used to silently demote a jump action to a prompt action —
+    the one field that discriminates the two destroyed by editing a label."""
+    client = _client(tmp_path)
+    created = _publish_jump_shortcut(client, "report_fault", "/charge/pages/faultReport/faultReportList")
+    forked = client.post(
+        f"/v1/shortcuts/{created['shortcut_id']}/draft",
+        headers=_HEADERS,
+        json={"expected_revision": created["revision"] + 1},
+    ).json()
+
+    # Change ONLY the copy; do not mention jump_path at all.
+    updated = client.put(
+        f"/v1/shortcuts/{created['shortcut_id']}",
+        headers=_HEADERS,
+        json={
+            "expected_revision": forked["revision"],
+            "intent": "report_fault",
+            "requires_order": False,
+            "sort_order": 30,
+            "labels": {"zh": "故障上报（新文案）"},
+        },
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["jump_path"] == "/charge/pages/faultReport/faultReportList"
+
+    promoted = client.post(
+        f"/v1/shortcuts/{created['shortcut_id']}/publish",
+        headers=_HEADERS,
+        json={"expected_revision": updated.json()["revision"]},
+    )
+    assert promoted.status_code == 200, promoted.text
+    listed = client.get("/v1/shortcuts", headers=_HEADERS).json()
+    assert listed["shortcuts"][0]["jump_path"] == "/charge/pages/faultReport/faultReportList"
+    assert listed["shortcuts"][0]["label"] == "故障上报（新文案）"
+
+
+def test_update_jump_path_semantics_preserve_vs_clear(tmp_path: Path) -> None:
+    """The three spellings must be coherent, since they differ in meaning:
+    absent = unchanged, explicit None or whitespace = clear (a prompt action),
+    a real path = set. Absent is the one the HTTP model can send by accident,
+    so it is the one that must not destroy state."""
+    store = ShortcutStore(tmp_path / "gateway.db")
+    from aiops_diagnostics.shortcut_lifecycle import ShortcutManager
+
+    manager = ShortcutManager(store)
+
+    class _Ctx:
+        effective_tenant_id = "T-1"
+        roles = frozenset({"ROLE_AGENT_ADMIN"})
+        caller = type("C", (), {"b_user_id": "admin"})()
+
+    ctx = _Ctx()
+    base = {
+        "business_entry": "consumer",
+        "code": "report_fault",
+        "intent": "report_fault",
+        "requires_order": False,
+        "sort_order": 30,
+        "labels": {"zh": "故障上报"},
+        "jump_path": "/charge/pages/faultReport/faultReportList",
+    }
+    created = manager.create(ctx, base)  # type: ignore[arg-type]
+
+    def _edit(payload: dict, revision: int):
+        # update is replace-semantics: every other field must be resent, which
+        # is exactly the situation that made the omission bug reachable.
+        return manager.update(
+            ctx,  # type: ignore[arg-type]
+            created.shortcut_id,
+            {
+                "expected_revision": revision,
+                "intent": "report_fault",
+                "requires_order": False,
+                "sort_order": 30,
+                "labels": {"zh": "改"},
+                **payload,
+            },
+        )
+
+    # (a) key absent -> unchanged  (the case the HTTP model sends by accident)
+    step = _edit({}, created.revision)
+    assert step.jump_path == "/charge/pages/faultReport/faultReportList"
+    # (b) whitespace-only -> cleared, per the documented "no path" meaning
+    step = _edit({"jump_path": "   "}, step.revision)
+    assert step.jump_path is None
+    # (c) explicit None -> cleared (already clear, stays clear)
+    step = _edit({"jump_path": None}, step.revision)
+    assert step.jump_path is None
+    # (d) new path -> set
+    step = _edit({"jump_path": "/charge/pages/other"}, step.revision)
+    assert step.jump_path == "/charge/pages/other"
+
+
+def test_http_layer_rejects_whitespace_in_jump_path(tmp_path: Path) -> None:
+    """Both layers must agree: raw whitespace is not a valid URL path."""
+    client = _client(tmp_path)
+    for probe in ("", "  ", "/x ", " /x", "/x\n"):
+        r = client.post(
+            "/v1/shortcuts",
+            headers=_HEADERS,
+            json={
+                "business_entry": "consumer",
+                "code": "report_fault",
+                "intent": "report_fault",
+                "requires_order": False,
+                "labels": {"zh": "x"},
+                "jump_path": probe,
+            },
+        )
+        assert r.status_code == 422, f"{probe!r} should be rejected, got {r.status_code}"
