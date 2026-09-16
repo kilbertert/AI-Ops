@@ -957,9 +957,15 @@ def _jump_path(value: Any) -> str | None:
     candidate = value.strip()
     if not candidate:
         return None
-    if not candidate.startswith("/") or len(candidate) > _JUMP_PATH_MAX:
+    if candidate.startswith("//") or not candidate.startswith("/") or len(candidate) > _JUMP_PATH_MAX:
+        # See the HTTP request model for why "//" is rejected: RFC 3986 §4.2
+        # makes a leading "//" a network-path reference (an authority, i.e. a
+        # host), not a route, so a client navigator could treat it as a jump
+        # to another origin. Duplicated here because this validator is also
+        # called directly by the operator runbook, which does not go through
+        # the HTTP layer.
         raise ShortcutValidationError(
-            f"jump_path must start with '/' and be at most {_JUMP_PATH_MAX} characters"
+            f"jump_path must be a '/'-prefixed path (not '//') of at most {_JUMP_PATH_MAX} characters"
         )
     return candidate
 

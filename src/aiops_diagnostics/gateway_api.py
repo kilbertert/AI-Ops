@@ -248,11 +248,19 @@ class ShortcutFieldsRequest(BaseModel):
     jump_path: str | None = Field(
         default=None,
         max_length=512,
-        # Raw whitespace in a URL path is invalid (it is "%20" when encoded),
-        # so rejecting it here keeps this layer and the lifecycle validator
-        # agreeing on what a path is. Without \S, a trailing space or newline
-        # would be accepted here and then silently normalized away there.
-        pattern=r"^/\S*$",
+        # Must be a path-absolute route, not a network-path reference. Per RFC
+        # 3986 §4.2 a leading "//" starts an authority, so "//evil.com" is a
+        # cross-host reference — a classic open-redirect vector once a client
+        # hands it to its navigator. This form is used instead of a "(?!/)"
+        # lookahead because Pydantic v2 compiles patterns with the Rust regex
+        # crate, which does not support lookaround at all (it fails at import).
+        # It accepts exactly "/" plus a non-"/" start plus a non-space tail.
+        #
+        # Raw whitespace is also rejected: it cannot appear in a URL path (it
+        # is "%20" once encoded), and without \S a trailing space or newline
+        # would pass here and then be silently normalized away by the
+        # lifecycle validator, leaving the two layers disagreeing.
+        pattern=r"^/(?:[^/]\S*)?$",
     )
 
 

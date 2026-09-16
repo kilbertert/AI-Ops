@@ -955,3 +955,58 @@ def test_http_layer_rejects_whitespace_in_jump_path(tmp_path: Path) -> None:
             },
         )
         assert r.status_code == 422, f"{probe!r} should be rejected, got {r.status_code}"
+
+
+def test_jump_path_rejects_network_path_reference(tmp_path: Path) -> None:
+    """RFC 3986 §4.2: a leading "//" is an authority, not a path, so
+    "//evil.com" is a cross-host reference — a classic open-redirect vector
+    once a client hands it to its navigator. Only path-absolute routes are
+    acceptable for an in-app jump."""
+    client = _client(tmp_path)
+
+    def _create(jump_path: str, code: str):
+        return client.post(
+            "/v1/shortcuts",
+            headers=_HEADERS,
+            json={
+                "business_entry": "consumer",
+                "code": code,
+                "intent": "report_fault",
+                "requires_order": False,
+                "labels": {"zh": "故障上报"},
+                "jump_path": jump_path,
+            },
+        )
+
+    for index, hostile in enumerate(("//evil.com", "//evil.com/path", "//", "///x")):
+        r = _create(hostile, f"hostile_{index}")
+        assert r.status_code == 422, f"{hostile!r} must be rejected, got {r.status_code}"
+
+    # A legitimate path-absolute route still works, including one with an
+    # internal double slash (only the leading "//" is an authority).
+    assert _create("/charge/pages/faultReport/faultReportList", "ok_a").status_code == 201
+    assert _create("/x//y", "ok_b").status_code == 201
+
+
+def test_lifecycle_validator_also_rejects_network_path_reference(tmp_path: Path) -> None:
+    """The operator runbook calls the lifecycle layer directly, bypassing HTTP,
+    so the same guard must live there too."""
+    from aiops_diagnostics.shortcut_lifecycle import (
+        ShortcutManager,
+        ShortcutValidationError,
+    )
+
+    manager = ShortcutManager(ShortcutStore(tmp_path / "gateway.db"))
+    payload = {
+        "intent": "report_fault",
+        "requires_order": False,
+        "sort_order": 30,
+        "labels": {"zh": "故障上报"},
+        "jump_path": "//evil.com",
+    }
+    try:
+        manager._validated_fields(payload, for_publish=False)
+    except ShortcutValidationError:
+        pass
+    else:  # pragma: no cover
+        raise AssertionError("//evil.com must be rejected by the lifecycle validator")
