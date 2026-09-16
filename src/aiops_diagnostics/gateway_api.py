@@ -731,11 +731,7 @@ def create_gateway_app(
         # 异常"). Only when NEITHER carries a candidate do we ask for one —
         # otherwise this guard would shadow Route 1b and reject a perfectly
         # diagnosable request.
-        if (
-            payload.shortcut_code
-            and not payload.order_no
-            and _extract_order_no(payload.question) is None
-        ):
+        if payload.shortcut_code and not payload.order_no and _extract_order_no(payload.question) is None:
             try:
                 shortcut = context.shortcut_manager.store.find_effective_by_code(
                     caller.effective_tenant_id, str(decision.platform), payload.shortcut_code
