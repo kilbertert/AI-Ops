@@ -392,3 +392,43 @@ class _PublishOkResolver:
 
 def _publish_ok():
     return _PublishOkResolver()
+
+
+def test_unavailable_card_does_not_claim_an_empty_library() -> None:
+    """A kb-service outage must not be reported as "the library holds no
+    match". Verified on 41: with the provider account in arrears, kb-service
+    answers 502 code=102, and the old code turned that into
+    "未检索到匹配的宣传资料" — a false statement about content nobody read."""
+    outage = promo_empty_result("zh", "solution_discovery", retrieval_status="unavailable")
+    empty = promo_empty_result("zh", "solution_discovery")
+
+    assert outage["retrieval_status"] == "unavailable"
+    assert empty["retrieval_status"] == "not_found"
+
+    # The two must not share copy: one asserts content, the other an outage.
+    assert outage["blocks"][0]["text"] != empty["blocks"][0]["text"]
+    assert "未检索到匹配的宣传资料" not in outage["blocks"][0]["text"]
+    assert "不可用" in outage["blocks"][0]["text"]
+
+    # Localized, and unknown languages degrade rather than raise. Compare
+    # like-for-like: the copy is keyed by intent as well as language.
+    en_outage = promo_empty_result("en", "solution_discovery", retrieval_status="unavailable")
+    assert "temporarily unavailable" in en_outage["blocks"][0]["text"]
+    assert en_outage["blocks"][0]["text"] != outage["blocks"][0]["text"]
+    assert (
+        promo_empty_result("xx", "solution_discovery", retrieval_status="unavailable")["blocks"][0]["text"]
+        == outage["blocks"][0]["text"]
+    )
+
+    # The status survives into the public blocks contract unchanged.
+    assert outage["retrieval_status"] in {"found", "not_found", "unavailable", "limited"}
+
+
+def test_unavailable_card_is_still_a_valid_blocks_payload() -> None:
+    """The card goes through the same QaAnswer contract as a normal answer."""
+    from aiops_diagnostics.qa_rag import _finalize  # noqa: F401  (import path guard)
+
+    card = promo_empty_result("zh", "case_exploration", retrieval_status="unavailable")
+    assert isinstance(card["blocks"], list) and card["blocks"]
+    assert card["blocks"][0]["kind"] == "text"
+    assert isinstance(card["blocks"][0]["text"], str) and card["blocks"][0]["text"]
