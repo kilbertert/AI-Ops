@@ -1017,6 +1017,12 @@ Feature: 快捷动作跳转站内页面
       When 读取该动作
       Then jump_path 为 null 且该动作按提示动作工作
 
+    Scenario: 跳转路径与宣传绑定互斥
+      Given 管理员在创建请求中同时提交 jump_path 与 target_agent_version
+      When 调用创建快捷动作接口
+      Then 请求被拒绝且错误码为 SHORTCUT_VALIDATION_FAILED
+      And 单独提交其中任意一个仍然成功
+
     Scenario: 后端不校验页面是否存在
       Given 管理员提交一个格式合法但客户端并不存在的站内路径
       When 读取 GET /v1/shortcuts

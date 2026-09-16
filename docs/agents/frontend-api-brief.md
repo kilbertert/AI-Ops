@@ -711,7 +711,7 @@ Accept-Language: zh                              # 可选，影响 label/descrip
 | `requires_order` | `true` → 点击后先弹**订单选择器**（用户订单列表由 BFF 既有接口提供），选完再把 `order_no`+问题提交统一入口；`false` → 直接提交 |
 | `sort_order` | 按升序渲染按钮 |
 | `label` / `description` / `question_template` | 按 `Accept-Language` 本地化（缺失翻译回退中文）；`question_template` 可作为默认问题文案预填输入框 |
-| `target_agent_version` | 宣传类快捷动作绑定的已发布 agent 版本，**前端不需要理解，原样忽略**（服务端路由用；不要展示给用户） |
+| `target_agent_version` | 宣传类快捷动作绑定的已发布 agent 版本，**前端不需要理解，原样忽略**（服务端路由用；不要展示给用户）。与 `jump_path` **互斥**：跳转动作不会到达 agent，因此不允许同时绑定 |
 | `jump_path` | **跳转动作的唯一判别依据**，见 D.2a。**该字段恒存在**：非 `null` → 点击后导航到该路径；`null` → 走的提示动作流程（D.2）。不要区分"字段缺失"与"字段为空" |
 
 **两种动作形态**：每条动作要么是**提示动作**（`jump_path` 为 `null`，点击后把问题提交统一入口），
