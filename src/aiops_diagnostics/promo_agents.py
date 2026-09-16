@@ -15,7 +15,12 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from aiops_diagnostics.i18n import DEFAULT_LANGUAGE, PROMO_EMPTY_MESSAGES, language_name
+from aiops_diagnostics.i18n import (
+    DEFAULT_LANGUAGE,
+    PROMO_EMPTY_MESSAGES,
+    PROMO_UNAVAILABLE_MESSAGES,
+    language_name,
+)
 from aiops_diagnostics.qa_rag import CustomerAgentSelection
 
 PROMO_INTENTS = frozenset({"case_exploration", "solution_discovery"})
@@ -103,13 +108,29 @@ def select_promo_agent(
     )
 
 
-def promo_empty_result(language: str, intent: str) -> dict[str, str | list[dict[str, str]]]:
-    """Structured card substitute when no promotional material is available."""
-    pack = PROMO_EMPTY_MESSAGES.get(language) or PROMO_EMPTY_MESSAGES[DEFAULT_LANGUAGE]
+def promo_empty_result(
+    language: str, intent: str, *, retrieval_status: str = "not_found"
+) -> dict[str, str | list[dict[str, str]]]:
+    """Structured card substitute when no promotional card can be produced.
+
+    ``retrieval_status`` distinguishes two different situations that used to
+    share the same copy:
+
+    - ``not_found`` — a search really ran and returned nothing.
+    - ``unavailable`` — no search ran at all: the action has no resolvable
+      promotional agent, the dependency is down, or the library could not be
+      reached.
+
+    Claiming "no matching material" in the second case is a statement about a
+    library nobody read, which is what 41 showed for solution_discovery (a
+    shortcut with no target, so no query was ever issued).
+    """
+    source = PROMO_UNAVAILABLE_MESSAGES if retrieval_status == "unavailable" else PROMO_EMPTY_MESSAGES
+    pack = source.get(language) or source[DEFAULT_LANGUAGE]
     key = intent if intent in pack else "case_exploration"
     return {
         "blocks": [{"kind": "text", "text": pack[key]}],
-        "retrieval_status": "not_found",
+        "retrieval_status": retrieval_status,
     }
 
 

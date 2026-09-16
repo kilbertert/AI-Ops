@@ -98,6 +98,22 @@ PROMO_EMPTY_MESSAGES: dict[str, dict[str, str]] = {
     },
 }
 
+# Promotional retrieval dependency is down. Deliberately NOT the messages
+# above: those assert "the library holds nothing matching this", which is a
+# claim about content. When the search itself failed we know nothing about the
+# content, so claiming an empty library would be a false statement to the user
+# (and a misleading one to whoever debugs it later).
+PROMO_UNAVAILABLE_MESSAGES: dict[str, dict[str, str]] = {
+    "zh": {
+        "case_exploration": "客户案例检索服务暂时不可用，请稍后重试。",
+        "solution_discovery": "行业方案检索服务暂时不可用，请稍后重试。",
+    },
+    "en": {
+        "case_exploration": "Customer case search is temporarily unavailable. Please try again later.",
+        "solution_discovery": "Industry solution search is temporarily unavailable. Please try again later.",
+    },
+}
+
 
 def language_name(language: str) -> str:
     """English display name of a supported language for prompt injection."""

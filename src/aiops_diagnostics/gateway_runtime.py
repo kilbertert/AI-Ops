@@ -641,7 +641,9 @@ class GatewayRuntime:
         if promo_intent and (not tenant_id or self.kb_search_client is None or self.media_signer is None):
             from aiops_diagnostics.promo_agents import promo_empty_result
 
-            rag_result = promo_empty_result(language, promo_intent)
+            # No search capability is wired here, so nothing was searched. Same
+            # rule as the other card sites: do not claim the library is empty.
+            rag_result = promo_empty_result(language, promo_intent, retrieval_status="unavailable")
             self.store.update_assistant_question(qa_id, status="completed", result=rag_result)
         elif tenant_id and self.kb_search_client is not None and self.media_signer is not None:
             rag_result = self._try_customer_rag(
@@ -865,7 +867,13 @@ class GatewayRuntime:
                 else None
             )
             if promo is None:
-                result = promo_empty_result(language, promo_intent)
+                # No pin, or the pin does not resolve. Nothing was searched, so
+                # the card must not claim the library holds no match: on 41 this
+                # is exactly what produced "未检索到匹配的宣传资料" for
+                # solution_discovery, which has no target at all and therefore
+                # never ran a query. "not_found" is reserved for a search that
+                # actually returned nothing.
+                result = promo_empty_result(language, promo_intent, retrieval_status="unavailable")
                 self.store.update_assistant_question(qa_id, status="completed", result=result)
                 return result
             selection = promo
@@ -898,7 +906,13 @@ class GatewayRuntime:
             if promo_intent:
                 from aiops_diagnostics.promo_agents import promo_empty_result
 
-                result = promo_empty_result(language, promo_intent)
+                # The search failed, so nothing is known about the library's
+                # contents. Reporting not_found here would tell the user (and
+                # the next debugger) that the library holds no match — a claim
+                # nobody made. Verified on 41: kb-service returns 502
+                # code=102 while the provider account is in arrears, and the
+                # old code turned that outage into "未检索到匹配的宣传资料".
+                result = promo_empty_result(language, promo_intent, retrieval_status="unavailable")
                 self.store.update_assistant_question(qa_id, status="completed", result=result)
                 return result
             # Retrieval dependency is down: per the T1/T3 contract the model
