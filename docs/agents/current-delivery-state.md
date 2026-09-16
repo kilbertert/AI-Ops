@@ -31,7 +31,8 @@
 41 网关服务为 `aiops-gateway-41.service`，公网正式路径是
 `https://api.mall.qushiyun.com/v1/*`。`/aiops/v1/*` 不是该入口，2026-09-15 实测为
 404。快捷动作数据位于 41 Gateway 的 SQLite 库，由 `ShortcutManager` 管理；不要直接
-插入 `shortcuts` 表。
+插入 `shortcuts` 表。**完整的访问、部署、资源创建与验收步骤见
+[41 环境运维与真实验收手册](env-41-runbook.md)（本页只保留当前结论，不重复操作细节）。**
 
 ### 安全复测
 
@@ -61,6 +62,7 @@ curl --silent --show-error --max-time 20 \
 
 ## 证据导航
 
+- [41 环境运维与真实验收手册](env-41-runbook.md) — 部署/资源创建/会话获取/公网验收的可执行步骤
 - [真实 41 INTENT-01..08 与模型契约修复](../validation.md)
 - [里程碑、分支和已知缺口](../开发进度.md)
 - [前端快捷动作与 clarification 合同](frontend-api-brief.md)

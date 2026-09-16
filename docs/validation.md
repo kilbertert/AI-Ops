@@ -141,7 +141,7 @@ smart_diagnosis、report_fault）经 ShortcutManager 创建并发布。真实 H5
 - **INTENT-03 FAQ 命中**：`充电枪拔不出来怎么办` → 200 `type=faq`
   `consumer.faq.q010` 同步答案，未建异步作业。
 - **INTENT-04 订单诊断**：文本内嵌已归属订单 `订单2099211664421249025为什么提前停止
-  充电了`（会话 93c03a38…，订单属 ch_order_info 真实记录）→ 202
+  充电了`（业务方提供的有效会话，订单属 ch_order_info 真实记录）→ 202
   `type=diagnosis` `dx_0f44d09f…`，`order_no_extracted` 回显；轮询终态
   **completed/diagnosed/medium**（远程启动 OCPP1.6-J 会话 20 秒 0.4 kWh 结论）。
   前置发现：非本人订单（1955824…）正确回落 FAQ/通用路径，无存在性泄露。
