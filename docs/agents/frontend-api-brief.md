@@ -722,6 +722,9 @@ POST /v1/assistant/questions
 
 - `shortcut_code` 可选字段（1-64 字符，`[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}`）；传了且命中已发布行 → 服务端按该行的意图路由（宣传类 → 独立宣传 agent；订单类 → 诊断）。
 - **`requires_order=true` 的动作（如 smart_diagnosis）**：先弹订单选择器，`question` 里带订单或显式传 `order_no`（场景 C 合同），服务端做归属校验。
+  - 两种传法等价，服务端都会提取并做归属校验：**①** `order_no` 字段单独传；**②** 订单号出现在 `question` 文本里（如「帮我检测（2099…）这个订单的充电异常」）。
+  - 两处都没有订单号时，才同步返回 `type=clarification` + `missing_fields:["order_no"]`，**不创建作业**。
+  - 订单号不是本人的：回落通用问答（非 404、不泄露），本人在订单选择器里选到的订单正常进诊断。
 - **`requires_order=false` 的宣传类动作（案例/方案）**：直接提交 → `202 type=qa` → 按 `retry_after_ms` 轮询（场景 B 完全相同的合同）；completed 后 `result.blocks[]` 是四段式卡片（标题/行业痛点/破局方案/商业成果），按块渲染即可（不解析文本）。
 - 未传 `shortcut_code` 时，用户自由输入里明确出现"客户案例/行业解决方案"等词也会命中宣传路由；普通问题走场景 B。
 - 过期/未发布的 `shortcut_code` 被服务端忽略，按普通问题处理（不报错）。

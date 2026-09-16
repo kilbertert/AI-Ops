@@ -1,5 +1,38 @@
 # 验证与验收计划
 
+## 智能检测内嵌订单号路由修复（2026-09-16，前端联调反馈）
+
+**现象**：前端 H5 在订单选择器选好订单后发送智能检测，服务端仍返回
+`type=clarification`、`missing_fields=["order_no"]`、"请先选择需要检测的订单后…"。
+前端请求把订单选择结果**拼进 question 文本**（`帮我检测（2099…）这个订单的充电异常`），
+不单独传 `order_no` 字段。
+
+**根因**：`#253` 的 requires_order guard 位于 Route 1b（文本内嵌订单号 → 诊断）**之前**，
+且只判断 `payload.order_no` 字段。文本里已有订单号时 guard 仍短路返回澄清，Route 1b
+永远执行不到。真实数据核实该订单确实归该会话用户（`ch_order_info` 的
+`user_id`/`tenant_id` 与 `app:3rd_session` 会话值一致），属纯路由顺序缺陷，非权限问题。
+
+**修复**（PR #258，merge `9eab020`）：guard 增加条件——当 `_extract_order_no(question)`
+能在文本中找到候选时不返回澄清，请求正常到达 Route 1b；所有权校验仍在 Route 1b 执行。
+
+**41 真实复跑证据**（部署 `gateway_api.py` = `fb66605b`，备份
+`/var/backups/aiops-41/fix-embedded-order-20260916-*`，服务重启 healthy）：
+
+| 用例 | 请求 | 结果 |
+|---|---|---|
+| 前端原样请求 | `{"question":"帮我检测（2099766643908612097）这个订单的充电异常","shortcut_code":"smart_diagnosis"}` | **202 `type=diagnosis`**，`order_no_extracted` 正确回显，`dx_ff94f3af…` 已创建 ✅ |
+| 无订单号（保护未削弱） | `{"question":"帮我检测这个订单的充电异常","shortcut_code":"smart_diagnosis"}` | 200 `type=clarification`，`missing_fields=["order_no"]` ✅ |
+| 非本人订单（不越权） | `{"question":"帮我检测（2099999999999999999）…","shortcut_code":"smart_diagnosis"}` | 回落 `type=qa`，未建诊断、未 404 ✅ |
+
+**边界（如实记录）**：本轮诊断作业 `dx_ff94f3af…` 轮询终态为 `failed`，错误为供应商
+`code:"Arrearage"`（阿里云百炼账户欠费 400），与本次路由修复无关——路由与授权链路已在
+202 阶段验证通过；诊断端到端 `completed` 仍受供应商账户状态阻塞（与 #218 记录的
+同一供应商问题同源）。不得把本次结果写成诊断业务验收完成。
+
+**自检**（AGENTS.md 操作知识自检条款）：本轮执行的操作命令已入仓——
+`docs/agents/env-41-runbook.md` 覆盖部署与 sha 校验、会话获取、真实订单查找（`ch_order_info`
+的 `order_no/user_id/tenant_id`）、公网验收与轮询纪律。
+
 ## #247 真实验收续测（2026-09-15 21:27~21:45，部分通过）
 
 本轮基于已合并的快捷动作迁移 `1f708888` 与订单快捷动作修复 `48cfb2c`，环境为 41
