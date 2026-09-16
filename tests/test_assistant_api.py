@@ -252,6 +252,60 @@ def test_order_bound_shortcut_requires_order_context(tmp_path: Path) -> None:
     assert runtime._qa == {}
 
 
+def test_order_bound_shortcut_with_embedded_order_reaches_diagnosis(tmp_path: Path) -> None:
+    """Frontend regression (2026-09-16, live H5): the order picker result
+    arrives INSIDE the question text, not as the order_no field. The
+    requires_order guard only looked at payload.order_no, shadowed the
+    embedded-order route (Route 1b), and rejected a perfectly diagnosable
+    request with '请先选择需要检测的订单'. The guard must stay silent when
+    the text already carries an order id."""
+    client, runtime = _client(tmp_path)  # fixture allows 2096164064667852801
+    created = client.post(
+        "/v1/shortcuts",
+        headers=_headers(),
+        json={
+            "business_entry": "consumer",
+            "code": "smart_diagnosis",
+            "intent": "order_issue",
+            "requires_order": True,
+            "labels": {"zh": "智能检测"},
+        },
+    )
+    assert created.status_code == 201, created.text
+    shortcut = created.json()
+    published = client.post(
+        f"/v1/shortcuts/{shortcut['shortcut_id']}/publish",
+        headers=_headers(),
+        json={"expected_revision": shortcut["revision"]},
+    )
+    assert published.status_code == 200, published.text
+
+    question = "帮我检测（2096164064667852801）这个订单的充电异常"
+    resp = client.post(
+        "/v1/assistant/questions",
+        json={"question": question, "shortcut_code": "smart_diagnosis"},
+        headers=_headers(),
+    )
+    assert resp.status_code == 202, resp.text
+    body = resp.json()
+    assert body["type"] == "diagnosis"
+    assert body["order_no_extracted"] == "2096164064667852801"
+    assert runtime.calls == [("2096164064667852801", question)]
+
+    # Unowned embedded order still falls through (no hard 404, no leak).
+    runtime.calls.clear()
+    unowned = client.post(
+        "/v1/assistant/questions",
+        json={
+            "question": "帮我检测（2099999999999999999）这个订单的充电异常",
+            "shortcut_code": "smart_diagnosis",
+        },
+        headers=_headers(),
+    )
+    assert unowned.status_code != 404
+    assert runtime.calls == []
+
+
 def test_assistant_qa_poll_failed_exposes_error(tmp_path: Path) -> None:
     """A failed QA job returns the {code, message, retryable} error contract,
     matching the diagnosis poll line — not a null error the frontend must
