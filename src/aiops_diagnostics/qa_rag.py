@@ -339,6 +339,50 @@ def _parse_rag_turn(final_response: str) -> dict[str, Any] | None:
     return None
 
 
+_BLOCK_FIELDS_BY_KIND: dict[str, tuple[str, ...]] = {
+    "text": ("kind", "text"),
+    "image": ("kind", "resource_id", "title"),
+    "video": ("kind", "resource_id", "title"),
+    "reference": ("kind", "reference_id", "title"),
+}
+
+
+def _clean_blocks(blocks: Any) -> list[dict[str, Any]]:
+    """Reduce each block to the fields its kind is allowed to carry.
+
+    Real models add display metadata the strict blocks-v1 contract does not
+    carry (mime_type, caption, ...), and they routinely OVERFILL a block: a
+    text block also carrying the reference id it cites, or a reference block
+    echoing the chunk text. The contract forbids those combinations and rejects
+    the whole answer (41 live, 2026-09-17: "reference block must not carry text
+    or resource ids"), losing an otherwise good reply.
+
+    Keeping only the fields the block's kind owns is what the model meant — the
+    citation belongs in a sibling reference block, and a stray field is not
+    worth failing the answer over. An unknown kind is passed through untouched:
+    inventing a shape for a kind we do not define is not this normalizer's job.
+
+    Shared by BOTH answer shapes on purpose. The `{"answer": {...}}` wrapper
+    used to return early and skip cleaning entirely, which is why the same
+    failure survived the first fix.
+    """
+    if not isinstance(blocks, list) or not blocks:
+        return []
+    cleaned: list[dict[str, Any]] = []
+    for block in blocks:
+        if not isinstance(block, dict):
+            continue
+        normalized = dict(block)
+        if not normalized.get("kind") and normalized.get("type"):
+            normalized["kind"] = normalized.pop("type")
+        allowed = _BLOCK_FIELDS_BY_KIND.get(str(normalized.get("kind")))
+        if allowed is None:
+            cleaned.append(normalized)
+            continue
+        cleaned.append({key: normalized[key] for key in allowed if key in normalized})
+    return cleaned
+
+
 def _normalize_answer_turn(turn: dict[str, Any]) -> dict[str, Any] | None:
     """Extract the answer payload from a parsed answer turn, tolerantly.
 
@@ -352,42 +396,14 @@ def _normalize_answer_turn(turn: dict[str, Any]) -> dict[str, Any] | None:
     """
     answer = turn.get("answer")
     if isinstance(answer, dict):
-        return answer
+        blocks = _clean_blocks(answer.get("blocks"))
+        if not blocks:
+            return None
+        return {**answer, "blocks": blocks}
     blocks = turn.get("blocks")
     if not isinstance(blocks, list) or not blocks:
         return None
-    normalized_blocks: list[dict[str, Any]] = []
-    for block in blocks:
-        if not isinstance(block, dict):
-            continue
-        normalized = dict(block)
-        if not normalized.get("kind") and normalized.get("type"):
-            normalized["kind"] = normalized.pop("type")
-        # Real models add display metadata the strict blocks-v1 contract does
-        # not carry (mime_type, caption, ...) — keep only contract fields so
-        # pydantic's extra=forbid guard stays strict downstream.
-        #
-        # They also routinely overfill a block: a text block carrying the
-        # reference id it cites, or a reference block echoing the chunk text.
-        # The contract forbids those combinations and rejects the whole answer
-        # (41 live, 2026-09-17: "text block must not carry resource/reference
-        # ids"). Keeping the fields for this block's kind and dropping the rest
-        # is what the model meant — the citation belongs in a sibling
-        # reference block, and its loss is not worth failing the answer over.
-        allowed_by_kind = {
-            "text": ("kind", "text"),
-            "image": ("kind", "resource_id", "title"),
-            "video": ("kind", "resource_id", "title"),
-            "reference": ("kind", "reference_id", "title"),
-        }
-        allowed = allowed_by_kind.get(str(normalized.get("kind")))
-        if allowed is None:
-            # Unknown kind: the contract will reject it, and inventing fields
-            # for a shape we do not own is not this normalizer's job.
-            normalized_blocks.append(normalized)
-            continue
-        normalized = {key: normalized[key] for key in allowed if key in normalized}
-        normalized_blocks.append(normalized)
+    normalized_blocks = _clean_blocks(blocks)
     if not normalized_blocks:
         return None
     return {
