@@ -235,3 +235,79 @@ def test_proxy_healthz() -> None:
     finally:
         adapter.shutdown()
         adapter.server_close()
+
+
+def test_adapter_protocol_is_http_11_so_chunked_streaming_can_be_framed() -> None:
+    """Regression (41 live, 2026-09-17): with the stdlib's HTTP/1.0 default the
+    relay's `Transfer-Encoding: chunked` was unframeable by the client, which
+    then dropped the connection mid-stream — Codex reported "stream disconnected
+    before completion" and every turn failed. The version is load-bearing."""
+    from aiops_diagnostics.responses_adapter import ResponsesStatusHandler
+
+    assert ResponsesStatusHandler.protocol_version == "HTTP/1.1"
+
+
+def test_streamed_response_is_relayed_with_chunked_framing() -> None:
+    """The body must arrive intact through the chunked relay."""
+    import http.client
+
+    class _Streaming(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+
+        def log_message(self, *args: object) -> None:
+            return
+
+        def do_POST(self) -> None:
+            length = int(self.headers.get("Content-Length", "0"))
+            self.rfile.read(length)
+            # An SSE-ish stream with no Content-Length, like the provider's.
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+            for i in range(5):
+                chunk = f"event: tick\ndata: {i}\n\n".encode()
+                self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
+            self.wfile.write(b"0\r\n\r\n")
+            self.wfile.flush()
+
+    upstream = ThreadingHTTPServer(("127.0.0.1", 0), _Streaming)
+    _start(upstream)
+    adapter = make_server(
+        AdapterSettings(
+            listen_host="127.0.0.1",
+            listen_port=0,
+            upstream_url=f"http://127.0.0.1:{upstream.server_address[1]}",
+        )
+    )
+    _start(adapter)
+    try:
+        conn = http.client.HTTPConnection("127.0.0.1", adapter.server_address[1], timeout=10)
+        conn.request(
+            "POST",
+            "/responses",
+            body=json.dumps({"input": [{"type": "message", "content": []}]}).encode(),
+            headers={"Content-Type": "application/json"},
+        )
+        response = conn.getresponse()
+        body = response.read().decode()
+        conn.close()
+
+        assert response.status == 200
+        # All five events survived the relay, in order and complete.
+        assert body.count("event: tick") == 5
+        assert "data: 4" in body
+        # The version the client actually sees. http.client tolerates chunked
+        # framing regardless of version, so the body assertions above cannot
+        # distinguish 1.0 from 1.1 — but a strict client (Codex) refuses to
+        # frame a chunked stream advertised as HTTP/1.0 and drops the
+        # connection. Assert the wire version, which is what it checks.
+        assert response.version == 11, (
+            f"adapter must advertise HTTP/1.1, got {response.version} "
+            "(10 = HTTP/1.0, which cannot carry a chunked stream)"
+        )
+    finally:
+        adapter.shutdown()
+        upstream.shutdown()
+        adapter.server_close()
+        upstream.server_close()
