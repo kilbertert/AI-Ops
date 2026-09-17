@@ -162,6 +162,11 @@ class ResponsesStatusHandler(BaseHTTPRequestHandler):
     settings: ClassVar[AdapterSettings]
     server_version = "AI-Ops-Responses-Status-Adapter/1.0"
     sys_version = ""
+    # HTTP/1.1 is required, not cosmetic: the relay streams the response with
+    # `Transfer-Encoding: chunked`, which HTTP/1.0 clients cannot frame. With
+    # the stdlib default the client cannot tell where the body ends and drops
+    # the connection mid-stream ("stream disconnected before completion").
+    protocol_version = "HTTP/1.1"
 
     def do_GET(self) -> None:
         if self.path == "/healthz":
@@ -207,27 +212,30 @@ class ResponsesStatusHandler(BaseHTTPRequestHandler):
             self._send_json(502, {"error": "upstream_unavailable"})
 
     def _relay(self, status: int, headers: Any, stream: Any) -> None:
-        """Relay the upstream response, streaming the body in chunks."""
+        """Relay the upstream response, streaming the body in chunks.
+
+        Always chunked: an SSE event stream has no Content-Length, and
+        forwarding one would require buffering it whole. A client that hangs up
+        mid-stream (Codex abandoning a turn) is normal, not an error, so the
+        broken pipe is swallowed rather than logged as a crash.
+        """
         self.send_response(status)
         self.send_header("Content-Type", headers.get("Content-Type", "application/json"))
-        # Errors are small and benefit from a length; success is a stream.
-        length = headers.get("Content-Length")
-        if length is not None and status >= 400:
-            self.send_header("Content-Length", length)
-        else:
-            self.send_header("Transfer-Encoding", "chunked")
+        self.send_header("Transfer-Encoding", "chunked")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
 
-        if length is not None and status >= 400:
-            self.wfile.write(stream.read())
-            return
-        while True:
-            chunk = stream.read(CHUNK_BYTES)
-            if not chunk:
-                break
-            self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
-        self.wfile.write(b"0\r\n\r\n")
+        try:
+            while True:
+                chunk = stream.read(CHUNK_BYTES)
+                if not chunk:
+                    break
+                self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
+            self.wfile.write(b"0\r\n\r\n")
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            # The caller stopped reading. Nothing to report and nothing to fix.
+            self.close_connection = True
 
     def _send_json(self, status: int, payload: dict[str, object]) -> None:
         body = json.dumps(payload, separators=(",", ":")).encode()
