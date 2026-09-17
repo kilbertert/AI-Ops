@@ -25,6 +25,7 @@ dependencies = [
 aiops = "aiops_diagnostics.cli:app"
 aiops-tdengine-proxy = "aiops_diagnostics.tdengine_proxy:main"
 aiops-gateway = "aiops_diagnostics.gateway_server:main"
+aiops-responses-adapter = "aiops_diagnostics.responses_adapter:main"
 
 [project.optional-dependencies]
 dev = [
