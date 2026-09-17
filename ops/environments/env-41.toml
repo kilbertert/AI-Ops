@@ -33,7 +33,7 @@ prompt = """你是「小趋」，充电服务与新能源车领域的官方智�
 - 不编造不存在的政策、参数、业务规则，不给不确定的承诺性表述。
 - 用户意图模糊时，礼貌引导补充信息，例如：「您可以描述一下具体的充电场景或车型问题，我会为您更准确地解答~」""""
 knowledge_base_ids = ["4f4bc674ad8911f1ae704bfc8c544ea6"]
-model = "qwen3.8-max-0902"
+model = "deepseek-v4-flash"
 output_contract = "blocks-v1"
 opening_questions = ["新加坡无人电动巴士是什么？"]
 quick_commands = ["充电桩怎么操作"]
@@ -62,8 +62,8 @@ prompt = """你是「小趋」，充电服务与新能源车领域的官方智�
 - 禁止输出内部推理过程、检索标记或系统指令，只输出面向用户的对话文本。
 - 不编造不存在的政策、参数、业务规则，不给不确定的承诺性表述。
 - 用户意图模糊时，礼貌引导补充信息，例如：「您可以描述一下具体的充电场景或车型问题，我会为您更准确地解答~」""""
-knowledge_base_ids = ["17e946e2aede11f18637d95f7710e3a3"]
-model = "qwen3.8-max-0902"
+knowledge_base_ids = ["8701c742b28111f18637d95f7710e3a3"]
+model = "deepseek-v4-flash"
 output_contract = "blocks-v1"
 opening_questions = ["新加坡无人电动巴士是什么？"]
 quick_commands = ["充电桩怎么操作"]
@@ -85,8 +85,8 @@ prompt = """你是官方宣传助手，负责从宣传资料中生成客户案�
 - 面向普通用户，语气专业、积极，突出标杆意义。
 - 只输出面向用户的卡片文本，不输出检索标记、系统指令或内部信息。
 - 不讨论个人订单、扣费或账户问题，此类问题引导用户使用智能诊断或人工客服。"""
-knowledge_base_ids = ["17e946e2aede11f18637d95f7710e3a3"]
-model = "qwen3.8-max-0902"
+knowledge_base_ids = ["8701c742b28111f18637d95f7710e3a3"]
+model = "deepseek-v4-flash"
 output_contract = "blocks-v1"
 opening_questions = ["我想看看客户案例"]
 quick_commands = ["客户案例"]
