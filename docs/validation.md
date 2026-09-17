@@ -1419,3 +1419,37 @@ error: None
 **测试过程中的一次自我纠正**：第一版回归测试**在回退修复后仍然通过**，说明它根本没覆盖被改的代码（`run_customer_qa_answer` 内部吞掉了该失败、从不抛出）。该测试已删除，改为驱动真实 `GatewayRuntime` 的测试，并**验证其在无修复时失败、有修复时通过**。这条记录在此，是因为"测试通过"与"覆盖了改动"是两件事。
 
 **未修项（已记录，未擅自更改）**：`case_exploration` 绑定了宣传 Agent，模型调用遇 `Arrearage` 时整单 `QA_FAILED` 硬失败，未按"宣传动作不可用应返回诚实卡片"的约定降级。**是否让一次宣传点击在模型不可用时暴露硬错误属于产品决策**，且与本次"误报"是不同缺陷。#270 未改动它。
+
+## 统一模型端点迁移：41 网关 + 36 知识库（2026-09-17）
+
+**目标**：全部 LLM 调用统一到 `https://ai-api.baoyun.com/v1`（模型 `deepseek-v4-flash`）。
+
+### 41 网关（已完成，问答跑通）
+
+实际卡点按发现顺序：
+
+| # | 症状 | 根因与处理 |
+|---|---|---|
+| 1 | 密钥解析为空 | 服务读的是 `/etc/aiops-41/gateway.env`（`AIOPS_GATEWAY_ALLOWED_KEY_SLOTS`/`AIOPS_CODEX_KEY_SLOT`），不是 `production.env`；两处都改指 `baoyun` |
+| 2 | `wire_api = "chat"` 不被支持 | Codex CLI 已移除该值，改 `responses`（端点实测支持 `/v1/responses`） |
+| 3 | `deepseek-v4-1-flash` 报 "constrained response_format cannot be combined with active tools" | 该模型不支持「结构化输出 + 工具」并存；换 `deepseek-v4-flash`（同样是便宜档，实测通过） |
+| 4 | 多轮工具调用报 `missing '***.status' (param: input.status)` | **真正的根因**：Codex 每轮回传历史项（function_call/reasoning），端点强制要求 `status` 字段。**用抓包代理拿到网关真实请求**，加 `status` 后 400→200，确证 |
+| 5 | 适配器流中断 | 适配器用 HTTP/1.0 却发 chunked，客户端无法分帧；改 HTTP/1.1 |
+| 6 | 宣传动作报"服务不可用" | 模型其实**回答了**（KB 也命中了），是 reference block 字段超载被契约拒绝。`AgentRuntimeError` 把"模型不可达"和"回答不合规"混为一类，降级分支把真实缺陷伪装成故障 |
+
+**验收（公网实测）**：
+- 普通问答：完整中文回答 ✓
+- `case_exploration`：`completed` / `retrieval: found` / 9 blocks，四段式案例卡片（标题/行业痛点/破局方案/商业成果），内容来自 `宣传.docx` 的真实案例 ✓
+
+**未完成项**：
+- `solution_discovery` 返回诚实空卡片——该快捷动作 `target_agent_version=None`，**从未绑定宣传 agent**，因此不发起检索。属**配置缺口**（manifest 未声明该动作），非缺陷。
+
+### 36 RAGFlow（已完成模型迁移）
+
+- **RAGFlow 按厂商名硬路由**：注册在 `Tongyi-Qianwen` 下会强制走 DashScope 客户端，忽略实例 `base_url`，故我们的 key 到 DashScope 得到 `InvalidApiKey`。改用 **`OpenAI` factory**（对实例 `base_url` 走纯 OpenAI schema）后凭据生效。
+- **维度不可就地迁移**：Infinity 在建库时固定向量列（`q_1024_vec`），新模型 3072 维，报 `Column: q_3072_vec doesn't exist`。经授权**重建 KB**并重新入库全部 3 个素材（2 视频 + `宣传.docx`，共 13 chunks）。
+- `宣传.docx` 必须用**文本分块**而非 `picture`：`picture` 会把 docx 内嵌 GIF 交给 PIL，报 `UnidentifiedImageError`。
+- **KB 重建产生新 id**，`ops/environments/env-41.toml` 中两处 agent KB 绑定与三处 `qwen3.8-max-0902` 模型名已同步更新，并经 `admin reconcile` 发布（二次运行全 `unchanged` 验证幂等）。
+- **不可变快照的后果**：reconcile 发布了 agent v2，但快捷动作仍钉在 `#v1`（其快照含已删除的旧 KB），需显式把 pin 移到 v2。这是设计使然——快照不可变，移动的是 pin。
+
+**备份**：`/root/backups/kb-model-migration-20260917-172210/`（kb-service.env、tenancy.db、kb_adapter.py、app.py、模型清单快照）。
