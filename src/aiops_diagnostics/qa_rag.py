@@ -29,7 +29,7 @@ from aiops_diagnostics.agent_contracts import (
 )
 from aiops_diagnostics.agent_lifecycle import AgentStore
 from aiops_diagnostics.agent_workspace import AgentWorkspace
-from aiops_diagnostics.codex_runtime import AgentRuntimeError, SDKCodexSession
+from aiops_diagnostics.codex_runtime import AgentContractError, SDKCodexSession
 from aiops_diagnostics.config import AgentSettings, ProviderConfig
 from aiops_diagnostics.i18n import DEFAULT_LANGUAGE, QA_FALLBACK_MESSAGES, language_name
 from aiops_diagnostics.knowledge_retrieval import (
@@ -187,7 +187,7 @@ def run_customer_qa_answer(
             output = session.run(prompt, output_schema=qa_rag_turn_schema())
             turn = _parse_rag_turn(output.final_response)
             if turn is None:
-                raise AgentRuntimeError("customer QA turn returned invalid JSON")
+                raise AgentContractError("customer QA turn returned invalid JSON")
             if turn.get("kind") == "tool_requests":
                 requests = turn.get("tool_requests") or []
                 empty_request = not requests
@@ -223,7 +223,7 @@ def run_customer_qa_answer(
                 continue
             answer = _normalize_answer_turn(turn)
             if answer is None:
-                raise AgentRuntimeError("answer turn carried no answer payload")
+                raise AgentContractError("answer turn carried no answer payload")
             # Business question but the model skipped retrieval: force one
             # supplementary search before accepting the answer (T1/T3 rule).
             if not searched and _needs_retrieval(question):
@@ -291,7 +291,7 @@ def _finalize(answer: dict[str, Any], retrieval: _TurnRetrieval) -> dict[str, An
             }
         )
     except ValidationError as exc:
-        raise AgentRuntimeError(f"customer QA answer failed contract validation: {exc}") from exc
+        raise AgentContractError(f"customer QA answer failed contract validation: {exc}") from exc
 
     blocks: list[QaBlock] = []
     for block in parsed.blocks:
@@ -301,7 +301,7 @@ def _finalize(answer: dict[str, Any], retrieval: _TurnRetrieval) -> dict[str, An
             continue
         blocks.append(block)
     if not any(block.kind == "text" for block in blocks):
-        raise AgentRuntimeError("customer QA answer lost every text block")
+        raise AgentContractError("customer QA answer lost every text block")
 
     status = parsed.retrieval_status
     if status == "found" and not retrieval.reference_ids:
