@@ -695,3 +695,65 @@ def test_initial_prompt_names_output_language() -> None:
     assert "English" in _initial_prompt(selection, "question", "en")
     assert "German" in _initial_prompt(selection, "Frage", "de")
     assert "Simplified Chinese" in _initial_prompt(selection, "问题", "zh")
+
+
+def test_overfilled_blocks_are_trimmed_to_their_kind() -> None:
+    """41 live (2026-09-17): the model answered with a text block that also
+    carried resource/reference ids, and the contract rejected the whole answer
+    ("text block must not carry resource/reference ids"). The fields are the
+    model overfilling a block, not a second intent — trim to the kind."""
+    from aiops_diagnostics.qa_rag import _normalize_answer_turn
+
+    turn = {
+        "kind": "answer",
+        "retrieval_status": "found",
+        "blocks": [
+            # text carrying reference ids (the live failure shape)
+            {
+                "kind": "text",
+                "text": "案例正文",
+                "resource_id": "b2e2d38a064a0ea7",
+                "reference_id": "b2e2d38a064a0ea7",
+            },
+            # reference echoing text and a resource
+            {
+                "kind": "reference",
+                "text": "echo",
+                "resource_id": "x",
+                "reference_id": "ref-1",
+                "title": "宣传.docx",
+            },
+            # image with a stray text field
+            {"kind": "image", "text": "caption", "resource_id": "media-1", "title": "图.png"},
+        ],
+    }
+    result = _normalize_answer_turn(turn)
+    assert result is not None
+    blocks = result["blocks"]
+
+    assert blocks[0] == {"kind": "text", "text": "案例正文"}
+    assert blocks[1] == {"kind": "reference", "reference_id": "ref-1", "title": "宣传.docx"}
+    assert blocks[2] == {"kind": "image", "resource_id": "media-1", "title": "图.png"}
+
+    # The text and reference blocks are exactly what the strict contract
+    # accepts. An image block additionally needs a harness-signed id, which
+    # this unit test has no signer for (covered by the media tests).
+    from aiops_diagnostics.agent_contracts import QaBlock
+
+    QaBlock.model_validate(blocks[0])
+    QaBlock.model_validate(blocks[1])
+
+
+def test_unknown_block_kind_is_left_for_the_contract_to_reject() -> None:
+    """Trimming must not invent a shape for a kind we do not define."""
+    from aiops_diagnostics.qa_rag import _normalize_answer_turn
+
+    result = _normalize_answer_turn(
+        {
+            "kind": "answer",
+            "retrieval_status": "found",
+            "blocks": [{"kind": "hologram", "text": "?", "reference_id": "r"}],
+        }
+    )
+    assert result is not None
+    assert result["blocks"][0]["kind"] == "hologram"

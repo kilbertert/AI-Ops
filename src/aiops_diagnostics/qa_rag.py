@@ -366,11 +366,27 @@ def _normalize_answer_turn(turn: dict[str, Any]) -> dict[str, Any] | None:
         # Real models add display metadata the strict blocks-v1 contract does
         # not carry (mime_type, caption, ...) — keep only contract fields so
         # pydantic's extra=forbid guard stays strict downstream.
-        normalized = {
-            key: normalized[key]
-            for key in ("kind", "text", "resource_id", "reference_id", "title")
-            if key in normalized
+        #
+        # They also routinely overfill a block: a text block carrying the
+        # reference id it cites, or a reference block echoing the chunk text.
+        # The contract forbids those combinations and rejects the whole answer
+        # (41 live, 2026-09-17: "text block must not carry resource/reference
+        # ids"). Keeping the fields for this block's kind and dropping the rest
+        # is what the model meant — the citation belongs in a sibling
+        # reference block, and its loss is not worth failing the answer over.
+        allowed_by_kind = {
+            "text": ("kind", "text"),
+            "image": ("kind", "resource_id", "title"),
+            "video": ("kind", "resource_id", "title"),
+            "reference": ("kind", "reference_id", "title"),
         }
+        allowed = allowed_by_kind.get(str(normalized.get("kind")))
+        if allowed is None:
+            # Unknown kind: the contract will reject it, and inventing fields
+            # for a shape we do not own is not this normalizer's job.
+            normalized_blocks.append(normalized)
+            continue
+        normalized = {key: normalized[key] for key in allowed if key in normalized}
         normalized_blocks.append(normalized)
     if not normalized_blocks:
         return None
