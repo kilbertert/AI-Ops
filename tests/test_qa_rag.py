@@ -757,3 +757,40 @@ def test_unknown_block_kind_is_left_for_the_contract_to_reject() -> None:
     )
     assert result is not None
     assert result["blocks"][0]["kind"] == "hologram"
+
+
+def test_overfilled_blocks_are_trimmed_in_the_wrapped_answer_shape() -> None:
+    """The shape that actually failed on 41: blocks arrive nested under
+    `answer`, which used to return EARLY and skip cleaning entirely — so the
+    first trim fix never ran and the same contract error survived."""
+    from aiops_diagnostics.qa_rag import _normalize_answer_turn
+
+    # Mimics the live payload: text blocks carrying `title`, and a reference
+    # block echoing `text` (both forbidden combinations).
+    turn = {
+        "kind": "answer",
+        "answer": {
+            "retrieval_status": "found",
+            "blocks": [
+                {"kind": "text", "title": "标题", "text": "案例正文", "resource_id": "", "reference_id": ""},
+                {
+                    "kind": "reference",
+                    "title": "案例背景与痛点",
+                    "text": "案例来源：宣传.docx",
+                    "reference_id": "ref-9",
+                },
+            ],
+        },
+    }
+    result = _normalize_answer_turn(turn)
+    assert result is not None
+    blocks = result["blocks"]
+
+    assert blocks[0] == {"kind": "text", "text": "案例正文"}
+    assert blocks[1] == {"kind": "reference", "reference_id": "ref-9", "title": "案例背景与痛点"}
+    # retrieval_status must survive from the wrapper.
+    assert result["retrieval_status"] == "found"
+
+    from aiops_diagnostics.agent_contracts import QaAnswer
+
+    QaAnswer.model_validate({"blocks": blocks, "retrieval_status": "found"})
