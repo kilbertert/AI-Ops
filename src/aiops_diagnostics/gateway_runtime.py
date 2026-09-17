@@ -9,7 +9,7 @@ from typing import Any
 from aiops_diagnostics.agent_contracts import IncidentManifest
 from aiops_diagnostics.agent_runner import classify_lightweight, run_agent_diagnosis, run_zero_order_answer
 from aiops_diagnostics.agent_workspace import AgentWorkspace
-from aiops_diagnostics.codex_runtime import AgentRuntimeError
+from aiops_diagnostics.codex_runtime import AgentContractError, AgentRuntimeError
 from aiops_diagnostics.config import Settings, canonical_provider_base_url, validate_key_slot_name
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_store import GatewayDevice, GatewayStore
@@ -921,14 +921,27 @@ class GatewayRuntime:
             # model without the search guard either, so degrade to the plain
             # zero-order answer instead of failing the job.
             return None
+        except AgentContractError as exc:
+            # The model answered but violated the blocks contract. That is a
+            # defect, not an outage: report it as a failure so it stays visible
+            # in the job record, and do NOT let the promo degrade hide it.
+            # (2026-09-17: treating this like a provider outage made a real
+            # reference-block bug look like "service temporarily unavailable".)
+            self.store.update_assistant_question(
+                qa_id,
+                status="failed",
+                error_code="QA_FAILED",
+                error_message=_public_error_message(exc, ""),
+            )
+            return {"status": "failed"}
         except (AgentRuntimeError, ValueError) as exc:
             if promo_intent:
                 # A promotional click is a product surface, not a diagnostic
-                # run. When the model is unreachable (41 live: the provider
-                # account in arrears made every case_exploration click a hard
-                # QA_FAILED), the promotion contract promises an honest card,
-                # so report the outage as a card instead of an error the user
-                # cannot act on.
+                # run. When the model is genuinely unreachable (41 live: the
+                # provider account in arrears made every case_exploration click
+                # a hard QA_FAILED), the promotion contract promises an honest
+                # card, so report the outage as a card instead of an error the
+                # user cannot act on.
                 from aiops_diagnostics.promo_agents import promo_empty_result
 
                 self.store.update_assistant_question(

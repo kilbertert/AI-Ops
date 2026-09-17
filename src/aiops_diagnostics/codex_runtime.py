@@ -88,6 +88,17 @@ class AgentRuntimeError(RuntimeError):
     """The Codex diagnostic runtime could not complete a turn."""
 
 
+class AgentContractError(AgentRuntimeError):
+    """The model answered, but the answer violated the output contract.
+
+    Deliberately distinct from a transport/provider failure: an unreachable
+    model is an outage a product surface may degrade to an honest card, while a
+    malformed answer is a defect that must stay visible. Treating them alike
+    (2026-09-17) turned a real block-shape bug into "service unavailable" and
+    hid it from both the user and the logs.
+    """
+
+
 class AgentTurnTimeout(AgentRuntimeError):
     """A Codex turn exceeded the configured deadline and was interrupted."""
 

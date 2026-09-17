@@ -272,3 +272,80 @@ def _stub_search():
             return []
 
     return _Stub()
+
+
+def test_promo_contract_violation_stays_a_failure_not_a_card(tmp_path: Path, monkeypatch) -> None:
+    """41 live (2026-09-17): the model answered with a malformed reference
+    block, the contract rejected it, and the promo degrade turned that real
+    defect into "服务暂时不可用" — hiding it from the user and the logs.
+
+    A contract violation is a bug, not an outage, so it must fail visibly."""
+    from aiops_diagnostics.codex_runtime import AgentContractError
+
+    runtime = _runtime(tmp_path, with_search=True, agent_store=_StoreWithPublishedAgent())
+    created = runtime.store.create_assistant_question("tenant-a", "我想看看客户案例")
+
+    monkeypatch.setattr(
+        "aiops_diagnostics.qa_rag.run_customer_qa_answer",
+        lambda *a, **k: (_ for _ in ()).throw(
+            AgentContractError("reference block must not carry text or resource ids")
+        ),
+    )
+    captured: dict = {}
+    real_update = runtime.store.update_assistant_question
+
+    def spy(qa_id, **kwargs):
+        captured.update(kwargs)
+        return real_update(qa_id, **kwargs)
+
+    monkeypatch.setattr(runtime.store, "update_assistant_question", spy)
+    try:
+        outcome = runtime._try_customer_rag(
+            created["qa_id"],
+            "我想看看客户案例",
+            "tenant-a",
+            runtime.diagnostic_settings,
+            None,
+            None,
+            "zh",
+            promo_target="agt_12345678#v1",
+            promo_intent="case_exploration",
+        )
+    finally:
+        runtime.shutdown()
+
+    assert outcome == {"status": "failed"}, outcome
+    assert captured.get("status") == "failed", captured
+    # The real reason must survive into the job record, not be replaced by the
+    # generic outage copy.
+    assert "reference block" in str(captured.get("error_message") or "")
+
+
+def test_promo_provider_outage_still_degrades_to_a_card(tmp_path: Path, monkeypatch) -> None:
+    """The behaviour #272 added must survive: an unreachable model is an outage
+    a promo click may honestly degrade. (Guards against over-correcting.)"""
+    from aiops_diagnostics.codex_runtime import AgentRuntimeError
+
+    runtime = _runtime(tmp_path, with_search=True, agent_store=_StoreWithPublishedAgent())
+    created = runtime.store.create_assistant_question("tenant-a", "我想看看客户案例")
+
+    monkeypatch.setattr(
+        "aiops_diagnostics.qa_rag.run_customer_qa_answer",
+        lambda *a, **k: (_ for _ in ()).throw(AgentRuntimeError("provider unreachable")),
+    )
+    try:
+        outcome = runtime._try_customer_rag(
+            created["qa_id"],
+            "我想看看客户案例",
+            "tenant-a",
+            runtime.diagnostic_settings,
+            None,
+            None,
+            "zh",
+            promo_target="agt_12345678#v1",
+            promo_intent="case_exploration",
+        )
+    finally:
+        runtime.shutdown()
+
+    assert outcome == {"status": "completed"}, outcome
