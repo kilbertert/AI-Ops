@@ -1519,3 +1519,61 @@ IMAGE: 重卡流量平台_互联互通过程图.png -> /v1/media/media_bpl3iD9TK
 图片**可检索 + 可显示**，端到端闭环。KB 现有 10 个文档（2 视频 + 1 docx + 9 图，另 GIF 已替换为 PNG），检索命中同时返回 text / image / reference 块。
 
 **备份**：`/root/backups/kb-images-20260918-160754/`。
+
+## 多语言与媒体端到端验收（2026-09-18，PR #280–#285）
+
+### 快捷指令文案多语言（#283 / #284）
+
+**反馈**：快捷指令返回没有做国际化。
+
+排查后发现**三层各有缺口**，且**修代码不够——线上数据需单独迁移**：
+
+| 层 | 缺口 | 处理 |
+|---|---|---|
+| 消息表 | `CLARIFICATION_MESSAGES` / `PROMO_EMPTY_MESSAGES` / `PROMO_UNAVAILABLE_MESSAGES` 只有 zh/en | 补 de/fr/es/pt（#283，42 条）|
+| seed 文案 | `_BUNDLED_SHORTCUTS` 只有 zh/en | 补六语（#284，54 条）|
+| **线上数据** | 41 上 9 行（3 租户 × 3 动作）是用旧两语 seed 建的 | **经生产生命周期更新（fork→update→publish），改前完整备份** |
+
+**关键教训**：`public()` 对缺失语言**静默回退 zh**，所以请求返回 200、`language` 回显正确、按钮却是中文——**这类缺陷不会报错**。已加结构性测试断言每张面向用户的表覆盖全部受支持语言、key 集合一致、值非空。
+
+**41 实测（六语）**：
+
+```
+zh -> 请先选择需要检测的订单后，我才能继续处理。
+en -> Please select the order you want checked before I can continue.
+de -> Bitte wählen Sie zuerst den zu prüfenden Auftrag aus, damit ich fortfahren kann.
+fr -> Veuillez d'abord sélectionner la commande à vérifier pour que je puisse continuer.
+es -> Seleccione primero el pedido que desea revisar para que yo pueda continuar.
+pt -> Selecione primeiro o pedido que deseja verificar para que eu possa continuar.
+ja -> 请先选择需要检测的订单后，我才能继续处理。   （不支持的语言，整体回退 zh）
+
+列表 label：de='Kundenfälle' fr='Cas clients' es='Casos de cliente' pt='Casos de cliente'
+```
+
+### 诊断结果里的原文中文（#285）
+
+**反馈**：切换语言后，诊断响应里仍有中文。
+
+**根因不是模型失误**——`agent_engine.py` 的 prompt 明确要求：*"Keep identifiers, codes, numbers and quoted evidence verbatim regardless of output language"*，模型是**照做**。
+
+**产品判断：诊断面向终端用户读**（工程师另有工具），所以该规则在此场景下取舍错误。新规则区分两类内容：
+
+- **翻译**证据叙述，含枚举标签与停因（prompt 中以 `余额耗尽停止订单` 为例）
+- **逐字保留**标识符、代码、数字、时间戳、带单位数值（供读者对照系统记录）
+- 允许在代码旁附译文，如 `status 2 (uncontrollable fault)`
+
+**41 实测**（订单 `2095587778063572993`，`Accept-Language: en`，`diagnosis completed`）：
+
+```
+修复前：stop reason '余额耗尽停止订单'（中文枚举原样拼入英文句）
+修复后：status 1, 'charging finished'          ← 中文枚举已翻译
+        stopped_reason_content 'Remote'         ← 原文即英文，正确保留
+        订单号 / stopped_reason_code / meter_end ← 逐字保留
+```
+
+**未受影响**：QA 与 promo 的 prompt 从未含此规则；校验器只校验 `evidence_id` 引用与证据哈希，不校验文本逐字性。
+
+### 其他
+
+- **图片/视频可检索 + 可显示**（#280）：三个独立根因——`qwen3-vl-plus` 端点上离线、图片从未入库、促销媒体授权因用错 agent 校验而永远 403。详见上一节。
+- **行业方案停用**：三行（平台默认 + 两租户）全部 `disabled`，公网列表 `count` 由 4 → 3。已发布动作无法删除，停用是可逆机制。**前端按钮为硬编码**（见 `frontend-api-brief.md` §10.2），需前端改动才会消失。
