@@ -120,6 +120,44 @@ PROMO_UNAVAILABLE_MESSAGES: dict[str, dict[str, str]] = {
 }
 
 
+# Sync clarification replies. These are USER-VISIBLE and rendered directly by
+# the client (frontend brief D.3: "渲染 message"), so they must follow
+# Accept-Language like every other user-facing string. They were hardcoded in
+# Chinese while the response still echoed `language: en` — the one user-visible
+# surface that silently ignored the request language (41 live, 2026-09-18).
+#
+# Keys are the missing context the reply asks for; the jump-action guard uses
+# "wrong_entry" because nothing is missing there — the client used the wrong
+# surface.
+CLARIFICATION_MESSAGES: dict[str, dict[str, str]] = {
+    "zh": {
+        "order_no": "请先选择需要检测的订单后，我才能继续处理。",
+        "context": "请补充订单或设备等必要信息后，我才能继续处理。",
+        "wrong_entry": "请点击页面上的快捷按钮进入对应页面。",
+    },
+    "en": {
+        "order_no": "Please select the order you want checked before I can continue.",
+        "context": "Please provide the order or device details before I can continue.",
+        "wrong_entry": "Please use the shortcut button on the page to open the relevant screen.",
+    },
+}
+
+CLARIFICATION_FALLBACK_KEY = "context"
+
+
+def clarification_message(language: str, key: str) -> str:
+    """Localized clarification text, falling back to zh then to a safe default.
+
+    A missing key must never yield an empty message: the client renders this
+    string verbatim, so an empty one would leave the user with a blank reply.
+    """
+    pack = CLARIFICATION_MESSAGES.get(language) or CLARIFICATION_MESSAGES[DEFAULT_LANGUAGE]
+    resolved = pack.get(key) or CLARIFICATION_MESSAGES[DEFAULT_LANGUAGE].get(key)
+    if resolved:
+        return resolved
+    return CLARIFICATION_MESSAGES[DEFAULT_LANGUAGE][CLARIFICATION_FALLBACK_KEY]
+
+
 def language_name(language: str) -> str:
     """English display name of a supported language for prompt injection."""
     return LANGUAGE_NAMES.get(language, LANGUAGE_NAMES[DEFAULT_LANGUAGE])

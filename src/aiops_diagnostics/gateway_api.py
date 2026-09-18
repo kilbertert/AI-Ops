@@ -66,7 +66,7 @@ from aiops_diagnostics.gateway_store import (
     GatewayStore,
     RunNotFoundError,
 )
-from aiops_diagnostics.i18n import resolve_language
+from aiops_diagnostics.i18n import clarification_message, resolve_language
 from aiops_diagnostics.metrics_store import MetricsValidationError
 from aiops_diagnostics.scope_context import ScopeContext, ScopeError
 from aiops_diagnostics.shortcut_lifecycle import (
@@ -761,7 +761,7 @@ def create_gateway_app(
                         "language": language,
                         "question": payload.question,
                         "missing_fields": [],
-                        "message": "请点击页面上的快捷按钮进入对应页面。",
+                        "message": clarification_message(language, "wrong_entry"),
                     }
 
                 # (b) A clicked order-bound shortcut must not silently fall
@@ -786,7 +786,7 @@ def create_gateway_app(
                         "language": language,
                         "question": payload.question,
                         "missing_fields": ["order_no"],
-                        "message": "请先选择需要检测的订单后，我才能继续处理。",
+                        "message": clarification_message(language, "order_no"),
                     }
 
         # Route 1: explicit order → diagnosis semantics.
@@ -998,7 +998,7 @@ def create_gateway_app(
                     "language": language,
                     "question": payload.question,
                     "missing_fields": ["context"],
-                    "message": "请补充订单或设备等必要信息后，我才能继续处理。",
+                    "message": clarification_message(language, "context"),
                 }
             # Classifier-returned promotional intent (#229 protocol): same
             # promotional route as the explicit cues, resolved against the

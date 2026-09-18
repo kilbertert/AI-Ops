@@ -692,3 +692,67 @@ def test_unknown_shortcut_code_still_falls_through_to_qa(tmp_path: Path) -> None
     )
     assert resp.status_code == 202, resp.text
     assert resp.json()["type"] == "qa"
+
+
+def test_clarification_message_follows_accept_language(tmp_path: Path) -> None:
+    """41 live (2026-09-18): the clarification `message` was hardcoded Chinese
+    while the response still echoed `language: en` — the one user-visible
+    surface that ignored the request language. The client renders this string
+    verbatim (frontend brief D.3), so it must be localized like everything
+    else."""
+    client, _ = _client(tmp_path)
+    _publish_shortcut(
+        client,
+        {
+            "business_entry": "consumer",
+            "code": "smart_diagnosis",
+            "intent": "order_issue",
+            "requires_order": True,
+            "labels": {"zh": "智能检测", "en": "Smart Diagnosis"},
+        },
+    )
+
+    cases = [
+        ("zh", "请先选择需要检测的订单"),
+        ("en", "Please select the order"),
+        ("de", "请先选择需要检测的订单"),  # no de copy -> zh fallback
+    ]
+    for lang, expected in cases:
+        resp = client.post(
+            "/v1/assistant/questions",
+            json={"question": "帮我检测这个订单", "shortcut_code": "smart_diagnosis"},
+            headers={**_headers(), "Accept-Language": lang},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body["type"] == "clarification"
+        assert body["language"] == lang
+        assert expected in body["message"], (lang, body["message"])
+        # Never empty: the client renders this verbatim.
+        assert body["message"].strip()
+
+
+def test_jump_action_clarification_is_localized(tmp_path: Path) -> None:
+    """The jump-action guard's reply (added in #262) was hardcoded too."""
+    client, _ = _client(tmp_path)
+    _publish_shortcut(
+        client,
+        {
+            "business_entry": "consumer",
+            "code": "report_fault",
+            "intent": "report_fault",
+            "requires_order": False,
+            "labels": {"zh": "故障上报", "en": "Report a Fault"},
+            "jump_path": "/charge/pages/faultReport/faultReportList",
+        },
+    )
+    for lang, expected in (("zh", "请点击页面上的快捷按钮"), ("en", "shortcut button on the page")):
+        resp = client.post(
+            "/v1/assistant/questions",
+            json={"question": "我要上报一个故障", "shortcut_code": "report_fault"},
+            headers={**_headers(), "Accept-Language": lang},
+        )
+        body = resp.json()
+        assert body["type"] == "clarification"
+        assert body["language"] == lang
+        assert expected in body["message"], (lang, body["message"])
