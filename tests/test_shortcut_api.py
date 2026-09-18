@@ -1010,3 +1010,26 @@ def test_lifecycle_validator_also_rejects_network_path_reference(tmp_path: Path)
         pass
     else:  # pragma: no cover
         raise AssertionError("//evil.com must be rejected by the lifecycle validator")
+
+
+def test_bundled_seed_copy_covers_every_supported_language() -> None:
+    """41 live (2026-09-18): the seed carried zh+en only, so a de/fr/es/pt user
+    got Chinese buttons while the response still echoed their language.
+
+    public() falls back to zh per field, so a missing language is silent: the
+    request succeeds and looks localized."""
+    from aiops_diagnostics.i18n import SUPPORTED_LANGUAGES
+    from aiops_diagnostics.shortcut_lifecycle import _BUNDLED_SHORTCUTS
+
+    checked = 0
+    for entry, specs in _BUNDLED_SHORTCUTS:
+        assert entry in {"consumer", "operator"}
+        for code, spec in specs.items():
+            for field in ("labels", "descriptions", "question_templates"):
+                copy = spec.get(field) or {}
+                missing = [lang for lang in SUPPORTED_LANGUAGES if lang not in copy]
+                assert not missing, f"{entry}/{code}/{field} missing: {missing}"
+                for lang in SUPPORTED_LANGUAGES:
+                    assert str(copy[lang]).strip(), f"{entry}/{code}/{field}/{lang} is empty"
+                checked += 1
+    assert checked >= 3, "seed shape changed; update this test deliberately"
