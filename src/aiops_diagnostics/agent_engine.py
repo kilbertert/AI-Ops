@@ -335,9 +335,23 @@ Available read-only evidence tools:
 {tools}
 {notes_block}
 Choose the smallest useful evidence set. Normally request `order_snapshot` first.
-Write every human-readable output field (summary, root_cause, evidence notes,
-recommendations) in {language_name(self.language)}. Keep identifiers, codes,
-numbers and quoted evidence verbatim regardless of output language.
+Write the ENTIRE response in {language_name(self.language)} — every field a
+person reads, including summary, root_cause, evidence notes, recommendations and
+every limitation or next step.
+
+Translate evidence into that language. Source data is stored in Chinese, so a
+raw field value copied into the answer will read as Chinese to a user who asked
+for another language — translate it as you would any other prose. This includes
+enum labels and stop reasons, e.g. `余额耗尽停止订单` becomes "balance exhausted,
+order stopped".
+
+Keep only what carries meaning as an identifier, and keep it EXACTLY as stored:
+order numbers, device/connector IDs, evidence IDs, field names, error and status
+codes, timestamps, and numeric values with their units. Those must stay
+byte-identical even though the sentence around them is translated — a reader has
+to be able to match them against the system of record. Where a translated label
+helps, you may add it next to the code, e.g. `status 2 (uncontrollable fault)`.
+
 Return only the structured response required by the output schema.
 """
 
