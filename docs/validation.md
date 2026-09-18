@@ -1453,3 +1453,69 @@ error: None
 - **不可变快照的后果**：reconcile 发布了 agent v2，但快捷动作仍钉在 `#v1`（其快照含已删除的旧 KB），需显式把 pin 移到 v2。这是设计使然——快照不可变，移动的是 pin。
 
 **备份**：`/root/backups/kb-model-migration-20260917-172210/`（kb-service.env、tenancy.db、kb_adapter.py、app.py、模型清单快照）。
+
+## 图片与视频可检索 + 可显示：修复与 41 实测（2026-09-18，PR #280）
+
+**反馈**：「视频和图片还是不能被检索出来」。
+
+排查后发现是**三个独立问题**，性质各不相同：
+
+### 1. 视频描述实为解析错误文本（已修）
+
+视频 chunk 的**内容本身**是解析失败时的错误串：
+
+```
+**ERROR**: Error code: 400 - {'error': {'message':
+  'Invalid param: model [Qwen/Qwen3-vl-Plus] is offline'}}
+```
+
+**根因**：视觉模型 `qwen3-vl-plus` 在该端点上**列在 `/models` 里但实际离线**。逐写法实测：
+
+| 模型名 | 结果 |
+|---|---|
+| `qwen3-vl-plus` | `model is offline` |
+| `Qwen/Qwen3-vl-Plus` | `倍率或价格未配置` (500) |
+| **`deepseek-v4-flash-vision-exp`** | **200 OK** |
+
+该端点上**唯一可用**的视觉模型是 `deepseek-v4-flash-vision-exp`。切换后重新解析两个视频，chunk 内容变为真实描述（CV LLM 正常响应）。**这是"列出来 ≠ 能用"的同类陷阱，本轮第二次遇到。**
+
+### 2. 图片素材从未入库（已补）
+
+素材目录中**没有独立图片文件**；9 张图内嵌在 `宣传.docx` 里，而 docx 用 `naive` 文本解析——文本解析器只抽文字，**不会把内嵌图片提出来单独入库**。
+
+处理：从 docx 提取 9 张图（内容经逐一确认为**实质产品素材**：功能截图、流程示意图、方案海报），按 `picture` 分块上传——这是同时产生**可检索描述**与**可显示 image_id** 的唯一方式。
+
+一处细节：其中一张是**动态 GIF（22 帧）**，而 harness 的 `ALLOWED_IMAGE_TYPES` 只含 `png/jpeg/webp`，GIF 永远无法签发。首帧经确认是**完整独立的宣传图**，转成 PNG 后重新上传，无内容损失。
+
+### 3. 促销媒体的媒体授权**永远 403**（已修，PR #280）
+
+**这是最关键的一个，且一直存在**：图片/视频能被检索、模型也输出了带签名 `media_*` 的 image 块，但**URL 取不到字节**。
+
+根因在 `_is_active`——它用**客服 agent** 校验授权：
+
+```python
+selection = select_customer_agent(self.agent_store, grant.tenant_id)
+if f"{selection.agent_id}#v{selection.version_no}" != grant.agent_version:
+    return False
+```
+
+但 `select_customer_agent` **刻意跳过**被快捷动作 pin 的宣传 agent（#231），所以对宣传授权它永远返回 None 或客服 agent——**这个检查要保护的那一种情况，恰好是它永远拒绝的那一种**。
+
+修法：授权自带它所属的 agent version，就校验**那个** agent（仍处于已发布且版本一致、且 KB 仍绑定）。停用该 agent 或解绑 KB 依然立即失效，符合 #168 的过期 URL 规则。
+
+**方法教训（本轮第四次）**：该测试的第一版**在缺陷上通过了**——它创建了宣传 agent 但**没有 pin 它**，于是 `select_customer_agent` 仍然返回它、旧比较恰好成立。修正后测试会发布一条 pin 住该 agent 的快捷动作，并**先断言前置条件**（选择器必须返回 None），再验媒体路径。已验证：回退修复则失败、保留修复则通过。
+
+### 41 公网实测
+
+```
+status: completed | retrieval: found
+IMAGE: 重卡充电桩流量平台_产品海报.png -> /v1/media/media_2EIx14vY9KA2lJmojc-_I0UWdFmnNF_M.8e21...
+IMAGE: 重卡流量平台_互联互通过程图.png -> /v1/media/media_bpl3iD9TKwfkiEEUWw9TqULamhfjZRx6.b264...
+
+取图: /v1/media/media_2EIx14...  http=200 bytes=271953 type=image/jpeg
+文件头: ffd8ffe0 0010 4a46  → 真实 JPEG 字节
+```
+
+图片**可检索 + 可显示**，端到端闭环。KB 现有 10 个文档（2 视频 + 1 docx + 9 图，另 GIF 已替换为 PNG），检索命中同时返回 text / image / reference 块。
+
+**备份**：`/root/backups/kb-images-20260918-160754/`。
