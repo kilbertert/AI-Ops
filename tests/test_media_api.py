@@ -637,3 +637,140 @@ def test_runtime_serve_media_fetches_through_grant_tenant(tmp_path: Path) -> Non
     # The fetch reached kb-service under the grant's tenant, never under the
     # process-level neutral "aiops" binding.
     assert kb_client.fetches == [("tenant-video", "tenant-video", "bytes=0-2")]
+
+
+def test_promo_media_grant_validates_against_its_own_agent(tmp_path: Path) -> None:
+    """41 live (2026-09-18): every image/video URL a promotional card produced
+    was rejected 403, so media was retrievable but never displayable.
+
+    `_is_active` compared the grant against `select_customer_agent(...)`, which
+    deliberately SKIPS promo-pinned agents (#231) — so the comparison could
+    never hold for a promotional grant. The check must validate the agent the
+    grant actually names."""
+    from aiops_diagnostics.agent_lifecycle import AgentConfig, AgentManager, AgentStore
+    from aiops_diagnostics.config import Settings
+    from aiops_diagnostics.gateway_runtime import GatewayRuntime
+    from aiops_diagnostics.scope_context import DataScope, SubjectRecord
+
+    settings = GatewayServerSettings(
+        data_home=tmp_path,
+        database_file=tmp_path / "gateway.db",
+        server_config_file=tmp_path / "production.env",
+    )
+    settings.server_config_file.write_text("# test\n", encoding="utf-8")
+    store = GatewayStore(settings.database_file)
+    agent_store = AgentStore(settings.database_file)
+    signer = MediaResourceSigner("secret", ttl_seconds=600)
+    runtime = GatewayRuntime(
+        store,
+        settings,
+        Settings(agent=Settings().agent),  # type: ignore[arg-type]
+        kb_search_client=_FakeKbClient(lambda _grant: b"PNGDATA"),
+        media_signer=signer,
+        agent_store=agent_store,
+    )
+
+    subject = SubjectRecord(b_user_id="B-1", tenant_id="tenant-a")
+    admin = ScopeContext.build(
+        caller=subject,
+        subject=subject,
+        delegated=False,
+        effective_tenant_id="tenant-a",
+        data_scope=DataScope(type="self"),
+        roles=frozenset({"ROLE_AGENT_ADMIN"}),
+        permissions=frozenset({"aiops:agents:manage"}),
+    )
+    manager = AgentManager(
+        agent_store,
+        allowed_models=("aiops-api",),
+        knowledge_resolver=_AlwaysValidKnowledge(),
+    )
+    # A promotional agent: pinned by a published shortcut, so select_customer_agent
+    # skips it. That is exactly the situation the old check could not handle.
+    promo = manager.create(
+        admin,
+        name="宣传案例",
+        description="宣传卡片 agent",
+        config=AgentConfig(
+            agent_type="customer",
+            prompt="宣传语气，事实只来自检索。",
+            knowledge_base_ids=("kb-promo",),
+            model="aiops-api",
+            output_contract="blocks-v1",
+        ),
+    )
+    published = manager.publish(admin, promo.agent_id, expected_revision=promo.revision)
+
+    # The pin is what makes the agent promotional: _pinned_promo_agents reads
+    # published shortcuts, and select_customer_agent skips whatever they pin.
+    # Without this the test would exercise a plain customer agent and pass
+    # against the very bug it is meant to catch.
+    from aiops_diagnostics.shortcut_lifecycle import ShortcutManager, ShortcutStore
+
+    shortcut_store = ShortcutStore(settings.database_file)
+    shortcut_manager = ShortcutManager(shortcut_store)
+    created = shortcut_manager.create(
+        admin,
+        {
+            "business_entry": "consumer",
+            "code": "case_exploration",
+            "intent": "case_exploration",
+            "requires_order": False,
+            "sort_order": 10,
+            "labels": {"zh": "客户案例"},
+            "descriptions": {},
+            "question_templates": {},
+            "target_agent_version": f"{promo.agent_id}#v{published.version_no}",
+        },
+    )
+    shortcut_manager.publish(admin, created.shortcut_id, expected_revision=created.revision)
+
+    # Precondition: the selector must now SKIP the promo agent, otherwise the
+    # old check would have matched and the test would prove nothing.
+    from aiops_diagnostics.qa_rag import select_customer_agent
+
+    assert select_customer_agent(agent_store, "tenant-a") is None, (
+        "precondition failed: the promo agent is not being skipped"
+    )
+
+    resource = signer.issue(
+        tenant_id="tenant-a",
+        agent_version=f"{promo.agent_id}#v{published.version_no}",
+        session_id=None,
+        knowledge_base_id="kb-promo",
+        document_id="doc-1",
+        chunk_id="chunk-1",
+        backend_id="backend-1",
+        kind="image",
+        mime_type="image/png",
+        title="产品海报.png",
+        reference_id="chunk-1",
+    )
+    signed_id = resource.url.rsplit("/", 1)[-1]
+    response = runtime.serve_media(signed_id)
+    assert response is not None, "probe agent version must resolve"
+    assert response.status_code == 200, f"a promotional grant must serve, got {response.status_code}"
+    assert response.body == b"PNGDATA"
+
+    # Stale URLs must still fail: disabling THAT agent invalidates the URL.
+    current = manager.get(admin, promo.agent_id)
+    manager.disable(admin, promo.agent_id, expected_revision=current.revision)
+    response = runtime.serve_media(signed_id)
+    assert response is not None and response.status_code == 403
+
+    # A grant whose KB is not bound to the named agent version is also rejected.
+    other = signer.issue(
+        tenant_id="tenant-a",
+        agent_version=f"{promo.agent_id}#v{published.version_no}",
+        session_id=None,
+        knowledge_base_id="kb-not-bound",
+        document_id="doc-1",
+        chunk_id="chunk-1",
+        backend_id="backend-1",
+        kind="image",
+        mime_type="image/png",
+        title="x.png",
+        reference_id="chunk-1",
+    )
+    response = runtime.serve_media(other.url.rsplit("/", 1)[-1])
+    assert response is not None and response.status_code == 403

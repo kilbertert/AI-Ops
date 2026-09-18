@@ -1005,20 +1005,36 @@ class GatewayRuntime:
 
         if self._media_proxy is None:
             self._media_proxy = MediaProxy(self.media_signer, _fetch_for_tenant)
-        from aiops_diagnostics.qa_rag import select_customer_agent
 
         def _is_active(grant: MediaGrant) -> bool:
+            """Is the agent version that SIGNED this grant still live?
+
+            Validate the grant against its own agent, not the customer-service
+            agent. Asserting `select_customer_agent(...) == grant.agent_version`
+            could never hold for a promotional grant: that selector deliberately
+            SKIPS promo-pinned agents (#231), so every image and video URL a
+            promotional card produced was rejected with 403 — media was
+            retrievable but never displayable (41 live, 2026-09-18).
+
+            The grant names its agent, so the honest check is: that agent is
+            still published at exactly that version, and still bound to the
+            knowledge base the grant cites. A disabled agent version or an
+            unbound KB still invalidates URLs immediately.
+            """
             if self.agent_store is None:
                 return False
+            agent_id, _, version_part = str(grant.agent_version).partition("#v")
+            if not agent_id or not version_part.isdigit():
+                return False
             try:
-                selection = select_customer_agent(self.agent_store, grant.tenant_id)
+                published = self.agent_store.get(agent_id, grant.tenant_id)
+                version = self.agent_store.version(agent_id, grant.tenant_id, int(version_part))
             except Exception:
                 return False
-            if selection is None:
+            if published.status != "published" or published.published_version != int(version_part):
                 return False
-            if f"{selection.agent_id}#v{selection.version_no}" != grant.agent_version:
-                return False
-            return grant.knowledge_base_id in selection.knowledge_base_ids
+            snapshot_kbs = tuple(version.snapshot.get("knowledge_base_ids") or ())
+            return grant.knowledge_base_id in snapshot_kbs
 
         try:
             return self._media_proxy.serve_signed(signed_id, range_header=range_header, is_active=_is_active)
