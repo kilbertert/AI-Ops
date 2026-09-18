@@ -63,6 +63,12 @@ class ShortcutError(RuntimeError):
 # The initial product-entry shortcuts (#230 initial codes). Copy lives here
 # only as the seed default; after creation the rows are ordinary managed
 # resources — operators edit/publish/disable them through the API.
+#
+# Copy covers ALL of SUPPORTED_LANGUAGES, matching the label/description tables
+# in i18n.py. A two-language seed is not harmless: resolve_language accepts six
+# languages and public() falls back to zh, so a de/fr/es/pt user silently gets
+# Chinese buttons while the response still echoes their language
+# (41 live, 2026-09-18).
 _BUNDLED_SHORTCUTS: tuple[tuple[str, dict[str, dict[str, Any]]], ...] = (
     (
         "consumer",
@@ -71,42 +77,87 @@ _BUNDLED_SHORTCUTS: tuple[tuple[str, dict[str, dict[str, Any]]], ...] = (
                 "intent": "case_exploration",
                 "requires_order": False,
                 "sort_order": 10,
-                "labels": {"zh": "客户案例", "en": "Customer Cases"},
+                "labels": {
+                    "zh": "客户案例",
+                    "en": "Customer Cases",
+                    "de": "Kundenfälle",
+                    "fr": "Cas clients",
+                    "es": "Casos de cliente",
+                    "pt": "Casos de cliente",
+                },
                 "descriptions": {
                     "zh": "查看不同行业的充电运营标杆案例",
                     "en": "Explore charging-operation benchmark cases by industry",
+                    "de": "Benchmark-Fälle aus dem Ladebetrieb verschiedener Branchen",
+                    "fr": "Découvrez des cas de référence par secteur d'activité",
+                    "es": "Conozca casos de referencia de distintos sectores",
+                    "pt": "Conheça casos de referência de vários setores",
                 },
                 "question_templates": {
                     "zh": "我想看看客户案例",
                     "en": "I'd like to see customer cases",
+                    "de": "Ich möchte Kundenfälle sehen",
+                    "fr": "Je voudrais voir des cas clients",
+                    "es": "Quiero ver casos de cliente",
+                    "pt": "Quero ver casos de cliente",
                 },
             },
             "smart_diagnosis": {
                 "intent": "order_issue",
                 "requires_order": True,
                 "sort_order": 20,
-                "labels": {"zh": "智能检测", "en": "Smart Diagnosis"},
+                "labels": {
+                    "zh": "智能检测",
+                    "en": "Smart Diagnosis",
+                    "de": "Intelligente Diagnose",
+                    "fr": "Diagnostic intelligent",
+                    "es": "Diagnóstico inteligente",
+                    "pt": "Diagnóstico inteligente",
+                },
                 "descriptions": {
                     "zh": "选择订单后自动诊断充电异常",
                     "en": "Pick an order, then diagnose the charging issue automatically",
+                    "de": "Auftrag wählen, Ladeabbrüche werden automatisch diagnostiziert",
+                    "fr": "Sélectionnez une commande pour diagnostiquer l'anomalie de charge",
+                    "es": "Seleccione un pedido para diagnosticar la anomalía de carga",
+                    "pt": "Selecione um pedido para diagnosticar a anomalia de carregamento",
                 },
                 "question_templates": {
                     "zh": "帮我检测这个订单的充电异常",
                     "en": "Diagnose the charging issue of this order",
+                    "de": "Diagnostizieren Sie den Ladefehler dieses Auftrags",
+                    "fr": "Diagnostiquez l'anomalie de charge de cette commande",
+                    "es": "Diagnostique la anomalía de carga de este pedido",
+                    "pt": "Diagnostique a anomalia de carregamento deste pedido",
                 },
             },
             "report_fault": {
                 "intent": "report_fault",
                 "requires_order": False,
                 "sort_order": 30,
-                "labels": {"zh": "故障上报", "en": "Report a Fault"},
+                "labels": {
+                    "zh": "故障上报",
+                    "en": "Report a Fault",
+                    "de": "Störung melden",
+                    "fr": "Signaler une panne",
+                    "es": "Notificar una avería",
+                    "pt": "Comunicar uma avaria",
+                },
                 "descriptions": {
                     "zh": "描述故障现象，由平台跟进处理",
                     "en": "Describe the fault and the platform will follow up",
+                    "de": "Beschreiben Sie die Störung, die Plattform kümmert sich darum",
+                    "fr": "Décrivez la panne, la plateforme prend le relais",
+                    "es": "Describa la avería y la plataforma se encargará",
+                    "pt": "Descreva a avaria e a plataforma dará seguimento",
                 },
                 "question_templates": {
                     "zh": "我要上报一个故障",
                     "en": "I want to report a fault",
+                    "de": "Ich möchte eine Störung melden",
+                    "fr": "Je souhaite signaler une panne",
+                    "es": "Quiero notificar una avería",
+                    "pt": "Quero comunicar uma avaria",
                 },
                 # The product's default fault-reporting entry is the in-app
                 # form, not a preset prompt. Kept here as the versioned
