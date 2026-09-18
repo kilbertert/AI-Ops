@@ -87,6 +87,11 @@ QA_FALLBACK_MESSAGES: dict[str, dict[str, str]] = {
 }
 
 # Honest empty promotional card when the pinned agent/KB has no match (#231).
+#
+# Every table below covers ALL of SUPPORTED_LANGUAGES. A missing language is not
+# harmless: resolve_language accepts de/fr/es/pt, so a two-language table makes
+# the service claim a language it then answers in Chinese — the exact mismatch
+# this module exists to prevent (41 live, 2026-09-18).
 PROMO_EMPTY_MESSAGES: dict[str, dict[str, str]] = {
     "zh": {
         "case_exploration": "当前没有可用的客户案例，未检索到匹配的宣传资料。",
@@ -95,6 +100,24 @@ PROMO_EMPTY_MESSAGES: dict[str, dict[str, str]] = {
     "en": {
         "case_exploration": "No matching customer case is available in the promotional library.",
         "solution_discovery": "No matching industry solution is available in the promotional library.",
+    },
+    "de": {
+        "case_exploration": "In der Werbematerial-Bibliothek ist kein passender Kundenfall verfügbar.",
+        "solution_discovery": "In der Werbematerial-Bibliothek ist keine passende Branchenlösung verfügbar.",
+    },
+    "fr": {
+        "case_exploration": "Aucun cas client correspondant n'est disponible dans la bibliothèque.",
+        "solution_discovery": (
+            "Aucune solution sectorielle correspondante n'est disponible dans la bibliothèque."
+        ),
+    },
+    "es": {
+        "case_exploration": "No hay ningún caso de cliente coincidente en la biblioteca promocional.",
+        "solution_discovery": "No hay ninguna solución sectorial coincidente en la biblioteca promocional.",
+    },
+    "pt": {
+        "case_exploration": "Não há nenhum caso de cliente correspondente na biblioteca promocional.",
+        "solution_discovery": "Não há nenhuma solução setorial correspondente na biblioteca promocional.",
     },
 }
 
@@ -116,6 +139,34 @@ PROMO_UNAVAILABLE_MESSAGES: dict[str, dict[str, str]] = {
     "en": {
         "case_exploration": "Customer cases are temporarily unavailable. Please try again later.",
         "solution_discovery": "Industry solutions are temporarily unavailable. Please try again later.",
+    },
+    "de": {
+        "case_exploration": "Kundenfälle sind vorübergehend nicht verfügbar. Bitte später erneut versuchen.",
+        "solution_discovery": (
+            "Branchenlösungen sind vorübergehend nicht verfügbar. Bitte später erneut versuchen."
+        ),
+    },
+    "fr": {
+        "case_exploration": "Les cas clients sont momentanément indisponibles. Veuillez réessayer plus tard.",
+        "solution_discovery": (
+            "Les solutions sectorielles sont momentanément indisponibles. Veuillez réessayer plus tard."
+        ),
+    },
+    "es": {
+        "case_exploration": (
+            "Los casos de cliente no están disponibles temporalmente. Inténtelo de nuevo más tarde."
+        ),
+        "solution_discovery": (
+            "Las soluciones sectoriales no están disponibles temporalmente. Inténtelo de nuevo más tarde."
+        ),
+    },
+    "pt": {
+        "case_exploration": (
+            "Os casos de cliente estão temporariamente indisponíveis. Tente novamente mais tarde."
+        ),
+        "solution_discovery": (
+            "As soluções setoriais estão temporariamente indisponíveis. Tente novamente mais tarde."
+        ),
     },
 }
 
@@ -139,6 +190,28 @@ CLARIFICATION_MESSAGES: dict[str, dict[str, str]] = {
         "order_no": "Please select the order you want checked before I can continue.",
         "context": "Please provide the order or device details before I can continue.",
         "wrong_entry": "Please use the shortcut button on the page to open the relevant screen.",
+    },
+    "de": {
+        "order_no": "Bitte wählen Sie zuerst den zu prüfenden Auftrag aus, damit ich fortfahren kann.",
+        "context": "Bitte geben Sie die Auftrags- oder Gerätedaten an, damit ich fortfahren kann.",
+        "wrong_entry": "Bitte öffnen Sie die entsprechende Seite über die Schaltfläche auf der Seite.",
+    },
+    "fr": {
+        "order_no": "Veuillez d'abord sélectionner la commande à vérifier pour que je puisse continuer.",
+        "context": (
+            "Veuillez fournir les informations de commande ou d'appareil pour que je puisse continuer."
+        ),
+        "wrong_entry": "Veuillez utiliser le bouton de la page pour ouvrir l'écran correspondant.",
+    },
+    "es": {
+        "order_no": "Seleccione primero el pedido que desea revisar para que yo pueda continuar.",
+        "context": "Facilite los datos del pedido o del dispositivo para que yo pueda continuar.",
+        "wrong_entry": "Utilice el botón de la página para abrir la pantalla correspondiente.",
+    },
+    "pt": {
+        "order_no": "Selecione primeiro o pedido que deseja verificar para que eu possa continuar.",
+        "context": "Forneça os dados do pedido ou do dispositivo para que eu possa continuar.",
+        "wrong_entry": "Utilize o botão da página para abrir o ecrã correspondente.",
     },
 }
 
