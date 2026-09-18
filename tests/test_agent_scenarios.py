@@ -117,6 +117,7 @@ def _run_scenario(tmp_path: Path, fixture_name: str, tools: list[str], failing: 
         executor,
         settings,
         session_factory=lambda *_: session,
+        language="en",
     ).run()
     return result, journal, manifest
 
@@ -229,3 +230,60 @@ def test_initial_prompt_includes_environment_notes(tmp_path: Path) -> None:
         session_factory=lambda *_: session2,
     ).run()
     assert "环境能力预检" not in session2.prompts[0]
+
+
+def test_initial_prompt_asks_for_evidence_translation_but_keeps_identifiers(
+    tmp_path: Path,
+) -> None:
+    """41 live (2026-09-18): an English diagnosis read
+
+        summary: Order ... finished with status 1 and stop reason
+                 '余额耗尽停止订单' (stopped_reason_code=-1, ...)
+
+    The surrounding sentence was English, but the raw Chinese enum value was
+    copied in verbatim. The old prompt asked to keep "quoted evidence verbatim
+    regardless of output language", so the model was following instructions —
+    on a response the END USER reads (product call: these are for users;
+    engineers have other tooling).
+
+    The rule now distinguishes prose from identifiers: translate the evidence,
+    keep identifiers/codes/numbers byte-identical so they still match the system
+    of record."""
+    request = parse_request("订单 TEST-OCPP-0003 金额异常")
+    manifest = IncidentManifest.from_request(request)
+    workspace = AgentWorkspace.create(Path(__file__).parents[1], tmp_path / "en", manifest)
+    journal = EvidenceJournal(workspace, manifest)
+    executor = DiagnosticToolExecutor(
+        FixtureSources(FIXTURES / "ocpp_consistent.json"),
+        request,
+        manifest,
+        journal,
+        safety=SafetySettings(),
+    )
+    session = _ScriptedSession(["order_snapshot"])
+    session.bind_manifest(manifest)
+    settings = AgentSettings(codex_bin="/bin/true", max_turns=2)
+
+    AgentCoordinator(
+        workspace,
+        manifest,
+        journal,
+        executor,
+        settings,
+        session_factory=lambda *_: session,
+        language="en",
+    ).run()
+
+    prompt = session.prompts[0]
+    # The output language is named.
+    assert "English" in prompt
+    # Evidence is to be translated, with the stored-Chinese cause spelled out.
+    assert "Translate evidence" in prompt
+    assert "余额耗尽停止订单" in prompt, "the concrete case should be exemplified"
+    # Identifiers must survive translation.
+    assert "EXACTLY as stored" in prompt
+    normalised = " ".join(prompt.split())
+    for kept in ("order numbers", "evidence IDs", "field names", "error and status codes", "timestamps"):
+        assert kept in normalised, f"{kept} must be named as verbatim"
+    # The old blanket rule must be gone: it is what produced the report.
+    assert "quoted evidence verbatim regardless of output language" not in prompt
