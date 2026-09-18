@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import pytest
@@ -54,3 +55,58 @@ def test_supported_languages_and_default_match_the_i18n_catalog_plan() -> None:
     assert DEFAULT_LANGUAGE == "zh"
     assert SUPPORTED_LANGUAGES == ("zh", "en", "de", "fr", "es", "pt")
     assert len(set(SUPPORTED_LANGUAGES)) == len(SUPPORTED_LANGUAGES)
+
+
+# Every table whose strings are shown to a user. Kept as a list so a NEW table
+# added later must be registered here to be checked — the point is that
+# coverage is verified structurally, not remembered.
+_USER_FACING_MESSAGE_TABLES = (
+    "QA_FALLBACK_MESSAGES",
+    "PROMO_EMPTY_MESSAGES",
+    "PROMO_UNAVAILABLE_MESSAGES",
+    "CLARIFICATION_MESSAGES",
+)
+
+
+@pytest.mark.parametrize("table_name", _USER_FACING_MESSAGE_TABLES)
+def test_every_user_facing_table_covers_all_supported_languages(table_name: str) -> None:
+    """resolve_language accepts all six languages, so a table missing some of
+    them makes the service announce a language it then answers in Chinese.
+
+    41 live (2026-09-18): the clarification and promo tables carried only zh+en
+    while `language` echoed de/fr/es/pt. Structural check rather than trusting
+    each table to have been filled in by hand."""
+    from aiops_diagnostics import i18n
+
+    table = getattr(i18n, table_name)
+    missing = [lang for lang in SUPPORTED_LANGUAGES if lang not in table]
+    assert not missing, f"{table_name} is missing: {missing}"
+
+    # And each language's entries must be non-empty for every key in the table.
+    keys = set(table[DEFAULT_LANGUAGE])
+    assert keys, f"{table_name} has no keys under the default language"
+    for lang in SUPPORTED_LANGUAGES:
+        assert set(table[lang]) == keys, (
+            f"{table_name}[{lang}] keys differ from {DEFAULT_LANGUAGE}: {sorted(set(table[lang]) ^ keys)}"
+        )
+        for key, text in table[lang].items():
+            assert isinstance(text, str) and text.strip(), f"{table_name}[{lang}][{key}] is empty"
+            # A wrap that split after "." must keep the separating space. Not
+            # hypothetical: an automatic line-wrapper dropped it while these
+            # tables were being filled, producing "verfügbar.Bitte".
+            assert not re.search(r"[.!?][A-Za-zÀ-ɏ]", text), (
+                f"{table_name}[{lang}][{key}] lost a space after a sentence end: {text!r}"
+            )
+
+
+@pytest.mark.parametrize("language", SUPPORTED_LANGUAGES)
+def test_clarification_message_never_falls_back_to_chinese_when_translated(language: str) -> None:
+    """A supported language must get its OWN copy, not the zh fallback."""
+    from aiops_diagnostics.i18n import clarification_message
+
+    zh = clarification_message("zh", "order_no")
+    for key in ("order_no", "context", "wrong_entry"):
+        text = clarification_message(language, key)
+        assert text.strip(), (language, key)
+        if language != "zh":
+            assert text != zh, f"{language}/{key} fell back to Chinese"

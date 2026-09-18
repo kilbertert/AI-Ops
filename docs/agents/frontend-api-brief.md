@@ -785,6 +785,8 @@ POST /v1/assistant/questions
 ```
 
 - HTTP 200，**没有 qa_id/diagnosis_id，不轮询**——渲染 `message` 并按 `missing_fields` 引导补信息（`order_no` → 弹订单选择器）后重新提交。
+- **`message` 按 `Accept-Language` 本地化**（§2.4 同一规则）：`zh/en/de/fr/es/pt` 六种受支持语言**各有独立文案**，非中文请求不再回退中文。不受支持的语言标签（如 `ja`）整体回退 `zh`，`language` 回显与实际文案始终一致。
+- 澄清共三处，文案随场景不同：`missing_fields=["order_no"]`（订单类动作缺订单）、`["context"]`（高风险问题缺上下文）、`[]`（跳转动作误投统一入口，D.2a）。
 - `report_fault` 第一版只收集故障描述，**不创建工单**。
 
 #### D.4 响应 type 速查（统一入口 POST /v1/assistant/questions）

@@ -712,22 +712,33 @@ def test_clarification_message_follows_accept_language(tmp_path: Path) -> None:
         },
     )
 
+    # Every supported language now carries its OWN copy, so this asserts real
+    # translation rather than a zh fallback. Only a genuinely unsupported tag
+    # falls back — covered separately below.
+    # (requested tag, resolved language, expected fragment)
     cases = [
-        ("zh", "请先选择需要检测的订单"),
-        ("en", "Please select the order"),
-        ("de", "请先选择需要检测的订单"),  # no de copy -> zh fallback
+        ("zh", "zh", "请先选择需要检测的订单"),
+        ("en", "en", "Please select the order"),
+        ("de", "de", "Bitte wählen Sie zuerst den zu prüfenden Auftrag"),
+        ("fr", "fr", "Veuillez d'abord sélectionner la commande"),
+        ("es", "es", "Seleccione primero el pedido"),
+        ("pt", "pt", "Selecione primeiro o pedido"),
+        ("en-US", "en", "Please select the order"),  # region subtag folds
+        # An UNSUPPORTED language resolves to zh, so both the echo and the copy
+        # fall back together — the documented rule.
+        ("ja", "zh", "请先选择需要检测的订单"),
     ]
-    for lang, expected in cases:
+    for sent, resolved, expected in cases:
         resp = client.post(
             "/v1/assistant/questions",
             json={"question": "帮我检测这个订单", "shortcut_code": "smart_diagnosis"},
-            headers={**_headers(), "Accept-Language": lang},
+            headers={**_headers(), "Accept-Language": sent},
         )
         assert resp.status_code == 200, resp.text
         body = resp.json()
         assert body["type"] == "clarification"
-        assert body["language"] == lang
-        assert expected in body["message"], (lang, body["message"])
+        assert body["language"] == resolved, (sent, body["language"])
+        assert expected in body["message"], (sent, body["message"])
         # Never empty: the client renders this verbatim.
         assert body["message"].strip()
 
