@@ -201,3 +201,54 @@ def test_validator_rejects_diagnosis_when_order_snapshot_is_not_unique(tmp_path:
 
     assert any("不得返回 diagnosed" in error for error in errors)
     assert any("必须为 low" in error for error in errors)
+
+
+def test_validator_rejects_stored_chinese_echoed_in_another_language(tmp_path: Path) -> None:
+    """Reproduces the live 41 leak: the stop-reason enum was translated AND echoed."""
+    manifest, journal, entry = _context(tmp_path)
+    leaked = _diagnosis(manifest, entry.evidence_id).model_copy(
+        update={
+            "summary": (
+                'The order-level stop reason is code -1 with content "余额耗尽停止订单" '
+                "(balance exhausted, order stopped)."
+            ),
+        }
+    )
+
+    errors = AgentResultValidator(manifest, journal, language="en").validate(leaked)
+
+    assert any("仍含中文字符" in error for error in errors)
+
+
+def test_validator_allows_chinese_for_the_chinese_answer(tmp_path: Path) -> None:
+    """zh answers are Chinese by design; the check must not fire for the default language."""
+    manifest, journal, entry = _context(tmp_path)
+
+    errors = AgentResultValidator(manifest, journal, language="zh").validate(
+        _diagnosis(manifest, entry.evidence_id)
+    )
+
+    assert not any("中文字符" in error for error in errors)
+
+
+def test_validator_allows_translated_prose_with_ascii_identifiers(tmp_path: Path) -> None:
+    """The intended shape: prose translated, identifiers kept byte-identical, no CJK."""
+    manifest, journal, entry = _context(tmp_path)
+    translated = _diagnosis(manifest, entry.evidence_id).model_copy(
+        update={
+            "summary": 'stopped_reason_content = "balance exhausted, order stopped"; '
+            "stopped_reason_code=-1; balance_insufficient_stop=1.",
+            "root_cause": "The order was ended by an automatic remote stop (ev-001) at 2026-09-12 16:58:51.",
+            "hypotheses": [
+                Hypothesis(
+                    title="Primary data exists",
+                    explanation="The order row is readable",
+                    evidence_ids=[entry.evidence_id],
+                )
+            ],
+        }
+    )
+
+    errors = AgentResultValidator(manifest, journal, language="en").validate(translated)
+
+    assert not any("中文字符" in error for error in errors)
