@@ -25,9 +25,16 @@ AI-Ops 提供的是消费端无关的标准后端 HTTP API。调用方可以是�
 健康检查地址为：
 
 ```text
-95：GET https://api.qumall.qushiyun.com/health
-41：GET https://api.mall.qushiyun.com/health
+41：GET http://127.0.0.1:8788/health      # 在 41 本机执行（ssh 进去后打）
 ```
+
+**注意：41 的公网地址上 `/health` 不可用。** nginx 只代理 `^~ /v1/`，
+`/health` 落到默认处理返回 403（实测 `https://api.mall.qushiyun.com/health`
+→ 301 → `/health/` → 403）。这是**有意不对外暴露**，不是配置错误——
+探活请在本机 loopback 上做。公网可用的是业务端点，例如
+`https://api.mall.qushiyun.com/v1/health-report-jobs`。
+
+95 环境的 `/health` 记录未在本轮核实，故不再列出；需要时按同一方式实测后补。
 
 业务后端直接调用 AI-Ops 时统一携带：
 
