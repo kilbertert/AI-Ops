@@ -2505,20 +2505,39 @@ def _keep_conversation_turn(
 _ACTIVE_ORDER_CUES = re.compile(r"订单|充值|充电|退款|押金|金额|费用|订单号|为什么.*停|怎么还没")
 # Cues that mark a BILLING DISPUTE — a user ASSERTING their money is wrong.
 #
-# Multilingual from the start. The Chinese-only list let every Latin-script
-# user past the guard into generic customer service (41 live, 2026-09-20).
+# Covers every supported language. The Chinese-only list let every
+# non-Chinese user past the guard into generic customer service: an English
+# "was I overcharged" produced a plain QA answer with no order prompt at all
+# (41 live, 2026-09-20). Chinese got away with bare nouns because 扣费 /
+# 账单 / 金额不对 ARE claims about a specific charge.
 #
-# The English cues are PHRASES, not topic words, because the branch ASKS for
-# an order instead of answering: a lone "refund" states no dispute, and
-# treating it as one would swallow the topic questions the FAQ short-circuit
-# exists to serve. The Chinese list gets away with single words because 扣费 /
-# 账单 / 金额不对 are claims about a specific charge; "refund" is a subject.
+# The other languages use PHRASES, not bare topic nouns, for the same reason
+# the guard exists: `refund` / `remboursement` / `reembolso` alone names a
+# subject, and the FAQ carries entries on exactly those subjects (q020/q021).
+# Treating a topic word as a dispute would swallow the questions the FAQ
+# short-circuit exists to serve — and it is not hypothetical: the first draft
+# of this list included bare `refund` and broke
+# test_assistant_faq_shortcircuit_ignores_generic_single_tokens.
 _HIGH_RISK_ORDER_CUES = re.compile(
+    # zh
     r"扣费|扣款|扣错|费用异常|金额不对|退款|退费|订单异常|订单问题|账单"
+    # en
     r"|overcharg\w*|double[-\s]?charg\w*"
     r"|(?:bill|amount|charge)\w*\b[^.]{0,24}?\bwrong\b|\bwrong\b[^.]{0,24}?\b(?:bill|amount|charge)\w*"
     r"|charged\s+(?:but|however|twice|two)"
-    r"|refund\s+(?:not|never|has\s+not|hasn't|still)",
+    r"|refund\s+(?:not|never|has\s+not|hasn't|still)"
+    # de
+    r"|überladen|überteuert|zu\s+viel\s+berechnet|doppelt\s+berechnet"
+    r"|(?:rechnung|betrag|abrechnung)\w*\b[^.]{0,24}?\bfalsch\b|\bfalsch\b[^.]{0,24}?\b(?:rechnung|abrechnung)\w*"
+    # fr
+    r"|surfactur\w+|factur\w+\s+(?:en\s+trop|deux\s+fois)"
+    r"|(?:facture|montant|facturation)\w*\b[^.]{0,24}?\b(?:incorrect|erroné|faux)\w*"
+    # es
+    r"|cobrad\w+\s+de\s+m[áa]s|cobrad\w+\s+dos\s+veces"
+    r"|(?:factura|importe|cobro)\w*\b[^.]{0,24}?\b(?:incorrect|erróne|equivocad)\w*"
+    # pt
+    r"|cobrad\w+\s+a\s+mais|cobrad\w+\s+duas\s+vezes"
+    r"|(?:fatura|valor|cobrança)\w*\b[^.]{0,24}?\b(?:incorret|errad|equivocad)\w*",
     re.IGNORECASE,
 )
 
