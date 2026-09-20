@@ -967,12 +967,12 @@ def create_gateway_app(
 
         # Do not send an order/billing dispute without an order context into
         # generic QA; ask for the missing business identifier synchronously.
-        risk = (
-            _missing_order_context(payload.question)
+        risk_key = (
+            _missing_order_context_key(payload.question)
             if conversation is None and _extract_order_no(payload.question) is None
             else None
         )
-        if risk is not None:
+        if risk_key is not None:
             _record_route_metric(context, caller, route_type="clarification", outcome="completed")
             return {
                 **decision.public(),
@@ -980,7 +980,7 @@ def create_gateway_app(
                 "language": language,
                 "question": payload.question,
                 "missing_fields": ["order_no"],
-                "message": risk,
+                "message": clarification_message(language, risk_key),
             }
 
         classifier = getattr(context.runtime, "classify_lightweight", None)
@@ -2293,7 +2293,10 @@ def _faq_hit_by_keywords(platform: str, faq_catalog: FAQCatalog, question: str) 
     return best_qid if containment >= _FAQ_MIN_CONTAINMENT else None
 
 
-_ORDER_TOKEN = re.compile(r"(?<![A-Za-z0-9])[A-Za-z0-9_.:-]{6,64}(?![A-Za-z0-9])")
+# A candidate order token: starts AND ends on an alphanumeric, so a trailing
+# sentence period or a label colon is not swallowed into the id, and carries
+# 6-64 safe characters total.
+_ORDER_TOKEN = re.compile(r"(?<![A-Za-z0-9])[A-Za-z0-9][A-Za-z0-9_.:-]{4,62}[A-Za-z0-9](?![A-Za-z0-9])")
 
 
 def _extract_order_no(text: str) -> str | None:
@@ -2304,11 +2307,23 @@ def _extract_order_no(text: str) -> str | None:
     (letters/digits/_.:-), which is a much stronger signal than bare digits
     (which would also hit phone numbers). This is a cheap deterministic first
     pass; a model disambiguation layer can refine it later.
+
+    A candidate MUST carry at least one digit. Without that rule the scan
+    returns the first ordinary WORD of a Latin-script question — `Please
+    check charging anomalies for order (2098…)` yielded ``Please``, so the
+    order was never found and the request silently degraded to a zero-order
+    answer (41 live, 2026-09-20). Chinese hid the defect: CJK characters are
+    outside the token class, so the scan skipped them and landed on the bare
+    order number. Requiring a digit is what tells an identifier apart from a
+    word; a real order number that carries none does not exist in this
+    system.
     """
     if not text:
         return None
     for match in _ORDER_TOKEN.finditer(text):
         candidate = match.group(0)
+        if not any(char.isdigit() for char in candidate):
+            continue
         # Skip pure-digit tokens that are too short to be order ids and could
         # be phone numbers (<6 digits already excluded by length, but a long
         # pure-digit run like a phone would be 11 digits — still ambiguous;
@@ -2488,7 +2503,24 @@ def _keep_conversation_turn(
 
 
 _ACTIVE_ORDER_CUES = re.compile(r"订单|充值|充电|退款|押金|金额|费用|订单号|为什么.*停|怎么还没")
-_HIGH_RISK_ORDER_CUES = re.compile(r"扣费|扣款|扣错|费用异常|金额不对|退款|退费|订单异常|订单问题|账单")
+# Cues that mark a BILLING DISPUTE — a user ASSERTING their money is wrong.
+#
+# Multilingual from the start. The Chinese-only list let every Latin-script
+# user past the guard into generic customer service (41 live, 2026-09-20).
+#
+# The English cues are PHRASES, not topic words, because the branch ASKS for
+# an order instead of answering: a lone "refund" states no dispute, and
+# treating it as one would swallow the topic questions the FAQ short-circuit
+# exists to serve. The Chinese list gets away with single words because 扣费 /
+# 账单 / 金额不对 are claims about a specific charge; "refund" is a subject.
+_HIGH_RISK_ORDER_CUES = re.compile(
+    r"扣费|扣款|扣错|费用异常|金额不对|退款|退费|订单异常|订单问题|账单"
+    r"|overcharg\w*|double[-\s]?charg\w*"
+    r"|(?:bill|amount|charge)\w*\b[^.]{0,24}?\bwrong\b|\bwrong\b[^.]{0,24}?\b(?:bill|amount|charge)\w*"
+    r"|charged\s+(?:but|however|twice|two)"
+    r"|refund\s+(?:not|never|has\s+not|hasn't|still)",
+    re.IGNORECASE,
+)
 
 
 def _question_involves_active_order(question: str) -> bool:
@@ -2501,9 +2533,17 @@ def _question_involves_active_order(question: str) -> bool:
     return bool(_ACTIVE_ORDER_CUES.search(question or ""))
 
 
-def _missing_order_context(question: str) -> str | None:
+def _missing_order_context_key(question: str) -> str | None:
+    """The clarification key for a high-risk question, or None.
+
+    Returns the key rather than the rendered text so the reply is localized
+    by the shared ``clarification_message`` catalog. The previous form
+    returned a Chinese literal regardless of Accept-Language — the same
+    hardcoded-copy defect fixed on the other two clarification branches
+    (#262, #282).
+    """
     if _HIGH_RISK_ORDER_CUES.search(question or ""):
-        return "请提供需要核查的订单号后，我才能继续处理。"
+        return "order_no"
     return None
 
 

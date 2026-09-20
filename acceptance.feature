@@ -867,6 +867,42 @@ Feature: 统一助手业务意图路由与产品快捷动作
       And missing_fields 包含 order_no
       And 不创建诊断作业
 
+    Scenario: 扣费争议的判定与澄清文案都不限中文
+      Given 用户未在请求中提供订单号
+      And 请求的 Accept-Language 为 en
+      When 用户提交“Was I overcharged for this charging session?”
+      Then 返回 HTTP 200 且 type 为 clarification
+      And missing_fields 包含 order_no
+      And message 为英文文案而非中文原文
+      And language 回显为 en
+
+    Scenario: 单纯的主题词不构成扣费争议
+      Given 用户提交独立的“refund”或“Why did charging stop unexpectedly?”
+      When 服务端处理该请求
+      Then 不返回 type 为 clarification
+      And 该问题按 FAQ 或通用问答路径处理
+
+  Rule: 文本内嵌的订单号必须按语言无关的方式识别
+
+    Scenario: 中文提问内嵌订单号进入诊断
+      Given 用户拥有订单 123 的访问权限
+      When 用户提交“帮我检测（123）这个订单的充电异常”
+      Then 返回 HTTP 202 且 type 为 diagnosis
+      And order_no_extracted 为 123
+
+    Scenario: 英文提问内嵌订单号同样进入诊断
+      Given 用户拥有订单 123 的访问权限
+      When 用户提交“Please check charging anomalies for order (123)”
+      Then 返回 HTTP 202 且 type 为 diagnosis
+      And order_no_extracted 为 123
+
+    Scenario: 普通单词不得被当作订单号
+      Given 提问文本中不含任何订单号
+      And 提问为英文自然语言（如“Show me a customer case”）
+      When 服务端进行文本内嵌订单号识别
+      Then 不识别出订单号
+      And 请求不被路由为订单诊断
+
   Rule: 产品快捷动作只声明入口，执行复用统一助手协议
 
     Scenario: 平台发布的动作对新租户默认可见

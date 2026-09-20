@@ -216,6 +216,56 @@ def test_assistant_high_risk_without_order_returns_clarification(tmp_path: Path)
     assert runtime._qa == {}
 
 
+def test_high_risk_clarification_holds_in_every_supported_language(tmp_path: Path) -> None:
+    """A billing dispute is not a Chinese-only event.
+
+    The cue list was Chinese-only, so an English "was I overcharged" fell
+    through this guard, and the guard's own reply string was a Chinese
+    literal regardless of Accept-Language — the same class of defect as the
+    extraction bug above, on the branch beside it."""
+    cases = [
+        ("是不是扣错钱了", "zh", "请先选择需要检测的订单"),
+        ("Was I overcharged for this charging session?", "en", "Please select the order"),
+        ("My bill amount is wrong", "en", "Please select the order"),
+        ("I was charged but never got power", "en", "Please select the order"),
+    ]
+    for question, lang, expected in cases:
+        client, runtime = _client(tmp_path)
+        resp = client.post(
+            "/v1/assistant/questions",
+            json={"question": question},
+            headers={**_headers(), "Accept-Language": lang},
+        )
+        assert resp.status_code == 200, (question, resp.text)
+        body = resp.json()
+        assert body["type"] == "clarification", (question, body)
+        assert body["missing_fields"] == ["order_no"], question
+        assert body["language"] == lang, question
+        assert expected in body["message"], (question, body["message"])
+        assert "qa_id" not in body
+        assert runtime._qa == {}
+        client.close()
+
+
+def test_general_charging_questions_are_not_high_risk(tmp_path: Path) -> None:
+    """The guard must not swallow ordinary knowledge questions.
+
+    "Why did charging stop" is a FAQ entry (q011), not a billing dispute. A
+    cue list broad enough to catch every order word would turn this branch
+    into a catch-all and strip the FAQ short-circuit of its traffic."""
+    client, runtime = _client(tmp_path)
+    for question in (
+        "Why did charging stop unexpectedly?",
+        "充电过程中突然自动停止是什么原因",
+        "How do I stop charging early?",
+    ):
+        resp = client.post("/v1/assistant/questions", json={"question": question}, headers=_headers())
+        assert resp.status_code == 200, question
+        assert resp.json()["type"] != "clarification", (question, resp.json())
+    assert runtime.calls == []
+    client.close()
+
+
 def test_order_bound_shortcut_requires_order_context(tmp_path: Path) -> None:
     client, runtime = _client(tmp_path)
     created = client.post(
@@ -439,6 +489,51 @@ def test_extract_order_no_ignores_short_digits_and_phone(tmp_path: Path) -> None
     """Pure-digit runs shorter than 15 chars are NOT treated as orders."""
     assert _extract_order_no("我的手机号是13800001111，帮我查一下") is None
     assert _extract_order_no("价格是50元") is None
+
+
+def test_extract_order_no_never_returns_a_latin_word(tmp_path: Path) -> None:
+    """A candidate with no digit is a word, not an order number.
+
+    41 live (2026-09-20): the token pattern was [!A-Za-z0-9] runs of 6-64
+    safe chars with no digit requirement, so an ENGLISH question returned its
+    own first word — `Please check charging anomalies for order (2098…)`
+    extracted `Please`. Chinese questions were unaffected only because CJK
+    characters are outside the token class, so the scan skipped straight to
+    the bare order number. The same shape broke every Latin-script language
+    and silently degraded Smart Diagnosis into zero-order customer service."""
+    cases = {
+        "Please check charging anomalies for order (2096164064667852801)": "2096164064667852801",
+        "Please check charging anomalies for order 2096164064667852801.": "2096164064667852801",
+        "Diagnose the charging issue of this order 2096164064667852801": "2096164064667852801",
+        "check this order for charging problems 2096164064667852801": "2096164064667852801",
+        # Purely textual questions have no order to find — and must NOT
+        # manufacture one out of an ordinary word.
+        "Show me industry solutions": None,
+        "I'd like to see customer cases": None,
+        "Show me a customer case": None,
+    }
+    for question, expected in cases.items():
+        assert _extract_order_no(question) == expected, question
+
+
+def test_assistant_english_embedded_order_reaches_diagnosis(tmp_path: Path) -> None:
+    """The English form of the frontend's order-in-text submission.
+
+    This is the reported defect: the English prefill reaches the assistant
+    with the order inside the sentence, exactly like the Chinese one that has
+    always worked. Only the digits-carrying candidate may be chosen."""
+    client, runtime = _client(tmp_path)  # fixture allows 2096164064667852801
+    question = "Please check charging anomalies for order (2096164064667852801)"
+    resp = client.post(
+        "/v1/assistant/questions",
+        json={"question": question},
+        headers=_headers(),
+    )
+    assert resp.status_code == 202, resp.text
+    body = resp.json()
+    assert body["type"] == "diagnosis"
+    assert body["order_no_extracted"] == "2096164064667852801"
+    assert runtime.calls == [("2096164064667852801", question)]
 
 
 def test_assistant_text_embedded_owned_order_routes_to_diagnosis(tmp_path: Path) -> None:
