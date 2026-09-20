@@ -1,0 +1,26 @@
+# AI-Ops 可访问主机声明
+#
+# 本文件是"项目侧"声明,由 dev-host 读取。与之配对的是"主机侧"清单
+# `~/.config/dev-host/hosts.toml`(库外 600),那里记角色、信任平面、
+# 归属、访问方式与主机公钥。
+#
+# 为什么分成两半:本文件进仓库、可被评审,所以**只写逻辑名与路径**;
+# 地址、指纹、凭据一律留在库外。这样本文件可以安全地进公开仓库。
+#
+# 用法:
+#   cd <repo> && dev-host show 41
+#   dev-host exec 41 --allow-service-exec -- systemctl is-active aiops-gateway-41.service
+#
+# 注意:41 是服务类主机,写入需要产物身份(`--artifact-sha256`),
+# `exec` 需要显式 `--allow-service-exec`;只读用 read/ls/find,不受限。
+
+[[targets]]
+name        = "41"
+host        = "aiops-41"
+description = "AI-Ops Gateway 生产环境(公网入口 api.mall.qushiyun.com)"
+
+[targets.paths]
+app  = "/opt/aiops-41/src"
+logs = "/var/log/aiops-41"
+ops  = "/opt/aiops-41/ops"
+backups = "/var/backups/aiops-41"
