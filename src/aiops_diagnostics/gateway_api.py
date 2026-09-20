@@ -25,6 +25,10 @@ from aiops_diagnostics.agent_lifecycle import (
     AgentStore,
     allowed_models_from_settings,
 )
+from aiops_diagnostics.answer_language import (
+    answer_chinese_leak,
+    record_answer_language_fallback,
+)
 from aiops_diagnostics.caller_auth import (
     CALLER_AUTH_CONFIG_MISSING,
     CALLER_AUTH_FORBIDDEN,
@@ -66,7 +70,11 @@ from aiops_diagnostics.gateway_store import (
     GatewayStore,
     RunNotFoundError,
 )
-from aiops_diagnostics.i18n import clarification_message, resolve_language
+from aiops_diagnostics.i18n import (
+    QA_FALLBACK_MESSAGES,
+    clarification_message,
+    resolve_language,
+)
 from aiops_diagnostics.metrics_store import MetricsValidationError
 from aiops_diagnostics.scope_context import ScopeContext, ScopeError
 from aiops_diagnostics.shortcut_lifecycle import (
@@ -982,13 +990,21 @@ def create_gateway_app(
             except (ValueError, RuntimeError):
                 classified = None
             if classified and classified.get("intent") == "casual" and classified.get("answer"):
+                casual = str(classified["answer"])
+                leak = answer_chinese_leak(casual, language)
+                if leak:
+                    # Same contract as the blocks surfaces: an answer that
+                    # leaked Chinese is withheld, not delivered, and the
+                    # fallback is written in the requested language.
+                    record_answer_language_fallback(language=language, leaked=leak, surface="casual")
+                    casual = QA_FALLBACK_MESSAGES.get(language, QA_FALLBACK_MESSAGES["zh"])["unavailable"]
                 return {
                     **decision.public(),
                     "type": "qa",
                     "language": language,
                     "question": payload.question,
                     "status": "completed",
-                    "result": {"text": classified["answer"], "reminder": True},
+                    "result": {"text": casual, "reminder": True},
                     "error": None,
                 }
             if classified and classified.get("risk") == "high" and classified.get("confidence") != "high":
@@ -1597,6 +1613,7 @@ def create_gateway_app(
         agent_id: str,
         payload: AgentDebugRunRequest,
         caller: ScopeContext = Depends(authenticated_agent_caller),  # noqa: B008
+        language: str = Depends(request_language),  # noqa: B008
     ) -> dict[str, Any]:
         """Isolated draft preview (T5/#171): runs the draft config through the
         production customer-QA harness without touching conversations or
@@ -1626,7 +1643,7 @@ def create_gateway_app(
                 retryable=True,
             )
         try:
-            return runner(caller, agent_id, payload.question)
+            return runner(caller, agent_id, payload.question, language=language)
         except AgentRuntimeError as exc:
             raise StandardAPIError(
                 status.HTTP_502_BAD_GATEWAY,

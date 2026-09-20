@@ -29,6 +29,7 @@ from aiops_diagnostics.agent_lifecycle import (
     KnowledgeBindingResolver,
 )
 from aiops_diagnostics.config import AgentSettings, ProviderConfig
+from aiops_diagnostics.i18n import DEFAULT_LANGUAGE
 from aiops_diagnostics.knowledge_retrieval import (
     KnowledgeSearchClient,
     KnowledgeSearchUnavailable,
@@ -184,6 +185,7 @@ def run_agent_debug_answer(
     key_slot: str | None = None,
     project_root: Path | None = None,
     session_factory: Any | None = None,
+    language: str = DEFAULT_LANGUAGE,
 ) -> dict[str, Any]:
     """Run one isolated preview turn of a draft customer agent config.
 
@@ -192,6 +194,11 @@ def run_agent_debug_answer(
     result and media grants carry ``#draft-r<revision>`` so a debug preview
     never claims a published version. No conversation turn is created and no
     order path is touched.
+
+    ``language`` is threaded through rather than left to default: a preview
+    that ran every draft under a Chinese output instruction reported a
+    language the published agent would never use, so the operator judged the
+    draft by a run that did not represent it.
     """
     selection = CustomerAgentSelection(
         agent_id=agent_id,
@@ -210,6 +217,7 @@ def run_agent_debug_answer(
         key_slot=key_slot,
         project_root=project_root,
         session_factory=session_factory,
+        language=language,
     )
     result["agent_version"] = f"{agent_id}#draft-r{revision}"
     result["debug"] = True

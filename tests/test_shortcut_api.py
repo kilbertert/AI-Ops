@@ -1033,3 +1033,191 @@ def test_bundled_seed_copy_covers_every_supported_language() -> None:
                     assert str(copy[lang]).strip(), f"{entry}/{code}/{field}/{lang} is empty"
                 checked += 1
     assert checked >= 3, "seed shape changed; update this test deliberately"
+
+
+def test_live_rows_report_missing_translations_instead_of_falling_back_silently(
+    caplog,
+) -> None:
+    """The seed check covers NEW rows; this covers rows already in the store.
+
+    41 live: the copy gap that survived a release cycle was in existing rows
+    created from the old zh+en seed. public() still falls back to zh (returning
+    empty would blank the user's buttons) but a fallback must never be silent —
+    that silence is why the defect was invisible until a customer saw it.
+    """
+    import logging
+
+    from aiops_diagnostics.shortcut_lifecycle import Shortcut
+
+    shortcut = Shortcut(
+        shortcut_id="sct_test",
+        tenant_id="tenant-1",
+        business_entry="consumer",
+        code="smart_diagnosis",
+        intent="order_issue",
+        requires_order=True,
+        sort_order=10,
+        status="published",
+        revision=1,
+        labels={"zh": "智能检测", "en": "Smart Diagnosis"},
+        descriptions={"zh": "选择订单后自动诊断充电异常", "en": "Diagnose a charging issue"},
+        # de/fr/es/pt were never translated on this row.
+        question_templates={"zh": "帮我检测这个订单的充电异常", "en": "Diagnose this order"},
+        target_agent_version=None,
+        jump_path=None,
+        published_version=1,
+        created_by="tester",
+        created_at="2026-09-20T00:00:00+00:00",
+        updated_at="2026-09-20T00:00:00+00:00",
+    )
+
+    with caplog.at_level(logging.WARNING, logger="aiops_diagnostics.shortcut_lifecycle"):
+        listed = shortcut.public("fr")
+
+    # The user still gets usable copy rather than a blank button.
+    assert listed["label"] == "智能检测"
+    assert listed["question_template"] == "帮我检测这个订单的充电异常"
+
+    # ...and the gap is recorded, field by field, without dumping the copy.
+    warnings = [r for r in caplog.records if getattr(r, "event", "") == "shortcut_translation_missing"]
+    assert {r.field for r in warnings} == {"label", "description", "question_template"}
+    assert all(r.language == "fr" for r in warnings)
+    assert all(r.code == "smart_diagnosis" for r in warnings)
+    assert "智能检测" not in caplog.text
+
+
+def test_a_fully_translated_row_warns_about_nothing(caplog) -> None:
+    import logging
+
+    from aiops_diagnostics.shortcut_lifecycle import Shortcut
+
+    shortcut = Shortcut(
+        shortcut_id="sct_ok",
+        tenant_id="tenant-1",
+        business_entry="consumer",
+        code="report_fault",
+        intent="report_fault",
+        requires_order=False,
+        sort_order=30,
+        status="published",
+        revision=1,
+        labels={"zh": "故障上报", "en": "Report a Fault"},
+        descriptions={"zh": "描述故障现象", "en": "Describe the fault"},
+        question_templates={"zh": "我要上报一个故障", "en": "I want to report a fault"},
+        target_agent_version=None,
+        jump_path="/charge/pages/faultReport/faultReportList",
+        published_version=1,
+        created_by="tester",
+        created_at="2026-09-20T00:00:00+00:00",
+        updated_at="2026-09-20T00:00:00+00:00",
+    )
+
+    with caplog.at_level(logging.WARNING, logger="aiops_diagnostics.shortcut_lifecycle"):
+        shortcut.public("en")
+
+    assert not [r for r in caplog.records if getattr(r, "event", "") == "shortcut_translation_missing"]
+
+
+def test_the_default_language_is_never_reported_as_a_gap(caplog) -> None:
+    """zh is the authority: reading it is not a fallback."""
+    import logging
+
+    from aiops_diagnostics.shortcut_lifecycle import Shortcut
+
+    shortcut = Shortcut(
+        shortcut_id="sct_zh",
+        tenant_id="tenant-1",
+        business_entry="consumer",
+        code="report_fault",
+        intent="report_fault",
+        requires_order=False,
+        sort_order=30,
+        status="published",
+        revision=1,
+        labels={"zh": "故障上报"},
+        descriptions={"zh": "描述故障现象"},
+        question_templates={"zh": "我要上报一个故障"},
+        target_agent_version=None,
+        jump_path=None,
+        published_version=1,
+        created_by="tester",
+        created_at="2026-09-20T00:00:00+00:00",
+        updated_at="2026-09-20T00:00:00+00:00",
+    )
+
+    with caplog.at_level(logging.WARNING, logger="aiops_diagnostics.shortcut_lifecycle"):
+        shortcut.public("zh")
+
+    assert not [r for r in caplog.records if getattr(r, "event", "") == "shortcut_translation_missing"]
+
+
+def test_copy_gap_gate_names_every_missing_field_and_language() -> None:
+    """The CI gate: a partial row is a defect, named precisely.
+
+    This is the check that would have caught the live gap before a user saw it.
+    It reports WHAT is missing rather than a bare boolean, so the fix is
+    actionable without re-deriving the gap by hand.
+    """
+    from aiops_diagnostics.shortcut_lifecycle import Shortcut, shortcut_copy_gaps
+
+    row = Shortcut(
+        shortcut_id="sct_gap",
+        tenant_id="tenant-1",
+        business_entry="consumer",
+        code="solution_discovery",
+        intent="solution_discovery",
+        requires_order=False,
+        sort_order=40,
+        status="published",
+        revision=1,
+        labels={"zh": "行业方案", "en": "Industry Solutions"},
+        descriptions={"zh": "发现解决方案"},  # no en at all
+        question_templates={"zh": "我想看看行业解决方案", "en": "Show me industry solutions"},
+        target_agent_version=None,
+        jump_path=None,
+        published_version=1,
+        created_by="tester",
+        created_at="2026-09-20T00:00:00+00:00",
+        updated_at="2026-09-20T00:00:00+00:00",
+    )
+
+    gaps = shortcut_copy_gaps([row])
+
+    assert {gap.code for gap in gaps} == {"solution_discovery"}
+    # All three copy fields lack de/fr/es/pt; `description` lacks en as well,
+    # which is the field that lines the fixture up with the live gap.
+    assert {gap.field for gap in gaps} == {"label", "description", "question_template"}
+    assert {gap.language for gap in gaps} == {"de", "fr", "es", "pt", "en"}
+    missing_pairs = {(gap.field, gap.language) for gap in gaps}
+    assert ("description", "en") in missing_pairs
+    assert ("label", "en") not in missing_pairs
+    # zh is the authority, never a gap.
+    assert all(gap.language != "zh" for gap in gaps)
+
+
+def test_copy_gap_gate_is_empty_for_a_complete_row() -> None:
+    from aiops_diagnostics.i18n import SUPPORTED_LANGUAGES
+    from aiops_diagnostics.shortcut_lifecycle import Shortcut, shortcut_copy_gaps
+
+    row = Shortcut(
+        shortcut_id="sct_ok2",
+        tenant_id="tenant-1",
+        business_entry="consumer",
+        code="report_fault",
+        intent="report_fault",
+        requires_order=False,
+        sort_order=30,
+        status="published",
+        revision=1,
+        labels={lang: f"label-{lang}" for lang in SUPPORTED_LANGUAGES},
+        descriptions={lang: f"description-{lang}" for lang in SUPPORTED_LANGUAGES},
+        question_templates={lang: f"template-{lang}" for lang in SUPPORTED_LANGUAGES},
+        target_agent_version=None,
+        jump_path=None,
+        published_version=1,
+        created_by="tester",
+        created_at="2026-09-20T00:00:00+00:00",
+        updated_at="2026-09-20T00:00:00+00:00",
+    )
+
+    assert shortcut_copy_gaps([row]) == []

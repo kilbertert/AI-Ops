@@ -944,3 +944,25 @@ ADAPTER-FMT-07 才是端到端验收，未包含在本 PR 内（需另行走部�
 响应文本解析。解析侧本就容忍非严格输出（`_parse_agent_turn` 处理围栏与未包裹
 payload——非 OpenAI provider 从未遵守该 schema），故不是新增风险；但这是本次
 取舍的代价，如实记录。
+
+## 回答面输出语言契约 QA（ANSWER-LANG-COVERAGE）
+
+| ID | 环境 | 前置条件与数据 | 有序动作 | 预期可观察结果 | 清理/证据 |
+|---|---|---|---|---|---|
+| AL-COV-01 | 本地 dev | 假模型返回含中文正文 | 以 en 走客户问答 | 正文被替换为英文不可用文案；retrieval_status=unavailable；language_fallback=true | `tests/test_qa_rag.py::test_english_answer_that_leaked_chinese_is_replaced_with_localized_fallback` |
+| AL-COV-02 | 本地 dev | 假模型返回纯英文 | 以 en 走客户问答 | 原样交付，不触发兜底 | `...::test_a_clean_english_answer_is_delivered_untouched` |
+| AL-COV-03 | 本地 dev | 假模型返回中文 | 以 zh 走客户问答 | 不触发兜底 | `...::test_chinese_answer_is_never_treated_as_a_leak` |
+| AL-COV-04 | 本地 dev | 同上 | 分别以 en/de/fr/es/pt 走 | 五语各自触发、兜底文案为对应语言 | `...::test_every_supported_non_chinese_language_is_guarded` |
+| AL-COV-05 | 本地 dev | 回答含中文文件名 | 校验该回答 | 不判为泄漏 | `tests/test_answer_language.py::test_resource_filename_in_a_media_title_is_exempt` |
+| AL-COV-06 | 本地 dev | 中文散文 + 中文文件名并存 | 校验该回答 | 判为泄漏 | `...::test_chinese_prose_beside_an_exempt_filename_is_still_a_leak` |
+| AL-COV-07 | 本地 dev | 存量行缺 fr 文案 | 读列表并捕获告警 | 返回中文回退；逐字段告警；告警不含文案正文 | `tests/test_shortcut_api.py::test_live_rows_report_missing_translations_instead_of_falling_back_silently` |
+| AL-COV-08 | 本地 dev | 缺语言的快捷动作 | 运行覆盖度检查 | 失败并列出字段×语言；zh 不算缺口 | `...::test_copy_gap_gate_names_every_missing_field_and_language` |
+| AL-COV-09 | 本地 dev | 英文请求草稿预览 | 调预览接口 | 以已解析语言运行 | `tests/test_agent_debug.py::test_debug_run_endpoint_runs_draft_and_returns_preview` |
+| AL-COV-10 | 41 实机 | 修复已部署 | 公网英文请求客户案例与问答 | 正文无中文字符；标识符逐字保留；媒体标题原样 | **待部署后执行**，本 PR 不标记通过 |
+
+**边界声明（重要）**：AL-COV-01~09 证明的是**没漏中文**，**不是译得对**。译文
+语义质量无法用确定性断言衡量，验收记录不得把前者冒充为后者。
+
+**边界**：客户端预填提问的正确性不在本验收范围（见 #293 的归属结论）。
+**已知缺口（本轮显式不做）**：管家端固定问答 17 条无 i18n（85 例）；健康报告接口
+无语言参数。

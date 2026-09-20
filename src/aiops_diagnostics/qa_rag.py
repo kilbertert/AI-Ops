@@ -29,6 +29,10 @@ from aiops_diagnostics.agent_contracts import (
 )
 from aiops_diagnostics.agent_lifecycle import AgentStore
 from aiops_diagnostics.agent_workspace import AgentWorkspace
+from aiops_diagnostics.answer_language import (
+    answer_chinese_leak,
+    record_answer_language_fallback,
+)
 from aiops_diagnostics.codex_runtime import AgentContractError, SDKCodexSession
 from aiops_diagnostics.config import AgentSettings, ProviderConfig
 from aiops_diagnostics.i18n import DEFAULT_LANGUAGE, QA_FALLBACK_MESSAGES, language_name
@@ -229,7 +233,7 @@ def run_customer_qa_answer(
             if not searched and _needs_retrieval(question):
                 prompt = _forced_search_prompt(question, language)
                 continue
-            return _finalize(answer, retrieval)
+            return _finalize(answer, retrieval, language=language)
         return _fallback_result(language=language)
     finally:
         if session is not None:
@@ -270,12 +274,20 @@ def _execute_searches(
     return payloads
 
 
-def _finalize(answer: dict[str, Any], retrieval: _TurnRetrieval) -> dict[str, Any]:
+def _finalize(
+    answer: dict[str, Any], retrieval: _TurnRetrieval, language: str = DEFAULT_LANGUAGE
+) -> dict[str, Any]:
     """Validate the model answer against this turn's actual retrieval.
 
     Media blocks may only cite resource ids issued by THIS turn's searches;
     reference blocks only the chunk reference ids actually returned. Anything
     the model invented is dropped, never trusted.
+
+    The answer's language is checked here too, at the single point both the
+    customer-QA and promotional paths settle on their blocks. An answer that
+    leaked Chinese despite the prompt is replaced with the localized fallback
+    rather than delivered: a customer-facing card that reads as garbage is
+    worse than one that honestly says the content is unavailable right now.
     """
     try:
         parsed = QaAnswer.model_validate(
@@ -302,6 +314,32 @@ def _finalize(answer: dict[str, Any], retrieval: _TurnRetrieval) -> dict[str, An
         blocks.append(block)
     if not any(block.kind == "text" for block in blocks):
         raise AgentContractError("customer QA answer lost every text block")
+
+    leak = answer_chinese_leak([block.model_dump(mode="json") for block in blocks], language)
+    if leak:
+        # The prompt asked for the output language and the model produced
+        # Chinese anyway — a contract miss, not an outage. Deliver the
+        # localized fallback so the user gets something readable.
+        #
+        # `retrieval_status` is NOT forced here. A leak happens precisely when
+        # retrieval SUCCEEDED and the model pasted what came back, so claiming
+        # `unavailable` would report a knowledge-base outage that did not
+        # happen — corrupting the operator signal this whole guard exists to
+        # provide. The status keeps saying what retrieval actually did; the
+        # guard's own warning carries the reason (same rule as
+        # `promo_empty_result`, which refuses to call an unsearched library
+        # empty). The block shape stays exactly the public contract too: no
+        # extra key rides along in the payload.
+        pack = QA_FALLBACK_MESSAGES.get(language) or QA_FALLBACK_MESSAGES[DEFAULT_LANGUAGE]
+        record_answer_language_fallback(language=language, leaked=leak, surface="qa")
+        status = parsed.retrieval_status
+        if retrieval.last_status == RetrievalStatus.UNAVAILABLE:
+            status = RetrievalStatus.UNAVAILABLE
+        return {
+            "blocks": [{"kind": "text", "text": pack["unavailable"]}],
+            "retrieval_status": status,
+            "searches": retrieval.searches_used,
+        }
 
     status = parsed.retrieval_status
     if status == "found" and not retrieval.reference_ids:
@@ -460,7 +498,9 @@ describing authorized resources. Return the final `answer` turn now: build
 citing the chunks' `reference_id`. If retrieval was empty or unavailable, say
 so honestly in text and set `retrieval_status` to `not_found` or `unavailable`
 as reported. Do not invent media ids or external URLs.
-Write every `text` block in {output_language}.
+Write every `text` block in {output_language}. The chunk `content` above is
+stored in Chinese — render its meaning rather than pasting it, and keep IDs,
+field names, codes, timestamps and numbers byte-identical.
 """
 
 
@@ -519,8 +559,22 @@ Customer question (may arrive in any language):
 Output language: every customer-facing `text` block MUST be written in
 {output_language}. The agent instructions above are the authoritative business
 script — their facts, policies and numbers stay binding regardless of output
-language. Knowledge-base excerpts may keep their original language; never
-translate identifiers, prices or status codes.
+language.
+
+When the output language is not Chinese, the answer must not contain Chinese
+characters at all. This includes knowledge-base excerpts: the library is
+authored in Chinese, so a passage copied out of it will read as garbage to the
+reader. Render the MEANING in {output_language} instead of pasting the stored
+text — a quoted passage is not an identifier, and the reader cannot use a
+string they cannot read.
+
+Keep only what carries meaning as an identifier, and keep it EXACTLY as stored:
+order numbers, device/connector IDs, evidence IDs, field names, error and
+status codes, timestamps, prices, and numeric values with their units. Those
+stay byte-identical even though the sentence around them is translated, so a
+reader can match them against the system of record. Where a translated label
+helps, you may add it next to the code, e.g. `status 2 (uncontrollable
+fault)`.
 
 Return a structured turn: either `kind=tool_requests` with up to one
 `knowledge_search` request, or `kind=answer` with `blocks[]` (at least one

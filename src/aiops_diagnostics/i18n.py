@@ -7,9 +7,42 @@ change routing semantics, or reach the incident manifest (#200 decision).
 
 from __future__ import annotations
 
+import re
+
 # Must stay aligned with the i18n catalog shipped in faq_catalog.json (#200).
 SUPPORTED_LANGUAGES: tuple[str, ...] = ("zh", "en", "de", "fr", "es", "pt")
 DEFAULT_LANGUAGE = "zh"
+
+# CJK ideographs and CJK punctuation — what a stored Chinese value looks like
+# when it is copied into an answer meant for a reader of another language.
+#
+# Covers the CJK punctuation blocks (U+3000-303F) and the fullwidth forms
+# (U+FF00-FFEF). The fullwidth block also holds fullwidth LATIN letters, so a
+# non-Chinese answer using them as a typographic choice would be flagged — an
+# accepted, deliberate edge: fullwidth punctuation in an English answer means
+# the model is writing through a Chinese input method, and Chinese is what
+# follows. The cost of the false positive is one retry; the cost of the false
+# negative was a customer reading a language they could not.
+CJK_TEXT = re.compile(r"[㐀-䶿一-鿿　-〿＀-￯]")
+
+# Languages whose answers must not contain Chinese. Derived, never listed, so a
+# new supported language is covered the moment it is added.
+NON_CHINESE_LANGUAGES = frozenset(SUPPORTED_LANGUAGES) - {DEFAULT_LANGUAGE}
+
+
+def chinese_leak(text: str) -> str:
+    """Return the distinct Chinese characters in ``text`` (empty when clean).
+
+    Answers for a non-Chinese language may not contain Chinese at all — source
+    data is Chinese, so a copied-out value reads as garbage to the reader. This
+    is the single shared judgement behind every answer surface's guard; it lives
+    here, beside the language tables, so a surface cannot quietly reimplement it.
+
+    Scope: this proves the answer did not LEAK Chinese. It says nothing about
+    whether the translation is correct — that is not decidable by pattern.
+    """
+    return "".join(sorted(set(CJK_TEXT.findall(text))))
+
 
 # Human-readable names used inside model prompts (qa/diagnosis, #204).
 LANGUAGE_NAMES: dict[str, str] = {
