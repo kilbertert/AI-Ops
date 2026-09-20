@@ -12,7 +12,7 @@ from aiops_diagnostics.agent_contracts import (
     IncidentManifest,
     ToolName,
 )
-from aiops_diagnostics.i18n import DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES
+from aiops_diagnostics.i18n import DEFAULT_LANGUAGE, NON_CHINESE_LANGUAGES, chinese_leak
 from aiops_diagnostics.journal import EvidenceJournal, JournalEntry
 from aiops_diagnostics.redaction import contains_secret
 
@@ -26,13 +26,6 @@ EXECUTED_MUTATION = re.compile(
     r")",
     re.IGNORECASE,
 )
-
-# CJK ideographs and CJK punctuation — what a stored Chinese value looks like when
-# it is copied into an answer meant for a reader of another language. Deliberately
-# excludes the fullwidth-forms block, whose Latin letters are not Chinese text.
-CJK_TEXT = re.compile(r"[㐀-䶿一-鿿　-〿]")
-
-NON_CHINESE_LANGUAGES = frozenset(SUPPORTED_LANGUAGES) - {DEFAULT_LANGUAGE}
 
 
 class AgentResultValidator:
@@ -145,10 +138,10 @@ class AgentResultValidator:
         if EXECUTED_MUTATION.search(rendered):
             errors.append("结果声称执行了第一版禁止的业务变更动作")
         if self.language in NON_CHINESE_LANGUAGES:
-            leaked = sorted(set(CJK_TEXT.findall(rendered)))
+            leaked = chinese_leak(rendered)
             if leaked:
                 errors.append(
-                    f"结果语言为 {self.language}，但仍含中文字符 {''.join(leaked)}："
+                    f"结果语言为 {self.language}，但仍含中文字符 {leaked}："
                     "受控词表值（枚举标签、停因等）须按语义翻译，不得原样附带中文原文"
                 )
         return errors

@@ -287,9 +287,11 @@ class _Runtime:
         pass
 
     # debug-run dependency surface
-    def run_agent_debug(self, context, agent_id: str, question: str) -> dict[str, Any]:
+    def run_agent_debug(
+        self, context, agent_id: str, question: str, *, language: str = "zh"
+    ) -> dict[str, Any]:
         del context
-        self.calls.append((agent_id, question))
+        self.calls.append((agent_id, question, language))
         return {
             "blocks": [_text_block("预览回答")],
             "retrieval_status": "found",
@@ -366,7 +368,9 @@ def test_debug_run_endpoint_runs_draft_and_returns_preview(tmp_path: Path) -> No
         assert body["debug"] is True
         assert body["agent_version"] == f"{agent['agent_id']}#draft-r1"
         assert any(block["kind"] == "text" for block in body["blocks"])
-        assert runtime.calls == [(agent["agent_id"], "怎么拔枪")]
+        # The request carried no Accept-Language, so the preview runs under the
+        # default language — but it is RESOLVED and passed, not left implicit.
+        assert runtime.calls == [(agent["agent_id"], "怎么拔枪", "zh")]
 
 
 def test_debug_run_endpoint_requires_edit_role(tmp_path: Path) -> None:

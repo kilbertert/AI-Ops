@@ -794,3 +794,122 @@ def test_overfilled_blocks_are_trimmed_in_the_wrapped_answer_shape() -> None:
     from aiops_diagnostics.agent_contracts import QaAnswer
 
     QaAnswer.model_validate({"blocks": blocks, "retrieval_status": "found"})
+
+
+# --------------------------------------------------------------------------
+# Output-language guard on the answer surfaces (#293)
+#
+# The customer-QA and promotional paths settle on their blocks in one place,
+# so a Chinese leak is caught there for both. These tests go through the public
+# harness result, not the guard's internals: what matters is what the user gets.
+# --------------------------------------------------------------------------
+
+
+def _client_with_one_chunk() -> _SearchClient:
+    return _SearchClient(
+        [
+            [
+                {
+                    "content": "扫码开始充电。",
+                    "title": "充电桩操作",
+                    "score": 0.9,
+                    "reference_id": "ref-1",
+                    "media": [],
+                }
+            ]
+        ]
+    )
+
+
+def test_english_answer_that_leaked_chinese_is_replaced_with_localized_fallback(
+    tmp_path: Path,
+) -> None:
+    """The prompt asked for English and the model answered in Chinese anyway."""
+    session = _FakeSession(
+        [
+            _tool_request("充电"),
+            _answer([_text_block("标题: 新加坡项目; 行业痛点: 土地资源有限")], "found"),
+        ]
+    )
+
+    result = _run(
+        tmp_path,
+        session,
+        _client_with_one_chunk(),
+        question="Show me the customer case",
+        language="en",
+    )
+
+    texts = [block["text"] for block in result["blocks"] if block["kind"] == "text"]
+    assert texts == [QA_FALLBACK_MESSAGES["en"]["unavailable"]]
+    # Retrieval SUCCEEDED here — that is why the model had Chinese to paste.
+    # Reporting `unavailable` would tell the operator the knowledge base was
+    # down, which is a false claim about the data source and would hide the
+    # real cause. The status keeps saying what retrieval did.
+    assert result["retrieval_status"] == "found"
+    # No undeclared key rides along in the public payload; the warning carries
+    # the reason instead.
+    assert "language_fallback" not in result
+
+
+def test_a_clean_english_answer_is_delivered_untouched(tmp_path: Path) -> None:
+    session = _FakeSession(
+        [
+            _tool_request("charging"),
+            _answer([_text_block("Scan the QR code to start charging.")], "found"),
+        ]
+    )
+
+    result = _run(
+        tmp_path,
+        session,
+        _client_with_one_chunk(),
+        question="How do I start charging?",
+        language="en",
+    )
+
+    texts = [block["text"] for block in result["blocks"] if block["kind"] == "text"]
+    assert texts == ["Scan the QR code to start charging."]
+
+
+def test_chinese_answer_is_never_treated_as_a_leak(tmp_path: Path) -> None:
+    """zh is the default: a Chinese answer is correct, not a defect."""
+    session = _FakeSession(
+        [
+            _tool_request("充电"),
+            _answer([_text_block("标题: 新加坡项目")], "found"),
+        ]
+    )
+
+    result = _run(
+        tmp_path,
+        session,
+        _client_with_one_chunk(),
+        question="给我看看客户案例",
+        language="zh",
+    )
+
+    texts = [block["text"] for block in result["blocks"] if block["kind"] == "text"]
+    assert texts == ["标题: 新加坡项目"]
+
+
+def test_every_supported_non_chinese_language_is_guarded(tmp_path: Path) -> None:
+    """A new supported language must be covered without touching this guard."""
+    for language in ("en", "de", "fr", "es", "pt"):
+        session = _FakeSession(
+            [
+                _tool_request("charging"),
+                _answer([_text_block("标题: 新加坡项目")], "found"),
+            ]
+        )
+        result = _run(
+            tmp_path,
+            session,
+            _client_with_one_chunk(),
+            question="Show me the customer case",
+            language=language,
+        )
+        texts = [block["text"] for block in result["blocks"] if block["kind"] == "text"]
+        assert texts == [QA_FALLBACK_MESSAGES[language]["unavailable"]], language
+        # The payload shape stays the contract on every language.
+        assert "language_fallback" not in result, language

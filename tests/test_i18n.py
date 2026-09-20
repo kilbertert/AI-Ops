@@ -110,3 +110,37 @@ def test_clarification_message_never_falls_back_to_chinese_when_translated(langu
         assert text.strip(), (language, key)
         if language != "zh":
             assert text != zh, f"{language}/{key} fell back to Chinese"
+
+
+# --------------------------------------------------------------------------
+# Shared answer-language guard (#293)
+#
+# The defect class this covers appeared three times, each time on a different
+# surface, because the guard lived in one place (the diagnosis validator) while
+# answers left through several. These tests pin the shared judgement and the
+# media exemption that keeps resource filenames intact.
+# --------------------------------------------------------------------------
+
+
+def test_chinese_leak_names_the_offending_characters() -> None:
+    from aiops_diagnostics.i18n import chinese_leak
+
+    assert chinese_leak('stop reason "余额耗尽停止订单" (balance exhausted)') == "余停单尽止耗订额"
+
+
+def test_chinese_leak_is_empty_for_ascii_and_for_english_prose() -> None:
+    from aiops_diagnostics.i18n import chinese_leak
+
+    assert chinese_leak("stopped_reason_code=-1; balance_insufficient_stop=1") == ""
+    assert chinese_leak("") == ""
+
+
+def test_non_chinese_languages_is_derived_from_the_supported_set() -> None:
+    from aiops_diagnostics.i18n import (
+        DEFAULT_LANGUAGE,
+        NON_CHINESE_LANGUAGES,
+        SUPPORTED_LANGUAGES,
+    )
+
+    assert DEFAULT_LANGUAGE not in NON_CHINESE_LANGUAGES
+    assert set(SUPPORTED_LANGUAGES) - {DEFAULT_LANGUAGE} == set(NON_CHINESE_LANGUAGES)

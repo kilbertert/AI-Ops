@@ -9,6 +9,10 @@ from typing import Any
 from aiops_diagnostics.agent_contracts import IncidentManifest
 from aiops_diagnostics.agent_runner import classify_lightweight, run_agent_diagnosis, run_zero_order_answer
 from aiops_diagnostics.agent_workspace import AgentWorkspace
+from aiops_diagnostics.answer_language import (
+    answer_chinese_leak,
+    record_answer_language_fallback,
+)
 from aiops_diagnostics.codex_runtime import AgentContractError, AgentRuntimeError
 from aiops_diagnostics.config import Settings, canonical_provider_base_url, validate_key_slot_name
 from aiops_diagnostics.gateway_config import GatewayServerSettings
@@ -20,7 +24,7 @@ from aiops_diagnostics.health_report import (
     HealthReportError,
     build_minimal_health_report,
 )
-from aiops_diagnostics.i18n import DEFAULT_LANGUAGE
+from aiops_diagnostics.i18n import DEFAULT_LANGUAGE, QA_FALLBACK_MESSAGES
 from aiops_diagnostics.journal import EvidenceJournal
 from aiops_diagnostics.knowledge_retrieval import (
     KbServiceClient,
@@ -700,6 +704,7 @@ class GatewayRuntime:
                 )
             _finish_turn(None, cancelled=True)
             return
+        answer = _guard_zero_order_language(answer, language)
         self.store.update_assistant_question(
             qa_id,
             status="completed",
@@ -758,6 +763,8 @@ class GatewayRuntime:
         context: Any,
         agent_id: str,
         question: str,
+        *,
+        language: str = DEFAULT_LANGUAGE,
     ) -> dict[str, Any]:
         """Isolated draft preview turn (T5/#171).
 
@@ -794,6 +801,7 @@ class GatewayRuntime:
                 provider=selected_provider,
                 key_slot=key_slot,
                 project_root=reference_root(),
+                language=language,
             )
         except KnowledgeSearchUnavailable as exc:
             self._record_metric(
@@ -1132,6 +1140,32 @@ class GatewayRuntime:
         if requested and requested != device.tenant_id:
             raise ValueError("requested tenant does not match the enrolled device scope")
         return device.tenant_id
+
+
+def _guard_zero_order_language(answer: dict[str, Any], language: str) -> dict[str, Any]:
+    """Withhold a zero-order answer that leaked Chinese (#293).
+
+    This surface is reachable, not theoretical: when the customer-RAG path
+    degrades on an unavailable knowledge base it deliberately falls through to
+    the zero-order answer, so the same user who asked for English gets this
+    text instead. Its prompt is also authored in Chinese, so the model is
+    copying from Chinese instructions — the same shape as the card headings.
+
+    Returns a localized fallback in place of the leaking text. The payload
+    shape is unchanged: the caller stores and returns exactly the keys the
+    contract defines.
+    """
+    if not isinstance(answer, dict):
+        return answer
+    text = answer.get("text")
+    if not isinstance(text, str):
+        return answer
+    leak = answer_chinese_leak(text, language)
+    if not leak:
+        return answer
+    record_answer_language_fallback(language=language, leaked=leak, surface="zero_order")
+    pack = QA_FALLBACK_MESSAGES.get(language) or QA_FALLBACK_MESSAGES[DEFAULT_LANGUAGE]
+    return {**answer, "text": pack["unavailable"]}
 
 
 def _estimate_turn_tokens(question: str, answer: dict[str, Any] | None) -> int:

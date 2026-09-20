@@ -12,18 +12,82 @@ already be rendering.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import sqlite3
 import uuid
+from collections.abc import Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 from aiops_diagnostics.agent_lifecycle import SAFE_ID
-from aiops_diagnostics.i18n import SUPPORTED_LANGUAGES
+from aiops_diagnostics.i18n import DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES
 from aiops_diagnostics.private_files import ensure_private_directory, protect_private_file
+
+logger = logging.getLogger(__name__)
+
+
+class ShortcutCopyGap(NamedTuple):
+    """One field of one shortcut that lacks a supported language."""
+
+    tenant_id: str
+    code: str
+    field: str
+    language: str
+
+
+def shortcut_copy_gaps(shortcuts: Iterable[Any]) -> list[ShortcutCopyGap]:
+    """Return every supported-language gap across ``shortcuts``.
+
+    The deterministic gate behind the CI coverage check: a shortcut shipping
+    with three of six languages is a defect that must fail a check rather than
+    reach a user whose buttons are in a language they did not ask for. Kept
+    separate from the warning path so the gate and the log agree on what
+    counts as a gap.
+    """
+    gaps: list[ShortcutCopyGap] = []
+    for shortcut in shortcuts:
+        for language in SUPPORTED_LANGUAGES:
+            for field, _fallback in shortcut.missing_translations(language):
+                gaps.append(
+                    ShortcutCopyGap(
+                        tenant_id=shortcut.tenant_id,
+                        code=shortcut.code,
+                        field=field,
+                        language=language,
+                    )
+                )
+    return gaps
+
+
+def _warn_missing_translation(shortcut: Any, language: str, field: str, fallback: str) -> None:
+    """Record a shortcut copy fallback (never silently, never the copy itself).
+
+    Logs identifiers and the fact of the gap. The fallback text is not logged:
+    it is not secret, but the log is for finding the gap, not for reading the
+    product's copy in a place nobody curates.
+    """
+    logger.warning(
+        "shortcut copy missing translation: code=%s tenant=%s entry=%s field=%s language=%s",
+        shortcut.code,
+        shortcut.tenant_id,
+        shortcut.business_entry,
+        field,
+        language,
+        extra={
+            "event": "shortcut_translation_missing",
+            "code": shortcut.code,
+            "tenant_id": shortcut.tenant_id,
+            "business_entry": shortcut.business_entry,
+            "field": field,
+            "language": language,
+            "has_zh_fallback": bool(fallback),
+        },
+    )
+
 
 # Promotional Agent/version reference — same shape as ConversationCreateRequest's
 # agent_version_key ("agt_<hex>#vN"), so a shortcut target always resolves to
@@ -217,20 +281,50 @@ class Shortcut:
         Falls back to zh for a missing language (repo i18n rule: the catalog
         never returns empty copy). Status is always ``published`` here — the
         listing endpoint only serves published rows (#230 acceptance).
+
+        A missing translation is ALWAYS recorded before the fallback is used.
+        The fallback itself is deliberate — returning empty copy would blank a
+        user's buttons — but doing it silently is what let a shortcut language
+        gap survive a whole release cycle: the request returned 200, the
+        ``language`` echoed exactly what was asked for, and only the text was
+        wrong. See :meth:`missing_translations`.
         """
+        for field, value in self.missing_translations(language):
+            _warn_missing_translation(self, language, field, value)
         return {
             "code": self.code,
             "intent": self.intent,
             "requires_order": self.requires_order,
             "sort_order": self.sort_order,
-            "label": self.labels.get(language) or self.labels.get("zh", ""),
-            "description": self.descriptions.get(language) or self.descriptions.get("zh", ""),
-            "question_template": (
-                self.question_templates.get(language) or self.question_templates.get("zh", "")
-            ),
+            "label": self._localized_field(self.labels, language),
+            "description": self._localized_field(self.descriptions, language),
+            "question_template": self._localized_field(self.question_templates, language),
             "target_agent_version": self.target_agent_version,
             "jump_path": self.jump_path,
         }
+
+    @staticmethod
+    def _localized_field(values: dict[str, str], language: str) -> str:
+        return values.get(language) or values.get("zh", "")
+
+    def missing_translations(self, language: str) -> list[tuple[str, str]]:
+        """Return ``(field, fallback_value)`` for copy this language lacks.
+
+        Empty when the language is fully covered, or when it is the default
+        (zh is the authority, so its presence is not a gap). Also used by the
+        coverage check, so the warning and the gate agree on what counts.
+        """
+        if language == DEFAULT_LANGUAGE:
+            return []
+        missing: list[tuple[str, str]] = []
+        for field, values in (
+            ("label", self.labels),
+            ("description", self.descriptions),
+            ("question_template", self.question_templates),
+        ):
+            if not values.get(language):
+                missing.append((field, values.get(DEFAULT_LANGUAGE, "")))
+        return missing
 
     def to_dict(self) -> dict[str, Any]:
         """Full management shape (admin surface only)."""

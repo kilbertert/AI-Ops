@@ -152,9 +152,15 @@ def promo_prompt(selection: CustomerAgentSelection, question: str, *, language: 
         )
     return f"""You are the published promotional agent defined below. The user
 wants to explore {topic}.
-Produce a {card} structured with these sections in text blocks:
-标题 (title), 行业痛点 (industry pain points), 破局方案 (the solution),
-商业成果/标杆意义 (commercial results / benchmark significance).
+Produce a {card} with four parts, one text block each, in this order: the case
+title; the industry pain points; the solution; and the commercial results or
+benchmark significance.
+
+Write each part's heading in the output language. Do NOT copy a heading from
+these instructions — they name the parts in English only so the structure is
+unambiguous, and copying them would leave an English heading in a card written
+in another language. The part names above describe what to write, not the
+words to use.
 
 Promotional agent instructions (authoritative for tone and scope):
 \"\"\"{selection.prompt}\"\"\"
