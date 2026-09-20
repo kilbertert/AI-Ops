@@ -1,11 +1,23 @@
-"""The Responses-API status adapter (provider compatibility shim).
+"""The Responses-API compatibility adapter (provider compatibility shim).
 
-Upstream context (2026-09-17): the unified model endpoint rejects any
-`/responses` request whose conversation-history items omit `status`, with
-`400 missing '***.status' parameter (param: input.status)`. Codex resends such
-items on every multi-turn tool exchange and never sends `status`, so every
-agent run failed once it had one tool round. Adding the field to the same
-captured request turned the 400 into a 200, which is what this shim automates.
+Two upstream gaps are repaired here, both captured from the live gateway and
+both invisible to the client:
+
+1. **Missing item status** (2026-09-17). The unified model endpoint rejects any
+   `/responses` request whose conversation-history items omit `status`, with
+   `400 missing '***.status' parameter (param: input.status)`. Codex resends
+   such items on every multi-turn tool exchange and never sends `status`, so
+   every agent run failed once it had one tool round.
+
+2. **Grammar plus tools** (2026-09-20). The same endpoint rejects a request
+   that asks for constrained output *and* declares tools:
+   `400 Constrained response_format/guided_grammar cannot be combined with
+   active tools`. The agent always wants both — it needs tools to gather
+   evidence and a schema to return a typed turn — so every diagnosis failed.
+   Measured against the live endpoint: tools alone 200, grammar alone 200,
+   both 400. The grammar is dropped and the turn is parsed from the response
+   text instead; the caller already tolerates that, because non-OpenAI
+   providers never honored the schema anyway.
 """
 
 from __future__ import annotations
@@ -61,6 +73,38 @@ def needs_status(item: Any) -> bool:
     return item.get("type") in STATUS_BEARING_TYPES
 
 
+def _declares_tools(payload: dict[str, Any]) -> bool:
+    """True when the request carries tools the model could call.
+
+    An empty list is not a declaration: the endpoint's conflict is with active
+    tools, so a request that sends none is left completely alone.
+    """
+    tools = payload.get("tools")
+    return isinstance(tools, list) and bool(tools)
+
+
+def drop_conflicting_grammar(payload: Any) -> tuple[Any, int]:
+    """Return ``(payload, dropped_count)`` with guided grammar removed.
+
+    Only removed when the same request also declares tools, which is the exact
+    combination the endpoint rejects. Removing it costs the strict-schema
+    guarantee and nothing else: the response is parsed from text by the caller.
+    """
+    if not isinstance(payload, dict) or "text" not in payload:
+        return payload, 0
+    text = payload.get("text")
+    if not isinstance(text, dict) or "format" not in text:
+        return payload, 0
+    if not _declares_tools(payload):
+        return payload, 0
+
+    remaining = {key: value for key, value in text.items() if key != "format"}
+    # `text` had nothing but the grammar, so the whole object goes too — an
+    # empty `text` is a shape the endpoint has no reason to accept.
+    replacement: Any = remaining if remaining else None
+    return {**payload, "text": replacement}, 1
+
+
 def patch_responses_payload(payload: Any) -> tuple[Any, int]:
     """Return ``(payload, patched_count)`` with `status` filled in.
 
@@ -91,7 +135,7 @@ def patch_body(raw: bytes) -> tuple[bytes, int]:
     """Patch a JSON request body. Non-JSON or non-object bodies pass through.
 
     A malformed body is forwarded untouched on purpose: this shim exists to fix
-    one known gap, not to become a validator that turns a provider error into a
+    known gaps, not to become a validator that turns a provider error into a
     shim error.
     """
     try:
@@ -100,7 +144,10 @@ def patch_body(raw: bytes) -> tuple[bytes, int]:
         return raw, 0
     if not isinstance(payload, dict) or payload.get("input") is None:
         return raw, 0
+
+    payload, dropped = drop_conflicting_grammar(payload)
     patched_payload, count = patch_responses_payload(payload)
+    count += dropped
     if not count:
         return raw, 0
     return json.dumps(patched_payload, ensure_ascii=False).encode("utf-8"), count

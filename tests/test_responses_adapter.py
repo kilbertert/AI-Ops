@@ -311,3 +311,98 @@ def test_streamed_response_is_relayed_with_chunked_framing() -> None:
         upstream.shutdown()
         adapter.server_close()
         upstream.server_close()
+
+
+# --------------------------------------------------------------------------
+# Grammar x tools conflict (2026-09-20)
+#
+# Measured against the live endpoint through the same base URL the gateway
+# uses: tools-only 200, grammar-only 200, both 400 `Constrained
+# response_format/guided_grammar cannot be combined with active tools`. The
+# agent always sends both, so every diagnosis failed.
+# --------------------------------------------------------------------------
+
+
+def _grammar() -> dict[str, object]:
+    return {
+        "type": "json_schema",
+        "name": "agent_turn",
+        "strict": True,
+        "schema": {"type": "object", "properties": {"kind": {"type": "string"}}},
+    }
+
+
+def _tool(name: str = "order_snapshot") -> dict[str, object]:
+    return {
+        "type": "function",
+        "name": name,
+        "description": "read one order",
+        "parameters": {"type": "object", "properties": {}},
+    }
+
+
+def _statused_input() -> list[dict[str, object]]:
+    """A history item the status patch leaves alone, so grammar tests stay isolated."""
+    return [{"type": "message", "status": "completed"}]
+
+
+def test_grammar_is_dropped_when_the_request_also_declares_tools() -> None:
+    payload = {"input": _statused_input(), "tools": [_tool()], "text": {"format": _grammar()}}
+
+    patched, count = patch_body(json.dumps(payload).encode())
+
+    assert count == 1
+    result = json.loads(patched)
+    assert "format" not in (result.get("text") or {})
+    assert result["tools"] == [_tool()]
+
+
+def test_the_empty_text_object_is_dropped_too_not_left_as_a_stub() -> None:
+    payload = {"input": _statused_input(), "tools": [_tool()], "text": {"format": _grammar()}}
+
+    patched, _ = patch_body(json.dumps(payload).encode())
+
+    assert json.loads(patched)["text"] is None
+
+
+def test_grammar_survives_when_there_are_no_tools() -> None:
+    """The conflict is with ACTIVE tools; a tool-less request keeps its schema."""
+    payload = {"input": _statused_input(), "text": {"format": _grammar()}}
+    body = json.dumps(payload).encode()
+
+    assert patch_body(body) == (body, 0)
+
+
+def test_an_empty_tool_list_is_not_a_declaration() -> None:
+    payload = {"input": _statused_input(), "tools": [], "text": {"format": _grammar()}}
+    body = json.dumps(payload).encode()
+
+    assert patch_body(body) == (body, 0)
+
+
+def test_other_text_fields_survive_the_grammar_drop() -> None:
+    payload = {
+        "input": _statused_input(),
+        "tools": [_tool()],
+        "text": {"format": _grammar(), "verbosity": "low"},
+    }
+
+    patched, _ = patch_body(json.dumps(payload).encode())
+
+    assert json.loads(patched)["text"] == {"verbosity": "low"}
+
+
+def test_both_gaps_are_repaired_in_one_pass() -> None:
+    """A real agent turn has both: history items missing status AND the conflict."""
+    payload = {
+        "input": [{"type": "function_call", "name": "order_snapshot"}],
+        "tools": [_tool()],
+        "text": {"format": _grammar()},
+    }
+
+    patched, count = patch_body(json.dumps(payload).encode())
+
+    result = json.loads(patched)
+    assert count == 2, "one history item patched, one grammar dropped"
+    assert result["input"][0]["status"] == "completed"
+    assert json.loads(patched).get("text") is None

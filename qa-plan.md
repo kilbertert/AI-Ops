@@ -924,3 +924,23 @@ PROMPT-01/02 为 41 实机验收（清单收敛 + 公网问答），PROMPT-03 �
 **边界声明**：ANSWER-LANG-07 依赖把修复部署到 41（`/opt/aiops-41/src`），属
 单独的生产变更步骤，未包含在本 PR 内。本 PR 只交付代码与确定性证据；
 ANSWER-LANG-04/05 用的是**已发生的生产载荷**，不是新一次端到端验收。
+
+## 适配器：语法 × 工具冲突 QA（ADAPTER-FMT）
+
+| ID | 环境 | 前置条件与数据 | 有序动作 | 预期可观察结果 | 清理/证据 |
+|---|---|---|---|---|---|
+| ADAPTER-FMT-01 | 本地 dev | 无 | 构造 `tools` + `text.format` 的请求体，调用 `patch_body` | 返回 `text` 为 `None`（或仅剩非 format 字段），`tools` 保留，计数 1 | `tests/test_responses_adapter.py::test_grammar_is_dropped_when_the_request_also_declares_tools` |
+| ADAPTER-FMT-02 | 本地 dev | 无 | 只带 `text.format`、不带 `tools` | 请求体逐字节不变，计数 0 | `...::test_grammar_survives_when_there_are_no_tools` |
+| ADAPTER-FMT-03 | 本地 dev | 无 | `tools: []` + `text.format` | 逐字节不变（空列表不算声明工具） | `...::test_an_empty_tool_list_is_not_a_declaration` |
+| ADAPTER-FMT-04 | 本地 dev | 无 | `text` 含 `format` 与 `verbosity` | 只去掉 `format`，`verbosity` 保留 | `...::test_other_text_fields_survive_the_grammar_drop` |
+| ADAPTER-FMT-05 | 本地 dev | 无 | 同时含缺 status 的历史项与语法冲突 | 计数 2；历史项补 status 且语法被丢弃 | `...::test_both_gaps_are_repaired_in_one_pass` |
+| ADAPTER-FMT-06 | 41 实机 | 适配器运行于 `127.0.0.1:8799`，上游 `https://ai-api.baoyun.com/v1` | 对真实端点分别发送 tools+grammar 与 tools-only（grammar 置空） | 前者 400 `Constrained response_format/guided_grammar cannot be combined with active tools`；后者 200 | 实拍输出：`BEFORE (tools+grammar) HTTP 400` / `AFTER (tools only) HTTP 200` |
+| ADAPTER-FMT-07 | 41 实机 | 适配器已部署本修复 | 真实会话提交订单诊断并轮询至终态 | 诊断不再以该 400 失败 | **待部署后执行**，本 PR 不标记为通过 |
+
+**边界声明**：ADAPTER-FMT-06 证明的是**请求形状**在真实端点上的差异；
+ADAPTER-FMT-07 才是端到端验收，未包含在本 PR 内（需另行走部署）。
+
+**副作用（需知悉）**：丢弃 `text.format` 即放弃 strict-schema 保证，结果改为从
+响应文本解析。解析侧本就容忍非严格输出（`_parse_agent_turn` 处理围栏与未包裹
+payload——非 OpenAI provider 从未遵守该 schema），故不是新增风险；但这是本次
+取舍的代价，如实记录。

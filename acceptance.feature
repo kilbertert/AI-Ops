@@ -1089,3 +1089,37 @@ Feature: 诊断答案的输出语言合同
       When 校验失败且重试次数未达上限
       Then 将校验错误回送给模型并在同一会话内要求修正
       And 修正后仍不合格则按 blocked 处理，不输出中文残句
+
+Feature: 模型端点兼容适配器
+
+  统一模型端点对 Codex 发出的 Responses 请求有两处已知拒绝，客户端（Codex）
+  无法感知也无法自我修正。适配器是唯一的修复点：它在转发前重写请求，
+  客户端全程无感。
+
+  Rule: 有工具时不得同时要求受约束输出
+
+    Scenario: 工具与语法同时出现时丢弃语法
+      Given 一个 /responses 请求同时声明了 tools 和 text.format 受约束语法
+      When 适配器转发该请求
+      Then 该请求不再携带 text.format
+      And tools 原样保留
+      And 其余 text 字段（如 verbosity）不受影响
+
+    Scenario: 只有语法没有工具时保持原样
+      Given 一个 /responses 请求声明 text.format 但没有 tools
+      When 适配器转发该请求
+      Then 请求体逐字节不变
+
+    Scenario: 空工具列表不算声明工具
+      Given 一个 /responses 请求的 tools 为空数组且带受约束语法
+      When 适配器转发该请求
+      Then 请求体逐字节不变
+
+  Rule: 两处修补在同一请求上互不干扰
+
+    Scenario: 历史项缺 status 且同时有语法冲突
+      Given 一个请求既有缺少 status 的 input 历史项又同时带 tools 与语法
+      When 适配器转发该请求
+      Then 历史项补上 status
+      And 受约束语法被丢弃
+      And 两处修补都计入修补计数
