@@ -95,7 +95,28 @@ ssh aiops-41 'cd /opt/aiops-41 && for f in $(find src/aiops_diagnostics -type f 
 diff /tmp/local.txt /tmp/remote.txt && echo "41 == main"
 ```
 
-回滚：`rsync -a --delete /var/backups/aiops-41/backup-<时间戳>/ /opt/aiops-41/src/ && systemctl restart aiops-gateway-41.service`。
+回滚。**注意源路径必须以 `backup-<时间戳>/src/` 结尾**——上面第 3 步的备份做的是
+`cp -a /opt/aiops-41/src $B/`，所以备份内是 `<时间戳>/src/`，且同级还有一个 `gateway.db`。
+若照旧写成 `backup-<时间戳>/`（漏掉 `/src/`），rsync 会把它们**塞进**
+`/opt/aiops-41/src/src/`，并把 `gateway.db` 撒进 `src/`：
+
+```bash
+ssh aiops-41 '
+set -e
+rsync -a --delete /var/backups/aiops-41/backup-<时间戳>/src/ /opt/aiops-41/src/
+chown -R aiops41:aiops41 /opt/aiops-41/src
+systemctl restart aiops-gateway-41.service && sleep 5
+systemctl is-active aiops-gateway-41.service
+curl -s --max-time 6 http://127.0.0.1:8788/health'
+```
+
+回滚前建议先干跑确认路径正确（应**无**源码差异，只可能有 `__pycache__` 时间戳差异）：
+
+```bash
+ssh aiops-41 'rsync -an --delete --itemize-changes \
+  /var/backups/aiops-41/backup-<时间戳>/src/aiops_diagnostics/ \
+  /opt/aiops-41/src/aiops_diagnostics/'
+```
 
 ## 3. 资源创建（走生产代码路径，禁止手工插库）
 
