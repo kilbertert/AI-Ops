@@ -228,6 +228,11 @@ def test_high_risk_clarification_holds_in_every_supported_language(tmp_path: Pat
         ("Was I overcharged for this charging session?", "en", "Please select the order"),
         ("My bill amount is wrong", "en", "Please select the order"),
         ("I was charged but never got power", "en", "Please select the order"),
+        ("Wurde ich für diese Ladesitzung überladen?", "de", "Bitte wählen Sie zuerst"),
+        ("Meine Rechnung ist falsch", "de", "Bitte wählen Sie zuerst"),
+        ("Ai-je été surfacturé pour cette session ?", "fr", "Veuillez d'abord sélectionner"),
+        ("¿Me han cobrado de más por esta carga?", "es", "Seleccione primero el pedido"),
+        ("Fui cobrado a mais nesta recarga?", "pt", "Selecione primeiro o pedido"),
     ]
     for question, lang, expected in cases:
         client, runtime = _client(tmp_path)

@@ -869,12 +869,12 @@ Feature: 统一助手业务意图路由与产品快捷动作
 
     Scenario: 扣费争议的判定与澄清文案都不限中文
       Given 用户未在请求中提供订单号
-      And 请求的 Accept-Language 为 en
-      When 用户提交“Was I overcharged for this charging session?”
-      Then 返回 HTTP 200 且 type 为 clarification
+      And 请求的 Accept-Language 分别为 en/de/fr/es/pt
+      When 用户分别提交该语言的扣费争议问题
+      Then 均返回 HTTP 200 且 type 为 clarification
       And missing_fields 包含 order_no
-      And message 为英文文案而非中文原文
-      And language 回显为 en
+      And message 为该语言文案而非中文原文
+      And language 回显与请求语言一致
 
     Scenario: 单纯的主题词不构成扣费争议
       Given 用户提交独立的“refund”或“Why did charging stop unexpectedly?”
