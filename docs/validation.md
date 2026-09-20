@@ -1618,3 +1618,27 @@ ja -> 请先选择需要检测的订单后，我才能继续处理。   （不�
 
 **本节之前的两处记录**（本文档上方 41 验收条目）描述的是修复**之前**的运行，其中卡片
 标题确为中文。保留原文以存真，不追改。
+
+### AL-COV-10 验收结果（2026-09-20，41 公网）
+
+**构建身份**：`ea61dc7`（PR #302 squash；前序 #301 `ca51e88`）；41 上 `src/aiops_diagnostics/` 与 main **58/58 字节一致**。
+**环境**：`api.mall.qushiyun.com`（41，`aiops-gateway-41.service` active）。租户 `1942105476598861824`，`X-Business-Entry: consumer`，`Accept-Language: en`。
+
+| 检查 | 结果 |
+|---|---|
+| 快捷动作 `question_template`（en） | `I'd like to see customer cases` / `Diagnose the charging issue of this order` / `I want to report a fault` —— **全英文** |
+| 客户案例卡片 | `qa_ad7cab1c5f634b8e9d1708f9cfc0e6f4`，`completed`，`language=en`，`retrieval_status=found`（**非** `unavailable`），`searches=1`，6 blocks，`media_count=1` |
+| 卡片小标题 | `Case Title` / `Industry Pain Points` / `The Solution` / `Commercial Results and Benchmark Significance` —— **全英文** |
+| 正文块中文 | **无**（逐块检查：text 块 CJK 为空） |
+| 残留中文 | 仅媒体块 `title = 新加坡无人电动巴士.mp4` —— 资源文件名，按设计豁免 |
+| 中文站名括注 | `TrendPower (趋势智能)` 正常保留未被判为泄漏 |
+
+**agent 清单那半**：`canary-宣传案例` 经 `admin reconcile` 由 v2 → **v3**（v2 保留可回滚）。dry-run 显示仅该 agent `updated`，另两个 `unchanged`。这是 #294 清单半生效的必要步骤，**需生产授权**。
+
+**三处评审预警、验收中确认并修正的偏差**（均已在 code 与测试中固化，非口头结论）：
+1. 命中后不得改写 `retrieval_status`——泄漏发生在检索**成功**时，改状态是假陈述（评审 F5）。
+2. 资源名豁免按**值形态**，不按字段，且不只看扩展名（评审 F3/F4）。
+3. **专名括注不是泄漏**——卡片结构里公司名必然出现，误拦会把整张好卡片压成不可用；规则保持**窄**（只豁免拉丁词后的中文括注，裸专名不豁免）（评审 F8，我最初判为可接受、实测证明更常见，故修正）。
+
+**边界声明**：本次验收证明的是**没漏中文**，**不是译得对**。译文质量属语义判断，不在本断言范围。
+**未验**：`de`/`fr`/`es`/`pt` 的真实公网卡片（本地测试覆盖，41 未逐语实跑）；客户端预填提问（不在本服务）。
