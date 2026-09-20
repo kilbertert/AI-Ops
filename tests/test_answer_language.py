@@ -186,3 +186,56 @@ def test_fullwidth_chinese_punctuation_counts_as_a_leak() -> None:
     answer = {"blocks": [{"kind": "text", "text": "Scan the QR code，then start charging."}]}
 
     assert answer_chinese_leak(answer, "en") != ""
+
+
+# --------------------------------------------------------------------------
+# Name glosses (2026-09-20, 41 live)
+#
+# After the card headings were fixed, the promo card still got withheld — and
+# the ONLY Chinese left was the company's own name written as a gloss:
+# `TrendPower (趋势智能)`. That is an identifier written twice, not a leak, and
+# suppressing a whole good card over it is worse than the leak it prevented.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "TrendPower (趋势智能) joined forces with Huawei and BYD.",
+        "a partnership between Huawei, BYD and TrendPower (趋势智能).",
+        "TrendPower（趋势智能）won the bid.",
+    ],
+)
+def test_a_name_gloss_beside_its_latin_form_is_not_a_leak(text: str) -> None:
+    from aiops_diagnostics.i18n import chinese_leak
+
+    assert chinese_leak(text) == ""
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "标题\nSingapore's First National-Level Project",
+        "Industry Pain Points\n标题: 新加坡项目",
+        "提供订单号可获得更精确的结果哦。",
+        "Balance exhausted，please retry",
+        "The stop reason is 余额耗尽停止订单.",
+    ],
+)
+def test_the_narrow_gloss_rule_does_not_reopen_the_hole(text: str) -> None:
+    """A bare Chinese name or sentence is still judged.
+
+    Told apart from a cited proper noun needs semantics a pattern lacks, so the
+    rule stays narrow rather than guessing — see the `_NAME_GLOSS` comment.
+    """
+    from aiops_diagnostics.i18n import chinese_leak
+
+    assert chinese_leak(text) != ""
+
+
+def test_a_bare_chinese_proper_noun_is_still_judged() -> None:
+    """Known tradeoff, recorded: a bare name would be flagged. Narrow beats
+    broad here, because the broad rule is how a customer reads Chinese."""
+    from aiops_diagnostics.i18n import chinese_leak
+
+    assert chinese_leak("See the case from 特来电.") != ""
