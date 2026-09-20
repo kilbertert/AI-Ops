@@ -30,6 +30,31 @@ CJK_TEXT = re.compile(r"[㐀-䶿一-鿿　-〿＀-￯]")
 NON_CHINESE_LANGUAGES = frozenset(SUPPORTED_LANGUAGES) - {DEFAULT_LANGUAGE}
 
 
+# A Chinese name glossed beside its Latin form — `TrendPower (趋势智能)`. The
+# Chinese IS the proper noun, so it is an identifier, and dropping it would make
+# the answer unciteable to a reader who knows the company by that name.
+#
+# Deliberately narrow. It matches ONLY a parenthesised Chinese run that directly
+# follows Latin text, because that is the shape a gloss has. A bare Chinese name
+# (`特来电`) is NOT exempt: telling a cited proper noun apart from a sentence
+# needs semantics a pattern does not have, and guessing would reopen the hole
+# this guard exists to close. The cost of the narrow rule is a rare withhold
+# that an operator sees in the log; the cost of a broad one is Chinese read by a
+# customer.
+_NAME_GLOSS = re.compile(r"(?<=[A-Za-z0-9])\s*[\(（]\s*[㐀-䶿一-鿿]{1,12}\s*[\)）]")
+
+
+def _without_name_glosses(text: str) -> str:
+    """Remove `(中文名)` glosses that follow a Latin token.
+
+    A gloss is an identifier written twice, not prose: `TrendPower (趋势智能)`
+    names the company in both scripts the reader might know it by. Removing it
+    before the CJK scan is what keeps the guard from treating a proper noun as
+    a leak. See ``_NAME_GLOSS`` for why the rule stays narrow.
+    """
+    return _NAME_GLOSS.sub("", text)
+
+
 def chinese_leak(text: str) -> str:
     """Return the distinct Chinese characters in ``text`` (empty when clean).
 
@@ -38,10 +63,13 @@ def chinese_leak(text: str) -> str:
     is the single shared judgement behind every answer surface's guard; it lives
     here, beside the language tables, so a surface cannot quietly reimplement it.
 
+    Proper nouns glossed in parentheses are removed before judgement; everything
+    else is judged as-is.
+
     Scope: this proves the answer did not LEAK Chinese. It says nothing about
     whether the translation is correct — that is not decidable by pattern.
     """
-    return "".join(sorted(set(CJK_TEXT.findall(text))))
+    return "".join(sorted(set(CJK_TEXT.findall(_without_name_glosses(text)))))
 
 
 # Human-readable names used inside model prompts (qa/diagnosis, #204).
