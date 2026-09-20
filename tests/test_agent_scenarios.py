@@ -49,20 +49,23 @@ class _ScriptedSession:
                     "order_no": "placeholder",
                     "tenant_id": None,
                     "status": "diagnosed",
-                    "summary": "合成场景已完成证据核对",
-                    "root_cause": "合成场景根因由证据链决定",
+                    # The coordinator runs these scenarios with language="en", so the
+                    # scripted answer must read as English — a Chinese answer here is
+                    # exactly the leak the language check rejects.
+                    "summary": "The synthetic scenario finished checking its evidence",
+                    "root_cause": "The synthetic root cause is determined by the evidence chain",
                     "confidence": "medium" if failed_sources else "high",
                     "evidence_ids": evidence_ids,
                     "hypotheses": [
                         {
-                            "title": "场景假设",
-                            "explanation": "由工具返回的证据支持",
+                            "title": "Scenario hypothesis",
+                            "explanation": "Supported by the evidence the tools returned",
                             "evidence_ids": evidence_ids,
                         }
                     ],
-                    "limitations": ["一个数据源不可用"] if failed_sources else [],
+                    "limitations": ["one data source was unavailable"] if failed_sources else [],
                     "failed_sources": failed_sources,
-                    "next_steps": ["人工复核合成证据"],
+                    "next_steps": ["A human reviews the synthetic evidence"],
                 },
             }
             response["diagnosis"]["incident_id"] = self._manifest.incident_id

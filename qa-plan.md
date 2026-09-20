@@ -908,3 +908,19 @@ PROMPT-01/02 为 41 实机验收（清单收敛 + 公网问答），PROMPT-03 �
 | SHORTCUT-JUMP-10 | 41 实机 | SHORTCUT-JUMP-08 完成 | 以非中文 `Accept-Language` 读取列表 | 该动作名称按语言本地化（缺失回退 zh），路径保持同一字符串 | 保留脱敏响应摘要 |
 
 **边界声明**：SHORTCUT-JUMP-08/09/10 **不验证**跳转目标页面在客户端是否真实存在、能否打开、是否按语言渲染。仓库内不存在权威 H5 路由约定文档，页面属前端资产；该边界必须在验收记录中如实标注为未验，不得写成通过。
+
+## 诊断答案输出语言 QA（ANSWER-LANG）
+
+| ID | 环境 | 前置条件与数据 | 有序动作 | 预期可观察结果 | 清理/证据 |
+|---|---|---|---|---|---|
+| ANSWER-LANG-01 | 本地 dev | 已注册一条 order_snapshot 成功证据 | 构造 `language="en"` 且 summary 含 `"余额耗尽停止订单"` 的 AgentDiagnosis，调用 `AgentResultValidator(...).validate` | 返回错误且含「仍含中文字符」，并列出中文标点/汉字 | `tests/test_agent_validator.py::test_validator_rejects_stored_chinese_echoed_in_another_language` |
+| ANSWER-LANG-02 | 本地 dev | 同上 | 以 `language="zh"` 校验同一份中文答案 | 不产生语言相关错误（中文是默认输出语言） | `...::test_validator_allows_chinese_for_the_chinese_answer` |
+| ANSWER-LANG-03 | 本地 dev | 同上 | 校验一份英文答案：停因译为英文、订单号/证据 ID/字段名/时间戳原样 | 不产生语言相关错误；标识符逐字保留 | `...::test_validator_allows_translated_prose_with_ascii_identifiers` |
+| ANSWER-LANG-04 | 本地 dev | 真实生产载荷副本 | 对 41 上 `dx_c738eed26ec4454b9a696ef2dd08c184`（language=en，含中文残句）的 result_json 运行 `CJK_TEXT` | 命中汉字 `余停单尽止耗订额`，判定不合格 | 载荷取自 41 gateway.db；校验器直跑输出已记录 |
+| ANSWER-LANG-05 | 本地 dev | 真实生产载荷副本 | 对 41 上 `dx_3c3c34cb567041b89977b267210fa2c1`（language=en，干净答案）运行同一检查 | 无中文命中，判定合格；`order_no` 仍逐字保留 | 同上；证明规则不误伤合格答案 |
+| ANSWER-LANG-06 | 本地 dev | 全量套件 | `uv run python -m pytest`、`uv run ruff check src tests` | 789 passed；ruff 无告警 | 提交前本地运行，见 PR |
+| ANSWER-LANG-07 | 41 实机 | 修复已部署 | 以 `Accept-Language: en` 提交一条真实诊断订单并读取结果 | 答案无任何中文字符；标识符与修复前一致 | **待部署后执行**，本 PR 不标记为通过 |
+
+**边界声明**：ANSWER-LANG-07 依赖把修复部署到 41（`/opt/aiops-41/src`），属
+单独的生产变更步骤，未包含在本 PR 内。本 PR 只交付代码与确定性证据；
+ANSWER-LANG-04/05 用的是**已发生的生产载荷**，不是新一次端到端验收。

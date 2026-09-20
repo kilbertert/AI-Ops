@@ -9,6 +9,7 @@ from aiops_diagnostics.agent_workspace import AgentWorkspace
 from aiops_diagnostics.codex_runtime import AgentRuntimeError, AgentTurnTimeout, CodexTurnOutput
 from aiops_diagnostics.config import AgentSettings, SafetySettings
 from aiops_diagnostics.diagnostic_tools import DiagnosticToolExecutor
+from aiops_diagnostics.i18n import DEFAULT_LANGUAGE
 from aiops_diagnostics.journal import EvidenceJournal
 from aiops_diagnostics.parsing import parse_request
 from aiops_diagnostics.sources import FixtureSources
@@ -64,7 +65,42 @@ def _tool_request() -> str:
     )
 
 
-def _diagnosis(manifest: IncidentManifest, evidence_id: str = "ev-001") -> str:
+_EN_ANSWER = {
+    "summary": "The order was found; the amount evidence still needs to confirm it",
+    "root_cause": "The current evidence confirms the order exists with no amount contradiction yet",
+    "hypotheses": [
+        {
+            "title": "The order master record exists",
+            "explanation": "The order snapshot returned exactly one record",
+        }
+    ],
+    "next_steps": ["An engineer can continue against the fee template"],
+}
+
+_ZH_ANSWER = {
+    "summary": "订单已找到，需继续按金额证据确认",
+    "root_cause": "当前证据确认订单存在，金额路径尚无矛盾",
+    "hypotheses": [
+        {
+            "title": "订单主数据存在",
+            "explanation": "订单快照返回唯一记录",
+        }
+    ],
+    "next_steps": ["工程师可继续核对费用模板"],
+}
+
+
+def _diagnosis(
+    manifest: IncidentManifest, evidence_id: str = "ev-001", *, language: str = DEFAULT_LANGUAGE
+) -> str:
+    """A scripted diagnosis whose prose matches the coordinator's output language.
+
+    A prompt that asks for English but returns a Chinese answer is the leak the
+    language contract rejects, so scripts must be built for the language they are
+    paired with.
+    """
+    answer = _ZH_ANSWER if language == DEFAULT_LANGUAGE else _EN_ANSWER
+    hypotheses = [dict(hypothesis, evidence_ids=[evidence_id]) for hypothesis in answer["hypotheses"]]
     return json.dumps(
         {
             "kind": "diagnosis",
@@ -75,20 +111,14 @@ def _diagnosis(manifest: IncidentManifest, evidence_id: str = "ev-001") -> str:
                 "order_no": manifest.order_no,
                 "tenant_id": manifest.tenant_id,
                 "status": "diagnosed",
-                "summary": "订单已找到，需继续按金额证据确认",
-                "root_cause": "当前证据确认订单存在，金额路径尚无矛盾",
+                "summary": answer["summary"],
+                "root_cause": answer["root_cause"],
                 "confidence": "medium",
                 "evidence_ids": [evidence_id],
-                "hypotheses": [
-                    {
-                        "title": "订单主数据存在",
-                        "explanation": "订单快照返回唯一记录",
-                        "evidence_ids": [evidence_id],
-                    }
-                ],
+                "hypotheses": hypotheses,
                 "limitations": [],
                 "failed_sources": [],
-                "next_steps": ["工程师可继续核对费用模板"],
+                "next_steps": answer["next_steps"],
             },
         },
         ensure_ascii=False,
@@ -436,7 +466,7 @@ def test_parse_agent_turn_still_rejects_identity_echo_without_requests() -> None
 def test_coordinator_injects_output_language_into_prompts(tmp_path: Path) -> None:
     """The diagnosis initial prompt carries the output-language directive (#204)."""
     _, manifest, workspace, journal, tools, settings = _context(tmp_path)
-    session = _FakeSession([_tool_request(), _diagnosis(manifest)])
+    session = _FakeSession([_tool_request(), _diagnosis(manifest, language="de")])
     coordinator = AgentCoordinator(
         workspace,
         manifest,

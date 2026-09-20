@@ -1054,3 +1054,38 @@ Feature: 快捷动作跳转站内页面
       Given 用户提交一个未发布的 shortcut_code
       When 服务端处理该请求
       Then 该 code 被忽略且问题按普通提问处理
+
+Feature: 诊断答案的输出语言合同
+
+  诊断答案面向终端用户阅读。请求了非中文语言时，答案里不得残留中文——
+  尤其是原样附带的中文枚举值。该合同由确定性校验器强制执行，不依赖模型自觉。
+
+  Rule: 非中文请求的答案不含中文
+
+    Scenario: 原样附带的中文停因被判为不合格
+      Given 一次诊断请求的 Accept-Language 为 en
+      And 模型把停因译为 "balance exhausted, order stopped"
+      And 答案同时原样引用了存储值 "余额耗尽停止订单"
+      When 结果校验器校验该答案
+      Then 返回校验错误，指出结果语言为 en 但仍含中文字符
+      And 该答案不被当作最终结论交付
+
+    Scenario: 只翻译、不附带原文的答案通过
+      Given 一次诊断请求的 Accept-Language 为 en
+      And 答案把停因译为 "balance exhausted, order stopped"
+      And 订单号、证据 ID、字段名、状态码与时间戳按存储原样保留
+      When 结果校验器校验该答案
+      Then 不产生语言相关校验错误
+
+    Scenario: 中文请求不受影响
+      Given 一次诊断请求的 Accept-Language 为 zh
+      When 结果校验器校验一份中文答案
+      Then 不产生语言相关校验错误
+
+  Rule: 校验失败走既有的合同修复回路
+
+    Scenario: 语言不合格时要求模型修正而非直接交付
+      Given 模型返回了一份含中文枚举的英文诊断
+      When 校验失败且重试次数未达上限
+      Then 将校验错误回送给模型并在同一会话内要求修正
+      And 修正后仍不合格则按 blocked 处理，不输出中文残句

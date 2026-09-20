@@ -163,6 +163,7 @@ class AgentCoordinator:
             manifest,
             journal,
             sensitive_values=sensitive_values,
+            language=language,
         )
         self.session_factory = session_factory or _default_session_factory
         self.progress_callback = progress_callback
@@ -341,16 +342,25 @@ every limitation or next step.
 
 Translate evidence into that language. Source data is stored in Chinese, so a
 raw field value copied into the answer will read as Chinese to a user who asked
-for another language — translate it as you would any other prose. This includes
-enum labels and stop reasons, e.g. `余额耗尽停止订单` becomes "balance exhausted,
-order stopped".
+for another language — translate it as you would any other prose.
+
+When the target language is not Chinese, the answer must not contain Chinese
+characters at all. This includes controlled-vocabulary values such as enum
+labels and stop reasons: render the MEANING, e.g. the stored stop reason
+`余额耗尽停止订单` becomes "balance exhausted, order stopped". Do NOT echo the
+stored Chinese text alongside the translation — a quoted value is not an
+identifier, and the reader cannot use a string they cannot read. A reviewer
+checks the answer for Chinese characters and rejects it if any remain.
 
 Keep only what carries meaning as an identifier, and keep it EXACTLY as stored:
 order numbers, device/connector IDs, evidence IDs, field names, error and status
-codes, timestamps, and numeric values with their units. Those must stay
-byte-identical even though the sentence around them is translated — a reader has
-to be able to match them against the system of record. Where a translated label
-helps, you may add it next to the code, e.g. `status 2 (uncontrollable fault)`.
+codes, timestamps, and numeric values with their units. Record which field a
+value came from as a plain field name (`stopped_reason_content = "balance
+exhausted, order stopped"`), not by quoting the stored row. Identifiers of this
+kind must stay byte-identical even though the sentence around them is
+translated — a reader has to be able to match them against the system of record.
+Where a translated label helps, you may add it next to the code, e.g.
+`status 2 (uncontrollable fault)`.
 
 Return only the structured response required by the output schema.
 """
