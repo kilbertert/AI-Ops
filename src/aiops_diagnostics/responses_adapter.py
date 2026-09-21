@@ -26,10 +26,15 @@ import contextlib
 import json
 import os
 import urllib.error
-import urllib.request
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, ClassVar
+
+from aiops_diagnostics.bounded_http import (
+    RequestSpec,
+    join_url,
+    open_response,
+)
 
 CHUNK_BYTES = 64 * 1024
 
@@ -240,17 +245,25 @@ class ResponsesStatusHandler(BaseHTTPRequestHandler):
 
     def _forward(self, body: bytes, patched: int) -> None:
         settings = self.settings
-        url = settings.upstream_url.rstrip("/") + self.path
-        request = urllib.request.Request(url, data=body, method="POST")
-        for name, value in self.headers.items():
-            if name.lower() in {"host", "content-length", "connection", "transfer-encoding"}:
-                continue
-            request.add_header(name, value)
-        request.add_header("Content-Length", str(len(body)))
-
-        opener = urllib.request.build_opener(_NoRedirectHandler())
+        # Streaming relay: the response body is forwarded chunk by chunk, never
+        # buffered, so this uses the skeleton's request primitives rather than
+        # ``request_json``. Redirects are not followed, as before.
+        headers = {
+            name: value
+            for name, value in self.headers.items()
+            if name.lower() not in {"host", "content-length", "connection", "transfer-encoding"}
+        }
+        headers["Content-Length"] = str(len(body))
+        spec = RequestSpec(
+            url=join_url(settings.upstream_url, self.path),
+            method="POST",
+            headers=headers,
+            body=body,
+            timeout=settings.timeout_seconds,
+            follow_redirects=False,
+        )
         try:
-            with opener.open(request, timeout=settings.timeout_seconds) as response:
+            with open_response(spec) as response:
                 self._relay(response.status, response.headers, response)
         except urllib.error.HTTPError as exc:
             with contextlib.closing(exc):
@@ -314,13 +327,6 @@ def main() -> None:
         pass
     finally:
         server.server_close()
-
-
-class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
-    """A redirect would bypass the status patch, so never follow one."""
-
-    def redirect_request(self, *args: object, **kwargs: object) -> None:
-        return None
 
 
 def _env_int(name: str, default: int) -> int:
