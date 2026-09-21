@@ -10,6 +10,9 @@ const profiles = {
   agentrouter: process.env.AFK_AGENTROUTER_SETTINGS ?? join(homedir(), "cliproxyapi/settings.airouter2.json"),
   psydo: undefined,
   "aliyun-deepseek": undefined,
+  // Endpoint is baked into the image at build time (see .sandcastle/Dockerfile),
+  // so there is no host settings file to mount and no AFK_*_SETTINGS override.
+  "claude-stepfun": undefined,
 } as const;
 const configDir = process.env.AFK_CONFIG_DIR ?? join(homedir(), ".config/afk");
 const legacyConfigDir = join(homedir(), ".config/auto-test");
@@ -78,7 +81,9 @@ export function claudeProfile(
   profile = process.env.AFK_PROFILE,
   env?: Record<string, string>,
 ): { agent: AgentProvider; sandbox: SandboxProvider } {
-  if (profile && !(profile in profiles)) throw new Error("Unsupported profile; use claude, claude-ark, agentrouter, psydo, or aliyun-deepseek.");
+  if (profile && !(profile in profiles)) {
+    throw new Error(`Unsupported profile; use ${Object.keys(profiles).join(", ")}.`);
+  }
   const settingsPath = profile ? profiles[profile as keyof typeof profiles] : undefined;
   if (settingsPath && !existsSync(settingsPath)) throw new Error(`Profile settings not found: ${settingsPath}`);
   const usePsydo = profile === "psydo";
@@ -114,6 +119,11 @@ export function claudeProfile(
         ...(usePsydo ? { OPENAI_API_KEY: readFileSync(psydoKey, "utf8").trim() } : {}),
         ...(aliyun ? { DASHSCOPE_API_KEY: aliyun.apiKey } : {}),
       },
+      // Profiles whose endpoint is a public HTTPS origin reach it over the
+      // default bridge. Only `claude-ark` needs host networking, because its
+      // endpoint is a relay bound to the host loopback and a sandbox cannot
+      // reach a host loopback port. Buying that convenience with host network
+      // is a deliberate, profile-scoped trade, not a default.
       ...(profile === "claude-ark" || useCodex ? { network: "host" as const } : {}),
       ...(useCodex
         ? { mounts: [{ hostPath: useAliyun ? aliyunSettings : codexSettings, sandboxPath: "/home/agent/.codex/config.toml", readonly: true }] }
