@@ -1,5 +1,31 @@
 # 验证与验收计划
 
+## #355 终态提交检查 claim-guard 返回值（2026-09-21，本地自动化验证）
+
+**范围**：PRD #346 子票 T2，只改运行时对 claim-guard 返回值的态度——提问作业的 9 处
+终态写入（`completed` / `failed`）全部检查返回值，被拒时安静退出：不写会话轮次行、不写
+指标，只在已开启生成轮次时丢弃该行并释放生成槽位（与同函数内 `running` claim 被拒时的
+既有处理一致）。claim-guard 本身的语义（`WHERE status IN ('queued','running')`）与存储层
+均未改动。**本片未完成业务验收**：取消端点（#357）尚未落地，"取消让晚到写入从理论变成
+常态"这条动机目前只能以过期路径复现；取消路径的端到端验收留给 #357 / #359。
+
+**新增自动化检查**（均以"去掉修复即失败"核对过）：
+
+| 检查 | 文件 | 守护的行为 |
+|---|---|---|
+| `test_expired_job_keeps_its_terminal_row_and_drops_the_late_answer` | `tests/test_assistant_qa_claim_guard.py` | 作业在 worker 答题期间过期：终态写入被拒后结果不落库、会话轮次行被丢弃、生成槽位释放、不产生指标行 |
+| `test_a_terminal_write_that_lands_still_persists_result_turn_and_metric` | `tests/test_assistant_qa_claim_guard.py` | 反向守护：claim-guard 接受的写入照旧写结果、轮次与指标，检查返回值不改变正常路径 |
+| `test_rag_path_refusal_stops_the_worker` | `tests/test_assistant_qa_claim_guard.py` | RAG 路径以 `TERMINAL_WRITE_REFUSED` 上报被拒时 worker 停在该处，不把该标记当作已完成结果写进轮次与指标 |
+
+**结果**：本地全量 `uv run pytest` 1056 passed（此前 1053），`uv run ruff check` 与
+`ruff format --check` 干净；改动前后既有断言逐条不变。
+
+**同类缺口（不在本片）**：`standard_diagnoses` 与 `health_report_jobs` 的终态写入同样
+未检查返回值（诊断路径也在写入后落指标），二者不属本 PRD 范围，未在本片处理。
+
+**已知缺口**：取消端点与响应（#357）、契约分发与 #173 断链纠正（#358）、取消结果
+入指标与两条核心回归守护（#359）、提问作业重启恢复（#356）均未在本片交付。
+
 ## #354 `cancelled` 终态存储层（2026-09-21，本地自动化验证）
 
 **范围**：PRD #346 子票 T1，只做状态值与存储层；不含取消端点、运行时、API 层

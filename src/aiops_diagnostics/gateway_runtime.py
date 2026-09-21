@@ -53,6 +53,17 @@ FIXTURE_NAMES = frozenset({"ocpp_consistent.json", "ykc_amount_mismatch.json", "
 #: what a frontend may therefore rely on.
 DIAGNOSIS_ORDER_OUT_OF_SCOPE = "DIAGNOSIS_ORDER_OUT_OF_SCOPE"
 
+#: What ``_try_customer_rag`` hands back when the claim-guard refused the job's
+#: terminal write: another path (expiry today; cancellation once #357 lands)
+#: already put the row in a terminal state, so this worker's result was NOT
+#: persisted. The caller stops right there — no metric, and the in-flight turn
+#: is dropped rather than filled — because each of those follow-ups asserts
+#: "the write landed".
+#:
+#: A value rather than an exception on purpose: losing the race is a legal
+#: outcome, not a failure, and the worker must exit quietly rather than raise.
+TERMINAL_WRITE_REFUSED = {"status": "refused"}
+
 
 def _as_datetime(value):
     from datetime import UTC, datetime
@@ -666,7 +677,9 @@ class GatewayRuntime:
             # No search capability is wired here, so nothing was searched. Same
             # rule as the other card sites: do not claim the library is empty.
             rag_result = promo_empty_result(language, promo_intent, retrieval_status="unavailable")
-            self.store.update_assistant_question(qa_id, status="completed", result=rag_result)
+            if not self.store.update_assistant_question(qa_id, status="completed", result=rag_result):
+                _finish_turn(None, cancelled=True)
+                return
         elif tenant_id and self.kb_search_client is not None and self.media_signer is not None:
             rag_result = self._try_customer_rag(
                 qa_id,
@@ -680,6 +693,9 @@ class GatewayRuntime:
                 promo_intent=promo_intent,
             )
         if rag_result is not None:
+            if rag_result is TERMINAL_WRITE_REFUSED:
+                _finish_turn(None, cancelled=True)
+                return
             if isinstance(rag_result, dict) and rag_result.get("status") == "failed":
                 self._record_metric(
                     tenant_id=tenant_id,
@@ -706,12 +722,14 @@ class GatewayRuntime:
                 language=language,
             )
         except (AgentRuntimeError, SourceError, ValueError) as exc:
-            self.store.update_assistant_question(
+            if not self.store.update_assistant_question(
                 qa_id,
                 status="failed",
                 error_code="QA_FAILED",
                 error_message=_public_error_message(exc, ""),
-            )
+            ):
+                _finish_turn(None, cancelled=True)
+                return
             if tenant_id:
                 self._record_metric(
                     tenant_id=tenant_id,
@@ -723,11 +741,13 @@ class GatewayRuntime:
             _finish_turn(None, cancelled=True)
             return
         answer = _guard_zero_order_language(answer, language)
-        self.store.update_assistant_question(
+        if not self.store.update_assistant_question(
             qa_id,
             status="completed",
             result=answer,
-        )
+        ):
+            _finish_turn(None, cancelled=True)
+            return
         if tenant_id:
             self._record_metric(
                 tenant_id=tenant_id,
@@ -875,10 +895,13 @@ class GatewayRuntime:
         Returns the completed job record when the RAG path produced a result;
         None when there is no published customer agent for this tenant or the
         kb dependency is unavailable, letting the caller keep the existing
-        zero-order behavior. With ``promo_intent`` (#231) the pinned
-        promotional agent serves instead of the customer-service agent; an
-        unresolvable target or empty library returns the honest empty card
-        and never falls through to FAQ/customer QA.
+        zero-order behavior; ``TERMINAL_WRITE_REFUSED`` when the claim-guard
+        turned the job's terminal write away, which means nothing was
+        persisted and the caller must stop without recording a metric or a
+        turn. With ``promo_intent`` (#231) the pinned promotional agent serves
+        instead of the customer-service agent; an unresolvable target or empty
+        library returns the honest empty card and never falls through to
+        FAQ/customer QA.
         """
         from aiops_diagnostics.qa_rag import run_customer_qa_answer, select_customer_agent
 
@@ -900,7 +923,8 @@ class GatewayRuntime:
                 # never ran a query. "not_found" is reserved for a search that
                 # actually returned nothing.
                 result = promo_empty_result(language, promo_intent, retrieval_status="unavailable")
-                self.store.update_assistant_question(qa_id, status="completed", result=result)
+                if not self.store.update_assistant_question(qa_id, status="completed", result=result):
+                    return TERMINAL_WRITE_REFUSED
                 return result
             selection = promo
             promo_prompt_text = promo_prompt(promo, question, language=language, intent=promo_intent)
@@ -939,7 +963,8 @@ class GatewayRuntime:
                 # code=102 while the provider account is in arrears, and the
                 # old code turned that outage into "未检索到匹配的宣传资料".
                 result = promo_empty_result(language, promo_intent, retrieval_status="unavailable")
-                self.store.update_assistant_question(qa_id, status="completed", result=result)
+                if not self.store.update_assistant_question(qa_id, status="completed", result=result):
+                    return TERMINAL_WRITE_REFUSED
                 return result
             # Retrieval dependency is down: per the T1/T3 contract the model
             # can still answer from its own knowledge with
@@ -953,12 +978,13 @@ class GatewayRuntime:
             # in the job record, and do NOT let the promo degrade hide it.
             # (2026-09-17: treating this like a provider outage made a real
             # reference-block bug look like "service temporarily unavailable".)
-            self.store.update_assistant_question(
+            if not self.store.update_assistant_question(
                 qa_id,
                 status="failed",
                 error_code="QA_FAILED",
                 error_message=_public_error_message(exc, ""),
-            )
+            ):
+                return TERMINAL_WRITE_REFUSED
             return {"status": "failed"}
         except (AgentRuntimeError, ValueError) as exc:
             if promo_intent:
@@ -970,18 +996,20 @@ class GatewayRuntime:
                 # user cannot act on.
                 from aiops_diagnostics.promo_agents import promo_empty_result
 
-                self.store.update_assistant_question(
+                if not self.store.update_assistant_question(
                     qa_id,
                     status="completed",
                     result=promo_empty_result(language, promo_intent, retrieval_status="unavailable"),
-                )
+                ):
+                    return TERMINAL_WRITE_REFUSED
                 return {"status": "completed"}
-            self.store.update_assistant_question(
+            if not self.store.update_assistant_question(
                 qa_id,
                 status="failed",
                 error_code="QA_FAILED",
                 error_message=_public_error_message(exc, ""),
-            )
+            ):
+                return TERMINAL_WRITE_REFUSED
             return {"status": "failed"}
         # Metrics-only attribution tag: the job result and the conversation
         # turn payload stay on the unchanged blocks contract (no agent_version
@@ -990,11 +1018,12 @@ class GatewayRuntime:
             **result,
             "agent_version": f"{selection.agent_id}#v{selection.version_no}",
         }
-        self.store.update_assistant_question(
+        if not self.store.update_assistant_question(
             qa_id,
             status="completed",
             result={key: value for key, value in result.items() if key != "agent_version"},
-        )
+        ):
+            return TERMINAL_WRITE_REFUSED
         return result
 
     def serve_media(
