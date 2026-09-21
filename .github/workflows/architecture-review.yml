@@ -116,7 +116,8 @@ jobs:
           # gh issue create prints the URL on the last line.
           issue_url=$(gh issue create \
             --title "$title" \
-            --body-file "$BODY_FILE" | tail -n1)
+            --body-file "$BODY_FILE" \
+            --label "$LABEL" | tail -n1)
           issue_number=$(basename "$issue_url")
           echo "issue_url=$issue_url" >> "$GITHUB_OUTPUT"
           echo "issue_number=$issue_number" >> "$GITHUB_OUTPUT"
