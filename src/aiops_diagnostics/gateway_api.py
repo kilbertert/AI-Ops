@@ -76,6 +76,7 @@ from aiops_diagnostics.i18n import (
     resolve_language,
 )
 from aiops_diagnostics.metrics_store import MetricsValidationError
+from aiops_diagnostics.order_visibility import DeviceTenantError
 from aiops_diagnostics.scope_context import ScopeContext, ScopeError
 from aiops_diagnostics.shortcut_lifecycle import (
     SHORTCUT_MANAGE_SCOPE,
@@ -109,7 +110,10 @@ class RunCreateRequest(BaseModel):
 
     problem: str = Field(min_length=1, max_length=4000)
     order_no: str | None = Field(default=None, max_length=128)
-    tenant_id: str | None = Field(default=None, max_length=128)
+    # Same character constraint as HealthReportJobRequest.order_no: a tenant id
+    # is a bounded identifier, so a blank or punctuated one is an invalid
+    # request rather than a second tenant for the entry guard to compare (#331).
+    tenant_id: str | None = Field(default=None, max_length=128, pattern=r"^[A-Za-z0-9_.:-]+$")
     key_slot: str | None = Field(default=None, max_length=64)
     provider: str | None = Field(default=None, max_length=64)
     fixture_name: str | None = Field(default=None, max_length=128)
@@ -1963,11 +1967,6 @@ def create_gateway_app(
         payload: RunCreateRequest,
         device: GatewayDevice = Depends(authenticated_device),  # noqa: B008
     ) -> dict[str, Any]:
-        if device.tenant_id and payload.tenant_id and payload.tenant_id != device.tenant_id:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="requested tenant does not match the enrolled device scope",
-            )
         try:
             return context.runtime.start_run(
                 device,
@@ -1978,6 +1977,12 @@ def create_gateway_app(
                 provider=payload.provider,
                 fixture_name=payload.fixture_name,
             )
+        except DeviceTenantError as exc:
+            # The entry guard is one definition inside the runtime (#331); this
+            # layer only maps it. A request naming a tenant outside the enrolled
+            # device scope is therefore refused exactly once, with one status
+            # code and one error, instead of 403 here and 400 from the runtime.
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
