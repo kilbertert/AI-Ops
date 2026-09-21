@@ -1,5 +1,66 @@
 # 验证与验收计划
 
+## #359 取消结果入指标 + 两条核心回归守护封口（2026-09-21，本地自动化验证）
+
+**范围**：PRD #346 子票 T6（收口）。把取消结果写进指标，把取消语义的跨入口一致性钉住，
+并对 PRD 要求的两条核心回归守护逐条实测「去掉修复即失败」。**本片未完成业务验收**：
+`cancelled` 计数要真正出现在运维看到的聚合面上，还取决于 BFF 是否放行
+`/v1/agent-metrics/*` 与新状态值 `cancelled`（透传要求见交接文档）；41 公网停止链路的复跑
+步骤在 `docs/agents/assistant-cancel-handoff.md` §8，本片未跑。
+
+**取消结果入指标**：指标层的 `OUTCOME_TYPES` 自建表起就含 `cancelled`，而全代码库没有任何
+写入点——「哪些问题用户经常等不下去」因此没有答案，等待结束在一个没有任何聚合会看的作业行里。
+写入点放在 `GatewayRuntime.cancel_assistant_qa` 里终态写成功之后：那是唯一能确定一次取消
+确实发生了的时刻。只写脱敏字段（tenant / route_type / conversation_id），租户取自已认证的
+作用域（复用既有的 `record_route_metric`，不新增任何调用方输入）。**按 claim-guard 返回值
+计数**：只有赢下终态写的那次请求记一行，连点两次仍是一行；worker 随后被 claim-guard 拒绝的
+写入依旧什么都不记（#355 的既有约束不变），所以一次取消不可能被计两次。`route_type` 取自
+作业提交时的路线（`qa` / `promo`），由 `QARegistration` 携带：宣传点击被停止不能计成普通
+提问被停止，否则读宣传明细的人永远看不到它。
+
+**两条核心回归守护（各自实测去掉对应修复后会失败）**
+
+| 守护 | 所在 | 断言 | 去掉修复后的实测 |
+|---|---|---|---|
+| 取消后作业为 `cancelled` 终态、会话槽位已释放、后续提问不再撞 409 | `tests/test_assistant_api.py::test_stopping_a_question_returns_its_terminal_state_and_unlocks_the_conversation` | 取消返回 200 + `status=cancelled`/`retry_after_ms=null`、`is_generating` 转 false、同会话追问 202 而非 409、停止的那轮不留在历史 | 令 `cancel_assistant_qa` 不写终态也不中断 → `assert body["status"] == "cancelled"` 拿到 `'running'`，转红 |
+| 同上（槽位释放单独实测） | 同上 | 同上 | 保留终态写、只去掉槽位释放 → `is_generating is False` 转红，证明「不再撞 409」这一半单独有守护 |
+| 网关重启后，重启前处于 `running` 的提问不再卡在非终态 | `tests/test_assistant_api.py::test_restarted_gateway_converges_an_in_flight_question`（存储层还有 `tests/test_assistant_qa_store.py::test_running_question_is_converged_to_failed_on_restart`） | 原地重启后轮询得到 `status=failed` + `error.code=QA_INTERRUPTED_BY_RESTART`、`retry_after_ms=null`、`result is null` | 令 `recover_assistant_questions()` 直接返回 → 轮询仍是 `'running'`，两条一起转红 |
+
+**跨入口一致性**：取消语义只有一处定义（作业行的终态写）。`tests/test_assistant_qa_cancel.py::
+test_a_stopped_question_reads_the_same_from_every_surface` 用真实运行时驱动一次取消，然后逐个
+面核对同一次轮次：作业面（`status=cancelled` 且 `result is None`）、会话历史
+（`conversation_store.turns()` 无该轮）、后续上下文（`context_turns()` 亦无该轮：下一问的
+prompt 不可能拿它当依据，下一问之后历史里只剩它自己那一轮）、以及网关为这次运行留下的记录
+（一条 `outcome=cancelled` 且归属该会话的脱敏指标行——助手路径不跑证据日志，指标行就是这条
+记录）。四个面结论不一致时该测试转红。
+
+**改动了一条既有断言（在此声明）**：`tests/test_assistant_qa_cancel.py` 原有一条
+`metrics_store.list_runs(SCOPE) == []`，意图是「取消不写指标」。它按**作用域指纹**查询，而指标
+行按**租户**建（`_SAFE_TENANT`），因此无论有没有行它都通过——本片把这条查询改成
+`list_runs("T-1")`（该文件 `_context()` 的真实租户），断言改为「只有 stop 自己写的那一行
+`cancelled`」。这既是 #359 要求的新预期，也顺手把一条恒真的断言变成有效的；被取消的轮次
+依然不产生任何答案类指标，这一点由原断言的后半段（turns 为空、job 无 result）继续守着。
+
+**新增自动化检查**（均以「去掉修复即失败」核对过）：
+
+| 检查 | 文件 | 守护的行为 |
+|---|---|---|
+| `test_a_stopped_question_is_counted_as_its_own_outcome` | `tests/test_assistant_qa_cancel.py` | 取消后指标里出现一行 `outcome=cancelled`；连点两次仍一行；被拒的迟到答案不加行 |
+| `test_a_stopped_promotional_question_is_counted_as_a_promo_stop` | `tests/test_assistant_qa_cancel.py` | 宣传路线被停止记 `route_type=promo`；把 `route_type` 写成固定 `qa` 即转红 |
+| `test_a_stopped_question_reads_the_same_from_every_surface` | `tests/test_assistant_qa_cancel.py` | 作业面/会话历史/后续上下文/运行记录四处结论一致 |
+| `test_cancel_persists_the_terminal_state_then_interrupts_the_live_turn`（改） | `tests/test_assistant_qa_cancel.py` | 迟到答案被拒后，指标里只有 stop 写的那一行 |
+
+**指标写入本身也以 RED→GREEN 核对过**：先写测试，4 条相关检查（上表 4 条）在实现写入前全红
+（`assert [] == ['cancelled']`），补上写入后全绿；若把 `route_type` 写成固定的 `qa`，宣传路线
+那条单独转红。
+
+**结果**：本地全量 `uv run pytest` 1075 passed（此前 1072，新增 3 条、改动 1 条），
+`uv run ruff check` 与 `ruff format --check` 干净；其余既有断言逐条未改。
+
+**已知缺口（不在本片）**：41 公网停止链路与 `/v1/agent-metrics` 聚合面的真实验收；另两张
+异步表（`health_report_jobs` / `standard_diagnoses`）的重启恢复能力，仍是 #356 明确留下的
+范围外项。
+
 ## #358 取消契约分发 + #173 断链纠正（2026-09-21，本地自动化验证）
 
 **范围**：PRD #346 子票 T5。把助手入口的等待态契约交付给 BFF 组与前端组，并纠正「停止生成」

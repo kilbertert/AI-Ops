@@ -83,10 +83,16 @@ class QARegistration:
     ``conversation_turn`` is the generation slot this job owns. Cancelling is
     the one path that must free it without waiting for the worker to notice,
     so the stop request carries the slot's identity with it.
+
+    ``route_type`` is the route this job was submitted with (a promotional
+    shortcut run or a plain question), which is what the stop records: the
+    worker uses the same value for its own metric rows, so a stopped
+    promotional click is not counted as a stopped customer question.
     """
 
     conversation_turn: tuple[str, str, int] | None = None
     interrupt: Callable[[], None] | None = None
+    route_type: str = "qa"
 
     def register_interrupt(self, handle: Any) -> None:
         """Adopt the live turn handle's interrupt as this job's interrupt.
@@ -461,7 +467,8 @@ class GatewayRuntime:
                 conversation_turn_no,
             )
             if conversation is not None and conversation_turn_no is not None
-            else None
+            else None,
+            route_type="promo" if promo_intent else "qa",
         )
         self._qa_registrations[qa["qa_id"]] = registration
         future = self._executor.submit(
@@ -530,8 +537,12 @@ class GatewayRuntime:
         if qa is None:
             return None
         if qa["status"] in ACTIVE_DIAGNOSIS_STATUSES:
-            self.store.update_assistant_question(qa_id, status="cancelled")
+            accepted = self.store.update_assistant_question(qa_id, status="cancelled")
             registration = self._qa_registrations.pop(qa_id, None)
+            if accepted:
+                # One stop, one row, and never two: the terminal write is what
+                # decides the outcome, and only the request that wins it counts.
+                self._record_cancelled_qa_metric(context, registration)
             if registration is not None:
                 self._interrupt_registered_turn(registration)
                 self._release_conversation_turn(registration.conversation_turn)
@@ -539,6 +550,37 @@ class GatewayRuntime:
         # Already terminal: the answer (or the failure) the caller sees is the
         # job's own final state, not a cancellation that lost a race.
         return qa
+
+    def _record_cancelled_qa_metric(
+        self,
+        context: ScopeContext,
+        registration: QARegistration | None,
+    ) -> None:
+        """Record a stopped question as its own outcome (#359).
+
+        ``cancelled`` has been a valid metric outcome since the metrics table
+        was built and nothing ever wrote it, so "which questions do people give
+        up on" had no answer at all: the wait ended in a job row that no
+        aggregate looks at. The stop now leaves one redacted row behind it —
+        tenant, route, and the conversation it belongs to, which is all a metric
+        row may carry.
+
+        Written here, where the terminal row is decided, because this is the
+        only moment a stop is known to have happened: the worker's late write is
+        refused by the claim-guard and records nothing (its result never
+        landed), so a cancellation cannot be counted twice.
+        """
+        conversation_id = (
+            registration.conversation_turn[0]
+            if registration is not None and registration.conversation_turn is not None
+            else None
+        )
+        self.record_route_metric(
+            context,
+            registration.route_type if registration is not None else "qa",
+            "cancelled",
+            conversation_id=conversation_id,
+        )
 
     def _interrupt_registered_turn(self, registration: QARegistration) -> None:
         """Best-effort interrupt of the turn this job is running (fire and forget).
