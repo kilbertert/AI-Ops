@@ -1109,24 +1109,42 @@ def create_gateway_app(
                 "QA_NOT_FOUND",
                 "assistant question not found",
             )
-        return {
-            "type": "qa",
-            "language": language,
-            "qa_id": qa["qa_id"],
-            "question": qa["question"],
-            "status": qa["status"],
-            "retry_after_ms": 1000 if qa["status"] in {"queued", "running"} else None,
-            "result": qa.get("result"),
-            "error": (
-                {
-                    "code": qa.get("error_code") or "QA_FAILED",
-                    "message": qa.get("error_message") or "answer generation failed",
-                    "retryable": True,
-                }
-                if qa["status"] in {"failed", "expired"}
-                else None
-            ),
-        }
+        return _assistant_question_response(qa, language)
+
+    @app.post("/v1/assistant/questions/{qa_id}/cancel")
+    def cancel_assistant_question(
+        qa_id: str,
+        identity: tuple[ScopeContext, Any] = Depends(assistant_identity),  # noqa: B008
+        language: str = Depends(request_language),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Stop one in-flight general question (#357).
+
+        POST rather than DELETE: the job row survives as `cancelled` (audit and
+        history), and DELETE would promise the resource is gone. The response
+        carries the job's terminal state, so the caller does not have to poll
+        once more to learn the outcome — and a repeated cancel, or a cancel of
+        a job that just finished, answers that job's own current state instead
+        of an error, because the stop button is pressed under flaky networks.
+        """
+        caller, _ = identity
+        try:
+            qa = context.runtime.cancel_assistant_qa(caller, qa_id)
+        except (ValueError, RuntimeError) as exc:
+            raise StandardAPIError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "QA_UNAVAILABLE",
+                "general answer unavailable",
+                retryable=True,
+            ) from exc
+        if qa is None:
+            # Missing and out-of-scope are the same answer: cancelling must not
+            # become a way to probe which qa_ids exist.
+            raise StandardAPIError(
+                status.HTTP_404_NOT_FOUND,
+                "QA_NOT_FOUND",
+                "assistant question not found",
+            )
+        return _assistant_question_response(qa, language)
 
     @app.get("/v1/assistant/questions")
     def list_assistant_questions(
@@ -2349,6 +2367,33 @@ def _extract_order_no(text: str) -> str | None:
             continue
         return candidate
     return None
+
+
+def _assistant_question_response(qa: dict[str, Any], language: str) -> dict[str, Any]:
+    """The one public shape of an assistant-question job.
+
+    Poll and cancel return the same body on purpose: the job's state is the
+    single thing both surfaces report, so a client reads a stopped job exactly
+    as it reads a finished one.
+    """
+    return {
+        "type": "qa",
+        "language": language,
+        "qa_id": qa["qa_id"],
+        "question": qa["question"],
+        "status": qa["status"],
+        "retry_after_ms": 1000 if qa["status"] in {"queued", "running"} else None,
+        "result": qa.get("result"),
+        "error": (
+            {
+                "code": qa.get("error_code") or "QA_FAILED",
+                "message": qa.get("error_message") or "answer generation failed",
+                "retryable": True,
+            }
+            if qa["status"] in {"failed", "expired"}
+            else None
+        ),
+    }
 
 
 def _require_conversation(

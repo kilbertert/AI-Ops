@@ -129,11 +129,21 @@ class SDKCodexSession:
         *,
         provider: ProviderConfig | None = None,
         thread_id: str | None = None,
+        turn_registrar: Callable[[Any], None] | None = None,
     ) -> None:
+        """One Codex session over a run workspace.
+
+        ``turn_registrar`` (#357) is called with the live turn handle as soon
+        as each turn starts. It exists so a caller holding an interruptible
+        job can reach ``handle.interrupt()`` — the same RPC the turn timeout
+        already uses — while the turn is still running. A session that nobody
+        can interrupt passes nothing.
+        """
         self.workspace = workspace
         self.settings = settings
         self._provider = provider or settings.select_provider(None)
         self._progress_callback: Callable[[dict[str, Any]], None] | None = None
+        self._turn_registrar = turn_registrar
         provider_key = ""
         codex: Codex | None = None
         try:
@@ -184,6 +194,10 @@ class SDKCodexSession:
 
     def run(self, prompt: str, *, output_schema: dict[str, Any] | None = None) -> CodexTurnOutput:
         handle = self._thread.turn(prompt, output_schema=output_schema or agent_turn_schema())
+        if self._turn_registrar is not None:
+            # Hand the live turn to whoever may interrupt it, before the turn
+            # can block on the model for minutes.
+            self._turn_registrar(handle)
         self._record_event({"type": "codex_turn_started", "thread_id": self.thread_id, "turn_id": handle.id})
         executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="aiops-codex-turn")
         future = executor.submit(handle.run)

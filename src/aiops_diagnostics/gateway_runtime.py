@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 import time
+from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +19,7 @@ from aiops_diagnostics.answer_language import (
 from aiops_diagnostics.codex_runtime import AgentContractError, AgentRuntimeError
 from aiops_diagnostics.config import Settings, canonical_provider_base_url, validate_key_slot_name
 from aiops_diagnostics.gateway_config import GatewayServerSettings
-from aiops_diagnostics.gateway_store import GatewayDevice, GatewayStore
+from aiops_diagnostics.gateway_store import ACTIVE_DIAGNOSIS_STATUSES, GatewayDevice, GatewayStore
 from aiops_diagnostics.health_curves import build_curves
 from aiops_diagnostics.health_metrics import enrich_report
 from aiops_diagnostics.health_report import (
@@ -45,6 +48,8 @@ from aiops_diagnostics.sources import SourceError, scoped_live_sources
 
 FIXTURE_NAMES = frozenset({"ocpp_consistent.json", "ykc_amount_mismatch.json", "missing_tx_data.json"})
 
+_LOGGER = logging.getLogger("aiops.gateway_runtime")
+
 #: A blocked run whose order turned out to be outside the caller's tenant. It is
 #: NOT ``DIAGNOSIS_BLOCKED``: that code means the supplier did not honor
 #: ``output_schema``, and an operator must be able to tell the two apart. On the
@@ -63,6 +68,33 @@ DIAGNOSIS_ORDER_OUT_OF_SCOPE = "DIAGNOSIS_ORDER_OUT_OF_SCOPE"
 #: A value rather than an exception on purpose: losing the race is a legal
 #: outcome, not a failure, and the worker must exit quietly rather than raise.
 TERMINAL_WRITE_REFUSED = {"status": "refused"}
+
+
+@dataclass
+class QARegistration:
+    """What a stop request needs in order to interrupt one assistant question.
+
+    A ``Future`` is deliberately NOT what this holds: ``Future.cancel()``
+    cannot stop a thread that is already running the model turn, which is
+    exactly the case a stop request arrives in. What does stop it is the turn's
+    own ``interrupt()`` RPC (the one the turn timeout already uses), filled in
+    by the worker the moment its turn starts.
+
+    ``conversation_turn`` is the generation slot this job owns. Cancelling is
+    the one path that must free it without waiting for the worker to notice,
+    so the stop request carries the slot's identity with it.
+    """
+
+    conversation_turn: tuple[str, str, int] | None = None
+    interrupt: Callable[[], None] | None = None
+
+    def register_interrupt(self, handle: Any) -> None:
+        """Adopt the live turn handle's interrupt as this job's interrupt.
+
+        A new turn replaces the previous one (the RAG path runs several), so the
+        registration always points at the turn that is running NOW.
+        """
+        self.interrupt = handle.interrupt
 
 
 def _as_datetime(value):
@@ -117,6 +149,10 @@ class GatewayRuntime:
             thread_name_prefix="aiops-gateway-run",
         )
         self._futures: dict[str, Future[None]] = {}
+        # Interruptible assistant questions (#357): what a stop request needs in
+        # order to reach the model turn that is burning tokens. Registered when
+        # the job is submitted, dropped when it leaves the non-terminal state.
+        self._qa_registrations: dict[str, QARegistration] = {}
 
     @classmethod
     def from_settings(
@@ -415,6 +451,19 @@ class GatewayRuntime:
             question,
             internal_run_id=workspace.run_id,
         )
+        # Registered before the worker exists: a stop request that arrives a
+        # millisecond after this return must already find the job interruptible
+        # (and must know which conversation slot to free).
+        registration = QARegistration(
+            conversation_turn=(
+                conversation["conversation_id"],
+                conversation["scope_fingerprint"],
+                conversation_turn_no,
+            )
+            if conversation is not None and conversation_turn_no is not None
+            else None
+        )
+        self._qa_registrations[qa["qa_id"]] = registration
         future = self._executor.submit(
             self._execute_assistant_qa,
             qa["qa_id"],
@@ -423,19 +472,17 @@ class GatewayRuntime:
             selected_provider.name,
             selected_key_slot,
             context.effective_tenant_id or None,
-            (
-                conversation["conversation_id"],
-                conversation["scope_fingerprint"],
-                conversation_turn_no,
-            )
-            if conversation is not None and conversation_turn_no is not None
-            else None,
+            registration.conversation_turn,
             language,
             promo_target,
             promo_intent,
+            registration.register_interrupt,
         )
         self._futures[qa["qa_id"]] = future
+        # Once the future is done the job is terminal (or its worker is gone),
+        # so both registries forget it: nothing is left to interrupt.
         future.add_done_callback(lambda _: self._futures.pop(qa["qa_id"], None))
+        future.add_done_callback(lambda _: self._qa_registrations.pop(qa["qa_id"], None))
         return qa
 
     def classify_lightweight(self, question: str, *, language: str = DEFAULT_LANGUAGE) -> dict[str, Any]:
@@ -458,6 +505,73 @@ class GatewayRuntime:
         limit: int = 50,
     ) -> list[dict[str, Any]]:
         return self.store.list_assistant_questions(context.scope_fingerprint, limit=limit)
+
+    def cancel_assistant_qa(
+        self,
+        context: ScopeContext,
+        qa_id: str,
+    ) -> dict[str, Any] | None:
+        """Stop one in-flight general question (#357).
+
+        Persist first, interrupt second. Writing the terminal row is what makes
+        the cancellation real: the claim-guard is what stops the worker's late
+        answer from overwriting it, and the caller's input box is unlocked by
+        the job reaching a terminal state rather than by the model agreeing to
+        stop. Interrupting the live turn is then only a token saving — it is
+        fire-and-forget, and its failure changes nothing about the outcome.
+
+        Idempotent by construction: a job that is already terminal is returned
+        as it stands (the stop button is a network-flaky entry point, so a
+        repeat click must not read as a failure), and a job outside this
+        caller's scope is indistinguishable from a missing one — ``None``, which
+        the API layer answers with 404.
+        """
+        qa = self.store.get_assistant_question(qa_id, context.scope_fingerprint)
+        if qa is None:
+            return None
+        if qa["status"] in ACTIVE_DIAGNOSIS_STATUSES:
+            self.store.update_assistant_question(qa_id, status="cancelled")
+            registration = self._qa_registrations.pop(qa_id, None)
+            if registration is not None:
+                self._interrupt_registered_turn(registration)
+                self._release_conversation_turn(registration.conversation_turn)
+            return self.store.get_assistant_question(qa_id, context.scope_fingerprint)
+        # Already terminal: the answer (or the failure) the caller sees is the
+        # job's own final state, not a cancellation that lost a race.
+        return qa
+
+    def _interrupt_registered_turn(self, registration: QARegistration) -> None:
+        """Best-effort interrupt of the turn this job is running (fire and forget).
+
+        The terminal write already decided the outcome, so a failed interrupt is
+        logged and dropped: the worst case is a model turn that keeps burning
+        tokens until it finishes on its own, never a wrong job state. A job
+        whose turn has not started yet (queued) has nothing to interrupt — the
+        worker will find the row terminal and exit.
+        """
+        interrupt = registration.interrupt
+        if interrupt is None:
+            return
+        try:
+            interrupt()
+        except Exception as exc:  # the interrupt is not the contract
+            _LOGGER.warning("assistant question interrupt failed: %s", exc.__class__.__name__)
+
+    def _release_conversation_turn(self, conversation_turn: tuple[str, str, int] | None) -> None:
+        """Free the generation slot this job owns, without waiting for its worker.
+
+        The worker frees the same slot when it notices the refused write; doing
+        it here too is what makes the input box return immediately. The release
+        is scoped to this turn, so a newer turn that took the slot in the
+        meantime keeps it.
+        """
+        if conversation_turn is None:
+            return
+        from aiops_diagnostics.conversation_store import ConversationError
+
+        conversation_id, scope_fingerprint, turn_no = conversation_turn
+        with contextlib.suppress(ConversationError):
+            self.conversation_store.release_turn(conversation_id, scope_fingerprint, turn_no)
 
     def list_evidence(self, run_id: str) -> list[dict[str, Any]]:
         """Return redacted evidence metadata for a run (no business payloads)."""
@@ -640,6 +754,7 @@ class GatewayRuntime:
         language: str = DEFAULT_LANGUAGE,
         promo_target: str | None = None,
         promo_intent: str | None = None,
+        turn_registrar: Callable[[Any], None] | None = None,
     ) -> None:
         def _finish_turn(answer: dict[str, Any] | None, *, cancelled: bool = False) -> None:
             """Write the finished answer into the conversation turn (if any).
@@ -691,6 +806,7 @@ class GatewayRuntime:
                 language,
                 promo_target=promo_target,
                 promo_intent=promo_intent,
+                turn_registrar=turn_registrar,
             )
         if rag_result is not None:
             if rag_result is TERMINAL_WRITE_REFUSED:
@@ -720,6 +836,7 @@ class GatewayRuntime:
                 provider=provider,
                 key_slot=key_slot,
                 language=language,
+                turn_registrar=turn_registrar,
             )
         except (AgentRuntimeError, SourceError, ValueError) as exc:
             if not self.store.update_assistant_question(
@@ -889,6 +1006,7 @@ class GatewayRuntime:
         *,
         promo_target: str | None = None,
         promo_intent: str | None = None,
+        turn_registrar: Callable[[Any], None] | None = None,
     ) -> dict[str, Any] | None:
         """Run the published customer agent path (T3/#170) or fall back.
 
@@ -951,6 +1069,7 @@ class GatewayRuntime:
                 project_root=reference_root(),
                 language=language,
                 initial_prompt=promo_prompt_text,
+                turn_registrar=turn_registrar,
             )
         except KnowledgeSearchUnavailable:
             if promo_intent:

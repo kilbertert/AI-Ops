@@ -374,6 +374,44 @@ def test_cancelled_turn_never_survives_as_reply(tmp_path: Path) -> None:
     assert [item["turn_no"] for item in history] == [keep]
 
 
+def test_late_release_does_not_free_a_newer_turns_slot(tmp_path: Path) -> None:
+    """A slow worker must not unlock the generation a NEW turn just claimed.
+
+    The busy lock self-expires after 120s (a crashed worker cannot wedge the
+    conversation forever), so a worker that outlived its own lock is a legal
+    state: the user asked again, the new turn took the slot. When that worker
+    finally finishes it releases ITS turn — and must leave the new turn's slot
+    alone, otherwise the input unlocks while a generation is still running and
+    the next question collides with it.
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from aiops_diagnostics.conversation_store import ConversationStore
+
+    client, _, _ = _client(tmp_path)
+    conversation = _create_conversation(client)
+    cid = conversation["conversation_id"]
+    store = ConversationStore(Path(client.app.state.gateway.settings.database_file))
+    scope = _scope_of(client)
+
+    slow = store.begin_turn(cid, scope, kind="qa", question="慢的那一轮")
+    # The slow worker's lock self-expires (crash fallback), so the user's retry
+    # is allowed to claim the slot while that worker is still running.
+    with store._connection(write=True) as connection:  # noqa: SLF001 — test probes internals
+        connection.execute(
+            "UPDATE conversations SET generating_since = ? WHERE conversation_id = ?",
+            ((datetime.now(UTC) - timedelta(seconds=180)).isoformat(), cid),
+        )
+    fresh = store.begin_turn(cid, scope, kind="qa", question="用户重问的那一轮")
+    assert fresh == slow + 1
+
+    # The slow worker finishes late: its own turn row goes (no answer survives
+    # an interrupted generation) but the slot stays with the newer turn.
+    store.release_turn(cid, scope, slow)
+    assert [item["turn_no"] for item in store.turns(cid, scope)] == [fresh]
+    assert store.get(cid, scope)["is_generating"] is True
+
+
 def test_context_window_is_bounded(tmp_path: Path) -> None:
     """context_turns keeps at most 8 turns and the 8k-token budget."""
     from aiops_diagnostics.conversation_store import (

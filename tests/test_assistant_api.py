@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import threading
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -138,8 +140,8 @@ def _client(tmp_path: Path, *, allowed_orders: set[str] | None = None) -> tuple[
     return TestClient(app), runtime
 
 
-def _headers() -> dict[str, str]:
-    return {"Authorization": "Bearer service", "X-Business-Entry": "consumer"}
+def _headers(token: str = "service") -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}", "X-Business-Entry": "consumer"}
 
 
 def test_assistant_faq_shortcircuit_returns_sync_answer(tmp_path: Path) -> None:
@@ -929,3 +931,253 @@ def test_restarted_gateway_converges_an_in_flight_question(tmp_path: Path) -> No
     assert body["retry_after_ms"] is None
     assert body["result"] is None
     assert body["error"]["code"] == ASSISTANT_QUESTION_RESTART_ERROR_CODE
+
+
+# ----------------------------------------------------------------------
+# Stopping a question (PRD #346 / #357)
+# ----------------------------------------------------------------------
+
+#: A plain knowledge question: reaches the generic QA route (202) without
+#: matching the FAQ short-circuit, naming an order, or reading as a dispute.
+STOP_QUESTION = "电动车的电池保养怎么做"
+FOLLOW_UP_QUESTION = "动力电池的质保政策一般是多少年"
+
+
+class _Turn:
+    """Stands in for the SDK turn handle the worker runs on.
+
+    ``interrupt()`` is the RPC the turn timeout already uses; recording the
+    call is what proves the stop request reached the turn that was burning
+    tokens.
+    """
+
+    def __init__(self) -> None:
+        self.interrupted = False
+
+    def interrupt(self) -> None:
+        self.interrupted = True
+
+
+class _TwoTenantCaller(_Caller):
+    """The same resolver with a second tenant available by token name.
+
+    A stop request from another tenant must read exactly like a job that does
+    not exist — otherwise cancelling becomes a way to probe which qa_ids are
+    real.
+    """
+
+    def resolve(self, token: str, *, required_scope: str, third_session: str | None = None) -> ScopeContext:
+        del third_session
+        subject = (
+            SubjectRecord(b_user_id="c:C-2", c_user_id="C-2", tenant_id="T-2")
+            if token == "other-tenant"
+            else SubjectRecord(b_user_id="c:C-1", c_user_id="C-1", tenant_id="T-1")
+        )
+        if token == "narrow" and required_scope not in {"aiops:faq:read"}:
+            raise CallerAuthError("insufficient scope", code=CALLER_AUTH_FORBIDDEN)
+        return ScopeContext.build(
+            caller=subject,
+            subject=subject,
+            delegated=False,
+            effective_tenant_id=subject.tenant_id,
+            data_scope=DataScope(type="self"),
+            roles=frozenset({"ROLE_AGENT_ADMIN"}),
+            permissions=frozenset({required_scope}),
+        )
+
+
+def _real_runtime_client(
+    tmp_path: Path,
+    monkeypatch,
+    *,
+    gates: dict | None = None,
+    turn: _Turn | None = None,
+    caller_resolver=None,
+):
+    """A TestClient over the REAL runtime.
+
+    Stopping a question is observable only where it happens: the terminal
+    write, the interrupt of the live model turn, and the conversation slot that
+    is freed. A stub runtime would prove the stub, so these tests run the real
+    worker — parked inside the (patched) model call when they need to catch it
+    mid-answer, which is exactly the state a stop request arrives in.
+    """
+    from aiops_diagnostics import gateway_runtime
+    from aiops_diagnostics.config import Settings
+    from aiops_diagnostics.gateway_runtime import GatewayRuntime
+
+    settings = GatewayServerSettings(
+        data_home=tmp_path,
+        database_file=tmp_path / "gateway.db",
+        server_config_file=tmp_path / "production.env",
+    )
+    settings.server_config_file.write_text("# test\n", encoding="utf-8")
+    os.chmod(settings.server_config_file, 0o600)  # the config is a private file
+    # The classifier is a model call of its own: routing is not what a stop test
+    # is about, and its result must not depend on whether a provider key happens
+    # to be configured in the environment.
+    monkeypatch.setattr(GatewayRuntime, "classify_lightweight", lambda *a, **k: None)
+    if gates is not None:
+
+        def _answer(_question, _settings, *, turn_registrar=None, **_kwargs):
+            gates["at_model_call"].set()
+            gates["before_turn"].wait(timeout=30)
+            if turn_registrar is not None:
+                turn_registrar(turn)
+            gates["turn_started"].set()
+            gates["release"].wait(timeout=30)
+            return {"text": "这是一个完整的答案", "reminder": False}
+
+        monkeypatch.setattr(gateway_runtime, "run_zero_order_answer", _answer)
+
+    runtime = GatewayRuntime(GatewayStore(settings.database_file), settings, Settings())
+    app = create_gateway_app(
+        settings=settings,
+        store=GatewayStore(settings.database_file),
+        runtime=runtime,
+        caller_resolver=caller_resolver or _Caller(),
+        order_authorizer=_Authorizer({"2096164064667852801"}),
+        platform_resolver=PlatformIdentityResolver(_Directory()),
+        faq_catalog=FAQCatalog.bundled(),
+    )
+    return TestClient(app), runtime
+
+
+def _gates() -> dict:
+    return {
+        "at_model_call": threading.Event(),
+        "before_turn": threading.Event(),
+        "turn_started": threading.Event(),
+        "release": threading.Event(),
+    }
+
+
+def test_stopping_a_question_returns_its_terminal_state_and_unlocks_the_conversation(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The stop returns the job's own terminal state — no second poll needed —
+    frees the generation slot at once, and interrupts the running turn."""
+    turn = _Turn()
+    gates = _gates()
+    gates["before_turn"].set()  # let the turn start as soon as the model runs
+    client, runtime = _real_runtime_client(tmp_path, monkeypatch, gates=gates, turn=turn)
+    try:
+        conversation = client.post(
+            "/v1/conversations",
+            json={"agent_version_key": "agt_abcdef1234567890#v1"},
+            headers=_headers(),
+        ).json()
+        cid = conversation["conversation_id"]
+
+        asked = client.post(
+            "/v1/assistant/questions",
+            json={"question": STOP_QUESTION, "conversation_id": cid},
+            headers=_headers(),
+        )
+        assert asked.status_code == 202
+        qa_id = asked.json()["qa_id"]
+        assert gates["turn_started"].wait(10), "the worker never reached the model turn"
+
+        stopped = client.post(f"/v1/assistant/questions/{qa_id}/cancel", headers=_headers())
+
+        assert stopped.status_code == 200
+        body = stopped.json()
+        assert body["type"] == "qa"
+        assert body["qa_id"] == qa_id
+        assert body["status"] == "cancelled"
+        assert body["retry_after_ms"] is None
+        assert body["result"] is None
+        assert body["error"] is None
+        assert turn.interrupted, "the stop request never reached the live turn"
+
+        # The generation slot is free the moment the stop lands: the next
+        # question in the same conversation is accepted, not 409.
+        detail = client.get(f"/v1/conversations/{cid}", headers=_headers())
+        assert detail.json()["is_generating"] is False
+        again = client.post(
+            "/v1/assistant/questions",
+            json={"question": FOLLOW_UP_QUESTION, "conversation_id": cid},
+            headers=_headers(),
+        )
+        assert again.status_code == 202, again.text
+
+        # Only the follow-up survives as a turn: the stopped question leaves no
+        # row, so it never becomes context for a later answer.
+        gates["release"].set()
+        assert [item["question"] for item in _answered_turns(client, cid)] == [FOLLOW_UP_QUESTION]
+    finally:
+        gates["release"].set()
+        runtime.shutdown()
+        client.close()
+
+
+def _answered_turns(client: TestClient, conversation_id: str) -> list[dict]:
+    """Wait for the follow-up's worker to write its answer, then read history."""
+    for _ in range(250):
+        turns = client.get(f"/v1/conversations/{conversation_id}", headers=_headers()).json()["turns"]
+        if turns and turns[-1]["answer"] is not None:
+            return turns
+        threading.Event().wait(0.02)
+    raise AssertionError("the follow-up answer never reached the conversation")
+
+
+def test_stopping_a_question_twice_and_after_it_finished_is_not_an_error(tmp_path: Path, monkeypatch) -> None:
+    """A double tap, and a tap that lands just after the answer did, both answer
+    with the job's own state — the stop button is not allowed to invent
+    failures the user then has to explain."""
+    client, runtime = _real_runtime_client(tmp_path, monkeypatch)
+    try:
+        scope = _Caller().resolve("service", required_scope=STANDARD_DIAGNOSIS_SCOPE).scope_fingerprint
+        in_flight = runtime.store.create_assistant_question(scope, STOP_QUESTION)
+        finished = runtime.store.create_assistant_question(scope, STOP_QUESTION)
+        runtime.store.update_assistant_question(
+            finished["qa_id"], status="completed", result={"text": "答案"}
+        )
+
+        first = client.post(f"/v1/assistant/questions/{in_flight['qa_id']}/cancel", headers=_headers())
+        assert first.status_code == 200
+        assert first.json()["status"] == "cancelled"
+
+        # Second tap on the same job: still that job's state, not an error.
+        second = client.post(f"/v1/assistant/questions/{in_flight['qa_id']}/cancel", headers=_headers())
+        assert second.status_code == 200
+        assert second.json()["status"] == "cancelled"
+
+        # A job that completed while the user was reaching for the button keeps
+        # its answer: the stop is a no-op, never a rewrite of the result.
+        late = client.post(f"/v1/assistant/questions/{finished['qa_id']}/cancel", headers=_headers())
+        assert late.status_code == 200
+        assert late.json()["status"] == "completed"
+        assert late.json()["result"] == {"text": "答案"}
+    finally:
+        runtime.shutdown()
+        client.close()
+
+
+def test_stopping_an_unknown_or_foreign_question_is_404(tmp_path: Path, monkeypatch) -> None:
+    """Missing and out-of-scope are the same answer, and neither stops the job:
+    cancelling must not become a way to probe which qa_ids are real."""
+    client, runtime = _real_runtime_client(tmp_path, monkeypatch, caller_resolver=_TwoTenantCaller())
+    try:
+        scope = (
+            _TwoTenantCaller().resolve("service", required_scope=STANDARD_DIAGNOSIS_SCOPE).scope_fingerprint
+        )
+        qa = runtime.store.create_assistant_question(scope, STOP_QUESTION)
+
+        missing = client.post(
+            "/v1/assistant/questions/qa_nonexistent000000000000000000000001/cancel",
+            headers=_headers(),
+        )
+        assert missing.status_code == 404
+        assert missing.json()["error"]["code"] == "QA_NOT_FOUND"
+
+        foreign = client.post(
+            f"/v1/assistant/questions/{qa['qa_id']}/cancel", headers=_headers("other-tenant")
+        )
+        # Refused by the identity layer before any job lookup, exactly like
+        # every other cross-tenant read: the caller learns nothing either way.
+        assert foreign.status_code in (403, 404, 503)
+        assert runtime.store.get_assistant_question(qa["qa_id"], scope)["status"] == "queued"
+    finally:
+        runtime.shutdown()
+        client.close()
