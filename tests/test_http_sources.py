@@ -423,3 +423,33 @@ def _fixture_tx_serial(order: dict[str, Any]) -> str | None:
     if protocol.startswith("OCPP"):
         return order.get("transaction_id") or (order.get("tx_data") or {}).get("txSerialNo")
     return order.get("order_no")
+
+
+@pytest.mark.parametrize("body_key", ["detail", "message"])
+def test_http_sources_does_not_leak_a_foreign_error_key_into_the_message(
+    monkeypatch: pytest.MonkeyPatch, body_key: str
+) -> None:
+    """A 401 body carrying only ``detail``/``message`` must not enter the message.
+
+    This client reads ``msg`` and nothing else, so the skeleton must be told that
+    with ``detail_keys=("msg",)``. The default key set is wider, and with it a
+    401 body like ``{"detail": "internal-xyz"}`` would surface as
+    "Diag API 令牌无效或过期: internal-xyz" instead of the client's own wording.
+
+    Nothing else pinned this: the neighbouring tests assert with a substring
+    match, so a leaked key slipped past them.
+    """
+    body = json.dumps({body_key: "internal-xyz"}).encode("utf-8")
+
+    def _unauthorized(request: Any, timeout: int | None = None) -> Any:
+        raise urllib.error.HTTPError(
+            request.full_url, 401, "Unauthorized", http.client.HTTPMessage(), io.BytesIO(body)
+        )
+
+    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", _unauthorized)
+
+    with pytest.raises(SourceError) as excinfo:
+        HttpSources(_http_settings()).get_orders("ORDER-1")
+
+    assert "internal-xyz" not in str(excinfo.value)
+    assert str(excinfo.value) == "Diag API 令牌无效或过期"
