@@ -29,6 +29,7 @@ from aiops_diagnostics.bounded_http import (
     ErrorMapping,
     HttpFailure,
     RequestSpec,
+    RetryPolicy,
     bearer_auth_header,
     join_url,
     json_body,
@@ -37,6 +38,7 @@ from aiops_diagnostics.bounded_http import (
     quote_segment,
     read_body,
     request_json,
+    retry_delay,
     tenant_id_header,
 )
 from aiops_diagnostics.redaction import redact_text
@@ -45,6 +47,21 @@ KNOWLEDGE_SEARCH_TOOL = "knowledge_search"
 ALLOWED_IMAGE_TYPES = frozenset({"image/png", "image/jpeg", "image/webp"})
 ALLOWED_VIDEO_TYPES = frozenset({"video/mp4", "video/webm"})
 ALLOWED_MEDIA_TYPES = ALLOWED_IMAGE_TYPES | ALLOWED_VIDEO_TYPES
+
+#: The declared retry policy for a video media fetch. RAGFlow can briefly report
+#: an existing video document as code=102 while its document index settles.
+#: These numbers are the historical hand-rolled ones (``0.25 * 2**attempt``,
+#: five naps, no jitter) expressed as a policy, so the behaviour is unchanged
+#: while the backoff implementation is the skeleton's single one. It is
+#: deliberately *not* the skeleton's default: a jittered 1s base would make the
+#: video failure path wait roughly four times longer for no benefit, because
+#: this retry waits on a settling index rather than on a shared upstream.
+VIDEO_MEDIA_RETRY = RetryPolicy(
+    max_retries=5,
+    base_delay_seconds=0.25,
+    max_delay_seconds=4.0,
+    jitter_seconds=0.0,
+)
 
 
 class RetrievalStatus(StrEnum):
@@ -677,16 +694,25 @@ class KbServiceClient:
 
         # RAGFlow can briefly report an existing video document as code=102
         # while its document index settles. Retry only that video-not-found
-        # signal with bounded exponential backoff; real missing media still
-        # ends as 404 after the budget is exhausted.
-        attempts = 6 if grant.kind == "video" else 1
+        # signal; real missing media still ends as 404 after the budget is
+        # exhausted.
+        #
+        # The backoff is declared rather than hand-rolled: this used to be a
+        # second, divergent implementation (``0.25 * 2**attempt``, no jitter).
+        # The numbers are preserved exactly -- base 0.25s, five naps
+        # (0.25/0.5/1/2/4), no jitter -- so the production behaviour of the
+        # video failure path is unchanged. Only the implementation is now the
+        # skeleton's single one. The cap is inert here (the largest delay is
+        # 4s, well under it) but declared so the policy is self-describing.
+        policy = VIDEO_MEDIA_RETRY
+        attempts = policy.attempts if grant.kind == "video" else 1
         for attempt in range(attempts):
             try:
                 return fetch_once()
             except MediaNotFound:
                 if attempt + 1 == attempts:
                     raise
-                time.sleep(0.25 * (2**attempt))
+                time.sleep(retry_delay(attempt, policy=policy))
         raise AssertionError("media fetch retry loop did not return")
 
     def _error_mapping(self) -> ErrorMapping:

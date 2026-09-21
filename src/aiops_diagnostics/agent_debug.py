@@ -16,10 +16,7 @@ Two pieces share this module:
 
 from __future__ import annotations
 
-import json
-import urllib.error
 import urllib.parse
-import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -27,6 +24,15 @@ from typing import Any
 from aiops_diagnostics.agent_lifecycle import (
     AgentPublishError,
     KnowledgeBindingResolver,
+)
+from aiops_diagnostics.bounded_http import (
+    ErrorMapping,
+    HttpFailure,
+    RequestSpec,
+    join_url,
+    parse_data_key_envelope,
+    request_json,
+    tenant_id_header,
 )
 from aiops_diagnostics.config import AgentSettings, ProviderConfig
 from aiops_diagnostics.i18n import DEFAULT_LANGUAGE
@@ -94,30 +100,42 @@ class KbServiceKnowledgeClient:
         return self._get(path, query=f"page=1&page_size={page_size}")
 
     def _get(self, path: str, *, query: str = "") -> dict[str, Any]:
-        url = f"{self.base_url}{path}"
+        # kb-service turns RAGFlow failures (missing base, cross-tenant access,
+        # invalid id) into 502 upstream_error responses; every failure collapses
+        # onto one message here, so the mapping does the same.
+        def _unavailable(_failure: HttpFailure) -> Exception:
+            return KnowledgeSearchUnavailable("kb-service is unavailable")
+
+        def _http_error(failure: HttpFailure) -> Exception:
+            return KnowledgeSearchUnavailable(f"kb-service returned HTTP {failure.status}")
+
+        # A non-200 that still decoded, and a parse failure, keep their own
+        # wording: the skeleton separates those from transport faults, which is
+        # exactly the distinction this client already drew by hand.
+        url = join_url(self.base_url, path)
         if query:
             url = f"{url}?{query}"
-        request = urllib.request.Request(url, headers={"tenant-id": self.tenant_id}, method="GET")
-        try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                body = response.read().decode("utf-8")
-                status_code = response.status
-        except urllib.error.HTTPError as exc:
-            # kb-service turns RAGFlow failures (missing base, cross-tenant
-            # access, invalid id) into 502 upstream_error responses.
-            raise KnowledgeSearchUnavailable(f"kb-service returned HTTP {exc.code}") from exc
-        except (urllib.error.URLError, TimeoutError, OSError, ValueError, UnicodeDecodeError) as exc:
-            raise KnowledgeSearchUnavailable("kb-service is unavailable") from exc
-        try:
-            payload = json.loads(body)
-        except (ValueError, TypeError) as exc:
-            raise KnowledgeSearchUnavailable("kb-service returned an invalid response") from exc
-        if status_code != 200 or not isinstance(payload, dict):
-            raise KnowledgeSearchUnavailable(f"kb-service returned HTTP {status_code}")
-        data = payload.get("data", payload)
-        if not isinstance(data, dict):
+        payload = request_json(
+            RequestSpec(
+                url=url,
+                method="GET",
+                headers=tenant_id_header(self.tenant_id),
+                timeout=self.timeout,
+            ),
+            mapping=ErrorMapping(
+                auth_rejected=_http_error,
+                http_error=_http_error,
+                unavailable=_unavailable,
+                invalid_body=lambda _f: KnowledgeSearchUnavailable("kb-service returned an invalid response"),
+                invalid_envelope=lambda _f: KnowledgeSearchUnavailable(
+                    "kb-service returned an invalid response"
+                ),
+            ),
+            envelope=parse_data_key_envelope,
+        )
+        if not isinstance(payload, dict):
             raise KnowledgeSearchUnavailable("kb-service returned an invalid response")
-        return data
+        return payload
 
 
 class KbBindingResolver(KnowledgeBindingResolver):

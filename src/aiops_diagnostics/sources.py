@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import contextlib
 import copy
 import json
@@ -8,8 +7,6 @@ import re
 import socket
 import subprocess
 import time
-import urllib.error
-import urllib.request
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -22,9 +19,11 @@ from pymysql.cursors import DictCursor
 
 from aiops_diagnostics.bounded_http import (
     JSON_CONTENT_TYPE,
+    TEXT_PLAIN_CONTENT_TYPE,
     ErrorMapping,
     HttpFailure,
     RequestSpec,
+    basic_auth_header,
     internal_token_headers,
     join_url,
     parse_raw_envelope,
@@ -522,18 +521,28 @@ class TDengineSource:
         cfg = self.settings.tdengine
         if not cfg.user or not cfg.password:
             raise SourceError("TDengine 只读账号未配置")
-        endpoint = f"{cfg.url.rstrip('/')}/rest/sql/{self.database}"
-        request = urllib.request.Request(endpoint, data=sql.encode("utf-8"), method="POST")
-        token = base64.b64encode(f"{cfg.user}:{cfg.password}".encode()).decode()
-        request.add_header("Authorization", f"Basic {token}")
-        request.add_header("Content-Type", "text/plain; charset=utf-8")
-        try:
-            with urllib.request.urlopen(
-                request, timeout=self.settings.safety.query_timeout_seconds
-            ) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-            raise SourceError(f"TDengine 查询失败: {exc.__class__.__name__}") from exc
+        payload = request_json(
+            RequestSpec(
+                url=join_url(cfg.url, f"/rest/sql/{self.database}"),
+                method="POST",
+                headers={
+                    "Authorization": basic_auth_header(cfg.user, cfg.password),
+                    "Content-Type": TEXT_PLAIN_CONTENT_TYPE,
+                },
+                body=sql.encode("utf-8"),
+                timeout=self.settings.safety.query_timeout_seconds,
+            ),
+            mapping=ErrorMapping(
+                auth_rejected=lambda f: SourceError(f"TDengine 查询失败: {f.detail}"),
+                http_error=lambda f: SourceError(f"TDengine 查询失败: HTTP {f.status}"),
+                unavailable=lambda f: SourceError(f"TDengine 查询失败: {f.detail}"),
+                invalid_body=lambda f: SourceError(f"TDengine 查询失败: {f.detail}"),
+                invalid_envelope=lambda f: SourceError(f"TDengine 查询失败: {f.detail}"),
+            ),
+            envelope=parse_raw_envelope,
+        )
+        if not isinstance(payload, dict):
+            raise SourceError("TDengine 查询失败: invalid response")
         if payload.get("code") not in (None, 0):
             raise SourceError(f"TDengine 拒绝查询: {payload.get('desc', 'unknown error')}")
         columns = [item[0] if isinstance(item, list) else item for item in payload.get("column_meta", [])]
