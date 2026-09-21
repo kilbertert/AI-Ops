@@ -17,13 +17,28 @@ import secrets
 import time
 import urllib.error
 import urllib.parse
-import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Any, Protocol
 
+from aiops_diagnostics.bounded_http import (
+    JSON_CONTENT_TYPE,
+    TRANSPORT_FAILURES,
+    ErrorMapping,
+    HttpFailure,
+    RequestSpec,
+    bearer_auth_header,
+    join_url,
+    json_body,
+    open_response,
+    parse_data_key_envelope,
+    quote_segment,
+    read_body,
+    request_json,
+    tenant_id_header,
+)
 from aiops_diagnostics.redaction import redact_text
 
 KNOWLEDGE_SEARCH_TOOL = "knowledge_search"
@@ -577,26 +592,23 @@ class KbServiceClient:
             return []
         merged: list[dict[str, Any]] = []
         for kb_id in knowledge_base_ids:
-            path_id = urllib.parse.quote(kb_id, safe="")
-            url = f"{self.base_url}/kb/knowledge-bases/{path_id}/search"
-            headers = {"Content-Type": "application/json", "tenant-id": self.tenant_id}
+            url = join_url(self.base_url, f"/kb/knowledge-bases/{quote_segment(kb_id)}/search")
+            headers = {"Content-Type": JSON_CONTENT_TYPE, **tenant_id_header(self.tenant_id)}
             if self.service_token:
-                headers["Authorization"] = f"Bearer {self.service_token}"
-            request = urllib.request.Request(
-                url,
-                data=json.dumps({"question": question, "top_k": top_k}, ensure_ascii=False).encode("utf-8"),
-                headers=headers,
-                method="POST",
+                headers["Authorization"] = bearer_auth_header(self.service_token)
+            payload = request_json(
+                RequestSpec(
+                    url=url,
+                    method="POST",
+                    headers=headers,
+                    body=json_body({"question": question, "top_k": top_k}),
+                    timeout=self.timeout,
+                ),
+                mapping=self._error_mapping(),
+                envelope=parse_data_key_envelope,
             )
-            try:
-                with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                    payload = json.loads(response.read().decode("utf-8"))
-            except (urllib.error.URLError, TimeoutError, OSError, ValueError, UnicodeDecodeError) as exc:
-                raise KnowledgeSearchUnavailable("kb-service search unavailable") from exc
             if not isinstance(payload, (dict, list)):
                 raise KnowledgeSearchUnavailable("kb-service returned an invalid response")
-            if isinstance(payload, dict):
-                payload = payload.get("data", payload)
             chunks = payload.get("chunks", []) if isinstance(payload, dict) else payload
             if not isinstance(chunks, list):
                 raise KnowledgeSearchUnavailable("kb-service returned invalid chunks")
@@ -621,28 +633,37 @@ class KbServiceClient:
         bytes instead of buffering the whole object per request.
         """
         if grant.kind == "image":
-            path = f"/kb/documents/images/{urllib.parse.quote(grant.backend_id, safe='')}"
+            path = f"/kb/documents/images/{quote_segment(grant.backend_id)}"
         else:
             path = (
-                f"/kb/knowledge-bases/{urllib.parse.quote(grant.knowledge_base_id, safe='')}"
-                f"/documents/{urllib.parse.quote(grant.document_id, safe='')}/download"
+                f"/kb/knowledge-bases/{quote_segment(grant.knowledge_base_id)}"
+                f"/documents/{quote_segment(grant.document_id)}/download"
             )
-        url = f"{self.base_url}{path}"
-        headers = {"tenant-id": self.tenant_id}
+        headers = tenant_id_header(self.tenant_id)
         if range_header:
             # Single-range only; parse_byte_range rejects the multi-range form
             # before we reach here, so replaying the header upstream is safe.
             headers["Range"] = range_header
         if self.service_token:
-            headers["Authorization"] = f"Bearer {self.service_token}"
-        request = urllib.request.Request(url, headers=headers, method="GET")
+            headers["Authorization"] = bearer_auth_header(self.service_token)
+        spec = RequestSpec(
+            url=join_url(self.base_url, path),
+            method="GET",
+            headers=headers,
+            timeout=self.timeout,
+        )
 
+        # Media is raw bytes, not JSON: this site drives the skeleton's
+        # open_response/read_body primitives directly and keeps its own status
+        # semantics (404 is a missing blob, not an auth/invalid-body case).
+        # The capture set is the skeleton's shared one plus ValueError, which
+        # the previous hand-rolled tuple also listed.
         def fetch_once() -> bytes:
             try:
-                with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                with open_response(spec) as response:
                     if response.status == 404:
                         raise MediaNotFound(grant.backend_id)
-                    body = response.read()
+                    body = read_body(response)
                     _raise_for_media_error_body(body)
                     return body
             except MediaNotFound:
@@ -651,7 +672,7 @@ class KbServiceClient:
                 if exc.code == 404:
                     raise MediaNotFound(grant.backend_id) from exc
                 raise KnowledgeSearchUnavailable("kb-service media fetch failed") from exc
-            except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            except TRANSPORT_FAILURES + (ValueError,) as exc:
                 raise KnowledgeSearchUnavailable("kb-service media fetch unavailable") from exc
 
         # RAGFlow can briefly report an existing video document as code=102
@@ -667,6 +688,35 @@ class KbServiceClient:
                     raise
                 time.sleep(0.25 * (2**attempt))
         raise AssertionError("media fetch retry loop did not return")
+
+    def _error_mapping(self) -> ErrorMapping:
+        """Both kb-service sites collapse every failure onto one message.
+
+        The original client caught one flat exception tuple and raised
+        ``KnowledgeSearchUnavailable`` for all of it; the envelope-level
+        ``invalid response`` case is the exception, which is why
+        ``invalid_envelope`` reads differently from the rest.
+        """
+
+        def _unavailable(_failure: HttpFailure) -> Exception:
+            return KnowledgeSearchUnavailable("kb-service search unavailable")
+
+        def _invalid_body(_failure: HttpFailure) -> Exception:
+            # A body that is not valid UTF-8/JSON was caught by the original
+            # tuple (ValueError/UnicodeDecodeError) and reported as the same
+            # "search unavailable"; keep that text on this path.
+            return KnowledgeSearchUnavailable("kb-service search unavailable")
+
+        def _invalid_envelope(_failure: HttpFailure) -> Exception:
+            return KnowledgeSearchUnavailable("kb-service returned an invalid response")
+
+        return ErrorMapping(
+            auth_rejected=_unavailable,
+            http_error=_unavailable,
+            unavailable=_unavailable,
+            invalid_body=_invalid_body,
+            invalid_envelope=_invalid_envelope,
+        )
 
 
 def normalize_search_response(
