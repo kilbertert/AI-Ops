@@ -286,6 +286,16 @@ queued | running | completed | inconclusive | failed | expired
 
 `completed` 或 `inconclusive` 时 `result` 才可能有值。诊断结果中的证据 ID、内部 run、provider、workspace、SQL、原始报文和凭据不会进入标准 API 响应。
 
+终态 `failed` 时 `error` 非空，其 `code` 区分失败根因：
+
+| code | 含义 |
+|---|---|
+| `DIAGNOSIS_ORDER_OUT_OF_SCOPE` | 订单不在当前授权租户内（越权）。创建时的越权订单已由 `404 ORDER_NOT_FOUND` 拒绝；此码是轮询到终态后出现的补充信号，用于把授权问题与供应商问题分开，重试不会改变结论 |
+| `DIAGNOSIS_BLOCKED` | 模型未按结构化输出 schema 产出结论（供应商能力或配额受限） |
+| `DIAGNOSIS_FAILED` | 其余运行失败 |
+
+`error.message` 只说明根因，不含租户标识、SQL、原始报文或内部 run 信息。
+
 ### 5.3 历史诊断
 
 ```http

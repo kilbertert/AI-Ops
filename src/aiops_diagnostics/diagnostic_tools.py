@@ -11,11 +11,13 @@ from aiops_diagnostics.engine import DiagnosticEngine, _order_window
 from aiops_diagnostics.journal import EvidenceJournal, JournalEntry
 from aiops_diagnostics.models import DiagnosticRequest
 from aiops_diagnostics.order_visibility import (
+    TENANT_SCOPE_SOURCE,
     TenantVisibility,
     VisibilityProfile,
     normalize_tenant,
     visible_orders,
 )
+from aiops_diagnostics.query_scope import QueryScope
 from aiops_diagnostics.sources import DiagnosticSources, SourceError, TDengineSource
 
 _LOGGER = logging.getLogger("aiops.diagnostic_tools")
@@ -102,6 +104,45 @@ def preflight_environment(
     return tuple(notes)
 
 
+def _tenant_visibility(scope: QueryScope | None, allowed_tenants: set[str] | None) -> TenantVisibility:
+    """Render the run's range object into the shared rule's input.
+
+    Two named profiles, not one implicit default. A resolved ``QueryScope`` is
+    the CALLER profile: the tenant is known up front, so there is nothing to
+    discover. A device registration is the DEVICE profile, where ``allowed=None``
+    is a *valid* unbound registration — the tenant is discovered from the order
+    rows and nothing is blocked.
+
+    A run carries one range object, never both. Passing both is how the standard
+    API face used to judge the same tenant twice — once in SQL, once here over
+    the rows that SQL had already returned — so it fails fast instead of letting
+    one of the two silently win.
+
+    The authorized set must be normalized before it enters ``allowed``: the rule
+    normalizes the row tenant before comparing, so two different normalizations
+    would read a padded identifier as out of scope. An entry that cannot be
+    normalized is not a usable identity and is dropped — the set may then be
+    empty, meaning "nothing is visible" — rather than matched as a blank. A
+    scope whose tenant cannot be normalized renders the same empty set, which is
+    what the SQL push-down renders too (``1=0``): the two renderings of one rule
+    cannot disagree about it.
+    """
+    if scope is not None and allowed_tenants is not None:
+        raise ValueError("一次运行只携带一个范围对象：要么传 scope，要么传 allowed_tenants")
+    if scope is not None:
+        tenant = normalize_tenant(scope.tenant_id)
+        return TenantVisibility(
+            profile=VisibilityProfile.CALLER,
+            allowed=frozenset({tenant}) if tenant else frozenset(),
+        )
+    if allowed_tenants is None:
+        return TenantVisibility(profile=VisibilityProfile.DEVICE, allowed=None)
+    return TenantVisibility(
+        profile=VisibilityProfile.DEVICE,
+        allowed=frozenset(tenant for tenant in map(normalize_tenant, allowed_tenants) if tenant),
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class ToolOutcome:
     tool: ToolName
@@ -132,6 +173,7 @@ class DiagnosticToolExecutor:
         journal: EvidenceJournal,
         *,
         safety: Any,
+        scope: QueryScope | None = None,
         allowed_tenants: set[str] | None = None,
     ) -> None:
         self.sources = sources
@@ -139,33 +181,15 @@ class DiagnosticToolExecutor:
         self.manifest = manifest
         self.journal = journal
         self.safety = safety
-        self.allowed_tenants = allowed_tenants
         # Tenant learned from order_snapshot discovery; falls back to the
         # request's tenant until the order is located.
         self.effective_tenant: str | None = request.tenant_id
+        # The run's tenant visibility, rendered once from the one range object
+        # the run was given (see ``_tenant_visibility``).
+        self._visibility = _tenant_visibility(scope, allowed_tenants)
 
     def _tenant(self) -> str | None:
         return self.effective_tenant or self.request.tenant_id
-
-    def _tenant_visibility(self) -> TenantVisibility:
-        """Express the device's authorized tenants as shared-rule input (device profile).
-
-        ``allowed=None`` is a valid unbound registration (workspace level): the
-        tenant is discovered from the order rows and nothing is blocked. That is
-        the shared rule's DEVICE profile verbatim, which is why the tool layer no
-        longer decides on its own whether to block. The authorized set must be
-        normalized before it enters ``allowed``: the rule normalizes the row
-        tenant before comparing, so two different normalizations would read a
-        padded identifier as out of scope. An entry that cannot be normalized is
-        not a usable identity and is dropped — the set may then be empty, meaning
-        "nothing is visible" — rather than matched as a blank.
-        """
-        if self.allowed_tenants is None:
-            return TenantVisibility(profile=VisibilityProfile.DEVICE, allowed=None)
-        return TenantVisibility(
-            profile=VisibilityProfile.DEVICE,
-            allowed=frozenset(tenant for tenant in map(normalize_tenant, self.allowed_tenants) if tenant),
-        )
 
     def execute_many(self, requests: list[ToolRequest]) -> list[ToolOutcome]:
         return [self.execute(item.tool) for item in requests]
@@ -212,17 +236,20 @@ class DiagnosticToolExecutor:
         # from the order row, not pre-bound. This lets an engineer diagnose an
         # order without knowing its tenant. The device path reads its orders
         # over /diag/* HTTP, so there is no SQL to push the scope down into and
-        # this is the only place the rule is enforced on that path — which is
-        # why it is enforced by the shared definition and recorded as-is, not
-        # re-implemented here.
+        # this is the only place the rule is enforced on that path; on the caller
+        # path the scoped source has already pushed it down, and the same rule
+        # runs again over what came back. Either way it is enforced by the shared
+        # definition and recorded as-is, not re-implemented here — and the record
+        # is the one coded result every surface reads (see
+        # ``gateway_runtime._blocked_diagnosis_error``).
         rows = self.sources.get_orders(self.request.order_no, None)
-        result = visible_orders(rows, self._tenant_visibility())
+        result = visible_orders(rows, self._visibility)
         if result.blocked_tenants:
             # All-or-nothing: one invisible row blocks the whole snapshot, and
             # the discovered tenants are reported instead of silently dropped.
             return self.journal.record(
                 tool=ToolName.ORDER_SNAPSHOT,
-                source="harness:tenant_scope",
+                source=TENANT_SCOPE_SOURCE,
                 status="blocked",
                 request=self._identity_request(),
                 payload={"orders": [], "discovered_tenant_ids": list(result.blocked_tenants)},

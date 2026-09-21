@@ -18,6 +18,7 @@ from aiops_diagnostics.order_visibility import (
     visible_orders,
 )
 from aiops_diagnostics.parsing import parse_request
+from aiops_diagnostics.query_scope import QueryScope
 from aiops_diagnostics.sources import FixtureSources, TDengineSource
 
 FIXTURE = Path(__file__).parents[1] / "examples/fixtures/ocpp_consistent.json"
@@ -29,6 +30,7 @@ def _executor(
     *,
     allowed_tenants: set[str] | None = None,
     orders: list[dict] | None = None,
+    scope: QueryScope | None = None,
 ) -> tuple[DiagnosticToolExecutor, EvidenceJournal]:
     request = parse_request("订单 TEST-OCPP-0003 金额异常")
     manifest = IncidentManifest.from_request(request)
@@ -47,6 +49,7 @@ def _executor(
             journal,
             safety=SafetySettings(),
             allowed_tenants=allowed_tenants,
+            scope=scope,
         ),
         journal,
     )
@@ -122,6 +125,99 @@ def test_order_snapshot_discovers_tenant_within_authorized_scope(tmp_path: Path)
     assert outcome.status == "success"
     # The discovered tenant is learned from the order, not pre-bound.
     assert executor.effective_tenant == "TENANT-DEMO"
+
+
+def _caller_visibility(scope: QueryScope) -> TenantVisibility:
+    """Render a resolved scope the way the scoped direct source renders it.
+
+    Both are renderings of one rule, so they must agree: the tool layer decides
+    on the rows it holds, the source pushes the same decision into SQL.
+    """
+    tenant = normalize_tenant(scope.tenant_id)
+    return TenantVisibility(
+        profile=VisibilityProfile.CALLER,
+        allowed=frozenset({tenant}) if tenant else frozenset(),
+    )
+
+
+@pytest.mark.parametrize(
+    ("scope", "rows"),
+    [
+        # Out of scope: blocked, and the discovered tenant is reported.
+        (
+            QueryScope(tenant_id="T-1", site_ids=None, user_id=None),
+            [{"order_no": "TEST-OCPP-0003", "tenant_id": "TENANT-DEMO"}],
+        ),
+        # In scope: the row survives.
+        (
+            QueryScope(tenant_id="TENANT-DEMO", site_ids=None, user_id=None),
+            [{"order_no": "TEST-OCPP-0003", "tenant_id": "TENANT-DEMO"}],
+        ),
+        # The same tenant, padded: one normalization, so it is in scope.
+        (
+            QueryScope(tenant_id="TENANT-DEMO", site_ids=None, user_id=None),
+            [{"order_no": "TEST-OCPP-0003", "tenant_id": " TENANT-DEMO "}],
+        ),
+        # A row without a tenant cannot be shown to be in scope: fail closed.
+        (QueryScope(tenant_id="T-1", site_ids=None, user_id=None), [{"order_no": "TEST-OCPP-0003"}]),
+        # No rows: nothing to block.
+        (QueryScope(tenant_id="T-1", site_ids=None, user_id=None), []),
+    ],
+)
+def test_a_resolved_scope_reaches_the_tool_layer_as_the_caller_profile(
+    tmp_path: Path, scope: QueryScope, rows: list[dict]
+) -> None:
+    """The caller path carries one range object, so the tool layer renders it.
+
+    The standard API face used to hand the tenant to the tool layer a second
+    time — ``allowed_tenants={context.effective_tenant_id}`` beside the ``scope``
+    the SQL push-down already used. It now passes the scope alone, so the tool
+    layer must derive its visibility from that object: the CALLER profile,
+    because a resolved scope always knows its tenant and has nothing to discover.
+    The same candidate rows are evaluated independently by the shared rule here
+    and the tool layer's recorded conclusion is checked against it.
+    """
+    executor, journal = _executor(tmp_path, scope=scope, orders=rows)
+    expected = visible_orders(rows, _caller_visibility(scope))
+
+    outcome = executor.execute(ToolName.ORDER_SNAPSHOT)
+    entry = journal.get(outcome.evidence_id)
+    assert entry is not None
+
+    if expected.blocked_tenants:
+        assert outcome.status == "blocked"
+        assert entry.source == "harness:tenant_scope"
+        payload = journal.load_payload(entry)
+        assert payload["discovered_tenant_ids"] == list(expected.blocked_tenants)
+        assert executor.effective_tenant is None
+    else:
+        assert outcome.status == "success"
+        visible = journal.load_payload(entry)["orders"]
+        assert [row.get("tenant_id") for row in visible] == [row.get("tenant_id") for row in expected.rows]
+
+
+def test_a_run_may_not_carry_two_range_objects(tmp_path: Path) -> None:
+    """One range object per run, enforced rather than assumed.
+
+    The standard API face used to pass ``scope=query_scope`` *and*
+    ``allowed_tenants={context.effective_tenant_id}`` — the same tenant twice. It
+    agreed with itself only while one call site kept reading the same field
+    twice. Silently preferring one of the two would let that come back without a
+    test noticing, so the tool layer refuses the combination instead.
+    """
+    request = parse_request("订单 TEST-OCPP-0003 金额异常")
+    manifest = IncidentManifest.from_request(request)
+    workspace = AgentWorkspace.create(Path(__file__).parents[1], tmp_path, manifest)
+    with pytest.raises(ValueError, match="一个范围对象"):
+        DiagnosticToolExecutor(
+            FixtureSources(FIXTURE),
+            request,
+            manifest,
+            EvidenceJournal(workspace, manifest),
+            safety=SafetySettings(),
+            scope=QueryScope(tenant_id="T-1", site_ids=None, user_id=None),
+            allowed_tenants={"T-1"},
+        )
 
 
 def _device_visibility(allowed_tenants: set[str] | None) -> TenantVisibility:

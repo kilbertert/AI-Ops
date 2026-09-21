@@ -35,7 +35,7 @@ from aiops_diagnostics.knowledge_retrieval import (
     MediaResourceSigner,
     MediaResponse,
 )
-from aiops_diagnostics.order_visibility import resolve_device_tenant
+from aiops_diagnostics.order_visibility import TENANT_SCOPE_SOURCE, resolve_device_tenant
 from aiops_diagnostics.parsing import parse_request
 from aiops_diagnostics.platform_paths import reference_root
 from aiops_diagnostics.query_scope import resolve_query_scope
@@ -44,6 +44,11 @@ from aiops_diagnostics.scope_context import ScopeContext
 from aiops_diagnostics.sources import SourceError, scoped_live_sources
 
 FIXTURE_NAMES = frozenset({"ocpp_consistent.json", "ykc_amount_mismatch.json", "missing_tx_data.json"})
+
+#: A blocked run whose order turned out to be outside the caller's tenant. It is
+#: NOT ``DIAGNOSIS_BLOCKED``: that code means the supplier did not honor
+#: ``output_schema``, and an operator must be able to tell the two apart.
+DIAGNOSIS_ORDER_OUT_OF_SCOPE = "DIAGNOSIS_ORDER_OUT_OF_SCOPE"
 
 
 def _as_datetime(value):
@@ -536,12 +541,16 @@ class GatewayRuntime:
         settings.agent.run_root = self.diagnostic_settings.agent.run_root
         try:
             query_scope = resolve_query_scope(context)
+            # One range object: the tenant is carried once, as the frozen
+            # ``QueryScope`` the SQL push-down and the tool layer both read. It
+            # used to also arrive as ``allowed_tenants={context.effective_tenant_id}``
+            # — the same tenant a second time, as a Python post-filter over rows
+            # the push-down had already returned.
             result = run_agent_diagnosis(
                 workspace,
                 request,
                 settings,
                 None,
-                allowed_tenants={context.effective_tenant_id},
                 provider=provider,
                 key_slot=key_slot,
                 scope=query_scope,
@@ -569,17 +578,18 @@ class GatewayRuntime:
         # it as failed with an explicit error code so the frontend can
         # distinguish provider/task failure from a genuine inconclusive result.
         if result.status.value == "blocked":
+            error_code, error_message = _blocked_diagnosis_error(workspace)
             self.store.update_standard_diagnosis(
                 diagnosis_id,
                 status="failed",
-                error_code="DIAGNOSIS_BLOCKED",
-                error_message="diagnosis could not complete",
+                error_code=error_code,
+                error_message=error_message,
             )
             self._record_metric(
                 tenant_id=context.effective_tenant_id,
                 route_type="diagnosis",
                 outcome="failed",
-                error_code="DIAGNOSIS_BLOCKED",
+                error_code=error_code,
                 duration_ms=int((time.monotonic() - started_ms) * 1000),
             )
             return
@@ -1212,6 +1222,32 @@ def _public_error_message(error: Exception, order_no: str | None) -> str:
     """Expose a bounded, redacted diagnostic reason without server secrets."""
     message = redact_text(str(error), preserve=(order_no or "",))
     return message[:1000] if message else error.__class__.__name__
+
+
+def _blocked_diagnosis_error(workspace: AgentWorkspace) -> tuple[str, str]:
+    """Decide how one blocked run is reported on the standard API surface.
+
+    ``DIAGNOSIS_BLOCKED`` is the provider/task failure code: the model could not
+    produce the structured output. "This order is not in the caller's tenant"
+    used to be absorbed into the same code, which left an operator unable to tell
+    an authorization failure from a supplier failure — the two have opposite
+    remedies.
+
+    The shared rule records that condition exactly once, as a coded blocked
+    entry, so this surface reads the record instead of re-deciding the condition
+    (re-deciding is how one request used to collect two status codes). The
+    message states the reason without naming the foreign tenant: the caller is a
+    delegated end user, and which tenant owns an order they cannot see is not
+    theirs to learn.
+    """
+    try:
+        entries = EvidenceJournal(workspace, workspace.load_manifest()).entries()
+    except (FileNotFoundError, ValueError, OSError):
+        entries = []
+    for entry in entries:
+        if entry.status == "blocked" and entry.source == TENANT_SCOPE_SOURCE:
+            return DIAGNOSIS_ORDER_OUT_OF_SCOPE, "order is outside the authorized tenant scope"
+    return "DIAGNOSIS_BLOCKED", "diagnosis could not complete"
 
 
 def close_gateway_runtime(runtime: GatewayRuntime) -> None:

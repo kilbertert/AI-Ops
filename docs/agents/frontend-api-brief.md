@@ -348,6 +348,16 @@ queued → running → completed | failed | expired                  （报告�
 
 **专属错误**：`404 DIAGNOSIS_NOT_FOUND`、`503 DIAGNOSIS_UNAVAILABLE`。
 
+**终态 `failed` 的 `error.code` 区分根因**（自动重试前先看它，2026-09-21 起新增第三行）：
+
+| code | 含义 | 前端处理 |
+|---|---|---|
+| `DIAGNOSIS_ORDER_OUT_OF_SCOPE` | 订单不在当前调用者租户内（越权） | 提示"该订单不属于当前账号"，引导换本账号订单；重试不会改变结论 |
+| `DIAGNOSIS_BLOCKED` | 模型未按结构化 schema 产出（供应商能力/配额受限） | 提示"诊断暂不可用，稍后重试"，勿当业务失败 |
+| `DIAGNOSIS_FAILED` | 其余运行失败（依赖不可用等） | 稍后重试并保留 `diagnosis_id` |
+
+`error.message` 只说明根因，不含租户标识、SQL、原始报文或内部 run 信息。创建时（`POST`）的越权订单仍按既有约定返回 `404 ORDER_NOT_FOUND`，不区分"不存在"与"不在授权范围"；上面的 `DIAGNOSIS_ORDER_OUT_OF_SCOPE` 是**轮询到终态后**才可能出现的补充信号，用于把授权问题与供应商问题分开。
+
 ### 5.3 result 对象字段（AgentDiagnosis）
 
 | 字段 | 类型 | 说明 |

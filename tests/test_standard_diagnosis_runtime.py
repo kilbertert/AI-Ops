@@ -1,15 +1,28 @@
 from __future__ import annotations
 
+import ast
+import json
 import time
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
-from aiops_diagnostics.agent_contracts import AgentDiagnosis, Confidence, DiagnosisStatus
+from aiops_diagnostics.agent_contracts import (
+    AgentDiagnosis,
+    Confidence,
+    DiagnosisStatus,
+    IncidentManifest,
+    ToolName,
+)
 from aiops_diagnostics.config import Settings
+from aiops_diagnostics.diagnostic_tools import DiagnosticToolExecutor
 from aiops_diagnostics.gateway_config import GatewayServerSettings
-from aiops_diagnostics.gateway_runtime import GatewayRuntime
+from aiops_diagnostics.gateway_runtime import DIAGNOSIS_ORDER_OUT_OF_SCOPE, GatewayRuntime
 from aiops_diagnostics.gateway_store import GatewayStore
+from aiops_diagnostics.journal import EvidenceJournal
 from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
+from aiops_diagnostics.sources import FixtureSources
+
+SOURCE_ROOT = Path(__file__).parents[1] / "src" / "aiops_diagnostics"
 
 
 def _scope() -> ScopeContext:
@@ -113,6 +126,145 @@ def test_blocked_diagnosis_is_failed_with_model_output_code(tmp_path: Path, monk
     runtime.shutdown()
     assert current["status"] == "failed"
     assert current["error_code"] == "DIAGNOSIS_BLOCKED"
+
+
+def _blocked_diagnosis(order_no: str, reason: str) -> AgentDiagnosis:
+    return AgentDiagnosis(
+        incident_id="incident-x",
+        order_no=order_no,
+        tenant_id="T-1",
+        status=DiagnosisStatus.BLOCKED,
+        summary="诊断运行未能生成满足证据合同的结论",
+        root_cause=reason,
+        confidence=Confidence.LOW,
+        evidence_ids=[],
+        hypotheses=[],
+        limitations=[reason],
+        failed_sources=[],
+        next_steps=[],
+    )
+
+
+def _foreign_tenant_fixture(tmp_path: Path) -> Path:
+    path = tmp_path / "foreign-tenant-orders.json"
+    path.write_text(
+        json.dumps({"orders": [{"order_no": "ORDER-1", "tenant_id": "TENANT-OTHER"}]}),
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_the_standard_worker_hands_the_agent_one_range_object() -> None:
+    """Guard: the caller path must not carry the tenant twice.
+
+    It used to pass ``scope=query_scope`` *and*
+    ``allowed_tenants={context.effective_tenant_id}``: the tenant once as a SQL
+    push-down and once as a Python post-filter over the rows that push-down had
+    already returned. They agree only while one call site keeps reading the same
+    field twice, and nothing pinned that equation — so the two mechanisms could
+    drift apart with no test noticing.
+
+    Source-level rather than behavioural, because what is being prevented is a
+    future edit. The device path legitimately still passes ``allowed_tenants``
+    (it has no SQL to push into), which is why the check is scoped to the
+    standard-diagnosis worker.
+    """
+    tree = ast.parse(
+        (SOURCE_ROOT / "gateway_runtime.py").read_text(encoding="utf-8"),
+        filename="gateway_runtime.py",
+    )
+    worker = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "_execute_standard_diagnosis"
+    )
+    calls = [
+        call
+        for call in ast.walk(worker)
+        if isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Name)
+        and call.func.id == "run_agent_diagnosis"
+    ]
+    assert calls, "_execute_standard_diagnosis must run the shared agent path"
+    offenders = [
+        f"gateway_runtime.py:{call.lineno}"
+        for call in calls
+        if any(keyword.arg == "allowed_tenants" for keyword in call.keywords)
+    ]
+    assert not offenders, (
+        "the caller path must pass one range object (scope); the tenant must not also "
+        f"be post-filtered via allowed_tenants: found {', '.join(offenders)}"
+    )
+    assert all(any(keyword.arg == "scope" for keyword in call.keywords) for call in calls)
+
+
+def test_out_of_scope_order_fails_with_a_distinguishable_code(tmp_path: Path, monkeypatch) -> None:
+    """An order outside the caller's tenant is not a provider failure.
+
+    ``DIAGNOSIS_BLOCKED`` means "the model could not produce structured output"
+    — the supplier not honoring ``output_schema``. The same code used to absorb
+    "this order is not in your tenant" too, so an operator could not tell an
+    authorization failure from a supplier failure on this surface. The shared
+    rule records one coded result for out-of-scope; this face now presents it
+    instead of collapsing it.
+    """
+    runtime, store, settings = _runtime(tmp_path)
+    fixture = _foreign_tenant_fixture(tmp_path)
+
+    def diagnose(workspace, request, selected_settings, fixture_path, **kwargs):
+        # The real tool layer, driven by the one scope object the worker passed.
+        # The shared row-level rule turns the foreign-tenant order into its coded
+        # blocked record — the same record the device path produces.
+        del selected_settings, fixture_path
+        executor = DiagnosticToolExecutor(
+            FixtureSources(fixture),
+            request,
+            IncidentManifest.from_request(request),
+            EvidenceJournal(workspace, workspace.load_manifest()),
+            safety=settings.safety,
+            scope=kwargs["scope"],
+        )
+        executor.execute(ToolName.ORDER_SNAPSHOT)
+        return _blocked_diagnosis(request.order_no, "订单不在调用者租户内，无证据可收集")
+
+    monkeypatch.setattr("aiops_diagnostics.gateway_runtime.Settings.from_config", lambda *_: settings)
+    monkeypatch.setattr("aiops_diagnostics.gateway_runtime.run_agent_diagnosis", diagnose)
+
+    created = runtime.start_standard_diagnosis(_scope(), "ORDER-1", "为什么跳枪", None)
+    deadline = time.monotonic() + 2
+    current = created
+    while current["status"] not in {"completed", "failed", "inconclusive"}:
+        assert time.monotonic() < deadline
+        time.sleep(0.01)
+        current = store.get_standard_diagnosis(created["diagnosis_id"], _scope().scope_fingerprint)
+
+    runtime.shutdown()
+    assert current["status"] == "failed"
+    assert current["error_code"] == "DIAGNOSIS_ORDER_OUT_OF_SCOPE"
+    assert current["error_code"] != "DIAGNOSIS_BLOCKED"
+
+
+def test_the_out_of_scope_code_reaches_the_metrics_row(tmp_path: Path) -> None:
+    """Ops read the failure reason from the metrics row, not only from the API.
+
+    ``_record_metric`` is best-effort and swallows its own failures, so a code the
+    metrics store would reject is dropped silently — and the operator is back to
+    being unable to tell an authorization failure from a supplier failure. Record
+    the code the way the worker does and read it back.
+    """
+    from aiops_diagnostics.metrics_store import MetricsStore
+
+    metrics = MetricsStore(tmp_path / "gateway.db")
+    metrics.record(
+        tenant_id="T-1",
+        route_type="diagnosis",
+        outcome="failed",
+        error_code=DIAGNOSIS_ORDER_OUT_OF_SCOPE,
+        duration_ms=1,
+    )
+
+    rows = metrics.list_runs("T-1", route_type="diagnosis")
+    assert [row["error_code"] for row in rows] == [DIAGNOSIS_ORDER_OUT_OF_SCOPE]
 
 
 def test_inconclusive_diagnosis_is_retained_and_late_completion_is_rejected(tmp_path: Path) -> None:

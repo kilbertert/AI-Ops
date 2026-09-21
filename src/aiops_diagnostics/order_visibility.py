@@ -90,6 +90,13 @@ def normalize_tenant(value: object) -> str | None:
 #: answer 403 and then 400.
 DEVICE_TENANT_MISMATCH = "scope.device_tenant_mismatch"
 
+#: The evidence-journal ``source`` the row-level rendering records when an order
+#: is blocked for belonging to a tenant outside the authorized set. One spelling
+#: on purpose: the tool layer writes it and every surface reads it, so a producer
+#: and a consumer can never drift on the string the way the six implementations
+#: drifted on the rule itself.
+TENANT_SCOPE_SOURCE = "harness:tenant_scope"
+
 
 class DeviceTenantError(RuntimeError):
     """A run request named a tenant outside the entry's authorized scope.
