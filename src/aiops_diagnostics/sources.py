@@ -950,7 +950,7 @@ class RedisSource:
         try:
             for stream in self.STREAMS:
                 stream_key = stream.encode("utf-8")
-                stream_type = _decode_text(client.type(stream_key))
+                stream_type = _decode_reply(client.type(stream_key))
                 if stream_type != "stream":
                     results.append(
                         {"stream": stream, "type": stream_type, "length": 0, "groups": [], "matches": 0}
@@ -969,7 +969,7 @@ class RedisSource:
                         "length": client.xlen(stream_key),
                         "groups": [
                             {
-                                "name": _decode_text(_mapping_get(group, "name")),
+                                "name": _decode_reply(_mapping_get(group, "name")),
                                 "consumers": _mapping_get(group, "consumers"),
                                 "pending": _mapping_get(group, "pending"),
                                 "lag": _mapping_get(group, "lag"),
@@ -992,8 +992,8 @@ class RedisSource:
             info = client.info("server")
             return {
                 "ping": client.ping(),
-                "version": _decode_text(_mapping_get(info, "redis_version")),
-                "mode": _decode_text(_mapping_get(info, "redis_mode")),
+                "version": _decode_reply(_mapping_get(info, "redis_version")),
+                "mode": _decode_reply(_mapping_get(info, "redis_mode")),
                 "database": self.settings.redis.database,
             }
         except Exception as exc:
@@ -1466,7 +1466,13 @@ def _mapping_get(mapping: dict[Any, Any], key: str) -> Any:
     return mapping.get(key, mapping.get(key.encode("utf-8")))
 
 
-def _decode_text(value: Any) -> Any:
+def _decode_reply(value: Any) -> Any:
+    """解出 Redis 原始回复里的 bytes，供类型判断与元数据上报使用。
+
+    只解 bytes、不 strip：这是**传输层**解码，不是租户标识归一化。租户归属一律
+    经 ``order_visibility.normalize_tenant`` 判定（PRD #325 T3）——把这里的输出
+    直接拿去比租户，就是本 PRD 要消掉的第四套归一化。
+    """
     if isinstance(value, (bytes, bytearray)):
         return bytes(value).decode("utf-8", errors="replace")
     return value
@@ -1492,27 +1498,39 @@ def _order_in_scope(
     return predicate is None or predicate(fields)
 
 
+#: Redis 同步消息里携带租户的字段名（``decode_responses=False``，键可能是 bytes，
+#: 也可能是调用方自行构造的 str）。这里只认字段名；取值一律交给共享规则归一化。
+_REDIS_TENANT_FIELDS = frozenset({"tenantId", "tenant_id"})
+
+
 def make_redis_order_in_scope(
     scope: QueryScope,
 ) -> Callable[[Mapping[Any, Any]], bool]:
     """从 ``QueryScope`` 构造 Redis 归属验证谓词。
 
-    消息字段必须包含匹配 ``scope.tenant_id`` 的租户字段（``tenantId`` /
-    ``tenant_id``，支持 str/bytes），才被计为范围内命中；无法从消息验证租户
-    归属时不返回原始正文、不计数。站点/用户范围不直接用于 Redis 过滤——订单
-    若已通过 MySQL scope 约束，则其同步消息即可被安全关联。
-    """
+    租户判定用共享的行级定义（``order_visibility.visible_orders``，caller
+    profile）：把消息里的租户字段投影成候选行交给同一处规则，Redis 自己不再持有
+    一套归一化——此前这里比的是 `_decode_reply` 的原始输出，只解 bytes、不
+    strip，与行级规则不是同一套归一化。无法从消息验证租户归属时不返回原始正文、
+    不计数。
 
-    expected = scope.tenant_id
+    站点/用户范围不直接用于 Redis 过滤——订单若已通过 MySQL scope 约束，则其
+    同步消息即可被安全关联（PRD #325 Implementation Decisions）。
+    """
+    tenant = normalize_tenant(scope.tenant_id)
+    visibility = TenantVisibility(
+        profile=VisibilityProfile.CALLER,
+        allowed=frozenset({tenant}) if tenant else frozenset(),
+    )
 
     def predicate(fields: Mapping[Any, Any]) -> bool:
-        for key, value in fields.items():
-            text_key = _decode_text(key)
-            if text_key not in {"tenantId", "tenant_id"}:
-                continue
-            text_value = _decode_text(value)
-            if text_value and text_value == expected:
-                return True
-        return False
+        tenant_rows = [
+            {"tenant_id": value}
+            for key, value in fields.items()
+            if _decode_reply(key) in _REDIS_TENANT_FIELDS
+        ]
+        # 任一租户字段命中即范围内（与迁移前一致）；消息里没有任何租户字段时候选
+        # 为空，共享规则判为不可见，fail closed。
+        return bool(visible_orders(tenant_rows, visibility).rows)
 
     return predicate
