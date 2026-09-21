@@ -76,17 +76,30 @@ jobs:
             echo "proceed=$proceed"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Refuse — issue is a PRD or has open native blockers
-        if: steps.shape.outputs.proceed == 'false' && steps.shape.outputs.parent_number == ''
+      # A PRD is not this workflow's business: agent-implement-prd.yml owns it.
+      # Skip silently and leave the label alone. Mutating it here is a race
+      # with the PRD chain, which re-labels the PRD to `agent:implement` after
+      # each sub-issue precisely so this same event fires — clearing it would
+      # abort the chain that agent-implement-prd.yml just set up.
+      - name: Skip — PRD is owned by agent-implement-prd, leave its labels alone
+        if: steps.shape.outputs.proceed == 'false' && steps.shape.outputs.sub_count != '0'
+        env:
+          SUB_COUNT: ${{ steps.shape.outputs.sub_count }}
+        run: |
+          echo "PRD with ${SUB_COUNT} sub-issue(s); agent-implement-prd.yml handles it. Leaving labels untouched."
+
+      # A blocked or PRD-shaped issue that is NOT a parent is a human
+      # mislabeling: nothing else will pick it up, so say so and clear it.
+      - name: Refuse — un-decomposed PRD or open native blockers
+        if: steps.shape.outputs.proceed == 'false' && steps.shape.outputs.parent_number == '' && steps.shape.outputs.sub_count == '0'
         env:
           IS_PRD: ${{ steps.shape.outputs.is_prd }}
-          SUB_COUNT: ${{ steps.shape.outputs.sub_count }}
           OPEN_BLOCKERS: ${{ steps.shape.outputs.open_blockers }}
         run: |
           gh issue edit "$ISSUE_NUMBER" --remove-label "agent:implement" || true
           gh issue edit "$ISSUE_NUMBER" --add-label "agent:blocked" || true
-          if [ "$SUB_COUNT" != "0" ] || [ "$IS_PRD" = "true" ]; then
-            reason="This is a PRD or parent issue. Use /to-tickets first and run agent-implement-prd on the approved native sub-issues."
+          if [ "$IS_PRD" = "true" ]; then
+            reason="This is a PRD with no sub-issues yet. Use /to-tickets first, then run agent-implement-prd."
           else
             reason="This issue has ${OPEN_BLOCKERS} open native blocker(s)."
           fi
