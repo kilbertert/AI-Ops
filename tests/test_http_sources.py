@@ -116,7 +116,7 @@ class _FakeDiagTransport:
 
 def test_http_sources_adds_internal_token_headers(monkeypatch) -> None:
     transport = _FakeDiagTransport(_EMPTY_FIXTURE)
-    monkeypatch.setattr("aiops_diagnostics.sources.urllib.request.urlopen", transport)
+    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", transport)
     monkeypatch.setattr("aiops_diagnostics.sources.time.time", lambda: 1_760_000_000)
     source = HttpSources(_http_settings())
 
@@ -138,7 +138,7 @@ def test_http_sources_adds_internal_token_headers(monkeypatch) -> None:
 
 def test_http_sources_uses_frozen_diag_endpoint_contract(monkeypatch) -> None:
     transport = _FakeDiagTransport(_EMPTY_FIXTURE)
-    monkeypatch.setattr("aiops_diagnostics.sources.urllib.request.urlopen", transport)
+    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", transport)
     source = HttpSources(_http_settings())
     start = datetime.fromisoformat("2026-07-31 10:00:00")
     end = datetime.fromisoformat("2026-07-31 10:30:00")
@@ -211,7 +211,7 @@ def test_http_sources_rejects_failed_or_expired_token(monkeypatch) -> None:
                 io.BytesIO(body),
             )
 
-        monkeypatch.setattr("aiops_diagnostics.sources.urllib.request.urlopen", raise_http_error)
+        monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", raise_http_error)
         source = HttpSources(_http_settings())
 
         with pytest.raises(SourceError, match="令牌无效或过期"):
@@ -222,7 +222,7 @@ def test_http_sources_rejects_api_failure_codes(monkeypatch) -> None:
     def fail_transport(request: Any, timeout: int | None = None) -> _FakeResponse:
         return _FakeResponse({"code": 500, "msg": "订单查询失败", "data": None})
 
-    monkeypatch.setattr("aiops_diagnostics.sources.urllib.request.urlopen", fail_transport)
+    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", fail_transport)
     source = HttpSources(_http_settings())
 
     with pytest.raises(SourceError, match="订单查询失败"):
@@ -233,7 +233,7 @@ def test_http_sources_wraps_non_utf8_success_body(monkeypatch) -> None:
     def invalid_utf8_transport(request: Any, timeout: int | None = None) -> _RawResponse:
         return _RawResponse(b"\xff\xfe")
 
-    monkeypatch.setattr("aiops_diagnostics.sources.urllib.request.urlopen", invalid_utf8_transport)
+    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", invalid_utf8_transport)
     source = HttpSources(_http_settings())
 
     with pytest.raises(SourceError, match="UnicodeDecodeError"):
@@ -253,7 +253,7 @@ def test_http_sources_maps_native_transport_failures(monkeypatch, failure: Excep
     def failing_transport(request: Any, timeout: int | None = None) -> _RawResponse:
         raise failure
 
-    monkeypatch.setattr("aiops_diagnostics.sources.urllib.request.urlopen", failing_transport)
+    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", failing_transport)
     source = HttpSources(_http_settings())
 
     with pytest.raises(SourceError) as excinfo:
@@ -270,7 +270,7 @@ def test_http_sources_requires_internal_token_secret_before_request(monkeypatch)
         requested.append(request.full_url)
         raise AssertionError("Diag API must not be called before configuration is validated")
 
-    monkeypatch.setattr("aiops_diagnostics.sources.urllib.request.urlopen", forbidden_transport)
+    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", forbidden_transport)
     settings = _http_settings()
     settings.diag_api.token_secret = ""
 
@@ -287,7 +287,7 @@ def test_http_sources_requires_diag_api_base_url_before_request(monkeypatch) -> 
         requested.append(request.full_url)
         raise AssertionError("Diag API must not be called before configuration is validated")
 
-    monkeypatch.setattr("aiops_diagnostics.sources.urllib.request.urlopen", forbidden_transport)
+    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", forbidden_transport)
     settings = _http_settings()
     settings.diag_api.base_url = ""
 
@@ -360,7 +360,7 @@ def test_http_sources_preserve_identifier_injection_guard(
     monkeypatch, method: str, kwargs: dict[str, Any]
 ) -> None:
     transport = _FakeDiagTransport(_EMPTY_FIXTURE)
-    monkeypatch.setattr("aiops_diagnostics.sources.urllib.request.urlopen", transport)
+    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", transport)
     source = HttpSources(_http_settings())
 
     with pytest.raises(ValueError):
@@ -379,7 +379,7 @@ def test_http_sources_preserve_identifier_injection_guard(
 def test_http_sources_match_fixture_sources_field_by_field(monkeypatch, fixture_name: str) -> None:
     fixture = FixtureSources(FIXTURES / fixture_name)
     transport = _FakeDiagTransport(fixture.payload)
-    monkeypatch.setattr("aiops_diagnostics.sources.urllib.request.urlopen", transport)
+    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", transport)
     source = HttpSources(_http_settings())
 
     for order in fixture.payload["orders"]:

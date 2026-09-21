@@ -37,7 +37,7 @@ from aiops_diagnostics.sources import (
 def test_hybrid_sources_match_fixture_sources_field_by_field(monkeypatch, fixture_name: str) -> None:
     fixture = FixtureSources(FIXTURES / fixture_name)
     transport = _FakeDiagTransport(fixture.payload)
-    monkeypatch.setattr("aiops_diagnostics.sources.urllib.request.urlopen", transport)
+    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", transport)
     source = HybridSources(_http_settings())
 
     def tdengine_query(sql: str) -> list[dict[str, Any]]:
@@ -119,7 +119,7 @@ def test_hybrid_sources_tdengine_sql_matches_live_sources(monkeypatch) -> None:
 def test_hybrid_sources_doctor_classification(monkeypatch) -> None:
     source = HybridSources(_http_settings())
     monkeypatch.setattr(
-        "aiops_diagnostics.sources.urllib.request.urlopen",
+        "aiops_diagnostics.bounded_http.urllib.request.urlopen",
         _FakeDiagTransport({"streams": []}),
     )
 
@@ -197,7 +197,7 @@ def test_hybrid_sources_doctor_http_config_missing(monkeypatch) -> None:
     def forbidden(request: Any, timeout: int | None = None) -> None:
         raise AssertionError("HTTP must not be called when Diag API config is missing")
 
-    monkeypatch.setattr("aiops_diagnostics.sources.urllib.request.urlopen", forbidden)
+    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", forbidden)
 
     result = source.doctor()
 
@@ -222,7 +222,7 @@ def test_hybrid_sources_doctor_http_config_incomplete(monkeypatch, field: str, m
     def forbidden(request: Any, timeout: int | None = None) -> None:
         raise AssertionError("HTTP must not be called when Diag API config is missing")
 
-    monkeypatch.setattr("aiops_diagnostics.sources.urllib.request.urlopen", forbidden)
+    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", forbidden)
 
     result = source.doctor()
 
@@ -248,7 +248,7 @@ def test_hybrid_sources_doctor_http_json_failure(monkeypatch, payload_code: int,
         body = json.dumps({"code": payload_code, "msg": "拒绝查询"}, ensure_ascii=False).encode("utf-8")
         return _RawResponse(body)
 
-    monkeypatch.setattr("aiops_diagnostics.sources.urllib.request.urlopen", failing_api)
+    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", failing_api)
 
     result = source.doctor()
 
@@ -268,7 +268,7 @@ def test_hybrid_sources_doctor_http_auth_failed(monkeypatch) -> None:
         body = json.dumps({"code": 401, "msg": "令牌无效或过期"}).encode("utf-8")
         raise urllib.error.HTTPError(request.full_url, 401, "Unauthorized", {}, io.BytesIO(body))
 
-    monkeypatch.setattr("aiops_diagnostics.sources.urllib.request.urlopen", auth_failed)
+    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", auth_failed)
 
     result = source.doctor()
 
@@ -285,7 +285,7 @@ def test_hybrid_sources_doctor_http_unreachable(monkeypatch) -> None:
     def unreachable(request: Any, timeout: int | None = None) -> _FakeDiagTransport:
         raise urllib.error.URLError("network down")
 
-    monkeypatch.setattr("aiops_diagnostics.sources.urllib.request.urlopen", unreachable)
+    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", unreachable)
 
     result = source.doctor()
 
