@@ -24,13 +24,18 @@ fail closed，且不会触发任何 MySQL 查询（解析先于数据源查询�
 
 from __future__ import annotations
 
-import json
 import re
-import urllib.error
-import urllib.request
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+from aiops_diagnostics.bounded_http import (
+    JSON_CONTENT_TYPE,
+    ErrorMapping,
+    RequestSpec,
+    join_url,
+    parse_raw_envelope,
+    request_json,
+)
 from aiops_diagnostics.config import DisSettings
 from aiops_diagnostics.scope_context import (
     SCOPE_ERROR_EMPTY_SCOPE,
@@ -108,23 +113,41 @@ class DisHttpDirectory:
         if not base_url or not token:
             raise ScopeError("Dis 服务未配置", code=SCOPE_ERROR_DIS_CONFIG_MISSING)
         path = DIS_POINT_BY_USER_PATH.format(user_id=_safe_path_segment(c_user_id))
-        request = urllib.request.Request(f"{base_url.rstrip('/')}{path}", method="GET")
-        request.add_header("Authorization", token)
-        request.add_header("tenantId", _clean_header(tenant_id))
-        request.add_header("site", _clean_header(tenant_id))
-        request.add_header("saasType", "STANDARD")
-        request.add_header("Accept", "application/json")
-        try:
-            with urllib.request.urlopen(request, timeout=self.settings.timeout_seconds) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            if exc.code in (401, 403):
-                raise ScopeError("Dis 拒绝服务令牌", code=SCOPE_ERROR_DIS_AUTH_FAILED) from exc
-            raise ScopeError(f"Dis 请求失败: HTTP {exc.code}", code=SCOPE_ERROR_DIS_UNAVAILABLE) from exc
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, UnicodeDecodeError) as exc:
-            raise ScopeError(
-                f"Dis 请求失败: {exc.__class__.__name__}", code=SCOPE_ERROR_DIS_UNAVAILABLE
-            ) from exc
+        # The Dis service token is a service-side credential, treated like every
+        # other declared auth scheme; it never enters QueryScope, audit
+        # summaries or error messages. The envelope is parsed here (raw), not by
+        # the skeleton, because this client inspects ``code`` and ``data``
+        # itself.
+        payload = request_json(
+            RequestSpec(
+                url=join_url(base_url, path),
+                method="GET",
+                headers={
+                    "Authorization": token,
+                    "tenantId": _clean_header(tenant_id),
+                    "site": _clean_header(tenant_id),
+                    "saasType": "STANDARD",
+                    "Accept": JSON_CONTENT_TYPE,
+                },
+                timeout=self.settings.timeout_seconds,
+            ),
+            mapping=ErrorMapping(
+                auth_rejected=lambda _f: ScopeError("Dis 拒绝服务令牌", code=SCOPE_ERROR_DIS_AUTH_FAILED),
+                http_error=lambda f: ScopeError(
+                    f"Dis 请求失败: HTTP {f.status}", code=SCOPE_ERROR_DIS_UNAVAILABLE
+                ),
+                unavailable=lambda f: ScopeError(
+                    f"Dis 请求失败: {f.detail}", code=SCOPE_ERROR_DIS_UNAVAILABLE
+                ),
+                invalid_body=lambda f: ScopeError(
+                    f"Dis 请求失败: {f.detail}", code=SCOPE_ERROR_DIS_UNAVAILABLE
+                ),
+                invalid_envelope=lambda _f: ScopeError(
+                    "Dis 请求失败: invalid response", code=SCOPE_ERROR_DIS_UNAVAILABLE
+                ),
+            ),
+            envelope=parse_raw_envelope,
+        )
         if not isinstance(payload, dict) or payload.get("code") not in (0, 200):
             detail = payload.get("msg") if isinstance(payload, dict) else "invalid response"
             raise ScopeError(f"Dis 拒绝查询: {detail}", code=SCOPE_ERROR_DIS_UNAVAILABLE)

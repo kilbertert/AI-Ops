@@ -65,7 +65,7 @@ def test_gateway_client_retries_transient_url_errors(monkeypatch) -> None:
             raise urllib.error.URLError("transient blip")
         return _fake_response({"runs": []})
 
-    monkeypatch.setattr("aiops_diagnostics.gateway_client.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", fake_urlopen)
     monkeypatch.setattr("aiops_diagnostics.gateway_client.time.sleep", lambda s: None)
 
     assert client.list_runs() == []
@@ -80,7 +80,7 @@ def test_gateway_client_gives_up_after_retries(monkeypatch) -> None:
     def fake_urlopen(request, timeout):
         raise urllib.error.URLError("down")
 
-    monkeypatch.setattr("aiops_diagnostics.gateway_client.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", fake_urlopen)
     monkeypatch.setattr("aiops_diagnostics.gateway_client.time.sleep", lambda s: None)
 
     with pytest.raises(GatewayClientError):
@@ -97,7 +97,7 @@ def test_gateway_client_does_not_retry_http_errors(monkeypatch) -> None:
         calls["n"] += 1
         raise urllib.error.HTTPError(request.full_url, 404, "Not Found", {}, None)
 
-    monkeypatch.setattr("aiops_diagnostics.gateway_client.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", fake_urlopen)
     monkeypatch.setattr("aiops_diagnostics.gateway_client.time.sleep", lambda s: None)
 
     with pytest.raises(GatewayClientError):
@@ -118,7 +118,7 @@ def test_non_idempotent_post_is_not_retried(monkeypatch) -> None:
         calls["n"] += 1
         raise urllib.error.URLError("transient blip")
 
-    monkeypatch.setattr("aiops_diagnostics.gateway_client.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", fake_urlopen)
     monkeypatch.setattr("aiops_diagnostics.gateway_client.time.sleep", lambda s: None)
 
     with pytest.raises(GatewayClientError):
@@ -139,7 +139,7 @@ def test_get_retries_connection_reset_during_read(monkeypatch) -> None:
             resp.read.side_effect = ConnectionResetError("reset by peer")
         return resp
 
-    monkeypatch.setattr("aiops_diagnostics.gateway_client.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", fake_urlopen)
     monkeypatch.setattr("aiops_diagnostics.gateway_client.time.sleep", lambda s: None)
 
     assert client.list_runs() == []
@@ -161,7 +161,7 @@ def test_get_retries_incomplete_read(monkeypatch) -> None:
             resp.read.side_effect = http.client.IncompleteRead(b"partial")
         return resp
 
-    monkeypatch.setattr("aiops_diagnostics.gateway_client.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", fake_urlopen)
     monkeypatch.setattr("aiops_diagnostics.gateway_client.time.sleep", lambda s: None)
 
     assert client.list_runs() == []
@@ -179,7 +179,7 @@ def test_negative_max_retries_is_clamped(monkeypatch) -> None:
     def fake_urlopen(request, timeout):
         raise urllib.error.URLError("down")
 
-    monkeypatch.setattr("aiops_diagnostics.gateway_client.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", fake_urlopen)
     monkeypatch.setattr("aiops_diagnostics.gateway_client.time.sleep", lambda s: None)
 
     with pytest.raises(GatewayClientError):  # not TypeError
@@ -201,7 +201,7 @@ def test_wait_for_run_stops_retrying_past_deadline(monkeypatch) -> None:
         calls["n"] += 1
         raise urllib.error.URLError("down")
 
-    monkeypatch.setattr("aiops_diagnostics.gateway_client.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", fake_urlopen)
     monkeypatch.setattr("aiops_diagnostics.gateway_client.time.monotonic", lambda: clock["t"])
     monkeypatch.setattr(
         "aiops_diagnostics.gateway_client.time.sleep",

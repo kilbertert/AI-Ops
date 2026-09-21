@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import http.client
 import io
 import json
 import urllib.error
@@ -239,6 +240,29 @@ def test_http_sources_wraps_non_utf8_success_body(monkeypatch) -> None:
         source.get_orders("TEST-YKC-0001")
 
 
+@pytest.mark.parametrize(
+    "failure",
+    [
+        ConnectionResetError("connection reset by peer"),
+        http.client.IncompleteRead(b"\x01\x02", 10),
+    ],
+)
+def test_http_sources_maps_native_transport_failures(monkeypatch, failure: Exception) -> None:
+    """相对旧捕获集合的补齐：连接被重置与响应体截断必须仍是带 code 的领域错误。"""
+
+    def failing_transport(request: Any, timeout: int | None = None) -> _RawResponse:
+        raise failure
+
+    monkeypatch.setattr("aiops_diagnostics.sources.urllib.request.urlopen", failing_transport)
+    source = HttpSources(_http_settings())
+
+    with pytest.raises(SourceError) as excinfo:
+        source.get_orders("TEST-YKC-0001")
+
+    assert excinfo.value.code == "http.http_unreachable"
+    assert str(excinfo.value) == f"Diag API 请求失败: {type(failure).__name__}"
+
+
 def test_http_sources_requires_internal_token_secret_before_request(monkeypatch) -> None:
     requested: list[str] = []
 
@@ -399,3 +423,33 @@ def _fixture_tx_serial(order: dict[str, Any]) -> str | None:
     if protocol.startswith("OCPP"):
         return order.get("transaction_id") or (order.get("tx_data") or {}).get("txSerialNo")
     return order.get("order_no")
+
+
+@pytest.mark.parametrize("body_key", ["detail", "message"])
+def test_http_sources_does_not_leak_a_foreign_error_key_into_the_message(
+    monkeypatch: pytest.MonkeyPatch, body_key: str
+) -> None:
+    """A 401 body carrying only ``detail``/``message`` must not enter the message.
+
+    This client reads ``msg`` and nothing else, so the skeleton must be told that
+    with ``detail_keys=("msg",)``. The default key set is wider, and with it a
+    401 body like ``{"detail": "internal-xyz"}`` would surface as
+    "Diag API 令牌无效或过期: internal-xyz" instead of the client's own wording.
+
+    Nothing else pinned this: the neighbouring tests assert with a substring
+    match, so a leaked key slipped past them.
+    """
+    body = json.dumps({body_key: "internal-xyz"}).encode("utf-8")
+
+    def _unauthorized(request: Any, timeout: int | None = None) -> Any:
+        raise urllib.error.HTTPError(
+            request.full_url, 401, "Unauthorized", http.client.HTTPMessage(), io.BytesIO(body)
+        )
+
+    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", _unauthorized)
+
+    with pytest.raises(SourceError) as excinfo:
+        HttpSources(_http_settings()).get_orders("ORDER-1")
+
+    assert "internal-xyz" not in str(excinfo.value)
+    assert str(excinfo.value) == "Diag API 令牌无效或过期"

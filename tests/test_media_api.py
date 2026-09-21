@@ -217,7 +217,7 @@ def test_kb_client_fetch_media_routes_image_and_video_paths(monkeypatch) -> None
         seen.append((request.full_url, {k: v for k, v in request.header_items()}))
         return _Response()
 
-    monkeypatch.setattr("aiops_diagnostics.knowledge_retrieval.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", fake_urlopen)
     client = KbServiceClient("http://kb.local", tenant_id="tenant-a", service_token="svc-token")
 
     image_grant = MediaGrant(
@@ -284,7 +284,7 @@ def test_kb_client_fetch_media_maps_missing_and_unavailable(monkeypatch) -> None
     def not_found(request, timeout=None):
         raise urllib.error.HTTPError(request.full_url, 404, "Not Found", hdrs=None, fp=None)
 
-    monkeypatch.setattr("aiops_diagnostics.knowledge_retrieval.urllib.request.urlopen", not_found)
+    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", not_found)
     try:
         client.fetch_media(grant)
     except MediaNotFound:
@@ -295,7 +295,7 @@ def test_kb_client_fetch_media_maps_missing_and_unavailable(monkeypatch) -> None
     def unreachable(request, timeout=None):
         raise OSError("connection refused")
 
-    monkeypatch.setattr("aiops_diagnostics.knowledge_retrieval.urllib.request.urlopen", unreachable)
+    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", unreachable)
     try:
         client.fetch_media(grant)
     except Exception as exc:  # KnowledgeSearchUnavailable — route maps to 503
@@ -336,7 +336,7 @@ def test_kb_client_maps_http_200_business_error_body_to_not_found(monkeypatch) -
             return False
 
     monkeypatch.setattr(
-        "aiops_diagnostics.knowledge_retrieval.urllib.request.urlopen",
+        "aiops_diagnostics.bounded_http.urllib.request.urlopen",
         lambda request, timeout=None: _Response(),
     )
     try:
@@ -388,7 +388,7 @@ def test_kb_client_retries_transient_video_not_found(monkeypatch) -> None:
             return _Response(b'{"code":102,"message":"document not found"}')
         return _Response(b"\x00\x00\x00\x18ftypisom")
 
-    monkeypatch.setattr("aiops_diagnostics.knowledge_retrieval.urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", fake_urlopen)
     assert client.fetch_media(grant).startswith(b"\x00\x00\x00\x18ftyp")
     assert calls == 2
 
@@ -424,7 +424,7 @@ def test_kb_client_maps_http_200_unknown_business_error_to_unavailable(monkeypat
             return False
 
     monkeypatch.setattr(
-        "aiops_diagnostics.knowledge_retrieval.urllib.request.urlopen",
+        "aiops_diagnostics.bounded_http.urllib.request.urlopen",
         lambda request, timeout=None: _Response(),
     )
     try:

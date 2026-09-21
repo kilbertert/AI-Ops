@@ -15,14 +15,22 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
-from urllib.parse import urlencode
 
 import pymysql
 import redis
 from pymysql.cursors import DictCursor
 
+from aiops_diagnostics.bounded_http import (
+    JSON_CONTENT_TYPE,
+    ErrorMapping,
+    HttpFailure,
+    RequestSpec,
+    internal_token_headers,
+    join_url,
+    parse_raw_envelope,
+    request_json,
+)
 from aiops_diagnostics.config import Settings
-from aiops_diagnostics.http_auth import build_internal_token_headers
 from aiops_diagnostics.order_visibility import (
     TenantVisibility,
     VisibilityProfile,
@@ -599,7 +607,7 @@ class HttpSources:
             raise SourceError("Diag API 内部令牌密钥未配置")
 
     def _headers(self) -> dict[str, str]:
-        return build_internal_token_headers(
+        return internal_token_headers(
             self.api.internal_token.secret,
             self.api.internal_token.expire_seconds,
             int(time.time()),
@@ -612,29 +620,55 @@ class HttpSources:
             raise SourceError("Diag API 内部令牌密钥未配置", code=_HTTP_ERROR_CONFIG_MISSING)
         if not self.api.internal_token.expire_seconds:
             raise SourceError("Diag API 内部令牌有效期未配置", code=_HTTP_ERROR_CONFIG_MISSING)
-        url = self.api.base_url.rstrip("/") + endpoint
-        if params:
-            url = f"{url}?{urlencode(sorted(params.items()))}"
-        request = urllib.request.Request(url, method="GET")
-        for name, value in self._headers().items():
-            request.add_header(name, value)
-        request.add_header("Accept", "application/json")
-        try:
-            with urllib.request.urlopen(request, timeout=self.api.timeout_seconds) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            detail = _http_error_message(exc)
-            if exc.code in (401, 403):
-                raise SourceError(detail or "Diag API 令牌无效或过期", code=_HTTP_ERROR_AUTH_FAILED) from exc
-            raise SourceError(
-                f"Diag API 请求失败: {detail or f'HTTP {exc.code}'}",
+
+        # The transport skeleton owns request assembly, the failure capture set
+        # and the status-code table. This client only declares how its own domain
+        # errors are built; its error-code vocabulary and message wording stay
+        # local. Two seams stay explicit because the skeleton's defaults are
+        # wider than this client's contract: ``detail_keys=("msg",)`` keeps the
+        # HTTP-layer detail sourced from ``msg`` alone (the default would also
+        # read ``detail``/``message``), and the envelope is read here because the
+        # shared ``parse_code_data_envelope`` is lenient about a non-Mapping
+        # payload while this client rejects it -- and an envelope rejection must
+        # keep this client's own message rather than the skeleton's.
+        def _auth_failed(failure: HttpFailure) -> Exception:
+            return SourceError(
+                failure.detail or "Diag API 令牌无效或过期",
+                code=_HTTP_ERROR_AUTH_FAILED,
+            )
+
+        def _unreachable(failure: HttpFailure) -> Exception:
+            if failure.status is None:
+                return SourceError(
+                    f"Diag API 请求失败: {failure.detail}",
+                    code=_HTTP_ERROR_UNREACHABLE,
+                )
+            return SourceError(
+                f"Diag API 请求失败: {failure.detail or f'HTTP {failure.status}'}",
                 code=_HTTP_ERROR_UNREACHABLE,
-            ) from exc
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, UnicodeDecodeError) as exc:
-            raise SourceError(
-                f"Diag API 请求失败: {exc.__class__.__name__}",
-                code=_HTTP_ERROR_UNREACHABLE,
-            ) from exc
+            )
+
+        def _rejected_envelope(_failure: HttpFailure) -> Exception:
+            # 非 Mapping/数组的载荷：与下方本地信封分支对同一类载荷的产出逐字一致。
+            return SourceError("Diag API 拒绝查询: invalid response", code=_HTTP_ERROR_UNREACHABLE)
+
+        payload = request_json(
+            RequestSpec(
+                url=join_url(self.api.base_url, endpoint, query=params or None),
+                method="GET",
+                headers={**self._headers(), "Accept": JSON_CONTENT_TYPE},
+                timeout=self.api.timeout_seconds,
+            ),
+            mapping=ErrorMapping(
+                auth_rejected=_auth_failed,
+                http_error=_unreachable,
+                unavailable=_unreachable,
+                invalid_body=_unreachable,
+                invalid_envelope=_rejected_envelope,
+                detail_keys=("msg",),
+            ),
+            envelope=parse_raw_envelope,
+        )
         if not isinstance(payload, dict) or payload.get("code") not in (0, 200):
             detail = payload.get("msg") if isinstance(payload, dict) else "invalid response"
             is_auth_failure = isinstance(payload, dict) and payload.get("code") in (401, 403)
@@ -1378,14 +1412,6 @@ def _format_time(value: datetime) -> str:
 
 def _format_http_time(value: datetime) -> str:
     return value.isoformat(timespec="milliseconds")
-
-
-def _http_error_message(exc: urllib.error.HTTPError) -> str:
-    with contextlib.suppress(Exception):
-        payload = json.loads(exc.read().decode("utf-8", errors="replace"))
-        if isinstance(payload, dict) and payload.get("msg"):
-            return str(payload["msg"])
-    return ""
 
 
 def _normalize_row(row: dict[str, Any] | None) -> dict[str, Any]:
