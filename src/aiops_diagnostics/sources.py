@@ -7,7 +7,7 @@ import re
 import socket
 import subprocess
 import time
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 from pathlib import Path
@@ -32,7 +32,7 @@ from aiops_diagnostics.bounded_http import (
 from aiops_diagnostics.config import Settings
 from aiops_diagnostics.order_visibility import (
     TenantVisibility,
-    VisibilityProfile,
+    caller_visibility,
     normalize_tenant,
     scope_where_sql,
     visible_orders,
@@ -165,6 +165,21 @@ def _placeholders(count: int) -> str:
     return ", ".join(_SQL_PARAM for _ in range(count))
 
 
+def _caller_visible(rows: Sequence[Mapping[str, Any]], tenant_id: str | None) -> list[Mapping[str, Any]]:
+    """Apply the shared row-level rule to the rows one source holds in memory.
+
+    A caller that supplies no tenant imposes no constraint and sees every row —
+    the discovery mode an unbound device registration uses. A caller that
+    supplies one is judged by the shared rule, which normalizes the row tenant
+    before comparing: a padded identifier now matches instead of silently
+    missing, and a tenant that cannot be normalized sees nothing rather than
+    binding a blank value to match.
+    """
+    if normalize_tenant(tenant_id) is None:
+        return list(rows)
+    return list(visible_orders(rows, caller_visibility(tenant_id)).rows)
+
+
 class MySQLSource:
     """直连 MySQL 诊断查询；可选携带单次运行冻结的 ``QueryScope``。
 
@@ -179,18 +194,10 @@ class MySQLSource:
         self.database = _safe_identifier(settings.mysql.database)
 
     def _tenant_visibility(self) -> TenantVisibility:
-        """把冻结 scope 表达成共享租户可见性规则的输入（caller profile）。
-
-        租户标识必须已经归一化才能进入 ``allowed``：scope 里的租户与请求里的
-        租户、行里的租户若不是同一套归一化，同一个订单就会在 SQL 下推与行级
-        过滤之间得到不同结论。无法归一化的租户不是可用身份，渲染为"什么都不可
-        见"（空范围），而不是绑定一个空值去匹配。
-        """
+        """把冻结 scope 表达成共享租户可见性规则的输入（caller profile）。"""
         scope = self.scope
         assert scope is not None
-        tenant = normalize_tenant(scope.tenant_id)
-        allowed = frozenset({tenant}) if tenant else frozenset()
-        return TenantVisibility(profile=VisibilityProfile.CALLER, allowed=allowed)
+        return caller_visibility(scope.tenant_id)
 
     def _scope_where(
         self,
@@ -1184,20 +1191,15 @@ class FixtureSources:
 
     def get_orders(self, order_no: str, tenant_id: str | None = None) -> list[dict[str, Any]]:
         orders = [row for row in self.payload.get("orders", []) if row.get("order_no") == order_no]
-        # Tenant visibility is one shared rule (#325 T1); this source no longer
-        # carries its own comparison. A caller-supplied tenant is a caller
-        # profile with that single allowed tenant.
-        if tenant_id is not None:
-            visibility = TenantVisibility(
-                profile=VisibilityProfile.CALLER,
-                allowed=frozenset({normalize_tenant(tenant_id) or ""}),
-            )
-            orders = list(visible_orders(orders, visibility).rows)
-        return copy.deepcopy(orders)
+        # Tenant visibility is one shared rule (#325); this source no longer
+        # carries its own comparison.
+        return copy.deepcopy(_caller_visible(orders, tenant_id))
 
     def get_fee_template_record(self, order_no: str, tenant_id: str | None = None) -> dict[str, Any] | None:
         record = self.payload.get("fee_template_records", {}).get(order_no)
-        if record and tenant_id and record.get("tenant_id") != tenant_id:
+        if record is None:
+            return None
+        if not _caller_visible([record], tenant_id):
             return None
         return copy.deepcopy(record)
 
@@ -1217,9 +1219,7 @@ class FixtureSources:
             if (has_order_id and row.get("orderId") == order_id)
             or (has_order_no and row.get("order_no") == order_no)
         ]
-        if tenant_id:
-            records = [row for row in records if row.get("tenant_id") == tenant_id]
-        return copy.deepcopy(records[:OCCUPY_ORDER_LIMIT])
+        return copy.deepcopy(_caller_visible(records, tenant_id)[:OCCUPY_ORDER_LIMIT])
 
     def get_device(
         self,
@@ -1228,10 +1228,17 @@ class FixtureSources:
         tenant_id: str | None = None,
     ) -> dict[str, Any] | None:
         for device in self.payload.get("devices", []):
-            if (
+            if not (
                 (device_id and device.get("id") == device_id)
                 or (device_code and device.get("device_code") == device_code)
-            ) and (not tenant_id or not device.get("tenant_id") or device.get("tenant_id") == tenant_id):
+            ):
+                continue
+            # A device row that states no tenant is not hidden by a tenant filter:
+            # the device catalog is looked up by the order's tenant, and the
+            # ``/diag/device`` contract binds a tenant only when one is supplied.
+            # This is not the order-visibility rule — a row that *does* state a
+            # tenant is judged by the shared rule like every other row.
+            if not normalize_tenant(device.get("tenant_id")) or _caller_visible([device], tenant_id):
                 return copy.deepcopy(device)
         return None
 
@@ -1517,11 +1524,7 @@ def make_redis_order_in_scope(
     站点/用户范围不直接用于 Redis 过滤——订单若已通过 MySQL scope 约束，则其
     同步消息即可被安全关联（PRD #325 Implementation Decisions）。
     """
-    tenant = normalize_tenant(scope.tenant_id)
-    visibility = TenantVisibility(
-        profile=VisibilityProfile.CALLER,
-        allowed=frozenset({tenant}) if tenant else frozenset(),
-    )
+    visibility = caller_visibility(scope.tenant_id)
 
     def predicate(fields: Mapping[Any, Any]) -> bool:
         tenant_rows = [

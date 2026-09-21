@@ -14,6 +14,7 @@ from aiops_diagnostics.order_visibility import (
     TENANT_SCOPE_SOURCE,
     TenantVisibility,
     VisibilityProfile,
+    caller_visibility,
     normalize_tenant,
     visible_orders,
 )
@@ -123,18 +124,12 @@ def _tenant_visibility(scope: QueryScope | None, allowed_tenants: set[str] | Non
     would read a padded identifier as out of scope. An entry that cannot be
     normalized is not a usable identity and is dropped — the set may then be
     empty, meaning "nothing is visible" — rather than matched as a blank. A
-    scope whose tenant cannot be normalized renders the same empty set, which is
-    what the SQL push-down renders too (``1=0``): the two renderings of one rule
-    cannot disagree about it.
+    scope's tenant is rendered by the shared constructor for the same reason.
     """
     if scope is not None and allowed_tenants is not None:
         raise ValueError("一次运行只携带一个范围对象：要么传 scope，要么传 allowed_tenants")
     if scope is not None:
-        tenant = normalize_tenant(scope.tenant_id)
-        return TenantVisibility(
-            profile=VisibilityProfile.CALLER,
-            allowed=frozenset({tenant}) if tenant else frozenset(),
-        )
+        return caller_visibility(scope.tenant_id)
     if allowed_tenants is None:
         return TenantVisibility(profile=VisibilityProfile.DEVICE, allowed=None)
     return TenantVisibility(

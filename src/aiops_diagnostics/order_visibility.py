@@ -163,6 +163,24 @@ class TenantVisibility:
         return self.allowed is not None and not self.allowed
 
 
+def caller_visibility(tenant: object) -> TenantVisibility:
+    """The CALLER profile for one already-resolved tenant.
+
+    Every consumer that knows its tenant up front — the scoped direct sources,
+    the Redis predicate and the tool layer's scope branch — builds the same
+    profile from the same value, so the construction lives here once. A tenant
+    that cannot be normalized is not a usable identity: the scope is empty,
+    meaning nothing is visible, rather than a blank value bound to match. That
+    is also what the SQL rendering produces (``1=0``), so the two renderings of
+    one rule cannot disagree about it.
+    """
+    normalized = normalize_tenant(tenant)
+    return TenantVisibility(
+        profile=VisibilityProfile.CALLER,
+        allowed=frozenset({normalized}) if normalized else frozenset(),
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class VisibilityResult:
     """The outcome of applying the rule to one candidate set of rows.
