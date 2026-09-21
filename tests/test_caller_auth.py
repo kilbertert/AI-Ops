@@ -62,7 +62,7 @@ def test_introspection_builds_immutable_scope(monkeypatch: pytest.MonkeyPatch) -
         return _Response(_active())
 
     monkeypatch.setattr(
-        "aiops_diagnostics.caller_auth.urllib.request.urlopen",
+        "aiops_diagnostics.bounded_http.urllib.request.urlopen",
         respond,
     )
 
@@ -86,7 +86,7 @@ def test_introspection_form_encodes_basic_credentials(monkeypatch: pytest.Monkey
         requests.append(request)
         return _Response(_active())
 
-    monkeypatch.setattr("aiops_diagnostics.caller_auth.urllib.request.urlopen", respond)
+    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", respond)
     settings = IntrospectionSettings(
         url="https://auth.example.test/oauth2/introspect",
         client_id="client id",
@@ -121,7 +121,7 @@ def test_introspection_fails_closed(
     expected_code: str,
 ) -> None:
     monkeypatch.setattr(
-        "aiops_diagnostics.caller_auth.urllib.request.urlopen",
+        "aiops_diagnostics.bounded_http.urllib.request.urlopen",
         lambda *_args, **_kwargs: _Response(payload),
     )
 
@@ -140,7 +140,95 @@ def test_introspection_transport_failure_is_retryable(monkeypatch: pytest.Monkey
     def unavailable(*_args, **_kwargs):
         raise urllib.error.URLError("offline")
 
-    monkeypatch.setattr("aiops_diagnostics.caller_auth.urllib.request.urlopen", unavailable)
+    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", unavailable)
+
+    with pytest.raises(CallerAuthError) as excinfo:
+        IntrospectionCallerResolver(_settings()).resolve(
+            "opaque-token",
+            required_scope="aiops:orders:read",
+        )
+
+    assert excinfo.value.code == CALLER_AUTH_UNAVAILABLE
+    assert excinfo.value.retryable
+
+
+def test_introspection_non_utf8_body_is_a_coded_domain_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A non-UTF-8 introspection body must not escape as a raw UnicodeDecodeError.
+
+    The peer returning bytes that are not UTF-8 is a transport-level fault of the
+    same family as an unreachable service; it has to surface as the retryable
+    CALLER_AUTH_UNAVAILABLE, because an unmapped exception reaches the API layer
+    as a 500 instead of a 503.
+    """
+
+    class _BadEncoding:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self) -> bytes:
+            return b"\xff\xfe\x00 invalid utf-8"
+
+    monkeypatch.setattr(
+        "aiops_diagnostics.bounded_http.urllib.request.urlopen",
+        lambda *_a, **_k: _BadEncoding(),
+    )
+
+    with pytest.raises(CallerAuthError) as excinfo:
+        IntrospectionCallerResolver(_settings()).resolve(
+            "opaque-token",
+            required_scope="aiops:orders:read",
+        )
+
+    assert excinfo.value.code == CALLER_AUTH_UNAVAILABLE
+    assert excinfo.value.retryable
+
+
+def test_introspection_mid_connection_failure_is_a_coded_domain_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A connection dropped mid-read must map like any other transport fault.
+
+    ConnectionResetError and IncompleteRead were absent from the previous
+    capture set, so a dropped connection produced an unmapped exception rather
+    than a coded, retryable domain error.
+    """
+
+    def _dropped(*_args, **_kwargs):
+        raise ConnectionResetError("connection reset by peer")
+
+    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", _dropped)
+
+    with pytest.raises(CallerAuthError) as excinfo:
+        IntrospectionCallerResolver(_settings()).resolve(
+            "opaque-token",
+            required_scope="aiops:orders:read",
+        )
+
+    assert excinfo.value.code == CALLER_AUTH_UNAVAILABLE
+    assert excinfo.value.retryable
+
+
+def test_introspection_truncated_body_is_a_coded_domain_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A truncated response body (IncompleteRead) is a transport fault too."""
+    import http.client
+
+    class _Truncated:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def read(self) -> bytes:
+            raise http.client.IncompleteRead(b'{"active": tr')
+
+    monkeypatch.setattr(
+        "aiops_diagnostics.bounded_http.urllib.request.urlopen",
+        lambda *_a, **_k: _Truncated(),
+    )
 
     with pytest.raises(CallerAuthError) as excinfo:
         IntrospectionCallerResolver(_settings()).resolve(

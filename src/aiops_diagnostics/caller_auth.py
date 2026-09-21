@@ -1,15 +1,22 @@
 from __future__ import annotations
 
-import base64
-import json
-import urllib.error
-import urllib.request
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Protocol
-from urllib.parse import quote, urlencode, urlsplit
+from urllib.parse import urlsplit
 
+from aiops_diagnostics.bounded_http import (
+    FORM_CONTENT_TYPE,
+    JSON_CONTENT_TYPE,
+    ErrorMapping,
+    HttpFailure,
+    RequestSpec,
+    basic_auth_header,
+    form_body,
+    parse_raw_envelope,
+    request_json,
+)
 from aiops_diagnostics.config import Settings
 from aiops_diagnostics.query_scope import resolve_query_scope
 from aiops_diagnostics.scope_context import (
@@ -161,32 +168,53 @@ class IntrospectionCallerResolver:
         )
 
     def _introspect(self, token: str) -> Mapping[str, Any]:
-        body = urlencode({"token": token}).encode()
-        request = urllib.request.Request(self.settings.url, data=body, method="POST")
-        credentials = (
-            f"{quote(self.settings.client_id, safe='')}:{quote(self.settings.client_secret, safe='')}"
+        # The transport skeleton owns request assembly, the failure capture set
+        # and the status-code table. This client only declares how its own
+        # domain errors are built -- including the one deliberate difference
+        # from the default table: introspection treats 400 as a rejected token
+        # (a malformed token), not just 401/403.
+        def _rejected(_failure: HttpFailure) -> Exception:
+            return CallerAuthError("introspection rejected the token", code=CALLER_AUTH_INVALID)
+
+        def _unavailable(_failure: HttpFailure) -> Exception:
+            return CallerAuthError(
+                "introspection service is unavailable",
+                code=CALLER_AUTH_UNAVAILABLE,
+                retryable=True,
+            )
+
+        def _invalid_body(_failure: HttpFailure) -> Exception:
+            # A body that is not valid UTF-8/JSON is a transport-level fault of
+            # the same family as an unreachable service, and must stay retryable
+            # rather than escaping as an unmapped exception.
+            return CallerAuthError(
+                "introspection service is unavailable",
+                code=CALLER_AUTH_UNAVAILABLE,
+                retryable=True,
+            )
+
+        payload = request_json(
+            RequestSpec(
+                url=self.settings.url,
+                method="POST",
+                headers={
+                    "Authorization": basic_auth_header(self.settings.client_id, self.settings.client_secret),
+                    "Accept": JSON_CONTENT_TYPE,
+                    "Content-Type": FORM_CONTENT_TYPE,
+                },
+                body=form_body({"token": token}),
+                timeout=self.settings.timeout_seconds,
+            ),
+            mapping=ErrorMapping(
+                auth_rejected=_rejected,
+                http_error=_unavailable,
+                unavailable=_unavailable,
+                invalid_body=_invalid_body,
+                invalid_envelope=_rejected,
+                auth_rejected_statuses=frozenset({400, 401, 403}),
+            ),
+            envelope=parse_raw_envelope,
         )
-        basic = base64.b64encode(credentials.encode()).decode()
-        request.add_header("Authorization", f"Basic {basic}")
-        request.add_header("Accept", "application/json")
-        request.add_header("Content-Type", "application/x-www-form-urlencoded")
-        try:
-            with urllib.request.urlopen(request, timeout=self.settings.timeout_seconds) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            if exc.code in {400, 401, 403}:
-                raise CallerAuthError("introspection rejected the token", code=CALLER_AUTH_INVALID) from exc
-            raise CallerAuthError(
-                "introspection service is unavailable",
-                code=CALLER_AUTH_UNAVAILABLE,
-                retryable=True,
-            ) from exc
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as exc:
-            raise CallerAuthError(
-                "introspection service is unavailable",
-                code=CALLER_AUTH_UNAVAILABLE,
-                retryable=True,
-            ) from exc
         if not isinstance(payload, Mapping):
             raise CallerAuthError("invalid introspection response", code=CALLER_AUTH_INVALID)
         return payload
