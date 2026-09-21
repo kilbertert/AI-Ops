@@ -618,7 +618,12 @@ class GatewayStore:
         Scoped to ``assistant_questions`` on purpose: ``health_report_jobs`` and
         ``standard_diagnoses`` already sweep their in-flight rows at store
         construction, and changing what they converge to is not this change's to
-        make.
+        make. This one is deliberately NOT folded into that sweep even though it
+        would be three lines beside them: ``__init__`` runs on every construction,
+        short-lived CLI commands (``aiops-gateway devices``) included, so a row
+        would be told "the gateway restarted" by a process that only listed
+        devices. This hook runs where the restart actually happened, and the other
+        two tables keep the construction sweep they have.
         """
         with self._connection() as connection:
             in_flight = [

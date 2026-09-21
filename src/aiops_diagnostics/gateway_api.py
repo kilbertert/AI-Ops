@@ -63,6 +63,8 @@ from aiops_diagnostics.faq import (
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_runtime import GatewayRuntime, close_gateway_runtime
 from aiops_diagnostics.gateway_store import (
+    ACTIVE_DIAGNOSIS_STATUSES,
+    TERMINAL_DIAGNOSIS_STATUSES,
     TERMINAL_RUN_STATUSES,
     AuthenticationError,
     EnrollmentError,
@@ -2376,13 +2378,14 @@ def _assistant_question_response(qa: dict[str, Any], language: str) -> dict[str,
     single thing both surfaces report, so a client reads a stopped job exactly
     as it reads a finished one.
     """
+    status_value = str(qa["status"])
     return {
         "type": "qa",
         "language": language,
         "qa_id": qa["qa_id"],
         "question": qa["question"],
-        "status": qa["status"],
-        "retry_after_ms": 1000 if qa["status"] in {"queued", "running"} else None,
+        "status": status_value,
+        "retry_after_ms": 1000 if status_value in ACTIVE_DIAGNOSIS_STATUSES else None,
         "result": qa.get("result"),
         "error": (
             {
@@ -2390,7 +2393,7 @@ def _assistant_question_response(qa: dict[str, Any], language: str) -> dict[str,
                 "message": qa.get("error_message") or "answer generation failed",
                 "retryable": True,
             }
-            if qa["status"] in {"failed", "expired"}
+            if status_value in {"failed", "expired"}
             else None
         ),
     }
@@ -2739,7 +2742,11 @@ def _start_promo_qa(
 
 def _standard_diagnosis_response(diagnosis: dict[str, Any]) -> dict[str, Any]:
     status_value = str(diagnosis["status"])
-    is_terminal = status_value in {"completed", "inconclusive", "failed", "expired"}
+    # The shared status set decides what is terminal, exactly as it decides what
+    # the store accepts: a literal copy here is how a status the store now takes
+    # (a stopped diagnosis) would render `retry_after_ms=1000` and keep a client
+    # polling a row the claim-guard can never let change again.
+    is_terminal = status_value in TERMINAL_DIAGNOSIS_STATUSES
     return {
         "diagnosis_id": diagnosis["diagnosis_id"],
         "order_no": diagnosis["order_no"],

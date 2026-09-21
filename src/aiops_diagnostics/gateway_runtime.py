@@ -539,13 +539,16 @@ class GatewayRuntime:
         if qa["status"] in ACTIVE_DIAGNOSIS_STATUSES:
             accepted = self.store.update_assistant_question(qa_id, status="cancelled")
             registration = self._qa_registrations.pop(qa_id, None)
+            if registration is not None:
+                # Both savings run before the metric row, so nothing that
+                # records rather than decides can keep the turn burning or the
+                # input box locked: order is persist, save, then count.
+                self._interrupt_registered_turn(registration)
+                self._release_conversation_turn(registration.conversation_turn)
             if accepted:
                 # One stop, one row, and never two: the terminal write is what
                 # decides the outcome, and only the request that wins it counts.
                 self._record_cancelled_qa_metric(context, registration)
-            if registration is not None:
-                self._interrupt_registered_turn(registration)
-                self._release_conversation_turn(registration.conversation_turn)
             return self.store.get_assistant_question(qa_id, context.scope_fingerprint)
         # Already terminal: the answer (or the failure) the caller sees is the
         # job's own final state, not a cancellation that lost a race.
@@ -597,7 +600,10 @@ class GatewayRuntime:
         try:
             interrupt()
         except Exception as exc:  # the interrupt is not the contract
-            _LOGGER.warning("assistant question interrupt failed: %s", exc.__class__.__name__)
+            # The message, not just the class name: it names the turn RPC that
+            # failed, which tells a dead worker apart from a turn that outlived
+            # its own claim.
+            _LOGGER.warning("assistant question interrupt failed: %s", exc)
 
     def _release_conversation_turn(self, conversation_turn: tuple[str, str, int] | None) -> None:
         """Free the generation slot this job owns, without waiting for its worker.
