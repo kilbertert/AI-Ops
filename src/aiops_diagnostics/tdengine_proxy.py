@@ -8,12 +8,20 @@ import json
 import os
 import re
 import urllib.error
-import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import ClassVar
 from urllib.parse import urlsplit
+
+from aiops_diagnostics.bounded_http import (
+    TEXT_PLAIN_CONTENT_TYPE,
+    RequestSpec,
+    basic_auth_header,
+    join_url,
+    open_response,
+    read_body,
+)
 
 # 代理授权的 gun SELECT 列串与 sources.get_gun_samples 生成的 SQL 逐字节同源：
 # 同一函数派生、由 pin 测试兜底。代理是独立部署的 root 服务，SQL 形状漂移
@@ -192,15 +200,24 @@ class TDengineReadonlyHandler(BaseHTTPRequestHandler):
 
     def _forward(self, sql: str) -> None:
         settings = self.settings
-        endpoint = f"{settings.upstream_url.rstrip('/')}/rest/sql/{settings.database}"
-        request = urllib.request.Request(endpoint, data=sql.encode("utf-8"), method="POST")
-        token = base64.b64encode(f"{settings.upstream_user}:{settings.upstream_password}".encode()).decode()
-        request.add_header("Authorization", f"Basic {token}")
-        request.add_header("Content-Type", "text/plain; charset=utf-8")
+        # This endpoint relays a whole response body and enforces its own size
+        # cap, so it uses the skeleton's request primitives rather than
+        # ``request_json``: raw bytes out, no JSON parsing, and a hard refusal
+        # to follow redirects.
+        spec = RequestSpec(
+            url=join_url(settings.upstream_url, f"/rest/sql/{settings.database}"),
+            method="POST",
+            headers={
+                "Authorization": basic_auth_header(settings.upstream_user, settings.upstream_password),
+                "Content-Type": TEXT_PLAIN_CONTENT_TYPE,
+            },
+            body=sql.encode("utf-8"),
+            timeout=settings.timeout_seconds,
+            follow_redirects=False,
+        )
         try:
-            opener = urllib.request.build_opener(_NoRedirectHandler())
-            with opener.open(request, timeout=settings.timeout_seconds) as response:
-                body = response.read(settings.max_response_bytes + 1)
+            with open_response(spec) as response:
+                body = read_body(response, max_read_bytes=settings.max_response_bytes)
                 if len(body) > settings.max_response_bytes:
                     self._send_json(502, {"error": "upstream_response_too_large"})
                     return
@@ -256,11 +273,6 @@ def _authorized(header: str | None, settings: ProxySettings) -> bool:
     return hmac.compare_digest(user, settings.client_user.encode("utf-8")) and hmac.compare_digest(
         password, settings.client_password.encode("utf-8")
     )
-
-
-class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, *args: object, **kwargs: object) -> None:
-        return None
 
 
 def _required_env(name: str) -> str:
