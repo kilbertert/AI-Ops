@@ -116,12 +116,27 @@ jobs:
           # gh issue create prints the URL on the last line.
           issue_url=$(gh issue create \
             --title "$title" \
-            --body-file "$BODY_FILE" \
-            --label "$LABEL" | tail -n1)
+            --body-file "$BODY_FILE" | tail -n1)
           issue_number=$(basename "$issue_url")
           echo "issue_url=$issue_url" >> "$GITHUB_OUTPUT"
           echo "issue_number=$issue_number" >> "$GITHUB_OUTPUT"
-          echo "Published #${issue_number}: ${issue_url}"
+          # Label as a separate, verified step. `gh issue create --label` drops a
+          # label it cannot apply while still exiting 0 (in a sandbox holding a
+          # token without label permission it did exactly that), so the label
+          # would vanish with nothing failing. Applying it here and reading it
+          # back makes the provenance label an assertion rather than a hope —
+          # `check-backlog` throttles on this label, so a silent drop also
+          # distorts the next run's decision.
+          if ! gh issue edit "$issue_number" --add-label "$LABEL"; then
+            echo "::error::could not apply $LABEL to #${issue_number}; provenance is required"
+            exit 1
+          fi
+          applied=$(gh issue view "$issue_number" --json labels --jq "[.labels[].name] | index(\"$LABEL\") != null")
+          if [ "$applied" != "true" ]; then
+            echo "::error::#${issue_number} is missing $LABEL after applying it"
+            exit 1
+          fi
+          echo "Published #${issue_number} with ${LABEL}: ${issue_url}"
 
       - name: Summarise run
         if: always()

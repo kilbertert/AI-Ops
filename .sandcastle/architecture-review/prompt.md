@@ -1,7 +1,7 @@
 # TASK
 
 You are running the daily architecture-review pass. Find one fresh deepening
-opportunity in this codebase and publish it as a PRD.
+opportunity in this codebase and report it as a PRD.
 
 This is an unattended CI run. There is no user to grill, no HTML report to
 write. Your job is:
@@ -10,8 +10,10 @@ write. Your job is:
    closed) so you don't re-propose them.
 2. Explore the codebase.
 3. Pick **one** top candidate.
-4. Publish it via `/to-prd-project`.
-5. Apply the `source:architecture-review` label to the new issue.
+4. **Report it as structured output — you do not create the issue.** Emit the
+   PRD title and body in the `<output>` block specified below; the workflow
+   creates the issue from them and applies the provenance label. Do not run
+   `gh issue create`, and do not try to apply a label.
 
 The full process — including the methodology (deletion test, deepening,
 glossary), the loose-duplicate rule, the PRD shape, and the exact `<output>`
@@ -26,9 +28,10 @@ recorded decision.
 
 # RULES
 
-- Read-only on the repo. No commits. No edits to `docs/`, ADRs, or
-  source files. The only mutations allowed are creating the PRD issue (via
-  `/to-prd-project`) and applying the `source:architecture-review` label.
+- **Read-only, entirely.** No commits. No edits to `docs/`, ADRs, or source
+  files. No GitHub mutations either: **do not create, comment on, label, or
+  close any issue.** This run's sandbox token cannot perform issue mutations,
+  and the workflow performs the one creation this pass needs.
 - One PRD per run. If every reasonable candidate is already covered by a
   prior `source:architecture-review` proposal, emit a `skipped` output and
   stop.
