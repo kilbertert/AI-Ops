@@ -376,6 +376,12 @@ def create_gateway_app(
     selected_settings = settings or GatewayServerSettings.from_env()
     selected_settings.validate()
     selected_store = store or GatewayStore(selected_settings.database_file)
+    # Restart recovery, before this app can serve anything: a question the
+    # previous process left `queued`/`running` is converged to a terminal state
+    # here instead of hanging until its deadline (T3/#356). Deliberately not in
+    # ``GatewayStore.__init__`` — short-lived CLI commands (`aiops-gateway
+    # devices`) open the same database and must not end live work.
+    selected_store.recover_assistant_questions()
     selected_runtime = runtime or GatewayRuntime.from_settings(selected_store, selected_settings)
     selected_resolver = caller_resolver or _caller_resolver(selected_settings)
     diagnostic_settings = getattr(selected_runtime, "diagnostic_settings", None)

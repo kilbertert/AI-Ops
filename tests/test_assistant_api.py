@@ -6,9 +6,13 @@ from fastapi.testclient import TestClient
 
 from aiops_diagnostics.caller_auth import CALLER_AUTH_FORBIDDEN, CallerAuthError
 from aiops_diagnostics.faq import FAQCatalog, PlatformIdentityResolver, PlatformRoleRecord
-from aiops_diagnostics.gateway_api import _extract_order_no, create_gateway_app
+from aiops_diagnostics.gateway_api import (
+    STANDARD_DIAGNOSIS_SCOPE,
+    _extract_order_no,
+    create_gateway_app,
+)
 from aiops_diagnostics.gateway_config import GatewayServerSettings
-from aiops_diagnostics.gateway_store import GatewayStore
+from aiops_diagnostics.gateway_store import ASSISTANT_QUESTION_RESTART_ERROR_CODE, GatewayStore
 from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
 
 
@@ -867,3 +871,61 @@ def test_jump_action_clarification_is_localized(tmp_path: Path) -> None:
         assert body["type"] == "clarification"
         assert body["language"] == lang
         assert expected in body["message"], (lang, body["message"])
+
+
+class _StoreBackedRuntime(_Runtime):
+    """A runtime whose read path is the real store, as ``GatewayRuntime`` is.
+
+    ``get_assistant_qa`` there is a one-line delegation to the store, so a
+    restart — whose whole effect is durable state written before the app can
+    serve — has to be observed through the store, not through the in-memory
+    ``_qa`` dict the rest of this file uses.
+    """
+
+    def __init__(self, store: GatewayStore) -> None:
+        super().__init__()
+        self._store = store
+
+    def get_assistant_qa(self, context: ScopeContext, qa_id: str):
+        return self._store.get_assistant_question(qa_id, context.scope_fingerprint)
+
+
+def test_restarted_gateway_converges_an_in_flight_question(tmp_path: Path) -> None:
+    """A question still `running` across a restart is over before the new
+    gateway can answer a single request.
+
+    The poll is the waiting-state contract: once the job is terminal the
+    client stops polling and unlocks its input box, so `retry_after_ms` must go
+    null and the error must name the restart rather than a timeout or a stop.
+    """
+    settings = GatewayServerSettings(
+        data_home=tmp_path,
+        database_file=tmp_path / "gateway.db",
+        server_config_file=tmp_path / "production.env",
+    )
+    settings.server_config_file.write_text("# test\n", encoding="utf-8")
+    store = GatewayStore(settings.database_file)
+    scope = _Caller().resolve("service", required_scope=STANDARD_DIAGNOSIS_SCOPE).scope_fingerprint
+    qa = store.create_assistant_question(scope, "什么是分时电价")
+    store.update_assistant_question(qa["qa_id"], status="running")
+
+    # The gateway restarts on the same database: building the app is the boot.
+    restarted = GatewayStore(settings.database_file)
+    app = create_gateway_app(
+        settings=settings,
+        store=restarted,
+        runtime=_StoreBackedRuntime(restarted),  # type: ignore[arg-type]
+        caller_resolver=_Caller(),
+        order_authorizer=_Authorizer({"2096164064667852801"}),
+        platform_resolver=PlatformIdentityResolver(_Directory()),
+        faq_catalog=FAQCatalog.bundled(),
+    )
+    with TestClient(app) as client:
+        poll = client.get(f"/v1/assistant/questions/{qa['qa_id']}", headers=_headers())
+
+    assert poll.status_code == 200, poll.text
+    body = poll.json()
+    assert body["status"] == "failed"
+    assert body["retry_after_ms"] is None
+    assert body["result"] is None
+    assert body["error"]["code"] == ASSISTANT_QUESTION_RESTART_ERROR_CODE

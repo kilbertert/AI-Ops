@@ -1,5 +1,42 @@
 # 验证与验收计划
 
+## #356 网关重启收敛在飞的提问作业（2026-09-21，本地自动化验证）
+
+**范围**：PRD #346 子票 T3。网关重启时把仍处于 `queued`/`running` 的提问收敛到终态，
+使重启后**立即**结束，而不是挂着等满 15 分钟 deadline。**本片未完成业务验收**：没有
+真实重启故障案例可复现（这项能力的目的正是消除它），下列证据全部来自本地 fixture 级
+自动化测试。
+
+**终态取值与理由**：选 `failed` + `error_code=QA_INTERRUPTED_BY_RESTART`。不复用
+`expired`——那个值的语义是「作业跑超了自己的 deadline」，重启不是超时；不复用
+`cancelled`——那个值的语义是「用户主动停止」（#354 新增），重启也不是用户取消。原因
+写在行上的 error code / message 里，运维因此能把一次发版、一次超时和一次用户停止区分开。
+保留期走既有失败档（5 分钟）：刷新窗口内可查，到期由既有保留期清扫收敛为 `expired`。
+
+**放置位置**：恢复挂在 `create_gateway_app` 的启动路径上（先于接受任何请求），没有放进
+`GatewayStore.__init__`——后者同样被 `aiops-gateway devices` 之类短命 CLI 命令触发，
+那会在网关还在跑的时候结束在飞作业。已存在的另两张表的启动清扫（在 `_initialize` 内，
+收敛为 `expired`）**未改动**，其既有断言逐条不变。
+
+**新增自动化检查**（回归守护均以"去掉修复即失败"核对过）：
+
+| 检查 | 文件 | 守护的行为 |
+|---|---|---|
+| `test_running_question_is_converged_to_failed_on_restart` | `tests/test_assistant_qa_store.py` | 重启前 `running` 的提问重启后不再是非终态：转 `failed`、带重启 error code、无结果、`completed_at` 落值 |
+| `test_restart_recovery_is_a_noop_for_terminal_questions` | `tests/test_assistant_qa_store.py` | 幂等：`completed`（含结果）/ `cancelled` 行在恢复后原样不动，恢复跑两遍结果一致 |
+| `test_restarted_gateway_converges_an_in_flight_question` | `tests/test_assistant_api.py` | 协议层：新网关建好就能对外——轮询返回终态 `failed`、`retry_after_ms` 为 null（等待态结束）、error code 指名重启 |
+
+前两条的"去掉修复即失败"已实测：把恢复改为空操作后，第一、三条失败（状态仍是
+`running`）；第二条是反向守护（防止恢复越界改写已终态行），修复在与否都通过。
+
+**结果**：本地全量 `uv run pytest` 1059 passed（此前 1056），`uv run ruff check` 与
+`ruff format --check` 干净；改动前后既有断言逐条不变。
+
+**已知缺口（不在本片）**：`health_report_jobs` 与 `standard_diagnoses` 同样只靠 deadline
+过期，本次按子票范围未触碰；取消端点与响应（#357）、契约分发与 #173 断链纠正（#358）、
+取消结果入指标与两条核心回归守护（#359）均未在本片交付。会话生成槽位由既有的 120 秒
+自过期兜底，本片不改该数值。
+
 ## #355 终态提交检查 claim-guard 返回值（2026-09-21，本地自动化验证）
 
 **范围**：PRD #346 子票 T2，只改运行时对 claim-guard 返回值的态度——提问作业的 9 处

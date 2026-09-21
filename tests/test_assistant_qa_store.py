@@ -4,6 +4,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from aiops_diagnostics.gateway_store import (
+    ASSISTANT_QUESTION_RESTART_ERROR_CODE,
     DIAGNOSIS_COMPLETED_RETENTION,
     DIAGNOSIS_FAILED_RETENTION,
     GatewayStore,
@@ -130,3 +131,56 @@ def test_late_worker_cannot_overwrite_a_cancelled_question(tmp_path: Path) -> No
     assert stored["status"] == "cancelled"
     assert stored["result"] is None
     assert stored["error_code"] is None
+
+
+def test_running_question_is_converged_to_failed_on_restart(tmp_path: Path) -> None:
+    """A question still in flight when the gateway restarts ends immediately.
+
+    The only other way out was the 15-minute deadline, so a deploy left the
+    caller staring at a spinner for a job whose worker no longer exists. The
+    recovery converges it to `failed` — the status says the answer is gone, and
+    the error code says why, so an operator can tell a restart from a timeout
+    (`expired`) and from a user stop (`cancelled`).
+    """
+    database = tmp_path / "gateway.db"
+    store = GatewayStore(database)
+    qa = store.create_assistant_question("scope-1", "什么是分时电价")
+    store.update_assistant_question(qa["qa_id"], status="running")
+
+    restarted = GatewayStore(database)
+    restarted.recover_assistant_questions()
+
+    stored = restarted.get_assistant_question(qa["qa_id"], "scope-1")
+    assert stored["status"] == "failed"
+    assert stored["error_code"] == ASSISTANT_QUESTION_RESTART_ERROR_CODE
+    assert stored["result"] is None
+    assert stored["completed_at"] is not None
+
+
+def test_restart_recovery_is_a_noop_for_terminal_questions(tmp_path: Path) -> None:
+    """Recovery only converges in-flight work; a finished row keeps its result.
+
+    Every status outside `queued`/`running` is left exactly as it was —
+    including a row an earlier recovery already converged — so a restart (or a
+    second recovery) can never rewrite an answer or a user's own stop.
+    """
+    database = tmp_path / "gateway.db"
+    store = GatewayStore(database)
+    completed = store.create_assistant_question("scope-1", "已回答")
+    store.update_assistant_question(
+        completed["qa_id"], status="completed", result={"text": "答案", "reminder": False}
+    )
+    cancelled = store.create_assistant_question("scope-1", "已取消")
+    store.update_assistant_question(cancelled["qa_id"], status="cancelled")
+
+    restarted = GatewayStore(database)
+    restarted.recover_assistant_questions()
+    restarted.recover_assistant_questions()
+
+    answered = restarted.get_assistant_question(completed["qa_id"], "scope-1")
+    assert answered["status"] == "completed"
+    assert answered["result"] == {"text": "答案", "reminder": False}
+    assert answered["error_code"] is None
+    stopped = restarted.get_assistant_question(cancelled["qa_id"], "scope-1")
+    assert stopped["status"] == "cancelled"
+    assert stopped["error_code"] is None
