@@ -18,7 +18,12 @@ jobs:
   implement-prd:
     if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'agent:implement'
     runs-on: self-hosted
-    timeout-minutes: 60
+    # A real sub-issue is a full implement-and-verify cycle: read the ticket,
+    # edit source, write tests, run the suite, then push. Observed twice at 60
+    # minutes, the run was cancelled mid-work — it never reached the push step,
+    # so the delivery path went unexercised and the work died with the sandbox.
+    # The budget has to exceed the work, not the other way round.
+    timeout-minutes: 120
     concurrency:
       group: agent-implement-prd-issue-${{ inputs.prd_number || github.event.issue.number }}
       cancel-in-progress: false
