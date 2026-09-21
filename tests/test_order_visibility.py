@@ -1,23 +1,32 @@
-"""Tenant visibility must be one definition with two renderings (#325 T1).
+"""Tenant visibility must be one definition with three renderings (#325).
 
 The rule "which orders may this run see" was implemented six independent times
 across the entry guards, the agent tool layer and three data sources, and had
-already drifted. These tests pin the shared definition itself, and the
-equivalence between its row-level rendering and its SQL rendering.
+already drifted. These tests pin the shared definition itself, the equivalence
+between its row-level rendering and its SQL rendering, and the entry rendering
+that replaced the two entry guards.
 """
 
 from __future__ import annotations
 
+import ast
+from pathlib import Path
+
 import pytest
 
 from aiops_diagnostics.order_visibility import (
+    DEVICE_TENANT_MISMATCH,
     UNKNOWN_TENANT,
+    DeviceTenantError,
     TenantVisibility,
     VisibilityProfile,
     normalize_tenant,
+    resolve_device_tenant,
     scope_where_sql,
     visible_orders,
 )
+
+SOURCE_ROOT = Path(__file__).parents[1] / "src" / "aiops_diagnostics"
 
 
 def _visibility(profile: VisibilityProfile, allowed: set[str] | None) -> TenantVisibility:
@@ -50,6 +59,87 @@ def test_normalize_tenant_matches_parse_request_stripping() -> None:
     # parse_request strips request.tenant_id; the allowed set must strip too or
     # a padded identifier makes the two disagree and the filter falsely rejects.
     assert normalize_tenant(" tenant-a ") == normalize_tenant("tenant-a")
+
+
+# --- entry rendering -------------------------------------------------------------
+#
+# The device entry used to hold the rule twice: ``POST /v1/runs`` compared the
+# request tenant against the enrolled one and answered 403, and the runtime's
+# ``_tenant_for_device`` compared the very same two values again and answered
+# 400. One request could therefore collect two status codes and two error
+# vocabularies for one condition. ``resolve_device_tenant`` is the single
+# definition; the HTTP layer only maps its error to a status.
+
+
+def test_mismatching_request_tenant_is_refused_with_one_code() -> None:
+    with pytest.raises(DeviceTenantError) as excinfo:
+        resolve_device_tenant("tenant-a", "tenant-b")
+    assert excinfo.value.code == DEVICE_TENANT_MISMATCH
+    assert str(excinfo.value) == "requested tenant does not match the enrolled device scope"
+
+
+@pytest.mark.parametrize(
+    ("enrolled", "requested", "expected"),
+    [
+        ("tenant-a", "tenant-a", "tenant-a"),
+        ("tenant-a", None, "tenant-a"),
+        # A blank request tenant is an absent one, not a second tenant to match.
+        ("tenant-a", "", "tenant-a"),
+        ("tenant-a", "   ", "tenant-a"),
+        # Padded on either side: one normalization, so both forms are the tenant.
+        (" tenant-a ", "tenant-a", "tenant-a"),
+        ("tenant-a", " tenant-a ", "tenant-a"),
+        # A workspace-level registration binds no tenant: the request decides,
+        # and the tenant is discovered from the order rows.
+        (None, "tenant-a", "tenant-a"),
+        (None, " tenant-a ", "tenant-a"),
+        (None, None, None),
+        (None, "", None),
+    ],
+)
+def test_the_effective_tenant_is_the_normalized_one(
+    enrolled: str | None, requested: str | None, expected: str | None
+) -> None:
+    assert resolve_device_tenant(enrolled, requested) == expected
+
+
+def test_the_effective_tenant_feeds_both_renderings_identically() -> None:
+    # The allowed set used to come from the un-stripped effective tenant while
+    # parse_request stored the stripped one, so a padded identifier made the
+    # row-level filter disagree with the run's own tenant (and could not even
+    # enter TenantVisibility, which requires an already-normalized set).
+    effective = resolve_device_tenant(" tenant-a ", " tenant-a ")
+    assert effective == normalize_tenant(effective)
+    visibility = TenantVisibility(profile=VisibilityProfile.DEVICE, allowed=frozenset({effective}))
+    rows = [{"order_no": "o1", "tenant_id": "tenant-a"}]
+    assert [row["order_no"] for row in visible_orders(rows, visibility).rows] == ["o1"]
+
+
+def test_the_device_entry_guard_is_implemented_once() -> None:
+    """No second implementation of the device-entry tenant comparison.
+
+    Source-level rather than behavioural, because what is being prevented is a
+    future edit: the entry rule lives in ``order_visibility`` and the HTTP layer
+    only maps its error. Re-adding a comparison of ``device.tenant_id`` in
+    either of these two modules is how the duplicate status code came back.
+    """
+    offenders: list[str] = []
+    for name in ("gateway_api.py", "gateway_runtime.py"):
+        tree = ast.parse((SOURCE_ROOT / name).read_text(encoding="utf-8"), filename=name)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Compare):
+                continue
+            if any(
+                isinstance(sub, ast.Attribute)
+                and sub.attr == "tenant_id"
+                and isinstance(sub.value, ast.Name)
+                and sub.value.id == "device"
+                for sub in ast.walk(node)
+            ):
+                offenders.append(f"{name}:{node.lineno}")
+    assert not offenders, (
+        f"device.tenant_id must be compared only in order_visibility.py; found: {', '.join(offenders)}"
+    )
 
 
 # --- row-level rendering ---------------------------------------------------------
