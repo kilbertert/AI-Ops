@@ -180,7 +180,19 @@ jobs:
           if [ -d .git ]; then
             git remote remove origin 2>/dev/null || true
             git remote add origin "https://github.com/${GH_REPO}.git"
-            git fetch --prune origin
+            # Full history, not a shallow fetch. A previous job — CI's
+            # actions/checkout — leaves this shared workspace shallow, and a
+            # shallow boundary that predates newly merged commits gives HEAD and
+            # origin/main no merge base. The pre-push overlap guard needs one,
+            # and without it the guard cannot run and refuses the push, so a
+            # run that finished its work dies at delivery. Unshallowing the
+            # existing clone is what upstream gets from actions/checkout with
+            # fetch-depth: 0.
+            if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
+              git fetch --prune --unshallow origin
+            else
+              git fetch --prune origin
+            fi
             git checkout -B main origin/main
             git branch --list 'agent/*' 'sandcastle/*' | xargs -r git branch -D 2>/dev/null || true
           else
