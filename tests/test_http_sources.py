@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import http.client
 import io
 import json
 import urllib.error
@@ -237,6 +238,29 @@ def test_http_sources_wraps_non_utf8_success_body(monkeypatch) -> None:
 
     with pytest.raises(SourceError, match="UnicodeDecodeError"):
         source.get_orders("TEST-YKC-0001")
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        ConnectionResetError("connection reset by peer"),
+        http.client.IncompleteRead(b"\x01\x02", 10),
+    ],
+)
+def test_http_sources_maps_native_transport_failures(monkeypatch, failure: Exception) -> None:
+    """相对旧捕获集合的补齐：连接被重置与响应体截断必须仍是带 code 的领域错误。"""
+
+    def failing_transport(request: Any, timeout: int | None = None) -> _RawResponse:
+        raise failure
+
+    monkeypatch.setattr("aiops_diagnostics.sources.urllib.request.urlopen", failing_transport)
+    source = HttpSources(_http_settings())
+
+    with pytest.raises(SourceError) as excinfo:
+        source.get_orders("TEST-YKC-0001")
+
+    assert excinfo.value.code == "http.http_unreachable"
+    assert str(excinfo.value) == f"Diag API 请求失败: {type(failure).__name__}"
 
 
 def test_http_sources_requires_internal_token_secret_before_request(monkeypatch) -> None:
