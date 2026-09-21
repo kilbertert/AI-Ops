@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 import json
 import time
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -13,12 +14,14 @@ from aiops_diagnostics.agent_contracts import (
     IncidentManifest,
     ToolName,
 )
+from aiops_diagnostics.agent_runner import _agent_sources
 from aiops_diagnostics.config import Settings
 from aiops_diagnostics.diagnostic_tools import DiagnosticToolExecutor
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_runtime import DIAGNOSIS_ORDER_OUT_OF_SCOPE, GatewayRuntime
 from aiops_diagnostics.gateway_store import GatewayStore
 from aiops_diagnostics.journal import EvidenceJournal
+from aiops_diagnostics.query_scope import QueryScope
 from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
 from aiops_diagnostics.sources import FixtureSources
 
@@ -242,6 +245,73 @@ def test_out_of_scope_order_fails_with_a_distinguishable_code(tmp_path: Path, mo
     assert current["status"] == "failed"
     assert current["error_code"] == "DIAGNOSIS_ORDER_OUT_OF_SCOPE"
     assert current["error_code"] != "DIAGNOSIS_BLOCKED"
+
+
+def test_the_out_of_scope_code_is_defense_in_depth_on_this_face(tmp_path: Path, monkeypatch) -> None:
+    """Why the contract docs must not promise ``DIAGNOSIS_ORDER_OUT_OF_SCOPE``.
+
+    The code is produced only when the row-level rule blocks a row the source
+    already returned. On the standard API face that can never be the *first*
+    check on an order: create-time authorization resolves the same
+    ``QueryScope`` and pushes the tenant into SQL, and the worker's source set is
+    the scoped one — never a fixture — so the tool layer only ever sees rows the
+    predicate already admitted. The code is therefore defense in depth (a source
+    that cannot push the rule down, or a scope re-resolved differently between
+    create and worker), not a terminal state the frontend should wait for.
+
+    Both halves are pinned here because they are the whole reachability
+    argument: reintroducing a fixture source or dropping the scope on this face
+    would make the code reachable through a path nobody authorized, and the
+    contract docs would keep promising a signal production does not emit.
+    """
+    runtime, store, settings = _runtime(tmp_path)
+    captured: dict[str, object] = {}
+
+    def diagnose(workspace, request, selected_settings, fixture, **kwargs):
+        del workspace, request, selected_settings
+        captured["fixture"] = fixture
+        captured["scope"] = kwargs["scope"]
+        return _blocked_diagnosis("ORDER-1", "订单不在调用者租户内，无证据可收集")
+
+    monkeypatch.setattr("aiops_diagnostics.gateway_runtime.Settings.from_config", lambda *_: settings)
+    monkeypatch.setattr("aiops_diagnostics.gateway_runtime.run_agent_diagnosis", diagnose)
+
+    created = runtime.start_standard_diagnosis(_scope(), "ORDER-1", "为什么跳枪", None)
+    deadline = time.monotonic() + 2
+    current = created
+    while current["status"] not in {"completed", "failed", "inconclusive"}:
+        assert time.monotonic() < deadline
+        time.sleep(0.01)
+        current = store.get_standard_diagnosis(created["diagnosis_id"], _scope().scope_fingerprint)
+    runtime.shutdown()
+
+    # Half one: the worker never runs this face on fixtures, and it carries the
+    # caller's own resolved scope rather than a second copy of the tenant.
+    assert captured["fixture"] is None
+    scope = captured["scope"]
+    assert isinstance(scope, QueryScope)
+    assert scope.tenant_id == "T-1"
+
+    # Half two: a fixture-less run with a scope therefore resolves to the scoped
+    # source set, which pushes the tenant into SQL, and not to the unscoped one.
+    entered: list[str] = []
+
+    @contextmanager
+    def _fake_scoped(_settings, *, scope):
+        del scope
+        entered.append("scoped")
+        yield object()
+
+    @contextmanager
+    def _fake_live(_settings):
+        entered.append("live")
+        yield object()
+
+    monkeypatch.setattr("aiops_diagnostics.agent_runner.scoped_live_sources", _fake_scoped)
+    monkeypatch.setattr("aiops_diagnostics.agent_runner.live_sources", _fake_live)
+    with _agent_sources(settings, None, scope=scope):
+        pass
+    assert entered == ["scoped"]
 
 
 def test_the_out_of_scope_code_reaches_the_metrics_row(tmp_path: Path) -> None:

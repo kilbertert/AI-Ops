@@ -12,6 +12,7 @@ from aiops_diagnostics.config import SafetySettings
 from aiops_diagnostics.diagnostic_tools import DiagnosticToolExecutor
 from aiops_diagnostics.journal import EvidenceJournal
 from aiops_diagnostics.order_visibility import (
+    UNKNOWN_TENANT,
     TenantVisibility,
     VisibilityProfile,
     normalize_tenant,
@@ -285,6 +286,35 @@ def test_order_snapshot_records_the_shared_rule_result(
         visible = journal.load_payload(entry)["orders"]
         assert [row.get("tenant_id") for row in visible] == [row.get("tenant_id") for row in expected.rows]
         assert executor.effective_tenant == (normalize_tenant(rows[0].get("tenant_id")) if rows else None)
+
+
+def test_a_tenant_less_row_is_reported_under_the_unknown_marker(tmp_path: Path) -> None:
+    """A row that states no tenant is blocked and reported as ``UNKNOWN_TENANT``.
+
+    The pre-convergence implementation collected ``row.get("tenant_id")`` into
+    the blocked set, so such a row reported ``null`` — and a *mixed* set made
+    ``sorted({None, "tenant-a"})`` raise ``TypeError``, crashing the whole run.
+    The shared rule reports one marker instead. That is a value change on an
+    externally visible evidence key (``null`` -> ``"<unknown>"``) which the PRD's
+    "external contract unchanged" clause pins only at the key name, so it is
+    asserted here explicitly rather than left implicit in the equivalence test
+    above.
+    """
+    executor, journal = _executor(
+        tmp_path,
+        allowed_tenants={"TENANT-DEMO"},
+        orders=[{"order_no": "TEST-OCPP-0003"}],
+    )
+
+    outcome = executor.execute(ToolName.ORDER_SNAPSHOT)
+    entry = journal.get(outcome.evidence_id)
+    assert entry is not None
+    assert outcome.status == "blocked"
+    assert entry.source == "harness:tenant_scope"
+    payload = journal.load_payload(entry)
+    assert payload["discovered_tenant_ids"] == [UNKNOWN_TENANT]
+    assert payload["orders"] == []
+    assert executor.effective_tenant is None
 
 
 def test_the_tool_layer_does_not_own_the_tenant_rule() -> None:

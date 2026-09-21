@@ -264,3 +264,19 @@ def test_the_architecture_doc_names_both_source_sets() -> None:
     assert "HybridSources" in text
     assert "ScopedSources" in text
     assert "order_visibility.py" in text
+
+
+@pytest.mark.parametrize("name", [".env.example", "docs/architecture.md"])
+def test_the_doc_correction_names_the_real_standard_api_route(name: str) -> None:
+    """The doc-drift fix must not introduce a new path drift (#334).
+
+    This ticket exists to correct documentation drift, and the correction it
+    added named the standard API face ``/v1/diagnoses`` — a route this repository
+    does not serve (the real one is ``/v1/standard/diagnoses``). A reader who
+    follows the corrected sentence lands on a 404, which is the same class of
+    drift the ticket was opened to remove.
+    """
+    text = (PROJECT_ROOT / name).read_text(encoding="utf-8")
+
+    assert "/v1/standard/diagnoses" in text
+    assert "/v1/diagnoses" not in text.replace("/v1/standard/diagnoses", "")

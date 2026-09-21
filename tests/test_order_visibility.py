@@ -17,7 +17,6 @@ from pathlib import Path
 import pytest
 
 from aiops_diagnostics.order_visibility import (
-    DEVICE_TENANT_MISMATCH,
     UNKNOWN_TENANT,
     DeviceTenantError,
     TenantVisibility,
@@ -74,10 +73,10 @@ def test_normalize_tenant_matches_parse_request_stripping() -> None:
 # definition; the HTTP layer only maps its error to a status.
 
 
-def test_mismatching_request_tenant_is_refused_with_one_code() -> None:
+def test_mismatching_request_tenant_is_refused_with_one_error() -> None:
     with pytest.raises(DeviceTenantError) as excinfo:
         resolve_device_tenant("tenant-a", "tenant-b")
-    assert excinfo.value.code == DEVICE_TENANT_MISMATCH
+    assert isinstance(excinfo.value, DeviceTenantError)
     assert str(excinfo.value) == "requested tenant does not match the enrolled device scope"
 
 
@@ -430,22 +429,37 @@ def test_the_fixture_source_filters_every_lookup_through_the_shared_rule(tmp_pat
     assert source.get_device("D-1", None, "other") is None
 
 
-def test_a_blank_tenant_constrains_nothing_instead_of_raising(tmp_path: Path) -> None:
-    """A caller that supplies no usable tenant imposes no constraint.
+def test_a_blank_tenant_sees_nothing_rather_than_everything(tmp_path: Path) -> None:
+    """A caller that names a tenant it cannot use is not a caller with no tenant.
 
-    The first fixture migration built the allowed set as
-    ``{normalize_tenant(tenant) or ""}``, and ``""`` is not a normalized tenant —
-    ``TenantVisibility`` rejects it, so a blank tenant raised ``ValueError``
-    instead of meaning "no filter", which is what it meant before that migration
-    and what the no-scope MySQL branch still does. The shared constructor makes
-    the case unrepresentable rather than wrong.
+    Two inputs, two meanings, and the difference is fail-closed versus fail-open:
+
+    - ``tenant_id=None`` names no tenant at all — the unrestricted discovery
+      mode, the DEVICE profile's ``allowed=None``;
+    - ``tenant_id=""`` / ``"   "`` names one that cannot be normalized — an
+      unusable identity, which ``caller_visibility`` renders as the *empty*
+      scope and ``scope_where_sql`` renders as ``1=0``.
+
+    Reading the second as the first is the fail-open direction in the one filter
+    this module converges, and it makes the row-level and SQL renderings disagree
+    about the identical input. It is also what the last commit of this change did
+    by accident: it wrote ``_caller_visible``'s unrestricted branch as
+    ``normalize_tenant(tenant_id) is None`` and pinned that behavior here, while
+    the same commit's stated intent was "blank renders as nothing visible".
     """
     from aiops_diagnostics.sources import FixtureSources
 
     source = FixtureSources(_order_fixture(tmp_path))
 
+    # No tenant named: the discovery mode an unbound registration uses.
+    assert [r["order_no"] for r in source.get_orders("o1", None)] == ["o1"]
+    assert source.get_fee_template_record("o1", None) is not None
+    assert len(source.get_occupy_orders(order_id="1", tenant_id=None)) == 1
+    assert source.get_device("D-1", None, None)["id"] == "D-1"
+
+    # Named but unusable: nothing is visible, on every lookup.
     for blank in ("", "   "):
-        assert [r["order_no"] for r in source.get_orders("o1", blank)] == ["o1"]
-        assert source.get_fee_template_record("o1", blank) is not None
-        assert len(source.get_occupy_orders(order_id="1", tenant_id=blank)) == 1
-        assert source.get_device("D-1", None, blank)["id"] == "D-1"
+        assert source.get_orders("o1", blank) == []
+        assert source.get_fee_template_record("o1", blank) is None
+        assert source.get_occupy_orders(order_id="1", tenant_id=blank) == []
+        assert source.get_device("D-1", None, blank) is None

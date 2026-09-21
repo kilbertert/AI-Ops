@@ -24,8 +24,8 @@ either: a run's effective tenant is decided once, here, and every later
 rendering compares against that decision.
 
 Only pure functions and frozen values live here, following the ``rules.py``
-precedent — plus the one coded error the entry rendering raises: no class
-hierarchy, no runtime state, no third-party dependency.
+precedent — plus the one error the entry rendering raises: no class hierarchy,
+no runtime state, no third-party dependency.
 """
 
 from __future__ import annotations
@@ -84,12 +84,6 @@ def normalize_tenant(value: object) -> str | None:
     return text or None
 
 
-#: The code for "this request names a tenant the entry is not authorized for".
-#: One condition, one code: a transport layer maps it to exactly one status code
-#: and never re-decides the condition — the duplication that let one request
-#: answer 403 and then 400.
-DEVICE_TENANT_MISMATCH = "scope.device_tenant_mismatch"
-
 #: The evidence-journal ``source`` the row-level rendering records when an order
 #: is blocked for belonging to a tenant outside the authorized set. One spelling
 #: on purpose: the tool layer writes it and every surface reads it, so a producer
@@ -101,14 +95,13 @@ TENANT_SCOPE_SOURCE = "harness:tenant_scope"
 class DeviceTenantError(RuntimeError):
     """A run request named a tenant outside the entry's authorized scope.
 
-    Carries a code so a transport layer maps it to exactly one status code
-    instead of comparing the same two values again — the duplication that let
-    one request answer 403 and then 400 for a single condition.
+    One condition, one exception type, so a transport layer maps it to exactly
+    one status code and never re-decides the condition — the duplication that
+    let one request answer 403 at the edge and then 400 inside the runtime. The
+    type *is* the identity: the device run surface has no error-code envelope to
+    put a code into (``/v1/runs`` answers ``HTTPException(403, detail=...)``), so
+    a ``code`` attribute here would be an extension point with no reader.
     """
-
-    def __init__(self, message: str, *, code: str = DEVICE_TENANT_MISMATCH) -> None:
-        super().__init__(message)
-        self.code = code
 
 
 def resolve_device_tenant(enrolled: str | None, requested: str | None) -> str | None:

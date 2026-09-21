@@ -1,15 +1,90 @@
+import json
 from datetime import datetime
+from pathlib import Path
 
 import pytest
 
 from aiops_diagnostics.config import Settings
+from aiops_diagnostics.order_visibility import caller_visibility, scope_where_sql
 from aiops_diagnostics.sources import (
+    FixtureSources,
     MySQLSource,
     RedisSource,
     TDengineSource,
+    _caller_visible,
     _safe_identifier,
     _safe_literal,
 )
+
+ROWS = [{"order_no": "O-1", "tenant_id": "tenant-a"}, {"order_no": "O-2", "tenant_id": "tenant-b"}]
+
+
+def test_caller_visible_treats_an_absent_tenant_as_the_discovery_mode() -> None:
+    """No tenant named is the unrestricted state, not an empty scope.
+
+    This is the DEVICE profile's unbound registration reaching a caller that
+    holds rows in memory: the tenant is discovered from the rows and nothing is
+    blocked. Only an explicitly supplied tenant constrains anything.
+    """
+    assert _caller_visible(ROWS, None) == ROWS
+
+
+@pytest.mark.parametrize("unusable", ["", "   ", "\t\n", b"", b"   "])
+def test_caller_visible_fails_closed_on_a_tenant_it_cannot_normalize(unusable: object) -> None:
+    """A named-but-unusable tenant sees nothing, not everything (#325).
+
+    ``_caller_visible`` answers two different questions and must not collapse
+    them. "No tenant named" is the unrestricted discovery mode; "a tenant named
+    that cannot be normalized" is a caller whose identity is unusable, which is
+    the *empty* scope — the same one ``caller_visibility`` builds and
+    ``scope_where_sql`` renders as ``1=0``. Reading the first as the second is
+    the fail-open direction in the very filter this PR converges: it would
+    return every row the source holds. It was also a regression — before this PR
+    ``FixtureSources.get_orders`` bound ``normalize_tenant(t) or ""``, which
+    matches no row, so a blank tenant saw nothing.
+    """
+    assert _caller_visible(ROWS, unusable) == []
+    # The row-level and SQL renderings must reach the same conclusion for it.
+    assert scope_where_sql("tenant_id", caller_visibility(unusable)) == ("1=0", [])
+
+
+@pytest.mark.parametrize("usable", ["tenant-a", " tenant-a ", b"tenant-a"])
+def test_caller_visible_judges_a_named_tenant_by_the_shared_rule(usable: object) -> None:
+    assert _caller_visible(ROWS, usable) == [{"order_no": "O-1", "tenant_id": "tenant-a"}]
+
+
+def test_fixture_source_fails_closed_on_a_blank_tenant(tmp_path: Path) -> None:
+    """The fixture source keeps its pre-convergence fail-closed behavior.
+
+    This is the consumer-level regression check for the helper above: the
+    fixture source is what the device path and the tests actually call, and a
+    blank tenant reaching any of its lookups must yield nothing rather than
+    every row it holds. A caller that names no tenant at all is unaffected.
+    """
+    fixture = tmp_path / "orders.json"
+    fixture.write_text(
+        json.dumps(
+            {
+                "orders": ROWS,
+                "fee_template_records": {"O-1": {"order_no": "O-1", "tenant_id": "tenant-a"}},
+                "occupy_orders": [{"orderId": "X-1", "order_no": "O-1", "tenant_id": "tenant-a"}],
+                "devices": [{"id": "D-1", "device_code": "PILE-01", "tenant_id": "tenant-a"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    sources = FixtureSources(fixture)
+
+    assert sources.get_orders("O-1", None) == [{"order_no": "O-1", "tenant_id": "tenant-a"}]
+    assert sources.get_fee_template_record("O-1", None)["tenant_id"] == "tenant-a"
+    assert sources.get_occupy_orders(order_id="X-1", tenant_id=None)[0]["tenant_id"] == "tenant-a"
+    assert sources.get_device("D-1", None, None)["tenant_id"] == "tenant-a"
+
+    for unusable in ("", "   "):
+        assert sources.get_orders("O-1", unusable) == []
+        assert sources.get_fee_template_record("O-1", unusable) is None
+        assert sources.get_occupy_orders(order_id="X-1", tenant_id=unusable) == []
+        assert sources.get_device("D-1", None, unusable) is None
 
 
 def test_tdengine_literal_rejects_injection_characters() -> None:

@@ -168,14 +168,25 @@ def _placeholders(count: int) -> str:
 def _caller_visible(rows: Sequence[Mapping[str, Any]], tenant_id: str | None) -> list[Mapping[str, Any]]:
     """Apply the shared row-level rule to the rows one source holds in memory.
 
-    A caller that supplies no tenant imposes no constraint and sees every row —
-    the discovery mode an unbound device registration uses. A caller that
-    supplies one is judged by the shared rule, which normalizes the row tenant
-    before comparing: a padded identifier now matches instead of silently
-    missing, and a tenant that cannot be normalized sees nothing rather than
-    binding a blank value to match.
+    Two different inputs, two different meanings, and the difference is the
+    whole point:
+
+    - a caller that names *no* tenant at all imposes no constraint and sees
+      every row — the discovery mode an unbound device registration uses, and
+      the same unrestricted state the ``DEVICE`` profile spells ``allowed=None``;
+    - a caller that names one is judged by the shared rule, which normalizes the
+      row tenant before comparing: a padded identifier matches instead of
+      silently missing, and a tenant that cannot be normalized sees *nothing*
+      rather than binding a blank value to match.
+
+    "Named but unusable" must not collapse into "not named": a blank or
+    whitespace tenant that fell through to the unrestricted branch would show
+    every row, which is the fail-open direction in the one filter this module
+    converges. It goes to :func:`caller_visibility` instead, whose empty scope
+    renders as ``1=0`` in SQL — the same conclusion the row-level rule reaches,
+    because both are renderings of one definition.
     """
-    if normalize_tenant(tenant_id) is None:
+    if tenant_id is None:
         return list(rows)
     return list(visible_orders(rows, caller_visibility(tenant_id)).rows)
 

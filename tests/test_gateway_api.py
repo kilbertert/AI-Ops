@@ -12,11 +12,7 @@ from aiops_diagnostics.gateway_runtime import GatewayRuntime
 from aiops_diagnostics.gateway_store import GatewayDevice, GatewayStore
 from aiops_diagnostics.journal import EvidenceJournal
 from aiops_diagnostics.models import DiagnosticRequest, Intent
-from aiops_diagnostics.order_visibility import (
-    DEVICE_TENANT_MISMATCH,
-    DeviceTenantError,
-    resolve_device_tenant,
-)
+from aiops_diagnostics.order_visibility import DeviceTenantError, resolve_device_tenant
 
 
 class _FakeRuntime:
@@ -28,9 +24,11 @@ class _FakeRuntime:
     def start_run(self, device, *, problem, order_no, tenant_id, key_slot, provider, fixture_name):
         # The real runtime refuses a mismatching tenant through the shared entry
         # guard (#331); the fake applies the same single definition so what is
-        # under test here is the HTTP layer's mapping, not a second rule.
+        # under test here is the HTTP layer's mapping, not a second rule. The run
+        # is stored under the *resolved* tenant, exactly as the real runtime
+        # stores the effective one.
         self.entry_guard_calls += 1
-        resolve_device_tenant(device.tenant_id, tenant_id)
+        effective_tenant = resolve_device_tenant(device.tenant_id, tenant_id)
         self.counter += 1
         run_id = f"run-fake-{self.counter}"
         run = self.store.create_run(
@@ -39,7 +37,7 @@ class _FakeRuntime:
             incident_id=f"incident-{self.counter}",
             problem=problem,
             order_no=order_no or "ORDER-UNKNOWN",
-            tenant_id=tenant_id,
+            tenant_id=effective_tenant,
             key_slot=key_slot or "primary",
             provider=provider,
             fixture_name=fixture_name,
@@ -191,13 +189,17 @@ def test_cross_tenant_request_is_refused_once_with_one_error(tmp_path: Path) -> 
         assert runtime.entry_guard_calls == 2
 
 
-def test_gateway_run_rejects_a_tenant_id_with_unsupported_characters(tmp_path: Path) -> None:
-    """``tenant_id`` carries the same character constraint as ``order_no`` (#331).
+def test_gateway_run_tenant_id_is_judged_only_by_the_shared_entry_rule(tmp_path: Path) -> None:
+    """``tenant_id`` carries no character pattern: the entry rule decides (#331).
 
-    A blank or punctuated tenant used to reach the guard, where it either
-    widened the allowed set or was compared un-stripped against the enrolled
-    tenant. It is now refused as an invalid request, like every other bounded
-    identifier on this surface.
+    The transport must not hold a second tenant decision. A pattern here would
+    refuse a blank tenant as an invalid request even though the shared rule
+    already treats a blank one as *absent* — the enrolled tenant, not a second
+    tenant to match — and would refuse a padded identifier that normalizes onto
+    the enrolled tenant, changing a public request contract (202 -> 422) for
+    input the rule already accepts. So this surface keeps only the length bound
+    and lets ``resolve_device_tenant`` answer: the guard is reached for every
+    request, and the status code is the guard's, never the validator's.
     """
     config = tmp_path / "production.env"
     config.write_text("# test config\n", encoding="utf-8")
@@ -217,25 +219,46 @@ def test_gateway_run_rejects_a_tenant_id_with_unsupported_characters(tmp_path: P
             json={"code": code, "device_name": "windows", "platform": "win32"},
         ).json()["token"]
         headers = {"Authorization": f"Bearer {token}"}
-        for tenant_id in (" tenant-a ", "", "tenant a", "tenant/a"):
-            rejected = client.post(
+        # (requested tenant, expected status, expected run tenant)
+        cases = [
+            # Blank is an absent tenant: the run takes the enrolled one.
+            ("", 202, "tenant-a"),
+            # Padded normalizes onto the enrolled tenant: one normalization, so
+            # it is the run's own scope rather than a mismatch.
+            (" tenant-a ", 202, "tenant-a"),
+            # Genuinely outside the enrolled scope: refused by the guard.
+            ("tenant-b", 403, None),
+            # Punctuation the rule cannot reconcile with the enrolled tenant.
+            ("tenant a", 403, None),
+            ("tenant/a", 403, None),
+        ]
+        for tenant_id, status_code, run_tenant in cases:
+            response = client.post(
                 "/v1/runs",
                 headers=headers,
                 json={"problem": "amount mismatch", "order_no": "ORDER-1", "tenant_id": tenant_id},
             )
-            assert rejected.status_code == 422
-            assert rejected.json()["error"]["code"] == "INVALID_REQUEST"
-        assert runtime.entry_guard_calls == 0
+            assert response.status_code == status_code, tenant_id
+            if status_code == 202:
+                assert response.json()["tenant_id"] == run_tenant
+            else:
+                assert (
+                    response.json()["detail"] == "requested tenant does not match the enrolled device scope"
+                )
+
+        # Every request reached the guard: none was refused at the edge.
+        assert runtime.entry_guard_calls == len(cases)
 
 
-def test_runtime_start_run_refuses_a_mismatching_tenant_with_one_code(tmp_path: Path) -> None:
+def test_runtime_start_run_refuses_a_mismatching_tenant_with_one_error(tmp_path: Path) -> None:
     """The runtime refuses through the shared entry rule, not a copy of it.
 
     The guard used to live here as ``_tenant_for_device`` raising a bare
     ``ValueError``, which the HTTP layer answered with 400 while the entry
-    answered 403. It is now the shared definition's coded domain error, so a
-    direct runtime caller gets the same single refusal the HTTP entry maps. The
-    guard runs before anything is queued, so no diagnosis is started.
+    answered 403. It is now the shared definition's domain error, so a direct
+    runtime caller gets the same single refusal the HTTP entry maps: one
+    condition, one exception type, one status code. The guard runs before
+    anything is queued, so no diagnosis is started.
     """
     database = tmp_path / "gateway.db"
     config = tmp_path / "production.env"
@@ -267,7 +290,7 @@ def test_runtime_start_run_refuses_a_mismatching_tenant_with_one_code(tmp_path: 
             )
     finally:
         runtime.shutdown()
-    assert excinfo.value.code == DEVICE_TENANT_MISMATCH
+    assert isinstance(excinfo.value, DeviceTenantError)
     assert str(excinfo.value) == "requested tenant does not match the enrolled device scope"
     assert store.list_runs("ops") == []
 

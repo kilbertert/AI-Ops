@@ -290,7 +290,7 @@ queued | running | completed | inconclusive | failed | expired
 
 | code | 含义 |
 |---|---|
-| `DIAGNOSIS_ORDER_OUT_OF_SCOPE` | 订单不在当前授权租户内（越权）。创建时的越权订单已由 `404 ORDER_NOT_FOUND` 拒绝；此码是轮询到终态后出现的补充信号，用于把授权问题与供应商问题分开，重试不会改变结论 |
+| `DIAGNOSIS_ORDER_OUT_OF_SCOPE` | 订单不在当前授权租户内（越权）。创建时的越权订单已由 `404 ORDER_NOT_FOUND` 拒绝；此码是**纵深防御**信号而非必经终态——worker 携带冻结的 `QueryScope`，租户以参数绑定的 SQL 谓词下推，行级规则只会看到 SQL 已放行的行，越权订单因此在创建阶段即被拒绝。仅当"下推之后仍有行未通过行级规则"时出现（某一证据源无法下推，或创建与 worker 之间授权范围发生变化），用途是把授权问题与供应商问题分开，重试不会改变结论 |
 | `DIAGNOSIS_BLOCKED` | 模型未按结构化输出 schema 产出结论（供应商能力或配额受限） |
 | `DIAGNOSIS_FAILED` | 其余运行失败 |
 

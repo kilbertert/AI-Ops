@@ -47,7 +47,10 @@ FIXTURE_NAMES = frozenset({"ocpp_consistent.json", "ykc_amount_mismatch.json", "
 
 #: A blocked run whose order turned out to be outside the caller's tenant. It is
 #: NOT ``DIAGNOSIS_BLOCKED``: that code means the supplier did not honor
-#: ``output_schema``, and an operator must be able to tell the two apart.
+#: ``output_schema``, and an operator must be able to tell the two apart. On the
+#: standard API face this is defense in depth rather than an expected terminal
+#: state — see ``_blocked_diagnosis_error`` for why, and both contract docs for
+#: what a frontend may therefore rely on.
 DIAGNOSIS_ORDER_OUT_OF_SCOPE = "DIAGNOSIS_ORDER_OUT_OF_SCOPE"
 
 
@@ -1239,6 +1242,17 @@ def _blocked_diagnosis_error(workspace: AgentWorkspace) -> tuple[str, str]:
     message states the reason without naming the foreign tenant: the caller is a
     delegated end user, and which tenant owns an order they cannot see is not
     theirs to learn.
+
+    Reachability on this face is deliberately one-directional. The worker runs
+    with a frozen ``QueryScope`` and the scoped source set, so the tenant is
+    pushed into SQL and the row-level rule only ever sees rows the predicate
+    already admitted; an out-of-scope order is refused earlier still, at create
+    time, by the same scope. ``DIAGNOSIS_ORDER_OUT_OF_SCOPE`` is therefore
+    defense in depth, not a terminal state the frontend should wait for: it
+    appears only when a row survives the push-down and *still* fails the
+    row-level rule — a source that cannot push the rule down, or a scope
+    re-resolved differently between create and worker. Both contract docs say
+    so, so nobody promises a signal production does not emit.
     """
     try:
         entries = EvidenceJournal(workspace, workspace.load_manifest()).entries()
