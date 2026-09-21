@@ -22,12 +22,21 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-import urllib.error
-import urllib.request
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
+from aiops_diagnostics.bounded_http import (
+    JSON_CONTENT_TYPE,
+    EnvelopeParser,
+    ErrorMapping,
+    HttpFailure,
+    RequestSpec,
+    bearer_auth_header,
+    join_url,
+    parse_code_data_envelope,
+    request_json,
+)
 from aiops_diagnostics.config import UpmsSettings
 
 SCOPE_ERROR_AUTH_FAILED = "scope.auth_failed"
@@ -63,12 +72,42 @@ _SCOPE_TYPE_BY_PLATFORM_CODE = {
 _SAFE_PATH_SEGMENT = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
 
 
+def _raw_payload(payload: Any, *, mapping: ErrorMapping) -> Any:
+    """无信封端点（``/role/list`` 返回裸 JSON 数组）：解码后的 JSON 原样返回。
+
+    形状判断留给调用方，与迁移前一致：骨架自带的 ``parse_raw_envelope`` 会把标量
+    载荷判为信封不符，而本端点的旧实现把任何形状都交给调用方，因此这里保留原样
+    返回，``invalid_envelope`` 永不被触发。
+    """
+    return payload
+
+
 class ScopeError(RuntimeError):
     """A scope resolution failed and the diagnostic run must fail closed."""
 
     def __init__(self, message: str, *, code: str | None = None) -> None:
         super().__init__(message)
         self.code = code
+
+
+def _unavailable_message(failure: HttpFailure) -> str:
+    """UPMS 请求失败文案：信封层与 HTTP/传输层措辞不同。
+
+    骨架对信封层拒绝（``code`` 不为 0/200）与 HTTP/传输层故障都归入
+    ``unavailable``，但旧实现给两者不同的文案，因此按 ``failure.cause``
+    分流：骨架只在信封层留空 ``cause``。
+    """
+    if failure.cause is None:
+        return f"UPMS 拒绝查询: {failure.detail}"
+    detail = f"HTTP {failure.status}" if failure.status is not None else failure.detail
+    return f"UPMS 请求失败: {detail}"
+
+
+def _rejected_message(failure: HttpFailure) -> str:
+    """凭证被拒文案：HTTP 层与信封层措辞不同，同样按 ``failure.cause`` 分流。"""
+    if failure.cause is None:
+        return f"UPMS 拒绝查询: {failure.detail}"
+    return "UPMS 拒绝平台凭证"
 
 
 @dataclass(frozen=True, slots=True)
@@ -452,37 +491,53 @@ class UpmsDirectory:
             organ_ids = custom_ids if ds_type == 1 else ((caller_organ_id,) if caller_organ_id else ())
         return DataScope(type=scope_type, organ_ids=organ_ids, shop_ids=shop_ids, site_ids=())
 
-    def _request(self, path: str, credential: str) -> Any:
-        """Fetch one UPMS path and return the raw payload envelope."""
+    def _request(self, path: str, credential: str, *, envelope: EnvelopeParser = _raw_payload) -> Any:
+        """Fetch one UPMS path and return the payload after *envelope* is applied.
+
+        The transport skeleton owns request assembly, the failure capture set and
+        the ``(401, 403)`` status table. This client declares its own domain
+        errors and which envelope the endpoint speaks: ``/role/list`` answers
+        with a bare JSON array (``_raw_payload``), every other endpoint with a
+        ``code``/``data`` envelope. Both layers share one ``ErrorMapping``, so its
+        callables discriminate on ``failure.cause`` — the skeleton leaves it
+        ``None`` exactly for an envelope-level rejection, whose messages differ
+        from the HTTP/transport ones.
+        """
         base_url = self.settings.base_url
         if not base_url:
             raise ScopeError("UPMS 服务地址未配置", code=SCOPE_ERROR_CONFIG_MISSING)
         token = (credential or "").strip()
         if not token:
             raise ScopeError("平台凭证为空", code=SCOPE_ERROR_AUTH_FAILED)
-        request = urllib.request.Request(f"{base_url.rstrip('/')}{path}", method="GET")
-        request.add_header("Authorization", f"Bearer {token}")
-        request.add_header("Accept", "application/json")
-        try:
-            with urllib.request.urlopen(request, timeout=self.settings.timeout_seconds) as response:
-                return json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            if exc.code in (401, 403):
-                raise ScopeError("UPMS 拒绝平台凭证", code=SCOPE_ERROR_AUTH_FAILED) from exc
-            raise ScopeError(f"UPMS 请求失败: HTTP {exc.code}", code=SCOPE_ERROR_UPMS_UNAVAILABLE) from exc
-        except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, UnicodeDecodeError) as exc:
-            raise ScopeError(
-                f"UPMS 请求失败: {exc.__class__.__name__}", code=SCOPE_ERROR_UPMS_UNAVAILABLE
-            ) from exc
+
+        def _rejected(failure: HttpFailure) -> Exception:
+            return ScopeError(_rejected_message(failure), code=SCOPE_ERROR_AUTH_FAILED)
+
+        def _unavailable(failure: HttpFailure) -> Exception:
+            return ScopeError(_unavailable_message(failure), code=SCOPE_ERROR_UPMS_UNAVAILABLE)
+
+        return request_json(
+            RequestSpec(
+                url=join_url(base_url, path),
+                headers={
+                    "Authorization": bearer_auth_header(token),
+                    "Accept": JSON_CONTENT_TYPE,
+                },
+                timeout=self.settings.timeout_seconds,
+            ),
+            mapping=ErrorMapping(
+                auth_rejected=_rejected,
+                http_error=_unavailable,
+                unavailable=_unavailable,
+                invalid_body=_unavailable,
+                invalid_envelope=_unavailable,
+            ),
+            envelope=envelope,
+        )
 
     def _get(self, path: str, credential: str) -> Any:
-        payload = self._request(path, credential)
-        if not isinstance(payload, dict) or payload.get("code") not in (0, 200):
-            detail = payload.get("msg") if isinstance(payload, dict) else "invalid response"
-            is_auth_failure = isinstance(payload, dict) and payload.get("code") in (401, 403)
-            code = SCOPE_ERROR_AUTH_FAILED if is_auth_failure else SCOPE_ERROR_UPMS_UNAVAILABLE
-            raise ScopeError(f"UPMS 拒绝查询: {detail}", code=code)
-        return payload.get("data")
+        """Fetch one UPMS path and return the ``data`` of its ``code``/``data`` envelope."""
+        return self._request(path, credential, envelope=parse_code_data_envelope)
 
 
 def _expand_roles(roles: tuple[RoleGrant, ...]) -> frozenset[str]:
