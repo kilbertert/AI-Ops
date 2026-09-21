@@ -23,6 +23,12 @@ from pymysql.cursors import DictCursor
 
 from aiops_diagnostics.config import Settings
 from aiops_diagnostics.http_auth import build_internal_token_headers
+from aiops_diagnostics.order_visibility import (
+    TenantVisibility,
+    VisibilityProfile,
+    normalize_tenant,
+    visible_orders,
+)
 from aiops_diagnostics.query_scope import QueryScope
 
 SAFE_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -1110,8 +1116,15 @@ class FixtureSources:
 
     def get_orders(self, order_no: str, tenant_id: str | None = None) -> list[dict[str, Any]]:
         orders = [row for row in self.payload.get("orders", []) if row.get("order_no") == order_no]
-        if tenant_id:
-            orders = [row for row in orders if row.get("tenant_id") == tenant_id]
+        # Tenant visibility is one shared rule (#325 T1); this source no longer
+        # carries its own comparison. A caller-supplied tenant is a caller
+        # profile with that single allowed tenant.
+        if tenant_id is not None:
+            visibility = TenantVisibility(
+                profile=VisibilityProfile.CALLER,
+                allowed=frozenset({normalize_tenant(tenant_id) or ""}),
+            )
+            orders = list(visible_orders(orders, visibility).rows)
         return copy.deepcopy(orders)
 
     def get_fee_template_record(self, order_no: str, tenant_id: str | None = None) -> dict[str, Any] | None:
