@@ -567,7 +567,9 @@ Java BFF 透传与前端 blocks[] 渲染属 #171/#173 及真实媒体验收范�
 - 结果：PASS（2026-09-10，pytest `tests/test_conversation_api.py`）。
 
 证据边界：CONV-01..04 为 mock-first 协议级验证。真实多设备续聊（前端轮询/刷新）、
-BFF 会话透传、停止生成的真实取消链路由 #173 前端票与 P0-E2E-REAL 覆盖；真实
+BFF 会话透传仍由 #171/#173 与 P0-E2E-REAL 覆盖；**停止生成的真实取消链路由 PRD #346
+交付**（BFF/前端交接见 `docs/agents/assistant-cancel-handoff.md`，协议级证据见
+`docs/validation.md` 的「#358」），41 公网复跑待联调；真实
 ScopeContext（UPMS/Dis）行为由 T1-T3 既有真实验收线覆盖。
 
 ## P0-E2E 本地集成与真实链路状态
@@ -713,7 +715,7 @@ ScopeContext（UPMS/Dis）行为由 T1-T3 既有真实验收线覆盖。
 - 有序动作：创建 qa 作业等待终态，读监控明细行。
 - 预期结果：作业 failed/QA_FAILED 且指标行 (qa, failed, QA_FAILED) 带 duration_ms；行内无问题原文。
 - 结果：PASS（2026-09-10）。
-- 说明：取消/超时的完整真实链路（用户停止、模型超时）归 #173/P0-E2E-REAL 真实链路验收；本票在失败码枚举与记录接缝上覆盖其落点（CONVERSATION_BUSY/DIAGNOSIS_BLOCKED/QA_FAILED/KB_UNAVAILABLE）。
+- 说明：用户停止的完整真实链路归 PRD #346（取消端点 + `cancelled` 终态；BFF/前端交接见 `docs/agents/assistant-cancel-handoff.md`，协议级证据见 `docs/validation.md` 的「#358」，41 公网复跑待联调）；模型超时的真实链路归 P0-E2E-REAL。本票在失败码枚举与记录接缝上覆盖其落点（CONVERSATION_BUSY/DIAGNOSIS_BLOCKED/QA_FAILED/KB_UNAVAILABLE）。
 
 ### METRICS-REAL 真实环境监控（部署后）
 

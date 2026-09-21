@@ -1,5 +1,45 @@
 # 验证与验收计划
 
+## #358 取消契约分发 + #173 断链纠正（2026-09-21，本地自动化验证）
+
+**范围**：PRD #346 子票 T5。把助手入口的等待态契约交付给 BFF 组与前端组，并纠正「停止生成」
+这条引用链。**本片未完成业务验收**：新增契约是文档交付物，§5 的响应样例由回归测试在真实网关栈上
+抓取，**尚未在 41 公网链路跑过取消**——复跑步骤写在交接文档 §8。
+
+**交付物**：`docs/agents/assistant-cancel-handoff.md`（读者明确为 BFF/Java 组 + 客服前端组）。
+含：输入框锁定/复原规则（`qa`/`diagnosis` 的 202 锁，`faq`/`clarification` 的同步 200 不锁，
+跳转类动作不经入口不锁）、解锁由作业终态驱动（含 `is_generating` 的定位：会话并发闸门，不是
+解锁条件）、取消端点契约（幂等表、404 三因同形、落库优先+尽力中断）、`cancelled` 的界面含义
+（**无内容**，接口不流式，无"部分内容"分支）、陷阱清单 13 条、41 联调复跑步骤。
+
+**响应样例不是手写的**：7 个样例由 `tests/test_assistant_cancel_handoff.py` 在真实网关栈
+（真实 `GatewayRuntime` + 真实 `GatewayStore` + 走 HTTP 路由的 `TestClient`）上抓取，只掩盖逐次
+生成的 `qa_id`/`conv_` id 与 ISO 8601 时间戳，其余逐字段比对；**文档漂移即测试失败**（实测：
+把样例里一个值改错，该测试转红）。
+
+**#173 断链纠正**（PRD #346）：6 处把「真实停止生成链路」归给已关闭 #173 的引用已改指本 PRD
+（`qa-plan.md` 两处、本页 CONV-01 一条、`docs/开发进度.md` 两处、
+`docs/agents/p0-media-canary.md` 验收表一项）。#173 的「停止生成」条目在范围决定时被降级为
+范围外，2026-09-14 的 PASS 证据引的是 CONV-01（一个不含任何停止接口的会话生命周期用例）——
+停止生成当时从未有过实现或证据。runbook 里「并发忙碌/停止」共用 C5（409）证据的那一行已拆开：
+并发忙碌仍归 C5（409），用户停止改为"不得以 409 充数"，指向 PRD #346 的协议级证据，并在 41 公网
+停止链路跑通前记 BLOCKED、不勾验收项。
+
+**新增自动化检查**（均以"去掉修复即失败"核对过）：
+
+| 检查 | 文件 | 守护的行为 |
+|---|---|---|
+| `test_the_handoff_shows_what_the_gateway_answers` | `tests/test_assistant_cancel_handoff.py` | 交接文档 7 个响应样例逐字段等于真实响应；文档漂移即失败 |
+| `test_no_document_still_blames_173_for_the_stop_link` | `tests/test_assistant_cancel_handoff.py` | 任何同时提及 #173 与停止链路的文档块必须同时点名 #346；把已纠正的 6 处改回原样即转红 |
+| `test_no_document_claims_the_stop_link_was_already_accepted` | `tests/test_assistant_cancel_handoff.py` | 不得声称停止生成已验收而不指出 PRD 或真实测试；同上反向守护 |
+
+**结果**：本地全量 `uv run pytest` 1072 passed（此前 1069），`uv run ruff check` 与
+`ruff format --check` 干净；既有断言逐条未改（新增 3 条，未动任何既有检查）。
+
+**已知缺口（不在本片）**：41 公网 / BFF 放行 `/cancel` 后的真实验收；取消结果入指标与两条核心
+回归守护的独立封口（#359）；配套地 `frontend-api-brief.md` §2.3 已补 `cancelled` 状态值与透传
+要求，前端输入框的锁定/复原实现属前端改动，不在本仓。
+
 ## #356 网关重启收敛在飞的提问作业（2026-09-21，本地自动化验证）
 
 **范围**：PRD #346 子票 T3。网关重启时把仍处于 `queued`/`running` 的提问收敛到终态，
@@ -1097,7 +1137,7 @@ S3 退役验收（公网入口 + 开机自启）：FAQ 200（28 条）、健康�
 - 已验证：跨租户身份层拒绝、跨入口统一 404（含 GET/DELETE/active-order 端点）；绑定活跃订单必须归属校验（未授权统一 404）；follow-up 省略订单号复用活跃订单走 diagnosis，归属撤销后清除绑定走 qa；知识问题始终 qa+RAG；并发 409 且无会话提问不受影响；崩溃锁 120s 自过期；取消/无答案轮次不保留、不进上下文；窗口取 8 轮与 8k 较小者（单条超预算轮次单独保留不返回空上下文）；30 天过期不可见。
 - 版本语义：会话记录 agent_version_key；`select_customer_agent` 每回合现查最新已发布版本（新回合新版本），执行中回合持 #170 的 selection 快照（原版本），双向满足 #172 版本切换验收。
 
-未完成业务验收：前端刷新/跨设备续聊的真实轮询体验、BFF 会话字段透传、真实"停止生成"按钮链路属 #173；未连接生产环境，不把 fake 结果记为业务验收。
+未完成业务验收：前端刷新/跨设备续聊的真实轮询体验与 BFF 会话字段透传属 #173；**真实"停止生成"按钮链路原归 #173 但当时从未实现**，现由 PRD #346 交付（取消端点 + `cancelled` 终态；协议级证据见本页「#358」，BFF/前端交接见 `docs/agents/assistant-cancel-handoff.md`），41 公网复跑待联调；未连接生产环境，不把 fake 结果记为业务验收。
 ## T1 受限知识检索与媒体资源协议验证（issue #168，2026-09-09）
 
 验证范围：AI-Ops 内部 `knowledge_search` guard、RAGFlow 字段规范化和媒体资源授权协议；不包含生产 `kb-service`、RAGFlow、Java BFF 或浏览器部署。

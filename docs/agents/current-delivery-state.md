@@ -64,6 +64,7 @@ curl --silent --show-error --max-time 20 \
 
 - [41 环境运维与真实验收手册](env-41-runbook.md) — 部署/资源创建/会话获取/公网验收的可执行步骤
 - [真实 41 INTENT-01..08 与模型契约修复](../validation.md)
+- [助手入口等待态与取消：BFF / 前端交接契约](assistant-cancel-handoff.md) — 输入框锁定/复原规则、取消端点契约、`cancelled` 终态、真实响应样例（PRD #346）
 - [里程碑、分支和已知缺口](../开发进度.md)
 - [前端快捷动作与 clarification 合同](frontend-api-brief.md)
 - [验收场景与人工复跑步骤](../../qa-plan.md)

@@ -90,17 +90,24 @@ Content-Type: application/json                   # POST 时
 
 ### 2.3 状态字段（异步线通用）
 
-健康报告作业与单问诊断都是"创建 → 轮询"模型：
+统一助手的提问作业与单问诊断共用同一套状态（都是"创建 → 轮询"）：
 
 ```text
-queued → running → completed | inconclusive | failed | expired   （诊断）
-queued → running → completed | failed | expired                  （报告作业）
+提问作业  queued → running → completed | failed | expired | cancelled
+单问诊断  queued → running → completed | inconclusive | failed | expired | cancelled
+报告作业  queued → running → completed | failed | expired
 ```
 
-- 创建响应都带 `retry_after_ms`，按它节流轮询；不要密集轮询。
-- 只有 `completed`/`inconclusive` 时 `result`/`report` 才有值。
+- **`cancelled` = 用户主动停止**（PRD #346 新增，只有提问作业能产生）。BFF 必须**原样透传**这个
+  新状态值，不得因响应词表白名单把它改写或丢弃——被丢弃的表现是输入框不解锁或误判为失败。
+  诊断没有独立的取消入口，因此诊断线不会真的产出该值，只在枚举里；报告作业不在该共享状态集内。
+- 创建响应都带 `retry_after_ms`，按它节流轮询；不要密集轮询。**终态时它为 `null`**——它与
+  `status` 一起构成"等待结束"的唯一信号。
+- 只有 `completed`/`inconclusive` 时 `result`/`report` 才有值；**`cancelled` 时 `result` 恒为
+  `null`**（该接口不流式，不存在"部分内容"），界面显示「已停止」即可。
 - `expired` 表示结果超过保留期，让用户重新发起。
 - 重复创建同一订单的报告作业会复用未过期作业（幂等），不会重复计算。
+- 输入框锁定/复原与取消端点契约见 [assistant-cancel-handoff.md](./assistant-cancel-handoff.md)。
 
 ### 2.4 语言标识（`Accept-Language`，国际化）
 
@@ -568,6 +575,10 @@ curl -i "https://api.mall.qushiyun.com/v1/faq/recommendations" \
 ## 10.8 智能问答调用示例（前端可直接照抄）
 
 统一入口 `POST /v1/assistant/questions`（`order_no` 可选）。三种场景：
+
+> **等待态与「停止」契约单独成篇**：[assistant-cancel-handoff.md](./assistant-cancel-handoff.md)
+> ——哪些响应锁输入框、解锁由什么驱动、取消端点与 `cancelled` 终态、真实响应样例与陷阱清单。
+> **BFF 需放行新路径 `POST /v1/assistant/questions/{qa_id}/cancel` 并原样透传新状态值 `cancelled`。**
 
 ### 场景 A：快捷问 / FAQ 命中 —— 同步返回答案
 
