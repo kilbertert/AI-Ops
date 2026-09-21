@@ -1,14 +1,20 @@
 from __future__ import annotations
 
-import http.client
-import json
-import random
 import time
-import urllib.error
-import urllib.request
 from collections.abc import Callable
 from typing import Any
 
+from aiops_diagnostics.bounded_http import (
+    JSON_CONTENT_TYPE,
+    ErrorMapping,
+    HttpFailure,
+    RequestSpec,
+    RetryPolicy,
+    bearer_auth_header,
+    json_body,
+    parse_raw_envelope,
+    request_json,
+)
 from aiops_diagnostics.gateway_config import GatewayClientProfile, canonical_gateway_url
 from aiops_diagnostics.gateway_tokens import load_token, save_profile, save_token
 
@@ -124,20 +130,15 @@ class GatewayClient:
         deadline: float | None = None,
     ) -> dict[str, Any]:
         body = None
-        headers = {"Accept": "application/json"}
+        headers = {"Accept": JSON_CONTENT_TYPE}
         if payload is not None:
-            body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-            headers["Content-Type"] = "application/json"
+            body = json_body(payload)
+            headers["Content-Type"] = JSON_CONTENT_TYPE
         if authenticated:
             if not self.token:
                 raise GatewayClientError("gateway token is not configured")
-            headers["Authorization"] = f"Bearer {self.token}"
-        request = urllib.request.Request(
-            self.base_url + path,
-            data=body,
-            headers=headers,
-            method=method,
-        )
+            headers["Authorization"] = bearer_auth_header(self.token)
+
         # Retry only idempotent GET requests for transient connection errors
         # (Tailscale/VPN blips, momentary unreachable Gateway). POST enroll and
         # create_run are non-idempotent: the Gateway acts before responding, so a
@@ -146,34 +147,41 @@ class GatewayClient:
         # (404/401/5xx) are never retried: they reflect a deliberate Gateway
         # response, not a transport failure. When polling, wait_for_run forwards
         # its deadline so a slow connection cannot retry far past the timeout.
-        attempts = self.max_retries + 1 if method == "GET" else 1
-        last_connection_error: Exception | None = None
-        raw: str | None = None
-        for attempt in range(attempts):
-            try:
-                with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                    raw = response.read().decode("utf-8")
-                last_connection_error = None
-                break
-            except urllib.error.HTTPError as exc:
-                detail = _error_detail(exc)
-                raise GatewayClientError(f"gateway HTTP {exc.code}: {detail}") from exc
-            except (urllib.error.URLError, TimeoutError, ConnectionError, http.client.IncompleteRead) as exc:
-                last_connection_error = exc
-                past_deadline = deadline is not None and time.monotonic() >= deadline
-                if attempt + 1 >= attempts or past_deadline:
-                    break
-                # Exponential backoff with jitter so simultaneous clients do not
-                # retry in lockstep after a shared gateway restart.
-                time.sleep(min(2**attempt, 8) + random.uniform(0, 1))
-        if raw is None:
-            raise GatewayClientError(
-                f"gateway connection failed: {last_connection_error.__class__.__name__}"
-            ) from last_connection_error
-        try:
-            result = json.loads(raw)
-        except json.JSONDecodeError as exc:
-            raise GatewayClientError("gateway returned invalid JSON") from exc
+        # The jittered backoff itself now lives in the skeleton, so this is the
+        # only implementation of it in the repository.
+        def _http_error(failure: HttpFailure) -> Exception:
+            return GatewayClientError(f"gateway HTTP {failure.status}: {failure.detail}")
+
+        def _unavailable(failure: HttpFailure) -> Exception:
+            # The class name is part of the observable message; the skeleton
+            # carries it in ``detail`` for transport failures.
+            return GatewayClientError(f"gateway connection failed: {failure.detail}")
+
+        result = request_json(
+            RequestSpec(
+                url=self.base_url + path,
+                method=method,
+                headers=headers,
+                body=body,
+                timeout=self.timeout,
+            ),
+            mapping=ErrorMapping(
+                auth_rejected=_http_error,
+                http_error=_http_error,
+                unavailable=_unavailable,
+                invalid_body=lambda _f: GatewayClientError("gateway returned invalid JSON"),
+                invalid_envelope=lambda _f: GatewayClientError("gateway returned an invalid response"),
+            ),
+            envelope=parse_raw_envelope,
+            retry=RetryPolicy(
+                max_retries=self.max_retries,
+                base_delay_seconds=1.0,
+                max_delay_seconds=8.0,
+                jitter_seconds=1.0,
+                methods=frozenset({"GET"}),
+            ),
+            deadline=deadline,
+        )
         if not isinstance(result, dict):
             raise GatewayClientError("gateway returned an invalid response")
         return result
@@ -208,16 +216,3 @@ def _path_part(value: str) -> str:
     if not value or "/" in value or "\\" in value or ".." in value:
         raise GatewayClientError("invalid gateway path identifier")
     return value
-
-
-def _error_detail(error: urllib.error.HTTPError) -> str:
-    try:
-        body = error.read()
-        if isinstance(body, bytes):
-            body = body.decode("utf-8")
-        payload = json.loads(body)
-        if isinstance(payload, dict) and payload.get("detail"):
-            return str(payload["detail"])
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        pass
-    return "request rejected"
