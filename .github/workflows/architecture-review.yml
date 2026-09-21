@@ -40,7 +40,14 @@ jobs:
     needs: check-backlog
     if: needs.check-backlog.outputs.proceed == 'true'
     runs-on: self-hosted
-    timeout-minutes: 20
+    # Sized against observed runs, not guessed. The review itself took 19m13s
+    # on StepFun against a 20m budget, so the job was cancelled inside its own
+    # success path — after the PRD was published, while the post step uploaded
+    # the npm cache — and reported a spurious `cancelled` that reads as failure.
+    # A real run on a slower day needs headroom on top of that, so 45m gives
+    # ~2.3x the observed review time. The other agent workflows already budget
+    # 60m; this one now sits below them rather than an order below.
+    timeout-minutes: 45
     concurrency:
       group: architecture-review
       cancel-in-progress: false
