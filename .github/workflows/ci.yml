@@ -15,20 +15,19 @@ concurrency:
 
 jobs:
   verify:
-    # Self-hosted, NOT ubuntu-latest: the GitHub-hosted minutes for this
-    # repository were exhausted, which stopped every job from starting at all
-    # ("recent account payments have failed or your spending limit needs to be
-    # increased"). The repository's own runner is online and unlimited, and the
-    # other workflows already use it.
+    # GitHub-hosted, NOT self-hosted. The self-hosted runner was chosen while
+    # GitHub-hosted minutes for this repository were exhausted, and it was
+    # paired with a fork gate because a persistent runner must never execute
+    # untrusted pull-request code. The repository is public now, so standard
+    # GitHub-hosted runners cost nothing and the gate can go: GitHub counts a
+    # skipped required job as a success, so a gated job silently satisfies the
+    # branch Ruleset for every fork pull request.
     #
-    # SECURITY BOUNDARY: self-hosted runners must never run untrusted code.
-    # This job runs pull-request code with repository secrets and a persistent
-    # filesystem, so it is only safe while every PR author is trusted and fork
-    # PRs never reach it. If this repository ever accepts outside
-    # contributions, this job must go back to a GitHub-hosted runner and the
-    # fork gate below is not sufficient on its own.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: self-hosted
+    # The agent-*.yml and architecture-review.yml workflows stay on the
+    # self-hosted runner: they need its persistent filesystem, AGENT_PAT and the
+    # controller/candidate/delivery isolation, and .sandcastle/policy-check.mjs
+    # statically locks their owner-only same-repository gate.
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - name: Check out repository
@@ -39,17 +38,7 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@bd01e18f51369d5a26f1651c3cb451d3417e3bba # v6.3.1
         with:
-          # Cache save is disabled on the self-hosted runner. Its post-job step
-          # runs `uv cache prune` against the SAME uv cache this host's
-          # development work uses (~/.cache/uv, ~900M, concurrently held by live
-          # processes), so the step contends, hangs for its full timeout, and
-          # then fails the job. Worse than slow, it is destructive: a CI job
-          # pruning the developer's cache is not something to leave armed.
-          #
-          # No speed is lost: `uv sync` below still reads that local cache
-          # directly (the install step measured ~11s), and the action's own
-          # cache is only a GitHub-side copy we do not need here.
-          enable-cache: false
+          enable-cache: true
           python-version: "3.13"
 
       - name: Install locked dependencies

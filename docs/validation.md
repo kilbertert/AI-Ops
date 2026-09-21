@@ -1642,3 +1642,31 @@ ja -> 请先选择需要检测的订单后，我才能继续处理。   （不�
 
 **边界声明**：本次验收证明的是**没漏中文**，**不是译得对**。译文质量属语义判断，不在本断言范围。
 **未验**：`de`/`fr`/`es`/`pt` 的真实公网卡片（本地测试覆盖，41 未逐语实跑）；客户端预填提问（不在本服务）。
+
+## CI `verify` 迁回 GitHub-hosted runner（2026-09-21）
+
+**范围**：只改 `verify` 的执行环境、fork 门与该 job 的缓存设置；不改变 AI-Ops 诊断 API、
+数据库、业务安全边界或用户入口，`agent-*` 与 `architecture-review.yml` 的自托管执行边界不变。
+
+**起因**：默认分支 Ruleset 把 `verify` 设为必需检查后，评审指出该 job 对 fork PR 被
+`if: github.event.pull_request.head.repo.full_name == github.repository` 跳过，而 GitHub 对被
+跳过的必需作业按成功处理，因此 fork PR 能在 Linux 检查未运行时满足规则。原迁移理由（宿主
+分钟数耗尽）在仓库转为公开后不再成立。
+
+| 检查 | 结果 |
+|---|---|
+| 变更前 `verify` runner | `self-hosted`，带 fork 门 |
+| 变更后 `verify` runner | `ubuntu-latest`，无 fork 门 |
+| 缓存覆盖 | 删除 `enable-cache: false`（该覆盖的理由是自托管 runner 与开发机共用 `~/.cache/uv`） |
+| `uv run ruff check .` | All checks passed |
+| `uv run ruff format --check .` | 200 files already formatted |
+| `uv run pytest -q` | **1007 passed**（39.92s） |
+| `compileall` / `uv pip check` | 通过 / 49 packages compatible |
+| `node .sandcastle/policy-check.mjs workflows` | policy check passed |
+| `actionlint .github/workflows/ci.yml` | 通过 |
+| 本 PR 必需检查 | `Workflow policy`、`verify`、`windows-verify`（结果见 PR 的 CI） |
+
+**未验**：真实 fork PR 上 `verify` 的执行未取证（本仓当前无外部贡献者），本结论只覆盖同仓库 PR。
+
+**操作知识自检**：本次变更只涉及 GitHub Actions 配置与文档，未在主机上执行运维命令，按
+AGENTS.md 的自检条款无可沉淀的新操作步骤。
