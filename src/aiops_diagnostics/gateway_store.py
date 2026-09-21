@@ -24,9 +24,18 @@ HEALTH_JOB_COMPLETED_RETENTION = timedelta(minutes=15)
 HEALTH_JOB_FAILED_RETENTION = timedelta(minutes=5)
 HEALTH_JOB_DEADLINE = timedelta(seconds=30)
 ACTIVE_DIAGNOSIS_STATUSES = frozenset({"queued", "running"})
-TERMINAL_DIAGNOSIS_STATUSES = frozenset({"completed", "inconclusive", "failed", "expired"})
+# `cancelled` is the user-stop terminal status (PRD #346). assistant_questions
+# reuses this set, so the value shows up in the diagnosis enum as well — one
+# shared status set instead of two. Diagnoses have no cancel entry point of
+# their own, so nothing here produces it yet.
+TERMINAL_DIAGNOSIS_STATUSES = frozenset({"completed", "inconclusive", "failed", "expired", "cancelled"})
 DIAGNOSIS_COMPLETED_RETENTION = timedelta(minutes=15)
 DIAGNOSIS_FAILED_RETENTION = timedelta(minutes=5)
+# A cancelled job is kept on the short (failed) tier: the client already holds
+# the answer surface, and the row only has to outlive the refresh window. Not
+# "never expires" (unbounded rows) and not "expires now" — the user is still
+# looking at 「已停止」 when they refresh.
+DIAGNOSIS_FAILED_RETENTION_STATUSES = frozenset({"failed", "cancelled"})
 # The diagnosis deadline must cover real agent runs, which the API contract
 # documents as tens of seconds to minutes (observed: ~7 minutes on the real
 # 120-world link). A short deadline marks still-running diagnoses as expired
@@ -370,7 +379,7 @@ class GatewayStore:
             now + DIAGNOSIS_COMPLETED_RETENTION
             if status in {"completed", "inconclusive"}
             else now + DIAGNOSIS_FAILED_RETENTION
-            if status == "failed"
+            if status in DIAGNOSIS_FAILED_RETENTION_STATUSES
             else now
             if status == "expired"
             else None
@@ -387,7 +396,7 @@ class GatewayStore:
                     completed_at = COALESCE(completed_at, ?),
                     expires_at = COALESCE(?, expires_at), updated_at = ?
                 WHERE diagnosis_id = ?
-                  AND status NOT IN ('completed', 'inconclusive', 'failed', 'expired')
+                  AND status IN ('queued', 'running')
                 """,
                 (
                     status,
@@ -505,7 +514,7 @@ class GatewayStore:
             now + DIAGNOSIS_COMPLETED_RETENTION
             if status in {"completed", "inconclusive"}
             else now + DIAGNOSIS_FAILED_RETENTION
-            if status == "failed"
+            if status in DIAGNOSIS_FAILED_RETENTION_STATUSES
             else now
             if status == "expired"
             else None
@@ -594,7 +603,8 @@ class GatewayStore:
         connection.execute(
             """
             UPDATE standard_diagnoses SET status = 'expired', updated_at = ?
-            WHERE status IN ('completed', 'inconclusive', 'failed') AND expires_at <= ?
+            WHERE status IN ('completed', 'inconclusive', 'failed', 'cancelled')
+              AND expires_at <= ?
             """,
             (now_text, now_text),
         )
@@ -614,7 +624,8 @@ class GatewayStore:
         connection.execute(
             """
             UPDATE assistant_questions SET status = 'expired', updated_at = ?
-            WHERE status IN ('completed', 'inconclusive', 'failed') AND expires_at <= ?
+            WHERE status IN ('completed', 'inconclusive', 'failed', 'cancelled')
+              AND expires_at <= ?
             """,
             (now_text, now_text),
         )

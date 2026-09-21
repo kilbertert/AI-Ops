@@ -1,5 +1,26 @@
 # 验证与验收计划
 
+## #354 `cancelled` 终态存储层（2026-09-21，本地自动化验证）
+
+**范围**：PRD #346 子票 T1，只做状态值与存储层；不含取消端点、运行时、API 层
+（分属 #357 / #358）。**本片未完成业务验收**：新增能力尚无取消入口可触发，也没有
+真实故障案例可复现；下列证据全部来自本地 fixture 级自动化测试。
+
+**新增自动化检查**（均以"去掉修复即失败"核对过）：
+
+| 检查 | 文件 | 守护的行为 |
+|---|---|---|
+| `test_cancelled_question_is_terminal_and_kept_for_the_refresh_window` | `tests/test_assistant_qa_store.py` | `cancelled` 是终态且保留期按失败档（5 分钟）：既非"不过期"，也非"立即过期" |
+| `test_cancelled_question_expires_after_its_retention_window` | `tests/test_assistant_qa_store.py` | 保留期到期后由既有清扫收敛为 `expired`，`cancelled` 不是无限期状态 |
+| `test_late_worker_cannot_overwrite_a_cancelled_question` | `tests/test_assistant_qa_store.py` | 晚到的 worker 写入与重复取消都被 claim-guard 挡下（返回 false，不抛错） |
+| `test_cancelled_diagnosis_shares_the_assistant_status_set` | `tests/test_standard_diagnosis_runtime.py` | 诊断终态枚举同样含 `cancelled`（有意接受），保留期与 claim-guard 一致 |
+
+**结果**：本地全量 `uv run pytest` 1053 passed（此前 1049），`uv run ruff check` 与
+`ruff format --check` 干净；改动前后既有断言逐条不变。
+
+**已知缺口**：取消端点与响应（#357）、契约分发与 #173 断链纠正（#358）、取消结果
+入指标与两条核心回归守护（#359）、提问作业重启恢复（#356）均未在本片交付。
+
 ## 智能检测内嵌订单号路由修复（2026-09-16，前端联调反馈）
 
 **现象**：前端 H5 在订单选择器选好订单后发送智能检测，服务端仍返回

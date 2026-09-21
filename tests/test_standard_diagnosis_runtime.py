@@ -365,6 +365,35 @@ def test_inconclusive_diagnosis_is_retained_and_late_completion_is_rejected(tmp_
     assert store.get_standard_diagnosis(late["diagnosis_id"], "scope-1")["status"] == "expired"
 
 
+def test_cancelled_diagnosis_shares_the_assistant_status_set(tmp_path: Path) -> None:
+    """`assistant_questions` reuses the diagnosis status set, so `cancelled` is
+    accepted for diagnoses too. Accepted on purpose: one shared status set
+    instead of two. Diagnoses have no cancel entry point of their own, so
+    nothing in this repo produces the value yet (PRD #346)."""
+    store = GatewayStore(tmp_path / "gateway.db")
+    diagnosis = store.create_standard_diagnosis("scope-1", "O-1", "问题", None)
+    store.update_standard_diagnosis(diagnosis["diagnosis_id"], status="running")
+    assert store.update_standard_diagnosis(diagnosis["diagnosis_id"], status="cancelled")
+    stored = store.get_standard_diagnosis(diagnosis["diagnosis_id"], "scope-1")
+    assert stored["status"] == "cancelled"
+    expires = datetime.fromisoformat(stored["expires_at"])
+    assert expires > datetime.now(UTC)
+    assert expires < datetime.now(UTC) + timedelta(minutes=14)
+
+    assert not store.update_standard_diagnosis(
+        diagnosis["diagnosis_id"],
+        status="completed",
+        result={"summary": "迟到的诊断"},
+    )
+
+    with store._connection(write=True) as connection:
+        connection.execute(
+            "UPDATE standard_diagnoses SET expires_at = ? WHERE diagnosis_id = ?",
+            ((datetime.now(UTC) - timedelta(seconds=1)).isoformat(), diagnosis["diagnosis_id"]),
+        )
+    assert store.get_standard_diagnosis(diagnosis["diagnosis_id"], "scope-1")["status"] == "expired"
+
+
 def test_diagnosis_deadline_covers_real_agent_runtime() -> None:
     """The deadline must exceed real agent runs (observed ~7 minutes on the
     120-world link, 2026-09-05). A short deadline expires still-running
