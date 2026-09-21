@@ -280,7 +280,7 @@ def _dis_directory() -> DisHttpDirectory:
 
 def test_dis_http_directory_forwards_token_and_tenant_headers(monkeypatch: pytest.MonkeyPatch) -> None:
     transport = _FakeDisTransport(b'{"code":0,"msg":"ok","data":[{"pointId":"P-1"},{"pointId":"P-2"}]}')
-    monkeypatch.setattr("aiops_diagnostics.query_scope.urllib.request.urlopen", transport)
+    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", transport)
     directory = _dis_directory()
 
     point_ids = directory.point_ids_for_user("C-TARGET-2", TENANT)
@@ -299,7 +299,7 @@ def test_dis_http_directory_fails_closed_on_http_auth_error(monkeypatch: pytest.
     def forbidden(request: Any, timeout: int | None = None) -> _FakeResponse:
         raise urllib.error.HTTPError(request.full_url, 403, "Forbidden", hdrs=None, fp=None)  # type: ignore[arg-type]
 
-    monkeypatch.setattr("aiops_diagnostics.query_scope.urllib.request.urlopen", forbidden)
+    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", forbidden)
 
     with pytest.raises(ScopeError) as excinfo:
         _dis_directory().point_ids_for_user("C-TARGET-2", TENANT)
@@ -311,7 +311,7 @@ def test_dis_http_directory_fails_closed_on_unreachable(monkeypatch: pytest.Monk
     def unreachable(request: Any, timeout: int | None = None) -> _FakeResponse:
         raise urllib.error.URLError("connection refused")
 
-    monkeypatch.setattr("aiops_diagnostics.query_scope.urllib.request.urlopen", unreachable)
+    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", unreachable)
 
     with pytest.raises(ScopeError) as excinfo:
         _dis_directory().point_ids_for_user("C-TARGET-2", TENANT)
@@ -330,7 +330,7 @@ def test_dis_http_directory_fails_closed_without_config() -> None:
 
 def test_dis_http_directory_rejects_path_injection_in_user_id(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
-        "aiops_diagnostics.query_scope.urllib.request.urlopen",
+        "aiops_diagnostics.bounded_http.urllib.request.urlopen",
         _FakeDisTransport(b"{}"),
     )
 
