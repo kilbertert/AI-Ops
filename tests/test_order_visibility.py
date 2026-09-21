@@ -111,6 +111,11 @@ def test_blocked_tenants_are_sorted_and_deduplicated() -> None:
 
 
 # --- one definition, two renderings ----------------------------------------------
+#
+# The row-level rendering above and the SQL rendering below are two views of one
+# definition. The equivalence is pinned twice: here against the rendering itself,
+# and in ``tests/test_mysql_scope.py`` against the real ``MySQLSource._scope_where``
+# output, which is the only production consumer of the SQL rendering.
 
 
 def _visible_via_sql(rows: list[dict[str, object]], visibility) -> list[dict[str, object]]:
@@ -121,12 +126,12 @@ def _visible_via_sql(rows: list[dict[str, object]], visibility) -> list[dict[str
     disagrees and the equivalence test fails.
     """
     predicate, params = scope_where_sql("tenant_id", visibility)
-    assert predicate in {"1=1", "1=0", "tenant_id = ?"} or predicate.startswith("tenant_id IN (")
+    assert predicate in {"1=1", "1=0", "tenant_id=?"} or predicate.startswith("tenant_id IN (")
     if predicate == "1=1":
         return list(rows)
     if predicate == "1=0":
         return []
-    if predicate == "tenant_id = ?":
+    if predicate == "tenant_id=?":
         return [r for r in rows if normalize_tenant(r.get("tenant_id")) == params[0]]
     allowed = set(params)
     return [r for r in rows if normalize_tenant(r.get("tenant_id")) in allowed]
@@ -180,6 +185,17 @@ def test_empty_scope_renders_a_contradiction_without_querying() -> None:
     predicate, params = scope_where_sql("tenant_id", _visibility(VisibilityProfile.CALLER, set()))
     assert predicate == "1=0"
     assert params == []
+
+
+def test_the_placeholder_is_the_driver_marker_not_part_of_the_rule() -> None:
+    # The visibility rule is the predicate plus the bound values; the marker is
+    # whichever paramstyle the driver speaks (? for sqlite3, %s for pymysql).
+    visibility = _visibility(VisibilityProfile.CALLER, {"a", "b"})
+    sqlite_predicate, sqlite_params = scope_where_sql("tenant_id", visibility)
+    mysql_predicate, mysql_params = scope_where_sql("tenant_id", visibility, placeholder="%s")
+    assert sqlite_predicate == "tenant_id IN (?, ?)"
+    assert mysql_predicate == "tenant_id IN (%s, %s)"
+    assert sqlite_params == mysql_params == ["a", "b"]
 
 
 # --- consumer: fixture data source ------------------------------------------------

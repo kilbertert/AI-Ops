@@ -2,7 +2,15 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from aiops_diagnostics.config import Settings
+from aiops_diagnostics.order_visibility import (
+    TenantVisibility,
+    VisibilityProfile,
+    normalize_tenant,
+    visible_orders,
+)
 from aiops_diagnostics.query_scope import QueryScope
 from aiops_diagnostics.sources import (
     RedisSource,
@@ -152,6 +160,70 @@ def test_order_in_scope_predicate_accepts_tenant_field() -> None:
     assert predicate({b"tenant_id": TENANT.encode("utf-8")}) is True
     assert predicate({b"tenantId": b"TENANT-EVIL"}) is False
     assert predicate({b"orderNo": ORDER.encode("utf-8")}) is False
+
+
+def _caller_visibility(tenant_id: str) -> TenantVisibility:
+    """把 scope 租户表达成共享行级定义的 caller profile 输入。"""
+    tenant = normalize_tenant(tenant_id)
+    return TenantVisibility(
+        profile=VisibilityProfile.CALLER,
+        allowed=frozenset({tenant}) if tenant else frozenset(),
+    )
+
+
+@pytest.mark.parametrize(
+    "raw_tenant",
+    [
+        TENANT,
+        f" {TENANT} ",
+        TENANT.encode(),
+        f" {TENANT} ".encode(),
+        "TENANT-EVIL",
+        b"TENANT-EVIL",
+        "",
+        b"",
+        "   ",
+        None,
+        7,
+    ],
+)
+def test_redis_scope_predicate_agrees_with_the_shared_row_rule(raw_tenant: object) -> None:
+    """Redis 谓词必须与共享行级定义对同一消息给出同一结论。
+
+    覆盖带空白与 bytes 形态的租户标识。迁移前 Redis 自己比 `tenantId` /
+    `tenant_id`：用只解 bytes、不 strip 的解码直接与 `scope.tenant_id` 原值比较，
+    是行级规则之外的第四套归一化——带空白的 scope 租户与干净的消息租户本属同一
+    租户，却被判为范围外。这里把消息的租户字段投影成候选行，直接与
+    `visible_orders` 的结论对齐。
+    """
+    scope = QueryScope(tenant_id=f" {TENANT} ", site_ids=None, user_id=None)
+    predicate = make_redis_order_in_scope(scope)
+    visibility = _caller_visibility(scope.tenant_id)
+
+    expected = bool(visible_orders([{"tenant_id": raw_tenant}], visibility).rows)
+    assert predicate({b"tenantId": raw_tenant}) is expected
+
+
+def test_redis_scope_predicate_accepts_every_tenant_field_spelling() -> None:
+    """str 键与 bytes 键、camelCase 与 snake_case 都是同一个租户字段。"""
+    scope = QueryScope(tenant_id=TENANT, site_ids=None, user_id=None)
+    predicate = make_redis_order_in_scope(scope)
+
+    assert predicate({b"tenantId": TENANT}) is True
+    assert predicate({"tenant_id": TENANT}) is True
+    assert predicate({b"tenantId": f" {TENANT} "}) is True
+    # 任一租户字段命中即算范围内（与迁移前一致），缺租户字段则不可验证。
+    assert predicate({b"tenantId": b"TENANT-EVIL", b"tenant_id": TENANT}) is True
+    assert predicate({b"orderNo": ORDER}) is False
+
+
+def test_redis_scope_does_not_push_site_or_user_scope_down() -> None:
+    """站点/用户范围不下推 Redis：订单已通过 MySQL scope 约束即可安全关联。"""
+    scope = QueryScope(tenant_id=TENANT, site_ids=("SITE-A-1",), user_id="U-1")
+    predicate = make_redis_order_in_scope(scope)
+
+    assert predicate({b"tenantId": TENANT}) is True
+    assert predicate({b"tenantId": b"TENANT-EVIL"}) is False
 
 
 def test_order_in_scope_none_predicate_accepts_all() -> None:
