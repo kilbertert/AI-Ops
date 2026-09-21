@@ -50,6 +50,7 @@ def run_agent_diagnosis(
             manifest,
             journal,
             safety=settings.safety,
+            scope=scope,
             allowed_tenants=allowed_tenants,
         )
         environment_notes = preflight_environment(sources, request, journal)

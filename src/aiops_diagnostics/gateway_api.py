@@ -110,10 +110,15 @@ class RunCreateRequest(BaseModel):
 
     problem: str = Field(min_length=1, max_length=4000)
     order_no: str | None = Field(default=None, max_length=128)
-    # Same character constraint as HealthReportJobRequest.order_no: a tenant id
-    # is a bounded identifier, so a blank or punctuated one is an invalid
-    # request rather than a second tenant for the entry guard to compare (#331).
-    tenant_id: str | None = Field(default=None, max_length=128, pattern=r"^[A-Za-z0-9_.:-]+$")
+    # Deliberately no character pattern: the tenant a request names is judged by
+    # the shared entry rule (``resolve_device_tenant``), which normalizes both
+    # sides, treats a blank one as absent, and refuses a genuinely different one.
+    # A pattern here would be a second tenant decision at the transport layer —
+    # the duplication this boundary exists to remove — and would turn a padded
+    # identifier that normalizes onto the enrolled tenant into a 422 instead of
+    # the run it is entitled to. Only the length bound stays, as for every other
+    # bounded identifier on this surface (#331).
+    tenant_id: str | None = Field(default=None, max_length=128)
     key_slot: str | None = Field(default=None, max_length=64)
     provider: str | None = Field(default=None, max_length=64)
     fixture_name: str | None = Field(default=None, max_length=128)

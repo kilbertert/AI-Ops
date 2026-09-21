@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from aiops_diagnostics.gateway_api import create_gateway_app
 from aiops_diagnostics.gateway_config import GatewayServerSettings
+from aiops_diagnostics.gateway_runtime import DIAGNOSIS_ORDER_OUT_OF_SCOPE
 from aiops_diagnostics.gateway_store import GatewayStore
 from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
 
@@ -350,3 +351,53 @@ def test_create_diagnosis_requires_diagnosis_scope(tmp_path: Path) -> None:
     assert response.json()["error"]["code"] == "INSUFFICIENT_SCOPE"
     assert store.count_standard_diagnoses() == 0
     assert runtime.started == []
+
+
+def test_get_diagnosis_surfaces_the_out_of_scope_code_with_an_unchanged_shape(tmp_path: Path) -> None:
+    """The one new externally observable value reaches the wire, and nothing else moves.
+
+    ``DIAGNOSIS_ORDER_OUT_OF_SCOPE`` is the only new observable behavior in this
+    change: the frontend must be able to tell an authorization failure from a
+    supplier failure. Every other key of the failed-diagnosis response — and
+    every existing error code — stays exactly as it was, so this asserts the full
+    key set rather than just the code.
+    """
+    client, store, _ = _client(tmp_path)
+    with client:
+        created = client.post(
+            "/v1/standard/diagnoses",
+            headers={"Authorization": "Bearer token"},
+            json={"order_no": "O-1", "question": "test"},
+        ).json()
+        store.update_standard_diagnosis(
+            created["diagnosis_id"],
+            status="failed",
+            error_code=DIAGNOSIS_ORDER_OUT_OF_SCOPE,
+            error_message="order is outside the authorized tenant scope",
+        )
+        response = client.get(
+            f"/v1/standard/diagnoses/{created['diagnosis_id']}",
+            headers={"Authorization": "Bearer token"},
+        )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "failed"
+    assert set(body) == {
+        "diagnosis_id",
+        "order_no",
+        "question",
+        "indicator_code",
+        "language",
+        "status",
+        "retry_after_ms",
+        "result",
+        "error",
+        "created_at",
+        "updated_at",
+        "completed_at",
+    }
+    assert set(body["error"]) == {"code", "message", "retryable"}
+    assert body["error"]["code"] == DIAGNOSIS_ORDER_OUT_OF_SCOPE
+    assert body["error"]["message"] == "order is outside the authorized tenant scope"
+    assert body["result"] is None

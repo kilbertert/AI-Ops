@@ -3,23 +3,25 @@
 The rule "which orders may this run see" was implemented six independent times
 across the entry guards, the agent tool layer and three data sources, and had
 already drifted. These tests pin the shared definition itself, the equivalence
-between its row-level rendering and its SQL rendering, and the entry rendering
-that replaced the two entry guards.
+between its row-level rendering and its SQL rendering, the entry rendering that
+replaced the two entry guards, and the source-level guard that keeps a comparison
+from growing back outside the shared module.
 """
 
 from __future__ import annotations
 
 import ast
+import json
 from pathlib import Path
 
 import pytest
 
 from aiops_diagnostics.order_visibility import (
-    DEVICE_TENANT_MISMATCH,
     UNKNOWN_TENANT,
     DeviceTenantError,
     TenantVisibility,
     VisibilityProfile,
+    caller_visibility,
     normalize_tenant,
     resolve_device_tenant,
     scope_where_sql,
@@ -71,10 +73,10 @@ def test_normalize_tenant_matches_parse_request_stripping() -> None:
 # definition; the HTTP layer only maps its error to a status.
 
 
-def test_mismatching_request_tenant_is_refused_with_one_code() -> None:
+def test_mismatching_request_tenant_is_refused_with_one_error() -> None:
     with pytest.raises(DeviceTenantError) as excinfo:
         resolve_device_tenant("tenant-a", "tenant-b")
-    assert excinfo.value.code == DEVICE_TENANT_MISMATCH
+    assert isinstance(excinfo.value, DeviceTenantError)
     assert str(excinfo.value) == "requested tenant does not match the enrolled device scope"
 
 
@@ -142,6 +144,65 @@ def test_the_device_entry_guard_is_implemented_once() -> None:
     )
 
 
+#: The modules that render the tenant-visibility rule: the two entry guards, the
+#: agent tool layer, the shared agent-path preparation, and the data sources. A
+#: tenant comparison growing back in any of them is how the six implementations
+#: drifted apart — the same order reaching different conclusions, with different
+#: failure reasons, depending on the entry point.
+#:
+#: Everything else that compares a tenant compares something else, and the PRD
+#: deliberately leaves it alone (its Out of Scope names C/B identity mapping and
+#: platform determination): ``agent_validator`` binds an agent turn to its
+#: manifest's tenant, ``faq`` checks a C/B role record belongs to the effective
+#: tenant, ``knowledge_retrieval`` checks a media grant's tenant,
+#: ``shortcut_lifecycle`` classifies the platform content domain against its
+#: ``__platform__`` sentinel, and ``scope_context._effective_tenant`` binds the
+#: caller/subject/requested tenant. None of them decides which orders a run may
+#: see, so routing them through this rule would be wrong, not thorough.
+VISIBILITY_MODULES = (
+    "sources.py",
+    "diagnostic_tools.py",
+    "agent_runner.py",
+    "gateway_api.py",
+    "gateway_runtime.py",
+)
+
+
+def _names_a_tenant(node: ast.AST) -> bool:
+    """Does this expression reach a tenant value at all?
+
+    ``row.get("tenant_id")`` (a row read) and ``device.tenant_id`` (an entry
+    guard) are the two spellings a comparison can reach a tenant through; both
+    are the rendering's job and neither may appear outside the shared module.
+    """
+    return any(
+        (isinstance(sub, ast.Attribute) and sub.attr == "tenant_id")
+        or (isinstance(sub, ast.Constant) and sub.value == "tenant_id")
+        for sub in ast.walk(node)
+    )
+
+
+def test_no_module_renders_its_own_tenant_comparison() -> None:
+    """Tenant visibility is compared in exactly one place.
+
+    Source-level rather than behavioural, because what is being prevented is a
+    future edit. The convergence only holds while every consumer asks the shared
+    rule; a comparison written back into a source, the tool layer or an entry
+    guard is how one order came to mean two things at once. The failure names the
+    file and the line so the offender is obvious.
+    """
+    offenders: list[str] = []
+    for name in VISIBILITY_MODULES:
+        tree = ast.parse((SOURCE_ROOT / name).read_text(encoding="utf-8"), filename=name)
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Compare) and _names_a_tenant(node):
+                offenders.append(f"{name}:{node.lineno}")
+    assert not offenders, (
+        "tenant visibility is one definition in order_visibility.py; an independent "
+        f"tenant comparison was found at {', '.join(offenders)}"
+    )
+
+
 # --- row-level rendering ---------------------------------------------------------
 
 
@@ -192,6 +253,23 @@ def test_empty_scope_short_circuits_to_nothing_visible() -> None:
     result = visible_orders(rows, _visibility(VisibilityProfile.CALLER, set()))
     assert result.rows == ()
     assert result.blocked_tenants == ("tenant-a",)
+
+
+def test_the_caller_profile_has_one_construction() -> None:
+    """Every consumer that knows its tenant builds the same profile.
+
+    The scoped direct sources, the Redis predicate, the tool layer's scope branch
+    and the fixture source each used to assemble this themselves, and one of them
+    assembled it wrongly (a blank tenant became ``""`` in the allowed set, which
+    ``TenantVisibility`` rejects). One constructor means there is nothing left to
+    assemble wrongly.
+    """
+    assert caller_visibility("tenant-a").allowed == frozenset({"tenant-a"})
+    assert caller_visibility(" tenant-a ").allowed == frozenset({"tenant-a"})
+    # A tenant that cannot be normalized is not a usable identity: nothing is
+    # visible, which is what the SQL rendering produces too.
+    for unusable in (None, "", "   ", 123):
+        assert caller_visibility(unusable).allowed == frozenset()
 
 
 def test_blocked_tenants_are_sorted_and_deduplicated() -> None:
@@ -291,7 +369,7 @@ def test_the_placeholder_is_the_driver_marker_not_part_of_the_rule() -> None:
 # --- consumer: fixture data source ------------------------------------------------
 
 
-def test_fixture_source_uses_the_shared_rule(tmp_path) -> None:
+def test_fixture_source_uses_the_shared_rule(tmp_path: Path) -> None:
     from aiops_diagnostics.sources import FixtureSources
 
     payload = {
@@ -301,7 +379,7 @@ def test_fixture_source_uses_the_shared_rule(tmp_path) -> None:
         ]
     }
     path = tmp_path / "f.json"
-    path.write_text(__import__("json").dumps(payload), encoding="utf-8")
+    path.write_text(json.dumps(payload), encoding="utf-8")
     source = FixtureSources(path)
 
     # No tenant filter: unchanged, both visible (tenant discovery).
@@ -312,3 +390,76 @@ def test_fixture_source_uses_the_shared_rule(tmp_path) -> None:
     assert source.get_orders("o1", "tenant-a") == []
     # Padded tenant still matches: the shared normalization strips.
     assert [r["order_no"] for r in source.get_orders("o1", " TENANT-DEMO ")] == ["o1"]
+
+
+def _order_fixture(tmp_path: Path) -> Path:
+    """A fixture whose order, fee record, occupy order and device all state a tenant."""
+    payload = {
+        "orders": [{"order_no": "o1", "tenant_id": "TENANT-DEMO"}],
+        "fee_template_records": {"o1": {"order_no": "o1", "tenant_id": "TENANT-DEMO"}},
+        "occupy_orders": [
+            {"orderId": "1", "order_no": "o1", "tenant_id": "TENANT-DEMO"},
+            {"orderId": "2", "order_no": "o1", "tenant_id": "other"},
+        ],
+        "devices": [{"id": "D-1", "device_code": "C-1", "tenant_id": "TENANT-DEMO"}],
+    }
+    path = tmp_path / "orders.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def test_the_fixture_source_filters_every_lookup_through_the_shared_rule(tmp_path: Path) -> None:
+    """Every fixture lookup asks the shared rule, not just ``get_orders``.
+
+    ``get_orders`` was migrated first; the order's fee record, its occupy orders
+    and the device lookup kept comparing tenants by hand, so a padded identifier
+    matched on one lookup and missed on the others — the drift this PRD removes,
+    inside one source. They now all go through the same row-level rendering.
+    """
+    from aiops_diagnostics.sources import FixtureSources
+
+    source = FixtureSources(_order_fixture(tmp_path))
+
+    assert [r["order_no"] for r in source.get_orders("o1", " TENANT-DEMO ")] == ["o1"]
+    assert source.get_fee_template_record("o1", " TENANT-DEMO ") is not None
+    assert source.get_fee_template_record("o1", "other") is None
+    assert [r["orderId"] for r in source.get_occupy_orders(order_id="1", tenant_id=" TENANT-DEMO ")] == ["1"]
+    assert source.get_occupy_orders(order_id="1", tenant_id="other") == []
+    assert source.get_device("D-1", None, " TENANT-DEMO ")["id"] == "D-1"
+    assert source.get_device("D-1", None, "other") is None
+
+
+def test_a_blank_tenant_sees_nothing_rather_than_everything(tmp_path: Path) -> None:
+    """A caller that names a tenant it cannot use is not a caller with no tenant.
+
+    Two inputs, two meanings, and the difference is fail-closed versus fail-open:
+
+    - ``tenant_id=None`` names no tenant at all — the unrestricted discovery
+      mode, the DEVICE profile's ``allowed=None``;
+    - ``tenant_id=""`` / ``"   "`` names one that cannot be normalized — an
+      unusable identity, which ``caller_visibility`` renders as the *empty*
+      scope and ``scope_where_sql`` renders as ``1=0``.
+
+    Reading the second as the first is the fail-open direction in the one filter
+    this module converges, and it makes the row-level and SQL renderings disagree
+    about the identical input. It is also what the last commit of this change did
+    by accident: it wrote ``_caller_visible``'s unrestricted branch as
+    ``normalize_tenant(tenant_id) is None`` and pinned that behavior here, while
+    the same commit's stated intent was "blank renders as nothing visible".
+    """
+    from aiops_diagnostics.sources import FixtureSources
+
+    source = FixtureSources(_order_fixture(tmp_path))
+
+    # No tenant named: the discovery mode an unbound registration uses.
+    assert [r["order_no"] for r in source.get_orders("o1", None)] == ["o1"]
+    assert source.get_fee_template_record("o1", None) is not None
+    assert len(source.get_occupy_orders(order_id="1", tenant_id=None)) == 1
+    assert source.get_device("D-1", None, None)["id"] == "D-1"
+
+    # Named but unusable: nothing is visible, on every lookup.
+    for blank in ("", "   "):
+        assert source.get_orders("o1", blank) == []
+        assert source.get_fee_template_record("o1", blank) is None
+        assert source.get_occupy_orders(order_id="1", tenant_id=blank) == []
+        assert source.get_device("D-1", None, blank) is None

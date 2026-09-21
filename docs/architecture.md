@@ -40,7 +40,9 @@ flowchart LR
 
 ## 部署边界
 
-项目可以直接运行在权限受限的诊断主机上，也可以通过 OpenSSH 本地转发访问 TDengine 严格只读代理。刻意不支持 SSH 密码自动化；生产环境必须使用专用账号和 key，并限制可转发目标。订单、费用、设备和 Redis 队列证据改由充电桩 `/diag/*` HTTP 接口读取，本仓不再配置 MySQL / Redis 直连凭据。
+项目可以直接运行在权限受限的诊断主机上，也可以通过 OpenSSH 本地转发访问 TDengine 严格只读代理。刻意不支持 SSH 密码自动化；生产环境必须使用专用账号和 key，并限制可转发目标。
+
+**两个源集合并存，各自服务一条入口路径**：设备运行路径（`POST /v1/runs`）不携带范围对象，订单、费用、设备和 Redis 队列证据经充电桩 `/diag/*` HTTP 接口读取（`HybridSources`），租户由工具层按行后过滤；标准 API 面（`/v1/standard/diagnoses`，调用者身份已解析出租户）携带冻结的 `QueryScope`，走受限直连（`ScopedSources`），租户以参数绑定的 SQL 谓词下推，本仓为此配置最小只读的 MySQL / Redis 账号。并存的根因是设备路径没有 SQL 可下推，而不是两套规则：租户可见性只在 `order_visibility.py` 定义一次，行级过滤与 SQL 谓词是同一定义的两种渲染，两个入口因此必须给出一致结论。
 
 多端便携部署时，推荐将上述数据库访问边界放入固定服务器上的 `AI-Ops Gateway`，客户端只通过 HTTPS 设备令牌提交诊断请求和同步事件。Gateway 方案、注册、秘密管理和跨设备 run 同步见 [gateway.md](gateway.md)。
 
