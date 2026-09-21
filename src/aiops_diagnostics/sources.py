@@ -34,6 +34,7 @@ from aiops_diagnostics.order_visibility import (
     TenantVisibility,
     VisibilityProfile,
     normalize_tenant,
+    scope_where_sql,
     visible_orders,
 )
 from aiops_diagnostics.query_scope import QueryScope
@@ -156,8 +157,12 @@ OCCUPY_ORDER_LIMIT = 20
 SITE_SCOPE_MAX_ROWS = 1000
 
 
+#: pymysql 的参数占位符（paramstyle=format）；共享规则按此渲染租户谓词。
+_SQL_PARAM = "%s"
+
+
 def _placeholders(count: int) -> str:
-    return ", ".join("%s" for _ in range(count))
+    return ", ".join(_SQL_PARAM for _ in range(count))
 
 
 class MySQLSource:
@@ -173,6 +178,20 @@ class MySQLSource:
         self.scope = scope
         self.database = _safe_identifier(settings.mysql.database)
 
+    def _tenant_visibility(self) -> TenantVisibility:
+        """把冻结 scope 表达成共享租户可见性规则的输入（caller profile）。
+
+        租户标识必须已经归一化才能进入 ``allowed``：scope 里的租户与请求里的
+        租户、行里的租户若不是同一套归一化，同一个订单就会在 SQL 下推与行级
+        过滤之间得到不同结论。无法归一化的租户不是可用身份，渲染为"什么都不可
+        见"（空范围），而不是绑定一个空值去匹配。
+        """
+        scope = self.scope
+        assert scope is not None
+        tenant = normalize_tenant(scope.tenant_id)
+        allowed = frozenset({tenant}) if tenant else frozenset()
+        return TenantVisibility(profile=VisibilityProfile.CALLER, allowed=allowed)
+
     def _scope_where(
         self,
         *,
@@ -181,18 +200,20 @@ class MySQLSource:
     ) -> tuple[str, list[Any]]:
         """构造 scope 下推的 WHERE 片段（不含前导 AND，调用方自行拼接）。
 
-        站点/用户列名来自固定表结构常量，不是客户端输入；值一律参数绑定。
+        租户谓词由共享租户可见性规则渲染（参数绑定），与行级过滤是同一处定义
+        的两种渲染；站点/用户列名来自固定表结构常量，不是客户端输入，值一律
+        参数绑定。
         """
         scope = self.scope
         if scope is None:
             return "", []
-        fragments: list[str] = ["tenant_id=%s"]
-        params: list[Any] = [scope.tenant_id]
+        tenant_where, params = scope_where_sql("tenant_id", self._tenant_visibility(), placeholder=_SQL_PARAM)
+        fragments: list[str] = [tenant_where]
         if scope.site_ids is not None and site_column:
             fragments.append(f"{site_column} IN ({_placeholders(len(scope.site_ids))})")
             params.extend(scope.site_ids)
         if scope.user_id and user_column:
-            fragments.append(f"{user_column}=%s")
+            fragments.append(f"{user_column}={_SQL_PARAM}")
             params.append(scope.user_id)
         return " AND ".join(fragments), params
 
@@ -271,13 +292,17 @@ class MySQLSource:
         params: list[Any] = [order_no]
         if scope_where:
             # 计费模板表没有站点/用户列；先用与订单完全相同的范围谓词做订单
-            # 存在性检查，保证单独查询不会扩大可见范围。
+            # 存在性检查，再用同一处渲染的租户谓词读模板，保证单独查询不会
+            # 扩大可见范围。
             assert self.scope is not None
             exists_sql = (
                 f"SELECT 1 FROM `{self.database}`.`ch_order_info` WHERE order_no=%s AND {scope_where} LIMIT 1"
             )
-            fee_sql = sql + "AND tenant_id=%s ORDER BY created_time DESC LIMIT 1"
-            fee_params: list[Any] = [order_no, self.scope.tenant_id]
+            tenant_where, tenant_params = scope_where_sql(
+                "tenant_id", self._tenant_visibility(), placeholder=_SQL_PARAM
+            )
+            fee_sql = sql + f"AND {tenant_where} ORDER BY created_time DESC LIMIT 1"
+            fee_params: list[Any] = [order_no, *tenant_params]
             with self._cursor() as cursor:
                 cursor.execute(exists_sql, [order_no, *scope_params])
                 if cursor.fetchone() is None:

@@ -141,7 +141,9 @@ def visible_orders(rows: Sequence[Mapping[str, Any]], visibility: TenantVisibili
     return VisibilityResult(rows=tuple(visible), blocked_tenants=tuple(sorted(blocked)))
 
 
-def scope_where_sql(column: str, visibility: TenantVisibility) -> tuple[str, list[str]]:
+def scope_where_sql(
+    column: str, visibility: TenantVisibility, *, placeholder: str = "?"
+) -> tuple[str, list[str]]:
     """Render the same rule as a parameter-bound SQL predicate.
 
     Returns ``(predicate, params)``. The tenant is never interpolated into the
@@ -152,6 +154,10 @@ def scope_where_sql(column: str, visibility: TenantVisibility) -> tuple[str, lis
     - unrestricted -> ``("1=1", [])``
     - empty scope  -> ``("1=0", [])``, matching the existing "empty site scope
       short-circuits and issues no SQL" semantics.
+
+    ``placeholder`` is the driver's parameter marker (``?`` for sqlite3, ``%s``
+    for pymysql) and carries no meaning of its own: the visibility rule is the
+    predicate and the bound values, which are identical either way.
     """
     if visibility.unrestricted:
         return "1=1", []
@@ -159,6 +165,6 @@ def scope_where_sql(column: str, visibility: TenantVisibility) -> tuple[str, lis
         return "1=0", []
     tenants = sorted(visibility.allowed or ())
     if len(tenants) == 1:
-        return f"{column} = ?", [tenants[0]]
-    placeholders = ", ".join("?" for _ in tenants)
+        return f"{column}={placeholder}", [tenants[0]]
+    placeholders = ", ".join(placeholder for _ in tenants)
     return f"{column} IN ({placeholders})", list(tenants)

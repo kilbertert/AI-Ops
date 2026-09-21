@@ -5,6 +5,12 @@ from typing import Any
 import pytest
 
 from aiops_diagnostics.config import Settings
+from aiops_diagnostics.order_visibility import (
+    TenantVisibility,
+    VisibilityProfile,
+    normalize_tenant,
+    visible_orders,
+)
 from aiops_diagnostics.query_scope import QueryScope
 from aiops_diagnostics.sources import MySQLSource
 
@@ -114,6 +120,27 @@ def _source(
     return src, connection
 
 
+def _rows_selected_by(rows: list[dict[str, Any]], where: str, params: list[Any]) -> list[dict[str, Any]]:
+    """在 Python 里按真实渲染出的 WHERE 片段选行，作为 SQL 下推的行级镜像。
+
+    只解释共享规则渲染的租户谓词（``1=0`` / ``=`` / ``IN``）并按同一套归一化
+    比较行内租户；站点/用户片段不属于租户可见性，直接跳过。若 SQL 渲染与行级
+    规则不是同一处定义，两者选出的行集就会在这里分叉。
+    """
+    if where == "1=0":
+        return []
+    remaining = list(params)
+    for fragment in where.split(" AND "):
+        if fragment == "tenant_id=%s":
+            allowed = {str(remaining.pop(0))}
+        elif fragment.startswith("tenant_id IN ("):
+            allowed = {str(remaining.pop(0)) for _ in range(fragment.count("%s"))}
+        else:
+            continue
+        rows = [row for row in rows if normalize_tenant(row.get("tenant_id")) in allowed]
+    return rows
+
+
 def test_scoped_order_query_pushes_tenant_and_site_filters() -> None:
     connection = _ScopedConnection(orders=[{"order_no": "O-1", "tenant_id": TENANT, "site_id": "SITE-A-1"}])
     source, conn = _source(connection, QueryScope(tenant_id=TENANT, site_ids=SITES, user_id=None))
@@ -138,6 +165,40 @@ def test_scoped_order_query_ignores_caller_tenant_argument() -> None:
     assert params[1] == TENANT
 
 
+@pytest.mark.parametrize(
+    "scope",
+    [
+        QueryScope(tenant_id=TENANT, site_ids=None, user_id=None),
+        # 带空白的租户：SQL 绑定值必须与行级规则同一套归一化，否则同一订单在
+        # 两个渲染里得到不同结论。
+        QueryScope(tenant_id=f" {TENANT} ", site_ids=None, user_id=None),
+        # 站点/用户下推并存时，租户谓词仍是那一处定义。
+        QueryScope(tenant_id=TENANT, site_ids=SITES, user_id=USER),
+        # 无法归一化的租户不是可用身份：渲染为"什么都不可见"，不绑定空值。
+        QueryScope(tenant_id="   ", site_ids=None, user_id=None),
+    ],
+)
+def test_scope_where_selects_the_same_rows_as_the_shared_row_rule(scope: QueryScope) -> None:
+    rows: list[dict[str, Any]] = [
+        {"order_no": "O-1", "tenant_id": TENANT},
+        {"order_no": "O-2", "tenant_id": "TENANT-B"},
+        {"order_no": "O-3", "tenant_id": b"TENANT-A"},
+        {"order_no": "O-4", "tenant_id": f" {TENANT} "},
+        {"order_no": "O-5"},
+    ]
+    source, _ = _source(_ScopedConnection(), scope)
+    where, params = source._scope_where()
+
+    tenant = normalize_tenant(scope.tenant_id)
+    visibility = TenantVisibility(
+        profile=VisibilityProfile.CALLER,
+        allowed=frozenset({tenant}) if tenant else frozenset(),
+    )
+    via_sql = _rows_selected_by(rows, where, params)
+    via_rule = list(visible_orders(rows, visibility).rows)
+    assert [row["order_no"] for row in via_sql] == [row["order_no"] for row in via_rule]
+
+
 def test_scoped_order_query_applies_user_filter_for_self_scope() -> None:
     connection = _ScopedConnection(orders=[])
     source, conn = _source(connection, QueryScope(tenant_id=TENANT, site_ids=None, user_id=USER))
@@ -150,6 +211,8 @@ def test_scoped_order_query_applies_user_filter_for_self_scope() -> None:
 
 
 def test_scoped_order_query_short_circuits_on_empty_site_scope() -> None:
+    # 空站点范围是"什么都不可见"的另一种输入：直连面短路（不发 SQL），与共享
+    # 规则的空范围渲染同一结论。
     source, conn = _source(_ScopedConnection(), QueryScope(tenant_id=TENANT, site_ids=(), user_id=None))
 
     rows = source.get_orders("O-1")
