@@ -122,6 +122,31 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
+      # The run's title is always the PRD's, and GitHub fixes it when the run is
+      # created — `run-name` cannot see a step output, and a run cannot be
+      # renamed afterwards. So a chain of sub-issue runs reads as one repeated
+      # PRD title, and a person watching the Actions list cannot tell one
+      # iteration from the next. The summary names the sub-issue this run is
+      # actually about, which is the part the title cannot carry.
+      - name: Summarise — which sub-issue this run implements
+        if: always() && steps.shape.outputs.mode != ''
+        env:
+          MODE: ${{ steps.shape.outputs.mode }}
+          SUB_ISSUE_NUMBER: ${{ steps.shape.outputs.next_open_number }}
+          SUB_ISSUE_TITLE: ${{ steps.shape.outputs.next_open_title }}
+          SUB_COUNT: ${{ steps.shape.outputs.sub_count }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Sub-issue #${SUB_ISSUE_NUMBER:-—}"
+            echo ""
+            echo "${SUB_ISSUE_TITLE:-(none)}"
+            echo ""
+            echo "- PRD: #${PRD_NUMBER} — ${PRD_TITLE}"
+            echo "- Sub-issues on this PRD: ${SUB_COUNT}"
+            echo "- Outcome: \`${MODE}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Refuse — nested PRD
         if: steps.shape.outputs.mode == 'refuse-nested-prd'
         env:
