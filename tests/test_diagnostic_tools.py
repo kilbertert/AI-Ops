@@ -1,28 +1,47 @@
+from __future__ import annotations
+
+import ast
+import json
 from pathlib import Path
+
+import pytest
 
 from aiops_diagnostics.agent_contracts import IncidentManifest, ToolName
 from aiops_diagnostics.agent_workspace import AgentWorkspace
 from aiops_diagnostics.config import SafetySettings
 from aiops_diagnostics.diagnostic_tools import DiagnosticToolExecutor
 from aiops_diagnostics.journal import EvidenceJournal
+from aiops_diagnostics.order_visibility import (
+    TenantVisibility,
+    VisibilityProfile,
+    normalize_tenant,
+    visible_orders,
+)
 from aiops_diagnostics.parsing import parse_request
 from aiops_diagnostics.sources import FixtureSources, TDengineSource
 
 FIXTURE = Path(__file__).parents[1] / "examples/fixtures/ocpp_consistent.json"
+SOURCE_ROOT = Path(__file__).parents[1] / "src" / "aiops_diagnostics"
 
 
 def _executor(
     tmp_path: Path,
     *,
     allowed_tenants: set[str] | None = None,
+    orders: list[dict] | None = None,
 ) -> tuple[DiagnosticToolExecutor, EvidenceJournal]:
     request = parse_request("订单 TEST-OCPP-0003 金额异常")
     manifest = IncidentManifest.from_request(request)
     workspace = AgentWorkspace.create(Path(__file__).parents[1], tmp_path, manifest)
     journal = EvidenceJournal(workspace, manifest)
+    fixture = FIXTURE
+    if orders is not None:
+        fixture = tmp_path / "fixtures" / "orders.json"
+        fixture.parent.mkdir(parents=True, exist_ok=True)
+        fixture.write_text(json.dumps({"orders": orders}), encoding="utf-8")
     return (
         DiagnosticToolExecutor(
-            FixtureSources(FIXTURE),
+            FixtureSources(fixture),
             request,
             manifest,
             journal,
@@ -103,6 +122,108 @@ def test_order_snapshot_discovers_tenant_within_authorized_scope(tmp_path: Path)
     assert outcome.status == "success"
     # The discovered tenant is learned from the order, not pre-bound.
     assert executor.effective_tenant == "TENANT-DEMO"
+
+
+def _device_visibility(allowed_tenants: set[str] | None) -> TenantVisibility:
+    """Express the device's authorized set as shared-rule device-profile input."""
+    if allowed_tenants is None:
+        return TenantVisibility(profile=VisibilityProfile.DEVICE, allowed=None)
+    return TenantVisibility(
+        profile=VisibilityProfile.DEVICE,
+        allowed=frozenset(tenant for tenant in map(normalize_tenant, allowed_tenants) if tenant),
+    )
+
+
+@pytest.mark.parametrize(
+    ("rows", "allowed_tenants"),
+    [
+        # Out of scope: blocked, and the effective tenant stays untouched.
+        ([{"order_no": "TEST-OCPP-0003", "tenant_id": "TENANT-DEMO"}], {"tenant-a"}),
+        # In scope: discovered from the order row.
+        ([{"order_no": "TEST-OCPP-0003", "tenant_id": "TENANT-DEMO"}], {"TENANT-DEMO"}),
+        # The same tenant, padded: the shared normalization reads it as in scope.
+        ([{"order_no": "TEST-OCPP-0003", "tenant_id": " TENANT-DEMO "}], {"TENANT-DEMO"}),
+        # A row without a tenant cannot be shown to be in scope: fail closed and
+        # report it, instead of crashing on the mixed blocked set.
+        ([{"order_no": "TEST-OCPP-0003"}], {"TENANT-DEMO"}),
+        (
+            [{"order_no": "TEST-OCPP-0003", "tenant_id": "TENANT-DEMO"}, {"order_no": "TEST-OCPP-0003"}],
+            {"tenant-a"},
+        ),
+        # A workspace-level registration binds no tenant: discover, block nothing.
+        ([{"order_no": "TEST-OCPP-0003", "tenant_id": "TENANT-DEMO"}], None),
+        # No order rows: nothing to block, so the 0-row success is unchanged.
+        ([], {"tenant-a"}),
+    ],
+)
+def test_order_snapshot_records_the_shared_rule_result(
+    tmp_path: Path, rows: list[dict], allowed_tenants: set[str] | None
+) -> None:
+    """The tool layer must not compare tenants itself: it must record the shared rule.
+
+    The device path reads its orders over ``/diag/*`` HTTP, so there is no SQL to
+    push the scope down into and the tool layer is the only place the rule is
+    enforced there — but the enforcement point is not the definition. The same
+    candidate rows are evaluated independently by the shared rule here, and the
+    tool layer's recorded conclusion (blocked tenant set, visible rows,
+    effective tenant) is checked against it.
+    """
+    executor, journal = _executor(tmp_path, allowed_tenants=allowed_tenants, orders=rows)
+    expected = visible_orders(rows, _device_visibility(allowed_tenants))
+
+    outcome = executor.execute(ToolName.ORDER_SNAPSHOT)
+    entry = journal.get(outcome.evidence_id)
+    assert entry is not None
+
+    if expected.blocked_tenants:
+        assert outcome.status == "blocked"
+        # External contract: the source and the key name do not change.
+        assert entry.source == "harness:tenant_scope"
+        payload = journal.load_payload(entry)
+        assert payload["discovered_tenant_ids"] == list(expected.blocked_tenants)
+        # A blocked snapshot must not write the out-of-scope tenant anywhere.
+        assert executor.effective_tenant is None
+    else:
+        assert outcome.status == "success"
+        assert entry.source == "mysql:ch_order_info"
+        visible = journal.load_payload(entry)["orders"]
+        assert [row.get("tenant_id") for row in visible] == [row.get("tenant_id") for row in expected.rows]
+        assert executor.effective_tenant == (normalize_tenant(rows[0].get("tenant_id")) if rows else None)
+
+
+def test_the_tool_layer_does_not_own_the_tenant_rule() -> None:
+    """The tool layer must not hold a tenant comparison of its own.
+
+    Source-level rather than behavioural, because what is being prevented is a
+    future edit: the rule lives once in ``order_visibility``. The device path has
+    no SQL to push down, so a second comparison growing back here — raw values
+    versus normalized ones, a missing tenant in or out of scope — is how the same
+    order starts reaching different conclusions on this path than on the others.
+    Reading a row's tenant (``row.get("tenant_id")``) stays allowed; comparing one
+    does not.
+    """
+    tree = ast.parse(
+        (SOURCE_ROOT / "diagnostic_tools.py").read_text(encoding="utf-8"),
+        filename="diagnostic_tools.py",
+    )
+
+    def _names_tenant(node: ast.AST) -> bool:
+        # ``row.get("tenant_id")`` and ``request.tenant_id`` are the two spellings
+        # a comparison could reach a tenant through.
+        return any(
+            (isinstance(sub, ast.Attribute) and sub.attr == "tenant_id")
+            or (isinstance(sub, ast.Constant) and sub.value == "tenant_id")
+            for sub in ast.walk(node)
+        )
+
+    offenders = [
+        f"diagnostic_tools.py:{node.lineno}"
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Compare) and _names_tenant(node)
+    ]
+    assert not offenders, (
+        f"tenant_id must be compared only in order_visibility.py; found: {', '.join(offenders)}"
+    )
 
 
 class _DoctorSources(FixtureSources):

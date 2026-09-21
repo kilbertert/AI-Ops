@@ -10,6 +10,12 @@ from aiops_diagnostics.agent_contracts import IncidentManifest, ToolName, ToolRe
 from aiops_diagnostics.engine import DiagnosticEngine, _order_window
 from aiops_diagnostics.journal import EvidenceJournal, JournalEntry
 from aiops_diagnostics.models import DiagnosticRequest
+from aiops_diagnostics.order_visibility import (
+    TenantVisibility,
+    VisibilityProfile,
+    normalize_tenant,
+    visible_orders,
+)
 from aiops_diagnostics.sources import DiagnosticSources, SourceError, TDengineSource
 
 _LOGGER = logging.getLogger("aiops.diagnostic_tools")
@@ -141,6 +147,26 @@ class DiagnosticToolExecutor:
     def _tenant(self) -> str | None:
         return self.effective_tenant or self.request.tenant_id
 
+    def _tenant_visibility(self) -> TenantVisibility:
+        """Express the device's authorized tenants as shared-rule input (device profile).
+
+        ``allowed=None`` is a valid unbound registration (workspace level): the
+        tenant is discovered from the order rows and nothing is blocked. That is
+        the shared rule's DEVICE profile verbatim, which is why the tool layer no
+        longer decides on its own whether to block. The authorized set must be
+        normalized before it enters ``allowed``: the rule normalizes the row
+        tenant before comparing, so two different normalizations would read a
+        padded identifier as out of scope. An entry that cannot be normalized is
+        not a usable identity and is dropped — the set may then be empty, meaning
+        "nothing is visible" — rather than matched as a blank.
+        """
+        if self.allowed_tenants is None:
+            return TenantVisibility(profile=VisibilityProfile.DEVICE, allowed=None)
+        return TenantVisibility(
+            profile=VisibilityProfile.DEVICE,
+            allowed=frozenset(tenant for tenant in map(normalize_tenant, self.allowed_tenants) if tenant),
+        )
+
     def execute_many(self, requests: list[ToolRequest]) -> list[ToolOutcome]:
         return [self.execute(item.tool) for item in requests]
 
@@ -184,25 +210,29 @@ class DiagnosticToolExecutor:
     def _order_snapshot(self) -> JournalEntry:
         # Discover by order_no without a tenant filter: the tenant is learned
         # from the order row, not pre-bound. This lets an engineer diagnose an
-        # order without knowing its tenant, while allowed_tenants still enforces
-        # the device's authorized scope.
+        # order without knowing its tenant. The device path reads its orders
+        # over /diag/* HTTP, so there is no SQL to push the scope down into and
+        # this is the only place the rule is enforced on that path — which is
+        # why it is enforced by the shared definition and recorded as-is, not
+        # re-implemented here.
         rows = self.sources.get_orders(self.request.order_no, None)
-        if rows and self.allowed_tenants is not None:
-            blocked_tenants = sorted(
-                {row.get("tenant_id") for row in rows if row.get("tenant_id") not in self.allowed_tenants}
+        result = visible_orders(rows, self._tenant_visibility())
+        if result.blocked_tenants:
+            # All-or-nothing: one invisible row blocks the whole snapshot, and
+            # the discovered tenants are reported instead of silently dropped.
+            return self.journal.record(
+                tool=ToolName.ORDER_SNAPSHOT,
+                source="harness:tenant_scope",
+                status="blocked",
+                request=self._identity_request(),
+                payload={"orders": [], "discovered_tenant_ids": list(result.blocked_tenants)},
+                error=f"订单属于租户 {', '.join(result.blocked_tenants)}，不在授权租户范围内",
             )
-            if blocked_tenants:
-                return self.journal.record(
-                    tool=ToolName.ORDER_SNAPSHOT,
-                    source="harness:tenant_scope",
-                    status="blocked",
-                    request=self._identity_request(),
-                    payload={"orders": [], "discovered_tenant_ids": blocked_tenants},
-                    error=f"订单属于租户 {', '.join(blocked_tenants)}，不在本设备授权租户范围内",
-                )
-            rows = [row for row in rows if row.get("tenant_id") in self.allowed_tenants]
+        rows = list(result.rows)
         if rows:
-            self.effective_tenant = rows[0].get("tenant_id") or self.effective_tenant
+            # The discovered tenant is the normalized one — the very value the
+            # rule compared — so later tools compare and log the same tenant.
+            self.effective_tenant = normalize_tenant(rows[0].get("tenant_id")) or self.effective_tenant
         return self.journal.record(
             tool=ToolName.ORDER_SNAPSHOT,
             source=TOOL_SOURCES[ToolName.ORDER_SNAPSHOT],
