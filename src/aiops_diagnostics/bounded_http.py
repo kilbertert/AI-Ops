@@ -192,7 +192,17 @@ def read_body(response: Any, *, max_read_bytes: int | None = None) -> bytes:
 
 @dataclass(frozen=True, slots=True)
 class HttpFailure:
-    """一次已分类的传输故障，附带构造领域错误所需的信息。"""
+    """一次已分类的传输故障，附带构造领域错误所需的信息。
+
+    ``cause`` 是有语义的空值，不只是诊断信息：**``cause is None`` 当且仅当
+    这次拒绝来自信封层**（``parse_code_data_envelope`` 按 ``code`` 判定的拒绝），
+    其余分类（HTTP 状态码、传输故障、解码故障）一律带上原始异常。因此调用方
+    需要「HTTP 层的文案与信封层的文案不同」时，可以按它分流——UPMS 客户端正是
+    这么做的。
+
+    这条契约是隐式的：信封拒绝在构造 ``HttpFailure`` 时就是不传 ``cause``。
+    若将来给信封拒绝补上 ``cause``，依赖它的分流会静默改变文案。
+    """
 
     kind: FailureKind
     status: int | None = None

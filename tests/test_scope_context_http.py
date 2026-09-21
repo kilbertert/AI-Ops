@@ -99,7 +99,7 @@ def _directory() -> UpmsDirectory:
 
 
 def _resolver(transport: _FakeUpmsTransport, monkeypatch: pytest.MonkeyPatch) -> ScopeResolver:
-    monkeypatch.setattr("aiops_diagnostics.scope_context.urllib.request.urlopen", transport)
+    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", transport)
     return ScopeResolver(_directory(), policy=_POLICY)
 
 
@@ -205,7 +205,7 @@ def test_upms_directory_fails_closed_on_unreachable_service(monkeypatch: pytest.
     def unavailable(request: Any, timeout: int | None = None) -> _FakeResponse:
         raise urllib.error.URLError("connection refused")
 
-    monkeypatch.setattr("aiops_diagnostics.scope_context.urllib.request.urlopen", unavailable)
+    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", unavailable)
 
     with pytest.raises(ScopeError) as excinfo:
         _directory().user_info(CREDENTIAL)
@@ -223,7 +223,7 @@ def test_upms_directory_fails_closed_on_http_auth_error(monkeypatch: pytest.Monk
             fp=None,  # type: ignore[arg-type]
         )
 
-    monkeypatch.setattr("aiops_diagnostics.scope_context.urllib.request.urlopen", forbidden)
+    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", forbidden)
 
     with pytest.raises(ScopeError) as excinfo:
         _directory().user_info(CREDENTIAL)
@@ -233,12 +233,12 @@ def test_upms_directory_fails_closed_on_http_auth_error(monkeypatch: pytest.Monk
 
 def test_upms_directory_fails_closed_on_rejected_envelope(monkeypatch: pytest.MonkeyPatch) -> None:
     transport = _FakeUpmsTransport(user_info=_USER_INFO, data_scope=_DATA_SCOPE)
-    monkeypatch.setattr("aiops_diagnostics.scope_context.urllib.request.urlopen", transport)
+    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", transport)
 
     def rejected(request: Any, timeout: int | None = None) -> _FakeResponse:
         return _FakeResponse({"code": 403, "msg": "令牌无效", "data": None})
 
-    monkeypatch.setattr("aiops_diagnostics.scope_context.urllib.request.urlopen", rejected)
+    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", rejected)
 
     with pytest.raises(ScopeError) as excinfo:
         _directory().user_info(CREDENTIAL)
@@ -268,7 +268,7 @@ def test_upms_directory_fails_closed_without_base_url() -> None:
 def test_upms_directory_rejects_path_injection_in_user_ids(monkeypatch: pytest.MonkeyPatch) -> None:
     transport = _FakeUpmsTransport(user_info=_USER_INFO, data_scope=_DATA_SCOPE)
     directory = _directory()
-    monkeypatch.setattr("aiops_diagnostics.scope_context.urllib.request.urlopen", transport)
+    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", transport)
 
     with pytest.raises(ValueError):
         directory.user_by_b_user_id(CREDENTIAL, "../user/info")
@@ -281,7 +281,7 @@ def test_upms_directory_error_messages_never_leak_the_credential(monkeypatch: py
     def unavailable(request: Any, timeout: int | None = None) -> _FakeResponse:
         raise urllib.error.URLError(f"boom {CREDENTIAL}")
 
-    monkeypatch.setattr("aiops_diagnostics.scope_context.urllib.request.urlopen", unavailable)
+    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", unavailable)
 
     with pytest.raises(ScopeError) as excinfo:
         _directory().user_info(CREDENTIAL)

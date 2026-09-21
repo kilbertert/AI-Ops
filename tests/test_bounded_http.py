@@ -725,3 +725,37 @@ def test_request_json_without_a_retry_policy_makes_one_attempt(monkeypatch: pyte
         request_json(_spec(), mapping=_mapping())
 
     assert len(upstream.requests) == 1
+
+
+def test_envelope_rejections_are_distinguishable_from_transport_failures() -> None:
+    """`cause is None` iff the rejection came from the envelope layer.
+
+    A client that words its HTTP-layer and envelope-layer errors differently
+    (the UPMS client does) discriminates on this. It holds only because the
+    envelope rejection constructs HttpFailure without a cause while every other
+    classification carries its original exception -- so pin it, or a future
+    change would silently rewrite those messages.
+    """
+    seen: list[HttpFailure] = []
+
+    def _capture(failure: HttpFailure) -> Exception:
+        seen.append(failure)
+        return _DomainError(f"{failure.kind}:{failure.detail}", kind=failure.kind)
+
+    mapping = _mapping(
+        unavailable=_capture, http_error=_capture, auth_rejected=_capture, invalid_body=_capture
+    )
+
+    # Envelope-level rejection: the failure carries no cause.
+    with pytest.raises(_DomainError):
+        parse_code_data_envelope({"code": 500, "msg": "nope"}, mapping)
+    assert seen[-1].kind == UNAVAILABLE
+    assert seen[-1].cause is None
+
+    # Every other classification carries its original exception.
+    assert classify_transport_error(TimeoutError("slow")).cause is not None
+    assert classify_failure(_http_error(503), mapping=mapping).cause is not None
+    assert (
+        classify_failure(UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid"), mapping=mapping).cause
+        is not None
+    )
