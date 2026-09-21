@@ -1,4 +1,4 @@
-"""The single authoritative tenant-visibility rule, with two renderings.
+"""The single authoritative tenant-visibility rule, with three renderings.
 
 "Which orders may this run see" is one business rule on the read-only
 diagnostic boundary (ADR-0001). It used to be implemented six independent
@@ -6,8 +6,11 @@ times — two entry guards, the agent tool layer, and three data sources — and
 had already drifted: the same order could reach different conclusions about
 visibility, with different failure reasons, depending on the entry point.
 
-This module defines the rule once and renders it twice:
+This module defines the rule once and renders it three times:
 
+- :func:`resolve_device_tenant` is the entry rendering: it decides the effective
+  tenant of one run from the tenant an entry is authorized for and the tenant
+  the request names, refusing a request that would widen that scope.
 - :func:`visible_orders` is the row-level rendering, for callers that hold rows
   in memory (the fixture source, the agent tool layer).
 - :func:`scope_where_sql` is the parameter-bound ``WHERE`` rendering, for
@@ -15,10 +18,14 @@ This module defines the rule once and renders it twice:
 
 The device path has no SQL to push down (it reads orders over ``/diag/*`` HTTP)
 while the caller path does; that is why the convergence point is the *rule*
-rather than the execution point, and why both renderings must exist.
+rather than the execution point, and why the row-level and SQL renderings must
+both exist. The entry rendering comes first in the list because it runs before
+either: a run's effective tenant is decided once, here, and every later
+rendering compares against that decision.
 
 Only pure functions and frozen values live here, following the ``rules.py``
-precedent: no class hierarchy, no runtime state, no third-party dependency.
+precedent — plus the one coded error the entry rendering raises: no class
+hierarchy, no runtime state, no third-party dependency.
 """
 
 from __future__ import annotations
@@ -75,6 +82,51 @@ def normalize_tenant(value: object) -> str | None:
         return None
     text = value.strip()
     return text or None
+
+
+#: The code for "this request names a tenant the entry is not authorized for".
+#: One condition, one code: a transport layer maps it to exactly one status code
+#: and never re-decides the condition — the duplication that let one request
+#: answer 403 and then 400.
+DEVICE_TENANT_MISMATCH = "scope.device_tenant_mismatch"
+
+
+class DeviceTenantError(RuntimeError):
+    """A run request named a tenant outside the entry's authorized scope.
+
+    Carries a code so a transport layer maps it to exactly one status code
+    instead of comparing the same two values again — the duplication that let
+    one request answer 403 and then 400 for a single condition.
+    """
+
+    def __init__(self, message: str, *, code: str = DEVICE_TENANT_MISMATCH) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+def resolve_device_tenant(enrolled: str | None, requested: str | None) -> str | None:
+    """The entry rendering: decide the effective tenant, or refuse the request.
+
+    ``enrolled`` is the tenant the entry is authorized for — for the device
+    entry, the enrolled device's tenant. ``None`` is a valid registration that
+    binds no tenant (workspace-level: the tenant is discovered from the order
+    rows and nothing is blocked). ``requested`` is the tenant the request names;
+    it may only ever *equal* the enrolled one, because a request can never widen
+    the scope it runs under.
+
+    Both sides go through :func:`normalize_tenant`, so the returned tenant is
+    the same normalized form the row-level and SQL renderings compare against:
+    the allowed set and the run's own tenant can no longer disagree about
+    stripping. A blank or otherwise unusable requested tenant is an absent one,
+    not a second tenant to match.
+    """
+    enrolled_tenant = normalize_tenant(enrolled)
+    requested_tenant = normalize_tenant(requested)
+    if enrolled_tenant is None:
+        return requested_tenant
+    if requested_tenant is not None and requested_tenant != enrolled_tenant:
+        raise DeviceTenantError("requested tenant does not match the enrolled device scope")
+    return enrolled_tenant
 
 
 @dataclass(frozen=True, slots=True)

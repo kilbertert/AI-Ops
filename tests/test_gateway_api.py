@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from aiops_diagnostics.agent_contracts import IncidentManifest, ToolName
@@ -8,17 +9,28 @@ from aiops_diagnostics.config import Settings
 from aiops_diagnostics.gateway_api import create_gateway_app
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_runtime import GatewayRuntime
-from aiops_diagnostics.gateway_store import GatewayStore
+from aiops_diagnostics.gateway_store import GatewayDevice, GatewayStore
 from aiops_diagnostics.journal import EvidenceJournal
 from aiops_diagnostics.models import DiagnosticRequest, Intent
+from aiops_diagnostics.order_visibility import (
+    DEVICE_TENANT_MISMATCH,
+    DeviceTenantError,
+    resolve_device_tenant,
+)
 
 
 class _FakeRuntime:
     def __init__(self, store: GatewayStore) -> None:
         self.store = store
         self.counter = 0
+        self.entry_guard_calls = 0
 
     def start_run(self, device, *, problem, order_no, tenant_id, key_slot, provider, fixture_name):
+        # The real runtime refuses a mismatching tenant through the shared entry
+        # guard (#331); the fake applies the same single definition so what is
+        # under test here is the HTTP layer's mapping, not a second rule.
+        self.entry_guard_calls += 1
+        resolve_device_tenant(device.tenant_id, tenant_id)
         self.counter += 1
         run_id = f"run-fake-{self.counter}"
         run = self.store.create_run(
@@ -127,6 +139,137 @@ def test_gateway_rejects_cross_tenant_requests(tmp_path: Path) -> None:
             json={"problem": "amount mismatch", "order_no": "ORDER-1", "tenant_id": "tenant-b"},
         )
         assert rejected.status_code == 403
+
+
+def test_cross_tenant_request_is_refused_once_with_one_error(tmp_path: Path) -> None:
+    """A mismatching tenant yields one status code and one error (#331).
+
+    The entry guard existed twice: this route compared the request tenant
+    against the enrolled one and answered 403, then the runtime compared the
+    very same two values and answered 400. It is now one definition the runtime
+    calls, so the request is refused exactly once — inside the runtime, not at
+    the edge, and never with a second status code behind the first.
+    """
+    config = tmp_path / "production.env"
+    config.write_text("# test config\n", encoding="utf-8")
+    settings = GatewayServerSettings(
+        data_home=tmp_path,
+        database_file=tmp_path / "gateway.db",
+        server_config_file=config,
+    )
+    store = GatewayStore(settings.database_file)
+    runtime = _FakeRuntime(store)
+    app = create_gateway_app(settings=settings, store=store, runtime=runtime)
+
+    with TestClient(app) as client:
+        code = store.issue_enrollment(workspace_id="ops", tenant_id="tenant-a")
+        token = client.post(
+            "/v1/enroll",
+            json={"code": code, "device_name": "windows", "platform": "win32"},
+        ).json()["token"]
+        headers = {"Authorization": f"Bearer {token}"}
+
+        rejected = client.post(
+            "/v1/runs",
+            headers=headers,
+            json={"problem": "amount mismatch", "order_no": "ORDER-1", "tenant_id": "tenant-b"},
+        )
+        assert rejected.status_code == 403
+        assert rejected.json()["detail"] == "requested tenant does not match the enrolled device scope"
+        # Refused once, by the one definition: the runtime was entered and the
+        # guard ran there, instead of the edge refusing before the runtime.
+        assert runtime.entry_guard_calls == 1
+
+        # The same tenant as the enrolled one is the run's own scope, not a
+        # second tenant to match.
+        accepted = client.post(
+            "/v1/runs",
+            headers=headers,
+            json={"problem": "amount mismatch", "order_no": "ORDER-1", "tenant_id": "tenant-a"},
+        )
+        assert accepted.status_code == 202
+        assert runtime.entry_guard_calls == 2
+
+
+def test_gateway_run_rejects_a_tenant_id_with_unsupported_characters(tmp_path: Path) -> None:
+    """``tenant_id`` carries the same character constraint as ``order_no`` (#331).
+
+    A blank or punctuated tenant used to reach the guard, where it either
+    widened the allowed set or was compared un-stripped against the enrolled
+    tenant. It is now refused as an invalid request, like every other bounded
+    identifier on this surface.
+    """
+    config = tmp_path / "production.env"
+    config.write_text("# test config\n", encoding="utf-8")
+    settings = GatewayServerSettings(
+        data_home=tmp_path,
+        database_file=tmp_path / "gateway.db",
+        server_config_file=config,
+    )
+    store = GatewayStore(settings.database_file)
+    runtime = _FakeRuntime(store)
+    app = create_gateway_app(settings=settings, store=store, runtime=runtime)
+
+    with TestClient(app) as client:
+        code = store.issue_enrollment(workspace_id="ops", tenant_id="tenant-a")
+        token = client.post(
+            "/v1/enroll",
+            json={"code": code, "device_name": "windows", "platform": "win32"},
+        ).json()["token"]
+        headers = {"Authorization": f"Bearer {token}"}
+        for tenant_id in (" tenant-a ", "", "tenant a", "tenant/a"):
+            rejected = client.post(
+                "/v1/runs",
+                headers=headers,
+                json={"problem": "amount mismatch", "order_no": "ORDER-1", "tenant_id": tenant_id},
+            )
+            assert rejected.status_code == 422
+            assert rejected.json()["error"]["code"] == "INVALID_REQUEST"
+        assert runtime.entry_guard_calls == 0
+
+
+def test_runtime_start_run_refuses_a_mismatching_tenant_with_one_code(tmp_path: Path) -> None:
+    """The runtime refuses through the shared entry rule, not a copy of it.
+
+    The guard used to live here as ``_tenant_for_device`` raising a bare
+    ``ValueError``, which the HTTP layer answered with 400 while the entry
+    answered 403. It is now the shared definition's coded domain error, so a
+    direct runtime caller gets the same single refusal the HTTP entry maps. The
+    guard runs before anything is queued, so no diagnosis is started.
+    """
+    database = tmp_path / "gateway.db"
+    config = tmp_path / "production.env"
+    config.write_text("# test config\n", encoding="utf-8")
+    settings = GatewayServerSettings(
+        data_home=tmp_path,
+        database_file=database,
+        server_config_file=config,
+    )
+    store = GatewayStore(database)
+    runtime = GatewayRuntime(store, settings, Settings())
+    device = GatewayDevice(
+        device_id="dev-1",
+        workspace_id="ops",
+        tenant_id="tenant-a",
+        name="windows",
+        platform="win32",
+    )
+    try:
+        with pytest.raises(DeviceTenantError) as excinfo:
+            runtime.start_run(
+                device,
+                problem="amount mismatch",
+                order_no="ORDER-1",
+                tenant_id="tenant-b",
+                key_slot=None,
+                provider=None,
+                fixture_name=None,
+            )
+    finally:
+        runtime.shutdown()
+    assert excinfo.value.code == DEVICE_TENANT_MISMATCH
+    assert str(excinfo.value) == "requested tenant does not match the enrolled device scope"
+    assert store.list_runs("ops") == []
 
 
 def test_gateway_evidence_endpoint_requires_run_and_auth(tmp_path: Path) -> None:

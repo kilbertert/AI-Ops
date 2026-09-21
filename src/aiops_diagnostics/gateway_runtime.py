@@ -35,6 +35,7 @@ from aiops_diagnostics.knowledge_retrieval import (
     MediaResourceSigner,
     MediaResponse,
 )
+from aiops_diagnostics.order_visibility import resolve_device_tenant
 from aiops_diagnostics.parsing import parse_request
 from aiops_diagnostics.platform_paths import reference_root
 from aiops_diagnostics.query_scope import resolve_query_scope
@@ -142,7 +143,11 @@ class GatewayRuntime:
         provider: str | None,
         fixture_name: str | None,
     ) -> dict[str, Any]:
-        effective_tenant = self._tenant_for_device(device, tenant_id)
+        # The entry rule is the shared definition (#331): it refuses a request
+        # that names a tenant outside the enrolled device scope and returns the
+        # effective tenant already normalized, so the allowed set below and the
+        # run's own tenant (stripped by parse_request) cannot disagree.
+        effective_tenant = resolve_device_tenant(device.tenant_id, tenant_id)
         allowed_tenants = {effective_tenant} if effective_tenant else None
         selected_provider = self.diagnostic_settings.agent.select_provider(provider)
         selected_key_slot = validate_key_slot_name(key_slot or selected_provider.resolved_key_slot())
@@ -1132,14 +1137,6 @@ class GatewayRuntime:
         if not path.is_file():
             raise ValueError("gateway fixture is missing")
         return path
-
-    @staticmethod
-    def _tenant_for_device(device: GatewayDevice, requested: str | None) -> str | None:
-        if device.tenant_id is None:
-            return requested
-        if requested and requested != device.tenant_id:
-            raise ValueError("requested tenant does not match the enrolled device scope")
-        return device.tenant_id
 
 
 def _guard_zero_order_language(answer: dict[str, Any], language: str) -> dict[str, Any]:
