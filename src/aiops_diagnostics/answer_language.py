@@ -34,8 +34,12 @@ guard used to accept `Any` and pick a branch by shape, and the one production
 shape that needed the exemption — a bare list of block dicts — fell through to a
 shape-blind flatten that knew neither a block's kind nor its field names. Same
 blocks, opposite conclusions, depending on the Python shape the caller chose.
-`AnswerSurface.from_public_blocks` is the single construction path, so a new
-surface reaches the exemption by construction rather than by remembering to.
+`AnswerSurface.from_public_blocks` builds one from the public ``blocks[]`` a
+surface delivers, so a new surface reaches the exemption by construction rather
+than by remembering to. A surface that finalises on something other than public
+blocks — the diagnosis document, which has none — builds the same type from what
+it does have. Either way the caller hands over the contract type, which is the
+part that keeps a shape from reaching the shape-blind path.
 """
 
 from __future__ import annotations
@@ -281,8 +285,9 @@ def answer_chinese_leak(payload: AnswerSurface | str, language: str) -> str:
     """Return the Chinese characters ``payload`` leaks for ``language``.
 
     ``payload`` is one of two things, and which one is declared by the caller
-    rather than guessed at: an :class:`AnswerSurface` built through
-    ``AnswerSurface.from_public_blocks``, or a plain string for the surfaces
+    rather than guessed at: an :class:`AnswerSurface` — from the public
+    ``blocks[]`` when the surface delivers blocks, and built directly by the
+    surface when it delivers something else — or a plain string for the surfaces
     that finalise on text alone (the zero-order answer and the casual answer).
     Every other shape is a caller bug, not a shape to dispatch on.
 
@@ -300,12 +305,12 @@ def answer_chinese_leak(payload: AnswerSurface | str, language: str) -> str:
         return payload.leaked_chinese()
     if isinstance(payload, str):
         return chinese_leak(payload)
-    # ponytail: the raw dict/list shapes the pre-contract callers still pass.
-    # Same judgement — the dict shape goes through `AnswerSurface`, so the
-    # exemption stays a single implementation — but a bare list of blocks
-    # carries no kinds, so it is judged leaf by leaf. Ceiling and upgrade
-    # trigger: #364/#365 migrate the callers and #366 deletes this branch,
-    # turning any other value into a TypeError.
+    # ponytail: the raw dict/list shapes, which no production caller passes any
+    # more (#364, #365) — only tests do. Same judgement — the dict shape goes
+    # through `AnswerSurface`, so the exemption stays a single implementation —
+    # but a bare list of blocks carries no kinds, so it is judged leaf by leaf.
+    # Ceiling and upgrade trigger: #366 deletes this branch, turning any other
+    # value into a TypeError.
     return _leak_in_unmigrated_payload(payload)
 
 
