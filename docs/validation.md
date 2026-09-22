@@ -1919,9 +1919,17 @@ AGENTS.md 的自检条款无可沉淀的新操作步骤。
 | 发过 `/devin review` 的 head（#36、#37） | thread 全部由 `devin-ai-integration[bot]` 解决 |
 | 未发 `/devin review` 的 head（AI-Ops 4 张，共 10 条 thread） | 解决数 **0** |
 
-**未验**：本仓**尚无启用闸门后的 PR**，因此「unresolved thread ⇒ `mergeStateStatus: BLOCKED`
-且合并不通过」在本仓未取证。该行为的完整执行记录见
-`server-development-consensus` 的 `qa-plan.md` GOV-B19。
+**本仓行为验证已在 PR #371 上取证**：在必需检查（`Workflow policy` / `verify` /
+`windows-verify`）全部 `pass` 且 `mergeable: MERGEABLE` 的前提下，只改变 thread 的
+解决状态即可改变合并门：
+
+| threads | `mergeStateStatus` |
+| --- | --- |
+| 0 / 1、1 / 1、0 / 2、1 / 2 | `BLOCKED` |
+| 2 / 2 | `CLEAN` |
+
+被拒信息：`the base branch policy prohibits the merge`。该 PR 自身就是观测对象，
+因此下列「验证闸门确实在拦」一节必须用**不会真合并**的方式读取，见该节。
 
 **操作知识自检**：本次只用 `gh api` 读写了远端 Ruleset，未在主机上执行运维命令。
 
@@ -1962,6 +1970,36 @@ gh api "repos/$REPO/rulesets/$RS" \
 gh api "repos/$REPO/rules/branches/main" --jq '[.[].type]|join(", ")'   # 规则仍在
 ```
 
+**核对的是「除目标键外其余逐字未变」，而不是只看闸门值。** 只读闸门值无法证明
+`json.dump` 筛掉的字段没丢东西——`enforcement`、`conditions`、`bypass_actors`
+与各规则参数都可能被改而闸门仍显示 `true`。所以第 1 步那份要留底，回写后比对：
+
+```bash
+# 第 1 步: gh api "repos/$REPO/rulesets/$RS" | ... > /tmp/rs.json   (改键前先留一份)
+#          gh api "repos/$REPO/rulesets/$RS" > /tmp/before.json
+# 回写后:
+gh api "repos/$REPO/rulesets/$RS" > /tmp/after.json
+python3 - <<'PYEOF'
+import json
+def norm(path, drop_key):
+    d = json.load(open(path)); out = []
+    for r in d["rules"]:
+        p = dict(r.get("parameters") or {})
+        if drop_key and r["type"] == "pull_request":
+            p.pop("required_review_thread_resolution", None)
+        out.append((r["type"], json.dumps(p, sort_keys=True)))
+    return sorted(out), d["conditions"], d.get("bypass_actors"), d["enforcement"]
+b, bc, bb, be = norm("/tmp/before.json", True)
+a, ac, ab, ae = norm("/tmp/after.json",  True)
+assert (b, bc, bb, be) == (a, ac, ab, ae), "除目标键外有改动，逐一排查后再重做"
+print("除该键外逐字未变；gate =", [r["parameters"]["required_review_thread_resolution"]
+      for r in json.load(open("/tmp/after.json"))["rules"] if r["type"] == "pull_request"][0])
+PYEOF
+```
+
+断言里保留 `enforcement`、`conditions`、`bypass_actors` 三项：它们是 `json.dump`
+从顶层筛出来手写的字段，也是最容易被漏掉或被误改的部分，闸门值看不出它们的变化。
+
 两条边界，都在本片实测过，都写在上面这段里而不是靠脚本兜住：
 
 - **成功退出不等于生效。** 本片上一版的 python 在改写时丢掉了真正赋值的那一行，
@@ -1986,16 +2024,34 @@ gh api "repos/$REPO/rules/branches/main" --jq '[.[].type]|join(", ")'   # 规则
 最小做法，外加一条确定性验收：**读回远端，看到 `true`。**
 ### 验证闸门确实在拦
 
-配置为 `true` 只是配置证据。行为证据需要一张**必需检查全绿但仍有未解决 thread** 的 PR：
+配置为 `true` 只是配置证据。行为证据是一张**必需检查全绿但仍有未解决 thread** 的 PR。
+
+**只用读操作取证——不要真的去合并那张 PR。** 若观测对象本身就是待合并的 PR
+（本片的 PR #371 即如此），`gh pr merge` 一旦不返回预期拒绝就会**真的把它合掉**，
+默认分支被改、观测对象消失。用 `BLOCKED` 状态加一次不写入的试探即可：
 
 ```bash
-gh pr view <n> --repo $REPO --json mergeStateStatus -q .mergeStateStatus   # 期望 BLOCKED
-gh pr merge <n> --repo $REPO --squash                                       # 期望被拒
-# -> "the base branch policy prohibits the merge"
+# 状态判据（只读，不写任何东西）
+gh pr view <n> --repo $REPO --json mergeStateStatus -q .mergeStateStatus
+gh pr merge <n> --repo $REPO --squash --auto     # 只在门通过时才排队
+gh pr checks <n> --repo $REPO                    # 全部 pass 才是有效读数
 ```
 
+读法：必需检查全部 `pass` + `mergeable: MERGEABLE` + `BLOCKED` ⇒ 阻塞来自门，
+因为能让 `BLOCKED` 的其他原因（pending/失败的必需检查、`required_approving_review_count`
+未满足、分支不最新）都已被前两项排除。
+
+**不要用 `gh pr merge` 探测**（不带 `--auto`）——本片试过：它对 `BLOCKED` 的 PR 会
+**真的合掉**，观测对象当场消失，默认分支被改。这不是理论风险，是这条命令的语义。
+
+同样**不要用 `--auto` 探测**，理由不同：它在**未开启 auto-merge 的仓库上直接报错**
+（`Auto merge is not allowed for this repository`），拿不到「被拒」这个信号。本仓就是
+这种状态，所以本片最终用的是上面的纯读判据。（若仓库开启了 auto-merge，`--auto` 是安全
+的，但要在探测后用 `--disable-auto` 撤销排队。）
+
 `BLOCKED` 也可由 pending 的必需检查造成，所以必须在所有必需检查 `pass` 之后再读，
-否则归因不成立。
+否则归因不成立。本片实测：`windows-verify` 曾仍在 `pending`，那次 `BLOCKED` 读数
+被判定无效并丢弃。
 
 ### 为什么没有脚本自检
 
