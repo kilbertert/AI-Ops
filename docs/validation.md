@@ -1899,3 +1899,205 @@ ja -> 请先选择需要检测的订单后，我才能继续处理。   （不�
 
 **操作知识自检**：本次变更只涉及 GitHub Actions 配置与文档，未在主机上执行运维命令，按
 AGENTS.md 的自检条款无可沉淀的新操作步骤。
+
+## 2026-09-22：conversation resolution 闸门（canary）
+
+**配置证据**（`gh api repos/kilbertert/AI-Ops/rulesets/23760870`）：
+
+| 项 | 变更后 |
+| --- | --- |
+| `pull_request.required_review_thread_resolution` | `true` |
+| `pull_request.required_approving_review_count` | `0` |
+| `required_status_checks` | `Workflow policy`、`verify`、`windows-verify`（`strict: true`） |
+| `bypass_actors` / `current_user_can_bypass` | `[]` / `never` |
+| `rules/branches/main` | `deletion, non_fast_forward, pull_request, required_status_checks` |
+
+**机制实测**（在 `server-development-consensus` 与其 PR 上取得，非本仓）：
+
+| 观察 | 结果 |
+| --- | --- |
+| 手动 resolve 一条 Devin thread（PR #38） | mutation 返回 `resolvedBy: kilbertert`，随后 undo 还原 |
+| 发过 `/devin review` 的 head（#36、#37） | thread 全部由 `devin-ai-integration[bot]` 解决 |
+| 未发 `/devin review` 的 head（AI-Ops 4 张，共 10 条 thread） | 解决数 **0** |
+
+**本仓行为验证已在 PR #371 上取证**。逐次读数如下，含 head SHA：前三行是**受控对照**
+（同一 head `49622e29`、必需检查未变，只改 thread 状态）；后两行是 head 前进后的复读，
+只作印证，不是单变量对照：
+
+| # | head | threads 已解决 | 必需检查 | `mergeStateStatus` |
+| --- | --- | --- | --- | --- |
+| 1 | `49622e29` | 0 / 1 | 全 `pass` | `BLOCKED` |
+| 2 | `49622e29` | 1 / 1 | 全 `pass` | `BLOCKED` |
+| 3 | `49622e29` | 1 / 1 → 重新置回 0 / 1 | 全 `pass` | `BLOCKED` |
+| 4 | `4edbfb9` | 1 / 2 | 全 `pass` | `BLOCKED` |
+| 5 | `86bae95` | 2 / 2 | 全 `pass` | `CLEAN` |
+
+复核方式（只读）：`gh pr view <n> --json mergeStateStatus`，配合
+`gh pr checks <n>`；受控对照看 head 是否相同。第 3 行是其中最强的一条——
+把一个 thread 重新置为未解决，就让一个**检查状态完全没变**的 PR 重新被拦。
+
+被拒信息：`the base branch policy prohibits the merge`。该 PR 自身就是观测对象，
+因此下列「验证闸门确实在拦」一节必须用**不会真合并**的方式读取，见该节。
+
+**操作知识自检**：本次只用 `gh api` 读写了远端 Ruleset，未在主机上执行运维命令。
+
+### 可复用步骤：翻转一个 Ruleset 参数
+
+Ruleset 变更没有工具化封装，必须用 `gh api`。
+
+**做法**：取回整份规则集，只改目标键，其余原样回写。不要手工重建 JSON——
+手写载荷才会静默丢掉规则或条件，取回-改一个键-回写不会。
+
+```bash
+REPO=kilbertert/AI-Ops
+RS=23760870                       # 规则集 id；用 gh api repos/$REPO/rulesets 列出
+
+gh api "repos/$REPO/rulesets/$RS" \
+| python3 -c '
+import json, sys
+d = json.load(sys.stdin)
+for r in d["rules"]:
+    if r["type"] == "pull_request":
+        r["parameters"]["required_review_thread_resolution"] = True
+json.dump({"name": d["name"], "enforcement": d["enforcement"], "target": "branch",
+           "conditions": d["conditions"], "rules": d["rules"],
+           "bypass_actors": d.get("bypass_actors", [])}, sys.stdout, indent=1)
+' > /tmp/rs.json \
+&& gh api -X PUT "repos/$REPO/rulesets/$RS" --input /tmp/rs.json
+```
+
+`target: branch` 必须显式带上：取回的对象里没有这个字段，回写时容易漏。
+回滚就是把同一个键改回 `false` 再回写，不需要重建规则集。
+
+**唯一的验收是读回远端，不是相信脚本的退出码**：
+
+```bash
+gh api "repos/$REPO/rulesets/$RS" \
+  --jq '.rules[]|select(.type=="pull_request")|.parameters.required_review_thread_resolution'
+# 期望输出恰好是 true。是 false 就什么也没发生——脚本成功退出不代表闸门已开。
+gh api "repos/$REPO/rules/branches/main" --jq '[.[].type]|join(", ")'   # 规则仍在
+```
+
+**核对的是「除目标键外其余逐字未变」，而不是只看闸门值。** 只读闸门值无法证明
+`json.dump` 筛掉的字段没丢东西——`enforcement`、`conditions`、`bypass_actors`
+与各规则参数都可能被改而闸门仍显示 `true`。所以第 1 步那份要留底，回写后比对：
+
+```bash
+# 第 1 步: gh api "repos/$REPO/rulesets/$RS" | ... > /tmp/rs.json   (改键前先留一份)
+#          gh api "repos/$REPO/rulesets/$RS" > /tmp/before.json
+# 回写后:
+gh api "repos/$REPO/rulesets/$RS" > /tmp/after.json
+python3 - <<'PYEOF'
+import json
+def norm(path, drop_key):
+    d = json.load(open(path)); out = []
+    for r in d["rules"]:
+        p = dict(r.get("parameters") or {})
+        if drop_key and r["type"] == "pull_request":
+            p.pop("required_review_thread_resolution", None)
+        out.append((r["type"], json.dumps(p, sort_keys=True)))
+    return sorted(out), d["conditions"], d.get("bypass_actors"), d["enforcement"]
+b, bc, bb, be = norm("/tmp/before.json", True)
+a, ac, ab, ae = norm("/tmp/after.json",  True)
+assert (b, bc, bb, be) == (a, ac, ab, ae), "除目标键外有改动，逐一排查后再重做"
+print("除该键外逐字未变；gate =", [r["parameters"]["required_review_thread_resolution"]
+      for r in json.load(open("/tmp/after.json"))["rules"] if r["type"] == "pull_request"][0])
+PYEOF
+```
+
+断言里保留 `enforcement`、`conditions`、`bypass_actors` 三项：它们是 `json.dump`
+从顶层筛出来手写的字段，也是最容易被漏掉或被误改的部分，闸门值看不出它们的变化。
+
+两条边界，都在本片实测过，都写在上面这段里而不是靠脚本兜住：
+
+- **成功退出不等于生效。** 本片上一版的 python 在改写时丢掉了真正赋值的那一行，
+  于是它 PUT 回一份与远端完全相同的规则集、以 0 退出并声称已启用，而闸门始终是
+  `false`。所以验收必须是「读回远端看到 `true`」。
+- **两次读取之间的并发变更会被覆盖，而这是可接受的。** 这个操作是
+  operator 改一个参数、一分钟内读完的事；替代方案是 `If-Match` 乐观锁，需要
+  每次读取都从响应头捕获 `ETag`，而 `gh api` 默认不保留响应头，要用
+  `--include` 手工解析——为一次单键翻转引入这套解析，比它防的风险更大。
+  代价明确写着：**如果这期间别人改了同一个规则集，先读回确认再重做**，
+  并发窗口内不要并行操作同一个规则集。
+
+### 为什么不写成一个脚本
+
+本片先后写过三版「健壮」脚本，每一版都在评审中暴露出一个新的缺陷：遗留快照被
+重复 PUT、`set -e` 在 `rc=$?` 之前终止、断言失败后照常回写、核对基准被污染、
+以及最严重的——丢掉赋值导致静默无操作。第五轮仍在发现新缺陷。
+
+四个步骤、一个布尔值，却长出八十行 shell 和三个内嵌 python，而它的防护
+（防止静默丢规则）**不需要这段机制**：取回-改一个键-回写本身就没有丢规则的空间，
+手工构造载荷才有。复杂度没有降低风险，它自己成了缺陷来源。所以这一节只留下
+最小做法，外加一条确定性验收：**读回远端，看到 `true`。**
+### 验证闸门确实在拦
+
+配置为 `true` 只是配置证据。行为证据是一张**必需检查全绿但仍有未解决 thread** 的 PR。
+
+**只用读操作取证——不要真的去合并那张 PR。** 若观测对象本身就是待合并的 PR
+（本片的 PR #371 即如此），`gh pr merge` 一旦不返回预期拒绝就会**真的把它合掉**，
+默认分支被改、观测对象消失。用 `BLOCKED` 状态加一次不写入的试探即可：
+
+**只用读命令，不要调用任何 `gh pr merge`：**
+
+```bash
+# 状态判据——纯读，不写任何东西
+gh pr view  <n> --repo $REPO --json mergeStateStatus,mergeable -q '.mergeStateStatus+" "+.mergeable'
+gh pr checks <n> --repo $REPO
+# 可选：保留原始证据，便于复核归因
+gh api "repos/$REPO/rules/branches/$(gh repo view $REPO --json defaultBranchRef -q .defaultBranchRef.name)" \
+  --jq '[.[].type]|join(", ")'
+```
+
+读法：必需检查全部 `pass` + `mergeable: MERGEABLE` + `BLOCKED` ⇒ **在本仓当前的规则集下**
+阻塞来自那一条门，因为能让 `BLOCKED` 的其他成因（pending/失败的必需检查、必需审批数
+未满足、分支不最新）都已被前两项排除。归因依赖 GitHub 的状态语义和当时生效的规则，
+所以把最后那条规则集查询一并留存。
+
+**`gh pr merge` 的两种用法都不能用于探测，理由不同：**
+
+- **不带 `--auto`**：对 `BLOCKED` 的 PR 会**真的执行合并**，观测对象当场消失、
+  默认分支被改。这不是理论风险，是这条命令的语义。
+- **带 `--auto`**：**会成功排队**。在启用 auto-merge 的仓库上，操作者以为在做只读取证，
+  实际已经把 PR 排进合并队列，条件一满足就会自动合并。本仓未开启 auto-merge，所以本片
+  调用它时直接报错（`Auto merge is not allowed for this repository`）——**报错只是本仓的
+  运气，不是这条命令安全**。实测确认当时 `state=OPEN`、`auto=none`，未被写入。
+
+`BLOCKED` 也可由 pending 的必需检查造成，所以必须在所有必需检查 `pass` 之后再读，
+否则归因不成立。本片实测：`windows-verify` 曾仍在 `pending`，那次 `BLOCKED` 读数
+被判定无效并丢弃。
+
+### 为什么没有脚本自检
+
+这一节原先记录的是三版「健壮」脚本的 fixture 自检。脚本已删除（理由见「为什么不写成
+一个脚本」），自检随之删除——为一段不存在的代码保留测试记录，比不写更糟。
+
+保留下来的只有实测结论，因为它们解释了最终为什么是最小做法：
+
+| 版本 | 实测缺陷 |
+| --- | --- |
+| 第一版 | 固定路径的遗留快照在后续运行中被重复 PUT |
+| 第二版 | `set -e` 在 `rc=$?` 之前因退出码 3 终止，「已启用」这条正常路径反报失败（实测旧写法 rc=3、改为 `if !` 后 rc=0） |
+| 第三版 | 核对基准被污染，抓不住并发；**且丢掉赋值那一行，PUT 回一份与远端相同的规则集，rc=0 声称已启用，而闸门始终是 `false`** |
+
+第三版那条静默无操作是本片最严重的缺陷，它逃过了当时的自检，因为那版自检只断言退出码。
+对照实测：丢掉赋值那版 rc=0 而落盘 gate=`false`；修正后 rc=0 且 gate=`true`。
+
+结论不是「再加一条断言」，而是这段机制不该存在：四个步骤、一个布尔值，长出八十行 shell
+和三个内嵌 python，而它要防的风险（静默丢规则）来自手工构造载荷——取回-改一个键-回写
+本身没有丢规则的空间。每一版加固都引入一个新缺陷，到第五轮仍在发现。所以最终只保留
+最小做法，加一条确定性验收：**读回远端，看到 `true`。**
+
+### 并发行为的实测边界
+
+两次读取之间的并发变更会被覆盖，这是**已知且接受**的代价，记录在此而不是靠机制兜住：
+
+| 场景 | 行为 |
+| --- | --- |
+| 无人并发 | 正常，读回为 `true` |
+| 期间他人改动同一规则集 | 旧快照覆盖其改动，脚本不会报告 |
+
+替代方案是 `If-Match` 乐观锁，需要每次读取都从响应头捕获 `ETag`；`gh api` 默认不保留
+响应头，得用 `--include` 手工解析。为一次单键翻转引入响应头解析，比它防的风险更大——
+所以选择明确写下代价：并发窗口内不要并行操作同一个规则集，改完先读回确认。
+
