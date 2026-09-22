@@ -1,5 +1,36 @@
 # 验证与验收计划
 
+## 41 runbook tar/rsync 配对修正（2026-09-22，本地模拟验证）
+
+**范围**：`docs/agents/env-41-runbook.md` §2 的打包命令与 rsync 源路径配对（PR #384）。
+**不涉及生产**：本次未连接 41，仅在临时目录模拟。
+
+**根因**：文档与实际部署漂移，且两种写法各自自洽，因此不可见。
+
+| 打包 | 包内首层 | 需要的 rsync 源 |
+|---|---|---|
+| `tar czf x src/aiops_diagnostics/` | `src/` | `/tmp/sync-check/src/aiops_diagnostics/` |
+| `tar -czf x -C src aiops_diagnostics` | `aiops_diagnostics/` | `/tmp/sync-check/aiops_diagnostics/` |
+
+**验证（临时目录完整模拟，含 gateway.db 同级污染与远端遗留 STALE.py）**：
+
+| 断言 | 实测 |
+|---|---|
+| 打包后首层 = `aiops_diagnostics/` | PASS |
+| rsync 后远端文件数与本地一致（150） | PASS |
+| 远端 `STALE.py` 被 `--delete` 清除 | PASS |
+| `gateway.db` **未**被撒进 `src/` | PASS |
+| 无嵌套 `src/src/` | PASS |
+| 备份内 `<时间戳>/src/gateway.db` 存在 | PASS |
+
+**断言本身的两向实测**（Devin 指出初版只打印不中止，已修正）：
+
+- 错的打包（不带 `-C`）→ 断言中止，退出码 1，不进入 `scp`
+- 对的打包（带 `-C`）→ 断言放行，退出码 0
+
+**未完成**：未在 41 上实跑本次修订后的部署流程。本次改动只涉及本地打包与校验命令，
+不改变 41 上的任何状态；下次实际部署时才是第一次真实验证。
+
 ## 流式轮次首部丢失修复 + 失败文案分因（2026-09-22，本地自动化验证）
 
 **范围**：修复 `customer QA turn returned invalid JSON`（PR #380）。

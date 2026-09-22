@@ -64,9 +64,18 @@ SSHPASS='<现场从受控来源取得>' sshpass -e ssh -o StrictHostKeyChecking=
 
 生产代码是文件拷贝部署（41 无 `.git`）。流程：**备份 → 传 → 校验 sha → 重启**。
 
+> **打包与 rsync 源必须成对**（本节唯一容易错的地方）。`-C src aiops_diagnostics`
+> 让包内首层就是 `aiops_diagnostics/`，所以解包后的 rsync 源是
+> `/tmp/sync-check/aiops_diagnostics/`。若改成 `tar czf x src/aiops_diagnostics/`
+> （不带 `-C`），首层会变成 `src/`，源就必须写成
+> `/tmp/sync-check/src/aiops_diagnostics/`——同理，用 `--strip-components` 会剥掉
+> 目录层把文件散到 `src/` 根。**打包后先 `tar tzf` 看一眼首层，再决定 rsync 源。**
+
 ```bash
 # 1) 本地打包（在 canonical checkout，确保在目标 commit）
-tar czf /tmp/aiops-sync.tar.gz src/aiops_diagnostics/
+tar -czf /tmp/aiops-sync.tar.gz -C src aiops_diagnostics
+first=$(tar tzf /tmp/aiops-sync.tar.gz | head -1)
+[ "$first" = "aiops_diagnostics/" ] || { echo "错误：包内首层是 $first，期望 aiops_diagnostics/；先停下，别上传" >&2; exit 1; }
 
 # 2) 上传
 scp /tmp/aiops-sync.tar.gz aiops-41:/tmp/
@@ -77,7 +86,7 @@ set -e
 mkdir -p /var/backups/aiops-41/backup-$(date +%Y%m%d-%H%M%S)
 cp -a /opt/aiops-41/src /var/backups/aiops-41/backup-$(date +%Y%m%d-%H%M%S)/
 mkdir -p /tmp/sync-check && tar xzf /tmp/aiops-sync.tar.gz -C /tmp/sync-check
-rsync -a --delete /tmp/sync-check/src/aiops_diagnostics/ /opt/aiops-41/src/aiops_diagnostics/
+rsync -a --delete /tmp/sync-check/aiops_diagnostics/ /opt/aiops-41/src/aiops_diagnostics/
 chown -R aiops41:aiops41 /opt/aiops-41/src
 systemctl restart aiops-gateway-41.service && sleep 5
 systemctl is-active aiops-gateway-41.service
