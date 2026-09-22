@@ -92,6 +92,36 @@ def test_readme_relative_links_resolve() -> None:
     assert broken == [], "README.md 中的相对链接不可解析: " + ", ".join(sorted(set(broken)))
 
 
+def _github_anchor(heading: str) -> str:
+    """GitHub's anchor rule: strip markup/punctuation, spaces become hyphens.
+
+    Kept deliberately close to GitHub's own transform for the shapes this README
+    uses (CJK headings, punctuation, parenthesised asides). It is not a general
+    reimplementation — the point is to catch a TOC entry whose heading was
+    renamed and whose anchor was not.
+    """
+    text = re.sub(r"`([^`]*)`", r"\1", heading)
+    text = re.sub(r"[^\w\-\u4e00-\u9fff ]+", "", text)
+    return text.strip().lower().replace(" ", "-")
+
+
+def test_readme_toc_anchors_resolve() -> None:
+    """Every in-page TOC link must point at a heading that still exists.
+
+    The relative-link guard above deliberately skips `#anchors`, so renaming a
+    heading leaves its table-of-contents entry pointing at an anchor nothing
+    defines — the entry silently stops jumping and CI stays green. That is not
+    hypothetical: shortening `## 二、设计哲学：…` to `## 二、设计哲学` did exactly
+    this, and only a human reading the diff (via a review comment) caught it.
+    """
+    readme = _readme()
+    headings = {_github_anchor(m.group(1)) for m in re.finditer(r"^#{1,6}\s+(.+?)\s*$", readme, re.M)}
+    broken = [target for target in re.findall(r"\[[^\]]*\]\(#([^)]+)\)", readme) if target not in headings]
+    assert broken == [], "README.md 的页内目录锚点没有对应标题（标题改名后锚点未同步？）: " + ", ".join(
+        sorted(set(broken))
+    )
+
+
 def test_package_import_graph_stays_acyclic() -> None:
     """The README tells the reader to trust the layer diagram; a cycle would invalidate it."""
     edges = _import_edges()
