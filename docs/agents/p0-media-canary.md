@@ -160,7 +160,8 @@ GET /v1/agent-metrics/runs?route_type=qa
 | 视频块可播放、Range | C4 206/416 |
 | 多轮 + 检索状态/引用 | C5、C3 |
 | 媒体失效文本引用保留 | C6 |
-| 并发忙碌/停止 | C5（409）|
+| 并发忙碌 | C5（409）|
+| 用户停止 | **不得以 C5 的 409 充数**：该项原挂在本表，但 #173 的"停止生成"条目在范围决定时被降级为范围外、2026-09-14 的 PASS 证据引的是 CONV-01（不含任何停止接口的会话生命周期用例），停止生成当时从未实现。现在由 PRD #346 交付——协议级证据见 `docs/validation.md` 的「#358」与 `tests/test_assistant_cancel_handoff.py`，BFF/前端契约见 `docs/agents/assistant-cancel-handoff.md` §8。**41 公网停止链路跑通前本项记 BLOCKED，不勾验收项。** |
 | 跨租户拒绝 | C6 + 既有租户隔离测试 |
 
 #175 的 acceptance.feature/QA 计划在 `acceptance.feature`（P0-E2E-REAL

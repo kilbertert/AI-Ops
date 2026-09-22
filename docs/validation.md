@@ -1,5 +1,190 @@
 # 验证与验收计划
 
+## #359 取消结果入指标 + 两条核心回归守护封口（2026-09-21，本地自动化验证）
+
+**范围**：PRD #346 子票 T6（收口）。把取消结果写进指标，把取消语义的跨入口一致性钉住，
+并对 PRD 要求的两条核心回归守护逐条实测「去掉修复即失败」。**本片未完成业务验收**：
+`cancelled` 计数要真正出现在运维看到的聚合面上，还取决于 BFF 是否放行
+`/v1/agent-metrics/*` 与新状态值 `cancelled`（透传要求见交接文档）；41 公网停止链路的复跑
+步骤在 `docs/agents/assistant-cancel-handoff.md` §8，本片未跑。
+
+**取消结果入指标**：指标层的 `OUTCOME_TYPES` 自建表起就含 `cancelled`，而全代码库没有任何
+写入点——「哪些问题用户经常等不下去」因此没有答案，等待结束在一个没有任何聚合会看的作业行里。
+写入点放在 `GatewayRuntime.cancel_assistant_qa` 里终态写成功之后：那是唯一能确定一次取消
+确实发生了的时刻。只写脱敏字段（tenant / route_type / conversation_id），租户取自已认证的
+作用域（复用既有的 `record_route_metric`，不新增任何调用方输入）。**按 claim-guard 返回值
+计数**：只有赢下终态写的那次请求记一行，连点两次仍是一行；worker 随后被 claim-guard 拒绝的
+写入依旧什么都不记（#355 的既有约束不变），所以一次取消不可能被计两次。`route_type` 取自
+作业提交时的路线（`qa` / `promo`），由 `QARegistration` 携带：宣传点击被停止不能计成普通
+提问被停止，否则读宣传明细的人永远看不到它。
+
+**两条核心回归守护（各自实测去掉对应修复后会失败）**
+
+| 守护 | 所在 | 断言 | 去掉修复后的实测 |
+|---|---|---|---|
+| 取消后作业为 `cancelled` 终态、会话槽位已释放、后续提问不再撞 409 | `tests/test_assistant_api.py::test_stopping_a_question_returns_its_terminal_state_and_unlocks_the_conversation` | 取消返回 200 + `status=cancelled`/`retry_after_ms=null`、`is_generating` 转 false、同会话追问 202 而非 409、停止的那轮不留在历史 | 令 `cancel_assistant_qa` 不写终态也不中断 → `assert body["status"] == "cancelled"` 拿到 `'running'`，转红 |
+| 同上（槽位释放单独实测） | 同上 | 同上 | 保留终态写、只去掉槽位释放 → `is_generating is False` 转红，证明「不再撞 409」这一半单独有守护 |
+| 网关重启后，重启前处于 `running` 的提问不再卡在非终态 | `tests/test_assistant_api.py::test_restarted_gateway_converges_an_in_flight_question`（存储层还有 `tests/test_assistant_qa_store.py::test_running_question_is_converged_to_failed_on_restart`） | 原地重启后轮询得到 `status=failed` + `error.code=QA_INTERRUPTED_BY_RESTART`、`retry_after_ms=null`、`result is null` | 令 `recover_assistant_questions()` 直接返回 → 轮询仍是 `'running'`，两条一起转红 |
+
+**跨入口一致性**：取消语义只有一处定义（作业行的终态写）。`tests/test_assistant_qa_cancel.py::
+test_a_stopped_question_reads_the_same_from_every_surface` 用真实运行时驱动一次取消，然后逐个
+面核对同一次轮次：作业面（`status=cancelled` 且 `result is None`）、会话历史
+（`conversation_store.turns()` 无该轮）、后续上下文（`context_turns()` 亦无该轮：下一问的
+prompt 不可能拿它当依据，下一问之后历史里只剩它自己那一轮）、以及网关为这次运行留下的记录
+（一条 `outcome=cancelled` 且归属该会话的脱敏指标行——助手路径不跑证据日志，指标行就是这条
+记录）。四个面结论不一致时该测试转红。
+
+**改动了一条既有断言（在此声明）**：`tests/test_assistant_qa_cancel.py` 原有一条
+`metrics_store.list_runs(SCOPE) == []`，意图是「取消不写指标」。它按**作用域指纹**查询，而指标
+行按**租户**建（`_SAFE_TENANT`），因此无论有没有行它都通过——本片把这条查询改成
+`list_runs("T-1")`（该文件 `_context()` 的真实租户），断言改为「只有 stop 自己写的那一行
+`cancelled`」。这既是 #359 要求的新预期，也顺手把一条恒真的断言变成有效的；被取消的轮次
+依然不产生任何答案类指标，这一点由原断言的后半段（turns 为空、job 无 result）继续守着。
+
+**新增自动化检查**（均以「去掉修复即失败」核对过）：
+
+| 检查 | 文件 | 守护的行为 |
+|---|---|---|
+| `test_a_stopped_question_is_counted_as_its_own_outcome` | `tests/test_assistant_qa_cancel.py` | 取消后指标里出现一行 `outcome=cancelled`；连点两次仍一行；被拒的迟到答案不加行 |
+| `test_a_stopped_promotional_question_is_counted_as_a_promo_stop` | `tests/test_assistant_qa_cancel.py` | 宣传路线被停止记 `route_type=promo`；把 `route_type` 写成固定 `qa` 即转红 |
+| `test_a_stopped_question_reads_the_same_from_every_surface` | `tests/test_assistant_qa_cancel.py` | 作业面/会话历史/后续上下文/运行记录四处结论一致 |
+| `test_cancel_persists_the_terminal_state_then_interrupts_the_live_turn`（改） | `tests/test_assistant_qa_cancel.py` | 迟到答案被拒后，指标里只有 stop 写的那一行 |
+
+**指标写入本身也以 RED→GREEN 核对过**：先写测试，4 条相关检查（上表 4 条）在实现写入前全红
+（`assert [] == ['cancelled']`），补上写入后全绿；若把 `route_type` 写成固定的 `qa`，宣传路线
+那条单独转红。
+
+**结果**：本地全量 `uv run pytest` 1075 passed（此前 1072，新增 3 条、改动 1 条），
+`uv run ruff check` 与 `ruff format --check` 干净；其余既有断言逐条未改。
+
+**已知缺口（不在本片）**：41 公网停止链路与 `/v1/agent-metrics` 聚合面的真实验收；另两张
+异步表（`health_report_jobs` / `standard_diagnoses`）的重启恢复能力，仍是 #356 明确留下的
+范围外项。
+
+## #358 取消契约分发 + #173 断链纠正（2026-09-21，本地自动化验证）
+
+**范围**：PRD #346 子票 T5。把助手入口的等待态契约交付给 BFF 组与前端组，并纠正「停止生成」
+这条引用链。**本片未完成业务验收**：新增契约是文档交付物，§5 的响应样例由回归测试在真实网关栈上
+抓取，**尚未在 41 公网链路跑过取消**——复跑步骤写在交接文档 §8。
+
+**交付物**：`docs/agents/assistant-cancel-handoff.md`（读者明确为 BFF/Java 组 + 客服前端组）。
+含：输入框锁定/复原规则（`qa`/`diagnosis` 的 202 锁，`faq`/`clarification` 的同步 200 不锁，
+跳转类动作不经入口不锁）、解锁由作业终态驱动（含 `is_generating` 的定位：会话并发闸门，不是
+解锁条件）、取消端点契约（幂等表、404 三因同形、落库优先+尽力中断）、`cancelled` 的界面含义
+（**无内容**，接口不流式，无"部分内容"分支）、陷阱清单 13 条、41 联调复跑步骤。
+
+**响应样例不是手写的**：7 个样例由 `tests/test_assistant_cancel_handoff.py` 在真实网关栈
+（真实 `GatewayRuntime` + 真实 `GatewayStore` + 走 HTTP 路由的 `TestClient`）上抓取，只掩盖逐次
+生成的 `qa_id`/`conv_` id 与 ISO 8601 时间戳，其余逐字段比对；**文档漂移即测试失败**（实测：
+把样例里一个值改错，该测试转红）。
+
+**#173 断链纠正**（PRD #346）：6 处把「真实停止生成链路」归给已关闭 #173 的引用已改指本 PRD
+（`qa-plan.md` 两处、本页 CONV-01 一条、`docs/开发进度.md` 两处、
+`docs/agents/p0-media-canary.md` 验收表一项）。#173 的「停止生成」条目在范围决定时被降级为
+范围外，2026-09-14 的 PASS 证据引的是 CONV-01（一个不含任何停止接口的会话生命周期用例）——
+停止生成当时从未有过实现或证据。runbook 里「并发忙碌/停止」共用 C5（409）证据的那一行已拆开：
+并发忙碌仍归 C5（409），用户停止改为"不得以 409 充数"，指向 PRD #346 的协议级证据，并在 41 公网
+停止链路跑通前记 BLOCKED、不勾验收项。
+
+**新增自动化检查**（均以"去掉修复即失败"核对过）：
+
+| 检查 | 文件 | 守护的行为 |
+|---|---|---|
+| `test_the_handoff_shows_what_the_gateway_answers` | `tests/test_assistant_cancel_handoff.py` | 交接文档 7 个响应样例逐字段等于真实响应；文档漂移即失败 |
+| `test_no_document_still_blames_173_for_the_stop_link` | `tests/test_assistant_cancel_handoff.py` | 任何同时提及 #173 与停止链路的文档块必须同时点名 #346；把已纠正的 6 处改回原样即转红 |
+| `test_no_document_claims_the_stop_link_was_already_accepted` | `tests/test_assistant_cancel_handoff.py` | 不得声称停止生成已验收而不指出 PRD 或真实测试；同上反向守护 |
+
+**结果**：本地全量 `uv run pytest` 1072 passed（此前 1069），`uv run ruff check` 与
+`ruff format --check` 干净；既有断言逐条未改（新增 3 条，未动任何既有检查）。
+
+**已知缺口（不在本片）**：41 公网 / BFF 放行 `/cancel` 后的真实验收；取消结果入指标与两条核心
+回归守护的独立封口（#359）；配套地 `frontend-api-brief.md` §2.3 已补 `cancelled` 状态值与透传
+要求，前端输入框的锁定/复原实现属前端改动，不在本仓。
+
+## #356 网关重启收敛在飞的提问作业（2026-09-21，本地自动化验证）
+
+**范围**：PRD #346 子票 T3。网关重启时把仍处于 `queued`/`running` 的提问收敛到终态，
+使重启后**立即**结束，而不是挂着等满 15 分钟 deadline。**本片未完成业务验收**：没有
+真实重启故障案例可复现（这项能力的目的正是消除它），下列证据全部来自本地 fixture 级
+自动化测试。
+
+**终态取值与理由**：选 `failed` + `error_code=QA_INTERRUPTED_BY_RESTART`。不复用
+`expired`——那个值的语义是「作业跑超了自己的 deadline」，重启不是超时；不复用
+`cancelled`——那个值的语义是「用户主动停止」（#354 新增），重启也不是用户取消。原因
+写在行上的 error code / message 里，运维因此能把一次发版、一次超时和一次用户停止区分开。
+保留期走既有失败档（5 分钟）：刷新窗口内可查，到期由既有保留期清扫收敛为 `expired`。
+
+**放置位置**：恢复挂在 `create_gateway_app` 的启动路径上（先于接受任何请求），没有放进
+`GatewayStore.__init__`——后者同样被 `aiops-gateway devices` 之类短命 CLI 命令触发，
+那会在网关还在跑的时候结束在飞作业。已存在的另两张表的启动清扫（在 `_initialize` 内，
+收敛为 `expired`）**未改动**，其既有断言逐条不变。
+
+**新增自动化检查**（回归守护均以"去掉修复即失败"核对过）：
+
+| 检查 | 文件 | 守护的行为 |
+|---|---|---|
+| `test_running_question_is_converged_to_failed_on_restart` | `tests/test_assistant_qa_store.py` | 重启前 `running` 的提问重启后不再是非终态：转 `failed`、带重启 error code、无结果、`completed_at` 落值 |
+| `test_restart_recovery_is_a_noop_for_terminal_questions` | `tests/test_assistant_qa_store.py` | 幂等：`completed`（含结果）/ `cancelled` 行在恢复后原样不动，恢复跑两遍结果一致 |
+| `test_restarted_gateway_converges_an_in_flight_question` | `tests/test_assistant_api.py` | 协议层：新网关建好就能对外——轮询返回终态 `failed`、`retry_after_ms` 为 null（等待态结束）、error code 指名重启 |
+
+前两条的"去掉修复即失败"已实测：把恢复改为空操作后，第一、三条失败（状态仍是
+`running`）；第二条是反向守护（防止恢复越界改写已终态行），修复在与否都通过。
+
+**结果**：本地全量 `uv run pytest` 1059 passed（此前 1056），`uv run ruff check` 与
+`ruff format --check` 干净；改动前后既有断言逐条不变。
+
+**已知缺口（不在本片）**：`health_report_jobs` 与 `standard_diagnoses` 同样只靠 deadline
+过期，本次按子票范围未触碰；取消端点与响应（#357）、契约分发与 #173 断链纠正（#358）、
+取消结果入指标与两条核心回归守护（#359）均未在本片交付。会话生成槽位由既有的 120 秒
+自过期兜底，本片不改该数值。
+
+## #355 终态提交检查 claim-guard 返回值（2026-09-21，本地自动化验证）
+
+**范围**：PRD #346 子票 T2，只改运行时对 claim-guard 返回值的态度——提问作业的 9 处
+终态写入（`completed` / `failed`）全部检查返回值，被拒时安静退出：不写会话轮次行、不写
+指标，只在已开启生成轮次时丢弃该行并释放生成槽位（与同函数内 `running` claim 被拒时的
+既有处理一致）。claim-guard 本身的语义（`WHERE status IN ('queued','running')`）与存储层
+均未改动。**本片未完成业务验收**：取消端点（#357）尚未落地，"取消让晚到写入从理论变成
+常态"这条动机目前只能以过期路径复现；取消路径的端到端验收留给 #357 / #359。
+
+**新增自动化检查**（均以"去掉修复即失败"核对过）：
+
+| 检查 | 文件 | 守护的行为 |
+|---|---|---|
+| `test_expired_job_keeps_its_terminal_row_and_drops_the_late_answer` | `tests/test_assistant_qa_claim_guard.py` | 作业在 worker 答题期间过期：终态写入被拒后结果不落库、会话轮次行被丢弃、生成槽位释放、不产生指标行 |
+| `test_a_terminal_write_that_lands_still_persists_result_turn_and_metric` | `tests/test_assistant_qa_claim_guard.py` | 反向守护：claim-guard 接受的写入照旧写结果、轮次与指标，检查返回值不改变正常路径 |
+| `test_rag_path_refusal_stops_the_worker` | `tests/test_assistant_qa_claim_guard.py` | RAG 路径以 `TERMINAL_WRITE_REFUSED` 上报被拒时 worker 停在该处，不把该标记当作已完成结果写进轮次与指标 |
+
+**结果**：本地全量 `uv run pytest` 1056 passed（此前 1053），`uv run ruff check` 与
+`ruff format --check` 干净；改动前后既有断言逐条不变。
+
+**同类缺口（不在本片）**：`standard_diagnoses` 与 `health_report_jobs` 的终态写入同样
+未检查返回值（诊断路径也在写入后落指标），二者不属本 PRD 范围，未在本片处理。
+
+**已知缺口**：取消端点与响应（#357）、契约分发与 #173 断链纠正（#358）、取消结果
+入指标与两条核心回归守护（#359）、提问作业重启恢复（#356）均未在本片交付。
+
+## #354 `cancelled` 终态存储层（2026-09-21，本地自动化验证）
+
+**范围**：PRD #346 子票 T1，只做状态值与存储层；不含取消端点、运行时、API 层
+（分属 #357 / #358）。**本片未完成业务验收**：新增能力尚无取消入口可触发，也没有
+真实故障案例可复现；下列证据全部来自本地 fixture 级自动化测试。
+
+**新增自动化检查**（均以"去掉修复即失败"核对过）：
+
+| 检查 | 文件 | 守护的行为 |
+|---|---|---|
+| `test_cancelled_question_is_terminal_and_kept_for_the_refresh_window` | `tests/test_assistant_qa_store.py` | `cancelled` 是终态且保留期按失败档（5 分钟）：既非"不过期"，也非"立即过期" |
+| `test_cancelled_question_expires_after_its_retention_window` | `tests/test_assistant_qa_store.py` | 保留期到期后由既有清扫收敛为 `expired`，`cancelled` 不是无限期状态 |
+| `test_late_worker_cannot_overwrite_a_cancelled_question` | `tests/test_assistant_qa_store.py` | 晚到的 worker 写入与重复取消都被 claim-guard 挡下（返回 false，不抛错） |
+| `test_cancelled_diagnosis_shares_the_assistant_status_set` | `tests/test_standard_diagnosis_runtime.py` | 诊断终态枚举同样含 `cancelled`（有意接受），保留期与 claim-guard 一致 |
+
+**结果**：本地全量 `uv run pytest` 1053 passed（此前 1049），`uv run ruff check` 与
+`ruff format --check` 干净；改动前后既有断言逐条不变。
+
+**已知缺口**：取消端点与响应（#357）、契约分发与 #173 断链纠正（#358）、取消结果
+入指标与两条核心回归守护（#359）、提问作业重启恢复（#356）均未在本片交付。
+
 ## 智能检测内嵌订单号路由修复（2026-09-16，前端联调反馈）
 
 **现象**：前端 H5 在订单选择器选好订单后发送智能检测，服务端仍返回
@@ -1013,7 +1198,7 @@ S3 退役验收（公网入口 + 开机自启）：FAQ 200（28 条）、健康�
 - 已验证：跨租户身份层拒绝、跨入口统一 404（含 GET/DELETE/active-order 端点）；绑定活跃订单必须归属校验（未授权统一 404）；follow-up 省略订单号复用活跃订单走 diagnosis，归属撤销后清除绑定走 qa；知识问题始终 qa+RAG；并发 409 且无会话提问不受影响；崩溃锁 120s 自过期；取消/无答案轮次不保留、不进上下文；窗口取 8 轮与 8k 较小者（单条超预算轮次单独保留不返回空上下文）；30 天过期不可见。
 - 版本语义：会话记录 agent_version_key；`select_customer_agent` 每回合现查最新已发布版本（新回合新版本），执行中回合持 #170 的 selection 快照（原版本），双向满足 #172 版本切换验收。
 
-未完成业务验收：前端刷新/跨设备续聊的真实轮询体验、BFF 会话字段透传、真实"停止生成"按钮链路属 #173；未连接生产环境，不把 fake 结果记为业务验收。
+未完成业务验收：前端刷新/跨设备续聊的真实轮询体验与 BFF 会话字段透传属 #173；**真实"停止生成"按钮链路原归 #173 但当时从未实现**，现由 PRD #346 交付（取消端点 + `cancelled` 终态；协议级证据见本页「#358」，BFF/前端交接见 `docs/agents/assistant-cancel-handoff.md`），41 公网复跑待联调；未连接生产环境，不把 fake 结果记为业务验收。
 ## T1 受限知识检索与媒体资源协议验证（issue #168，2026-09-09）
 
 验证范围：AI-Ops 内部 `knowledge_search` guard、RAGFlow 字段规范化和媒体资源授权协议；不包含生产 `kb-service`、RAGFlow、Java BFF 或浏览器部署。

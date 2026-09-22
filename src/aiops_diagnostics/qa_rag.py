@@ -16,6 +16,7 @@ from __future__ import annotations
 import contextlib
 import json
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -151,6 +152,7 @@ def run_customer_qa_answer(
     session_factory: Any | None = None,
     language: str = DEFAULT_LANGUAGE,
     initial_prompt: str | None = None,
+    turn_registrar: Callable[[Any], None] | None = None,
 ) -> dict[str, Any]:
     """Answer one customer question via the published agent + bounded retrieval.
 
@@ -159,7 +161,10 @@ def run_customer_qa_answer(
     Raises ``AgentRuntimeError`` on harness-level failures (the caller maps
     that to a failed job). ``initial_prompt`` (#231) replaces the built-in
     customer prompt when the promotional agent serves the run — same harness
-    contract, different instructions and knowledge bases.
+    contract, different instructions and knowledge bases. ``turn_registrar``
+    (#357) receives each live turn handle so a caller that can be interrupted
+    (an assistant question the user may stop) can reach the turn's own
+    interrupt RPC while it runs.
     """
     root = project_root or Path(__file__).resolve().parents[1]
     selected_provider = agent_settings.select_provider(provider.name if provider else None)
@@ -184,7 +189,12 @@ def run_customer_qa_answer(
         if session_factory is not None:
             session = session_factory(workspace, agent_settings, selected_provider, None)
         else:
-            session = SDKCodexSession(workspace, agent_settings, provider=selected_provider)
+            session = SDKCodexSession(
+                workspace,
+                agent_settings,
+                provider=selected_provider,
+                turn_registrar=turn_registrar,
+            )
         prompt = initial_prompt or _initial_prompt(selection, question, language)
         searched = False
         for _ in range(_MAX_RUNS):

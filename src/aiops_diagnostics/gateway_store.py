@@ -24,14 +24,33 @@ HEALTH_JOB_COMPLETED_RETENTION = timedelta(minutes=15)
 HEALTH_JOB_FAILED_RETENTION = timedelta(minutes=5)
 HEALTH_JOB_DEADLINE = timedelta(seconds=30)
 ACTIVE_DIAGNOSIS_STATUSES = frozenset({"queued", "running"})
-TERMINAL_DIAGNOSIS_STATUSES = frozenset({"completed", "inconclusive", "failed", "expired"})
+# `cancelled` is the user-stop terminal status (PRD #346). assistant_questions
+# reuses this set, so the value shows up in the diagnosis enum as well — one
+# shared status set instead of two. Diagnoses have no cancel entry point of
+# their own, so nothing here produces it yet.
+TERMINAL_DIAGNOSIS_STATUSES = frozenset({"completed", "inconclusive", "failed", "expired", "cancelled"})
 DIAGNOSIS_COMPLETED_RETENTION = timedelta(minutes=15)
 DIAGNOSIS_FAILED_RETENTION = timedelta(minutes=5)
+# A cancelled job is kept on the short (failed) tier: the client already holds
+# the answer surface, and the row only has to outlive the refresh window. Not
+# "never expires" (unbounded rows) and not "expires now" — the user is still
+# looking at 「已停止」 when they refresh.
+DIAGNOSIS_FAILED_RETENTION_STATUSES = frozenset({"failed", "cancelled"})
 # The diagnosis deadline must cover real agent runs, which the API contract
 # documents as tens of seconds to minutes (observed: ~7 minutes on the real
 # 120-world link). A short deadline marks still-running diagnoses as expired
 # before the worker can record its result.
 DIAGNOSIS_DEADLINE = timedelta(minutes=15)
+# A question still `queued`/`running` when the gateway restarts is converged to
+# `failed`, not to `expired` (that value means the job outran its deadline) and
+# not to `cancelled` (that value means the user asked it to stop). Neither is
+# what happened: the process holding the worker died. The code and message on
+# the row carry the cause, so an operator reading a failed answer can tell a
+# deploy from a timeout and from a user stop.
+ASSISTANT_QUESTION_RESTART_ERROR_CODE = "QA_INTERRUPTED_BY_RESTART"
+ASSISTANT_QUESTION_RESTART_ERROR_MESSAGE = (
+    "the gateway restarted while this question was still being answered"
+)
 
 
 class GatewayStoreError(RuntimeError):
@@ -370,7 +389,7 @@ class GatewayStore:
             now + DIAGNOSIS_COMPLETED_RETENTION
             if status in {"completed", "inconclusive"}
             else now + DIAGNOSIS_FAILED_RETENTION
-            if status == "failed"
+            if status in DIAGNOSIS_FAILED_RETENTION_STATUSES
             else now
             if status == "expired"
             else None
@@ -387,7 +406,7 @@ class GatewayStore:
                     completed_at = COALESCE(completed_at, ?),
                     expires_at = COALESCE(?, expires_at), updated_at = ?
                 WHERE diagnosis_id = ?
-                  AND status NOT IN ('completed', 'inconclusive', 'failed', 'expired')
+                  AND status IN ('queued', 'running')
                 """,
                 (
                     status,
@@ -505,7 +524,7 @@ class GatewayStore:
             now + DIAGNOSIS_COMPLETED_RETENTION
             if status in {"completed", "inconclusive"}
             else now + DIAGNOSIS_FAILED_RETENTION
-            if status == "failed"
+            if status in DIAGNOSIS_FAILED_RETENTION_STATUSES
             else now
             if status == "expired"
             else None
@@ -579,6 +598,48 @@ class GatewayStore:
             row = connection.execute("SELECT COUNT(*) AS count FROM assistant_questions").fetchone()
         return int(row["count"])
 
+    def recover_assistant_questions(self) -> None:
+        """Converge the questions a previous gateway process left in flight.
+
+        A restart kills the workers but not the rows, and the only other exit is
+        the 15-minute deadline — so without this a caller waits out the whole
+        deadline on a question nobody is answering. Runs on the gateway's boot
+        path before it serves a request, so no caller ever polls a `running`
+        job whose worker is gone.
+
+        The write goes through ``update_assistant_question`` rather than its own
+        SQL: that path already applies the failed retention tier and its
+        claim-guard, so a row another path drove terminal between the scan and
+        the write is left alone (``False``, nothing to converge — the same quiet
+        exit the worker takes on a refused write). A row whose deadline already
+        passed is swept to `expired` by that path's own expiry first, which is
+        the accurate verdict: it outran its budget, the restart only noticed.
+
+        Scoped to ``assistant_questions`` on purpose: ``health_report_jobs`` and
+        ``standard_diagnoses`` already sweep their in-flight rows at store
+        construction, and changing what they converge to is not this change's to
+        make. This one is deliberately NOT folded into that sweep even though it
+        would be three lines beside them: ``__init__`` runs on every construction,
+        short-lived CLI commands (``aiops-gateway devices``) included, so a row
+        would be told "the gateway restarted" by a process that only listed
+        devices. This hook runs where the restart actually happened, and the other
+        two tables keep the construction sweep they have.
+        """
+        with self._connection() as connection:
+            in_flight = [
+                str(row["qa_id"])
+                for row in connection.execute(
+                    "SELECT qa_id FROM assistant_questions WHERE status IN ('queued', 'running')"
+                ).fetchall()
+            ]
+        for qa_id in in_flight:
+            self.update_assistant_question(
+                qa_id,
+                status="failed",
+                error_code=ASSISTANT_QUESTION_RESTART_ERROR_CODE,
+                error_message=ASSISTANT_QUESTION_RESTART_ERROR_MESSAGE,
+            )
+
     @staticmethod
     def _expire_diagnoses(connection: sqlite3.Connection, now: datetime) -> None:
         now_text = _iso(now)
@@ -594,7 +655,8 @@ class GatewayStore:
         connection.execute(
             """
             UPDATE standard_diagnoses SET status = 'expired', updated_at = ?
-            WHERE status IN ('completed', 'inconclusive', 'failed') AND expires_at <= ?
+            WHERE status IN ('completed', 'inconclusive', 'failed', 'cancelled')
+              AND expires_at <= ?
             """,
             (now_text, now_text),
         )
@@ -614,7 +676,8 @@ class GatewayStore:
         connection.execute(
             """
             UPDATE assistant_questions SET status = 'expired', updated_at = ?
-            WHERE status IN ('completed', 'inconclusive', 'failed') AND expires_at <= ?
+            WHERE status IN ('completed', 'inconclusive', 'failed', 'cancelled')
+              AND expires_at <= ?
             """,
             (now_text, now_text),
         )

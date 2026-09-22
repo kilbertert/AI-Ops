@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import json
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -82,12 +82,17 @@ def run_zero_order_answer(
     key_slot: str | None = None,
     project_root: Path | None = None,
     language: str = DEFAULT_LANGUAGE,
+    turn_registrar: Callable[[Any], None] | None = None,
 ) -> dict[str, Any]:
     """Answer a general (zero-order) question via the shared read-only Agent.
 
     No order identity is created, so the model can reach only the staged
     references (SOP/backend docs) plus its own knowledge — it cannot read any
     order data. Returns ``{"text": str, "reminder": bool}`` (T3/#153).
+
+    ``turn_registrar`` (#357) receives the live turn handle so a caller that
+    can be interrupted (an assistant question the user may stop) can reach the
+    turn's own interrupt RPC while it runs.
     """
     from aiops_diagnostics.codex_runtime import SDKCodexSession
 
@@ -106,6 +111,7 @@ def run_zero_order_answer(
             workspace,
             settings.agent,
             provider=selected_provider,
+            turn_registrar=turn_registrar,
         )
         prompt = (
             "请回答用户的这个一般问题，只输出 JSON（遵循结构化输出 schema），"

@@ -63,6 +63,8 @@ from aiops_diagnostics.faq import (
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_runtime import GatewayRuntime, close_gateway_runtime
 from aiops_diagnostics.gateway_store import (
+    ACTIVE_DIAGNOSIS_STATUSES,
+    TERMINAL_DIAGNOSIS_STATUSES,
     TERMINAL_RUN_STATUSES,
     AuthenticationError,
     EnrollmentError,
@@ -376,6 +378,12 @@ def create_gateway_app(
     selected_settings = settings or GatewayServerSettings.from_env()
     selected_settings.validate()
     selected_store = store or GatewayStore(selected_settings.database_file)
+    # Restart recovery, before this app can serve anything: a question the
+    # previous process left `queued`/`running` is converged to a terminal state
+    # here instead of hanging until its deadline (T3/#356). Deliberately not in
+    # ``GatewayStore.__init__`` — short-lived CLI commands (`aiops-gateway
+    # devices`) open the same database and must not end live work.
+    selected_store.recover_assistant_questions()
     selected_runtime = runtime or GatewayRuntime.from_settings(selected_store, selected_settings)
     selected_resolver = caller_resolver or _caller_resolver(selected_settings)
     diagnostic_settings = getattr(selected_runtime, "diagnostic_settings", None)
@@ -1103,24 +1111,42 @@ def create_gateway_app(
                 "QA_NOT_FOUND",
                 "assistant question not found",
             )
-        return {
-            "type": "qa",
-            "language": language,
-            "qa_id": qa["qa_id"],
-            "question": qa["question"],
-            "status": qa["status"],
-            "retry_after_ms": 1000 if qa["status"] in {"queued", "running"} else None,
-            "result": qa.get("result"),
-            "error": (
-                {
-                    "code": qa.get("error_code") or "QA_FAILED",
-                    "message": qa.get("error_message") or "answer generation failed",
-                    "retryable": True,
-                }
-                if qa["status"] in {"failed", "expired"}
-                else None
-            ),
-        }
+        return _assistant_question_response(qa, language)
+
+    @app.post("/v1/assistant/questions/{qa_id}/cancel")
+    def cancel_assistant_question(
+        qa_id: str,
+        identity: tuple[ScopeContext, Any] = Depends(assistant_identity),  # noqa: B008
+        language: str = Depends(request_language),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Stop one in-flight general question (#357).
+
+        POST rather than DELETE: the job row survives as `cancelled` (audit and
+        history), and DELETE would promise the resource is gone. The response
+        carries the job's terminal state, so the caller does not have to poll
+        once more to learn the outcome — and a repeated cancel, or a cancel of
+        a job that just finished, answers that job's own current state instead
+        of an error, because the stop button is pressed under flaky networks.
+        """
+        caller, _ = identity
+        try:
+            qa = context.runtime.cancel_assistant_qa(caller, qa_id)
+        except (ValueError, RuntimeError) as exc:
+            raise StandardAPIError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "QA_UNAVAILABLE",
+                "general answer unavailable",
+                retryable=True,
+            ) from exc
+        if qa is None:
+            # Missing and out-of-scope are the same answer: cancelling must not
+            # become a way to probe which qa_ids exist.
+            raise StandardAPIError(
+                status.HTTP_404_NOT_FOUND,
+                "QA_NOT_FOUND",
+                "assistant question not found",
+            )
+        return _assistant_question_response(qa, language)
 
     @app.get("/v1/assistant/questions")
     def list_assistant_questions(
@@ -2345,6 +2371,34 @@ def _extract_order_no(text: str) -> str | None:
     return None
 
 
+def _assistant_question_response(qa: dict[str, Any], language: str) -> dict[str, Any]:
+    """The one public shape of an assistant-question job.
+
+    Poll and cancel return the same body on purpose: the job's state is the
+    single thing both surfaces report, so a client reads a stopped job exactly
+    as it reads a finished one.
+    """
+    status_value = str(qa["status"])
+    return {
+        "type": "qa",
+        "language": language,
+        "qa_id": qa["qa_id"],
+        "question": qa["question"],
+        "status": status_value,
+        "retry_after_ms": 1000 if status_value in ACTIVE_DIAGNOSIS_STATUSES else None,
+        "result": qa.get("result"),
+        "error": (
+            {
+                "code": qa.get("error_code") or "QA_FAILED",
+                "message": qa.get("error_message") or "answer generation failed",
+                "retryable": True,
+            }
+            if status_value in {"failed", "expired"}
+            else None
+        ),
+    }
+
+
 def _require_conversation(
     context: Any,
     caller: ScopeContext,
@@ -2688,7 +2742,11 @@ def _start_promo_qa(
 
 def _standard_diagnosis_response(diagnosis: dict[str, Any]) -> dict[str, Any]:
     status_value = str(diagnosis["status"])
-    is_terminal = status_value in {"completed", "inconclusive", "failed", "expired"}
+    # The shared status set decides what is terminal, exactly as it decides what
+    # the store accepts: a literal copy here is how a status the store now takes
+    # (a stopped diagnosis) would render `retry_after_ms=1000` and keep a client
+    # polling a row the claim-guard can never let change again.
+    is_terminal = status_value in TERMINAL_DIAGNOSIS_STATUSES
     return {
         "diagnosis_id": diagnosis["diagnosis_id"],
         "order_no": diagnosis["order_no"],

@@ -77,6 +77,8 @@ class ConversationStore:
                     agent_version_key TEXT NOT NULL,
                     active_order_no TEXT,
                     generating_since TEXT,
+                    generating_turn_no INTEGER,
+                    last_turn_no INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
                     expires_at TEXT NOT NULL
@@ -98,6 +100,18 @@ class ConversationStore:
                     ON conversation_turns(conversation_id, turn_no DESC);
                 """
             )
+            # #357: which turn currently holds the generation slot, and the
+            # highest turn number this conversation has ever handed out. Both
+            # additive — a database written before them has no live generation
+            # to attribute (its empty lock self-expires on its own) and simply
+            # starts numbering from the highest row it still has.
+            columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(conversations)")}
+            if "generating_turn_no" not in columns:
+                connection.execute("ALTER TABLE conversations ADD COLUMN generating_turn_no INTEGER")
+            if "last_turn_no" not in columns:
+                connection.execute(
+                    "ALTER TABLE conversations ADD COLUMN last_turn_no INTEGER NOT NULL DEFAULT 0"
+                )
         protect_private_file(self.path)
 
     @contextmanager
@@ -279,7 +293,14 @@ class ConversationStore:
 
         Raises ConversationBusy when a live generation holds the slot. The
         claim self-expires after BUSY_LOCK_SECONDS so a crashed worker cannot
-        wedge the conversation forever.
+        wedge the conversation forever — which is also why the claim records
+        WHICH turn holds it (``generating_turn_no``): a worker that outlived
+        its own claim must not release the slot of the turn that replaced it.
+
+        Turn numbers are never reused. A stopped turn's row is deleted, so a
+        number handed out once has to stay spent — otherwise the next turn
+        would inherit the stopped turn's identity, and a worker finishing late
+        would write to (and unlock) somebody else's turn.
         """
         self._validate_conversation_id(conversation_id)
         scope = self._validate_scope(scope_fingerprint)
@@ -292,7 +313,7 @@ class ConversationStore:
             self._expire_conversations(connection, now)
             row = connection.execute(
                 """
-                SELECT generating_since FROM conversations
+                SELECT generating_since, last_turn_no FROM conversations
                 WHERE conversation_id = ? AND scope_fingerprint = ?
                 """,
                 (conversation_id, scope),
@@ -302,13 +323,16 @@ class ConversationStore:
             generating_since = _parse_iso(row["generating_since"]) if row["generating_since"] else None
             if generating_since is not None and generating_since > lock_expiry:
                 raise ConversationBusy("conversation already has a generating turn")
-            next_no = connection.execute(
+            highest_row = connection.execute(
                 """
                 SELECT COALESCE(MAX(turn_no), 0) + 1 AS next
                 FROM conversation_turns WHERE conversation_id = ?
                 """,
                 (conversation_id,),
             ).fetchone()["next"]
+            # A stopped turn's row is gone, so the rows alone can undercount:
+            # the spent number is the floor.
+            next_no = max(int(row["last_turn_no"] or 0) + 1, int(highest_row))
             connection.execute(
                 """
                 INSERT INTO conversation_turns
@@ -318,8 +342,13 @@ class ConversationStore:
                 ("turn_" + uuid.uuid4().hex, conversation_id, next_no, kind, question, _iso(now)),
             )
             connection.execute(
-                "UPDATE conversations SET generating_since = ?, updated_at = ? WHERE conversation_id = ?",
-                (_iso(now), _iso(now), conversation_id),
+                """
+                UPDATE conversations
+                SET generating_since = ?, generating_turn_no = ?, last_turn_no = ?,
+                    updated_at = ?
+                WHERE conversation_id = ?
+                """,
+                (_iso(now), next_no, next_no, _iso(now), conversation_id),
             )
             return int(next_no)
 
@@ -337,6 +366,12 @@ class ConversationStore:
 
         A cancelled turn keeps its question row (audit) but never stores an
         answer — an interrupted generation must not survive as a complete one.
+
+        The slot is released only while THIS turn still holds it. A turn whose
+        claim already lapsed (crash fallback) can find a newer turn generating:
+        writing its own row is still correct, but clearing the slot would
+        unlock the input while that newer generation is still running. The
+        claim is matched on the turn number, which is never reused.
         """
         self._validate_conversation_id(conversation_id)
         scope = self._validate_scope(scope_fingerprint)
@@ -369,11 +404,17 @@ class ConversationStore:
             connection.execute(
                 """
                 UPDATE conversations
-                SET generating_since = NULL, updated_at = ?,
+                SET generating_since = NULL, generating_turn_no = NULL, updated_at = ?,
                     expires_at = MAX(expires_at, ?)
-                WHERE conversation_id = ? AND scope_fingerprint = ?
+                WHERE conversation_id = ? AND scope_fingerprint = ? AND generating_turn_no = ?
                 """,
-                (_iso(now), _iso(now + timedelta(days=CONVERSATION_RETENTION_DAYS)), conversation_id, scope),
+                (
+                    _iso(now),
+                    _iso(now + timedelta(days=CONVERSATION_RETENTION_DAYS)),
+                    conversation_id,
+                    scope,
+                    turn_no,
+                ),
             )
 
     def release_turn(
@@ -495,6 +536,9 @@ class ConversationStore:
 def _conversation_from_row(row: sqlite3.Row) -> dict[str, Any]:
     result = dict(row)
     result["is_generating"] = bool(result.pop("generating_since"))
+    # Internal claim bookkeeping: never part of the conversation's shape.
+    result.pop("generating_turn_no", None)
+    result.pop("last_turn_no", None)
     return result
 
 

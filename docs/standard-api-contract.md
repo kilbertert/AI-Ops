@@ -281,8 +281,10 @@ Authorization: Bearer <access_token>
 状态：
 
 ```text
-queued | running | completed | inconclusive | failed | expired
+queued | running | completed | inconclusive | failed | expired | cancelled
 ```
+
+`cancelled`（PRD #346 新增，语义是"用户主动停止"）与`assistant_questions` 共用同一套终态状态集，因此出现在诊断枚举里；诊断没有独立的取消入口，**不会**在诊断线产出该值——出现即视为契约破裂。`cancelled` 时 `result` 与 `error` 均为 `null`，`retry_after_ms` 为 `null`（终态不轮询）。
 
 `completed` 或 `inconclusive` 时 `result` 才可能有值。诊断结果中的证据 ID、内部 run、provider、workspace、SQL、原始报文和凭据不会进入标准 API 响应。
 

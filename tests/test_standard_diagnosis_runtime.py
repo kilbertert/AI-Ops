@@ -17,9 +17,14 @@ from aiops_diagnostics.agent_contracts import (
 from aiops_diagnostics.agent_runner import _agent_sources
 from aiops_diagnostics.config import Settings
 from aiops_diagnostics.diagnostic_tools import DiagnosticToolExecutor
+from aiops_diagnostics.gateway_api import _standard_diagnosis_response
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_runtime import DIAGNOSIS_ORDER_OUT_OF_SCOPE, GatewayRuntime
-from aiops_diagnostics.gateway_store import GatewayStore
+from aiops_diagnostics.gateway_store import (
+    ACTIVE_DIAGNOSIS_STATUSES,
+    TERMINAL_DIAGNOSIS_STATUSES,
+    GatewayStore,
+)
 from aiops_diagnostics.journal import EvidenceJournal
 from aiops_diagnostics.query_scope import QueryScope
 from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
@@ -363,6 +368,70 @@ def test_inconclusive_diagnosis_is_retained_and_late_completion_is_rejected(tmp_
         result={"summary": "迟到"},
     )
     assert store.get_standard_diagnosis(late["diagnosis_id"], "scope-1")["status"] == "expired"
+
+
+def test_cancelled_diagnosis_shares_the_assistant_status_set(tmp_path: Path) -> None:
+    """`assistant_questions` reuses the diagnosis status set, so `cancelled` is
+    accepted for diagnoses too. Accepted on purpose: one shared status set
+    instead of two. Diagnoses have no cancel entry point of their own, so
+    nothing in this repo produces the value yet (PRD #346)."""
+    store = GatewayStore(tmp_path / "gateway.db")
+    diagnosis = store.create_standard_diagnosis("scope-1", "O-1", "问题", None)
+    store.update_standard_diagnosis(diagnosis["diagnosis_id"], status="running")
+    assert store.update_standard_diagnosis(diagnosis["diagnosis_id"], status="cancelled")
+    stored = store.get_standard_diagnosis(diagnosis["diagnosis_id"], "scope-1")
+    assert stored["status"] == "cancelled"
+    expires = datetime.fromisoformat(stored["expires_at"])
+    assert expires > datetime.now(UTC)
+    assert expires < datetime.now(UTC) + timedelta(minutes=14)
+
+    assert not store.update_standard_diagnosis(
+        diagnosis["diagnosis_id"],
+        status="completed",
+        result={"summary": "迟到的诊断"},
+    )
+
+    with store._connection(write=True) as connection:
+        connection.execute(
+            "UPDATE standard_diagnoses SET expires_at = ? WHERE diagnosis_id = ?",
+            ((datetime.now(UTC) - timedelta(seconds=1)).isoformat(), diagnosis["diagnosis_id"]),
+        )
+    assert store.get_standard_diagnosis(diagnosis["diagnosis_id"], "scope-1")["status"] == "expired"
+
+
+def test_polling_stops_on_every_status_the_whitelist_accepts(tmp_path: Path) -> None:
+    """The poll's stop signal is derived from the shared status set, not copied.
+
+    #354 widened the whitelist to `cancelled`, so a literal copy of the terminal
+    set in the response builder would answer `retry_after_ms=1000` for a stopped
+    diagnosis and keep a client polling a row the claim-guard can never let
+    change again — the in-flight look this PRD exists to remove. The assertion
+    walks the sets rather than one value, so the next value added to the store's
+    whitelist has to land in the public contract too.
+    """
+    store = GatewayStore(tmp_path / "gateway.db")
+    diagnosis = store.create_standard_diagnosis("scope-1", "O-1", "问题", None)
+    rendered = {}
+    for status in sorted(ACTIVE_DIAGNOSIS_STATUSES | TERMINAL_DIAGNOSIS_STATUSES):
+        with store._connection(write=True) as connection:
+            connection.execute(
+                "UPDATE standard_diagnoses SET status = ? WHERE diagnosis_id = ?",
+                (status, diagnosis["diagnosis_id"]),
+            )
+        rendered[status] = _standard_diagnosis_response(
+            store.get_standard_diagnosis(diagnosis["diagnosis_id"], "scope-1")
+        )
+
+    for status in sorted(ACTIVE_DIAGNOSIS_STATUSES):
+        assert rendered[status]["retry_after_ms"] == 1000, status
+    for status in sorted(TERMINAL_DIAGNOSIS_STATUSES):
+        body = rendered[status]
+        assert body["retry_after_ms"] is None, status
+        if status == "cancelled":
+            # The one terminal value that carries neither: the user asked for the
+            # stop, so there is no result and no failure to report (§5.2).
+            assert body["result"] is None
+            assert body["error"] is None
 
 
 def test_diagnosis_deadline_covers_real_agent_runtime() -> None:

@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 import time
+from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +19,7 @@ from aiops_diagnostics.answer_language import (
 from aiops_diagnostics.codex_runtime import AgentContractError, AgentRuntimeError
 from aiops_diagnostics.config import Settings, canonical_provider_base_url, validate_key_slot_name
 from aiops_diagnostics.gateway_config import GatewayServerSettings
-from aiops_diagnostics.gateway_store import GatewayDevice, GatewayStore
+from aiops_diagnostics.gateway_store import ACTIVE_DIAGNOSIS_STATUSES, GatewayDevice, GatewayStore
 from aiops_diagnostics.health_curves import build_curves
 from aiops_diagnostics.health_metrics import enrich_report
 from aiops_diagnostics.health_report import (
@@ -45,6 +48,8 @@ from aiops_diagnostics.sources import SourceError, scoped_live_sources
 
 FIXTURE_NAMES = frozenset({"ocpp_consistent.json", "ykc_amount_mismatch.json", "missing_tx_data.json"})
 
+_LOGGER = logging.getLogger("aiops.gateway_runtime")
+
 #: A blocked run whose order turned out to be outside the caller's tenant. It is
 #: NOT ``DIAGNOSIS_BLOCKED``: that code means the supplier did not honor
 #: ``output_schema``, and an operator must be able to tell the two apart. On the
@@ -52,6 +57,50 @@ FIXTURE_NAMES = frozenset({"ocpp_consistent.json", "ykc_amount_mismatch.json", "
 #: state — see ``_blocked_diagnosis_error`` for why, and both contract docs for
 #: what a frontend may therefore rely on.
 DIAGNOSIS_ORDER_OUT_OF_SCOPE = "DIAGNOSIS_ORDER_OUT_OF_SCOPE"
+
+#: What ``_try_customer_rag`` hands back when the claim-guard refused the job's
+#: terminal write: another path (expiry today; cancellation once #357 lands)
+#: already put the row in a terminal state, so this worker's result was NOT
+#: persisted. The caller stops right there — no metric, and the in-flight turn
+#: is dropped rather than filled — because each of those follow-ups asserts
+#: "the write landed".
+#:
+#: A value rather than an exception on purpose: losing the race is a legal
+#: outcome, not a failure, and the worker must exit quietly rather than raise.
+TERMINAL_WRITE_REFUSED = {"status": "refused"}
+
+
+@dataclass
+class QARegistration:
+    """What a stop request needs in order to interrupt one assistant question.
+
+    A ``Future`` is deliberately NOT what this holds: ``Future.cancel()``
+    cannot stop a thread that is already running the model turn, which is
+    exactly the case a stop request arrives in. What does stop it is the turn's
+    own ``interrupt()`` RPC (the one the turn timeout already uses), filled in
+    by the worker the moment its turn starts.
+
+    ``conversation_turn`` is the generation slot this job owns. Cancelling is
+    the one path that must free it without waiting for the worker to notice,
+    so the stop request carries the slot's identity with it.
+
+    ``route_type`` is the route this job was submitted with (a promotional
+    shortcut run or a plain question), which is what the stop records: the
+    worker uses the same value for its own metric rows, so a stopped
+    promotional click is not counted as a stopped customer question.
+    """
+
+    conversation_turn: tuple[str, str, int] | None = None
+    interrupt: Callable[[], None] | None = None
+    route_type: str = "qa"
+
+    def register_interrupt(self, handle: Any) -> None:
+        """Adopt the live turn handle's interrupt as this job's interrupt.
+
+        A new turn replaces the previous one (the RAG path runs several), so the
+        registration always points at the turn that is running NOW.
+        """
+        self.interrupt = handle.interrupt
 
 
 def _as_datetime(value):
@@ -106,6 +155,10 @@ class GatewayRuntime:
             thread_name_prefix="aiops-gateway-run",
         )
         self._futures: dict[str, Future[None]] = {}
+        # Interruptible assistant questions (#357): what a stop request needs in
+        # order to reach the model turn that is burning tokens. Registered when
+        # the job is submitted, dropped when it leaves the non-terminal state.
+        self._qa_registrations: dict[str, QARegistration] = {}
 
     @classmethod
     def from_settings(
@@ -404,6 +457,20 @@ class GatewayRuntime:
             question,
             internal_run_id=workspace.run_id,
         )
+        # Registered before the worker exists: a stop request that arrives a
+        # millisecond after this return must already find the job interruptible
+        # (and must know which conversation slot to free).
+        registration = QARegistration(
+            conversation_turn=(
+                conversation["conversation_id"],
+                conversation["scope_fingerprint"],
+                conversation_turn_no,
+            )
+            if conversation is not None and conversation_turn_no is not None
+            else None,
+            route_type="promo" if promo_intent else "qa",
+        )
+        self._qa_registrations[qa["qa_id"]] = registration
         future = self._executor.submit(
             self._execute_assistant_qa,
             qa["qa_id"],
@@ -412,19 +479,17 @@ class GatewayRuntime:
             selected_provider.name,
             selected_key_slot,
             context.effective_tenant_id or None,
-            (
-                conversation["conversation_id"],
-                conversation["scope_fingerprint"],
-                conversation_turn_no,
-            )
-            if conversation is not None and conversation_turn_no is not None
-            else None,
+            registration.conversation_turn,
             language,
             promo_target,
             promo_intent,
+            registration.register_interrupt,
         )
         self._futures[qa["qa_id"]] = future
+        # Once the future is done the job is terminal (or its worker is gone),
+        # so both registries forget it: nothing is left to interrupt.
         future.add_done_callback(lambda _: self._futures.pop(qa["qa_id"], None))
+        future.add_done_callback(lambda _: self._qa_registrations.pop(qa["qa_id"], None))
         return qa
 
     def classify_lightweight(self, question: str, *, language: str = DEFAULT_LANGUAGE) -> dict[str, Any]:
@@ -447,6 +512,114 @@ class GatewayRuntime:
         limit: int = 50,
     ) -> list[dict[str, Any]]:
         return self.store.list_assistant_questions(context.scope_fingerprint, limit=limit)
+
+    def cancel_assistant_qa(
+        self,
+        context: ScopeContext,
+        qa_id: str,
+    ) -> dict[str, Any] | None:
+        """Stop one in-flight general question (#357).
+
+        Persist first, interrupt second. Writing the terminal row is what makes
+        the cancellation real: the claim-guard is what stops the worker's late
+        answer from overwriting it, and the caller's input box is unlocked by
+        the job reaching a terminal state rather than by the model agreeing to
+        stop. Interrupting the live turn is then only a token saving — it is
+        fire-and-forget, and its failure changes nothing about the outcome.
+
+        Idempotent by construction: a job that is already terminal is returned
+        as it stands (the stop button is a network-flaky entry point, so a
+        repeat click must not read as a failure), and a job outside this
+        caller's scope is indistinguishable from a missing one — ``None``, which
+        the API layer answers with 404.
+        """
+        qa = self.store.get_assistant_question(qa_id, context.scope_fingerprint)
+        if qa is None:
+            return None
+        if qa["status"] in ACTIVE_DIAGNOSIS_STATUSES:
+            accepted = self.store.update_assistant_question(qa_id, status="cancelled")
+            registration = self._qa_registrations.pop(qa_id, None)
+            if registration is not None:
+                # Both savings run before the metric row, so nothing that
+                # records rather than decides can keep the turn burning or the
+                # input box locked: order is persist, save, then count.
+                self._interrupt_registered_turn(registration)
+                self._release_conversation_turn(registration.conversation_turn)
+            if accepted:
+                # One stop, one row, and never two: the terminal write is what
+                # decides the outcome, and only the request that wins it counts.
+                self._record_cancelled_qa_metric(context, registration)
+            return self.store.get_assistant_question(qa_id, context.scope_fingerprint)
+        # Already terminal: the answer (or the failure) the caller sees is the
+        # job's own final state, not a cancellation that lost a race.
+        return qa
+
+    def _record_cancelled_qa_metric(
+        self,
+        context: ScopeContext,
+        registration: QARegistration | None,
+    ) -> None:
+        """Record a stopped question as its own outcome (#359).
+
+        ``cancelled`` has been a valid metric outcome since the metrics table
+        was built and nothing ever wrote it, so "which questions do people give
+        up on" had no answer at all: the wait ended in a job row that no
+        aggregate looks at. The stop now leaves one redacted row behind it —
+        tenant, route, and the conversation it belongs to, which is all a metric
+        row may carry.
+
+        Written here, where the terminal row is decided, because this is the
+        only moment a stop is known to have happened: the worker's late write is
+        refused by the claim-guard and records nothing (its result never
+        landed), so a cancellation cannot be counted twice.
+        """
+        conversation_id = (
+            registration.conversation_turn[0]
+            if registration is not None and registration.conversation_turn is not None
+            else None
+        )
+        self.record_route_metric(
+            context,
+            registration.route_type if registration is not None else "qa",
+            "cancelled",
+            conversation_id=conversation_id,
+        )
+
+    def _interrupt_registered_turn(self, registration: QARegistration) -> None:
+        """Best-effort interrupt of the turn this job is running (fire and forget).
+
+        The terminal write already decided the outcome, so a failed interrupt is
+        logged and dropped: the worst case is a model turn that keeps burning
+        tokens until it finishes on its own, never a wrong job state. A job
+        whose turn has not started yet (queued) has nothing to interrupt — the
+        worker will find the row terminal and exit.
+        """
+        interrupt = registration.interrupt
+        if interrupt is None:
+            return
+        try:
+            interrupt()
+        except Exception as exc:  # the interrupt is not the contract
+            # The message, not just the class name: it names the turn RPC that
+            # failed, which tells a dead worker apart from a turn that outlived
+            # its own claim.
+            _LOGGER.warning("assistant question interrupt failed: %s", exc)
+
+    def _release_conversation_turn(self, conversation_turn: tuple[str, str, int] | None) -> None:
+        """Free the generation slot this job owns, without waiting for its worker.
+
+        The worker frees the same slot when it notices the refused write; doing
+        it here too is what makes the input box return immediately. The release
+        is scoped to this turn, so a newer turn that took the slot in the
+        meantime keeps it.
+        """
+        if conversation_turn is None:
+            return
+        from aiops_diagnostics.conversation_store import ConversationError
+
+        conversation_id, scope_fingerprint, turn_no = conversation_turn
+        with contextlib.suppress(ConversationError):
+            self.conversation_store.release_turn(conversation_id, scope_fingerprint, turn_no)
 
     def list_evidence(self, run_id: str) -> list[dict[str, Any]]:
         """Return redacted evidence metadata for a run (no business payloads)."""
@@ -629,6 +802,7 @@ class GatewayRuntime:
         language: str = DEFAULT_LANGUAGE,
         promo_target: str | None = None,
         promo_intent: str | None = None,
+        turn_registrar: Callable[[Any], None] | None = None,
     ) -> None:
         def _finish_turn(answer: dict[str, Any] | None, *, cancelled: bool = False) -> None:
             """Write the finished answer into the conversation turn (if any).
@@ -666,7 +840,9 @@ class GatewayRuntime:
             # No search capability is wired here, so nothing was searched. Same
             # rule as the other card sites: do not claim the library is empty.
             rag_result = promo_empty_result(language, promo_intent, retrieval_status="unavailable")
-            self.store.update_assistant_question(qa_id, status="completed", result=rag_result)
+            if not self.store.update_assistant_question(qa_id, status="completed", result=rag_result):
+                _finish_turn(None, cancelled=True)
+                return
         elif tenant_id and self.kb_search_client is not None and self.media_signer is not None:
             rag_result = self._try_customer_rag(
                 qa_id,
@@ -678,8 +854,12 @@ class GatewayRuntime:
                 language,
                 promo_target=promo_target,
                 promo_intent=promo_intent,
+                turn_registrar=turn_registrar,
             )
         if rag_result is not None:
+            if rag_result is TERMINAL_WRITE_REFUSED:
+                _finish_turn(None, cancelled=True)
+                return
             if isinstance(rag_result, dict) and rag_result.get("status") == "failed":
                 self._record_metric(
                     tenant_id=tenant_id,
@@ -704,14 +884,17 @@ class GatewayRuntime:
                 provider=provider,
                 key_slot=key_slot,
                 language=language,
+                turn_registrar=turn_registrar,
             )
         except (AgentRuntimeError, SourceError, ValueError) as exc:
-            self.store.update_assistant_question(
+            if not self.store.update_assistant_question(
                 qa_id,
                 status="failed",
                 error_code="QA_FAILED",
                 error_message=_public_error_message(exc, ""),
-            )
+            ):
+                _finish_turn(None, cancelled=True)
+                return
             if tenant_id:
                 self._record_metric(
                     tenant_id=tenant_id,
@@ -723,11 +906,13 @@ class GatewayRuntime:
             _finish_turn(None, cancelled=True)
             return
         answer = _guard_zero_order_language(answer, language)
-        self.store.update_assistant_question(
+        if not self.store.update_assistant_question(
             qa_id,
             status="completed",
             result=answer,
-        )
+        ):
+            _finish_turn(None, cancelled=True)
+            return
         if tenant_id:
             self._record_metric(
                 tenant_id=tenant_id,
@@ -869,16 +1054,20 @@ class GatewayRuntime:
         *,
         promo_target: str | None = None,
         promo_intent: str | None = None,
+        turn_registrar: Callable[[Any], None] | None = None,
     ) -> dict[str, Any] | None:
         """Run the published customer agent path (T3/#170) or fall back.
 
         Returns the completed job record when the RAG path produced a result;
         None when there is no published customer agent for this tenant or the
         kb dependency is unavailable, letting the caller keep the existing
-        zero-order behavior. With ``promo_intent`` (#231) the pinned
-        promotional agent serves instead of the customer-service agent; an
-        unresolvable target or empty library returns the honest empty card
-        and never falls through to FAQ/customer QA.
+        zero-order behavior; ``TERMINAL_WRITE_REFUSED`` when the claim-guard
+        turned the job's terminal write away, which means nothing was
+        persisted and the caller must stop without recording a metric or a
+        turn. With ``promo_intent`` (#231) the pinned promotional agent serves
+        instead of the customer-service agent; an unresolvable target or empty
+        library returns the honest empty card and never falls through to
+        FAQ/customer QA.
         """
         from aiops_diagnostics.qa_rag import run_customer_qa_answer, select_customer_agent
 
@@ -900,7 +1089,8 @@ class GatewayRuntime:
                 # never ran a query. "not_found" is reserved for a search that
                 # actually returned nothing.
                 result = promo_empty_result(language, promo_intent, retrieval_status="unavailable")
-                self.store.update_assistant_question(qa_id, status="completed", result=result)
+                if not self.store.update_assistant_question(qa_id, status="completed", result=result):
+                    return TERMINAL_WRITE_REFUSED
                 return result
             selection = promo
             promo_prompt_text = promo_prompt(promo, question, language=language, intent=promo_intent)
@@ -927,6 +1117,7 @@ class GatewayRuntime:
                 project_root=reference_root(),
                 language=language,
                 initial_prompt=promo_prompt_text,
+                turn_registrar=turn_registrar,
             )
         except KnowledgeSearchUnavailable:
             if promo_intent:
@@ -939,7 +1130,8 @@ class GatewayRuntime:
                 # code=102 while the provider account is in arrears, and the
                 # old code turned that outage into "未检索到匹配的宣传资料".
                 result = promo_empty_result(language, promo_intent, retrieval_status="unavailable")
-                self.store.update_assistant_question(qa_id, status="completed", result=result)
+                if not self.store.update_assistant_question(qa_id, status="completed", result=result):
+                    return TERMINAL_WRITE_REFUSED
                 return result
             # Retrieval dependency is down: per the T1/T3 contract the model
             # can still answer from its own knowledge with
@@ -953,12 +1145,13 @@ class GatewayRuntime:
             # in the job record, and do NOT let the promo degrade hide it.
             # (2026-09-17: treating this like a provider outage made a real
             # reference-block bug look like "service temporarily unavailable".)
-            self.store.update_assistant_question(
+            if not self.store.update_assistant_question(
                 qa_id,
                 status="failed",
                 error_code="QA_FAILED",
                 error_message=_public_error_message(exc, ""),
-            )
+            ):
+                return TERMINAL_WRITE_REFUSED
             return {"status": "failed"}
         except (AgentRuntimeError, ValueError) as exc:
             if promo_intent:
@@ -970,18 +1163,20 @@ class GatewayRuntime:
                 # user cannot act on.
                 from aiops_diagnostics.promo_agents import promo_empty_result
 
-                self.store.update_assistant_question(
+                if not self.store.update_assistant_question(
                     qa_id,
                     status="completed",
                     result=promo_empty_result(language, promo_intent, retrieval_status="unavailable"),
-                )
+                ):
+                    return TERMINAL_WRITE_REFUSED
                 return {"status": "completed"}
-            self.store.update_assistant_question(
+            if not self.store.update_assistant_question(
                 qa_id,
                 status="failed",
                 error_code="QA_FAILED",
                 error_message=_public_error_message(exc, ""),
-            )
+            ):
+                return TERMINAL_WRITE_REFUSED
             return {"status": "failed"}
         # Metrics-only attribution tag: the job result and the conversation
         # turn payload stay on the unchanged blocks contract (no agent_version
@@ -990,11 +1185,12 @@ class GatewayRuntime:
             **result,
             "agent_version": f"{selection.agent_id}#v{selection.version_no}",
         }
-        self.store.update_assistant_question(
+        if not self.store.update_assistant_question(
             qa_id,
             status="completed",
             result={key: value for key, value in result.items() if key != "agent_version"},
-        )
+        ):
+            return TERMINAL_WRITE_REFUSED
         return result
 
     def serve_media(
