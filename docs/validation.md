@@ -1952,9 +1952,15 @@ if python3 - "$work/before.json" "$work/payload.json" <<'PYEOF'
 import json, sys
 src, dst = sys.argv[1], sys.argv[2]
 d = json.load(open(src))
+target = None
 for r in d["rules"]:
-    if r["type"] == "pull_request" and r["parameters"]["required_review_thread_resolution"] is True:
-        sys.exit(3)                      # 3 = 无需变更
+    if r["type"] == "pull_request":
+        target = r["parameters"]
+if target is None:
+    sys.exit(4)                          # 4 = 规则集结构不符，不是可以继续的状态
+if target["required_review_thread_resolution"] is True:
+    sys.exit(3)                          # 3 = 无需变更
+target["required_review_thread_resolution"] = True    # <- 这一行才是真正的改动
 json.dump({"name": d["name"], "enforcement": d["enforcement"], "target": "branch",
            "conditions": d["conditions"], "rules": d["rules"],
            "bypass_actors": d.get("bypass_actors", [])},
@@ -1963,8 +1969,20 @@ PYEOF
 then :; else
   rc=$?
   [ "$rc" -eq 3 ] && { echo "already enabled; nothing to do"; exit 0; }
-  exit "$rc"
+  exit "$rc"                          # 4（结构不符）与其他错误都到这里
 fi
+
+# 2b) 回写前先验证载荷真的改了那一个键。少了这一步，一个「什么都没改」的载荷
+#     会被照常 PUT，脚本以 0 退出并声称已启用——正是本步骤要防的静默无操作。
+python3 - "$work/before.json" "$work/payload.json" <<'PYEOF'
+import json, sys
+before = json.load(open(sys.argv[1])); payload = json.load(open(sys.argv[2]))
+def gate(d):
+    return [r["parameters"]["required_review_thread_resolution"]
+            for r in d["rules"] if r["type"] == "pull_request"][0]
+assert gate(before) is False, "gate was already true; nothing to enable"
+assert gate(payload) is True, "payload does not enable the gate; refusing to PUT a no-op"
+PYEOF
 
 # 3) 回写前重新读取并与第 1 步比对。并发改名会被这一步抓住；只比对「除目标键外
 #    是否变化」是抓不住的——第 1 步的快照同样缺那条新规则，差异核对会照常通过。
@@ -2024,18 +2042,33 @@ gh pr merge <n> --repo $REPO --squash                                       # �
 
 ### 上述脚本的自检（在本地对 fixture 跑，未触碰远端）
 
-**用真的 shell 跑整段脚本**，而不是只测内嵌的 python——下面第二行正是只测 python 会漏掉的。
-用一个假 `gh`（读 `state.json`、`PUT` 时把输入拷进去）驱动，四条用例：
+**用真的 shell 跑整段脚本，并且断言「结果」而不只是退出码**。用一个假 `gh`（读
+`state.json`、`PUT` 时把输入拷进去）驱动，读回最终落盘的规则集：
 
 | 用例 | 期望 | 实测 |
 | --- | --- | --- |
-| 需要变更（键为 `false`） | 正常完成，rc=0 | rc=0 |
-| 重复执行（键已为 `true`） | 提示无需变更，rc=0 | rc=0，输出 `already enabled; nothing to do` |
-| 两次读取之间远端被他人改动 | 拒绝回写，rc=1 | rc=1，输出 `ruleset changed between reads; re-run instead of overwriting` |
+| 需要变更（`false`） | rc=0 **且 gate 变为 `true`** | rc=0，gate=`true` |
+| 重复执行（已为 `true`） | 提示无需变更，rc=0 | rc=0，`already enabled; nothing to do` |
+| 两次读取之间远端被他人改动 | 拒绝回写，rc=1 | rc=1，`ruleset changed between reads; re-run instead of overwriting` |
 | 回写后误删了 `deletion` 规则 | 差异核对失败并中止 | AssertionError，rc=1 |
 
+第一行的措辞是刻意的：**只断言 rc 的测试会让一个什么都不改的脚本通过**。本片第一版正是
+如此——python 里真正赋值那一行在改写时被丢掉，循环只做判断、从不改动，于是 PUT 回写一份
+与远端完全相同的规则集，脚本以 rc=0 退出并声称已启用。它逃过了当时那版只检查 rc 的自检。
+
+对照实测（同一个假 `gh`，只换脚本）：
+
+| 脚本 | rc | 落盘后的 gate |
+| --- | --- | --- |
+| 丢掉赋值那版 | 0 | **`false`**（静默无操作） |
+| 修正后 | 0 | `true` |
+
+因此第 2b 步在回写前显式断言载荷真的把该键从 `false` 改成了 `true`，并同时拒绝
+「规则集里根本没有 `pull_request` 规则」这种结构不符（退出码 4）。这两条断言是让上面
+那个缺陷无法再次通过的机制，而不是描述。
+
 第二行抓到的是一类只在 shell 层出现的缺陷：`set -e` 会在 `rc=$?` 之前因 python 的非零
-退出码终止脚本，于是「已启用」这条正常路径反而报失败且不打印提示。实测对照——把退出码
+退出码终止脚本，于是「已启用」这条正常路径反而报失败且不打印提示。对照实测——把退出码
 处理换回 `rc=$?` 的旧写法，同一用例返回 **rc=3**；改为 `if ! python3 …` 后返回 **0**。
 
 第三行抓到的是一类比差异核对更隐蔽的缺陷：只比对「第 1 步快照」与「回写后」是否一致，
