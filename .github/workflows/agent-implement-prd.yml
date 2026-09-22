@@ -326,6 +326,25 @@ jobs:
           if [ -n "$EXISTING_PR" ]; then
             echo "pr_number=$EXISTING_PR" >> "$GITHUB_OUTPUT"
             echo "created=false" >> "$GITHUB_OUTPUT"
+            # A PR this branch already had is left exactly as it is — except for
+            # one case. The first run creates it as a draft (deliberately: the
+            # tree is not reviewable until its sub-issue is done), and if that
+            # draft is never un-drafted the whole PRD finishes unmergeable with
+            # nothing failing — the PRD only closes on merge. Review normally
+            # un-drafts it, but review runs once, before later sub-issues push.
+            # So each run makes sure the tree it is accumulating is not sitting
+            # in a draft that no later step will clear.
+            if [ "$(gh pr view "$EXISTING_PR" --json isDraft --jq '.isDraft')" = "true" ]; then
+              if [ -z "$AGENT_PAT" ]; then
+                echo "AGENT_PAT is required to re-open the delivery PR for review." > "${RUNNER_TEMP}/failure_reason.txt"
+                exit 1
+              fi
+              if ! GH_TOKEN="$AGENT_PAT" gh pr ready "$EXISTING_PR"; then
+                echo "AGENT_PAT could not re-open the delivery PR for review." > "${RUNNER_TEMP}/failure_reason.txt"
+                exit 1
+              fi
+              echo "Re-opened draft PR #${EXISTING_PR} for review."
+            fi
           else
             if [ -z "$AGENT_PAT" ]; then
               echo "AGENT_PAT is required to create the delivery pull request." > "${RUNNER_TEMP}/failure_reason.txt"
