@@ -15,77 +15,87 @@ the transport ate the first byte.
 The repair does not guess. A dropped head is always a prefix of the body, so
 re-attaching the missing characters restores exactly the text the model sent —
 and a candidate is accepted only when it parses to a JSON object AND satisfies
-the turn contract (a ``kind`` the schema allows, and for an answer the blocks
-the schema requires). A wrong reconstruction therefore cannot be mistaken for a
-right one: it fails the same schema check the intact body passes.
+the caller's own contract check. A wrong reconstruction therefore cannot be
+mistaken for a right one: it fails the same schema check the intact body passes.
 
-Only prefixes the schema can enumerate are tried. ``{"kind":"answer"`` and
-``{"kind":"tool_requests"`` are the only two openings the contract permits, and
-whitespace between the tokens is the only variation — so the search space is the
-cartesian product of the two openings and a few spacings, not an open-ended
-string match. Anything further from the contract than that is not repaired here;
-it is retried or salvaged by the caller.
+The contract is supplied by the caller, because this repository has several turn
+contracts and they do not share an opening. The customer-QA turn opens
+``{"kind":"answer"``, the diagnosis turn opens ``{"kind":"diagnosis"``, and the
+zero-order answer has no ``kind`` at all — it opens ``{"text"``. A repair that
+knew only the QA opening would leave the other three schemas unrecoverable while
+appearing to fix the problem.
+
+Any single dropped head is a prefix *of* an opening, so the cut can land inside
+a key name (a real turn lost exactly ``{"kind``, ending mid-``"kind"``). The
+search is therefore over every prefix length, not over token boundaries: a
+token-aligned list cannot rebuild a mid-token cut, which is how a first version
+of this module repaired nothing at all.
 """
 
 from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from typing import Any
-
-#: The two bodies a turn can open with, exactly as the schema orders them.
-#: Spacing variants cover a model that pretty-prints the same tokens.
-_TURN_OPENINGS: tuple[str, ...] = (
-    '{"kind":"answer",',
-    '{"kind": "answer",',
-    '{"kind":"tool_requests",',
-    '{"kind": "tool_requests",',
-)
-
-#: Characters the head loss has been observed to reach. A reconstruction longer
-#: than this is not attempted: it would mean the model opened with something the
-#: contract does not permit, which is not a transport defect.
-_MAX_PREFIX = 32
-
-
-def _prefix_candidates() -> tuple[str, ...]:
-    """Every prefix of every opening, longest first.
-
-    Every *prefix*, not every token boundary: the transport cuts wherever the
-    delta boundary happens to fall, and it is not aligned to JSON tokens. A real
-    turn lost exactly ``{"kind`` — six characters, ending in the middle of the
-    ``"kind"`` key — leaving a body that starts ``":"answer",...``. A candidate
-    list built from whole tokens can never rebuild that, which is how a first
-    version of this module repaired nothing at all.
-
-    Longest first, so the fuller reconstruction is preferred when several parse.
-    """
-    seen: dict[str, None] = {}
-    for opening in _TURN_OPENINGS:
-        for length in range(1, min(len(opening), _MAX_PREFIX) + 1):
-            seen[opening[:length]] = None
-    return tuple(sorted(seen, key=len, reverse=True))
-
-
-_PREFIXES: tuple[str, ...] = _prefix_candidates()
 
 #: A model that wraps its JSON in a markdown fence, which some providers emit
 #: even when the contract asked for bare JSON.
 _JSON_FENCE = re.compile(r"```(?:json)?\s*\n?(.*?)```", re.DOTALL)
 
 
-def _looks_like_a_turn(parsed: Any) -> bool:
-    """True when a reconstruction satisfies the turn contract, not just JSON.
+def _all_prefixes(openings: tuple[str, ...]) -> tuple[str, ...]:
+    """Every prefix of every opening, longest first.
 
-    This is what keeps the repair honest. A repair that merely produced valid
-    JSON would happily re-attach the wrong opening and hand back a turn the
-    model never wrote; requiring the contract's own discriminator means a wrong
-    guess fails here exactly as it would fail the real parser.
+    Longest first, so the fuller reconstruction is preferred when several parse.
+    """
+    seen: dict[str, None] = {}
+    for opening in openings:
+        for length in range(1, len(opening) + 1):
+            seen[opening[:length]] = None
+    return tuple(sorted(seen, key=len, reverse=True))
 
-    Both answer shapes real providers emit are accepted, because the runtime
-    accepts both: the contract shape (``answer.blocks``) and the flat shape
-    (``blocks`` at turn top level). A repair that rejected the flat shape would
-    leave half the real traffic unrepaired.
+
+#: The openings this repository's turn contracts actually use, and the check
+#: that decides whether a reconstruction is that contract's turn. Each entry is
+#: ``(openings, is_valid)``; a caller selects the ones its schema can produce.
+QA_TURN_OPENINGS: tuple[str, ...] = (
+    '{"kind":"answer",',
+    '{"kind": "answer",',
+    '{"kind":"tool_requests",',
+    '{"kind": "tool_requests",',
+)
+
+DIAGNOSIS_TURN_OPENINGS: tuple[str, ...] = (
+    '{"kind":"diagnosis",',
+    '{"kind": "diagnosis",',
+    '{"kind":"tool_requests",',
+    '{"kind": "tool_requests",',
+)
+
+CLASSIFIER_TURN_OPENINGS: tuple[str, ...] = (
+    '{"intent":',
+    '{"intent": ',
+    "{",
+)
+
+ZERO_ORDER_OPENINGS: tuple[str, ...] = (
+    '{"text":',
+    '{"text": ',
+    "{",
+)
+
+
+def _has_str(parsed: Any, key: str) -> bool:
+    return isinstance(parsed, dict) and isinstance(parsed.get(key), str)
+
+
+def _looks_like_qa_turn(parsed: Any) -> bool:
+    """The customer-QA contract, in both shapes real providers emit.
+
+    The runtime accepts the contract shape (``answer.blocks``) and the flat shape
+    (``blocks`` at top level), so the repair must accept both or it leaves half
+    the real traffic unrepaired.
     """
     if not isinstance(parsed, dict):
         return False
@@ -100,26 +110,29 @@ def _looks_like_a_turn(parsed: Any) -> bool:
     return False
 
 
-def repair_truncated_turn_head(text: str) -> dict[str, Any] | None:
-    """Parse a turn whose opening characters were lost, or ``None``.
+def _looks_like_diagnosis_turn(parsed: Any) -> bool:
+    if not isinstance(parsed, dict):
+        return False
+    kind = parsed.get("kind")
+    if kind == "tool_requests":
+        return isinstance(parsed.get("tool_requests"), list)
+    if kind == "diagnosis":
+        return "diagnosis" in parsed or "summary" in parsed or "report" in parsed
+    return False
 
-    Returns the reconstructed object, so the caller keeps one parse path: the
-    repaired body is treated as the model's own answer, because that is what it
-    is.
-    """
-    for body in _bodies(text):
-        if not body or body.startswith("{"):
-            # An intact opening is not this function's business; the caller
-            # parses first and only falls back here.
-            continue
-        for prefix in _PREFIXES:
-            try:
-                parsed = json.loads(prefix + body)
-            except (ValueError, TypeError):
-                continue
-            if _looks_like_a_turn(parsed):
-                return parsed
-    return None
+
+def _looks_like_classifier_turn(parsed: Any) -> bool:
+    """The classifier always answers with these four keys."""
+    if not isinstance(parsed, dict):
+        return False
+    return _has_str(parsed, "intent") and _has_str(parsed, "confidence")
+
+
+def _looks_like_zero_order_turn(parsed: Any) -> bool:
+    """``{"text": str, "reminder": bool}`` — the staged-reference answer."""
+    if not isinstance(parsed, dict) or not _has_str(parsed, "text"):
+        return False
+    return isinstance(parsed.get("reminder"), bool)
 
 
 def _bodies(text: str) -> list[str]:
@@ -132,18 +145,49 @@ def _bodies(text: str) -> list[str]:
     return [candidate for candidate in candidates if candidate]
 
 
-def parse_turn(text: str) -> dict[str, Any] | None:
+def repair_truncated_turn_head(
+    text: str,
+    *,
+    openings: tuple[str, ...],
+    is_valid: Callable[[Any], bool],
+) -> dict[str, Any] | None:
+    """Parse a turn whose opening characters were lost, or ``None``.
+
+    ``openings`` are the string prefixes the caller's contract can start with;
+    ``is_valid`` is the caller's own contract check, which is what keeps a wrong
+    reconstruction from being mistaken for a right one.
+    """
+    prefixes = _all_prefixes(openings)
+    for body in _bodies(text):
+        if not body or body.startswith("{"):
+            # An intact opening is not this function's business; the caller
+            # parses first and only falls back here.
+            continue
+        for prefix in prefixes:
+            try:
+                parsed = json.loads(prefix + body)
+            except (ValueError, TypeError):
+                continue
+            if is_valid(parsed):
+                return parsed
+    return None
+
+
+def parse_turn(
+    text: str,
+    *,
+    openings: tuple[str, ...] = QA_TURN_OPENINGS,
+    is_valid: Callable[[Any], bool] = _looks_like_qa_turn,
+) -> dict[str, Any] | None:
     """Parse a streamed model turn into a JSON object, or ``None``.
 
-    Tolerant in the two ways a real provider makes necessary, tried in order:
-    a fenced block, an outermost ``{...}`` span, and finally a body whose head
-    was dropped by the transport (see the module docstring).
+    Tolerant in the ways a real provider makes necessary, tried in order: a
+    fenced block, an outermost ``{...}`` span, and finally a body whose head was
+    dropped by the transport (see the module docstring).
 
-    This is the one parser for every JSON turn in the runtime. Two copies of
-    this logic is how the QA path and the lightweight classifier came to
-    disagree about what counts as an invalid turn — the classifier had no
-    head-loss fallback at all, so the same transport defect reached it as a
-    routing failure instead of an answer.
+    This is the one parser for every JSON turn in the runtime, which is why the
+    contract is a parameter: the QA path, the light classifier, the zero-order
+    answer and the diagnosis turn share the transport defect but not the schema.
     """
     for body in _bodies(text):
         start, end = body.find("{"), body.rfind("}")
@@ -157,4 +201,4 @@ def parse_turn(text: str) -> dict[str, Any] | None:
                 continue
             if isinstance(parsed, dict):
                 return parsed
-    return repair_truncated_turn_head(text)
+    return repair_truncated_turn_head(text, openings=openings, is_valid=is_valid)

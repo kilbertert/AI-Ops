@@ -18,7 +18,18 @@ import json
 
 import pytest
 
-from aiops_diagnostics.turn_recovery import parse_turn, repair_truncated_turn_head
+from aiops_diagnostics.turn_recovery import (
+    CLASSIFIER_TURN_OPENINGS,
+    DIAGNOSIS_TURN_OPENINGS,
+    QA_TURN_OPENINGS,
+    ZERO_ORDER_OPENINGS,
+    _looks_like_classifier_turn,
+    _looks_like_diagnosis_turn,
+    _looks_like_qa_turn,
+    _looks_like_zero_order_turn,
+    parse_turn,
+    repair_truncated_turn_head,
+)
 
 #: The body the gateway actually received for qa_e42533c3fd234a4a958cd59d559a643e
 #: (41, 2026-09-22T10:18:41Z). ``{"kind":`` is what went missing.
@@ -107,7 +118,12 @@ def test_the_repair_does_not_re_attach_a_wrong_opening() -> None:
     opening the schema does not allow is refused rather than repaired.
     """
     # A body whose true opening is neither of the two permitted ones.
-    assert repair_truncated_turn_head('":"unknown","blocks":[]}') is None
+    assert (
+        repair_truncated_turn_head(
+            '":"unknown","blocks":[]}', openings=QA_TURN_OPENINGS, is_valid=_looks_like_qa_turn
+        )
+        is None
+    )
 
 
 def test_a_failed_qa_job_reports_copy_a_customer_can_act_on() -> None:
@@ -155,7 +171,7 @@ def test_the_failure_copy_resolves_in_every_supported_language(language: str) ->
     from aiops_diagnostics.gateway_api import _qa_user_message
     from aiops_diagnostics.i18n import QA_FALLBACK_MESSAGES
 
-    message = _qa_user_message(language)
+    message = _qa_user_message(language, "KB_UNAVAILABLE")
     assert message == QA_FALLBACK_MESSAGES[language]["unavailable"]
     assert message.strip()
 
@@ -164,5 +180,77 @@ def test_an_unknown_language_still_yields_copy() -> None:
     """A language tag the pack does not carry must not turn into a crash."""
     from aiops_diagnostics.gateway_api import _qa_user_message
 
-    message = _qa_user_message("xx-not-a-language")
+    message = _qa_user_message("xx-not-a-language", "QA_FAILED")
     assert message.strip()
+
+
+# --- The recovery must cover every turn contract, not just the QA one. ---
+# An earlier revision knew only the QA opening, so three of the four schemas
+# stayed unrecoverable while the fix looked complete.
+
+
+def test_the_diagnosis_turn_is_recovered() -> None:
+    """The diagnosis contract opens `{"kind":"diagnosis"`, not the QA opening."""
+    intact = '{"kind":"diagnosis","diagnosis":{"status":"diagnosed","summary":"ok"},"tool_requests":[]}'
+    repaired = parse_turn(intact[6:], openings=DIAGNOSIS_TURN_OPENINGS, is_valid=_looks_like_diagnosis_turn)
+    assert repaired == json.loads(intact)
+
+
+def test_a_diagnosis_tool_request_is_recovered() -> None:
+    intact = '{"kind":"tool_requests","tool_requests":[{"tool":"order_snapshot"}],"diagnosis":null}'
+    repaired = parse_turn(intact[9:], openings=DIAGNOSIS_TURN_OPENINGS, is_valid=_looks_like_diagnosis_turn)
+    assert repaired == json.loads(intact)
+
+
+def test_the_classifier_turn_is_recovered() -> None:
+    """The classifier opens `{"intent":` — it has no `kind` at all."""
+    intact = '{"intent":"casual","confidence":"high","risk":"low","answer":"你好"}'
+    repaired = parse_turn(intact[1:], openings=CLASSIFIER_TURN_OPENINGS, is_valid=_looks_like_classifier_turn)
+    assert repaired == json.loads(intact)
+
+
+def test_the_zero_order_turn_is_recovered() -> None:
+    """`run_zero_order_answer` expects `{"text", "reminder"}` with no `kind`."""
+    intact = '{"text":"你好，我可以帮你解答充电问题。","reminder":true}'
+    repaired = parse_turn(intact[1:], openings=ZERO_ORDER_OPENINGS, is_valid=_looks_like_zero_order_turn)
+    assert repaired == json.loads(intact)
+
+
+def test_a_wrong_contract_does_not_accept_another_schemas_body() -> None:
+    """Recovery is schema-aware: the QA openings must not swallow a zero-order body."""
+    zero_order_body = '"text":"hi","reminder":true}'
+    assert parse_turn(zero_order_body, openings=QA_TURN_OPENINGS, is_valid=_looks_like_qa_turn) is None
+
+
+# --- The failure copy must name the cause that actually failed. ---
+
+
+def test_a_provider_failure_does_not_blame_the_knowledge_base() -> None:
+    """`QA_FAILED` covers provider errors and contract defects, not retrieval.
+
+    Telling a customer the library is down when their model provider rejected
+    the request names the wrong broken thing and points at the wrong remedy.
+    """
+    from aiops_diagnostics.gateway_api import _qa_user_message
+    from aiops_diagnostics.i18n import QA_FALLBACK_MESSAGES
+
+    generic = _qa_user_message("zh", "QA_FAILED")
+    assert generic == QA_FALLBACK_MESSAGES["zh"]["generation_failed"]
+    assert generic != QA_FALLBACK_MESSAGES["zh"]["unavailable"]
+
+
+def test_only_a_verified_retrieval_failure_blames_the_knowledge_base() -> None:
+    from aiops_diagnostics.gateway_api import _qa_user_message
+    from aiops_diagnostics.i18n import QA_FALLBACK_MESSAGES
+
+    kb = _qa_user_message("en", "KB_UNAVAILABLE")
+    assert kb == QA_FALLBACK_MESSAGES["en"]["unavailable"]
+
+
+@pytest.mark.parametrize("language", ["zh", "en", "de", "fr", "es", "pt"])
+@pytest.mark.parametrize("code", ["QA_FAILED", "KB_UNAVAILABLE", None])
+def test_every_failure_path_yields_copy_in_every_language(language: str, code: str | None) -> None:
+    """No combination may fall through to a missing key or an empty string."""
+    from aiops_diagnostics.gateway_api import _qa_user_message
+
+    assert _qa_user_message(language, code).strip()

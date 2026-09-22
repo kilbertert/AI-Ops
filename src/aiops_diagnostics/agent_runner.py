@@ -22,7 +22,13 @@ from aiops_diagnostics.sources import (
     live_sources,
     scoped_live_sources,
 )
-from aiops_diagnostics.turn_recovery import parse_turn
+from aiops_diagnostics.turn_recovery import (
+    CLASSIFIER_TURN_OPENINGS,
+    ZERO_ORDER_OPENINGS,
+    _looks_like_classifier_turn,
+    _looks_like_zero_order_turn,
+    parse_turn,
+)
 
 
 def run_agent_diagnosis(
@@ -122,7 +128,11 @@ def run_zero_order_answer(
         # The same shared parser: this path lost the head of its JSON to the
         # identical transport defect, and its own fence-tolerance here was a
         # third copy of the logic.
-        payload = parse_turn(result.final_response)
+        payload = parse_turn(
+            result.final_response,
+            openings=ZERO_ORDER_OPENINGS,
+            is_valid=_looks_like_zero_order_turn,
+        )
         if not isinstance(payload, dict):
             raise AgentRuntimeError("zero-order answer returned invalid JSON")
         text = str(payload.get("text") or "")
@@ -176,7 +186,11 @@ def classify_lightweight(
         # own copy with no head-loss fallback, so a provider that dropped the
         # opening characters turned into a routing failure here while the QA
         # path repaired the very same body.
-        payload = parse_turn(result.final_response)
+        payload = parse_turn(
+            result.final_response,
+            openings=CLASSIFIER_TURN_OPENINGS,
+            is_valid=_looks_like_classifier_turn,
+        )
         if not isinstance(payload, dict):
             raise AgentRuntimeError("lightweight classifier returned invalid JSON")
         if payload.get("intent") not in {

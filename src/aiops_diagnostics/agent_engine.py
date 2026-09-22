@@ -30,6 +30,11 @@ from aiops_diagnostics.diagnostic_tools import (
 )
 from aiops_diagnostics.i18n import DEFAULT_LANGUAGE, language_name
 from aiops_diagnostics.journal import EvidenceJournal
+from aiops_diagnostics.turn_recovery import (
+    DIAGNOSIS_TURN_OPENINGS,
+    _looks_like_diagnosis_turn,
+    repair_truncated_turn_head,
+)
 
 SessionFactory = Callable[[AgentWorkspace, AgentSettings, ProviderConfig | None, str | None], CodexSession]
 ProgressCallback = Callable[[dict[str, Any]], None]
@@ -51,6 +56,18 @@ def _parse_agent_turn(final_response: str) -> AgentTurn:
     failing on ``extra_forbidden``.
     """
     text = final_response.strip()
+    # A transport that dropped the opening characters leaves a body no
+    # candidate below can match — every one of them looks for a JSON object, and
+    # there is no opening brace to find. Rebuild the head first, then run the
+    # provider-normalization above on the repaired text so the two tolerances
+    # compose instead of competing.
+    repaired = repair_truncated_turn_head(
+        text,
+        openings=DIAGNOSIS_TURN_OPENINGS,
+        is_valid=_looks_like_diagnosis_turn,
+    )
+    if repaired is not None:
+        text = json.dumps(repaired, ensure_ascii=False)
     candidates: list[str] = [text]
     candidates.extend(match.group(1).strip() for match in _JSON_FENCE.finditer(text))
     start, end = text.find("{"), text.rfind("}")

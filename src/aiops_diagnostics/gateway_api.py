@@ -2400,7 +2400,7 @@ def _assistant_question_response(qa: dict[str, Any], language: str) -> dict[str,
         "error": (
             {
                 "code": qa.get("error_code") or "QA_FAILED",
-                "message": _qa_user_message(language),
+                "message": _qa_user_message(language, qa.get("error_code")),
                 "retryable": True,
             }
             if status_value in {"failed", "expired"}
@@ -2409,10 +2409,24 @@ def _assistant_question_response(qa: dict[str, Any], language: str) -> dict[str,
     }
 
 
-def _qa_user_message(language: str) -> str:
-    """The localized, actionable sentence a customer sees when a QA job fails."""
+#: The only failure code that means retrieval actually failed. Everything else
+#: on this surface — a provider error, a contract violation, an unreachable
+#: model — records `QA_FAILED` and has nothing to do with the knowledge base.
+_KB_FAILURE_CODE = "KB_UNAVAILABLE"
+
+
+def _qa_user_message(language: str, error_code: str | None) -> str:
+    """The localized, actionable sentence a customer sees when a QA job fails.
+
+    The cause decides the sentence. Claiming the knowledge base is unavailable
+    for every failure told a customer whose model provider had simply rejected
+    the request that the *library* was down — a false cause and useless
+    guidance, since retrying is the wrong advice only for the reader who
+    believes the wrong thing is broken. Only a verified retrieval failure gets
+    the retrieval copy; the rest get the honest, cause-neutral one.
+    """
     pack = QA_FALLBACK_MESSAGES.get(language) or QA_FALLBACK_MESSAGES[DEFAULT_LANGUAGE]
-    return pack["unavailable"]
+    return pack["unavailable"] if error_code == _KB_FAILURE_CODE else pack["generation_failed"]
 
 
 def _require_conversation(

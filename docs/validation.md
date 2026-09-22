@@ -1,5 +1,48 @@
 # 验证与验收计划
 
+## 流式轮次首部丢失修复 + 失败文案分因（2026-09-22，本地自动化验证）
+
+**范围**：修复 `customer QA turn returned invalid JSON`（PR #380）。
+
+**根因（41 真实 provider 实测）**：上游 SSE 会**间歇性丢掉 body 的第一个 delta**。
+同一 prompt 连跑 6 次，**5/6 丢首部**，丢失 2–18 字符，**永远是前缀、尾巴完整**。
+绕开 `aiops-responses-adapter` 直连上游同样 5/6 → **适配器清白，丢失发生在上游**。
+生产库当日 8 条相同失败（10:05–10:18），与输入内容无关。
+
+生产实拍（`qa_e42533c3fd234a4a958cd59d559a643e`）：
+
+```
+收到: ` "answer", "retrieval_status": "not_attempted", ... }`
+应为: `{"kind": "answer", "retrieval_status": "not_attempted", ... }`
+```
+
+解析器要三种形态（裸 JSON / 围栏 / `{...}` 区间），一个都不满足 → `qa_rag.py:209` 抛错。
+
+**修法**：`turn_recovery.py`（新）按 schema 允许的开头枚举**所有前缀**回贴，回贴结果
+**必须通过该 schema 自己的合同校验**才接受 —— 猜错过不了校验，与真解析器同一把尺。
+**必须是所有前缀**：真实丢失 `{"kind` 停在 key 名中间，只枚举整 token 的初版**什么都修不了**。
+
+**经评审补出的三处（Devin Review 三条全部成立）**：
+
+1. 🔴 **恢复只覆盖 QA 一种 schema** —— 初版只知道 QA 的 `{"kind":"answer"`，而诊断是
+   `{"kind":"diagnosis"`、分类器是 `{"intent":`、零阶答案是 `{"text":`（**都没有 `kind`**）。
+   同一个传输缺陷对这四个 schema 都在发生，只修一个会让另外三个继续失败而**看起来已修好**。
+   已改为**schema 参数化**：调用方传入自己的 opening 与校验函数，四条路径全部接入，
+   含此前完全没被触碰的 `agent_engine._parse_agent_turn`（诊断线）。
+2. 🟡 **失败文案把原因归错** —— 所有失败都写"知识库不可用"。但 `QA_FAILED` 覆盖的是
+   供应商报错与合同缺陷，与检索无关；告诉用户"资料库挂了"既说错原因又给错建议。
+   已按**已验证的错误码**分因：只有 `KB_UNAVAILABLE` 用检索文案，其余用中性的
+   `generation_failed`（六语新增）。
+3. 🔍 **里程碑记录未同步** —— 即本节。
+
+**验证**：`tests/test_turn_recovery.py` 62 例。含四个 schema 各自的恢复用例、
+"QA opening 不得吞下零阶 body"的反例、六语 × 三种错误码的文案穷举。
+**去掉修复即失败已实测**：屏蔽 `repair_truncated_turn_head` 后同一生产 body 重新抛错。
+`ruff check` / `ruff format --check` / 全量 pytest 全绿。
+
+**未完成业务验收**：修复已在本地与 41 真实 provider 上复现并验证解析层，但**41 尚未部署**；
+公网链路的端到端复验待部署后进行。不得以本地结果记为 41 已验收。
+
 ## 订单时间窗规则正式化：消除跨模块私有名依赖（2026-09-22，本地自动化验证）
 
 **范围**：`diagnostic_tools.py` 原以 `from aiops_diagnostics.engine import _order_window`
