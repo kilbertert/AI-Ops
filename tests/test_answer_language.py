@@ -7,9 +7,12 @@ how a surface calls the guard, only what the guard decides.
 
 from __future__ import annotations
 
+from dataclasses import FrozenInstanceError
+
 import pytest
 
 from aiops_diagnostics.answer_language import (
+    AnswerSurface,
     answer_chinese_leak,
     looks_like_asset_name,
     text_block_leak,
@@ -140,6 +143,140 @@ def test_reference_title_prose_punctuation_still_flags() -> None:
     }
 
     assert answer_chinese_leak(answer, "en") != ""
+
+
+# --------------------------------------------------------------------------
+# The payload as a contract (#363)
+#
+# The guard used to accept `Any` and pick a branch by shape, and the one
+# production shape that needed the exemption (a bare list of block dicts) fell
+# through to a shape-blind flatten that knows neither the block's kind nor its
+# field names. The payload is a value now: a surface carries blocks, and each
+# block carries its own kind, its own title and the descriptor mounted on it.
+# --------------------------------------------------------------------------
+
+
+def test_a_media_descriptor_mounted_on_its_block_is_judged_under_that_kind() -> None:
+    """The descriptor the guard recursed into was unreachable in production:
+    `to_public_dict` mounts `media` after the judgement point, so nothing ever
+    judged a `media.title`. On the contract type the descriptor is a field of
+    the block that carries it, so the same predicate that exempts a block title
+    exempts the resource's name beside it.
+    """
+    surface = AnswerSurface.from_public_blocks(
+        [
+            {"kind": "text", "text": "See the attached case video."},
+            {
+                "kind": "video",
+                "title": "新加坡无人电动巴士.mp4",
+                "media": {"title": "新加坡无人电动巴士.mp4"},
+            },
+        ]
+    )
+
+    assert surface.blocks[1].kind == "video"
+    assert surface.blocks[1].title == "新加坡无人电动巴士.mp4"
+    assert surface.blocks[1].media.title == "新加坡无人电动巴士.mp4"
+    assert answer_chinese_leak(surface, "en") == ""
+
+
+@pytest.mark.parametrize("kind", ["image", "video", "reference"])
+def test_a_resource_name_in_a_title_is_exempt_on_the_contract(kind: str) -> None:
+    """Same rule as the dict shape, now run on the contract: the kind names the
+    resource, so the title is an identifier rather than prose."""
+    surface = AnswerSurface.from_public_blocks([{"kind": kind, "title": "重卡充电案例"}])
+
+    assert answer_chinese_leak(surface, "en") == ""
+
+
+def test_the_exemption_follows_the_kind_not_the_key() -> None:
+    """A title on a block whose kind does not name a resource is prose."""
+    surface = AnswerSurface.from_public_blocks(
+        [{"kind": "text", "text": "Scan the QR code to start charging.", "title": "标题"}]
+    )
+
+    assert answer_chinese_leak(surface, "en") != ""
+
+
+@pytest.mark.parametrize("kind", ["image", "video", "reference"])
+def test_a_descriptor_holding_a_real_resource_name_is_exempt(kind: str) -> None:
+    """The descriptor's name rides on its block's kind — the same predicate that
+    exempts the block's own title, not a second rule for a second layer."""
+    surface = AnswerSurface.from_public_blocks([{"kind": kind, "media": {"title": "重卡充电案例"}}])
+
+    assert answer_chinese_leak(surface, "en") == ""
+
+
+def test_a_descriptor_holding_prose_is_judged() -> None:
+    """The descriptor is not a blanket pass on names: a sentence inside it is."""
+    surface = AnswerSurface.from_public_blocks(
+        [
+            {
+                "kind": "video",
+                "title": "新加坡无人电动巴士.mp4",
+                "media": {"title": "错误 402：余额不足，请先充值.pdf"},
+            }
+        ]
+    )
+
+    assert answer_chinese_leak(surface, "en") != ""
+
+
+def test_a_descriptor_on_a_block_that_names_no_resource_is_judged() -> None:
+    """Judged rather than exempted when no kind says the name is a resource.
+
+    The public shape never mounts a descriptor on a text block; this pins that
+    the exemption comes from the block's kind, so a future block kind gets the
+    conservative answer until it declares `title` a resource name.
+    """
+    surface = AnswerSurface.from_public_blocks(
+        [{"kind": "text", "text": "See the attached case video.", "media": {"title": "重卡充电案例"}}]
+    )
+
+    assert answer_chinese_leak(surface, "en") != ""
+
+
+def test_a_plain_text_payload_is_judged_as_text() -> None:
+    """Text alone is a declared input, not a shape the guard noticed: the
+    zero-order and casual finalization points return exactly this."""
+    assert answer_chinese_leak("标题: 新加坡项目", "en") != ""
+    assert answer_chinese_leak("Scan the QR code, then start charging.", "en") == ""
+
+
+def test_the_contract_and_its_serialised_dict_reach_the_same_conclusion() -> None:
+    """The conclusion must not turn on which Python shape the caller chose.
+
+    ponytail: the serialized-dict arm is the representation #366 retires; until
+    then the two must agree, and after it the arm goes away with the branch.
+    """
+    blocks = [
+        {"kind": "text", "text": "标题: 新加坡项目"},
+        {
+            "kind": "video",
+            "title": "新加坡无人电动巴士.mp4",
+            "media": {"title": "新加坡无人电动巴士.mp4"},
+        },
+    ]
+
+    from_contract = answer_chinese_leak(AnswerSurface.from_public_blocks(blocks), "en")
+
+    assert from_contract == answer_chinese_leak({"blocks": blocks}, "en")
+    # Prose beside an exempt name is still a leak: the exemption is per-value.
+    assert from_contract != ""
+
+
+def test_the_contract_is_a_frozen_value_object() -> None:
+    """The guard reads a settled payload, so it must not be able to reshape one."""
+    surface = AnswerSurface.from_public_blocks([{"kind": "text", "text": "All clear."}])
+
+    assert surface.blocks[0].kind == "text"
+    with pytest.raises(FrozenInstanceError):
+        surface.blocks = ()
+
+
+def test_an_empty_surface_leaks_nothing() -> None:
+    assert AnswerSurface().leaked_chinese() == ""
+    assert answer_chinese_leak(AnswerSurface(), "en") == ""
 
 
 # --------------------------------------------------------------------------
