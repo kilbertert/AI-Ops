@@ -1931,38 +1931,75 @@ Ruleset 变更没有工具化封装，必须用 `gh api`。**关键是不要重�
 只改目标键，其余原样回写，否则容易静默丢掉规则或条件。
 
 ```bash
+#!/bin/bash
+set -euo pipefail                 # 失败即停：下面每一步非零都必须中止，不能继续到 PUT
+
 REPO=kilbertert/AI-Ops
-RS=23760870                      # 规则集 id；用 gh api repos/$REPO/rulesets 列出
+RS=23760870                       # 规则集 id；用 gh api repos/$REPO/rulesets 列出
 
-# 1) 取回整份
-gh api "repos/$REPO/rulesets/$RS" > /tmp/rs.json
+# 每次运行唯一的临时文件，退出时清理。不要用固定的 /tmp/rs-new.json：
+# 那份快照一旦留下，下次运行断言失败后仍会被 PUT，覆盖掉这期间远端新增的规则。
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
 
-# 2) 只改目标键，其余原样保留（变更前断言，防止重复执行）
-python3 - <<'PYEOF'
-import json
-d = json.load(open("/tmp/rs.json"))
+# 1) 取回整份（就在回写前，最小化并发窗口）
+gh api "repos/$REPO/rulesets/$RS" > "$work/rs.json"
+
+# 2) 只改目标键，其余原样保留。生产文件只在改动真正成立时才写出。
+python3 - "$work/rs.json" "$work/rs-new.json" <<'PYEOF'
+import json, sys
+src, dst = sys.argv[1], sys.argv[2]
+d = json.load(open(src))
 for r in d["rules"]:
     if r["type"] == "pull_request":
-        assert r["parameters"]["required_review_thread_resolution"] is False
+        # 已是目标值就直接退出且不写文件，避免重复执行
+        if r["parameters"]["required_review_thread_resolution"] is True:
+            sys.exit(3)
         r["parameters"]["required_review_thread_resolution"] = True
 json.dump({"name": d["name"], "enforcement": d["enforcement"], "target": "branch",
            "conditions": d["conditions"], "rules": d["rules"],
            "bypass_actors": d.get("bypass_actors", [])},
-          open("/tmp/rs-new.json", "w"), indent=1)
+          open(dst, "w"), indent=1)
+PYEOF
+# 退出码 3 = 无需变更；set -e 下需显式放行，其他非零仍然中止
+rc=$?; if [ "$rc" -eq 3 ]; then echo "already enabled; nothing to do"; exit 0; fi
+[ "$rc" -eq 0 ] || exit "$rc"
+
+# 3) 回写，并把回写前后的规则集做一次差异核对
+gh api -X PUT "repos/$REPO/rulesets/$RS" --input "$work/rs-new.json" >/dev/null
+gh api "repos/$REPO/rulesets/$RS" > "$work/after.json"
+python3 - "$work/rs.json" "$work/after.json" <<'PYEOF'
+import json, sys
+before = json.load(open(sys.argv[1])); after = json.load(open(sys.argv[2]))
+# 断言：除目标键外，其余规则与条件逐字未变
+def norm(rules, drop_target):
+    out = []
+    for r in rules:
+        p = dict(r.get("parameters") or {})
+        if drop_target and r["type"] == "pull_request":
+            p.pop("required_review_thread_resolution", None)
+        out.append((r["type"], json.dumps(p, sort_keys=True)))
+    return sorted(out)
+assert norm(before["rules"], True) == norm(after["rules"], True), "unrelated rule changed"
+assert before["conditions"] == after["conditions"], "conditions changed"
+print("gate =", [r["parameters"]["required_review_thread_resolution"]
+                 for r in after["rules"] if r["type"] == "pull_request"][0])
 PYEOF
 
-# 3) 回写并核对
-gh api -X PUT "repos/$REPO/rulesets/$RS" --input /tmp/rs-new.json
-gh api "repos/$REPO/rulesets/$RS" --jq '.rules[]|select(.type=="pull_request")|.parameters.required_review_thread_resolution'
 gh api "repos/$REPO/rules/branches/main" --jq '[.[].type]|join(", ")'   # 确认规则仍在
 ```
 
 注意：
 
 - `target: branch` 必须显式带上；取回的对象里没有这个字段，回写时容易漏。
+- **`set -euo pipefail` 不是装饰**：没有它，第 2 步的断言失败不会阻止第 3 步的 PUT，
+  而 PUT 会把上一次运行遗留的快照写回去，静默删掉这期间新增的规则。
+- 临时文件必须每次唯一并在退出时清理；固定路径正是上一条的载体。
 - 回滚就是把同一个键改回 `false` 再回写，不需要重建规则集。
 - 生效范围是远端、立即生效、对所有 PR 生效。本地没有任何东西能替代它，
-  所以 `dev-pr` 与本地 guard 都拦不住这类回归，只能靠上面第 3 步的复核命令。
+  所以 `dev-pr` 与本地 guard 都拦不住这类回归，只能靠上面的差异核对。
+- 两次读取之间仍有并发窗口（别人同时改了同一个规则集）。差异核对能发现它，
+  但正确处置是重跑，而不是强行 PUT。
 
 ### 验证闸门确实在拦
 
@@ -1976,3 +2013,14 @@ gh pr merge <n> --repo $REPO --squash                                       # �
 
 `BLOCKED` 也可由 pending 的必需检查造成，所以必须在所有必需检查 `pass` 之后再读，
 否则归因不成立。
+
+### 上述脚本的自检（在本地对 fixture 跑，未触碰远端）
+
+| 用例 | 期望 | 实测 |
+| --- | --- | --- |
+| 需要变更（键为 `false`） | 写出新快照，退出码 0 | 写出、rc=0 |
+| 重复执行（键已为 `true`） | 不写快照，退出码 3，提示无需变更 | 未写文件、rc=3 |
+| 回写后除目标键外无变化 | 差异核对通过 | PASS |
+| 回写后误删了 `deletion` 规则 | 差异核对失败并中止 | AssertionError，rc=1 |
+
+第四行正是 Devin 指出的路径：没有这条核对，丢失的规则会被静默写掉。
