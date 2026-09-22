@@ -12,11 +12,17 @@ Created 2026-08-27._
   label Actions + `CONTEXT.md` + `CODING_STANDARDS.md` + `docs/afk-workflow.md`.
 - **Plan A (no auto-claim) active** — no label auto-runs an issue; driven by
   `pnpm ralph` (planner), `pnpm afk` (single), or explicit `workflow_dispatch`.
-- **Providers**: `claude-ark` (GLM), `psydo` (GPT), `aliyun-deepseek` (DeepSeek).
-  Only **aliyun-deepseek** is currently healthy in full sessions (ark/psydo had
-  quota/429). aliyun is **slow-timeout-prone** on long multi-turn sessions.
+- **Providers** (AFK): `claude` and `claude-stepfun`. The four older profiles
+  (`claude-ark`, `agentrouter`, `psydo`, `aliyun-deepseek`) were retired by the
+  1.2.0 template — the first three resolved to host settings files whose
+  upstream quota is exhausted, so any run selecting them failed before the agent
+  started, and `aliyun-deepseek` was the only Codex-provider profile.
+  `claude-stepfun` now reads its endpoint from the host settings file
+  `~/cliproxyapi/settings.stepfun.json`, mounted read-only into the sandbox.
 - **Self-hosted runners online** for all repos; `AGENT_PAT` set.
-- **AFK_PROFILE for AI-Ops = aliyun-deepseek**.
+- **AFK_PROFILE for AI-Ops = claude-stepfun** (the repository variable is set
+  separately; the sandbox image must be rebuilt from the upgraded Dockerfile
+  before that switch, or the wrapper exits 2).
 
 ## 2. Ten-ticket relationship graph
 
@@ -66,8 +72,9 @@ T10  #43 收口(切流量+删凭据)                    ╎ needs #34, #37-41, #
   actions; use `pnpm afk -- <issue>` or `pnpm ralph` (planner) when an issue is
   a clean, auto-drivable AFK task. Reserve human-in-the-loop for the security /
   cross-repo / withdrawal decisions (T7 access, T8 secrets, T10 cutoff).
-- Current model on this repo is `aliyun-deepseek`; it's slow on long sessions —
-  expect patience or use a fast path for small tasks.
+- Current profile on this repo is `claude-stepfun` (StepFun `step-5-preview`),
+  with the endpoint mounted from the host settings file rather than baked into
+  the image — so a token rotation is a host file edit, not an image rebuild.
 - **Do not** rely on `agent:implement` auto-triggering (Plan A — dispatch only).
 - The `.gitignore` now ignores `pnpm-lock.yaml`/`pnpm-workspace.yaml` (repo
   uses npm) and `*.jsonl`/`codex-agent.state.json`.
