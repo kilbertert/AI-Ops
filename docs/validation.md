@@ -71,8 +71,25 @@
 **去掉修复即失败已实测**：屏蔽 `repair_truncated_turn_head` 后同一生产 body 重新抛错。
 `ruff check` / `ruff format --check` / 全量 pytest 全绿。
 
-**未完成业务验收**：修复已在本地与 41 真实 provider 上复现并验证解析层，但**41 尚未部署**；
-公网链路的端到端复验待部署后进行。不得以本地结果记为 41 已验收。
+**41 部署与公网复验（2026-09-22 20:36，已完成）**：
+
+- 合并 `#380` → main `e0edfdd`；41 按 runbook §2 部署（备份 → 传 → **逐文件 sha 核对** → 重启）。
+  六个改动文件 sha 与本地**逐一相同**；备份 `/var/backups/aiops-41/backup-20260922-203326`。
+- 网关重启后 `active`，`/health` 返回 ok，启动日志无 error/traceback。
+- **公网端到端复验（`api.mall.qushiyun.com`，真实 thirdSession）**：用**当初失败的那个问题**
+  `Hello, my car is not working.` 提问 ——
+
+```
+CREATE 202 type=qa status=queued  qa_id=qa_3280ce7cbea44610aed1bee625e2f29b
+poll0..3 status=running
+poll4   status=completed
+RESULT  {"text": "您好！车辆无法启动/无法正常工作，可以从几个方向排查：1）动力电池电量…"}
+```
+
+  修复前该问题稳定返回 `customer QA turn returned invalid JSON`；现在返回完整回答，**首部丢失已被修复**。
+
+**未完成**：上游（`ai-api.baoyun.com`）丢 delta 的问题**依然存在**（直连复现 5/6）；本次修的是
+客户端容错。长期方案需与上游沟通或改走非流式请求。
 
 ## 订单时间窗规则正式化：消除跨模块私有名依赖（2026-09-22，本地自动化验证）
 
