@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta
+from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Any
 
 from aiops_diagnostics.config import SafetySettings
 from aiops_diagnostics.models import DiagnosticReport, DiagnosticRequest, Evidence, Intent, Severity
-from aiops_diagnostics.rules import classify_stop_reason, is_server_billing, status_label
+from aiops_diagnostics.rules import (
+    classify_stop_reason,
+    is_server_billing,
+    order_window,
+    status_label,
+)
 from aiops_diagnostics.sources import DiagnosticSources, SourceError
 
 AMOUNT_TOLERANCE = Decimal("0.02")
@@ -696,21 +701,13 @@ class DiagnosticEngine:
 
 
 def _order_window(order: dict[str, Any], max_hours: int) -> tuple[datetime, datetime, bool] | None:
-    created = _datetime(order.get("created_time"))
-    if not created:
-        return None
-    stopped = _datetime(order.get("stop_time")) or datetime.now(tz=created.tzinfo)
-    if created.tzinfo is None and stopped.tzinfo is not None:
-        created = created.replace(tzinfo=stopped.tzinfo)
-    elif created.tzinfo is not None and stopped.tzinfo is None:
-        stopped = stopped.replace(tzinfo=created.tzinfo)
-    elif created.tzinfo is not None and stopped.tzinfo is not None:
-        stopped = stopped.astimezone(created.tzinfo)
-    start = created - timedelta(minutes=5)
-    end = stopped + timedelta(minutes=5)
-    maximum_end = start + timedelta(hours=max_hours)
-    clamped = end > maximum_end
-    return start, min(end, maximum_end), clamped
+    """Thin adapter over the shared rule: both diagnosis paths must read one window.
+
+    Kept as a name because ``DiagnosticEngine`` reads better calling it, but the
+    behaviour now lives in ``rules.order_window`` so the agent tool layer can
+    depend on a public contract instead of importing a private helper.
+    """
+    return order_window(order.get("created_time"), order.get("stop_time"), max_hours)
 
 
 def _public_order_facts(order: dict[str, Any]) -> dict[str, Any]:
