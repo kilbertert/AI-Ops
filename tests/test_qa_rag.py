@@ -1164,6 +1164,24 @@ def _finalized(
     retrieval = _TurnRetrieval(
         reference_ids={block["reference_id"] for block in blocks if block.get("reference_id")},
         media_by_id=resources or {},
+        # The run's retrieved document names (#376). This helper stands in for a
+        # real search, so it supplies provenance. It draws on both places a name
+        # can sit -- the mounted descriptor's title and the block's own title --
+        # because this helper's callers put the same retrieved resource name in
+        # each in turn and require one verdict. Without provenance the guard falls
+        # back to the shape-only rule and never exercises the predicate under test.
+        retrieved_titles={
+            name
+            for name in (
+                # What the knowledge base returned this turn: the descriptors the
+                # harness signed carry the document names.
+                [resource.title for resource in (resources or {}).values()]
+                # Plus whatever the caller put directly on a block, since this
+                # helper's callers place the same retrieved name in either spot.
+                + [block.get("title") for block in blocks]
+            )
+            if name
+        },
         searches_used=1,
     )
     return _finalize({"blocks": blocks, "retrieval_status": "found"}, retrieval, language)
@@ -1394,6 +1412,21 @@ def test_the_41_english_card_keeps_its_chinese_reference_document(tmp_path: Path
     assert "language_fallback" not in result
 
 
+_real_from_public_blocks = answer_language.AnswerSurface.from_public_blocks
+
+
+class _NoRetrievedTitles:
+    """Stand-in for ``from_public_blocks`` with the run's provenance withheld.
+
+    A classmethod, matching the method it replaces, so the binding is the same.
+    """
+
+    @classmethod
+    def from_public_blocks(cls, blocks, **kwargs):
+        kwargs.pop("retrieved_titles", None)
+        return _real_from_public_blocks(blocks, **kwargs)
+
+
 @pytest.mark.parametrize(
     ("chunk", "blocks", "cite_media", "question"),
     [
@@ -1423,7 +1456,18 @@ def test_the_recorded_cards_are_carried_by_the_exemption_alone(
     this repository has already had to replace. Judging a resource name as prose
     is exactly what a shape-blind, leaf-by-leaf payload did to the video card.
     """
+    # #376: the exemption is a CONJUNCTION -- a title is a resource name only
+    # when it both looks like one and was actually retrieved this run. Disabling
+    # either half alone no longer withdraws it (an absent provenance falls back
+    # to the shape rule), so the counter-proof disables both: that is what "turn
+    # the exemption off" now means. Judging a resource name as prose is still
+    # exactly what a shape-blind payload did to the video card.
     monkeypatch.setattr(answer_language, "looks_like_asset_name", lambda value: False)
+    monkeypatch.setattr(
+        answer_language.AnswerSurface,
+        "from_public_blocks",
+        _NoRetrievedTitles.from_public_blocks,
+    )
 
     result = _run_card(tmp_path, chunk, blocks, cite_media=cite_media, question=question)
 

@@ -179,6 +179,16 @@ class AnswerBlock:
     title: str = ""
     media_title: str = ""
     identifiers: tuple[str, ...] = ()
+    #: The resource names this run actually retrieved.
+    #:
+    #: ``None`` means the caller supplied no provenance at all; a (possibly
+    #: empty) set means it did. The two must not collapse: an empty set is a
+    #: real answer — retrieval returned items, none of which carried a document
+    #: name (`normalize_search_response` accepts ``title=None``, and such a chunk
+    #: can still have its image signed and cited) — and treating it as "no
+    #: provenance" would fall back to the shape-only rule and deliver a
+    #: model-authored heading. Only ``None`` may fall back.
+    retrieved_titles: frozenset[str] | None = None
 
     def leaked_chinese(self) -> str:
         """The Chinese this block leaks, honouring the resource-name exemption."""
@@ -191,22 +201,56 @@ class AnswerBlock:
         return "".join(sorted(leaked))
 
     def _judged_titles(self) -> list[str]:
-        """The titles that are prose rather than the resource's name.
+        """The titles that are prose rather than a resource this run retrieved.
 
-        One implementation of the exemption, applied to the block's own title
-        and to the descriptor mounted on it alike: a title on an image, video
-        or reference block names the knowledge-base resource, so translating it
-        would leave the answer citing material the reader cannot match back to
-        the library. A title on any other kind is prose and is judged.
+        The exemption is by SOURCE TRUTH, not by shape. A title is display text
+        the user reads, and the only thing that makes it a resource name rather
+        than prose is that the library actually returned it this run — so a
+        title is exempt when it matches one of :attr:`retrieved_titles`.
 
-        The ids stay outside it. A title is display text whose SHAPE is the only
-        provenance available; an id is a handle the library issued, and a
-        Chinese one reaches the reader as Chinese all the same.
+        Shape alone cannot decide this. `操作步骤` is short and punctuation-free,
+        exactly like a filename, so a shape rule accepts a Chinese heading the
+        model invented and delivers it to a reader who asked for English. ADR-0007
+        named that gap: closing it needs the resource's provenance, not a
+        cleverer pattern.
+
+        The mounted descriptor's title is exempt on the same test. A reference
+        block carries no descriptor at all (`to_public_dict` mounts `media` for
+        image/video only), which is why the exemption cannot key on "matches the
+        descriptor" — that would withdraw it from every reference card.
+
+        The ids stay outside all of this. An id is a handle the library issued,
+        and a Chinese one reaches the reader as Chinese all the same.
         """
         titles = [self.title, self.media_title]
+        if self.retrieved_titles is None:
+            # No provenance was supplied: keep the pre-#376 rule, so a surface
+            # that finalises without retrieval data is judged as it always was.
+            # The risk is a surface that HAS the data and forgets to pass it,
+            # restoring the hole #376 closes — a source-level guard asserts the
+            # production caller always supplies it (test_answer_caller_shapes.py).
+            #
+            # Only `None` falls back. An EMPTY set is provenance too: it says
+            # retrieval returned nothing usable, so nothing is exempt and a
+            # model-authored heading is judged like any other prose.
+            if self.kind not in _ASSET_TITLE_KINDS:
+                return titles
+            return [title for title in titles if not looks_like_asset_name(title)]
+        # Provenance supplied. Exempt only when BOTH hold, because either rule
+        # alone is wrong in one direction:
+        #
+        #   - shape alone exempts `操作步骤`, a heading the model invented, which
+        #     is as short and punctuation-free as a filename (#376);
+        #   - provenance alone exempts a resource named with a sentence, which
+        #     ADR-0007 judges as prose by value SHAPE.
+        #
+        # The conjunction is what a resource name actually is: it looks like one
+        # AND the library returned it this run.
         if self.kind not in _ASSET_TITLE_KINDS:
-            return titles
-        return [title for title in titles if not looks_like_asset_name(title)]
+            return [title for title in titles if title not in self.retrieved_titles]
+        return [
+            title for title in titles if not (looks_like_asset_name(title) and title in self.retrieved_titles)
+        ]
 
 
 @dataclass(frozen=True, slots=True)
@@ -220,7 +264,12 @@ class AnswerSurface:
     blocks: tuple[AnswerBlock, ...] = ()
 
     @classmethod
-    def from_public_blocks(cls, blocks: Iterable[Mapping[str, Any]]) -> AnswerSurface:
+    def from_public_blocks(
+        cls,
+        blocks: Iterable[Mapping[str, Any]],
+        *,
+        retrieved_titles: Iterable[str] | None = None,
+    ) -> AnswerSurface:
         """Build a surface from the public ``blocks[]`` dicts a surface delivers.
 
         The single construction path: every finalisation point runs the blocks
@@ -229,6 +278,11 @@ class AnswerSurface:
         Python shape. Non-mapping entries are skipped, as are keys the guard
         does not judge — see :func:`_media_title_of` and :func:`_identifiers_of`.
         """
+        exempt: frozenset[str] | None = (
+            None
+            if retrieved_titles is None
+            else frozenset(_text_of(name) for name in retrieved_titles if _text_of(name))
+        )
         surface_blocks = [
             AnswerBlock(
                 kind=str(block.get("kind") or ""),
@@ -236,6 +290,7 @@ class AnswerSurface:
                 title=_text_of(block.get("title")),
                 media_title=_media_title_of(block),
                 identifiers=_identifiers_of(block),
+                retrieved_titles=exempt,
             )
             for block in blocks
             if isinstance(block, Mapping)
