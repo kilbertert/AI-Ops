@@ -270,6 +270,29 @@ jobs:
           OUTPUT_DIR: ${{ runner.temp }}
         run: npm exec tsx .sandcastle/implement-prd/implement-prd.ts
 
+      # A run whose sandbox produced nothing must fail here, saying so. Without
+      # this the steps below still run: the push is a no-op, and the failure
+      # finally surfaces as `gh pr create` refusing with "No commits between
+      # main and <branch>" — an error about pull requests for a problem that is
+      # entirely about the agent. That misdirection cost a full investigation:
+      # it pointed at the credential and then at the model endpoint, while the
+      # sandbox log showed the agent had introduced itself and stopped.
+      - name: Fail fast — the agent committed nothing
+        if: steps.shape.outputs.mode == 'run' && success()
+        env:
+          BRANCH: ${{ steps.branch.outputs.name }}
+          SUB_ISSUE_NUMBER: ${{ steps.shape.outputs.next_open_number }}
+        run: |
+          set -euo pipefail
+          ahead=$(git rev-list --count "origin/main..HEAD")
+          if [ "$ahead" = "0" ]; then
+            reason="the agent produced no commits for sub-issue #${SUB_ISSUE_NUMBER} (branch ${BRANCH} is still at origin/main). The sandbox ran but changed nothing — check its output above; a model that answers conversationally instead of acting looks exactly like this."
+            echo "$reason" > "${RUNNER_TEMP}/failure_reason.txt"
+            echo "::error::$reason"
+            exit 1
+          fi
+          echo "Branch is ${ahead} commit(s) ahead of main."
+
       - name: Verify AFK policy before push
         if: steps.shape.outputs.mode == 'run' && success()
         run: node .sandcastle/policy-check.mjs delivery
@@ -352,15 +375,21 @@ jobs:
             fi
             PR_TITLE=$(cat "${RUNNER_TEMP}/pr_title.txt")
             PR_TITLE="${PR_TITLE:0:256}"
-            if ! pr_url=$(GH_TOKEN="$AGENT_PAT" gh pr create \
+            if ! pr_output=$(GH_TOKEN="$AGENT_PAT" gh pr create \
               --draft \
               --base main \
               --head "$BRANCH" \
               --title "$PR_TITLE" \
-              --body-file "${RUNNER_TEMP}/pr_description.txt" | tail -n1); then
-              echo "AGENT_PAT could not create the delivery pull request." > "${RUNNER_TEMP}/failure_reason.txt"
+              --body-file "${RUNNER_TEMP}/pr_description.txt" 2>&1); then
+              # Keep GitHub's own reason. Reporting every failure as "AGENT_PAT
+              # could not create the PR" sent a reader to the credential when
+              # the real cause was "No commits between main and <branch>" — a
+              # run whose sandbox produced nothing. The token was fine.
+              echo "gh pr create failed: $(echo "$pr_output" | tail -n1)" > "${RUNNER_TEMP}/failure_reason.txt"
+              echo "$pr_output" >&2
               exit 1
             fi
+            pr_url=$(echo "$pr_output" | tail -n1)
             pr_number=$(basename "$pr_url")
             echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
             echo "created=true" >> "$GITHUB_OUTPUT"
