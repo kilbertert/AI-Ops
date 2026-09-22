@@ -36,7 +36,6 @@ from aiops_diagnostics.answer_language import (
     record_answer_language_fallback,
 )
 from aiops_diagnostics.codex_runtime import AgentContractError, SDKCodexSession
-from aiops_diagnostics.turn_recovery import parse_turn
 from aiops_diagnostics.config import AgentSettings, ProviderConfig
 from aiops_diagnostics.i18n import DEFAULT_LANGUAGE, QA_FALLBACK_MESSAGES, language_name
 from aiops_diagnostics.knowledge_retrieval import (
@@ -47,6 +46,7 @@ from aiops_diagnostics.knowledge_retrieval import (
     MediaResourceSigner,
     RetrievalStatus,
 )
+from aiops_diagnostics.turn_recovery import parse_turn
 
 _MAX_RUNS = 5  # initial turn + ≤2 search rounds + forced re-search + final
 _JSON_FENCE = re.compile(r"```(?:json)?\s*\n?(.*?)```", re.DOTALL)

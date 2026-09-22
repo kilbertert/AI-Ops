@@ -55,7 +55,10 @@ def test_every_prefix_loss_the_transport_was_observed_to_make(cut: int) -> None:
 
 def test_a_tool_request_turn_is_repaired_too() -> None:
     """Both turn kinds share the opening, so both need the fallback."""
-    intact = '{"kind":"tool_requests","tool_requests":[{"tool":"knowledge_search","query":"充电","reason":"needs kb"}]}'
+    intact = (
+        '{"kind":"tool_requests","tool_requests":'
+        '[{"tool":"knowledge_search","query":"充电","reason":"needs kb"}]}'
+    )
     repaired = parse_turn(intact[6:])
     assert repaired == json.loads(intact)
 
@@ -138,3 +141,28 @@ def test_a_failed_qa_job_reports_copy_a_customer_can_act_on() -> None:
     assert en["error"]["message"] != body["error"]["message"], (
         "the copy is localized from the request's language, not fixed to Chinese"
     )
+
+
+@pytest.mark.parametrize("language", ["zh", "en", "de", "fr", "es", "pt"])
+def test_the_failure_copy_resolves_in_every_supported_language(language: str) -> None:
+    """Every supported language has copy, so the fallback never has to fire.
+
+    The fallback branch is what broke first: it referenced a constant that was
+    not imported, so an unknown language name raised NameError at the moment a
+    customer was already seeing a failure. Pinning all six languages keeps the
+    fallback genuinely unreachable for real requests.
+    """
+    from aiops_diagnostics.gateway_api import _qa_user_message
+    from aiops_diagnostics.i18n import QA_FALLBACK_MESSAGES
+
+    message = _qa_user_message(language)
+    assert message == QA_FALLBACK_MESSAGES[language]["unavailable"]
+    assert message.strip()
+
+
+def test_an_unknown_language_still_yields_copy() -> None:
+    """A language tag the pack does not carry must not turn into a crash."""
+    from aiops_diagnostics.gateway_api import _qa_user_message
+
+    message = _qa_user_message("xx-not-a-language")
+    assert message.strip()

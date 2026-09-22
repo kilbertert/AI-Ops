@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import contextlib
-import json
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -11,7 +10,6 @@ from aiops_diagnostics.agent_contracts import AgentDiagnosis
 from aiops_diagnostics.agent_engine import AgentCoordinator, ProgressCallback
 from aiops_diagnostics.agent_workspace import AgentWorkspace
 from aiops_diagnostics.codex_runtime import AgentRuntimeError, resolve_provider_api_key
-from aiops_diagnostics.turn_recovery import parse_turn
 from aiops_diagnostics.config import Settings
 from aiops_diagnostics.diagnostic_tools import DiagnosticToolExecutor, preflight_environment
 from aiops_diagnostics.i18n import DEFAULT_LANGUAGE, language_name
@@ -24,6 +22,7 @@ from aiops_diagnostics.sources import (
     live_sources,
     scoped_live_sources,
 )
+from aiops_diagnostics.turn_recovery import parse_turn
 
 
 def run_agent_diagnosis(

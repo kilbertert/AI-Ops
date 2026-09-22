@@ -73,6 +73,7 @@ from aiops_diagnostics.gateway_store import (
     RunNotFoundError,
 )
 from aiops_diagnostics.i18n import (
+    DEFAULT_LANGUAGE,
     QA_FALLBACK_MESSAGES,
     clarification_message,
     resolve_language,
