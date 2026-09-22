@@ -1,5 +1,48 @@
 # 验证与验收计划
 
+## README 重构为架构导览 + 四条形状守护（2026-09-22，本地自动化验证）
+
+**范围**：把根 README 从「功能说明书」改为**面向接手者的架构导览**——新增第一性原理
+设计哲学、实测模块分层与依赖方向、模块间契约（接缝）及其与 ADR 的映射、改动指南、
+以及明确的「当前权威文档 / 历史快照」路由表。
+
+**内容修正（本片顺带纠错，均为实测）**：
+
+- 原 README 称订单/费用/设备/Redis 证据「改由 `/diag/*` HTTP 接口只读查询，本运行时不再
+  保存 MySQL / Redis 直连凭据」。该表述**与当前基线相反**：`.env.example` 已在 PRD #23
+  （2026-08-31）把 `/diag/*` HTTP 段标记 DEPRECATED，`ScopedSources` 受限直连才是默认诊断
+  路径。新 README 按实测改写，并说明**两个源集合并存**的原因（设备路径没有 SQL 可下推）
+  而非把它写成历史包袱。
+- 原 README 未覆盖 Gateway 标准 API 面、客服问答/知识库/媒体、充电健康报告、智能体与
+  快捷动作生命周期、AFK 治理面——即仓库约 70% 的代码。新 README 补齐。
+- 新增 `.sandcastle/`、`.github/workflows/`、`acceptance.feature`、`qa-plan.md`、
+  `java/` 的定位说明，并明确 `java/` 在**本仓库未编译、未部署**，其四个 Python 契约测试
+  不等于真实验收。
+
+**依赖分层为实测结果，非估计**：全量 AST 导入分析（含函数内延迟导入）得出
+**包内无环**，并识别出 **6 条真实的向上依赖**（`caller_auth→sources`；
+`qa_rag`/`agent_manifest`/`agent_debug`/`shortcut_migration→agent_lifecycle`、
+`shortcut_lifecycle`；以及两条同层边）。README 逐条列出理由，并记录一处**真实封装缺陷**：
+`diagnostic_tools` 复用 `engine._order_window`（下划线私有名），复用方向正确但接口未正式化。
+
+**新增四条形状守护**（`tests/test_readme_architecture.py`），**逐条实测「破坏即失败」**：
+
+| 守护 | 变异实测结果 |
+|---|---|
+| `test_every_package_module_is_named_in_the_readme` | 从 README 移除全部 `engine` 提及 → FAILED |
+| `test_readme_module_references_point_at_real_modules` | 追加引用 `nonexistent_module.py` → FAILED |
+| `test_readme_relative_links_resolve` | 追加 `[坏链](docs/does-not-exist.md)` → FAILED |
+| `test_package_import_graph_stays_acyclic` | 给 `rules.py` 加 `from ...engine import ...` 制造 `engine↔rules` 环 → FAILED，报 `engine -> rules -> engine` |
+
+变异均已在本地还原，还原后四条全绿。守护只断言**形状**（模块被说明、链接可解析、
+无导入环），不断言文字质量——这四条正好是人工复核容易漏掉、而文档最容易随时间腐烂的
+部分。
+
+**验证**：本地全量 pytest **1082 passed**（此前本分支基线 1075，新增 4 条 README 守护
++ 3 条既有），`ruff check` 与 `ruff format --check` 干净。**未完成业务验收**：
+本片只改文档与文档守护，不触及诊断逻辑，无真实故障案例可比对；41 公网验收状态不变，
+仍以 `docs/agents/current-delivery-state.md` 为准。
+
 ## #359 取消结果入指标 + 两条核心回归守护封口（2026-09-21，本地自动化验证）
 
 **范围**：PRD #346 子票 T6（收口）。把取消结果写进指标，把取消语义的跨入口一致性钉住，
