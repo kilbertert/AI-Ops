@@ -1919,14 +1919,21 @@ AGENTS.md 的自检条款无可沉淀的新操作步骤。
 | 发过 `/devin review` 的 head（#36、#37） | thread 全部由 `devin-ai-integration[bot]` 解决 |
 | 未发 `/devin review` 的 head（AI-Ops 4 张，共 10 条 thread） | 解决数 **0** |
 
-**本仓行为验证已在 PR #371 上取证**：在必需检查（`Workflow policy` / `verify` /
-`windows-verify`）全部 `pass` 且 `mergeable: MERGEABLE` 的前提下，只改变 thread 的
-解决状态即可改变合并门：
+**本仓行为验证已在 PR #371 上取证**。逐次读数如下，含 head SHA：前三行是**受控对照**
+（同一 head `49622e29`、必需检查未变，只改 thread 状态）；后两行是 head 前进后的复读，
+只作印证，不是单变量对照：
 
-| threads | `mergeStateStatus` |
-| --- | --- |
-| 0 / 1、1 / 1、0 / 2、1 / 2 | `BLOCKED` |
-| 2 / 2 | `CLEAN` |
+| # | head | threads 已解决 | 必需检查 | `mergeStateStatus` |
+| --- | --- | --- | --- | --- |
+| 1 | `49622e29` | 0 / 1 | 全 `pass` | `BLOCKED` |
+| 2 | `49622e29` | 1 / 1 | 全 `pass` | `BLOCKED` |
+| 3 | `49622e29` | 1 / 1 → 重新置回 0 / 1 | 全 `pass` | `BLOCKED` |
+| 4 | `4edbfb9` | 1 / 2 | 全 `pass` | `BLOCKED` |
+| 5 | `86bae95` | 2 / 2 | 全 `pass` | `CLEAN` |
+
+复核方式（只读）：`gh pr view <n> --json mergeStateStatus`，配合
+`gh pr checks <n>`；受控对照看 head 是否相同。第 3 行是其中最强的一条——
+把一个 thread 重新置为未解决，就让一个**检查状态完全没变**的 PR 重新被拦。
 
 被拒信息：`the base branch policy prohibits the merge`。该 PR 自身就是观测对象，
 因此下列「验证闸门确实在拦」一节必须用**不会真合并**的方式读取，见该节。
@@ -2030,24 +2037,30 @@ PYEOF
 （本片的 PR #371 即如此），`gh pr merge` 一旦不返回预期拒绝就会**真的把它合掉**，
 默认分支被改、观测对象消失。用 `BLOCKED` 状态加一次不写入的试探即可：
 
+**只用读命令，不要调用任何 `gh pr merge`：**
+
 ```bash
-# 状态判据（只读，不写任何东西）
-gh pr view <n> --repo $REPO --json mergeStateStatus -q .mergeStateStatus
-gh pr merge <n> --repo $REPO --squash --auto     # 只在门通过时才排队
-gh pr checks <n> --repo $REPO                    # 全部 pass 才是有效读数
+# 状态判据——纯读，不写任何东西
+gh pr view  <n> --repo $REPO --json mergeStateStatus,mergeable -q '.mergeStateStatus+" "+.mergeable'
+gh pr checks <n> --repo $REPO
+# 可选：保留原始证据，便于复核归因
+gh api "repos/$REPO/rules/branches/$(gh repo view $REPO --json defaultBranchRef -q .defaultBranchRef.name)" \
+  --jq '[.[].type]|join(", ")'
 ```
 
-读法：必需检查全部 `pass` + `mergeable: MERGEABLE` + `BLOCKED` ⇒ 阻塞来自门，
-因为能让 `BLOCKED` 的其他原因（pending/失败的必需检查、`required_approving_review_count`
-未满足、分支不最新）都已被前两项排除。
+读法：必需检查全部 `pass` + `mergeable: MERGEABLE` + `BLOCKED` ⇒ **在本仓当前的规则集下**
+阻塞来自那一条门，因为能让 `BLOCKED` 的其他成因（pending/失败的必需检查、必需审批数
+未满足、分支不最新）都已被前两项排除。归因依赖 GitHub 的状态语义和当时生效的规则，
+所以把最后那条规则集查询一并留存。
 
-**不要用 `gh pr merge` 探测**（不带 `--auto`）——本片试过：它对 `BLOCKED` 的 PR 会
-**真的合掉**，观测对象当场消失，默认分支被改。这不是理论风险，是这条命令的语义。
+**`gh pr merge` 的两种用法都不能用于探测，理由不同：**
 
-同样**不要用 `--auto` 探测**，理由不同：它在**未开启 auto-merge 的仓库上直接报错**
-（`Auto merge is not allowed for this repository`），拿不到「被拒」这个信号。本仓就是
-这种状态，所以本片最终用的是上面的纯读判据。（若仓库开启了 auto-merge，`--auto` 是安全
-的，但要在探测后用 `--disable-auto` 撤销排队。）
+- **不带 `--auto`**：对 `BLOCKED` 的 PR 会**真的执行合并**，观测对象当场消失、
+  默认分支被改。这不是理论风险，是这条命令的语义。
+- **带 `--auto`**：**会成功排队**。在启用 auto-merge 的仓库上，操作者以为在做只读取证，
+  实际已经把 PR 排进合并队列，条件一满足就会自动合并。本仓未开启 auto-merge，所以本片
+  调用它时直接报错（`Auto merge is not allowed for this repository`）——**报错只是本仓的
+  运气，不是这条命令安全**。实测确认当时 `state=OPEN`、`auto=none`，未被写入。
 
 `BLOCKED` 也可由 pending 的必需检查造成，所以必须在所有必需检查 `pass` 之后再读，
 否则归因不成立。本片实测：`windows-verify` 曾仍在 `pending`，那次 `BLOCKED` 读数
