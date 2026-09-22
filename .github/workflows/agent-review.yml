@@ -149,8 +149,34 @@ jobs:
       - name: Mark PR ready for review
         if: success()
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh pr ready "$PR_NUMBER" || true
+          # AGENT_PAT, not GITHUB_TOKEN. `gh pr ready` calls the GraphQL
+          # `markPullRequestReadyForReview`, and the workflow token is refused
+          # with "Resource not accessible by integration". It used to run under
+          # GITHUB_TOKEN with a trailing `|| true`, so the refusal was swallowed
+          # and the step reported success while the PR stayed a draft — and the
+          # PRD is only closed by the merge, so a whole tree sat finished but
+          # unmerged with nothing failing. Verified against the run that did it:
+          # the API call failed and the log still said the step succeeded.
+          AGENT_PAT: ${{ secrets.AGENT_PAT }}
+        run: |
+          set -euo pipefail
+          if [ -z "$AGENT_PAT" ]; then
+            echo "AGENT_PAT is required to mark the delivery PR ready." > "${RUNNER_TEMP}/failure_reason.txt"
+            exit 1
+          fi
+          if ! GH_TOKEN="$AGENT_PAT" gh pr ready "$PR_NUMBER"; then
+            echo "AGENT_PAT could not mark the delivery PR ready." > "${RUNNER_TEMP}/failure_reason.txt"
+            exit 1
+          fi
+          # Read it back. "The call did not error" is not "the PR is ready" —
+          # that assumption is what hid the failure above. A draft PR here means
+          # the tree is finished but cannot be merged or closed.
+          is_draft=$(gh pr view "$PR_NUMBER" --json isDraft --jq '.isDraft')
+          if [ "$is_draft" = "true" ]; then
+            echo "::error::PR #${PR_NUMBER} is still a draft after being marked ready"
+            exit 1
+          fi
+          echo "PR #${PR_NUMBER} is ready for review."
 
       - name: Post thread replies
         if: success()
