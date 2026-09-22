@@ -46,6 +46,7 @@ from aiops_diagnostics.knowledge_retrieval import (
     MediaResourceSigner,
     RetrievalStatus,
 )
+from aiops_diagnostics.turn_recovery import parse_turn
 
 _MAX_RUNS = 5  # initial turn + ≤2 search rounds + forced re-search + final
 _JSON_FENCE = re.compile(r"```(?:json)?\s*\n?(.*?)```", re.DOTALL)
@@ -392,23 +393,13 @@ def _finalize(
 
 
 def _parse_rag_turn(final_response: str) -> dict[str, Any] | None:
-    """Parse the model turn: raw JSON, fenced block, or outermost {...} span."""
-    text = (final_response or "").strip()
-    if not text:
-        return None
-    candidates: list[str] = [text]
-    candidates.extend(match.group(1).strip() for match in _JSON_FENCE.finditer(text))
-    start, end = text.find("{"), text.rfind("}")
-    if start != -1 and end > start:
-        candidates.append(text[start : end + 1])
-    for candidate in candidates:
-        try:
-            parsed = json.loads(candidate)
-        except (ValueError, TypeError):
-            continue
-        if isinstance(parsed, dict):
-            return parsed
-    return None
+    """Parse the model turn into an object, or ``None``.
+
+    Delegates to the shared tolerant parser, which also repairs a body whose
+    opening characters a provider dropped in flight (2026-09-22). Kept as a
+    named seam because the contract tests drive this exact call.
+    """
+    return parse_turn(final_response)
 
 
 _BLOCK_FIELDS_BY_KIND: dict[str, tuple[str, ...]] = {
