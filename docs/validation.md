@@ -1,5 +1,48 @@
 # 验证与验收计划
 
+## 流式轮次首部丢失修复 + 失败文案分因（2026-09-22，本地自动化验证）
+
+**范围**：修复 `customer QA turn returned invalid JSON`（PR #380）。
+
+**根因（41 真实 provider 实测）**：上游 SSE 会**间歇性丢掉 body 的第一个 delta**。
+同一 prompt 连跑 6 次，**5/6 丢首部**，丢失 2–18 字符，**永远是前缀、尾巴完整**。
+绕开 `aiops-responses-adapter` 直连上游同样 5/6 → **适配器清白，丢失发生在上游**。
+生产库当日 8 条相同失败（10:05–10:18），与输入内容无关。
+
+生产实拍（`qa_e42533c3fd234a4a958cd59d559a643e`）：
+
+```
+收到: ` "answer", "retrieval_status": "not_attempted", ... }`
+应为: `{"kind": "answer", "retrieval_status": "not_attempted", ... }`
+```
+
+解析器要三种形态（裸 JSON / 围栏 / `{...}` 区间），一个都不满足 → `qa_rag.py:209` 抛错。
+
+**修法**：`turn_recovery.py`（新）按 schema 允许的开头枚举**所有前缀**回贴，回贴结果
+**必须通过该 schema 自己的合同校验**才接受 —— 猜错过不了校验，与真解析器同一把尺。
+**必须是所有前缀**：真实丢失 `{"kind` 停在 key 名中间，只枚举整 token 的初版**什么都修不了**。
+
+**经评审补出的三处（Devin Review 三条全部成立）**：
+
+1. 🔴 **恢复只覆盖 QA 一种 schema** —— 初版只知道 QA 的 `{"kind":"answer"`，而诊断是
+   `{"kind":"diagnosis"`、分类器是 `{"intent":`、零阶答案是 `{"text":`（**都没有 `kind`**）。
+   同一个传输缺陷对这四个 schema 都在发生，只修一个会让另外三个继续失败而**看起来已修好**。
+   已改为**schema 参数化**：调用方传入自己的 opening 与校验函数，四条路径全部接入，
+   含此前完全没被触碰的 `agent_engine._parse_agent_turn`（诊断线）。
+2. 🟡 **失败文案把原因归错** —— 所有失败都写"知识库不可用"。但 `QA_FAILED` 覆盖的是
+   供应商报错与合同缺陷，与检索无关；告诉用户"资料库挂了"既说错原因又给错建议。
+   已按**已验证的错误码**分因：只有 `KB_UNAVAILABLE` 用检索文案，其余用中性的
+   `generation_failed`（六语新增）。
+3. 🔍 **里程碑记录未同步** —— 即本节。
+
+**验证**：`tests/test_turn_recovery.py` 62 例。含四个 schema 各自的恢复用例、
+"QA opening 不得吞下零阶 body"的反例、六语 × 三种错误码的文案穷举。
+**去掉修复即失败已实测**：屏蔽 `repair_truncated_turn_head` 后同一生产 body 重新抛错。
+`ruff check` / `ruff format --check` / 全量 pytest 全绿。
+
+**未完成业务验收**：修复已在本地与 41 真实 provider 上复现并验证解析层，但**41 尚未部署**；
+公网链路的端到端复验待部署后进行。不得以本地结果记为 41 已验收。
+
 ## 订单时间窗规则正式化：消除跨模块私有名依赖（2026-09-22，本地自动化验证）
 
 **范围**：`diagnostic_tools.py` 原以 `from aiops_diagnostics.engine import _order_window`
@@ -1253,6 +1296,33 @@ runner 上执行 owner-authored `agent:review` canary，保留 workflow URL，�
 
 未完成业务验收：没有连接真实 `/diag/*` 服务、生产数据源或真实故障案例；本节只证明
 AFK 治理契约已部署并通过确定性检查，不代表诊断准确率或生产安全边界获得新的验收。
+
+## AFK 模板 1.2.0 挂载式端点验证（2026-09-22）
+
+本次验证范围是 AFK 沙箱的模型端点注入方式，不涉及业务运行时。模板由 afk-bootstrap
+PR #46 收敛，本仓 PR #381 用该模板的 `upgrade-afk.sh` 迁入（非手工改）。
+
+- `.sandcastle/profile.ts` 只保留 `claude` 与 `claude-stepfun` 两个档案。四个旧档案
+  （`claude-ark` / `agentrouter` / `psydo` / `aliyun-deepseek`）退役：前三个解析到
+  `cliproxyapi/` 下上游配额已耗尽的 settings 文件，选中必然在 agent 启动前失败；
+  `aliyun-deepseek` 曾是唯一的 Codex-provider 档案，其退役也让本仓 AFK 不再需要
+  Codex agent 路径。
+- `claude-stepfun` 的端点由**宿主 settings 文件只读挂入**沙箱
+  （`~/cliproxyapi/settings.stepfun.json`，可用 `AFK_STEPFUN_SETTINGS` 覆盖），
+  而不是构建期烤进镜像。因此：密钥不进入任何镜像层；轮换只需改该宿主文件，不需要
+  重建镜像，也不存在「secret 挂载不让层缓存失效、必须加 `--no-cache`」这个坑。
+- Dockerfile 中 #322 引入的 `ARG STEPFUN_BASE_URL` + `--mount=type=secret` +
+  settings 生成块，以及文件顶部那条「用 BuildKit secret 构建」的说明，均已删除。
+  后者在挂载之后就是在指示构建一个已被移除的镜像。
+- 确定性检查：`uv run pytest` **1161 项通过**、`uv run ruff check` 全部通过、
+  `node .sandcastle/policy-check.mjs all` 通过。本仓产品代码零改动。
+- 迁移脚本自身的拒绝面在 afk-bootstrap 有 8 个用例覆盖（拒绝即整树不变、拒绝降级、
+  发布失败可回滚、拒绝带项目编辑的 `profile.ts`、`.yaml` 工作流、路径含空格）。
+
+未执行真实故障案例，因此无业务验收：本节只证明端点注入方式已改为挂载式并通过确定性
+检查，不代表 agent 在真实 issue 上的端到端运行已验收。**合并后必须先用新 Dockerfile
+重建 `sandcastle:ai-ops-governance`**；`AFK_PROFILE` 已是 `claude-stepfun`，镜像未
+重建时触发 AFK 运行会让 wrapper 因没有对应 dispatch 分支而 `exit 2`。
 
 ## T1 权限上下文解析验证（2026-08-31）
 

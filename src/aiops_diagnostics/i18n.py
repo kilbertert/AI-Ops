@@ -88,6 +88,7 @@ QA_FALLBACK_MESSAGES: dict[str, dict[str, str]] = {
     "zh": {
         "not_found": "知识库中没有找到与当前问题直接相关的资料，暂时无法提供有依据的回答。",
         "unavailable": "当前知识库暂时不可用，本次回答无法基于知识库确认，请稍后重试。",
+        "generation_failed": "本次回答没能完成生成，请稍后重试。",
         "limited": "本次检索未能完成，请稍后重试或换个问法。",
     },
     "en": {
@@ -99,6 +100,7 @@ QA_FALLBACK_MESSAGES: dict[str, dict[str, str]] = {
             "The knowledge base is temporarily unavailable and the answer "
             "could not be verified. Please retry later."
         ),
+        "generation_failed": ("This answer could not be generated. Please try again later."),
         "limited": "This lookup could not be completed. Please try again or rephrase your question.",
     },
     "de": {
@@ -110,6 +112,7 @@ QA_FALLBACK_MESSAGES: dict[str, dict[str, str]] = {
             "Die Wissensbasis ist vorübergehend nicht erreichbar; "
             "die Antwort blieb unverifiziert. Bitte später erneut versuchen."
         ),
+        "generation_failed": ("Diese Antwort konnte nicht erzeugt werden. Bitte später erneut versuchen."),
         "limited": "Diese Suche konnte nicht abgeschlossen werden. Bitte später erneut versuchen.",
     },
     "fr": {
@@ -121,6 +124,7 @@ QA_FALLBACK_MESSAGES: dict[str, dict[str, str]] = {
             "La base de connaissances est momentanément indisponible ; "
             "la réponse n'a pu y être vérifiée. Réessayez plus tard."
         ),
+        "generation_failed": ("Cette réponse n'a pas pu être générée. Veuillez réessayer plus tard."),
         "limited": "Cette recherche n'a pas abouti. Réessayez plus tard ou reformulez la question.",
     },
     "es": {
@@ -132,6 +136,7 @@ QA_FALLBACK_MESSAGES: dict[str, dict[str, str]] = {
             "La base de conocimiento no está disponible y la respuesta "
             "no pudo verificarse. Inténtelo más tarde."
         ),
+        "generation_failed": ("No se pudo generar esta respuesta. Inténtalo de nuevo más tarde."),
         "limited": "No se pudo completar la búsqueda. Inténtelo de nuevo o formule la pregunta otra vez.",
     },
     "pt": {
@@ -143,6 +148,7 @@ QA_FALLBACK_MESSAGES: dict[str, dict[str, str]] = {
             "A base de conhecimento está indisponível e a resposta "
             "não pôde ser verificada. Tente novamente mais tarde."
         ),
+        "generation_failed": ("Não foi possível gerar esta resposta. Tente novamente mais tarde."),
         "limited": "Não foi possível concluir a busca. Tente novamente ou reformule a sua pergunta.",
     },
 }

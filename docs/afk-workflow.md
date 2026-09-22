@@ -61,31 +61,22 @@ Missing delivery credentials produce `agent:blocked`; there is no non-triggering
 
 ## Providers
 
-The configured Sandcastle profile is server-global: `claude`, `claude-ark`,
-`claude-stepfun`, `agentrouter`, `psydo`, or `aliyun-deepseek`. Set
-`AFK_PROFILE` for local runs or the repository variable for Actions; no
-project-side credential is needed.
+The configured Sandcastle profile is server-global: `claude` or
+`claude-stepfun`. Set `AFK_PROFILE` for local runs or the repository variable
+for Actions; no project-side credential is needed.
 
-`claude-stepfun` differs from the other settings-driven profiles in where its
-endpoint lives: StepFun is a public HTTPS origin and Claude Code is pointed at
-it through `ANTHROPIC_*` values baked into the image at build time, so there is
-no `AFK_*_SETTINGS` override and no host file to mount. Rebuilding the image
-therefore requires the key — pass it as a BuildKit secret, never a build arg,
-because a build arg stays readable in the image metadata:
+Both are one settings file the host owns, mounted read-only into the sandbox:
 
-```
-DOCKER_BUILDKIT=1 docker build \
-  --secret id=stepfun_api_key,src=/run/secrets/stepfun_api_key \
-  -t sandcastle:ai-ops-governance .sandcastle
-```
+- `claude` talks to the Anthropic API with whatever credential the host shell
+  already exports.
+- `claude-stepfun` points Claude Code at StepFun's native Anthropic Messages
+  API through `~/cliproxyapi/settings.stepfun.json`, which holds
+  `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN` plus the three
+  `ANTHROPIC_DEFAULT_*_MODEL` entries. Override the path with
+  `AFK_STEPFUN_SETTINGS` when the file lives elsewhere.
 
-Add `--no-cache` whenever the key changes. A secret mount does not invalidate
-the layer cache, so a rotation silently rebuilds an image still carrying the
-old key, and the failure surfaces later as an authentication error at run time
-rather than at build time. A build with the secret missing does fail, because
-the mount is declared `required=true`.
-
-The base URL is the provider root preceding `/v1` (Claude Code appends
-`/v1/messages` itself), and the profile uses the default bridge network rather
-than `network: host` — it has no host-loopback dependency, and host networking
-is a deliberate trade only `claude-ark` makes for its loopback relay.
+Because the endpoint is mounted rather than baked, rotating the token is an
+edit to that host file plus a container restart — there is no image rebuild,
+and no `--no-cache` to remember. The base URL is the provider root preceding
+`/v1`; Claude Code appends `/v1/messages` itself, so a URL ending in `/v1`
+would be requested as `/v1/v1/messages`.

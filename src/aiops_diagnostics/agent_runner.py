@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import contextlib
-import json
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -22,6 +21,13 @@ from aiops_diagnostics.sources import (
     FixtureSources,
     live_sources,
     scoped_live_sources,
+)
+from aiops_diagnostics.turn_recovery import (
+    CLASSIFIER_TURN_OPENINGS,
+    ZERO_ORDER_OPENINGS,
+    _looks_like_classifier_turn,
+    _looks_like_zero_order_turn,
+    parse_turn,
 )
 
 
@@ -119,11 +125,16 @@ def run_zero_order_answer(
             "reminder 字段为 true。\n\n问题：" + question
         )
         result = session.run(prompt)
-        payload = json.loads(result.final_response)
-        # tolerate markdown fence
+        # The same shared parser: this path lost the head of its JSON to the
+        # identical transport defect, and its own fence-tolerance here was a
+        # third copy of the logic.
+        payload = parse_turn(
+            result.final_response,
+            openings=ZERO_ORDER_OPENINGS,
+            is_valid=_looks_like_zero_order_turn,
+        )
         if not isinstance(payload, dict):
-            start, end = str(result.final_response).find("{"), str(result.final_response).rfind("}")
-            payload = json.loads(str(result.final_response)[start : end + 1])
+            raise AgentRuntimeError("zero-order answer returned invalid JSON")
         text = str(payload.get("text") or "")
         reminder = bool(payload.get("reminder"))
         if not text:
@@ -157,7 +168,12 @@ def classify_lightweight(
     )
     session: SDKCodexSession | None = None
     try:
-        session = SDKCodexSession(workspace, settings, provider=selected_provider)
+        # ``settings.agent``, not ``settings``: the session's contract is the
+        # agent slice and it calls ``.validate()``, which only that slice has.
+        # Passing the whole Settings raised AttributeError inside every
+        # classifier turn, and the caller swallowed it — so this capability was
+        # dead in production while looking merely unused.
+        session = SDKCodexSession(workspace, settings.agent, provider=selected_provider)
         prompt = (
             "Classify the user request. Return JSON only with intent (knowledge, casual, "
             "order_issue, report_fault, case_exploration, solution_discovery), confidence "
@@ -166,12 +182,15 @@ def classify_lightweight(
             f"User request: {question}"
         )
         result = session.run(prompt)
-        raw = result.final_response
-        try:
-            payload = json.loads(raw)
-        except json.JSONDecodeError:
-            start, end = raw.find("{"), raw.rfind("}")
-            payload = json.loads(raw[start : end + 1]) if start >= 0 and end > start else None
+        # Same tolerant parser as the QA turn. The classifier used to carry its
+        # own copy with no head-loss fallback, so a provider that dropped the
+        # opening characters turned into a routing failure here while the QA
+        # path repaired the very same body.
+        payload = parse_turn(
+            result.final_response,
+            openings=CLASSIFIER_TURN_OPENINGS,
+            is_valid=_looks_like_classifier_turn,
+        )
         if not isinstance(payload, dict):
             raise AgentRuntimeError("lightweight classifier returned invalid JSON")
         if payload.get("intent") not in {
