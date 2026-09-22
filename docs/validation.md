@@ -1898,3 +1898,29 @@ ja -> 请先选择需要检测的订单后，我才能继续处理。   （不�
 
 **操作知识自检**：本次变更只涉及 GitHub Actions 配置与文档，未在主机上执行运维命令，按
 AGENTS.md 的自检条款无可沉淀的新操作步骤。
+
+## 2026-09-22：conversation resolution 闸门（canary）
+
+**配置证据**（`gh api repos/kilbertert/AI-Ops/rulesets/23760870`）：
+
+| 项 | 变更后 |
+| --- | --- |
+| `pull_request.required_review_thread_resolution` | `true` |
+| `pull_request.required_approving_review_count` | `0` |
+| `required_status_checks` | `Workflow policy`、`verify`、`windows-verify`（`strict: true`） |
+| `bypass_actors` / `current_user_can_bypass` | `[]` / `never` |
+| `rules/branches/main` | `deletion, non_fast_forward, pull_request, required_status_checks` |
+
+**机制实测**（在 `server-development-consensus` 与其 PR 上取得，非本仓）：
+
+| 观察 | 结果 |
+| --- | --- |
+| 手动 resolve 一条 Devin thread（PR #38） | mutation 返回 `resolvedBy: kilbertert`，随后 undo 还原 |
+| 发过 `/devin review` 的 head（#36、#37） | thread 全部由 `devin-ai-integration[bot]` 解决 |
+| 未发 `/devin review` 的 head（AI-Ops 4 张，共 10 条 thread） | 解决数 **0** |
+
+**未验**：本仓**尚无启用闸门后的 PR**，因此「unresolved thread ⇒ `mergeStateStatus: BLOCKED`
+且合并不通过」在本仓未取证。该行为的完整执行记录见
+`server-development-consensus` 的 `qa-plan.md` GOV-B19。
+
+**操作知识自检**：本次只用 `gh api` 读写了远端 Ruleset，未在主机上执行运维命令。
