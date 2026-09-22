@@ -1,6 +1,6 @@
 # 验证与验收计划
 
-## README 重构为架构导览 + 四条形状守护（2026-09-22，本地自动化验证）
+## README 重构为架构导览 + 五条形状守护（2026-09-22，本地自动化验证）
 
 **范围**：把根 README 从「功能说明书」改为**面向接手者的架构导览**——新增第一性原理
 设计哲学、实测模块分层与依赖方向、模块间契约（接缝）及其与 ADR 的映射、改动指南、
@@ -25,7 +25,7 @@
 `shortcut_lifecycle`；以及两条同层边）。README 逐条列出理由，并记录一处**真实封装缺陷**：
 `diagnostic_tools` 复用 `engine._order_window`（下划线私有名），复用方向正确但接口未正式化。
 
-**新增四条形状守护**（`tests/test_readme_architecture.py`），**逐条实测「破坏即失败」**：
+**新增五条形状守护**（`tests/test_readme_architecture.py`），**逐条实测「破坏即失败」**：
 
 | 守护 | 变异实测结果 |
 |---|---|
@@ -33,12 +33,13 @@
 | `test_readme_module_references_point_at_real_modules` | 追加引用 `nonexistent_module.py` → FAILED |
 | `test_readme_relative_links_resolve` | 追加 `[坏链](docs/does-not-exist.md)` → FAILED |
 | `test_package_import_graph_stays_acyclic` | 给 `rules.py` 加 `from ...engine import ...` 制造 `engine↔rules` 环 → FAILED，报 `engine -> rules -> engine` |
+| `test_readme_toc_anchors_resolve` | 只回退目录锚点修复（标题已改名）→ FAILED，报 `assert ['二设计哲学从第一性原理推出全部结构'] == []`；该守护补的正是 `test_readme_relative_links_resolve` 的盲区——后者在 `target.startswith((..., "#"))` 处 `continue`，页内锚点全部不检查 |
 
-变异均已在本地还原，还原后四条全绿。守护只断言**形状**（模块被说明、链接可解析、
-无导入环），不断言文字质量——这四条正好是人工复核容易漏掉、而文档最容易随时间腐烂的
+变异均已在本地还原，还原后五条全绿。守护只断言**形状**（模块被说明、链接可解析、
+页内锚点有对应标题、无导入环），不断言文字质量——这四条正好是人工复核容易漏掉、而文档最容易随时间腐烂的
 部分。
 
-**验证**：本地全量 pytest **1082 passed**（此前本分支基线 1075，新增 4 条 README 守护
+**验证**：本地全量 pytest **1083 passed**（此前基线 1078，新增 5 条 README 守护
 + 3 条既有），`ruff check` 与 `ruff format --check` 干净。**未完成业务验收**：
 本片只改文档与文档守护，不触及诊断逻辑，无真实故障案例可比对；41 公网验收状态不变，
 仍以 `docs/agents/current-delivery-state.md` 为准。
