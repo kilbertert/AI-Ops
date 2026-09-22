@@ -355,7 +355,7 @@ def test_a_value_the_caller_never_proved_is_refused() -> None:
     ("module", "reverted_payload", "what_it_was"),
     [
         ("qa_rag.py", '[block.model_dump(mode="json") for block in blocks]', "a bare list of block dicts"),
-        ("agent_validator.py", "document", "the whole serialised diagnosis document"),
+        ("agent_validator.py", 'result.model_dump(mode="json")', "the whole serialised diagnosis document"),
     ],
     ids=["qa_rag", "agent_validator"],
 )

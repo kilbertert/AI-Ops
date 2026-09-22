@@ -3,8 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections.abc import Iterable, Iterator, Mapping
-from typing import Any
+from collections.abc import Iterable
 
 from aiops_diagnostics.agent_contracts import (
     AgentDiagnosis,
@@ -138,8 +137,7 @@ class AgentResultValidator:
         if unresolved_blocked and not result.limitations:
             errors.append("存在未解决的 blocked 工具时必须说明 limitations")
 
-        document = result.model_dump(mode="json")
-        rendered = json.dumps(document, ensure_ascii=False)
+        rendered = json.dumps(result.model_dump(mode="json"), ensure_ascii=False)
         if contains_secret(rendered, self.sensitive_values):
             errors.append("结果包含运行时敏感值")
         if EXECUTED_MUTATION.search(rendered):
@@ -153,12 +151,13 @@ class AgentResultValidator:
         # alert the surfaces without a loop raise.
         #
         # A diagnosis carries no media blocks and no titles, so the projection is
-        # the degenerate one: every judgeable string the contract holds becomes
-        # text, and nothing is exempted.
+        # the degenerate one: the whole serialised contract is one text block,
+        # and nothing in it is exempted. Judging it as one string is the same
+        # verdict as judging each value on its own — the JSON separators are
+        # never `[A-Za-z0-9]`, so no gloss can be built across two values, and
+        # `extra='forbid'` fixes every key as an English field name.
         leak = answer_chinese_leak(
-            AnswerSurface(
-                blocks=tuple(AnswerBlock(kind="text", text=text) for text in _judgeable_text(document))
-            ),
+            AnswerSurface(blocks=(AnswerBlock(kind="text", text=rendered),)),
             self.language,
         )
         if leak:
@@ -191,28 +190,3 @@ class AgentResultValidator:
             return path.is_file() and hashlib.sha256(path.read_bytes()).hexdigest() == entry.artifact_sha256
         except (OSError, ValueError):
             return False
-
-
-def _judgeable_text(document: Any) -> Iterator[str]:
-    """Yield every string a JSON-shaped diagnosis document holds, in order.
-
-    The projection into the guard's contract type. A diagnosis has no media
-    blocks, so there is no kind to read and no title the resource-name exemption
-    could apply to: every string the model produced — prose, hypothesis titles,
-    enum labels pasted out of the Chinese source — belongs in the judgement.
-    Walked rather than listed by field name, so a string added to the contract
-    later is judged by the same predicate as the rest instead of silently
-    escaping it.
-
-    One string per block, not the serialized document as a single block: a
-    parenthesised Chinese gloss is only exempted beside the Latin token it
-    follows, and that pair always sits inside one value.
-    """
-    if isinstance(document, str):
-        yield document
-    elif isinstance(document, Mapping):
-        for child in document.values():
-            yield from _judgeable_text(child)
-    elif isinstance(document, list):
-        for child in document:
-            yield from _judgeable_text(child)

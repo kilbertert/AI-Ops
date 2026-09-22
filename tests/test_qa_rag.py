@@ -25,6 +25,7 @@ from aiops_diagnostics.knowledge_retrieval import (
     KnowledgeSearchUnavailable,
     MediaResource,
     MediaResourceSigner,
+    RetrievalStatus,
 )
 from aiops_diagnostics.qa_rag import (
     CustomerAgentSelection,
@@ -849,6 +850,13 @@ def test_overfilled_blocks_are_trimmed_in_the_wrapped_answer_shape() -> None:
 
 
 def _client_with_one_chunk() -> _SearchClient:
+    """One chunk that survives normalization, so retrieval really did succeed.
+
+    `doc_id` is required for that: `normalize_search_response` derives the
+    reference id from `chunk_id or document_id` and drops a chunk carrying
+    neither, and a chunk that never reached `reference_ids` leaves the
+    `found`-without-evidence downgrade to correct the model's claim.
+    """
     return _SearchClient(
         [
             [
@@ -856,6 +864,8 @@ def _client_with_one_chunk() -> _SearchClient:
                     "content": "扫码开始充电。",
                     "title": "充电桩操作",
                     "score": 0.9,
+                    "chunk_id": "chunk-1",
+                    "doc_id": "doc-1",
                     "reference_id": "ref-1",
                     "media": [],
                 }
@@ -1215,8 +1225,51 @@ def test_a_chinese_text_beside_the_descriptor_is_still_a_leak() -> None:
     assert _delivered(result) == ["text"]
     assert result["blocks"][0]["text"] == QA_FALLBACK_MESSAGES["en"]["unavailable"]
     # A leak is a language-contract miss, not a retrieval outcome: the status
-    # keeps reporting what retrieval actually did (ADR-0007).
-    assert result["retrieval_status"] == "found"
+    # keeps reporting what retrieval actually did (ADR-0007). Nothing was
+    # retrieved here — no chunk came back — so the truthful status is
+    # `not_found`, exactly as it would be had the same card been delivered.
+    assert result["retrieval_status"] == "not_found"
+
+
+def test_a_withheld_card_reports_the_status_the_delivered_one_would() -> None:
+    """A leak decides whether the text goes out, never what retrieval did.
+
+    The `found`-without-evidence downgrade corrects a claim about evidence, and a
+    false claim about evidence does not become true because the card was
+    withheld — if anything it misleads most there, since the fallback copy beside
+    it says the content is unavailable while the status says the knowledge backing
+    it was found. Deciding the status twice, once per branch, is how the two came
+    to disagree: the same answer reported `found` when it leaked and `not_found`
+    when it did not.
+    """
+    delivered = _finalized([_text_block(_CARD_TEXT)])
+    withheld = _finalized([_text_block("标题: 新加坡项目")])
+
+    assert _delivered(withheld) == ["text"]
+    assert withheld["blocks"][0]["text"] == QA_FALLBACK_MESSAGES["en"]["unavailable"]
+    assert withheld["retrieval_status"] == delivered["retrieval_status"] == "not_found"
+
+
+def test_an_outage_is_still_reported_as_one_on_the_withheld_card() -> None:
+    """Withholding does not swallow the outage correction.
+
+    A knowledge-base outage is something the dependency did, not something the
+    model did, so the withheld card reports it — and reports it as the contract's
+    value rather than as the enum object, which is what the delivered card sends.
+    """
+    retrieval = _TurnRetrieval(
+        reference_ids=set(),
+        media_by_id={},
+        searches_used=1,
+        last_status=RetrievalStatus.UNAVAILABLE,
+    )
+    withheld = _finalize(
+        {"blocks": [_text_block("标题: 新加坡项目")], "retrieval_status": "found"}, retrieval, "en"
+    )
+
+    assert withheld["blocks"][0]["text"] == QA_FALLBACK_MESSAGES["en"]["unavailable"]
+    assert withheld["retrieval_status"] == RetrievalStatus.UNAVAILABLE.value
+    assert type(withheld["retrieval_status"]) is str
 
 
 def test_the_sentence_in_the_descriptor_is_withheld_because_the_descriptor_is_judged(
@@ -1231,7 +1284,7 @@ def test_the_sentence_in_the_descriptor_is_withheld_because_the_descriptor_is_ju
     judged. If the sentence assertion above ever passes for the wrong reason,
     this one goes the other way.
     """
-    monkeypatch.setattr(answer_language, "_descriptor_of", lambda value: None)
+    monkeypatch.setattr(answer_language, "_media_title_of", lambda block: "")
 
     result = _finalized(
         [_text_block(_CARD_TEXT), _video_block()],

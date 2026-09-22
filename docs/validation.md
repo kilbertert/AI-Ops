@@ -1,5 +1,80 @@
 # 验证与验收计划
 
+## #372 评审整改：守卫输入契约再收口 + 扣下卡片的状态一致性（2026-09-22，本地自动化验证）
+
+**范围**：PR #372（PRD #361，T1–T5）的两轮独立评审 + 外部 AI 评审的整改轮。本片**修代码**
+（4 处，其中 1 处是同轴 Economy 收口）与**补记录**（3 处），不引入新能力。**本片未完成业务验收**：
+41 公网英文卡片未复跑；本次证明的仍是「当前代码满足已记录的验收」，改动本身没有公网取证。
+
+**接受并修掉的 3 条**（三条评审线与外部评审各有一条命中同一处，均已本地复现）：
+
+1. **扣下卡片报了 sibling 路径刚证伪的 `retrieval_status`**（`qa_rag._finalize`，
+   Standards P2 / Spec P3 / 外部 BUG-0002）。同一个答案走同一次判定：`found`-without-evidence
+   降级在**送达**分支算出并生效，在**泄漏**分支被丢掉、改为重新读模型的原始声明。实测
+   （`retrieval_status=found`、`reference_ids=∅`）：干净答案 → `not_found`，泄漏答案 → `found`。
+   即扣下的卡片一边写着"内容暂不可用"，一边声称有证据支撑一个从未发生过的检索。修法是把
+   泄漏分支改成直接复用上面已算出的 `status`（不可用覆盖已折叠其中），两次推导并为一次。
+   ADR-0007 的「命中后不得改写 `retrieval_status`」其理由只针对**改写为 `unavailable`**（对数据源
+   的假陈述），本条对**证据主张**的纠错不在其列，且不可用覆盖仍然优先——两者都落成回归用例。
+2. **block 的 `resource_id` / `reference_id` 不再被判**（Spec P3）。迁移前的生产形状是裸
+   list，落进逐叶 flatten，因此这两个 id 是被判的；`from_public_blocks` 只投影
+   kind/text/title/media.title，于是载荷里交付给用户的两串标识符静默退出判定。`reference_id`
+   是 `chunk_id or document_id`（`knowledge_retrieval.normalize_search_response`），库方签发，
+   并非不可能含中文。修法是投影 `identifiers`，恢复原有覆盖面——不确定它为什么该放行，就按
+   守卫的方向判（漏判的代价是用户读到中文）。
+3. **`agent_validator` 的逐值游走 Walker 是 ladder 跳级**（Standards P3）。约 25 行递归只为把
+   每串值喂给一个 `str` 字段，而 `rendered`（同一份序列化文档）就在上一行。已验证逐值与整串
+   判定**完全等价**（JSON 分隔符 `, : { } [ ]` 与 `"` 都不是 `[A-Za-z0-9]`，跨键值无法拼出
+   专名括注；`extra='forbid'` 固定所有键为英文字段名），本次另以 20 万份随机文档复核 0 分歧。
+   改为直接判 `rendered`，删除 walker 与 `Iterator`/`Mapping`/`Any` 三个 import。
+   外部评审 ANALYSIS-0001「遗留形状分发仍在、`agent_validator` 仍绕开共享入口」在本分支上
+   **不成立**：`_flatten`/`text_block_leak` 已删，`answer_language` 只剩契约与字符串两条路，
+   `agent_validator` 已经在调共享入口（源码级守护枚举到的四个调用点之一）。
+
+**顺带按 Economy ladder 收掉一层**（Standards P3，已实测行为等价）：`MediaDescriptor` 是单字段
+无行为的数据类，`media=None` 与 `media=MediaDescriptor(title="")` 判定逐条相同（该区别不可观测），
+折叠为 `AnswerBlock.media_title`，删去类型、`_descriptor_of`、`is not None` 分支与一个 `__all__` 导出。
+`_descriptor_of` 的文档（「公开描述符里只有 title 带知识库文本」）移入 `_media_title_of`。
+
+**新增回归与反证用例**，并逐条实测「去掉修复即转红」（先改源码跑红、再恢复，输出见下）：
+
+| 去掉的修复 | 转红的用例 |
+|---|---|
+| 扣下分支改回重新读模型原始声明（`withheld = parsed.retrieval_status`） | `test_a_withheld_card_reports_the_status_the_delivered_one_would`（`'found' != 'not_found'`）与 `test_an_outage_is_still_reported_as_one_on_the_withheld_card`（不可用覆盖亦失效） |
+| `_identifiers_of` 投影改回 `()` | `test_the_ids_a_block_delivers_are_judged` 两条参数化全部转红 |
+| `agent_validator` 迁回整份序列化诊断文档 | 源码级守护：`model_dump(...) is neither the contract payload nor a string` |
+
+**改期的两条既有断言**，理由逐条如下：
+`test_a_chinese_text_beside_the_descriptor_is_still_a_leak` 的 fixture 取不到任何 reference id，
+它断言的 `found` 正是被修掉的那个缺陷值；改为 `not_found`。`test_english_answer_that_leaked_chinese_
+is_replaced_with_localized_fallback` 的 fixture 检索其实从未成功（见下一条），注释却写着
+"Retrieval SUCCEEDED here"，断言 `found` 因此是通过了错的原因；补好 fixture 后它恢复为字面含义。
+ADR-0007 的「泄漏不改写为 `unavailable`」由 `test_a_real_leak_beside_an_exempt_resource_name_is_still_
+withheld` 与修好的后者继续钉住（两者都确有检索成功）。
+
+**修好的一个坏 fixture**：`tests/test_qa_rag.py::_client_with_one_chunk` 的 chunk 缺 `doc_id`
+（`normalize_search_response` 用 `chunk_id or document_id` 派生 reference id，两者皆无的分块被丢弃），
+所以检索其实从未成功。该 fixture 的四个用例都写着「retrieval SUCCEEDED here」，于是其中一条
+恰好一直在为被修掉的那条缺陷背书。补齐 `chunk_id`/`doc_id`，让用例断言它声称的事。
+
+**记录缺口的整改（AGENTS.md「里程碑同步（强制）」）**：本分支五张子票的提交里，只有 #367 一片
+在两个里程碑文件中留了记录；**改变了生产行为的 #363–#366 四片当时没有记录**。本次按 PR 整体补
+一节（即本节与 `docs/开发进度.md` 对应条目），不为已发生的缺漏补写「当时已做」的叙述；并补
+ADR-0007 一条 Consequences——守卫的输入契约与 `TypeError` 是兼容性契约变更，此前只存在于代码注释。
+
+**结果**：本地全量 `uv run pytest` **1135 passed**（本片新增 5 条：扣下卡片状态 2 条、ids 判定
+3 条），`uv run ruff check`、`ruff format --check` 与 `node .sandcastle/policy-check.mjs commit`
+干净。既有断言除改期的两条见上以外，逐条未改。
+
+**未接受的外部评审意见（含理由，供人工复核）**：见本节末「评审结论」。
+
+### 评审结论
+
+| 意见 | 结论 | 理由 |
+|---|---|---|
+| 外部 BUG-0001「模型自造中文小标题绕过守卫」 | **不接受** | 该分支与 main 行为逐字相同（已实测），且是 ADR-0007 已记录的**不可判定**边界：中文的引用块标题与中文命名的来源文档在形态上无法区分。其建议（block title 仅在与挂载描述符标题一致时豁免）会让 `_document_card` 这类**无描述符的 reference 块**失去豁免——`宣传.docx` 整卡被扣下，直接推翻 AL-COV-10 记录在案的 41 验收结论。闭合它需要来源真实性比对，属独立事项。 |
+| 外部 ANALYSIS-0004「里程碑记录缺失」 | **接受（实质）** | 其陈述的事实依据有误（两个里程碑文件在本 diff 中**都有**更新，只是只覆盖 #367），实质即上面第 5 条的记录缺口，已补。 |
+
 ## #367 回答载荷契据封口 + 41 验收结论落成可执行用例（2026-09-22，本地自动化验证）
 
 **范围**：PRD #361 子票 T5（收口）。#363-#366 已把守卫的输入收窄为契约类型
@@ -42,16 +117,19 @@
 | 去掉的修复 | 转红的用例 | 实测输出 |
 |---|---|---|
 | `qa_rag` 迁回迁移前的裸 list 实参（`[block.model_dump(mode="json") for block in blocks]`） | 守护一：`test_every_finalisation_point_hands_the_guard_the_contract_payload` | `found: qa_rag.py:349 -- a ListComp expression is neither the contract payload nor a string` |
-| `agent_validator` 迁回整份序列化诊断文档（`document`） | 守护二：`test_the_guard_reports_the_payload_that_module_carried_before` | 同一条源码级断言指出 `agent_validator.py:158` |
+| `agent_validator` 迁回整份序列化诊断文档（`result.model_dump(mode="json")`） | 守护一：`test_the_guard_reports_the_payload_that_module_carried_before` | 同一条源码级断言指出 `agent_validator.py`：`model_dump(...) is neither the contract payload nor a string` |
 | 判定点移回 `media_by_id` 挂载**之前**（判 `cleaned.blocks` 而非 `payload["blocks"]`） | `test_the_mounted_descriptor_is_judged_by_the_blocks_own_predicate[a sentence]`（另有 #364 的 `test_a_prose_resource_name_in_the_mounted_descriptor_is_still_judged` 一起转红） | `assert ['text', 'video'] == ['text']` —— 描述符里的句子不再被判 |
 | 描述符另得一条自己的豁免（`_judged_titles` 判完 block title 就返回，不再递归描述符） | 上一条四个参数化全部转红，另加 `test_the_41_english_card_keeps_its_chinese_resource_names` | 名称与句子在描述符上结论相同（都不泄漏），而 block title 上二者结论相反 |
 | 关掉 `looks_like_asset_name` 资源名豁免 | `test_the_recorded_cards_are_carried_by_the_exemption_alone` 两条同时转红 | 两张记录在案的卡片都被替换成 `The knowledge base is temporarily unavailable and the answer could not be verified. Please retry later.` |
 
-后两行同时以**常驻反证用例**的形式写进测试（`monkeypatch` 关掉 `_descriptor_of` /
+后两行同时以**常驻反证用例**的形式写进测试（`monkeypatch` 关掉 `_media_title_of` /
 `looks_like_asset_name`），不依赖有人记得手动回改源码。
 
 **引用漂移（如实记录）**：本 PRD 与子票写的是 `docs/validation.md:1633`，该条 AL-COV-10
-记录现位于**第 1818 行**（其后的提交在前面插入了新章节）。内容未变，行号已漂；本次按内容定位。
+记录已不在那一行——合并基线 `c35f9de` 上它位于第 1807 行，此后每在前方插入新章节就再漂一次
+（本 PRD 自己的 #367 一节 +61 行，本轮 #372 一节又在其上）。内容未变。**本条起按内容定位，
+不再记行号**：行号不是内容的一部分，记它只会让每一条漂移记录都跟着失真——本轮写出「现位于第
+1868 行」的同一刻，上面的新章节已经让它变成第 1937 行。
 
 **结果**：本地全量 `uv run pytest` **1130 passed**（此前 1102，新增 28 条：守护一 18 条、
 守护二与 41 用例 10 条），`uv run ruff check` 与 `ruff format --check` 干净；全部既有断言逐条

@@ -162,33 +162,23 @@ def _looks_like_label(value: str) -> bool:
 
 
 @dataclass(frozen=True, slots=True)
-class MediaDescriptor:
-    """The knowledge-base resource descriptor a media block carries.
-
-    Its title is the resource's own name. The rest of the public descriptor
-    (`url`, `kind`, `mime_type` and the ids) is issued by the harness at
-    runtime rather than copied out of the library, so there is no knowledge-base
-    text left in it for the guard to judge.
-    """
-
-    title: str = ""
-
-
-@dataclass(frozen=True, slots=True)
 class AnswerBlock:
     """One answer block as the language guard judges it.
 
-    `kind` decides how the block's text is read, and `title` — the block's own
-    and the mounted descriptor's — belongs here, to the block that carries it.
-    That is the whole point of the type: a block-level title and a
-    `media.title` used to live on two layers, so the same Chinese resource name
-    was exempted as a title and never judged at all as a descriptor.
+    Every string the public block puts in front of the user is a field here:
+    its `text`, its `title` — the block's own and the mounted descriptor's — and
+    the resource and chunk ids it cites, with the `kind` that says which of them
+    name a knowledge-base resource. That is the whole point of the type: a
+    block-level title and a `media.title` used to live on two layers, so the
+    same Chinese resource name was exempted as a title and never judged at all
+    as a descriptor.
     """
 
     kind: str
     text: str = ""
     title: str = ""
-    media: MediaDescriptor | None = None
+    media_title: str = ""
+    identifiers: tuple[str, ...] = ()
 
     def leaked_chinese(self) -> str:
         """The Chinese this block leaks, honouring the resource-name exemption."""
@@ -196,6 +186,8 @@ class AnswerBlock:
         for title in self._judged_titles():
             leaked.update(chinese_leak(title))
         leaked.update(chinese_leak(self.text))
+        for identifier in self.identifiers:
+            leaked.update(chinese_leak(identifier))
         return "".join(sorted(leaked))
 
     def _judged_titles(self) -> list[str]:
@@ -206,10 +198,12 @@ class AnswerBlock:
         or reference block names the knowledge-base resource, so translating it
         would leave the answer citing material the reader cannot match back to
         the library. A title on any other kind is prose and is judged.
+
+        The ids stay outside it. A title is display text whose SHAPE is the only
+        provenance available; an id is a handle the library issued, and a
+        Chinese one reaches the reader as Chinese all the same.
         """
-        titles = [self.title]
-        if self.media is not None:
-            titles.append(self.media.title)
+        titles = [self.title, self.media_title]
         if self.kind not in _ASSET_TITLE_KINDS:
             return titles
         return [title for title in titles if not looks_like_asset_name(title)]
@@ -233,14 +227,15 @@ class AnswerSurface:
         it is about to publish through here before the guard judges them, so the
         resource-name exemption cannot be sidestepped by picking a different
         Python shape. Non-mapping entries are skipped, as are keys the guard
-        does not judge — see :class:`MediaDescriptor`.
+        does not judge — see :func:`_media_title_of` and :func:`_identifiers_of`.
         """
         surface_blocks = [
             AnswerBlock(
                 kind=str(block.get("kind") or ""),
                 text=_text_of(block.get("text")),
                 title=_text_of(block.get("title")),
-                media=_descriptor_of(block.get("media")),
+                media_title=_media_title_of(block),
+                identifiers=_identifiers_of(block),
             )
             for block in blocks
             if isinstance(block, Mapping)
@@ -260,9 +255,28 @@ def _text_of(value: Any) -> str:
     return value if isinstance(value, str) else ""
 
 
-def _descriptor_of(value: Any) -> MediaDescriptor | None:
-    """The mounted media descriptor, when the block really carries one."""
-    return MediaDescriptor(title=_text_of(value.get("title"))) if isinstance(value, Mapping) else None
+def _media_title_of(block: Mapping[str, Any]) -> str:
+    """The mounted descriptor's title — the knowledge-base resource's own name.
+
+    Only the title is read. The rest of the public descriptor (`url`, `kind`,
+    `mime_type` and its ids) is issued by the harness at runtime rather than
+    copied out of the library, so there is no knowledge-base text left in it for
+    the guard to judge.
+    """
+    descriptor = block.get("media")
+    return _text_of(descriptor.get("title")) if isinstance(descriptor, Mapping) else ""
+
+
+def _identifiers_of(block: Mapping[str, Any]) -> tuple[str, ...]:
+    """The ids the block cites: the media resource, the chunk or the document.
+
+    Judged, not exempted. They are part of the payload the user receives, so the
+    guard's promise covers them — and the pre-contract production payload did
+    judge them, as leaves of the shape-blind flatten. Dropping them here would
+    be a silent narrowing of what "no Chinese in the delivered answer" means.
+    """
+    ids = (block.get("resource_id"), block.get("reference_id"))
+    return tuple(_text_of(value) for value in ids if value)
 
 
 def answer_chinese_leak(payload: AnswerSurface | str, language: str) -> str:
@@ -328,7 +342,6 @@ __all__ = [
     "ASSET_EXTENSIONS",
     "AnswerBlock",
     "AnswerSurface",
-    "MediaDescriptor",
     "answer_chinese_leak",
     "looks_like_asset_name",
     "record_answer_language_fallback",

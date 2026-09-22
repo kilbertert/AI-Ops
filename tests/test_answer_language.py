@@ -182,7 +182,7 @@ def test_a_media_descriptor_mounted_on_its_block_is_judged_under_that_kind() -> 
 
     assert surface.blocks[1].kind == "video"
     assert surface.blocks[1].title == "新加坡无人电动巴士.mp4"
-    assert surface.blocks[1].media.title == "新加坡无人电动巴士.mp4"
+    assert surface.blocks[1].media_title == "新加坡无人电动巴士.mp4"
     assert answer_chinese_leak(surface, "en") == ""
 
 
@@ -247,6 +247,33 @@ def test_a_plain_text_payload_is_judged_as_text() -> None:
     zero-order and casual finalization points return exactly this."""
     assert answer_chinese_leak("标题: 新加坡项目", "en") != ""
     assert answer_chinese_leak("Scan the QR code, then start charging.", "en") == ""
+
+
+@pytest.mark.parametrize(
+    ("key", "value"),
+    [("resource_id", "media_充电指南"), ("reference_id", "chunk-充电枪时序数据")],
+    ids=["the media resource id", "the chunk or document id"],
+)
+def test_the_ids_a_block_delivers_are_judged(key: str, value: str) -> None:
+    """The payload's ids are delivered to the user, so the promise covers them.
+
+    The pre-contract production payload reached them as leaves of the shape-blind
+    flatten, so this is coverage kept rather than coverage added — and the note
+    is deliberate, because the contract type's field list is what would silently
+    drop them otherwise.
+    """
+    surface = AnswerSurface.from_public_blocks([{"kind": "reference", key: value}])
+
+    assert answer_chinese_leak(surface, "en") != ""
+
+
+def test_an_identifier_the_library_issued_in_ascii_contributes_nothing() -> None:
+    """The other half: judging the ids is not a new way to withhold a card."""
+    surface = AnswerSurface.from_public_blocks(
+        [{"kind": "video", "resource_id": "media_9f2c1d", "title": "新加坡无人电动巴士.mp4"}]
+    )
+
+    assert answer_chinese_leak(surface, "en") == ""
 
 
 # --------------------------------------------------------------------------

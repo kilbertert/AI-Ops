@@ -363,17 +363,16 @@ def _finalize(
         # extra key rides along in the payload.
         pack = QA_FALLBACK_MESSAGES.get(language) or QA_FALLBACK_MESSAGES[DEFAULT_LANGUAGE]
         record_answer_language_fallback(language=language, leaked=leak, surface="qa")
-        # The withheld card reports the status the model claimed, with one
-        # correction: an outage is reported as one. Deliberately unchanged by
-        # moving the judgement (#364) — a leak is a language-contract miss
-        # rather than a retrieval outcome, and the `found`-without-evidence
-        # downgrade settles the status of a card that is DELIVERED.
-        withheld = parsed.retrieval_status
-        if retrieval.last_status == RetrievalStatus.UNAVAILABLE:
-            withheld = RetrievalStatus.UNAVAILABLE
+        # Withholding the text does not restate the retrieval: the withheld card
+        # carries the SAME `status` the delivered payload would. The correction
+        # above settles a claim about evidence, and a false claim about evidence
+        # does not become true because the card was withheld — it misleads most
+        # there, since the fallback copy says the content is unavailable while
+        # the status says the knowledge backing it was found. One derivation,
+        # two payloads.
         return {
             "blocks": [{"kind": "text", "text": pack["unavailable"]}],
-            "retrieval_status": withheld,
+            "retrieval_status": status,
             "searches": retrieval.searches_used,
         }
 
