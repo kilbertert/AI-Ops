@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from aiops_diagnostics.agent_contracts import IncidentManifest, ToolName, ToolRequest
-from aiops_diagnostics.engine import DiagnosticEngine, _order_window
+from aiops_diagnostics.engine import DiagnosticEngine
 from aiops_diagnostics.journal import EvidenceJournal, JournalEntry
 from aiops_diagnostics.models import DiagnosticRequest
 from aiops_diagnostics.order_visibility import (
@@ -19,6 +19,7 @@ from aiops_diagnostics.order_visibility import (
     visible_orders,
 )
 from aiops_diagnostics.query_scope import QueryScope
+from aiops_diagnostics.rules import order_window
 from aiops_diagnostics.sources import DiagnosticSources, SourceError, TDengineSource
 
 _LOGGER = logging.getLogger("aiops.diagnostic_tools")
@@ -304,7 +305,11 @@ class DiagnosticToolExecutor:
         if blocked:
             return blocked
         device = order.get("child_device_code") or order.get("device_code")
-        window = _order_window(order, self.safety.max_order_window_hours)
+        window = order_window(
+            order.get("created_time"),
+            order.get("stop_time"),
+            self.safety.max_order_window_hours,
+        )
         if not device or not window:
             return self._blocked(
                 ToolName.GUN_TIMESERIES,
@@ -333,7 +338,11 @@ class DiagnosticToolExecutor:
         if blocked:
             return blocked
         device = order.get("device_code") or order.get("child_device_code")
-        window = _order_window(order, self.safety.max_order_window_hours)
+        window = order_window(
+            order.get("created_time"),
+            order.get("stop_time"),
+            self.safety.max_order_window_hours,
+        )
         if not device or not window:
             return self._blocked(
                 ToolName.COMM_MESSAGES,
