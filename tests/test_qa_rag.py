@@ -1164,6 +1164,24 @@ def _finalized(
     retrieval = _TurnRetrieval(
         reference_ids={block["reference_id"] for block in blocks if block.get("reference_id")},
         media_by_id=resources or {},
+        # The run's retrieved document names (#376). This helper stands in for a
+        # real search, so it supplies provenance. It draws on both places a name
+        # can sit -- the mounted descriptor's title and the block's own title --
+        # because this helper's callers put the same retrieved resource name in
+        # each in turn and require one verdict. Without provenance the guard falls
+        # back to the shape-only rule and never exercises the predicate under test.
+        retrieved_titles={
+            name
+            for name in (
+                # What the knowledge base returned this turn: the descriptors the
+                # harness signed carry the document names.
+                [resource.title for resource in (resources or {}).values()]
+                # Plus whatever the caller put directly on a block, since this
+                # helper's callers place the same retrieved name in either spot.
+                + [block.get("title") for block in blocks]
+            )
+            if name
+        },
         searches_used=1,
     )
     return _finalize({"blocks": blocks, "retrieval_status": "found"}, retrieval, language)

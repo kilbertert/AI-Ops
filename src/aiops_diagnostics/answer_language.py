@@ -179,11 +179,16 @@ class AnswerBlock:
     title: str = ""
     media_title: str = ""
     identifiers: tuple[str, ...] = ()
-    #: The resource names this run actually retrieved, normalized for comparison.
-    #: Empty means "nothing was retrieved", which exempts nothing — the safe
-    #: direction: a title is only treated as a resource name when the library
-    #: really returned it, never because it merely looks like one.
-    retrieved_titles: frozenset[str] = frozenset()
+    #: The resource names this run actually retrieved.
+    #:
+    #: ``None`` means the caller supplied no provenance at all; a (possibly
+    #: empty) set means it did. The two must not collapse: an empty set is a
+    #: real answer — retrieval returned items, none of which carried a document
+    #: name (`normalize_search_response` accepts ``title=None``, and such a chunk
+    #: can still have its image signed and cited) — and treating it as "no
+    #: provenance" would fall back to the shape-only rule and deliver a
+    #: model-authored heading. Only ``None`` may fall back.
+    retrieved_titles: frozenset[str] | None = None
 
     def leaked_chinese(self) -> str:
         """The Chinese this block leaks, honouring the resource-name exemption."""
@@ -218,12 +223,16 @@ class AnswerBlock:
         and a Chinese one reaches the reader as Chinese all the same.
         """
         titles = [self.title, self.media_title]
-        if not self.retrieved_titles:
+        if self.retrieved_titles is None:
             # No provenance was supplied: keep the pre-#376 rule, so a surface
             # that finalises without retrieval data is judged as it always was.
             # The risk is a surface that HAS the data and forgets to pass it,
             # restoring the hole #376 closes — a source-level guard asserts the
             # production caller always supplies it (test_answer_caller_shapes.py).
+            #
+            # Only `None` falls back. An EMPTY set is provenance too: it says
+            # retrieval returned nothing usable, so nothing is exempt and a
+            # model-authored heading is judged like any other prose.
             if self.kind not in _ASSET_TITLE_KINDS:
                 return titles
             return [title for title in titles if not looks_like_asset_name(title)]
@@ -259,7 +268,7 @@ class AnswerSurface:
         cls,
         blocks: Iterable[Mapping[str, Any]],
         *,
-        retrieved_titles: Iterable[str] = (),
+        retrieved_titles: Iterable[str] | None = None,
     ) -> AnswerSurface:
         """Build a surface from the public ``blocks[]`` dicts a surface delivers.
 
@@ -269,7 +278,11 @@ class AnswerSurface:
         Python shape. Non-mapping entries are skipped, as are keys the guard
         does not judge — see :func:`_media_title_of` and :func:`_identifiers_of`.
         """
-        exempt = frozenset(_text_of(name) for name in retrieved_titles if _text_of(name))
+        exempt: frozenset[str] | None = (
+            None
+            if retrieved_titles is None
+            else frozenset(_text_of(name) for name in retrieved_titles if _text_of(name))
+        )
         surface_blocks = [
             AnswerBlock(
                 kind=str(block.get("kind") or ""),

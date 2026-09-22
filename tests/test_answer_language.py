@@ -542,3 +542,28 @@ def test_ascii_resource_names_contribute_nothing() -> None:
     }
     surface = AnswerSurface.from_public_blocks([block], retrieved_titles=("charging-guide.png",))
     assert answer_chinese_leak(surface, "en") == ""
+
+
+def test_supplied_but_empty_provenance_exempts_nothing() -> None:
+    """An empty retrieved-titles set is provenance, not its absence.
+
+    A search can return a chunk that carries no document name
+    (`normalize_search_response` accepts `title=None`) while its image is still
+    signed and cited. The caller HAS provenance then — it just names nothing —
+    and collapsing that into "no provenance" would restore the shape-only rule
+    and deliver a model-authored heading (found in review of #376).
+    """
+    block = {"kind": "image", "title": "操作步骤", "text": "", "media": {"title": "charging-guide.png"}}
+    supplied_empty = AnswerSurface.from_public_blocks([block], retrieved_titles=())
+    assert answer_chinese_leak(supplied_empty, "en") == "作操步骤"
+
+
+def test_absent_provenance_still_falls_back_to_the_shape_rule() -> None:
+    """The other half: only `None` means "no provenance" and keeps the old rule.
+
+    A surface that finalises without retrieval data cannot run a provenance test
+    it has no data for, and the 41 record's Chinese resource names stay exempt.
+    """
+    block = {"kind": "image", "title": "重卡充电案例", "text": ""}
+    no_provenance = AnswerSurface.from_public_blocks([block])
+    assert answer_chinese_leak(no_provenance, "en") == ""
