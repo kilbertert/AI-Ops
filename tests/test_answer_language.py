@@ -1,8 +1,10 @@
 """Tests for the shared answer-surface language guard (#293).
 
 The guard is judged on observable behaviour: given an answer payload and a
-requested language, which Chinese does it consider leaked? Nothing here asserts
-how a surface calls the guard, only what the guard decides.
+requested language, which Chinese does it consider leaked? How a surface calls
+it is a source-level guard of its own; what the guard accepts as a payload is
+part of the behaviour asserted here — since #366 anything but the contract type
+or a plain string is a TypeError, not a second judgement path.
 """
 
 from __future__ import annotations
@@ -15,7 +17,6 @@ from aiops_diagnostics.answer_language import (
     AnswerSurface,
     answer_chinese_leak,
     looks_like_asset_name,
-    text_block_leak,
 )
 
 
@@ -47,77 +48,80 @@ def test_prose_is_not_mistaken_for_a_resource_name(value: str) -> None:
 
 
 def test_chinese_in_an_english_answer_is_a_leak() -> None:
-    answer = {"blocks": [{"kind": "text", "text": "标题: 新加坡项目"}]}
+    surface = AnswerSurface.from_public_blocks([{"kind": "text", "text": "标题: 新加坡项目"}])
 
-    assert answer_chinese_leak(answer, "en") != ""
+    assert answer_chinese_leak(surface, "en") != ""
 
 
 def test_clean_english_answer_has_no_leak() -> None:
-    answer = {"blocks": [{"kind": "text", "text": "The order was force-stopped."}]}
+    surface = AnswerSurface.from_public_blocks([{"kind": "text", "text": "The order was force-stopped."}])
 
-    assert answer_chinese_leak(answer, "en") == ""
+    assert answer_chinese_leak(surface, "en") == ""
 
 
 def test_resource_filename_in_a_media_title_is_exempt() -> None:
     """A media title is an identifier; translating it would orphan the asset."""
-    answer = {
-        "blocks": [
+    surface = AnswerSurface.from_public_blocks(
+        [
             {"kind": "text", "text": "See the attached case video."},
             {"kind": "video", "media": {"title": "新加坡无人电动巴士.mp4"}},
         ]
-    }
+    )
 
-    assert answer_chinese_leak(answer, "en") == ""
+    assert answer_chinese_leak(surface, "en") == ""
 
 
 def test_chinese_prose_beside_an_exempt_filename_is_still_a_leak() -> None:
     """The exemption is per-value, not per-answer."""
-    answer = {
-        "blocks": [
+    surface = AnswerSurface.from_public_blocks(
+        [
             {"kind": "text", "text": "标题: 新加坡项目"},
             {"kind": "video", "media": {"title": "新加坡无人电动巴士.mp4"}},
         ]
-    }
+    )
 
-    assert answer_chinese_leak(answer, "en") != ""
+    assert answer_chinese_leak(surface, "en") != ""
 
 
 def test_chinese_leak_never_fires_for_the_chinese_answer() -> None:
-    answer = {"blocks": [{"kind": "text", "text": "标题: 新加坡项目"}]}
+    surface = AnswerSurface.from_public_blocks([{"kind": "text", "text": "标题: 新加坡项目"}])
 
-    assert answer_chinese_leak(answer, "zh") == ""
-    assert text_block_leak(answer["blocks"], "zh") == ""
+    assert answer_chinese_leak(surface, "zh") == ""
 
 
 def test_unsupported_language_is_left_alone() -> None:
     """Upstream already resolves unknown tags to the default language."""
-    answer = {"blocks": [{"kind": "text", "text": "标题: 新加坡项目"}]}
+    surface = AnswerSurface.from_public_blocks([{"kind": "text", "text": "标题: 新加坡项目"}])
 
-    assert answer_chinese_leak(answer, "ja") == ""
+    assert answer_chinese_leak(surface, "ja") == ""
 
 
-def test_text_block_leak_judges_only_prose() -> None:
+def test_media_titles_are_exempt_as_resource_names() -> None:
+    """Only prose is judged: what a non-text block carries is an identifier.
+
+    Reaches the guard through the same construction path a surface uses, so the
+    exemption is not an artefact of the shape the test picked.
+    """
     blocks = [
         {"kind": "text", "text": "All clear."},
         {"kind": "image", "media": {"title": "重卡充电桩流量平台_产品海报.png"}},
     ]
 
-    assert text_block_leak(blocks, "en") == ""
+    assert answer_chinese_leak(AnswerSurface.from_public_blocks(blocks), "en") == ""
 
 
-def test_text_block_leak_reports_the_offending_prose() -> None:
-    blocks = [{"kind": "text", "text": "行业痛点: 土地资源有限"}]
+def test_text_block_prose_is_reported() -> None:
+    surface = AnswerSurface.from_public_blocks([{"kind": "text", "text": "行业痛点: 土地资源有限"}])
 
-    assert text_block_leak(blocks, "de") == "业土地有源点痛行资限"
+    assert answer_chinese_leak(surface, "de") == "业土地有源点痛行资限"
 
 
 def test_non_chinese_languages_are_all_covered() -> None:
     """One assertion per supported language, so a new language cannot slip by."""
-    blocks = [{"kind": "text", "text": "标题"}]
-    answer = {"blocks": blocks}
+    surface = AnswerSurface.from_public_blocks([{"kind": "text", "text": "标题"}])
 
     for language in ("en", "de", "fr", "es", "pt"):
-        assert answer_chinese_leak(answer, language) != ""
+        assert answer_chinese_leak(surface, language) != ""
 
 
 def test_reference_titles_are_exempt_as_resource_names() -> None:
@@ -131,18 +135,20 @@ def test_reference_titles_are_exempt_as_resource_names() -> None:
     caught. Closing it needs document-name provenance (compare the title
     against the chunks actually returned this turn), not a smarter pattern.
     """
-    answer = {"blocks": [{"kind": "reference", "reference_id": "r1", "title": "重卡充电案例"}]}
+    surface = AnswerSurface.from_public_blocks(
+        [{"kind": "reference", "reference_id": "r1", "title": "重卡充电案例"}]
+    )
 
-    assert answer_chinese_leak(answer, "en") == ""
+    assert answer_chinese_leak(surface, "en") == ""
 
 
 def test_reference_title_prose_punctuation_still_flags() -> None:
     """A sentence is judged even in a title field — names carry no punctuation."""
-    answer = {
-        "blocks": [{"kind": "reference", "reference_id": "r2", "title": "错误 402：余额不足，请先充值.pdf"}]
-    }
+    surface = AnswerSurface.from_public_blocks(
+        [{"kind": "reference", "reference_id": "r2", "title": "错误 402：余额不足，请先充值.pdf"}]
+    )
 
-    assert answer_chinese_leak(answer, "en") != ""
+    assert answer_chinese_leak(surface, "en") != ""
 
 
 # --------------------------------------------------------------------------
@@ -243,11 +249,23 @@ def test_a_plain_text_payload_is_judged_as_text() -> None:
     assert answer_chinese_leak("Scan the QR code, then start charging.", "en") == ""
 
 
-def test_the_contract_and_its_serialised_dict_reach_the_same_conclusion() -> None:
-    """The conclusion must not turn on which Python shape the caller chose.
+# --------------------------------------------------------------------------
+# The shape bypass is gone (#366)
+#
+# Every finalisation point passes the contract type now (#364, #365), so the
+# shape dispatch had no caller left to serve — and it was the root cause, not a
+# symptom: a bare list of block dicts was judged leaf by leaf with no kinds, so
+# the resource-name exemption could not reach the one surface that needed it.
+# The branch and `text_block_leak` are deleted, and any other shape raises,
+# because a shape mistake must not be able to repick a judgement path.
+# --------------------------------------------------------------------------
 
-    ponytail: the serialized-dict arm is the representation #366 retires; until
-    then the two must agree, and after it the arm goes away with the branch.
+
+def test_the_serialised_dict_is_no_longer_a_way_in() -> None:
+    """The serialised payload used to reach the same conclusion through a branch
+    of its own. It is a caller bug now, and the contract type is the only way
+    in: the exemption travels with the type rather than with the shape the
+    caller happened to pick.
     """
     blocks = [
         {"kind": "text", "text": "标题: 新加坡项目"},
@@ -258,11 +276,52 @@ def test_the_contract_and_its_serialised_dict_reach_the_same_conclusion() -> Non
         },
     ]
 
-    from_contract = answer_chinese_leak(AnswerSurface.from_public_blocks(blocks), "en")
-
-    assert from_contract == answer_chinese_leak({"blocks": blocks}, "en")
     # Prose beside an exempt name is still a leak: the exemption is per-value.
-    assert from_contract != ""
+    assert answer_chinese_leak(AnswerSurface.from_public_blocks(blocks), "en") != ""
+
+    with pytest.raises(TypeError):
+        answer_chinese_leak({"blocks": blocks}, "en")
+
+
+def test_the_bare_list_does_not_get_a_judgement_of_its_own() -> None:
+    """The root-cause shape: `qa_rag` passed a bare list of block dicts, which the
+    guard flattened leaf by leaf without knowing a block's kind — so the only
+    surface that needed the resource-name exemption never got it, and one good
+    card was replaced with "the knowledge base is unavailable".
+
+    Judged on the contract the same blocks are exempt, because the block says it
+    carries a resource name.
+    """
+    blocks = [
+        {"kind": "text", "text": "See the attached case video."},
+        {
+            "kind": "video",
+            "title": "新加坡无人电动巴士.mp4",
+            "media": {"title": "新加坡无人电动巴士.mp4"},
+        },
+    ]
+
+    assert answer_chinese_leak(AnswerSurface.from_public_blocks(blocks), "en") == ""
+
+    with pytest.raises(TypeError):
+        answer_chinese_leak(blocks, "en")
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"kind": "text", "text": "All clear."},
+        None,
+        42,
+        object(),
+    ],
+    ids=["a single block", "None", "an int", "an arbitrary object"],
+)
+def test_any_other_shape_is_a_type_error(payload: object) -> None:
+    """Nothing reaches a second judgement path: a shape the contract does not
+    name is a caller bug, reported as one."""
+    with pytest.raises(TypeError):
+        answer_chinese_leak(payload, "en")
 
 
 def test_the_contract_is_a_frozen_value_object() -> None:
@@ -318,11 +377,11 @@ def test_zero_order_chinese_answer_is_untouched() -> None:
 
 def test_fullwidth_chinese_punctuation_counts_as_a_leak() -> None:
     """A model writing through a Chinese input method emits fullwidth marks."""
-    from aiops_diagnostics.answer_language import answer_chinese_leak
+    surface = AnswerSurface.from_public_blocks(
+        [{"kind": "text", "text": "Scan the QR code，then start charging."}]
+    )
 
-    answer = {"blocks": [{"kind": "text", "text": "Scan the QR code，then start charging."}]}
-
-    assert answer_chinese_leak(answer, "en") != ""
+    assert answer_chinese_leak(surface, "en") != ""
 
 
 # --------------------------------------------------------------------------

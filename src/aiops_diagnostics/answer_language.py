@@ -26,20 +26,22 @@ the source document name). It is NOT a blanket pass on the `title` key: the
 value must be name-shaped — short, no sentence punctuation, no prose. Text
 blocks carry no title at all, so prose cannot reach the exemption.
 
-The guard's INPUT is a contract too (#363). It takes an :class:`AnswerSurface`
-— the blocks a surface is about to deliver, each carrying its own `kind`, its
-own `title`, and the media descriptor mounted on it — or a plain string for the
-surfaces that finalise on text alone. What it does not take is "any value": the
+The guard's INPUT is a contract too (#363, #366). It takes an
+:class:`AnswerSurface` — the blocks a surface is about to deliver, each carrying
+its own `kind`, its own `title`, and the media descriptor mounted on it — or a
+plain string for the surfaces that finalise on text alone. Nothing else: the
 guard used to accept `Any` and pick a branch by shape, and the one production
 shape that needed the exemption — a bare list of block dicts — fell through to a
-shape-blind flatten that knew neither a block's kind nor its field names. Same
-blocks, opposite conclusions, depending on the Python shape the caller chose.
+shape-blind flatten that knew neither a block's kind nor its field names, so the
+same blocks reached opposite conclusions depending on the Python shape the caller
+chose. That branch is gone, and a payload that is neither an `AnswerSurface` nor
+a string is a ``TypeError`` rather than a second path: a shape mistake cannot
+quietly change which rule judges the answer.
 `AnswerSurface.from_public_blocks` builds one from the public ``blocks[]`` a
 surface delivers, so a new surface reaches the exemption by construction rather
 than by remembering to. A surface that finalises on something other than public
 blocks — the diagnosis document, which has none — builds the same type from what
-it does have. Either way the caller hands over the contract type, which is the
-part that keeps a shape from reaching the shape-blind path.
+it does have.
 """
 
 from __future__ import annotations
@@ -159,24 +161,6 @@ def _looks_like_label(value: str) -> bool:
     return len(tokens) >= 2
 
 
-def _flatten(value: Any, key: str | None = None) -> Iterable[tuple[str | None, str]]:
-    """Yield ``(parent_key, leaf_string)`` for every string in ``value``.
-
-    ponytail: shape-blind by construction — it cannot know a block's kind, so it
-    cannot honour the resource-name exemption. Ceiling and upgrade trigger: the
-    bare-list payload shape it exists for is migrated in #364, and #366 deletes
-    this path with the rest of the shape dispatch.
-    """
-    if isinstance(value, str):
-        yield key, value
-    elif isinstance(value, dict):
-        for child_key, child in value.items():
-            yield from _flatten(child, str(child_key))
-    elif isinstance(value, (list, tuple)):
-        for item in value:
-            yield from _flatten(item, key)
-
-
 @dataclass(frozen=True, slots=True)
 class MediaDescriptor:
     """The knowledge-base resource descriptor a media block carries.
@@ -289,7 +273,10 @@ def answer_chinese_leak(payload: AnswerSurface | str, language: str) -> str:
     ``blocks[]`` when the surface delivers blocks, and built directly by the
     surface when it delivers something else — or a plain string for the surfaces
     that finalise on text alone (the zero-order answer and the casual answer).
-    Every other shape is a caller bug, not a shape to dispatch on.
+    Any other value raises ``TypeError``: the guard used to dispatch on shape,
+    and the shape a caller happened to pick decided whether the resource-name
+    exemption applied at all. A shape mistake must not be able to change which
+    rule judges the answer.
 
     Empty when the answer is clean, when the language is Chinese, when the
     language is not supported, or when the only Chinese present sits inside a
@@ -299,59 +286,17 @@ def answer_chinese_leak(payload: AnswerSurface | str, language: str) -> str:
     already fall back to the default language upstream, and rejecting here
     would turn a language-resolution detail into a delivery failure.
     """
+    if not isinstance(payload, (AnswerSurface, str)):
+        raise TypeError(
+            "answer payload must be an AnswerSurface or a str, got "
+            f"{type(payload).__name__}; build the payload's blocks with "
+            "AnswerSurface.from_public_blocks"
+        )
     if language not in NON_CHINESE_LANGUAGES:
         return ""
-    if isinstance(payload, AnswerSurface):
-        return payload.leaked_chinese()
     if isinstance(payload, str):
         return chinese_leak(payload)
-    # ponytail: the raw dict/list shapes, which no production caller passes any
-    # more (#364, #365) — only tests do. Same judgement — the dict shape goes
-    # through `AnswerSurface`, so the exemption stays a single implementation —
-    # but a bare list of blocks carries no kinds, so it is judged leaf by leaf.
-    # Ceiling and upgrade trigger: #366 deletes this branch, turning any other
-    # value into a TypeError.
-    return _leak_in_unmigrated_payload(payload)
-
-
-def _leak_in_unmigrated_payload(payload: Any) -> str:
-    """Judge a payload no surface has migrated to the contract yet.
-
-    The judge itself is unchanged from the pre-contract guard: a
-    ``{"blocks": [...]}`` payload is judged as blocks, a single block dict as one
-    block, and anything else leaf by leaf.
-    """
-    if isinstance(payload, dict):
-        blocks = payload.get("blocks")
-        if isinstance(blocks, list):
-            return AnswerSurface.from_public_blocks(blocks).leaked_chinese()
-        return AnswerSurface.from_public_blocks([payload]).leaked_chinese()
-    leaked: set[str] = set()
-    for _parent, text in _flatten(payload):
-        found = chinese_leak(text)
-        if found:
-            leaked.update(found)
-    return "".join(sorted(leaked))
-
-
-def text_block_leak(blocks: Iterable[Any], language: str) -> str:
-    """Return the Chinese leak across the ``text`` blocks of an answer.
-
-    Non-text blocks (media, references) carry resource identifiers and titles,
-    which the shape exemption already covers; only prose is judged here.
-    """
-    if language not in NON_CHINESE_LANGUAGES:
-        return ""
-    leaked: set[str] = set()
-    for block in blocks:
-        if not isinstance(block, dict):
-            continue
-        if block.get("kind") != "text":
-            continue
-        found = chinese_leak(str(block.get("text") or ""))
-        if found:
-            leaked.update(found)
-    return "".join(sorted(leaked))
+    return payload.leaked_chinese()
 
 
 def record_answer_language_fallback(*, language: str, leaked: str, surface: str) -> None:
@@ -387,7 +332,6 @@ __all__ = [
     "answer_chinese_leak",
     "looks_like_asset_name",
     "record_answer_language_fallback",
-    "text_block_leak",
 ]
 
 
