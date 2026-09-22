@@ -16,17 +16,21 @@ from typing import Any
 
 import pytest
 
+from aiops_diagnostics import answer_language
 from aiops_diagnostics.agent_lifecycle import AgentConfig, AgentManager, AgentStore
 from aiops_diagnostics.codex_runtime import AgentRuntimeError, CodexTurnOutput
 from aiops_diagnostics.config import AgentSettings
 from aiops_diagnostics.i18n import QA_FALLBACK_MESSAGES
 from aiops_diagnostics.knowledge_retrieval import (
     KnowledgeSearchUnavailable,
+    MediaResource,
     MediaResourceSigner,
 )
 from aiops_diagnostics.qa_rag import (
     CustomerAgentSelection,
+    _finalize,
     _initial_prompt,
+    _TurnRetrieval,
     run_customer_qa_answer,
     select_customer_agent,
 )
@@ -79,6 +83,20 @@ _VIDEO_CHUNK_CN_PROSE_NAME = {
     "mime_type": "video/mp4",
     "score": 0.95,
 }
+
+# The promotional library's other material: the case document itself. The
+# knowledge base stores it under its Chinese name, and the reference block
+# carries that name so a reader can match the card back to the library.
+_DOCX_CHUNK = {
+    "knowledge_base_id": "kb-a",
+    "chunk_id": "chunk-promo-docx",
+    "doc_id": "doc-promo-docx",
+    "docnm_kwd": "宣传.docx",
+    "content_with_weight": "趋势智能与华为、比亚迪合作交付新加坡国家级无人电动巴士项目。",
+    "score": 0.9,
+}
+
+_CARD_TEXT = "Here is the autonomous bus introduction video."
 
 
 class _SearchClient:
@@ -1076,3 +1094,288 @@ def test_every_supported_non_chinese_language_is_guarded(tmp_path: Path) -> None
         assert texts == [QA_FALLBACK_MESSAGES[language]["unavailable"]], language
         # The payload shape stays the contract on every language.
         assert "language_fallback" not in result, language
+
+
+# --------------------------------------------------------------------------
+# Closing the coverage #367 asks for (#361 T5)
+#
+# The guard is fed the payload the surface is about to deliver, and the
+# resource-name exemption is reachable by construction rather than by the caller
+# picking the right Python shape. What that leaves is the reason those two facts
+# can rot on their own: nothing said the two places a resource name sits are
+# judged by ONE predicate, and nothing said the 41 acceptance conclusion
+# (`docs/validation.md` AL-COV-10: the residual Chinese was the media block's
+# `title`, a resource filename, exempt by design) still holds against the current
+# code. Both are executable below, and each carries a counter-proof beside it that
+# fails when the thing it pins is removed -- a guard nobody has watched turn red
+# is not evidence.
+# --------------------------------------------------------------------------
+
+
+def _video_block(*, title: str = "") -> dict[str, Any]:
+    """A video block citing this turn's signed resource, as the model emits it."""
+    return {
+        "kind": "video",
+        "text": "",
+        "resource_id": "media_sg",
+        "reference_id": "",
+        "title": title,
+    }
+
+
+def _resource(title: str) -> MediaResource:
+    """The descriptor the harness mounts for the resource it signed this turn."""
+    return MediaResource(
+        resource_id="media_sg",
+        url="/v1/media/media_sg",
+        kind="video",
+        mime_type="video/mp4",
+        title=title,
+        reference_id="",
+    )
+
+
+def _finalized(
+    blocks: list[dict[str, Any]],
+    *,
+    resources: dict[str, MediaResource] | None = None,
+    language: str = "en",
+) -> dict[str, Any]:
+    """Run `_finalize` on blocks plus this turn's authorized descriptors.
+
+    `_finalize` is where the customer-QA and promotional paths settle, so driving
+    it directly is how a test states exactly which layer carries which Chinese:
+    the block's own `title` is what the model wrote, and `media.title` is what the
+    harness mounted from the knowledge base. The signed resource has to be in
+    `media_by_id` for the block to survive at all -- a media block citing a
+    resource this turn never issued is dropped, so an absent descriptor would hide
+    a verdict behind a dropped block.
+    """
+    retrieval = _TurnRetrieval(
+        reference_ids={block["reference_id"] for block in blocks if block.get("reference_id")},
+        media_by_id=resources or {},
+        searches_used=1,
+    )
+    return _finalize({"blocks": blocks, "retrieval_status": "found"}, retrieval, language)
+
+
+def _delivered(result: dict[str, Any]) -> list[str]:
+    """The block kinds the user receives -- the whole card, or the withheld one."""
+    return [block["kind"] for block in result["blocks"]]
+
+
+@pytest.mark.parametrize(
+    ("value", "exempt"),
+    [
+        ("新加坡无人电动巴士.mp4", True),
+        ("宣传.docx", True),
+        ("案例背景与痛点", True),
+        ("运维记录：新加坡园区试运营.mp4", False),
+    ],
+    ids=["a video filename", "a document filename", "an extensionless name", "a sentence"],
+)
+def test_the_mounted_descriptor_is_judged_by_the_blocks_own_predicate(value: str, exempt: bool) -> None:
+    """`media.title` and the block's own `title` are one rule, not two layers.
+
+    User story 3 of the PRD: the same resource name must not be exempted as a
+    block title while never being judged at all as a descriptor. The value is put
+    in each place in turn and both verdicts are compared AND pinned, so a
+    descriptor with an exemption of its own -- or one that skips it -- disagrees
+    here rather than in production.
+
+    The sentence case is the half that makes this a shared-PREDICATE assertion: a
+    descriptor ruled on by where it sits rather than by its value would deliver
+    the names and be caught by the sentence.
+    """
+    # A mounted descriptor that names nothing, so the block survives and the only
+    # name in play is the block's own.
+    nameless = {"media_sg": _resource("")}
+    expected = ["text", "video"] if exempt else ["text"]
+
+    told_on_the_block = _finalized([_text_block(_CARD_TEXT), _video_block(title=value)], resources=nameless)
+    told_on_the_descriptor = _finalized(
+        [_text_block(_CARD_TEXT), _video_block()], resources={"media_sg": _resource(value)}
+    )
+
+    assert _delivered(told_on_the_block) == expected
+    assert _delivered(told_on_the_descriptor) == expected
+
+
+def test_a_chinese_text_beside_the_descriptor_is_still_a_leak() -> None:
+    """The predicate is shared, not widened: a body that leaks is still judged.
+
+    Without this, the assertion above would also pass if the exemption had quietly
+    grown from "a resource name" to "the whole card that carries one".
+    """
+    result = _finalized(
+        [_text_block("标题: 新加坡项目"), _video_block()],
+        resources={"media_sg": _resource("新加坡无人电动巴士.mp4")},
+    )
+
+    assert _delivered(result) == ["text"]
+    assert result["blocks"][0]["text"] == QA_FALLBACK_MESSAGES["en"]["unavailable"]
+    # A leak is a language-contract miss, not a retrieval outcome: the status
+    # keeps reporting what retrieval actually did (ADR-0007).
+    assert result["retrieval_status"] == "found"
+
+
+def test_the_sentence_in_the_descriptor_is_withheld_because_the_descriptor_is_judged(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Counter-proof for the sentence case: drop the descriptor out of the
+    contract payload and there is no Chinese left to judge, so the card goes out.
+
+    That is exactly what a judgement running before the mount saw -- the
+    descriptor layer sat past the guard's reach entirely, so a sentence named as
+    a resource went out unjudged while the same sentence in a block title was
+    judged. If the sentence assertion above ever passes for the wrong reason,
+    this one goes the other way.
+    """
+    monkeypatch.setattr(answer_language, "_descriptor_of", lambda value: None)
+
+    result = _finalized(
+        [_text_block(_CARD_TEXT), _video_block()],
+        resources={"media_sg": _resource("运维记录：新加坡园区试运营.mp4")},
+    )
+
+    assert _delivered(result) == ["text", "video"]
+
+
+def _bus_card(title: str) -> list[dict[str, Any]]:
+    """The 41 card: the prose, the video it shows, and the chunk it came from."""
+    return [
+        _text_block(_CARD_TEXT),
+        {
+            "kind": "video",
+            "text": "",
+            "resource_id": "PLACEHOLDER_MEDIA",
+            "reference_id": "",
+            "title": title,
+        },
+        {
+            "kind": "reference",
+            "text": "",
+            "resource_id": "",
+            "reference_id": "chunk-sg-bus",
+            "title": title,
+        },
+    ]
+
+
+def _document_card(title: str) -> list[dict[str, Any]]:
+    """The 41 case card: the prose and the document it was assembled from."""
+    return [
+        _text_block(
+            "TrendPower, Huawei and BYD delivered Singapore's first national-level autonomous bus project."
+        ),
+        {
+            "kind": "reference",
+            "text": "",
+            "resource_id": "",
+            "reference_id": "chunk-promo-docx",
+            "title": title,
+        },
+    ]
+
+
+def _run_card(
+    tmp_path: Path,
+    chunk: dict[str, Any],
+    blocks: list[dict[str, Any]],
+    *,
+    cite_media: bool,
+    question: str,
+) -> dict[str, Any]:
+    """Drive the real harness over one scripted card and one search result."""
+    session = _FakeSession([_tool_request("无人巴士"), _answer(blocks, "found", cite_media=cite_media)])
+    return _run(tmp_path, session, _SearchClient([[dict(chunk)]]), question=question, language="en")
+
+
+def test_the_41_english_card_keeps_its_chinese_resource_names(tmp_path: Path) -> None:
+    """`docs/validation.md` AL-COV-10 recorded the residual Chinese in 41's
+    English card as the media block's `title` -- `新加坡无人电动巴士.mp4` -- a
+    resource filename, exempt by design. The current code must agree with that
+    record, so the same card asked for in English is delivered whole rather than
+    withheld as a leak.
+
+    The name rides in three places -- the block's own title, the descriptor
+    mounted beside it, and the citation naming the chunk it came from -- and all
+    three survive.
+    """
+    result = _run_card(
+        tmp_path,
+        _VIDEO_CHUNK_CN_NAME,
+        _bus_card("新加坡无人电动巴士.mp4"),
+        cite_media=True,
+        question="Show me the autonomous bus video",
+    )
+
+    blocks = result["blocks"]
+    assert [block["kind"] for block in blocks] == ["text", "video", "reference"]
+    # The names the knowledge base issued, unchanged everywhere they are carried.
+    assert blocks[1]["title"] == "新加坡无人电动巴士.mp4"
+    assert blocks[1]["media"]["title"] == "新加坡无人电动巴士.mp4"
+    assert blocks[2]["title"] == "新加坡无人电动巴士.mp4"
+    assert result["retrieval_status"] == "found"
+    assert "language_fallback" not in result
+
+
+def test_the_41_english_card_keeps_its_chinese_reference_document(tmp_path: Path) -> None:
+    """The other recorded resource name: the source document, which the library
+    stores as `宣传.docx`. A reader has to be able to match the card's citation
+    back to the library, so the reference block keeps it rather than being
+    translated into something that matches nothing.
+    """
+    result = _run_card(
+        tmp_path,
+        _DOCX_CHUNK,
+        _document_card("宣传.docx"),
+        cite_media=False,
+        question="Show me the customer case",
+    )
+
+    blocks = result["blocks"]
+    assert [block["kind"] for block in blocks] == ["text", "reference"]
+    assert blocks[1]["title"] == "宣传.docx"
+    assert result["retrieval_status"] == "found"
+    assert "language_fallback" not in result
+
+
+@pytest.mark.parametrize(
+    ("chunk", "blocks", "cite_media", "question"),
+    [
+        (
+            _VIDEO_CHUNK_CN_NAME,
+            _bus_card("新加坡无人电动巴士.mp4"),
+            True,
+            "Show me the autonomous bus video",
+        ),
+        (_DOCX_CHUNK, _document_card("宣传.docx"), False, "Show me the customer case"),
+    ],
+    ids=["the video resource", "the cited document"],
+)
+def test_the_recorded_cards_are_carried_by_the_exemption_alone(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    chunk: dict[str, Any],
+    blocks: list[dict[str, Any]],
+    cite_media: bool,
+    question: str,
+) -> None:
+    """Counter-proof: turn the resource-name exemption off and both recorded
+    cards are withheld.
+
+    Without this, the two assertions above would also pass if the exemption had
+    quietly stopped being what carries them -- the same failure mode as the guards
+    this repository has already had to replace. Judging a resource name as prose
+    is exactly what a shape-blind, leaf-by-leaf payload did to the video card.
+    """
+    monkeypatch.setattr(answer_language, "looks_like_asset_name", lambda value: False)
+
+    result = _run_card(tmp_path, chunk, blocks, cite_media=cite_media, question=question)
+
+    texts = [block["text"] for block in result["blocks"] if block["kind"] == "text"]
+    assert texts == [QA_FALLBACK_MESSAGES["en"]["unavailable"]]
+    # The status still tells the truth about retrieval; only the alert says why.
+    assert result["retrieval_status"] == "found"
+    assert "language_fallback" not in result

@@ -1,5 +1,66 @@
 # 验证与验收计划
 
+## #367 回答载荷契据封口 + 41 验收结论落成可执行用例（2026-09-22，本地自动化验证）
+
+**范围**：PRD #361 子票 T5（收口）。#363-#366 已把守卫的输入收窄为契约类型
+（`AnswerSurface` 或纯字符串）并把全部生产调用方迁了上去；本片不再改判定、不再改调用方，
+只做收口：**源码级守护调用方形态**，并把 `docs/validation.md` AL-COV-10 记录的 41 公网结论
+（残留中文仅媒体块 `title = 新加坡无人电动巴士.mp4` —— 资源文件名，按设计豁免）落成可执行
+用例。**本片未完成业务验收**：41 公网英文卡片未复跑，本次证明的是「当前代码满足那条已记录
+的验收」，不是又一次公网实测。
+
+**为什么收口必须是源码级的**：契约类型是「加」，调用方是「改」。#364 修好了当时唯一的坏
+调用方，但仓内没有任何断言能阻止下一个调用方退回裸 list / 裸 dict —— 而那正是本 PRD 的
+根因本身：形状错误的载荷被逐叶判，既不知道 block 的 kind 也不知道字段名，于是资源名豁免的
+正确实现在生产侧走不到，一张好卡片被压成「知识库暂不可用」，告警却写着 `surface=qa`、
+`leaked_char_count=12`，看着像模型语言契约失守。**形状错误最终会以 `TypeError` 炸出来（#366
+已做到），但那要等有人真的那么调用；源码级枚举让它在提交前就转红。**
+
+**守护一：调用方形态**（`tests/test_answer_caller_shapes.py`）。按 **import 绑定**解析
+（不按名字拼写——否则 `import ... as leak_check` 一改名，守护就悄悄少覆盖一个调用点），
+枚举四个生产调用点：`qa_rag.py`（客户问答 / 宣传共同定稿点，传
+`AnswerSurface.from_public_blocks(payload["blocks"])`）、`agent_validator.py`（诊断面，无
+媒体块，直接构造 `AnswerSurface(blocks=...)`）、`gateway_runtime.py`（零单问答，传字符串）、
+`gateway_api.py`（轻量问答 casual 分支，传 `str(...)`）。只接受两种输入——**契约构造结果**，
+或**已被证明的字符串**（`isinstance(x, str)` 的显式检查，或 `str(...)` 转换）。字符串不可能
+绕过豁免：豁免只对 block 自己的 `title` 与挂在它上面的描述符存在，纯字符串两样都没有。
+同时拒绝「在别处另定义一个 `answer_chinese_leak`」——调用点检查会把它算成干净，它却是同一
+规则的第二份实现。`tests/test_agent_validator.py::test_the_validator_has_no_language_gate_of_its_own`
+的既有断言只覆盖诊断面一个模块，本守护把它扩到全部生产模块。
+
+**守护二：描述符覆盖**（`tests/test_qa_rag.py`）。对已挂载 `media_by_id` 的 payload，把同一个
+取值分别只放进 block `title`、只放进 `media.title`，断言两处结论**逐条相同**（名称形态交付整卡、
+句子形态整卡被扣下），再断言中文 `text` 正文仍判泄漏。句子那一半是这条断言成立的关键：一个
+「按层豁免」的描述符（自己另有一条规则）会放过名称也放过句子，只测名称根本发现不了。
+
+**41 验收结论落成用例**：两个真实资源名 `新加坡无人电动巴士.mp4`（视频）与 `宣传.docx`
+（引用文档名，41 KB 的另一份素材）在 `en` 下走真实 `run_customer_qa_answer`，断言整卡交付、
+资源名在三处逐字保留、`retrieval_status=found`、无兜底替换。
+
+**两条守护均实测「去掉修复即失败」**（先改源码跑红、再恢复，证据为下列实测输出）：
+
+| 去掉的修复 | 转红的用例 | 实测输出 |
+|---|---|---|
+| `qa_rag` 迁回迁移前的裸 list 实参（`[block.model_dump(mode="json") for block in blocks]`） | 守护一：`test_every_finalisation_point_hands_the_guard_the_contract_payload` | `found: qa_rag.py:349 -- a ListComp expression is neither the contract payload nor a string` |
+| `agent_validator` 迁回整份序列化诊断文档（`document`） | 守护二：`test_the_guard_reports_the_payload_that_module_carried_before` | 同一条源码级断言指出 `agent_validator.py:158` |
+| 判定点移回 `media_by_id` 挂载**之前**（判 `cleaned.blocks` 而非 `payload["blocks"]`） | `test_the_mounted_descriptor_is_judged_by_the_blocks_own_predicate[a sentence]`（另有 #364 的 `test_a_prose_resource_name_in_the_mounted_descriptor_is_still_judged` 一起转红） | `assert ['text', 'video'] == ['text']` —— 描述符里的句子不再被判 |
+| 描述符另得一条自己的豁免（`_judged_titles` 判完 block title 就返回，不再递归描述符） | 上一条四个参数化全部转红，另加 `test_the_41_english_card_keeps_its_chinese_resource_names` | 名称与句子在描述符上结论相同（都不泄漏），而 block title 上二者结论相反 |
+| 关掉 `looks_like_asset_name` 资源名豁免 | `test_the_recorded_cards_are_carried_by_the_exemption_alone` 两条同时转红 | 两张记录在案的卡片都被替换成 `The knowledge base is temporarily unavailable and the answer could not be verified. Please retry later.` |
+
+后两行同时以**常驻反证用例**的形式写进测试（`monkeypatch` 关掉 `_descriptor_of` /
+`looks_like_asset_name`），不依赖有人记得手动回改源码。
+
+**引用漂移（如实记录）**：本 PRD 与子票写的是 `docs/validation.md:1633`，该条 AL-COV-10
+记录现位于**第 1818 行**（其后的提交在前面插入了新章节）。内容未变，行号已漂；本次按内容定位。
+
+**结果**：本地全量 `uv run pytest` **1130 passed**（此前 1102，新增 28 条：守护一 18 条、
+守护二与 41 用例 10 条），`uv run ruff check` 与 `ruff format --check` 干净；全部既有断言逐条
+未改。
+
+**已知缺口（不在本片）**：41 公网英文卡片的复跑；FAQ / 快捷动作 / 健康报告 / `/v1/runs`
+经典链路的语言缺口（PRD 明确范围外）；模型自造中文小标题与中文命名来源文档在形态上不可区分
+（ADR-0007 已记录的不可判定边界，闭合需来源真实性比对）。
+
 ## #359 取消结果入指标 + 两条核心回归守护封口（2026-09-21，本地自动化验证）
 
 **范围**：PRD #346 子票 T6（收口）。把取消结果写进指标，把取消语义的跨入口一致性钉住，
