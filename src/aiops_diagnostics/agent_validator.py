@@ -12,7 +12,12 @@ from aiops_diagnostics.agent_contracts import (
     IncidentManifest,
     ToolName,
 )
-from aiops_diagnostics.i18n import DEFAULT_LANGUAGE, NON_CHINESE_LANGUAGES, chinese_leak
+from aiops_diagnostics.answer_language import (
+    AnswerBlock,
+    AnswerSurface,
+    answer_chinese_leak,
+)
+from aiops_diagnostics.i18n import DEFAULT_LANGUAGE
 from aiops_diagnostics.journal import EvidenceJournal, JournalEntry
 from aiops_diagnostics.redaction import contains_secret
 
@@ -137,13 +142,29 @@ class AgentResultValidator:
             errors.append("结果包含运行时敏感值")
         if EXECUTED_MUTATION.search(rendered):
             errors.append("结果声称执行了第一版禁止的业务变更动作")
-        if self.language in NON_CHINESE_LANGUAGES:
-            leaked = chinese_leak(rendered)
-            if leaked:
-                errors.append(
-                    f"结果语言为 {self.language}，但仍含中文字符 {leaked}："
-                    "受控词表值（枚举标签、停因等）须按语义翻译，不得原样附带中文原文"
-                )
+        # The language verdict is the shared guard's, exactly as on every other
+        # surface (ADR-0007): the gate predicate and the raw `chinese_leak` call
+        # that used to sit here defined the rule a second time (#365). The
+        # DISPOSITION stays this surface's own — ADR-0007 allows that difference,
+        # because this is the one surface with a contract-repair retry loop, so a
+        # leak arrives as a validation error rather than as the localized-fallback
+        # alert the surfaces without a loop raise.
+        #
+        # A diagnosis carries no media blocks and no titles, so the projection is
+        # the degenerate one: the whole serialised contract is one text block,
+        # and nothing in it is exempted. Judging it as one string is the same
+        # verdict as judging each value on its own — the JSON separators are
+        # never `[A-Za-z0-9]`, so no gloss can be built across two values, and
+        # `extra='forbid'` fixes every key as an English field name.
+        leak = answer_chinese_leak(
+            AnswerSurface(blocks=(AnswerBlock(kind="text", text=rendered),)),
+            self.language,
+        )
+        if leak:
+            errors.append(
+                f"结果语言为 {self.language}，但仍含中文字符 {leak}："
+                "受控词表值（枚举标签、停因等）须按语义翻译，不得原样附带中文原文"
+            )
         return errors
 
     def blocked_result(self, reason: str) -> AgentDiagnosis:

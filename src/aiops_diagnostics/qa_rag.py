@@ -31,6 +31,7 @@ from aiops_diagnostics.agent_contracts import (
 from aiops_diagnostics.agent_lifecycle import AgentStore
 from aiops_diagnostics.agent_workspace import AgentWorkspace
 from aiops_diagnostics.answer_language import (
+    AnswerSurface,
     answer_chinese_leak,
     record_answer_language_fallback,
 )
@@ -294,10 +295,13 @@ def _finalize(
     the model invented is dropped, never trusted.
 
     The answer's language is checked here too, at the single point both the
-    customer-QA and promotional paths settle on their blocks. An answer that
-    leaked Chinese despite the prompt is replaced with the localized fallback
-    rather than delivered: a customer-facing card that reads as garbage is
-    worse than one that honestly says the content is unavailable right now.
+    customer-QA and promotional paths settle on their blocks — and on the
+    blocks as they go out, media descriptor mounted, so that the layer naming
+    the knowledge-base resource is judged by the same predicate as the block
+    carrying it. An answer that leaked Chinese despite the prompt is replaced
+    with the localized fallback rather than delivered: a customer-facing card
+    that reads as garbage is worse than one that honestly says the content is
+    unavailable right now.
     """
     try:
         parsed = QaAnswer.model_validate(
@@ -325,7 +329,24 @@ def _finalize(
     if not any(block.kind == "text" for block in blocks):
         raise AgentContractError("customer QA answer lost every text block")
 
-    leak = answer_chinese_leak([block.model_dump(mode="json") for block in blocks], language)
+    status = parsed.retrieval_status
+    if status == "found" and not retrieval.reference_ids:
+        # The model claims knowledge backing it never retrieved or received.
+        status = RetrievalStatus.NOT_FOUND.value
+    if retrieval.last_status == RetrievalStatus.UNAVAILABLE:
+        status = RetrievalStatus.UNAVAILABLE.value
+
+    cleaned = QaAnswer(blocks=blocks, retrieval_status=status)
+    media_by_id = {key: value.to_dict() for key, value in retrieval.media_by_id.items()}
+    payload = cleaned.to_public_dict(media_by_id=media_by_id)
+
+    # Judged on the payload the surface is about to deliver, not on the model's
+    # blocks as they arrived: the descriptor naming the knowledge-base resource
+    # a media block carries is mounted here, so a judgement that ran earlier
+    # neither saw it nor knew which block it belonged to — and the one
+    # production shape that needed the resource-name exemption (a bare list)
+    # was judged leaf by leaf, without kinds (#361, #364).
+    leak = answer_chinese_leak(AnswerSurface.from_public_blocks(payload["blocks"]), language)
     if leak:
         # The prompt asked for the output language and the model produced
         # Chinese anyway — a contract miss, not an outage. Deliver the
@@ -342,25 +363,19 @@ def _finalize(
         # extra key rides along in the payload.
         pack = QA_FALLBACK_MESSAGES.get(language) or QA_FALLBACK_MESSAGES[DEFAULT_LANGUAGE]
         record_answer_language_fallback(language=language, leaked=leak, surface="qa")
-        status = parsed.retrieval_status
-        if retrieval.last_status == RetrievalStatus.UNAVAILABLE:
-            status = RetrievalStatus.UNAVAILABLE
+        # Withholding the text does not restate the retrieval: the withheld card
+        # carries the SAME `status` the delivered payload would. The correction
+        # above settles a claim about evidence, and a false claim about evidence
+        # does not become true because the card was withheld — it misleads most
+        # there, since the fallback copy says the content is unavailable while
+        # the status says the knowledge backing it was found. One derivation,
+        # two payloads.
         return {
             "blocks": [{"kind": "text", "text": pack["unavailable"]}],
             "retrieval_status": status,
             "searches": retrieval.searches_used,
         }
 
-    status = parsed.retrieval_status
-    if status == "found" and not retrieval.reference_ids:
-        # The model claims knowledge backing it never retrieved or received.
-        status = RetrievalStatus.NOT_FOUND.value
-    if retrieval.last_status == RetrievalStatus.UNAVAILABLE:
-        status = RetrievalStatus.UNAVAILABLE.value
-
-    cleaned = QaAnswer(blocks=blocks, retrieval_status=status)
-    media_by_id = {key: value.to_dict() for key, value in retrieval.media_by_id.items()}
-    payload = cleaned.to_public_dict(media_by_id=media_by_id)
     # Runtime-owned run metadata (harness search budget usage) alongside the
     # blocks contract; callers ignore it, the metrics seam reads it.
     payload["searches"] = retrieval.searches_used

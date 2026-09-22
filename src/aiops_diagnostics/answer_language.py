@@ -25,12 +25,30 @@ defines as a resource name (image/video carry the media name, reference carries
 the source document name). It is NOT a blanket pass on the `title` key: the
 value must be name-shaped — short, no sentence punctuation, no prose. Text
 blocks carry no title at all, so prose cannot reach the exemption.
+
+The guard's INPUT is a contract too (#363, #366). It takes an
+:class:`AnswerSurface` — the blocks a surface is about to deliver, each carrying
+its own `kind`, its own `title`, and the media descriptor mounted on it — or a
+plain string for the surfaces that finalise on text alone. Nothing else: the
+guard used to accept `Any` and pick a branch by shape, and the one production
+shape that needed the exemption — a bare list of block dicts — fell through to a
+shape-blind flatten that knew neither a block's kind nor its field names, so the
+same blocks reached opposite conclusions depending on the Python shape the caller
+chose. That branch is gone, and a payload that is neither an `AnswerSurface` nor
+a string is a ``TypeError`` rather than a second path: a shape mistake cannot
+quietly change which rule judges the answer.
+`AnswerSurface.from_public_blocks` builds one from the public ``blocks[]`` a
+surface delivers, so a new surface reaches the exemption by construction rather
+than by remembering to. A surface that finalises on something other than public
+blocks — the diagnosis document, which has none — builds the same type from what
+it does have.
 """
 
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from typing import Any
 
 from aiops_diagnostics.i18n import (
@@ -143,91 +161,156 @@ def _looks_like_label(value: str) -> bool:
     return len(tokens) >= 2
 
 
-def _flatten(value: Any, key: str | None = None) -> Iterable[tuple[str | None, str]]:
-    """Yield ``(parent_key, leaf_string)`` for every string in ``value``."""
-    if isinstance(value, str):
-        yield key, value
-    elif isinstance(value, dict):
-        for child_key, child in value.items():
-            yield from _flatten(child, str(child_key))
-    elif isinstance(value, (list, tuple)):
-        for item in value:
-            yield from _flatten(item, key)
+@dataclass(frozen=True, slots=True)
+class AnswerBlock:
+    """One answer block as the language guard judges it.
+
+    Every string the public block puts in front of the user is a field here:
+    its `text`, its `title` — the block's own and the mounted descriptor's — and
+    the resource and chunk ids it cites, with the `kind` that says which of them
+    name a knowledge-base resource. That is the whole point of the type: a
+    block-level title and a `media.title` used to live on two layers, so the
+    same Chinese resource name was exempted as a title and never judged at all
+    as a descriptor.
+    """
+
+    kind: str
+    text: str = ""
+    title: str = ""
+    media_title: str = ""
+    identifiers: tuple[str, ...] = ()
+
+    def leaked_chinese(self) -> str:
+        """The Chinese this block leaks, honouring the resource-name exemption."""
+        leaked: set[str] = set()
+        for title in self._judged_titles():
+            leaked.update(chinese_leak(title))
+        leaked.update(chinese_leak(self.text))
+        for identifier in self.identifiers:
+            leaked.update(chinese_leak(identifier))
+        return "".join(sorted(leaked))
+
+    def _judged_titles(self) -> list[str]:
+        """The titles that are prose rather than the resource's name.
+
+        One implementation of the exemption, applied to the block's own title
+        and to the descriptor mounted on it alike: a title on an image, video
+        or reference block names the knowledge-base resource, so translating it
+        would leave the answer citing material the reader cannot match back to
+        the library. A title on any other kind is prose and is judged.
+
+        The ids stay outside it. A title is display text whose SHAPE is the only
+        provenance available; an id is a handle the library issued, and a
+        Chinese one reaches the reader as Chinese all the same.
+        """
+        titles = [self.title, self.media_title]
+        if self.kind not in _ASSET_TITLE_KINDS:
+            return titles
+        return [title for title in titles if not looks_like_asset_name(title)]
 
 
-def _leak_in_block(block: Any) -> str:
-    """Chinese leaked by one answer block, honouring the title exemption."""
-    if not isinstance(block, dict):
-        return ""
-    kind = block.get("kind")
-    leaked: set[str] = set()
-    for key, value in block.items():
-        if not isinstance(value, str):
-            # Nested media descriptors carry the same resource name; recurse.
-            if isinstance(value, dict):
-                found = _leak_in_block({**value, "kind": kind})
-                if found:
-                    leaked.update(found)
-            continue
-        if key == "title" and kind in _ASSET_TITLE_KINDS and looks_like_asset_name(value):
-            continue
-        found = chinese_leak(value)
-        if found:
-            leaked.update(found)
-    return "".join(sorted(leaked))
+@dataclass(frozen=True, slots=True)
+class AnswerSurface:
+    """The answer a surface is about to deliver: its blocks, in order.
+
+    Frozen on purpose — the guard reads a settled payload and must not be able
+    to change what gets delivered. It holds state of no kind beyond its blocks.
+    """
+
+    blocks: tuple[AnswerBlock, ...] = ()
+
+    @classmethod
+    def from_public_blocks(cls, blocks: Iterable[Mapping[str, Any]]) -> AnswerSurface:
+        """Build a surface from the public ``blocks[]`` dicts a surface delivers.
+
+        The single construction path: every finalisation point runs the blocks
+        it is about to publish through here before the guard judges them, so the
+        resource-name exemption cannot be sidestepped by picking a different
+        Python shape. Non-mapping entries are skipped, as are keys the guard
+        does not judge — see :func:`_media_title_of` and :func:`_identifiers_of`.
+        """
+        surface_blocks = [
+            AnswerBlock(
+                kind=str(block.get("kind") or ""),
+                text=_text_of(block.get("text")),
+                title=_text_of(block.get("title")),
+                media_title=_media_title_of(block),
+                identifiers=_identifiers_of(block),
+            )
+            for block in blocks
+            if isinstance(block, Mapping)
+        ]
+        return cls(blocks=tuple(surface_blocks))
+
+    def leaked_chinese(self) -> str:
+        """The Chinese the whole payload leaks for a non-Chinese language."""
+        leaked: set[str] = set()
+        for block in self.blocks:
+            leaked.update(block.leaked_chinese())
+        return "".join(sorted(leaked))
 
 
-def answer_chinese_leak(payload: Any, language: str) -> str:
+def _text_of(value: Any) -> str:
+    """The value when it is text, empty otherwise — only strings are judged."""
+    return value if isinstance(value, str) else ""
+
+
+def _media_title_of(block: Mapping[str, Any]) -> str:
+    """The mounted descriptor's title — the knowledge-base resource's own name.
+
+    Only the title is read. The rest of the public descriptor (`url`, `kind`,
+    `mime_type` and its ids) is issued by the harness at runtime rather than
+    copied out of the library, so there is no knowledge-base text left in it for
+    the guard to judge.
+    """
+    descriptor = block.get("media")
+    return _text_of(descriptor.get("title")) if isinstance(descriptor, Mapping) else ""
+
+
+def _identifiers_of(block: Mapping[str, Any]) -> tuple[str, ...]:
+    """The ids the block cites: the media resource, the chunk or the document.
+
+    Judged, not exempted. They are part of the payload the user receives, so the
+    guard's promise covers them — and the pre-contract production payload did
+    judge them, as leaves of the shape-blind flatten. Dropping them here would
+    be a silent narrowing of what "no Chinese in the delivered answer" means.
+    """
+    ids = (block.get("resource_id"), block.get("reference_id"))
+    return tuple(_text_of(value) for value in ids if value)
+
+
+def answer_chinese_leak(payload: AnswerSurface | str, language: str) -> str:
     """Return the Chinese characters ``payload`` leaks for ``language``.
+
+    ``payload`` is one of two things, and which one is declared by the caller
+    rather than guessed at: an :class:`AnswerSurface` — from the public
+    ``blocks[]`` when the surface delivers blocks, and built directly by the
+    surface when it delivers something else — or a plain string for the surfaces
+    that finalise on text alone (the zero-order answer and the casual answer).
+    Any other value raises ``TypeError``: the guard used to dispatch on shape,
+    and the shape a caller happened to pick decided whether the resource-name
+    exemption applied at all. A shape mistake must not be able to change which
+    rule judges the answer.
 
     Empty when the answer is clean, when the language is Chinese, when the
     language is not supported, or when the only Chinese present sits inside a
-    block title that is the resource's name.
+    title that is the resource's name.
 
     ``language`` values outside the supported set are left alone: the surfaces
     already fall back to the default language upstream, and rejecting here
     would turn a language-resolution detail into a delivery failure.
     """
+    if not isinstance(payload, (AnswerSurface, str)):
+        raise TypeError(
+            "answer payload must be an AnswerSurface or a str, got "
+            f"{type(payload).__name__}; build the payload's blocks with "
+            "AnswerSurface.from_public_blocks"
+        )
     if language not in NON_CHINESE_LANGUAGES:
         return ""
     if isinstance(payload, str):
         return chinese_leak(payload)
-    if isinstance(payload, dict):
-        blocks = payload.get("blocks")
-        if isinstance(blocks, list):
-            leaked: set[str] = set()
-            for block in blocks:
-                found = _leak_in_block(block)
-                if found:
-                    leaked.update(found)
-            return "".join(sorted(leaked))
-        return _leak_in_block(payload)
-    leaked = set()
-    for _parent, text in _flatten(payload):
-        found = chinese_leak(text)
-        if found:
-            leaked.update(found)
-    return "".join(sorted(leaked))
-
-
-def text_block_leak(blocks: Iterable[Any], language: str) -> str:
-    """Return the Chinese leak across the ``text`` blocks of an answer.
-
-    Non-text blocks (media, references) carry resource identifiers and titles,
-    which the shape exemption already covers; only prose is judged here.
-    """
-    if language not in NON_CHINESE_LANGUAGES:
-        return ""
-    leaked: set[str] = set()
-    for block in blocks:
-        if not isinstance(block, dict):
-            continue
-        if block.get("kind") != "text":
-            continue
-        found = chinese_leak(str(block.get("text") or ""))
-        if found:
-            leaked.update(found)
-    return "".join(sorted(leaked))
+    return payload.leaked_chinese()
 
 
 def record_answer_language_fallback(*, language: str, leaked: str, surface: str) -> None:
@@ -257,10 +340,11 @@ def record_answer_language_fallback(*, language: str, leaked: str, surface: str)
 
 __all__ = [
     "ASSET_EXTENSIONS",
+    "AnswerBlock",
+    "AnswerSurface",
     "answer_chinese_leak",
     "looks_like_asset_name",
     "record_answer_language_fallback",
-    "text_block_leak",
 ]
 
 

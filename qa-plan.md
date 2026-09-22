@@ -972,3 +972,19 @@ payload——非 OpenAI provider 从未遵守该 schema），故不是新增风�
 **边界**：客户端预填提问的正确性不在本验收范围（见 #293 的归属结论）。
 **已知缺口（本轮显式不做）**：管家端固定问答 17 条无 i18n（85 例）；健康报告接口
 无语言参数。
+
+## 回答载荷契据封口 QA（ANSWER-PAYLOAD，PRD #361 子票 T5/#367）
+
+| ID | 环境 | 前置条件与数据 | 有序动作 | 预期可观察结果 | 清理/证据 |
+|---|---|---|---|---|---|
+| ANSWER-PAYLOAD-01 | 本地 dev | 四个回答面的生产源码 | 解析 `src/aiops_diagnostics/*.py`，按 import 绑定（含别名）枚举 `answer_chinese_leak` 的每个调用点，断言首个实参是契约构造结果或已被证明的字符串 | 四个调用点全部合规；出现裸 list / 裸 dict / 未证明的读值即报出文件与行号 | `tests/test_answer_caller_shapes.py::test_every_finalisation_point_hands_the_guard_the_contract_payload` |
+| ANSWER-PAYLOAD-02 | 本地 dev | 同上 | 把 `qa_rag.py` / `agent_validator.py` 迁移前的实参按 AST 源码区间放回原文件 | 守护各自转红并指出该文件该行 | `...::test_the_guard_reports_the_payload_that_module_carried_before` |
+| ANSWER-PAYLOAD-03 | 本地 dev | 合成模块（形状同生产调用方） | 分别以裸 list、根因形状（`model_dump` 列表推导）、序列化 dict、整份 answer、单 block、类型本身作实参 | 逐一被守护拒绝；契约构造、`str()`、字面量、已证明字符串则不误报 | `...::test_a_caller_that_picks_its_own_shape_fails_the_guard`、`...::test_the_two_declared_inputs_are_accepted` |
+| ANSWER-PAYLOAD-04 | 本地 dev | 已挂载 `media_by_id` 的 payload（直驱 `qa_rag._finalize`） | 对同一取值分别只放 block `title`、只放 `media.title` | 两处结论一致；名称形态交付整卡，句子形态整卡被扣下 | `tests/test_qa_rag.py::test_the_mounted_descriptor_is_judged_by_the_blocks_own_predicate` |
+| ANSWER-PAYLOAD-05 | 本地 dev | 同上，payload 正文为中文 | 名称形态的 `media.title` 旁放中文正文 | 正文仍判泄漏并触发本地化兜底；`retrieval_status` 为 `not_found`（本 fixture 未取到任何分块，与同样输入下被送达时会报的状态一致，见 #372 整改轮） | `...::test_a_chinese_text_beside_the_descriptor_is_still_a_leak` |
+| ANSWER-PAYLOAD-06 | 本地 dev | 41 真实资源名（`新加坡无人电动巴士.mp4`、`宣传.docx`） | 以 `en` 走真实 `run_customer_qa_answer`（客户问答 / 宣传共同定稿点） | 卡片整份交付，两处资源名逐字保留，`retrieval_status=found`，无兜底替换 | `...::test_the_41_english_card_keeps_its_chinese_resource_names`、`...::test_the_41_english_card_keeps_its_chinese_reference_document` |
+| ANSWER-PAYLOAD-07 | 本地 dev | 同上，关掉 `looks_like_asset_name` 豁免 | 复跑同一张卡片 | 卡片被扣下并替换为本地化兜底——证明上一条是由豁免承载的，不是恒真 | `...::test_the_recorded_cards_are_carried_by_the_exemption_alone` |
+
+**边界声明（重要）**：ANSWER-PAYLOAD-06 证明的是**当前代码满足 `docs/validation.md`
+AL-COV-10 已记录的那条验收**，不是新一次 41 公网实测——本片未部署、未复跑公网链路。
+ANSWER-PAYLOAD-01~05、07 证明的是**调用方形态无法再漂**，同样不证明译得对。
