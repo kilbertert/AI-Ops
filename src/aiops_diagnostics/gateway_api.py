@@ -2377,6 +2377,15 @@ def _assistant_question_response(qa: dict[str, Any], language: str) -> dict[str,
     Poll and cancel return the same body on purpose: the job's state is the
     single thing both surfaces report, so a client reads a stopped job exactly
     as it reads a finished one.
+
+    The failure message is customer-facing copy, not the job record's internal
+    reason. The record keeps that reason deliberately — a contract violation is
+    a defect an engineer must be able to see, and replacing it there once turned
+    a real bug into "service temporarily unavailable" (2026-09-17). But the
+    record is read by an engineer and this response is read by a customer; the
+    two need different sentences, and only the boundary can tell them apart. A
+    Chinese-speaking user was shown "customer QA turn returned invalid JSON",
+    which names neither the problem nor an action.
     """
     status_value = str(qa["status"])
     return {
@@ -2390,13 +2399,19 @@ def _assistant_question_response(qa: dict[str, Any], language: str) -> dict[str,
         "error": (
             {
                 "code": qa.get("error_code") or "QA_FAILED",
-                "message": qa.get("error_message") or "answer generation failed",
+                "message": _qa_user_message(language),
                 "retryable": True,
             }
             if status_value in {"failed", "expired"}
             else None
         ),
     }
+
+
+def _qa_user_message(language: str) -> str:
+    """The localized, actionable sentence a customer sees when a QA job fails."""
+    pack = QA_FALLBACK_MESSAGES.get(language) or QA_FALLBACK_MESSAGES[DEFAULT_LANGUAGE]
+    return pack["unavailable"]
 
 
 def _require_conversation(

@@ -370,7 +370,15 @@ def test_order_bound_shortcut_with_embedded_order_reaches_diagnosis(tmp_path: Pa
 def test_assistant_qa_poll_failed_exposes_error(tmp_path: Path) -> None:
     """A failed QA job returns the {code, message, retryable} error contract,
     matching the diagnosis poll line — not a null error the frontend must
-    guess at (bare '未找到')."""
+    guess at (bare '未找到').
+
+    The message is customer-facing copy, not the job record's internal reason.
+    The two audiences need different sentences and only this boundary can tell
+    them apart: a Chinese-speaking user was shown the harness's own English
+    "customer QA turn returned invalid JSON". The record keeps the reason (the
+    store assertion below), because a contract violation is a defect an engineer
+    must be able to see — replacing it there once hid a real bug behind
+    "service temporarily unavailable" (2026-09-17)."""
     client, runtime = _client(tmp_path)
     resp = client.post(
         "/v1/assistant/questions",
@@ -383,10 +391,16 @@ def test_assistant_qa_poll_failed_exposes_error(tmp_path: Path) -> None:
     assert poll.status_code == 200
     body = poll.json()
     assert body["status"] == "failed"
+    # The machine-actionable half of the contract is unchanged: the frontend
+    # still branches on `code`, and `error` is still present rather than null.
     assert body["error"]["code"] == "QA_FAILED"
-    assert body["error"]["message"] == "model provider quota exceeded"
     assert body["error"]["retryable"] is True
     assert body["result"] is None
+    # The human half is localized copy, not the internal reason.
+    assert body["error"]["message"] != "model provider quota exceeded"
+    assert "quota" not in body["error"]["message"]
+    # ...and the reason is not lost, only moved to where an engineer looks.
+    assert runtime._qa[qa_id]["error_message"] == "model provider quota exceeded"
 
 
 def test_assistant_qa_poll_running_keeps_null_error(tmp_path: Path) -> None:
