@@ -1927,106 +1927,63 @@ AGENTS.md 的自检条款无可沉淀的新操作步骤。
 
 ### 可复用步骤：翻转一个 Ruleset 参数
 
-Ruleset 变更没有工具化封装，必须用 `gh api`。**关键是不要重建 JSON**：先取回整份规则集，
-只改目标键，其余原样回写，否则容易静默丢掉规则或条件。
+Ruleset 变更没有工具化封装，必须用 `gh api`。
+
+**做法**：取回整份规则集，只改目标键，其余原样回写。不要手工重建 JSON——
+手写载荷才会静默丢掉规则或条件，取回-改一个键-回写不会。
 
 ```bash
-#!/bin/bash
-set -euo pipefail                 # 失败即停：下面每一步非零都必须中止，不能继续到 PUT
-
 REPO=kilbertert/AI-Ops
 RS=23760870                       # 规则集 id；用 gh api repos/$REPO/rulesets 列出
 
-# 每次运行唯一的临时目录，退出时清理。不要用固定的 /tmp/rs-new.json：
-# 那份快照一旦留下，下次运行失败后仍会被 PUT，覆盖掉这期间远端新增的规则。
-work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT
-
-# 1) 取回整份，就在回写前，最小化并发窗口
-gh api "repos/$REPO/rulesets/$RS" > "$work/before.json"
-
-# 2) 只改目标键，其余原样保留。无需变更时不写文件。
-#    用 if ! 而不是取 $?：set -e 会在 `rc=$?` 之前就因非零退出终止脚本，
-#    于是「已启用」这条正常路径反而报失败。
-if python3 - "$work/before.json" "$work/payload.json" <<'PYEOF'
+gh api "repos/$REPO/rulesets/$RS" \
+| python3 -c '
 import json, sys
-src, dst = sys.argv[1], sys.argv[2]
-d = json.load(open(src))
-target = None
+d = json.load(sys.stdin)
 for r in d["rules"]:
     if r["type"] == "pull_request":
-        target = r["parameters"]
-if target is None:
-    sys.exit(4)                          # 4 = 规则集结构不符，不是可以继续的状态
-if target["required_review_thread_resolution"] is True:
-    sys.exit(3)                          # 3 = 无需变更
-target["required_review_thread_resolution"] = True    # <- 这一行才是真正的改动
+        r["parameters"]["required_review_thread_resolution"] = True
 json.dump({"name": d["name"], "enforcement": d["enforcement"], "target": "branch",
            "conditions": d["conditions"], "rules": d["rules"],
-           "bypass_actors": d.get("bypass_actors", [])},
-          open(dst, "w"), indent=1)
-PYEOF
-then :; else
-  rc=$?
-  [ "$rc" -eq 3 ] && { echo "already enabled; nothing to do"; exit 0; }
-  exit "$rc"                          # 4（结构不符）与其他错误都到这里
-fi
-
-# 2b) 回写前先验证载荷真的改了那一个键。少了这一步，一个「什么都没改」的载荷
-#     会被照常 PUT，脚本以 0 退出并声称已启用——正是本步骤要防的静默无操作。
-python3 - "$work/before.json" "$work/payload.json" <<'PYEOF'
-import json, sys
-before = json.load(open(sys.argv[1])); payload = json.load(open(sys.argv[2]))
-def gate(d):
-    return [r["parameters"]["required_review_thread_resolution"]
-            for r in d["rules"] if r["type"] == "pull_request"][0]
-assert gate(before) is False, "gate was already true; nothing to enable"
-assert gate(payload) is True, "payload does not enable the gate; refusing to PUT a no-op"
-PYEOF
-
-# 3) 回写前重新读取并与第 1 步比对。并发改名会被这一步抓住；只比对「除目标键外
-#    是否变化」是抓不住的——第 1 步的快照同样缺那条新规则，差异核对会照常通过。
-gh api "repos/$REPO/rulesets/$RS" > "$work/recheck.json"
-if ! cmp -s "$work/before.json" "$work/recheck.json"; then
-  echo "ruleset changed between reads; re-run instead of overwriting" >&2
-  exit 1
-fi
-
-# 4) 回写并核对
-gh api -X PUT "repos/$REPO/rulesets/$RS" --input "$work/payload.json" >/dev/null
-gh api "repos/$REPO/rulesets/$RS" > "$work/after.json"
-python3 - "$work/before.json" "$work/after.json" <<'PYEOF'
-import json, sys
-before = json.load(open(sys.argv[1])); after = json.load(open(sys.argv[2]))
-def norm(d, drop_target):
-    out = []
-    for r in d["rules"]:
-        p = dict(r.get("parameters") or {})
-        if drop_target and r["type"] == "pull_request":
-            p.pop("required_review_thread_resolution", None)
-        out.append((r["type"], json.dumps(p, sort_keys=True)))
-    return sorted(out)
-assert norm(before, True) == norm(after, True), "unrelated rule changed"
-assert before["conditions"] == after["conditions"], "conditions changed"
-print("gate =", [r["parameters"]["required_review_thread_resolution"]
-                 for r in after["rules"] if r["type"] == "pull_request"][0])
-PYEOF
-
-gh api "repos/$REPO/rules/branches/main" --jq '[.[].type]|join(", ")'   # 确认规则仍在
+           "bypass_actors": d.get("bypass_actors", [])}, sys.stdout, indent=1)
+' > /tmp/rs.json \
+&& gh api -X PUT "repos/$REPO/rulesets/$RS" --input /tmp/rs.json
 ```
 
-注意：
+`target: branch` 必须显式带上：取回的对象里没有这个字段，回写时容易漏。
+回滚就是把同一个键改回 `false` 再回写，不需要重建规则集。
 
-- `target: branch` 必须显式带上；取回的对象里没有这个字段，回写时容易漏。
-- **`set -euo pipefail` 不是装饰**：没有它，第 2 步的断言失败不会阻止第 3 步的 PUT，
-  而 PUT 会把上一次运行遗留的快照写回去，静默删掉这期间新增的规则。
-- 临时文件必须每次唯一并在退出时清理；固定路径正是上一条的载体。
-- 回滚就是把同一个键改回 `false` 再回写，不需要重建规则集。
-- 生效范围是远端、立即生效、对所有 PR 生效。本地没有任何东西能替代它，
-  所以 `dev-pr` 与本地 guard 都拦不住这类回归，只能靠上面的差异核对。
-- 两次读取之间仍有并发窗口（别人同时改了同一个规则集）。差异核对能发现它，
-  但正确处置是重跑，而不是强行 PUT。
+**唯一的验收是读回远端，不是相信脚本的退出码**：
 
+```bash
+gh api "repos/$REPO/rulesets/$RS" \
+  --jq '.rules[]|select(.type=="pull_request")|.parameters.required_review_thread_resolution'
+# 期望输出恰好是 true。是 false 就什么也没发生——脚本成功退出不代表闸门已开。
+gh api "repos/$REPO/rules/branches/main" --jq '[.[].type]|join(", ")'   # 规则仍在
+```
+
+两条边界，都在本片实测过，都写在上面这段里而不是靠脚本兜住：
+
+- **成功退出不等于生效。** 本片上一版的 python 在改写时丢掉了真正赋值的那一行，
+  于是它 PUT 回一份与远端完全相同的规则集、以 0 退出并声称已启用，而闸门始终是
+  `false`。所以验收必须是「读回远端看到 `true`」。
+- **两次读取之间的并发变更会被覆盖，而这是可接受的。** 这个操作是
+  operator 改一个参数、一分钟内读完的事；替代方案是 `If-Match` 乐观锁，需要
+  每次读取都从响应头捕获 `ETag`，而 `gh api` 默认不保留响应头，要用
+  `--include` 手工解析——为一次单键翻转引入这套解析，比它防的风险更大。
+  代价明确写着：**如果这期间别人改了同一个规则集，先读回确认再重做**，
+  并发窗口内不要并行操作同一个规则集。
+
+### 为什么不写成一个脚本
+
+本片先后写过三版「健壮」脚本，每一版都在评审中暴露出一个新的缺陷：遗留快照被
+重复 PUT、`set -e` 在 `rc=$?` 之前终止、断言失败后照常回写、核对基准被污染、
+以及最严重的——丢掉赋值导致静默无操作。第五轮仍在发现新缺陷。
+
+四个步骤、一个布尔值，却长出八十行 shell 和三个内嵌 python，而它的防护
+（防止静默丢规则）**不需要这段机制**：取回-改一个键-回写本身就没有丢规则的空间，
+手工构造载荷才有。复杂度没有降低风险，它自己成了缺陷来源。所以这一节只留下
+最小做法，外加一条确定性验收：**读回远端，看到 `true`。**
 ### 验证闸门确实在拦
 
 配置为 `true` 只是配置证据。行为证据需要一张**必需检查全绿但仍有未解决 thread** 的 PR：
@@ -2040,39 +1997,37 @@ gh pr merge <n> --repo $REPO --squash                                       # �
 `BLOCKED` 也可由 pending 的必需检查造成，所以必须在所有必需检查 `pass` 之后再读，
 否则归因不成立。
 
-### 上述脚本的自检（在本地对 fixture 跑，未触碰远端）
+### 为什么没有脚本自检
 
-**用真的 shell 跑整段脚本，并且断言「结果」而不只是退出码**。用一个假 `gh`（读
-`state.json`、`PUT` 时把输入拷进去）驱动，读回最终落盘的规则集：
+这一节原先记录的是三版「健壮」脚本的 fixture 自检。脚本已删除（理由见「为什么不写成
+一个脚本」），自检随之删除——为一段不存在的代码保留测试记录，比不写更糟。
 
-| 用例 | 期望 | 实测 |
-| --- | --- | --- |
-| 需要变更（`false`） | rc=0 **且 gate 变为 `true`** | rc=0，gate=`true` |
-| 重复执行（已为 `true`） | 提示无需变更，rc=0 | rc=0，`already enabled; nothing to do` |
-| 两次读取之间远端被他人改动 | 拒绝回写，rc=1 | rc=1，`ruleset changed between reads; re-run instead of overwriting` |
-| 回写后误删了 `deletion` 规则 | 差异核对失败并中止 | AssertionError，rc=1 |
+保留下来的只有实测结论，因为它们解释了最终为什么是最小做法：
 
-第一行的措辞是刻意的：**只断言 rc 的测试会让一个什么都不改的脚本通过**。本片第一版正是
-如此——python 里真正赋值那一行在改写时被丢掉，循环只做判断、从不改动，于是 PUT 回写一份
-与远端完全相同的规则集，脚本以 rc=0 退出并声称已启用。它逃过了当时那版只检查 rc 的自检。
+| 版本 | 实测缺陷 |
+| --- | --- |
+| 第一版 | 固定路径的遗留快照在后续运行中被重复 PUT |
+| 第二版 | `set -e` 在 `rc=$?` 之前因退出码 3 终止，「已启用」这条正常路径反报失败（实测旧写法 rc=3、改为 `if !` 后 rc=0） |
+| 第三版 | 核对基准被污染，抓不住并发；**且丢掉赋值那一行，PUT 回一份与远端相同的规则集，rc=0 声称已启用，而闸门始终是 `false`** |
 
-对照实测（同一个假 `gh`，只换脚本）：
+第三版那条静默无操作是本片最严重的缺陷，它逃过了当时的自检，因为那版自检只断言退出码。
+对照实测：丢掉赋值那版 rc=0 而落盘 gate=`false`；修正后 rc=0 且 gate=`true`。
 
-| 脚本 | rc | 落盘后的 gate |
-| --- | --- | --- |
-| 丢掉赋值那版 | 0 | **`false`**（静默无操作） |
-| 修正后 | 0 | `true` |
+结论不是「再加一条断言」，而是这段机制不该存在：四个步骤、一个布尔值，长出八十行 shell
+和三个内嵌 python，而它要防的风险（静默丢规则）来自手工构造载荷——取回-改一个键-回写
+本身没有丢规则的空间。每一版加固都引入一个新缺陷，到第五轮仍在发现。所以最终只保留
+最小做法，加一条确定性验收：**读回远端，看到 `true`。**
 
-因此第 2b 步在回写前显式断言载荷真的把该键从 `false` 改成了 `true`，并同时拒绝
-「规则集里根本没有 `pull_request` 规则」这种结构不符（退出码 4）。这两条断言是让上面
-那个缺陷无法再次通过的机制，而不是描述。
+### 并发行为的实测边界
 
-第二行抓到的是一类只在 shell 层出现的缺陷：`set -e` 会在 `rc=$?` 之前因 python 的非零
-退出码终止脚本，于是「已启用」这条正常路径反而报失败且不打印提示。对照实测——把退出码
-处理换回 `rc=$?` 的旧写法，同一用例返回 **rc=3**；改为 `if ! python3 …` 后返回 **0**。
+两次读取之间的并发变更会被覆盖，这是**已知且接受**的代价，记录在此而不是靠机制兜住：
 
-第三行抓到的是一类比差异核对更隐蔽的缺陷：只比对「第 1 步快照」与「回写后」是否一致，
-**抓不住并发**——第 1 步快照同样缺那条别人新增的规则，差异核对会照常通过。必须在回写前
-重新读取并与第 1 步原文比对。
+| 场景 | 行为 |
+| --- | --- |
+| 无人并发 | 正常，读回为 `true` |
+| 期间他人改动同一规则集 | 旧快照覆盖其改动，脚本不会报告 |
 
-第四行是 Devin 指出的路径：没有那条核对，丢失的规则会被静默写掉。
+替代方案是 `If-Match` 乐观锁，需要每次读取都从响应头捕获 `ETag`；`gh api` 默认不保留
+响应头，得用 `--include` 手工解析。为一次单键翻转引入响应头解析，比它防的风险更大——
+所以选择明确写下代价：并发窗口内不要并行操作同一个规则集，改完先读回确认。
+
