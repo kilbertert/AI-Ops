@@ -1924,3 +1924,55 @@ AGENTS.md 的自检条款无可沉淀的新操作步骤。
 `server-development-consensus` 的 `qa-plan.md` GOV-B19。
 
 **操作知识自检**：本次只用 `gh api` 读写了远端 Ruleset，未在主机上执行运维命令。
+
+### 可复用步骤：翻转一个 Ruleset 参数
+
+Ruleset 变更没有工具化封装，必须用 `gh api`。**关键是不要重建 JSON**：先取回整份规则集，
+只改目标键，其余原样回写，否则容易静默丢掉规则或条件。
+
+```bash
+REPO=kilbertert/AI-Ops
+RS=23760870                      # 规则集 id；用 gh api repos/$REPO/rulesets 列出
+
+# 1) 取回整份
+gh api "repos/$REPO/rulesets/$RS" > /tmp/rs.json
+
+# 2) 只改目标键，其余原样保留（变更前断言，防止重复执行）
+python3 - <<'PYEOF'
+import json
+d = json.load(open("/tmp/rs.json"))
+for r in d["rules"]:
+    if r["type"] == "pull_request":
+        assert r["parameters"]["required_review_thread_resolution"] is False
+        r["parameters"]["required_review_thread_resolution"] = True
+json.dump({"name": d["name"], "enforcement": d["enforcement"], "target": "branch",
+           "conditions": d["conditions"], "rules": d["rules"],
+           "bypass_actors": d.get("bypass_actors", [])},
+          open("/tmp/rs-new.json", "w"), indent=1)
+PYEOF
+
+# 3) 回写并核对
+gh api -X PUT "repos/$REPO/rulesets/$RS" --input /tmp/rs-new.json
+gh api "repos/$REPO/rulesets/$RS" --jq '.rules[]|select(.type=="pull_request")|.parameters.required_review_thread_resolution'
+gh api "repos/$REPO/rules/branches/main" --jq '[.[].type]|join(", ")'   # 确认规则仍在
+```
+
+注意：
+
+- `target: branch` 必须显式带上；取回的对象里没有这个字段，回写时容易漏。
+- 回滚就是把同一个键改回 `false` 再回写，不需要重建规则集。
+- 生效范围是远端、立即生效、对所有 PR 生效。本地没有任何东西能替代它，
+  所以 `dev-pr` 与本地 guard 都拦不住这类回归，只能靠上面第 3 步的复核命令。
+
+### 验证闸门确实在拦
+
+配置为 `true` 只是配置证据。行为证据需要一张**必需检查全绿但仍有未解决 thread** 的 PR：
+
+```bash
+gh pr view <n> --repo $REPO --json mergeStateStatus -q .mergeStateStatus   # 期望 BLOCKED
+gh pr merge <n> --repo $REPO --squash                                       # 期望被拒
+# -> "the base branch policy prohibits the merge"
+```
+
+`BLOCKED` 也可由 pending 的必需检查造成，所以必须在所有必需检查 `pass` 之后再读，
+否则归因不成立。
