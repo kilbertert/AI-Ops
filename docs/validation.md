@@ -1937,50 +1937,58 @@ set -euo pipefail                 # 失败即停：下面每一步非零都必�
 REPO=kilbertert/AI-Ops
 RS=23760870                       # 规则集 id；用 gh api repos/$REPO/rulesets 列出
 
-# 每次运行唯一的临时文件，退出时清理。不要用固定的 /tmp/rs-new.json：
-# 那份快照一旦留下，下次运行断言失败后仍会被 PUT，覆盖掉这期间远端新增的规则。
+# 每次运行唯一的临时目录，退出时清理。不要用固定的 /tmp/rs-new.json：
+# 那份快照一旦留下，下次运行失败后仍会被 PUT，覆盖掉这期间远端新增的规则。
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
-# 1) 取回整份（就在回写前，最小化并发窗口）
-gh api "repos/$REPO/rulesets/$RS" > "$work/rs.json"
+# 1) 取回整份，就在回写前，最小化并发窗口
+gh api "repos/$REPO/rulesets/$RS" > "$work/before.json"
 
-# 2) 只改目标键，其余原样保留。生产文件只在改动真正成立时才写出。
-python3 - "$work/rs.json" "$work/rs-new.json" <<'PYEOF'
+# 2) 只改目标键，其余原样保留。无需变更时不写文件。
+#    用 if ! 而不是取 $?：set -e 会在 `rc=$?` 之前就因非零退出终止脚本，
+#    于是「已启用」这条正常路径反而报失败。
+if python3 - "$work/before.json" "$work/payload.json" <<'PYEOF'
 import json, sys
 src, dst = sys.argv[1], sys.argv[2]
 d = json.load(open(src))
 for r in d["rules"]:
-    if r["type"] == "pull_request":
-        # 已是目标值就直接退出且不写文件，避免重复执行
-        if r["parameters"]["required_review_thread_resolution"] is True:
-            sys.exit(3)
-        r["parameters"]["required_review_thread_resolution"] = True
+    if r["type"] == "pull_request" and r["parameters"]["required_review_thread_resolution"] is True:
+        sys.exit(3)                      # 3 = 无需变更
 json.dump({"name": d["name"], "enforcement": d["enforcement"], "target": "branch",
            "conditions": d["conditions"], "rules": d["rules"],
            "bypass_actors": d.get("bypass_actors", [])},
           open(dst, "w"), indent=1)
 PYEOF
-# 退出码 3 = 无需变更；set -e 下需显式放行，其他非零仍然中止
-rc=$?; if [ "$rc" -eq 3 ]; then echo "already enabled; nothing to do"; exit 0; fi
-[ "$rc" -eq 0 ] || exit "$rc"
+then :; else
+  rc=$?
+  [ "$rc" -eq 3 ] && { echo "already enabled; nothing to do"; exit 0; }
+  exit "$rc"
+fi
 
-# 3) 回写，并把回写前后的规则集做一次差异核对
-gh api -X PUT "repos/$REPO/rulesets/$RS" --input "$work/rs-new.json" >/dev/null
+# 3) 回写前重新读取并与第 1 步比对。并发改名会被这一步抓住；只比对「除目标键外
+#    是否变化」是抓不住的——第 1 步的快照同样缺那条新规则，差异核对会照常通过。
+gh api "repos/$REPO/rulesets/$RS" > "$work/recheck.json"
+if ! cmp -s "$work/before.json" "$work/recheck.json"; then
+  echo "ruleset changed between reads; re-run instead of overwriting" >&2
+  exit 1
+fi
+
+# 4) 回写并核对
+gh api -X PUT "repos/$REPO/rulesets/$RS" --input "$work/payload.json" >/dev/null
 gh api "repos/$REPO/rulesets/$RS" > "$work/after.json"
-python3 - "$work/rs.json" "$work/after.json" <<'PYEOF'
+python3 - "$work/before.json" "$work/after.json" <<'PYEOF'
 import json, sys
 before = json.load(open(sys.argv[1])); after = json.load(open(sys.argv[2]))
-# 断言：除目标键外，其余规则与条件逐字未变
-def norm(rules, drop_target):
+def norm(d, drop_target):
     out = []
-    for r in rules:
+    for r in d["rules"]:
         p = dict(r.get("parameters") or {})
         if drop_target and r["type"] == "pull_request":
             p.pop("required_review_thread_resolution", None)
         out.append((r["type"], json.dumps(p, sort_keys=True)))
     return sorted(out)
-assert norm(before["rules"], True) == norm(after["rules"], True), "unrelated rule changed"
+assert norm(before, True) == norm(after, True), "unrelated rule changed"
 assert before["conditions"] == after["conditions"], "conditions changed"
 print("gate =", [r["parameters"]["required_review_thread_resolution"]
                  for r in after["rules"] if r["type"] == "pull_request"][0])
@@ -2016,11 +2024,22 @@ gh pr merge <n> --repo $REPO --squash                                       # �
 
 ### 上述脚本的自检（在本地对 fixture 跑，未触碰远端）
 
+**用真的 shell 跑整段脚本**，而不是只测内嵌的 python——下面第二行正是只测 python 会漏掉的。
+用一个假 `gh`（读 `state.json`、`PUT` 时把输入拷进去）驱动，四条用例：
+
 | 用例 | 期望 | 实测 |
 | --- | --- | --- |
-| 需要变更（键为 `false`） | 写出新快照，退出码 0 | 写出、rc=0 |
-| 重复执行（键已为 `true`） | 不写快照，退出码 3，提示无需变更 | 未写文件、rc=3 |
-| 回写后除目标键外无变化 | 差异核对通过 | PASS |
+| 需要变更（键为 `false`） | 正常完成，rc=0 | rc=0 |
+| 重复执行（键已为 `true`） | 提示无需变更，rc=0 | rc=0，输出 `already enabled; nothing to do` |
+| 两次读取之间远端被他人改动 | 拒绝回写，rc=1 | rc=1，输出 `ruleset changed between reads; re-run instead of overwriting` |
 | 回写后误删了 `deletion` 规则 | 差异核对失败并中止 | AssertionError，rc=1 |
 
-第四行正是 Devin 指出的路径：没有这条核对，丢失的规则会被静默写掉。
+第二行抓到的是一类只在 shell 层出现的缺陷：`set -e` 会在 `rc=$?` 之前因 python 的非零
+退出码终止脚本，于是「已启用」这条正常路径反而报失败且不打印提示。实测对照——把退出码
+处理换回 `rc=$?` 的旧写法，同一用例返回 **rc=3**；改为 `if ! python3 …` 后返回 **0**。
+
+第三行抓到的是一类比差异核对更隐蔽的缺陷：只比对「第 1 步快照」与「回写后」是否一致，
+**抓不住并发**——第 1 步快照同样缺那条别人新增的规则，差异核对会照常通过。必须在回写前
+重新读取并与第 1 步原文比对。
+
+第四行是 Devin 指出的路径：没有那条核对，丢失的规则会被静默写掉。
