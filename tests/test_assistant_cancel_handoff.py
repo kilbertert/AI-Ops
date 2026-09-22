@@ -247,3 +247,44 @@ def test_no_document_claims_the_stop_link_was_already_accepted() -> None:
                 f"{name}:{number} reports the stop-generation link as accepted "
                 "without pointing at the PRD or a test that proves it"
             )
+
+
+#: Every route the app registers whose path promises a cancellation.
+_CANCEL_ROUTE = re.compile(r'@app\.(?:get|post|put|delete|patch)\(\s*"([^"]*cancel[^"]*)"')
+
+#: The one cancel route that exists. Diagnoses deliberately have none (PRD #346
+#: Out of Scope), and the handoff says so in prose.
+_ONLY_CANCEL_ROUTE = "/v1/assistant/questions/{qa_id}/cancel"
+
+
+def test_the_handoff_warns_that_a_diagnosis_cannot_be_stopped() -> None:
+    """Diagnoses lock the input box without offering a stop — and must say so.
+
+    The handoff splits "who waits" and "who can be cancelled" across different
+    tables, so a reader wiring the waiting-state table alone draws a stop button
+    for diagnoses that can only ever answer 404. The warning is load-bearing.
+    """
+    text = HANDOFF.read_text(encoding="utf-8")
+    assert "没有取消路由" in text, (
+        "the handoff no longer states that the diagnosis path has no cancel route; "
+        "a frontend wiring the waiting-state table will draw a stop button that cannot work"
+    )
+    assert "刻意保留" in text, (
+        "the handoff no longer says the diagnosis asymmetry is deliberate, "
+        "so it reads as an oversight and invites a workaround"
+    )
+
+
+def test_only_the_assistant_question_route_can_be_cancelled() -> None:
+    """The doc's "diagnoses cannot be stopped" claim is checked against the app.
+
+    If a diagnosis cancel route is ever added, this fails and points at the
+    handoff, which would otherwise keep telling two teams to render a stop-less
+    waiting state for a flow that had since gained a stop.
+    """
+    source = (PROJECT_ROOT / "src" / "aiops_diagnostics" / "gateway_api.py").read_text(encoding="utf-8")
+    routes = set(_CANCEL_ROUTE.findall(source))
+    assert routes == {_ONLY_CANCEL_ROUTE}, (
+        f"cancel routes changed to {sorted(routes)}; update {HANDOFF.name} §1.1, "
+        "which states that only the assistant-question path can be cancelled"
+    )
