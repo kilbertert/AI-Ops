@@ -135,6 +135,10 @@ class _TurnRetrieval:
 
     reference_ids: set[str] = field(default_factory=set)
     media_by_id: dict[str, MediaResource] = field(default_factory=dict)
+    #: The document names this turn's searches actually returned. The guard's
+    #: resource-name exemption is decided on this: a title is a resource name
+    #: only when the library returned it, never because it looks like one (#376).
+    retrieved_titles: set[str] = field(default_factory=set)
     last_status: RetrievalStatus | None = None
     searches_used: int = 0
 
@@ -272,6 +276,8 @@ def _execute_searches(
         retrieval.last_status = result.status
         for chunk in result.chunks:
             retrieval.reference_ids.add(chunk.reference_id)
+            if chunk.title:
+                retrieval.retrieved_titles.add(chunk.title)
             for item in chunk.media:
                 retrieval.media_by_id[item.resource.resource_id] = item.resource
         payloads.append(
@@ -346,7 +352,10 @@ def _finalize(
     # neither saw it nor knew which block it belonged to — and the one
     # production shape that needed the resource-name exemption (a bare list)
     # was judged leaf by leaf, without kinds (#361, #364).
-    leak = answer_chinese_leak(AnswerSurface.from_public_blocks(payload["blocks"]), language)
+    leak = answer_chinese_leak(
+        AnswerSurface.from_public_blocks(payload["blocks"], retrieved_titles=retrieval.retrieved_titles),
+        language,
+    )
     if leak:
         # The prompt asked for the output language and the model produced
         # Chinese anyway — a contract miss, not an outage. Deliver the

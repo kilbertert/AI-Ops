@@ -232,6 +232,47 @@ def test_every_finalisation_point_hands_the_guard_the_contract_payload() -> None
     )
 
 
+def _from_public_blocks_without_source_truth(tree: ast.Module, filename: str) -> list[str]:
+    """``file:line`` for every ``from_public_blocks`` that omits ``retrieved_titles``.
+
+    #376 decides the resource-name exemption on source truth: a title is a
+    resource name only when this run actually retrieved it. When no truth is
+    supplied the rule falls back to the old kind-only test, which is the hole
+    #376 closes -- so a surface that has the data and forgets to pass it silently
+    restores it. That "forgot to pass it" is exactly what this asserts against.
+    """
+    offenders: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
+        if name != "from_public_blocks":
+            continue
+        if not any(keyword.arg == "retrieved_titles" for keyword in node.keywords):
+            offenders.append(f"{filename}:{node.lineno}")
+    return offenders
+
+
+def test_every_contract_payload_carries_the_run_s_retrieved_titles() -> None:
+    """A finalisation point must hand the guard the run's retrieved resource names.
+
+    The exemption is only as strong as the provenance it is given: without
+    ``retrieved_titles`` the guard cannot tell a resource name from a heading the
+    model invented, and a media-block heading like `操作步骤` is delivered to an
+    English reader. Provenance is data the surface already holds at finalisation,
+    so the only way to lose it is to not pass it.
+    """
+    offenders: list[str] = []
+    for path, tree in _trees():
+        offenders.extend(_from_public_blocks_without_source_truth(tree, path.name))
+
+    assert not offenders, (
+        "every AnswerSurface.from_public_blocks call must pass retrieved_titles, "
+        f"or the #376 exemption falls back to the shape-only hole; found: {'; '.join(offenders)}"
+    )
+
+
 def test_the_enumeration_covers_every_finalisation_point() -> None:
     """A guard that finds no call site passes vacuously.
 

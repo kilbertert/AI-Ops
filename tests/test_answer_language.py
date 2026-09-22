@@ -462,3 +462,83 @@ def test_a_bare_chinese_proper_noun_is_still_judged() -> None:
     from aiops_diagnostics.i18n import chinese_leak
 
     assert chinese_leak("See the case from 特来电.") != ""
+
+
+# --- source-truth exemption (#376) ------------------------------------------------
+#
+# The exemption used to key on value SHAPE alone, so a short model-authored
+# Chinese heading (`操作步骤`) on a media block passed as if it were the stored
+# filename — while the same string in a text block was caught. The heading was
+# never retrieved from the library, so shape cannot tell them apart; what can is
+# whether the value is a resource THIS run actually returned.
+
+
+def test_a_model_authored_title_on_a_media_block_is_a_leak() -> None:
+    """A short Chinese heading the model invented is prose, not a resource name.
+
+    `操作步骤` is short and punctuation-free, so `looks_like_asset_name` accepts
+    it. It was never retrieved from the library, so it must be judged.
+    """
+    block = {"kind": "image", "title": "操作步骤", "text": "", "media": {"title": "charging-guide.png"}}
+    surface = AnswerSurface.from_public_blocks([block], retrieved_titles=("charging-guide.png",))
+    assert answer_chinese_leak(surface, "en") == "作操步骤"
+
+
+def test_the_same_title_is_judged_the_same_way_on_any_kind() -> None:
+    """Prose is prose: the block's kind must not decide whether its title is judged.
+
+    Both calls supply the run's retrieved names, so the exemption runs on source
+    truth for both — the media block's invented heading is prose exactly like the
+    text block's, and both are judged.
+    """
+    retrieved = ("charging-guide.png",)
+    media = {"kind": "image", "title": "操作步骤", "text": "", "media": {"title": "charging-guide.png"}}
+    text = {"kind": "text", "title": "", "text": "操作步骤"}
+    a = answer_chinese_leak(AnswerSurface.from_public_blocks([media], retrieved_titles=retrieved), "en")
+    b = answer_chinese_leak(AnswerSurface.from_public_blocks([text], retrieved_titles=retrieved), "en")
+    assert a == b == "作操步骤"
+
+
+def test_a_retrieved_resource_name_is_still_exempt() -> None:
+    """The 41 acceptance conclusion: a Chinese resource name stays exempt.
+
+    AL-COV-10 records the live capture as 「残留中文仅媒体块 title =
+    新加坡无人电动巴士.mp4 —— 资源文件名，按设计豁免」. That must not regress.
+    """
+    name = "新加坡无人电动巴士.mp4"
+    block = {"kind": "video", "title": name, "text": "", "media": {"title": name}}
+    surface = AnswerSurface.from_public_blocks([block], retrieved_titles=(name,))
+    assert answer_chinese_leak(surface, "en") == ""
+
+
+def test_a_reference_title_is_exempt_even_without_a_descriptor() -> None:
+    """Reference blocks carry no mounted descriptor; their title is the source doc.
+
+    `to_public_dict` mounts `media` for image/video only, so keying the
+    exemption on "matches the descriptor" would withdraw it from every reference
+    card — the outcome the 41 record depends on. A reference title that this run
+    actually retrieved stays exempt.
+    """
+    name = "宣传.docx"
+    block = {"kind": "reference", "title": name, "text": ""}
+    surface = AnswerSurface.from_public_blocks([block], retrieved_titles=(name,))
+    assert answer_chinese_leak(surface, "en") == ""
+
+
+def test_an_unretrieved_reference_title_is_a_leak() -> None:
+    """Source truth cuts both ways: a Chinese title no retrieval returned is prose."""
+    block = {"kind": "reference", "title": "操作步骤", "text": ""}
+    surface = AnswerSurface.from_public_blocks([block], retrieved_titles=("宣传.docx",))
+    assert answer_chinese_leak(surface, "en") == "作操步骤"
+
+
+def test_ascii_resource_names_contribute_nothing() -> None:
+    """The reverse half: an ASCII retrieved name is not a new reason to withhold."""
+    block = {
+        "kind": "image",
+        "title": "charging-guide.png",
+        "text": "",
+        "media": {"title": "charging-guide.png"},
+    }
+    surface = AnswerSurface.from_public_blocks([block], retrieved_titles=("charging-guide.png",))
+    assert answer_chinese_leak(surface, "en") == ""
