@@ -1257,6 +1257,33 @@ runner 上执行 owner-authored `agent:review` canary，保留 workflow URL，�
 未完成业务验收：没有连接真实 `/diag/*` 服务、生产数据源或真实故障案例；本节只证明
 AFK 治理契约已部署并通过确定性检查，不代表诊断准确率或生产安全边界获得新的验收。
 
+## AFK 模板 1.2.0 挂载式端点验证（2026-09-22）
+
+本次验证范围是 AFK 沙箱的模型端点注入方式，不涉及业务运行时。模板由 afk-bootstrap
+PR #46 收敛，本仓 PR #381 用该模板的 `upgrade-afk.sh` 迁入（非手工改）。
+
+- `.sandcastle/profile.ts` 只保留 `claude` 与 `claude-stepfun` 两个档案。四个旧档案
+  （`claude-ark` / `agentrouter` / `psydo` / `aliyun-deepseek`）退役：前三个解析到
+  `cliproxyapi/` 下上游配额已耗尽的 settings 文件，选中必然在 agent 启动前失败；
+  `aliyun-deepseek` 曾是唯一的 Codex-provider 档案，其退役也让本仓 AFK 不再需要
+  Codex agent 路径。
+- `claude-stepfun` 的端点由**宿主 settings 文件只读挂入**沙箱
+  （`~/cliproxyapi/settings.stepfun.json`，可用 `AFK_STEPFUN_SETTINGS` 覆盖），
+  而不是构建期烤进镜像。因此：密钥不进入任何镜像层；轮换只需改该宿主文件，不需要
+  重建镜像，也不存在「secret 挂载不让层缓存失效、必须加 `--no-cache`」这个坑。
+- Dockerfile 中 #322 引入的 `ARG STEPFUN_BASE_URL` + `--mount=type=secret` +
+  settings 生成块，以及文件顶部那条「用 BuildKit secret 构建」的说明，均已删除。
+  后者在挂载之后就是在指示构建一个已被移除的镜像。
+- 确定性检查：`uv run pytest` **1161 项通过**、`uv run ruff check` 全部通过、
+  `node .sandcastle/policy-check.mjs all` 通过。本仓产品代码零改动。
+- 迁移脚本自身的拒绝面在 afk-bootstrap 有 8 个用例覆盖（拒绝即整树不变、拒绝降级、
+  发布失败可回滚、拒绝带项目编辑的 `profile.ts`、`.yaml` 工作流、路径含空格）。
+
+未执行真实故障案例，因此无业务验收：本节只证明端点注入方式已改为挂载式并通过确定性
+检查，不代表 agent 在真实 issue 上的端到端运行已验收。**合并后必须先用新 Dockerfile
+重建 `sandcastle:ai-ops-governance`**；`AFK_PROFILE` 已是 `claude-stepfun`，镜像未
+重建时触发 AFK 运行会让 wrapper 因没有对应 dispatch 分支而 `exit 2`。
+
 ## T1 权限上下文解析验证（2026-08-31）
 
 本次验证范围是 issue #71 的 `ScopeContext` 与身份映射，输入为模拟 UPMS 响应和
