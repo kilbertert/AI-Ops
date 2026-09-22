@@ -400,6 +400,46 @@ prompt 不可能拿它当依据，下一问之后历史里只剩它自己那一�
 异步表（`health_report_jobs` / `standard_diagnoses`）的重启恢复能力，仍是 #356 明确留下的
 范围外项。
 
+## #346 取消链路端到端真实验收（2026-09-22，真实网关栈 + 真实身份/会话/模型）
+
+**范围**：PRD #346 的用户停止链路（`cancelled` 终态 + 取消端点 + 解锁事件 + 重启收敛）。
+上一节（#358）记的是"本地自动化、尚未跑过真取消"；**本节补上真实链路**。
+
+**为什么不是 41 公网**：41 的活动源码 mtime 为 2026-09-20 18:45，早于 #360 合并（2026-09-22 08:19），
+实测 `POST .../{qa_id}/cancel` 返回 FastAPI 默认 `{"detail":"Not Found"}`（我们的错误形状是
+`{"error":{...}}`），即路由根本不存在。要在 41 验收须把 9 天内累计改动（含 9 个 HTTP 骨架重构与
+4 个租户可见性收敛）一并推上生产，超出本次授权范围，故不部署。
+
+**验收载体**：开发主机既有 `aiops-gateway.service`（`_runners/AI-Ops-deploy`，loopback 8787），
+把它快进到 `main` 后以**真实**身份/会话/模型跑通全链路：
+
+- **真实身份**：`x-third-session` → 隧道到 41 本机 Redis 的 `app:3rd_session:*`；平台判定经 UPMS
+  `qumall_upms` 真实查询（6410 条会话中筛出 54 条有 B 端身份映射的可用会话）。
+- **真实模型**：默认 `psydo-primary` 槽位 429 限流，切 `psydo-funded` 后正常出答。
+- 注：dev 网关默认配置缺第三方会话/平台库可达性（隧道指向已下线的 120），本次以临时隧道补齐；
+  这是**本地环境配置**问题，与代码缺陷无关，未改动仓库。
+
+**结果**：§8 三步全部 PASS。
+
+| 步骤 | 断言 | 实测 |
+|---|---|---|
+| 1 创建 | `202` + `status=queued` + `retry_after_ms=1000` | PASS（`type=qa`，真实 `qa_id`） |
+| 2 取消 | `200` + `status=cancelled` + `result:null` + `error:null` | PASS |
+| 2' 取消后轮询 | 终态保持、`retry_after_ms=null`、晚到 worker 不覆盖 | PASS（12 秒后仍 `cancelled`，claim-guard 生效） |
+| 3 同会话再问 | 不再 `409 CONVERSATION_BUSY`；被停止的轮次不入 `turns` | PASS（`is_generating` 由 `true`→`false`，`turns` 为 0，未被回答污染） |
+| 幂等 | 重复取消不报错，返回该作业自身终态 | PASS（对已 `failed` 的作业取消返回 `200` + 原终态，非错误） |
+| 重启收敛 | 重启前 `running` 的提问不再卡死 | PASS（收敛为 `failed` + `QA_INTERRUPTED_BY_RESTART`，`retry_after_ms=null`） |
+
+**这轮验收真正打中了两条修复**：`cancelled` 终态与取消端点（#354/#357）、重启收敛（#356）。
+重启收敛一条在 41 上**无法验**（该代码不在 41），只在本地真实栈验到。
+
+**环境复原**：部署工作树已 `git reset --hard` 回 `52fa8a4`（`state=preserved` 不变）、
+`gateway.env` 已还原（临时第三方会话变量删除、key slot 还原 `psydo-primary`）、
+临时隧道（16390/23306/15999）已全部关闭、开发库 `gateway.db` 已备份至
+`_runners/AI-Ops-deploy-rollback-20260922-162827/`。
+
+**仍未完成**：41 公网链路取消验收（待 41 部署 + BFF 放行 `/cancel`）。**不得**以本地结果记为 41 已验收。
+
 ## #358 取消契约分发 + #173 断链纠正（2026-09-21，本地自动化验证）
 
 **范围**：PRD #346 子票 T5。把助手入口的等待态契约交付给 BFF 组与前端组，并纠正「停止生成」
