@@ -74,7 +74,8 @@ SSHPASS='<现场从受控来源取得>' sshpass -e ssh -o StrictHostKeyChecking=
 ```bash
 # 1) 本地打包（在 canonical checkout，确保在目标 commit）
 tar -czf /tmp/aiops-sync.tar.gz -C src aiops_diagnostics
-tar tzf /tmp/aiops-sync.tar.gz | head -1   # 必须输出 aiops_diagnostics/；不是就先停下来
+first=$(tar tzf /tmp/aiops-sync.tar.gz | head -1)
+[ "$first" = "aiops_diagnostics/" ] || { echo "错误：包内首层是 $first，期望 aiops_diagnostics/；先停下，别上传" >&2; exit 1; }
 
 # 2) 上传
 scp /tmp/aiops-sync.tar.gz aiops-41:/tmp/
