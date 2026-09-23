@@ -62,6 +62,7 @@ class _Runtime:
         self.calls: list[tuple[str, str]] = []
         self._qa = {}  # qa_id -> record
         self.skip_retrieval = False
+        self.classify_calls = 0
 
     def shutdown(self) -> None:
         pass
@@ -95,6 +96,7 @@ class _Runtime:
 
     def classify_lightweight(self, question: str, *, language: str = "zh", tenant_id: str | None = None):
         del question, language, tenant_id
+        self.classify_calls += 1
         return self.classified
 
     def start_assistant_qa(
@@ -105,9 +107,11 @@ class _Runtime:
         conversation=None,
         conversation_turn_no=None,
         language="zh",
+        promo_target=None,
+        promo_intent=None,
         skip_retrieval=False,
     ):
-        del conversation, conversation_turn_no
+        del conversation, conversation_turn_no, promo_target, promo_intent
         self.skip_retrieval = skip_retrieval
         qa_id = "qa_test00000000000000000000000000000001"
         self._qa[qa_id] = {"qa_id": qa_id, "question": question, "status": "queued", "result": None}
@@ -1295,3 +1299,107 @@ def test_a_low_risk_question_is_not_interrupted(tmp_path: Path) -> None:
     resp = client.post("/v1/assistant/questions", json={"question": "你好"}, headers=_headers())
     assert resp.status_code == 202
     assert resp.json()["type"] == "qa"
+
+
+def test_faq_shortcircuit_does_not_answer_an_unrelated_question(tmp_path: Path) -> None:
+    """A marginal keyword match whose routing intent is `casual` is not an FAQ.
+
+    The defect (#408, reproduced on 41): "今天天气怎么样" shares 天气 with the
+    summer-heat entry, and on so short a question that one word is half the
+    signature — the keyword score reaches full containment and the user is told
+    about high-temperature charging. The keyword score cannot tell this apart
+    from a real hit, so the routing intent decides.
+    """
+    client, runtime = _client(tmp_path)
+    runtime.classified = {"intent": "casual", "confidence": "high", "risk": "low"}
+    resp = client.post(
+        "/v1/assistant/questions",
+        json={"question": "今天天气怎么样"},
+        headers=_headers(),
+    )
+    # The keyword matcher does hit q026; the point is that this must not be
+    # what the user is told.
+    assert resp.status_code == 202, resp.text
+    assert resp.json()["type"] == "qa"
+
+
+def test_faq_shortcircuit_does_not_swallow_a_case_request(tmp_path: Path) -> None:
+    """`重卡充电案例` is the second false positive, and the only one in real traffic.
+
+    Found while measuring this ticket: the promo cue matcher catches "客户案例" /
+    "案例库" but not "重卡充电案例", so the question reached the catalog and was
+    answered as RFID-card content. Among the 86 deduplicated real questions it
+    is the sole marginal match — and Jev reads it as case exploration, which
+    #231 already says must not enter the FAQ.
+    """
+    client, runtime = _client(tmp_path)
+    runtime.classified = {"intent": "case_exploration", "confidence": "high", "risk": "low"}
+    resp = client.post(
+        "/v1/assistant/questions",
+        json={"question": "重卡充电案例"},
+        headers=_headers(),
+    )
+    assert resp.status_code in {200, 202}, resp.text
+    assert resp.json()["type"] != "faq"
+
+
+def test_a_confident_faq_match_is_answered_without_consulting_routing(tmp_path: Path) -> None:
+    """The instant path survives: a strong match never depends on the classifier.
+
+    This is what keeps every question clicked from the FAQ list — and every
+    catalog title itself — a synchronous zero-model answer. It also pins the
+    failure mode: if the routing decision said `casual` here (it would not),
+    the strong match must still win, or the catalog would become unanswerable
+    whenever the classifier mislabelled a real question.
+    """
+    client, runtime = _client(tmp_path)
+    runtime.classified = {"intent": "casual", "confidence": "high", "risk": "low"}
+    resp = client.post(
+        "/v1/assistant/questions",
+        json={"question": "夏季高温酷暑暴晒天气充电，需要注意什么？"},
+        headers=_headers(),
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["type"] == "faq"
+    assert body["question_id"] == "consumer.faq.q026"
+
+
+def test_faq_answer_survives_when_no_routing_decision_is_available(tmp_path: Path) -> None:
+    """No classifier configured must not empty the FAQ.
+
+    The #398 shape, caught in the act this time: an unconfigured routing source
+    returns "no decision", and if that suppressed the keyword match the whole
+    FAQ path would disappear on every deployment without one. "No decision" is
+    not a behaviour change.
+    """
+    client, runtime = _client(tmp_path)
+    runtime.classified = None
+    resp = client.post(
+        "/v1/assistant/questions",
+        json={"question": "无法拔枪怎么办"},
+        headers=_headers(),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["type"] == "faq"
+
+
+def test_a_short_question_asks_the_classifier_once(tmp_path: Path) -> None:
+    """One routing decision per request, even when the FAQ branch consults it.
+
+    The FAQ disambiguation is only free because it reuses the decision the
+    routing block below would have resolved anyway. Resolving it twice would
+    charge a second call to exactly the short questions the FAQ branch does NOT
+    suppress — the safe path — against an upstream that is metered per day
+    (measured 2026-09-23: the free tier is 500 requests/day, and exhausting it
+    makes routing unavailable outright).
+    """
+    client, runtime = _client(tmp_path)
+    runtime.classified = {"intent": "casual", "confidence": "high", "risk": "low"}
+    resp = client.post("/v1/assistant/questions", json={"question": "今天天气怎么样"}, headers=_headers())
+    # A suppressed match is the case that reaches BOTH callers: the FAQ branch
+    # resolves the decision to reject the entry, then falls through to the
+    # routing block that wants the same decision.
+    assert resp.status_code == 202
+    assert resp.json()["type"] == "qa"
+    assert runtime.classify_calls == 1
