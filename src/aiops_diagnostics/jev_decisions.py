@@ -34,6 +34,7 @@ part of the contract rather than a convenience.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -146,6 +147,16 @@ class Decision:
     usage: Mapping[str, Any] = field(default_factory=dict)
 
 
+def _primitive_of(question: Question) -> str:
+    if isinstance(question, Choice):
+        return CHOICE
+    if isinstance(question, Noul):
+        return NOUL
+    if isinstance(question, Score):
+        return SCORE
+    raise ValueError(f"unsupported question type: {type(question).__name__}")
+
+
 def _question_payload(question: Question) -> dict[str, Any]:
     if isinstance(question, Choice):
         if not question.criteria:
@@ -154,32 +165,60 @@ def _question_payload(question: Question) -> dict[str, Any]:
     if isinstance(question, Noul):
         return {"type": NOUL, "instructions": question.instructions}
     if isinstance(question, Score):
-        if not question.criteria:
+        # A bare string would iterate per character and ship a scale of single
+        # letters, which upstream would answer against without complaint.
+        if isinstance(question.criteria, str) or not question.criteria:
             raise ValueError("a score question needs at least one level")
         return {"type": SCORE, "instructions": question.instructions, "criteria": list(question.criteria)}
     raise ValueError(f"unsupported question type: {type(question).__name__}")
 
 
-def _as_float(value: Any) -> float | None:
-    """Coerce a numeric field, rejecting bool.
+def _as_number(value: Any) -> float | None:
+    """Coerce a numeric field, rejecting bool and non-finite values.
 
     ``bool`` is an ``int`` in Python, so ``isinstance(True, (int, float))``
     passes — and a service answering ``true`` where a probability belongs should
     be a contract failure, not the number 1.0.
+
+    Non-finite values are rejected for a sharper reason: ``json.loads`` accepts
+    the literals ``NaN`` and ``Infinity``, and a NaN that reaches a caller's
+    threshold comparison makes every comparison false in **both** directions.
+    A routing rule like ``confidence >= 0.8`` would then reject the value
+    without anyone learning the response was malformed. Better to fail here,
+    where the cause is still legible.
     """
     if isinstance(value, bool):
         return None
-    if isinstance(value, (int, float)):
+    if isinstance(value, (int, float)) and math.isfinite(value):
         return float(value)
     return None
 
 
-def _as_float_map(value: Any) -> dict[str, float]:
+def _as_probability(value: Any) -> float | None:
+    """A number that is also a valid probability (0..1)."""
+    number = _as_number(value)
+    if number is None or not 0.0 <= number <= 1.0:
+        return None
+    return number
+
+
+def _as_number_map(value: Any) -> dict[str, float]:
     if not isinstance(value, Mapping):
         return {}
     out: dict[str, float] = {}
     for key, item in value.items():
-        number = _as_float(item)
+        number = _as_number(item)
+        if number is not None:
+            out[str(key)] = number
+    return out
+
+
+def _as_probability_map(value: Any) -> dict[str, float]:
+    if not isinstance(value, Mapping):
+        return {}
+    out: dict[str, float] = {}
+    for key, item in value.items():
+        number = _as_probability(item)
         if number is not None:
             out[str(key)] = number
     return out
@@ -191,40 +230,59 @@ def _parse_answer(answer_id: str, raw: Any) -> Answer:
     kind = raw.get("type")
     if kind == CHOICE:
         choice = raw.get("choice")
-        confidence = _as_float(raw.get("confidence"))
+        confidence = _as_probability(raw.get("confidence"))
         if not isinstance(choice, str) or not choice:
             raise JevInvalidResponse(f"choice answer {answer_id!r} carried no label")
         if confidence is None:
             raise JevInvalidResponse(f"choice answer {answer_id!r} carried no confidence")
         return ChoiceAnswer(
-            choice=choice, confidence=confidence, probabilities=_as_float_map(raw.get("probabilities"))
+            choice=choice, confidence=confidence, probabilities=_as_probability_map(raw.get("probabilities"))
         )
     if kind == NOUL:
-        noul = _as_float(raw.get("noul"))
+        noul = _as_probability(raw.get("noul"))
         if noul is None:
             raise JevInvalidResponse(f"noul answer {answer_id!r} carried no value")
         if not 0.0 <= noul <= 1.0:
             raise JevInvalidResponse(f"noul answer {answer_id!r} is outside 0..1")
         return NoulAnswer(noul=noul)
     if kind == SCORE:
-        score = _as_float(raw.get("score"))
+        score = _as_number(raw.get("score"))
         if score is None:
             raise JevInvalidResponse(f"score answer {answer_id!r} carried no score")
         legend = raw.get("legend")
+        confidence = _as_probability(raw.get("confidence"))
         return ScoreAnswer(
             score=score,
-            confidence=_as_float(raw.get("confidence")) or 0.0,
+            # A score may legitimately carry no confidence; only an invalid one
+            # is a contract failure.
+            confidence=confidence if confidence is not None else 0.0,
             legend={str(k): str(v) for k, v in legend.items()} if isinstance(legend, Mapping) else {},
-            probabilities=_as_float_map(raw.get("probabilities")),
+            probabilities=_as_probability_map(raw.get("probabilities")),
         )
     raise JevInvalidResponse(f"answer {answer_id!r} has an unsupported type: {kind!r}")
 
 
-def parse_decision(payload: Any, *, expected_ids: Sequence[str] = ()) -> Decision:
+#: Which answer class each question primitive must come back as.
+_ANSWER_FOR_QUESTION: dict[str, type] = {CHOICE: ChoiceAnswer, NOUL: NoulAnswer, SCORE: ScoreAnswer}
+
+
+def parse_decision(
+    payload: Any,
+    *,
+    expected: Mapping[str, Question] | None = None,
+    expected_ids: Sequence[str] = (),
+) -> Decision:
     """Read a service response into a ``Decision``.
 
     Kept separate from the transport so the parsing contract is testable without
     a server, and so a caller that already holds a payload can reuse it.
+
+    ``expected`` is the question set that was asked, and passing it is what makes
+    the correspondence checkable. Verifying only that each id is present accepts
+    a ``noul`` answer to a ``choice`` question: the caller then holds an object
+    with no ``choice`` field where its own types promised one, and the mismatch
+    surfaces far from its cause. ``expected_ids`` remains for callers that hold
+    only id strings and can accept the weaker check.
     """
     if not isinstance(payload, Mapping):
         raise JevInvalidResponse("response is not an object")
@@ -235,6 +293,24 @@ def parse_decision(payload: Any, *, expected_ids: Sequence[str] = ()) -> Decisio
     missing = [item for item in expected_ids if item not in answers]
     if missing:
         raise JevInvalidResponse(f"response omitted requested questions: {', '.join(missing)}")
+    for name, question in (expected or {}).items():
+        answer = answers.get(name)
+        if answer is None:
+            raise JevInvalidResponse(f"response omitted requested question: {name}")
+        wanted = _ANSWER_FOR_QUESTION.get(_primitive_of(question))
+        if wanted is not None and not isinstance(answer, wanted):
+            raise JevInvalidResponse(
+                f"answer {name!r} is a {type(answer).__name__} but the question asked for a {wanted.__name__}"
+            )
+        if (
+            isinstance(question, Choice)
+            and isinstance(answer, ChoiceAnswer)
+            and answer.choice not in question.criteria
+        ):
+            raise JevInvalidResponse(
+                f"answer {name!r} chose {answer.choice!r}, which is not one of the "
+                f"labels that question offered"
+            )
     usage = payload.get("usage")
     return Decision(
         model=str(payload.get("model") or ""),
@@ -258,6 +334,11 @@ class JevSettings:
             raise ValueError("Jev api_key is required")
         if self.model not in KNOWN_MODELS:
             raise ValueError(f"unknown Jev model: {self.model}")
+        # Blank is not "use the default": the WAF then rejects every request with
+        # a 403 that reads like an auth failure, which is exactly the confusion
+        # the module docstring exists to prevent.
+        if not self.user_agent.strip():
+            raise ValueError("Jev user_agent is required")
 
 
 class JevDecisionClient:
@@ -333,7 +414,7 @@ class JevDecisionClient:
                 methods=frozenset({"POST"}),
             ),
         )
-        return parse_decision(body, expected_ids=tuple(questions))
+        return parse_decision(body, expected=questions)
 
 
 def _demo() -> None:
@@ -372,9 +453,12 @@ def _demo() -> None:
         "high",
     ]
 
-    # A boolean is not a probability.
-    assert _as_float(True) is None
-    assert _as_float(0) == 0.0
+    # A boolean is not a probability, and neither is NaN.
+    assert _as_probability(True) is None
+    assert _as_probability(0) == 0.0
+    assert _as_probability(float("nan")) is None
+    assert _as_probability(1.5) is None
+    assert _as_number(float("inf")) is None
 
     # Malformed answers are contract failures, not silent defaults.
     for bad in (

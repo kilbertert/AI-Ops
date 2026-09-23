@@ -306,3 +306,68 @@ def test_a_rejected_request_is_not_retried(monkeypatch: pytest.MonkeyPatch) -> N
     with pytest.raises(JevUnavailable):
         _client().decide("state", {"q": Noul(instructions="x?")})
     assert attempts["n"] == 1
+
+
+# --- The correspondence between a question and its answer (review findings) ---
+# The client promises one typed answer per typed question. Verifying only that
+# each id is present accepts a `noul` answer to a `choice` question, and the
+# mismatch then surfaces wherever the caller tries to read `.choice`.
+
+
+def test_an_answer_of_the_wrong_primitive_is_rejected() -> None:
+    """A choice question answered with a noul is not a decision, it is a bug."""
+    asked = {"intent": Choice(instructions="which?", criteria={"a": "A", "b": "B"})}
+    with pytest.raises(JevInvalidResponse):
+        parse_decision({"answers": {"intent": {"type": "noul", "noul": 0.8}}}, expected=asked)
+
+
+def test_a_choice_outside_the_offered_labels_is_rejected() -> None:
+    """The label must come from the criteria that were sent, not from anywhere."""
+    asked = {"intent": Choice(instructions="which?", criteria={"a": "A", "b": "B"})}
+    with pytest.raises(JevInvalidResponse):
+        parse_decision(
+            {"answers": {"intent": {"type": "choice", "choice": "z", "confidence": 0.9}}},
+            expected=asked,
+        )
+
+
+def test_a_matching_answer_is_accepted() -> None:
+    asked = {"intent": Choice(instructions="which?", criteria={"a": "A", "b": "B"})}
+    decision = parse_decision(
+        {"answers": {"intent": {"type": "choice", "choice": "a", "confidence": 0.9}}}, expected=asked
+    )
+    assert decision.answers["intent"].choice == "a"
+
+
+def test_a_non_finite_probability_is_rejected() -> None:
+    """NaN would make every threshold comparison false in both directions.
+
+    ``json.loads`` accepts the literal ``NaN``, so without this check a routing
+    rule like ``confidence >= 0.8`` silently rejects a malformed response.
+    """
+    with pytest.raises(JevInvalidResponse):
+        parse_decision({"answers": {"q": {"type": "noul", "noul": float("nan")}}}, expected_ids=["q"])
+    with pytest.raises(JevInvalidResponse):
+        parse_decision(
+            {"answers": {"q": {"type": "choice", "choice": "a", "confidence": float("inf")}}},
+            expected_ids=["q"],
+        )
+
+
+def test_an_out_of_range_confidence_is_rejected() -> None:
+    with pytest.raises(JevInvalidResponse):
+        parse_decision(
+            {"answers": {"q": {"type": "choice", "choice": "a", "confidence": 1.5}}}, expected_ids=["q"]
+        )
+
+
+def test_a_score_scale_that_is_a_string_is_rejected() -> None:
+    """``list("abc")`` is ``['a','b','c']`` — a scale of single letters."""
+    with pytest.raises(ValueError):
+        _client().decide("state", {"q": Score(instructions="how bad?", criteria="abc")})
+
+
+def test_a_blank_user_agent_is_rejected() -> None:
+    """Blank is not "use the default" — the WAF then 403s every request."""
+    with pytest.raises(ValueError):
+        JevSettings(base_url=BASE, api_key="k", user_agent="   ").validate()
