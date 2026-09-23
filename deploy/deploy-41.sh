@@ -178,8 +178,25 @@ git archive "$FULL_SHA" src/aiops_diagnostics | tar -x -C "$STAGE"
 REFERENCE_FILES="SOP.md 充电桩问题排查SOP.md docs/architecture.md"
 for ref in $REFERENCE_FILES; do
   if ! git cat-file -e "$FULL_SHA:$ref" 2>/dev/null; then
-    info "参考资料 $ref 不在该 commit 里 —— 跳过"
-    continue
+    # **不跳过，停止部署。** 跳过意味着「不同步也不删除」：41 上的旧副本会留下，
+    # 而诊断每次仍从 /opt/aiops-41 读它 —— 于是 main 删掉某份参考资料后，生产继续
+    # 使用已删除的内容，且没有任何信号。
+    #
+    # 有意**不**自动删除 41 上的旧副本：那是诊断的运行输入，由 CI 单方面删掉比留下
+    # 更难恢复。把决定交回给人：要么恢复该文件，要么明确把 REFERENCE_FILES 改掉
+    # （那是一次单独的、被评审核过的改动）。
+    cat >&2 <<EOF
+目标 commit ($SHORT_SHA) 缺少受管的运行时参考资料：$ref
+
+诊断会从 /opt/aiops-41 读这份文件并拷进每个 workspace。若在此跳过，41 上的旧副本
+会继续被使用 —— main 已删除的内容仍在生产生效，且不会报错。
+
+已停止，未上传、未写入、未重启。请二选一：
+  1. 恢复 $REFERENCE_FILES 中列出的这份文件；或
+  2. 明确把 $ref 从 deploy/deploy-41.sh 的 REFERENCE_FILES 移除
+     （同时处理 41 上的旧副本），走一次单独评审的改动。
+EOF
+    exit 1
   fi
   mkdir -p "$WORK/$(dirname "$ref")"
   git show "$FULL_SHA:$ref" > "$WORK/$ref"
