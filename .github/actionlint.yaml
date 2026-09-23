@@ -1,0 +1,9 @@
+# actionlint 配置：声明本仓自托管 runner 的自定义 label。
+#
+# 为什么需要：cd.yml 用 `[self-hosted, AI-Ops]` 而不是裸 `self-hosted`，把能执行
+# CD 的 runner 收敛到本仓那台 —— 裸 label 的含义是「任何一台自托管 runner」，
+# 任何新登记的 runner 都能领到生产部署密钥。actionlint 不认识自定义 label，
+# 不声明就会把这一行报成错误，从而掩盖真正的告警。
+self-hosted-runner:
+  labels:
+    - AI-Ops

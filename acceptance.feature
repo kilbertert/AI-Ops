@@ -1229,3 +1229,66 @@ Feature: 回答面输出语言契约收口
       And 请求未声明语言
       When 运行草稿预览
       Then 预览以已解析的语言运行（而非隐式落到中文）
+
+Feature: 持续部署到服务主机
+
+  Rule: 部署只在合并到 main 且改动影响运行时时发生
+
+    Scenario: 纯文档合并不触发部署
+      Given 一个只改 docs/ 的提交合并到 main
+      When CD workflow 评估触发条件
+      Then 不产生部署运行
+
+    Scenario: 影响运行时的合并触发一次受门控的部署
+      Given 一个改动 src/ 的提交合并到 main
+      When CD workflow 运行
+      Then 该运行绑定到 production-41 环境
+      And 在有人批准该环境之前不写入 41
+
+  Rule: 部署可自证跑了哪个 commit
+
+    Scenario: 部署后 /health 报出本次 commit
+      Given 已完成一次 `--commit <sha>` 部署
+      When 读取 41 本机的 /health
+      Then version 等于 `<semver>+<short-sha>`
+      And 服务为 active
+
+    Scenario: 回滚后 /health 报出被回滚到的 commit
+      Given 已对上一个已知良好 commit 执行 `--rollback-to`
+      When 读取 41 本机的 /health
+      Then version 含该 commit 的 short sha
+
+  Rule: 身份与产物受策略门约束
+
+    Scenario: 写入服务主机必须携带产物身份
+      Given 一次对 41 的产物上传
+      When 声明的 artifact-sha256 与载荷实际 sha 不符
+      Then dev-host 拒绝且不写入（退出 77）
+
+    Scenario: CD 用专用身份而非人工身份
+      Given CD 执行一次部署
+      When 解析其使用的 ssh 别名
+      Then 别名指向 CD 专用密钥
+      And 人工别名仍指向人工密钥
+
+  Rule: 拒绝即无副作用
+
+    Scenario: 环境前置不满足时以专用退出码失败
+      Given 缺少 tomllib 的解释器（python3 < 3.11）
+      When 运行 deploy-41.sh
+      Then 以 65（环境问题）退出，区别于部署失败
+      And 不上传、不写入、不重启
+
+    Scenario: 解包目录残留不得进入生产
+      Given /tmp/sync-check 留有上次中断部署的残留文件
+      When 执行部署
+      Then 残留文件不出现在 41 的源码目录
+      And 文件数与本地一致
+
+  Rule: 部署不等于业务验收
+
+    Scenario: CD 通过不宣称业务验收
+      Given 一次成功的 CD 部署
+      When 报告交付状态
+      Then 最多为 merged_waiting_deploy
+      And 真实端到端仍须按 runbook §5 由人用业务方 thirdSession 执行

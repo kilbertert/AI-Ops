@@ -1,0 +1,175 @@
+name: CD
+
+# 把合并到 main 的 src/ 部署到 41（AI-Ops Gateway 生产环境）。
+#
+# 与 CI 的分工：ci.yml 跑确定性检查（ruff / pytest / 编译 / 依赖）并作为 Ruleset
+# 的必需检查；本 workflow 只负责「把已合并的代码送上去」，不重复跑检查 —— 它在
+# main 上运行，而 main 只能通过带必需检查的 PR 进入。
+#
+# 与 AFK 的分工：AFK 只做 GitHub（分支 / PR / label），从不到达主机。到生产的
+# 交付此前 100% 靠人按 runbook §2 手工执行；本 workflow 是那条路的自动化版本，
+# 两者共用 deploy/deploy-41.sh，因此不会各自漂移。
+
+on:
+  push:
+    branches: [main]
+    # 只有会影响运行时的路径才部署。纯文档合并（本仓很常见）不该拉起一次
+    # 生产重启，也不该占用人工审批的注意力。
+    paths:
+      - "src/**"
+      - "deploy/**"
+      - ".github/workflows/cd.yml"
+      # 依赖清单也观察：它们变了却不触发，生产会停在旧依赖上，而且下一次 src 合并会被
+      # 脚本的漂移门拦下 —— CD 就永远收敛不到 main。让变更被看见，由脚本判定"能否部署"
+      # 还是"需要先更新 41 的依赖环境"（后者需独立决定，脚本会明确报出而不是硬上）。
+      - "pyproject.toml"
+      - "uv.lock"
+      # 运行时参考资料：它们进产物、也要落到 41（诊断每次读）。
+      # 触发集合必须与 deploy-41.sh 的 REFERENCE_FILES 一致，否则改了 SOP 却
+      # 不部署，生产会一直用旧规则 —— 而且不会有任何报错提示你。
+      - "SOP.md"
+      - "充电桩问题排查SOP.md"
+      - "docs/architecture.md"
+  # 手动触发只用于**重跑当前 main**（例如上次部署失败后重试），不提供任意 commit
+  # 入口：一个能选任意 fetched commit 的输入，等于让有权批准环境的人把从未通过 main
+  # 必需检查的提交部署到生产 —— 那把 Ruleset 绕开了。
+  #
+  # 回滚不靠选 commit，靠 `--rollback-to`：它需要一个**已经部署过**的 commit，
+  # 走本地脚本或下面的 rollback_to 输入（该输入不在本 workflow 里，见 PR 说明）。
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# 部署必须串行：两次并发写同一台主机的同一个目录会互相踩（备份、rsync、重启
+# 都不幂等）。cancel-in-progress 关掉 —— 中途取消会留下半部署状态。
+concurrency:
+  group: cd-41
+  cancel-in-progress: false
+
+jobs:
+  deploy-41:
+    # 必须用 self-hosted：41 不在 GitHub-hosted runner 的可达范围内，而且
+    # deploy-41.sh 依赖 dev-host，后者的配置（~/.ssh/config、库外 hosts.toml、
+    # 私钥）只存在于本机 claude 账户下。GitHub-hosted runner 既不持有也够不到。
+    #
+    # 用**本仓专属 label**（server-dev-runner-AI-Ops 带 `AI-Ops`），不只是
+    # `self-hosted`：后者的含义是「任何一台自托管 runner」，任何新登记的 runner
+    # 都能领这个 job，从而拿到生产部署密钥与部署权。专属 label 把能执行 CD 的
+    # runner 收敛到已知那一台。
+    runs-on: [self-hosted, AI-Ops]
+    timeout-minutes: 20
+
+    # 门控与审计都在这一行：
+    #   * environment 的 required reviewer 让「合并后自动准备好、人工点一下才写生产」
+    #     成为可能 —— 这是审批后自动执行，不是每次手跑命令。
+    #   * environment 限制为 main 分支，拒绝其它 ref。
+    #   * GitHub 会把每次运行记成一次 deployment，形成「哪个 commit 部署过、结果如何」
+    #     的账本；部署 success 会自动把同环境的旧部署标为 inactive。
+    environment: production-41
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # deploy-41.sh 用 `git archive <sha>` 取产物，所以需要该 commit 可达。
+          # fetch-depth: 0 保证 --rollback-to 一个较旧的 commit 也能取到。
+          fetch-depth: 0
+          persist-credentials: false
+
+      # 部署的永远是这次运行自己的 commit（GITHUB_SHA）。
+      # 不引入「让操作者挑一个别的 commit」的输入：environment 的 deployment 记录
+      # 是按 workflow ref/SHA 记的，若实际部署了另一个 sha，账本就会把生产归到错的
+      # commit 上 —— 而「哪个 commit 在跑」正是这套 CD 要能回答的问题。
+      # 回滚走 --rollback-to（见 runbook §2 的应急路径）。
+      - name: Resolve the commit to deploy
+        id: target
+        run: |
+          set -euo pipefail
+          git cat-file -e "${GITHUB_SHA}^{commit}"
+          echo "sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Install the CD deploy key
+        id: cdkey
+        env:
+          CD_SSH_KEY: ${{ secrets.DEPLOY_41_CD_SSH_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "$CD_SSH_KEY" ]; then
+            echo "DEPLOY_41_CD_SSH_KEY 未设置 —— CD 拒绝退化到人工密钥" >&2
+            exit 1
+          fi
+          # 从 secret 幂等落到固定路径，别名 aiops-41-cd 指向它。让 secret 成为
+          # 权威来源：轮换 secret 后重跑即完成换钥，不必登机器。
+          #
+          # **有意不删**（本步骤不做清理）。两个理由：
+          #   1. 应急预案要能用。`deploy-41.sh --rollback-to` 是出事故时的回滚手段，
+          #      而密钥只应存在于 job 生命周期内的话，workflow 跑完之后人工回滚就没
+          #      密钥可用了 —— 恰恰在最需要它的时候失效。
+          #   2. 在这个 self-hosted runner 上「用完即删」没有隔离意义：runner 以
+          #      `claude` 运行，HOME 就是持有 ~/.ssh 的那个账户，同一把密钥本来就在
+          #      同一台机器的同一用户下。删掉只是剧场，不是边界。
+          # 真正的隔离要靠独立 runner 身份（另一个决定），不是靠删文件。
+          install -d -m 700 "$HOME/.ssh"
+          key="$HOME/.ssh/id_ed25519_41_cd"
+          printf '%s\n' "$CD_SSH_KEY" > "$key"
+          chmod 600 "$key"
+          ssh-keygen -y -f "$key" >/dev/null   # 私钥格式自检，坏密钥在这里就失败
+          echo "CD 部署密钥已就位（$(ssh-keygen -lf "$key" | awk '{print $2}')）"
+
+      - name: Verify the CD identity resolves
+        # 别等到写生产时才发现身份不对：先确认别名解析到 CD 密钥、且主机清单
+        # 认为 41 是可写的服务类主机。deploy-41.sh 内部也会断言，这里先失败更早。
+        env:
+          PATH: /home/claude/miniconda3/bin:/home/claude/.local/bin:/usr/local/bin:/usr/bin:/bin
+        run: |
+          set -euo pipefail
+          # 2>/dev/null：ssh -G 在无 tty 时会给 stderr 打 "Pseudo-terminal will not
+          # be allocated" 之类提示，别让它混进解析结果。
+          alias_key=$(ssh -G aiops-41-cd 2>/dev/null | awk '$1=="identityfile"{print $2; exit}')
+          # 比**完整路径**，不是后缀：`*id_ed25519_41_cd` 会接受
+          # `.../evil/id_ed25519_41_cd` 这种形似路径 —— 看着通过了，实际用的是另一把
+          # 密钥。ssh 的 identityfile 可能显示为 `~/.ssh/...`，先展开再比。
+          expanded=${alias_key/#\~/$HOME}
+          if [ "$expanded" = "$HOME/.ssh/id_ed25519_41_cd" ]; then
+            echo "别名 aiops-41-cd 解析到 CD 密钥（$alias_key）✓"
+          else
+            echo "别名 aiops-41-cd 未指向 CD 密钥，实际：$alias_key（展开：$expanded）" >&2
+            exit 1
+          fi
+          dev-host show 41 | sed 's/^/  /'
+
+      - name: Deploy
+        env:
+          # dev-host 用 `python3 -c` 解析 TOML，需要 tomllib（3.11+）。self-hosted
+          # runner 的 PATH 不含 miniconda，裸 python3 会落到 /usr/bin/python3 (3.10)
+          # 并抛 ModuleNotFoundError —— 那是「环境不对」而不是「部署失败」。
+          # deploy-41.sh 会先自检并在这种情况下以 65 退出，这里负责把解释器摆对。
+          PATH: /home/claude/miniconda3/bin:/home/claude/.local/bin:/usr/local/bin:/usr/bin:/bin
+          # 显式声明用 CD 身份。脚本的默认是**人工**别名（见 deploy-41.sh 的说明），
+          # 因为同一个脚本也服务人工应急回滚 —— 那种场景下 CD 密钥可能正是被吊销的
+          # 那把。自动化路径在这里明确选用 CD 身份。
+          CD_SSH_ALIAS: aiops-41-cd
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+        run: deploy/deploy-41.sh --commit "$TARGET_SHA"
+
+      - name: Report failure
+        if: failure()
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          {
+            echo "### CD 部署失败"
+            echo
+            echo "- commit: \`${TARGET_SHA}\`"
+            echo "- run: ${RUN_URL}"
+            echo
+            echo "41 上的服务状态与上一次备份见上面的步骤日志。"
+            echo
+            echo "回滚：本地执行 \`deploy/deploy-41.sh --rollback-to <上一个已知良好 commit>\`。"
+            echo "本 workflow **没有**「指定 commit」的输入（那会绕过 main 保护），"
+            echo "所以回滚只能走本地脚本 —— 它默认用人工身份，CD 密钥被吊销时也可用。"
+            echo
+            echo "注意：部署失败**不是**业务验收结论 —— 业务验收需按 runbook §5 由人执行。"
+          } >> "$GITHUB_STEP_SUMMARY"

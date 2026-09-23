@@ -1,5 +1,139 @@
 # 验证与验收计划
 
+## 持续部署（CD）落地验证（2026-09-23，41 真实执行 + 本机模拟）
+
+**范围**：`deploy/deploy-41.sh` + `.github/workflows/cd.yml`（PR #387）。
+把 runbook §2 的手工部署变成受门控的自动化路径。
+
+**未验证的部分先说**：`cd.yml` **尚未在 GitHub 上跑过**。下面三轮都是直接执行
+`deploy-41.sh`（脚本层验证）。workflow 层的触发、environment 审批门、代理解析
+需首次真实触发才算验证 —— 那要在合并一个 `src/**` 改动并点批准时补。
+
+### 三轮 41 真实执行
+
+| 轮次 | 动作 | `/health` version | 断言 |
+|---|---|---|---|
+| 1 | `--commit HEAD` | `0.1.0+51e59b697ab8` | 服务 active、文件数 61、sha 树一致 |
+| 2 | `--rollback-to HEAD~1` | `0.1.0+4533e956052a` | 同上 |
+| 3 | `--commit HEAD`（恢复） | `0.1.0+51e59b697ab8` | 同上 |
+
+**验证到的能力**：
+
+- **部署可自证**：`/health` 的 version 含本次 short sha。这是新能力 —— 改前 `/health`
+  报静态 `0.1.0`，无法回答「现在跑的是哪个 commit」，回滚也无从验证。
+- **回滚可验证**：`--rollback-to <sha>` 后 `/health` 确实变成该 commit 的 sha，
+  不是「跑了一遍希望它生效」。
+- **走 CD 专用身份**：三轮都以 `aiops-41-cd` 别名（CD 专用密钥）执行，非人工密钥。
+- **产物身份门生效**：`dev-host cp --artifact-sha256` 在**上传这一步**核对载荷 sha。
+- **sync-check 残留仍被清除**：预置 `ZZZ_stale_cd_test.py` 于 `/tmp/sync-check/`，
+  部署后文件数 61（非 62）、该文件不存在 —— #386 堵住的路径在脚本里同样成立。
+
+### 环境坑（已修，记录备查）
+
+`dev-host` 用裸 `python3 -c` 解析 TOML，需要 tomllib（3.11+）。self-hosted runner 的
+PATH 是 `/home/claude/.local/bin:/usr/local/bin:/usr/bin:/bin`，其中 `python3` 落到
+`/usr/bin/python3` = **3.10**（无 tomllib），而交互 shell 拿到 miniconda 的 3.13。
+表现为 `dev-host` 抛 `ModuleNotFoundError`。
+
+修法：调用前把 `/home/claude/miniconda3/bin` 前置到 PATH（workflow 里已写死，
+`deploy-41.sh` 也自带前置自检并在这种情况下以 **65** 退出 —— 与「部署失败」区分开，
+避免把人引向错误的排查方向）。
+
+### CD 身份的设计约束（实测得出）
+
+两个硬事实决定了「CD 专用密钥」只能靠 ssh 别名实现：
+
+1. `dev-host` **不做 identity 覆盖** —— 它调裸 `ssh`/`scp`，没有 `-F`，也不读
+   `SSH_CONFIG` 之类的环境变量。
+2. **`HOME` 对 ssh 无效** —— OpenSSH 从 passwd 条目展开 `~`，`env -i HOME=<tmp> ssh -G`
+   照样读 `/home/claude/.ssh/config`。所以「隔离 HOME」不是可用手段。
+
+因此：`~/.ssh/config` 增 `aiops-41-cd` 别名（指向 `id_ed25519_41_cd`），
+`deploy-41.sh` 用 `DEV_HOST_REGISTRY` 指向一份**运行时派生**的清单视图 —— 从主清单
+读全部字段、只替换 `ssh_alias`，并断言其余字段逐一致。这样角色/归属的唯一真值仍是
+主清单，没有第二份记录可漂移。
+
+### 评审后的加固（Devin Review 7 条，均确认为真）
+
+| # | 问题 | 处置 |
+|---|---|---|
+| 🟥 | `workflow_dispatch` 的任意 commit 输入可绕过 main 保护（部署从未过检查的提交） | **去掉该输入**。部署永远是本次运行的 `GITHUB_SHA`；回滚走 `--rollback-to` |
+| 🟨 | 裸 `self-hosted` label 让任何 runner 能领到生产部署密钥 | 改用本仓专属 label `[self-hosted, AI-Ops]`；加 `.github/actionlint.yaml` 声明它 |
+| 🔴 | 产物只含 `src/`，依赖变更不会被同步 → restart 可能 `ModuleNotFoundError` | **加依赖漂移门**：比对本地与 41 的 `pyproject.toml`/`uv.lock` sha，不一致即拒绝部署 |
+| 🟡 | 脚本默认用 CD 身份 → CD 密钥被吊销时应急回滚失效 | **默认改人工别名**；CD 在 workflow 里显式设 `CD_SSH_ALIAS=aiops-41-cd` |
+| 🟡 | 手动指定 commit 时 environment 记录的是 ref 的 sha，账本归错 commit | 与 🟥 同源，去掉该输入后消失 |
+| 🔍 | 备份无保留策略 | 加按份数修剪（默认 20），**只删本脚本自己造的备份** |
+| 🔍 | 生产门控在 GitHub 设置里，仓库文本无法验证 | environment 已实测配置：required reviewer + 仅 protected branches + 关闭 admin bypass |
+
+### 第二轮评审（8 条，含 1 🟥）
+
+| # | 问题 | 处置 |
+|---|---|---|
+| 🟥 | `--commit`/`--rollback-to` 值未加引号进远端命令，可能注入 | **实测不可达**（`git rev-parse` 要求可解析的 revision，非法输入直接 fatal；`--short=12` 恒为 hex）。但仍**补了显式断言**：把「依赖 git 当前行为」变成脚本自己维护的不变量 —— 这类依赖不该是唯一的保证 |
+| 🟨 | SSH 身份检查用后缀匹配，形似路径可通过 | 改为**比完整路径**（先展开 `~` 再比） |
+| 🔴 | `--rollback-to` 时漂移门读当前 checkout 而非目标 commit | 改为 `git show "$FULL_SHA:<spec>"` 取**目标 commit** 的 manifest 再比 |
+| 🟡 | 依赖清单变更不触发部署 → CD 无法收敛 | `paths` 加 `pyproject.toml` / `uv.lock` |
+| 🟡 | 产物不含运行时参考资料，诊断用旧 SOP/架构文档 | 见下（**并因此发现生产已有真实漂移**） |
+| 🟡 | `KEEP_BACKUPS=0` 会删掉刚建的备份 | 拒绝 0 |
+| 🔍 | 失败指引提到不存在的 commit 输入 | 改为指向本地 `--rollback-to` |
+| 🔍 | runbook 保留第二条部署路径 | 已明确标为「审阅这个脚本 / 应急」并说明与脚本的能力差 |
+
+### 运行时参考资料：评审发现的一处**真实生产漂移**
+
+`reference_root()` 解析到 `/opt/aiops-41`（该目录有 `pyproject.toml` + `src/`），诊断每次
+运行都从那里按 `_stage_references` 拷 `SOP.md` / `充电桩问题排查SOP.md` /
+`docs/architecture.md` 进 workspace。而我的产物只含 `src/` —— 于是 `/health` 会报新
+commit，诊断实际用的却是旧文档。
+
+**实测确认这不是假设**：部署前 41 上的 `docs/architecture.md` 是 `74249e3f`，而 main 是
+`f95c3d3c` —— **已经在漂移**，与我的 CD 无关，是既存状态。
+
+已修：产物纳入这三份（`git show <sha>:<ref>`，解包后与源码分开搬到 `/opt/aiops-41/`），
+部署后逐份核对 sha。实测：`architecture.md` 由 `74249e3f` → `f95c3d3c`，三份全部一致。
+
+**未覆盖的边界**：`_stage_references` 还列了若干 `java/backend-v2-domestic/...java`。
+那些**不在 git 里**（`java/` 是另一个仓库的检出），无法从目标 commit 取，因此不在本次
+同步范围 —— 它们仍是潜在漂移源，需独立决定如何处理。
+
+### 第三轮评审（6 条，含 2 个我自己造的 bug）
+
+两条 BUG 都出在我上一轮加的参考资料同步上：
+
+| # | 问题 | 处置 |
+|---|---|---|
+| 🟡 | 只改参考资料不触发部署 → 改了 SOP 生产仍用旧的，且无任何信号 | `push.paths` 补三份，使**触发集合与 `REFERENCE_FILES` 一致**（已脚本化比对） |
+| 🟡 | 目标 commit **删除**某份参考资料时脚本跳过 → 41 上旧副本继续被读 | 改为**停止部署**（fail closed），说明跳过等于「main 删了但生产还在用」，给出两条处理路径 |
+| 🔍 | 部署失败依赖人工恢复 | 已记入边界：备份在，回滚靠 `--rollback-to`，无自动回滚 |
+| 🔍 | 依赖变更无法自动收敛 | 已记入边界：漂移门必然拒绝，需人工先更新 41 的依赖环境 |
+| 🔍×2 | 门控在设置里 / runbook 第二条路径 | 前轮已处理，本轮复述 |
+
+**关于「删除时报错而非自动删」的选择**：参考资料是诊断的**运行输入**，由 CI 单方面
+把 41 上的删掉，比留下更难恢复；而「跳过」我已验证会让生产静默使用已删除的内容。
+两条路都不好，所以第三条：**停下来，让人决定**（恢复文件，或明确改 `REFERENCE_FILES`
+并处理 41 上的旧副本 —— 后者是一次单独评审的改动）。
+
+实测：正常 commit 通过；人为构造一份不存在的受管参考资料 → 以 1 退出、不写入。
+
+### 一处我自己造成并已修复的损失（记录备查）
+
+初版的修剪模式是 `backup-*`，**过宽** —— 实测把人工留下的
+`backup-20260915-pre-621490d`（`docs/validation.md` 引为 2026-09-15 部署证据的那份）
+一并删了。已做两件事：
+
+1. 收紧模式为 `backup-<14位数字>`，并加「非 CD 备份不删、只报告」的约束；
+   实测 `KEEP=14` 时删 2 份 CD 备份、人工那份完好并输出 `note: 1 non-CD backup(s) present, not pruned`。
+2. **恢复**那份备份：其对应 commit `621490d` 仍在 git，用 `git archive` 精确重建
+   并传回 41，文件数 55 —— 与 `validation.md` 当时记录的「55 个 git 跟踪文件」一致。
+
+> 教训：修剪类逻辑的匹配模式过宽 = 删除别人产物的许可。备份正是回滚时要用的东西，
+> 不该由「清理磁盘」顺手带走。
+
+### 未完成
+
+- workflow 层未跑过（见上）。
+- **业务验收未做**：§5 的真实端到端需业务方 thirdSession，§6 禁止 CI 自证。
+  CD 通过只报 `merged_waiting_deploy`；`live` 须人按 §5 执行。
+
 ## 41 runbook 试跑：sync-check 残留污染（2026-09-23，41 真实执行）
 
 **范围**：在 41（`api.mall.qushiyun.com`，`aiops-gateway-41.service`）实跑 #384 修订后的
