@@ -1,5 +1,66 @@
 # 验证与验收计划
 
+## PRD #383 在 41 的生产启用与验收（2026-09-23，公网真实流量）
+
+**范围**：四片（#389/#390/#391/#392）合并后，在 41 配置 Jev 并验证。**这是 PRD #383 的目的所在。**
+
+**部署核对**：41 的 `routing.py` / `jev_decisions.py` / `gateway_runtime.py` / `gateway_api.py`
+四个文件 sha 与本地 main **逐一相同**。
+
+### 部署中发现并修复的一个生产故障（与本次功能无关）
+
+```
+PermissionError: [Errno 13] Permission denied: '/opt/aiops-41/docs/architecture.md'
+→ 每个 POST /v1/assistant/questions 返回 500
+```
+
+根因：该文件被以 **root 身份**复制，变成 `root:root 0640`，而网关以 `aiops41` 运行，
+读不了自己的参考文件（`agent_workspace.py` 会读它）。**是部署动作本身引入的**，
+与本功能无关。全仓非 venv 的 root 归属文件**只有这一个**，已 `chown aiops41` 并留备份。
+修复后 **PermissionError 0 条、500 0 条**（按修复时间点前后分别统计确认）。
+
+### 配置
+
+**一个必须记住的坑**：41 的 systemd 单元加载的是 `/etc/aiops-41/gateway.env`，
+而 `production.env` 是**服务端配置文件**（由 `AIOPS_GATEWAY_SERVER_CONFIG_FILE` 指向）。
+第一次把六个变量写进 `production.env`，进程 env 里**看不到** —— 因为运行时是从**进程 env**
+构造客户端的。写入 `gateway.env` 后生效。两个文件现都保留（belt-and-braces）。
+
+### 验收结果
+
+**接线确认**（真实运行时对象）：
+
+```
+jev_base_url: https://api.commandcode.ai/provider/v1 | model: typesafe/jev
+thresholds  : risk>=0.5 conf<0.8
+jev_client wired: True
+  我要投诉，充电扣了我200块钱但没充上电 -> intent=report_fault conf=medium risk=high
+  你好                             -> intent=casual       conf=high   risk=low
+  我想看看客户案例                    -> intent=case_exploration conf=high risk=low
+```
+
+**公网端到端**（`api.mall.qushiyun.com`，真实会话）：
+
+```
+high-risk complaint  [200] type=clarification missing=['context']
+                     msg='请补充订单或设备等必要信息后，我才能继续处理。'
+promo intent         [202] type=qa
+chit-chat            [202] type=qa
+```
+
+**🔴 这是 PRD #383 的核心目的**：#390 发现"高风险且拿不准就追问"这条规则在生产上
+**从未触发过**（现状分类器对高风险问题给 `conf=high`）。现在同一条问句稳定得到
+`risk=high, conf=medium` → **规则第一次真正触发**，用户被追问上下文。
+
+**稳定性**：连跑 3 次，**3/3 都返回 `clarification`** —— 不是偶发。
+
+**#391 的生产行为确认**：寒暄返回 `202 + type=qa` 并最终 `completed`
+（`text='你好！我是充电/新能源领域的智能助手…'`），不再是旧的同步内联回答。
+
+**回退路径已就位**：Jev 不可用时返回"无判定"、按原行为继续；本片未触发该路径。
+
+**遗留**：阈值仍为 #390 标定值（n=10），需按真实流量复标；阈值可配置，复标不改代码。
+
 ## 分类器判定切换到 Jev（2026-09-23，本地自动化 + 真实端点联调，#392）
 
 **范围**：`#392`（PRD #383 的 T4）。`intent`/`risk`/`confidence` 三字段改由 Jev 产出。
