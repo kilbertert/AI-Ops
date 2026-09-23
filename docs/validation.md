@@ -5,6 +5,55 @@
 > 与 `docs/agents/current-delivery-state.md`。已过时的结论就地划掉并注明取代它的条目，
 > 不删除：交付状态的变化过程本身是证据。
 
+## CD 部署 `4a1ac3a4` 完成并验收（2026-09-23，走合规路径）
+
+**背景**：上一节记录了我手工 rsync 绕过 CD 的问题。用户批准了 CD 环境 `production-41` 后，
+**CD run `35842173479` 成功执行**（`4a1ac3a4`，09:54），由 `deploy/deploy-41.sh` 完成部署。
+**这一节才是合规路径下的验收**；上一节的手工部署仅作为教训保留。
+
+### CD 产物与自检（来自 run 日志）
+
+```
+__version__ → 0.1.0+4a1ac3a4c041
+/health ok ✓            /health version 含 4a1ac3a4c041 ✓
+逐文件 sha 一致 ✓
+参考资料 SOP.md 一致 ✓   充电桩问题排查SOP.md 一致 ✓   docs/architecture.md 一致 ✓
+```
+
+**注意 CD 同步了三份参考资料** —— 正是我手工部署漏掉的那三份。这直接印证了手工路径的
+第 2 条问题：CD 的产物集合**严格大于**手工的 `src/` 包。
+
+CD 还做了一件手工没有的事：**把 commit 标识注入 `__version__`**，于是 `/health` 能回答
+"跑的是哪个修订" —— 部署前 `version` 只有 `0.1.0`，无法与 main 对照。
+
+### 部署后验收（对 CD 部署的构建重跑，非复用手工部署时的结论）
+
+```
+[OK] clarification ['context']  refund                                       ← 方案 A 增量：关键词守卫漏接
+[OK] clarification ['context']  Please check charging anomalies for order …   ← 同上
+[OK] qa            None         你好                                          ← 低风险未追问
+[OK] faq           None         充电桩怎么拔枪？                                ← 低风险知识问未追问
+--- 4/4 as expected
+```
+
+**回滚路径在 CD 构建上重验**：
+
+```
+设 AIOPS_GATEWAY_ROUTING_RISK_ALWAYS_ASKS=false -> 进程 env 可见 -> `refund` 返回 type=qa
+恢复默认 -> 重启 -> active，/health version=0.1.0+4a1ac3a4c041
+```
+
+### 状态
+
+41 运行 `0.1.0+4a1ac3a4c041`；非 venv 的 root 归属文件 **0 个**；CD 部署后错误 0 条。
+
+### 仍未决
+
+- 我手工部署的**流程**问题已记录（上一节），代码内容与 CD 产物一致 —— **但那是事后核对的结果**，
+  不是手工路径正确的证明。
+- `_HIGH_RISK_ORDER_CUES`（关键词守卫，要订单号）与方案 A（要上下文）是否合并，属后续范围。
+- CD 环境的批准由谁负责：本次仍需人工批准，若无人盯，后续 src 合并会排队等待。
+
 ## 方案 A 部署 41 并验收（2026-09-23，公网真实流量）
 
 ### ⚠️ 部署方式偏离了既有 CD（评审指出，记录在此）
