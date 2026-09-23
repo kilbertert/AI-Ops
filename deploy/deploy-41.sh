@@ -203,6 +203,56 @@ EOF
 done
 info "参考资料已纳入产物：$(printf '%s' "$REFERENCE_FILES" | tr ' ' ',')"
 
+# ---- 1a. 过期审批门禁（只对 --commit；--rollback-to 是有意的回退）--------------
+# 场景：commit A 与 B 依次合并，两个 CD run 都停在审批门。审核者先批 B（生产变成 B），
+# 之后误批队列里仍在的 A —— A 的 job 拿到并发锁，按**自己的** GITHUB_SHA 部署，
+# 生产从 B 退回 A。
+#
+# 这是把并发控制放到 job 级的代价（评审指出）：job 级锁只保证**串行**，不保证**顺序** ——
+# 谁先获批谁先跑，而 workflow 级原本会取消旧的等审批 run，不存在陈旧 run。
+# 所以补这道门禁：**目标 commit 若是当前生产版本的祖先，说明它已被更新部署取代，拒绝。**
+#
+# 只对 --commit 生效。`--rollback-to` 的目的就是部署一个更旧的 commit，那是显式的人为
+# 决定，不该被这道门禁挡住。
+if [ -z "$ROLLBACK_TO" ]; then
+  step "过期审批门禁"
+  CURRENT_VERSION=$(dev-host exec "$HOST_TARGET" --allow-service-exec -- \
+    "curl -s --max-time 6 $HEALTH" | tail -1 \
+    | python3 -c 'import json,sys
+try:
+    print(json.load(sys.stdin).get("version",""))
+except Exception:
+    print("")' 2>/dev/null)
+  CURRENT_SHA=$(printf '%s' "$CURRENT_VERSION" | sed -n 's/.*+\([0-9a-f]\{7,\}\)$/\1/p')
+  if [ -z "$CURRENT_SHA" ]; then
+    info "读不到 41 当前版本（$CURRENT_VERSION）—— 无法做顺序检查，继续"
+  elif ! git cat-file -e "${CURRENT_SHA}^{commit}" 2>/dev/null; then
+    info "41 当前版本 $CURRENT_SHA 不在本仓历史里 —— 无法做顺序检查，继续"
+  elif [ "$CURRENT_SHA" = "$FULL_SHA" ]; then
+    info "41 已跑该 commit（$SHORT_SHA）—— 幂等重跑，继续"
+  elif git merge-base --is-ancestor "$FULL_SHA" "$CURRENT_SHA" 2>/dev/null; then
+    cat >&2 <<EOF
+拒绝：目标 commit 已被更新部署取代（过期审批）
+
+  本次要部署   $SHORT_SHA（$FULL_SHA）
+  41 当前在跑  $(git rev-parse --short=12 "$CURRENT_SHA")（$CURRENT_SHA）
+
+目标 commit 是当前生产版本的**祖先**，说明它之后已经有更新的部署成功过。此刻部署它
+等于把生产**回退**到旧版本。这通常意味着：两个 run 都停在审批门，审核者先批了较新的
+那个，之后又误批了队列里仍在的旧 run。
+
+已停止，未上传、未写入、未重启。请二选一：
+  1. 若确实要停在当前版本 —— 什么都不做，关掉那个旧 run 的审批请求即可；
+  2. 若确实要回退到该版本 —— 这是一次**有意的回退**，用显式命令：
+       deploy/deploy-41.sh --rollback-to $FULL_SHA
+     （--rollback-to 不受本门禁限制，因为它表达的就是"我要回到旧版本"。）
+EOF
+    exit 1
+  else
+    info "顺序检查通过（目标 $SHORT_SHA 不是当前 $CURRENT_SHA 的祖先）"
+  fi
+fi
+
 # ---- 1b. 参考资料前置检查（**保守**：不存在就拒绝部署，不猜回滚）--------------
 # 每份受管的参考资料在 41 上都必须**已经存在**。理由：
 #
