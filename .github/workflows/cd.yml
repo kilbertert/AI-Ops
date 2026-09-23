@@ -41,14 +41,29 @@ on:
 permissions:
   contents: read
 
-# 部署必须串行：两次并发写同一台主机的同一个目录会互相踩（备份、rsync、重启
-# 都不幂等）。cancel-in-progress 关掉 —— 中途取消会留下半部署状态。
-concurrency:
-  group: cd-41
-  cancel-in-progress: false
+# 并发控制放在 **job** 上，不放在 workflow 上 —— 这个区别是全部要点，两个错误版本
+# 都栽在这里（详见 job 的 concurrency 注释）：
+#   1. workflow 级 + cancel-in-progress: false → 实测死锁
+#   2. workflow 级 + cancel-in-progress: true → 可能把正在改生产的部署打断
+# job 级：锁在 job 即将启动时才获取，所以"等审批的"不持锁（不死锁）、
+#         "正在跑的"持锁（不被打断）。
 
 jobs:
   deploy-41:
+    # 并发控制在 job 级（不是 workflow 级）。两个实测教训：
+    #   1. workflow 级 + cancel-in-progress: false → **死锁**：run 一创建就占住槽位，
+    #      CD #1 在审批门等 24 分钟后被取消，而被取消的 run 没释放槽位，之后所有 run
+    #      卡在 "waiting for another serialized run to finish"、jobs=0、永不推进。
+    #   2. workflow 级 + cancel-in-progress: true → **可能打断正在改生产的部署**：
+    #      新 push 在 job 启动前就取消旧 run，若它已获批并正在跑 deploy-41.sh，会在
+    #      改到一半时被杀（自检与回滚跑不到），而新 run 自己还在等审批 —— 没人修生产。
+    #
+    # job 级锁在**该 job 即将启动时**才获取，于是：等审批的 run 不持锁（新 run 不被
+    # 它挡住），正在执行的部署持锁（新 run 排队等它跑完）。取代"等审批的"、保护
+    # "正在跑的" —— 这正是要的。
+    concurrency:
+      group: cd-41-deploy
+      cancel-in-progress: false
     # 必须用 self-hosted：41 不在 GitHub-hosted runner 的可达范围内，而且
     # deploy-41.sh 依赖 dev-host，后者的配置（~/.ssh/config、库外 hosts.toml、
     # 私钥）只存在于本机 claude 账户下。GitHub-hosted runner 既不持有也够不到。
