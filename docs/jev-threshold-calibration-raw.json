@@ -1,0 +1,243 @@
+{
+  "summary": {
+    "questions": 10,
+    "both_decided": 10,
+    "intent_agreements": 7,
+    "intent_disagreements": 3,
+    "baseline_would_ask": 0,
+    "jev_confidence_when_baseline_asks": null,
+    "jev_confidence_when_baseline_does_not_ask": {
+      "min": 0.57,
+      "max": 1.0,
+      "median": 1.0
+    },
+    "jev_risk_when_baseline_asks": null,
+    "jev_risk_when_baseline_does_not_ask": {
+      "min": 0.02,
+      "max": 0.92,
+      "median": 0.055
+    },
+    "jev_latency_seconds": {
+      "min": 0.56,
+      "median": 0.675,
+      "max": 0.967
+    },
+    "baseline_latency_seconds": {
+      "min": 4.421,
+      "median": 7.78,
+      "max": 12.744
+    }
+  },
+  "rows": [
+    {
+      "question": "你好，你好，你好。",
+      "expected_by_author": "casual",
+      "note": "重复寒暄",
+      "baseline": {
+        "intent": "casual",
+        "risk": "low",
+        "confidence": "high",
+        "seconds": 4.989,
+        "error": null
+      },
+      "jev": {
+        "intent": "casual",
+        "confidence": 1.0,
+        "risk": 0.02,
+        "seconds": 0.822,
+        "error": null
+      },
+      "intent_agrees": true,
+      "baseline_would_ask": false
+    },
+    {
+      "question": "谢谢",
+      "expected_by_author": "casual",
+      "note": "短寒暄",
+      "baseline": {
+        "intent": "casual",
+        "risk": "low",
+        "confidence": "high",
+        "seconds": 4.94,
+        "error": null
+      },
+      "jev": {
+        "intent": "casual",
+        "confidence": 1.0,
+        "risk": 0.02,
+        "seconds": 0.967,
+        "error": null
+      },
+      "intent_agrees": true,
+      "baseline_would_ask": false
+    },
+    {
+      "question": "Hello, my car is not working.",
+      "expected_by_author": "order_issue",
+      "note": "英文故障描述（标签本身可争议）",
+      "baseline": {
+        "intent": "casual",
+        "risk": "low",
+        "confidence": "medium",
+        "seconds": 9.425,
+        "error": null
+      },
+      "jev": {
+        "intent": "report_fault",
+        "confidence": 1.0,
+        "risk": 0.08,
+        "seconds": 0.563,
+        "error": null
+      },
+      "intent_agrees": false,
+      "baseline_would_ask": false
+    },
+    {
+      "question": "充电桩怎么拔枪？有没有演示视频",
+      "expected_by_author": "knowledge",
+      "note": "业务知识",
+      "baseline": {
+        "intent": "knowledge",
+        "risk": "low",
+        "confidence": "high",
+        "seconds": 12.744,
+        "error": null
+      },
+      "jev": {
+        "intent": "knowledge",
+        "confidence": 1.0,
+        "risk": 0.05,
+        "seconds": 0.693,
+        "error": null
+      },
+      "intent_agrees": true,
+      "baseline_would_ask": false
+    },
+    {
+      "question": "下暴雨、打雷或路面积水时，可以在户外露天充电吗？",
+      "expected_by_author": "knowledge",
+      "note": "安全知识",
+      "baseline": {
+        "intent": "knowledge",
+        "risk": "low",
+        "confidence": "high",
+        "seconds": 7.558,
+        "error": null
+      },
+      "jev": {
+        "intent": "knowledge",
+        "confidence": 1.0,
+        "risk": 0.06,
+        "seconds": 0.714,
+        "error": null
+      },
+      "intent_agrees": true,
+      "baseline_would_ask": false
+    },
+    {
+      "question": "优惠券使用规则是什么？为什么结账时没有抵扣？",
+      "expected_by_author": "knowledge",
+      "note": "计费知识（可能涉高风险）",
+      "baseline": {
+        "intent": "knowledge",
+        "risk": "low",
+        "confidence": "high",
+        "seconds": 10.709,
+        "error": null
+      },
+      "jev": {
+        "intent": "order_issue",
+        "confidence": 0.71,
+        "risk": 0.6,
+        "seconds": 0.56,
+        "error": null
+      },
+      "intent_agrees": false,
+      "baseline_would_ask": false
+    },
+    {
+      "question": "我想看看客户案例",
+      "expected_by_author": "case_exploration",
+      "note": "宣传-案例",
+      "baseline": {
+        "intent": "case_exploration",
+        "risk": "low",
+        "confidence": "high",
+        "seconds": 8.003,
+        "error": null
+      },
+      "jev": {
+        "intent": "case_exploration",
+        "confidence": 1.0,
+        "risk": 0.03,
+        "seconds": 0.626,
+        "error": null
+      },
+      "intent_agrees": true,
+      "baseline_would_ask": false
+    },
+    {
+      "question": "你们有没有针对物流行业的方案",
+      "expected_by_author": "solution_discovery",
+      "note": "宣传-方案",
+      "baseline": {
+        "intent": "solution_discovery",
+        "risk": "low",
+        "confidence": "high",
+        "seconds": 11.685,
+        "error": null
+      },
+      "jev": {
+        "intent": "solution_discovery",
+        "confidence": 1.0,
+        "risk": 0.04,
+        "seconds": 0.667,
+        "error": null
+      },
+      "intent_agrees": true,
+      "baseline_would_ask": false
+    },
+    {
+      "question": "我要投诉，充电扣了我200块钱但没充上电",
+      "expected_by_author": "report_fault",
+      "note": "投诉（高风险）",
+      "baseline": {
+        "intent": "order_issue",
+        "risk": "high",
+        "confidence": "high",
+        "seconds": 4.421,
+        "error": null
+      },
+      "jev": {
+        "intent": "report_fault",
+        "confidence": 0.57,
+        "risk": 0.92,
+        "seconds": 0.632,
+        "error": null
+      },
+      "intent_agrees": false,
+      "baseline_would_ask": false
+    },
+    {
+      "question": "扣费不对，多扣了我50元，订单号2096164064667852801",
+      "expected_by_author": "order_issue",
+      "note": "订单异常（高风险）",
+      "baseline": {
+        "intent": "order_issue",
+        "risk": "high",
+        "confidence": "high",
+        "seconds": 5.269,
+        "error": null
+      },
+      "jev": {
+        "intent": "order_issue",
+        "confidence": 0.98,
+        "risk": 0.88,
+        "seconds": 0.682,
+        "error": null
+      },
+      "intent_agrees": true,
+      "baseline_would_ask": false
+    }
+  ]
+}
