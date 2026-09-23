@@ -404,3 +404,29 @@ def test_the_switch_is_configurable_by_environment() -> None:
     assert thresholds_from({"AIOPS_GATEWAY_ROUTING_RISK_ALWAYS_ASKS": "true"}).risk_always_asks is True
     with pytest.raises(ValueError, match="must be a boolean"):
         thresholds_from({"AIOPS_GATEWAY_ROUTING_RISK_ALWAYS_ASKS": "maybe"})
+
+
+def test_every_routing_setting_is_reachable_from_the_environment(monkeypatch) -> None:
+    """A setting nobody reads is not a setting.
+
+    Found in review: `routing_risk_always_asks` was declared, documented in
+    `.env.example`, and used as the documented rollback — but `from_env()` never
+    read it, so `AIOPS_GATEWAY_ROUTING_RISK_ALWAYS_ASKS=false` did nothing. The
+    rollback path was written down in three places and worked in none of them.
+
+    This test drives the real reader rather than the dataclass default, so a
+    future setting that is declared but not wired fails here.
+    """
+    from aiops_diagnostics.gateway_config import GatewayServerSettings
+
+    monkeypatch.setenv("AIOPS_GATEWAY_DATA_HOME", "/tmp/aiops-routing-probe")
+    monkeypatch.setenv("AIOPS_GATEWAY_DATABASE_FILE", "/tmp/aiops-routing-probe/gateway.db")
+    monkeypatch.setenv("AIOPS_GATEWAY_ROUTING_RISK_AT_LEAST", "0.6")
+    monkeypatch.setenv("AIOPS_GATEWAY_ROUTING_CONFIDENCE_AT_LEAST", "0.9")
+    monkeypatch.setenv("AIOPS_GATEWAY_ROUTING_RISK_ALWAYS_ASKS", "false")
+    settings = GatewayServerSettings.from_env()
+    assert settings.routing_risk_at_least == 0.6
+    assert settings.routing_confidence_at_least == 0.9
+    assert settings.routing_risk_always_asks is False, (
+        "the documented rollback must actually reach the gateway settings"
+    )
