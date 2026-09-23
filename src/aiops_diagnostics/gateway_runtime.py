@@ -431,6 +431,7 @@ class GatewayRuntime:
         language: str = DEFAULT_LANGUAGE,
         promo_target: str | None = None,
         promo_intent: str | None = None,
+        skip_retrieval: bool = False,
     ) -> dict[str, Any]:
         """Start a zero-order general-question job (T3/#153).
 
@@ -440,6 +441,11 @@ class GatewayRuntime:
         ``promo_target`` + ``promo_intent`` (#231) pin a published promotional
         agent version (``agt_xxx#vN``) and the card kind (case/solution) its
         knowledge bases serve instead of the customer-service agent.
+
+        ``skip_retrieval`` (#391) marks a question already judged as chit-chat:
+        it is answered from the staged references without a knowledge search. A
+        greeting must not trigger a library lookup just because the run happens
+        to have search capability wired.
         """
         selected_provider = self.diagnostic_settings.agent.select_provider(None)
         selected_key_slot = validate_key_slot_name(selected_provider.resolved_key_slot())
@@ -484,6 +490,7 @@ class GatewayRuntime:
             promo_target,
             promo_intent,
             registration.register_interrupt,
+            skip_retrieval,
         )
         self._futures[qa["qa_id"]] = future
         # Once the future is done the job is terminal (or its worker is gone),
@@ -803,6 +810,7 @@ class GatewayRuntime:
         promo_target: str | None = None,
         promo_intent: str | None = None,
         turn_registrar: Callable[[Any], None] | None = None,
+        skip_retrieval: bool = False,
     ) -> None:
         def _finish_turn(answer: dict[str, Any] | None, *, cancelled: bool = False) -> None:
             """Write the finished answer into the conversation turn (if any).
@@ -843,7 +851,12 @@ class GatewayRuntime:
             if not self.store.update_assistant_question(qa_id, status="completed", result=rag_result):
                 _finish_turn(None, cancelled=True)
                 return
-        elif tenant_id and self.kb_search_client is not None and self.media_signer is not None:
+        elif (
+            not skip_retrieval
+            and tenant_id
+            and self.kb_search_client is not None
+            and self.media_signer is not None
+        ):
             rag_result = self._try_customer_rag(
                 qa_id,
                 question,
