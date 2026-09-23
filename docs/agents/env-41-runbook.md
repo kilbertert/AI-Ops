@@ -85,7 +85,10 @@ ssh aiops-41 '
 set -e
 mkdir -p /var/backups/aiops-41/backup-$(date +%Y%m%d-%H%M%S)
 cp -a /opt/aiops-41/src /var/backups/aiops-41/backup-$(date +%Y%m%d-%H%M%S)/
-mkdir -p /tmp/sync-check && tar xzf /tmp/aiops-sync.tar.gz -C /tmp/sync-check
+# 先清空再解包。解包目录若留着上次中断部署的残留，rsync 会把它们当成本次内容
+# 一起同步过去——--delete 只删目标侧多出的文件，不管源侧多出的。
+rm -rf /tmp/sync-check && mkdir -p /tmp/sync-check
+tar xzf /tmp/aiops-sync.tar.gz -C /tmp/sync-check
 rsync -a --delete /tmp/sync-check/aiops_diagnostics/ /opt/aiops-41/src/aiops_diagnostics/
 chown -R aiops41:aiops41 /opt/aiops-41/src
 systemctl restart aiops-gateway-41.service && sleep 5
@@ -93,6 +96,11 @@ systemctl is-active aiops-gateway-41.service
 curl -s --max-time 6 http://127.0.0.1:8788/health
 rm -rf /tmp/sync-check /tmp/aiops-sync.tar.gz'
 ```
+
+上面第 3 步的 `rm -rf` 不是保守起见，是**必需**的：`rsync -a --delete` 只删除
+**目标**目录里多出的文件，**不会**删除**源**目录里多出的文件。若 `/tmp/sync-check`
+残留着上次中断部署解开的文件，它们会作为本次内容被同步到生产。部署后核对文件数
+（与本地 `git ls-files src/aiops_diagnostics/ | wc -l` 对比）能发现这类污染。
 
 **逐文件 sha 校验（必做）**：
 

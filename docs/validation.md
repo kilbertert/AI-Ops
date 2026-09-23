@@ -1,5 +1,49 @@
 # 验证与验收计划
 
+## 41 runbook 试跑：sync-check 残留污染（2026-09-23，41 真实执行）
+
+**范围**：在 41（`api.mall.qushiyun.com`，`aiops-gateway-41.service`）实跑 #384 修订后的
+部署流程。这是 #384 一节所写「下次实际部署才是第一次真实验证」的那次验证。
+
+**前置**：41 当时跑 `e0edfdd`；`e0edfdd → main(4533e95)` 的 `src/` **零变化**（只有
+`docs/` 变动）。因此这次试跑**不可能改变生产行为**，是验证流程本身的安全窗口。
+
+**故意预置的陷阱**（复现 Devin 在 #384 上预言的路径）：
+
+```
+/tmp/sync-check/aiops_diagnostics/ZZZ_stale_from_interrupted_run.py   # 模拟上次中断部署的残留
+```
+
+**结果：残留被同步进生产**，文件数 61 → 62。
+
+**根因**：`rsync -a --delete` 的 `--delete` 只作用于**目标**目录里多出的文件，
+**不删除源目录里多出的文件**。原块用 `mkdir -p /tmp/sync-check`（不清空），残留即被
+当作本次内容同步。本地已验证该语义（源多出的文件会被同步过去）。
+
+**处置**：立即删除该自造文件、重启，文件数回到 61，服务 `active`，`/health` ok。
+
+**修法与二轮验证**：
+
+| 轮次 | sync-check 处理 | 预置残留 | 结果 |
+|---|---|---|---|
+| 一轮 | `mkdir -p`（原样） | `ZZZ_stale_from_interrupted_run.py` | 残留上传，文件数 62 ✗ |
+| 二轮 | `rm -rf && mkdir -p`（修后） | `ZZZ_stale2.py` | 残留清除，文件数 61 ✓ |
+
+**最终状态**：
+
+| 断言 | 实测 |
+|---|---|
+| 打包首层（`tar tzf \| head -1`） | `aiops_diagnostics/` PASS |
+| 反向验证：旧打包写法被断言拦下 | 退出码 1、不进入 scp PASS |
+| 逐文件 sha：本地 vs 41（61 个文件） | **逐一相同** PASS |
+| 文件数 = `git ls-files src/aiops_diagnostics/ \| wc -l` | 61 == 61 PASS |
+| 服务重启后 `active`、`/health` ok | PASS |
+| 公网路由存在（`POST /v1/assistant/questions` 无会话 → 401，非 404） | PASS |
+| 临时目录与临时包已清理 | PASS |
+
+**未完成**：本次 `src/` 零变化，验证的是**流程**而非新代码行为。下一次带 `src/` 变更的
+部署仍需重新验证（届时才真正检验「部署后行为正确」）。
+
 ## 41 runbook tar/rsync 配对修正（2026-09-22，本地模拟验证）
 
 **范围**：`docs/agents/env-41-runbook.md` §2 的打包命令与 rsync 源路径配对（PR #384）。
