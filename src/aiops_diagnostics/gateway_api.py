@@ -1001,8 +1001,15 @@ def create_gateway_app(
         classifier = getattr(context.runtime, "classify_lightweight", None)
         if classifier is not None:
             try:
-                classified = classifier(payload.question, language=language)
+                classified = classifier(
+                    payload.question,
+                    language=language,
+                    tenant_id=caller.effective_tenant_id,
+                )
             except (ValueError, RuntimeError):
+                # A classifier that raises is treated as "no decision", exactly
+                # as one that returns None is. The routing hint must never be
+                # the reason a user gets nothing (#392).
                 classified = None
             if classified and classified.get("intent") == "casual":
                 # Chit-chat is answered by the same zero-order QA job every other

@@ -28,7 +28,10 @@ from aiops_diagnostics.private_files import ensure_private_directory, protect_pr
 
 METRICS_RETENTION_DAYS = 30
 
-ROUTE_TYPES = frozenset({"faq", "qa", "diagnosis", "debug", "clarification", "promo"})
+#: ``routing`` is the classifier's own decision path (#392): it is not a
+#: user-visible route, but a failed decision is exactly the kind of silent
+#: breakage that went unnoticed once, so it gets a counted row of its own.
+ROUTE_TYPES = frozenset({"faq", "qa", "diagnosis", "debug", "clarification", "promo", "routing"})
 RETRIEVAL_STATUSES = frozenset({"", "found", "not_found", "unavailable", "limited"})
 OUTCOME_TYPES = frozenset({"completed", "failed", "cancelled", "busy"})
 

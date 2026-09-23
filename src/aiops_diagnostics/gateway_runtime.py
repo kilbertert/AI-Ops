@@ -28,6 +28,7 @@ from aiops_diagnostics.health_report import (
     build_minimal_health_report,
 )
 from aiops_diagnostics.i18n import DEFAULT_LANGUAGE, QA_FALLBACK_MESSAGES
+from aiops_diagnostics.jev_decisions import JevDecisionClient, JevSettings
 from aiops_diagnostics.journal import EvidenceJournal
 from aiops_diagnostics.knowledge_retrieval import (
     KbServiceClient,
@@ -43,6 +44,7 @@ from aiops_diagnostics.parsing import parse_request
 from aiops_diagnostics.platform_paths import reference_root
 from aiops_diagnostics.query_scope import resolve_query_scope
 from aiops_diagnostics.redaction import redact_text
+from aiops_diagnostics.routing import RoutingThresholds, classify_with_jev
 from aiops_diagnostics.scope_context import ScopeContext
 from aiops_diagnostics.sources import SourceError, scoped_live_sources
 
@@ -124,6 +126,8 @@ class GatewayRuntime:
         kb_search_client: KnowledgeSearchClient | None = None,
         media_signer: MediaResourceSigner | None = None,
         agent_store: Any = None,
+        jev_client: JevDecisionClient | None = None,
+        routing_thresholds: RoutingThresholds | None = None,
     ) -> None:
         self.store = store
         self.gateway_settings = gateway_settings
@@ -137,6 +141,11 @@ class GatewayRuntime:
         self.kb_search_client = kb_search_client
         self.media_signer = media_signer
         self.agent_store = agent_store
+        # Routing decisions from typed answers (#392). Absent configuration
+        # leaves this None, and every question simply routes as it did before —
+        # the dependency is optional by design, not by accident.
+        self.jev_client = jev_client
+        self.routing_thresholds = routing_thresholds or RoutingThresholds()
         # Lazy media proxy (T3/#170 follow-up): built on first /v1/media hit;
         # without the kb-service + media-signing configuration it stays None
         # and the route answers a uniform 404.
@@ -184,6 +193,18 @@ class GatewayRuntime:
                 gateway_settings.media_signing_secret,
                 ttl_seconds=gateway_settings.media_ttl_seconds,
             )
+        # Routing from typed answers (#392): built only when configured, so an
+        # unconfigured deployment keeps the previous behaviour exactly.
+        jev_client = None
+        if gateway_settings.jev_base_url and gateway_settings.jev_api_key:
+            jev_client = JevDecisionClient(
+                JevSettings(
+                    base_url=gateway_settings.jev_base_url,
+                    api_key=gateway_settings.jev_api_key,
+                    model=gateway_settings.jev_model,
+                    timeout=gateway_settings.jev_timeout_seconds,
+                )
+            )
         return cls(
             store,
             gateway_settings,
@@ -191,6 +212,11 @@ class GatewayRuntime:
             kb_search_client=kb_client,
             media_signer=media_signer,
             agent_store=AgentStore(store.path),
+            jev_client=jev_client,
+            routing_thresholds=RoutingThresholds(
+                risk_at_least=gateway_settings.routing_risk_at_least,
+                confidence_at_least=gateway_settings.routing_confidence_at_least,
+            ),
         )
 
     def start_run(
@@ -499,7 +525,46 @@ class GatewayRuntime:
         future.add_done_callback(lambda _: self._qa_registrations.pop(qa["qa_id"], None))
         return qa
 
-    def classify_lightweight(self, question: str, *, language: str = DEFAULT_LANGUAGE) -> dict[str, Any]:
+    def classify_lightweight(
+        self,
+        question: str,
+        *,
+        language: str = DEFAULT_LANGUAGE,
+        tenant_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """The routing decision, from Jev's typed answers (#392).
+
+        ``None`` means no decision was obtained, and the caller answers without
+        one — the same path it takes today when the model classifier is
+        unreachable. A routing hint is an optimisation; it must never be the
+        reason a user gets nothing.
+
+        The model-based classifier this replaces remains below as
+        ``classify_lightweight_model`` for the rollout window: Jev is a new
+        external dependency, and keeping the incumbent reachable means an
+        operator can compare the two on real traffic before the old path is
+        deleted.
+        """
+        return classify_with_jev(
+            question,
+            self.jev_client,
+            thresholds=self.routing_thresholds,
+            metrics=self.metrics_store,
+            tenant_id=tenant_id,
+        )
+
+    def classify_lightweight_model(
+        self,
+        question: str,
+        *,
+        language: str = DEFAULT_LANGUAGE,
+    ) -> dict[str, Any]:
+        """The previous classifier: a model generating JSON.
+
+        Kept deliberately (expand/contract): the cutover adds the new source
+        beside the old one so neither has to be right on the first day. Delete
+        once Jev has run on real traffic for an agreed window.
+        """
         settings = Settings.from_config(self.gateway_settings.server_config_file)
         settings.agent.run_root = self.diagnostic_settings.agent.run_root
         provider = settings.agent.select_provider(None)

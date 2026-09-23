@@ -34,6 +34,14 @@ class GatewayServerSettings:
     third_session_service_token: str = ""
     third_session_key_prefix: str = "app:3rd_session:"
     kb_service_base_url: str = ""
+    #: Routing decision source (#392). Empty base URL or key leaves routing on
+    #: the previous behaviour; the dependency is optional by configuration.
+    jev_base_url: str = ""
+    jev_api_key: str = ""
+    jev_model: str = "typesafe/jev"
+    jev_timeout_seconds: float = 20.0
+    routing_risk_at_least: float = 0.5
+    routing_confidence_at_least: float = 0.8
     kb_service_timeout_seconds: float = 10.0
     media_signing_secret: str = ""
     media_ttl_seconds: int = 600
@@ -83,6 +91,14 @@ class GatewayServerSettings:
             media_signing_secret=_env("AIOPS_GATEWAY_MEDIA_SIGNING_SECRET")
             or _file_value(file_values, "AIOPS_GATEWAY_MEDIA_SIGNING_SECRET"),
             media_ttl_seconds=_env_int("AIOPS_GATEWAY_MEDIA_TTL_SECONDS", 600),
+            jev_base_url=_env("AIOPS_GATEWAY_JEV_BASE_URL")
+            or _file_value(file_values, "AIOPS_GATEWAY_JEV_BASE_URL"),
+            jev_api_key=_env("AIOPS_GATEWAY_JEV_API_KEY")
+            or _file_value(file_values, "AIOPS_GATEWAY_JEV_API_KEY"),
+            jev_model=_env("AIOPS_GATEWAY_JEV_MODEL", "typesafe/jev"),
+            jev_timeout_seconds=_env_float("AIOPS_GATEWAY_JEV_TIMEOUT_SECONDS", 20.0),
+            routing_risk_at_least=_env_float("AIOPS_GATEWAY_ROUTING_RISK_AT_LEAST", 0.5),
+            routing_confidence_at_least=_env_float("AIOPS_GATEWAY_ROUTING_CONFIDENCE_AT_LEAST", 0.8),
         )
 
     def validate(self) -> None:
@@ -92,6 +108,14 @@ class GatewayServerSettings:
             raise ValueError("AIOPS_GATEWAY_PORT must be between 1 and 65535")
         if not 1 <= self.max_workers <= 16:
             raise ValueError("AIOPS_GATEWAY_MAX_WORKERS must be between 1 and 16")
+        for name, value in (
+            ("AIOPS_GATEWAY_ROUTING_RISK_AT_LEAST", self.routing_risk_at_least),
+            ("AIOPS_GATEWAY_ROUTING_CONFIDENCE_AT_LEAST", self.routing_confidence_at_least),
+        ):
+            if not 0.0 <= value <= 1.0:
+                raise ValueError(f"{name} must be between 0 and 1")
+        if self.jev_base_url and not self.jev_api_key:
+            raise ValueError("AIOPS_GATEWAY_JEV_API_KEY is required when a Jev base URL is set")
         if not 0.1 <= self.event_poll_interval_seconds <= 10:
             raise ValueError("AIOPS_GATEWAY_EVENT_POLL_SECONDS must be between 0.1 and 10")
         if not 1 <= self.introspection_timeout_seconds <= 30:
