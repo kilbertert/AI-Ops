@@ -326,49 +326,57 @@ TS=\$(date +%Y%m%d-%H%M%S)
 B=/var/backups/aiops-41/backup-\$TS
 mkdir -p "\$B/refs"
 cp -a $REMOTE_SRC "\$B"/
+# 取 /health 的 version 字段。用 python3 解析而不是 grep/sed 搜子串 —— 那种做法会
+# 命中响应里任意位置，而判据要的是「version 字段恰好等于期望值」。41 上有 python3。
+# 定义放在最前面，因为部署前的基线记录与部署后的自检**必须用同一把尺**：两处解析方式
+# 不同时，一次响应格式变化就会把成功的恢复误报成失败。
+health_version() {
+  curl -s --max-time 6 $HEALTH \
+    | python3 -c 'import json,sys
+try:
+    print(json.load(sys.stdin).get("version",""))
+except Exception:
+    print("")' 2>/dev/null
+}
 # 部署前记录当前 /health 报的版本 —— 回滚成功的判据要与它相等，而不是只看 active。
-PRE_VERSION=\$(curl -s --max-time 6 $HEALTH | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')
-[ -n "\$PRE_VERSION" ] || PRE_VERSION='(deployment前未能读到版本)'
+PRE_VERSION=\$(health_version)
+[ -n "\$PRE_VERSION" ] || PRE_VERSION='(部署前未能读到版本)'
 echo "pre-version=\$PRE_VERSION"
-rm -rf /tmp/sync-check && mkdir -p /tmp/sync-check
-tar xzf $REMOTE_TARBALL -C /tmp/sync-check
-rsync -a --delete /tmp/sync-check/aiops_diagnostics/ $REMOTE_SRC/aiops_diagnostics/
+
+# =====================================================================
+# 变更阶段：**所有写操作累积状态，绝不提前退出。**
+#
+# 远端块带 set -e。若让 rsync/mkdir/cp/chown 里任何一个直接失败退出，控制流就到不了
+# 下面的自检与回滚 —— 生产停在「源已换、服务未重启」的半部署状态，本机只看到「状态
+# 未知」。这个坑我按实例修过四次（首次 restart、回滚 restart、恢复动作、变更阶段），
+# 每次都是同一形状。所以这里改成结构性的：一个阶段累积一个状态，任何非零都汇入同一
+# 条恢复路径，不再逐个 if 包。
+# =====================================================================
+mutate_rc=0
+step_failed() { echo "mutate-failed=\$1"; mutate_rc=1; }
+
+rm -rf /tmp/sync-check && mkdir -p /tmp/sync-check || step_failed "prepare-sync-dir"
+tar xzf $REMOTE_TARBALL -C /tmp/sync-check || step_failed "extract"
+rsync -a --delete /tmp/sync-check/aiops_diagnostics/ $REMOTE_SRC/aiops_diagnostics/ || step_failed "rsync-src"
 # 参考资料：与源码分开搬，因为它们的落点是 /opt/aiops-41 而不是 src/。
 # reference_root() 解析到 /opt/aiops-41（该目录有 pyproject.toml + src/），
 # 诊断每次运行都从这里读这几份文件 —— 不同步就会「报新 commit、用旧 SOP」。
 for ref in $REFERENCE_FILES; do
   if [ -f "/tmp/sync-check/$ref" ]; then
-    mkdir -p "/opt/aiops-41/$(dirname "$ref")" "\$B/refs/$(dirname "$ref")"
-    [ -f "/opt/aiops-41/$ref" ] && cp "/opt/aiops-41/$ref" "\$B/refs/$ref" || true
-    cp "/tmp/sync-check/$ref" "/opt/aiops-41/$ref"
+    mkdir -p "/opt/aiops-41/$(dirname "$ref")" "\$B/refs/$(dirname "$ref")" \
+      || { step_failed "refs-mkdir:$ref"; continue; }
+    if [ -f "/opt/aiops-41/$ref" ]; then
+      cp "/opt/aiops-41/$ref" "\$B/refs/$ref" || step_failed "refs-backup:$ref"
+    fi
+    cp "/tmp/sync-check/$ref" "/opt/aiops-41/$ref" || { step_failed "refs-copy:$ref"; continue; }
     echo "reference-synced=$ref"
   fi
 done
-chown -R aiops41:aiops41 $REMOTE_SRC
-# 备份保留：每次部署留一份全量 src 备份（约 8.5M）。CD 会把份数持续推上去，
-# 所以按份数修剪、只保留最近 KEEP_BACKUPS 份。
-#
-# **只删本脚本自己造的备份**：本脚本的备份名是 backup-<14位时间戳>。人工或别的
-# 工具留下的备份（例如 backup-20260915-pre-621490d 那种带标记的）不在修剪范围内
-# —— 精简磁盘不是删除别人产物的理由，何况备份正是回滚时要用的东西。实测中曾把
-# 一个人工备份误删，故加这个约束。
-# 若匹配到的份数仍超限，说明有非本脚本的备份占位，报告出来而不是继续删。
-LATEST_PATTERN='backup-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]'
-own=\$(ls -1d /var/backups/aiops-41/\$LATEST_PATTERN 2>/dev/null | wc -l)
-others=\$(( \$(ls -1d /var/backups/aiops-41/backup-* 2>/dev/null | wc -l) - own ))
-if [ "\$own" -gt "${KEEP_BACKUPS}" ]; then
-  ls -1d /var/backups/aiops-41/\$LATEST_PATTERN 2>/dev/null | sort \
-    | head -n "\$((own - ${KEEP_BACKUPS}))" \
-    | while read -r old; do rm -rf "\$old"; echo "pruned-backup=\${old##*/}"; done
-fi
-if [ "\$others" -gt 0 ]; then
-  echo "note: \$others non-CD backup(s) present, not pruned"
-fi
-# restart **必须**用 if 包住：远端块带 set -e，非零的 restart 会直接终止脚本，
-# 连后面的 check_ok 都到不了 —— 而那正是自动回滚要覆盖的主要情形。
-# 注意 systemctl restart 是异步的：服务起不来时它**常常仍返回 0**（fork 完成即返回），
+chown -R aiops41:aiops41 $REMOTE_SRC || step_failed "chown"
+
+# restart 也累积：systemctl restart 非零时必须继续走自检/回滚，而不是退出。
+# 注意 restart 是异步的：服务起不来时它**常常仍返回 0**（fork 完成即返回），
 # 所以「restart 返回 0」不能推出「服务起来了」；真正的判据是下面的 check_ok。
-# 但反过来，restart 真返回非零时必须继续走自检/回滚，而不是退出。
 if systemctl restart $SERVICE; then :; else echo "deploy-restart-rc=nonzero"; fi
 sleep 5
 echo "backup=\$B"
@@ -378,23 +386,31 @@ echo "backup=\$B"
 # 断了就会分裂成「本机以为失败 / 主机其实已切换」，两边都不确定。判据只取本机也能
 # 独立复核的两项：服务 active + /health 含本次 commit 版本。
 EXPECT_VERSION="${STAMPED}"
-# 取 /health 的 version 字段。用 python3 解析而不是 grep 搜子串 —— grep 会命中
-# 响应里任意位置，而判据要的是「version 字段恰好等于期望值」。41 上有 python3。
-health_version() {
-  curl -s --max-time 6 $HEALTH \
-    | python3 -c 'import json,sys
-try:
-    print(json.load(sys.stdin).get("version",""))
-except Exception:
-    print("")' 2>/dev/null
-}
 check_ok() {
+  # mutate_rc 必须为 0：变更阶段有任何一步失败，即使服务恰好起来了，也不算成功 ——
+  # 那意味着源码与参考资料可能只同步了一部分。
+  [ "\$mutate_rc" = "0" ] || return 1
   [ "\$(systemctl is-active $SERVICE)" = "active" ] || return 1
   [ "\$(health_version)" = "\$EXPECT_VERSION" ] || return 1
   return 0
 }
 if check_ok; then
   echo "selfcheck=passed"
+  # 备份修剪是**非关键维护**，放在自检通过之后：放前面的话，一次磁盘/权限问题就会
+  # 阻断恢复路径，而修剪失败本身不影响这次部署是否正确。
+  #
+  # **只删本脚本自己造的备份**：备份名是 backup-<14位时间戳>。人工或别的工具留下的
+  # （例如 backup-20260915-pre-621490d 那种带标记的）不在修剪范围 —— 精简磁盘不是删除
+  # 别人产物的理由，何况备份正是回滚时要用的。实测中曾把一个人工备份误删，故加此约束。
+  LATEST_PATTERN='backup-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]'
+  own=\$(ls -1d /var/backups/aiops-41/\$LATEST_PATTERN 2>/dev/null | wc -l)
+  others=\$(( \$(ls -1d /var/backups/aiops-41/backup-* 2>/dev/null | wc -l) - own ))
+  if [ "\$own" -gt "${KEEP_BACKUPS}" ]; then
+    ls -1d /var/backups/aiops-41/\$LATEST_PATTERN 2>/dev/null | sort \
+      | head -n "\$((own - ${KEEP_BACKUPS}))" \
+      | while read -r old; do rm -rf "\$old"; echo "pruned-backup=\${old##*/}"; done || true
+  fi
+  [ "\$others" -gt 0 ] && echo "note: \$others non-CD backup(s) present, not pruned"
 else
   echo "selfcheck=failed" >&2
   echo "rolling back to \$B ..." >&2
@@ -430,10 +446,12 @@ else
     echo "rollback=restored version=\$PRE_VERSION"
   else
     echo "rollback=also-failed"
+    # is-active 用 || true 兜住：服务 inactive 时它非零，set -e 会在这里终止，
+    # 下面的标记与清理就都发不出去 —— 而这正是最需要它们被发出去的情形。
     echo "rollback-health=\$(curl -s --max-time 6 $HEALTH || echo '(no response)')"
-    echo "rollback-active=\$(systemctl is-active $SERVICE)"
+    echo "rollback-active=\$(systemctl is-active $SERVICE || true)"
   fi
-  rm -rf /tmp/sync-check $REMOTE_TARBALL
+  rm -rf /tmp/sync-check $REMOTE_TARBALL || true
   exit 1
 fi
 
