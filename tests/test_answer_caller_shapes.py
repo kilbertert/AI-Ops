@@ -277,20 +277,24 @@ def test_the_enumeration_covers_every_finalisation_point() -> None:
     """A guard that finds no call site passes vacuously.
 
     So the enumeration is pinned to what the surfaces actually do: one
-    finalisation point per answer surface, in the four modules that finalise an
+    finalisation point per answer surface, in the modules that finalise an
     answer. A surface added or removed is a deliberate edit here -- a new one must
     travel through the same construction path, and one that disappears must not
     leave the guard claiming a coverage it no longer has.
+
+    ``gateway_api`` is deliberately absent since #391: chit-chat used to be
+    answered inline there, and it is now the same zero-order job as every other
+    general question, so its answer is finalised in ``gateway_runtime`` along
+    with the rest. Three surfaces remain, not four.
     """
     sites = [(path.name, call.lineno) for path, tree in _trees() for call in _entry_calls(tree)]
 
     assert {name for name, _ in sites} == {
         "agent_validator.py",
-        "gateway_api.py",
         "gateway_runtime.py",
         "qa_rag.py",
     }
-    assert len(sites) == 4, sites
+    assert len(sites) == 3, sites
 
 
 # --------------------------------------------------------------------------

@@ -25,10 +25,6 @@ from aiops_diagnostics.agent_lifecycle import (
     AgentStore,
     allowed_models_from_settings,
 )
-from aiops_diagnostics.answer_language import (
-    answer_chinese_leak,
-    record_answer_language_fallback,
-)
 from aiops_diagnostics.caller_auth import (
     CALLER_AUTH_CONFIG_MISSING,
     CALLER_AUTH_FORBIDDEN,
@@ -1001,30 +997,32 @@ def create_gateway_app(
                 "message": clarification_message(language, risk_key),
             }
 
+        casual_job = False
         classifier = getattr(context.runtime, "classify_lightweight", None)
         if classifier is not None:
             try:
                 classified = classifier(payload.question, language=language)
             except (ValueError, RuntimeError):
                 classified = None
-            if classified and classified.get("intent") == "casual" and classified.get("answer"):
-                casual = str(classified["answer"])
-                leak = answer_chinese_leak(casual, language)
-                if leak:
-                    # Same contract as the blocks surfaces: an answer that
-                    # leaked Chinese is withheld, not delivered, and the
-                    # fallback is written in the requested language.
-                    record_answer_language_fallback(language=language, leaked=leak, surface="casual")
-                    casual = QA_FALLBACK_MESSAGES.get(language, QA_FALLBACK_MESSAGES["zh"])["unavailable"]
-                return {
-                    **decision.public(),
-                    "type": "qa",
-                    "language": language,
-                    "question": payload.question,
-                    "status": "completed",
-                    "result": {"text": casual, "reminder": True},
-                    "error": None,
-                }
+            if classified and classified.get("intent") == "casual":
+                # Chit-chat is answered by the same zero-order QA job every other
+                # general question uses, rather than by the classifier writing a
+                # sentence inline (#391). Two reasons, and the second is why this
+                # is required rather than tidy:
+                #
+                # 1. The answer travels one path, so the language guard, the
+                #    localized failure copy and the conversation turn all apply
+                #    to it exactly as they do everywhere else.
+                # 2. Typed-decision routing (PRD #383) cannot produce an answer at
+                #    all — it returns labels and probabilities, never text. With
+                #    the answer here, moving routing off generated text would have
+                #    removed chit-chat replies entirely.
+                #
+                # Effect on the waiting-state contract: `casual` used to be a
+                # synchronous 200 and did NOT lock the input box; it is now a 202
+                # like any other `qa` and does. The handoff docs were updated with
+                # this change.
+                casual_job = True
             if classified and classified.get("risk") == "high" and classified.get("confidence") != "high":
                 return {
                     **decision.public(),
@@ -1062,6 +1060,7 @@ def create_gateway_app(
                 conversation=conversation if turn_no is not None else None,
                 conversation_turn_no=turn_no,
                 language=language,
+                skip_retrieval=casual_job,
             )
         except (ValueError, RuntimeError) as exc:
             _release_conversation_turn(context, conversation, turn_no)
