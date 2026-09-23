@@ -1000,6 +1000,9 @@ ANSWER-PAYLOAD-01~05、07 证明的是**调用方形态无法再漂**，同样�
 | CD-41-07 | 41 实机 | 本地 `pyproject.toml` 与 41 上的不一致（人为 drift） | `deploy-41.sh --dry-run` | PASS：以 1 退出并列出两侧 sha；不上传、不写入、不重启 | 输出与退出码 |
 | CD-41-08 | 41 实机 | 41 上有 1 份人工备份 + 15 份 CD 备份；`KEEP_BACKUPS=14` | `deploy-41.sh --commit HEAD` | PASS：删 2 份最旧 CD 备份 → CD 式 14 份；人工备份**未动**且输出 `note: 1 non-CD backup(s) present, not pruned` | 部署输出；备份计数 |
 | CD-41-09 | 41 实机 | 默认身份（不设 `CD_SSH_ALIAS`） | `deploy-41.sh --commit HEAD` | PASS：用人工别名 `aiops-41` 完成部署（应急回滚路径在 CD 密钥被吊销后仍可用） | 输出「CD 身份别名=aiops-41」 |
+| CD-41-10 | 41 实机 | 41 上 `docs/architecture.md` 与 main 不同（既存漂移 `74249e3f` vs `f95c3d3c`） | `deploy-41.sh --commit HEAD` | PASS：三份运行时参考资料同步并逐份核对一致；`architecture.md` 变为 `f95c3d3c` | 部署输出与两侧 sha |
+| CD-41-11 | 41 实机 | `KEEP_BACKUPS=0` | `deploy-41.sh --dry-run` | PASS：以非 0 退出并说明「0 会删掉本次刚建的恢复点」 | 退出码与提示 |
+| CD-41-12 | 41 实机 | `--rollback-to` 一个依赖清单与当前不同的 commit | `deploy-41.sh --rollback-to <sha>` | PASS：漂移门读**目标 commit** 的 manifest（改前读的是当前 checkout，会放行错配） | 代码路径已改，见 validation.md |
 | CD-41-05 | GitHub Actions | 已合并一个 `src/**` 改动；environment 已配 required reviewer | 观察 `cd.yml` 运行 | **未执行**：workflow 层尚未真实触发过。需首次合并 `src/**` 并在 `production-41` 上点批准来验证触发、审批门与代理解析 | 待补 |
 | CD-41-06 | GitHub Actions | CD-41-05 通过 | 在同一 run 上不批准，等待 | **未执行**：需验证「未批准则不写入 41」 | 待补 |
 

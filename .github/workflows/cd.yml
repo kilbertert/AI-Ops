@@ -19,6 +19,11 @@ on:
       - "src/**"
       - "deploy/**"
       - ".github/workflows/cd.yml"
+      # 依赖清单也观察：它们变了却不触发，生产会停在旧依赖上，而且下一次 src 合并会被
+      # 脚本的漂移门拦下 —— CD 就永远收敛不到 main。让变更被看见，由脚本判定"能否部署"
+      # 还是"需要先更新 41 的依赖环境"（后者需独立决定，脚本会明确报出而不是硬上）。
+      - "pyproject.toml"
+      - "uv.lock"
   # 手动触发只用于**重跑当前 main**（例如上次部署失败后重试），不提供任意 commit
   # 入口：一个能选任意 fetched commit 的输入，等于让有权批准环境的人把从未通过 main
   # 必需检查的提交部署到生产 —— 那把 Ruleset 绕开了。
@@ -116,10 +121,16 @@ jobs:
           # 2>/dev/null：ssh -G 在无 tty 时会给 stderr 打 "Pseudo-terminal will not
           # be allocated" 之类提示，别让它混进解析结果。
           alias_key=$(ssh -G aiops-41-cd 2>/dev/null | awk '$1=="identityfile"{print $2; exit}')
-          case "$alias_key" in
-            *id_ed25519_41_cd) echo "别名 aiops-41-cd 解析到 CD 密钥 ✓" ;;
-            *) echo "别名 aiops-41-cd 未指向 CD 密钥（$alias_key）" >&2; exit 1 ;;
-          esac
+          # 比**完整路径**，不是后缀：`*id_ed25519_41_cd` 会接受
+          # `.../evil/id_ed25519_41_cd` 这种形似路径 —— 看着通过了，实际用的是另一把
+          # 密钥。ssh 的 identityfile 可能显示为 `~/.ssh/...`，先展开再比。
+          expanded=${alias_key/#\~/$HOME}
+          if [ "$expanded" = "$HOME/.ssh/id_ed25519_41_cd" ]; then
+            echo "别名 aiops-41-cd 解析到 CD 密钥（$alias_key）✓"
+          else
+            echo "别名 aiops-41-cd 未指向 CD 密钥，实际：$alias_key（展开：$expanded）" >&2
+            exit 1
+          fi
           dev-host show 41 | sed 's/^/  /'
 
       - name: Deploy
@@ -148,9 +159,11 @@ jobs:
             echo "- commit: \`${TARGET_SHA}\`"
             echo "- run: ${RUN_URL}"
             echo
-            echo "41 上的服务状态与上一次备份见上面的步骤日志。回滚方式："
-            echo "重跑本 workflow 并指定上一个已知良好 commit，或本地执行"
-            echo "\`deploy/deploy-41.sh --rollback-to <sha>\`。"
+            echo "41 上的服务状态与上一次备份见上面的步骤日志。"
+            echo
+            echo "回滚：本地执行 \`deploy/deploy-41.sh --rollback-to <上一个已知良好 commit>\`。"
+            echo "本 workflow **没有**「指定 commit」的输入（那会绕过 main 保护），"
+            echo "所以回滚只能走本地脚本 —— 它默认用人工身份，CD 密钥被吊销时也可用。"
             echo
             echo "注意：部署失败**不是**业务验收结论 —— 业务验收需按 runbook §5 由人执行。"
           } >> "$GITHUB_STEP_SUMMARY"

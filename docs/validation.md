@@ -65,6 +65,36 @@ PATH 是 `/home/claude/.local/bin:/usr/local/bin:/usr/bin:/bin`，其中 `python
 | 🔍 | 备份无保留策略 | 加按份数修剪（默认 20），**只删本脚本自己造的备份** |
 | 🔍 | 生产门控在 GitHub 设置里，仓库文本无法验证 | environment 已实测配置：required reviewer + 仅 protected branches + 关闭 admin bypass |
 
+### 第二轮评审（8 条，含 1 🟥）
+
+| # | 问题 | 处置 |
+|---|---|---|
+| 🟥 | `--commit`/`--rollback-to` 值未加引号进远端命令，可能注入 | **实测不可达**（`git rev-parse` 要求可解析的 revision，非法输入直接 fatal；`--short=12` 恒为 hex）。但仍**补了显式断言**：把「依赖 git 当前行为」变成脚本自己维护的不变量 —— 这类依赖不该是唯一的保证 |
+| 🟨 | SSH 身份检查用后缀匹配，形似路径可通过 | 改为**比完整路径**（先展开 `~` 再比） |
+| 🔴 | `--rollback-to` 时漂移门读当前 checkout 而非目标 commit | 改为 `git show "$FULL_SHA:<spec>"` 取**目标 commit** 的 manifest 再比 |
+| 🟡 | 依赖清单变更不触发部署 → CD 无法收敛 | `paths` 加 `pyproject.toml` / `uv.lock` |
+| 🟡 | 产物不含运行时参考资料，诊断用旧 SOP/架构文档 | 见下（**并因此发现生产已有真实漂移**） |
+| 🟡 | `KEEP_BACKUPS=0` 会删掉刚建的备份 | 拒绝 0 |
+| 🔍 | 失败指引提到不存在的 commit 输入 | 改为指向本地 `--rollback-to` |
+| 🔍 | runbook 保留第二条部署路径 | 已明确标为「审阅这个脚本 / 应急」并说明与脚本的能力差 |
+
+### 运行时参考资料：评审发现的一处**真实生产漂移**
+
+`reference_root()` 解析到 `/opt/aiops-41`（该目录有 `pyproject.toml` + `src/`），诊断每次
+运行都从那里按 `_stage_references` 拷 `SOP.md` / `充电桩问题排查SOP.md` /
+`docs/architecture.md` 进 workspace。而我的产物只含 `src/` —— 于是 `/health` 会报新
+commit，诊断实际用的却是旧文档。
+
+**实测确认这不是假设**：部署前 41 上的 `docs/architecture.md` 是 `74249e3f`，而 main 是
+`f95c3d3c` —— **已经在漂移**，与我的 CD 无关，是既存状态。
+
+已修：产物纳入这三份（`git show <sha>:<ref>`，解包后与源码分开搬到 `/opt/aiops-41/`），
+部署后逐份核对 sha。实测：`architecture.md` 由 `74249e3f` → `f95c3d3c`，三份全部一致。
+
+**未覆盖的边界**：`_stage_references` 还列了若干 `java/backend-v2-domestic/...java`。
+那些**不在 git 里**（`java/` 是另一个仓库的检出），无法从目标 commit 取，因此不在本次
+同步范围 —— 它们仍是潜在漂移源，需独立决定如何处理。
+
 ### 一处我自己造成并已修复的损失（记录备查）
 
 初版的修剪模式是 `backup-*`，**过宽** —— 实测把人工留下的

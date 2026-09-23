@@ -152,6 +152,15 @@ git cat-file -e "${TARGET_COMMIT}^{commit}" 2>/dev/null \
   || die "仓库里没有 commit $TARGET_COMMIT（自托管 runner 需要完整 main 历史）"
 FULL_SHA=$(git rev-parse "$TARGET_COMMIT^{commit}")
 SHORT_SHA=$(git rev-parse --short=12 "$FULL_SHA")
+# FULL_SHA/SHORT_SHA 会被插进远端命令（文件名、断言文本）。git rev-parse 的契约是
+# 产出 hex，所以实践上安全；但「实践上安全」不该是这里唯一的保证 —— 下面显式断言，
+# 把这条不变量变成脚本自己维护的，而不是依赖外部工具当前的行为。
+case $FULL_SHA in
+  *[!0-9a-f]*) die "commit 解析出了非 hex 的 sha：$FULL_SHA" ;;
+esac
+case $SHORT_SHA in
+  *[!0-9a-f]*) die "short sha 含非 hex 字符：$SHORT_SHA" ;;
+esac
 info "commit=$FULL_SHA (${SHORT_SHA})"
 info "subject=$(git log -1 --format=%s "$FULL_SHA" | cut -c1-70)"
 
@@ -161,6 +170,21 @@ WORK="$STAGE/src"
 # 内容，不是某人 checkout 到哪。落地即：src/aiops_diagnostics/...
 git archive "$FULL_SHA" src/aiops_diagnostics | tar -x -C "$STAGE"
 [ -d "$WORK/aiops_diagnostics" ] || die "该 commit 没有 src/aiops_diagnostics"
+
+# 诊断运行时会从 reference_root()（解析到 /opt/aiops-41）读取这几份文件并拷进每个
+# workspace。它们不是 src/ 下的代码，若不同步，`/health` 会报新 commit 而诊断实际用的是
+# 旧 SOP/架构文档 —— 「部署了什么」与「跑了什么」不一致。
+# 只纳入 git 跟踪、且解包后仍保留仓库相对路径的那几份。
+REFERENCE_FILES="SOP.md 充电桩问题排查SOP.md docs/architecture.md"
+for ref in $REFERENCE_FILES; do
+  if ! git cat-file -e "$FULL_SHA:$ref" 2>/dev/null; then
+    info "参考资料 $ref 不在该 commit 里 —— 跳过"
+    continue
+  fi
+  mkdir -p "$WORK/$(dirname "$ref")"
+  git show "$FULL_SHA:$ref" > "$WORK/$ref"
+done
+info "参考资料已纳入产物：$(printf '%s' "$REFERENCE_FILES" | tr ' ' ',')"
 
 # ---- 2. 注入 commit 标识 ---------------------------------------------------
 # /health 的 version 来自 src/aiops_diagnostics/__init__.py 的 __version__，是个
@@ -196,7 +220,14 @@ info "文件数（预期）= $EXPECTED_FILES"
 # ---- 3. 打包 + 首层断言 ----------------------------------------------------
 step "打包"
 TARBALL="$STAGE/aiops-sync.tar.gz"
-tar -czf "$TARBALL" -C "$WORK" aiops_diagnostics
+# 包内首层仍是 aiops_diagnostics/（下面的断言依赖这一点）；参考资料作为同层的额外条目。
+# 显式构造条目列表：REFERENCE_FILES 是有意按空白拆分的路径清单，用数组承载，
+# 避免把「未加引号的命令替换」当成约定（那样既难读，也容易在改动时出错）。
+TAR_ENTRIES=(aiops_diagnostics)
+for ref in $REFERENCE_FILES; do
+  [ -e "$WORK/$ref" ] && TAR_ENTRIES+=("$ref")
+done
+tar -czf "$TARBALL" -C "$WORK" "${TAR_ENTRIES[@]}"
 # 先把清单读进变量，再取首行。**不要**写 `tar tzf ... | head -1`：head 读一行即退出，
 # 关掉管道，tar 收到 SIGPIPE 而死；在 `set -o pipefail` 下 141 会被当成脚本失败
 # （实测）。断言本身没错，是取首行的手法会自杀。
@@ -208,6 +239,8 @@ ARTIFACT_SHA=$(sha256sum "$TARBALL" | cut -d' ' -f1)
 info "首层=$FIRST"
 info "大小=$(du -h "$TARBALL" | cut -f1)  产物 sha256=${ARTIFACT_SHA:0:16}…"
 
+# SHORT_SHA 已断言为纯 hex，因此这个路径不含空格或 shell 元字符；它在远端命令里
+# 以未加引号的形式出现（远端块本来就是一段 shell 文本），这条断言是该做法成立的前提。
 REMOTE_TARBALL="/tmp/aiops-sync-${SHORT_SHA}.tar.gz"
 
 # ---- 3b. 依赖漂移检查 ------------------------------------------------------
@@ -221,8 +254,16 @@ REMOTE_TARBALL="/tmp/aiops-sync-${SHORT_SHA}.tar.gz"
 # 注意 pyproject/uv.lock 目前不在 cd.yml 的触发路径里；若哪天它们变了，下面的检查会
 # 在这里拦下，而不是让部署"成功"后服务挂掉。
 step "依赖漂移检查"
+# **读的是 TARGET_COMMIT 的 manifest，不是当前 checkout。** 回滚场景下两者可能不同：
+# 若拿当前 checkout 去比，只能证明「操作者的工作区与主机一致」，证明不了「要部署的那个
+# commit 与主机环境兼容」—— 于是旧源码会被放进新依赖环境里跑。
+# 从 git 取目标 commit 的这两份文件，与 41 上的比。
 for spec in "pyproject.toml" "uv.lock"; do
-  local_sha=$(sha256sum "$REPO_ROOT/$spec" 2>/dev/null | cut -d' ' -f1 || true)
+  local_sha=$(git show "$FULL_SHA:$spec" 2>/dev/null | sha256sum | cut -d' ' -f1 || true)
+  if [ -z "$local_sha" ]; then
+    info "$spec：目标 commit 里没有该文件 —— 跳过（无法比较）"
+    continue
+  fi
   remote_sha=$(dev-host exec "$HOST_TARGET" --allow-service-exec -- \
     "sha256sum /opt/aiops-41/$spec 2>/dev/null | cut -d' ' -f1" | tail -1 | tr -d '[:space:]')
   if [ -z "$remote_sha" ]; then
@@ -231,26 +272,27 @@ for spec in "pyproject.toml" "uv.lock"; do
   fi
   if [ "$local_sha" != "$remote_sha" ]; then
     cat >&2 <<EOF
-依赖漂移：$spec 与 41 上的不一致
-  本地 $local_sha
-  41   $remote_sha
+依赖漂移：目标 commit 的 $spec 与 41 上的不一致
+  目标 commit ($SHORT_SHA) $local_sha
+  41                       $remote_sha
 
 产物只含 src/，不会同步依赖。此时若继续部署，restart 可能因缺包而失败
 （服务从 active 掉到 failed）。已停止，未上传、未写入、未重启。
 
 处理方式（需独立决定，不在本脚本范围）：
   1. 在 41 上更新依赖环境（该机无 uv，需先确定用哪种方式），并记录变更；或
-  2. 若本次改动确实不需要新依赖，把 $spec 在 41 上对齐到本地同一版本。
+  2. 若本次改动确实不需要新依赖，把 $spec 在 41 上对齐到目标 commit 的版本。
 EOF
     exit 1
   fi
-  info "$spec 与 41 一致 ✓"
+  info "$spec 与目标 commit 一致 ✓"
 done
 
 # 备份保留份数（本机侧决定，插值进远端命令）。用环境变量可覆盖，用于验证修剪分支。
 KEEP_BACKUPS=${KEEP_BACKUPS:-20}
 case $KEEP_BACKUPS in
   ''|*[!0-9]*) die "KEEP_BACKUPS 必须是正整数，得到：$KEEP_BACKUPS" ;;
+  0) die "KEEP_BACKUPS=0 会把本次刚建的备份也删掉 —— 重启失败就没有恢复点了" ;;
 esac
 
 # 远端块的构造：把它写成一条已引用好的命令交给 dev-host exec（它按 ssh argv 语义
@@ -259,6 +301,7 @@ esac
 # 关键：解包前 `rm -rf /tmp/sync-check`。rsync --delete 只删目标侧多出的文件，
 # 不管源侧 —— 残留目录会被当成本次内容同步到生产。这是真实踩过的坑（#386）。
 read -r -d '' REMOTE_CMD <<EOF || true
+REFERENCE_FILES="${REFERENCE_FILES}"
 set -eu
 TS=\$(date +%Y%m%d-%H%M%S)
 B=/var/backups/aiops-41/backup-\$TS
@@ -267,6 +310,16 @@ cp -a $REMOTE_SRC "\$B"/
 rm -rf /tmp/sync-check && mkdir -p /tmp/sync-check
 tar xzf $REMOTE_TARBALL -C /tmp/sync-check
 rsync -a --delete /tmp/sync-check/aiops_diagnostics/ $REMOTE_SRC/aiops_diagnostics/
+# 参考资料：与源码分开搬，因为它们的落点是 /opt/aiops-41 而不是 src/。
+# reference_root() 解析到 /opt/aiops-41（该目录有 pyproject.toml + src/），
+# 诊断每次运行都从这里读这几份文件 —— 不同步就会「报新 commit、用旧 SOP」。
+for ref in $REFERENCE_FILES; do
+  if [ -f "/tmp/sync-check/$ref" ]; then
+    mkdir -p "/opt/aiops-41/$(dirname "$ref")"
+    cp "/tmp/sync-check/$ref" "/opt/aiops-41/$ref"
+    echo "reference-synced=$ref"
+  fi
+done
 chown -R aiops41:aiops41 $REMOTE_SRC
 # 备份保留：每次部署留一份全量 src 备份（约 8.5M）。CD 会把份数持续推上去，
 # 所以按份数修剪、只保留最近 KEEP_BACKUPS 份。
@@ -354,6 +407,16 @@ if [ "$LOCAL_SHAS" = "$REMOTE_SHAS" ]; then
 else
   die "逐文件 sha 不一致 —— 远端内容与产物不同"
 fi
+
+# 参考资料同样核对：它们不在 src/ 下，文件数与 sha 树都覆盖不到。
+for ref in $REFERENCE_FILES; do
+  want=$(sha256sum "$WORK/$ref" 2>/dev/null | cut -d' ' -f1 || true)
+  [ -n "$want" ] || continue
+  got=$(dev-host exec "$HOST_TARGET" --allow-service-exec -- \
+    "sha256sum /opt/aiops-41/$ref 2>/dev/null | cut -d' ' -f1" | tail -1 | tr -d '[:space:]')
+  [ "$want" = "$got" ] || die "参考资料 $ref 未同步到 41（本地 $want / 41 $got）"
+  info "参考资料 $ref 一致 ✓"
+done
 
 step "完成"
 cat <<EOF
