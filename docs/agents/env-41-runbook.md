@@ -14,7 +14,8 @@
 | 41 主机 | `47.97.160.153`（root 登录，方式见 §1） |
 | 运行源码 | `/opt/aiops-41/src/aiops_diagnostics/` |
 | Gateway 数据库 | `/var/lib/aiops-41/gateway/gateway.db`（SQLite） |
-| 服务配置 | `/etc/aiops-41/production.env`（含凭据，勿打印明文） |
+| 服务配置（**服务端配置**） | `/etc/aiops-41/production.env`（含凭据，勿打印明文）。由 `AIOPS_GATEWAY_SERVER_CONFIG_FILE` 指向，供 `Settings.from_config` 读取：模型 provider、KB、Redis 等**配置项**在这里 |
+| 服务配置（**进程环境**） | `/etc/aiops-41/gateway.env`。systemd 单元的 `EnvironmentFile` 是**它**，不是 `production.env` |
 | 平台清单 | `/opt/aiops-41/ops/environments/env-41.toml` |
 | 服务单元 | `aiops-gateway-41.service`、`aiops-36-kb-tunnel.service` |
 | 回环监听 | Gateway `127.0.0.1:8788`；KB 隧道 `127.0.0.1:29380`（→ 36 kb-service） |
@@ -59,6 +60,19 @@ SSHPASS='<现场从受控来源取得>' sshpass -e ssh -o StrictHostKeyChecking=
   工作目录必须在 `/opt/aiops-41`（否则 `.venv` 找不到 `pyproject.toml`，报
   `PermissionError: /root/pyproject.toml`）。
 - **41 上没有 `sqlite3` CLI**；查库用 `/opt/aiops-41/.venv/bin/python -c "import sqlite3; ..."`。
+
+## 1.4 两个 env 文件的分工（2026-09-23 实测踩坑，务必先读）
+
+41 有**两个** env 文件，用途不同，**写错文件不会报错，只会静默不生效**：
+
+| 文件 | 谁读它 | 放什么 |
+|---|---|---|
+| `/etc/aiops-41/gateway.env` | systemd 的 `EnvironmentFile` | **进程环境变量**。运行时从**进程 env** 构造的配置（如 Jev 客户端的 `AIOPS_GATEWAY_JEV_*`）必须放这里 |
+| `/etc/aiops-41/production.env` | 由 `AIOPS_GATEWAY_SERVER_CONFIG_FILE` 指向，`Settings.from_config` 读取 | 服务端**配置项**（模型 provider、KB、Redis 凭据等）|
+
+**实测教训**：把 `AIOPS_GATEWAY_JEV_*` 写进 `production.env` 后重启，进程 env 里**根本看不到这些变量**，路由静默退回原模型分类器 —— 没有任何报错。写入 `gateway.env` 才生效。**改配置后务必用 `tr '\0' '\n' < /proc/<MainPID>/environ` 确认变量真的进了进程**，不要只看文件写没写。
+
+两文件均为 `0600 aiops41`；改后保持属主与权限。
 
 ## 2. 部署（源码同步到 41）
 
