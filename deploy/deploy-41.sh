@@ -322,8 +322,12 @@ REFERENCE_FILES="${REFERENCE_FILES}"
 set -eu
 TS=\$(date +%Y%m%d-%H%M%S)
 B=/var/backups/aiops-41/backup-\$TS
-mkdir -p "\$B"
+mkdir -p "\$B/refs"
 cp -a $REMOTE_SRC "\$B"/
+# 部署前记录当前 /health 报的版本 —— 回滚成功的判据要与它相等，而不是只看 active。
+PRE_VERSION=\$(curl -s --max-time 6 $HEALTH | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')
+[ -n "\$PRE_VERSION" ] || PRE_VERSION='(deployment前未能读到版本)'
+echo "pre-version=\$PRE_VERSION"
 rm -rf /tmp/sync-check && mkdir -p /tmp/sync-check
 tar xzf $REMOTE_TARBALL -C /tmp/sync-check
 rsync -a --delete /tmp/sync-check/aiops_diagnostics/ $REMOTE_SRC/aiops_diagnostics/
@@ -332,7 +336,8 @@ rsync -a --delete /tmp/sync-check/aiops_diagnostics/ $REMOTE_SRC/aiops_diagnosti
 # 诊断每次运行都从这里读这几份文件 —— 不同步就会「报新 commit、用旧 SOP」。
 for ref in $REFERENCE_FILES; do
   if [ -f "/tmp/sync-check/$ref" ]; then
-    mkdir -p "/opt/aiops-41/$(dirname "$ref")"
+    mkdir -p "/opt/aiops-41/$(dirname "$ref")" "\$B/refs/$(dirname "$ref")"
+    [ -f "/opt/aiops-41/$ref" ] && cp "/opt/aiops-41/$ref" "\$B/refs/$ref" || true
     cp "/tmp/sync-check/$ref" "/opt/aiops-41/$ref"
     echo "reference-synced=$ref"
   fi
@@ -376,19 +381,33 @@ if check_ok; then
 else
   echo "selfcheck=failed" >&2
   echo "rolling back to \$B ..." >&2
-  # 只回滚**本次真正改过的东西**：源码。之前那版顺手也同步依赖环境，已按钻演结论
-  # 撤掉 —— 依赖变更现在由漂移门在上传前拒绝，走不到这里。
+  # 回滚两样东西：源码 + 参考资料。两者都在本次部署里被改过，只回源码会留下
+  # 「旧代码 + 被拒 commit 的 SOP」—— 服务能起来，但诊断读的是被拒版本的内容。
   rsync -a --delete "\$B/src/" $REMOTE_SRC/
+  for ref in $REFERENCE_FILES; do
+    if [ -f "\$B/refs/$ref" ]; then
+      mkdir -p "/opt/aiops-41/$(dirname "$ref")"
+      cp "\$B/refs/$ref" "/opt/aiops-41/$ref"
+    fi
+  done
   chown -R aiops41:aiops41 $REMOTE_SRC
-  systemctl restart $SERVICE
+
+  # 判定回滚是否成功必须用与部署前**同一把尺**：服务 active **且** /health 报的
+  # 版本等于部署前记录的那个。只看 active 不够 —— systemd 可以是 active 而 HTTP
+  # 监听起不来（初始化卡住），那时报 healthy 就是谎报。
+  #
+  # 所有标记都走 stdout：本机用 $( ) 只捕获 stdout，写 stderr 的标记到不了分类器。
+  # restart 用 if 包住：远端块带 set -e，非零的 restart 会直接终止，连标记都发不出。
+  if systemctl restart $SERVICE; then :; else echo "rollback-restart-rc=nonzero"; fi
   sleep 5
-  if [ "\$(systemctl is-active $SERVICE)" = "active" ]; then
-    echo "rollback=restored"
+  if [ "\$(systemctl is-active $SERVICE)" = "active" ] \
+     && curl -s --max-time 6 $HEALTH | grep -q "\$PRE_VERSION"; then
+    echo "rollback=restored version=\$PRE_VERSION"
   else
-    echo "rollback=also-failed" >&2
+    echo "rollback=also-failed"
+    echo "rollback-health=\$(curl -s --max-time 6 $HEALTH || echo '(no response)')"
+    echo "rollback-active=\$(systemctl is-active $SERVICE)"
   fi
-  curl -s --max-time 6 $HEALTH || true
-  echo
   rm -rf /tmp/sync-check $REMOTE_TARBALL
   exit 1
 fi
@@ -424,6 +443,10 @@ step "远端部署"
 # 自检与回滚块根本没机会跑，生产会停在「源已换、服务未重启」的分裂状态
 # （2026-09-23 钻演实测踩到，见 validation.md）。
 REMOTE_TIMEOUT=${REMOTE_TIMEOUT:-900}
+case $REMOTE_TIMEOUT in
+  ''|*[!0-9]*) die "REMOTE_TIMEOUT 必须是正整数秒数，得到：$REMOTE_TIMEOUT" ;;
+  0) die "REMOTE_TIMEOUT=0 会让远端命令立即被 kill —— 回滚块没有机会执行" ;;
+esac
 set +e
 REMOTE_OUT=$(dev-host exec "$HOST_TARGET" --allow-service-exec --timeout "$REMOTE_TIMEOUT" -- "$REMOTE_CMD")
 REMOTE_RC=$?
@@ -433,41 +456,14 @@ BACKUP=$(printf '%s\n' "$REMOTE_OUT" | sed -n 's/^backup=//p' | head -1)
 info "备份=$BACKUP"
 
 if [ "$REMOTE_RC" -ne 0 ]; then
-  if printf '%s' "$REMOTE_OUT" | grep -q 'rollback=restored'; then
-    cat >&2 <<EOF
-
-部署失败，但**主机已自动回滚**到本次部署前的源码并重启，服务 healthy。
-备份保留在 $BACKUP。可用 --rollback-to <sha> 重试上一个已知良好版本。
-EOF
-    exit 1
-  fi
-  if printf '%s' "$REMOTE_OUT" | grep -q 'rollback=also-failed'; then
-    cat >&2 <<EOF
-
-**严重**：部署失败且自动回滚后服务仍不 active。需立即人工介入：
-  ssh $HOST_TARGET 'journalctl -u $SERVICE -n 80 --no-pager'
-备份（源码）在 $BACKUP。
-EOF
-    exit 2
-  fi
-  if [ "$REMOTE_RC" -eq 124 ]; then
-    cat >&2 <<EOF
-
-**超时**（${REMOTE_TIMEOUT}s，退出码 124）：远端命令被中途 kill，主机侧的自检与
-回滚块**没有机会执行**。生产可能停在半途状态，须人工上机确认：
-
-  ssh $HOST_TARGET 'systemctl is-active $SERVICE; curl -s http://127.0.0.1:8788/health'
-
-确认无事后用 REMOTE_TIMEOUT=<更大值> 重跑。
-EOF
-    exit 124
-  fi
-  die "远端部署失败（退出码 $REMOTE_RC），且未产生 selfcheck/rollback 标记 —— 状态未知，须人工确认 41"
+  # 分类逻辑抽在 deploy/classify-remote-result.sh，因为它有三个容易错的判断
+  # （远端 set -e、标记写 stderr、只看 active 不看 /health），而那些错法只在
+  # 特定分支显现。抽出来才能对每个分支做测试（见 test-rollback-classifier.sh）。
+  printf '%s' "$REMOTE_OUT" | REMOTE_RC="$REMOTE_RC" \
+    "$REPO_ROOT/deploy/classify-remote-result.sh" "$HOST_TARGET" "$SERVICE" >&2
+  exit $?
 fi
 
-# ---- 7. 部署后验证（失败即非零退出）----------------------------------------
-# 只证技术健康。业务验收需业务方 thirdSession，§5/§6 明确禁止 CI 自证 ——
-# 所以本节通过也**不**等于「已验收」，状态词止于 merged_waiting_deploy。
 step "部署后验证"
 
 ACTIVE=$(dev-host exec "$HOST_TARGET" --allow-service-exec -- "systemctl is-active $SERVICE" | tail -1)
