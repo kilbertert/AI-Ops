@@ -93,3 +93,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+raise SystemExit("CD drill 6: import-time failure")
