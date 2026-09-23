@@ -371,3 +371,23 @@ def test_a_blank_user_agent_is_rejected() -> None:
     """Blank is not "use the default" — the WAF then 403s every request."""
     with pytest.raises(ValueError):
         JevSettings(base_url=BASE, api_key="k", user_agent="   ").validate()
+
+
+def test_a_remote_plaintext_endpoint_is_rejected() -> None:
+    """The bearer key and the business state both travel in this request.
+
+    Cleartext transport is a credential disclosure, not a hygiene preference —
+    any observer on the path reads both. Loopback stays allowed, which is what
+    a local relay needs.
+    """
+    for url in ("http://decision.example", "http://10.0.0.5:8080"):
+        with pytest.raises(ValueError):
+            JevSettings(base_url=url, api_key="k").validate()
+    for url in ("http://127.0.0.1:8799", "http://localhost:8799", "https://decision.example"):
+        JevSettings(base_url=url, api_key="k").validate()
+
+
+def test_an_incomplete_base_url_is_rejected() -> None:
+    for url in ("decision.example", "ftp://decision.example", "https://"):
+        with pytest.raises(ValueError):
+            JevSettings(base_url=url, api_key="k").validate()

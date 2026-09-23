@@ -38,6 +38,7 @@ import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
+from urllib.parse import urlsplit
 
 from aiops_diagnostics.bounded_http import (
     ErrorMapping,
@@ -330,6 +331,15 @@ class JevSettings:
     def validate(self) -> None:
         if not self.base_url.strip():
             raise ValueError("Jev base_url is required")
+        # The bearer key and the business state both travel in this request, so
+        # cleartext transport is a credential disclosure, not just a hygiene
+        # issue. Same rule the model providers already follow: https anywhere,
+        # http only for a loopback address.
+        parsed = urlsplit(self.base_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise ValueError("Jev base_url must be a complete http or https URL")
+        if parsed.scheme == "http" and parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
+            raise ValueError("Jev base_url must use https unless it is a loopback address")
         if not self.api_key.strip():
             raise ValueError("Jev api_key is required")
         if self.model not in KNOWN_MODELS:
