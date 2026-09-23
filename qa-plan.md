@@ -1010,6 +1010,8 @@ ANSWER-PAYLOAD-01~05、07 证明的是**调用方形态无法再漂**，同样�
 | CD-41-17 | 41 实机 | 远端命令超时被 kill | 设 `REMOTE_TIMEOUT` 极小值 | PASS：本机报「超时，回滚块未执行，须人工确认」并以 124 退出，不谎报成功 | 超时默认已由 300s 提到 900s |
 | CD-41-18 | 本机 | 构造的主机输出（7 种分支） | 运行 `deploy/test-rollback-classifier.sh` | PASS：7/7。含关键回归——`restart 非零` 时旧版靠 `set -e` 终止会漏报，现正确分类为「回滚也失败」 | 测试脚本随代码入库 |
 | CD-41-19 | 41 实机 | 加固后的回滚（含参考资料恢复、版本相等判据） | `deploy-41.sh --commit <bad>` | PASS（2026-09-23，第 4 轮）：`rollback=restored version=0.1.0+140ca1dd2c74`，与 `pre-version` 相等；独立复核 src/参考资料/editable 均回到部署前 | 坏提交已从分支移除 |
+| CD-41-20 | 41 实机 | 加固后第 5 轮（含首次 restart 包住、版本精确比较） | `deploy-41.sh --commit <bad>` | PASS（2026-09-23）：`rollback=restored version=0.1.0+140ca1dd2c74` 与 `pre-version` 相等；独立复核 src/editable 均回到部署前。**注意**：`deploy-restart-rc=nonzero` 分支未触发（restart 异步，服务起不来时仍返回 0） | 坏提交已移除 |
+| CD-41-21 | 本机 | 桩件强制 restart 非零 + rsync 非零 | 复刻远端块结构运行 | PASS：发出 `rollback-restore-rc=nonzero` + `rollback=also-failed`（正确分类，非「状态未知」）。**该分支的真机证据缺失**，见 validation.md | 桩件为临时验证，未入库 |
 | CD-41-05 | GitHub Actions | 已合并一个 `src/**` 改动；environment 已配 required reviewer | 观察 `cd.yml` 运行 | **未执行**：workflow 层尚未真实触发过。需首次合并 `src/**` 并在 `production-41` 上点批准来验证触发、审批门与代理解析 | 待补 |
 | CD-41-06 | GitHub Actions | CD-41-05 通过 | 在同一 run 上不批准，等待 | **未执行**：需验证「未批准则不写入 41」 | 待补 |
 
