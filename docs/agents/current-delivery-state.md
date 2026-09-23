@@ -4,9 +4,9 @@
 > 41 前，先读本页；再按链接查看完整证据。本文只保留当前可行动结论，历史过程在
 > `docs/开发进度.md`，逐项证据在 `docs/validation.md`。
 >
-> **最后核验**：2026-09-23 15:01（Asia/Shanghai）
-> **仓库基线**：读取时在 canonical checkout 执行 `git rev-parse origin/main`；最近固化的
-> 状态索引变更为 PR #399（承接 PR #397）。
+> **最后核验**：2026-09-23 17:40（Asia/Shanghai）
+> **仓库基线**：读取时在 canonical checkout 执行 `git rev-parse origin/main`（此时为 `4a1ac3a`）。
+> 最近固化的状态索引变更为 PR #403（方案 A 部署与验收；此前依次为 #401/#400/#399）。
 
 ## 一分钟结论
 
