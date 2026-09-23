@@ -42,10 +42,24 @@ permissions:
   contents: read
 
 # 部署必须串行：两次并发写同一台主机的同一个目录会互相踩（备份、rsync、重启
-# 都不幂等）。cancel-in-progress 关掉 —— 中途取消会留下半部署状态。
+# 都不幂等）。
+#
+# `cancel-in-progress: true` —— 新 run 取消旧的。这是**实测后改的**：原来写 false
+# （想保护正在跑的部署），结果 2026-09-23 首次验收时立刻死锁：CD #1 在审批门等待时
+# 占住槽位，随后两个被取消的 run 没有释放它，之后的 run 全部卡在
+# "waiting for another serialized run to finish"、job 数为 0、永不推进。
+#
+# 取舍（有意接受，写在这里以免被当成疏忽）：true 意味着若一个部署**正在执行**时
+# 又来了新 commit，正在跑的那个会被取消，可能停在「源已换、服务未重启」。
+# 三点让它可接受：
+#   1. 部署本身是**幂等**的：下一次部署会把 src/、参考资料、依赖全部重新同步到
+#      目标 commit，半状态会被下一次收敛掉。
+#   2. deploy-41.sh 自带部署后自检与自动回滚（服务起不来时从本次备份恢复）。
+#   3. 人工随时可用 `deploy/deploy-41.sh --rollback-to <sha>` 兜底。
+# 而 false 的代价是**整个 CD 停摆**，比一次可收敛的半部署严重得多。
 concurrency:
   group: cd-41
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   deploy-41:
