@@ -370,10 +370,12 @@ cp -a $REMOTE_SRC "\$B"/
 #
 # **必须排除本次的包**：本次的 tar 在部署命令之前就已上传，用通配全部删除会把它一并
 # 删掉，紧接着的解包必然失败（钻演实测：mutate-failed=extract, rsync-src）。
-# 按「文件名不含本次 SHORT_SHA」过滤。
+#
+# 保留判据是**精确路径相等**，不是「文件名含本次 SHA」：后者会放过一个同 SHA 的
+# 陈旧残留（评审指出）—— 那个残留不该存在，且它的内容无从验证。
 for stale in /tmp/aiops-sync-*.tar.gz; do
   [ -e "\$stale" ] || continue
-  case "\$stale" in *"$SHORT_SHA"*) continue ;; esac
+  [ "\$stale" = "$REMOTE_TARBALL" ] && continue
   rm -f "\$stale"
 done
 # 取 /health 的 version 字段。用 python3 解析而不是 grep/sed 搜子串 —— 那种做法会
