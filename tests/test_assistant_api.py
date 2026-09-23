@@ -61,6 +61,7 @@ class _Runtime:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []
         self._qa = {}  # qa_id -> record
+        self.skip_retrieval = False
 
     def shutdown(self) -> None:
         pass
@@ -88,6 +89,14 @@ class _Runtime:
         del context, diagnosis_id
         return None
 
+    #: What the lightweight classifier returns. Unset means "no classification",
+    #: which is the routing every test that is not about the classifier wants.
+    classified = None
+
+    def classify_lightweight(self, question: str, *, language: str = "zh"):
+        del question, language
+        return self.classified
+
     def start_assistant_qa(
         self,
         context: ScopeContext,
@@ -96,8 +105,10 @@ class _Runtime:
         conversation=None,
         conversation_turn_no=None,
         language="zh",
+        skip_retrieval=False,
     ):
         del conversation, conversation_turn_no
+        self.skip_retrieval = skip_retrieval
         qa_id = "qa_test00000000000000000000000000000001"
         self._qa[qa_id] = {"qa_id": qa_id, "question": question, "status": "queued", "result": None}
         return self._qa[qa_id]
@@ -1195,3 +1206,55 @@ def test_stopping_an_unknown_or_foreign_question_is_404(tmp_path: Path, monkeypa
     finally:
         runtime.shutdown()
         client.close()
+
+
+def test_casual_question_returns_a_job_rather_than_an_inline_answer(tmp_path: Path) -> None:
+    """Chit-chat is answered by the zero-order QA job, not by the classifier (#391).
+
+    The classifier no longer writes the reply. Two reasons, and the second is why
+    this is required rather than tidier: the answer travels the one path that has
+    the language guard and the localized failure copy, and typed-decision routing
+    (#383) cannot produce text at all — an answer that lived in the classifier
+    would vanish when routing moved off generated text.
+    """
+    client, runtime = _client(tmp_path)
+    runtime.classified = {"intent": "casual", "confidence": "high", "risk": "low", "answer": "你好呀"}
+    resp = client.post("/v1/assistant/questions", json={"question": "你好，你好，你好。"}, headers=_headers())
+    # A job, not a synchronous answer.
+    assert resp.status_code == 202
+    body = resp.json()
+    assert body["type"] == "qa"
+    assert body["status"] == "queued"
+    assert body["qa_id"]
+    # The classifier's own sentence is not what the caller receives.
+    assert "answer" not in body.get("result", {}) if body.get("result") else True
+
+
+def test_a_casual_question_skips_knowledge_retrieval(tmp_path: Path) -> None:
+    """A greeting must not trigger a library lookup just because search is wired."""
+    client, runtime = _client(tmp_path)
+    runtime.classified = {"intent": "casual", "confidence": "high", "risk": "low", "answer": "你好呀"}
+    client.post("/v1/assistant/questions", json={"question": "你好"}, headers=_headers())
+    assert runtime.skip_retrieval is True
+
+
+def test_a_non_casual_question_still_searches(tmp_path: Path) -> None:
+    """The skip is scoped to chit-chat; a business question keeps its retrieval."""
+    client, runtime = _client(tmp_path)
+    runtime.classified = {"intent": "knowledge", "confidence": "high", "risk": "low"}
+    client.post("/v1/assistant/questions", json={"question": "充电桩怎么拔枪"}, headers=_headers())
+    assert runtime.skip_retrieval is False
+
+
+def test_a_high_risk_low_confidence_question_still_asks_for_context(tmp_path: Path) -> None:
+    """#391 must not weaken the asymmetric threshold #346 relies on.
+
+    `risk` high with confidence short of high means "ask once more rather than
+    act on a thin judgement" — that rule is unchanged, and a chit-chat answer
+    moving out of the classifier does not touch it.
+    """
+    client, runtime = _client(tmp_path)
+    runtime.classified = {"intent": "order_issue", "confidence": "medium", "risk": "high"}
+    resp = client.post("/v1/assistant/questions", json={"question": "这单扣费不对"}, headers=_headers())
+    assert resp.status_code == 200
+    assert resp.json()["type"] == "clarification"
