@@ -216,21 +216,31 @@ info "参考资料已纳入产物：$(printf '%s' "$REFERENCE_FILES" | tr ' ' ',
 # 决定，不该被这道门禁挡住。
 if [ -z "$ROLLBACK_TO" ]; then
   step "过期审批门禁"
+  # `|| CURRENT_VERSION=""` 是必需的：远端 curl 超时会让命令替换非零，而本脚本带
+  # `set -e` —— 不兜住就会**因为一次瞬时健康检查失败而中止每一次正常部署**。
+  # 读不到版本应当降级为「无法判断」，不是「拒绝部署」。
   CURRENT_VERSION=$(dev-host exec "$HOST_TARGET" --allow-service-exec -- \
     "curl -s --max-time 6 $HEALTH" | tail -1 \
     | python3 -c 'import json,sys
 try:
     print(json.load(sys.stdin).get("version",""))
 except Exception:
-    print("")' 2>/dev/null)
+    print("")' 2>/dev/null) || CURRENT_VERSION=""
+  # /health 报的是 12 位短 sha，FULL_SHA 是 40 位 —— 不能直接字符串相等，
+  # 否则「同一个 commit 的幂等重跑」会被误判成陈旧并拒绝。统一解析成完整 sha 再比。
   CURRENT_SHA=$(printf '%s' "$CURRENT_VERSION" | sed -n 's/.*+\([0-9a-f]\{7,\}\)$/\1/p')
+  if [ -n "$CURRENT_SHA" ]; then
+    CURRENT_FULL=$(git rev-parse "${CURRENT_SHA}^{commit}" 2>/dev/null || true)
+  else
+    CURRENT_FULL=""
+  fi
   if [ -z "$CURRENT_SHA" ]; then
     info "读不到 41 当前版本（$CURRENT_VERSION）—— 无法做顺序检查，继续"
-  elif ! git cat-file -e "${CURRENT_SHA}^{commit}" 2>/dev/null; then
+  elif [ -z "$CURRENT_FULL" ]; then
     info "41 当前版本 $CURRENT_SHA 不在本仓历史里 —— 无法做顺序检查，继续"
-  elif [ "$CURRENT_SHA" = "$FULL_SHA" ]; then
+  elif [ "$CURRENT_FULL" = "$FULL_SHA" ]; then
     info "41 已跑该 commit（$SHORT_SHA）—— 幂等重跑，继续"
-  elif git merge-base --is-ancestor "$FULL_SHA" "$CURRENT_SHA" 2>/dev/null; then
+  elif git merge-base --is-ancestor "$FULL_SHA" "$CURRENT_FULL" 2>/dev/null; then
     cat >&2 <<EOF
 拒绝：目标 commit 已被更新部署取代（过期审批）
 
