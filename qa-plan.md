@@ -1005,6 +1005,16 @@ ANSWER-PAYLOAD-01~05、07 证明的是**调用方形态无法再漂**，同样�
 | CD-41-12 | 41 实机 | `--rollback-to` 一个依赖清单与当前不同的 commit | `deploy-41.sh --rollback-to <sha>` | PASS：漂移门读**目标 commit** 的 manifest（改前读的是当前 checkout，会放行错配） | 代码路径已改，见 validation.md |
 | CD-41-13 | 本机模拟 | 目标 commit 缺少受管的运行时参考资料 | `deploy-41.sh --dry-run` | PASS：以 1 退出并说明「跳过会让 41 继续用已删除内容」，给出两条处理路径；不上传、不写入 | 退出码与提示文本 |
 | CD-41-14 | 本机 | `cd.yml` 的 `push.paths` 与脚本 `REFERENCE_FILES` 是否一致 | 比对两者 | PASS：三份参考资料均在 `paths` 中（改前不在 → 改 SOP 不触发部署，生产静默用旧规则） | 已脚本化比对 |
+| CD-41-15 | 41 实机 | 部署一个故意让 gateway 起不来的 commit（`raise` 追加到 `gateway_server.py`） | `deploy-41.sh --commit <bad>` | PASS（2026-09-23，第 3 轮）：`selfcheck=failed` → `rollback=restored` → `/health` 回到 `1.0.0+140ca1dd2c74`、服务 healthy；本机报告「主机已自动回滚」 | 坏提交已从分支移除；两次前序失败与恢复过程记入 `validation.md` |
+| CD-41-16 | 41 实机 | 依赖清单与目标 commit 不一致 | `deploy-41.sh --dry-run` | PASS：以 1 退出、列出两侧 sha、不上传（**有意不做自动同步**，见 validation.md 的三条理由） | 见 CD-41-07 |
+| CD-41-17 | 41 实机 | 远端命令超时被 kill | 设 `REMOTE_TIMEOUT` 极小值 | PASS：本机报「超时，回滚块未执行，须人工确认」并以 124 退出，不谎报成功 | 超时默认已由 300s 提到 900s |
+| CD-41-18 | 本机 | 构造的主机输出（9 种分支） | 运行 `deploy/test-rollback-classifier.sh` | PASS：9/9。含关键回归——`restart 非零` 时旧版靠 `set -e` 终止会漏报，现正确分类为「回滚也失败」；另覆盖 `恢复动作非零` 分支 | 测试脚本随代码入库，并由 `tests/test_cd_deploy_scripts.py` 在 CI 中执行 |
+| CD-41-19 | 41 实机 | 加固后的回滚（含参考资料恢复、版本相等判据） | `deploy-41.sh --commit <bad>` | PASS（2026-09-23，第 4 轮）：`rollback=restored version=0.1.0+140ca1dd2c74`，与 `pre-version` 相等；独立复核 src/参考资料/editable 均回到部署前 | 坏提交已从分支移除 |
+| CD-41-20 | 41 实机 | 加固后第 5 轮（含首次 restart 包住、版本精确比较） | `deploy-41.sh --commit <bad>` | PASS（2026-09-23）：`rollback=restored version=0.1.0+140ca1dd2c74` 与 `pre-version` 相等；独立复核 src/editable 均回到部署前。**注意**：`deploy-restart-rc=nonzero` 分支未触发（restart 异步，服务起不来时仍返回 0） | 坏提交已移除 |
+| CD-41-21 | 本机 | 桩件强制 restart 非零 + rsync 非零 | 复刻远端块结构运行 | PASS：发出 `rollback-restore-rc=nonzero` + `rollback=also-failed`（正确分类，非「状态未知」）。**该分支的真机证据缺失**，见 validation.md | 桩件为临时验证，未入库 |
+| CD-41-22 | 本机 | 生成的远端块 | dry-run 后对块单独 `bash -n`（`tests/test_cd_deploy_scripts.py`） | PASS。**已用复现 bug 验证**：未转义的位置参数会让它失败（`$1: unbound variable`）。heredoc 是生成的，静态检查看不到 |
+| CD-41-23 | 41 实机 | 预置一个陈旧 tar 残留（`aiops-sync-DEADBEEF1234.tar.gz`） | `deploy-41.sh --commit <good>` | PASS（2026-09-23）：陈旧残留被清、本次的包正常解包并在结束时自清、服务 healthy。**改前该逻辑会删掉本次的包**（钻演实测 `mutate-failed=extract`） | 假残留已清 |
+| CD-41-24 | 41 实机 | 移走一份受管参考资料（`docs/architecture.md`） | `deploy-41.sh --commit HEAD` | PASS：以 1 退出、给出两条处理路径（人工放置 / 显式移除）、不上传不写入；放回后正常部署通过 | 文件已放回 |
 | CD-41-05 | GitHub Actions | 已合并一个 `src/**` 改动；environment 已配 required reviewer | 观察 `cd.yml` 运行 | **未执行**：workflow 层尚未真实触发过。需首次合并 `src/**` 并在 `production-41` 上点批准来验证触发、审批门与代理解析 | 待补 |
 | CD-41-06 | GitHub Actions | CD-41-05 通过 | 在同一 run 上不批准，等待 | **未执行**：需验证「未批准则不写入 41」 | 待补 |
 

@@ -74,6 +74,11 @@ SSHPASS='<现场从受控来源取得>' sshpass -e ssh -o StrictHostKeyChecking=
 > `deploy/deploy-41.sh --commit <sha>`（或 `--rollback-to <sha>`），用人工密钥
 > 别名 `aiops-41`；自动化用的是 CD 专用别名 `aiops-41-cd`。
 >
+> **依赖不在本流程范围。** `src/` 与运行时参考资料由 CD 同步；依赖清单
+> （`pyproject.toml` / `uv.lock`）不一致时 CD 会**拒绝部署**。更新 41 的依赖环境走
+> [依赖环境更新流程](env-41-dependency-update.md) —— 那是一次人工的、要留记录的
+> 环境变更，不做成自动化。
+>
 > `deploy-41.sh` 在本文步骤之上多了两件**唯一**有它才有的能力：把 commit 标识注入
 > `__init__.py`（使 `/health` 能自证跑的是哪个 commit），以及部署后逐条断言
 > （服务 active、`/health` 含该 commit、文件数与 sha 树一致）。下面的手工步骤没有

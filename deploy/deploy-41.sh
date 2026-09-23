@@ -203,6 +203,45 @@ EOF
 done
 info "参考资料已纳入产物：$(printf '%s' "$REFERENCE_FILES" | tr ' ' ',')"
 
+# ---- 1b. 参考资料前置检查（**保守**：不存在就拒绝部署，不猜回滚）--------------
+# 每份受管的参考资料在 41 上都必须**已经存在**。理由：
+#
+#   1. 它们本来就是生产上既有的运行输入（`reference_root()` 读 /opt/aiops-41）。
+#      部署只负责把它们更新到目标 commit 的版本，不负责从无到有地引入。
+#   2. 「部署前不存在」意味着回滚要**删除**它 —— 那是比更新更重的动作，且必须知道
+#      它原本不该在。评审指出：旧实现只按「有没有备份」判断，会把新建的文件留在
+#      盘上却报「完整回滚」（假声明）。
+#   3. 我们试过实现「按部署前存在状态决定回滚动作」，但在真机上无法可靠复现 ——
+#      主机侧探针显示检查时文件已存在、而部署前我们刚确认它不在（根因未定位）。
+#      与其交付一个自己都不信的回滚分支，不如把这种情况挡在部署之前。
+#
+# 代价：首次引入一份新参考资料时需要人工在 41 上先放置它（一次性动作），
+# 以及显式更新 REFERENCE_FILES。这是有意的取舍 —— 宁可要人做一次，
+# 不要脚本去猜一个删文件的回滚。
+step "参考资料前置检查"
+for ref in $REFERENCE_FILES; do
+  present=$(dev-host exec "$HOST_TARGET" --allow-service-exec -- \
+    "[ -f /opt/aiops-41/$ref ] && echo yes || echo no" | tail -1 | tr -d '[:space:]')
+  if [ "$present" != "yes" ]; then
+    cat >&2 <<EOF
+受管的运行时参考资料在 41 上不存在：$ref
+
+部署只把它更新到目标 commit 的版本，不负责从无到有地引入。若在此继续，回滚就得
+**删除**它 —— 那需要知道它原本不该在，而按「有没有备份」判断会把新建的文件留在
+盘上却报「完整回滚」（假声明，评审指出过）。
+
+已停止，未上传、未写入、未重启。请二选一：
+  1. 在 41 上放置该文件（人工一次性动作）：
+       install -o aiops41 -g aiops41 -m 0640 <file> /opt/aiops-41/$ref
+     再重跑本部署；或
+  2. 若它确实不该再是受管参考资料，把它从 deploy/deploy-41.sh 的 REFERENCE_FILES
+     移除（走一次单独评审的改动）。
+EOF
+    exit 1
+  fi
+  info "$ref 在 41 上存在 ✓"
+done
+
 # ---- 2. 注入 commit 标识 ---------------------------------------------------
 # /health 的 version 来自 src/aiops_diagnostics/__init__.py 的 __version__，是个
 # 静态 semver —— 部署后无法回答「现在跑的是哪个 commit」。在**暂存副本**上把它
@@ -296,9 +335,11 @@ for spec in "pyproject.toml" "uv.lock"; do
 产物只含 src/，不会同步依赖。此时若继续部署，restart 可能因缺包而失败
 （服务从 active 掉到 failed）。已停止，未上传、未写入、未重启。
 
-处理方式（需独立决定，不在本脚本范围）：
-  1. 在 41 上更新依赖环境（该机无 uv，需先确定用哪种方式），并记录变更；或
-  2. 若本次改动确实不需要新依赖，把 $spec 在 41 上对齐到目标 commit 的版本。
+处理方式（不在本脚本范围 —— 它改的是运行环境）：
+  按 docs/agents/env-41-dependency-update.md 的人工流程更新 41 的依赖环境，再重跑
+  部署。该流程要求备份、editable 守卫与留记录。**不要在这里顺手装包**：
+  uv sync 会把 editable 安装换成实体目录，之后 src/ 同步会静默失效
+  （import 仍成功，但拿的是旧代码，而 /health 还报新 commit）。
 EOF
     exit 1
   fi
@@ -322,44 +363,157 @@ REFERENCE_FILES="${REFERENCE_FILES}"
 set -eu
 TS=\$(date +%Y%m%d-%H%M%S)
 B=/var/backups/aiops-41/backup-\$TS
-mkdir -p "\$B"
+mkdir -p "\$B/refs"
 cp -a $REMOTE_SRC "\$B"/
-rm -rf /tmp/sync-check && mkdir -p /tmp/sync-check
-tar xzf $REMOTE_TARBALL -C /tmp/sync-check
-rsync -a --delete /tmp/sync-check/aiops_diagnostics/ $REMOTE_SRC/aiops_diagnostics/
+# 清理上一次被 kill 的部署留下的产物。正常路径与回滚路径都会删掉自己的 tar，
+# 但**被超时/断线 kill 的那次**删不了 —— 实测留下过 24MB 残留（2026-09-23 钻演）。
+#
+# **必须排除本次的包**：本次的 tar 在部署命令之前就已上传，用通配全部删除会把它一并
+# 删掉，紧接着的解包必然失败（钻演实测：mutate-failed=extract, rsync-src）。
+#
+# 保留判据是**精确路径相等**，不是「文件名含本次 SHA」：后者会放过一个同 SHA 的
+# 陈旧残留（评审指出）—— 那个残留不该存在，且它的内容无从验证。
+for stale in /tmp/aiops-sync-*.tar.gz; do
+  [ -e "\$stale" ] || continue
+  [ "\$stale" = "$REMOTE_TARBALL" ] && continue
+  rm -f "\$stale"
+done
+# 取 /health 的 version 字段。用 python3 解析而不是 grep/sed 搜子串 —— 那种做法会
+# 命中响应里任意位置，而判据要的是「version 字段恰好等于期望值」。41 上有 python3。
+# 定义放在最前面，因为部署前的基线记录与部署后的自检**必须用同一把尺**：两处解析方式
+# 不同时，一次响应格式变化就会把成功的恢复误报成失败。
+health_version() {
+  curl -s --max-time 6 $HEALTH \
+    | python3 -c 'import json,sys
+try:
+    print(json.load(sys.stdin).get("version",""))
+except Exception:
+    print("")' 2>/dev/null
+}
+# 部署前记录当前 /health 报的版本 —— 回滚成功的判据要与它相等，而不是只看 active。
+PRE_VERSION=\$(health_version)
+[ -n "\$PRE_VERSION" ] || PRE_VERSION='(部署前未能读到版本)'
+echo "pre-version=\$PRE_VERSION"
+
+# =====================================================================
+# 变更阶段：**所有写操作累积状态，绝不提前退出。**
+#
+# 远端块带 set -e。若让 rsync/mkdir/cp/chown 里任何一个直接失败退出，控制流就到不了
+# 下面的自检与回滚 —— 生产停在「源已换、服务未重启」的半部署状态，本机只看到「状态
+# 未知」。这个坑我按实例修过四次（首次 restart、回滚 restart、恢复动作、变更阶段），
+# 每次都是同一形状。所以这里改成结构性的：一个阶段累积一个状态，任何非零都汇入同一
+# 条恢复路径，不再逐个 if 包。
+# =====================================================================
+mutate_rc=0
+step_failed() { echo "mutate-failed=\$1"; mutate_rc=1; }
+
+rm -rf /tmp/sync-check && mkdir -p /tmp/sync-check || step_failed "prepare-sync-dir"
+tar xzf $REMOTE_TARBALL -C /tmp/sync-check || step_failed "extract"
+rsync -a --delete /tmp/sync-check/aiops_diagnostics/ $REMOTE_SRC/aiops_diagnostics/ || step_failed "rsync-src"
 # 参考资料：与源码分开搬，因为它们的落点是 /opt/aiops-41 而不是 src/。
 # reference_root() 解析到 /opt/aiops-41（该目录有 pyproject.toml + src/），
 # 诊断每次运行都从这里读这几份文件 —— 不同步就会「报新 commit、用旧 SOP」。
 for ref in $REFERENCE_FILES; do
   if [ -f "/tmp/sync-check/$ref" ]; then
-    mkdir -p "/opt/aiops-41/$(dirname "$ref")"
-    cp "/tmp/sync-check/$ref" "/opt/aiops-41/$ref"
+    mkdir -p "/opt/aiops-41/$(dirname "$ref")" "\$B/refs/$(dirname "$ref")" \
+      || { step_failed "refs-mkdir:$ref"; continue; }
+    # 备份后覆盖。参考资料的**存在性**已由本脚本的前置检查（step "参考资料前置检查"）
+    # 保证 —— 因此这里不需要再判断 present/absent，回滚也不必删文件、只需还原。
+    # 之前那版按存在状态决定回滚动作，在真机上无法可靠复现（见该前置检查处的说明），
+    # 已按保守做法改为「不存在就拒绝部署」。
+    cp "/opt/aiops-41/$ref" "\$B/refs/$ref" || { step_failed "refs-backup:$ref"; continue; }
+    cp "/tmp/sync-check/$ref" "/opt/aiops-41/$ref" || { step_failed "refs-copy:$ref"; continue; }
     echo "reference-synced=$ref"
   fi
 done
-chown -R aiops41:aiops41 $REMOTE_SRC
-# 备份保留：每次部署留一份全量 src 备份（约 8.5M）。CD 会把份数持续推上去，
-# 所以按份数修剪、只保留最近 KEEP_BACKUPS 份。
-#
-# **只删本脚本自己造的备份**：本脚本的备份名是 backup-<14位时间戳>。人工或别的
-# 工具留下的备份（例如 backup-20260915-pre-621490d 那种带标记的）不在修剪范围内
-# —— 精简磁盘不是删除别人产物的理由，何况备份正是回滚时要用的东西。实测中曾把
-# 一个人工备份误删，故加这个约束。
-# 若匹配到的份数仍超限，说明有非本脚本的备份占位，报告出来而不是继续删。
-LATEST_PATTERN='backup-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]'
-own=\$(ls -1d /var/backups/aiops-41/\$LATEST_PATTERN 2>/dev/null | wc -l)
-others=\$(( \$(ls -1d /var/backups/aiops-41/backup-* 2>/dev/null | wc -l) - own ))
-if [ "\$own" -gt "${KEEP_BACKUPS}" ]; then
-  ls -1d /var/backups/aiops-41/\$LATEST_PATTERN 2>/dev/null | sort \
-    | head -n "\$((own - ${KEEP_BACKUPS}))" \
-    | while read -r old; do rm -rf "\$old"; echo "pruned-backup=\${old##*/}"; done
-fi
-if [ "\$others" -gt 0 ]; then
-  echo "note: \$others non-CD backup(s) present, not pruned"
-fi
-systemctl restart $SERVICE
+chown -R aiops41:aiops41 $REMOTE_SRC || step_failed "chown"
+
+# restart 也累积：systemctl restart 非零时必须继续走自检/回滚，而不是退出。
+# 注意 restart 是异步的：服务起不来时它**常常仍返回 0**（fork 完成即返回），
+# 所以「restart 返回 0」不能推出「服务起来了」；真正的判据是下面的 check_ok。
+if systemctl restart $SERVICE; then :; else echo "deploy-restart-rc=nonzero"; fi
 sleep 5
 echo "backup=\$B"
+
+# ---- 自检与自动回滚（都在主机上做）----
+# 自检放主机侧，因为回滚只能用主机上的备份做。若自检在本机、回滚在主机，中间网络
+# 断了就会分裂成「本机以为失败 / 主机其实已切换」，两边都不确定。判据只取本机也能
+# 独立复核的两项：服务 active + /health 含本次 commit 版本。
+EXPECT_VERSION="${STAMPED}"
+check_ok() {
+  # mutate_rc 必须为 0：变更阶段有任何一步失败，即使服务恰好起来了，也不算成功 ——
+  # 那意味着源码与参考资料可能只同步了一部分。
+  [ "\$mutate_rc" = "0" ] || return 1
+  [ "\$(systemctl is-active $SERVICE)" = "active" ] || return 1
+  [ "\$(health_version)" = "\$EXPECT_VERSION" ] || return 1
+  return 0
+}
+if check_ok; then
+  echo "selfcheck=passed"
+  # 备份修剪是**非关键维护**，放在自检通过之后：放前面的话，一次磁盘/权限问题就会
+  # 阻断恢复路径，而修剪失败本身不影响这次部署是否正确。
+  #
+  # **只删本脚本自己造的备份**：备份名是 backup-<14位时间戳>。人工或别的工具留下的
+  # （例如 backup-20260915-pre-621490d 那种带标记的）不在修剪范围 —— 精简磁盘不是删除
+  # 别人产物的理由，何况备份正是回滚时要用的。实测中曾把一个人工备份误删，故加此约束。
+  LATEST_PATTERN='backup-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]'
+  own=\$(ls -1d /var/backups/aiops-41/\$LATEST_PATTERN 2>/dev/null | wc -l)
+  others=\$(( \$(ls -1d /var/backups/aiops-41/backup-* 2>/dev/null | wc -l) - own ))
+  if [ "\$own" -gt "${KEEP_BACKUPS}" ]; then
+    ls -1d /var/backups/aiops-41/\$LATEST_PATTERN 2>/dev/null | sort \
+      | head -n "\$((own - ${KEEP_BACKUPS}))" \
+      | while read -r old; do rm -rf "\$old"; echo "pruned-backup=\${old##*/}"; done || true
+  fi
+  [ "\$others" -gt 0 ] && echo "note: \$others non-CD backup(s) present, not pruned"
+else
+  echo "selfcheck=failed" >&2
+  echo "rolling back to \$B ..." >&2
+  # 回滚两样东西：源码 + 参考资料。两者都在本次部署里被改过，只回源码会留下
+  # 「旧代码 + 被拒 commit 的 SOP」—— 服务能起来，但诊断读的是被拒版本的内容。
+  # 恢复动作累积状态、不做提前退出：这些命令若失败而 set -e 直接终止，标记就发不出去，
+  # 分类器把它当「状态未知」—— 而它其实是「回滚失败」，要人做的事完全不同。
+  restore_rc=0
+  rsync -a --delete "\$B/src/" $REMOTE_SRC/ || restore_rc=1
+  for ref in $REFERENCE_FILES; do
+    # 参考资料一定原本存在（前置检查保证），所以回滚就是「从备份还原」。
+    # 唯一的不确定是备份本身是否完好 —— 那由 cp 的退出码如实反映，不猜。
+    if [ -f "\$B/refs/$ref" ]; then
+      mkdir -p "/opt/aiops-41/$(dirname "$ref")" || restore_rc=1
+      cp "\$B/refs/$ref" "/opt/aiops-41/$ref" || restore_rc=1
+    else
+      echo "refs-backup-missing=$ref" >&2
+      restore_rc=1
+    fi
+  done
+  chown -R aiops41:aiops41 $REMOTE_SRC || restore_rc=1
+  [ "\$restore_rc" = "0" ] || echo "rollback-restore-rc=nonzero"
+
+  # 判定回滚是否成功必须用与部署前**同一把尺**：服务 active **且** /health 报的
+  # 版本等于部署前记录的那个。只看 active 不够 —— systemd 可以是 active 而 HTTP
+  # 监听起不来（初始化卡住），那时报 healthy 就是谎报。
+  #
+  # 所有标记都走 stdout：本机用 $( ) 只捕获 stdout，写 stderr 的标记到不了分类器。
+  # restart 用 if 包住：远端块带 set -e，非零的 restart 会直接终止，连标记都发不出。
+  if systemctl restart $SERVICE; then :; else echo "rollback-restart-rc=nonzero"; fi
+  sleep 5
+  # 三个条件缺一不可：恢复动作全部成功 **且** 服务 active **且** /health 版本等于部署前。
+  # 少了 restore_rc 这条，就会把「参考资料只回了一半、但版本恰好还是旧的」报成
+  # 完整回滚 —— 服务看起来正常，而诊断读的是半新半旧的输入。
+  if [ "\$restore_rc" = "0" ] \
+     && [ "\$(systemctl is-active $SERVICE)" = "active" ] \
+     && [ "\$(health_version)" = "\$PRE_VERSION" ]; then
+    echo "rollback=restored version=\$PRE_VERSION"
+  else
+    echo "rollback=also-failed"
+    # is-active 用 || true 兜住：服务 inactive 时它非零，set -e 会在这里终止，
+    # 下面的标记与清理就都发不出去 —— 而这正是最需要它们被发出去的情形。
+    echo "rollback-health=\$(curl -s --max-time 6 $HEALTH || echo '(no response)')"
+    echo "rollback-active=\$(systemctl is-active $SERVICE || true)"
+  fi
+  rm -rf /tmp/sync-check $REMOTE_TARBALL || true
+  exit 1
+fi
+
 systemctl is-active $SERVICE
 curl -s --max-time 6 $HEALTH
 rm -rf /tmp/sync-check $REMOTE_TARBALL
@@ -387,14 +541,31 @@ info "已上传 $REMOTE_TARBALL（产物身份 $ARTIFACT_SHA 已核对）"
 
 # ---- 6. 远端部署 -----------------------------------------------------------
 step "远端部署"
-REMOTE_OUT=$(dev-host exec "$HOST_TARGET" --allow-service-exec --timeout 300 -- "$REMOTE_CMD")
+# 超时要够。**超时设短不是更保守，而是更危险**：命令被 kill 在中途时，主机上的
+# 自检与回滚块根本没机会跑，生产会停在「源已换、服务未重启」的分裂状态
+# （2026-09-23 钻演实测踩到，见 validation.md）。
+REMOTE_TIMEOUT=${REMOTE_TIMEOUT:-900}
+case $REMOTE_TIMEOUT in
+  ''|*[!0-9]*) die "REMOTE_TIMEOUT 必须是正整数秒数，得到：$REMOTE_TIMEOUT" ;;
+  0) die "REMOTE_TIMEOUT=0 会让远端命令立即被 kill —— 回滚块没有机会执行" ;;
+esac
+set +e
+REMOTE_OUT=$(dev-host exec "$HOST_TARGET" --allow-service-exec --timeout "$REMOTE_TIMEOUT" -- "$REMOTE_CMD")
+REMOTE_RC=$?
+set -e
 printf '%s\n' "$REMOTE_OUT" | sed 's/^/   /'
 BACKUP=$(printf '%s\n' "$REMOTE_OUT" | sed -n 's/^backup=//p' | head -1)
 info "备份=$BACKUP"
 
-# ---- 7. 部署后验证（失败即非零退出）----------------------------------------
-# 只证技术健康。业务验收需业务方 thirdSession，§5/§6 明确禁止 CI 自证 ——
-# 所以本节通过也**不**等于「已验收」，状态词止于 merged_waiting_deploy。
+if [ "$REMOTE_RC" -ne 0 ]; then
+  # 分类逻辑抽在 deploy/classify-remote-result.sh，因为它有三个容易错的判断
+  # （远端 set -e、标记写 stderr、只看 active 不看 /health），而那些错法只在
+  # 特定分支显现。抽出来才能对每个分支做测试（见 test-rollback-classifier.sh）。
+  printf '%s' "$REMOTE_OUT" | REMOTE_RC="$REMOTE_RC" \
+    "$REPO_ROOT/deploy/classify-remote-result.sh" "$HOST_TARGET" "$SERVICE" >&2
+  exit $?
+fi
+
 step "部署后验证"
 
 ACTIVE=$(dev-host exec "$HOST_TARGET" --allow-service-exec -- "systemctl is-active $SERVICE" | tail -1)
