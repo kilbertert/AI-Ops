@@ -326,6 +326,10 @@ TS=\$(date +%Y%m%d-%H%M%S)
 B=/var/backups/aiops-41/backup-\$TS
 mkdir -p "\$B/refs"
 cp -a $REMOTE_SRC "\$B"/
+# 清理上一次被 kill 的部署留下的产物。正常路径与回滚路径都会删掉自己的 tar，
+# 但**被超时/断线 kill 的那次**删不了 —— 实测留下过 24MB 残留（2026-09-23 钻演）。
+# 放在开头清，等于每次部署顺手自愈上一次的残留。
+rm -f /tmp/aiops-sync-*.tar.gz
 # 取 /health 的 version 字段。用 python3 解析而不是 grep/sed 搜子串 —— 那种做法会
 # 命中响应里任意位置，而判据要的是「version 字段恰好等于期望值」。41 上有 python3。
 # 定义放在最前面，因为部署前的基线记录与部署后的自检**必须用同一把尺**：两处解析方式
