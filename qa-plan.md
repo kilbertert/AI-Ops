@@ -1005,6 +1005,9 @@ ANSWER-PAYLOAD-01~05、07 证明的是**调用方形态无法再漂**，同样�
 | CD-41-12 | 41 实机 | `--rollback-to` 一个依赖清单与当前不同的 commit | `deploy-41.sh --rollback-to <sha>` | PASS：漂移门读**目标 commit** 的 manifest（改前读的是当前 checkout，会放行错配） | 代码路径已改，见 validation.md |
 | CD-41-13 | 本机模拟 | 目标 commit 缺少受管的运行时参考资料 | `deploy-41.sh --dry-run` | PASS：以 1 退出并说明「跳过会让 41 继续用已删除内容」，给出两条处理路径；不上传、不写入 | 退出码与提示文本 |
 | CD-41-14 | 本机 | `cd.yml` 的 `push.paths` 与脚本 `REFERENCE_FILES` 是否一致 | 比对两者 | PASS：三份参考资料均在 `paths` 中（改前不在 → 改 SOP 不触发部署，生产静默用旧规则） | 已脚本化比对 |
+| CD-41-15 | 41 实机 | 部署一个故意让 gateway 起不来的 commit（`raise` 追加到 `gateway_server.py`） | `deploy-41.sh --commit <bad>` | PASS（2026-09-23，第 3 轮）：`selfcheck=failed` → `rollback=restored` → `/health` 回到 `1.0.0+140ca1dd2c74`、服务 healthy；本机报告「主机已自动回滚」 | 坏提交已从分支移除；两次前序失败与恢复过程记入 `validation.md` |
+| CD-41-16 | 41 实机 | 依赖清单与目标 commit 不一致 | `deploy-41.sh --dry-run` | PASS：以 1 退出、列出两侧 sha、不上传（**有意不做自动同步**，见 validation.md 的三条理由） | 见 CD-41-07 |
+| CD-41-17 | 41 实机 | 远端命令超时被 kill | 设 `REMOTE_TIMEOUT` 极小值 | PASS：本机报「超时，回滚块未执行，须人工确认」并以 124 退出，不谎报成功 | 超时默认已由 300s 提到 900s |
 | CD-41-05 | GitHub Actions | 已合并一个 `src/**` 改动；environment 已配 required reviewer | 观察 `cd.yml` 运行 | **未执行**：workflow 层尚未真实触发过。需首次合并 `src/**` 并在 `production-41` 上点批准来验证触发、审批门与代理解析 | 待补 |
 | CD-41-06 | GitHub Actions | CD-41-05 通过 | 在同一 run 上不批准，等待 | **未执行**：需验证「未批准则不写入 41」 | 待补 |
 
