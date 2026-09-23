@@ -99,7 +99,11 @@ info "dev-host 可用（$(command -v dev-host)）"
 # 这里不往主清单里加第二条 41 记录 —— 策略规定角色/信任平面/归属只记一处，
 # 重复过就是两份记录打架的来源。改为**运行时派生**一份视图：从主清单读全部字段，
 # 只把 ssh_alias 换成 CD 别名。角色与归属的唯一真值仍是主清单。
-CD_ALIAS=${CD_SSH_ALIAS:-aiops-41-cd}
+# **默认人工别名**，不是 CD 别名。同一个脚本既服务自动化部署，也服务人工应急回滚；
+# 而应急场景恰恰可能是「CD 密钥已被吊销」（CD 出事或被入侵时第一件事就是吊销它）。
+# 若默认选 CD 身份，那条应急路径会在最需要它的时候认证失败。
+# 自动化路径由 cd.yml 显式设 CD_SSH_ALIAS=aiops-41-cd 选用 CD 身份。
+CD_ALIAS=${CD_SSH_ALIAS:-aiops-41}
 CANONICAL_REGISTRY=${DEV_HOST_REGISTRY:-$HOME/.config/dev-host/hosts.toml}
 [ -r "$CANONICAL_REGISTRY" ] || die "读不到主机清单：$CANONICAL_REGISTRY"
 
@@ -206,6 +210,49 @@ info "大小=$(du -h "$TARBALL" | cut -f1)  产物 sha256=${ARTIFACT_SHA:0:16}�
 
 REMOTE_TARBALL="/tmp/aiops-sync-${SHORT_SHA}.tar.gz"
 
+# ---- 3b. 依赖漂移检查 ------------------------------------------------------
+# 产物只含 src/，41 上的依赖环境（/opt/aiops-41/.venv）在机上有它自己的 pyproject/uv.lock。
+# 两者不一致时，restart 会以 ModuleNotFoundError 起不来 —— 服务从 active 掉到 failed。
+#
+# 这一版**检测并拒绝**，不自动在 41 上装依赖：那是一台承载生产、没有 uv 的公司主机，
+# 装依赖属于「改运行环境」，不是「传一次源码」，需要独立决定与独立验证（见本 PR 说明的
+# 「依赖漂移」一节）。宁可停止部署并说清楚，也不把生产交给一个可能起不来的进程。
+#
+# 注意 pyproject/uv.lock 目前不在 cd.yml 的触发路径里；若哪天它们变了，下面的检查会
+# 在这里拦下，而不是让部署"成功"后服务挂掉。
+step "依赖漂移检查"
+for spec in "pyproject.toml" "uv.lock"; do
+  local_sha=$(sha256sum "$REPO_ROOT/$spec" 2>/dev/null | cut -d' ' -f1 || true)
+  remote_sha=$(dev-host exec "$HOST_TARGET" --allow-service-exec -- \
+    "sha256sum /opt/aiops-41/$spec 2>/dev/null | cut -d' ' -f1" | tail -1 | tr -d '[:space:]')
+  if [ -z "$remote_sha" ]; then
+    info "$spec：41 上没有该文件 —— 无法验证依赖一致性（记为已知缺口）"
+    continue
+  fi
+  if [ "$local_sha" != "$remote_sha" ]; then
+    cat >&2 <<EOF
+依赖漂移：$spec 与 41 上的不一致
+  本地 $local_sha
+  41   $remote_sha
+
+产物只含 src/，不会同步依赖。此时若继续部署，restart 可能因缺包而失败
+（服务从 active 掉到 failed）。已停止，未上传、未写入、未重启。
+
+处理方式（需独立决定，不在本脚本范围）：
+  1. 在 41 上更新依赖环境（该机无 uv，需先确定用哪种方式），并记录变更；或
+  2. 若本次改动确实不需要新依赖，把 $spec 在 41 上对齐到本地同一版本。
+EOF
+    exit 1
+  fi
+  info "$spec 与 41 一致 ✓"
+done
+
+# 备份保留份数（本机侧决定，插值进远端命令）。用环境变量可覆盖，用于验证修剪分支。
+KEEP_BACKUPS=${KEEP_BACKUPS:-20}
+case $KEEP_BACKUPS in
+  ''|*[!0-9]*) die "KEEP_BACKUPS 必须是正整数，得到：$KEEP_BACKUPS" ;;
+esac
+
 # 远端块的构造：把它写成一条已引用好的命令交给 dev-host exec（它按 ssh argv 语义
 # 转发，需要 shell 语法时必须整体引用）。
 #
@@ -221,6 +268,25 @@ rm -rf /tmp/sync-check && mkdir -p /tmp/sync-check
 tar xzf $REMOTE_TARBALL -C /tmp/sync-check
 rsync -a --delete /tmp/sync-check/aiops_diagnostics/ $REMOTE_SRC/aiops_diagnostics/
 chown -R aiops41:aiops41 $REMOTE_SRC
+# 备份保留：每次部署留一份全量 src 备份（约 8.5M）。CD 会把份数持续推上去，
+# 所以按份数修剪、只保留最近 KEEP_BACKUPS 份。
+#
+# **只删本脚本自己造的备份**：本脚本的备份名是 backup-<14位时间戳>。人工或别的
+# 工具留下的备份（例如 backup-20260915-pre-621490d 那种带标记的）不在修剪范围内
+# —— 精简磁盘不是删除别人产物的理由，何况备份正是回滚时要用的东西。实测中曾把
+# 一个人工备份误删，故加这个约束。
+# 若匹配到的份数仍超限，说明有非本脚本的备份占位，报告出来而不是继续删。
+LATEST_PATTERN='backup-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]'
+own=\$(ls -1d /var/backups/aiops-41/\$LATEST_PATTERN 2>/dev/null | wc -l)
+others=\$(( \$(ls -1d /var/backups/aiops-41/backup-* 2>/dev/null | wc -l) - own ))
+if [ "\$own" -gt "${KEEP_BACKUPS}" ]; then
+  ls -1d /var/backups/aiops-41/\$LATEST_PATTERN 2>/dev/null | sort \
+    | head -n "\$((own - ${KEEP_BACKUPS}))" \
+    | while read -r old; do rm -rf "\$old"; echo "pruned-backup=\${old##*/}"; done
+fi
+if [ "\$others" -gt 0 ]; then
+  echo "note: \$others non-CD backup(s) present, not pruned"
+fi
 systemctl restart $SERVICE
 sleep 5
 echo "backup=\$B"

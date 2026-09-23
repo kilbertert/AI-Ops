@@ -53,6 +53,32 @@ PATH 是 `/home/claude/.local/bin:/usr/local/bin:/usr/bin:/bin`，其中 `python
 读全部字段、只替换 `ssh_alias`，并断言其余字段逐一致。这样角色/归属的唯一真值仍是
 主清单，没有第二份记录可漂移。
 
+### 评审后的加固（Devin Review 7 条，均确认为真）
+
+| # | 问题 | 处置 |
+|---|---|---|
+| 🟥 | `workflow_dispatch` 的任意 commit 输入可绕过 main 保护（部署从未过检查的提交） | **去掉该输入**。部署永远是本次运行的 `GITHUB_SHA`；回滚走 `--rollback-to` |
+| 🟨 | 裸 `self-hosted` label 让任何 runner 能领到生产部署密钥 | 改用本仓专属 label `[self-hosted, AI-Ops]`；加 `.github/actionlint.yaml` 声明它 |
+| 🔴 | 产物只含 `src/`，依赖变更不会被同步 → restart 可能 `ModuleNotFoundError` | **加依赖漂移门**：比对本地与 41 的 `pyproject.toml`/`uv.lock` sha，不一致即拒绝部署 |
+| 🟡 | 脚本默认用 CD 身份 → CD 密钥被吊销时应急回滚失效 | **默认改人工别名**；CD 在 workflow 里显式设 `CD_SSH_ALIAS=aiops-41-cd` |
+| 🟡 | 手动指定 commit 时 environment 记录的是 ref 的 sha，账本归错 commit | 与 🟥 同源，去掉该输入后消失 |
+| 🔍 | 备份无保留策略 | 加按份数修剪（默认 20），**只删本脚本自己造的备份** |
+| 🔍 | 生产门控在 GitHub 设置里，仓库文本无法验证 | environment 已实测配置：required reviewer + 仅 protected branches + 关闭 admin bypass |
+
+### 一处我自己造成并已修复的损失（记录备查）
+
+初版的修剪模式是 `backup-*`，**过宽** —— 实测把人工留下的
+`backup-20260915-pre-621490d`（`docs/validation.md` 引为 2026-09-15 部署证据的那份）
+一并删了。已做两件事：
+
+1. 收紧模式为 `backup-<14位数字>`，并加「非 CD 备份不删、只报告」的约束；
+   实测 `KEEP=14` 时删 2 份 CD 备份、人工那份完好并输出 `note: 1 non-CD backup(s) present, not pruned`。
+2. **恢复**那份备份：其对应 commit `621490d` 仍在 git，用 `git archive` 精确重建
+   并传回 41，文件数 55 —— 与 `validation.md` 当时记录的「55 个 git 跟踪文件」一致。
+
+> 教训：修剪类逻辑的匹配模式过宽 = 删除别人产物的许可。备份正是回滚时要用的东西，
+> 不该由「清理磁盘」顺手带走。
+
 ### 未完成
 
 - workflow 层未跑过（见上）。

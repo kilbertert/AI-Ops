@@ -19,11 +19,13 @@ on:
       - "src/**"
       - "deploy/**"
       - ".github/workflows/cd.yml"
+  # 手动触发只用于**重跑当前 main**（例如上次部署失败后重试），不提供任意 commit
+  # 入口：一个能选任意 fetched commit 的输入，等于让有权批准环境的人把从未通过 main
+  # 必需检查的提交部署到生产 —— 那把 Ruleset 绕开了。
+  #
+  # 回滚不靠选 commit，靠 `--rollback-to`：它需要一个**已经部署过**的 commit，
+  # 走本地脚本或下面的 rollback_to 输入（该输入不在本 workflow 里，见 PR 说明）。
   workflow_dispatch:
-    inputs:
-      commit:
-        description: "要部署的 commit（留空 = 当前 main 的 HEAD）"
-        required: false
 
 permissions:
   contents: read
@@ -39,7 +41,12 @@ jobs:
     # 必须用 self-hosted：41 不在 GitHub-hosted runner 的可达范围内，而且
     # deploy-41.sh 依赖 dev-host，后者的配置（~/.ssh/config、库外 hosts.toml、
     # 私钥）只存在于本机 claude 账户下。GitHub-hosted runner 既不持有也够不到。
-    runs-on: self-hosted
+    #
+    # 用**本仓专属 label**（server-dev-runner-AI-Ops 带 `AI-Ops`），不只是
+    # `self-hosted`：后者的含义是「任何一台自托管 runner」，任何新登记的 runner
+    # 都能领这个 job，从而拿到生产部署密钥与部署权。专属 label 把能执行 CD 的
+    # runner 收敛到已知那一台。
+    runs-on: [self-hosted, AI-Ops]
     timeout-minutes: 20
 
     # 门控与审计都在这一行：
@@ -59,15 +66,17 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      # 部署的永远是这次运行自己的 commit（GITHUB_SHA）。
+      # 不引入「让操作者挑一个别的 commit」的输入：environment 的 deployment 记录
+      # 是按 workflow ref/SHA 记的，若实际部署了另一个 sha，账本就会把生产归到错的
+      # commit 上 —— 而「哪个 commit 在跑」正是这套 CD 要能回答的问题。
+      # 回滚走 --rollback-to（见 runbook §2 的应急路径）。
       - name: Resolve the commit to deploy
         id: target
-        env:
-          DISPATCH_COMMIT: ${{ inputs.commit }}
         run: |
           set -euo pipefail
-          commit="${DISPATCH_COMMIT:-${GITHUB_SHA}}"
-          git cat-file -e "${commit}^{commit}"
-          echo "sha=$(git rev-parse "${commit}^{commit}")" >> "$GITHUB_OUTPUT"
+          git cat-file -e "${GITHUB_SHA}^{commit}"
+          echo "sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
 
       - name: Install the CD deploy key
         id: cdkey
@@ -120,6 +129,10 @@ jobs:
           # 并抛 ModuleNotFoundError —— 那是「环境不对」而不是「部署失败」。
           # deploy-41.sh 会先自检并在这种情况下以 65 退出，这里负责把解释器摆对。
           PATH: /home/claude/miniconda3/bin:/home/claude/.local/bin:/usr/local/bin:/usr/bin:/bin
+          # 显式声明用 CD 身份。脚本的默认是**人工**别名（见 deploy-41.sh 的说明），
+          # 因为同一个脚本也服务人工应急回滚 —— 那种场景下 CD 密钥可能正是被吊销的
+          # 那把。自动化路径在这里明确选用 CD 身份。
+          CD_SSH_ALIAS: aiops-41-cd
           TARGET_SHA: ${{ steps.target.outputs.sha }}
         run: deploy/deploy-41.sh --commit "$TARGET_SHA"
 

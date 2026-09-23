@@ -997,6 +997,9 @@ ANSWER-PAYLOAD-01~05、07 证明的是**调用方形态无法再漂**，同样�
 | CD-41-02 | 41 实机 | 服务 active；CD 密钥与别名就位；预置 `/tmp/sync-check/aiops_diagnostics/ZZZ_stale_cd_test.py` | `deploy-41.sh --commit HEAD` | PASS（2026-09-23）：服务 active；`/health` 报 `0.1.0+51e59b697ab8`（含本次 commit）；文件数 61（非 62，残留被清）；逐文件 sha 与产物一致；备份 `/var/backups/aiops-41/backup-20260923-093839` | 部署输出；`docs/validation.md`「持续部署（CD）落地验证」 |
 | CD-41-03 | 41 实机 | CD-41-02 成功 | `deploy-41.sh --rollback-to HEAD~1` | PASS：`/health` 报 `0.1.0+4533e956052a`（被回滚到的 commit），服务 active | 同上；随后已重新部署回 HEAD |
 | CD-41-04 | 41 实机 | 缺 tomllib 的解释器（模拟 runner PATH 未前置 miniconda） | 运行 `deploy-41.sh` | PASS：以 **65** 退出（环境问题），与部署失败区分；不上传、不写入、不重启 | 退出码与提示文本 |
+| CD-41-07 | 41 实机 | 本地 `pyproject.toml` 与 41 上的不一致（人为 drift） | `deploy-41.sh --dry-run` | PASS：以 1 退出并列出两侧 sha；不上传、不写入、不重启 | 输出与退出码 |
+| CD-41-08 | 41 实机 | 41 上有 1 份人工备份 + 15 份 CD 备份；`KEEP_BACKUPS=14` | `deploy-41.sh --commit HEAD` | PASS：删 2 份最旧 CD 备份 → CD 式 14 份；人工备份**未动**且输出 `note: 1 non-CD backup(s) present, not pruned` | 部署输出；备份计数 |
+| CD-41-09 | 41 实机 | 默认身份（不设 `CD_SSH_ALIAS`） | `deploy-41.sh --commit HEAD` | PASS：用人工别名 `aiops-41` 完成部署（应急回滚路径在 CD 密钥被吊销后仍可用） | 输出「CD 身份别名=aiops-41」 |
 | CD-41-05 | GitHub Actions | 已合并一个 `src/**` 改动；environment 已配 required reviewer | 观察 `cd.yml` 运行 | **未执行**：workflow 层尚未真实触发过。需首次合并 `src/**` 并在 `production-41` 上点批准来验证触发、审批门与代理解析 | 待补 |
 | CD-41-06 | GitHub Actions | CD-41-05 通过 | 在同一 run 上不批准，等待 | **未执行**：需验证「未批准则不写入 41」 | 待补 |
 
