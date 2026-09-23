@@ -1,0 +1,777 @@
+{
+ "thresholds_shipped": {
+  "risk_at_least": 0.5,
+  "confidence_at_least": 0.8
+ },
+ "summary": {
+  "questions": 86,
+  "decided": 86,
+  "errors": 0,
+  "risk": {
+   "n": 86,
+   "min": 0.02,
+   "p25": 0.03,
+   "median": 0.05,
+   "p75": 0.1025,
+   "max": 0.85
+  },
+  "confidence": {
+   "n": 86,
+   "min": 0.33,
+   "p25": 0.7675,
+   "median": 0.995,
+   "p75": 1.0,
+   "max": 1.0
+  },
+  "risk_high_count": 5,
+  "risk_low_count": 81,
+  "risk_gap": 0.21,
+  "nearest_confidence_to_threshold": 0.81,
+  "distance_to_nearest_confidence": 0.01,
+  "would_ask_now": 0,
+  "latency_seconds": {
+   "n": 86,
+   "min": 0.574,
+   "p25": 0.6298,
+   "median": 0.6565,
+   "p75": 0.694,
+   "max": 0.832
+  },
+  "intents": {
+   "casual": 29,
+   "knowledge": 25,
+   "case_exploration": 13,
+   "solution_discovery": 9,
+   "order_issue": 6,
+   "report_fault": 4
+  }
+ },
+ "sweep": [
+  {
+   "risk_at_least": 0.3,
+   "confidence_at_least": 0.6,
+   "would_ask": 0,
+   "asked": []
+  },
+  {
+   "risk_at_least": 0.3,
+   "confidence_at_least": 0.7,
+   "would_ask": 0,
+   "asked": []
+  },
+  {
+   "risk_at_least": 0.3,
+   "confidence_at_least": 0.8,
+   "would_ask": 0,
+   "asked": []
+  },
+  {
+   "risk_at_least": 0.3,
+   "confidence_at_least": 0.9,
+   "would_ask": 1,
+   "asked": [
+    "Wurde ich für diese Ladesitzung überladen?"
+   ]
+  },
+  {
+   "risk_at_least": 0.4,
+   "confidence_at_least": 0.6,
+   "would_ask": 0,
+   "asked": []
+  },
+  {
+   "risk_at_least": 0.4,
+   "confidence_at_least": 0.7,
+   "would_ask": 0,
+   "asked": []
+  },
+  {
+   "risk_at_least": 0.4,
+   "confidence_at_least": 0.8,
+   "would_ask": 0,
+   "asked": []
+  },
+  {
+   "risk_at_least": 0.4,
+   "confidence_at_least": 0.9,
+   "would_ask": 0,
+   "asked": []
+  },
+  {
+   "risk_at_least": 0.5,
+   "confidence_at_least": 0.6,
+   "would_ask": 0,
+   "asked": []
+  },
+  {
+   "risk_at_least": 0.5,
+   "confidence_at_least": 0.7,
+   "would_ask": 0,
+   "asked": []
+  },
+  {
+   "risk_at_least": 0.5,
+   "confidence_at_least": 0.8,
+   "would_ask": 0,
+   "asked": []
+  },
+  {
+   "risk_at_least": 0.5,
+   "confidence_at_least": 0.9,
+   "would_ask": 0,
+   "asked": []
+  },
+  {
+   "risk_at_least": 0.6,
+   "confidence_at_least": 0.6,
+   "would_ask": 0,
+   "asked": []
+  },
+  {
+   "risk_at_least": 0.6,
+   "confidence_at_least": 0.7,
+   "would_ask": 0,
+   "asked": []
+  },
+  {
+   "risk_at_least": 0.6,
+   "confidence_at_least": 0.8,
+   "would_ask": 0,
+   "asked": []
+  },
+  {
+   "risk_at_least": 0.6,
+   "confidence_at_least": 0.9,
+   "would_ask": 0,
+   "asked": []
+  },
+  {
+   "risk_at_least": 0.7,
+   "confidence_at_least": 0.6,
+   "would_ask": 0,
+   "asked": []
+  },
+  {
+   "risk_at_least": 0.7,
+   "confidence_at_least": 0.7,
+   "would_ask": 0,
+   "asked": []
+  },
+  {
+   "risk_at_least": 0.7,
+   "confidence_at_least": 0.8,
+   "would_ask": 0,
+   "asked": []
+  },
+  {
+   "risk_at_least": 0.7,
+   "confidence_at_least": 0.9,
+   "would_ask": 0,
+   "asked": []
+  }
+ ],
+ "rows": [
+  {
+   "question": "充电桩出现E01故障代码应该如何处理",
+   "intent": "solution_discovery",
+   "confidence": 0.56,
+   "risk": 0.09,
+   "seconds": 0.66
+  },
+  {
+   "question": "充电桩为什么无法启动",
+   "intent": "report_fault",
+   "confidence": 0.56,
+   "risk": 0.12,
+   "seconds": 0.695
+  },
+  {
+   "question": "磷酸铁锂电池平时怎么保养充电才比较延长寿命",
+   "intent": "knowledge",
+   "confidence": 1.0,
+   "risk": 0.02,
+   "seconds": 0.657
+  },
+  {
+   "question": "新加坡无人电动巴士怎么充电？",
+   "intent": "knowledge",
+   "confidence": 0.99,
+   "risk": 0.03,
+   "seconds": 0.595
+  },
+  {
+   "question": "充电桩图片怎么安装？",
+   "intent": "knowledge",
+   "confidence": 0.98,
+   "risk": 0.05,
+   "seconds": 0.622
+  },
+  {
+   "question": "新加坡无人电动巴士是什么？",
+   "intent": "knowledge",
+   "confidence": 0.99,
+   "risk": 0.03,
+   "seconds": 0.649
+  },
+  {
+   "question": "请结合知识库说明新加坡无人电动巴士的运营特点。",
+   "intent": "knowledge",
+   "confidence": 0.69,
+   "risk": 0.03,
+   "seconds": 0.591
+  },
+  {
+   "question": "请回答一个不在常见问题目录中的技术问题：充电协议握手失败如何定位？",
+   "intent": "solution_discovery",
+   "confidence": 0.5,
+   "risk": 0.03,
+   "seconds": 0.701
+  },
+  {
+   "question": "What is the recommended maintenance interval for the cooling fan in an electric bus depot?",
+   "intent": "knowledge",
+   "confidence": 1.0,
+   "risk": 0.03,
+   "seconds": 0.736
+  },
+  {
+   "question": "Explain the relationship between battery impedance spectroscopy and charger harmonics in a depot.",
+   "intent": "knowledge",
+   "confidence": 1.0,
+   "risk": 0.03,
+   "seconds": 0.62
+  },
+  {
+   "question": "介绍一下新加坡无人电动巴士",
+   "intent": "knowledge",
+   "confidence": 0.91,
+   "risk": 0.03,
+   "seconds": 0.634
+  },
+  {
+   "question": "充电桩怎么拔枪？有没有演示视频",
+   "intent": "knowledge",
+   "confidence": 1.0,
+   "risk": 0.06,
+   "seconds": 0.645
+  },
+  {
+   "question": "介绍一下新加坡无人电动巴士是什么？",
+   "intent": "knowledge",
+   "confidence": 0.99,
+   "risk": 0.02,
+   "seconds": 0.629
+  },
+  {
+   "question": "介绍一下新加坡无人电动巴士项目",
+   "intent": "knowledge",
+   "confidence": 0.54,
+   "risk": 0.03,
+   "seconds": 0.631
+  },
+  {
+   "question": "Singapore autonomous electric bus project media",
+   "intent": "case_exploration",
+   "confidence": 0.73,
+   "risk": 0.05,
+   "seconds": 0.699
+  },
+  {
+   "question": "介绍一下新加坡无人电动巴士项目，有视频可以看吗？",
+   "intent": "case_exploration",
+   "confidence": 0.53,
+   "risk": 0.03,
+   "seconds": 0.644
+  },
+  {
+   "question": "充电桩怎么操作？有演示图片吗？",
+   "intent": "knowledge",
+   "confidence": 1.0,
+   "risk": 0.07,
+   "seconds": 0.624
+  },
+  {
+   "question": "电动车长期停放不开的话,电池最好保持多少电量?",
+   "intent": "knowledge",
+   "confidence": 1.0,
+   "risk": 0.02,
+   "seconds": 0.63
+  },
+  {
+   "question": "我上个月的充电扣费感觉多扣了,帮我看看对不对",
+   "intent": "order_issue",
+   "confidence": 0.97,
+   "risk": 0.62,
+   "seconds": 0.69
+  },
+  {
+   "question": "Singapore autonomous electric bus project",
+   "intent": "case_exploration",
+   "confidence": 0.76,
+   "risk": 0.08,
+   "seconds": 0.669
+  },
+  {
+   "question": "Wie bezahle ich das Laden?",
+   "intent": "knowledge",
+   "confidence": 0.99,
+   "risk": 0.22,
+   "seconds": 0.692
+  },
+  {
+   "question": "Wie bezahle ich das Laden? Wie funktioniert die Bezahlung",
+   "intent": "knowledge",
+   "confidence": 1.0,
+   "risk": 0.21,
+   "seconds": 0.726
+  },
+  {
+   "question": "Bezahlung des Ladens Bezahlung Laden bezahlen Bezahlung",
+   "intent": "knowledge",
+   "confidence": 0.36,
+   "risk": 0.26,
+   "seconds": 0.598
+  },
+  {
+   "question": "How do I pay for charging? payment",
+   "intent": "knowledge",
+   "confidence": 1.0,
+   "risk": 0.33,
+   "seconds": 0.758
+  },
+  {
+   "question": "wewe",
+   "intent": "casual",
+   "confidence": 0.99,
+   "risk": 0.06,
+   "seconds": 0.664
+  },
+  {
+   "question": "新加波电动巴士",
+   "intent": "knowledge",
+   "confidence": 0.5,
+   "risk": 0.06,
+   "seconds": 0.679
+  },
+  {
+   "question": "1212",
+   "intent": "casual",
+   "confidence": 0.69,
+   "risk": 0.11,
+   "seconds": 0.816
+  },
+  {
+   "question": "有什么案例",
+   "intent": "case_exploration",
+   "confidence": 0.99,
+   "risk": 0.07,
+   "seconds": 0.638
+  },
+  {
+   "question": "你好",
+   "intent": "casual",
+   "confidence": 1.0,
+   "risk": 0.02,
+   "seconds": 0.832
+  },
+  {
+   "question": "新加坡",
+   "intent": "casual",
+   "confidence": 0.72,
+   "risk": 0.08,
+   "seconds": 0.688
+  },
+  {
+   "question": "帮我看看我的订单扣费对不对,感觉多扣了钱",
+   "intent": "order_issue",
+   "confidence": 1.0,
+   "risk": 0.85,
+   "seconds": 0.601
+  },
+  {
+   "question": "Tell me about the Singapore autonomous electric bus project",
+   "intent": "knowledge",
+   "confidence": 0.81,
+   "risk": 0.04,
+   "seconds": 0.671
+  },
+  {
+   "question": "新加坡电动巴士",
+   "intent": "knowledge",
+   "confidence": 0.65,
+   "risk": 0.06,
+   "seconds": 0.65
+  },
+  {
+   "question": "我想看看客户案例",
+   "intent": "case_exploration",
+   "confidence": 1.0,
+   "risk": 0.03,
+   "seconds": 0.724
+  },
+  {
+   "question": "有没有公交充电的客户案例",
+   "intent": "case_exploration",
+   "confidence": 1.0,
+   "risk": 0.05,
+   "seconds": 0.719
+  },
+  {
+   "question": "我想看看新加坡无人巴士的客户案例",
+   "intent": "case_exploration",
+   "confidence": 1.0,
+   "risk": 0.03,
+   "seconds": 0.642
+  },
+  {
+   "question": "你是谁呀",
+   "intent": "casual",
+   "confidence": 0.99,
+   "risk": 0.02,
+   "seconds": 0.597
+  },
+  {
+   "question": "我要上报一个故障",
+   "intent": "report_fault",
+   "confidence": 1.0,
+   "risk": 0.14,
+   "seconds": 0.694
+  },
+  {
+   "question": "给我看看行业解决方案",
+   "intent": "solution_discovery",
+   "confidence": 1.0,
+   "risk": 0.04,
+   "seconds": 0.715
+  },
+  {
+   "question": "我想发现行业解决方案",
+   "intent": "solution_discovery",
+   "confidence": 1.0,
+   "risk": 0.03,
+   "seconds": 0.621
+  },
+  {
+   "question": "帮我检测（REDACTED）这个订单的充电异常",
+   "intent": "order_issue",
+   "confidence": 1.0,
+   "risk": 0.6,
+   "seconds": 0.574
+  },
+  {
+   "question": "美好",
+   "intent": "casual",
+   "confidence": 1.0,
+   "risk": 0.04,
+   "seconds": 0.638
+  },
+  {
+   "question": "新加坡无人电动巴士案例",
+   "intent": "case_exploration",
+   "confidence": 1.0,
+   "risk": 0.06,
+   "seconds": 0.65
+  },
+  {
+   "question": "你是谁？你是谁？",
+   "intent": "casual",
+   "confidence": 0.97,
+   "risk": 0.03,
+   "seconds": 0.727
+  },
+  {
+   "question": "为什么充满电后续航比标注少",
+   "intent": "knowledge",
+   "confidence": 0.91,
+   "risk": 0.06,
+   "seconds": 0.778
+  },
+  {
+   "question": "为什么充满电后续航比官方标注少这么多",
+   "intent": "knowledge",
+   "confidence": 0.46,
+   "risk": 0.08,
+   "seconds": 0.656
+  },
+  {
+   "question": "为什么充满电后续航少",
+   "intent": "knowledge",
+   "confidence": 0.51,
+   "risk": 0.05,
+   "seconds": 0.661
+  },
+  {
+   "question": "重卡充电客户案例",
+   "intent": "case_exploration",
+   "confidence": 1.0,
+   "risk": 0.09,
+   "seconds": 0.729
+  },
+  {
+   "question": "港口集卡方案",
+   "intent": "solution_discovery",
+   "confidence": 1.0,
+   "risk": 0.12,
+   "seconds": 0.621
+  },
+  {
+   "question": "I would like to see customer cases",
+   "intent": "case_exploration",
+   "confidence": 1.0,
+   "risk": 0.06,
+   "seconds": 0.669
+  },
+  {
+   "question": "Show me industry solutions",
+   "intent": "solution_discovery",
+   "confidence": 1.0,
+   "risk": 0.04,
+   "seconds": 0.602
+  },
+  {
+   "question": "重卡充电桩流量平台的产品海报和功能截图",
+   "intent": "solution_discovery",
+   "confidence": 0.7,
+   "risk": 0.11,
+   "seconds": 0.673
+  },
+  {
+   "question": "重卡充电桩流量平台海报",
+   "intent": "solution_discovery",
+   "confidence": 0.73,
+   "risk": 0.16,
+   "seconds": 0.644
+  },
+  {
+   "question": "渠道订单归集功能",
+   "intent": "solution_discovery",
+   "confidence": 0.63,
+   "risk": 0.16,
+   "seconds": 0.634
+  },
+  {
+   "question": "重卡充电案例",
+   "intent": "case_exploration",
+   "confidence": 1.0,
+   "risk": 0.12,
+   "seconds": 0.605
+  },
+  {
+   "question": "I'd like to see customer cases",
+   "intent": "case_exploration",
+   "confidence": 1.0,
+   "risk": 0.05,
+   "seconds": 0.678
+  },
+  {
+   "question": "Please check charging anomalies for order (REDACTED)",
+   "intent": "order_issue",
+   "confidence": 1.0,
+   "risk": 0.74,
+   "seconds": 0.608
+  },
+  {
+   "question": "Show me a customer case",
+   "intent": "case_exploration",
+   "confidence": 1.0,
+   "risk": 0.1,
+   "seconds": 0.656
+  },
+  {
+   "question": "Wurde ich für diese Ladesitzung überladen?",
+   "intent": "order_issue",
+   "confidence": 0.84,
+   "risk": 0.34,
+   "seconds": 0.664
+  },
+  {
+   "question": "refund",
+   "intent": "order_issue",
+   "confidence": 0.97,
+   "risk": 0.55,
+   "seconds": 0.653
+  },
+  {
+   "question": "Wie wird die Ladegebühr berechnet?",
+   "intent": "knowledge",
+   "confidence": 0.99,
+   "risk": 0.3,
+   "seconds": 0.803
+  },
+  {
+   "question": "测试测试测试。",
+   "intent": "casual",
+   "confidence": 0.99,
+   "risk": 0.02,
+   "seconds": 0.708
+  },
+  {
+   "question": "可以，怎么可以呢测试？测试。那你告诉我怎么可以呢？记录下来。",
+   "intent": "casual",
+   "confidence": 0.73,
+   "risk": 0.07,
+   "seconds": 0.621
+  },
+  {
+   "question": "等到时间出来。",
+   "intent": "casual",
+   "confidence": 0.77,
+   "risk": 0.05,
+   "seconds": 0.68
+  },
+  {
+   "question": "我刚刚就这样，它自己显示正在听，而是我一直有说话的，它没有识别你要靠近一点，他才可以识别的。",
+   "intent": "report_fault",
+   "confidence": 1.0,
+   "risk": 0.05,
+   "seconds": 0.691
+  },
+  {
+   "question": "你好你好。你这边应该也是牛市的吧，因为你拿这个语音是呀。现在就是有时候就像当时的身体就是你说话的时候上传到100多点，20点就是一时间买，应该是假的，放到后台。",
+   "intent": "casual",
+   "confidence": 0.33,
+   "risk": 0.26,
+   "seconds": 0.722
+  },
+  {
+   "question": "你好。",
+   "intent": "casual",
+   "confidence": 1.0,
+   "risk": 0.02,
+   "seconds": 0.7
+  },
+  {
+   "question": "您好。",
+   "intent": "casual",
+   "confidence": 1.0,
+   "risk": 0.02,
+   "seconds": 0.704
+  },
+  {
+   "question": "Thank you.",
+   "intent": "casual",
+   "confidence": 1.0,
+   "risk": 0.02,
+   "seconds": 0.687
+  },
+  {
+   "question": "123",
+   "intent": "casual",
+   "confidence": 0.98,
+   "risk": 0.05,
+   "seconds": 0.651
+  },
+  {
+   "question": "喂喂喂喂喂喂。",
+   "intent": "casual",
+   "confidence": 0.99,
+   "risk": 0.03,
+   "seconds": 0.693
+  },
+  {
+   "question": "听不听得清我说话？",
+   "intent": "casual",
+   "confidence": 0.55,
+   "risk": 0.03,
+   "seconds": 0.673
+  },
+  {
+   "question": "Can you speak English?",
+   "intent": "casual",
+   "confidence": 0.99,
+   "risk": 0.02,
+   "seconds": 0.648
+  },
+  {
+   "question": "你好你好你好。",
+   "intent": "casual",
+   "confidence": 1.0,
+   "risk": 0.02,
+   "seconds": 0.629
+  },
+  {
+   "question": "你好，你好。",
+   "intent": "casual",
+   "confidence": 1.0,
+   "risk": 0.02,
+   "seconds": 0.694
+  },
+  {
+   "question": "嗯。",
+   "intent": "casual",
+   "confidence": 1.0,
+   "risk": 0.04,
+   "seconds": 0.714
+  },
+  {
+   "question": "哈喽哈喽哈喽。",
+   "intent": "casual",
+   "confidence": 1.0,
+   "risk": 0.02,
+   "seconds": 0.675
+  },
+  {
+   "question": "蹦极。",
+   "intent": "casual",
+   "confidence": 0.9,
+   "risk": 0.21,
+   "seconds": 0.653
+  },
+  {
+   "question": "今日食啲咩啊。",
+   "intent": "casual",
+   "confidence": 1.0,
+   "risk": 0.02,
+   "seconds": 0.618
+  },
+  {
+   "question": "哦，你好你好。",
+   "intent": "casual",
+   "confidence": 1.0,
+   "risk": 0.02,
+   "seconds": 0.64
+  },
+  {
+   "question": "你好，你好，你好。",
+   "intent": "casual",
+   "confidence": 1.0,
+   "risk": 0.02,
+   "seconds": 0.635
+  },
+  {
+   "question": "English English Hello Hello.",
+   "intent": "casual",
+   "confidence": 1.0,
+   "risk": 0.02,
+   "seconds": 0.631
+  },
+  {
+   "question": "喽hello。",
+   "intent": "casual",
+   "confidence": 1.0,
+   "risk": 0.02,
+   "seconds": 0.584
+  },
+  {
+   "question": "哈喽哈喽。",
+   "intent": "casual",
+   "confidence": 1.0,
+   "risk": 0.02,
+   "seconds": 0.601
+  },
+  {
+   "question": "Hello, my car is not working.",
+   "intent": "report_fault",
+   "confidence": 1.0,
+   "risk": 0.08,
+   "seconds": 0.666
+  },
+  {
+   "question": "电动车的电池保养怎么做",
+   "intent": "knowledge",
+   "confidence": 1.0,
+   "risk": 0.02,
+   "seconds": 0.608
+  }
+ ]
+}
