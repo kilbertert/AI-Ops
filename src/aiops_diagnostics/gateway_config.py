@@ -42,6 +42,9 @@ class GatewayServerSettings:
     jev_timeout_seconds: float = 20.0
     routing_risk_at_least: float = 0.5
     routing_confidence_at_least: float = 0.8
+    #: High risk asks for context regardless of confidence (#401). False restores
+    #: the "high risk AND unsure" form, which real traffic showed never fires.
+    routing_risk_always_asks: bool = True
     kb_service_timeout_seconds: float = 10.0
     media_signing_secret: str = ""
     media_ttl_seconds: int = 600
@@ -99,6 +102,7 @@ class GatewayServerSettings:
             jev_timeout_seconds=_env_float("AIOPS_GATEWAY_JEV_TIMEOUT_SECONDS", 20.0),
             routing_risk_at_least=_env_float("AIOPS_GATEWAY_ROUTING_RISK_AT_LEAST", 0.5),
             routing_confidence_at_least=_env_float("AIOPS_GATEWAY_ROUTING_CONFIDENCE_AT_LEAST", 0.8),
+            routing_risk_always_asks=_env_bool("AIOPS_GATEWAY_ROUTING_RISK_ALWAYS_ASKS", True),
         )
 
     def validate(self) -> None:

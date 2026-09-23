@@ -1,5 +1,42 @@
 # 验证与验收计划
 
+## 方案 A：高风险一律追问（2026-09-23，含与既有关键词守卫的重叠实测）
+
+**决策**（用户 2026-09-23）：采纳方案 A —— `risk >= 0.5` 即追问，不再要求 "confidence 不够高"。
+理由见 `docs/jev-recalibration.md`：真实流量 86 条上原规则 `would_ask = 0`，
+因为 Jev 认出涉钱（0.55–0.85）**同时**对此极度自信（0.97–1.00），第二个条件从不成立。
+
+**实现**：规则从 `gateway_api` 内联移到 `routing.should_ask_for_context()` —— 前两版之所以
+坏了没人发现，正是因为这条规则**没有可被直接测试的位置**。新增
+`RoutingThresholds.risk_always_asks`（配置项 `AIOPS_GATEWAY_ROUTING_RISK_ALWAYS_ASKS`，
+默认 true）保留旧形态以便对照，改行为不必改代码。
+
+### ⚠️ 实测发现：既有还有一条**关键词**守卫，两者部分重叠
+
+`gateway_api._HIGH_RISK_ORDER_CUES` 在**分类器之前**就已经拦截涉钱问句，返回
+`missing_fields=['order_no']`（要订单号）。方案 A 走分类器之后，返回
+`missing_fields=['context']`（要上下文）。实测 86 条语料：
+
+| | 条数 |
+|---|---|
+| 关键词守卫已拦（早于分类器，方案 A 不参与） | 2/5 高风险问句 |
+| **方案 A 新增（关键词守卫漏掉的）** | **3 条**：`refund`、`Please check charging anomalies for order …`、`帮我检测（REDACTED）…` |
+
+**所以方案 A 的增量是 3 条，不是 5 条。** 两条真实扣费投诉本来就会被拦下（只是拦法不同）。
+这与复标报告"高风险 5 条"的说法不矛盾，但**夸大了方案 A 的边际收益** —— 记在这里以免再被误读。
+
+### 验收
+
+- **去掉即失败已实测**：把 `should_ask_for_context` 还原成方案 A 之前的形态，
+  `tests/test_routing.py` 两条与 `tests/test_assistant_api.py` 一条**同时转红**。
+- 端到端：`refund`（关键词守卫漏掉、方案 A 新增的那类）经真实请求路径返回
+  `type=clarification` + `missing_fields=['context']`。
+- 低风险不受影响（`risk=low` 一律不追问，规则仍是非对称的）。
+- 全量 pytest exit=0；ruff check / format 全过。
+
+**未完成**：未部署 41；两条守卫的**先后与文案差异**（要订单号 vs 要上下文）未合并，
+属后续范围。
+
 ## Jev 阈值按真实流量复标（2026-09-23，86 条真实提问）
 
 **样本**：41 生产库 86 条去重真实提问（2026-09-12 → 09-23），**86/86 全部得到判定**，

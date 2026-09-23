@@ -1258,3 +1258,40 @@ def test_a_high_risk_low_confidence_question_still_asks_for_context(tmp_path: Pa
     resp = client.post("/v1/assistant/questions", json={"question": "这单扣费不对"}, headers=_headers())
     assert resp.status_code == 200
     assert resp.json()["type"] == "clarification"
+
+
+def test_a_confident_high_risk_question_still_asks_for_context(tmp_path: Path) -> None:
+    """Plan A (#401): high risk asks regardless of confidence.
+
+    Measured on 86 real questions, the previous "high risk AND unsure" form
+    asked **zero** times: Jev recognises money questions and is confident about
+    recognising them, so the second condition never held. The real billing
+    complaint (`帮我看看我的订单扣费对不对,感觉多扣了钱`) came back
+    risk=high/confidence=high and was answered without ever asking.
+
+    Measured on the real corpus, this rule adds questions the earlier
+    **keyword** guard (`_HIGH_RISK_ORDER_CUES`) does not catch — e.g. `refund`
+    and `Please check charging anomalies for order ...`, whose wording carries
+    no cue from that list. The question below is deliberately one of those, so
+    the clarification can only come from the risk rule.
+    """
+    client, runtime = _client(tmp_path)
+    runtime.classified = {"intent": "order_issue", "confidence": "high", "risk": "high"}
+    resp = client.post(
+        "/v1/assistant/questions",
+        json={"question": "refund"},
+        headers=_headers(),
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["type"] == "clarification"
+    assert body["missing_fields"] == ["context"]
+
+
+def test_a_low_risk_question_is_not_interrupted(tmp_path: Path) -> None:
+    """The rule stays asymmetric — only risk gates it now, not confidence."""
+    client, runtime = _client(tmp_path)
+    runtime.classified = {"intent": "casual", "confidence": "low", "risk": "low"}
+    resp = client.post("/v1/assistant/questions", json={"question": "你好"}, headers=_headers())
+    assert resp.status_code == 202
+    assert resp.json()["type"] == "qa"
