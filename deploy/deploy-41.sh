@@ -203,6 +203,45 @@ EOF
 done
 info "参考资料已纳入产物：$(printf '%s' "$REFERENCE_FILES" | tr ' ' ',')"
 
+# ---- 1b. 参考资料前置检查（**保守**：不存在就拒绝部署，不猜回滚）--------------
+# 每份受管的参考资料在 41 上都必须**已经存在**。理由：
+#
+#   1. 它们本来就是生产上既有的运行输入（`reference_root()` 读 /opt/aiops-41）。
+#      部署只负责把它们更新到目标 commit 的版本，不负责从无到有地引入。
+#   2. 「部署前不存在」意味着回滚要**删除**它 —— 那是比更新更重的动作，且必须知道
+#      它原本不该在。评审指出：旧实现只按「有没有备份」判断，会把新建的文件留在
+#      盘上却报「完整回滚」（假声明）。
+#   3. 我们试过实现「按部署前存在状态决定回滚动作」，但在真机上无法可靠复现 ——
+#      主机侧探针显示检查时文件已存在、而部署前我们刚确认它不在（根因未定位）。
+#      与其交付一个自己都不信的回滚分支，不如把这种情况挡在部署之前。
+#
+# 代价：首次引入一份新参考资料时需要人工在 41 上先放置它（一次性动作），
+# 以及显式更新 REFERENCE_FILES。这是有意的取舍 —— 宁可要人做一次，
+# 不要脚本去猜一个删文件的回滚。
+step "参考资料前置检查"
+for ref in $REFERENCE_FILES; do
+  present=$(dev-host exec "$HOST_TARGET" --allow-service-exec -- \
+    "[ -f /opt/aiops-41/$ref ] && echo yes || echo no" | tail -1 | tr -d '[:space:]')
+  if [ "$present" != "yes" ]; then
+    cat >&2 <<EOF
+受管的运行时参考资料在 41 上不存在：$ref
+
+部署只把它更新到目标 commit 的版本，不负责从无到有地引入。若在此继续，回滚就得
+**删除**它 —— 那需要知道它原本不该在，而按「有没有备份」判断会把新建的文件留在
+盘上却报「完整回滚」（假声明，评审指出过）。
+
+已停止，未上传、未写入、未重启。请二选一：
+  1. 在 41 上放置该文件（人工一次性动作）：
+       install -o aiops41 -g aiops41 -m 0640 <file> /opt/aiops-41/$ref
+     再重跑本部署；或
+  2. 若它确实不该再是受管参考资料，把它从 deploy/deploy-41.sh 的 REFERENCE_FILES
+     移除（走一次单独评审的改动）。
+EOF
+    exit 1
+  fi
+  info "$ref 在 41 上存在 ✓"
+done
+
 # ---- 2. 注入 commit 标识 ---------------------------------------------------
 # /health 的 version 来自 src/aiops_diagnostics/__init__.py 的 __version__，是个
 # 静态 semver —— 部署后无法回答「现在跑的是哪个 commit」。在**暂存副本**上把它
@@ -376,15 +415,11 @@ for ref in $REFERENCE_FILES; do
   if [ -f "/tmp/sync-check/$ref" ]; then
     mkdir -p "/opt/aiops-41/$(dirname "$ref")" "\$B/refs/$(dirname "$ref")" \
       || { step_failed "refs-mkdir:$ref"; continue; }
-    # 记录**部署前是否存在**。原先不存在时，部署会新建它；回滚必须把这个新文件删掉，
-    # 否则它继续生效，而分类器却报「完整回滚」（评审指出的假声明）。
-    if [ -f "/opt/aiops-41/$ref" ]; then
-      cp "/opt/aiops-41/$ref" "\$B/refs/$ref" || { step_failed "refs-backup:$ref"; continue; }
-      printf 'present' > "\$B/refs/$ref.state"
-    else
-      printf 'absent' > "\$B/refs/$ref.state"
-    fi
-    # 备份失败就不覆盖：宁可这一步失败并入恢复路径，也不要拿一份残缺备份当恢复点。
+    # 备份后覆盖。参考资料的**存在性**已由本脚本的前置检查（step "参考资料前置检查"）
+    # 保证 —— 因此这里不需要再判断 present/absent，回滚也不必删文件、只需还原。
+    # 之前那版按存在状态决定回滚动作，在真机上无法可靠复现（见该前置检查处的说明），
+    # 已按保守做法改为「不存在就拒绝部署」。
+    cp "/opt/aiops-41/$ref" "\$B/refs/$ref" || { step_failed "refs-backup:$ref"; continue; }
     cp "/tmp/sync-check/$ref" "/opt/aiops-41/$ref" || { step_failed "refs-copy:$ref"; continue; }
     echo "reference-synced=$ref"
   fi
@@ -438,25 +473,15 @@ else
   restore_rc=0
   rsync -a --delete "\$B/src/" $REMOTE_SRC/ || restore_rc=1
   for ref in $REFERENCE_FILES; do
-    # 按部署前记录的状态恢复：原本存在的从备份还原；原本**不存在**的把新文件删掉。
-    # 只检查「备份是否存在」会漏掉后一种 —— 部署新建的文件留在盘上继续生效，而
-    # 分类器报「完整回滚」（评审指出的假声明）。
-    state=\$(cat "\$B/refs/$ref.state" 2>/dev/null || echo unknown)
-    case "\$state" in
-      present)
-        mkdir -p "/opt/aiops-41/$(dirname "$ref")" || restore_rc=1
-        cp "\$B/refs/$ref" "/opt/aiops-41/$ref" || restore_rc=1
-        ;;
-      absent)
-        rm -f "/opt/aiops-41/$ref" || restore_rc=1
-        ;;
-      *)
-        # 状态缺失（旧备份格式，或本次写入前就失败）—— 不猜，让恢复判为失败，
-        # 由人判断该文件该不该在。
-        echo "refs-state-unknown=$ref" >&2
-        restore_rc=1
-        ;;
-    esac
+    # 参考资料一定原本存在（前置检查保证），所以回滚就是「从备份还原」。
+    # 唯一的不确定是备份本身是否完好 —— 那由 cp 的退出码如实反映，不猜。
+    if [ -f "\$B/refs/$ref" ]; then
+      mkdir -p "/opt/aiops-41/$(dirname "$ref")" || restore_rc=1
+      cp "\$B/refs/$ref" "/opt/aiops-41/$ref" || restore_rc=1
+    else
+      echo "refs-backup-missing=$ref" >&2
+      restore_rc=1
+    fi
   done
   chown -R aiops41:aiops41 $REMOTE_SRC || restore_rc=1
   [ "\$restore_rc" = "0" ] || echo "rollback-restore-rc=nonzero"

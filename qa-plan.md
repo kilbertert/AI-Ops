@@ -1014,6 +1014,7 @@ ANSWER-PAYLOAD-01~05、07 证明的是**调用方形态无法再漂**，同样�
 | CD-41-21 | 本机 | 桩件强制 restart 非零 + rsync 非零 | 复刻远端块结构运行 | PASS：发出 `rollback-restore-rc=nonzero` + `rollback=also-failed`（正确分类，非「状态未知」）。**该分支的真机证据缺失**，见 validation.md | 桩件为临时验证，未入库 |
 | CD-41-22 | 本机 | 生成的远端块 | dry-run 后对块单独 `bash -n`（`tests/test_cd_deploy_scripts.py`） | PASS。**已用复现 bug 验证**：未转义的位置参数会让它失败（`$1: unbound variable`）。heredoc 是生成的，静态检查看不到 |
 | CD-41-23 | 41 实机 | 预置一个陈旧 tar 残留（`aiops-sync-DEADBEEF1234.tar.gz`） | `deploy-41.sh --commit <good>` | PASS（2026-09-23）：陈旧残留被清、本次的包正常解包并在结束时自清、服务 healthy。**改前该逻辑会删掉本次的包**（钻演实测 `mutate-failed=extract`） | 假残留已清 |
+| CD-41-24 | 41 实机 | 移走一份受管参考资料（`docs/architecture.md`） | `deploy-41.sh --commit HEAD` | PASS：以 1 退出、给出两条处理路径（人工放置 / 显式移除）、不上传不写入；放回后正常部署通过 | 文件已放回 |
 | CD-41-05 | GitHub Actions | 已合并一个 `src/**` 改动；environment 已配 required reviewer | 观察 `cd.yml` 运行 | **未执行**：workflow 层尚未真实触发过。需首次合并 `src/**` 并在 `production-41` 上点批准来验证触发、审批门与代理解析 | 待补 |
 | CD-41-06 | GitHub Actions | CD-41-05 通过 | 在同一 run 上不批准，等待 | **未执行**：需验证「未批准则不写入 41」 | 待补 |
 
