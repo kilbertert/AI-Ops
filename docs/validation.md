@@ -1,5 +1,40 @@
 # 验证与验收计划
 
+## 方案 A 部署 41 并验收（2026-09-23，公网真实流量）
+
+**部署**：`#402` 合并（main `4a1ac3a`）→ 41 按 runbook §2（备份 → 传 → rsync → chown → 重启）。
+备份 `/var/backups/aiops-41/backup-20260923-171901`。**非 venv 的 root 归属文件 0 个**
+（上一轮修的 `docs/architecture.md` 未被破坏）。启动无 error。
+
+### 公网端到端（`api.mall.qushiyun.com`，真实会话）
+
+```
+[200] clarification  missing=['context']   refund                                    ← 关键词守卫漏掉、方案 A 新增的那类
+[200] clarification  missing=['context']   Please check charging anomalies for order …  ← 同上
+[202] qa             missing=None          你好                                        ← 低风险，正确未被追问
+```
+
+**方案 A 在生产生效**：两条关键词守卫接不住的涉钱问句现在会追问上下文；
+低风险问句不受影响（规则仍非对称）。
+
+### 回滚路径已实测可用（这是评审抓到的缺陷，修复后验证）
+
+`AIOPS_GATEWAY_ROUTING_RISK_ALWAYS_ASKS` 此前只被声明、`from_env()` 从未读取 ——
+**回滚写在三个地方、一个都不工作**。修复后在生产上实测：
+
+```
+设 false -> 进程 env 可见 -> 同一问句 `refund` 返回 type=qa（不再追问）
+恢复默认 -> 重启 -> active
+```
+
+即"出问题就放回去"这句话现在是真的。回滚后配置已还原，41 当前为方案 A。
+
+### 未决
+
+- `_HIGH_RISK_ORDER_CUES`（关键词守卫，要订单号）与方案 A（要上下文）**求的东西不同**，
+  是否合并属后续范围，本片未动既有行为。
+- 复标语料 86 条规模仍有限；阈值与开关均可配置。
+
 ## 方案 A：高风险一律追问（2026-09-23，含与既有关键词守卫的重叠实测）
 
 **决策**（用户 2026-09-23）：采纳方案 A —— `risk >= 0.5` 即追问，不再要求 "confidence 不够高"。
