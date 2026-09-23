@@ -77,6 +77,7 @@ from aiops_diagnostics.i18n import (
 )
 from aiops_diagnostics.metrics_store import MetricsValidationError
 from aiops_diagnostics.order_visibility import DeviceTenantError
+from aiops_diagnostics.routing import should_ask_for_context
 from aiops_diagnostics.scope_context import ScopeContext, ScopeError
 from aiops_diagnostics.shortcut_lifecycle import (
     SHORTCUT_MANAGE_SCOPE,
@@ -1041,7 +1042,9 @@ def create_gateway_app(
                 # like any other `qa` and does. The handoff docs were updated with
                 # this change.
                 casual_job = True
-            if classified and classified.get("risk") == "high" and classified.get("confidence") != "high":
+            if should_ask_for_context(
+                classified, thresholds=getattr(context.runtime, "routing_thresholds", None)
+            ):
                 return {
                     **decision.public(),
                     "type": "clarification",

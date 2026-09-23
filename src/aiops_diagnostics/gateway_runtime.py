@@ -216,6 +216,7 @@ class GatewayRuntime:
             routing_thresholds=RoutingThresholds(
                 risk_at_least=gateway_settings.routing_risk_at_least,
                 confidence_at_least=gateway_settings.routing_confidence_at_least,
+                risk_always_asks=gateway_settings.routing_risk_always_asks,
             ),
         )
 

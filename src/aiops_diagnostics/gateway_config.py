@@ -42,6 +42,9 @@ class GatewayServerSettings:
     jev_timeout_seconds: float = 20.0
     routing_risk_at_least: float = 0.5
     routing_confidence_at_least: float = 0.8
+    #: High risk asks for context regardless of confidence (#401). False restores
+    #: the "high risk AND unsure" form, which real traffic showed never fires.
+    routing_risk_always_asks: bool = True
     kb_service_timeout_seconds: float = 10.0
     media_signing_secret: str = ""
     media_ttl_seconds: int = 600

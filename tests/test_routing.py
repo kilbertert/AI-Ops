@@ -35,6 +35,7 @@ from aiops_diagnostics.routing import (
     RoutingThresholds,
     classify_with_jev,
     decide,
+    should_ask_for_context,
     thresholds_from,
 )
 
@@ -346,3 +347,60 @@ def test_routing_health_does_not_inflate_user_run_totals(tmp_path) -> None:
     # ...but the health signal is not hidden.
     routes = {row["route_type"] for row in summary["by_route"]}
     assert "routing" in routes, summary["by_route"]
+
+
+# --- Plan A: high risk asks regardless of confidence (#401) ---
+# The rule this replaces fired zero times in 86 real questions, because Jev
+# recognises money questions and is confident about recognising them. A rule
+# that is always correct and never fires is not a rule.
+
+
+def test_high_risk_asks_even_when_the_decision_is_confident() -> None:
+    """The whole point of plan A: confidence no longer suppresses the question."""
+    decided = {"intent": "order_issue", "risk": "high", "confidence": "high"}
+    assert should_ask_for_context(decided) is True
+
+
+def test_the_real_traffic_case_now_asks() -> None:
+    """The measured billing complaint, with the values Jev actually returned.
+
+    `帮我看看我的订单扣费对不对,感觉多扣了钱` came back risk=high (0.85) and
+    confidence=high (1.00). Under the old rule it did not ask; that is the case
+    this change exists for.
+    """
+    assert should_ask_for_context({"intent": "order_issue", "risk": "high", "confidence": "high"}) is True
+
+
+def test_low_risk_never_asks() -> None:
+    """Low-risk questions proceed as before — the rule stays asymmetric."""
+    assert should_ask_for_context({"intent": "casual", "risk": "low", "confidence": "low"}) is False
+    assert should_ask_for_context({"intent": "knowledge", "risk": "low", "confidence": "high"}) is False
+
+
+def test_no_decision_means_no_question() -> None:
+    """An unobtainable decision must not turn into an interruption."""
+    assert should_ask_for_context(None) is False
+    assert should_ask_for_context({}) is False
+
+
+def test_the_previous_form_is_still_reachable_for_comparison() -> None:
+    """`risk_always_asks=False` restores the old rule, so the two can be compared.
+
+    Kept as a switch rather than deleted logic: the change is a product decision
+    about behaviour, and being able to put the previous behaviour back — on one
+    host, without a code change — is what makes that decision cheap to revisit.
+    """
+    old = RoutingThresholds(risk_always_asks=False)
+    assert should_ask_for_context({"risk": "high", "confidence": "high"}, thresholds=old) is False
+    assert should_ask_for_context({"risk": "high", "confidence": "medium"}, thresholds=old) is True
+    # ...and the new behaviour is the default.
+    assert RoutingThresholds().risk_always_asks is True
+
+
+def test_the_switch_is_configurable_by_environment() -> None:
+    """Changing the behaviour must not require a code change."""
+    assert thresholds_from({}).risk_always_asks is True
+    assert thresholds_from({"AIOPS_GATEWAY_ROUTING_RISK_ALWAYS_ASKS": "false"}).risk_always_asks is False
+    assert thresholds_from({"AIOPS_GATEWAY_ROUTING_RISK_ALWAYS_ASKS": "true"}).risk_always_asks is True
+    with pytest.raises(ValueError, match="must be a boolean"):
+        thresholds_from({"AIOPS_GATEWAY_ROUTING_RISK_ALWAYS_ASKS": "maybe"})

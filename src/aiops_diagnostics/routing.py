@@ -86,20 +86,36 @@ class RoutingContractError(JevError):
 
 @dataclass(frozen=True, slots=True)
 class RoutingThresholds:
-    """Where Jev's continuous values become the three buckets the rule needs.
+    """Where Jev's continuous values become the buckets the routing rule needs.
 
-    Calibrated in #390 against real questions; the numbers are a starting point
-    and are expected to be re-measured against real traffic. They are settings
-    rather than constants so that re-measuring does not mean a code change.
+    ``risk_at_least`` is calibrated in #390 and confirmed on real traffic (#401):
+    the risk signal is bimodal, with a gap between 0.34 and 0.55, so any value
+    inside that gap sorts identically. 0.5 sits in it.
 
-    ``confidence_at_least`` is deliberately far from the values observed in
-    calibration, because Jev's confidence drifts slightly run to run (0.71 once,
-    0.67 the next): a threshold near an observed value makes the same question
-    behave differently on different days.
+    **``confidence_at_least`` no longer gates the clarification rule.** It was
+    the second half of "high risk AND unsure", and real traffic showed that
+    combination essentially never occurs: Jev recognises money questions
+    (risk 0.55–0.85 against 0.02–0.10 for everything else) *and is highly
+    confident about that recognition* (0.97–1.00). Measured over 86 real
+    questions, the original rule asked for context **zero** times — it was
+    inoperative in production, the same way the model-based classifier it
+    replaced had been.
+
+    The decision (2026-09-23) is therefore to drop the confidence gate: high
+    risk asks, period. That is the original intent ("rather than act on a thin
+    judgement about something involving money") restored to something that
+    actually runs. The field is kept because it still buckets for callers that
+    want a three-way confidence, and because removing a setting is a larger
+    change than changing its role.
     """
 
     risk_at_least: float = 0.5
     confidence_at_least: float = 0.8
+
+    #: Whether a high-risk question is asked for context no matter how confident
+    #: the decision is. True is the shipped behaviour since 2026-09-23; False
+    #: restores the original "high risk AND unsure" rule for comparison.
+    risk_always_asks: bool = True
 
     def validate(self) -> None:
         for name, value in (
@@ -211,6 +227,31 @@ def classify_with_jev(
     return decision.as_dict()
 
 
+def should_ask_for_context(
+    decision: Mapping[str, Any] | None,
+    *,
+    thresholds: RoutingThresholds | None = None,
+) -> bool:
+    """Whether a routing decision means "ask the user before going further".
+
+    One function, because this rule has now been wrong twice in the same way:
+    it existed but never fired. It was "high risk AND unsure" against a model
+    that returned `risk=high` with `confidence=high`, and then against Jev,
+    which recognises money questions and is confident about recognising them.
+    Measured over 86 real questions (#401) the original form asked **zero**
+    times.
+
+    Keeping the rule here rather than inline in the request handler means it can
+    be tested directly, which is what the previous two versions lacked.
+    """
+    active = thresholds or RoutingThresholds()
+    if not decision or decision.get("risk") != "high":
+        return False
+    if active.risk_always_asks:
+        return True
+    return decision.get("confidence") != "high"
+
+
 def _record_routing_failure(
     code: str,
     exc: BaseException,
@@ -248,9 +289,24 @@ def thresholds_from(values: Mapping[str, Any], *, prefix: str = "AIOPS_GATEWAY_"
     thresholds = RoutingThresholds(
         risk_at_least=_float_env(values, f"{prefix}ROUTING_RISK_AT_LEAST", 0.5),
         confidence_at_least=_float_env(values, f"{prefix}ROUTING_CONFIDENCE_AT_LEAST", 0.8),
+        risk_always_asks=_bool_env(values, f"{prefix}ROUTING_RISK_ALWAYS_ASKS", True),
     )
     thresholds.validate()
     return thresholds
+
+
+def _bool_env(values: Mapping[str, Any], name: str, default: bool) -> bool:
+    raw = values.get(name)
+    if raw in (None, ""):
+        return default
+    if isinstance(raw, bool):
+        return raw
+    lowered = str(raw).strip().lower()
+    if lowered in {"1", "true", "yes", "on"}:
+        return True
+    if lowered in {"0", "false", "no", "off"}:
+        return False
+    raise ValueError(f"{name} must be a boolean")
 
 
 def _float_env(values: Mapping[str, Any], name: str, default: float) -> float:
