@@ -1012,6 +1012,8 @@ ANSWER-PAYLOAD-01~05、07 证明的是**调用方形态无法再漂**，同样�
 | CD-41-19 | 41 实机 | 加固后的回滚（含参考资料恢复、版本相等判据） | `deploy-41.sh --commit <bad>` | PASS（2026-09-23，第 4 轮）：`rollback=restored version=0.1.0+140ca1dd2c74`，与 `pre-version` 相等；独立复核 src/参考资料/editable 均回到部署前 | 坏提交已从分支移除 |
 | CD-41-20 | 41 实机 | 加固后第 5 轮（含首次 restart 包住、版本精确比较） | `deploy-41.sh --commit <bad>` | PASS（2026-09-23）：`rollback=restored version=0.1.0+140ca1dd2c74` 与 `pre-version` 相等；独立复核 src/editable 均回到部署前。**注意**：`deploy-restart-rc=nonzero` 分支未触发（restart 异步，服务起不来时仍返回 0） | 坏提交已移除 |
 | CD-41-21 | 本机 | 桩件强制 restart 非零 + rsync 非零 | 复刻远端块结构运行 | PASS：发出 `rollback-restore-rc=nonzero` + `rollback=also-failed`（正确分类，非「状态未知」）。**该分支的真机证据缺失**，见 validation.md | 桩件为临时验证，未入库 |
+| CD-41-22 | 本机 | 生成的远端块 | dry-run 后对块单独 `bash -n`（`tests/test_cd_deploy_scripts.py`） | PASS。**已用复现 bug 验证**：未转义的位置参数会让它失败（`$1: unbound variable`）。heredoc 是生成的，静态检查看不到 |
+| CD-41-23 | 41 实机 | 预置一个陈旧 tar 残留（`aiops-sync-DEADBEEF1234.tar.gz`） | `deploy-41.sh --commit <good>` | PASS（2026-09-23）：陈旧残留被清、本次的包正常解包并在结束时自清、服务 healthy。**改前该逻辑会删掉本次的包**（钻演实测 `mutate-failed=extract`） | 假残留已清 |
 | CD-41-05 | GitHub Actions | 已合并一个 `src/**` 改动；environment 已配 required reviewer | 观察 `cd.yml` 运行 | **未执行**：workflow 层尚未真实触发过。需首次合并 `src/**` 并在 `production-41` 上点批准来验证触发、审批门与代理解析 | 待补 |
 | CD-41-06 | GitHub Actions | CD-41-05 通过 | 在同一 run 上不批准，等待 | **未执行**：需验证「未批准则不写入 41」 | 待补 |
 
