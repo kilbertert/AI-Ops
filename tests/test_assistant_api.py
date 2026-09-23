@@ -93,8 +93,8 @@ class _Runtime:
     #: which is the routing every test that is not about the classifier wants.
     classified = None
 
-    def classify_lightweight(self, question: str, *, language: str = "zh"):
-        del question, language
+    def classify_lightweight(self, question: str, *, language: str = "zh", tenant_id: str | None = None):
+        del question, language, tenant_id
         return self.classified
 
     def start_assistant_qa(

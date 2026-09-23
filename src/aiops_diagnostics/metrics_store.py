@@ -28,7 +28,10 @@ from aiops_diagnostics.private_files import ensure_private_directory, protect_pr
 
 METRICS_RETENTION_DAYS = 30
 
-ROUTE_TYPES = frozenset({"faq", "qa", "diagnosis", "debug", "clarification", "promo"})
+#: ``routing`` is the classifier's own decision path (#392): it is not a
+#: user-visible route, but a failed decision is exactly the kind of silent
+#: breakage that went unnoticed once, so it gets a counted row of its own.
+ROUTE_TYPES = frozenset({"faq", "qa", "diagnosis", "debug", "clarification", "promo", "routing"})
 RETRIEVAL_STATUSES = frozenset({"", "found", "not_found", "unavailable", "limited"})
 OUTCOME_TYPES = frozenset({"completed", "failed", "cancelled", "busy"})
 
@@ -211,6 +214,10 @@ class MetricsStore:
         if limit_hours < 1 or limit_hours > 24 * METRICS_RETENTION_DAYS:
             raise MetricsValidationError("limit_hours is invalid")
         cutoff = _iso(_utc_now() - timedelta(hours=limit_hours))
+        # ``routing`` rows are component health, not user interactions: one
+        # question that lost its routing hint and then answered normally would
+        # otherwise count as two runs, one of them failed. They stay visible in
+        # ``by_route`` and in the error codes; they do not enter the totals.
         conditions = ["tenant_id = ?", "created_at >= ?"]
         params: list[Any] = [tenant_id, cutoff]
         if agent_id is not None:
@@ -224,6 +231,11 @@ class MetricsStore:
             with self._connection() as connection:
                 return connection.execute(query, params + (extra or [])).fetchall()
 
+        # ``routing`` rows are component health, not user interactions: one
+        # question that lost its routing hint and then answered normally must not
+        # count as two runs, one of them failed. They stay visible in
+        # ``by_route`` and in the error codes; they leave the totals only.
+        interaction = " AND route_type != 'routing'"
         totals = _rows(
             f"""
             SELECT COUNT(*) AS runs,
@@ -236,7 +248,7 @@ class MetricsStore:
                    SUM(token_count) AS tokens,
                    SUM(searches) AS searches,
                    SUM(media_count) AS media
-            FROM agent_run_metrics WHERE {where}
+            FROM agent_run_metrics WHERE {where}{interaction}
             """
         )[0]
         by_route = _rows(

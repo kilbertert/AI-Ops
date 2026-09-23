@@ -175,7 +175,7 @@ AI-Ops 用独立服务身份回查——见 [ADR-0003](docs/adr/0003-bff-delegat
 flowchart TB
     L6["L6 服务边界与入口<br/>gateway_api · gateway_runtime · cli · gateway_server · gateway_cli<br/>gateway_client · admin_cli · gateway_config · gateway_tokens<br/>tdengine_proxy · responses_adapter · codex_launcher"]
     L5["L5 持久化<br/>gateway_store · conversation_store · metrics_store<br/>agent_lifecycle · shortcut_lifecycle"]
-    L4["L4 推理与产品能力<br/>agent_engine · codex_runtime · agent_runner · agent_validator · qa_rag<br/>turn_recovery · faq · promo_agents · answer_language · agent_manifest · agent_debug"]
+    L4["L4 推理与产品能力<br/>agent_engine · codex_runtime · agent_runner · agent_validator · qa_rag<br/>turn_recovery · routing · faq · promo_agents · answer_language · agent_manifest · agent_debug"]
     L3["L3 证据与诊断内核<br/>sources · diagnostic_tools · engine · journal<br/>agent_workspace · health_report · knowledge_retrieval · zero_order"]
     L2["L2 身份与范围<br/>scope_context · query_scope · caller_auth · third_session_auth"]
     L1["L1 领域规则（纯函数）<br/>rules · order_visibility · health_metrics · health_curves · parsing"]
@@ -286,6 +286,7 @@ flowchart TB
 | `agent_runner.py` | CLI 与 Gateway 共用的入口：`run_agent_diagnosis` / `run_zero_order_answer` / `classify_lightweight` |
 | `qa_rag.py` | 客服 QA 的 RAG 运行：在 Codex harness 里跑已发布智能体 + `knowledge_search`，产出 blocks-v1 合同 |
 | `turn_recovery.py` | 传输层模型轮次的宽容解析：围栏 / 最外层 `{}` / **首部丢失修复**（providers 的 SSE 首个 delta 会被上游丢弃，2026-09-22 实测 5/6） |
+| `routing.py` | 路由判定（PRD #383）：把 Jev 的**类型化判定**翻成 `intent`/`risk`/`confidence`，六个 `intent` 字符串与旧模型逐字相同。取不到判定时**返回 None 而非失败**（路由只是优化），失败带错误码、可计数、日志可见（该组件曾静默失效过一次）|
 | `faq.py` | 平台隔离的固定问答目录与平台身份判定（`consumer` / `operator`） |
 | `promo_agents.py` | 宣传案例/方案路由：跑租户已发布的宣传智能体，与客服 FAQ 智能体隔离 |
 | `answer_language.py` | 回答面输出语言校验的**共享应用点**（挂到各回答面的定稿点） |
