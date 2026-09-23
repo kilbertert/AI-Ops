@@ -349,6 +349,11 @@ class JevSettings:
         # the module docstring exists to prevent.
         if not self.user_agent.strip():
             raise ValueError("Jev user_agent is required")
+        # A nonpositive timeout reaches urllib and fails every request as a
+        # transport error, which reads like an outage rather than a misconfigured
+        # number. Rejected here so the caller learns at construction.
+        if not 0.1 <= self.timeout <= 120:
+            raise ValueError("Jev timeout must be between 0.1 and 120 seconds")
 
 
 class JevDecisionClient:

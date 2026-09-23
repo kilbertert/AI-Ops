@@ -1,5 +1,40 @@
 # 验证与验收计划
 
+## 分类器判定切换到 Jev（2026-09-23，本地自动化 + 真实端点联调，#392）
+
+**范围**：`#392`（PRD #383 的 T4）。`intent`/`risk`/`confidence` 三字段改由 Jev 产出。
+
+**`intent` 六字符串与旧模型逐字相同** —— 下游用 `==` 比较并传入
+`_promo_route(forced_intent=...)`，本片不改这些消费方。
+
+**阈值**：`risk >= 0.5` 且 `confidence < 0.8`（#390 标定），经
+`AIOPS_GATEWAY_ROUTING_RISK_AT_LEAST` / `..._CONFIDENCE_AT_LEAST` **可配置**，改阈值不改代码。
+
+**回退是正确性的一部分**：Jev 不可用/超时/响应非法 → **返回 None 而非失败**，调用方按无判定
+继续（与今天分类器不可用时的路径完全相同）。**只有本客户端自己的异常词汇被转换** ——
+`KeyError` 这类真缺陷必须暴露，宽 `except` 正是上次静默失效的成因。
+
+**可观测性**：失败带错误码（`ROUTING_UNAVAILABLE` / `ROUTING_INVALID`）、写一条
+`route_type="routing"` 的计数行、并记 WARNING 日志。**日志不含用户原文**（有测试钉住）。
+两个码分开是因为处置不同：不可用是等，契约违规是两边形状变了。
+
+**真实端点联调**（阈值默认值）：
+
+```
+你好，你好，你好。            intent=casual            conf=high   risk=low   (raw 0.02/1.0)
+我要投诉，充电扣了我200块钱但没充上电  intent=report_fault      conf=medium risk=high  (raw 0.92/0.55)
+我想看看客户案例               intent=case_exploration  conf=high   risk=low   (raw 0.03/1.0)
+充电桩怎么拔枪？               intent=knowledge         conf=high   risk=low   (raw 0.09/1.0)
+```
+
+**注**：投诉那条 `risk=high, conf=medium` —— 这是 #390 发现的"高风险追问规则"**第一次真正触发**。
+按 #346 交付的语义，这条会走澄清（追问上下文），而现状分类器在这条上从不追问。
+
+**去掉即失败已实测两条**：拆掉回退 → 4 条转红；拆掉可观测性 → 4 条转红。
+
+**未完成**：**未部署 41**。旧模型分类器保留为 `classify_lightweight_model`（expand/contract），
+待真实流量观察后再删。阈值需按真实流量复标（#390 已注明 n=10 不足）。
+
 ## Jev 阈值标定实测（2026-09-23，真实端点 + 真实模型对照，#390）
 
 **结论：继续。** 报告与原始数据：`docs/jev-threshold-calibration.md` +

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import logging
 import platform
 import re
 from contextlib import asynccontextmanager
@@ -89,6 +90,8 @@ from aiops_diagnostics.shortcut_lifecycle import (
 )
 from aiops_diagnostics.sources import SourceError
 from aiops_diagnostics.third_session_auth import RedisThirdSessionResolver, ThirdSessionSettings
+
+_LOGGER = logging.getLogger("aiops.gateway")
 
 STANDARD_ORDER_READ_SCOPE = "aiops:orders:read"
 STANDARD_DIAGNOSIS_SCOPE = "aiops:diagnoses:write"
@@ -1001,8 +1004,23 @@ def create_gateway_app(
         classifier = getattr(context.runtime, "classify_lightweight", None)
         if classifier is not None:
             try:
-                classified = classifier(payload.question, language=language)
-            except (ValueError, RuntimeError):
+                classified = classifier(
+                    payload.question,
+                    language=language,
+                    tenant_id=caller.effective_tenant_id,
+                )
+            except (ValueError, RuntimeError) as exc:
+                # A classifier that raises is treated as "no decision", exactly
+                # as one that returns None is. The routing hint must never be
+                # the reason a user gets nothing (#392).
+                #
+                # But it must not be swallowed in silence either: this handler is
+                # the outermost one, so a defect that escapes the routing
+                # module's own vocabulary would otherwise disable routing with no
+                # trace anywhere — which is precisely how this component stayed
+                # broken unnoticed before. Logged, no metric (the routing module
+                # counts the failures it recognises), and never the user's text.
+                _LOGGER.warning("classifier raised outside its own fallback: %s", type(exc).__name__)
                 classified = None
             if classified and classified.get("intent") == "casual":
                 # Chit-chat is answered by the same zero-order QA job every other
