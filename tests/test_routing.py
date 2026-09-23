@@ -273,3 +273,76 @@ def test_the_failure_log_is_bounded_and_carries_no_credentials(caplog: pytest.Lo
         assert len(record.getMessage()) < 300, record.getMessage()
     # And a serialized payload embedded in the message would be a leak path.
     assert json.dumps({"x": 1}) not in caplog.text
+
+
+# --- Review findings: each of these was a real defect before the fix ---
+
+
+def test_an_unconfigured_deployment_still_classifies(tmp_path) -> None:
+    """No Jev settings must not mean no classification.
+
+    Found in review: the first version returned "no decision" whenever Jev was
+    unconfigured. Every deployment without the new credentials would then have
+    lost casual handling, the promotional intents and the high-risk
+    clarification rule — a regression wearing the costume of a default.
+    """
+    from aiops_diagnostics.gateway_runtime import GatewayRuntime
+
+    runtime = GatewayRuntime.__new__(GatewayRuntime)
+    runtime.jev_client = None
+    runtime.routing_thresholds = RoutingThresholds()
+    runtime.metrics_store = None
+    called: dict[str, Any] = {}
+
+    def _model(question: str, *, language: str = "zh") -> dict[str, Any]:
+        called["question"] = question
+        return {"intent": "casual", "confidence": "high", "risk": "low"}
+
+    runtime.classify_lightweight_model = _model  # type: ignore[method-assign]
+    result = runtime.classify_lightweight("你好")
+    assert called.get("question") == "你好", "the previous classifier must still be reached"
+    assert result == {"intent": "casual", "confidence": "high", "risk": "low"}
+
+
+def test_a_nonpositive_timeout_is_rejected() -> None:
+    """A bad timeout otherwise fails every call as a transport error."""
+    from aiops_diagnostics.jev_decisions import JevSettings
+
+    for bad in (-1, 0, 0.0, 500):
+        with pytest.raises(ValueError, match="timeout"):
+            JevSettings(base_url="https://x.example", api_key="k", timeout=bad).validate()
+
+
+def test_a_nonpositive_gateway_timeout_is_rejected() -> None:
+    from pathlib import Path
+
+    from aiops_diagnostics.gateway_config import GatewayServerSettings
+
+    settings = GatewayServerSettings(
+        data_home=Path("/tmp"),
+        database_file=Path("/tmp/gateway.db"),
+        jev_timeout_seconds=0,
+    )
+    with pytest.raises(ValueError, match="JEV_TIMEOUT"):
+        settings.validate()
+
+
+def test_routing_health_does_not_inflate_user_run_totals(tmp_path) -> None:
+    """One question that lost its hint and then answered normally is one run.
+
+    Found in review: the routing row entered the summary totals as a failed run,
+    so a successfully answered request counted twice — once failed, once
+    completed. The row stays visible in `by_route`; it leaves the totals.
+    """
+    from aiops_diagnostics.metrics_store import MetricsStore
+
+    store = MetricsStore(tmp_path / "metrics.db")
+    store.record(tenant_id="T-1", route_type="qa", outcome="completed")
+    store.record(tenant_id="T-1", route_type="routing", outcome="failed", error_code="ROUTING_UNAVAILABLE")
+
+    summary = store.summary("T-1")
+    assert summary["totals"]["runs"] == 1, summary["totals"]
+    assert summary["totals"]["failed"] == 0, summary["totals"]
+    # ...but the health signal is not hidden.
+    routes = {row["route_type"] for row in summary["by_route"]}
+    assert "routing" in routes, summary["by_route"]

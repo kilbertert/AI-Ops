@@ -116,6 +116,8 @@ class GatewayServerSettings:
                 raise ValueError(f"{name} must be between 0 and 1")
         if self.jev_base_url and not self.jev_api_key:
             raise ValueError("AIOPS_GATEWAY_JEV_API_KEY is required when a Jev base URL is set")
+        if not 0.1 <= self.jev_timeout_seconds <= 120:
+            raise ValueError("AIOPS_GATEWAY_JEV_TIMEOUT_SECONDS must be between 0.1 and 120")
         if not 0.1 <= self.event_poll_interval_seconds <= 10:
             raise ValueError("AIOPS_GATEWAY_EVENT_POLL_SECONDS must be between 0.1 and 10")
         if not 1 <= self.introspection_timeout_seconds <= 30:

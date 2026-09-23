@@ -539,19 +539,24 @@ class GatewayRuntime:
         unreachable. A routing hint is an optimisation; it must never be the
         reason a user gets nothing.
 
-        The model-based classifier this replaces remains below as
-        ``classify_lightweight_model`` for the rollout window: Jev is a new
-        external dependency, and keeping the incumbent reachable means an
-        operator can compare the two on real traffic before the old path is
-        deleted.
+        The model-based classifier remains as ``classify_lightweight_model`` and
+        is what runs when Jev is not configured, so the cutover is a change of
+        source rather than a removal of the capability.
         """
-        return classify_with_jev(
-            question,
-            self.jev_client,
-            thresholds=self.routing_thresholds,
-            metrics=self.metrics_store,
-            tenant_id=tenant_id,
-        )
+        if self.jev_client is not None:
+            return classify_with_jev(
+                question,
+                self.jev_client,
+                thresholds=self.routing_thresholds,
+                metrics=self.metrics_store,
+                tenant_id=tenant_id,
+            )
+        # No Jev configured: the decision still has to be made, so the previous
+        # source keeps making it. Falling through to "no decision" would have
+        # silently disabled casual handling, the promotional intents and the
+        # high-risk clarification rule on every deployment that has not been
+        # given Jev credentials — a regression dressed as a default.
+        return self.classify_lightweight_model(question, language=language)
 
     def classify_lightweight_model(
         self,
