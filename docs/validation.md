@@ -289,30 +289,48 @@ workflow 级原本会取消旧的等审批 run，不存在这个残留；job 级
 
 三种情形已用测试仓库 + 41 实测验证：陈旧→拒绝、更新→放行、相等→放行。
 
-判据 1 已通过（触发成功）。判据 2–4 需在合并本修正后用一次干净运行重新验收。
+### 验收结果（2026-09-23，全部通过）
 
-## CD workflow 层首次验收（2026-09-23，进行中）
+修正合并后（`b1a823f`）CD 被触发，停在审批门，操作者批准后自动完成部署。
 
-**目的**：验收 `.github/workflows/cd.yml` 的**触发链与审批门** —— 脚本层已由 41 真实
-钻演验证（见下节），但 workflow 层从未在 GitHub 上跑过，这是它第一次。
+| # | 判据 | 结果 | 证据 |
+|---|---|---|---|
+| 1 | 合并后 `cd.yml` 被触发 | ✅ | run `35828620572`，event=push |
+| 2 | 停在审批门、未批准不写 41 | ✅ | 批准前：`status=waiting`、`jobs=1`、`pending_deployments=1`、页面提示 **"waiting for review"**；41 仍是 `0.1.0+140ca1dd2c74`（未触碰） |
+| 3 | 批准后部署成功、`/health` 带本次 sha | ✅ | `/health` = **`0.1.0+b1a823f8ca2e`**、`ok:true`、service active、editable 布局完好、参考资料一致 |
+| 4 | Deployments 页出现该 commit 记录 | ✅ | deployment `6608108650`：`queued → in_progress → success`（`b1a823f`） |
+
+**端到端确认**：公网 `POST /v1/assistant/questions` 无会话返回 **401**（路由存在、鉴权生效）；
+41 上无临时残留（`/tmp/aiops-sync-*` 与 `/tmp/sync-check` 均已清）。
+
+**与死锁形态的对照**（判据 2 的判别信号）：
+
+| | 死锁时 | 修好后 |
+|---|---|---|
+| status | `pending` | **`waiting`** |
+| jobs | **0** | **1** |
+| pending_deployments | **0** | **1** |
+| 页面提示 | "waiting for another serialized run to finish" | **"waiting for review"** |
+
+**一处如实记录的遗留**：更早那次死锁的 deployment（`6c8017e`，id `6605141818`）状态仍停在
+`waiting` —— 它被批准过，但对应的 run 在死锁期间被取消，job 从未启动，所以没有终态。
+这是那次事故的残留记录，不影响生产（生产已由 `b1a823f` 的 `success` deployment 描述）。
+
+## CD workflow 层首次验收（2026-09-23，**已通过**）
+
+**目的**：验收 `.github/workflows/cd.yml` 的**触发链与审批门**。
 
 **载体**：PR #395（`src/aiops_diagnostics/__init__.py` 的纯注释变更）。选注释是因为它
 同时满足两个条件：命中 `push.paths` 的 `src/**`，且**行为完全不变** —— 验收触发与
 门控不该同时改变生产行为。
 
-**验收判据**（合并后逐条核对）：
+**过程与结果**：首次运行**暴露了一个并发死锁缺陷**（见上一节：三轮修法），修正合并后
+重新验收，**四条判据全部通过** —— 完整证据、对照表与遗留项见上一节「验收结果」。
 
-| # | 判据 | 状态 |
-|---|---|---|
-| 1 | 合并到 main 后 `cd.yml` 被触发 | 待验 |
-| 2 | 运行停在 `production-41` 的人工审批门（未批准不写 41） | 待验 |
-| 3 | 批准后自动完成部署，`/health` 报 `0.1.0+<合并后 short sha>` | 待验 |
-| 4 | GitHub Deployments 页出现该 commit 的记录 | 待验 |
+**为什么只能合并后验**：workflow 只在 main 上存在才响应 `push: main`，所以结果必然是
+合并之后回填的。
 
-**为什么先合并才可能验**：workflow 只在 main 上存在才会响应 `push: main`。因此本节的
-结果是**合并之后**回填的 —— 在那之前这四行都是「待验」，不得写成通过。
-
-## 持续部署（CD）落地验证（2026-09-23，41 真实执行 + 本机模拟）## 持续部署（CD）落地验证（2026-09-23，41 真实执行 + 本机模拟）
+## 持续部署（CD）落地验证（2026-09-23，41 真实执行 + 本机模拟）
 
 **范围**：`deploy/deploy-41.sh` + `.github/workflows/cd.yml`（PR #387）。
 把 runbook §2 的手工部署变成受门控的自动化路径。
