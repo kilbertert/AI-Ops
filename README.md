@@ -179,7 +179,7 @@ flowchart TB
     L3["L3 证据与诊断内核<br/>sources · diagnostic_tools · engine · journal<br/>agent_workspace · health_report · knowledge_retrieval · zero_order"]
     L2["L2 身份与范围<br/>scope_context · query_scope · caller_auth · third_session_auth"]
     L1["L1 领域规则（纯函数）<br/>rules · order_visibility · health_metrics · health_curves · parsing"]
-    L0["L0 基础设施与契约<br/>agent_contracts · models · config · bounded_http · redaction<br/>i18n · private_files · platform_paths · http_auth · render · console_encoding"]
+    L0["L0 基础设施与契约<br/>agent_contracts · models · config · bounded_http · redaction<br/>i18n · private_files · platform_paths · http_auth · render · console_encoding<br/>jev_decisions"]
 
     L6 --> L5
     L6 --> L4
@@ -237,6 +237,7 @@ flowchart TB
 | `models.py` | 确定性面数据类：`DiagnosticRequest`、`DiagnosticReport`、`Evidence`、`Intent`、`Severity` |
 | `config.py` | 全部配置的单一来源：`Settings` 及嵌套 `*Settings`，含 `SafetySettings`（上限）与 `AgentSettings`（provider 注册表） |
 | `bounded_http.py` | 所有出站 HTTP 的**唯一**骨架：请求构造 → 认证头 → `urlopen` → 异常分类 → 信封解析。各调用点以声明式参数注入自己的错误类、认证方式与重试策略，差异显式可见 |
+| `jev_decisions.py` | Jev 决策客户端（PRD #383）：发送类型化问题（`choice`/`noul`/`score`），取回**带概率的类型化判定**而非生成文本——判定路径因此不再需要先让模型生成 JSON 再解析。**必须显式设置 User-Agent**：网关 WAF 会以 403 拒绝 urllib 的默认 agent，形态酷似限流或认证失败 |
 | `redaction.py` | `redact_text` / `sanitize_data` / `contains_secret` |
 | `i18n.py` | `Accept-Language` 解析、语言表、`chinese_leak` 判定。**纯头部解析**，结果只用于呈现，不得改变权限或路由 |
 | `private_files.py` | 私有目录/文件创建与权限加固（POSIX `0700`/`0600`，Windows 当前用户 DACL） |
