@@ -376,9 +376,15 @@ for ref in $REFERENCE_FILES; do
   if [ -f "/tmp/sync-check/$ref" ]; then
     mkdir -p "/opt/aiops-41/$(dirname "$ref")" "\$B/refs/$(dirname "$ref")" \
       || { step_failed "refs-mkdir:$ref"; continue; }
+    # 记录**部署前是否存在**。原先不存在时，部署会新建它；回滚必须把这个新文件删掉，
+    # 否则它继续生效，而分类器却报「完整回滚」（评审指出的假声明）。
     if [ -f "/opt/aiops-41/$ref" ]; then
-      cp "/opt/aiops-41/$ref" "\$B/refs/$ref" || step_failed "refs-backup:$ref"
+      cp "/opt/aiops-41/$ref" "\$B/refs/$ref" || { step_failed "refs-backup:$ref"; continue; }
+      printf 'present' > "\$B/refs/$ref.state"
+    else
+      printf 'absent' > "\$B/refs/$ref.state"
     fi
+    # 备份失败就不覆盖：宁可这一步失败并入恢复路径，也不要拿一份残缺备份当恢复点。
     cp "/tmp/sync-check/$ref" "/opt/aiops-41/$ref" || { step_failed "refs-copy:$ref"; continue; }
     echo "reference-synced=$ref"
   fi
@@ -432,10 +438,25 @@ else
   restore_rc=0
   rsync -a --delete "\$B/src/" $REMOTE_SRC/ || restore_rc=1
   for ref in $REFERENCE_FILES; do
-    if [ -f "\$B/refs/$ref" ]; then
-      mkdir -p "/opt/aiops-41/$(dirname "$ref")" || restore_rc=1
-      cp "\$B/refs/$ref" "/opt/aiops-41/$ref" || restore_rc=1
-    fi
+    # 按部署前记录的状态恢复：原本存在的从备份还原；原本**不存在**的把新文件删掉。
+    # 只检查「备份是否存在」会漏掉后一种 —— 部署新建的文件留在盘上继续生效，而
+    # 分类器报「完整回滚」（评审指出的假声明）。
+    state=\$(cat "\$B/refs/$ref.state" 2>/dev/null || echo unknown)
+    case "\$state" in
+      present)
+        mkdir -p "/opt/aiops-41/$(dirname "$ref")" || restore_rc=1
+        cp "\$B/refs/$ref" "/opt/aiops-41/$ref" || restore_rc=1
+        ;;
+      absent)
+        rm -f "/opt/aiops-41/$ref" || restore_rc=1
+        ;;
+      *)
+        # 状态缺失（旧备份格式，或本次写入前就失败）—— 不猜，让恢复判为失败，
+        # 由人判断该文件该不该在。
+        echo "refs-state-unknown=$ref" >&2
+        restore_rc=1
+        ;;
+    esac
   done
   chown -R aiops41:aiops41 $REMOTE_SRC || restore_rc=1
   [ "\$restore_rc" = "0" ] || echo "rollback-restore-rc=nonzero"
