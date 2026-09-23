@@ -362,7 +362,12 @@ fi
 if [ "\$others" -gt 0 ]; then
   echo "note: \$others non-CD backup(s) present, not pruned"
 fi
-systemctl restart $SERVICE
+# restart **必须**用 if 包住：远端块带 set -e，非零的 restart 会直接终止脚本，
+# 连后面的 check_ok 都到不了 —— 而那正是自动回滚要覆盖的主要情形。
+# 注意 systemctl restart 是异步的：服务起不来时它**常常仍返回 0**（fork 完成即返回），
+# 所以「restart 返回 0」不能推出「服务起来了」；真正的判据是下面的 check_ok。
+# 但反过来，restart 真返回非零时必须继续走自检/回滚，而不是退出。
+if systemctl restart $SERVICE; then :; else echo "deploy-restart-rc=nonzero"; fi
 sleep 5
 echo "backup=\$B"
 
@@ -371,9 +376,19 @@ echo "backup=\$B"
 # 断了就会分裂成「本机以为失败 / 主机其实已切换」，两边都不确定。判据只取本机也能
 # 独立复核的两项：服务 active + /health 含本次 commit 版本。
 EXPECT_VERSION="${STAMPED}"
+# 取 /health 的 version 字段。用 python3 解析而不是 grep 搜子串 —— grep 会命中
+# 响应里任意位置，而判据要的是「version 字段恰好等于期望值」。41 上有 python3。
+health_version() {
+  curl -s --max-time 6 $HEALTH \
+    | python3 -c 'import json,sys
+try:
+    print(json.load(sys.stdin).get("version",""))
+except Exception:
+    print("")' 2>/dev/null
+}
 check_ok() {
   [ "\$(systemctl is-active $SERVICE)" = "active" ] || return 1
-  curl -s --max-time 6 $HEALTH | grep -q "\$EXPECT_VERSION" || return 1
+  [ "\$(health_version)" = "\$EXPECT_VERSION" ] || return 1
   return 0
 }
 if check_ok; then
@@ -383,14 +398,18 @@ else
   echo "rolling back to \$B ..." >&2
   # 回滚两样东西：源码 + 参考资料。两者都在本次部署里被改过，只回源码会留下
   # 「旧代码 + 被拒 commit 的 SOP」—— 服务能起来，但诊断读的是被拒版本的内容。
-  rsync -a --delete "\$B/src/" $REMOTE_SRC/
+  # 恢复动作累积状态、不做提前退出：这些命令若失败而 set -e 直接终止，标记就发不出去，
+  # 分类器把它当「状态未知」—— 而它其实是「回滚失败」，要人做的事完全不同。
+  restore_rc=0
+  rsync -a --delete "\$B/src/" $REMOTE_SRC/ || restore_rc=1
   for ref in $REFERENCE_FILES; do
     if [ -f "\$B/refs/$ref" ]; then
-      mkdir -p "/opt/aiops-41/$(dirname "$ref")"
-      cp "\$B/refs/$ref" "/opt/aiops-41/$ref"
+      mkdir -p "/opt/aiops-41/$(dirname "$ref")" || restore_rc=1
+      cp "\$B/refs/$ref" "/opt/aiops-41/$ref" || restore_rc=1
     fi
   done
-  chown -R aiops41:aiops41 $REMOTE_SRC
+  chown -R aiops41:aiops41 $REMOTE_SRC || restore_rc=1
+  [ "\$restore_rc" = "0" ] || echo "rollback-restore-rc=nonzero"
 
   # 判定回滚是否成功必须用与部署前**同一把尺**：服务 active **且** /health 报的
   # 版本等于部署前记录的那个。只看 active 不够 —— systemd 可以是 active 而 HTTP
@@ -401,7 +420,7 @@ else
   if systemctl restart $SERVICE; then :; else echo "rollback-restart-rc=nonzero"; fi
   sleep 5
   if [ "\$(systemctl is-active $SERVICE)" = "active" ] \
-     && curl -s --max-time 6 $HEALTH | grep -q "\$PRE_VERSION"; then
+     && [ "\$(health_version)" = "\$PRE_VERSION" ]; then
     echo "rollback=restored version=\$PRE_VERSION"
   else
     echo "rollback=also-failed"

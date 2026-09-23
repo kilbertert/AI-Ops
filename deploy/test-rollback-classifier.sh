@@ -54,6 +54,17 @@ check "超时" 124 124 "超时" ""
 # 6. 什么都没输出（连接中断）→ 状态未知
 check "无输出" 1 1 "状态未知" ""
 
+# 6b. restart 非零但自检仍判失败 → 依然走回滚路径（不应因 restart 非零而丢分类）
+check "部署 restart 非零 + 已回滚" 1 1 "已自动回滚" "deploy-restart-rc=nonzero
+selfcheck=failed
+rollback=restored version=0.1.0+cccc"
+
+# 6c. 恢复动作失败（rsync/chown 非零）→ 必须仍是「回滚也失败」，不是「状态未知」
+check "恢复动作非零" 1 2 "严重" "selfcheck=failed
+rollback-restore-rc=nonzero
+rollback=also-failed
+rollback-active=inactive"
+
 # 7. 关键回归：只看 active 不算回滚成功。主机报 restored 但 health 版本≠部署前
 #    ——分类器信任主机的判定，但主机那边现在要求 health 相等；这条验证版本行被转发
 check "回滚成功带版本" 1 1 "0.1.0+bbbb" "selfcheck=failed
