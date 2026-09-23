@@ -296,9 +296,11 @@ for spec in "pyproject.toml" "uv.lock"; do
 产物只含 src/，不会同步依赖。此时若继续部署，restart 可能因缺包而失败
 （服务从 active 掉到 failed）。已停止，未上传、未写入、未重启。
 
-处理方式（需独立决定，不在本脚本范围）：
-  1. 在 41 上更新依赖环境（该机无 uv，需先确定用哪种方式），并记录变更；或
-  2. 若本次改动确实不需要新依赖，把 $spec 在 41 上对齐到目标 commit 的版本。
+处理方式（不在本脚本范围 —— 它改的是运行环境）：
+  按 docs/agents/env-41-dependency-update.md 的人工流程更新 41 的依赖环境，再重跑
+  部署。该流程要求备份、editable 守卫与留记录。**不要在这里顺手装包**：
+  uv sync 会把 editable 安装换成实体目录，之后 src/ 同步会静默失效
+  （import 仍成功，但拿的是旧代码，而 /health 还报新 commit）。
 EOF
     exit 1
   fi
@@ -419,7 +421,11 @@ else
   # restart 用 if 包住：远端块带 set -e，非零的 restart 会直接终止，连标记都发不出。
   if systemctl restart $SERVICE; then :; else echo "rollback-restart-rc=nonzero"; fi
   sleep 5
-  if [ "\$(systemctl is-active $SERVICE)" = "active" ] \
+  # 三个条件缺一不可：恢复动作全部成功 **且** 服务 active **且** /health 版本等于部署前。
+  # 少了 restore_rc 这条，就会把「参考资料只回了一半、但版本恰好还是旧的」报成
+  # 完整回滚 —— 服务看起来正常，而诊断读的是半新半旧的输入。
+  if [ "\$restore_rc" = "0" ] \
+     && [ "\$(systemctl is-active $SERVICE)" = "active" ] \
      && [ "\$(health_version)" = "\$PRE_VERSION" ]; then
     echo "rollback=restored version=\$PRE_VERSION"
   else
