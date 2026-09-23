@@ -44,6 +44,10 @@ def test_deploy_scripts_parse() -> None:
         assert result.returncode == 0, f"{script.name} 语法错误：{result.stderr}"
 
 
+@pytest.mark.skipif(
+    shutil.which("dev-host") is None,
+    reason="dry-run 需要 dev-host（只在开发机上）—— CI 是 GitHub-hosted，没有它",
+)
 def test_remote_block_renders_and_parses() -> None:
     """远端块是**生成**出来的（heredoc 展开），所以静态 `bash -n` 看不到它。
 
