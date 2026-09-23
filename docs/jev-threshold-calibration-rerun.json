@@ -1,0 +1,414 @@
+{
+  "summary": {
+    "questions": 10,
+    "both_decided": 10,
+    "intent_agreements": 7,
+    "intent_disagreements": 3,
+    "baseline_would_ask": 0,
+    "jev_confidence_when_baseline_asks": null,
+    "jev_confidence_when_baseline_does_not_ask": {
+      "min": 0.56,
+      "max": 1.0,
+      "median": 1.0
+    },
+    "jev_risk_when_baseline_asks": null,
+    "jev_risk_when_baseline_does_not_ask": {
+      "min": 0.02,
+      "max": 0.93,
+      "median": 0.055
+    },
+    "jev_latency_seconds": {
+      "min": 0.568,
+      "median": 0.662,
+      "max": 0.837
+    },
+    "baseline_latency_seconds": {
+      "min": 3.641,
+      "median": 6.049,
+      "max": 12.121
+    }
+  },
+  "threshold_sweep": [
+    {
+      "risk_at_least": 0.3,
+      "confidence_at_least": 0.6,
+      "would_ask": 1,
+      "asked_questions": [
+        "我要投诉，充电扣了我200块钱但没充上电"
+      ]
+    },
+    {
+      "risk_at_least": 0.3,
+      "confidence_at_least": 0.7,
+      "would_ask": 2,
+      "asked_questions": [
+        "优惠券使用规则是什么？为什么结账时没有抵扣？",
+        "我要投诉，充电扣了我200块钱但没充上电"
+      ]
+    },
+    {
+      "risk_at_least": 0.3,
+      "confidence_at_least": 0.8,
+      "would_ask": 2,
+      "asked_questions": [
+        "优惠券使用规则是什么？为什么结账时没有抵扣？",
+        "我要投诉，充电扣了我200块钱但没充上电"
+      ]
+    },
+    {
+      "risk_at_least": 0.3,
+      "confidence_at_least": 0.9,
+      "would_ask": 2,
+      "asked_questions": [
+        "优惠券使用规则是什么？为什么结账时没有抵扣？",
+        "我要投诉，充电扣了我200块钱但没充上电"
+      ]
+    },
+    {
+      "risk_at_least": 0.4,
+      "confidence_at_least": 0.6,
+      "would_ask": 1,
+      "asked_questions": [
+        "我要投诉，充电扣了我200块钱但没充上电"
+      ]
+    },
+    {
+      "risk_at_least": 0.4,
+      "confidence_at_least": 0.7,
+      "would_ask": 2,
+      "asked_questions": [
+        "优惠券使用规则是什么？为什么结账时没有抵扣？",
+        "我要投诉，充电扣了我200块钱但没充上电"
+      ]
+    },
+    {
+      "risk_at_least": 0.4,
+      "confidence_at_least": 0.8,
+      "would_ask": 2,
+      "asked_questions": [
+        "优惠券使用规则是什么？为什么结账时没有抵扣？",
+        "我要投诉，充电扣了我200块钱但没充上电"
+      ]
+    },
+    {
+      "risk_at_least": 0.4,
+      "confidence_at_least": 0.9,
+      "would_ask": 2,
+      "asked_questions": [
+        "优惠券使用规则是什么？为什么结账时没有抵扣？",
+        "我要投诉，充电扣了我200块钱但没充上电"
+      ]
+    },
+    {
+      "risk_at_least": 0.5,
+      "confidence_at_least": 0.6,
+      "would_ask": 1,
+      "asked_questions": [
+        "我要投诉，充电扣了我200块钱但没充上电"
+      ]
+    },
+    {
+      "risk_at_least": 0.5,
+      "confidence_at_least": 0.7,
+      "would_ask": 2,
+      "asked_questions": [
+        "优惠券使用规则是什么？为什么结账时没有抵扣？",
+        "我要投诉，充电扣了我200块钱但没充上电"
+      ]
+    },
+    {
+      "risk_at_least": 0.5,
+      "confidence_at_least": 0.8,
+      "would_ask": 2,
+      "asked_questions": [
+        "优惠券使用规则是什么？为什么结账时没有抵扣？",
+        "我要投诉，充电扣了我200块钱但没充上电"
+      ]
+    },
+    {
+      "risk_at_least": 0.5,
+      "confidence_at_least": 0.9,
+      "would_ask": 2,
+      "asked_questions": [
+        "优惠券使用规则是什么？为什么结账时没有抵扣？",
+        "我要投诉，充电扣了我200块钱但没充上电"
+      ]
+    },
+    {
+      "risk_at_least": 0.6,
+      "confidence_at_least": 0.6,
+      "would_ask": 1,
+      "asked_questions": [
+        "我要投诉，充电扣了我200块钱但没充上电"
+      ]
+    },
+    {
+      "risk_at_least": 0.6,
+      "confidence_at_least": 0.7,
+      "would_ask": 1,
+      "asked_questions": [
+        "我要投诉，充电扣了我200块钱但没充上电"
+      ]
+    },
+    {
+      "risk_at_least": 0.6,
+      "confidence_at_least": 0.8,
+      "would_ask": 1,
+      "asked_questions": [
+        "我要投诉，充电扣了我200块钱但没充上电"
+      ]
+    },
+    {
+      "risk_at_least": 0.6,
+      "confidence_at_least": 0.9,
+      "would_ask": 1,
+      "asked_questions": [
+        "我要投诉，充电扣了我200块钱但没充上电"
+      ]
+    },
+    {
+      "risk_at_least": 0.7,
+      "confidence_at_least": 0.6,
+      "would_ask": 1,
+      "asked_questions": [
+        "我要投诉，充电扣了我200块钱但没充上电"
+      ]
+    },
+    {
+      "risk_at_least": 0.7,
+      "confidence_at_least": 0.7,
+      "would_ask": 1,
+      "asked_questions": [
+        "我要投诉，充电扣了我200块钱但没充上电"
+      ]
+    },
+    {
+      "risk_at_least": 0.7,
+      "confidence_at_least": 0.8,
+      "would_ask": 1,
+      "asked_questions": [
+        "我要投诉，充电扣了我200块钱但没充上电"
+      ]
+    },
+    {
+      "risk_at_least": 0.7,
+      "confidence_at_least": 0.9,
+      "would_ask": 1,
+      "asked_questions": [
+        "我要投诉，充电扣了我200块钱但没充上电"
+      ]
+    }
+  ],
+  "rows": [
+    {
+      "question": "你好，你好，你好。",
+      "expected_by_author": "casual",
+      "note": "重复寒暄",
+      "baseline": {
+        "intent": "casual",
+        "risk": "low",
+        "confidence": "high",
+        "seconds": 4.26,
+        "error": null
+      },
+      "jev": {
+        "intent": "casual",
+        "confidence": 1.0,
+        "risk": 0.02,
+        "seconds": 0.654,
+        "error": null
+      },
+      "intent_agrees": true,
+      "baseline_would_ask": false
+    },
+    {
+      "question": "谢谢",
+      "expected_by_author": "casual",
+      "note": "短寒暄",
+      "baseline": {
+        "intent": "casual",
+        "risk": "low",
+        "confidence": "high",
+        "seconds": 3.892,
+        "error": null
+      },
+      "jev": {
+        "intent": "casual",
+        "confidence": 1.0,
+        "risk": 0.02,
+        "seconds": 0.837,
+        "error": null
+      },
+      "intent_agrees": true,
+      "baseline_would_ask": false
+    },
+    {
+      "question": "Hello, my car is not working.",
+      "expected_by_author": "order_issue",
+      "note": "英文故障描述（标签本身可争议）",
+      "baseline": {
+        "intent": "casual",
+        "risk": "low",
+        "confidence": "high",
+        "seconds": 6.289,
+        "error": null
+      },
+      "jev": {
+        "intent": "report_fault",
+        "confidence": 1.0,
+        "risk": 0.08,
+        "seconds": 0.568,
+        "error": null
+      },
+      "intent_agrees": false,
+      "baseline_would_ask": false
+    },
+    {
+      "question": "充电桩怎么拔枪？有没有演示视频",
+      "expected_by_author": "knowledge",
+      "note": "业务知识",
+      "baseline": {
+        "intent": "knowledge",
+        "risk": "low",
+        "confidence": "high",
+        "seconds": 10.784,
+        "error": null
+      },
+      "jev": {
+        "intent": "knowledge",
+        "confidence": 1.0,
+        "risk": 0.06,
+        "seconds": 0.71,
+        "error": null
+      },
+      "intent_agrees": true,
+      "baseline_would_ask": false
+    },
+    {
+      "question": "下暴雨、打雷或路面积水时，可以在户外露天充电吗？",
+      "expected_by_author": "knowledge",
+      "note": "安全知识",
+      "baseline": {
+        "intent": "knowledge",
+        "risk": "high",
+        "confidence": "high",
+        "seconds": 12.121,
+        "error": null
+      },
+      "jev": {
+        "intent": "knowledge",
+        "confidence": 1.0,
+        "risk": 0.05,
+        "seconds": 0.648,
+        "error": null
+      },
+      "intent_agrees": true,
+      "baseline_would_ask": false
+    },
+    {
+      "question": "优惠券使用规则是什么？为什么结账时没有抵扣？",
+      "expected_by_author": "knowledge",
+      "note": "计费知识（可能涉高风险）",
+      "baseline": {
+        "intent": "knowledge",
+        "risk": "low",
+        "confidence": "medium",
+        "seconds": 11.037,
+        "error": null
+      },
+      "jev": {
+        "intent": "order_issue",
+        "confidence": 0.67,
+        "risk": 0.58,
+        "seconds": 0.779,
+        "error": null
+      },
+      "intent_agrees": false,
+      "baseline_would_ask": false
+    },
+    {
+      "question": "我想看看客户案例",
+      "expected_by_author": "case_exploration",
+      "note": "宣传-案例",
+      "baseline": {
+        "intent": "case_exploration",
+        "risk": "low",
+        "confidence": "high",
+        "seconds": 3.641,
+        "error": null
+      },
+      "jev": {
+        "intent": "case_exploration",
+        "confidence": 1.0,
+        "risk": 0.03,
+        "seconds": 0.624,
+        "error": null
+      },
+      "intent_agrees": true,
+      "baseline_would_ask": false
+    },
+    {
+      "question": "你们有没有针对物流行业的方案",
+      "expected_by_author": "solution_discovery",
+      "note": "宣传-方案",
+      "baseline": {
+        "intent": "solution_discovery",
+        "risk": "low",
+        "confidence": "high",
+        "seconds": 11.258,
+        "error": null
+      },
+      "jev": {
+        "intent": "solution_discovery",
+        "confidence": 1.0,
+        "risk": 0.04,
+        "seconds": 0.677,
+        "error": null
+      },
+      "intent_agrees": true,
+      "baseline_would_ask": false
+    },
+    {
+      "question": "我要投诉，充电扣了我200块钱但没充上电",
+      "expected_by_author": "report_fault",
+      "note": "投诉（高风险）",
+      "baseline": {
+        "intent": "order_issue",
+        "risk": "high",
+        "confidence": "high",
+        "seconds": 5.785,
+        "error": null
+      },
+      "jev": {
+        "intent": "report_fault",
+        "confidence": 0.56,
+        "risk": 0.93,
+        "seconds": 0.67,
+        "error": null
+      },
+      "intent_agrees": false,
+      "baseline_would_ask": false
+    },
+    {
+      "question": "扣费不对，多扣了我50元，订单号2096164064667852801",
+      "expected_by_author": "order_issue",
+      "note": "订单异常（高风险）",
+      "baseline": {
+        "intent": "order_issue",
+        "risk": "high",
+        "confidence": "high",
+        "seconds": 5.809,
+        "error": null
+      },
+      "jev": {
+        "intent": "order_issue",
+        "confidence": 0.98,
+        "risk": 0.88,
+        "seconds": 0.64,
+        "error": null
+      },
+      "intent_agrees": true,
+      "baseline_would_ask": false
+    }
+  ]
+}
