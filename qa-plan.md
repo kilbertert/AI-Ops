@@ -988,3 +988,21 @@ payload——非 OpenAI provider 从未遵守该 schema），故不是新增风�
 **边界声明（重要）**：ANSWER-PAYLOAD-06 证明的是**当前代码满足 `docs/validation.md`
 AL-COV-10 已记录的那条验收**，不是新一次 41 公网实测——本片未部署、未复跑公网链路。
 ANSWER-PAYLOAD-01~05、07 证明的是**调用方形态无法再漂**，同样不证明译得对。
+
+## 持续部署 QA（CD-41，PR #387）
+
+| ID | 环境 | 前置条件与数据 | 有序动作 | 预期可观察结果 | 清理/证据 |
+|---|---|---|---|---|---|
+| CD-41-01 | 本机模拟 | `dev-host` 在 PATH；`miniconda3/bin` 已前置；仓库含目标 commit | `deploy/deploy-41.sh --commit HEAD --dry-run` | PASS：打包成功、首层断言 `aiops_diagnostics/`、`__version__ → 0.1.0+<short-sha>`、文件数 61、产物 sha 打印、远端命令打印；**未连接 41** | dry-run 输出；无残留（trap 清理暂存） |
+| CD-41-02 | 41 实机 | 服务 active；CD 密钥与别名就位；预置 `/tmp/sync-check/aiops_diagnostics/ZZZ_stale_cd_test.py` | `deploy-41.sh --commit HEAD` | PASS（2026-09-23）：服务 active；`/health` 报 `0.1.0+51e59b697ab8`（含本次 commit）；文件数 61（非 62，残留被清）；逐文件 sha 与产物一致；备份 `/var/backups/aiops-41/backup-20260923-093839` | 部署输出；`docs/validation.md`「持续部署（CD）落地验证」 |
+| CD-41-03 | 41 实机 | CD-41-02 成功 | `deploy-41.sh --rollback-to HEAD~1` | PASS：`/health` 报 `0.1.0+4533e956052a`（被回滚到的 commit），服务 active | 同上；随后已重新部署回 HEAD |
+| CD-41-04 | 41 实机 | 缺 tomllib 的解释器（模拟 runner PATH 未前置 miniconda） | 运行 `deploy-41.sh` | PASS：以 **65** 退出（环境问题），与部署失败区分；不上传、不写入、不重启 | 退出码与提示文本 |
+| CD-41-05 | GitHub Actions | 已合并一个 `src/**` 改动；environment 已配 required reviewer | 观察 `cd.yml` 运行 | **未执行**：workflow 层尚未真实触发过。需首次合并 `src/**` 并在 `production-41` 上点批准来验证触发、审批门与代理解析 | 待补 |
+| CD-41-06 | GitHub Actions | CD-41-05 通过 | 在同一 run 上不批准，等待 | **未执行**：需验证「未批准则不写入 41」 | 待补 |
+
+**边界（不得写成本项已过的部分）**：
+
+- CD 只证技术健康。CD-41-02/03 成功**不等于**业务验收 —— §5 的真实端到端需业务方
+  签发的 thirdSession，§6 禁止 CI 自证。CD 通过最多报 `merged_waiting_deploy`。
+- CD-41-05/06 未执行，因此「workflow 的触发与审批门」尚未验证。已记入
+  `docs/开发进度.md` 的已知缺口。

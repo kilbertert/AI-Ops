@@ -498,6 +498,35 @@ uv run python -m compileall -q src tests && uv pip check
 `windows-verify` 跑同样五条，外加 `packaging/build_portable.py`（构建便携包并在
 源码目录之外解压、以最小 `PATH`、隔离 home 做烟测，且**断言产物内不含凭据**）。
 
+### 持续部署（[:cd.yml](.github/workflows/cd.yml) + [:deploy/deploy-41.sh](deploy/deploy-41.sh)）
+
+CI 保证「合并进来的东西是对的」，CD 负责「把它送到 41 上跑」。触发条件是
+`main` 上 `src/**` 的改动（纯文档合并不部署，也不该占用人审批的注意力）。
+
+```
+push main (src/**) → cd.yml → environment: production-41（人工审批门）→ deploy-41.sh
+```
+
+四个设计选择，每个都有具体理由：
+
+1. **部署逻辑只在 `deploy-41.sh` 里**。runbook §2 是同一套步骤的散文版；两处各写一遍
+   必然漂移（§2 的 tar/rsync 配对 bug 就是这么来的）。脚本是自动化与手工应急的唯一共同实现。
+2. **走 `dev-host`，不自造 ssh+rsync**。`dev-host` 已实现策略要求的门：主机公钥身份断言、
+   写入服务主机需要 `--artifact-sha256`（载荷 sha 与声明不符即拒，退出 77）。
+   自己写一套传输就等于绕开「变更只能作为已识别产物到达服务主机」。
+3. **CD 用独立 ssh 别名 `aiops-41-cd`（独立密钥）**，人工仍用 `aiops-41`。
+   这样自动写入可独立吊销而不影响人工路径，41 的 `authorized_keys` 也能区分来源。
+   `deploy-41.sh` 不往主机清单里加第二条 41 记录（那会制造两份角色记录），
+   而是**运行时从主清单派生**一份视图、只替换 `ssh_alias`，并断言其余字段一致。
+4. **部署后断言 `/health` 含本次 commit**。`/health` 的 `version` 原先是个静态
+   `0.1.0`，无法回答「现在跑的是哪个 commit」——回滚也就无从验证。脚本在**暂存副本**上
+   把 `__init__.py` 的 `__version__` 写成 `<semver>+<short-sha>`（不动工作树），
+   于是部署后可断言、回滚后可确认。
+
+**CD 只证技术健康，不证业务验收。** 真实端到端需要业务方签发的 thirdSession，
+runbook §5/§6 明确禁止 CI 自证。所以 CD 通过最多报告 `merged_waiting_deploy`；
+`live` 仍须人按 §5 执行。
+
 ### 测试组织
 
 `tests/` 是 77 个平铺文件的集合，按关注点聚类：

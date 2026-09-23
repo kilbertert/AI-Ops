@@ -64,6 +64,21 @@ SSHPASS='<现场从受控来源取得>' sshpass -e ssh -o StrictHostKeyChecking=
 
 生产代码是文件拷贝部署（41 无 `.git`）。流程：**备份 → 传 → 校验 sha → 重启**。
 
+> **常规部署走 CD，不按本文手敲。** 合并到 `main` 且改动含 `src/**` 时，
+> `.github/workflows/cd.yml` 会自动准备好一次部署，经 `production-41` 环境的
+> 人工审批后执行 `deploy/deploy-41.sh`。**自动化路径与手工路径共用同一个脚本**，
+> 所以两者不会各自漂移 —— 本节保留手工步骤是为了：审阅这个脚本、以及自动化挂掉时
+> 的应急路径。
+>
+> **什么时候仍需手工**：CD 不可用（runner 掉线、GitHub 故障）。手工执行即
+> `deploy/deploy-41.sh --commit <sha>`（或 `--rollback-to <sha>`），用人工密钥
+> 别名 `aiops-41`；自动化用的是 CD 专用别名 `aiops-41-cd`。
+>
+> `deploy-41.sh` 在本文步骤之上多了两件**唯一**有它才有的能力：把 commit 标识注入
+> `__init__.py`（使 `/health` 能自证跑的是哪个 commit），以及部署后逐条断言
+> （服务 active、`/health` 含该 commit、文件数与 sha 树一致）。下面的手工步骤没有
+> 这些断言 —— 这正是「手工路径会漂移」的具体表现，也是保留脚本的理由。
+
 > **打包与 rsync 源必须成对**（本节唯一容易错的地方）。`-C src aiops_diagnostics`
 > 让包内首层就是 `aiops_diagnostics/`，所以解包后的 rsync 源是
 > `/tmp/sync-check/aiops_diagnostics/`。若改成 `tar czf x src/aiops_diagnostics/`

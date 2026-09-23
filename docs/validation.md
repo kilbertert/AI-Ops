@@ -1,5 +1,64 @@
 # 验证与验收计划
 
+## 持续部署（CD）落地验证（2026-09-23，41 真实执行 + 本机模拟）
+
+**范围**：`deploy/deploy-41.sh` + `.github/workflows/cd.yml`（PR #387）。
+把 runbook §2 的手工部署变成受门控的自动化路径。
+
+**未验证的部分先说**：`cd.yml` **尚未在 GitHub 上跑过**。下面三轮都是直接执行
+`deploy-41.sh`（脚本层验证）。workflow 层的触发、environment 审批门、代理解析
+需首次真实触发才算验证 —— 那要在合并一个 `src/**` 改动并点批准时补。
+
+### 三轮 41 真实执行
+
+| 轮次 | 动作 | `/health` version | 断言 |
+|---|---|---|---|
+| 1 | `--commit HEAD` | `0.1.0+51e59b697ab8` | 服务 active、文件数 61、sha 树一致 |
+| 2 | `--rollback-to HEAD~1` | `0.1.0+4533e956052a` | 同上 |
+| 3 | `--commit HEAD`（恢复） | `0.1.0+51e59b697ab8` | 同上 |
+
+**验证到的能力**：
+
+- **部署可自证**：`/health` 的 version 含本次 short sha。这是新能力 —— 改前 `/health`
+  报静态 `0.1.0`，无法回答「现在跑的是哪个 commit」，回滚也无从验证。
+- **回滚可验证**：`--rollback-to <sha>` 后 `/health` 确实变成该 commit 的 sha，
+  不是「跑了一遍希望它生效」。
+- **走 CD 专用身份**：三轮都以 `aiops-41-cd` 别名（CD 专用密钥）执行，非人工密钥。
+- **产物身份门生效**：`dev-host cp --artifact-sha256` 在**上传这一步**核对载荷 sha。
+- **sync-check 残留仍被清除**：预置 `ZZZ_stale_cd_test.py` 于 `/tmp/sync-check/`，
+  部署后文件数 61（非 62）、该文件不存在 —— #386 堵住的路径在脚本里同样成立。
+
+### 环境坑（已修，记录备查）
+
+`dev-host` 用裸 `python3 -c` 解析 TOML，需要 tomllib（3.11+）。self-hosted runner 的
+PATH 是 `/home/claude/.local/bin:/usr/local/bin:/usr/bin:/bin`，其中 `python3` 落到
+`/usr/bin/python3` = **3.10**（无 tomllib），而交互 shell 拿到 miniconda 的 3.13。
+表现为 `dev-host` 抛 `ModuleNotFoundError`。
+
+修法：调用前把 `/home/claude/miniconda3/bin` 前置到 PATH（workflow 里已写死，
+`deploy-41.sh` 也自带前置自检并在这种情况下以 **65** 退出 —— 与「部署失败」区分开，
+避免把人引向错误的排查方向）。
+
+### CD 身份的设计约束（实测得出）
+
+两个硬事实决定了「CD 专用密钥」只能靠 ssh 别名实现：
+
+1. `dev-host` **不做 identity 覆盖** —— 它调裸 `ssh`/`scp`，没有 `-F`，也不读
+   `SSH_CONFIG` 之类的环境变量。
+2. **`HOME` 对 ssh 无效** —— OpenSSH 从 passwd 条目展开 `~`，`env -i HOME=<tmp> ssh -G`
+   照样读 `/home/claude/.ssh/config`。所以「隔离 HOME」不是可用手段。
+
+因此：`~/.ssh/config` 增 `aiops-41-cd` 别名（指向 `id_ed25519_41_cd`），
+`deploy-41.sh` 用 `DEV_HOST_REGISTRY` 指向一份**运行时派生**的清单视图 —— 从主清单
+读全部字段、只替换 `ssh_alias`，并断言其余字段逐一致。这样角色/归属的唯一真值仍是
+主清单，没有第二份记录可漂移。
+
+### 未完成
+
+- workflow 层未跑过（见上）。
+- **业务验收未做**：§5 的真实端到端需业务方 thirdSession，§6 禁止 CI 自证。
+  CD 通过只报 `merged_waiting_deploy`；`live` 须人按 §5 执行。
+
 ## 41 runbook 试跑：sync-check 残留污染（2026-09-23，41 真实执行）
 
 **范围**：在 41（`api.mall.qushiyun.com`，`aiops-gateway-41.service`）实跑 #384 修订后的
