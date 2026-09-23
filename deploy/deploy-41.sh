@@ -360,6 +360,39 @@ fi
 systemctl restart $SERVICE
 sleep 5
 echo "backup=\$B"
+
+# ---- 自检与自动回滚（都在主机上做）----
+# 自检放主机侧，因为回滚只能用主机上的备份做。若自检在本机、回滚在主机，中间网络
+# 断了就会分裂成「本机以为失败 / 主机其实已切换」，两边都不确定。判据只取本机也能
+# 独立复核的两项：服务 active + /health 含本次 commit 版本。
+EXPECT_VERSION="${STAMPED}"
+check_ok() {
+  [ "\$(systemctl is-active $SERVICE)" = "active" ] || return 1
+  curl -s --max-time 6 $HEALTH | grep -q "\$EXPECT_VERSION" || return 1
+  return 0
+}
+if check_ok; then
+  echo "selfcheck=passed"
+else
+  echo "selfcheck=failed" >&2
+  echo "rolling back to \$B ..." >&2
+  # 只回滚**本次真正改过的东西**：源码。之前那版顺手也同步依赖环境，已按钻演结论
+  # 撤掉 —— 依赖变更现在由漂移门在上传前拒绝，走不到这里。
+  rsync -a --delete "\$B/src/" $REMOTE_SRC/
+  chown -R aiops41:aiops41 $REMOTE_SRC
+  systemctl restart $SERVICE
+  sleep 5
+  if [ "\$(systemctl is-active $SERVICE)" = "active" ]; then
+    echo "rollback=restored"
+  else
+    echo "rollback=also-failed" >&2
+  fi
+  curl -s --max-time 6 $HEALTH || true
+  echo
+  rm -rf /tmp/sync-check $REMOTE_TARBALL
+  exit 1
+fi
+
 systemctl is-active $SERVICE
 curl -s --max-time 6 $HEALTH
 rm -rf /tmp/sync-check $REMOTE_TARBALL
@@ -387,10 +420,50 @@ info "已上传 $REMOTE_TARBALL（产物身份 $ARTIFACT_SHA 已核对）"
 
 # ---- 6. 远端部署 -----------------------------------------------------------
 step "远端部署"
-REMOTE_OUT=$(dev-host exec "$HOST_TARGET" --allow-service-exec --timeout 300 -- "$REMOTE_CMD")
+# 超时要够。**超时设短不是更保守，而是更危险**：命令被 kill 在中途时，主机上的
+# 自检与回滚块根本没机会跑，生产会停在「源已换、服务未重启」的分裂状态
+# （2026-09-23 钻演实测踩到，见 validation.md）。
+REMOTE_TIMEOUT=${REMOTE_TIMEOUT:-900}
+set +e
+REMOTE_OUT=$(dev-host exec "$HOST_TARGET" --allow-service-exec --timeout "$REMOTE_TIMEOUT" -- "$REMOTE_CMD")
+REMOTE_RC=$?
+set -e
 printf '%s\n' "$REMOTE_OUT" | sed 's/^/   /'
 BACKUP=$(printf '%s\n' "$REMOTE_OUT" | sed -n 's/^backup=//p' | head -1)
 info "备份=$BACKUP"
+
+if [ "$REMOTE_RC" -ne 0 ]; then
+  if printf '%s' "$REMOTE_OUT" | grep -q 'rollback=restored'; then
+    cat >&2 <<EOF
+
+部署失败，但**主机已自动回滚**到本次部署前的源码并重启，服务 healthy。
+备份保留在 $BACKUP。可用 --rollback-to <sha> 重试上一个已知良好版本。
+EOF
+    exit 1
+  fi
+  if printf '%s' "$REMOTE_OUT" | grep -q 'rollback=also-failed'; then
+    cat >&2 <<EOF
+
+**严重**：部署失败且自动回滚后服务仍不 active。需立即人工介入：
+  ssh $HOST_TARGET 'journalctl -u $SERVICE -n 80 --no-pager'
+备份（源码）在 $BACKUP。
+EOF
+    exit 2
+  fi
+  if [ "$REMOTE_RC" -eq 124 ]; then
+    cat >&2 <<EOF
+
+**超时**（${REMOTE_TIMEOUT}s，退出码 124）：远端命令被中途 kill，主机侧的自检与
+回滚块**没有机会执行**。生产可能停在半途状态，须人工上机确认：
+
+  ssh $HOST_TARGET 'systemctl is-active $SERVICE; curl -s http://127.0.0.1:8788/health'
+
+确认无事后用 REMOTE_TIMEOUT=<更大值> 重跑。
+EOF
+    exit 124
+  fi
+  die "远端部署失败（退出码 $REMOTE_RC），且未产生 selfcheck/rollback 标记 —— 状态未知，须人工确认 41"
+fi
 
 # ---- 7. 部署后验证（失败即非零退出）----------------------------------------
 # 只证技术健康。业务验收需业务方 thirdSession，§5/§6 明确禁止 CI 自证 ——
