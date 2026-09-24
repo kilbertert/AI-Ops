@@ -24,7 +24,7 @@ bundle_datas = [
     (str(project_root / "examples/fixtures"), "aiops_diagnostics/_bundle/examples/fixtures"),
     (str(project_root / ".env.example"), "."),
     (str(project_root / "README.md"), "."),
-    (str(project_root / "docs/portable.md"), "docs"),
+    (str(project_root / "docs/gateway.md"), "docs"),
     (str(project_root / "examples/fixtures"), "examples/fixtures"),
 ]
 

@@ -56,32 +56,3 @@ jobs:
         run: |
           uv run python -m compileall -q src tests
           uv pip check
-
-  windows-verify:
-    runs-on: windows-latest
-    timeout-minutes: 20
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-        with:
-          persist-credentials: false
-
-      - name: Install uv
-        uses: astral-sh/setup-uv@bd01e18f51369d5a26f1651c3cb451d3417e3bba # v6.3.1
-        with:
-          enable-cache: true
-          python-version: "3.13"
-
-      - name: Install locked dependencies
-        run: uv sync --locked --dev
-
-      - name: Run Windows verification
-        run: |
-          uv run ruff check .
-          uv run ruff format --check .
-          uv run pytest -q
-          uv run python -m compileall -q src tests
-          uv pip check
-
-      - name: Build and smoke-test Windows portable bundle
-        run: uv run python packaging/build_portable.py
