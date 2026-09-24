@@ -88,7 +88,7 @@ AI-Ops 是外挂的第三条数据路径。需求真正的意思是**把 AI-Ops 
 | # | 问题 | 状态 |
 |---|---|---|
 | ~~R-1~~ | ~~`partner_b_id` 对哪个注册表？~~ | ✅ **已解（源码 + 生产库实测双证）**：`ch_site.partner_b_id` ≡ `partner_info.owner` ≡ **`qumall_upms.sys_user.id`（`type='5'` 代理商）**。端到端覆盖率 **68.3%（20782/30443）**，不是先前误算的 9.4%——错因是我按 `partner_info.id` 做了 join。 |
-| ~~R-2~~ | ~~AI-Ops 用什么身份代表调用者？~~ | ✅ **已解（公司源码 + 生产库实测）**：**存在，且直接吃 `userId`** —— `GET /shopuser/getShops?userId=` 返回该用户的 `shop_id` 集合，而 `shop_id` 与 `ch_site.id` **同域**（954 行中 953 行相同），可直接当站点集合下推。**无需新增映射、无需后端改动**（详见 §5.9） |
+| ~~R-2~~ | ~~AI-Ops 用什么身份代表调用者？~~ | ✅ **已解（公司源码 + 生产库实测）**：链条为 **会话 C 端 `userId` → `/user/inside/byUserId/{userId}` 拿 B 端 id → `GET /shopuser/getShops?userId=<B端>` → `shop_id` → 既有 `site_ids_by_shops` 映射 → `site_ids` 下推**。**无需新增接口、无需后端改动。** 注意两次纠正：必须走 C→B 映射（两会话 id 空间不同）；`shop_id` 与 `site_id` **近似但不等同**（954 行中 1 行不同），**不可直接互用**（详见 §5.9） |
 | ~~R-3~~ | ~~平台方（`'-1'`）是否应看到所有运营商的订单？~~ | ✅ **已关闭（产品口径 + 数据佐证）**：产品答「不会有出现 `-1` 查看数据的场景，不用理会平台」；实测 `ch_site` 无任何 `shop_id='-1'` 行。**该通路当前是空操作。** 注意范围：这关闭的是"**是否需要跨运营商可见性**"。「**租户内的店铺 ID 仍会匹配到站点**」（即普通站点隔离照常生效）不在本次关闭范围内 |
 | **R-4** | 「统一案例库」用哪个知识库、是否允许跨租户读 | 业务决策（见 P1-6） |
 | **R-5** | 管家端登录的账号类型 → 映射成哪个 `clientType`（`admin`/`tenant-app`/`supply-admin`） | 需要业务+后端共同确认 |
@@ -398,7 +398,10 @@ Illegal mix of collations (utf8mb4_0900_ai_ci,IMPLICIT) and (utf8mb4_general_ci,
 
 #### 修正后的结论
 
-**R-2 未解**，但已从"走哪个接口"收敛为一个精确问题：
+> **本节的"未解"状态已被 §5.9 取代。** §5.9 查到了那条受信路径
+> （`/shopuser/getShops` 直接吃 `userId`）。本节保留，用于存证收敛过程与两条边界。
+
+**R-2 当时未解**，已从"走哪个接口"收敛为一个精确问题：
 
 > **有没有一条受信路径，能用 third-session 的 `userId` 换到该调用者的身份/凭证？**
 
@@ -471,15 +474,32 @@ return point.proceed();      // 无条件放行
 
 #### 因此落地方案（A 方案的具体形状）
 
+> ⚠️ **本节初稿漏了一跳，已更正。** 初稿写「会话 `userId` → `getShops`」，
+> 但两者**不是同一个 id 空间**：会话给的是 **C 端** `userId`，而 `getShops` 要 **B 端**
+> `sys_user.id`。修正后的链条多一跳 C→B 映射，而该端点**既有**
+> （`/user/inside/byUserId/{userId}`，`scope_context.py:414`）。
+
 ```
-third-session 会话 → userId
-  → GET /shopuser/getShops?userId=<id>        ← 既有端点，直接吃 userId
-  → shop_id 集合（≈ 站点 id 集合）
-  → 作为 QueryScope.site_ids 下推             ← 既有机制，无需新增映射
+third-session 会话 → userId（C 端）
+  → GET /user/inside/byUserId/{userId}     ← C→B 映射（既有端点）
+  → B 端 sys_user.id
+  → GET /shopuser/getShops?userId=<B 端 id> ← 既有端点
+  → shop_id 集合
+  → site_ids_by_shops(...)                  ← 既有映射，**不要**把 shop_id 直接当 site_id
+  → QueryScope.site_ids 下推
 ```
 
-**不需要后端新增或修改任何接口，也不需要 `partner_b_id → 站点` 的新映射。**
-（§5.8 曾把"新增映射"列为约束，据此**撤回** —— `shop_id` 与站点 id 同域。）
+**关于 `shop_id` 与站点 id**：两者**近似但不等同**（954 行中 953 行相同，**有 1 行不同**）。
+因此**必须走既有 `site_ids_by_shops`**（`ch_site.shop_id → ch_site.id`，`sources.py:435-453`），
+**不能把 `shop_id` 直接当 `site_id`** —— 那会绕过那一行。
+
+**关于范围类型**：`RedisThirdSessionResolver` 现在产出 `data_scope=self`
+（`third_session_auth.py:82`），而 `resolve_query_scope` 的 **self 分支会提前返回并忽略店铺集合**
+（`query_scope.py:232-240`）。所以适配**必须改范围类型**（从 `self` 改为组织/店铺型），
+不能只"填上 shop_ids"。
+
+**不需要后端新增或修改任何接口。**（§5.8 曾把"新增 `partner_b_id → 站点` 映射"列为约束，
+据此**撤回**——走既有 `site_ids_by_shops` 即可。）
 
 #### 仍成立的两条边界
 
@@ -489,3 +509,18 @@ third-session 会话 → userId
 2. **`@Inside` 与组织级 `DataScopeInterceptor` 的鉴权体均被注释掉**（§5.3、§5.8）——
    意味着**端点本身不拒绝调用方**。我们依赖的是"内网服务 + 身份头"这一约定，
    而不是端点自带的保护。这一点应在实现时明确记录。
+
+#### 安全核查（2026-09-24，针对审查提出的 id 碰撞）
+
+审查提出：把会话 `userId` 传给 `getShops` **可能因标识碰撞读到他人范围**。实测：
+
+| 检查 | 结果 |
+|---|---|
+| `sys_user.id` ∩ `sys_user.user_id`（B 端主键 ∩ C 端 id） | **0** — 两个 id 空间**当前无重叠** |
+| `sys_user_shop.user_id` 命中 `sys_user.id`（B 端） | 468 |
+| `sys_user_shop.user_id` 命中 `sys_user.user_id`（C 端） | 0 |
+| 两者都命中（**真正的碰撞**） | **0** |
+
+**结论**：传错 id 空间**今天不会**读到他人范围（会得到空集），但**这仍是必须修的设计错误**——
+它是类型错误，且**碰撞何时出现取决于两个 id 空间将来是否分叉**，不能依赖"当前恰好不重叠"。
+修正后的链条已含 C→B 映射（见上）。
