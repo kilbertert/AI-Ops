@@ -42,7 +42,11 @@
 - `ch_site.agent_id` ≡ `partner_info.id`（另一条支线）。
 - 覆盖率：`site.partner_b_id → sys_user(type=5)` = **20782/30443 = 68.3%**。
 - 代理商账号实测 **314** 个；`partner_info.owner ∩ sys_user` = 312（type=5 占 307）→ 身份可绑。
-- 「平台」= `@ShopDataScope(seePlatform=true)` 下 shop id 的哨兵值 `'-1'`。
+- 「平台」= `@ShopDataScope(seePlatform=true)` 下 shop id 的哨兵值 `'-1'`；但 **41 上无任何
+  `ch_site.shop_id='-1'` 行**，该通路当前是空操作（R-3 关闭）。
+- **R-2 结论（撤回旧方向）**：不调后端接口。会话只提供身份；`/user/ds` 结构性为空
+  （`sys_organ.biz_data` 349 行全 NULL）；改用既已验证的 `ScopeResolver` 骨架出 `site_ids` 下推。
+- 另记：`DataScopeInterceptor` 与 `BaseSecurityInsideAspect` 的**判断体均被注释掉**。
 
 **更正（重要）**：先前记「`partner_b_id` 覆盖 69% 却与注册表交集为 0、端到端仅 9.4%」**是错的**。
 错因：按 `partner_info.id` 做了 join，而 `partner_b_id` 的对应列是 `partner_info.owner`。
