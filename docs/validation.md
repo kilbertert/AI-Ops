@@ -33,10 +33,16 @@ Linux+Windows 矩阵）接回 CI 即可，无需重写代码。
 
 **构建耦合（review 发现，已修）**：`packaging/aiops.spec` 曾把 `docs/portable.md` 列为
 便携包的顶层打包输入，直接删除文档会让 `build_portable.py` 在 Linux 和 Windows 上都无法构建。
-已替换为 `docs/gateway.md`（它仍是活文档，且本来就已打进包内）。这条说明"下线 Windows 分发"
-与"删除两份文档"不是同一个动作——文档是构建输入，删文档必须同时处理构建。构建脚本本身未单独
-跑过（未做 PyInstaller 构建），该修复由 `aiops.spec` 输入与 `_assert_bundled_references`
-断言的一致性核对覆盖。
+已替换为 `docs/gateway.md`（它仍是活文档，且本来就已打进包内）。这条说明「下线 Windows 分发」
+与「删除两份文档」不是同一个动作 —— 文档是构建输入，删文档必须同时处理构建。
+
+**构建实测（Linux，`chore/remove-windows-verify` + `8db4f14`）**：`uv run python
+packaging/build_portable.py` 全程通过并产出 `dist/aiops-diagnostics-0.1.0-linux-x86_64.zip`，
+含源码目录外解压、最小 PATH 启动、隔离 home 初始化、key slot 与内置 Codex runtime 检查、
+私有路径权限校验、制品内秘密文件拒绝、三份 fixture 诊断、以及连本地 mock Gateway 的
+`remote enroll/doctor/runs`。顶层文档落位已核对：ZIP 内实际存在 `aiops/docs/gateway.md`
+（12413 字节）与 `aiops/_internal/aiops_diagnostics/_bundle/docs/{architecture,gateway}.md`。
+这一步是为了让「顶层文档进入便携包」有证据，而不是由 spec 与断言的一致性推断出来。
 
 **未完成业务验收**：本片不改变任何诊断结论，无真实故障案例可比对。
 
