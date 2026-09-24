@@ -55,7 +55,7 @@ grep -rn "<host>\|ssh \|scp \|redis-cli\|systemctl restart" docs/ ops/ README.md
 ## 验证与交付
 
 - 代码、配置、打包或文档流程变更都要运行与风险匹配的 formatter、静态检查、测试和构建检查。
-- Windows 便携包必须在 Windows runner 上构建，并从最终 ZIP 的解压目录验证，不能只运行源码目录或 `dist/` 目录。
+- 本项目不出 Windows 交付物：CI 只在 Linux 上跑，Windows 便携包已下线（见 `docs/validation.md` 对应决策记录）。便携打包脚本 `packaging/build_portable.py` 保留为按需的本机构建入口，若要恢复 Windows 分发，必须先补回 Windows runner 上的构建与解压烟测。
 - 每次 PR 只解决一个逻辑任务；AI 审查是建议，不替代确定性 CI 和人工判断。
 
 <!-- afk-bootstrap:managed:start -->

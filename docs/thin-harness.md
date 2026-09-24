@@ -29,7 +29,7 @@ Codex 决定请求哪些证据以及如何组合证据。harness 不选择最终
 ## Harness 不变量
 
 - `IncidentManifest` 固定订单号、租户、反馈意图和来源哈希。
-- `AgentWorkspace` 是私有目录（POSIX 为 `0700`，Windows 使用当前用户保护 DACL），包含暂存 SOP/业务参考，不包含生产凭据或跨运行原始状态。
+- `AgentWorkspace` 是私有目录（POSIX 为 `0700`），包含暂存 SOP/业务参考，不包含生产凭据或跨运行原始状态。
 - 合成 fixture 会复制到隐藏且带哈希校验的输入路径，恢复运行时不能悄悄读取变化后的测试数据。
 - `EvidenceJournal` 为每个工具结果保存不可变 artifact、SHA-256、有界请求元数据和来源状态；依赖性读取会重新校验哈希。
 - tool result 同时携带从 artifact 读取、已脱敏且有限大小的 evidence payload，模型不必依赖本地 sandbox 回读私有文件；artifact 仍是审计源，事件日志不重复写入 payload。
@@ -78,7 +78,7 @@ Codex 决定请求哪些证据以及如何组合证据。harness 不选择最终
 - `AIOPS_CODEX_KEY_DIR/<slot>.key`：默认的可插拔 key slot 存储。
 - `--key-slot`：在不改代码的情况下切换同一 provider 的另一把 key。
 
-POSIX key 文件必须属于当前开发账号且为 `0600`；Windows key 文件使用当前用户保护 DACL。key 只作为内部 provider 变量传给 Codex app-server，模型生成的 shell 命令收到的是过滤后的环境，不包含业务密钥。运行状态和日志只记录 slot 名称，`agent-doctor` 只记录短的一次性指纹。恢复运行会校验 provider 与 base_url 一致，禁止把已存 key 重定向到别的主机，只允许切换同一端点的 key slot。
+key 文件必须属于当前开发账号且为 `0600`。key 只作为内部 provider 变量传给 Codex app-server，模型生成的 shell 命令收到的是过滤后的环境，不包含业务密钥。运行状态和日志只记录 slot 名称，`agent-doctor` 只记录短的一次性指纹。恢复运行会校验 provider 与 base_url 一致，禁止把已存 key 重定向到别的主机，只允许切换同一端点的 key slot。
 
 ## 明确不做的事情
 
