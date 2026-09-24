@@ -10,6 +10,12 @@ permissions:
   contents: read
 
 jobs:
+  # Linux only. The Windows matrix row was removed with the Windows
+  # distribution itself (see docs/validation.md, 2026-09-24): leaving it here
+  # would mean a `v*` tag still auto-publishes a Windows bundle for a
+  # platform this project no longer ships. Restoring Windows means adding
+  # the row back AND restoring the runner-side build and extraction smoke
+  # test that used to hold it honest — not just the one line.
   build:
     strategy:
       fail-fast: false
@@ -17,8 +23,6 @@ jobs:
         include:
           - os: ubuntu-latest
             artifact: linux
-          - os: windows-latest
-            artifact: windows
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     steps:

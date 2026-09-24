@@ -22,9 +22,16 @@
 | Windows 代码路径 | `console_encoding.py` / `codex_launcher.py` 的 `os.name == "nt"` 分支已由 `platform_name=` 参数在 Linux 上单测覆盖（`tests/test_console_encoding.py`、`tests/test_codex_runtime.py`） |
 
 **代价（明确接受）**：源自 Windows 的破坏性改动不再被每提交 CI 捕获，只会在有人于 Windows
-主机本机构建便携包时暴露。`packaging/build_portable.py` 与其余 Windows 代码路径保留，不予删除
-—— 保留即保留了恢复路径：将来若要恢复 Windows 分发，把 `package.yml`（tag/手动触发的
-Linux+Windows 矩阵）接回 CI 即可，无需重写代码。
+主机本机构建便携包时暴露。`packaging/build_portable.py` 与其余 Windows 代码路径保留，不予删除，
+因此将来恢复 Windows 分发不需要重写代码 —— 但仍需两步，不是一步：把 `package.yml` 的
+`windows-latest` 矩阵行加回来，**并补回 runner 侧的构建与解压烟测**（每提交的
+`build_portable.py` 步骤已随 `windows-verify` 一起删除，恢复时若只加回矩阵行，Windows 包将带上
+无人验证过的回归）。
+
+**`package.yml` 的 Windows 矩阵行同片删除**（re-review 发现）：该工作流在 `v*` 标签和手动触发时
+运行，保留 Windows 行意味着打一个 tag 仍会自动产出并上传 Windows 包 —— 与本次「不再出 Windows
+交付物」的决定直接冲突，也把矛盾发到 release 面上。删掉 2 行 YAML 的恢复成本极低（git 历史里
+就是），不足以换取「自动交付一个已下线的平台」这个不一致状态。
 
 **变更集**：`.github/workflows/ci.yml`（删 job）、`README.md`（CI 段与文档索引）、
 `AGENTS.md`（平台规则改写）、`docs/gateway.md`、`docs/快速上手.md`、`docs/thin-harness.md`
