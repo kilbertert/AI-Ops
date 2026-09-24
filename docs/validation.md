@@ -28,8 +28,17 @@ Linux+Windows 矩阵）接回 CI 即可，无需重写代码。
 
 **变更集**：`.github/workflows/ci.yml`（删 job）、`README.md`（CI 段与文档索引）、
 `AGENTS.md`（平台规则改写）、`docs/gateway.md`、`docs/快速上手.md`、`docs/thin-harness.md`
-（去掉共享运行时不再依赖的平台专用表述）、删除 `docs/portable.md`、`docs/打包与下载.md`。
-产品代码零改动。
+（去掉共享运行时不再依赖的平台专用表述）、`packaging/aiops.spec`（见下）、
+删除 `docs/portable.md`、`docs/打包与下载.md`。产品代码零改动。
+
+**构建耦合（review 发现，已修）**：`packaging/aiops.spec` 曾把 `docs/portable.md` 列为
+便携包的顶层打包输入，直接删除文档会让 `build_portable.py` 在 Linux 和 Windows 上都无法构建。
+已替换为 `docs/gateway.md`（它仍是活文档，且本来就已打进包内）。这条说明"下线 Windows 分发"
+与"删除两份文档"不是同一个动作——文档是构建输入，删文档必须同时处理构建。构建脚本本身未单独
+跑过（未做 PyInstaller 构建），该修复由 `aiops.spec` 输入与 `_assert_bundled_references`
+断言的一致性核对覆盖。
+
+**未完成业务验收**：本片不改变任何诊断结论，无真实故障案例可比对。
 
 **`docs/开发进度.md` 中 M12/M15 等历史条目不动** —— 它们记录的是当时状态，按本页阅读须知
 「已过时的结论就地注明取代它的条目，不删除」处理。
