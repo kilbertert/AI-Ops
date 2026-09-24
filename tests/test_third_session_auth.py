@@ -8,12 +8,22 @@ from typing import Any
 from urllib.parse import urlsplit
 
 import pytest
+from operator_support import (
+    C_USER_ID,
+    SESSION_TOKEN,
+    TENANT,
+    BSubjectDirectory,
+    b_subject,
+    java_session,
+    session_settings,
+)
 
 from aiops_diagnostics.caller_auth import CALLER_AUTH_INVALID, CallerAuthError
 from aiops_diagnostics.config import UpmsSettings
 from aiops_diagnostics.query_scope import QueryScope, resolve_query_scope
 from aiops_diagnostics.scope_context import (
     C_MAPPING_AMBIGUOUS,
+    C_MAPPING_C_USER_MISMATCH,
     C_MAPPING_FAILED,
     C_MAPPING_NOT_CONFIGURED,
     C_MAPPING_NOT_FOUND,
@@ -25,17 +35,17 @@ from aiops_diagnostics.scope_context import (
 )
 from aiops_diagnostics.third_session_auth import (
     RedisThirdSessionResolver,
-    ThirdSessionSettings,
     UpmsBSubjectDirectory,
 )
 
 UPMS_BASE_URL = "https://upms.example.test"
 INSIDE_CREDENTIAL = "upms-internal-token"
-SESSION_TOKEN = "session-123456789012345"
 
 
+# 无效会话载荷的替身：这个文件要驱动「没有载荷 / 不是 JSON / 缺字段」三种形状，
+# 因此保留自己的 Redis 替身；有效载荷与 #426/#427/#428 共用 operator_support。
 class _Redis:
-    def __init__(self, value: str | None):
+    def __init__(self, value: str | bytes | None):
         self.value = value.encode() if isinstance(value, str) else value
 
     def get(self, key: str):
@@ -43,26 +53,13 @@ class _Redis:
         return self.value
 
 
-def _settings() -> ThirdSessionSettings:
-    return ThirdSessionSettings(
-        "127.0.0.1", 6379, 0, password="secret", service_token="svc", key_prefix="app:3rd_session:"
-    )
-
-
 def _redis_session(monkeypatch: pytest.MonkeyPatch, payload: str | bytes | None) -> None:
-    monkeypatch.setattr(
-        "aiops_diagnostics.third_session_auth.redis.Redis", lambda **_: _Redis(payload)
-    )
-
-
-def _java_session(payload: dict[str, Any]) -> bytes:
-    """A Redis value as the Java BFF stores it: header + embedded JSON string."""
-    return b"\xac\xed\x00\x05t\x00" + json.dumps(payload).encode()
+    monkeypatch.setattr("aiops_diagnostics.third_session_auth.redis.Redis", lambda **_: _Redis(payload))
 
 
 def test_resolves_existing_third_session(monkeypatch: pytest.MonkeyPatch) -> None:
-    _redis_session(monkeypatch, _java_session({"userId": "C-1", "tenantId": "T-1"}))
-    context = RedisThirdSessionResolver(_settings()).resolve(
+    _redis_session(monkeypatch, java_session({"userId": "C-1", "tenantId": "T-1"}))
+    context = RedisThirdSessionResolver(session_settings()).resolve(
         "svc", required_scope="aiops:orders:read", third_session=SESSION_TOKEN
     )
     assert context.subject.c_user_id == "C-1"
@@ -74,7 +71,7 @@ def test_resolves_existing_third_session(monkeypatch: pytest.MonkeyPatch) -> Non
 def test_missing_or_invalid_session_fails_closed(monkeypatch: pytest.MonkeyPatch, value: str | None) -> None:
     _redis_session(monkeypatch, value)
     with pytest.raises(CallerAuthError) as excinfo:
-        RedisThirdSessionResolver(_settings()).resolve(
+        RedisThirdSessionResolver(session_settings()).resolve(
             "svc", required_scope="aiops:orders:read", third_session=SESSION_TOKEN
         )
     assert excinfo.value.code == CALLER_AUTH_INVALID
@@ -82,14 +79,14 @@ def test_missing_or_invalid_session_fails_closed(monkeypatch: pytest.MonkeyPatch
 
 def test_resolves_login_pointer_to_session_object(monkeypatch: pytest.MonkeyPatch) -> None:
     pointer = b"\xac\xed\x00\x05t\x00Kapp:3rd_session:wx:wx-1:uuid"
-    session = _java_session({"userId": "C-1", "tenantId": "T-1"})
+    session = java_session({"userId": "C-1", "tenantId": "T-1"})
 
     class Redis:
         def get(self, key: str):
             return pointer if key.endswith("login-1") else session
 
     monkeypatch.setattr("aiops_diagnostics.third_session_auth.redis.Redis", lambda **_: Redis())
-    context = RedisThirdSessionResolver(_settings()).resolve(
+    context = RedisThirdSessionResolver(session_settings()).resolve(
         "svc", required_scope="aiops:orders:read", third_session="login-1"
     )
     assert context.subject.c_user_id == "C-1"
@@ -101,45 +98,24 @@ def test_resolves_login_pointer_to_session_object(monkeypatch: pytest.MonkeyPatc
 # 范围指纹，不测内部调用顺序。
 
 
-def _b_subject(**overrides: Any) -> SubjectRecord:
-    fields: dict[str, Any] = {"b_user_id": "B-9", "c_user_id": "C-1", "tenant_id": "T-1"}
-    fields.update(overrides)
-    return SubjectRecord(**fields)
-
-
-class _BSubjectDirectory:
-    """In-memory C→B mapping directory recording every lookup."""
-
-    def __init__(
-        self,
-        by_c_user_id: dict[str, tuple[SubjectRecord, ...]] | None = None,
-        *,
-        error: Exception | None = None,
-    ) -> None:
-        self.by_c_user_id = by_c_user_id or {}
-        self.error = error
-        self.calls: list[str] = []
-
-    def users_by_c_user_id(self, c_user_id: str) -> tuple[SubjectRecord, ...]:
-        self.calls.append(c_user_id)
-        if self.error is not None:
-            raise self.error
-        return self.by_c_user_id.get(c_user_id, ())
-
-
 def _resolve(
     monkeypatch: pytest.MonkeyPatch,
-    directory: _BSubjectDirectory | UpmsBSubjectDirectory | None,
+    directory: BSubjectDirectory | UpmsBSubjectDirectory | None,
 ) -> Any:
-    _redis_session(monkeypatch, _java_session({"userId": "C-1", "tenantId": "T-1"}))
-    resolver = RedisThirdSessionResolver(_settings(), b_subject_directory=directory)
+    """一次会话解析；替身（会话值、C→B 映射）与 #426/#427/#428 共用 operator_support。
+
+    这里自己构造 resolver 而不是走 ``resolve_session``：断言里要看 ``directory.calls``，
+    即「用过哪个 C 端 id 查过一次」——那是接缝的行为，不是实现细节。
+    """
+    _redis_session(monkeypatch, java_session({"userId": C_USER_ID, "tenantId": TENANT}))
+    resolver = RedisThirdSessionResolver(session_settings(), b_subject_directory=directory)
     return resolver.resolve("svc", required_scope="aiops:orders:read", third_session=SESSION_TOKEN)
 
 
 def test_session_identity_carries_b_side_subject_from_the_c_to_b_mapping(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    directory = _BSubjectDirectory({"C-1": (_b_subject(),)})
+    directory = BSubjectDirectory({"C-1": (b_subject(),)})
 
     context = _resolve(monkeypatch, directory)
 
@@ -159,20 +135,59 @@ def test_session_identity_carries_b_side_subject_from_the_c_to_b_mapping(
     ("records", "reason"),
     [
         ((), C_MAPPING_NOT_FOUND),
-        ((_b_subject(), _b_subject(b_user_id="B-10")), C_MAPPING_AMBIGUOUS),
-        ((_b_subject(tenant_id="T-OTHER"),), C_MAPPING_TENANT_MISMATCH),
+        ((b_subject(), b_subject(b_user_id="B-10")), C_MAPPING_AMBIGUOUS),
+        ((b_subject(tenant_id="T-OTHER"),), C_MAPPING_TENANT_MISMATCH),
+        # 同租户但绑的是另一个 C 端用户：核对的是 userId，不是 tenant_id。
+        ((b_subject(c_user_id="C-OTHER"),), C_MAPPING_C_USER_MISMATCH),
+        # 回带里没有 userId：无从核对，按不可用处理（fail closed）。
+        ((b_subject(c_user_id=None),), C_MAPPING_C_USER_MISMATCH),
     ],
 )
 def test_unresolvable_c_to_b_mapping_fails_closed_with_a_distinguishable_reason(
     monkeypatch: pytest.MonkeyPatch, records: tuple[SubjectRecord, ...], reason: str
 ) -> None:
-    """非唯一的三种情形一律拒绝而非放行：身份不携带可用的 B 端主体。"""
+    """非唯一的四种情形一律拒绝而非放行：身份不携带可用的 B 端主体。"""
 
-    context = _resolve(monkeypatch, _BSubjectDirectory({"C-1": records}))
+    context = _resolve(monkeypatch, BSubjectDirectory({"C-1": records}))
 
     assert context.subject.b_subject_reason == reason
     assert context.subject.c_user_id == "C-1"
     # B 端主体不可用，b_user_id 仍只是 C 侧占位值，不得被当作 B 端主体使用。
+    assert context.subject.b_user_id == "c:C-1"
+
+
+def test_a_cross_tenant_record_does_not_make_the_same_tenant_subject_ambiguous(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """「本租户唯一主体 + 一条跨租户记录」不是歧义：先按会话租户筛选再判定。
+
+    判在筛选之前会把唯一的主体判成 ambiguous_subject，会话退回 self 范围——
+    PRD 要修掉的「查不到本运营商别人的单」在这个形状上复活。
+    """
+    records = (
+        b_subject(),
+        b_subject(b_user_id="B-2", c_user_id="C-X", tenant_id="T-OTHER"),
+    )
+
+    context = _resolve(monkeypatch, BSubjectDirectory({"C-1": records}))
+
+    assert context.subject.b_user_id == "B-9"
+    assert context.subject.b_subject_reason == ""
+    assert context.subject.c_user_id == "C-1"
+
+
+def test_two_same_tenant_records_are_still_ambiguous(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """同租户内两条仍是歧义：筛选只挡跨租户，不放松同租户内的唯一性要求。"""
+    records = (
+        b_subject(c_user_id="C-OTHER"),
+        b_subject(b_user_id="B-2", c_user_id="C-1"),
+    )
+
+    context = _resolve(monkeypatch, BSubjectDirectory({"C-1": records}))
+
+    assert context.subject.b_subject_reason == C_MAPPING_AMBIGUOUS
     assert context.subject.b_user_id == "c:C-1"
 
 
@@ -186,7 +201,7 @@ def test_unresolvable_c_to_b_mapping_fails_closed_with_a_distinguishable_reason(
 def test_failing_c_to_b_mapping_is_refused_with_its_own_reason(
     monkeypatch: pytest.MonkeyPatch, error: Exception
 ) -> None:
-    context = _resolve(monkeypatch, _BSubjectDirectory(error=error))
+    context = _resolve(monkeypatch, BSubjectDirectory(error=error))
 
     assert context.subject.b_subject_reason == C_MAPPING_FAILED
     assert context.subject.b_user_id == "c:C-1"
@@ -206,7 +221,7 @@ def test_data_level_c_mapping_problems_are_logged_without_identifiers(
 ) -> None:
     """歧义/悬空类原因必须留痕，但日志不带 C 端 id、租户或凭据。"""
     with caplog.at_level(logging.INFO, logger="aiops_diagnostics.third_session_auth"):
-        _resolve(monkeypatch, _BSubjectDirectory({"C-1": (_b_subject(), _b_subject(b_user_id="B-10"))}))
+        _resolve(monkeypatch, BSubjectDirectory({"C-1": (b_subject(), b_subject(b_user_id="B-10"))}))
 
     assert C_MAPPING_AMBIGUOUS in caplog.text
     assert "C-1" not in caplog.text
@@ -216,9 +231,9 @@ def test_data_level_c_mapping_problems_are_logged_without_identifiers(
 def test_b_side_subject_enters_the_existing_scope_fingerprint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    mapped = _resolve(monkeypatch, _BSubjectDirectory({"C-1": (_b_subject(),)}))
-    other_subject = _resolve(monkeypatch, _BSubjectDirectory({"C-1": (_b_subject(b_user_id="B-10"),)}))
-    unmapped = _resolve(monkeypatch, _BSubjectDirectory({"C-1": ()}))
+    mapped = _resolve(monkeypatch, BSubjectDirectory({"C-1": (b_subject(),)}))
+    other_subject = _resolve(monkeypatch, BSubjectDirectory({"C-1": (b_subject(b_user_id="B-10"),)}))
+    unmapped = _resolve(monkeypatch, BSubjectDirectory({"C-1": ()}))
 
     assert mapped.scope_fingerprint != unmapped.scope_fingerprint
     assert mapped.scope_fingerprint != other_subject.scope_fingerprint
@@ -253,18 +268,14 @@ class _FakeUpmsTransport:
 
 
 def _upms_directory() -> UpmsBSubjectDirectory:
-    return UpmsBSubjectDirectory(
-        UpmsSettings(base_url=UPMS_BASE_URL, timeout_seconds=5), INSIDE_CREDENTIAL
-    )
+    return UpmsBSubjectDirectory(UpmsSettings(base_url=UPMS_BASE_URL, timeout_seconds=5), INSIDE_CREDENTIAL)
 
 
 def test_upms_b_subject_directory_reuses_the_existing_mapping_endpoint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """B 端 id 取自既有 C→B 映射端点，不新增服务端接口。"""
-    transport = _FakeUpmsTransport(
-        [{"id": "B-9", "userId": "C-1", "username": "agent.9", "tenantId": "T-1"}]
-    )
+    transport = _FakeUpmsTransport([{"id": "B-9", "userId": "C-1", "username": "agent.9", "tenantId": "T-1"}])
     monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", transport)
 
     records = _upms_directory().users_by_c_user_id("C-1")
@@ -279,9 +290,7 @@ def test_session_identity_matches_what_upms_answers_for_the_same_user(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """端到端：会话解析出的身份与直接向 UPMS 查同一用户的结果一致。"""
-    transport = _FakeUpmsTransport(
-        [{"id": "B-9", "userId": "C-1", "username": "agent.9", "tenantId": "T-1"}]
-    )
+    transport = _FakeUpmsTransport([{"id": "B-9", "userId": "C-1", "username": "agent.9", "tenantId": "T-1"}])
     monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", transport)
 
     context = _resolve(monkeypatch, _upms_directory())
@@ -324,7 +333,7 @@ def test_third_session_resolver_is_wired_with_the_c_to_b_directory(tmp_path: Pat
     assert isinstance(resolver.b_subject_directory, UpmsBSubjectDirectory)
 
 
-def test_third_session_resolver_without_the_inside_token_resolves_no_b_subject(
+def test_third_session_resolver_without_the_inside_token_resolves_nob_subject(
     tmp_path: Path,
 ) -> None:
     """未配置服务侧内部凭据时不发起 C→B 调用：管家端按 fail closed 拒绝，消费者端不变。"""

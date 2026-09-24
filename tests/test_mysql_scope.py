@@ -11,8 +11,8 @@ from aiops_diagnostics.order_visibility import (
     normalize_tenant,
     visible_orders,
 )
-from aiops_diagnostics.query_scope import QueryScope
-from aiops_diagnostics.sources import MySQLSource
+from aiops_diagnostics.query_scope import QueryScope, ScopeError
+from aiops_diagnostics.sources import SITE_SCOPE_MAX_ROWS, MySQLSource
 
 TENANT = "TENANT-A"
 SITES = ("SITE-A-1", "SITE-A-2")
@@ -366,7 +366,8 @@ def test_site_ids_by_shops_resolves_sites_bound_and_read_only() -> None:
     sql, params = conn.executed[-1]
     assert "ch_site" in sql
     assert "shop_id IN (%s, %s)" in sql
-    assert "LIMIT 1000" in sql
+    # 多取一行：LIMIT 恰好等于上限时无法区分「正好这么多」与「被截断」。
+    assert f"LIMIT {SITE_SCOPE_MAX_ROWS + 1}" in sql
     assert params == [TENANT, "SHOP-B-1", "SHOP-B-2"]
 
 
@@ -395,3 +396,26 @@ def test_scoped_query_does_not_fallback_to_unfiltered_when_scope_fails() -> None
     source.get_orders("O-1")
 
     assert all("tenant_id=%s" in sql for sql, _ in conn.executed if "SELECT" in sql)
+
+
+def test_site_ids_by_shops_fails_closed_when_the_site_set_is_truncated() -> None:
+    """匹配站点超过上限时必须抛 ``scope.too_large``，不能静默只留下前 N 行。
+
+    上限与 ``MAX_SCOPE_IDS`` 相等，因此「LIMIT 恰好取到上限」既可能是完整集合、
+    也可能是被截断的集合——以取到第 N+1 行判定，范围判定才不会被静默收窄。
+    """
+    over_limit = [{"id": f"SITE-{index}"} for index in range(SITE_SCOPE_MAX_ROWS + 1)]
+    source, _conn = _source(_ScopedConnection(sites=over_limit))
+
+    with pytest.raises(ScopeError) as excinfo:
+        source.site_ids_by_shops(("SHOP-B-1",), TENANT)
+
+    assert excinfo.value.code == "scope.too_large"
+
+
+def test_site_ids_by_shops_accepts_a_set_at_exactly_the_limit() -> None:
+    """边界对照：正好上限行时仍是合法集合，不该被当成超界。"""
+    at_limit = [{"id": f"SITE-{index}"} for index in range(SITE_SCOPE_MAX_ROWS)]
+    source, _conn = _source(_ScopedConnection(sites=at_limit))
+
+    assert len(source.site_ids_by_shops(("SHOP-B-1",), TENANT)) == SITE_SCOPE_MAX_ROWS

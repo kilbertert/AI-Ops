@@ -259,7 +259,7 @@ flowchart TB
 | 模块 | 职责 |
 |---|---|
 | `scope_context.py` | 把一次运行的授权输入收敛为不可变 `ScopeContext`：调用者、目标主体、有效租户、业务数据范围。平台依赖经 `PlatformDirectory` 单一接缝接入。**解析器不持有任何数据源**，全部 fail closed |
-| `query_scope.py` | 把 `ScopeContext` 解析成可直接下推的不可变 `QueryScope`（tenant / site_ids / user_id），站点范围来自 UPMS 数据范围与 Dis 点位归属 |
+| `query_scope.py` | 把 `ScopeContext` 解析成可直接下推的不可变 `QueryScope`（tenant / site_ids / user_id），站点范围来自 UPMS 数据范围、Dis 点位归属，或运营商维度（B 端主体 → 店铺集合 → 站点归属，PRD #423） |
 | `caller_auth.py` | 调用者身份接缝：`CallerContextResolver`（UPMS / OAuth2 introspection / fail-closed 禁用）与 `OrderAuthorizer` |
 | `third_session_auth.py` | C 端 `thirdSession` → `ScopeContext` 的 Redis 解析路径；身份同时带 C 端 id 与经既有 C→B 映射端点补全的 B 端 `sys_user.id`，解析不出唯一主体时记录可区分原因 |
 
@@ -376,6 +376,9 @@ flowchart TB
 | `OrderAuthorizer` | `caller_auth.py` | `Disabled…` / `ScopedOrderAuthorizer` |
 | `PlatformDirectory` | `scope_context.py` | `UpmsDirectory` |
 | `SiteScopeMapper` / `DisDirectory` | `query_scope.py` | 静态映射 / `DisHttpDirectory` |
+| `BSubjectDirectory` | `third_session_auth.py` | `UpmsBSubjectDirectory`（C 端用户 → B 端主体，会话身份补全） |
+| `ShopDirectory` | `query_scope.py` | `UpmsShopDirectory`（B 端主体 → 店铺集合，与后端权威授权同一端点） |
+| `OperatorSiteScope` | `third_session_auth.py` | `UpmsOperatorSiteScope`（运营商站点集合，管家端会话的数据范围） |
 
 生成物是冻结的 `ScopeContext`，其 `scope_fingerprint` 是下游所有存储与授权的键。
 
@@ -458,7 +461,7 @@ AGENTS.md                 仓库级开发共识（中文文档、里程碑同步
 CONTEXT.md                领域词汇表（术语 + 应避免的同义词）
 SOP.md / 充电桩问题排查SOP.md   业务规则来源（后端行为的中文说明）
 acceptance.feature        Gherkin 可执行验收约束（29 Feature / 73 Rule / 195 Scenario）
-qa-plan.md                QA 用例（78 个用例 ID，含环境/前置/数据/动作/预期/清理）
+qa-plan.md                QA 用例（136 个用例 ID，含环境/前置/数据/动作/预期/清理）
 ```
 
 > ⚠️ **`java/` 是待落地工件，不是本仓库构建产物。**

@@ -21,6 +21,7 @@ from aiops_diagnostics.query_scope import (
 )
 from aiops_diagnostics.scope_context import (
     C_MAPPING_AMBIGUOUS,
+    C_MAPPING_C_USER_MISMATCH,
     C_MAPPING_FAILED,
     C_MAPPING_NOT_CONFIGURED,
     C_MAPPING_NOT_FOUND,
@@ -206,6 +207,18 @@ class RedisThirdSessionResolver:
 
         失败原因单独记一行，与 #425 区分的两种空集合成因（账号漏登记 /
         已登记店铺无站点）都不是一回事：那些要去补数据，这里要去看上游。
+
+        ponytail: 授予条件只有「唯一 B 端主体 + 其店铺集合」，既不含管家端角色，
+        也不看业务入口（入口在 FastAPI 依赖里晚于身份解析，本结构进不来）。词汇表
+        对「管家主体」的定义带管家端角色维度，因此「恰好也有 B 端账号的 C 端用户
+        在消费者入口上同样拿到该运营商的站点集合」是这条边界内被接受的行为，不是
+        遗漏。升级触发条件：会话身份能拿到角色（或入口可传入本层）时，先补角色门
+        再扩大授予条件；在那之前靠 `b_subject_reason` 与站点集合边界兜底。
+
+        ponytail: 每次会话解析都开一条跳板隧道（与查询路径 `scoped_live_sources`
+        同款，每个管家端请求一次），没有缓存或按请求复用。升级触发条件：
+        实测确认它是管家端请求的热点成本后，改为按请求/按次运行复用一条隧道，或
+        加短 TTL 的主体级缓存——后者会引入授权范围 staleness，须先定可接受上限。
         """
         directory = self.operator_scope
         if subject.b_subject_reason or directory is None:
@@ -224,6 +237,12 @@ class RedisThirdSessionResolver:
         请求，消费者端可见性判定零变化；需要唯一 B 端主体的下游（管家端订单授权）
         必须对非空 ``SubjectRecord.b_subject_reason`` fail closed，而不是把占位
         ``b_user_id`` 当作 B 端主体使用。
+
+        唯一的那个 B 端主体必须**同时**命中会话租户和会话 C 端用户：端点按 C 端
+        ``userId`` 查询，但返回的记录自带 ``userId``/``tenantId``，不核对就不能
+        把别人绑定的运营商当成本会话的身份（那会直接把另一个 C 用户名下的店铺→
+        站点集合当成本会话可见范围）。判定顺序是「先按租户筛选，再数本租户内几条」：
+        跨租户记录出现在响应里是可能的，但它不能把本租户内唯一的主体判成歧义。
         """
         directory = self.b_subject_directory
         if directory is None:
@@ -236,17 +255,23 @@ class RedisThirdSessionResolver:
         if not records:
             # 消费者端的正常状态：不记日志，避免每个 C 端账号都刷一行。
             return _c_side_subject(user_id, tenant_id, C_MAPPING_NOT_FOUND)
-        if len(records) > 1:
-            _log_unresolved(C_MAPPING_AMBIGUOUS)
-            return _c_side_subject(user_id, tenant_id, C_MAPPING_AMBIGUOUS)
-        record = records[0]
-        if record.tenant_id != tenant_id:
+        same_tenant = tuple(record for record in records if record.tenant_id == tenant_id)
+        if not same_tenant:
             # 跨租户的 C→B 映射不是本次会话的身份，宁可没有 B 端主体也不越租户。
             _log_unresolved(C_MAPPING_TENANT_MISMATCH)
             return _c_side_subject(user_id, tenant_id, C_MAPPING_TENANT_MISMATCH)
-        # C 端 id 与租户以会话为准：端点回带的同名字段不参与可见性判定，
-        # 避免响应形状差异改写 self 范围的查询谓词。
-        return replace(record, c_user_id=user_id, tenant_id=tenant_id, b_subject_reason="")
+        if len(same_tenant) > 1:
+            _log_unresolved(C_MAPPING_AMBIGUOUS)
+            return _c_side_subject(user_id, tenant_id, C_MAPPING_AMBIGUOUS)
+        record = same_tenant[0]
+        if record.c_user_id != user_id:
+            # 同租户但绑的是另一个 C 端用户：它的店铺集合不属于本会话，不核对就是
+            # 冒用。响应形状若不回带 userId（None）同样无法核对，一并判为不可用。
+            _log_unresolved(C_MAPPING_C_USER_MISMATCH)
+            return _c_side_subject(user_id, tenant_id, C_MAPPING_C_USER_MISMATCH)
+        # 到这里租户与 C 端用户都已被核对，记录自带的同名字段不再是「未核对输入」，
+        # 因此不再改写它们；只清掉原因标记唯一性已确定。
+        return replace(record, b_subject_reason="")
 
 
 def _log_unresolved(reason: str, code: str | None = None) -> None:

@@ -15,7 +15,6 @@
 
 from __future__ import annotations
 
-import os
 import time as time_module
 from pathlib import Path
 from typing import Any
@@ -23,171 +22,60 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-# 与 #426 共用同一套替身（假 MySQL 行级镜像、真实授权判定、运营商会话身份）：
-# 两份拷贝会各自漂移，因此这里不重写，直接复用。
-from test_operator_order_authorization import (
-    B_USER_ID,
+# 与 #426 共用同一套替身（行级镜像的假 MySQL、真实授权判定、运营商会话身份、发布
+# 后的入口应用）：替身各写一份会各自漂移，因此这里不重写。
+from operator_support import (
+    CONSUMER_HEADERS as _CONSUMER_HEADERS,
+)
+from operator_support import (
+    DIAGNOSIS_QUESTION,
     ORDER_INSIDE,
     SITE_IN,
-    TENANT,
-    _authorizer,
-    _Connection,
-    _operator_session,
+    Caller,
+    Connection,
+    Directory,
+    PlatformIdentityResolver,
+    Runtime,
+    assistant_app,
+    build_authorizer,
+    create_gateway_app,
+    gateway_settings,
+    operator_session,
+    publish,
+)
+from operator_support import (
+    OPERATOR_HEADERS as _OPERATOR_HEADERS,
 )
 
-from aiops_diagnostics.faq import FAQCatalog, PlatformIdentityResolver, PlatformRoleRecord
-from aiops_diagnostics.gateway_api import create_gateway_app
-from aiops_diagnostics.gateway_config import GatewayServerSettings
+from aiops_diagnostics.faq import FAQCatalog
 from aiops_diagnostics.gateway_store import GatewayStore
-from aiops_diagnostics.scope_context import SubjectRecord
 from aiops_diagnostics.shortcut_lifecycle import (
     _BUNDLED_SHORTCUTS,
     ShortcutManager,
     ShortcutStore,
 )
 
-#: 「订单检测」的成功路径问句：不带订单号，由动作的 requires_order 决定去向。
-DIAGNOSIS_QUESTION = "帮我检测这个订单的充电异常"
 #: 「客户案例」的点击问句：故意不含任何宣传意图线索（「案例库」「标杆」等都没出现），
 #: 因此只有入口侧的动作行能把这次点击判成案例探索——若意图改由文案推导，本条会红。
 CASE_QUESTION = "推荐一些内容给我看看"
-
-_OPERATOR_HEADERS = {"Authorization": "Bearer service", "X-Business-Entry": "operator"}
-_CONSUMER_HEADERS = {"Authorization": "Bearer service", "X-Business-Entry": "consumer"}
-
-
-class _Directory:
-    """平台身份目录：该会话有 admin client_type，operator 入口可用。"""
-
-    def roles_for_c_user(self, c_user_id: str, tenant_id: str):
-        return (PlatformRoleRecord(B_USER_ID, c_user_id, tenant_id, "admin"),)
-
-    def roles_for_b_user(self, b_user_id: str, tenant_id: str):
-        return ()
-
-
-class _StubRuntime:
-    """记录「有没有启动作业 / 启动的是哪一单」的运行时替身。"""
-
-    def __init__(self) -> None:
-        self.diagnoses: list[tuple[str, str]] = []
-        self.questions: list[dict[str, Any]] = []
-
-    def shutdown(self) -> None:
-        return None
-
-    def start_standard_diagnosis(
-        self, context: Any, order_no: str, question: str, indicator_code, language="zh"
-    ):
-        del context, indicator_code
-        self.diagnoses.append((order_no, question))
-        return {
-            "diagnosis_id": "dx_operator0000000000000000000001",
-            "order_no": order_no,
-            "question": question,
-            "indicator_code": None,
-            "status": "queued",
-            "result": None,
-            "error_code": None,
-            "error_message": None,
-            "created_at": "2026-09-24T00:00:00+00:00",
-            "updated_at": "2026-09-24T00:00:00+00:00",
-            "completed_at": None,
-        }
-
-    def get_standard_diagnosis(self, context: Any, diagnosis_id: str):
-        del context, diagnosis_id
-        return None
-
-    classified = None
-
-    def classify_lightweight(self, question: str, *, language: str = "zh", tenant_id: str | None = None):
-        del question, language, tenant_id
-        return self.classified
-
-    def start_assistant_qa(self, context: Any, question: str, **kwargs: Any):
-        del context, kwargs
-        record = {
-            "qa_id": "qa_operator0000000000000000000001",
-            "question": question,
-            "status": "queued",
-            "result": None,
-        }
-        self.questions.append(record)
-        return record
-
-    def get_assistant_qa(self, context: Any, qa_id: str):
-        del context
-        return next((item for item in self.questions if item["qa_id"] == qa_id), None)
-
-    def list_assistant_qa(self, context: Any, *, limit: int = 50):
-        del context, limit
-        return []
-
-
-class _PublisherContext:
-    """运营发布者的身份：租户管理员在该租户的 operator 入口发布既有动作。"""
-
-    effective_tenant_id = TENANT
-    roles = frozenset({"ROLE_AGENT_ADMIN"})
-    caller = SubjectRecord(b_user_id="ops-admin", tenant_id=TENANT)
-
-
-def _settings(tmp_path: Path) -> GatewayServerSettings:
-    settings = GatewayServerSettings(
-        data_home=tmp_path,
-        database_file=tmp_path / "gateway.db",
-        server_config_file=tmp_path / "production.env",
-    )
-    settings.server_config_file.write_text("# test\n", encoding="utf-8")
-    # 配置文件是私有文件：运行时在读它之前会校验权限。
-    os.chmod(settings.server_config_file, 0o600)
-    return settings
-
-
-def _publish(manager: ShortcutManager, entries: tuple[str, ...]) -> None:
-    """按 租户 + 入口 发布种子行（PRD 说的那个数据操作）。"""
-    context = _PublisherContext()
-    for seeded in manager.store.seed_bundled(context, manager):
-        if seeded.business_entry in entries:
-            manager.publish(context, seeded.shortcut_id, expected_revision=seeded.revision)
 
 
 def _app(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     *,
-    runtime: Any = None,
-    connection: _Connection | None = None,
     published_entries: tuple[str, ...] = ("operator",),
-) -> tuple[TestClient, Any]:
-    settings = _settings(tmp_path)
-    store = GatewayStore(settings.database_file)
-    shortcuts = ShortcutManager(ShortcutStore(settings.database_file))
-    _publish(shortcuts, published_entries)
-    selected_runtime = runtime if runtime is not None else _StubRuntime()
-    app = create_gateway_app(
-        settings=settings,
-        store=store,
-        runtime=selected_runtime,
-        caller_resolver=_OperatorCaller(monkeypatch),
-        order_authorizer=_authorizer(monkeypatch, connection if connection is not None else _Connection()),
-        platform_resolver=PlatformIdentityResolver(_Directory()),
-        faq_catalog=FAQCatalog.bundled(),
-        shortcut_manager=shortcuts,
+    connection: Connection | None = None,
+) -> tuple[TestClient, Runtime]:
+    """发布后的入口应用：会话身份取 #426 的运营商会话（真实范围 + 真实授权判定）。"""
+    caller = Caller(operator_session(monkeypatch, sites={"SHOP-1": (SITE_IN,)})[0])
+    return assistant_app(
+        tmp_path,
+        monkeypatch,
+        caller,
+        connection if connection is not None else Connection(),
+        published_entries=published_entries,
     )
-    return TestClient(app), selected_runtime
-
-
-class _OperatorCaller:
-    """把每个请求都解析成 #426 的运营商会话身份（organ + 该运营商的站点集合）。"""
-
-    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        self.context, self.scope = _operator_session(monkeypatch, sites={"SHOP-1": (SITE_IN,)})
-
-    def resolve(self, token: str, *, required_scope: str, third_session: str | None = None) -> Any:
-        del token, third_session, required_scope
-        return self.context
 
 
 def _wait_terminal(client: TestClient, qa_id: str, *, deadline_s: float = 20.0) -> dict[str, Any]:
@@ -204,6 +92,31 @@ def _wait_terminal(client: TestClient, qa_id: str, *, deadline_s: float = 20.0) 
 
 
 # --- 1. 管家端入口的动作集 ------------------------------------------------
+
+
+def test_the_two_entries_share_one_definition_of_the_execution_fields() -> None:
+    """两个入口的动作行在执行字段上逐字节相同（#427 复用同一 code 与执行路径）。
+
+    这些字段来自 `shortcut_lifecycle._SHARED_ACTION_FIELDS` 这一个常量，两侧各写
+    一份会各自漂移，而漂移是 invisible 的——只有按钮文案不同。这一条就是那个
+    共享常量的回归：一旦某侧开始自带一份，这里转红。
+    """
+    consumer = dict(_BUNDLED_SHORTCUTS)["consumer"]
+    operator = dict(_BUNDLED_SHORTCUTS)["operator"]
+    shared = ("intent", "requires_order", "sort_order", "question_templates")
+
+    for code in ("case_exploration", "smart_diagnosis"):
+        for field in shared:
+            assert consumer[code][field] == operator[code][field], f"{code}.{field}"
+        # 展示字段各自定义（不共享）：两个入口的按钮叫法不同。
+        assert (
+            set(consumer[code]["labels"])
+            == set(operator[code]["labels"])
+            == set(consumer[code]["descriptions"])
+        )
+    # 「订单检测」与「智能检测」是同一个 code 在不同入口的两种叫法。
+    assert consumer["smart_diagnosis"]["labels"]["zh"] == "智能检测"
+    assert operator["smart_diagnosis"]["labels"]["zh"] == "订单检测"
 
 
 def test_operator_entry_holds_the_two_actions_and_nothing_else() -> None:
@@ -307,7 +220,7 @@ def test_clicked_order_diagnosis_with_a_visible_order_starts_the_diagnosis(
     站点在集合内：这正是管家端替同事和站点处理问题要看的那一单，也是「仅本人」范围
     下看不到的那一单。
     """
-    connection = _Connection()
+    connection = Connection()
     client, runtime = _app(tmp_path, monkeypatch, connection=connection)
 
     response = client.post(
@@ -375,21 +288,21 @@ def test_clicked_customer_cases_report_the_missing_library_not_an_empty_one(
     from aiops_diagnostics.config import Settings
     from aiops_diagnostics.gateway_runtime import GatewayRuntime
 
-    settings = _settings(tmp_path)
+    settings = gateway_settings(tmp_path)
     diagnostic_settings = Settings()
     diagnostic_settings.agent.run_root = str(tmp_path / "runs")
     store = GatewayStore(settings.database_file)
     shortcuts = ShortcutManager(ShortcutStore(settings.database_file))
-    _publish(shortcuts, ("operator",))
+    publish(shortcuts, ("operator",))
     runtime = GatewayRuntime(store, settings, diagnostic_settings)
     try:
         app = create_gateway_app(
             settings=settings,
             store=store,
             runtime=runtime,
-            caller_resolver=_OperatorCaller(monkeypatch),
-            order_authorizer=_authorizer(monkeypatch, _Connection()),
-            platform_resolver=PlatformIdentityResolver(_Directory()),
+            caller_resolver=Caller(operator_session(monkeypatch, sites={"SHOP-1": (SITE_IN,)})[0]),
+            order_authorizer=build_authorizer(monkeypatch, Connection()),
+            platform_resolver=PlatformIdentityResolver(Directory()),
             faq_catalog=FAQCatalog.bundled(),
             shortcut_manager=shortcuts,
         )

@@ -284,9 +284,7 @@ def resolve_query_scope(
     if data_scope.type != SCOPE_TYPE_ALL:
         sites = set(data_scope.site_ids)
         if data_scope.shop_ids and mapper is not None:
-            shops = mapper.site_ids_by_shops(tuple(data_scope.shop_ids), tenant_id)
-            _require_bounded(len(shops), "店铺归属")
-            sites.update(shops)
+            sites.update(_sites_from_shops(mapper, data_scope.shop_ids, tenant_id))
 
     if context.delegated and context.subject.c_user_id:
         if dis is None or mapper is None:
@@ -346,7 +344,7 @@ def resolve_operator_site_scope(
         # 代理商账号本身未绑定任何店铺：空集合并记录供运营补登记，不回落为租户级放行。
         _log_operator_scope(OPERATOR_SCOPE_NO_SHOP_BINDING, shop_count=0)
         return QueryScope(tenant_id=tenant_id, site_ids=(), user_id=None)
-    site_ids = tuple(sorted(mapper.site_ids_by_shops(shop_ids, tenant_id)))
+    site_ids = _sites_from_shops(mapper, shop_ids, tenant_id)
     _require_bounded(len(site_ids), "运营商站点")
     if not site_ids:
         # 已登记店铺在充电库里没有对应站点：与前一种空集合成因不同，同样失败关闭。
@@ -361,6 +359,17 @@ def _log_operator_scope(reason: str, *, shop_count: int) -> None:
         reason,
         shop_count,
     )
+
+
+def _sites_from_shops(mapper: SiteScopeMapper, shop_ids: tuple[str, ...], tenant_id: str) -> tuple[str, ...]:
+    """店铺集合 → 有界、去重、排序的站点集合（店铺 id ≠ 站点 id，必须经归属映射）。
+
+    ``resolve_query_scope`` 的 organ 分支与 ``resolve_operator_site_scope`` 共用：
+    一条规则（翻译 + 定序 + 上限）只写一次，改上限或排序时不需要找两处。
+    """
+    site_ids = tuple(sorted(mapper.site_ids_by_shops(tuple(shop_ids), tenant_id)))
+    _require_bounded(len(site_ids), "店铺归属")
+    return site_ids
 
 
 def _require_bounded(count: int, label: str) -> None:

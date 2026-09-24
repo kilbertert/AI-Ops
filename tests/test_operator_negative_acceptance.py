@@ -21,100 +21,45 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-# 与 #426 共用同一套替身（假 MySQL 行级镜像、真实授权判定、运营商会话身份），
-# 与 #427 共用入口栈（发布动作、平台身份、记录作业的运行时）。两份拷贝会
-# 各自漂移，因此都不重写，直接复用。
-from test_operator_entry_actions import (
-    _CONSUMER_HEADERS,
-    _OPERATOR_HEADERS,
-    _Directory,
-    _publish,
-    _settings,
-    _StubRuntime,
-)
-from test_operator_order_authorization import (
+# 与 #426 共用同一套替身（行级镜像的假 MySQL、真实授权判定、运营商会话身份、发布
+# 后的入口应用）、与 #427 共用点击问句：替身各写一份会各自漂移，因此都不重写。
+from operator_support import (
+    AGENT_VERSION_KEY,
     B_USER_ID,
     C_USER_ID,
+    DIAGNOSIS_QUESTION,
+    FOLLOWUP_AFTER_LOSS,
+    FOLLOWUP_QUESTION,
     ORDER_INSIDE,
     ORDER_MISSING,
     ORDER_OUTSIDE,
     SITE_IN,
     SITE_OUT,
     TENANT,
-    _authorizer,
-    _Connection,
-    _operator_session,
-    _session,
+    Caller,
+    Connection,
+    FakeShops,
+    OperatorScope,
+    assistant_app,
+    b_subject,
+    mysql_settings,
+    operator_caller,
+    operator_session,
+    resolve_session,
+)
+from operator_support import (
+    CONSUMER_HEADERS as _CONSUMER_HEADERS,
+)
+from operator_support import (
+    OPERATOR_HEADERS as _OPERATOR_HEADERS,
 )
 
 from aiops_diagnostics.caller_auth import ScopedOrderAuthorizer
 from aiops_diagnostics.config import Settings
-from aiops_diagnostics.faq import FAQCatalog, PlatformIdentityResolver
-from aiops_diagnostics.gateway_api import create_gateway_app
-from aiops_diagnostics.gateway_store import GatewayStore
 from aiops_diagnostics.i18n import SUPPORTED_LANGUAGES
 from aiops_diagnostics.query_scope import resolve_operator_site_scope
-from aiops_diagnostics.shortcut_lifecycle import ShortcutManager, ShortcutStore
+from aiops_diagnostics.scope_context import SCOPE_TYPE_ORGAN
 from aiops_diagnostics.sources import MySQLSource
-
-#: 「订单检测」的点击问句：不带订单号，由动作的 requires_order 决定去向。
-DIAGNOSIS_QUESTION = "帮我检测这个订单的充电异常"
-#: 追问问句：只含订单业务线索，因此走活跃订单分支而不是普通问答。
-FOLLOWUP_QUESTION = "我刚才那笔充电订单为什么突然停了"
-FOLLOWUP_AFTER_LOSS = "那笔订单现在怎么还不退款"
-AGENT_VERSION_KEY = "agt_abcdef1234567890#v1"
-
-
-class _Caller:
-    """把每个请求都解析成给定的会话身份；身份可在轮与轮之间替换。
-
-    换身份就是「权限变了」的真实形状：下一次请求重新解析会话，得到一个新的
-    站点集合（或一个新的范围指纹），而不是沿用上一轮的上下文。
-    """
-
-    def __init__(self, context: Any) -> None:
-        self.context = context
-
-    def resolve(self, token: str, *, required_scope: str, third_session: str | None = None) -> Any:
-        del token, third_session, required_scope
-        return self.context
-
-
-def _app(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    caller: _Caller,
-    connection: _Connection,
-    *,
-    published_entries: tuple[str, ...] = ("operator",),
-) -> tuple[TestClient, _StubRuntime]:
-    """助手入口应用：真实授权判定 + 真实范围下推 + 已发布的入口动作。"""
-    settings = _settings(tmp_path)
-    store = GatewayStore(settings.database_file)
-    shortcuts = ShortcutManager(ShortcutStore(settings.database_file))
-    _publish(shortcuts, published_entries)
-    runtime = _StubRuntime()
-    app = create_gateway_app(
-        settings=settings,
-        store=store,
-        runtime=runtime,  # type: ignore[arg-type]
-        caller_resolver=caller,
-        order_authorizer=_authorizer(monkeypatch, connection),
-        platform_resolver=PlatformIdentityResolver(_Directory()),
-        faq_catalog=FAQCatalog.bundled(),
-        shortcut_manager=shortcuts,
-    )
-    return TestClient(app), runtime
-
-
-def _operator_caller(
-    monkeypatch: pytest.MonkeyPatch,
-    *,
-    sites: dict[str, tuple[str, ...]],
-    shop_ids: tuple[str, ...] = ("SHOP-1",),
-) -> _Caller:
-    """#426 的运营商会话身份：店铺集合 → 站点集合（经 #425 的真实解析函数）。"""
-    return _Caller(_operator_session(monkeypatch, shop_ids=shop_ids, sites=sites)[0])
 
 
 def _click_order_diagnosis(
@@ -140,11 +85,11 @@ def test_clicked_order_diagnosis_of_another_operators_order_is_refused(
     用来试探订单是否存在。走的是前端真实路径（`shortcut_code`），不是裸
     `order_no` 字段。
     """
-    client, runtime = _app(
+    client, runtime = assistant_app(
         tmp_path,
         monkeypatch,
-        _operator_caller(monkeypatch, sites={"SHOP-1": (SITE_IN,)}),
-        _Connection(),
+        operator_caller(monkeypatch, sites={"SHOP-1": (SITE_IN,)}),
+        Connection(),
     )
 
     refused = _click_order_diagnosis(client, ORDER_OUTSIDE)
@@ -165,11 +110,11 @@ def test_a_site_outside_the_scope_is_refused_even_when_the_order_is_the_callers_
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """只挂在本人名下、站点在集合外的订单同样被拒——替换 self，不是与 self 取并集。"""
-    client, runtime = _app(
+    client, runtime = assistant_app(
         tmp_path,
         monkeypatch,
-        _operator_caller(monkeypatch, sites={"SHOP-1": (SITE_IN,)}),
-        _Connection(),
+        operator_caller(monkeypatch, sites={"SHOP-1": (SITE_IN,)}),
+        Connection(),
     )
 
     assert _click_order_diagnosis(client, ORDER_OUTSIDE).status_code == 404
@@ -180,10 +125,10 @@ def test_an_operator_account_without_shop_binding_is_refused_at_the_entry(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """未绑定店铺 → 空集合 → 拒绝，不回落为租户级放行，且不发起订单查询。"""
-    connection = _Connection()
+    connection = Connection()
     with caplog.at_level(logging.INFO, logger="aiops_diagnostics.query_scope"):
-        caller = _operator_caller(monkeypatch, sites={}, shop_ids=())
-    client, runtime = _app(tmp_path, monkeypatch, caller, connection)
+        caller = operator_caller(monkeypatch, sites={}, shop_ids=())
+    client, runtime = assistant_app(tmp_path, monkeypatch, caller, connection)
 
     refused = _click_order_diagnosis(client, ORDER_INSIDE)
 
@@ -208,8 +153,8 @@ def test_the_order_picker_prompt_is_localized_on_the_operator_entry(
     语言拿到同一串），而不是只断言非空。
     """
     messages = {}
-    client, runtime = _app(
-        tmp_path, monkeypatch, _operator_caller(monkeypatch, sites={"SHOP-1": (SITE_IN,)}), _Connection()
+    client, runtime = assistant_app(
+        tmp_path, monkeypatch, operator_caller(monkeypatch, sites={"SHOP-1": (SITE_IN,)}), Connection()
     )
     for tag in SUPPORTED_LANGUAGES:
         resp = client.post(
@@ -241,9 +186,9 @@ def test_active_order_follow_up_drops_an_order_that_left_the_scope(
     范围指纹不变）→ 同一个追问静默回落为普通问答并清掉失效绑定，而不是
     拿着上一轮的确认继续诊断一个已经看不到的订单。
     """
-    connection = _Connection()
-    client, runtime = _app(
-        tmp_path, monkeypatch, _operator_caller(monkeypatch, sites={"SHOP-1": (SITE_IN,)}), connection
+    connection = Connection()
+    client, runtime = assistant_app(
+        tmp_path, monkeypatch, operator_caller(monkeypatch, sites={"SHOP-1": (SITE_IN,)}), connection
     )
 
     conversation = client.post(
@@ -294,8 +239,8 @@ def test_a_changed_operator_scope_makes_the_conversation_invisible(
     用户故事 19 + 12：权限变化后旧会话不能再被用来追问；同一个 conversation_id
     在任何一个站点集合下都得到 404，不告诉调用者它存在过。
     """
-    caller = _operator_caller(monkeypatch, sites={"SHOP-1": (SITE_IN,)})
-    client, _ = _app(tmp_path, monkeypatch, caller, _Connection())
+    caller = operator_caller(monkeypatch, sites={"SHOP-1": (SITE_IN,)})
+    client, _ = assistant_app(tmp_path, monkeypatch, caller, Connection())
 
     conversation = client.post(
         "/v1/conversations", json={"agent_version_key": AGENT_VERSION_KEY}, headers=_OPERATOR_HEADERS
@@ -303,7 +248,7 @@ def test_a_changed_operator_scope_makes_the_conversation_invisible(
     cid = conversation.json()["conversation_id"]
 
     # 下一次会话解析给出更大的站点集合（指纹随之改变）。
-    caller.context = _operator_session(monkeypatch, sites={"SHOP-1": (SITE_IN, SITE_OUT)})[0]
+    caller.context = operator_session(monkeypatch, sites={"SHOP-1": (SITE_IN, SITE_OUT)})[0]
 
     for headers in (_OPERATOR_HEADERS, _CONSUMER_HEADERS):
         resp = client.get(f"/v1/conversations/{cid}", headers=headers)
@@ -314,7 +259,7 @@ def test_a_changed_operator_scope_makes_the_conversation_invisible(
 # --- 4. 数据完整性四类情形：站点上的 partner_b_id 不能放宽可见性 --------------
 
 
-class _PartnerAwareConnection(_Connection):
+class _PartnerAwareConnection(Connection):
     """站点替身：按参数取值匹配 ``shop_id`` **或** ``partner_b_id``。
 
     按参数驱动而不是按列驱动，是为了让「改成按 partner_b_id 取站点」这种
@@ -335,16 +280,6 @@ class _PartnerAwareConnection(_Connection):
         ]
 
 
-class _FakeShops:
-    def __init__(self, shop_ids: tuple[str, ...]) -> None:
-        self.shop_ids = shop_ids
-        self.calls: list[str] = []
-
-    def shop_ids_by_b_user_id(self, b_user_id: str) -> tuple[str, ...]:
-        self.calls.append(b_user_id)
-        return self.shop_ids
-
-
 class _ChargingBookOperatorScope:
     """会话身份的运营商站点范围：店铺集合走内存替身，站点映射走真实 ``MySQLSource``。
 
@@ -352,20 +287,12 @@ class _ChargingBookOperatorScope:
     #425 解析函数在真实映射来源上的回归。
     """
 
-    def __init__(self, settings: Settings, connection: _Connection, shop_ids: tuple[str, ...]) -> None:
+    def __init__(self, settings: Settings, shop_ids: tuple[str, ...]) -> None:
         self.source = MySQLSource(settings, scope=None)
-        self.shops = _FakeShops(shop_ids)
+        self.shops = FakeShops(shop_ids)
 
     def site_scope_by_b_user_id(self, b_user_id: str, tenant_id: str):
         return resolve_operator_site_scope(b_user_id, tenant_id, shops=self.shops, mapper=self.source)
-
-
-def _mysql_settings() -> Settings:
-    settings = Settings.from_env()
-    settings.mysql.user = "readonly"
-    settings.mysql.password = "secret"
-    settings.ssh.enabled = False
-    return settings
 
 
 # PRD 数据完整性表的前三类，各给一个站点：租户自有（无 partner_b_id）、
@@ -412,12 +339,12 @@ def test_a_sites_partner_b_id_never_widens_the_operators_visibility(
     跨库只读查询，不在授权判定链路里，本片如实记为未交付；判定侧能证明的是
     **悬空引用不会让任何人多看到一个站点**。
     """
-    settings = _mysql_settings()
+    settings = mysql_settings()
     connection = _PartnerAwareConnection(orders=ORDERS_AT_THOSE_SITES, sites=SITES)
     monkeypatch.setattr("aiops_diagnostics.sources.pymysql.connect", lambda **_: connection)
-    scope = _ChargingBookOperatorScope(settings, connection, ("SHOP-1",))
+    scope = _ChargingBookOperatorScope(settings, ("SHOP-1",))
 
-    context = _session(monkeypatch, operator_scope=scope)
+    context = resolve_session(monkeypatch, operator_scope=scope)
 
     assert context.data_scope.site_ids == ("SITE-TENANT-OWNED",)
     authorizer = ScopedOrderAuthorizer(settings)
@@ -432,11 +359,11 @@ def test_a_sites_partner_b_id_never_widens_the_operators_visibility(
 
 def test_the_consumer_entry_keeps_its_own_actions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """消费者入口仍只有它自己的三个动作，管家端动作不出现在那里。"""
-    client, _ = _app(
+    client, _ = assistant_app(
         tmp_path,
         monkeypatch,
-        _operator_caller(monkeypatch, sites={"SHOP-1": (SITE_IN,)}),
-        _Connection(),
+        operator_caller(monkeypatch, sites={"SHOP-1": (SITE_IN,)}),
+        Connection(),
         published_entries=("consumer", "operator"),
     )
 
@@ -459,9 +386,9 @@ def test_the_consumer_entry_keeps_its_own_order_visibility(
     B 端账号」的会话同样生效。这一条是它的反向守护——运营商维度**没有**把消费者
     入口放宽到「同租户任意订单」，本人的订单照样能查、别人的照样被拒。
     """
-    connection = _Connection()
-    consumer = _Caller(_session(monkeypatch, records=()))  # 无 B 端账号：消费者端正常状态
-    client, _ = _app(
+    connection = Connection()
+    consumer = Caller(resolve_session(monkeypatch, records=()))  # 无 B 端账号：消费者端正常状态
+    client, _ = assistant_app(
         tmp_path, monkeypatch, consumer, connection, published_entries=("consumer", "operator")
     )
     own_orders = [row for row in connection.orders if row["user_id"] == C_USER_ID]
@@ -484,3 +411,39 @@ def test_the_consumer_entry_keeps_its_own_order_visibility(
 
     assert foreign.status_code == 404
     assert foreign.json()["error"]["code"] == "ORDER_NOT_FOUND"
+
+
+def test_a_consumer_entry_session_with_a_b_account_sees_only_that_operators_sites(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """消费者入口 + 会话恰好有 B 端账号：可见范围正好是该运营商的站点集合。
+
+    #426 记录的边界（入口维度不进身份）的**正向**形状：运营商维度对这些会话同样
+    生效。这条把它钉住——既不是「同租户任意订单」（放宽），也不是「仅本人」
+    （收窄），集合外连本人的订单都不放过，集合内连别人的订单都看得见。
+    """
+    connection = Connection()
+    session = resolve_session(
+        monkeypatch,
+        records=(b_subject(),),
+        operator_scope=OperatorScope(sites={"SHOP-1": (SITE_IN,)}),
+    )
+    assert session.data_scope.type == SCOPE_TYPE_ORGAN  # 前置：确实拿到了运营商维度
+    client, runtime = assistant_app(
+        tmp_path, monkeypatch, Caller(session), connection, published_entries=("consumer", "operator")
+    )
+
+    inside = client.post(
+        "/v1/assistant/questions",
+        json={"question": DIAGNOSIS_QUESTION, "order_no": ORDER_INSIDE},
+        headers=_CONSUMER_HEADERS,
+    )
+    outside = client.post(
+        "/v1/assistant/questions",
+        json={"question": DIAGNOSIS_QUESTION, "order_no": ORDER_OUTSIDE},
+        headers=_CONSUMER_HEADERS,
+    )
+
+    assert inside.status_code == 202, inside.text
+    assert outside.status_code == 404, outside.text
+    assert runtime.diagnoses == [(ORDER_INSIDE, DIAGNOSIS_QUESTION)]

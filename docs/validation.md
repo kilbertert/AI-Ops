@@ -3791,8 +3791,8 @@ MySQL 通路），实测数字引自 2026-09-24 的既有记录并如实标注�
   （无唯一管家端 B 端主体），本片无真实身份可跑。
 - **订单授权判定**：本片只产出范围值；「显式指名 → 明确拒绝 / 不区分不存在与无权」
   与「内嵌订单号 → 静默回落」在 #426 与 #428。
-- **ADR-0003**：沿用 PRD #423 的既定记录，委托句柄仍未实现、当前依赖共享会话直读；
-  本片延续该偏离，未在任何注释里把「直接读会话」写成已批准的设计。
+- **ADR-0003**：偏离沿用（委托句柄仍未实现、依赖共享 Redis 会话直读），全篇只
+  记一次——见「#425 运营商站点范围解析」节的「### 与 ADR-0003 的关系」。
 
 ---
 
@@ -3874,8 +3874,8 @@ MySQL 通路），实测数字引自 2026-09-24 的既有记录并如实标注�
 - **入口维度未进身份**：`X-Business-Entry` 在 FastAPI 依赖里晚于身份解析，因此
   运营商维度对「消费者入口中恰好也有 B 端账号」的会话同样生效（有负向用例约束其
   上界）。把入口传进身份解析属另一处改动。
-- **ADR-0003**：沿用 PRD #423 的既定记录，委托句柄仍未实现、当前依赖共享会话直读；
-  本片延续该偏离，未在任何注释里把「直接读会话」写成已批准的设计。
+- **ADR-0003**：偏离沿用（委托句柄仍未实现、依赖共享 Redis 会话直读），全篇只
+  记一次——见「#425 运营商站点范围解析」节的「### 与 ADR-0003 的关系」。
 - **验收产物**：`acceptance.feature` 与 `qa-plan.md` 属子票 #428。
 
 ---
@@ -3930,12 +3930,52 @@ MySQL 通路），实测数字引自 2026-09-24 的既有记录并如实标注�
   交付的边界，不能当作「案例内容已验收」。
 - **入口维度仍未进身份**（#426 记录的边界，本片未触碰）：运营商维度对「消费者入口中
   恰好也有 B 端账号」的会话同样生效，入口只在内容域解析时使用。
-- **ADR-0003**：沿用 PRD #423 的既定记录，委托句柄仍未实现、当前依赖共享会话直读；
-  PRD 要求的那条偏离说明（含对齐路径）仍写在案的待办，本片延续该偏离，未在任何注释里
-  把「直接读会话」写成已批准的设计。
+- **ADR-0003**：偏离沿用（委托句柄仍未实现、依赖共享 Redis 会话直读），全篇只
+  记一次——见「#425 运营商站点范围解析」节的「### 与 ADR-0003 的关系」。
 - **验收产物**：`acceptance.feature` 与 `qa-plan.md` 属子票 #428。
 
 ---
+
+## PR #431 审查修复：身份核对、范围上限与替身收敛（2026-09-24）
+
+**结论**：两轮独立审查在 PRD #423 实现上的确认项已修完并各有回归用例守护；
+`uv run pytest` **1403 passed / 2 skipped**（基线 1392，新增 11 项）、
+`uv run ruff format --check .`、`uv run ruff check`、
+`node .sandcastle/policy-check.mjs commit` 全部通过。
+**没有新增业务验收**——本片修的是已落地行为的确认缺陷，41 上仍未具备正向业务条件。
+
+### 修了什么（按审查发现）
+
+| 发现 | 修法 | 回归用例 |
+|---|---|---|
+| C→B 映射采用前不核对记录自带的 `userId`（同租户但绑在别的 C 端用户名下会被盖写后采用 → 拿到对方的运营商站点集合，fail **open**） | `_resolve_subject` 改为核对而非 `replace` 盖写；核对不过记 `C_MAPPING_C_USER_MISMATCH`（含回带没有 `userId` 的情形），失败关闭为 `self` | `test_unresolvable_c_to_b_mapping_fails_closed_with_a_distinguishable_reason`（新增两个参数化形状）、`test_a_record_bound_to_another_c_user_is_not_adopted` |
+| 歧义判定（`len(records) > 1`）排在租户筛选之前 → 「本租户唯一主体 + 一条跨租户记录」被判 `ambiguous_subject`，管家端拿不到可用 B 端身份 | 先按会话租户筛选，再对筛选结果做 0/1/many 判定；不匹配的记录仍留可区分原因 | `test_a_cross_tenant_record_does_not_make_the_same_tenant_subject_ambiguous`、`test_two_same_tenant_records_are_still_ambiguous` |
+| 运营商站点集合的数量上限按构造不可能触发：`SITE_SCOPE_MAX_ROWS` 与 `MAX_SCOPE_IDS` 都是 1000，`LIMIT 1000` 的返回值无法区分完整与截断 → 1001 个站点时静默少算 | `_site_ids_by_column` 多取一行，取到第 N+1 行即抛 `ScopeError(scope.too_large)`；`/user/ds` 派生路径同受其益 | `test_site_count_over_the_mapper_limit_fails_closed`（真实 `MySQLSource`）、`test_site_ids_by_shops_fails_closed_when_the_site_set_is_truncated`、`test_site_ids_by_shops_accepts_a_set_at_exactly_the_limit` |
+| `mysql_site_mapper` 向 `permitopen` 收紧过的主机多要 TDengine/Redis 转发，`ExitOnForwardFailure=yes` 会因此杀掉 ssh → 整个管家端授权链因无关拒绝而失败关闭 | `_ssh_tunnel` 参数改为显式转发名集合；映射只请求 `("mysql",)` | `test_upms_operator_site_scope_asks_the_tunnel_for_the_one_forward_it_uses` |
+| 「消费者入口 + 恰好有 B 端账号」的形状无用例（`qa-plan.md` 与 #428 声称被负向用例约束上界） | 不改变行为，把该边界钉成用例：可见范围正好是该运营商的站点集合，既不是同租户任意订单、也不是仅本人 | `test_a_consumer_entry_session_with_a_b_account_sees_only_that_operators_sites` |
+
+### 重复收敛（同类项合并，行为不变）
+
+- 新增 `tests/operator_support.py`：四个测试片共用的替身只写一份（原先
+  `_FakeResponse` / `_FakeTransport` 各三份、`_StubRuntime` 与 `_AssistantRuntime` 两份、
+  7 参 `create_gateway_app(...)` 三处、`_FakeShops` 三份且其中一份缺 `error=`）。
+- `resolve_query_scope` 的 organ 分支与 `resolve_operator_site_scope` 的
+  「店铺 → 有界有序站点集合」合并为一个 helper，上限/排序规则只写一次。
+- `shortcut_lifecycle.py`：两个入口逐字节相同的字段收成共享常量（顺带修正
+  operator 侧 `smart_diagnosis` 的 es/pt 提问文案）。
+- `gateway_api.py`：两个目录工厂共用一个配置前提 helper。
+
+### 未修（说明原因，供人工分诊）
+
+1. **不给运营商范围加管家端角色门 / 入口门**：词汇表对「管家主体」的定义带角色维度，
+   会话身份当前拿不到角色；边界已在 `qa-plan.md` 与 #426 条目披露，加门是独立的鉴权
+   路径改动（未立票）。已在 `_data_scope` 的 `ponytail:` 注释写明上限与触发条件。
+2. **不加主体级缓存**：每个管家端请求开一条跳板隧道（与查询路径同款）。TTL 缓存会引入
+   授权范围 staleness，记在同一个 `ponytail:` 注释里，等实测确认是热点再动。
+3. **测试替身收敛不改变任何断言口径**：`test_operator_site_scope.py` 与
+   `test_mysql_scope.py` 原先断言的 SQL 文本改为断言产出的站点集合（该文件自己的
+   纪律本来就写「不断言 SQL 文本」）；`LIMIT 1000` → `LIMIT 1001` 是上限防线前移的
+   必然结果。
 
 ## PRD #423 子票 #428：管家端负向与回归验收（含双轨验收记录，2026-09-24）
 
@@ -4036,6 +4076,5 @@ OP-ACCEPT-POS-01..04 与本文末节，不用消费者会话或人造夹具冒�
 - **`AIOPS_UPMS_INSIDE_TOKEN` 未配置**：部署接缝（配置齐备时注入了
   `UpmsOperatorSiteScope`，缺失时为 `None` → 管家端 fail closed）由既有用例固定，
   本轮未在 41 上配置。
-- **ADR-0003 偏离沿用**：委托句柄仍未实现，当前依赖共享 Redis 会话直读；PRD 要求的
-  那条偏离说明（含对齐路径）仍是在案待办，本片延续该偏离，未在任何注释里把
-  「直接读会话」写成已批准的设计。
+- **ADR-0003**：偏离沿用（委托句柄仍未实现、依赖共享 Redis 会话直读），全篇只
+  记一次——见「#425 运营商站点范围解析」节的「### 与 ADR-0003 的关系」。

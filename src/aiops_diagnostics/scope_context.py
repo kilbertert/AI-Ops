@@ -56,6 +56,7 @@ C_MAPPING_FAILED = "mapping_failed"
 C_MAPPING_NOT_FOUND = "subject_not_found"
 C_MAPPING_AMBIGUOUS = "ambiguous_subject"
 C_MAPPING_TENANT_MISMATCH = "tenant_mismatch"
+C_MAPPING_C_USER_MISMATCH = "c_user_mismatch"
 
 SCOPE_TYPE_ALL = "all"
 SCOPE_TYPE_ORGAN = "organ"

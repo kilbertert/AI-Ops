@@ -37,7 +37,12 @@ from aiops_diagnostics.order_visibility import (
     scope_where_sql,
     visible_orders,
 )
-from aiops_diagnostics.query_scope import QueryScope, SiteScopeMapper
+from aiops_diagnostics.query_scope import (
+    SCOPE_ERROR_SCOPE_TOO_LARGE,
+    QueryScope,
+    SiteScopeMapper,
+)
+from aiops_diagnostics.scope_context import ScopeError
 
 SAFE_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 SAFE_VALUE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
@@ -447,16 +452,22 @@ class MySQLSource:
     def _site_ids_by_column(self, column: str, values: tuple[str, ...], tenant_id: str) -> tuple[str, ...]:
         if not all(SAFE_VALUE.fullmatch(value) for value in values):
             raise ValueError("范围 ID 包含不允许的字符")
+        # 多取一行：LIMIT 恰好等于上限时无法区分「正好这么多」与「被截断」，而上游
+        # 把截断当完整集合用（MAX_SCOPE_IDS 与 SITE_SCOPE_MAX_ROWS 恰好相等）会
+        # 静默漏掉超出的站点。因此以「是否取到第 MAX+1 行」判定超界并 fail closed。
         sql = (
             f"SELECT id FROM `{self.database}`.`ch_site` "
             f"WHERE tenant_id=%s AND {column} IN ({_placeholders(len(values))}) "
-            f"ORDER BY id LIMIT {SITE_SCOPE_MAX_ROWS}"
+            f"ORDER BY id LIMIT {SITE_SCOPE_MAX_ROWS + 1}"
         )
         params: list[Any] = [tenant_id, *values]
         with self._cursor() as cursor:
             cursor.execute(sql, params)
             rows = cursor.fetchall()
-        return tuple(str(row["id"]) for row in rows if row.get("id") is not None)
+        ids = tuple(str(row["id"]) for row in rows if row.get("id") is not None)
+        if len(ids) > SITE_SCOPE_MAX_ROWS:
+            raise ScopeError(f"站点归属数量超过上限 {SITE_SCOPE_MAX_ROWS}", code=SCOPE_ERROR_SCOPE_TOO_LARGE)
+        return ids
 
     def doctor(self) -> dict[str, Any]:
         with self._cursor() as cursor:
@@ -1298,7 +1309,7 @@ def live_sources(
 
     ``allowed_devices`` 非空时，TDengine 查询只允许该设备集合内的设备。
     """
-    with _ssh_tunnel(settings, include_direct_backends=False) as effective:
+    with _ssh_tunnel(settings, forwards=("tdengine",)) as effective:
         yield HybridSources(effective, allowed_devices=allowed_devices)
 
 
@@ -1315,7 +1326,7 @@ def scoped_live_sources(
     消息。SSH 隧道按直连回退路径建立三条转发（与 ``direct_sources`` 一致）。
     """
     device_gate = DeviceGate()
-    with _ssh_tunnel(settings, include_direct_backends=True) as effective:
+    with _ssh_tunnel(settings) as effective:
         yield ScopedSources(
             effective,
             mysql=MySQLSource(effective, scope=scope),
@@ -1332,16 +1343,18 @@ def scoped_live_sources(
 def mysql_site_mapper(settings: Settings) -> Iterator[SiteScopeMapper]:
     """Return the charging-library site-ownership mapper for one operation.
 
-    站点归属映射（``ch_site.shop_id → ch_site.id``、``dis_point_id → id``）既要
-    在授权范围解析里用（运营商站点集合，#426），也要在业务数据范围解析里用
-    （``resolve_query_scope``）。两者都必须在同一条跳板隧道内构造
-    ``MySQLSource``：在隧道外构造会绕开 ``_ssh_tunnel`` 的端口转发，直连一个
-    SSH 部署下不可达的数据库地址。
+    站点归属映射（``ch_site.shop_id → ch_site.id``）在授权范围解析里用（运营商站点
+    集合，#426）。它必须与受限直连在同一条跳板隧道内构造 ``MySQLSource``：在隧道外
+    构造会绕开 ``_ssh_tunnel`` 的端口转发，直连一个 SSH 部署下不可达的数据库地址。
+
+    只请求 ``mysql`` 一条转发：这里只需要 MySQL。按 ``permitopen`` 收紧后的 SSH
+    策略多要 TDengine/Redis 转发，会让 ``ExitOnForwardFailure=yes`` 直接杀掉 ssh
+    进程——于是整个管家端授权链因为一个与它无关的拒绝而 fail closed。
 
     ``MySQLSource`` 不带 ``scope``：归属映射自己带租户条件，与单次运行冻结的
     查询范围无关。
     """
-    with _ssh_tunnel(settings, include_direct_backends=True) as effective:
+    with _ssh_tunnel(settings, forwards=("mysql",)) as effective:
         yield MySQLSource(effective)
 
 
@@ -1349,14 +1362,17 @@ def mysql_site_mapper(settings: Settings) -> Iterator[SiteScopeMapper]:
 def _ssh_tunnel(
     settings: Settings,
     *,
-    include_direct_backends: bool = True,
+    forwards: tuple[str, ...] = ("mysql", "tdengine", "redis"),
 ) -> Iterator[Settings]:
     """Open only the SSH forwards required by the selected source set.
 
     The Phase 3a production path uses ``HybridSources`` and only needs the
     TDengine forward, so it must not request MySQL / Redis forwards that the
     tightened SSH ``permitopen`` policy no longer allows. The explicit
-    rollback path keeps all three direct backends available.
+    rollback path keeps all three direct backends available. An authorization
+    helper asks for the one forward it really uses — with
+    ``ExitOnForwardFailure=yes`` a forward the policy rejects kills the ssh
+    process and takes the whole operation down with it.
     """
     if not settings.ssh.enabled:
         yield settings
@@ -1364,16 +1380,14 @@ def _ssh_tunnel(
 
     settings.ssh.validate()
     ssh = settings.ssh
-    if include_direct_backends:
-        forwards = [
-            ("mysql", ssh.mysql_host, ssh.mysql_port),
-            ("tdengine", ssh.tdengine_host, ssh.tdengine_port),
-            ("redis", ssh.redis_host, ssh.redis_port),
-        ]
-    else:
-        forwards = [("tdengine", ssh.tdengine_host, ssh.tdengine_port)]
+    remote_by_name = {
+        "mysql": (ssh.mysql_host, ssh.mysql_port),
+        "tdengine": (ssh.tdengine_host, ssh.tdengine_port),
+        "redis": (ssh.redis_host, ssh.redis_port),
+    }
+    selected = [(name, *remote_by_name[name]) for name in forwards]
 
-    local_ports = [_available_port() for _ in forwards]
+    local_ports = [_available_port() for _ in selected]
     command = [
         ssh.ssh_bin,
         "-N",
@@ -1388,7 +1402,7 @@ def _ssh_tunnel(
         "-i",
         str(Path(ssh.key_file).expanduser()),
     ]
-    for (_name, remote_host, remote_port), local_port in zip(forwards, local_ports, strict=True):
+    for (_name, remote_host, remote_port), local_port in zip(selected, local_ports, strict=True):
         command.extend(["-L", f"127.0.0.1:{local_port}:{remote_host}:{remote_port}"])
     command.append(f"{ssh.user}@{ssh.host}")
 
@@ -1397,7 +1411,7 @@ def _ssh_tunnel(
         for port in local_ports:
             _wait_for_port(port, process, settings.safety.query_timeout_seconds)
         effective = copy.deepcopy(settings)
-        for (name, _remote_host, _remote_port), local_port in zip(forwards, local_ports, strict=True):
+        for (name, _remote_host, _remote_port), local_port in zip(selected, local_ports, strict=True):
             if name == "mysql":
                 effective.mysql = replace(effective.mysql, host="127.0.0.1", port=local_port)
             elif name == "tdengine":
