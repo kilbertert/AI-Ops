@@ -43,7 +43,9 @@
 - 覆盖率：`site.partner_b_id → sys_user(type=5)` = **20782/30443 = 68.3%**。
 - 代理商账号实测 **314** 个；`partner_info.owner ∩ sys_user` = 312（type=5 占 307）→ 身份可绑。
 - 「平台」= `@ShopDataScope(seePlatform=true)` 下 shop id 的哨兵值 `'-1'`；但 **41 上无任何
-  `ch_site.shop_id='-1'` 行**，该通路当前是空操作（R-3 关闭）。
+  `ch_site.shop_id='-1'` 行**，该通路当前是空操作。产品口径同为「不会有 `-1` 查看数据的场景」，
+  **R-3 据此关闭**——关闭的是"是否需要跨运营商可见性"；**租户内店铺 ID 匹配站点照常生效**，
+  不在关闭范围内。
 - **R-2 结论（撤回旧方向）**：不调后端接口。会话只提供身份；`/user/ds` 结构性为空
   （`sys_organ.biz_data` 349 行全 NULL）；改用既已验证的 `ScopeResolver` 骨架出 `site_ids` 下推。
 - 另记：`DataScopeInterceptor` 与 `BaseSecurityInsideAspect` 的**判断体均被注释掉**。

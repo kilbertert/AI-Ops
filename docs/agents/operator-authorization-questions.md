@@ -73,11 +73,13 @@
 
 AI-Ops 是外挂的第三条数据路径。需求真正的意思是**把 AI-Ops 的订单访问接回公司既有授权语义**。
 
-> ⚠️ **2026-09-24 更正 —— 方向已改，见 §5.8。**
+> ⚠️ **2026-09-24 更正 —— 方向待定，见 §5.8。**
 > 本文档一度写「Q34=A：调一个施加了 `@ShopDataScope` 的 Java 接口复用公司授权」。
-> 深挖后**撤回**：那条路依赖 UPMS `/user/ds`，而它**是结构性空的**
-> （`sys_organ.biz_data` 349 行**全为 NULL**）。**改用 AI-Ops 侧既定骨架（§5.8）**，
-> **不需要后端改任何东西**。
+> 复核后**撤回该结论**，但**原因与我最初写的不一样**：`@ShopDataScope` 的隔离集合本身来自
+> UPMS `/shopuser/getShops`（`ShopIdInterceptor` 用调用者会话身份实时取），**它自己是可用**；
+> 真正的卡点是**AI-Ops 用什么身份代表调用者**——这个卡点**对两条路同样存在**。
+> （另有一条独立发现：UPMS `/user/ds` **结构性为空**，见 §5.8。）
+> **R-2 因此未解，但已收敛为一个精确的问题。**
 
 ---
 
@@ -86,8 +88,8 @@ AI-Ops 是外挂的第三条数据路径。需求真正的意思是**把 AI-Ops 
 | # | 问题 | 状态 |
 |---|---|---|
 | ~~R-1~~ | ~~`partner_b_id` 对哪个注册表？~~ | ✅ **已解（源码 + 生产库实测双证）**：`ch_site.partner_b_id` ≡ `partner_info.owner` ≡ **`qumall_upms.sys_user.id`（`type='5'` 代理商）**。端到端覆盖率 **68.3%（20782/30443）**，不是先前误算的 9.4%——错因是我按 `partner_info.id` 做了 join。 |
-| ~~R-2~~ | ~~AI-Ops 走哪个后端接口？~~ | ✅ **已解（源码 + 生产库 + 本仓历史三重证据）**：**不需要后端配合**。会话只给 `userId/tenantId`；把 `userId` 经 `UpmsDirectory` 换成 `ScopeContext`，出 `site_ids` 下推即可 —— 骨架已在生产跑通（M34）。详见 §5.8 |
-| **R-3** | `seePlatform=true` 的语义：平台方（`'-1'`）**是否应该**看到所有运营商的订单？ | **业务规则**，不是代码事实。**需要产品确认** |
+| **R-2** | **AI-Ops 用什么身份代表调用者？** —— 这是唯一剩下的一跳。会话只给 `userId/tenantId`（无 roles/无范围），而所有取范围的接口都要**凭证**：`/user/info`、`/user/ds`、`/shopuser/getShops`、`/role/list` 皆然。**需业务/后端确认**：有没有一个"用 `userId` 换调用者凭证"的受信路径 | **未解，但已收敛**（详见 §5.8）。两条路（AI-Ops 自算 / 调后端）都卡在同一处 |
+| ~~R-3~~ | ~~平台方（`'-1'`）是否应看到所有运营商的订单？~~ | ✅ **已关闭（产品口径 + 数据佐证）**：产品答「不会有出现 `-1` 查看数据的场景，不用理会平台」；实测 `ch_site` 无任何 `shop_id='-1'` 行。**该通路当前是空操作。** 注意范围：这关闭的是"**是否需要跨运营商可见性**"。「**租户内的店铺 ID 仍会匹配到站点**」（即普通站点隔离照常生效）不在本次关闭范围内 |
 | **R-4** | 「统一案例库」用哪个知识库、是否允许跨租户读 | 业务决策（见 P1-6） |
 | **R-5** | 管家端登录的账号类型 → 映射成哪个 `clientType`（`admin`/`tenant-app`/`supply-admin`） | 需要业务+后端共同确认 |
 | **R-6** | 未覆盖的 31.7% 由**三种不同成因**组成（见下），其中两种是**数据完整性缺口**而非"自有站点"。规则必须对三种都给出明确行为 | 需业务确认 + 数据侧决定是否修 |
@@ -332,7 +334,7 @@ Illegal mix of collations (utf8mb4_0900_ai_ci,IMPLICIT) and (utf8mb4_general_ci,
 
 | # | 事项 | 说明 |
 |---|---|---|
-| C-1 | **修前端会话的 `data_scope`**（C5） | 让它真的调 UPMS `/user/ds`。**这是唯一能拿到真实组织层级的路**，但改的是**鉴权路径**，需单独评估 + 独立票，不塞进本轮 |
+| C-1 | **修前端会话的 `data_scope`**（C5） | 目标仍是"会话能拿到真实范围"，**但路径已变**：`/user/ds` 结构性为空（§5.8 事实 3），**不能再作为目标接口**。改的是**鉴权路径**，需单独评估 + 独立票，不塞进本轮。**依赖 R-2 的答案** |
 | C-2 | **operator 正向会话**（C11） | 至今拿不到唯一 B 端主体，验收只能做负向（越权必被拒）+ 消费者端回归；正向标 `blocked` |
 | C-3 | ~~收敛 C6/C7 两种订单可见性口径~~ **已撤回**：C7 经核为误读（详见 C7 行），两条路径的差异是**有意的 profile 区分**（调用者 vs 设备），不是技术债 | 无需并入 #406 |
 | C-4 | 订单投影加 `operator_id`（C8） | 若 P0-2 确认走订单侧，需要先加投影列 |
@@ -346,7 +348,7 @@ Illegal mix of collations (utf8mb4_0900_ai_ci,IMPLICIT) and (utf8mb4_general_ci,
 | 管家端入口（`operator`）+ 两个快捷指令 | **可落地**（数据发布为主） |
 | 「订单检测」 | **可落地**，但**不能绑智能体**（C9），靠 `requires_order` 弹订单选择器 |
 | 「客户案例」用统一案例库 | **待 P1-6**：需指定 KB + 跨租户授权 |
-| 「订单查询加运营商权限判断」 | **判据与链路已查清**（见 §5）：运营商 ≡ `partner_info.owner` ≡ `sys_user.id(type='5')`；`订单→站点→运营商` 覆盖 **68.3%**；调用者侧 `owner ∩ sys_user = 312`。**剩余阻塞只剩 R-2**（AI-Ops 走哪个后端接口以复用 `@ShopDataScope`），属**集成决策**而非数据缺口 |
+| 「订单查询加运营商权限判断」 | **判据与数据链路已查清**（见 §5）：运营商 ≡ `partner_info.owner` ≡ `sys_user.id(type='5')`；`订单→站点→运营商` 覆盖 **68.3%**；调用者侧 `owner ∩ sys_user = 312`。**仍未解的是 R-2**：AI-Ops 用什么身份代表调用者（见 §5.8）。数据侧无缺口，**卡点是一个身份/凭证问题** |
 | 现有授权缺口 | **真实缺口，与上述三者独立**：缺的是**运营商/平台维度**。注意前端会话**已**叠加 `user_id`（C6），所以不是「任何人可查」——但按人过滤既过窄（查不到本运营商别人的单），也可能与业务口径不符。即使 P0 全部悬置，也值得单独评估 |
 
 **最重要的一句**：需求说的「该订单的**站点的**运营商 id 和平台 id」——
@@ -374,43 +376,57 @@ Illegal mix of collations (utf8mb4_0900_ai_ci,IMPLICIT) and (utf8mb4_general_ci,
 
 ---
 
-### 5.8 R-2 结论与实现方向（2026-09-24，取代 §5.4 的旧方向）
+### 5.8 R-2 复核：卡点收敛为「AI-Ops 用什么身份代表调用者」（2026-09-24）
 
-**问题**：AI-Ops 的订单访问怎么接回公司授权语义。
+> **本节曾下过一个过满的结论**（"不需要后端改任何东西，只缺一小段适配"），
+> 经核查**撤回**。以下为修正后的版本，并保留撤回原因。
 
-**证据链（三重）**：
+#### 已确证的三条事实
 
-1. **会话里只有身份** —— 41 生产会话 JSON 的**全部字段**是
+1. **会话只提供身份** —— 41 生产 third-session 的**全部字段**是
    `appId / isEnterprise / isEnterpriseAdmin / openId / phoneAreaCode / sessionKey /
    tenantId / userId / userPhone / wxUserId`。**没有 roles、没有 organs、没有 shop_ids、
    没有任何数据范围**。所以 `RedisThirdSessionResolver` 硬编码 `data_scope=self`
    （`third_session_auth.py:82`）不是取舍，是**数据里就没有**。
-2. **`/user/ds` 结构性为空** —— 它的实现读 `sys_organ.biz_data` 并摊平；
-   实测 41：**349 行 `sys_organ`，`biz_data` 非 NULL 的 0 行**。即使修好历史上那个
-   空 IN 子句缺陷，它也只能返回空列表。**这条路不可用。**
-3. **骨架已在生产跑通** —— 降级路径 `/role/list`（取最宽 `dsType` + `dsScope`）+
-   `/shopuser/getShops`，已于 2026-09-01 经 124 内网隧道对真实生产 UPMS 端到端验证
-   （见 `docs/开发进度.md` M34 与 `docs/validation.md`「生产 /user/ds 缺陷降级验证」）。
-   实测燃料充足：`sys_role.ds_type` = `0:802, 1:26, 2:615, 3:36`；
-   `ds_type='1'` 且有 `ds_scope` 的 30 个角色；`sys_user.user_id` 非空 507 行。
+2. **取范围的每个接口都要凭证，不是 `userId`** —— `ScopeResolver.resolve` 以
+   `credential` 取调用者信息与范围（`scope_context.py:283-312`：`user_info(credential)`、
+   `data_scope(credential)`）；`userId` 在该设计里只用于**解析目标主体**
+   （`byUserId` 那条）。`/shopuser/getShops`、`/role/list` 同样要凭证。
+3. **UPMS `/user/ds` 结构性为空** —— 它读 `sys_organ.biz_data` 并摊平；实测 41：
+   349 行 `sys_organ`，**`biz_data` 非 NULL 的 0 行**。即使修好历史上那个空 IN 子句
+   缺陷，也只能返回空列表。**这条接口当前不可用**（独立于第 2 条）。
 
-**结论**：**不需要后端新增或修改任何接口。** 缺的只是把 third-session 的 `userId`
-接到既有 `ScopeResolver` 上的**一小段适配**。链路：
+#### 修正后的结论
 
-```
-third-session 会话 → userId
-  → UPMS /user/inside/byUserId/{userId} → sys_user.id
-  → /role/list（dsType + dsScope）+ /shopuser/getShops
-  → ScopeContext（tenant/organ/shop/site）→ QueryScope → SQL 下推
-```
+**R-2 未解**，但已从"走哪个接口"收敛为一个精确问题：
 
-**已定方向（A 方案）**：用 AI-Ops 侧既有骨架，把**运营商范围表达成 `site_ids`**
-（`partner_b_id → 站点集合`，见 §5.2），复用已验证的 `site_ids` 下推，**不重写一份授权**。
+> **有没有一条受信路径，能用 third-session 的 `userId` 换到该调用者的身份/凭证？**
 
-**需要更新的既有文案**：§5.4 曾写「调后端接口复用 `@ShopDataScope`」——
-该方向已撤回，原因如上（它依赖那个空接口）。本仓其他文档若引用该方向，需同步。
+- **若「有」** → 走 A 方案：接既有 `ScopeResolver`，出 `shop_ids`/`site_ids` 下推
+  （运营商范围需**新增** `partner_b_id → 站点集合` 的映射，见下）。
+- **若「没有」** → 需要后端提供这样的路径，或改由后端施加 `@ShopDataScope`
+  （那时卡点变成"后端如何信任 AI-Ops 传来的身份"）。
 
-**顺带发现（应报公司）**：`BaseSecurityInsideAspect`（`@Inside` 的鉴权）**整个判断体被注释掉**：
+**两条路卡在同一处**，所以这个问题的答案同时决定 R-2 与实现方向。
+
+#### 撤回原因（保留存证）
+
+本节初稿把撤回旧方向的理由写成"`@ShopDataScope` 那条路依赖 `/user/ds`"。
+**这是错的**：`ShopIdInterceptor` 的隔离集合来自 **`/shopuser/getShops`**（§5.3），
+与 `/user/ds` 是**两条独立的调用链**。`/user/ds` 为空只影响"组织/店铺范围解析"，
+**不构成对后端复用方向的否定**。
+
+#### 仍成立的两条实现约束（与 R-2 答案无关）
+
+1. **运营商范围需要新增站点映射** —— 既有骨架的站点来源是
+   `ch_site.shop_id` / `ch_site.dis_point_id`（`sources.py:435-453`）；
+   按 **`partner_b_id` 取站点集合**是**新映射**，现有生产验证不覆盖它。
+2. **既有验证用的是平台凭证** —— M34 那次端到端跑的是 `testadmin`，属平台凭证路径；
+   **不能推断会话凭证路径已通**。
+
+#### 顺带发现（应报平台侧）
+
+`BaseSecurityInsideAspect`（`@Inside` 的鉴权）**整个判断体被注释掉**：
 
 ```java
 //if (inside.value() && !StrUtil.equals(SecurityConstants.FROM_IN, header)) {
@@ -419,5 +435,5 @@ third-session 会话 → userId
 return point.proceed();      // 无条件放行
 ```
 
-`@Inside` 形同虚设。这与 `DataScopeInterceptor`（组织级隔离，同样整段注释掉）
+`@Inside` 形同虚设。与 `DataScopeInterceptor`（组织级隔离，同样整段注释掉）
 是**同一种形态**：**看着有隔离，实际是空的**。两者都应报平台侧。
