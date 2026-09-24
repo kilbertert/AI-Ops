@@ -184,9 +184,15 @@ class InternalTokenSettings:
 
 @dataclass(slots=True)
 class UpmsSettings:
-    """平台 UPMS 只读服务边界；权限上下文解析使用，不承载任何业务数据查询。"""
+    """平台 UPMS 只读服务边界；权限上下文解析使用，不承载任何业务数据查询。
+
+    ``inside_token`` 是 AI-Ops 以**服务侧身份**调用 UPMS 内部端点（``/user/inside/*``，
+    如会话身份的 C→B 映射）时出示的凭据，不是调用者平台凭证；只在服务端配置，绝不
+    进入 ``ScopeContext``、审计摘要或错误消息。
+    """
 
     base_url: str | None = None
+    inside_token: str | None = None
     timeout_seconds: int = 8
 
     def __post_init__(self) -> None:
@@ -517,6 +523,7 @@ class Settings:
             ),
             upms=UpmsSettings(
                 base_url=env("AIOPS_UPMS_BASE_URL") or None,
+                inside_token=env("AIOPS_UPMS_INSIDE_TOKEN") or None,
                 timeout_seconds=env_int("AIOPS_UPMS_TIMEOUT_SECONDS", 8),
             ),
             dis=DisSettings(
@@ -573,6 +580,7 @@ class Settings:
         data["tdengine"]["password"] = "REDACTED" if self.tdengine.password else ""
         data["redis"]["password"] = "REDACTED" if self.redis.password else ""
         data["http"]["internal_token"]["secret"] = "REDACTED" if self.http.internal_token.secret else ""
+        data["upms"]["inside_token"] = "REDACTED" if self.upms.inside_token else ""
         data["dis"]["token"] = "REDACTED" if self.dis.token else ""
         data["diag_api"] = {
             "base_url": self.http.base_url,

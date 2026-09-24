@@ -20,10 +20,16 @@
 
 Dis 不可用、代查缺少 Dis 配置或范围 ID 超过上限时以带错误码的 ``ScopeError``
 fail closed，且不会触发任何 MySQL 查询（解析先于数据源查询完成）。
+
+运营商范围解析（``resolve_operator_site_scope``）是同一层里的另一条入链：后端权威
+授权所用的同一个 UPMS 端点给出 B 端主体的店铺集合，经充电库既有站点归属映射得到
+站点集合。管家端会话（``third_session_auth``）用它替换自己的 ``self`` 兜底范围，
+订单授权判定（``caller_auth.ScopedOrderAuthorizer``）与证据收集因此共用同一个范围。
 """
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -36,19 +42,28 @@ from aiops_diagnostics.bounded_http import (
     parse_raw_envelope,
     request_json,
 )
-from aiops_diagnostics.config import DisSettings
+from aiops_diagnostics.config import DisSettings, UpmsSettings
 from aiops_diagnostics.scope_context import (
     SCOPE_ERROR_EMPTY_SCOPE,
     SCOPE_TYPE_ALL,
     SCOPE_TYPE_SELF,
     ScopeContext,
     ScopeError,
+    UpmsDirectory,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 SCOPE_ERROR_DIS_CONFIG_MISSING = "scope.dis_config_missing"
 SCOPE_ERROR_DIS_UNAVAILABLE = "scope.dis_unavailable"
 SCOPE_ERROR_DIS_AUTH_FAILED = "scope.dis_auth_failed"
 SCOPE_ERROR_SCOPE_TOO_LARGE = "scope.too_large"
+
+#: 运营商站点范围解析不出可见站点时的可区分原因（只写日志，不含任何身份标识）。
+#: 两者表象都是「空集合」，运维含义相反：一个是账号漏登记（应补绑定），一个是
+#: 已登记店铺在充电库里没有站点（数据缺口）。
+OPERATOR_SCOPE_NO_SHOP_BINDING = "no_shop_binding"
+OPERATOR_SCOPE_SHOP_WITHOUT_SITE = "shop_without_site"
 
 #: 单个范围的站点/店铺/点位 ID 数量上限；超过说明数据范围异常，fail closed。
 MAX_SCOPE_IDS = 1000
@@ -168,6 +183,32 @@ class DisHttpDirectory:
         return tuple(point_ids)
 
 
+class ShopDirectory(Protocol):
+    """运营商店铺归属解析接缝：B 端 ``SysUser.id`` → 店铺 ID 集合。
+
+    实现复用后端权威授权所用的同一个 UPMS 端点（``/shopuser/getShops``，即
+    ``ShopIdInterceptor``/``@ShopDataScope`` 取隔离集合的那个来源），不在系统里
+    保留第二套事实来源。未绑定任何店铺时返回**空集合**。
+    """
+
+    def shop_ids_by_b_user_id(self, b_user_id: str) -> tuple[str, ...]: ...
+
+
+class UpmsShopDirectory:
+    """``ShopDirectory`` 的 UPMS 实现（复用后端权威授权所用的同一端点）。
+
+    ``credential`` 是服务侧配置的内部调用凭据，只透传给 UPMS，绝不进入
+    ``QueryScope``、审计摘要或错误消息。
+    """
+
+    def __init__(self, settings: UpmsSettings, credential: str) -> None:
+        self._directory = UpmsDirectory(settings)
+        self._credential = credential
+
+    def shop_ids_by_b_user_id(self, b_user_id: str) -> tuple[str, ...]:
+        return self._directory.shop_ids_by_b_user_id(self._credential, b_user_id)
+
+
 class SiteScopeMapper(Protocol):
     """充电库内的站点归属解析接缝（``ch_site``）。
 
@@ -243,9 +284,7 @@ def resolve_query_scope(
     if data_scope.type != SCOPE_TYPE_ALL:
         sites = set(data_scope.site_ids)
         if data_scope.shop_ids and mapper is not None:
-            shops = mapper.site_ids_by_shops(tuple(data_scope.shop_ids), tenant_id)
-            _require_bounded(len(shops), "店铺归属")
-            sites.update(shops)
+            sites.update(_sites_from_shops(mapper, data_scope.shop_ids, tenant_id))
 
     if context.delegated and context.subject.c_user_id:
         if dis is None or mapper is None:
@@ -264,6 +303,73 @@ def resolve_query_scope(
         site_ids=None if sites is None else tuple(sorted(sites)),
         user_id=None,
     )
+
+
+def resolve_operator_site_scope(
+    b_user_id: str,
+    tenant_id: str,
+    *,
+    shops: ShopDirectory,
+    mapper: SiteScopeMapper,
+) -> QueryScope:
+    """运营商站点范围：B 端主体 → 店铺集合（UPMS）→ 站点集合（充电库归属）。
+
+    管家端订单授权（PRD #423）的可见范围判据：运营商在数据上表现为**一组站点**，
+    因此范围以站点集合表达，可经既有 ``site_ids`` 机制下推。管家端会话用它替换
+    ``self`` 兜底范围（#426），订单授权判定与证据收集因此共用这一个范围。
+
+    三个已识别陷阱中的两个在这里处置（第三个是改范围类型会触发代查分支，属于
+    查询路径）：
+
+    1. **id 空间**：入参是 B 端 ``SysUser.id``（会话的 C→B 映射产出），不是会话的
+       C 端 ``userId``。两者实测无重叠，传错只会得到空集而非他人范围，但那仍是
+       类型错误，不能依赖「当前恰好不重叠」。因此调用方必须先确认会话身份唯一
+       确定了 B 端主体——#424 的占位 ``b_user_id``（``c:`` 前缀）绝不能传进来。
+    2. **店铺 id ≠ 站点 id**：真实数据 954 行站点中 ``ch_site.id ≡ ch_site.shop_id``
+       的占 953 行、1 行不同。因此店铺集合**必须**经既有 ``site_ids_by_shops``
+       （``ch_site.shop_id → ch_site.id``）映射，直接互用会在例外行上漏算/多算，
+       而另外 953 行上恰好是对的——错误不会自己暴露。
+
+    两种空集合都不放行：未绑定店铺（账号漏登记）与店铺在充电库里没有站点（数据
+    缺口）都返回空范围并各记一条可区分原因；店铺/站点数量超界或上游不可达/响应
+    形状非法时以带错误码的 ``ScopeError`` 失败关闭。
+
+    跨库字符集冲突在本链路不出现（店铺集合来自 UPMS HTTP，站点集合来自充电库单库
+    查询，无跨库 JOIN）。若将来改为把店铺集合直接送进 SQL 与 ``ch_site`` 比对，
+    必须先显式统一排序规则，且不得把报错当成"查无此行"。
+    """
+    shop_ids = shops.shop_ids_by_b_user_id(b_user_id)
+    _require_bounded(len(shop_ids), "运营商店铺")
+    if not shop_ids:
+        # 代理商账号本身未绑定任何店铺：空集合并记录供运营补登记，不回落为租户级放行。
+        _log_operator_scope(OPERATOR_SCOPE_NO_SHOP_BINDING, shop_count=0)
+        return QueryScope(tenant_id=tenant_id, site_ids=(), user_id=None)
+    site_ids = _sites_from_shops(mapper, shop_ids, tenant_id)
+    _require_bounded(len(site_ids), "运营商站点")
+    if not site_ids:
+        # 已登记店铺在充电库里没有对应站点：与前一种空集合成因不同，同样失败关闭。
+        _log_operator_scope(OPERATOR_SCOPE_SHOP_WITHOUT_SITE, shop_count=len(shop_ids))
+    return QueryScope(tenant_id=tenant_id, site_ids=site_ids, user_id=None)
+
+
+def _log_operator_scope(reason: str, *, shop_count: int) -> None:
+    """记录空集合的成因：不含用户 id、租户与凭据，凭它区分「漏登记」与「数据缺口」。"""
+    _LOGGER.info(
+        "operator_site_scope_empty reason=%s shop_count=%d",
+        reason,
+        shop_count,
+    )
+
+
+def _sites_from_shops(mapper: SiteScopeMapper, shop_ids: tuple[str, ...], tenant_id: str) -> tuple[str, ...]:
+    """店铺集合 → 有界、去重、排序的站点集合（店铺 id ≠ 站点 id，必须经归属映射）。
+
+    ``resolve_query_scope`` 的 organ 分支与 ``resolve_operator_site_scope`` 共用：
+    一条规则（翻译 + 定序 + 上限）只写一次，改上限或排序时不需要找两处。
+    """
+    site_ids = tuple(sorted(mapper.site_ids_by_shops(tuple(shop_ids), tenant_id)))
+    _require_bounded(len(site_ids), "店铺归属")
+    return site_ids
 
 
 def _require_bounded(count: int, label: str) -> None:
