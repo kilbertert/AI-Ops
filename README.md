@@ -261,7 +261,7 @@ flowchart TB
 | `scope_context.py` | 把一次运行的授权输入收敛为不可变 `ScopeContext`：调用者、目标主体、有效租户、业务数据范围。平台依赖经 `PlatformDirectory` 单一接缝接入。**解析器不持有任何数据源**，全部 fail closed |
 | `query_scope.py` | 把 `ScopeContext` 解析成可直接下推的不可变 `QueryScope`（tenant / site_ids / user_id），站点范围来自 UPMS 数据范围与 Dis 点位归属 |
 | `caller_auth.py` | 调用者身份接缝：`CallerContextResolver`（UPMS / OAuth2 introspection / fail-closed 禁用）与 `OrderAuthorizer` |
-| `third_session_auth.py` | C 端 `thirdSession` → `ScopeContext` 的 Redis 解析路径 |
+| `third_session_auth.py` | C 端 `thirdSession` → `ScopeContext` 的 Redis 解析路径；身份同时带 C 端 id 与经既有 C→B 映射端点补全的 B 端 `sys_user.id`，解析不出唯一主体时记录可区分原因 |
 
 #### L3 证据与诊断内核
 

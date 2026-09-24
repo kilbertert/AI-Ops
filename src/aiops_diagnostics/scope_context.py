@@ -48,6 +48,15 @@ SCOPE_ERROR_DELEGATION_DENIED = "scope.delegation_denied"
 SCOPE_ERROR_TENANT_FORBIDDEN = "scope.tenant_forbidden"
 SCOPE_ERROR_EMPTY_SCOPE = "scope.empty_scope"
 
+#: C 端 → B 端映射未能唯一确定 B 端主体时的可区分原因（``SubjectRecord.b_subject_reason``）。
+#: 空串表示已唯一确定；其余取值表示**没有**可用的 B 端主体，需要 B 端主体的下游必须
+#: 据此拒绝，而不是把 ``b_user_id`` 当作 B 端 ``SysUser.id`` 使用。
+C_MAPPING_NOT_CONFIGURED = "mapping_not_configured"
+C_MAPPING_FAILED = "mapping_failed"
+C_MAPPING_NOT_FOUND = "subject_not_found"
+C_MAPPING_AMBIGUOUS = "ambiguous_subject"
+C_MAPPING_TENANT_MISMATCH = "tenant_mismatch"
+
 SCOPE_TYPE_ALL = "all"
 SCOPE_TYPE_ORGAN = "organ"
 SCOPE_TYPE_SELF = "self"
@@ -124,6 +133,12 @@ class SubjectRecord:
 
     ``b_user_id`` is the B 端 ``SysUser.id``; ``c_user_id`` is the bound C 端
     ``SysUser.userId``. They are never interchangeable.
+
+    A third-session identity completes ``b_user_id`` through the existing C→B
+    mapping endpoint (``third_session_auth``). When that mapping cannot name
+    exactly one B 端 subject inside the session tenant, ``b_subject_reason``
+    carries a distinguishable cause and ``b_user_id`` remains a C-side
+    placeholder that must never be used as a B 端 subject.
     """
 
     b_user_id: str
@@ -132,6 +147,7 @@ class SubjectRecord:
     tenant_id: str | None = None
     organ_id: str | None = None
     shop_id: str | None = None
+    b_subject_reason: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -576,6 +592,8 @@ def _scope_fingerprint(
     data_scope: DataScope,
     roles: frozenset[str],
 ) -> str:
+    # B 端主体 id 已由 ``subject_b_user_id`` 覆盖（#424 的 C→B 映射因此自动进指纹）。
+    # ``b_subject_reason`` 有意不入指纹：它不改变任何可见性，只说明 B 端主体为何缺失。
     payload = {
         "caller_b_user_id": caller.b_user_id,
         "subject_b_user_id": subject.b_user_id,

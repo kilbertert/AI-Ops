@@ -270,6 +270,7 @@ def test_http_settings_token_expire_setter_still_validates() -> None:
 def test_upms_settings_defaults_and_env_names(monkeypatch) -> None:
     settings = Settings.from_env()
     assert settings.upms.base_url is None
+    assert settings.upms.inside_token is None
     assert settings.upms.timeout_seconds == 8
 
     monkeypatch.setenv("AIOPS_UPMS_BASE_URL", "https://upms.example.test")
@@ -278,6 +279,17 @@ def test_upms_settings_defaults_and_env_names(monkeypatch) -> None:
     assert settings.upms.base_url == "https://upms.example.test"
     assert settings.upms.timeout_seconds == 12
     assert settings.upms.base_url in str(settings.redacted())
+
+
+def test_upms_inside_token_is_redacted(monkeypatch) -> None:
+    monkeypatch.setenv("AIOPS_UPMS_BASE_URL", "https://upms.example.test")
+    monkeypatch.setenv("AIOPS_UPMS_INSIDE_TOKEN", "upms-inside-token")
+    settings = Settings.from_env()
+
+    assert settings.upms.inside_token == "upms-inside-token"
+    redacted = str(settings.redacted())
+    assert "upms-inside-token" not in redacted
+    assert redacted.count("REDACTED") >= 1
 
 
 def test_upms_settings_rejects_credential_bearing_or_unbounded_values() -> None:

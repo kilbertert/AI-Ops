@@ -90,7 +90,12 @@ from aiops_diagnostics.shortcut_lifecycle import (
     ShortcutStore,
 )
 from aiops_diagnostics.sources import SourceError
-from aiops_diagnostics.third_session_auth import RedisThirdSessionResolver, ThirdSessionSettings
+from aiops_diagnostics.third_session_auth import (
+    BSubjectDirectory,
+    RedisThirdSessionResolver,
+    ThirdSessionSettings,
+    UpmsBSubjectDirectory,
+)
 
 _LOGGER = logging.getLogger("aiops.gateway")
 
@@ -2177,6 +2182,18 @@ def _sse(event: dict[str, Any]) -> str:
     return f"id: {sequence}\nevent: {event_type}\ndata: {data}\n\n"
 
 
+def _b_subject_directory(runtime: Settings) -> BSubjectDirectory | None:
+    """会话身份的 C→B 映射目录（#424）。
+
+    复用 UPMS 既有端点；未配置 UPMS 地址或服务侧内部凭据时返回 ``None``——会话身份
+    只保留 C 侧部分，需要 B 端主体的路径按 fail closed 拒绝，消费者端不受影响。
+    """
+    credential = (runtime.upms.inside_token or "").strip()
+    if not runtime.upms.base_url or not credential:
+        return None
+    return UpmsBSubjectDirectory(runtime.upms, credential)
+
+
 def _caller_resolver(settings: GatewayServerSettings) -> CallerContextResolver:
     if settings.third_session_service_token:
         try:
@@ -2190,7 +2207,8 @@ def _caller_resolver(settings: GatewayServerSettings) -> CallerContextResolver:
                     password=runtime.redis.password,
                     service_token=settings.third_session_service_token,
                     key_prefix=settings.third_session_key_prefix,
-                )
+                ),
+                b_subject_directory=_b_subject_directory(runtime),
             )
         except (ValueError, OSError):
             return DisabledCallerResolver()
