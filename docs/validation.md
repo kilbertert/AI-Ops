@@ -3669,3 +3669,55 @@ classify_with_jev(...) -> None            ← 返回 None，不抛异常
 **未验**：跨仓错峰的运行时效果。本仓的 `cron` 值未变，因此本轮无法从本仓观测到
 「不再撞 429」——那要看四个兄弟仓升级后、下一次定时触发的实际并发。本轮只验证了
 配置层面：脚本读回一致、其它 job 的预算未被误改（另有模板侧用例覆盖）。
+
+## PRD #423 子票 #424：会话身份补全 C→B 映射（2026-09-24，本地自动化 + 离线契约）
+
+**结论**：离线自动化全部通过；**未在 41 生产跑通端到端**（`AIOPS_UPMS_INSIDE_TOKEN`
+尚未在私有 `production.env` 配置，且本片不接入任何订单查询路径）。如实记为
+「负向与回归已覆盖，正向待业务条件」。
+
+### 自动化结果
+
+| 检查 | 结果 |
+| --- | --- |
+| `uv run pytest` | **1336 通过 / 2 skipped**（基线 1321 通过，新增 15 项） |
+| `uv run ruff check` | 全部通过 |
+
+新增用例集中在 `tests/test_third_session_auth.py`（身份形状、可见性、指纹、日志、部署接缝）
+与 `tests/test_config.py` / `tests/test_env_example.py`（新配置项边界与脱敏）。
+
+### 断言的是外部可观察行为，不是调用顺序
+
+- **唯一映射进身份**：一次会话解析出的 `ScopeContext.subject` 同时带 C 端 `userId`
+  与 B 端 `sys_user.id`，与直接向 UPMS 查同一用户的结果逐字段一致（`b_user_id`、
+  `c_user_id`、`username`、`tenant_id`）。
+- **消费者端零回归**：有/无映射两种身份下，`data_scope`、`effective_tenant_id` 与
+  `resolve_query_scope(context)` 的结果与改动前逐字相同
+  （`QueryScope(tenant_id="T-1", site_ids=None, user_id="C-1")`）。
+- **五种非唯一情形各有可区分原因**，且都不放行一个可用的 B 端主体：
+  无映射（`subject_not_found`）、多映射（`ambiguous_subject`）、跨租户
+  （`tenant_mismatch`）、端点失败（`mapping_failed`）、未配置目录
+  （`mapping_not_configured`）。
+- **B 端主体 id 进范围指纹**：同一会话映射到不同 B 端 id 时
+  `scope_fingerprint` 不同（指纹实现未改动，`subject_b_user_id` 本就在内）。
+- **日志**：歧义/跨租户/端点失败三类写 `third_session c_mapping_unresolved`
+  一行，只带原因与 UPMS 错误码，**不含** C 端 id、租户与凭据；
+  「无映射」是消费者端正常状态，**有意不记日志**以免每个 C 端账号刷一行。
+- **部署接缝**：配置齐备时 `_caller_resolver` 返回带 `UpmsBSubjectDirectory` 的
+  会话解析器；缺 `AIOPS_UPMS_INSIDE_TOKEN` 时为 `None`（管家端随后 fail closed，
+  消费者端不变）。
+
+### 未覆盖 / 待业务条件
+
+- **真实管家端会话**：PRD #423 已记录 41 上 `X-Business-Entry: operator` 稳定 503
+  （无唯一管家端 B 端主体）。本片提供了补全身份的能力，但**没有真实会话可验**。
+- **端到端（UPMS 真实响应）**：本轮只做离线契约（假 transport 服务
+  `/user/inside/byUserId/{userId}` 的既有形状）；真实 UPMS 的字段差异需按
+  `UpmsDirectory` 的既有降级/告警路径观察。
+- **不接入订单查询**：本片不改变任何订单可见性；「显式指名订单 → 明确拒绝」
+  与运营商站点范围在 #425/#426。
+
+### 与 ADR-0003 的关系
+
+沿用 PRD #423 的既定记录：委托句柄仍未实现，当前依赖共享 Redis 会话直读；
+本片延续该偏离，未在任何注释里把「直接读会话」写成已批准的设计。

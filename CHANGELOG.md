@@ -87,6 +87,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 主机侧自检与自动回滚；依赖收敛定为有意边界 (#388)
 - 分类器判定切换到 Jev——阈值映射、失败回退与可观测性 (#398)
 - 方案 A —— 高风险一律追问，并记录与关键词守卫的重叠 (#402)
+- 管家端会话身份补全 C→B 映射——身份同时带 C 端 id 与 B 端 `sys_user.id`，非唯一映射记可区分原因 (#424)
 
 ### Changed
 - Clarify HTTP doctor classification
