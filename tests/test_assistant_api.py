@@ -1323,24 +1323,81 @@ def test_faq_shortcircuit_does_not_answer_an_unrelated_question(tmp_path: Path) 
     assert resp.json()["type"] == "qa"
 
 
-def test_faq_shortcircuit_does_not_swallow_a_case_request(tmp_path: Path) -> None:
-    """`重卡充电案例` is the second false positive, and the only one in real traffic.
+def test_case_and_solution_intents_do_not_suppress_a_catalog_title(tmp_path: Path) -> None:
+    """A catalog title must survive the model reading its wording as promotional.
 
-    Found while measuring this ticket: the promo cue matcher catches "客户案例" /
-    "案例库" but not "重卡充电案例", so the question reached the catalog and was
-    answered as RFID-card content. Among the 86 deduplicated real questions it
-    is the sole marginal match — and Jev reads it as case exploration, which
-    #231 already says must not enter the FAQ.
+    The first version of this fix suppressed case/solution intents. It was
+    narrow enough to buy one thing — "重卡充电案例" reaching the RFID-card entry —
+    and broad enough to cost a class of false suppressions, because the model
+    reads the wording of the catalog's OWN titles that way: "Guide" in q010's
+    title, "SOP" in q023's.
+
+    Suppression was never needed for promo routing: a genuine request NAMES it,
+    and the cue matcher upstream catches those, while the routing block below
+    sends whatever is left to the promotional path anyway. So these two answers
+    are what the suppression set must NOT do.
     """
     client, runtime = _client(tmp_path)
-    runtime.classified = {"intent": "case_exploration", "confidence": "high", "risk": "low"}
+    runtime.classified = {"intent": "solution_discovery", "confidence": "high", "risk": "low"}
+
+    # The title verbatim is self-evident, so it never reaches the intent at all.
     resp = client.post(
         "/v1/assistant/questions",
-        json={"question": "重卡充电案例"},
+        json={"question": "Connector Stuck? Emergency Cable Release Guide"},
         headers=_headers(),
     )
-    assert resp.status_code in {200, 202}, resp.text
-    assert resp.json()["type"] != "faq"
+    assert resp.status_code == 200
+    assert resp.json()["question_id"] == "consumer.faq.q010"
+    assert runtime.classify_calls == 0
+
+    # Prefacing it drops the identity score to 0.6, which DOES reach the intent —
+    # and this is the case the suppression set governs. A user who wanted the
+    # FAQ answer must not be sent to a promotional card because the model reads
+    # the word "Guide" as solution-shaped. (The verbatim case above cannot catch
+    # a widened suppression set: it never gets that far.)
+    resp = client.post(
+        "/v1/assistant/questions",
+        json={"question": "Please show me the Connector Stuck? Emergency Cable Release Guide"},
+        headers=_headers(),
+    )
+    assert runtime.classify_calls == 1
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["type"] == "faq"
+    assert resp.json()["question_id"] == "consumer.faq.q010"
+
+
+def test_a_polarity_flip_does_not_ride_the_identity_bar(tmp_path: Path) -> None:
+    """A one-token reversal must not be answered as the title it reverses.
+
+    Review finding on this PR, and a sharp one: "Why Did Charging Stop Normally?"
+    shares 4 of 5 tokens with the English q011 title "Why Did Charging Stop
+    Unexpectedly?" and scored exactly 4/5 on BOTH sides — so an inclusive bar
+    called it self-evident and told a user asking about a NORMAL stop about
+    insulation faults, overheating and premature stops. The bar is strict now,
+    and no catalog variant sits exactly on it (measured over all 185).
+    """
+    client, runtime = _client(tmp_path)
+    runtime.classified = None  # the decision is consulted, not necessarily obtained
+
+    # The title itself is self-evident: answered with no second opinion asked.
+    resp = client.post(
+        "/v1/assistant/questions",
+        json={"question": "Why Did Charging Stop Unexpectedly?"},
+        headers=_headers(),
+    )
+    assert resp.status_code == 200
+    assert resp.json()["question_id"] == "consumer.faq.q011"
+    assert runtime.classify_calls == 0
+
+    # One reversed token must NOT inherit that. It is checked — and here, with
+    # no decision available, it falls back to the FAQ rather than to nothing,
+    # which is the degradation rule doing its job rather than a wrong answer.
+    resp = client.post(
+        "/v1/assistant/questions",
+        json={"question": "Why Did Charging Stop Normally?"},
+        headers=_headers(),
+    )
+    assert runtime.classify_calls == 1
 
 
 def test_a_confident_faq_match_is_answered_without_consulting_routing(tmp_path: Path) -> None:

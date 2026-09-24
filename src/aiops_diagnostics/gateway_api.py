@@ -2349,32 +2349,33 @@ _FAQ_VARIANT_IDENTITY = 0.8
 
 
 #: Intents that say "the catalog is not where this question belongs", so a
-#: marginal keyword match must not answer from it.
+#: question that merely OVERLAPS a title must not be answered from it.
 #:
-#: `casual` is the defect this ticket was opened for: "今天天气怎么样" reached the
-#: summer-heat entry on the single shared word 天气, and every non-charging
-#: question of that shape — 今天吃什么, 股票怎么样 — reaches some entry the same
-#: way. Jev says `casual` for all of them.
+#: One intent, and the narrowness is the point. `casual` is the defect this
+#: ticket was opened for: "今天天气怎么样" reached the summer-heat entry on the
+#: single shared word 天气, and every non-charging question of that shape —
+#: 今天吃什么, 股票怎么样 — reaches some entry the same way. Jev says `casual`
+#: for all of them, and there is no legitimate short question it mislabels.
 #:
-#: `case_exploration` / `solution_discovery` must not enter the FAQ at all
-#: (#231 acceptance: 案例不进入 FAQ). The promo cue matcher upstream catches
-#: only the phrasings it was given, and "重卡充电案例" was reaching the catalog as
-#: RFID-card content — the only marginal match among the 86 real questions.
+#: CASE AND SOLUTION INTENTS ARE DELIBERATELY ABSENT, and the first version of
+#: this fix had them. They bought exactly one thing — "重卡充电案例" reaching the
+#: RFID-card entry, the sole marginal match among 86 real questions — and cost a
+#: class of false suppressions, because the model reads the wording of the
+#: catalog's OWN titles as promotional: "Guide" in q010's `Connector Stuck?
+#: Emergency Cable Release Guide`, "SOP" in q023's `Vehicle Scratch or Equipment
+#: Damage Incident SOP`. A user prefacing q010's title with "Please show me the"
+#: scored 0.6, Jev said solution_discovery, and the entry was dropped in favour
+#: of a promotional card.
 #:
-#: `knowledge` is deliberately ABSENT, and that is a measurement rather than an
-#: oversight. A knowledge-intent question in the marginal band is the near-miss:
-#: "充电桩怎么拔枪？" (the user's words) against q010 "充电结束后拔不出充电枪怎么
-#: 办？" (the entry, answer included). That is related content, not unrelated
-#: content — the harm this ticket is about — and suppressing it also suppresses
-#: genuinely-asked short knowledge questions, which is a recall cost with no
-#: matching acceptance requirement. No `knowledge` question in the 86-question
-#: real corpus lands in the marginal band at all, so the wider set would add
-#: that risk without a single observed case to justify it.
+#: Suppressing them was never necessary for promo routing: a genuine request
+#: NAMES it ("客户案例" / "行业解决方案" / "Please show me a customer case"), which the
+#: cue matcher upstream already catches, and anything that does reach here with a
+#: case/solution intent is sent to the promotional path by the routing block
+#: below — which runs after this one and needs no help from the suppression set.
+#: The residual is "重卡充电案例" continuing to answer from q009; the fix for that
+#: is a promotional cue, not a FAQ suppressor, and it is tracked separately.
 #:
-#: `order_issue` and `report_fault` are likewise absent: they are the narrowest
-#: intents, so they almost never land in the marginal band, and where one does
-#: the FAQ answer is still the right one to give.
-_FAQ_SUPPRESSING_INTENTS = frozenset({"casual", "case_exploration", "solution_discovery"})
+_FAQ_SUPPRESSING_INTENTS = frozenset({"casual"})
 
 
 def _normalize_keywords(text: str) -> set[str]:
@@ -2405,19 +2406,6 @@ def _normalize_keywords(text: str) -> set[str]:
     if latin:
         significant.add(latin)
     return significant
-
-
-def _faq_title_union_sigs(faq_catalog: FAQCatalog, platform: str, question_id: str) -> set[str]:
-    """Signatures over ALL language variants of one entry's title (L3/#203).
-
-    zh full question first, then the en/de/fr/es/pt compressed titles from the
-    wide table — a question in any supported language matches the entry whose
-    variant union it overlaps, without weakening per-entry determinism.
-    """
-    sigs: set[str] = set()
-    for variant in faq_catalog.title_variants(platform, question_id):
-        sigs |= _normalize_keywords(variant)
-    return sigs
 
 
 def _classify_for_routing(
@@ -2479,6 +2467,10 @@ def _faq_match(
     qsigs = _normalize_keywords(question)
     if not qsigs:
         return None, False
+    # Signature each title variant once. The union below is the union of THESE
+    # signatures, not a second tokenization pass over the same strings — this
+    # runs on every assistant request, and `_normalize_keywords` walks the text
+    # character by character.
     variants = {
         entry["question_id"]: tuple(
             sig
@@ -2491,8 +2483,8 @@ def _faq_match(
         for entry in faq_catalog.catalog(platform)
     }
     unions = {
-        entry["question_id"]: _faq_title_union_sigs(faq_catalog, platform, entry["question_id"])
-        for entry in faq_catalog.catalog(platform)
+        question_id: frozenset().union(*sigs) if sigs else frozenset()
+        for question_id, sigs in variants.items()
     }
     best_qid: str | None = None
     best_overlap = 0
@@ -2515,7 +2507,13 @@ def _faq_match(
         ),
         default=0.0,
     )
-    return best_qid, best_variant_identity >= _FAQ_VARIANT_IDENTITY
+    # Strictly above, not at. A polarity flip costs one shared token and lands
+    # EXACTLY on the bar — "Why Did Charging Stop Normally?" scores 4/5 = 0.80
+    # against q011 "Why Did Charging Stop Unexpectedly?" and passed an inclusive
+    # threshold, so the user asking about a NORMAL stop was told about
+    # insulation faults and overheating. No catalog variant sits exactly at the
+    # bar (measured over all 185), so nothing legitimate depends on the boundary.
+    return best_qid, best_variant_identity > _FAQ_VARIANT_IDENTITY
 
 
 # A candidate order token: starts AND ends on an alphanumeric, so a trailing
