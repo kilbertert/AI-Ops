@@ -84,13 +84,44 @@ AI-Ops 是外挂的第三条数据路径。需求真正的意思是**把 AI-Ops 
 
 ## 2'. 仍真正需要确认的（收敛后）
 
-| # | 问题 | 为什么源码回答不了 |
+| # | 问题 | 状态 |
 |---|---|---|
-| **R-1** | `ch_site.partner_b_id` 覆盖 69% 订单，却与 `partner_info.id` **交集为 0**——它对哪个注册表？ | 需要跟着写入路径追（`EasyChargeAuthorityService` 只是一个写入点）；也可能确实是历史脏数据。**先继续追源码，追不到再问** |
+| ~~R-1~~ | ~~`partner_b_id` 对哪个注册表？~~ | ✅ **已解（源码 + 生产库实测双证）**：`ch_site.partner_b_id` ≡ `partner_info.owner` ≡ **`qumall_upms.sys_user.id`（`type='5'` 代理商）**。端到端覆盖率 **68.3%（20782/30443）**，不是先前误算的 9.4%——错因是我按 `partner_info.id` 做了 join。 |
 | **R-2** | AI-Ops 走哪个后端接口？现在有没有一个**接受 `client-type` 且暴露订单查询**的接口可复用？ | 需要与后端确认是**复用现有接口**还是**新开一个**，以及 AI-Ops 的调用身份怎么映射成 `clientType` |
-| **R-3** | `seePlatform=true` 的语义：平台方（`'-1'`）**是否应该**看到所有运营商的订单？ | 这是**业务规则**，不是代码事实 |
+| **R-3** | `seePlatform=true` 的语义：平台方（`'-1'`）**是否应该**看到所有运营商的订单？ | **业务规则**，不是代码事实。**需要产品确认** |
 | **R-4** | 「统一案例库」用哪个知识库、是否允许跨租户读 | 业务决策（见 P1-6） |
 | **R-5** | 管家端登录的账号类型 → 映射成哪个 `clientType`（`admin`/`tenant-app`/`supply-admin`） | 需要业务+后端共同确认 |
+| **R-6** | 未覆盖的 ~31.7% 订单（站点无 `partner_b_id`）是**自有站点（正常）**还是缺数据？ | 需业务确认；若是自有站点，则"无代理商→按租户/平台放行"是正确规则而非漏洞 |
+
+### 5.5 R-1 追查结论（新增，取代"待问同事"）
+
+**`ch_site.partner_b_id` 指向 `qumall_upms.sys_user.id`，且该行 `type='5'`（代理商账号）。**
+
+三条独立证据：
+
+1. **源码成对写入**（`ChSiteServiceImpl.java:494-495`）——同一次调用里两个字段取自
+   `partner_info` 的**不同列**，直接证明是两个 id 空间：
+   ```java
+   chSite.setAgentId(partnerInfo.getId());       // agent_id     ← partner_info.id
+   chSite.setPartnerBId(partnerInfo.getOwner()); // partner_b_id ← partner_info.owner
+   ```
+2. **写入落点**（`MallDataMapper.xml:87`）：`insert into qumall_upms.sys_user_shop(..., user_id, ...) value ('0',#{partnerBId},...)`；
+   UPMS 定义 `sys_user_shop.user_id = sys_user.id where type='5'`（`SysUserMapper.xml:428-437`）。
+3. **JOIN 路径**（`ChOrderInfoMapper.xml:159-161`）：`coi.partner_b_id = pi.owner`。
+
+**生产库实测（2026-09-24，41 → `192.168.1.45`，只读元数据/基数）**：
+
+| 链路 | 覆盖订单 | 占比 |
+|---|---|---|
+| `site.partner_b_id → sys_user(type=5)` | **20,782** | **68.3%** |
+| `site.partner_b_id → partner_info.owner` | 21,130 | 69.4% |
+| `site.agent_id → partner_info.id` | 2,875 | 9.4% |
+
+`sys_user.type` 实测：`-1:35, 1:452, 2:540, 3:154, 5:314, 6:4, 7:1, 8:2, 9:132`——
+**代理商（type=5）314 个账号**；`partner_info.owner ∩ sys_user` = 312（type=5 有 307）→ **运营商身份可绑**。
+
+**`partner_b_id` 的消费方**（供实现参考）：`ChOrderInfoMapper.xml:151-166` 的传化订单推送
+显式 JOIN：`coi.partner_b_id = pi.owner`（同一 UNION 里出现三次）。
 
 
 ---
