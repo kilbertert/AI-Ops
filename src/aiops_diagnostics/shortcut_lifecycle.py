@@ -133,6 +133,13 @@ class ShortcutError(RuntimeError):
 # languages and public() falls back to zh, so a de/fr/es/pt user silently gets
 # Chinese buttons while the response still echoes their language
 # (41 live, 2026-09-18).
+#
+# The operator entry (#427) reuses the SAME codes as consumer: both actions run
+# on the published execution paths, so an operator-entry button behaves exactly
+# like its consumer twin and needs no second implementation. Only two: the
+# fault-report jump action is not the assistant entry's business, so it stays on
+# the consumer side. Publishing per tenant+entry remains an operator act — these
+# rows seed as drafts like the consumer ones.
 _BUNDLED_SHORTCUTS: tuple[tuple[str, dict[str, dict[str, Any]]], ...] = (
     (
         "consumer",
@@ -228,6 +235,69 @@ _BUNDLED_SHORTCUTS: tuple[tuple[str, dict[str, dict[str, Any]]], ...] = (
                 # definition so the path is a repo asset, not a magic string
                 # in an ad-hoc migration command.
                 "jump_path": REPORT_FAULT_JUMP_PATH,
+            },
+        },
+    ),
+    (
+        "operator",
+        {
+            "case_exploration": {
+                "intent": "case_exploration",
+                "requires_order": False,
+                "sort_order": 10,
+                "labels": {
+                    "zh": "客户案例",
+                    "en": "Customer Cases",
+                    "de": "Kundenfälle",
+                    "fr": "Cas clients",
+                    "es": "Casos de cliente",
+                    "pt": "Casos de cliente",
+                },
+                "descriptions": {
+                    "zh": "查看与充电运营相关的标杆案例",
+                    "en": "Browse benchmark cases from charging operations",
+                    "de": "Benchmark-Fälle aus dem Ladebetrieb ansehen",
+                    "fr": "Consultez des cas de référence liés à l'exploitation de la recharge",
+                    "es": "Consulte casos de referencia relacionados con la operación de carga",
+                    "pt": "Consulte casos de referência relacionados à operação de recarga",
+                },
+                "question_templates": {
+                    "zh": "我想看看客户案例",
+                    "en": "I'd like to see customer cases",
+                    "de": "Ich möchte Kundenfälle sehen",
+                    "fr": "Je voudrais voir des cas clients",
+                    "es": "Quiero ver casos de cliente",
+                    "pt": "Quero ver casos de cliente",
+                },
+            },
+            "smart_diagnosis": {
+                "intent": "order_issue",
+                "requires_order": True,
+                "sort_order": 20,
+                "labels": {
+                    "zh": "订单检测",
+                    "en": "Order Diagnosis",
+                    "de": "Auftragsdiagnose",
+                    "fr": "Diagnostic de commande",
+                    "es": "Diagnóstico de pedido",
+                    "pt": "Diagnóstico de pedido",
+                },
+                "descriptions": {
+                    "zh": "选择订单，检测该订单的充电异常",
+                    "en": "Pick an order and its charging issues are detected",
+                    "de": "Auftrag wählen, Ladefehler werden automatisch erkannt",
+                    "fr": "Sélectionnez une commande, ses anomalies de charge sont détectées",
+                    "es": "Seleccione un pedido y se detectarán sus anomalías de carga",
+                    "pt": "Selecione um pedido e as anomalias de carregamento serão detectadas",
+                },
+                "question_templates": {
+                    "zh": "帮我检测这个订单的充电异常",
+                    "en": "Diagnose the charging issue of this order",
+                    "de": "Diagnostizieren Sie den Ladefehler dieses Auftrags",
+                    "fr": "Diagnostiquez l'anomalie de charge de cette commande",
+                    "es": "Diagnostique la anomalía de carga de este pedido",
+                    "pt": "Diagnostique a anomalia de carregamento deste pedido",
+                },
             },
         },
     ),
