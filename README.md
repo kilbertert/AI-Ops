@@ -146,7 +146,7 @@ agent 工具层、三个数据源——并且**已经漂移了**：同一个订�
 
 ### 推论五：凭据不能到达客户端，所以有 Gateway
 
-便携客户端（Windows/Linux）不应该携带 MySQL、Redis、SSH 或 provider key。
+便携客户端不应该携带 MySQL、Redis、SSH 或 provider key。
 把凭据留在固定服务器、客户端只拿一个设备令牌——见
 [docs/gateway.md](docs/gateway.md)，以及 [ADR-0004](docs/adr/0004-bff-owns-frontend-api-boundary.md)。
 
@@ -488,7 +488,7 @@ qa-plan.md                QA 用例（78 个用例 ID，含环境/前置/数据/
 
 ### 确定性检查（唯一强制门）
 
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml) 两个 job，均 GitHub-hosted：
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) 一个 job，GitHub-hosted：
 
 ```bash
 uv sync --locked --dev
@@ -496,9 +496,6 @@ uv run ruff check . && uv run ruff format --check .
 uv run pytest -q
 uv run python -m compileall -q src tests && uv pip check
 ```
-
-`windows-verify` 跑同样五条，外加 `packaging/build_portable.py`（构建便携包并在
-源码目录之外解压、以最小 `PATH`、隔离 home 做烟测，且**断言产物内不含凭据**）。
 
 ### 持续部署（[:cd.yml](.github/workflows/cd.yml) + [:deploy/deploy-41.sh](deploy/deploy-41.sh)）
 
@@ -602,7 +599,7 @@ runbook §5/§6 明确禁止 CI 自证。所以 CD 通过最多报告 `merged_wa
 | 怎么跑起来？ | [docs/快速上手.md](docs/快速上手.md) |
 | 系统架构简述？ | [docs/architecture.md](docs/architecture.md) |
 | agent 运行时细节？ | [docs/thin-harness.md](docs/thin-harness.md) |
-| 多端部署？ | [docs/gateway.md](docs/gateway.md) · [docs/portable.md](docs/portable.md) · [docs/打包与下载.md](docs/打包与下载.md) |
+| 多端部署？ | [docs/gateway.md](docs/gateway.md) |
 | 里程碑历史？ | [docs/开发进度.md](docs/开发进度.md) |
 
 **历史遗留文件（保留但不代表当前状态，不要据此判断）：**

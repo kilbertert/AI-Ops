@@ -5,6 +5,35 @@
 > 与 `docs/agents/current-delivery-state.md`。已过时的结论就地划掉并注明取代它的条目，
 > 不删除：交付状态的变化过程本身是证据。
 
+## 移除 `windows-verify` 与 Windows 分发（2026-09-24）
+
+**决定**：本仓不再出 Windows 便携包。CI 的 `windows-verify` job 删除，Ruleset 23760870 的
+必需检查同步移除它，`docs/portable.md` 与 `docs/打包与下载.md` 删除。此处记录判据与代价，
+因为这是一次交付面收窄，不是清理。
+
+**判据（实测，非推断）**：
+
+| 观察 | 证据 |
+| --- | --- |
+| 成本 | run `35967750416`：`verify` 50s，`windows-verify` 332s（近 5 次 334/367/356/339/348s） |
+| 其中真实 Windows 验证 | 仅 `build_portable.py` 71s；其余 240s 是在 Windows 上重跑 `verify` 已跑过的五条 |
+| 制品是否被使用 | `gh api .../actions/artifacts`：未过期 artifact `total_count: 0`，历史下载数全为 0 |
+| 历史上的配额问题 | 提交 `1e96734`「修复 verify(ruff) 与 windows-verify(artifact 配额)」；每提交上传一个 Windows ZIP |
+| Windows 代码路径 | `console_encoding.py` / `codex_launcher.py` 的 `os.name == "nt"` 分支已由 `platform_name=` 参数在 Linux 上单测覆盖（`tests/test_console_encoding.py`、`tests/test_codex_runtime.py`） |
+
+**代价（明确接受）**：源自 Windows 的破坏性改动不再被每提交 CI 捕获，只会在有人于 Windows
+主机本机构建便携包时暴露。`packaging/build_portable.py` 与其余 Windows 代码路径保留，不予删除
+—— 保留即保留了恢复路径：将来若要恢复 Windows 分发，把 `package.yml`（tag/手动触发的
+Linux+Windows 矩阵）接回 CI 即可，无需重写代码。
+
+**变更集**：`.github/workflows/ci.yml`（删 job）、`README.md`（CI 段与文档索引）、
+`AGENTS.md`（平台规则改写）、`docs/gateway.md`、`docs/快速上手.md`、`docs/thin-harness.md`
+（去掉共享运行时不再依赖的平台专用表述）、删除 `docs/portable.md`、`docs/打包与下载.md`。
+产品代码零改动。
+
+**`docs/开发进度.md` 中 M12/M15 等历史条目不动** —— 它们记录的是当时状态，按本页阅读须知
+「已过时的结论就地注明取代它的条目，不删除」处理。
+
 ## 交付状态核查：CD 实际部署史与 FAQ 假阳性（2026-09-23）
 
 用户要求核查"生产跑的到底是不是 main"，以及"还有什么没收尾"。两项实测结论如下，
