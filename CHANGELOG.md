@@ -193,6 +193,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 记录 CD 部署完成与对 CD 构建的重新验收 (#404)
 - 修正状态索引的过期「进行中」，并记录 CD 部署史核查 (#409)
 - 订单授权问题清单——P0 三条改由公司源码回答 (#415)
+- 开发进度.md 补阅读须知，避免历史条目被当作现状 (#418)
 
 ### Fixed
 - Deliver evidence payloads to Windows runner
