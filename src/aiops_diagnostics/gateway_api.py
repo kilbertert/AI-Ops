@@ -967,8 +967,68 @@ def create_gateway_app(
                 context, caller, conversation, payload, language, promo_target, promo_intent
             )
 
+        # The routing decision, resolved at most once per request and reused by
+        # whichever branch needs it (#408). ``routing_resolved`` records that it
+        # was already resolved on the FAQ path, so the routing block below does
+        # not pay for a second identical call.
+        classified: dict[str, Any] | None = None
+        routing_resolved = False
+
         # Route 2b: FAQ short-circuit (deterministic, zero-order, zero-model).
-        faq_id = _faq_hit_by_keywords(decision.platform, context.faq_catalog, payload.question)
+        #
+        # A short question's keyword match is not yet an answer (#408). The
+        # scoring below can only see token overlap, and a short question has few
+        # tokens, so one or two generic words reach full containment against
+        # some title — "今天天气怎么样" scored 1.0 against the summer-heat entry and
+        # answered a charging question to someone who asked about the weather.
+        # Overlap cannot separate that from a real hit: "充电桩" (a genuine
+        # question) and "拔不出枪" (a genuine question) and "天气" (not one) all
+        # reach 1.0.
+        #
+        # So the decision the score cannot make is made by the thing that can —
+        # the routing intent, which comes from Jev. A long question does not ask:
+        # it answers from the catalog with no model call, which is what keeps
+        # every question clicked from the FAQ list on the instant path it has
+        # today. The length bar, and why it is length rather than score, is
+        # argued at `_FAQ_MARGINAL_QUESTION_SIGS`.
+        #
+        # It costs nothing extra. This branch runs BEFORE the routing block
+        # further down, and either the FAQ branch answers this request or that
+        # block resolves the identical decision for it — so a short question is
+        # not an additional model call, it is the same one moved earlier.
+        #
+        # The decision is resolved ONCE for the whole request and carried. The
+        # routing block below must not resolve it again: a second call would be
+        # paid by every short question the FAQ branch does NOT suppress, i.e.
+        # exactly the safe path, and this upstream is metered per day.
+        faq_id, faq_self_evident = _faq_match(decision.platform, context.faq_catalog, payload.question)
+        if faq_id is not None and not faq_self_evident:
+            classified = _classify_for_routing(
+                context, payload.question, language=language, tenant_id=caller.effective_tenant_id
+            )
+            routing_resolved = True
+            if classified is not None and classified.get("intent") in _FAQ_SUPPRESSING_INTENTS:
+                # Not this entry's question, or not an FAQ-shaped question at
+                # all. Fall through to the routing below, which serves it on the
+                # path its intent names — a general answer for chit-chat and
+                # knowledge, the promotional card for case exploration.
+                faq_id = None
+            # When there is no second opinion, the keyword answer stands —
+            # deliberately, and NOT because it is more likely to be right.
+            #
+            # Suppressing on "no decision" would make an unavailable routing
+            # hint change what a user is told, and it would do so on exactly the
+            # deployments that have no classifier configured — the FAQ path
+            # would vanish from them wholesale. This release already paid for
+            # that mistake once: the #392 cutover let an unconfigured Jev return
+            # "no decision" and silently disabled casual handling, the
+            # promotional intents and the high-risk rule everywhere it was not
+            # configured (#398). "No decision" must not be a behaviour change.
+            #
+            # The cost is bounded and stated rather than hidden: while the
+            # routing decision is unavailable, the misroute this ticket fixes
+            # can still happen. That is the pre-existing behaviour, not a new
+            # defect, and it is the recoverable direction of the two.
         if faq_id is not None:
             answer = context.faq_catalog.answer(decision.platform, faq_id, language)
             _record_route_metric(context, caller, route_type="faq", outcome="completed")
@@ -1002,28 +1062,12 @@ def create_gateway_app(
             }
 
         casual_job = False
-        classifier = getattr(context.runtime, "classify_lightweight", None)
-        if classifier is not None:
-            try:
-                classified = classifier(
-                    payload.question,
-                    language=language,
-                    tenant_id=caller.effective_tenant_id,
-                )
-            except (ValueError, RuntimeError) as exc:
-                # A classifier that raises is treated as "no decision", exactly
-                # as one that returns None is. The routing hint must never be
-                # the reason a user gets nothing (#392).
-                #
-                # But it must not be swallowed in silence either: this handler is
-                # the outermost one, so a defect that escapes the routing
-                # module's own vocabulary would otherwise disable routing with no
-                # trace anywhere — which is precisely how this component stayed
-                # broken unnoticed before. Logged, no metric (the routing module
-                # counts the failures it recognises), and never the user's text.
-                _LOGGER.warning("classifier raised outside its own fallback: %s", type(exc).__name__)
-                classified = None
-            if classified and classified.get("intent") == "casual":
+        if not routing_resolved:
+            classified = _classify_for_routing(
+                context, payload.question, language=language, tenant_id=caller.effective_tenant_id
+            )
+        if classified is not None:
+            if classified.get("intent") == "casual":
                 # Chit-chat is answered by the same zero-order QA job every other
                 # general question uses, rather than by the classifier writing a
                 # sentence inline (#391). Two reasons, and the second is why this
@@ -2275,6 +2319,59 @@ _FAQ_GENERIC_CHARS = frozenset(
 _FAQ_MIN_CONTAINMENT = 0.5
 _FAQ_MIN_OVERLAP = 2
 
+# The question length at or above which a keyword match is answered directly,
+# with no second opinion.
+#
+# The ambiguity this ticket fixes is a SHAPE, not a keyword: the question is
+# short, so one or two generic words are its entire signature, they reach full
+# containment against some title, and the answer is about the wrong subject.
+#
+# Length is what isolates that shape, and the measurements bracket it: every
+# ambiguous case is 2-6 significant tokens ("天气" 2, "充电" 2, "充电桩" 3, "今天天气
+# 怎么样" 4, "重卡充电案例" 6), while the genuine questions a user types run 10-12
+# ("充电桩怎么拔枪？" 5 is the one exception, and it clears the bar).
+#
+# Length rather than an overlap score, because a score bar is scale-dependent
+# and the compressed en/de/fr/es/pt titles are short by construction: measured,
+# an absolute overlap bar of 8 sends 91 of the 185 title variants to the model.
+#
+# What that buys, precisely, so the cost is not overstated: clicking a
+# recommended question calls `/v1/faq/answer` with a question_id and never runs
+# this matcher at all; 27 of the 28 zh consumer titles self-evident when TYPED;
+# and the 135 localized variants consult the routing intent, which is the
+# genuine added call in this change. The bar is not what decides any individual
+# case — the routing intent is — so the widened band is safe: a `knowledge`
+# question in it still goes to the catalog.
+_FAQ_MARGINAL_QUESTION_SIGS = 10
+
+#: Intents that say "the catalog is not where this question belongs", so a
+#: marginal keyword match must not answer from it.
+#:
+#: `casual` is the defect this ticket was opened for: "今天天气怎么样" reached the
+#: summer-heat entry on the single shared word 天气, and every non-charging
+#: question of that shape — 今天吃什么, 股票怎么样 — reaches some entry the same
+#: way. Jev says `casual` for all of them.
+#:
+#: `case_exploration` / `solution_discovery` must not enter the FAQ at all
+#: (#231 acceptance: 案例不进入 FAQ). The promo cue matcher upstream catches
+#: only the phrasings it was given, and "重卡充电案例" was reaching the catalog as
+#: RFID-card content — the only marginal match among the 86 real questions.
+#:
+#: `knowledge` is deliberately ABSENT, and that is a measurement rather than an
+#: oversight. A knowledge-intent question in the marginal band is the near-miss:
+#: "充电桩怎么拔枪？" (the user's words) against q010 "充电结束后拔不出充电枪怎么
+#: 办？" (the entry, answer included). That is related content, not unrelated
+#: content — the harm this ticket is about — and suppressing it also suppresses
+#: genuinely-asked short knowledge questions, which is a recall cost with no
+#: matching acceptance requirement. No `knowledge` question in the 86-question
+#: real corpus lands in the marginal band at all, so the wider set would add
+#: that risk without a single observed case to justify it.
+#:
+#: `order_issue` and `report_fault` are likewise absent: they are the narrowest
+#: intents, so they almost never land in the marginal band, and where one does
+#: the FAQ answer is still the right one to give.
+_FAQ_SUPPRESSING_INTENTS = frozenset({"casual", "case_exploration", "solution_discovery"})
+
 
 def _normalize_keywords(text: str) -> set[str]:
     """Deterministic CJK char set for FAQ short-circuiting.
@@ -2319,18 +2416,65 @@ def _faq_title_union_sigs(faq_catalog: FAQCatalog, platform: str, question_id: s
     return sigs
 
 
-def _faq_hit_by_keywords(platform: str, faq_catalog: FAQCatalog, question: str) -> str | None:
-    """Return a question_id whose multilingual titles best match the question.
+def _classify_for_routing(
+    context: Any,
+    question: str,
+    *,
+    language: str,
+    tenant_id: str | None,
+) -> dict[str, Any] | None:
+    """The routing decision, or None when none could be obtained.
+
+    Lifted out of the handler because two branches now need the same answer and
+    one request must not pay for it twice: the FAQ short-circuit consults it for
+    a marginal match, and the routing below consults it for everything the FAQ
+    branch did not take. Resolving it on both paths is what keeps the FAQ
+    disambiguation free rather than an added model call.
+
+    ``None`` is a first-class outcome. A routing hint is an optimisation and
+    must never be the reason a user gets nothing (#392), so both a missing
+    runtime hook and a raise from one are "no decision" rather than an error.
+    """
+    classifier = getattr(context.runtime, "classify_lightweight", None)
+    if classifier is None:
+        return None
+    try:
+        return classifier(question, language=language, tenant_id=tenant_id)
+    except (ValueError, RuntimeError) as exc:
+        # Treated as "no decision", exactly as a None return is.
+        #
+        # But it must not be swallowed in silence either: this is the outermost
+        # handler, so a defect that escapes the routing module's own vocabulary
+        # would otherwise disable routing with no trace anywhere — which is
+        # precisely how this component stayed broken unnoticed before. Logged,
+        # no metric (the routing module counts the failures it recognises), and
+        # never the user's text.
+        _LOGGER.warning("classifier raised outside its own fallback: %s", type(exc).__name__)
+        return None
+
+
+def _faq_match(
+    platform: str,
+    faq_catalog: FAQCatalog,
+    question: str,
+) -> tuple[str | None, bool]:
+    """Best matching entry, and whether it may be answered only on those words.
+
+    Returns ``(question_id, confident)``. ``confident`` is True when the match
+    does not need a second opinion; False means the question is short enough
+    that the match may be an artifact of its brevity, and the routing intent
+    should confirm it before the catalog answers (see
+    ``_FAQ_MARGINAL_QUESTION_SIGS``).
 
     Set-containment over the union of a title's language variants: score =
     |question_sig ∩ title_union|, with a containment bar on the same union, so
     the question's significant tokens must sit mostly inside ONE entry across
-    its languages. Deterministic, zero-model; a later ticket adds model
-    disambiguation for ambiguous text.
+    its languages. The scoring stays deterministic and zero-model; what this
+    returns is whether those words can be trusted on their own.
     """
     qsigs = _normalize_keywords(question)
     if not qsigs:
-        return None
+        return None, False
     unions = {
         entry["question_id"]: _faq_title_union_sigs(faq_catalog, platform, entry["question_id"])
         for entry in faq_catalog.catalog(platform)
@@ -2345,9 +2489,11 @@ def _faq_hit_by_keywords(platform: str, faq_catalog: FAQCatalog, question: str) 
     # Require at least MIN_OVERLAP distinct tokens AND a strong containment,
     # so single-token ties ("枪") or generic overlap ("充/电/程") never fire.
     if best_overlap < _FAQ_MIN_OVERLAP or best_qid is None:
-        return None
+        return None, False
     containment = len(qsigs & unions[best_qid]) / len(qsigs)
-    return best_qid if containment >= _FAQ_MIN_CONTAINMENT else None
+    if containment < _FAQ_MIN_CONTAINMENT:
+        return None, False
+    return best_qid, len(qsigs) >= _FAQ_MARGINAL_QUESTION_SIGS
 
 
 # A candidate order token: starts AND ends on an alphanumeric, so a trailing
