@@ -498,6 +498,20 @@ third-session 会话 → userId（C 端）
 （`query_scope.py:232-240`）。所以适配**必须改范围类型**（从 `self` 改为组织/店铺型），
 不能只"填上 shop_ids"。
 
+**但改范围类型会触发代查分支，这是第二个陷阱**：`RedisThirdSessionResolver` 同时设了
+`delegated=True`（`third_session_auth.py:80`）与 `subject.c_user_id`，而
+`query_scope.py:250-260` 对该组合会：
+
+1. **要求 Dis 配置** —— `dis.point_ids_for_user(...)`，未配置则抛
+   `SCOPE_ERROR_DIS_CONFIG_MISSING`；即"只改范围类型"会**直接报错**（若 41 未配 Dis）；
+2. **取交集收窄** —— `sites = target_sites if sites is None else sites & target_sites`：
+   把店铺推出的站点与 Dis 点位推出的站点**取交集**，**缩小**运营商可见站点。
+
+**语义上 `delegated` 用错了**：该标志的原意是"代查**他人的**目标主体"
+（`scope_context` 的设计如此），而会话场景里**用户查的是自己的单**。
+所以适配**必须同时处理 `delegated`**（会话路径应置 `delegated=False`，或明确设计交集语义），
+否则会踩上面两条之一。**这条必须在实现前定，不能留给实现时发现。**
+
 **不需要后端新增或修改任何接口。**（§5.8 曾把"新增 `partner_b_id → 站点` 映射"列为约束，
 据此**撤回**——走既有 `site_ids_by_shops` 即可。）
 
