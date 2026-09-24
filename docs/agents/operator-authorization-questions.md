@@ -88,7 +88,7 @@ AI-Ops 是外挂的第三条数据路径。需求真正的意思是**把 AI-Ops 
 | # | 问题 | 状态 |
 |---|---|---|
 | ~~R-1~~ | ~~`partner_b_id` 对哪个注册表？~~ | ✅ **已解（源码 + 生产库实测双证）**：`ch_site.partner_b_id` ≡ `partner_info.owner` ≡ **`qumall_upms.sys_user.id`（`type='5'` 代理商）**。端到端覆盖率 **68.3%（20782/30443）**，不是先前误算的 9.4%——错因是我按 `partner_info.id` 做了 join。 |
-| **R-2** | **AI-Ops 用什么身份代表调用者？** —— 这是唯一剩下的一跳。会话只给 `userId/tenantId`（无 roles/无范围），而所有取范围的接口都要**凭证**：`/user/info`、`/user/ds`、`/shopuser/getShops`、`/role/list` 皆然。**需业务/后端确认**：有没有一个"用 `userId` 换调用者凭证"的受信路径 | **未解，但已收敛**（详见 §5.8）。两条路（AI-Ops 自算 / 调后端）都卡在同一处 |
+| ~~R-2~~ | ~~AI-Ops 用什么身份代表调用者？~~ | ✅ **已解（公司源码 + 生产库实测）**：**存在，且直接吃 `userId`** —— `GET /shopuser/getShops?userId=` 返回该用户的 `shop_id` 集合，而 `shop_id` 与 `ch_site.id` **同域**（954 行中 953 行相同），可直接当站点集合下推。**无需新增映射、无需后端改动**（详见 §5.9） |
 | ~~R-3~~ | ~~平台方（`'-1'`）是否应看到所有运营商的订单？~~ | ✅ **已关闭（产品口径 + 数据佐证）**：产品答「不会有出现 `-1` 查看数据的场景，不用理会平台」；实测 `ch_site` 无任何 `shop_id='-1'` 行。**该通路当前是空操作。** 注意范围：这关闭的是"**是否需要跨运营商可见性**"。「**租户内的店铺 ID 仍会匹配到站点**」（即普通站点隔离照常生效）不在本次关闭范围内 |
 | **R-4** | 「统一案例库」用哪个知识库、是否允许跨租户读 | 业务决策（见 P1-6） |
 | **R-5** | 管家端登录的账号类型 → 映射成哪个 `clientType`（`admin`/`tenant-app`/`supply-admin`） | 需要业务+后端共同确认 |
@@ -348,7 +348,7 @@ Illegal mix of collations (utf8mb4_0900_ai_ci,IMPLICIT) and (utf8mb4_general_ci,
 | 管家端入口（`operator`）+ 两个快捷指令 | **可落地**（数据发布为主） |
 | 「订单检测」 | **可落地**，但**不能绑智能体**（C9），靠 `requires_order` 弹订单选择器 |
 | 「客户案例」用统一案例库 | **待 P1-6**：需指定 KB + 跨租户授权 |
-| 「订单查询加运营商权限判断」 | **判据与数据链路已查清**（见 §5）：运营商 ≡ `partner_info.owner` ≡ `sys_user.id(type='5')`；`订单→站点→运营商` 覆盖 **68.3%**；调用者侧 `owner ∩ sys_user = 312`。**仍未解的是 R-2**：AI-Ops 用什么身份代表调用者（见 §5.8）。数据侧无缺口，**卡点是一个身份/凭证问题** |
+| 「订单查询加运营商权限判断」 | **可落地**。判据与链路已查清（§5.5）：运营商 ≡ `partner_info.owner` ≡ `sys_user.id(type='5')`；覆盖 **68.3%**。**实现路径已解（§5.9）**：会话 `userId` → `GET /shopuser/getShops` → `shop_id`（与站点 id 同域）→ 既有 `site_ids` 下推。**不需要后端改动。** 剩余为数据完整性（§5.9 边界 1）与实现期决策 |
 | 现有授权缺口 | **真实缺口，与上述三者独立**：缺的是**运营商/平台维度**。注意前端会话**已**叠加 `user_id`（C6），所以不是「任何人可查」——但按人过滤既过窄（查不到本运营商别人的单），也可能与业务口径不符。即使 P0 全部悬置，也值得单独评估 |
 
 **最重要的一句**：需求说的「该订单的**站点的**运营商 id 和平台 id」——
@@ -418,9 +418,8 @@ Illegal mix of collations (utf8mb4_0900_ai_ci,IMPLICIT) and (utf8mb4_general_ci,
 
 #### 仍成立的两条实现约束（与 R-2 答案无关）
 
-1. **运营商范围需要新增站点映射** —— 既有骨架的站点来源是
-   `ch_site.shop_id` / `ch_site.dis_point_id`（`sources.py:435-453`）；
-   按 **`partner_b_id` 取站点集合**是**新映射**，现有生产验证不覆盖它。
+1. ~~运营商范围需要新增站点映射~~ —— **已被 §5.9 撤回**：`shop_id` 与 `ch_site.id` 同域
+   （954 行中 953 行相同），既有 `shop_ids` 下推**直接可用**，无需 `partner_b_id → 站点` 的新映射。
 2. **既有验证用的是平台凭证** —— M34 那次端到端跑的是 `testadmin`，属平台凭证路径；
    **不能推断会话凭证路径已通**。
 
@@ -437,3 +436,56 @@ return point.proceed();      // 无条件放行
 
 `@Inside` 形同虚设。与 `DataScopeInterceptor`（组织级隔离，同样整段注释掉）
 是**同一种形态**：**看着有隔离，实际是空的**。两者都应报平台侧。
+
+---
+
+### 5.9 R-2 答案：有受信路径，且不需要凭证（2026-09-24）
+
+> 承接 §5.8 的收敛问题：**有没有一条受信路径，能用会话的 `userId` 换到调用者身份/范围？**
+> 结论：**有。**
+
+#### 证据链（公司源码 + 生产库实测）
+
+1. **公司网关对 third-session 做的事与我们完全相同** ——
+   `cloud-gateway/.../filter/ApiProxyHeadFilter.java`：从 Redis 取
+   `app:3rd_session:<token>`，解析出 `ThirdSession`，然后**只注入头部**：
+   `user-id` / `uid` / `tenant-id` / `site`。**没有 credential、没有 roles、没有范围。**
+   即**公司自身从不做"userId 换凭证"**——身份以**头**的形式向下游传递，由下游各自解析。
+
+2. **后端也采用同一模式** —— `ShopIdInterceptor.judge()` 要求
+   `SecurityUtils.getUser()` 非空，而那个用户由 `from: Y` 头经 `@FeignAutoFillHeader` 注入。
+   也就是说后端期望的**正是**"受信调用方 + 身份头"，而非某个用户凭证。
+
+3. **`/shopuser/getShops` 直接接受 `userId`** ——
+   `cloud-upms-admin/.../ShopUserController.java`：
+   该端点（`GET /shopuser/getShops`）**无 `@Inside`、无类级鉴权**，SQL 为
+   `select distinct shop_id from sys_user_shop where user_id = #{id}`。
+
+4. **它正是后端权威授权所用的同一个接口** —— `ShopIdInterceptor` 在 `realTime=true` 时
+   调的就是 `UpmsAdminFeignClient.getShops(userId)` → `GET /shopuser/getShops`。
+   **我们调它不是在另发明一套范围，而是在用同一个数据源。**
+
+5. **`shop_id` 可直接当站点集合用** —— 生产库实测：`ch_site.id` 与 `ch_site.shop_id`
+   **954 行中 953 行相同**（同域）。`sys_user_shop.shop_id` 命中 `ch_site.id` 299 个，
+   命中 `ch_site.shop_id` 同样 299 个 —— 两列可互换。
+
+#### 因此落地方案（A 方案的具体形状）
+
+```
+third-session 会话 → userId
+  → GET /shopuser/getShops?userId=<id>        ← 既有端点，直接吃 userId
+  → shop_id 集合（≈ 站点 id 集合）
+  → 作为 QueryScope.site_ids 下推             ← 既有机制，无需新增映射
+```
+
+**不需要后端新增或修改任何接口，也不需要 `partner_b_id → 站点` 的新映射。**
+（§5.8 曾把"新增映射"列为约束，据此**撤回** —— `shop_id` 与站点 id 同域。）
+
+#### 仍成立的两条边界
+
+1. **覆盖面不全** —— 实测 310 个代理商账号中，**只有 131 个有 `sys_user_shop` 绑定**。
+   其余 179 个走这条路会得到**空集合 → fail closed**，即使其名下站点 `partner_b_id` 有值。
+   这与 R-6 是**同一类问题**（数据完整性），应按同一规则处置：**fail closed 并记录，不兜**。
+2. **`@Inside` 与组织级 `DataScopeInterceptor` 的鉴权体均被注释掉**（§5.3、§5.8）——
+   意味着**端点本身不拒绝调用方**。我们依赖的是"内网服务 + 身份头"这一约定，
+   而不是端点自带的保护。这一点应在实现时明确记录。
