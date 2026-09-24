@@ -990,7 +990,7 @@ def create_gateway_app(
         # catalog title does not ask: it answers from the catalog with no model
         # call, which is what keeps every typed entry on the instant path. What
         # separates "reproduces" from "overlaps", and why it is not a length bar,
-        # is argued at `_FAQ_VARIANT_IDENTITY`.
+        # is argued at the note above `_classify_for_routing`.
         #
         # It costs nothing extra. This branch runs BEFORE the routing block
         # further down, and either the FAQ branch answers this request or that
@@ -2319,33 +2319,31 @@ _FAQ_GENERIC_CHARS = frozenset(
 _FAQ_MIN_CONTAINMENT = 0.5
 _FAQ_MIN_OVERLAP = 2
 
-# The share of one title variant that a question must reproduce, in BOTH
-# directions, for the match to be answered directly with no second opinion.
+# What makes a keyword match self-evident is not a score: it is whether the
+# question's significant tokens ARE one of the entry's title variants — token-set
+# equality, with no threshold to tune.
 #
-# An earlier version of this change used question LENGTH as the bar, on the
-# theory that the ambiguity is a short question whose few tokens are all
-# generic. **Measured on the full catalog that was wrong**, and wrong in a way
-# only a full run could show: the compressed en/de/fr/es/pt titles are short
-# too, so length cannot tell a short title from a short question. It sent
-# `Connector Stuck? Emergency Cable Release Guide` — q010's own title — to the
-# routing intent, where Jev read the word "Guide" as solution_discovery and
-# suppressed the catalog's own entry (5 of 185 variants, 4 of them q010's).
+# Arriving at this took two measured corrections, both from real runs:
 #
-# What does separate them is not how long the question is but whose words they
-# are. A user TYPING a catalog entry reproduces it exactly; a user asking a
-# short question merely overlaps it. Requiring the overlap to cover most of the
-# question AND most of the variant, against the SINGLE best variant rather
-# than the union, measures exactly that. Measured over all 185 variants:
+# 1. A question-LENGTH bar was tried first and failed, because the compressed
+#    en/de/fr/es/pt titles are short too, so length cannot tell a short title
+#    from a short question. It sent `Connector Stuck? Emergency Cable Release
+#    Guide` — q010's own title — to the routing intent, where Jev read the word
+#    "Guide" as solution_discovery and dropped the entry (5 of 185 variants).
+# 2. A variant-containment bar (question covers most of the variant AND the
+#    variant covers most of the question, at 0.8) fixed that but kept letting
+#    ONE-TOKEN REVERSALS through, because a reversal changes a single token and
+#    lands just above the bar: `Why Did Charging Stop Normally?` scores 0.80
+#    against "…Unexpectedly?", and `Why Is Charging Power Faster Than
+#    Advertised?` scores 0.86 against the "Slower" title. Both were answered
+#    from the FAQ, and the token that differed was the whole question — a user
+#    asking why charging was FAST was told about slow charging.
 #
-#   every one of the 185 catalog variants (in all six languages): 1.00
-#   "插枪扫码步骤" (the highest non-title paraphrase):              0.50
-#   "重卡充电案例" / "充电桩怎么拔枪？":                             0.27
-#   "今天天气怎么样" / "天气":                                      0.12
-#
-# So 0.8 sits in an empty band, and the 185 never reach the model. The union
-# the matcher scores on is deliberately NOT used here: a variant matches its
-# own text, not the average of six translations of it.
-_FAQ_VARIANT_IDENTITY = 0.8
+# Equality has no such gap, and the measurements say it costs nothing: all 185
+# catalog variants (in all six languages) are exactly their own token set, while
+# every near-miss fails — the two reversals, a prefixed title (0.6 on the old
+# bar), and the false positives. So the catalog is answered instantly, and
+# anything that is merely CLOSE to an entry is checked by the routing intent.
 
 
 #: Intents that say "the catalog is not where this question belongs", so a
@@ -2452,11 +2450,10 @@ def _faq_match(
 ) -> tuple[str | None, bool]:
     """Best matching entry, and whether it may be answered only on those words.
 
-    Returns ``(question_id, confident)``. ``confident`` is True when the question
-    reproduces one of the entry's own titles, so it is answered without a second
+    Returns ``(question_id, confident)``. ``confident`` is True when the question's
+    tokens ARE one of the entry's own titles, so it is answered without a second
     opinion; False means the question merely OVERLAPS a title and the routing
-    intent should confirm it before the catalog answers (see
-    ``_FAQ_VARIANT_IDENTITY``).
+    intent should confirm it before the catalog answers (see the note above).
 
     Set-containment over the union of a title's language variants: score =
     |question_sig ∩ title_union|, with a containment bar on the same union, so
@@ -2500,20 +2497,7 @@ def _faq_match(
     containment = len(qsigs & unions[best_qid]) / len(qsigs)
     if containment < _FAQ_MIN_CONTAINMENT:
         return None, False
-    best_variant_identity = max(
-        (
-            min(len(qsigs & variant) / len(qsigs), len(qsigs & variant) / len(variant))
-            for variant in variants[best_qid]
-        ),
-        default=0.0,
-    )
-    # Strictly above, not at. A polarity flip costs one shared token and lands
-    # EXACTLY on the bar — "Why Did Charging Stop Normally?" scores 4/5 = 0.80
-    # against q011 "Why Did Charging Stop Unexpectedly?" and passed an inclusive
-    # threshold, so the user asking about a NORMAL stop was told about
-    # insulation faults and overheating. No catalog variant sits exactly at the
-    # bar (measured over all 185), so nothing legitimate depends on the boundary.
-    return best_qid, best_variant_identity > _FAQ_VARIANT_IDENTITY
+    return best_qid, any(qsigs == variant for variant in variants[best_qid])
 
 
 # A candidate order token: starts AND ends on an alphanumeric, so a trailing

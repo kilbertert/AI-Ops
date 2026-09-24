@@ -1377,27 +1377,38 @@ def test_a_polarity_flip_does_not_ride_the_identity_bar(tmp_path: Path) -> None:
     and no catalog variant sits exactly on it (measured over all 185).
     """
     client, runtime = _client(tmp_path)
-    runtime.classified = None  # the decision is consulted, not necessarily obtained
-
-    # The title itself is self-evident: answered with no second opinion asked.
-    resp = client.post(
-        "/v1/assistant/questions",
-        json={"question": "Why Did Charging Stop Unexpectedly?"},
-        headers=_headers(),
-    )
-    assert resp.status_code == 200
-    assert resp.json()["question_id"] == "consumer.faq.q011"
-    assert runtime.classify_calls == 0
-
-    # One reversed token must NOT inherit that. It is checked — and here, with
-    # no decision available, it falls back to the FAQ rather than to nothing,
-    # which is the degradation rule doing its job rather than a wrong answer.
+    # A casual reading: the reversal is a different question and must not be
+    # answered as the title it reverses.
+    runtime.classified = {"intent": "casual", "confidence": "high", "risk": "low"}
     resp = client.post(
         "/v1/assistant/questions",
         json={"question": "Why Did Charging Stop Normally?"},
         headers=_headers(),
     )
-    assert runtime.classify_calls == 1
+    assert resp.status_code == 202, resp.text
+    assert resp.json()["type"] == "qa"
+
+    # The symmetric case, one token the other way, and the one that defeated a
+    # threshold: 6/7 shared tokens scored 0.86, above any bar that still let the
+    # legitimate paraphrases through. The differing token IS the question.
+    resp = client.post(
+        "/v1/assistant/questions",
+        json={"question": "Why Is Charging Power Faster Than Advertised?"},
+        headers=_headers(),
+    )
+    assert resp.status_code == 202, resp.text
+    assert resp.json()["type"] == "qa"
+
+    # The titles themselves stay instant and model-free.
+    runtime.classify_calls = 0
+    for question, expected in (
+        ("Why Did Charging Stop Unexpectedly?", "consumer.faq.q011"),
+        ("Connector Stuck? Emergency Cable Release Guide", "consumer.faq.q010"),
+    ):
+        resp = client.post("/v1/assistant/questions", json={"question": question}, headers=_headers())
+        assert resp.status_code == 200, question
+        assert resp.json()["question_id"] == expected, question
+    assert runtime.classify_calls == 0
 
 
 def test_a_confident_faq_match_is_answered_without_consulting_routing(tmp_path: Path) -> None:

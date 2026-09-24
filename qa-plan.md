@@ -866,8 +866,8 @@ PROMPT-01/02 为 41 实机验收（清单收敛 + 公网问答），PROMPT-03 �
 | INTENT-24 | 本地 dev | #408 修复后 | 长问句即使被路由误判为 casual | 仍返回 type=faq | PASS：`test_a_confident_faq_match_is_answered_without_consulting_routing`；长度达标即自证 |
 | INTENT-25 | 本地 dev | #408 修复后 | 统计单请求的分类器调用次数 | 恰好 1 次 | PASS：`test_a_short_question_asks_the_classifier_once`（去掉复用后该断言为 2，已实测） |
 | INTENT-26 | 41 实机（真实 Jev） | #408 修复后 | 逐条提交**全部 185 个目录标题变体**（含 en/de/fr/es/pt） | 全部仍 type=faq 且不消耗判定调用 | PASS：**185/185 仍 FAQ，185 免模型、问判定 0 次、失败 0**。第一版长度判据在此为 180/185（q010 的 4 个语言变体因 "Guide" 一词被判 solution_discovery 而打掉）→ 已改为变体同一性判据 |
-| INTENT-27 | 41 实机（真实 Jev） | #408 修复后 | 单变体判据的分离度（185 变体 vs 非标题改写） | 两群之间有明显空带 | PASS：**185 个变体全部 1.00**；最高非标题改写 `插枪扫码步骤` 0.50，`重卡充电案例`/`充电桩怎么拔枪？` 0.27，`今天天气怎么样`/`天气` 0.12；阈值 0.8 落在空带 |
-| INTENT-28 | 本地 dev | 极性翻转 | 提交 `Why Did Charging Stop Normally?`（q011 英文标题为 `…Unexpectedly?`） | 不得被判自证 | PASS：双向 identity 恰为 0.80；门槛改**严格大于**后它会去问判定（`>=` 时该测试变红，已变异验证）。实测 185 个目录变体无一恰在 0.80 |
+| INTENT-27 | 41 实机（本地确定性） | #408 修复后 | 判据的分离度：目录变体 vs 近似命中 | 两群完全分开且无需阈值 | PASS：**185 个目录变体全部 token 集合相等**；近似命中全部不相等（两个极性翻转 0.80/0.86、加前缀标题、假阳性） |
+| INTENT-28 | 本地 dev | 极性翻转 | 提交 `Why Did Charging Stop Normally?` 与 `Why Is Charging Power Faster Than Advertised?` | 均不得被判自证，改走 qa | PASS：两者分别得 0.80 / 0.86，**任何阈值都放过 0.86 那条**，故改为集合相等；两条均 → 202 type=qa。改回阈值判据该测试即红 |
 | INTENT-29 | 本地 dev | 加前缀后 identity 掉到 0.6 | 提交 `Please show me the Connector Stuck? Emergency Cable Release Guide` | 仍返回 q010 的 faq，不被换成宣传卡片 | PASS。**这条是抑制集合的守门测试** —— 把案例/方案加回抑制集合即变红（`202 != 200`）。注意逐字标题本身自证、到不了该分支，用它测不出这件事 |
 
 ## 平台级快捷动作目录 QA（SHORTCUT-GLOBAL）
