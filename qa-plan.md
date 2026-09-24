@@ -859,12 +859,14 @@ PROMPT-01/02 为 41 实机验收（清单收敛 + 公网问答），PROMPT-03 �
 | INTENT-10 | 本地 dev | 无订单上下文 | 提交英文“Show me a customer case”等纯文本提问 | 不识别出订单号；不被路由为订单诊断 | PASS：文本内嵌识别返回 None，走宣传/问答路径 |
 | INTENT-11 | 本地 dev | 无订单上下文，Accept-Language=en | 提交“Was I overcharged for this charging session?” | `200 type=clarification`，missing_fields 含 order_no，message 为英文 | PASS：200 clarification，missing_fields=[order_no]，英文文案（修复前英文提问完全绕过该守卫，且文案恒为中文） |
 | INTENT-12 | 本地 dev | 无订单上下文 | 提交独立主题词“refund”/“Why did charging stop unexpectedly?” | 不返回 clarification；按 FAQ 或通用问答处理 | PASS：“refund”→“qa”（不误判为争议）；q011 走 FAQ |
-| INTENT-20 | 本地 dev | #408 修复后 | 提交“今天天气怎么样” | 不返回 type=faq；不给出 q026 的答案 | PASS（本地，确定性）：intent=casual → 短路被抑制 → 202 type=qa。**这是 INTENT-02 原题首次真正通过** |
-| INTENT-21 | 本地 dev | #408 修复后 | 提交“重卡充电案例” | 不返回 type=faq | PASS：intent=case_exploration → 抑制；该题是 86 条真实语料中唯一的边际命中 |
-| INTENT-22 | 本地 dev | #408 修复后 | 提交完整中文业务问句（“充电桩怎么拔枪？”等） | 仍 200 type=faq | PASS：intent=knowledge 不在抑制集合，FAQ 短路保留 |
+| INTENT-20 | 41 实机（真实 Jev） | #408 修复后 | 提交“今天天气怎么样” | 不返回 type=faq；不给出 q026 的答案 | PASS（2026-09-24，真实判定）：intent=casual → 短路被抑制 → qa。**这是 INTENT-02 原题首次真正通过** |
+| INTENT-21 | 41 实机（真实 Jev） | #408 修复后 | 提交“重卡充电案例” | 不返回 type=faq | PASS：intent=case_exploration → 抑制；**该题是 86 条真实语料中唯一的 type 变化**（旧 {qa:85,faq:1} → 新 {qa:86}） |
+| INTENT-22 | 41 实机（真实 Jev） | #408 修复后 | 提交完整中文业务问句（“充电桩怎么拔枪？”等 11 条） | 仍返回 type=faq | PASS：11/11 仍 FAQ（knowledge/report_fault 均不抑制）。另有 `客服电话是多少` 未命中任何条目 → qa，属既有行为 |
 | INTENT-23 | 本地 dev | #408 修复后 | 路由判定源不可用 | 仍返回 type=faq | PASS：`test_faq_answer_survives_when_no_routing_decision_is_available`；「无判定」不改变用户所得 |
 | INTENT-24 | 本地 dev | #408 修复后 | 长问句即使被路由误判为 casual | 仍返回 type=faq | PASS：`test_a_confident_faq_match_is_answered_without_consulting_routing`；长度达标即自证 |
 | INTENT-25 | 本地 dev | #408 修复后 | 统计单请求的分类器调用次数 | 恰好 1 次 | PASS：`test_a_short_question_asks_the_classifier_once`（去掉复用后该断言为 2，已实测） |
+| INTENT-26 | 41 实机（真实 Jev） | #408 修复后 | 逐条提交**全部 185 个目录标题变体**（含 en/de/fr/es/pt） | 全部仍 type=faq 且不消耗判定调用 | PASS：**185/185 仍 FAQ，185 免模型、问判定 0 次、失败 0**。第一版长度判据在此为 180/185（q010 的 4 个语言变体因 "Guide" 一词被判 solution_discovery 而打掉）→ 已改为变体同一性判据 |
+| INTENT-27 | 41 实机（真实 Jev） | #408 修复后 | 单变体判据的分离度（185 变体 vs 非标题改写） | 两群之间有明显空带 | PASS：**185 个变体全部 1.00**；最高非标题改写 `插枪扫码步骤` 0.50，`重卡充电案例`/`充电桩怎么拔枪？` 0.27，`今天天气怎么样`/`天气` 0.12；阈值 0.8 落在空带 |
 
 ## 平台级快捷动作目录 QA（SHORTCUT-GLOBAL）
 

@@ -976,9 +976,9 @@ def create_gateway_app(
 
         # Route 2b: FAQ short-circuit (deterministic, zero-order, zero-model).
         #
-        # A short question's keyword match is not yet an answer (#408). The
-        # scoring below can only see token overlap, and a short question has few
-        # tokens, so one or two generic words reach full containment against
+        # A keyword match that only OVERLAPS a title is not yet an answer (#408).
+        # The scoring below can only see token overlap, and a short question has
+        # few tokens, so one or two generic words reach full containment against
         # some title — "今天天气怎么样" scored 1.0 against the summer-heat entry and
         # answered a charging question to someone who asked about the weather.
         # Overlap cannot separate that from a real hit: "充电桩" (a genuine
@@ -986,11 +986,11 @@ def create_gateway_app(
         # reach 1.0.
         #
         # So the decision the score cannot make is made by the thing that can —
-        # the routing intent, which comes from Jev. A long question does not ask:
-        # it answers from the catalog with no model call, which is what keeps
-        # every question clicked from the FAQ list on the instant path it has
-        # today. The length bar, and why it is length rather than score, is
-        # argued at `_FAQ_MARGINAL_QUESTION_SIGS`.
+        # the routing intent, which comes from Jev. A question that REPRODUCES a
+        # catalog title does not ask: it answers from the catalog with no model
+        # call, which is what keeps every typed entry on the instant path. What
+        # separates "reproduces" from "overlaps", and why it is not a length bar,
+        # is argued at `_FAQ_VARIANT_IDENTITY`.
         #
         # It costs nothing extra. This branch runs BEFORE the routing block
         # further down, and either the FAQ branch answers this request or that
@@ -2319,30 +2319,34 @@ _FAQ_GENERIC_CHARS = frozenset(
 _FAQ_MIN_CONTAINMENT = 0.5
 _FAQ_MIN_OVERLAP = 2
 
-# The question length at or above which a keyword match is answered directly,
-# with no second opinion.
+# The share of one title variant that a question must reproduce, in BOTH
+# directions, for the match to be answered directly with no second opinion.
 #
-# The ambiguity this ticket fixes is a SHAPE, not a keyword: the question is
-# short, so one or two generic words are its entire signature, they reach full
-# containment against some title, and the answer is about the wrong subject.
+# An earlier version of this change used question LENGTH as the bar, on the
+# theory that the ambiguity is a short question whose few tokens are all
+# generic. **Measured on the full catalog that was wrong**, and wrong in a way
+# only a full run could show: the compressed en/de/fr/es/pt titles are short
+# too, so length cannot tell a short title from a short question. It sent
+# `Connector Stuck? Emergency Cable Release Guide` — q010's own title — to the
+# routing intent, where Jev read the word "Guide" as solution_discovery and
+# suppressed the catalog's own entry (5 of 185 variants, 4 of them q010's).
 #
-# Length is what isolates that shape, and the measurements bracket it: every
-# ambiguous case is 2-6 significant tokens ("天气" 2, "充电" 2, "充电桩" 3, "今天天气
-# 怎么样" 4, "重卡充电案例" 6), while the genuine questions a user types run 10-12
-# ("充电桩怎么拔枪？" 5 is the one exception, and it clears the bar).
+# What does separate them is not how long the question is but whose words they
+# are. A user TYPING a catalog entry reproduces it exactly; a user asking a
+# short question merely overlaps it. Requiring the overlap to cover most of the
+# question AND most of the variant, against the SINGLE best variant rather
+# than the union, measures exactly that. Measured over all 185 variants:
 #
-# Length rather than an overlap score, because a score bar is scale-dependent
-# and the compressed en/de/fr/es/pt titles are short by construction: measured,
-# an absolute overlap bar of 8 sends 91 of the 185 title variants to the model.
+#   every one of the 185 catalog variants (in all six languages): 1.00
+#   "插枪扫码步骤" (the highest non-title paraphrase):              0.50
+#   "重卡充电案例" / "充电桩怎么拔枪？":                             0.27
+#   "今天天气怎么样" / "天气":                                      0.12
 #
-# What that buys, precisely, so the cost is not overstated: clicking a
-# recommended question calls `/v1/faq/answer` with a question_id and never runs
-# this matcher at all; 27 of the 28 zh consumer titles self-evident when TYPED;
-# and the 135 localized variants consult the routing intent, which is the
-# genuine added call in this change. The bar is not what decides any individual
-# case — the routing intent is — so the widened band is safe: a `knowledge`
-# question in it still goes to the catalog.
-_FAQ_MARGINAL_QUESTION_SIGS = 10
+# So 0.8 sits in an empty band, and the 185 never reach the model. The union
+# the matcher scores on is deliberately NOT used here: a variant matches its
+# own text, not the average of six translations of it.
+_FAQ_VARIANT_IDENTITY = 0.8
+
 
 #: Intents that say "the catalog is not where this question belongs", so a
 #: marginal keyword match must not answer from it.
@@ -2460,11 +2464,11 @@ def _faq_match(
 ) -> tuple[str | None, bool]:
     """Best matching entry, and whether it may be answered only on those words.
 
-    Returns ``(question_id, confident)``. ``confident`` is True when the match
-    does not need a second opinion; False means the question is short enough
-    that the match may be an artifact of its brevity, and the routing intent
-    should confirm it before the catalog answers (see
-    ``_FAQ_MARGINAL_QUESTION_SIGS``).
+    Returns ``(question_id, confident)``. ``confident`` is True when the question
+    reproduces one of the entry's own titles, so it is answered without a second
+    opinion; False means the question merely OVERLAPS a title and the routing
+    intent should confirm it before the catalog answers (see
+    ``_FAQ_VARIANT_IDENTITY``).
 
     Set-containment over the union of a title's language variants: score =
     |question_sig ∩ title_union|, with a containment bar on the same union, so
@@ -2475,6 +2479,17 @@ def _faq_match(
     qsigs = _normalize_keywords(question)
     if not qsigs:
         return None, False
+    variants = {
+        entry["question_id"]: tuple(
+            sig
+            for sig in (
+                _normalize_keywords(variant)
+                for variant in faq_catalog.title_variants(platform, entry["question_id"])
+            )
+            if sig
+        )
+        for entry in faq_catalog.catalog(platform)
+    }
     unions = {
         entry["question_id"]: _faq_title_union_sigs(faq_catalog, platform, entry["question_id"])
         for entry in faq_catalog.catalog(platform)
@@ -2493,7 +2508,14 @@ def _faq_match(
     containment = len(qsigs & unions[best_qid]) / len(qsigs)
     if containment < _FAQ_MIN_CONTAINMENT:
         return None, False
-    return best_qid, len(qsigs) >= _FAQ_MARGINAL_QUESTION_SIGS
+    best_variant_identity = max(
+        (
+            min(len(qsigs & variant) / len(qsigs), len(qsigs & variant) / len(variant))
+            for variant in variants[best_qid]
+        ),
+        default=0.0,
+    )
+    return best_qid, best_variant_identity >= _FAQ_VARIANT_IDENTITY
 
 
 # A candidate order token: starts AND ends on an alphanumeric, so a trailing

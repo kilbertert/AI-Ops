@@ -1403,3 +1403,29 @@ def test_a_short_question_asks_the_classifier_once(tmp_path: Path) -> None:
     assert resp.status_code == 202
     assert resp.json()["type"] == "qa"
     assert runtime.classify_calls == 1
+
+
+def test_a_localized_catalog_title_is_not_suppressed_by_its_wording(tmp_path: Path) -> None:
+    """The catalog's own titles must survive a misreading of their wording.
+
+    Regression for the first cut of this fix, caught by the full-catalog run
+    against the real model rather than by any unit test: the bar was question
+    LENGTH, which cannot tell a short title from a short question, so q010's own
+    localized titles reached the routing intent. Jev read the word "Guide" —
+    and q023's "SOP" — as solution_discovery, and the entry was suppressed.
+    5 of 185 variants went that way, four of them q010's.
+
+    The intent here is the one that broke it. A title's own text must win
+    regardless of how the model labels the domain wording in it.
+    """
+    client, runtime = _client(tmp_path)
+    runtime.classified = {"intent": "solution_discovery", "confidence": "high", "risk": "low"}
+    for question, expected in (
+        ("Connector Stuck? Emergency Cable Release Guide", "consumer.faq.q010"),
+        ("Vehicle Scratch or Equipment Damage Incident SOP", "consumer.faq.q023"),
+    ):
+        resp = client.post("/v1/assistant/questions", json={"question": question}, headers=_headers())
+        assert resp.status_code == 200, question
+        body = resp.json()
+        assert body["type"] == "faq", question
+        assert body["question_id"] == expected, question
