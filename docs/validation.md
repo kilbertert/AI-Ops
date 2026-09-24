@@ -3934,3 +3934,108 @@ MySQL 通路），实测数字引自 2026-09-24 的既有记录并如实标注�
   PRD 要求的那条偏离说明（含对齐路径）仍写在案的待办，本片延续该偏离，未在任何注释里
   把「直接读会话」写成已批准的设计。
 - **验收产物**：`acceptance.feature` 与 `qa-plan.md` 属子票 #428。
+
+---
+
+## PRD #423 子票 #428：管家端负向与回归验收（含双轨验收记录，2026-09-24）
+
+**结论（双轨，不得混淆）**：**负向 + 回归轨道全部通过**（提交 `717eea4`，父提交 `50cab4f`，
+2026-09-24，`uv run pytest` **1392 passed / 2 skipped**、`uv run ruff check` 全部通过，
+本片新增 9 项）；**正向轨道未完成**——41 上 `X-Business-Entry: operator` 稳定返回
+503 `PLATFORM_UNAVAILABLE`（无唯一管家端 B 端主体），且「按租户 + 入口发布」需要一次
+真实运营商会话。本 PRD 因此**不得**报告为「已验收」，只能报
+**「负向通过、正向待业务条件」**。正向未完成的原因与边界写在 `qa-plan.md`
+OP-ACCEPT-POS-01..04 与本文末节，不用消费者会话或人造夹具冒充。
+
+本片不写产品代码：产出是**证据**——把负向与回归逐条钉成用例，并交付仓库强制的两份
+产物（`acceptance.feature` 与 `qa-plan.md`）。
+
+### 自动化结果
+
+| 检查 | 结果 |
+|---|---|
+| `uv run pytest` | **1392 passed / 2 skipped**（基线 1383 通过，新增 9 项） |
+| `uv run ruff check` | 全部通过 |
+| 新增用例 | `tests/test_operator_negative_acceptance.py`（9 项） |
+
+### 负向 + 回归轨道逐条
+
+断言的都是对外可观察行为（状态码 / 响应类型 / 可见性 / 是否启动作业 / 文案），
+不测调用顺序，不断言 SQL 文本。入口用**真实**授权判定与真实范围下推驱动。
+
+| # | 断言 | 用例 |
+|---|---|---|
+| 1 | 显式指名集合外订单 → 404 `ORDER_NOT_FOUND`，与不存在的订单号同形；零作业；响应不含订单字段 | `test_clicked_order_diagnosis_of_another_operators_order_is_refused` |
+| 2 | 集合外、只挂在本人名下的订单同样被拒（替换 `self`，非取并集） | `test_a_site_outside_the_scope_is_refused_even_when_the_order_is_the_callers_own` |
+| 3 | 未绑定店铺 → 空集合 → 拒绝；不发起订单查询；日志 `reason=no_shop_binding` | `test_an_operator_account_without_shop_binding_is_refused_at_the_entry` |
+| 4 | 订单选择器提示按请求语言给出，六种语言文案互不相同 | `test_the_order_picker_prompt_is_localized_on_the_operator_entry` |
+| 5 | 活跃订单离开站点集合 → 下一轮静默回落为 qa 并清掉失效绑定，不产生第二次诊断 | `test_active_order_follow_up_drops_an_order_that_left_the_scope` |
+| 6 | 站点集合变化 → 旧会话统一 404（两个入口都一样），不泄露存在性 | `test_a_changed_operator_scope_makes_the_conversation_invisible` |
+| 7 | 站点上的 `partner_b_id`（悬空 / 类型不符 / 命名调用者本人）不进入站点集合 | `test_a_sites_partner_b_id_never_widens_the_operators_visibility` |
+| 8 | 消费者入口动作列表与订单可见性不变（同上） | `test_the_consumer_entry_keeps_its_own_actions`、`..._its_own_order_visibility` |
+
+**对照组（防止「全部拒掉」冒充通过）**：集合内、挂在**别人**名下的订单仍得到
+202 `diagnosis`（`tests/test_operator_entry_actions.py`，#427 已固定）。负向轨道
+只有配上这一条才能证明「拒绝」来自范围判据，而不是来自一个什么都不放的实现。
+
+### 负向断言不是恒真：做了两组变异验证
+
+把两类已知的退化分别注入实现，重跑用例集：
+
+| 变异 | 结果 |
+|---|---|
+| 运营商范围回落成 `self`（`third_session_auth._data_scope`） | **6 项转红**（含入口 404、活跃订单回落、指纹隔离、`partner_b_id` 用例） |
+| 把店铺 id 直接当站点 id（`query_scope.resolve_operator_site_scope` 跳过归属映射） | **12 项转红**（#425/#426 的例外行与端到端用例同时转红） |
+
+变异已还原（`git status` 干净）。这组实验的用途是证明断言**会**失败，而不是
+"断言写成了恒真式"。
+
+### 消费者端零回归的独立证据
+
+不用运行时的自我声明，用**同一批用例在两个提交上的同构结果**：
+
+| 证据 | 结果 |
+|---|---|
+| 消费者侧 13 个用例文件在 PRD 起点 `18f569b` 与 `50cab4f` 之间的改动 | 12 个逐字节相同；唯一改动是 `tests/test_shortcut_api.py` 的种子幂等断言改为按 (入口, code)——`code` 现在出现在两个入口，身份本来就是 租户+入口+code，断言对象随之收窄，**未放宽任何承诺**（10 增 1 删） |
+| 同一批文件在 `18f569b` 上的运行 | **324 passed** |
+| 同一批文件在 `50cab4f` + 本片上的运行 | **324 passed**，无一项由绿转红 |
+
+覆盖的文件：`test_assistant_api.py`、`test_conversation_api.py`、`test_shortcut_api.py`、
+`test_caller_auth.py`、`test_order_visibility.py`、`test_query_scope.py`、
+`test_scope_context.py`、`test_scope_context_http.py`、`test_scope_context_ds_fallback.py`、
+`test_cross_entry_visibility.py`、`test_faq.py`、`test_routing.py`、`test_mysql_scope.py`。
+基线运行在 `18f569b` 的独立 worktree 上执行（`PYTHONPATH` 指向该 worktree 的 `src`），
+复现命令见 `qa-plan.md` 第四节。
+
+### 仓库强制产物
+
+- **`acceptance.feature`**：新增 `Feature: 管家端入口与订单运营商级授权`（5 Rule /
+  12 场景），覆盖 PRD 点名要的六项（本运营商站点订单可见、他人运营商订单明确拒绝、
+  无绑定代理商账号拒绝、内嵌订单号静默回落、operator 入口列出两个动作、消费者端
+  不变）+ 订单选择器澄清与语言、案例库未就绪、活跃订单指纹失效；并在
+  `Feature: 智能体会话与活跃订单上下文` 补一个场景（运营商站点集合变化使旧会话
+  不可见）。全部断言对外可观察结果，未断言内部状态。条目数随之更新
+  （29 Feature / 73 Rule / 195 Scenario，README 的过时计数已同步）。
+- **`qa-plan.md`**：新增 `## 管家端入口与订单运营商级授权验收 QA（OP-ACCEPT，…）`，
+  逐条含 ID / 环境 / 前置条件与数据 / 有序动作 / 预期可观察结果 / 清理与证据，
+  并分两轨：负向 + 回归 12 条（PASS）、正向 4 条（BLOCKED + 原因），
+  外加构建标识 / 环境 / 时间戳与消费者端零回归的独立证据节。
+
+### 未覆盖 / 待业务条件
+
+- **正向轨道整体未执行**：41 上 operator 入口头稳定 503，无真实身份。四项
+  （入口列表、集合内订单可见、其他运营商订单被拒、按入口发布动作）如实记为
+  BLOCKED，不得写成通过。
+- **`/shopuser/getShops` 真实响应形状**：沿用 2026-09-01 已对生产实测通过的
+  `_parse_id_list`；形状不符时链路以 `ScopeError` 失败关闭 → 空集合 → 拒绝全部
+  管家端订单查询，**不会**误放行。这是 41 上第一件要确认的事。
+- **数据完整性第二、三类的「记录供数据修复」清单未交付**（用户故事 17）：授权
+  判定侧的可观察行为已由 `partner_b_id` 用例固定（悬空引用不会让任何人多看到一个
+  站点），但「订单 + 站点 + 原因」的跨库只读清单需要独立实现并处置字符集排序规则
+  冲突，**不在授权判定链路里**，本轮未做。
+- **`AIOPS_UPMS_INSIDE_TOKEN` 未配置**：部署接缝（配置齐备时注入了
+  `UpmsOperatorSiteScope`，缺失时为 `None` → 管家端 fail closed）由既有用例固定，
+  本轮未在 41 上配置。
+- **ADR-0003 偏离沿用**：委托句柄仍未实现，当前依赖共享 Redis 会话直读；PRD 要求的
+  那条偏离说明（含对齐路径）仍是在案待办，本片延续该偏离，未在任何注释里把
+  「直接读会话」写成已批准的设计。

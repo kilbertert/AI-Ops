@@ -91,6 +91,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 运营商站点范围解析——B 端主体经后端权威授权同一端点取店铺集合，再经既有站点归属映射取站点集合；未绑定/无站点分开记因并 fail closed (#425)
 - 订单授权判定接入运营商维度——管家端会话的可见范围由该 B 端主体的运营商站点集合定义（替换 `self`，不取交集），`delegated` 置 `False`；显式指名订单在集合内可查、集合外明确 404 且不区分「不存在」与「无权」 (#426)
 - 管家端入口发布两个快捷动作（订单检测 / 客户案例，复用既有 code，不新建执行路径）并跑通「订单检测」的成功路径：无订单号弹订单选择器澄清且不启动作业，带集合内订单返回既有诊断响应形态；案例库未就绪时返回明确的不可用而不是空的「未检索到」 (#427)
+- 管家端负向与回归验收（双轨记录）——新增 `tests/test_operator_negative_acceptance.py` 9 项（越权必被拒且与「不存在」同形、未绑定店铺空集合短路、活跃订单每轮重新校验、站点集合变化使旧会话统一 404、站点 `partner_b_id` 不构成授权依据、消费者端不变）；`acceptance.feature` 新增「管家端入口与订单运营商级授权」Feature 12 场景，`qa-plan.md` 新增 OP-ACCEPT-01..12 与 OP-ACCEPT-POS-01..04：**负向 + 回归轨道通过**（1392 passed / 2 skipped，消费者端有双提交对照证据），**正向轨道如实记为待业务条件**（41 上 operator 入口稳定 503） (#428)
 
 ### Changed
 - Clarify HTTP doctor classification

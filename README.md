@@ -457,7 +457,7 @@ docs/                     架构、契约、ADR、运行手册（见第十节路
 AGENTS.md                 仓库级开发共识（中文文档、里程碑同步、业务边界）
 CONTEXT.md                领域词汇表（术语 + 应避免的同义词）
 SOP.md / 充电桩问题排查SOP.md   业务规则来源（后端行为的中文说明）
-acceptance.feature        Gherkin 可执行验收约束（26 Feature / 60 Rule / 167 Scenario）
+acceptance.feature        Gherkin 可执行验收约束（29 Feature / 73 Rule / 195 Scenario）
 qa-plan.md                QA 用例（78 个用例 ID，含环境/前置/数据/动作/预期/清理）
 ```
 
