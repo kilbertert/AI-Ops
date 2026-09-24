@@ -92,9 +92,11 @@ from aiops_diagnostics.shortcut_lifecycle import (
 from aiops_diagnostics.sources import SourceError
 from aiops_diagnostics.third_session_auth import (
     BSubjectDirectory,
+    OperatorSiteScope,
     RedisThirdSessionResolver,
     ThirdSessionSettings,
     UpmsBSubjectDirectory,
+    UpmsOperatorSiteScope,
 )
 
 _LOGGER = logging.getLogger("aiops.gateway")
@@ -2194,6 +2196,20 @@ def _b_subject_directory(runtime: Settings) -> BSubjectDirectory | None:
     return UpmsBSubjectDirectory(runtime.upms, credential)
 
 
+def _operator_site_scope(runtime: Settings) -> OperatorSiteScope | None:
+    """会话身份的运营商站点范围（#426，四跳链的后两跳）。
+
+    与 C→B 映射共用同一套配置前提（UPMS 地址 + 服务侧内部凭据）：未配置时返回
+    ``None``，会话数据范围保持 ``self``——管家端因此只能看到本人的单（fail closed，
+    不放宽），消费者端不变。站点归属映射复用受限直连的同一条跳板隧道，不为授权
+    另开一条连接路径。
+    """
+    credential = (runtime.upms.inside_token or "").strip()
+    if not runtime.upms.base_url or not credential:
+        return None
+    return UpmsOperatorSiteScope(runtime, credential)
+
+
 def _caller_resolver(settings: GatewayServerSettings) -> CallerContextResolver:
     if settings.third_session_service_token:
         try:
@@ -2209,6 +2225,7 @@ def _caller_resolver(settings: GatewayServerSettings) -> CallerContextResolver:
                     key_prefix=settings.third_session_key_prefix,
                 ),
                 b_subject_directory=_b_subject_directory(runtime),
+                operator_scope=_operator_site_scope(runtime),
             )
         except (ValueError, OSError):
             return DisabledCallerResolver()

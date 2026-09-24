@@ -37,7 +37,7 @@ from aiops_diagnostics.order_visibility import (
     scope_where_sql,
     visible_orders,
 )
-from aiops_diagnostics.query_scope import QueryScope
+from aiops_diagnostics.query_scope import QueryScope, SiteScopeMapper
 
 SAFE_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 SAFE_VALUE = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
@@ -1326,6 +1326,23 @@ def scoped_live_sources(
             ),
             device_gate=device_gate,
         )
+
+
+@contextlib.contextmanager
+def mysql_site_mapper(settings: Settings) -> Iterator[SiteScopeMapper]:
+    """Return the charging-library site-ownership mapper for one operation.
+
+    站点归属映射（``ch_site.shop_id → ch_site.id``、``dis_point_id → id``）既要
+    在授权范围解析里用（运营商站点集合，#426），也要在业务数据范围解析里用
+    （``resolve_query_scope``）。两者都必须在同一条跳板隧道内构造
+    ``MySQLSource``：在隧道外构造会绕开 ``_ssh_tunnel`` 的端口转发，直连一个
+    SSH 部署下不可达的数据库地址。
+
+    ``MySQLSource`` 不带 ``scope``：归属映射自己带租户条件，与单次运行冻结的
+    查询范围无关。
+    """
+    with _ssh_tunnel(settings, include_direct_backends=True) as effective:
+        yield MySQLSource(effective)
 
 
 @contextlib.contextmanager

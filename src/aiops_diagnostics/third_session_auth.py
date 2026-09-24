@@ -13,19 +13,27 @@ from aiops_diagnostics.caller_auth import (
     CALLER_AUTH_UNAVAILABLE,
     CallerAuthError,
 )
-from aiops_diagnostics.config import UpmsSettings
+from aiops_diagnostics.config import Settings, UpmsSettings
+from aiops_diagnostics.query_scope import (
+    QueryScope,
+    UpmsShopDirectory,
+    resolve_operator_site_scope,
+)
 from aiops_diagnostics.scope_context import (
     C_MAPPING_AMBIGUOUS,
     C_MAPPING_FAILED,
     C_MAPPING_NOT_CONFIGURED,
     C_MAPPING_NOT_FOUND,
     C_MAPPING_TENANT_MISMATCH,
+    SCOPE_TYPE_ORGAN,
+    SCOPE_TYPE_SELF,
     DataScope,
     ScopeContext,
     ScopeError,
     SubjectRecord,
     UpmsDirectory,
 )
+from aiops_diagnostics.sources import SourceError, mysql_site_mapper
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -72,13 +80,52 @@ class UpmsBSubjectDirectory:
         return self._directory.users_by_c_user_id(self._credential, c_user_id)
 
 
+class OperatorSiteScope(Protocol):
+    """运营商站点范围接缝（#426）：B 端主体 + 租户 → 冻结的 ``QueryScope``。
+
+    实现必须复用后端权威授权所用的同一数据源（``/shopuser/getShops``）与既有
+    站点归属映射（``ch_site.shop_id → ch_site.id``）；未绑定店铺、已绑定店铺在
+    充电库里没有站点都返回**空集合**（下游据此拒绝），上游不可达或响应形状非法
+    以 ``ScopeError`` 失败关闭。
+    """
+
+    def site_scope_by_b_user_id(self, b_user_id: str, tenant_id: str) -> QueryScope: ...
+
+
+class UpmsOperatorSiteScope:
+    """``OperatorSiteScope`` 的生产实现（#426，四跳链的后两跳）。
+
+    店铺集合取 ``GET /shopuser/getShops``——后端权威授权（``@ShopDataScope`` 的
+    隔离集合来源）所用的同一个端点；站点集合走既有归属映射。映射查询与受限直连
+    共用同一条跳板隧道（``mysql_site_mapper``），因此 SSH 部署下不会为授权另开
+    一条绕过隧道的连接路径。
+
+    ``credential`` 是服务侧配置的内部调用凭据，只透传给 UPMS，绝不进入
+    ``ScopeContext``、审计摘要或错误消息。
+    """
+
+    def __init__(self, settings: Settings, credential: str) -> None:
+        self.settings = settings
+        self._shops = UpmsShopDirectory(settings.upms, credential)
+
+    def site_scope_by_b_user_id(self, b_user_id: str, tenant_id: str) -> QueryScope:
+        with mysql_site_mapper(self.settings) as mapper:
+            return resolve_operator_site_scope(b_user_id, tenant_id, shops=self._shops, mapper=mapper)
+
+
 class RedisThirdSessionResolver:
     """C 端 ``thirdSession`` → ``ScopeContext`` 的 Redis 解析路径。
 
-    身份由两部分组成：会话给出的 C 端 ``userId``（可见性判定的依据，恒等于会话值）
-    与经既有 C→B 映射端点补全的 B 端 ``sys_user.id``（管家端授权链的起点）。
+    身份由两部分组成：会话给出的 C 端 ``userId``（消费者端可见性判定的依据，恒等于
+    会话值）与经既有 C→B 映射端点补全的 B 端 ``sys_user.id``（管家端授权链的起点）。
     ``b_subject_directory`` 未注入、或解析不出**同租户内唯一**的 B 端主体时，身份只保留
     C 侧部分并带上可区分原因——消费者端行为不变，需要 B 端主体的下游自行 fail closed。
+
+    业务数据范围由主体决定（#426）：拿不到唯一 B 端主体时仍是解析器的固定兜底值
+    ``self``（消费者端逐字不变）；拿到时替换为该主体名下的**运营商站点集合**——
+    替换而非取交集，因为 ``self`` 只是兜底值而不是管家端的业务规则，取交集等于只
+    保留「自己下的单」，正是本 PRD 要修掉的错位。同一会话的订单授权判定与证据收集
+    因此共用这一个范围（``resolve_query_scope``）。
     """
 
     def __init__(
@@ -86,11 +133,13 @@ class RedisThirdSessionResolver:
         settings: ThirdSessionSettings,
         *,
         b_subject_directory: BSubjectDirectory | None = None,
+        operator_scope: OperatorSiteScope | None = None,
     ) -> None:
         if not settings.password or not settings.service_token:
             raise ValueError("thirdSession Redis and service credentials are required")
         self.settings = settings
         self.b_subject_directory = b_subject_directory
+        self.operator_scope = operator_scope
 
     def resolve(self, token: str, *, required_scope: str, third_session: str | None = None) -> ScopeContext:
         if not secrets.compare_digest(token, self.settings.service_token):
@@ -136,12 +185,37 @@ class RedisThirdSessionResolver:
         return ScopeContext.build(
             caller=caller,
             subject=subject,
-            delegated=True,
+            # 会话查的是自己的授权范围，不是代查他人的目标主体。保持 True 会进入
+            # 代查分支：未配 Dis 则报错，配了则与 Dis 点位取交集而收窄（PRD #423
+            # 已定调置 False，且该标志应由请求意图推导，而不是按调用者类型写死）。
+            delegated=False,
             effective_tenant_id=tenant_id,
-            data_scope=DataScope(type="self"),
+            data_scope=self._data_scope(subject, tenant_id),
             roles=frozenset(),
             permissions=frozenset({required_scope}),
         )
+
+    def _data_scope(self, subject: SubjectRecord, tenant_id: str) -> DataScope:
+        """会话的业务数据范围：有唯一 B 端主体时取其运营商站点集合。
+
+        解析失败一律失败关闭为**空集合**——拒绝全部订单查询，不回落为租户级放行，
+        也绝不套用 ``self``（那会把「查不到自己的运营商范围」伪装成「只能看本人的
+        单」）。失败覆盖链路上每一种逃逸方式：上游不可达/响应形状非法/数量超界
+        （``ScopeError``）、充电库不可用（``SourceError``）、范围 ID 不可用
+        （``ValueError``）；不捕获就等于让一次授权故障变成 500。
+
+        失败原因单独记一行，与 #425 区分的两种空集合成因（账号漏登记 /
+        已登记店铺无站点）都不是一回事：那些要去补数据，这里要去看上游。
+        """
+        directory = self.operator_scope
+        if subject.b_subject_reason or directory is None:
+            return DataScope(type=SCOPE_TYPE_SELF)
+        try:
+            scope = directory.site_scope_by_b_user_id(subject.b_user_id, tenant_id)
+        except (ScopeError, SourceError, ValueError) as exc:
+            _log_operator_scope_unavailable(exc)
+            return DataScope(type=SCOPE_TYPE_ORGAN, site_ids=())
+        return DataScope(type=SCOPE_TYPE_ORGAN, site_ids=scope.site_ids)
 
     def _resolve_subject(self, user_id: str, tenant_id: str) -> SubjectRecord:
         """会话主体：C 端 id 恒等于会话 ``userId``，B 端 id 由既有 C→B 映射补全。
@@ -181,6 +255,19 @@ def _log_unresolved(reason: str, code: str | None = None) -> None:
         _LOGGER.info("third_session c_mapping_unresolved reason=%s", reason)
     else:
         _LOGGER.info("third_session c_mapping_unresolved reason=%s code=%s", reason, code)
+
+
+def _log_operator_scope_unavailable(error: Exception) -> None:
+    """运营商站点范围解析失败：可区分原因（错误码或异常类型），不含身份标识。
+
+    与 #425 的 ``no_shop_binding`` / ``shop_without_site`` 都不同：那两种是数据/
+    配置缺口（拒绝是正确行为，运营去补登记），这里是解析本身失败（运维去看上游，
+    不是去补绑定）。三种混在一起就无法从日志判断「权限正确拒绝」与「系统坏了」。
+    """
+    _LOGGER.info(
+        "third_session operator_scope_unavailable code=%s",
+        getattr(error, "code", None) or type(error).__name__,
+    )
 
 
 def _c_side_subject(user_id: str, tenant_id: str, reason: str) -> SubjectRecord:

@@ -89,6 +89,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 方案 A —— 高风险一律追问，并记录与关键词守卫的重叠 (#402)
 - 管家端会话身份补全 C→B 映射——身份同时带 C 端 id 与 B 端 `sys_user.id`，非唯一映射记可区分原因 (#424)
 - 运营商站点范围解析——B 端主体经后端权威授权同一端点取店铺集合，再经既有站点归属映射取站点集合；未绑定/无站点分开记因并 fail closed (#425)
+- 订单授权判定接入运营商维度——管家端会话的可见范围由该 B 端主体的运营商站点集合定义（替换 `self`，不取交集），`delegated` 置 `False`；显式指名订单在集合内可查、集合外明确 404 且不区分「不存在」与「无权」 (#426)
 
 ### Changed
 - Clarify HTTP doctor classification

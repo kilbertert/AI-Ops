@@ -147,7 +147,9 @@ def test_session_identity_carries_b_side_subject_from_the_c_to_b_mapping(
     assert context.subject.b_user_id == "B-9"
     assert context.subject.b_subject_reason == ""
     assert directory.calls == ["C-1"]
-    # 可见性判定不变：仍是 self 范围、同一租户、同一 C 端用户过滤。
+    # 未注入运营商站点范围（消费者端部署/缺配置）时可见性判定不变：仍是 self 范围、
+    # 同一租户、同一 C 端用户过滤。注入了范围之后的判定见 #426 的
+    # tests/test_operator_order_authorization.py。
     assert context.data_scope == DataScope(type="self")
     assert context.effective_tenant_id == "T-1"
     assert resolve_query_scope(context) == QueryScope(tenant_id="T-1", site_ids=None, user_id="C-1")
@@ -336,3 +338,38 @@ def test_third_session_resolver_without_the_inside_token_resolves_no_b_subject(
 
     assert isinstance(resolver, RedisThirdSessionResolver)
     assert resolver.b_subject_directory is None
+
+
+# --- #426: 部署接缝（运营商站点范围）----------------------------------------
+
+
+def test_third_session_resolver_is_wired_with_the_operator_site_scope(tmp_path: Path) -> None:
+    from aiops_diagnostics.gateway_api import _caller_resolver
+    from aiops_diagnostics.third_session_auth import UpmsOperatorSiteScope
+
+    settings = _gateway_settings(
+        tmp_path,
+        "AIOPS_REDIS_PASSWORD=redis-secret\n"
+        "AIOPS_UPMS_BASE_URL=https://upms.example.test\n"
+        "AIOPS_UPMS_INSIDE_TOKEN=upms-internal-token\n",
+    )
+
+    resolver = _caller_resolver(settings)
+
+    assert isinstance(resolver, RedisThirdSessionResolver)
+    assert isinstance(resolver.operator_scope, UpmsOperatorSiteScope)
+
+
+def test_third_session_resolver_without_the_inside_token_has_no_operator_scope(
+    tmp_path: Path,
+) -> None:
+    """缺同一套配置时不注入范围：会话数据范围保持 self，管家端因此 fail closed。"""
+    from aiops_diagnostics.gateway_api import _caller_resolver
+
+    settings = _gateway_settings(
+        tmp_path, "AIOPS_REDIS_PASSWORD=redis-secret\nAIOPS_UPMS_BASE_URL=https://upms.example.test\n"
+    )
+
+    resolver = _caller_resolver(settings)
+
+    assert resolver.operator_scope is None
