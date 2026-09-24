@@ -108,14 +108,12 @@ C 会放行到不存在的账号、D 会放行到非代理商账号。**判据�
 三条独立证据：
 
 1. **源码成对写入**（`ChSiteServiceImpl.java:494-495`）——同一次调用里两个字段取自
-   `partner_info` 的**不同列**，直接证明是两个 id 空间：
-   ```java
-   chSite.setAgentId(partnerInfo.getId());       // agent_id     ← partner_info.id
-   chSite.setPartnerBId(partnerInfo.getOwner()); // partner_b_id ← partner_info.owner
-   ```
-2. **写入落点**（`MallDataMapper.xml:87`）：`insert into qumall_upms.sys_user_shop(..., user_id, ...) value ('0',#{partnerBId},...)`；
-   UPMS 定义 `sys_user_shop.user_id = sys_user.id where type='5'`（`SysUserMapper.xml:428-437`）。
-3. **JOIN 路径**（`ChOrderInfoMapper.xml:159-161`）：`coi.partner_b_id = pi.owner`。
+   `partner_info` 的**不同列**（`getId()` 给 `agent_id`、`getOwner()` 给 `partner_b_id`），
+   直接证明是两个 id 空间。
+2. **写入落点**（`MallDataMapper.xml:87`）：`partnerBId` 被写进 UPMS 的用户-店铺关系表
+   `user_id` 列；UPMS 侧把它定义为 `sys_user.id` 且要求 `type='5'`（`SysUserMapper.xml:428-437`）。
+3. **JOIN 路径**（`ChOrderInfoMapper.xml:159-161`）：订单的 `partner_b_id` 与
+   `partner_info.owner` 直接等值连接。
 
 **生产库实测（2026-09-24，41 生产环境，只读元数据/基数）**：
 

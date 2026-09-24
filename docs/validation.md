@@ -5,6 +5,54 @@
 > 与 `docs/agents/current-delivery-state.md`。已过时的结论就地划掉并注明取代它的条目，
 > 不删除：交付状态的变化过程本身是证据。
 
+
+## #408 生产验收（2026-09-24，build `0.1.0+682ea9a8e7c5`）
+
+**环境**：41 生产，公网入口 `https://api.mall.qushiyun.com/v1/assistant/questions`，
+`X-Business-Entry: consumer`，`Accept-Language: en`，会话来自 41 本机 Redis（不落任何转录）。
+
+**入口坑（本轮踩到）**：直连 `127.0.0.1:8788` 返回 **401 `INVALID_ACCESS_TOKEN`** ——
+`RedisThirdSessionResolver` 先比对 bearer，而**进程 env 里没有**服务令牌；
+该令牌由**入口（nginx/BFF）注入**。故必须走公网路径，不能从主机内直连做验收。
+
+| 探测 | 结果 |
+|---|---|
+| `今天天气怎么样` | **202 `type=qa`** ✅ 原 bug 已修 |
+| `Connector Stuck? Emergency Cable Release Guide`（q010 标题，含 "Guide"） | **200 `type=faq` q010** ✅ |
+| `Vehicle Scratch or Equipment Damage Incident SOP`（q023 标题，含 "SOP"） | **200 `type=faq` q023** ✅ |
+| `充电桩怎么拔枪？` | **200 `type=faq` q010** ✅ |
+| `夏季高温天气充电注意什么？` | **200 `type=faq` q026** ✅ |
+
+**结论**：#408 的四项验收判据在生产上全部通过，`今天天气怎么样` 不再被误判为业务 FAQ，
+两个被长度判据误杀的标题变体恢复命中，真实业务问题不受影响。
+
+---
+
+## 订单授权判据的源码/生产库核查（2026-09-24，支撑 #414）
+
+本节记录「订单 → 站点 → 运营商」判据的查证结果，含**一次自我更正**。
+
+**已确证（源码 + 生产库只读实测双证）**：
+
+- `ch_site.partner_b_id` ≡ `qumall_mall.partner_info.owner` ≡ `qumall_upms.sys_user.id`（`type='5'` 代理商）。
+  证据：`ChSiteServiceImpl.java:494-495` 成对写 `setAgentId(partnerInfo.getId())` /
+  `setPartnerBId(partnerInfo.getOwner())`；`MallDataMapper.xml:87` 写 `sys_user_shop.user_id`；
+  `SysUserMapper.xml:428-437` 定义 `user_id = sys_user.id where type='5'`；
+  `ChOrderInfoMapper.xml:159-161` 写 `coi.partner_b_id = pi.owner`。
+- `ch_site.agent_id` ≡ `partner_info.id`（另一条支线）。
+- 覆盖率：`site.partner_b_id → sys_user(type=5)` = **20782/30443 = 68.3%**。
+- 代理商账号实测 **314** 个；`partner_info.owner ∩ sys_user` = 312（type=5 占 307）→ 身份可绑。
+- 「平台」= `@ShopDataScope(seePlatform=true)` 下 shop id 的哨兵值 `'-1'`。
+
+**更正（重要）**：先前记「`partner_b_id` 覆盖 69% 却与注册表交集为 0、端到端仅 9.4%」**是错的**。
+错因：按 `partner_info.id` 做了 join，而 `partner_b_id` 的对应列是 `partner_info.owner`。
+只量了一条支线就下了"链路已断"的结论，把"我 join 错"误报成"数据缺失"。
+正确量法见上表。该错误与本会话另一处（把 `ChOrderInfoController` 写成 `ChAgentInfoController`）
+同属"未复核就断言"，已入档。
+
+**边界**：公司源码**只读、不入库、不镜像**（本地仅存于 `.scratch/company-repos/`，已 gitignore）。
+
+---
 ## 交付状态核查：CD 实际部署史与 FAQ 假阳性（2026-09-23）
 
 用户要求核查"生产跑的到底是不是 main"，以及"还有什么没收尾"。两项实测结论如下，
@@ -3499,49 +3547,3 @@ classify_with_jev(...) -> None            ← 返回 None，不抛异常
 - `今天天气怎么样` → 非 faq。
 
 **在此之前，本票不得报"41 已验收"。** 本地确定性测试已完成，Jev 侧证据缺失，如实记为待补。
-
-## #408 生产验收（2026-09-24，build `0.1.0+682ea9a8e7c5`）
-
-**环境**：41 生产，公网入口 `https://api.mall.qushiyun.com/v1/assistant/questions`，
-`X-Business-Entry: consumer`，`Accept-Language: en`，会话来自 41 本机 Redis（不落任何转录）。
-
-**入口坑（本轮踩到）**：直连 `127.0.0.1:8788` 返回 **401 `INVALID_ACCESS_TOKEN`** ——
-`RedisThirdSessionResolver` 先比对 bearer，而**进程 env 里没有**服务令牌；
-该令牌由**入口（nginx/BFF）注入**。故必须走公网路径，不能从主机内直连做验收。
-
-| 探测 | 结果 |
-|---|---|
-| `今天天气怎么样` | **202 `type=qa`** ✅ 原 bug 已修 |
-| `Connector Stuck? Emergency Cable Release Guide`（q010 标题，含 "Guide"） | **200 `type=faq` q010** ✅ |
-| `Vehicle Scratch or Equipment Damage Incident SOP`（q023 标题，含 "SOP"） | **200 `type=faq` q023** ✅ |
-| `充电桩怎么拔枪？` | **200 `type=faq` q010** ✅ |
-| `夏季高温天气充电注意什么？` | **200 `type=faq` q026** ✅ |
-
-**结论**：#408 的四项验收判据在生产上全部通过，`今天天气怎么样` 不再被误判为业务 FAQ，
-两个被长度判据误杀的标题变体恢复命中，真实业务问题不受影响。
-
----
-
-## 订单授权判据的源码/生产库核查（2026-09-24，支撑 #414）
-
-本节记录「订单 → 站点 → 运营商」判据的查证结果，含**一次自我更正**。
-
-**已确证（源码 + 生产库只读实测双证）**：
-
-- `ch_site.partner_b_id` ≡ `qumall_mall.partner_info.owner` ≡ `qumall_upms.sys_user.id`（`type='5'` 代理商）。
-  证据：`ChSiteServiceImpl.java:494-495` 成对写 `setAgentId(partnerInfo.getId())` /
-  `setPartnerBId(partnerInfo.getOwner())`；`MallDataMapper.xml:87` 写 `sys_user_shop.user_id`；
-  `SysUserMapper.xml:428-437` 定义 `user_id = sys_user.id where type='5'`；
-  `ChOrderInfoMapper.xml:159-161` 写 `coi.partner_b_id = pi.owner`。
-- `ch_site.agent_id` ≡ `partner_info.id`（另一条支线）。
-- 覆盖率：`site.partner_b_id → sys_user(type=5)` = **20782/30443 = 68.3%**。
-- 代理商账号实测 **314** 个；`partner_info.owner ∩ sys_user` = 312（type=5 占 307）→ 身份可绑。
-- 「平台」= `@ShopDataScope(seePlatform=true)` 下 shop id 的哨兵值 `'-1'`。
-
-**更正（重要）**：先前记「`partner_b_id` 覆盖 69% 却与注册表交集为 0、端到端仅 9.4%」**是错的**。
-错因：按 `partner_info.id` 做了 join，而 `partner_b_id` 的对应列是 `partner_info.owner`。
-只量了一条支线就下了"链路已断"的结论，把"我 join 错"误报成"数据缺失"。
-正确量法见上表。该错误与本会话另一处（把 `ChOrderInfoController` 写成 `ChAgentInfoController`）
-同属"未复核就断言"，已入档。
-
-**边界**：公司源码**只读、不入库、不镜像**（本地仅存于 `.scratch/company-repos/`，已 gitignore）。
