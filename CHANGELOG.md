@@ -192,6 +192,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 记录方案 A 部署 41 与公网验收（含回滚路径实测） (#403)
 - 记录 CD 部署完成与对 CD 构建的重新验收 (#404)
 - 修正状态索引的过期「进行中」，并记录 CD 部署史核查 (#409)
+- 订单授权问题清单——P0 三条改由公司源码回答 (#415)
 
 ### Fixed
 - Deliver evidence payloads to Windows runner
