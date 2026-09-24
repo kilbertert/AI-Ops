@@ -46,7 +46,13 @@
   `ch_site.shop_id='-1'` 行**，该通路当前是空操作。产品口径同为「不会有 `-1` 查看数据的场景」，
   **R-3 据此关闭**——关闭的是"是否需要跨运营商可见性"；**租户内店铺 ID 匹配站点照常生效**，
   不在关闭范围内。
-- **R-2 状态：未解，已收敛**（**不得读作"已定方案"**）。已确证：会话只提供身份（无 roles/无范围）；
+- **R-2 状态：已解（2026-09-24 后续 PR）** —— 曾记"未解、已收敛"，现被取代：存在受信路径
+  `GET /shopuser/getShops?userId=`（直接吃 `userId`，无 `@Inside`），且它正是后端权威授权
+  （`ShopIdInterceptor`）所用的同一接口。**必须注意两处**：① 会话给的是 **C 端** `userId`，
+  需先经 `/user/inside/byUserId/{userId}` 换成 **B 端** `sys_user.id` 才能传给它
+  （两 id 空间实测无重叠，传错得空集，非他人范围）；② `shop_id` 与 `ch_site.id` **近似但不等同**
+  （954 行中 1 行不同），必须走既有 `site_ids_by_shops`，不可直接互用。
+  详见该文档 §5.9。以下为当时的"未解"记录，保留以存证收敛过程。已确证：会话只提供身份（无 roles/无范围）；
   取范围的每个接口（`/user/info`、`/user/ds`、`/shopuser/getShops`、`/role/list`）都要**凭证**，
   而 `userId` 在设计里只用于解析**目标主体**；`/user/ds` 结构性为空（`sys_organ.biz_data` 349 行全 NULL）。
   **两条实现路线（AI-Ops 自算 / 调后端 `@ShopDataScope`）因此卡在同一处**：
