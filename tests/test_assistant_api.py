@@ -1323,24 +1323,92 @@ def test_faq_shortcircuit_does_not_answer_an_unrelated_question(tmp_path: Path) 
     assert resp.json()["type"] == "qa"
 
 
-def test_faq_shortcircuit_does_not_swallow_a_case_request(tmp_path: Path) -> None:
-    """`重卡充电案例` is the second false positive, and the only one in real traffic.
+def test_case_and_solution_intents_do_not_suppress_a_catalog_title(tmp_path: Path) -> None:
+    """A catalog title must survive the model reading its wording as promotional.
 
-    Found while measuring this ticket: the promo cue matcher catches "客户案例" /
-    "案例库" but not "重卡充电案例", so the question reached the catalog and was
-    answered as RFID-card content. Among the 86 deduplicated real questions it
-    is the sole marginal match — and Jev reads it as case exploration, which
-    #231 already says must not enter the FAQ.
+    The first version of this fix suppressed case/solution intents. It was
+    narrow enough to buy one thing — "重卡充电案例" reaching the RFID-card entry —
+    and broad enough to cost a class of false suppressions, because the model
+    reads the wording of the catalog's OWN titles that way: "Guide" in q010's
+    title, "SOP" in q023's.
+
+    Suppression was never needed for promo routing: a genuine request NAMES it,
+    and the cue matcher upstream catches those, while the routing block below
+    sends whatever is left to the promotional path anyway. So these two answers
+    are what the suppression set must NOT do.
     """
     client, runtime = _client(tmp_path)
-    runtime.classified = {"intent": "case_exploration", "confidence": "high", "risk": "low"}
+    runtime.classified = {"intent": "solution_discovery", "confidence": "high", "risk": "low"}
+
+    # The title verbatim is self-evident, so it never reaches the intent at all.
     resp = client.post(
         "/v1/assistant/questions",
-        json={"question": "重卡充电案例"},
+        json={"question": "Connector Stuck? Emergency Cable Release Guide"},
         headers=_headers(),
     )
-    assert resp.status_code in {200, 202}, resp.text
-    assert resp.json()["type"] != "faq"
+    assert resp.status_code == 200
+    assert resp.json()["question_id"] == "consumer.faq.q010"
+    assert runtime.classify_calls == 0
+
+    # Prefacing it drops the identity score to 0.6, which DOES reach the intent —
+    # and this is the case the suppression set governs. A user who wanted the
+    # FAQ answer must not be sent to a promotional card because the model reads
+    # the word "Guide" as solution-shaped. (The verbatim case above cannot catch
+    # a widened suppression set: it never gets that far.)
+    resp = client.post(
+        "/v1/assistant/questions",
+        json={"question": "Please show me the Connector Stuck? Emergency Cable Release Guide"},
+        headers=_headers(),
+    )
+    assert runtime.classify_calls == 1
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["type"] == "faq"
+    assert resp.json()["question_id"] == "consumer.faq.q010"
+
+
+def test_a_polarity_flip_does_not_ride_the_identity_bar(tmp_path: Path) -> None:
+    """A one-token reversal must not be answered as the title it reverses.
+
+    Review finding on this PR, and a sharp one: "Why Did Charging Stop Normally?"
+    shares 4 of 5 tokens with the English q011 title "Why Did Charging Stop
+    Unexpectedly?" and scored exactly 4/5 on BOTH sides — so an inclusive bar
+    called it self-evident and told a user asking about a NORMAL stop about
+    insulation faults, overheating and premature stops. The bar is strict now,
+    and no catalog variant sits exactly on it (measured over all 185).
+    """
+    client, runtime = _client(tmp_path)
+    # A casual reading: the reversal is a different question and must not be
+    # answered as the title it reverses.
+    runtime.classified = {"intent": "casual", "confidence": "high", "risk": "low"}
+    resp = client.post(
+        "/v1/assistant/questions",
+        json={"question": "Why Did Charging Stop Normally?"},
+        headers=_headers(),
+    )
+    assert resp.status_code == 202, resp.text
+    assert resp.json()["type"] == "qa"
+
+    # The symmetric case, one token the other way, and the one that defeated a
+    # threshold: 6/7 shared tokens scored 0.86, above any bar that still let the
+    # legitimate paraphrases through. The differing token IS the question.
+    resp = client.post(
+        "/v1/assistant/questions",
+        json={"question": "Why Is Charging Power Faster Than Advertised?"},
+        headers=_headers(),
+    )
+    assert resp.status_code == 202, resp.text
+    assert resp.json()["type"] == "qa"
+
+    # The titles themselves stay instant and model-free.
+    runtime.classify_calls = 0
+    for question, expected in (
+        ("Why Did Charging Stop Unexpectedly?", "consumer.faq.q011"),
+        ("Connector Stuck? Emergency Cable Release Guide", "consumer.faq.q010"),
+    ):
+        resp = client.post("/v1/assistant/questions", json={"question": question}, headers=_headers())
+        assert resp.status_code == 200, question
+        assert resp.json()["question_id"] == expected, question
+    assert runtime.classify_calls == 0
 
 
 def test_a_confident_faq_match_is_answered_without_consulting_routing(tmp_path: Path) -> None:
@@ -1403,3 +1471,29 @@ def test_a_short_question_asks_the_classifier_once(tmp_path: Path) -> None:
     assert resp.status_code == 202
     assert resp.json()["type"] == "qa"
     assert runtime.classify_calls == 1
+
+
+def test_a_localized_catalog_title_is_not_suppressed_by_its_wording(tmp_path: Path) -> None:
+    """The catalog's own titles must survive a misreading of their wording.
+
+    Regression for the first cut of this fix, caught by the full-catalog run
+    against the real model rather than by any unit test: the bar was question
+    LENGTH, which cannot tell a short title from a short question, so q010's own
+    localized titles reached the routing intent. Jev read the word "Guide" —
+    and q023's "SOP" — as solution_discovery, and the entry was suppressed.
+    5 of 185 variants went that way, four of them q010's.
+
+    The intent here is the one that broke it. A title's own text must win
+    regardless of how the model labels the domain wording in it.
+    """
+    client, runtime = _client(tmp_path)
+    runtime.classified = {"intent": "solution_discovery", "confidence": "high", "risk": "low"}
+    for question, expected in (
+        ("Connector Stuck? Emergency Cable Release Guide", "consumer.faq.q010"),
+        ("Vehicle Scratch or Equipment Damage Incident SOP", "consumer.faq.q023"),
+    ):
+        resp = client.post("/v1/assistant/questions", json={"question": question}, headers=_headers())
+        assert resp.status_code == 200, question
+        body = resp.json()
+        assert body["type"] == "faq", question
+        assert body["question_id"] == expected, question

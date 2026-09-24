@@ -976,9 +976,9 @@ def create_gateway_app(
 
         # Route 2b: FAQ short-circuit (deterministic, zero-order, zero-model).
         #
-        # A short question's keyword match is not yet an answer (#408). The
-        # scoring below can only see token overlap, and a short question has few
-        # tokens, so one or two generic words reach full containment against
+        # A keyword match that only OVERLAPS a title is not yet an answer (#408).
+        # The scoring below can only see token overlap, and a short question has
+        # few tokens, so one or two generic words reach full containment against
         # some title — "今天天气怎么样" scored 1.0 against the summer-heat entry and
         # answered a charging question to someone who asked about the weather.
         # Overlap cannot separate that from a real hit: "充电桩" (a genuine
@@ -986,11 +986,11 @@ def create_gateway_app(
         # reach 1.0.
         #
         # So the decision the score cannot make is made by the thing that can —
-        # the routing intent, which comes from Jev. A long question does not ask:
-        # it answers from the catalog with no model call, which is what keeps
-        # every question clicked from the FAQ list on the instant path it has
-        # today. The length bar, and why it is length rather than score, is
-        # argued at `_FAQ_MARGINAL_QUESTION_SIGS`.
+        # the routing intent, which comes from Jev. A question that REPRODUCES a
+        # catalog title does not ask: it answers from the catalog with no model
+        # call, which is what keeps every typed entry on the instant path. What
+        # separates "reproduces" from "overlaps", and why it is not a length bar,
+        # is argued at the note above `_classify_for_routing`.
         #
         # It costs nothing extra. This branch runs BEFORE the routing block
         # further down, and either the FAQ branch answers this request or that
@@ -2319,58 +2319,61 @@ _FAQ_GENERIC_CHARS = frozenset(
 _FAQ_MIN_CONTAINMENT = 0.5
 _FAQ_MIN_OVERLAP = 2
 
-# The question length at or above which a keyword match is answered directly,
-# with no second opinion.
+# What makes a keyword match self-evident is not a score: it is whether the
+# question's significant tokens ARE one of the entry's title variants — token-set
+# equality, with no threshold to tune.
 #
-# The ambiguity this ticket fixes is a SHAPE, not a keyword: the question is
-# short, so one or two generic words are its entire signature, they reach full
-# containment against some title, and the answer is about the wrong subject.
+# Arriving at this took two measured corrections, both from real runs:
 #
-# Length is what isolates that shape, and the measurements bracket it: every
-# ambiguous case is 2-6 significant tokens ("天气" 2, "充电" 2, "充电桩" 3, "今天天气
-# 怎么样" 4, "重卡充电案例" 6), while the genuine questions a user types run 10-12
-# ("充电桩怎么拔枪？" 5 is the one exception, and it clears the bar).
+# 1. A question-LENGTH bar was tried first and failed, because the compressed
+#    en/de/fr/es/pt titles are short too, so length cannot tell a short title
+#    from a short question. It sent `Connector Stuck? Emergency Cable Release
+#    Guide` — q010's own title — to the routing intent, where Jev read the word
+#    "Guide" as solution_discovery and dropped the entry (5 of 185 variants).
+# 2. A variant-containment bar (question covers most of the variant AND the
+#    variant covers most of the question, at 0.8) fixed that but kept letting
+#    ONE-TOKEN REVERSALS through, because a reversal changes a single token and
+#    lands just above the bar: `Why Did Charging Stop Normally?` scores 0.80
+#    against "…Unexpectedly?", and `Why Is Charging Power Faster Than
+#    Advertised?` scores 0.86 against the "Slower" title. Both were answered
+#    from the FAQ, and the token that differed was the whole question — a user
+#    asking why charging was FAST was told about slow charging.
 #
-# Length rather than an overlap score, because a score bar is scale-dependent
-# and the compressed en/de/fr/es/pt titles are short by construction: measured,
-# an absolute overlap bar of 8 sends 91 of the 185 title variants to the model.
-#
-# What that buys, precisely, so the cost is not overstated: clicking a
-# recommended question calls `/v1/faq/answer` with a question_id and never runs
-# this matcher at all; 27 of the 28 zh consumer titles self-evident when TYPED;
-# and the 135 localized variants consult the routing intent, which is the
-# genuine added call in this change. The bar is not what decides any individual
-# case — the routing intent is — so the widened band is safe: a `knowledge`
-# question in it still goes to the catalog.
-_FAQ_MARGINAL_QUESTION_SIGS = 10
+# Equality has no such gap, and the measurements say it costs nothing: all 185
+# catalog variants (in all six languages) are exactly their own token set, while
+# every near-miss fails — the two reversals, a prefixed title (0.6 on the old
+# bar), and the false positives. So the catalog is answered instantly, and
+# anything that is merely CLOSE to an entry is checked by the routing intent.
+
 
 #: Intents that say "the catalog is not where this question belongs", so a
-#: marginal keyword match must not answer from it.
+#: question that merely OVERLAPS a title must not be answered from it.
 #:
-#: `casual` is the defect this ticket was opened for: "今天天气怎么样" reached the
-#: summer-heat entry on the single shared word 天气, and every non-charging
-#: question of that shape — 今天吃什么, 股票怎么样 — reaches some entry the same
-#: way. Jev says `casual` for all of them.
+#: One intent, and the narrowness is the point. `casual` is the defect this
+#: ticket was opened for: "今天天气怎么样" reached the summer-heat entry on the
+#: single shared word 天气, and every non-charging question of that shape —
+#: 今天吃什么, 股票怎么样 — reaches some entry the same way. Jev says `casual`
+#: for all of them, and there is no legitimate short question it mislabels.
 #:
-#: `case_exploration` / `solution_discovery` must not enter the FAQ at all
-#: (#231 acceptance: 案例不进入 FAQ). The promo cue matcher upstream catches
-#: only the phrasings it was given, and "重卡充电案例" was reaching the catalog as
-#: RFID-card content — the only marginal match among the 86 real questions.
+#: CASE AND SOLUTION INTENTS ARE DELIBERATELY ABSENT, and the first version of
+#: this fix had them. They bought exactly one thing — "重卡充电案例" reaching the
+#: RFID-card entry, the sole marginal match among 86 real questions — and cost a
+#: class of false suppressions, because the model reads the wording of the
+#: catalog's OWN titles as promotional: "Guide" in q010's `Connector Stuck?
+#: Emergency Cable Release Guide`, "SOP" in q023's `Vehicle Scratch or Equipment
+#: Damage Incident SOP`. A user prefacing q010's title with "Please show me the"
+#: scored 0.6, Jev said solution_discovery, and the entry was dropped in favour
+#: of a promotional card.
 #:
-#: `knowledge` is deliberately ABSENT, and that is a measurement rather than an
-#: oversight. A knowledge-intent question in the marginal band is the near-miss:
-#: "充电桩怎么拔枪？" (the user's words) against q010 "充电结束后拔不出充电枪怎么
-#: 办？" (the entry, answer included). That is related content, not unrelated
-#: content — the harm this ticket is about — and suppressing it also suppresses
-#: genuinely-asked short knowledge questions, which is a recall cost with no
-#: matching acceptance requirement. No `knowledge` question in the 86-question
-#: real corpus lands in the marginal band at all, so the wider set would add
-#: that risk without a single observed case to justify it.
+#: Suppressing them was never necessary for promo routing: a genuine request
+#: NAMES it ("客户案例" / "行业解决方案" / "Please show me a customer case"), which the
+#: cue matcher upstream already catches, and anything that does reach here with a
+#: case/solution intent is sent to the promotional path by the routing block
+#: below — which runs after this one and needs no help from the suppression set.
+#: The residual is "重卡充电案例" continuing to answer from q009; the fix for that
+#: is a promotional cue, not a FAQ suppressor, and it is tracked separately.
 #:
-#: `order_issue` and `report_fault` are likewise absent: they are the narrowest
-#: intents, so they almost never land in the marginal band, and where one does
-#: the FAQ answer is still the right one to give.
-_FAQ_SUPPRESSING_INTENTS = frozenset({"casual", "case_exploration", "solution_discovery"})
+_FAQ_SUPPRESSING_INTENTS = frozenset({"casual"})
 
 
 def _normalize_keywords(text: str) -> set[str]:
@@ -2401,19 +2404,6 @@ def _normalize_keywords(text: str) -> set[str]:
     if latin:
         significant.add(latin)
     return significant
-
-
-def _faq_title_union_sigs(faq_catalog: FAQCatalog, platform: str, question_id: str) -> set[str]:
-    """Signatures over ALL language variants of one entry's title (L3/#203).
-
-    zh full question first, then the en/de/fr/es/pt compressed titles from the
-    wide table — a question in any supported language matches the entry whose
-    variant union it overlaps, without weakening per-entry determinism.
-    """
-    sigs: set[str] = set()
-    for variant in faq_catalog.title_variants(platform, question_id):
-        sigs |= _normalize_keywords(variant)
-    return sigs
 
 
 def _classify_for_routing(
@@ -2460,11 +2450,10 @@ def _faq_match(
 ) -> tuple[str | None, bool]:
     """Best matching entry, and whether it may be answered only on those words.
 
-    Returns ``(question_id, confident)``. ``confident`` is True when the match
-    does not need a second opinion; False means the question is short enough
-    that the match may be an artifact of its brevity, and the routing intent
-    should confirm it before the catalog answers (see
-    ``_FAQ_MARGINAL_QUESTION_SIGS``).
+    Returns ``(question_id, confident)``. ``confident`` is True when the question's
+    tokens ARE one of the entry's own titles, so it is answered without a second
+    opinion; False means the question merely OVERLAPS a title and the routing
+    intent should confirm it before the catalog answers (see the note above).
 
     Set-containment over the union of a title's language variants: score =
     |question_sig ∩ title_union|, with a containment bar on the same union, so
@@ -2475,9 +2464,24 @@ def _faq_match(
     qsigs = _normalize_keywords(question)
     if not qsigs:
         return None, False
-    unions = {
-        entry["question_id"]: _faq_title_union_sigs(faq_catalog, platform, entry["question_id"])
+    # Signature each title variant once. The union below is the union of THESE
+    # signatures, not a second tokenization pass over the same strings — this
+    # runs on every assistant request, and `_normalize_keywords` walks the text
+    # character by character.
+    variants = {
+        entry["question_id"]: tuple(
+            sig
+            for sig in (
+                _normalize_keywords(variant)
+                for variant in faq_catalog.title_variants(platform, entry["question_id"])
+            )
+            if sig
+        )
         for entry in faq_catalog.catalog(platform)
+    }
+    unions = {
+        question_id: frozenset().union(*sigs) if sigs else frozenset()
+        for question_id, sigs in variants.items()
     }
     best_qid: str | None = None
     best_overlap = 0
@@ -2493,7 +2497,7 @@ def _faq_match(
     containment = len(qsigs & unions[best_qid]) / len(qsigs)
     if containment < _FAQ_MIN_CONTAINMENT:
         return None, False
-    return best_qid, len(qsigs) >= _FAQ_MARGINAL_QUESTION_SIGS
+    return best_qid, any(qsigs == variant for variant in variants[best_qid])
 
 
 # A candidate order token: starts AND ends on an alphanumeric, so a trailing
