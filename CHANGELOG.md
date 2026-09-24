@@ -1,0 +1,283 @@
+# Changelog
+
+All notable changes to this project are documented in this file.
+
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Added
+- Add read-only charging diagnostics runtime (#1)
+- Add Codex-native diagnostic harness (#2)
+- Add portable Windows diagnostic package
+- Expose live diagnostic progress events
+- Add central AI-Ops gateway (#7)
+- Unify diagnose as single entry, default to Codex agent (#9)
+- Tenant discovery, Chinese output, auditable evidence (#13)
+- Multi-provider infrastructure with GLM default (#18)
+- Plan A — no auto-claim on agent:implement label
+- Add Java /diag/order tracer bullet
+- Implement HttpSources with fixture equivalence
+- Add Java /diag/order tracer and HttpSources fixture equivalence
+- Plan A full decouple — implement-prd dispatch-only
+- Close reference gaps — dependency analysis + model guardrails
+- Add HybridSources partial cutover and fixtures
+- Merge HybridSources partial cutover (#50) and D方案 doc/workflow sync (#52)
+- Read internal token secret from config with 300s window
+- Classify doctor sources and annotate env example
+- Merge issue-42 internal token config and issue-51 doctor/env example
+- Add Java /diag/occupy-order lookup endpoint
+- Add Java /diag/occupy-order lookup endpoint (#39)
+- Add Java /diag/redis-stream endpoint
+- Merge /diag/redis-stream endpoint (#40)
+- Add GET /diag/device endpoint
+- Merge Java /diag endpoints (#40, #41)
+- Remove MySQL/Redis direct credentials in Phase 3a
+- Merge Phase 3a MySQL/Redis credential removal (#43)
+- Strip queue labels on issue close
+- Enforce governance contract
+- Add permission ScopeContext and identity mapping (#77)
+- Scope MySQL diagnostic queries by permission context (#74) (#78)
+- Scope TDengine queries by allowed device set (#79)
+- Scope Redis stream inspection by tenant ownership (#80)
+- Integrate scoped runtime, audit, and acceptance artifacts (#81)
+- Add standard caller authentication (#93)
+- Deliver minimum async charging health report jobs (#94)
+- Restore async health report jobs (#99)
+- Deliver standard diagnosis API (#100)
+- Add standard curves and provenance (#101)
+- Add complete deterministic health metrics (#102)
+- Unify standard resource contract (#103)
+- Validate standard tokens through cloud auth (#106)
+- Resolve thirdSession from shared redis (#115)
+- Deliver C/B platform-scoped fixed FAQ APIs (#134)
+- Add zero-order tool boundary for general questions (T1/#151) (#157)
+- Add unified assistant questions endpoint (T2/#152) (#158)
+- Real zero-order general-question job (T3/#153) (#159)
+- Text-embedded order parse + ownership route (T4/#154) (#161)
+- General-question history + frontend examples (T5/#155) (#162)
+- Add bounded retrieval and media protocol
+- Add draft publish lifecycle
+- Customer QA RAG runtime in unified entry (T3/#170) (#179)
+- Session and active-order context (#180)
+- Isolated draft debug-run and real kb publish validation (T5/#171) (#182)
+- Redacted agent run metrics and tenant-scoped query API (T7/#174) (#183)
+- Signed /v1/media route + frontend blocks[] contract (#181)
+- 语言解析横切 — Accept-Language 解析、回退与依赖注入 (#201) (#205)
+- Localize FAQ catalog with the multilingual wide table (#206)
+- Match FAQ short-circuit across multilingual titles (#207)
+- Inject output language into qa and diagnosis prompts (#208)
+- Declarative environment manifest + aiops admin reconcile (#211)
+- Intent-relative confidence ladder + environment preflight (#212)
+- Adopt the customer service prompt contract for env 41 (#215)
+- Clarify high-risk questions without order context (#233)
+- Add structured lightweight intent fallback (#234)
+- Add versioned tenant-entry shortcut resources (#230) (#235)
+- Connect promotional agents to case and solution intents (#236)
+- Add platform-wide shortcut defaults
+- Add tenant shortcut overrides and suppression
+- Migrate tenant actions to platform defaults
+- Add jump path to shortcut resources (#265)
+- Add a Responses status adapter for the unified endpoint (#273)
+- 统一助手入口补齐取消终态、解锁事件并修复两个同源缺陷 (#360)
+- 回答载荷提升为契约类型，资源名豁免直达生产路径 (#372)
+- 合并 main 后受门控地部署 41 (#387)
+- Jev 决策客户端——自有协议接入与类型化决策解析 (#393)
+- 主机侧自检与自动回滚；依赖收敛定为有意边界 (#388)
+- 分类器判定切换到 Jev——阈值映射、失败回退与可观测性 (#398)
+- 方案 A —— 高风险一律追问，并记录与关键词守卫的重叠 (#402)
+
+### Changed
+- Clarify HTTP doctor classification
+- Simplify Java /diag/occupy-order lookup flow
+- Harden redis-stream key and lag edge cases
+- Clarify T6 device lookup guard and expand contract tests
+- 引入租户可见性共享规则并迁移 fixture 数据源 (#328) (#335)
+- 引入有界 HTTP 传输骨架 (#306) (#336)
+- Introspection 客户端迁移到骨架并补齐异常捕获 (#307) (#337)
+- 网关/TDengine 代理/Responses 适配器/Dis 客户端迁移到骨架 (#311) (#338)
+- Kb-service 检索与媒体客户端迁移到有界 HTTP 骨架 (#309) (#339)
+- Diag API 客户端迁移到有界 HTTP 骨架 (#340)
+- UPMS 客户端迁移到有界 HTTP 骨架 (#341)
+- 拆除重复退避与残留构造点，并以守护测试封口 (#312) (#342)
+- 收敛租户可见性规则为单一权威，统一入口守卫与两种渲染 (#344)
+- 合并两处入口租户守卫为单一权威 (#331) (#350)
+- 收敛租户可见性规则为单一权威 (#347)
+- 订单时间窗规则正式化，消除跨模块私有名依赖 (#378)
+
+### Documentation
+- Chinese governance and milestone evidence
+- Add quick-start guide and surface it in README (#8)
+- Fix quickstart step 3 to use --mode deterministic (#10)
+- Add packaging and CI artifact download guide (#12)
+- Make workspace-level enrollment the default (#14)
+- Rewrite packaging & download guide as step-by-step (#16)
+- 充电业务诊断查询接口方案(AI-Ops 直查库正式化)
+- AFK 工作流脚手架收尾 (M16 milestone sync)
+- Sync issue #36 milestone and validation
+- Align with Plan A — deprecate agent:to-issues auto-spawn
+- D 方案前置工作——拆分 PR-A/B/C 任务清单与决策记录
+- Sync plan and AFK workflow to D方案
+- Clarify D方案 phased scope consistency
+- Sync issue #39 milestone and validation
+- Sync issue #40 milestone and validation
+- Annotate P0 — Java /diag/* 未落地,HTTP 段回退直连
+- Add execution-paths note to handoff brief
+- Retain review workflow boundaries (#69)
+- Record standard API real acceptance blockers (#104)
+- BFF identity + frontend API brief + arch showcase (#108)
+- Publish PNG + SVG preview of architecture showcase (#109)
+- Document thirdSession service boundary (#116)
+- Record fixed faq acceptance (#136)
+- Record faq gateway smoke (#138)
+- Sync frontend integration contract (#139)
+- Expand brief into three-line integration overview (#140)
+- Add FAQ platform identity domain terms (#141)
+- Add per-endpoint input/output field definitions (#142)
+- Record acceptance-verified auth and validation semantics (#143)
+- Record APK joint-debug diagnosis and breakpoints (#144)
+- Update topology after 120 service migration (issue #147) (#148)
+- Fix thirdSession header name — use lowercase third-session (nginx drops underscored headers) (#149)
+- Add 智能问答 and 通用问答 terms (T6/#156) (#163)
+- Frontend trigger guide for the three response types (#166)
+- Kb-service test env facts and protocol samples for #170 (#178)
+- P0 real-media canary runbook for #173/#175 (#184)
+- Sync 36 cutover facts, canary C1-C3 evidence, and stale status sections (#191)
+- Record media canary blockers
+- Record metrics forbidden path
+- Record end-to-end completed diagnosis acceptance (PR #194 follow-up) (#195)
+- Archive revoked 41 decision (#197)
+- Record frontend API real acceptance (#198)
+- Record environment 41 cutover and shared kb
+- Record current 41 provider verification
+- Record 41 multilingual cutover
+- Record shared provider key diagnosis
+- Require explicit --db in admin reconcile examples (#213)
+- Record M53-M55 milestones and on-box acceptance evidence (#214)
+- Record M56 prompt rollout acceptance and supplier blockage (#216)
+- Record live five-language FAQ acceptance for #200 closure (#217)
+- Correct review-found record inaccuracies (test count, empty scenario, language claim) (#222)
+- Close #218 with live backlog acceptance after supplier recovery (#223)
+- Record three-environment sync of the QA error contract fix (#224)
+- Clarify QA failed is terminal — retry means a new POST, not more polling (#225)
+- Full frontend contract for shortcuts and clarification (#239)
+- Index current delivery and shortcut demo state
+- Refresh delivery index baseline
+- Keep delivery baseline resolvable
+- Record 41 shortcut migration evidence
+- Record shortcut acceptance follow-up
+- Refresh shortcut acceptance timestamp
+- Add 41 environment runbook as reusable repo asset (#256)
+- Require operational-knowledge self-check before milestone close (#257)
+- Record embedded-order routing fix with 41 live evidence (#259)
+- Record the 41 jump-path deployment and live acceptance (#267)
+- Record 41 key-based SSH access in the runbook (#268)
+- Add a frontend handoff for jump-path integration (#269)
+- Record the promo empty-library misreport and its 41 fix (#271)
+- Record the unified model endpoint migration (#279)
+- Record the media/image retrieval and display fixes (#281)
+- Record the i18n and media acceptance for this session (#286)
+- 记录后台知识库页与智能体平台统一到 36 (#287)
+- 声明本项目可访问的主机（.dev-host.toml） (#291)
+- 记录 AL-COV-10 的 41 公网验收结果 (#303)
+- 交接文档写明诊断线等待态不可取消 (#370)
+- README 重构为架构导览并加四条形状守护 (#373)
+- 缩短第二节标题并同步目录锚点，补页内锚点守护 (#375)
+- 补 #346 取消链路的端到端真实验收证据 (#379)
+- 记录 #380 部署 41 与公网复验结果 (#382)
+- 说明 __version__ 在 CD 部署时会被注入 commit 标识 (#395)
+- 回填 workflow 层验收结果 —— 四条判据全部通过 (#399)
+- 记录 PRD #383 在 41 的启用与验收——高风险追问规则首次触发 (#400)
+- 记录方案 A 部署 41 与公网验收（含回滚路径实测） (#403)
+- 记录 CD 部署完成与对 CD 构建的重新验收 (#404)
+- 修正状态索引的过期「进行中」，并记录 CD 部署史核查 (#409)
+
+### Fixed
+- Deliver evidence payloads to Windows runner
+- Expose gateway errors and document Windows client flow
+- Retry transient gateway connection errors in client (#15)
+- Scope gateway client retries to idempotent GET requests (#17)
+- Tolerate markdown-wrapped structured output from non-OpenAI providers (#19)
+- Normalize unwrapped and flattened diagnosis from non-OpenAI providers (#20)
+- Unescape GH_REPO in manual checkout steps
+- Clean stale agent branches in runner checkout
+- Add zod dependency
+- Update package-lock with zod
+- Remove orphan step stubs from label workflows
+- Use npm cache in setup-node
+- Inject GH_TOKEN into the sandbox env
+- Grant issues permission to PR-label workflows
+- Harden Java /diag/order tracer bullet
+- Harden HttpSources edge cases and DiagApi validation
+- Validate legacy diag-api token expiry setter
+- Harden internal-token validation edge cases
+- Count single-device diag audit rows
+- Expose dev extra for uv sync --extra dev
+- Limit hybrid SSH tunnel to TDengine in Phase 3a
+- Align label lifecycle with reference
+- Align label-Action review with the reference design
+- Use host delivery token for pull requests (#64)
+- Deepen review checkout history (#65)
+- Harden AFK review delivery
+- Fail closed on workflow boundaries
+- Handle pull requests without linked issues (#68)
+- Apply provider-neutral economy contract (#70)
+- Let planner run leaf sub-issues of PRDs (#76)
+- Derive data scope from role dsType when /user/ds is broken (#82)
+- Support caching_sha2_password handshake (#107)
+- Complete real thirdSession compatibility (#117)
+- Keep resolver implementations compatible (#118)
+- Harden identity boundary checks (#135)
+- Load delegated session config securely (#137)
+- Raise diagnosis deadline to cover real agent runs (#146)
+- Poll endpoint must unpack assistant_identity tuple (#160)
+- Surface blocked diagnosis as failed DIAGNOSIS_BLOCKED (#164)
+- Pointed 404 hint when polling diagnosis endpoint with a qa_ id (#165)
+- Map non-ASCII URL ids to the uniform 403, never a 500 (#185)
+- Normalize close-contract answer turns from real providers (#186)
+- Close real RAG canary blockers (#187)
+- Retry transient video document misses (#188)
+- Extend transient video retry budget (#190)
+- Tolerate provider turn deviations and document the delivery contract (#194)
+- Fetch signed media under the grant's tenant (#196)
+- Support 41 environment schema and archive identity (#199)
+- Guard --db, share allowed-models derivation, drop unused kb-repair layer (#219)
+- Single-source gun column list and preflight failure logging (#220)
+- Expose QA failure error on the assistant poll endpoint (#221)
+- Short-circuit greetings and expose diagnosis language (#226)
+- Three real-model contract gaps found by 41 live acceptance (#238)
+- Enforce order context for diagnosis shortcuts
+- Order-bound shortcut guard must honor a text-embedded order (#258)
+- Stop reporting an unsearched promo library as empty (#270)
+- Degrade a promotional click when the model is unreachable (#272)
+- Advertise HTTP/1.1 in the status adapter (#274)
+- Keep a contract violation visible instead of degrading it (#276)
+- Trim answer blocks to their kind before validation (#277)
+- Clean blocks in the wrapped answer shape too (#278)
+- Validate a media grant against the agent that signed it (#280)
+- Localize the clarification replies (#282)
+- Cover all six supported languages in the message tables (#283)
+- Cover all supported languages in the bundled shortcut copy (#284)
+- Translate diagnosis evidence for the reader (#285)
+- 修正 41 runbook 的回滚源路径 (#289)
+- Forbid echoing stored Chinese in another language (#290)
+- Drop guided grammar when the request also declares tools (#292)
+- 收口回答面输出语言契约，消除中文字面泄漏 (#301)
+- 中文专名括注不再判为语言泄漏 (#302)
+- 文本内嵌订单识别不再把英文单词当订单号 (#304)
+- 高风险扣费线索补齐全部六种受支持语言 (#305)
+- PRD 不再被 agent-implement 清掉链式标签 (#325) (#345)
+- 共享 runner 工作区的浅克隆导致推送被安全挡下 (#349)
+- 架构审查不再让沙箱做它做不到的 GitHub 变更 (#353)
+- 修复「PR 永远停在 draft」——用错凭据且失败被吞 (#362)
+- 零产出的运行以真因失败，不再误报成凭据问题 (#369)
+- 媒体块的模型自造标题不再借资源名豁免通过 (#377)
+- 修复流式轮次首部丢失导致的 invalid JSON，并修掉三处同源缺陷 (#380)
+- 41 runbook 的打包方式与 rsync 源路径对齐，并加首层断言 (#384)
+- 41 runbook 解包前清空 sync-check，堵住残留污染生产的路径 (#386)
+- 寒暄答复改走零阶 QA 作业，并同步等待态契约 (#394)
+- 并发配置改为 cancel-in-progress，修掉实测到的死锁 (#397)
+- FAQ 关键词短路对短问句先取路由意图确认 (#408) (#411)
+- FAQ 命中判据改为「是否复述标题原文」，替掉长度判据 (#408) (#412)
+
