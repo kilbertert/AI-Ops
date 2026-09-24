@@ -23,30 +23,23 @@
 
 ### 5.1 「平台」= shop id 的哨兵值 `'-1'`（原 P0-1）
 
-不是缺失字段，是**约定**：
-
-```java
-// qumall-common/cloud-common-data/.../datascope/shop/ShopIdInterceptor.java
-// seePlatform=true 时：
-originalSql = "... where " + scopeName + " IN ('" + shopId + "', '-1')";
-```
-
+不是缺失字段，是**约定**：当 `seePlatform=true` 时，隔离条件会把 shop id 与**哨兵值 `'-1'`**
+一起放进 `IN (...)`——`'-1'` 即"平台方"。出处：`qumall-common/cloud-common-data/.../datascope/shop/ShopIdInterceptor.java`。
 `@ShopDataScope.seePlatform()` 的文档注释即「**是否平台**」（`ShopDataScope.java`）。
 
-### 5.2 「运营商」= `partner_info`，桥是 `agent_id ≡ partner_info.owner`（原 P0-2）
+### 5.2 「运营商」= `partner_info`；`partner_b_id ≡ partner_info.owner`，`agent_id ≡ partner_info.id`（原 P0-2）
 
-```java
-// cloud-charging-pile .../ChSiteServiceImpl.java:494-495  ← 站点侧成对写入（最直接）
-chSite.setAgentId(partnerInfo.getId());        // agent_id     ← partner_info.id
-chSite.setPartnerBId(partnerInfo.getOwner());  // partner_b_id ← partner_info.owner
-// .../EasyChargeAuthorityService.java:245 —— 订单从站点继承
-chOrderInfo.setPartnerBId(chSite.getPartnerBId());
-```
+**站点侧两列由同一段代码成对写入，取自 `partner_info` 的不同列**——这是最直接的依据：
+`cloud-charging-pile .../ChSiteServiceImpl.java:494-495`，`setAgentId(...)` 取 `partner_info.getId()`，
+`setPartnerBId(...)` 取 `partner_info.getOwner()`。
 
-> ⚠️ **注意**：另一处 `ChOrderInfoController.java:736,1599` 的
-> `orderInfoModel.setAgentId(partnerInfo.getOwner())` 写的是**订单模型的一个 DTO 字段**，
-> **不是 `ch_site.agent_id`**。此前本文档把它当作站点 `agent_id` 的依据，**是错的**；
-> 站点侧的正确依据是上面的 `ChSiteServiceImpl.java:494-495`，且已由生产库实测交叉验证。
+**订单侧从站点继承**：`.../EasyChargeAuthorityService.java:245` 把站点的 `partner_b_id`
+复制到订单同名列。
+
+> ⚠️ **注意**：另一处 `ChOrderInfoController.java:736,1599` 写的是**订单模型的一个 DTO 字段**
+> （取 `partner_info.owner`），**不是 `ch_site.agent_id`**。此前本文档把它当作站点
+> `agent_id` 的依据，**是错的**；站点侧的正确依据是上面的 `ChSiteServiceImpl.java:494-495`，
+> 且已由生产库实测交叉验证。
 
 `ChSite` 字段（源码 javadoc）：`agentId`=「代理商id」、`partnerBId`=「代理商B端账户id」、
 `owner`=「店铺管理员id」、`hlhtId`=「互联互通渠道Id」。
@@ -54,11 +47,9 @@ chOrderInfo.setPartnerBId(chSite.getPartnerBId());
 
 ### 5.3 后端**已有**订单授权实现（这是最重要的一条）
 
-```java
-// data/mapper/ChOrderInfoMapper.java:59   @ShopDataScope(column = "site_id", realTime = true)
-//                          :221            @ShopDataScope(column = "o.site_id", montage = true)
-// data/mapper/ChSiteMapper.java:44,70,77  @ShopDataScope(column = "id"/"siteId", montage = true, realTime = true)
-```
+注解 `@ShopDataScope` 标注在 Mapper 方法上，把隔离列声明为站点列——
+`ChOrderInfoMapper.java:59`（`site_id`, `realTime=true`）、`:221`（`o.site_id`, `montage=true`）、
+`ChSiteMapper.java:44,70,77`（`id` / `siteId`）。
 
 `ShopIdInterceptor.beforeQuery` 用 jsqlparser 改写 SQL 追加 `scopeName IN (…)`；
 集合来自 `UpmsAdminFeignClient.getShops(userId)` = **`GET /shopuser/getShops`**（`realTime=true` 时实时取）。
@@ -95,7 +86,20 @@ AI-Ops 是外挂的第三条数据路径。需求真正的意思是**把 AI-Ops 
 | **R-3** | `seePlatform=true` 的语义：平台方（`'-1'`）**是否应该**看到所有运营商的订单？ | **业务规则**，不是代码事实。**需要产品确认** |
 | **R-4** | 「统一案例库」用哪个知识库、是否允许跨租户读 | 业务决策（见 P1-6） |
 | **R-5** | 管家端登录的账号类型 → 映射成哪个 `clientType`（`admin`/`tenant-app`/`supply-admin`） | 需要业务+后端共同确认 |
-| **R-6** | 未覆盖的 ~31.7% 订单（站点无 `partner_b_id`）是**自有站点（正常）**还是缺数据？ | 需业务确认；若是自有站点，则"无代理商→按租户/平台放行"是正确规则而非漏洞 |
+| **R-6** | 未覆盖的 31.7% 由**三种不同成因**组成（见下），其中两种是**数据完整性缺口**而非"自有站点"。规则必须对三种都给出明确行为 | 需业务确认 + 数据侧决定是否修 |
+
+**R-6 的三分解（2026-09-24 实测，B+C+D+E 与总数严格相等）**：
+
+| 成因 | 订单数 | 占比 | 性质 |
+|---|---|---|---|
+| B. 站点 `partner_b_id` 为空 | 9,307 | 30.6% | **正常**（自有站点/无代理商）——规则应为"无代理商→按租户或平台放行" |
+| C. 有值但 `sys_user` 无此行 | **57** | 0.2% | ⚠️ **悬空引用**（数据完整性缺口） |
+| D. 匹配到但 `sys_user.type ≠ '5'` | **297** | 1.0% | ⚠️ **账号类型不符**（数据完整性缺口） |
+| E. 匹配且 `type='5'` | 20,782 | 68.3% | 正常路径 |
+
+**C/D 共 354 单**：授权判据遇到它们时**行为未定义**——若只写"有 `partner_b_id` 就按运营商放行"，
+C 会放行到不存在的账号、D 会放行到非代理商账号。**判据必须对这两种情况 fail closed（拒绝）**，
+且应作为**数据质量问题**反馈给数据侧，不要靠应用层兜。
 
 ### 5.5 R-1 追查结论（新增，取代"待问同事"）
 
@@ -120,6 +124,8 @@ AI-Ops 是外挂的第三条数据路径。需求真正的意思是**把 AI-Ops 
 | `site.partner_b_id → sys_user(type=5)` | **20,782** | **68.3%** |
 | `site.partner_b_id → partner_info.owner` | 21,130 | 69.4% |
 | `site.agent_id → partner_info.id` | 2,875 | 9.4% |
+
+> 注：68.3% 是 **join 成功率**，**不等于**"站点 `partner_b_id` 非空率"。差额的构成见 §5.6。
 
 `sys_user.type` 实测：`-1:35, 1:452, 2:540, 3:154, 5:314, 6:4, 7:1, 8:2, 9:132`——
 **代理商（type=5）314 个账号**；`partner_info.owner ∩ sys_user` = 312（type=5 有 307）→ **运营商身份可绑**。
@@ -342,3 +348,20 @@ Illegal mix of collations (utf8mb4_0900_ai_ci,IMPLICIT) and (utf8mb4_general_ci,
 `ch_site` 的 90 列里**没有这两列**。这两个属性**都不在站点上**，
 一个在商城库的 `partner_info`（9.4% 可连），一个在数据里**无区分度**。
 **这个差距不是命名问题，是数据模型问题**，需要业务和数据侧共同确认后才能实施。
+
+### 5.6 未覆盖部分的构成（支撑 R-6）
+
+2026-09-24 实测，四类**严格加总等于总数**（30443）：
+
+| 成因 | 订单数 | 占比 |
+|---|---|---|
+| 站点 `partner_b_id` 为空 | 9,307 | 30.6% |
+| 有值但 `sys_user` 无匹配行 | 57 | 0.2% |
+| 匹配到但 `sys_user.type ≠ '5'` | 297 | 1.0% |
+| 匹配到且 `type='5'`（正常路径） | 20,782 | 68.3% |
+
+站点粒度（954 个站点）：`partner_b_id` 为空 504 个、有值但无匹配 176 个（其中 10 个是 `type≠'5'`）。
+
+**实现含义**：判据对「无 `partner_b_id`」与「引用悬空/类型不符」**必须区别对待**——
+前者走"无代理商→租户/平台"规则，后者**fail closed**。把 31.7% 当成单一原因会导致
+放行到不存在的账号或非代理商账号。
