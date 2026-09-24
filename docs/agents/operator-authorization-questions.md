@@ -156,7 +156,7 @@ C 会放行到不存在的账号、D 会放行到非代理商账号。**判据�
 | C4 | 会话内**活跃订单**的追问，无权限时静默回落并清掉绑定 | `gateway_api.py:912-957` |
 | C5 | 前端会话（`third-session`）的 `data_scope` **硬编码为 `self`**，从不调 UPMS `/user/ds` | `third_session_auth.py:82` |
 | C6 | 但 `self` **确实生效**：下推为 `user_id` 谓词 → 前端会话查订单**已按「本人」过滤** | `query_scope.py:232-240` → `sources.py:217,233-235` → `sources.py:286`，SQL `… AND user_id=?` |
-| C7 | 订单路由路径（`diagnostic_tools.py`）调用同一构造函数时**不带** `user_id`，与 C6 口径不一致 | `diagnostic_tools.py` vs `sources.py:286` |
+| C7 | 订单可见性随**入口**使用不同 profile：调用者入口用 caller profile，**设备入口没有调用者 self 范围**。这是设计区分（`order_visibility.py:130-139`），**不是口径漂移** | `order_visibility.py:130-139`；`scoped_live_sources` 统一把 `QueryScope` 交给数据源（`sources.py:1306-1326`）。**更正**：先前把 `diagnostic_tools` 的 `get_orders(order_no, None)` 记为"不带 `user_id`、与 C6 不一致"，是**读错参数**——那个 `None` 是 `tenant_id` 实参，不是 `user_column`；`_scope_where()` 走默认值**会**带 `user_id` |
 | C8 | 我方订单投影 **不含** `operator_id`（要用必须先加投影列） | `sources.py:105-123` `ORDER_COLUMNS` |
 | C9 | 「订单检测」**不能绑智能体**：`target_agent_version` 只允许宣传类 intent | `shortcut_lifecycle.py:1022-1037` |
 | C10 | 「客户案例」的智能体绑定**强校验租户匹配**，跨租户解析失败且不回退 | `promo_agents.py:80-108` |
@@ -327,7 +327,7 @@ Illegal mix of collations (utf8mb4_0900_ai_ci,IMPLICIT) and (utf8mb4_general_ci,
 |---|---|---|
 | C-1 | **修前端会话的 `data_scope`**（C5） | 让它真的调 UPMS `/user/ds`。**这是唯一能拿到真实组织层级的路**，但改的是**鉴权路径**，需单独评估 + 独立票，不塞进本轮 |
 | C-2 | **operator 正向会话**（C11） | 至今拿不到唯一 B 端主体，验收只能做负向（越权必被拒）+ 消费者端回归；正向标 `blocked` |
-| C-3 | 收敛 C6/C7 两种订单可见性口径 | 同一仓两种写法，属既有技术债，建议并入 #406 |
+| C-3 | ~~收敛 C6/C7 两种订单可见性口径~~ **已撤回**：C7 经核为误读（详见 C7 行），两条路径的差异是**有意的 profile 区分**（调用者 vs 设备），不是技术债 | 无需并入 #406 |
 | C-4 | 订单投影加 `operator_id`（C8） | 若 P0-2 确认走订单侧，需要先加投影列 |
 
 ---
@@ -343,9 +343,10 @@ Illegal mix of collations (utf8mb4_0900_ai_ci,IMPLICIT) and (utf8mb4_general_ci,
 | 现有缺口本身（租户内任何人凭订单号可查） | **真实缺口，且与上述三者独立**——即使 P0 全部悬置，也值得单独评估是否先补一道最小门 |
 
 **最重要的一句**：需求说的「该订单的**站点的**运营商 id 和平台 id」——
-`ch_site` 的 90 列里**没有这两列**。这两个属性**都不在站点上**，
-一个在商城库的 `partner_info`（9.4% 可连），一个在数据里**无区分度**。
-**这个差距不是命名问题，是数据模型问题**，需要业务和数据侧共同确认后才能实施。
+`ch_site` 的 90 列里**没有这两列**。这两个属性**都不在站点上**：
+运营商经 `partner_b_id` 指到商城库的 `partner_info.owner`（**覆盖 68.3%**，见 §5.5），
+「平台」在数据里是 shop id 的**哨兵值**而非独立字段（§5.1），**没有可比的平台 id**。
+**这个差距不是命名问题，是数据模型与授权路径问题**，需要业务和后端共同确认后才能实施。
 
 ### 5.6 未覆盖部分的构成（支撑 R-6）
 
