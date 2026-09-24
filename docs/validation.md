@@ -46,8 +46,11 @@
   `ch_site.shop_id='-1'` 行**，该通路当前是空操作。产品口径同为「不会有 `-1` 查看数据的场景」，
   **R-3 据此关闭**——关闭的是"是否需要跨运营商可见性"；**租户内店铺 ID 匹配站点照常生效**，
   不在关闭范围内。
-- **R-2 结论（撤回旧方向）**：不调后端接口。会话只提供身份；`/user/ds` 结构性为空
-  （`sys_organ.biz_data` 349 行全 NULL）；改用既已验证的 `ScopeResolver` 骨架出 `site_ids` 下推。
+- **R-2 状态：未解，已收敛**（**不得读作"已定方案"**）。已确证：会话只提供身份（无 roles/无范围）；
+  取范围的每个接口（`/user/info`、`/user/ds`、`/shopuser/getShops`、`/role/list`）都要**凭证**，
+  而 `userId` 在设计里只用于解析**目标主体**；`/user/ds` 结构性为空（`sys_organ.biz_data` 349 行全 NULL）。
+  **两条实现路线（AI-Ops 自算 / 调后端 `@ShopDataScope`）因此卡在同一处**：
+  有没有受信路径能用会话的 `userId` 换到调用者凭证。详见该文档 §5.8。
 - 另记：`DataScopeInterceptor` 与 `BaseSecurityInsideAspect` 的**判断体均被注释掉**。
 
 **更正（重要）**：先前记「`partner_b_id` 覆盖 69% 却与注册表交集为 0、端到端仅 9.4%」**是错的**。
