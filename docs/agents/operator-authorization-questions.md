@@ -5,8 +5,8 @@
 > 每条都带代码或生产库证据，可直接转发。
 >
 > **证据来源**：① 本仓 `src/aiops_diagnostics/` 源码（行号已核）；② 2026-09-24 对 41
-> 生产库（MySQL `192.168.1.45`，只读）的 `information_schema` 元数据与 ID 交集探查。
-> **未读业务行，未打印凭据**。
+> 生产库（只读）的 `information_schema` 元数据与 ID 交集探查。**未读业务行，未打印凭据**；
+> **本文件不含任何主机地址、凭据位置或连接信息**（本文档会跨团队转发）。
 >
 > **状态**：2026-09-24 **大幅修订**。P0-1 / P0-2 / P0-3 三条原标记为"阻塞"，经**通读公司
 > GitLab 源码**（`git.qushiyun.com:801`，见 §5）后**已由源码回答**，不再是需要问同事的问题。
@@ -17,7 +17,7 @@
 
 ## 5. 源码已答（2026-09-24 补充，取代原 P0-1/P0-2/P0-3）
 
-**方法**：公司 GitLab 可读（`~/.git-credentials` 的 token，519 个可见项目）。**API 优先、
+**方法**：公司 GitLab 可读（519 个可见项目；**凭据由运维侧管理，位置不记入本文档**）。**API 优先、
 不 clone**；关键仓 `iot/cloud-charging-pile`（真码在 `release` 分支，**默认分支 `master` 只有
 `Demo*.java` 脚手架**）、`s2b2c-java/qumall-common`、`s2b2c-java/cloud-upms`。
 
@@ -36,13 +36,17 @@ originalSql = "... where " + scopeName + " IN ('" + shopId + "', '-1')";
 ### 5.2 「运营商」= `partner_info`，桥是 `agent_id ≡ partner_info.owner`（原 P0-2）
 
 ```java
-// iot/cloud-charging-pile .../ChOrderInfoController.java:736, :1599
-//                              .../HlhtOrderStatisticsController.java:104
-orderInfoModel.setAgentId(partnerInfo.getOwner());
-// ChOrderInfo.partnerWalletId 原始注释：「运营商车队钱包对应的商城代理商id」
-// EasyChargeAuthorityService.java:245
+// cloud-charging-pile .../ChSiteServiceImpl.java:494-495  ← 站点侧成对写入（最直接）
+chSite.setAgentId(partnerInfo.getId());        // agent_id     ← partner_info.id
+chSite.setPartnerBId(partnerInfo.getOwner());  // partner_b_id ← partner_info.owner
+// .../EasyChargeAuthorityService.java:245 —— 订单从站点继承
 chOrderInfo.setPartnerBId(chSite.getPartnerBId());
 ```
+
+> ⚠️ **注意**：另一处 `ChOrderInfoController.java:736,1599` 的
+> `orderInfoModel.setAgentId(partnerInfo.getOwner())` 写的是**订单模型的一个 DTO 字段**，
+> **不是 `ch_site.agent_id`**。此前本文档把它当作站点 `agent_id` 的依据，**是错的**；
+> 站点侧的正确依据是上面的 `ChSiteServiceImpl.java:494-495`，且已由生产库实测交叉验证。
 
 `ChSite` 字段（源码 javadoc）：`agentId`=「代理商id」、`partnerBId`=「代理商B端账户id」、
 `owner`=「店铺管理员id」、`hlhtId`=「互联互通渠道Id」。
@@ -109,7 +113,7 @@ AI-Ops 是外挂的第三条数据路径。需求真正的意思是**把 AI-Ops 
    UPMS 定义 `sys_user_shop.user_id = sys_user.id where type='5'`（`SysUserMapper.xml:428-437`）。
 3. **JOIN 路径**（`ChOrderInfoMapper.xml:159-161`）：`coi.partner_b_id = pi.owner`。
 
-**生产库实测（2026-09-24，41 → `192.168.1.45`，只读元数据/基数）**：
+**生产库实测（2026-09-24，41 生产环境，只读元数据/基数）**：
 
 | 链路 | 覆盖订单 | 占比 |
 |---|---|---|
@@ -331,7 +335,7 @@ Illegal mix of collations (utf8mb4_0900_ai_ci,IMPLICIT) and (utf8mb4_general_ci,
 | 管家端入口（`operator`）+ 两个快捷指令 | **可落地**（数据发布为主） |
 | 「订单检测」 | **可落地**，但**不能绑智能体**（C9），靠 `requires_order` 弹订单选择器 |
 | 「客户案例」用统一案例库 | **待 P1-6**：需指定 KB + 跨租户授权 |
-| 「订单查询加运营商权限判断」 | **被 P0-1/P0-2/P0-3 阻塞**。判据字段不存在、覆盖率 9.4%、调用者身份拿不到 |
+| 「订单查询加运营商权限判断」 | **判据与链路已查清**（见 §5）：运营商 ≡ `partner_info.owner` ≡ `sys_user.id(type='5')`；`订单→站点→运营商` 覆盖 **68.3%**；调用者侧 `owner ∩ sys_user = 312`。**剩余阻塞只剩 R-2**（AI-Ops 走哪个后端接口以复用 `@ShopDataScope`），属**集成决策**而非数据缺口 |
 | 现有缺口本身（租户内任何人凭订单号可查） | **真实缺口，且与上述三者独立**——即使 P0 全部悬置，也值得单独评估是否先补一道最小门 |
 
 **最重要的一句**：需求说的「该订单的**站点的**运营商 id 和平台 id」——
