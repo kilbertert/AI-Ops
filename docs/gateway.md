@@ -6,8 +6,8 @@
 
 ```mermaid
 flowchart LR
-    W[Windows 便携包] -->|HTTPS + 设备令牌| G[AI-Ops Gateway]
-    L[Linux 便携包] -->|HTTPS + 设备令牌| G
+    W[便携客户端] -->|HTTPS + 设备令牌| G[AI-Ops Gateway]
+    L[源码运行时] -->|HTTPS + 设备令牌| G
     G --> H[/diag/* HTTP 只读接口/]
     G --> T[(TDengine 严格只读代理)]
     G --> C[Codex API]
@@ -23,7 +23,7 @@ flowchart LR
 - [RFC 8705 OAuth mTLS](https://www.rfc-editor.org/rfc/rfc8705)：生产环境可使用证书绑定令牌，避免被复制的 bearer token 被重放。
 - [OWASP Secrets Management Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Secrets_Management_Cheat_Sheet.html)：集中管理、最小权限、自动轮换和秘密使用审计。
 - [HashiCorp Vault Database Secrets Engine](https://developer.hashicorp.com/vault/docs/secrets/databases)：优先为数据库访问签发短期动态凭据，而不是在客户端分发长期密码。
-- [Microsoft Credential Locker](https://learn.microsoft.com/en-us/windows/apps/develop/security/credential-locker) 与 [Freedesktop Secret Service](https://specifications.freedesktop.org/secret-service-spec/latest/)：客户端令牌应进入操作系统凭据库，而不是明文配置或漫游文件。
+- [Freedesktop Secret Service](https://specifications.freedesktop.org/secret-service-spec/latest/)：客户端令牌应进入操作系统凭据库，而不是明文配置或漫游文件。
 - [Temporal Durable Execution](https://docs.temporal.io/temporal)：跨机器和故障恢复需要持久事件历史；本项目 MVP 先用 SQLite/WAL 事件表，接口预留 PostgreSQL/Temporal 演进空间。
 
 ## 当前实现
@@ -94,7 +94,7 @@ AIOPS_CODEX_KEY_SLOT=psydo-primary
 ### Model provider
 
 Gateway 在服务端运行 Codex session，因此 provider 选择是服务端行为：切换默认 provider
-后，已注册的 Windows 客户端立即生效，无需重新打包。在 `production.env` 中配置多 provider
+后，已注册的客户端立即生效，无需更新客户端。在 `production.env` 中配置多 provider
 注册表，默认 provider 用于每次 `remote diagnose`：
 
 ```env
@@ -139,32 +139,21 @@ Gateway 使用只读 Redis 读取 `app:3rd_session:<thirdSession>`；Java 序列
 
 新电脑只需一次注册：
 
-```powershell
-.\aiops.exe remote enroll --url https://aiops.example.com --code-file C:\secure\gateway-enrollment.code
-.\aiops.exe remote doctor
-.\aiops.exe remote runs
-.\aiops.exe remote diagnose "订单 123 金额异常" --json
-.\aiops.exe remote evidence RUN_ID
+```bash
+aiops remote enroll --url https://aiops.example.com --code-file /secure/gateway-enrollment.code
+aiops remote doctor
+aiops remote runs
+aiops remote diagnose "订单 123 金额异常" --json
+aiops remote evidence RUN_ID
 ```
 
 `order_snapshot` 按 `order_no` 发现订单并从订单行学习 tenant，再校验是否在设备授权租户内；不匹配时返回明确的租户范围错误而非空结果。诊断结果与证据默认用中文输出；`remote evidence RUN_ID` 列出每条证据的工具、状态、命中行数和错误，用于追溯结论来源（证据正文仍只在服务端）。
 
-Windows `cmd.exe` 示例（便携包解压到 `D:\aiops`）：
+注册码只能兑换一次。若文件名或路径不正确，客户端会在本地文件检查阶段返回 `File ... does not exist`，此时注册码尚未被兑换；检查实际文件名后重试。也可以省略 `--code-file`，让客户端隐藏提示输入注册码。注册成功后删除本地注册码文件，不要再次运行 `remote enroll`。
 
-```cmd
-cd /d D:\aiops
-dir D:\gateway-enrollment-ops.code
-aiops.exe remote enroll --url https://aiops.example.com --code-file D:\gateway-enrollment-ops.code
-aiops.exe remote doctor
-aiops.exe remote runs
-aiops.exe remote diagnose "订单 123 金额异常" --json
-```
+注册后，客户端只保存 Gateway URL、设备 ID、workspace ID 等 profile，以及设备令牌。令牌优先存入操作系统凭据库（Linux Secret Service），通过 `keyring` 访问；没有系统凭据库时才回退到当前用户私有文件，并保留 `0600` 校验。
 
-注册码只能兑换一次。若文件名或路径不正确，客户端会在本地文件检查阶段返回 `File ... does not exist`，此时注册码尚未被兑换；使用 `dir` 检查实际文件名后重试。也可以省略 `--code-file`，让客户端隐藏提示输入注册码。注册成功后删除本地注册码文件，不要再次运行 `remote enroll`。
-
-注册后，客户端只保存 Gateway URL、设备 ID、workspace ID 等 profile，以及设备令牌。令牌优先使用 Windows Credential Locker / Linux Secret Service，通过 `keyring` 访问；没有系统凭据库时才回退到当前用户私有文件，并保留 `0600/Windows DACL` 校验。
-
-同一 workspace 的 Windows 和 Linux 设备查询同一套 run/event 数据，因此换设备后仍能用 `remote runs`、`remote show` 和 `remote events` 查看进度。
+同一 workspace 的多台设备查询同一套 run/event 数据，因此换设备后仍能用 `remote runs`、`remote show` 和 `remote events` 查看进度。
 
 `remote doctor` 只调用公开的 `/health` liveness 接口，不证明设备令牌仍有效；要验证注册后的身份，请执行 `remote runs`。诊断出现 `interrupted` 或 `failed` 时，`remote show RUN_ID` 会显示脱敏的 `error_type` 和 `error_message`，`remote events RUN_ID --after 0` 可追溯排队、worker 启动、provider 调用和中断原因。
 

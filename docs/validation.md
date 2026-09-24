@@ -5,6 +5,57 @@
 > 与 `docs/agents/current-delivery-state.md`。已过时的结论就地划掉并注明取代它的条目，
 > 不删除：交付状态的变化过程本身是证据。
 
+## 移除 `windows-verify` 与 Windows 分发（2026-09-24）
+
+**决定**：本仓不再出 Windows 便携包。CI 的 `windows-verify` job 删除，Ruleset 23760870 的
+必需检查同步移除它，`docs/portable.md` 与 `docs/打包与下载.md` 删除。此处记录判据与代价，
+因为这是一次交付面收窄，不是清理。
+
+**判据（实测，非推断）**：
+
+| 观察 | 证据 |
+| --- | --- |
+| 成本 | run `35967750416`：`verify` 50s，`windows-verify` 332s（近 5 次 334/367/356/339/348s） |
+| 其中真实 Windows 验证 | 仅 `build_portable.py` 71s；其余 240s 是在 Windows 上重跑 `verify` 已跑过的五条 |
+| 制品是否被使用 | `gh api .../actions/artifacts`：未过期 artifact `total_count: 0`，历史下载数全为 0 |
+| 历史上的配额问题 | 提交 `1e96734`「修复 verify(ruff) 与 windows-verify(artifact 配额)」；每提交上传一个 Windows ZIP |
+| Windows 代码路径 | `console_encoding.py` / `codex_launcher.py` 的 `os.name == "nt"` 分支已由 `platform_name=` 参数在 Linux 上单测覆盖（`tests/test_console_encoding.py`、`tests/test_codex_runtime.py`） |
+
+**代价（明确接受）**：源自 Windows 的破坏性改动不再被每提交 CI 捕获，只会在有人于 Windows
+主机本机构建便携包时暴露。`packaging/build_portable.py` 与其余 Windows 代码路径保留，不予删除，
+因此将来恢复 Windows 分发不需要重写代码 —— 但仍需两步，不是一步：把 `package.yml` 的
+`windows-latest` 矩阵行加回来，**并补回 runner 侧的构建与解压烟测**（每提交的
+`build_portable.py` 步骤已随 `windows-verify` 一起删除，恢复时若只加回矩阵行，Windows 包将带上
+无人验证过的回归）。
+
+**`package.yml` 的 Windows 矩阵行同片删除**（re-review 发现）：该工作流在 `v*` 标签和手动触发时
+运行，保留 Windows 行意味着打一个 tag 仍会自动产出并上传 Windows 包 —— 与本次「不再出 Windows
+交付物」的决定直接冲突，也把矛盾发到 release 面上。删掉 2 行 YAML 的恢复成本极低（git 历史里
+就是），不足以换取「自动交付一个已下线的平台」这个不一致状态。
+
+**变更集**：`.github/workflows/ci.yml`（删 job）、`README.md`（CI 段与文档索引）、
+`AGENTS.md`（平台规则改写）、`docs/gateway.md`、`docs/快速上手.md`、`docs/thin-harness.md`
+（去掉共享运行时不再依赖的平台专用表述）、`packaging/aiops.spec`（见下）、
+删除 `docs/portable.md`、`docs/打包与下载.md`。产品代码零改动。
+
+**构建耦合（review 发现，已修）**：`packaging/aiops.spec` 曾把 `docs/portable.md` 列为
+便携包的顶层打包输入，直接删除文档会让 `build_portable.py` 在 Linux 和 Windows 上都无法构建。
+已替换为 `docs/gateway.md`（它仍是活文档，且本来就已打进包内）。这条说明「下线 Windows 分发」
+与「删除两份文档」不是同一个动作 —— 文档是构建输入，删文档必须同时处理构建。
+
+**构建实测（Linux，`chore/remove-windows-verify` + `8db4f14`）**：`uv run python
+packaging/build_portable.py` 全程通过并产出 `dist/aiops-diagnostics-0.1.0-linux-x86_64.zip`，
+含源码目录外解压、最小 PATH 启动、隔离 home 初始化、key slot 与内置 Codex runtime 检查、
+私有路径权限校验、制品内秘密文件拒绝、三份 fixture 诊断、以及连本地 mock Gateway 的
+`remote enroll/doctor/runs`。顶层文档落位已核对：ZIP 内实际存在 `aiops/docs/gateway.md`
+（12413 字节）与 `aiops/_internal/aiops_diagnostics/_bundle/docs/{architecture,gateway}.md`。
+这一步是为了让「顶层文档进入便携包」有证据，而不是由 spec 与断言的一致性推断出来。
+
+**未完成业务验收**：本片不改变任何诊断结论，无真实故障案例可比对。
+
+**`docs/开发进度.md` 中 M12/M15 等历史条目不动** —— 它们记录的是当时状态，按本页阅读须知
+「已过时的结论就地注明取代它的条目，不删除」处理。
+
 ## 交付状态核查：CD 实际部署史与 FAQ 假阳性（2026-09-23）
 
 用户要求核查"生产跑的到底是不是 main"，以及"还有什么没收尾"。两项实测结论如下，
