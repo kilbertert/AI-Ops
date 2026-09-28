@@ -536,6 +536,12 @@ Feature: 智能体会话与活跃订单上下文
       Then 清除活跃订单并按普通知识问题回答
       And 不产生订单诊断
 
+    Scenario: 运营商站点集合变化使旧会话不可见
+      Given 会话在某个运营商站点集合下创建并绑定了活跃订单
+      When 下一轮解析出的站点集合发生变化后再访问该会话
+      Then 返回统一 404 且不泄露会话存在性
+      And 旧会话不能被用来追问已经失效的活跃订单
+
     Scenario: 普通知识问题即使存在活跃订单也走 qa
       Given 会话已绑定活跃订单
       When 用户提出不涉及订单的知识问题
@@ -1363,3 +1369,97 @@ Feature: 持续部署到服务主机
       When 报告交付状态
       Then 最多为 merged_waiting_deploy
       And 真实端到端仍须按 runbook §5 由人用业务方 thirdSession 执行
+
+Feature: 管家端入口与订单运营商级授权
+  管家端（运营商员工、租户管理员、店铺管理员登录的 B 端入口）复用 consumer 之外的
+  operator 内容域：入口只发布「订单检测」与「客户案例」两个既有动作，订单可见范围由
+  该会话唯一确定的 B 端主体名下的运营商站点集合定义——租户匹配且站点在该集合内才
+  可见，空集合拒绝，无运营商身份者不回落为租户级放行。消费者端行为不因该维度改变。
+
+  Rule: 管家端入口只发布两个提示动作
+
+    Scenario: 管家端入口列出订单检测与客户案例
+      Given 运营方已在租户的 operator 入口发布两个动作
+      When 管家端用户带 X-Business-Entry: operator 读取 GET /v1/shortcuts
+      Then 恰好返回 smart_diagnosis 与 case_exploration 两个已发布动作
+      And 两个动作都不带 target_agent_version 且都不是跳转动作
+      And 按钮文案按请求语言给出订单检测与客户案例
+
+    Scenario: 管家端动作不出现在消费者入口
+      Given 上述动作只发布在 operator 入口
+      When 同一用户从 consumer 入口读取 GET /v1/shortcuts
+      Then 列表仍是消费者入口自己的动作
+      And 不出现仅为管家端发布的动作
+
+  Rule: 订单检测的动作路径与消费者侧一致
+
+    Scenario: 点击订单检测未选订单时弹出订单选择器
+      Given 管家端用户点击已发布的 smart_diagnosis 且未提供订单号
+      When 提交 shortcut_code=smart_diagnosis
+      Then 返回 type 为 clarification 且 missing_fields 为 order_no
+      And 提示文案为请求语言而非固定中文
+      And 不创建诊断或问答作业
+
+    Scenario: 订单不在可见范围内时订单检测被明确拒绝
+      Given 管家端用户点击 smart_diagnosis 并带入一个订单号
+      And 该订单的站点不在该用户的运营商站点集合内
+      When 提交 shortcut_code=smart_diagnosis 与 order_no
+      Then 返回统一 ORDER_NOT_FOUND
+      And 不创建诊断或问答作业
+
+    Scenario: 案例库未就绪时返回明确的不可用
+      Given 管家端用户点击 case_exploration 且案例知识库尚未就绪
+      When 该问答作业到达终态
+      Then 检索状态为不可用且文案说明不可用
+      And 不把配置缺口表述成未检索到匹配的宣传资料
+
+  Rule: 运营商站点集合决定订单可见性
+
+    Scenario: 本运营商站点上的订单可查（含他人名下的订单）
+      Given 管家端会话唯一确定一个 B 端主体
+      And 该主体名下的运营商店铺在充电库对应若干站点
+      When 查询站点在该集合内且挂在其他用户名下的订单
+      Then 该订单可访问并进入订单诊断
+      And 不要求该订单由本人下单
+
+    Scenario: 其他运营商的订单被拒绝且不区分是否存在
+      Given 管家端用户查询一个站点不在其集合内的订单
+      And 该订单属于其他运营商
+      When 显式提供 order_no 提交
+      Then 返回统一 ORDER_NOT_FOUND
+      And 一个不存在的订单号得到同一响应
+      And 响应体不含订单字段，也不说明是无权
+
+    Scenario: 未绑定店铺的运营商账号查询被拒绝
+      Given 管家端账号在用户-店铺关系表中没有任何绑定
+      When 该账号查询任意订单
+      Then 返回统一 ORDER_NOT_FOUND
+      And 不回落为按租户放行，也不发起订单查询
+
+    Scenario: 站点上的运营商引用不构成授权依据
+      Given 某站点的 partner_b_id 指向一个不存在或账号类型不符的主体
+      And 没有任何账号持有该站点所属店铺
+      When 解析该站点所属运营商的可见范围
+      Then 该站点不进入任何运营商的站点集合
+      And 订单可见性只由调用者持有的店铺决定
+
+  Rule: 问句内嵌订单号维持静默回落
+
+    Scenario: 内嵌未授权订单号时不打断对话
+      Given 管家端用户在提问文本里顺带提到一个集合外的订单号
+      When 提交该问题
+      Then 不返回订单错误
+      And 按普通问答路径回答，与内嵌有权订单号时同样不中断
+
+  Rule: 消费者端行为不变
+
+    Scenario: 消费者入口订单可见性不变
+      Given 消费者会话没有 B 端账号
+      When 查询本人订单与其他用户的订单
+      Then 仅本人的订单可访问
+      And 其他用户的订单返回统一 ORDER_NOT_FOUND
+
+    Scenario: 消费者入口快捷动作与订单检测不变
+      Given 只发布了管家端入口的动作
+      When 消费者入口读取动作列表并发起一次订单检测
+      Then 动作列表与澄清响应和新增本维度前一致

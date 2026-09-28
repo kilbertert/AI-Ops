@@ -575,7 +575,16 @@ def test_store_seed_bundled_is_idempotent(tmp_path: Path) -> None:
 
     manager = ShortcutManager(store)
     first = store.seed_bundled(_Ctx(), manager)  # type: ignore[arg-type]
-    assert sorted(s.code for s in first) == ["case_exploration", "report_fault", "smart_diagnosis"]
+    # Codes repeat across entries (identity is tenant+entry+code), so the seed
+    # is asserted per entry: consumer keeps its three, operator holds the two
+    # prompt actions the PRD names and no jump action.
+    assert {(row.business_entry, row.code) for row in first} == {
+        ("consumer", "case_exploration"),
+        ("consumer", "report_fault"),
+        ("consumer", "smart_diagnosis"),
+        ("operator", "case_exploration"),
+        ("operator", "smart_diagnosis"),
+    }
     # Second run creates nothing.
     assert store.seed_bundled(_Ctx(), manager) == []  # type: ignore[arg-type]
 

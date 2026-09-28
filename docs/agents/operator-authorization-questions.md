@@ -160,8 +160,8 @@ C 会放行到不存在的账号、D 会放行到非代理商账号。**判据�
 | C2 | 显式传 `order_no` 时，无权限返回 **404 `ORDER_NOT_FOUND`**，授权服务故障返回 **503** | `gateway_api.py:819-834` |
 | C3 | 问句**文本里内嵌**订单号时，无权限**静默回落**零阶问答（已发布契约，有测试固化） | `gateway_api.py:862-903`；`tests/test_assistant_api.py:595-606`；`docs/validation.md:1420` |
 | C4 | 会话内**活跃订单**的追问，无权限时静默回落并清掉绑定 | `gateway_api.py:912-957` |
-| C5 | 前端会话（`third-session`）的 `data_scope` **硬编码为 `self`**，从不调 UPMS `/user/ds` | `third_session_auth.py:82` |
-| C6 | 但 `self` **确实生效**：下推为 `user_id` 谓词 → 前端会话查订单**已按「本人」过滤** | `query_scope.py:232-240` → `sources.py:217,233-235` → `sources.py:286`，SQL `… AND user_id=?` |
+| C5 | 前端会话（`third-session`）的 `data_scope` **硬编码为 `self`**，从不调 UPMS `/user/ds`。~~**已被 #423（#424/#425/#426）取代**：解析出唯一 B 端主体后 `data_scope` 替换为该主体的运营商站点集合（`DataScope(organ, site_ids=…)`）；仍**解析不出**唯一主体时才回落 `self`。本行结论只对「没有 B 端账号的会话」成立 | ~~`third_session_auth.py:82`~~ → `third_session_auth.py:198-218`（`_data_scope`）、`query_scope.py:310`（`resolve_operator_site_scope`）；见 PRD #423 与 `docs/开发进度.md` #424~#426 条目 |
+| C6 | 但 `self` **确实生效**：下推为 `user_id` 谓词 → 前端会话查订单**已按「本人」过滤**。C5 失效后这条只覆盖回落分支（拿不到唯一 B 端主体时） | `query_scope.py:256` → `sources.py:217,233-235` → `sources.py:286`，SQL `… AND user_id=?` |
 | C7 | 订单可见性随**入口**使用不同 profile：调用者入口用 caller profile，**设备入口没有调用者 self 范围**。这是设计区分（`order_visibility.py:130-139`），**不是口径漂移** | `order_visibility.py:130-139`；`scoped_live_sources` 统一把 `QueryScope` 交给数据源（`sources.py:1306-1326`）。**更正**：先前把 `diagnostic_tools` 的 `get_orders(order_no, None)` 记为"不带 `user_id`、与 C6 不一致"，是**读错参数**——那个 `None` 是 `tenant_id` 实参，不是 `user_column`；`_scope_where()` 走默认值**会**带 `user_id` |
 | C8 | 我方订单投影 **不含** `operator_id`（要用必须先加投影列） | `sources.py:105-123` `ORDER_COLUMNS` |
 | C9 | 「订单检测」**不能绑智能体**：`target_agent_version` 只允许宣传类 intent | `shortcut_lifecycle.py:1022-1037` |
@@ -239,7 +239,7 @@ sys_organ.saas_type  注释「0.平台 1.商城…」                    → 349
 
 #### P0-3 调用者侧：运营商身份从哪来？
 
-**已查到的**：前端会话**没有**运营商身份（`data_scope` 硬编码 `self`，C5）。
+**已查到的**：前端会话**没有**运营商身份（`data_scope` 硬编码 `self`，C5）。~~**更新**：C5 已被 #423 修正——解析出唯一 B 端主体的会话持有运营商站点集合；本条当时的结论只对「没有 B 端账号的会话」成立。~~
 可用的绑定键是 `partner_info.owner` / `group_header`，但它们是**账号级**字段，
 **不在 UPMS `/user/ds` 的返回里**（该接口只给 `organIds/shopIds/siteIds`）。
 
@@ -334,7 +334,7 @@ Illegal mix of collations (utf8mb4_0900_ai_ci,IMPLICIT) and (utf8mb4_general_ci,
 
 | # | 事项 | 说明 |
 |---|---|---|
-| C-1 | **修前端会话的 `data_scope`**（C5） | 目标仍是"会话能拿到真实范围"，**但路径已变**：`/user/ds` 结构性为空（§5.8 事实 3），**不能再作为目标接口**。改的是**鉴权路径**，需单独评估 + 独立票，不塞进本轮。**依赖 R-2 的答案** |
+| C-1 | ~~**修前端会话的 `data_scope`**（C5）~~ **已由 #423 落地**（未经本条，改走会话自身的 C→B 映射 + 店铺/站点归属）：`/user/ds` 结构性为空的问题依然存在，但已不需要它当目标接口。**未随本条评估的部分**：授予运营商范围前是否要管家端角色门（词汇表对「管家主体」的定义带角色维度，当前判据只有「唯一 B 端主体 + 店铺集合」）——这仍是独立的鉴权路径改动，留待单独评估。**消除的依赖**：R-2 的答案（不再依赖 `/user/ds`） |
 | C-2 | **operator 正向会话**（C11） | 至今拿不到唯一 B 端主体，验收只能做负向（越权必被拒）+ 消费者端回归；正向标 `blocked` |
 | C-3 | ~~收敛 C6/C7 两种订单可见性口径~~ **已撤回**：C7 经核为误读（详见 C7 行），两条路径的差异是**有意的 profile 区分**（调用者 vs 设备），不是技术债 | 无需并入 #406 |
 | C-4 | 订单投影加 `operator_id`（C8） | 若 P0-2 确认走订单侧，需要先加投影列 |

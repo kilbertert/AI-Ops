@@ -55,6 +55,16 @@ def test_env_example_documents_upms_permission_context_boundary() -> None:
     assert not [line for line in _active_lines(text) if "UPMS" in line and "TOKEN" in line]
 
 
+def test_env_example_documents_the_upms_inside_token_boundary() -> None:
+    """#424：服务侧内部凭据只在私有配置取值，模板只声明不落值。"""
+    text = _template()
+
+    assert "AIOPS_UPMS_INSIDE_TOKEN" in text
+    assert "只在私有 production.env 里取值，模板不落值" in text
+    assert not [line for line in text.splitlines() if line.startswith("AIOPS_UPMS_INSIDE_TOKEN=")]
+    assert not [line for line in _active_lines(text) if "INSIDE_TOKEN" in line]
+
+
 def test_env_example_documents_dis_point_scope_boundary() -> None:
     text = _template()
 

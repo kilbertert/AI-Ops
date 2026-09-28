@@ -213,7 +213,7 @@ def test_scoped_live_sources_constructs_scoped_sources(monkeypatch: pytest.Monke
 
     monkeypatch.setattr(
         "aiops_diagnostics.sources._ssh_tunnel",
-        lambda s, include_direct_backends=True: contextlib.nullcontext(s),
+        lambda s, forwards=("mysql", "tdengine", "redis"): contextlib.nullcontext(s),
     )
 
     with scoped_live_sources(settings, scope=scope) as sources:

@@ -48,6 +48,16 @@ SCOPE_ERROR_DELEGATION_DENIED = "scope.delegation_denied"
 SCOPE_ERROR_TENANT_FORBIDDEN = "scope.tenant_forbidden"
 SCOPE_ERROR_EMPTY_SCOPE = "scope.empty_scope"
 
+#: C 端 → B 端映射未能唯一确定 B 端主体时的可区分原因（``SubjectRecord.b_subject_reason``）。
+#: 空串表示已唯一确定；其余取值表示**没有**可用的 B 端主体，需要 B 端主体的下游必须
+#: 据此拒绝，而不是把 ``b_user_id`` 当作 B 端 ``SysUser.id`` 使用。
+C_MAPPING_NOT_CONFIGURED = "mapping_not_configured"
+C_MAPPING_FAILED = "mapping_failed"
+C_MAPPING_NOT_FOUND = "subject_not_found"
+C_MAPPING_AMBIGUOUS = "ambiguous_subject"
+C_MAPPING_TENANT_MISMATCH = "tenant_mismatch"
+C_MAPPING_C_USER_MISMATCH = "c_user_mismatch"
+
 SCOPE_TYPE_ALL = "all"
 SCOPE_TYPE_ORGAN = "organ"
 SCOPE_TYPE_SELF = "self"
@@ -124,6 +134,12 @@ class SubjectRecord:
 
     ``b_user_id`` is the B 端 ``SysUser.id``; ``c_user_id`` is the bound C 端
     ``SysUser.userId``. They are never interchangeable.
+
+    A third-session identity completes ``b_user_id`` through the existing C→B
+    mapping endpoint (``third_session_auth``). When that mapping cannot name
+    exactly one B 端 subject inside the session tenant, ``b_subject_reason``
+    carries a distinguishable cause and ``b_user_id`` remains a C-side
+    placeholder that must never be used as a B 端 subject.
     """
 
     b_user_id: str
@@ -132,6 +148,7 @@ class SubjectRecord:
     tenant_id: str | None = None
     organ_id: str | None = None
     shop_id: str | None = None
+    b_subject_reason: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -386,7 +403,8 @@ class UpmsDirectory:
     - ``GET /user/ds``：业务数据范围（范围类型 + 组织/店铺/站点 ID）；
     - ``GET /user/inside/byId/{id}``：按 B 端用户 ID 返回基础用户对象，仅用于
       目标主体身份，不当作完整权限上下文；
-    - ``GET /user/inside/byUserId/{userId}``：C 端用户到 B 端用户的映射。
+    - ``GET /user/inside/byUserId/{userId}``：C 端用户到 B 端用户的映射；
+    - ``GET /shopuser/getShops``：B 端用户到店铺的归属（后端权威授权同一端点）。
 
     ponytail: 端点路径与响应字段按 PRD #23 记录的 cloud-upms 能力固定，当前只由
     离线契约测试守护；真实环境验收时若字段不同，只需调整本类的解析，解析器与
@@ -416,6 +434,20 @@ class UpmsDirectory:
             return ()
         records = data if isinstance(data, list) else [data]
         return tuple(_parse_subject(item) for item in records)
+
+    def shop_ids_by_b_user_id(self, credential: str, b_user_id: str) -> tuple[str, ...]:
+        """B 端 ``SysUser.id`` → 店铺 ID 集合（只读）。
+
+        复用后端权威授权所用的同一个端点：``ShopIdInterceptor``（``@ShopDataScope``
+        的隔离集合来源）取的正是 ``GET /shopuser/getShops?userId=``。因此调用方
+        不是在另发明一套范围。未绑定任何店铺时返回**空集合**——空集合在下游表示
+        失败关闭，不得被改写成「不限制店铺」。
+
+        响应形状沿用 2026-09-01 已对生产 UPMS 实测通过的解析（ID 数组或逗号
+        分隔字符串）；形状不可识别时以 ``SCOPE_ERROR_UPMS_UNAVAILABLE`` 失败关闭。
+        """
+        shops = self._get(f"{SHOP_USER_PATH}?userId={_safe_path_segment(b_user_id)}", credential)
+        return _parse_id_list(shops)
 
     def data_scope(self, credential: str) -> DataScope:
         try:
@@ -482,8 +514,7 @@ class UpmsDirectory:
         if ds_type is None:
             raise ScopeError("UPMS 角色未配置数据权限类型", code=SCOPE_ERROR_UPMS_UNAVAILABLE)
 
-        shops = self._get(f"{SHOP_USER_PATH}?userId={_safe_path_segment(caller_b_user_id)}", credential)
-        shop_ids = _parse_id_list(shops)
+        shop_ids = self.shop_ids_by_b_user_id(credential, caller_b_user_id)
 
         scope_type = _SCOPE_TYPE_BY_PLATFORM_CODE[ds_type]
         organ_ids: tuple[str, ...] = ()
@@ -576,6 +607,8 @@ def _scope_fingerprint(
     data_scope: DataScope,
     roles: frozenset[str],
 ) -> str:
+    # B 端主体 id 已由 ``subject_b_user_id`` 覆盖（#424 的 C→B 映射因此自动进指纹）。
+    # ``b_subject_reason`` 有意不入指纹：它不改变任何可见性，只说明 B 端主体为何缺失。
     payload = {
         "caller_b_user_id": caller.b_user_id,
         "subject_b_user_id": subject.b_user_id,

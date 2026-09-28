@@ -90,7 +90,14 @@ from aiops_diagnostics.shortcut_lifecycle import (
     ShortcutStore,
 )
 from aiops_diagnostics.sources import SourceError
-from aiops_diagnostics.third_session_auth import RedisThirdSessionResolver, ThirdSessionSettings
+from aiops_diagnostics.third_session_auth import (
+    BSubjectDirectory,
+    OperatorSiteScope,
+    RedisThirdSessionResolver,
+    ThirdSessionSettings,
+    UpmsBSubjectDirectory,
+    UpmsOperatorSiteScope,
+)
 
 _LOGGER = logging.getLogger("aiops.gateway")
 
@@ -2177,6 +2184,41 @@ def _sse(event: dict[str, Any]) -> str:
     return f"id: {sequence}\nevent: {event_type}\ndata: {data}\n\n"
 
 
+def _inside_credential(runtime: Settings) -> str:
+    """会话身份的 UPMS 服务侧内部凭据（C→B 映射与运营商站点范围共用同一套前提）。
+
+    两个接缝的配置前提逐字相同（UPMS 地址 + 该凭据），所以只写一遍：往其中一个
+    加条件时不会漏掉另一个。
+    """
+    return (runtime.upms.inside_token or "").strip()
+
+
+def _b_subject_directory(runtime: Settings) -> BSubjectDirectory | None:
+    """会话身份的 C→B 映射目录（#424）。
+
+    复用 UPMS 既有端点；未配置 UPMS 地址或服务侧内部凭据时返回 ``None``——会话身份
+    只保留 C 侧部分，需要 B 端主体的路径按 fail closed 拒绝，消费者端不受影响。
+    """
+    credential = _inside_credential(runtime)
+    if not runtime.upms.base_url or not credential:
+        return None
+    return UpmsBSubjectDirectory(runtime.upms, credential)
+
+
+def _operator_site_scope(runtime: Settings) -> OperatorSiteScope | None:
+    """会话身份的运营商站点范围（#426，四跳链的后两跳）。
+
+    与 C→B 映射共用同一套配置前提（UPMS 地址 + 服务侧内部凭据）：未配置时返回
+    ``None``，会话数据范围保持 ``self``——管家端因此只能看到本人的单（fail closed，
+    不放宽），消费者端不变。站点归属映射复用受限直连的同一条跳板隧道，不为授权
+    另开一条连接路径。
+    """
+    credential = _inside_credential(runtime)
+    if not runtime.upms.base_url or not credential:
+        return None
+    return UpmsOperatorSiteScope(runtime, credential)
+
+
 def _caller_resolver(settings: GatewayServerSettings) -> CallerContextResolver:
     if settings.third_session_service_token:
         try:
@@ -2190,7 +2232,9 @@ def _caller_resolver(settings: GatewayServerSettings) -> CallerContextResolver:
                     password=runtime.redis.password,
                     service_token=settings.third_session_service_token,
                     key_prefix=settings.third_session_key_prefix,
-                )
+                ),
+                b_subject_directory=_b_subject_directory(runtime),
+                operator_scope=_operator_site_scope(runtime),
             )
         except (ValueError, OSError):
             return DisabledCallerResolver()

@@ -221,6 +221,14 @@ class IntrospectionCallerResolver:
 
 
 class ScopedOrderAuthorizer:
+    """订单授权判定：某身份能否查某订单。
+
+    范围一律来自 ``resolve_query_scope(context)``，因此管家端会话的运营商维度
+    （#426：会话身份带上该 B 端主体的运营商站点集合）与平台 Bearer 调用者的数据
+    范围走同一个判定。判定只回答「能查 / 被拒绝」，订单不存在与无权查看得到同一个
+    ``False``——订单号不能用来探测他人业务。
+    """
+
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
 
