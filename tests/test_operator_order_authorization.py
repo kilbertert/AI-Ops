@@ -418,3 +418,47 @@ def test_assistant_embedded_order_outside_the_operator_scope_falls_through(
     assert resp.status_code == 202
     assert resp.json()["type"] == "qa"
     assert runtime.diagnoses == []
+
+
+# --- #423 回归：运营商站点范围只在管家端入口生效 ---------------------------
+
+
+def test_consumer_entry_keeps_self_scope_even_with_a_b_account(monkeypatch):
+    """消费者入口下，有 B 端映射**也不得**换成运营商站点集合。
+
+    这是 41 实测发现的越权：替换 ``self`` 原先发生在身份层、对两个内容域同时生效，
+    于是 ``consumer`` 入口能查到**他人**名下、位于该运营商站点的订单。
+    """
+    context = resolve_session(
+        monkeypatch,
+        records=(b_subject(),),
+        operator_scope=OperatorScope(("SHOP-1",), {"SHOP-1": ("SITE-IN-1",)}),
+        platform_entry="consumer",
+    )
+    assert context.data_scope.type == SCOPE_TYPE_SELF
+    assert context.data_scope.site_ids == ()
+
+
+def test_unknown_entry_keeps_self_scope(monkeypatch):
+    """入口缺失或非法时按最窄范围处理 —— 不放宽，由后续平台决策拒绝请求。"""
+    for entry in (None, "", "operator-admin", "OPERATOR "):
+        context = resolve_session(
+            monkeypatch,
+            records=(b_subject(),),
+            operator_scope=OperatorScope(("SHOP-1",), {"SHOP-1": ("SITE-IN-1",)}),
+            platform_entry=entry,
+        )
+        assert context.data_scope.type == SCOPE_TYPE_SELF, entry
+        assert context.data_scope.site_ids == (), entry
+
+
+def test_operator_entry_still_gets_the_operator_site_set(monkeypatch):
+    """管家端入口不受影响 —— 回归修复不得收窄管家端。"""
+    context = resolve_session(
+        monkeypatch,
+        records=(b_subject(),),
+        operator_scope=OperatorScope(("SHOP-1",), {"SHOP-1": ("SITE-IN-1",)}),
+        platform_entry="operator",
+    )
+    assert context.data_scope.type == SCOPE_TYPE_ORGAN
+    assert context.data_scope.site_ids == ("SITE-IN-1",)

@@ -195,11 +195,16 @@ def resolve_session(
     *,
     records: tuple[SubjectRecord, ...] = (b_subject(),),
     operator_scope: OperatorScope | None = None,
+    platform_entry: str | None = "operator",
 ) -> ScopeContext:
     """resolve one third-session caller, with the operator directories faked.
 
     ``operator_scope`` 默认 ``None``（= 生产未配置时的接线）：需要运营商站点集合的
     用例显式传一个 ``OperatorScope``。
+
+    ``platform_entry`` 决定数据范围（#423 回归修复）：**只有 ``operator`` 才取运营商
+    站点集合**，其余一律保持 ``self``。默认取 ``operator``，因为本模块的替身服务于
+    管家端用例；消费者侧用例显式传 ``"consumer"``。
     """
     from aiops_diagnostics.third_session_auth import RedisThirdSessionResolver
 
@@ -209,7 +214,12 @@ def resolve_session(
         b_subject_directory=BSubjectDirectory(records),
         operator_scope=operator_scope,
     )
-    return resolver.resolve("svc", required_scope="aiops:diagnoses:write", third_session=SESSION_TOKEN)
+    return resolver.resolve(
+        "svc",
+        required_scope="aiops:diagnoses:write",
+        third_session=SESSION_TOKEN,
+        platform_entry=platform_entry,
+    )
 
 
 def operator_session(
@@ -225,7 +235,7 @@ def operator_session(
 
 def consumer_session(monkeypatch: pytest.MonkeyPatch) -> ScopeContext:
     """A C-side caller with no B 端 account: the normal consumer state."""
-    return resolve_session(monkeypatch, records=())
+    return resolve_session(monkeypatch, records=(), platform_entry="consumer")
 
 
 # --- 假 MySQL：渲染出的 WHERE 的行级镜像 -------------------------------------

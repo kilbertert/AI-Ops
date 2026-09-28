@@ -502,6 +502,7 @@ def create_gateway_app(
     def authenticated_caller(
         authorization: Annotated[str | None, Header()] = None,
         x_third_session: Annotated[str | None, Header()] = None,
+        business_entry: Annotated[str | None, Header(alias="X-Business-Entry")] = None,
     ) -> ScopeContext:
         if not authorization or not authorization.startswith("Bearer "):
             raise StandardAPIError(
@@ -520,7 +521,10 @@ def create_gateway_app(
             if x_third_session is None:
                 return context.caller_resolver.resolve(token, required_scope=STANDARD_ORDER_READ_SCOPE)
             return context.caller_resolver.resolve(
-                token, required_scope=STANDARD_ORDER_READ_SCOPE, third_session=x_third_session
+                token,
+                required_scope=STANDARD_ORDER_READ_SCOPE,
+                third_session=x_third_session,
+                platform_entry=business_entry,
             )
         except CallerAuthError as exc:
             if exc.code == CALLER_AUTH_FORBIDDEN:
@@ -544,6 +548,7 @@ def create_gateway_app(
     def authenticated_diagnosis_caller(
         authorization: Annotated[str | None, Header()] = None,
         x_third_session: Annotated[str | None, Header()] = None,
+        business_entry: Annotated[str | None, Header(alias="X-Business-Entry")] = None,
     ) -> ScopeContext:
         if not authorization or not authorization.startswith("Bearer "):
             raise StandardAPIError(
@@ -561,8 +566,13 @@ def create_gateway_app(
         try:
             if x_third_session is None:
                 return context.caller_resolver.resolve(token, required_scope=STANDARD_DIAGNOSIS_SCOPE)
+            # 数据范围按内容域决定（运营商站点范围只在管家端生效），因此入口必须
+            # 在这里就传下去 —— 晚于身份解析的平台决策改不了已算好的范围。
             return context.caller_resolver.resolve(
-                token, required_scope=STANDARD_DIAGNOSIS_SCOPE, third_session=x_third_session
+                token,
+                required_scope=STANDARD_DIAGNOSIS_SCOPE,
+                third_session=x_third_session,
+                platform_entry=business_entry,
             )
         except CallerAuthError as exc:
             if exc.code == CALLER_AUTH_FORBIDDEN:
@@ -581,11 +591,13 @@ def create_gateway_app(
     def authenticated_faq_caller(
         authorization: Annotated[str | None, Header()] = None,
         x_third_session: Annotated[str | None, Header()] = None,
+        business_entry: Annotated[str | None, Header(alias="X-Business-Entry")] = None,
     ) -> ScopeContext:
         return _authenticate_caller(
             context.caller_resolver,
             authorization,
             x_third_session,
+            platform_entry=business_entry,
             required_scope=STANDARD_FAQ_SCOPE,
         )
 
@@ -614,11 +626,13 @@ def create_gateway_app(
     def authenticated_shortcut_viewer(
         authorization: Annotated[str | None, Header()] = None,
         x_third_session: Annotated[str | None, Header()] = None,
+        business_entry: Annotated[str | None, Header(alias="X-Business-Entry")] = None,
     ) -> ScopeContext:
         return _authenticate_caller(
             context.caller_resolver,
             authorization,
             x_third_session,
+            platform_entry=business_entry,
             required_scope=STANDARD_FAQ_SCOPE,
         )
 
@@ -2268,6 +2282,7 @@ def _authenticate_caller(
     third_session: str | None,
     *,
     required_scope: str,
+    platform_entry: str | None = None,
 ) -> ScopeContext:
     if not authorization or not authorization.startswith("Bearer "):
         raise StandardAPIError(status.HTTP_401_UNAUTHORIZED, "ACCESS_TOKEN_REQUIRED", "access token required")
@@ -2279,9 +2294,16 @@ def _authenticate_caller(
             "access token validation failed",
         )
     try:
+        # ``platform_entry`` 只对会话解析器有意义（它据此决定数据范围）；其它
+        # 解析器忽略它。未知入口在此原样传入，由解析器按最窄范围处理。
         if third_session is None:
             return resolver.resolve(token, required_scope=required_scope)
-        return resolver.resolve(token, required_scope=required_scope, third_session=third_session)
+        return resolver.resolve(
+            token,
+            required_scope=required_scope,
+            third_session=third_session,
+            platform_entry=platform_entry,
+        )
     except CallerAuthError as exc:
         if exc.code == CALLER_AUTH_FORBIDDEN:
             status_code, code = status.HTTP_403_FORBIDDEN, "INSUFFICIENT_SCOPE"
