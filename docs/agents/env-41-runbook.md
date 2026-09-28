@@ -264,16 +264,37 @@ runuser -u aiops41 -- /opt/aiops-41/.venv/bin/python -m aiops_diagnostics \
 **用途**：让**所有租户**的某个入口都能看到该动作（consumer 侧现有的 4 条平台默认
 就是这么来的）。**按租户发布**见下一节 3.2。
 
-**改前必备份**（停服务冷备，避免 WAL 不一致）：
+**改前必备份。** `ShortcutStore` 用 WAL：**只 `cp` 主库、不停服务**会得到一个不含
+未检查点提交的副本 —— 看着有、回滚时才发现少了数据。所以这套命令有四个硬要求：
+`set -e`（任一步失败就停）、**确认服务真的停了再复制**、**复制后校验副本可打开**、
+`trap` 保证无论怎么退出都**把服务拉回来**。备份没成功就**不要往下发布**。
 
 ```bash
-ssh aiops-41 'TS=$(date +%Y%m%d-%H%M%S); B=/var/backups/aiops-41/shortcuts-$TS
-mkdir -p "$B"; systemctl stop aiops-gateway-41.service; sleep 2
+ssh aiops-41 'set -eu
+TS=$(date +%Y%m%d-%H%M%S); B=/var/backups/aiops-41/shortcuts-$TS; mkdir -p "$B"
+trap "systemctl start aiops-gateway-41.service >/dev/null 2>&1 || true" EXIT
+systemctl stop aiops-gateway-41.service
+sleep 2
+if systemctl is-active --quiet aiops-gateway-41.service; then echo "服务未停止，放弃"; exit 1; fi
 cp -a /var/lib/aiops-41/gateway/gateway.db "$B/gateway.db"
-systemctl start aiops-gateway-41.service; sleep 5; systemctl is-active aiops-gateway-41.service'
+test -s "$B/gateway.db"
+head -c 16 "$B/gateway.db" | grep -q "SQLite format 3" || { echo "副本不是 SQLite 文件，放弃"; exit 1; }
+echo "备份就绪: $B"'
 ```
 
+**判据**：命令末尾必须打印出 `备份就绪: <路径>` 且表数非 0；否则**停止**，
+不要进入发布步骤。
+
 **发布**（走生产生命周期，**不要**直接 INSERT）：
+
+> ⚠️ **信任边界，必须先读。** 下面这段在**主机上构造** `ROLE_PLATFORM_ADMIN` 上下文。
+> `ShortcutManager` 校验的是**传入的 context**，不是"谁在敲命令" —— 所以**能执行本脚本
+> 的人就能以平台身份发布对所有租户可见的动作**。这是**有意的设计边界**：在这台主机上
+> `root`/`aiops41` 的 shell 访问本身就是最高信任级，平台发布属其射程。
+> **但要说清两点**：① 这条路径**不是**面向人的自助入口，它是**运维动作**，执行记录要留
+> （谁、什么时候、发了什么）；② 面向人的平台发布入口是**带鉴权的 HTTP 管理接口**
+> （`ROLE_PLATFORM_ADMIN` 由 UPMS 角色解析得出），主机脚本是它的**旁路**，
+> 仅用于运维与首次发布。**不要把这条脚本当成"平台管理员登录"。**
 
 ```text
 # 脚本放 /tmp 并用 644（runuser 读不到 /root）；cd /opt/aiops-41
@@ -302,6 +323,17 @@ cur = store.get(row.shortcut_id, PLATFORM_TENANT_ID)
 if cur.status == "draft":
     manager.publish(ctx, row.shortcut_id, expected_revision=cur.revision, scope=PLATFORM_SCOPE)
 ```
+
+**幂等重跑（发布中断时的恢复）**：这段脚本**不是**天然幂等的 —— 首次 `create` 成功后
+若 `publish` 之前中断，再跑会在唯一键唯一约束处失败。按下面三种状态分别处理：
+
+| 现状 | 动作 |
+|---|---|
+| 平台行**不存在** | 正常流程：`create` → `publish` |
+| 存在且 `status=draft` | **不要**再 create；直接 `publish(expected_revision=当前 revision)` |
+| 存在且 `status=published` | 已完成，跳过（要改内容则 `fork_draft` → `update` → `publish`） |
+
+查现状（只读）：`manager.list(ctx, scope=PLATFORM_SCOPE, business_entry="<entry>")`。
 
 **验收**：`GET /v1/shortcuts` 带目标入口头，看 `count` 与 `codes`。
 
