@@ -39,6 +39,7 @@ from operator_support import (
     TENANT,
     Caller,
     Connection,
+    Directory,
     FakeShops,
     OperatorScope,
     assistant_app,
@@ -493,3 +494,37 @@ def test_the_entry_header_reaches_the_session_resolver(
             # 所以"无头 + 自愿 self 范围"这个组合**不可达**（不是靠本层兜住的）。
             assert resp.status_code == 409, resp.text
             assert resp.json()["error"]["code"] == "PLATFORM_AMBIGUOUS", resp.text
+
+
+def test_the_no_header_ambiguity_holds_only_for_two_platform_identities(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """把上面那条的结论限定到它成立的形状：双平台身份。
+
+    上面那个用例的目录替身固定返回管家端角色，因此它只证明了「双平台 -> 409」。
+    另一半更重要：**无管家端角色**的会话只有 consumer 可选 —— 平台决策会自动选中它，
+    并在同样省略入口头的情况下放行。那不是漏洞（consumer + 本人范围正是正确行为），
+    但它说明「省略入口头必然 409」是错的，结论必须写成「双平台身份时」。
+    """
+    session = resolve_session(
+        monkeypatch,
+        records=(b_subject(),),
+        operator_scope=OperatorScope(sites={"SHOP-1": (SITE_IN,)}),
+        platform_entry=None,
+    )
+    client, _ = assistant_app(
+        tmp_path,
+        monkeypatch,
+        Caller(session),
+        Connection(),
+        published_entries=("consumer", "operator"),
+        directory=Directory(client_type=None),
+    )
+    resp = client.post(
+        "/v1/assistant/questions",
+        json={"question": DIAGNOSIS_QUESTION, "order_no": ORDER_OWN_IN},
+        headers={"Authorization": "Bearer service"},
+    )
+    # 单平台身份被自动选中，请求照常走 —— 不是 409。
+    # 这条与上面那条一起表明：409 来自"双平台歧义"，不是"缺入口头"本身。
+    assert resp.status_code in (202, 404), resp.text

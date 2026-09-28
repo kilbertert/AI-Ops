@@ -408,13 +408,24 @@ class Runtime:
 
 
 class Directory:
-    """平台身份目录：该会话有 admin client_type，operator 入口可用。"""
+    """平台身份目录：默认该会话有 admin client_type，operator 入口可用。
+
+    ``client_type`` 可换：判"双平台歧义"与"单平台自动选中"两种形状时，
+    可用平台集合必须不同，而它正是由这个角色字段决定的。
+    """
+
+    def __init__(self, client_type: str | None = "admin") -> None:
+        self.client_type = client_type
 
     def roles_for_c_user(self, c_user_id: str, tenant_id: str):
-        return (PlatformRoleRecord(B_USER_ID, c_user_id, tenant_id, "admin"),)
+        return (PlatformRoleRecord(B_USER_ID, c_user_id, tenant_id, self.client_type),)
 
     def roles_for_b_user(self, b_user_id: str, tenant_id: str):
-        return ()
+        return (
+            ()
+            if self.client_type is None
+            else (PlatformRoleRecord(B_USER_ID, None, tenant_id, self.client_type),)
+        )
 
 
 class Caller:
@@ -482,8 +493,13 @@ def assistant_app(
     *,
     published_entries: tuple[str, ...] = ("operator",),
     runtime: Runtime | None = None,
+    directory: Directory | None = None,
 ) -> tuple[TestClient, Runtime]:
-    """助手入口应用：真实授权判定 + 真实范围下推 + 已发布的入口动作。"""
+    """助手入口应用：真实授权判定 + 真实范围下推 + 已发布的入口动作。
+
+    ``directory`` 换平台角色：默认有管家端角色（双平台），传
+    ``Directory(client_type=None)`` 得到仅有消费者平台的会话。
+    """
     settings = gateway_settings(tmp_path)
     store = GatewayStore(settings.database_file)
     shortcuts = ShortcutManager(ShortcutStore(settings.database_file))
@@ -495,7 +511,7 @@ def assistant_app(
         runtime=selected,  # type: ignore[arg-type]
         caller_resolver=caller,
         order_authorizer=build_authorizer(monkeypatch, connection),
-        platform_resolver=PlatformIdentityResolver(Directory()),
+        platform_resolver=PlatformIdentityResolver(directory or Directory()),
         faq_catalog=FAQCatalog.bundled(),
         shortcut_manager=shortcuts,
     )
