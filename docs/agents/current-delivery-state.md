@@ -104,12 +104,15 @@
   > 真实可达地址（或一条受控隧道，或改走 ADR-0003 的委托句柄）。
   > 详见 `../validation.md` 的「管家端端到端验收：卡在 `AIOPS_UPMS_INSIDE_TOKEN`」。
   > **本项未完成，不计为通过。**
-- PRD #423 / #427 的管家端入口内容与订单检测成功路径：operator 内容域的两个动作
-  （订单检测 `smart_diagnosis`、客户案例 `case_exploration`）已进入仓库的初始产品入口
-  资产，点击行为（无订单号弹订单选择器、带集合内订单启动诊断、案例库未就绪返回明确
-  不可用）已由离线用例固定；**41 上的一次真实验收仍未做**——`X-Business-Entry:
-  operator` 稳定 503（无唯一管家端 B 端主体），且「按租户 + 入口发布」需要一次真实
-  运营商会话（或平台管理员 scope）才能执行。
+- PRD #423 / #427 的管家端入口内容与订单检测成功路径：**2026-09-28 已在 41 发布并验收**。
+  `operator` 侧两个动作（`smart_diagnosis` 订单检测、`case_exploration` 客户案例）
+  以**平台默认**发布（走 `ShortcutManager` 生命周期，非直接插库；改前已冷备 gateway.db）。
+  实测：`operator` 入口 `count=2`；订单检测无订单号 → `clarification`；
+  站点外订单 → `404`；客户案例 → `completed` 且 `retrieval_status=unavailable`
+  （文案为「客户案例服务暂时不可用」，不含「未检索到匹配的宣传资料」）；
+  `consumer` 侧 `count=3` 零回归。详见 `../validation.md` 同名节。
+  **仍未完成**：真正的管家端 App 登录路径未经验收（本次走的是"恰好有 B 端账号的
+  消费者会话"这条已披露形状）；客户案例知识库内容未配置。
 - PRD #423 / #428 的验收产物与双轨结论：`acceptance.feature` 与 `qa-plan.md` 已交付
   （负向 + 回归轨道通过、正向记为 BLOCKED，逐条证据与对照实验见 `docs/validation.md`
   同名节），**正向轨道仍待业务条件**（同上一条 503 约束 + 待业务方提供管家端会话），

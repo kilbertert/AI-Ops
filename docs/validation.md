@@ -267,6 +267,47 @@ AIOPS_UPMS_BASE_URL=http://192.168.1.44:30899/upms
 
 ---
 
+## 管家端入口动作**已在 41 发布并端到端验收**（2026-09-28）
+
+**本节的地位**：补上了此前记为「未完成」的那一半 —— #427 的交付把「入口内容（代码）」
+与「发布动作（运营操作）」分开，代码早已合并，**发布这一步今天在 41 上执行并验收**。
+
+### 做了什么
+
+在 41 上把 `operator` 侧两个动作发布为**平台默认**（与 consumer 侧平台默认同层）：
+
+| code | status | intent | 说明 |
+|---|---|---|---|
+| `case_exploration` | published | `case_exploration` | 客户案例 |
+| `smart_diagnosis` | published | `order_issue` | 订单检测，`requires_order=1` |
+
+- **方式**：走生产生命周期 `ShortcutManager.create` + `publish`（`scope=platform`），
+  用 `ROLE_PLATFORM_ADMIN` + `PLATFORM_TENANT_ID` 构造 scope。**不是直接 INSERT**。
+- **改前备份**：`/var/backups/aiops-41/shortcuts-20260928-155554/gateway.db`（停服务冷备）。
+- **为什么选平台默认而非按租户**：平台默认对所有租户的 `operator` 入口生效，与 consumer
+  侧现状一致；两个动作都是**提示动作**（无 `target_agent_version`、无 `jump_path`），
+  影响面可控。
+
+### 验收结果（41，`0.1.0+67954175fca2`，真实运营商会话）
+
+| # | 判据 | 结果 |
+|---|---|---|
+| 1 | `operator` 入口动作列表 | **200 `count=2`**：`case_exploration`、`smart_diagnosis` ✅ |
+| 2 | 订单检测（无订单号） | **200 `clarification`**，`missing_fields=["order_no"]` ✅ |
+| 3 | 站点外订单（同租户、不在该运营商集合内） | **404**，`operator` 与 `consumer` 两个入口都拒绝 ✅ |
+| 4 | 客户案例 | **202 → `completed`**，`retrieval_status=unavailable`，文案「客户案例服务暂时不可用」，**不含**「未检索到匹配的宣传资料」 ✅ |
+| 5 | `consumer` 侧零回归 | **200 `count=3`**（含 `report_fault` 跳转动作与宣传绑定 `agt_…`）✅ |
+| 6 | `operator` 可见**他人**下单、站点在集合内的订单 | **202 `diagnosis`** ✅（早前已测，见「按内容域分流」节） |
+
+**判据 6 与判据 3 是一对**：同一条"他人订单"在**集合内**放行、**集合外**拒绝 ——
+运营商维度确实在生效，而不是"全放行"或"全拒绝"。
+
+**未完成业务验收**：`operator` 入口的真实**正向**登录仍是通过"恰好有 B 端账号的消费者
+会话"这条已披露形状达成的；真正的管家端 App 登录路径未经本次验收。客户案例的知识库
+内容仍未配置（`unavailable` 是正确行为，不是缺陷）。
+
+---
+
 ## 便携客户端/设备入口的实际使用观察（2026-09-24）
 
 **用途**：为"该入口是否仍在用"提供可复核证据。策略要求退役/关闭暴露前
