@@ -339,11 +339,19 @@ PY'
 
 > **两条路径不是"等效的两种做法"，差别就在身份从哪来。** HTTP 接口同样支持
 > `scope=platform`（`create_shortcut` 的 `scope` 查询参数，走**同一个**
-> `ShortcutManager.create`），但它的 `caller` 由 **UPMS 令牌解析**，需要真实持有
-> `ROLE_PLATFORM_ADMIN` 的账号。**主机脚本之所以存在，是因为 41 上当前没有可用的
-> 平台管理员令牌**（与管理面 HTTP 化受阻同源，见 `kb-service-test-env.md` 关于
-> `ROLE_AGENT_ADMIN` 角色族未建的记录）。**因此这是一条临时旁路，不是终态**：
-> 平台侧建好角色族后，首次发布也应走 HTTP 接口，主机脚本退化为断网/应急手段。
+> `ShortcutManager.create`），但它要求 `caller` 的 `roles` 含 `ROLE_PLATFORM_ADMIN`。
+>
+> ⚠️ **而 41 上这条 HTTP 路径当前结构上不可达，不只是"缺个令牌"**：
+> `_caller_resolver` 在配置了 `AIOPS_GATEWAY_THIRD_SESSION_SERVICE_TOKEN` 时
+> **只选** `RedisThirdSessionResolver`（`gateway_api.py`），而它会话解析出来的
+> `roles` **恒为空集**。也就是说 41 上无论用谁的令牌，管理面都拿不到平台角色。
+> 要走通 HTTP，需要**另外一层身份路由**（例如给管理面单独一个解析器，或在会话解析里
+> 补角色）—— 那是**独立改动**，不在本手册射程内。这也与管理面 HTTP 化受阻同源
+> （`kb-service-test-env.md` 记载 `ROLE_AGENT_ADMIN` 角色族未建）。
+>
+> **因此主机脚本是一条临时旁路，不是终态**，且它的存在**有结构性理由**：
+> 管理面的 HTTP 身份路径当前不通。平台侧补齐角色族**并**给管理面一条能解析角色的
+> 身份路由之后，首次发布应改走 HTTP；主机脚本退化为断网/应急手段。
 
 ```text
 # 脚本放 /tmp 并用 644（runuser 读不到 /root）；cd /opt/aiops-41
