@@ -22,6 +22,11 @@
    其 `/actuator/mappings` 注册的 185 个路径里**没有任何一个**是 AI-Ops 需要的：
    `/user/info`、`/user/ds`、`/user/inside/byUserId`、`/shopuser/getShops`、`/role/list`
    —— **五项全部不存在**。对不存在的路径它返回 200 + `{"code":1,"msg":"系统错误！"}`。
+   （**注意区分**：这五项里只有 `/user/inside/byUserId` 与 `/shopuser/getShops` 是
+   管家端链路**必需**的；`/user/info`、`/user/ds`、`/role/list` 属 B 端 Bearer
+   调用者的范围解析链。此处列全五项是因为**全缺失**才构成"该地址不是 UPMS"的判据；
+   若将来只有平台组缺失，**不构成**管家端不可用的理由。判据速查见
+   `agents/env-41-runbook.md` §1.5。）
    `/actuator/health` 报 `UP`、`/actuator/info` 报 git commit，证明那是**被直接访问的真服务**，
    不是代理或桩。
 
