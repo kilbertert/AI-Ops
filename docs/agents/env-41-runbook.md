@@ -272,7 +272,18 @@ runuser -u aiops41 -- /opt/aiops-41/.venv/bin/python -m aiops_diagnostics \
 ```bash
 ssh aiops-41 'set -eu
 TS=$(date +%Y%m%d-%H%M%S); B=/var/backups/aiops-41/shortcuts-$TS; mkdir -p "$B"
-trap "systemctl start aiops-gateway-41.service >/dev/null 2>&1 || true" EXIT
+# 退出时无条件尝试恢复服务；**并把启动结果计入退出码** —— 备份成功但服务没起来
+# 不算成功（值班人员不能从"备份就绪"里看出网关还躺着）。
+restore() {
+  systemctl start aiops-gateway-41.service >/dev/null 2>&1 || true
+  if systemctl is-active --quiet aiops-gateway-41.service; then
+    echo "网关已恢复运行"
+  else
+    echo "!! 网关未能启动 —— 立即人工介入（备份本身可能仍是好的）" >&2
+    exit 1
+  fi
+}
+trap restore EXIT
 systemctl stop aiops-gateway-41.service
 sleep 2
 if systemctl is-active --quiet aiops-gateway-41.service; then echo "服务未停止，放弃"; exit 1; fi
@@ -282,8 +293,32 @@ head -c 16 "$B/gateway.db" | grep -q "SQLite format 3" || { echo "副本不是 S
 echo "备份就绪: $B"'
 ```
 
-**判据**：命令末尾必须打印出 `备份就绪: <路径>` 且表数非 0；否则**停止**，
-不要进入发布步骤。
+**判据**：命令末尾必须打印出 `备份就绪: <路径>`；否则**停止**，不要进入发布步骤。
+**再加一条表数校验**（确认副本结构完整，而不只是"有个文件"）—— 用 heredoc 写，
+避免单引号里嵌套引号：
+
+```bash
+ssh aiops-41 '/opt/aiops-41/.venv/bin/python - <<PY
+import sqlite3, sys
+c = sqlite3.connect("/var/backups/aiops-41/shortcuts-<TS>/gateway.db")
+n = len(c.execute("select name from sqlite_master where type=\"table\"").fetchall())
+print("表数 =", n)
+sys.exit(0 if n > 0 else 1)
+PY'
+```
+
+判据：**表数 > 0**。为 0 说明副本是空库，回滚不了 —— 同样**停止发布**。
+
+**服务状态说明（易误读）**：上面这段以 `trap ... EXIT` 收尾，**备份成功失败都会尝试
+把网关拉回来**；并且**启动失败会让整条命令返回非零** —— "备份好了但服务没起来"不是
+成功。所以命令结束时正常情况是"网关运行中 + 备份就绪"；若只看到 `!! 网关未能启动`，
+先修服务、**不要**继续发布。
+
+（备份只占几秒，因此让服务多停这一会儿是可接受的；`ShortcutManager` 写库时服务本来
+就在跑，所以**发布步骤不需要**为它额外停服务。）
+紧接着的**发布脚本是在服务运行状态下写库的**，这与 `ShortcutManager` 日常被 HTTP
+接口调用时完全一样（它自己开连接、自己提交），因此**不需要**为发布额外停服务。
+（本页初稿没写这句，读者容易以为"备份完还得手动起服务"。）
 
 **发布**（走生产生命周期，**不要**直接 INSERT）：
 
