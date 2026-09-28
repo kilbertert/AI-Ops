@@ -122,7 +122,11 @@ class RedisThirdSessionResolver:
     ``b_subject_directory`` 未注入、或解析不出**同租户内唯一**的 B 端主体时，身份只保留
     C 侧部分并带上可区分原因——消费者端行为不变，需要 B 端主体的下游自行 fail closed。
 
-    业务数据范围由主体决定（#426）：拿不到唯一 B 端主体时仍是解析器的固定兜底值
+    业务数据范围由**主体 + 内容域**共同决定（#426，2026-09-28 修正）：只在
+    ``operator`` 入口把 C 侧身份换成运营商站点集合；其余入口（含入口缺失/非法）
+    保持本人范围 —— 替换发生在身份层，若不按入口分流，消费者侧会被一并收窄与放宽。
+
+    拿不到唯一 B 端主体时仍是解析器的固定兜底值
     ``self``（消费者端逐字不变）；拿到时替换为该主体名下的**运营商站点集合**——
     替换而非取交集，因为 ``self`` 只是兜底值而不是管家端的业务规则，取交集等于只
     保留「自己下的单」，正是本 PRD 要修掉的错位。同一会话的订单授权判定与证据收集
@@ -142,7 +146,14 @@ class RedisThirdSessionResolver:
         self.b_subject_directory = b_subject_directory
         self.operator_scope = operator_scope
 
-    def resolve(self, token: str, *, required_scope: str, third_session: str | None = None) -> ScopeContext:
+    def resolve(
+        self,
+        token: str,
+        *,
+        required_scope: str,
+        third_session: str | None = None,
+        platform_entry: str | None = None,
+    ) -> ScopeContext:
         if not secrets.compare_digest(token, self.settings.service_token):
             raise CallerAuthError("service authentication failed", code=CALLER_AUTH_INVALID)
         if not third_session or len(third_session) > 256 or any(c in third_session for c in "\r\n"):
@@ -191,12 +202,12 @@ class RedisThirdSessionResolver:
             # 已定调置 False，且该标志应由请求意图推导，而不是按调用者类型写死）。
             delegated=False,
             effective_tenant_id=tenant_id,
-            data_scope=self._data_scope(subject, tenant_id),
+            data_scope=self._data_scope(subject, tenant_id, platform_entry),
             roles=frozenset(),
             permissions=frozenset({required_scope}),
         )
 
-    def _data_scope(self, subject: SubjectRecord, tenant_id: str) -> DataScope:
+    def _data_scope(self, subject: SubjectRecord, tenant_id: str, platform_entry: str | None) -> DataScope:
         """会话的业务数据范围：有唯一 B 端主体时取其运营商站点集合。
 
         解析失败一律失败关闭为**空集合**——拒绝全部订单查询，不回落为租户级放行，
@@ -208,18 +219,36 @@ class RedisThirdSessionResolver:
         失败原因单独记一行，与 #425 区分的两种空集合成因（账号漏登记 /
         已登记店铺无站点）都不是一回事：那些要去补数据，这里要去看上游。
 
-        ponytail: 授予条件只有「唯一 B 端主体 + 其店铺集合」，既不含管家端角色，
-        也不看业务入口（入口在 FastAPI 依赖里晚于身份解析，本结构进不来）。词汇表
-        对「管家主体」的定义带管家端角色维度，因此「恰好也有 B 端账号的 C 端用户
-        在消费者入口上同样拿到该运营商的站点集合」是这条边界内被接受的行为，不是
-        遗漏。升级触发条件：会话身份能拿到角色（或入口可传入本层）时，先补角色门
-        再扩大授予条件；在那之前靠 `b_subject_reason` 与站点集合边界兜底。
+        ponytail: 授予条件只有「唯一 B 端主体 + 其店铺集合 + operator 入口」，**不含
+        管家端角色** —— 入口已按 #423 修复传进本层（缺失或非法时按最窄处理），但角色
+        仍拿不到。词汇表对「管家主体」的定义带管家端角色维度，因此「恰好也有 B 端账号
+        的 C 端用户在 **operator** 入口上同样拿到该运营商的站点集合」是这条边界内被
+        接受的行为，不是遗漏。升级触发条件：会话身份能拿到角色时，先补角色门再谈扩大
+        授予条件；在那之前靠 `b_subject_reason` 与站点集合边界兜底。
 
         ponytail: 每次会话解析都开一条跳板隧道（与查询路径 `scoped_live_sources`
         同款，每个管家端请求一次），没有缓存或按请求复用。升级触发条件：
         实测确认它是管家端请求的热点成本后，改为按请求/按次运行复用一条隧道，或
         加短 TTL 的主体级缓存——后者会引入授权范围 staleness，须先定可接受上限。
         """
+
+        # 运营商站点范围**只在管家端入口生效**（#423 回归修复）。
+        #
+        # 替换 ``self`` 的语义是为管家端设计的：运营商员工要看本运营商名下站点的
+        # 订单。但该替换发生在**身份层**，原先对两个内容域同时生效，于是消费者侧
+        # 的「本人可见」被换成「本运营商站点可见」——两个方向都错：本人订单可能被
+        # 拒（站点不在集合内），他人订单可能被放行（同站点同运营商）。实测确认过
+        # 后者：``consumer`` 入口能查到**他人**名下、位于该运营商站点的订单。
+        #
+        # 因此按入口分流：只有 ``operator`` 用运营商站点范围；其余（``consumer``、
+        # 缺少入口、入口非法）一律保持 ``self``。**未知入口按最窄的 ``self`` 处理，
+        # 不放宽** —— 非法入口随后由平台决策拒绝，范围在这里已经先收紧。
+        # 与 ``PlatformIdentityResolver`` 同一套规范化：它 ``strip().lower()`` 之后
+        # 才判管家入口，这里若用严格相等，``OPERATOR`` / `` operator `` 会被上游当成
+        # 管家入口、却被这里判为"未知"而回落 self —— 同站点他人订单因此 404。
+        if (platform_entry or "").strip().lower() != "operator":
+            return DataScope(type=SCOPE_TYPE_SELF)
+
         directory = self.operator_scope
         if subject.b_subject_reason or directory is None:
             return DataScope(type=SCOPE_TYPE_SELF)

@@ -195,11 +195,16 @@ def resolve_session(
     *,
     records: tuple[SubjectRecord, ...] = (b_subject(),),
     operator_scope: OperatorScope | None = None,
+    platform_entry: str | None = "operator",
 ) -> ScopeContext:
     """resolve one third-session caller, with the operator directories faked.
 
     ``operator_scope`` 默认 ``None``（= 生产未配置时的接线）：需要运营商站点集合的
     用例显式传一个 ``OperatorScope``。
+
+    ``platform_entry`` 决定数据范围（#423 回归修复）：**只有 ``operator`` 才取运营商
+    站点集合**，其余一律保持 ``self``。默认取 ``operator``，因为本模块的替身服务于
+    管家端用例；消费者侧用例显式传 ``"consumer"``。
     """
     from aiops_diagnostics.third_session_auth import RedisThirdSessionResolver
 
@@ -209,7 +214,12 @@ def resolve_session(
         b_subject_directory=BSubjectDirectory(records),
         operator_scope=operator_scope,
     )
-    return resolver.resolve("svc", required_scope="aiops:diagnoses:write", third_session=SESSION_TOKEN)
+    return resolver.resolve(
+        "svc",
+        required_scope="aiops:diagnoses:write",
+        third_session=SESSION_TOKEN,
+        platform_entry=platform_entry,
+    )
 
 
 def operator_session(
@@ -225,7 +235,7 @@ def operator_session(
 
 def consumer_session(monkeypatch: pytest.MonkeyPatch) -> ScopeContext:
     """A C-side caller with no B 端 account: the normal consumer state."""
-    return resolve_session(monkeypatch, records=())
+    return resolve_session(monkeypatch, records=(), platform_entry="consumer")
 
 
 # --- 假 MySQL：渲染出的 WHERE 的行级镜像 -------------------------------------
@@ -398,13 +408,24 @@ class Runtime:
 
 
 class Directory:
-    """平台身份目录：该会话有 admin client_type，operator 入口可用。"""
+    """平台身份目录：默认该会话有 admin client_type，operator 入口可用。
+
+    ``client_type`` 可换：判"双平台歧义"与"单平台自动选中"两种形状时，
+    可用平台集合必须不同，而它正是由这个角色字段决定的。
+    """
+
+    def __init__(self, client_type: str | None = "admin") -> None:
+        self.client_type = client_type
 
     def roles_for_c_user(self, c_user_id: str, tenant_id: str):
-        return (PlatformRoleRecord(B_USER_ID, c_user_id, tenant_id, "admin"),)
+        return (PlatformRoleRecord(B_USER_ID, c_user_id, tenant_id, self.client_type),)
 
     def roles_for_b_user(self, b_user_id: str, tenant_id: str):
-        return ()
+        return (
+            ()
+            if self.client_type is None
+            else (PlatformRoleRecord(B_USER_ID, None, tenant_id, self.client_type),)
+        )
 
 
 class Caller:
@@ -416,9 +437,22 @@ class Caller:
 
     def __init__(self, context: ScopeContext) -> None:
         self.context = context
+        #: 最近一次解析收到的业务入口。**它让替身能验证 header 透传** ——
+        #: 只返回固定上下文的替身，对"请求头有没有被传到解析器"是盲的，
+        #: 而这正是入口分流修复的接线部分（分流逻辑本身在解析器里，由
+        #: ``resolve_session`` 那组用例覆盖）。
+        self.last_platform_entry: str | None = "<never-called>"
 
-    def resolve(self, token: str, *, required_scope: str, third_session: str | None = None) -> ScopeContext:
+    def resolve(
+        self,
+        token: str,
+        *,
+        required_scope: str,
+        third_session: str | None = None,
+        platform_entry: str | None = None,
+    ) -> ScopeContext:
         del token, third_session, required_scope
+        self.last_platform_entry = platform_entry
         return self.context
 
 
@@ -459,8 +493,13 @@ def assistant_app(
     *,
     published_entries: tuple[str, ...] = ("operator",),
     runtime: Runtime | None = None,
+    directory: Directory | None = None,
 ) -> tuple[TestClient, Runtime]:
-    """助手入口应用：真实授权判定 + 真实范围下推 + 已发布的入口动作。"""
+    """助手入口应用：真实授权判定 + 真实范围下推 + 已发布的入口动作。
+
+    ``directory`` 换平台角色：默认有管家端角色（双平台），传
+    ``Directory(client_type=None)`` 得到仅有消费者平台的会话。
+    """
     settings = gateway_settings(tmp_path)
     store = GatewayStore(settings.database_file)
     shortcuts = ShortcutManager(ShortcutStore(settings.database_file))
@@ -472,7 +511,7 @@ def assistant_app(
         runtime=selected,  # type: ignore[arg-type]
         caller_resolver=caller,
         order_authorizer=build_authorizer(monkeypatch, connection),
-        platform_resolver=PlatformIdentityResolver(Directory()),
+        platform_resolver=PlatformIdentityResolver(directory or Directory()),
         faq_catalog=FAQCatalog.bundled(),
         shortcut_manager=shortcuts,
     )

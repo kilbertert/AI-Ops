@@ -1453,6 +1453,18 @@ Feature: 管家端入口与订单运营商级授权
 
   Rule: 消费者端行为不变
 
+    Scenario: 运营商站点范围只在管家端入口生效
+      Given 一个会话恰好关联到唯一的 B 端主体，且该主体名下有站点
+      When 同一个会话分别以 consumer 与 operator 入口发起订单查询
+      Then consumer 入口按本人范围判定，不采用运营商站点集合
+      And operator 入口按该运营商的站点集合判定
+      And 入口缺失或非法时按本人范围判定，不放宽
+
+    Scenario: 消费者入口下他人订单仍被拒绝
+      Given 一个有 B 端账号的会话从 consumer 入口查询同运营商站点上他人名下的订单
+      When 显式提供该订单号提交
+      Then 返回统一 ORDER_NOT_FOUND
+
     Scenario: 消费者入口订单可见性不变
       Given 消费者会话没有 B 端账号
       When 查询本人订单与其他用户的订单
