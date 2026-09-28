@@ -259,6 +259,57 @@ runuser -u aiops41 -- /opt/aiops-41/.venv/bin/python -m aiops_diagnostics \
 - 发布前 KB 活性校验会真实调用 kb-service；供应商欠费时（embedding 502）会误报
   "知识库不存在"，**这是误报**，充值后重试即恢复，不要据此删绑定。
 
+### 3.1-bis 把动作发布为**平台默认**（2026-09-28 新增）
+
+**用途**：让**所有租户**的某个入口都能看到该动作（consumer 侧现有的 4 条平台默认
+就是这么来的）。**按租户发布**见下一节 3.2。
+
+**改前必备份**（停服务冷备，避免 WAL 不一致）：
+
+```bash
+ssh aiops-41 'TS=$(date +%Y%m%d-%H%M%S); B=/var/backups/aiops-41/shortcuts-$TS
+mkdir -p "$B"; systemctl stop aiops-gateway-41.service; sleep 2
+cp -a /var/lib/aiops-41/gateway/gateway.db "$B/gateway.db"
+systemctl start aiops-gateway-41.service; sleep 5; systemctl is-active aiops-gateway-41.service'
+```
+
+**发布**（走生产生命周期，**不要**直接 INSERT）：
+
+```text
+# 脚本放 /tmp 并用 644（runuser 读不到 /root）；cd /opt/aiops-41
+sudo install -m 644 /root/pub.py /tmp/pub.py
+cd /opt/aiops-41 && runuser -u aiops41 -- /opt/aiops-41/.venv/bin/python /tmp/pub.py
+```
+
+```python
+from pathlib import Path
+from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
+from aiops_diagnostics.shortcut_lifecycle import (
+    PLATFORM_SCOPE, PLATFORM_TENANT_ID, ShortcutManager, ShortcutStore,
+)
+store = ShortcutStore(Path("/var/lib/aiops-41/gateway/gateway.db"))
+manager = ShortcutManager(store)
+subject = SubjectRecord(b_user_id="B-onbox-admin", tenant_id=PLATFORM_TENANT_ID)
+ctx = ScopeContext.build(
+    caller=subject, subject=subject, delegated=False,
+    effective_tenant_id=PLATFORM_TENANT_ID, data_scope=DataScope(type="self"),
+    roles=frozenset({"ROLE_PLATFORM_ADMIN"}),          # 必需：缺它会被 ShortcutForbidden 拒
+    permissions=frozenset({"aiops:shortcuts:manage"}),
+)
+row = manager.create(ctx, {"business_entry": "operator", "code": "smart_diagnosis", ...},
+                     scope=PLATFORM_SCOPE)
+cur = store.get(row.shortcut_id, PLATFORM_TENANT_ID)
+if cur.status == "draft":
+    manager.publish(ctx, row.shortcut_id, expected_revision=cur.revision, scope=PLATFORM_SCOPE)
+```
+
+**验收**：`GET /v1/shortcuts` 带目标入口头，看 `count` 与 `codes`。
+
+**常见坑**：
+- `admin migrate-shortcuts` **不能**用来首次建平台默认 —— 它是**从已发布的租户行复制**
+  的；某入口若一条已发布租户行都没有，它会跳过（这就是 `operator` 侧长期为 0 行的原因）。
+- `create` 之后拿到的是**草稿**，必须再 `publish`；只 create 不 publish 入口看不到。
+
 ### 3.2 快捷动作（ShortcutManager，无 CLI）
 
 `admin` CLI 没有 shortcut 子命令；用生产类在 41 上创建，**不要**直接 `INSERT INTO shortcuts`：
