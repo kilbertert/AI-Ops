@@ -452,3 +452,38 @@ def test_a_consumer_entry_session_with_a_b_account_sees_only_its_own_orders(
     assert own.status_code == 202, own.text
     assert foreign.status_code == 404, foreign.text
     assert runtime.diagnoses == [(ORDER_OWN_IN, DIAGNOSIS_QUESTION)]
+
+
+def test_the_entry_header_reaches_the_session_resolver(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """入口头必须真的传到解析器 —— 分流逻辑在解析器里，接线断了它就不生效。
+
+    这一条覆盖**接线**（header → resolver 参数）；分流本身（按入口选范围）由
+    ``test_operator_order_authorization`` 里那组用例覆盖。两者缺一，
+    "消费者侧不再拿到运营商范围"就可能是运气而非实现。
+    """
+    session = resolve_session(
+        monkeypatch,
+        records=(b_subject(),),
+        operator_scope=OperatorScope(sites={"SHOP-1": (SITE_IN,)}),
+        platform_entry="consumer",
+    )
+    caller = Caller(session)
+    client, _ = assistant_app(
+        tmp_path, monkeypatch, caller, Connection(), published_entries=("consumer", "operator")
+    )
+
+    # 第三个用例**保留 Authorization**：完全无头的请求在鉴权处就被拒，
+    # 解析器根本不会被调用，测不出"入口缺失时传了什么"。
+    for header, expected in (
+        (_CONSUMER_HEADERS, "consumer"),
+        (_OPERATOR_HEADERS, "operator"),
+        ({"Authorization": "Bearer service"}, None),
+    ):
+        client.post(
+            "/v1/assistant/questions",
+            json={"question": DIAGNOSIS_QUESTION, "order_no": ORDER_OWN_IN},
+            headers=header,
+        )
+        assert caller.last_platform_entry == expected, (header, caller.last_platform_entry)

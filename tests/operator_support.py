@@ -426,9 +426,22 @@ class Caller:
 
     def __init__(self, context: ScopeContext) -> None:
         self.context = context
+        #: 最近一次解析收到的业务入口。**它让替身能验证 header 透传** ——
+        #: 只返回固定上下文的替身，对"请求头有没有被传到解析器"是盲的，
+        #: 而这正是入口分流修复的接线部分（分流逻辑本身在解析器里，由
+        #: ``resolve_session`` 那组用例覆盖）。
+        self.last_platform_entry: str | None = "<never-called>"
 
-    def resolve(self, token: str, *, required_scope: str, third_session: str | None = None) -> ScopeContext:
+    def resolve(
+        self,
+        token: str,
+        *,
+        required_scope: str,
+        third_session: str | None = None,
+        platform_entry: str | None = None,
+    ) -> ScopeContext:
         del token, third_session, required_scope
+        self.last_platform_entry = platform_entry
         return self.context
 
 

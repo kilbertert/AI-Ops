@@ -20,7 +20,13 @@ class _Resolver:
         self.context = context
         self.tokens: list[str] = []
 
-    def resolve(self, token: str, *, required_scope: str) -> ScopeContext:
+    def resolve(
+        self,
+        token: str,
+        *,
+        required_scope: str,
+        platform_entry: str | None = None,
+    ) -> ScopeContext:
         self.tokens.append(token)
         if isinstance(self.context, Exception):
             raise self.context

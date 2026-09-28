@@ -565,7 +565,13 @@ def create_gateway_app(
             )
         try:
             if x_third_session is None:
-                return context.caller_resolver.resolve(token, required_scope=STANDARD_DIAGNOSIS_SCOPE)
+                # 两个分支都传入口：非会话解析器忽略它，但**分支之间不能不对称** ——
+                # 否则"带不带会话"会意外改变范围语义，排查时极难定位。
+                return context.caller_resolver.resolve(
+                    token,
+                    required_scope=STANDARD_DIAGNOSIS_SCOPE,
+                    platform_entry=business_entry,
+                )
             # 数据范围按内容域决定（运营商站点范围只在管家端生效），因此入口必须
             # 在这里就传下去 —— 晚于身份解析的平台决策改不了已算好的范围。
             return context.caller_resolver.resolve(

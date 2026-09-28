@@ -441,7 +441,9 @@ def test_consumer_entry_keeps_self_scope_even_with_a_b_account(monkeypatch):
 
 def test_unknown_entry_keeps_self_scope(monkeypatch):
     """入口缺失或非法时按最窄范围处理 —— 不放宽，由后续平台决策拒绝请求。"""
-    for entry in (None, "", "operator-admin", "OPERATOR "):
+    # 注意 "OPERATOR " 不在此列：它是 operator 的合法写法（见下一条用例）；
+    # 这里只放真正无法识别成已知入口的值。
+    for entry in (None, "", "operator-admin", "consumer-admin"):
         context = resolve_session(
             monkeypatch,
             records=(b_subject(),),
@@ -450,6 +452,23 @@ def test_unknown_entry_keeps_self_scope(monkeypatch):
         )
         assert context.data_scope.type == SCOPE_TYPE_SELF, entry
         assert context.data_scope.site_ids == (), entry
+
+
+def test_operator_entry_is_normalized_like_the_platform_resolver(monkeypatch):
+    """``OPERATOR`` / `` operator `` 与 ``operator`` 同义 —— 上游就是这么判的。
+
+    两侧规范化不一致时会出现最坏的一种：上游认定是管家入口（于是允许该入口，
+    也据此选内容域），而这层按"未知"回落 ``self``，同站点的他人订单被 404。
+    """
+    for entry in ("operator", "OPERATOR", " operator ", "Operator"):
+        context = resolve_session(
+            monkeypatch,
+            records=(b_subject(),),
+            operator_scope=OperatorScope(("SHOP-1",), {"SHOP-1": ("SITE-IN-1",)}),
+            platform_entry=entry,
+        )
+        assert context.data_scope.type == SCOPE_TYPE_ORGAN, entry
+        assert context.data_scope.site_ids == ("SITE-IN-1",), entry
 
 
 def test_operator_entry_still_gets_the_operator_site_set(monkeypatch):

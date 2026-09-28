@@ -3897,10 +3897,11 @@ MySQL 通路），实测数字引自 2026-09-24 的既有记录并如实标注�
   `_parse_id_list`。形状不符时链路以 `ScopeError` 失败关闭 → 空集合 → 拒绝全部
   管家端订单查询，**不会**误放行；这是 41 上第一件要确认的事。
 - **B 端 Bearer 入口未改**：其数据范围仍来自 `/user/ds`/令牌（结构性为空、
-  fail closed）。本片只替换会话路径的 `self`，未放宽另一条入口。
-- **入口维度未进身份**：`X-Business-Entry` 在 FastAPI 依赖里晚于身份解析，因此
-  运营商维度对「消费者入口中恰好也有 B 端账号」的会话同样生效（有负向用例约束其
-  上界）。把入口传进身份解析属另一处改动。
+  fail closed）。**会话路径**的 `self` 现按内容域分流（见下节），另一条入口未动。
+- ~~**入口维度未进身份**~~ → **已修正**：该限制正是**越权来源**。运营商站点范围
+  原先对「消费者入口中恰好也有 B 端账号」的会话同样生效，41 实测可读到**他人**名下
+  订单。现已把入口传进身份解析并**按入口分流**（只有 `operator` 取运营商站点范围，
+  其余保持 `self`）。见本页「运营商站点范围只在管家端入口生效」一节。
 - **ADR-0003**：偏离沿用（委托句柄仍未实现、依赖共享 Redis 会话直读），全篇只
   记一次——见「#425 运营商站点范围解析」节的「### 与 ADR-0003 的关系」。
 - **验收产物**：`acceptance.feature` 与 `qa-plan.md` 属子票 #428。
@@ -4033,7 +4034,7 @@ OP-ACCEPT-POS-01..04 与本文末节，不用消费者会话或人造夹具冒�
 | # | 断言 | 用例 |
 |---|---|---|
 | 1 | 显式指名集合外订单 → 404 `ORDER_NOT_FOUND`，与不存在的订单号同形；零作业；响应不含订单字段 | `test_clicked_order_diagnosis_of_another_operators_order_is_refused` |
-| 2 | 集合外、只挂在本人名下的订单同样被拒（替换 `self`，非取并集） | `test_a_site_outside_the_scope_is_refused_even_when_the_order_is_the_callers_own` |
+| 2 | 集合外、只挂在本人名下的订单在**管家端入口**被拒（替换 `self`，非取并集）；**消费者入口不适用**——那是越权修复后的边界，见下节 | `test_a_site_outside_the_scope_is_refused_even_when_the_order_is_the_callers_own` |
 | 3 | 未绑定店铺 → 空集合 → 拒绝；不发起订单查询；日志 `reason=no_shop_binding` | `test_an_operator_account_without_shop_binding_is_refused_at_the_entry` |
 | 4 | 订单选择器提示按请求语言给出，六种语言文案互不相同 | `test_the_order_picker_prompt_is_localized_on_the_operator_entry` |
 | 5 | 活跃订单离开站点集合 → 下一轮静默回落为 qa 并清掉失效绑定，不产生第二次诊断 | `test_active_order_follow_up_drops_an_order_that_left_the_scope` |
