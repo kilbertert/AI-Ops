@@ -40,6 +40,13 @@
 - **改写了一条钉住旧行为的测试**：它原先断言「运营商维度对消费者会话同样生效」、
   把 404 当正确 —— 现改为判据相反的正确形状。
 
+**一处审查提出的风险，已实证为不可达**：有人担心"省略 `X-Business-Entry` 的管家会话
+会用 `self` 范围、而平台决策自动选中 `operator`，从而绕过站点限制"。**实测不成立**：
+会话路径的 `subject.c_user_id` 恒非空（`user_id` 是硬校验），因此平台决策看到的
+可用平台恒含 `consumer` 与 `operator` 两者 → 省略入口头得到 **409 `PLATFORM_AMBIGUOUS`**，
+**不会**自动选中 operator。已把这条钉成 HTTP 层用例（断言 409 与错误码），
+而不是靠注释澄清。
+
 **顺带对齐**：诊断入口的"无会话"分支原先不传入口，与"有会话"分支不对称；
 已两处都传（非会话解析器忽略它），避免"带不带会话"意外改变范围语义。
 
@@ -4089,7 +4096,7 @@ OP-ACCEPT-POS-01..04 与本文末节，不用消费者会话或人造夹具冒�
 | # | 断言 | 用例 |
 |---|---|---|
 | 1 | 显式指名集合外订单 → 404 `ORDER_NOT_FOUND`，与不存在的订单号同形；零作业；响应不含订单字段 | `test_clicked_order_diagnosis_of_another_operators_order_is_refused` |
-| 2 | 集合外、只挂在本人名下的订单在**管家端入口**被拒（替换 `self`，非取并集）；**消费者入口不适用**——那是越权修复后的边界，见下节 | `test_a_site_outside_the_scope_is_refused_even_when_the_order_is_the_callers_own` |
+| 2 | 集合外、只挂在本人名下的订单在**管家端入口**被拒（该入口内替换 `self`，非取并集）；**消费者入口不适用** —— 2026-09-28 修复后替换只限 operator，见下节「按内容域分流」 | `test_a_site_outside_the_scope_is_refused_even_when_the_order_is_the_callers_own` |
 | 3 | 未绑定店铺 → 空集合 → 拒绝；不发起订单查询；日志 `reason=no_shop_binding` | `test_an_operator_account_without_shop_binding_is_refused_at_the_entry` |
 | 4 | 订单选择器提示按请求语言给出，六种语言文案互不相同 | `test_the_order_picker_prompt_is_localized_on_the_operator_entry` |
 | 5 | 活跃订单离开站点集合 → 下一轮静默回落为 qa 并清掉失效绑定，不产生第二次诊断 | `test_active_order_follow_up_drops_an_order_that_left_the_scope` |

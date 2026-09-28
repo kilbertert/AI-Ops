@@ -481,9 +481,15 @@ def test_the_entry_header_reaches_the_session_resolver(
         (_OPERATOR_HEADERS, "operator"),
         ({"Authorization": "Bearer service"}, None),
     ):
-        client.post(
+        resp = client.post(
             "/v1/assistant/questions",
             json={"question": DIAGNOSIS_QUESTION, "order_no": ORDER_OWN_IN},
             headers=header,
         )
         assert caller.last_platform_entry == expected, (header, caller.last_platform_entry)
+        if expected is None:
+            # 省略入口头**不会**被上游自动选成 operator —— 会话路径的 subject 恒带
+            # C 端 id，于是 consumer 与 operator 都可用，平台决策判歧义并拒绝。
+            # 所以"无头 + 自愿 self 范围"这个组合**不可达**（不是靠本层兜住的）。
+            assert resp.status_code == 409, resp.text
+            assert resp.json()["error"]["code"] == "PLATFORM_AMBIGUOUS", resp.text
