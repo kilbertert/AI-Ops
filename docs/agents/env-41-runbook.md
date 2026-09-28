@@ -259,6 +259,146 @@ runuser -u aiops41 -- /opt/aiops-41/.venv/bin/python -m aiops_diagnostics \
 - 发布前 KB 活性校验会真实调用 kb-service；供应商欠费时（embedding 502）会误报
   "知识库不存在"，**这是误报**，充值后重试即恢复，不要据此删绑定。
 
+### 3.1-bis 把动作发布为**平台默认**（2026-09-28 新增）
+
+**用途**：让**所有租户**的某个入口都能看到该动作（consumer 侧现有的 4 条平台默认
+就是这么来的）。**按租户发布**见下一节 3.2。
+
+**改前必备份。** `ShortcutStore` 用 WAL：**只 `cp` 主库、不停服务**会得到一个不含
+未检查点提交的副本 —— 看着有、回滚时才发现少了数据。所以这套命令有四个硬要求：
+`set -e`（任一步失败就停）、**确认服务真的停了再复制**、**复制后校验副本可打开**、
+`trap` 保证无论怎么退出都**把服务拉回来**。备份没成功就**不要往下发布**。
+
+```bash
+ssh aiops-41 'set -eu
+TS=$(date +%Y%m%d-%H%M%S); B=/var/backups/aiops-41/shortcuts-$TS; mkdir -p "$B"
+# 退出时无条件尝试恢复服务；**并把启动结果计入退出码** —— 备份成功但服务没起来
+# 不算成功（值班人员不能从"备份就绪"里看出网关还躺着）。
+restore() {
+  systemctl start aiops-gateway-41.service >/dev/null 2>&1 || true
+  if systemctl is-active --quiet aiops-gateway-41.service; then
+    echo "网关已恢复运行"
+  else
+    echo "!! 网关未能启动 —— 立即人工介入（备份本身可能仍是好的）" >&2
+    exit 1
+  fi
+}
+trap restore EXIT
+systemctl stop aiops-gateway-41.service
+sleep 2
+if systemctl is-active --quiet aiops-gateway-41.service; then echo "服务未停止，放弃"; exit 1; fi
+cp -a /var/lib/aiops-41/gateway/gateway.db "$B/gateway.db"
+test -s "$B/gateway.db"
+head -c 16 "$B/gateway.db" | grep -q "SQLite format 3" || { echo "副本不是 SQLite 文件，放弃"; exit 1; }
+echo "备份就绪: $B"'
+```
+
+**判据**（三条同时成立才算通过；**不要**写成"最后一行必须是什么"——`EXIT` trap 会在
+`备份就绪` 之后再打印一行 `网关已恢复运行`，末行判据会把成功当失败）：
+
+1. **退出码为 0**；
+2. 输出里出现 `备份就绪: <路径>`；
+3. 输出里出现 `网关已恢复运行`（没有它、或出现 `!! 网关未能启动` → 停止）。
+
+**再加一条表数校验**（确认副本结构完整，而不只是"有个文件"）—— 用 heredoc 写，
+避免单引号里嵌套引号：
+
+```bash
+ssh aiops-41 '/opt/aiops-41/.venv/bin/python - <<PY
+import sqlite3, sys
+c = sqlite3.connect("/var/backups/aiops-41/shortcuts-<TS>/gateway.db")
+n = len(c.execute("select name from sqlite_master where type=\"table\"").fetchall())
+print("表数 =", n)
+sys.exit(0 if n > 0 else 1)
+PY'
+```
+
+判据：**表数 > 0**。为 0 说明副本是空库，回滚不了 —— 同样**停止发布**。
+
+**服务状态说明（易误读）**：上面这段以 `trap ... EXIT` 收尾，**备份成功失败都会尝试
+把网关拉回来**；并且**启动失败会让整条命令返回非零** —— "备份好了但服务没起来"不是
+成功。所以命令结束时正常情况是**输出里有 `备份就绪` 且有 `网关已恢复运行`、退出码 0**；
+若只看到 `!! 网关未能启动`，先修服务、**不要**继续发布。
+
+（备份只占几秒，因此让服务多停这一会儿是可接受的；`ShortcutManager` 写库时服务本来
+就在跑，所以**发布步骤不需要**为它额外停服务。）
+紧接着的**发布脚本是在服务运行状态下写库的**，这与 `ShortcutManager` 日常被 HTTP
+接口调用时完全一样（它自己开连接、自己提交），因此**不需要**为发布额外停服务。
+（本页初稿没写这句，读者容易以为"备份完还得手动起服务"。）
+
+**发布**（走生产生命周期，**不要**直接 INSERT）：
+
+> ⚠️ **信任边界，必须先读。** 下面这段在**主机上构造** `ROLE_PLATFORM_ADMIN` 上下文。
+> `ShortcutManager` 校验的是**传入的 context**，不是"谁在敲命令" —— 所以**能执行本脚本
+> 的人就能以平台身份发布对所有租户可见的动作**。这是**有意的设计边界**：在这台主机上
+> `root`/`aiops41` 的 shell 访问本身就是最高信任级，平台发布属其射程。
+> **但要说清两点**：① 这条路径**不是**面向人的自助入口，它是**运维动作**，执行记录要留
+> （谁、什么时候、发了什么）；② 面向人的平台发布入口是**带鉴权的 HTTP 管理接口**
+> （`ROLE_PLATFORM_ADMIN` 由 UPMS 角色解析得出），主机脚本是它的**旁路**，
+> 仅用于运维与首次发布。**不要把这条脚本当成"平台管理员登录"。**
+
+> **两条路径不是"等效的两种做法"，差别就在身份从哪来。** HTTP 接口同样支持
+> `scope=platform`（`create_shortcut` 的 `scope` 查询参数，走**同一个**
+> `ShortcutManager.create`），但它要求 `caller` 的 `roles` 含 `ROLE_PLATFORM_ADMIN`。
+>
+> ⚠️ **而 41 上这条 HTTP 路径当前结构上不可达，不只是"缺个令牌"**：
+> `_caller_resolver` 在配置了 `AIOPS_GATEWAY_THIRD_SESSION_SERVICE_TOKEN` 时
+> **只选** `RedisThirdSessionResolver`（`gateway_api.py`），而它会话解析出来的
+> `roles` **恒为空集**。也就是说 41 上无论用谁的令牌，管理面都拿不到平台角色。
+> 要走通 HTTP，需要**另外一层身份路由**（例如给管理面单独一个解析器，或在会话解析里
+> 补角色）—— 那是**独立改动**，不在本手册射程内。这也与管理面 HTTP 化受阻同源
+> （`kb-service-test-env.md` 记载 `ROLE_AGENT_ADMIN` 角色族未建）。
+>
+> **因此主机脚本是一条临时旁路，不是终态**，且它的存在**有结构性理由**：
+> 管理面的 HTTP 身份路径当前不通。平台侧补齐角色族**并**给管理面一条能解析角色的
+> 身份路由之后，首次发布应改走 HTTP；主机脚本退化为断网/应急手段。
+
+```text
+# 脚本放 /tmp 并用 644（runuser 读不到 /root）；cd /opt/aiops-41
+sudo install -m 644 /root/pub.py /tmp/pub.py
+cd /opt/aiops-41 && runuser -u aiops41 -- /opt/aiops-41/.venv/bin/python /tmp/pub.py
+```
+
+```python
+from pathlib import Path
+from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
+from aiops_diagnostics.shortcut_lifecycle import (
+    PLATFORM_SCOPE, PLATFORM_TENANT_ID, ShortcutManager, ShortcutStore,
+)
+store = ShortcutStore(Path("/var/lib/aiops-41/gateway/gateway.db"))
+manager = ShortcutManager(store)
+subject = SubjectRecord(b_user_id="B-onbox-admin", tenant_id=PLATFORM_TENANT_ID)
+ctx = ScopeContext.build(
+    caller=subject, subject=subject, delegated=False,
+    effective_tenant_id=PLATFORM_TENANT_ID, data_scope=DataScope(type="self"),
+    roles=frozenset({"ROLE_PLATFORM_ADMIN"}),          # 必需：缺它会被 ShortcutForbidden 拒
+    permissions=frozenset({"aiops:shortcuts:manage"}),
+)
+row = manager.create(ctx, {"business_entry": "operator", "code": "smart_diagnosis", ...},
+                     scope=PLATFORM_SCOPE)
+cur = store.get(row.shortcut_id, PLATFORM_TENANT_ID)
+if cur.status == "draft":
+    manager.publish(ctx, row.shortcut_id, expected_revision=cur.revision, scope=PLATFORM_SCOPE)
+```
+
+**幂等重跑（发布中断时的恢复）**：这段脚本**不是**天然幂等的 —— 首次 `create` 成功后
+若 `publish` 之前中断，再跑会在唯一键唯一约束处失败。按下面三种状态分别处理：
+
+| 现状 | 动作 |
+|---|---|
+| 平台行**不存在** | 正常流程：`create` → `publish` |
+| 存在且 `status=draft` | **不要**再 create；直接 `publish(expected_revision=当前 revision)` |
+| 存在且 `status=published` | 已完成，跳过（要改内容则 `fork_draft` → `update` → `publish`） |
+
+查现状（只读）：`manager.list(ctx, scope=PLATFORM_SCOPE, business_entry="<entry>")`。
+
+**验收**：`GET /v1/shortcuts` 带目标入口头，看 `count` 与 `codes`。
+
+**常见坑**：
+- `admin migrate-shortcuts` **不能**用来首次建平台默认 —— 它是**从已发布的租户行复制**
+  的；某入口若一条已发布租户行都没有，它会跳过（这就是 `operator` 侧长期为 0 行的原因）。
+- `create` 之后拿到的是**草稿**，必须再 `publish`；只 create 不 publish 入口看不到。
+
 ### 3.2 快捷动作（ShortcutManager，无 CLI）
 
 `admin` CLI 没有 shortcut 子命令；用生产类在 41 上创建，**不要**直接 `INSERT INTO shortcuts`：
