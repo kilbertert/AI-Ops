@@ -23,8 +23,12 @@ Content-Type: application/json
 - 值只有两个：`consumer` / `operator`。**不带就按 `consumer` 处理**（41 的 Nginx 兜底）。
 - 大小写与空格会被规范化，`Operator` / `" operator "` 等价于 `operator`。
 - 非法值（如 `operator-admin`）会被拒：`403 PLATFORM_FORBIDDEN`。
-- **双平台身份（既是 C 端用户、又有管家端角色）必须显式带这个头**，
-  否则得到 `409 PLATFORM_AMBIGUOUS`（平台决策无法自行二选一）。
+- ⚠️ **双平台身份（既是 C 端用户、又有管家端角色）必须显式带这个头。**
+  **漏传不会报错** —— 41 的 Nginx 会补成 `consumer`（见 [另一篇](client-type-vs-business-entry.md) §4），
+  请求直接落进**客户端**内容域与**本人**订单范围。也就是说**漏传是静默走错域**，
+  前端拿不到任何错误信号。只有**显式传了非法值**（如 `operator-admin`）才会 `403`。
+- `409 PLATFORM_AMBIGUOUS` 只在**请求真的没带头、且平台决策能自行判断**时出现
+  （直连网关、绕过 Nginx 兜底时）。**经 41 公网入口不会看到 409。**
 
 路径与其余头与客户端**完全一致**，没有第二个入口、没有第二套 URL：
 
@@ -75,7 +79,7 @@ GET  https://api.mall.qushiyun.com/v1/shortcuts
 |---|---|
 | `jump_path` 有值 | **本地跳转**，不发请求（管家端这两个都是 `null`，所以都属下面的"提示动作"） |
 | `jump_path` 为 `null` | **提示动作**：点击后带着 `code` 调助手入口（见 §3） |
-| `requires_order: true` | 点击后**先弹订单选择器**，带上选中的订单号再发请求 |
+| `requires_order: true` | 点击后**先弹订单选择器**（见下方"主流程与兜底"） |
 | `target_agent_version` | 管家端两个动作都是 `null`，**不要**据此做任何绑定假设 |
 
 > `question_template` 可直接预填输入框；`label`/`description` 已按 `Accept-Language` 本地化
@@ -85,7 +89,16 @@ GET  https://api.mall.qushiyun.com/v1/shortcuts
 
 ### 3.1 订单检测（`smart_diagnosis`，`requires_order: true`）
 
-**不带订单号**（用户还没选单）：
+**主流程与兜底（不是两套交互，别实现两遍）**：
+
+| | 谁做 | 何时 |
+|---|---|---|
+| **主流程** | 前端 | 看到 `requires_order: true` → 点击时**先弹订单选择器** → 带上选中的 `order_no` 发请求。省一次往返，用户体验最好。 |
+| **兜底** | 后端 | 万一请求**没带** `order_no` 且问句里也抽不出订单号 → 返回 `clarification` + `missing_fields: ["order_no"]`。前端**收到这个再弹**选择器即可。 |
+
+两者是**同一条流程的两层**：前端主动弹是优化，后端澄清是保底。**不要**为它们写两套 UI。
+
+**不带订单号**（用户还没选单，或跳过了选择器）：
 
 ```http
 POST /v1/assistant/questions
@@ -134,6 +147,17 @@ POST /v1/assistant/questions
 **素材配好后**：同样的请求会返回 `retrieval_status: "found"` 与内容块，
 前端**不需要**改代码。
 
+⚠️ **但"配好素材"不止是传知识库**。当前 `case_exploration` 的
+`target_agent_version` 是 `null`，而运行时在**解析不出该动作绑定的宣传智能体**时
+**直接返回 `unavailable`**（`gateway_runtime.py`：`promo is None` 分支）——
+**光有知识库、没有绑定的智能体，仍然不会 `found`**。完整的上线步骤是：
+
+1. 建并**发布**一个宣传类智能体（绑定目标知识库）；
+2. 把它的 `agt_…#vN` **绑到 `case_exploration` 动作**上（该字段只允许宣传类 intent）；
+3. 动作需**重新发布**（改的是已发布行，见 runbook 的发布流程）。
+
+三件都做完才会 `found`。此前不要向前端承诺"素材到位即可用"。
+
 ## 4. 与客户端共用的部分（不要重复实现）
 
 - **返回体形状、轮询、取消、会话**：与客户端**完全一致**。见
@@ -151,7 +175,8 @@ POST /v1/assistant/questions
 
 - [ ] 进管家端的页面带上 `X-Business-Entry: operator`（或由 BFF 按入口注入）。
 - [ ] 动作列表按 `jump_path` / `requires_order` 两个字段决定点击行为，**不要**硬编码 `code` 列表。
-- [ ] 订单检测：无订单号时弹选择器（用后端返回的 `missing_fields` 判，不要自己猜）。
+- [ ] 订单检测：`requires_order: true` 时**点击即弹选择器**（主流程）；同时**处理**后端
+      返回的 `clarification` + `missing_fields`（兜底）—— 两者共用同一个选择器组件。
 - [ ] 显式带 `order_no` 得到 `404` 时，提示"订单不存在或无权查看"，**不重试**。
 - [ ] 客户案例：`retrieval_status=unavailable` 渲染成"暂不可用"，不写成"没有案例"。
 - [ ] 不要保存、打印或打包 AI-Ops 服务令牌（它只在 BFF 与 Nginx 之间）。
