@@ -74,6 +74,73 @@ SSHPASS='<现场从受控来源取得>' sshpass -e ssh -o StrictHostKeyChecking=
 
 两文件均为 `0600 aiops41`；改后保持属主与权限。
 
+## 1.5 判别 `AIOPS_UPMS_BASE_URL` 指向的是哪个服务（只读，2026-09-28 新增）
+
+**用途**：管家端授权链（`/user/inside/*`、`/shopuser/getShops`）依赖该地址指向
+**`cloud-upms-admin`**。指向错误时上游对**任何**路径都回 `200` + 通用错误信封，
+不会报 404 —— **看起来像"凭据不对"，实际是"点错了服务"**。
+
+**执行前提（必须满足才可跑下面这段）**：
+
+- **只读**：只请求 `GET /actuator/mappings`，它返回**路径注册表**，不含配置值与业务数据。
+  **不要**读 `/actuator/env`（可能含凭据）。
+- **只对 41 自己的配置目标发起**：脚本从 41 的 `production.env` 读 `AIOPS_UPMS_BASE_URL`，
+  **不另外指定地址**。若该值已指向非预期服务，这**正是本步骤要发现的事实**；
+  发现后**不要**继续对其它候选地址逐个试探——把结论上报，由运维决定正确地址。
+- **不要在非 41 的机器上跑**：该地址只在 41 的网络位置可达。
+
+```bash
+ssh aiops-41 '/opt/aiops-41/.venv/bin/python - <<PY
+import json, urllib.request, os
+env = {}
+for line in open("/etc/aiops-41/production.env"):
+    line = line.strip()
+    if line and not line.startswith("#") and "=" in line:
+        k, v = line.split("=", 1); env[k.strip()] = v.strip().strip(chr(34))
+base = env["AIOPS_UPMS_BASE_URL"].rstrip("/")
+
+# 1) 应用上下文名 —— 直接说出这是哪个服务
+with urllib.request.urlopen(base + "/actuator/mappings", timeout=15) as r:
+    d = json.load(r)
+print("  应用上下文:", list(d.get("contexts", {})))
+
+# 2) AI-Ops 需要的五个路径是否存在（只看路径注册表，不读配置值）
+paths = set()
+def walk(o):
+    if isinstance(o, dict):
+        for k, v in o.items():
+            if k == "predicate" and isinstance(v, str): paths.add(v)
+            else: walk(v)
+    elif isinstance(o, list):
+        for x in o: walk(x)
+walk(d.get("contexts", {}))
+for want in ("/user/info", "/user/ds", "/user/inside/byUserId",
+             "/shopuser/getShops", "/role/list"):
+    print(f"  {want:<28}", "有" if any(want in p for p in paths) else "**没有**")
+PY'
+```
+
+**判据（按依赖强弱分两组，不要混用）**：
+
+| 组 | 路径 | 谁依赖 | 缺失的后果 |
+|---|---|---|---|
+| **管家端必需** | `/user/inside/byUserId`、`/shopuser/getShops` | 会话身份的 C→B 映射；运营商站点范围 | **管家端授权链不可用**（本链路只调这两个） |
+| **平台调用者用** | `/user/info`、`/user/ds`、`/role/list` | B 端 Bearer 调用者的范围解析（`/user/ds` 失败时降级到 `/role/list`） | 与本链路无关；只影响那条路径 |
+
+- **必需的两个缺失** → 该地址不可用于管家端授权链。
+- **只有平台组缺失** → **不影响管家端**，不要因此弃用一个可用地址。
+- **五个全没有** → 该地址不是 `cloud-upms-admin`。**不要**再试凭据，
+  换任何 token 都不会改变结果（上游对三种 Authorization 的响应逐字相同）。
+
+**配置该链路的两个前提**（缺一不可，且**都尚未在 41 就绪**）：
+1. `AIOPS_UPMS_BASE_URL` 指向真实可达的 `cloud-upms-admin`；
+2. `AIOPS_UPMS_INSIDE_TOKEN` 有**来源**（当前全仓无出处，环境清单未登记）。
+   经隧道接入时它是**回环地址**（既有 UPMS 隧道暴露 `127.0.0.1:25999`，
+   见 `kb-service-test-env.md`）。
+
+**记录**：本次判别的结论与证据见 `../validation.md` 的
+「管家端端到端验收：卡在 `AIOPS_UPMS_INSIDE_TOKEN`」一节。
+
 ## 2. 部署（源码同步到 41）
 
 生产代码是文件拷贝部署（41 无 `.git`）。流程：**备份 → 传 → 校验 sha → 重启**。
