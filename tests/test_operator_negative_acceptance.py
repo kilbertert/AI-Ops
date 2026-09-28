@@ -527,4 +527,7 @@ def test_the_no_header_ambiguity_holds_only_for_two_platform_identities(
     )
     # 单平台身份被自动选中，请求照常走 —— 不是 409。
     # 这条与上面那条一起表明：409 来自"双平台歧义"，不是"缺入口头"本身。
-    assert resp.status_code in (202, 404), resp.text
+    #
+    # **必须断言精确的状态码，不能写 `in (202, 404)`**：那样"本人订单被错误拒绝"
+    # 也会通过，等于这条用例验不了它声称验的事（正常放行）。
+    assert resp.status_code == 202, resp.text
