@@ -74,6 +74,59 @@ SSHPASS='<现场从受控来源取得>' sshpass -e ssh -o StrictHostKeyChecking=
 
 两文件均为 `0600 aiops41`；改后保持属主与权限。
 
+## 1.5 判别 `AIOPS_UPMS_BASE_URL` 指向的是哪个服务（只读，2026-09-28 新增）
+
+**用途**：管家端授权链（`/user/inside/*`、`/shopuser/getShops`）依赖该地址指向
+**`cloud-upms-admin`**。指向错误时上游对**任何**路径都回 `200` + 通用错误信封，
+不会报 404 —— **看起来像"凭据不对"，实际是"点错了服务"**。
+
+判别步骤（只读、不打印任何配置值）：
+
+```bash
+ssh aiops-41 '/opt/aiops-41/.venv/bin/python - <<PY
+import json, urllib.request, os
+env = {}
+for line in open("/etc/aiops-41/production.env"):
+    line = line.strip()
+    if line and not line.startswith("#") and "=" in line:
+        k, v = line.split("=", 1); env[k.strip()] = v.strip().strip(chr(34))
+base = env["AIOPS_UPMS_BASE_URL"].rstrip("/")
+
+# 1) 应用上下文名 —— 直接说出这是哪个服务
+with urllib.request.urlopen(base + "/actuator/mappings", timeout=15) as r:
+    d = json.load(r)
+print("  应用上下文:", list(d.get("contexts", {})))
+
+# 2) AI-Ops 需要的五个路径是否存在（只看路径注册表，不读配置值）
+paths = set()
+def walk(o):
+    if isinstance(o, dict):
+        for k, v in o.items():
+            if k == "predicate" and isinstance(v, str): paths.add(v)
+            else: walk(v)
+    elif isinstance(o, list):
+        for x in o: walk(x)
+walk(d.get("contexts", {}))
+for want in ("/user/info", "/user/ds", "/user/inside/byUserId",
+             "/shopuser/getShops", "/role/list"):
+    print(f"  {want:<28}", "有" if any(want in p for p in paths) else "**没有**")
+PY'
+```
+
+**判据**：
+- **五个路径全没有** → 该地址不是 `cloud-upms-admin`。**不要**再试凭据，
+  换任何 token 都不会改变结果（上游对三种 Authorization 的响应逐字相同）。
+- **任一缺失** → 同样不可用于管家端授权链。
+
+**配置该链路的两个前提**（缺一不可，且**都尚未在 41 就绪**）：
+1. `AIOPS_UPMS_BASE_URL` 指向真实可达的 `cloud-upms-admin`；
+2. `AIOPS_UPMS_INSIDE_TOKEN` 有**来源**（当前全仓无出处，环境清单未登记）。
+   经隧道接入时它是**回环地址**（既有 UPMS 隧道暴露 `127.0.0.1:25999`，
+   见 `kb-service-test-env.md`）。
+
+**记录**：本次判别的结论与证据见 `../validation.md` 的
+「管家端端到端验收：卡在 `AIOPS_UPMS_INSIDE_TOKEN`」一节。
+
 ## 2. 部署（源码同步到 41）
 
 生产代码是文件拷贝部署（41 无 `.git`）。流程：**备份 → 传 → 校验 sha → 重启**。

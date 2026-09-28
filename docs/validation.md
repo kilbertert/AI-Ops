@@ -35,10 +35,20 @@
 
 4. **41 上没有到 UPMS 的隧道。** 本机只有 `aiops-36-kb-tunnel.service`
    （→ 共享 kb-service 的 9380）。历史记录里 UPMS 是经**常驻 SSH 隧道**以
-   **回环地址**接入的（[real-acceptance-results.md](real-acceptance-results.md) 第 113 行记载
-   `AIOPS_UPMS_BASE_URL=http://127.0.0.1:15999`，经 124 **常驻 SSH 隧道**）。
-   **那条隧道不在 41 上存在**，所以即使知道 UPMS 的真实地址，
-   当前也没有经审计的路径到它。
+   **回环地址**接入的。**该说法的可核对来源（均在本仓被追踪）**：
+
+   - `docs/开发进度.md:1953` 记载 36→120 数据面隧道含 **UPMS API 25999**，
+     且是 `restricted authorized_keys + permitopen`；
+   - `docs/agents/kb-service-test-env.md:80` 记载该隧道单元
+     `aiops-session-redis-tunnel` 暴露 `127.0.0.1:26379/23306/25999`；
+   - 隧道的**当前状态**：36 上该单元为 `active`（本会话实测），
+     **41 上不存在**（41 只有 `aiops-36-kb-tunnel.service`）。
+
+   > 注：`docs/real-acceptance-results.md:113` 也记有同一事实，但**该文件未被 git 追踪**
+   > （`.gitignore:41` 排除），读者无法据此核对，故此处改引上述被追踪的出处。
+   > 该文件里有凭据类内容，因此被排除是**有意的**，不为引用方便而解除。
+
+   **因此即使知道 UPMS 的真实地址，41 当前也没有经审计的路径到它。**
 
 ### 因此未做的事（与原因）
 
