@@ -31,7 +31,14 @@ from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectReco
 
 
 class _Caller:
-    def resolve(self, token: str, *, required_scope: str, third_session: str | None = None) -> ScopeContext:
+    def resolve(
+        self,
+        token: str,
+        *,
+        required_scope: str,
+        third_session: str | None = None,
+        platform_entry: str | None = None,
+    ) -> ScopeContext:
         if token == "narrow" and required_scope not in {"aiops:faq:read"}:
             raise CallerAuthError("insufficient scope", code=CALLER_AUTH_FORBIDDEN)
         subject = SubjectRecord(b_user_id="c:C-1", c_user_id="C-1", tenant_id="T-1")

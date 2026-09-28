@@ -30,7 +30,14 @@ class _Caller:
     def __init__(self) -> None:
         self.subject = SubjectRecord(b_user_id="c:C-1", c_user_id="C-1", tenant_id="T-1")
 
-    def resolve(self, token: str, *, required_scope: str, third_session: str | None = None) -> ScopeContext:
+    def resolve(
+        self,
+        token: str,
+        *,
+        required_scope: str,
+        third_session: str | None = None,
+        platform_entry: str | None = None,
+    ) -> ScopeContext:
         del third_session
         if token == "narrow" and required_scope not in {"aiops:faq:read"}:
             from aiops_diagnostics.caller_auth import CALLER_AUTH_FORBIDDEN, CallerAuthError

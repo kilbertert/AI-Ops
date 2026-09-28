@@ -173,7 +173,14 @@ class _Caller:
     """Management token "admin" carries the admin role and every requested
     scope; token "narrow" holds only faq:read (assistant consumer callers)."""
 
-    def resolve(self, token: str, *, required_scope: str, third_session: str | None = None) -> ScopeContext:
+    def resolve(
+        self,
+        token: str,
+        *,
+        required_scope: str,
+        third_session: str | None = None,
+        platform_entry: str | None = None,
+    ) -> ScopeContext:
         del third_session
         if token == "narrow" and required_scope != "aiops:faq:read":
             raise CallerAuthError("insufficient scope", code=CALLER_AUTH_FORBIDDEN)

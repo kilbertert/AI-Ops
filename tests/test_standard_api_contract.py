@@ -11,7 +11,13 @@ from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectReco
 
 
 class _Resolver:
-    def resolve(self, token: str, *, required_scope: str) -> ScopeContext:
+    def resolve(
+        self,
+        token: str,
+        *,
+        required_scope: str,
+        platform_entry: str | None = None,
+    ) -> ScopeContext:
         subject = SubjectRecord(b_user_id=token, c_user_id=token, tenant_id="T-1")
         return ScopeContext.build(
             caller=subject,

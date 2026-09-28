@@ -45,7 +45,12 @@ class CallerAuthError(RuntimeError):
 
 class CallerContextResolver(Protocol):
     def resolve(
-        self, token: str, *, required_scope: str, third_session: str | None = None
+        self,
+        token: str,
+        *,
+        required_scope: str,
+        third_session: str | None = None,
+        platform_entry: str | None = None,
     ) -> ScopeContext: ...
 
 
@@ -85,7 +90,14 @@ class IntrospectionSettings:
 
 
 class DisabledCallerResolver:
-    def resolve(self, token: str, *, required_scope: str, third_session: str | None = None) -> ScopeContext:
+    def resolve(
+        self,
+        token: str,
+        *,
+        required_scope: str,
+        third_session: str | None = None,
+        platform_entry: str | None = None,
+    ) -> ScopeContext:
         del token, required_scope, third_session
         raise CallerAuthError(
             "standard access-token validation is not configured",
@@ -101,7 +113,14 @@ class UpmsCallerResolver:
             raise ValueError("UPMS caller validation requires AIOPS_UPMS_BASE_URL")
         self.resolver = ScopeResolver(UpmsDirectory(settings.upms))
 
-    def resolve(self, token: str, *, required_scope: str, third_session: str | None = None) -> ScopeContext:
+    def resolve(
+        self,
+        token: str,
+        *,
+        required_scope: str,
+        third_session: str | None = None,
+        platform_entry: str | None = None,
+    ) -> ScopeContext:
         del third_session
         try:
             context = self.resolver.resolve(ScopeRequest(credential=token))
@@ -118,7 +137,14 @@ class IntrospectionCallerResolver:
         settings.validate()
         self.settings = settings
 
-    def resolve(self, token: str, *, required_scope: str, third_session: str | None = None) -> ScopeContext:
+    def resolve(
+        self,
+        token: str,
+        *,
+        required_scope: str,
+        third_session: str | None = None,
+        platform_entry: str | None = None,
+    ) -> ScopeContext:
         del third_session
         if not token or token.startswith("aops_"):
             raise CallerAuthError("invalid access token", code=CALLER_AUTH_INVALID)

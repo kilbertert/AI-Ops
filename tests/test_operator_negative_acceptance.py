@@ -33,11 +33,13 @@ from operator_support import (
     ORDER_INSIDE,
     ORDER_MISSING,
     ORDER_OUTSIDE,
+    ORDER_OWN_IN,
     SITE_IN,
     SITE_OUT,
     TENANT,
     Caller,
     Connection,
+    Directory,
     FakeShops,
     OperatorScope,
     assistant_app,
@@ -58,7 +60,7 @@ from aiops_diagnostics.caller_auth import ScopedOrderAuthorizer
 from aiops_diagnostics.config import Settings
 from aiops_diagnostics.i18n import SUPPORTED_LANGUAGES
 from aiops_diagnostics.query_scope import resolve_operator_site_scope
-from aiops_diagnostics.scope_context import SCOPE_TYPE_ORGAN
+from aiops_diagnostics.scope_context import SCOPE_TYPE_SELF
 from aiops_diagnostics.sources import MySQLSource
 
 
@@ -413,37 +415,119 @@ def test_the_consumer_entry_keeps_its_own_order_visibility(
     assert foreign.json()["error"]["code"] == "ORDER_NOT_FOUND"
 
 
-def test_a_consumer_entry_session_with_a_b_account_sees_only_that_operators_sites(
+def test_a_consumer_entry_session_with_a_b_account_sees_only_its_own_orders(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """消费者入口 + 会话恰好有 B 端账号：可见范围正好是该运营商的站点集合。
+    """消费者入口 + 会话恰好有 B 端账号：可见范围仍是**本人**，不是运营商站点集合。
 
-    #426 记录的边界（入口维度不进身份）的**正向**形状：运营商维度对这些会话同样
-    生效。这条把它钉住——既不是「同租户任意订单」（放宽），也不是「仅本人」
-    （收窄），集合外连本人的订单都不放过，集合内连别人的订单都看得见。
+    **这条曾经断言相反的结论**：它原先钉住「运营商维度对消费者会话同样生效」——
+    集合内连别人的订单都看得见、集合外连本人的订单都看不见。41 实测证明那是
+    **越权**：``consumer`` 入口能读到**他人**名下、位于该运营商站点的订单。
+
+    现在的判据：#423 定调「消费者端行为保持不变」，运营商站点范围**只在管家端入口
+    生效**。因此消费者会话回到 ``self`` —— 本人的订单可见、他人的订单不可见。
     """
     connection = Connection()
     session = resolve_session(
         monkeypatch,
         records=(b_subject(),),
         operator_scope=OperatorScope(sites={"SHOP-1": (SITE_IN,)}),
+        platform_entry="consumer",
     )
-    assert session.data_scope.type == SCOPE_TYPE_ORGAN  # 前置：确实拿到了运营商维度
+    assert session.data_scope.type == SCOPE_TYPE_SELF  # 前置：未被换成运营商维度
     client, runtime = assistant_app(
         tmp_path, monkeypatch, Caller(session), connection, published_entries=("consumer", "operator")
     )
 
-    inside = client.post(
+    own = client.post(
+        "/v1/assistant/questions",
+        json={"question": DIAGNOSIS_QUESTION, "order_no": ORDER_OWN_IN},
+        headers=_CONSUMER_HEADERS,
+    )
+    foreign = client.post(
         "/v1/assistant/questions",
         json={"question": DIAGNOSIS_QUESTION, "order_no": ORDER_INSIDE},
         headers=_CONSUMER_HEADERS,
     )
-    outside = client.post(
-        "/v1/assistant/questions",
-        json={"question": DIAGNOSIS_QUESTION, "order_no": ORDER_OUTSIDE},
-        headers=_CONSUMER_HEADERS,
+
+    assert own.status_code == 202, own.text
+    assert foreign.status_code == 404, foreign.text
+    assert runtime.diagnoses == [(ORDER_OWN_IN, DIAGNOSIS_QUESTION)]
+
+
+def test_the_entry_header_reaches_the_session_resolver(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """入口头必须真的传到解析器 —— 分流逻辑在解析器里，接线断了它就不生效。
+
+    这一条覆盖**接线**（header → resolver 参数）；分流本身（按入口选范围）由
+    ``test_operator_order_authorization`` 里那组用例覆盖。两者缺一，
+    "消费者侧不再拿到运营商范围"就可能是运气而非实现。
+    """
+    session = resolve_session(
+        monkeypatch,
+        records=(b_subject(),),
+        operator_scope=OperatorScope(sites={"SHOP-1": (SITE_IN,)}),
+        platform_entry="consumer",
+    )
+    caller = Caller(session)
+    client, _ = assistant_app(
+        tmp_path, monkeypatch, caller, Connection(), published_entries=("consumer", "operator")
     )
 
-    assert inside.status_code == 202, inside.text
-    assert outside.status_code == 404, outside.text
-    assert runtime.diagnoses == [(ORDER_INSIDE, DIAGNOSIS_QUESTION)]
+    # 第三个用例**保留 Authorization**：完全无头的请求在鉴权处就被拒，
+    # 解析器根本不会被调用，测不出"入口缺失时传了什么"。
+    for header, expected in (
+        (_CONSUMER_HEADERS, "consumer"),
+        (_OPERATOR_HEADERS, "operator"),
+        ({"Authorization": "Bearer service"}, None),
+    ):
+        resp = client.post(
+            "/v1/assistant/questions",
+            json={"question": DIAGNOSIS_QUESTION, "order_no": ORDER_OWN_IN},
+            headers=header,
+        )
+        assert caller.last_platform_entry == expected, (header, caller.last_platform_entry)
+        if expected is None:
+            # 省略入口头**不会**被上游自动选成 operator —— 会话路径的 subject 恒带
+            # C 端 id，于是 consumer 与 operator 都可用，平台决策判歧义并拒绝。
+            # 所以"无头 + 自愿 self 范围"这个组合**不可达**（不是靠本层兜住的）。
+            assert resp.status_code == 409, resp.text
+            assert resp.json()["error"]["code"] == "PLATFORM_AMBIGUOUS", resp.text
+
+
+def test_the_no_header_ambiguity_holds_only_for_two_platform_identities(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """把上面那条的结论限定到它成立的形状：双平台身份。
+
+    上面那个用例的目录替身固定返回管家端角色，因此它只证明了「双平台 -> 409」。
+    另一半更重要：**无管家端角色**的会话只有 consumer 可选 —— 平台决策会自动选中它，
+    并在同样省略入口头的情况下放行。那不是漏洞（consumer + 本人范围正是正确行为），
+    但它说明「省略入口头必然 409」是错的，结论必须写成「双平台身份时」。
+    """
+    session = resolve_session(
+        monkeypatch,
+        records=(b_subject(),),
+        operator_scope=OperatorScope(sites={"SHOP-1": (SITE_IN,)}),
+        platform_entry=None,
+    )
+    client, _ = assistant_app(
+        tmp_path,
+        monkeypatch,
+        Caller(session),
+        Connection(),
+        published_entries=("consumer", "operator"),
+        directory=Directory(client_type=None),
+    )
+    resp = client.post(
+        "/v1/assistant/questions",
+        json={"question": DIAGNOSIS_QUESTION, "order_no": ORDER_OWN_IN},
+        headers={"Authorization": "Bearer service"},
+    )
+    # 单平台身份被自动选中，请求照常走 —— 不是 409。
+    # 这条与上面那条一起表明：409 来自"双平台歧义"，不是"缺入口头"本身。
+    #
+    # **必须断言精确的状态码，不能写 `in (202, 404)`**：那样"本人订单被错误拒绝"
+    # 也会通过，等于这条用例验不了它声称验的事（正常放行）。
+    assert resp.status_code == 202, resp.text

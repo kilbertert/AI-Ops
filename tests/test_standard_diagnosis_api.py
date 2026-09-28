@@ -30,7 +30,13 @@ class _Resolver:
     def __init__(self, b_user_id: str = "B-1") -> None:
         self.b_user_id = b_user_id
 
-    def resolve(self, token: str, *, required_scope: str) -> ScopeContext:
+    def resolve(
+        self,
+        token: str,
+        *,
+        required_scope: str,
+        platform_entry: str | None = None,
+    ) -> ScopeContext:
         if token == "orders-only":
             from aiops_diagnostics.caller_auth import CallerAuthError
 
