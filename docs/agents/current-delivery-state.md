@@ -67,6 +67,17 @@
   的可见范围 = 租户 ∩ 该 B 端主体的运营商站点集合），负向与回归已由离线用例固定；
   **正向**（真实运营商员工查到本运营商站点订单）仍待业务方提供可用的管家端会话，
   配置前提同为 `AIOPS_UPMS_INSIDE_TOKEN`。
+
+  > ⚠️ **2026-09-28 追因：卡点不是缺凭据，是 41 的 `AIOPS_UPMS_BASE_URL` 指向了另一个服务。**
+  > 该地址上运行的是 `cloud-weixin-admin`（微信管理后台），其注册的 185 个路径里
+  > **没有 AI-Ops 需要的任何一个**（`/user/info`、`/user/ds`、`/user/inside/byUserId`、
+  > `/shopuser/getShops`、`/role/list` 全缺），且上游**不校验 `Authorization`**
+  > （无头/假 Bearer/真 Bearer 响应逐字相同）。
+  > 该 token 在全仓**没有来源**：环境清单未登记、runbook 未提、41 上无其它 env 出现该键。
+  > **因此「等业务方给一个管家端会话」不足以解开这条链路** —— 还需要 UPMS 在 41 的
+  > 真实可达地址（或一条受控隧道，或改走 ADR-0003 的委托句柄）。
+  > 详见 `../validation.md` 的「管家端端到端验收：卡在 `AIOPS_UPMS_INSIDE_TOKEN`」。
+  > **本项未完成，不计为通过。**
 - PRD #423 / #427 的管家端入口内容与订单检测成功路径：operator 内容域的两个动作
   （订单检测 `smart_diagnosis`、客户案例 `case_exploration`）已进入仓库的初始产品入口
   资产，点击行为（无订单号弹订单选择器、带集合内订单启动诊断、案例库未就绪返回明确
