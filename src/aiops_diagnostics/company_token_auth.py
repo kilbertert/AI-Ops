@@ -133,6 +133,10 @@ from aiops_diagnostics.sources import SourceError, mysql_site_mapper
 
 _LOGGER = logging.getLogger(__name__)
 
+#: 本地验签密钥的最小长度。与来源密钥同一条判据：短到可枚举的密钥等于没有这道门，
+#: 而这条模式把「令牌有效」的断言整个搬到了本进程，弱密钥的后果比其他配置项更重。
+MIN_SIGNATURE_KEY_LENGTH = 16
+
 #: ``mysql_site_mapper`` 的形状：由 ``Settings`` 构造一个上下文管理器，产出站点归属映射。
 #: 测试注入替身时替换它，生产路径不换。
 ScopeMapperFactory = Callable[[Settings], AbstractContextManager[SiteScopeMapper]]
@@ -156,6 +160,10 @@ class CompanyTokenSettings:
 
     def validate(self) -> None:
         if self.signature_key:
+            if len(self.signature_key) < MIN_SIGNATURE_KEY_LENGTH:
+                raise ValueError(
+                    f"company JWT signature key must be at least {MIN_SIGNATURE_KEY_LENGTH} characters"
+                )
             if not self.url and not self.client_id and not self.client_secret:
                 return
             raise ValueError(
@@ -402,7 +410,10 @@ def _claims_from_signed_jwt(token: str, key: str) -> Mapping[str, Any]:
 
 
 def _b64url_decode(value: str) -> str:
-    return _b64url_decode_bytes(value).decode("utf-8")
+    try:
+        return _b64url_decode_bytes(value).decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("not UTF-8") from exc
 
 
 def _b64url_decode_bytes(value: str) -> bytes:
@@ -477,7 +488,15 @@ def _shop_ids_from_claims(
         # 与后端 ``@ShopDataScope`` 的隔离集合同源）。这不是放宽：拿不到归属仍然得到空集合。
         if shop_directory is None or not b_user_id:
             raise CallerAuthError("company token is missing its shop ids", code=CALLER_AUTH_INVALID)
-        return shop_directory.shop_ids_by_b_user_id(b_user_id)
+        try:
+            return shop_directory.shop_ids_by_b_user_id(b_user_id)
+        except (ScopeError, SourceError, ValueError) as exc:
+            # ⚠️ 归属查询的失败**必须**译成 ``CallerAuthError``：网关只捕获这一种并译成
+            # 401/503（``_authenticate_caller``），让它逃出去就是 500 —— 一个授权依赖不可用
+            # 会被报成服务端崩溃。失败关闭的方向：拒绝，而不是放行或 500。
+            raise CallerAuthError(
+                "company token shop lookup is unavailable", code=CALLER_AUTH_UNAVAILABLE, retryable=True
+            ) from exc
     value = claims.get("shop_ids")
     if value is None:
         return ()

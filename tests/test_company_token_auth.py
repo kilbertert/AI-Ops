@@ -1038,3 +1038,45 @@ def test_settings_reject_both_modes_at_once() -> None:
             client_secret=CLIENT_SECRET,
             signature_key=LOCAL_KEY,
         ).validate()
+
+
+def test_local_mode_rejects_a_shop_lookup_failure_without_escaping_as_a_server_error() -> None:
+    """归属查询失败必须译成 ``CallerAuthError``（401/503），不能逃成 500。
+
+    网关只捕获 ``CallerAuthError``；``ScopeError`` 逃出去就是一个「授权依赖不可用被报成
+    服务端崩溃」的形态。
+    """
+
+    class _Broken:
+        def shop_ids_by_b_user_id(self, _b_user_id: str) -> tuple[str, ...]:
+            raise ScopeError("upms down")
+
+    claims = _valid_claims()
+    claims.pop("shop_ids")
+    resolver = CompanyTokenCallerResolver(
+        _local_settings(),
+        mysql_settings(),
+        scope_mapper_factory=lambda _s: _Mapper(),
+        shop_directory=_Broken(),
+    )
+    with pytest.raises(CallerAuthError) as excinfo:
+        resolver.resolve(_jwt(claims), required_scope="aiops:orders:read", platform_entry="operator")
+    assert excinfo.value.code == CALLER_AUTH_UNAVAILABLE
+    assert excinfo.value.retryable is True
+
+
+def test_local_mode_rejects_a_token_with_invalid_utf8() -> None:
+    """非法 UTF-8 的载荷 ⇒ 401，不是 500。"""
+    header = base64.urlsafe_b64encode(b'{"typ":"JWT","alg":"HS256"}').rstrip(b"=").decode()
+    payload = base64.urlsafe_b64encode(b"\xff\xfe").rstrip(b"=").decode()
+    signing = f"{header}.{payload}".encode("ascii")
+    signature = base64.urlsafe_b64encode(hmac.new(LOCAL_KEY.encode(), signing, hashlib.sha256).digest())
+    token = f"{header}.{payload}.{signature.rstrip(b'=').decode()}"
+    with pytest.raises(CallerAuthError):
+        _local_resolver().resolve(token, required_scope="aiops:orders:read", platform_entry="operator")
+
+
+def test_settings_reject_a_short_signature_key() -> None:
+    """短到可枚举的签名密钥等于没有这道门。"""
+    with pytest.raises(ValueError):
+        CompanyTokenSettings(signature_key="short").validate()

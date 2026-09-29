@@ -158,6 +158,13 @@ class GatewayServerSettings:
                 "AIOPS_GATEWAY_COMPANY_TOKEN_CLIENT_ID and _CLIENT_SECRET are required "
                 "when a company check_token URL is set"
             )
+        # 两条校验通道**互斥**（A2 / #448）：「谁来断言这条令牌」只能有一个答案。两个都配时
+        # 若只落回其中一条，运维看到的是「配置对了」，实际跑的是另一条 —— 因此交给启动失败。
+        if self.company_jwt_key and self.company_check_token_url:
+            raise ValueError(
+                "AIOPS_GATEWAY_COMPANY_JWT_KEY and AIOPS_GATEWAY_COMPANY_CHECK_TOKEN_URL are "
+                "mutually exclusive: token validity must have exactly one authority"
+            )
         # #444：来源密钥与校验入口是**同一条路径的两半**，半配置同样是启动失败。只配密钥会让
         # 运维以为「门装好了、新链路在跑」，而实际上没有可路由的目标 —— 每一条带密钥的请求都会
         # 静默落回既有链（对管家端令牌就是 401），与「没配密钥」在现象上不可区分。

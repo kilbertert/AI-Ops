@@ -4746,3 +4746,41 @@ PYTHONPATH=$PWD/src uv run pytest
 **真实故障业务验收：未完成 —— 且本票不适用**：它是纯重构，对外可观察行为零变化
 （判据即「既有用例未改断言即通过」），所以没有可验收的业务效果。管家端令牌接进来
 之后的行为验收属 #443。**在 #443 完成前，不得把本票记为「管家端可用」的证据。**
+
+---
+
+## A2：本地验签模式（#448 第二段的代码侧，2026-09-29）
+
+**结论**：新增「本地按 HS256 自校验公司 JWT」这条通道，与远端 `check_token` **互斥**，
+缺省关闭。**业务验收：未完成** —— 41 上未配置、nginx 那一跳未做，没有一次真实管家端登录被走到。
+
+**依据（A1 为何被否）**：41 实测网关注入路径三条全不成立 ——
+① `cloud.auth.enable=false` ⇒ `AuthGlobalFilter` 直接放行；
+② 即便打开，它要的 `user.auth.sync.*` 权限对象在 `cloud-redis` 里**0 命中**，会走拒绝分支；
+③ 把 `AdminProxyHeadFilter`/`ApiProxyHeadFilter` 的字节码字符串全列了一遍，注入的只有
+`client-type`/`tenant-id`/`site`/`saasType`/`switch-tenant-id`/`uid` —— **没有 `user-id`**。
+
+**签名密钥是「源码默认值」这一条成立（实测，但按纪律不留值）**：取一条真令牌按其签名验证 ——
+**公司源码里那个默认值验签通过**，一个刻意给错的密钥不通过，即线上用的就是那个默认值。
+该默认值的字符串**属凭据，不写进本仓**；定位方式：`cloud-auth` 的运行 jar 里
+`MySecurityConfig.class` 的字符串常量 `${cloud.auth.jwt.key:<默认值>}`（Nacos 各配置与容器
+env 均未覆盖它）。**含义**：任何读过那份源码的人都能自签一把合法令牌 —— 因此在这个默认值被
+换掉之前，本地验签模式**不得在生产启用**。
+
+**生产令牌的形状（实测，两条）**：payload 键为
+`exp/id/organ_id/role_ids/shop_id/system_id/tenant_id/type/username` ——
+**不带 `shop_ids`**，而 `shop_id` 对代理商账号是空串。因此本地模式在 `shop_ids` 缺失时
+退回公司权威的 `/shopuser/getShops`（与后端隔离集合同源），拿不到归属仍然得到**空集合**。
+
+**评审发现并已修的三处**：
+1. 🔴 归属查询失败会泄出 `ScopeError` ⇒ 网关只捕 `CallerAuthError`，结果是 **500**。
+   已译成 `CallerAuthError(UNAVAILABLE, retryable=True)`。
+2. 🟡 `_b64url_decode` 对非法 UTF-8 抛未捕获的 `UnicodeDecodeError` ⇒ 500。已包成 401。
+3. 🟨 签名密钥只要求非空 ⇒ 单字符也能启用 HS256。已加最小长度（16）。
+
+**一条被否的评审建议**（记录在案，避免下轮重提）：Devin 指出「已撤销令牌在过期前仍可用」——
+这是本地验签模式的**固有性质**，而撤销黑名单正是网关的 `jwt:blacklist:`（由 logout 写入）。
+要覆盖它需要在 AI-Ops 侧读那个命名空间，等于把令牌存储的读取权重新搬回来；本模式选择
+**以 `exp` 为界**，并把代价写在这里。
+
+**验证**：1488 passed / 0 failed；ruff check + format 干净。
