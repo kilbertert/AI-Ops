@@ -64,12 +64,16 @@ EXPECTED_BASIC = "Basic YWlvcHM6Y2hlY2stdG9rZW4tc2VjcmV0"
 
 SITES_BY_SHOP = {"SHOP-1": (SITE_IN,)}
 
-#: 真实运营商令牌的公司 check_token 成功体：``additionalInformation`` 被合并进**顶层**，
-#: 没有 ``aud``/``scope``，也没有 ``code``/``data`` 信封。
+#: 真实运营商令牌的公司 check_token 成功体：**框架组装的映射**——框架字段（``username``/
+#: ``scope``/``exp``/``client_id``）与增强器字段（身份那一组）合并，后者覆盖同名键；**没有**
+#: ``code``/``data`` 信封。因此身份判据只能落在增强器那一组（``id`` + ``tenant_id``）。
 CLAIMS: dict[str, Any] = {
+    # 框架字段（真实成功体里也存在，见 DefaultAccessTokenConverter.convertAccessToken）
+    "scope": ["server"],
+    "username": "operator-a",  # 增强器覆盖了框架的同名 username
+    # 增强器字段（tokenEnhancer 逐字段写入 additionalInformation）
     "id": B_USER_ID,
     "user_id": C_USER_ID,
-    "username": "operator-a",
     "organ_id": "ORG-1",
     "type": "5",
     "tenant_id": TENANT_ID,
@@ -78,7 +82,8 @@ CLAIMS: dict[str, Any] = {
     "license": "made-by-aiops",
     "tenant_ids": [TENANT_ID],
     "shop_ids": ["SHOP-1"],
-    # 公司确实返回这两个，但都不是判据：``active`` 与客户端凭据令牌无法区分，``exp`` 由公司判。
+    # 这三个也在真实成功体里，同样不是判据：``active``/``exp``/``client_id`` 与客户端凭据令牌
+    # 无法区分（``exp`` 由公司判），只有增强器那组字段能区分。
     "active": True,
     "exp": 4102444800,
     "client_id": "admin",
@@ -267,12 +272,24 @@ def _without(key: str) -> dict[str, Any]:
 @pytest.mark.parametrize(
     ("payload", "expected_code"),
     [
-        # 失败体：公司对非法令牌返回 HTTP 200 + code 非 0（数字与字符串两种写法）。
-        ({"code": 1, "msg": "token无效", "data": "invalid_token"}, CALLER_AUTH_INVALID),
-        ({"code": "1", "data": "invalid_token"}, CALLER_AUTH_INVALID),
-        ({"code": 401, "msg": "unauthorized"}, CALLER_AUTH_INVALID),
-        # 只有 active、没有身份：客户端凭据令牌的形状 —— ``active`` 不是判据。
-        ({"active": True, "client_id": "aiops", "shop_ids": []}, CALLER_AUTH_INVALID),
+        # 失败体：公司对非法令牌返回 HTTP 200 + code 非 0，且 **data 为 null**
+        # （R.failed(Integer, String) 走 restResult(null, code, msg)）。数字与字符串两种写法。
+        ({"code": 1, "msg": "token无效", "data": None}, CALLER_AUTH_INVALID),
+        ({"code": "1", "msg": "token无效", "data": None}, CALLER_AUTH_INVALID),
+        ({"code": 401, "msg": "unauthorized", "data": None}, CALLER_AUTH_INVALID),
+        # 只有 active、没有身份：客户端凭据令牌的形状 —— ``active`` 不是判据，
+        # 而且它同样带 client_id/scope/exp/authorities，所以形状判据必须窄到增强器那组字段。
+        (
+            {
+                "active": True,
+                "client_id": "aiops",
+                "scope": ["server"],
+                "exp": 4102444800,
+                "authorities": ["ROLE_USER"],
+                "shop_ids": [],
+            },
+            CALLER_AUTH_INVALID,
+        ),
         # 身份字段缺失/空白：不猜、不回落成 C 端身份。
         ({**_without("id"), "shop_ids": []}, CALLER_AUTH_INVALID),
         ({**CLAIMS, "id": ""}, CALLER_AUTH_INVALID),
@@ -307,7 +324,7 @@ def test_the_company_refusal_is_judged_by_the_envelope_not_by_its_identity_field
     ``return False``）而身份字段齐全时，按身份解读的代码会把它当成功 —— 那样一条被公司明确
     拒绝的令牌就能拿到完整的运营商站点范围。用例特意让所有身份字段合法，只让 ``code`` 说「不」。
     """
-    refused = {**CLAIMS, "code": 1, "msg": "token无效", "data": "invalid_token"}
+    refused = {**CLAIMS, "code": 1, "msg": "token无效", "data": None}
     mapper = _Mapper()
     sent: list[Any] = []
 

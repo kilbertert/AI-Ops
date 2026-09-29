@@ -45,8 +45,14 @@ Status: Accepted
 
 - **令牌里的字段名是**snake_case**（`user_id` / `shop_ids`），与公司另一处 API 的
   camelCase 不一致** —— 适配器必须按公司那一份契约解析，不能照抄本仓既有的
-  `IntrospectionCallerResolver`（它是 RFC 7662 形状，要求 `active`/`aud`/`scope`，
-  公司这份**都没有**）。两处形状相同是巧合，不是可复用。
+  `IntrospectionCallerResolver`（RFC 7662 形状：身份在 `sub` + `aud` + `data_scope` 里，
+  而公司这份身份在**增强器**注入的 `id`/`tenant_id` 里）。两处形状相同是巧合，不是可复用。
+  ⚠️ 公司**也**返回 `active`/`scope`（框架字段），所以「有没有 `active`」不构成差异，
+  **形状判据必须窄到增强器那组字段** —— `username`/`client_id`/`exp`/`scope`/`authorities`
+  对客户端凭据令牌同样存在。判定还只能写在**信封**上：无效令牌也返回 HTTP 200
+  （`{"code":<码>,"msg":"token无效","data":null}`）。实现与依据见
+  [`company_token_auth.py`](../src/aiops_diagnostics/company_token_auth.py) 与
+  [company-platform-integration-baseline.md](../agents/company-platform-integration-baseline.md) §2.1。
 
 - **本决定不改变 ADR-0003 / ADR-0008 的状态。** 委托句柄仍未实现、客户端仍走共享会话直读；
   本条只把**管家端**那一条支路的身份来源换成公司权威校验。ADR-0008 里

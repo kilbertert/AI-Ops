@@ -3,34 +3,48 @@
 管家端 App（``ulinkmanage.h5.mall.qushiyun.com``）登录走公司 ``/upms/token/login``，拿到的是
 **公司签发的 OAuth2 访问令牌**。AI-Ops 既有的两条凭据路径都认不出它：共享会话 Redis 里没有
 ``app:3rd_session:<该令牌>``（前端照现状接必然 ``401``），而 RFC 7662 自省那条要求
-``active``/``aud``/``scope`` —— 公司这份都没有。本模块补上「把令牌翻成身份」的那一跳。
+``active``/``aud``/``scope`` 的**具体含义与公司这份不同**（见下：公司也会给 ``scope``，但
+身份不在 ``sub``/``data_scope`` 里）。本模块补上「把令牌翻成身份」的那一跳。
 
 **校验落在公司权威入口**（``/oauth/check_token``，公司资源服务器 ``RemoteTokenServices`` 用的
 同一处，ADR-0009 D2）：不自己验签、不复制密钥、不读令牌存储、不把「能以令牌读到对象」当校验。
 
-⚠️ **不能复用 ``IntrospectionCallerResolver``**（实现时的第一坑）：公司成功时返回的是**裸映射**
-（令牌的 ``additionalInformation`` 被合并进顶层：``id``/``user_id``/``username``/``organ_id``/
-``type``/``tenant_id``/``system_id``/``shop_id``/``tenant_ids``/``shop_ids``），**没有**
-``aud``/``scope``，**也没有** ``code``/``data`` 信封。两处「都是 OAuth2 自省」是巧合。
+⚠️ **不能复用 ``IntrospectionCallerResolver``**（实现时的第一坑）：公司成功时返回的是
+**框架组装的身份映射**（框架字段 + 增强器字段合并，**没有** ``code``/``data`` 信封），不是
+RFC 7662 的自省体 —— 身份在增强器注入的 ``id``/``tenant_id`` 里，而不是 ``sub`` + ``aud`` +
+``data_scope``。两处「都是 OAuth2 自省」是巧合。
 
-依据是公司源码而非推测，且两条路径形状不同：
+依据是公司源码与 Spring 源码，且两条路径形状不同：
 
-- **成功**：``cloud-auth/AuthorizationServerConfig.tokenEnhancer()`` 逐字段列出
-  ``additionalInformation``；公司未设置 ``accessTokenConverter``，故走 Spring ``CheckTokenEndpoint``
-  的默认转换器，把该映射**合并进顶层**。公司那两个 ``ResponseBodyAdvice``（``I18nResponseAdvice``、
-  ``TenantNameResponseAdvice``）的 ``supports()`` 都要求**控制器方法声明的返回类型**可被 ``R`` 赋值，
-  而 ``check_token`` 声明的是 ``Map`` ⇒ **不包装**。所以成功体里没有 ``code``。
+- **成功**：``DefaultAccessTokenConverter.convertAccessToken`` 先放框架字段
+  （``username``/``authorities``（仅用户令牌分支）/``scope``/``exp``/``jti``，``resourceIds``
+  非空时还有 ``aud``），最后一步才是 ``response.putAll(token.getAdditionalInformation())``
+  **合并且覆盖同名键**；身份字段来自 ``cloud-auth/AuthorizationServerConfig.tokenEnhancer()``
+  逐字段写入的 ``additionalInformation``（``id``/``user_id``/``username``/``organ_id``/
+  ``type``/``tenant_id``/``system_id``/``shop_id``/``license``/``tenant_ids``/``shop_ids``）。
+  随后 ``CheckTokenAccessTokenConverter`` 无条件 ``put("active", true)``，再补 ``client_id``。
+  公司那两个 ``ResponseBodyAdvice``（``I18nResponseAdvice``、``TenantNameResponseAdvice``）的
+  ``supports()`` 都要求**控制器方法声明的返回类型**可被 ``R`` 赋值，而 ``check_token`` 声明的是
+  ``Map`` ⇒ **不包装**。所以成功体里没有 ``code``、没有 ``data``，但**确实有** ``scope``/``exp``/
+  ``client_id``/``active``（客户端凭据令牌还有 ``aud``/``authorities``）。
 - **失败**：非法/过期令牌由 ``CheckTokenEndpoint`` 抛异常 → 公司
-  ``BaseWebResponseExceptionTranslator`` → ``R.failed``，即 **HTTP 200 +
-  ``{"code":1,"msg":"token无效","data":"invalid_token"}``**（``CommonConstants.SUCCESS=0`` /
-  ``FAIL=1``）。它是 ``@ExceptionHandler`` 的返回值，不经过上面那条 advice。
+  ``BaseWebResponseExceptionTranslator`` → ``ResponseEntity.ok().body(R.failed(e.getOAuth2ErrorCode(),
+  e.getMessage()))``，即 **HTTP 200 + ``{"code":<码>,"msg":"token无效","data":null}``**
+  （``CommonConstants.SUCCESS=0`` / ``FAIL=1``；``R.failed(Integer, String)`` 走
+  ``restResult(null, code, msg)`` ⇒ ``data`` 是 **null**）。它是 ``@ExceptionHandler`` 的返回值，
+  不经过上面那条 advice。
+  ⚠️ ``data:"invalid_token"`` 是**另一条**路径的形状（资源服务器入口
+  ``ResourceAuthExceptionEntryPoint``），**不是** ``check_token`` 的 —— 这条端点的失败体
+  ``data`` 为 null。
 
 因此判据是「**存在且非 0/200 的 ``code`` ⇒ 拒绝**」，而不是「``code`` 必须等于 0」——
-后者会把每一条合法令牌都拒掉。
+后者会把每一条合法令牌都拒掉。**注意这个判据不能换成 HTTP 状态**：令牌无效也返回 HTTP 200
+（见上），按状态判会把它读成成功。
 
 ⚠️ ``active`` **不是**判据：公司确实返回它（Spring 的 ``CheckTokenAccessTokenConverter`` 无条件
-``put("active", true)``），但客户端凭据令牌同样 ``active: true`` 而身份字段为空 —— 按 ``active``
-判会给一条没有身份的通路放行。判据是**公司的身份字段**（``id`` + ``tenant_id``）。
+``put("active", true)``），但客户端凭据令牌同样 ``active: true``。判据是**增强器注入的身份字段**
+（``id`` + ``tenant_id``）—— 这也是为什么不能用更宽的形状判据：``username``/``client_id``/``exp``/
+``scope``/``authorities`` 对**客户端凭据令牌同样存在**，只有增强器写的字段能区分。
 
 ``exp`` 有意不本地判：公司是权威校验方（过期令牌在那一跳就被拒成 ``code:1``），本地再判一次
 只会引入时钟偏移这个新的失败模式，而 ``shop_ids`` 快照的 staleness 窗口已按令牌有效期接受
@@ -287,8 +301,12 @@ def _envelope_refused(claims: Mapping[str, Any]) -> bool:
     """公司是否**明确拒绝**了这条令牌。
 
     判据是「存在 ``code`` 键且该码不是 0/200」—— 合法令牌**没有** ``code``（见模块文档），
-    而公司的拒绝（含 ``{"code":1,"data":"invalid_token"}``）有。``code`` 缺失 ⇒ 不是拒绝，
+    而公司的拒绝（``{"code":1,"msg":"token无效","data":null}``）有。``code`` 缺失 ⇒ 不是拒绝，
     继续按身份声明解读；解读阶段缺 ``id``/``tenant_id`` 会自己拒。
+
+    ⚠️ 判据只能在**信封**上，不能在 HTTP 状态上：令牌无效也走 HTTP 200（公司把异常译成
+    ``ResponseEntity.ok().body(R.failed(...))``）。任何「404/401 就拒绝、其余放行」的写法
+    都会把一条无效令牌静默读成有效。
 
     ``code`` 允许是字符串（``"0"``）：公司的 ``R`` 用 ``Integer``，但同一家的 JSON 里数字字段
     并非总是数字，多一种写法不增加放行面（非 ``{0,200}`` 一律拒，含无法解析的值）。

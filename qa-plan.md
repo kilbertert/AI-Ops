@@ -1149,7 +1149,7 @@ uv run pytest tests/test_assistant_api.py tests/test_conversation_api.py \
 | CT-ACCEPT-02 | 本地 dev | 同上 | 店铺集合映射到两个站点 | 解析站点集合 | 站点经归属映射得到，**不把店铺 id 当站点 id** | 无 | `...::test_shop_ids_are_mapped_through_the_ownership_table_not_used_directly` |
 | CT-ACCEPT-03 | 本地 dev | 同上 | 令牌同时带 `tenant_id` 与 `tenant_ids` | 解析租户 | 取 `tenant_id`；可切换的 `tenant_ids` 不影响范围 | 无 | `...::test_the_tenant_comes_from_tenant_id_not_the_switchable_tenant_ids` |
 | CT-ACCEPT-04 | 本地 dev | 公司以「拒绝」形态应答，且**身份字段齐全** | 拒绝体（带拒绝标记） | 解析 | 拒绝；**不发起任何范围查询** | 无 | `...::test_the_company_refusal_is_judged_by_the_envelope_not_by_its_identity_fields` |
-| CT-ACCEPT-05 | 本地 dev | 校验应答无身份声明（客户端凭据令牌形状，含「令牌有效」标记） | 无身份应答 | 解析 | 拒绝：不把「令牌有效」当「有身份」 | 无 | `...::test_the_resolver_fails_closed[payload3-...]` |
+| CT-ACCEPT-05 | 本地 dev | 校验应答无身份声明（客户端凭据令牌形状：`active:true` + `client_id`/`scope`/`exp`/`authorities`，唯独没有增强器那组字段） | 无身份应答 | 解析 | 拒绝：不把「令牌有效」当「有身份」；证明判据窄到增强器字段而不是任何更宽的形状 | 无 | `...::test_the_resolver_fails_closed[payload3-...]`（该参数即此形状，含 `authorities` 以钉住「宽形状判据会放行」） |
 | CT-ACCEPT-06 | 本地 dev | 参数化：缺主体、缺租户、空白、非标量、非对象载荷、非法店铺形状 | 各类畸形应答 | 解析 | 一律拒绝；错误文本不含令牌与密钥 | 无 | `...::test_the_resolver_fails_closed`、`...::test_invalid_shop_id_shapes_fail_closed` |
 | CT-ACCEPT-07 | 本地 dev | 校验入口拒绝 AI-Ops 客户端凭据 / 不可达 / 返回 HTML | 三种上游故障 | 解析 | 可重试的服务不可用（**不是**「令牌无效」） | 无 | `...::test_http_401_says_the_caller_credentials_are_wrong_not_the_user_token`、`...::test_a_transport_failure_is_retryable`、`...::test_a_non_json_body_is_a_retryable_upstream_fault` |
 | CT-ACCEPT-08 | 本地 dev | 站点归属映射抛错（上游不可达 / ID 不合法） | 两种故障 | 解析 | 空站点集合（拒绝），**不是 500**；日志带可区分原因且不含身份与凭据 | 无 | `...::test_every_scope_failure_denies_instead_of_raising` |
@@ -1164,10 +1164,18 @@ uv run pytest tests/test_assistant_api.py tests/test_conversation_api.py \
 - **正向轨道（真实管家端登录）未执行**：令牌路径未启用，41 上也没有第二段所需的
   `client_id`/`secret`，因此**没有一次真实管家端登录被走到**。本表全部为离线替身 + 真实授权
   判定与真实范围下推，只能主张「契约形状与 fail-closed 矩阵被覆盖」。
-- **公司侧形状来自源码而非实测**：成功体是裸身份映射、失败体是 `HTTP 200 + {"code":1,...}`、
-  `active` 不是判据 —— 依据是 `CheckTokenEndpoint`、`AuthorizationServerConfig.tokenEnhancer()`、
-  `BaseWebResponseExceptionTranslator` 与 `I18nResponseAdvice.supports()`。**未实测**。
-- **`active` 有意不作判据**：客户端凭据令牌同样声称令牌有效而身份字段为空；CT-ACCEPT-05 钉住这一点。
+- **公司侧形状来自源码而非实测**（且经独立第二遍源码复核修正过两处）：成功体是**框架组装的
+  身份映射**（框架的 `scope`/`exp`/`client_id`/`active` 也在，身份那组由增强器合并进来）、
+  失败体是 `HTTP 200 + {"code":<码>,"msg":"token无效","data":null}`（`data` 是 null）——
+  依据是 `CheckTokenEndpoint`、`DefaultAccessTokenConverter`（2.3.x）、
+  `AuthorizationServerConfig.tokenEnhancer()`、`BaseWebResponseExceptionTranslator`、
+  `ResourceAuthExceptionEntryPoint` 与 `I18nResponseAdvice.supports()`。**未实测**。
+- **判据是增强器注入的 `id` + `tenant_id`，不是任何更宽的形状**：`username`/`client_id`/`exp`/
+  `scope`/`authorities` 对客户端凭据令牌同样存在；CT-ACCEPT-05 钉住这一点。
+- **判定只能在信封上，不能换成 HTTP 状态**：无效令牌也走 200（公司把异常译成
+  `ResponseEntity.ok().body(R.failed(...))`）。「404/401 就拒绝、其余放行」会把无效令牌读成有效。
+  客户端 Basic 凭据不对则是**另一种形状**（HTTP 401 + OAuth2 标准错误 JSON），本票把它归到
+  「AI-Ops 侧凭据问题」（可重试的 503）。
 - **`exp` 有意不本地判**：公司是权威校验方，本地再判一次只会引入时钟偏移这个新的失败模式。
 - **明写的代价**：令牌里的店铺集合是**签发时刻**的快照（staleness 窗口 = 令牌有效期），
   而既有的店铺归属查询是实时的。这是 ADR-0009 已接受的取舍，**未实测**真实运营场景下的可接受性。

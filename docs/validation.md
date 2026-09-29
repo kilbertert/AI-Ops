@@ -4505,19 +4505,34 @@ OP-ACCEPT-POS-01..04 与本文末节，不用消费者会话或人造夹具冒�
 
 ### 形状差异（实现时的第一坑）
 
-公司 `/oauth/check_token` **成功时**返回的是**裸映射**（`additionalInformation` 合并进顶层），
-**没有** RFC 7662 的 `aud` / `scope`，也**没有** `code`/`data` 信封；**失败时**却是有信封的
-`{"code":1,...}`，且**走 HTTP 200**。仓里既有的 `IntrospectionCallerResolver`
-**不能复用**，必须另写适配层。两处「都是 OAuth2 自省」是巧合，不是可复用。
+公司 `/oauth/check_token` **成功时**返回的是**框架组装的身份映射**（框架字段 + 增强器字段
+合并、同名覆盖，**没有** `code`/`data` 信封）；**失败时**却是**有信封**的
+`{"code":<码>,"msg":"token无效","data":null}`，且**走 HTTP 200**。仓里既有的
+`IntrospectionCallerResolver` **不能复用**，必须另写适配层。两处「都是 OAuth2 自省」是巧合。
 
-> **2026-09-29 更正（#443 实现时读源码修正）**：本小节此前写「没有 `active`」。事实是
-> **有**（Spring `CheckTokenAccessTokenConverter` 无条件 `put("active", true)`），但
-> **`active` 不是判据** —— 客户端凭据令牌也 `active: true` 而身份字段为空，按它判会给一条
-> 没有身份的通路放行。判据是**公司的身份字段**（`id` + `tenant_id`）。同时补上「成功体没有
-> 信封、失败体有信封且 HTTP 200」这条形状差异（依据：`CheckTokenEndpoint`、
-> `AuthorizationServerConfig.tokenEnhancer()`、`BaseWebResponseExceptionTranslator` 与
-> `I18nResponseAdvice.supports()` 的源码，**未实测**）。判定因此写在信封上：
-> 「存在且非 0/200 的 `code` ⇒ 拒绝」。
+> **2026-09-29 更正（#443 实现时读源码 + 独立复核两轮修正）**：本小节此前有两处写错，已改。
+> ① 此前写「**没有** `active`」—— 错了，`active` **总是**存在（Spring
+> `CheckTokenAccessTokenConverter.convertAccessToken` 无条件 `put("active", true)`），但
+> **它不是判据**。
+> ② 此前写「成功体没有 `aud`/`scope`、只有身份字段」—— 也错了。成功体是
+> `DefaultAccessTokenConverter.convertAccessToken` **先组装框架字段**（`username`/
+> `authorities`（仅用户令牌分支）/`scope`/`exp`/`jti`，`resourceIds` 非空时 `aud`），
+> **最后**才 `response.putAll(token.getAdditionalInformation())` 合并并覆盖同名键，之后补
+> `active` 与 `client_id`。所以成功体**确实带** `scope`/`exp`/`client_id`；`shop_ids` 那组是
+> **增强器**写进 `additionalInformation` 的。
+> ③ 失败体的 `data` 是 **null**（`R.failed(Integer, String)` → `restResult(null, code, msg)`），
+> 不是 `"invalid_token"` —— 后者是**资源服务器入口** `ResourceAuthExceptionEntryPoint` 的形状，
+> 且它硬编码 401，与 `check_token` 是两条路径。
+>
+> **判据因此是**：**增强器注入的那组字段**（`id` + `tenant_id`）—— 不能用更宽的形状判据，
+> 因为 `username`/`client_id`/`exp`/`scope`/`authorities` 对**客户端凭据令牌同样存在**；
+> 且判定只能写在**信封**上（「存在且非 0/200 的 `code` ⇒ 拒绝」），**不能换成 HTTP 状态**，
+> 因为无效令牌也走 200。
+> 另有一种形状要分开：客户端 Basic 凭据不对 ⇒ **HTTP 401 + OAuth2 标准错误 JSON**（非 `R` 信封）。
+>
+> 依据是对应源码（`CheckTokenEndpoint`、`DefaultAccessTokenConverter`（2.3.x）、
+> `AuthorizationServerConfig.tokenEnhancer()`、`BaseWebResponseExceptionTranslator`、
+> `ResourceAuthExceptionEntryPoint`、`I18nResponseAdvice.supports()`），**未实测**。
 
 ### 未验证（如实列出，勿当成已验）
 
