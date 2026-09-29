@@ -50,6 +50,8 @@ class GatewayServerSettings:
     #: 与上面三键同一条「全空即与今天逐字一致」的机制保证，也是回滚路径。
     #: 用 ``repr=False``：它与客户端密钥同性质，不得出现在任何 repr / 日志 / 审计摘要里。
     company_source_key: str = field(repr=False, default="")
+    #: 本地校验模式的签名密钥（A2 / #448）：配了它就不再调上游 check_token。
+    company_jwt_key: str = field(repr=False, default="")
     kb_service_base_url: str = ""
     #: Routing decision source (#392). Empty base URL or key leaves routing on
     #: the previous behaviour; the dependency is optional by configuration.
@@ -113,6 +115,8 @@ class GatewayServerSettings:
             or _file_value(file_values, "AIOPS_GATEWAY_COMPANY_TOKEN_CLIENT_SECRET"),
             company_source_key=_env("AIOPS_GATEWAY_COMPANY_SOURCE_KEY")
             or _file_value(file_values, "AIOPS_GATEWAY_COMPANY_SOURCE_KEY"),
+            company_jwt_key=_env("AIOPS_GATEWAY_COMPANY_JWT_KEY")
+            or _file_value(file_values, "AIOPS_GATEWAY_COMPANY_JWT_KEY"),
             kb_service_base_url=_env("AIOPS_GATEWAY_KB_SERVICE_BASE_URL")
             or _file_value(file_values, "AIOPS_GATEWAY_KB_SERVICE_BASE_URL"),
             kb_service_timeout_seconds=_env_float("AIOPS_GATEWAY_KB_SERVICE_TIMEOUT_SECONDS", 10.0),
@@ -157,8 +161,12 @@ class GatewayServerSettings:
         # #444：来源密钥与校验入口是**同一条路径的两半**，半配置同样是启动失败。只配密钥会让
         # 运维以为「门装好了、新链路在跑」，而实际上没有可路由的目标 —— 每一条带密钥的请求都会
         # 静默落回既有链（对管家端令牌就是 401），与「没配密钥」在现象上不可区分。
-        if self.company_source_key and not self.company_check_token_url:
-            raise ValueError("AIOPS_GATEWAY_COMPANY_CHECK_TOKEN_URL is required when a source key is set")
+        # 本地校验模式与远端 check_token 互斥；两者都不配时来源密钥无意义。
+        if self.company_source_key and not (self.company_check_token_url or self.company_jwt_key):
+            raise ValueError(
+                "AIOPS_GATEWAY_COMPANY_CHECK_TOKEN_URL or AIOPS_GATEWAY_COMPANY_JWT_KEY is required "
+                "when a source key is set"
+            )
         if self.company_source_key and len(self.company_source_key) < MIN_SOURCE_KEY_LENGTH:
             raise ValueError(
                 f"AIOPS_GATEWAY_COMPANY_SOURCE_KEY must be at least {MIN_SOURCE_KEY_LENGTH} characters"

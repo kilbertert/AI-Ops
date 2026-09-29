@@ -15,9 +15,13 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import json
 import logging
 import os
+import time
 import urllib.error
 from pathlib import Path
 from typing import Any
@@ -911,3 +915,126 @@ def test_the_source_key_gate_decides_the_chain_through_the_real_app(
         assert response.status_code == 401, (name, response.text)
         assert response.json()["error"]["code"] == "INVALID_ACCESS_TOKEN"
     assert SESSION_TOKEN not in without_key.text
+
+
+# --- A2：本地验签模式（#448）-------------------------------------------------
+#
+# 与远端模式**同一条解析链**，差别只在「谁断言令牌有效」：这里由本进程用共享密钥验签。
+# 因此这组用例的重点是**验签本身**与两种签名缺陷，而不是重复身份解读（后者已由上面的
+# 用例覆盖，且两条通道共用同一份 ``_subject_from_claims`` / ``_shop_ids_from_claims``）。
+
+LOCAL_KEY = "local-signing-key-for-tests"
+
+
+def _local_settings(**overrides: Any) -> CompanyTokenSettings:
+    fields: dict[str, Any] = {"signature_key": LOCAL_KEY}
+    fields.update(overrides)
+    return CompanyTokenSettings(**fields)
+
+
+def _jwt(claims: dict[str, Any], *, key: str = LOCAL_KEY, alg: str = "HS256", tamper: bool = False) -> str:
+    """按公司那把 JWT 的形状签一条令牌（HS256 + base64url，无 padding）。"""
+
+    def b64(raw: bytes) -> str:
+        return base64.urlsafe_b64encode(raw).rstrip(b"=").decode()
+
+    header = b64(json.dumps({"typ": "JWT", "alg": alg}, separators=(",", ":")).encode())
+    payload = b64(json.dumps(claims, separators=(",", ":")).encode())
+    signing = f"{header}.{payload}".encode("ascii")
+    signature = b64(hmac.new(key.encode(), signing, hashlib.sha256).digest())
+    token = f"{header}.{payload}.{signature}"
+    return token[:-1] + ("a" if token[-1] != "a" else "b") if tamper else token
+
+
+def _local_resolver(**overrides: Any) -> CompanyTokenCallerResolver:
+    return CompanyTokenCallerResolver(
+        _local_settings(**overrides), mysql_settings(), scope_mapper_factory=lambda _s: _Mapper()
+    )
+
+
+def _valid_claims(**overrides: Any) -> dict[str, Any]:
+    claims = dict(CLAIMS)
+    claims["exp"] = int(time.time()) + 600
+    claims.pop("active", None)
+    claims.pop("client_id", None)
+    claims.update(overrides)
+    return claims
+
+
+def test_local_mode_accepts_a_token_signed_with_the_shared_key() -> None:
+    """正路：签名对得上 ⇒ 解析出身份与站点范围（与远端模式同一份解读）。"""
+    resolver = _local_resolver()
+    context = resolver.resolve(
+        _jwt(_valid_claims()), required_scope="aiops:orders:read", platform_entry="operator"
+    )
+    assert context.subject.b_user_id == B_USER_ID
+    assert context.subject.c_user_id == C_USER_ID
+    assert context.effective_tenant_id == TENANT_ID
+
+
+def test_local_mode_rejects_a_token_signed_with_another_key() -> None:
+    """**这一条是本地模式的全部安全性所在**：签名不符即拒，不解释身份。"""
+    resolver = _local_resolver()
+    with pytest.raises(CallerAuthError) as excinfo:
+        resolver.resolve(
+            _jwt(_valid_claims(), key="not-the-key"),
+            required_scope="aiops:orders:read",
+            platform_entry="operator",
+        )
+    assert excinfo.value.code == CALLER_AUTH_INVALID
+
+
+def test_local_mode_rejects_a_tampered_payload() -> None:
+    """改了载荷、签名没跟着变 ⇒ 拒（防止「解出声明就当有效」）。"""
+    resolver = _local_resolver()
+    with pytest.raises(CallerAuthError):
+        resolver.resolve(
+            _jwt(_valid_claims(), tamper=True),
+            required_scope="aiops:orders:read",
+            platform_entry="operator",
+        )
+
+
+def test_local_mode_rejects_an_unsigned_token() -> None:
+    """``alg: none`` 不收 —— 只看令牌自报的算法就是算法混淆的入口。"""
+    resolver = _local_resolver()
+    with pytest.raises(CallerAuthError):
+        resolver.resolve(
+            _jwt(_valid_claims(), alg="none"),
+            required_scope="aiops:orders:read",
+            platform_entry="operator",
+        )
+
+
+def test_local_mode_rejects_an_expired_token() -> None:
+    """本地模式没有上游替我们判过期，必须自己判。"""
+    resolver = _local_resolver()
+    claims = _valid_claims(exp=int(time.time()) - 10)
+    with pytest.raises(CallerAuthError):
+        resolver.resolve(_jwt(claims), required_scope="aiops:orders:read", platform_entry="operator")
+
+
+def test_local_mode_rejects_a_token_without_expiry() -> None:
+    """``exp`` 缺失即拒：不接受「永不过期」的令牌。"""
+    resolver = _local_resolver()
+    claims = _valid_claims()
+    claims.pop("exp")
+    with pytest.raises(CallerAuthError):
+        resolver.resolve(_jwt(claims), required_scope="aiops:orders:read", platform_entry="operator")
+
+
+def test_local_mode_rejects_a_non_jwt() -> None:
+    resolver = _local_resolver()
+    with pytest.raises(CallerAuthError):
+        resolver.resolve("not-a-jwt", required_scope="aiops:orders:read", platform_entry="operator")
+
+
+def test_settings_reject_both_modes_at_once() -> None:
+    """两条通道互斥：「谁来断言这条令牌」只能有一个答案。"""
+    with pytest.raises(ValueError):
+        CompanyTokenSettings(
+            url=CHECK_TOKEN_URL,
+            client_id=CLIENT_ID,
+            client_secret=CLIENT_SECRET,
+            signature_key=LOCAL_KEY,
+        ).validate()

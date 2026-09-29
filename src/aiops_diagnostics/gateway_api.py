@@ -83,6 +83,10 @@ from aiops_diagnostics.i18n import (
 )
 from aiops_diagnostics.metrics_store import MetricsValidationError
 from aiops_diagnostics.order_visibility import DeviceTenantError
+from aiops_diagnostics.query_scope import (
+    ShopDirectory,
+    UpmsShopDirectory,
+)
 from aiops_diagnostics.routing import should_ask_for_context
 from aiops_diagnostics.scope_context import ScopeContext, ScopeError
 from aiops_diagnostics.shortcut_lifecycle import (
@@ -2234,6 +2238,18 @@ def _b_subject_directory(runtime: Settings) -> BSubjectDirectory | None:
     return UpmsBSubjectDirectory(runtime.upms, credential)
 
 
+def _shop_directory(runtime: Settings) -> ShopDirectory | None:
+    """令牌不带 ``shop_ids`` 时的店铺归属来源（公司权威端点）。
+
+    与 C→B 映射、运营商站点范围共用**同一套配置前提**（UPMS 地址 + 服务侧内部凭据）：
+    未配置时返回 ``None``，此时令牌缺 ``shop_ids`` 一律拒绝（拿不到归属就是拿不到范围）。
+    """
+    credential = _inside_credential(runtime)
+    if not runtime.upms.base_url or not credential:
+        return None
+    return UpmsShopDirectory(runtime.upms, credential)
+
+
 def _operator_site_scope(runtime: Settings) -> OperatorSiteScope | None:
     """会话身份的运营商站点范围（#426，四跳链的后两跳）。
 
@@ -2275,16 +2291,20 @@ def _company_token_resolver(settings: GatewayServerSettings) -> CompanyTokenCall
     拒绝（401），而不是被放行 —— 这是 fail closed 的方向。半配置（只设 URL 或只设密钥）
     已在 ``GatewayServerSettings.validate`` 里变成启动失败，不走这里。
     """
-    if not settings.company_check_token_url:
+    # 两条通道二选一：配了签名密钥就走本地验签（A2 / #448），否则走远端 check_token。
+    if not settings.company_check_token_url and not settings.company_jwt_key:
         return None
     try:
+        runtime = Settings.from_config(settings.server_config_file)
         return CompanyTokenCallerResolver(
             CompanyTokenSettings(
                 url=settings.company_check_token_url,
                 client_id=settings.company_token_client_id,
                 client_secret=settings.company_token_client_secret,
+                signature_key=settings.company_jwt_key,
             ),
-            Settings.from_config(settings.server_config_file),
+            runtime,
+            shop_directory=_shop_directory(runtime),
         )
     except (ValueError, OSError):
         return None

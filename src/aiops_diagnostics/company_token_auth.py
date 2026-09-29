@@ -85,10 +85,16 @@ RFC 7662 的自省体 —— 身份在增强器注入的 ``id``/``tenant_id`` �
 
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
+import hmac
+import json
 import logging
 from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -110,6 +116,7 @@ from aiops_diagnostics.caller_auth import (
 )
 from aiops_diagnostics.config import Settings
 from aiops_diagnostics.query_scope import (
+    ShopDirectory,
     SiteScopeMapper,
     operator_site_scope_from_shops,
 )
@@ -139,12 +146,22 @@ class CompanyTokenSettings:
     因此用 ``repr=False`` 把 ``dataclass`` 自动生成的 ``__repr__`` 里的明文摘掉。
     """
 
-    url: str
-    client_id: str
-    client_secret: str = field(repr=False)
+    url: str = ""
+    client_id: str = ""
+    client_secret: str = field(repr=False, default="")
     timeout_seconds: int = 10
+    #: 本地校验模式的签名密钥（A2 / #448）。**与远端模式互斥**：两者都配即启动失败，
+    #: 因为「谁来断言这条令牌」只能有一个答案。
+    signature_key: str = field(repr=False, default="")
 
     def validate(self) -> None:
+        if self.signature_key:
+            if not self.url and not self.client_id and not self.client_secret:
+                return
+            raise ValueError(
+                "company token access must use either local signature verification or "
+                "the remote check_token endpoint, not both"
+            )
         parsed = urlsplit(self.url)
         if parsed.scheme not in {"http", "https"} or not parsed.hostname:
             raise ValueError("company check_token URL must be a complete HTTP or HTTPS URL")
@@ -175,11 +192,15 @@ class CompanyTokenCallerResolver:
         scoped_settings: Settings,
         *,
         scope_mapper_factory: ScopeMapperFactory | None = None,
+        shop_directory: ShopDirectory | None = None,
     ) -> None:
         settings.validate()
         self.settings = settings
         self.scoped_settings = scoped_settings
         self._scope_mapper: ScopeMapperFactory = scope_mapper_factory or mysql_site_mapper
+        #: 令牌不带 ``shop_ids`` 时的店铺归属来源（公司权威端点，与后端隔离集合同源）。
+        #: 为 ``None`` 时该情形一律拒绝 —— 拿不到归属就是拿不到范围，不放宽。
+        self._shop_directory = shop_directory
 
     def resolve(
         self,
@@ -201,7 +222,9 @@ class CompanyTokenCallerResolver:
         subject = _subject_from_claims(claims)
         # 形状校验先于入口分流：``shop_ids`` 的形状是上游契约的属性，与本次请求从哪个入口进来
         # 无关。一条形状不符的响应不该因为入口恰好是 consumer 就被当成「能用」。
-        shop_ids = _shop_ids_from_claims(claims)
+        shop_ids = _shop_ids_from_claims(
+            claims, shop_directory=self._shop_directory, b_user_id=subject.b_user_id
+        )
         return ScopeContext.build(
             caller=subject,
             subject=subject,
@@ -290,6 +313,12 @@ class CompanyTokenCallerResolver:
                 retryable=True,
             )
 
+        if self.settings.signature_key:
+            # 本地校验模式（A2 / #448）：按 HS256 验签后**直接从令牌读声明**，不调用任何上游。
+            # ⚠️ 这条模式把「令牌有效」的断言从公司那一跳搬到了本进程，因此它的前提是**签名密钥
+            # 本身是秘密**。密钥是配置项（``AIOPS_GATEWAY_COMPANY_JWT_KEY``），不进仓库、不进日志。
+            return _claims_from_signed_jwt(token, self.settings.signature_key)
+
         payload = request_json(
             RequestSpec(
                 url=self.settings.url,
@@ -321,6 +350,67 @@ class CompanyTokenCallerResolver:
         if _envelope_refused(payload):
             raise CallerAuthError("company token rejected", code=CALLER_AUTH_INVALID)
         return payload
+
+
+def _claims_from_signed_jwt(token: str, key: str) -> Mapping[str, Any]:
+    """本地按 HS256 校验公司 JWT 并取回声明（A2 / #448 的第二条通道）。
+
+    与远端 ``check_token`` 的差别**只在「谁断言令牌有效」**：这里由本进程用共享密钥验签，
+    其余字段解读完全共用（``_subject_from_claims`` / ``_shop_ids_from_claims``）。
+
+    **必须验签，不能只解 base64**：不验签的话任何人都能自造一份 ``id`` 声明，等于把身份交给
+    调用方自报 —— 与 ADR-0009 那条「不得由请求体推导身份」直接冲突。
+
+    失败一律 fail closed：结构不是三段、``alg`` 不是 HS256、签名不符、``exp`` 已过，
+    四种都拒。``alg`` 必须**显式等于 HS256**，不接受 ``none``，也不按令牌自报的算法选实现
+    （那正是 JWT 算法混淆的入口）。
+    """
+    parts = token.split(".")
+    if len(parts) != 3:
+        raise CallerAuthError("company token is not a JWT", code=CALLER_AUTH_INVALID)
+    header_b64, payload_b64, signature_b64 = parts
+    try:
+        header = json.loads(_b64url_decode(header_b64))
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise CallerAuthError("company token header is invalid", code=CALLER_AUTH_INVALID) from exc
+    if not isinstance(header, Mapping) or header.get("alg") != "HS256":
+        raise CallerAuthError("company token algorithm is not accepted", code=CALLER_AUTH_INVALID)
+    try:
+        expected = hmac.new(
+            key.encode("utf-8"),
+            f"{header_b64}.{payload_b64}".encode("ascii"),
+            hashlib.sha256,
+        ).digest()
+        signature = _b64url_decode_bytes(signature_b64)
+    except (ValueError, UnicodeEncodeError) as exc:
+        raise CallerAuthError("company token signature is invalid", code=CALLER_AUTH_INVALID) from exc
+    if not hmac.compare_digest(expected, signature):
+        raise CallerAuthError("company token signature does not verify", code=CALLER_AUTH_INVALID)
+    try:
+        payload = json.loads(_b64url_decode(payload_b64))
+    except (ValueError, json.JSONDecodeError) as exc:
+        raise CallerAuthError("company token payload is invalid", code=CALLER_AUTH_INVALID) from exc
+    if not isinstance(payload, Mapping):
+        raise CallerAuthError("company token payload is invalid", code=CALLER_AUTH_INVALID)
+    # 过期由本进程判：本地模式没有上游替我们判。``exp`` 缺失即拒（不接受不过期的令牌）。
+    expires_at = payload.get("exp")
+    if not isinstance(expires_at, (int, float)) or isinstance(expires_at, bool):
+        raise CallerAuthError("company token has no expiry", code=CALLER_AUTH_INVALID)
+    if expires_at <= datetime.now(UTC).timestamp():
+        raise CallerAuthError("company token is expired", code=CALLER_AUTH_INVALID)
+    return payload
+
+
+def _b64url_decode(value: str) -> str:
+    return _b64url_decode_bytes(value).decode("utf-8")
+
+
+def _b64url_decode_bytes(value: str) -> bytes:
+    padded = value + "=" * (-len(value) % 4)
+    try:
+        return base64.urlsafe_b64decode(padded)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError("not base64url") from exc
 
 
 def _envelope_refused(claims: Mapping[str, Any]) -> bool:
@@ -370,7 +460,9 @@ def _subject_from_claims(claims: Mapping[str, Any]) -> SubjectRecord:
     )
 
 
-def _shop_ids_from_claims(claims: Mapping[str, Any]) -> tuple[str, ...]:
+def _shop_ids_from_claims(
+    claims: Mapping[str, Any], *, shop_directory: ShopDirectory | None = None, b_user_id: str = ""
+) -> tuple[str, ...]:
     """令牌里的店铺集合（``shop_ids``），形状不符即拒绝。
 
     口径有意不对称，因为两者的信息来源不同：**键缺失**说明这条通道根本没给这个答案
@@ -379,7 +471,13 @@ def _shop_ids_from_claims(claims: Mapping[str, Any]) -> tuple[str, ...]:
     范围**并记一条 ``no_shop_binding``（下游据此拒绝，见 §5 的站点绑定缺口）。
     """
     if "shop_ids" not in claims:
-        raise CallerAuthError("company token is missing its shop ids", code=CALLER_AUTH_INVALID)
+        # ⚠️ 生产令牌实测**不带** ``shop_ids``（keys: exp/id/organ_id/role_ids/shop_id/system_id/
+        # tenant_id/type/username），``shop_id`` 对代理商账号还是空串 —— 也就是说「店铺集合」这条
+        # 声明在令牌里**常常没有**。此时退回公司权威的店铺归属查询（``/shopuser/getShops``，
+        # 与后端 ``@ShopDataScope`` 的隔离集合同源）。这不是放宽：拿不到归属仍然得到空集合。
+        if shop_directory is None or not b_user_id:
+            raise CallerAuthError("company token is missing its shop ids", code=CALLER_AUTH_INVALID)
+        return shop_directory.shop_ids_by_b_user_id(b_user_id)
     value = claims.get("shop_ids")
     if value is None:
         return ()
