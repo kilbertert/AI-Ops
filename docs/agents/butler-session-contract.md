@@ -4,9 +4,10 @@
 > **状态**：2026-09-29 实测（41 生产 + 两个前端产物逆向 + UPMS 只读查询）。
 > **先读**：[company-platform-integration-baseline.md](company-platform-integration-baseline.md)
 > —— 本文每一个「缺口」都是那条根因（AI-Ops 不在公司网关之后）的投影。
-> **一句话**：AI-Ops 只认**共享 Redis 里的 `app:3rd_session:<...>` 会话**；
+> **一句话**：**今天** AI-Ops 只认**共享 Redis 里的 `app:3rd_session:<...>` 会话**；
 > 管家端 App 登录走的是 OAuth2 令牌，**不写这个会话**，所以前端直接把管家端 token
-> 塞进 `third-session` 必然 `401`。**令牌本身是对的**，缺的是把它翻译成身份的那一跳。
+> 塞进 `third-session` 必然 `401`。**令牌本身是对的**，缺的是把它翻译成身份的那一跳
+> —— 该跳的定稿形状见 §3 与 [ADR-0009](../adr/0009-operator-identity-via-company-oauth2-token.md)。
 
 ---
 
@@ -52,20 +53,29 @@
 client-type / third-session / X-Business-Entry`，其中 `X-Business-Entry` **硬编码 `"consumer"`**。
 管家端产物里 `X-Business-Entry` **零命中** —— 管家端入口目前没有一个管家端页面在调。
 
-## 3. 交付形状：不是「BFF 签发 thirdSession」，是**挂到网关之后**
+## 3. 交付形状：AI-Ops 认公司 OAuth2 令牌（分两段）
 
-此前一轮曾把交付形状定为「由 BFF 签发一条 `app:3rd_session:*`」。**该结论已被取代**，
-理由是它继续在给一个已经存在的注入路径造第二条：
+曾有两版被取代的结论，先记下来免得再绕回去：
 
-- `cloud-gateway` 的 **`AdminProxyHeadFilter`** 就是为管家端设计的：读
-  `client-type: admin` + `Authorization: Bearer <OAuth2>`，用令牌值查
-  `base_oauth:access:<token>`，从中注入 **`user-id` / `admin-id` / `tenant-id` / `site`**。
-  管家端发的 `client-type` 实测正是 `admin`，凭据正是 OAuth2 令牌 —— 两边本来就是配套的。
-- 所以正确形状是让 **AI-Ops 收到公司网关注入的身份头**（D3/D5），
-  而不是让 BFF 再签发一次会话、或让 AI-Ops 自己去读共享 Redis。
+- ✗ 「由 BFF 签发一条 `app:3rd_session:*`」 —— 在给一个**已经存在**的注入路径造第二条，
+  等于把根因（AI-Ops 站错位置）固化下来。
+- ✗ 「等 AI-Ops 挪到 `cloud-gateway` 之后再说」 —— 拓扑变更带 exposure 决定与
+  35 条路由的爆炸半径，把它当成前置会让管家端一直不可用。
 
-**落地前需要业务侧提供**（见基线文档 §4）：`/oauth/check_token` 用的 `client_id` /
-`client_secret` 由谁建、以及前端实际请求的域名是否已经过网关。
+**定稿形状**（ADR-0009）：
+
+- **AI-Ops 自己调公司权威的 `/auth/oauth/check_token`** 校验管家端令牌，
+  身份与数据范围**直接取自令牌**（`id` = B 端主体、`user_id` = C 端、`tenant_id`、
+  `shop_ids`）。校验落在公司自己那一跳，不自己验签。
+- **不再调** `/user/inside/byUserId`（C→B）与 `/shopuser/getShops`（店铺集合）——
+  令牌已经带着答案；少两跳，其中一条还是**实测无鉴权**的内部端点。
+- **入站信任 = 来源 + 共享密钥**（由网关那一跳注入，前端不持有）；
+  两条信任模式按来源密钥分派。
+- **分两段**：第一段只做 AI-Ops 侧，**合入即生效但默认关闭**（三个配置键全空 =
+  与今天逐字一致）；第二段做网络/路由/Nginx，先 41。
+
+**第二段落地前需要业务侧提供**（基线文档 §4）：`/oauth/check_token` 用的
+`client_id` / `client_secret` 由谁建，以及前端实际请求的域名是否已经过网关。
 
 **对前端的两条硬性要求**：
 

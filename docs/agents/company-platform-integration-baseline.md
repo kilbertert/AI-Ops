@@ -137,23 +137,53 @@ return point.proceed();
 
 ---
 
-## 3. 本轮的决定（六条）
+## 3. 决定（2026-09-29 定稿，含本轮 Q1–Q18 的结论）
 
 | # | 决定 |
 |---|---|
-| D1 | **管家端走公司 OAuth2 令牌**：AI-Ops 扩展成能收下管家端的 OAuth2 令牌并解析成身份（客户端的 `app:3rd_session:` 直读路径保留，作为既有链路的兼容）。 |
-| D2 | **复用公司已有的令牌校验能力**，不自己实现验签或复制密钥。 |
-| D3 | **目标态：AI-Ops 挂在 `cloud-gateway` 之后**（§1.3）。本轮不动部署拓扑，只记录理由与现状。 |
-| D4 | **客户端侧直读 `app:3rd_session:` 记为已知偏离**：它其实是在重复公司网关的工作；与 ADR-0008 同源，收敛方向一致。 |
-| D5 | **身份与数据范围的一切来源改走公司体系**：后端 `admin-id`/`user-id`、`/shopuser/getShops`、`@ShopDataScope` 的隔离语义**逐条对齐**，不再另立一套。 |
-| D6 | 旧 PR #439 关闭；其事实并入本文与交接文档，重开一次 PR。 |
+| D1 | **管家端走公司 OAuth2 令牌**：AI-Ops 新增 `CompanyTokenCallerResolver`，适配**公司** `/auth/oauth/check_token`（校验落在公司权威那一跳）。客户端的 `app:3rd_session:` 直读路径**本轮保留**，标注为待收敛。 |
+| D2 | **复用公司已有的令牌校验能力**（Q7=a）：调 `/oauth/check_token`，不自实现验签、不复制密钥、不靠「能以令牌读到对象」当校验。 |
+| D3 | **目标态：AI-Ops 挂在 `cloud-gateway` 之后**（§1.3）。拓扑变更**本轮不做**，作为独立第二段（见 D7、§3.2）。 |
+| D4 | **客户端侧直读 `app:3rd_session:` 记为已知偏离**（Q9=A）：与 ADR-0008 同源，收敛方向一致；客户端改 BFF（ADR-0004 落地）**另立后续票**。 |
+| D5 | **身份与数据范围的一切来源改走公司体系**（Q8=A、Q12=A）：B 端主体直接取令牌里的 `id`；数据范围用令牌里的 `shop_ids` 算站点集合；**不再**调 `/shopuser/getShops`、**不再**调 `/user/inside/*`（后者实测**无鉴权**，见 §2.3）。 |
+| D6 | 旧 PR #439 关闭；其事实并入本文与交接文档，重开一次 PR（#440）。 |
+| D7 | **两段实施**（Q15=A）：第一段 = AI-Ops 侧（新解析器 + 来源密钥校验 + 分派 + 单测 + 文档），**合入即生效但默认关闭**；第二段 = 网络/路由/Nginx，独立一票、逐环境做、先 41。 |
+| D8 | **入站信任用「来源 + 共享密钥」**（Q17=B）：不靠 `bind 172.18.0.1` 的网络隔离（那条 `docker-compose-release_default` 上还有公司 35 个容器，等于把信任降到多租网络）；来源密钥由**网关那一跳**注入，前端不持有。 |
+| D9 | **两条信任模式按来源密钥分派**（Q18=a）：带且验过来源密钥 → 走 OAuth2 解析器；否则走既有链。判据是调用方**无法自报**的东西。 |
+
+### 3.1 第一段（AI-Ops 侧）的交付边界
+
+- `CompanyTokenCallerResolver`：⚠️ 公司 `/oauth/check_token` 返回的是**裸映射**
+  （`additionalInformation` 全量：`id`/`user_id`/`tenant_id`/`type`/`shop_id`/`shop_ids`/`tenant_ids`），
+  **没有** `active`/`aud`/`scope` —— 与 RFC 7662 不同，因此仓里现有的
+  `IntrospectionCallerResolver` **不能复用**，要另写一层适配；失败一律 fail closed。
+- 数据范围按 D5；`platform_entry` 仍决定 consumer/operator 分流（#436 那条**不许动**）。
+- 来源密钥：**未配置则该路径整体不启用**（fail closed，不是放行）。
+- 分派接进 `_caller_resolver`，**排在既有两个 resolver 之后**，不改变它们的选择结果。
+- 三个新配置键（check_token URL / client 凭据 / 来源密钥）**全部缺省为空 ⇒ 行为与今天逐字一致**，
+  这是「先合不启用」的机制保证。
+- 授权相关的分支做**变异测试**（改坏一处必须转红）。
+
+### 3.2 第二段（网络与路由）的顺序
+
+1. 拿到 `sys_oauth_client` 那一行（业务侧依赖，**唯一的跨团队前置**）。
+2. AI-Ops 绑定变更 —— **一条 exposure 决定**，按 D8 必须同时具备来源密钥才允许。
+3. Nacos `dynamic_routes` 新增一条（`DynamicRouteInit` 带监听器，**无需重启**；现有
+   35 条里 `das-front` 是「HTTP 上游 + 两个 HeadFilter + RewritePath」的现成样板）。
+   **爆炸半径是那 35 条路由**，由 infra owner 执行，先在 41 单独做。
+4. Nginx `/v1/` 改向网关，并由它**覆盖式注入**来源密钥（不是新增一个能被客户端伪造的头）。
+5. 端到端验收：管家端真实登录 → 动作列表 2 条 → 订单检测（站点外 `404` / 站点内 `202`）；
+   客户端**回归**通过（证明未被波及）。
+
+**为什么必须先做第一段**：第二段每一件都有外部依赖与 exposure 决定；第一段的代码在被启用前
+对现网零影响，但「AI-Ops 认公司令牌」这一层**不管将来挂不挂网关都需要**。
 
 ---
 
 ## 4. 未决（不猜，逐条列出）
 
 1. **`/oauth/check_token` 的客户端凭据**：`sys_oauth_client` 里给 AI-Ops 用哪一个
-   `client_id` / `client_secret`；谁去建这一行。需要业务侧提供。
+   `client_id` / `client_secret`；谁去建这一行。需要业务侧提供。**（第二段的唯一前置阻塞）**
 2. **管家端请求在 41 上是否已经过 `cloud-gateway`**：浏览器直连 `api.mall.qushiyun.com/v1/*`
    时不经过；但若走的是别的域名（例如从网关进来的域），结论会不同。**需要前端确认它实际请求的域名**。
 3. **`client-type` 的对齐**：公司后端用 `admin` / `supply-admin` / `tenant-app` 决定是否隔离；
@@ -164,6 +194,20 @@ return point.proceed();
 5. **客户端 App 里 AI-Ops 请求的鉴权方式**：`aiPackage` 只发 `third-session`、不带
    `Authorization`；Nginx 补的是 **AI-Ops 自己的服务令牌**，不是公司令牌。
    这条「客户端不经过公司网关」的现状是否需要一并收敛，取决于 D3 的落地方式。
+
+---
+
+## 4.1 未决三条的「不是未决」
+
+- **令牌里的 `shop_ids` 能拿到吗** —— 能，但**不是**从网关注入头拿：`AdminProxyHeadFilter`
+  只注入 `user-id`/`admin-id`/`tenant-id`/`site`，**不转发** `shop_ids`。
+  所以 D5 的「用令牌里的 `shop_ids`」隐含**AI-Ops 自己调 `check_token`**（D2），
+  二者是同一件事的两面。（实测：41 本机 Redis **没有** `base_oauth:*`，
+  令牌存储不在 AI-Ops 够得到的那台上，因此不能靠「自己读 Redis」省掉这一跳。）
+- **`/oauth/check_token` 是否可达** —— 可达：`http://192.168.1.44:30899/auth/oauth/check_token`，
+  无客户端凭据时返回 `Full authentication is required to access this resource`。
+- **网关路由好不好加** —— 好加，且**无需重启**（Nacos `dataId=dynamic_routes` + `DynamicRouteInit` 监听器）；
+  难的是前置（凭据）与爆炸半径（35 条），不在配置本身。
 
 ---
 

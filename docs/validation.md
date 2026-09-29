@@ -4471,6 +4471,52 @@ OP-ACCEPT-POS-01..04 与本文末节，不用消费者会话或人造夹具冒�
   （产物里两种都在，另见 `H5`/`H5-WX`/`APP`/`"1"`）。
 - 客户端聊天页的 AI-Ops 请求是否也需一并收敛（它不带 `Authorization`，
   靠 Nginx 注入 AI-Ops 自己的服务令牌）。
+
+---
+
+## 管家端身份方案定稿：18 轮 grill 的结论（2026-09-29）
+
+**结论**：管家端身份改由**公司签发的 OAuth2 访问令牌**断言，校验走公司权威的
+`/auth/oauth/check_token`；分两段实施（AI-Ops 侧先合不启用，网络/路由第二段）。
+决策已固化为 [`docs/adr/0009`](../adr/0009-operator-identity-via-company-oauth2-token.md)，
+事实与完整推理在
+[`docs/agents/company-platform-integration-baseline.md`](../agents/company-platform-integration-baseline.md)。
+
+### 关键结论（Q1–Q18 收敛）
+
+| 项 | 结论 | 依据 |
+|---|---|---|
+| 令牌校验 | 调 `/auth/oauth/check_token`（公司 `RemoteTokenServices` 同一入口） | 实测可达；无凭据返回 `Full authentication is required` |
+| B 端主体 | 直接取令牌里的 `id`，**不再**调 `/user/inside/byUserId` | 令牌已带 `id`/`user_id`/`tenant_id`/`type` |
+| 数据范围 | 用令牌里的 `shop_ids`，**不再**调 `/shopuser/getShops` | 令牌已带；少一跳且少一个**无鉴权**端点依赖 |
+| 入站信任 | **来源 + 共享密钥**（网关那一跳注入，前端不持有） | 该 docker0 桥上还有公司 35 个容器，纯网络隔离 = 多租网络信任 |
+| 分派 | 按**来源密钥**分派（调用方无法自报） | 避免「先试哪个解析器」本身成为攻击面 |
+| 客户端链路 | 本轮**不动**，标注待收敛；改 BFF 另立票 | 现役链路，一次只动一条 |
+| 拓扑 | 目标态是挂 `cloud-gateway` 之后；**本轮不动** | 入口变更需独立验收与回滚 |
+
+### 两个必须先说清的前提
+
+1. **网关注入头里没有 `shop_ids`**（`AdminProxyHeadFilter` 只注入
+   `user-id`/`admin-id`/`tenant-id`/`site`）。因此「用令牌里的 `shop_ids`」隐含
+   **AI-Ops 自己调 `check_token`**，二者是同一件事的两面。
+2. **41 本机 Redis 没有令牌存储**：`base_oauth:*` 在 db0–db15 全部 0
+   （该实例 69120 键，前缀为 `i18n`/`app`/`charging`/`MALL`…）。
+   令牌存储不在 AI-Ops 够得到的那台上，所以不能靠「自己读 Redis」省掉校验这一跳。
+
+### 形状差异（实现时的第一坑）
+
+公司 `/oauth/check_token` 返回的是**裸映射**（`additionalInformation` 全量），
+**没有** RFC 7662 的 `active` / `aud` / `scope`。仓里既有的 `IntrospectionCallerResolver`
+**不能复用**，必须另写适配层。两处「都是 OAuth2 自省」是巧合，不是可复用。
+
+### 未验证（如实列出，勿当成已验）
+
+- `/oauth/check_token` 的 `client_id`/`client_secret` 归属与创建方（业务侧）。
+- 管家端在 41 上实际请求的域名是否已经过 `cloud-gateway`（前端）。
+- 管家端真实请求带的 `client-type` 是 `admin` 还是 `tenant-app`。
+- `shop_ids` 快照 vs `/shopuser/getShops` 实时的 staleness 窗口（= 令牌有效期）
+  在真实运营场景下是否可接受 —— **未被实测**，是按低频变更判断接受的代价。
+- 第一段代码尚未实现（本轮只落决策与文档）。
 ---
 
 ## #442 共享范围解析的重构（2026-09-29）
