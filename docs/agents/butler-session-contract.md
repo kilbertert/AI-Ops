@@ -91,7 +91,7 @@ client-type / third-session / X-Business-Entry`，其中 `X-Business-Entry` **�
   注意公司后端**是读 `client-type` 的**（`ShopIdInterceptor.judge()` 要求它属于
   `admin`/`supply-admin`/`tenant-app` 才做数据隔离）——两边对同一个头有不同依赖，
   这是 §1 根因的直接后果。
-- **`409 PLATFORM_AMBIGUOUS` 在公网可达**：管家端账号 `15800395017` 同时有客户端 id
+- **`409 PLATFORM_AMBIGUOUS` 在公网可达**：运营商的验收账号同时有客户端 id
   与管家端角色（`client_type` = `admin` / `tenant-app`），于是两个平台都可用；
   此时**不带 `X-Business-Entry`** 会被平台决策判为歧义并拒绝
   （`business entry is required to select a platform`）。管家端必须显式带这个头。
@@ -100,17 +100,17 @@ client-type / third-session / X-Business-Entry`，其中 `X-Business-Entry` **�
 
 ## 5. 站点绑定缺口：当前 41 上管家端订单范围是空的
 
-`15800395017`（运营商，租户 `2019588094906601472`）实测：
+一个运营商账号（租户 `<该租户>`）实测：
 
 ```
-GET /user/inside/byUserId/2043951654176063490
-  → data = { id: 2043992894120771586, userId: 2043951654176063490,
-             type: "5", username: "15800395017", shopId: null, shopIds: [] }   # 唯一 B 端主体 ✓
+GET /user/inside/byUserId/<C 端用户 id>
+  → data = { id: <B 端主体 id>, userId: <C 端用户 id>,
+             type: "5", username: "<运营商账号>", shopId: null, shopIds: [] }   # 唯一 B 端主体 ✓
 
-GET /user/inside/byId/2043992894120771586        # 注意与上面同值，不是笔误
-  → data = { id: 2043992894120771586, shopId: null, shopIds: [] }
+GET /user/inside/byId/<B 端主体 id>        # 注意与上面同值，不是笔误
+  → data = { id: <B 端主体 id>, shopId: null, shopIds: [] }
 
-GET /shopuser/getShops?userId=2043992894120771586
+GET /shopuser/getShops?userId=<B 端主体 id>
   → {"code":0,"data":[]}                                                        # 没有绑定任何店铺 ✗
 ```
 
@@ -121,8 +121,8 @@ fail closed**（空集合不得被改写成「不限制」），不是故障：*
 **归属**：运营商账号的店铺绑定由业务侧补登记（已确认）。在补上之前，即使身份打通，
 管家端「订单检测」对这类账号仍然是「订单不存在或无权查看」。
 
-对照组：租户 `1942105476598861824` 的运营商账号 `13333102001` 在 UPMS 里同样唯一
-且带管家端角色（B 端 id `1980205180737404929`、`type=5`），但 Redis 里**没有它的会话**
+对照组：另一租户的一个运营商账号在 UPMS 里同样唯一
+且带管家端角色（`type=5`），但 Redis 里**没有它的会话**
 （今天没登录过），因此连「拿它验收」都做不到。
 
 ## 6. 对 2026-09-28 那条验收结论的更正

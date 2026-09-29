@@ -4429,7 +4429,7 @@ OP-ACCEPT-POS-01..04 与本文末节，不用消费者会话或人造夹具冒�
 
 1. **拓扑**：`api.mall.qushiyun.com` 的 Nginx 里，`/v1/` 直接 `proxy_pass 127.0.0.1:8788`；
    而公司服务走另一条 `location ~* ^/(...|upms|mall|mallapi|...)` → `upstream back_server`
-   → **`192.168.1.44:30899`（即 `cloud-gateway`）**。**两条互不相交，`/v1/` 在前。**
+   → **`<公司网关>`（即 `cloud-gateway`）**。**两条互不相交，`/v1/` 在前。**
 2. **公司网关本来就有注入路径**：`ApiProxyHeadFilter`（`client-type` ∈ `ma|h5|app` +
    `third-session` → 查 `app:3rd_session:<值>` → 注入 `user-id`/`uid`/`tenant-id`/`site`）；
    `AdminProxyHeadFilter`（`client-type == admin` + `Authorization` → 查
@@ -4437,7 +4437,7 @@ OP-ACCEPT-POS-01..04 与本文末节，不用消费者会话或人造夹具冒�
    **管家端发的正是 `client-type: admin` + OAuth2 令牌** —— 两边本来就配套。
 3. **令牌体系**：`cloud-auth` 是 Spring Security OAuth2 传统栈 + `RedisTokenStore`，
    令牌不透明；资源服务器用 `RemoteTokenServices` 调 `/oauth/check_token`
-   （实测 `http://192.168.1.44:30899/auth/oauth/check_token` 可达）。
+   （实测 `<公司网关>/auth/oauth/check_token` 可达）。
 4. **数据范围同源**：`ShopIdInterceptor` 的隔离集合来自 `/shopuser/getShops`
    （与 #426 使用的同一条链），但**它的生效条件是 `client-type ∈ {admin, supply-admin, tenant-app}`**
    —— 公司后端是读这个头的，AI-Ops 不读。

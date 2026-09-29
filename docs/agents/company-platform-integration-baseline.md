@@ -43,7 +43,7 @@ location ^~ /v1/ {                       # ← AI-Ops 走这条
 }
 
 location ~* ^/(erp|qm|das|dis|...|upms|mall|mallapi|...)  {  # ← 公司服务走这条
-    proxy_pass http://back_server;        # upstream 指向 192.168.1.44:30899（cloud-gateway）
+    proxy_pass http://back_server;        # upstream 指向 <公司网关>（cloud-gateway）
 }
 ```
 
@@ -89,7 +89,7 @@ location ~* ^/(erp|qm|das|dis|...|upms|mall|mallapi|...)  {  # ← 公司服务�
   token enhancement**（不带身份），用户令牌才把身份写进 `additionalInformation`：
   `id` / `user_id` / `type` / `tenant_id` / `system_id` / `shop_id` / `tenant_ids` / `shop_ids`。
 - 校验：资源服务器用 `RemoteTokenServices` 调 **`/oauth/check_token`**（实测可达：
-  `http://192.168.1.44:30899/auth/oauth/check_token`，无凭据时返回
+  `<公司网关>/auth/oauth/check_token`，无凭据时返回
   `Full authentication is required to access this resource`）。
 
 ### 2.2 数据范围：`@ShopDataScope` + `ShopIdInterceptor`，**还是那一条链**
@@ -148,7 +148,7 @@ return point.proceed();
 | D5 | **身份与数据范围的一切来源改走公司体系**（Q8=A、Q12=A）：B 端主体直接取令牌里的 `id`；数据范围用令牌里的 `shop_ids` 算站点集合；**不再**调 `/shopuser/getShops`、**不再**调 `/user/inside/*`（后者实测**无鉴权**，见 §2.3）。 |
 | D6 | 旧 PR #439 关闭；其事实并入本文与交接文档，重开一次 PR（#440）。 |
 | D7 | **两段实施**（Q15=A）：第一段 = AI-Ops 侧（新解析器 + 来源密钥校验 + 分派 + 单测 + 文档），**合入即生效但默认关闭**；第二段 = 网络/路由/Nginx，独立一票、逐环境做、先 41。 |
-| D8 | **入站信任用「来源 + 共享密钥」**（Q17=B）：不靠 `bind 172.18.0.1` 的网络隔离（那条 `docker-compose-release_default` 上还有公司 35 个容器，等于把信任降到多租网络）；来源密钥由**网关那一跳**注入，前端不持有。 |
+| D8 | **入站信任用「来源 + 共享密钥」**（Q17=B）：不靠「绑定容器网可达地址」的网络隔离（网关容器所在的那条网桥上还有公司数十个服务的容器，等于把信任降到多租网络）；来源密钥由**网关那一跳**注入，前端不持有。 |
 | D9 | **两条信任模式按来源密钥分派**（Q18=a）：带且验过来源密钥 → 走 OAuth2 解析器；否则走既有链。判据是调用方**无法自报**的东西。 |
 
 ### 3.1 第一段（AI-Ops 侧）的交付边界
@@ -204,7 +204,7 @@ return point.proceed();
   所以 D5 的「用令牌里的 `shop_ids`」隐含**AI-Ops 自己调 `check_token`**（D2），
   二者是同一件事的两面。（实测：41 本机 Redis **没有** `base_oauth:*`，
   令牌存储不在 AI-Ops 够得到的那台上，因此不能靠「自己读 Redis」省掉这一跳。）
-- **`/oauth/check_token` 是否可达** —— 可达：`http://192.168.1.44:30899/auth/oauth/check_token`，
+- **`/oauth/check_token` 是否可达** —— 可达：`<公司网关>/auth/oauth/check_token`，
   无客户端凭据时返回 `Full authentication is required to access this resource`。
 - **网关路由好不好加** —— 好加，且**无需重启**（Nacos `dataId=dynamic_routes` + `DynamicRouteInit` 监听器）；
   难的是前置（凭据）与爆炸半径（35 条），不在配置本身。
