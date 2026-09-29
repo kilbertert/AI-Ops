@@ -171,15 +171,23 @@ ssh aiops-41 'curl -sS -m 8 -X POST \
 
 # ③ 读 client 行（只读；确认 secret 是不是字面量）。走 §0 环境事实里那条业务库连接，
 #    不要假定 41 上有 mysql CLI。
-ssh aiops-41 'runuser -u aiops41 -- /opt/aiops-41/.venv/bin/python - <<PY
+#
+#    ⚠️ 两条纪律（2026-09-29 评审）：
+#    · 口令要从现场受控来源**显式传进去**，不要依赖别的片段遗留的 shell 变量 ——
+#      每条 ssh 起的是独立远端 shell，`PW` 不会自动在。
+#    · 这一步只要「secret 是不是等于 id」这一个事实，因此**只打印长度与是否相等**，
+#      不打印明文。即使今天的值是公开字面量，轮换之后同一条命令就会把新口令刷到终端
+#      和 shell 历史里。要看明文是**一次显式的、被记录的决定**，不是默认行为。
+DBPW="<现场从受控来源取得，不写进任何文件>"
+ssh aiops-41 "runuser -u aiops41 -- env DBPW='$DBPW' /opt/aiops-41/.venv/bin/python - <<PY
 import os, pymysql
-c = pymysql.connect(host="192.168.1.45", port=3306, user="mall",
-                    password=os.environ["PW"], database="qumall_upms")
+c = pymysql.connect(host='192.168.1.45', port=3306, user='mall',
+                    password=os.environ['DBPW'], database='qumall_upms')
 with c.cursor() as cur:
-    cur.execute("SELECT client_id, client_secret FROM sys_oauth_client")
-    for row in cur.fetchall():
-        print(row)
-PY'
+    cur.execute('SELECT client_id, client_secret FROM sys_oauth_client')
+    for client_id, secret in cur.fetchall():
+        print(client_id, 'secret_len=%d' % len(secret or ''), 'secret_equals_id=%s' % (secret == client_id))
+PY"
 
 # ④ 另一条入口（对照：它被图形验证码拦住）
 ssh aiops-41 'curl -sS -m 8 -X POST \

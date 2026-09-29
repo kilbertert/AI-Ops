@@ -4581,6 +4581,8 @@ OP-ACCEPT-POS-01..04 与本文末节，不用消费者会话或人造夹具冒�
 **库侧事实**：`qumall_upms.sys_oauth_client` 现有 7 行，其 `client_secret` **等于各自的
 `client_id`**（`admin`/`admin`、`app`/`app`、…）。⇒「取到凭据」这件事不是权限问题 ——
 **它是公开值**，因此它不构成一条信任边界。
+（记录口径：这里是**结论**，不是说这些值可以随处分发 —— 复现步骤只比较「长度 + 是否等于 id」，
+不打印明文，见 runbook §1.6；把公开值配进任何服务端仍然是错的方向。）
 
 **源码侧候选解释（未证实，且只在上面那个未定分支下成立）**：`cloud-auth/WebSecurityConfigurer.passwordEncoder()` 返回
 `PasswordEncoderFactories.createDelegatingPasswordEncoder()`（要求 `{bcrypt}` 之类前缀），
