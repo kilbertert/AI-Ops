@@ -228,11 +228,24 @@ class CompanyTokenCallerResolver:
             raise CallerAuthError("invalid access token", code=CALLER_AUTH_INVALID)
         claims = self._claims(token)
         subject = _subject_from_claims(claims)
-        # 形状校验先于入口分流：``shop_ids`` 的形状是上游契约的属性，与本次请求从哪个入口进来
-        # 无关。一条形状不符的响应不该因为入口恰好是 consumer 就被当成「能用」。
-        shop_ids = _shop_ids_from_claims(
-            claims, shop_directory=self._shop_directory, b_user_id=subject.b_user_id
-        )
+        # ⚠️ **非管家端入口不解析店铺集合**（2026-09-29 修正）：``_data_scope`` 对 consumer/缺失/
+        # 非法入口一律返回最窄的 ``self``，因此这里算出来的店铺集合**随后会被丢弃**。而生产令牌
+        # 实测**不带 ``shop_ids``**，缺键会走回退去查公司权威的 ``/shopuser/getShops`` —— 于是
+        # 消费者请求会为了一个用不上的答案去打一次公司内部端点，且在该端点不可用时把
+        # **不相关的故障**引进消费者路径（503），并与 ADR-0009 决定 2「不再调 /shopuser/getShops」
+        # 直接矛盾。
+        #
+        # 因此把入口判定提到解析**之前**：只有管家端入口才需要店铺集合。判据与 ``_data_scope``
+        # 共用 ``is_operator_entry``（两份实现漂移的方向就是放宽）。
+        #
+        # 形状校验仍在解析内部保留（``_shop_ids_from_claims``）：管家端入口上一条形状不符的
+        # ``shop_ids`` 照旧被拒 —— 那一条与入口无关，只是现在只在需要它的入口上发生。
+        if is_operator_entry(platform_entry):
+            shop_ids = _shop_ids_from_claims(
+                claims, shop_directory=self._shop_directory, b_user_id=subject.b_user_id
+            )
+        else:
+            shop_ids = ()
         return ScopeContext.build(
             caller=subject,
             subject=subject,
