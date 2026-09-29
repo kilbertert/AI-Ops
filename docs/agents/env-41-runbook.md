@@ -246,8 +246,12 @@ here`）。按入口分流必须用 `map`。41 上已有现成用法：`0.websoc
 
 ### 实测定稿的配置（离线起真进程验证过三种情形）
 
+⚠️ **下面这一段要拆成两处放**：三条 `map` 在 **`http` 上下文**（vhost 文件顶部即可，
+因为 vhost 是 `include .../vhost/nginx/*.conf` 进来的、本身就在 `http` 里）；而 `location` 必须
+放进**已有的 `server` 块**（替换现行那个 `location ^~ /v1/`）。**不要**把整块照抄到文件顶部。
+
 ```nginx
-# 放在 vhost 文件顶部（http 上下文内）
+# ① 以下三条 map 放 vhost 文件顶部（http 上下文内）
 map $http_x_business_entry $aiops_entry {
     default        "consumer";
     # ⚠️ 必须容忍两侧空白：上游 `is_operator_entry` 是 `(v or "").strip().lower()`，nginx 不 strip。
@@ -275,6 +279,7 @@ map $aiops_entry $aiops_srckey {
     "operator" $aiops_source_key_injected;     # 同样来自那份 root-only 文件（见下）
 }
 
+# ② 以下 location 替换 server 块里现有的 location ^~ /v1/
 location ^~ /v1/ {
     include /etc/aiops-41/nginx-aiops-service-token.conf;   # 现在它只 set 变量
     proxy_pass http://127.0.0.1:8788;
@@ -341,7 +346,12 @@ nginx 在**同一个 location 内**对同名头**不做覆盖**，而是**两条
 - [ ] **签名密钥已换成真正的秘密**（否则本地验签放行任何人自签的令牌，见基线 §3.3）
 - [ ] `gateway.env` 三键：`COMPANY_JWT_KEY` + `COMPANY_SOURCE_KEY` 有值，`COMPANY_CHECK_TOKEN_URL` **留空**（与本地模式互斥，两者都配 = 启动失败）
 - [ ] `nginx -t` 通过；原 vhost 文件已备份（`cp -a ... .bak-<用途>-<时间戳>`）
-- [ ] 回滚路径：恢复备份 + `nginx -s reload`；AI-Ops 侧清空那三个键即回到「新链路整体不启用」
+- [ ] 回滚路径：**要恢复两处**，不是一处 ——
+      ① `cp -a` 恢复 vhost 备份；② **恢复 `nginx-aiops-service-token.conf`**（它被改成了「只设变量」，
+      旧 vhost 依赖它注入 `proxy_set_header Authorization`，只恢复 vhost 会让**客户端请求全部 401**）；
+      然后 `nginx -s reload`。AI-Ops 侧清空那三个键即回到「新链路整体不启用」。
+- [ ] 因此**改前必须备份两份**：vhost **与** `nginx-aiops-service-token.conf`（后者也要 `cp -a` 留档，
+      否则回滚时只能凭记忆改回 set-header）
 - [ ] 验收含**客户端回归**（无入口头那条必须仍是服务令牌）
 
 ## 2. 部署（源码同步到 41）
