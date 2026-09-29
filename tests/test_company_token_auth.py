@@ -1080,3 +1080,73 @@ def test_settings_reject_a_short_signature_key() -> None:
     """短到可枚举的签名密钥等于没有这道门。"""
     with pytest.raises(ValueError):
         CompanyTokenSettings(signature_key="short").validate()
+
+
+# --- consumer 入口不得触发店铺归属查询（2026-09-29 评审发现）-------------------
+#
+# 生产令牌**不带 `shop_ids`**（实测），缺键会走回退去查公司权威的 `/shopuser/getShops`。
+# 而 `_data_scope` 对非 operator 入口一律返回 `self`，那个答案随后被**丢弃** —— 也就是
+# 消费者请求会为一个用不上的答案去打一次公司内部端点，并在它不可用时把不相关的故障引进来。
+#
+# 这组用例的判据是**查询次数**（不是返回值）：返回值两种实现下都一样，只有「有没有真的去查」
+# 能区分它们。这正是 #444 那条「只测带密钥方向」的同形教训 —— 开关的另一侧必须各测一次。
+
+
+class _CountingDirectory:
+    """数「查了几次」的店铺归属替身；不换判定，只记 I/O。"""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def shop_ids_by_b_user_id(self, _b_user_id: str) -> tuple[str, ...]:
+        self.calls += 1
+        return ("SHOP-1",)
+
+
+def _resolver_with_counter() -> tuple[CompanyTokenCallerResolver, _CountingDirectory]:
+    directory = _CountingDirectory()
+    resolver = CompanyTokenCallerResolver(
+        _local_settings(),
+        mysql_settings(),
+        scope_mapper_factory=lambda _s: _Mapper(),
+        shop_directory=directory,
+    )
+    return resolver, directory
+
+
+def _no_shop_ids_claims() -> dict[str, Any]:
+    """真实生产令牌的形状：**没有 `shop_ids` 键**（实测 payload 9 键，不含它）。"""
+    claims = _valid_claims()
+    claims.pop("shop_ids", None)
+    return claims
+
+
+@pytest.mark.parametrize("entry", ["consumer", None, "not-an-entry"])
+def test_a_non_operator_entry_never_queries_the_shop_directory(entry: str | None) -> None:
+    """非管家端入口：范围是 `self`，**一次店铺查询都不该发生**。"""
+    resolver, directory = _resolver_with_counter()
+    context = resolver.resolve(
+        _jwt(_no_shop_ids_claims()), required_scope="aiops:orders:read", platform_entry=entry
+    )
+    assert context.data_scope.type == SCOPE_TYPE_SELF
+    assert directory.calls == 0, f"入口 {entry!r} 触发了 {directory.calls} 次店铺归属查询"
+
+
+def test_the_operator_entry_does_query_the_shop_directory_when_shop_ids_are_absent() -> None:
+    """管家端入口：缺 `shop_ids` 时**必须**查（否则拿不到范围）—— 与上一条互为对照。"""
+    resolver, directory = _resolver_with_counter()
+    context = resolver.resolve(
+        _jwt(_no_shop_ids_claims()), required_scope="aiops:orders:read", platform_entry="operator"
+    )
+    assert context.data_scope.type == SCOPE_TYPE_ORGAN
+    assert directory.calls == 1
+
+
+def test_the_operator_entry_does_not_query_when_the_token_carries_shop_ids() -> None:
+    """令牌自带 `shop_ids` 时管家端也不查 —— 归属查询是**回退**，不是必经。"""
+    resolver, directory = _resolver_with_counter()
+    context = resolver.resolve(
+        _jwt(_valid_claims()), required_scope="aiops:orders:read", platform_entry="operator"
+    )
+    assert context.data_scope.type == SCOPE_TYPE_ORGAN
+    assert directory.calls == 0
