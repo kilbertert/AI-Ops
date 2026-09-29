@@ -259,32 +259,28 @@ map $http_x_business_entry $aiops_entry {
 }
 # ⚠️ 服务令牌**不进 vhost**：今天它单独放在 /etc/aiops-41/nginx-aiops-service-token.conf
 # （0600 root，location 内 include）。搬进 vhost 会把明文复制到第二处，且会随备份再复制一次。
-# 保持原样：该文件只提供 `proxy_set_header Authorization "Bearer <令牌>"` 这一行，
-# 本方案下它只在 consumer 分支需要 —— 因此**保留 include**，再用 map 覆盖 operator 分支：
+# ⇒ 做法：把那份文件从「直接 proxy_set_header Authorization」改成「只设一个变量」
+#    （set $aiops_service_authorization "Bearer <令牌>";），由下面的 map 引用。
 map $aiops_entry $aiops_auth {
-    default    $aiops_service_authorization;  # 由 include 的文件设置（见下）
-    "operator" $http_authorization;           # 管家端：透传用户 JWT
+    default    $aiops_service_authorization;   # ← 变量来自那个 0600 文件
+    "operator" $http_authorization;            # 管家端：透传用户 JWT
 }
-
-# 在 location 内、`map` 之后（保持原 include 不动）：
-#   include /etc/aiops-41/nginx-aiops-service-token.conf;
-# 该文件改为：set $aiops_service_authorization "Bearer <AI-Ops 服务令牌>";
-# 或保持 `proxy_set_header Authorization ...` 原样 —— 后者会被下面的 map 版覆盖，
-# 因此**推荐前者**：把它从「直接 set header」改成「设一个变量」，令牌仍在原文件里。
 map $aiops_entry $aiops_srckey {
     default    "";
-    "operator" "<来源密钥>";                # 只有管家端带，由这一跳覆盖式注入
+    "operator" "<来源密钥>";                    # 只由这一跳注入，前端不持有
 }
 
 location ^~ /v1/ {
+    include /etc/aiops-41/nginx-aiops-service-token.conf;   # 现在它只 set 变量
     proxy_pass http://127.0.0.1:8788;
     proxy_http_version 1.1;
-    proxy_set_header Authorization        $aiops_auth;
-    proxy_set_header X-AIOps-Source-Key   $aiops_srckey;
-    proxy_set_header X-Business-Entry     $aiops_entry;
-    proxy_set_header X-Third-Session      $http_third_session;
-    proxy_set_header Range                $http_range;
-    proxy_set_header Host                 $host;
+    # ⚠️ **本 location 内只允许这一条 Authorization 的 proxy_set_header**（见下）
+    proxy_set_header Authorization      $aiops_auth;
+    proxy_set_header X-AIOps-Source-Key $aiops_srckey;
+    proxy_set_header X-Business-Entry   $aiops_entry;
+    proxy_set_header X-Third-Session    $http_third_session;
+    proxy_set_header Range              $http_range;
+    proxy_set_header Host               $host;
     proxy_connect_timeout 15s;
     proxy_send_timeout  120s;
     proxy_read_timeout  120s;
@@ -292,34 +288,25 @@ location ^~ /v1/ {
 }
 ```
 
-> 与现行配置的差异只有三行：原来的 `include nginx-aiops-service-token.conf`（注入备份地址）
-> 被 `map` 取代；`set $aiops_business_entry` + `if` 那两行被 `map $aiops_entry` 取代。
+### 🔴 为什么「两条同名 `proxy_set_header`」是一个静默用错凭据的坑（实测）
 
-### ⚠️ 这一跳**不是**身份边界，别把它当成一个
+nginx 在**同一个 location 内**对同名头**不做覆盖**，而是**两条都发给上游**，顺序按指令出现顺序。
+于是上游收到**两个 `Authorization` 头**；而 AI-Ops 侧（Starlette `Headers.get`）**取第一个**。
 
-`X-Business-Entry` 是**调用方自报**的（这一条从 #423 起就是已知边界）。因此按上面的 `map`：
+实测（真 nginx + 真上游回显 + Starlette 复现）：
 
-> **任何人只要发 `X-Business-Entry: operator`，就会拿到来源密钥。**
+| location 内写法 | 上游收到 | AI-Ops 实际读到 |
+|---|---|---|
+| `include`（含 set-header）+ 一条 `map` 版 set-header | `['Bearer SERVICE-TOKEN', 'Bearer USER.JWT']`（两条） | **`SERVICE-TOKEN`** ⇒ 管家端被当成客户端 |
+| 同上、两条顺序调换 | `['Bearer USER.JWT', 'Bearer SERVICE-TOKEN']` | `USER.JWT`（碰巧对） |
+| **只留一条 `set-header`**（令牌由 `include` 设的**变量**提供） | `['Bearer USER.JWT']`（一条） | 正确 |
 
-这不是本方案引入的**新**漏洞，但它把「来源密钥 = 被可信那一跳注入」这条假设**削弱到只剩
-「网关与 AI-Ops 之间」**：密钥证明的是「这一跳经过了 nginx」，**不是**「调用方是管家端」。
+**结论：保留 `include` 原样（它仍然 `proxy_set_header`）+ 再加一条 map 版 set-header，是错的** ——
+它会静默地让管家端请求用服务令牌。正确形状只有一种：**让 `include` 只设变量，location 内
+只留一条 Authorization 的 set-header**。
 
-**真正的身份边界在 AI-Ops 内部**，由两件事共同顶着：
-1. **令牌必须验签通过**（HS256 + 共享密钥）—— 自报入口**换不来**一个有效签名；
-2. **入口与令牌租户/角色的一致性**由平台决策收口（`PlatformIdentityResolver`：非法入口 403、
-   双平台身份且不带入口 409、管家端主体不唯一 409）。
-
-**因此有一条硬前提**：**签名密钥必须是真正的秘密**。密钥若是公开值，自报入口 + 自签令牌 =
-完整的越权链 —— 这也是检查单第一条写它的原因。
-
-### 实测证据（上游回显三个头）
-
-| 请求 | 上游实际收到 |
-|---|---|
-| `X-Business-Entry: operator` + 用户 JWT + 会话 | `AUTH=Bearer USER.JWT` / `SRC=SRC-KEY-VALUE` / `ENTRY=operator` |
-| **不带入口头** + 会话 | `AUTH=Bearer SERVICE-TOKEN` / `SRC=空` / `ENTRY=consumer` ⇒ **客户端逐字不变** |
-| `X-Business-Entry: OPERATOR`（大写） | 被 `~*` 规范化成 `operator`，同走管家端分支 |
-| `X-Business-Entry: operator-admin`（非法非空） | **原样透传** `ENTRY=operator-admin` + **服务令牌**（不带来源密钥）⇒ 上游按 `403 PLATFORM_FORBIDDEN` 拒，**不再静默落进客户端域** |
+⚠️ 这个错误**不报错、不警告**，现象是「管家端请求被当成客户端」（拿到 `consumer` 内容域与本人
+订单范围），排查时很难定位到「多了一个头」。
 
 ### 里程碑记录
 
