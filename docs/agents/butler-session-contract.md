@@ -24,17 +24,22 @@
 | 发的 `third-session` | 结果 |
 |---|---|
 | 管家端登录取到的 OAuth2 `access_token` | **`401 INVALID_ACCESS_TOKEN`** |
-| 裸的会话 uuid（不带 `app:3rd_session:` 前缀） | **`401 INVALID_ACCESS_TOKEN`** |
+| 一条**真实存在**的 C 端 thirdSession（裸 uuid） | **`200`**，`platform=consumer` |
+| 一条**不存在或已过期**的 uuid | **`401 INVALID_ACCESS_TOKEN`** |
 | 完整的 Redis 键名 `app:3rd_session:<uuid>` | **`401 INVALID_ACCESS_TOKEN`** |
-| 一条**真实存在**的 C 端 thirdSession | **`200`**，`platform=consumer` |
 
 判据在 `RedisThirdSessionResolver.resolve`：
 
 1. `Authorization: Bearer` 必须等于服务端配置的服务令牌（**由 41 的 Nginx 注入**，
    前端不持有）；
-2. `third-session` 的值是一个 **Redis 键的组成部分** —— 服务端自己拼
+2. `third-session` 的值是**裸的会话值**（不带前缀）—— 服务端自己拼
    `AIOPS_GATEWAY_THIRD_SESSION_KEY_PREFIX + <值>` 去 `GET`。
-   所以传令牌、传裸 uuid、传整键名，三种都不命中。
+   因此**传整键名会 401**（前缀被拼了两遍），**传 OAuth2 令牌也会 401**
+   （那是另一个命名空间的值，不是这个键的一部分）。
+
+> ⚠️ **裸 uuid 本身不是拒绝理由**：它正是服务端要的值，键存在就 `200`。
+> 「裸 uuid ⇒ `401`」这个说法只对**不存在或已过期**的那种成立 —— 而 OAuth2 令牌
+> 属于前者（值对不上任何键），不是后者。
 
 ## 2. 两个 App 各用各的凭据
 
