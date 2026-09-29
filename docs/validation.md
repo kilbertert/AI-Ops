@@ -4416,6 +4416,109 @@ OP-ACCEPT-POS-01..04 与本文末节，不用消费者会话或人造夹具冒�
 
 ---
 
+---
+
+## 立项根基复核：AI-Ops 不在公司网关之后（2026-09-29）
+
+**触发**：管家端鉴权 `401` 的排查，追问「是不是从一开始就重复造轮子、与公司体系脱节」。
+
+**结论**：是。根因不是某一处凭据接错，而是 **AI-Ops 站错了位置** ——
+41 上 `location ^~ /v1/` **写在公司网关前面**，于是 AI-Ops 从未经过 `cloud-gateway`。
+
+### 证据（41 实测 + 公司源码）
+
+1. **拓扑**：`api.mall.qushiyun.com` 的 Nginx 里，`/v1/` 直接 `proxy_pass 127.0.0.1:8788`；
+   而公司服务走另一条 `location ~* ^/(...|upms|mall|mallapi|...)` → `upstream back_server`
+   → **`<公司网关>`（即 `cloud-gateway`）**。**两条互不相交，`/v1/` 在前。**
+2. **公司网关本来就有注入路径**：`ApiProxyHeadFilter`（`client-type` ∈ `ma|h5|app` +
+   `third-session` → 查 `app:3rd_session:<值>` → 注入 `user-id`/`uid`/`tenant-id`/`site`）；
+   `AdminProxyHeadFilter`（`client-type == admin` + `Authorization` → 查
+   `base_oauth:access:<token>` → 注入 `user-id`/`admin-id`/`tenant-id`/`site`）。
+   **管家端发的正是 `client-type: admin` + OAuth2 令牌** —— 两边本来就配套。
+3. **令牌体系**：`cloud-auth` 是 Spring Security OAuth2 传统栈 + `RedisTokenStore`，
+   令牌不透明；资源服务器用 `RemoteTokenServices` 调 `/oauth/check_token`
+   （实测 `<公司网关>/auth/oauth/check_token` 可达）。
+4. **数据范围同源**：`ShopIdInterceptor` 的隔离集合来自 `/shopuser/getShops`
+   （与 #426 使用的同一条链），但**它的生效条件是 `client-type ∈ {admin, supply-admin, tenant-app}`**
+   —— 公司后端是读这个头的，AI-Ops 不读。
+5. **⚠️ `@Inside` 实际无鉴权**：`BaseSecurityInsideAspect` 的校验整段被注释掉，
+   且 `PermitAllUrlProperties` 把 `@Inside` 端点加入 `permitAll`。
+   即 `/user/inside/byId|byUserId`、`/user/ds` **不需要任何凭据**，只要网络可达。
+   ⇒ `AIOPS_UPMS_INSIDE_TOKEN` 不是门槛；**管家端授权链的信任边界是网络可达性**。
+
+### 三次同形问题，同一根因
+
+| 被当成的问题 | 实际是 |
+|---|---|
+| 用不上公司 OAuth2 令牌 → 自建共享 Redis 直读（ADR-0008 偏离） | 不在网关之后，网关本会把令牌翻成身份头 |
+| 三套 `client-type` 互不相交 | 两侧各发各的，中间没有翻译那一跳 |
+| 管家端 OAuth2 令牌 `401` | 令牌是对的，AI-Ops 缺「把它翻成身份」的那一层 |
+
+### 处置
+
+- 新增 `docs/agents/company-platform-integration-baseline.md`（立项根基：现状、证据、
+  六条决定、五条未决）。
+- `ADR-0003` 的两处 README 引用、`CONTEXT.md` 的「身份委托句柄」词条、`ADR-0004` 各加
+  「未实现 / 目标形态」标注 —— 这是 ADR-0008 早已要求却一直没做到的
+  （「任何提到会话身份的地方，要么写明偏离，要么不声称来源」）。
+- **本轮不改部署拓扑**（那是入口变更，需独立验收与回滚）；目标态已入档。
+
+### 仍未验证（如实列出）
+
+- `/oauth/check_token` 的 `client_id` / `client_secret` 归属与创建方（需业务侧）。
+- 管家端在 41 上实际请求的域名是否已经过 `cloud-gateway`（需前端确认）。
+- 管家端真实请求带的 `client-type` 到底是 `admin` 还是 `tenant-app`
+  （产物里两种都在，另见 `H5`/`H5-WX`/`APP`/`"1"`）。
+- 客户端聊天页的 AI-Ops 请求是否也需一并收敛（它不带 `Authorization`，
+  靠 Nginx 注入 AI-Ops 自己的服务令牌）。
+
+---
+
+## 管家端身份方案定稿：18 轮 grill 的结论（2026-09-29）
+
+**结论**：管家端身份改由**公司签发的 OAuth2 访问令牌**断言，校验走公司权威的
+`/auth/oauth/check_token`；分两段实施（AI-Ops 侧先合不启用，网络/路由第二段）。
+决策已固化为 [`docs/adr/0009`](adr/0009-operator-identity-via-company-oauth2-token.md)，
+事实与完整推理在
+[`docs/agents/company-platform-integration-baseline.md`](agents/company-platform-integration-baseline.md)。
+
+### 关键结论（Q1–Q18 收敛）
+
+| 项 | 结论 | 依据 |
+|---|---|---|
+| 令牌校验 | 调 `/auth/oauth/check_token`（公司 `RemoteTokenServices` 同一入口） | 实测可达；无凭据返回 `Full authentication is required` |
+| B 端主体 | 直接取令牌里的 `id`，**不再**调 `/user/inside/byUserId` | 令牌已带 `id`/`user_id`/`tenant_id`/`type` |
+| 数据范围 | 用令牌里的 `shop_ids`，**不再**调 `/shopuser/getShops` | 令牌已带；少一跳且少一个**无鉴权**端点依赖 |
+| 入站信任 | **来源 + 共享密钥**（网关那一跳注入，前端不持有） | 该 docker0 桥上还有公司 35 个容器，纯网络隔离 = 多租网络信任 |
+| 分派 | 按**来源密钥**分派（调用方无法自报） | 避免「先试哪个解析器」本身成为攻击面 |
+| 客户端链路 | 本轮**不动**，标注待收敛；改 BFF 另立票 | 现役链路，一次只动一条 |
+| 拓扑 | 目标态是挂 `cloud-gateway` 之后；**本轮不动** | 入口变更需独立验收与回滚 |
+
+### 两个必须先说清的前提
+
+1. **网关注入头里没有 `shop_ids`**（`AdminProxyHeadFilter` 只注入
+   `user-id`/`admin-id`/`tenant-id`/`site`）。因此「用令牌里的 `shop_ids`」隐含
+   **AI-Ops 自己调 `check_token`**，二者是同一件事的两面。
+2. **41 本机 Redis 没有令牌存储**：`base_oauth:*` 在 db0–db15 全部 0
+   （该实例 69120 键，前缀为 `i18n`/`app`/`charging`/`MALL`…）。
+   令牌存储不在 AI-Ops 够得到的那台上，所以不能靠「自己读 Redis」省掉校验这一跳。
+
+### 形状差异（实现时的第一坑）
+
+公司 `/oauth/check_token` 返回的是**裸映射**（`additionalInformation` 全量），
+**没有** RFC 7662 的 `active` / `aud` / `scope`。仓里既有的 `IntrospectionCallerResolver`
+**不能复用**，必须另写适配层。两处「都是 OAuth2 自省」是巧合，不是可复用。
+
+### 未验证（如实列出，勿当成已验）
+
+- `/oauth/check_token` 的 `client_id`/`client_secret` 归属与创建方（业务侧）。
+- 管家端在 41 上实际请求的域名是否已经过 `cloud-gateway`（前端）。
+- 管家端真实请求带的 `client-type` 是 `admin` 还是 `tenant-app`。
+- `shop_ids` 快照 vs `/shopuser/getShops` 实时的 staleness 窗口（= 令牌有效期）
+  在真实运营场景下是否可接受 —— **未被实测**，是按低频变更判断接受的代价。
+- 第一段代码尚未实现（本轮只落决策与文档）。
+---
+
 ## #442 共享范围解析的重构（2026-09-29）
 
 **结论**：把「店铺集合 → 运营商站点范围」提取为共享入口（#441 的 prefactor），

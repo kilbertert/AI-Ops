@@ -1,25 +1,35 @@
 # 管家端（operator）入口：前端联调交接说明
 
 > **读者**：前端组 / BFF。
-> **状态**：后端已上线并完成 41 公网验收（2026-09-28，main `056873d` / 41 运行 `0.1.0+67954175fca2`）。
+> **状态**：后端已上线（main `20db41a` / 41 运行 `0.1.0+67954175fca2`）。
 > **一句话**：管家端与客户端**共用同一个助手入口**，靠请求头 `X-Business-Entry: operator`
 > 切换；入口动作已发布，两个按钮点下去的行为见 §3。
 > **先读**：[client-type-vs-business-entry.md](client-type-vs-business-entry.md) ——
 > 为什么**不是**用 `client-type` 区分。
+>
+> ⚠️ **2026-09-29 更正**：本文此前写的「已在 41 端到端验收通过」**范围过宽**。
+> 验收用的是**代造的会话行**，不是一次管家端真实登录；管家端 App 的登录链路
+> （`/upms/token/login` → OAuth2 令牌 → **不产生 thirdSession**）当时**没有被走到**，
+> 前端照现在的方式发会 **`401`**。根因、凭据从哪来、以及该账号**没有任何店铺绑定**
+> 的缺口，见 [butler-session-contract.md](butler-session-contract.md) 与
+> [company-platform-integration-baseline.md](company-platform-integration-baseline.md)。
 
 ---
 
 ## 1. 与客户端唯一的差别：一个请求头
 
 ```http
-# BFF → AI-Ops（服务身份由 BFF 注入，不下发前端）
+# BFF → AI-Ops（服务身份与用户会话都由 BFF 注入，不下发前端）
 Authorization: Bearer <aiops-service-token>
 third-session: <当前用户的有效 thirdSession>   # 全小写连字符
-tenant-id: <会话所属租户>
 X-Business-Entry: operator                      # ← 管家端就是这一行
 Content-Type: application/json
 ```
 
+- **`third-session` 是「共享 Redis 里 `app:3rd_session:<值>` 的那个值」，不是随便一个
+  token。** 服务端自己拼前缀去查，所以传 OAuth2 令牌、传裸 uuid、传整键名都会
+  `401`。管家端登录**不产生**这个值 —— 见 [butler-session-contract.md](butler-session-contract.md) §3。
+- **`tenant-id` 请求头不会被 AI-Ops 使用**：租户取自会话载荷的 `tenantId`。
 - 值只有两个：`consumer` / `operator`。**不带就按 `consumer` 处理**（41 的 Nginx 兜底）。
 - 大小写与空格会被规范化，`Operator` / `" operator "` 等价于 `operator`。
 - 非法值（如 `operator-admin`）会被拒：`403 PLATFORM_FORBIDDEN`。
@@ -27,8 +37,9 @@ Content-Type: application/json
   **漏传不会报错** —— 41 的 Nginx 会补成 `consumer`（见 [另一篇](client-type-vs-business-entry.md) §4），
   请求直接落进**客户端**内容域与**本人**订单范围。也就是说**漏传是静默走错域**，
   前端拿不到任何错误信号。只有**显式传了非法值**（如 `operator-admin`）才会 `403`。
-- `409 PLATFORM_AMBIGUOUS` 有**两种**来源，**公网都能遇到**：
-  1. **没有带头、且平台无法自行二选一**（直连网关时才会走到这条）；
+- `409 PLATFORM_AMBIGUOUS` 有**两种**来源：
+  1. **没有带头、且平台无法自行二选一** —— 只有**直连网关**（绕过 41 的 Nginx）才走到
+     这条；经公网入口时 Nginx 已把缺省补成 `consumer`，走不到这里；
   2. **带了 `operator`、但该账号在同租户内关联了多个不同的管家主体**
      （`faq.py`：`len(subject_ids) != 1` → 409）。**这条经 41 公网也会出现**，
      Nginx 只补缺失的头，不会消解这种冲突。
@@ -191,12 +202,19 @@ POST /v1/assistant/questions
 - [ ] 客户案例：`retrieval_status=unavailable` 渲染成"暂不可用"，不写成"没有案例"。
 - [ ] 不要保存、打印或打包 AI-Ops 服务令牌（它只在 BFF 与 Nginx 之间）。
 - [ ] 不要试图用 `client-type` 切换入口（见[另一篇](client-type-vs-business-entry.md)）。
+- [ ] **先把「AI-Ops 收谁的身份」定下来**：见
+      [company-platform-integration-baseline.md](company-platform-integration-baseline.md) ——
+      现在的管家端 App 登录给不出 `third-session`，照现状接会 `401`。
 
 ## 6. 已知边界（后端如实告知）
 
 - **「客户案例」暂无知识库素材**，恒为 `unavailable`（§3.2）。素材由产品提供。
 - **入口头是调用方自报的**：41 的 Nginx 只做"没带就当 `consumer`"的兜底，
   不校验自报值。真实前端按入口发它即可；这不放大到"无范围"（管家端范围仍受运营商站点集合约束）。
-- **管家端 App 的真实登录链路未端到端验收**：本次验收用的是"恰好有 B 端账号的会话 +
-  显式 `operator` 头"，走的是**同一条生产判定路径**；差别只在"谁发那个头"。
-  前端接入后请复跑 §3 的两个场景各一次。
+- **管家端登录链路：不通，已定位**。管家端 App 走 `/upms/token/login` 的 OAuth2 令牌，
+  **不写** `app:3rd_session:*`，所以 AI-Ops 的会话解析必然拒绝（实测三种发法全 `401`）。
+  根因是 AI-Ops 不在公司网关之后，交付形状见
+  [company-platform-integration-baseline.md](company-platform-integration-baseline.md)。
+- **订单范围：当前为空（数据缺口）**。验收账号的
+  `/shopuser/getShops` 返回 `[]`，运营商站点集合为 Ø ⇒ 订单查询一律 `404`。
+  这是设计内的 fail closed，等业务侧补店铺绑定（butler-session-contract.md §5）。
