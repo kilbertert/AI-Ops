@@ -35,7 +35,9 @@ class _Resolver:
         token: str,
         *,
         required_scope: str,
+        third_session: str | None = None,
         platform_entry: str | None = None,
+        source_key: str | None = None,
     ) -> ScopeContext:
         if token == "orders-only":
             from aiops_diagnostics.caller_auth import CallerAuthError

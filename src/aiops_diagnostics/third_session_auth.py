@@ -154,7 +154,11 @@ class RedisThirdSessionResolver:
         required_scope: str,
         third_session: str | None = None,
         platform_entry: str | None = None,
+        source_key: str | None = None,
     ) -> ScopeContext:
+        # ``source_key`` 与本解析器无关：它决定的是「走哪条信任模式」，而走到这里说明分派已经
+        # 落在这条既有链上（没有密钥、密钥不对、或根本没配置门）。
+        del source_key
         if not secrets.compare_digest(token, self.settings.service_token):
             raise CallerAuthError("service authentication failed", code=CALLER_AUTH_INVALID)
         if not third_session or len(third_session) > 256 or any(c in third_session for c in "\r\n"):

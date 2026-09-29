@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import secrets
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -35,6 +36,34 @@ CALLER_AUTH_FORBIDDEN = "caller_auth.forbidden"
 CALLER_AUTH_UNAVAILABLE = "caller_auth.unavailable"
 CALLER_AUTH_CONFIG_MISSING = "caller_auth.config_missing"
 
+#: 入站来源密钥的请求头（#444 / ADR-0009 D8）。由**可信的那一跳**（未来是公司网关）覆盖式注入，
+#: 前端不持有 —— 因此它是**调用方自报不了**的判据，也是两条信任模式之间唯一的分派依据。
+#: 与 ``http_auth.INTERNAL_TOKEN_HEADER`` 同一条形状：AI-Ops 自己的入站秘密走独立的头，
+#: 不复用 ``Authorization``（那一个装的是被校验的凭据，不是「这一跳可信」的断言）。
+SOURCE_KEY_HEADER = "X-AIOps-Source-Key"
+
+
+def source_key_accepted(configured: str, presented: str | None) -> bool:
+    """来源密钥这道门：**未配置即不启用**，带且验过才认（#444 / ADR-0009 D9）。
+
+    三条判据各有理由，都不是「顺手写的比较」：
+
+    - ``configured`` 为空 ⇒ 一律 ``False``。这是 D8「未配置密钥时该路径整体不启用」的落点：
+      fail closed 指的是**新链路不参与**，而不是「没有密钥就放行」。
+    - ``presented`` 为空/缺失 ⇒ ``False``。不带这个头是**正常请求**（既有客户端与会话链
+      就是这样），必须继续按既有链处理，所以这里返回 ``False`` 而不是抛错。
+    - 比较走 ``hmac.compare_digest``：这道门对着可达的入口，逐字节比较会把「猜中几个字符」
+      暴露成可用的时间侧信道，使枚举密钥成为可能。编码成 ``bytes`` 再比较是因为
+      ``compare_digest`` 对含非 ASCII 的 ``str`` 会抛 ``TypeError`` —— 那会让一个畸形请求头
+      变成 500，等于把「拒绝」写成了「崩」。
+
+    这里**不做**任何规范化（不去空白、不折叠大小写、不剥前缀）：密钥是本侧生成的定长随机串，
+    任何「宽容比较」都只会缩短有效密钥空间。运维配置进来时已被 ``_env`` 去掉两侧空白。
+    """
+    if not configured or not presented:
+        return False
+    return secrets.compare_digest(configured.encode("utf-8"), presented.encode("utf-8"))
+
 
 class CallerAuthError(RuntimeError):
     def __init__(self, message: str, *, code: str, retryable: bool = False) -> None:
@@ -51,6 +80,7 @@ class CallerContextResolver(Protocol):
         required_scope: str,
         third_session: str | None = None,
         platform_entry: str | None = None,
+        source_key: str | None = None,
     ) -> ScopeContext: ...
 
 
@@ -97,11 +127,66 @@ class DisabledCallerResolver:
         required_scope: str,
         third_session: str | None = None,
         platform_entry: str | None = None,
+        source_key: str | None = None,
     ) -> ScopeContext:
-        del token, required_scope, third_session
+        del token, required_scope, third_session, platform_entry, source_key
         raise CallerAuthError(
             "standard access-token validation is not configured",
             code=CALLER_AUTH_CONFIG_MISSING,
+        )
+
+
+class SourceKeyCallerResolver:
+    """按**入站来源密钥**在两条信任模式之间分派（#444 / ADR-0009 D8–D9）。
+
+    同一个入口上并存两条凭据路径：既有链（会话 / introspection / UPMS）与新链（公司
+    OAuth2 令牌）。分派依据是**来源密钥**，而不是「令牌长什么样」或「试出来哪个解析器不报错」：
+
+    - 按令牌形态分派要靠试错，顺序错了就是**静默降级**（先问会话、被拒，再问令牌路径），
+      而两条路径的身份来源不同，降级的落点也就无法预期。
+    - 来源密钥是**调用方自报不了**的判据：它由可信的那一跳（未来是公司网关）覆盖式注入，
+      前端不持有，因此「带着正确密钥」等价于「这一跳被信任过」。
+
+    三条边界：
+
+    1. **未配置密钥时本类根本不构造**（见 ``gateway_api._caller_resolver``）—— 新链路整体不
+       参与，请求仍按既有链处理或拒绝。fail closed 指的是**门不开**，不是「没门就放行」。
+    2. **密钥验过才走新链，否则一律走既有链**，且既有链的输入（``third_session`` /
+       ``platform_entry``）原样透传 —— 分派只决定「谁来解析」，不改解析结果。
+    3. **带密钥的请求不再看 ``third_session``**：两条路径的凭据是两种东西（会话值 vs 公司令牌），
+       同时带齐也由密钥定夺，避免「同一个请求因为多带一个头而换了身份来源」。
+    """
+
+    def __init__(
+        self,
+        source_key: str,
+        company: CallerContextResolver,
+        fallback: CallerContextResolver,
+    ) -> None:
+        if not source_key:
+            raise ValueError("a source key is required to route between trust modes")
+        self._source_key = source_key
+        self._company = company
+        self._fallback = fallback
+
+    def resolve(
+        self,
+        token: str,
+        *,
+        required_scope: str,
+        third_session: str | None = None,
+        platform_entry: str | None = None,
+        source_key: str | None = None,
+    ) -> ScopeContext:
+        if source_key_accepted(self._source_key, source_key):
+            # 不传 ``third_session``：这条路径的凭据是公司令牌，会话值对它没有意义
+            # （``CompanyTokenCallerResolver`` 也是 ``del third_session``）。
+            return self._company.resolve(token, required_scope=required_scope, platform_entry=platform_entry)
+        return self._fallback.resolve(
+            token,
+            required_scope=required_scope,
+            third_session=third_session,
+            platform_entry=platform_entry,
         )
 
 
@@ -120,8 +205,9 @@ class UpmsCallerResolver:
         required_scope: str,
         third_session: str | None = None,
         platform_entry: str | None = None,
+        source_key: str | None = None,
     ) -> ScopeContext:
-        del third_session
+        del third_session, source_key
         try:
             context = self.resolver.resolve(ScopeRequest(credential=token))
         except ScopeError as exc:
@@ -144,8 +230,9 @@ class IntrospectionCallerResolver:
         required_scope: str,
         third_session: str | None = None,
         platform_entry: str | None = None,
+        source_key: str | None = None,
     ) -> ScopeContext:
-        del third_session
+        del third_session, source_key
         if not token or token.startswith("aops_"):
             raise CallerAuthError("invalid access token", code=CALLER_AUTH_INVALID)
         payload = self._introspect(token)

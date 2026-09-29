@@ -16,7 +16,9 @@ class _Resolver:
         token: str,
         *,
         required_scope: str,
+        third_session: str | None = None,
         platform_entry: str | None = None,
+        source_key: str | None = None,
     ) -> ScopeContext:
         subject = SubjectRecord(b_user_id=token, c_user_id=token, tenant_id="T-1")
         return ScopeContext.build(

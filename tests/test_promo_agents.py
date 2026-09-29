@@ -180,6 +180,7 @@ class _Caller:
         required_scope: str,
         third_session: str | None = None,
         platform_entry: str | None = None,
+        source_key: str | None = None,
     ) -> ScopeContext:
         del third_session
         if token == "narrow" and required_scope != "aiops:faq:read":

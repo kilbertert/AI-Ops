@@ -80,6 +80,20 @@ def test_env_example_keeps_the_company_token_path_off_by_default() -> None:
     assert "LEAVE ALL THREE EMPTY" in text
 
 
+def test_env_example_documents_the_company_source_key_gate() -> None:
+    """#444：来源密钥必须声明、缺省为空，且模板要说清它是「可信那一跳注入」而非前端持有。"""
+    text = _template()
+    active = _active_lines(text)
+
+    assert "AIOPS_GATEWAY_COMPANY_SOURCE_KEY=" in active
+    # 头名写在模板里：它是那条信任链的对外契约（网关注入方也要按这个名字发）。
+    assert "X-AIOps-Source-Key" in text
+    assert "LEAVE ALL THREE EMPTY" in text  # 上一条用例的机制保证仍成立
+    # fail closed 那句话被换行拆开，逐段断言（不把模板的行宽当成契约）。
+    assert "LEFT EMPTY, the" in text
+    assert "not built at all (fail closed, not a bypass)" in text
+
+
 def test_env_example_documents_dis_point_scope_boundary() -> None:
     text = _template()
 
