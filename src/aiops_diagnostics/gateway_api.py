@@ -40,6 +40,10 @@ from aiops_diagnostics.caller_auth import (
     UpmsCallerResolver,
 )
 from aiops_diagnostics.codex_runtime import AgentRuntimeError
+from aiops_diagnostics.company_token_auth import (
+    CompanyTokenCallerResolver,
+    CompanyTokenSettings,
+)
 from aiops_diagnostics.config import Settings
 from aiops_diagnostics.conversation_store import (
     ConversationBusy,
@@ -2258,9 +2262,36 @@ def _caller_resolver(settings: GatewayServerSettings) -> CallerContextResolver:
             )
         except (ValueError, OSError):
             return DisabledCallerResolver()
-    if not settings.introspection_url:
+    # UPMS 是「没配别的」时的默认实现，因此它必须让位给显式配置的令牌路径：否则
+    # ``AIOPS_GATEWAY_COMPANY_CHECK_TOKEN_URL`` 配了、而 introspection 没配（41 的现状）时，
+    # 这一级会先 return，新分支永远走不到。三个键全空时条件退化成原来的形式，选择结果逐字不变。
+    if not settings.introspection_url and not settings.company_check_token_url:
         try:
             return UpmsCallerResolver(Settings.from_config(settings.server_config_file))
+        except (ValueError, OSError):
+            return DisabledCallerResolver()
+    if settings.company_check_token_url:
+        # 管家端公司令牌路径（#443 / ADR-0009）。配置齐备才构造，三个键全空 ⇒ 与启用前逐字一致
+        # （这是「先合不启用」的机制保证，清空即回滚）。
+        #
+        # ⚠️ 两条必须记住的边界，否则会把本票读成「管家端已经能用」：
+        # ① **入口未装门**。来源密钥与按密钥分派是 #444；在那之前，任何一条走到本解析器的请求都
+        #    只是「带了公司令牌」，没有「来自网关那一跳」的判据。因此本票的启用前提是**网络层尚
+        #    未暴露这条路径**（第二段），而 41 现网配置下 `third_session_service_token` 有值且那
+        #    一级直接 return ⇒ 本分支在现网**不可达**。#444 必须把门放在**会话那一级之前**。
+        # ② 本分支只在 `company_check_token_url` 有值时生效，因此它位于 introspection 分支之前、
+        #    UPMS 兜底之前（见上面那一级条件）。三键全空时两个分支都不参与，选择结果不变。
+        #
+        # 半配置（只有 URL）不是静默禁用，而是启动失败：见 ``GatewayServerSettings.validate``。
+        try:
+            return CompanyTokenCallerResolver(
+                CompanyTokenSettings(
+                    url=settings.company_check_token_url,
+                    client_id=settings.company_token_client_id,
+                    client_secret=settings.company_token_client_secret,
+                ),
+                Settings.from_config(settings.server_config_file),
+            )
         except (ValueError, OSError):
             return DisabledCallerResolver()
     return IntrospectionCallerResolver(

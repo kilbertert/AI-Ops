@@ -33,6 +33,7 @@ from aiops_diagnostics.scope_context import (
     ScopeError,
     SubjectRecord,
     UpmsDirectory,
+    is_operator_entry,
 )
 from aiops_diagnostics.sources import SourceError, mysql_site_mapper
 
@@ -243,10 +244,10 @@ class RedisThirdSessionResolver:
         # 因此按入口分流：只有 ``operator`` 用运营商站点范围；其余（``consumer``、
         # 缺少入口、入口非法）一律保持 ``self``。**未知入口按最窄的 ``self`` 处理，
         # 不放宽** —— 非法入口随后由平台决策拒绝，范围在这里已经先收紧。
-        # 与 ``PlatformIdentityResolver`` 同一套规范化：它 ``strip().lower()`` 之后
-        # 才判管家入口，这里若用严格相等，``OPERATOR`` / `` operator `` 会被上游当成
-        # 管家入口、却被这里判为"未知"而回落 self —— 同站点他人订单因此 404。
-        if (platform_entry or "").strip().lower() != "operator":
+        # 判据本身在 ``is_operator_entry`` 里只有一份（规范化与
+        # ``PlatformIdentityResolver`` 同一套），令牌路径用的是同一个函数：两份实现一旦
+        # 漂移，漂移方向就是放宽。
+        if not is_operator_entry(platform_entry):
             return DataScope(type=SCOPE_TYPE_SELF)
 
         directory = self.operator_scope
