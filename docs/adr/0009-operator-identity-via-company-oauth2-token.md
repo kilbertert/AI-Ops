@@ -24,7 +24,9 @@ Status: Accepted
    `user_id` = C 端、`tenant_id`、`shop_ids`。
    **不再调** `/user/inside/byUserId`（C→B 补全）与 `/shopuser/getShops`（店铺集合）——
    令牌已经带着这两件事的答案。
-3. **入站信任 = 来源 + 共享密钥**：来源密钥由网关那一跳注入，**前端不持有**；
+3. **入站信任 = 来源 + 共享密钥**：来源密钥由网关那一跳注入，**前端不持有**（实现为请求头
+   `X-AIOps-Source-Key`，校验在 `caller_auth.SourceKeyCallerResolver`，**装在会话那一级之前**
+   —— 会话那一级会直接返回，门在它之后则现网不可达）；
    未配置密钥时该路径**整体不启用**（fail closed，不是放行）。
    两条信任模式按**来源密钥**分派（调用方无法自报）。
 4. **客户端的 `app:3rd_session:` 直读路径本轮保留**，标注为待收敛；
