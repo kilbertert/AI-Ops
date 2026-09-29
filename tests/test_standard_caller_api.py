@@ -25,7 +25,9 @@ class _Resolver:
         token: str,
         *,
         required_scope: str,
+        third_session: str | None = None,
         platform_entry: str | None = None,
+        source_key: str | None = None,
     ) -> ScopeContext:
         self.tokens.append(token)
         if isinstance(self.context, Exception):

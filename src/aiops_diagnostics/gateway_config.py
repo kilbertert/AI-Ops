@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -13,6 +13,11 @@ from aiops_diagnostics.platform_paths import config_root, data_root
 from aiops_diagnostics.private_files import PrivatePathError, validate_private_file
 
 SAFE_PROFILE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
+
+#: 入站来源密钥的最小长度（#444 / ADR-0009 D8）。它是**唯一**一道「请求来自那一次可信注入」
+#: 的判据，且对着公网可达的入口，因此短到可枚举就等于没有这道门。长度上限不设：密钥由本侧
+#: 生成，比下限长不构成风险。
+MIN_SOURCE_KEY_LENGTH = 16
 
 
 @dataclass(slots=True)
@@ -40,6 +45,11 @@ class GatewayServerSettings:
     company_check_token_url: str = ""
     company_token_client_id: str = ""
     company_token_client_secret: str = ""
+    #: 入站来源密钥（#444 / ADR-0009 D8）。由**可信的那一跳**注入，前端不持有；带且验过才走
+    #: 公司令牌路径，否则走既有链。**缺省为空 ⇒ 新链路整体不启用**（fail closed，不是放行）——
+    #: 与上面三键同一条「全空即与今天逐字一致」的机制保证，也是回滚路径。
+    #: 用 ``repr=False``：它与客户端密钥同性质，不得出现在任何 repr / 日志 / 审计摘要里。
+    company_source_key: str = field(repr=False, default="")
     kb_service_base_url: str = ""
     #: Routing decision source (#392). Empty base URL or key leaves routing on
     #: the previous behaviour; the dependency is optional by configuration.
@@ -101,6 +111,8 @@ class GatewayServerSettings:
             or _file_value(file_values, "AIOPS_GATEWAY_COMPANY_TOKEN_CLIENT_ID"),
             company_token_client_secret=_env("AIOPS_GATEWAY_COMPANY_TOKEN_CLIENT_SECRET")
             or _file_value(file_values, "AIOPS_GATEWAY_COMPANY_TOKEN_CLIENT_SECRET"),
+            company_source_key=_env("AIOPS_GATEWAY_COMPANY_SOURCE_KEY")
+            or _file_value(file_values, "AIOPS_GATEWAY_COMPANY_SOURCE_KEY"),
             kb_service_base_url=_env("AIOPS_GATEWAY_KB_SERVICE_BASE_URL")
             or _file_value(file_values, "AIOPS_GATEWAY_KB_SERVICE_BASE_URL"),
             kb_service_timeout_seconds=_env_float("AIOPS_GATEWAY_KB_SERVICE_TIMEOUT_SECONDS", 10.0),
@@ -141,6 +153,15 @@ class GatewayServerSettings:
             raise ValueError(
                 "AIOPS_GATEWAY_COMPANY_TOKEN_CLIENT_ID and _CLIENT_SECRET are required "
                 "when a company check_token URL is set"
+            )
+        # #444：来源密钥与校验入口是**同一条路径的两半**，半配置同样是启动失败。只配密钥会让
+        # 运维以为「门装好了、新链路在跑」，而实际上没有可路由的目标 —— 每一条带密钥的请求都会
+        # 静默落回既有链（对管家端令牌就是 401），与「没配密钥」在现象上不可区分。
+        if self.company_source_key and not self.company_check_token_url:
+            raise ValueError("AIOPS_GATEWAY_COMPANY_CHECK_TOKEN_URL is required when a source key is set")
+        if self.company_source_key and len(self.company_source_key) < MIN_SOURCE_KEY_LENGTH:
+            raise ValueError(
+                f"AIOPS_GATEWAY_COMPANY_SOURCE_KEY must be at least {MIN_SOURCE_KEY_LENGTH} characters"
             )
         if not 0.1 <= self.jev_timeout_seconds <= 120:
             raise ValueError("AIOPS_GATEWAY_JEV_TIMEOUT_SECONDS must be between 0.1 and 120")

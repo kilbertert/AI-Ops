@@ -166,9 +166,13 @@ class CompanyTokenCallerResolver:
         required_scope: str,
         third_session: str | None = None,
         platform_entry: str | None = None,
+        source_key: str | None = None,
     ) -> ScopeContext:
         # ``third_session`` 对本解析器无意义：走到这里说明凭据是公司令牌，不是共享会话值。
-        del third_session
+        # ``source_key`` 同样无意义：**校验在分派处**（``SourceKeyCallerResolver``），能进到本方法
+        # 说明门已经放行过。不在这里再验一次是有意的 —— 两处校验一旦漂移，漂移方向就是「其中一处
+        # 放行」，而这里没有配置可比（密钥在分派器的配置里，不在本解析器里）。
+        del third_session, source_key
         if not token or token.startswith("aops_"):
             raise CallerAuthError("invalid access token", code=CALLER_AUTH_INVALID)
         claims = self._claims(token)

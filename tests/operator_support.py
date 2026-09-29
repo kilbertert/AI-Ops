@@ -450,6 +450,7 @@ class Caller:
         required_scope: str,
         third_session: str | None = None,
         platform_entry: str | None = None,
+        source_key: str | None = None,
     ) -> ScopeContext:
         del token, third_session, required_scope
         self.last_platform_entry = platform_entry
@@ -488,19 +489,25 @@ def publish(manager: ShortcutManager, entries: tuple[str, ...]) -> None:
 def assistant_app(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    caller: Caller,
+    caller: Caller | None,
     connection: Connection,
     *,
     published_entries: tuple[str, ...] = ("operator",),
     runtime: Runtime | None = None,
     directory: Directory | None = None,
+    settings: GatewayServerSettings | None = None,
 ) -> tuple[TestClient, Runtime]:
     """助手入口应用：真实授权判定 + 真实范围下推 + 已发布的入口动作。
 
     ``directory`` 换平台角色：默认有管家端角色（双平台），传
     ``Directory(client_type=None)`` 得到仅有消费者平台的会话。
+
+    ``caller=None`` ⇒ **不注入替身**，由应用走真实的 ``_caller_resolver(settings)`` 配置链。
+    #444 的来源密钥门正是在那里装上的：注入替身会绕过整条配置链，于是「接线把 header 传到了门」
+    就没有人证明（改掉 wrapper 的 ``source_key=`` 传参，注入式用例照样全绿）。``settings`` 与它
+    配套使用（门要从配置里取密钥）；不传则仍是本模块生成的那份最小配置，与既有用例逐字一致。
     """
-    settings = gateway_settings(tmp_path)
+    settings = settings or gateway_settings(tmp_path)
     store = GatewayStore(settings.database_file)
     shortcuts = ShortcutManager(ShortcutStore(settings.database_file))
     publish(shortcuts, published_entries)

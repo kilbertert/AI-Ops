@@ -266,7 +266,7 @@ flowchart TB
 |---|---|
 | `scope_context.py` | 把一次运行的授权输入收敛为不可变 `ScopeContext`：调用者、目标主体、有效租户、业务数据范围。平台依赖经 `PlatformDirectory` 单一接缝接入。**解析器不持有任何数据源**，全部 fail closed |
 | `query_scope.py` | 把 `ScopeContext` 解析成可直接下推的不可变 `QueryScope`（tenant / site_ids / user_id），站点范围来自 UPMS 数据范围、Dis 点位归属，或运营商维度（B 端主体 → 店铺集合 → 站点归属，PRD #423） |
-| `caller_auth.py` | 调用者身份接缝：`CallerContextResolver`（UPMS / OAuth2 introspection / fail-closed 禁用）与 `OrderAuthorizer` |
+| `caller_auth.py` | 调用者身份接缝：`CallerContextResolver`（UPMS / OAuth2 introspection / fail-closed 禁用 / **来源密钥分派**）与 `OrderAuthorizer`。来源密钥（`X-AIOps-Source-Key`，由可信那一跳注入）决定走既有链还是公司令牌链；未配置即不启用（#444，ADR-0009 D8–D9） |
 | `third_session_auth.py` | C 端 `thirdSession` → `ScopeContext` 的 Redis 解析路径；身份同时带 C 端 id 与经既有 C→B 映射端点补全的 B 端 `sys_user.id`，解析不出唯一主体时记录可区分原因 |
 | `company_token_auth.py` | 管家端的**公司 OAuth2 令牌** → `ScopeContext`：校验落在公司权威的 `check_token`（不自验签、不复制密钥），身份与 `shop_ids` 取自令牌，站点范围经 `operator_site_scope_from_shops` 共用同一份规则。缺字段/形状不符/上游不可用一律 fail closed（#443，ADR-0009） |
 
@@ -379,7 +379,7 @@ flowchart TB
 
 | 接缝 | 协议 | 实现（按配置选择） |
 |---|---|---|
-| `CallerContextResolver` | `caller_auth.py` | `Disabled…`（fail closed 默认）/ `Upms…`（公司 Bearer）/ `Introspection…`（RFC 7662 令牌自省，强制 HTTPS 与 audience）/ `CompanyToken…`（`company_token_auth.py`，管家端公司 OAuth2 令牌；三个配置键全空时不构造） |
+| `CallerContextResolver` | `caller_auth.py` | `SourceKey…`（按来源密钥在两条信任模式间分派，**装在会话那一级之前**；未配置密钥时整层不构造）/ `Disabled…`（fail closed 默认）/ `Upms…`（公司 Bearer）/ `Introspection…`（RFC 7662 令牌自省，强制 HTTPS 与 audience）/ `CompanyToken…`（`company_token_auth.py`，管家端公司 OAuth2 令牌；缺来源密钥时不构造） |
 | `OrderAuthorizer` | `caller_auth.py` | `Disabled…` / `ScopedOrderAuthorizer` |
 | `PlatformDirectory` | `scope_context.py` | `UpmsDirectory` |
 | `SiteScopeMapper` / `DisDirectory` | `query_scope.py` | 静态映射 / `DisHttpDirectory` |
@@ -467,8 +467,8 @@ docs/                     架构、契约、ADR、运行手册（见第十节路
 AGENTS.md                 仓库级开发共识（中文文档、里程碑同步、业务边界）
 CONTEXT.md                领域词汇表（术语 + 应避免的同义词）
 SOP.md / 充电桩问题排查SOP.md   业务规则来源（后端行为的中文说明）
-acceptance.feature        Gherkin 可执行验收约束（30 Feature / 77 Rule / 206 Scenario）
-qa-plan.md                QA 用例（136 个用例 ID，含环境/前置/数据/动作/预期/清理）
+acceptance.feature        Gherkin 可执行验收约束（31 Feature / 80 Rule / 212 Scenario）
+qa-plan.md                QA 用例（158 个用例 ID，含环境/前置/数据/动作/预期/清理）
 ```
 
 > ⚠️ **`java/` 是待落地工件，不是本仓库构建产物。**

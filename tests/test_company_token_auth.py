@@ -28,9 +28,11 @@ from operator_support import (
     C_USER_ID,
     ORDER_INSIDE,
     ORDER_OUTSIDE,
+    SESSION_TOKEN,
     SITE_IN,
     Connection,
     assistant_app,
+    java_session,
     mysql_settings,
     order_queries,
 )
@@ -40,6 +42,7 @@ from aiops_diagnostics.caller_auth import (
     CALLER_AUTH_UNAVAILABLE,
     CallerAuthError,
     ScopedOrderAuthorizer,
+    SourceKeyCallerResolver,
 )
 from aiops_diagnostics.company_token_auth import (
     CompanyTokenCallerResolver,
@@ -533,9 +536,12 @@ COMPANY_KEYS: dict[str, Any] = {
     "company_token_client_secret": CLIENT_SECRET,
 }
 
+#: #444 的入站来源密钥。长度必须 ≥ ``MIN_SOURCE_KEY_LENGTH``（16），否则启动失败。
+SOURCE_KEY = "source-key-0123456789abcdef"
 
-def test_the_company_path_is_not_built_while_all_three_keys_are_empty(tmp_path: Path) -> None:
-    """全空 ⇒ 与启用前同型（UPMS 兜底），这是「先合不启用」的机制保证。"""
+
+def test_the_company_path_is_not_built_while_all_keys_are_empty(tmp_path: Path) -> None:
+    """全空 ⇒ 与启用前同型（UPMS 兜底），这是「先合不启用」的机制保证（#443/#444 同一条）。"""
     from aiops_diagnostics.caller_auth import UpmsCallerResolver
     from aiops_diagnostics.gateway_api import _caller_resolver
 
@@ -544,26 +550,40 @@ def test_the_company_path_is_not_built_while_all_three_keys_are_empty(tmp_path: 
     assert isinstance(_caller_resolver(settings), UpmsCallerResolver)
 
 
-def test_the_company_path_is_built_once_the_three_keys_are_set(tmp_path: Path) -> None:
+def test_the_company_path_is_not_built_without_the_source_key(tmp_path: Path) -> None:
+    """⭐ #444 的核心：**没有来源密钥，新链路整体不参与**，即使校验入口与凭据都配好了。
+
+    这条同时也是「门为什么必须在会话之前」的证据：``third_session_service_token`` 在这里
+    **没有**配置（41 之外的环境），而一旦它配置上，落在下面的会话那一级就会直接 return ——
+    把这条断言与下一条放在一起读，才是本票真正的形状。
+    """
+    from aiops_diagnostics.caller_auth import DisabledCallerResolver
     from aiops_diagnostics.gateway_api import _caller_resolver
 
     resolver = _caller_resolver(_gateway_settings(tmp_path, **COMPANY_KEYS))
 
-    assert isinstance(resolver, CompanyTokenCallerResolver)
+    assert not isinstance(resolver, CompanyTokenCallerResolver)
+    # 没有 introspection、没有 UPMS 地址 ⇒ 落到 fail-closed 的禁用解析器（拒绝，不是放行）。
+    assert isinstance(resolver, DisabledCallerResolver)
 
 
-def test_the_company_path_takes_precedence_over_the_upms_default(tmp_path: Path) -> None:
-    """UPMS 是「没配别的」时的兜底：显式配置的令牌路径必须排它在前面（41 现状即无 introspection）。"""
-    from aiops_diagnostics.caller_auth import UpmsCallerResolver
+def test_the_source_key_gate_is_built_once_key_and_company_path_are_configured(tmp_path: Path) -> None:
+    from aiops_diagnostics.caller_auth import SourceKeyCallerResolver
     from aiops_diagnostics.gateway_api import _caller_resolver
 
-    settings = _gateway_settings(tmp_path, "AIOPS_UPMS_BASE_URL=https://upms.example.test\n", **COMPANY_KEYS)
+    resolver = _caller_resolver(_gateway_settings(tmp_path, company_source_key=SOURCE_KEY, **COMPANY_KEYS))
 
-    assert not isinstance(_caller_resolver(settings), UpmsCallerResolver)
+    assert isinstance(resolver, SourceKeyCallerResolver)
 
 
-def test_the_session_path_still_wins_when_the_service_token_is_set(tmp_path: Path) -> None:
-    """⚠️ 记录 #444 的启用前提：会话那一级直接 return，排在它之后的分支在现网配置下不可达。"""
+def test_the_gate_sits_in_front_of_the_session_level(tmp_path: Path) -> None:
+    """⭐ 41 现网形状：服务令牌有值（会话那一级会直接 return）**且**密钥已配置。
+
+    这是本票最容易被写错的一处。若门排在会话那一级之后，带公司令牌、不带 ``third-session``
+    的请求会在第一级就被 401 —— 密钥配了也白配。因此断言两层：
+    ``_fallback`` 仍是会话解析器（既有链没被动过），而**外层**是门。
+    """
+    from aiops_diagnostics.caller_auth import SourceKeyCallerResolver
     from aiops_diagnostics.gateway_api import _caller_resolver
     from aiops_diagnostics.third_session_auth import RedisThirdSessionResolver
 
@@ -572,17 +592,52 @@ def test_the_session_path_still_wins_when_the_service_token_is_set(tmp_path: Pat
             tmp_path,
             "AIOPS_REDIS_PASSWORD=redis-secret\n",
             third_session_service_token="svc",
+            company_source_key=SOURCE_KEY,
             **COMPANY_KEYS,
         )
     )
 
-    assert isinstance(resolver, RedisThirdSessionResolver)
+    assert isinstance(resolver, SourceKeyCallerResolver)
+    assert isinstance(resolver._fallback, RedisThirdSessionResolver)
+    assert isinstance(resolver._company, CompanyTokenCallerResolver)
+
+
+def test_the_gate_wraps_the_existing_chain_without_changing_its_choice(tmp_path: Path) -> None:
+    """既有链的选择结果零变化：门只是**包在外面**，未命中密钥时原样委派。"""
+    from aiops_diagnostics.caller_auth import SourceKeyCallerResolver, UpmsCallerResolver
+    from aiops_diagnostics.gateway_api import _caller_resolver
+
+    settings = _gateway_settings(
+        tmp_path,
+        "AIOPS_UPMS_BASE_URL=https://upms.example.test\n",
+        company_source_key=SOURCE_KEY,
+        **COMPANY_KEYS,
+    )
+
+    resolver = _caller_resolver(settings)
+
+    assert isinstance(resolver, SourceKeyCallerResolver)
+    # UPMS 兜底原本会被 company_check_token_url 挡掉（#443 那一级条件）；#444 起那条路径
+    # 不再参与既有链，兜底照旧 —— 这正是「门未命中 ⇒ 走既有链」的字面含义。
+    assert isinstance(resolver._fallback, UpmsCallerResolver)
 
 
 def test_a_half_configured_company_path_is_a_startup_error(tmp_path: Path) -> None:
     """只设 URL 不是静默禁用，而是启动失败：否则部署看起来正常、实际一直 401。"""
     with pytest.raises(ValueError, match="COMPANY_TOKEN_CLIENT"):
         _gateway_settings(tmp_path, company_check_token_url=CHECK_TOKEN_URL).validate()
+
+
+def test_a_source_key_without_the_check_token_url_is_a_startup_error(tmp_path: Path) -> None:
+    """#444：只配密钥等于「装了门但没有可路由的目标」—— 每条带密钥的请求都静默落回既有链。"""
+    with pytest.raises(ValueError, match="COMPANY_CHECK_TOKEN_URL"):
+        _gateway_settings(tmp_path, company_source_key=SOURCE_KEY).validate()
+
+
+def test_a_short_source_key_is_a_startup_error(tmp_path: Path) -> None:
+    """门对着可达的入口：短到可枚举的密钥等于没有这道门，因此在启动时就拒。"""
+    with pytest.raises(ValueError, match="at least 16"):
+        _gateway_settings(tmp_path, company_source_key="short-key", **COMPANY_KEYS).validate()
 
 
 # --- 8. 端到端：真实应用层 -----------------------------------------------------
@@ -647,3 +702,212 @@ def test_the_consumer_entry_keeps_the_self_scope_for_a_company_token(
 
     assert other.status_code == 404
     assert other.json()["error"]["code"] == "ORDER_NOT_FOUND"
+
+
+# --- 9. #444：来源密钥门（分派 + fail closed）---------------------------------
+#
+# 断言的都是对外可观察行为：**哪条链被走到**（由替身记录）与 HTTP 结果。门本身只是一次
+# 比较，真正的风险在「比较错了会怎样」，所以每条错误方向都有一条用例。
+
+
+class _Recording:
+    """记录被调用时收到的参数的解析器替身（两条链各一份，用来证明分派对不对）。"""
+
+    def __init__(self, name: str, context: Any) -> None:
+        self.name = name
+        self.context = context
+        self.calls: list[dict[str, Any]] = []
+
+    def resolve(
+        self,
+        token: str,
+        *,
+        required_scope: str,
+        third_session: str | None = None,
+        platform_entry: str | None = None,
+        source_key: str | None = None,
+    ) -> Any:
+        self.calls.append(
+            {
+                "token": token,
+                "required_scope": required_scope,
+                # 密钥**不入记录**：替身也不该把明文秘密留在内存断言里。
+                "third_session": third_session,
+                "platform_entry": platform_entry,
+            }
+        )
+        return self.context
+
+
+def _gate(source_key: str = SOURCE_KEY) -> tuple[SourceKeyCallerResolver, _Recording, _Recording]:
+    company = _Recording("company", "company-context")
+    fallback = _Recording("fallback", "fallback-context")
+    return SourceKeyCallerResolver(source_key, company, fallback), company, fallback
+
+
+def _resolve_through(
+    gate: SourceKeyCallerResolver, *, source_key: str | None, third_session: str | None = "sess-1"
+) -> Any:
+    return gate.resolve(
+        "opaque-token",
+        required_scope="aiops:orders:read",
+        third_session=third_session,
+        platform_entry="operator",
+        source_key=source_key,
+    )
+
+
+def test_the_correct_source_key_routes_to_the_company_path() -> None:
+    """带且验过 ⇒ 走公司令牌路径，且**不把会话值递给它**（两种凭据不是一回事）。"""
+    gate, company, fallback = _gate()
+
+    assert _resolve_through(gate, source_key=SOURCE_KEY) == "company-context"
+    assert len(company.calls) == 1
+    assert fallback.calls == []
+    assert company.calls[0]["third_session"] is None
+    assert company.calls[0]["platform_entry"] == "operator"
+
+
+@pytest.mark.parametrize("presented", [None, "", "wrong-key-0123456789abcde", SOURCE_KEY + "x"])
+def test_a_missing_or_wrong_source_key_falls_back_to_the_existing_chain(presented: str | None) -> None:
+    """不带 / 带错 ⇒ 走既有链，且入口与会话值**原样透传**（既有链的结果零变化）。"""
+    gate, company, fallback = _gate()
+
+    assert _resolve_through(gate, source_key=presented) == "fallback-context"
+    assert company.calls == []
+    assert len(fallback.calls) == 1
+    assert fallback.calls[0]["third_session"] == "sess-1"
+    assert fallback.calls[0]["platform_entry"] == "operator"
+
+
+def test_a_near_miss_source_key_is_not_accepted() -> None:
+    """前缀/大小写/空白都不算命中：显式钉住「比较不做任何规范化」。
+
+    这四种写法都是「运维手抄时最可能的错法」，若比较宽容其中任意一种，有效密钥空间就缩了。
+    """
+    gate, company, _ = _gate()
+
+    for near_miss in (SOURCE_KEY[:-1], SOURCE_KEY.upper(), f" {SOURCE_KEY}", f"{SOURCE_KEY} "):
+        assert _resolve_through(gate, source_key=near_miss) != "company-context", near_miss
+    assert company.calls == []
+
+
+def test_an_empty_configured_key_never_opens_the_gate() -> None:
+    """⭐ #444 的 fail closed：**未配置密钥 ⇒ 新链路整体不启用**（不是「没密钥就放行」）。"""
+    with pytest.raises(ValueError, match="source key is required"):
+        SourceKeyCallerResolver("", _Recording("company", None), _Recording("fallback", None))
+
+
+def test_the_gate_is_inert_when_no_header_is_presented() -> None:
+    """整条既有链的既有客户端**从来不带**这个头 —— 他们的行为必须一个字都不变。"""
+    gate, company, fallback = _gate()
+
+    assert _resolve_through(gate, source_key=None, third_session=None) == "fallback-context"
+    assert company.calls == []
+    assert fallback.calls[0]["third_session"] is None
+
+
+def test_the_source_key_gate_decides_the_chain_through_the_real_app(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """端到端，**且解析器由配置构造**：同一请求只换来源密钥这个头，就走两条真实链。
+
+    这里刻意**不用** ``caller_resolver=`` 替身注入：门是在 ``_caller_resolver`` 里装上的，
+    注入替身会绕过整条配置链，「接线把 header 传到了门」这件事就没人证明（改掉 wrapper 的
+    ``source_key=`` 传参，注入式用例照样全绿 —— 试着改坏过一次，就是这样漏的）。
+    因此应用走真实的 ``assistant_app`` 默认路径（内部调 ``_caller_resolver(settings)``），
+    只有两处**外部 I/O** 换成替身：公司 check_token 的 HTTP 与既有链的 Redis 会话值。
+
+    既有链一侧必须是真实的 ``RedisThirdSessionResolver``，否则「带错密钥 ⇒ 走既有链」会被
+    「无论怎样都是同一个替身」蒙过去；服务令牌与 Redis 会话都配好，于是两条链各自成立。
+    """
+    connection = Connection()
+    monkeypatch.setattr("aiops_diagnostics.sources.pymysql.connect", lambda **_: connection)
+    monkeypatch.setattr(
+        "aiops_diagnostics.bounded_http.urllib.request.urlopen", lambda *_a, **_k: _Response(CLAIMS)
+    )
+    # 唯一被替身顶掉的**内部**依赖：站点归属映射要连充电库。这条用例的对象是「header → 门 →
+    # 哪条链」，不是映射本身（映射规则由 1–6 节覆盖）。顶在模块级而不是构造参数上，是因为
+    # 解析器由真实配置链构造，没有注入点。
+    monkeypatch.setattr("aiops_diagnostics.company_token_auth.mysql_site_mapper", _Mapper())
+
+    class _Redis:
+        """既有链要的会话值（与 ``operator_support._Redis`` 同一形状）。"""
+
+        def get(self, _key: str) -> bytes:
+            return java_session({"userId": C_USER_ID, "tenantId": TENANT_ID})
+
+    monkeypatch.setattr("aiops_diagnostics.third_session_auth.redis.Redis", lambda **_: _Redis())
+    settings = _gateway_settings(
+        tmp_path,
+        "AIOPS_REDIS_PASSWORD=redis-secret\n",
+        third_session_service_token="svc",
+        company_source_key=SOURCE_KEY,
+        **COMPANY_KEYS,
+    )
+    client, runtime = assistant_app(tmp_path, monkeypatch, None, connection, settings=settings)
+    question = "帮我检测这个订单的充电异常"
+
+    # 带密钥 ⇒ 公司链：B 端主体名下站点集合 ⇒ 站点内的单可查。
+    with_key = client.post(
+        "/v1/assistant/questions",
+        json={"question": question, "order_no": ORDER_INSIDE},
+        headers={
+            "Authorization": "Bearer company-token",
+            "X-Business-Entry": "operator",
+            "X-AIOps-Source-Key": SOURCE_KEY,
+        },
+    )
+    # 不带密钥 ⇒ 既有链，且**走到会话解析器**：公司令牌不等于服务令牌 ⇒ 401（不是放行）。
+    # 若门接错（比如门把 header 丢了、或门排在会话之后），这一条会变成别的东西：
+    # 前者会拿到 202（公司链被误用），后者会拿到「公司令牌被当成会话值」的 401 —— 后者与本例
+    # 结果同为 401，所以**另用一条**断言把两条 401 区分开（见下）。
+    without_key = client.post(
+        "/v1/assistant/questions",
+        json={"question": question, "order_no": ORDER_INSIDE},
+        headers={"Authorization": "Bearer company-token", "X-Business-Entry": "operator"},
+    )
+    # 既有链真正被走到：服务令牌 + 会话值 ⇒ 200 的动作列表（没有 202/404 的订单分支）。
+    # 头名是 ``x-third-session``（下划线会变成连字符）—— ``third-session`` 与
+    # ``x-third-session`` 是两个不同的头，用错了就落到「无会话」分支被拒，与本题无关却会让
+    # 这条断言失去意义。
+    session_chain = client.get(
+        "/v1/shortcuts",
+        headers={
+            "Authorization": "Bearer svc",
+            "X-Business-Entry": "operator",
+            "x-third-session": SESSION_TOKEN,
+        },
+    )
+    # **另两个入口**：``/v1/shortcuts`` 走的是 ``_authenticate_caller`` 那条共用依赖，
+    # ``/v1/orders/{order_no}/access`` 走 ``authenticated_caller``（内联的另一条）。仓库里共有
+    # **三个**入口依赖各自把 ``source_key`` 传下去，只驱动其中一部分时，剩下的把参数丢掉会
+    # **静默通过**（试过：把 ``_authenticate_caller`` 里的 ``source_key=`` 删掉，只测助手入口的
+    # 用例照样全绿 —— 这正是变异 M5/M9 的形状）。因此每个入口都按**两个方向**各打一次：
+    # 带密钥 ⇒ 公司链，不带 ⇒ 既有链拒绝。只测「带密钥」那一边会漏掉「门有没有生效」的反向。
+    other_entries = {
+        "shortcuts": "/v1/shortcuts",
+        "order_access": f"/v1/orders/{ORDER_INSIDE}/access",
+    }
+
+    def _call(path: str, *, with_key: bool) -> Any:
+        headers = {"Authorization": "Bearer company-token", "X-Business-Entry": "operator"}
+        if with_key:
+            headers["X-AIOps-Source-Key"] = SOURCE_KEY
+        return client.get(path, headers=headers)
+
+    keyed = {name: _call(path, with_key=True) for name, path in other_entries.items()}
+    unkeyed = {name: _call(path, with_key=False) for name, path in other_entries.items()}
+
+    assert with_key.status_code == 202
+    assert runtime.diagnoses == [(ORDER_INSIDE, question)]
+    assert without_key.status_code == 401
+    assert without_key.json()["error"]["code"] == "INVALID_ACCESS_TOKEN"
+    assert session_chain.status_code == 200
+    for name, response in keyed.items():
+        assert response.status_code == 200, (name, response.text)
+    assert keyed["order_access"].json()["accessible"] is True
+    for name, response in unkeyed.items():
+        assert response.status_code == 401, (name, response.text)
+        assert response.json()["error"]["code"] == "INVALID_ACCESS_TOKEN"
+    assert SESSION_TOKEN not in without_key.text

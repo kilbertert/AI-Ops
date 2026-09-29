@@ -1156,8 +1156,8 @@ uv run pytest tests/test_assistant_api.py tests/test_conversation_api.py \
 | CT-ACCEPT-09 | 本地 dev | 管家端入口；店铺集合映射到一个站点 | 行级镜像假 MySQL：集合内他人名下订单、集合外订单 | 经入口显式指名两单 | 集合内 → `202 diagnosis`；集合外 → `404 ORDER_NOT_FOUND` | 不产生业务数据 | `...::test_a_company_token_reaches_the_operator_actions_and_order_diagnosis`、`...::test_an_order_outside_the_operators_sites_is_refused` |
 | CT-ACCEPT-10 | 本地 dev | 同一条令牌、consumer 入口 | 集合内他人名下订单 | 经 consumer 入口显式指名 | `404`：不采用运营商站点集合（#436 边界） | 无 | `...::test_the_consumer_entry_keeps_the_self_scope_for_a_company_token` |
 | CT-ACCEPT-11 | 本地 dev | 令牌的店铺集合为空 | 空集合 | 经入口查询任意订单 | `404`；**不发起订单查询**（不是「不限制」）；日志成因与「已登记店铺无站点」可区分 | 无 | `...::test_a_token_without_shop_binding_denies_every_order_without_issuing_sql`、`...::test_the_two_empty_scope_causes_are_still_logged_apart` |
-| CT-ACCEPT-12 | 本地 dev | 解析器选择：三个配置键（URL/客户端 id/客户端密钥）各种组合 | 三键全空 / 三键齐备 / 只设 URL | 调用配置选择 | 全空 ⇒ 与启用前同型；齐备 ⇒ 选中新解析器且优先于 UPMS 兜底；只设 URL ⇒ 启动失败 | 临时配置文件 | `...::test_the_company_path_*`、`...::test_a_half_configured_company_path_is_a_startup_error` |
-| CT-ACCEPT-13 | 本地 dev | 会话服务令牌已配置（41 的现网形状） | 三键齐备 + 服务令牌 | 调用配置选择 | 仍选中会话解析器 —— **记录 #444 的启用前提**：门必须放在会话那一级之前 | 无 | `...::test_the_session_path_still_wins_when_the_service_token_is_set` |
+| CT-ACCEPT-12 | 本地 dev | 解析器选择：校验入口与客户端凭据已配置，来源密钥缺省为空（#444 起这三键不再足以选中新链路） | 三键齐备、密钥为空 | 调用配置选择 | 不构造公司令牌路径；落到 fail-closed 的禁用解析器（拒绝，不是放行） | 临时配置文件 | `...::test_the_company_path_is_not_built_while_all_keys_are_empty`、`...::test_the_company_path_is_not_built_without_the_source_key` |
+| CT-ACCEPT-13 | 本地 dev | 会话服务令牌已配置（41 的现网形状）**且来源密钥已配置** | 密钥 + 三键 + 服务令牌 | 调用配置选择 | 最外层是来源密钥门，其既有链一侧仍是会话解析器 —— 门在会话那一级**之前**（#443 记录的启用前提在此关闭） | 无 | `...::test_the_gate_sits_in_front_of_the_session_level` |
 
 **边界声明（不得写成本项已过的部分）**：
 
@@ -1179,3 +1179,49 @@ uv run pytest tests/test_assistant_api.py tests/test_conversation_api.py \
 - **`exp` 有意不本地判**：公司是权威校验方，本地再判一次只会引入时钟偏移这个新的失败模式。
 - **明写的代价**：令牌里的店铺集合是**签发时刻**的快照（staleness 窗口 = 令牌有效期），
   而既有的店铺归属查询是实时的。这是 ADR-0009 已接受的取舍，**未实测**真实运营场景下的可接受性。
+
+## 入站来源密钥验收 QA（CT-GATE，#444 / ADR-0009 D8–D9）
+
+- 环境：AI-Ops 仓库本机（Linux x86_64，Python 3.13，uv 虚拟环境），pytest + ruff；
+  **未连接 41、未连接公司校验入口、未连充电库** —— 离线替身 + 真实配置链、真实授权判定与真实范围下推。
+- 前置：分支 `feat/source-key-gate` 的提交；工作树内执行（`PYTHONPATH` 指向该工作树的 `src`）。
+- 时间戳：2026-09-29（Asia/Shanghai）执行 `PYTHONPATH=$PWD/src uv run pytest` 与 `uv run ruff check`。
+- 结果：**1477 passed / 0 failed**（#443 基线 1464，新增 13）；`ruff check` 与 `ruff format --check` 通过。
+- 日志/报告：本仓库不提交原始控制台输出；逐条用例的测试标识见下表「证据」列，可在该提交上复现。
+  **未把「手工测过」当作证据。**
+
+| ID | 环境 | 前置 | 数据 | 动作 | 预期 | 清理 | 证据 |
+|---|---|---|---|---|---|---|---|
+| CT-GATE-01 | 本地 dev | 来源密钥已配置 | 带正确密钥的请求 | 经助手入口请求 | 走公司令牌链路：解析出 B 端身份与运营商站点集合（`202`） | 无 | `tests/test_company_token_auth.py::test_the_correct_source_key_routes_to_the_company_path`、`...::test_the_source_key_gate_decides_the_chain_through_the_real_app` |
+| CT-GATE-02 | 本地 dev | 来源密钥已配置 | 不带 / 带错 / 前缀 / 大小写 / 首尾空白 各种值 | 经助手入口请求 | 一律走既有链，且业务入口与会话值**原样透传**；公司解析器一次都没被调用 | 无 | `...::test_a_missing_or_wrong_source_key_falls_back_to_the_existing_chain`、`...::test_a_near_miss_source_key_is_not_accepted` |
+| CT-GATE-03 | 本地 dev | 来源密钥已配置而请求不带该头 | 既有客户端的请求形状（只有服务令牌 + 会话） | 经助手入口请求 | 行为一个字不变：既有链照常解析并放行（`200`） | 无 | `...::test_the_gate_is_inert_when_no_header_is_presented`、`...::test_the_source_key_gate_decides_the_chain_through_the_real_app` |
+| CT-GATE-04 | 本地 dev | 来源密钥缺省为空 | 带「正确」密钥的请求 | 经助手入口请求 | **新链路整体不参与**：按既有链被处理或拒绝，**不放行** | 无 | `...::test_the_company_path_is_not_built_without_the_source_key` |
+| CT-GATE-05 | 本地 dev | 来源密钥为空串 | 空密钥 | 构造分派器 | 拒绝构造（fail closed，而不是「没有密钥就放行」） | 无 | `...::test_an_empty_configured_key_never_opens_the_gate` |
+| CT-GATE-06 | 本地 dev | 只配来源密钥、不配校验入口 | 密钥 + 空 URL | 启动时校验配置 | 启动失败并指出缺少校验入口 | 临时配置文件 | `...::test_a_source_key_without_the_check_token_url_is_a_startup_error` |
+| CT-GATE-07 | 本地 dev | 来源密钥短于 16 字符 | 短密钥 | 启动时校验配置 | 启动失败并指出最小长度 | 临时配置文件 | `...::test_a_short_source_key_is_a_startup_error` |
+| CT-GATE-08 | 本地 dev | 会话服务令牌已配置（41 现网形状）且密钥已配置 | 服务令牌 + 三键 + 密钥 | 调用配置选择 | 外层是门、既有链一侧是会话解析器；门若排到会话之后，41 上带令牌的请求会在第一级被 401（变异 M6 转红） | 无 | `...::test_the_gate_sits_in_front_of_the_session_level` |
+| CT-GATE-09 | 本地 dev | 来源密钥已配置 | 同一请求只换密钥这一个头 | 经**三个**入口（助手 / 快捷动作 / 订单访问）各请求**两次**：带密钥与不带 | 每个入口两个方向都成立：带密钥走公司链（`202` / `200 accessible:true`），不带走既有链并被拒（`401`）。反向那一半是必须的 —— 只测「带密钥成功」时，某条入口把 `source_key` 丢掉仍是绿的（变异 M5/M9 的形状） | 无 | `...::test_the_source_key_gate_decides_the_chain_through_the_real_app` |
+
+**变异矩阵（9 条，逐条清 `__pycache__` 后重跑，全部转红）**：
+
+| # | 变异 | 结果 |
+|---|---|---|
+| M1 | 未配置密钥时放行（把「不启用」写成「不拦」） | 转红 |
+| M2 | 密钥校验放宽成「带了一个非空值就算命中」 | 转红 |
+| M3 | 命中密钥仍走既有链（分派方向反了） | 转红 |
+| M4 | 构造分派器时不拒绝空密钥 | 转红 |
+| M5 | 内联入口不再把 `source_key` 传给门（接线断了） | 转红（**首轮为绿**：只测助手入口时漏掉了共用依赖那条路径，补上第二个入口后才捕获） |
+| M6 | 把门排到会话那一级**之后**（41 现网形状下新路径不可达） | 转红 |
+| M7 | 不拒绝短到可枚举的来源密钥 | 转红 |
+| M8 | 不拒绝「只配密钥、不配校验入口」 | 转红 |
+| M9 | `orders/access` 入口（第三个入口依赖）不再把 `source_key` 传给门 | 转红（补该入口的带密钥请求之后；此前只驱动两个入口，它是盲区） |
+
+**边界声明（不得写成本项已过的部分）**：
+
+- **#444 完成不等于管家端可用**：本票只把门装上。第二段（Nacos 路由 / Nginx 改向 / 绑定变更 /
+  `sys_oauth_client` 凭据）仍未做，41 上这条路径仍不可达；密钥由谁注入也还没有落地主体。
+- **正向轨道（真实管家端登录）未执行**：同上一条，没有一次真实管家端登录被走到；本表全部为
+  离线替身 + 真实配置链，只能主张「分派与 fail-closed 行为被覆盖」。
+- **已知可观测性缺口**：分派失败（密钥抄错/没带）**不单独记日志**，它在生产日志里与「既有链
+  拿到一条不认识的令牌」是同一条 401。要区分得靠「这次请求是否本该走新链路」的上下文，
+  本票没有引入该日志 —— 作为已知缺口记下，不写成已覆盖。

@@ -29,6 +29,7 @@ from aiops_diagnostics.agent_lifecycle import (
 from aiops_diagnostics.caller_auth import (
     CALLER_AUTH_CONFIG_MISSING,
     CALLER_AUTH_FORBIDDEN,
+    SOURCE_KEY_HEADER,
     CallerAuthError,
     CallerContextResolver,
     DisabledCallerResolver,
@@ -37,6 +38,7 @@ from aiops_diagnostics.caller_auth import (
     IntrospectionSettings,
     OrderAuthorizer,
     ScopedOrderAuthorizer,
+    SourceKeyCallerResolver,
     UpmsCallerResolver,
 )
 from aiops_diagnostics.codex_runtime import AgentRuntimeError
@@ -507,6 +509,7 @@ def create_gateway_app(
         authorization: Annotated[str | None, Header()] = None,
         x_third_session: Annotated[str | None, Header()] = None,
         business_entry: Annotated[str | None, Header(alias="X-Business-Entry")] = None,
+        source_key: Annotated[str | None, Header(alias=SOURCE_KEY_HEADER)] = None,
     ) -> ScopeContext:
         if not authorization or not authorization.startswith("Bearer "):
             raise StandardAPIError(
@@ -522,13 +525,12 @@ def create_gateway_app(
                 "access token validation failed",
             )
         try:
-            if x_third_session is None:
-                return context.caller_resolver.resolve(token, required_scope=STANDARD_ORDER_READ_SCOPE)
             return context.caller_resolver.resolve(
                 token,
                 required_scope=STANDARD_ORDER_READ_SCOPE,
                 third_session=x_third_session,
                 platform_entry=business_entry,
+                source_key=source_key,
             )
         except CallerAuthError as exc:
             if exc.code == CALLER_AUTH_FORBIDDEN:
@@ -553,6 +555,7 @@ def create_gateway_app(
         authorization: Annotated[str | None, Header()] = None,
         x_third_session: Annotated[str | None, Header()] = None,
         business_entry: Annotated[str | None, Header(alias="X-Business-Entry")] = None,
+        source_key: Annotated[str | None, Header(alias=SOURCE_KEY_HEADER)] = None,
     ) -> ScopeContext:
         if not authorization or not authorization.startswith("Bearer "):
             raise StandardAPIError(
@@ -568,21 +571,15 @@ def create_gateway_app(
                 "access token validation failed",
             )
         try:
-            if x_third_session is None:
-                # 两个分支都传入口：非会话解析器忽略它，但**分支之间不能不对称** ——
-                # 否则"带不带会话"会意外改变范围语义，排查时极难定位。
-                return context.caller_resolver.resolve(
-                    token,
-                    required_scope=STANDARD_DIAGNOSIS_SCOPE,
-                    platform_entry=business_entry,
-                )
-            # 数据范围按内容域决定（运营商站点范围只在管家端生效），因此入口必须
-            # 在这里就传下去 —— 晚于身份解析的平台决策改不了已算好的范围。
+            # 数据范围按内容域决定（运营商站点范围只在管家端生效），因此入口必须在这里就传下去
+            # —— 晚于身份解析的平台决策改不了已算好的范围。``source_key`` 同理：它是**分派**依据，
+            # 决定谁来解析身份，传晚了等于门不存在。
             return context.caller_resolver.resolve(
                 token,
                 required_scope=STANDARD_DIAGNOSIS_SCOPE,
                 third_session=x_third_session,
                 platform_entry=business_entry,
+                source_key=source_key,
             )
         except CallerAuthError as exc:
             if exc.code == CALLER_AUTH_FORBIDDEN:
@@ -602,34 +599,40 @@ def create_gateway_app(
         authorization: Annotated[str | None, Header()] = None,
         x_third_session: Annotated[str | None, Header()] = None,
         business_entry: Annotated[str | None, Header(alias="X-Business-Entry")] = None,
+        source_key: Annotated[str | None, Header(alias=SOURCE_KEY_HEADER)] = None,
     ) -> ScopeContext:
         return _authenticate_caller(
             context.caller_resolver,
             authorization,
             x_third_session,
             platform_entry=business_entry,
+            source_key=source_key,
             required_scope=STANDARD_FAQ_SCOPE,
         )
 
     def authenticated_agent_caller(
         authorization: Annotated[str | None, Header()] = None,
         x_third_session: Annotated[str | None, Header()] = None,
+        source_key: Annotated[str | None, Header(alias=SOURCE_KEY_HEADER)] = None,
     ) -> ScopeContext:
         return _authenticate_caller(
             context.caller_resolver,
             authorization,
             x_third_session,
+            source_key=source_key,
             required_scope=AGENT_MANAGE_SCOPE,
         )
 
     def authenticated_shortcut_caller(
         authorization: Annotated[str | None, Header()] = None,
         x_third_session: Annotated[str | None, Header()] = None,
+        source_key: Annotated[str | None, Header(alias=SOURCE_KEY_HEADER)] = None,
     ) -> ScopeContext:
         return _authenticate_caller(
             context.caller_resolver,
             authorization,
             x_third_session,
+            source_key=source_key,
             required_scope=SHORTCUT_MANAGE_SCOPE,
         )
 
@@ -637,12 +640,14 @@ def create_gateway_app(
         authorization: Annotated[str | None, Header()] = None,
         x_third_session: Annotated[str | None, Header()] = None,
         business_entry: Annotated[str | None, Header(alias="X-Business-Entry")] = None,
+        source_key: Annotated[str | None, Header(alias=SOURCE_KEY_HEADER)] = None,
     ) -> ScopeContext:
         return _authenticate_caller(
             context.caller_resolver,
             authorization,
             x_third_session,
             platform_entry=business_entry,
+            source_key=source_key,
             required_scope=STANDARD_FAQ_SCOPE,
         )
 
@@ -2244,6 +2249,49 @@ def _operator_site_scope(runtime: Settings) -> OperatorSiteScope | None:
 
 
 def _caller_resolver(settings: GatewayServerSettings) -> CallerContextResolver:
+    # #444 / ADR-0009 D9：来源密钥这道门**装在会话那一级之前**。这是本票最关键的一处，
+    # 也是 #443 记录的两条边界里那条「必须放在会话之前」的落点：会话那一级是
+    # ``if settings.third_session_service_token:`` 且**直接 return**，而 41 现网那个键有值 ——
+    # 门若排在它之后，带公司令牌、不带 ``third-session`` 的请求会在第一级就被 401，
+    # 新路径在现网**永远不可达**，即便把密钥配上也一样。
+    #
+    # 未配置来源密钥 ⇒ 这一整段不参与（新链路整体不启用，fail closed；不是放行），
+    # 下面的选择链与本票之前逐字一致；清空即回滚。
+    if settings.company_source_key:
+        company = _company_token_resolver(settings)
+        if company is not None:
+            return SourceKeyCallerResolver(
+                settings.company_source_key,
+                company,
+                _fallback_caller_resolver(settings),
+            )
+    return _fallback_caller_resolver(settings)
+
+
+def _company_token_resolver(settings: GatewayServerSettings) -> CompanyTokenCallerResolver | None:
+    """新链路的解析器（#443 的实现），只在来源密钥已配置时构造。
+
+    构造失败（配置读不出来）返回 ``None`` ⇒ 调用方退回既有链：带密钥的请求随后按既有链被
+    拒绝（401），而不是被放行 —— 这是 fail closed 的方向。半配置（只设 URL 或只设密钥）
+    已在 ``GatewayServerSettings.validate`` 里变成启动失败，不走这里。
+    """
+    if not settings.company_check_token_url:
+        return None
+    try:
+        return CompanyTokenCallerResolver(
+            CompanyTokenSettings(
+                url=settings.company_check_token_url,
+                client_id=settings.company_token_client_id,
+                client_secret=settings.company_token_client_secret,
+            ),
+            Settings.from_config(settings.server_config_file),
+        )
+    except (ValueError, OSError):
+        return None
+
+
+def _fallback_caller_resolver(settings: GatewayServerSettings) -> CallerContextResolver:
+    """既有链：会话 → UPMS 兜底 → introspection。选择结果与新增本票之前逐字一致。"""
     if settings.third_session_service_token:
         try:
             runtime = Settings.from_config(settings.server_config_file)
@@ -2262,36 +2310,12 @@ def _caller_resolver(settings: GatewayServerSettings) -> CallerContextResolver:
             )
         except (ValueError, OSError):
             return DisabledCallerResolver()
-    # UPMS 是「没配别的」时的默认实现，因此它必须让位给显式配置的令牌路径：否则
-    # ``AIOPS_GATEWAY_COMPANY_CHECK_TOKEN_URL`` 配了、而 introspection 没配（41 的现状）时，
-    # 这一级会先 return，新分支永远走不到。三个键全空时条件退化成原来的形式，选择结果逐字不变。
-    if not settings.introspection_url and not settings.company_check_token_url:
+    # #444 起，公司令牌路径**不再出现在这条链里**：它由上面的来源密钥门分派，只有密钥验过的
+    # 请求才走得到。把这四种选择结果写清楚，是为了让「带错密钥」的行为可预期 —— 它会落到这里，
+    # 按会话/introspection/UPMS 处理公司令牌，结果是被拒绝（401），而不是被放行。
+    if not settings.introspection_url:
         try:
             return UpmsCallerResolver(Settings.from_config(settings.server_config_file))
-        except (ValueError, OSError):
-            return DisabledCallerResolver()
-    if settings.company_check_token_url:
-        # 管家端公司令牌路径（#443 / ADR-0009）。配置齐备才构造，三个键全空 ⇒ 与启用前逐字一致
-        # （这是「先合不启用」的机制保证，清空即回滚）。
-        #
-        # ⚠️ 两条必须记住的边界，否则会把本票读成「管家端已经能用」：
-        # ① **入口未装门**。来源密钥与按密钥分派是 #444；在那之前，任何一条走到本解析器的请求都
-        #    只是「带了公司令牌」，没有「来自网关那一跳」的判据。因此本票的启用前提是**网络层尚
-        #    未暴露这条路径**（第二段），而 41 现网配置下 `third_session_service_token` 有值且那
-        #    一级直接 return ⇒ 本分支在现网**不可达**。#444 必须把门放在**会话那一级之前**。
-        # ② 本分支只在 `company_check_token_url` 有值时生效，因此它位于 introspection 分支之前、
-        #    UPMS 兜底之前（见上面那一级条件）。三键全空时两个分支都不参与，选择结果不变。
-        #
-        # 半配置（只有 URL）不是静默禁用，而是启动失败：见 ``GatewayServerSettings.validate``。
-        try:
-            return CompanyTokenCallerResolver(
-                CompanyTokenSettings(
-                    url=settings.company_check_token_url,
-                    client_id=settings.company_token_client_id,
-                    client_secret=settings.company_token_client_secret,
-                ),
-                Settings.from_config(settings.server_config_file),
-            )
         except (ValueError, OSError):
             return DisabledCallerResolver()
     return IntrospectionCallerResolver(
@@ -2320,6 +2344,7 @@ def _authenticate_caller(
     *,
     required_scope: str,
     platform_entry: str | None = None,
+    source_key: str | None = None,
 ) -> ScopeContext:
     if not authorization or not authorization.startswith("Bearer "):
         raise StandardAPIError(status.HTTP_401_UNAUTHORIZED, "ACCESS_TOKEN_REQUIRED", "access token required")
@@ -2331,15 +2356,16 @@ def _authenticate_caller(
             "access token validation failed",
         )
     try:
-        # ``platform_entry`` 只对会话解析器有意义（它据此决定数据范围）；其它
-        # 解析器忽略它。未知入口在此原样传入，由解析器按最窄范围处理。
-        if third_session is None:
-            return resolver.resolve(token, required_scope=required_scope)
+        # ``platform_entry`` 与 ``source_key`` 都在这里**无条件**传下去，不走「带没带会话」的
+        # 分支：解析器各自忽略对自己无意义的参数，但分支之间一旦不对称，「同一个请求多带一个头
+        # 就换了范围语义/身份来源」就会变成排查不了的形状（同 ``authenticated_diagnosis_caller``
+        # 那条注释）。``source_key`` 尤其如此：它是分派依据，缺它门就永远落到既有链。
         return resolver.resolve(
             token,
             required_scope=required_scope,
             third_session=third_session,
             platform_entry=platform_entry,
+            source_key=source_key,
         )
     except CallerAuthError as exc:
         if exc.code == CALLER_AUTH_FORBIDDEN:

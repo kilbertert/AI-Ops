@@ -69,19 +69,34 @@ HTTPS；client secret 不得进入便携包、日志或 API 响应。
 
 ### 解析器的选择顺序（2026-09-29 补充）
 
-同一个入口上并存多条凭据路径，按配置**互斥**选择：会话服务令牌 → 公司 `check_token`
-（`AIOPS_GATEWAY_COMPANY_CHECK_TOKEN_URL` + 客户端凭据，管家端 OAuth2 令牌，见
-[ADR-0009](adr/0009-operator-identity-via-company-oauth2-token.md)）→ introspection →
-UPMS 兜底。**任何一条的配置键不齐备就不构造该路径**；只设了其中一部分是启动失败，
-不是静默禁用（避免部署看起来正常、实际一直 401）。
+同一个入口上并存**两条信任模式**，先由**入站来源密钥**分派，未命中才在既有链内按配置
+**互斥**选择：
+
+```
+来源密钥（X-AIOps-Source-Key，由可信那一跳注入）
+  ├─ 带且验过 ⇒ 公司 check_token 路径（管家端 OAuth2 令牌，ADR-0009）
+  └─ 其它     ⇒ 既有链：会话服务令牌 → introspection → UPMS 兜底
+```
+
+**分派依据是密钥而不是令牌形态**：按形态分派要靠试错，顺序错了就是静默降级；密钥是调用方
+**自报不了**的判据。**未配置密钥 ⇒ 新链路整体不启用**（fail closed，不是放行）。门排在
+**会话那一级之前**是必须的：41 现网 `AIOPS_GATEWAY_THIRD_SESSION_SERVICE_TOKEN` 有值且那一级
+直接 `return`，门槛若在它之后，带公司令牌、不带 `third-session` 的请求会在第一级就被 401。
+
+既有链内每一级的配置键不齐备就不构造该路径；只设了其中一部分是启动失败，不是静默禁用
+（避免部署看起来正常、实际一直 401）。
 
 ```env
 AIOPS_GATEWAY_COMPANY_CHECK_TOKEN_URL=
 AIOPS_GATEWAY_COMPANY_TOKEN_CLIENT_ID=
 AIOPS_GATEWAY_COMPANY_TOKEN_CLIENT_SECRET=REDACTED
+AIOPS_GATEWAY_COMPANY_SOURCE_KEY=
 ```
 
-公司那条路径**默认不启用**：三键缺省为空 ⇒ 选择结果与新增它之前逐字一致（清空即回滚）。
+公司那条路径**默认不启用**：四个键缺省为空 ⇒ 选择结果与新增它之前逐字一致（清空即回滚）。
+来源密钥短于 16 字符、或只配密钥不配校验入口，都是**启动失败**（前者等于没有这道门，
+后者是装了门却没有可路由的目标）。请求头是 `X-AIOps-Source-Key`，必须由那一跳**覆盖式注入**
+（不是追加一个客户端也能伪造的头）。
 它的校验落在公司自己的 `/oauth/check_token` 上 —— 不自己验签、不复制密钥、不读令牌存储；
 身份与店铺集合直接取自令牌，站点集合经与运营商账号**同一份**规则解析。注意公司这条端点的
 **成功体没有 `code`/`data` 信封**（身份字段在顶层），而**失败体有信封且走 HTTP 200**，
