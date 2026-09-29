@@ -288,4 +288,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 并发配置改为 cancel-in-progress，修掉实测到的死锁 (#397)
 - FAQ 关键词短路对短问句先取路由意图确认 (#408) (#411)
 - FAQ 命中判据改为「是否复述标题原文」，替掉长度判据 (#408) (#412)
+- 记录管家端 `third-session` 凭据契约与 41 上的真实缺口（含一条验收表述更正）
 

@@ -4413,3 +4413,95 @@ OP-ACCEPT-POS-01..04 与本文末节，不用消费者会话或人造夹具冒�
   本轮未在 41 上配置。
 - **ADR-0003**：偏离沿用（委托句柄仍未实现、依赖共享 Redis 会话直读），全篇只
   记一次——见「#425 运营商站点范围解析」节的「### 与 ADR-0003 的关系」。
+
+---
+
+## 管家端鉴权链路核实与更正（2026-09-29）
+
+**触发**：前端反馈管家端联调 `401`：`{"error":{"code":"INVALID_ACCESS_TOKEN",
+"message":"access token validation failed","retryable":false}}`。
+
+**结论**：这不是入口头的问题，而是**凭据体系不同**——管家端 App 登录不产生
+AI-Ops 所需的那种会话。同时**收窄**此前一条过宽的验收表述。
+
+### 复现（41 公网入口，同一份线上代码）
+
+| 发的 `third-session` | 结果 |
+|---|---|
+| 管家端登录取到的 OAuth2 `access_token` | `401 INVALID_ACCESS_TOKEN` |
+| 裸的会话 uuid（不带 `app:3rd_session:` 前缀） | `401 INVALID_ACCESS_TOKEN` |
+| 完整的 Redis 键名 `app:3rd_session:<uuid>` | `401 INVALID_ACCESS_TOKEN` |
+| 一条真实存在于 Redis 的 C 端 thirdSession | `200`，`platform=consumer` |
+
+判据在 `RedisThirdSessionResolver.resolve`：① `Bearer` 必须等于 Nginx 注入的服务令牌；
+② 服务端自己拼 `AIOPS_GATEWAY_THIRD_SESSION_KEY_PREFIX + <值>` 去 Redis `GET`——
+所以该头的值是**键的组成部分**，不是「一个 token」。三种发法都不命中。
+
+### 根因（两条独立事实）
+
+1. **管家端 App 的登录不是 C 端的登录。** 管家端 H5
+   （`ulinkmanage.h5.mall.qushiyun.com`，产物 `adminPackage/*`）走
+   `POST /upms/token/login` / `/upms/token/loginByPhone`（`grant_type=password|sms_login`，
+   `scope=server&deviceType=shop`），令牌存 `CLOUD_ACCESS_TOKEN`，**不写
+   `app:3rd_session:*`**；全量搜 `adminPackage` 的 `getStorageSync("third_session")` 零命中。
+   C 端 H5（`ulink.h5.mall.qushiyun.com`，产物 `aiPackage/*`）才是登录后
+   `setStorageSync("third_session", …)` 的那一套。
+2. **聊天页只存在于 C 端产物里。** 两个域名是同一个 App 的两个构建目标：
+   客户端出 `aiPackage/*`+`shopPackage/*`，管家端出 `adminPackage/*`；
+   **管家端产物里没有 `aiPackage`，`X-Business-Entry` 也零命中** ——
+   「管家端入口」目前在管家端 App 内没有任何页面在调。
+
+C 端聊天页实测发的头（逐字）：`Content-Type / Accept / tenant-id /
+Accept-Language / client-type / third-session / X-Business-Entry`，其中
+`X-Business-Entry` **硬编码 `"consumer"`**。
+另：**`tenant-id` 请求头在 AI-Ops 侧未被使用**（租户取自会话载荷 `tenantId`）。
+
+### 更正的验收表述
+
+`docs/validation.md` 与 `docs/agents/frontend-operator-handoff.md` 原写
+「管家端入口与订单运营商级授权已在 41 端到端验收通过」，**范围过宽**：
+
+- **仍然成立**：运营商站点范围判定与 fail closed、`operator` 动作列表（2 条）、
+  显式 `operator` 的订单检测路径、入口判据、会话按入口隔离。
+- **需要更正**：当时用的是**代造的会话行**（租户内挑一条裸 uuid 会话直接发），
+  **不是一次管家端真实登录**；管家端登录链路（→ 无 thirdSession → `401`）
+  当时**没有被走到**，实际**不通**。这不是代码缺陷，是当初把「恰好有 B 端账号的会话」
+  当成了「管家端登录」，两者在凭据层不是一回事。
+
+### 交付形状（已定）
+
+**由 BFF 签发 thirdSession**：管家端登录后由业务后端向共享 Redis 写一条
+`app:3rd_session:<不透明值>`（含 `userId`(C 端) 与 `tenantId`），前端当
+`third-session` 发；AI-Ops **零改动**复用整条既有链。另一条路（AI-Ops 也认
+OAuth2 令牌）需要新增一条安全敏感鉴权分支，评审与验收面积更大，而且**BFF 断言身份**
+正是 ADR-0003 想要的方向（现为直读 Redis，见 ADR-0008）。
+
+### 同批核实的第二处缺口：站点范围为空（数据，非代码）
+
+验收账号 `15800395017`（运营商，租户 `2019588094906601472`）41 上实测：
+
+- `GET /user/inside/byUserId/2043951654176063490` →
+  `{id: 2043992894120771586, userId: 2043951654176063490, type: "5", shopId: null,
+  shopIds: [], ...}`（唯一一个 B 端主体 ✓，C→B 核对通过）；
+- `GET /shopuser/getShops?userId=2043992894120771586` → `{"code":0,"data":[]}`，
+  `sys_user_role` 2 行（`client_type` = `tenant-app` / `admin`，平台判定可用 ✓）。
+
+⇒ 站点集合为 **Ø** ⇒ 该账号订单查询一律 `404`。这是**设计内的 fail closed**
+（空集合不得被改写成「不限制」），**不是故障**：店铺绑定由业务侧补登记（已确认）。
+在补上之前，thirdSession 打通了也仍然是「订单不存在或无权查看」。
+
+对照组：租户 `1942105476598861824` 的运营商账号 `13333102001` 在 UPMS 里同样
+唯一且带管家端角色（B 端 id `1980205180737404929`、`type=5`），
+但 Redis 里**没有它的会话**（今天没登录过），因此连「拿它验收」都做不到。
+
+### 复现命令（41）
+
+```bash
+B=https://api.mall.qushiyun.com/v1/faq/recommendations
+curl -sS -H "third-session: <任意非 Redis 会话值>" $B          # → 401 INVALID_ACCESS_TOKEN
+curl -sS -H "third-session: <真实 app:3rd_session:* 的值>" $B   # → 200 platform=consumer
+```
+
+（`third-session` 的值由 Nginx 原样转发；服务令牌由
+`/etc/aiops-41/nginx-aiops-service-token.conf` 在 `location ^~ /v1/` 内注入，
+前端不需要持有。）

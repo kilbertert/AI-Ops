@@ -1,9 +1,12 @@
 # 「管家端 vs 客户端」是怎么区分的：三套 `client-type` 取值不要混用
 
 > **读者**：接 AI-Ops 的前端 / BFF 同学，以及排查"为什么走了另一套范围"的人。
-> **状态**：2026-09-28 实测（41 生产 + 公司 GitLab 源码 + 前端 bundle 逆向）。
+> **状态**：2026-09-28 实测（41 生产 + 公司 GitLab 源码 + 前端 bundle 逆向）；
+> 2026-09-29 补一列（两个 App 各自发了什么）。
 > **一句话**：**区分管家端与客户端的是 `X-Business-Entry`，不是 `client-type`**；
 > 而 `client-type` 这个词在三个地方指三套不同的取值，**当前链路上它们是断开的**。
+> 入口头定了之后，**凭据是另一个独立问题**：见
+> [butler-session-contract.md](butler-session-contract.md)。
 
 ---
 
@@ -23,8 +26,13 @@
 | 出处 | 取值 | 语义 | 谁在读 |
 |---|---|---|---|
 | **公司网关** `ApiProxyHeadFilter`（`cloud-gateway`） | `ma` / `h5` / `app` | 转发代理时用来判断"要不要从 Redis 补注入 `user-id`/`tenant-id` 头"；**不在这三个里的值直接放行、不做任何注入** | 公司网关 |
-| **前端实际发的**（ulink H5 bundle 实测） | `H5` / `H5-WX` | 端形态标识（是否微信浏览器） | 目前只被公司网关的"不匹配就放行"分支吃掉 |
+| **前端实际发的**（ulink H5 = **客户端** App bundle 实测） | `H5` / `H5-WX` | 端形态标识（是否微信浏览器） | 目前只被公司网关的"不匹配就放行"分支吃掉 |
 | **AI-Ops** `faq.py` 的 `operator_client_types` | `admin` / `tenant-app` / `MA` / `supply-admin` | 从 UPMS `sys_role.client_type` 读出的**角色维度**：具备这些角色才算"有管家端角色" | AI-Ops 的**平台身份判定** |
+
+> 补一句容易混的：**管家端 App（`ulinkmanage.h5.mall.qushiyun.com`）的产物里
+> 既没有 `client-type: H5`，也没有聊天页**（它只出 `adminPackage/*`，不出 `aiPackage/*`）——
+> 「管家端入口」目前没有一个管家端页面在调。两个 App 的分工见
+> [butler-session-contract.md](butler-session-contract.md) §3。
 
 > 注意 AI-Ops 那一组来自 **`sys_role.client_type`（UPMS 角色表）**，与网关/前端的
 > **请求头 `client-type`** 只是**同名，不同源**。前者是"这个账号是不是管家端角色"，
