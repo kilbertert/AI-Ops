@@ -4437,7 +4437,8 @@ OP-ACCEPT-POS-01..04 与本文末节，不用消费者会话或人造夹具冒�
    **管家端发的正是 `client-type: admin` + OAuth2 令牌** —— 两边本来就配套。
 3. **令牌体系**：`cloud-auth` 是 Spring Security OAuth2 传统栈 + `RedisTokenStore`，
    令牌不透明；资源服务器用 `RemoteTokenServices` 调 `/oauth/check_token`
-   （实测 `<公司网关>/auth/oauth/check_token` 可达）。
+   （**网络可达**：`<公司网关>/auth/oauth/check_token`。⚠️ 但「服务可调用」**未成立**，
+   见下方未决条目 —— 可达曾被读成「只差凭据」，2026-09-29 实测推翻）。
 4. **数据范围同源**：`ShopIdInterceptor` 的隔离集合来自 `/shopuser/getShops`
    （与 #426 使用的同一条链），但**它的生效条件是 `client-type ∈ {admin, supply-admin, tenant-app}`**
    —— 公司后端是读这个头的，AI-Ops 不读。
@@ -4486,7 +4487,7 @@ OP-ACCEPT-POS-01..04 与本文末节，不用消费者会话或人造夹具冒�
 
 | 项 | 结论 | 依据 |
 |---|---|---|
-| 令牌校验 | 调 `/auth/oauth/check_token`（公司 `RemoteTokenServices` 同一入口） | 实测可达；无凭据返回 `Full authentication is required` |
+| 令牌校验 | 调 `/auth/oauth/check_token`（公司 `RemoteTokenServices` 同一入口） | **网络可达**；但带现有任一客户端凭据与不带凭据返回**逐字相同**的 `Full authentication is required` ⇒ 对**服务间调用**是否成立未定（见未决） |
 | B 端主体 | 直接取令牌里的 `id`，**不再**调 `/user/inside/byUserId` | 令牌已带 `id`/`user_id`/`tenant_id`/`type` |
 | 数据范围 | 用令牌里的 `shop_ids`，**不再**调 `/shopuser/getShops` | 令牌已带；少一跳且少一个**无鉴权**端点依赖 |
 | 入站信任 | **来源 + 共享密钥**（网关那一跳注入，前端不持有） | 该 docker0 桥上还有公司 35 个容器，纯网络隔离 = 多租网络信任 |
@@ -4536,14 +4537,73 @@ OP-ACCEPT-POS-01..04 与本文末节，不用消费者会话或人造夹具冒�
 
 ### 未验证（如实列出，勿当成已验）
 
-- `/oauth/check_token` 的 `client_id`/`client_secret` 归属与创建方（业务侧）。
+- **`/oauth/check_token` 是不是「服务可调用」的形态**（业务侧/接口人）：库里 7 个客户端的
+  `client_secret` **等于其 `client_id`**（公开值），带上它请求与不带请求结果逐字相同；
+  `/oauth/token` 则被图形验证码拦住。⇒ 要问的不是「用哪一行凭据」，而是**公司侧怎么让一个服务
+  调用这条路径**（建真正的客户端？另有入口？）。**这是第一段之外唯一的跨团队阻塞。**
 - 管家端在 41 上实际请求的域名是否已经过 `cloud-gateway`（前端）。
 - 管家端真实请求带的 `client-type` 是 `admin` 还是 `tenant-app`。
 - `shop_ids` 快照 vs `/shopuser/getShops` 实时的 staleness 窗口（= 令牌有效期）
   在真实运营场景下是否可接受 —— **未被实测**，是按低频变更判断接受的代价。
-- **第二段提供的客户端凭据能否过 `check_token` 的 `isAuthenticated()`** —— 未实测；
-  #443 把这条失败显式映射为「AI-Ops 侧凭据问题」（可重试的
-  `ACCESS_TOKEN_VALIDATION_UNAVAILABLE`），而不是用户令牌无效。
+- **服务身份能否过 `check_token` 的 `isAuthenticated()`** —— **已实测：用现有客户端过不去**
+  （`admin:admin` 与不带凭据得到同一句话；`WebSecurityConfigurer` 注册的是
+  `DelegatingPasswordEncoder`，要求 `{bcrypt}` 前缀，与库里的字面量 secret 匹配不上 ——
+  这是**候选解释，未证实**）。#443 把这条失败显式映射为「AI-Ops 侧凭据问题」（可重试的
+  `ACCESS_TOKEN_VALIDATION_UNAVAILABLE`），而不是用户令牌无效；这个映射**在这条证据下依然正确**：
+  它确实是 AI-Ops 侧（更准确地说是公司侧客户端配置）的问题，不是用户令牌的问题。
+
+---
+
+## 公司校验入口对「服务间调用」是否成立：一条实测更正（2026-09-29）
+
+**结论**：`/auth/oauth/check_token` **网络可达，但服务调用不可用** —— 现有客户端凭据过不去。
+这**不影响** #443/#444 已交付的代码，但**改变第二段的可行性**：路由打通了、令牌也换不出身份。
+
+**为什么值得单列**：这条端点此前被记录为「可达，无凭据返回 `Full authentication is required`」，
+读起来像「只差凭据」。**那句话读到的是半分信息**：它同时也是**带凭据时**的返回。
+
+**实测（41，读-only 探测）**：
+
+| 请求 | 结果 |
+|---|---|
+| `POST /auth/oauth/check_token`，不带 Basic | `{"code":1,"msg":"Full authentication is required to access this resource"}` |
+| 同上，带 `Basic admin:admin` | **逐字相同** |
+| 同上，带错的 Basic | **逐字相同** |
+| `POST /auth/oauth/token` | `{"code":1,"msg":"验证码不能为空"}`（与管家端登录同一条被验证码拦住的链） |
+
+⚠️ **从表里能推出的边界是窄的**：三种请求得到同一句话，只能说明「在这些输入下没有任何输入
+产生成功认证」；**不能**据此断定被判掉的位置是 `client_details` **之前**还是**之中**（例如密码
+编码器不匹配会产生同一结果）。要区分需要公司侧服务端日志，我们没有。**本节据以行动的结论
+（服务调用不成立）不依赖这个区分**；只有下面的源码解释依赖它。
+
+复现方式见 `docs/agents/env-41-runbook.md` 的「探测公司校验入口的服务身份」（只读，不写任何配置）。
+
+**复现时的凭据处理**（评审四轮才收敛）：读服务配置自己取口令（`/etc/aiops-41/production.env`
+的 `AIOPS_MYSQL_*`，`aiops41` 可读）—— **不经 shell 变量、不进命令行**（那会展开进 `ps` 可见的
+进程参数），也**不打印 secret 明文**（轮换后同一条命令会捕获新值）；且必须**复用
+`Settings.from_config`**（它用 `dotenv_values(..., interpolate=False)` 并给端口兜底 3306），
+自己拆 `KEY=VALUE` 会把引号当口令、把缺端口当错误。见 runbook §1.6。
+
+**库侧事实**（2026-09-29 按上述步骤实测复现）：`qumall_upms.sys_oauth_client` 现有 7 行，
+主键列名是 **`id`**（不是 `client_id`），`client_secret` **逐行等于该 `id`**
+（`admin`/`admin`、`app`/`app`、`gen`/`gen`、`shop`/`shop`、`swagger`/`swagger`、
+`test`/`test`、`weixin`/`weixin`）。⇒「取到凭据」这件事不是权限问题 ——
+**它是公开值**，因此它不构成一条信任边界。
+（记录口径：这里是**结论**，不是说这些值可以随处分发 —— 复现步骤只比较「长度 + 是否等于 id」，
+不打印明文，见 runbook §1.6；把公开值配进任何服务端仍然是错的方向。）
+
+**源码侧候选解释（未证实，且只在上面那个未定分支下成立）**：`cloud-auth/WebSecurityConfigurer.passwordEncoder()` 返回
+`PasswordEncoderFactories.createDelegatingPasswordEncoder()`（要求 `{bcrypt}` 之类前缀），
+而 `JdbcClientDetailsService` 默认用 `NoOpPasswordEncoder`；带基本认证访问 `check_token` 时
+`ClientDetailsUserDetailsService` 也会用该 encoder 校验 secret ⇒ 字面量 secret 匹配不上。
+**这与观测一致，但只是解释候选**：我们无法从 41 侧区分它是唯一原因。
+
+**对已交付代码的意义**：#443 把这条失败映射成「AI-Ops 侧凭据问题」（可重试的
+`ACCESS_TOKEN_VALIDATION_UNAVAILABLE`）**依然正确** —— 它确实是凭据/客户端配置问题，
+不是用户令牌问题。**要改的是公司侧配置或换一条服务间通道**，不是这两张票的实现。
+
+**记录要求**：这条结论是**跨团队阻塞**，已写进基线 §4 第 1 条与 ADR-0009 的决定 1；
+在得到公司侧答复前，本链路保持「实现已合入、依赖未就绪」。
 
 ---
 

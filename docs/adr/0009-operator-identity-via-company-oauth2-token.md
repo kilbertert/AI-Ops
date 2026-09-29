@@ -20,6 +20,11 @@ Status: Accepted
 
 1. **校验走 `/auth/oauth/check_token`**（公司资源服务器 `RemoteTokenServices` 用的同一入口），
    不自己验签、不复制密钥、不把「能以令牌读到 Redis 对象」当作「令牌有效」。
+   ⚠️ **未验证的前置（2026-09-29 实测，见基线 §4 第 1 条）**：这条端点对**服务间调用**是否成立
+   尚不确定，且证据指向**不成立** —— 库里客户端的 `client_secret` 等于其 `client_id`（公开值），
+   带上它与不带它得到逐字相同的 `Full authentication is required`。本决定选的是**校验位置**
+   （公司权威那一跳），它仍然正确；但「AI-Ops 能不能以服务身份调到那一跳」是**另一件事**，
+   在得到公司侧答复前，本链路保持「实现已合入、依赖未就绪」。
 2. **身份与范围直接取自令牌**：`id` = B 端 `sys_user.id`（管家端授权的起点）、
    `user_id` = C 端、`tenant_id`、`shop_ids`。
    **不再调** `/user/inside/byUserId`（C→B 补全）与 `/shopuser/getShops`（店铺集合）——

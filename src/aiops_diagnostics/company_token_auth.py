@@ -9,6 +9,25 @@
 **校验落在公司权威入口**（``/oauth/check_token``，公司资源服务器 ``RemoteTokenServices`` 用的
 同一处，ADR-0009 D2）：不自己验签、不复制密钥、不读令牌存储、不把「能以令牌读到对象」当校验。
 
+⚠️ **这条端点对「服务间调用」是否成立，尚未验证，而现有证据指向不成立**（#448 的探查，
+2026-09-29 41 实测 + Spring 源码复核）。本模块只实现了这条链路，**没有**、也无法证明公司那边
+会接受我们的凭据：
+
+- **`sys_oauth_client` 里现有 7 个客户端的 `client_secret` 就是它的 `client_id` 字面量**
+  （`admin`/`admin`、`app`/`app`、…）。那是为了让公司旧的 `NoOpPasswordEncoder` 能匹配而写进库的
+  历史值，不是「有凭据可取」——**它等于公开值**。
+- 实测 `POST /auth/oauth/check_token` 带 `Basic admin:admin` 与**不带** Basic 得到**逐字相同**的
+  `{"code":1,"msg":"Full authentication is required to access this resource"}`，即请求没有走到
+  `client_details` 认证那一步就被拒。而 `cloud-auth` 的 `WebSecurityConfigurer` 注册的是
+  `PasswordEncoderFactories.createDelegatingPasswordEncoder()`（要求 `{bcrypt}` 之类前缀），
+  与库里的字面量 secret 匹配不上 —— **这与观测一致**，是源码层面的一个候选解释，不是结论。
+- 另一条入口 `/auth/oauth/token` 实测返回 `{"code":1,"msg":"验证码不能为空"}`（与管家端登录同一条
+  被图形验证码拦住的链）。
+
+因此本模块的**启用前提**是一条公司侧未解的依赖：要么为 AI-Ops 建一个真正的客户端（`id == secret`
+不算），要么公司另有服务间校验入口。**在那之前不要把这条路径当作可用**：模块已实现，
+但它的外部依赖在 41 上未就绪（见基线文档 §4 第 1 条）。
+
 ⚠️ **不能复用 ``IntrospectionCallerResolver``**（实现时的第一坑）：公司成功时返回的是
 **框架组装的身份映射**（框架字段 + 增强器字段合并，**没有** ``code``/``data`` 信封），不是
 RFC 7662 的自省体 —— 身份在增强器注入的 ``id``/``tenant_id`` 里，而不是 ``sub`` + ``aud`` +

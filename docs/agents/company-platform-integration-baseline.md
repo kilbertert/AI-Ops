@@ -88,9 +88,9 @@ location ~* ^/(erp|qm|das|dis|...|upms|mall|mallapi|...)  {  # ← 公司服务�
 - 客户端（`sys_oauth_client` 表行）+ 用户两类主体；**client-credentials 令牌刻意不做
   token enhancement**（不带身份），用户令牌才把身份写进 `additionalInformation`：
   `id` / `user_id` / `type` / `tenant_id` / `system_id` / `shop_id` / `tenant_ids` / `shop_ids`。
-- 校验：资源服务器用 `RemoteTokenServices` 调 **`/oauth/check_token`**（实测可达：
-  `<公司网关>/auth/oauth/check_token`，无凭据时返回
-  `Full authentication is required to access this resource`）。
+- 校验：资源服务器用 `RemoteTokenServices` 调 **`/oauth/check_token`**（`<公司网关>/auth/oauth/check_token`）。
+  ⚠️ **「无凭据时返回 `Full authentication is required`」曾被读成「端点可达、只差凭据」—— 这是错的**，
+  见 §4 第 1 条：带凭据时返回**逐字相同**的那句话。
   **两种响应的形状不同**（2026-09-29 读源码更正，实现依据见
   [``company_token_auth.py``](../../src/aiops_diagnostics/company_token_auth.py) 的模块文档）：
   - **成功**：令牌的 `additionalInformation` 被**合并进顶层**（不是包在 `data` 里），
@@ -254,10 +254,29 @@ return point.proceed();
 
 ## 4. 未决（不猜，逐条列出）
 
-1. **`/oauth/check_token` 的客户端凭据**：`sys_oauth_client` 里给 AI-Ops 用哪一个
-   `client_id` / `client_secret`；谁去建这一行。需要业务侧提供。**（第二段的唯一前置阻塞）**
-2. **管家端请求在 41 上是否已经过 `cloud-gateway`**：浏览器直连 `api.mall.qushiyun.com/v1/*`
-   时不经过；但若走的是别的域名（例如从网关进来的域），结论会不同。**需要前端确认它实际请求的域名**。
+1. **`/oauth/check_token` 是不是「服务可调用」的形态** —— （原条目问的是「用哪一行凭据」，
+   2026-09-29 实测后**问题本身改了形状**）：`sys_oauth_client`（**主键列名是 `id`**）里
+   **7 个客户端的 `client_secret` 都等于它自己的 `id`**（`admin`/`admin` …）。
+   这不是「有凭据可取」而是**凭据即公开值**；
+   而带上它请求 `/auth/oauth/check_token`，与**不带**凭据得到**逐字相同**的
+   `{"code":1,"msg":"Full authentication is required to access this resource"}`。
+   ⚠️ **从「结果相同」能推出的边界是窄的**（第一版这里写宽了）：它只能说明「在这些输入下，
+   没有任何输入产生成功认证」；**不能**据此断定请求是在 `client_details` 之前还是之中被判掉
+   —— 例如密码编码器不匹配也会产生同一结果。要区分这两者需要公司侧服务端日志，而我们没有。
+   本节据以行动的结论（**服务调用不成立**）不需要区分它们，但**解释**（见下）只在其中一个分支
+   下成立。另一条入口 `/auth/oauth/token` 返回
+   `{"code":1,"msg":"验证码不能为空"}`（与管家端登录同一条被验证码拦住的链）。
+   ⇒ **答案不是「用哪个 client」，而是「公司侧要怎么让一个服务调用这条路径」**：要么建一个真正的
+   客户端（`id == secret` 不算），要么公司另有服务间校验入口。**需要公司侧/接口人答复。**
+   **这是 AI-Ops 侧第一段之外唯一的跨团队阻塞**；在那之前 #443/#444 的代码保持「实现已合入、
+   依赖未就绪」。（源码层面的一个候选解释，**未证实、且只在上面那个未定的分支下成立**：`cloud-auth` 的 `WebSecurityConfigurer`
+   注册 `PasswordEncoderFactories.createDelegatingPasswordEncoder()`，要求 `{bcrypt}` 之类前缀，
+   与库里的字面量 secret 匹配不上 —— 与观测一致，但这是解释候选，不是结论。）
+2. ~~**管家端请求在 41 上是否已经过 `cloud-gateway`**~~ —— **已解（2026-09-29 实测，由 #448 记录）**：
+   管家端 App 打的是 `api.mall.qushiyun.com`，其路径前缀（`upms`/`das`/`mall`/`charging-pile`/
+   `mallapi`）**全部命中 Nginx 那条 `→ upstream back_server`（＝公司网关）**。也就是说管家端流量
+   **今天已经在网关之后**；被单独摘出来直连 AI-Ops 的只有 `/v1/` 一个前缀。因此它不是「新开一条
+   路由」，而是「让 `/v1/` 也走那条已经在走的路」。
 3. **`client-type` 的对齐**：公司后端用 `admin` / `supply-admin` / `tenant-app` 决定是否隔离；
    AI-Ops 现在不读它。管家端产物实测会发 `admin` / `tenant-app`（另有 `H5` / `H5-WX` / `APP` / `"1"` 等
    其它取值），需要确认哪一个才是管家端**真实请求**带的值。
@@ -276,8 +295,9 @@ return point.proceed();
   所以 D5 的「用令牌里的 `shop_ids`」隐含**AI-Ops 自己调 `check_token`**（D2），
   二者是同一件事的两面。（实测：41 本机 Redis **没有** `base_oauth:*`，
   令牌存储不在 AI-Ops 够得到的那台上，因此不能靠「自己读 Redis」省掉这一跳。）
-- **`/oauth/check_token` 是否可达** —— 可达：`<公司网关>/auth/oauth/check_token`，
-  无客户端凭据时返回 `Full authentication is required to access this resource`。
+- **`/oauth/check_token` 是否可达** —— **网络可达，但「服务可调用」未成立**（这正是上面 §4 第 1 条
+  改形状的原因）：无凭据、带 `admin:admin`、带错凭据三种请求得到**同一句话**。原先据「无凭据也返回
+  这句话」推断「只差凭据」是把「可达」当成了「可用」。
 - **网关路由好不好加** —— 好加，且**无需重启**（Nacos `dataId=dynamic_routes` + `DynamicRouteInit` 监听器）；
   难的是前置（凭据）与爆炸半径（35 条），不在配置本身。
 
