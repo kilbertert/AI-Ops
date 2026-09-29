@@ -250,7 +250,10 @@ here`）。按入口分流必须用 `map`。41 上已有现成用法：`0.websoc
 # 放在 vhost 文件顶部（http 上下文内）
 map $http_x_business_entry $aiops_entry {
     default        "consumer";
-    "~*^operator$" "operator";          # 大小写不敏感，与上游 is_operator_entry 同口径
+    # ⚠️ 必须容忍两侧空白：上游 `is_operator_entry` 是 `(v or "").strip().lower()`，nginx 不 strip。
+    # 只写 `~*^operator$` 时，`" operator "` 会落到下面那条原样透传 ⇒ **服务令牌 + entry=operator**
+    # ⇒ 上游拿服务令牌去当公司令牌验签 ⇒ 管家端登录不了（实测）。
+    "~*^\s*operator\s*$" "operator";
     # ⚠️ 未知的非空值必须**原样透传**，不能落进 default 变成 consumer：
     # 上游 `PlatformIdentityResolver` 对非法入口是 403 PLATFORM_FORBIDDEN；若这里把它改写成
     # consumer，调用方会**静默落进客户端内容域**，拿不到那个 403，而 `_data_scope` 也已经在
@@ -259,15 +262,17 @@ map $http_x_business_entry $aiops_entry {
 }
 # ⚠️ 服务令牌**不进 vhost**：今天它单独放在 /etc/aiops-41/nginx-aiops-service-token.conf
 # （0600 root，location 内 include）。搬进 vhost 会把明文复制到第二处，且会随备份再复制一次。
-# ⇒ 做法：把那份文件从「直接 proxy_set_header Authorization」改成「只设一个变量」
-#    （set $aiops_service_authorization "Bearer <令牌>";），由下面的 map 引用。
+# ⇒ 做法：把那份文件从「直接 proxy_set_header Authorization」改成「只设两个变量」——
+#    set $aiops_service_authorization "Bearer <服务令牌>";
+#    set $aiops_source_key_injected    "<来源密钥>";
+#    两把钥匙因此**都不以字面量落在 vhost 里**，也不随 vhost 的备份再复制一份。
 map $aiops_entry $aiops_auth {
     default    $aiops_service_authorization;   # ← 变量来自那个 0600 文件
     "operator" $http_authorization;            # 管家端：透传用户 JWT
 }
 map $aiops_entry $aiops_srckey {
     default    "";
-    "operator" "<来源密钥>";                    # 只由这一跳注入，前端不持有
+    "operator" $aiops_source_key_injected;     # 同样来自那份 root-only 文件（见下）
 }
 
 location ^~ /v1/ {
@@ -287,6 +292,22 @@ location ^~ /v1/ {
     proxy_buffering off;
 }
 ```
+
+### 实测定稿的配置：五种入口值的落点
+
+（真 nginx + 真上游回显；`Authorization` 恒发 `Bearer U.JWT`）
+
+| `X-Business-Entry` | 上游收到 | 落点 |
+|---|---|---|
+| `operator` | `ENTRY=operator` / `AUTH=Bearer U.JWT` / `SRC=SRC-KEY-VALUE` | 管家端 ✅ |
+| `" operator "`（两侧空格） | 同上（被 `~*^\s*operator\s*$` 规范化） | 管家端 ✅（**只写 `~*^operator$` 会落错**） |
+| `OPERATOR`（大写） | 同上 | 管家端 ✅ |
+| `operator-admin`（非法非空） | `ENTRY=operator-admin` / `AUTH=Bearer SERVICE-TOKEN` / `SRC=空` | **原样透传** ⇒ 上游按 `403 PLATFORM_FORBIDDEN` 拒 |
+| 无该头 | `ENTRY=consumer` / `AUTH=Bearer SERVICE-TOKEN` / `SRC=空` | 客户端，**逐字不变** ✅ |
+
+> 🟡 **空白那一行是实测踩到的**：上游做 `strip().lower()` 而 nginx 不 strip，两边不一致时该值
+> **不报错**，只是落进另一条分支（服务令牌 + entry=operator ⇒ 管家端登不进去）。
+> **凡上游会规范化的入参，这一跳的正则必须按同一套规范化写。**
 
 ### 🔴 为什么「两条同名 `proxy_set_header`」是一个静默用错凭据的坑（实测）
 
