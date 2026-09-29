@@ -183,7 +183,7 @@ flowchart TB
     L5["L5 持久化<br/>gateway_store · conversation_store · metrics_store<br/>agent_lifecycle · shortcut_lifecycle"]
     L4["L4 推理与产品能力<br/>agent_engine · codex_runtime · agent_runner · agent_validator · qa_rag<br/>turn_recovery · routing · faq · promo_agents · answer_language · agent_manifest · agent_debug"]
     L3["L3 证据与诊断内核<br/>sources · diagnostic_tools · engine · journal<br/>agent_workspace · health_report · knowledge_retrieval · zero_order"]
-    L2["L2 身份与范围<br/>scope_context · query_scope · caller_auth · third_session_auth"]
+    L2["L2 身份与范围<br/>scope_context · query_scope · caller_auth · third_session_auth<br/>company_token_auth"]
     L1["L1 领域规则（纯函数）<br/>rules · order_visibility · health_metrics · health_curves · parsing"]
     L0["L0 基础设施与契约<br/>agent_contracts · models · config · bounded_http · redaction<br/>i18n · private_files · platform_paths · http_auth · render · console_encoding<br/>jev_decisions"]
 
@@ -268,6 +268,7 @@ flowchart TB
 | `query_scope.py` | 把 `ScopeContext` 解析成可直接下推的不可变 `QueryScope`（tenant / site_ids / user_id），站点范围来自 UPMS 数据范围、Dis 点位归属，或运营商维度（B 端主体 → 店铺集合 → 站点归属，PRD #423） |
 | `caller_auth.py` | 调用者身份接缝：`CallerContextResolver`（UPMS / OAuth2 introspection / fail-closed 禁用）与 `OrderAuthorizer` |
 | `third_session_auth.py` | C 端 `thirdSession` → `ScopeContext` 的 Redis 解析路径；身份同时带 C 端 id 与经既有 C→B 映射端点补全的 B 端 `sys_user.id`，解析不出唯一主体时记录可区分原因 |
+| `company_token_auth.py` | 管家端的**公司 OAuth2 令牌** → `ScopeContext`：校验落在公司权威的 `check_token`（不自验签、不复制密钥），身份与 `shop_ids` 取自令牌，站点范围经 `operator_site_scope_from_shops` 共用同一份规则。缺字段/形状不符/上游不可用一律 fail closed（#443，ADR-0009） |
 
 #### L3 证据与诊断内核
 
@@ -378,7 +379,7 @@ flowchart TB
 
 | 接缝 | 协议 | 实现（按配置选择） |
 |---|---|---|
-| `CallerContextResolver` | `caller_auth.py` | `Disabled…`（fail closed 默认）/ `Upms…`（公司 Bearer）/ `Introspection…`（RFC 7662 令牌自省，强制 HTTPS 与 audience） |
+| `CallerContextResolver` | `caller_auth.py` | `Disabled…`（fail closed 默认）/ `Upms…`（公司 Bearer）/ `Introspection…`（RFC 7662 令牌自省，强制 HTTPS 与 audience）/ `CompanyToken…`（`company_token_auth.py`，管家端公司 OAuth2 令牌；三个配置键全空时不构造） |
 | `OrderAuthorizer` | `caller_auth.py` | `Disabled…` / `ScopedOrderAuthorizer` |
 | `PlatformDirectory` | `scope_context.py` | `UpmsDirectory` |
 | `SiteScopeMapper` / `DisDirectory` | `query_scope.py` | 静态映射 / `DisHttpDirectory` |
@@ -466,7 +467,7 @@ docs/                     架构、契约、ADR、运行手册（见第十节路
 AGENTS.md                 仓库级开发共识（中文文档、里程碑同步、业务边界）
 CONTEXT.md                领域词汇表（术语 + 应避免的同义词）
 SOP.md / 充电桩问题排查SOP.md   业务规则来源（后端行为的中文说明）
-acceptance.feature        Gherkin 可执行验收约束（29 Feature / 73 Rule / 195 Scenario）
+acceptance.feature        Gherkin 可执行验收约束（30 Feature / 77 Rule / 206 Scenario）
 qa-plan.md                QA 用例（136 个用例 ID，含环境/前置/数据/动作/预期/清理）
 ```
 

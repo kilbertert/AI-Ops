@@ -1130,3 +1130,44 @@ uv run pytest tests/test_assistant_api.py tests/test_conversation_api.py \
   B 端账号」的会话同样生效，负向上界由 OP-ACCEPT-09 约束。
 - **ADR-0003 偏离沿用**：委托句柄仍未实现，当前依赖共享 Redis 会话直读；本片
   延续该偏离，未在任何注释里把「直接读会话」写成已批准的设计。
+
+## 管家端公司 OAuth2 令牌解析验收 QA（CT-ACCEPT，#443 / ADR-0009）
+
+- 环境：AI-Ops 仓库本机（Linux x86_64，Python 3.13，uv 虚拟环境），pytest + ruff；
+  **未连接 41、未连接公司校验入口、未连充电库** —— 全部为离线替身 + 真实授权判定与真实范围下推。
+- 前置：分支 `feat/company-token-resolver` 的提交；工作树内执行（`PYTHONPATH` 必须指向该
+  工作树的 `src`，否则 editable install 会加载规范 checkout 的旧代码）。
+- 时间戳：2026-09-29（Asia/Shanghai）执行 `uv run pytest` 与 `uv run ruff check`。
+- 结果：`PYTHONPATH=$PWD/src uv run pytest` **1464 passed / 0 failed**（基线 1414，新增 50）；
+  `uv run ruff check` 与 `uv run ruff format --check` 全部通过。
+- 日志/报告：本仓库不提交原始控制台输出；逐条用例的测试标识见下表的「证据」列，可在该提交上
+  用 `uv run pytest <文件>` 复现。**未把「手工测过」当作证据。**
+
+| ID | 环境 | 前置 | 数据 | 动作 | 预期 | 清理 | 证据 |
+|---|---|---|---|---|---|---|---|
+| CT-ACCEPT-01 | 本地 dev | 校验入口替身返回带身份的应答 | 一条管家端令牌（`id`/`user_id`/`tenant_id`/`shop_ids`） | 经解析器解析 | B 端主体、C 端用户、租户与站点集合正确；产生范围指纹 | 无 | `tests/test_company_token_auth.py::test_a_valid_token_yields_the_operator_identity_and_site_scope` |
+| CT-ACCEPT-02 | 本地 dev | 同上 | 店铺集合映射到两个站点 | 解析站点集合 | 站点经归属映射得到，**不把店铺 id 当站点 id** | 无 | `...::test_shop_ids_are_mapped_through_the_ownership_table_not_used_directly` |
+| CT-ACCEPT-03 | 本地 dev | 同上 | 令牌同时带 `tenant_id` 与 `tenant_ids` | 解析租户 | 取 `tenant_id`；可切换的 `tenant_ids` 不影响范围 | 无 | `...::test_the_tenant_comes_from_tenant_id_not_the_switchable_tenant_ids` |
+| CT-ACCEPT-04 | 本地 dev | 公司以「拒绝」形态应答，且**身份字段齐全** | 拒绝体（带拒绝标记） | 解析 | 拒绝；**不发起任何范围查询** | 无 | `...::test_the_company_refusal_is_judged_by_the_envelope_not_by_its_identity_fields` |
+| CT-ACCEPT-05 | 本地 dev | 校验应答无身份声明（客户端凭据令牌形状，含「令牌有效」标记） | 无身份应答 | 解析 | 拒绝：不把「令牌有效」当「有身份」 | 无 | `...::test_the_resolver_fails_closed[payload3-...]` |
+| CT-ACCEPT-06 | 本地 dev | 参数化：缺主体、缺租户、空白、非标量、非对象载荷、非法店铺形状 | 各类畸形应答 | 解析 | 一律拒绝；错误文本不含令牌与密钥 | 无 | `...::test_the_resolver_fails_closed`、`...::test_invalid_shop_id_shapes_fail_closed` |
+| CT-ACCEPT-07 | 本地 dev | 校验入口拒绝 AI-Ops 客户端凭据 / 不可达 / 返回 HTML | 三种上游故障 | 解析 | 可重试的服务不可用（**不是**「令牌无效」） | 无 | `...::test_http_401_says_the_caller_credentials_are_wrong_not_the_user_token`、`...::test_a_transport_failure_is_retryable`、`...::test_a_non_json_body_is_a_retryable_upstream_fault` |
+| CT-ACCEPT-08 | 本地 dev | 站点归属映射抛错（上游不可达 / ID 不合法） | 两种故障 | 解析 | 空站点集合（拒绝），**不是 500**；日志带可区分原因且不含身份与凭据 | 无 | `...::test_every_scope_failure_denies_instead_of_raising` |
+| CT-ACCEPT-09 | 本地 dev | 管家端入口；店铺集合映射到一个站点 | 行级镜像假 MySQL：集合内他人名下订单、集合外订单 | 经入口显式指名两单 | 集合内 → `202 diagnosis`；集合外 → `404 ORDER_NOT_FOUND` | 不产生业务数据 | `...::test_a_company_token_reaches_the_operator_actions_and_order_diagnosis`、`...::test_an_order_outside_the_operators_sites_is_refused` |
+| CT-ACCEPT-10 | 本地 dev | 同一条令牌、consumer 入口 | 集合内他人名下订单 | 经 consumer 入口显式指名 | `404`：不采用运营商站点集合（#436 边界） | 无 | `...::test_the_consumer_entry_keeps_the_self_scope_for_a_company_token` |
+| CT-ACCEPT-11 | 本地 dev | 令牌的店铺集合为空 | 空集合 | 经入口查询任意订单 | `404`；**不发起订单查询**（不是「不限制」）；日志成因与「已登记店铺无站点」可区分 | 无 | `...::test_a_token_without_shop_binding_denies_every_order_without_issuing_sql`、`...::test_the_two_empty_scope_causes_are_still_logged_apart` |
+| CT-ACCEPT-12 | 本地 dev | 解析器选择：三个配置键（URL/客户端 id/客户端密钥）各种组合 | 三键全空 / 三键齐备 / 只设 URL | 调用配置选择 | 全空 ⇒ 与启用前同型；齐备 ⇒ 选中新解析器且优先于 UPMS 兜底；只设 URL ⇒ 启动失败 | 临时配置文件 | `...::test_the_company_path_*`、`...::test_a_half_configured_company_path_is_a_startup_error` |
+| CT-ACCEPT-13 | 本地 dev | 会话服务令牌已配置（41 的现网形状） | 三键齐备 + 服务令牌 | 调用配置选择 | 仍选中会话解析器 —— **记录 #444 的启用前提**：门必须放在会话那一级之前 | 无 | `...::test_the_session_path_still_wins_when_the_service_token_is_set` |
+
+**边界声明（不得写成本项已过的部分）**：
+
+- **正向轨道（真实管家端登录）未执行**：令牌路径未启用，41 上也没有第二段所需的
+  `client_id`/`secret`，因此**没有一次真实管家端登录被走到**。本表全部为离线替身 + 真实授权
+  判定与真实范围下推，只能主张「契约形状与 fail-closed 矩阵被覆盖」。
+- **公司侧形状来自源码而非实测**：成功体是裸身份映射、失败体是 `HTTP 200 + {"code":1,...}`、
+  `active` 不是判据 —— 依据是 `CheckTokenEndpoint`、`AuthorizationServerConfig.tokenEnhancer()`、
+  `BaseWebResponseExceptionTranslator` 与 `I18nResponseAdvice.supports()`。**未实测**。
+- **`active` 有意不作判据**：客户端凭据令牌同样声称令牌有效而身份字段为空；CT-ACCEPT-05 钉住这一点。
+- **`exp` 有意不本地判**：公司是权威校验方，本地再判一次只会引入时钟偏移这个新的失败模式。
+- **明写的代价**：令牌里的店铺集合是**签发时刻**的快照（staleness 窗口 = 令牌有效期），
+  而既有的店铺归属查询是实时的。这是 ADR-0009 已接受的取舍，**未实测**真实运营场景下的可接受性。
