@@ -17,10 +17,13 @@
   （`admin`/`admin`、`app`/`app`、…）。那是为了让公司旧的 `NoOpPasswordEncoder` 能匹配而写进库的
   历史值，不是「有凭据可取」——**它等于公开值**。
 - 实测 `POST /auth/oauth/check_token` 带 `Basic admin:admin` 与**不带** Basic 得到**逐字相同**的
-  `{"code":1,"msg":"Full authentication is required to access this resource"}`，即请求没有走到
-  `client_details` 认证那一步就被拒。而 `cloud-auth` 的 `WebSecurityConfigurer` 注册的是
+  `{"code":1,"msg":"Full authentication is required to access this resource"}`。
+  ⇒ 能推出的只有：**这些输入下没有任何一种产生成功认证**（即这条路径不能当服务间入口用）。
+  **不能**据此定位失败发生在 `client_details` 认证**之前**还是**之中** —— 两者产生同样的观测，
+  要区分需要公司侧服务端日志，我们没有。`cloud-auth` 的 `WebSecurityConfigurer` 注册的是
   `PasswordEncoderFactories.createDelegatingPasswordEncoder()`（要求 `{bcrypt}` 之类前缀），
-  与库里的字面量 secret 匹配不上 —— **这与观测一致**，是源码层面的一个候选解释，不是结论。
+  与库里的字面量 secret 匹配不上 —— 这是**同一条链之内**失败的一种**候选解释**（与观测一致，
+  但依赖上面那个未定的分支），**不是结论**。
 - 另一条入口 `/auth/oauth/token` 实测返回 `{"code":1,"msg":"验证码不能为空"}`（与管家端登录同一条
   被图形验证码拦住的链）。
 
