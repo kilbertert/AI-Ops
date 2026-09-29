@@ -55,7 +55,11 @@ SSHPASS='<现场从受控来源取得>' sshpass -e ssh -o StrictHostKeyChecking=
 
 ### 1.3 执行约定
 
-- 所有需要读 `production.env` 凭据的命令都用 `root`（`aiops41` 用户读不到 env 明文）。
+- **读** `production.env` 里凭据的命令用 `root` 或 `runuser -u aiops41`（文件权限是
+  `0600 aiops41:aiops41`，**属主自己可读** —— 2026-09-29 实测：`runuser -u aiops41 -- test -r`
+  通过。初稿这里写「`aiops41` 读不到 env 明文」，与 §1.4 的「两文件均为 `0600 aiops41`」
+  自相矛盾，是错的）。
+  ⚠️ **改**这些文件的动作仍按取证口径走（见本手册开头），不要因为「能读」就顺手写。
 - 应用进程内执行（reconcile、ShortcutManager）用 `runuser -u aiops41 -- ...`，
   工作目录必须在 `/opt/aiops-41`（否则 `.venv` 找不到 `pyproject.toml`，报
   `PermissionError: /root/pyproject.toml`）。
@@ -165,6 +169,7 @@ ssh aiops-41 'curl -sS -m 8 -X POST \
   https://api.mall.qushiyun.com/auth/oauth/check_token; echo'
 
 # ② 带库里现有的客户端凭据（注意：这些 secret 就等于它们的 id，见 ③）
+#    用「错的凭据」做对照更稳：见下面「判据」——无凭据与错凭据应当给出同一结果。
 ssh aiops-41 'curl -sS -m 8 -X POST \
   -H "Content-Type: application/x-www-form-urlencoded" -d "token=probe" \
   -u admin:admin https://api.mall.qushiyun.com/auth/oauth/check_token; echo'
@@ -172,28 +177,30 @@ ssh aiops-41 'curl -sS -m 8 -X POST \
 # ③ 读 client 行（只读；确认 secret 是不是字面量）。走 §0 环境事实里那条业务库连接，
 #    不要假定 41 上有 mysql CLI。
 #
-#    ⚠️ 三条纪律，都是评审逐轮指出来的：
+#    ⚠️ 四条纪律，都是评审逐轮指出来的：
 #    · 口令**不要**经 shell 变量或命令行传递 —— 那会把它展开进本地与远端的进程参数
 #      （`ps` 可见）。改为让脚本**自己读服务配置**：`/etc/aiops-41/production.env`
-#      里有 `AIOPS_MYSQL_*`，且 `aiops41` 可读（已核）。整段经 stdin 送到远端 shell，
-#      口令只在 python 进程内出现。
+#      里有 `AIOPS_MYSQL_*`，且 `aiops41` 可读（已实测）。
+#    · **用仓库自己的配置读取器**（`Settings.from_config`），不要自己拆 `KEY=VALUE` ——
+#      服务读的是 `dotenv_values(..., interpolate=False)`（会处理引号），并且给未设置的
+#      端口兜底 3306。自己拆会把 `"abc"` 的引号当口令、把缺失端口当错误，于是「探测失败」
+#      与「服务其实连得上」分不开。传给它的必须是 `Path`，不是 `str`。
 #    · 也**不要**依赖别的片段遗留的 shell 变量：每条 `ssh` 起的是独立远端 shell。
 #    · 这一步只要「secret 是不是等于 id」这一个事实，因此**只打印长度与是否相等**，
 #      不打印明文。即使今天的值是公开字面量，轮换之后同一条命令就会把新口令刷到终端
 #      和 shell 历史里。要看明文是**一次显式的、被记录的决定**，不是默认行为。
 ssh aiops-41 'runuser -u aiops41 -- /opt/aiops-41/.venv/bin/python - <<PY
+import sys
+from pathlib import Path
+sys.path.insert(0, "/opt/aiops-41/src")          # 线上代码；不是本仓 checkout
 import pymysql
-cfg = {}
-with open("/etc/aiops-41/production.env") as fh:
-    for line in fh:
-        if "=" in line and not line.lstrip().startswith("#"):
-            k, v = line.split("=", 1)
-            cfg[k.strip()] = v.strip()
-c = pymysql.connect(host=cfg["AIOPS_MYSQL_HOST"], port=int(cfg["AIOPS_MYSQL_PORT"]),
-                    user=cfg["AIOPS_MYSQL_USER"], password=cfg["AIOPS_MYSQL_PASSWORD"],
-                    database="qumall_upms")
+from aiops_diagnostics.config import Settings
+s = Settings.from_config(Path("/etc/aiops-41/production.env"))
+c = pymysql.connect(host=s.mysql.host, port=s.mysql.port, user=s.mysql.user,
+                    password=s.mysql.password, database="qumall_upms")
 with c.cursor() as cur:
-    cur.execute("SELECT client_id, client_secret FROM sys_oauth_client")
+    # 列名是 id，不是 client_id（2026-09-29 实测）
+    cur.execute("SELECT id, client_secret FROM sys_oauth_client")
     for client_id, secret in cur.fetchall():
         print(client_id, "secret_len=%d" % len(secret or ""), "secret_equals_id=%s" % (secret == client_id))
 PY'
@@ -209,6 +216,10 @@ ssh aiops-41 'curl -sS -m 8 -X POST \
 **公司侧服务端日志**，我们没有。**能据以行动的结论只有一条：服务间调用不成立**，因此
 「AI-Ops 用客户端凭据调 check_token」这条路在得到公司侧答复前不要作为前提。完整记录见
 `../validation.md` 的「公司校验入口对『服务间调用』是否成立」一节。
+
+**这套步骤的收敛代价**（写下来是为了下一个人不必再走一遍）：初稿经四轮评审各修一处 ——
+推断过强、口令没有来源、口令进了命令行、自己拆配置与服务读法不一致。第 ③ 步现在的形状
+（脚本自读配置 + 只打印长度与相等）是这四轮的结果，**照抄即可**，不要「顺手简化」。
 
 **结论去向**：这是**跨团队依赖**，需要公司侧/接口人答复「怎么让一个服务调用这条路径」
 （建一个真正的客户端？公司另有服务间入口？）；在那之前基线 §4 第 1 条保持开放。

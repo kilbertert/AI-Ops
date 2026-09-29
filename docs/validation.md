@@ -4578,9 +4578,14 @@ OP-ACCEPT-POS-01..04 与本文末节，不用消费者会话或人造夹具冒�
 
 复现方式见 `docs/agents/env-41-runbook.md` 的「探测公司校验入口的服务身份」（只读，不写任何配置）。
 
-**复现时的凭据处理**（评审三轮才收敛）：读服务配置自己取口令（`/etc/aiops-41/production.env`
+**复现时的凭据处理**（评审四轮才收敛）：读服务配置自己取口令（`/etc/aiops-41/production.env`
 的 `AIOPS_MYSQL_*`，`aiops41` 可读）—— **不经 shell 变量、不进命令行**（那会展开进 `ps` 可见的
-进程参数），也**不打印 secret 明文**（轮换后同一条命令会捕获新值）。见 runbook §1.6。
+进程参数），也**不打印 secret 明文**（轮换后同一条命令会捕获新值）；且必须**复用
+`Settings.from_config`**（它用 `dotenv_values(..., interpolate=False)` 并给端口兜底 3306），
+自己拆 `KEY=VALUE` 会把引号当口令、把缺端口当错误。见 runbook §1.6。
+
+**库侧事实已实测复现**（2026-09-29，上述步骤）：`sys_oauth_client` 7 行，`client_secret`
+**逐行等于其 `id`**（列名是 `id`，不是 `client_id`）。
 
 **库侧事实**：`qumall_upms.sys_oauth_client` 现有 7 行，其 `client_secret` **等于各自的
 `client_id`**（`admin`/`admin`、`app`/`app`、…）。⇒「取到凭据」这件事不是权限问题 ——
