@@ -1200,7 +1200,7 @@ uv run pytest tests/test_assistant_api.py tests/test_conversation_api.py \
 | CT-GATE-06 | 本地 dev | 只配来源密钥、不配校验入口 | 密钥 + 空 URL | 启动时校验配置 | 启动失败并指出缺少校验入口 | 临时配置文件 | `...::test_a_source_key_without_the_check_token_url_is_a_startup_error` |
 | CT-GATE-07 | 本地 dev | 来源密钥短于 16 字符 | 短密钥 | 启动时校验配置 | 启动失败并指出最小长度 | 临时配置文件 | `...::test_a_short_source_key_is_a_startup_error` |
 | CT-GATE-08 | 本地 dev | 会话服务令牌已配置（41 现网形状）且密钥已配置 | 服务令牌 + 三键 + 密钥 | 调用配置选择 | 外层是门、既有链一侧是会话解析器；门若排到会话之后，41 上带令牌的请求会在第一级被 401（变异 M6 转红） | 无 | `...::test_the_gate_sits_in_front_of_the_session_level` |
-| CT-GATE-09 | 本地 dev | 来源密钥已配置 | 同一请求只换密钥这一个头 | 经**三个**入口（助手 / 快捷动作 / 订单访问）请求 | 三条入口都按密钥分派：带密钥走公司链，不带走既有链（钉住三条入口各自把 header 传到了门） | 无 | `...::test_the_source_key_gate_decides_the_chain_through_the_real_app` |
+| CT-GATE-09 | 本地 dev | 来源密钥已配置 | 同一请求只换密钥这一个头 | 经**三个**入口（助手 / 快捷动作 / 订单访问）各请求**两次**：带密钥与不带 | 每个入口两个方向都成立：带密钥走公司链（`202` / `200 accessible:true`），不带走既有链并被拒（`401`）。反向那一半是必须的 —— 只测「带密钥成功」时，某条入口把 `source_key` 丢掉仍是绿的（变异 M5/M9 的形状） | 无 | `...::test_the_source_key_gate_decides_the_chain_through_the_real_app` |
 
 **变异矩阵（9 条，逐条清 `__pycache__` 后重跑，全部转红）**：
 

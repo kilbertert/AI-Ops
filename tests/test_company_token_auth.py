@@ -879,37 +879,35 @@ def test_the_source_key_gate_decides_the_chain_through_the_real_app(
             "x-third-session": SESSION_TOKEN,
         },
     )
-    # **第二个入口**：``/v1/shortcuts`` 走的是 ``_authenticate_caller`` 那条共用依赖，而
-    # ``/v1/assistant/questions`` 走的是内联的那条。两条各自把 ``source_key`` 传下去，因此
-    # 两条都要有带密钥的请求打到：只测其中一条时，另一条把参数丢掉会**静默通过**（试过：
-    # 把 ``_authenticate_caller`` 里的 ``source_key=`` 删掉，只测助手入口的用例照样全绿）。
-    keyed_shortcuts = client.get(
-        "/v1/shortcuts",
-        headers={
-            "Authorization": "Bearer company-token",
-            "X-Business-Entry": "operator",
-            "X-AIOps-Source-Key": SOURCE_KEY,
-        },
-    )
-    # **第三个入口**：``/v1/orders/{order_no}/access`` 走 ``authenticated_caller``（内联的另一
-    # 条）。它同样要有一条带密钥的请求：仓库里共有**三个**入口依赖各自把 ``source_key`` 传下去
-    # （``authenticated_diagnosis_caller`` 内联、``_authenticate_caller`` 共用、
-    # ``authenticated_caller`` 内联），只驱动其中两个时，第三个把参数丢掉仍会**静默通过**。
-    keyed_order_access = client.get(
-        f"/v1/orders/{ORDER_INSIDE}/access",
-        headers={
-            "Authorization": "Bearer company-token",
-            "X-Business-Entry": "operator",
-            "X-AIOps-Source-Key": SOURCE_KEY,
-        },
-    )
+    # **另两个入口**：``/v1/shortcuts`` 走的是 ``_authenticate_caller`` 那条共用依赖，
+    # ``/v1/orders/{order_no}/access`` 走 ``authenticated_caller``（内联的另一条）。仓库里共有
+    # **三个**入口依赖各自把 ``source_key`` 传下去，只驱动其中一部分时，剩下的把参数丢掉会
+    # **静默通过**（试过：把 ``_authenticate_caller`` 里的 ``source_key=`` 删掉，只测助手入口的
+    # 用例照样全绿 —— 这正是变异 M5/M9 的形状）。因此每个入口都按**两个方向**各打一次：
+    # 带密钥 ⇒ 公司链，不带 ⇒ 既有链拒绝。只测「带密钥」那一边会漏掉「门有没有生效」的反向。
+    other_entries = {
+        "shortcuts": "/v1/shortcuts",
+        "order_access": f"/v1/orders/{ORDER_INSIDE}/access",
+    }
+
+    def _call(path: str, *, with_key: bool) -> Any:
+        headers = {"Authorization": "Bearer company-token", "X-Business-Entry": "operator"}
+        if with_key:
+            headers["X-AIOps-Source-Key"] = SOURCE_KEY
+        return client.get(path, headers=headers)
+
+    keyed = {name: _call(path, with_key=True) for name, path in other_entries.items()}
+    unkeyed = {name: _call(path, with_key=False) for name, path in other_entries.items()}
 
     assert with_key.status_code == 202
     assert runtime.diagnoses == [(ORDER_INSIDE, question)]
     assert without_key.status_code == 401
     assert without_key.json()["error"]["code"] == "INVALID_ACCESS_TOKEN"
     assert session_chain.status_code == 200
-    assert keyed_shortcuts.status_code == 200
-    assert keyed_order_access.status_code == 200
-    assert keyed_order_access.json()["accessible"] is True
+    for name, response in keyed.items():
+        assert response.status_code == 200, (name, response.text)
+    assert keyed["order_access"].json()["accessible"] is True
+    for name, response in unkeyed.items():
+        assert response.status_code == 401, (name, response.text)
+        assert response.json()["error"]["code"] == "INVALID_ACCESS_TOKEN"
     assert SESSION_TOKEN not in without_key.text
