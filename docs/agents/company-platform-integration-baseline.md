@@ -255,8 +255,9 @@ return point.proceed();
 ## 4. 未决（不猜，逐条列出）
 
 1. **`/oauth/check_token` 是不是「服务可调用」的形态** —— （原条目问的是「用哪一行凭据」，
-   2026-09-29 实测后**问题本身改了形状**）：`sys_oauth_client` 里 **7 个客户端的 `client_secret`
-   都等于它自己的 `client_id`**（`admin`/`admin` …）。这不是「有凭据可取」而是**凭据即公开值**；
+   2026-09-29 实测后**问题本身改了形状**）：`sys_oauth_client`（**主键列名是 `id`**）里
+   **7 个客户端的 `client_secret` 都等于它自己的 `id`**（`admin`/`admin` …）。
+   这不是「有凭据可取」而是**凭据即公开值**；
    而带上它请求 `/auth/oauth/check_token`，与**不带**凭据得到**逐字相同**的
    `{"code":1,"msg":"Full authentication is required to access this resource"}`。
    ⚠️ **从「结果相同」能推出的边界是窄的**（第一版这里写宽了）：它只能说明「在这些输入下，

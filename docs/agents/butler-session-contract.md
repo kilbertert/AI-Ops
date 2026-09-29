@@ -81,8 +81,8 @@ client-type / third-session / X-Business-Entry`，其中 `X-Business-Entry` **�
 
 **第二段落地前需要业务侧提供**（基线文档 §4，**两条都已在 2026-09-29 更新形状**）：
 
-- `/oauth/check_token`：问题**不是**「用哪个 `client_id`/`secret`」—— 库里 7 个客户端的 secret
-  **都等于自己的 id**（`admin`/`admin` …，公开值），而带上它请求与不带请求得到**逐字相同**的
+- `/oauth/check_token`：问题**不是**「用哪个客户端/secret」—— `sys_oauth_client` 里 7 行的
+  `client_secret` **都等于自己那一行的 `id`**（`admin`/`admin` …，公开值），而带上它请求与不带请求得到**逐字相同**的
   `Full authentication is required`；`/oauth/token` 则返回「验证码不能为空」。⇒ 要问公司侧的
   是**「怎么让一个服务调用这条路径」**（建一个真正的客户端？另有入口？）。
 - 管家端实际请求的域名：**已有答案** —— `api.mall.qushiyun.com`，其前缀全部已经过公司网关，

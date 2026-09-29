@@ -4584,11 +4584,10 @@ OP-ACCEPT-POS-01..04 与本文末节，不用消费者会话或人造夹具冒�
 `Settings.from_config`**（它用 `dotenv_values(..., interpolate=False)` 并给端口兜底 3306），
 自己拆 `KEY=VALUE` 会把引号当口令、把缺端口当错误。见 runbook §1.6。
 
-**库侧事实已实测复现**（2026-09-29，上述步骤）：`sys_oauth_client` 7 行，`client_secret`
-**逐行等于其 `id`**（列名是 `id`，不是 `client_id`）。
-
-**库侧事实**：`qumall_upms.sys_oauth_client` 现有 7 行，其 `client_secret` **等于各自的
-`client_id`**（`admin`/`admin`、`app`/`app`、…）。⇒「取到凭据」这件事不是权限问题 ——
+**库侧事实**（2026-09-29 按上述步骤实测复现）：`qumall_upms.sys_oauth_client` 现有 7 行，
+主键列名是 **`id`**（不是 `client_id`），`client_secret` **逐行等于该 `id`**
+（`admin`/`admin`、`app`/`app`、`gen`/`gen`、`shop`/`shop`、`swagger`/`swagger`、
+`test`/`test`、`weixin`/`weixin`）。⇒「取到凭据」这件事不是权限问题 ——
 **它是公开值**，因此它不构成一条信任边界。
 （记录口径：这里是**结论**，不是说这些值可以随处分发 —— 复现步骤只比较「长度 + 是否等于 id」，
 不打印明文，见 runbook §1.6；把公开值配进任何服务端仍然是错的方向。）
