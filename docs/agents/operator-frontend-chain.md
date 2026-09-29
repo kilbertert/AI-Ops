@@ -34,7 +34,8 @@ X-Business-Entry: operator                                    # ← 管家端就
 Content-Type: application/json
 ```
 
-**只有这两个头是必须的**，其余与客户端完全一致（URL、方法、返回体形状、轮询、取消都一样）。
+**只有这两个头是必须的**，其余与客户端完全一致（URL、方法、返回体形状、轮询）。
+⚠️ **取消不是全都一样**：`type=qa` 的作业可以取消；**订单检测的 `type=diagnosis` 没有取消接口**。
 
 ### 头从哪来
 
@@ -73,13 +74,23 @@ AI-Ops 网关（127.0.0.1:8788）
 
 ## 3. 三个易错点（每个都有实测对照）
 
-### 3.1 漏发 `X-Business-Entry` = **静默走客户端域**（不报错）
+### 3.1 漏发 `X-Business-Entry` —— 后果**取决于还带没带会话**（实测）
 
-这是最容易踩的：Nginx 缺省补 `consumer`，所以**请求照样 200，只是内容与范围都变成客户端的**。
-现象是「功能好像能用，但看到的订单/问题列表不对」。
+Nginx 缺省把入口补成 `consumer`，并**把 `Authorization` 换成 AI-Ops 服务令牌**。于是：
 
-**排查信号**：响应体里的 `platform` 字段 —— `operator` 才是管家端。客户端链路返回的是
-`platform: consumer` 与 `available_platforms: ["consumer"]`。
+| 只带 JWT、漏入口头 | 结果 |
+|---|---|
+| **只带用户 JWT**（管家端的正常形态） | **`401`** —— 因为换成服务令牌后那条链**需要 `third-session`**，而管家端没有它 |
+| 同时带**有效的 `third-session`**（极少见） | `200`，但落到**客户端内容域与本人订单范围**（**静默走错域**） |
+
+⇒ 管家端**漏发入口头通常表现为 `401`**（好定位）；真正危险的是**第二种**：一个同时带着
+客户端会话的双平台账号，漏头会静默拿到客户端内容域。**两条都指向同一个结论：这个头必须显式发。**
+
+**排查信号**：`GET /v1/shortcuts` 的响应**没有** `platform` 字段（别拿它自检）。用这两条：
+- **`count` 与内容**：管家端是 `2`（订单检测 / 客户案例）；客户端是 `3`，且 `case_exploration` 带
+  `target_agent_version: "agt_…#vN"`，管家端那条是 `null`；
+- **需要 `platform` 字段时改用 `GET /v1/faq/recommendations`** —— 它的响应里有
+  `platform: operator` 与 `available_platforms`。
 
 ### 3.2 只发入口头、不发 JWT ⇒ `401`
 
@@ -113,8 +124,22 @@ AI-Ops 网关（127.0.0.1:8788）
 }
 ```
 
-**渲染规则**（与客户端相同）：`jump_path` 有值 ⇒ 本地跳转；为 `null` ⇒ 提示动作，点击后带 `code`
-调 `POST /v1/assistant/questions`；`requires_order: true` ⇒ 点击时先弹订单选择器。
+**渲染规则**（与客户端相同）：`jump_path` 有值 ⇒ 本地跳转；为 `null` ⇒ 提示动作，点击后调
+`POST /v1/assistant/questions`；`requires_order: true` ⇒ 点击时先弹订单选择器。
+
+⚠️ **请求体的字段名是 `shortcut_code`，不是 `code`** —— 该请求体是 `extra="forbid"` 的，
+**传错字段名会直接 `422`**（不是被忽略）。两个动作的完整请求体：
+
+```json
+// 订单检测（不带订单号 → 200 clarification，前端据此弹选择器）
+{"question": "帮我检测这个订单的充电异常", "shortcut_code": "smart_diagnosis"}
+
+// 订单检测（用户选完单 → 202 diagnosis）
+{"question": "帮我检测这个订单的充电异常", "shortcut_code": "smart_diagnosis", "order_no": "<订单号>"}
+
+// 客户案例（→ 202 qa）
+{"question": "有哪些充电运营的客户案例", "shortcut_code": "case_exploration"}
+```
 
 ### 4.1 订单检测（`smart_diagnosis`）
 
@@ -146,7 +171,8 @@ AI-Ops 网关（127.0.0.1:8788）
 - [ ] 用响应里的 `platform` 字段自检：应当是 `operator`（若是 `consumer` ⇒ 入口头没生效）。
 - [ ] 动作列表按 `jump_path` / `requires_order` 决定行为，**不要硬编码 `code` 列表**。
 - [ ] 订单检测：`requires_order: true` 时点击即弹选择器；同时处理后端返回的 `clarification`（同一个组件）。
-- [ ] `404` 提示「订单不存在或无权查看」，**不重试**。
+- [ ] **订单检测**的 `404 ORDER_NOT_FOUND` 提示「订单不存在或无权查看」，**不重试**。
+      （FAQ / 问答作业 / 会话的 `404` 是另一回事，别套这句文案。）
 - [ ] `401` 时先查**两个头是否都发了**，再怀疑登录态。
 - [ ] 不要保存、打印或打包 AI-Ops 服务令牌（它只在 BFF 与 Nginx 之间）。
 

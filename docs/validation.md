@@ -4870,3 +4870,28 @@ ValueError: AIOPS_GATEWAY_COMPANY_CHECK_TOKEN_URL is required when a source key 
 vhost 与令牌文件的新形状**保留**（客户端链路实测仍 200）。
 
 ---
+<<<<<<< HEAD
+=======
+
+## 管家端联调链条说明（交付给前端）的实测依据（2026-09-29）
+
+**结论**：`docs/agents/operator-frontend-chain.md` 里每条结论都来自 41 公网入口当日实测，
+本节记录**请求条件**（文档只写了响应）。
+
+**请求条件**：`Authorization: Bearer <按生产令牌形状自签的 JWT>` + `X-Business-Entry: operator`；
+或对照组的「不带入口头 / 只带会话 / 非法入口值」。进程 `0.1.0+09552737e3a1`。
+
+| 实测 | 请求条件 | 响应 |
+|---|---|---|
+| 动作列表 | 两个头 | `200`，`count=2`，`case_exploration` 的 `target_agent_version: null` |
+| 客户端对照 | `third-session` + 无入口头 | `200`，`count=3`，`case_exploration` 带 `agt_…#v2` |
+| FAQ 目录 | 两个头 | `200`，`platform: operator`，`available_platforms: ["consumer","operator"]` |
+| 客户案例 | 两个头 + `shortcut_code=case_exploration` | `202`，`type=qa` |
+| 订单检测（无单号） | 两个头 + `shortcut_code=smart_diagnosis` | `200 clarification`，`missing_fields=["order_no"]` |
+| 非法入口 | `operator-admin` + JWT | `401 INVALID_ACCESS_TOKEN` |
+| 只带 JWT、漏入口头 | 无 `X-Business-Entry` | `401 INVALID_ACCESS_TOKEN` |
+
+**一条被评审纠正的表述**：文档初稿写「漏发入口头 ⇒ 静默走客户端域」。**收窄为**：
+只带 JWT 时是 `401`（换成服务令牌后缺 `third-session`）；只有**同时带有效会话**时才是静默走错域。
+两种后果不同，文档已按此改写。
+>>>>>>> 4f47828 (docs(agents): 消化评审七条——字段名、自检信号、漏头后果、场景限定、取消、请求体、验证记录)
