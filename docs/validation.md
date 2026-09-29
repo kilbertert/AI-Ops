@@ -4505,9 +4505,34 @@ OP-ACCEPT-POS-01..04 与本文末节，不用消费者会话或人造夹具冒�
 
 ### 形状差异（实现时的第一坑）
 
-公司 `/oauth/check_token` 返回的是**裸映射**（`additionalInformation` 全量），
-**没有** RFC 7662 的 `active` / `aud` / `scope`。仓里既有的 `IntrospectionCallerResolver`
-**不能复用**，必须另写适配层。两处「都是 OAuth2 自省」是巧合，不是可复用。
+公司 `/oauth/check_token` **成功时**返回的是**框架组装的身份映射**（框架字段 + 增强器字段
+合并、同名覆盖，**没有** `code`/`data` 信封）；**失败时**却是**有信封**的
+`{"code":<码>,"msg":"token无效","data":null}`，且**走 HTTP 200**。仓里既有的
+`IntrospectionCallerResolver` **不能复用**，必须另写适配层。两处「都是 OAuth2 自省」是巧合。
+
+> **2026-09-29 更正（#443 实现时读源码 + 独立复核两轮修正）**：本小节此前有两处写错，已改。
+> ① 此前写「**没有** `active`」—— 错了，`active` **总是**存在（Spring
+> `CheckTokenAccessTokenConverter.convertAccessToken` 无条件 `put("active", true)`），但
+> **它不是判据**。
+> ② 此前写「成功体没有 `aud`/`scope`、只有身份字段」—— 也错了。成功体是
+> `DefaultAccessTokenConverter.convertAccessToken` **先组装框架字段**（`username`/
+> `authorities`（仅用户令牌分支）/`scope`/`exp`/`jti`，`resourceIds` 非空时 `aud`），
+> **最后**才 `response.putAll(token.getAdditionalInformation())` 合并并覆盖同名键，之后补
+> `active` 与 `client_id`。所以成功体**确实带** `scope`/`exp`/`client_id`；`shop_ids` 那组是
+> **增强器**写进 `additionalInformation` 的。
+> ③ 失败体的 `data` 是 **null**（`R.failed(Integer, String)` → `restResult(null, code, msg)`），
+> 不是 `"invalid_token"` —— 后者是**资源服务器入口** `ResourceAuthExceptionEntryPoint` 的形状，
+> 且它硬编码 401，与 `check_token` 是两条路径。
+>
+> **判据因此是**：**增强器注入的那组字段**（`id` + `tenant_id`）—— 不能用更宽的形状判据，
+> 因为 `username`/`client_id`/`exp`/`scope`/`authorities` 对**客户端凭据令牌同样存在**；
+> 且判定只能写在**信封**上（「存在且非 0/200 的 `code` ⇒ 拒绝」），**不能换成 HTTP 状态**，
+> 因为无效令牌也走 200。
+> 另有一种形状要分开：客户端 Basic 凭据不对 ⇒ **HTTP 401 + OAuth2 标准错误 JSON**（非 `R` 信封）。
+>
+> 依据是对应源码（`CheckTokenEndpoint`、`DefaultAccessTokenConverter`（2.3.x）、
+> `AuthorizationServerConfig.tokenEnhancer()`、`BaseWebResponseExceptionTranslator`、
+> `ResourceAuthExceptionEntryPoint`、`I18nResponseAdvice.supports()`），**未实测**。
 
 ### 未验证（如实列出，勿当成已验）
 
@@ -4516,7 +4541,61 @@ OP-ACCEPT-POS-01..04 与本文末节，不用消费者会话或人造夹具冒�
 - 管家端真实请求带的 `client-type` 是 `admin` 还是 `tenant-app`。
 - `shop_ids` 快照 vs `/shopuser/getShops` 实时的 staleness 窗口（= 令牌有效期）
   在真实运营场景下是否可接受 —— **未被实测**，是按低频变更判断接受的代价。
-- 第一段代码尚未实现（本轮只落决策与文档）。
+- **第二段提供的客户端凭据能否过 `check_token` 的 `isAuthenticated()`** —— 未实测；
+  #443 把这条失败显式映射为「AI-Ops 侧凭据问题」（可重试的
+  `ACCESS_TOKEN_VALIDATION_UNAVAILABLE`），而不是用户令牌无效。
+
+---
+
+## #443 公司令牌解析器（2026-09-29）
+
+**结论**：AI-Ops 能收下公司签发的 OAuth2 访问令牌并解析出管家端身份与运营商站点范围；
+**合入不启用**。
+
+**做了什么**：新增 `src/aiops_diagnostics/company_token_auth.py`
+（`CompanyTokenSettings` / `CompanyTokenCallerResolver`），校验落在公司权威的
+`/oauth/check_token`（不自验签、不复制密钥、不读令牌存储）；身份取令牌的
+`id`/`user_id`/`tenant_id`，站点范围走 #442 的共享解析 `operator_site_scope_from_shops`
+与既有的 `mysql_site_mapper`（与受限直连同一条跳板隧道）。数据范围按入口分流：只有
+`operator` 入口换成运营商站点集合，其余入口保持最窄的 `self`（#436 的同一条边界，判据抽成
+`scope_context.is_operator_entry` **只有一份**，会话路径与令牌路径共用）。
+`gateway_api._caller_resolver` 新增一条**配置门控**分支，三个新配置键
+（`AIOPS_GATEWAY_COMPANY_CHECK_TOKEN_URL` / `_CLIENT_ID` / `_CLIENT_SECRET`）全空 ⇒ 与今天
+逐字一致；只设 URL 是**启动失败**而不是静默禁用。
+
+**证据**：`1464 passed / 0 failed`（基线 1414，新增 50）；`ruff check` 与
+`ruff format --check` 通过。工作树内跑法（**必须带 `PYTHONPATH`**，否则 editable install
+指向规范 checkout，会「改动没被测到却显示全绿」）：
+
+```text
+PYTHONPATH=$PWD/src uv run pytest
+```
+
+**#436 那条教训的直接延续——变异测试**（每条都清 `__pycache__` 后重跑，逐条转红）：
+
+| 改坏的地方 | 结果 |
+|---|---|
+| 去掉入口分流（非管家端入口也拿到运营商范围） | 转红（`test_only_the_operator_entry_gets_the_operator_site_scope` 五例 + consumer 端到端一例） |
+| 删掉身份守卫（缺 `id`/`tenant_id` 不再拒绝） | 转红（fail-closed 参数化 4 例） |
+| 空 `shop_ids` 写成 `site_ids=None`（Ø 被放宽成「不限」） | 转红（含「不发起 SQL」那条） |
+| `_envelope_refused` 改成恒假（公司的拒绝不再拦） | 转红（`test_the_company_refusal_is_judged_by_the_envelope...`——该用例特意让拒绝体的身份字段**齐全**，只让 `code` 说「不」） |
+| 缺失 `shop_ids` 当成空集合 | 转红（形状判据一例） |
+
+**两条必须显式声明的边界（不得读成「管家端已经能用」）**：
+
+1. **入口未装门**：来源密钥与按密钥分派是 #444；在那之前没有任何「来自网关那一跳」的判据，
+   本票的启用前提是**网络层尚未暴露这条路径**（第二段）。
+2. **41 现网配置下不可达**：`_caller_resolver` 第一级 `if settings.third_session_service_token:`
+   直接 return，而 41 上那个键有值 ⇒ 新分支走不到。**#444 必须把门放在会话那一级之前。**
+
+**真实故障业务验收：未完成 —— 且本票不可达此前置**：令牌路径未启用、41 上也没有第二段所需的
+`client_id`/`secret`，因此**没有一次真实管家端登录被走到**（`butler-session-contract.md` §1 的
+`401` 一个字未变）。本节只主张「离线替身覆盖了契约形状与 fail-closed 矩阵」，不主张管家端可用。
+
+**已知代价（明写，免得将来当缺陷修）**：令牌里的 `shop_ids` 是**签发时刻**的快照，
+`/shopuser/getShops` 是实时的；staleness 窗口 = 令牌有效期。这是 ADR-0009 已接受的取舍
+（店铺绑定变更是低频事件），**未实测**真实运营场景下的可接受性。
+
 ---
 
 ## #442 共享范围解析的重构（2026-09-29）

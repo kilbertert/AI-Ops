@@ -91,6 +91,32 @@ location ~* ^/(erp|qm|das|dis|...|upms|mall|mallapi|...)  {  # ← 公司服务�
 - 校验：资源服务器用 `RemoteTokenServices` 调 **`/oauth/check_token`**（实测可达：
   `<公司网关>/auth/oauth/check_token`，无凭据时返回
   `Full authentication is required to access this resource`）。
+  **两种响应的形状不同**（2026-09-29 读源码更正，实现依据见
+  [``company_token_auth.py``](../../src/aiops_diagnostics/company_token_auth.py) 的模块文档）：
+  - **成功**：令牌的 `additionalInformation` 被**合并进顶层**（不是包在 `data` 里），
+    且**没有** `code`/`data` 信封。公司那两个 `ResponseBodyAdvice`
+    （`I18nResponseAdvice`/`TenantNameResponseAdvice`）的 `supports()` 都要求**控制器方法声明的
+    返回类型**可被 `R` 赋值，而 `check_token` 声明返回 `Map` ⇒ 不包装。
+  - **成功体比「只有身份字段」更宽**：`DefaultAccessTokenConverter.convertAccessToken` 先放
+    框架字段（`username`/`authorities`（仅用户令牌分支）/`scope`/`exp`/`jti`，`resourceIds`
+    非空时还有 `aud`），最后一步 `response.putAll(token.getAdditionalInformation())` **合并并
+    覆盖同名键**，之后 `CheckTokenAccessTokenConverter` 再补 `active: true`，框架再补
+    `client_id`。所以成功体**确实带** `scope`/`exp`/`client_id`；身份判据只能用**增强器写的**
+    `id` + `tenant_id`（`username`/`client_id`/`scope`/`exp`/`authorities` 对**客户端凭据令牌
+    同样存在**，只有增强器字段能区分）。
+  - **失败**：非法/过期令牌由 `CheckTokenEndpoint` 抛异常 → 公司
+    `BaseWebResponseExceptionTranslator` → `ResponseEntity.ok().body(R.failed(
+    e.getOAuth2ErrorCode(), e.getMessage()))`，即 **HTTP 200 +
+    `{"code":<码>,"msg":"token无效","data":null}`**（`CommonConstants.SUCCESS=0`/`FAIL=1`；
+    `R.failed(Integer, String)` 走 `restResult(null, code, msg)` ⇒ `data` 是 **null**）。
+    **不是 4xx**，所以「HTTP 200 就代表令牌有效」是错的。
+    ⚠️ `data:"invalid_token"` 是**另一条**路径的形状（资源服务器入口
+    `ResourceAuthExceptionEntryPoint`，且它硬编码 401），**不是** `check_token` 的。
+  - 因此判定必须写在**信封**上（「存在且非 0/200 的 `code` ⇒ 拒绝」），
+    不能写成「`code` 必须等于 0」（会把每条合法令牌都拒掉），**也不能换成 HTTP 状态**
+    （无效令牌也走 200，按状态判会把它读成成功）。
+  - ⚠️ 客户端 Basic 凭据不对时是**另一种形状**：`checkTokenAccess("isAuthenticated()")` 返回
+    **HTTP 401 + OAuth2 标准错误 JSON**（不是 `R` 信封）。三种形状要分开处理。
 
 ### 2.2 数据范围：`@ShopDataScope` + `ShopIdInterceptor`，**还是那一条链**
 
@@ -153,10 +179,18 @@ return point.proceed();
 
 ### 3.1 第一段（AI-Ops 侧）的交付边界
 
-- `CompanyTokenCallerResolver`：⚠️ 公司 `/oauth/check_token` 返回的是**裸映射**
-  （`additionalInformation` 全量：`id`/`user_id`/`tenant_id`/`type`/`shop_id`/`shop_ids`/`tenant_ids`），
-  **没有** `active`/`aud`/`scope` —— 与 RFC 7662 不同，因此仓里现有的
+- `CompanyTokenCallerResolver`：⚠️ 公司 `/oauth/check_token` **成功时**返回的是**框架组装的身份
+  映射**（框架字段 `username`/`authorities`/`scope`/`exp`/`jti`（`resourceIds` 非空时 `aud`）
+  + 增强器字段 `id`/`user_id`/`username`/`organ_id`/`type`/`tenant_id`/`system_id`/`shop_id`/
+  `license`/`tenant_ids`/`shop_ids` 合并、同名覆盖，再补 `active`/`client_id`），**没有**
+  `code`/`data` 信封；**失败时**却是**有信封**的
+  `{"code":<码>,"msg":"token无效","data":null}`（见 §2.1）—— 与 RFC 7662 不同（自省体是
+  `active`+`sub`+`aud`+`scope`+`data_scope`），因此仓里现有的
   `IntrospectionCallerResolver` **不能复用**，要另写一层适配；失败一律 fail closed。
+  ⚠️ **`active` 不是判据**：公司确实返回它（Spring `CheckTokenAccessTokenConverter` 无条件
+  `put("active", true)`），但客户端凭据令牌同样 `active: true`，而且同样带
+  `username`/`client_id`/`exp`/`scope`/`authorities` —— 形状判据必须窄到**增强器写的那组字段**
+  （`id` + `tenant_id`），否则会给一条没有身份的通路放行。
 - 数据范围按 D5；`platform_entry` 仍决定 consumer/operator 分流（#436 那条**不许动**）。
 - 来源密钥：**未配置则该路径整体不启用**（fail closed，不是放行）。
 - 分派接进 `_caller_resolver`，**排在既有两个 resolver 之后**，不改变它们的选择结果。
@@ -177,6 +211,41 @@ return point.proceed();
 
 **为什么必须先做第一段**：第二段每一件都有外部依赖与 exposure 决定；第一段的代码在被启用前
 对现网零影响，但「AI-Ops 认公司令牌」这一层**不管将来挂不挂网关都需要**。
+
+### 3.3 第一段的交付状态（2026-09-29）
+
+| 票 | 内容 | 状态 |
+|---|---|---|
+| #442 | 抽出「店铺集合 → 运营商站点范围」的共享解析 `operator_site_scope_from_shops` | 已合入 |
+| #443 | `company_token_auth.py`：公司令牌 → 身份 + 站点范围；`_caller_resolver` 里配置门控接线 | 已交付（见下） |
+| #444 | 入站来源密钥与按密钥分派（**启用门**） | 待做 |
+
+**#443 的两条边界**（写在这里是为了不让后来者把它读成「管家端已经能用」）：
+
+1. **入口未装门**。来源密钥与分派在 #444；在那之前，任何走到新解析器的请求只是「带了公司
+   令牌」，没有「来自网关那一跳」的判据。因此 #443 的启用前提是**网络层尚未暴露这条路径**
+   （第二段）。
+2. **41 现网配置下不可达**：`_caller_resolver` 的第一级是
+   `if settings.third_session_service_token:` 且**直接 return**，而 41 上那个键有值 ⇒ 新分支
+   走不到。这是「合入不启用」的最强形式。**#444 必须把来源密钥这道门放在会话那一级之前**，
+   否则带令牌、不带 `third-session` 的请求会在第一级就被 `401` 掉。
+
+**写给 #444 的三条**（前两条是本票实现出来的，第三条是复核时补的）：
+
+1. **门要在会话那一级之前**（见上第 2 条），否则新路径在 41 现网不可达。
+2. **「令牌无效」也返回 HTTP 200**，因此 #444 里任何「404/401 就拒绝、其余放行」的写法都会把
+   一条无效令牌静默读成有效 —— 判据只能在**公司信封**上。本票的实现已经是这样，但 #444 装门时
+   若写成「先按状态判、失败再落回既有链」，就会退化成放行。
+3. **客户端 Basic 凭据不对是一种不同的形状**：`checkTokenAccess("isAuthenticated()")` 返回
+   **HTTP 401 + OAuth2 标准错误 JSON**（不是 `R` 信封）。本票把它映射成「AI-Ops 侧凭据问题」
+   （可重试的 `ACCESS_TOKEN_VALIDATION_UNAVAILABLE`），#444 不要把它并回「用户令牌无效」。
+
+**#443 的 URL 校验与已知地址冲突**：新配置键沿用仓库既有规则（远程必须 HTTPS，loopback 除外，
+见 `caller_auth.IntrospectionSettings.validate` / `gateway_config.canonical_gateway_url`），
+因此 §4.1 里那个 `http://192.168.1.44:30899/...` **会被拒绝**。这是有意的：非 loopback 明文
+发送的是**用户令牌与客户端密钥**，而它同时是内网地址、也会出现在 URL 日志里。启用时（第二段）
+应配公司网关侧的域名 URL —— 若届时实测确认只能走该内网地址，那是一次**显式的安全决定**
+（放宽哪一条、为什么），不是实现细节，需要在此处记录后再改。
 
 ---
 

@@ -67,6 +67,26 @@ AIOPS_GATEWAY_INTROSPECTION_TIMEOUT_SECONDS=5
 `ACCESS_TOKEN_VALIDATION_UNAVAILABLE` fail closed。远程 introspection endpoint 必须使用
 HTTPS；client secret 不得进入便携包、日志或 API 响应。
 
+### 解析器的选择顺序（2026-09-29 补充）
+
+同一个入口上并存多条凭据路径，按配置**互斥**选择：会话服务令牌 → 公司 `check_token`
+（`AIOPS_GATEWAY_COMPANY_CHECK_TOKEN_URL` + 客户端凭据，管家端 OAuth2 令牌，见
+[ADR-0009](adr/0009-operator-identity-via-company-oauth2-token.md)）→ introspection →
+UPMS 兜底。**任何一条的配置键不齐备就不构造该路径**；只设了其中一部分是启动失败，
+不是静默禁用（避免部署看起来正常、实际一直 401）。
+
+```env
+AIOPS_GATEWAY_COMPANY_CHECK_TOKEN_URL=
+AIOPS_GATEWAY_COMPANY_TOKEN_CLIENT_ID=
+AIOPS_GATEWAY_COMPANY_TOKEN_CLIENT_SECRET=REDACTED
+```
+
+公司那条路径**默认不启用**：三键缺省为空 ⇒ 选择结果与新增它之前逐字一致（清空即回滚）。
+它的校验落在公司自己的 `/oauth/check_token` 上 —— 不自己验签、不复制密钥、不读令牌存储；
+身份与店铺集合直接取自令牌，站点集合经与运营商账号**同一份**规则解析。注意公司这条端点的
+**成功体没有 `code`/`data` 信封**（身份字段在顶层），而**失败体有信封且走 HTTP 200**，
+所以「HTTP 200 就代表令牌有效」在这里不成立。
+
 服务端 SQLite 只保存注册码哈希、设备令牌哈希、run 元数据、脱敏结果和事件元数据，不保存原始 API key。证据正文仍保留在服务器私有 run workspace，不通过 Gateway 事件接口暴露。
 
 当前 MVP 的注册码由服务器管理员本地签发：

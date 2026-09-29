@@ -343,8 +343,10 @@ PY'
 >
 > ⚠️ **而 41 上这条 HTTP 路径当前结构上不可达，不只是"缺个令牌"**：
 > `_caller_resolver` 在配置了 `AIOPS_GATEWAY_THIRD_SESSION_SERVICE_TOKEN` 时
-> **只选** `RedisThirdSessionResolver`（`gateway_api.py`），而它会话解析出来的
-> `roles` **恒为空集**。也就是说 41 上无论用谁的令牌，管理面都拿不到平台角色。
+> **只选** `RedisThirdSessionResolver`（`gateway_api.py`）—— 那一级 `return` 掉之后不再往下看，
+> 而它会话解析出来的 `roles` **恒为空集**。也就是说 41 上无论用谁的令牌，管理面都拿不到平台角色。
+> （同理：#443 新增的公司令牌路径也排在那一级之后，在 41 现网配置下同样不可达；要让一条新路径
+> 可达，得把它接在会话那一级**之前**。）
 > 要走通 HTTP，需要**另外一层身份路由**（例如给管理面单独一个解析器，或在会话解析里
 > 补角色）—— 那是**独立改动**，不在本手册射程内。这也与管理面 HTTP 化受阻同源
 > （`kb-service-test-env.md` 记载 `ROLE_AGENT_ADMIN` 角色族未建）。

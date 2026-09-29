@@ -571,6 +571,22 @@ class UpmsDirectory:
         return self._request(path, credential, envelope=parse_code_data_envelope)
 
 
+def is_operator_entry(platform_entry: str | None) -> bool:
+    """本次请求是否落在**管家端**内容域（``X-Business-Entry`` 的入口判据）。
+
+    这条判据决定「运营商站点范围要不要替换掉最窄的默认范围」，因此它是一道**安全边界**而不是
+    一个字符串比较：两份实现一旦漂移，漂移的方向就是**放宽**（一处认管家端、另一处不认 ⇒ 同
+    一个请求在两条链上得到相反结论）。所以它只有一份，被 ``third_session_auth`` 与
+    ``company_token_auth`` 共用。
+
+    规范化规则与 ``faq.PlatformIdentityResolver`` 相同（``strip()`` + ``lower()``）：上游会把
+    ``OPERATOR`` / `` operator `` 当成管家端入口，若这里用严格相等，同一个请求会被上游当作管家端
+    却在范围解析时被判为「未知入口」——那正是 #436 之前「同站点他人订单 404」的形状。
+    未知或缺失的入口返回 ``False``（按最窄范围处理，不放宽）。
+    """
+    return (platform_entry or "").strip().lower() == "operator"
+
+
 def _expand_roles(roles: tuple[RoleGrant, ...]) -> frozenset[str]:
     """Flatten granted roles with their inherited parents into one effective set."""
     parents_by_code = {grant.code: grant.parent_codes for grant in roles}

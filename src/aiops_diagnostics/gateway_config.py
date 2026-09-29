@@ -33,6 +33,13 @@ class GatewayServerSettings:
     introspection_timeout_seconds: int = 5
     third_session_service_token: str = ""
     third_session_key_prefix: str = "app:3rd_session:"
+    #: 管家端公司 OAuth2 令牌的校验入口与客户端凭据（#443 / ADR-0009）。三个键**全部缺省为空**，
+    #: 全空时该路径整体不构造 ⇒ 行为与启用前逐字一致（这既是「先合不启用」的机制保证，也是
+    #: 回滚路径：清空即回退）。只设了其中一部分是启动错误，不是静默禁用 —— 与
+    #: ``AIOPS_GATEWAY_INTROSPECTION_*`` 同一条形状（URL 有值时凭据必填）。
+    company_check_token_url: str = ""
+    company_token_client_id: str = ""
+    company_token_client_secret: str = ""
     kb_service_base_url: str = ""
     #: Routing decision source (#392). Empty base URL or key leaves routing on
     #: the previous behaviour; the dependency is optional by configuration.
@@ -88,6 +95,12 @@ class GatewayServerSettings:
             or _file_value(file_values, "AIOPS_GATEWAY_THIRD_SESSION_SERVICE_TOKEN"),
             third_session_key_prefix=_env("AIOPS_GATEWAY_THIRD_SESSION_KEY_PREFIX")
             or _file_value(file_values, "AIOPS_GATEWAY_THIRD_SESSION_KEY_PREFIX", "app:3rd_session:"),
+            company_check_token_url=_env("AIOPS_GATEWAY_COMPANY_CHECK_TOKEN_URL")
+            or _file_value(file_values, "AIOPS_GATEWAY_COMPANY_CHECK_TOKEN_URL"),
+            company_token_client_id=_env("AIOPS_GATEWAY_COMPANY_TOKEN_CLIENT_ID")
+            or _file_value(file_values, "AIOPS_GATEWAY_COMPANY_TOKEN_CLIENT_ID"),
+            company_token_client_secret=_env("AIOPS_GATEWAY_COMPANY_TOKEN_CLIENT_SECRET")
+            or _file_value(file_values, "AIOPS_GATEWAY_COMPANY_TOKEN_CLIENT_SECRET"),
             kb_service_base_url=_env("AIOPS_GATEWAY_KB_SERVICE_BASE_URL")
             or _file_value(file_values, "AIOPS_GATEWAY_KB_SERVICE_BASE_URL"),
             kb_service_timeout_seconds=_env_float("AIOPS_GATEWAY_KB_SERVICE_TIMEOUT_SECONDS", 10.0),
@@ -120,6 +133,15 @@ class GatewayServerSettings:
                 raise ValueError(f"{name} must be between 0 and 1")
         if self.jev_base_url and not self.jev_api_key:
             raise ValueError("AIOPS_GATEWAY_JEV_API_KEY is required when a Jev base URL is set")
+        # 半配置是启动错误而不是静默禁用：URL 有值说明运维确实想启用这条路径，而此时凭据缺失
+        # 若只落回「不构造」，结果是一个看起来正常、实际一直 401 的部署。交给启动失败。
+        if self.company_check_token_url and not (
+            self.company_token_client_id and self.company_token_client_secret
+        ):
+            raise ValueError(
+                "AIOPS_GATEWAY_COMPANY_TOKEN_CLIENT_ID and _CLIENT_SECRET are required "
+                "when a company check_token URL is set"
+            )
         if not 0.1 <= self.jev_timeout_seconds <= 120:
             raise ValueError("AIOPS_GATEWAY_JEV_TIMEOUT_SECONDS must be between 0.1 and 120")
         if not 0.1 <= self.event_poll_interval_seconds <= 10:

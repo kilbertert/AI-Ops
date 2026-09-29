@@ -65,6 +65,21 @@ def test_env_example_documents_the_upms_inside_token_boundary() -> None:
     assert not [line for line in _active_lines(text) if "INSIDE_TOKEN" in line]
 
 
+def test_env_example_keeps_the_company_token_path_off_by_default() -> None:
+    """#443：三个键必须**声明的存在、且缺省为空**——「先合不启用」的机制保证，模板不落值。"""
+    text = _template()
+    active = _active_lines(text)
+
+    for name in (
+        "AIOPS_GATEWAY_COMPANY_CHECK_TOKEN_URL",
+        "AIOPS_GATEWAY_COMPANY_TOKEN_CLIENT_ID",
+        "AIOPS_GATEWAY_COMPANY_TOKEN_CLIENT_SECRET",
+    ):
+        assert f"{name}=" in active, f"{name} 必须在模板里声明为空值"
+    # 客户端密钥与服务侧凭据一样：只在私有 production.env 里取值，模板不落值。
+    assert "LEAVE ALL THREE EMPTY" in text
+
+
 def test_env_example_documents_dis_point_scope_boundary() -> None:
     text = _template()
 
