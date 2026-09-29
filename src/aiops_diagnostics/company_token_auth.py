@@ -133,9 +133,15 @@ from aiops_diagnostics.sources import SourceError, mysql_site_mapper
 
 _LOGGER = logging.getLogger(__name__)
 
-#: 本地验签密钥的最小长度。与来源密钥同一条判据：短到可枚举的密钥等于没有这道门，
-#: 而这条模式把「令牌有效」的断言整个搬到了本进程，弱密钥的后果比其他配置项更重。
-MIN_SIGNATURE_KEY_LENGTH = 16
+#: 密钥长度的**告警**阈值（不是拒绝阈值）。
+#:
+#: 这里刻意只告警、不拒绝 —— 上一版把它做成了硬门（<16 字符即启动失败），而**公司线上的真钥匙
+#: 就是 10 个字符**，于是这条检查在真实部署上直接把「启用」这条路封死了。评审当初建议加长度门
+#: 是对的，但**当时没人知道真钥匙多长**；现在知道了，判据必须按事实写。
+#:
+#: 保留告警的理由：短钥匙可枚举，而这条模式把「令牌有效」的断言整个搬到了本进程 ——
+#: 换成真钥匙之后这条告警会消失，它同时也是「钥匙还没换」的一个信号。
+SHORT_SIGNATURE_KEY_WARNING_LENGTH = 16
 
 #: ``mysql_site_mapper`` 的形状：由 ``Settings`` 构造一个上下文管理器，产出站点归属映射。
 #: 测试注入替身时替换它，生产路径不换。
@@ -160,9 +166,12 @@ class CompanyTokenSettings:
 
     def validate(self) -> None:
         if self.signature_key:
-            if len(self.signature_key) < MIN_SIGNATURE_KEY_LENGTH:
-                raise ValueError(
-                    f"company JWT signature key must be at least {MIN_SIGNATURE_KEY_LENGTH} characters"
+            if len(self.signature_key) < SHORT_SIGNATURE_KEY_WARNING_LENGTH:
+                # 只记一行、不拦：拦了就没法用真实的钥匙启用（见常量上的说明）。
+                _LOGGER.warning(
+                    "company JWT signature key is shorter than %d characters; "
+                    "this is expected only while the company default key is still in use",
+                    SHORT_SIGNATURE_KEY_WARNING_LENGTH,
                 )
             if not self.url and not self.client_id and not self.client_secret:
                 return

@@ -1083,10 +1083,20 @@ def test_local_mode_rejects_a_token_with_invalid_utf8() -> None:
         _local_resolver().resolve(token, required_scope="aiops:orders:read", platform_entry="operator")
 
 
-def test_settings_reject_a_short_signature_key() -> None:
-    """短到可枚举的签名密钥等于没有这道门。"""
-    with pytest.raises(ValueError):
-        CompanyTokenSettings(signature_key="short").validate()
+def test_settings_accept_a_short_signature_key_with_a_warning(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """短钥匙**只告警、不拒绝**（2026-09-29 更正）。
+
+    上一版把它做成硬门（<16 即启动失败），而公司线上的真钥匙就是 10 个字符 —— 那条检查在真实
+    部署上直接把「启用」封死了：配置齐全、代码就绪，服务却起不来。评审当初建议加长度门是对的，
+    但当时没人知道真钥匙多长；现在知道了，判据按事实改成告警。
+
+    告警仍然保留：它是「钥匙还没换」的一个信号。
+    """
+    with caplog.at_level("WARNING"):
+        CompanyTokenSettings(signature_key="ten-chars!").validate()  # 10 字符：与线上钥匙同长，值不取自生产
+    assert any("shorter than" in r.message for r in caplog.records)
 
 
 # --- consumer 入口不得触发店铺归属查询（2026-09-29 评审发现）-------------------
