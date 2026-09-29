@@ -80,7 +80,18 @@ location ~* ^/(erp|qm|das|dis|...|upms|mall|mallapi|...)  {  # ← 公司服务�
 
 ## 2. 公司体系的鉴权契约（本次实测，非推测）
 
-### 2.1 令牌：OAuth2，不透明令牌，`cloud-auth` 签发
+### 2.1 令牌：**线上是 HS256 JWT**（本节曾按仓库写成「不透明令牌」，2026-09-29 更正）
+
+> ⚠️ **先说结论，别按下面那段的旧读法用**：41 上真实登录令牌是**三段式 HS256 JWT**
+> （`{"typ":"JWT","alg":"HS256"}`，payload 9 键：`exp/id/organ_id/role_ids/[shop_id|user_id]/system_id/tenant_id/type/username`），
+> 由 `cloud-auth` 的 **hutool** JWT 签发。**仓库里不是这一套** —— `s2b2c-java/cloud-auth` 的
+> `main` 分支是 Spring Security OAuth2 传统栈 + `RedisTokenStore`，而 41 上运行的那个 jar 里
+> **`spring-security-oauth2` 数量为 0**、用的是 `hutool-all`。**该以运行容器的产物为准。**
+> 证据与更正过程见 `../validation.md` 的「A2：本地验签模式」一节。
+>
+> 下面这段保留，是因为它仍**准确描述仓库源码**（也是「读仓库 ≠ 读线上」这条教训的现场）。
+
+#### （旧读法，仓库源码）OAuth2，不透明令牌
 
 - `cloud-auth` 是 **Spring Security OAuth2 传统栈**（`@EnableAuthorizationServer` +
   `RedisTokenStore`），不是 JWT + Resource Server。令牌**不透明**，存在 Redis 里，

@@ -943,7 +943,14 @@ def _jwt(claims: dict[str, Any], *, key: str = LOCAL_KEY, alg: str = "HS256", ta
     signing = f"{header}.{payload}".encode("ascii")
     signature = b64(hmac.new(key.encode(), signing, hashlib.sha256).digest())
     token = f"{header}.{payload}.{signature}"
-    return token[:-1] + ("a" if token[-1] != "a" else "b") if tamper else token
+    if not tamper:
+        return token
+    # ⚠️ 篡改必须**改字节**，不能只改最后一个字符：base64url 的末位字符含"填充比特"，把它换成
+    # 另一个合法字符时**解码结果可能完全相同**（实测 200 次里 8 次）—— 那样签名依然验得过，
+    # 用例会**假通过**（本地偶发、CI 上被逮到）。所以在解码层翻一个比特再重新编码。
+    raw = bytearray(base64.urlsafe_b64decode(signature + "=" * (-len(signature) % 4)))
+    raw[0] ^= 0x01
+    return f"{header}.{payload}.{b64(bytes(raw))}"
 
 
 def _local_resolver(**overrides: Any) -> CompanyTokenCallerResolver:

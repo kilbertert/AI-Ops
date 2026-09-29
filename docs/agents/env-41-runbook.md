@@ -226,6 +226,134 @@ ssh aiops-41 'curl -sS -m 8 -X POST \
 
 ---
 
+## 1.7 管家端入口：nginx 那一跳（**改前必读**，2026-09-29 实测）
+
+### 为什么需要这一跳
+
+AI-Ops 现在只认两种凭据：共享会话（客户端）与公司 JWT（管家端，见 #451 的本地验签模式）。
+`/v1/` 目前由 nginx 注入 **AI-Ops 自己的服务令牌**，所以客户端那条链路能用；
+管家端拿的是**用户 JWT**，需要按入口分流。
+
+### 正确形状是 `map`，**不是 `if`**
+
+⚠️ `proxy_set_header` 在 `if` 块里**不合法**（实测报 `"proxy_set_header" directive is not allowed
+here`）。按入口分流必须用 `map`。41 上已有现成用法：`0.websocket.conf`、`waf2monitor_data.conf`。
+
+`map` 必须写在 **`http` 层**，而 vhost 是 `include /www/server/panel/vhost/nginx/*.conf` 进来的
+（`nginx.conf:101`）—— 也就是 vhost 文件自己就在 `http` 里，可以直接在文件顶部写 `map`。
+生产主配置有 `lua_package_path`，自定义 `nginx.conf` 测试时若缺它会报 `resty.core` 找不到 ——
+**那是配置环境差异，不是 map 的问题**。
+
+### 实测定稿的配置（离线起真进程验证过三种情形）
+
+⚠️ **下面这一段要拆成两处放**：三条 `map` 在 **`http` 上下文**（vhost 文件顶部即可，
+因为 vhost 是 `include .../vhost/nginx/*.conf` 进来的、本身就在 `http` 里）；而 `location` 必须
+放进**已有的 `server` 块**（替换现行那个 `location ^~ /v1/`）。**不要**把整块照抄到文件顶部。
+
+```nginx
+# ① 以下三条 map 放 vhost 文件顶部（http 上下文内）
+map $http_x_business_entry $aiops_entry {
+    default        "consumer";
+    # ⚠️ 必须容忍两侧空白：上游 `is_operator_entry` 是 `(v or "").strip().lower()`，nginx 不 strip。
+    # 只写 `~*^operator$` 时，`" operator "` 会落到下面那条原样透传 ⇒ **服务令牌 + entry=operator**
+    # ⇒ 上游拿服务令牌去当公司令牌验签 ⇒ 管家端登录不了（实测）。
+    "~*^\s*operator\s*$" "operator";
+    # ⚠️ 未知的非空值必须**原样透传**，不能落进 default 变成 consumer：
+    # 上游 `PlatformIdentityResolver` 对非法入口是 403 PLATFORM_FORBIDDEN；若这里把它改写成
+    # consumer，调用方会**静默落进客户端内容域**，拿不到那个 403，而 `_data_scope` 也已经在
+    # 身份层按最窄的 self 收紧了 —— 现象是「错了但没人报错」。
+    "~^.+$"        $http_x_business_entry;
+}
+# ⚠️ 服务令牌**不进 vhost**：今天它单独放在 /etc/aiops-41/nginx-aiops-service-token.conf
+# （0600 root，location 内 include）。搬进 vhost 会把明文复制到第二处，且会随备份再复制一次。
+# ⇒ 做法：把那份文件从「直接 proxy_set_header Authorization」改成「只设两个变量」——
+#    set $aiops_service_authorization "Bearer <服务令牌>";
+#    set $aiops_source_key_injected    "<来源密钥>";
+#    两把钥匙因此**都不以字面量落在 vhost 里**，也不随 vhost 的备份再复制一份。
+map $aiops_entry $aiops_auth {
+    default    $aiops_service_authorization;   # ← 变量来自那个 0600 文件
+    "operator" $http_authorization;            # 管家端：透传用户 JWT
+}
+map $aiops_entry $aiops_srckey {
+    default    "";
+    "operator" $aiops_source_key_injected;     # 同样来自那份 root-only 文件（见下）
+}
+
+# ② 以下 location 替换 server 块里现有的 location ^~ /v1/
+location ^~ /v1/ {
+    include /etc/aiops-41/nginx-aiops-service-token.conf;   # 现在它只 set 变量
+    proxy_pass http://127.0.0.1:8788;
+    proxy_http_version 1.1;
+    # ⚠️ **本 location 内只允许这一条 Authorization 的 proxy_set_header**（见下）
+    proxy_set_header Authorization      $aiops_auth;
+    proxy_set_header X-AIOps-Source-Key $aiops_srckey;
+    proxy_set_header X-Business-Entry   $aiops_entry;
+    proxy_set_header X-Third-Session    $http_third_session;
+    proxy_set_header Range              $http_range;
+    proxy_set_header Host               $host;
+    proxy_connect_timeout 15s;
+    proxy_send_timeout  120s;
+    proxy_read_timeout  120s;
+    proxy_buffering off;
+}
+```
+
+### 实测定稿的配置：五种入口值的落点
+
+（真 nginx + 真上游回显；`Authorization` 恒发 `Bearer U.JWT`）
+
+| `X-Business-Entry` | 上游收到 | 落点 |
+|---|---|---|
+| `operator` | `ENTRY=operator` / `AUTH=Bearer U.JWT` / `SRC=SRC-KEY-VALUE` | 管家端 ✅ |
+| `" operator "`（两侧空格） | 同上（被 `~*^\s*operator\s*$` 规范化） | 管家端 ✅（**只写 `~*^operator$` 会落错**） |
+| `OPERATOR`（大写） | 同上 | 管家端 ✅ |
+| `operator-admin`（非法非空） | `ENTRY=operator-admin` / `AUTH=Bearer SERVICE-TOKEN` / `SRC=空` | **原样透传** ⇒ 上游按 `403 PLATFORM_FORBIDDEN` 拒 |
+| 无该头 | `ENTRY=consumer` / `AUTH=Bearer SERVICE-TOKEN` / `SRC=空` | 客户端，**逐字不变** ✅ |
+
+> 🟡 **空白那一行是实测踩到的**：上游做 `strip().lower()` 而 nginx 不 strip，两边不一致时该值
+> **不报错**，只是落进另一条分支（服务令牌 + entry=operator ⇒ 管家端登不进去）。
+> **凡上游会规范化的入参，这一跳的正则必须按同一套规范化写。**
+
+### 🔴 为什么「两条同名 `proxy_set_header`」是一个静默用错凭据的坑（实测）
+
+nginx 在**同一个 location 内**对同名头**不做覆盖**，而是**两条都发给上游**，顺序按指令出现顺序。
+于是上游收到**两个 `Authorization` 头**；而 AI-Ops 侧（Starlette `Headers.get`）**取第一个**。
+
+实测（真 nginx + 真上游回显 + Starlette 复现）：
+
+| location 内写法 | 上游收到 | AI-Ops 实际读到 |
+|---|---|---|
+| `include`（含 set-header）+ 一条 `map` 版 set-header | `['Bearer SERVICE-TOKEN', 'Bearer USER.JWT']`（两条） | **`SERVICE-TOKEN`** ⇒ 管家端被当成客户端 |
+| 同上、两条顺序调换 | `['Bearer USER.JWT', 'Bearer SERVICE-TOKEN']` | `USER.JWT`（碰巧对） |
+| **只留一条 `set-header`**（令牌由 `include` 设的**变量**提供） | `['Bearer USER.JWT']`（一条） | 正确 |
+
+**结论：保留 `include` 原样（它仍然 `proxy_set_header`）+ 再加一条 map 版 set-header，是错的** ——
+它会静默地让管家端请求用服务令牌。正确形状只有一种：**让 `include` 只设变量，location 内
+只留一条 Authorization 的 set-header**。
+
+⚠️ 这个错误**不报错、不警告**，现象是「管家端请求被当成客户端」（拿到 `consumer` 内容域与本人
+订单范围），排查时很难定位到「多了一个头」。
+
+### 里程碑记录
+
+本节的交付物是**一段 nginx 配置 + 一份改前检查单**，验证方式是离线起真 nginx 复刻三种入口情形
+（证据表见上）。**真实故障业务验收：未完成** —— 41 上未改任何配置、通道未启用。
+交付追踪：分支 `docs/nginx-operator-entry-runbook`，PR #452，base `ab3b22b`；
+下一步 = 密钥换成真秘密 → 配 41 三键 → 改 vhost → 端到端验收（含客户端回归）。
+
+### 改前检查单
+
+- [ ] **签名密钥已换成真正的秘密**（否则本地验签放行任何人自签的令牌，见基线 §3.3）
+- [ ] `gateway.env` 三键：`COMPANY_JWT_KEY` + `COMPANY_SOURCE_KEY` 有值，`COMPANY_CHECK_TOKEN_URL` **留空**（与本地模式互斥，两者都配 = 启动失败）
+- [ ] `nginx -t` 通过；原 vhost 文件已备份（`cp -a ... .bak-<用途>-<时间戳>`）
+- [ ] 回滚路径：**要恢复两处**，不是一处 ——
+      ① `cp -a` 恢复 vhost 备份；② **恢复 `nginx-aiops-service-token.conf`**（它被改成了「只设变量」，
+      旧 vhost 依赖它注入 `proxy_set_header Authorization`，只恢复 vhost 会让**客户端请求全部 401**）；
+      然后 `nginx -s reload`。AI-Ops 侧清空那三个键即回到「新链路整体不启用」。
+- [ ] 因此**改前必须备份两份**：vhost **与** `nginx-aiops-service-token.conf`（后者也要 `cp -a` 留档，
+      否则回滚时只能凭记忆改回 set-header）
+- [ ] 验收含**客户端回归**（无入口头那条必须仍是服务令牌）
+
 ## 2. 部署（源码同步到 41）
 
 生产代码是文件拷贝部署（41 无 `.git`）。流程：**备份 → 传 → 校验 sha → 重启**。

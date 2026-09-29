@@ -26,6 +26,12 @@ X-Business-Entry: operator                      # ← 管家端就是这一行
 Content-Type: application/json
 ```
 
+> ⚠️ **2026-09-29 状态更正：上面这段是「客户端那条链路」的形状，不是管家端的目标形状。**
+> 管家端最终走的是**用户 JWT**（不是服务令牌 + 会话），由 41 的 nginx 按入口分流
+> （`/v1/` 上 `X-Business-Entry: operator` ⇒ 透传用户 JWT + 注入来源密钥）。
+> **该分流尚未部署**，正确形状与启用前提见
+> [env-41-runbook.md](env-41-runbook.md) §1.7。在它落地前，管家端按现在这样接仍然是 `401`。
+
 - **`third-session` 是「共享 Redis 里 `app:3rd_session:<值>` 的那个值」，不是随便一个
   token。** 服务端自己拼前缀去查，所以传 OAuth2 令牌、传裸 uuid、传整键名都会
   `401`。管家端登录**不产生**这个值 —— 见 [butler-session-contract.md](butler-session-contract.md) §3。
