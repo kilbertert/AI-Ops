@@ -891,6 +891,18 @@ def test_the_source_key_gate_decides_the_chain_through_the_real_app(
             "X-AIOps-Source-Key": SOURCE_KEY,
         },
     )
+    # **第三个入口**：``/v1/orders/{order_no}/access`` 走 ``authenticated_caller``（内联的另一
+    # 条）。它同样要有一条带密钥的请求：仓库里共有**三个**入口依赖各自把 ``source_key`` 传下去
+    # （``authenticated_diagnosis_caller`` 内联、``_authenticate_caller`` 共用、
+    # ``authenticated_caller`` 内联），只驱动其中两个时，第三个把参数丢掉仍会**静默通过**。
+    keyed_order_access = client.get(
+        f"/v1/orders/{ORDER_INSIDE}/access",
+        headers={
+            "Authorization": "Bearer company-token",
+            "X-Business-Entry": "operator",
+            "X-AIOps-Source-Key": SOURCE_KEY,
+        },
+    )
 
     assert with_key.status_code == 202
     assert runtime.diagnoses == [(ORDER_INSIDE, question)]
@@ -898,4 +910,6 @@ def test_the_source_key_gate_decides_the_chain_through_the_real_app(
     assert without_key.json()["error"]["code"] == "INVALID_ACCESS_TOKEN"
     assert session_chain.status_code == 200
     assert keyed_shortcuts.status_code == 200
+    assert keyed_order_access.status_code == 200
+    assert keyed_order_access.json()["accessible"] is True
     assert SESSION_TOKEN not in without_key.text

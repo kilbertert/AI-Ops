@@ -4575,7 +4575,7 @@ uv run ruff check .                   # All checks passed
 uv run ruff format --check .           # 234 files already formatted
 ```
 
-**变异矩阵（8 条，逐条清 `__pycache__` 后重跑，全部转红）**：
+**变异矩阵（9 条，逐条清 `__pycache__` 后重跑，全部转红）**：
 
 | 改坏的地方 | 结果 |
 |---|---|
@@ -4587,12 +4587,15 @@ uv run ruff format --check .           # 234 files already formatted
 | 把门排到会话那一级**之后** | 转红 |
 | 不拒绝短到可枚举的来源密钥 | 转红 |
 | 不拒绝「只配密钥、不配校验入口」 | 转红 |
+| `orders/access` 入口（第三个入口依赖）不再把 `source_key` 传给门 | 转红（补该入口的带密钥请求之后） |
 
-⚠️ **首轮为绿的那一条值得记下来**：`gateway_api` 有两个入口依赖（内联的
-`authenticated_diagnosis_caller` 与共用的 `_authenticate_caller`），最初只驱动了前者。把
-`_authenticate_caller` 里的 `source_key=` 删掉，用例**照样全绿** —— 这种「改坏一处仍绿」正是
-#436 那条教训的同一形状。修法不是加断言，而是**把端到端用例改成由真实配置链构造解析器**
-（不注入替身：注入式用例对「header 有没有传到门」是盲的），并同时驱动两个入口。补完后该变异转红。
+⚠️ **首轮为绿的那一条值得记下来**：`gateway_api` 有**三个**入口依赖（内联的
+`authenticated_diagnosis_caller`、共用的 `_authenticate_caller`、内联的 `authenticated_caller`），
+最初只驱动了第一个。把 `_authenticate_caller` 里的 `source_key=` 删掉，用例**照样全绿**；补上
+第二个入口后，第三个（订单访问）同样是盲区，直到也补上带密钥的请求才覆盖。这种「改坏一处仍绿」
+正是 #436 那条教训的同一形状。修法不是加断言，而是**把端到端用例改成由真实配置链构造解析器**
+（不注入替身：注入式用例对「header 有没有传到门」是盲的），并逐条驱动全部入口。补完后两条变异
+都转红。
 
 **三条必须显式声明的边界（不得读成「管家端已经能用」）**：
 

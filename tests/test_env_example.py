@@ -89,9 +89,9 @@ def test_env_example_documents_the_company_source_key_gate() -> None:
     # 头名写在模板里：它是那条信任链的对外契约（网关注入方也要按这个名字发）。
     assert "X-AIOps-Source-Key" in text
     assert "LEAVE ALL THREE EMPTY" in text  # 上一条用例的机制保证仍成立
-    # fail closed 那句话被换行拆开，逐段断言（不把模板的行宽当成契约）。
-    assert "LEFT EMPTY, the" in text
-    assert "not built at all (fail closed, not a bypass)" in text
+    # fail closed 那句与「覆盖式注入」的要求都写在说明里（被换行拆开，逐段断言）。
+    assert "新链路整体不构造（fail closed，不是放行）" in text
+    assert "覆盖式注入" in text
 
 
 def test_env_example_documents_dis_point_scope_boundary() -> None:
