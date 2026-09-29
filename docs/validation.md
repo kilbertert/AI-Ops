@@ -4478,9 +4478,9 @@ OP-ACCEPT-POS-01..04 与本文末节，不用消费者会话或人造夹具冒�
 
 **结论**：管家端身份改由**公司签发的 OAuth2 访问令牌**断言，校验走公司权威的
 `/auth/oauth/check_token`；分两段实施（AI-Ops 侧先合不启用，网络/路由第二段）。
-决策已固化为 [`docs/adr/0009`](../adr/0009-operator-identity-via-company-oauth2-token.md)，
+决策已固化为 [`docs/adr/0009`](adr/0009-operator-identity-via-company-oauth2-token.md)，
 事实与完整推理在
-[`docs/agents/company-platform-integration-baseline.md`](../agents/company-platform-integration-baseline.md)。
+[`docs/agents/company-platform-integration-baseline.md`](agents/company-platform-integration-baseline.md)。
 
 ### 关键结论（Q1–Q18 收敛）
 

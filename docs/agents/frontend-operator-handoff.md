@@ -215,6 +215,6 @@ POST /v1/assistant/questions
   **不写** `app:3rd_session:*`，所以 AI-Ops 的会话解析必然拒绝（实测三种发法全 `401`）。
   根因是 AI-Ops 不在公司网关之后，交付形状见
   [company-platform-integration-baseline.md](company-platform-integration-baseline.md)。
-- **订单范围：当前为空（数据缺口）**。验收账号 `15800395017` 的
+- **订单范围：当前为空（数据缺口）**。验收账号的
   `/shopuser/getShops` 返回 `[]`，运营商站点集合为 Ø ⇒ 订单查询一律 `404`。
   这是设计内的 fail closed，等业务侧补店铺绑定（butler-session-contract.md §5）。
