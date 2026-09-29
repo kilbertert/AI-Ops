@@ -4571,11 +4571,18 @@ OP-ACCEPT-POS-01..04 与本文末节，不用消费者会话或人造夹具冒�
 | 同上，带错的 Basic | **逐字相同** |
 | `POST /auth/oauth/token` | `{"code":1,"msg":"验证码不能为空"}`（与管家端登录同一条被验证码拦住的链） |
 
+⚠️ **从表里能推出的边界是窄的**：三种请求得到同一句话，只能说明「在这些输入下没有任何输入
+产生成功认证」；**不能**据此断定被判掉的位置是 `client_details` **之前**还是**之中**（例如密码
+编码器不匹配会产生同一结果）。要区分需要公司侧服务端日志，我们没有。**本节据以行动的结论
+（服务调用不成立）不依赖这个区分**；只有下面的源码解释依赖它。
+
+复现方式见 `docs/agents/env-41-runbook.md` 的「探测公司校验入口的服务身份」（只读，不写任何配置）。
+
 **库侧事实**：`qumall_upms.sys_oauth_client` 现有 7 行，其 `client_secret` **等于各自的
 `client_id`**（`admin`/`admin`、`app`/`app`、…）。⇒「取到凭据」这件事不是权限问题 ——
 **它是公开值**，因此它不构成一条信任边界。
 
-**源码侧候选解释（未证实）**：`cloud-auth/WebSecurityConfigurer.passwordEncoder()` 返回
+**源码侧候选解释（未证实，且只在上面那个未定分支下成立）**：`cloud-auth/WebSecurityConfigurer.passwordEncoder()` 返回
 `PasswordEncoderFactories.createDelegatingPasswordEncoder()`（要求 `{bcrypt}` 之类前缀），
 而 `JdbcClientDetailsService` 默认用 `NoOpPasswordEncoder`；带基本认证访问 `check_token` 时
 `ClientDetailsUserDetailsService` 也会用该 encoder 校验 secret ⇒ 字面量 secret 匹配不上。

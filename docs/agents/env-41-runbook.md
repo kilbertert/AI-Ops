@@ -150,6 +150,54 @@ PY'
 > 第二段之前**没有注入主体**，先配出来只是一把没人用的钥匙 —— 密钥的注入动作属于第二段，
 > 见基线文档 §3.2。
 
+## 1.6 探测公司校验入口的服务身份（**只读**，2026-09-29 新增）
+
+**要回答的问题**：公司侧 `/auth/oauth/check_token` 对**服务间调用**是否成立 —— 即 AI-Ops 能否用
+一个客户端凭据调到它。这不是「配置对不对」，是「这条路径存不存在」。
+
+**纪律**：本节**只发请求、只读库**。**不要**把探测用的凭据写进任何 AI-Ops 配置文件 —— 见 §6 的
+不变量与 #448 的显式禁令。
+
+```bash
+# ① 不带凭据（原文「无凭据返回 Full authentication is required」即出自这里）
+ssh aiops-41 'curl -sS -m 8 -X POST \
+  -H "Content-Type: application/x-www-form-urlencoded" -d "token=probe" \
+  https://api.mall.qushiyun.com/auth/oauth/check_token; echo'
+
+# ② 带库里现有的客户端凭据（注意：这些 secret 就等于它们的 id，见 ③）
+ssh aiops-41 'curl -sS -m 8 -X POST \
+  -H "Content-Type: application/x-www-form-urlencoded" -d "token=probe" \
+  -u admin:admin https://api.mall.qushiyun.com/auth/oauth/check_token; echo'
+
+# ③ 读 client 行（只读；确认 secret 是不是字面量）。走 §0 环境事实里那条业务库连接，
+#    不要假定 41 上有 mysql CLI。
+ssh aiops-41 'runuser -u aiops41 -- /opt/aiops-41/.venv/bin/python - <<PY
+import os, pymysql
+c = pymysql.connect(host="192.168.1.45", port=3306, user="mall",
+                    password=os.environ["PW"], database="qumall_upms")
+with c.cursor() as cur:
+    cur.execute("SELECT client_id, client_secret FROM sys_oauth_client")
+    for row in cur.fetchall():
+        print(row)
+PY'
+
+# ④ 另一条入口（对照：它被图形验证码拦住）
+ssh aiops-41 'curl -sS -m 8 -X POST \
+  -H "Content-Type: application/x-www-form-urlencoded" -d "grant_type=password" \
+  https://api.mall.qushiyun.com/auth/oauth/token; echo'
+```
+
+**判据**（别过度解读，这是 2026-09-29 一次评审指出的边界）：①②③ 结果相同**只能**说明
+「在这些输入下没有任何输入产生成功认证」。它**不能**定位被判掉发生在哪一层 —— 要区分需要
+**公司侧服务端日志**，我们没有。**能据以行动的结论只有一条：服务间调用不成立**，因此
+「AI-Ops 用客户端凭据调 check_token」这条路在得到公司侧答复前不要作为前提。完整记录见
+`../validation.md` 的「公司校验入口对『服务间调用』是否成立」一节。
+
+**结论去向**：这是**跨团队依赖**，需要公司侧/接口人答复「怎么让一个服务调用这条路径」
+（建一个真正的客户端？公司另有服务间入口？）；在那之前基线 §4 第 1 条保持开放。
+
+---
+
 ## 2. 部署（源码同步到 41）
 
 生产代码是文件拷贝部署（41 无 `.git`）。流程：**备份 → 传 → 校验 sha → 重启**。

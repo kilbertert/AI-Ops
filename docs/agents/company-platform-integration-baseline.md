@@ -258,13 +258,17 @@ return point.proceed();
    2026-09-29 实测后**问题本身改了形状**）：`sys_oauth_client` 里 **7 个客户端的 `client_secret`
    都等于它自己的 `client_id`**（`admin`/`admin` …）。这不是「有凭据可取」而是**凭据即公开值**；
    而带上它请求 `/auth/oauth/check_token`，与**不带**凭据得到**逐字相同**的
-   `{"code":1,"msg":"Full authentication is required to access this resource"}` —— 请求没有走到
-   `client_details` 认证那一步就被拒。另一条入口 `/auth/oauth/token` 返回
+   `{"code":1,"msg":"Full authentication is required to access this resource"}`。
+   ⚠️ **从「结果相同」能推出的边界是窄的**（第一版这里写宽了）：它只能说明「在这些输入下，
+   没有任何输入产生成功认证」；**不能**据此断定请求是在 `client_details` 之前还是之中被判掉
+   —— 例如密码编码器不匹配也会产生同一结果。要区分这两者需要公司侧服务端日志，而我们没有。
+   本节据以行动的结论（**服务调用不成立**）不需要区分它们，但**解释**（见下）只在其中一个分支
+   下成立。另一条入口 `/auth/oauth/token` 返回
    `{"code":1,"msg":"验证码不能为空"}`（与管家端登录同一条被验证码拦住的链）。
    ⇒ **答案不是「用哪个 client」，而是「公司侧要怎么让一个服务调用这条路径」**：要么建一个真正的
    客户端（`id == secret` 不算），要么公司另有服务间校验入口。**需要公司侧/接口人答复。**
    **这是 AI-Ops 侧第一段之外唯一的跨团队阻塞**；在那之前 #443/#444 的代码保持「实现已合入、
-   依赖未就绪」。（源码层面的一个候选解释，**未证实**：`cloud-auth` 的 `WebSecurityConfigurer`
+   依赖未就绪」。（源码层面的一个候选解释，**未证实、且只在上面那个未定的分支下成立**：`cloud-auth` 的 `WebSecurityConfigurer`
    注册 `PasswordEncoderFactories.createDelegatingPasswordEncoder()`，要求 `{bcrypt}` 之类前缀，
    与库里的字面量 secret 匹配不上 —— 与观测一致，但这是解释候选，不是结论。）
 2. ~~**管家端请求在 41 上是否已经过 `cloud-gateway`**~~ —— **已解（2026-09-29 实测，由 #448 记录）**：
