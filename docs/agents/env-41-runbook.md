@@ -251,11 +251,26 @@ here`）。按入口分流必须用 `map`。41 上已有现成用法：`0.websoc
 map $http_x_business_entry $aiops_entry {
     default        "consumer";
     "~*^operator$" "operator";          # 大小写不敏感，与上游 is_operator_entry 同口径
+    # ⚠️ 未知的非空值必须**原样透传**，不能落进 default 变成 consumer：
+    # 上游 `PlatformIdentityResolver` 对非法入口是 403 PLATFORM_FORBIDDEN；若这里把它改写成
+    # consumer，调用方会**静默落进客户端内容域**，拿不到那个 403，而 `_data_scope` 也已经在
+    # 身份层按最窄的 self 收紧了 —— 现象是「错了但没人报错」。
+    "~^.+$"        $http_x_business_entry;
 }
+# ⚠️ 服务令牌**不进 vhost**：今天它单独放在 /etc/aiops-41/nginx-aiops-service-token.conf
+# （0600 root，location 内 include）。搬进 vhost 会把明文复制到第二处，且会随备份再复制一次。
+# 保持原样：该文件只提供 `proxy_set_header Authorization "Bearer <令牌>"` 这一行，
+# 本方案下它只在 consumer 分支需要 —— 因此**保留 include**，再用 map 覆盖 operator 分支：
 map $aiops_entry $aiops_auth {
-    default    "Bearer <AI-Ops 服务令牌>";   # 客户端：与今天逐字一致
-    "operator" $http_authorization;        # 管家端：透传用户 JWT
+    default    $aiops_service_authorization;  # 由 include 的文件设置（见下）
+    "operator" $http_authorization;           # 管家端：透传用户 JWT
 }
+
+# 在 location 内、`map` 之后（保持原 include 不动）：
+#   include /etc/aiops-41/nginx-aiops-service-token.conf;
+# 该文件改为：set $aiops_service_authorization "Bearer <AI-Ops 服务令牌>";
+# 或保持 `proxy_set_header Authorization ...` 原样 —— 后者会被下面的 map 版覆盖，
+# 因此**推荐前者**：把它从「直接 set header」改成「设一个变量」，令牌仍在原文件里。
 map $aiops_entry $aiops_srckey {
     default    "";
     "operator" "<来源密钥>";                # 只有管家端带，由这一跳覆盖式注入
@@ -280,13 +295,38 @@ location ^~ /v1/ {
 > 与现行配置的差异只有三行：原来的 `include nginx-aiops-service-token.conf`（注入备份地址）
 > 被 `map` 取代；`set $aiops_business_entry` + `if` 那两行被 `map $aiops_entry` 取代。
 
+### ⚠️ 这一跳**不是**身份边界，别把它当成一个
+
+`X-Business-Entry` 是**调用方自报**的（这一条从 #423 起就是已知边界）。因此按上面的 `map`：
+
+> **任何人只要发 `X-Business-Entry: operator`，就会拿到来源密钥。**
+
+这不是本方案引入的**新**漏洞，但它把「来源密钥 = 被可信那一跳注入」这条假设**削弱到只剩
+「网关与 AI-Ops 之间」**：密钥证明的是「这一跳经过了 nginx」，**不是**「调用方是管家端」。
+
+**真正的身份边界在 AI-Ops 内部**，由两件事共同顶着：
+1. **令牌必须验签通过**（HS256 + 共享密钥）—— 自报入口**换不来**一个有效签名；
+2. **入口与令牌租户/角色的一致性**由平台决策收口（`PlatformIdentityResolver`：非法入口 403、
+   双平台身份且不带入口 409、管家端主体不唯一 409）。
+
+**因此有一条硬前提**：**签名密钥必须是真正的秘密**。密钥若是公开值，自报入口 + 自签令牌 =
+完整的越权链 —— 这也是检查单第一条写它的原因。
+
 ### 实测证据（上游回显三个头）
 
 | 请求 | 上游实际收到 |
 |---|---|
 | `X-Business-Entry: operator` + 用户 JWT + 会话 | `AUTH=Bearer USER.JWT` / `SRC=SRC-KEY-VALUE` / `ENTRY=operator` |
 | **不带入口头** + 会话 | `AUTH=Bearer SERVICE-TOKEN` / `SRC=空` / `ENTRY=consumer` ⇒ **客户端逐字不变** |
-| `X-Business-Entry: OPERATOR` | 被 `~*` 规范化成 `operator` |
+| `X-Business-Entry: OPERATOR`（大写） | 被 `~*` 规范化成 `operator`，同走管家端分支 |
+| `X-Business-Entry: operator-admin`（非法非空） | **原样透传** `ENTRY=operator-admin` + **服务令牌**（不带来源密钥）⇒ 上游按 `403 PLATFORM_FORBIDDEN` 拒，**不再静默落进客户端域** |
+
+### 里程碑记录
+
+本节的交付物是**一段 nginx 配置 + 一份改前检查单**，验证方式是离线起真 nginx 复刻三种入口情形
+（证据表见上）。**真实故障业务验收：未完成** —— 41 上未改任何配置、通道未启用。
+交付追踪：分支 `docs/nginx-operator-entry-runbook`，PR #452，base `ab3b22b`；
+下一步 = 密钥换成真秘密 → 配 41 三键 → 改 vhost → 端到端验收（含客户端回归）。
 
 ### 改前检查单
 
