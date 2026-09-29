@@ -17,6 +17,7 @@ from aiops_diagnostics.query_scope import (
     DisHttpDirectory,
     QueryScope,
     ScopeError,
+    operator_site_scope_from_shops,
     resolve_query_scope,
     static_site_mapper,
 )
@@ -345,3 +346,32 @@ def test_query_scope_rejects_oversized_business_scope_ids() -> None:
         resolve_query_scope(context)
 
     assert excinfo.value.code == SCOPE_ERROR_SCOPE_TOO_LARGE
+
+
+# --- #425 范围解析的接缝：店铺集合来源可换，映射规则只有一份 -------------------
+#
+# 提取 ``operator_site_scope_from_shops`` 的动机是 #441：管家端 OAuth2 会话的
+# 店铺集合**来自令牌**（``shop_ids``），而运营商账号来自 ``/shopuser/getShops``。
+# 两个来源必须共用同一份映射规则——多一份实现就多一处会漂移的地方。
+# 这组用例只钉住「新接缝自己成立」，既有 ``resolve_operator_site_scope`` 的
+# 用例（工厂/单站点/多站点/无绑定/无站点）原样保留，用来证明重构没有改变它的行为。
+
+
+def test_the_shared_seam_pins_the_factory_case() -> None:
+    """未绑定店铺（账号漏登记）⇒ 空范围，且这是**设计内**的失败关闭。"""
+    scope = operator_site_scope_from_shops((), TENANT, mapper=static_site_mapper())
+    assert scope.site_ids == ()
+
+
+def test_the_shared_seam_maps_shops_through_the_ownership_table() -> None:
+    """店铺 → 站点必须走归属映射，不能直接把店铺 id 当站点 id。"""
+    mapper = static_site_mapper(sites_by_shop={"SHOP-1": ("SITE-A", "SITE-B")})
+    scope = operator_site_scope_from_shops(("SHOP-1",), TENANT, mapper=mapper)
+    assert scope.site_ids == ("SITE-A", "SITE-B")
+    assert scope.tenant_id == TENANT
+
+
+def test_the_shared_seam_keeps_a_shop_without_sites_empty() -> None:
+    """店铺已登记但充电库里没有站点 ⇒ 同样空范围（与「没绑店铺」成因不同）。"""
+    scope = operator_site_scope_from_shops(("SHOP-EMPTY",), TENANT, mapper=static_site_mapper())
+    assert scope.site_ids == ()
