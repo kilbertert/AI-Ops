@@ -1,9 +1,14 @@
 # 「管家端 vs 客户端」是怎么区分的：三套 `client-type` 取值不要混用
 
 > **读者**：接 AI-Ops 的前端 / BFF 同学，以及排查"为什么走了另一套范围"的人。
-> **状态**：2026-09-28 实测（41 生产 + 公司 GitLab 源码 + 前端 bundle 逆向）。
+> **状态**：2026-09-28 实测（41 生产 + 公司 GitLab 源码 + 前端 bundle 逆向）；
+> 2026-09-29 补两个 App 各自发了什么。
 > **一句话**：**区分管家端与客户端的是 `X-Business-Entry`，不是 `client-type`**；
 > 而 `client-type` 这个词在三个地方指三套不同的取值，**当前链路上它们是断开的**。
+> 为什么会有三套：因为**两侧各发各的**，中间没有那一跳做翻译 ——
+> 根因与目标态见 [company-platform-integration-baseline.md](company-platform-integration-baseline.md)。
+> ⚠️ 但注意**公司后端是读 `client-type` 的**：`ShopIdInterceptor.judge()` 要求它属于
+> `admin`/`supply-admin`/`tenant-app` 才做数据隔离，所以这个头不能想当然地停发。
 
 ---
 
@@ -23,7 +28,7 @@
 | 出处 | 取值 | 语义 | 谁在读 |
 |---|---|---|---|
 | **公司网关** `ApiProxyHeadFilter`（`cloud-gateway`） | `ma` / `h5` / `app` | 转发代理时用来判断"要不要从 Redis 补注入 `user-id`/`tenant-id` 头"；**不在这三个里的值直接放行、不做任何注入** | 公司网关 |
-| **前端实际发的**（ulink H5 bundle 实测） | `H5` / `H5-WX` | 端形态标识（是否微信浏览器） | 目前只被公司网关的"不匹配就放行"分支吃掉 |
+| **前端实际发的**（两个 App 产物实测） | 客户端：`H5` / `H5-WX`；管家端：`admin` / `tenant-app`（另有 `APP` / `H5-PC` / `"1"` 等） | 端形态标识（是否微信浏览器 / 哪个端） | 公司网关的 `ApiProxyHeadFilter`（认 `H5-WX` 之外的三个）与 `AdminProxyHeadFilter`（认 `admin`）；**AI-Ops 完全不读** |
 | **AI-Ops** `faq.py` 的 `operator_client_types` | `admin` / `tenant-app` / `MA` / `supply-admin` | 从 UPMS `sys_role.client_type` 读出的**角色维度**：具备这些角色才算"有管家端角色" | AI-Ops 的**平台身份判定** |
 
 > 注意 AI-Ops 那一组来自 **`sys_role.client_type`（UPMS 角色表）**，与网关/前端的

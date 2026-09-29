@@ -154,6 +154,12 @@ agent 工具层、三个数据源——并且**已经漂移了**：同一个订�
 不能作为授权依据。所以小程序侧由业务后端验证会话后签发一次性身份委托句柄，
 AI-Ops 用独立服务身份回查——见 [ADR-0003](docs/adr/0003-bff-delegated-user-identity.md)。
 
+> ⚠️ **上句描述的是目标形态，不是现状。** 实际落地是共享会话 Redis 直读，
+> 偏离记录见 [ADR-0008](docs/adr/0008-adr-0003-deviation-session-direct-read.md)；
+> 偏离的**根因**是站点位置（AI-Ops 不在 `cloud-gateway` 之后），
+> 现状、证据与目标态见
+> [docs/agents/company-platform-integration-baseline.md](docs/agents/company-platform-integration-baseline.md)。
+
 ### 推论六：成本与确定性要求保留一条不调用模型的路径
 
 模型很贵、不稳定、不可复现，但 CI 需要可复现的回归基准。因此 `diagnose` 保留
@@ -395,7 +401,7 @@ flowchart TB
 |---|---|
 | [ADR-0001](docs/adr/0001-read-only-diagnostic-boundary.md) 只读诊断边界 | `diagnostic_tools.py`（工具白名单）、`sources.py`（有界查询）、`config.SafetySettings`、`ops/` 代理、`zero_order.py` |
 | [ADR-0002](docs/adr/0002-trusted-pr-control-plane.md) 可信 PR 控制面 | `.github/workflows/agent-*.yml`、`.sandcastle/policy-check.mjs`、`.sandcastle/trusted-pr-delivery.sh` |
-| [ADR-0003](docs/adr/0003-bff-delegated-user-identity.md) BFF 委托用户身份 | `caller_auth.py`、`scope_context.py`、`third_session_auth.py`、`gateway_api.py` 的 `authenticated_caller` |
+| [ADR-0003](docs/adr/0003-bff-delegated-user-identity.md) BFF 委托用户身份（**未实现**，现行是共享会话直读：见 [ADR-0008](docs/adr/0008-adr-0003-deviation-session-direct-read.md)） | `caller_auth.py`、`scope_context.py`、`third_session_auth.py`、`gateway_api.py` 的 `authenticated_caller` |
 | [ADR-0004](docs/adr/0004-bff-owns-frontend-api-boundary.md) BFF 拥有前端接口边界 | `gateway_api.py` 的标准 API 面、`docs/standard-api-contract.md` |
 | [ADR-0005](docs/adr/0005-codex-mediated-knowledge-retrieval.md) Codex 中介知识检索 | `knowledge_retrieval.py`、`qa_rag.py`、`agent_contracts.qa_rag_turn_schema` |
 | [ADR-0006](docs/adr/0006-shortcut-actions-extend-to-in-app-navigation.md) 快捷动作分两种形态 | `shortcut_lifecycle.py`、`gateway_api.py` 快捷动作路由 |

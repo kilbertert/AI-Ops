@@ -4416,6 +4416,63 @@ OP-ACCEPT-POS-01..04 与本文末节，不用消费者会话或人造夹具冒�
 
 ---
 
+---
+
+## 立项根基复核：AI-Ops 不在公司网关之后（2026-09-29）
+
+**触发**：管家端鉴权 `401` 的排查，追问「是不是从一开始就重复造轮子、与公司体系脱节」。
+
+**结论**：是。根因不是某一处凭据接错，而是 **AI-Ops 站错了位置** ——
+41 上 `location ^~ /v1/` **写在公司网关前面**，于是 AI-Ops 从未经过 `cloud-gateway`。
+
+### 证据（41 实测 + 公司源码）
+
+1. **拓扑**：`api.mall.qushiyun.com` 的 Nginx 里，`/v1/` 直接 `proxy_pass 127.0.0.1:8788`；
+   而公司服务走另一条 `location ~* ^/(...|upms|mall|mallapi|...)` → `upstream back_server`
+   → **`192.168.1.44:30899`（即 `cloud-gateway`）**。**两条互不相交，`/v1/` 在前。**
+2. **公司网关本来就有注入路径**：`ApiProxyHeadFilter`（`client-type` ∈ `ma|h5|app` +
+   `third-session` → 查 `app:3rd_session:<值>` → 注入 `user-id`/`uid`/`tenant-id`/`site`）；
+   `AdminProxyHeadFilter`（`client-type == admin` + `Authorization` → 查
+   `base_oauth:access:<token>` → 注入 `user-id`/`admin-id`/`tenant-id`/`site`）。
+   **管家端发的正是 `client-type: admin` + OAuth2 令牌** —— 两边本来就配套。
+3. **令牌体系**：`cloud-auth` 是 Spring Security OAuth2 传统栈 + `RedisTokenStore`，
+   令牌不透明；资源服务器用 `RemoteTokenServices` 调 `/oauth/check_token`
+   （实测 `http://192.168.1.44:30899/auth/oauth/check_token` 可达）。
+4. **数据范围同源**：`ShopIdInterceptor` 的隔离集合来自 `/shopuser/getShops`
+   （与 #426 使用的同一条链），但**它的生效条件是 `client-type ∈ {admin, supply-admin, tenant-app}`**
+   —— 公司后端是读这个头的，AI-Ops 不读。
+5. **⚠️ `@Inside` 实际无鉴权**：`BaseSecurityInsideAspect` 的校验整段被注释掉，
+   且 `PermitAllUrlProperties` 把 `@Inside` 端点加入 `permitAll`。
+   即 `/user/inside/byId|byUserId`、`/user/ds` **不需要任何凭据**，只要网络可达。
+   ⇒ `AIOPS_UPMS_INSIDE_TOKEN` 不是门槛；**管家端授权链的信任边界是网络可达性**。
+
+### 三次同形问题，同一根因
+
+| 被当成的问题 | 实际是 |
+|---|---|
+| 用不上公司 OAuth2 令牌 → 自建共享 Redis 直读（ADR-0008 偏离） | 不在网关之后，网关本会把令牌翻成身份头 |
+| 三套 `client-type` 互不相交 | 两侧各发各的，中间没有翻译那一跳 |
+| 管家端 OAuth2 令牌 `401` | 令牌是对的，AI-Ops 缺「把它翻成身份」的那一层 |
+
+### 处置
+
+- 新增 `docs/agents/company-platform-integration-baseline.md`（立项根基：现状、证据、
+  六条决定、五条未决）。
+- `ADR-0003` 的两处 README 引用、`CONTEXT.md` 的「身份委托句柄」词条、`ADR-0004` 各加
+  「未实现 / 目标形态」标注 —— 这是 ADR-0008 早已要求却一直没做到的
+  （「任何提到会话身份的地方，要么写明偏离，要么不声称来源」）。
+- **本轮不改部署拓扑**（那是入口变更，需独立验收与回滚）；目标态已入档。
+
+### 仍未验证（如实列出）
+
+- `/oauth/check_token` 的 `client_id` / `client_secret` 归属与创建方（需业务侧）。
+- 管家端在 41 上实际请求的域名是否已经过 `cloud-gateway`（需前端确认）。
+- 管家端真实请求带的 `client-type` 到底是 `admin` 还是 `tenant-app`
+  （产物里两种都在，另见 `H5`/`H5-WX`/`APP`/`"1"`）。
+- 客户端聊天页的 AI-Ops 请求是否也需一并收敛（它不带 `Authorization`，
+  靠 Nginx 注入 AI-Ops 自己的服务令牌）。
+---
+
 ## #442 共享范围解析的重构（2026-09-29）
 
 **结论**：把「店铺集合 → 运营商站点范围」提取为共享入口（#441 的 prefactor），
