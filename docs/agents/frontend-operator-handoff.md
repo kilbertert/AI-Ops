@@ -26,6 +26,12 @@ X-Business-Entry: operator                      # ← 管家端就是这一行
 Content-Type: application/json
 ```
 
+> ✅ **2026-09-29 后端已启用**：41 公网入口实测 —— `X-Business-Entry: operator` + 用户 JWT
+> ⇒ `GET /v1/shortcuts` 返回 `count=2`（订单检测 / 客户案例）；订单检测不带单号
+> ⇒ `200 clarification` + `missing_fields=["order_no"]`。**前端现在可以按这份文档联调。**
+> 仍缺两项（不由前端负责但会影响你看到的终态）：验收账号**无店铺绑定** ⇒ 带单号仍 `404`；
+> 客户案例 `target_agent_version: null` ⇒ 仍 `unavailable`。
+>
 > ⚠️ **2026-09-29 状态更正：上面这段是「客户端那条链路」的形状，不是管家端的目标形状。**
 > 管家端最终走的是**用户 JWT**（不是服务令牌 + 会话），由 41 的 nginx 按入口分流
 > （`/v1/` 上 `X-Business-Entry: operator` ⇒ 透传用户 JWT + 注入来源密钥）。

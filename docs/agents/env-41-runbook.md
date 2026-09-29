@@ -334,6 +334,16 @@ nginx 在**同一个 location 内**对同名头**不做覆盖**，而是**两条
 ⚠️ 这个错误**不报错、不警告**，现象是「管家端请求被当成客户端」（拿到 `consumer` 内容域与本人
 订单范围），排查时很难定位到「多了一个头」。
 
+### ✅ 2026-09-29：本节描述的配置**已在 41 落地并验收**
+
+- nginx：`0.aiops-entry-map.conf`（三条 map）+ rewrite 里 `/v1/` 的三条 `proxy_set_header`；
+  令牌文件已改为「只设变量」。
+- `gateway.env`：`AIOPS_GATEWAY_COMPANY_JWT_KEY` + `AIOPS_GATEWAY_COMPANY_SOURCE_KEY` 已配，
+  `CHECK_TOKEN_URL` 留空。
+- 实测：客户端 200（不变）/ 管家端 `operator` 200 `count=2` / 非法入口 401 / 订单检测 `platform=operator`。
+- **仍开放**：验收账号无店铺绑定 ⇒ 站点范围 Ø；客户案例 `target_agent_version: null`；
+  密钥仍是公司源码默认值（启动日志每次告警）。
+
 ### 里程碑记录
 
 本节的交付物是**一段 nginx 配置 + 一份改前检查单**，验证方式是离线起真 nginx 复刻三种入口情形

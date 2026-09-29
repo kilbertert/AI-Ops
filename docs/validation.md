@@ -50,6 +50,45 @@
 
 ---
 
+## 管家端入口在 41 上启用并端到端验收通过（2026-09-29）
+
+**结论**：A2 通道已在 41 启用，**管家端入口机制可用**。下面四条是 41 公网入口的实测响应
+（同一时刻、同一进程 `0.1.0+09552737e3a1`）。
+
+| # | 请求 | 结果 |
+|---|---|---|
+| ① | **客户端**：真实会话 + 无入口头 | `200`，`count=3`，`case_exploration` 带 `target_agent_version` ⇒ **客户端链路逐字不变** |
+| ② | **管家端**：用户 JWT + `X-Business-Entry: operator` | `200`，**`count=2`**（`case_exploration` / `smart_diagnosis`），`target_agent_version: null` |
+| ③ | 非法入口 `operator-admin` + JWT | `401 INVALID_ACCESS_TOKEN` ⇒ 原样透传后未被当成管家端 |
+| ④ | **管家端订单检测**（无订单号） | `200 type=clarification`，`missing_fields=["order_no"]`，`platform=operator`，`available_platforms=["consumer","operator"]` |
+
+**「管家端入口机制可用」的判据是 ② 与 ④**：② 证明按入口分流 + JWT 身份两条都成立；
+④ 证明身份进了平台决策（`platform=operator`）且订单守卫正确要求 `order_no`。
+
+### 还没验的部分（如实列）
+
+- **站点范围**：验收账号在 41 上**没有店铺绑定** ⇒ 站点集合为 Ø ⇒ 带 `order_no` 的订单检测
+  仍会 `404`。**这不是本机制的缺陷，是数据缺口**（产品/运营补绑定）。
+- **客户案例内容**：平台行的 `target_agent_version: null`，且无租户覆盖行 ⇒ 该动作仍
+  `unavailable`。字段为空、接口形状正确（对比 ①：客户端那条有 `agt_…#v2`）——
+  **同一个字段在两处的差别就是「素材配没配」的判据**。
+- **真实登录令牌尚未参加验收（保留为待验项）**：四项请求用的是**按生产令牌形状自签的令牌**
+  （字段与生产一致、由真钥匙签），**不是**一次性 App 登录返回的那把。差别只在「谁签的」，
+  但按本仓纪律这仍属**未验**：App 登录回来那把令牌参加验收后才算闭环。
+- **前端接入**：前端还没发 `operator` 头（页面里目前没有管家端入口）。
+- **密钥仍是公司源码默认值**：启动日志每次都会打一行
+  `company JWT signature key is shorter than N characters; this is expected only while the company default key is still in use`。
+
+### 启用过程中踩到并修掉的两处（各是一个 commit）
+
+1. **nginx 那一跳**（PR #452）：`if` 块不能写 `proxy_set_header`（必须 `map`）；空白容错；
+   同一 location 两条同名 `proxy_set_header` **不覆盖**（都发给上游、应用取第一个）⇒
+   「保留 include + 再加一条」会**静默用错凭据**。
+2. **长度门自伤**（PR #454）：我按评审建议加的 `MIN_SIGNATURE_KEY_LENGTH = 16`，而真实钥匙
+   **10 个字符** ⇒ 配置齐全、验签函数可用，**服务却起不来**，报错还指向别处
+   （`CHECK_TOKEN_URL is required`）。改为只告警。
+
+
 ---
 
 ## 运营商站点范围按内容域分流，关闭消费者侧越权（2026-09-28）
@@ -4831,38 +4870,3 @@ ValueError: AIOPS_GATEWAY_COMPANY_CHECK_TOKEN_URL is required when a source key 
 vhost 与令牌文件的新形状**保留**（客户端链路实测仍 200）。
 
 ---
-
-## 管家端入口在 41 上启用并端到端验收通过（2026-09-29）
-
-**结论**：A2 通道已在 41 启用，**管家端入口机制可用**。下面四条是 41 公网入口的实测响应
-（同一时刻、同一进程 `0.1.0+09552737e3a1`）。
-
-| # | 请求 | 结果 |
-|---|---|---|
-| ① | **客户端**：真实会话 + 无入口头 | `200`，`count=3`，`case_exploration` 带 `target_agent_version` ⇒ **客户端链路逐字不变** |
-| ② | **管家端**：用户 JWT + `X-Business-Entry: operator` | `200`，**`count=2`**（`case_exploration` / `smart_diagnosis`），`target_agent_version: null` |
-| ③ | 非法入口 `operator-admin` + JWT | `401 INVALID_ACCESS_TOKEN` ⇒ 原样透传后未被当成管家端 |
-| ④ | **管家端订单检测**（无订单号） | `200 type=clarification`，`missing_fields=["order_no"]`，`platform=operator`，`available_platforms=["consumer","operator"]` |
-
-**「管家端入口机制可用」的判据是 ② 与 ④**：② 证明按入口分流 + JWT 身份两条都成立；
-④ 证明身份进了平台决策（`platform=operator`）且订单守卫正确要求 `order_no`。
-
-### 还没验的部分（如实列）
-
-- **站点范围**：验收账号在 41 上**没有店铺绑定** ⇒ 站点集合为 Ø ⇒ 带 `order_no` 的订单检测
-  仍会 `404`。**这不是本机制的缺陷，是数据缺口**（产品/运营补绑定）。
-- **客户案例内容**：平台行的 `target_agent_version: null`，且无租户覆盖行 ⇒ 该动作仍
-  `unavailable`。字段为空、接口形状正确（对比 ①：客户端那条有 `agt_…#v2`）——
-  **同一个字段在两处的差别就是「素材配没配」的判据**。
-- **前端接入**：以上用**按生产令牌形状自签的令牌**走真实公网入口；前端还没发 `operator` 头。
-- **密钥仍是公司源码默认值**：启动日志每次都会打一行
-  `company JWT signature key is shorter than N characters; this is expected only while the company default key is still in use`。
-
-### 启用过程中踩到并修掉的两处（各是一个 commit）
-
-1. **nginx 那一跳**（PR #452）：`if` 块不能写 `proxy_set_header`（必须 `map`）；空白容错；
-   同一 location 两条同名 `proxy_set_header` **不覆盖**（都发给上游、应用取第一个）⇒
-   「保留 include + 再加一条」会**静默用错凭据**。
-2. **长度门自伤**（PR #454）：我按评审建议加的 `MIN_SIGNATURE_KEY_LENGTH = 16`，而真实钥匙
-   **10 个字符** ⇒ 配置齐全、验签函数可用，**服务却起不来**，报错还指向别处
-   （`CHECK_TOKEN_URL is required`）。改为只告警。
