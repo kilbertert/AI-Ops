@@ -226,6 +226,76 @@ ssh aiops-41 'curl -sS -m 8 -X POST \
 
 ---
 
+## 1.7 管家端入口：nginx 那一跳（**改前必读**，2026-09-29 实测）
+
+### 为什么需要这一跳
+
+AI-Ops 现在只认两种凭据：共享会话（客户端）与公司 JWT（管家端，见 #451 的本地验签模式）。
+`/v1/` 目前由 nginx 注入 **AI-Ops 自己的服务令牌**，所以客户端那条链路能用；
+管家端拿的是**用户 JWT**，需要按入口分流。
+
+### 正确形状是 `map`，**不是 `if`**
+
+⚠️ `proxy_set_header` 在 `if` 块里**不合法**（实测报 `"proxy_set_header" directive is not allowed
+here`）。按入口分流必须用 `map`。41 上已有现成用法：`0.websocket.conf`、`waf2monitor_data.conf`。
+
+`map` 必须写在 **`http` 层**，而 vhost 是 `include /www/server/panel/vhost/nginx/*.conf` 进来的
+（`nginx.conf:101`）—— 也就是 vhost 文件自己就在 `http` 里，可以直接在文件顶部写 `map`。
+生产主配置有 `lua_package_path`，自定义 `nginx.conf` 测试时若缺它会报 `resty.core` 找不到 ——
+**那是配置环境差异，不是 map 的问题**。
+
+### 实测定稿的配置（离线起真进程验证过三种情形）
+
+```nginx
+# 放在 vhost 文件顶部（http 上下文内）
+map $http_x_business_entry $aiops_entry {
+    default        "consumer";
+    "~*^operator$" "operator";          # 大小写不敏感，与上游 is_operator_entry 同口径
+}
+map $aiops_entry $aiops_auth {
+    default    "Bearer <AI-Ops 服务令牌>";   # 客户端：与今天逐字一致
+    "operator" $http_authorization;        # 管家端：透传用户 JWT
+}
+map $aiops_entry $aiops_srckey {
+    default    "";
+    "operator" "<来源密钥>";                # 只有管家端带，由这一跳覆盖式注入
+}
+
+location ^~ /v1/ {
+    proxy_pass http://127.0.0.1:8788;
+    proxy_http_version 1.1;
+    proxy_set_header Authorization        $aiops_auth;
+    proxy_set_header X-AIOps-Source-Key   $aiops_srckey;
+    proxy_set_header X-Business-Entry     $aiops_entry;
+    proxy_set_header X-Third-Session      $http_third_session;
+    proxy_set_header Range                $http_range;
+    proxy_set_header Host                 $host;
+    proxy_connect_timeout 15s;
+    proxy_send_timeout  120s;
+    proxy_read_timeout  120s;
+    proxy_buffering off;
+}
+```
+
+> 与现行配置的差异只有三行：原来的 `include nginx-aiops-service-token.conf`（注入备份地址）
+> 被 `map` 取代；`set $aiops_business_entry` + `if` 那两行被 `map $aiops_entry` 取代。
+
+### 实测证据（上游回显三个头）
+
+| 请求 | 上游实际收到 |
+|---|---|
+| `X-Business-Entry: operator` + 用户 JWT + 会话 | `AUTH=Bearer USER.JWT` / `SRC=SRC-KEY-VALUE` / `ENTRY=operator` |
+| **不带入口头** + 会话 | `AUTH=Bearer SERVICE-TOKEN` / `SRC=空` / `ENTRY=consumer` ⇒ **客户端逐字不变** |
+| `X-Business-Entry: OPERATOR` | 被 `~*` 规范化成 `operator` |
+
+### 改前检查单
+
+- [ ] **签名密钥已换成真正的秘密**（否则本地验签放行任何人自签的令牌，见基线 §3.3）
+- [ ] `gateway.env` 三键：`COMPANY_JWT_KEY` + `COMPANY_SOURCE_KEY` 有值，`COMPANY_CHECK_TOKEN_URL` **留空**（与本地模式互斥，两者都配 = 启动失败）
+- [ ] `nginx -t` 通过；原 vhost 文件已备份（`cp -a ... .bak-<用途>-<时间戳>`）
+- [ ] 回滚路径：恢复备份 + `nginx -s reload`；AI-Ops 侧清空那三个键即回到「新链路整体不启用」
+- [ ] 验收含**客户端回归**（无入口头那条必须仍是服务令牌）
+
 ## 2. 部署（源码同步到 41）
 
 生产代码是文件拷贝部署（41 无 `.git`）。流程：**备份 → 传 → 校验 sha → 重启**。
