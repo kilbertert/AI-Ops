@@ -42,9 +42,12 @@ Content-Type: application/json
 | 头 | 来源 |
 |---|---|
 | `Authorization: Bearer <JWT>` | 管家端 App 登录（`/upms/token/login` 那条链）拿到的 `access_token`。**已经在客户端产物里存着**（`CLOUD_ACCESS_TOKEN`），不用新做登录 |
-| `X-Business-Entry: operator` | **前端自己显式发**。41 的 Nginx 会在**缺失时补 `consumer`** —— 也就是说**漏发不报错，只会静默走客户端那条链路**（见 §3） |
+| `X-Business-Entry: operator` | **前端自己显式发**。41 的 Nginx 在**缺失时补 `consumer`**；漏发的实际后果**取决于还带没带会话** —— 见 §3.1（两种情形，别只记一半） |
 
 > **`tenant-id` 不用发**（服务端取自 JWT 里的 `tenant_id`，发了也不读）。
+>
+> ⚠️ 关于「漏发入口头会怎样」，口径**只有 §3.1 那一处**（按是否同时带会话分两种后果）——
+> 别按「反正会静默降级」理解。
 > **`third-session` 不用发**（那是客户端那条链路的凭据，管家端用 JWT）。
 
 ---
@@ -87,8 +90,10 @@ Nginx 缺省把入口补成 `consumer`，并**把 `Authorization` 换成 AI-Ops 
 客户端会话的双平台账号，漏头会静默拿到客户端内容域。**两条都指向同一个结论：这个头必须显式发。**
 
 **排查信号**：`GET /v1/shortcuts` 的响应**没有** `platform` 字段（别拿它自检）。用这两条：
-- **`count` 与内容**：管家端是 `2`（订单检测 / 客户案例）；客户端是 `3`，且 `case_exploration` 带
-  `target_agent_version: "agt_…#vN"`，管家端那条是 `null`；
+- **最可靠的是 `/v1/faq/recommendations` 的 `platform` 字段**（下面那条）；
+- **次选**：动作列表的 `count` 与内容 —— **但这只是当前发布状态**（动作是运营发布的，
+  数量会变）：现在管家端 `2` 条、客户端 `3` 条；`case_exploration` 在客户端带
+  `target_agent_version: "agt_…#vN"`、管家端为 `null`。**别把 `count` 写成硬断言**；
 - **需要 `platform` 字段时改用 `GET /v1/faq/recommendations`** —— 它的响应里有
   `platform: operator` 与 `available_platforms`。
 
