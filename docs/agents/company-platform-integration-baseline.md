@@ -87,7 +87,7 @@ location ~* ^/(erp|qm|das|dis|...|upms|mall|mallapi|...)  {  # ← 公司服务�
 > 由 `cloud-auth` 的 **hutool** JWT 签发。**仓库里不是这一套** —— `s2b2c-java/cloud-auth` 的
 > `main` 分支是 Spring Security OAuth2 传统栈 + `RedisTokenStore`，而 41 上运行的那个 jar 里
 > **`spring-security-oauth2` 数量为 0**、用的是 `hutool-all`。**该以运行容器的产物为准。**
-> 证据与更正过程见 `../../validation.md` 的「A2：本地验签模式」一节。
+> 证据与更正过程见 `../validation.md` 的「A2：本地验签模式」一节。
 >
 > 下面这段保留，是因为它仍**准确描述仓库源码**（也是「读仓库 ≠ 读线上」这条教训的现场）。
 
