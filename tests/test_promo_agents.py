@@ -117,28 +117,39 @@ def test_no_ordinary_support_wording_enters_the_promotional_path() -> None:
     questions = corpus["questions"]
     assert len(questions) >= 86, f"语料规模变了（{len(questions)} 条），这条用例的前提要重核"
 
-    # 这 8 条是**已知宣传意图**的（#413 的目标 + 既有命中），它们命中是对的。
+    # 这 14 条是**已知宣传意图**的（#413 的目标 + 既有命中）：它们**必须命中**，
+    # 且语料里**只有**它们可以命中。两个方向都断言 —— 只查"多出来的"会漏掉
+    # 「某个已知宣传说法**不再**命中」这种回归（评审指出）。
     expected_promo = {
-        "有什么案例",
-        "新加坡无人电动巴士案例",
-        "重卡充电案例",
-        "港口集卡方案",
-        "我想看看客户案例",
-        "有没有公交充电的客户案例",
-        "我想看看新加坡无人巴士的客户案例",
-        "重卡充电客户案例",
-        "给我看看行业解决方案",
-        "我想发现行业解决方案",
-        "I would like to see customer cases",
-        "Show me industry solutions",
-        "I'd like to see customer cases",
-        "Show me a customer case",
+        "有什么案例": "case_exploration",
+        "新加坡无人电动巴士案例": "case_exploration",
+        "重卡充电案例": "case_exploration",
+        "港口集卡方案": "solution_discovery",
+        "我想看看客户案例": "case_exploration",
+        "有没有公交充电的客户案例": "case_exploration",
+        "我想看看新加坡无人巴士的客户案例": "case_exploration",
+        "重卡充电客户案例": "case_exploration",
+        "给我看看行业解决方案": "solution_discovery",
+        "我想发现行业解决方案": "solution_discovery",
+        "I would like to see customer cases": "case_exploration",
+        "Show me industry solutions": "solution_discovery",
+        "I'd like to see customer cases": "case_exploration",
+        "Show me a customer case": "case_exploration",
     }
+    # 方向一：**不该命中的不许命中**。
     offenders = [
         question
         for question in questions
         if promo_intent_from_text(question) and question not in expected_promo
     ]
+    # 方向二：**该命中的不许漏**（且意图要对）—— 缺了它，一个已知说法悄悄不再命中
+    # 时这条用例仍会通过，而它声称的是"恰好相等"。
+    missing = [
+        f"{question} -> {promo_intent_from_text(question)!r}（期望 {intent!r}）"
+        for question, intent in expected_promo.items()
+        if promo_intent_from_text(question) != intent
+    ]
+    assert missing == [], f"语料里已知的宣传说法不再命中：{missing}"
     assert offenders == [], f"语料里出现预期之外的宣传命中：{offenders}"
 
     support_questions = (
