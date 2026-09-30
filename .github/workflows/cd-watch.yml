@@ -1,0 +1,81 @@
+name: CD Watch
+
+# #407：让「CD 未按预期发生」可见，**不改批准门本身**。
+#
+# 起因：连续 6 次 src 合并都没成功部署而无人察觉 —— 那段时间有人在手工 rsync，生产确实
+# 更新了，于是没有任何理由去看 CD。手工动作把「CD 坏了」这条本应被发现的信号一起抹掉了。
+#
+# 两条判据（实现见 .sandcastle/deploy-state.mjs）：
+#   1. **卡住**：`waiting` 与「根本没在跑」在 API 上长得一样，靠 `pending_deployments`
+#      分辨（等批准的有部署记录，死锁的没有）；
+#   2. **连续不成功**：判据是「最近 N 次**已完成**的 run 里有没有 success」，
+#      而不是「当前这次多久没动静」——后者区分不了「还没来得及」。
+#
+# 为什么跑在 GitHub-hosted 而**不是** self-hosted：
+#
+# CD 部署本身跑在 self-hosted 的 `AI-Ops` runner 上（它要去 41）。**守望者不能与它
+# 共用那台机器** —— runner 掉线时，恰恰是最需要有人报「部署没发生」的时候，而共用
+# runner 的守望会同它一起停摆，把本票要修的静默原样复制一遍（评审指出）。
+#
+# 放在 GitHub-hosted 上：它只用 `gh` + 仓库自带的 node 脚本，**不跑候选代码、不碰生产**，
+# 每次运行数秒；唯一需要的是能开 issue 的 token —— 由 workflow 自带的
+# `GITHUB_TOKEN` 提供（见 permissions），不引入任何 secret。
+#
+# 为什么开票而不是让 job 失败：判据是**状态**。job 失败只会让红色出现在一个没人天天看
+# 的页面上 —— 那正是本票要修的病。一张未关的 `cd:needs-attention` 票本身就是未处理的告警。
+
+on:
+  schedule:
+    # 每小时的第 7 分钟。刻意避开 :00 —— 整点是所有人的默认选择，GitHub 在
+    # 那些时刻会延迟计划任务（本 job 对分钟数没有要求，避开就没有代价）。
+    - cron: "7 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  # 开票与评论需要写权限。范围只到 issue，不涉 contents。
+  issues: write
+
+jobs:
+  watch:
+    # GitHub-hosted（理由见文件头）：与 CD 用的 self-hosted runner **故意不共用**，
+    # 否则 runner 掉线时守望者一起停摆，恰好漏掉它该报的那件事。
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Check out the watchdog
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          # 只用仓库自带的脚本，不需要历史。
+          fetch-depth: 1
+          persist-credentials: false
+
+      # 先用真数据跑一次**只读**判定：异常时打印告警内容但不投递。
+      # 这一段同时也是「可复跑的检查」—— 任何人在本机跑 `node .sandcastle/cd-watch.mjs
+      # --dry-run` 都能回答「此刻是否有待批准的 CD」。
+      - name: Assess the CD state (read-only)
+        run: node .sandcastle/cd-watch.mjs --dry-run
+
+      # 判定自检：用票里记录的真实形态（含 jobs=0 的死锁）驱动全部分支。
+      # 放在投递之前 —— 判定坏了就不该投递。
+      - name: Self-check the decision logic
+        run: |
+          node .sandcastle/deploy-state.mjs
+          node .sandcastle/cd-watch.test.mjs
+
+      - name: Raise or update the alarm
+        run: node .sandcastle/cd-watch.mjs
+
+      - name: Summarize
+        if: always()
+        run: |
+          {
+            echo "### CD Watch"
+            echo
+            echo "判定逻辑见 \`.sandcastle/deploy-state.mjs\`；阈值：卡住 30 分钟、连续失败 3 次。"
+            echo
+            echo "**批准门未被改动**：\`production-41\` 的 \`required_reviewers\` 保留。"
+            echo "卡住时谁负责批准、怎么办，见 \`docs/agents/env-41-runbook.md\` 的 CD 一节。"
+          } >> "$GITHUB_STEP_SUMMARY"

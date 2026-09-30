@@ -7,6 +7,56 @@
 
 
 
+## E1 · #407 交付：CD 状态可见 + 手工部署留痕（2026-09-30）
+
+**背景是实测的**：CD 自落地起**连续 6 次 src 合并全部部署失败而无人察觉**（逐 run 结果见
+#407 正文）。看不见的原因不是「没人告警」，而是**同期有人在手工 rsync** —— 生产确实更新了，
+于是没有任何理由去看 CD。**不可见的人工动作会连带隐藏本应被发现的异常。**
+
+### 交付
+
+| 件 | 内容 |
+|---|---|
+| `.sandcastle/deploy-state.mjs` | 判定（纯函数，可 `node` 直接跑自检） |
+| `.sandcastle/cd-watch.mjs` | 取数 + 告警投递；`--dry-run` 为**只读**检查 |
+| `.sandcastle/cd-watch.test.mjs` | 判定分支自检（11 条，用票里记录的**真实形态**驱动） |
+| `.github/workflows/cd-watch.yml` | 每小时第 7 分钟跑一次；**GitHub-hosted**，与 CD 的 self-hosted runner 故意不共用 |
+| `deploy/record-manual-deploy.sh` + `deploy/manual-deploys.md` | 手工部署留痕（**首个条目就是本次实测那次**） |
+| `env-41-runbook.md` §2 | 谁批准、卡住怎么办、「不要因为等待就手工部署」 |
+
+### 两条判据与各自的可区分性
+
+| 形态 | 判据 | 为什么不能更弱 |
+|---|---|---|
+| 等批准超阈值 | `pending_deployments` **> 0** | `waiting` 与「根本没在跑」在 API 上长得一样；只盯「超时未批准」区分不了 |
+| 连续不成功 | 最近 N 次**已完成**的 run 里有没有 success | 单次失败会被归因，**连续不成功看起来和「还没来得及」一样** —— 那 6 次就是这样过去的 |
+
+### 三个「未知不是正常」（评审逐条指出后改的）
+
+初版把三种**取数不成立**的情况当成正常，各自会把一整类故障变成静默 —— 正是本票要修的东西：
+
+| 情况 | 初版 | 现在 |
+|---|---|---|
+| 详情取不到（`null`） | 当成 0 ⇒ 报 `deadlocked`（**假阳性**） | `indeterminate` ⇒ **报异常**（未知不是正常） |
+| run 列表为空 | 报正常 | 报 `no-runs` —— 「一次都没触发过」与「一直正常」在告警面上是同一种安静 |
+| 超时且 `jobs=0` | 判 `indeterminate` ⇒ 报正常（**恰好把要修的静默又做了一遍**） | 判 `deadlocked` —— 阈值本身就是「已经等了 30 分钟」，30 分钟没建出作业不是慢，是坏了 |
+
+### 验证（全部可复跑；**不依赖访问生产**）
+
+| 检查 | 结果 |
+|---|---|
+| `node .sandcastle/deploy-state.mjs` | `demo passed` |
+| `node .sandcastle/cd-watch.test.mjs` | **11/11**（含上表三种「未知」情形与「连续 3 次 cancelled」） |
+| **真实数据** `node .sandcastle/cd-watch.mjs --dry-run` | 报出**当下确实在等**的那个 run（`58dc271`，pending=1）为 `stuck` ⇒ **判据在真实等待上会响**，不只在假数据里成立 |
+| `shellcheck deploy/*.sh` | 通过（新增脚本被仓库既有测试 `test_deploy_scripts_pass_shellcheck` 覆盖） |
+| `node .sandcastle/policy-check.mjs workflows` | passed |
+| 留痕脚本 | 三条拒绝路径（无参 / 假 commit / 原因过短）各实测；成功路径演练后**已还原**，工作区无残留 |
+| `ruff check` / `format --check` / `pytest` | 通过 / 237 formatted / **1509 passed** |
+
+**批准门未改动**：`production-41` 的 `required_reviewers` 保留。
+
+---
+
 ## M4 观察期时钟开启 + M2 只读探查（2026-09-30）
 
 ### M4 · #405 的观察期判据：**三项前置全部满足，观察窗自今日起算**

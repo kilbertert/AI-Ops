@@ -438,6 +438,22 @@ nginx 在**同一个 location 内**对同名头**不做覆盖**，而是**两条
 > `deploy/deploy-41.sh --commit <sha>`（或 `--rollback-to <sha>`），用人工密钥
 > 别名 `aiops-41`；自动化用的是 CD 专用别名 `aiops-41-cd`。
 >
+> 🔴 **手工部署必须留痕**（#407，`deploy/record-manual-deploy.sh`）。这不是流程洁癖：
+> 一次 CD 连续 6 次没成功部署而无人察觉，正是因为**同期的确有人在手工 rsync**
+> —— 生产确实更新了，于是没有任何理由去看 CD。**不可见的人工动作会连带隐藏本应被
+> 发现的异常。** 部署后当天追加一行：
+> `deploy/record-manual-deploy.sh <commit> "<为什么走手工>"`，
+> 记录落在 [`deploy/manual-deploys.md`](../../deploy/manual-deploys.md)（并同步到 41 的
+> 运维记录）。**先部署后补记也行，但不能不记。**
+>
+> **谁负责批准 CD / 卡住了怎么办**：批准由**运维负责人**在 GitHub 的
+> `production-41` environment 上点（`required_reviewers` 是有意保留的唯一人工注视点）。
+> 卡住时**不需要人盯着**：每小时第 7 分钟跑一次 `CD Watch`（#407），它把
+> 「等待批准超过 30 分钟」与「连续 3 次已完成的 CD 都不是 success」变成一张
+> `cd:needs-attention` 的票。想立刻问「此刻有没有待批准的部署」，跑
+> `node .sandcastle/cd-watch.mjs --dry-run`（只读，不开票）。
+> ⚠️ **不要因为等待就手工部署** —— 那正是上面那条留痕要求的由来。
+>
 > **依赖不在本流程范围。** `src/` 与运行时参考资料由 CD 同步；依赖清单
 > （`pyproject.toml` / `uv.lock`）不一致时 CD 会**拒绝部署**。更新 41 的依赖环境走
 > [依赖环境更新流程](env-41-dependency-update.md) —— 那是一次人工的、要留记录的

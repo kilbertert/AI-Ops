@@ -1,0 +1,95 @@
+/** cd-watch 的判定分支自检（不联网）：用第 407 号票记录的真实形态驱动。 */
+import { assess, classifyRun, straightFailures } from "./deploy-state.mjs";
+
+const now = new Date("2026-09-30T15:30:00Z");
+const cases = [];
+
+// 1. 真实：run 36678842333（58dc271）—— waiting + 有 pending deployment
+cases.push([
+  "等批准超阈值 ⇒ stuck",
+  classifyRun({ status: "waiting", createdAt: "2026-09-30T06:33:29Z", totalCount: 1, pendingCount: 1 }, { now }).kind,
+  "stuck",
+]);
+
+// 2. 票里记录的**死锁**形态：run 存在、waiting、jobs=0、已超时
+//    （曾判成 indeterminate ⇒ assess 报正常 ⇒ 把本票要修的静默又做了一遍）
+cases.push([
+  "超时仍 jobs=0 ⇒ deadlocked",
+  classifyRun({ status: "waiting", createdAt: "2026-09-30T06:33:29Z", totalCount: 0, pendingCount: 0 }, { now }).kind,
+  "deadlocked",
+]);
+
+// 2b. 详情**取不到**（null）⇒ 未知，不是死锁、更不是正常
+cases.push([
+  "详情取不到 ⇒ indeterminate",
+  classifyRun({ status: "waiting", createdAt: "2026-09-30T06:33:29Z", totalCount: null, pendingCount: null }, { now }).kind,
+  "indeterminate",
+]);
+cases.push([
+  "indeterminate ⇒ 报异常（未知不是正常）",
+  assess({
+    runs: [{ status: "waiting", createdAt: "2026-09-30T06:33:29Z", totalCount: null, pendingCount: null }],
+    fetchedOk: true,
+  }).ok,
+  false,
+]);
+
+// 3. 有作业、无人等批准 ⇒ 死锁
+cases.push([
+  "有作业无 pending ⇒ deadlocked",
+  classifyRun({ status: "waiting", createdAt: "2026-09-30T06:33:29Z", totalCount: 1, pendingCount: 0 }, { now }).kind,
+  "deadlocked",
+]);
+
+// 4. 刚创建 5 分钟 ⇒ 不报警
+cases.push([
+  "阈值内 ⇒ in-flight",
+  classifyRun(
+    { status: "waiting", createdAt: "2026-09-30T15:25:00Z", totalCount: 1, pendingCount: 1 },
+    { now },
+  ).kind,
+  "in-flight",
+]);
+
+// 5. 连续 6 次 cancelled（票里那段的形态）：数到第一个 success 为止，只在已完成的里数
+cases.push([
+  "连续失败计数（跳过未完成的）",
+  straightFailures([
+    { status: "waiting", conclusion: null },
+    { status: "completed", conclusion: "cancelled" },
+    { status: "completed", conclusion: "cancelled" },
+    { status: "completed", conclusion: "success" },
+  ]),
+  2,
+]);
+
+// 6. 取数失败 ⇒ 不报正常
+cases.push(["取数失败 ⇒ ok=false", assess({ runs: [], fetchedOk: false }).ok, false]);
+
+// 6b. **空列表**也 ⇒ 不报正常。「一次都没触发过」与「一直正常」在告警面上是同一种安静。
+cases.push(["取不到任何 run ⇒ ok=false", assess({ runs: [], fetchedOk: true }).ok, false]);
+
+// 7. 连续 3 次失败 ⇒ 两条告警（stuck 与 straight-failures 可以同时成立）
+const many = assess({
+  runs: [
+    { status: "completed", conclusion: "cancelled" },
+    { status: "completed", conclusion: "cancelled" },
+    { status: "completed", conclusion: "cancelled" },
+  ],
+  fetchedOk: true,
+  straightFailures: 3,
+});
+cases.push(["连续 3 次失败 ⇒ 报警", many.ok, false]);
+cases.push(["告警种类正确", many.alarms.map((a) => a.kind).join(","), "straight-failures"]);
+
+let failed = 0;
+for (const [name, got, want] of cases) {
+  const ok = got === want;
+  if (!ok) failed += 1;
+  console.log(`${ok ? "PASS" : "FAIL"}  ${name}: ${JSON.stringify(got)}${ok ? "" : ` (want ${JSON.stringify(want)})`}`);
+}
+if (failed) {
+  console.error(`\n${failed} 条未通过`);
+  process.exit(1);
+}
+console.log(`\nwatchdog 自检通过（${cases.length} 条）`);
