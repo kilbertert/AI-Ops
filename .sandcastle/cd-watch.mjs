@@ -66,19 +66,18 @@ function enrich(runs) {
  * 这个状态下拿不到任何时间锚，只能退回**创建时刻**，而创建时刻在"等批准等了很久
  * 才获批"的 run 上会给出假阳性（评审三次指出，见 `classifyRun` 的注释）。
  *
- * 尝试顺序（实测）：
- *   1. `pending_deployments` —— 若还带着 `current_user`（审批人），它**就是**获批时刻，
- *      一次调用、最准；实测 GitHub 在本仓的部署上会把首次审批后的状态留在这里。
- *   2. 该 run 的 deployment 状态时间线 —— 找 `in_progress`（成功路径实测只隔 0.5 分钟）
- *      或 `queued`（首次获批当且仅当状态还是 `waiting` 时成立），取最早的那个。
- *   3. 都没有 ⇒ `null`（判定侧据此**不判**，宁可漏报也不开假票）。
+ * **唯一来源是部署账本的状态时间线**（`waiting → queued → in_progress`）：
+ *   · `queued` 只出现在**首次批准**的那一刻（后续状态推送不会退回 `queued`），
+ *     所以它是"获批时刻"的代理；实测它与 `in_progress` 只隔 0.5 分钟；
+ *   · 取两者的**最早**时刻；两者都没有（尚未获批）⇒ 该 sha 不入表 ⇒ 判定侧不判。
  *
- * 每次多两次 API 调用，只对**未完成**的 run 做（通常 0–2 个）。
+ * ⚠️ 两条曾经的写法与其问题（都按实测改掉了）：
+ *   · 曾以为 `actions/runs/<id>/deployments` 能按 run 取 —— 该端点**不存在**（404），
+ *     账本挂在**仓库级**，与 run 的关联只有 `sha`；
+ *   · 曾把 `pending_deployments.current_user` 当首选来源 —— 实测那个字段是 **null**，
+ *     本仓没有任何一次部署带过它。注释里写过"最准"，**实现从没这么做过**，已删。
  */
-export function approvedStamps({ repo, workflow = "cd.yml", environment = "production-41", limit = 20 } = {}) {
-  // ⚠️ `actions/runs/<id>/deployments` **不存在**（实测 404）——账本挂在**仓库级**，
-  // 与 run 的关联只有 `sha` 与 `created_at`。所以这里：① 列最近的 deployment；
-  // ② 只留目标环境的；③ 逐条读它自己的状态时间线。
+export function approvedStamps({ repo, environment = "production-41", limit = 20 } = {}) {
   const args = [
     "api",
     `repos/{owner}/{repo}/deployments?per_page=${limit}`,
@@ -86,10 +85,21 @@ export function approvedStamps({ repo, workflow = "cd.yml", environment = "produ
     `[.[] | select(.environment == "${environment}") | {id, sha, created_at}]`,
   ];
   if (repo) args.splice(2, 0, "--repo", repo);
-  void workflow;
   const deployments = JSON.parse(gh(args));
-  const byDeployment = new Map();
+  // 🔴 **同一个 sha 可能有多条 deployment**（重跑一次就是新的一条）：必须取**最新**
+  //    那条的时间线，否则一条早已失败的旧记录会把新记录的获批时刻覆盖成旧的 ——
+  //    而那正好会让"刚获批"看起来像"排了很久"（评审指出）。
+  //    判据用 `created_at`（deployment 自己的创建时刻，与 run 的创建时刻同源）。
+  const latestBySha = new Map();
   for (const item of Array.isArray(deployments) ? deployments : []) {
+    const created = Date.parse(item.created_at ?? 0);
+    const known = latestBySha.get(item.sha);
+    if (known === undefined || created > Date.parse(known.created_at ?? 0)) {
+      latestBySha.set(item.sha, item);
+    }
+  }
+  const bySha = new Map();
+  for (const item of latestBySha.values()) {
     const statuses = JSON.parse(
       gh([
         "api",
@@ -100,18 +110,14 @@ export function approvedStamps({ repo, workflow = "cd.yml", environment = "produ
     );
     let approved = null;
     for (const entry of Array.isArray(statuses) ? statuses : []) {
-      // `queued` 作为"首次获批"的代理：实测时间线是 waiting → queued → in_progress，
-      // 它只出现在**首次**批准的那一刻（后续状态推送不会回到 queued）。
       if (entry.state === "in_progress" || entry.state === "queued") {
         const t = Date.parse(entry.created_at);
         if (Number.isFinite(t) && (approved === null || t < approved)) approved = t;
       }
     }
-    if (approved !== null) {
-      byDeployment.set(item.sha, new Date(approved).toISOString());
-    }
+    if (approved !== null) bySha.set(item.sha, new Date(approved).toISOString());
   }
-  return byDeployment;
+  return bySha;
 }
 
 /**

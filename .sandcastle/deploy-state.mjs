@@ -287,32 +287,44 @@ function demo() {
 
   // 真实：run 36678842333（58dc271），pending deployment 在等批准
   const waiting = classifyRun({ ...base, totalCount: 1, pendingCount: 1 }, { now });
-  console.assert(waiting.kind === "stuck", "等批准超阈值应为 stuck", waiting);
+  check(waiting.kind === "stuck", "等批准超阈值应为 stuck", waiting);
 
   // 历史死锁形态：run 存在、waiting、jobs=0（本票背景里那次）。
   // 超时仍 jobs=0 ⇒ 判死锁；**曾经判成 indeterminate，那会让 assess 报正常**。
   const dead = classifyRun({ ...base, totalCount: 0, pendingCount: 0 }, { now });
-  console.assert(dead.kind === "deadlocked", "超时仍 jobs=0 应为 deadlocked", dead);
+  check(dead.kind === "deadlocked", "超时仍 jobs=0 应为 deadlocked", dead);
 
-  // 已获批、在等并发锁 ⇒ 超阈值时是 `queued-too-long`（不是死锁，也不是"健康"）
-  const queued = classifyRun({ ...base, totalCount: 1, pendingCount: 0 }, { now });
-  console.assert(queued.kind === "queued-too-long", "已获批却超阈值应为 queued-too-long", queued);
+  // 已获批、在等并发锁 ⇒ 时长从**获批时刻**算：超阈值才是 `queued-too-long`
+  const queued = classifyRun(
+    { ...base, totalCount: 1, pendingCount: 0, approvedAt: "2026-09-30T06:35:00Z" },
+    { now },
+  );
+  check(queued.kind === "queued-too-long", "获批后排队超阈值应为 queued-too-long", queued);
+  // 等批准等很久、**刚获批** ⇒ 不是"排队太久"（判据要挂在获批时刻上）
+  const justApproved = classifyRun(
+    { ...base, totalCount: 1, pendingCount: 0, approvedAt: "2026-09-30T15:25:00Z" },
+    { now },
+  );
+  check(justApproved.kind === "in-flight", "刚获批应为 in-flight", justApproved);
+  // 拿不到获批时刻 ⇒ 不判（宁可漏报，也不凭创建时刻开假票）
+  const noStamp = classifyRun({ ...base, totalCount: 1, pendingCount: 0 }, { now });
+  check(noStamp.kind === "in-flight", "拿不到获批时刻应不判", noStamp);
 
   // 取数失败（null）不得被当成 0
   const unknown = classifyRun({ ...base, totalCount: null, pendingCount: null }, { now });
-  console.assert(unknown.kind === "indeterminate", "详情取不到应为 indeterminate", unknown);
-  console.assert(
+  check(unknown.kind === "indeterminate", "详情取不到应为 indeterminate", unknown);
+  check(
     assess({ runs: [{ ...base, totalCount: null, pendingCount: null }], fetchedOk: true }).ok === false,
     "indeterminate 不得报正常",
   );
-  console.assert(assess({ runs: [], fetchedOk: true }).ok === false, "空列表不得报正常");
+  check(assess({ runs: [], fetchedOk: true }).ok === false, "空列表不得报正常");
 
   // 正常：刚创建 5 分钟
   const fresh = classifyRun(
     { ...base, createdAt: "2026-09-30T15:25:00Z", totalCount: 1, pendingCount: 1 },
     { now },
   );
-  console.assert(fresh.kind === "in-flight", "阈值内不得报警", fresh);
+  check(fresh.kind === "in-flight", "阈值内不得报警", fresh);
 
   // 连续 6 次 cancelled（票里那段的真实形态）
   const streak = straightFailures([
@@ -322,12 +334,32 @@ function demo() {
     { status: "completed", conclusion: "cancelled" },
     { status: "completed", conclusion: "success" },
   ]);
-  console.assert(streak === 3, "应数到第一个 success 为止", streak);
+  check(streak === 3, "应数到第一个 success 为止", streak);
 
   // 取数失败不得报正常
-  console.assert(assess({ runs: [], fetchedOk: false }).ok === false, "取数失败不能算正常");
+  check(assess({ runs: [], fetchedOk: false }).ok === false, "取数失败不能算正常");
 
-  console.log("deploy-state demo passed");
+  // 🔴 **断言失败必须让退出码非零**。`console.assert` 只打印，不改变退出码 ——
+  // 于是「demo passed」会在断言失败时照样打印，CI 与人都读不出区别（评审指出）。
+  // 这里显式统计：任何一条失败 ⇒ 抛错 ⇒ 退出码非零、且**不会**打印 passed。
+  const failures = pendingAssertions;
+  pendingAssertions = [];
+  if (failures.length > 0) {
+    for (const failure of failures) console.error(`FAIL  ${failure}`);
+    throw new Error(`deploy-state 自检失败 ${failures.length} 条`);
+  }
+  console.log(`deploy-state demo passed（${passedAssertions} 条断言）`);
+}
+
+/** 收集自检失败：`console.assert` 不会让进程失败，这里替它记账。 */
+let pendingAssertions = [];
+let passedAssertions = 0;
+function check(condition, message, value) {
+  if (condition) {
+    passedAssertions += 1;
+  } else {
+    pendingAssertions.push(`${message}${value === undefined ? "" : `（实际：${JSON.stringify(value)}）`}`);
+  }
 }
 
 if (process.argv[1] && process.argv[1].endsWith("deploy-state.mjs")) demo();

@@ -61,9 +61,14 @@ jobs:
       # 判定自检：用票里记录的真实形态（含 jobs=0 的死锁）驱动全部分支。
       # 放在投递之前 —— 判定坏了就不该投递。
       - name: Self-check the decision logic
+        # `deploy-state.mjs` 的 demo 用 `console.assert` —— 它**只打印，不改变退出码**，
+        # 于是断言失败时"passed"照样打印（评审指出）。现在它改成自记账并在失败时抛错，
+        # 但这里仍然**显式检查两者各自的退出码**：这个 job 的意义就是"判定坏了要停住"，
+        # 不该把"停住"寄托在一个库的语义上。
         run: |
-          node .sandcastle/deploy-state.mjs
-          node .sandcastle/cd-watch.test.mjs
+          set -euo pipefail
+          node .sandcastle/deploy-state.mjs || { echo 'deploy-state 自检失败' >&2; exit 1; }
+          node .sandcastle/cd-watch.test.mjs || { echo 'watchdog 分支自检失败' >&2; exit 1; }
 
       - name: Raise or update the alarm
         run: node .sandcastle/cd-watch.mjs

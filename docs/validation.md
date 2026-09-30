@@ -122,6 +122,8 @@
 | 判据挂在创建时刻（第二处） | 已获批、在等并发锁的 run 被判 `deadlocked` —— 它是**合法排队** | 先改 `in-flight`，但那样**运行器离线时会永远显示健康**（第三处）⇒ 最终给它一个说得出成因的类别 `queued-too-long`（超阈值即报警） |
 | 「三类」断言把同一常量同时当实测值与期望值 | **那个断言永远不会失败**（评审指出） | 真喂进四类输入、读回类别 |
 | 判据挂在创建时刻（第三处） | 等批准等超阈值、**刚获批**的部署被判成"排队太久" ⇒ 给正常部署开异常票 | 改用**获批时刻**为锚（`approvedAt`，从部署账本按 sha 读）；**拿不到就不判**，宁可漏报不凭创建时刻开假票 |
+| 同一 sha 有多条 deployment | 一条早已失败的旧记录会把新记录的获批时刻**覆盖成旧的** ⇒ 刚获批看起来像排了很久 | 按 `created_at` 取**最新**那条的时间线 |
+| demo 用 `console.assert` | 它**只打印、不改变退出码** ⇒ 断言失败时 "demo passed" 照样打印 | 自记账并在失败时抛错；workflow 里再显式检查两者的退出码（已用变异验证：改坏一条断言 ⇒ 退出码 1） |
 >
 > 🔴 **一个用例设计问题（评审的发现让我意识到它）**：排队那条用例最初断言的是
 > `assess().ok`，而「两条 run 组成的队列恰好仍为 true」让「已获批排队被判死锁」这个真
@@ -137,7 +139,7 @@
 | 检查 | 结果 |
 |---|---|
 | `node .sandcastle/deploy-state.mjs` | `demo passed` |
-| `node .sandcastle/cd-watch.test.mjs` | **28/28**（含三种「未知」情形、「连续 3 次 cancelled」，以及上线当天补的四条：窗口外看不见、排队不误报、未知不挡确凿、未完成集合取不到） |
+| `node .sandcastle/cd-watch.test.mjs` | **28/28**；`node .sandcastle/deploy-state.mjs` **11 条断言**（失败即非零退出，已用变异验证）（含三种「未知」情形、「连续 3 次 cancelled」，以及上线当天补的四条：窗口外看不见、排队不误报、未知不挡确凿、未完成集合取不到） |
 | **真实数据** `node .sandcastle/cd-watch.mjs --dry-run` | 报出**当下确实在等**的那个 run（`58dc271`，pending=1）为 `stuck` ⇒ **判据在真实等待上会响**，不只在假数据里成立 |
 | `shellcheck deploy/*.sh` | 通过（新增脚本被仓库既有测试 `test_deploy_scripts_pass_shellcheck` 覆盖） |
 | `node .sandcastle/policy-check.mjs workflows` | passed |
