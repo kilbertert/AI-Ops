@@ -35,13 +35,19 @@ cases.push([
   false,
 ]);
 
-// 3. 有作业、无人等批准、**已获批** ⇒ 在等并发锁，是合法排队，**不是死锁**。
-//    （这里曾判 `deadlocked` —— 纯假阳性：它在等前一个部署跑完，岗位锁一次只放一个。
-//    真正没有超时兜底的形状是 `jobs=0`：作业从未创建 ⇒ 它自己的 20 分钟超时也没机会生效。）
+// 3. 有作业、无人等批准、**已获批** ⇒ 在等并发锁。这一段被两个方向各纠过一次：
+//      · 判 `deadlocked` ⇒ 假阳性（合法排队被说成"卡死了"）；
+//      · 改成"不看时长" ⇒ 另一个洞（运行器离线时会永远显示健康）。
+//    ⇒ 结论是「**要判，但不是死锁**」：给它一个说得出成因的类别。
 cases.push([
-  "已获批在等锁 ⇒ in-flight（不是死锁）",
-  classifyRun({ status: "waiting", createdAt: "2026-09-30T06:33:29Z", totalCount: 1, pendingCount: 0 }, { now }).kind,
+  "已获批却在阈值内 ⇒ in-flight（合法排队）",
+  classifyRun({ status: "waiting", createdAt: "2026-09-30T15:25:00Z", totalCount: 1, pendingCount: 0 }, { now }).kind,
   "in-flight",
+]);
+cases.push([
+  "已获批却超阈值 ⇒ queued-too-long（运行器可能离线）",
+  classifyRun({ status: "waiting", createdAt: "2026-09-30T06:33:29Z", totalCount: 1, pendingCount: 0 }, { now }).kind,
+  "queued-too-long",
 ]);
 
 // 4. 刚创建 5 分钟 ⇒ 不报警
@@ -154,20 +160,38 @@ cases.push([
   "indeterminate,stuck",
 ]);
 
-// 8. 🔴 **「算卡住」的那几类必须显式枚举** —— 断言的是**判定函数本身**，
-//    不是 `assess().ok`。上一轮我在这里断言 `ok`，而「两条 run 组成的队列恰好仍为
-//    true」让一个真实的 bug（把普通排队当异常）**通过了用例**（评审指出）。
-//    教训：断言要落在**产生结论的那一步**上，别落在它的下游聚合结果上。
-cases.push([
-  "算卡住的那 3 类",
-  ["stuck", "deadlocked", "indeterminate"].join(","),
-  ["stuck", "deadlocked", "indeterminate"].join(","),
-]);
+// 8. 🔴 **枚举 `overdueUnfinished` 到底把哪些判成要报警** —— 断言**它返回的类别**，
+//    不是 `assess().ok`。上一轮我断言 `ok`，而「两条 run 组成的队列恰好仍为 true」
+//    让一个真 bug（把普通排队当异常）**通过了用例**。
+//
+//    ⚠️ 这一条还犯过一次更蠢的错：曾经写成把同一个常量同时当实测值与期望值
+//    （`["stuck",...]` vs 同样的字面量），**那个断言永远不会失败**（评审指出）。
+//    现在它真的喂进三类输入、读回类别。
+const alarmingKinds = [
+  ["等批准超阈值", { status: "waiting", totalCount: 1, pendingCount: 1, createdAt: "2026-09-30T06:33:29Z" }, "stuck"],
+  ["jobs=0 超阈值", { status: "waiting", totalCount: 0, pendingCount: 0, createdAt: "2026-09-30T06:33:29Z" }, "deadlocked"],
+  [
+    "详情取不到",
+    { status: "waiting", totalCount: null, pendingCount: null, createdAt: "2026-09-30T06:33:29Z" },
+    "indeterminate",
+  ],
+  [
+    "已获批却开不了工",
+    { status: "waiting", totalCount: 1, pendingCount: 0, createdAt: "2026-09-30T06:33:29Z" },
+    "queued-too-long",
+  ],
+];
+const gotKinds = alarmingKinds.map(([, run]) => {
+  const overdue = overdueUnfinished([run], { now });
+  return overdue.length === 1 ? overdue[0].verdict.kind : `(none:${overdue.length})`;
+});
+cases.push(["算卡住的那 4 类（真喂进去再读回）", gotKinds.join(","), "stuck,deadlocked,indeterminate,queued-too-long"]);
 
 // 8b. **不算卡住的那些必须仍然不算**：把三类之外的所有 kind 都过一遍 —— 排队
 //     （已获批、等锁）、正在部署、阈值内、已完成、未知状态，一个都不许进 overdue。
 for (const [label, run, want] of [
-  ["已获批在排队（无 pending）", { status: "waiting", totalCount: 1, pendingCount: 0, createdAt: "2026-09-30T06:33:29Z" }, 0],
+  ["已获批、刚开始排队", { status: "waiting", totalCount: 1, pendingCount: 0, createdAt: "2026-09-30T15:25:00Z" }, 0],
+  ["已获批、排队超阈值（运行器可能离线）", { status: "waiting", totalCount: 1, pendingCount: 0, createdAt: "2026-09-30T06:33:29Z" }, 1],
   ["正在部署", { status: "in_progress", totalCount: 1, pendingCount: 0, createdAt: "2026-09-30T06:33:29Z" }, 0],
   ["阈值内", { status: "waiting", totalCount: 1, pendingCount: 1, createdAt: "2026-09-30T15:25:00Z" }, 0],
   ["已完成", { status: "completed", conclusion: "success", createdAt: "2026-09-30T06:33:29Z" }, 0],

@@ -119,7 +119,8 @@
 > | 判据挂在创建时刻 | 「等批准 40 分钟 + 部署 10 分钟」的运行会在第二阶段被判 `deadlocked`（批准后 `pending_deployments` 归零）—— 纯假阳性 | `in_progress` 永远不是 stalled（它自己的 20 分钟超时就是兜底） |
 > | 只看最早那条 | 一条 `indeterminate` 的旧 run 会把后面一条**确凿**的 `stuck` 一起挡掉 | **逐条**判定 |
 | 两份取数用 `\|\|` 合并成败 | 「最近取数失败 + 未完成取数成功」⇒ 连续失败计数喂的是**未完成列表**（计数恒为 0）⇒ 那条判据永不响 | 改为 `&&`；两份各喂各的判据 |
-| 判据挂在创建时刻（第二处） | 已获批、在等并发锁的 run 被判 `deadlocked` —— 它在等前一个部署放锁，是**合法排队** | `in-flight`；真正没超时兜底的是 `jobs=0` |
+| 判据挂在创建时刻（第二处） | 已获批、在等并发锁的 run 被判 `deadlocked` —— 它是**合法排队** | 先改 `in-flight`，但那样**运行器离线时会永远显示健康**（第三处）⇒ 最终给它一个说得出成因的类别 `queued-too-long`（超阈值即报警） |
+| 「三类」断言把同一常量同时当实测值与期望值 | **那个断言永远不会失败**（评审指出） | 真喂进四类输入、读回类别 |
 >
 > 🔴 **一个用例设计问题（评审的发现让我意识到它）**：排队那条用例最初断言的是
 > `assess().ok`，而「两条 run 组成的队列恰好仍为 true」让「已获批排队被判死锁」这个真
@@ -135,7 +136,7 @@
 | 检查 | 结果 |
 |---|---|
 | `node .sandcastle/deploy-state.mjs` | `demo passed` |
-| `node .sandcastle/cd-watch.test.mjs` | **23/23**（含三种「未知」情形、「连续 3 次 cancelled」，以及上线当天补的四条：窗口外看不见、排队不误报、未知不挡确凿、未完成集合取不到） |
+| `node .sandcastle/cd-watch.test.mjs` | **25/25**（含三种「未知」情形、「连续 3 次 cancelled」，以及上线当天补的四条：窗口外看不见、排队不误报、未知不挡确凿、未完成集合取不到） |
 | **真实数据** `node .sandcastle/cd-watch.mjs --dry-run` | 报出**当下确实在等**的那个 run（`58dc271`，pending=1）为 `stuck` ⇒ **判据在真实等待上会响**，不只在假数据里成立 |
 | `shellcheck deploy/*.sh` | 通过（新增脚本被仓库既有测试 `test_deploy_scripts_pass_shellcheck` 覆盖） |
 | `node .sandcastle/policy-check.mjs workflows` | passed |

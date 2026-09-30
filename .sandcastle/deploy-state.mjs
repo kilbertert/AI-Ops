@@ -24,6 +24,14 @@ export const DEFAULT_STUCK_MINUTES = 30;
 export const DEFAULT_STRAIGHT_FAILURES = 3;
 
 /**
+ * 这些 kind 是**要报警**的（它们是「部署没有发生」的不同成因）；其余是正常/中间态。
+ *
+ * 抽成常量是因为上一轮把它写成三处零散的 `||`：一处漏改就会出现「某类异常不再进告警
+ * 而用例仍通过」——评审正是在那里抓到一个**永远为真**的断言。
+ */
+const ALARMING = new Set(["stuck", "deadlocked", "indeterminate", "queued-too-long"]);
+
+/**
  * 一个 run 的形态。字段全部来自 GitHub API，本函数不做取数。
  *
  * @param {{status?: string, conclusion?: string|null, createdAt?: string,
@@ -109,16 +117,24 @@ export function classifyRun(run, options = {}) {
     };
   }
   // 剩下的都是「作业已创建、没有待批准部署」：要么在跑（`in_progress` 已在上面返回），
-  // 要么**已获批、在等并发锁**（前一个部署还在跑）。后者是**合法排队** —— 锁一次只放
-  // 一个 run 进去，等多久取决于前一个跑多久，与"卡住"无关（评审指出：这里曾判 deadlocked）。
+  // 要么**已获批、还没开始** —— 在等并发锁，或在等一个能接活的运行器。
   //
-  // 那它自己挂住怎么办？它的 job 有 20 分钟 `timeout-minutes`，超时会被取消并释放锁。
-  // **没有超时兜底的那个形状恰恰是 `jobs=0`**（job 从未创建 ⇒ 它自己的超时也没机会生效），
-  // 所以死锁判据只落在那一条上，这也是 #407 实测到的形态。
+  // ⚠️ **这一段被两个方向各纠过一次，结论是「要判，但别判成死锁」**：
+  //   · 先判成 `deadlocked` ⇒ 纯假阳性：合法排队被说成"卡死了"（评审指出）；
+  //   · 改成「不看时长」⇒ 另一个洞：**运行器离线时它会永远显示健康**，
+  //     而部署根本开不了工（评审再指出）。
+  // ⇒ 保留时长判据，但给一个**说得出成因**的类别：既不是"没人点批准"（`stuck`），
+  //    也不是"作业没建出来"（`deadlocked`），而是**已获批却开不了工**。
+  //
+  // 这个阈值有据可依，不是拍的：持锁的那个 job 自己有 20 分钟 `timeout-minutes`，
+  // 一次合法排队的上限因此就是"前一个跑完"≈ 20 分钟出头。超过 `stuckMinutes`（30）
+  // 仍未开始，成因只剩两种：运行器不在线，或前一个部署自己挂了没释放锁。
   return {
-    kind: "in-flight",
+    kind: "queued-too-long",
     ageMinutes: ageMinutesWait,
-    reason: "已获批准、在等并发锁或正在收尾 —— 合法排队，不看时长",
+    reason:
+      `已获批却超过 ${stuckMinutes} 分钟仍未开始 —— 合法排队的上限是"前一个部署跑完"` +
+      `（它自己的 job 超时是 20 分钟）；超过它，成因是**运行器不在线**或前一个没释放锁`,
   };
 }
 
@@ -165,9 +181,7 @@ export function overdueUnfinished(runs, { now, stuckMinutes } = {}) {
     // 组合恰好仍为 true）。现在由显式枚举把「算」与「不算」**都**钉住 ——
     // 见 `cd-watch.test.mjs` 的 8b。
     const verdict = classifyRun(run, { now, stuckMinutes });
-    if (verdict.kind === "stuck" || verdict.kind === "deadlocked" || verdict.kind === "indeterminate") {
-      overdue.push({ run, verdict });
-    }
+    if (ALARMING.has(verdict.kind)) overdue.push({ run, verdict });
   }
   return overdue;
 }
@@ -261,9 +275,9 @@ function demo() {
   const dead = classifyRun({ ...base, totalCount: 0, pendingCount: 0 }, { now });
   console.assert(dead.kind === "deadlocked", "超时仍 jobs=0 应为 deadlocked", dead);
 
-  // 已获批、在等并发锁 ⇒ 合法排队，**不是**死锁（曾在 demo 里断言成 deadlocked）
+  // 已获批、在等并发锁 ⇒ 超阈值时是 `queued-too-long`（不是死锁，也不是"健康"）
   const queued = classifyRun({ ...base, totalCount: 1, pendingCount: 0 }, { now });
-  console.assert(queued.kind === "in-flight", "已获批在等锁应为 in-flight", queued);
+  console.assert(queued.kind === "queued-too-long", "已获批却超阈值应为 queued-too-long", queued);
 
   // 取数失败（null）不得被当成 0
   const unknown = classifyRun({ ...base, totalCount: null, pendingCount: null }, { now });
