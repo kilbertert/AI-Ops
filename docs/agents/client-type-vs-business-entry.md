@@ -27,7 +27,7 @@
 
 | 出处 | 取值 | 语义 | 谁在读 |
 |---|---|---|---|
-| **公司网关** `ApiProxyHeadFilter`（`cloud-gateway`） | `ma` / `h5` / `app` | 转发代理时用来判断"要不要从 Redis 补注入 `user-id`/`tenant-id` 头"；**不在这三个里的值直接放行、不做任何注入** | 公司网关 |
+| **公司网关** `ApiProxyHeadFilter`（`cloud-gateway`） | `ma` / `h5` / `app` | 转发代理时用来判断"要不要从 Redis 补注入 `user-id`/`tenant-id` 头"；**不在这三个里的值直接放行、不做任何注入**。⚠️ **2026-09-30 复核：这段注入在线上被注释掉了**（`AdminProxyHeadFilter` 整个方法体同样被注释；`AuthGlobalFilter` 的开关 `cloud.auth.enable: false`）⇒ 网关今天**不注入身份、也不做身份强制**，但**分支判据本身仍然有效** | 公司网关 |
 | **前端实际发的**（两个 App 产物实测） | 客户端：`H5` / `H5-WX`；管家端：`admin` / `tenant-app`（另有 `APP` / `H5-PC` / `"1"` 等） | 端形态标识（是否微信浏览器 / 哪个端） | 公司网关的 `ApiProxyHeadFilter`（认 `H5-WX` 之外的三个）与 `AdminProxyHeadFilter`（认 `admin`）；**AI-Ops 完全不读** |
 | **AI-Ops** `faq.py` 的 `operator_client_types` | `admin` / `tenant-app` / `MA` / `supply-admin` | 从 UPMS `sys_role.client_type` 读出的**角色维度**：具备这些角色才算"有管家端角色" | AI-Ops 的**平台身份判定** |
 
