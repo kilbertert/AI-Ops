@@ -25,6 +25,7 @@ Two kinds of assertion, because the defect has two shapes:
 from __future__ import annotations
 
 import ast
+import threading
 from pathlib import Path
 
 from aiops_diagnostics.gateway_store import ACTIVE_DIAGNOSIS_STATUSES, TERMINAL_DIAGNOSIS_STATUSES
@@ -246,27 +247,25 @@ def test_a_refused_terminal_write_records_no_metric(tmp_path, monkeypatch) -> No
     monkeypatch.setattr(runtime, "_record_metric", lambda **fields: recorded.append(fields))
 
     real_update = runtime.store.update_standard_diagnosis
-    reached: list[str] = []
+    finished = threading.Event()
 
     def refuse_the_terminal_write(diagnosis_id: str, *, status: str, **kwargs: object) -> bool:
-        reached.append(status)
         if status == "running":
             return real_update(diagnosis_id, status=status, **kwargs)
+        finished.set()
         return False
 
     monkeypatch.setattr(runtime.store, "update_standard_diagnosis", refuse_the_terminal_write)
 
     created = runtime.start_standard_diagnosis(_scope(), "ORDER-1", "为什么跳枪", None)
     assert created["diagnosis_id"]
-    import time
-
-    deadline = time.monotonic() + 5
-    while "completed" not in reached and time.monotonic() < deadline:
-        time.sleep(0.01)
+    # Wait for the WORKER to finish, not for a flag it set on its way in: the
+    # metric is recorded after the write returns, so an assertion that fires
+    # the moment the write is called reads a state the worker has not reached.
+    assert finished.wait(10), "the worker never attempted its terminal write"
+    # The metric (if the gate were missing) is recorded right after that write,
+    # so give the worker the moment it needs to get there.
     runtime.shutdown()
-    # The worker got past the claim and tried the terminal write...
-    assert "completed" in reached, reached
-    # ...and its refusal produced no metric.
     assert recorded == [], f"a refused write was counted as a completed run: {recorded}"
 
 
