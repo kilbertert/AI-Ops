@@ -22,9 +22,7 @@ from aiops_diagnostics.gateway_tokens import load_token, save_profile, save_toke
 #: A cross-process copy is unavoidable — the client talks to a remote gateway —
 #: and it is named here so it reads as a deliberate boundary rather than as a
 #: third definition inside the package (#490).
-_TERMINAL_RUN_STATUSES = frozenset(
-    {"diagnosed", "inconclusive", "blocked", "interrupted", "failed"}
-)
+_TERMINAL_RUN_STATUSES = frozenset({"diagnosed", "inconclusive", "blocked", "interrupted", "failed"})
 
 
 class GatewayClientError(RuntimeError):

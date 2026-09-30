@@ -26,7 +26,7 @@ from aiops_diagnostics.agent_lifecycle import (
     AgentStore,
     allowed_models_from_settings,
 )
-from aiops_diagnostics.async_job_lifecycle import DIAGNOSIS
+from aiops_diagnostics.async_job_lifecycle import DIAGNOSIS, QUESTION
 from aiops_diagnostics.caller_auth import (
     CALLER_AUTH_CONFIG_MISSING,
     CALLER_AUTH_FORBIDDEN,
@@ -2647,7 +2647,7 @@ def _assistant_question_response(qa: dict[str, Any], language: str) -> dict[str,
                 "message": _qa_user_message(language, qa.get("error_code")),
                 "retryable": True,
             }
-            if status_value in {DIAGNOSIS.failed, DIAGNOSIS.expired}
+            if status_value in {QUESTION.failed, QUESTION.expired}
             else None
         ),
     }

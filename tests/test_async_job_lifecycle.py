@@ -16,6 +16,7 @@ written against the properties the four tables must keep:
 
 from __future__ import annotations
 
+import ast
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -190,36 +191,31 @@ def test_the_numbers_are_written_down_only_in_this_module() -> None:
 
 
 def test_the_status_sets_are_written_down_only_in_this_module() -> None:
-    """The same rule for the status words, scoped to the job tables.
+    """The same rule for the status words, read from the SYNTAX.
 
-    `{"queued", "running"}` was spelled out at four sites; `{"failed",
-    "cancelled"}` at two. All of them now name a profile's field.
+    Parsed rather than grepped: a set split across lines (`frozenset({` on one
+    line, its members on the next) is invisible to a line scan, and that is
+    exactly how the one legitimate copy in this package is written. The first
+    version of this guard missed it — a guard that reads text to answer a
+    question about structure is the same "agrees today" shape this ticket is
+    about.
 
-    Scoped to the words that MEAN a job state (queued/running/expired and the
-    per-table terminal values) and excluding `metrics_store`, which keeps its
-    own `OUTCOME_TYPES` vocabulary — `completed`/`failed` there describe a
-    metric row's outcome, not a job's status. Two vocabularies that happen to
-    share words are not one definition, and merging them would be the opposite
-    mistake.
+    A set literal is a status set when every element is one of the job words.
+    Anything else is some other vocabulary that happens to share a word.
     """
-    import re
     from pathlib import Path
 
     package = Path(__file__).parents[1] / "src" / "aiops_diagnostics"
-    job_words = ("queued", "running", "expired", "inconclusive", "cancelled")
-    # Matched anywhere inside the literal, not only as its first element: a copy
-    # that happens to list `completed` first would otherwise slip past — the same
-    # "agrees today" shape this ticket is about.
-    #
-    # Scoped to the shapes that ARE a status set: a `frozenset({...})`, or a set
-    # on the right of `status ... in`. A bare dict that happens to carry a
-    # `"running"` value (a phase, a log field) is not a status set, and matching
-    # it would make this guard cry wolf until someone deleted it.
-    words = "|".join(job_words)
-    literal_set = re.compile(
-        r"frozenset\(\{[^}\n]*[" + "'\"" + r"](?:" + words + r")[" + "'\"" + r"][^}\n]*\}\)"
-        r"|in\s*\{[^}\n]*[" + "'\"" + r"](?:" + words + r")[" + "'\"" + r"][^}\n]*\}"
-    )
+    job_words = {
+        "queued",
+        "running",
+        "expired",
+        "inconclusive",
+        "cancelled",
+        "diagnosed",
+        "blocked",
+        "interrupted",
+    }
     #: Files that legitimately hold a copy. `metrics_store` keeps the metric-row
     #: vocabulary (same words, different meaning). `gateway_client` polls a REMOTE
     #: gateway and cannot import the definition — its copy is named
@@ -229,14 +225,31 @@ def test_the_status_sets_are_written_down_only_in_this_module() -> None:
     for path in sorted(package.glob("*.py")):
         if path.name in owners:
             continue
-        text = path.read_text(encoding="utf-8")
-        for number, line in enumerate(text.splitlines(), 1):
-            if literal_set.search(line):
-                offenders.append(f"{path.name}:{number}")
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            for literal in _set_literals(node):
+                words = {
+                    element.value
+                    for element in literal.elts
+                    if isinstance(element, ast.Constant) and isinstance(element.value, str)
+                }
+                if words and words <= job_words:
+                    offenders.append(f"{path.name}:{literal.lineno} {sorted(words)}")
     # The named copies must still say why they exist, or they are just copies.
     client = (package / "gateway_client.py").read_text(encoding="utf-8")
     assert "cross-process copy is unavoidable" in client
     assert offenders == [], "; ".join(offenders)
+
+
+def _set_literals(node: ast.AST) -> list[ast.Set]:
+    """Every `{...}` set literal reachable from ``node``."""
+    found: list[ast.Set] = []
+    for inner in ast.walk(node):
+        if isinstance(inner, ast.Set):
+            found.append(inner)
+        elif isinstance(inner, ast.Call):
+            found.extend(argument for argument in inner.args if isinstance(argument, ast.Set))
+    return found
 
 
 def test_a_table_without_an_expiry_is_not_given_one() -> None:
@@ -278,17 +291,16 @@ def test_a_user_stop_is_not_a_retryable_failure() -> None:
 
     The lifecycle has two failure-ish tiers: `failed` (one status, a recorded
     cause) and `interrupted` (a superset that also holds a user stop). The
-    diagnosis response treats `{"failed", "expired"}` as retryable. Answering
-    that from the tier would tell a user who stopped their own diagnosis to
-    retry it — so the response names the status, and this pins that.
-
-    Asserted through the store's exported set rather than the response, because
-    the property is about the vocabulary: a table with a user stop must keep
-    that stop out of its `failed` field.
+    diagnosis and question responses treat `{failed, expired}` as retryable.
+    Answering that from the tier would tell a user who stopped their own
+    generation to retry it — so the responses name the status, and this pins the
+    distinction they depend on.
     """
     assert DIAGNOSIS.failed == "failed"
     assert DIAGNOSIS.failed in DIAGNOSIS.interrupted
     assert "cancelled" in DIAGNOSIS.interrupted
     assert DIAGNOSIS.failed != "cancelled"
-    # And the health table, which has no user stop, still names its one failure.
+    # The health table has no user stop, and still names its one failure.
     assert HEALTH_JOB.failed == "failed"
+    # `runs` spells three causes instead of one, so it names none of them here.
+    assert RUN.failed is None
