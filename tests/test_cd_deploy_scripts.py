@@ -129,3 +129,53 @@ def test_classifier_markers_match_deploy_emitters() -> None:
     for marker in ("rollback=restored", "rollback=also-failed", "rollback-health=", "rollback-active="):
         assert marker in classify, f"分类器未读取 {marker}"
         assert marker in deploy, f"主机未发出分类器读取的 {marker}"
+
+
+def test_routing_window_refuses_values_that_would_reach_the_remote_shell() -> None:
+    """取数脚本的四个环境变量都会被嵌进远端命令，逐个按形状拒。
+
+    它平时只跑默认值，所以这些分支靠人跑到的那一天，就是它出错的那一天。
+    换行单独测：`grep -E` 是逐行匹配的，「合法首行 + 换行 + 命令」会在正则那关通过，
+    而远端 shell 会执行第二行。
+    """
+    script = DEPLOY_DIR / "routing-window.sh"
+    window = "2026-10-01T00:00:00+00:00"
+    cases = [
+        ("AIOPS_41_SERVICE", "aiops-gateway-41; id"),
+        ("AIOPS_41_HOST", "host && id"),
+        ("AIOPS_41_DB", "/var/lib/x.db; id"),
+        ("AIOPS_41_PY", "/usr/bin/python\nid"),
+        ("AIOPS_41_PY", "/usr/bin/python\r\nid"),
+    ]
+    for name, value in cases:
+        env = {**os.environ, name: value}
+        result = subprocess.run(  # noqa: S603 - fixed argv, no shell
+            ["bash", str(script), window], capture_output=True, text=True, check=False, env=env
+        )
+        assert result.returncode == 2, f"{name}={value!r} 未被拒绝：{result.stdout}"
+
+
+def test_routing_window_refuses_an_impossible_window_start() -> None:
+    """形状对不等于时刻存在：不在日历上的值会被拒，而不是静默算窄窗口。
+
+    那个值会按**文本**与 created_at 比较，所以一个存不存在的月份不会报错，
+    只会让窗口悄悄变一个宽度。
+    """
+    script = DEPLOY_DIR / "routing-window.sh"
+    for value in ("2026-13-01T02:00:00+00:00", "2026-10-01T25:00:00+00:00", "不是时间"):
+        result = _run(script, value)
+        assert result.returncode == 2, f"{value!r} 未被拒绝：{result.stdout}"
+    for value in ("2026-10-01T02:00:00+08:00", "2026-10-01", "2026-10-01T02:00:00Z"):
+        result = _run(script, value)
+        assert result.returncode == 2, f"{value!r} 未被拒绝（只收 UTC 的 +00:00 形状）"
+
+
+def test_routing_window_says_what_it_observed(tmp_path: Path) -> None:
+    """无指标行时说「无法据此判断网关是否处理过请求」，不说「没处理过请求」。
+
+    `/health` 与媒体路由不写指标行，所以空窗口与「有流量但不进这张表」不可分。
+    这条断言的是一条措辞纪律：只陈述观测到的事实。
+    """
+    source = (DEPLOY_DIR / "routing-window.sh").read_text(encoding="utf-8")
+    assert "据此无法判断网关是否处理过请求" in source
+    assert "网关没有处理过请求" not in source

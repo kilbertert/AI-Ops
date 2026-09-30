@@ -23,6 +23,14 @@ SERVICE=${AIOPS_41_SERVICE:-aiops-gateway-41}
 # 校验的成本是零；不校验的成本是「一个只读脚本能被一个环境变量改成任意远端命令」。
 require_shape() {
   local name=$1 value=$2 pattern=$3
+  # 换行必须先单独拒掉：`grep -E` 是**逐行**匹配的，一个「合法首行 + 换行 + 命令」
+  # 的值会在正则那一关通过，而远端 shell 会执行第二行。pattern 里的 `$` 拦不住它。
+  case "$value" in
+    *$'\n'* | *$'\r'*)
+      printf '环境变量 %s 含换行，拒绝：%s\n' "$name" "$value" >&2
+      exit 2
+      ;;
+  esac
   if ! printf '%s' "$value" | grep -Eq "$pattern"; then
     printf '环境变量 %s 的形状不被接受：%s\n' "$name" "$value" >&2
     exit 2
