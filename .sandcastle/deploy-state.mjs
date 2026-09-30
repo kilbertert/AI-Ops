@@ -62,13 +62,32 @@ export function classifyRun(run, options = {}) {
   // 🔴 死锁与等待批准的**唯一**可区分点。API 不会替我们分辨：
   //    两者都是 waiting、jobs 数也一样。有没有 pending deployment 才是判据。
   //
-  // `totalCount === 0` 时**不判定**为死锁：那是「作业还没被调度」的合法中间态，
-  // 也可能是我们自己取数失败。判成死锁会把一次正常的慢启动报成故障（假阳性），
-  // 而假阳性正是「以后没人看这个告警」的原因。⇒ 直接说不知道。
-  if (totalCount === 0) {
-    return { kind: "indeterminate", ageMinutes, reason: "作业尚未创建，无法区分死锁与排队" };
+  // 这一段的每一条都要分清「是 0」与「取不到」。把 null（查询失败）当成 0 会把
+  // 「不知道」报成「死锁」；反过来把 0 当成 null 会让真正的死锁一直静默。
+  // 曾经写错过一次：`pendingCount !== null && pendingCount > 0` 后面直接接
+  // deadlocked，于是**取数失败被报成死锁**（评审指出）。
+  if (totalCount === null || pendingCount === null) {
+    const missing = totalCount === null ? "作业数" : "待批准部署数";
+    return {
+      kind: "indeterminate",
+      ageMinutes,
+      reason: `超过 ${stuckMinutes} 分钟未完成，但${missing}取不到 —— **状态未知**，不是正常`,
+    };
   }
-  if (pendingCount !== null && pendingCount > 0) {
+  // jobs=0 且已经超时 ⇒ **这正是那次死锁的形态**：run 一创建就占住并发槽位，
+  // 从未调度出作业，于是既没有要批准的部署、也没有任何推进。
+  //
+  // 最初这里判 indeterminate（担心「作业还没被调度」是合法中间态），**那是错的**：
+  // 阈值本身就是"已经等了 30 分钟"，一个 30 分钟还没建出作业的 run 不是慢，是坏了。
+  // 判 indeterminate ⇒ assess 报正常 ⇒ 恰好把本票要修的那种静默又做了一遍。
+  if (totalCount === 0) {
+    return {
+      kind: "deadlocked",
+      ageMinutes,
+      reason: `超过 ${stuckMinutes} 分钟仍未创建任何作业（jobs=0）—— 与"没人点批准"不同，这是卡死了`,
+    };
+  }
+  if (pendingCount > 0) {
     return {
       kind: "stuck",
       ageMinutes,
@@ -98,26 +117,44 @@ export function straightFailures(runs) {
 }
 
 /**
- * 汇总一份判决。**取数为空时不报「正常」** —— 取不到就说取不到（fail honest）。
+ * 汇总一份判决。**取数不成立时一律不报「正常」** —— 不知道就说不知道（fail honest）。
+ *
+ * 三种「不成立」都要报警，而不是静默：
+ *  - `fetchedOk === false`：连 run 列表都取不到；
+ *  - 列表为空：`cd.yml` 从未被触发过，或取数被静默截断 —— 两种都值得看一眼，
+ *    因为「一次都没有」与「一直正常」在告警面上是同一种安静；
+ *  - 最新 run 的判定是 `indeterminate`（详情取不到、或状态不认识）：**未知不是正常**。
  *
  * @param {{runs: Array, fetchedOk?: boolean, now?: Date, stuckMinutes?: number,
  *          straightFailures?: number}} input
  */
 export function assess(input) {
   const runs = Array.isArray(input.runs) ? input.runs : [];
+  const alarms = [];
+
   if (input.fetchedOk === false) {
-    return { ok: false, alarms: [], notes: ["取数失败：本状态**未知**，不是正常"] };
+    alarms.push({ kind: "unavailable", reason: "取数失败：本状态**未知**，不是正常" });
+    return { ok: false, alarms, notes: [], latest: null, straight: 0 };
   }
-  const run = classifyRun(runs[0] ?? {}, {
+  // 空列表有多种成因（从未触发 / 取数被截断 / workflow 被改名），
+  // 判据只有一句：**「一次都没有」不构成「一切正常」**。
+  if (runs.length === 0) {
+    alarms.push({ kind: "no-runs", reason: "取不到任何 CD run —— 要么从未触发过，要么取数不完整" });
+    return { ok: false, alarms, notes: [], latest: null, straight: 0 };
+  }
+
+  const run = classifyRun(runs[0], {
     now: input.now,
     stuckMinutes: input.stuckMinutes,
   });
   const straight = straightFailures(runs);
   const straightLimit = input.straightFailures ?? DEFAULT_STRAIGHT_FAILURES;
-  const alarms = [];
 
   if (run.kind === "stuck" || run.kind === "deadlocked") {
     alarms.push({ kind: run.kind, reason: run.reason });
+  }
+  if (run.kind === "indeterminate") {
+    alarms.push({ kind: "indeterminate", reason: run.reason });
   }
   if (straight >= straightLimit) {
     alarms.push({
@@ -137,16 +174,23 @@ function demo() {
   const waiting = classifyRun({ ...base, totalCount: 1, pendingCount: 1 }, { now });
   console.assert(waiting.kind === "stuck", "等批准超阈值应为 stuck", waiting);
 
-  // 历史死锁形态：run 存在、waiting、jobs=0（本票背景里那次）
-  const dead = classifyRun(
-    { ...base, totalCount: 0, pendingCount: 0 },
-    { now },
-  );
-  console.assert(dead.kind === "indeterminate", "jobs=0 不得判成死锁", dead);
+  // 历史死锁形态：run 存在、waiting、jobs=0（本票背景里那次）。
+  // 超时仍 jobs=0 ⇒ 判死锁；**曾经判成 indeterminate，那会让 assess 报正常**。
+  const dead = classifyRun({ ...base, totalCount: 0, pendingCount: 0 }, { now });
+  console.assert(dead.kind === "deadlocked", "超时仍 jobs=0 应为 deadlocked", dead);
 
   // 死锁（有作业、无人等批准）
   const locked = classifyRun({ ...base, totalCount: 1, pendingCount: 0 }, { now });
   console.assert(locked.kind === "deadlocked", "有作业且无 pending 应为 deadlocked", locked);
+
+  // 取数失败（null）不得被当成 0
+  const unknown = classifyRun({ ...base, totalCount: null, pendingCount: null }, { now });
+  console.assert(unknown.kind === "indeterminate", "详情取不到应为 indeterminate", unknown);
+  console.assert(
+    assess({ runs: [{ ...base, totalCount: null, pendingCount: null }], fetchedOk: true }).ok === false,
+    "indeterminate 不得报正常",
+  );
+  console.assert(assess({ runs: [], fetchedOk: true }).ok === false, "空列表不得报正常");
 
   // 正常：刚创建 5 分钟
   const fresh = classifyRun(

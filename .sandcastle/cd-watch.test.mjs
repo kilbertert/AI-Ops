@@ -11,11 +11,27 @@ cases.push([
   "stuck",
 ]);
 
-// 2. 票里记录的**死锁**形态：run 存在、waiting、jobs=0
+// 2. 票里记录的**死锁**形态：run 存在、waiting、jobs=0、已超时
+//    （曾判成 indeterminate ⇒ assess 报正常 ⇒ 把本票要修的静默又做了一遍）
 cases.push([
-  "jobs=0 ⇒ indeterminate（不冒充成死锁）",
+  "超时仍 jobs=0 ⇒ deadlocked",
   classifyRun({ status: "waiting", createdAt: "2026-09-30T06:33:29Z", totalCount: 0, pendingCount: 0 }, { now }).kind,
+  "deadlocked",
+]);
+
+// 2b. 详情**取不到**（null）⇒ 未知，不是死锁、更不是正常
+cases.push([
+  "详情取不到 ⇒ indeterminate",
+  classifyRun({ status: "waiting", createdAt: "2026-09-30T06:33:29Z", totalCount: null, pendingCount: null }, { now }).kind,
   "indeterminate",
+]);
+cases.push([
+  "indeterminate ⇒ 报异常（未知不是正常）",
+  assess({
+    runs: [{ status: "waiting", createdAt: "2026-09-30T06:33:29Z", totalCount: null, pendingCount: null }],
+    fetchedOk: true,
+  }).ok,
+  false,
 ]);
 
 // 3. 有作业、无人等批准 ⇒ 死锁
@@ -49,6 +65,9 @@ cases.push([
 
 // 6. 取数失败 ⇒ 不报正常
 cases.push(["取数失败 ⇒ ok=false", assess({ runs: [], fetchedOk: false }).ok, false]);
+
+// 6b. **空列表**也 ⇒ 不报正常。「一次都没触发过」与「一直正常」在告警面上是同一种安静。
+cases.push(["取不到任何 run ⇒ ok=false", assess({ runs: [], fetchedOk: true }).ok, false]);
 
 // 7. 连续 3 次失败 ⇒ 两条告警（stuck 与 straight-failures 可以同时成立）
 const many = assess({

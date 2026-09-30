@@ -11,9 +11,15 @@ name: CD Watch
 #   2. **连续不成功**：判据是「最近 N 次**已完成**的 run 里有没有 success」，
 #      而不是「当前这次多久没动静」——后者区分不了「还没来得及」。
 #
-# 为什么跑在 self-hosted：本 job 只用 `gh` + 仓库自带的 node 脚本，**不跑候选代码、
-# 不碰生产**，而 self-hosted runner 上 gh 已认证。放在 GitHub-hosted 上需要额外
-# token 配置，收益是零。
+# 为什么跑在 GitHub-hosted 而**不是** self-hosted：
+#
+# CD 部署本身跑在 self-hosted 的 `AI-Ops` runner 上（它要去 41）。**守望者不能与它
+# 共用那台机器** —— runner 掉线时，恰恰是最需要有人报「部署没发生」的时候，而共用
+# runner 的守望会同它一起停摆，把本票要修的静默原样复制一遍（评审指出）。
+#
+# 放在 GitHub-hosted 上：它只用 `gh` + 仓库自带的 node 脚本，**不跑候选代码、不碰生产**，
+# 每次运行数秒；唯一需要的是能开 issue 的 token —— 由 workflow 自带的
+# `GITHUB_TOKEN` 提供（见 permissions），不引入任何 secret。
 #
 # 为什么开票而不是让 job 失败：判据是**状态**。job 失败只会让红色出现在一个没人天天看
 # 的页面上 —— 那正是本票要修的病。一张未关的 `cd:needs-attention` 票本身就是未处理的告警。
@@ -32,7 +38,9 @@ permissions:
 
 jobs:
   watch:
-    runs-on: [self-hosted, AI-Ops]
+    # GitHub-hosted（理由见文件头）：与 CD 用的 self-hosted runner **故意不共用**，
+    # 否则 runner 掉线时守望者一起停摆，恰好漏掉它该报的那件事。
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
