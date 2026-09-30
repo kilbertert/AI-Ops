@@ -370,11 +370,18 @@ nginx 在**同一个 location 内**对同名头**不做覆盖**，而是**两条
       **判定（不打印值、只做相等比较 —— 这是唯一能证的方式）**：
 
       ```bash
-      # 41 上执行；默认值从公司源码取（cloud-auth 运行产物里的 MySecurityConfig 常量）
+      # 41 上执行。$KNOWN_DEFAULT 是你**从公司源码/jar 取值后填进来**的（本仓没有它，
+      # 也不该有）；取不到值就**停下**，不要判「已满足」——空值会让任何非空密钥都被判成满足。
       PID=$(systemctl show aiops-gateway-41 -p MainPID --value)
       V=$(tr '\0' '\n' < /proc/$PID/environ | grep '^AIOPS_GATEWAY_COMPANY_JWT_KEY' | cut -d= -f2-)
-      [ "$V" = "$DEFAULT_FROM_COMPANY_SOURCE" ] && echo '未满足：仍在用源码默认值' || echo '已满足'
+      if [ -z "$KNOWN_DEFAULT" ]; then echo '无法判定：未提供对照值'; exit 2; fi
+      if [ -z "$V" ]; then echo '未满足：密钥未配置'; exit 1; fi
+      [ "$V" = "$KNOWN_DEFAULT" ] && { echo '未满足：仍在用源码默认值'; exit 1; } || echo '已满足'
       ```
+
+      ⚠️ **更常见的用法是「轮换后确认真的换了」，而不是「每次启用前重跑」**：既然已确认
+      41 现在跑的就是默认值，日常不需要重复判定；**在换掉那把钥匙之后、以及此后每次轮换后**各跑一次，
+      确认它不再等于旧值。这样这条检查**只依赖本机自有记录**，不依赖一份我们手上没有的外部源码。
 
       ⚠️ **千万不要用「长度告警消失了」当判据** —— 那行告警只看长度，换成另一把同样短的钥匙
       它照样出现。也**不要**用「用默认值签的令牌被拒」当判据 —— **签名正确 ≠ 令牌有效**
