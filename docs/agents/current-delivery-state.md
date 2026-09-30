@@ -219,6 +219,7 @@ curl --silent --show-error --max-time 20 \
 - [里程碑、分支和已知缺口](../开发进度.md)
 - [前端快捷动作与 clarification 合同](frontend-api-brief.md)
 - **管家端（operator）入口：前端联调交接** — 已发布并验收的动作清单、两个按钮的行为、`X-Business-Entry` 契约、已知边界：[frontend-operator-handoff.md](frontend-operator-handoff.md)
+- **管家端收尾实施蓝图（B/D/E 三批）** — 联调后倒查出的欠债、实施顺序、每批的完成判据与明示不做项：[operator-repair-blueprint.md](operator-repair-blueprint.md)
 - **为什么不是用 `client-type` 区分管家端** — 三套同名取值互不相交的实测记录：[client-type-vs-business-entry.md](client-type-vs-business-entry.md)
 - [验收场景与人工复跑步骤](../../qa-plan.md)
 - [可执行验收约束](../../acceptance.feature)
