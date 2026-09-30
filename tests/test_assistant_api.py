@@ -76,9 +76,16 @@ class _Runtime:
         pass
 
     def start_standard_diagnosis(
-        self, context: ScopeContext, order_no: str, question: str, indicator_code, language="zh"
+        self,
+        context: ScopeContext,
+        order_no: str,
+        question: str,
+        indicator_code,
+        language="zh",
+        *,
+        conversation_turn=None,
     ):
-        del context, indicator_code
+        del context, indicator_code, conversation_turn
         self.calls.append((order_no, question))
         return {
             "diagnosis_id": "dx_test000000000000000000000000000001",

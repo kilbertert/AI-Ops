@@ -910,6 +910,15 @@ def create_gateway_app(
                     turn_no = _begin_conversation_turn(
                         context, caller, conversation, "diagnosis", payload.question
                     )
+                    # The slot is held until the job reaches a terminal
+                    # state (the worker frees it): this branch used to free it
+                    # right here, so `is_generating` reported false for the
+                    # whole generation and the frontend never locked its input.
+                    own_turn = (
+                        conversation is not None
+                        and turn_no is not None
+                        and embedded == conversation.get("active_order_no")
+                    )
                     try:
                         diagnosis = context.runtime.start_standard_diagnosis(
                             caller,
@@ -917,6 +926,11 @@ def create_gateway_app(
                             payload.question,
                             None,
                             language=language,
+                            conversation_turn=(
+                                (conversation["conversation_id"], conversation["scope_fingerprint"], turn_no)
+                                if own_turn
+                                else None
+                            ),
                         )
                     except (ValueError, RuntimeError) as exc:
                         _release_conversation_turn(context, conversation, turn_no)
@@ -926,10 +940,12 @@ def create_gateway_app(
                             "diagnosis unavailable",
                             retryable=True,
                         ) from exc
-                    if conversation is not None and embedded == conversation.get("active_order_no"):
-                        _keep_conversation_turn(context, conversation, turn_no)
-                    else:
+                    if not own_turn:
                         _release_conversation_turn(context, conversation, turn_no)
+                    # Only report a turn the conversation actually keeps: in
+                    # the non-own case the row was just dropped, and echoing a
+                    # turn_no for it would point the frontend at nothing.
+                    turn_field = {"turn_no": turn_no} if own_turn else {}
                     base = _standard_diagnosis_response(diagnosis)
                     return JSONResponse(
                         status_code=status.HTTP_202_ACCEPTED,
@@ -939,6 +955,7 @@ def create_gateway_app(
                             "language": language,
                             "order_no_extracted": embedded,
                             **({"conversation_id": conversation["conversation_id"]} if conversation else {}),
+                            **turn_field,
                         },
                     )
 
@@ -967,6 +984,11 @@ def create_gateway_app(
                             payload.question,
                             None,
                             language=language,
+                            conversation_turn=(
+                                (conversation["conversation_id"], conversation["scope_fingerprint"], turn_no)
+                                if turn_no is not None
+                                else None
+                            ),
                         )
                     except (ValueError, RuntimeError) as exc:
                         _release_conversation_turn(context, conversation, turn_no)
@@ -976,7 +998,6 @@ def create_gateway_app(
                             "diagnosis unavailable",
                             retryable=True,
                         ) from exc
-                    _keep_conversation_turn(context, conversation, turn_no)
                     base = _standard_diagnosis_response(diagnosis)
                     return JSONResponse(
                         status_code=status.HTTP_202_ACCEPTED,
@@ -986,6 +1007,7 @@ def create_gateway_app(
                             "language": language,
                             "order_no_from_context": active_order,
                             "conversation_id": conversation["conversation_id"],
+                            **({"turn_no": turn_no} if turn_no is not None else {}),
                         },
                     )
                 # Ownership lost since confirmation: clear the stale binding
@@ -2890,29 +2912,6 @@ def _release_conversation_turn(
     with contextlib.suppress(ConversationError):
         context.conversation_store.release_turn(
             conversation["conversation_id"], conversation["scope_fingerprint"], turn_no
-        )
-
-
-def _keep_conversation_turn(
-    context: Any,
-    conversation: dict[str, Any] | None,
-    turn_no: int | None,
-) -> None:
-    """Mark the claimed turn as persisted-without-answer (pending fill).
-
-    The turn's answer arrives asynchronously (job worker); the row keeps the
-    question and slot state. Job completion later writes the answer through
-    the same store; for now the row marks the turn as asked.
-    """
-    if conversation is None or turn_no is None:
-        return
-    with contextlib.suppress(ConversationError):
-        context.conversation_store.complete_turn(
-            conversation["conversation_id"],
-            conversation["scope_fingerprint"],
-            turn_no,
-            answer=None,
-            token_count=0,
         )
 
 

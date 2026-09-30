@@ -417,6 +417,32 @@ class ConversationStore:
                 ),
             )
 
+    def renew_turn_claim(self, conversation_id: str, scope_fingerprint: str, turn_no: int) -> bool:
+        """Push this turn's claim back to now, if it still holds the slot.
+
+        The busy check treats a claim older than ``BUSY_LOCK_SECONDS`` as a
+        crashed worker's. That window is shorter than some generations (a
+        diagnosis runs for minutes), so a worker still running must say so, or
+        its own conversation stops being busy mid-generation and a second turn
+        starts over it. Renewing is the worker proving it is alive; the window
+        keeps meaning "time since the last proof", which is the only reading
+        under which the crash fallback still works.
+
+        Returns whether the claim was this turn's to renew: a worker that
+        outlived its own claim must not extend a newer turn's slot.
+        """
+        self._validate_conversation_id(conversation_id)
+        scope = self._validate_scope(scope_fingerprint)
+        if not isinstance(turn_no, int) or turn_no < 1:
+            raise ConversationError("turn number is invalid")
+        with self._connection(write=True) as connection:
+            cursor = connection.execute(
+                "UPDATE conversations SET generating_since = ?"
+                " WHERE conversation_id = ? AND scope_fingerprint = ? AND generating_turn_no = ?",
+                (_iso(_utc_now()), conversation_id, scope, turn_no),
+            )
+            return cursor.rowcount > 0
+
     def release_turn(
         self,
         conversation_id: str,

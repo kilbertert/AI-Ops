@@ -372,6 +372,22 @@ class GatewayStore:
             ).fetchone()
         return _standard_diagnosis_from_row(row)
 
+    def diagnosis_is_finished(self, diagnosis_id: str) -> bool:
+        """Whether this diagnosis row is already in a terminal state.
+
+        Read without an ownership scope: the only caller is the worker that
+        created the row, and the question it asks -- "has my job ended?" -- is
+        about the row, not about who may see it.
+        """
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT status FROM standard_diagnoses WHERE diagnosis_id = ?",
+                (diagnosis_id,),
+            ).fetchone()
+        if row is None:
+            return True  # gone: nothing left to hold a conversation for
+        return str(row["status"]) in TERMINAL_DIAGNOSIS_STATUSES
+
     def update_standard_diagnosis(
         self,
         diagnosis_id: str,

@@ -662,6 +662,23 @@ POST https://api.qumall.qushiyun.com/v1/assistant/questions
   轮询 GET /v1/standard/diagnoses/{diagnosis_id} 到 completed
 ```
 
+**带 `conversation_id` 时（会话里的订单诊断），这个 202 与 `qa` 线同形**：请求体带
+`conversation_id` 且路由到诊断（显式 `order_no`、文本里的订单号、或会话已确认的活跃订单），
+响应体额外带 `conversation_id` 与 `turn_no`：
+
+```json
+{"type": "diagnosis", "diagnosis_id": "...", "status": "queued",
+ "conversation_id": "conv_...", "turn_no": 3}
+```
+
+两条口径：
+
+- **诊断生成期间该会话的 `is_generating` 为 `true`** —— 与 `qa` 线一致，前端按同一个并发闸门
+  锁输入框；该会话上的下一次提问会得到 `409 CONVERSATION_BUSY`，直到诊断作业到达终态。
+  （此前诊断一旦提交就释放槽位，`is_generating` 在生成期间是 `false`。）
+- **诊断完成后该轮进入会话上下文**，`GET /v1/conversations/{id}` 的 `turns` 里 `answer` 带
+  `summary` / `root_cause`（不是全量 `hypotheses`）。失败或取消的诊断轮次**不保留**。
+
 ### 场景 D：产品快捷动作（shortcut）与澄清（clarification）
 
 > **跳转类动作的联调交接**见 [frontend-jump-path-handoff.md](./frontend-jump-path-handoff.md)：含 41 真实响应样例、一个分支的判别写法、以及 8 个易踩点。
