@@ -423,6 +423,18 @@ def _claims_from_signed_jwt(token: str, key: str) -> Mapping[str, Any]:
     if not isinstance(payload, Mapping):
         raise CallerAuthError("company token payload is invalid", code=CALLER_AUTH_INVALID)
     # 过期由本进程判：本地模式没有上游替我们判。``exp`` 缺失即拒（不接受不过期的令牌）。
+    #
+    # ⚠️ **这里判得比公司自己严，是有意的 —— 但它是本模式与公司行为的一处已知差异**：
+    # 41 实测，同一条 `exp` 已过的令牌打公司自己的接口 **仍然 200**
+    # （`GET /upms/user/info` → 返回该用户信息；`/user/check` → `ok:true`），
+    # 说明**公司侧在当前配置下并不因为 `exp` 过期而拒绝**（它认的是 Redis 里的会话对象，
+    # 由登出/撤销删除；`exp` 只写进对象、不做时效判定）。
+    #
+    # 因此会出现「前端拿同一把令牌打公司接口通、打 AI-Ops 401」的现象，**那不是 AI-Ops 出错**。
+    # 两条路要选一条：
+    #   (a) 保持现状（拒绝过期令牌）：更严，但与公司其余接口的行为不一致；
+    #   (b) 放宽到与公司一致：只验签、不判 `exp` —— 需产品/安全确认（届时删掉本段判定即可）。
+    # **本文件选 (a)**：放宽一个授权边界不该由实现方默认决定。
     expires_at = payload.get("exp")
     if not isinstance(expires_at, (int, float)) or isinstance(expires_at, bool):
         raise CallerAuthError("company token has no expiry", code=CALLER_AUTH_INVALID)
