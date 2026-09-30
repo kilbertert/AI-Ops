@@ -68,6 +68,7 @@ from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_runtime import GatewayRuntime, close_gateway_runtime
 from aiops_diagnostics.gateway_store import (
     ACTIVE_DIAGNOSIS_STATUSES,
+    ACTIVE_HEALTH_JOB_STATUSES,
     TERMINAL_DIAGNOSIS_STATUSES,
     TERMINAL_RUN_STATUSES,
     AuthenticationError,
@@ -1135,14 +1136,7 @@ def create_gateway_app(
         return JSONResponse(
             status_code=status.HTTP_202_ACCEPTED,
             content={
-                "type": "qa",
-                "language": language,
-                "qa_id": qa["qa_id"],
-                "question": qa["question"],
-                "status": qa["status"],
-                "retry_after_ms": 1000,
-                "result": qa.get("result"),
-                "error": None,
+                **_assistant_question_response(qa, language),
                 **(
                     {"conversation_id": conversation["conversation_id"], "turn_no": turn_no}
                     if conversation
@@ -2338,7 +2332,7 @@ def _health_job_response(job: dict[str, Any]) -> dict[str, Any]:
         "order_no": job["order_no"],
         "rule_version": job["rule_version"],
         "status": status_value,
-        "retry_after_ms": 1000 if status_value in {"queued", "running"} else None,
+        "retry_after_ms": 1000 if status_value in ACTIVE_HEALTH_JOB_STATUSES else None,
         "report": job.get("report"),
         "error": (
             {
@@ -3015,14 +3009,7 @@ def _start_promo_qa(
     return JSONResponse(
         status_code=status.HTTP_202_ACCEPTED,
         content={
-            "type": "qa",
-            "language": language,
-            "qa_id": qa["qa_id"],
-            "question": qa["question"],
-            "status": qa["status"],
-            "retry_after_ms": 1000,
-            "result": qa.get("result"),
-            "error": None,
+            **_assistant_question_response(qa, language),
             **(
                 {"conversation_id": conversation["conversation_id"], "turn_no": turn_no}
                 if conversation
