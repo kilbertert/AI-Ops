@@ -31,8 +31,17 @@
 | 配置缺失 ⇒ 503 且 `retryable: true` | `test_a_config_missing_error_is_retryable_wherever_it_is_answered` |
 | **映射只有一处**、六个依赖只委托 | `test_the_mapping_exists_in_exactly_one_place`（源码级） |
 
-**以两条变异核对**：① 复原缺陷（共用实现去掉 `CONFIG_MISSING` 分支）⇒ 转红；
-② 让一个依赖自行加一层 `except CallerAuthError` 映射 ⇒ 转红。
+**以三条变异核对**：① 复原缺陷（共用实现去掉 `CONFIG_MISSING` 分支）⇒ 转红；
+② 让一个既有依赖自行加一层 `except CallerAuthError` 映射 ⇒ 转红；
+③ **新增一个自行映射的认证依赖**（Devin 指出的形态）⇒ 转红。
+
+**依赖集合是推导出来的，不是手写的**：`_caller_dependencies()` 取「**自己调用了共用映射**的函数」，
+命名只是为了**校验**这个集合（`authenticated_*` 里除设备路径外必须都在集合里，集合里的必须在命名约定内）。
+Devin 指出手写元组的形态「新增的认证依赖对路由发现不可见，而计数断言照样通过」—— 上一版正是那样。
+推导之后，新依赖**一旦存在就被覆盖**，而自行映射的那个会被命名校验抓出来（变异 ③）。
+
+⚠️ **一个性能坑也写在这里**：`_caller_dependencies` 要遍历整个 `gateway_api.py`（约 2 秒），
+放进逐路由的循环里会让 42 条路由 × 4 个参数化 = 几分钟。现在**算一次传进去**。
 
 **枚举方式本身值得记一笔**：第一版按源码 AST 找「handler 的默认参数里有 `authenticated_*`」，
 结果**只找到 0 条** —— 依赖是 `Depends(...)` 里的一层调用，且助手端点是

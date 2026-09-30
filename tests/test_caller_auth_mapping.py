@@ -44,17 +44,14 @@ SOURCE_ROOT = Path(__file__).parents[1] / "src" / "aiops_diagnostics"
 API_FILE = "gateway_api.py"
 #: The shared entry point. One definition, and every dependency delegates to it.
 SHARED = "_authenticate_caller"
-#: The dependencies that authenticate a caller (as opposed to a device token).
-SOURCE_ROOT = Path(__file__).parents[1] / "src" / "aiops_diagnostics"
-API_FILE = "gateway_api.py"
-CALLER_DEPENDENCIES = (
-    "authenticated_caller",
-    "authenticated_diagnosis_caller",
-    "authenticated_faq_caller",
-    "authenticated_agent_caller",
-    "authenticated_shortcut_caller",
-    "authenticated_shortcut_viewer",
-)
+#: Naming convention for dependencies that authenticate a caller. Used to CHECK
+#: the derived set, never as the set itself: a hand-written list is exactly what
+#: lets a new dependency go uncovered while every count-based assertion still
+#: passes.
+CALLER_DEPENDENCY_PREFIX = "authenticated_"
+#: Device-token dependencies share the prefix but not the mapping — they
+#: resolve no caller and never raise `CallerAuthError`.
+DEVICE_DEPENDENCIES = ("authenticated_device",)
 #: The error codes this mapping may produce, and whether a retry can help.
 #: `ACCESS_TOKEN_VALIDATION_UNAVAILABLE` is the fail-closed answer for "we could
 #: not check your token", which is not the caller's fault and not a login state.
@@ -107,6 +104,57 @@ def _client(tmp_path: Path, resolver: _Resolver) -> TestClient:
     )
 
 
+def _api_tree() -> ast.Module:
+    return ast.parse((SOURCE_ROOT / API_FILE).read_text(encoding="utf-8"))
+
+
+def _delegates(tree: ast.Module, function: ast.FunctionDef) -> bool:
+    """Whether ``function`` itself calls the shared mapping.
+
+    "Itself" is the point: the dependencies are nested inside
+    ``create_gateway_app``, so crediting a call to whichever function encloses
+    it would put the app factory in the set and make the naming check report it
+    as an unnamed dependency. The call must sit in this function's body without
+    another function definition in between.
+    """
+    parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
+    for node in ast.walk(function):
+        if not isinstance(node, ast.Call) or getattr(node.func, "id", "") != SHARED:
+            continue
+        owner = node
+        while owner in parents:
+            owner = parents[owner]
+            if owner is function:
+                return True
+            if isinstance(owner, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                break
+    return False
+
+
+def _caller_dependencies(tree: ast.Module) -> set[str]:
+    """Every dependency that authenticates a caller, derived from the source.
+
+    The set IS "the functions that delegate to the shared mapping", so a new
+    dependency is covered the moment it exists — and one that maps
+    `CallerAuthError` itself is caught by the naming check below rather than
+    being silently absent from a tuple someone forgot to update.
+    """
+    return {
+        node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and _delegates(tree, node)
+    }
+
+
+def _named_caller_dependencies(tree: ast.Module) -> set[str]:
+    """Dependencies that LOOK like caller authentication but do not delegate."""
+    return {
+        node.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef)
+        and node.name.startswith(CALLER_DEPENDENCY_PREFIX)
+        and node.name not in DEVICE_DEPENDENCIES
+    }
+
+
 def _dependant_names(dependant: object) -> set[str]:
     """Every callable name in a route's dependency tree, transitively.
 
@@ -126,18 +174,24 @@ def _dependant_names(dependant: object) -> set[str]:
     return names
 
 
-def _routes_using_caller_resolver(client: TestClient) -> list[tuple[str, str]]:
+def _routes_using_caller_resolver(
+    client: TestClient, dependencies: set[str] | None = None
+) -> list[tuple[str, str]]:
     """`(method, path)` for every route that authenticates a caller.
 
     Read from the built application, so a route added later is covered without
-    anyone remembering to add it here.
+    anyone remembering to add it here. ``dependencies`` is passed in by callers
+    that enumerate repeatedly: deriving the set parses the whole gateway module,
+    and doing that once per route turns a fast check into a minutes-long one.
     """
+    if dependencies is None:
+        dependencies = _caller_dependencies(_api_tree())
     routes: list[tuple[str, str]] = []
     for route in client.app.routes:  # type: ignore[attr-defined]
         dependant = getattr(route, "dependant", None)
         if dependant is None:
             continue
-        if _dependant_names(dependant) & set(CALLER_DEPENDENCIES):
+        if _dependant_names(dependant) & dependencies:
             routes.append((sorted(route.methods)[0], route.path))
     return sorted(set(routes))
 
@@ -178,7 +232,7 @@ def test_every_authenticated_route_maps_a_resolver_failure_the_same_way(
     client = _client(tmp_path, resolver)
     headers = {"Authorization": "Bearer token"}
     mismatches: list[str] = []
-    for method, path in _routes_using_caller_resolver(client):
+    for method, path in _routes_using_caller_resolver(client, _caller_dependencies(_api_tree())):
         request_path = path.replace("{qa_id}", "qa_x").replace("{diagnosis_id}", "dx_x")
         request_path = request_path.replace("{question_id}", "q1").replace("{job_id}", "job1")
         request_path = request_path.replace("{order_no}", "O-1").replace("{code}", "c1")
@@ -223,8 +277,18 @@ def test_the_mapping_exists_in_exactly_one_place() -> None:
         node.lineno for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == SHARED
     ]
     assert len(copies) == 1, f"{SHARED} is defined {len(copies)} times: {copies}"
+    tree = _api_tree()
+    derived = _caller_dependencies(tree)
+    named = _named_caller_dependencies(tree)
+    # The convention check: every caller-authenticating dependency delegates,
+    # and nothing that delegates is outside the naming convention (which is what
+    # the derivation above keys on).
     offenders: list[str] = []
-    for name in CALLER_DEPENDENCIES:
+    for name in sorted(named - derived):
+        offenders.append(f"{API_FILE} {name} looks like caller authentication but does not delegate")
+    for name in sorted(derived - named):
+        offenders.append(f"{API_FILE} {name} delegates but is not named {CALLER_DEPENDENCY_PREFIX}*")
+    for name in sorted(named):
         function = next(
             node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == name
         )
