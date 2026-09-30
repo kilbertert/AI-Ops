@@ -268,7 +268,7 @@ function main() {
   }
   lines.push(
     "",
-    "**批准门不因此改动**：`production-41` 的 `required_reviewers` 保留。",
+    "**批准门已于 2026-09-30 移除**（所有者决定）—— 因此「等批准」不该再出现；",
     "卡住时怎么办、谁负责批准，见 `docs/agents/env-41-runbook.md` 的 CD 一节。",
   );
   const body = lines.join("\n");

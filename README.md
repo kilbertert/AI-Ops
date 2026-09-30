@@ -513,8 +513,17 @@ CI 保证「合并进来的东西是对的」，CD 负责「把它送到 41 上�
 `main` 上 `src/**` 的改动（纯文档合并不部署，也不该占用人审批的注意力）。
 
 ```
-push main (src/**) → cd.yml → environment: production-41（人工审批门）→ deploy-41.sh
+push main (src/**) → cd.yml → environment: production-41 → deploy-41.sh
 ```
+
+> ⚠️ **2026-09-30 起这道门是自动的**：仓库所有者决定去掉人工审批（原文见
+> [`docs/validation.md`](docs/validation.md) 的「决定记录：CD 的人工批准门按仓库所有者决定去掉」）。
+> **任何合并到 main 且命中 `src/**` 的提交都会自动部署到生产。**
+> 「什么人能改生产」因此等于「**什么人能合并到 main**」—— 那道门仍在
+> （Ruleset 要求 PR、必需检查、会话解决），去掉的只是"合并之后再点一次"。
+> `production-41` 环境本身保留（部署账本、只允许 main 的分支策略）。
+> ⚠️ **回滚就一处**：在环境上重新加回 required reviewer；`cd.yml` 不需要动 ——
+> 那里**做不出**一个自动批准（environment 审批发生在 job 的步骤开始之前）。
 
 四个设计选择，每个都有具体理由：
 
