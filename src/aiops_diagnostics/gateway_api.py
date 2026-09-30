@@ -515,45 +515,14 @@ def create_gateway_app(
         business_entry: Annotated[str | None, Header(alias="X-Business-Entry")] = None,
         source_key: Annotated[str | None, Header(alias=SOURCE_KEY_HEADER)] = None,
     ) -> ScopeContext:
-        if not authorization or not authorization.startswith("Bearer "):
-            raise StandardAPIError(
-                status.HTTP_401_UNAUTHORIZED,
-                "ACCESS_TOKEN_REQUIRED",
-                "access token required",
-            )
-        token = authorization.removeprefix("Bearer ").strip()
-        if token.startswith("aops_"):
-            raise StandardAPIError(
-                status.HTTP_401_UNAUTHORIZED,
-                "INVALID_ACCESS_TOKEN",
-                "access token validation failed",
-            )
-        try:
-            return context.caller_resolver.resolve(
-                token,
-                required_scope=STANDARD_ORDER_READ_SCOPE,
-                third_session=x_third_session,
-                platform_entry=business_entry,
-                source_key=source_key,
-            )
-        except CallerAuthError as exc:
-            if exc.code == CALLER_AUTH_FORBIDDEN:
-                status_code = status.HTTP_403_FORBIDDEN
-                code = "INSUFFICIENT_SCOPE"
-            elif exc.code == CALLER_AUTH_CONFIG_MISSING:
-                status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-                code = "ACCESS_TOKEN_VALIDATION_UNAVAILABLE"
-            else:
-                status_code = (
-                    status.HTTP_503_SERVICE_UNAVAILABLE if exc.retryable else status.HTTP_401_UNAUTHORIZED
-                )
-                code = "ACCESS_TOKEN_VALIDATION_UNAVAILABLE" if exc.retryable else "INVALID_ACCESS_TOKEN"
-            raise StandardAPIError(
-                status_code,
-                code,
-                "access token validation failed",
-                retryable=exc.retryable,
-            ) from exc
+        return _authenticate_caller(
+            context.caller_resolver,
+            authorization,
+            x_third_session,
+            platform_entry=business_entry,
+            source_key=source_key,
+            required_scope=STANDARD_ORDER_READ_SCOPE,
+        )
 
     def authenticated_diagnosis_caller(
         authorization: Annotated[str | None, Header()] = None,
@@ -561,43 +530,14 @@ def create_gateway_app(
         business_entry: Annotated[str | None, Header(alias="X-Business-Entry")] = None,
         source_key: Annotated[str | None, Header(alias=SOURCE_KEY_HEADER)] = None,
     ) -> ScopeContext:
-        if not authorization or not authorization.startswith("Bearer "):
-            raise StandardAPIError(
-                status.HTTP_401_UNAUTHORIZED,
-                "ACCESS_TOKEN_REQUIRED",
-                "access token required",
-            )
-        token = authorization.removeprefix("Bearer ").strip()
-        if token.startswith("aops_"):
-            raise StandardAPIError(
-                status.HTTP_401_UNAUTHORIZED,
-                "INVALID_ACCESS_TOKEN",
-                "access token validation failed",
-            )
-        try:
-            # 数据范围按内容域决定（运营商站点范围只在管家端生效），因此入口必须在这里就传下去
-            # —— 晚于身份解析的平台决策改不了已算好的范围。``source_key`` 同理：它是**分派**依据，
-            # 决定谁来解析身份，传晚了等于门不存在。
-            return context.caller_resolver.resolve(
-                token,
-                required_scope=STANDARD_DIAGNOSIS_SCOPE,
-                third_session=x_third_session,
-                platform_entry=business_entry,
-                source_key=source_key,
-            )
-        except CallerAuthError as exc:
-            if exc.code == CALLER_AUTH_FORBIDDEN:
-                raise StandardAPIError(
-                    status.HTTP_403_FORBIDDEN,
-                    "INSUFFICIENT_SCOPE",
-                    "access token validation failed",
-                ) from exc
-            raise StandardAPIError(
-                status.HTTP_503_SERVICE_UNAVAILABLE if exc.retryable else status.HTTP_401_UNAUTHORIZED,
-                "ACCESS_TOKEN_VALIDATION_UNAVAILABLE" if exc.retryable else "INVALID_ACCESS_TOKEN",
-                "access token validation failed",
-                retryable=exc.retryable,
-            ) from exc
+        return _authenticate_caller(
+            context.caller_resolver,
+            authorization,
+            x_third_session,
+            platform_entry=business_entry,
+            source_key=source_key,
+            required_scope=STANDARD_DIAGNOSIS_SCOPE,
+        )
 
     def authenticated_faq_caller(
         authorization: Annotated[str | None, Header()] = None,
@@ -2411,6 +2351,17 @@ def _authenticate_caller(
     platform_entry: str | None = None,
     source_key: str | None = None,
 ) -> ScopeContext:
+    """The one place a ``CallerAuthError`` becomes an outbound error, and the
+    one place the resolver is asked for an identity.
+
+    Every ``authenticated_*`` dependency delegates here. There used to be three
+    copies of this mapping and one of them had no ``CALLER_AUTH_CONFIG_MISSING``
+    branch, so a missing gateway configuration told twelve endpoints' callers
+    "your login has expired, sign in again" — the exact opposite of what
+    ``docs/gateway.md`` promises (a stable 503, fail closed). A rule with two
+    answers is a rule with none, and the copy that drifted was the one nobody
+    looked at.
+    """
     if not authorization or not authorization.startswith("Bearer "):
         raise StandardAPIError(status.HTTP_401_UNAUTHORIZED, "ACCESS_TOKEN_REQUIRED", "access token required")
     token = authorization.removeprefix("Bearer ").strip()
@@ -2434,16 +2385,22 @@ def _authenticate_caller(
         )
     except CallerAuthError as exc:
         if exc.code == CALLER_AUTH_FORBIDDEN:
-            status_code, code = status.HTTP_403_FORBIDDEN, "INSUFFICIENT_SCOPE"
+            status_code, code, retryable = status.HTTP_403_FORBIDDEN, "INSUFFICIENT_SCOPE", False
         elif exc.code == CALLER_AUTH_CONFIG_MISSING:
+            # Explicitly retryable, rather than relying on whoever raised it to
+            # have passed `retryable=True`: `CallerAuthError`'s default is
+            # False, and a configuration gap is by definition something a fix
+            # restores. This is the rule deciding, not the raiser remembering.
             status_code, code = status.HTTP_503_SERVICE_UNAVAILABLE, "ACCESS_TOKEN_VALIDATION_UNAVAILABLE"
+            retryable = True
         else:
             status_code = (
                 status.HTTP_503_SERVICE_UNAVAILABLE if exc.retryable else status.HTTP_401_UNAUTHORIZED
             )
             code = "ACCESS_TOKEN_VALIDATION_UNAVAILABLE" if exc.retryable else "INVALID_ACCESS_TOKEN"
+            retryable = exc.retryable
         raise StandardAPIError(
-            status_code, code, "access token validation failed", retryable=exc.retryable
+            status_code, code, "access token validation failed", retryable=retryable
         ) from exc
 
 

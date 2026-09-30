@@ -522,17 +522,14 @@ def test_diagnosis_turn_is_filled_at_the_terminal_write(tmp_path: Path, monkeypa
         None,
         conversation_turn=(cid, scope_fingerprint, turn_no),
     )
-    deadline = time.monotonic() + 2
-    while store.get_standard_diagnosis(created["diagnosis_id"], scope_fingerprint)["status"] not in {
-        "completed",
-        "failed",
-        "inconclusive",
-    }:
-        assert time.monotonic() < deadline
-        time.sleep(0.01)
+    # Wait on the conversation, not on the job row: the job turns terminal one
+    # write BEFORE its turn is filled, so polling the row reads a moment when
+    # the job is done and the conversation has not caught up — the same race
+    # the caller-facing observable does not have.
+    _wait_for_slot(conversations, cid, scope_fingerprint)
     runtime.shutdown()
 
-    assert conversations.get(cid, scope_fingerprint)["is_generating"] is False
+    assert store.get_standard_diagnosis(created["diagnosis_id"], scope_fingerprint)["status"] == ("completed")
     window = conversations.context_turns(cid, scope_fingerprint)
     assert len(window) == 1
     assert window[0]["question"] == "为什么跳枪"
