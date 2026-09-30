@@ -425,6 +425,78 @@ nginx 在**同一个 location 内**对同名头**不做覆盖**，而是**两条
       否则回滚时只能凭记忆改回 set-header）
 - [ ] 验收含**客户端回归**（无入口头那条必须仍是服务令牌）
 
+## 1.8 公司网关（cloud-gateway）那一跳（**D-3/D-4 之后**，2026-09-30）
+
+**背景**：`operator` 那条链自 2026-09-30 起**先经过公司网关**（ADR-0009 第二段）。
+nginx 不再为 operator 注入任何凭据；来源密钥由**网关**覆盖式注入。
+
+### 现状（一句话）
+
+```
+operator → nginx(/v1/) → 127.0.0.1:30899（宿主 → cloud-gateway）→ 172.18.0.1:8788（AI-Ops）
+consumer → nginx(/v1/) → 172.18.0.1:8788（直连，逐字不变）
+```
+
+### 改向脚本（改前必读）
+
+执行脚本在仓库的 `deploy/d4-cutover.py`。**41 上没有仓库 checkout**，所以要先按仓库
+一贯的取证口径把它送上去（传文件 + 核对 sha，与 §2 部署同一套纪律）：
+
+```bash
+# 本地（仓库内）——记下 sha
+sha256sum deploy/d4-cutover.py
+
+# 送上 41
+scp deploy/d4-cutover.py aiops-41:/tmp/d4-cutover.py
+
+# 41 上——**核对 sha 与本地一致再执行**
+sha256sum /tmp/d4-cutover.py     # 与上面那个值逐字相同才继续
+python3 /tmp/d4-cutover.py dry-run    # 只打印将写入的内容
+python3 /tmp/d4-cutover.py apply      # 备份 → 写 vhost+map → nginx -t → reload
+python3 /tmp/d4-cutover.py rollback   # 从最近一次备份恢复（**两处**）→ reload
+```
+
+⚠️ 脚本**不进 `REFERENCE_FILES`**（那是 CD 同步的运行时参考资料），所以**不会被 CD 送到 41** ——
+每次都要手工传。这正是上面这几行的存在理由，不是多余的步骤。
+
+> **顺带说明（评审指出）**：把脚本放进 `deploy/` 会让 `cd.yml` 的 `paths` 命中它，
+> 于是**改这个脚本会触发一次生产部署**。那是可接受的：部署同一 commit 是幂等的，
+> 而脚本放 `deploy/` 是它该在的位置。改它的人**知道会发生什么**就行。
+
+- 备份落 `/var/backups/aiops-41/d4-cutover-<时间戳>/`（vhost、map、tokenconf 各一份）；
+- **回滚必须恢复两处**：`api.mall.qushiyun.com.conf` **与** `0.aiops-entry-map.conf`。
+  只恢复 vhost 会引用不存在的 `$aiops_upstream`，`nginx -t` 直接失败。
+  `nginx-aiops-service-token.conf` **不需要**跟着回滚（保持「只 set 变量」两种形态都可用）。
+
+### 🔴 Nacos 那边：加完路由**必须重启网关容器**（实测，别被日志骗）
+
+`DynamicRouteInit` 的监听器**会**打印「加载路由：<id>」并保存，但**新建的那条不生效** ——
+同一批里既有路由正常响应、只有新路由 404；重新发布同样内容也无效。
+（线上 jar 里**不存在** `RefreshRoutesEvent`，刷新根本没被触发。）
+
+```bash
+# 改 Nacos（dataId=dynamic_routes / group=DEFAULT_GROUP / public）
+# 然后：
+docker restart cloud-gateway && sleep 25
+docker logs cloud-gateway --since 2m | grep "加载路由：aiops-gateway"
+```
+
+### 那条路由为什么必须带 `RewritePath`
+
+本网关**会剥掉匹配到的那段前缀**（既有 35 条全都用 `RewritePath` 把它加回来）。
+少了 `RewritePath=/(?<segment>.*),/v1/$\{segment}`，AI-Ops 收到的路径是
+`/faq/recommendations`（少 `/v1`）⇒ `404`。
+
+### 安全口径（**别读成"有网关兜底"**）
+
+- 网关**不做身份强制**（`cloud.auth.enable: false`），也**不注入身份**；
+- `30899` 这条网关端口**公网可达**（实测 `http://47.97.160.153:30899/upms/user/check` → `200`）；
+- ⇒ 那条路径上的防线是 **AI-Ops 自己的令牌校验**，而它**不验签、不判 `exp`**。
+- **D 的收益是「注入主体从我们自己的 nginx 换成网关」，不是「身份由公司校验」。**
+  暴露面发现见 `fleet-ops/FLEET.md` §7.7（私有记录），**不是我们该单方面改的**。
+
+---
+
 ## 2. 部署（源码同步到 41）
 
 生产代码是文件拷贝部署（41 无 `.git`）。流程：**备份 → 传 → 校验 sha → 重启**。
