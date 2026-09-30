@@ -224,6 +224,10 @@ def classify_with_jev(
         # outage, which is why it has its own code.
         _record_routing_failure(ROUTING_INVALID, exc, metrics=metrics, tenant_id=tenant_id)
         return None
+    # The decision was obtained, so it is counted. Same dimension as the failure
+    # rows: a rate needs both halves, and "no failures" alone cannot tell a
+    # working week apart from an idle one.
+    _record_routing_outcome(ROUTING_DECIDED, metrics=metrics, tenant_id=tenant_id)
     return decision.as_dict()
 
 
@@ -252,6 +256,49 @@ def should_ask_for_context(
     return decision.get("confidence") != "high"
 
 
+#: The outcome row a *successful* routing decision records. It shares the
+#: dimension name with the failure rows (`route_type="routing"`) on purpose:
+#: without a common denominator a success rate cannot be computed, and the
+#: question this exists to answer is "was Jev providing decisions for the last
+#: seven days" — which needs both halves of the ratio.
+ROUTING_DECIDED = "completed"
+
+
+def _record_routing_outcome(
+    outcome: str,
+    *,
+    metrics: MetricsStore | None,
+    tenant_id: str | None,
+    code: str | None = None,
+    exc: BaseException | None = None,
+) -> None:
+    """Make the routing path's behaviour visible, on both sides. Never logs the
+    user's text.
+
+    The success side used to record nothing — only failures did — which made
+    "routing has been running for a week" unanswerable: zero failure rows are
+    equally consistent with "every question was decided" and with "nothing ever
+    asked". A rate needs a numerator and a denominator.
+
+    The failure message is the exception's class and its own text, which this
+    client authors and which carries no user data — the question is not part of
+    it.
+    """
+    if exc is not None:
+        _LOGGER.warning("routing decision unavailable: code=%s error=%s", code, _safe_reason(exc))
+    if metrics is None or not tenant_id:
+        return
+    try:
+        metrics.record(
+            tenant_id=tenant_id,
+            route_type="routing",
+            outcome=outcome,
+            error_code=code,
+        )
+    except Exception as metric_exc:  # noqa: BLE001 - metrics must never fail a request
+        _LOGGER.warning("routing metric could not be recorded: %s", _safe_reason(metric_exc))
+
+
 def _record_routing_failure(
     code: str,
     exc: BaseException,
@@ -259,23 +306,8 @@ def _record_routing_failure(
     metrics: MetricsStore | None,
     tenant_id: str | None,
 ) -> None:
-    """Make a broken routing path visible. Never logs the user's text.
-
-    The message is the exception's class and its own text, which this client
-    authors and which carries no user data — the question is not part of it.
-    """
-    _LOGGER.warning("routing decision unavailable: code=%s error=%s", code, _safe_reason(exc))
-    if metrics is None or not tenant_id:
-        return
-    try:
-        metrics.record(
-            tenant_id=tenant_id,
-            route_type="routing",
-            outcome="failed",
-            error_code=code,
-        )
-    except Exception as exc:  # noqa: BLE001 - metrics must never fail a request
-        _LOGGER.warning("routing metric could not be recorded: %s", _safe_reason(exc))
+    """A failed routing decision: warned about, and counted."""
+    _record_routing_outcome("failed", metrics=metrics, tenant_id=tenant_id, code=code, exc=exc)
 
 
 def _safe_reason(exc: BaseException) -> str:
