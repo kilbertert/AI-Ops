@@ -120,12 +120,19 @@ def test_a_health_job_terminal_write_goes_through_the_one_helper() -> None:
         for node in ast.walk(tree)
         if isinstance(node, ast.FunctionDef) and node.name == "_finish_health_job"
     )
-    assert len(_job_updates(worker)) == 1, "the claim write is checked on its own"  # the running claim
+    assert len(_job_updates(worker)) == 1, "the claim write is checked on its own"
     # The helper is the one place the health terminal write happens, and it
-    # returns what the store said.
-    assert any(
-        isinstance(node, ast.Return) and "update_health_job" in ast.unparse(node) for node in ast.walk(helper)
-    ), "_finish_health_job no longer returns the store's answer"
+    # answers its caller: the store's value, and — on a refusal — a log line,
+    # because this path has no metric for the refusal to show up in.
+    helper = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "_finish_health_job"
+    )
+    source = ast.unparse(helper)
+    assert "update_health_job" in source, "the helper no longer writes the job"
+    assert "return True" in source and "return False" in source, source
+    assert "_LOGGER.warning" in source, "a refusal on this path leaves no trace"
 
 
 def test_every_job_write_in_the_two_workers_is_answered() -> None:
@@ -203,9 +210,10 @@ def test_the_diagnosis_success_metric_is_gated_on_the_write() -> None:
 def test_a_refused_terminal_write_records_no_metric(tmp_path, monkeypatch) -> None:
     """The behaviour, not just the shape: a refused write leaves no metric row.
 
-    Drives the real worker with a store whose terminal write is refused, and
-    asserts no metric row appears. The structural guards above say every write is
-    *answered*; this says what the answer has to do.
+    The stub refuses ONLY the terminal write, and lets the `running` claim
+    through — otherwise the worker returns at the claim and never reaches the
+    line under test, which is a green test that proves nothing. (Getting that
+    wrong is how the first version of this test passed on the ungated code.)
     """
     from test_standard_diagnosis_runtime import _runtime, _scope
 
@@ -236,16 +244,47 @@ def test_a_refused_terminal_write_records_no_metric(tmp_path, monkeypatch) -> No
     )
     recorded: list[dict] = []
     monkeypatch.setattr(runtime, "_record_metric", lambda **fields: recorded.append(fields))
-    # The terminal write is refused, as it is for a row that expired while the
-    # worker ran.
-    monkeypatch.setattr(runtime.store, "update_standard_diagnosis", lambda *a, **k: False)
+
+    real_update = runtime.store.update_standard_diagnosis
+    reached: list[str] = []
+
+    def refuse_the_terminal_write(diagnosis_id: str, *, status: str, **kwargs: object) -> bool:
+        reached.append(status)
+        if status == "running":
+            return real_update(diagnosis_id, status=status, **kwargs)
+        return False
+
+    monkeypatch.setattr(runtime.store, "update_standard_diagnosis", refuse_the_terminal_write)
 
     created = runtime.start_standard_diagnosis(_scope(), "ORDER-1", "为什么跳枪", None)
     assert created["diagnosis_id"]
     import time
 
     deadline = time.monotonic() + 5
-    while not recorded and time.monotonic() < deadline:
+    while "completed" not in reached and time.monotonic() < deadline:
         time.sleep(0.01)
     runtime.shutdown()
+    # The worker got past the claim and tried the terminal write...
+    assert "completed" in reached, reached
+    # ...and its refusal produced no metric.
     assert recorded == [], f"a refused write was counted as a completed run: {recorded}"
+
+
+def test_a_refused_health_write_is_logged(tmp_path, monkeypatch, caplog) -> None:
+    """The health path has no metric, so the log is its observable.
+
+    Without one, "the result is checked" would be nominal on this path: the
+    boolean would be returned into a caller that does nothing with it, and a
+    worker whose result nobody could ever read would leave no trace.
+    """
+    import logging
+
+    from test_standard_diagnosis_runtime import _runtime
+
+    runtime, store, settings = _runtime(tmp_path)
+    monkeypatch.setattr(runtime.store, "update_health_job", lambda *a, **k: False)
+    with caplog.at_level(logging.WARNING, logger="aiops.gateway_runtime"):
+        assert runtime._finish_health_job("job1", status="completed") is False
+    assert any("health job terminal write refused" in record.getMessage() for record in caplog.records), [
+        record.getMessage() for record in caplog.records
+    ]

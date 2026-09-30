@@ -863,14 +863,30 @@ class GatewayRuntime:
     def _finish_health_job(self, job_id: str, **fields: Any) -> bool:
         """Write a health job's terminal state, and say whether it landed.
 
-        The one place this line decides what "the job is over" means. A refused
-        write is not an error to raise: the row was already terminal, which is
-        a state other paths reach on purpose (the deadline sweep, the restart
-        hook). What must not happen is a caller treating the refusal as its own
-        success, which is what an unchecked `update_health_job` did at all four
-        of its terminal call sites.
+        The one place this line decides what "the job is over" means, so the
+        four call sites cannot answer that question differently — which is what
+        they did when one of them was checked and three were not.
+
+        A refused write is not an error to raise: the row was already terminal,
+        which is a state other paths reach on purpose (the deadline sweep, the
+        restart hook). Unlike the diagnosis line there is **no metric on this
+        path at all**, so a refusal does not make two surfaces disagree — it
+        had no observable consequence, which is exactly why it went unnoticed.
+        What it left behind was a worker doing work whose result nobody would
+        read, with nothing anywhere to say so.
+
+        So the refusal is **logged**: one line naming the code the job would
+        have recorded. That is the observable this path can have today, and it
+        is what makes "the result is checked" true here rather than nominal.
         """
-        return bool(self.store.update_health_job(job_id, **fields))
+        if not self.store.update_health_job(job_id, **fields):
+            _LOGGER.warning(
+                "health job terminal write refused: job=%s status=%s",
+                job_id,
+                fields.get("status"),
+            )
+            return False
+        return True
 
     def _execute_health_report(
         self,
