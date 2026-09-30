@@ -446,13 +446,21 @@ nginx 在**同一个 location 内**对同名头**不做覆盖**，而是**两条
 > 记录落在 [`deploy/manual-deploys.md`](../../deploy/manual-deploys.md)（并同步到 41 的
 > 运维记录）。**先部署后补记也行，但不能不记。**
 >
-> **谁负责批准 CD / 卡住了怎么办**：批准由**运维负责人**在 GitHub 的
-> `production-41` environment 上点（`required_reviewers` 是有意保留的唯一人工注视点）。
-> 卡住时**不需要人盯着**：每小时第 7 分钟跑一次 `CD Watch`（#407），它把
-> 「等待批准超过 30 分钟」与「连续 3 次已完成的 CD 都不是 success」变成一张
-> `cd:needs-attention` 的票。想立刻问「此刻有没有待批准的部署」，跑
-> `node .sandcastle/cd-watch.mjs --dry-run`（只读，不开票）。
-> ⚠️ **不要因为等待就手工部署** —— 那正是上面那条留痕要求的由来。
+> 🛑 **谁负责批准 CD —— 2026-09-30 起：没有人，门已去掉。**
+> 仓库所有者的明确决定（原文：「我授权你可以自动的进行 CD 审批部署，不需要我认为的点击」，
+> 经追问确认取**永久去掉批准门**）：`production-41` 环境的 `required_reviewers` 已移除，
+> 且 `cd.yml` 里保留一个**显式**的自动批准步骤。
+>
+> **含义**：**任何合并到 main 且命中 `cd.yml` 的 `paths` 的提交，都会自动部署到生产。**
+> 「什么人能改生产」因此等于「**什么人能合并到 main**」—— 那道门仍在（Ruleset 要求 PR、
+> 必需检查、会话解决），去掉的只是"合并后再点一次"。
+>
+> ⚠️ **回滚**：在 GitHub 的 `production-41` 环境上重新加回 required reviewer **并且**
+> 删掉 `cd.yml` 里的自动批准步骤 —— **只加 reviewer 会得到一个自动批准自己部署的假门**。
+>
+> ⚠️ **仍然不要因为等待就手工部署**：现在根本没有"等待"这个状态了。若 CD 没跑，
+> 那是路径没命中或 workflow 出错，查 `gh run list --workflow=cd.yml`，不要绕过去手敲。
+> 卡住/连续失败会由 `CD Watch` 开 `cd:needs-attention` 票（#407）。
 >
 > **依赖不在本流程范围。** `src/` 与运行时参考资料由 CD 同步；依赖清单
 > （`pyproject.toml` / `uv.lock`）不一致时 CD 会**拒绝部署**。更新 41 的依赖环境走
