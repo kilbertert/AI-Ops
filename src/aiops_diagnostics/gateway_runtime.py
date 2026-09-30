@@ -860,6 +860,34 @@ class GatewayRuntime:
             for entry in journal.entries()
         ]
 
+    def _finish_health_job(self, job_id: str, **fields: Any) -> bool:
+        """Write a health job's terminal state, and say whether it landed.
+
+        The one place this line decides what "the job is over" means, so the
+        four call sites cannot answer that question differently — which is what
+        they did when one of them was checked and three were not.
+
+        A refused write is not an error to raise: the row was already terminal,
+        which is a state other paths reach on purpose (the deadline sweep, the
+        restart hook). Unlike the diagnosis line there is **no metric on this
+        path at all**, so a refusal does not make two surfaces disagree — it
+        had no observable consequence, which is exactly why it went unnoticed.
+        What it left behind was a worker doing work whose result nobody would
+        read, with nothing anywhere to say so.
+
+        So the refusal is **logged**: one line naming the code the job would
+        have recorded. That is the observable this path can have today, and it
+        is what makes "the result is checked" true here rather than nominal.
+        """
+        if not self.store.update_health_job(job_id, **fields):
+            _LOGGER.warning(
+                "health job terminal write refused: job=%s status=%s",
+                job_id,
+                fields.get("status"),
+            )
+            return False
+        return True
+
     def _execute_health_report(
         self,
         job_id: str,
@@ -893,24 +921,30 @@ class GatewayRuntime:
                     report["source_summary"]["telemetry"] = "available" if samples else "unavailable"
                 report["curves"] = build_curves(samples)
                 report = enrich_report(report, samples, order)
+            # Every terminal write below is checked, and the refusal is the
+            # same quiet exit the qa line takes (`_execute_assistant_qa`, #355):
+            # a refused write means the row already ended — expired, or driven
+            # terminal by another path — so this job's answer is not the answer
+            # anyone is waiting for. Reporting success for it is how the metric
+            # and the row disagree.
             if time.monotonic() - started > 30:
-                self.store.update_health_job(
+                self._finish_health_job(
                     job_id,
                     status="failed",
                     error_code="REPORT_TIMEOUT",
                     error_message="health report timed out",
                 )
                 return
-            self.store.update_health_job(job_id, status="completed", report=report)
+            self._finish_health_job(job_id, status="completed", report=report)
         except HealthReportError as exc:
-            self.store.update_health_job(
+            self._finish_health_job(
                 job_id,
                 status="failed",
                 error_code=exc.code,
                 error_message=str(exc),
             )
         except (SourceError, ValueError) as exc:
-            self.store.update_health_job(
+            self._finish_health_job(
                 job_id,
                 status="failed",
                 error_code="SOURCE_UNAVAILABLE",
@@ -1048,6 +1082,12 @@ class GatewayRuntime:
             guarded=not stored,
             stop_renewer=claim_stop,
         )
+        if not stored:
+            # The row was already terminal, so this run produced nothing anyone
+            # will read. Recording a success here is what makes the metric and
+            # the row disagree — the metric says a diagnosis completed, the row
+            # says `expired`, and the caller polls the row.
+            return
         self._record_metric(
             tenant_id=context.effective_tenant_id,
             route_type="diagnosis",
