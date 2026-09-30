@@ -370,6 +370,74 @@ def test_concurrent_generation_returns_409_on_the_diagnosis_branch(tmp_path: Pat
     assert store.get(cid, _scope_of(client))["is_generating"] is False
 
 
+def test_an_explicit_order_diagnosis_joins_the_conversation(tmp_path: Path) -> None:
+    """A diagnosis started WITH an explicit order_no is part of the conversation.
+
+    This branch used to read none of the conversation's fields — the handler
+    resolves the conversation before routing precisely so every branch can use
+    it. Without a claimed turn the diagnosis is invisible to the conversation:
+    no row for a follow-up to see, and no `turn_no` for the frontend to cancel
+    with (`assistant-cancel-handoff.md`: only a 202 carrying conversation_id +
+    turn_no can be cancelled)."""
+    client, _, runtime = _client(tmp_path)
+    conversation = _create_conversation(client)
+    cid = conversation["conversation_id"]
+
+    resp = client.post(
+        "/v1/assistant/questions",
+        json={"question": "这个订单为什么提前停了", "order_no": OWNED_ORDER, "conversation_id": cid},
+        headers=_headers(),
+    )
+    assert resp.status_code == 202
+    body = resp.json()
+    assert body["type"] == "diagnosis"
+    assert body["conversation_id"] == cid
+    assert isinstance(body["turn_no"], int)
+    assert runtime.turns[0] is not None
+
+    # The claimed turn holds the conversation's generation slot: the same
+    # question cannot start a second generation while this one runs.
+    blocked = client.post(
+        "/v1/assistant/questions",
+        json={"question": "那笔订单现在怎么还不退款", "conversation_id": cid},
+        headers=_headers(),
+    )
+    assert blocked.status_code == 409
+    assert blocked.json()["error"]["code"] == "CONVERSATION_BUSY"
+
+    # The worker closes the turn at its terminal state, and then the row is
+    # part of the history a follow-up reads.
+    from aiops_diagnostics.conversation_store import ConversationStore
+
+    store = ConversationStore(Path(client.app.state.gateway.settings.database_file))
+    scope = _scope_of(client)
+    held = runtime.turns[0]
+    store.complete_turn(cid, scope, held[2], answer={"summary": "停机原因", "root_cause": "余额耗尽"})
+    detail = client.get(f"/v1/conversations/{cid}", headers=_headers()).json()
+    turns = [turn for turn in detail["turns"] if turn["turn_no"] == held[2]]
+    assert turns and turns[0]["answer"]["summary"] == "停机原因"
+
+
+def test_an_explicit_order_without_a_conversation_is_unchanged(tmp_path: Path) -> None:
+    """No conversation in the request ⇒ byte-identical response, no turn.
+
+    The frontend may keep calling the explicit-order form with no conversation
+    at all, and that shape must not grow fields it never asked for."""
+    client, _, runtime = _client(tmp_path)
+
+    resp = client.post(
+        "/v1/assistant/questions",
+        json={"question": "这个订单为什么提前停了", "order_no": OWNED_ORDER},
+        headers=_headers(),
+    )
+    assert resp.status_code == 202
+    body = resp.json()
+    assert body["type"] == "diagnosis"
+    assert "conversation_id" not in body
+    assert "turn_no" not in body
+    assert runtime.turns == [None]
+
+
 def _scope_of(client: TestClient) -> str:
     """The test caller's scope fingerprint (same construction as _Caller)."""
     subject = SubjectRecord(b_user_id="c:C-1", c_user_id="C-1", tenant_id="T-1")

@@ -7,6 +7,38 @@
 
 
 
+## #484 Route 1 补齐会话语义（2026-09-30）
+
+Route 1（显式 `order_no`）**整个分支不碰会话**：不领取轮次、不把 `turn_no` 交给 worker、202 体也没有
+`conversation_id` / `turn_no`。同一个 handler 在上面几行已经把 conversation 解析出来，注释还写着
+「resolve BEFORE routing so **every branch** can consult it」——而这一支一个字段都不读。
+
+两个后果：`assistant-cancel-handoff.md` 记着「只有 202 创建响应带 `conversation_id` / `turn_no`」，
+所以经**订单选择器**发起的诊断**前端无法取消**；它的轮次也不进 `turns`，后续 follow-up 拿不到它。
+
+**改动**：领取轮次 → 把 `conversation_turn` 交给 `start_standard_diagnosis` → 202 体回显
+`conversation_id` + `turn_no`（**仅在请求带会话标识时**），形状与 Route 1c 一致；
+启动失败时释放轮次（与另外两条分支同一处置）。
+
+**证据**：
+
+| 判据 | 用例 |
+|---|---|
+| 202 同时回显两个字段、生成期间 409、终态后进入 `turns` | `test_an_explicit_order_diagnosis_joins_the_conversation` |
+| **不带会话标识时响应逐字不变、不创建轮次** | `test_an_explicit_order_without_a_conversation_is_unchanged` |
+
+**源码级封口**（并入 `tests/test_conversation_turn_shapes.py`）：枚举 handler 里**每一个**返回 202 的分支，
+断言「领了轮次的分支必须回显 `turn_no`」且「回显 `turn_no` 就必须回显 `conversation_id`」。
+**以四条变异核对**：Route 1 不回显 `turn_no`、只回显 `turn_no`、1b 的 `turn_field` 清空、
+1c 的 `turn_no` 去掉 —— 各自转红。
+
+⚠️ **这条守护的读法写进了注释**：字段是通过条件展开（`**({...} if cond else {})`）与局部变量
+（`**turn_field`）挂上去的，所以它按「响应体的键」判断，并按名字解析同一块里的赋值；
+「分支是否领了轮次」则看整块。**只读返回表达式**会把领了轮次的分支判成没领（claim 在返回语句之上），
+**只读整块文本**又会把赋值左侧的 `turn_no` 当成返回值 —— 两种写法都实测过，各自会产生假绿或假红。
+
+**未完成业务验收**：41 上无真实订单选择器联调；前端可取消性（拿到 `turn_no` 后走取消接口）仍待联调验证。
+
 ## #482 会话上下文窗口接上三条生成路径（2026-09-30）
 
 **这条兑现的是一份写进对外合同、已实现、已测试、却没有任何生产调用方的能力。**
