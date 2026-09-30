@@ -574,6 +574,7 @@ Java BFF 透传与前端 blocks[] 渲染属 #171/#173 及真实媒体验收范�
 - 有序动作：带两者提问；同会话再问一次；把诊断推到终态后读会话详情；单独跑不带会话的那次。
 - 预期结果：带两者时 202 体同时有 `conversation_id` 与 `turn_no`，生成期间同会话再问得 409，终态后该轮次出现在 `turns`；
   **不带会话时响应与本特性交付前逐字相同且不创建任何轮次**。
+- ⚠️ **本条不验证「可取消」**：诊断线没有取消端点，`turn_no` 只用于轮次归属与历史可见。
 - 清理：临时目录自动回收。
 - 结果：PASS（2026-09-30，`tests/test_conversation_api.py::test_an_explicit_order_diagnosis_joins_the_conversation`
   与 `::test_an_explicit_order_without_a_conversation_is_unchanged`；源码级封口见 CONV-05 同文件）。
