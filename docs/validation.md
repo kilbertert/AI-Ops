@@ -969,28 +969,21 @@ Route 1（显式 `order_no`）**整个分支不碰会话**：不领取轮次、�
 
 ### 部署后的第一次取数（2026-10-01）
 
-**取数方式**（可被第二人复跑；只读，不取用户文本）：
+**取数方式**：`deploy/routing-window.sh`（只读；不写库、不重启服务、只取计数与时间戳）。
 
 ```bash
-# 窗口起点：本次进程的启动时间
-ssh aiops-41 'ps -o lstart= -p $(systemctl show aiops-gateway-41 -p MainPID --value)'
-
-# 读数（一次查询给出全部三行）
-ssh aiops-41 'sudo -u aiops41 /opt/aiops-41/.venv/bin/python -c "
-import sqlite3
-c = sqlite3.connect("/var/lib/aiops-41/gateway/gateway.db")
-print("routing:", c.execute(
-    "SELECT outcome, COALESCE(error_code,'-'), COUNT(*) FROM agent_run_metrics"
-    " WHERE route_type='routing' AND created_at > ? GROUP BY 1,2",
-    (WINDOW_START,)).fetchall())
-print("any:", c.execute(
-    "SELECT route_type, COUNT(*) FROM agent_run_metrics WHERE created_at > ? GROUP BY 1",
-    (WINDOW_START,)).fetchall())
-"'
+deploy/routing-window.sh                              # 窗口 = 当前网关进程启动至今
+deploy/routing-window.sh 2026-10-01T00:00:00+00:00    # 或显式给起点
 ```
 
-`WINDOW_START` 取进程启动的 UTC 时刻。**41 上没有 `sqlite3` 命令行**，因此经网关自己的
-venv 取数；库文件是 `/var/lib/aiops-41/gateway/gateway.db`（`AIOPS_GATEWAY_DATABASE_FILE`）。
+它给出四行 —— 窗口内 routing 两侧计数、窗口内任何路由的计数、全表最近一条、历史 routing 行
+（供对照）—— 并按两侧是否为 0 直接给出判定。**做成脚本而不是文档里的一段命令**，是因为
+上一版命令有两处会让人根本跑不起来：远端 shell 会剥掉一层引号，`WINDOW_START` 也没有定义。
+
+⚠️ **窗口起点的时间换算踩过一次，记在这里**：`ps -o lstart=` 给的是**本地墙钟且不带时区**，
+`date -d` 又按主机时区读它 —— 本主机是 CST，于是「换算」把 18:39Z 的进程算成了 02:39+00:00，
+**窗口被悄悄前移了 8 小时**。这个方向会**凭空造出流量**，比藏起流量更危险。改用
+`stat -c %Y /proc/<pid>`（epoch）后无需任何时区算术。
 
 本次读数：**进程启动 2026-09-30 18:39:47 UTC，取数时间 2026-10-01**。
 
