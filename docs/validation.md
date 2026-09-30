@@ -7,6 +7,34 @@
 
 
 
+## #488 响应形状与状态词汇收敛（2026-09-30）
+
+一处内联 202 体 + 一处手写的活动状态集，都是同一个形态：**同一样东西定义两遍，
+每份只被各自的端点用例覆盖**。读响应读不出第二份副本 —— 它今天恰好一致 ——
+所以两条断言都在源码层。
+
+| 缺陷 | 今天的后果（都不显眼，所以都活了下来） |
+|---|---|
+| 两处分支手拼 `type=qa` 的 202 体，绕过自称「唯一形状」的 `_assistant_question_response` | 字段恰好一致；改动其中一处不会让任何用例转红 |
+| `_health_job_response` 手写 `{"queued","running"}`，而 `gateway_store.ACTIVE_HEALTH_JOB_STATUSES` 就是它 | 存储层新增一个活动状态 ⇒ 该面报 `retry_after_ms=None`，客户端停止轮询一个还在跑的作业 |
+
+**改动**：两处内联 202 体改走 `_assistant_question_response`；健康报告改为引用
+`ACTIVE_HEALTH_JOB_STATUSES`。**对外响应逐字节不变。**
+
+**证据**：
+
+| 判据 | 用例 |
+|---|---|
+| 处理器不再手拼 qa 202 体 | `test_the_202_body_is_built_through_the_one_helper` |
+| `"type": "qa"` 在源码里只出现一次 | `test_the_helper_is_the_only_place_that_names_the_qa_kind` |
+| 状态集合不再手写，且响应确实问存储层 | `test_the_status_words_come_from_the_store` |
+
+**两条变异核对**：① 恢复一处内联 202 体 ⇒ 转红；② 健康报告回到内联状态集 ⇒ 转红。
+第 ① 条另以「只把字面量换成一个变量」的变体验证过 —— 仍然转红（断言的是**出现次数**，
+不是某个拼写）。
+
+**未完成业务验收**：本片对外零变化，41 上无可比对案例。
+
 ## #487 12 处 503 守卫合一，异常细节进脱敏日志（2026-09-30）
 
 `docs/standard-api-contract.md:355-356` 承诺「内部异常细节只进入脱敏日志，不返回异常类型、SQL、
