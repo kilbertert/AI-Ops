@@ -4,7 +4,10 @@
   "scripts": {
     "afk": "tsx .sandcastle/main.ts",
     "ralph": "tsx .sandcastle/planner.ts",
-    "afk:policy": "node .sandcastle/policy-check.mjs all"
+    "afk:policy": "node .sandcastle/policy-check.mjs all",
+    "cd:watch": "node .sandcastle/cd-watch.mjs",
+    "cd:state": "node .sandcastle/deploy-state.mjs",
+    "cd:watch:test": "node .sandcastle/cd-watch.test.mjs"
   },
   "dependencies": {
     "tsx": "^4.20.0",
