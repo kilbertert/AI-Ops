@@ -58,6 +58,7 @@ from operator_support import (
 
 from aiops_diagnostics.caller_auth import ScopedOrderAuthorizer
 from aiops_diagnostics.config import Settings
+from aiops_diagnostics.conversation_store import ConversationStore
 from aiops_diagnostics.i18n import SUPPORTED_LANGUAGES
 from aiops_diagnostics.query_scope import resolve_operator_site_scope
 from aiops_diagnostics.scope_context import SCOPE_TYPE_SELF
@@ -189,9 +190,8 @@ def test_active_order_follow_up_drops_an_order_that_left_the_scope(
     拿着上一轮的确认继续诊断一个已经看不到的订单。
     """
     connection = Connection()
-    client, runtime = assistant_app(
-        tmp_path, monkeypatch, operator_caller(monkeypatch, sites={"SHOP-1": (SITE_IN,)}), connection
-    )
+    caller = operator_caller(monkeypatch, sites={"SHOP-1": (SITE_IN,)})
+    client, runtime = assistant_app(tmp_path, monkeypatch, caller, connection)
 
     conversation = client.post(
         "/v1/conversations", json={"agent_version_key": AGENT_VERSION_KEY}, headers=_OPERATOR_HEADERS
@@ -215,6 +215,15 @@ def test_active_order_follow_up_drops_an_order_that_left_the_scope(
     assert first.status_code == 202, first.text
     assert first.json()["type"] == "diagnosis"
     assert first.json()["order_no_from_context"] == ORDER_INSIDE
+    # 诊断生成期间会话的并发闸门是**锁着的**：槽位持有到作业终态，不再在提交时释放
+    # （否则这里会读到一个正在生成、却说 ``is_generating=false`` 的会话）。替身运行时
+    # 不跑工人，所以由用例自己把作业推到终态——正是真实工人在终态做的事。
+    turn_no = first.json()["turn_no"]
+    store = ConversationStore(Path(client.app.state.gateway.settings.database_file))
+    scope = caller.context.scope_fingerprint
+    assert store.get(cid, scope)["is_generating"] is True
+    store.complete_turn(cid, scope, turn_no, answer={"text": "诊断结论"})
+    assert store.get(cid, scope)["is_generating"] is False
 
     # 订单改挂到集合外站点：调用者站点集合不变（指纹不变），但订单已不可见。
     connection.orders = [

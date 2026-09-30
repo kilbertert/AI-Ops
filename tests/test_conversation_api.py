@@ -82,14 +82,20 @@ class _Authorizer:
 class _Runtime:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []
+        # The conversation turn handed to each diagnosis job (None when the
+        # conversation does not keep it).
+        self.turns: list[tuple[str, str, int] | None] = []
         self.busy_conversations: set[str] = set()
 
     def shutdown(self) -> None:
         pass
 
-    def start_standard_diagnosis(self, context, order_no: str, question: str, indicator_code, language="zh"):
+    def start_standard_diagnosis(
+        self, context, order_no: str, question: str, indicator_code, language="zh", *, conversation_turn=None
+    ):
         del context, indicator_code
         self.calls.append((order_no, question))
+        self.turns.append(conversation_turn)
         return {
             "diagnosis_id": "dx_test000000000000000000000000000001",
             "order_no": order_no,
@@ -248,6 +254,17 @@ def test_followup_omits_order_via_active_order(tmp_path: Path) -> None:
     assert body["type"] == "diagnosis"
     assert body["order_no_from_context"] == OWNED_ORDER
     assert runtime.calls == [(OWNED_ORDER, "我刚才那笔充电订单为什么突然停了")]
+    # The slot the diagnosis claimed is still held while its job runs — the
+    # frontend's concurrency gate (#172), which this branch used to release at
+    # submit time.
+    from aiops_diagnostics.conversation_store import ConversationStore
+
+    store = ConversationStore(Path(client.app.state.gateway.settings.database_file))
+    assert store.get(cid, _scope_of(client))["is_generating"] is True
+    held_turn = runtime.turns[0]
+    assert held_turn is not None
+    # The worker frees the slot when the job reaches a terminal state.
+    store.complete_turn(cid, _scope_of(client), held_turn[2], answer={"text": "诊断结论"})
 
     # Ownership revoked between turns: the same follow-up falls back to qa
     # (plain knowledge answer), and the stale binding is cleared.
@@ -311,6 +328,46 @@ def test_concurrent_generation_returns_409(tmp_path: Path) -> None:
         headers=_headers(),
     )
     assert plain.status_code == 202
+
+
+def test_concurrent_generation_returns_409_on_the_diagnosis_branch(tmp_path: Path) -> None:
+    """The 409 gate covers the diagnosis branch too, not just qa.
+
+    Both branches claim the same conversation slot, so a diagnosis generating
+    in a conversation must block the next turn exactly as a qa generation does
+    — that is what the held slot buys, and it is what the frontend's
+    `is_generating` gate reads."""
+    client, _, runtime = _client(tmp_path)
+    conversation = _create_conversation(client)
+    cid = conversation["conversation_id"]
+    client.post(f"/v1/conversations/{cid}/active-order", json={"order_no": OWNED_ORDER}, headers=_headers())
+
+    first = client.post(
+        "/v1/assistant/questions",
+        json={"question": "我刚才那笔充电订单为什么突然停了", "conversation_id": cid},
+        headers=_headers(),
+    )
+    assert first.status_code == 202
+    assert first.json()["type"] == "diagnosis"
+    assert runtime.turns[0] is not None
+
+    blocked = client.post(
+        "/v1/assistant/questions",
+        json={"question": "那笔订单现在怎么还不退款", "conversation_id": cid},
+        headers=_headers(),
+    )
+    assert blocked.status_code == 409
+    assert blocked.json()["error"]["code"] == "CONVERSATION_BUSY"
+
+    # The diagnosis worker frees the slot at its terminal state — the same
+    # `complete_turn` the worker calls; a test that stops at the 409 cannot
+    # tell "held until terminal" apart from "never released".
+    from aiops_diagnostics.conversation_store import ConversationStore
+
+    store = ConversationStore(Path(client.app.state.gateway.settings.database_file))
+    held = runtime.turns[0]
+    store.complete_turn(cid, _scope_of(client), held[2], answer={"summary": "诊断结论"})
+    assert store.get(cid, _scope_of(client))["is_generating"] is False
 
 
 def _scope_of(client: TestClient) -> str:

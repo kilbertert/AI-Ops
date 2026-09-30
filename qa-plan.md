@@ -566,6 +566,24 @@ Java BFF 透传与前端 blocks[] 渲染属 #171/#173 及真实媒体验收范�
 - 清理：同上。
 - 结果：PASS（2026-09-10，pytest `tests/test_conversation_api.py`）。
 
+### CONV-05 订单诊断线的会话语义（#483）
+
+- 环境：同 CONV-01。
+- 前置条件：会话已绑定归属校验通过的活跃订单。
+- 测试数据：活跃订单 follow-up（路由到诊断）；终态写入（成功带 `summary`/`root_cause`；失败或取消不带答案）。
+- 有序动作：提 follow-up 得到 `202 type=diagnosis`；诊断生成中在同会话再提问；驱动诊断到终态；
+  驱动一次以失败收场的诊断；读写 `context_turns`。
+- 预期结果：诊断生成期间 `is_generating` 为 `true` 且同会话再提问得 `409 CONVERSATION_BUSY`；
+  诊断终态后 `is_generating` 转 `false` 且该轮进入 `context_turns`（`answer` 带 `summary`/`root_cause`）；
+  **失败的诊断不保留轮次**且一样释放槽位（不退化为永久 409）；诊断轮次的 `summary`/`root_cause`
+  与诊断指标行采用同一 token 估计口径。
+- 清理：同上。
+- 结果：PASS（2026-09-30，`tests/test_conversation_api.py::test_concurrent_generation_returns_409_on_the_diagnosis_branch`、
+  `tests/test_standard_diagnosis_runtime.py::test_diagnosis_turn_is_filled_at_the_terminal_write`、
+  `::test_a_failed_diagnosis_drops_its_turn`；源码级守护 `tests/test_conversation_turn_shapes.py`）。
+- 证据边界：诊断作业由替身运行时驱动到终态；真实模型耗时下的 120s 崩溃兜底与前端解锁仍按
+  `docs/agents/assistant-cancel-handoff.md` §2 的既有口径，不在本条内重新验证。
+
 证据边界：CONV-01..04 为 mock-first 协议级验证。真实多设备续聊（前端轮询/刷新）、
 BFF 会话透传仍由 #171/#173 与 P0-E2E-REAL 覆盖；**停止生成的真实取消链路由 PRD #346
 交付**（BFF/前端交接见 `docs/agents/assistant-cancel-handoff.md`，协议级证据见

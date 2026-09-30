@@ -307,7 +307,17 @@ class GatewayRuntime:
         question: str,
         indicator_code: str | None,
         language: str = DEFAULT_LANGUAGE,
+        *,
+        conversation_turn: tuple[str, str, int] | None = None,
     ) -> dict[str, Any]:
+        """Start an order diagnosis job.
+
+        With ``conversation_turn`` (T4/#172) the finished diagnosis is written
+        back into the conversation's turn row and the generation slot is held
+        until the job reaches a terminal state — the same shape the qa line
+        (``start_assistant_qa``) already has. Without it nothing about the
+        conversation changes.
+        """
         selected_provider = self.diagnostic_settings.agent.select_provider(None)
         selected_key_slot = validate_key_slot_name(selected_provider.resolved_key_slot())
         if selected_key_slot not in self.allowed_key_slots:
@@ -344,6 +354,7 @@ class GatewayRuntime:
             selected_provider.name,
             selected_key_slot,
             language,
+            conversation_turn,
         )
         self._futures[diagnosis["diagnosis_id"]] = future
         future.add_done_callback(lambda _: self._futures.pop(diagnosis["diagnosis_id"], None))
@@ -699,6 +710,38 @@ class GatewayRuntime:
         with contextlib.suppress(ConversationError):
             self.conversation_store.release_turn(conversation_id, scope_fingerprint, turn_no)
 
+    def _complete_conversation_turn(
+        self,
+        conversation_turn: tuple[str, str, int] | None,
+        question: str,
+        answer: dict[str, Any] | None,
+        *,
+        cancelled: bool = False,
+    ) -> None:
+        """Write a finished answer into the conversation turn (if any).
+
+        The ONE implementation of "a job finished, so its turn can be closed":
+        both the qa/promo line and the diagnosis line call it, so the two can
+        no longer disagree about what a finished turn looks like.
+
+        Cancelled/failed turns drop their row: an interrupted generation never
+        survives as a complete reply (#172).
+        """
+        if conversation_turn is None:
+            return
+        from aiops_diagnostics.conversation_store import ConversationError
+
+        conversation_id, scope_fingerprint, turn_no = conversation_turn
+        with contextlib.suppress(ConversationError):
+            self.conversation_store.complete_turn(
+                conversation_id,
+                scope_fingerprint,
+                turn_no,
+                answer=answer,
+                token_count=_estimate_turn_tokens(question, answer),
+                cancelled=cancelled or answer is None,
+            )
+
     def list_evidence(self, run_id: str) -> list[dict[str, Any]]:
         """Return redacted evidence metadata for a run (no business payloads)."""
         run_root = Path(self.diagnostic_settings.agent.run_root).expanduser().resolve()
@@ -787,8 +830,11 @@ class GatewayRuntime:
         provider: str,
         key_slot: str,
         language: str = DEFAULT_LANGUAGE,
+        conversation_turn: tuple[str, str, int] | None = None,
     ) -> None:
         if not self.store.update_standard_diagnosis(diagnosis_id, status="running"):
+            # Refused claim: another path already terminalised this row (or it
+            # expired). Nothing was generated, so the turn must not survive.
             return
         started_ms = time.monotonic()
         settings = Settings.from_config(self.gateway_settings.server_config_file)
@@ -817,6 +863,7 @@ class GatewayRuntime:
                 error_code="DIAGNOSIS_FAILED",
                 error_message=_public_error_message(exc, request.order_no),
             )
+            self._complete_conversation_turn(conversation_turn, request.problem, None, cancelled=True)
             self._record_metric(
                 tenant_id=context.effective_tenant_id,
                 route_type="diagnosis",
@@ -839,6 +886,7 @@ class GatewayRuntime:
                 error_code=error_code,
                 error_message=error_message,
             )
+            self._complete_conversation_turn(conversation_turn, request.problem, None, cancelled=True)
             self._record_metric(
                 tenant_id=context.effective_tenant_id,
                 route_type="diagnosis",
@@ -858,6 +906,11 @@ class GatewayRuntime:
         # estimate tokens from the narrative fields it actually has.
         diagnosis_tokens = (
             sum(len(str(dumped.get(field) or "")) for field in ("summary", "root_cause")) * 2 // 3 + 1
+        )
+        self._complete_conversation_turn(
+            conversation_turn,
+            request.problem,
+            {"summary": dumped.get("summary"), "root_cause": dumped.get("root_cause")},
         )
         self._record_metric(
             tenant_id=context.effective_tenant_id,
@@ -884,25 +937,7 @@ class GatewayRuntime:
         skip_retrieval: bool = False,
     ) -> None:
         def _finish_turn(answer: dict[str, Any] | None, *, cancelled: bool = False) -> None:
-            """Write the finished answer into the conversation turn (if any).
-
-            Cancelled/failed turns drop their row: an interrupted generation
-            never survives as a complete reply (#172).
-            """
-            if conversation_turn is None:
-                return
-            from aiops_diagnostics.conversation_store import ConversationError
-
-            conversation_id, scope_fingerprint, turn_no = conversation_turn
-            with contextlib.suppress(ConversationError):
-                self.conversation_store.complete_turn(
-                    conversation_id,
-                    scope_fingerprint,
-                    turn_no,
-                    answer=answer,
-                    token_count=_estimate_turn_tokens(question, answer),
-                    cancelled=cancelled or answer is None,
-                )
+            self._complete_conversation_turn(conversation_turn, question, answer, cancelled=cancelled)
 
         if not self.store.update_assistant_question(qa_id, status="running"):
             _finish_turn(None, cancelled=True)
@@ -1469,6 +1504,10 @@ def _estimate_turn_tokens(question: str, answer: dict[str, Any] | None) -> int:
         for block in answer.get("blocks") or []:
             text += str(block.get("text") or "")
         text += str(answer.get("text") or "")
+        # Diagnosis turns carry summary/root_cause, not blocks[] — the same
+        # two fields the diagnosis metric's token estimate uses.
+        for field in ("summary", "root_cause"):
+            text += str(answer.get(field) or "")
     return max(1, len(text) * 2 // 3)
 
 

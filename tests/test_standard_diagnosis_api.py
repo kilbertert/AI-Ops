@@ -81,7 +81,10 @@ class _Runtime:
         question: str,
         indicator_code: str | None,
         language: str = "zh",
+        *,
+        conversation_turn=None,
     ) -> dict:
+        del conversation_turn
         self.started.append(order_no)
         return self.store.create_standard_diagnosis(
             context.scope_fingerprint,

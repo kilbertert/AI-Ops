@@ -458,3 +458,108 @@ def test_diagnosis_survives_long_running_worker(tmp_path: Path) -> None:
             (diagnosis["diagnosis_id"],),
         ).fetchone()
     assert datetime.fromisoformat(row[0]) - created >= DIAGNOSIS_DEADLINE
+
+
+def test_diagnosis_turn_is_filled_at_the_terminal_write(tmp_path: Path, monkeypatch) -> None:
+    """A diagnosis kept in the conversation must end up with an answer (#172).
+
+    Before this wiring the turn row was written answer-less and NEVER filled:
+    the diagnosis worker had no conversation_turn at all, so the row stayed
+    `answer_json IS NULL` forever — and `context_turns()` filters exactly those
+    out, so a follow-up could never see the diagnosis.
+    """
+    from aiops_diagnostics.conversation_store import ConversationStore
+
+    runtime, store, settings = _runtime(tmp_path)
+    monkeypatch.setattr("aiops_diagnostics.gateway_runtime.Settings.from_config", lambda *_: settings)
+    monkeypatch.setattr(
+        "aiops_diagnostics.gateway_runtime.run_agent_diagnosis",
+        lambda workspace, request, selected_settings, fixture, **kwargs: AgentDiagnosis(
+            incident_id=workspace.load_manifest().incident_id,
+            order_no=request.order_no,
+            tenant_id=request.tenant_id,
+            status=DiagnosisStatus.DIAGNOSED,
+            summary="已完成诊断",
+            root_cause="测试根因",
+            confidence=Confidence.HIGH,
+            evidence_ids=[],
+            hypotheses=[],
+            limitations=[],
+            failed_sources=[],
+            next_steps=[],
+        ),
+    )
+    conversations = ConversationStore(store.path)
+    scope_fingerprint = _scope().scope_fingerprint
+    conversation = conversations.create(
+        scope_fingerprint=scope_fingerprint,
+        business_entry="operator",
+        agent_version_key="agt_abcdef1234567890#v1",
+    )
+    cid = conversation["conversation_id"]
+    turn_no = conversations.begin_turn(cid, scope_fingerprint, kind="diagnosis", question="为什么跳枪")
+
+    created = runtime.start_standard_diagnosis(
+        _scope(),
+        "ORDER-1",
+        "为什么跳枪",
+        None,
+        conversation_turn=(cid, scope_fingerprint, turn_no),
+    )
+    deadline = time.monotonic() + 2
+    while store.get_standard_diagnosis(created["diagnosis_id"], scope_fingerprint)["status"] not in {
+        "completed",
+        "failed",
+        "inconclusive",
+    }:
+        assert time.monotonic() < deadline
+        time.sleep(0.01)
+    runtime.shutdown()
+
+    assert conversations.get(cid, scope_fingerprint)["is_generating"] is False
+    window = conversations.context_turns(cid, scope_fingerprint)
+    assert len(window) == 1
+    assert window[0]["question"] == "为什么跳枪"
+    assert "已完成诊断" in window[0]["answer"]["summary"]
+
+
+def test_a_failed_diagnosis_drops_its_turn(tmp_path: Path, monkeypatch) -> None:
+    """A failed diagnosis never survives as a reply (#172), and it still frees
+    the generation slot — otherwise the conversation would wedge at 409."""
+    from aiops_diagnostics.conversation_store import ConversationStore
+
+    runtime, store, settings = _runtime(tmp_path)
+    monkeypatch.setattr("aiops_diagnostics.gateway_runtime.Settings.from_config", lambda *_: settings)
+
+    def explode(*args, **kwargs):
+        raise ValueError("provider is unhappy")
+
+    monkeypatch.setattr("aiops_diagnostics.gateway_runtime.run_agent_diagnosis", explode)
+    conversations = ConversationStore(store.path)
+    scope_fingerprint = _scope().scope_fingerprint
+    cid = conversations.create(
+        scope_fingerprint=scope_fingerprint,
+        business_entry="operator",
+        agent_version_key="agt_abcdef1234567890#v1",
+    )["conversation_id"]
+    turn_no = conversations.begin_turn(cid, scope_fingerprint, kind="diagnosis", question="为什么跳枪")
+
+    created = runtime.start_standard_diagnosis(
+        _scope(),
+        "ORDER-1",
+        "为什么跳枪",
+        None,
+        conversation_turn=(cid, scope_fingerprint, turn_no),
+    )
+    deadline = time.monotonic() + 2
+    while store.get_standard_diagnosis(created["diagnosis_id"], scope_fingerprint)["status"] not in {
+        "completed",
+        "failed",
+        "inconclusive",
+    }:
+        assert time.monotonic() < deadline
+        time.sleep(0.01)
+    runtime.shutdown()
+
+    assert conversations.get(cid, scope_fingerprint)["is_generating"] is False
+    assert conversations.context_turns(cid, scope_fingerprint) == []

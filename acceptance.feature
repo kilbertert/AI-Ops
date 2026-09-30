@@ -554,6 +554,18 @@ Feature: 智能体会话与活跃订单上下文
       When 同一会话再次发起提问
       Then 返回 409 CONVERSATION_BUSY
 
+    Scenario: 订单诊断生成期间同样占据会话的生成槽位
+      Given 会话已绑定归属校验通过的活跃订单
+      And 该订单的追问已按订单诊断语义路由并处于生成中
+      When 同一会话再次发起提问
+      Then 返回 409 CONVERSATION_BUSY
+      And 该诊断到达终态后同一会话可以再次发起提问
+
+    Scenario: 完成的订单诊断进入后续上下文
+      Given 一个订单诊断回合已到达终态
+      When 读取会话上下文
+      Then 该轮次带摘要与根因进入上下文窗口
+
     Scenario: 未完成的结果不作为完整回答保存
       Given 一个生成中的回合被停止或失败
       When 会话轮次落库
