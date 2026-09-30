@@ -468,6 +468,10 @@ class ConversationStore:
 
         Returns oldest-first for prompt assembly. Turns without a stored
         answer (interrupted/failed generations) never enter the window.
+
+        The budget is not a hard ceiling on the returned turns: the newest turn
+        is always kept, even alone, because an empty context is worse than one
+        oversized turn. Callers that need a strict bound must say so.
         """
         self._validate_conversation_id(conversation_id)
         self._validate_scope(scope_fingerprint)  # ownership enforced by caller

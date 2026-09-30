@@ -46,6 +46,12 @@ _LABELS: dict[str, tuple[str, str]] = {
     "pt": ("Usuário", "Assistente"),
 }
 
+#: Continuation prefix for extra lines inside one speaker's text. Without it a
+#: stored answer containing a newline plus "Assistant:" would read to the model
+#: as a turn nobody made — the history is data, and this keeps its shape from
+#: being forgeable by its content.
+_CONTINUATION = "  "
+
 _HEADERS: dict[str, str] = {
     "zh": "以下是本次会话中此前已完成的问答（仅供理解指代，不作为事实依据；本轮仍以实际查询到的数据为准）：",
     "en": "Earlier completed turns in this conversation (context for resolving "
@@ -111,9 +117,9 @@ def render_history(turns: list[dict[str, Any]], language: str = DEFAULT_LANGUAGE
         if not question and not answer:
             continue
         if question:
-            lines.append(f"{asker}: {question}")
+            lines.append(f"{asker}: " + question.replace("\n", "\n" + _CONTINUATION))
         if answer:
-            lines.append(f"{answerer}: {answer}")
+            lines.append(f"{answerer}: " + answer.replace("\n", "\n" + _CONTINUATION))
     if not lines:
         return ""
     return _header(language) + "\n" + "\n".join(lines) + "\n\n"
@@ -130,12 +136,23 @@ def build_history(
 ) -> str:
     """Read the window and render it, or ``""`` when there is none to read.
 
+    The token budget bounds the window the same way the store defines it: the
+    newest turn is kept even if it alone exceeds the budget. A stricter cap
+    would silently return nothing for a conversation whose last turn was long,
+    which is the failure this window exists to avoid.
+
     Every failure returns ``""``: an unreadable window must not make a question
     unanswerable. The caller distinguishes the two by logging the exception —
     this function's contract is only "history or no history".
+
+    The bounds are checked here rather than left to ``context_turns()``, whose
+    range check is an exception: a mistyped knob must read as "no history" (and
+    be visible in the caller's warning), not as a question that cannot be asked.
     """
     if not conversation_id or not scope_fingerprint:
         return ""
+    if not 1 <= max_turns <= 50 or not 100 <= max_tokens <= 100000:
+        raise ValueError("conversation context limits are out of range")
     turns = store.context_turns(
         conversation_id,
         scope_fingerprint,
