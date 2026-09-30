@@ -9,6 +9,7 @@ from urllib.parse import urlsplit
 from dotenv import dotenv_values
 
 from aiops_diagnostics.config import selected_config_file, validate_key_slot_name
+from aiops_diagnostics.conversation_store import CONTEXT_MAX_TOKENS, CONTEXT_MAX_TURNS
 from aiops_diagnostics.platform_paths import config_root, data_root
 from aiops_diagnostics.private_files import PrivatePathError, validate_private_file
 
@@ -75,6 +76,13 @@ class GatewayServerSettings:
     kb_service_timeout_seconds: float = 10.0
     media_signing_secret: str = ""
     media_ttl_seconds: int = 600
+    #: Conversation context window (#482). The defaults ARE the contract's
+    #: numbers (8 turns / 8k tokens, ``conversation_store`` owns the constants);
+    #: they are configurable because a RAG or promotional turn also spends the
+    #: model's budget on retrieved chunks, and the only honest way to tune that
+    #: trade-off is a knob rather than a second hardcoded copy.
+    context_max_turns: int = CONTEXT_MAX_TURNS
+    context_max_tokens: int = CONTEXT_MAX_TOKENS
 
     @classmethod
     def from_env(cls) -> GatewayServerSettings:
@@ -136,6 +144,8 @@ class GatewayServerSettings:
             .strip()
             .lower()
             not in _FALSY_SETTINGS,
+            context_max_turns=_env_int("AIOPS_GATEWAY_CONVERSATION_MAX_TURNS", CONTEXT_MAX_TURNS),
+            context_max_tokens=_env_int("AIOPS_GATEWAY_CONVERSATION_MAX_TOKENS", CONTEXT_MAX_TOKENS),
             kb_service_base_url=_env("AIOPS_GATEWAY_KB_SERVICE_BASE_URL")
             or _file_value(file_values, "AIOPS_GATEWAY_KB_SERVICE_BASE_URL"),
             kb_service_timeout_seconds=_env_float("AIOPS_GATEWAY_KB_SERVICE_TIMEOUT_SECONDS", 10.0),

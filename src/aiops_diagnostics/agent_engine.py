@@ -167,6 +167,7 @@ class AgentCoordinator:
         progress_callback: ProgressCallback | None = None,
         language: str = DEFAULT_LANGUAGE,
         environment_notes: tuple[str, ...] = (),
+        history: str = "",
     ) -> None:
         self.workspace = workspace
         self.manifest = manifest
@@ -176,6 +177,11 @@ class AgentCoordinator:
         self._provider = provider
         self.language = language
         self.environment_notes = tuple(environment_notes)
+        #: Earlier completed turns of this conversation (#482), already rendered
+        #: and redacted. Empty when the run has no conversation or the window
+        #: was unreadable, which leaves every prompt below byte-identical to the
+        #: one this class built before it accepted history at all.
+        self.history = history
         self.validator = AgentResultValidator(
             manifest,
             journal,
@@ -349,7 +355,7 @@ Incident manifest:
 {incident}
 ```
 
-Available read-only evidence tools:
+{self.history}Available read-only evidence tools:
 {tools}
 {notes_block}
 Choose the smallest useful evidence set. Normally request `order_snapshot` first.

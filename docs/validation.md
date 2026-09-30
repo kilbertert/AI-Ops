@@ -7,6 +7,49 @@
 
 
 
+## #482 会话上下文窗口接上三条生成路径（2026-09-30）
+
+**这条兑现的是一份写进对外合同、已实现、已测试、却没有任何生产调用方的能力。**
+`context_turns()`（最近 8 轮或 8k token，只含已完成轮次）在 `src/` 下**零处被调用**：
+四条生成路径的 prompt 组装签名里都没有历史参数。用户在会话里追问「那它为什么跳枪」，
+模型看到的只有这一句。
+
+**改动**：新增 `conversation_context.py`（窗口 → 文本的唯一一处：确定性、已脱敏、
+按本轮语言**标注**而非翻译；无历史时返回空串），并在三条生成路径的 prompt 里插入该块：
+零阶问答、客户 RAG / 宣传卡、订单诊断（经 coordinator）。窗口上限成为配置项
+（`AIOPS_GATEWAY_CONVERSATION_MAX_TURNS` / `_MAX_TOKENS`，**默认值等于契约里的 8 / 8000**），
+因为 RAG 与宣传路径还要再被检索内容占额度，调这个权衡只能靠旋钮而不是第二份硬编码。
+
+**本次唯一的安全边界，且可证伪**：**历史为空时，三条路径的 prompt 与接线前逐字相同。**
+它以「接线只做插入、不改写」的形式断言（去掉注入块即回到原 prompt），不是「看起来没变」。
+
+**证据**：
+
+| 判据 | 用例 |
+|---|---|
+| 窗口内容按发生顺序进入块 | `test_the_window_reaches_the_block` |
+| 诊断轮次以 `summary`/`root_cause` 进入 | `test_a_diagnosis_turn_contributes_summary_and_root_cause` |
+| 生成中 / 已取消轮次不进入 | `test_in_flight_and_cancelled_turns_stay_out` |
+| 历史已脱敏 | `test_history_is_redacted` |
+| 标注随本轮语言、正文不翻译 | `test_the_labels_follow_this_turn_not_the_stored_turn` |
+| **空历史 ⇒ 提示词逐字不变** | `test_empty_history_leaves_the_zero_order_prompt_unchanged`、`test_no_history_leaves_the_diagnosis_prompt_unchanged` |
+| 三条路径都插入了历史 | `test_history_reaches_the_customer_qa_prompt` / `_promo_prompt` / `_the_diagnosis_prompt` |
+| 上限来自配置而非字面量 | `test_build_history_reads_the_configured_window` |
+
+**源码级封口** `tests/test_conversation_context_wiring.py`：三条生成路径都必须交出历史，
+读取窗口只能有一处，且读不到时必须返回「无历史」而不是让提问失败。
+**以四条变异核对过**：① 零阶线不传 ② 诊断线不传 ③ 宣传线不传 ④ 读取器去掉 try，
+各自转红。
+
+⚠️ **一条刻意保留的例外**：设备路径 `_execute_run` **不传历史**，并在守护里**具名列出**。
+`runs` 没有会话语义（PRD #410 明示不在范围内），让它经由共享默认值「顺便」长出一个，
+正是这类仓库反复收敛掉的形态。列名而不是推断，是为了让「设备路径要不要有会话」这件事
+将来必须被显式决定。
+
+**未完成业务验收**：41 上尚无真实多轮联调证据。本 PRD 的验收基线——
+「同一 `conversation_id` 连问两轮，第二轮用依赖上一轮的指代提问，拿到引用了上一轮事实的公网证据」
+——**待部署后在 41 实测**，本轮全部证据为本地协议级与源码级。
+
 ## #483 诊断线与 QA 线同构（2026-09-30）
 
 **这一条同时是 #410 的前置。** 诊断线今天对同一件事给出两种真相，且两个 bug 同一个根因：

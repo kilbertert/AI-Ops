@@ -712,6 +712,41 @@ class GatewayRuntime:
         with contextlib.suppress(ConversationError):
             self.conversation_store.release_turn(conversation_id, scope_fingerprint, turn_no)
 
+    def _conversation_history(
+        self,
+        conversation_turn: tuple[str, str, int] | None,
+        language: str,
+    ) -> str:
+        """The conversation's completed turns, as prompt text (#482).
+
+        Failures are not failures of the question: a window that cannot be read
+        yields no history, with one warning carrying the error code so the
+        split between "no history" and "history unavailable" is visible in
+        logs. Blanking the block on any exception is the same discipline the
+        Jev fallback uses — the dependency may be down without the surface
+        going down with it.
+
+        The turn being generated is answer-less, so ``context_turns()`` filters
+        it out on its own: no caller has to remember to exclude it.
+        """
+        if conversation_turn is None:
+            return ""
+        from aiops_diagnostics.conversation_context import build_history
+
+        conversation_id, scope_fingerprint, _ = conversation_turn
+        try:
+            return build_history(
+                self.conversation_store,
+                conversation_id,
+                scope_fingerprint,
+                language,
+                max_turns=self.gateway_settings.context_max_turns,
+                max_tokens=self.gateway_settings.context_max_tokens,
+            )
+        except Exception as exc:  # the question must survive a bad window
+            _LOGGER.warning("conversation history unavailable: %s: %s", type(exc).__name__, exc)
+            return ""
+
     def _turn_claim_renewer(
         self, diagnosis_id: str, conversation_turn: tuple[str, str, int] | None
     ) -> threading.Event:
@@ -908,6 +943,7 @@ class GatewayRuntime:
         # a diagnosis outlives that. The renewer stops at the terminal writes
         # below, on a stop, on expiry, or when the claim stops being ours.
         claim_stop = self._turn_claim_renewer(diagnosis_id, conversation_turn)
+        history = self._conversation_history(conversation_turn, language)
         settings = Settings.from_config(self.gateway_settings.server_config_file)
         settings.agent.run_root = self.diagnostic_settings.agent.run_root
         try:
@@ -926,6 +962,7 @@ class GatewayRuntime:
                 key_slot=key_slot,
                 scope=query_scope,
                 language=language,
+                history=history,
             )
         except (AgentRuntimeError, SourceError, ValueError) as exc:
             ok = self.store.update_standard_diagnosis(
@@ -1042,6 +1079,7 @@ class GatewayRuntime:
             _finish_turn(None, cancelled=True)
             return
         started_ms = time.monotonic()
+        history = self._conversation_history(conversation_turn, language)
         # #232 route metric: promotional card runs get their own bucket.
         route_tag = "promo" if promo_intent else "qa"
         settings = Settings.from_config(self.gateway_settings.server_config_file)
@@ -1073,6 +1111,7 @@ class GatewayRuntime:
                 promo_target=promo_target,
                 promo_intent=promo_intent,
                 turn_registrar=turn_registrar,
+                history=history,
             )
         if rag_result is not None:
             if rag_result is TERMINAL_WRITE_REFUSED:
@@ -1103,6 +1142,7 @@ class GatewayRuntime:
                 key_slot=key_slot,
                 language=language,
                 turn_registrar=turn_registrar,
+                history=history,
             )
         except (AgentRuntimeError, SourceError, ValueError) as exc:
             if not self.store.update_assistant_question(
@@ -1273,6 +1313,7 @@ class GatewayRuntime:
         promo_target: str | None = None,
         promo_intent: str | None = None,
         turn_registrar: Callable[[Any], None] | None = None,
+        history: str = "",
     ) -> dict[str, Any] | None:
         """Run the published customer agent path (T3/#170) or fall back.
 
@@ -1311,7 +1352,9 @@ class GatewayRuntime:
                     return TERMINAL_WRITE_REFUSED
                 return result
             selection = promo
-            promo_prompt_text = promo_prompt(promo, question, language=language, intent=promo_intent)
+            promo_prompt_text = promo_prompt(
+                promo, question, language=language, intent=promo_intent, history=history
+            )
         if selection is None:
             if self.agent_store is None:
                 return None
@@ -1336,6 +1379,7 @@ class GatewayRuntime:
                 language=language,
                 initial_prompt=promo_prompt_text,
                 turn_registrar=turn_registrar,
+                history=history,
             )
         except KnowledgeSearchUnavailable:
             if promo_intent:
