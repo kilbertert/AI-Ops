@@ -52,25 +52,48 @@ location ~* ^/(erp|qm|das|dis|...|upms|mall|mallapi|...)  {  # ← 公司服务�
 
 ### 1.2 公司网关本来会做什么
 
-`cloud-gateway` 的两个 `AbstractGatewayFilterFactory` 是设计好的两条注入路径：
+> 🛑 **2026-09-30 重要更正：下面这两条注入路径当前在线上都不生效。** 本节初稿读的是
+> **源码里写着的形状**（那没错），但没有核**它到底跑不跑** —— 复核后确定：
+>
+> - **`AdminProxyHeadFilter` 的函数体整段被注释掉**，只剩 `return chain.filter(exchange)`
+>   ⇒ **空操作**。`dev` / `uat` / `release` 三个分支**都一样**；线上跑的那个 jar
+>   （镜像 `20260916`）是在**注释之后**构建的。
+> - **`ApiProxyHeadFilter` 活着，但注入身份的那一段同样被注释**（`third-session` →
+>   `user-id` / `tenant-id` 全在 `//` 里）。它实际只注入 `client-type`、`saasType`，
+>   以及两条路由（`das` / `dis`）的硬编码 `dis.token`。
+> - **`AuthGlobalFilter` 的开关是关的**：网关自己的 `cloud-gateway-dev.yml` 里
+>   `cloud.auth.enable: false` ⇒ 它第一句就放行，连 token 都不读。
+>
+> ⇒ **把 AI-Ops 挂到网关之后，今天不会因此获得任何身份强制，也不会获得身份注入。**
+> 这是「别从『它是网关』推出『它注入身份』」那条判据的又一次实例。
+> **本节下面两段保留原文以存证，但阅读时按上面这段收窄。**
+> 对 D 批的影响：收益是「来源密钥的注入主体从我们自己的 nginx 换成网关」（A2 消掉），
+> **不是**「身份由公司校验」。D 的验收因此不得断言后者 —— 判据与顺序见
+> [operator-repair-blueprint.md](operator-repair-blueprint.md) §2。
+
+`cloud-gateway` 的两个 `AbstractGatewayFilterFactory` **在源码里**是设计好的两条注入路径：
 
 - **`ApiProxyHeadFilter`**（读 `client-type` + `third-session`，认 `ma` / `h5` / `app`）：
   用 `third-session` 去 `${THIRD_SESSION_BEGIN}:${third-session}`（即 `app:3rd_session:<值>`）
-  查 Redis，注入 `user-id`、`uid`、`tenant-id`、`site`、`client-type`。
+  查 Redis，注入 `user-id`、`uid`、`tenant-id`、`site`、`client-type`。**（线上该段被注释。）**
 - **`AdminProxyHeadFilter`**（读 `Authorization` + `client-type`，认 **`admin`**）：
   用 `Authorization` 的令牌值去 `base_oauth:access:<tokenValue>` 查 Redis，
   从令牌的 `additionalInformation` 注入 **`user-id`、`admin-id`、`tenant-id`、`site`**，
-  并顺带设 `saasType: STANDARD`。
+  并顺带设 `saasType: STANDARD`。**（线上整个方法体被注释。）**
 
-**第二条正是管家端需要的**：管家端浏览器的存储键是 **`CLOUD_ACCESS_TOKEN`**（OAuth2），
-它发的 `client-type` 实测正是 **`admin`**。也就是说公司网关会把「管家端的一个 OAuth2
-令牌」翻译成 `user-id` + `tenant-id` —— AI-Ops 现在做的那一大段（读共享 Redis →
+**第二条在源码层面正是管家端需要的**：管家端浏览器的存储键是 **`CLOUD_ACCESS_TOKEN`**（OAuth2），
+它发的 `client-type` 实测正是 **`admin`**。也就是说**若它启用**，公司网关会把「管家端的一个
+OAuth2 令牌」翻译成 `user-id` + `tenant-id` —— AI-Ops 现在做的那一大段（读共享 Redis →
 按前缀拼键 → 解 Java 序列化载荷 → 补 B 端主体），**大部分是在重抄这一步**。
+⚠️ 但**它没有启用**（见上），所以这句只在设计层面成立，不构成「接进去就不用做身份」的依据。
 
 ### 1.3 于是有了一句可执行的判据
 
 > **AI-Ops 应当挂在 `cloud-gateway` 之后，作为它的一个下游服务。**
 > `X-Business-Entry` 应当由**受信的那一跳**决定，而不是由调用方自报。
+> ⚠️ **但这一跳今天不是「公司的身份强制」**（§1.2 的更正）：挂过去拿到的是
+> **一个调用方到不了的位置**，而不是一个「被公司校验过的身份」。判据仍然成立，
+> 只是它的**理由要换** —— 见 §1.2 顶部那段。
 > 只要 `/v1/` 还写在网关之前，本仓的一切「入口判定」都是在替网关做它没做的工作。
 
 ⭐ 本轮**不改**这条部署拓扑（那是一次入口变更，要有自己的验收与回滚路径）。
