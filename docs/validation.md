@@ -29,10 +29,17 @@
 | 返回类型处处是对象、工厂体内不再出现字符串返回 | `test_the_decision_object_is_what_every_surface_receives` |
 | 三个身份名都由工厂产出，没有第二份实现 | `test_the_identity_dependencies_come_from_one_factory` |
 | **三个身份各自绑定正确的认证依赖** | `test_each_identity_carries_the_scope_its_surface_requires` |
+| **每个端点请求的是承载其 scope 的那个身份** | `test_each_surface_asks_for_the_identity_that_carries_its_scope` |
 
 **三条变异核对**：① 快捷动作分支改回 `str(decision.platform)` ⇒ 转红；
-② 借用 `faq_identity` 的正是 `assistant_identity` 的注释（scope 差异的理由）—— 该理由保留在绑定处；
-③ **某个身份换错认证依赖**（`faq_identity` 绑到 diagnosis 依赖）⇒ 转红。
+② **某个身份换错认证依赖**（`faq_identity` 绑到 diagnosis 依赖）⇒ 转红；
+③ **某个端点改用另一个身份名**（`list_shortcuts` 用 `faq_identity`）⇒ 转红。
+
+第 ③ 条是第一轮评审**没有**覆盖的形态（Devin 指出记录里对它的「核对」其实只是一句注释，
+现有用例只检查身份绑定、不检查端点用哪个身份）。补上端点级断言后它才真的会转红 ——
+而且这是更可能的失误：**依赖名写在端点上，离它承载的 scope 很远**。
+那条映射按**处理函数名**索引而不是路径：`/v1/shortcuts` 同时服务列表（要平台判定）
+与创建（只要管理 scope），按路径索引会把正确的处理函数报成越界。
 
 ⚠️ **一条自己踩的坑，记在这里**：改这段时一次 `python` 替换把 **`/health` 路由整段删掉了**
 （片段边界选在了 `@app.get("/v1/faq/recommendations")`，而健康检查正好在它前面）。是 ruff 报

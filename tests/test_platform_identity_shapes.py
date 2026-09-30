@@ -220,3 +220,54 @@ def test_each_identity_carries_the_scope_its_surface_requires() -> None:
     }
     for name, dependency in expected.items():
         assert dependency in bindings[name], f"{name} is bound to {bindings[name]}, expected {dependency}"
+
+
+#: Which identity each handler must ask for, keyed by HANDLER NAME. Not by path:
+#: `/v1/shortcuts` serves both the listing (which needs the platform decision)
+#: and creation (which needs only the manage scope), so a path-keyed map would
+#: report a correct handler as an offender. The scope differences only matter if
+#: the right handler gets the right identity, and swapping two leaves every
+#: other assertion here green: the three come from one factory, so they answer
+#: identically on every input the tests above drive.
+SURFACE_HANDLERS = {
+    "faq_recommendations": "faq_identity",
+    "faq_catalog": "faq_identity",
+    "faq_answer": "faq_identity",
+    "assistant_questions": "assistant_identity",
+    "list_assistant_questions": "assistant_identity",
+    "get_assistant_question": "assistant_identity",
+    "cancel_assistant_question": "assistant_identity",
+    "list_shortcuts": "shortcut_identity",
+}
+
+
+def test_each_surface_asks_for_the_identity_that_carries_its_scope() -> None:
+    """The endpoints, not just the bindings: which identity each one depends on.
+
+    This is the half that a swap would break. Binding the factory to the wrong
+    caller dependency is caught by the test above; handing a surface the wrong
+    identity is caught here — and it is the more likely slip, because the
+    dependency is named at the endpoint, far from the scope it carries.
+    """
+    tree = ast.parse((SOURCE_ROOT / API_FILE).read_text(encoding="utf-8"))
+    app = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "create_gateway_app"
+    )
+    offenders: list[str] = []
+    for node in ast.walk(app):
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        expected = SURFACE_HANDLERS.get(node.name)
+        if expected is None:
+            continue
+        uses = {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+        if expected not in uses:
+            offenders.append(f"{API_FILE}:{node.lineno} {node.name} does not use {expected}")
+    # A handler listed here that no longer exists means this map has gone stale
+    # and is silently checking nothing for that surface.
+    present = {node.name for node in ast.walk(app) if isinstance(node, ast.FunctionDef)}
+    missing = sorted(set(SURFACE_HANDLERS) - present)
+    assert missing == [], f"these mapped handlers are gone: {missing}"
+    assert offenders == [], "; ".join(offenders)
