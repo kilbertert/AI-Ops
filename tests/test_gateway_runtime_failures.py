@@ -27,6 +27,11 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
+from aiops_diagnostics.faq import (
+    FAQCatalog,
+    PlatformIdentityResolver,
+    PlatformRoleRecord,
+)
 from aiops_diagnostics.gateway_api import create_gateway_app
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_store import GatewayStore
@@ -77,6 +82,19 @@ class _Runtime:
     start_promo_qa = staticmethod(_boom)
 
 
+class _Directory:
+    """A single platform role, so the platform decision resolves and the call
+    reaches the runtime guard instead of failing at the identity stage."""
+
+    def roles_for_c_user(self, c_user_id: str, tenant_id: str):
+        del c_user_id, tenant_id
+        return (PlatformRoleRecord("B-1", "C-1", "T-1", "admin"),)
+
+    def roles_for_b_user(self, b_user_id: str, tenant_id: str):
+        del b_user_id, tenant_id
+        return ()
+
+
 class _Authorizer:
     """Allows everything, so the call reaches the runtime guard under test."""
 
@@ -114,13 +132,24 @@ def _client(tmp_path: Path) -> TestClient:
             runtime=_Runtime(),  # type: ignore[arg-type]
             caller_resolver=_Caller(),  # type: ignore[arg-type]
             order_authorizer=_Authorizer(),  # type: ignore[arg-type]
+            platform_resolver=PlatformIdentityResolver(_Directory()),  # type: ignore[arg-type]
+            faq_catalog=FAQCatalog.bundled(),
         )
     )
 
 
-def _runtime_guards() -> list[ast.ExceptHandler]:
-    """Every `except (ValueError, RuntimeError)` block in the gateway."""
-    tree = ast.parse((SOURCE_ROOT / API_FILE).read_text(encoding="utf-8"))
+def _api_tree() -> ast.Module:
+    return ast.parse((SOURCE_ROOT / API_FILE).read_text(encoding="utf-8"))
+
+
+def _runtime_guards(tree: ast.Module | None = None) -> list[ast.ExceptHandler]:
+    """Every `except (ValueError, RuntimeError)` block in the gateway.
+
+    Takes the tree so a caller can resolve a guard's enclosing function: nodes
+    from two separate parses of the same file are not the same objects, and the
+    lookup would silently report every guard as module-level.
+    """
+    tree = tree if tree is not None else _api_tree()
     return [
         node
         for node in ast.walk(tree)
@@ -139,40 +168,55 @@ def test_the_guard_enumeration_finds_the_runtime_surface() -> None:
 
 
 def test_a_runtime_failure_still_answers_the_documented_503(tmp_path: Path) -> None:
-    """The response is unchanged: same status, code and message as before.
+    """The response is unchanged: the exact status, code, message and retry flag.
 
-    One call per guarded surface. The point is not the individual codes — it is
-    that routing them through a renderer did not quietly change what any caller
-    sees, which is what a "while I am here" edit usually does.
+    Pinned per surface rather than as "some `*_UNAVAILABLE` code": routing these
+    through a renderer must not have moved a code, softened a message or dropped
+    `retryable`, and a loose assertion would accept all three.
+
+    The surfaces are the ones that actually reach the renderer. `/v1/conversations`
+    is deliberately absent: it fails earlier, inside the platform decision, so it
+    would answer `PLATFORM_UNAVAILABLE` and prove nothing about this change.
     """
     client = _client(tmp_path)
-    headers = {"Authorization": "Bearer token"}
-    observed: dict[str, tuple[int, str]] = {}
+    headers = {"Authorization": "Bearer token", "X-Business-Entry": "consumer"}
+    observed: dict[str, tuple[int, str, str, bool]] = {}
     for path, payload in (
         ("/v1/assistant/questions", {"question": "q"}),
-        ("/v1/conversations", {"agent_version_key": "agt_abcdef1234567890#v1"}),
         ("/v1/health-report-jobs", {"order_no": "O-1"}),
         ("/v1/standard/diagnoses", {"order_no": "O-1", "question": "q"}),
     ):
         response = client.post(path, headers=headers, json=payload)
-        body = response.json().get("error", {})
-        observed[path] = (response.status_code, body.get("code", ""))
-    assert all(status == 503 for status, _ in observed.values()), observed
-    assert all(code.endswith("_UNAVAILABLE") for _, code in observed.values()), observed
+        body = response.json()["error"]
+        observed[path] = (
+            response.status_code,
+            body["code"],
+            body["message"],
+            body["retryable"],
+        )
+    assert observed == {
+        # A plain question on the consumer entry takes the qa branch; the other
+        # two are the report and diagnosis starts.
+        "/v1/assistant/questions": (503, "QA_UNAVAILABLE", "general answer unavailable", True),
+        "/v1/health-report-jobs": (503, "REPORT_JOB_UNAVAILABLE", "health report job unavailable", True),
+        "/v1/standard/diagnoses": (503, "DIAGNOSIS_UNAVAILABLE", "diagnosis unavailable", True),
+    }, observed
 
 
 def test_the_failure_reaches_the_log_not_only_the_response(tmp_path: Path, caplog) -> None:
-    """The whole point: `str(exc)` becomes visible to an operator.
+    """The point of the change: an operator can tell WHICH failure this was.
 
-    Asserted on the record's logger name as well as its text — a wrong logger
-    name still propagates to the root handler caplog owns, so naming a logger
-    that does not exist would pass while claiming to pin this one.
+    What is recorded is the exception type, not its message — see the renderer's
+    docstring for why. So the assertion is that the type and the code are both
+    present, and that the message is **not** (a message can quote a field
+    contract or a failed statement, and `redact_text` is pattern-based: it
+    removes credential shapes, not free-form text).
     """
     client = _client(tmp_path)
     with caplog.at_level(logging.WARNING, logger=LOGGER_NAME):
         client.post(
             "/v1/health-report-jobs",
-            headers={"Authorization": "Bearer token"},
+            headers={"Authorization": "Bearer token", "X-Business-Entry": "consumer"},
             json={"order_no": "O-1"},
         )
     records = [record for record in caplog.records if "runtime failure" in record.getMessage()]
@@ -180,11 +224,13 @@ def test_the_failure_reaches_the_log_not_only_the_response(tmp_path: Path, caplo
     # The renderer's own logger, not some other module's — a wrong name here
     # would still propagate to caplog's root handler and read as covered.
     assert records[0].name == LOGGER_NAME, records[0].name
-    assert "provider rejected" in records[0].getMessage()
-    assert "ValueError" in records[0].getMessage()
-    # A credential-shaped string in the upstream's message must not survive.
-    assert SECRET_SHAPE not in records[0].getMessage()
-    assert "REDACTED" in records[0].getMessage()
+    message = records[0].getMessage()
+    assert "REPORT_JOB_UNAVAILABLE" in message
+    assert "ValueError" in message
+    # The message itself must not be echoed — free-form text is not redactable
+    # by pattern, and an exception message is written by whoever raised it.
+    assert SECRET_SHAPE not in message
+    assert "provider rejected" not in message
 
 
 def test_the_log_carries_no_request_or_user_text(tmp_path: Path, caplog) -> None:
@@ -198,7 +244,7 @@ def test_the_log_carries_no_request_or_user_text(tmp_path: Path, caplog) -> None
     with caplog.at_level(logging.WARNING, logger=LOGGER_NAME):
         client.post(
             "/v1/assistant/questions",
-            headers={"Authorization": "Bearer token"},
+            headers={"Authorization": "Bearer token", "X-Business-Entry": "consumer"},
             json={"question": question, "order_no": "2096164064667852801"},
         )
     logged = " ".join(record.getMessage() for record in caplog.records if record.name == LOGGER_NAME)
@@ -208,48 +254,64 @@ def test_the_log_carries_no_request_or_user_text(tmp_path: Path, caplog) -> None
     assert "Bearer token" not in logged
 
 
+#: Runtime guards that answer something OTHER than "a dependency is down", each
+#: with the reason. Default-deny: a guard that is not listed here must raise
+#: through the renderer. An allowlist rather than a shape test, because the
+#: defect was a guard that stopped calling it — and "it raises something named"
+#: accepts exactly that.
+NON_503_GUARDS = {
+    # The classifier's outermost handler treats any escape as "no decision" and
+    # returns None (it logs, and deliberately records no metric); it answers no
+    # caller and has no 503 to render.
+    "_classify_for_routing",
+    # Agent debug-run answers 502 with its own public message: the shape is the
+    # contract for this surface (`_debug_public_error`).
+    "debug_run_agent",
+    # Metrics input validation: a 422 for a caller-supplied argument, not a
+    # dependency failure.
+    "agent_metrics_summary",
+    "agent_metrics_runs",
+}
+
+
+def _enclosing_function(tree: ast.Module, target: ast.AST) -> str:
+    parents = {child: parent for parent in ast.walk(tree) for child in ast.iter_child_nodes(parent)}
+    cur: ast.AST | None = target
+    while cur is not None and cur in parents:
+        cur = parents[cur]
+        if isinstance(cur, ast.FunctionDef):
+            return cur.name
+    return "<module>"
+
+
 def test_every_runtime_guard_goes_through_the_one_renderer() -> None:
     """No guard renders its own 503 and drops the exception.
 
-    The defect was a *missing* call, which no response test can see: the answer
-    is correct either way. So the rule is checked at the source — each guard's
-    body must raise through the renderer, and the renderer itself must be the
-    only place that maps a runtime failure to 503 with `retryable=True`.
+    The defect was a *missing* call, which no response test can see — the answer
+    is correct either way. Default-deny, so a guard that stops calling the
+    renderer (the actual regression) fails here even though it still raises
+    something, and a _new_ guard cannot be added without either calling it or
+    being listed with a reason.
     """
+    tree = _api_tree()
     offenders: list[str] = []
-    for handler in _runtime_guards():
-        raises = [
-            node
+    for handler in _runtime_guards(tree):
+        owner = _enclosing_function(tree, handler)
+        calls = {
+            getattr(node.func, "id", "") or getattr(node.func, "attr", "")
             for node in ast.walk(handler)
-            if isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call)
-        ]
-        if not raises:
+            if isinstance(node, ast.Call)
+        }
+        if RENDERER in calls:
             continue
-        for node in raises:
-            assert isinstance(node.exc, ast.Call)
-            called = getattr(node.exc.func, "id", "")
-            # A guard may also raise a *different* error deliberately (a 404 for
-            # an out-of-scope order, say); only the 503-shaped ones are ours.
-            renders_503 = any(
-                getattr(arg, "attr", "") == "HTTP_503_SERVICE_UNAVAILABLE" for arg in node.exc.args
+        if owner not in NON_503_GUARDS:
+            offenders.append(
+                f"{API_FILE}:{handler.lineno} {owner} guards a runtime failure"
+                f" without going through {RENDERER} (and is not an allowed exception)"
             )
-            if renders_503:
-                offenders.append(f"{API_FILE}:{node.lineno} renders its own 503")
-            elif called not in {RENDERER} and not _is_unrelated(node.exc):
-                # Neither the renderer nor a documented other error.
-                offenders.append(f"{API_FILE}:{node.lineno} raises {called}() from a runtime guard")
     assert offenders == [], "; ".join(offenders)
-
-
-def _is_unrelated(call: ast.Call) -> bool:
-    """Whether this raise is a different, deliberate contract answer.
-
-    The guards catch `(ValueError, RuntimeError)` broadly, so some of them
-    translate a *domain* error to its own status (a 422 for invalid metrics
-    input, a 404 for an unknown run). Those are not the failure this ticket is
-    about and must not be dragged into it.
-    """
-    name = getattr(call.func, "id", "")
-    if name in {"StandardAPIError", "HTTPException"}:
-        return True
-    return bool(name)
+    # A listed exception that no longer exists hides a guard that should be
+    # checked; the list is part of the guard, so it is checked too.
+    present = {node.name for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)}
+    stale = sorted(set(NON_503_GUARDS) - present)
+    assert stale == [], f"these allowlisted guards are gone: {stale}"

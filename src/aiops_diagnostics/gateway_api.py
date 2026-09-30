@@ -2814,33 +2814,33 @@ _RUNTIME_FAILURE_MESSAGE = "runtime dependency unavailable"
 
 
 def _runtime_unavailable(code: str, message: str, exc: Exception) -> StandardAPIError:
-    """Render a runtime failure as the 503 the contract promises, and log it.
+    """Render a runtime failure as the 503 the contract promises, and record it.
 
-    `docs/standard-api-contract.md` says internal failure detail goes to the
-    sanitised log rather than into the response. The 12 copies this replaces did
-    the first half — they rendered a stable 503 — and dropped `exc` on the floor:
-    the error type, and the message the upstream or the runtime actually raised,
-    reached nobody. So a misconfigured field, an unreachable upstream and a
-    genuine provider outage all produced the same sentence, with nothing anywhere
-    to tell a operator which one they were looking at.
+    The contract (`docs/standard-api-contract.md:355-356`) says internal failure
+    detail goes to the sanitised log and that the response carries no exception
+    type, SQL, absolute path, password or raw upstream response. The 12 copies
+    this replaces did the second half and dropped `exc` entirely: a misconfigured
+    field, an unreachable upstream and a provider outage read identically in the
+    response (correct, by contract) **and in the log** (the defect).
 
-    The response is unchanged, deliberately: the contract promises "a stable
-    503", and turning this into a diagnostic channel is a different decision.
-    Only the log gains the detail.
+    What is logged is **the exception type and the failure's own vocabulary** —
+    never `str(exc)`. That is the narrower choice, and it is deliberate:
 
-    `str(exc)` is passed through `redact_text` before it is written: an exception
-    message is the one string here that came from outside this process, and this
-    repository's discipline is that external text is redacted at every boundary
-    it crosses.
+    * `redact_text` is pattern-based. It removes credential *shapes*; it does not
+      remove free-form text, and a `SourceError` may quote a field contract or a
+      backend response while an upstream driver's message may quote the statement
+      that failed. Passing those through would put request-adjacent content into
+      gateway logs, which is the very thing the contract forbids.
+    * The type plus the error code is what tells an operator which failure they
+      are looking at: `SourceError`/`MYSQL_UNAVAILABLE` is a backend problem,
+      `AgentRuntimeError`/`PROVIDER_UNAVAILABLE` is a provider problem. That is
+      the whole diagnostic question this ticket exists to answer.
+
+    The response body is byte-identical to before, on purpose: the contract
+    promises "a stable 503", and turning this into a diagnostic channel for
+    callers is a different decision that nobody has made.
     """
-    from aiops_diagnostics.redaction import redact_text
-
-    _LOGGER.warning(
-        "runtime failure -> %s (%s): %s",
-        code,
-        type(exc).__name__,
-        redact_text(str(exc)),
-    )
+    _LOGGER.warning("runtime failure -> %s (%s)", code, type(exc).__name__)
     return StandardAPIError(
         status.HTTP_503_SERVICE_UNAVAILABLE,
         code,
