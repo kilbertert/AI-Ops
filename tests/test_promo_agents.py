@@ -49,6 +49,130 @@ def test_promo_intent_cues_are_narrow() -> None:
     assert promo_intent_from_text("") is None
 
 
+def test_case_intent_is_recognised_without_the_word_customer() -> None:
+    """`重卡充电案例` must route to cases (#413, measured on 41).
+
+    The cue table only matched 「客户案例」and friends, so a user who named a
+    case but not a *customer's* case fell through to FAQ — on 41 that was
+    `consumer.faq.q009` ("how do I bind an RFID card") for a question about
+    heavy-truck charging cases. The word 「案例」 alone carries the intent in
+    Chinese; the miss was the cue table's spelling, not the intent's absence.
+    """
+    assert promo_intent_from_text("重卡充电案例") == "case_exploration"
+    assert promo_intent_from_text("有什么案例") == "case_exploration"
+    assert promo_intent_from_text("新加坡无人电动巴士案例") == "case_exploration"
+
+
+def test_a_scenario_word_plus_方案_is_a_solution_intent() -> None:
+    """`港口集卡方案` — a scenario word makes the bare 「方案」specific enough.
+
+    This is deliberately narrower than adding 「方案」to the cue table: bare
+    "方案" belongs to ordinary support ("我的充电方案是什么" asks about the
+    user's own charging arrangement). Requiring a scenario word is what keeps
+    the two apart, so both directions are asserted here.
+    """
+    assert promo_intent_from_text("港口集卡方案") == "solution_discovery"
+    assert promo_intent_from_text("重卡充电桩的方案") == "solution_discovery"
+    # Without a scenario word it stays ordinary support wording.
+    assert promo_intent_from_text("有什么方案") is None
+    # 🔴 A scenario word is NOT enough on its own: 「重卡」satisfies the scenario
+    # list, but 「我的重卡充电方案」asks about the speaker's OWN arrangement —
+    # same shape as 「我的充电方案是什么」. The possessive marker is what tells
+    # them apart, so both directions are pinned here.
+    assert promo_intent_from_text("我的充电方案是什么") is None
+    assert promo_intent_from_text("我的重卡充电方案是什么") is None
+    assert promo_intent_from_text("我的港口集卡方案应该怎么配") is None
+
+
+def test_no_ordinary_support_wording_enters_the_promotional_path() -> None:
+    """The #413 blast radius, asserted on the real catalog and corpus.
+
+    #408's first cut put these intents into the FAQ suppression set and the
+    cost was a whole class of false positives — the catalog's OWN titles (q010's
+    "Guide", q023's "SOP") started reading as promos. That is why the fix lives
+    here, and why this test pins the boundary with real data rather than a
+    hand-written list: no catalog question, no prefixed catalog title, and no
+    support question from the 86-question corpus may reach the promo path.
+    """
+    catalog = FAQCatalog.bundled()
+    titles: list[str] = []
+    for platform in ("consumer", "operator"):
+        for row in catalog.catalog(platform):
+            titles.append(str(row["question"]))
+            # 目录自己的标题变体也要过一遍 —— #408 那次误伤正是从变体里出来的
+            # （给 q010 的标题加个前缀就变成了宣传卡片）。
+            titles.extend(catalog.title_variants(platform, str(row["question_id"])))
+    assert titles, "目录为空说明加载方式变了，这条用例会失去意义"
+
+    prefixes = ("请告诉我", "我想知道", "请说明", "Please show me the ", "Tell me about the ")
+    variants = list(titles) + [prefix + title for title in titles for prefix in prefixes]
+    offenders = [variant for variant in variants if promo_intent_from_text(variant)]
+    assert offenders == [], f"目录标题或其变体被宣传 cue 截走：{offenders[:5]}"
+
+    # 语料**就地加载**，不是抄一份清单 —— 清单会随语料变化失真，而这条用例的
+    # 全部意义就是「真实语料里不许有支持类问题被误判」（评审指出初版只查手写清单）。
+    corpus = json.loads(
+        (Path(__file__).resolve().parents[1] / "docs" / "jev-recalibration-corpus.json").read_text("utf-8")
+    )
+    questions = corpus["questions"]
+    assert len(questions) >= 86, f"语料规模变了（{len(questions)} 条），这条用例的前提要重核"
+
+    # 这 14 条是**已知宣传意图**的（#413 的目标 + 既有命中）：它们**必须命中**，
+    # 且语料里**只有**它们可以命中。两个方向都断言 —— 只查"多出来的"会漏掉
+    # 「某个已知宣传说法**不再**命中」这种回归（评审指出）。
+    expected_promo = {
+        "有什么案例": "case_exploration",
+        "新加坡无人电动巴士案例": "case_exploration",
+        "重卡充电案例": "case_exploration",
+        "港口集卡方案": "solution_discovery",
+        "我想看看客户案例": "case_exploration",
+        "有没有公交充电的客户案例": "case_exploration",
+        "我想看看新加坡无人巴士的客户案例": "case_exploration",
+        "重卡充电客户案例": "case_exploration",
+        "给我看看行业解决方案": "solution_discovery",
+        "我想发现行业解决方案": "solution_discovery",
+        "I would like to see customer cases": "case_exploration",
+        "Show me industry solutions": "solution_discovery",
+        "I'd like to see customer cases": "case_exploration",
+        "Show me a customer case": "case_exploration",
+    }
+    # 方向零：**上表里的问句必须仍在这份语料里**。否则语料换掉一条时，
+    # 下面两个方向都在测一组**不在语料中的**句子，而用例照样通过 ——
+    # 那样它证明的是"这 14 句能命中"，不是"语料里这 14 句能命中"。
+    absent = sorted(set(expected_promo) - set(questions))
+    assert absent == [], f"下列问句已不在语料里，请重核期望表：{absent}"
+
+    # 方向一：**不该命中的不许命中**。
+    offenders = [
+        question
+        for question in questions
+        if promo_intent_from_text(question) and question not in expected_promo
+    ]
+    # 方向二：**该命中的不许漏**（且意图要对）—— 缺了它，一个已知说法悄悄不再命中
+    # 时这条用例仍会通过，而它声称的是"恰好相等"。
+    missing = [
+        f"{question} -> {promo_intent_from_text(question)!r}（期望 {intent!r}）"
+        for question, intent in expected_promo.items()
+        if promo_intent_from_text(question) != intent
+    ]
+    assert missing == [], f"语料里已知的宣传说法不再命中：{missing}"
+    assert offenders == [], f"语料里出现预期之外的宣传命中：{offenders}"
+
+    support_questions = (
+        "充电卡怎么绑定",
+        "夏季高温天气充电注意什么",
+        "充电桩出现E01故障代码应该如何处理",
+        "磷酸铁锂电池平时怎么保养充电才比较延长寿命",
+        "充电桩图片怎么安装？",
+        "充电桩怎么拔枪？有没有演示视频",
+        "充电协议握手失败如何定位？",
+        "重卡充电桩流量平台海报",
+        "我的重卡充电方案是什么",
+    )
+    for question in support_questions:
+        assert promo_intent_from_text(question) is None, question
+
+
 def test_scenario_keywords_steer_search() -> None:
     assert scenario_keywords("港口充电有没有案例") == ["港口"]
     assert "重卡" in scenario_keywords("重卡车队的解决方案")
