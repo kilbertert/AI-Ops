@@ -927,7 +927,13 @@ LOCAL_KEY = "local-signing-key-for-tests"
 
 
 def _local_settings(**overrides: Any) -> CompanyTokenSettings:
-    fields: dict[str, Any] = {"signature_key": LOCAL_KEY}
+    """默认构造**严格模式**（验签 + 判 exp）—— 既有用例测的都是那条路。
+
+    ⚠️ 生产默认已改为**公司一致模式**（不验签、不判 `exp`，见 ``CompanyTokenSettings``）；
+    两个默认值不同是有意的：**默认面向生产口径，测试默认面向严格口径**，
+    这样「更严那条路」始终有覆盖。
+    """
+    fields: dict[str, Any] = {"signature_key": LOCAL_KEY, "trust_company_payload": False}
     fields.update(overrides)
     return CompanyTokenSettings(**fields)
 
@@ -1191,3 +1197,108 @@ def test_the_two_rejection_reasons_are_distinguishable_in_the_log(
             platform_entry="operator",
         )
     assert any("reason=signature_mismatch" in r.message for r in caplog.records)
+
+
+# --- 公司一致模式（trust_company_payload=True，生产默认） ----------------------
+#
+# 来由：公司侧**既不验签也不判 exp**（41 实测，见 validation.md），按载荷里的 `id` 查用户。
+# 前端用户长时间停留、不重登，而公司接口接受已过期令牌 —— 两边判据不同会让
+# 「公司能用、AI-Ops 401」。用户裁定按公司口径，故这是**生产默认**。
+#
+# 这组用例钉住三件事：不验签被接受、过期被接受、**身份字段仍必须齐备**（防线后移后剩下的那一层）。
+
+
+def _parity_settings(**overrides: Any) -> CompanyTokenSettings:
+    fields: dict[str, Any] = {"signature_key": LOCAL_KEY, "trust_company_payload": True}
+    fields.update(overrides)
+    return CompanyTokenSettings(**fields)
+
+
+def _parity_resolver(**overrides: Any) -> CompanyTokenCallerResolver:
+    return CompanyTokenCallerResolver(
+        _parity_settings(**overrides), mysql_settings(), scope_mapper_factory=lambda _s: _Mapper()
+    )
+
+
+def test_company_parity_accepts_a_token_with_a_garbage_signature() -> None:
+    """**这就是公司一致模式的定义**：签名不看（公司也不看）。"""
+    context = _parity_resolver().resolve(
+        _jwt(_valid_claims(), key="any-key-at-all"),
+        required_scope="aiops:orders:read",
+        platform_entry="operator",
+    )
+    assert context.subject.b_user_id == B_USER_ID
+
+
+def test_company_parity_accepts_an_expired_token() -> None:
+    """过期不看（公司也不看）—— 这正是前端那类长时间停留会话能用的原因。"""
+    context = _parity_resolver().resolve(
+        _jwt(_valid_claims(exp=int(time.time()) - 86400)),
+        required_scope="aiops:orders:read",
+        platform_entry="operator",
+    )
+    assert context.subject.b_user_id == B_USER_ID
+
+
+def test_company_parity_accepts_a_token_without_expiry() -> None:
+    claims = _valid_claims()
+    claims.pop("exp")
+    context = _parity_resolver().resolve(
+        _jwt(claims), required_scope="aiops:orders:read", platform_entry="operator"
+    )
+    assert context.subject.b_user_id == B_USER_ID
+
+
+def test_company_parity_still_requires_a_well_formed_token() -> None:
+    """防线后移，但**没消失**：非三段结构仍拒。"""
+    with pytest.raises(CallerAuthError):
+        _parity_resolver().resolve("not-a-jwt", required_scope="aiops:orders:read", platform_entry="operator")
+
+
+def test_company_parity_still_requires_identity_fields() -> None:
+    """缺 `id` / `tenant_id` 仍拒 —— 这是后移之后剩下的那层判据。"""
+    claims = _valid_claims()
+    claims.pop("id")
+    with pytest.raises(CallerAuthError):
+        _parity_resolver().resolve(
+            _jwt(claims), required_scope="aiops:orders:read", platform_entry="operator"
+        )
+
+
+def test_company_parity_still_rejects_a_non_hs256_header() -> None:
+    """`alg` 仍必须显式 HS256 —— 这条不因「不验签」而放宽（否则连 `none` 都收）。"""
+    with pytest.raises(CallerAuthError):
+        _parity_resolver().resolve(
+            _jwt(_valid_claims(), alg="none"),
+            required_scope="aiops:orders:read",
+            platform_entry="operator",
+        )
+
+
+def test_the_strict_mode_is_reachable_from_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
+    """严格模式必须**能从配置切回**（评审指出：此前只有代码默认值，生产切不回去）。
+
+    判据走真实环境变量路径，而不是直接构造 dataclass —— 后者绕开了读者真正会用的那条路。
+    """
+    from aiops_diagnostics.gateway_config import GatewayServerSettings
+
+    monkeypatch.setenv("AIOPS_GATEWAY_COMPANY_TRUST_PAYLOAD", "0")
+    assert GatewayServerSettings.from_env().trust_company_payload is False
+    monkeypatch.setenv("AIOPS_GATEWAY_COMPANY_TRUST_PAYLOAD", "1")
+    assert GatewayServerSettings.from_env().trust_company_payload is True
+    monkeypatch.delenv("AIOPS_GATEWAY_COMPANY_TRUST_PAYLOAD", raising=False)
+    assert GatewayServerSettings.from_env().trust_company_payload is True  # 未设 = 公司一致
+
+
+@pytest.mark.parametrize("value", ["0", "false", "no", "off", "disable", "DISABLED"])
+def test_every_documented_off_value_disables_the_company_parity_mode(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    """**显式关闭的取值要收全**：只认一小撮时，运维写 `off` 会静默保持公司一致。
+
+    这是本仓反复出现的「配了但静默不生效」形态，所以逐个取值都钉一条。
+    """
+    from aiops_diagnostics.gateway_config import GatewayServerSettings
+
+    monkeypatch.setenv("AIOPS_GATEWAY_COMPANY_TRUST_PAYLOAD", value)
+    assert GatewayServerSettings.from_env().trust_company_payload is False, value

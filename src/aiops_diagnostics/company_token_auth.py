@@ -163,6 +163,10 @@ class CompanyTokenSettings:
     #: 本地校验模式的签名密钥（A2 / #448）。**与远端模式互斥**：两者都配即启动失败，
     #: 因为「谁来断言这条令牌」只能有一个答案。
     signature_key: str = field(repr=False, default="")
+    #: **是否按公司自己的判据认令牌**（默认 True = 公司一致）：公司既不验签、也不判 `exp`，
+    #: 按载荷里的 `id` 查用户（41 实测，见 ``validation.md``）。设 False 则回到「验签 + 判 exp」
+    #: 的更严模式 —— 那是安全上更可取、但与公司不一致的行为。用户裁定按公司口径，故默认 True。
+    trust_company_payload: bool = True
 
     def validate(self) -> None:
         if self.signature_key:
@@ -347,7 +351,11 @@ class CompanyTokenCallerResolver:
             # 本地校验模式（A2 / #448）：按 HS256 验签后**直接从令牌读声明**，不调用任何上游。
             # ⚠️ 这条模式把「令牌有效」的断言从公司那一跳搬到了本进程，因此它的前提是**签名密钥
             # 本身是秘密**。密钥是配置项（``AIOPS_GATEWAY_COMPANY_JWT_KEY``），不进仓库、不进日志。
-            return _claims_from_signed_jwt(token, self.settings.signature_key)
+            return _claims_from_signed_jwt(
+                token,
+                self.settings.signature_key,
+                trust_company_payload=self.settings.trust_company_payload,
+            )
 
         payload = request_json(
             RequestSpec(
@@ -382,18 +390,23 @@ class CompanyTokenCallerResolver:
         return payload
 
 
-def _claims_from_signed_jwt(token: str, key: str) -> Mapping[str, Any]:
+def _claims_from_signed_jwt(token: str, key: str, *, trust_company_payload: bool = True) -> Mapping[str, Any]:
     """本地按 HS256 校验公司 JWT 并取回声明（A2 / #448 的第二条通道）。
 
     与远端 ``check_token`` 的差别**只在「谁断言令牌有效」**：这里由本进程用共享密钥验签，
     其余字段解读完全共用（``_subject_from_claims`` / ``_shop_ids_from_claims``）。
 
     **必须验签，不能只解 base64**：不验签的话任何人都能自造一份 ``id`` 声明，等于把身份交给
-    调用方自报 —— 与 ADR-0009 那条「不得由请求体推导身份」直接冲突。
+    调用方自报。
 
-    失败一律 fail closed：结构不是三段、``alg`` 不是 HS256、签名不符、``exp`` 已过，
-    四种都拒。``alg`` 必须**显式等于 HS256**，不接受 ``none``，也不按令牌自报的算法选实现
-    （那正是 JWT 算法混淆的入口）。
+    **两种模式，由 ``trust_company_payload`` 决定**：
+
+    - **True（生产默认）= 公司一致**：不验签、不判 ``exp`` —— 与公司接口行为一致。
+      失败仍 fail closed：结构不是三段、``alg`` 不是 HS256。
+    - **False = 严格模式**：额外验签 + 判 ``exp``。
+
+    两模式共同保留的判据：``alg`` 必须**显式等于 HS256**，不接受 ``none``，
+    也不按令牌自报的算法选实现（那正是 JWT 算法混淆的入口）。
     """
     parts = token.split(".")
     if len(parts) != 3:
@@ -405,29 +418,41 @@ def _claims_from_signed_jwt(token: str, key: str) -> Mapping[str, Any]:
         raise CallerAuthError("company token header is invalid", code=CALLER_AUTH_INVALID) from exc
     if not isinstance(header, Mapping) or header.get("alg") != "HS256":
         raise CallerAuthError("company token algorithm is not accepted", code=CALLER_AUTH_INVALID)
-    try:
-        expected = hmac.new(
-            key.encode("utf-8"),
-            f"{header_b64}.{payload_b64}".encode("ascii"),
-            hashlib.sha256,
-        ).digest()
-        signature = _b64url_decode_bytes(signature_b64)
-    except (ValueError, UnicodeEncodeError) as exc:
-        raise CallerAuthError("company token signature is invalid", code=CALLER_AUTH_INVALID) from exc
-    if not hmac.compare_digest(expected, signature):
-        # 记一行**可区分**的原因：这两个分支此前都不记日志，而网关对外只看得到同一句
-        # 「access token validation failed」—— 于是「签名不匹配」与「已过期」在观测面上
-        # **不可分**，排查时只能靠猜（#458 的评审就指出过这一点）。
-        # 只记原因，不记令牌、不记密钥、不记身份。
-        _LOGGER.info("company token rejected reason=signature_mismatch")
-        raise CallerAuthError("company token signature does not verify", code=CALLER_AUTH_INVALID)
+    if not trust_company_payload:
+        try:
+            expected = hmac.new(
+                key.encode("utf-8"),
+                f"{header_b64}.{payload_b64}".encode("ascii"),
+                hashlib.sha256,
+            ).digest()
+            signature = _b64url_decode_bytes(signature_b64)
+        except (ValueError, UnicodeEncodeError) as exc:
+            raise CallerAuthError("company token signature is invalid", code=CALLER_AUTH_INVALID) from exc
+        if not hmac.compare_digest(expected, signature):
+            # 记一行**可区分**的原因：这两个分支此前都不记日志，而网关对外只看得到同一句
+            # 「access token validation failed」—— 于是「签名不匹配」与「已过期」在观测面上
+            # **不可分**，排查时只能靠猜（#458 的评审就指出过这一点）。
+            # 只记原因，不记令牌、不记密钥、不记身份。
+            _LOGGER.info("company token rejected reason=signature_mismatch")
+            raise CallerAuthError("company token signature does not verify", code=CALLER_AUTH_INVALID)
+    else:
+        # 公司一致模式：**不验签**。公司侧实测既不验签也不判 `exp`，按载荷里的 `id` 查用户；
+        # 有效性由会话对象决定。用户裁定按此口径适配前端（前端用户长时间停留、不重登，
+        # 而公司接口接受已过期的令牌，两边判据不同会让「公司能用、AI-Ops 401」）。
+        #
+        # ⚠️ 这条就是公司当前的判据，也是它的一个安全弱项：令牌载荷可伪造（实测：签名整段
+        # 换成 `A…` 公司仍 200，只改 `id` 才 500「用户不存在」）。**我们的防线相应后移到**
+        # 「令牌必须来自 nginx 那一跳」（``X-AIOps-Source-Key``，调用方自报不了）**与**
+        # 「身份字段必须齐备且租户一致」。这比验签弱 —— 但它是**用户明确选定的边界**，
+        # 且与公司其余接口行为一致；要回收它把 ``trust_company_payload`` 设回 False 即可。
+        _LOGGER.info("company token accepted reason=company_parity_no_verification")
     try:
         payload = json.loads(_b64url_decode(payload_b64))
     except (ValueError, json.JSONDecodeError) as exc:
         raise CallerAuthError("company token payload is invalid", code=CALLER_AUTH_INVALID) from exc
     if not isinstance(payload, Mapping):
         raise CallerAuthError("company token payload is invalid", code=CALLER_AUTH_INVALID)
-    # 过期由本进程判：本地模式没有上游替我们判。``exp`` 缺失即拒（不接受不过期的令牌）。
+    # 公司一致模式**不判 `exp`**（公司也不判，见上）；严格模式才判。
     #
     # ⚠️ **这里判得比公司自己严，是有意的 —— 但它是本模式与公司行为的一处已知差异**：
     # 41 实测，同一条 `exp` 已过的令牌打公司自己的接口 **仍然 200**
@@ -440,12 +465,13 @@ def _claims_from_signed_jwt(token: str, key: str) -> Mapping[str, Any]:
     #   (a) 保持现状（拒绝过期令牌）：更严，但与公司其余接口的行为不一致；
     #   (b) 放宽到与公司一致：只验签、不判 `exp` —— 需产品/安全确认（届时删掉本段判定即可）。
     # **本文件选 (a)**：放宽一个授权边界不该由实现方默认决定。
-    expires_at = payload.get("exp")
-    if not isinstance(expires_at, (int, float)) or isinstance(expires_at, bool):
-        raise CallerAuthError("company token has no expiry", code=CALLER_AUTH_INVALID)
-    if expires_at <= datetime.now(UTC).timestamp():
-        _LOGGER.info("company token rejected reason=expired")
-        raise CallerAuthError("company token is expired", code=CALLER_AUTH_INVALID)
+    if not trust_company_payload:
+        expires_at = payload.get("exp")
+        if not isinstance(expires_at, (int, float)) or isinstance(expires_at, bool):
+            raise CallerAuthError("company token has no expiry", code=CALLER_AUTH_INVALID)
+        if expires_at <= datetime.now(UTC).timestamp():
+            _LOGGER.info("company token rejected reason=expired")
+            raise CallerAuthError("company token is expired", code=CALLER_AUTH_INVALID)
     return payload
 
 

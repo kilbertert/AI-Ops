@@ -19,6 +19,10 @@ SAFE_PROFILE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 #: 生成，比下限长不构成风险。
 MIN_SOURCE_KEY_LENGTH = 16
 
+#: 布尔类开关的「显式关闭」取值表。收全它是为了避免「配了但静默不生效」：
+#: 只认一小撮时，运维写 `off` 会看起来像关掉了、实际仍是默认（本仓反复出现的形态）。
+_FALSY_SETTINGS = frozenset({"0", "false", "no", "off", "disable", "disabled"})
+
 
 @dataclass(slots=True)
 class GatewayServerSettings:
@@ -52,6 +56,10 @@ class GatewayServerSettings:
     company_source_key: str = field(repr=False, default="")
     #: 本地校验模式的签名密钥（A2 / #448）：配了它就不再调上游 check_token。
     company_jwt_key: str = field(repr=False, default="")
+    #: 是否按**公司自己的判据**认管家端令牌（默认 True = 不验签、不判 `exp`，与公司一致）。
+    #: 设 False 回到严格模式（验签 + 判 `exp`）。判定写成「不是明确关闭就按公司一致」——
+    #: 与本模块其余开关的取向一致：**默认值只有一个来源**。
+    trust_company_payload: bool = True
     kb_service_base_url: str = ""
     #: Routing decision source (#392). Empty base URL or key leaves routing on
     #: the previous behaviour; the dependency is optional by configuration.
@@ -117,6 +125,17 @@ class GatewayServerSettings:
             or _file_value(file_values, "AIOPS_GATEWAY_COMPANY_SOURCE_KEY"),
             company_jwt_key=_env("AIOPS_GATEWAY_COMPANY_JWT_KEY")
             or _file_value(file_values, "AIOPS_GATEWAY_COMPANY_JWT_KEY"),
+            # 显式关闭的取值要**收全**（0/false/no/off/disable…）—— 只认一小撮时，
+            # 运维写 `off` 会**静默保持公司一致**（看起来像配了、实际没生效），
+            # 这正是本仓反复出现的「静默不生效」形态。未设 = 公司一致（默认）。
+            trust_company_payload=(
+                _env("AIOPS_GATEWAY_COMPANY_TRUST_PAYLOAD")
+                or _file_value(file_values, "AIOPS_GATEWAY_COMPANY_TRUST_PAYLOAD")
+                or "1"
+            )
+            .strip()
+            .lower()
+            not in _FALSY_SETTINGS,
             kb_service_base_url=_env("AIOPS_GATEWAY_KB_SERVICE_BASE_URL")
             or _file_value(file_values, "AIOPS_GATEWAY_KB_SERVICE_BASE_URL"),
             kb_service_timeout_seconds=_env_float("AIOPS_GATEWAY_KB_SERVICE_TIMEOUT_SECONDS", 10.0),
