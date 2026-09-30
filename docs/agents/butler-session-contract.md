@@ -69,9 +69,16 @@ client-type / third-session / X-Business-Entry`，其中 `X-Business-Entry` **�
 
 **定稿形状**（ADR-0009）：
 
-- **AI-Ops 自己调公司权威的 `/auth/oauth/check_token`** 校验管家端令牌，
-  身份与数据范围**直接取自令牌**（`id` = B 端主体、`user_id` = C 端、`tenant_id`、
-  `shop_ids`）。校验落在公司自己那一跳，不自己验签。
+- **令牌校验走两条互斥通道**（ADR-0009 原文写的是「走公司权威的 `check_token`、不自己验签」，
+  ⚠️ **这条在 2026-09-30 之后不再成立**，按实际收窄如下）：
+  - **远端 `check_token`**（默认关闭）：公司那条端点对**服务间调用**是否成立未确认，
+    实测证据指向**不成立**（`sys_oauth_client` 的 `secret` 等于其 `id`，公开值）；
+  - **本地 HS256**（41 现役）：`AIOPS_GATEWAY_COMPANY_JWT_KEY` 已配 ⇒ 走这条。
+    **它的判据默认与公司一致**（`trust_company_payload=True`：**不验签、不判 `exp`**，
+    见 #460 的用户裁定与 `validation.md`）。⇒ **本页原句「不自己验签」在实际方向上写反了**：
+    现在是「自己判，且判得与公司一样宽」。
+  - 身份与数据范围仍**直接取自令牌**（`id` = B 端主体、`user_id` = C 端、`tenant_id`、
+    `shop_ids`），这一点未变。
 - **不再调** `/user/inside/byUserId`（C→B）与 `/shopuser/getShops`（店铺集合）——
   令牌已经带着答案；少两跳，其中一条还是**实测无鉴权**的内部端点。
 - **入站信任 = 来源 + 共享密钥**（由网关那一跳注入，前端不持有）；

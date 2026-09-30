@@ -1,18 +1,24 @@
 # 管家端（operator）入口：前端联调交接说明
 
 > **读者**：前端组 / BFF。
-> **状态**：后端已上线（main `20db41a` / 41 运行 `0.1.0+67954175fca2`）。
+> **状态**：**分流已部署、公网已通**（2026-09-30）。**不要照本文 §1 的旧示例发** ——
+> 那是**客户端**那条链路的形状（服务令牌 + 会话），管家端发那一套仍然是 `401`。
+> **正确形状与可直接照抄的 curl 见 [operator-frontend-chain.md](operator-frontend-chain.md)。**
 > **一句话**：管家端与客户端**共用同一个助手入口**，靠请求头 `X-Business-Entry: operator`
-> 切换；入口动作已发布，两个按钮点下去的行为见 §3。
+> 分流；入口动作已发布，两个按钮点下去的行为见 §3。
 > **先读**：[client-type-vs-business-entry.md](client-type-vs-business-entry.md) ——
 > 为什么**不是**用 `client-type` 区分。
 >
-> ⚠️ **2026-09-29 更正**：本文此前写的「已在 41 端到端验收通过」**范围过宽**。
+> ⚠️ **2026-09-29 更正（仍然有效）**：本文此前写的「已在 41 端到端验收通过」**范围过宽**。
 > 验收用的是**代造的会话行**，不是一次管家端真实登录；管家端 App 的登录链路
-> （`/upms/token/login` → OAuth2 令牌 → **不产生 thirdSession**）当时**没有被走到**，
-> 前端照现在的方式发会 **`401`**。根因、凭据从哪来、以及该账号**没有任何店铺绑定**
-> 的缺口，见 [butler-session-contract.md](butler-session-contract.md) 与
+> （`/upms/token/login` → OAuth2 令牌 → **不产生 thirdSession**）当时**没有被走到**。
+> 根因见 [butler-session-contract.md](butler-session-contract.md) 与
 > [company-platform-integration-baseline.md](company-platform-integration-baseline.md)。
+>
+> 🛑 **2026-09-30 一条前置**：这条链**可以联调**，但**身份可信度未达标**（判据不看签名与
+> 有效期；外部判据只有来源密钥，而其注入主体目前是我们自己的 nginx）。
+> 因此**不对外宣称可用**。成因、口径与解除路径见
+> [operator-repair-blueprint.md](operator-repair-blueprint.md) §0.1。
 
 ---
 

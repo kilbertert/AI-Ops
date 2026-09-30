@@ -268,7 +268,7 @@ flowchart TB
 | `query_scope.py` | 把 `ScopeContext` 解析成可直接下推的不可变 `QueryScope`（tenant / site_ids / user_id），站点范围来自 UPMS 数据范围、Dis 点位归属，或运营商维度（B 端主体 → 店铺集合 → 站点归属，PRD #423） |
 | `caller_auth.py` | 调用者身份接缝：`CallerContextResolver`（UPMS / OAuth2 introspection / fail-closed 禁用 / **来源密钥分派**）与 `OrderAuthorizer`。来源密钥（`X-AIOps-Source-Key`，由可信那一跳注入）决定走既有链还是公司令牌链；未配置即不启用（#444，ADR-0009 D8–D9） |
 | `third_session_auth.py` | C 端 `thirdSession` → `ScopeContext` 的 Redis 解析路径；身份同时带 C 端 id 与经既有 C→B 映射端点补全的 B 端 `sys_user.id`，解析不出唯一主体时记录可区分原因 |
-| `company_token_auth.py` | 管家端的**公司 OAuth2 令牌** → `ScopeContext`：校验落在公司权威的 `check_token`（不自验签、不复制密钥），身份与 `shop_ids` 取自令牌，站点范围经 `operator_site_scope_from_shops` 共用同一份规则。缺字段/形状不符/上游不可用一律 fail closed（#443，ADR-0009） |
+| `company_token_auth.py` | 管家端的**公司 OAuth2 令牌** → `ScopeContext`。两条互斥通道：**远端** `check_token`（默认关闭）或**本地 HS256**（`AIOPS_GATEWAY_COMPANY_JWT_KEY`）。本地通道的判据**默认与公司一致**（`trust_company_payload=True`，生产默认 = **不验签、不判 `exp`**，见 ADR-0009 与 #460 的用户裁定；设 `AIOPS_GATEWAY_COMPANY_TRUST_PAYLOAD=0` 切回验签 + 判 `exp` 的更严模式）。身份与 `shop_ids` 取自令牌，站点范围经 `operator_site_scope_from_shops` 共用同一份规则。缺字段/形状不符/上游不可用一律 fail closed（#443，ADR-0009） |
 
 #### L3 证据与诊断内核
 
