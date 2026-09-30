@@ -33,28 +33,10 @@ function gh(args) {
   return execFileSync("gh", args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
 }
 
-/** 取最近若干次 CD run 的形态；取不到返回 `fetchedOk: false`（不抛）。 */
-export function fetchRuns({ repo, workflow = "cd.yml", limit = 10 } = {}) {
-  const args = [
-    "run",
-    "list",
-    "--workflow",
-    workflow,
-    "--limit",
-    String(limit),
-    "--json",
-    "databaseId,status,conclusion,createdAt,headSha",
-  ];
-  if (repo) args.push("--repo", repo);
-  let runs;
-  try {
-    runs = JSON.parse(gh(args));
-  } catch (error) {
-    return { runs: [], fetchedOk: false, error: String(error.message ?? error) };
-  }
+function enrich(runs) {
   // 两个只有 job/部署层面才知道的量：等批准的**部署记录**与作业数。
   // 它们正是「死锁 vs 等批准」的唯一区分点，值得每次多两次调用。
-  const enriched = runs.map((run) => {
+  return runs.map((run) => {
     let totalCount = null;
     let pendingCount = null;
     try {
@@ -74,7 +56,154 @@ export function fetchRuns({ repo, workflow = "cd.yml", limit = 10 } = {}) {
     }
     return { ...run, totalCount, pendingCount };
   });
-  return { runs: enriched, fetchedOk: true };
+}
+
+/**
+ * 取每个 run 的**获批时刻** —— 从部署账本读，不是从 run 猜。
+ *
+ * 🔴 为什么必须要它：`pending_deployments` 只回答「**现在**有没有部署在等批准」，
+ * 一旦获批就变成空 —— 而那恰恰是"排队"开始的那一刻。于是「已获批、在等并发锁」
+ * 这个状态下拿不到任何时间锚，只能退回**创建时刻**，而创建时刻在"等批准等了很久
+ * 才获批"的 run 上会给出假阳性（评审三次指出，见 `classifyRun` 的注释）。
+ *
+ * **唯一来源是部署账本的状态时间线**（`waiting → queued → in_progress`）：
+ *   · `queued` 只出现在**首次批准**的那一刻（后续状态推送不会退回 `queued`），
+ *     所以它是"获批时刻"的代理；实测它与 `in_progress` 只隔 0.5 分钟；
+ *   · 取两者的**最早**时刻；两者都没有（尚未获批）⇒ 该 sha 不入表 ⇒ 判定侧不判。
+ *
+ * ⚠️ 两条曾经的写法与其问题（都按实测改掉了）：
+ *   · 曾以为 `actions/runs/<id>/deployments` 能按 run 取 —— 该端点**不存在**（404），
+ *     账本挂在**仓库级**，与 run 的关联只有 `sha`；
+ *   · 曾把 `pending_deployments.current_user` 当首选来源 —— 实测那个字段是 **null**，
+ *     本仓没有任何一次部署带过它。注释里写过"最准"，**实现从没这么做过**，已删。
+ */
+export function approvedStamps({ repo, environment = "production-41", limit = 20 } = {}) {
+  const args = [
+    "api",
+    `repos/{owner}/{repo}/deployments?per_page=${limit}`,
+    "--jq",
+    `[.[] | select(.environment == "${environment}") | {id, sha, created_at}]`,
+  ];
+  if (repo) args.splice(2, 0, "--repo", repo);
+  const deployments = JSON.parse(gh(args));
+  // 🔴 **同一个 sha 可能有多条 deployment**（重跑一次就是新的一条）：必须取**最新**
+  //    那条的时间线，否则一条早已失败的旧记录会把新记录的获批时刻覆盖成旧的 ——
+  //    而那正好会让"刚获批"看起来像"排了很久"（评审指出）。
+  //    判据用 `created_at`（deployment 自己的创建时刻，与 run 的创建时刻同源）。
+  const latestBySha = new Map();
+  for (const item of Array.isArray(deployments) ? deployments : []) {
+    const created = Date.parse(item.created_at ?? 0);
+    const known = latestBySha.get(item.sha);
+    if (known === undefined || created > Date.parse(known.created_at ?? 0)) {
+      latestBySha.set(item.sha, item);
+    }
+  }
+  const bySha = new Map();
+  for (const item of latestBySha.values()) {
+    const statuses = JSON.parse(
+      gh([
+        "api",
+        `repos/{owner}/{repo}/deployments/${item.id}/statuses`,
+        "--jq",
+        "[.[] | {state, created_at}]",
+      ]),
+    );
+    let approved = null;
+    for (const entry of Array.isArray(statuses) ? statuses : []) {
+      if (entry.state === "in_progress" || entry.state === "queued") {
+        const t = Date.parse(entry.created_at);
+        if (Number.isFinite(t) && (approved === null || t < approved)) approved = t;
+      }
+    }
+    if (approved !== null) bySha.set(item.sha, new Date(approved).toISOString());
+  }
+  return bySha;
+}
+
+/**
+ * 给每个未完成的 run 补上**获批时刻** —— 从部署账本按 `sha` 找，不是从 run 猜。
+ *
+ * 🔴 为什么必须要它：`pending_deployments` 只回答「**现在**有没有部署在等批准」，
+ * 一旦获批就变成空 —— 而那恰恰是"排队"开始的那一刻。于是「已获批、在等并发锁」
+ * 这个状态下拿不到任何时间锚，只能退回**创建时刻**，而创建时刻在"等批准等了很久
+ * 才获批"的 run 上会给出假阳性（评审三次指出，见 `classifyRun` 的注释）。
+ */
+export function attachApprovedAt(runs, options = {}) {
+  let stamps;
+  try {
+    stamps = approvedStamps(options);
+  } catch {
+    // 账本取不到 ⇒ 全部为未知，判定侧据此**不判**（宁可漏报，也不凭创建时刻开假票）。
+    return runs.map((run) => ({ ...run, approvedAt: null }));
+  }
+  return runs.map((run) => ({ ...run, approvedAt: stamps.get(run.headSha) ?? null }));
+}
+
+/** 取最近若干次 CD run 的形态；取不到返回 `fetchedOk: false`（不抛）。 */
+export function fetchRuns({ repo, workflow = "cd.yml", limit = 10 } = {}) {
+  const args = [
+    "run",
+    "list",
+    "--workflow",
+    workflow,
+    "--limit",
+    String(limit),
+    "--json",
+    "databaseId,status,conclusion,createdAt,headSha",
+  ];
+  if (repo) args.push("--repo", repo);
+  let runs;
+  try {
+    runs = JSON.parse(gh(args));
+  } catch (error) {
+    return { runs: [], fetchedOk: false, error: String(error.message ?? error) };
+  }
+  return { runs: enrich(runs), fetchedOk: true };
+}
+
+/**
+ * 取**全部未完成**的 run —— 不受「最近 N 次」窗口限制。
+ *
+ * 🔴 为什么必须单独取：上限为 N 的窗口会让一个旧的卡住 run **在 N 次更新的 run
+ * 之后从视野里消失**（评审指出）。而"卡住"的定义恰恰是"它一直没结束" ——
+ * 用「最近 N 次」去找它，等于用一个会随时间收窄的窗口去找一个**随时间变得更该被
+ * 看见**的东西。
+ *
+ * ⚠️ 判据靠这条的**完整性**：`jobs=0` ⇒ 死锁这条只有在拿到该 run 的**完整**列表时
+ * 才成立。所以这里按**每个状态**分别取（`--status` 是精确过滤，不做窗口截断），
+ * 任一状态取不到就整体报「取数失败」—— **宁可报未知，也不返回部分结果**。
+ */
+export function fetchUnfinished({ repo, workflow = "cd.yml", limit = 100 } = {}) {
+  const statuses = ["queued", "in_progress", "waiting", "requested", "pending"];
+  const collected = [];
+  for (const status of statuses) {
+    const args = [
+      "run",
+      "list",
+      "--workflow",
+      workflow,
+      "--status",
+      status,
+      "--limit",
+      String(limit),
+      "--json",
+      "databaseId,status,conclusion,createdAt,headSha",
+    ];
+    if (repo) args.push("--repo", repo);
+    let runs;
+    try {
+      runs = JSON.parse(gh(args));
+    } catch (error) {
+      return { runs: [], fetchedOk: false, error: `status=${status}: ${error.message ?? error}` };
+    }
+    // 取满上限说明可能还有更多 ⇒ **不完整**，不能拿它判 jobs=0。
+    if (runs.length >= limit) {
+      return { runs: [], fetchedOk: false, error: `status=${status} 命中上限 ${limit}，结果可能不完整` };
+    }
+    collected.push(...runs);
+  }
+  // 未完成的 run 才需要「获批时刻」——判定"排队多久"要用它作锚，不能用创建时刻。
+  return { runs: attachApprovedAt(enrich(collected), { repo, workflow, limit }), fetchedOk: true };
 }
 
 function announce(title, body, label) {
@@ -99,9 +228,24 @@ function main() {
   const dryRun = process.argv.includes("--dry-run");
   const limitArg = process.argv.indexOf("--limit");
   const limit = limitArg > -1 ? Number(process.argv[limitArg + 1]) : 10;
-  const { runs, fetchedOk, error } = fetchRuns({ limit });
+  // 两条取数各司其职，都失败才算取数失败：
+  //   · `fetchUnfinished` —— **全部**未完成的 run（判「有没有谁卡住」；不受窗口截断）；
+  //   · `fetchRuns` —— 最近 N 次（判「连续多少次没成功」；这条本来就只看最近）。
+  const unfinished = fetchUnfinished({ limit: 100 });
+  const recent = fetchRuns({ limit });
+  // 🔴 **两份取数必须都成功才算取数成功** —— 它们服务两条**独立**判据，任何一份失败
+  // 都意味着有一条判据无法成立。用 `||` 合并会让「最近取数失败 + 未完成取数成功」
+  // 变成「一切正常」：那时连续失败计数喂的是未完成列表（全是未完成 ⇒ 计数恒为 0），
+  // 恰好把「连续 N 次没成功」这条判据变成永远不响（评审指出）。
+  const fetchedOk = unfinished.fetchedOk && recent.fetchedOk;
+  const error = unfinished.error ?? recent.error;
+  // 「有没有谁卡住」吃**全部未完成**的 run；「连续多少次没成功」吃**最近 N 次**。
+  // 两份数据不能互换 —— 用窗口去找卡住的 run 等于用一个随时间收窄的窗口去找一个
+  // 随时间更该被看见的东西。
   const result = assess({
-    runs,
+    runs: recent.runs,
+    // `null` = 这份取数失败（**不是**「没有未完成的 run」）—— 空数组与 null 含义不同。
+    unfinishedRuns: unfinished.fetchedOk ? unfinished.runs : null,
     fetchedOk,
     stuckMinutes: DEFAULT_STUCK_MINUTES,
     straightFailures: DEFAULT_STRAIGHT_FAILURES,

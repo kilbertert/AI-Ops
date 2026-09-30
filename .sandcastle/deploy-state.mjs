@@ -24,6 +24,14 @@ export const DEFAULT_STUCK_MINUTES = 30;
 export const DEFAULT_STRAIGHT_FAILURES = 3;
 
 /**
+ * 这些 kind 是**要报警**的（它们是「部署没有发生」的不同成因）；其余是正常/中间态。
+ *
+ * 抽成常量是因为上一轮把它写成三处零散的 `||`：一处漏改就会出现「某类异常不再进告警
+ * 而用例仍通过」——评审正是在那里抓到一个**永远为真**的断言。
+ */
+const ALARMING = new Set(["stuck", "deadlocked", "indeterminate", "queued-too-long"]);
+
+/**
  * 一个 run 的形态。字段全部来自 GitHub API，本函数不做取数。
  *
  * @param {{status?: string, conclusion?: string|null, createdAt?: string,
@@ -51,9 +59,20 @@ export function classifyRun(run, options = {}) {
     return { kind: "unknown", ageMinutes, reason: `未知状态：${status || "(空)"}` };
   }
 
-  const overdue = ageMinutes !== null && ageMinutes > stuckMinutes;
+  // 🔴 **`in_progress` 永远不是 stalled。** 它是在**真的干活**（部署脚本正在跑），
+  //    而不是在等谁做什么。这条判据挂在**创建时刻**上，会随时间必然触发：
+  //    一次"等批准 40 分钟、然后开始部署 10 分钟"的运行，会在第二个阶段被判成
+  //    `deadlocked`（因为 `pending_deployments` 在批准后归零）—— 纯假阳性。
+  //    本 job 自己就有 20 分钟超时兜着，不需要外部再加一层。
+  //    （评审指出；这条也是"不能只看创建时刻"的第二个例子。）
+  const ageMinutesWait = ageMinutes;
+  if (status === "in_progress") {
+    return { kind: "in-flight", ageMinutes: ageMinutesWait, reason: "正在部署 —— 不看时长" };
+  }
+
+  const overdue = ageMinutesWait !== null && ageMinutesWait > stuckMinutes;
   if (!overdue) {
-    return { kind: "in-flight", ageMinutes, reason: "未完成，但在阈值内 —— 正常" };
+    return { kind: "in-flight", ageMinutes: ageMinutesWait, reason: "未完成，但在阈值内 —— 正常" };
   }
 
   const totalCount = run.totalCount ?? null;
@@ -70,7 +89,7 @@ export function classifyRun(run, options = {}) {
     const missing = totalCount === null ? "作业数" : "待批准部署数";
     return {
       kind: "indeterminate",
-      ageMinutes,
+      ageMinutes: ageMinutesWait,
       reason: `超过 ${stuckMinutes} 分钟未完成，但${missing}取不到 —— **状态未知**，不是正常`,
     };
   }
@@ -81,23 +100,60 @@ export function classifyRun(run, options = {}) {
   // 阈值本身就是"已经等了 30 分钟"，一个 30 分钟还没建出作业的 run 不是慢，是坏了。
   // 判 indeterminate ⇒ assess 报正常 ⇒ 恰好把本票要修的那种静默又做了一遍。
   if (totalCount === 0) {
+    // ⚠️ 这条判据有前提：**必须取到全部未完成的 run**（见 fetchUnfinished）。
+    // 只看「最近 N 次」时，`totalCount=0` 也会出现在「取数只拿到了一部分」的截断情形，
+    // 那时它说明的是取数不完整，不是死锁。调用方负责这个前提。
     return {
       kind: "deadlocked",
-      ageMinutes,
+      ageMinutes: ageMinutesWait,
       reason: `超过 ${stuckMinutes} 分钟仍未创建任何作业（jobs=0）—— 与"没人点批准"不同，这是卡死了`,
     };
   }
   if (pendingCount > 0) {
     return {
       kind: "stuck",
-      ageMinutes,
+      ageMinutes: ageMinutesWait,
       reason: `等待批准已超过 ${stuckMinutes} 分钟 —— 部署尚未发生`,
     };
   }
+  // 剩下的都是「作业已创建、没有待批准部署」：要么在跑（`in_progress` 已在上面返回），
+  // 要么**已获批、还没开始** —— 在等并发锁，或在等一个能接活的运行器。
+  //
+  // ⚠️ **这一段被三个方向各纠过一次**，三次都是同一个根因：**判据挂错了时刻**。
+  //   · 判 `deadlocked`（挂在创建时刻）⇒ 假阳性：合法排队被说成"卡死了"；
+  //   · 改成「不看时长」⇒ 反方向的洞：**运行器离线时会永远显示健康**；
+  //   · 再挂回创建时刻 ⇒ 又假阳性：等批准等超阈值、**刚获批**的部署会被判成"排队太久"
+  //     （评审第三次指出）。
+  //
+  // ⇒ 关键不是"看时长"还是"不看"，而是**从哪个时刻算**：这里要用**获批时刻**，
+  //   因为"排队"是从那一刻才开始的。`pending_deployments` 一旦为空就查不到获批时间了，
+  //   但**部署账本**记着它 —— `approvedAt`（见 `emitUnfinishedStatuses`）。
+  //   没有它（旧 run 或取数失败）就**不判**：宁可漏报，也不要凭创建时刻开一张假票。
+  const approved = run.approvedAt ? Date.parse(run.approvedAt) : Number.NaN;
+  const queueMinutes = Number.isFinite(approved) ? (now.getTime() - approved) / 60000 : null;
+  if (queueMinutes === null) {
+    return {
+      kind: "in-flight",
+      ageMinutes: ageMinutesWait,
+      reason: "已获批（拿不到获批时刻，不据创建时刻判长）—— 视为排队中",
+    };
+  }
+  if (queueMinutes <= stuckMinutes) {
+    return {
+      kind: "in-flight",
+      ageMinutes: ageMinutesWait,
+      reason: `已获批 ${Math.round(queueMinutes)} 分钟 —— 在等并发锁或运行器，仍在合理范围`,
+    };
+  }
+  // 阈值有据可依，不是拍的：持锁那个 job 自己有 20 分钟 `timeout-minutes`，
+  // 一次合法排队的上限因此就是"前一个跑完"≈ 20 分钟出头。超过 `stuckMinutes`（30）
+  // 仍未开始，成因只剩两种：运行器不在线，或前一个部署自己挂了没释放锁。
   return {
-    kind: "deadlocked",
-    ageMinutes,
-    reason: `无任何部署在等批准却已超过 ${stuckMinutes} 分钟 —— 与"没人点批准"不同，这是卡住了`,
+    kind: "queued-too-long",
+    ageMinutes: ageMinutesWait,
+    reason:
+      `**获批后**已等待超过 ${stuckMinutes} 分钟仍未开始 —— 合法排队的上限是"前一个部署跑完"` +
+      `（它自己的 job 超时是 20 分钟）；超过它，成因是**运行器不在线**或前一个没释放锁`,
   };
 }
 
@@ -117,19 +173,63 @@ export function straightFailures(runs) {
 }
 
 /**
+ * **所有**未完成的 run 里卡住/卡死的那些 —— 不只是最新那一条。
+ *
+ * 只看 `runs[0]` 会漏掉整类故障且会**自愈**：一个新 push 让更新的 run 成为首条，
+ * 旧的卡住 run 就从视野里消失。（这个洞是上线当天实测撞到的：一个等了 84 分钟的
+ * run 躺在那儿，而 `assess` 说「正常」。）
+ *
+ * ⚠️ **但「旧」不等于「坏」**：并发锁只保证**串行**，一个等着接替前一个的 run 本来就
+ * 该等多久等多久 —— 那不是 stuck，是排队。所以**逐条**判定，而不只看最早那个：
+ * 取数（`fetchUnfinished`）已经保证拿到的是**全部**未完成 run，于是每条都能自己
+ * 回答「我超期了吗」。若只看最早那条，一个 `indeterminate` 的旧 run 会把后面
+ * 一条**确凿**的 `stuck` 一起挡掉（评审指出）。
+ *
+ * ⇒ 前提：**调用方必须取全**。截断的列表会让 `jobs=0` 这类判据失真，所以
+ * `fetchUnfinished` 宁可报「取数失败」也不返回部分结果。
+ *
+ * @returns {Array<{run: object, verdict: object}>} 超期的未完成 run（正常排队的不在内）
+ */
+export function overdueUnfinished(runs, { now, stuckMinutes } = {}) {
+  const overdue = [];
+  for (const run of runs) {
+    if (!UNFINISHED.has(String(run.status ?? ""))) continue;
+    // ⚠️ **只有这些才算「卡住」** —— 本函数**已经**筛掉 `in-flight`，因此调用方
+    // **不能**用 `verdict.kind !== "in-flight"` 当判据：那会把普通排队也当成异常。
+    // 曾经这样写错过一次，而且用例没抓到（断言的是 `assess().ok`，排队两条 run 的
+    // 组合恰好仍为 true）。现在由显式枚举把「算」与「不算」**都**钉住 ——
+    // 见 `cd-watch.test.mjs` 的 8b。
+    const verdict = classifyRun(run, { now, stuckMinutes });
+    if (ALARMING.has(verdict.kind)) overdue.push({ run, verdict });
+  }
+  return overdue;
+}
+
+/**
  * 汇总一份判决。**取数不成立时一律不报「正常」** —— 不知道就说不知道（fail honest）。
  *
  * 三种「不成立」都要报警，而不是静默：
- *  - `fetchedOk === false`：连 run 列表都取不到；
- *  - 列表为空：`cd.yml` 从未被触发过，或取数被静默截断 —— 两种都值得看一眼，
+ *  - `fetchedOk === false`：任一份取数失败；
+ *  - 最近列表为空：`cd.yml` 从未被触发过，或取数被静默截断 —— 两种都值得看一眼，
  *    因为「一次都没有」与「一直正常」在告警面上是同一种安静；
- *  - 最新 run 的判定是 `indeterminate`（详情取不到、或状态不认识）：**未知不是正常**。
+ *  - 任一条待判定的 run 是 `indeterminate`（详情取不到、或状态不认识）：**未知不是正常**。
  *
- * @param {{runs: Array, fetchedOk?: boolean, now?: Date, stuckMinutes?: number,
- *          straightFailures?: number}} input
+ * ⚠️ **两条判据吃两份数据，不要混用**：
+ *  - 「有没有谁卡住」吃 `unfinishedRuns` —— 它必须是**全部未完成**的 run
+ *    （`fetchUnfinished`）。用「最近 N 次」的窗口去找卡住的 run，等于用一个随时间
+ *    收窄的窗口去找一个随时间更该被看见的东西（评审指出）。
+ *    **空集合是正常的**（没人卡住），不是「取不到」。
+ *  - 「连续多少次没成功」吃 `runs` —— 这条本来就只看最近 N 次**已完成**的。
+ *    两者合成一份会让未完成的 run 插进来打乱「连续」的计数。
+ *
+ * @param {{runs: Array, unfinishedRuns?: Array|null, fetchedOk?: boolean, now?: Date,
+ *          stuckMinutes?: number, straightFailures?: number}} input
+ *    `unfinishedRuns` 为 `null` 表示**这份取数失败**（未完成集合未知）；
+ *    空数组表示「确实没有未完成的 run」——两者含义不同，不能混。
  */
 export function assess(input) {
   const runs = Array.isArray(input.runs) ? input.runs : [];
+  const unfinishedRuns = Array.isArray(input.unfinishedRuns) ? input.unfinishedRuns : null;
   const alarms = [];
 
   if (input.fetchedOk === false) {
@@ -142,27 +242,42 @@ export function assess(input) {
     alarms.push({ kind: "no-runs", reason: "取不到任何 CD run —— 要么从未触发过，要么取数不完整" });
     return { ok: false, alarms, notes: [], latest: null, straight: 0 };
   }
+  // 未完成集合取不到 ⇒ 未知。它**不能**退化用最近列表代替：那个窗口不完整，
+  // 而 `jobs=0` ⇒ 死锁这条判据恰恰依赖完整性。
+  if (unfinishedRuns === null) {
+    alarms.push({
+      kind: "unavailable",
+      reason: "未完成 run 的集合取不到 —— 无法判断是否有人卡住（**未知**，不是正常）",
+    });
+  }
 
-  const run = classifyRun(runs[0], {
+  // 每条未完成的 run **自己**回答「我超期了吗」，而不是只问最早那条 ——
+  // 否则一条 `indeterminate` 的旧 run 会把后面一条**确凿**的 `stuck` 一起挡掉
+  // （评审指出；这与上一条修的是同一个「只看一条」的毛病）。
+  for (const { verdict } of overdueUnfinished(unfinishedRuns ?? [], {
     now: input.now,
     stuckMinutes: input.stuckMinutes,
-  });
+  })) {
+    alarms.push({ kind: verdict.kind, reason: verdict.reason });
+  }
+
   const straight = straightFailures(runs);
   const straightLimit = input.straightFailures ?? DEFAULT_STRAIGHT_FAILURES;
-
-  if (run.kind === "stuck" || run.kind === "deadlocked") {
-    alarms.push({ kind: run.kind, reason: run.reason });
-  }
-  if (run.kind === "indeterminate") {
-    alarms.push({ kind: "indeterminate", reason: run.reason });
-  }
   if (straight >= straightLimit) {
     alarms.push({
       kind: "straight-failures",
       reason: `最近 ${straight} 次**已完成**的 CD 都不是 success（阈值 ${straightLimit}）`,
     });
   }
-  return { ok: alarms.length === 0, alarms, notes: [], latest: run, straight };
+  // 摘要行用**最新**那条（按创建时间），而不是数组首条 —— 数组顺序不保证是时间序。
+  const newest = [...runs].sort((a, b) => Date.parse(b.createdAt ?? 0) - Date.parse(a.createdAt ?? 0))[0];
+  return {
+    ok: alarms.length === 0,
+    alarms,
+    notes: [],
+    latest: classifyRun(newest, { now: input.now, stuckMinutes: input.stuckMinutes }),
+    straight,
+  };
 }
 
 /** 自检：跑 `node .sandcastle/deploy-state.mjs`。判据用第 407 号票记录的真实形态。 */
@@ -172,32 +287,44 @@ function demo() {
 
   // 真实：run 36678842333（58dc271），pending deployment 在等批准
   const waiting = classifyRun({ ...base, totalCount: 1, pendingCount: 1 }, { now });
-  console.assert(waiting.kind === "stuck", "等批准超阈值应为 stuck", waiting);
+  check(waiting.kind === "stuck", "等批准超阈值应为 stuck", waiting);
 
   // 历史死锁形态：run 存在、waiting、jobs=0（本票背景里那次）。
   // 超时仍 jobs=0 ⇒ 判死锁；**曾经判成 indeterminate，那会让 assess 报正常**。
   const dead = classifyRun({ ...base, totalCount: 0, pendingCount: 0 }, { now });
-  console.assert(dead.kind === "deadlocked", "超时仍 jobs=0 应为 deadlocked", dead);
+  check(dead.kind === "deadlocked", "超时仍 jobs=0 应为 deadlocked", dead);
 
-  // 死锁（有作业、无人等批准）
-  const locked = classifyRun({ ...base, totalCount: 1, pendingCount: 0 }, { now });
-  console.assert(locked.kind === "deadlocked", "有作业且无 pending 应为 deadlocked", locked);
+  // 已获批、在等并发锁 ⇒ 时长从**获批时刻**算：超阈值才是 `queued-too-long`
+  const queued = classifyRun(
+    { ...base, totalCount: 1, pendingCount: 0, approvedAt: "2026-09-30T06:35:00Z" },
+    { now },
+  );
+  check(queued.kind === "queued-too-long", "获批后排队超阈值应为 queued-too-long", queued);
+  // 等批准等很久、**刚获批** ⇒ 不是"排队太久"（判据要挂在获批时刻上）
+  const justApproved = classifyRun(
+    { ...base, totalCount: 1, pendingCount: 0, approvedAt: "2026-09-30T15:25:00Z" },
+    { now },
+  );
+  check(justApproved.kind === "in-flight", "刚获批应为 in-flight", justApproved);
+  // 拿不到获批时刻 ⇒ 不判（宁可漏报，也不凭创建时刻开假票）
+  const noStamp = classifyRun({ ...base, totalCount: 1, pendingCount: 0 }, { now });
+  check(noStamp.kind === "in-flight", "拿不到获批时刻应不判", noStamp);
 
   // 取数失败（null）不得被当成 0
   const unknown = classifyRun({ ...base, totalCount: null, pendingCount: null }, { now });
-  console.assert(unknown.kind === "indeterminate", "详情取不到应为 indeterminate", unknown);
-  console.assert(
+  check(unknown.kind === "indeterminate", "详情取不到应为 indeterminate", unknown);
+  check(
     assess({ runs: [{ ...base, totalCount: null, pendingCount: null }], fetchedOk: true }).ok === false,
     "indeterminate 不得报正常",
   );
-  console.assert(assess({ runs: [], fetchedOk: true }).ok === false, "空列表不得报正常");
+  check(assess({ runs: [], fetchedOk: true }).ok === false, "空列表不得报正常");
 
   // 正常：刚创建 5 分钟
   const fresh = classifyRun(
     { ...base, createdAt: "2026-09-30T15:25:00Z", totalCount: 1, pendingCount: 1 },
     { now },
   );
-  console.assert(fresh.kind === "in-flight", "阈值内不得报警", fresh);
+  check(fresh.kind === "in-flight", "阈值内不得报警", fresh);
 
   // 连续 6 次 cancelled（票里那段的真实形态）
   const streak = straightFailures([
@@ -207,12 +334,32 @@ function demo() {
     { status: "completed", conclusion: "cancelled" },
     { status: "completed", conclusion: "success" },
   ]);
-  console.assert(streak === 3, "应数到第一个 success 为止", streak);
+  check(streak === 3, "应数到第一个 success 为止", streak);
 
   // 取数失败不得报正常
-  console.assert(assess({ runs: [], fetchedOk: false }).ok === false, "取数失败不能算正常");
+  check(assess({ runs: [], fetchedOk: false }).ok === false, "取数失败不能算正常");
 
-  console.log("deploy-state demo passed");
+  // 🔴 **断言失败必须让退出码非零**。`console.assert` 只打印，不改变退出码 ——
+  // 于是「demo passed」会在断言失败时照样打印，CI 与人都读不出区别（评审指出）。
+  // 这里显式统计：任何一条失败 ⇒ 抛错 ⇒ 退出码非零、且**不会**打印 passed。
+  const failures = pendingAssertions;
+  pendingAssertions = [];
+  if (failures.length > 0) {
+    for (const failure of failures) console.error(`FAIL  ${failure}`);
+    throw new Error(`deploy-state 自检失败 ${failures.length} 条`);
+  }
+  console.log(`deploy-state demo passed（${passedAssertions} 条断言）`);
+}
+
+/** 收集自检失败：`console.assert` 不会让进程失败，这里替它记账。 */
+let pendingAssertions = [];
+let passedAssertions = 0;
+function check(condition, message, value) {
+  if (condition) {
+    passedAssertions += 1;
+  } else {
+    pendingAssertions.push(`${message}${value === undefined ? "" : `（实际：${JSON.stringify(value)}）`}`);
+  }
 }
 
 if (process.argv[1] && process.argv[1].endsWith("deploy-state.mjs")) demo();
