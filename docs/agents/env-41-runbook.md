@@ -439,13 +439,29 @@ consumer → nginx(/v1/) → 172.18.0.1:8788（直连，逐字不变）
 
 ### 改向脚本（改前必读）
 
-仓库里的执行脚本在 41 上以 root 跑：
+执行脚本在仓库的 `deploy/d4-cutover.py`。**41 上没有仓库 checkout**，所以要先按仓库
+一贯的取证口径把它送上去（传文件 + 核对 sha，与 §2 部署同一套纪律）：
 
 ```bash
-python3 d4-cutover.py dry-run    # 只打印将写入的内容
-python3 d4-cutover.py apply      # 备份 → 写 vhost+map → nginx -t → reload
-python3 d4-cutover.py rollback   # 从最近一次备份恢复（**两处**）→ reload
+# 本地（仓库内）——记下 sha
+sha256sum deploy/d4-cutover.py
+
+# 送上 41
+scp deploy/d4-cutover.py aiops-41:/tmp/d4-cutover.py
+
+# 41 上——**核对 sha 与本地一致再执行**
+sha256sum /tmp/d4-cutover.py     # 与上面那个值逐字相同才继续
+python3 /tmp/d4-cutover.py dry-run    # 只打印将写入的内容
+python3 /tmp/d4-cutover.py apply      # 备份 → 写 vhost+map → nginx -t → reload
+python3 /tmp/d4-cutover.py rollback   # 从最近一次备份恢复（**两处**）→ reload
 ```
+
+⚠️ 脚本**不进 `REFERENCE_FILES`**（那是 CD 同步的运行时参考资料），所以**不会被 CD 送到 41** ——
+每次都要手工传。这正是上面这几行的存在理由，不是多余的步骤。
+
+> **顺带说明（评审指出）**：把脚本放进 `deploy/` 会让 `cd.yml` 的 `paths` 命中它，
+> 于是**改这个脚本会触发一次生产部署**。那是可接受的：部署同一 commit 是幂等的，
+> 而脚本放 `deploy/` 是它该在的位置。改它的人**知道会发生什么**就行。
 
 - 备份落 `/var/backups/aiops-41/d4-cutover-<时间戳>/`（vhost、map、tokenconf 各一份）；
 - **回滚必须恢复两处**：`api.mall.qushiyun.com.conf` **与** `0.aiops-entry-map.conf`。
