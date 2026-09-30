@@ -7,6 +7,51 @@
 
 
 
+## #490 作业生命周期模块（2026-09-30）
+
+**本片是 #430 的第一张子票，刻意只建模块、不接调用方**（另三张票要依赖它）。
+PRD §1 数过：四张表、五份同形过期 SQL、两种极性的 claim-guard、两套常量、
+以及一处进程死亡收敛「本仓自己已经判定为错」的机制。
+
+**本模块定义**：命名 profile（`health_job` / `diagnosis` / `question` / `run`）声明各自的
+活动集、终态分档、截止时间与保留期；一处 claim-guard 渲染（只有 `IN` 一种极性）；
+一处 `expires_at`；一处「进程死了该怎么判」——**入参 `(status, deadline_passed, cause)`，
+三种成因各自得到不同结论**。
+
+### 数值一个都没动，但第二份定义没了
+
+存储层的 11 个常量改为**从 profile 派生**（`HEALTH_JOB_DEADLINE = HEALTH_JOB.deadline` 等），
+取值与改动前逐一相同。**这是本片唯一会影响其它模块的改动**，因此另加两条跨包扫描：
+`timedelta(seconds=30)` / `(minutes=15)` / `(minutes=5)` 与作业状态词的字面集合
+**在 `async_job_lifecycle.py` 之外不再出现**。
+
+例外写清楚了：`metrics_store.OUTCOME_TYPES`（`completed`/`failed`/`cancelled`）**不在扫描范围**。
+它是**指标行的结果**词汇，不是**作业的状态**词汇；两套词汇恰好共用几个词，不等于同一定义 ——
+合并它们才是反向的错误。
+
+### 证据
+
+| 判据 | 用例 |
+|---|---|
+| 数字与存储层既有取值逐一相同 | `test_the_numbers_are_the_ones_the_store_uses` |
+| 四张表的差异以显式字段声明 | `test_the_profiles_differ_where_the_tables_differ` |
+| 问答表的 deadline 不再借用诊断的名字 | `test_a_question_does_not_borrow_the_diagnosis_name` |
+| claim-guard 只有一种极性 | `test_the_claim_guard_has_one_polarity` |
+| **三种成因互不混同** | `test_the_three_causes_stay_distinguishable`、`test_a_restart_never_uses_expired_or_cancelled` |
+| 未超时的活动作业保持原状 | `test_a_live_job_inside_its_deadline_is_left_alone` |
+| **第二次定义会被扫出来** | `test_the_numbers_are_written_down_only_in_this_module`、`test_the_status_sets_are_written_down_only_in_this_module` |
+
+**三条变异核对**：① 存储层把健康作业的截止时间写回字面量 ⇒ 转红；
+② 存储层把活动状态集写回字面量 ⇒ 转红；③ 重启也用 `expired`（三种成因混同）⇒ 转红。
+
+⚠️ **一处刻意不做的改动**：把三份 `_expire_*` 与 `_initialize` 的 SQL 改为经本模块渲染 ——
+那是 **#491 与 #492 的范围**。本片只做「一处定义」，SQL 渲染留给动它的票，
+否则一张票同时改定义与四处调用点，回退时无法分辨是哪一半出的问题。
+实测过一次并撤回：把健康作业的过期 SQL 改为经 `claim_guard()` 渲染后，
+健康作业的四个既有用例转红（多出来的参数绑定顺序），**说明那确实不是一行的事**。
+
+**未完成业务验收**：本片对外零变化，且**没有生产调用方**；41 上无可比对案例。
+
 ## #489 订单授权守卫合一，判定不可用与「确实无权」在观测上可分（2026-09-30）
 
 七个调用点各自取一个 `bool`，而 `bool` 抹掉了日志与指标再也表达不出的区别：
