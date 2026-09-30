@@ -110,12 +110,25 @@
 | run 列表为空 | 报正常 | 报 `no-runs` —— 「一次都没触发过」与「一直正常」在告警面上是同一种安静 |
 | 超时且 `jobs=0` | 判 `indeterminate` ⇒ 报正常（**恰好把要修的静默又做了一遍**） | 判 `deadlocked` —— 阈值本身就是「已经等了 30 分钟」，30 分钟没建出作业不是慢，是坏了 |
 
+> **上线当天用真实队列撞到并修掉的四个洞**（各自都是「只看一条/只看一个窗口」的投影）：
+>
+> | 洞 | 现象 | 修法 |
+> |---|---|---|
+> | 只看 `runs[0]` | 一个等了 **84 分钟**的在等批准，因为 `runs[0]` 是刚 push 的那条 ⇒ 报「正常」；再 push 一次它就彻底消失 | 扫**全部**未完成的 run |
+> | 取数有窗口上限 | 10 次更新的 run 之后，旧的卡住 run 从 `--limit` 窗口里消失 | 新增 `fetchUnfinished`，**按状态逐个精确过滤**；取满上限即判「可能不完整」并报取数失败 |
+> | 判据挂在创建时刻 | 「等批准 40 分钟 + 部署 10 分钟」的运行会在第二阶段被判 `deadlocked`（批准后 `pending_deployments` 归零）—— 纯假阳性 | `in_progress` 永远不是 stalled（它自己的 20 分钟超时就是兜底） |
+> | 只看最早那条 | 一条 `indeterminate` 的旧 run 会把后面一条**确凿**的 `stuck` 一起挡掉 | **逐条**判定 |
+>
+> 同时把 `assess` 的输入拆成两份：卡住看**未完成集合**、连续失败看**最近 N 次** ——
+> 两者混用会让未完成的 run 插进来打乱「连续」的计数。`unfinishedRuns: null`（取不到）
+> 与 `[]`（确实没有）含义不同，不可互换。
+
 ### 验证（全部可复跑；**不依赖访问生产**）
 
 | 检查 | 结果 |
 |---|---|
 | `node .sandcastle/deploy-state.mjs` | `demo passed` |
-| `node .sandcastle/cd-watch.test.mjs` | **11/11**（含上表三种「未知」情形与「连续 3 次 cancelled」） |
+| `node .sandcastle/cd-watch.test.mjs` | **15/15**（含三种「未知」情形、「连续 3 次 cancelled」，以及上线当天补的四条：窗口外看不见、排队不误报、未知不挡确凿、未完成集合取不到） |
 | **真实数据** `node .sandcastle/cd-watch.mjs --dry-run` | 报出**当下确实在等**的那个 run（`58dc271`，pending=1）为 `stuck` ⇒ **判据在真实等待上会响**，不只在假数据里成立 |
 | `shellcheck deploy/*.sh` | 通过（新增脚本被仓库既有测试 `test_deploy_scripts_pass_shellcheck` 覆盖） |
 | `node .sandcastle/policy-check.mjs workflows` | passed |
