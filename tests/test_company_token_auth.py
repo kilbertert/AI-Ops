@@ -708,6 +708,99 @@ def test_the_consumer_entry_keeps_the_self_scope_for_a_company_token(
     assert other.json()["error"]["code"] == "ORDER_NOT_FOUND"
 
 
+# --- 8-bis. B1：入口头是「分流」，**不是身份** ---------------------------------
+#
+# 来由（`docs/agents/operator-repair-blueprint.md` §B1）：`X-Business-Entry` 目前由前端自报，
+# 任何调用方都能宣称自己落在管家端内容域。判定时刻的定案是「前端自报 + 目标态由网关注入」，
+# 因此这一层必须钉死它的**边界**：宣称 entry=operator 换来的只有内容域与数据范围口径，
+# 换不来身份。下面两条是那条契约的可回归形式，覆盖**两个方向**：
+#   ① 凭据不成立时，入口头**打不开**任何东西（不是「带了 operator 就放行」）；
+#   ② 凭据成立时，入口头换的是**范围口径**，不是「你是谁」（同一凭据两个入口结果不同，但
+#      差异恰好是「站点集合 vs 本人」，不是「能看 / 不能看任意订单」）。
+
+
+def _parity_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """生产形状的应用：**公司一致模式**（`trust_company_payload=True`，不验签）。
+
+    这一节刻意用生产默认模式而不是远端 ``check_token`` 模式 —— 后者在本文件里被替换成
+    「永远返回成功体」，于是**任何** Authorization 值都会被接受，用它测「凭据不成立时
+    入口头打不开东西」会得到假绿。生产形状下 `_jwt` 造的令牌才是唯一能进门的形态。
+    """
+    connection = Connection()
+    monkeypatch.setattr("aiops_diagnostics.sources.pymysql.connect", lambda **_: connection)
+    resolver = CompanyTokenCallerResolver(
+        _parity_settings(),
+        mysql_settings(),
+        scope_mapper_factory=lambda _s: _Mapper({"SHOP-1": (SITE_IN,)}),
+    )
+    return assistant_app(tmp_path, monkeypatch, resolver, connection)
+
+
+def test_the_operator_entry_header_alone_never_authenticates(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """**入口头不是身份**：带上它、凭据不成立 ⇒ 一条都读不到，且报的是**凭据**的错。
+
+    断言错误码而不是只看非 200，是为了把它与「放行后由平台层兜住」区分开：
+    `ACCESS_TOKEN_REQUIRED` / `INVALID_ACCESS_TOKEN` 都说明请求死在**凭据**那一层。
+    若实现改成「有 `operator` 头就走宽路径」，这里会变成 200 或平台层的 409/503。
+    """
+    client, _ = _parity_client(tmp_path, monkeypatch)
+
+    cases = [
+        # 完全不带凭据。
+        ({"X-Business-Entry": "operator"}, "ACCESS_TOKEN_REQUIRED"),
+        # 带了凭据，但结构上就不是 JWT（入口头不改变这一点）。
+        ({"X-Business-Entry": "operator", "Authorization": "Bearer not-a-jwt"}, "INVALID_ACCESS_TOKEN"),
+        # 结构合法、身份字段齐备，但 `alg` 不是 HS256 —— 这条判据**不因不验签而放宽**。
+        (
+            {
+                "X-Business-Entry": "operator",
+                "Authorization": "Bearer " + _jwt(_valid_claims(), alg="none"),
+            },
+            "INVALID_ACCESS_TOKEN",
+        ),
+    ]
+    for headers, expected_code in cases:
+        listed = client.get("/v1/shortcuts", headers=headers)
+        assert listed.status_code == 401, (headers, listed.text)
+        assert listed.json()["error"]["code"] == expected_code, (headers, listed.text)
+
+
+def test_the_operator_entry_header_selects_the_scope_reading_not_the_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """凭据成立时，入口头换的是**范围口径**：同一凭据、同一订单，两个入口结果不同。
+
+    `ORDER_INSIDE` 挂在**别人**名下、站点在 `SHOP-1` 的站点集合里：
+
+    - `operator` ⇒ 运营商站点集合口径 ⇒ 可见（`202`）；
+    - `consumer` ⇒ 本人口径 ⇒ 不可见（`404`，且与「不存在」同形）。
+
+    差异**恰好是这两种口径**，不是「能看任意订单」—— 这正是「入口头决定分流、不决定身份」
+    的可观察形式（身份两侧相同：同一个 B 端主体、同一个 C 端用户）。
+    若实现把入口头当成放宽开关，`consumer` 那一侧会变成 `202`；若当成收紧开关，
+    `operator` 那一侧会变成 `404`。
+    """
+    client, _ = _parity_client(tmp_path, monkeypatch)
+    body = {"question": "帮我检测这个订单的充电异常", "order_no": ORDER_INSIDE}
+
+    allowed = client.post(
+        "/v1/assistant/questions",
+        json=body,
+        headers={"Authorization": "Bearer " + _jwt(_valid_claims()), "X-Business-Entry": "operator"},
+    )
+    refused = client.post(
+        "/v1/assistant/questions",
+        json=body,
+        headers={"Authorization": "Bearer " + _jwt(_valid_claims()), "X-Business-Entry": "consumer"},
+    )
+
+    assert allowed.status_code == 202, allowed.text
+    assert refused.status_code == 404, refused.text
+    assert refused.json()["error"]["code"] == "ORDER_NOT_FOUND", refused.text
+
+
 # --- 9. #444：来源密钥门（分派 + fail closed）---------------------------------
 #
 # 断言的都是对外可观察行为：**哪条链被走到**（由替身记录）与 HTTP 结果。门本身只是一次
