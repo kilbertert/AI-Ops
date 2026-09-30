@@ -304,3 +304,177 @@ def test_a_user_stop_is_not_a_retryable_failure() -> None:
     assert HEALTH_JOB.failed == "failed"
     # `runs` spells three causes instead of one, so it names none of them here.
     assert RUN.failed is None
+
+
+def test_one_rendering_covers_every_table() -> None:
+    """The statement text differs between tables only by the table name.
+
+    This is what "five copies became one" means concretely: the sweep SQL for
+    `standard_diagnoses` and for `assistant_questions` is byte-identical once
+    the table name is substituted, and their parameters differ only in the
+    status lists their profiles declare.
+    """
+    from aiops_diagnostics.async_job_lifecycle import expire_statements
+
+    now = "2026-09-30T12:00:00+00:00"
+    shapes = []
+    for table, profile in (
+        ("standard_diagnoses", DIAGNOSIS),
+        ("assistant_questions", QUESTION),
+    ):
+        statements = expire_statements(table, profile, now)
+        shapes.append(
+            (
+                statements.claim[0].replace(table, "<table>"),
+                statements.sweep[0].replace(table, "<table>"),
+            )
+        )
+    assert shapes[0] == shapes[1], shapes
+
+
+def test_the_health_table_sweeps_a_different_status_set() -> None:
+    """A difference between tables is now a difference between profiles.
+
+    The health table has no `cancelled`, so its sweep names three statuses where
+    the other two name four. That is the whole of the difference, and it is
+    readable off the profile rather than off a hand-edited SQL string.
+    """
+    from aiops_diagnostics.async_job_lifecycle import expire_statements
+
+    health = expire_statements("health_report_jobs", HEALTH_JOB, "NOW")
+    diagnosis = expire_statements("standard_diagnoses", DIAGNOSIS, "NOW")
+    assert "cancelled" in diagnosis.sweep[1]
+    assert "cancelled" not in health.sweep[1]
+    assert health.sweep[1][2:] == ("completed", "failed", "NOW")
+
+
+def test_the_startup_shape_is_the_sweep_without_a_deadline_clause() -> None:
+    """One rendering, two shapes, and the difference is a parameter.
+
+    The startup path converges every live row (the process that held them is
+    gone); the sweep compares against a deadline. Keeping that as a parameter
+    rather than a second copy is what makes the difference visible — and it is
+    the thing #492 decides about.
+    """
+    from aiops_diagnostics.async_job_lifecycle import expire_statements
+
+    now = "NOW"
+    startup = expire_statements("standard_diagnoses", DIAGNOSIS, now, require_deadline=False)
+    sweep = expire_statements("standard_diagnoses", DIAGNOSIS, now)
+    assert "deadline_at" not in startup.claim[0]
+    assert "deadline_at" in sweep.claim[0]
+    assert startup.claim[1] == sweep.claim[1][:-1]
+
+
+def test_a_table_the_module_does_not_own_is_refused() -> None:
+    """The table name is interpolated, so it is an allowlist, not a parameter.
+
+    A name from anywhere else would be an injection surface; every caller today
+    passes a literal and this keeps it that way.
+    """
+    from aiops_diagnostics.async_job_lifecycle import expire_statements
+
+    with pytest.raises(ValueError):
+        expire_statements("runs; DROP TABLE runs", DIAGNOSIS, "NOW")
+    with pytest.raises(ValueError):
+        expire_statements("runs", RUN, "NOW")  # a real table, but not swept here
+
+
+def test_a_profile_without_an_expiry_cannot_be_swept() -> None:
+    from aiops_diagnostics.async_job_lifecycle import expire_statements
+
+    with pytest.raises(ValueError):
+        expire_statements("health_report_jobs", RUN, "NOW")
+
+
+def test_the_sweep_sql_is_written_down_only_in_this_module() -> None:
+    """No hand-written expire statement survives outside the renderer.
+
+    Five copies lived here before: three `_expire_*` methods and two more inside
+    the startup path. The defect was never that any one of them was wrong — it
+    is that each was covered by its own callers' tests, so changing one left the
+    others green. That is invisible to a behaviour test and visible here.
+    """
+    import ast
+    from pathlib import Path
+
+    package = Path(__file__).parents[1] / "src" / "aiops_diagnostics"
+    offenders: list[str] = []
+    for path in sorted(package.glob("*.py")):
+        if path.name == "async_job_lifecycle.py":
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+                continue
+            text = " ".join(node.value.upper().split())
+            # A sweep is an UPDATE whose SET clause writes `expired` as a
+            # LITERAL. Narrow on purpose: an UPDATE that only mentions `expired`
+            # in its WHERE clause (the per-row claim guard, which binds its
+            # status) is not a sweep, and matching it would make this guard cry
+            # wolf until someone deleted it.
+            if "UPDATE " in text and "SET STATUS = 'EXPIRED'" in text.replace("STATUS ='", "STATUS = '"):
+                offenders.append(f"{path.name}:{node.lineno}")
+    assert offenders == [], "; ".join(offenders)
+
+
+def _expire_pairs() -> tuple[dict[str, str], dict[str, str]]:
+    """`(method pairs, startup pairs)` — kept apart, on purpose.
+
+    Two sources pair a table with a profile: the three `_expire_*` methods and
+    the startup loop. Merging them into one dict lets a correct entry in one
+    source MASK a wrong entry in the other (last write wins), which is exactly
+    the failure this check exists to catch. Returning them separately is what
+    makes both sources assertable.
+    """
+    import ast
+    from pathlib import Path
+
+    store = Path(__file__).parents[1] / "src" / "aiops_diagnostics" / "gateway_store.py"
+    tree = ast.parse(store.read_text(encoding="utf-8"), filename=str(store))
+    methods: dict[str, str] = {}
+    startup: dict[str, str] = {}
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and getattr(node.func, "id", "") == "expire_statements"
+            and isinstance(node.args[0], ast.Constant)
+        ):
+            methods[node.args[0].value] = ast.unparse(node.args[1])
+        if not isinstance(node, ast.For) or not isinstance(node.iter, ast.Tuple):
+            continue
+        if "expire_statements" not in ast.unparse(node):
+            continue
+        for element in node.iter.elts:
+            if not isinstance(element, ast.Tuple) or len(element.elts) != 2:
+                continue
+            table = element.elts[0]
+            if not isinstance(table, ast.Constant):
+                continue
+            startup[table.value] = ast.unparse(element.elts[1])
+    return methods, startup
+
+
+def test_each_sweep_names_the_profile_of_its_own_table() -> None:
+    """The table and the profile are two names for one thing — in both shapes.
+
+    Substituting another profile's name is behaviourally invisible on today's
+    data — the health table has no `cancelled`, so sweeping it with the
+    diagnosis profile changes nothing you can observe. It is still wrong: the
+    sweep would then follow a profile that does not describe its table, and the
+    first status either profile gains would silently apply to both.
+
+    Asserted per source rather than on a merged view: with one dict, a correct
+    startup pair would overwrite a wrong `_expire_*` pair and the check would
+    pass on the very defect it names.
+    """
+    expected = {
+        "health_report_jobs": "HEALTH_JOB",
+        "standard_diagnoses": "DIAGNOSIS",
+        "assistant_questions": "QUESTION",
+    }
+    methods, startup = _expire_pairs()
+    assert methods == expected, methods
+    # The startup path sweeps two of the three; each must still name its own.
+    assert startup, "the startup sweep was not found: this check points at nothing"
+    assert startup == {table: expected[table] for table in startup}, startup

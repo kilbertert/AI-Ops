@@ -7,6 +7,52 @@
 
 
 
+## #491 五份同形过期 SQL 收成一种渲染（2026-10-01）
+
+**#430 的第二张子票。** 改动前：三份 `_expire_*` 各写一份同形 SQL（差别只有表名与终态集合），
+`_initialize` 的启动清扫又写了两份 —— **五份**，删掉其中任何两份、把第三份的表名换成自己的，
+全仓测试一片绿。
+
+**改动**：三份 `_expire_*` 与启动清扫的两份全部改走 `expire_statements(table, profile, now)`。
+后者的语句与 sweep **同一份渲染**，只少一个 `deadline_at` 子句 —— 那点差异做成了**显式参数**
+（`require_deadline=False`），而不是第二份副本。
+
+**对外与行为零变化**：语句、参数、调用时机都没动，只动了它们写在哪里。
+
+### 证据
+
+| 判据 | 用例 |
+|---|---|
+| 两张表的语句除表名外**逐字相同** | `test_one_rendering_covers_every_table` |
+| 健康表的状态差异来自其 profile | `test_the_health_table_sweeps_a_different_status_set` |
+| 启动形态 = sweep 去掉 deadline 子句，差一个参数 | `test_the_startup_shape_is_the_sweep_without_a_deadline_clause` |
+| 表名是**白名单**（它被插值进语句） | `test_a_table_the_module_does_not_own_is_refused` |
+| 没有过期的 profile 不能被清扫 | `test_a_profile_without_an_expiry_cannot_be_swept` |
+| **没有手写的清扫语句残留** | `test_the_sweep_sql_is_written_down_only_in_this_module`（按语句而非按行） |
+| 表名与 profile **配对正确** | `test_each_sweep_names_the_profile_of_its_own_table` |
+
+**四条变异核对**：① 某张表写回字面量 SQL ⇒ 转红；② 表名与 profile 配错（在 `_expire_*` 里）
+⇒ 转红；③ 表名与 profile 配错（在启动循环里）⇒ 转红；④ 方法里配错、启动循环正确（即两处
+**互相掩盖**的方向）⇒ 转红。
+
+后两条是两轮评审各指出一次的同一个盲点，值得连起来看：
+
+- 第一轮：配对检查只走 `_expire_*` 方法，**跳过启动循环**。
+- 第二轮：把它扩成「读全模块」之后，两处**合并进同一个字典** —— 于是正确的那一处会
+  **覆盖**错误的那一处（后写者胜），检查又一次在对它命名的缺陷上通过。
+
+最终形态是**按来源分别断言**（方法一份、启动循环一份），两个方向都各有用例。
+
+⚠️ **最后那条是「行为上看不出」的那种错**：拿诊断的 profile 去清扫健康作业，**今天完全观察不到**
+（健康表没有 `cancelled`，多扫一个状态不改变任何行）。但它仍要拦 —— 那条语句从此跟随一个
+**不描述自己表**的 profile，任一方将来多一个状态都会悄悄应用到另一方。这条断言是纯结构性的。
+
+⚠️ **扫描的写法**：先按行查直接**漏**（`_initialize` 里那份 SQL 的第一行不含 `SET status`）；
+改成按**语句常量**查之后才抓到它。另按形状收窄到 `SET status = 'expired'` 字面量，
+否则按行级 claim-guard（它只出现在 WHERE 子句里）会误报。
+
+**未完成业务验收**：对外与行为零变化，41 无可比对案例。
+
 ## #490 作业生命周期模块（2026-09-30）
 
 **本片是 #430 的第一张子票，刻意只建模块、不接调用方**（另三张票要依赖它）。
