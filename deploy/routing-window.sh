@@ -29,10 +29,13 @@ else
   # is the direction that invents traffic rather than hiding it.
   # `/proc/<pid>` carries the epoch, so this reads the clock the rows were
   # written with and needs no zone arithmetic at all.
+  # shellcheck disable=SC2029  # the expansion is meant to happen here: the
+  # remote side runs the remote shell's own commands on the remote clock.
   WINDOW_START=$(ssh "$HOST" "date -u -d @\$(stat -c %Y /proc/\$(systemctl show $SERVICE -p MainPID --value)) +%Y-%m-%dT%H:%M:%S+00:00")
   echo "窗口起点（当前进程启动，UTC）：$WINDOW_START"
 fi
 
+# shellcheck disable=SC2029  # sending these values to the remote side IS the point
 ssh "$HOST" "sudo -u aiops41 $PY - '$DB' '$WINDOW_START'" <<'PY'
 import sqlite3
 import sys
