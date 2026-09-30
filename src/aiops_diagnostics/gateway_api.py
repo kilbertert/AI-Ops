@@ -60,6 +60,7 @@ from aiops_diagnostics.faq import (
     FAQCatalog,
     FAQError,
     MySQLPlatformDirectory,
+    PlatformDecision,
     PlatformDirectoryError,
     PlatformIdentityResolver,
 )
@@ -595,67 +596,55 @@ def create_gateway_app(
             required_scope=STANDARD_FAQ_SCOPE,
         )
 
-    def faq_identity(
-        caller: ScopeContext = Depends(authenticated_faq_caller),  # noqa: B008
-        business_entry: Annotated[str | None, Header(alias="X-Business-Entry")] = None,
-    ) -> tuple[ScopeContext, Any]:
-        try:
-            decision = context.platform_resolver.resolve(caller, business_entry)
-        except FAQError as exc:
-            status_code = {
-                PLATFORM_AMBIGUOUS: status.HTTP_409_CONFLICT,
-                PLATFORM_FORBIDDEN: status.HTTP_403_FORBIDDEN,
-                PLATFORM_UNAVAILABLE: status.HTTP_503_SERVICE_UNAVAILABLE,
-            }.get(exc.code, status.HTTP_503_SERVICE_UNAVAILABLE)
-            raise StandardAPIError(
-                status_code,
-                exc.code,
-                str(exc),
-                retryable=exc.code == PLATFORM_UNAVAILABLE,
-            ) from exc
-        except PlatformDirectoryError as exc:
-            raise StandardAPIError(
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-                PLATFORM_UNAVAILABLE,
-                "platform identity unavailable",
-                retryable=True,
-            ) from exc
-        return caller, decision
+    def platform_identity(caller_dependency: Any):
+        """Build the identity dependency for one required scope.
 
-    def assistant_identity(
-        caller: ScopeContext = Depends(authenticated_diagnosis_caller),  # noqa: B008
-        business_entry: Annotated[str | None, Header(alias="X-Business-Entry")] = None,
-    ) -> tuple[ScopeContext, Any]:
-        """Assistant endpoint identity: diagnoses:write callers + platform decision.
+        The platform decision is one rule — "which content domain is this
+        request in, given a VERIFIED caller and the entry context" — and it had
+        been written out three times, twice byte-for-byte and once differing in
+        a single line: the return type. That one line was load-bearing (the FAQ
+        and assistant branches need the decision object, the shortcut branch
+        needed `str(decision.platform)`), which is exactly why the copies
+        drifted: each caller read the copy that suited its own shape.
 
-        The assistant endpoint can trigger a full order diagnosis (a write
-        action) on its order branch, so it must authenticate with the same
-        scope as /v1/standard/diagnoses (aiops:diagnoses:write) — NOT the
-        weaker faq:read used by the pure-FAQ endpoints. The authenticated
-        caller then resolves the platform content domain for the FAQ branch.
+        The factory returns the SAME shape to everyone and lets each caller take
+        what it needs, so there is one rule and no per-caller variant of it.
         """
-        try:
-            decision = context.platform_resolver.resolve(caller, business_entry)
-        except FAQError as exc:
-            status_code = {
-                PLATFORM_AMBIGUOUS: status.HTTP_409_CONFLICT,
-                PLATFORM_FORBIDDEN: status.HTTP_403_FORBIDDEN,
-                PLATFORM_UNAVAILABLE: status.HTTP_503_SERVICE_UNAVAILABLE,
-            }.get(exc.code, status.HTTP_503_SERVICE_UNAVAILABLE)
-            raise StandardAPIError(
-                status_code,
-                exc.code,
-                str(exc),
-                retryable=exc.code == PLATFORM_UNAVAILABLE,
-            ) from exc
-        except PlatformDirectoryError as exc:
-            raise StandardAPIError(
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-                PLATFORM_UNAVAILABLE,
-                "platform identity unavailable",
-                retryable=True,
-            ) from exc
-        return caller, decision
+
+        def dependency(
+            caller: ScopeContext = Depends(caller_dependency),  # noqa: B008
+            business_entry: Annotated[str | None, Header(alias="X-Business-Entry")] = None,
+        ) -> tuple[ScopeContext, PlatformDecision]:
+            try:
+                decision = context.platform_resolver.resolve(caller, business_entry)
+            except FAQError as exc:
+                raise _platform_error(exc) from exc
+            except PlatformDirectoryError as exc:
+                raise StandardAPIError(
+                    status.HTTP_503_SERVICE_UNAVAILABLE,
+                    PLATFORM_UNAVAILABLE,
+                    "platform identity unavailable",
+                    retryable=True,
+                ) from exc
+            return caller, decision
+
+        return dependency
+
+    # One rule, three required scopes. The scope is the only thing that differs
+    # between them, and it differs for a reason worth keeping written down:
+    #
+    # * `faq_identity` — the pure-FAQ surface reads catalogue content.
+    # * `assistant_identity` — the assistant can trigger a full order diagnosis
+    #   (a write action) on its order branch, so it authenticates with the same
+    #   scope as `/v1/standard/diagnoses` (aiops:diagnoses:write), NOT the
+    #   weaker faq:read. It then resolves the platform content domain for the
+    #   FAQ branch.
+    # * `shortcut_identity` — the shortcut listing renders the product home for
+    #   every authenticated user, so it needs no admin role; tenant isolation
+    #   is enforced inside the store by the caller's effective tenant.
+    faq_identity = platform_identity(authenticated_faq_caller)
+    assistant_identity = platform_identity(authenticated_diagnosis_caller)
+    shortcut_identity = platform_identity(authenticated_shortcut_viewer)
 
     @app.get("/health")
     def health() -> dict[str, Any]:
@@ -1793,44 +1782,9 @@ def create_gateway_app(
             )
         return StandardAPIError(status.HTTP_422_UNPROCESSABLE_ENTITY, exc.code, str(exc))
 
-    def shortcut_identity(
-        caller: ScopeContext = Depends(authenticated_shortcut_viewer),  # noqa: B008
-        business_entry: Annotated[str | None, Header(alias="X-Business-Entry")] = None,
-    ) -> tuple[ScopeContext, str]:
-        """Shortcut listing identity: any assistant-scope caller + resolved entry.
-
-        The listing renders the product home for every authenticated user, so
-        it requires no admin role — but the entry comes from the SAME platform
-        decision the assistant uses (never a client self-report), and tenant
-        isolation is enforced inside the store by the caller's effective
-        tenant.
-        """
-        try:
-            decision = context.platform_resolver.resolve(caller, business_entry)
-        except FAQError as exc:
-            status_code = {
-                PLATFORM_AMBIGUOUS: status.HTTP_409_CONFLICT,
-                PLATFORM_FORBIDDEN: status.HTTP_403_FORBIDDEN,
-                PLATFORM_UNAVAILABLE: status.HTTP_503_SERVICE_UNAVAILABLE,
-            }.get(exc.code, status.HTTP_503_SERVICE_UNAVAILABLE)
-            raise StandardAPIError(
-                status_code,
-                exc.code,
-                str(exc),
-                retryable=exc.code == PLATFORM_UNAVAILABLE,
-            ) from exc
-        except PlatformDirectoryError as exc:
-            raise StandardAPIError(
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-                PLATFORM_UNAVAILABLE,
-                "platform identity unavailable",
-                retryable=True,
-            ) from exc
-        return caller, str(decision.platform)
-
     @app.get("/v1/shortcuts")
     def list_shortcuts(
-        identity: tuple[ScopeContext, str] = Depends(shortcut_identity),  # noqa: B008
+        identity: tuple[ScopeContext, PlatformDecision] = Depends(shortcut_identity),  # noqa: B008
         language: str = Depends(request_language),  # noqa: B008
     ) -> dict[str, Any]:
         """Published product-entry shortcuts for this caller's tenant+entry.
@@ -1840,9 +1794,9 @@ def create_gateway_app(
         wires behavior to (e.g. order picker for requires_order=True), plus
         copy localized in the request language (zh fallback).
         """
-        caller, entry = identity
+        caller, decision = identity
         try:
-            shortcuts = context.shortcut_manager.list_effective(caller, business_entry=entry)
+            shortcuts = context.shortcut_manager.list_effective(caller, business_entry=decision.platform)
         except ShortcutError as exc:
             raise _shortcut_error(exc) from exc
         return {
@@ -2340,6 +2294,26 @@ def _debug_public_error(error: Exception) -> str:
 
     message = redact_text(str(error))
     return message[:500] if message else error.__class__.__name__
+
+
+#: The platform decision's failure modes and the answer each one gets. One
+#: definition: the three copies this replaces had already drifted apart once,
+#: and an error taxonomy with two answers is an error taxonomy with none.
+_PLATFORM_ERROR_STATUS = {
+    PLATFORM_AMBIGUOUS: status.HTTP_409_CONFLICT,
+    PLATFORM_FORBIDDEN: status.HTTP_403_FORBIDDEN,
+    PLATFORM_UNAVAILABLE: status.HTTP_503_SERVICE_UNAVAILABLE,
+}
+
+
+def _platform_error(exc: FAQError) -> StandardAPIError:
+    """``FAQError`` (a platform-decision failure) as the response it deserves."""
+    return StandardAPIError(
+        _PLATFORM_ERROR_STATUS.get(exc.code, status.HTTP_503_SERVICE_UNAVAILABLE),
+        exc.code,
+        str(exc),
+        retryable=exc.code == PLATFORM_UNAVAILABLE,
+    )
 
 
 def _authenticate_caller(

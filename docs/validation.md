@@ -7,6 +7,56 @@
 
 
 
+## #486 平台身份判定三份合一份（2026-09-30）
+
+`CONTEXT.md` 对「平台身份判定」有权威定义，并附 `Avoid: 客户端自报 platform`。这条规则在网关层
+被抄了三遍：`faq_identity` 与 `assistant_identity` 的 22 行**逐字节相同**，`shortcut_identity`
+与它们相差**且仅相差**一行 —— 一个返回对象，一个返回 `str(decision.platform)`。
+
+**那一行是承重的，不是外观问题**：FAQ 与助手分支的消费方要对象（`decision.platform`、
+`**decision.public()` 等多处），快捷动作分支的消费方要字符串。**每个调用方读了适合自己形状的那一份**
+—— 这正是同一条规则变成三份的方式。
+
+**改动**：一个工厂 `platform_identity(caller_dependency)` 产出三个身份依赖，**返回类型统一为
+`PlatformDecision`**；快捷动作分支改回对象并自行取 `decision.platform`；`FAQError` 的三种平台错误码
+与 `retryable` 判据收成一个渲染器 `_platform_error`（原先三份内联 dict）。
+
+**证据**：
+
+| 判据 | 用例 |
+|---|---|
+| 同一个平台失败在 FAQ / 助手 / 快捷动作三面**同答** | `test_the_same_platform_failure_answers_the_same_on_every_surface` |
+| 返回类型处处是对象、工厂体内不再出现字符串返回 | `test_the_decision_object_is_what_every_surface_receives` |
+| 三个身份名都由工厂产出，没有第二份实现 | `test_the_identity_dependencies_come_from_one_factory` |
+| **三个身份各自绑定正确的认证依赖** | `test_each_identity_carries_the_scope_its_surface_requires` |
+| **每个端点请求的是承载其 scope 的那个身份**（13 个处理函数，双向相等） | `test_each_surface_asks_for_the_identity_that_carries_its_scope` |
+
+**三条变异核对**：① 快捷动作分支改回 `str(decision.platform)` ⇒ 转红；
+② **某个身份换错认证依赖**（`faq_identity` 绑到 diagnosis 依赖）⇒ 转红；
+③ **某个端点改用另一个身份名**（`list_shortcuts` 用 `faq_identity`）⇒ 转红；
+④ **某个会话端点改用 `shortcut_identity`**（覆盖面不止快捷动作那一处）⇒ 转红。
+
+第 ③ 条是第一轮评审**没有**覆盖的形态（Devin 指出记录里对它的「核对」其实只是一句注释，
+现有用例只检查身份绑定、不检查端点用哪个身份）。补上端点级断言后它才真的会转红 ——
+而且这是更可能的失误：**依赖名写在端点上，离它承载的 scope 很远**。
+
+三处细节都是第二轮评审逼出来的，各自实测过：
+
+- 映射按**处理函数名**索引而不是路径：`/v1/shortcuts` 同时服务列表（要平台判定）与创建
+  （只要管理 scope），按路径索引会把正确的处理函数报成越界。
+- 判定读 **`Depends(...)` 的参数**，不读「这个名字出现过没有」：否则备注或变量里提一句
+  就能把已发生的替换盖过去。
+- 断言写成**双向相等**：代码里依赖了身份却没登记 ⇒ 一条；登记了却没人依赖 ⇒ 另一条。
+  两个方向各堵一种漂移（新端点悄悄并入某个面 / 改名让这张表静默失效）。
+
+⚠️ **一条自己踩的坑，记在这里**：改这段时一次 `python` 替换把 **`/health` 路由整段删掉了**
+（片段边界选在了 `@app.get("/v1/faq/recommendations")`，而健康检查正好在它前面）。是 ruff 报
+`platform` 未使用才暴露的 —— `/health` 的响应体里用 `platform.system()`。**删完必须核对
+「这个 import 还有没有用」**，那是这次唯一发现它的信号。
+
+**未完成业务验收**：本片对外零变化（错误码、文案、状态码都不变），无真实故障案例可比对；
+41 上未实测，但三面一致性由本地替身驱动。
+
 ## #485 调用者认证错误映射合一（2026-09-30）
 
 **这是 #432 五张切片里唯一改变对外行为的一张，也是本轮唯一「文档把答案写定、代码给了两个答案」的缺陷。**
