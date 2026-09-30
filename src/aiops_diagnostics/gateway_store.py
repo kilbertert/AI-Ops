@@ -59,6 +59,10 @@ DIAGNOSIS_DEADLINE = DIAGNOSIS.deadline
 # what happened: the process holding the worker died. The code and message on
 # the row carry the cause, so an operator reading a failed answer can tell a
 # deploy from a timeout and from a user stop.
+HEALTH_JOB_RESTART_ERROR_CODE = "REPORT_INTERRUPTED_BY_RESTART"
+HEALTH_JOB_RESTART_ERROR_MESSAGE = "the gateway restarted while this report was still being computed"
+DIAGNOSIS_RESTART_ERROR_CODE = "DIAGNOSIS_INTERRUPTED_BY_RESTART"
+DIAGNOSIS_RESTART_ERROR_MESSAGE = "the gateway restarted while this diagnosis was still running"
 ASSISTANT_QUESTION_RESTART_ERROR_CODE = "QA_INTERRUPTED_BY_RESTART"
 ASSISTANT_QUESTION_RESTART_ERROR_MESSAGE = (
     "the gateway restarted while this question was still being answered"
@@ -617,6 +621,68 @@ class GatewayStore:
             row = connection.execute("SELECT COUNT(*) AS count FROM assistant_questions").fetchone()
         return int(row["count"])
 
+    def recover_interrupted_jobs(self) -> None:
+        """Converge the jobs a previous gateway process left in flight (#492).
+
+        A restart kills the workers but not the rows, and the only other exit is
+        each job's deadline — so without this a caller waits out the whole
+        deadline on work nobody is doing. Runs on the gateway's boot path, where
+        the restart actually happened.
+
+        **Not in `__init__`.** That is where the other two tables used to do it,
+        and it was wrong: construction happens on every short-lived CLI command
+        (`aiops-gateway devices`, `issue-enrollment`, `revoke-device`), so
+        listing devices ended a diagnosis that was still being worked on and the
+        caller read a result-less `expired`. The verdict here is the honest one
+        — `failed` with a code saying the process holding it died — and it uses
+        the same three-way distinction the question table already used:
+        `expired` means the job outran its deadline, `cancelled` means the user
+        stopped it, and a restart is neither.
+
+        Each write goes through the table's own update path, so its claim-guard
+        and retention tier apply: a row another path drove terminal between the
+        scan and the write is left alone, which is the same quiet exit the
+        workers take on a refused write.
+        """
+        with self._connection() as connection:
+            jobs = {
+                "health_report_jobs": [
+                    str(row["job_id"])
+                    for row in connection.execute(
+                        "SELECT job_id FROM health_report_jobs WHERE status IN ('queued', 'running')"
+                    ).fetchall()
+                ],
+                "standard_diagnoses": [
+                    str(row["diagnosis_id"])
+                    for row in connection.execute(
+                        "SELECT diagnosis_id FROM standard_diagnoses WHERE status IN ('queued', 'running')"
+                    ).fetchall()
+                ],
+            }
+        for job_id in jobs["health_report_jobs"]:
+            self.update_health_job(
+                job_id,
+                status="failed",
+                error_code=HEALTH_JOB_RESTART_ERROR_CODE,
+                error_message=HEALTH_JOB_RESTART_ERROR_MESSAGE,
+            )
+        for diagnosis_id in jobs["standard_diagnoses"]:
+            self.update_standard_diagnosis(
+                diagnosis_id,
+                status="failed",
+                error_code=DIAGNOSIS_RESTART_ERROR_CODE,
+                error_message=DIAGNOSIS_RESTART_ERROR_MESSAGE,
+            )
+        self.recover_assistant_questions()
+        # The conversations those jobs belonged to are still holding their
+        # generation slots, and nothing will complete those turns: the worker
+        # that owned them died with the process. Freeing them here is the
+        # difference between "retry now" and "retry in two minutes" for the
+        # caller whose generation the deploy killed (#492).
+        from aiops_diagnostics.conversation_store import ConversationStore
+
+        ConversationStore(self.path).recover_interrupted_turns()
+
     def recover_assistant_questions(self) -> None:
         """Converge the questions a previous gateway process left in flight.
 
@@ -634,15 +700,16 @@ class GatewayStore:
         passed is swept to `expired` by that path's own expiry first, which is
         the accurate verdict: it outran its budget, the restart only noticed.
 
-        Scoped to ``assistant_questions`` on purpose: ``health_report_jobs`` and
-        ``standard_diagnoses`` already sweep their in-flight rows at store
-        construction, and changing what they converge to is not this change's to
-        make. This one is deliberately NOT folded into that sweep even though it
-        would be three lines beside them: ``__init__`` runs on every construction,
-        short-lived CLI commands (``aiops-gateway devices``) included, so a row
-        would be told "the gateway restarted" by a process that only listed
-        devices. This hook runs where the restart actually happened, and the other
-        two tables keep the construction sweep they have.
+        Reached through ``recover_interrupted_jobs()``, which the boot path calls
+        for all three asynchronous tables. It is kept as its own method because
+        this table's convergence predates the other two (T3/#356) and has its own
+        recovery test; the shared entry point is what keeps them together.
+
+        This method is deliberately NOT reachable from ``GatewayStore.__init__``:
+        construction runs on short-lived CLI commands (``aiops-gateway devices``)
+        too, so a row would be told "the gateway restarted" by a process that
+        only listed devices. That mistake is what the other two tables used to
+        make, and #492 moved them here.
         """
         with self._connection() as connection:
             in_flight = [
@@ -671,6 +738,14 @@ class GatewayStore:
         connection.execute(*statements.claim)
         connection.execute(*statements.sweep)
 
+    # NOTE (#492): `runs` is deliberately absent from `recover_interrupted_jobs`.
+    # The device path is scheduled for retirement and this table has no deadline
+    # column, so giving it a convergence rule is a product decision that nobody
+    # has made — PRD #410 left it explicit. Today a `queued`/`running` run whose
+    # process died stays that way until `update_run` is called with a terminal
+    # status; it is never swept. Recorded here because "the other three are
+    # converged at boot" is the shape that makes an omission look like an
+    # oversight rather than a decision.
     def create_run(
         self,
         *,
@@ -967,18 +1042,13 @@ class GatewayStore:
                 connection.execute(
                     "ALTER TABLE standard_diagnoses ADD COLUMN language TEXT NOT NULL DEFAULT 'zh'"
                 )
-            # The same two statements the sweeps run, against the same profiles
-            # (#491): this path used to carry a fourth and fifth copy whose only
-            # difference from the others was the missing `deadline_at` clause.
-            # That difference is the subject of #492 — it is kept here so this
-            # ticket changes WHERE the statement is written, not WHEN it runs.
-            now = _iso(_utc_now())
-            for table, profile in (
-                ("health_report_jobs", HEALTH_JOB),
-                ("standard_diagnoses", DIAGNOSIS),
-            ):
-                statements = expire_statements(table, profile, now, require_deadline=False)
-                connection.execute(*statements.claim)
+            # Constructing a store converges NOTHING (#492). This path used to
+            # end every `queued`/`running` health job and diagnosis without a
+            # deadline condition, and `__init__` runs on every construction —
+            # short-lived CLI commands included. `aiops-gateway devices` ended a
+            # diagnosis that was still being worked on, and the caller then read
+            # a result-less `expired`. Restart convergence belongs on the boot
+            # path, where the restart actually happened.
         protect_private_file(self.path)
 
     @contextmanager

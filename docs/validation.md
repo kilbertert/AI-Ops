@@ -7,6 +7,66 @@
 
 
 
+## #492 构造不再是重启（2026-10-01）
+
+**#430 的第三张子票，也是四张里唯一改变用户可见结果的一张。**
+
+`GatewayStore.__init__` 里的无条件清扫把**每一行** `queued`/`running` 的健康作业与标准诊断
+在**构造时**结束为 `expired`，没有 deadline 条件。而构造发生在**每一次**构造 —— 包括短命
+CLI 命令：`aiops-gateway devices` / `issue-enrollment` / `revoke-device`。
+
+⇒ **一次列设备的命令，结束了一条正在跑的诊断**，调用方随后读到一个没有结果的 `expired`。
+本仓自己已经在三处写明这件事（`recover_assistant_questions` 的 docstring、`docs/validation.md`、
+`docs/开发进度.md`），#356 因此**刻意没有把提问表并进去** —— 却把另两张表留在了那个机制里。
+
+**改动**：删掉 `__init__` 里的清扫；新增 `recover_interrupted_jobs()`，挂在**启动路径**
+（`create_gateway_app`，与既有的 `recover_assistant_questions` 同一个位置），覆盖三张异步表。
+终态是 **`failed` + `*_INTERRUPTED_BY_RESTART`**，不是 `expired`（超时）也不是 `cancelled`（用户停止）
+—— 三分语义沿用提问表的既有先例。每张表经**它自己的 update 路径**写入，因此 claim-guard 与
+保留期分档照常生效。
+
+### 唯一必须改写的既有断言
+
+`test_health_job_marks_incomplete_work_expired_after_restart` 用「构造第二个 `GatewayStore`」
+模拟重启，**这条守护把缺陷本身钉死了，因此它永远不可能发现它**。按 PRD 要求**拆成两条**：
+
+- `test_constructing_a_store_leaves_live_work_alone`：断言**不变**（旧代码上转红），
+  并断言该作业随后仍能写入自己的终态；
+- `test_the_boot_hook_converges_with_a_restart_verdict`：断言启动 hook 给出 `failed` + restart 码。
+
+**四条变异核对**：① 把启动收敛放回 `__init__` ⇒ 转红；② 收敛用 `expired` 而不是 restart 码 ⇒ 转红；
+③ 两个循环的 update 路径互换 ⇒ 转红；④ 启动恢复不释放会话槽 ⇒ 转红。
+
+### 评审第三轮四条（Devin）
+
+| # | 发现 | 处置 |
+|---|---|---|
+| 1 | 🟡 重启后的健康报告被响应标记 `retryable=false` —— 而 `create_or_reuse_health_job` **不复用失败记录**，重新创建确实可行，前端却不会给出重试入口 | ✅ 把 `REPORT_INTERRUPTED_BY_RESTART` 加入可重试集合；另加一条响应级用例（以「移出集合」核对，转红） |
+| 2 | 🟡 **重启收敛后没有释放会话槽**：`begin_turn` 仍视旧槽为忙，新提问最长等 120 秒 | ✅ 新增 `ConversationStore.recover_interrupted_turns()`，在启动路径调用。这是**延迟缺陷而非正确性缺陷**（兜底终会释放），但部署后「现在能重问」与「两分钟后能重问」是两回事；启动时**不可能有更新的轮次**，因此 `generating_turn_no` 匹配在这里无事可做 |
+| 3 | 🔍 `recover_assistant_questions` 的说明仍称另两张表在构造时清扫 | ✅ 改写：三张表都由 `recover_interrupted_jobs()` 在启动路径收敛 |
+| 4 | 🔍 启动配对的检查只看见 SELECT 就写预期路径，**没有看扫描结果实际传给了哪个 update 路径** | ✅ 改为从**循环体**读「表 → update 路径」的配对；以「两个循环互换」核对，转红 |
+
+第 4 条又是我自己那类错：**用一句更弱的话代替了要断言的那句话**。「扫了哪张表」不等于「把 id 交给了哪条路径」，
+而把一表的 id 交给另一表的 update 路径不会崩（两边都收字符串），在今天的空表上完全看不出来。
+
+### 第四轮一条（Devin）
+
+| # | 发现 | 处置 |
+|---|---|---|
+| 5 | 🔍 恢复只释放槽位，**未完成的那一轮仍留在会话详情里**（`context_turns()` 会滤掉它，`GET /v1/conversations/{id}` 不会） | ✅ 释放槽位时**连同该轮一起删除**，且只删槽位指向的那一轮。理由与 #172 一致：被中断的生成不得作为「没有答案的问题」活下来 —— 与工人对失败轮次的处置相同 |
+
+以「删掉该轮的那句」核对，转红。第 5 条让「一次部署不再留下一轮无答案的问题」这条结论
+从「提示词里看不到」推进到「详情里也看不到」。
+
+### `runs` 的显式决定（PRD 要求「不默认照做」）
+
+`runs` **不接**启动收敛，并**在代码里写明理由**（`create_run` 上方）：设备路径已决定退役，
+这张表也没有 deadline 列，给它一条收敛规则是一个**没有人做过的产品决定**。
+写下来的原因：「其余三张在启动时收敛」这个形状会让**遗漏**看起来像疏忽而不是决定。
+
+**未完成业务验收**：本片改变的是「一次 CLI 命令会不会结束在飞诊断」——41 上需要**实际跑一次
+`aiops-gateway devices` 再核对一条在飞诊断仍可写入**，这属于部署后的动作，记为待验。
+
 ## #491 五份同形过期 SQL 收成一种渲染（2026-10-01）
 
 **#430 的第二张子票。** 改动前：三份 `_expire_*` 各写一份同形 SQL（差别只有表名与终态集合），

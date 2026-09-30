@@ -527,6 +527,28 @@ workflow YAML 不适用复杂度或 mutation 工具；安全状态机由模板�
 Java BFF 透传与前端 blocks[] 渲染属 #171/#173 及真实媒体验收范围（见 P0-E2E-REAL），
 本票不把 fake 结果记为业务验收。
 
+## 构造不再是重启 QA 计划（#492）
+
+### BOOT-01 构造不动在飞作业、启动路径才收敛
+
+- 环境：AI-Ops 本地 Python 3.13，临时 SQLite。
+- 前置条件：一条 `running` 的健康作业与一条 `running` 的标准诊断。
+- 有序动作：① 再构造一个 `GatewayStore`（模拟 `aiops-gateway devices`）；
+  ② 调 `recover_interrupted_jobs()`（模拟网关启动）。
+- 预期结果：① 两条作业**状态不变**，且随后仍能写入自己的终态；
+  ② 两条都进入 `failed` + 各自的 `*_INTERRUPTED_BY_RESTART` 错误码，
+  **既不是 `expired`（超时）也不是 `cancelled`（用户停止）**。
+- 清理：临时目录自动回收。
+- 结果：PASS（2026-10-01，`tests/test_health_report_jobs.py`、`tests/test_standard_diagnosis_runtime.py`；
+  以「把启动收敛放回 __init__」与「收敛用 expired」两条变异核对，各自转红）。
+
+### BOOT-02 设备路径的 runs 不在收敛范围内（已记录的显式决定）
+
+- 环境：同上。
+- 预期结果：`runs` 表没有 deadline 列、不参与启动收敛；这一决定写在
+  `create_run` 上方的注释里（「其余三张在启动时收敛」这个形状会让遗漏看起来像疏忽，而不是决定）。
+- 结果：PASS（2026-10-01，代码注释 + `docs/validation.md` 记录）。
+
 ## 过期清扫 SQL 收成一种渲染 QA 计划（#491）
 
 ### SWEEP-01 一个渲染、两张表的差异只在表名

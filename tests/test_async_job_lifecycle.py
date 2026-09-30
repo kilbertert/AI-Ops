@@ -418,41 +418,71 @@ def test_the_sweep_sql_is_written_down_only_in_this_module() -> None:
     assert offenders == [], "; ".join(offenders)
 
 
-def _expire_pairs() -> tuple[dict[str, str], dict[str, str]]:
-    """`(method pairs, startup pairs)` — kept apart, on purpose.
-
-    Two sources pair a table with a profile: the three `_expire_*` methods and
-    the startup loop. Merging them into one dict lets a correct entry in one
-    source MASK a wrong entry in the other (last write wins), which is exactly
-    the failure this check exists to catch. Returning them separately is what
-    makes both sources assertable.
-    """
+def _method_pairs() -> dict[str, str]:
+    """`table -> profile` for the three `_expire_*` render calls."""
     import ast
     from pathlib import Path
 
     store = Path(__file__).parents[1] / "src" / "aiops_diagnostics" / "gateway_store.py"
     tree = ast.parse(store.read_text(encoding="utf-8"), filename=str(store))
-    methods: dict[str, str] = {}
-    startup: dict[str, str] = {}
+    pairs: dict[str, str] = {}
     for node in ast.walk(tree):
         if (
             isinstance(node, ast.Call)
             and getattr(node.func, "id", "") == "expire_statements"
             and isinstance(node.args[0], ast.Constant)
         ):
-            methods[node.args[0].value] = ast.unparse(node.args[1])
-        if not isinstance(node, ast.For) or not isinstance(node.iter, ast.Tuple):
+            pairs[node.args[0].value] = ast.unparse(node.args[1])
+    return pairs
+
+
+def _boot_hook_pairs() -> dict[str, str]:
+    """`table -> the update path that table's ids are handed to`, from the LOOPS.
+
+    Read from the loop body rather than from the SELECT: knowing which table was
+    scanned does not tell you which path its ids were handed to, and handing a
+    job id to the other table's update path is not a crash — both take a string
+    — so on today's data it is invisible. The pairing is the point; the scan is
+    only where the ids came from.
+
+    Kept separate from `_method_pairs`, never merged: one dict with both sources
+    lets a correct entry in one overwrite a wrong entry in the other.
+    """
+    import ast
+    from pathlib import Path
+
+    store = Path(__file__).parents[1] / "src" / "aiops_diagnostics" / "gateway_store.py"
+    tree = ast.parse(store.read_text(encoding="utf-8"), filename=str(store))
+    hook = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "recover_interrupted_jobs"
+    )
+    pairs: dict[str, str] = {}
+    for loop in (node for node in ast.walk(hook) if isinstance(node, ast.For)):
+        # `for job_id in jobs["<table>"]:` — unparsed, so the quotes are single.
+        source = ast.unparse(loop.iter)
+        table = source.split("[", 1)[-1].strip("]").strip("\"'") if "[" in source else ""
+        if table not in {"health_report_jobs", "standard_diagnoses"}:
             continue
-        if "expire_statements" not in ast.unparse(node):
-            continue
-        for element in node.iter.elts:
-            if not isinstance(element, ast.Tuple) or len(element.elts) != 2:
-                continue
-            table = element.elts[0]
-            if not isinstance(table, ast.Constant):
-                continue
-            startup[table.value] = ast.unparse(element.elts[1])
-    return methods, startup
+        for inner in ast.walk(loop):
+            if isinstance(inner, ast.Call) and getattr(inner.func, "attr", "").startswith("update_"):
+                pairs[table] = inner.func.attr
+    return pairs
+
+
+def test_each_table_is_converged_through_its_own_path() -> None:
+    """The table being scanned and the path writing to it must correspond.
+
+    A job id from one table passed to the other table's update path is not a
+    crash — both take a string — and on today's data it is invisible, because
+    the two tables are empty of the ids in question. It is still a defect the
+    first time both have rows.
+    """
+    assert _boot_hook_pairs() == {
+        "health_report_jobs": "update_health_job",
+        "standard_diagnoses": "update_standard_diagnosis",
+    }, _boot_hook_pairs()
 
 
 def test_each_sweep_names_the_profile_of_its_own_table() -> None:
@@ -473,8 +503,51 @@ def test_each_sweep_names_the_profile_of_its_own_table() -> None:
         "standard_diagnoses": "DIAGNOSIS",
         "assistant_questions": "QUESTION",
     }
-    methods, startup = _expire_pairs()
+    methods = _method_pairs()
     assert methods == expected, methods
-    # The startup path sweeps two of the three; each must still name its own.
-    assert startup, "the startup sweep was not found: this check points at nothing"
-    assert startup == {table: expected[table] for table in startup}, startup
+
+
+def test_the_boot_hook_releases_the_conversation_slots_it_ends(tmp_path) -> None:
+    """A job the restart killed must not leave its conversation busy.
+
+    `begin_turn` holds the generation slot until the worker completes the turn
+    or the 120-second crash fallback lapses. When a restart kills the worker,
+    nothing completes the turn — so the boot hook has to, or the caller cannot
+    ask again in that conversation for up to two minutes after a deploy.
+    """
+    from aiops_diagnostics.conversation_store import ConversationStore
+    from aiops_diagnostics.gateway_store import (
+        DIAGNOSIS_RESTART_ERROR_CODE,
+        GatewayStore,
+    )
+
+    database = tmp_path / "gateway.db"
+    store = GatewayStore(database)
+    conversations = ConversationStore(database)
+    scope = "scope-1"
+    cid = conversations.create(
+        scope_fingerprint=scope, business_entry="operator", agent_version_key="agt_abcdef1234567890#v1"
+    )["conversation_id"]
+    turn_no = conversations.begin_turn(cid, scope, kind="diagnosis", question="为什么跳枪")
+    diagnosis = store.create_standard_diagnosis(scope, "O-1", "为什么跳枪", None)
+    store.update_standard_diagnosis(diagnosis["diagnosis_id"], status="running")
+    with conversations._connection(write=True) as connection:  # noqa: SLF001 - link the two
+        connection.execute(
+            "UPDATE conversations SET generating_turn_no = ? WHERE conversation_id = ?",
+            (turn_no, cid),
+        )
+
+    restarted = GatewayStore(database)
+    restarted.recover_interrupted_jobs()
+
+    assert restarted.get_standard_diagnosis(diagnosis["diagnosis_id"], scope)["error_code"] == (
+        DIAGNOSIS_RESTART_ERROR_CODE
+    )
+    # The slot is free: the next turn claims without waiting out the fallback.
+    assert conversations.get(cid, scope)["is_generating"] is False
+    # And the interrupted turn is gone from the history, not left as a question
+    # with no answer — the same treatment a failed turn gets from its worker
+    # (#172). `context_turns()` would have filtered it out anyway; the detail
+    # view would not have.
+    assert [turn["turn_no"] for turn in conversations.turns(cid, scope)] == []
+    conversations.begin_turn(cid, scope, kind="qa", question="那它为什么跳枪")

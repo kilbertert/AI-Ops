@@ -399,12 +399,13 @@ def create_gateway_app(
     selected_settings = settings or GatewayServerSettings.from_env()
     selected_settings.validate()
     selected_store = store or GatewayStore(selected_settings.database_file)
-    # Restart recovery, before this app can serve anything: a question the
-    # previous process left `queued`/`running` is converged to a terminal state
-    # here instead of hanging until its deadline (T3/#356). Deliberately not in
-    # ``GatewayStore.__init__`` — short-lived CLI commands (`aiops-gateway
-    # devices`) open the same database and must not end live work.
-    selected_store.recover_assistant_questions()
+    # Restart recovery, before this app can serve anything: every job the
+    # previous process left `queued`/`running` is converged to an honest
+    # terminal state here instead of hanging until its deadline (T3/#356,
+    # T6/#492). Deliberately not in ``GatewayStore.__init__`` — short-lived CLI
+    # commands (`aiops-gateway devices`) open the same database and must not
+    # end live work; that mistake is what #492 fixed.
+    selected_store.recover_interrupted_jobs()
     selected_runtime = runtime or GatewayRuntime.from_settings(selected_store, selected_settings)
     selected_resolver = caller_resolver or _caller_resolver(selected_settings)
     diagnostic_settings = getattr(selected_runtime, "diagnostic_settings", None)
@@ -2340,7 +2341,12 @@ def _health_job_response(job: dict[str, Any]) -> dict[str, Any]:
             {
                 "code": job.get("error_code") or "REPORT_FAILED",
                 "message": job.get("error_message") or "health report failed",
-                "retryable": job.get("error_code") in {"SOURCE_UNAVAILABLE", "REPORT_TIMEOUT"},
+                # A restart is retryable for the caller: the report never ran,
+                # and asking again is exactly what should happen. Without it
+                # here, the frontend shows an error with no action — which is
+                # the one thing the restart verdict is supposed to avoid.
+                "retryable": job.get("error_code")
+                in {"SOURCE_UNAVAILABLE", "REPORT_TIMEOUT", "REPORT_INTERRUPTED_BY_RESTART"},
             }
             if status_value == "failed"
             else None
