@@ -210,11 +210,37 @@ C 批暂缓 ⇒ 这条口径**止于文档**，但必须先写下来。
 - 已登记进私有运维记录（`fleet-ops/FLEET.md` §7.6，含回滚的**四处**与备份路径）；
 - 回滚 = 绑定 + nginx 上游 + ufw 规则 + 重启，**四处**（缺一处就是 502 或可达性错位）。
 
-**D-3 · Nacos 路由**
+**D-3 · Nacos 路由 —— ✅ 已执行（2026-09-30）**
 
-- 目标：`dynamic_routes` **新增一条**，把 AI-Ops 作为一个 HTTP 下游；
-- 样板：既有路由里已有「HTTP 上游 + 头注入过滤器 + 重写路径」（无需重启，带监听器）；
-- **爆炸半径是那份所有服务共用的配置** ⇒ 改前导出备份、明确回退方式、由 infra owner 执行。
+`dynamic_routes` 新增一条（35 → 36），把 AI-Ops 作为 HTTP 下游。**逐字追加**在原文末尾，
+不改既有 35 条的任何一行（`diff` 只有 10 行差异，全是新增）：
+
+```yaml
+  - id: aiops-gateway
+    uri: http://172.18.0.1:8788
+    predicates:
+    - Path=/v1/**
+    filters:
+    - RewritePath=/(?<segment>.*),/v1/$\{segment}
+    - SetRequestHeader=X-AIOps-Source-Key,<来源密钥>
+    - SetRequestHeader=X-Business-Entry,operator
+    order: 0
+```
+
+🔴 **三个实测出来的坑，缺一条这条路就不通**：
+
+1. **`RewritePath` 是必需的，不是可选项。** 少了它，AI-Ops 收到的路径变成
+   `/faq/recommendations`（少了 `/v1`）⇒ `404`。原因：本网关会把**匹配到的那一段前缀剥掉**
+   （既有 35 条全都用 `RewritePath` 把它加回来 —— 那就是它们存在的理由）。
+   `Path=/v1/**` 剥掉 `/v1` 之后再拼 `/v1/$\{segment}`。
+2. **更新 Nacos 之后必须重启网关容器。** `DynamicRouteInit` 的监听器**会打印
+   「加载路由：…」并且保存**，但新建的 route **不生效** —— 既有路由不受影响，只有新的那条
+   404（实测：同一批 `save` 里既有路由正常响应，新路由不行）。⇒ 容器 `docker restart`
+   之后正常。**不要被那行「加载路由完成」的日志骗了。**
+3. **路由 id 不能叫 `aiops`**（会撞上既有 `Path=/aiops/**` 的那条）——取自 `aiops-gateway`。
+
+**执行方式**：由我按所有者授权执行（改前 `cp` 原文到 `/var/backups/aiops-41/nacos-routes-*.yaml`，
+改后逐字回读核对 36 条）。
 
 **D-3a · 网关对同名头是「覆盖」还是「追加」？ —— ✅ 已离线测定（2026-09-30）**
 
@@ -247,7 +273,7 @@ C 批暂缓 ⇒ 这条口径**止于文档**，但必须先写下来。
 > 那时通道才通（今天网关还够不到 AI-Ops，见 §2 的 exposure 决定）。
 > **离线结论足以决定 D-3/D-4 怎么写**，这也是把它从"第一个实验"降级为"验收断言"的理由。
 
-**D-4 · nginx 改向**
+**D-4 · nginx 改向 —— ✅ 已执行（2026-09-30）**
 
 - 形状：按入口分上游。`proxy_pass` 的**变量形式会丢掉 URI**（实测），
   因此必须配 `rewrite … break` —— 不用变量形式则 `map` 白做；
@@ -257,29 +283,32 @@ C 批暂缓 ⇒ 这条口径**止于文档**，但必须先写下来。
   **nginx 不再为 operator 注入来源密钥** —— 这一步做完，A2 才算真正消掉；
 - `consumer` 分支**逐字不变**。
 
-**D-5 · 验收与回滚**
+**D-5 · 验收与回滚 —— ✅ 已执行（2026-09-30）**
 
 五条，每条都要有「不带它时会怎样」的对照：
 
 | # | 判据 | 对照 |
 |---|---|---|
-| ① | operator 经网关 → `200 platform=operator` | —— |
-| ② | operator 经网关但**去掉来源密钥** → **拒绝** | 证明门在生效（fail-closed 那一半） |
-| ②-bis | **两个来源同时写**时，AI-Ops **实际读到**的是网关那份 | 🔴 D-3a 的落点：让 nginx **也**注入一个**不同**的值。只看「收到几个头」不够 —— nginx 那一跳踩的就是「两条都到、应用取第一条」 |
-| ③ | `consumer` 原路 → **逐字不变** | 与切流前同一会话、同一响应对比 |
-| ④ | **回滚演练**：恢复 vhost → 服务恢复 | 命令级 |
-| ⑤ | **保留待验**：真实 App 登录令牌 | 文档记为待验项，**不阻塞本批收口** |
+| ① | operator 经网关 → `200 platform=operator` | ✅ 实测 200，且 AI-Ops 侧记录的来源是 **`172.18.0.8`（网关容器）** ⇒ 确实走了网关 |
+| ② | operator 经网关但**去掉来源密钥** → **拒绝** | ✅ 实测 401（`ACCESS_TOKEN_REQUIRED`）；且把 operator 上游临时指到死端口 ⇒ **502**，同期 consumer 不受影响 ⇒ 它**确实**经网关 |
+| ②-bis | 客户端**自报一个错的**来源密钥，经网关 | ✅ 仍 `200` —— 网关**覆盖**了它（`SetRequestHeader` = `set` 语义）。**对照**：不经网关直连 AI-Ops 带同一个错密钥 ⇒ `401` ⇒ 判据成立 |
+| ③ | `consumer` 原路 → **逐字不变** | ✅ 真会话 `200 count=3`，改向前后各量一次，一致 |
+| ④ | **回滚演练** | ✅ 恢复 D-4 前的 vhost **与 map**（两处）⇒ operator 仍 `200`（走原路）、consumer 正常；再 apply 回目标态也 `200` |
+| ⑤ | **保留待验**：真实 App 登录令牌 | ⏳ 本轮用的仍是**按生产形状自签**的令牌，与既有待验项同一条 —— **不阻塞本批收口** |
 
 **回滚点**（四处，各自独立，**要恢复的不是一处**）：
 
 1. **nginx vhost** —— `cp -a` 恢复（备份规范见 runbook §1.7 检查单）；
-2. 🔴 **`/etc/aiops-41/nginx-aiops-service-token.conf` 必须一并恢复** —— 它已被改成
-   「只 `set` 变量」，而**旧 vhost 依赖它直接 `proxy_set_header Authorization`**。
-   只恢复 vhost 会让**客户端请求全部 401**。因此**改前必须备份两份**；
-3. Nacos 路由配置（改前导出）；
+2. 🔴 **map 文件 `0.aiops-entry-map.conf` 必须一并恢复** —— D-4 给它加了 `$aiops_upstream`
+   并改掉了 `$aiops_srckey`。**只恢复 vhost 会得到一个引用不存在变量的配置**（`nginx -t` 直接失败）；
+   ⚠️ 顺带说明：`nginx-aiops-service-token.conf` **不需要**跟着回滚 —— 它保持「只 set 变量」即可，
+   两种形态下 vhost 都从它取变量；
+3. Nacos 路由配置（改前导出，见 `/var/backups/aiops-41/nacos-routes-*.yaml`）——
+   **删掉 `aiops-gateway` 那一条之后要 `docker restart cloud-gateway`**（见 D-3 坑 2）；
 4. AI-Ops 侧三键清空 = 新链路整体不启用。
 
-⇒ 四处合起来才等于回到今天。**"只恢复 vhost"是一个已被实测证伪的回滚写法。**
+⇒ 四处合起来才等于回到今天。**执行 D-4 的脚本自带 `rollback` 子命令**：
+`python3 d4-cutover.py rollback` 会**同时**恢复 vhost 与 map 两处（实测演练通过）。
 
 ---
 
