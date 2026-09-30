@@ -12,7 +12,7 @@
   · nginx **不再**为 operator 注入来源密钥 —— 由网关那一跳注入（这正是 D-4 的目的）
   · 变量式 proxy_pass 不会自动拼 URI ⇒ location 里必须配 `rewrite … break`
 """
-import re
+
 import shutil
 import subprocess
 import sys
@@ -100,7 +100,8 @@ def main() -> int:
         print("（dry-run 不写任何文件）")
         return 0
 
-    if sys.platform != "linux" or subprocess.run(["id", "-u"], capture_output=True, text=True).stdout.strip() != "0":
+    uid = subprocess.run(["id", "-u"], capture_output=True, text=True).stdout.strip()
+    if sys.platform != "linux" or uid != "0":
         print("必须 root 运行", file=sys.stderr)
         return 1
 
