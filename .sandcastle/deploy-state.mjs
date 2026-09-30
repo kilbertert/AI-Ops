@@ -117,6 +117,30 @@ export function straightFailures(runs) {
 }
 
 /**
+ * **所有**未完成的 run 里卡住/卡死的那些 —— 不只是最新那一条。
+ *
+ * 只看 `runs[0]` 会漏掉整类故障且会**自愈**：一个新 push 让更新的 run 成为首条，
+ * 旧的卡住 run 就从视野里消失。（这个洞是上线当天实测撞到的：一个等了 84 分钟的
+ * run 躺在那儿，而 `assess` 说「正常」。）
+ *
+ * ⚠️ **但「旧」不等于「坏」**：并发锁只保证**串行**，一个等着接替前一个的 run 本来就
+ * 该等多久等多久 —— 那不是 stuck，是排队。所以只有当**最早的**那个未完成 run
+ * 本身就超期时才算异常：锁一次只放一个 run 进去，前面那个还没走，后面的必然等。
+ *
+ * @returns {Array} 超期的未完成 run（含最新那条；正常排队的不在内）
+ */
+export function overdueUnfinished(runs, { now, stuckMinutes } = {}) {
+  const unfinished = runs.filter((run) => UNFINISHED.has(String(run.status ?? "")));
+  if (unfinished.length === 0) return [];
+  const oldest = unfinished[unfinished.length - 1];
+  const verdict = classifyRun(oldest, { now, stuckMinutes });
+  if (verdict.kind === "stuck" || verdict.kind === "deadlocked" || verdict.kind === "indeterminate") {
+    return [{ run: oldest, verdict }];
+  }
+  return [];
+}
+
+/**
  * 汇总一份判决。**取数不成立时一律不报「正常」** —— 不知道就说不知道（fail honest）。
  *
  * 三种「不成立」都要报警，而不是静默：
@@ -150,10 +174,15 @@ export function assess(input) {
   const straight = straightFailures(runs);
   const straightLimit = input.straightFailures ?? DEFAULT_STRAIGHT_FAILURES;
 
-  if (run.kind === "stuck" || run.kind === "deadlocked") {
-    alarms.push({ kind: run.kind, reason: run.reason });
+  // 扫**所有**未完成的 run，而不只是最新那条 —— 否则一个卡住的旧 run 会被后来的
+  // 新 run 挤出视野，故障"自愈"（上线当天实测撞到过）。
+  for (const { verdict } of overdueUnfinished(runs, {
+    now: input.now,
+    stuckMinutes: input.stuckMinutes,
+  })) {
+    alarms.push({ kind: verdict.kind, reason: verdict.reason });
   }
-  if (run.kind === "indeterminate") {
+  if (run.kind === "indeterminate" && !alarms.some((a) => a.kind === "indeterminate")) {
     alarms.push({ kind: "indeterminate", reason: run.reason });
   }
   if (straight >= straightLimit) {

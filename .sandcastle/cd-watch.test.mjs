@@ -69,6 +69,35 @@ cases.push(["取数失败 ⇒ ok=false", assess({ runs: [], fetchedOk: false }).
 // 6b. **空列表**也 ⇒ 不报正常。「一次都没触发过」与「一直正常」在告警面上是同一种安静。
 cases.push(["取不到任何 run ⇒ ok=false", assess({ runs: [], fetchedOk: true }).ok, false]);
 
+// 6c. 🔴 **卡住的旧 run 被新 run 挤出视野 ⇒ 故障"自愈"**（上线当天实测撞到：
+//     一个等了 84 分钟的在等批准，而 assess 说「正常」，因为 runs[0] 是那个刚 push 的）。
+cases.push([
+  "旧 run 卡住、新 run 在后 ⇒ 仍要报警",
+  assess({
+    runs: [
+      { status: "pending", createdAt: "2026-09-30T15:28:00Z", totalCount: 1, pendingCount: 1 },
+      { status: "waiting", createdAt: "2026-09-30T06:33:29Z", totalCount: 1, pendingCount: 1 },
+    ],
+    fetchedOk: true,
+    now,
+  }).ok,
+  false,
+]);
+
+// 6d. **但排队不是卡住**：并发锁只保证串行，等着接替前一个的 run 本来就该等。
+cases.push([
+  "正常排队（最早那个没超期）⇒ 不报警",
+  assess({
+    runs: [
+      { status: "pending", createdAt: "2026-09-30T15:28:00Z", totalCount: 1, pendingCount: 1 },
+      { status: "waiting", createdAt: "2026-09-30T15:10:00Z", totalCount: 1, pendingCount: 1 },
+    ],
+    fetchedOk: true,
+    now,
+  }).ok,
+  true,
+]);
+
 // 7. 连续 3 次失败 ⇒ 两条告警（stuck 与 straight-failures 可以同时成立）
 const many = assess({
   runs: [
