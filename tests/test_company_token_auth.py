@@ -1288,3 +1288,17 @@ def test_the_strict_mode_is_reachable_from_configuration(monkeypatch: pytest.Mon
     assert GatewayServerSettings.from_env().trust_company_payload is True
     monkeypatch.delenv("AIOPS_GATEWAY_COMPANY_TRUST_PAYLOAD", raising=False)
     assert GatewayServerSettings.from_env().trust_company_payload is True  # 未设 = 公司一致
+
+
+@pytest.mark.parametrize("value", ["0", "false", "no", "off", "disable", "DISABLED"])
+def test_every_documented_off_value_disables_the_company_parity_mode(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    """**显式关闭的取值要收全**：只认一小撮时，运维写 `off` 会静默保持公司一致。
+
+    这是本仓反复出现的「配了但静默不生效」形态，所以逐个取值都钉一条。
+    """
+    from aiops_diagnostics.gateway_config import GatewayServerSettings
+
+    monkeypatch.setenv("AIOPS_GATEWAY_COMPANY_TRUST_PAYLOAD", value)
+    assert GatewayServerSettings.from_env().trust_company_payload is False, value

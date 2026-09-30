@@ -19,6 +19,10 @@ SAFE_PROFILE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 #: 生成，比下限长不构成风险。
 MIN_SOURCE_KEY_LENGTH = 16
 
+#: 布尔类开关的「显式关闭」取值表。收全它是为了避免「配了但静默不生效」：
+#: 只认一小撮时，运维写 `off` 会看起来像关掉了、实际仍是默认（本仓反复出现的形态）。
+_FALSY_SETTINGS = frozenset({"0", "false", "no", "off", "disable", "disabled"})
+
 
 @dataclass(slots=True)
 class GatewayServerSettings:
@@ -121,7 +125,9 @@ class GatewayServerSettings:
             or _file_value(file_values, "AIOPS_GATEWAY_COMPANY_SOURCE_KEY"),
             company_jwt_key=_env("AIOPS_GATEWAY_COMPANY_JWT_KEY")
             or _file_value(file_values, "AIOPS_GATEWAY_COMPANY_JWT_KEY"),
-            # 「显式为 0/false/no」才关闭；未设 = 公司一致（默认）。
+            # 显式关闭的取值要**收全**（0/false/no/off/disable…）—— 只认一小撮时，
+            # 运维写 `off` 会**静默保持公司一致**（看起来像配了、实际没生效），
+            # 这正是本仓反复出现的「静默不生效」形态。未设 = 公司一致（默认）。
             trust_company_payload=(
                 _env("AIOPS_GATEWAY_COMPANY_TRUST_PAYLOAD")
                 or _file_value(file_values, "AIOPS_GATEWAY_COMPANY_TRUST_PAYLOAD")
@@ -129,7 +135,7 @@ class GatewayServerSettings:
             )
             .strip()
             .lower()
-            not in {"0", "false", "no"},
+            not in _FALSY_SETTINGS,
             kb_service_base_url=_env("AIOPS_GATEWAY_KB_SERVICE_BASE_URL")
             or _file_value(file_values, "AIOPS_GATEWAY_KB_SERVICE_BASE_URL"),
             kb_service_timeout_seconds=_env_float("AIOPS_GATEWAY_KB_SERVICE_TIMEOUT_SECONDS", 10.0),
