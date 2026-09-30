@@ -872,6 +872,13 @@ def create_gateway_app(
                     "ORDER_NOT_FOUND",
                     "order not found",
                 )
+            # The conversation is resolved before routing so EVERY branch can
+            # consult it; this one used to read none of its fields. Without the
+            # claim the diagnosis is invisible to the conversation: no turn row
+            # (so a follow-up cannot see it) and nothing for the frontend to
+            # cancel with, because only a 202 that carries conversation_id +
+            # turn_no can be cancelled.
+            turn_no = _begin_conversation_turn(context, caller, conversation, "diagnosis", payload.question)
             try:
                 diagnosis = context.runtime.start_standard_diagnosis(
                     caller,
@@ -879,8 +886,14 @@ def create_gateway_app(
                     payload.question,
                     None,
                     language=language,
+                    conversation_turn=(
+                        (conversation["conversation_id"], conversation["scope_fingerprint"], turn_no)
+                        if conversation is not None and turn_no is not None
+                        else None
+                    ),
                 )
             except (ValueError, RuntimeError) as exc:
+                _release_conversation_turn(context, conversation, turn_no)
                 raise StandardAPIError(
                     status.HTTP_503_SERVICE_UNAVAILABLE,
                     "DIAGNOSIS_UNAVAILABLE",
@@ -890,7 +903,16 @@ def create_gateway_app(
             base = _standard_diagnosis_response(diagnosis)
             return JSONResponse(
                 status_code=status.HTTP_202_ACCEPTED,
-                content={**base, "type": "diagnosis", "language": language},
+                content={
+                    **base,
+                    "type": "diagnosis",
+                    "language": language,
+                    **(
+                        {"conversation_id": conversation["conversation_id"], "turn_no": turn_no}
+                        if conversation is not None and turn_no is not None
+                        else {}
+                    ),
+                },
             )
 
         # Route 1b: text-embedded order number → diagnosis if authorizable.

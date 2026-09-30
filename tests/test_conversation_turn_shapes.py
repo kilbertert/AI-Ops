@@ -200,3 +200,120 @@ def test_a_release_path_survives_on_every_claiming_branch() -> None:
                 " has no release path"
             )
     assert offenders == [], "; ".join(offenders)
+
+
+def _api_tree() -> ast.Module:
+    return ast.parse((SOURCE_ROOT / API_FILE).read_text(encoding="utf-8"))
+
+
+def _accepting_branches(tree: ast.Module) -> list[ast.Return]:
+    """Every `return JSONResponse(status_code=202, ...)` inside the handler."""
+    handler = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "assistant_questions"
+    )
+    found: list[ast.Return] = []
+    for node in ast.walk(handler):
+        if not isinstance(node, ast.Return) or not isinstance(node.value, ast.Call):
+            continue
+        call = node.value
+        name = call.func.attr if isinstance(call.func, ast.Attribute) else getattr(call.func, "id", "")
+        if name != "JSONResponse":
+            continue
+        status = next((kw.value for kw in call.keywords if kw.arg == "status_code"), None)
+        # `status.HTTP_202_ACCEPTED` reads as an attribute, not a constant; both
+        # spellings name the same code and both appear in this file.
+        if (
+            isinstance(status, ast.Constant)
+            and status.value == 202
+            or isinstance(status, ast.Attribute)
+            and status.attr.endswith("202_ACCEPTED")
+        ):
+            found.append(node)
+    return found
+
+
+def _block_claims_a_turn(tree: ast.Module, block: list[ast.stmt]) -> bool:
+    """Whether this block claims a conversation turn anywhere inside it."""
+    return any(
+        isinstance(node, ast.Call) and _called_name(node.func) == CLAIM
+        for statement in block
+        for node in ast.walk(statement)
+    )
+
+
+def _dict_fields(node: ast.expr, block: list[ast.stmt]) -> set[str]:
+    """Field names a dict expression can carry, following spreads by name.
+
+    ``**turn_field`` is a name, not a literal, so it is resolved from its
+    assignment in the same block; ``**({"turn_no": n} if cond else {})`` is an
+    IfExp whose branches are both dicts and both are read. Only KEYS are
+    collected — what a value happens to be is the branch's business, whether
+    the key exists at all is the frontend's.
+    """
+    if isinstance(node, ast.Name):
+        for statement in block:
+            if isinstance(statement, ast.Assign) and any(
+                isinstance(target, ast.Name) and target.id == node.id for target in statement.targets
+            ):
+                return _dict_fields(statement.value, block)
+        return set()
+    if isinstance(node, ast.IfExp):
+        return _dict_fields(node.body, block) | _dict_fields(node.orelse, block)
+    if isinstance(node, ast.Dict):
+        fields: set[str] = set()
+        for key, value in zip(node.keys, node.values, strict=True):
+            if isinstance(key, ast.Constant):
+                fields.add(key.value)
+            elif key is None:
+                fields |= _dict_fields(value, block)
+        return fields
+    return set()
+
+
+def _response_fields(tree: ast.Module, branch: ast.Return) -> set[str] | None:
+    """The field names the 202 body can carry, or ``None`` when out of scope.
+
+    Three branches answer ``None``: one that never claims a turn (nothing to
+    check), and any whose body this reader cannot resolve (a pre-built ``**base``
+    alone). Those stay unchecked rather than guessed at — a reader that reports
+    a false offender teaches its own deletion.
+    """
+    owner, block = _innermost_block(tree, branch)
+    while len(block) == 1 and owner is not None:
+        owner, block = _innermost_block(tree, owner)
+    if not _block_claims_a_turn(tree, block):
+        return None
+    call = branch.value
+    if not isinstance(call, ast.Call):
+        return None
+    content = next(
+        (kw.value for kw in call.keywords if kw.arg == "content" and isinstance(kw.value, ast.Dict)),
+        None,
+    )
+    if content is None:
+        return None
+    return _dict_fields(content, block)
+
+
+def test_every_accepting_branch_that_claims_a_turn_can_be_cancelled() -> None:
+    """A 202 that claims a conversation turn must return its `turn_no`.
+
+    "Only a 202 carrying conversation_id + turn_no can be cancelled"
+    (`assistant-cancel-handoff.md`) — and the frontend can only construct that
+    call from what the response hands back. A branch that claims a slot but
+    withholds the number leaves the user with a generation they cannot stop and
+    a conversation they cannot ask into.
+    """
+    tree = _api_tree()
+    offenders: list[str] = []
+    for branch in _accepting_branches(tree):
+        fields = _response_fields(tree, branch)
+        if fields is None:
+            continue
+        if "turn_no" not in fields:
+            offenders.append(f"{API_FILE}:{branch.lineno} claims a turn but returns no turn_no")
+        elif "conversation_id" not in fields:
+            offenders.append(f"{API_FILE}:{branch.lineno} returns a turn_no without its conversation_id")
+    assert offenders == [], "; ".join(offenders)

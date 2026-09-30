@@ -566,6 +566,19 @@ Java BFF 透传与前端 blocks[] 渲染属 #171/#173 及真实媒体验收范�
 - 清理：同上。
 - 结果：PASS（2026-09-10，pytest `tests/test_conversation_api.py`）。
 
+### CONV-07 显式订单号的诊断加入会话（#484）
+
+- 环境：同 CONV-01。
+- 前置条件：授权器允许订单 2096164064667852801；会话已创建。
+- 测试数据：显式 `order_no` + `conversation_id`；显式 `order_no` 不带会话。
+- 有序动作：带两者提问；同会话再问一次；把诊断推到终态后读会话详情；单独跑不带会话的那次。
+- 预期结果：带两者时 202 体同时有 `conversation_id` 与 `turn_no`，生成期间同会话再问得 409，终态后该轮次出现在 `turns`；
+  **不带会话时响应与本特性交付前逐字相同且不创建任何轮次**。
+- ⚠️ **本条不验证「可取消」**：诊断线没有取消端点，`turn_no` 只用于轮次归属与历史可见。
+- 清理：临时目录自动回收。
+- 结果：PASS（2026-09-30，`tests/test_conversation_api.py::test_an_explicit_order_diagnosis_joins_the_conversation`
+  与 `::test_an_explicit_order_without_a_conversation_is_unchanged`；源码级封口见 CONV-05 同文件）。
+
 ### CONV-06 会话历史进入提示词（#482）
 
 - 环境：同 CONV-01（协议层）+ 本地 `ConversationStore`（窗口渲染）。

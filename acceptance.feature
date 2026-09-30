@@ -577,6 +577,19 @@ Feature: 智能体会话与活跃订单上下文
       When 用户提出问题
       Then 送入模型的提示词与本特性交付前完全一致
 
+    Scenario: 显式带订单号的诊断也属于会话
+      Given 会话已存在且订单归属校验通过
+      When 用户同时带显式订单号与会话标识提问
+      Then 返回 202 且响应同时带 conversation_id 与 turn_no
+      And 诊断生成期间同一会话再次提问返回 409 CONVERSATION_BUSY
+      And 该诊断到达终态后其轮次出现在会话历史中
+
+    Scenario: 不带会话标识的显式订单诊断响应不变
+      Given 请求带显式订单号但不带会话标识
+      When 调用者提问
+      Then 返回与本特性交付前逐字相同的 202 诊断响应
+      And 不创建任何会话轮次
+
     Scenario: 未完成的结果不作为完整回答保存
       Given 一个生成中的回合被停止或失败
       When 会话轮次落库
