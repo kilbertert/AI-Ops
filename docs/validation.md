@@ -969,7 +969,30 @@ Route 1（显式 `order_no`）**整个分支不碰会话**：不领取轮次、�
 
 ### 部署后的第一次取数（2026-10-01）
 
-窗口从该进程启动起算：**进程启动 2026-09-30 18:39:47 UTC，取数 2026-10-01**。
+**取数方式**（可被第二人复跑；只读，不取用户文本）：
+
+```bash
+# 窗口起点：本次进程的启动时间
+ssh aiops-41 'ps -o lstart= -p $(systemctl show aiops-gateway-41 -p MainPID --value)'
+
+# 读数（一次查询给出全部三行）
+ssh aiops-41 'sudo -u aiops41 /opt/aiops-41/.venv/bin/python -c "
+import sqlite3
+c = sqlite3.connect("/var/lib/aiops-41/gateway/gateway.db")
+print("routing:", c.execute(
+    "SELECT outcome, COALESCE(error_code,'-'), COUNT(*) FROM agent_run_metrics"
+    " WHERE route_type='routing' AND created_at > ? GROUP BY 1,2",
+    (WINDOW_START,)).fetchall())
+print("any:", c.execute(
+    "SELECT route_type, COUNT(*) FROM agent_run_metrics WHERE created_at > ? GROUP BY 1",
+    (WINDOW_START,)).fetchall())
+"'
+```
+
+`WINDOW_START` 取进程启动的 UTC 时刻。**41 上没有 `sqlite3` 命令行**，因此经网关自己的
+venv 取数；库文件是 `/var/lib/aiops-41/gateway/gateway.db`（`AIOPS_GATEWAY_DATABASE_FILE`）。
+
+本次读数：**进程启动 2026-09-30 18:39:47 UTC，取数时间 2026-10-01**。
 
 | 读数 | 值 | 说明 |
 |---|---|---|
