@@ -459,9 +459,28 @@ class ConversationStore:
         match — the whole point of that match is to avoid clearing a slot a
         LATER worker took, and at boot there is no later worker.
 
+        The turn row goes with the slot, and only the one the slot names: an
+        interrupted generation must not survive as a question with no answer
+        (#172), which is the same treatment a failed turn gets from its worker.
+        Deleting by ``generating_turn_no`` rather than by "every answer-less
+        row" keeps a turn that some other exit already closed out of this one's
+        way.
+
         Returns how many slots were freed.
         """
         with self._connection(write=True) as connection:
+            held = [
+                (str(row["conversation_id"]), int(row["generating_turn_no"]))
+                for row in connection.execute(
+                    "SELECT conversation_id, generating_turn_no FROM conversations"
+                    " WHERE generating_since IS NOT NULL AND generating_turn_no IS NOT NULL"
+                ).fetchall()
+            ]
+            for conversation_id, turn_no in held:
+                connection.execute(
+                    "DELETE FROM conversation_turns WHERE conversation_id = ? AND turn_no = ?",
+                    (conversation_id, turn_no),
+                )
             cursor = connection.execute(
                 "UPDATE conversations SET generating_since = NULL, generating_turn_no = NULL"
                 " WHERE generating_since IS NOT NULL"

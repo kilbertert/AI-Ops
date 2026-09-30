@@ -545,4 +545,9 @@ def test_the_boot_hook_releases_the_conversation_slots_it_ends(tmp_path) -> None
     )
     # The slot is free: the next turn claims without waiting out the fallback.
     assert conversations.get(cid, scope)["is_generating"] is False
+    # And the interrupted turn is gone from the history, not left as a question
+    # with no answer — the same treatment a failed turn gets from its worker
+    # (#172). `context_turns()` would have filtered it out anyway; the detail
+    # view would not have.
+    assert [turn["turn_no"] for turn in conversations.turns(cid, scope)] == []
     conversations.begin_turn(cid, scope, kind="qa", question="那它为什么跳枪")
