@@ -842,11 +842,18 @@ def test_an_unreadable_window_yields_no_history_and_warns(tmp_path: Path, caplog
     conversations.complete_turn(cid, scope_fingerprint, turn_no, answer={"text": "上一轮的答案"})
 
     runtime.gateway_settings.context_max_turns = 0  # out of range
-    with caplog.at_level(logging.WARNING, logger="aiops_diagnostics.gateway_runtime"):
+    # The logger name is the one the module actually uses (`aiops.` prefix, not
+    # the package name). Naming a logger that does not exist still passes —
+    # propagation reaches the root handler caplog owns — so a wrong name here
+    # would assert "some warning happened" while claiming to pin this one.
+    with caplog.at_level(logging.WARNING, logger="aiops.gateway_runtime"):
         history = runtime._conversation_history((cid, scope_fingerprint, turn_no), "zh")
 
     assert history == ""
-    assert any("conversation history unavailable" in record.message for record in caplog.records)
+    assert any(
+        record.name == "aiops.gateway_runtime" and "conversation history unavailable" in record.message
+        for record in caplog.records
+    )
 
     # The same call with a valid window returns the turn, so the empty result
     # above is the setting and not the store.
