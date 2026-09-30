@@ -397,11 +397,16 @@ def _claims_from_signed_jwt(token: str, key: str, *, trust_company_payload: bool
     其余字段解读完全共用（``_subject_from_claims`` / ``_shop_ids_from_claims``）。
 
     **必须验签，不能只解 base64**：不验签的话任何人都能自造一份 ``id`` 声明，等于把身份交给
-    调用方自报 —— 与 ADR-0009 那条「不得由请求体推导身份」直接冲突。
+    调用方自报。
 
-    失败一律 fail closed：结构不是三段、``alg`` 不是 HS256、签名不符、``exp`` 已过，
-    四种都拒。``alg`` 必须**显式等于 HS256**，不接受 ``none``，也不按令牌自报的算法选实现
-    （那正是 JWT 算法混淆的入口）。
+    **两种模式，由 ``trust_company_payload`` 决定**：
+
+    - **True（生产默认）= 公司一致**：不验签、不判 ``exp`` —— 与公司接口行为一致。
+      失败仍 fail closed：结构不是三段、``alg`` 不是 HS256。
+    - **False = 严格模式**：额外验签 + 判 ``exp``。
+
+    两模式共同保留的判据：``alg`` 必须**显式等于 HS256**，不接受 ``none``，
+    也不按令牌自报的算法选实现（那正是 JWT 算法混淆的入口）。
     """
     parts = token.split(".")
     if len(parts) != 3:

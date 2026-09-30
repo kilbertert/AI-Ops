@@ -2302,6 +2302,7 @@ def _company_token_resolver(settings: GatewayServerSettings) -> CompanyTokenCall
                 client_id=settings.company_token_client_id,
                 client_secret=settings.company_token_client_secret,
                 signature_key=settings.company_jwt_key,
+                trust_company_payload=settings.trust_company_payload,
             ),
             runtime,
             shop_directory=_shop_directory(runtime),

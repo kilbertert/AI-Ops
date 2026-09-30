@@ -1273,3 +1273,18 @@ def test_company_parity_still_rejects_a_non_hs256_header() -> None:
             required_scope="aiops:orders:read",
             platform_entry="operator",
         )
+
+
+def test_the_strict_mode_is_reachable_from_configuration(monkeypatch: pytest.MonkeyPatch) -> None:
+    """严格模式必须**能从配置切回**（评审指出：此前只有代码默认值，生产切不回去）。
+
+    判据走真实环境变量路径，而不是直接构造 dataclass —— 后者绕开了读者真正会用的那条路。
+    """
+    from aiops_diagnostics.gateway_config import GatewayServerSettings
+
+    monkeypatch.setenv("AIOPS_GATEWAY_COMPANY_TRUST_PAYLOAD", "0")
+    assert GatewayServerSettings.from_env().trust_company_payload is False
+    monkeypatch.setenv("AIOPS_GATEWAY_COMPANY_TRUST_PAYLOAD", "1")
+    assert GatewayServerSettings.from_env().trust_company_payload is True
+    monkeypatch.delenv("AIOPS_GATEWAY_COMPANY_TRUST_PAYLOAD", raising=False)
+    assert GatewayServerSettings.from_env().trust_company_payload is True  # 未设 = 公司一致
