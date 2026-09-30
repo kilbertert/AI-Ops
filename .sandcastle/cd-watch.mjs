@@ -58,6 +58,81 @@ function enrich(runs) {
   });
 }
 
+/**
+ * 取每个 run 的**获批时刻** —— 从部署账本读，不是从 run 猜。
+ *
+ * 🔴 为什么必须要它：`pending_deployments` 只回答「**现在**有没有部署在等批准」，
+ * 一旦获批就变成空 —— 而那恰恰是"排队"开始的那一刻。于是「已获批、在等并发锁」
+ * 这个状态下拿不到任何时间锚，只能退回**创建时刻**，而创建时刻在"等批准等了很久
+ * 才获批"的 run 上会给出假阳性（评审三次指出，见 `classifyRun` 的注释）。
+ *
+ * 尝试顺序（实测）：
+ *   1. `pending_deployments` —— 若还带着 `current_user`（审批人），它**就是**获批时刻，
+ *      一次调用、最准；实测 GitHub 在本仓的部署上会把首次审批后的状态留在这里。
+ *   2. 该 run 的 deployment 状态时间线 —— 找 `in_progress`（成功路径实测只隔 0.5 分钟）
+ *      或 `queued`（首次获批当且仅当状态还是 `waiting` 时成立），取最早的那个。
+ *   3. 都没有 ⇒ `null`（判定侧据此**不判**，宁可漏报也不开假票）。
+ *
+ * 每次多两次 API 调用，只对**未完成**的 run 做（通常 0–2 个）。
+ */
+export function approvedStamps({ repo, workflow = "cd.yml", environment = "production-41", limit = 20 } = {}) {
+  // ⚠️ `actions/runs/<id>/deployments` **不存在**（实测 404）——账本挂在**仓库级**，
+  // 与 run 的关联只有 `sha` 与 `created_at`。所以这里：① 列最近的 deployment；
+  // ② 只留目标环境的；③ 逐条读它自己的状态时间线。
+  const args = [
+    "api",
+    `repos/{owner}/{repo}/deployments?per_page=${limit}`,
+    "--jq",
+    `[.[] | select(.environment == "${environment}") | {id, sha, created_at}]`,
+  ];
+  if (repo) args.splice(2, 0, "--repo", repo);
+  void workflow;
+  const deployments = JSON.parse(gh(args));
+  const byDeployment = new Map();
+  for (const item of Array.isArray(deployments) ? deployments : []) {
+    const statuses = JSON.parse(
+      gh([
+        "api",
+        `repos/{owner}/{repo}/deployments/${item.id}/statuses`,
+        "--jq",
+        "[.[] | {state, created_at}]",
+      ]),
+    );
+    let approved = null;
+    for (const entry of Array.isArray(statuses) ? statuses : []) {
+      // `queued` 作为"首次获批"的代理：实测时间线是 waiting → queued → in_progress，
+      // 它只出现在**首次**批准的那一刻（后续状态推送不会回到 queued）。
+      if (entry.state === "in_progress" || entry.state === "queued") {
+        const t = Date.parse(entry.created_at);
+        if (Number.isFinite(t) && (approved === null || t < approved)) approved = t;
+      }
+    }
+    if (approved !== null) {
+      byDeployment.set(item.sha, new Date(approved).toISOString());
+    }
+  }
+  return byDeployment;
+}
+
+/**
+ * 给每个未完成的 run 补上**获批时刻** —— 从部署账本按 `sha` 找，不是从 run 猜。
+ *
+ * 🔴 为什么必须要它：`pending_deployments` 只回答「**现在**有没有部署在等批准」，
+ * 一旦获批就变成空 —— 而那恰恰是"排队"开始的那一刻。于是「已获批、在等并发锁」
+ * 这个状态下拿不到任何时间锚，只能退回**创建时刻**，而创建时刻在"等批准等了很久
+ * 才获批"的 run 上会给出假阳性（评审三次指出，见 `classifyRun` 的注释）。
+ */
+export function attachApprovedAt(runs, options = {}) {
+  let stamps;
+  try {
+    stamps = approvedStamps(options);
+  } catch {
+    // 账本取不到 ⇒ 全部为未知，判定侧据此**不判**（宁可漏报，也不凭创建时刻开假票）。
+    return runs.map((run) => ({ ...run, approvedAt: null }));
+  }
+  return runs.map((run) => ({ ...run, approvedAt: stamps.get(run.headSha) ?? null }));
+}
+
 /** 取最近若干次 CD run 的形态；取不到返回 `fetchedOk: false`（不抛）。 */
 export function fetchRuns({ repo, workflow = "cd.yml", limit = 10 } = {}) {
   const args = [
@@ -121,7 +196,8 @@ export function fetchUnfinished({ repo, workflow = "cd.yml", limit = 100 } = {})
     }
     collected.push(...runs);
   }
-  return { runs: enrich(collected), fetchedOk: true };
+  // 未完成的 run 才需要「获批时刻」——判定"排队多久"要用它作锚，不能用创建时刻。
+  return { runs: attachApprovedAt(enrich(collected), { repo, workflow, limit }), fetchedOk: true };
 }
 
 function announce(title, body, label) {

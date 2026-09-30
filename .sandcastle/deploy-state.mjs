@@ -119,21 +119,40 @@ export function classifyRun(run, options = {}) {
   // 剩下的都是「作业已创建、没有待批准部署」：要么在跑（`in_progress` 已在上面返回），
   // 要么**已获批、还没开始** —— 在等并发锁，或在等一个能接活的运行器。
   //
-  // ⚠️ **这一段被两个方向各纠过一次，结论是「要判，但别判成死锁」**：
-  //   · 先判成 `deadlocked` ⇒ 纯假阳性：合法排队被说成"卡死了"（评审指出）；
-  //   · 改成「不看时长」⇒ 另一个洞：**运行器离线时它会永远显示健康**，
-  //     而部署根本开不了工（评审再指出）。
-  // ⇒ 保留时长判据，但给一个**说得出成因**的类别：既不是"没人点批准"（`stuck`），
-  //    也不是"作业没建出来"（`deadlocked`），而是**已获批却开不了工**。
+  // ⚠️ **这一段被三个方向各纠过一次**，三次都是同一个根因：**判据挂错了时刻**。
+  //   · 判 `deadlocked`（挂在创建时刻）⇒ 假阳性：合法排队被说成"卡死了"；
+  //   · 改成「不看时长」⇒ 反方向的洞：**运行器离线时会永远显示健康**；
+  //   · 再挂回创建时刻 ⇒ 又假阳性：等批准等超阈值、**刚获批**的部署会被判成"排队太久"
+  //     （评审第三次指出）。
   //
-  // 这个阈值有据可依，不是拍的：持锁的那个 job 自己有 20 分钟 `timeout-minutes`，
+  // ⇒ 关键不是"看时长"还是"不看"，而是**从哪个时刻算**：这里要用**获批时刻**，
+  //   因为"排队"是从那一刻才开始的。`pending_deployments` 一旦为空就查不到获批时间了，
+  //   但**部署账本**记着它 —— `approvedAt`（见 `emitUnfinishedStatuses`）。
+  //   没有它（旧 run 或取数失败）就**不判**：宁可漏报，也不要凭创建时刻开一张假票。
+  const approved = run.approvedAt ? Date.parse(run.approvedAt) : Number.NaN;
+  const queueMinutes = Number.isFinite(approved) ? (now.getTime() - approved) / 60000 : null;
+  if (queueMinutes === null) {
+    return {
+      kind: "in-flight",
+      ageMinutes: ageMinutesWait,
+      reason: "已获批（拿不到获批时刻，不据创建时刻判长）—— 视为排队中",
+    };
+  }
+  if (queueMinutes <= stuckMinutes) {
+    return {
+      kind: "in-flight",
+      ageMinutes: ageMinutesWait,
+      reason: `已获批 ${Math.round(queueMinutes)} 分钟 —— 在等并发锁或运行器，仍在合理范围`,
+    };
+  }
+  // 阈值有据可依，不是拍的：持锁那个 job 自己有 20 分钟 `timeout-minutes`，
   // 一次合法排队的上限因此就是"前一个跑完"≈ 20 分钟出头。超过 `stuckMinutes`（30）
   // 仍未开始，成因只剩两种：运行器不在线，或前一个部署自己挂了没释放锁。
   return {
     kind: "queued-too-long",
     ageMinutes: ageMinutesWait,
     reason:
-      `已获批却超过 ${stuckMinutes} 分钟仍未开始 —— 合法排队的上限是"前一个部署跑完"` +
+      `**获批后**已等待超过 ${stuckMinutes} 分钟仍未开始 —— 合法排队的上限是"前一个部署跑完"` +
       `（它自己的 job 超时是 20 分钟）；超过它，成因是**运行器不在线**或前一个没释放锁`,
   };
 }

@@ -45,9 +45,45 @@ cases.push([
   "in-flight",
 ]);
 cases.push([
-  "已获批却超阈值 ⇒ queued-too-long（运行器可能离线）",
-  classifyRun({ status: "waiting", createdAt: "2026-09-30T06:33:29Z", totalCount: 1, pendingCount: 0 }, { now }).kind,
+  "已获批**后**排队超阈值 ⇒ queued-too-long（运行器可能离线）",
+  classifyRun(
+    {
+      status: "waiting",
+      createdAt: "2026-09-30T06:33:29Z",
+      totalCount: 1,
+      pendingCount: 0,
+      approvedAt: "2026-09-30T06:35:00Z", // 获批于 ~9 小时前
+    },
+    { now },
+  ).kind,
   "queued-too-long",
+]);
+
+// 3b. 🔴 **等批准等超了阈值、刚获批** —— 创建时刻已经很老，但"排队"才刚开始。
+//     这是第三次被指出同一个根因：判据挂错了时刻。用获批时刻算就不会误报。
+cases.push([
+  "等批准很久、刚获批 ⇒ in-flight（不得按创建时刻判）",
+  classifyRun(
+    {
+      status: "waiting",
+      createdAt: "2026-09-30T06:33:29Z", // 创建于 ~9 小时前
+      totalCount: 1,
+      pendingCount: 0,
+      approvedAt: "2026-09-30T15:25:00Z", // 5 分钟前刚获批
+    },
+    { now },
+  ).kind,
+  "in-flight",
+]);
+
+// 3c. 拿不到获批时刻 ⇒ **不判**（宁可漏报也不凭创建时刻开假票）
+cases.push([
+  "拿不到获批时刻 ⇒ in-flight（不猜）",
+  classifyRun(
+    { status: "waiting", createdAt: "2026-09-30T06:33:29Z", totalCount: 1, pendingCount: 0, approvedAt: null },
+    { now },
+  ).kind,
+  "in-flight",
 ]);
 
 // 4. 刚创建 5 分钟 ⇒ 不报警
@@ -177,7 +213,13 @@ const alarmingKinds = [
   ],
   [
     "已获批却开不了工",
-    { status: "waiting", totalCount: 1, pendingCount: 0, createdAt: "2026-09-30T06:33:29Z" },
+    {
+      status: "waiting",
+      totalCount: 1,
+      pendingCount: 0,
+      createdAt: "2026-09-30T06:33:29Z",
+      approvedAt: "2026-09-30T06:35:00Z",
+    },
     "queued-too-long",
   ],
 ];
@@ -191,7 +233,28 @@ cases.push(["算卡住的那 4 类（真喂进去再读回）", gotKinds.join(",
 //     （已获批、等锁）、正在部署、阈值内、已完成、未知状态，一个都不许进 overdue。
 for (const [label, run, want] of [
   ["已获批、刚开始排队", { status: "waiting", totalCount: 1, pendingCount: 0, createdAt: "2026-09-30T15:25:00Z" }, 0],
-  ["已获批、排队超阈值（运行器可能离线）", { status: "waiting", totalCount: 1, pendingCount: 0, createdAt: "2026-09-30T06:33:29Z" }, 1],
+  [
+    "已获批、排队超阈值（运行器可能离线）",
+    {
+      status: "waiting",
+      totalCount: 1,
+      pendingCount: 0,
+      createdAt: "2026-09-30T06:33:29Z",
+      approvedAt: "2026-09-30T06:35:00Z",
+    },
+    1,
+  ],
+  [
+    "等批准很久、刚获批",
+    {
+      status: "waiting",
+      totalCount: 1,
+      pendingCount: 0,
+      createdAt: "2026-09-30T06:33:29Z",
+      approvedAt: "2026-09-30T15:25:00Z",
+    },
+    0,
+  ],
   ["正在部署", { status: "in_progress", totalCount: 1, pendingCount: 0, createdAt: "2026-09-30T06:33:29Z" }, 0],
   ["阈值内", { status: "waiting", totalCount: 1, pendingCount: 1, createdAt: "2026-09-30T15:25:00Z" }, 0],
   ["已完成", { status: "completed", conclusion: "success", createdAt: "2026-09-30T06:33:29Z" }, 0],
