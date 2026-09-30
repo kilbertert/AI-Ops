@@ -351,7 +351,8 @@ def test_out_of_range_limits_raise_rather_than_blank_the_history(tmp_path: Path)
     cid = _conversation(store)
     _finished_turn(store, cid, "问题", {"text": "答案"})
 
-    with pytest.raises(ValueError):
-        build_history(store, cid, _SCOPE, "zh", max_turns=0)
-    with pytest.raises(ValueError):
-        build_history(store, cid, _SCOPE, "zh", max_tokens=10)
+    for bad in ({"max_turns": 0}, {"max_turns": 51}, {"max_tokens": 10}):
+        with pytest.raises(ValueError):
+            build_history(store, cid, _SCOPE, "zh", **bad)
+    # The documented boundaries are inclusive, so the valid ends must not raise.
+    assert build_history(store, cid, _SCOPE, "zh", max_turns=1, max_tokens=100)
