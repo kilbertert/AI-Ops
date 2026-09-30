@@ -527,6 +527,27 @@ workflow YAML 不适用复杂度或 mutation 工具；安全状态机由模板�
 Java BFF 透传与前端 blocks[] 渲染属 #171/#173 及真实媒体验收范围（见 P0-E2E-REAL），
 本票不把 fake 结果记为业务验收。
 
+## 调用者认证错误映射 QA 计划（#485）
+
+### CALLER-01 配置缺失在全表上按 503 回答
+
+- 环境：AI-Ops 本地 Python 3.13，FastAPI TestClient，临时 SQLite，注入式 resolver 替身。
+- 前置条件：注入一个抛 `CALLER_AUTH_CONFIG_MISSING` 的 resolver。
+- 测试数据：`Authorization: Bearer <任意>`；路由集合**从构建后的应用枚举**（遍历依赖树），不手写。
+- 有序动作：对枚举出的每条路由同法调用一次。
+- 预期结果：**每一条**都是 503 `ACCESS_TOKEN_VALIDATION_UNAVAILABLE` 且 `retryable: true`；无误报 401。
+- 清理：临时目录自动回收。
+- 结果：PASS（2026-09-30，`tests/test_caller_auth_mapping.py`）。
+
+### CALLER-02 映射只有一处（源码级）
+
+- 环境：同上。
+- 前置条件：读 `gateway_api.py` 的语法树。
+- 有序动作：统计共用实现的定义次数；逐个检查六个认证依赖是否都委托它、且自身不再出现 `CallerAuthError`。
+- 预期结果：定义一次；六个依赖全部只委托；任一依赖自行映射即失败。
+- 清理：无。
+- 结果：PASS（同上；以「复原缺陷」与「让一个依赖自行映射」两条变异核对，各自转红）。
+
 ## 会话与活跃订单上下文 QA 计划（T4/#172）
 
 ### CONV-01 会话隔离与生命周期

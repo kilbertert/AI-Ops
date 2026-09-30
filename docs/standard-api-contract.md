@@ -350,6 +350,7 @@ Authorization: Bearer <access_token>
 | 404 | `ORDER_NOT_FOUND` | 订单不存在或不在当前授权范围；不区分两者 |
 | 404 | `REPORT_JOB_NOT_FOUND` | 作业不存在或不属于当前调用者 |
 | 404 | `DIAGNOSIS_NOT_FOUND` | 诊断不存在或不属于当前调用者 |
+| 503 | `ACCESS_TOKEN_VALIDATION_UNAVAILABLE` | 调用方认证暂时不可用（含网关自身配置缺失，fail closed）。**按 503 处理：可重试，不要引导重新登录** |
 | 503 | `ORDER_AUTHORIZATION_UNAVAILABLE` | 权限目录或数据源暂时不可用 |
 | 503 | `REPORT_JOB_UNAVAILABLE` | 报告作业暂时不可用 |
 | 503 | `DIAGNOSIS_UNAVAILABLE` | 诊断执行暂时不可用 |

@@ -108,6 +108,22 @@ Feature: 标准调用者认证与订单授权
   AI-Ops 标准资源接口必须从验证后的 Bearer token 建立调用者上下文，
   不接受设备令牌或裸身份字段代替授权。
 
+  Rule: 调用者认证失败一律 fail closed 且映射一致
+
+    Scenario: 网关自身配置缺失时按依赖不可用拒绝
+      Given 调用者认证所需的配置缺失
+      And 调用者携带格式正确的 Bearer token
+      When 任一需要调用者认证的接口被调用
+      Then 返回 503 ACCESS_TOKEN_VALIDATION_UNAVAILABLE
+      And 该错误标记为可重试
+      And 不引导调用者重新登录
+
+    Scenario: 认证失败到对外错误的映射只有一处
+      Given 仓库里存在多个需要调用者认证的接口
+      When 检查网关源码
+      Then 只有一个函数把认证异常映射为对外错误
+      And 每个认证依赖都委托该函数
+
   Rule: 标准接口只信任验证后的调用者上下文
 
     Scenario: 有效 access token 可以验证有权订单
