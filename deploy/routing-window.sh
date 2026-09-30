@@ -19,8 +19,31 @@ DB=${AIOPS_41_DB:-/var/lib/aiops-41/gateway/gateway.db}
 PY=${AIOPS_41_PY:-/opt/aiops-41/.venv/bin/python}
 SERVICE=${AIOPS_41_SERVICE:-aiops-gateway-41}
 
+#: The only shape this script accepts for a window start. It is not a stylistic
+#: check: the value travels into a remote `sh -c` string, and it is compared as
+#: TEXT against `created_at`, which the store writes as UTC ISO8601. Both
+#: concerns are answered by accepting exactly one canonical form.
+WINDOW_PATTERN='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\+00:00$'
+
+normalize_window() {
+  local value=$1
+  if ! printf '%s' "$value" | grep -Eq "$WINDOW_PATTERN"; then
+    cat >&2 <<EOF
+窗口起点必须是 UTC 的 ISO8601，形如 2026-10-01T02:00:00+00:00；收到：$value
+
+为什么只收这一种形状：
+  · 它会被嵌进远端命令，含引号或元字符的值会改变那条命令（本脚本只读，但没有理由给它开口子）；
+  · 它按**文本**与 created_at 比较，而后者是 UTC ISO8601 文本。带 +08:00 偏移的起点
+    字符串比较会得到错误的边界（10:00+08:00 应等于 02:00Z，字符串里却比 03:00Z 大）。
+需换算时先跑：date -u -d '<你的时间>' +%Y-%m-%dT%H:%M:%S+00:00
+EOF
+    exit 2
+  fi
+  printf '%s' "$value"
+}
+
 if [ $# -ge 1 ]; then
-  WINDOW_START=$1
+  WINDOW_START=$(normalize_window "$1")
 else
   # The process's start time, in UTC. `ps -o lstart=` prints a LOCAL wall clock
   # with no zone, and `date -d` reads it back in the host's zone — which on this
@@ -66,8 +89,19 @@ print(f"历史 routing 行（全部，供对照）：{all_routing}")
 
 completed = sum(n for outcome, _, n in routing if outcome == "completed")
 failed = sum(n for outcome, _, n in routing if outcome == "failed")
+other_traffic = sum(n for route_type, n in by_route if route_type != "routing")
 if completed == 0 and failed == 0:
-    print("\n判定：窗口内没有流量 —— 结论是「判定路径未被使用」，不是「连续运行通过」。")
+    if other_traffic == 0:
+        print("\n判定：窗口内没有任何指标行 —— 网关没有处理过请求。")
+    else:
+        # The two are different facts and the difference matters: "nobody asked
+        # anything" is not the same as "people asked and the decision path was
+        # never consulted". Collapsing them would report the second as the
+        # first, which is the same shape of error this whole ticket is about.
+        print(
+            f"\n判定：窗口内有其它路径的请求（{other_traffic} 条），但判定路径**一次都没被使用** ——"
+            " 结论是「判定路径未被使用」，不是「连续运行通过」。"
+        )
 elif completed == 0:
     print("\n判定：窗口内有失败但没有成功 —— 判定路径有问题，不是「没流量」。")
 else:
