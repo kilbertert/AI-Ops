@@ -418,14 +418,14 @@ def test_the_sweep_sql_is_written_down_only_in_this_module() -> None:
     assert offenders == [], "; ".join(offenders)
 
 
-def test_each_sweep_names_the_profile_of_its_own_table() -> None:
-    """The table and the profile are two names for one thing.
+def _expire_statements_calls() -> dict[str, str]:
+    """Every `expire_statements(table, profile, ...)` in the store, by table.
 
-    Substituting another profile's name is behaviourally invisible on today's
-    data — the health table has no `cancelled`, so sweeping it with the
-    diagnosis profile changes nothing you can observe. It is still wrong: the
-    sweep would then follow a profile that does not describe its table, and the
-    first status either profile gains would silently apply to both.
+    Read from the syntax tree so both shapes are covered: the three
+    `_expire_*` methods AND the startup loop, which pairs a table with a
+    profile inside a tuple. The first version of this check walked the methods
+    only and missed the loop — where a swap is equally invisible today, because
+    the two profiles agree on every value their tables actually produce.
     """
     import ast
     from pathlib import Path
@@ -434,17 +434,49 @@ def test_each_sweep_names_the_profile_of_its_own_table() -> None:
     tree = ast.parse(store.read_text(encoding="utf-8"), filename=str(store))
     pairs: dict[str, str] = {}
     for node in ast.walk(tree):
-        if not isinstance(node, ast.FunctionDef) or not node.name.startswith("_expire_"):
+        if not isinstance(node, ast.Call):
             continue
-        for call in ast.walk(node):
-            if not isinstance(call, ast.Call):
+        if getattr(node.func, "id", "") != "expire_statements":
+            continue
+        # Only the literal call sites pair a table with a profile; the startup
+        # loop calls with its loop variables, and those literals are read below.
+        if not isinstance(node.args[0], ast.Constant):
+            continue
+        table = node.args[0].value
+        pairs[table] = ast.unparse(node.args[1])
+    # The startup path builds its pair as a loop over literals: read those too,
+    # so a swap there is caught by the same assertion. `table`/`profile` are the
+    # loop variables themselves — the literals are the tuple elements.
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.For) or not isinstance(node.iter, ast.Tuple):
+            continue
+        if "expire_statements" not in ast.unparse(node):
+            continue
+        for element in node.iter.elts:
+            if not isinstance(element, ast.Tuple) or len(element.elts) != 2:
                 continue
-            if getattr(call.func, "id", "") != "expire_statements":
+            table = ast.unparse(element.elts[0]).strip("\"'")
+            profile = ast.unparse(element.elts[1])
+            if table in {"table", "profile"}:
                 continue
-            table = ast.unparse(call.args[0]).strip("\"'")
-            pairs[table] = ast.unparse(call.args[1])
-    assert pairs == {
+            pairs[table] = profile
+    return pairs
+
+
+def test_each_sweep_names_the_profile_of_its_own_table() -> None:
+    """The table and the profile are two names for one thing — everywhere.
+
+    Substituting another profile's name is behaviourally invisible on today's
+    data — the health table has no `cancelled`, so sweeping it with the
+    diagnosis profile changes nothing you can observe. It is still wrong: the
+    sweep would then follow a profile that does not describe its table, and the
+    first status either profile gains would silently apply to both.
+
+    Every pairing in the module is read, including the startup loop's: that is
+    where the first version of this check was blind.
+    """
+    assert _expire_statements_calls() == {
         "health_report_jobs": "HEALTH_JOB",
         "standard_diagnoses": "DIAGNOSIS",
         "assistant_questions": "QUESTION",
-    }, pairs
+    }, _expire_statements_calls()

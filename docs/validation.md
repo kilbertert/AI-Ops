@@ -31,7 +31,11 @@
 | **没有手写的清扫语句残留** | `test_the_sweep_sql_is_written_down_only_in_this_module`（按语句而非按行） |
 | 表名与 profile **配对正确** | `test_each_sweep_names_the_profile_of_its_own_table` |
 
-**两条变异核对**：① 某张表写回字面量 SQL ⇒ 转红；② 表名与 profile 配错 ⇒ 转红。
+**三条变异核对**：① 某张表写回字面量 SQL ⇒ 转红；② 表名与 profile 配错（在 `_expire_*` 里）
+⇒ 转红；③ **表名与 profile 配错（在启动循环里）⇒ 转红**。
+
+第 ③ 条是第一轮覆盖不到的：配对检查原本只走 `_expire_*` 方法，**跳过了启动循环**。
+Devin 指出后扩成「读全模块的配对」，两种写法都覆盖。
 
 ⚠️ **最后那条是「行为上看不出」的那种错**：拿诊断的 profile 去清扫健康作业，**今天完全观察不到**
 （健康表没有 `cancelled`，多扫一个状态不改变任何行）。但它仍要拦 —— 那条语句从此跟随一个
