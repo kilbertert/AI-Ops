@@ -101,11 +101,11 @@ class _Metrics:
     """Records what the runtime would have recorded."""
 
     def __init__(self) -> None:
-        self.rows: list[tuple[str, str, str | None]] = []
+        self.rows: list[tuple[str, str, str]] = []
 
     def record_route_metric(self, caller, route_type, outcome, **kwargs) -> None:
-        del caller, route_type
-        self.rows.append((outcome, kwargs.get("error_code") or "", kwargs.get("conversation_id")))
+        del caller
+        self.rows.append((route_type, outcome, kwargs.get("error_code") or ""))
 
 
 def _client(tmp_path: Path, authorizer: _Authorizer, metrics: _Metrics | None = None) -> TestClient:
@@ -177,12 +177,15 @@ def test_a_failed_check_is_logged_and_counted(tmp_path: Path, caplog) -> None:
         )
     assert response.status_code == 503
     assert response.json()["error"]["code"] == "ORDER_AUTHORIZATION_UNAVAILABLE"
-    warnings = [r for r in caplog.records if "order authorization unavailable" in r.getMessage()]
+    # The warning carries the same code the metric and the contract use, so one
+    # grep finds all three.
+    warnings = [r for r in caplog.records if "ORDER_AUTHORIZATION_UNAVAILABLE" in r.getMessage()]
     assert warnings, caplog.text
     assert warnings[0].name == LOGGER_NAME, warnings[0].name
-    assert ("failed", "ORDER_AUTHORIZATION_UNAVAILABLE") in [
-        (outcome, code) for outcome, code, _ in metrics.rows
-    ], metrics.rows
+    # The row is its own bucket, not `diagnosis`: a failed precheck is component
+    # health, and counting it as a diagnosis run reported runs that never
+    # happened — including on surfaces that start no diagnosis at all.
+    assert metrics.rows == [("order_auth", "failed", "ORDER_AUTHORIZATION_UNAVAILABLE")], metrics.rows
 
 
 def test_the_fallback_surfaces_still_fall_back_silently(tmp_path: Path) -> None:
@@ -205,12 +208,57 @@ def test_the_fallback_surfaces_still_fall_back_silently(tmp_path: Path) -> None:
     # The embedded order routes to diagnosis only when ownership is confirmed;
     # an unconfirmable check falls through. Which fallback it takes (a qa job or
     # a FAQ short-circuit) is the FAQ layer's business — what matters here is
-    # that the outage did not become an error the caller has to handle.
-    assert response.status_code != 503, response.text
-    # ...and the failure was still recorded, which is the new part.
-    assert ("failed", "ORDER_AUTHORIZATION_UNAVAILABLE") in [
-        (outcome, code) for outcome, code, _ in metrics.rows
-    ], metrics.rows
+    # that the outage did not become an error the caller has to handle, and that
+    # it still produced an answer.
+    assert response.status_code == 200, response.text
+    assert response.json()["type"] in {"faq", "qa"}, response.text
+    # ...and the failure was still recorded, which is the new part. The FAQ
+    # short-circuit that answers the question records its own row; the precheck
+    # is the failure row, and it is its own bucket.
+    assert ("order_auth", "failed", "ORDER_AUTHORIZATION_UNAVAILABLE") in metrics.rows, metrics.rows
+
+
+def test_one_question_leaves_one_failure_row(tmp_path: Path) -> None:
+    """The embedded order and the active order are the same object, checked once.
+
+    Both 1b and 1c fire when the number in the question is ALSO the
+    conversation's confirmed order, and each failed check records a warning and a
+    metric row. Without deduping, one question leaves two identical failure rows
+    — the metric then lies about how many failures happened.
+
+    The authorizer is made to answer first (so the order can be bound to the
+    conversation) and then to fail: that is the production sequence, since
+    binding an order is itself an authorization check.
+    """
+    metrics = _Metrics()
+    authorizer = _Authorizer(owned=True)
+    client = _client(tmp_path, authorizer, metrics)
+    headers = {"Authorization": "Bearer token", "X-Business-Entry": "consumer"}
+    created = client.post(
+        "/v1/conversations",
+        headers=headers,
+        json={"agent_version_key": "agt_abcdef1234567890#v1"},
+    )
+    assert created.status_code == 201, created.text
+    cid = created.json()["conversation_id"]
+    bound = client.post(f"/v1/conversations/{cid}/active-order", headers=headers, json={"order_no": ORDER})
+    assert bound.status_code == 200, bound.text
+
+    # Now the directory goes down: the same order is about to be checked twice.
+    authorizer.fails = True
+    metrics.rows.clear()
+    before = authorizer.calls
+    response = client.post(
+        "/v1/assistant/questions",
+        headers=headers,
+        json={"question": f"订单 {ORDER} 为什么停了", "conversation_id": cid},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["type"] in {"faq", "qa"}, response.text
+
+    failure_rows = [row for row in metrics.rows if row[0] == "order_auth"]
+    assert len(failure_rows) == 1, metrics.rows
+    assert authorizer.calls - before == 1, (authorizer.calls, before)
 
 
 def test_no_call_site_reaches_the_authorizer_directly() -> None:

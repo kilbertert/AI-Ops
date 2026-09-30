@@ -28,8 +28,22 @@
 | 判定失败记告警（含记录名）并落指标 | `test_a_failed_check_is_logged_and_counted` |
 | 回落面**不**因判定失败变成 503，但故障仍被记录 | `test_the_fallback_surfaces_still_fall_back_silently` |
 | 只有守卫能调 `can_access`（源码级） | `test_no_call_site_reaches_the_authorizer_directly` |
+| 同一次提问只留一条故障行（1b 与 1c 命中同一订单时） | `test_one_question_leaves_one_failure_row` |
 
-**两条变异核对**：① 把「失败」并进「不拥有」⇒ 转红；② 某个调用点又直接调 `can_access` ⇒ 转红。
+**四条变异核对**：① 把「失败」并进「不拥有」⇒ 转红；② 某个调用点又直接调 `can_access` ⇒ 转红；
+③ 去掉同请求去重 ⇒ 转红；④ 日志去掉错误码 ⇒ 转红。
+
+### 评审前三轮的三条修正（Devin）
+
+- 🟡 **precheck 记成了 `diagnosis` 桶**：访问探针、报告创建与问答回落三个面**根本不启动诊断**，
+  却各记了一条诊断运行；`MetricsStore.summary` 还会把它算进交互总数。改为独立桶
+  `order_auth`，并像 `routing` 一样**排除在交互总数之外**——理由相同：那是一次前置检查，
+  不是一次运行。错误码与告警不变。
+- 🟡 **同一订单在一次请求里被查两次**：1b 与 1c 会命中同一个号码（问题里的订单号正是会话的活跃订单），
+  失败时留下两条一模一样的告警与故障行。加一层**请求内 per-order 判定缓存**；
+  权限在一次请求内不会中途变化，这个前提成立。
+- 🟡 **告警里没有错误码**：按错误码检索日志找不到它。现在消息里带 `ORDER_AUTHORIZATION_UNAVAILABLE`，
+  与合同、指标同一个串，一次 grep 能找到三处。
 
 ⚠️ **一处断言写窄了又改对的经过**：回落面那条最初断言「202 且 `type=qa`」，实测拿到的是
 **200 `type=faq`** —— 该请求在平台判定后先被 FAQ 短路接走了。文案最初写的是「回到通用问答，
