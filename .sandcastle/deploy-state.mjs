@@ -51,9 +51,20 @@ export function classifyRun(run, options = {}) {
     return { kind: "unknown", ageMinutes, reason: `未知状态：${status || "(空)"}` };
   }
 
-  const overdue = ageMinutes !== null && ageMinutes > stuckMinutes;
+  // 🔴 **`in_progress` 永远不是 stalled。** 它是在**真的干活**（部署脚本正在跑），
+  //    而不是在等谁做什么。这条判据挂在**创建时刻**上，会随时间必然触发：
+  //    一次"等批准 40 分钟、然后开始部署 10 分钟"的运行，会在第二个阶段被判成
+  //    `deadlocked`（因为 `pending_deployments` 在批准后归零）—— 纯假阳性。
+  //    本 job 自己就有 20 分钟超时兜着，不需要外部再加一层。
+  //    （评审指出；这条也是"不能只看创建时刻"的第二个例子。）
+  const ageMinutesWait = ageMinutes;
+  if (status === "in_progress") {
+    return { kind: "in-flight", ageMinutes: ageMinutesWait, reason: "正在部署 —— 不看时长" };
+  }
+
+  const overdue = ageMinutesWait !== null && ageMinutesWait > stuckMinutes;
   if (!overdue) {
-    return { kind: "in-flight", ageMinutes, reason: "未完成，但在阈值内 —— 正常" };
+    return { kind: "in-flight", ageMinutes: ageMinutesWait, reason: "未完成，但在阈值内 —— 正常" };
   }
 
   const totalCount = run.totalCount ?? null;
@@ -70,7 +81,7 @@ export function classifyRun(run, options = {}) {
     const missing = totalCount === null ? "作业数" : "待批准部署数";
     return {
       kind: "indeterminate",
-      ageMinutes,
+      ageMinutes: ageMinutesWait,
       reason: `超过 ${stuckMinutes} 分钟未完成，但${missing}取不到 —— **状态未知**，不是正常`,
     };
   }
@@ -81,22 +92,25 @@ export function classifyRun(run, options = {}) {
   // 阈值本身就是"已经等了 30 分钟"，一个 30 分钟还没建出作业的 run 不是慢，是坏了。
   // 判 indeterminate ⇒ assess 报正常 ⇒ 恰好把本票要修的那种静默又做了一遍。
   if (totalCount === 0) {
+    // ⚠️ 这条判据有前提：**必须取到全部未完成的 run**（见 fetchUnfinished）。
+    // 只看「最近 N 次」时，`totalCount=0` 也会出现在「取数只拿到了一部分」的截断情形，
+    // 那时它说明的是取数不完整，不是死锁。调用方负责这个前提。
     return {
       kind: "deadlocked",
-      ageMinutes,
+      ageMinutes: ageMinutesWait,
       reason: `超过 ${stuckMinutes} 分钟仍未创建任何作业（jobs=0）—— 与"没人点批准"不同，这是卡死了`,
     };
   }
   if (pendingCount > 0) {
     return {
       kind: "stuck",
-      ageMinutes,
+      ageMinutes: ageMinutesWait,
       reason: `等待批准已超过 ${stuckMinutes} 分钟 —— 部署尚未发生`,
     };
   }
   return {
     kind: "deadlocked",
-    ageMinutes,
+    ageMinutes: ageMinutesWait,
     reason: `无任何部署在等批准却已超过 ${stuckMinutes} 分钟 —— 与"没人点批准"不同，这是卡住了`,
   };
 }
@@ -124,36 +138,53 @@ export function straightFailures(runs) {
  * run 躺在那儿，而 `assess` 说「正常」。）
  *
  * ⚠️ **但「旧」不等于「坏」**：并发锁只保证**串行**，一个等着接替前一个的 run 本来就
- * 该等多久等多久 —— 那不是 stuck，是排队。所以只有当**最早的**那个未完成 run
- * 本身就超期时才算异常：锁一次只放一个 run 进去，前面那个还没走，后面的必然等。
+ * 该等多久等多久 —— 那不是 stuck，是排队。所以**逐条**判定，而不只看最早那个：
+ * 取数（`fetchUnfinished`）已经保证拿到的是**全部**未完成 run，于是每条都能自己
+ * 回答「我超期了吗」。若只看最早那条，一个 `indeterminate` 的旧 run 会把后面
+ * 一条**确凿**的 `stuck` 一起挡掉（评审指出）。
  *
- * @returns {Array} 超期的未完成 run（含最新那条；正常排队的不在内）
+ * ⇒ 前提：**调用方必须取全**。截断的列表会让 `jobs=0` 这类判据失真，所以
+ * `fetchUnfinished` 宁可报「取数失败」也不返回部分结果。
+ *
+ * @returns {Array<{run: object, verdict: object}>} 超期的未完成 run（正常排队的不在内）
  */
 export function overdueUnfinished(runs, { now, stuckMinutes } = {}) {
-  const unfinished = runs.filter((run) => UNFINISHED.has(String(run.status ?? "")));
-  if (unfinished.length === 0) return [];
-  const oldest = unfinished[unfinished.length - 1];
-  const verdict = classifyRun(oldest, { now, stuckMinutes });
-  if (verdict.kind === "stuck" || verdict.kind === "deadlocked" || verdict.kind === "indeterminate") {
-    return [{ run: oldest, verdict }];
+  const overdue = [];
+  for (const run of runs) {
+    if (!UNFINISHED.has(String(run.status ?? ""))) continue;
+    const verdict = classifyRun(run, { now, stuckMinutes });
+    if (verdict.kind === "stuck" || verdict.kind === "deadlocked" || verdict.kind === "indeterminate") {
+      overdue.push({ run, verdict });
+    }
   }
-  return [];
+  return overdue;
 }
 
 /**
  * 汇总一份判决。**取数不成立时一律不报「正常」** —— 不知道就说不知道（fail honest）。
  *
  * 三种「不成立」都要报警，而不是静默：
- *  - `fetchedOk === false`：连 run 列表都取不到；
- *  - 列表为空：`cd.yml` 从未被触发过，或取数被静默截断 —— 两种都值得看一眼，
+ *  - `fetchedOk === false`：任一份取数失败；
+ *  - 最近列表为空：`cd.yml` 从未被触发过，或取数被静默截断 —— 两种都值得看一眼，
  *    因为「一次都没有」与「一直正常」在告警面上是同一种安静；
- *  - 最新 run 的判定是 `indeterminate`（详情取不到、或状态不认识）：**未知不是正常**。
+ *  - 任一条待判定的 run 是 `indeterminate`（详情取不到、或状态不认识）：**未知不是正常**。
  *
- * @param {{runs: Array, fetchedOk?: boolean, now?: Date, stuckMinutes?: number,
- *          straightFailures?: number}} input
+ * ⚠️ **两条判据吃两份数据，不要混用**：
+ *  - 「有没有谁卡住」吃 `unfinishedRuns` —— 它必须是**全部未完成**的 run
+ *    （`fetchUnfinished`）。用「最近 N 次」的窗口去找卡住的 run，等于用一个随时间
+ *    收窄的窗口去找一个随时间更该被看见的东西（评审指出）。
+ *    **空集合是正常的**（没人卡住），不是「取不到」。
+ *  - 「连续多少次没成功」吃 `runs` —— 这条本来就只看最近 N 次**已完成**的。
+ *    两者合成一份会让未完成的 run 插进来打乱「连续」的计数。
+ *
+ * @param {{runs: Array, unfinishedRuns?: Array|null, fetchedOk?: boolean, now?: Date,
+ *          stuckMinutes?: number, straightFailures?: number}} input
+ *    `unfinishedRuns` 为 `null` 表示**这份取数失败**（未完成集合未知）；
+ *    空数组表示「确实没有未完成的 run」——两者含义不同，不能混。
  */
 export function assess(input) {
   const runs = Array.isArray(input.runs) ? input.runs : [];
+  const unfinishedRuns = Array.isArray(input.unfinishedRuns) ? input.unfinishedRuns : null;
   const alarms = [];
 
   if (input.fetchedOk === false) {
@@ -166,32 +197,42 @@ export function assess(input) {
     alarms.push({ kind: "no-runs", reason: "取不到任何 CD run —— 要么从未触发过，要么取数不完整" });
     return { ok: false, alarms, notes: [], latest: null, straight: 0 };
   }
+  // 未完成集合取不到 ⇒ 未知。它**不能**退化用最近列表代替：那个窗口不完整，
+  // 而 `jobs=0` ⇒ 死锁这条判据恰恰依赖完整性。
+  if (unfinishedRuns === null) {
+    alarms.push({
+      kind: "unavailable",
+      reason: "未完成 run 的集合取不到 —— 无法判断是否有人卡住（**未知**，不是正常）",
+    });
+  }
 
-  const run = classifyRun(runs[0], {
-    now: input.now,
-    stuckMinutes: input.stuckMinutes,
-  });
-  const straight = straightFailures(runs);
-  const straightLimit = input.straightFailures ?? DEFAULT_STRAIGHT_FAILURES;
-
-  // 扫**所有**未完成的 run，而不只是最新那条 —— 否则一个卡住的旧 run 会被后来的
-  // 新 run 挤出视野，故障"自愈"（上线当天实测撞到过）。
-  for (const { verdict } of overdueUnfinished(runs, {
+  // 每条未完成的 run **自己**回答「我超期了吗」，而不是只问最早那条 ——
+  // 否则一条 `indeterminate` 的旧 run 会把后面一条**确凿**的 `stuck` 一起挡掉
+  // （评审指出；这与上一条修的是同一个「只看一条」的毛病）。
+  for (const { verdict } of overdueUnfinished(unfinishedRuns ?? [], {
     now: input.now,
     stuckMinutes: input.stuckMinutes,
   })) {
     alarms.push({ kind: verdict.kind, reason: verdict.reason });
   }
-  if (run.kind === "indeterminate" && !alarms.some((a) => a.kind === "indeterminate")) {
-    alarms.push({ kind: "indeterminate", reason: run.reason });
-  }
+
+  const straight = straightFailures(runs);
+  const straightLimit = input.straightFailures ?? DEFAULT_STRAIGHT_FAILURES;
   if (straight >= straightLimit) {
     alarms.push({
       kind: "straight-failures",
       reason: `最近 ${straight} 次**已完成**的 CD 都不是 success（阈值 ${straightLimit}）`,
     });
   }
-  return { ok: alarms.length === 0, alarms, notes: [], latest: run, straight };
+  // 摘要行用**最新**那条（按创建时间），而不是数组首条 —— 数组顺序不保证是时间序。
+  const newest = [...runs].sort((a, b) => Date.parse(b.createdAt ?? 0) - Date.parse(a.createdAt ?? 0))[0];
+  return {
+    ok: alarms.length === 0,
+    alarms,
+    notes: [],
+    latest: classifyRun(newest, { now: input.now, stuckMinutes: input.stuckMinutes }),
+    straight,
+  };
 }
 
 /** 自检：跑 `node .sandcastle/deploy-state.mjs`。判据用第 407 号票记录的真实形态。 */

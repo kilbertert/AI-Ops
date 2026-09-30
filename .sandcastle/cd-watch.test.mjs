@@ -29,6 +29,7 @@ cases.push([
   "indeterminate ⇒ 报异常（未知不是正常）",
   assess({
     runs: [{ status: "waiting", createdAt: "2026-09-30T06:33:29Z", totalCount: null, pendingCount: null }],
+    unfinishedRuns: [{ status: "waiting", createdAt: "2026-09-30T06:33:29Z", totalCount: null, pendingCount: null }],
     fetchedOk: true,
   }).ok,
   false,
@@ -78,6 +79,10 @@ cases.push([
       { status: "pending", createdAt: "2026-09-30T15:28:00Z", totalCount: 1, pendingCount: 1 },
       { status: "waiting", createdAt: "2026-09-30T06:33:29Z", totalCount: 1, pendingCount: 1 },
     ],
+    unfinishedRuns: [
+      { status: "pending", createdAt: "2026-09-30T15:28:00Z", totalCount: 1, pendingCount: 1 },
+      { status: "waiting", createdAt: "2026-09-30T06:33:29Z", totalCount: 1, pendingCount: 1 },
+    ],
     fetchedOk: true,
     now,
   }).ok,
@@ -92,24 +97,60 @@ cases.push([
       { status: "pending", createdAt: "2026-09-30T15:28:00Z", totalCount: 1, pendingCount: 1 },
       { status: "waiting", createdAt: "2026-09-30T15:10:00Z", totalCount: 1, pendingCount: 1 },
     ],
+    unfinishedRuns: [
+      { status: "pending", createdAt: "2026-09-30T15:28:00Z", totalCount: 1, pendingCount: 1 },
+      { status: "waiting", createdAt: "2026-09-30T15:10:00Z", totalCount: 1, pendingCount: 1 },
+    ],
     fetchedOk: true,
     now,
   }).ok,
   true,
 ]);
 
-// 7. 连续 3 次失败 ⇒ 两条告警（stuck 与 straight-failures 可以同时成立）
+// 7. 连续 3 次失败 ⇒ 报警。**没有未完成的 run 是正常状态**（`[]`），
+//    与「未完成集合取不到」（`null`）不同 —— 两者混同会让每次正常运行都报 unavailable。
 const many = assess({
   runs: [
     { status: "completed", conclusion: "cancelled" },
     { status: "completed", conclusion: "cancelled" },
     { status: "completed", conclusion: "cancelled" },
   ],
+  unfinishedRuns: [],
   fetchedOk: true,
   straightFailures: 3,
 });
 cases.push(["连续 3 次失败 ⇒ 报警", many.ok, false]);
 cases.push(["告警种类正确", many.alarms.map((a) => a.kind).join(","), "straight-failures"]);
+
+// 7b. 🔴 **未完成集合取不到 ⇒ 未知**（不能用最近列表代替：那个窗口不完整，
+//     而「jobs=0 ⇒ 死锁」这条判据恰恰依赖完整性）。
+cases.push([
+  "未完成集合取不到 ⇒ 报 unavailable",
+  assess({
+    runs: [{ status: "completed", conclusion: "success" }],
+    unfinishedRuns: null,
+    fetchedOk: true,
+  }).alarms.map((a) => a.kind).join(","),
+  "unavailable",
+]);
+
+// 7c. **一条 indeterminate 的旧 run 不得挡住后面一条确凿的 stuck** ——
+//     这曾经是「只看最早那条」的另一个投影（评审指出）。
+cases.push([
+  "旧 run 未知、新 run 确凿卡住 ⇒ 两者都报",
+  assess({
+    runs: [
+      { status: "waiting", createdAt: "2026-09-30T06:33:29Z", totalCount: 1, pendingCount: 1 },
+    ],
+    unfinishedRuns: [
+      { status: "waiting", createdAt: "2026-09-30T06:33:29Z", totalCount: 1, pendingCount: 1 },
+      { status: "waiting", createdAt: "2026-09-30T08:00:00Z", totalCount: null, pendingCount: null },
+    ],
+    fetchedOk: true,
+    now,
+  }).alarms.map((a) => a.kind).sort().join(","),
+  "indeterminate,stuck",
+]);
 
 let failed = 0;
 for (const [name, got, want] of cases) {
