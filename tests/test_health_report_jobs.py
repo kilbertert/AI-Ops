@@ -123,3 +123,31 @@ def test_health_job_rejects_completion_after_deadline(tmp_path: Path) -> None:
     current = store.get_health_job(job["job_id"], "scope-1")
     assert current["status"] == "expired"
     assert current["report"] is None
+
+
+def test_a_restarted_report_tells_the_caller_to_retry(tmp_path: Path) -> None:
+    """The restart verdict must be actionable, not just honest.
+
+    The whole point of converging a restarted job to `failed` (rather than
+    letting it hang, or calling it `expired`) is that the caller can do
+    something about it. `retryable` is what the frontend renders as that action,
+    and it is computed from an allowlist of codes — a new code that is not on it
+    produces an error with no button, which is the outcome this ticket exists to
+    avoid.
+    """
+    from aiops_diagnostics.gateway_api import _health_job_response
+    from aiops_diagnostics.gateway_store import HEALTH_JOB_RESTART_ERROR_CODE
+
+    body = _health_job_response(
+        {
+            "job_id": "job1",
+            "order_no": "O-1",
+            "rule_version": "v1",
+            "status": "failed",
+            "error_code": HEALTH_JOB_RESTART_ERROR_CODE,
+            "created_at": "2026-10-01T00:00:00+00:00",
+            "updated_at": "2026-10-01T00:00:00+00:00",
+            "completed_at": "2026-10-01T00:00:00+00:00",
+        }
+    )
+    assert body["error"]["retryable"] is True, body

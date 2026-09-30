@@ -437,12 +437,16 @@ def _method_pairs() -> dict[str, str]:
 
 
 def _boot_hook_pairs() -> dict[str, str]:
-    """`table -> convergence path` for the boot path's restart recovery.
+    """`table -> the update path that table's ids are handed to`, from the LOOPS.
 
-    Read separately from `_method_pairs`, never merged: one dict with both
-    sources lets a correct entry in one overwrite a wrong entry in the other,
-    and the check then passes on the defect it names. That is not hypothetical —
-    it is what the first version of this guard did.
+    Read from the loop body rather than from the SELECT: knowing which table was
+    scanned does not tell you which path its ids were handed to, and handing a
+    job id to the other table's update path is not a crash — both take a string
+    — so on today's data it is invisible. The pairing is the point; the scan is
+    only where the ids came from.
+
+    Kept separate from `_method_pairs`, never merged: one dict with both sources
+    lets a correct entry in one overwrite a wrong entry in the other.
     """
     import ast
     from pathlib import Path
@@ -454,12 +458,16 @@ def _boot_hook_pairs() -> dict[str, str]:
         for node in ast.walk(tree)
         if isinstance(node, ast.FunctionDef) and node.name == "recover_interrupted_jobs"
     )
-    source = ast.unparse(hook)
     pairs: dict[str, str] = {}
-    if "SELECT job_id FROM health_report_jobs" in source:
-        pairs["health_report_jobs"] = "update_health_job"
-    if "SELECT diagnosis_id FROM standard_diagnoses" in source:
-        pairs["standard_diagnoses"] = "update_standard_diagnosis"
+    for loop in (node for node in ast.walk(hook) if isinstance(node, ast.For)):
+        # `for job_id in jobs["<table>"]:` — unparsed, so the quotes are single.
+        source = ast.unparse(loop.iter)
+        table = source.split("[", 1)[-1].strip("]").strip("\"'") if "[" in source else ""
+        if table not in {"health_report_jobs", "standard_diagnoses"}:
+            continue
+        for inner in ast.walk(loop):
+            if isinstance(inner, ast.Call) and getattr(inner.func, "attr", "").startswith("update_"):
+                pairs[table] = inner.func.attr
     return pairs
 
 
@@ -497,3 +505,44 @@ def test_each_sweep_names_the_profile_of_its_own_table() -> None:
     }
     methods = _method_pairs()
     assert methods == expected, methods
+
+
+def test_the_boot_hook_releases_the_conversation_slots_it_ends(tmp_path) -> None:
+    """A job the restart killed must not leave its conversation busy.
+
+    `begin_turn` holds the generation slot until the worker completes the turn
+    or the 120-second crash fallback lapses. When a restart kills the worker,
+    nothing completes the turn — so the boot hook has to, or the caller cannot
+    ask again in that conversation for up to two minutes after a deploy.
+    """
+    from aiops_diagnostics.conversation_store import ConversationStore
+    from aiops_diagnostics.gateway_store import (
+        DIAGNOSIS_RESTART_ERROR_CODE,
+        GatewayStore,
+    )
+
+    database = tmp_path / "gateway.db"
+    store = GatewayStore(database)
+    conversations = ConversationStore(database)
+    scope = "scope-1"
+    cid = conversations.create(
+        scope_fingerprint=scope, business_entry="operator", agent_version_key="agt_abcdef1234567890#v1"
+    )["conversation_id"]
+    turn_no = conversations.begin_turn(cid, scope, kind="diagnosis", question="为什么跳枪")
+    diagnosis = store.create_standard_diagnosis(scope, "O-1", "为什么跳枪", None)
+    store.update_standard_diagnosis(diagnosis["diagnosis_id"], status="running")
+    with conversations._connection(write=True) as connection:  # noqa: SLF001 - link the two
+        connection.execute(
+            "UPDATE conversations SET generating_turn_no = ? WHERE conversation_id = ?",
+            (turn_no, cid),
+        )
+
+    restarted = GatewayStore(database)
+    restarted.recover_interrupted_jobs()
+
+    assert restarted.get_standard_diagnosis(diagnosis["diagnosis_id"], scope)["error_code"] == (
+        DIAGNOSIS_RESTART_ERROR_CODE
+    )
+    # The slot is free: the next turn claims without waiting out the fallback.
+    assert conversations.get(cid, scope)["is_generating"] is False
+    conversations.begin_turn(cid, scope, kind="qa", question="那它为什么跳枪")

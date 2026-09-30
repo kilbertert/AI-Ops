@@ -674,6 +674,14 @@ class GatewayStore:
                 error_message=DIAGNOSIS_RESTART_ERROR_MESSAGE,
             )
         self.recover_assistant_questions()
+        # The conversations those jobs belonged to are still holding their
+        # generation slots, and nothing will complete those turns: the worker
+        # that owned them died with the process. Freeing them here is the
+        # difference between "retry now" and "retry in two minutes" for the
+        # caller whose generation the deploy killed (#492).
+        from aiops_diagnostics.conversation_store import ConversationStore
+
+        ConversationStore(self.path).recover_interrupted_turns()
 
     def recover_assistant_questions(self) -> None:
         """Converge the questions a previous gateway process left in flight.
@@ -692,15 +700,16 @@ class GatewayStore:
         passed is swept to `expired` by that path's own expiry first, which is
         the accurate verdict: it outran its budget, the restart only noticed.
 
-        Scoped to ``assistant_questions`` on purpose: ``health_report_jobs`` and
-        ``standard_diagnoses`` already sweep their in-flight rows at store
-        construction, and changing what they converge to is not this change's to
-        make. This one is deliberately NOT folded into that sweep even though it
-        would be three lines beside them: ``__init__`` runs on every construction,
-        short-lived CLI commands (``aiops-gateway devices``) included, so a row
-        would be told "the gateway restarted" by a process that only listed
-        devices. This hook runs where the restart actually happened, and the other
-        two tables keep the construction sweep they have.
+        Reached through ``recover_interrupted_jobs()``, which the boot path calls
+        for all three asynchronous tables. It is kept as its own method because
+        this table's convergence predates the other two (T3/#356) and has its own
+        recovery test; the shared entry point is what keeps them together.
+
+        This method is deliberately NOT reachable from ``GatewayStore.__init__``:
+        construction runs on short-lived CLI commands (``aiops-gateway devices``)
+        too, so a row would be told "the gateway restarted" by a process that
+        only listed devices. That mistake is what the other two tables used to
+        make, and #492 moved them here.
         """
         with self._connection() as connection:
             in_flight = [

@@ -34,7 +34,20 @@ CLI 命令：`aiops-gateway devices` / `issue-enrollment` / `revoke-device`。
   并断言该作业随后仍能写入自己的终态；
 - `test_the_boot_hook_converges_with_a_restart_verdict`：断言启动 hook 给出 `failed` + restart 码。
 
-**两条变异核对**：① 把启动收敛放回 `__init__` ⇒ 转红；② 收敛用 `expired` 而不是 restart 码 ⇒ 转红。
+**四条变异核对**：① 把启动收敛放回 `__init__` ⇒ 转红；② 收敛用 `expired` 而不是 restart 码 ⇒ 转红；
+③ 两个循环的 update 路径互换 ⇒ 转红；④ 启动恢复不释放会话槽 ⇒ 转红。
+
+### 评审第三轮四条（Devin）
+
+| # | 发现 | 处置 |
+|---|---|---|
+| 1 | 🟡 重启后的健康报告被响应标记 `retryable=false` —— 而 `create_or_reuse_health_job` **不复用失败记录**，重新创建确实可行，前端却不会给出重试入口 | ✅ 把 `REPORT_INTERRUPTED_BY_RESTART` 加入可重试集合；另加一条响应级用例（以「移出集合」核对，转红） |
+| 2 | 🟡 **重启收敛后没有释放会话槽**：`begin_turn` 仍视旧槽为忙，新提问最长等 120 秒 | ✅ 新增 `ConversationStore.recover_interrupted_turns()`，在启动路径调用。这是**延迟缺陷而非正确性缺陷**（兜底终会释放），但部署后「现在能重问」与「两分钟后能重问」是两回事；启动时**不可能有更新的轮次**，因此 `generating_turn_no` 匹配在这里无事可做 |
+| 3 | 🔍 `recover_assistant_questions` 的说明仍称另两张表在构造时清扫 | ✅ 改写：三张表都由 `recover_interrupted_jobs()` 在启动路径收敛 |
+| 4 | 🔍 启动配对的检查只看见 SELECT 就写预期路径，**没有看扫描结果实际传给了哪个 update 路径** | ✅ 改为从**循环体**读「表 → update 路径」的配对；以「两个循环互换」核对，转红 |
+
+第 4 条又是我自己那类错：**用一句更弱的话代替了要断言的那句话**。「扫了哪张表」不等于「把 id 交给了哪条路径」，
+而把一表的 id 交给另一表的 update 路径不会崩（两边都收字符串），在今天的空表上完全看不出来。
 
 ### `runs` 的显式决定（PRD 要求「不默认照做」）
 

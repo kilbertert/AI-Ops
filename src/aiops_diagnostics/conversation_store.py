@@ -443,6 +443,31 @@ class ConversationStore:
             )
             return cursor.rowcount > 0
 
+    def recover_interrupted_turns(self) -> int:
+        """Free the generation slots a dead process left held (T6/#492).
+
+        A slot is held until its worker completes the turn or
+        ``BUSY_LOCK_SECONDS`` lapses. When a restart killed the worker, nothing
+        completes it — so a caller cannot ask again in that conversation until
+        the crash fallback expires, up to two minutes after a deploy. That is a
+        latency defect, not a correctness one: the fallback does eventually
+        release the slot. It is still the difference between "retry now" and
+        "retry in two minutes" for someone whose generation was killed.
+
+        Runs on the boot path, before the app serves anything, so a newer turn
+        cannot exist yet and there is nothing to protect with a turn-number
+        match — the whole point of that match is to avoid clearing a slot a
+        LATER worker took, and at boot there is no later worker.
+
+        Returns how many slots were freed.
+        """
+        with self._connection(write=True) as connection:
+            cursor = connection.execute(
+                "UPDATE conversations SET generating_since = NULL, generating_turn_no = NULL"
+                " WHERE generating_since IS NOT NULL"
+            )
+            return cursor.rowcount
+
     def release_turn(
         self,
         conversation_id: str,

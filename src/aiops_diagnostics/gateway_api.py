@@ -2341,7 +2341,12 @@ def _health_job_response(job: dict[str, Any]) -> dict[str, Any]:
             {
                 "code": job.get("error_code") or "REPORT_FAILED",
                 "message": job.get("error_message") or "health report failed",
-                "retryable": job.get("error_code") in {"SOURCE_UNAVAILABLE", "REPORT_TIMEOUT"},
+                # A restart is retryable for the caller: the report never ran,
+                # and asking again is exactly what should happen. Without it
+                # here, the frontend shows an error with no action — which is
+                # the one thing the restart verdict is supposed to avoid.
+                "retryable": job.get("error_code")
+                in {"SOURCE_UNAVAILABLE", "REPORT_TIMEOUT", "REPORT_INTERRUPTED_BY_RESTART"},
             }
             if status_value == "failed"
             else None
