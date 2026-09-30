@@ -29,9 +29,15 @@ PROG=${0##*/}
 HOST_TARGET=41
 REMOTE_SRC=/opt/aiops-41/src
 SERVICE=aiops-gateway-41.service
-HEALTH=http://127.0.0.1:8788/health
-# 41 本机 health 只在 loopback；公网入口是 api.mall.qushiyun.com，但那只用于
-# 业务验收（§5），不放这里做。
+# 服务在 41 上的绑定地址（2026-09-30 D-2 起由 loopback 改为**容器网桥**，
+# 因为公司网关要从那条网桥到达 AI-Ops，见 runbook 的 D-2 与 fleet 记录的暴露决定）。
+#
+# ⚠️ **这两行必须跟着 `AIOPS_GATEWAY_BIND` 走**：脚本在部署前后都拿它做健康检查与
+# 回滚判定，绑定换了而这里没换，**每一次部署都会自检失败并回滚**（评审指出）。
+# 允许用环境变量覆盖，是为了让"绑定迁移中"的两侧能被分别验证。
+HEALTH_HOST=${AIOPS_HEALTH_HOST:-172.18.0.1}
+HEALTH=http://$HEALTH_HOST:8788/health
+# 公网入口是 api.mall.qushiyun.com，但那只用于业务验收（§5），不放这里做。
 
 usage() {
   sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'
