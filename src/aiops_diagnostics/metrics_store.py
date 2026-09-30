@@ -31,7 +31,9 @@ METRICS_RETENTION_DAYS = 30
 #: ``routing`` is the classifier's own decision path (#392): it is not a
 #: user-visible route, but a failed decision is exactly the kind of silent
 #: breakage that went unnoticed once, so it gets a counted row of its own.
-ROUTE_TYPES = frozenset({"faq", "qa", "diagnosis", "debug", "clarification", "promo", "routing"})
+ROUTE_TYPES = frozenset(
+    {"faq", "qa", "diagnosis", "debug", "clarification", "promo", "routing", "order_auth"}
+)
 RETRIEVAL_STATUSES = frozenset({"", "found", "not_found", "unavailable", "limited"})
 OUTCOME_TYPES = frozenset({"completed", "failed", "cancelled", "busy"})
 
@@ -214,10 +216,12 @@ class MetricsStore:
         if limit_hours < 1 or limit_hours > 24 * METRICS_RETENTION_DAYS:
             raise MetricsValidationError("limit_hours is invalid")
         cutoff = _iso(_utc_now() - timedelta(hours=limit_hours))
-        # ``routing`` rows are component health, not user interactions: one
-        # question that lost its routing hint and then answered normally would
-        # otherwise count as two runs, one of them failed. They stay visible in
-        # ``by_route`` and in the error codes; they do not enter the totals.
+        # ``routing`` and ``order_auth`` rows are component health, not user
+        # interactions. One question that lost its routing hint and then
+        # answered normally would otherwise count as two runs, one of them
+        # failed; likewise an authorization precheck that failed on the way to a
+        # question that was still answered. Both stay visible in ``by_route``
+        # and in the error codes; neither enters the totals.
         conditions = ["tenant_id = ?", "created_at >= ?"]
         params: list[Any] = [tenant_id, cutoff]
         if agent_id is not None:
@@ -231,11 +235,12 @@ class MetricsStore:
             with self._connection() as connection:
                 return connection.execute(query, params + (extra or [])).fetchall()
 
-        # ``routing`` rows are component health, not user interactions: one
-        # question that lost its routing hint and then answered normally must not
-        # count as two runs, one of them failed. They stay visible in
-        # ``by_route`` and in the error codes; they leave the totals only.
-        interaction = " AND route_type != 'routing'"
+        # ``routing`` and ``order_auth`` rows are component health, not user
+        # interactions: one question that lost its routing hint and then answered
+        # normally must not count as two runs, one of them failed, and neither
+        # must an authorization precheck. Both stay visible in ``by_route`` and
+        # in the error codes; they leave the totals only.
+        interaction = " AND route_type NOT IN ('routing', 'order_auth')"
         totals = _rows(
             f"""
             SELECT COUNT(*) AS runs,

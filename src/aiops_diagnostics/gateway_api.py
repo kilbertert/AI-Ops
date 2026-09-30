@@ -787,16 +787,15 @@ def create_gateway_app(
 
         # Route 1: explicit order → diagnosis semantics.
         if payload.order_no:
-            try:
-                allowed = context.order_authorizer.can_access(caller, payload.order_no)
-            except (CallerAuthError, ScopeError, SourceError, ValueError) as exc:
+            verdict = _order_authorization(context, caller, payload.order_no)
+            if verdict == UNAVAILABLE:
                 raise StandardAPIError(
                     status.HTTP_503_SERVICE_UNAVAILABLE,
                     "ORDER_AUTHORIZATION_UNAVAILABLE",
                     "order authorization unavailable",
                     retryable=True,
-                ) from exc
-            if not allowed:
+                )
+            if verdict == NOT_OWNED:
                 raise StandardAPIError(
                     status.HTTP_404_NOT_FOUND,
                     "ORDER_NOT_FOUND",
@@ -840,6 +839,18 @@ def create_gateway_app(
                 },
             )
 
+        # One verdict per order per request. Routes 1b and 1c can check the same
+        # number (the embedded order IS the conversation's active order), and a
+        # failed check records a warning and a metric row each time — so without
+        # this, one question could leave two identical failure rows. Permissions
+        # are resolved once per request, so an answer cannot change mid-request.
+        checked: dict[str, str] = {}
+
+        def order_verdict(order_no: str) -> str:
+            if order_no not in checked:
+                checked[order_no] = _order_authorization(context, caller, order_no)
+            return checked[order_no]
+
         # Route 1b: text-embedded order number → diagnosis if authorizable.
         # The caller did not pass order_no explicitly, but the question text
         # contains a plausible order id. Verify ownership first; only then
@@ -849,10 +860,7 @@ def create_gateway_app(
         if not payload.order_no:
             embedded = _extract_order_no(payload.question)
             if embedded:
-                try:
-                    owns = context.order_authorizer.can_access(caller, embedded)
-                except (CallerAuthError, ScopeError, SourceError, ValueError):
-                    owns = False
+                owns = order_verdict(embedded) == OWNED
                 if owns:
                     turn_no = _begin_conversation_turn(
                         context, caller, conversation, "diagnosis", payload.question
@@ -913,10 +921,7 @@ def create_gateway_app(
         if not payload.order_no and conversation is not None:
             active_order = conversation.get("active_order_no")
             if active_order and _question_involves_active_order(payload.question):
-                try:
-                    still_owned = context.order_authorizer.can_access(caller, active_order)
-                except (CallerAuthError, ScopeError, SourceError, ValueError):
-                    still_owned = False
+                still_owned = order_verdict(active_order) == OWNED
                 if still_owned:
                     turn_no = _begin_conversation_turn(
                         context, caller, conversation, "diagnosis", payload.question
@@ -1362,16 +1367,15 @@ def create_gateway_app(
                 "INVALID_REQUEST",
                 "order_no is invalid",
             )
-        try:
-            allowed = context.order_authorizer.can_access(caller, candidate)
-        except (CallerAuthError, ScopeError, SourceError, ValueError) as exc:
+        verdict = _order_authorization(context, caller, candidate)
+        if verdict == UNAVAILABLE:
             raise StandardAPIError(
                 status.HTTP_503_SERVICE_UNAVAILABLE,
                 "ORDER_AUTHORIZATION_UNAVAILABLE",
                 "order authorization unavailable",
                 retryable=True,
-            ) from exc
-        if not allowed:
+            )
+        if verdict == NOT_OWNED:
             # Unowned order: uniform 404, never an ownership oracle.
             raise StandardAPIError(
                 status.HTTP_404_NOT_FOUND,
@@ -1394,16 +1398,15 @@ def create_gateway_app(
                 "INVALID_ORDER_NO",
                 "invalid order number",
             )
-        try:
-            allowed = context.order_authorizer.can_access(caller, order_no)
-        except (CallerAuthError, ScopeError, SourceError, ValueError) as exc:
+        verdict = _order_authorization(context, caller, order_no)
+        if verdict == UNAVAILABLE:
             raise StandardAPIError(
                 status.HTTP_503_SERVICE_UNAVAILABLE,
                 "ORDER_AUTHORIZATION_UNAVAILABLE",
                 "order authorization unavailable",
                 retryable=True,
-            ) from exc
-        if not allowed:
+            )
+        if verdict == NOT_OWNED:
             raise StandardAPIError(
                 status.HTTP_404_NOT_FOUND,
                 "ORDER_NOT_FOUND",
@@ -1420,16 +1423,15 @@ def create_gateway_app(
         payload: HealthReportJobRequest,
         caller: ScopeContext = Depends(authenticated_caller),  # noqa: B008
     ) -> dict[str, Any]:
-        try:
-            allowed = context.order_authorizer.can_access(caller, payload.order_no)
-        except (CallerAuthError, ScopeError, SourceError, ValueError) as exc:
+        verdict = _order_authorization(context, caller, payload.order_no)
+        if verdict == UNAVAILABLE:
             raise StandardAPIError(
                 status.HTTP_503_SERVICE_UNAVAILABLE,
                 "ORDER_AUTHORIZATION_UNAVAILABLE",
                 "order authorization unavailable",
                 retryable=True,
-            ) from exc
-        if not allowed:
+            )
+        if verdict == NOT_OWNED:
             raise StandardAPIError(
                 status.HTTP_404_NOT_FOUND,
                 "ORDER_NOT_FOUND",
@@ -1468,16 +1470,15 @@ def create_gateway_app(
         caller: ScopeContext = Depends(authenticated_diagnosis_caller),  # noqa: B008
         language: str = Depends(request_language),  # noqa: B008
     ) -> dict[str, Any]:
-        try:
-            allowed = context.order_authorizer.can_access(caller, payload.order_no)
-        except (CallerAuthError, ScopeError, SourceError, ValueError) as exc:
+        verdict = _order_authorization(context, caller, payload.order_no)
+        if verdict == UNAVAILABLE:
             raise StandardAPIError(
                 status.HTTP_503_SERVICE_UNAVAILABLE,
                 "ORDER_AUTHORIZATION_UNAVAILABLE",
                 "order authorization unavailable",
                 retryable=True,
-            ) from exc
-        if not allowed:
+            )
+        if verdict == NOT_OWNED:
             raise StandardAPIError(
                 status.HTTP_404_NOT_FOUND,
                 "ORDER_NOT_FOUND",
@@ -2730,6 +2731,63 @@ def _resolve_conversation(
             "conversation not found",
         )
     return conversation
+
+
+#: The three answers an order authorization check can give. Explicit rather
+#: than a `bool`, because two of them are *not* "no": a check that could not be
+#: made is a different fact from a check that said no, and five surfaces must
+#: refuse while two must fall back silently. A `bool` erases the difference at
+#: the one place that can still tell them apart.
+OWNED = "owned"
+NOT_OWNED = "not_owned"
+UNAVAILABLE = "unavailable"
+
+
+#: The metric dimension an authorization precheck is recorded under. Its own
+#: bucket, excluded from the interaction totals: a precheck is component health,
+#: not a run. Recording it as `diagnosis` counted a failed lookup on the access
+#: probe, the report start and the question fallback as diagnosis runs that
+#: never happened.
+ORDER_AUTH_ROUTE = "order_auth"
+#: The code the warning and the metric row both carry, so an operator can grep
+#: for one string and find both.
+ORDER_AUTHENTICATION_UNAVAILABLE = "ORDER_AUTHORIZATION_UNAVAILABLE"
+
+
+def _order_authorization(
+    context: Any,
+    caller: ScopeContext,
+    order_no: str,
+) -> str:
+    """Ask whether this caller may see this order: `OWNED` / `NOT_OWNED` / `UNAVAILABLE`.
+
+    One place decides what the answer means, and one place records the case that
+    used to be invisible. An order-authorization *failure* (a down directory, an
+    unreachable source, a defect in the authorizer) and an ordinary "this caller
+    does not own this order" were both `False`: from the logs and the metrics,
+    a live authorization outage looked exactly like a batch of users asking for
+    orders that are not theirs. The failing case now warns with an error code and
+    records a metric row.
+
+    The seven call sites keep their own *behaviour* — five refuse, two fall back
+    — because that difference is a product decision each surface made. What they
+    no longer do is re-decide what the *authorizer's* answer means.
+    """
+    try:
+        allowed = context.order_authorizer.can_access(caller, order_no)
+    except (CallerAuthError, ScopeError, SourceError, ValueError) as exc:
+        # The code is in the message, not only in the metric: an operator greps
+        # the log for the same string the contract and the metrics use.
+        _LOGGER.warning("%s (check failed): %s", ORDER_AUTHENTICATION_UNAVAILABLE, type(exc).__name__)
+        _record_route_metric(
+            context,
+            caller,
+            route_type=ORDER_AUTH_ROUTE,
+            outcome="failed",
+            error_code=ORDER_AUTHENTICATION_UNAVAILABLE,
+        )
+        return UNAVAILABLE
+    return OWNED if allowed else NOT_OWNED
 
 
 def _record_route_metric(
