@@ -188,6 +188,73 @@ def claim_guard(profile: JobProfile) -> tuple[str, tuple[str, ...]]:
     return f"status IN ({placeholders})", ordered
 
 
+#: The tables this module will render SQL for. An allowlist rather than a
+#: free-form name: the renderer interpolates the table into the statement, and a
+#: name that came from anywhere else would be an injection surface. Every caller
+#: today passes a literal, and this keeps it that way.
+_TABLES = frozenset({"health_report_jobs", "standard_diagnoses", "assistant_questions"})
+
+
+@dataclass(frozen=True, slots=True)
+class ExpireStatements:
+    """The two statements a sweep runs, with their parameters bound positionally.
+
+    `claim` moves a live job that outran its deadline to `expired`; `sweep` does
+    the same to a finished job whose retention ran out. They are one object
+    because every caller needs both, in that order, against the same table.
+
+    ``require_deadline`` is the one difference the startup path has: it converges
+    every live row because the process that held them is gone, so it has no
+    deadline to compare against. It is a parameter rather than a second rendering
+    so the two shapes stay visibly related — and #492 decides whether that path
+    should keep doing this at all.
+    """
+
+    claim: tuple[str, tuple[object, ...]]
+    sweep: tuple[str, tuple[object, ...]]
+
+
+def expire_statements(
+    table: str, profile: JobProfile, now: datetime, *, require_deadline: bool = True
+) -> ExpireStatements:
+    """Render the sweep for one table from its profile.
+
+    Five hand-written copies of this SQL became three (`_expire_*`) plus two
+    more inside the startup path, each differing only in the table name and the
+    set of statuses it swept — which is to say, each differing only in what its
+    profile already says.
+
+    The parameters are returned rather than interpolated: a status set has a
+    fixed size per profile, and binding it keeps the statement text identical
+    across tables so a diff of two renders is a diff of the profiles.
+    """
+    if table not in _TABLES:
+        raise ValueError(f"not a job table: {table}")
+    if profile.expired is None:
+        raise ValueError(f"{profile.name} has no expiry: it cannot be swept")
+    ordered_active = tuple(sorted(profile.active))
+    swept = tuple(sorted(profile.completed | profile.interrupted))
+    active_placeholders = ", ".join("?" for _ in ordered_active)
+    swept_placeholders = ", ".join("?" for _ in swept)
+    deadline_clause = " AND deadline_at <= ?" if require_deadline else ""
+    claim_sql = (
+        f"UPDATE {table} SET status = ?, completed_at = COALESCE(completed_at, ?),"
+        f" expires_at = COALESCE(expires_at, ?), updated_at = ?"
+        f" WHERE status IN ({active_placeholders}){deadline_clause}"
+    )
+    sweep_sql = (
+        f"UPDATE {table} SET status = ?, updated_at = ?"
+        f" WHERE status IN ({swept_placeholders}) AND expires_at <= ?"
+    )
+    claim_params: tuple[object, ...] = (profile.expired, now, now, now, *ordered_active)
+    if require_deadline:
+        claim_params = (*claim_params, now)
+    return ExpireStatements(
+        claim=(claim_sql, claim_params),
+        sweep=(sweep_sql, (profile.expired, now, *swept, now)),
+    )
+
+
 def expires_at(profile: JobProfile, status: str, finished_at: datetime) -> datetime | None:
     """When this row becomes sweepable, or `None` while it is still live."""
     retention = profile.retention_for(status)

@@ -16,7 +16,9 @@ from typing import Any
 from aiops_diagnostics.async_job_lifecycle import (
     DIAGNOSIS,
     HEALTH_JOB,
+    QUESTION,
     RUN,
+    expire_statements,
 )
 from aiops_diagnostics.private_files import ensure_private_directory, protect_private_file
 from aiops_diagnostics.redaction import redact_text
@@ -320,22 +322,13 @@ class GatewayStore:
 
     @staticmethod
     def _expire_health_jobs(connection: sqlite3.Connection, now: datetime) -> None:
-        now_text = _iso(now)
-        connection.execute(
-            """
-            UPDATE health_report_jobs SET status = 'expired', completed_at = COALESCE(completed_at, ?),
-                expires_at = COALESCE(expires_at, ?), updated_at = ?
-            WHERE status IN ('queued', 'running') AND deadline_at <= ?
-            """,
-            (now_text, now_text, now_text, now_text),
-        )
-        connection.execute(
-            """
-            UPDATE health_report_jobs SET status = 'expired', updated_at = ?
-            WHERE status IN ('completed', 'failed') AND expires_at <= ?
-            """,
-            (now_text, now_text),
-        )
+        # Rendered from the profile (#491). Every table runs the same two
+        # statements; what differs between them is what their profiles declare,
+        # so a difference between two tables is now a difference between two
+        # profiles rather than a difference between two hand-edits.
+        statements = expire_statements("health_report_jobs", HEALTH_JOB, _iso(now))
+        connection.execute(*statements.claim)
+        connection.execute(*statements.sweep)
 
     def create_standard_diagnosis(
         self,
@@ -668,45 +661,15 @@ class GatewayStore:
 
     @staticmethod
     def _expire_diagnoses(connection: sqlite3.Connection, now: datetime) -> None:
-        now_text = _iso(now)
-        connection.execute(
-            """
-            UPDATE standard_diagnoses
-            SET status = 'expired', completed_at = COALESCE(completed_at, ?),
-                expires_at = COALESCE(expires_at, ?), updated_at = ?
-            WHERE status IN ('queued', 'running') AND deadline_at <= ?
-            """,
-            (now_text, now_text, now_text, now_text),
-        )
-        connection.execute(
-            """
-            UPDATE standard_diagnoses SET status = 'expired', updated_at = ?
-            WHERE status IN ('completed', 'inconclusive', 'failed', 'cancelled')
-              AND expires_at <= ?
-            """,
-            (now_text, now_text),
-        )
+        statements = expire_statements("standard_diagnoses", DIAGNOSIS, _iso(now))
+        connection.execute(*statements.claim)
+        connection.execute(*statements.sweep)
 
     @staticmethod
     def _expire_assistant_questions(connection: sqlite3.Connection, now: datetime) -> None:
-        now_text = _iso(now)
-        connection.execute(
-            """
-            UPDATE assistant_questions
-            SET status = 'expired', completed_at = COALESCE(completed_at, ?),
-                expires_at = COALESCE(expires_at, ?), updated_at = ?
-            WHERE status IN ('queued', 'running') AND deadline_at <= ?
-            """,
-            (now_text, now_text, now_text, now_text),
-        )
-        connection.execute(
-            """
-            UPDATE assistant_questions SET status = 'expired', updated_at = ?
-            WHERE status IN ('completed', 'inconclusive', 'failed', 'cancelled')
-              AND expires_at <= ?
-            """,
-            (now_text, now_text),
-        )
+        statements = expire_statements("assistant_questions", QUESTION, _iso(now))
+        connection.execute(*statements.claim)
+        connection.execute(*statements.sweep)
 
     def create_run(
         self,
@@ -1004,24 +967,18 @@ class GatewayStore:
                 connection.execute(
                     "ALTER TABLE standard_diagnoses ADD COLUMN language TEXT NOT NULL DEFAULT 'zh'"
                 )
+            # The same two statements the sweeps run, against the same profiles
+            # (#491): this path used to carry a fourth and fifth copy whose only
+            # difference from the others was the missing `deadline_at` clause.
+            # That difference is the subject of #492 — it is kept here so this
+            # ticket changes WHERE the statement is written, not WHEN it runs.
             now = _iso(_utc_now())
-            connection.execute(
-                """
-                UPDATE health_report_jobs SET status = 'expired', completed_at = COALESCE(completed_at, ?),
-                    expires_at = COALESCE(expires_at, ?), updated_at = ?
-                WHERE status IN ('queued', 'running')
-                """,
-                (now, now, now),
-            )
-            connection.execute(
-                """
-                UPDATE standard_diagnoses
-                SET status = 'expired', completed_at = COALESCE(completed_at, ?),
-                    expires_at = COALESCE(expires_at, ?), updated_at = ?
-                WHERE status IN ('queued', 'running')
-                """,
-                (now, now, now),
-            )
+            for table, profile in (
+                ("health_report_jobs", HEALTH_JOB),
+                ("standard_diagnoses", DIAGNOSIS),
+            ):
+                statements = expire_statements(table, profile, now, require_deadline=False)
+                connection.execute(*statements.claim)
         protect_private_file(self.path)
 
     @contextmanager
