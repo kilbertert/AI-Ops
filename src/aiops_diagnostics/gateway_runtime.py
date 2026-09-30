@@ -860,6 +860,18 @@ class GatewayRuntime:
             for entry in journal.entries()
         ]
 
+    def _finish_health_job(self, job_id: str, **fields: Any) -> bool:
+        """Write a health job's terminal state, and say whether it landed.
+
+        The one place this line decides what "the job is over" means. A refused
+        write is not an error to raise: the row was already terminal, which is
+        a state other paths reach on purpose (the deadline sweep, the restart
+        hook). What must not happen is a caller treating the refusal as its own
+        success, which is what an unchecked `update_health_job` did at all four
+        of its terminal call sites.
+        """
+        return bool(self.store.update_health_job(job_id, **fields))
+
     def _execute_health_report(
         self,
         job_id: str,
@@ -893,24 +905,30 @@ class GatewayRuntime:
                     report["source_summary"]["telemetry"] = "available" if samples else "unavailable"
                 report["curves"] = build_curves(samples)
                 report = enrich_report(report, samples, order)
+            # Every terminal write below is checked, and the refusal is the
+            # same quiet exit the qa line takes (`_execute_assistant_qa`, #355):
+            # a refused write means the row already ended — expired, or driven
+            # terminal by another path — so this job's answer is not the answer
+            # anyone is waiting for. Reporting success for it is how the metric
+            # and the row disagree.
             if time.monotonic() - started > 30:
-                self.store.update_health_job(
+                self._finish_health_job(
                     job_id,
                     status="failed",
                     error_code="REPORT_TIMEOUT",
                     error_message="health report timed out",
                 )
                 return
-            self.store.update_health_job(job_id, status="completed", report=report)
+            self._finish_health_job(job_id, status="completed", report=report)
         except HealthReportError as exc:
-            self.store.update_health_job(
+            self._finish_health_job(
                 job_id,
                 status="failed",
                 error_code=exc.code,
                 error_message=str(exc),
             )
         except (SourceError, ValueError) as exc:
-            self.store.update_health_job(
+            self._finish_health_job(
                 job_id,
                 status="failed",
                 error_code="SOURCE_UNAVAILABLE",
@@ -1048,6 +1066,12 @@ class GatewayRuntime:
             guarded=not stored,
             stop_renewer=claim_stop,
         )
+        if not stored:
+            # The row was already terminal, so this run produced nothing anyone
+            # will read. Recording a success here is what makes the metric and
+            # the row disagree — the metric says a diagnosis completed, the row
+            # says `expired`, and the caller polls the row.
+            return
         self._record_metric(
             tenant_id=context.effective_tenant_id,
             route_type="diagnosis",
