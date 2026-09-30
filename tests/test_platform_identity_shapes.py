@@ -234,20 +234,47 @@ SURFACE_HANDLERS = {
     "faq_catalog": "faq_identity",
     "faq_answer": "faq_identity",
     "assistant_questions": "assistant_identity",
-    "list_assistant_questions": "assistant_identity",
     "get_assistant_question": "assistant_identity",
     "cancel_assistant_question": "assistant_identity",
+    "list_assistant_questions": "assistant_identity",
+    "create_conversation": "assistant_identity",
+    "list_conversations": "assistant_identity",
+    "get_conversation": "assistant_identity",
+    "delete_conversation": "assistant_identity",
+    "set_conversation_active_order": "assistant_identity",
     "list_shortcuts": "shortcut_identity",
 }
+
+
+def _depended_identity(handler: ast.FunctionDef) -> str | None:
+    """The identity this handler asks FastAPI for, or `None`.
+
+    Read from the `Depends(...)` argument specifically, not from any mention of
+    the name: a handler that happens to reference `faq_identity` in a comment or
+    a variable while depending on another one is exactly the swap this guard
+    exists to catch, and a bare "is the name present" test would pass.
+    """
+    for default in list(handler.args.defaults) + list(handler.args.kw_defaults):
+        if not isinstance(default, ast.Call):
+            continue
+        if getattr(default.func, "id", "") != "Depends" or not default.args:
+            continue
+        name = getattr(default.args[0], "id", "")
+        if name in IDENTITY_NAMES:
+            return name
+    return None
 
 
 def test_each_surface_asks_for_the_identity_that_carries_its_scope() -> None:
     """The endpoints, not just the bindings: which identity each one depends on.
 
-    This is the half that a swap would break. Binding the factory to the wrong
-    caller dependency is caught by the test above; handing a surface the wrong
-    identity is caught here — and it is the more likely slip, because the
-    dependency is named at the endpoint, far from the scope it carries.
+    Stated as an equality in both directions, so the map cannot go stale:
+
+    * a handler that depends on an identity must be **listed** with that exact
+      one — a new endpoint cannot quietly join a surface, and a swapped
+      dependency is a mismatch rather than an unlisted case;
+    * a listed handler must exist — a rename would otherwise leave this guard
+      checking a name nobody uses.
     """
     tree = ast.parse((SOURCE_ROOT / API_FILE).read_text(encoding="utf-8"))
     app = next(
@@ -255,19 +282,16 @@ def test_each_surface_asks_for_the_identity_that_carries_its_scope() -> None:
         for node in ast.walk(tree)
         if isinstance(node, ast.FunctionDef) and node.name == "create_gateway_app"
     )
-    offenders: list[str] = []
-    for node in ast.walk(app):
-        if not isinstance(node, ast.FunctionDef):
-            continue
-        expected = SURFACE_HANDLERS.get(node.name)
-        if expected is None:
-            continue
-        uses = {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
-        if expected not in uses:
-            offenders.append(f"{API_FILE}:{node.lineno} {node.name} does not use {expected}")
-    # A handler listed here that no longer exists means this map has gone stale
-    # and is silently checking nothing for that surface.
-    present = {node.name for node in ast.walk(app) if isinstance(node, ast.FunctionDef)}
-    missing = sorted(set(SURFACE_HANDLERS) - present)
-    assert missing == [], f"these mapped handlers are gone: {missing}"
-    assert offenders == [], "; ".join(offenders)
+    handlers = {
+        node.name: node for node in ast.walk(app) if isinstance(node, ast.FunctionDef) and node is not app
+    }
+    declared = {
+        name: identity
+        for name, node in handlers.items()
+        if (identity := _depended_identity(node)) is not None
+    }
+    assert declared, "no handler depends on an identity: this guard points at nothing"
+    assert declared == SURFACE_HANDLERS, {
+        "only in code": {k: v for k, v in declared.items() if SURFACE_HANDLERS.get(k) != v},
+        "only in the map": {k: v for k, v in SURFACE_HANDLERS.items() if declared.get(k) != v},
+    }
