@@ -823,12 +823,7 @@ def create_gateway_app(
                 )
             except (ValueError, RuntimeError) as exc:
                 _release_conversation_turn(context, conversation, turn_no)
-                raise StandardAPIError(
-                    status.HTTP_503_SERVICE_UNAVAILABLE,
-                    "DIAGNOSIS_UNAVAILABLE",
-                    "diagnosis unavailable",
-                    retryable=True,
-                ) from exc
+                raise _runtime_unavailable("DIAGNOSIS_UNAVAILABLE", "diagnosis unavailable", exc) from exc
             base = _standard_diagnosis_response(diagnosis)
             return JSONResponse(
                 status_code=status.HTTP_202_ACCEPTED,
@@ -885,11 +880,8 @@ def create_gateway_app(
                         )
                     except (ValueError, RuntimeError) as exc:
                         _release_conversation_turn(context, conversation, turn_no)
-                        raise StandardAPIError(
-                            status.HTTP_503_SERVICE_UNAVAILABLE,
-                            "DIAGNOSIS_UNAVAILABLE",
-                            "diagnosis unavailable",
-                            retryable=True,
+                        raise _runtime_unavailable(
+                            "DIAGNOSIS_UNAVAILABLE", "diagnosis unavailable", exc
                         ) from exc
                     if not own_turn:
                         _release_conversation_turn(context, conversation, turn_no)
@@ -943,11 +935,8 @@ def create_gateway_app(
                         )
                     except (ValueError, RuntimeError) as exc:
                         _release_conversation_turn(context, conversation, turn_no)
-                        raise StandardAPIError(
-                            status.HTTP_503_SERVICE_UNAVAILABLE,
-                            "DIAGNOSIS_UNAVAILABLE",
-                            "diagnosis unavailable",
-                            retryable=True,
+                        raise _runtime_unavailable(
+                            "DIAGNOSIS_UNAVAILABLE", "diagnosis unavailable", exc
                         ) from exc
                     base = _standard_diagnosis_response(diagnosis)
                     return JSONResponse(
@@ -1142,12 +1131,7 @@ def create_gateway_app(
             )
         except (ValueError, RuntimeError) as exc:
             _release_conversation_turn(context, conversation, turn_no)
-            raise StandardAPIError(
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-                "QA_UNAVAILABLE",
-                "general answer unavailable",
-                retryable=True,
-            ) from exc
+            raise _runtime_unavailable("QA_UNAVAILABLE", "general answer unavailable", exc) from exc
         return JSONResponse(
             status_code=status.HTTP_202_ACCEPTED,
             content={
@@ -1177,12 +1161,7 @@ def create_gateway_app(
         try:
             qa = context.runtime.get_assistant_qa(caller, qa_id)
         except (ValueError, RuntimeError) as exc:
-            raise StandardAPIError(
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-                "QA_UNAVAILABLE",
-                "general answer unavailable",
-                retryable=True,
-            ) from exc
+            raise _runtime_unavailable("QA_UNAVAILABLE", "general answer unavailable", exc) from exc
         if qa is None:
             raise StandardAPIError(
                 status.HTTP_404_NOT_FOUND,
@@ -1210,12 +1189,7 @@ def create_gateway_app(
         try:
             qa = context.runtime.cancel_assistant_qa(caller, qa_id)
         except (ValueError, RuntimeError) as exc:
-            raise StandardAPIError(
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-                "QA_UNAVAILABLE",
-                "general answer unavailable",
-                retryable=True,
-            ) from exc
+            raise _runtime_unavailable("QA_UNAVAILABLE", "general answer unavailable", exc) from exc
         if qa is None:
             # Missing and out-of-scope are the same answer: cancelling must not
             # become a way to probe which qa_ids exist.
@@ -1241,12 +1215,7 @@ def create_gateway_app(
         try:
             questions = context.runtime.list_assistant_qa(caller, limit=limit)
         except (ValueError, RuntimeError) as exc:
-            raise StandardAPIError(
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-                "QA_UNAVAILABLE",
-                "general answer unavailable",
-                retryable=True,
-            ) from exc
+            raise _runtime_unavailable("QA_UNAVAILABLE", "general answer unavailable", exc) from exc
         return {
             "type": "qa_list",
             "language": language,
@@ -1475,11 +1444,8 @@ def create_gateway_app(
         try:
             job = context.runtime.start_health_report(caller, payload.order_no)
         except (ValueError, RuntimeError) as exc:
-            raise StandardAPIError(
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-                "REPORT_JOB_UNAVAILABLE",
-                "health report job unavailable",
-                retryable=True,
+            raise _runtime_unavailable(
+                "REPORT_JOB_UNAVAILABLE", "health report job unavailable", exc
             ) from exc
         return _health_job_response(job)
 
@@ -1491,11 +1457,8 @@ def create_gateway_app(
         try:
             job = context.runtime.get_health_report(caller, job_id)
         except (ValueError, RuntimeError) as exc:
-            raise StandardAPIError(
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-                "REPORT_JOB_UNAVAILABLE",
-                "health report job unavailable",
-                retryable=True,
+            raise _runtime_unavailable(
+                "REPORT_JOB_UNAVAILABLE", "health report job unavailable", exc
             ) from exc
         if job is None:
             raise StandardAPIError(
@@ -1535,12 +1498,7 @@ def create_gateway_app(
                 language=language,
             )
         except (ValueError, RuntimeError) as exc:
-            raise StandardAPIError(
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-                "DIAGNOSIS_UNAVAILABLE",
-                "diagnosis unavailable",
-                retryable=True,
-            ) from exc
+            raise _runtime_unavailable("DIAGNOSIS_UNAVAILABLE", "diagnosis unavailable", exc) from exc
         return _standard_diagnosis_response(diagnosis)
 
     @app.get("/v1/standard/diagnoses/{diagnosis_id}")
@@ -1551,12 +1509,7 @@ def create_gateway_app(
         try:
             diagnosis = context.runtime.get_standard_diagnosis(caller, diagnosis_id)
         except (ValueError, RuntimeError) as exc:
-            raise StandardAPIError(
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-                "DIAGNOSIS_UNAVAILABLE",
-                "diagnosis unavailable",
-                retryable=True,
-            ) from exc
+            raise _runtime_unavailable("DIAGNOSIS_UNAVAILABLE", "diagnosis unavailable", exc) from exc
         if diagnosis is None:
             # A qa_ id here means the caller created a general-question job
             # (POST /v1/assistant/questions returned type=qa) but is polling
@@ -2854,6 +2807,48 @@ def _begin_conversation_turn(
         ) from exc
 
 
+#: The message every "a runtime dependency is down" answer carries. The body is
+#: unchanged from the 12 inline copies this replaces — the point of the helper is
+#: that the failure is *recorded*, not that the text improves.
+_RUNTIME_FAILURE_MESSAGE = "runtime dependency unavailable"
+
+
+def _runtime_unavailable(code: str, message: str, exc: Exception) -> StandardAPIError:
+    """Render a runtime failure as the 503 the contract promises, and log it.
+
+    `docs/standard-api-contract.md` says internal failure detail goes to the
+    sanitised log rather than into the response. The 12 copies this replaces did
+    the first half — they rendered a stable 503 — and dropped `exc` on the floor:
+    the error type, and the message the upstream or the runtime actually raised,
+    reached nobody. So a misconfigured field, an unreachable upstream and a
+    genuine provider outage all produced the same sentence, with nothing anywhere
+    to tell a operator which one they were looking at.
+
+    The response is unchanged, deliberately: the contract promises "a stable
+    503", and turning this into a diagnostic channel is a different decision.
+    Only the log gains the detail.
+
+    `str(exc)` is passed through `redact_text` before it is written: an exception
+    message is the one string here that came from outside this process, and this
+    repository's discipline is that external text is redacted at every boundary
+    it crosses.
+    """
+    from aiops_diagnostics.redaction import redact_text
+
+    _LOGGER.warning(
+        "runtime failure -> %s (%s): %s",
+        code,
+        type(exc).__name__,
+        redact_text(str(exc)),
+    )
+    return StandardAPIError(
+        status.HTTP_503_SERVICE_UNAVAILABLE,
+        code,
+        message,
+        retryable=True,
+    )
+
+
 def _release_conversation_turn(
     context: Any,
     conversation: dict[str, Any] | None,
@@ -3016,12 +3011,7 @@ def _start_promo_qa(
         )
     except (ValueError, RuntimeError) as exc:
         _release_conversation_turn(context, conversation, turn_no)
-        raise StandardAPIError(
-            status.HTTP_503_SERVICE_UNAVAILABLE,
-            "QA_UNAVAILABLE",
-            "general answer unavailable",
-            retryable=True,
-        ) from exc
+        raise _runtime_unavailable("QA_UNAVAILABLE", "general answer unavailable", exc) from exc
     return JSONResponse(
         status_code=status.HTTP_202_ACCEPTED,
         content={
