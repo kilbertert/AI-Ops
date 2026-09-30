@@ -527,6 +527,21 @@ workflow YAML 不适用复杂度或 mutation 工具；安全状态机由模板�
 Java BFF 透传与前端 blocks[] 渲染属 #171/#173 及真实媒体验收范围（见 P0-E2E-REAL），
 本票不把 fake 结果记为业务验收。
 
+## 订单授权守卫合一 QA 计划（#489）
+
+### ORDERGUARD-01 三种判定、两种处置
+
+- 环境：AI-Ops 本地 Python 3.13，FastAPI TestClient，注入式授权器（可切「拥有」/「不拥有」/「抛错」）与指标替身。
+- 前置条件：平台目录可解析（调用能走到授权判定那一层）。
+- 测试数据：`POST /v1/standard/diagnoses`（硬失败面）、`POST /v1/assistant/questions`（回落面）各一次。
+- 有序动作：① 授权器返回「不拥有」；② 授权器抛 `CallerAuthError`。
+- 预期结果：① 404 `ORDER_NOT_FOUND`，**无告警、无失败指标**；
+  ② 硬失败面 503 `ORDER_AUTHORIZATION_UNAVAILABLE`，回落面**不变成 503**；
+  两者都产生一条 `outcome=failed`、`error_code=ORDER_AUTHORIZATION_UNAVAILABLE` 的指标与一条告警。
+- 清理：临时目录自动回收。
+- 结果：PASS（2026-09-30，`tests/test_gateway_order_guards.py`；
+  以「把失败并进不拥有」与「某处又直接调 can_access」两条变异核对，各自转红）。
+
 ## 响应形状与状态词汇收敛 QA 计划（#488）
 
 ### SHAPE-01 一个 202 形状、一套状态词汇
