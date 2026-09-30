@@ -527,6 +527,27 @@ workflow YAML 不适用复杂度或 mutation 工具；安全状态机由模板�
 Java BFF 透传与前端 blocks[] 渲染属 #171/#173 及真实媒体验收范围（见 P0-E2E-REAL），
 本票不把 fake 结果记为业务验收。
 
+## 平台身份判定收敛 QA 计划（#486）
+
+### PLATFORM-01 三个入口同答、同类型
+
+- 环境：AI-Ops 本地 Python 3.13，FastAPI TestClient，注入式 caller 与平台目录替身。
+- 前置条件：目录替身让同一个 C 端用户同时具备两种平台身份，且请求不带 `X-Business-Entry`。
+- 测试数据：FAQ `/v1/faq/recommendations`、助手 `POST /v1/assistant/questions`、快捷动作 `GET /v1/shortcuts` 各一次。
+- 有序动作：同法调用三个入口，比较状态码与错误码。
+- 预期结果：三者**完全一致**（409 `PLATFORM_AMBIGUOUS`）；三者的身份类型都是平台判定对象。
+- 清理：临时目录自动回收。
+- 结果：PASS（2026-09-30，`tests/test_platform_identity_shapes.py`）。
+
+### PLATFORM-02 一处定义与槽位绑定（源码级）
+
+- 环境：同上（不启动应用，读语法树）。
+- 有序动作：检查工厂定义次数与返回注解；检查三个身份名是否为「定义」而非「工厂绑定」；检查各自绑定的认证依赖。
+- 预期结果：工厂定义一次、返回 `tuple[ScopeContext, PlatformDecision]`；三个身份名无独立定义、均由工厂产生；
+  三者分别绑定 faq / diagnosis / shortcut 三个依赖。
+- 清理：无。
+- 结果：PASS（同上；以「快捷动作分支改回字符串返回」与「某个身份换错认证依赖」两条变异核对，各自转红）。
+
 ## 调用者认证错误映射 QA 计划（#485）
 
 ### CALLER-01 配置缺失在全表上按 503 回答

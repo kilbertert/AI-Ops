@@ -7,6 +7,41 @@
 
 
 
+## #486 平台身份判定三份合一份（2026-09-30）
+
+`CONTEXT.md` 对「平台身份判定」有权威定义，并附 `Avoid: 客户端自报 platform`。这条规则在网关层
+被抄了三遍：`faq_identity` 与 `assistant_identity` 的 22 行**逐字节相同**，`shortcut_identity`
+与它们相差**且仅相差**一行 —— 一个返回对象，一个返回 `str(decision.platform)`。
+
+**那一行是承重的，不是外观问题**：FAQ 与助手分支的消费方要对象（`decision.platform`、
+`**decision.public()` 等多处），快捷动作分支的消费方要字符串。**每个调用方读了适合自己形状的那一份**
+—— 这正是同一条规则变成三份的方式。
+
+**改动**：一个工厂 `platform_identity(caller_dependency)` 产出三个身份依赖，**返回类型统一为
+`PlatformDecision`**；快捷动作分支改回对象并自行取 `decision.platform`；`FAQError` 的三种平台错误码
+与 `retryable` 判据收成一个渲染器 `_platform_error`（原先三份内联 dict）。
+
+**证据**：
+
+| 判据 | 用例 |
+|---|---|
+| 同一个平台失败在 FAQ / 助手 / 快捷动作三面**同答** | `test_the_same_platform_failure_answers_the_same_on_every_surface` |
+| 返回类型处处是对象、工厂体内不再出现字符串返回 | `test_the_decision_object_is_what_every_surface_receives` |
+| 三个身份名都由工厂产出，没有第二份实现 | `test_the_identity_dependencies_come_from_one_factory` |
+| **三个身份各自绑定正确的认证依赖** | `test_each_identity_carries_the_scope_its_surface_requires` |
+
+**三条变异核对**：① 快捷动作分支改回 `str(decision.platform)` ⇒ 转红；
+② 借用 `faq_identity` 的正是 `assistant_identity` 的注释（scope 差异的理由）—— 该理由保留在绑定处；
+③ **某个身份换错认证依赖**（`faq_identity` 绑到 diagnosis 依赖）⇒ 转红。
+
+⚠️ **一条自己踩的坑，记在这里**：改这段时一次 `python` 替换把 **`/health` 路由整段删掉了**
+（片段边界选在了 `@app.get("/v1/faq/recommendations")`，而健康检查正好在它前面）。是 ruff 报
+`platform` 未使用才暴露的 —— `/health` 的响应体里用 `platform.system()`。**删完必须核对
+「这个 import 还有没有用」**，那是这次唯一发现它的信号。
+
+**未完成业务验收**：本片对外零变化（错误码、文案、状态码都不变），无真实故障案例可比对；
+41 上未实测，但三面一致性由本地替身驱动。
+
 ## #485 调用者认证错误映射合一（2026-09-30）
 
 **这是 #432 五张切片里唯一改变对外行为的一张，也是本轮唯一「文档把答案写定、代码给了两个答案」的缺陷。**
