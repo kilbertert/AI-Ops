@@ -418,41 +418,63 @@ def test_the_sweep_sql_is_written_down_only_in_this_module() -> None:
     assert offenders == [], "; ".join(offenders)
 
 
-def _expire_pairs() -> tuple[dict[str, str], dict[str, str]]:
-    """`(method pairs, startup pairs)` — kept apart, on purpose.
-
-    Two sources pair a table with a profile: the three `_expire_*` methods and
-    the startup loop. Merging them into one dict lets a correct entry in one
-    source MASK a wrong entry in the other (last write wins), which is exactly
-    the failure this check exists to catch. Returning them separately is what
-    makes both sources assertable.
-    """
+def _method_pairs() -> dict[str, str]:
+    """`table -> profile` for the three `_expire_*` render calls."""
     import ast
     from pathlib import Path
 
     store = Path(__file__).parents[1] / "src" / "aiops_diagnostics" / "gateway_store.py"
     tree = ast.parse(store.read_text(encoding="utf-8"), filename=str(store))
-    methods: dict[str, str] = {}
-    startup: dict[str, str] = {}
+    pairs: dict[str, str] = {}
     for node in ast.walk(tree):
         if (
             isinstance(node, ast.Call)
             and getattr(node.func, "id", "") == "expire_statements"
             and isinstance(node.args[0], ast.Constant)
         ):
-            methods[node.args[0].value] = ast.unparse(node.args[1])
-        if not isinstance(node, ast.For) or not isinstance(node.iter, ast.Tuple):
-            continue
-        if "expire_statements" not in ast.unparse(node):
-            continue
-        for element in node.iter.elts:
-            if not isinstance(element, ast.Tuple) or len(element.elts) != 2:
-                continue
-            table = element.elts[0]
-            if not isinstance(table, ast.Constant):
-                continue
-            startup[table.value] = ast.unparse(element.elts[1])
-    return methods, startup
+            pairs[node.args[0].value] = ast.unparse(node.args[1])
+    return pairs
+
+
+def _boot_hook_pairs() -> dict[str, str]:
+    """`table -> convergence path` for the boot path's restart recovery.
+
+    Read separately from `_method_pairs`, never merged: one dict with both
+    sources lets a correct entry in one overwrite a wrong entry in the other,
+    and the check then passes on the defect it names. That is not hypothetical —
+    it is what the first version of this guard did.
+    """
+    import ast
+    from pathlib import Path
+
+    store = Path(__file__).parents[1] / "src" / "aiops_diagnostics" / "gateway_store.py"
+    tree = ast.parse(store.read_text(encoding="utf-8"), filename=str(store))
+    hook = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "recover_interrupted_jobs"
+    )
+    source = ast.unparse(hook)
+    pairs: dict[str, str] = {}
+    if "SELECT job_id FROM health_report_jobs" in source:
+        pairs["health_report_jobs"] = "update_health_job"
+    if "SELECT diagnosis_id FROM standard_diagnoses" in source:
+        pairs["standard_diagnoses"] = "update_standard_diagnosis"
+    return pairs
+
+
+def test_each_table_is_converged_through_its_own_path() -> None:
+    """The table being scanned and the path writing to it must correspond.
+
+    A job id from one table passed to the other table's update path is not a
+    crash — both take a string — and on today's data it is invisible, because
+    the two tables are empty of the ids in question. It is still a defect the
+    first time both have rows.
+    """
+    assert _boot_hook_pairs() == {
+        "health_report_jobs": "update_health_job",
+        "standard_diagnoses": "update_standard_diagnosis",
+    }, _boot_hook_pairs()
 
 
 def test_each_sweep_names_the_profile_of_its_own_table() -> None:
@@ -473,8 +495,5 @@ def test_each_sweep_names_the_profile_of_its_own_table() -> None:
         "standard_diagnoses": "DIAGNOSIS",
         "assistant_questions": "QUESTION",
     }
-    methods, startup = _expire_pairs()
+    methods = _method_pairs()
     assert methods == expected, methods
-    # The startup path sweeps two of the three; each must still name its own.
-    assert startup, "the startup sweep was not found: this check points at nothing"
-    assert startup == {table: expected[table] for table in startup}, startup

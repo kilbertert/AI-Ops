@@ -7,6 +7,44 @@
 
 
 
+## #492 构造不再是重启（2026-10-01）
+
+**#430 的第三张子票，也是四张里唯一改变用户可见结果的一张。**
+
+`GatewayStore.__init__` 里的无条件清扫把**每一行** `queued`/`running` 的健康作业与标准诊断
+在**构造时**结束为 `expired`，没有 deadline 条件。而构造发生在**每一次**构造 —— 包括短命
+CLI 命令：`aiops-gateway devices` / `issue-enrollment` / `revoke-device`。
+
+⇒ **一次列设备的命令，结束了一条正在跑的诊断**，调用方随后读到一个没有结果的 `expired`。
+本仓自己已经在三处写明这件事（`recover_assistant_questions` 的 docstring、`docs/validation.md`、
+`docs/开发进度.md`），#356 因此**刻意没有把提问表并进去** —— 却把另两张表留在了那个机制里。
+
+**改动**：删掉 `__init__` 里的清扫；新增 `recover_interrupted_jobs()`，挂在**启动路径**
+（`create_gateway_app`，与既有的 `recover_assistant_questions` 同一个位置），覆盖三张异步表。
+终态是 **`failed` + `*_INTERRUPTED_BY_RESTART`**，不是 `expired`（超时）也不是 `cancelled`（用户停止）
+—— 三分语义沿用提问表的既有先例。每张表经**它自己的 update 路径**写入，因此 claim-guard 与
+保留期分档照常生效。
+
+### 唯一必须改写的既有断言
+
+`test_health_job_marks_incomplete_work_expired_after_restart` 用「构造第二个 `GatewayStore`」
+模拟重启，**这条守护把缺陷本身钉死了，因此它永远不可能发现它**。按 PRD 要求**拆成两条**：
+
+- `test_constructing_a_store_leaves_live_work_alone`：断言**不变**（旧代码上转红），
+  并断言该作业随后仍能写入自己的终态；
+- `test_the_boot_hook_converges_with_a_restart_verdict`：断言启动 hook 给出 `failed` + restart 码。
+
+**两条变异核对**：① 把启动收敛放回 `__init__` ⇒ 转红；② 收敛用 `expired` 而不是 restart 码 ⇒ 转红。
+
+### `runs` 的显式决定（PRD 要求「不默认照做」）
+
+`runs` **不接**启动收敛，并**在代码里写明理由**（`create_run` 上方）：设备路径已决定退役，
+这张表也没有 deadline 列，给它一条收敛规则是一个**没有人做过的产品决定**。
+写下来的原因：「其余三张在启动时收敛」这个形状会让**遗漏**看起来像疏忽而不是决定。
+
+**未完成业务验收**：本片改变的是「一次 CLI 命令会不会结束在飞诊断」——41 上需要**实际跑一次
+`aiops-gateway devices` 再核对一条在飞诊断仍可写入**，这属于部署后的动作，记为待验。
+
 ## #491 五份同形过期 SQL 收成一种渲染（2026-10-01）
 
 **#430 的第二张子票。** 改动前：三份 `_expire_*` 各写一份同形 SQL（差别只有表名与终态集合），

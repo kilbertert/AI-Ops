@@ -36,7 +36,16 @@ def test_health_job_is_isolated_by_scope_and_recovers_after_failure(tmp_path: Pa
     assert store.get_health_job(replacement["job_id"], "scope-2") is None
 
 
-def test_health_job_marks_incomplete_work_expired_after_restart(tmp_path: Path) -> None:
+def test_constructing_a_store_leaves_live_work_alone(tmp_path: Path) -> None:
+    """A new `GatewayStore` is not a restart (#492).
+
+    Construction happens on every short-lived CLI command (`aiops-gateway
+    devices`, `issue-enrollment`, `revoke-device`). It used to converge every
+    `queued`/`running` row to `expired`, so listing devices ended a diagnosis
+    that was still running and the caller read a result-less `expired`. This
+    test is the one the old behaviour could never have failed: it asserted the
+    CONSTRUCTION was the convergence.
+    """
     database = tmp_path / "gateway.db"
     store = GatewayStore(database)
     job, _ = store.create_or_reuse_health_job("scope-1", "O-1", "health-v1")
@@ -44,7 +53,38 @@ def test_health_job_marks_incomplete_work_expired_after_restart(tmp_path: Path) 
 
     restarted = GatewayStore(database)
 
-    assert restarted.get_health_job(job["job_id"], "scope-1")["status"] == "expired"
+    assert restarted.get_health_job(job["job_id"], "scope-1")["status"] == "running"
+    # And the job is still writable, which is what the caller of an in-flight
+    # job needs: the old behaviour refused every later terminal write.
+    assert restart_write_succeeds(restarted, job["job_id"]) is True
+
+
+def restart_write_succeeds(store: GatewayStore, job_id: str) -> bool:
+    """Whether a live job can still reach its own terminal state."""
+    updated = store.update_health_job(job_id, status="failed", error_code="X")
+    return updated is True
+
+
+def test_the_boot_hook_converges_with_a_restart_verdict(tmp_path: Path) -> None:
+    """The restart verdict belongs where the restart happened.
+
+    `failed` with a code naming the cause, not `expired` (which means the job
+    outran its deadline) and not `cancelled` (which means the user stopped it).
+    `docs/validation.md` records why the three are kept apart.
+    """
+    from aiops_diagnostics.gateway_store import HEALTH_JOB_RESTART_ERROR_CODE
+
+    database = tmp_path / "gateway.db"
+    store = GatewayStore(database)
+    job, _ = store.create_or_reuse_health_job("scope-1", "O-1", "health-v1")
+    store.update_health_job(job["job_id"], status="running")
+
+    restarted = GatewayStore(database)
+    restarted.recover_interrupted_jobs()
+
+    current = restarted.get_health_job(job["job_id"], "scope-1")
+    assert current["status"] == "failed"
+    assert current["error_code"] == HEALTH_JOB_RESTART_ERROR_CODE
 
 
 def test_health_job_terminal_state_cannot_be_overwritten(tmp_path: Path) -> None:

@@ -769,6 +769,7 @@ def test_an_expired_job_stops_holding_the_conversation(tmp_path: Path, monkeypat
             connection.execute(
                 "UPDATE standard_diagnoses SET deadline_at = ?, status = 'expired'"
                 " WHERE status IN ('queued', 'running')",
+                ("2000-01-01T00:00:00+00:00",),
             )
         assert release.wait(10), "the test never released the slow diagnosis"
         return AgentDiagnosis(
