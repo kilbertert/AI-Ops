@@ -575,8 +575,9 @@ Java BFF 透传与前端 blocks[] 渲染属 #171/#173 及真实媒体验收范�
   驱动一次以失败收场的诊断；读写 `context_turns`。
 - 预期结果：诊断生成期间 `is_generating` 为 `true` 且同会话再提问得 `409 CONVERSATION_BUSY`；
   诊断终态后 `is_generating` 转 `false` 且该轮进入 `context_turns`（`answer` 带 `summary`/`root_cause`）；
-  **失败的诊断不保留轮次**且一样释放槽位（不退化为永久 409）；诊断轮次的 `summary`/`root_cause`
-  与诊断指标行采用同一 token 估计口径。
+  **失败的诊断不保留轮次**且一样释放槽位（不退化为永久 409）；诊断轮次与诊断指标行取同一组
+  答案字段（`summary` / `root_cause`，不是全量 `hypotheses`），差异只在轮次额外计入问题本身
+  —— 这是 `context_turns()` 对**每一种**轮次的预算口径，不因诊断而变。
 - 清理：同上。
 - 结果：PASS（2026-09-30，`tests/test_conversation_api.py::test_concurrent_generation_returns_409_on_the_diagnosis_branch`、
   `tests/test_standard_diagnosis_runtime.py::test_diagnosis_turn_is_filled_at_the_terminal_write`、

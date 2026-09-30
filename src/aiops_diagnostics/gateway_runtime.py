@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import threading
 import time
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -18,6 +19,7 @@ from aiops_diagnostics.answer_language import (
 )
 from aiops_diagnostics.codex_runtime import AgentContractError, AgentRuntimeError
 from aiops_diagnostics.config import Settings, canonical_provider_base_url, validate_key_slot_name
+from aiops_diagnostics.conversation_store import BUSY_LOCK_SECONDS
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_store import ACTIVE_DIAGNOSIS_STATUSES, GatewayDevice, GatewayStore
 from aiops_diagnostics.health_curves import build_curves
@@ -710,6 +712,37 @@ class GatewayRuntime:
         with contextlib.suppress(ConversationError):
             self.conversation_store.release_turn(conversation_id, scope_fingerprint, turn_no)
 
+    def _start_turn_claim_renewal(self, conversation_turn: tuple[str, str, int] | None) -> None:
+        """Keep this diagnosis's conversation claim from lapsing while it runs.
+
+        A turn claim is deliberately short-lived (a crashed worker must not wedge
+        a conversation), which is longer-``BUSY_LOCK_SECONDS``-agnostic and much
+        shorter than a diagnosis. Renewing is the worker proving it is alive;
+        the window then means "time since the last proof", which is the only
+        reading under which the crash fallback still holds.
+
+        The thread ends on its own: once the slot is no longer this turn's --
+        job completed, job stopped, claim already lapsed -- ``renew_turn_claim``
+        returns false and the loop stops. It is therefore never the thing that
+        decides when a generation is over.
+        """
+        if conversation_turn is None:
+            return
+        conversation_id, scope_fingerprint, turn_no = conversation_turn
+
+        def renew() -> None:
+            from aiops_diagnostics.conversation_store import ConversationError
+
+            while True:
+                with contextlib.suppress(ConversationError):
+                    if not self.conversation_store.renew_turn_claim(
+                        conversation_id, scope_fingerprint, turn_no
+                    ):
+                        return
+                time.sleep(RENEW_TURN_CLAIM_SECONDS)
+
+        threading.Thread(target=renew, name=f"turn-claim-{turn_no}", daemon=True).start()
+
     def _complete_conversation_turn(
         self,
         conversation_turn: tuple[str, str, int] | None,
@@ -717,6 +750,7 @@ class GatewayRuntime:
         answer: dict[str, Any] | None,
         *,
         cancelled: bool = False,
+        guarded: bool = False,
     ) -> None:
         """Write a finished answer into the conversation turn (if any).
 
@@ -726,7 +760,17 @@ class GatewayRuntime:
 
         Cancelled/failed turns drop their row: an interrupted generation never
         survives as a complete reply (#172).
+
+        ``guarded`` names the one case where this job does not own the outcome:
+        its own write to the job row was refused, so the job did not end here --
+        the stop path or the deadline sweep ended it. The refusal owner closes
+        the turn (the stop path releases it itself); when it has not got there
+        yet this call closes it instead. Either way the turn ends without an
+        answer: an ``expired`` job whose summary is readable in the history is
+        the split between what the user polls and what the conversation says.
         """
+        if guarded:
+            cancelled = True
         if conversation_turn is None:
             return
         from aiops_diagnostics.conversation_store import ConversationError
@@ -833,10 +877,21 @@ class GatewayRuntime:
         conversation_turn: tuple[str, str, int] | None = None,
     ) -> None:
         if not self.store.update_standard_diagnosis(diagnosis_id, status="running"):
-            # Refused claim: another path already terminalised this row (or it
-            # expired). Nothing was generated, so the turn must not survive.
+            # Refused claim: the row was already terminalised by another path,
+            # or it expired while queued. Nothing was generated, so the turn
+            # must not survive -- an answer-less row would hold the
+            # conversation's slot until the claim lapsed and then sit in the
+            # history with no answer.
+            self._complete_conversation_turn(conversation_turn, request.problem, None, cancelled=True)
             return
         started_ms = time.monotonic()
+        # The conversation claim is the frontend's concurrency gate while this
+        # runs, but a claim only counts as live for BUSY_LOCK_SECONDS (120s) and
+        # a diagnosis outlives that: without a sign of life the conversation
+        # stops being busy mid-generation and a second turn starts over the
+        # one still running. The renewer stops the moment the slot is gone --
+        # its own completion, a stop, or a lapsed claim all take it there.
+        self._start_turn_claim_renewal(conversation_turn)
         settings = Settings.from_config(self.gateway_settings.server_config_file)
         settings.agent.run_root = self.diagnostic_settings.agent.run_root
         try:
@@ -857,13 +912,19 @@ class GatewayRuntime:
                 language=language,
             )
         except (AgentRuntimeError, SourceError, ValueError) as exc:
-            self.store.update_standard_diagnosis(
+            ok = self.store.update_standard_diagnosis(
                 diagnosis_id,
                 status="failed",
                 error_code="DIAGNOSIS_FAILED",
                 error_message=_public_error_message(exc, request.order_no),
             )
-            self._complete_conversation_turn(conversation_turn, request.problem, None, cancelled=True)
+            # Only a write that landed has a terminal row to match: when the
+            # row was expired or cancelled underneath us, the turn is dropped
+            # by the cancellation path (or by the refused-claim path), and it
+            # must not claim an answer this job never produced.
+            self._complete_conversation_turn(
+                conversation_turn, request.problem, None, cancelled=True, guarded=not ok
+            )
             self._record_metric(
                 tenant_id=context.effective_tenant_id,
                 route_type="diagnosis",
@@ -880,13 +941,15 @@ class GatewayRuntime:
         # distinguish provider/task failure from a genuine inconclusive result.
         if result.status.value == "blocked":
             error_code, error_message = _blocked_diagnosis_error(workspace)
-            self.store.update_standard_diagnosis(
+            ok = self.store.update_standard_diagnosis(
                 diagnosis_id,
                 status="failed",
                 error_code=error_code,
                 error_message=error_message,
             )
-            self._complete_conversation_turn(conversation_turn, request.problem, None, cancelled=True)
+            self._complete_conversation_turn(
+                conversation_turn, request.problem, None, cancelled=True, guarded=not ok
+            )
             self._record_metric(
                 tenant_id=context.effective_tenant_id,
                 route_type="diagnosis",
@@ -896,7 +959,7 @@ class GatewayRuntime:
             )
             return
         public_status = "completed" if result.status.value == "diagnosed" else "inconclusive"
-        self.store.update_standard_diagnosis(
+        stored = self.store.update_standard_diagnosis(
             diagnosis_id,
             status=public_status,
             result=result.model_dump(mode="json"),
@@ -907,10 +970,19 @@ class GatewayRuntime:
         diagnosis_tokens = (
             sum(len(str(dumped.get(field) or "")) for field in ("summary", "root_cause")) * 2 // 3 + 1
         )
+        # A refused write means the row already ended (expired, or cancelled
+        # through the stop path): the job's answer is real, but it is not the
+        # answer the conversation's turn is waiting for. Either the stop path
+        # already dropped the row -- in which case this write only finds an
+        # absent turn and does nothing -- or it is about to, and ``guarded``
+        # makes that outcome depend on which write gets there first, never on
+        # whether the answer gets stored. What must NOT happen is the
+        # reverse: an ``expired`` job whose summary is readable in the history.
         self._complete_conversation_turn(
             conversation_turn,
             request.problem,
             {"summary": dumped.get("summary"), "root_cause": dumped.get("root_cause")},
+            guarded=not stored,
         )
         self._record_metric(
             tenant_id=context.effective_tenant_id,
@@ -1491,6 +1563,12 @@ def _guard_zero_order_language(answer: dict[str, Any], language: str) -> dict[st
     record_answer_language_fallback(language=language, leaked=leak, surface="zero_order")
     pack = QA_FALLBACK_MESSAGES.get(language) or QA_FALLBACK_MESSAGES[DEFAULT_LANGUAGE]
     return {**answer, "text": pack["unavailable"]}
+
+
+#: How often a running diagnosis says its conversation claim is still alive.
+#: Comfortably below ``BUSY_LOCK_SECONDS`` so one missed tick cannot lose the
+#: gate, and large enough that a minutes-long job renews a handful of times.
+RENEW_TURN_CLAIM_SECONDS = BUSY_LOCK_SECONDS / 3
 
 
 def _estimate_turn_tokens(question: str, answer: dict[str, Any] | None) -> int:
