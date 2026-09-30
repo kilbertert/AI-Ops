@@ -745,3 +745,75 @@ def test_a_long_generation_keeps_the_conversation_busy(tmp_path: Path, monkeypat
     _wait_for_slot(conversations, cid, scope_fingerprint)
     runtime.shutdown()
     assert conversations.context_turns(cid, scope_fingerprint)[0]["answer"]["summary"] == "跑得比锁窗久"
+
+
+def test_an_expired_job_stops_holding_the_conversation(tmp_path: Path, monkeypatch) -> None:
+    """A job the user already polls as expired must stop renewing its claim.
+
+    The renewer proves the worker is alive; it must not keep proving it for a
+    job that is over. Otherwise a worker still catching up after the deadline
+    sweep (or after a stop) holds the conversation busy on behalf of a
+    generation whose result nobody will ever read.
+    """
+    from aiops_diagnostics import conversation_store as store_module
+    from aiops_diagnostics.conversation_store import ConversationStore
+    from aiops_diagnostics.gateway_store import GatewayStore as _Store
+
+    runtime, store, settings = _runtime(tmp_path)
+    monkeypatch.setattr("aiops_diagnostics.gateway_runtime.Settings.from_config", lambda *_: settings)
+    monkeypatch.setattr(store_module, "BUSY_LOCK_SECONDS", 1)
+    monkeypatch.setattr("aiops_diagnostics.gateway_runtime.RENEW_TURN_CLAIM_SECONDS", 0.2)
+    release = threading.Event()
+
+    def diagnose(workspace, request, selected_settings, fixture, **kwargs):
+        # The deadline sweep (or a stop) ends the job while the worker runs on.
+        sweeper = _Store(store.path)
+        with sweeper._connection(write=True) as connection:
+            connection.execute(
+                "UPDATE standard_diagnoses SET deadline_at = ?, status = 'expired'"
+                " WHERE status IN ('queued', 'running')",
+            )
+        assert release.wait(10), "the test never released the slow diagnosis"
+        return AgentDiagnosis(
+            incident_id=workspace.load_manifest().incident_id,
+            order_no=request.order_no,
+            tenant_id=request.tenant_id,
+            status=DiagnosisStatus.DIAGNOSED,
+            summary="过期之后才跑完",
+            root_cause="测试根因",
+            confidence=Confidence.HIGH,
+            evidence_ids=[],
+            hypotheses=[],
+            limitations=[],
+            failed_sources=[],
+            next_steps=[],
+        )
+
+    monkeypatch.setattr("aiops_diagnostics.gateway_runtime.run_agent_diagnosis", diagnose)
+    conversations = ConversationStore(store.path)
+    scope_fingerprint = _scope().scope_fingerprint
+    cid = conversations.create(
+        scope_fingerprint=scope_fingerprint,
+        business_entry="operator",
+        agent_version_key="agt_abcdef1234567890#v1",
+    )["conversation_id"]
+    turn_no = conversations.begin_turn(cid, scope_fingerprint, kind="diagnosis", question="为什么跳枪")
+
+    runtime.start_standard_diagnosis(
+        _scope(),
+        "ORDER-1",
+        "为什么跳枪",
+        None,
+        conversation_turn=(cid, scope_fingerprint, turn_no),
+    )
+    # Past the (compressed) lock window with an already-expired job: the claim
+    # must have lapsed, so a new turn can be claimed. The flag itself is NOT
+    # the assertion -- `is_generating` stays set until something takes the slot
+    # (that is the documented crash fallback: it reads true for a crashed
+    # worker too). What must hold is that the conversation is usable again
+    # without waiting for a worker nobody is waiting for.
+    time.sleep(2.5 * store_module.BUSY_LOCK_SECONDS)
+    conversations.begin_turn(cid, scope_fingerprint, kind="qa", question="那它为什么跳枪")
+
+    release.set()
+    runtime.shutdown()

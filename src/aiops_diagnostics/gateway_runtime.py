@@ -712,36 +712,50 @@ class GatewayRuntime:
         with contextlib.suppress(ConversationError):
             self.conversation_store.release_turn(conversation_id, scope_fingerprint, turn_no)
 
-    def _start_turn_claim_renewal(self, conversation_turn: tuple[str, str, int] | None) -> None:
-        """Keep this diagnosis's conversation claim from lapsing while it runs.
+    def _turn_claim_renewer(
+        self, diagnosis_id: str, conversation_turn: tuple[str, str, int] | None
+    ) -> threading.Event:
+        """A stop signal for this diagnosis's claim renewal, and the thread using it.
 
-        A turn claim is deliberately short-lived (a crashed worker must not wedge
-        a conversation), which is longer-``BUSY_LOCK_SECONDS``-agnostic and much
-        shorter than a diagnosis. Renewing is the worker proving it is alive;
-        the window then means "time since the last proof", which is the only
-        reading under which the crash fallback still holds.
+        A turn claim is deliberately short-lived: ``BUSY_LOCK_SECONDS`` without
+        a sign of life means the worker died, and the conversation must not stay
+        wedged. A diagnosis outlives that window, so it has to say it is still
+        here -- otherwise its own conversation stops being busy mid-generation
+        and a second turn starts over the one still running.
 
-        The thread ends on its own: once the slot is no longer this turn's --
-        job completed, job stopped, claim already lapsed -- ``renew_turn_claim``
-        returns false and the loop stops. It is therefore never the thing that
-        decides when a generation is over.
+        The renewer yields on two conditions, and both matter:
+
+        * the turn is no longer this job's (``renew_turn_claim`` says so) --
+          job completed, job stopped, claim already lapsed;
+        * **the job row is finished** (``expired``/``cancelled``/terminal) --
+          even while this worker is still catching up. Renewing past that point
+          would keep holding a conversation for a job the user already polls as
+          over, which is the gate outliving the thing it gates.
+
+        It is a stop signal rather than a bare thread so that a worker which is
+        done stops renewing *now*: waiting out the sleep interval means a
+        finished diagnosis holds the slot for one renewal period longer than it
+        lives, and under sustained traffic those sleeping threads pile up.
         """
+        stop = threading.Event()
         if conversation_turn is None:
-            return
+            return stop
         conversation_id, scope_fingerprint, turn_no = conversation_turn
 
         def renew() -> None:
             from aiops_diagnostics.conversation_store import ConversationError
 
-            while True:
+            while not stop.wait(RENEW_TURN_CLAIM_SECONDS):
                 with contextlib.suppress(ConversationError):
+                    if self.store.diagnosis_is_finished(diagnosis_id):
+                        return
                     if not self.conversation_store.renew_turn_claim(
                         conversation_id, scope_fingerprint, turn_no
                     ):
                         return
-                time.sleep(RENEW_TURN_CLAIM_SECONDS)
 
         threading.Thread(target=renew, name=f"turn-claim-{turn_no}", daemon=True).start()
+        return stop
 
     def _complete_conversation_turn(
         self,
@@ -751,6 +765,7 @@ class GatewayRuntime:
         *,
         cancelled: bool = False,
         guarded: bool = False,
+        stop_renewer: threading.Event | None = None,
     ) -> None:
         """Write a finished answer into the conversation turn (if any).
 
@@ -771,6 +786,8 @@ class GatewayRuntime:
         """
         if guarded:
             cancelled = True
+        if stop_renewer is not None:
+            stop_renewer.set()
         if conversation_turn is None:
             return
         from aiops_diagnostics.conversation_store import ConversationError
@@ -882,16 +899,15 @@ class GatewayRuntime:
             # must not survive -- an answer-less row would hold the
             # conversation's slot until the claim lapsed and then sit in the
             # history with no answer.
+            # No renewer exists yet: the job never started.
             self._complete_conversation_turn(conversation_turn, request.problem, None, cancelled=True)
             return
         started_ms = time.monotonic()
         # The conversation claim is the frontend's concurrency gate while this
         # runs, but a claim only counts as live for BUSY_LOCK_SECONDS (120s) and
-        # a diagnosis outlives that: without a sign of life the conversation
-        # stops being busy mid-generation and a second turn starts over the
-        # one still running. The renewer stops the moment the slot is gone --
-        # its own completion, a stop, or a lapsed claim all take it there.
-        self._start_turn_claim_renewal(conversation_turn)
+        # a diagnosis outlives that. The renewer stops at the terminal writes
+        # below, on a stop, on expiry, or when the claim stops being ours.
+        claim_stop = self._turn_claim_renewer(diagnosis_id, conversation_turn)
         settings = Settings.from_config(self.gateway_settings.server_config_file)
         settings.agent.run_root = self.diagnostic_settings.agent.run_root
         try:
@@ -923,7 +939,12 @@ class GatewayRuntime:
             # by the cancellation path (or by the refused-claim path), and it
             # must not claim an answer this job never produced.
             self._complete_conversation_turn(
-                conversation_turn, request.problem, None, cancelled=True, guarded=not ok
+                conversation_turn,
+                request.problem,
+                None,
+                cancelled=True,
+                guarded=not ok,
+                stop_renewer=claim_stop,
             )
             self._record_metric(
                 tenant_id=context.effective_tenant_id,
@@ -948,7 +969,12 @@ class GatewayRuntime:
                 error_message=error_message,
             )
             self._complete_conversation_turn(
-                conversation_turn, request.problem, None, cancelled=True, guarded=not ok
+                conversation_turn,
+                request.problem,
+                None,
+                cancelled=True,
+                guarded=not ok,
+                stop_renewer=claim_stop,
             )
             self._record_metric(
                 tenant_id=context.effective_tenant_id,
@@ -983,6 +1009,7 @@ class GatewayRuntime:
             request.problem,
             {"summary": dumped.get("summary"), "root_cause": dumped.get("root_cause")},
             guarded=not stored,
+            stop_renewer=claim_stop,
         )
         self._record_metric(
             tenant_id=context.effective_tenant_id,
