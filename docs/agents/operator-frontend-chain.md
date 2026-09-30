@@ -103,8 +103,9 @@ AI-Ops 侧**零改动**（它不在上面那四个里，会被忽略）。**请�
   ▼
 41 的 Nginx（api.mall.qushiyun.com 的 /v1/）
   │  按 X-Business-Entry 分流：
-  │    · operator  → 透传用户 JWT；并注入 X-AIOps-Source-Key（来源密钥）
-  │    · consumer/缺失 → 换成 AI-Ops 服务令牌（客户端链路，行为与今天逐字一致）
+  │    · operator  → **改经公司网关**（cloud-gateway）：透传用户 JWT，
+  │                 由**网关那一跳**注入 X-AIOps-Source-Key（2026-09-30 D-4 起）
+  │    · consumer/缺失 → 直连 AI-Ops，换成 AI-Ops 服务令牌（行为与今天逐字一致）
   ▼
 AI-Ops 网关（127.0.0.1:8788）
   │  ① 凭据：带来源密钥 ⇒ 认用户 JWT（按**公司当前口径**判定：不验签、不判 exp；
