@@ -81,6 +81,6 @@ jobs:
             echo
             echo "判定逻辑见 \`.sandcastle/deploy-state.mjs\`；阈值：卡住 30 分钟、连续失败 3 次。"
             echo
-            echo "**批准门未被改动**：\`production-41\` 的 \`required_reviewers\` 保留。"
+            echo "**批准门已于 2026-09-30 移除**（所有者决定）：合并即自动部署，不再有人工批准。"
             echo "卡住时谁负责批准、怎么办，见 \`docs/agents/env-41-runbook.md\` 的 CD 一节。"
           } >> "$GITHUB_STEP_SUMMARY"

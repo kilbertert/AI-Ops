@@ -24,16 +24,19 @@
 - `production-41` 环境本身**保留**（部署账本、只允许 main 的分支策略都在），
   去掉的只是 `required_reviewers`。
 
-### 两头都做了什么（缺一不可）
+### 只有一处要改，因为另一处**做不到**
 
 | 位置 | 动作 |
 |---|---|
-| GitHub `production-41` 环境 | 移除 `required_reviewers`（决定本身生效的地方） |
-| `.github/workflows/cd.yml` | 保留一个**显式**的自动批准步骤（`github.token`，权限只到 `actions`） |
+| GitHub `production-41` 环境 | 移除 `required_reviewers`（决定生效的**唯一**地方） |
+| `.github/workflows/cd.yml` | **不改** —— 而且**做不出**一个自动批准来 |
 
-⚠️ **回滚要两处一起**：只把 reviewer 加回环境，会得到一个**自动批准自己部署的假门**；
-只有同时删掉 workflow 里的步骤，门才真的回来。反过来，只有步骤没有 reviewer 时
-它是空转的（无事可做），所以保留了它反而是**看得见**的那一头。
+⚠️ 我最初的方案是在 `cd.yml` 里加「自动批准本 run 自己的部署」的步骤，理由写成"回滚时
+它是看得见的那一头"。**评审指出并已核实：它做不到。** GitHub 的 environment 审批发生在
+**job 的步骤开始之前** —— 有 reviewer 时 job 自己卡在门上，那个步骤**根本不会被执行**；
+没有 reviewer 时它又无事可做 ⇒ 留着只是**死代码**。已删（连同为它加的 `actions: write`）。
+
+⇒ **回滚也因此只有一处**：把 reviewer 加回环境，workflow 不需要动。
 
 ### 拿到的与丢掉的
 
