@@ -418,36 +418,29 @@ def test_the_sweep_sql_is_written_down_only_in_this_module() -> None:
     assert offenders == [], "; ".join(offenders)
 
 
-def _expire_statements_calls() -> dict[str, str]:
-    """Every `expire_statements(table, profile, ...)` in the store, by table.
+def _expire_pairs() -> tuple[dict[str, str], dict[str, str]]:
+    """`(method pairs, startup pairs)` — kept apart, on purpose.
 
-    Read from the syntax tree so both shapes are covered: the three
-    `_expire_*` methods AND the startup loop, which pairs a table with a
-    profile inside a tuple. The first version of this check walked the methods
-    only and missed the loop — where a swap is equally invisible today, because
-    the two profiles agree on every value their tables actually produce.
+    Two sources pair a table with a profile: the three `_expire_*` methods and
+    the startup loop. Merging them into one dict lets a correct entry in one
+    source MASK a wrong entry in the other (last write wins), which is exactly
+    the failure this check exists to catch. Returning them separately is what
+    makes both sources assertable.
     """
     import ast
     from pathlib import Path
 
     store = Path(__file__).parents[1] / "src" / "aiops_diagnostics" / "gateway_store.py"
     tree = ast.parse(store.read_text(encoding="utf-8"), filename=str(store))
-    pairs: dict[str, str] = {}
+    methods: dict[str, str] = {}
+    startup: dict[str, str] = {}
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        if getattr(node.func, "id", "") != "expire_statements":
-            continue
-        # Only the literal call sites pair a table with a profile; the startup
-        # loop calls with its loop variables, and those literals are read below.
-        if not isinstance(node.args[0], ast.Constant):
-            continue
-        table = node.args[0].value
-        pairs[table] = ast.unparse(node.args[1])
-    # The startup path builds its pair as a loop over literals: read those too,
-    # so a swap there is caught by the same assertion. `table`/`profile` are the
-    # loop variables themselves — the literals are the tuple elements.
-    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.Call)
+            and getattr(node.func, "id", "") == "expire_statements"
+            and isinstance(node.args[0], ast.Constant)
+        ):
+            methods[node.args[0].value] = ast.unparse(node.args[1])
         if not isinstance(node, ast.For) or not isinstance(node.iter, ast.Tuple):
             continue
         if "expire_statements" not in ast.unparse(node):
@@ -455,16 +448,15 @@ def _expire_statements_calls() -> dict[str, str]:
         for element in node.iter.elts:
             if not isinstance(element, ast.Tuple) or len(element.elts) != 2:
                 continue
-            table = ast.unparse(element.elts[0]).strip("\"'")
-            profile = ast.unparse(element.elts[1])
-            if table in {"table", "profile"}:
+            table = element.elts[0]
+            if not isinstance(table, ast.Constant):
                 continue
-            pairs[table] = profile
-    return pairs
+            startup[table.value] = ast.unparse(element.elts[1])
+    return methods, startup
 
 
 def test_each_sweep_names_the_profile_of_its_own_table() -> None:
-    """The table and the profile are two names for one thing — everywhere.
+    """The table and the profile are two names for one thing — in both shapes.
 
     Substituting another profile's name is behaviourally invisible on today's
     data — the health table has no `cancelled`, so sweeping it with the
@@ -472,11 +464,17 @@ def test_each_sweep_names_the_profile_of_its_own_table() -> None:
     sweep would then follow a profile that does not describe its table, and the
     first status either profile gains would silently apply to both.
 
-    Every pairing in the module is read, including the startup loop's: that is
-    where the first version of this check was blind.
+    Asserted per source rather than on a merged view: with one dict, a correct
+    startup pair would overwrite a wrong `_expire_*` pair and the check would
+    pass on the very defect it names.
     """
-    assert _expire_statements_calls() == {
+    expected = {
         "health_report_jobs": "HEALTH_JOB",
         "standard_diagnoses": "DIAGNOSIS",
         "assistant_questions": "QUESTION",
-    }, _expire_statements_calls()
+    }
+    methods, startup = _expire_pairs()
+    assert methods == expected, methods
+    # The startup path sweeps two of the three; each must still name its own.
+    assert startup, "the startup sweep was not found: this check points at nothing"
+    assert startup == {table: expected[table] for table in startup}, startup
