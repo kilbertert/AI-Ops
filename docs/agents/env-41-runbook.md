@@ -18,7 +18,8 @@
 | 服务配置（**进程环境**） | `/etc/aiops-41/gateway.env`。systemd 单元的 `EnvironmentFile` 是**它**，不是 `production.env` |
 | 平台清单 | `/opt/aiops-41/ops/environments/env-41.toml` |
 | 服务单元 | `aiops-gateway-41.service`、`aiops-36-kb-tunnel.service` |
-| 回环监听 | Gateway `127.0.0.1:8788`；KB 隧道 `127.0.0.1:29380`（→ 36 kb-service） |
+| Gateway 监听 | **`172.18.0.1:8788`**（宿主侧 docker 网桥；2026-09-30 D-2 起，原为 `127.0.0.1`）—— **本机回环不再监听**，`curl 127.0.0.1:8788` 会「连不上」，那不代表服务挂了 |
+| KB 隧道 | `127.0.0.1:29380`（→ 36 kb-service） |
 | 公网入口 | `https://api.mall.qushiyun.com/v1/*`（**不是** `/aiops/v1/*`，后者 404） |
 | 会话 Redis | `127.0.0.1:6379`（41 本机），键前缀 `app:3rd_session:` |
 | 业务库 | MySQL `192.168.1.45:3306/cloud_charging_pile`（账号 `mall`，只读用途） |
@@ -463,6 +464,13 @@ nginx 在**同一个 location 内**对同名头**不做覆盖**，而是**两条
 > 那是路径没命中或 workflow 出错，查 `gh run list --workflow=cd.yml`，不要绕过去手敲。
 > 卡住/连续失败会由 `CD Watch` 开 `cd:needs-attention` 票（#407）。
 >
+> 🔴 **反向：若你把 D-2 的暴露回滚了（服务绑回 `127.0.0.1`），必须同时把
+> `deploy-41.sh` 的健康检查改回回环**（`AIOPS_HEALTH_HOST=127.0.0.1` 或直接改默认值）——
+> 否则它会拿网桥地址去查一个只监听回环的服务，**每次部署都自检失败并回滚**，
+> 而且回滚后的"服务是否恢复"也会被误报为失败（评审指出）。这条与正向的
+> 「绑定 + nginx 上游必须一起改」是同一个道理的第三面：**地址这件事牵动服务、nginx、
+> 部署脚本三处。**
+>
 > **依赖不在本流程范围。** `src/` 与运行时参考资料由 CD 同步；依赖清单
 > （`pyproject.toml` / `uv.lock`）不一致时 CD 会**拒绝部署**。更新 41 的依赖环境走
 > [依赖环境更新流程](env-41-dependency-update.md) —— 那是一次人工的、要留记录的
@@ -502,7 +510,7 @@ rsync -a --delete /tmp/sync-check/aiops_diagnostics/ /opt/aiops-41/src/aiops_dia
 chown -R aiops41:aiops41 /opt/aiops-41/src
 systemctl restart aiops-gateway-41.service && sleep 5
 systemctl is-active aiops-gateway-41.service
-curl -s --max-time 6 http://127.0.0.1:8788/health
+curl -s --max-time 6 http://172.18.0.1:8788/health
 rm -rf /tmp/sync-check /tmp/aiops-sync.tar.gz'
 ```
 
@@ -533,7 +541,7 @@ rsync -a --delete /var/backups/aiops-41/backup-<时间戳>/src/ /opt/aiops-41/sr
 chown -R aiops41:aiops41 /opt/aiops-41/src
 systemctl restart aiops-gateway-41.service && sleep 5
 systemctl is-active aiops-gateway-41.service
-curl -s --max-time 6 http://127.0.0.1:8788/health'
+curl -s --max-time 6 http://172.18.0.1:8788/health'
 ```
 
 回滚前建议先干跑确认路径正确（应**无**源码差异，只可能有 `__pycache__` 时间戳差异）：

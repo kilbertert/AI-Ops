@@ -22,7 +22,7 @@ if [ "$REMOTE_RC" -eq 124 ]; then
   cat >&2 <<EOF
 超时：远端命令被中途 kill，主机侧的自检与回滚块**没有机会执行**。
 生产可能停在半途状态，须人工上机确认：
-  ssh $HOST_TARGET 'systemctl is-active $SERVICE; curl -s http://127.0.0.1:8788/health'
+  ssh $HOST_TARGET 'systemctl is-active $SERVICE; curl -s ${AIOPS_HEALTH_HOST:-172.18.0.1}:8788/health'
 EOF
   exit 124
 fi
