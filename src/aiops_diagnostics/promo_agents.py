@@ -58,17 +58,53 @@ _PROMO_INTENT_CUES = {
     "solution_discovery": ("行业方案", "行业解决方案", "解决方案", "industry solution"),
 }
 
+#: 「说出意图的**词**」之外的第二种形状：**结构**（#413）。
+#:
+#: 只堆词表有一个可证的漏网面 —— `重卡充电案例` 缺的正是「客户」两个字，而用户已经
+#: 说清了他要**案例**（实测：2026-09-24，41 上落到 `consumer.faq.q009`「RFID 卡怎么
+#: 绑定」，用户想看案例却拿到操作说明）。补一条 `重卡充电案例` 只能挡住这一条，
+#: 下一个说法照样漏。
+#:
+#: 但也不能退回裸 `案例`/`方案`：那个方向已经被实测证伪 —— #408 期间**曾**把
+#: `case_exploration`/`solution_discovery` 加进 FAQ 抑制集合，代价是模型把**目录自己的
+#: 标题**里的 "Guide"、  "SOP" 读成宣传，给 q010 的标题加个 "Please show me the "
+#: 就变成宣传卡片（见 `docs/validation.md` 的「八之三」与取舍 2）。
+#:
+#: ⇒ 取两者之间：**「案例」可以裸出现**（实测 45 条目录问题 + 315 个标题变体、86 条真实
+#: 语料里**没有一条**支持类问题用它），而**「方案」必须带场景词**（`我的充电方案是什么`
+#: 就是反例：它在问自己的充电安排，不是要行业方案）。
+#:
+#: 中文里「X案例」是「案例」的常规写法（`重卡充电案例`、`新加坡无人电动巴士案例`），
+#: 因此裸「案例」不是原注释担心的那种宽泛词 —— 原注释把两者放在一起是过度概括。
+_BARE_INTENT_CUES = {"case_exploration": ("案例",)}
+
+#: 「场景词 + 方案」= 行业方案。场景词表**复用** `_PROMO_SCENARIO_CUES`
+#: （它本来就在描述行业场景，另立一份只会漂移）。
+_SCENARIO_SOLUTION_WORD = "方案"
+_SCENARIO_SOLUTION_INTENT = "solution_discovery"
+
 _AGENT_VERSION_REF = re.compile(r"^agt_[A-Za-z0-9]{8,64}#v\d{1,6}$")
 
 
 def promo_intent_from_text(question: str) -> str | None:
-    """Deterministic promotional-intent cue match, or None."""
+    """Deterministic promotional-intent cue match, or None.
+
+    两条判据，**先后有序**：先词表（精确说出意图），再结构（#413）。
+    顺序不影响结果（两条都不重叠），但写死顺序是为了让后来者一眼看出谁是主判据。
+    """
     text = (question or "").strip().lower()
     if not text:
         return None
     for intent, cues in _PROMO_INTENT_CUES.items():
         if any(cue in text for cue in cues):
             return intent
+    # 结构判据一：中文「X案例」——「案例」单独出现即是案例意图。
+    for intent, cues in _BARE_INTENT_CUES.items():
+        if any(cue in text for cue in cues):
+            return intent
+    # 结构判据二：场景词 + 「方案」。**两者缺一不可**，所以不能并进上面的裸词表。
+    if _SCENARIO_SOLUTION_WORD in text and any(scenario.lower() in text for scenario in _PROMO_SCENARIO_CUES):
+        return _SCENARIO_SOLUTION_INTENT
     return None
 
 
