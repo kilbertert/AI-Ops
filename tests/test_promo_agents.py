@@ -136,6 +136,12 @@ def test_no_ordinary_support_wording_enters_the_promotional_path() -> None:
         "I'd like to see customer cases": "case_exploration",
         "Show me a customer case": "case_exploration",
     }
+    # 方向零：**上表里的问句必须仍在这份语料里**。否则语料换掉一条时，
+    # 下面两个方向都在测一组**不在语料中的**句子，而用例照样通过 ——
+    # 那样它证明的是"这 14 句能命中"，不是"语料里这 14 句能命中"。
+    absent = sorted(set(expected_promo) - set(questions))
+    assert absent == [], f"下列问句已不在语料里，请重核期望表：{absent}"
+
     # 方向一：**不该命中的不许命中**。
     offenders = [
         question
