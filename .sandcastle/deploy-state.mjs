@@ -108,10 +108,17 @@ export function classifyRun(run, options = {}) {
       reason: `等待批准已超过 ${stuckMinutes} 分钟 —— 部署尚未发生`,
     };
   }
+  // 剩下的都是「作业已创建、没有待批准部署」：要么在跑（`in_progress` 已在上面返回），
+  // 要么**已获批、在等并发锁**（前一个部署还在跑）。后者是**合法排队** —— 锁一次只放
+  // 一个 run 进去，等多久取决于前一个跑多久，与"卡住"无关（评审指出：这里曾判 deadlocked）。
+  //
+  // 那它自己挂住怎么办？它的 job 有 20 分钟 `timeout-minutes`，超时会被取消并释放锁。
+  // **没有超时兜底的那个形状恰恰是 `jobs=0`**（job 从未创建 ⇒ 它自己的超时也没机会生效），
+  // 所以死锁判据只落在那一条上，这也是 #407 实测到的形态。
   return {
-    kind: "deadlocked",
+    kind: "in-flight",
     ageMinutes: ageMinutesWait,
-    reason: `无任何部署在等批准却已超过 ${stuckMinutes} 分钟 —— 与"没人点批准"不同，这是卡住了`,
+    reason: "已获批准、在等并发锁或正在收尾 —— 合法排队，不看时长",
   };
 }
 
@@ -152,6 +159,11 @@ export function overdueUnfinished(runs, { now, stuckMinutes } = {}) {
   const overdue = [];
   for (const run of runs) {
     if (!UNFINISHED.has(String(run.status ?? ""))) continue;
+    // ⚠️ **只有这些才算「卡住」** —— 本函数**已经**筛掉 `in-flight`，因此调用方
+    // **不能**用 `verdict.kind !== "in-flight"` 当判据：那会把普通排队也当成异常。
+    // 曾经这样写错过一次，而且用例没抓到（断言的是 `assess().ok`，排队两条 run 的
+    // 组合恰好仍为 true）。现在由显式枚举把「算」与「不算」**都**钉住 ——
+    // 见 `cd-watch.test.mjs` 的 8b。
     const verdict = classifyRun(run, { now, stuckMinutes });
     if (verdict.kind === "stuck" || verdict.kind === "deadlocked" || verdict.kind === "indeterminate") {
       overdue.push({ run, verdict });
@@ -249,9 +261,9 @@ function demo() {
   const dead = classifyRun({ ...base, totalCount: 0, pendingCount: 0 }, { now });
   console.assert(dead.kind === "deadlocked", "超时仍 jobs=0 应为 deadlocked", dead);
 
-  // 死锁（有作业、无人等批准）
-  const locked = classifyRun({ ...base, totalCount: 1, pendingCount: 0 }, { now });
-  console.assert(locked.kind === "deadlocked", "有作业且无 pending 应为 deadlocked", locked);
+  // 已获批、在等并发锁 ⇒ 合法排队，**不是**死锁（曾在 demo 里断言成 deadlocked）
+  const queued = classifyRun({ ...base, totalCount: 1, pendingCount: 0 }, { now });
+  console.assert(queued.kind === "in-flight", "已获批在等锁应为 in-flight", queued);
 
   // 取数失败（null）不得被当成 0
   const unknown = classifyRun({ ...base, totalCount: null, pendingCount: null }, { now });

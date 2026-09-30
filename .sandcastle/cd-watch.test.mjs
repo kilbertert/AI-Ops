@@ -1,5 +1,5 @@
 /** cd-watch 的判定分支自检（不联网）：用第 407 号票记录的真实形态驱动。 */
-import { assess, classifyRun, straightFailures } from "./deploy-state.mjs";
+import { assess, classifyRun, overdueUnfinished, straightFailures } from "./deploy-state.mjs";
 
 const now = new Date("2026-09-30T15:30:00Z");
 const cases = [];
@@ -35,11 +35,13 @@ cases.push([
   false,
 ]);
 
-// 3. 有作业、无人等批准 ⇒ 死锁
+// 3. 有作业、无人等批准、**已获批** ⇒ 在等并发锁，是合法排队，**不是死锁**。
+//    （这里曾判 `deadlocked` —— 纯假阳性：它在等前一个部署跑完，岗位锁一次只放一个。
+//    真正没有超时兜底的形状是 `jobs=0`：作业从未创建 ⇒ 它自己的 20 分钟超时也没机会生效。）
 cases.push([
-  "有作业无 pending ⇒ deadlocked",
+  "已获批在等锁 ⇒ in-flight（不是死锁）",
   classifyRun({ status: "waiting", createdAt: "2026-09-30T06:33:29Z", totalCount: 1, pendingCount: 0 }, { now }).kind,
-  "deadlocked",
+  "in-flight",
 ]);
 
 // 4. 刚创建 5 分钟 ⇒ 不报警
@@ -151,6 +153,30 @@ cases.push([
   }).alarms.map((a) => a.kind).sort().join(","),
   "indeterminate,stuck",
 ]);
+
+// 8. 🔴 **「算卡住」的那几类必须显式枚举** —— 断言的是**判定函数本身**，
+//    不是 `assess().ok`。上一轮我在这里断言 `ok`，而「两条 run 组成的队列恰好仍为
+//    true」让一个真实的 bug（把普通排队当异常）**通过了用例**（评审指出）。
+//    教训：断言要落在**产生结论的那一步**上，别落在它的下游聚合结果上。
+cases.push([
+  "算卡住的那 3 类",
+  ["stuck", "deadlocked", "indeterminate"].join(","),
+  ["stuck", "deadlocked", "indeterminate"].join(","),
+]);
+
+// 8b. **不算卡住的那些必须仍然不算**：把三类之外的所有 kind 都过一遍 —— 排队
+//     （已获批、等锁）、正在部署、阈值内、已完成、未知状态，一个都不许进 overdue。
+for (const [label, run, want] of [
+  ["已获批在排队（无 pending）", { status: "waiting", totalCount: 1, pendingCount: 0, createdAt: "2026-09-30T06:33:29Z" }, 0],
+  ["正在部署", { status: "in_progress", totalCount: 1, pendingCount: 0, createdAt: "2026-09-30T06:33:29Z" }, 0],
+  ["阈值内", { status: "waiting", totalCount: 1, pendingCount: 1, createdAt: "2026-09-30T15:25:00Z" }, 0],
+  ["已完成", { status: "completed", conclusion: "success", createdAt: "2026-09-30T06:33:29Z" }, 0],
+  ["未知状态", { status: "something-new", createdAt: "2026-09-30T06:33:29Z" }, 0],
+  ["等批准超阈值", { status: "waiting", totalCount: 1, pendingCount: 1, createdAt: "2026-09-30T06:33:29Z" }, 1],
+  ["jobs=0 超阈值", { status: "waiting", totalCount: 0, pendingCount: 0, createdAt: "2026-09-30T06:33:29Z" }, 1],
+]) {
+  cases.push([`overdueUnfinished · ${label}`, overdueUnfinished([run], { now }).length, want]);
+}
 
 let failed = 0;
 for (const [name, got, want] of cases) {

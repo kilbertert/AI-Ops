@@ -151,15 +151,17 @@ function main() {
   //   · `fetchRuns` —— 最近 N 次（判「连续多少次没成功」；这条本来就只看最近）。
   const unfinished = fetchUnfinished({ limit: 100 });
   const recent = fetchRuns({ limit });
-  // 两份取数各自独立失败：`fetchedOk=false` 表示**至少一份**没拿到；
-  // 具体哪一份交给 `assess`（未完成集合为 `null` 表示它那份失败）。
-  const fetchedOk = unfinished.fetchedOk || recent.fetchedOk;
+  // 🔴 **两份取数必须都成功才算取数成功** —— 它们服务两条**独立**判据，任何一份失败
+  // 都意味着有一条判据无法成立。用 `||` 合并会让「最近取数失败 + 未完成取数成功」
+  // 变成「一切正常」：那时连续失败计数喂的是未完成列表（全是未完成 ⇒ 计数恒为 0），
+  // 恰好把「连续 N 次没成功」这条判据变成永远不响（评审指出）。
+  const fetchedOk = unfinished.fetchedOk && recent.fetchedOk;
   const error = unfinished.error ?? recent.error;
   // 「有没有谁卡住」吃**全部未完成**的 run；「连续多少次没成功」吃**最近 N 次**。
   // 两份数据不能互换 —— 用窗口去找卡住的 run 等于用一个随时间收窄的窗口去找一个
   // 随时间更该被看见的东西。
   const result = assess({
-    runs: recent.fetchedOk ? recent.runs : unfinished.runs,
+    runs: recent.runs,
     // `null` = 这份取数失败（**不是**「没有未完成的 run」）—— 空数组与 null 含义不同。
     unfinishedRuns: unfinished.fetchedOk ? unfinished.runs : null,
     fetchedOk,
