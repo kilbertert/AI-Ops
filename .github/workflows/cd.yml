@@ -25,10 +25,10 @@ name: CD
 #      而卡住的等待不会自己出声（#407 的守望者补上了声音，但门本身还在挡路）；
 #   2. 「合并了但没部署」不再是一种可以停留很久的状态。
 #
-# ⚠️ **回滚**：在 GitHub 的 production-41 环境上重新加回 required reviewer 即可，
-# 不需要改本文件。决定记录见 `docs/agents/env-41-runbook.md` 的 CD 一节。
-# 若将来要把这道门加回来，**同时**要把下面那个自动 approve 步骤删掉 —— 只加
-# reviewer 而不删步骤，会得到一个自动批准自己部署的假门。
+# ⚠️ **回滚就是一处**：在 GitHub 的 `production-41` 环境上重新加回 required reviewer。
+# 本文件不需要改，而且**没有**任何"自动放行"的代码要一起删 —— 见 job 的 environment
+# 注释：job 内是不可能批准自己的（审批在步骤开始之前）。决定记录见
+# `docs/agents/env-41-runbook.md` 的 CD 一节。
 
 on:
   push:
@@ -60,9 +60,6 @@ on:
 
 permissions:
   contents: read
-  # 自动批准那一步要用。范围只到 actions（读+写该 workflow 自己的运行），
-  # 不涉 contents —— 它不能改代码，只能批准一次已经跑起来的部署。
-  actions: write
 
 # 并发控制放在 **job** 上，不放在 workflow 上 —— 这个区别是全部要点，两个错误版本
 # 都栽在这里（详见 job 的 concurrency 注释）：
@@ -103,9 +100,11 @@ jobs:
     # 部署记录、分支策略（只允许 main）、以及"哪个 commit 部署过、结果如何"的账本
     # 全部保留，丢掉的是那个「点一下」。
     #
-    # 下面那个 approve 步骤仍然保留并**先于部署**执行：环境若在别处被重新加了
-    # required reviewer（例如回滚时只改了环境设置而忘了这里），它会自动放行 ——
-    # **不要**把两者当成互相替代：删掉本步骤 + 加回 reviewer 才是完整的回滚。
+    # 🔴 **不要试图在 job 里自动批准自己的部署** —— 评审指出并已实测确认：
+    # GitHub 的 environment 审批发生在 **job 的步骤开始之前**，所以在 job 里写一个
+    # `pending_deployments` 批准步骤，在有 reviewer 时它**根本不会被执行**（job 自己
+    # 就卡在门上），在没有 reviewer 时它无事可做。那样写只会留下一个看起来像安全网的
+    # 死代码。要么去掉 reviewer（当前做法），要么保留门；**没有"在 job 内自动放行"这条路**。
     environment: production-41
 
     steps:
@@ -122,39 +121,6 @@ jobs:
       # 是按 workflow ref/SHA 记的，若实际部署了另一个 sha，账本就会把生产归到错的
       # commit 上 —— 而「哪个 commit 在跑」正是这套 CD 要能回答的问题。
       # 回滚走 --rollback-to（见 runbook §2 的应急路径）。
-      - name: Approve this run's pending deployment
-        # 自动放行本 run 自己的部署。
-        #
-        # 为什么留着它：环境的 required reviewer 已按决定去掉，但**回滚路径**是
-        # 「把 reviewer 加回来」；若那时忘了删本步骤，就会得到一个"自动批准自己"的
-        # 假门 —— 而留着它反而不会：没有 reviewer 时它无事可做，有 reviewer 时它是
-        # 一个**看得见**的自动批准点，至少不会让人误以为门还在。
-        #
-        # ⚠️ **必须显式给 `GH_TOKEN`**：这台 runner 上的 `gh` 是**常驻登录**的
-        # （`~/.config/gh/hosts.yml`，账号是仓库所有者），不设这个变量，
-        # `gh api` 就会用那把**管理员 PAT** —— 权限远大于这里需要的，而且与部署
-        # 身份不是同一个。`github.token` 按上面的 `permissions:` 只到 actions，
-        # 它**不能**批准其它 workflow 的运行、不能改代码、不能碰环境设置。
-        env:
-          RUN_ID: ${{ github.run_id }}
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          # 列出本 run 待批准的部署；没有就什么都不做（环境没挂 reviewer 时的正常状态）。
-          ids=$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/pending_deployments" \
-                  --jq '[.[] | .environment.id] | join(" ")')
-          if [ -z "$ids" ]; then
-            echo "本 run 没有待批准的部署（环境未挂 required reviewer）—— 跳过。"
-            exit 0
-          fi
-          for env_id in $ids; do
-            echo "自动批准环境 id=${env_id}"
-            gh api --method POST \
-              "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}/pending_deployments" \
-              -F "environment_ids[]=${env_id}" -f state=approved >/dev/null
-          done
-          echo "已自动批准本 run 的全部待批准部署。"
-
       - name: Resolve the commit to deploy
         id: target
         run: |
