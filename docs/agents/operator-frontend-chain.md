@@ -66,16 +66,32 @@ Content-Type: application/json
 > 别按「反正会静默降级」理解。
 > **`third-session` 不用发**（那是客户端那条链路的凭据，管家端用 JWT）。
 
-### 其余头：一律忽略（含两个已知的形状问题）
+### 其余头：AI-Ops 只读这四个（别照着「删干净」）
 
-AI-Ops 只读两个头（`Authorization` + `X-Business-Entry`），
-**其余全部忽略**：`client-type`、`tenant-id`、`app-id`、`Referer`、
-`sec-ch-*`、`Connection` 等，发不发、发什么都不影响结果。两个已知问题**前端侧待确认**：
+公开路径上 AI-Ops **实际会读**的请求头共四个：
 
-| 头 | 现状 | 说明 |
+| 头 | 谁需要 | 说明 |
 |---|---|---|
-| `client-type: H5` | 形状正常，但**AI-Ops 完全不读** | 它由**公司后端**读。两套取值并存是既定事实（见 [client-type-vs-business-entry.md](client-type-vs-business-entry.md)），**不要**指望用它在 AI-Ops 侧切入口 |
-| `app-id;` | **畸形头**（没有冒号，不是合法的 `name: value`） | 已随前端截图见到的形状记录在此，**AI-Ops 侧零改动**（忽略即可）。**请前端确认是否笔误**：是笔误就去掉；确实需要就补成合法形状 `app-id: <值>` —— 无论如何**不写进接口契约** |
+| `Authorization` | **管家端必需** | 用户 JWT（管家端）或服务令牌（客户端） |
+| `X-Business-Entry` | **管家端必需** | 内容域分流；**不是身份**（见上） |
+| `Accept-Language` | **可选，但影响结果** | 决定回答语言（`en` / `zh-CN` …）。**删掉它会改变语言** |
+| `Range` | 可选 | 媒体分片读取用 |
+
+**其余头一律忽略** —— `client-type`、`tenant-id`、`app-id`、`Referer`、`sec-ch-*`、
+`Connection`、`third-session` 等，发不发、发什么都不影响结果：
+
+- ⚠️ **`third-session` 是例外中的例外**：它在**客户端**那条链路上是凭据（删掉会让客户端
+  认证失败），只是**管家端**这条链路不用它。所以「可以删」只针对管家端；
+- `client-type: H5` 形状正常，但 **AI-Ops 完全不读**（它由**公司后端**读）。两套取值并存
+  是既定事实（见 [client-type-vs-business-entry.md](client-type-vs-business-entry.md)），
+  **不要**指望用它在 AI-Ops 侧切入口；
+- `tenant-id` 同上：服务端取自 JWT 里的 `tenant_id`，发了也不读。
+
+### 一个需要前端确认的小问题（B4）
+
+前端发出的 `-H 'app-id;'` 是一个**畸形头**（没有冒号，不是合法的 `name: value`）。
+AI-Ops 侧**零改动**（它不在上面那四个里，会被忽略）。**请前端确认是否笔误**：
+是笔误就去掉；确实需要就补成合法形状 `app-id: <值>` —— 无论如何**不写进接口契约**。
 
 ---
 

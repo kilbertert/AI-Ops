@@ -355,8 +355,8 @@ nginx 在**同一个 location 内**对同名头**不做覆盖**，而是**两条
 
 ⇒ 运维口径随之改为：**换钥匙既不能救这条链（判据不看它），当前唯一的外部判据是
 来源密钥的注入主体** —— 那正是 D 批（`operator-repair-blueprint.md` §2）要施工的东西。
-在此之前**不对外宣称可用**。实测与判定过程见 `../../validation.md` 与
-`../../agents/operator-repair-blueprint.md` §0.1。
+在此之前**不对外宣称可用**。实测与判定过程见 `../validation.md` 与
+`operator-repair-blueprint.md` §0.1。
 
 ### ✅ 2026-09-29：本节描述的配置**已在 41 落地并验收**
 

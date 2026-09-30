@@ -7,6 +7,62 @@
 
 
 
+## B 批（联调期形状固化）交付：入口头契约 + 三处判据陈述更正（2026-09-30）
+
+**本节是 M1（B 批）的验证记录**，按 [operator-repair-blueprint.md](agents/operator-repair-blueprint.md) 实施。
+B 批共 4 项，本批交付 2 项；B3/B4 责任在前端（已在 #448 记一句，不立票）。
+
+### B1 · 入口头是「分流」不是「身份」—— 两个方向的对照
+
+**契约**：`X-Business-Entry` 定案为**前端自报**（目标态是 D 批之后由网关注入并覆盖同名头）。
+写入 `is_operator_entry` 的文档字符串，并由两条用例钉住边界。
+
+| 方向 | 输入 | 观察到的结果 |
+|---|---|---|
+| 凭据不成立 | 带 `operator` 头 + 无 Authorization | **`401 ACCESS_TOKEN_REQUIRED`** |
+| 同上 | 带 `operator` 头 + `Bearer not-a-jwt` | **`401 INVALID_ACCESS_TOKEN`** |
+| 同上 | 带 `operator` 头 + `alg: none` 的 JWT | **`401 INVALID_ACCESS_TOKEN`** ⇒ 该判据**不因不验签而放宽** |
+| 凭据成立 | 同一令牌 + `operator` 头，查**他人**名下、站点在集合内的订单 | **`202`**（站点集合口径） |
+| 凭据成立 | 同一令牌 + `consumer` 头，同上那张订单 | **`404 ORDER_NOT_FOUND`**（本人口径） |
+
+**最后两行是一对**：身份两侧完全相同（同一 B 端主体、同一 C 端用户），唯一变量是入口头，
+而结果差异**恰好是两种范围口径** —— 这就是「入口头决定分流、不决定身份」的可观察形式。
+若实现把它当放宽开关，`consumer` 那侧会变 `202`；当收紧开关，`operator` 那侧会变 `404`。
+
+**构造方式说明**：这一节用**公司一致模式**（生产默认）构造应用，**不用**远端 `check_token`
+替身 —— 后者在本文件里被替换成「永远返回成功体」，任何 `Authorization` 都会被接受，
+用它测「凭据不成立」会得到**假绿**（本批首版即因此转红后改写）。
+
+**变异覆盖**（各自单独施加，随后还原）：
+
+| 变异 | 结果 |
+|---|---|
+| 放宽 `alg` 判定（去掉 `!= "HS256"`） | **3 条转红**（含新增那条） |
+| `is_operator_entry` 改成恒 `True`（入口一出现就放宽） | **4 条转红**（含新增那条） |
+
+### B2 · 三处与生产实际相反的判据陈述
+
+跑通联调后留下的文档欠债里，最危险的是「写的与跑的不一样」——下一个人会照文档判断身份边界。
+
+| 位置 | 原写 | 更正为 |
+|---|---|---|
+| `README.md` 模块表 | 「校验落在公司权威的 `check_token`，不自验签」 | **本地 HS256**，且默认**不验签**；点名 `AIOPS_GATEWAY_COMPANY_TRUST_PAYLOAD` |
+| `operator-frontend-chain.md` | 「按公司 HS256 **验签**」 | 不验签、不判 `exp`；顶部提醒的**成因**同时改写 |
+| `butler-session-contract.md` | 「校验落在公司自己那一跳，不自己验签」 | 方向写反了：现在是「自己判，且判得与公司一样宽」 |
+| `env-41-runbook.md` §1.7 | 「唯一判据就是验签」 | 该句只在**严格模式**下成立，逐处加限定；两处更正合并成一节 |
+| `current-delivery-state.md` | 「唯一判据是验签，成因是钥匙」 | **据此行动会走偏**（换钥匙救不了这条链）；改为两条叠加，指向 D 批 |
+
+### 检查结果
+
+- 环境：dev host，worktree `.worktrees/AI-Ops-operator-shape-freeze`，基线 `4195843`。
+- `uv run ruff check .` → **All checks passed!**
+- `uv run ruff format --check .` → **236 files already formatted**
+- `PYTHONPATH=src uv run pytest` → **1509 passed**（基线 1507，净增 2），66.00s。
+
+**本批无 HTTP 契约行为变更、无 DB 变更**，故未新增 `acceptance.feature` 场景。
+
+---
+
 ## 管家端入口动作**已在 41 发布并端到端验收**（2026-09-28）
 
 **本节的地位**：补上了此前记为「未完成」的那一半 —— #427 的交付把「入口内容（代码）」
