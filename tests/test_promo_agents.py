@@ -75,7 +75,13 @@ def test_a_scenario_word_plus_方案_is_a_solution_intent() -> None:
     assert promo_intent_from_text("重卡充电桩的方案") == "solution_discovery"
     # Without a scenario word it stays ordinary support wording.
     assert promo_intent_from_text("有什么方案") is None
+    # 🔴 A scenario word is NOT enough on its own: 「重卡」satisfies the scenario
+    # list, but 「我的重卡充电方案」asks about the speaker's OWN arrangement —
+    # same shape as 「我的充电方案是什么」. The possessive marker is what tells
+    # them apart, so both directions are pinned here.
     assert promo_intent_from_text("我的充电方案是什么") is None
+    assert promo_intent_from_text("我的重卡充电方案是什么") is None
+    assert promo_intent_from_text("我的港口集卡方案应该怎么配") is None
 
 
 def test_no_ordinary_support_wording_enters_the_promotional_path() -> None:
@@ -103,6 +109,38 @@ def test_no_ordinary_support_wording_enters_the_promotional_path() -> None:
     offenders = [variant for variant in variants if promo_intent_from_text(variant)]
     assert offenders == [], f"目录标题或其变体被宣传 cue 截走：{offenders[:5]}"
 
+    # 语料**就地加载**，不是抄一份清单 —— 清单会随语料变化失真，而这条用例的
+    # 全部意义就是「真实语料里不许有支持类问题被误判」（评审指出初版只查手写清单）。
+    corpus = json.loads(
+        (Path(__file__).resolve().parents[1] / "docs" / "jev-recalibration-corpus.json").read_text("utf-8")
+    )
+    questions = corpus["questions"]
+    assert len(questions) >= 86, f"语料规模变了（{len(questions)} 条），这条用例的前提要重核"
+
+    # 这 8 条是**已知宣传意图**的（#413 的目标 + 既有命中），它们命中是对的。
+    expected_promo = {
+        "有什么案例",
+        "新加坡无人电动巴士案例",
+        "重卡充电案例",
+        "港口集卡方案",
+        "我想看看客户案例",
+        "有没有公交充电的客户案例",
+        "我想看看新加坡无人巴士的客户案例",
+        "重卡充电客户案例",
+        "给我看看行业解决方案",
+        "我想发现行业解决方案",
+        "I would like to see customer cases",
+        "Show me industry solutions",
+        "I'd like to see customer cases",
+        "Show me a customer case",
+    }
+    offenders = [
+        question
+        for question in questions
+        if promo_intent_from_text(question) and question not in expected_promo
+    ]
+    assert offenders == [], f"语料里出现预期之外的宣传命中：{offenders}"
+
     support_questions = (
         "充电卡怎么绑定",
         "夏季高温天气充电注意什么",
@@ -112,6 +150,7 @@ def test_no_ordinary_support_wording_enters_the_promotional_path() -> None:
         "充电桩怎么拔枪？有没有演示视频",
         "充电协议握手失败如何定位？",
         "重卡充电桩流量平台海报",
+        "我的重卡充电方案是什么",
     )
     for question in support_questions:
         assert promo_intent_from_text(question) is None, question

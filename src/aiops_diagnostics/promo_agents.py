@@ -83,7 +83,25 @@ _BARE_INTENT_CUES = {"case_exploration": ("案例",)}
 _SCENARIO_SOLUTION_WORD = "方案"
 _SCENARIO_SOLUTION_INTENT = "solution_discovery"
 
+#: 🔴 **领地标记**：方案属于**说话人自己**时，它在问自己的安排，不是要行业方案。
+#:
+#: 场景词不够 —— `我的**重卡**充电方案是什么` 里「重卡」照样满足场景条件，而它问的是
+#: 我这一台车怎么充电（评审指出的反例，与 `我的充电方案是什么` 同形）。
+#: 判据取「方案」**之前**是否出现过「我的」：行业方案的说法里不会有它
+#: （`港口集卡方案`、`有没有重卡充电的方案`），而个人安排的说法里几乎必然有。
+_POSSESSIVE_MARKERS = ("我的",)
+_SCENARIO_SOLUTION_EXCLUSIONS = _POSSESSIVE_MARKERS
+
 _AGENT_VERSION_REF = re.compile(r"^agt_[A-Za-z0-9]{8,64}#v\d{1,6}$")
+
+
+def _is_personal_solution_wording(text: str, word: str) -> bool:
+    """「方案」前是否出现了领地标记（`我的`）⇒ 说的是自己的安排，不是行业方案。"""
+    index = text.find(word)
+    if index <= 0:
+        return False
+    head = text[:index]
+    return any(marker in head for marker in _SCENARIO_SOLUTION_EXCLUSIONS)
 
 
 def promo_intent_from_text(question: str) -> str | None:
@@ -102,8 +120,13 @@ def promo_intent_from_text(question: str) -> str | None:
     for intent, cues in _BARE_INTENT_CUES.items():
         if any(cue in text for cue in cues):
             return intent
-    # 结构判据二：场景词 + 「方案」。**两者缺一不可**，所以不能并进上面的裸词表。
-    if _SCENARIO_SOLUTION_WORD in text and any(scenario.lower() in text for scenario in _PROMO_SCENARIO_CUES):
+    # 结构判据二：场景词 + 「方案」，且**方案不是说话人自己的**。
+    # 两条缺一不可，所以不能并进上面的裸词表。
+    if (
+        _SCENARIO_SOLUTION_WORD in text
+        and any(scenario.lower() in text for scenario in _PROMO_SCENARIO_CUES)
+        and not _is_personal_solution_wording(text, _SCENARIO_SOLUTION_WORD)
+    ):
         return _SCENARIO_SOLUTION_INTENT
     return None
 
