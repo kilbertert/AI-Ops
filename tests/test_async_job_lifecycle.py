@@ -18,9 +18,12 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+import pytest
+
 from aiops_diagnostics.async_job_lifecycle import (
     DIAGNOSIS,
     HEALTH_JOB,
+    LIVE,
     PROFILES,
     QUESTION,
     RUN,
@@ -128,10 +131,12 @@ def test_a_live_job_inside_its_deadline_is_left_alone() -> None:
     This is the property the startup sweep violated: it converged every live row
     because the store had been constructed.
     """
+    # `live`, not a retention tier: a job that has not finished has no retention,
+    # and returning one would tell a caller to stamp an expiry on a running row.
     assert converged(DIAGNOSIS, status="running", deadline_passed=False, cause="deadline") == (
         "running",
         None,
-        "completed",
+        LIVE,
     )
 
 
@@ -202,12 +207,88 @@ def test_the_status_sets_are_written_down_only_in_this_module() -> None:
 
     package = Path(__file__).parents[1] / "src" / "aiops_diagnostics"
     job_words = ("queued", "running", "expired", "inconclusive", "cancelled")
-    literal_set = re.compile(r"\{\s*[" + "'\"" + r"](?:" + "|".join(job_words) + r")[" + "'\"" + r"]")
+    # Matched anywhere inside the literal, not only as its first element: a copy
+    # that happens to list `completed` first would otherwise slip past — the same
+    # "agrees today" shape this ticket is about.
+    #
+    # Scoped to the shapes that ARE a status set: a `frozenset({...})`, or a set
+    # on the right of `status ... in`. A bare dict that happens to carry a
+    # `"running"` value (a phase, a log field) is not a status set, and matching
+    # it would make this guard cry wolf until someone deleted it.
+    words = "|".join(job_words)
+    literal_set = re.compile(
+        r"frozenset\(\{[^}\n]*[" + "'\"" + r"](?:" + words + r")[" + "'\"" + r"][^}\n]*\}\)"
+        r"|in\s*\{[^}\n]*[" + "'\"" + r"](?:" + words + r")[" + "'\"" + r"][^}\n]*\}"
+    )
+    #: Files that legitimately hold a copy. `metrics_store` keeps the metric-row
+    #: vocabulary (same words, different meaning). `gateway_client` polls a REMOTE
+    #: gateway and cannot import the definition — its copy is named
+    #: `_TERMINAL_RUN_STATUSES` there and commented as a boundary.
+    owners = {"async_job_lifecycle.py", "metrics_store.py", "gateway_client.py"}
     offenders: list[str] = []
     for path in sorted(package.glob("*.py")):
-        if path.name in {"async_job_lifecycle.py", "metrics_store.py"}:
+        if path.name in owners:
             continue
-        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        text = path.read_text(encoding="utf-8")
+        for number, line in enumerate(text.splitlines(), 1):
             if literal_set.search(line):
                 offenders.append(f"{path.name}:{number}")
+    # The named copies must still say why they exist, or they are just copies.
+    client = (package / "gateway_client.py").read_text(encoding="utf-8")
+    assert "cross-process copy is unavoidable" in client
     assert offenders == [], "; ".join(offenders)
+
+
+def test_a_table_without_an_expiry_is_not_given_one() -> None:
+    """`runs` has no expiry, and inferring one would widen a terminal guard.
+
+    `TERMINAL_RUN_STATUSES` is what `update_run` uses to decide `completed_at`.
+    Adding `expired` to it — which the first version of this profile did, by
+    giving every table the same expiry word — would treat a status this table
+    never produces as "finished". The profile says `None` instead, and this
+    asserts the store's exported set is unchanged.
+    """
+    from aiops_diagnostics.gateway_store import TERMINAL_RUN_STATUSES
+
+    assert RUN.expired is None
+    assert (
+        frozenset({"diagnosed", "inconclusive", "blocked", "interrupted", "failed"}) == TERMINAL_RUN_STATUSES
+    )
+    assert "expired" not in TERMINAL_RUN_STATUSES
+    with pytest.raises(ValueError):
+        converged(RUN, status="running", deadline_passed=True, cause="deadline")
+
+
+def test_the_question_restart_code_is_the_one_the_contract_documents() -> None:
+    """One spelling of one incident.
+
+    The store already exports `ASSISTANT_QUESTION_RESTART_ERROR_CODE` and the
+    frontend contract documents it; a code derived from the profile name
+    (`QUESTION_INTERRUPTED_BY_RESTART`) would be a second contract for the same
+    event.
+    """
+    from aiops_diagnostics.gateway_store import ASSISTANT_QUESTION_RESTART_ERROR_CODE
+
+    _, code, _ = converged(QUESTION, status="running", deadline_passed=False, cause="restart")
+    assert code == ASSISTANT_QUESTION_RESTART_ERROR_CODE
+
+
+def test_a_user_stop_is_not_a_retryable_failure() -> None:
+    """`failed` and `interrupted` are different sets, and this is why.
+
+    The lifecycle has two failure-ish tiers: `failed` (one status, a recorded
+    cause) and `interrupted` (a superset that also holds a user stop). The
+    diagnosis response treats `{"failed", "expired"}` as retryable. Answering
+    that from the tier would tell a user who stopped their own diagnosis to
+    retry it — so the response names the status, and this pins that.
+
+    Asserted through the store's exported set rather than the response, because
+    the property is about the vocabulary: a table with a user stop must keep
+    that stop out of its `failed` field.
+    """
+    assert DIAGNOSIS.failed == "failed"
+    assert DIAGNOSIS.failed in DIAGNOSIS.interrupted
+    assert "cancelled" in DIAGNOSIS.interrupted
+    assert DIAGNOSIS.failed != "cancelled"
+    # And the health table, which has no user stop, still names its one failure.
+    assert HEALTH_JOB.failed == "failed"

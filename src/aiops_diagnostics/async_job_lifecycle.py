@@ -33,13 +33,20 @@ from typing import Literal
 #: tier but not a meaning: one outran its deadline, the other stopped for a
 #: cause that is recorded on the row. The tier is about how long the row is
 #: worth keeping, which is the only thing the sweep needs from it.
-RetentionTier = Literal["completed", "failed", "immediate"]
+#:
+#: `LIVE` is the fourth answer and it is not a tier: a job that has not finished
+#: has no retention, and giving it one would tell a caller to stamp an expiry on
+#: something that is still running.
+RetentionTier = Literal["completed", "failed", "immediate", "live"]
 
 #: Why a job is being converged instead of finishing. The three are distinct on
 #: purpose and the repository has already had to defend the distinction
 #: (`docs/validation.md:1478-1482`): `expired` means it outran its deadline,
 #: `cancelled` means the user stopped it, and a restart is neither.
 Cause = Literal["deadline", "restart", "user_stop"]
+
+#: The answer for "this row has not finished, so it has no tier".
+LIVE: RetentionTier = "live"
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,17 +64,40 @@ class JobProfile:
     completed: frozenset[str]
     #: Finished because it failed or the user stopped it.
     interrupted: frozenset[str]
-    #: Finished because it outran its deadline. Kept on the shortest tier.
-    expired: str
+    #: Finished because it outran its deadline, or `None` for a table that has
+    #: no expiry at all. `runs` is that table: no deadline column, no sweep, no
+    #: convergence rule. Making this optional is what keeps "we did not give it
+    #: one" different from "we gave it one and forgot to use it".
+    expired: str | None
     deadline: timedelta
     completed_retention: timedelta
     interrupted_retention: timedelta
+    #: The single status meaning "it stopped for a recorded cause", when the
+    #: table has exactly one. `None` where the vocabulary has no such value
+    #: (`runs` spells three different causes). Callers that mean *this* status
+    #: — a retryable failure shown to the caller, say — name it rather than
+    #: reaching for `interrupted`, which is a tier and also holds a user stop.
+    failed: str | None = None
+    #: The code a restart records on the row. Defaulted rather than spelled per
+    #: table: the store's existing constant is the one the API contract already
+    #: documents, and a second spelling would be a second contract.
+    restart_error_code: str | None = None
     #: Whether a finished row is removed the moment it expires (the sweep marks
     #: it `expired`, which is the only "gone" this schema has).
     expired_retention_is_immediate: bool = True
 
     @property
     def terminal(self) -> frozenset[str]:
+        """Every status this table will never change again.
+
+        `expired` joins it only when the table has one: a run has no expiry, so
+        its terminal set is exactly what the store exported before this module
+        existed — adding a status the table never produces would widen a guard
+        that answers "has this finished", which is not a change this ticket is
+        allowed to make.
+        """
+        if self.expired is None:
+            return self.completed | self.interrupted
         return self.completed | self.interrupted | frozenset({self.expired})
 
     def retention_for(self, status: str) -> timedelta | None:
@@ -76,7 +106,7 @@ class JobProfile:
             return self.completed_retention
         if status in self.interrupted:
             return self.interrupted_retention
-        if status == self.expired:
+        if self.expired is not None and status == self.expired:
             return timedelta(0) if self.expired_retention_is_immediate else self.completed_retention
         return None
 
@@ -86,6 +116,7 @@ class JobProfile:
 #: that is stated here rather than spelled by borrowing a diagnostic name.
 HEALTH_JOB = JobProfile(
     name="health_job",
+    failed="failed",
     active=frozenset({"queued", "running"}),
     completed=frozenset({"completed"}),
     interrupted=frozenset({"failed"}),
@@ -97,6 +128,7 @@ HEALTH_JOB = JobProfile(
 
 DIAGNOSIS = JobProfile(
     name="diagnosis",
+    failed="failed",
     active=frozenset({"queued", "running"}),
     completed=frozenset({"completed", "inconclusive"}),
     interrupted=frozenset({"failed", "cancelled"}),
@@ -111,6 +143,8 @@ DIAGNOSIS = JobProfile(
 #: store's `DIAGNOSIS_DEADLINE` on this table said otherwise.
 QUESTION = JobProfile(
     name="question",
+    failed="failed",
+    restart_error_code="QA_INTERRUPTED_BY_RESTART",
     active=frozenset({"queued", "running"}),
     completed=frozenset({"completed", "inconclusive"}),
     interrupted=frozenset({"failed", "cancelled"}),
@@ -121,15 +155,16 @@ QUESTION = JobProfile(
 )
 
 #: The device path's runs. A different vocabulary (`diagnosed`, `blocked`,
-#: `interrupted`) and no deadline column at all: this table has never had a
+#: `interrupted`) and **no expiry at all**: this table has never had a
 #: convergence rule, which is a decision PRD #410 left open rather than an
-#: oversight to be fixed here.
+#: oversight to be fixed here. `expired=None` says that, and keeps this table's
+#: terminal set byte-identical to the one the store exported before.
 RUN = JobProfile(
     name="run",
     active=frozenset({"queued", "running"}),
     completed=frozenset({"diagnosed", "inconclusive"}),
     interrupted=frozenset({"blocked", "interrupted", "failed"}),
-    expired="expired",
+    expired=None,
     deadline=timedelta(minutes=15),
     completed_retention=timedelta(minutes=15),
     interrupted_retention=timedelta(minutes=5),
@@ -182,7 +217,10 @@ def converged(
     if status not in profile.active:
         return status, None, _tier_for(profile, status)
     if cause == "restart":
-        code = f"{profile.name.upper()}_INTERRUPTED_BY_RESTART"
+        # The store already names this code for the question table
+        # (`ASSISTANT_QUESTION_RESTART_ERROR_CODE`). The profile carries the
+        # name so the two cannot drift into two spellings of one incident.
+        code = profile.restart_error_code or f"{profile.name.upper()}_INTERRUPTED_BY_RESTART"
         # A restart is neither a timeout nor a user stop; it lands on the
         # interrupted tier with a code that says which of the three it was.
         interrupted = sorted(profile.interrupted)
@@ -192,8 +230,13 @@ def converged(
         cancelled = "cancelled" if "cancelled" in profile.interrupted else "failed"
         return cancelled, None, "failed"
     if deadline_passed:
+        if profile.expired is None:
+            raise ValueError(f"{profile.name} has no expiry: it cannot be converged by deadline")
         return profile.expired, None, "immediate"
-    return status, None, "completed"
+    # A live row gets no tier: it has not finished, so "how long do we keep it"
+    # has no answer yet. Returning the completed tier would tell a future caller
+    # to stamp a retention deadline on a job that is still running.
+    return status, None, _tier_for(profile, status) if status in profile.terminal else LIVE
 
 
 def _tier_for(profile: JobProfile, status: str) -> RetentionTier:

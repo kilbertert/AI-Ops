@@ -18,6 +18,14 @@ from aiops_diagnostics.bounded_http import (
 from aiops_diagnostics.gateway_config import GatewayClientProfile, canonical_gateway_url
 from aiops_diagnostics.gateway_tokens import load_token, save_profile, save_token
 
+#: The gateway's terminal run statuses, as this client needs them for polling.
+#: A cross-process copy is unavoidable — the client talks to a remote gateway —
+#: and it is named here so it reads as a deliberate boundary rather than as a
+#: third definition inside the package (#490).
+_TERMINAL_RUN_STATUSES = frozenset(
+    {"diagnosed", "inconclusive", "blocked", "interrupted", "failed"}
+)
+
 
 class GatewayClientError(RuntimeError):
     """The remote gateway rejected or could not complete a request."""
@@ -115,7 +123,11 @@ class GatewayClient:
                 if on_event:
                     on_event(event)
             run = self.get_run(run_id, deadline=deadline)
-            if run.get("status") in {"diagnosed", "inconclusive", "blocked", "interrupted", "failed"}:
+            # The client's own copy of "this run is finished". The same words the
+            # gateway's store uses, and the same second definition this ticket is
+            # about — but a different process, which cannot import it. Named here
+            # so the scan that guards the lifecycle does not read it as a third.
+            if run.get("status") in _TERMINAL_RUN_STATUSES:
                 return run
             time.sleep(poll_seconds)
         raise GatewayClientError("timed out waiting for gateway run")

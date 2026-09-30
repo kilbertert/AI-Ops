@@ -413,7 +413,7 @@ class GatewayStore:
         completed_at = now if status in TERMINAL_DIAGNOSIS_STATUSES else None
         expires_at = (
             now + DIAGNOSIS_COMPLETED_RETENTION
-            if status in {"completed", "inconclusive"}
+            if status in DIAGNOSIS.completed
             else now + DIAGNOSIS_FAILED_RETENTION
             if status in DIAGNOSIS_FAILED_RETENTION_STATUSES
             else now
@@ -548,7 +548,7 @@ class GatewayStore:
         completed_at = now if status in TERMINAL_DIAGNOSIS_STATUSES else None
         expires_at = (
             now + DIAGNOSIS_COMPLETED_RETENTION
-            if status in {"completed", "inconclusive"}
+            if status in DIAGNOSIS.completed
             else now + DIAGNOSIS_FAILED_RETENTION
             if status in DIAGNOSIS_FAILED_RETENTION_STATUSES
             else now
