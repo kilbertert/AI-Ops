@@ -26,6 +26,7 @@ from aiops_diagnostics.agent_lifecycle import (
     AgentStore,
     allowed_models_from_settings,
 )
+from aiops_diagnostics.async_job_lifecycle import DIAGNOSIS, QUESTION
 from aiops_diagnostics.caller_auth import (
     CALLER_AUTH_CONFIG_MISSING,
     CALLER_AUTH_FORBIDDEN,
@@ -2646,7 +2647,7 @@ def _assistant_question_response(qa: dict[str, Any], language: str) -> dict[str,
                 "message": _qa_user_message(language, qa.get("error_code")),
                 "retryable": True,
             }
-            if status_value in {"failed", "expired"}
+            if status_value in {QUESTION.failed, QUESTION.expired}
             else None
         ),
     }
@@ -3092,14 +3093,14 @@ def _standard_diagnosis_response(diagnosis: dict[str, Any]) -> dict[str, Any]:
         "language": diagnosis.get("language", "zh"),
         "status": status_value,
         "retry_after_ms": None if is_terminal else 1000,
-        "result": diagnosis.get("result") if status_value in {"completed", "inconclusive"} else None,
+        "result": diagnosis.get("result") if status_value in DIAGNOSIS.completed else None,
         "error": (
             {
                 "code": diagnosis.get("error_code") or "DIAGNOSIS_FAILED",
                 "message": diagnosis.get("error_message") or "diagnosis failed",
-                "retryable": status_value in {"failed", "expired"},
+                "retryable": status_value in {DIAGNOSIS.failed, DIAGNOSIS.expired},
             }
-            if status_value in {"failed", "expired"}
+            if status_value in {DIAGNOSIS.failed, DIAGNOSIS.expired}
             else None
         ),
         "created_at": diagnosis.get("created_at"),

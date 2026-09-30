@@ -13,34 +13,44 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from aiops_diagnostics.async_job_lifecycle import (
+    DIAGNOSIS,
+    HEALTH_JOB,
+    RUN,
+)
 from aiops_diagnostics.private_files import ensure_private_directory, protect_private_file
 from aiops_diagnostics.redaction import redact_text
 
 SAFE_SCOPE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
-TERMINAL_RUN_STATUSES = frozenset({"diagnosed", "inconclusive", "blocked", "interrupted", "failed"})
-ACTIVE_HEALTH_JOB_STATUSES = frozenset({"queued", "running"})
-TERMINAL_HEALTH_JOB_STATUSES = frozenset({"completed", "failed", "expired"})
-HEALTH_JOB_COMPLETED_RETENTION = timedelta(minutes=15)
-HEALTH_JOB_FAILED_RETENTION = timedelta(minutes=5)
-HEALTH_JOB_DEADLINE = timedelta(seconds=30)
-ACTIVE_DIAGNOSIS_STATUSES = frozenset({"queued", "running"})
+TERMINAL_RUN_STATUSES = RUN.terminal
+# The numbers and status words live in ONE place (#490): `async_job_lifecycle`
+# owns the lifecycle and these names are its values under the names this module
+# has always exported. Deriving rather than restating is the point — a second
+# literal that agrees today is the shape that drifts, and this table's constants
+# and the question table's were already borrowing one another's names.
+ACTIVE_HEALTH_JOB_STATUSES = HEALTH_JOB.active
+TERMINAL_HEALTH_JOB_STATUSES = HEALTH_JOB.terminal
+HEALTH_JOB_COMPLETED_RETENTION = HEALTH_JOB.completed_retention
+HEALTH_JOB_FAILED_RETENTION = HEALTH_JOB.interrupted_retention
+HEALTH_JOB_DEADLINE = HEALTH_JOB.deadline
+ACTIVE_DIAGNOSIS_STATUSES = DIAGNOSIS.active
 # `cancelled` is the user-stop terminal status (PRD #346). assistant_questions
 # reuses this set, so the value shows up in the diagnosis enum as well — one
 # shared status set instead of two. Diagnoses have no cancel entry point of
 # their own, so nothing here produces it yet.
-TERMINAL_DIAGNOSIS_STATUSES = frozenset({"completed", "inconclusive", "failed", "expired", "cancelled"})
-DIAGNOSIS_COMPLETED_RETENTION = timedelta(minutes=15)
-DIAGNOSIS_FAILED_RETENTION = timedelta(minutes=5)
+TERMINAL_DIAGNOSIS_STATUSES = DIAGNOSIS.terminal
+DIAGNOSIS_COMPLETED_RETENTION = DIAGNOSIS.completed_retention
+DIAGNOSIS_FAILED_RETENTION = DIAGNOSIS.interrupted_retention
 # A cancelled job is kept on the short (failed) tier: the client already holds
 # the answer surface, and the row only has to outlive the refresh window. Not
 # "never expires" (unbounded rows) and not "expires now" — the user is still
 # looking at 「已停止」 when they refresh.
-DIAGNOSIS_FAILED_RETENTION_STATUSES = frozenset({"failed", "cancelled"})
+DIAGNOSIS_FAILED_RETENTION_STATUSES = DIAGNOSIS.interrupted
 # The diagnosis deadline must cover real agent runs, which the API contract
 # documents as tens of seconds to minutes (observed: ~7 minutes on the real
 # 120-world link). A short deadline marks still-running diagnoses as expired
 # before the worker can record its result.
-DIAGNOSIS_DEADLINE = timedelta(minutes=15)
+DIAGNOSIS_DEADLINE = DIAGNOSIS.deadline
 # A question still `queued`/`running` when the gateway restarts is converged to
 # `failed`, not to `expired` (that value means the job outran its deadline) and
 # not to `cancelled` (that value means the user asked it to stop). Neither is
@@ -403,7 +413,7 @@ class GatewayStore:
         completed_at = now if status in TERMINAL_DIAGNOSIS_STATUSES else None
         expires_at = (
             now + DIAGNOSIS_COMPLETED_RETENTION
-            if status in {"completed", "inconclusive"}
+            if status in DIAGNOSIS.completed
             else now + DIAGNOSIS_FAILED_RETENTION
             if status in DIAGNOSIS_FAILED_RETENTION_STATUSES
             else now
@@ -538,7 +548,7 @@ class GatewayStore:
         completed_at = now if status in TERMINAL_DIAGNOSIS_STATUSES else None
         expires_at = (
             now + DIAGNOSIS_COMPLETED_RETENTION
-            if status in {"completed", "inconclusive"}
+            if status in DIAGNOSIS.completed
             else now + DIAGNOSIS_FAILED_RETENTION
             if status in DIAGNOSIS_FAILED_RETENTION_STATUSES
             else now

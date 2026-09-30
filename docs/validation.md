@@ -7,6 +7,75 @@
 
 
 
+## #490 作业生命周期模块（2026-09-30）
+
+**本片是 #430 的第一张子票，刻意只建模块、不接调用方**（另三张票要依赖它）。
+PRD §1 数过：四张表、五份同形过期 SQL、两种极性的 claim-guard、两套常量、
+以及一处进程死亡收敛「本仓自己已经判定为错」的机制。
+
+**本模块定义**：命名 profile（`health_job` / `diagnosis` / `question` / `run`）声明各自的
+活动集、终态分档、截止时间与保留期；一处 claim-guard 渲染（只有 `IN` 一种极性）；
+一处 `expires_at`；一处「进程死了该怎么判」——**入参 `(status, deadline_passed, cause)`，
+三种成因各自得到不同结论**。
+
+### 数值一个都没动，但第二份定义没了
+
+存储层的 11 个常量改为**从 profile 派生**（`HEALTH_JOB_DEADLINE = HEALTH_JOB.deadline` 等），
+取值与改动前逐一相同。**这是本片唯一会影响其它模块的改动**，因此另加两条跨包扫描：
+`timedelta(seconds=30)` / `(minutes=15)` / `(minutes=5)` 与作业状态词的字面集合
+**在 `async_job_lifecycle.py` 之外不再出现**。
+
+例外写清楚了：`metrics_store.OUTCOME_TYPES`（`completed`/`failed`/`cancelled`）**不在扫描范围**。
+它是**指标行的结果**词汇，不是**作业的状态**词汇；两套词汇恰好共用几个词，不等于同一定义 ——
+合并它们才是反向的错误。
+
+### 证据
+
+| 判据 | 用例 |
+|---|---|
+| 数字与存储层既有取值逐一相同 | `test_the_numbers_are_the_ones_the_store_uses` |
+| 四张表的差异以显式字段声明 | `test_the_profiles_differ_where_the_tables_differ` |
+| 问答表的 deadline 不再借用诊断的名字 | `test_a_question_does_not_borrow_the_diagnosis_name` |
+| claim-guard 只有一种极性 | `test_the_claim_guard_has_one_polarity` |
+| **三种成因互不混同** | `test_the_three_causes_stay_distinguishable`、`test_a_restart_never_uses_expired_or_cancelled` |
+| 未超时的活动作业保持原状 | `test_a_live_job_inside_its_deadline_is_left_alone` |
+| **第二次定义会被扫出来** | `test_the_numbers_are_written_down_only_in_this_module`、`test_the_status_sets_are_written_down_only_in_this_module` |
+
+**三条变异核对**：① 存储层把健康作业的截止时间写回字面量 ⇒ 转红；
+② 存储层把活动状态集写回字面量 ⇒ 转红；③ 重启也用 `expired`（三种成因混同）⇒ 转红。
+
+### 评审四条（Devin，全部处理）
+
+| # | 发现 | 处置 |
+|---|---|---|
+| 1 | **`runs` 被我发了一个 `expired` 终态**，而这张表根本没有过期语义 ⇒ `TERMINAL_RUN_STATUSES` 凭空多出一个它永不产生的状态，`update_run` 会把它当成「已完成」 | ✅ `expired` 改为**可为 `None`**；`RUN.expired is None`，其 terminal 集**与改动前逐字节相同**（另有用例直接断言存储层导出的集合） |
+| 2 | 问答表的重启错误码会被派生成 `QUESTION_INTERRUPTED_BY_RESTART`，而契约文档写的是 `QA_INTERRUPTED_BY_RESTART` | ✅ profile 携带 `restart_error_code`；另有用例直接断言它等于存储层既有常量 |
+| 3 | 活动作业返回 `completed` **保留档** ⇒ 未来调用方会给一个还在跑的作业盖上过期时间 | ✅ 新增第四种答案 `live`（**不是档位**）：未完成的作业没有保留期 |
+| 4 | 状态集合扫描只认「列在第一位」的写法，把顺序换一下就能绕过 | ✅ 改为匹配**集合字面量内部任意位置**；同时按**形状**收窄（`frozenset({...})` 或 `status ... in {...}`），否则一个恰好含 `"running"` 的字典会造成误报 |
+
+### 第二轮评审两条
+
+| # | 发现 | 处置 |
+|---|---|---|
+| 5 | 问答的响应用了 `DIAGNOSIS.failed` / `DIAGNOSIS.expired`，而那张表的词汇是 `QUESTION` 的 | ✅ 改用 `QUESTION`；两者取值今天相同，但正是「今天相同」让这类错配活下来 |
+| 6 | 状态集合扫描**逐行**匹配，而**跨行的集合字面量**（`frozenset({` 一行、成员下一行）能绕过它 —— 本包里那份合法副本正是这种写法 | ✅ 改为**解析语法树**：一个集合字面量当且仅当它的元素全在作业状态词表内时才算状态集。**「用读文本回答一个关于结构的问题」本身就是这张票要收敛的形态** |
+
+第 6 条另加一条元断言：白名单里那个文件**必须仍然写着它为何是副本**（`cross-process copy is unavoidable`），
+否则它就只是一份副本。以「去掉那句话」核对过，转红。
+
+第 4 条顺带发现一处**真实的重复定义**：`gateway_client._TERMINAL_RUN_STATUSES`。
+它是**跨进程**的（客户端轮询远端网关，import 不到那一定义），因此**保留并具名**，
+理由写在常量旁；扫描器把三个「有理由的副本」列入白名单，但要求 `gateway_client`
+里那句理由**必须还在**，否则它就只是一份副本。
+
+⚠️ **一处刻意不做的改动**：把三份 `_expire_*` 与 `_initialize` 的 SQL 改为经本模块渲染 ——
+那是 **#491 与 #492 的范围**。本片只做「一处定义」，SQL 渲染留给动它的票，
+否则一张票同时改定义与四处调用点，回退时无法分辨是哪一半出的问题。
+实测过一次并撤回：把健康作业的过期 SQL 改为经 `claim_guard()` 渲染后，
+健康作业的四个既有用例转红（多出来的参数绑定顺序），**说明那确实不是一行的事**。
+
+**未完成业务验收**：本片对外零变化，且**没有生产调用方**；41 上无可比对案例。
+
 ## #489 订单授权守卫合一，判定不可用与「确实无权」在观测上可分（2026-09-30）
 
 七个调用点各自取一个 `bool`，而 `bool` 抹掉了日志与指标再也表达不出的区别：

@@ -527,6 +527,29 @@ workflow YAML 不适用复杂度或 mutation 工具；安全状态机由模板�
 Java BFF 透传与前端 blocks[] 渲染属 #171/#173 及真实媒体验收范围（见 P0-E2E-REAL），
 本票不把 fake 结果记为业务验收。
 
+## 作业生命周期模块 QA 计划（#490）
+
+### LIFECYCLE-01 一处定义、四张表各自的差异显式
+
+- 环境：AI-Ops 本地 Python 3.13（纯函数模块，无需启动应用）。
+- 前置条件：无。
+- 测试数据：四张表的命名 profile（health_job / diagnosis / question / run）。
+- 有序动作：断言取值；断言各 profile 的差异；跨包扫描字面量。
+- 预期结果：数字与存储层既有取值逐一相同；**四张表真正的差异（health 无 `cancelled`、
+  run 词汇不同）以显式字段声明**；状态集与三个时长在**本模块之外不再出现字面量**。
+- 清理：无。
+- 结果：PASS（2026-09-30，`tests/test_async_job_lifecycle.py`；
+  以「存储层写回字面量」两处与「重启也用 expired」三条变异核对，各自转红）。
+
+### LIFECYCLE-02 三种成因互不混同
+
+- 环境：同上。
+- 有序动作：对同一活动状态分别以 `restart` / `deadline` / `user_stop` 求收敛结果。
+- 预期结果：restart ⇒ 带 `*_INTERRUPTED_BY_RESTART` 的失败终态；deadline ⇒ `expired`；
+  user_stop ⇒ `cancelled`；**三者两两不同**；未超时且非重启 ⇒ 保持原状态。
+- 清理：无。
+- 结果：PASS（同上）。
+
 ## 订单授权守卫合一 QA 计划（#489）
 
 ### ORDERGUARD-01 三种判定、两种处置
