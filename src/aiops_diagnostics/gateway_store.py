@@ -60,13 +60,9 @@ DIAGNOSIS_DEADLINE = DIAGNOSIS.deadline
 # the row carry the cause, so an operator reading a failed answer can tell a
 # deploy from a timeout and from a user stop.
 HEALTH_JOB_RESTART_ERROR_CODE = "REPORT_INTERRUPTED_BY_RESTART"
-HEALTH_JOB_RESTART_ERROR_MESSAGE = (
-    "the gateway restarted while this report was still being computed"
-)
+HEALTH_JOB_RESTART_ERROR_MESSAGE = "the gateway restarted while this report was still being computed"
 DIAGNOSIS_RESTART_ERROR_CODE = "DIAGNOSIS_INTERRUPTED_BY_RESTART"
-DIAGNOSIS_RESTART_ERROR_MESSAGE = (
-    "the gateway restarted while this diagnosis was still running"
-)
+DIAGNOSIS_RESTART_ERROR_MESSAGE = "the gateway restarted while this diagnosis was still running"
 ASSISTANT_QUESTION_RESTART_ERROR_CODE = "QA_INTERRUPTED_BY_RESTART"
 ASSISTANT_QUESTION_RESTART_ERROR_MESSAGE = (
     "the gateway restarted while this question was still being answered"
@@ -659,8 +655,7 @@ class GatewayStore:
                 "standard_diagnoses": [
                     str(row["diagnosis_id"])
                     for row in connection.execute(
-                        "SELECT diagnosis_id FROM standard_diagnoses"
-                        " WHERE status IN ('queued', 'running')"
+                        "SELECT diagnosis_id FROM standard_diagnoses WHERE status IN ('queued', 'running')"
                     ).fetchall()
                 ],
             }
