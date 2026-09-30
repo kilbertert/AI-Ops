@@ -4953,6 +4953,11 @@ vhost 与令牌文件的新形状**保留**（客户端链路实测仍 200）。
 | 非法入口 | `operator-admin` + JWT | `401 INVALID_ACCESS_TOKEN` |
 | 只带 JWT、漏入口头 | 无 `X-Business-Entry` | `401 INVALID_ACCESS_TOKEN` |
 
+**可观测性缺口（本轮一并补上）**：上面那两个拒绝分支此前**都不记日志**（该文件只有两处
+`_LOGGER`：短密钥告警与 scope 不可用），而网关对外只有一句
+`access token validation failed` ⇒ 「签名不匹配」与「已过期」在观测面上**不可分**。
+已各记一行可区分原因（`reason=signature_mismatch` / `reason=expired`，不含令牌、密钥与身份）。
+
 **一条被评审纠正的表述**：文档初稿写「漏发入口头 ⇒ 静默走客户端域」。**收窄为**：
 只带 JWT 时是 `401`（换成服务令牌后缺 `third-session`）；只有**同时带有效会话**时才是静默走错域。
 两种后果不同，文档已按此改写。

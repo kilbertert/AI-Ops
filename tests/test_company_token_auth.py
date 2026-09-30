@@ -1167,3 +1167,27 @@ def test_the_operator_entry_does_not_query_when_the_token_carries_shop_ids() -> 
     )
     assert context.data_scope.type == SCOPE_TYPE_ORGAN
     assert directory.calls == 0
+
+
+def test_the_two_rejection_reasons_are_distinguishable_in_the_log(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """「签名不匹配」与「已过期」在日志上**可区分**（此前两者都不记日志）。
+
+    来由是两个分支只产生同字节的 `401 INVALID_ACCESS_TOKEN`，而网关对外只有一句
+    「access token validation failed」—— 排查时没有观察面，只能靠猜。
+    """
+    resolver = _local_resolver()
+    expired = _valid_claims(exp=int(time.time()) - 10)
+    with caplog.at_level("INFO"), pytest.raises(CallerAuthError):
+        resolver.resolve(_jwt(expired), required_scope="aiops:orders:read", platform_entry="operator")
+    assert any("reason=expired" in r.message for r in caplog.records)
+
+    caplog.clear()
+    with caplog.at_level("INFO"), pytest.raises(CallerAuthError):
+        resolver.resolve(
+            _jwt(_valid_claims(), key="not-the-key"),
+            required_scope="aiops:orders:read",
+            platform_entry="operator",
+        )
+    assert any("reason=signature_mismatch" in r.message for r in caplog.records)

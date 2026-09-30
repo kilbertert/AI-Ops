@@ -415,6 +415,11 @@ def _claims_from_signed_jwt(token: str, key: str) -> Mapping[str, Any]:
     except (ValueError, UnicodeEncodeError) as exc:
         raise CallerAuthError("company token signature is invalid", code=CALLER_AUTH_INVALID) from exc
     if not hmac.compare_digest(expected, signature):
+        # 记一行**可区分**的原因：这两个分支此前都不记日志，而网关对外只看得到同一句
+        # 「access token validation failed」—— 于是「签名不匹配」与「已过期」在观测面上
+        # **不可分**，排查时只能靠猜（#458 的评审就指出过这一点）。
+        # 只记原因，不记令牌、不记密钥、不记身份。
+        _LOGGER.info("company token rejected reason=signature_mismatch")
         raise CallerAuthError("company token signature does not verify", code=CALLER_AUTH_INVALID)
     try:
         payload = json.loads(_b64url_decode(payload_b64))
@@ -439,6 +444,7 @@ def _claims_from_signed_jwt(token: str, key: str) -> Mapping[str, Any]:
     if not isinstance(expires_at, (int, float)) or isinstance(expires_at, bool):
         raise CallerAuthError("company token has no expiry", code=CALLER_AUTH_INVALID)
     if expires_at <= datetime.now(UTC).timestamp():
+        _LOGGER.info("company token rejected reason=expired")
         raise CallerAuthError("company token is expired", code=CALLER_AUTH_INVALID)
     return payload
 
