@@ -306,6 +306,7 @@ flowchart TB
 |---|---|
 | `gateway_store.py` | 设备/注册码/run/事件/提问/健康报告作业/标准诊断 |
 | `conversation_store.py` | 会话与活跃订单上下文（最近 8 轮或 8k token，保留 30 天） |
+| `conversation_context.py` | 把上面的窗口渲染成模型的输入：确定性、已脱敏、按本轮语言标注而非翻译；无历史时是空串 |
 | `metrics_store.py` | 脱敏运行指标。**按构造脱敏**：只存租户/路由/计数/延迟，不存问题与答案正文 |
 | `agent_lifecycle.py` | 智能体草稿与不可变已发布版本（租户隔离） |
 | `shortcut_lifecycle.py` | 产品快捷动作草稿与不可变版本（平台默认 + 租户覆盖） |
@@ -467,7 +468,7 @@ docs/                     架构、契约、ADR、运行手册（见第十节路
 AGENTS.md                 仓库级开发共识（中文文档、里程碑同步、业务边界）
 CONTEXT.md                领域词汇表（术语 + 应避免的同义词）
 SOP.md / 充电桩问题排查SOP.md   业务规则来源（后端行为的中文说明）
-acceptance.feature        Gherkin 可执行验收约束（31 Feature / 80 Rule / 217 Scenario）
+acceptance.feature        Gherkin 可执行验收约束（31 Feature / 80 Rule / 219 Scenario）
 qa-plan.md                QA 用例（158 个用例 ID，含环境/前置/数据/动作/预期/清理）
 ```
 

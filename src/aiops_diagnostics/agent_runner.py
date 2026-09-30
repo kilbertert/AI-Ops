@@ -43,6 +43,7 @@ def run_agent_diagnosis(
     key_slot: str | None = None,
     scope: QueryScope | None = None,
     language: str = DEFAULT_LANGUAGE,
+    history: str = "",
 ) -> AgentDiagnosis:
     """Run the shared read-only agent path for local CLI and gateway workers."""
     manifest = workspace.load_manifest()
@@ -76,6 +77,7 @@ def run_agent_diagnosis(
             ),
             progress_callback=progress_callback,
             language=language,
+            history=history,
         )
         return coordinator.run()
 
@@ -89,6 +91,7 @@ def run_zero_order_answer(
     project_root: Path | None = None,
     language: str = DEFAULT_LANGUAGE,
     turn_registrar: Callable[[Any], None] | None = None,
+    history: str = "",
 ) -> dict[str, Any]:
     """Answer a general (zero-order) question via the shared read-only Agent.
 
@@ -122,7 +125,9 @@ def run_zero_order_answer(
         prompt = (
             "请回答用户的这个一般问题，只输出 JSON（遵循结构化输出 schema），"
             f"text 字段必须使用{language_name(language)}书写（面向用户的呈现语言），"
-            "reminder 字段为 true。\n\n问题：" + question
+            "reminder 字段为 true。\n\n" + history + "问题：" + question
+            # Empty history leaves this byte-identical to the prompt that had no
+            # history parameter at all — the change's safety boundary.
         )
         result = session.run(prompt)
         # The same shared parser: this path lost the head of its JSON to the

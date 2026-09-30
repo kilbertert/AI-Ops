@@ -193,7 +193,14 @@ def promo_empty_result(
     }
 
 
-def promo_prompt(selection: CustomerAgentSelection, question: str, *, language: str, intent: str) -> str:
+def promo_prompt(
+    selection: CustomerAgentSelection,
+    question: str,
+    *,
+    language: str,
+    intent: str,
+    history: str = "",
+) -> str:
     """Initial prompt for the promotional card run (same harness as customer QA)."""
     card = "customer case card" if intent == "case_exploration" else "industry solution card"
     topic = "customer cases" if intent == "case_exploration" else "industry solutions"
@@ -227,7 +234,7 @@ Promotional agent instructions (authoritative for tone and scope):
 User request (may arrive in any language):
 \"\"\"{question}\"\"\"
 
-{search_hint}
+{history}{search_hint}
 
 Hard rules:
 - Every customer fact, number, and named site in the card MUST come from

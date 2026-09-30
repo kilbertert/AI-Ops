@@ -159,6 +159,7 @@ def run_customer_qa_answer(
     language: str = DEFAULT_LANGUAGE,
     initial_prompt: str | None = None,
     turn_registrar: Callable[[Any], None] | None = None,
+    history: str = "",
 ) -> dict[str, Any]:
     """Answer one customer question via the published agent + bounded retrieval.
 
@@ -201,7 +202,7 @@ def run_customer_qa_answer(
                 provider=selected_provider,
                 turn_registrar=turn_registrar,
             )
-        prompt = initial_prompt or _initial_prompt(selection, question, language)
+        prompt = initial_prompt or _initial_prompt(selection, question, language, history=history)
         searched = False
         for _ in range(_MAX_RUNS):
             output = session.run(prompt, output_schema=qa_rag_turn_schema())
@@ -565,7 +566,9 @@ def _fallback_result(
     }
 
 
-def _initial_prompt(selection: CustomerAgentSelection, question: str, language: str) -> str:
+def _initial_prompt(
+    selection: CustomerAgentSelection, question: str, language: str, *, history: str = ""
+) -> str:
     output_language = language_name(language)
     return f"""Answer the customer's charging/new-energy question as the
 published customer service agent defined below. You have ONE bounded tool:
@@ -581,7 +584,7 @@ Agent business behavior instructions (authoritative for tone and scope):
 Customer question (may arrive in any language):
 \"\"\"{question}\"\"\"
 
-Output language: every customer-facing `text` block MUST be written in
+{history}Output language: every customer-facing `text` block MUST be written in
 {output_language}. The agent instructions above are the authoritative business
 script — their facts, policies and numbers stay binding regardless of output
 language.

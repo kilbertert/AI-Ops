@@ -817,3 +817,45 @@ def test_an_expired_job_stops_holding_the_conversation(tmp_path: Path, monkeypat
 
     release.set()
     runtime.shutdown()
+
+
+def test_an_unreadable_window_yields_no_history_and_warns(tmp_path: Path, caplog) -> None:
+    """An out-of-range window setting must not fail the question, and must not
+    pass silently either: the reading yields no history and leaves a warning.
+
+    The reader is the last place this can be caught — below it, a misconfigured
+    window is indistinguishable from an empty conversation.
+    """
+    import logging
+
+    runtime, store, settings = _runtime(tmp_path)
+    from aiops_diagnostics.conversation_store import ConversationStore
+
+    conversations = ConversationStore(store.path)
+    scope_fingerprint = _scope().scope_fingerprint
+    cid = conversations.create(
+        scope_fingerprint=scope_fingerprint,
+        business_entry="operator",
+        agent_version_key="agt_abcdef1234567890#v1",
+    )["conversation_id"]
+    turn_no = conversations.begin_turn(cid, scope_fingerprint, kind="qa", question="上一轮的问题")
+    conversations.complete_turn(cid, scope_fingerprint, turn_no, answer={"text": "上一轮的答案"})
+
+    runtime.gateway_settings.context_max_turns = 0  # out of range
+    # The logger name is the one the module actually uses (`aiops.` prefix, not
+    # the package name). Naming a logger that does not exist still passes —
+    # propagation reaches the root handler caplog owns — so a wrong name here
+    # would assert "some warning happened" while claiming to pin this one.
+    with caplog.at_level(logging.WARNING, logger="aiops.gateway_runtime"):
+        history = runtime._conversation_history((cid, scope_fingerprint, turn_no), "zh")
+
+    assert history == ""
+    assert any(
+        record.name == "aiops.gateway_runtime" and "conversation history unavailable" in record.message
+        for record in caplog.records
+    )
+
+    # The same call with a valid window returns the turn, so the empty result
+    # above is the setting and not the store.
+    runtime.gateway_settings.context_max_turns = 8
+    assert "上一轮的问题" in runtime._conversation_history((cid, scope_fingerprint, turn_no), "zh")

@@ -566,6 +566,20 @@ Java BFF 透传与前端 blocks[] 渲染属 #171/#173 及真实媒体验收范�
 - 清理：同上。
 - 结果：PASS（2026-09-10，pytest `tests/test_conversation_api.py`）。
 
+### CONV-06 会话历史进入提示词（#482）
+
+- 环境：同 CONV-01（协议层）+ 本地 `ConversationStore`（窗口渲染）。
+- 前置条件：会话内已有若干**已完成**轮次（含一轮订单诊断）。
+- 测试数据：两轮已完成的 qa 轮次、一轮已完成的诊断轮次、一轮生成中、一轮被取消；
+  一条答案文本里带 `Bearer <JWT>` 形状的串。
+- 有序动作：渲染窗口 → 生成 prompt（三条路径各一次）→ 空历史再生成一次 → 逐字比对。
+- 预期结果：**轮次按发生顺序**出现（最旧在前）；诊断轮次以 `summary` + `root_cause` 进入；
+  生成中与被取消的轮次**不出现**；JWT 形状的串已被脱敏为 `REDACTED`；
+  标注按**本轮语言**（历史正文不翻译）；**空历史时三条路径的 prompt 均与接线前逐字相同**。
+- 清理：临时库自动回收。
+- 结果：PASS（2026-09-30，`tests/test_conversation_context.py`；
+  源码级封口 `tests/test_conversation_context_wiring.py`）。
+
 ### CONV-05 订单诊断线的会话语义（#483）
 
 - 环境：同 CONV-01。
