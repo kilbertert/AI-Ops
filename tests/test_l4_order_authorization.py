@@ -194,7 +194,16 @@ def test_the_delivery_records_agree_on_who_carries_the_pending_item() -> None:
         # Only the #479 milestone block matters here.
         if "#479" not in text:
             pytest.skip(f"{name} 里没有 #479 条目")
-        start = text.index("#479")
+        # Anchor on the *milestone heading*, not the first `#479` mention: any
+        # earlier section that references the ticket would otherwise become the
+        # block under test. (That is exactly what happened when a later closeout
+        # entry cited `#479` above its own milestone.)
+        # Both documents have a `#479` milestone, but they head it differently
+        # (`## #479 …` vs `## 2026-10-01 · #479 …`). Anchor on a heading line
+        # that contains the ticket, not on the bare number.
+        m = re.search(r"^## [^\n]*#479", text, re.MULTILINE)
+        assert m, f"{name} 里找不到 #479 的里程碑标题"
+        start = m.start()
         # End at the *next* milestone heading: a fixed-width window reaches into
         # whatever entry follows, so a later milestone could satisfy these
         # checks while #479 itself lost them.
