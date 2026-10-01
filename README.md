@@ -512,15 +512,19 @@ uv run python -m compileall -q src tests && uv pip check
 ### 持续部署（[:cd.yml](.github/workflows/cd.yml) + [:deploy/deploy-41.sh](deploy/deploy-41.sh)）
 
 CI 保证「合并进来的东西是对的」，CD 负责「把它送到 41 上跑」。触发条件是
-`main` 上 `src/**` 的改动（纯文档合并不部署，也不该占用人审批的注意力）。
+`main` 上命中 `cd.yml` 的 `push.paths` 的改动（纯文档合并不部署，也不该占用人审批的注意力）。
 
 ```
-push main (src/**) → cd.yml → environment: production-41 → deploy-41.sh
+push main (src/** | deploy 的两个部署脚本 | 依赖清单 | 参考资料) → cd.yml → environment: production-41 → deploy-41.sh
 ```
+
+`deploy/` 下**只有** `deploy-41.sh` 与 `classify-remote-result.sh` 在触发集合里（#520）；
+`company-gitlab-api.sh`、`routing-window.sh` 这类只读取数脚本**不在** —— 改它们不重启生产。
+判据是「这次部署是否真的执行它」，不是文件名。
 
 > ⚠️ **2026-09-30 起这道门是自动的**：仓库所有者决定去掉人工审批（原文见
 > [`docs/validation.md`](docs/validation.md) 的「决定记录：CD 的人工批准门按仓库所有者决定去掉」）。
-> **任何合并到 main 且命中 `src/**` 的提交都会自动部署到生产。**
+> **任何合并到 main 且命中 `cd.yml` 的 `push.paths` 的提交都会自动部署到生产。**
 > 「什么人能改生产」因此等于「**什么人能合并到 main**」—— 那道门仍在
 > （Ruleset 要求 PR、必需检查、会话解决），去掉的只是"合并之后再点一次"。
 > `production-41` 环境本身保留（部署账本、只允许 main 的分支策略）。

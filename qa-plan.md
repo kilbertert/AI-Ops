@@ -1285,6 +1285,10 @@ ANSWER-PAYLOAD-01~05、07 证明的是**调用方形态无法再漂**，同样�
 | CD-41-22 | 本机 | 生成的远端块 | dry-run 后对块单独 `bash -n`（`tests/test_cd_deploy_scripts.py`） | PASS。**已用复现 bug 验证**：未转义的位置参数会让它失败（`$1: unbound variable`）。heredoc 是生成的，静态检查看不到 |
 | CD-41-23 | 41 实机 | 预置一个陈旧 tar 残留（`aiops-sync-DEADBEEF1234.tar.gz`） | `deploy-41.sh --commit <good>` | PASS（2026-09-23）：陈旧残留被清、本次的包正常解包并在结束时自清、服务 healthy。**改前该逻辑会删掉本次的包**（钻演实测 `mutate-failed=extract`） | 假残留已清 |
 | CD-41-24 | 41 实机 | 移走一份受管参考资料（`docs/architecture.md`） | `deploy-41.sh --commit HEAD` | PASS：以 1 退出、给出两条处理路径（人工放置 / 显式移除）、不上传不写入；放回后正常部署通过 | 文件已放回 |
+| CD-41-25 | 本机 | 取数脚本不再触发部署（#520） | 读 `cd.yml` 的 `push.paths`，断言无 `deploy/**`、且四个只读脚本各自不在其中 | PASS：`tests/test_cd_deploy_scripts.py::test_cd_paths_does_not_trigger_on_read_only_scripts`。**已做突变验证**：把 `paths` 改回 `deploy/**`，该条变红 | 突变结果记入 `validation.md`「#520」 |
+| CD-41-26 | 本机 | 部署自身执行的文件必须仍触发（#520 不能收窄过头） | 断言 `deploy-41.sh` 与 `classify-remote-result.sh` 都在 `paths` 中；删掉任一项应变红 | PASS：`test_cd_paths_covers_everything_deploy41_executes`。**已做突变验证**：删掉 `classify-remote-result.sh`，变红 | 同上 |
+| CD-41-27 | 本机 | 参考资料仍在触发集合内（CD-41-14 的机器化） | 从 `deploy-41.sh` 解析 `REFERENCE_FILES`，逐份断言在 `paths` 中；删掉任一份应变红 | PASS：`test_cd_paths_still_covers_reference_files`。**已做突变验证**：删掉 `docs/architecture.md`，变红 | 同上 |
+| CD-41-28 | 本机 | 守卫助手自身可失败（返回空列表时守卫会恒真） | 用两份改坏的真实 `cd.yml` 副本驱动助手，断言抛错 | PASS：`test_cd_paths_guard_reads_the_real_block`。**已做突变验证**：去掉助手内的 `assert paths`，该条变红（否则三条守卫会静默全过） | 同上 |
 | CD-41-05 | GitHub Actions | 已合并一个 `src/**` 改动；environment 已配 required reviewer | 观察 `cd.yml` 运行 | **未执行**：workflow 层尚未真实触发过。需首次合并 `src/**` 并在 `production-41` 上点批准来验证触发、审批门与代理解析 | 待补 |
 | CD-41-06 | GitHub Actions | CD-41-05 通过 | 在同一 run 上不批准，等待 | **未执行**：需验证「未批准则不写入 41」 | 待补 |
 

@@ -1450,6 +1450,22 @@ Feature: 持续部署到服务主机
       When CD workflow 评估触发条件
       Then 不产生部署运行
 
+    Scenario: 改动与部署无关的取数脚本不触发部署
+      Given 一个只改 deploy/company-gitlab-api.sh 的提交合并到 main
+      When CD workflow 评估触发条件
+      Then 不产生部署运行
+      And 41 上的网关进程启动时刻不变
+
+    Scenario: 改动部署自身的脚本触发一次部署
+      Given 一个改 deploy/deploy-41.sh 或 deploy/classify-remote-result.sh 的提交合并到 main
+      When CD workflow 评估触发条件
+      Then 产生一次部署运行
+
+    Scenario: 新增一个被部署脚本执行的 deploy 文件时触发集合必须同步
+      Given deploy-41.sh 开始执行一个新的 deploy/ 文件
+      When 确定性检查运行
+      Then 存在一条断言要求该文件出现在 cd.yml 的 push.paths 中
+
     Scenario: 影响运行时的合并触发一次受门控的部署
       Given 一个改动 src/ 的提交合并到 main
       When CD workflow 运行
