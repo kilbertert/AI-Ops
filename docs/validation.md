@@ -7,6 +7,78 @@
 
 
 
+## #413 41 实机复核（2026-10-01）——**一半通过，另一半卡在模型额度**
+
+票内验收：「`重卡充电案例` **不再返回 `type=faq`**，且进入 `case_exploration` 宣传路径
+**（或诚实空卡片）**」。41 实机（真实会话、真实 Jev、**已部署的构建** `0.1.0+8c172f26d925`，
+而 #413 的修复 `047b91e` 已在其中）：
+
+```
+POST /v1/assistant/questions {"question":"重卡充电案例"}
+→ 202 queued → completed
+{"blocks":[{"kind":"text","text":"客户案例服务暂时不可用，请稍后重试。"}],
+ "retrieval_status":"unavailable"}
+```
+
+`agent_run_metrics` 记 **`route_type='promo'`** ⇒ **进入了宣传路径**。
+修复前是 `type=faq` / `consumer.faq.q009`（一张 RFID 卡操作说明）。
+
+| 判据 | 结果 |
+|---|---|
+| 不再返回 `type=faq` | ✅ 实测：`type=qa` + `route_type=promo` |
+| 进入 `case_exploration` 宣传路径 | ✅ 实测（`route_type=promo`） |
+| **真的出案例卡片** | ❌ **未取得** —— 卡片是「诚实空卡片」那一支 |
+
+### 卡片为什么是空的：不是 KB，是**模型账户余额**
+
+**先排除一个我一开始猜错的方向**：我起初怀疑 KB 检索没接上，**那是错的**。
+41 上 KB 检索**可用**，实测：
+
+```
+POST http://127.0.0.1:29380/kb/knowledge-bases/8701c742…/search   （带 tenant-id 头）
+→ 200，命中的第一条正是
+  <caption>宣传 > 客户案例·重卡充电桩流量平台｜从各自为站到互联成势…</caption>
+```
+
+`GET /healthz` → `{"status":"ok"}`；`kb_service_base_url` / `media_signing_secret` 都已配置。
+
+**真正的阻塞在模型侧**（`/var/lib/aiops-41/gateway/runs/run-20261001T124213Z-qa-c230/events.jsonl`）：
+
+```
+codex_turn_failed  error_type=RuntimeError
+unexpected status 403 Forbidden: [sk-x4CF**********86yU]
+  预扣费额度失败, 用户剩余额度: ¥0.001794, 需要预扣费额度: ¥0.017245
+  url: http://127.0.0.1:8799/responses
+```
+
+`8799` 是 `aiops-responses-adapter`，上游 `ai-api.baoyun.com`。**账户余额耗尽**。
+
+**链条因此是**：promo agent 选到了（租户 `1942105476598861824` 的 shortcut 带
+`target=agt_ed443cae…v2`）→ KB 检索可跑 → **模型调用预付失败** →
+`AgentRuntimeError` → 按 promo 契约降级为**诚实空卡片**
+（`gateway_runtime.py:1457-1478` 那段注释写的正是这个场景）。
+
+**这解释了全部三次观测**：另一次（租户 `1961353704485687296`，无宣传 agent）秒回同一张卡片
+——那是「没有可解析的宣传 agent」那一支。
+
+⚠️ **一处口径要说准**：`retrieval_status=unavailable` 的字面意思是「**一次检索都没跑**」，
+但本例**KB 检索是通的**，卡在它之后的模型调用。所以这次不能读成「检索不可用」——
+**这个字段在这里确实会误导人**，值得单独记（未改代码，只记现象）。
+
+### 未完成的部分与它的前置
+
+**取不到「真的出案例卡片」这一条的验收**，因为 41 的模型端点没有余额。
+而要取得它，需要**改变生产模型端点或给账户充值** —— 两者都是费用与凭据决定，
+**不是在 41 上「把 KB 接上」就能解决的**（KB 本来就是通的）。
+
+**已暂缓**：凡是**需要调用模型**的验收或施工，等生产者解决额度问题后再继续。
+
+### 那次实测用的会话
+
+从公司会话 Redis 取的活动 `third-session`（本机 `127.0.0.1:6379`，前缀 `app:3rd_session:`，
+按 `env-41-runbook.md` §4.1 的既有步骤）。**令牌不落仓库、不贴文档、不写聊天记录**；
+本次用到的两个临时文件已删除。
+
 ## #405 到期评估（2026-10-01 取数）——**不满足，本票停在原地**
 
 > ⚠️ **这不是「到 10-07 再看」的提前执行**，而是一次**主动核对**：核对下来发现
