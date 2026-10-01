@@ -26,6 +26,7 @@ half that regressed.
 
 from __future__ import annotations
 
+import functools
 import os
 import re
 import shutil
@@ -40,6 +41,14 @@ SCRIPT = "deploy/company-gitlab-api.sh"
 
 #: A scope note the shell would happily swallow as an argument.
 _NOTE_AT_LINE_END = re.compile(r"[（(]\s*(全部|前\s*\d+\s*行)[^）)]*[）)]\s*$")
+
+#: "全部" means the block shows the whole thing. A note may add a count —
+#: "全部（该查询共 3 行）" — but nothing may be cut away.
+_WHOLE = re.compile(r"^全部")
+
+
+def _is_whole(note: str) -> bool:
+    return bool(_WHOLE.match(note.strip()))
 
 
 def _section_6() -> str:
@@ -107,12 +116,20 @@ def test_every_documented_command_is_extractable() -> None:
 
 
 def test_the_coverage_table_has_no_stale_rows() -> None:
-    """Every covered command must exist in the block, and vice versa."""
+    """The table and the block name the same commands, and the same count.
+
+    Both directions matter and the first version only checked one: a command
+    added to the block but left out of the table would never be checked for
+    truncation, which is exactly the gap the table exists to close.
+    """
     documented = _commands()
     covered = _coverage_totals()
     assert covered, "§6 的覆盖表不见了 —— 它是「哪条截断了」的唯一出处"
-    for cmd, _ in covered.items():
+    for cmd in covered:
         assert cmd in documented, f"覆盖表里有一条命令在代码块里找不到：{cmd}"
+    for cmd in documented:
+        assert cmd in covered, f"代码块里有一条命令不在覆盖表里（没人核它截没截）：{cmd}"
+    assert len(covered) == len(documented)
 
 
 def test_the_script_rejects_unknown_arguments_loudly() -> None:
@@ -164,51 +181,61 @@ def test_the_commands_run_verbatim() -> None:
         assert "未知参数" not in proc.stderr, command
 
 
+@functools.cache
+def real_lines(cmd: str) -> tuple[str, ...]:
+    """Run one documented command once; the live checks share the result."""
+    env = _recon_env()
+    proc = subprocess.run(
+        ["bash", "-c", cmd], cwd=PROJECT_ROOT, env=env, capture_output=True, text=True, timeout=180
+    )
+    assert proc.returncode == 0, f"{cmd}\n{proc.stderr}"
+    return tuple(proc.stdout.rstrip("\n").splitlines())
+
+
 @_live
 def test_the_untruncated_commands_reproduce_exactly() -> None:
     """ "全部" means the block shows the whole output — so it must match."""
-    env = _recon_env()
     documented = _block_lines()
     totals = _coverage_totals()
 
-    def real(cmd: str) -> list[str]:
-        proc = subprocess.run(
-            ["bash", "-c", cmd], cwd=PROJECT_ROOT, env=env, capture_output=True, text=True, timeout=180
-        )
-        assert proc.returncode == 0, f"{cmd}\n{proc.stderr}"
-        return proc.stdout.rstrip("\n").splitlines()
-
+    real_lines.cache_clear()
     checked = 0
     for cmd, note in totals.items():
-        if note.strip() != "全部":
+        if not _is_whole(note):
             continue
-        start = documented.index(f"$ {cmd}")
-        shown: list[str] = []
-        for line in documented[start + 1 :]:
-            if line.startswith("$ "):
-                break
-            # Blank lines separate commands in the block, so they are part of
-            # what is shown; only a `$ ` ends it.
-            shown.append(line)
-        # …but the block pads the last output before the closing fence, and the
-        # real output has no such padding.
-        while shown and not shown[-1].strip():
-            shown.pop()
-        assert real(cmd) == shown, f"「全部」的命令对不上：{cmd}"
+        assert list(real_lines(cmd)) == _documented_output(documented, cmd), f"「全部」的命令对不上：{cmd}"
         checked += 1
     assert checked >= 5, f"只核对了 {checked} 条，覆盖表可能退化了"
 
 
+def _documented_output(documented: list[str], cmd: str) -> list[str]:
+    """The block's output for `cmd`: everything up to the next `$ `, less padding."""
+    start = documented.index(f"$ {cmd}")
+    shown: list[str] = []
+    for line in documented[start + 1 :]:
+        if line.startswith("$ "):
+            break
+        shown.append(line)
+    while shown and not shown[-1].strip():
+        shown.pop()
+    return shown
+
+
 @_live
-def test_the_truncated_rows_state_the_true_total() -> None:
-    """`前 N 行（共 M 行）` — M has to be the real line count."""
-    env = _recon_env()
+def test_the_truncated_rows_show_the_truth_and_state_the_true_total() -> None:
+    """A truncated row is checked on both halves: what is shown, and how much there is.
+
+    Checking only the total let a row keep a stale first line while the count
+    stayed right — the reader sees a command whose output no longer matches.
+    """
+    documented = _block_lines()
+    checked_rows = 0
     for cmd, note in _coverage_totals().items():
         m = re.search(r"共\s*(\d+)\s*行", note)
         if not m:
             continue
-        proc = subprocess.run(
-            ["bash", "-c", cmd], cwd=PROJECT_ROOT, env=env, capture_output=True, text=True, timeout=180
-        )
-        assert proc.returncode == 0, f"{cmd}\n{proc.stderr}"
-        assert len(proc.stdout.rstrip("\n").splitlines()) == int(m.group(1)), cmd
+        shown = _documented_output(documented, cmd)
+        assert list(real_lines(cmd))[: len(shown)] == shown, f"截断行贴出的内容对不上：{cmd}"
+        assert len(real_lines(cmd)) == int(m.group(1)), cmd
+        checked_rows += 1
+    assert checked_rows >= 2, f"只核对了 {checked_rows} 条截断行"
