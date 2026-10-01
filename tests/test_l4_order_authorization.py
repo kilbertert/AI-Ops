@@ -173,9 +173,36 @@ def test_it_does_not_let_shop_scope_stand_in_for_partner_authorization() -> None
 
 def test_it_states_what_it_did_not_do() -> None:
     l4 = _section("L4")
-    not_done = _tail(l4, "L4-5")
+    not_done = _tail(l4, "L4-5").split("\n### ")[0]
     assert "不实现" in not_done, "没写明本票不实现订单授权"
     assert "不重测" in not_done, "没写明数字来自既有实测、本票未重测"
+    # Every "not done" item that has an owner must name a live one. This line
+    # pointed at D batch, which finished on 2026-09-30.
+    assert "不是 D 批" in not_done or "不是已完成的 D 批" in not_done, (
+        "「不定两条路选哪条」那一项又指向了已完成的 D 批 —— 承接方必须是后续票"
+    )
+
+
+def test_the_delivery_records_agree_on_who_carries_the_pending_item() -> None:
+    """`validation.md` and `开发进度.md` must not point back at D batch.
+
+    The correction landed in the baseline first; these two were the places a
+    reader goes for "what happens next", and they still said D batch.
+    """
+    for name in ("validation.md", "开发进度.md"):
+        text = (PROJECT_ROOT / "docs" / name).read_text(encoding="utf-8")
+        # Only the #479 milestone block matters here.
+        if "#479" not in text:
+            pytest.skip(f"{name} 里没有 #479 条目")
+        start = text.index("#479")
+        block = text[start : start + 3000]
+        assert "后续票" in block, f"{name} 的 #479 条目没写清待收敛项由谁承接"
+        assert "指向 D 批" not in block and "留给 D 批" not in block, (
+            f"{name} 的 #479 条目仍把待收敛项指向已完成的 D 批"
+        )
+        assert "未完成业务验收" in block, (
+            f"{name} 的 #479 条目没写明「未完成业务验收」—— AGENTS.md 要求这一状态必须写出来"
+        )
 
 
 def test_it_records_where_the_baseline_fell_short() -> None:
