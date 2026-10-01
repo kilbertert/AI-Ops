@@ -1091,10 +1091,31 @@ deploy/routing-window.sh 2026-10-01T00:00:00+00:00    # 或显式给起点
 ### 这对 #405 的到期评估意味着什么
 
 `#405` 的判据是**日历时间**（≥7 天）。**「时钟在走」与「证据在积累」是两件事**：
-本窗口里只有时钟在走。因此 2026-10-07 的评估**必须同时满足**两条，缺一即不成立：
+本窗口里只有时钟在走。因此 2026-10-07 的评估**必须同时满足**三条，缺一即不成立：
 
 1. 窗口内 `route_type='routing'` 的**成功计数 > 0**（#464 已使这条可判）；
-2. 窗口内**没有**（或已取数并解释）`failed` 行（原判据）。
+2. 窗口内**没有**（或已取数并解释）`failed` 行（原判据）；
+3. **成功要分布在窗口里**，不是某一天的一次 —— 七天里只有一次成功、其余六天零判定，
+   同样满足 1 与 2，却显然不是「连续运行 ≥ 7 天」。
+
+**第 3 条怎么取**（判据必须自带取数方式，否则到了 10-07 又要现发明一遍）：
+
+```bash
+# 按天分组，看成功分布在哪些天。同一条命令，加一个 strftime。
+ssh aiops-41 'sudo -u aiops41 /opt/aiops-41/.venv/bin/python -c "
+import sqlite3
+c = sqlite3.connect("/var/lib/aiops-41/gateway/gateway.db")
+for row in c.execute(
+    "SELECT substr(created_at,1,10) AS day, outcome, COUNT(*) FROM agent_run_metrics"
+    " WHERE route_type='routing' AND created_at > ? GROUP BY 1,2 ORDER BY 1",
+    (WINDOW_START,),
+):
+    print(row)
+"'
+```
+
+`WINDOW_START` 取 `deploy/routing-window.sh` 打印的那个起点。**「成功天数」**（有至少一次
+成功的天数）才是第 3 条要的那个数；把它与 7 一起写进结论。
 
 **若届时仍无流量**，正确结论是「观察期内判定路径未被使用」，而不是「连续运行通过」——
 #405 的前置条目要按此措辞记录，不能把「没有失败」写成「稳定运行」。
