@@ -102,26 +102,20 @@ def test_the_citation_shape_is_repo_branch_file_line() -> None:
     not, because the line number moves between branches.
     """
     l2 = _section("L2")
-    # Any `…/something.(java|xml|sql):NN` — with or without a branch prefix.
-    files = re.findall(r"`([^`]*\.(?:java|xml|sql):\d+(?:-\d+)?)`", l2)
-    assert len(files) >= 15, f"L2 里的文件出处太少（{len(files)} 条），可能被删了"
-    for f in files:
-        # `repo:branch:path/to/File.java:NN`. Split off the trailing `:NN`
-        # first, then the path is everything after `repo:branch:` — a path
-        # segment like `datascope/shop/…` has slashes but no colon, so counting
-        # colons in `f` is what tells the two apart.
-        assert f.count(":") >= 3, f"出处缺分支或行号（形如 仓:分支:文件:行）：`{f}`"
-
-    # A citation missing its line number would not match `_CITATION` at all, so
-    # the loop above cannot see it — and a row that already has one good
-    # citation would still pass. Catch the omission directly: every path-looking
-    # token in a code span is a citation, and every citation ends in `:NN`.
-    for token in re.findall(r"`([^`]+)`", l2):
-        if not re.search(r"\.(?:java|xml|sql)$", token):
-            continue
-        assert re.search(r":\d+(?:-\d+)?$", token), (
-            f"这是一个没有行号的出处（写成 `仓:分支:文件:行`）：`{token}`"
+    # Any code span that *contains* a source path — in any position. Anchoring on
+    # the end (`.java$`) misses a citation whose line number is not a number
+    # (`…/IotChargingDevice.java:待核` does not end in `.java` at all), and a row
+    # that already carries one good citation would pass anyway. So: find the path
+    # anywhere, then require the whole span to end in `:NN`.
+    spans = [s for s in re.findall(r"`([^`]+)`", l2) if re.search(r"\.(?:java|xml|sql)[:\s`]", s + " ")]
+    assert len(spans) >= 15, f"L2 里的文件出处太少（{len(spans)} 条），可能被删了"
+    for s in spans:
+        assert re.search(r":\d+(?:-\d+)?$", s), (
+            f"出处的行号必须是数字且写在末尾（形如 仓:分支:文件:行）：`{s}`"
         )
+        # `repo:branch:path/to/File.java:NN` — the path has slashes but no colon
+        # of its own, so the colon count is what distinguishes branch from path.
+        assert s.count(":") >= 3, f"出处缺分支或行号（形如 仓:分支:文件:行）：`{s}`"
 
 
 def test_platform_stays_a_sentinel_and_not_an_entity() -> None:
