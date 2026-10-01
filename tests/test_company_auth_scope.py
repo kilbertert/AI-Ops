@@ -122,11 +122,28 @@ def test_the_two_client_type_sets_are_written_down() -> None:
 
 
 def test_it_says_which_side_ai_ops_falls_on() -> None:
-    """The layer must not leave the reader to infer it from the sets."""
+    """The layer must not leave the reader to infer it from the sets.
+
+    And it must not overstate it either. A previous draft said flatly that
+    "AI-Ops does not send client-type ⇒ no isolation", which reads as "this
+    isolation does not apply to us" — when the real finding is "AI-Ops is a
+    third data path that goes *around* it". The distinction is the whole point
+    of the paragraph, so it is checked.
+    """
     l3 = _section("L3")
     gate = _between(l3, "L3-3", "L3-4")
     assert "AI-Ops" in gate
-    assert "不隔离" in gate or "不过" in gate
+    assert "不过" in gate or "不隔离" in gate
+    # Split by call shape, not one blanket sentence: there must be a table row
+    # for the AI-Ops outbound call *and* one for the browser-to-backend call.
+    rows = [r for r in gate.splitlines() if r.startswith("|")]
+    assert any("AI-Ops" in r for r in rows), "表里没有「AI-Ops 出站调用」那一行"
+    assert any("管家端" in r for r in rows), (
+        "表里没有「管家端浏览器直连公司后端」那一行 —— 两种调用形态必须分开写"
+    )
+    assert "绕开" in gate, "没点明 AI-Ops 是**绕开**这套隔离，而不是「隔离对它不适用」"
+    # And it must flag that D batch can change the answer.
+    assert "D 批" in gate, "没写明这条结论会被 D 批改掉、届时需要重测"
 
 
 def test_the_empty_set_branches_are_distinguished() -> None:

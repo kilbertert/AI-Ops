@@ -393,12 +393,28 @@ where条件」），落地在 `ShopIdInterceptor.java:189-221`。
 `equalsAnyIgnoreCase`（`:55`）比对，拦截器用 `equalsAny`（大小写敏感）。
 ⇒ `H5` 过得了网关，过不了隔离门；`admin` 反之。
 
-**AI-Ops 落在哪一支**：AI-Ops 的调用**不带 `client-type`**（本仓全仓检索零引用，
-见 `docs/agents/operator-repair-blueprint.md` F5），也**不在公司的网关之后**
-（§1 的依据在 `company-platform-integration-baseline.md` §1）。
-⇒ 门 5 **不过** ⇒ `ShopIdInterceptor` 对 AI-Ops 的查询**完全不隔离**。
-这不是猜测：它由「AI-Ops 走 nginx 直连、不经 `cloud-gateway`」+「隔离门要求 `client-type`
-属于那一小撮」两条推出，两条都有出处。
+**AI-Ops 落在哪一支** —— ⚠️ **这里要说准：是「分两次调用」+「将来取决于 D 批」，不是一句
+「AI-Ops 不隔离」**。本层的评审抓出过一个把结论下满的写法（说「管家端在网关之后、
+隔离可能已生效」），所以按调用形态分开写：
+
+| 调用形态 | 带不带 `client-type` | 门 5 | 结果 |
+|---|---|---|---|
+| AI-Ops 出站调公司接口（`/diag/*`、UPMS `/user/inside/*` 等） | **不带**：出站头只有 `X-Internal-Token` 与 `Accept`（`src/aiops_diagnostics/sources.py:722` + `:672-677`），**不转发任何入站头** | **不过** | 这些调用**不隔离** |
+| 管家端浏览器 → 公司后端（**不经过 AI-Ops**） | 带（前端产物实发 `admin` / `tenant-app`） | **过** | 隔离**生效**，与 AI-Ops 无关 |
+
+⇒ **正确结论是**：AI-Ops 是第三条数据路径（直连生产库 / 走 `/diag/*`），因此**绕开**了
+这套隔离；**不是**「这套隔离对 AI-Ops 不生效所以无所谓」——后者会把「缺一层授权」
+读成「不需要这层授权」。两条事实各有出处：
+
+- AI-Ops 出站不带 `client-type`：`src/aiops_diagnostics/sources.py:712-723`、
+  `src/aiops_diagnostics/http_auth.py`（此前记作蓝图 F5「AI-Ops 侧零引用」，**本票复核为
+  「出站构造里没有这个头」——比「零引用」更准**）；
+- AI-Ops 现在**不在**公司网关之后：`company-platform-integration-baseline.md` §1
+  （nginx 把 `/v1/` 写在网关前面）。
+
+⚠️ **第二条是会被 D 批改掉的**（蓝图 §2 的目标态就是把 AI-Ops 挂到网关之后）。
+到那时**本节这一段要重测**：挂过去之后，`/v1/` 是否会被网关注入 `client-type`、
+注入成哪一个值，直接决定门 5 过不过。**本票不预测那个结果**——它取决于 D 批怎么落。
 
 ---
 
