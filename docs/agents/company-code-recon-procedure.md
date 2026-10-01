@@ -205,25 +205,26 @@ SPKI sha256 = sha256//0E4usLaswMAYis+NuEpr5B2untcdBdi6AQgz7ISMjhQ=
 
 ## 6. 当场跑通留下的真实输出（2026-10-01）
 
-供复核用。**下面是节选**，不是完整输出——每条命令都注明了取的是前几行或总数，
-要重跑请直接执行命令本身。命令与输出逐字粘贴，未修饰。
+供复核用。**每条命令逐字可复制；输出按标注截取**——标了「全部」的是完整输出，
+标了「前 N 行」的只贴了开头 N 行。没有第三种情况：凡截断都写明了行数，任一行的原文
+都可直接重跑取回。
 
 ```
-$ deploy/company-gitlab-api.sh pin
+$ deploy/company-gitlab-api.sh pin                                                    （全部）
 sha256//0E4usLaswMAYis+NuEpr5B2untcdBdi6AQgz7ISMjhQ=
 
-$ deploy/company-gitlab-api.sh projects --search cloud-charging-pile      （全部 3 行）
+$ deploy/company-gitlab-api.sh projects --search cloud-charging-pile                  （全部 3 行）
 363	iot/cloud-charging-pile	default=master	activity=2026-09-30T09:51:26.553Z
 526	mtz/cloud-charging-pile	default=master	activity=2024-04-10T02:01:53.593Z
 524	mtw/cloud-charging-pile	default=master	activity=2024-04-10T01:57:21.980Z
 
-$ deploy/company-gitlab-api.sh group --id 90 | wc -l
+$ deploy/company-gitlab-api.sh group --id 90 | wc -l                                  （全部）
 28
 
-$ deploy/company-gitlab-api.sh tree --project 363 --ref master --count-java
+$ deploy/company-gitlab-api.sh tree --project 363 --ref master --count-java           （全部）
 ref=master blobs=46 java=34
 
-$ deploy/company-gitlab-api.sh tree --project 363 --ref release --count-java
+$ deploy/company-gitlab-api.sh tree --project 363 --ref release --count-java          （全部）
 ref=release blobs=2480 java=2012
 
 $ deploy/company-gitlab-api.sh blobs --project 363 --ref release --search '@Inside'   （前 3 行）
@@ -235,10 +236,10 @@ $ deploy/company-gitlab-api.sh raw --project 363 --ref master \
     --path cloud-charging-pile-client/src/main/java/com/qushiyun/cloud/charging/pile/client/DemoFeignClient.java   （前 2 行）
 package com.qushiyun.cloud.charging.pile.client;
 
-$ deploy/company-gitlab-api.sh projects --search 充电桩 | wc -l
+$ deploy/company-gitlab-api.sh projects --search 充电桩 | wc -l                       （全部）
 9
 
-$ deploy/company-gitlab-api.sh projects --search cloud-charging-pile | wc -l
+$ deploy/company-gitlab-api.sh projects --search cloud-charging-pile | wc -l          （全部）
 3
 ```
 
