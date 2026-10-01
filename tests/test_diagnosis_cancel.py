@@ -203,3 +203,52 @@ def _scope_fingerprint(client: TestClient) -> str:
     resolver = client.app.state.gateway.caller_resolver
     context = resolver.resolve("service", required_scope="aiops:diagnoses:write", third_session=None)
     return context.scope_fingerprint
+
+
+def test_a_cancelled_diagnosis_turn_stays_out_of_the_context_window(tmp_path: Path, monkeypatch) -> None:
+    """Acceptance criterion 3: the stopped turn does not become history.
+
+    A question the user cancelled is one they rejected — it must not come back
+    as context for the next one. The mechanism is the claim guard: the worker's
+    late ``_complete_conversation_turn(..., cancelled=True, guarded=True)``
+    finds the row already terminal and drops the turn instead of filling it.
+
+    Asserted through the store the app itself uses, so this is the same window
+    the next question reads.
+    """
+    gates = _gates()
+    gates["before_turn"].set()  # let the turn start as soon as the model runs
+    client, runtime = _diagnosis_client(tmp_path, monkeypatch, gates=gates, turn=_Turn())
+    try:
+        conversation = client.post(
+            "/v1/conversations",
+            json={"agent_version_key": "agt_abcdef1234567890#v1"},
+            headers=HEADERS,
+        ).json()
+        cid = conversation["conversation_id"]
+        client.post(f"/v1/conversations/{cid}/active-order", json={"order_no": ORDER}, headers=HEADERS)
+
+        asked = client.post(
+            "/v1/assistant/questions",
+            json={"question": "这个订单为什么提前停了", "conversation_id": cid},
+            headers=HEADERS,
+        )
+        diagnosis_id = asked.json()["diagnosis_id"]
+        assert gates["turn_started"].wait(10), "the worker never reached the model turn"
+
+        stopped = client.post(f"/v1/standard/diagnoses/{diagnosis_id}/cancel", headers=HEADERS)
+        assert stopped.json()["status"] == "cancelled"
+
+        scope = _scope_fingerprint(client)
+        store = client.app.state.gateway.conversation_store
+        # The cancelled turn never becomes history: the window is empty.
+        assert store.context_turns(cid, scope) == [], (
+            "a cancelled turn entered the context window — the user rejected that answer"
+        )
+        # The turn row itself is not left behind holding the slot either.
+        detail = client.get(f"/v1/conversations/{cid}", headers=HEADERS).json()
+        assert detail["turns"] == []
+    finally:
+        gates["release"].set()
+        runtime.shutdown()
+        client.close()

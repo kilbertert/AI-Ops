@@ -1512,6 +1512,7 @@ uv run pytest tests/test_assistant_api.py tests/test_conversation_api.py \
 | DX-CANCEL-02 | 本地 dev | 一个不存在的诊断 id | 取消它 | PASS：404 `DIAGNOSIS_NOT_FOUND`；与「存在但不属于本调用者」同形（不泄漏存在性） | `...::test_cancelling_a_diagnosis_the_caller_cannot_see_is_not_found` |
 | DX-CANCEL-03 | 本地 dev | 库里已存在一条 `completed` 的诊断（不经 worker，直接建行） | 取消它 | PASS：200 且 `status` **仍为 completed**、`result` 原样返回；终态行未被改写 | `...::test_cancelling_a_finished_diagnosis_returns_its_own_terminal_state` |
 | DX-CANCEL-04 | 本地 dev | 同上 | 阅读 `assistant-cancel-handoff.md` §1.1 与 §1 表 | PASS：文档不再声称诊断不可取消，且登记的两条取消路由都出现在文档里 | `tests/test_assistant_cancel_handoff.py::test_the_handoff_states_the_diagnosis_cancel_contract`、`::test_the_cancel_routes_match_what_the_handoff_documents` |
+| DX-CANCEL-05 | 本地 dev | 诊断在模型调用中被取消 | 读该会话的上下文窗口与 `turns` | PASS：窗口为空、`turns` 为空 —— 被取消的轮次**不进入上下文**（用户否掉的回答不能当依据）。机制是 claim guard：worker 的迟到写入 `cancelled=True, guarded=True` 发现行已终态就丢弃该轮 | `...::test_a_cancelled_diagnosis_turn_stays_out_of_the_context_window`；突变：取消时不释放槽位 → 红 |
 
 - **DX-CANCEL-03 的「不被改写」是两层守住的**，突变验证说明了这一点：**单独**去掉 runtime
   的终态分支、或**单独**去掉 store 的 `WHERE status IN ('queued','running')`，用例都**仍然通过**；

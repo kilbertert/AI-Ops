@@ -409,7 +409,7 @@ class GatewayRuntime:
                 self._interrupt_registered_turn(registration)
                 self._release_conversation_turn(registration.conversation_turn)
             if accepted:
-                self._record_cancelled_qa_metric(context, registration)
+                self._record_cancelled_job_metric(context, registration)
             return self.store.get_standard_diagnosis(diagnosis_id, context.scope_fingerprint)
         # Already terminal: the caller sees the job's own final state, not a
         # cancellation that lost a race.
@@ -692,18 +692,22 @@ class GatewayRuntime:
             if accepted:
                 # One stop, one row, and never two: the terminal write is what
                 # decides the outcome, and only the request that wins it counts.
-                self._record_cancelled_qa_metric(context, registration)
+                self._record_cancelled_job_metric(context, registration)
             return self.store.get_assistant_question(qa_id, context.scope_fingerprint)
         # Already terminal: the answer (or the failure) the caller sees is the
         # job's own final state, not a cancellation that lost a race.
         return qa
 
-    def _record_cancelled_qa_metric(
+    def _record_cancelled_job_metric(
         self,
         context: ScopeContext,
         registration: JobRegistration | None,
     ) -> None:
-        """Record a stopped question as its own outcome (#359).
+        """Record a stopped job as its own outcome (#359; both lines since #499).
+
+        Named for the job rather than the question since #499: a stopped
+        diagnosis leaves the same row, and a name that says otherwise invites
+        the next reader to assume only questions are counted.
 
         ``cancelled`` has been a valid metric outcome since the metrics table
         was built and nothing ever wrote it, so "which questions do people give
