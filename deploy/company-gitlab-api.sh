@@ -5,7 +5,7 @@
 #   deploy/company-gitlab-api.sh pin
 #   deploy/company-gitlab-api.sh projects  --search <词>
 #   deploy/company-gitlab-api.sh group     --id <组id>
-#   deploy/company-gitlab-api.sh branches  --project <id>
+#   deploy/company-gitlab-api.sh branches  --project <id> [--limit N]
 #   deploy/company-gitlab-api.sh tree      --project <id> --ref <分支> [--count-java]
 #   deploy/company-gitlab-api.sh blobs     --project <id> --ref <分支> --search <词>
 #   deploy/company-gitlab-api.sh raw       --project <id> --ref <分支> --path <路径>
@@ -142,7 +142,7 @@ enc() { printf '%s' "$1" | jq -sRr @uri; }
 need() { [ -n "${2:-}" ] || die "$1 是必填。"; }
 
 cmd=${1:-help}; shift || true
-project=""; ref=""; search=""; id=""; path=""; count_java=0
+project=""; ref=""; search=""; id=""; path=""; count_java=0; limit=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --project) project=$2; shift 2;;
@@ -151,18 +151,37 @@ while [ $# -gt 0 ]; do
     --id)      id=$2;      shift 2;;
     --path)    path=$2;    shift 2;;
     --count-java) count_java=1; shift;;
+    --limit)   limit=$2;   shift 2;;
     *) die "未知参数 $1";;
   esac
 done
+
+#: `--limit` 是数字。这条检查必须在 `case` **之前**：放进分支里用
+#: `[ "$limit" -gt 0 ]` 判空/非数字时，那个测试本身会失败并被 `set -e` 吞掉，
+#: 结果是**静默地不按 limit 走**（实测就是那样，一个带分号的注入值也能过）。
+if [ -n "$limit" ]; then
+  case "$limit" in
+    ''|*[!0-9]*) die "--limit 只接受数字：$limit" ;;
+  esac
+  [ "${#limit}" -le 3 ] || die "--limit 最多 3 位：$limit"
+fi
 
 case "$cmd" in
   pin)
     pin; printf '\n'
     ;;
   projects)
-    need --search "$search"
-    fetch_all "/projects?search=$(enc "$search")&simple=true&order_by=last_activity_at" \
-      '.[] | "\(.id)\t\(.path_with_namespace)\tdefault=\(.default_branch)\tactivity=\(.last_activity_at)"'
+    # `--search` 不带 ⇒ 列**全部可见仓**（L1 仓库地图要的就是全集）。
+    # 带 ⇒ 按**仓库名**过滤，注意它是名字匹配、不是路径匹配：同一个名字可能在
+    # 多个命名空间下各有一份（实测 `cloud-charging-pile` 有 3 个），
+    # 所以「搜到了唯一一个」这个前提不成立，别据此下结论。
+    if [ -n "$search" ]; then
+      fetch_all "/projects?search=$(enc "$search")&simple=true&order_by=last_activity_at&sort=desc" \
+        '.[] | "\(.id)\t\(.path_with_namespace)\tdefault=\(.default_branch)\tactivity=\(.last_activity_at)"'
+    else
+      fetch_all "/projects?simple=true&order_by=last_activity_at&sort=desc" \
+        '.[] | "\(.id)\t\(.path_with_namespace)\tdefault=\(.default_branch)\tactivity=\(.last_activity_at)"'
+    fi
     ;;
   group)
     need --id "$id"
@@ -171,6 +190,16 @@ case "$cmd" in
     ;;
   branches)
     need --project "$project"
+    # `--limit N` 只报**最近提交的 N 个分支**，按提交时间倒序。
+    # 为什么需要它：仓库有几十个分支时（商城 60+），一份按名字排序的完整列表
+    # **读不出「真分支是哪一个」**——而判据正是「谁的提交最新」。
+    # `fetch_all` 已经取全，这里只是排序后截取，不再多发请求。
+    if [ -n "$limit" ]; then
+      fetch_all "/projects/$project/repository/branches?" \
+        '.[] | "\(.commit.committed_date)\t\(.name)"' \
+        | sort -r | head -n "$limit"
+      exit 0
+    fi
     fetch_all "/projects/$project/repository/branches?" \
       '.[] | "\(.name)\t\(.commit.committed_date)\t\(.commit.short_id)"'
     ;;
