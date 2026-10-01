@@ -340,7 +340,7 @@ C 批暂缓 ⇒ 这条口径**止于文档**，但必须先写下来。
 |---|---|
 | **#405** 删旧分类器 | ⏳ **等观察窗到期（约 10-07）**。前置三条里两条已满足，第三条（「连续运行」）**今天量不出来也给不出正向结论** —— 见下 |
 | **#413** 宣传 cue 表 | ✅ 代码已交付（PR #466）；**41 实机复核**仍是待验项，与 #405 的窗口一起做 |
-| **#414** 公司业务基线 | ✅ **6 张全部交付**（PR #513–#518）。产出基线四层 + 519 行索引 + 探查规程 + 取数脚本 + 四个证据测试 |
+| **#414** 公司业务基线 | ✅ **6 张全部交付**（PR #513–#518）。产出基线四层 + 519 行索引 + 探查规程 + 取数脚本 + **六个**证据测试 |
 
 **#405 的到期评估必须同时满足三条**（2026-10-01 写定，因为它改变结论的措辞）：
 
@@ -383,9 +383,10 @@ C 批暂缓 ⇒ 这条口径**止于文档**，但必须先写下来。
 | **#479** L4 订单授权用例 | L4 章节（六步引用链 + 覆盖缺口四分解 + 待收敛偏离） | #517 |
 | **#480** 待答清单重新定级 | `operator-authorization-questions.md` 按「要不要找人」分三类 | #518 |
 
-**四个证据测试**（每个 L 层一个）：`test_recon_procedure_evidence.py`、
-`test_repo_index_evidence.py`、`test_company_entity_map.py`、`test_company_auth_scope.py`、
-`test_l4_order_authorization.py`、`test_operator_questions_triage.py`。
+**六个证据测试**（#475–#480 各一个）：`test_recon_procedure_evidence.py`（#475）、
+`test_repo_index_evidence.py`（#476）、`test_company_entity_map.py`（#477）、
+`test_company_auth_scope.py`（#478）、`test_l4_order_authorization.py`（#479）、
+`test_operator_questions_triage.py`（#480）。
 每个都分**结构半边**（CI 跑）与 **live 半边**（要 `AIOPS_GL_CA` 指向公司 GitLab 的证书锚点）。
 
 ⚠️ **已知覆盖空缺**：**live 半边在 CI 上跳过** —— 所以 **CI 绿 ≠ 那些命令被复核过**。

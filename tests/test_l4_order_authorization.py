@@ -264,3 +264,39 @@ def test_the_two_endpoints_of_the_chain_still_say_what_the_chain_assumes() -> No
         )
         assert proc.returncode == 0, f"{path}\n{proc.stderr}"
         assert marker in proc.stdout, f"{path} 里找不到 {marker}"
+
+def test_the_documents_agree_on_how_many_evidence_tests_there_are() -> None:
+    """A交付数量 must match what is on disk.
+
+    The closeout first shipped two numbers for the same set (four and six) in
+    two documents, in one batch of edits. The count is checkable, so check it:
+    every document that states the number must state the number of files that
+    actually exist.
+    """
+    actual = len(list((PROJECT_ROOT / "tests").glob("test_*evidence*.py"))) + len(
+        list((PROJECT_ROOT / "tests").glob("test_company_*.py"))
+    ) + len(list((PROJECT_ROOT / "tests").glob("test_l4_*.py"))) + len(
+        list((PROJECT_ROOT / "tests").glob("test_operator_questions_*.py"))
+    )
+    # The six guards are named explicitly rather than globbed together, so a
+    # stray extra file cannot silently change the number the docs must state.
+    named = [
+        "test_recon_procedure_evidence.py",
+        "test_repo_index_evidence.py",
+        "test_company_entity_map.py",
+        "test_company_auth_scope.py",
+        "test_l4_order_authorization.py",
+        "test_operator_questions_triage.py",
+    ]
+    for name in named:
+        assert (PROJECT_ROOT / "tests" / name).exists(), f"{name} 不见了"
+    assert actual >= len(named)  # sanity: the globs above also catch these
+
+    words = {4: "四个", 6: "六个"}
+    for doc in ("docs/agents/operator-repair-blueprint.md", "docs/agents/current-delivery-state.md"):
+        text = (PROJECT_ROOT / doc).read_text(encoding="utf-8")
+        for n, word in words.items():
+            if f"{word}证据测试" in text or f"{word}测试的 live" in text:
+                assert n == len(named), (
+                    f"{doc} 里写「{word}证据测试」，而实际是 {len(named)} 个 —— 交割时会被漏看"
+                )
