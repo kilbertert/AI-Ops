@@ -314,13 +314,22 @@ def test_a_cancel_that_loses_the_race_does_not_delete_the_workers_turn(tmp_path:
         store = client.app.state.gateway.conversation_store
         assert store.turns(cid, scope), "the turn row should exist while the job runs"
 
+        # The worker finishes and fills the turn — the state a losing cancel
+        # actually meets. Without this the assertion below would pass on an
+        # empty row and prove only that an unfinished row survived (review).
+        store.complete_turn(cid, scope, asked.json()["turn_no"], answer={"text": "已经算好的结论"})
+
         # The losing write: another path terminalised the row first, so this
         # cancel's UPDATE matches nothing.
         monkeypatch.setattr(runtime.store, "update_standard_diagnosis", lambda *a, **k: False)
         stopped = client.post(f"/v1/standard/diagnoses/{diagnosis_id}/cancel", headers=HEADERS)
         assert stopped.status_code == 200
 
-        assert store.turns(cid, scope), "a losing cancel released the slot and deleted the worker's turn row"
+        survived = store.turns(cid, scope)
+        assert survived, "a losing cancel released the slot and deleted the worker's turn row"
+        assert survived[0]["answer"] == {"text": "已经算好的结论"}, (
+            "a losing cancel destroyed the answer the worker had already written"
+        )
     finally:
         gates["release"].set()
         runtime.shutdown()
