@@ -265,6 +265,7 @@ def test_the_two_endpoints_of_the_chain_still_say_what_the_chain_assumes() -> No
         assert proc.returncode == 0, f"{path}\n{proc.stderr}"
         assert marker in proc.stdout, f"{path} 里找不到 {marker}"
 
+
 def test_the_documents_agree_on_how_many_evidence_tests_there_are() -> None:
     """A交付数量 must match what is on disk.
 
@@ -273,10 +274,11 @@ def test_the_documents_agree_on_how_many_evidence_tests_there_are() -> None:
     every document that states the number must state the number of files that
     actually exist.
     """
-    actual = len(list((PROJECT_ROOT / "tests").glob("test_*evidence*.py"))) + len(
-        list((PROJECT_ROOT / "tests").glob("test_company_*.py"))
-    ) + len(list((PROJECT_ROOT / "tests").glob("test_l4_*.py"))) + len(
-        list((PROJECT_ROOT / "tests").glob("test_operator_questions_*.py"))
+    actual = (
+        len(list((PROJECT_ROOT / "tests").glob("test_*evidence*.py")))
+        + len(list((PROJECT_ROOT / "tests").glob("test_company_*.py")))
+        + len(list((PROJECT_ROOT / "tests").glob("test_l4_*.py")))
+        + len(list((PROJECT_ROOT / "tests").glob("test_operator_questions_*.py")))
     )
     # The six guards are named explicitly rather than globbed together, so a
     # stray extra file cannot silently change the number the docs must state.
