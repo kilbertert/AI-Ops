@@ -22,7 +22,8 @@
 | 绑定是否立刻失效 | ✅ 立刻 —— Route 1c **每轮重校验**，订单离开集合即回落通用问答并清 `active_order_no` | `gateway_api.py:916-967` |
 | 窗口是否跟着排除 | ❌ 不排除 —— `context_turns()` 按 `turn_no DESC LIMIT` 取，不查任何可见性 | `conversation_store.py:527-531` |
 | 范围指纹是否变化 | ❌ 不变 —— `scope_fingerprint` 由**站点集合**算出，订单改挂站点不动它 | 用例内实测断言 |
-| 跨主体/跨范围 | 整个会话 **404**，已有用例覆盖 | `test_a_changed_operator_scope_makes_the_conversation_invisible` |
+| 跨范围 | 整个会话 **404**，已有用例覆盖 | `test_a_changed_operator_scope_makes_the_conversation_invisible` |
+| 跨主体 | 整个会话 **404** —— 本票**新补**一条用例（原引用那条只换站点集合、不换主体，评审指出该引用与结论不匹配） | `test_a_changed_subject_makes_the_conversation_invisible`（对外行为层，不隔离到具体指纹字段） |
 
 ⇒ **不是跨租户泄漏**，是「同一主体、同一租户、同一范围指纹下，可见性随时间收窄」这一种时序。
 真正的缺口是**没有轮次→订单的关联**，因此窗口里那一轮无法被判定为「现在不可见」。
@@ -47,6 +48,8 @@
 |---|---|
 | `context_turns()` 改为排除（即**真的做修复**） | ✅ 变红 —— 用例的正确含义是「现状被改变时它必须提醒」 |
 | `render_history()` 丢掉正文 | ✅ 变红 |
+| 生产接线 `_conversation_history` 不再接历史（评审发现 2 的形状） | ✅ 变红 —— 这是**加强后**才有的：原用例只调 `render_history`，那条突变下**照样通过** |
+| 从 `_scope_fingerprint` 的 payload 删掉 `subject_b_user_id` / `subject_c_user_id` | ❌ **仍通过** —— 如实记：跨主体用例只证对外行为，不隔离到字段（该路径 caller 与 subject 同源） |
 
 第一版的第二条突变我**打错了目标**：改的是 `build_history`，而用例直接调 `render_history`，
 于是「没变红」—— 那不是用例弱，是我的突变没落在它调用的那个函数上。改对后即变红。
