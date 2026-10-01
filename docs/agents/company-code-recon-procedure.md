@@ -205,41 +205,51 @@ SPKI sha256 = sha256//0E4usLaswMAYis+NuEpr5B2untcdBdi6AQgz7ISMjhQ=
 
 ## 6. 当场跑通留下的真实输出（2026-10-01）
 
-供复核用。**每条命令逐字可复制；输出按标注截取**——标了「全部」的是完整输出，
-标了「前 N 行」的只贴了开头 N 行。没有第三种情况：凡截断都写明了行数，任一行的原文
-都可直接重跑取回。
+供复核用。**下面的代码块里只有命令与它真实的输出，没有别的东西**——所以每一行都可以
+逐字复制去跑。哪条贴了几行，记在这张表里（不是记在命令行上：行末的中文标注会被 shell
+当成参数，`wc` 会把它当文件名，那样的「可复制」是假的）。
+
+| 命令（与代码块里逐字相同） | 这里贴了 |
+|---|---|
+| `deploy/company-gitlab-api.sh pin` | 全部 |
+| `deploy/company-gitlab-api.sh projects --search cloud-charging-pile` | 全部（该查询共 3 行） |
+| `deploy/company-gitlab-api.sh group --id 90 \| wc -l` | 全部 |
+| `deploy/company-gitlab-api.sh tree --project 363 --ref master --count-java` | 全部 |
+| `deploy/company-gitlab-api.sh tree --project 363 --ref release --count-java` | 全部 |
+| `deploy/company-gitlab-api.sh blobs --project 363 --ref release --search '@Inside'` | **前 3 行**（该查询共 12 行） |
+| `deploy/company-gitlab-api.sh raw --project 363 --ref master --path cloud-charging-pile-client/src/main/java/com/qushiyun/cloud/charging/pile/client/DemoFeignClient.java` | **前 2 行**（该文件共 29 行） |
+| `deploy/company-gitlab-api.sh projects --search 充电桩 \| wc -l` | 全部 |
 
 ```
-$ deploy/company-gitlab-api.sh pin                                                    （全部）
+$ deploy/company-gitlab-api.sh pin
 sha256//0E4usLaswMAYis+NuEpr5B2untcdBdi6AQgz7ISMjhQ=
 
-$ deploy/company-gitlab-api.sh projects --search cloud-charging-pile                  （全部 3 行）
+$ deploy/company-gitlab-api.sh projects --search cloud-charging-pile
 363	iot/cloud-charging-pile	default=master	activity=2026-09-30T09:51:26.553Z
 526	mtz/cloud-charging-pile	default=master	activity=2024-04-10T02:01:53.593Z
 524	mtw/cloud-charging-pile	default=master	activity=2024-04-10T01:57:21.980Z
 
-$ deploy/company-gitlab-api.sh group --id 90 | wc -l                                  （全部）
+$ deploy/company-gitlab-api.sh group --id 90 | wc -l
 28
 
-$ deploy/company-gitlab-api.sh tree --project 363 --ref master --count-java           （全部）
+$ deploy/company-gitlab-api.sh tree --project 363 --ref master --count-java
 ref=master blobs=46 java=34
 
-$ deploy/company-gitlab-api.sh tree --project 363 --ref release --count-java          （全部）
+$ deploy/company-gitlab-api.sh tree --project 363 --ref release --count-java
 ref=release blobs=2480 java=2012
 
-$ deploy/company-gitlab-api.sh blobs --project 363 --ref release --search '@Inside'   （前 3 行）
+$ deploy/company-gitlab-api.sh blobs --project 363 --ref release --search '@Inside'
 cloud-charging-pile-core/src/main/java/com/qushiyun/cloud/charging/pile/core/application/controller/DataDashboardController.java:49
 cloud-charging-pile-core/src/main/java/com/qushiyun/cloud/charging/pile/core/application/controller/DataDashboardController.java:65
 cloud-charging-pile-core/src/main/java/com/qushiyun/cloud/charging/pile/core/application/controller/DataDashboardController.java:80
 
-$ deploy/company-gitlab-api.sh raw --project 363 --ref master \
-    --path cloud-charging-pile-client/src/main/java/com/qushiyun/cloud/charging/pile/client/DemoFeignClient.java   （前 2 行）
+$ deploy/company-gitlab-api.sh raw --project 363 --ref master --path cloud-charging-pile-client/src/main/java/com/qushiyun/cloud/charging/pile/client/DemoFeignClient.java
 package com.qushiyun.cloud.charging.pile.client;
 
-$ deploy/company-gitlab-api.sh projects --search 充电桩 | wc -l                       （全部）
+$ deploy/company-gitlab-api.sh projects --search 充电桩 | wc -l
 9
 
-$ deploy/company-gitlab-api.sh projects --search cloud-charging-pile | wc -l          （全部）
+$ deploy/company-gitlab-api.sh projects --search cloud-charging-pile | wc -l
 3
 ```
 
@@ -256,6 +266,20 @@ $ deploy/company-gitlab-api.sh projects --search cloud-charging-pile | wc -l    
 
 **令牌不进 argv**：`projects` 跑起来时读 `/proc/<pid>/cmdline`，**看不到令牌**
 （令牌经 `curl --config /dev/stdin` 传入）。放进 `-H` 则任何本机进程都能读到。
+
+### 本节的claim有守卫，不是靠自觉
+
+上面那句「每行都可逐字复制」和「全部/前 N 行」的标注，由
+`tests/test_recon_procedure_evidence.py` 核对：
+
+- **结构半边**（CI 里就跑）：行末不许出现会被 shell 当参数的标注；
+  覆盖表与代码块里的命令必须**逐字一致**（缺一条、多一条都红）。
+- **live 半边**（设了 `AIOPS_GL_CA` 才跑）：代码块里的每条命令**真的执行**；
+  标「全部」的命令其输出与块里**逐行相同**；标「前 N 行（共 M 行）」的，M 必须是真实行数。
+
+已经用变异核对过（去掉守卫能变红）：行末标注加回去 → 结构测试红；
+把 `blobs=46` 改成 `blobs=99` → 复现测试红；把「共 12 行」改成「共 99 行」→ 总数测试红。
+**live 半边需要锚点所以 CI 不跑** —— 这是它的已知覆盖空缺，不是它通过了的证据。
 
 ---
 
