@@ -7,6 +7,60 @@
 
 
 
+## #520 `paths` 收窄：只读脚本不再触发生产重启（2026-10-01）
+
+**改动**：`.github/workflows/cd.yml` 的 `push.paths` 从 `deploy/**` 收窄为
+`deploy/deploy-41.sh` + `deploy/classify-remote-result.sh`（其余项不动）。
+
+**收窄的依据是先查清「部署到底执行哪些文件」**，不是按文件名猜。`deploy/deploy-41.sh`
+里以调用形状（`"$REPO_ROOT/deploy/<name>"`）出现的只有两个：
+
+```
+$ grep -n '\$REPO_ROOT/deploy/' deploy/deploy-41.sh
+631:    "$REPO_ROOT/deploy/classify-remote-result.sh" "$HOST_TARGET" "$SERVICE" >&2
+```
+
+| 文件 | CD 是否执行 | 是否留在触发集合 |
+|---|---|---|
+| `deploy-41.sh` | 是（workflow 的 run 步骤） | ✅ 留 |
+| `classify-remote-result.sh` | 是（解析主机回执） | ✅ 留 |
+| `test-rollback-classifier.sh` | 否（只在 CI 里跑） | ❌ 移出 |
+| `company-gitlab-api.sh` / `routing-window.sh` / `d4-cutover.py` / `record-manual-deploy.sh` | 否 | ❌ 移出 |
+
+**为什么这不是「顺手改」**：`cd.yml` 头部记着 2026-09-30 去掉人工批准门的决定，
+而那次决定的原文里就写着「任何合并到 main 且命中 paths 的提交都会自动部署到生产」。
+收窄 `paths` 改的正是这句话的范围，属于治理面改动 —— 所以本票在 issue 上先说方向、
+再动手，并把新范围写回 `cd.yml` 的注释里。
+
+### 抓到的坑
+
+1. **`classify-remote-result.sh` 差点被一起移出。** 按文件名看它和 `routing-window.sh`
+   一样「像」取数脚本，实际是部署路径上的调用。判据必须是**查调用关系**，不是看名字。
+2. **加一个 dev 依赖（PyYAML）会让 CD 停摆。** 第一版守卫用 `yaml.safe_load` 读
+   `cd.yml`，于是要给 `pyproject.toml` 加 `pyyaml`，于是 `uv.lock` 变，而
+   `deploy-41.sh` 的依赖漂移门拿 `uv.lock` 的 sha256 与 41 上的比 ——
+   **加一个测试依赖会拦住整条 CD**，直到有人按人工流程更新 41 的环境。
+   已放弃该方案，改成按缩进切 `paths` 块（`uv.lock` 未变）。
+
+### 验证（本机，不需要部署到 41）
+
+新增四条断言，均**做过去掉修复即失败的突变验证**：
+
+| 用例 | 突变 | 结果 |
+|---|---|---|
+| CD-41-25 只读脚本不触发 | `paths` 改回 `deploy/**` | ✅ 变红 |
+| CD-41-26 部署依赖仍触发 | 删掉 `classify-remote-result.sh` | ✅ 变红 |
+| CD-41-27 参考资料仍触发 | 删掉 `docs/architecture.md` | ✅ 变红 |
+| CD-41-28 守卫助手自身可失败 | 去掉助手内的 `assert paths` | ✅ 变红 |
+
+CD-41-27 把 `qa-plan.md` 里原写「已脚本化比对」的 CD-41-14 **补成真的脚本** ——
+它此前是**声称有、实际没有**的检查。
+
+**未取得的部分**：`paths` 的效果只有在**下一次合并到 main 时**才真正可见（GitHub 按
+改动路径决定是否建 run）。所以本票落地只能证明「过滤器的新范围是对的」，
+**「41 上进程启动时刻不变」要等下一次只读脚本的合并来观测**。`#405` 的观察窗
+因此**本票不重置窗口**，也不会替它下结论。
+
 ## #413 41 实机复核（2026-10-01）——**一半通过，另一半卡在模型额度**
 
 票内验收：「`重卡充电案例` **不再返回 `type=faq`**，且进入 `case_exploration` 宣传路径

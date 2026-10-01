@@ -17,6 +17,7 @@ import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEPLOY_DIR = REPO_ROOT / "deploy"
+CD_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "cd.yml"
 
 
 def _run(script: Path, *args: str, stdin: str = "") -> subprocess.CompletedProcess[str]:
@@ -179,3 +180,114 @@ def test_routing_window_says_what_it_observed(tmp_path: Path) -> None:
     source = (DEPLOY_DIR / "routing-window.sh").read_text(encoding="utf-8")
     assert "据此无法判断网关是否处理过请求" in source
     assert "网关没有处理过请求" not in source
+
+
+def _cd_push_paths(workflow: Path = CD_WORKFLOW) -> list[str]:
+    """读 cd.yml 的 `push.paths`。
+
+    **不引 YAML 库**：加一个 dev 依赖会改 uv.lock，而 deploy-41.sh 的依赖漂移门
+    拿 uv.lock 的 sha256 与 41 上的比 —— 于是「加一个测试依赖」会**拦住整条 CD**，
+    直到有人按 docs/agents/env-41-dependency-update.md 的人工流程更新 41 的环境。
+    一个测试助手不值这个代价，所以这里按缩进切。
+
+    切得出来的前提是 `on.push.paths` 是**列表**形状的块序列（每项 `      - "..."`）。
+    它变了这条会抛错而不是静默返回空 —— 空列表会让下面三条断言全过，那正是这里
+    最危险的失败模式。**这个助手自己可失败，由
+    test_cd_paths_guard_reads_the_real_block 用两份改坏的副本驱动。**
+    """
+    lines = workflow.read_text(encoding="utf-8").splitlines()
+    try:
+        start = next(i for i, line in enumerate(lines) if line == "    paths:")
+        end = next(i for i in range(start + 1, len(lines)) if not lines[i].startswith("      "))
+    except StopIteration:
+        raise AssertionError("cd.yml 里找不到 push.paths 块（形状变了，先看这段的注释）") from None
+    paths = [
+        match.group(1) for line in lines[start + 1 : end] if (match := re.match(r'^      - "([^"]+)"$', line))
+    ]
+    # 块里每一项都该是路径。注释行与空行不算，但**一项都没解析出来**说明形状变了。
+    assert paths, f"push.paths 块在 {workflow.name}:{start + 1} 解析为空 —— 缩进或引号形状变了"
+    return paths
+
+
+def _deploy41_dependencies() -> set[str]:
+    """deploy-41.sh **执行**的 deploy/ 文件。
+
+    只认调用形状（`"$REPO_ROOT/deploy/<name>"`），不认任意出现 —— 注释里提到的
+    文件名不是依赖，把它们算进来会让这条断言因为一句解释文字而变红。
+    """
+    source = (DEPLOY_DIR / "deploy-41.sh").read_text(encoding="utf-8")
+    return set(re.findall(r'"\$REPO_ROOT/deploy/([A-Za-z0-9._-]+)"', source))
+
+
+def test_cd_paths_covers_everything_deploy41_executes() -> None:
+    """`paths` 必须命中 deploy-41.sh 会执行的每个 deploy/ 文件。
+
+    `paths` 不命中时**不会有任何信号**：workflow 根本不创建 run，所以「改了却没部署」
+    与「改的东西不用部署」在 GitHub 上长得一模一样。这正是参考资料那段注释记的坑，
+    #520 收窄 `deploy/**` 时把同一个坑重新挖到两个具体文件名上，所以在这里钉住。
+
+    `deploy-41.sh` 自己写在断言里而不是从脚本里推：它是**被执行的**那一个，不是被引用的
+    那一个，所以 `_deploy41_dependencies` 的调用形状正则天然扫不到它（自己不会写自己）。
+    """
+    paths = _cd_push_paths()
+    assert "deploy/deploy-41.sh" in paths, "workflow 执行的 deploy-41.sh 本身必须在触发集合里"
+    dependencies = _deploy41_dependencies()
+    assert dependencies, "deploy-41.sh 里解析不出任何被调用的 deploy/ 文件 —— 调用形状变了"
+    for dep in dependencies:
+        assert f"deploy/{dep}" in paths, f"deploy-41.sh 会执行 {dep}，但 cd.yml 的 paths 不触发它"
+
+
+def test_cd_paths_does_not_trigger_on_read_only_scripts() -> None:
+    """`deploy/` 下的只读取数脚本不得触发部署（#520 的判据）。
+
+    这条是 #520 的回归闸：`deploy/**` 恢复回来，它就红。理由是实测的代价 ——
+    #513/#514 只改了 company-gitlab-api.sh（一个只读脚本，网关不 import 它），
+    却各拉起一次生产重启，并把 #405 的观察窗重新计时（窗口起点 = 网关进程启动时刻）。
+    """
+    paths = _cd_push_paths()
+    assert "deploy/**" not in paths, "deploy/** 会让只读脚本也触发生产重启（#520）"
+    for name in ("company-gitlab-api.sh", "routing-window.sh", "d4-cutover.py", "record-manual-deploy.sh"):
+        assert f"deploy/{name}" not in paths, f"{name} 与部署无关，不该触发生产重启"
+
+
+def test_cd_paths_still_covers_reference_files() -> None:
+    """`paths` 必须覆盖 deploy-41.sh 的 REFERENCE_FILES（CD-41-14 的机器化）。
+
+    改了 SOP 却不部署时，生产会**静默**继续用旧规则 —— 没有报错。所以这条不是
+    「顺手加的」，是原本就存在、只是从未被机器验证过的约束（qa-plan.md 的 CD-41-14
+    写的是「已脚本化比对」，实际没有脚本；本 PR 把它补上）。
+    """
+    deploy = (DEPLOY_DIR / "deploy-41.sh").read_text(encoding="utf-8")
+    match = re.search(r'^REFERENCE_FILES="([^"]+)"', deploy, re.MULTILINE)
+    assert match, "deploy-41.sh 里找不到 REFERENCE_FILES"
+    paths = _cd_push_paths()
+    for ref in match.group(1).split():
+        assert ref in paths, f"参考资料 {ref} 改了不触发部署，生产会静默用旧规则"
+
+
+def test_cd_paths_guard_reads_the_real_block(tmp_path: Path) -> None:
+    """上面这个助手自己可失败：改坏的两份副本必须让它抛错，而不是静默返回空。
+
+    `_cd_push_paths` 返回空列表时，三条断言会**全部通过** —— 一个恒真的守卫比没有
+    守卫更糟，因为它看起来像在守着。所以这里驱动它自己的失败模式：块被注释掉、
+    引号被去掉。两份都取自**真实的 cd.yml 文本**再改，不是手写的假文件。
+    """
+    real = CD_WORKFLOW.read_text(encoding="utf-8")
+    assert "    paths:" in real, "真实 cd.yml 里没有锚点行 —— 助手已经失效了"
+
+    commented = tmp_path / "commented.yml"
+    commented.write_text(re.sub(r"^      - ", "      # - ", real, flags=re.MULTILINE), encoding="utf-8")
+    with pytest.raises(AssertionError, match="解析为空"):
+        _cd_push_paths(commented)
+
+    unquoted = tmp_path / "unquoted.yml"
+    unquoted.write_text(
+        re.sub(r'^      - "([^"]+)"$', r"      - \1", real, flags=re.MULTILINE), encoding="utf-8"
+    )
+    with pytest.raises(AssertionError, match="解析为空"):
+        _cd_push_paths(unquoted)
+
+    missing = tmp_path / "missing.yml"
+    missing.write_text(real.replace("    paths:", "    pathsXYZ:"), encoding="utf-8")
+    with pytest.raises(AssertionError, match="找不到"):
+        _cd_push_paths(missing)

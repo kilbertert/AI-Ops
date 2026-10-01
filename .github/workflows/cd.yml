@@ -37,7 +37,24 @@ on:
     # 生产重启，也不该占用人工审批的注意力。
     paths:
       - "src/**"
-      - "deploy/**"
+      # 只列 deploy/ 下**这次部署真的要执行**的那两个文件，不用 `deploy/**`（#520）。
+      #
+      # `deploy/**` 里混着两类东西：部署自己的可执行件，和与部署无关的只读取数/运维
+      # 脚本（`company-gitlab-api.sh`、`routing-window.sh`、`d4-cutover.py`、
+      # `record-manual-deploy.sh` 等）。过滤器一视同仁，于是改一个只读脚本也会：
+      # 重启生产、并把 #405 的观察窗重新计时（窗口起点 = 网关进程启动时刻）。
+      # #513/#514 就是这样各触发了一次 —— 它们只把 `company-gitlab-api.sh` 连同
+      # 文档一起改掉，网关根本不 import 它。
+      #
+      # 下面两个是 deploy-41.sh 直接调用的，缺一个部署就起不来：
+      #   - deploy-41.sh 自身（由下面的 run 步骤执行）
+      #   - classify-remote-result.sh（deploy-41.sh 解析主机回执时调用）
+      # `deploy/test-rollback-classifier.sh` 只在 CI 里跑（tests/test_cd_deploy_scripts.py），
+      # 上不了生产，所以不在触发器里。**新增第三个被 deploy-41.sh 调用的文件时要加进来**
+      # —— 漏加的后果是「改了它却不部署」，而 `paths` 不命中时不会有任何信号，
+      # 这正是下面参考资料那段注释说的同一个坑。
+      - "deploy/deploy-41.sh"
+      - "deploy/classify-remote-result.sh"
       - ".github/workflows/cd.yml"
       # 依赖清单也观察：它们变了却不触发，生产会停在旧依赖上，而且下一次 src 合并会被
       # 脚本的漂移门拦下 —— CD 就永远收敛不到 main。让变更被看见，由脚本判定"能否部署"
