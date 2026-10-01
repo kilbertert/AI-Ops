@@ -23,7 +23,7 @@
 | 窗口是否跟着排除 | ❌ 不排除 —— `context_turns()` 按 `turn_no DESC LIMIT` 取，不查任何可见性 | `conversation_store.py:527-531` |
 | 范围指纹是否变化 | ❌ 不变 —— `scope_fingerprint` 由**站点集合**算出，订单改挂站点不动它 | 用例内实测断言 |
 | 跨范围 | 整个会话 **404**，已有用例覆盖 | `test_a_changed_operator_scope_makes_the_conversation_invisible` |
-| 跨主体 | 整个会话 **404** —— 本票**新补**一条用例（原引用那条只换站点集合、不换主体，评审指出该引用与结论不匹配） | `test_a_changed_subject_makes_the_conversation_invisible`（对外行为层，不隔离到具体指纹字段） |
+| 跨主体 | 整个会话 **404** —— 本票**新补**一条用例（原引用那条只换站点集合、不换主体，评审指出该引用与结论不匹配） | `test_a_changed_subject_makes_the_conversation_invisible` |
 
 ⇒ **不是跨租户泄漏**，是「同一主体、同一租户、同一范围指纹下，可见性随时间收窄」这一种时序。
 真正的缺口是**没有轮次→订单的关联**，因此窗口里那一轮无法被判定为「现在不可见」。
@@ -49,10 +49,25 @@
 | `context_turns()` 改为排除（即**真的做修复**） | ✅ 变红 —— 用例的正确含义是「现状被改变时它必须提醒」 |
 | `render_history()` 丢掉正文 | ✅ 变红 |
 | 生产接线 `_conversation_history` 不再接历史（评审发现 2 的形状） | ✅ 变红 —— 这是**加强后**才有的：原用例只调 `render_history`，那条突变下**照样通过** |
-| 从 `_scope_fingerprint` 的 payload 删掉 `subject_b_user_id` / `subject_c_user_id` | ❌ **仍通过** —— 如实记：跨主体用例只证对外行为，不隔离到字段（该路径 caller 与 subject 同源） |
+| 从 `_scope_fingerprint` 的 payload 删掉 `subject_b_user_id` / `subject_c_user_id` | ✅ 变红（**修正后**才如此；见下） |
 
 第一版的第二条突变我**打错了目标**：改的是 `build_history`，而用例直接调 `render_history`，
 于是「没变红」—— 那不是用例弱，是我的突变没落在它调用的那个函数上。改对后即变红。
+
+### 跨主体用例返工两次，两次都是**用例本身错**而不是断言错
+
+1. **第一版引错了证据**（Devin）：我引的 404 用例只换站点集合、不换主体。
+2. **第二版构造错了主体**（Devin 再指出，我用探针证实）：写成
+   `b_subject(b_user_id="B-OTHER", c_user_id="C-OTHER")`，而替身的会话用户恒为 `C-1`
+   ⇒ C→B 映射在 `record.c_user_id != user_id` 处判 `c_user_mismatch`
+   ⇒ **退回 C 端主体、范围退成 `self`、站点集合清空**。实测：
+   `b_subject_reason='c_user_mismatch'`、`data_scope.type='self'`、`site_ids=[]`。
+   那样构造出的 404 来自**范围退化**（与第 1 条同因），不是「另一个有效主体看不到」。
+   正确隔离是**C 端用户不变、只换 C→B 映射指向的 B 端主体**。
+3. 修正后补了四条**前提断言**（映射解析成功、范围类型仍 `organ`、站点集合逐字相同、
+   指纹确实变了），任何一条不成立用例就转红 —— 这类「用错成因的 404 冒充结论」的
+   错误才不会再无声通过。
+4. 修正后重跑突变：删掉 `subject_b_user_id`/`subject_c_user_id` ⇒ **变红**（修正前是绿的）。
 
 ## #520 `paths` 收窄：只读脚本不再触发生产重启（2026-10-01）
 

@@ -1496,6 +1496,7 @@ uv run pytest tests/test_assistant_api.py tests/test_conversation_api.py \
 |---|---|---|---|---|---|
 | CTX-RISK-01 | 本地 dev | 运营商会话；`SHOP-1` 站点集合含 `SITE_IN`；一单 `ORDER_INSIDE` 已绑定并完成一轮诊断 | 把 `ORDER_INSIDE` 改挂到 `SITE_OUT`（调用者站点集合**不变**）→ 发同一条追问 | PASS：回落 `type=qa`（绑定确已失效），**且** `context_turns()` 仍返回那一轮、`render_history()` 仍渲染出它的正文 | `tests/test_operator_negative_acceptance.py::test_history_window_keeps_a_turn_whose_order_left_the_scope`；突变：`context_turns()` 改为排除 → 红；`render_history()` 返回空 → 红 |
 | CTX-RISK-02 | 本地 dev | 同上会话 | 改变调用者站点集合（范围指纹随之改变）→ 用同一 `conversation_id` 读取 | PASS：统一 `404`，不区分会话是否存在 | `test_a_changed_operator_scope_makes_the_conversation_invisible`（**既有用例，非本票新增**） |
+| CTX-RISK-03 | 本地 dev | 同上会话 | **C 端用户不变**，只把 C→B 映射指向另一个 B 端主体（站点集合逐字相同）→ 用同一 `conversation_id` 读取 | PASS：统一 `404`。**四条前提断言**（映射解析成功、范围类型仍 `organ`、站点集合不变、指纹已变）必须同时成立，否则用例转红 —— 防止用「范围退化造成的 404」冒充本项 | `test_a_changed_subject_makes_the_conversation_invisible`（本票新增；**返工两次**，成因见 `validation.md`）。突变：从指纹 payload 删掉 subject id → 红 |
 
 - **本项是「风险声明」的 QA，不是「修复」的 QA**：CTX-RISK-01 断言的正是**已知的、
   已接受的**行为。它变红意味着有人改变了那个行为 —— 那时应当改写用例并重新评估风险，

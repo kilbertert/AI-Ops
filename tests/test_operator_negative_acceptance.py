@@ -272,22 +272,22 @@ def test_a_changed_operator_scope_makes_the_conversation_invisible(
 def test_a_changed_subject_makes_the_conversation_invisible(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """换成**另一个主体**同一个 conversation_id 也是 404（#497 要的那一半证据）。
+    """换成**同一个 C 端用户绑定的另一个 B 端主体**，同一个 conversation_id 也是 404。
 
     上面那条只换站点集合，**没有换主体** —— 而 #497 的风险声明里有一句
-    「不是跨主体泄漏」，那句当时只有「指纹的 payload 含主体 id」这个**构造上の**
-    依据，没有测试证据。评审指出后补上这条。
+    「不是跨主体泄漏」，那句当时只有「指纹的 payload 含主体 id」这个构造上的依据，
+    没有测试证据。评审指出后补上这条。
 
     单独立一条而不是塞进上面那条：两条的失效**成因不同**（一条是范围收窄，
     一条是主体不同），合成一条时前者先触发，后者就永远验不到了。
 
-    **本用例证明到哪为止**：它证明「换一个 B/C 身份，拿同一个 conversation_id 也是
-    404」这个**对外行为**。它**不**隔离出是哪个指纹字段做到的 —— 这条路径里 caller
-    与 subject 由同一条 session 记录派生，换主体必然连 caller 一起换（实测：把
-    ``subject_b_user_id`` / ``subject_c_user_id`` 从 payload 里删掉，本用例**仍然通过**，
-    因为 ``caller_b_user_id`` 跟着变了）。要隔离到字段级得另造一个 caller ≠ subject 的
-    夹具，本票不做。风险声明需要的正是上面那个对外行为，所以到这里为止是够的 ——
-    但不能把这个用例说成「证明了 subject 字段进了指纹」。
+    ⚠️ **第一版写错了，是本条用例自己抓出来的**。第一版换的是
+    ``b_subject(b_user_id="B-OTHER", c_user_id="C-OTHER")``，而替身的会话用户恒为
+    ``C-1`` —— 于是 C→B 映射在 ``record.c_user_id != user_id`` 那一步被判
+    ``c_user_mismatch``，**退回 C 端主体、范围退成 ``self``、站点集合清空**。
+    那样构造出来的 404 来自**范围退化**，不是「另一个有效主体看不到」，等于用
+    前面那条的成因冒充了这一条。正确的隔离方式是：**C 端用户不变（仍 ``C-1``）、
+    只把 C→B 映射指向另一个 B 端主体**（评审给的方向）。
     """
     caller = operator_caller(monkeypatch, sites={"SHOP-1": (SITE_IN,)})
     client, _ = assistant_app(tmp_path, monkeypatch, caller, Connection())
@@ -298,12 +298,24 @@ def test_a_changed_subject_makes_the_conversation_invisible(
     assert conversation.status_code == 201, conversation.text
     cid = conversation.json()["conversation_id"]
     owner_scope = caller.context.scope_fingerprint
+    assert caller.context.subject.b_subject_reason == ""
+    assert caller.context.subject.b_user_id == "B-9"
 
-    # 只换主体：站点集合逐字相同，因此**范围没有收窄**，变的只有 who。
+    # 会话用户仍是 C-1（替身恒定的那个），只换 C→B 映射指向的 B 端主体。
     other = resolve_session(
         monkeypatch,
-        records=(b_subject(b_user_id="B-OTHER", c_user_id="C-OTHER"),),
+        records=(b_subject(b_user_id="B-OTHER"),),
         operator_scope=OperatorScope(sites={"SHOP-1": (SITE_IN,)}),
+    )
+    # **前提断言**：这次换的是主体，且范围**没有**跟着退化 —— 否则下面的 404 是
+    # 「范围变空」造成的，与上一条用例同因，本用例就又白写了。
+    assert other.subject.b_subject_reason == "", (
+        "前提不成立：C→B 映射没解析成有效主体（退回了 C 端），本用例要的是两个有效主体"
+    )
+    assert other.subject.b_user_id == "B-OTHER"
+    assert other.data_scope.type == "organ", "前提不成立：范围类型退化了，404 的成因就不是主体"
+    assert sorted(other.data_scope.site_ids) == sorted(caller.context.data_scope.site_ids), (
+        "前提不成立：站点集合变了，那又变成范围收窄那条路径了"
     )
     assert other.scope_fingerprint != owner_scope, (
         "前提不成立：换了主体却没换指纹 —— 那说明指纹不含主体，跨主体那条边界不成立"
@@ -617,7 +629,7 @@ def test_history_window_keeps_a_turn_whose_order_left_the_scope(
       ``test_a_changed_operator_scope_makes_the_conversation_invisible`` 覆盖，
       本用例不重复证它，也不声称本用例覆盖了它。
       跨主体那一半现在由 ``test_a_changed_subject_makes_the_conversation_invisible``
-      覆盖（对外行为层；它不隔离到具体指纹字段，见那条的说明）。
+      覆盖（C 端用户不变、只换 C→B 映射指向的 B 端主体）。
 
     顺序是刻意的：**先证明订单真的离开了可见集合**（同一条追问回落成普通问答），
     **再**断言窗口里仍留着那一轮。反过来写的话，「订单已不可见」就只是一个假设。
