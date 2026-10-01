@@ -517,13 +517,21 @@ deploy/routing-window.sh 2026-10-01T00:00:00+00:00   # 或指定 UTC 起点
 ### 证据二：nginx 入口访问日志
 
 ```bash
-# 今天全天（主机本地时刻 00:00 起）有多少条打到 AI-Ops 的 /v1/
-ssh aiops-41 "grep '01/Oct/2026' /www/wwwlogs/api.mall.qushiyun.com.log | grep -c '/v1/'"
+# 今天全天（**主机本地**时刻 00:00 起）有多少条打到 AI-Ops 的 /v1/
+# 日期在 41 上现算 —— 不要手写日期，否则第二天照抄会去数昨天。
+ssh aiops-41 'd=$(LC_ALL=C date "+%d/%b/%Y"); \
+  sudo -n grep "\$d" /www/wwwlogs/api.mall.qushiyun.com.log | grep -c "/v1/"'
 
 # 只看真实的业务路径（把它们与扫描流量分开）
-ssh aiops-41 "grep '01/Oct/2026' /www/wwwlogs/api.mall.qushiyun.com.log \
-  | grep '/v1/' | awk '{print \$4, \$7, \$9}'"
+ssh aiops-41 'd=$(LC_ALL=C date "+%d/%b/%Y"); \
+  sudo -n grep "\$d" /www/wwwlogs/api.mall.qushiyun.com.log \
+  | grep "/v1/" | awk "{print \$4, \$7, \$9}"'
 ```
+
+⚠️ **日期必须现算，不能写死。** nginx 的 `$time_local` 形如 `01/Oct/2026:08:57:16`
+（英文月份缩写），所以用 `LC_ALL=C date "+%d/%b/%Y"` 生成；写死一个日期的话，
+**换一天再跑，数到的还是那一天的行** —— 而这个查询的整个意思是「**今天**」。
+查历史日期时另给参数，并注意日志可能已轮转出当前文件（那时会得到 0，**不代表没人来过**）。
 
 - 日志路径：`/www/wwwlogs/api.mall.qushiyun.com.log`（`api.mall.qushiyun.com` 的 vhost
   与 `/v1/` 分流见 §1.7）；

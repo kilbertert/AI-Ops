@@ -38,14 +38,15 @@
 `routing-window.sh` 正是因为这个才把空窗口判成「无法判断」）。所以再从**入口侧**核一次：
 
 ```bash
-# 从**主机本地时刻 00:00** 起算（不是从进程启动起算）——这里要的是「全天」，
-# 与上面的窗口是两个口径，别混。
-$ ssh aiops-41 "grep '01/Oct/2026' /www/wwwlogs/api.mall.qushiyun.com.log | grep -c '/v1/'"
+# 从**主机本地时刻 00:00** 起算（不是从进程启动起算）——这里要的是「当天」，
+# 与上面的窗口是两个口径，别混。日期在 41 上现算。
+$ ssh aiops-41 'd=$(LC_ALL=C date "+%d/%b/%Y"); \
+    sudo -n grep "$d" /www/wwwlogs/api.mall.qushiyun.com.log | grep -c "/v1/"'
 1                       # 且那一条是 GET /v1/.env → 404，扫描器
 ```
 
-（日志路径与 vhost 位置在 `env-41-runbook.md` 与 `client-type-vs-business-entry.md` §4
-已写过，不是本节新引入的。）
+**命令与口径已沉淀进 `env-41-runbook.md` §1.9**（含「日期必须现算、不能写死」
+与日志滚动的注意），这里只放这次的读数。
 
 ⇒ **截至取数时刻（2026-10-01T12:14Z / 20:14 CST），当天 `/v1/`（AI-Ops 入口）
 只被访问过一次，且是对 `.env` 的扫描。**
