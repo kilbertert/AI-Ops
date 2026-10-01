@@ -85,6 +85,15 @@ class ConversationStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_conversations_scope_created
                     ON conversations(scope_fingerprint, created_at DESC);
+                -- 这里**没有 order_no**，是有意为之且带一处已知代价（#497）。
+                -- 缺这条边 ⇒ 一行轮次说不出自己属于哪一单 ⇒ context_turns() 无法在
+                -- 「该单已离开调用者可见集合」时把这一轮排除掉，它只能按「最近 N 轮」取。
+                -- 于是：绑定失效（Route 1c 每轮重校验）与窗口排除是**两件事**，
+                -- 前者立刻生效，后者今天做不到。危险方向是把它读成「既然绑定了就一定有授权」。
+                -- 补这条边要改会话表结构，而 PRD #410 明示不改；本风险已由
+                -- tests/test_operator_negative_acceptance.py 的
+                -- test_history_window_keeps_a_turn_whose_order_left_the_scope 钉住。
+                -- 边界：跨主体/跨范围的整个会话 404，那是另一道门，不在本注释范围内。
                 CREATE TABLE IF NOT EXISTS conversation_turns (
                     turn_id TEXT PRIMARY KEY,
                     conversation_id TEXT NOT NULL,
@@ -512,6 +521,15 @@ class ConversationStore:
 
         Returns oldest-first for prompt assembly. Turns without a stored
         answer (interrupted/failed generations) never enter the window.
+
+        **"Recent" is a fact about the conversation, not a permission check**
+        (#497). This selects by ``turn_no`` alone: it does not consult whether
+        the order a turn was about is still visible to the caller. A turn whose
+        order has left the caller's site set therefore stays in the window even
+        though the binding has already been dropped by route 1c. Closing that
+        gap needs a turn → order edge the table does not have (see the schema
+        comment). Do not read a turn's presence here as evidence it is still
+        authorised.
 
         The budget is not a hard ceiling on the returned turns: the newest turn
         is always kept, even alone, because an empty context is worse than one

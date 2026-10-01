@@ -59,6 +59,8 @@ from operator_support import (
 from aiops_diagnostics.caller_auth import ScopedOrderAuthorizer
 from aiops_diagnostics.config import Settings
 from aiops_diagnostics.conversation_store import ConversationStore
+from aiops_diagnostics.gateway_runtime import GatewayRuntime
+from aiops_diagnostics.gateway_store import GatewayStore
 from aiops_diagnostics.i18n import SUPPORTED_LANGUAGES
 from aiops_diagnostics.query_scope import resolve_operator_site_scope
 from aiops_diagnostics.scope_context import SCOPE_TYPE_SELF
@@ -265,6 +267,64 @@ def test_a_changed_operator_scope_makes_the_conversation_invisible(
         resp = client.get(f"/v1/conversations/{cid}", headers=headers)
         assert resp.status_code == 404
         assert resp.json()["error"]["code"] == "CONVERSATION_NOT_FOUND"
+
+
+def test_a_changed_subject_makes_the_conversation_invisible(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """换成**同一个 C 端用户绑定的另一个 B 端主体**，同一个 conversation_id 也是 404。
+
+    上面那条只换站点集合，**没有换主体** —— 而 #497 的风险声明里有一句
+    「不是跨主体泄漏」，那句当时只有「指纹的 payload 含主体 id」这个构造上的依据，
+    没有测试证据。评审指出后补上这条。
+
+    单独立一条而不是塞进上面那条：两条的失效**成因不同**（一条是范围收窄，
+    一条是主体不同），合成一条时前者先触发，后者就永远验不到了。
+
+    ⚠️ **第一版写错了，是本条用例自己抓出来的**。第一版换的是
+    ``b_subject(b_user_id="B-OTHER", c_user_id="C-OTHER")``，而替身的会话用户恒为
+    ``C-1`` —— 于是 C→B 映射在 ``record.c_user_id != user_id`` 那一步被判
+    ``c_user_mismatch``，**退回 C 端主体、范围退成 ``self``、站点集合清空**。
+    那样构造出来的 404 来自**范围退化**，不是「另一个有效主体看不到」，等于用
+    前面那条的成因冒充了这一条。正确的隔离方式是：**C 端用户不变（仍 ``C-1``）、
+    只把 C→B 映射指向另一个 B 端主体**（评审给的方向）。
+    """
+    caller = operator_caller(monkeypatch, sites={"SHOP-1": (SITE_IN,)})
+    client, _ = assistant_app(tmp_path, monkeypatch, caller, Connection())
+
+    conversation = client.post(
+        "/v1/conversations", json={"agent_version_key": AGENT_VERSION_KEY}, headers=_OPERATOR_HEADERS
+    )
+    assert conversation.status_code == 201, conversation.text
+    cid = conversation.json()["conversation_id"]
+    owner_scope = caller.context.scope_fingerprint
+    assert caller.context.subject.b_subject_reason == ""
+    assert caller.context.subject.b_user_id == "B-9"
+
+    # 会话用户仍是 C-1（替身恒定的那个），只换 C→B 映射指向的 B 端主体。
+    other = resolve_session(
+        monkeypatch,
+        records=(b_subject(b_user_id="B-OTHER"),),
+        operator_scope=OperatorScope(sites={"SHOP-1": (SITE_IN,)}),
+    )
+    # **前提断言**：这次换的是主体，且范围**没有**跟着退化 —— 否则下面的 404 是
+    # 「范围变空」造成的，与上一条用例同因，本用例就又白写了。
+    assert other.subject.b_subject_reason == "", (
+        "前提不成立：C→B 映射没解析成有效主体（退回了 C 端），本用例要的是两个有效主体"
+    )
+    assert other.subject.b_user_id == "B-OTHER"
+    assert other.data_scope.type == "organ", "前提不成立：范围类型退化了，404 的成因就不是主体"
+    assert sorted(other.data_scope.site_ids) == sorted(caller.context.data_scope.site_ids), (
+        "前提不成立：站点集合变了，那又变成范围收窄那条路径了"
+    )
+    assert other.scope_fingerprint != owner_scope, (
+        "前提不成立：换了主体却没换指纹 —— 那说明指纹不含主体，跨主体那条边界不成立"
+    )
+
+    caller.context = other
+    resp = client.get(f"/v1/conversations/{cid}", headers=_OPERATOR_HEADERS)
+    assert resp.status_code == 404
+    assert resp.json()["error"]["code"] == "CONVERSATION_NOT_FOUND"
 
 
 # --- 4. 数据完整性四类情形：站点上的 partner_b_id 不能放宽可见性 --------------
@@ -540,3 +600,103 @@ def test_the_no_header_ambiguity_holds_only_for_two_platform_identities(
     # **必须断言精确的状态码，不能写 `in (202, 404)`**：那样"本人订单被错误拒绝"
     # 也会通过，等于这条用例验不了它声称验的事（正常放行）。
     assert resp.status_code == 202, resp.text
+
+
+def test_history_window_keeps_a_turn_whose_order_left_the_scope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#497 的风险声明：窗口是**事实**，不是授权 —— 这条用例钉住它并说明边界。
+
+    订单离开调用者站点集合后，Route 1c 下一轮就把它丢掉了（上一条用例：
+    回落成普通问答、清掉绑定）。但**那一轮已经存进 ``conversation_turns``**，
+    而窗口按「最近 N 轮」取，不按「现在还能不能看见」取 —— 于是那一轮的
+    诊断结论仍会以历史的名义进入后续提示词。
+
+    这是**有意接受的风险**（#497 选了「维持现状 + 写风险声明」那条路），不是缺陷：
+    根因是缺一条边（``conversation_turns`` 没有 ``order_no``），补它要改会话表结构，
+    而 PRD #410 明示不改。
+
+    覆盖范围**只到这里为止**：
+    * 同一主体、同一租户、**范围指纹不变**（订单改挂站点不改变指纹）。
+      ⇒ **不是跨租户/跨主体泄漏**。这一条的依据是**指纹的构成**，不是本用例：
+      ``_scope_fingerprint`` 的 payload 含 ``caller_b_user_id`` / ``subject_b_user_id`` /
+      ``subject_c_user_id`` / ``delegated`` / ``effective_tenant_id``
+      （``scope_context.py:640-648``），换主体必然换指纹。
+      **本用例只覆盖「站点集合变 → 指纹变 → 404」这一条**，它没有换主体。
+      评审指出我把一个由构造保证的性质说成了由这条用例保证 —— 那样写会让人以为
+      跨主体也被测过。
+    * 跨范围时整个会话 **404** —— 那条边界由
+      ``test_a_changed_operator_scope_makes_the_conversation_invisible`` 覆盖，
+      本用例不重复证它，也不声称本用例覆盖了它。
+      跨主体那一半现在由 ``test_a_changed_subject_makes_the_conversation_invisible``
+      覆盖（C 端用户不变、只换 C→B 映射指向的 B 端主体）。
+
+    顺序是刻意的：**先证明订单真的离开了可见集合**（同一条追问回落成普通问答），
+    **再**断言窗口里仍留着那一轮。反过来写的话，「订单已不可见」就只是一个假设。
+    """
+    connection = Connection()
+    caller = operator_caller(monkeypatch, sites={"SHOP-1": (SITE_IN,)})
+    client, _ = assistant_app(tmp_path, monkeypatch, caller, connection)
+
+    conversation = client.post(
+        "/v1/conversations", json={"agent_version_key": AGENT_VERSION_KEY}, headers=_OPERATOR_HEADERS
+    )
+    assert conversation.status_code == 201, conversation.text
+    cid = conversation.json()["conversation_id"]
+
+    bound = client.post(
+        f"/v1/conversations/{cid}/active-order",
+        json={"order_no": ORDER_INSIDE},
+        headers=_OPERATOR_HEADERS,
+    )
+    assert bound.status_code == 200, bound.text
+
+    first = client.post(
+        "/v1/assistant/questions",
+        json={"question": FOLLOWUP_QUESTION, "conversation_id": cid},
+        headers=_OPERATOR_HEADERS,
+    )
+    assert first.status_code == 202, first.text
+    assert first.json()["order_no_from_context"] == ORDER_INSIDE
+    turn_no = first.json()["turn_no"]
+
+    store = ConversationStore(Path(client.app.state.gateway.settings.database_file))
+    scope = caller.context.scope_fingerprint
+    store.complete_turn(cid, scope, turn_no, answer={"text": "诊断结论：充电桩通信中断"})
+
+    # 订单改挂到集合外站点：调用者站点集合不变 ⇒ 范围指纹不变（这正是本票的边界所在）。
+    connection.orders = [
+        {**row, "site_id": SITE_OUT} if row["order_no"] == ORDER_INSIDE else row for row in connection.orders
+    ]
+
+    # **前提先证**：同一条追问不再走诊断，说明那一单确实已不在可见集合里。
+    # （这一条与上一条用例重叠是有意的：本用例的全部意义建立在「订单真的不可见了」之上，
+    # 引用一个别处的断言会让它在本文件里变成一个假设。）
+    second = client.post(
+        "/v1/assistant/questions",
+        json={"question": FOLLOWUP_AFTER_LOSS, "conversation_id": cid},
+        headers=_OPERATOR_HEADERS,
+    )
+    assert second.status_code == 202, second.text
+    assert second.json()["type"] == "qa", "前提不成立：订单仍可见，本用例的场景没有构造出来"
+
+    # **结论**：已不可见的那一轮仍在窗口里 —— 这就是被接受的风险本身。
+    # 未完成的轮次（上面那条 qa 还停在 queued）不进窗口，所以这里只应看到第一轮。
+    window = store.context_turns(cid, scope)
+    assert [t["turn_no"] for t in window] == [turn_no], "被接受的现状：离开可见集合的轮次仍在窗口里"
+
+    # **并且它真的会进提示词** —— 这一步走的是**生产那条接线**
+    # （``GatewayRuntime._conversation_history``），不是直接调渲染函数。
+    # 评审指出：只调 ``render_history`` 时，即使生产提示词哪天不再接历史，这条用例
+    # 照样是绿的 —— 那正是 #482 修过的「窗口接上了但没人用」那个形状，本票不该把它
+    # 偷偷放回来。经由生产接线断言，这条用例才真的在守它声称守的东西。
+    #
+    # 用**真** ``GatewayRuntime``（本文件用的替代品没有这条接线，它只记录启没启动作业）；
+    # 它与应用读同一个库文件，所以看到的是同一个会话。
+    real_runtime = GatewayRuntime(
+        GatewayStore(client.app.state.gateway.settings.database_file),
+        client.app.state.gateway.settings,
+        Settings(),
+    )
+    history = real_runtime._conversation_history((cid, scope, turn_no), "zh")
+    assert "诊断结论" in history, "该轮不止在窗口里，而且真的经生产接线进了提示词"
