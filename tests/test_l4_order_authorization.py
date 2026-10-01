@@ -9,8 +9,9 @@ Those are checkable claims:
 * the chain must be a chain — each step naming an anchor, not free prose;
 * the coverage gap must keep its four parts and the two `fail closed` ones,
   because collapsing them into one bucket is the mistake the section warns about;
-* the deviation must be recorded as a pending item pointing at D batch, not
-  quietly dropped;
+* the deviation must be recorded as a pending item **with an owner that can
+  actually pick it up** — D batch finished on 2026-09-30 and only changed the
+  inbound hop, so pointing at it would mean nobody does;
 * the section must state what it did *not* do (rebuild it, re-measure the
   production database) so a reader does not take the quoted numbers for fresh.
 
@@ -86,16 +87,49 @@ def test_the_chain_is_a_table_of_steps() -> None:
         cells = [c.strip() for c in row.strip("|").split("|")]
         if cells[0] == "步":
             continue
-        assert _ANCHOR.search(cells[-1]) or cells[-1].startswith("L"), f"这一步没有指回 L2/L3：{row[:90]}"
+        # The anchor must be a real one. `startswith("L")` was the earlier
+        # fallback and it accepted `Later` — a step could lose its anchor and
+        # still pass because other steps kept theirs.
+        assert _ANCHOR.search(cells[-1]), f"这一步没有指回 L2/L3：{row[:90]}"
+
+
+def _gap_rows() -> dict[str, str]:
+    """The L4-2 table keyed by class letter (B/C/D/E)."""
+    gap = _tail(_section("L4"), "L4-2").split("\n### ")[0]
+    out: dict[str, str] = {}
+    for row in gap.splitlines():
+        if not row.startswith("|") or row.count("|") < 4:
+            continue
+        cells = [c.strip() for c in row.strip("|").split("|")]
+        m = re.match(r"\*\*([A-E])\*\*", cells[0])
+        if m:
+            out[m.group(1)] = row
+    return out
 
 
 def test_the_coverage_gap_keeps_its_four_parts() -> None:
-    """B/C/D/E, with C and D marked fail-closed — not one "31.7%" bucket."""
+    """B/C/D/E, with C and D marked fail-closed — not one "31.7%" bucket.
+
+    Each row is checked on its own: a count appearing *somewhere* in the
+    subsection is not the same as that class having a verdict, and counting
+    `fail closed` occurrences would pass while the two rows that need it lost it.
+    """
     l4 = _section("L4")
     gap = _tail(l4, "L4-2")
+    rows = _gap_rows()
+    assert set(rows) == {"B", "C", "D", "E"}, f"覆盖缺口的分类行不全：{sorted(rows)}"
     for part, count in (("B", "9,307"), ("C", "57"), ("D", "297"), ("E", "20,782")):
-        assert count in gap, f"覆盖缺口少了 {part} 类（{count}）"
-    assert gap.count("fail closed") >= 2, "C/D 两类必须各自标 fail closed"
+        assert count in rows[part], f"{part} 类的行里没有它的订单数（{count}）"
+
+    # The verdict lives with the class it applies to.
+    assert "fail closed" in rows["C"] and "fail closed" in rows["D"], (
+        "fail closed 必须写在 C、D 各自的**那一行**里 —— 写在别处读者不会把它与类别对应起来"
+    )
+    assert "fail closed" not in rows["B"] and "fail closed" not in rows["E"], (
+        "B 是正常类别、E 是正常路径 —— 它们不该被标 fail closed"
+    )
+    assert "正常" in rows["B"], "B 那一行必须说明它是正常类别而不是缺口"
+
     assert "30.6%" in gap and "1.2%" in gap, (
         "必须把「B 是正常类别」与「真正的缺口 1.2%」分开，否则 31.7% 会被读成 31.7% 有问题"
     )
@@ -107,11 +141,34 @@ def test_the_deviation_is_recorded_and_points_at_the_batch_that_fixes_it() -> No
     dev = _tail(l4, "L4-3").split("\n### ")[0]
     assert "绕开" in dev, "偏离那条没点明是「绕开」而不是「缺少授权」"
     assert "不在本票解决" in dev or "本票只把它写清楚" in dev
-    # The pointer has to sit with the pending item, not merely appear somewhere
-    # in the subsection: "recorded as pending, fixed by D batch" is one claim.
-    pending = [ln for ln in dev.splitlines() if "待收敛" in ln]
-    assert pending, "没把这条记成「待收敛项」"
-    assert any("D 批" in ln for ln in pending), "「待收敛项」那一句没写由谁承接 —— 必须与 D 批写在同一句里"
+    # The owner has to sit with the pending item, and it has to be the *right*
+    # owner: D batch finished on 2026-09-30 and only changed the inbound hop, so
+    # pointing the pending item at it means nothing picks it up.
+    # `待收敛` also appears in the heading, so anchor on the sentence that
+    # *records* the pending item, not the first occurrence of the word.
+    i = dev.index("记为待收敛项")
+    block = dev[i : i + 200]  # the pending sentence and what immediately follows
+    assert "后续票" in block, "「待收敛项」没写由谁承接 —— 承接方必须写在同一个句子或紧随的一句里"
+    assert "不要把它挂到已完成的 D 批" in block, (
+        "没点明**不要**把它挂到已完成的 D 批 —— 那正是「记了却没人接」的形态"
+    )
+
+
+def test_it_does_not_let_shop_scope_stand_in_for_partner_authorization() -> None:
+    """`@ShopDataScope(column="site_id")` filters by *shop*, not by 代理商.
+
+    The chain says "the backend already implements this", which is true — but
+    the thing it implements compares the caller's shop set against the order's
+    site. Reading that as "代理商 authorization" is a different claim, and the
+    two disagree whenever a site's shop binding and its partner differ.
+    """
+    l4 = _section("L4")
+    chain = _tail(l4, "L4-1").split("\n### ")[0]
+    assert "它不核 `partner_b_id`" in chain or "不核对 `partner_b_id`" in chain, (
+        "没写清这套现成隔离**不核 `partner_b_id`**"
+    )
+    assert "店铺集合" in chain and "代理商" in chain
+    assert "不一致" in chain, "没写「店铺绑定与代理商归属不一致时两者会给出不同的行集合」"
 
 
 def test_it_states_what_it_did_not_do() -> None:
