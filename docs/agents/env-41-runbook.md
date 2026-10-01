@@ -520,11 +520,11 @@ deploy/routing-window.sh 2026-10-01T00:00:00+00:00   # 或指定 UTC 起点
 # 今天全天（**主机本地**时刻 00:00 起）有多少条打到 AI-Ops 的 /v1/
 # 日期在 41 上现算 —— 不要手写日期，否则第二天照抄会去数昨天。
 ssh aiops-41 'd=$(LC_ALL=C date "+%d/%b/%Y"); \
-  sudo -n grep "\$d" /www/wwwlogs/api.mall.qushiyun.com.log | grep -c "/v1/"'
+  sudo -n grep "$d" /www/wwwlogs/api.mall.qushiyun.com.log | grep -c "/v1/"'
 
 # 只看真实的业务路径（把它们与扫描流量分开）
 ssh aiops-41 'd=$(LC_ALL=C date "+%d/%b/%Y"); \
-  sudo -n grep "\$d" /www/wwwlogs/api.mall.qushiyun.com.log \
+  sudo -n grep "$d" /www/wwwlogs/api.mall.qushiyun.com.log \
   | grep "/v1/" | awk "{print \$4, \$7, \$9}"'
 ```
 
@@ -532,6 +532,11 @@ ssh aiops-41 'd=$(LC_ALL=C date "+%d/%b/%Y"); \
 （英文月份缩写），所以用 `LC_ALL=C date "+%d/%b/%Y"` 生成；写死一个日期的话，
 **换一天再跑，数到的还是那一天的行** —— 而这个查询的整个意思是「**今天**」。
 查历史日期时另给参数，并注意日志可能已轮转出当前文件（那时会得到 0，**不代表没人来过**）。
+
+> ⚠️ **本节的两条命令是从这份文件里原样复制出来跑过的**（不是"手打一版差不多的"）。
+> 原因：写这两条时我把 `grep "\$d"` 写进了文件（多了一个反斜杠），
+> 而**验证时手打的是 `grep "$d"`** —— 于是「验过了」与「文件里那一条」是两条不同的命令，
+> 文件里那条会去匹配字面量 `$d`、永远返回 0。**验命令必须从文档复制，不能凭记忆重打。**
 
 - 日志路径：`/www/wwwlogs/api.mall.qushiyun.com.log`（`api.mall.qushiyun.com` 的 vhost
   与 `/v1/` 分流见 §1.7）；

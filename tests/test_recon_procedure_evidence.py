@@ -245,3 +245,26 @@ def test_the_truncated_rows_show_the_truth_and_state_the_true_total() -> None:
         assert len(lines) == int(m.group(2)), f"标注说共 {m.group(2)} 行，实际 {len(lines)} 行：{cmd}"
         checked_rows += 1
     assert checked_rows >= 2, f"只核对了 {checked_rows} 条截断行"
+
+
+def _runbook_log_block() -> str:
+    text = (PROJECT_ROOT / "docs" / "agents" / "env-41-runbook.md").read_text(encoding="utf-8")
+    return text.split("### 证据二：nginx 入口访问日志")[1].split("```bash")[1].split("```")[0]
+
+
+def test_the_runbook_entry_queries_have_no_stray_escaping() -> None:
+    """The two documented queries must be copy-pasteable.
+
+    A `grep "\\$d"` slipped into the file while the version that got *typed*
+    for verification was `grep "$d"` — so "I tested it" and "what the file
+    says" were two different commands, and the file's one matches the literal
+    `$d` and always returns 0. This checks the file's text, not a retyped copy.
+    """
+    block = _runbook_log_block()
+    assert 'grep "\\$d"' not in block, "文档里的 grep 多了一个反斜杠：`\\$d` 会匹配字面量 `$d`，永远返回 0"
+    assert 'grep "$d"' in block, "文档里的 grep 用的不是远端展开的 $d"
+    # The date must be computed on the remote host, not written in.
+    assert 'date "+%d/%b/%Y"' in block, "日期不是现算的 —— 写死的日期第二天会去数昨天"
+    assert not re.search(r"grep '[0-9]{2}/[A-Z][a-z]{2}/[0-9]{4}'", block), (
+        "文档里出现了写死的日期 —— 这个查询的意思是「今天」，写死会给出假阴性"
+    )
