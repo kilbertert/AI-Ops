@@ -83,12 +83,18 @@
 | `base/ddd4j` | 565 | `master` | `master` | 201 | 2026-07-14 |
 | `paas/qushisdk` | 483 | `master` | `master` | 188 | 2026-09-04 |
 | `common-java/cloud-message` | 357 | `master` | `release` | 148（两分支同规模） | 2026-07-23 |
-| `s2b2c-java/cloud-mall-common` | 558 | `main` | 待定 | — | 2026-09-28 |
+| `s2b2c-java/cloud-mall-common` | 558 | `main` | **`dev`**（`dev_251103` 同代） | dev **1376** / dev_251103 1373 / dev_chuanbang 1228 / **main 1209** | 2026-09-28 |
 
-⚠️ `s2b2c-java/cloud-mall-common` **近 30 天有活动（09-28）**，是本组里最活跃的。
-它同时命中「商城」（`mall`）与「通用库」（`common`）两条规则 ⇒ **跨域命中一律保持未定**，
-不按规则顺序取先命中的那个（见 §4）。这一条是核对时抓出来的：先前的实现按顺序取首个命中，
-索引把它标成了「商城」，与本页的「待定」互相矛盾。
+⚠️ `s2b2c-java/cloud-mall-common` 列在这里，是因为**它的名字里有 `common`**；
+但它服务的是**商城域**（`PartnerInfo` / `ShopInfo` 的实体都在它里面，见 L2）。
+两条分类规则（`mall` 与 `common`）它都命中，于是：
+
+- **索引把跨域命中一律标 `未定`**（不按规则顺序取先命中的那个）——这是「规则怎么分类」；
+- **本表按服务对象把它归到商城域**——这是「它服务谁」。
+
+两者不矛盾，是**两个问题**。规则那条是核对时抓出来的：先前的实现按顺序取首个命中，
+索引把它标成「商城」，与本页早先的「待定」打架；现在两侧各说各的口径并都写明了。
+它也是本组里最活跃的（2026-09-28）。
 
 ### 4. 显式未定（不猜）
 
@@ -104,7 +110,7 @@
 | 问题 | 为什么不答 |
 |---|---|
 | `UPMS` 真分支 | 见 §2：文件数不能判「线上那份」 |
-| `cloud-mall-common` 归域 | 可能是共享库，归错域比不归更糟 |
+| `cloud-mall-common` 在**索引**里的归域 | 它同时命中两条规则 ⇒ 索引按规则标 `未定`；本表按**服务对象**归商城（见 §3）。**规则不替人做这个判断** |
 | 519 个仓的逐条归域 | 粒度超出本票（L1 只到「域 → 主仓」），且 402 个已停一年以上 |
 
 **这两类都不许猜。** 猜出来的归属比 `未定` 更糟：`未定` 会让下一个人去查，
@@ -135,6 +141,15 @@ python3 tools/company_repo_index.py --out docs/agents/company-repo-index.md
 - **`iot/tsdata`（604）** 是充电桩域里近 30 天活跃的一个仓（2026-09-24），
   与 AI-Ops 的 TDengine 数据面相关 —— **L2/L3 若碰到数据面，从这里进**。
 
+> **2026-10-01 由 #477 回填一处**：§3 表里 `cloud-mall-common` 的「真分支」原写「待定」，
+> 现补为 **`dev`**。判据（当场跑）：dev **1376** / dev_251103 1373 / dev_chuanbang 1228 /
+> **main 1209** —— 与「默认分支落后一代」同形，只是差距小。
+> 注意它**不属于** §2 那种「无法判」的情形：§2 是 `refactor` 390 与 `release` 231 的
+> 近一倍差、且**方向不明**（更像进行中的重构）；这里是四个分支同一数量级、`dev` 最新也最大，
+> 方向清楚。
+> **这是跨节修改**（L1 本属已合并的 #476）。判据是：**已知写错的一格比节边界更重要**，
+> 且该票已合并、没有并行写者会冲突。回填由 #479 统一负责，此处按同一纪律先修。
+
 ---
 
 ## L2 · 关键实体图
@@ -149,7 +164,115 @@ python3 tools/company_repo_index.py --out docs/agents/company-repo-index.md
 **② 近似 ≠ 等同**，已知反例是 `shop_id` 与 `site_id`（954 行里 1 行不同），
 差异必须连同量级一起写出来，不能四舍五入。
 
-（尚未填充。）
+**本节口径**：出处写 `仓:分支:文件:行`。**行号取自下面列出的那个分支**，
+换分支行号会漂。
+
+---
+
+### L2-0 一个先把结论钉死的发现：这套库里「运营商」是两个不同的东西
+
+需求里的「运营商」在本层必须区分，否则后面每条边都会对错：
+
+| 词 | 指向 | 出处 | 特征 |
+|---|---|---|---|
+| **商城侧的「运营商」** | `partner_info`（合伙人/代理商） | `cloud-mall-common:dev:entity/marketPool/PartnerInfo.java:28`（`@TableName(value = "partner_info")`）；同仓 `:19-23` 类注释「合伙人」 | 有 `owner`（**b 端账号 id**，`:89`）、`groupHeader`（c 端账号 id，`:94`）、`shopId`（运营商店铺，`:58`）、`parentId`（有限级，`:147`）、`type`（`:149`） |
+| **互联互通侧的「运营商」** | `ht_stations_info.operator_id` / `ht_channel_info.operator_id` / `ch_order_info.operator_id` —— **对端平台在互操作协议里的标识** | `cloud-charging-pile:release:data/po/HtStationsInfo.java:47-50`（注释「运营商id」）；`cloud-charging-pile:release:application/controller/HtStationsInfoController.java:47` 的 `operatorIds` 来自 `HlStationOpenReq`，是**请求里带的对端标识**，不是本地账号 | 与 UPMS 账号无关；`ch_order_info.operator_id` 只在互操作链路上被赋值/筛选（`cloud-charging-pile:release:application/hlht/easycharge/EasyChargeAuthorityService.java:206` 等） |
+
+**判据**：`partner_info` 与 UPMS 账号有稳定的桥（见 L2-1）；`ht_*` 系列的 `operator_id`
+**没有**这条桥，它只在互操作协议内部有意义。**把两者当成一个「运营商」是本层最容易犯的错**。
+
+> 旧文档 `operator-authorization-questions.md` §5.2 末句把 `HtChannelInfo.operatorId`
+> 注释为「互联互通**平台**标识」——那说的是**同一个东西的另一侧**（对端平台自己叫它「平台」）。
+> 两处注释措辞不同、指向一致，**不是矛盾**，但合起来读很容易误解，故在此并排写清。
+
+---
+
+### L2-1 关键实体与主键
+
+| 实体 | 表 | 主键 | 出处（仓:分支:文件:行） |
+|---|---|---|---|
+| **租户** | 由 `@Tenant` 注解与**列 `tenant_id`** 表达，未找到独立的「租户 PO」 | —— | `cloud-charging-pile:release:data/po/IotChargingDevice.java:27`（`@Tenant`）、`:43`（`tenantId`）；`cloud-charging-pile:release:data/po/ChSite.java:52`、`cloud-charging-pile:release:data/po/ChOrderInfo.java:327`、`cloud-mall-common:dev:entity/ShopInfo.java:52`、`cloud-mall-common:dev:entity/marketPool/PartnerInfo.java:36` |
+| **平台** | **没有表**。是 shop id 的**哨兵值 `'-1'`** | —— | 见 L2-3 |
+| **运营商** | `partner_info` | `id`（`@TableId`） | `cloud-mall-common:dev:entity/marketPool/PartnerInfo.java:28` |
+| **店铺** | `shop_info` | `id` | `cloud-mall-common:dev:entity/ShopInfo.java:33`（`@TableName`） |
+| **站点** | `ch_site` | `id` | `cloud-charging-pile:release:data/po/ChSite.java:37` |
+| **订单** | `ch_order_info` | `id` / `order_no` | `cloud-charging-pile:release:data/po/ChOrderInfo.java:28`、`:37`、`:42` |
+| **设备** | `iot_charging_device` | `id` | `cloud-charging-pile:release:data/po/IotChargingDevice.java:28`、`:28-39`（类注释「充电桩设备表」） |
+| **用户** | `sys_user`（UPMS） | `id` | 见 L2-2（本仓只有它的外键方，实体在 `cloud-upms`） |
+
+⚠️ **租户这一行是有意写「没有独立 PO」的**：本仓检索到的都是 `tenant_id` **列**与
+`@Tenant` 注解，没有找到一张以租户为主键的表定义。把「找不到租户表」写成
+「租户不是一个实体」是**过度推断**——它在 UPMS 侧大概率有表，但我没查到出处，
+所以这一格留白，不猜。
+
+---
+
+### L2-2 关键边（每条都有出处）
+
+| 边 | 语义 | 出处 | 备注 |
+|---|---|---|---|
+| `ch_site.shop_id` → `shop_info.id` | 站点所属店铺 | `cloud-charging-pile:release:data/po/ChSite.java:54-57`（注释「店铺ID;关联商城店铺ID」） | 列名就是 `shop_id`，与 `ch_site.id` **同域但不等同**（见 L2-4） |
+| `ch_site.agent_id` ← `partner_info.id` | 代理商 | `cloud-charging-pile:release:domain/service/impl/ChSiteServiceImpl.java:491`（`setAgentId(partnerInfo.getId())`） | **成对写入的一半** |
+| `ch_site.partner_b_id` ← `partner_info.owner` | 代理商 B 端账户 | `cloud-charging-pile:release:domain/service/impl/ChSiteServiceImpl.java:492`（`setPartnerBId(partnerInfo.getOwner())`） | **成对写入的另一半**；两列取自 `partner_info` 的**不同列**，所以是两个 id 空间 |
+| 成对写入的上下文 | 由 `shopInfoModel.getPartnerId()` 取 `PartnerInfo` | `cloud-charging-pile:release:domain/service/impl/ChSiteServiceImpl.java:486-490` | 前提是店铺的 `partnerId` 非空 |
+| `shop_info.partner_id` → `partner_info` | 店铺关联的合伙人 | `cloud-mall-common:dev:entity/ShopInfo.java:719`（`partnerId` 注释「合伙人id」） | 是上面那条写入的**上游**：店铺先有合伙人，站点才被填代理商 |
+| `ch_order_info.site_id` → `ch_site.id` | 订单所属站点 | `cloud-charging-pile:release:data/po/ChOrderInfo.java:77`；`cloud-charging-pile:release:data/mapper/ChOrderInfoMapper.xml:41`（`left join ch_site ch_site on ch_site.id = ch_order_info.site_id`） | |
+| `ch_order_info.partner_b_id` = `partner_info.owner` | 订单侧的代理商 B 端账户 | `cloud-charging-pile:release:data/po/ChOrderInfo.java:698`（注释「代理商B端账户id」）；`cloud-charging-pile:release:data/mapper/ChOrderInfoMapper.xml:110-111`（`convert(pi.owner …) = convert(coi.partner_b_id …)`） | 跨库 join，**两侧都要 convert + 显式排序规则**（见下） |
+| `iot_charging_device.site_id` → `ch_site.id` | 设备投放的场地 | `cloud-charging-pile:release:data/po/IotChargingDevice.java:45-47`（注释「投放的场地id」） | |
+| `iot_charging_device.agent_id` | 设备侧也带代理商 id | `cloud-charging-pile:release:data/po/IotChargingDevice.java:72-74`；建表列出处 `cloud-charging-pile:release:resources/db/migration/V1.0.4__device_agentId_add.sql`（「代理商id」） | ⚠️ **与 `ch_site.agent_id` 是否同源，本票未证**：设备侧的赋值链没查，**不写成等同** |
+| `partner_info.owner` → UPMS 的 B 端账号 | 运营商身份可绑 | 见 L2-3 的边界 ① | 这里的映射**不在源码里**，是生产库实测结论，出处另记 |
+
+**跨库 join 必须带排序规则转换**：`cloud-charging-pile:release:data/mapper/ChOrderInfoMapper.xml:109-111` 的 join 条件两侧
+都套了 `convert(… using utf8mb4) collate utf8mb4_general_ci`。两库排序规则不同，
+直接等值 join 会报 `Illegal mix of collations`；**这不是我们踩的坑，是公司自己代码里的写法**，
+照抄即可。（此处不贴原文，只记这个决策——见本节开头的「不搬运正文」。）
+
+---
+
+### L2-3 「平台」= 哨兵值 `-1`（**不是实体，不进实体表**）
+
+`@ShopDataScope` 的 `seePlatform` 开关打开时，隔离条件会把调用者可见的 shop 集合
+**并上一个哨兵 `'-1'`**，再整体放进 `IN (…)`；若调用者没有 shop 集合，则直接写成
+`IN ('<当前 shop>', '-1')`。两种情况都会 `add("-1")`。
+
+出处：`qumall-common:dev_251103:cloud-common-data/…/datascope/shop/ShopIdInterceptor.java:158-166`；
+另有 `:178`、`:193` 两处相同的 `add("-1")`。`seePlatform` 的定义在
+`qumall-common:dev_251103:cloud-common-data/src/main/java/com/qushiyun/cloud/common/data/datascope/ShopDataScope.java:26-31`（注释「**是否平台**」，默认 `false`）。
+
+**为什么它是哨兵而不是实体**：`'-1'` 出现在 `scopeName IN (…)` 列表里，作为**一个取值**参与
+匹配；没有任何表以 `-1` 为键。生产库实测 `ch_site` 里 `shop_id='-1'` 的行数为 **0**
+（结论另记在 `operator-authorization-questions.md` §5.1，**本票未重测**）——
+即该通路今天**是空操作**。
+
+**边界（必须写出来）**：
+- 本票**只从源码证明**「`seePlatform=true` 时会并上 `'-1'`」；
+- 「因此平台方能看到所有订单」**不在本票结论内**——那取决于产品口径，
+  既有记录已按「无此场景」关闭（同上 §5.1）。
+
+---
+
+### L2-4 近似对：`shop_id` 与 `site_id`
+
+**不要互用。** 生产库实测 **954 行里 1 行不同**（出处：
+`operator-authorization-questions.md` §5.9，**本票未重测**），量级是千分之一，
+但方向是「把某一行的站点给了另一个店铺」，在授权场景下**不是舍入误差**。
+
+任何「用 `shop_id` 当站点集合」的写法都必须走既有映射
+（`site_ids_by_shops`，即 `ch_site.shop_id → ch_site.id`），不能直接代入。
+
+---
+
+### L2-5 本票没答的（不猜）
+
+| 问题 | 为什么不答 |
+|---|---|
+| `partner_info.owner → sys_user.id` 的**源码**出处 | 这条映射在源码里没找到。既有记录（`operator-authorization-questions.md` §5.5）列了三条证据，其中一条说某个 Mapper 把 `partnerBId` 写进 UPMS 的 `user_id` 列 —— **本票没有复核那三条**，所以此处**不复述、也不写成出处**（写成出处就等于替它背书） |
+| `iot_charging_device.agent_id` 与 `ch_site.agent_id` 是否同源 | 设备侧的赋值链没查 |
+| 租户表的实体定义 | 见 L2-1 的说明 |
+| `sys_user` / `sys_user_shop` 的表结构 | 实体在 `cloud-upms`，本票只用到外键方 |
+
+**上游**：本节的分支与仓取自 L1 §1（`cloud-charging-pile` → `release`、
+`qumall-common` → `dev_251103`、`cloud-mall-common` → `dev`）。
 
 ---
 
