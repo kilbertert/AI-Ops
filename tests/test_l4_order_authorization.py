@@ -267,38 +267,34 @@ def test_the_two_endpoints_of_the_chain_still_say_what_the_chain_assumes() -> No
 
 
 def test_the_documents_agree_on_how_many_evidence_tests_there_are() -> None:
-    """A交付数量 must match what is on disk.
+    """A stated count must match the guards that actually exist.
 
     The closeout first shipped two numbers for the same set (four and six) in
-    two documents, in one batch of edits. The count is checkable, so check it:
-    every document that states the number must state the number of files that
-    actually exist.
+    one batch of edits. The fix is a check, but the check has to be about the
+    number the documents care about — "the six #414 guards", named — not a glob
+    that also sweeps in unrelated files (`test_company_token_auth.py` matches a
+    `test_company_*.py` glob and is not one of them).
     """
-    actual = (
-        len(list((PROJECT_ROOT / "tests").glob("test_*evidence*.py")))
-        + len(list((PROJECT_ROOT / "tests").glob("test_company_*.py")))
-        + len(list((PROJECT_ROOT / "tests").glob("test_l4_*.py")))
-        + len(list((PROJECT_ROOT / "tests").glob("test_operator_questions_*.py")))
+    named = (
+        "test_recon_procedure_evidence.py",  # #475
+        "test_repo_index_evidence.py",  # #476
+        "test_company_entity_map.py",  # #477
+        "test_company_auth_scope.py",  # #478
+        "test_l4_order_authorization.py",  # #479
+        "test_operator_questions_triage.py",  # #480
     )
-    # The six guards are named explicitly rather than globbed together, so a
-    # stray extra file cannot silently change the number the docs must state.
-    named = [
-        "test_recon_procedure_evidence.py",
-        "test_repo_index_evidence.py",
-        "test_company_entity_map.py",
-        "test_company_auth_scope.py",
-        "test_l4_order_authorization.py",
-        "test_operator_questions_triage.py",
-    ]
     for name in named:
         assert (PROJECT_ROOT / "tests" / name).exists(), f"{name} 不见了"
-    assert actual >= len(named)  # sanity: the globs above also catch these
 
-    words = {4: "四个", 6: "六个"}
-    for doc in ("docs/agents/operator-repair-blueprint.md", "docs/agents/current-delivery-state.md"):
+    # Any document that states a count for this set must state *this* count.
+    stale = []
+    for doc in (
+        "docs/agents/operator-repair-blueprint.md",
+        "docs/agents/current-delivery-state.md",
+    ):
         text = (PROJECT_ROOT / doc).read_text(encoding="utf-8")
-        for n, word in words.items():
-            if f"{word}证据测试" in text or f"{word}测试的 live" in text:
-                assert n == len(named), (
-                    f"{doc} 里写「{word}证据测试」，而实际是 {len(named)} 个 —— 交割时会被漏看"
-                )
+        for word, n in (("四", 4), ("六", 6)):
+            stated = f"{word}个证据测试" in text or f"{word}个测试的 live" in text
+            if stated and n != len(named):
+                stale.append(f"{doc}: 写「{word}个」但实际是 {len(named)} 个")
+    assert stale == [], "；".join(stale) + " —— 交割时会被漏看"
