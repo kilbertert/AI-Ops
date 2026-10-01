@@ -292,7 +292,178 @@ python3 tools/company_repo_index.py --out docs/agents/company-repo-index.md
 ⚠️ **死代码必须点名**：`@Inside` 的鉴权体与组织级 `DataScopeInterceptor` 都是**整段被注释掉**的。
 不点名，后来者会照着它做安全推断。点名要附出处；没有出处的「疑似死代码」标为**待定**，不当结论。
 
-（尚未填充。）
+**本节口径**：出处写 `仓:分支:文件:行`，行号取 L1 §1 的真分支
+（`qumall-common` → `dev_251103`、`cloud-gateway` → `release`、`cloud-upms` → `release`）。
+
+---
+
+### L3-0 一句话总纲：判权限的是**同一个拦截器**，不是每个接口自己
+
+「谁能看到哪些行」在这套体系里只有一个决定点：**缓存/ORM 层的 `ShopIdInterceptor`**。
+它在 SQL 执行前改写 `WHERE`，追加一个 `scopeName IN (…)`。**没有第二套**——
+所以下面所有「谁能看到」的答案，都可以从这一个函数的判据推出来。
+
+**代码量本身不是判据，位置才是**：这个函数在网关**不**生效（网关用的是 `AuthGlobalFilter`，
+开关默认关；见 L3-3），在后端**生效但不总是**（下面五道门，任何一道不过就完全不隔离）。
+
+---
+
+### L3-1 `@ShopDataScope` 的语义
+
+注解定义在 `qumall-common:dev_251103:cloud-common-data/src/main/java/com/qushiyun/cloud/common/data/datascope/ShopDataScope.java:9-46`：
+标在 **mapper 的 select 方法**上（`:10` 注释「店铺数据隔离，mapper select方法上」），
+五个开关：
+
+| 开关 | 默认 | 含义 | 出处（同文件） |
+|---|---|---|---|
+| `isolation` | `true` | 是否隔离 | `:22` |
+| `column` | `"shop_id"` | **隔离列名** | `:27` |
+| `seePlatform` | `false` | 「是否平台」——为真时把哨兵 `'-1'` 并进集合 | `:33` |
+| `realTime` | `false` | 用 `getShops` **实时**取店铺集合（而不是用会话里那份） | `:38` |
+| `montage` | `false` | 隔离条件**直接作用于当前 where**，而不是包一层子查询 | `:45` |
+
+`montage` 的语义只在注解注释里写清（`:41-44`：「false:使用子查询 / true:直接作用于当前的
+where条件」），落地在 `ShopIdInterceptor.java:189-221`。
+
+实际取值举例（充电桩侧，`cloud-charging-pile:release`）：
+- `data/mapper/ChOrderInfoMapper.java:59` —— `@ShopDataScope(column = "site_id", realTime = true)`，
+  **隔离列是 `site_id`**，所以订单按站点隔离；
+- `data/mapper/ChSiteMapper.java:44` —— `@ShopDataScope(column = "id", montage = true, realTime = true)`，
+  站点按**自身 id** 隔离，且用 montage 直接改 where。
+  同文件 `:43` 有一行**被注释掉的旧注解** `//@ShopDataScope(column = "id")` —— 是历史，不是配置。
+
+⚠️ **「隔离列」是可变的，不要在别处硬编码 `shop_id`。** 充电桩侧两处用的就是 `site_id` 与 `id`。
+
+---
+
+### L3-2 「谁能看到哪些行」——一个可判定的过程
+
+给定「请求头 + 会话身份 + 目标 mapper」，可见行集合由下面五道门依次决定。
+**任何一道不过，`ShopIdInterceptor` 直接 `return`，SQL 原样执行 ⇒ 该查询不发生隔离。**
+
+| # | 门 | 不过会怎样 | 出处 |
+|---|---|---|---|
+| 1 | `ShopIdInterceptorContextHolder.isClose()` 为真 | 打日志「关闭店铺拦截器」并放行 | `ShopIdInterceptor.java:78-81` |
+| 2 | `@ShopDataScope(isolation=false)`，或该 mapper 不在配置的 mapper 组里 | `judge` 返回 false | `:285-301`（`ShopScopeHelper.isolation` / mapper 组查找） |
+| 3 | 取不到当前用户（`SecurityUtils.getUser()` 抛异常或为 null） | `judge` 返回 false | `:259-266` |
+| 4 | **用户类型是 `-1`（平台）或 `1`（租户）**，且请求头 `shop-id` 为空或是 `-1` | `judge` 返回 false | `:269-271` |
+| 5 | **请求头 `client-type` 不在 `{admin, supply-admin, tenant-app}`** | `judge` 返回 false | `:280-282` |
+
+过了五道门，隔离条件这样拼（`scopeName` 即上面的「隔离列」）：
+
+- **`seePlatform = true`**：把哨兵 `'-1'` **并进**集合，再整体放进 `IN (…)`；
+  没有集合时写成 `IN ('<当前 shop>', '-1')`。出处 `:158-166`（`selectCount` 支）与 `:187-196`（主子查询支）。
+- **`seePlatform = false`**（默认）：有 `user.shopIds` ⇒ `scopeName IN (店铺集合)`；
+  否则若 `shopId` 非空 ⇒ `scopeName = '<shopId>'`；
+  **两者都没有 ⇒ `return`，SQL 原样执行**（`:241-243`）。
+
+分支结构：`selectCount` 走 `:147-176`，其余走 `:177-247`；`montage` 在 `:189-221`。
+⚠️ 最后那个 `return` 只在 `seePlatform=false` 这一支上 —— 关掉一个分支的隔离，
+在**代码层**是「放行」，在**语义层**是「不追加条件」。
+
+**集合为空时到底放行还是收紧，取决于哪一个开关**，这是本节最容易被读错的一处：
+
+| `seePlatform` | 会话里没有 `shopIds` 也没有 `shopId` | 结果 |
+|---|---|---|
+| `false`（默认） | —— | **放行**（`:241-243` 的 `return`） |
+| `true` | —— | **收紧**：`IN ('<当前 shop>', '-1')`（`:164`、`:196`） |
+
+**实时取集合的条件**（`:139-145`）：`realTime=true`，**或**用户类型以 `5` 开头
+**且**会话里 `shopIds` 为空 **且** 头 `shop-id` 是 `""`/`-1` —— 满足才去调
+`upmsAdminFeignClient.getShops(user.getId())`。
+
+**店铺集合来自哪里**：`GET /shopuser/getShops`，SQL 是
+`select distinct shop_id from sys_user_shop where user_id = #{id}`
+（`cloud-upms:release:cloud-upms-admin/src/main/resources/mapper/SysUserMapper.xml:526-530`；
+端点 `.../controller/ShopUserController.java:386-389`，`@RequestMapping("/shopuser")` 在 `:65`）。
+⚠️ 该端点**没有 `@Inside`、没有类级鉴权注解**（`:62-66` 只有 `@RestController` 等）——
+它靠的是「内网 + 身份头」的约定，不是端点自带保护。
+
+---
+
+### L3-3 `client-type` 的取值全集，与 **AI-Ops 落在哪一支**
+
+**网关产出的那一套**（`cloud-gateway:release:src/main/java/com/qushiyun/cloud/gateway/filter/ApiProxyHeadFilter.java:30`）：
+`MA`、`H5`、`APP`、`PC-MA`、`BP`、`BP-MA`、`H5-PC`、`WX-H5`。
+
+**后端隔离门认的那一套**（`qumall-common:dev_251103:cloud-common-data/src/main/java/com/qushiyun/cloud/common/data/datascope/shop/ShopIdInterceptor.java:280`）：
+`admin`、`supply-admin`、`tenant-app`。
+
+**两个集合不相交**，而且两处的大小写处理还不一样：网关用
+`equalsAnyIgnoreCase`（`:55`）比对，拦截器用 `equalsAny`（大小写敏感）。
+⇒ `H5` 过得了网关，过不了隔离门；`admin` 反之。
+
+**AI-Ops 落在哪一支** —— ⚠️ **这里要说准**。本层评审先后抓出两个方向的过满写法
+（一次是「管家端在网关之后、隔离可能已生效」，一次是「管家端带 `admin` ⇒ 隔离生效」），
+所以按**调用形态**分开写，并且**只断言门 5**：
+
+| 调用形态 | `client-type` | 门 5 | 能说与**不能说**的 |
+|---|---|---|---|
+| AI-Ops **出站**调公司接口——三类，头部各不相同（见下） | **都不带** | **不过** | 能说：这些调用不经隔离门。 |
+| 管家端浏览器 → 公司后端（**不经过 AI-Ops**） | 带（前端产物实发 `admin` / `tenant-app`） | **过** | 能说：**门 5 过**。⚠️ **不能说「隔离生效」**——门 4 还要求「用户类型不是 `-1`/`1`，**或** `shop-id` 头非空且非 `-1`」；管家端账号若是租户/平台类型而没带有效 `shop-id`，门 4 就会放行一个**未隔离**的查询。**「过了 5」≠「隔离了」。** |
+
+**AI-Ops 的三类出站请求，凭据头不一样**（把它们写成一组是错的）：
+
+| 调用 | 头部 | 出处 |
+|---|---|---|
+| `/diag/*`（诊断数据面） | `X-Internal-Token` + `X-Request-Timestamp`（`http_auth.py:8-9`）+ `Accept` | `src/aiops_diagnostics/sources.py:722`、`:672-677` |
+| UPMS `/user/info`、`/user/ds`、`/user/inside/*` | `Authorization: Bearer …` + `Accept`，**没有内部令牌** | `src/aiops_diagnostics/scope_context.py:552-557` |
+| TDengine `/rest/sql/*` | `Authorization: Basic …` + `Content-Type` | `src/aiops_diagnostics/sources.py:581-587` |
+
+**三类的共同点只有一个**：都**不带 `client-type`**，也**都不转发任何入站头**。
+这正是「门 5 不过」的全部依据 —— 与凭据用哪一种无关。
+
+⇒ **正确结论是**：AI-Ops 是第三条数据路径，因此**绕开**了这套隔离；
+**不是**「这套隔离对 AI-Ops 不生效所以无所谓」——后者会把「缺一层授权」读成
+「不需要这层授权」。前提两条各有出处：
+
+- AI-Ops 出站不构造 `client-type`（蓝图 F5 记作「零引用」，**本票复核为
+  「出站构造里没有这个头」——比「零引用」更准**）；
+- AI-Ops 现在**不在**公司网关之后：`company-platform-integration-baseline.md` §1。
+
+⚠️ **第二条会被 D 批改掉，但改的是入站、不是出站**——这一条上一版写错过，格外记下：
+
+- D 批把 `/v1/` 挪到网关之后，改变的是**外部到 AI-Ops 的那一跳**（入站）；
+- 而 AI-Ops 到公司后端的调用是**自己构造出站头**的（上面三类，出处见上），
+  **不会因为入站路由变了就自动带上 `client-type`**。
+
+⇒ D 批落地后要重测的是**两件不同的事**：（1）入站那一跳现在由谁决定、有没有被注入；
+（2）**出站构造里要不要显式带上 `client-type`、带哪一个值**。后者是代码改动，
+不会自己发生。**本票不预测这两件事的结果。**
+
+---
+
+### L3-4 `/shopuser/getShops` 与 `/user/ds` 各返回什么、供谁用
+
+| 端点 | 返回 | 供谁用 | 状态 |
+|---|---|---|---|
+| `GET /shopuser/getShops?userId=<B端 id>` | `sys_user_shop` 里该用户的 **distinct `shop_id`** 列表 | `ShopIdInterceptor` 在 `realTime=true` 时调它取隔离集合（`ShopIdInterceptor.java:141`） | **可用**，是授权链的权威数据源 |
+| `GET /user/ds` | 读 `sys_organ.biz_data` 摊平 | 组织/店铺范围的**旧**解析路径 | **结构性为空**：41 实测 349 行 `sys_organ` 里 `biz_data` 非 NULL 的 **0 行** |
+
+`/user/ds` 那条的实测结论出自 `operator-authorization-questions.md` §5.8 第 3 条
+（**本票未重测**）；列在这里是因为 L3 要回答「哪个接口是权威」——
+**权威是 `/shopuser/getShops`**，与 `/user/ds` 是两条独立调用链。
+
+---
+
+### L3-5 死代码点名（**三处**，逐条附出处）
+
+| # | 什么 | 形态 | 出处 |
+|---|---|---|---|
+| 1 | **`@Inside` 的鉴权体** | 整个 `if` 块被注释，函数体只剩 `return point.proceed()` ⇒ **无条件放行** | `qumall-common:dev_251103:cloud-common-security/src/main/java/com/qushiyun/cloud/common/security/component/BaseSecurityInsideAspect.java:27-36`（注释在 `:31-34`） |
+| 2 | **组织级 `DataScopeInterceptor`** | `beforeQuery` 的**整个方法体**包在 `/* … */` 里，方法只剩空壳 | `qumall-common:dev_251103:cloud-common-data/src/main/java/com/qushiyun/cloud/common/data/datascope/DataScopeInterceptor.java:25-91`（注释块 `:30-90`；`:91` 之后只有结束大括号） |
+| 3 | **网关 `AdminProxyHeadFilter`** | `apply` 第一句就是 `return chain.filter(exchange)`，**其余全部注释** ⇒ 空操作 | `cloud-gateway:release:src/main/java/com/qushiyun/cloud/gateway/filter/AdminProxyHeadFilter.java:34-37`（注释自 `:38` 起） |
+
+**为什么必须点名**：这三处的注释块里，写的是**完整的、看起来在生效的鉴权逻辑**。
+读到它们的人会做出安全推断（「这个端点有 `@Inside`，所以只有内网能调」），
+而实际行为是「谁都能调」。**判断一个机制在不在，要看它有没有在注释里，不能只看它存在。**
+
+第 3 处还有一层：`AuthGlobalFilter` 的开关 `cloud.auth.enable` **默认关闭**
+（`cloud-gateway-dev.yml`，结论另记在 `company-platform-integration-baseline.md` §1.2，
+**本票未重测**），所以网关侧的「必须登录」同样不成立。
+
+> ⚠️ 「疑似死代码」与「死代码」要分开：上表三条都**逐行看过注释边界**才写。
+> 只凭「没见它生效」推断的，标**待定**，不进这张表。
 
 ---
 
