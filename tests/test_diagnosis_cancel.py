@@ -20,12 +20,14 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 from pathlib import Path
 from typing import Any
 
 from fastapi.testclient import TestClient
 from test_assistant_api import _Authorizer, _Caller, _Directory, _Turn
 
+from aiops_diagnostics.codex_runtime import AgentRuntimeError
 from aiops_diagnostics.config import Settings
 from aiops_diagnostics.faq import FAQCatalog, PlatformIdentityResolver
 from aiops_diagnostics.gateway_api import create_gateway_app
@@ -58,7 +60,10 @@ def _diagnosis_client(tmp_path: Path, monkeypatch, *, gates: dict, turn: _Turn):
             turn_registrar(turn)
         gates["turn_started"].set()
         gates["release"].wait(timeout=30)
-        raise RuntimeError("the stop must have happened before the model returned")
+        # AgentRuntimeError, not RuntimeError: the worker only handles the
+        # former, and a bare RuntimeError would escape before its failed branch
+        # ever ran — which is what made the metric guard look untestable.
+        raise AgentRuntimeError("the interrupted turn surfaced as a runtime error")
 
     monkeypatch.setattr(gateway_runtime, "run_agent_diagnosis", _diagnose)
 
@@ -143,17 +148,39 @@ def test_stopping_a_diagnosis_frees_the_slot_and_interrupts_the_turn(tmp_path: P
 def test_cancelling_a_diagnosis_the_caller_cannot_see_is_not_found(tmp_path: Path, monkeypatch) -> None:
     """Missing and out-of-scope are one answer — cancelling must not probe ids.
 
-    This is the same rule the read path already follows: a caller learns
-    nothing about whether a diagnosis exists outside its scope.
+    Two halves, and both are needed: an id that does not exist, and a real id
+    belonging to **another caller**. The first half alone is what review caught
+    — it never created a diagnosis owned by somebody else, so it proved nothing
+    about the scope check, which is the half that actually guards the data. The
+    two responses must be indistinguishable, or the endpoint becomes a way to
+    learn which diagnosis ids exist.
     """
     gates = _gates()
     client, runtime = _diagnosis_client(tmp_path, monkeypatch, gates=gates, turn=_Turn())
     try:
+        scope = _scope_fingerprint(client)
+        # A real, in-flight diagnosis that belongs to a DIFFERENT caller.
+        # Written straight into the store under another scope: the cancel path
+        # only reads the row by (id, scope), so this is the whole setup it needs.
+        theirs = runtime.store.create_standard_diagnosis("other-scope-fingerprint", ORDER, "别人的问题", None)
+
         missing = client.post(
             "/v1/standard/diagnoses/dx_nonexistent00000000000000000000001/cancel", headers=HEADERS
         )
-        assert missing.status_code == 404
-        assert missing.json()["error"]["code"] == "DIAGNOSIS_NOT_FOUND"
+        someone_elses = client.post(
+            f"/v1/standard/diagnoses/{theirs['diagnosis_id']}/cancel", headers=HEADERS
+        )
+
+        assert missing.status_code == someone_elses.status_code == 404
+        assert missing.json() == someone_elses.json(), (
+            "an existing-but-not-mine diagnosis answered differently from a missing one"
+        )
+        # And the other caller's job was not touched.
+        assert (
+            runtime.store.get_standard_diagnosis(theirs["diagnosis_id"], "other-scope-fingerprint")["status"]
+            == "queued"
+        )
+        assert scope  # the caller's own scope is not the one above
     finally:
         gates["release"].set()
         runtime.shutdown()
@@ -248,6 +275,125 @@ def test_a_cancelled_diagnosis_turn_stays_out_of_the_context_window(tmp_path: Pa
         # The turn row itself is not left behind holding the slot either.
         detail = client.get(f"/v1/conversations/{cid}", headers=HEADERS).json()
         assert detail["turns"] == []
+    finally:
+        gates["release"].set()
+        runtime.shutdown()
+        client.close()
+
+
+def test_a_cancel_that_loses_the_race_does_not_delete_the_workers_turn(tmp_path: Path, monkeypatch) -> None:
+    """A stop that loses the terminal write must not free the turn slot.
+
+    ``release_turn`` DELETES the turn row, so a cancel that lost the race would
+    delete a turn the worker had already filled (or is about to fill) — the
+    caller sees the job's own state and its own history silently damaged. The
+    guard is ``if accepted:`` around the release; this drives that branch by
+    making the store's terminal write lose, with the turn row genuinely present.
+    """
+    gates = _gates()
+    gates["before_turn"].set()
+    client, runtime = _diagnosis_client(tmp_path, monkeypatch, gates=gates, turn=_Turn())
+    try:
+        conversation = client.post(
+            "/v1/conversations",
+            json={"agent_version_key": "agt_abcdef1234567890#v1"},
+            headers=HEADERS,
+        ).json()
+        cid = conversation["conversation_id"]
+        client.post(f"/v1/conversations/{cid}/active-order", json={"order_no": ORDER}, headers=HEADERS)
+
+        asked = client.post(
+            "/v1/assistant/questions",
+            json={"question": "这个订单为什么提前停了", "conversation_id": cid},
+            headers=HEADERS,
+        )
+        diagnosis_id = asked.json()["diagnosis_id"]
+        assert gates["turn_started"].wait(10), "the worker never reached the model turn"
+
+        scope = _scope_fingerprint(client)
+        store = client.app.state.gateway.conversation_store
+        assert store.turns(cid, scope), "the turn row should exist while the job runs"
+
+        # The losing write: another path terminalised the row first, so this
+        # cancel's UPDATE matches nothing.
+        monkeypatch.setattr(runtime.store, "update_standard_diagnosis", lambda *a, **k: False)
+        stopped = client.post(f"/v1/standard/diagnoses/{diagnosis_id}/cancel", headers=HEADERS)
+        assert stopped.status_code == 200
+
+        assert store.turns(cid, scope), "a losing cancel released the slot and deleted the worker's turn row"
+    finally:
+        gates["release"].set()
+        runtime.shutdown()
+        client.close()
+
+
+def test_a_turn_that_starts_after_the_stop_is_still_interrupted(tmp_path: Path, monkeypatch) -> None:
+    """A stop that ran before the worker reached its turn must still stop it.
+
+    The stop pops the registration and finds no handle — but the worker still
+    holds that very object and will register into it moments later. Without the
+    ``cancelled`` flag the turn runs to completion on a job already reported as
+    ``cancelled``, and the interrupt nobody will look at again never happens.
+    """
+    from aiops_diagnostics.gateway_runtime import JobRegistration
+
+    turn = _Turn()
+    registration = JobRegistration(conversation_turn=("conv_x", "scope", 1), route_type="diagnosis")
+    registration.cancelled = True  # what the stop does while the worker spins up
+
+    registration.register_interrupt(turn)
+
+    assert turn.interrupted, "a turn starting after the stop was not interrupted"
+    assert registration.interrupt is None, "a stopped job should not adopt a new handle"
+
+
+def test_a_cancelled_diagnosis_is_not_also_counted_as_failed(tmp_path: Path, monkeypatch) -> None:
+    """Stopping a job must not inflate the failure rate (review on #499).
+
+    The interrupt makes the worker's model call raise, so the worker lands in
+    its ``failed`` branch for a job the user deliberately stopped. The store's
+    terminal guard refuses that write — but the metric row is not the store's to
+    refuse, so it was recorded anyway: one stop, two rows, one of them wrong.
+    The guard is ``if not ok: return`` before the metric.
+    """
+    gates = _gates()
+    gates["before_turn"].set()
+    client, runtime = _diagnosis_client(tmp_path, monkeypatch, gates=gates, turn=_Turn())
+    recorded: list[dict] = []
+    try:
+        original = runtime.metrics_store.record
+        monkeypatch.setattr(
+            runtime.metrics_store,
+            "record",
+            lambda **fields: (recorded.append(fields), original(**fields))[1],
+        )
+
+        conversation = client.post(
+            "/v1/conversations",
+            json={"agent_version_key": "agt_abcdef1234567890#v1"},
+            headers=HEADERS,
+        ).json()
+        cid = conversation["conversation_id"]
+        client.post(f"/v1/conversations/{cid}/active-order", json={"order_no": ORDER}, headers=HEADERS)
+        asked = client.post(
+            "/v1/assistant/questions",
+            json={"question": "这个订单为什么提前停了", "conversation_id": cid},
+            headers=HEADERS,
+        )
+        diagnosis_id = asked.json()["diagnosis_id"]
+        assert gates["turn_started"].wait(10), "the worker never reached the model turn"
+
+        client.post(f"/v1/standard/diagnoses/{diagnosis_id}/cancel", headers=HEADERS)
+
+        # Let the interrupted worker finish its failed branch.
+        gates["release"].set()
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and not any(row.get("outcome") == "failed" for row in recorded):
+            time.sleep(0.05)
+
+        outcomes = [row.get("outcome") for row in recorded if row.get("route_type") == "diagnosis"]
+        assert "failed" not in outcomes, f"a cancelled diagnosis was also counted as failed: {outcomes}"
+        assert "cancelled" in outcomes, f"the stop itself must still be counted: {outcomes}"
     finally:
         gates["release"].set()
         runtime.shutdown()

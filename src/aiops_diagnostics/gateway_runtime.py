@@ -103,13 +103,28 @@ class JobRegistration:
     conversation_turn: tuple[str, str, int] | None = None
     interrupt: Callable[[], None] | None = None
     route_type: str = "qa"
+    #: Set by a stop request (#499 review). Needed because the worker may reach
+    #: its first turn *after* the stop already ran: the stop pops the
+    #: registration out of the registry and finds no handle to interrupt, yet
+    #: the worker still holds this object and will register into it. Without
+    #: this flag the turn would run to completion on a job already reported as
+    #: ``cancelled``. Reachable whenever a user stops a job that is still
+    #: spinning up its workspace, which is the ordinary case.
+    cancelled: bool = False
 
     def register_interrupt(self, handle: Any) -> None:
         """Adopt the live turn handle's interrupt as this job's interrupt.
 
         A new turn replaces the previous one (the RAG path runs several), so the
         registration always points at the turn that is running NOW.
+
+        If the job was already stopped, interrupt the handle immediately rather
+        than adopting it: the stop request has already returned and nobody will
+        come back to look at ``self.interrupt``.
         """
+        if self.cancelled:
+            handle.interrupt()
+            return
         self.interrupt = handle.interrupt
 
 
@@ -403,11 +418,23 @@ class GatewayRuntime:
             accepted = self.store.update_standard_diagnosis(diagnosis_id, status="cancelled")
             registration = self._diagnosis_registrations.pop(diagnosis_id, None)
             if registration is not None:
-                # Both savings run before the metric row: nothing that records
-                # rather than decides may keep the turn burning or the input
-                # box locked. Order is persist, save, then count.
+                # Same as the qa line: mark before acting, because a worker that
+                # has not reached its turn yet still holds this object.
+                registration.cancelled = True
+                # **The interrupt is unconditional; freeing the slot is
+                # conditional on having won the terminal write** (#499 review).
+                # A cancel that lost the race (the worker completed between our
+                # read and our write) must NOT free the slot: by then the worker
+                # has filled this very turn with its answer, and releasing a
+                # filled turn DELETES it — the next follow-up would silently
+                # lose its context. The interrupt is still right to attempt: the
+                # turn is over, so the call is a no-op, never a wrong outcome.
+                #
+                # The qa line has the same shape and once had this same bug; see
+                # the matching comment in cancel_assistant_qa.
                 self._interrupt_registered_turn(registration)
-                self._release_conversation_turn(registration.conversation_turn)
+                if accepted:
+                    self._release_conversation_turn(registration.conversation_turn)
             if accepted:
                 self._record_cancelled_job_metric(context, registration)
             return self.store.get_standard_diagnosis(diagnosis_id, context.scope_fingerprint)
@@ -684,11 +711,22 @@ class GatewayRuntime:
             accepted = self.store.update_assistant_question(qa_id, status="cancelled")
             registration = self._qa_registrations.pop(qa_id, None)
             if registration is not None:
+                # Marked before anything else: a worker that has not started its
+                # turn yet still holds this object and will register into it.
+                registration.cancelled = True
                 # Both savings run before the metric row, so nothing that
                 # records rather than decides can keep the turn burning or the
                 # input box locked: order is persist, save, then count.
                 self._interrupt_registered_turn(registration)
-                self._release_conversation_turn(registration.conversation_turn)
+                # **Freeing the slot is conditional on having won the terminal
+                # write** (#499 review). ``release_turn`` DELETES the turn row,
+                # so a cancel that lost the race would delete a turn the worker
+                # had already filled with its answer — the caller would see the
+                # job as completed and its own history silently empty. Clearing
+                # the slot is only needed when the worker is still running,
+                # which is exactly the case ``accepted`` is true for.
+                if accepted:
+                    self._release_conversation_turn(registration.conversation_turn)
             if accepted:
                 # One stop, one row, and never two: the terminal write is what
                 # decides the outcome, and only the request that wins it counts.
@@ -1076,6 +1114,14 @@ class GatewayRuntime:
                 guarded=not ok,
                 stop_renewer=claim_stop,
             )
+            # **Only a failure that landed is counted** (#499 review). When a
+            # cancel won the race, the interrupt makes this worker raise — and
+            # counting that as ``failed`` would record the same job twice, once
+            # as cancelled and once as failed, inflating the failure rate with
+            # jobs the user deliberately stopped. Mirrors the qa line's early
+            # return on a refused terminal write.
+            if not ok:
+                return
             self._record_metric(
                 tenant_id=context.effective_tenant_id,
                 route_type="diagnosis",

@@ -35,7 +35,7 @@
 ### 验证
 
 本机：`ruff check` / `ruff format --check` / `pytest` 全套 / `compileall` / `uv pip check` 全绿。
-新增 3 条用例（真实 runtime + 真实 store + 真实 HTTP 路由），**突变验证**：
+新增 **7 条**用例（真实 runtime + 真实 store + 真实 HTTP 路由），**突变验证**：
 
 | 突变 | 结果 |
 |---|---|
@@ -50,6 +50,21 @@
 
 另外两条守卫用例（`test_assistant_cancel_handoff.py`）在本次改动下**先变红**，
 指出交接文档 §1.1 仍在教前端"诊断不可取消"——正是它们存在的意义。已按新契约改写文档与守卫。
+
+### Devin 评审第二轮：三条真 bug（都已修 + 都有回归用例）
+
+| 发现 | 核实 | 修法 |
+|---|---|---|
+| 🔴 取消赢不了写入时**仍释放槽位** → 删掉 worker 刚填好的轮次 | **成立**，且 `release_turn` 确实是无条件 `DELETE` | `if accepted:` 包住释放。**qa 线同一形状同一 bug，一并修**（根因同一个） |
+| 🔴 **取消后启动的轮次无法中断**：stop 弹出注册项时 worker 还没登记句柄，worker 之后仍会跑完 | **成立**——用户停一个还在起 workspace 的作业就会命中 | `JobRegistration.cancelled` 标志，`register_interrupt` 发现已停就**当场打断**而不是收下句柄 |
+| 🟡 被中断的 worker 仍无条件记 `failed` → 一个作业两条指标 | **成立** | `if not ok: return`，与 qa 线的早退对齐 |
+
+三条各自补了回归用例，**去掉修复即变红**均已实测。
+
+**第四条不是 bug，但同样成立**：前端主契约 `frontend-api-brief.md` 仍写着「诊断没有独立取消入口」，
+已同步（handoff 那份上一轮已改，主契约漏了）。
+**第五条**：非所有者取消的用例原先只请求了一个**不存在的 id**，没证明 scope 校验 —— 已补
+「另一个 callers 的真实诊断」那一半，并断言两者响应逐字相同。
 
 ### 未完成业务验收
 
