@@ -1777,3 +1777,44 @@ Feature: 会话上下文窗口的取值边界
       When 用同一 conversation_id 访问会话
       Then 统一 404，不区分会话是否存在
       And 因此上述「历史轮次仍在窗口里」不构成跨租户泄漏
+
+Feature: 诊断线的取消操作（#499）
+
+  Rule: 诊断可以按标识停止，契约与提问线同构
+
+    Scenario: 非终态诊断可被其所有者取消
+      Given 一条处于 queued 或 running 的订单诊断
+      When 其所有者调用该诊断的取消端点
+      Then 返回 200 且 status 为 cancelled
+      And 后续轮询稳定返回 cancelled
+
+    Scenario: 取消后会话槽位立即释放
+      Given 一条正在生成的诊断持有会话的生成槽位
+      When 其所有者取消该诊断
+      Then 会话的 is_generating 立即变为 false
+      And 同一会话可以立即发起下一条提问而不撞 409
+
+    Scenario: 取消的轮次不进入上下文窗口
+      Given 一条被取消的诊断
+      When 同一会话发起后续提问
+      Then 该轮不出现在上下文窗口里
+
+    Scenario: 运行中的模型调用被真正中断
+      Given 诊断的模型轮次正在运行
+      When 其所有者取消该诊断
+      Then 该轮次收到 interrupt RPC
+      And 中断是尽力而为：它失败也不改变作业终态
+
+  Rule: 取消不能成为探测诊断是否存在的手段
+
+    Scenario: 非所有者取消与不存在同形
+      Given 一条属于其他调用者的诊断
+      When 当前调用者取消它
+      Then 返回 404 DIAGNOSIS_NOT_FOUND
+      And 与「该 id 不存在」的响应逐字相同
+
+    Scenario: 已终态的取消请求不改变终态
+      Given 一条已 completed 的诊断
+      When 其所有者取消它
+      Then 返回 200 且 status 仍为 completed
+      And 已完成的 result 原样返回

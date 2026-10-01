@@ -98,9 +98,11 @@ Content-Type: application/json                   # POST 时
 报告作业  queued → running → completed | failed | expired
 ```
 
-- **`cancelled` = 用户主动停止**（PRD #346 新增，只有提问作业能产生）。BFF 必须**原样透传**这个
-  新状态值，不得因响应词表白名单把它改写或丢弃——被丢弃的表现是输入框不解锁或误判为失败。
-  诊断没有独立的取消入口，因此诊断线不会真的产出该值，只在枚举里；报告作业不在该共享状态集内。
+- **`cancelled` = 用户主动停止**（PRD #346 提问线；**#499 起诊断线也能产生**）。BFF 必须**原样透传**这个
+  新状态值，不得因响应表白名单把它改写或丢弃——被丢弃的表现是输入框不解锁或误判为失败。
+  诊断线此前没有取消入口、该值只在枚举里；**#499 已为它新增
+  `POST /v1/standard/diagnoses/{diagnosis_id}/cancel`**，契约与提问线同构
+  （见 [assistant-cancel-handoff.md](./assistant-cancel-handoff.md) §1.1）。报告作业不在该共享状态集内。
 - 创建响应都带 `retry_after_ms`，按它节流轮询；不要密集轮询。**终态时它为 `null`**——它与
   `status` 一起构成"等待结束"的唯一信号。
 - 只有 `completed`/`inconclusive` 时 `result`/`report` 才有值；**`cancelled` 时 `result` 恒为
@@ -578,7 +580,8 @@ curl -i "https://api.mall.qushiyun.com/v1/faq/recommendations" \
 
 > **等待态与「停止」契约单独成篇**：[assistant-cancel-handoff.md](./assistant-cancel-handoff.md)
 > ——哪些响应锁输入框、解锁由什么驱动、取消端点与 `cancelled` 终态、真实响应样例与陷阱清单。
-> **BFF 需放行新路径 `POST /v1/assistant/questions/{qa_id}/cancel` 并原样透传新状态值 `cancelled`。**
+> **BFF 需放行新路径 `POST /v1/assistant/questions/{qa_id}/cancel` 与
+> `POST /v1/standard/diagnoses/{diagnosis_id}/cancel`，并原样透传新状态值 `cancelled`。**
 
 ### 场景 A：快捷问 / FAQ 命中 —— 同步返回答案
 

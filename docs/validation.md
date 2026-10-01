@@ -7,6 +7,71 @@
 
 
 
+## #499 诊断线的取消操作（2026-10-02）
+
+**新增** `POST /v1/standard/diagnoses/{diagnosis_id}/cancel`，与 qa 线的取消**同构**。
+此前诊断**没有**取消入口（PRD #346 的 Out of Scope），于是一次诊断能把会话的生成槽位
+攥住最多 15 分钟，用户没有任何出路；交接文档还要求两个外部团队为它画一个**没有停止按钮**
+的等待态。
+
+### 改了哪几处（按依赖顺序）
+
+| 位置 | 改动 |
+|---|---|
+| `gateway_runtime.py` | `QARegistration` → **`JobRegistration`**（字段本就是线无关的，缺的是接线）；新增 `_diagnosis_registrations` 与 `cancel_standard_diagnosis` |
+| `gateway_runtime.py` | `start_standard_diagnosis` 注册作业，并把 `register_interrupt` 交给 worker |
+| `agent_runner.py` | `run_agent_diagnosis` 新增 `turn_registrar`，绑进 **已有的 `session_factory` 接缝**（coordinator 不用改） |
+| `gateway_api.py` | 新端点，鉴权与其他诊断面相同（`authenticated_diagnosis_caller`） |
+
+### 抓到的坑：参数传了一半
+
+`_execute_standard_diagnosis` 加了 `turn_registrar` 形参，但**没有把它转发进
+`run_agent_diagnosis`**。结果是：作业能被取消、槽位能释放、终态正确 —— 唯独**模型轮次
+不会被中断**，也就是票里点名"主要工作量"的那一步静默没做。
+
+**是新写的用例抓到的**（`assert turn.interrupted`），不是评审。教训：加形参时只验证
+"没报错"会漏掉"没接上"——参数从入口到被调用者之间少一跳，类型检查与既有用例都看不见。
+
+### 验证
+
+本机：`ruff check` / `ruff format --check` / `pytest` 全套 / `compileall` / `uv pip check` 全绿。
+新增 **7 条**用例（真实 runtime + 真实 store + 真实 HTTP 路由），**突变验证**：
+
+| 突变 | 结果 |
+|---|---|
+| 取消时不中断模型轮次 | ✅ 变红 |
+| 取消时不释放会话槽位 | ✅ 变红 |
+| 取消后不释放槽位（同一突变，由「不进入上下文窗口」那条用例独立捕获） | ✅ 变红 |
+| 去掉 runtime 的终态分支 | ❌ 仍通过（见下） |
+| 同时去掉 runtime 终态分支与 store 的 `WHERE status IN ('queued','running')` | ✅ 变红 |
+
+⇒ 「已终态不被改写」是**两层纵深防御**：单去一层另一层仍守住，两层同去才失守。
+这是有意的，但**只有这一条用例时看不出是哪层在起作用** —— 记下来，不假装它隔离到了层。
+
+另外两条守卫用例（`test_assistant_cancel_handoff.py`）在本次改动下**先变红**，
+指出交接文档 §1.1 仍在教前端"诊断不可取消"——正是它们存在的意义。已按新契约改写文档与守卫。
+
+### Devin 评审第二轮：三条真 bug（都已修 + 都有回归用例）
+
+| 发现 | 核实 | 修法 |
+|---|---|---|
+| 🔴 取消赢不了写入时**仍释放槽位** → 删掉 worker 刚填好的轮次 | **成立**，且 `release_turn` 确实是无条件 `DELETE` | `if accepted:` 包住释放。**qa 线同一形状同一 bug，一并修**（根因同一个） |
+| 🔴 **取消后启动的轮次无法中断**：stop 弹出注册项时 worker 还没登记句柄，worker 之后仍会跑完 | **成立**——用户停一个还在起 workspace 的作业就会命中 | `JobRegistration.cancelled` 标志，`register_interrupt` 发现已停就**当场打断**而不是收下句柄 |
+| 🟡 被中断的 worker 仍无条件记 `failed` → 一个作业两条指标 | **成立** | `if not ok: return`，与 qa 线的早退对齐 |
+
+三条各自补了回归用例，**去掉修复即变红**均已实测。
+
+**第四条不是 bug，但同样成立**：前端主契约 `frontend-api-brief.md` 仍写着「诊断没有独立取消入口」，
+已同步（handoff 那份上一轮已改，主契约漏了）。
+**第五条**：非所有者取消的用例原先只请求了一个**不存在的 id**，没证明 scope 校验 —— 已补
+「另一个 callers 的真实诊断」那一半，并断言两者响应逐字相同。
+
+### 未完成业务验收
+
+**没有在 41 公网链路上跑过一次真实取消。** 本项证据全部来自离线真实栈
+（真实 `GatewayRuntime`、真实 `GatewayStore`、走 HTTP 路由的 `TestClient`，只把模型调用停在半路
+以复现"用户正在等待时按下停止"）。联调前需按 `assistant-cancel-handoff.md` §8 复跑。
+
 ## #497 会话窗口的风险声明：选择「维持现状」并把它钉住（2026-10-01）
 
 **结论：不修，改为显式接受的风险。** 票面自己给了两条路（改 schema 排除不可见轮次 /

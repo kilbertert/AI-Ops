@@ -252,39 +252,48 @@ def test_no_document_claims_the_stop_link_was_already_accepted() -> None:
 #: Every route the app registers whose path promises a cancellation.
 _CANCEL_ROUTE = re.compile(r'@app\.(?:get|post|put|delete|patch)\(\s*"([^"]*cancel[^"]*)"')
 
-#: The one cancel route that exists. Diagnoses deliberately have none (PRD #346
-#: Out of Scope), and the handoff says so in prose.
-_ONLY_CANCEL_ROUTE = "/v1/assistant/questions/{qa_id}/cancel"
+#: The cancel routes that exist. Until #499 only the qa line had one and the
+#: handoff said so in prose; the diagnosis line gained its own, so this set is
+#: now the full expected set — a route added or removed without the handoff
+#: following is what this pins.
+_CANCEL_ROUTES = {
+    "/v1/assistant/questions/{qa_id}/cancel",
+    "/v1/standard/diagnoses/{diagnosis_id}/cancel",
+}
 
 
-def test_the_handoff_warns_that_a_diagnosis_cannot_be_stopped() -> None:
-    """Diagnoses lock the input box without offering a stop — and must say so.
+def test_the_handoff_states_the_diagnosis_cancel_contract() -> None:
+    """The diagnosis line can now be stopped — and the handoff must say so.
 
-    The handoff splits "who waits" and "who can be cancelled" across different
-    tables, so a reader wiring the waiting-state table alone draws a stop button
-    for diagnoses that can only ever answer 404. The warning is load-bearing.
+    Until #499 the handoff warned the opposite way: diagnoses lock the input
+    box but had no cancel route, so a frontend copying the QA stop button drew
+    one that could only ever 404. That warning was load-bearing and is now
+    obsolete; what replaces it must be equally explicit, because a frontend
+    still reading the old text renders a waiting state with no way out.
     """
     text = HANDOFF.read_text(encoding="utf-8")
-    assert "没有取消路由" in text, (
-        "the handoff no longer states that the diagnosis path has no cancel route; "
-        "a frontend wiring the waiting-state table will draw a stop button that cannot work"
+    assert "没有取消路由" not in text, (
+        "the handoff still claims the diagnosis path has no cancel route, which stopped being true in #499"
     )
-    assert "刻意保留" in text, (
-        "the handoff no longer says the diagnosis asymmetry is deliberate, "
-        "so it reads as an oversight and invites a workaround"
+    assert "POST /v1/standard/diagnoses/{diagnosis_id}/cancel" in text, (
+        "the handoff no longer states the diagnosis cancel route; "
+        "a frontend wiring the waiting-state table has nothing to call"
     )
 
 
-def test_only_the_assistant_question_route_can_be_cancelled() -> None:
-    """The doc's "diagnoses cannot be stopped" claim is checked against the app.
+def test_the_cancel_routes_match_what_the_handoff_documents() -> None:
+    """The set of cancel routes is checked against the app, not assumed.
 
-    If a diagnosis cancel route is ever added, this fails and points at the
-    handoff, which would otherwise keep telling two teams to render a stop-less
-    waiting state for a flow that had since gained a stop.
+    A route added or removed without the handoff following is the failure this
+    catches — it is what caught #499's new route against the handoff's old
+    "diagnoses cannot be stopped" text.
     """
     source = (PROJECT_ROOT / "src" / "aiops_diagnostics" / "gateway_api.py").read_text(encoding="utf-8")
     routes = set(_CANCEL_ROUTE.findall(source))
-    assert routes == {_ONLY_CANCEL_ROUTE}, (
-        f"cancel routes changed to {sorted(routes)}; update {HANDOFF.name} §1.1, "
-        "which states that only the assistant-question path can be cancelled"
+    assert routes == _CANCEL_ROUTES, (
+        f"cancel routes changed to {sorted(routes)}; update {HANDOFF.name}, "
+        "which documents which paths can be cancelled"
     )
+    text = HANDOFF.read_text(encoding="utf-8")
+    for route in sorted(routes):
+        assert route in text, f"{route} is registered but not documented in {HANDOFF.name}"
