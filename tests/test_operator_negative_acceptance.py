@@ -58,6 +58,7 @@ from operator_support import (
 
 from aiops_diagnostics.caller_auth import ScopedOrderAuthorizer
 from aiops_diagnostics.config import Settings
+from aiops_diagnostics.conversation_context import render_history
 from aiops_diagnostics.conversation_store import ConversationStore
 from aiops_diagnostics.i18n import SUPPORTED_LANGUAGES
 from aiops_diagnostics.query_scope import resolve_operator_site_scope
@@ -540,3 +541,80 @@ def test_the_no_header_ambiguity_holds_only_for_two_platform_identities(
     # **必须断言精确的状态码，不能写 `in (202, 404)`**：那样"本人订单被错误拒绝"
     # 也会通过，等于这条用例验不了它声称验的事（正常放行）。
     assert resp.status_code == 202, resp.text
+
+
+def test_history_window_keeps_a_turn_whose_order_left_the_scope(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#497 的风险声明：窗口是**事实**，不是授权 —— 这条用例钉住它并说明边界。
+
+    订单离开调用者站点集合后，Route 1c 下一轮就把它丢掉了（上一条用例：
+    回落成普通问答、清掉绑定）。但**那一轮已经存进 ``conversation_turns``**，
+    而窗口按「最近 N 轮」取，不按「现在还能不能看见」取 —— 于是那一轮的
+    诊断结论仍会以历史的名义进入后续提示词。
+
+    这是**有意接受的风险**（#497 选了「维持现状 + 写风险声明」那条路），不是缺陷：
+    根因是缺一条边（``conversation_turns`` 没有 ``order_no``），补它要改会话表结构，
+    而 PRD #410 明示不改。
+
+    覆盖范围**只到这里为止**：
+    * 同一主体、同一租户、**范围指纹不变**（``scope_fingerprint`` 只由站点集合算出，
+      订单改挂站点不改变它）。⇒ **不是跨租户/跨主体泄漏**。
+    * 跨主体或跨范围时整个会话 **404** —— 那条边界由
+      ``test_a_changed_operator_scope_makes_the_conversation_invisible`` 覆盖，
+      本用例不重复证它，也不声称本用例覆盖了它。
+
+    顺序是刻意的：**先证明订单真的离开了可见集合**（同一条追问回落成普通问答），
+    **再**断言窗口里仍留着那一轮。反过来写的话，「订单已不可见」就只是一个假设。
+    """
+    connection = Connection()
+    caller = operator_caller(monkeypatch, sites={"SHOP-1": (SITE_IN,)})
+    client, _ = assistant_app(tmp_path, monkeypatch, caller, connection)
+
+    conversation = client.post(
+        "/v1/conversations", json={"agent_version_key": AGENT_VERSION_KEY}, headers=_OPERATOR_HEADERS
+    )
+    assert conversation.status_code == 201, conversation.text
+    cid = conversation.json()["conversation_id"]
+
+    bound = client.post(
+        f"/v1/conversations/{cid}/active-order",
+        json={"order_no": ORDER_INSIDE},
+        headers=_OPERATOR_HEADERS,
+    )
+    assert bound.status_code == 200, bound.text
+
+    first = client.post(
+        "/v1/assistant/questions",
+        json={"question": FOLLOWUP_QUESTION, "conversation_id": cid},
+        headers=_OPERATOR_HEADERS,
+    )
+    assert first.status_code == 202, first.text
+    assert first.json()["order_no_from_context"] == ORDER_INSIDE
+    turn_no = first.json()["turn_no"]
+
+    store = ConversationStore(Path(client.app.state.gateway.settings.database_file))
+    scope = caller.context.scope_fingerprint
+    store.complete_turn(cid, scope, turn_no, answer={"text": "诊断结论：充电桩通信中断"})
+
+    # 订单改挂到集合外站点：调用者站点集合不变 ⇒ 范围指纹不变（这正是本票的边界所在）。
+    connection.orders = [
+        {**row, "site_id": SITE_OUT} if row["order_no"] == ORDER_INSIDE else row for row in connection.orders
+    ]
+
+    # **前提先证**：同一条追问不再走诊断，说明那一单确实已不在可见集合里。
+    # （这一条与上一条用例重叠是有意的：本用例的全部意义建立在「订单真的不可见了」之上，
+    # 引用一个别处的断言会让它在本文件里变成一个假设。）
+    second = client.post(
+        "/v1/assistant/questions",
+        json={"question": FOLLOWUP_AFTER_LOSS, "conversation_id": cid},
+        headers=_OPERATOR_HEADERS,
+    )
+    assert second.status_code == 202, second.text
+    assert second.json()["type"] == "qa", "前提不成立：订单仍可见，本用例的场景没有构造出来"
+
+    # **结论**：已不可见的那一轮仍在窗口里 —— 这就是被接受的风险本身。
+    # 未完成的轮次（上面那条 qa 还停在 queued）不进窗口，所以这里只应看到第一轮。
+    window = store.context_turns(cid, scope)
+    assert [t["turn_no"] for t in window] == [turn_no], "被接受的现状：离开可见集合的轮次仍在窗口里"
+    assert "诊断结论" in render_history(window), "该轮不止在窗口里，而且真的会渲染进提示词"

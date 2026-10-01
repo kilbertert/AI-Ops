@@ -1489,3 +1489,16 @@ uv run pytest tests/test_assistant_api.py tests/test_conversation_api.py \
 - **已知可观测性缺口**：分派失败（密钥抄错/没带）**不单独记日志**，它在生产日志里与「既有链
   拿到一条不认识的令牌」是同一条 401。要区分得靠「这次请求是否本该走新链路」的上下文，
   本票没有引入该日志 —— 作为已知缺口记下，不写成已覆盖。
+
+## 会话窗口风险声明 QA（CTX-RISK，#497）
+
+| ID | 环境 | 前置条件与数据 | 有序动作 | 预期可观察结果 | 清理/证据 |
+|---|---|---|---|---|---|
+| CTX-RISK-01 | 本地 dev | 运营商会话；`SHOP-1` 站点集合含 `SITE_IN`；一单 `ORDER_INSIDE` 已绑定并完成一轮诊断 | 把 `ORDER_INSIDE` 改挂到 `SITE_OUT`（调用者站点集合**不变**）→ 发同一条追问 | PASS：回落 `type=qa`（绑定确已失效），**且** `context_turns()` 仍返回那一轮、`render_history()` 仍渲染出它的正文 | `tests/test_operator_negative_acceptance.py::test_history_window_keeps_a_turn_whose_order_left_the_scope`；突变：`context_turns()` 改为排除 → 红；`render_history()` 返回空 → 红 |
+| CTX-RISK-02 | 本地 dev | 同上会话 | 改变调用者站点集合（范围指纹随之改变）→ 用同一 `conversation_id` 读取 | PASS：统一 `404`，不区分会话是否存在 | `test_a_changed_operator_scope_makes_the_conversation_invisible`（**既有用例，非本票新增**） |
+
+- **本项是「风险声明」的 QA，不是「修复」的 QA**：CTX-RISK-01 断言的正是**已知的、
+  已接受的**行为。它变红意味着有人改变了那个行为 —— 那时应当改写用例并重新评估风险，
+  而不是让它继续声称「这是接受的现状」。
+- **边界（不得写成更大的结论）**：本项只覆盖「同一主体 / 同一租户 / 范围指纹不变」
+  这一种时序。跨主体与跨范围由已有的 404 门覆盖，**不是**本项证明的。
