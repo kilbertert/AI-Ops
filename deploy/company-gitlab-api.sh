@@ -18,15 +18,15 @@
 #    实测反例见 docs/agents/company-code-recon-procedure.md §2：
 #    `iot/cloud-charging-pile` 的 master 34 个 java、release 2012 个。
 #
-# 凭据只从文件里读，不进命令行、不进输出、不进本仓任何文件。
-# ⚠️ 因此**不要在本脚本外面套 `bash -x` 跑**：xtrace 会把 `-H 'PRIVATE-TOKEN: …'`
-# 整条打印出来。要调试就调试别的层，别把令牌trace 进日志。
+# 凭据不进 argv（经 curl 的 --config 从 stdin 读），不进输出，不进本仓任何文件。
+# ⚠️ 仍然**不要用 `bash -x` 跑本脚本**：xtrace 会把带入参的那一行整个展开打印，
+#    包括 curl 命令与参数。要调试就调试别的层，别把凭据 trace 进日志。
 set -euo pipefail
 
 URL=${AIOPS_GL_URL:-https://git.qushiyun.com:801}
 CA=${AIOPS_GL_CA:-.scratch/company-repos/gitlab-qushiyun.pem}
 #: 凭据位置**不可配置**，这是有意的：一个能被环境变量改掉路径的凭据读取器，
-#: 就是一个能被改成读任意文件的原语。它只从这一处读，见 §3「凭据只写位置」。
+#: 就是一个能被改成读任意文件的原语。它只从这一处读，见规程 §3「凭据只写位置」。
 CREDS=$HOME/.git-credentials
 
 die() { printf '%s\n' "$*" >&2; exit 2; }
@@ -64,8 +64,9 @@ pin() {
   printf 'sha256//%s' "$spki"
 }
 
-#: 凭据按「哪个主机、哪个用户字段、哪个 HTTP 头」取用；值不进命令行、不落盘、不打印。
-#: 约定：`.git-credentials` 里该主机的用户字段就是 GitLab 的 personal access token。
+#: 凭据只按「哪个文件、哪个主机键、哪个字段」取；值不进 argv、不落盘、不打印。
+#: 约定：`.git-credentials` 里该主机的**口令字段**就是 GitLab 的 personal access token；
+#: 用户字段是 `oauth2`，它只是「这一行是令牌」的标记，**不是**令牌本身。
 token() {
   local host pair
   host=$(printf '%s' "$URL" | sed -E 's#^https://##; s#:[0-9]+$##')
@@ -77,14 +78,55 @@ token() {
   printf '%s' "${pair#* }"
 }
 
-#: 带下发的 next-page 走一页。第 2 个参数是暂存响应头的文件。
+TMPD=$(mktemp -d)
+HDR=$TMPD/hdr
+BODY=$TMPD/body
+trap 'rm -rf "$TMPD"' EXIT
+
+#: 一次只读 GET。**令牌经 curl 的 `--config /dev/stdin` 传入，不出现在 argv 里**
+#: （实测：`/proc/<pid>/cmdline` 里看不到它；放进 `-H` 则任何本机进程都能读到）。
+#: `--proto '=https'` 让「万一将来加了 -L」也只能停在 https 上，不会把自定义头带去 http。
+#: HTTP 状态**显式检查**：`curl` 默认不会因 4xx/5xx 失败，不检查就会把错误正文当源码交付。
 fetch() {
-  curl -sSk -m 90 -D "$2" --pinnedpubkey "$(pin)" \
-    -H "PRIVATE-TOKEN: $(token)" "$URL/api/v4$1"
+  local path=$1 rc status
+  printf 'header = "PRIVATE-TOKEN: %s"\n' "$(token)" \
+    | curl -sSk -m 90 -D "$HDR" -o "$BODY" -w '%{http_code}' \
+        --proto '=https' --pinnedpubkey "$(pin)" \
+        --config /dev/stdin "$URL/api/v4$path" >"$TMPD/status" 2>"$TMPD/err"
+  rc=$?
+  if [ "$rc" != 0 ]; then
+    die "请求失败（curl 退出码 $rc）：$path
+$(cat "$TMPD/err")"
+  fi
+  status=$(cat "$TMPD/status")
+  case "$status" in
+    2??) : ;;
+    *) die "HTTP $status：$path
+$(head -c 300 "$BODY")" ;;
+  esac
+  cat "$BODY"
 }
+
 next_page() {
-  tr -d '\r' < "$1" | sed -nE 's/^[Xx]-[Nn]ext-[Pp]age:[[:space:]]*([0-9]+).*/\1/p'
+  tr -d '\r' < "$HDR" | sed -nE 's/^[Xx]-[Nn]ext-[Pp]age:[[:space:]]*([0-9]+).*/\1/p'
 }
+
+#: 分页取全。GitLab 默认每页 20 条、最多 100 —— 不分页就会**静默漏项**，
+#: 而漏掉的项在结果里看不出任何痕迹（仓库地图与代码搜索尤其致命）。
+#: 第 1 个参数必须已经带 `?`，本函数往后接 `&per_page=…&page=…`。
+fetch_all() {
+  local path=$1 filter=$2 page=1
+  while [ -n "$page" ]; do
+    fetch "$path&per_page=100&page=$page" | jq -r "$filter"
+    page=$(next_page)
+  done
+}
+
+#: 路径段与查询值都要编码。不编码时，含 `+` / `#` / `&` 的分支名或搜索词会被
+#: 当成 URL 语法解析，请求打到别的分支上 —— 而结果看起来仍然像一个正常答案。
+#: 必须用 `printf` 而不是 `<<<` 喂给 jq：here-string 会**带上一个换行**，
+#: 于是每个值都被编码成 `…%0A`，GitLab 那边会把它当成值的一部分或直接报 400。
+enc() { printf '%s' "$1" | jq -sRr @uri; }
 
 need() { [ -n "${2:-}" ] || die "$1 是必填。"; }
 
@@ -102,51 +144,49 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-HDR=$(mktemp); trap 'rm -f "$HDR"' EXIT
-
 case "$cmd" in
   pin)
     pin; printf '\n'
     ;;
   projects)
     need --search "$search"
-    fetch "/projects?search=$(printf '%s' "$search" | jq -sRr @uri)&per_page=100&simple=true&order_by=last_activity_at" "$HDR" \
-      | jq -r '.[] | "\(.id)\t\(.path_with_namespace)\tdefault=\(.default_branch)\tactivity=\(.last_activity_at)"'
+    fetch_all "/projects?search=$(enc "$search")&simple=true&order_by=last_activity_at" \
+      '.[] | "\(.id)\t\(.path_with_namespace)\tdefault=\(.default_branch)\tactivity=\(.last_activity_at)"'
     ;;
   group)
     need --id "$id"
-    fetch "/groups/$id/projects?include_subgroups=true&per_page=100&simple=true" "$HDR" \
-      | jq -r '.[] | "\(.id)\t\(.path_with_namespace)\tdefault=\(.default_branch)\tactivity=\(.last_activity_at)"'
+    fetch_all "/groups/$id/projects?include_subgroups=true&simple=true" \
+      '.[] | "\(.id)\t\(.path_with_namespace)\tdefault=\(.default_branch)\tactivity=\(.last_activity_at)"'
     ;;
   branches)
     need --project "$project"
-    fetch "/projects/$project/repository/branches?per_page=100" "$HDR" \
-      | jq -r '.[] | "\(.name)\t\(.commit.committed_date)\t\(.commit.short_id)"'
+    fetch_all "/projects/$project/repository/branches?" \
+      '.[] | "\(.name)\t\(.commit.committed_date)\t\(.commit.short_id)"'
     ;;
   tree)
     need --project "$project"; need --ref "$ref"
     page=1; blobs=0; java=0
     while [ -n "$page" ]; do
-      body=$(fetch "/projects/$project/repository/tree?ref=$ref&recursive=true&per_page=100&page=$page" "$HDR")
+      body=$(fetch "/projects/$project/repository/tree?ref=$(enc "$ref")&recursive=true&per_page=100&page=$page")
       counts=$(printf '%s' "$body" | jq -r '[.[]|select(.type=="blob")]|"\(length) \(map(select(.path|endswith(".java")))|length)"')
       blobs=$((blobs + ${counts% *})); java=$((java + ${counts#* }))
       if [ "$count_java" = 0 ]; then
         printf '%s' "$body" | jq -r '.[] | "\(.type)\t\(.path)"'
       fi
-      page=$(next_page "$HDR")
+      page=$(next_page)
     done
-    # `[ … ] && printf` 在条件为假时整条语句的退出码是 1，而它是 case 分支的最后一句，
+    # `[ … ] && printf` 在条件为假时整条语句退出码是 1，而它是分支的最后一句，
     # 会变成脚本的退出码 —— 一个成功的列目录会被读成失败。
     if [ "$count_java" = 1 ]; then printf 'ref=%s blobs=%s java=%s\n' "$ref" "$blobs" "$java"; fi
     ;;
   blobs)
     need --project "$project"; need --ref "$ref"; need --search "$search"
-    fetch "/projects/$project/search?scope=blobs&ref=$ref&search=$(printf '%s' "$search" | jq -sRr @uri)&per_page=100" "$HDR" \
-      | jq -r '.[] | "\(.path):\(.startline)"'
+    fetch_all "/projects/$project/search?scope=blobs&ref=$(enc "$ref")&search=$(enc "$search")" \
+      '.[] | "\(.path):\(.startline)"'
     ;;
   raw)
     need --project "$project"; need --ref "$ref"; need --path "$path"
-    fetch "/projects/$project/repository/files/$(printf '%s' "$path" | jq -sRr @uri)/raw?ref=$ref" "$HDR"
+    fetch "/projects/$project/repository/files/$(enc "$path")/raw?ref=$(enc "$ref")"
     ;;
   *)
     sed -n '2,18p' "$0"

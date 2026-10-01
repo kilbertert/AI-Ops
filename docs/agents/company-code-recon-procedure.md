@@ -48,6 +48,10 @@ GET /api/v4/search?scope=blobs&search=…          →  400
 这是 GitLab CE/EE 的已知形态（Advanced Search 未启用时 blobs 只在项目内可用），
 **不是配置错误**。判据：跨文件搜索一律走 `blobs --project <id> --ref <分支>`。
 
+**分页是脚本的事，不是人的事。** 每条列出多个条目的命令都自己翻页到 `X-Next-Page` 为空；
+**漏页不会报错、只会静默少项**——仓库地图（#476）与代码搜索尤其致命，因为「少了几个仓」
+在结果里看不出任何痕迹。所以不要绕开脚本自己拼一次 curl 取列表。
+
 ### 1.2 实测：`projects --search` 是**仓库名**匹配，不是路径匹配
 
 搜 `cloud-charging-pile` 得到 3 个条目，**不是 1 个**：
@@ -122,8 +126,9 @@ cloud-charging-pile-core/…/DemoController.java                  ← 默认分�
 **不可由环境变量改**——一个能被改路径的凭据读取器就是一个能读任意文件的原语。
 写文档时写「哪个文件、哪个头、哪个字段」，**永远不写值本身**——本仓是公开仓库。
 
-> ⚠️ **不要用 `bash -x` 调这个脚本**：xtrace 会把 `-H 'PRIVATE-TOKEN: …'` 打印出来。
-> 脚本头部写了这一句，因为「调试时开一下 xtrace」是最容易把令牌送进日志的一个动作。
+> ⚠️ **不要用 `bash -x` 调这个脚本**：令牌虽然不进 argv（见 §6），但 xtrace 会把
+> 带入参的那一行整个展开打印。脚本头部写了这一句，因为「调试时开一下 xtrace」
+> 是最容易把凭据送进日志的一个动作。
 
 ### 3.1 自签证书：钉指纹，不是「-k 跳过」
 
@@ -200,13 +205,14 @@ SPKI sha256 = sha256//0E4usLaswMAYis+NuEpr5B2untcdBdi6AQgz7ISMjhQ=
 
 ## 6. 当场跑通留下的真实输出（2026-10-01）
 
-供复核用；命令与输出逐字粘贴，未修饰。
+供复核用。**下面是节选**，不是完整输出——每条命令都注明了取的是前几行或总数，
+要重跑请直接执行命令本身。命令与输出逐字粘贴，未修饰。
 
 ```
 $ deploy/company-gitlab-api.sh pin
 sha256//0E4usLaswMAYis+NuEpr5B2untcdBdi6AQgz7ISMjhQ=
 
-$ deploy/company-gitlab-api.sh projects --search cloud-charging-pile
+$ deploy/company-gitlab-api.sh projects --search cloud-charging-pile      （全部 3 行）
 363	iot/cloud-charging-pile	default=master	activity=2026-09-30T09:51:26.553Z
 526	mtz/cloud-charging-pile	default=master	activity=2024-04-10T02:01:53.593Z
 524	mtw/cloud-charging-pile	default=master	activity=2024-04-10T01:57:21.980Z
@@ -220,17 +226,35 @@ ref=master blobs=46 java=34
 $ deploy/company-gitlab-api.sh tree --project 363 --ref release --count-java
 ref=release blobs=2480 java=2012
 
-$ deploy/company-gitlab-api.sh blobs --project 363 --ref release --search '@Inside'
+$ deploy/company-gitlab-api.sh blobs --project 363 --ref release --search '@Inside'   （前 3 行）
 cloud-charging-pile-core/src/main/java/com/qushiyun/cloud/charging/pile/core/application/controller/DataDashboardController.java:49
 cloud-charging-pile-core/src/main/java/com/qushiyun/cloud/charging/pile/core/application/controller/DataDashboardController.java:65
-…（release 共 3 处）
+cloud-charging-pile-core/src/main/java/com/qushiyun/cloud/charging/pile/core/application/controller/DataDashboardController.java:80
+
+$ deploy/company-gitlab-api.sh raw --project 363 --ref master \
+    --path cloud-charging-pile-client/src/main/java/com/qushiyun/cloud/charging/pile/client/DemoFeignClient.java   （前 2 行）
+package com.qushiyun.cloud.charging.pile.client;
+
+$ deploy/company-gitlab-api.sh projects --search 充电桩 | wc -l
+9
 
 $ deploy/company-gitlab-api.sh projects --search cloud-charging-pile | wc -l
 3
 ```
 
-**脚本的守卫也当场验过**：`blobs` 不带 `--ref` → `--ref 是必填。`（退出码 2）；
-`--pinnedpubkey` 换成错误指纹 → `curl: (90) public key does not match pinned public key`。
+**脚本的守卫也当场验过**（命令 → 观测 → 退出码）：
+
+| 试什么 | 观测 | 退出码 |
+|---|---|---|
+| `blobs` 不带 `--ref` | `--ref 是必填。` | 2 |
+| URL 改成 `http://…` | 环境变量的形状不被接受 | 2 |
+| 锚点换成 `/etc/passwd` | `不是一份可解析的证书。`（**不能**变成空指纹放行） | 2 |
+| `raw` 指向不存在的文件 | `HTTP 404：…` + GitLab 的正文 | 2 |
+| 锚点换成错误指纹 | `curl: (90) public key does not match pinned public key` | — |
+| 8 条正常路径 | 全部正常输出 | 0 |
+
+**令牌不进 argv**：`projects` 跑起来时读 `/proc/<pid>/cmdline`，**看不到令牌**
+（令牌经 `curl --config /dev/stdin` 传入）。放进 `-H` 则任何本机进程都能读到。
 
 ---
 

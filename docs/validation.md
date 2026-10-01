@@ -7,6 +7,47 @@
 
 
 
+## #475 公司源码只读探查规程（2026-10-01）
+
+**这是 E 批收尾后第一批新工作**：#414（公司业务基线 PRD）的六张子票开工，本票是它们的方法基准。
+它交付的是「**怎么查**」，不是「查到了什么」——L1/L2/L3 三层都照它执行。
+
+### 分支探测：判据先于结论
+
+| 仓 | 分支 | blobs | `.java` |
+|---|---|---|---|
+| `iot/cloud-charging-pile` | `master`（**默认分支**） | 46 | **34** |
+| `iot/cloud-charging-pile` | `release` | 2480 | **2012** |
+
+差**两个数量级**。本仓那句「Java 快照只有 3 个文件」就是只看默认分支得出的**错误结论**。
+推论：**搜索同样受默认分支影响**——`@Inside` 在 `release` 上 3 处、在默认分支上 1 处，
+且那 1 处位于 `DemoController`（脚手架）。⇒ `仓:文件:行` 这种出处**不算数**，
+必须是 `仓:分支:文件:行`。
+
+### 全局 blobs 搜索在这台实例上**不可用**
+
+```
+GET /api/v4/search?scope=blobs&search=…  →  400
+    {"message":{"error":"Scope not supported without Elasticsearch!"}}
+```
+
+不是配置错误，是未启用 Advanced Search 的既知形态。⇒ 跨文件搜索一律带 `--project`。
+
+### 同名仓：`projects --search` 是**仓库名**匹配，不是路径匹配
+
+搜 `cloud-charging-pile` 得 3 个条目（`iot/` 363 活跃、`mtz/` 526 与 `mtw/` 524 停在 2024-04）。
+「搜到了唯一一个」这个前提在本实例上不成立。
+
+### 交付与验证
+
+- `deploy/company-gitlab-api.sh`（唯一取数入口，只做只读 GET）+ `docs/agents/company-code-recon-procedure.md`
+  + `docs/agents/company-code-baseline.md`（骨架，四节分属 #476/#477/#478/#479）。
+- 脚本 8 条成功路径 `exit=0`；3 条拒绝路径 `exit=2`（缺 `--ref`、非 https 的 URL、不可解析的证书）。
+- 证书锚点**双向**验过：正确指纹 `200`，错误指纹 `curl: (90) public key does not match`。
+- 实测：`/proc/<pid>/cmdline` 里看不到令牌（令牌经 `curl --config /dev/stdin` 传入，不进 argv）。
+- **未完成业务验收**：规程本身无「业务」可验收；它的验收是「第二人独立执行得到相同结论」，
+  由 #476/#477/#478 三张下游票在执行中实际检验。
+
 ## #406 涉钱问句的两条守卫合一（2026-10-01）
 
 **两条独立守卫对同一个问题（「涉钱问句要先要信息」）各答一次，且答案不同：**
