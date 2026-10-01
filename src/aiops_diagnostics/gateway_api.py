@@ -1064,10 +1064,21 @@ def create_gateway_app(
         # shape a user met depended on a hand-maintained regex. `money_question_context`
         # keeps the table as the fast path and makes the model its fallback.
         #
-        # The one case that cannot wait for the classifier is a caller who named
-        # an order number explicitly: their question already carries its
-        # identifier, so the guard must not fire at all.
-        guard_applies = conversation is None and _extract_order_no(payload.question) is None
+        # The two halves of the merged rule do NOT have the same applicability,
+        # and treating them as one condition silently dropped the model's half:
+        #
+        # * the keyword table is a SYNCHRONOUS fast path. It runs before the
+        #   classifier and before the conversation branches, so it must not
+        #   pre-empt them — that was its original scope, and it stays.
+        # * the model's risk label is a judgement about the QUESTION, applied
+        #   after every other branch has declined it. It used to fire on any
+        #   high-risk question, conversation or not.
+        #
+        # Gating both on "no conversation" re-introduced the defect in the other
+        # direction: a `refund` asked inside a conversation, or one naming an
+        # order the caller does not own, went to a plain answer with no prompt at
+        # all — where the model's half used to ask.
+        keyword_guard_applies = conversation is None and _extract_order_no(payload.question) is None
 
         casual_job = False
         if not routing_resolved:
@@ -1078,15 +1089,12 @@ def create_gateway_app(
         # the model covers what it misses (86-question corpus: table 3, model
         # adds 3 more), and whichever fired decides the identifier — so a user
         # never meets two different prompts for one question.
-        missing = (
-            money_question_context(
-                payload.question,
-                classified,
-                keyword_guard=lambda q: _missing_order_context_key(q) is not None,
-                thresholds=getattr(context.runtime, "routing_thresholds", None),
-            )
-            if guard_applies
-            else None
+        missing = money_question_context(
+            payload.question,
+            classified,
+            keyword_guard=lambda q: keyword_guard_applies
+            and _missing_order_context_key(q) is not None,
+            thresholds=getattr(context.runtime, "routing_thresholds", None),
         )
         if missing is not None:
             _record_route_metric(context, caller, route_type="clarification", outcome="completed")

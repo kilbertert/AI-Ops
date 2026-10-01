@@ -828,6 +828,13 @@ POST /v1/assistant/questions
 - HTTP 200，**没有 qa_id/diagnosis_id，不轮询**——渲染 `message` 并按 `missing_fields` 引导补信息（`order_no` → 弹订单选择器）后重新提交。
 - **`message` 按 `Accept-Language` 本地化**（§2.4 同一规则）：`zh/en/de/fr/es/pt` 六种受支持语言**各有独立文案**，非中文请求不再回退中文。不受支持的语言标签（如 `ja`）整体回退 `zh`，`language` 回显与实际文案始终一致。
 - **高风险线索覆盖全部六种受支持语言**：扣费/账单争议的判定不限中文——英文 `was I overcharged`、德语 `überladen` / `Rechnung ist falsch`、法语 `surfacturé`、西语 `cobrado de más`、葡语 `cobrado a mais` 同样命中本分支。判据是**断言自己钱错了的短语**，不是 `refund` / `remboursement` / `reembolso` 这类单纯主题词：后者是 FAQ 条目范围（如 q020/q021），不该被本分支截走。
+
+> ⚠️ **2026-10-01 更正（#406）**：上面这条描述的是**同步关键词守卫**，它仍只认「断言钱错了」的短语。
+> 但同一条链路上还有**第二道判定** —— 模型的风险标签，它在关键词未命中时仍可能把某个问句判为
+> 高风险，并返回 `missing_fields=["context"]`。实测：裸词 `refund` 就是这种（86 条语料里模型独有的
+> 3 条之一）。所以「`refund` 一定不被澄清分支截走」**不再成立**：它可能被模型那一侧拦下。
+> 两道判定现在合并为一处、答案统一（关键词命中 ⇒ `order_no`；只有模型命中 ⇒ `context`），
+> 前端按 `type=clarification` 分派即可，不必区分是哪一侧触发的。
 - 澄清共三处，文案随场景不同：`missing_fields=["order_no"]`（订单类动作缺订单，或高风险问题缺订单）、`["context"]`（高风险问题缺上下文）、`[]`（跳转动作误投统一入口，D.2a）。
 - `report_fault` 第一版只收集故障描述，**不创建工单**。
 

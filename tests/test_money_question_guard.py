@@ -149,3 +149,74 @@ def test_the_corpus_outcome_is_recorded_per_question() -> None:
     assert len(model_only) == 3, model_only
     # The union is what actually reaches the user: 6 of 86 in this corpus.
     assert len(both) + len(table_only) + len(model_only) == 6
+
+
+def test_a_high_risk_question_inside_a_conversation_still_asks(tmp_path, monkeypatch) -> None:
+    """The model's half is about the QUESTION, not about where it was asked.
+
+    Gating both halves on "no conversation" is the same defect in the other
+    direction: a `refund` typed into a conversation used to reach the model's
+    clarification, and the merged rule must not quietly stop asking.
+    """
+    from operator_support import (
+        AGENT_VERSION_KEY,
+        OPERATOR_HEADERS,
+        Connection,
+        assistant_app,
+        operator_caller,
+    )
+
+    caller = operator_caller(monkeypatch, sites={"SHOP-1": ("SITE-IN",)})
+    client, runtime = assistant_app(tmp_path, monkeypatch, caller, Connection())
+    created = client.post(
+        "/v1/conversations", headers=OPERATOR_HEADERS, json={"agent_version_key": AGENT_VERSION_KEY}
+    )
+    assert created.status_code == 201, created.text
+    cid = created.json()["conversation_id"]
+    # The classifier's own verdict, which is what the model's half reads.
+    runtime.classified = {"risk": "high", "confidence": "high"}
+
+    response = client.post(
+        "/v1/assistant/questions",
+        headers=OPERATOR_HEADERS,
+        json={"question": "refund", "conversation_id": cid},
+    )
+    body = response.json()
+    assert body.get("type") == "clarification", body
+    assert body["missing_fields"] == [MISSING_CONTEXT], body
+
+
+def test_an_unowned_text_order_does_not_disable_the_model_half(tmp_path, monkeypatch) -> None:
+    """A question naming an order the caller cannot see is still a question.
+
+    It falls through to the plain answer — never a 404 — and the model's
+    clarification must survive that fall-through. Gating it on "no order number
+    in the text" dropped exactly this case.
+    """
+    from operator_support import (
+        AGENT_VERSION_KEY,
+        OPERATOR_HEADERS,
+        ORDER_OUTSIDE,
+        Connection,
+        assistant_app,
+        operator_caller,
+    )
+
+    caller = operator_caller(monkeypatch, sites={"SHOP-1": ("SITE-IN",)})
+    client, runtime = assistant_app(tmp_path, monkeypatch, caller, Connection())
+    created = client.post(
+        "/v1/conversations", headers=OPERATOR_HEADERS, json={"agent_version_key": AGENT_VERSION_KEY}
+    )
+    cid = created.json()["conversation_id"]
+    runtime.classified = {"risk": "high", "confidence": "high"}
+    client.post(
+        f"/v1/conversations/{cid}/active-order", headers=OPERATOR_HEADERS, json={"order_no": ORDER_OUTSIDE}
+    )
+
+    response = client.post(
+        "/v1/assistant/questions",
+        headers=OPERATOR_HEADERS,
+        json={"question": f"订单 {ORDER_OUTSIDE} 的扣费是不是错了", "conversation_id": cid},
+    )
+    body = response.json()
+    assert response.status_code != 404, body
