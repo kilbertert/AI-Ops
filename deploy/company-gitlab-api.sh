@@ -88,12 +88,15 @@ trap 'rm -rf "$TMPD"' EXIT
 #: `--proto '=https'` 让「万一将来加了 -L」也只能停在 https 上，不会把自定义头带去 http。
 #: HTTP 状态**显式检查**：`curl` 默认不会因 4xx/5xx 失败，不检查就会把错误正文当源码交付。
 fetch() {
-  local path=$1 rc status
+  local path=$1 rc=0 status
+  # `|| rc=$?` 而不是「先跑再读 $?」：`set -e` 会在 curl 失败时**当场退出函数**，
+  # 后面那句 `rc=$?` 根本不会执行，stderr 又已被重定向进文件 ——
+  # 于是连接失败与公钥不匹配都只剩一个没有原因的非零退出码。`||` 让这条命令变成
+  # 「被测试的」，set -e 不再拦它。
   printf 'header = "PRIVATE-TOKEN: %s"\n' "$(token)" \
     | curl -sSk -m 90 -D "$HDR" -o "$BODY" -w '%{http_code}' \
         --proto '=https' --pinnedpubkey "$(pin)" \
-        --config /dev/stdin "$URL/api/v4$path" >"$TMPD/status" 2>"$TMPD/err"
-  rc=$?
+        --config /dev/stdin "$URL/api/v4$path" >"$TMPD/status" 2>"$TMPD/err" || rc=$?
   if [ "$rc" != 0 ]; then
     die "请求失败（curl 退出码 $rc）：$path
 $(cat "$TMPD/err")"
