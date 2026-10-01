@@ -1503,3 +1503,19 @@ uv run pytest tests/test_assistant_api.py tests/test_conversation_api.py \
   而不是让它继续声称「这是接受的现状」。
 - **边界（不得写成更大的结论）**：本项只覆盖「同一主体 / 同一租户 / 范围指纹不变」
   这一种时序。跨主体与跨范围由已有的 404 门覆盖，**不是**本项证明的。
+
+## 诊断线取消 QA（DX-CANCEL，#499）
+
+| ID | 环境 | 前置条件与数据 | 有序动作 | 预期可观察结果 | 清理/证据 |
+|---|---|---|---|---|---|
+| DX-CANCEL-01 | 本地 dev（真实 GatewayRuntime + 真实 GatewayStore + 真实 HTTP 路由） | 会话已绑定订单；诊断 worker 被停在模型调用内（= 停请求真实到达的那一刻） | `POST /v1/standard/diagnoses/{id}/cancel` | PASS：200 且 `status=cancelled`；响应即终态（`result=null`，无需再轮询）；再轮询仍 `cancelled`；会话 `is_generating=false`；**模型轮次收到 interrupt** | `tests/test_diagnosis_cancel.py::test_stopping_a_diagnosis_frees_the_slot_and_interrupts_the_turn`；突变：去掉 interrupt 调用 → 红；去掉释放槽位 → 红 |
+| DX-CANCEL-02 | 本地 dev | 一个不存在的诊断 id | 取消它 | PASS：404 `DIAGNOSIS_NOT_FOUND`；与「存在但不属于本调用者」同形（不泄漏存在性） | `...::test_cancelling_a_diagnosis_the_caller_cannot_see_is_not_found` |
+| DX-CANCEL-03 | 本地 dev | 库里已存在一条 `completed` 的诊断（不经 worker，直接建行） | 取消它 | PASS：200 且 `status` **仍为 completed**、`result` 原样返回；终态行未被改写 | `...::test_cancelling_a_finished_diagnosis_returns_its_own_terminal_state` |
+| DX-CANCEL-04 | 本地 dev | 同上 | 阅读 `assistant-cancel-handoff.md` §1.1 与 §1 表 | PASS：文档不再声称诊断不可取消，且登记的两条取消路由都出现在文档里 | `tests/test_assistant_cancel_handoff.py::test_the_handoff_states_the_diagnosis_cancel_contract`、`::test_the_cancel_routes_match_what_the_handoff_documents` |
+
+- **DX-CANCEL-03 的「不被改写」是两层守住的**，突变验证说明了这一点：**单独**去掉 runtime
+  的终态分支、或**单独**去掉 store 的 `WHERE status IN ('queued','running')`，用例都**仍然通过**；
+  **两层同时去掉才转红**。这是有意的纵深防御，不是冗余 —— 但也意味着单看这条用例**不能**
+  指出是哪一层在起作用。
+- **未完成业务验收**：本条为离线真实栈（真实运行时、真实存储、真实路由），**没有在 41 公网链路
+  上跑过一次真实取消**。联调前需按 `assistant-cancel-handoff.md` §8 复跑。

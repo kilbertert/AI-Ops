@@ -7,10 +7,10 @@ from pathlib import Path
 from typing import Any
 
 from aiops_diagnostics.agent_contracts import AgentDiagnosis
-from aiops_diagnostics.agent_engine import AgentCoordinator, ProgressCallback
+from aiops_diagnostics.agent_engine import AgentCoordinator, ProgressCallback, SessionFactory
 from aiops_diagnostics.agent_workspace import AgentWorkspace
-from aiops_diagnostics.codex_runtime import AgentRuntimeError, resolve_provider_api_key
-from aiops_diagnostics.config import Settings
+from aiops_diagnostics.codex_runtime import AgentRuntimeError, CodexSession, resolve_provider_api_key
+from aiops_diagnostics.config import AgentSettings, ProviderConfig, Settings
 from aiops_diagnostics.diagnostic_tools import DiagnosticToolExecutor, preflight_environment
 from aiops_diagnostics.i18n import DEFAULT_LANGUAGE, language_name
 from aiops_diagnostics.journal import EvidenceJournal
@@ -31,6 +31,37 @@ from aiops_diagnostics.turn_recovery import (
 )
 
 
+def _diagnosis_session_factory(
+    turn_registrar: Callable[[Any], None] | None,
+) -> SessionFactory | None:
+    """A session factory that hands each turn to ``turn_registrar`` (#499).
+
+    Returns ``None`` when nobody can interrupt, so an uninterruptible run keeps
+    the coordinator's own default factory byte-for-byte (the CLI path passes
+    nothing and must not gain a seam it does not use).
+    """
+    if turn_registrar is None:
+        return None
+
+    def factory(
+        workspace: AgentWorkspace,
+        settings: AgentSettings,
+        provider: ProviderConfig | None,
+        thread_id: str | None,
+    ) -> CodexSession:
+        from aiops_diagnostics.codex_runtime import SDKCodexSession
+
+        return SDKCodexSession(
+            workspace,
+            settings,
+            provider=provider,
+            thread_id=thread_id,
+            turn_registrar=turn_registrar,
+        )
+
+    return factory
+
+
 def run_agent_diagnosis(
     workspace: AgentWorkspace,
     request: DiagnosticRequest,
@@ -44,8 +75,17 @@ def run_agent_diagnosis(
     scope: QueryScope | None = None,
     language: str = DEFAULT_LANGUAGE,
     history: str = "",
+    turn_registrar: Callable[[Any], None] | None = None,
 ) -> AgentDiagnosis:
-    """Run the shared read-only agent path for local CLI and gateway workers."""
+    """Run the shared read-only agent path for local CLI and gateway workers.
+
+    ``turn_registrar`` (#499) receives the live turn handle as soon as the
+    coordinator's turn starts, so a caller that can be interrupted (an order
+    diagnosis the user may stop) can reach the turn's own interrupt RPC. It is
+    bound into a ``session_factory`` rather than passed to the coordinator
+    directly, because the coordinator builds its session through that seam and
+    a diagnosis runs exactly one session.
+    """
     manifest = workspace.load_manifest()
     selected_provider = settings.agent.select_provider(provider)
     provider_key = resolve_provider_api_key(settings.agent, provider=selected_provider, key_slot=key_slot)
@@ -78,6 +118,7 @@ def run_agent_diagnosis(
             progress_callback=progress_callback,
             language=language,
             history=history,
+            session_factory=_diagnosis_session_factory(turn_registrar),
         )
         return coordinator.run()
 

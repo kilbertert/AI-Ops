@@ -1555,6 +1555,34 @@ def create_gateway_app(
         diagnoses = context.runtime.list_standard_diagnoses(caller, limit=limit)
         return {"diagnoses": diagnoses}
 
+    @app.post("/v1/standard/diagnoses/{diagnosis_id}/cancel")
+    def cancel_standard_diagnosis(
+        diagnosis_id: str,
+        caller: ScopeContext = Depends(authenticated_diagnosis_caller),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Stop one in-flight order diagnosis (#499).
+
+        The same contract as the general-question cancel, for the same reasons:
+        POST rather than DELETE because the row survives as ``cancelled``, the
+        response carries the job's terminal state so the caller need not poll
+        again, and a repeat click or a cancel that lost a race answers the
+        job's own current state rather than an error.
+
+        Missing and out-of-scope are one answer (404), so cancelling cannot be
+        used to probe which diagnosis ids exist.
+        """
+        try:
+            diagnosis = context.runtime.cancel_standard_diagnosis(caller, diagnosis_id)
+        except (ValueError, RuntimeError) as exc:
+            raise _runtime_unavailable("DIAGNOSIS_UNAVAILABLE", "diagnosis unavailable", exc) from exc
+        if diagnosis is None:
+            raise StandardAPIError(
+                status.HTTP_404_NOT_FOUND,
+                "DIAGNOSIS_NOT_FOUND",
+                "diagnosis not found",
+            )
+        return _standard_diagnosis_response(diagnosis)
+
     def _agent_error(exc: AgentError) -> StandardAPIError:
         if isinstance(exc, AgentNotFound):
             return StandardAPIError(status.HTTP_404_NOT_FOUND, "AGENT_NOT_FOUND", "agent not found")

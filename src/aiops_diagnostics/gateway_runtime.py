@@ -75,8 +75,14 @@ TERMINAL_WRITE_REFUSED = {"status": "refused"}
 
 
 @dataclass
-class QARegistration:
-    """What a stop request needs in order to interrupt one assistant question.
+class JobRegistration:
+    """What a stop request needs in order to interrupt one running job.
+
+    Covers both interruptible lines — an assistant question (#357) and an
+    order diagnosis (#499). The diagnosis line used to have no registration at
+    all, which is why its stop button could only free the conversation slot and
+    never reach the model call; the fields were already line-agnostic, so the
+    fix is the plumbing, not a second class.
 
     A ``Future`` is deliberately NOT what this holds: ``Future.cancel()``
     cannot stop a thread that is already running the model turn, which is
@@ -89,9 +95,9 @@ class QARegistration:
     so the stop request carries the slot's identity with it.
 
     ``route_type`` is the route this job was submitted with (a promotional
-    shortcut run or a plain question), which is what the stop records: the
-    worker uses the same value for its own metric rows, so a stopped
-    promotional click is not counted as a stopped customer question.
+    shortcut run, a plain question, or an order diagnosis), which is what the
+    stop records: the worker uses the same value for its own metric rows, so a
+    stopped promotional click is not counted as a stopped customer question.
     """
 
     conversation_turn: tuple[str, str, int] | None = None
@@ -169,7 +175,12 @@ class GatewayRuntime:
         # Interruptible assistant questions (#357): what a stop request needs in
         # order to reach the model turn that is burning tokens. Registered when
         # the job is submitted, dropped when it leaves the non-terminal state.
-        self._qa_registrations: dict[str, QARegistration] = {}
+        self._qa_registrations: dict[str, JobRegistration] = {}
+        # #499: the diagnosis line gets its own registry — same shape, keyed by
+        # diagnosis_id. Kept separate rather than merged into one dict because
+        # the two id spaces are distinct (`qa_...` vs `dx_...`) and a shared
+        # dict would only make a lookup bug harder to see.
+        self._diagnosis_registrations: dict[str, JobRegistration] = {}
 
     @classmethod
     def from_settings(
@@ -347,6 +358,11 @@ class GatewayRuntime:
             language=language,
             internal_run_id=workspace.run_id,
         )
+        # #499: registered before the worker exists, exactly like the qa line —
+        # a stop arriving a millisecond after this return must already find the
+        # job interruptible and must know which conversation slot to free.
+        registration = JobRegistration(conversation_turn=conversation_turn, route_type="diagnosis")
+        self._diagnosis_registrations[diagnosis["diagnosis_id"]] = registration
         future = self._executor.submit(
             self._execute_standard_diagnosis,
             diagnosis["diagnosis_id"],
@@ -357,9 +373,46 @@ class GatewayRuntime:
             selected_key_slot,
             language,
             conversation_turn,
+            registration.register_interrupt,
         )
         self._futures[diagnosis["diagnosis_id"]] = future
         future.add_done_callback(lambda _: self._futures.pop(diagnosis["diagnosis_id"], None))
+        future.add_done_callback(lambda _: self._diagnosis_registrations.pop(diagnosis["diagnosis_id"], None))
+        return diagnosis
+
+    def cancel_standard_diagnosis(
+        self,
+        context: ScopeContext,
+        diagnosis_id: str,
+    ) -> dict[str, Any] | None:
+        """Stop one in-flight order diagnosis (#499).
+
+        The same shape as ``cancel_assistant_qa``, for the same reasons — see
+        that method for why the terminal row is written before the interrupt,
+        and why a repeated stop answers the job's own current state instead of
+        an error. What differs is only the job being stopped.
+
+        Idempotent and non-probing: an already-terminal diagnosis is returned
+        as it stands, and one outside this caller's scope is indistinguishable
+        from a missing one (``None`` ⇒ 404 at the API layer).
+        """
+        diagnosis = self.store.get_standard_diagnosis(diagnosis_id, context.scope_fingerprint)
+        if diagnosis is None:
+            return None
+        if diagnosis["status"] in ACTIVE_DIAGNOSIS_STATUSES:
+            accepted = self.store.update_standard_diagnosis(diagnosis_id, status="cancelled")
+            registration = self._diagnosis_registrations.pop(diagnosis_id, None)
+            if registration is not None:
+                # Both savings run before the metric row: nothing that records
+                # rather than decides may keep the turn burning or the input
+                # box locked. Order is persist, save, then count.
+                self._interrupt_registered_turn(registration)
+                self._release_conversation_turn(registration.conversation_turn)
+            if accepted:
+                self._record_cancelled_qa_metric(context, registration)
+            return self.store.get_standard_diagnosis(diagnosis_id, context.scope_fingerprint)
+        # Already terminal: the caller sees the job's own final state, not a
+        # cancellation that lost a race.
         return diagnosis
 
     def get_standard_diagnosis(
@@ -506,7 +559,7 @@ class GatewayRuntime:
         # Registered before the worker exists: a stop request that arrives a
         # millisecond after this return must already find the job interruptible
         # (and must know which conversation slot to free).
-        registration = QARegistration(
+        registration = JobRegistration(
             conversation_turn=(
                 conversation["conversation_id"],
                 conversation["scope_fingerprint"],
@@ -648,7 +701,7 @@ class GatewayRuntime:
     def _record_cancelled_qa_metric(
         self,
         context: ScopeContext,
-        registration: QARegistration | None,
+        registration: JobRegistration | None,
     ) -> None:
         """Record a stopped question as its own outcome (#359).
 
@@ -676,7 +729,7 @@ class GatewayRuntime:
             conversation_id=conversation_id,
         )
 
-    def _interrupt_registered_turn(self, registration: QARegistration) -> None:
+    def _interrupt_registered_turn(self, registration: JobRegistration) -> None:
         """Best-effort interrupt of the turn this job is running (fire and forget).
 
         The terminal write already decided the outcome, so a failed interrupt is
@@ -961,6 +1014,7 @@ class GatewayRuntime:
         key_slot: str,
         language: str = DEFAULT_LANGUAGE,
         conversation_turn: tuple[str, str, int] | None = None,
+        turn_registrar: Callable[[Any], None] | None = None,
     ) -> None:
         if not self.store.update_standard_diagnosis(diagnosis_id, status="running"):
             # Refused claim: the row was already terminalised by another path,
@@ -997,6 +1051,7 @@ class GatewayRuntime:
                 scope=query_scope,
                 language=language,
                 history=history,
+                turn_registrar=turn_registrar,
             )
         except (AgentRuntimeError, SourceError, ValueError) as exc:
             ok = self.store.update_standard_diagnosis(
