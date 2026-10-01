@@ -91,12 +91,17 @@ trap 'rm -rf "$TMPD"' EXIT
 #: `--proto '=https'` 让「万一将来加了 -L」也只能停在 https 上，不会把自定义头带去 http。
 #: HTTP 状态**显式检查**：`curl` 默认不会因 4xx/5xx 失败，不检查就会把错误正文当源码交付。
 fetch() {
-  local path=$1 rc=0 status
+  local path=$1 rc=0 status secret
+  # 凭据**先单独取**，取不到就在这里停下。
+  # 不能写成 `printf … "$(token)" | curl …`：那样子进程里 `token` 失败只让子进程退出，
+  # 外层 `printf` 照样成功、管道照样跑 —— 于是会**拿着空令牌发出一个匿名请求**。
+  # 公开项目会匿名返回 200，看起来像「认证成功」，比直接失败更糟。
+  secret=$(token) || die "读不到凭据（原因见上），已停止，未发出请求。"
   # `|| rc=$?` 而不是「先跑再读 $?」：`set -e` 会在 curl 失败时**当场退出函数**，
   # 后面那句 `rc=$?` 根本不会执行，stderr 又已被重定向进文件 ——
   # 于是连接失败与公钥不匹配都只剩一个没有原因的非零退出码。`||` 让这条命令变成
   # 「被测试的」，set -e 不再拦它。
-  printf 'header = "PRIVATE-TOKEN: %s"\n' "$(token)" \
+  printf 'header = "PRIVATE-TOKEN: %s"\n' "$secret" \
     | curl -sSk -m 90 -D "$HDR" -o "$BODY" -w '%{http_code}' \
         --proto '=https' --pinnedpubkey "$(pin)" \
         --config /dev/stdin "$URL/api/v4$path" >"$TMPD/status" 2>"$TMPD/err" || rc=$?

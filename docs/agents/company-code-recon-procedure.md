@@ -216,8 +216,8 @@ SPKI sha256 = sha256//0E4usLaswMAYis+NuEpr5B2untcdBdi6AQgz7ISMjhQ=
 | `deploy/company-gitlab-api.sh group --id 90 \| wc -l` | 全部 |
 | `deploy/company-gitlab-api.sh tree --project 363 --ref master --count-java` | 全部 |
 | `deploy/company-gitlab-api.sh tree --project 363 --ref release --count-java` | 全部 |
-| `deploy/company-gitlab-api.sh blobs --project 363 --ref release --search '@Inside'` | **前 3 行**（该查询共 12 行） |
-| `deploy/company-gitlab-api.sh raw --project 363 --ref master --path cloud-charging-pile-client/src/main/java/com/qushiyun/cloud/charging/pile/client/DemoFeignClient.java` | **前 2 行**（该文件共 29 行） |
+| `deploy/company-gitlab-api.sh blobs --project 363 --ref release --search '@Inside'` | 前 3 行（该查询共 12 行） |
+| `deploy/company-gitlab-api.sh raw --project 363 --ref master --path cloud-charging-pile-client/src/main/java/com/qushiyun/cloud/charging/pile/client/DemoFeignClient.java` | 前 1 行（该文件共 29 行） |
 | `deploy/company-gitlab-api.sh projects --search 充电桩 \| wc -l` | 全部 |
 | `deploy/company-gitlab-api.sh projects --search cloud-charging-pile \| wc -l` | 全部 |
 

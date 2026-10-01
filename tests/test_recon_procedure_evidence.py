@@ -231,11 +231,17 @@ def test_the_truncated_rows_show_the_truth_and_state_the_true_total() -> None:
     documented = _block_lines()
     checked_rows = 0
     for cmd, note in _coverage_totals().items():
-        m = re.search(r"共\s*(\d+)\s*行", note)
+        m = re.search(r"前\s*(\d+)\s*行（[^）]*共\s*(\d+)\s*行", note)
         if not m:
             continue
+        lines = list(real_lines(cmd))
         shown = _documented_output(documented, cmd)
-        assert list(real_lines(cmd))[: len(shown)] == shown, f"截断行贴出的内容对不上：{cmd}"
-        assert len(real_lines(cmd)) == int(m.group(1)), cmd
+        # All three numbers have to agree: what the note promises (前 N 行),
+        # what the block shows (len(shown)), and what the command returns.
+        # Checking only the first two lets the note drift; only the total lets
+        # the shown lines go stale.
+        assert len(shown) == int(m.group(1)), f"标注说前 {m.group(1)} 行，块里贴了 {len(shown)} 行：{cmd}"
+        assert shown == lines[: int(m.group(1))], f"截断行贴出的内容对不上：{cmd}"
+        assert len(lines) == int(m.group(2)), f"标注说共 {m.group(2)} 行，实际 {len(lines)} 行：{cmd}"
         checked_rows += 1
     assert checked_rows >= 2, f"只核对了 {checked_rows} 条截断行"
