@@ -195,7 +195,12 @@ def test_the_delivery_records_agree_on_who_carries_the_pending_item() -> None:
         if "#479" not in text:
             pytest.skip(f"{name} 里没有 #479 条目")
         start = text.index("#479")
-        block = text[start : start + 3000]
+        # End at the *next* milestone heading: a fixed-width window reaches into
+        # whatever entry follows, so a later milestone could satisfy these
+        # checks while #479 itself lost them.
+        rest = text[start:]
+        nxt = re.search(r"\n## ", rest)
+        block = rest[: nxt.start()] if nxt else rest
         assert "后续票" in block, f"{name} 的 #479 条目没写清待收敛项由谁承接"
         assert "指向 D 批" not in block and "留给 D 批" not in block, (
             f"{name} 的 #479 条目仍把待收敛项指向已完成的 D 批"
