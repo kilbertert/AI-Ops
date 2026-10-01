@@ -21,7 +21,7 @@ Fetching is done through ``deploy/company-gitlab-api.sh``: same credentials,
 same pinned certificate, same read-only surface as every other recon step. This
 script does not talk to the network itself.
 
-    python3 tools/company_repo_index.py > docs/agents/company-repo-index.md
+    python3 tools/company_repo_index.py --out docs/agents/company-repo-index.md
 """
 
 from __future__ import annotations
@@ -114,47 +114,111 @@ def fetch_projects() -> list[dict]:
             {
                 "id": int(pid),
                 "path_with_namespace": path,
-                "default_branch": fields.get("default") or None,
+                "default_branch": _branch(fields.get("default")),
                 "last_activity_at": fields.get("activity", ""),
             }
         )
     return rows
 
 
+def _branch(value: str | None) -> str | None:
+    """GitLab's JSON null arrives as the four letters ``null``, not as an
+    absent field. An empty repository has no default branch, and printing
+    ``null`` in backticks would read as a branch literally named that."""
+    if value is None or value in ("", "null"):
+        return None
+    return value
+
+
 def classify(path_with_namespace: str) -> str:
-    path = path_with_namespace.lower()
-    for domain, namespaces, keywords in RULES:
-        if any(path.startswith(ns) for ns in namespaces) and any(k in path for k in keywords):
-            return domain
+    """One domain, or ``未定``.
+
+    The namespace is checked against the prefix and the **repository name**
+    against the keywords — two separate strings. Matching both against the
+    whole path made the namespace itself do keyword duty: the namespace
+    ``bladex/`` contains ``blade``, so every repository under it classified as
+    ``通用库`` regardless of its name.
+
+    A repository matching more than one domain is ``未定``, not the first
+    match. ``cloud-mall-common`` matches 商城 (``mall``) and 通用库
+    (``common``); whichever rule happens to be listed first would otherwise
+    turn a genuinely undecided case into a confident answer.
+    """
+    lower = path_with_namespace.lower()
+    namespace, _, name = lower.rpartition("/")
+    matched = {
+        domain
+        for domain, namespaces, keywords in RULES
+        if any(lower.startswith(ns) for ns in namespaces) and any(k in name for k in keywords)
+    }
+    if len(matched) == 1:
+        return matched.pop()
     return UNCLASSIFIED
 
 
-def main() -> None:
-    projects = json.loads(Path(sys.argv[1]).read_text()) if len(sys.argv) > 1 else fetch_projects()
-    stamped = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d")
-    projects.sort(key=lambda r: r["path_with_namespace"].lower())
+def render(projects: list[dict], stamped: str) -> str:
+    out: list[str] = []
+    projects = sorted(projects, key=lambda r: r["path_with_namespace"].lower())
 
-    print("# 公司仓库索引（L1）")
-    print()
-    print(f"> 由 `tools/company_repo_index.py` 生成，**不要手改**。取数日 **{stamped}**（UTC）。")
-    print(">")
-    print("> 三列来自公司 GitLab 自己的元数据（`id` / `default_branch` / `last_activity_at`）；")
-    print(f"> 末列「域」是本脚本按**路径**机械分类的结果，不认识的一律 `{UNCLASSIFIED}`。")
-    print(">")
-    print("> ⚠️ `last_activity_at` 是**取数时点的快照，不是契约** —— 之后变安静的仓不会反映在这里。")
-    print("> 要判断「现在还在动吗」，重跑脚本，不要引用本表的日期。")
-    print(">")
-    print("> ⚠️ **默认分支不等于真分支**（#475 规程 §2）。本表只记默认分支；")
-    print("> 每个域要用的那个分支写在各域的条目里，判据是当场跑出来的 `.java` 计数。")
-    print()
-    print("| 仓（`path_with_namespace`） | id | 默认分支 | 最后活动 (UTC) | 域 |")
-    print("|---|---|---|---|---|")
+    def emit(line: str = "") -> None:
+        out.append(line)
+
+    emit("# 公司仓库索引（L1）")
+    emit()
+    emit(f"> 由 `tools/company_repo_index.py` 生成，**不要手改**。取数日 **{stamped}**（UTC）。")
+    emit(">")
+    emit("> 三列来自公司 GitLab 自己的元数据（`id` / `default_branch` / `last_activity_at`）；")
+    emit(f"> 末列「域」是本脚本按**路径**机械分类的结果，不认识的一律 `{UNCLASSIFIED}`。")
+    emit(">")
+    emit("> ⚠️ `last_activity_at` 是**取数时点的快照，不是契约** —— 之后变安静的仓不会反映在这里。")
+    emit("> 要判断「现在还在动吗」，重跑脚本，不要引用本表的日期。")
+    emit(">")
+    emit("> ⚠️ **默认分支不等于真分支**（#475 规程 §2）。本表只记默认分支；")
+    emit("> 每个域要用的那个分支写在各域的条目里，判据是当场跑出来的 `.java` 计数。")
+    emit(">")
+    unknown = sum(1 for r in projects if classify(r["path_with_namespace"]) == UNCLASSIFIED)
+    emit(f"> ⚠️ **一组仓里 `{UNCLASSIFIED}` 有 {unknown} / {len(projects)} 行。**")
+    emit("> 这是规则的结果，不是遗漏：规则只认「命名空间前缀 + 仓名关键词」，")
+    emit("> 跨两个域都匹配的仓（如 `cloud-mall-common`）也**保持未定**，不按规则顺序取先命中的那个。")
+    emit()
+    emit("| 仓（`path_with_namespace`） | id | 默认分支 | 最后活动 (UTC) | 域 |")
+    emit("|---|---|---|---|---|")
     for r in projects:
         default = r.get("default_branch") or "—"
-        print(
+        emit(
             f"| `{r['path_with_namespace']}` | {r['id']} | `{default}` "
             f"| {r['last_activity_at'][:10]} | {classify(r['path_with_namespace'])} |"
         )
+    return "\n".join(out) + "\n"
+
+
+def main() -> None:
+    """Write to ``--out PATH`` atomically, or to stdout when it is omitted.
+
+    The atomic form is the one to use in a shell pipeline: `… > docs/…` truncates
+    the target *before* the generator runs, so a failed fetch leaves a zero-byte
+    index where a 519-row one used to be — the failure is loud but the snapshot
+    is already gone.
+    """
+    argv = sys.argv[1:]
+    out_path = None
+    if "--out" in argv:
+        i = argv.index("--out")
+        out_path = Path(argv[i + 1])
+        argv = argv[:i] + argv[i + 2 :]
+    source = Path(argv[0]) if argv else None
+
+    projects = json.loads(source.read_text()) if source else fetch_projects()
+    stamped = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%d")
+    document = render(projects, stamped)
+
+    if out_path is None:
+        sys.stdout.write(document)
+        return
+    # Same directory, so the rename is atomic on the same filesystem.
+    tmp = out_path.with_name(out_path.name + ".partial")
+    tmp.write_text(document, encoding="utf-8")
+    tmp.replace(out_path)
 
 
 if __name__ == "__main__":

@@ -165,3 +165,38 @@ def test_the_default_branch_really_is_a_scaffold_for_charging_pile() -> None:
         f"默认分支不再是脚手架了（master={master}, release={release}）—— "
         "L1 与规程 §2 的反例需要重新核对，不要直接改数字。"
     )
+
+
+def test_a_repository_matching_two_domains_stays_unclassified() -> None:
+    """Cross-domain hits are `未定`, not the first rule that happens to match.
+
+    `cloud-mall-common` matches 商城 (`mall`) and 通用库 (`common`); taking the
+    first match turned a genuinely undecided repository into a confident
+    "商城" in the index while the baseline said 待定 — two entry points giving
+    contradictory answers about the same repository.
+    """
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("repo_index", GENERATOR)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod.classify("s2b2c-java/cloud-mall-common") == "未定"
+    # The namespace must not do keyword duty: `bladex/` contains `blade`, and
+    # matching the whole path made every repository under it a 通用库.
+    assert mod.classify("bladex/old") == "未定"
+    assert mod.classify("bladex/meidi") == "未定"
+    # …while a repository that really is one domain still classifies.
+    assert mod.classify("s2b2c-java/cloud-upms") == "UPMS"
+    assert mod.classify("iot/cloud-charging-pile") == "充电桩"
+
+
+def test_an_empty_repository_does_not_get_a_branch_named_null() -> None:
+    """GitLab sends JSON null, which the shell prints as the text `null`."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("repo_index", GENERATOR)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert mod._branch("null") is None
+    assert mod._branch("") is None
+    assert mod._branch("main") == "main"

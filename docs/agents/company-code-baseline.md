@@ -85,17 +85,19 @@
 | `common-java/cloud-message` | 357 | `master` | `release` | 148（两分支同规模） | 2026-07-23 |
 | `s2b2c-java/cloud-mall-common` | 558 | `main` | 待定 | — | 2026-09-28 |
 
-⚠️ `s2b2c-java/cloud-mall-common` **近 30 天有活动（09-28）**，是本组里最活跃的 ——
-它是不是「商城」域的一部分、还是被多域共享，本票**未定**（见下表）。
+⚠️ `s2b2c-java/cloud-mall-common` **近 30 天有活动（09-28）**，是本组里最活跃的。
+它同时命中「商城」（`mall`）与「通用库」（`common`）两条规则 ⇒ **跨域命中一律保持未定**，
+不按规则顺序取先命中的那个（见 §4）。这一条是核对时抓出来的：先前的实现按顺序取首个命中，
+索引把它标成了「商城」，与本页的「待定」互相矛盾。
 
 ### 4. 显式未定（不猜）
 
 「未定」有两类，分开写，因为它们的含义不同：
 
 **（a）归域未定**：路径里没有可判定的域前缀，且名字不落在任何规则上。
-全索引里 **468 / 519** 行的「域」列是 `未定`，这是**规则**的结果不是遗漏 ——
+全索引里 **474 / 519** 行的「域」列是 `未定`，这是**规则**的结果不是遗漏 ——
 规则按「命名空间前缀 + 仓名关键词」机械判定，不认识的一律不归类。
-**其中近 180 天有活动的 57 个**，逐个判断值不值得归域是**按需**的事，不在本票。
+**其中近 180 天有活动的 60 个**，逐个判断值不值得归域是**按需**的事，不在本票。
 
 **（b）本票明确不答的**：
 
@@ -119,7 +121,7 @@ deploy/company-gitlab-api.sh tree --project 363 --ref master  --count-java
 deploy/company-gitlab-api.sh tree --project 363 --ref release --count-java
 
 # 全仓索引（本页 §0/§4 的数字都出自它）
-python3 tools/company_repo_index.py > docs/agents/company-repo-index.md
+python3 tools/company_repo_index.py --out docs/agents/company-repo-index.md
 ```
 
 第二人独立执行可得到相同结论：`tools/company_repo_index.py` 与索引都带**取数日**，

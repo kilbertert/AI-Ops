@@ -195,9 +195,12 @@ case "$cmd" in
     # **读不出「真分支是哪一个」**——而判据正是「谁的提交最新」。
     # `fetch_all` 已经取全，这里只是排序后截取，不再多发请求。
     if [ -n "$limit" ]; then
+      # 用 awk 而不是 `| head -n N`：分支多时 head 读完就关掉读端，上游 sort 收到
+      # SIGPIPE(141)，而 `set -o pipefail` 会把整条管道判成失败 —— 结果已经印出来了，
+      # 调用方却看到非零退出码。awk 会读完全部输入，只在打印上截断。
       fetch_all "/projects/$project/repository/branches?" \
         '.[] | "\(.commit.committed_date)\t\(.name)"' \
-        | sort -r | head -n "$limit"
+        | sort -r | awk -v n="$limit" 'NR <= n'
       exit 0
     fi
     fetch_all "/projects/$project/repository/branches?" \

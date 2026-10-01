@@ -10,6 +10,10 @@
 >
 > ⚠️ **默认分支不等于真分支**（#475 规程 §2）。本表只记默认分支；
 > 每个域要用的那个分支写在各域的条目里，判据是当场跑出来的 `.java` 计数。
+>
+> ⚠️ **一组仓里 `未定` 有 474 / 519 行。**
+> 这是规则的结果，不是遗漏：规则只认「命名空间前缀 + 仓名关键词」，
+> 跨两个域都匹配的仓（如 `cloud-mall-common`）也**保持未定**，不按规则顺序取先命中的那个。
 
 | 仓（`path_with_namespace`） | id | 默认分支 | 最后活动 (UTC) | 域 |
 |---|---|---|---|---|
@@ -59,9 +63,9 @@
 | `base/ddd4j` | 565 | `master` | 2026-07-14 | 通用库 |
 | `base/ddd4j-vertx` | 578 | `master` | 2025-06-26 | 通用库 |
 | `bladex/blade-boot` | 120 | `master` | 2022-04-26 | 通用库 |
-| `bladex/meidi` | 283 | `main` | 2025-01-03 | 通用库 |
-| `bladex/old` | 103 | `main` | 2024-06-21 | 通用库 |
-| `bladex/saber` | 115 | `master` | 2022-04-12 | 通用库 |
+| `bladex/meidi` | 283 | `main` | 2025-01-03 | 未定 |
+| `bladex/old` | 103 | `main` | 2024-06-21 | 未定 |
+| `bladex/saber` | 115 | `master` | 2022-04-12 | 未定 |
 | `bzc/xunlan` | 68 | `main` | 2022-08-15 | 未定 |
 | `caish/pc-im` | 427 | `main` | 2023-05-24 | 未定 |
 | `caish/qumall-app` | 387 | `main` | 2023-04-26 | 未定 |
@@ -410,18 +414,18 @@
 | `s2b2c-java/cloud-inventory` | 624 | `main` | 2026-09-21 | 商城 |
 | `s2b2c-java/cloud-invoice` | 645 | `master` | 2026-09-30 | 商城 |
 | `s2b2c-java/cloud-iot` | 618 | `main` | 2026-09-07 | 未定 |
-| `s2b2c-java/cloud-mall-common` | 558 | `main` | 2026-09-28 | 商城 |
+| `s2b2c-java/cloud-mall-common` | 558 | `main` | 2026-09-28 | 未定 |
 | `s2b2c-java/cloud-member` | 649 | `main` | 2026-09-30 | 商城 |
 | `s2b2c-java/cloud-monitor` | 485 | `main` | 2025-02-20 | 未定 |
 | `s2b2c-java/cloud-order` | 556 | `dev` | 2026-09-30 | 商城 |
 | `s2b2c-java/cloud-rent` | 647 | `main` | 2026-09-16 | 商城 |
-| `s2b2c-java/cloud-sdk` | 646 | `dev` | 2026-09-29 | 商城 |
+| `s2b2c-java/cloud-sdk` | 646 | `dev` | 2026-09-29 | 未定 |
 | `s2b2c-java/cloud-shop` | 559 | `main` | 2024-11-19 | 商城 |
 | `s2b2c-java/cloud-upms` | 557 | `dev_230201` | 2026-09-28 | UPMS |
 | `s2b2c-java/cloud-vending` | 605 | `main` | 2026-06-04 | 未定 |
 | `s2b2c-java/cloud-weixin` | 490 | `main` | 2026-07-21 | 未定 |
 | `s2b2c-java/qumall` | 137 | `dev_230201` | 2026-09-30 | 商城 |
-| `s2b2c-java/qumall-common` | 300 | `dev_230201` | 2026-09-24 | 商城 |
+| `s2b2c-java/qumall-common` | 300 | `dev_230201` | 2026-09-24 | 未定 |
 | `s2b2c-java/qumall-pay` | 370 | `dev_230201` | 2026-09-29 | 商城 |
 | `s2b2c-java/qumall-sql` | 286 | `release_230201` | 2026-09-17 | 商城 |
 | `saas/AggrERP` | 484 | `master` | 2025-06-25 | 未定 |
