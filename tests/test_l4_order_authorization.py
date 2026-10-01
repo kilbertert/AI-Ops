@@ -293,8 +293,9 @@ def test_the_documents_agree_on_how_many_evidence_tests_there_are() -> None:
         "docs/agents/current-delivery-state.md",
     ):
         text = (PROJECT_ROOT / doc).read_text(encoding="utf-8")
-        for word, n in (("四", 4), ("六", 6)):
-            stated = f"{word}个证据测试" in text or f"{word}个测试的 live" in text
+        # Match the count however it is written: `四个` / `4 个` / `4个`.
+        for pattern, n in ((r"四个", 4), (r"六(?:个|\s*个)", 6), (r"\b4\s*个", 4), (r"\b6\s*个", 6)):
+            stated = re.search(pattern + r"\s*(?:证据)?测试", text)
             if stated and n != len(named):
-                stale.append(f"{doc}: 写「{word}个」但实际是 {len(named)} 个")
+                stale.append(f"{doc}: 写「{stated.group(0)}」但实际是 {len(named)} 个")
     assert stale == [], "；".join(stale) + " —— 交割时会被漏看"
