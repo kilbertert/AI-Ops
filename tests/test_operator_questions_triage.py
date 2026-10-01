@@ -9,7 +9,8 @@ checkable:
   restating its conclusions** — a restatement drifts the moment the baseline
   changes;
 * every item in "only a person can answer" says *why source code cannot answer
-  it* and *who answers* — that pair is the whole point of the bucket;
+  it* and *who answers* — that pair is the whole point of the bucket, and a
+  question parked in the archive does not silently lose its answerer;
 * the coverage breakdown stays four-part with C/D marked fail-closed, and B
   stays out of the "data problem" framing;
 * the archival sections are still marked as archive, so the historical entries
@@ -116,6 +117,10 @@ def test_the_person_bucket_says_why_and_who() -> None:
         assert "没查" not in why and "没去查" not in why
     for who in ("产品", "后端", "数据侧"):
         assert who in people, f"「谁来答」里少了 {who} 这一类"
+    # A question the archive still asks must not lose its answerer just because
+    # it was filed under an old heading.
+    for rescued in ("R-7", "R-8", "R-9"):
+        assert rescued in people, f"存档里仍在问的那条（{rescued}）没有归到「只有人能答」"
 
 
 def test_the_data_bucket_keeps_the_four_parts_and_b_is_not_a_gap() -> None:
@@ -143,6 +148,36 @@ def test_it_does_not_restate_the_baseline_conclusions() -> None:
         assert value not in answered, (
             f"「基线已回答」里复述了基线的事实（{value}）—— 复述会漂移，应当只指向章节"
         )
+
+
+def test_no_internal_addresses_in_a_forwardable_document() -> None:
+    """The header promises none; a private IP is exactly what it means."""
+    text = _text()
+    leaks = re.findall(r"\b(?:10|172)\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\b", text)
+    assert leaks == [], f"这份会跨团队转发的文档里出现了内网地址：{leaks}"
+
+
+def test_the_identity_chain_pointer_names_the_c_to_b_hop() -> None:
+    """The session gives a C-side id; `getShops` wants a B-side one.
+
+    Pointing only at the shop query hides the hop that makes it work, and a
+    reader following the pointer lands on an endpoint whose argument they
+    cannot produce.
+    """
+    answered = _bucket("一")
+    assert "byUserId" in answered, "身份链的指针没提 C→B 那一跳（`byUserId`）"
+    assert "C 端" in answered and "B 端" in answered, "没写清两个 id 空间不同"
+
+
+def test_the_core_conclusion_sentence_is_intact() -> None:
+    """It gets forwarded; a mangled subject breaks it."""
+    text = _text()
+    # The document uses full-width quotes inside the bold run; match on the
+    # two halves rather than reproducing the quoting in a Python literal.
+    assert "不是" in text and "授权" in text
+    assert '是"AI-Ops 绕开了它"' in text or "AI-Ops 绕开了它" in text, (
+        "「不是没有授权，是 AI-Ops 绕开了它」这句被改坏了 —— 它是会跨团队转发的核心结论"
+    )
 
 
 def test_the_internal_items_were_reviewed() -> None:
