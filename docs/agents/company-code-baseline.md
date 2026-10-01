@@ -219,8 +219,8 @@ python3 tools/company_repo_index.py --out docs/agents/company-repo-index.md
 | `ch_order_info.site_id` → `ch_site.id` | 订单所属站点 | `cloud-charging-pile:release:data/po/ChOrderInfo.java:77`；`cloud-charging-pile:release:data/mapper/ChOrderInfoMapper.xml:41`（`left join ch_site ch_site on ch_site.id = ch_order_info.site_id`） | |
 | `ch_order_info.partner_b_id` = `partner_info.owner` | 订单侧的代理商 B 端账户 | `cloud-charging-pile:release:data/po/ChOrderInfo.java:698`（注释「代理商B端账户id」）；`cloud-charging-pile:release:data/mapper/ChOrderInfoMapper.xml:110-111`（`convert(pi.owner …) = convert(coi.partner_b_id …)`） | 跨库 join，**两侧都要 convert + 显式排序规则**（见下） |
 | `iot_charging_device.site_id` → `ch_site.id` | 设备投放的场地 | `cloud-charging-pile:release:data/po/IotChargingDevice.java:45-47`（注释「投放的场地id」） | |
-| `iot_charging_device.agent_id` | 设备侧也带代理商 id | `cloud-charging-pile:release:data/po/IotChargingDevice.java:72-74`；建表列出处 `cloud-charging-pile:release:resources/db/migration/V1.0.4__device_agentId_add.sql`（「代理商id」） | ⚠️ **与 `ch_site.agent_id` 是否同源，本票未证**：设备侧的赋值链没查，**不写成等同** |
-| `partner_info.owner` → UPMS 的 B 端账号 | 运营商身份可绑 | 见 L2-3 的边界 ① | 这里的映射**不在源码里**，是生产库实测结论，出处另记 |
+| `iot_charging_device.agent_id` | 设备侧也带代理商 id | `cloud-charging-pile:release:data/po/IotChargingDevice.java:72-74`；建表列出处 `cloud-charging-pile:release:resources/db/migration/V1.0.4__device_agentId_add.sql:1-2`（`add agent_id … comment '代理商id'`） | ⚠️ **与 `ch_site.agent_id` 是否同源，本票未证**：设备侧的赋值链没查，**不写成等同** |
+| `partner_info.owner` → UPMS 的 B 端账号 | 运营商身份可绑 | **本节不给出处**（见 L2-5 第 1 行） | 这条映射**不在源码里**；既有记录把它列为生产库实测，本票**没有复核**，所以既不写成出处也不指向它 |
 
 **跨库 join 必须带排序规则转换**：`cloud-charging-pile:release:data/mapper/ChOrderInfoMapper.xml:109-111` 的 join 条件两侧
 都套了 `convert(… using utf8mb4) collate utf8mb4_general_ci`。两库排序规则不同，

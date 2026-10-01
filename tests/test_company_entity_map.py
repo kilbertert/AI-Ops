@@ -112,6 +112,17 @@ def test_the_citation_shape_is_repo_branch_file_line() -> None:
         # colons in `f` is what tells the two apart.
         assert f.count(":") >= 3, f"出处缺分支或行号（形如 仓:分支:文件:行）：`{f}`"
 
+    # A citation missing its line number would not match `_CITATION` at all, so
+    # the loop above cannot see it — and a row that already has one good
+    # citation would still pass. Catch the omission directly: every path-looking
+    # token in a code span is a citation, and every citation ends in `:NN`.
+    for token in re.findall(r"`([^`]+)`", l2):
+        if not re.search(r"\.(?:java|xml|sql)$", token):
+            continue
+        assert re.search(r":\d+(?:-\d+)?$", token), (
+            f"这是一个没有行号的出处（写成 `仓:分支:文件:行`）：`{token}`"
+        )
+
 
 def test_platform_stays_a_sentinel_and_not_an_entity() -> None:
     """The entity table's platform row must say "no table", not name one."""
