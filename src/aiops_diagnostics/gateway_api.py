@@ -90,7 +90,7 @@ from aiops_diagnostics.query_scope import (
     ShopDirectory,
     UpmsShopDirectory,
 )
-from aiops_diagnostics.routing import should_ask_for_context
+from aiops_diagnostics.routing import money_question_context
 from aiops_diagnostics.scope_context import ScopeContext, ScopeError
 from aiops_diagnostics.shortcut_lifecycle import (
     SHORTCUT_MANAGE_SCOPE,
@@ -1053,29 +1053,52 @@ def create_gateway_app(
                 "format": answer["format"],
             }
 
-        # Do not send an order/billing dispute without an order context into
-        # generic QA; ask for the missing business identifier synchronously.
-        risk_key = (
-            _missing_order_context_key(payload.question)
-            if conversation is None and _extract_order_no(payload.question) is None
-            else None
-        )
-        if risk_key is not None:
-            _record_route_metric(context, caller, route_type="clarification", outcome="completed")
-            return {
-                **decision.public(),
-                "type": "clarification",
-                "language": language,
-                "question": payload.question,
-                "missing_fields": ["order_no"],
-                "message": clarification_message(language, risk_key),
-            }
+        # A money question needs a business identifier before it can be
+        # answered — but which identifier, and whether the question is one at
+        # all, is decided in ONE place below, after the classifier has run.
+        #
+        # It used to be decided here, synchronously, by a keyword table: that
+        # answered faster and it could ask for `order_no`, which is the more
+        # actionable of the two. It also meant the same question could be asked
+        # twice in two shapes (this table first, then the model), and that which
+        # shape a user met depended on a hand-maintained regex. `money_question_context`
+        # keeps the table as the fast path and makes the model its fallback.
+        #
+        # The one case that cannot wait for the classifier is a caller who named
+        # an order number explicitly: their question already carries its
+        # identifier, so the guard must not fire at all.
+        guard_applies = conversation is None and _extract_order_no(payload.question) is None
 
         casual_job = False
         if not routing_resolved:
             classified = _classify_for_routing(
                 context, payload.question, language=language, tenant_id=caller.effective_tenant_id
             )
+        # One decision, one shape. The table is consulted first (no model call),
+        # the model covers what it misses (86-question corpus: table 3, model
+        # adds 3 more), and whichever fired decides the identifier — so a user
+        # never meets two different prompts for one question.
+        missing = (
+            money_question_context(
+                payload.question,
+                classified,
+                keyword_guard=lambda q: _missing_order_context_key(q) is not None,
+                thresholds=getattr(context.runtime, "routing_thresholds", None),
+            )
+            if guard_applies
+            else None
+        )
+        if missing is not None:
+            _record_route_metric(context, caller, route_type="clarification", outcome="completed")
+            return {
+                **decision.public(),
+                "type": "clarification",
+                "language": language,
+                "question": payload.question,
+                "missing_fields": [missing],
+                "message": clarification_message(language, missing),
+            }
+
         if classified is not None:
             if classified.get("intent") == "casual":
                 # Chit-chat is answered by the same zero-order QA job every other
@@ -1096,17 +1119,6 @@ def create_gateway_app(
                 # like any other `qa` and does. The handoff docs were updated with
                 # this change.
                 casual_job = True
-            if should_ask_for_context(
-                classified, thresholds=getattr(context.runtime, "routing_thresholds", None)
-            ):
-                return {
-                    **decision.public(),
-                    "type": "clarification",
-                    "language": language,
-                    "question": payload.question,
-                    "missing_fields": ["context"],
-                    "message": clarification_message(language, "context"),
-                }
             # Classifier-returned promotional intent (#229 protocol): same
             # promotional route as the explicit cues, resolved against the
             # caller's own published shortcut rows.

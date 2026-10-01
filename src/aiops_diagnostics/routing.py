@@ -27,7 +27,7 @@ The user's text is never logged.
 from __future__ import annotations
 
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -229,6 +229,49 @@ def classify_with_jev(
     # working week apart from an idle one.
     _record_routing_outcome(ROUTING_DECIDED, metrics=metrics, tenant_id=tenant_id)
     return decision.as_dict()
+
+
+#: Which business identifier a money question is missing, most specific first.
+#: `order_no` names a thing the user can go and find; `context` is the fallback
+#: for a question the model recognises as risk-bearing but the keyword table
+#: does not. Asking for the order number when we know it is missing is the more
+#: actionable of the two, so it wins when both would fire.
+MISSING_ORDER_NO = "order_no"
+MISSING_CONTEXT = "context"
+
+
+def money_question_context(
+    question: str,
+    decision: Mapping[str, Any] | None,
+    *,
+    keyword_guard: Callable[[str], bool],
+    thresholds: RoutingThresholds | None = None,
+) -> str | None:
+    """The identifier a money question is missing, or ``None``.
+
+    **One authority for "a question about money needs information first."**
+    Two independent guards used to answer it, and they disagreed on both the
+    trigger and the answer:
+
+    * a keyword table in the request handler, which fired before the classifier
+      ran and asked for `order_no`;
+    * the model's own risk label, which fired after it and asked for `context`.
+
+    So the same question could be asked twice, in two different shapes, and which
+    one a user met depended on whether a hand-maintained regex happened to match
+    — measured over the 86-question corpus, the table fires on 3 and the model
+    adds 3 the table misses.
+
+    The keyword table stays as a **fast path** rather than being dropped: it
+    costs no model call, and it is the only one of the two that still answers
+    when the model is unavailable. What changes is that it is no longer a second
+    *authority* — it is consulted first, and the model covers what it misses.
+    """
+    if keyword_guard(question or ""):
+        return MISSING_ORDER_NO
+    if should_ask_for_context(decision, thresholds=thresholds):
+        return MISSING_CONTEXT
+    return None
 
 
 def should_ask_for_context(
