@@ -1092,8 +1092,7 @@ def create_gateway_app(
         missing = money_question_context(
             payload.question,
             classified,
-            keyword_guard=lambda q: keyword_guard_applies
-            and _missing_order_context_key(q) is not None,
+            keyword_guard=lambda q: keyword_guard_applies and _missing_order_context_key(q) is not None,
             thresholds=getattr(context.runtime, "routing_thresholds", None),
         )
         if missing is not None:
