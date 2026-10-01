@@ -194,7 +194,16 @@ def test_the_delivery_records_agree_on_who_carries_the_pending_item() -> None:
         # Only the #479 milestone block matters here.
         if "#479" not in text:
             pytest.skip(f"{name} 里没有 #479 条目")
-        start = text.index("#479")
+        # Anchor on the *milestone heading*, not the first `#479` mention: any
+        # earlier section that references the ticket would otherwise become the
+        # block under test. (That is exactly what happened when a later closeout
+        # entry cited `#479` above its own milestone.)
+        # Both documents have a `#479` milestone, but they head it differently
+        # (`## #479 …` vs `## 2026-10-01 · #479 …`). Anchor on a heading line
+        # that contains the ticket, not on the bare number.
+        m = re.search(r"^## [^\n]*#479", text, re.MULTILINE)
+        assert m, f"{name} 里找不到 #479 的里程碑标题"
+        start = m.start()
         # End at the *next* milestone heading: a fixed-width window reaches into
         # whatever entry follows, so a later milestone could satisfy these
         # checks while #479 itself lost them.
@@ -255,3 +264,38 @@ def test_the_two_endpoints_of_the_chain_still_say_what_the_chain_assumes() -> No
         )
         assert proc.returncode == 0, f"{path}\n{proc.stderr}"
         assert marker in proc.stdout, f"{path} 里找不到 {marker}"
+
+
+def test_the_documents_agree_on_how_many_evidence_tests_there_are() -> None:
+    """A stated count must match the guards that actually exist.
+
+    The closeout first shipped two numbers for the same set (four and six) in
+    one batch of edits. The fix is a check, but the check has to be about the
+    number the documents care about — "the six #414 guards", named — not a glob
+    that also sweeps in unrelated files (`test_company_token_auth.py` matches a
+    `test_company_*.py` glob and is not one of them).
+    """
+    named = (
+        "test_recon_procedure_evidence.py",  # #475
+        "test_repo_index_evidence.py",  # #476
+        "test_company_entity_map.py",  # #477
+        "test_company_auth_scope.py",  # #478
+        "test_l4_order_authorization.py",  # #479
+        "test_operator_questions_triage.py",  # #480
+    )
+    for name in named:
+        assert (PROJECT_ROOT / "tests" / name).exists(), f"{name} 不见了"
+
+    # Any document that states a count for this set must state *this* count.
+    stale = []
+    for doc in (
+        "docs/agents/operator-repair-blueprint.md",
+        "docs/agents/current-delivery-state.md",
+    ):
+        text = (PROJECT_ROOT / doc).read_text(encoding="utf-8")
+        # Match the count however it is written: `四个` / `4 个` / `4个`.
+        for pattern, n in ((r"四个", 4), (r"六(?:个|\s*个)", 6), (r"\b4\s*个", 4), (r"\b6\s*个", 6)):
+            stated = re.search(pattern + r"\s*(?:证据)?测试", text)
+            if stated and n != len(named):
+                stale.append(f"{doc}: 写「{stated.group(0)}」但实际是 {len(named)} 个")
+    assert stale == [], "；".join(stale) + " —— 交割时会被漏看"
