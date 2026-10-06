@@ -80,9 +80,7 @@ def main() -> int:
         "AIOPS_HOME": str(root),
         "AIOPS_CONFIG_HOME": str(root / "config"),
         "AIOPS_DATA_HOME": str(root / "data"),
-        "PYTHONPATH": f"{repo / 'src'}{os.pathsep}{os.environ.get('PYTHONPATH', '')}".rstrip(
-            os.pathsep
-        ),
+        "PYTHONPATH": f"{repo / 'src'}{os.pathsep}{os.environ.get('PYTHONPATH', '')}".rstrip(os.pathsep),
     }
     base = f"http://127.0.0.1:{args.port}"
     out_dir = (repo / args.out).resolve()
