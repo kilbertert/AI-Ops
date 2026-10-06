@@ -797,6 +797,41 @@ def create_gateway_app(
                         "message": clarification_message(language, "order_no"),
                     }
 
+        # A language we can RENDER but not ROUTE. Thai and Khmer have no word
+        # boundaries, so `_normalize_keywords` swallows a run into pseudo-tokens
+        # and the matcher stops matching: measured, an UNRELATED Thai sentence
+        # scores a hit against a real entry (false positive), and a reworded one
+        # does not (false negative). The high-risk order cues cannot be written
+        # for these scripts at all.
+        #
+        # This is checked FIRST — ahead of EVERY model-backed route (explicit
+        # order, embedded order, active-order follow-up, promotional, FAQ match
+        # and generic QA), not just the one below it. Two reasons, both load-
+        # bearing:
+        #
+        # 1. Those routes START JOBS. A check after them returns a diagnosis job
+        #    that generates Chinese under a Thai label — exactly the silent
+        #    fallback this boundary exists to prevent.
+        # 2. The FAQ matcher is not SOUND for these scripts (measured: an
+        #    unrelated Thai sentence hits a real entry), so letting one through
+        #    would answer from a catalog entry chosen by a broken matcher.
+        #
+        # An explicit order still gets its authorization checked before this —
+        # see the order-authorization block above — so a caller cannot use the
+        # boundary to probe whether an order exists.
+        #
+        # Placed before every job, turn claim and model call, so a refused
+        # question leaves no row.
+        if not can_prompt_in(language):
+            return {
+                **decision.public(),
+                "type": "clarification",
+                "language": language,
+                "question": payload.question,
+                "missing_fields": ["language"],
+                "message": free_text_unavailable_message(language),
+            }
+
         # Route 1: explicit order → diagnosis semantics.
         if payload.order_no:
             verdict = _order_authorization(context, caller, payload.order_no)
@@ -1018,28 +1053,6 @@ def create_gateway_app(
         # routing block below must not resolve it again: a second call would be
         # paid by every short question the FAQ branch does NOT suppress, i.e.
         # exactly the safe path, and this upstream is metered per day.
-        # A language we can RENDER but not ROUTE. Thai and Khmer have no word
-        # boundaries, so `_normalize_keywords` swallows a run into pseudo-tokens
-        # and the matcher stops matching: measured, an UNRELATED Thai sentence
-        # scores a hit against a real entry (false positive), and a reworded one
-        # does not (false negative). The high-risk order cues cannot be written
-        # for these scripts at all.
-        #
-        # This is checked FIRST, before the FAQ match, precisely because that
-        # match is not sound here: running it first would let a Thai question be
-        # answered from a catalog entry chosen by a broken matcher, which is a
-        # confidently wrong answer rather than a boundary. Placed ahead of every
-        # job, turn claim and model call, so a refused question leaves no row.
-        if not can_prompt_in(language):
-            return {
-                **decision.public(),
-                "type": "clarification",
-                "language": language,
-                "question": payload.question,
-                "missing_fields": ["language"],
-                "message": free_text_unavailable_message(language),
-            }
-
         faq_id, faq_self_evident = _faq_match(decision.platform, context.faq_catalog, payload.question)
         if faq_id is not None and not faq_self_evident:
             classified = _classify_for_routing(

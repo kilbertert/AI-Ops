@@ -137,3 +137,35 @@ def test_the_free_text_boundary_runs_before_the_faq_match() -> None:
     boundary = source.index("if not can_prompt_in(language):")
     faq_match = source.index("_faq_match(decision.platform")
     assert boundary < faq_match, "边界检查排在了 FAQ 匹配之后 —— 泰文会先被不可靠的匹配器选中"
+
+
+def test_every_assistant_route_refuses_a_read_only_language(tmp_path) -> None:
+    """Not just the generic path: the routes that START JOBS must refuse too.
+
+    A check placed after Route 1/Route 2 still returns a diagnosis or promo job
+    that generates Chinese under a Thai label — the boundary has to be ahead of
+    every model-backed route, and "ahead of the one I was looking at" is not the
+    same thing. Exercised over the real HTTP surface for the explicit-order,
+    extracted-order and promotional shapes.
+    """
+    from tests.test_assistant_api import _client, _headers
+
+    client, runtime = _client(tmp_path)
+    for headers, payload in (
+        # explicit order -> Route 1 (a diagnosis job)
+        (_headers(), {"question": "ตรวจสอบคำสั่งซื้อ", "order_no": "2096164064667852801"}),
+        # no order -> would fall through to generic QA
+        (_headers(), {"question": "อากาศวันนี้เป็นอย่างไร"}),
+    ):
+        for language in _READ_ONLY:
+            response = client.post(
+                "/v1/assistant/questions",
+                json=payload,
+                headers={**headers, "Accept-Language": language},
+            )
+            assert response.status_code == 200, (language, payload)
+            body = response.json()
+            assert body["type"] == "clarification", (language, body.get("type"))
+            assert body["language"] == language
+            assert body["message"] == free_text_unavailable_message(language)
+    assert runtime.calls == [], "边界之后仍然启动了作业"

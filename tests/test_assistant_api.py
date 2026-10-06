@@ -1531,25 +1531,27 @@ def test_a_localized_catalog_title_is_not_suppressed_by_its_wording(tmp_path: Pa
         assert body["question_id"] == expected, question
 
 
-def test_a_non_promptable_language_creates_and_polls_as_the_same_language(tmp_path: Path) -> None:
-    """Creation and polling must agree, and neither may claim Thai/Khmer.
+def test_a_non_promptable_language_is_refused_before_any_job_starts(tmp_path: Path) -> None:
+    """Superseded #541's behaviour: no diagnosis job at all for Thai/Khmer.
 
-    The diagnosis runtime normalises a non-promptable language to the default
-    BEFORE storing it (#541), so the row says `zh` and the model writes Chinese.
-    Three assistant branches then overwrote that with the raw request language,
-    so creation said `th` while the row — and every later poll — said `zh`.
+    #541 normalised the language so the row and every poll agreed — but it still
+    STARTED a model job, which then wrote Chinese under a Thai label. #530
+    replaced that with a refusal at the entry: for a language the pipeline
+    cannot route, a job is a Chinese answer in disguise, however consistently
+    labelled. This test used to assert the 202; the boundary is the better
+    answer and this is the record of the change.
     """
     client, runtime = _client(tmp_path)
-    created = client.post(
+    refused = client.post(
         "/v1/assistant/questions",
         json={"question": "为什么充电突然停了", "order_no": "2096164064667852801"},
         headers={**_headers(), "Accept-Language": "th"},
     )
-    assert created.status_code == 202
-    body = created.json()
-    assert body["type"] == "diagnosis"
-    assert body["language"] == "zh", "创建响应声称泰语，而正文与存储行都是中文"
-    # The comparison that matters is with the ROW, not with a second request:
-    # the row is what every later poll reads, and the response is built from it.
-    # (`_Runtime` records what the runtime was asked to store.)
-    assert runtime.stored_language == "zh"
+    assert refused.status_code == 200
+    body = refused.json()
+    assert body["type"] == "clarification"
+    assert body["language"] == "th"
+    assert body["message"].strip() and "暂不支持" not in body["message"]
+    # No job, no turn, no model call: the stub records what it was asked to do.
+    assert runtime.calls == [], "边界之后仍然启动了作业"
+    assert not getattr(runtime, "stored_language", "")
