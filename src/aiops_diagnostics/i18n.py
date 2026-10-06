@@ -8,10 +8,85 @@ change routing semantics, or reach the incident manifest (#200 decision).
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True, slots=True)
+class LanguageSpec:
+    """One language, with the capabilities it is DECLARED to have.
+
+    A language is not one thing. The same decision — "do we support X?" — fans
+    out to consumers with different failure modes, and they are not the same
+    question:
+
+    - **rendering**: its copy may be shown to a user (a missing table entry
+      blanks a button);
+    - **prompting**: it may be injected into a model prompt (a missing entry
+      degrades answer quality, not readability);
+    - **routing**: it may take part in deterministic matching (a missing entry
+      turns a matcher into a lookup that only hits verbatim);
+    - **guarding**: its answers are subject to the Chinese-leak judgement.
+
+    One flag for all four means an operator cannot widen rendering without also
+    widening routing — the two have entirely different costs, and one of them
+    can be structurally impossible (a script with no word boundaries cannot be
+    written into a word-boundary regex).
+
+    ``is_chinese`` is a property of the LANGUAGE, never derived from "is it the
+    default". Those two coincided while the default was the only Chinese
+    language; a second Chinese script (``zh-Hant``) breaks the identity, and the
+    guard would then judge every legitimate Traditional answer a Chinese leak.
+    """
+
+    tag: str
+    name: str  # English display name, used in model prompts
+    is_chinese: bool
+    rendering: bool = True
+    prompting: bool = True
+    routing: bool = True
+    guarding: bool = True
+
+
+# THE inventory. Adding a language is one entry here plus whatever its data
+# needs — not a sweep for hand-copied tuples. Every derived constant below is
+# computed from this list, and a consumer that enumerates languages itself is a
+# defect this list exists to prevent.
+LANGUAGES: tuple[LanguageSpec, ...] = (
+    LanguageSpec("zh", "Simplified Chinese", is_chinese=True),
+    LanguageSpec("en", "English", is_chinese=False),
+    LanguageSpec("de", "German", is_chinese=False),
+    LanguageSpec("fr", "French", is_chinese=False),
+    LanguageSpec("es", "Spanish", is_chinese=False),
+    LanguageSpec("pt", "Portuguese", is_chinese=False),
+)
 
 # Must stay aligned with the i18n catalog shipped in faq_catalog.json (#200).
-SUPPORTED_LANGUAGES: tuple[str, ...] = ("zh", "en", "de", "fr", "es", "pt")
+SUPPORTED_LANGUAGES: tuple[str, ...] = tuple(spec.tag for spec in LANGUAGES)
+
+# The default is the language a request falls back to when nothing is
+# acceptable, and the authority whose text the catalogs are written in. It is
+# also Chinese — but that is a consequence, not the definition: see
+# ``is_chinese`` above for why the two must not be conflated.
 DEFAULT_LANGUAGE = "zh"
+
+_BY_TAG = {spec.tag: spec for spec in LANGUAGES}
+
+
+def language_spec(language: str) -> LanguageSpec | None:
+    """The declared spec for ``language``, or ``None`` when it is unsupported."""
+    return _BY_TAG.get(language)
+
+
+def languages_that(capability: str) -> tuple[str, ...]:
+    """Tags declaring the named capability, in inventory order.
+
+    ``languages_that("rendering")`` is the set whose copy must be complete;
+    ``languages_that("routing")`` is the smaller set a matcher may assume. A
+    consumer asks for the capability it actually needs instead of taking the
+    whole set and carving exceptions out by hand.
+    """
+    return tuple(spec.tag for spec in LANGUAGES if getattr(spec, capability))
+
 
 # CJK ideographs and CJK punctuation — what a stored Chinese value looks like
 # when it is copied into an answer meant for a reader of another language.
@@ -25,9 +100,28 @@ DEFAULT_LANGUAGE = "zh"
 # negative was a customer reading a language they could not.
 CJK_TEXT = re.compile(r"[㐀-䶿一-鿿　-〿＀-￯]")
 
-# Languages whose answers must not contain Chinese. Derived, never listed, so a
-# new supported language is covered the moment it is added.
-NON_CHINESE_LANGUAGES = frozenset(SUPPORTED_LANGUAGES) - {DEFAULT_LANGUAGE}
+
+def non_chinese_languages(specs: tuple[LanguageSpec, ...]) -> frozenset[str]:
+    """The languages whose answers the Chinese-leak guard judges.
+
+    Derived from the DECLARED ``is_chinese`` property, never from "is it the
+    default" (#527, ADR-0007's D-6).
+
+    A function rather than an inline comprehension so the RULE can be tested on
+    an inventory that distinguishes the two readings. With today's languages it
+    cannot be: `zh` is both the only Chinese language and the default, so
+    "declared Chinese" and "supported minus default" produce the same set and a
+    test over the real list would pass either way. The distinguishing case is a
+    second Chinese script — `zh-Hant` is not the default, so the old expression
+    would call it non-Chinese and the guard would replace every legitimate
+    Traditional answer with the fallback copy.
+    """
+    return frozenset(spec.tag for spec in specs if not spec.is_chinese)
+
+
+# Languages whose answers must not contain Chinese. Derived from the declared
+# property, never from "is it the default" — see `non_chinese_languages`.
+NON_CHINESE_LANGUAGES = non_chinese_languages(LANGUAGES)
 
 
 # A Chinese name glossed beside its Latin form — `TrendPower (趋势智能)`. The
@@ -73,14 +167,7 @@ def chinese_leak(text: str) -> str:
 
 
 # Human-readable names used inside model prompts (qa/diagnosis, #204).
-LANGUAGE_NAMES: dict[str, str] = {
-    "zh": "Simplified Chinese",
-    "en": "English",
-    "de": "German",
-    "fr": "French",
-    "es": "Spanish",
-    "pt": "Portuguese",
-}
+LANGUAGE_NAMES: dict[str, str] = {spec.tag: spec.name for spec in LANGUAGES}
 
 # Presentation copy for the qa retrieval fallback per language (#204).
 # zh is authoritative: a missing language falls back to the zh strings.
