@@ -3157,6 +3157,11 @@ def _shortcut_list_language(shortcuts: Any, requested: str) -> str:
     as claiming it for one fallback row — so it reports the shared language only
     when there is one, and the per-row `language` carries the truth otherwise.
     """
+    if not shortcuts:
+        # No rows means no text, so there is nothing to contradict the request:
+        # reporting the authority language here would describe a payload that
+        # does not exist.
+        return requested
     served = {item.served_language(requested) for item in shortcuts}
     return served.pop() if len(served) == 1 else DEFAULT_LANGUAGE
 

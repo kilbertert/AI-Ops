@@ -26,6 +26,9 @@ PLATFORM_FORBIDDEN = "PLATFORM_FORBIDDEN"
 PLATFORM_UNAVAILABLE = "PLATFORM_UNAVAILABLE"
 
 _LOGGER = logging.getLogger("aiops.faq")
+
+#: Per-process tally behind the aggregated missing-copy warning. See `_localized`.
+_MISSING_COPY: dict[tuple[str, str], int] = {}
 _SAFE_DATABASE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 
 
@@ -297,16 +300,23 @@ class FAQCatalog:
         fields = self._i18n[platform].get(question_id, {}).get(language or "")
         if fields is None:
             if language and language != DEFAULT_LANGUAGE:
+                # ONE warning per (platform, language), not one per entry: the
+                # whole operator catalog has no translations, so a single `de`
+                # request would otherwise log 17 warnings — 17 lines of an
+                # operator's journal that say the same thing. The count is the
+                # useful part; the per-entry detail is not.
+                _MISSING_COPY.setdefault((platform, language), 0)
+                _MISSING_COPY[(platform, language)] += 1
                 _LOGGER.warning(
-                    "FAQ copy missing: question_id=%s platform=%s language=%s",
-                    question_id,
+                    "FAQ copy missing: platform=%s language=%s missing_entries=%d",
                     platform,
                     language,
+                    _MISSING_COPY[(platform, language)],
                     extra={
                         "event": "faq_translation_missing",
-                        "question_id": question_id,
                         "platform": platform,
                         "language": language,
+                        "missing_entries": _MISSING_COPY[(platform, language)],
                     },
                 )
             return dict(entry)
@@ -340,9 +350,12 @@ class FAQCatalog:
         """
         if not language:
             return DEFAULT_LANGUAGE
-        for translations in self._i18n[platform].values():
-            if language in translations:
-                return language
+        # The LIST is in this language only when EVERY entry is — one translated
+        # entry among 28 does not make an English catalog, and claiming `en` for
+        # it would describe the 27 Chinese ones too.
+        entries = self._i18n[platform]
+        if entries and all(language in translations for translations in entries.values()):
+            return language
         return DEFAULT_LANGUAGE
 
     def entry_served_language(self, platform: str, question_id: str, language: str | None) -> str:

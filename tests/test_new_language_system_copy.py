@@ -213,3 +213,82 @@ def test_a_shortcut_row_reports_the_language_its_copy_is_in() -> None:
     assert row.public("th")["language"] == "zh"
     # And the row still renders — the fallback is not removed, only reported.
     assert row.public("th")["label"] == "客户案例"
+
+
+def _catalog_with(consumer_i18n: dict[str, dict[str, dict[str, str]]]):
+    """A minimal two-entry catalog, so list-level coverage is observable."""
+    from aiops_diagnostics.faq import FAQCatalog
+
+    def entry(qid: str, en: bool):
+        e = {
+            "question_id": qid,
+            "question": f"问题 {qid}",
+            "answer": "答案",
+            "format": "text",
+        }
+        if en:
+            e["i18n"] = {"en": {"question": "Q", "answer": "A"}}
+        return e
+
+    return FAQCatalog(
+        {
+            "faq_version": "test",
+            "platforms": {
+                "consumer": [entry("consumer.faq.q001", True), entry("consumer.faq.q002", False)],
+                "operator": [entry("operator.faq.q001", False)],
+            },
+        }
+    )
+
+
+def test_a_partially_translated_catalog_is_not_claimed_to_be_translated() -> None:
+    """The LIST is in a language only when EVERY entry is.
+
+    One translated entry among many does not make an English catalog, and
+    reporting `en` for it would describe the untranslated entries too.
+    """
+    catalog = _catalog_with({})
+    assert catalog.served_language("consumer", "en") == "zh"
+    assert catalog.served_language("consumer", "zh") == "zh"
+    # Every consumer entry translated -> the list really is English.
+    from aiops_diagnostics.faq import FAQCatalog
+
+    full = FAQCatalog(
+        {
+            "faq_version": "test",
+            "platforms": {
+                "consumer": [
+                    {
+                        "question_id": "consumer.faq.q001",
+                        "question": "问题",
+                        "answer": "答案",
+                        "format": "text",
+                        "i18n": {"en": {"question": "Q", "answer": "A"}},
+                    }
+                ],
+                "operator": [
+                    {
+                        "question_id": "operator.faq.q001",
+                        "question": "问题",
+                        "answer": "答案",
+                        "format": "text",
+                    }
+                ],
+            },
+        }
+    )
+    assert full.served_language("consumer", "en") == "en"
+
+
+def test_an_empty_shortcut_list_reports_the_requested_language(tmp_path) -> None:
+    """No rows means no text, so nothing can contradict the request.
+
+    Reporting the authority language for an empty list would describe a payload
+    that does not exist.
+    """
+    from tests.test_shortcut_api import _HEADERS, _client
+
+    client = _client(tmp_path)
+    body = client.get("/v1/shortcuts", headers={**_HEADERS, "Accept-Language": "de"}).json()
+    assert body["count"] == 0
+    assert body["language"] == "de"

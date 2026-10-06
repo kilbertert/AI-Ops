@@ -402,9 +402,16 @@ class Shortcut:
         """
         if language == DEFAULT_LANGUAGE:
             return DEFAULT_LANGUAGE
-        for values in (self.labels, self.descriptions, self.question_templates):
-            if values.get(language):
-                return language
+        # EVERY field that carries copy must have this language, not just one of
+        # them: a row with an English label and a Chinese description is not an
+        # English row, and reporting `en` would claim the description too. A
+        # field that is empty in every language (a jump action has no
+        # question_template) does not participate.
+        participating = [
+            values for values in (self.labels, self.descriptions, self.question_templates) if values
+        ]
+        if participating and all(values.get(language) for values in participating):
+            return language
         return DEFAULT_LANGUAGE
 
     def public(self, language: str) -> dict[str, Any]:
