@@ -13,38 +13,30 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True, slots=True)
 class LanguageSpec:
-    """One language, with the capabilities it is DECLARED to have.
+    """One language, with the facts a consumer actually reads.
 
-    A language is not one thing. The same decision — "do we support X?" — fans
-    out to consumers with different failure modes, and they are not the same
-    question:
+    Only the facts something READS live here. An earlier draft of this carried
+    four capability booleans (rendering / prompting / routing / guarding); three
+    of them were read by nobody, so they were declarations that could be — and
+    were — wrong without anything failing. A flag nothing consumes is worse than
+    no flag: it reads as a settled decision while encoding nothing. The
+    capabilities come back one at a time, together with the consumer that reads
+    them.
 
-    - **rendering**: its copy may be shown to a user (a missing table entry
-      blanks a button);
-    - **prompting**: it may be injected into a model prompt (a missing entry
-      degrades answer quality, not readability);
-    - **routing**: it may take part in deterministic matching (a missing entry
-      turns a matcher into a lookup that only hits verbatim);
-    - **guarding**: its answers are subject to the Chinese-leak judgement.
+    What remains is what is genuinely needed today:
 
-    One flag for all four means an operator cannot widen rendering without also
-    widening routing — the two have entirely different costs, and one of them
-    can be structurally impossible (a script with no word boundaries cannot be
-    written into a word-boundary regex).
+    - the tag and its prompt-usable name (the old ``LANGUAGE_NAMES`` table);
+    - ``is_chinese``, which the leak guard's language set is derived from.
 
     ``is_chinese`` is a property of the LANGUAGE, never derived from "is it the
-    default". Those two coincided while the default was the only Chinese
-    language; a second Chinese script (``zh-Hant``) breaks the identity, and the
-    guard would then judge every legitimate Traditional answer a Chinese leak.
+    default". Those coincided while the default was the only Chinese language; a
+    second Chinese script (``zh-Hant``) breaks the identity, and the guard would
+    then judge every legitimate Traditional answer a Chinese leak.
     """
 
     tag: str
     name: str  # English display name, used in model prompts
     is_chinese: bool
-    rendering: bool = True
-    prompting: bool = True
-    routing: bool = True
-    guarding: bool = True
 
 
 # THE inventory. Adding a language is one entry here plus whatever its data
@@ -77,30 +69,6 @@ def language_spec(language: str) -> LanguageSpec | None:
     return _BY_TAG.get(language)
 
 
-def languages_that(capability: str) -> tuple[str, ...]:
-    """Tags declaring the named capability, in inventory order.
-
-    ``languages_that("rendering")`` is the set whose copy must be complete;
-    ``languages_that("routing")`` is the smaller set a matcher may assume. A
-    consumer asks for the capability it actually needs instead of taking the
-    whole set and carving exceptions out by hand.
-    """
-    return tuple(spec.tag for spec in LANGUAGES if getattr(spec, capability))
-
-
-# CJK ideographs and CJK punctuation — what a stored Chinese value looks like
-# when it is copied into an answer meant for a reader of another language.
-#
-# Covers the CJK punctuation blocks (U+3000-303F) and the fullwidth forms
-# (U+FF00-FFEF). The fullwidth block also holds fullwidth LATIN letters, so a
-# non-Chinese answer using them as a typographic choice would be flagged — an
-# accepted, deliberate edge: fullwidth punctuation in an English answer means
-# the model is writing through a Chinese input method, and Chinese is what
-# follows. The cost of the false positive is one retry; the cost of the false
-# negative was a customer reading a language they could not.
-CJK_TEXT = re.compile(r"[㐀-䶿一-鿿　-〿＀-￯]")
-
-
 def non_chinese_languages(specs: tuple[LanguageSpec, ...]) -> frozenset[str]:
     """The languages whose answers the Chinese-leak guard judges.
 
@@ -122,6 +90,18 @@ def non_chinese_languages(specs: tuple[LanguageSpec, ...]) -> frozenset[str]:
 # Languages whose answers must not contain Chinese. Derived from the declared
 # property, never from "is it the default" — see `non_chinese_languages`.
 NON_CHINESE_LANGUAGES = non_chinese_languages(LANGUAGES)
+
+# CJK ideographs and CJK punctuation — what a stored Chinese value looks like
+# when it is copied into an answer meant for a reader of another language.
+#
+# Covers the CJK punctuation blocks (U+3000-303F) and the fullwidth forms
+# (U+FF00-FFEF). The fullwidth block also holds fullwidth LATIN letters, so a
+# non-Chinese answer using them as a typographic choice would be flagged — an
+# accepted, deliberate edge: fullwidth punctuation in an English answer means
+# the model is writing through a Chinese input method, and Chinese is what
+# follows. The cost of the false positive is one retry; the cost of the false
+# negative was a customer reading a language they could not.
+CJK_TEXT = re.compile(r"[㐀-䶿一-鿿　-〿＀-￯]")
 
 
 # A Chinese name glossed beside its Latin form — `TrendPower (趋势智能)`. The

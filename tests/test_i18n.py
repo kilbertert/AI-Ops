@@ -9,7 +9,6 @@ from aiops_diagnostics.i18n import (
     DEFAULT_LANGUAGE,
     NON_CHINESE_LANGUAGES,
     SUPPORTED_LANGUAGES,
-    languages_that,
     resolve_language,
 )
 
@@ -65,7 +64,7 @@ def test_the_language_inventory_is_self_consistent() -> None:
     hold is that the list is well-formed and that the derived constants agree
     with it — not that it happens to contain six specific tags.
     """
-    from aiops_diagnostics.i18n import LANGUAGES, language_spec, languages_that
+    from aiops_diagnostics.i18n import LANGUAGES, language_spec
 
     tags = [spec.tag for spec in LANGUAGES]
     assert len(set(tags)) == len(tags), "语言清单里有重复 tag"
@@ -78,11 +77,6 @@ def test_the_language_inventory_is_self_consistent() -> None:
     chinese = {spec.tag for spec in LANGUAGES if spec.is_chinese}
     assert set(tags) - chinese == NON_CHINESE_LANGUAGES
     assert DEFAULT_LANGUAGE in chinese, "默认语言应当是中文语系（清单里没这么声明）"
-
-    # A capability query must agree with the specs it filters.
-    for capability in ("rendering", "prompting", "routing", "guarding"):
-        expected = {spec.tag for spec in LANGUAGES if getattr(spec, capability)}
-        assert set(languages_that(capability)) == expected, capability
 
     # Every supported tag resolves to a spec with a prompt-usable display name.
     for tag in SUPPORTED_LANGUAGES:
@@ -113,13 +107,13 @@ def test_every_user_facing_table_covers_all_supported_languages(table_name: str)
     from aiops_diagnostics import i18n
 
     table = getattr(i18n, table_name)
-    missing = [lang for lang in languages_that("rendering") if lang not in table]
+    missing = [lang for lang in SUPPORTED_LANGUAGES if lang not in table]
     assert not missing, f"{table_name} is missing: {missing}"
 
     # And each language's entries must be non-empty for every key in the table.
     keys = set(table[DEFAULT_LANGUAGE])
     assert keys, f"{table_name} has no keys under the default language"
-    for lang in languages_that("rendering"):
+    for lang in SUPPORTED_LANGUAGES:
         assert set(table[lang]) == keys, (
             f"{table_name}[{lang}] keys differ from {DEFAULT_LANGUAGE}: {sorted(set(table[lang]) ^ keys)}"
         )
@@ -169,15 +163,17 @@ def test_chinese_leak_is_empty_for_ascii_and_for_english_prose() -> None:
     assert chinese_leak("") == ""
 
 
-def test_non_chinese_languages_is_derived_from_the_supported_set() -> None:
+def test_the_default_language_is_not_in_the_guarded_set() -> None:
     from aiops_diagnostics.i18n import (
         DEFAULT_LANGUAGE,
         NON_CHINESE_LANGUAGES,
-        SUPPORTED_LANGUAGES,
     )
 
     assert DEFAULT_LANGUAGE not in NON_CHINESE_LANGUAGES
-    assert set(SUPPORTED_LANGUAGES) - {DEFAULT_LANGUAGE} == set(NON_CHINESE_LANGUAGES)
+    # NOT asserted as "supported minus default": that reading is the one this
+    # change replaced. A second Chinese script makes the two disagree, and this
+    # assertion would then be pinning the wrong rule — see
+    # `test_non_chinese_set_follows_the_declared_property_not_the_default`.
 
 
 def test_prompt_only_tables_are_covered_too() -> None:
