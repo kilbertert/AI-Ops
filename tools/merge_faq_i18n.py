@@ -175,9 +175,39 @@ def _language_of_header(label: str) -> str | None:
     return _HEADER_ALIASES.get(_norm(text).lower())
 
 
+DEFAULT_FAQ_VERSION = "2026.09.12"
+
+
+def default_languages(answers_dir: Path, prefix: str, wide_table: Path) -> tuple[str, ...]:
+    """The languages this platform has BOTH a wide-table column and answers for.
+
+    Derived rather than listed: a fixed default serves whichever platform was
+    written first and fails on the other with a FileNotFoundError before it
+    reads a single entry.
+    """
+    rows, column_map = read_wide_table(wide_table)
+    available = set(column_map.values()) - {"zh"}
+    if not rows:  # pragma: no cover - the table always has rows when valid
+        return ()
+    return tuple(
+        language
+        for language in HEADER_LANGUAGES.values()
+        if language in available and (answers_dir / f"{prefix}{language}.json").is_file()
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--version", default="2026.09.12", help="new faq_version")
+    parser.add_argument(
+        "--version",
+        default=None,
+        help=(
+            "faq_version to stamp. Defaults to the catalog's CURRENT version, "
+            "so a run that changes nothing cannot roll the published revision "
+            "backward — the previous literal default predated the data and "
+            "would have regressed the version on any plain re-run."
+        ),
+    )
     parser.add_argument(
         "--xlsx",
         type=Path,
@@ -187,8 +217,13 @@ def main() -> int:
     parser.add_argument("--platform", default="consumer", choices=("consumer", "operator"))
     parser.add_argument(
         "--languages",
-        default=",".join(LANGS),
-        help="comma-separated languages to merge (must exist in the wide table)",
+        default=None,
+        help=(
+            "comma-separated languages to merge. Defaults to the languages this "
+            "platform actually has answer files for — a single fixed default "
+            "cannot serve two platforms whose translations landed at different "
+            "times (operator has vi/mn; consumer has en/de/fr/es/pt)."
+        ),
     )
     parser.add_argument(
         "--answers-dir",
@@ -199,11 +234,16 @@ def main() -> int:
     args = parser.parse_args()
 
     wide_table = args.xlsx or WIDE_TABLES[args.platform]
-    langs = tuple(part.strip() for part in args.languages.split(",") if part.strip())
+    prefix = ANSWER_PREFIX[args.platform]
+    if args.languages:
+        langs = tuple(part.strip() for part in args.languages.split(",") if part.strip())
+    else:
+        langs = default_languages(args.answers_dir, prefix, wide_table)
     if not langs:
-        raise ValueError("no languages requested")
+        raise ValueError(f"no answer files found for {args.platform} in {args.answers_dir}")
 
     catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
+    version = args.version or str(catalog.get("faq_version") or DEFAULT_FAQ_VERSION)
     entries = catalog["platforms"][args.platform]
     answers_by_lang = {
         lang: json.loads(
@@ -234,7 +274,7 @@ def main() -> int:
             existing[lang] = {"question": question, "answer": answer}
         entry["i18n"] = existing
 
-    catalog["faq_version"] = args.version
+    catalog["faq_version"] = version
     CATALOG.write_text(json.dumps(catalog, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     recommendations = json.loads(RECOMMENDATIONS.read_text(encoding="utf-8"))
@@ -247,13 +287,18 @@ def main() -> int:
         merged = dict(rec.get("i18n") or {})
         merged.update({lang: {"title": entry["i18n"][lang]["question"]} for lang in langs})
         rec["i18n"] = merged
-    recommendations["faq_version"] = args.version
+    recommendations["faq_version"] = version
     RECOMMENDATIONS.write_text(
         json.dumps(recommendations, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
     )
     print(
         json.dumps(
-            {"platform": args.platform, "languages": list(langs), "entries": len(entries)},
+            {
+                "platform": args.platform,
+                "languages": list(langs),
+                "entries": len(entries),
+                "version": version,
+            },
             ensure_ascii=False,
         )
     )
