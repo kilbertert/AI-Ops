@@ -53,6 +53,24 @@ zh 的 `root_cause` / `limitations` / `next_steps` 文案** —— 它们原先�
 - 证明：blocked/失败路径的**用户可见字段**来自有界文案表、随语言变化；内部原因不再出现在响应里。
 - **不证明**：真实链路上各失败分支是否都走到新路径（需 #542 实测）；译文质量。
 
+**网关契约验证（`verify-aiops-gateway` skill，#547 起为对外行为改动的强制项）**：
+
+在一次性数据根上跑真实 gateway（从本分支构建，非规范 checkout）。证据：
+
+```json
+{"health":{"ok":true,"service":"aiops-gateway","api_version":"v1","business_mutations":"disabled"},
+ "unauthenticated_runs_status":401,"enroll_status":201,
+ "authenticated/v1/runs":200,"authenticated/v1/agents":401}
+```
+
+**这次跑的边界必须如实说**：它证明的是**改动后 gateway 仍能启动、`/health` 契约未变、
+鉴权/注册/run 路由的准入未回归**。它**不能**证明本票的改动本身 ——
+本票改的是**诊断路径**（BLOCKED 结果、`error.message`），而该 skill 明确列出
+「`/diag/*`、模型驱动的 run、KB 活性**需要远端服务，本地不可证明**」。
+⇒ 本票的**业务效果仍未被证明**，端到端归 #542。
+
+跑完已停服务、释放 8787、删除临时数据根与 `var/` 证据目录（本仓不 gitignore `var/`，误 `git add -A` 会提交证据）。
+
 ## #535 输出语言的提示词契约只说一处（2026-10-06）
 
 **本票是提示词与契约层改动，未做真实链路（41）业务验收** —— 端到端语言效果需在 #542
