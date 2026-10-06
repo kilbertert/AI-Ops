@@ -839,7 +839,6 @@ def create_gateway_app(
                 content={
                     **base,
                     "type": "diagnosis",
-                    "language": language,
                     **(
                         {"conversation_id": conversation["conversation_id"], "turn_no": turn_no}
                         if conversation is not None and turn_no is not None
@@ -913,7 +912,6 @@ def create_gateway_app(
                         content={
                             **base,
                             "type": "diagnosis",
-                            "language": language,
                             "order_no_extracted": embedded,
                             **({"conversation_id": conversation["conversation_id"]} if conversation else {}),
                             **turn_field,
@@ -959,7 +957,6 @@ def create_gateway_app(
                         content={
                             **base,
                             "type": "diagnosis",
-                            "language": language,
                             "order_no_from_context": active_order,
                             "conversation_id": conversation["conversation_id"],
                             **({"turn_no": turn_no} if turn_no is not None else {}),

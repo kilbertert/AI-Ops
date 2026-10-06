@@ -122,3 +122,25 @@ def test_traditional_chinese_is_out_of_scope_for_this_ticket() -> None:
     and this ticket does not pretend otherwise."""
     assert "zh-Hant" not in SUPPORTED_LANGUAGES
     assert resolve_language("zh-Hant") == "zh"
+
+
+def test_every_model_prompting_route_normalises_a_non_promptable_language() -> None:
+    """`prompting=False` must hold on EVERY route that reaches a model — not
+    just the one that happened to consume the flag first.
+
+    The diagnosis face was the flag's first consumer; the assistant QA route and
+    the routing classifier reach a model too. A declaration enforced on one of
+    three consumers is not a boundary, it is a comment.
+    """
+    import inspect
+
+    from aiops_diagnostics.gateway_runtime import GatewayRuntime
+
+    normalise = "language = language if can_prompt_in(language) else DEFAULT_LANGUAGE"
+    for method in (
+        GatewayRuntime.start_standard_diagnosis,
+        GatewayRuntime.start_assistant_qa,
+        GatewayRuntime.classify_lightweight_model,
+    ):
+        source = inspect.getsource(method)
+        assert normalise in source, f"{method.__name__} 未归一化非可提示语言"

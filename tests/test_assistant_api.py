@@ -87,12 +87,21 @@ class _Runtime:
     ):
         del context, indicator_code, conversation_turn
         self.calls.append((order_no, question))
+        # The stub must STORE the language it was given, like the real runtime —
+        # which normalises it before storing. A stub that dropped it made every
+        # creation response report the request language whatever the row held,
+        # so the surface could not see the two disagree (#541 review).
+        from aiops_diagnostics.i18n import DEFAULT_LANGUAGE, can_prompt_in
+
+        stored_language = language if can_prompt_in(language) else DEFAULT_LANGUAGE
+        self.stored_language = stored_language
         return {
             "diagnosis_id": "dx_test000000000000000000000000000001",
             "order_no": order_no,
             "question": question,
             "indicator_code": None,
             "status": "queued",
+            "language": stored_language,
             "result": None,
             "error_code": None,
             "error_message": None,
@@ -1520,3 +1529,27 @@ def test_a_localized_catalog_title_is_not_suppressed_by_its_wording(tmp_path: Pa
         body = resp.json()
         assert body["type"] == "faq", question
         assert body["question_id"] == expected, question
+
+
+def test_a_non_promptable_language_creates_and_polls_as_the_same_language(tmp_path: Path) -> None:
+    """Creation and polling must agree, and neither may claim Thai/Khmer.
+
+    The diagnosis runtime normalises a non-promptable language to the default
+    BEFORE storing it (#541), so the row says `zh` and the model writes Chinese.
+    Three assistant branches then overwrote that with the raw request language,
+    so creation said `th` while the row — and every later poll — said `zh`.
+    """
+    client, runtime = _client(tmp_path)
+    created = client.post(
+        "/v1/assistant/questions",
+        json={"question": "为什么充电突然停了", "order_no": "2096164064667852801"},
+        headers={**_headers(), "Accept-Language": "th"},
+    )
+    assert created.status_code == 202
+    body = created.json()
+    assert body["type"] == "diagnosis"
+    assert body["language"] == "zh", "创建响应声称泰语，而正文与存储行都是中文"
+    # The comparison that matters is with the ROW, not with a second request:
+    # the row is what every later poll reads, and the response is built from it.
+    # (`_Runtime` records what the runtime was asked to store.)
+    assert runtime.stored_language == "zh"

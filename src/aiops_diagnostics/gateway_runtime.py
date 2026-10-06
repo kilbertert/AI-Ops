@@ -578,6 +578,13 @@ class GatewayRuntime:
     ) -> dict[str, Any]:
         """Start a zero-order general-question job (T3/#153).
 
+        ``language`` is normalised to one this pipeline can prompt in, for the
+        same reason the diagnosis runtime does it: Thai and Khmer can be RENDERED
+        but not reliably ROUTED, so a claim to answer in them is one the rest of
+        the pipeline cannot back. The declaration alone would not have stopped
+        this route — the diagnosis face was its first consumer, and this is its
+        second (#541 review).
+
         With ``conversation`` + ``conversation_turn_no`` (T4/#172) the finished
         answer is written back into the conversation's turn row; failures drop
         the turn so an interrupted generation never survives as a reply.
@@ -590,6 +597,7 @@ class GatewayRuntime:
         greeting must not trigger a library lookup just because the run happens
         to have search capability wired.
         """
+        language = language if can_prompt_in(language) else DEFAULT_LANGUAGE
         selected_provider = self.diagnostic_settings.agent.select_provider(None)
         selected_key_slot = validate_key_slot_name(selected_provider.resolved_key_slot())
         if selected_key_slot not in self.allowed_key_slots:
@@ -688,6 +696,8 @@ class GatewayRuntime:
         beside the old one so neither has to be right on the first day. Delete
         once Jev has run on real traffic for an agreed window.
         """
+        language = language if can_prompt_in(language) else DEFAULT_LANGUAGE
+
         settings = Settings.from_config(self.gateway_settings.server_config_file)
         settings.agent.run_root = self.diagnostic_settings.agent.run_root
         provider = settings.agent.select_provider(None)
