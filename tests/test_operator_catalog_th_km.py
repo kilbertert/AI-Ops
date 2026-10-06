@@ -269,11 +269,10 @@ class _Jobs:
 def _client(tmp_path, *, allowed_orders: set[str] | None = None):
     from fastapi.testclient import TestClient
 
-    from aiops_diagnostics.faq import FAQCatalog
+    from aiops_diagnostics.faq import FAQCatalog, PlatformIdentityResolver
     from aiops_diagnostics.gateway_api import create_gateway_app
     from aiops_diagnostics.gateway_config import GatewayServerSettings
     from aiops_diagnostics.gateway_store import GatewayStore
-    from aiops_diagnostics.faq import PlatformIdentityResolver
 
     settings = GatewayServerSettings(
         data_home=tmp_path,
