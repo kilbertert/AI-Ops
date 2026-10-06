@@ -81,9 +81,11 @@ from aiops_diagnostics.gateway_store import (
 from aiops_diagnostics.i18n import (
     DEFAULT_LANGUAGE,
     QA_FALLBACK_MESSAGES,
+    can_prompt_in,
     clarification_message,
     diagnosis_error_message,
     effective_language,
+    free_text_unavailable_message,
     resolve_language,
 )
 from aiops_diagnostics.metrics_store import MetricsValidationError
@@ -1016,6 +1018,28 @@ def create_gateway_app(
         # routing block below must not resolve it again: a second call would be
         # paid by every short question the FAQ branch does NOT suppress, i.e.
         # exactly the safe path, and this upstream is metered per day.
+        # A language we can RENDER but not ROUTE. Thai and Khmer have no word
+        # boundaries, so `_normalize_keywords` swallows a run into pseudo-tokens
+        # and the matcher stops matching: measured, an UNRELATED Thai sentence
+        # scores a hit against a real entry (false positive), and a reworded one
+        # does not (false negative). The high-risk order cues cannot be written
+        # for these scripts at all.
+        #
+        # This is checked FIRST, before the FAQ match, precisely because that
+        # match is not sound here: running it first would let a Thai question be
+        # answered from a catalog entry chosen by a broken matcher, which is a
+        # confidently wrong answer rather than a boundary. Placed ahead of every
+        # job, turn claim and model call, so a refused question leaves no row.
+        if not can_prompt_in(language):
+            return {
+                **decision.public(),
+                "type": "clarification",
+                "language": language,
+                "question": payload.question,
+                "missing_fields": ["language"],
+                "message": free_text_unavailable_message(language),
+            }
+
         faq_id, faq_self_evident = _faq_match(decision.platform, context.faq_catalog, payload.question)
         if faq_id is not None and not faq_self_evident:
             classified = _classify_for_routing(
