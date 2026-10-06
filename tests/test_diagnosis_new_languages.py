@@ -72,9 +72,9 @@ def test_a_non_promptable_request_is_normalised_at_job_creation(language: str) -
     source = inspect.getsource(GatewayRuntime.start_standard_diagnosis)
     # The normalisation is one line with one consumer; asserted verbatim so that
     # moving it to render time (which would break the stored value) fails here.
-    assert "language = language if can_prompt_in(language) else DEFAULT_LANGUAGE" in source
+    assert "language = effective_language(language)" in source
     # And it is applied before the row is created.
-    assert source.index("can_prompt_in(language)") < source.index("create_standard_diagnosis")
+    assert source.index("effective_language(language)") < source.index("create_standard_diagnosis")
     # The destination it falls back to is a language the surface can prompt.
     from aiops_diagnostics.i18n import DEFAULT_LANGUAGE
 
@@ -136,7 +136,7 @@ def test_every_model_prompting_route_normalises_a_non_promptable_language() -> N
 
     from aiops_diagnostics.gateway_runtime import GatewayRuntime
 
-    normalise = "language = language if can_prompt_in(language) else DEFAULT_LANGUAGE"
+    normalise = "language = effective_language(language)"
     for method in (
         GatewayRuntime.start_standard_diagnosis,
         GatewayRuntime.start_assistant_qa,
@@ -144,3 +144,20 @@ def test_every_model_prompting_route_normalises_a_non_promptable_language() -> N
     ):
         source = inspect.getsource(method)
         assert normalise in source, f"{method.__name__} 未归一化非可提示语言"
+
+
+def test_the_qa_response_boundary_reports_the_effective_language() -> None:
+    """The generator normalising is not enough — the REPORTING must match it.
+
+    For `Accept-Language: th` the QA worker now generates Chinese, but
+    `_assistant_question_response` still echoed `th`, so the payload claimed a
+    language its answer did not contain. Both ends read one definition
+    (`effective_language`), which is what keeps them from drifting apart again.
+    """
+    from aiops_diagnostics.gateway_api import _assistant_question_response
+
+    row = {"qa_id": "qa_1", "question": "q", "status": "completed", "result": {"text": "答案"}}
+    for language in _NOT_PROMPTABLE:
+        assert _assistant_question_response(dict(row), language)["language"] == "zh", language
+    for language in _PROMPTABLE:
+        assert _assistant_question_response(dict(row), language)["language"] == language

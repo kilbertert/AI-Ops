@@ -32,7 +32,7 @@ from aiops_diagnostics.health_report import (
 from aiops_diagnostics.i18n import (
     DEFAULT_LANGUAGE,
     QA_FALLBACK_MESSAGES,
-    can_prompt_in,
+    effective_language,
 )
 from aiops_diagnostics.jev_decisions import JevDecisionClient, JevSettings
 from aiops_diagnostics.journal import EvidenceJournal
@@ -367,7 +367,7 @@ class GatewayRuntime:
         (``start_assistant_qa``) already has. Without it nothing about the
         conversation changes.
         """
-        language = language if can_prompt_in(language) else DEFAULT_LANGUAGE
+        language = effective_language(language)
         selected_provider = self.diagnostic_settings.agent.select_provider(None)
         selected_key_slot = validate_key_slot_name(selected_provider.resolved_key_slot())
         if selected_key_slot not in self.allowed_key_slots:
@@ -597,7 +597,7 @@ class GatewayRuntime:
         greeting must not trigger a library lookup just because the run happens
         to have search capability wired.
         """
-        language = language if can_prompt_in(language) else DEFAULT_LANGUAGE
+        language = effective_language(language)
         selected_provider = self.diagnostic_settings.agent.select_provider(None)
         selected_key_slot = validate_key_slot_name(selected_provider.resolved_key_slot())
         if selected_key_slot not in self.allowed_key_slots:
@@ -696,7 +696,7 @@ class GatewayRuntime:
         beside the old one so neither has to be right on the first day. Delete
         once Jev has run on real traffic for an agreed window.
         """
-        language = language if can_prompt_in(language) else DEFAULT_LANGUAGE
+        language = effective_language(language)
 
         settings = Settings.from_config(self.gateway_settings.server_config_file)
         settings.agent.run_root = self.diagnostic_settings.agent.run_root

@@ -94,6 +94,20 @@ def can_prompt_in(language: str) -> bool:
     return bool(spec and spec.prompting)
 
 
+def effective_language(language: str | None) -> str:
+    """The language a model-backed answer will actually be written in.
+
+    One definition, used both where a job is created and where its response is
+    rendered. Splitting those two is how a `th` request came back reporting `th`
+    while the answer was Chinese: the generator normalised and the reporter did
+    not (#541 review). To the caller, "we cannot prompt in Thai" and "we did not
+    answer in Thai" are the same statement.
+    """
+    if language and can_prompt_in(language):
+        return language
+    return DEFAULT_LANGUAGE
+
+
 def language_spec(language: str) -> LanguageSpec | None:
     """The declared spec for ``language``, or ``None`` when it is unsupported."""
     return _BY_TAG.get(language)
