@@ -82,3 +82,77 @@ def test_an_explicit_version_still_wins() -> None:
         assert _run("--version", "2099.01.01")["version"] == "2099.01.01"
     finally:
         _restore(original, recommendations)
+
+
+def _run_expecting_failure(*args: str) -> str:
+    result = subprocess.run(
+        [sys.executable, str(TOOL), *args],
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+        check=False,
+    )
+    assert result.returncode != 0, f"预期失败但成功了：{result.stdout[-200:]}"
+    return result.stdout + result.stderr
+
+
+def test_changed_copy_without_an_explicit_version_is_refused() -> None:
+    """New copy must not ship under the OLD revision.
+
+    Preserving the current version on an unchanged rerun is right; preserving it
+    when the copy changed is not — consumers comparing `faq_version` see no
+    update at all. The tool refuses BEFORE writing, so a refused run leaves the
+    tree exactly as it found it.
+    """
+    answers = ROOT / "tools" / "faq_i18n" / "operator_answers_vi.json"
+    original_answers = answers.read_text(encoding="utf-8")
+    catalog = CATALOG.read_text(encoding="utf-8")
+    recommendations = RECOMMENDATIONS.read_text(encoding="utf-8")
+    try:
+        payload = json.loads(original_answers)
+        payload["operator.faq.q001"] = payload["operator.faq.q001"] + " (edited)"
+        answers.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+
+        message = _run_expecting_failure("--platform", "operator")
+        assert "--version" in message
+        # And nothing was written on the way out.
+        assert CATALOG.read_text(encoding="utf-8") == catalog
+    finally:
+        answers.write_text(original_answers, encoding="utf-8")
+        _restore(catalog, recommendations)
+
+
+def test_a_missing_answer_file_is_refused_rather_than_silently_dropped() -> None:
+    """A language that is already published may not vanish by omission.
+
+    `default_languages` discovers what has an answer file TODAY. If one went
+    missing, merging the rest and preserving the old entries leaves copy that no
+    longer matches its source, and the run says nothing — the worst outcome,
+    because it looks like a successful run.
+    """
+    answers = ROOT / "tools" / "faq_i18n" / "operator_answers_vi.json"
+    hidden = answers.with_suffix(".hidden")
+    catalog = CATALOG.read_text(encoding="utf-8")
+    recommendations = RECOMMENDATIONS.read_text(encoding="utf-8")
+    try:
+        answers.rename(hidden)
+        message = _run_expecting_failure("--platform", "operator")
+        assert "vi" in message
+        assert CATALOG.read_text(encoding="utf-8") == catalog
+    finally:
+        hidden.rename(answers)
+        _restore(catalog, recommendations)
+
+
+def test_removing_a_language_is_allowed_when_asked_for_explicitly() -> None:
+    """Refusing by omission must not make a deliberate removal impossible."""
+    answers = ROOT / "tools" / "faq_i18n" / "operator_answers_vi.json"
+    hidden = answers.with_suffix(".hidden")
+    catalog = CATALOG.read_text(encoding="utf-8")
+    recommendations = RECOMMENDATIONS.read_text(encoding="utf-8")
+    try:
+        answers.rename(hidden)
+        assert _run("--platform", "operator", "--languages", "mn")["languages"] == ["mn"]
+    finally:
+        hidden.rename(answers)
+        _restore(catalog, recommendations)

@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import re
 import zipfile
@@ -245,6 +246,20 @@ def main() -> int:
     catalog = json.loads(CATALOG.read_text(encoding="utf-8"))
     version = args.version or str(catalog.get("faq_version") or DEFAULT_FAQ_VERSION)
     entries = catalog["platforms"][args.platform]
+
+    # A default run must not silently DROP a language that is already published.
+    # `default_languages` discovers what has an answer file today; if one went
+    # missing, merging the rest and preserving the old entries leaves copy that
+    # no longer matches its source, and the run says nothing. Removing a
+    # language is a deliberate act: name it explicitly in `--languages`.
+    if not args.languages:
+        published = sorted({lang for entry in entries for lang in (entry.get("i18n") or {})})
+        dropped = [lang for lang in published if lang not in langs]
+        if dropped:
+            raise ValueError(
+                f"{args.platform}: 已发布的语言 {dropped} 没有答案文件；"
+                "若确实要移除，请在 --languages 里显式列出要保留的语言"
+            )
     answers_by_lang = {
         lang: json.loads(
             (args.answers_dir / f"{ANSWER_PREFIX[args.platform]}{lang}.json").read_text(encoding="utf-8")
@@ -256,6 +271,10 @@ def main() -> int:
         raise ValueError(
             f"wide table has {len(rows)} rows, catalog {args.platform} has {len(entries)} entries"
         )
+
+    # Snapshot BEFORE the in-place merge below: `entries` holds the same dicts
+    # the catalog does, so a later comparison would compare the result to itself.
+    original_platforms = copy.deepcopy(catalog["platforms"][args.platform])
 
     for entry, row in zip(entries, rows, strict=True):
         qid = entry["question_id"]
@@ -274,6 +293,12 @@ def main() -> int:
             existing[lang] = {"question": question, "answer": answer}
         entry["i18n"] = existing
 
+    changed = catalog["platforms"][args.platform] != original_platforms
+    if changed and args.version is None:
+        raise ValueError(
+            "内容已变化但没有给 --version：用当前修订号发布新内容，会让按版本号"
+            "比较的调用方看不到这次更新。请显式指定新版本。"
+        )
     catalog["faq_version"] = version
     CATALOG.write_text(json.dumps(catalog, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
