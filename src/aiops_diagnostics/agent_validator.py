@@ -17,7 +17,7 @@ from aiops_diagnostics.answer_language import (
     AnswerSurface,
     answer_chinese_leak,
 )
-from aiops_diagnostics.i18n import DEFAULT_LANGUAGE
+from aiops_diagnostics.i18n import DEFAULT_LANGUAGE, diagnosis_failure_message
 from aiops_diagnostics.journal import EvidenceJournal, JournalEntry
 from aiops_diagnostics.redaction import contains_secret
 
@@ -167,21 +167,37 @@ class AgentResultValidator:
             )
         return errors
 
-    def blocked_result(self, reason: str) -> AgentDiagnosis:
+    def blocked_result(self, failure_key: str) -> AgentDiagnosis:
+        """The delivery contract for a run that produced no conclusion.
+
+        ``failure_key`` selects from a CLOSED set of user-facing endings; it is
+        not the engine's free-text reason. The precise reason belongs in the run
+        record (`_finish_blocked` records it as a `diagnosis_blocked` event), not
+        in text handed to a 管家端 user — those reasons name tool budgets,
+        evidence IDs and contract rules, which tell the user nothing about their
+        order and arrive in whatever language the harness was written in.
+
+        This is the same engineer/user split the codebase already applies to a
+        QA failure: the record is read by an engineer, the response by a user.
+
+        The language comes from ``self.language`` — the validator has always
+        held it, but this path never used it.
+        """
         entries = self.journal.entries()
+        text = diagnosis_failure_message(self.language, failure_key)
         return AgentDiagnosis(
             incident_id=self.manifest.incident_id,
             order_no=self.manifest.order_no,
             tenant_id=self.manifest.tenant_id,
             status=DiagnosisStatus.BLOCKED,
-            summary="诊断运行未能生成满足证据合同的结论",
-            root_cause=reason,
+            summary=text,
+            root_cause=text,
             confidence=Confidence.LOW,
             evidence_ids=[entry.evidence_id for entry in entries],
             hypotheses=[],
-            limitations=[reason],
+            limitations=[text],
             failed_sources=self.journal.failed_sources(),
-            next_steps=["由工程师检查运行事件和证据日志后决定是否恢复同一诊断线程"],
+            next_steps=[text],
         )
 
     def _artifact_valid(self, entry: JournalEntry) -> bool:

@@ -408,3 +408,54 @@ def test_an_unsupported_language_is_left_alone_by_the_shared_exit(tmp_path: Path
     errors = AgentResultValidator(manifest, journal, language="ja").validate(leaked)
 
     assert not any("中文字符" in error for error in errors)
+
+
+# --------------------------------------------------------------------------
+# #536: the blocked result is bounded, localized, and free of engine internals.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("language", ["zh", "en", "de", "fr", "es", "pt"])
+def test_blocked_result_states_a_bounded_ending_in_the_run_language(language: str, tmp_path: Path) -> None:
+    """Every user-facing field of a blocked run follows the run's language.
+
+    They used to be four Chinese literals, with `root_cause` / `limitations`
+    carrying the engine's own reason verbatim — a tool-call budget, a contract
+    rule, a list of evidence IDs. A 管家端 user met engine internals, in the
+    harness's authoring language, on the screen that was supposed to explain
+    their order.
+    """
+    from aiops_diagnostics.i18n import diagnosis_failure_message
+
+    manifest, journal, _ = _context(tmp_path)
+    validator = AgentResultValidator(manifest, journal, language=language)
+
+    result = validator.blocked_result("insufficient_evidence")
+    expected = diagnosis_failure_message(language, "insufficient_evidence")
+
+    assert result.summary == expected
+    assert result.root_cause == expected
+    assert result.limitations == [expected]
+    assert result.next_steps == [expected]
+    if language != "zh":
+        for text in (result.summary, result.root_cause, result.next_steps[0]):
+            assert not any("一" <= ch <= "鿿" for ch in text), f"{language} 拿到中文兜底"
+
+
+def test_blocked_result_never_echoes_engine_detail(tmp_path: Path) -> None:
+    """An engine detail string must not appear in any user-facing field.
+
+    `blocked_result` takes a bounded KEY. This asserts the property directly:
+    even if a caller passes something long and engine-shaped, what the user
+    fields contain is a bounded sentence from the closed table.
+    """
+    from aiops_diagnostics.i18n import DIAGNOSIS_FAILURE_MESSAGES
+
+    manifest, journal, _ = _context(tmp_path)
+    validator = AgentResultValidator(manifest, journal, language="en")
+
+    # Whatever key is passed, the rendered text is one of the known endings.
+    known = set(DIAGNOSIS_FAILURE_MESSAGES["en"].values())
+    result = validator.blocked_result("incomplete")
+    assert result.root_cause in known
+    assert result.summary in known

@@ -409,6 +409,13 @@ def test_get_diagnosis_surfaces_the_out_of_scope_code_with_an_unchanged_shape(tm
         "completed_at",
     }
     assert set(body["error"]) == {"code", "message", "retryable"}
+    # The CODE is the contract a client branches on, and it is unchanged.
     assert body["error"]["code"] == DIAGNOSIS_ORDER_OUT_OF_SCOPE
-    assert body["error"]["message"] == "order is outside the authorized tenant scope"
+    # The MESSAGE is a bounded, localized sentence chosen by that code — NOT
+    # the stored `error_message`, which is an engineer's note. This surface
+    # already promised it carries no internal run information
+    # (standard-api-contract.md §error.message), and it used to return the
+    # stored string verbatim.
+    assert body["error"]["message"] == "该订单不在当前授权范围内。"
+    assert "order is outside the authorized tenant scope" not in body["error"]["message"]
     assert body["result"] is None

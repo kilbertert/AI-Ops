@@ -567,3 +567,26 @@ def test_absent_provenance_still_falls_back_to_the_shape_rule() -> None:
     block = {"kind": "image", "title": "重卡充电案例", "text": ""}
     no_provenance = AnswerSurface.from_public_blocks([block])
     assert answer_chinese_leak(no_provenance, "en") == ""
+
+
+# --------------------------------------------------------------------------
+# #536: a blocked diagnosis states a bounded ending, in the run's language.
+# --------------------------------------------------------------------------
+
+
+def test_diagnosis_error_message_never_returns_stored_internal_text() -> None:
+    """`error.message` is chosen by CODE, not copied from the record.
+
+    The stored `error_message` is an engineer's note (an upstream exception
+    string). Returning it verbatim is what the contract forbids.
+    """
+    from aiops_diagnostics.i18n import diagnosis_error_message
+
+    internal = "RuntimeError: provider returned 429 <html>stack</html>"
+    for code in ("DIAGNOSIS_FAILED", "DIAGNOSIS_ORDER_OUT_OF_SCOPE", "DIAGNOSIS_DEADLINE", None):
+        for language in ("zh", "en", "de", "fr", "es", "pt"):
+            message = diagnosis_error_message(language, code)
+            assert message.strip()
+            assert internal not in message
+            assert "429" not in message
+            assert "<html>" not in message
