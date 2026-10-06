@@ -15,6 +15,16 @@ Requirements:
    behavior you change.
 3. Run `uv sync --extra dev && uv run pytest && uv run ruff check` before
    committing. Do not weaken or skip checks.
+
+This repo HAS a project verification skill, `.claude/skills/verify-aiops-gateway`.
+If your change alters the Gateway's outward behavior (routes, auth, enrollment,
+response shapes), run that skill and capture its evidence before committing.
+Tests are not a substitute: it runs the real gateway on a throwaway data root and
+drives it over HTTP. **Never point it at the real AIOPS_DATA_HOME, and never
+record a device token in evidence or a commit.** It cannot prove `/diag/*` real
+diagnosis, model-backed runs, or KB liveness — say so rather than implying
+coverage. If you cannot run it, say so and why in the commit body; do not report
+it as done.
 4. Run `node .sandcastle/policy-check.mjs commit` before committing.
 5. Inspect `git diff --check` and the changed-file list before committing.
 6. Commit the completed work with a Conventional Commit message.
