@@ -7,6 +7,45 @@
 
 
 
+
+## afk-bootstrap 1.4.0 迁移：CONTEXT.md → GLOSSARY.md（2026-10-06）
+
+**本次为纯命名迁移，无产品代码或运行行为变化，因此没有真实故障案例。**
+按要求明确：**未完成业务验收**；以下仅为自动化验证。
+
+**自动化检查**：
+
+| 检查 | 命令 | 结果 |
+|---|---|---|
+| 全量单测 | `uv run python -m pytest -q` | 退出码 0；输出与迁移前基线**逐字节一致**，无 FAILED |
+| 迁移结果 | 见下三条 | 见下 |
+
+**迁移结果的判据（三条，均已实际执行）**：
+
+`grep -rn 'CONTEXT.md'` **不能**用作判据 —— 本页与 `docs/开发进度.md` 的记录本身就在
+叙述这次改名，必然命中自己。改用：
+
+```
+# A 指向旧文件的 Markdown 链接：必须为空
+grep -rn '](CONTEXT\.md)' . --exclude-dir=.git --exclude-dir=.venv
+    -> 空
+
+# B 两处记录文件之外的裸文件名：必须为空
+grep -rn 'CONTEXT\.md' . --exclude-dir=.git --exclude-dir=.venv \
+  | grep -vE 'validation\.md|开发进度\.md'
+    -> 空（迁移前此项列出 README.md / AGENTS.md / docs/afk-workflow.md /
+       docs/handoff-brief.md / tests/... 等）
+
+# C 文件状态
+    -> CONTEXT.md 不存在；GLOSSARY.md 存在
+```
+
+**对照方式说明**：基线取自迁移前的 `main` 检出，与本 worktree 跑同一条 pytest 命令，
+逐字节 diff 输出。worktree 下需 `uv sync --extra dev` 且显式 `PYTHONPATH`
+（editable install 在 worktree 中不自动生效），这是环境差异，与本次改动无关。
+
+**没有构造任何反向对照**：本次没有需要证伪的假设，故未编造对照。
+
 ## #499 诊断线的取消操作（2026-10-02）
 
 **新增** `POST /v1/standard/diagnoses/{diagnosis_id}/cancel`，与 qa 线的取消**同构**。
@@ -1253,7 +1292,7 @@ PRD §1 数过：四张表、五份同形过期 SQL、两种极性的 claim-guar
 
 ## #486 平台身份判定三份合一份（2026-09-30）
 
-`CONTEXT.md` 对「平台身份判定」有权威定义，并附 `Avoid: 客户端自报 platform`。这条规则在网关层
+`GLOSSARY.md` 对「平台身份判定」有权威定义，并附 `Avoid: 客户端自报 platform`。这条规则在网关层
 被抄了三遍：`faq_identity` 与 `assistant_identity` 的 22 行**逐字节相同**，`shortcut_identity`
 与它们相差**且仅相差**一行 —— 一个返回对象，一个返回 `str(decision.platform)`。
 
@@ -5454,7 +5493,7 @@ INVALID_ACCESS_TOKEN`，符合公开合同。
 ### 关联
 
 - 规格 #260；切片 #261（字段）、#262（入口守卫）、#263（契约/领域模型/ADR）、#264（本验收）。
-- 领域模型变更见 `CONTEXT.md`「提示动作/跳转动作」与 `docs/adr/0006-shortcut-actions-extend-to-in-app-navigation.md`。
+- 领域模型变更见 `GLOSSARY.md`「提示动作/跳转动作」与 `docs/adr/0006-shortcut-actions-extend-to-in-app-navigation.md`。
 - 前端契约见 `docs/agents/frontend-api-brief.md` D.1/D.2a。
 
 ## 宣传动作「空库」误报修复与 41 实测（2026-09-16，PR #270）
@@ -6617,7 +6656,7 @@ OP-ACCEPT-POS-01..04 与本文末节，不用消费者会话或人造夹具冒�
 
 - 新增 `docs/agents/company-platform-integration-baseline.md`（立项根基：现状、证据、
   六条决定、五条未决）。
-- `ADR-0003` 的两处 README 引用、`CONTEXT.md` 的「身份委托句柄」词条、`ADR-0004` 各加
+- `ADR-0003` 的两处 README 引用、`GLOSSARY.md` 的「身份委托句柄」词条、`ADR-0004` 各加
   「未实现 / 目标形态」标注 —— 这是 ADR-0008 早已要求却一直没做到的
   （「任何提到会话身份的地方，要么写明偏离，要么不声称来源」）。
 - **本轮不改部署拓扑**（那是入口变更，需独立验收与回滚）；目标态已入档。
@@ -7075,3 +7114,4 @@ vhost 与令牌文件的新形状**保留**（客户端链路实测仍 200）。
 为了反驳这条结论，我构造的对照**复用了同一个 900 秒签名窗口** ⇒ 令牌已过期 ⇒ 401
 ⇒ 我据此断言「钥匙不是默认值」。**我把自己刚建立的隔离扔掉了**，把一个已知会独立造成 401
 的变量（`exp`）重新混进对照，从而得到一个支持我的观测。判据一旦建立，**反方向也必须用它来证**。
+
