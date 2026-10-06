@@ -280,15 +280,26 @@ def test_a_partially_translated_catalog_is_not_claimed_to_be_translated() -> Non
     assert full.served_language("consumer", "en") == "en"
 
 
-def test_an_empty_shortcut_list_reports_the_requested_language(tmp_path) -> None:
+def test_an_empty_shortcut_list_reports_the_requested_language() -> None:
     """No rows means no text, so nothing can contradict the request.
 
     Reporting the authority language for an empty list would describe a payload
-    that does not exist.
+    that does not exist. Asserted on the rule directly: the wiring is a
+    one-liner that passes the rows it just read, and the non-empty cases are
+    covered end-to-end through the listing endpoint above.
     """
-    from tests.test_shortcut_api import _HEADERS, _client
+    from aiops_diagnostics.gateway_api import _shortcut_list_language
 
-    client = _client(tmp_path)
-    body = client.get("/v1/shortcuts", headers={**_HEADERS, "Accept-Language": "de"}).json()
-    assert body["count"] == 0
-    assert body["language"] == "de"
+    assert _shortcut_list_language([], "de") == "de"
+
+    class _Row:
+        def __init__(self, served: str) -> None:
+            self._served = served
+
+        def served_language(self, requested: str) -> str:
+            return self._served
+
+    # All rows agree -> that language; otherwise the authority language, because
+    # one field cannot describe a mixed list.
+    assert _shortcut_list_language([_Row("th"), _Row("th")], "th") == "th"
+    assert _shortcut_list_language([_Row("th"), _Row("zh")], "th") == "zh"
