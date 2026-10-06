@@ -390,6 +390,23 @@ class Shortcut:
     updated_at: str
     scope: str = TENANT_SCOPE
 
+    def served_language(self, language: str) -> str:
+        """The language this row's copy can actually be served in.
+
+        A row published before a language existed has no copy for it, and
+        `_localized_field` falls back to zh. The listing echoes a language, so
+        it must echo the one the TEXT is in — reporting the requested tag while
+        sending Chinese is the defect this whole workstream exists to remove,
+        and it survives in every already-published row unless the listing
+        reports the fallback instead of hiding it.
+        """
+        if language == DEFAULT_LANGUAGE:
+            return DEFAULT_LANGUAGE
+        for values in (self.labels, self.descriptions, self.question_templates):
+            if values.get(language):
+                return language
+        return DEFAULT_LANGUAGE
+
     def public(self, language: str) -> dict[str, Any]:
         """Public listing shape: stable code + localized text for ONE language.
 
@@ -408,6 +425,11 @@ class Shortcut:
             _warn_missing_translation(self, language, field, value)
         return {
             "code": self.code,
+            # The language THIS row's copy is in — the requested one when the
+            # row has it, the authority language when it does not. Per-row and
+            # not only per-list: rows are published independently, so one
+            # listing can carry a translated row beside an untranslated one.
+            "language": self.served_language(language),
             "intent": self.intent,
             "requires_order": self.requires_order,
             "sort_order": self.sort_order,

@@ -277,11 +277,38 @@ class FAQCatalog:
         question_id: str,
         language: str | None,
     ) -> dict[str, Any]:
+        """One entry in ``language``, reporting any fallback that happened.
+
+        The returned mapping carries ``language`` set to the language the text
+        is ACTUALLY in — which is ``DEFAULT_LANGUAGE`` when this entry has no
+        translation for the request. That is not cosmetic: the response echoes
+        this value, so reporting the REQUESTED language while serving Chinese
+        makes the payload lie about its own content. It is the same rule the
+        diagnosis surface follows for its stored prose.
+
+        The fallback is also recorded, because a surface whose copy is missing
+        in a supported language must be findable rather than merely tolerable.
+        Until this change it was silent, so a language could ship with every
+        endpoint echoing it and every FAQ entry in Chinese.
+        """
         entry = self._entries[platform].get(question_id)
         if entry is None:
             raise FAQError("FAQ question was not found")
         fields = self._i18n[platform].get(question_id, {}).get(language or "")
         if fields is None:
+            if language and language != DEFAULT_LANGUAGE:
+                _LOGGER.warning(
+                    "FAQ copy missing: question_id=%s platform=%s language=%s",
+                    question_id,
+                    platform,
+                    language,
+                    extra={
+                        "event": "faq_translation_missing",
+                        "question_id": question_id,
+                        "platform": platform,
+                        "language": language,
+                    },
+                )
             return dict(entry)
         return {
             "question_id": question_id,
@@ -302,6 +329,34 @@ class FAQCatalog:
         variants = [entry["question"]]
         variants.extend(fields["question"] for fields in self._i18n[platform].get(question_id, {}).values())
         return tuple(variants)
+
+    def served_language(self, platform: str, language: str | None) -> str:
+        """The language this platform's catalog can actually serve.
+
+        The catalog is per-platform: `operator` carries no translations at all,
+        so a `de` request there is served Chinese whatever the request said.
+        Exposed so a response can report the language of the text it is about
+        to send (see `_localized`).
+        """
+        if not language:
+            return DEFAULT_LANGUAGE
+        for translations in self._i18n[platform].values():
+            if language in translations:
+                return language
+        return DEFAULT_LANGUAGE
+
+    def entry_served_language(self, platform: str, question_id: str, language: str | None) -> str:
+        """The language ONE entry's text is actually in.
+
+        The catalog/recommendation entry SHAPE stays four keys — widening it for
+        a response-level concern would change a documented contract (a test
+        pins it). So the answer endpoint asks here instead, and the entry itself
+        stays what it always was.
+        """
+        if not language or language == DEFAULT_LANGUAGE:
+            return DEFAULT_LANGUAGE
+        translations = self._i18n[platform].get(question_id, {})
+        return language if language in translations else DEFAULT_LANGUAGE
 
     def recommendations(self, platform: str, language: str | None = None) -> list[dict[str, Any]]:
         return [

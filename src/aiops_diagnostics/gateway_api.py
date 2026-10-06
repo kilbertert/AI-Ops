@@ -669,7 +669,7 @@ def create_gateway_app(
         _, decision = identity
         return {
             **decision.public(),
-            "language": language,
+            "language": context.faq_catalog.served_language(decision.platform, language),
             "faq_version": context.faq_catalog.version,
             "recommendations": context.faq_catalog.recommendations(decision.platform, language),
         }
@@ -682,7 +682,7 @@ def create_gateway_app(
         _, decision = identity
         return {
             **decision.public(),
-            "language": language,
+            "language": context.faq_catalog.served_language(decision.platform, language),
             "faq_version": context.faq_catalog.version,
             "entries": context.faq_catalog.catalog(decision.platform, language),
         }
@@ -702,7 +702,13 @@ def create_gateway_app(
             ) from exc
         return {
             **decision.public(),
-            "language": language,
+            # The language the ANSWER is in, which is the catalog's answer rather
+            # than the request's: an entry without a translation is served in the
+            # authority language, and reporting the requested tag beside Chinese
+            # text would make the payload lie about itself.
+            "language": context.faq_catalog.entry_served_language(
+                decision.platform, payload.question_id, language
+            ),
             "faq_version": context.faq_catalog.version,
             "question_id": answer["question_id"],
             "question": answer["question"],
@@ -1046,7 +1052,7 @@ def create_gateway_app(
             return {
                 **decision.public(),
                 "type": "faq",
-                "language": language,
+                "language": context.faq_catalog.entry_served_language(decision.platform, faq_id, language),
                 "faq_version": context.faq_catalog.version,
                 "question_id": answer["question_id"],
                 "question": answer["question"],
@@ -1802,7 +1808,9 @@ def create_gateway_app(
             raise _shortcut_error(exc) from exc
         return {
             "type": "shortcut_list",
-            "language": language,
+            # The list-level language is only truthful when every row agrees;
+            # otherwise the per-row `language` is what a client must read.
+            "language": _shortcut_list_language(shortcuts, language),
             "count": len(shortcuts),
             "shortcuts": [item.public(language) for item in shortcuts],
         }
@@ -3138,6 +3146,19 @@ def _start_promo_qa(
             ),
         },
     )
+
+
+def _shortcut_list_language(shortcuts: Any, requested: str) -> str:
+    """The language a shortcut listing is uniformly in, else the authority one.
+
+    Rows are published independently, so a listing can mix a translated row with
+    an untranslated one. A single top-level field cannot describe that, and
+    claiming the requested language for a mixed list is the same false statement
+    as claiming it for one fallback row — so it reports the shared language only
+    when there is one, and the per-row `language` carries the truth otherwise.
+    """
+    served = {item.served_language(requested) for item in shortcuts}
+    return served.pop() if len(served) == 1 else DEFAULT_LANGUAGE
 
 
 def _standard_diagnosis_response(diagnosis: dict[str, Any], language: str) -> dict[str, Any]:

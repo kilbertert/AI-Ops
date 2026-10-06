@@ -140,3 +140,76 @@ def test_every_shortcut_seed_field_covers_every_language() -> None:
     for code, fields in _SHARED_ACTION_FIELDS.items():
         missing = [lang for lang in SUPPORTED_LANGUAGES if lang not in fields["question_templates"]]
         assert not missing, f"shared/{code} 缺 {missing}"
+
+
+# --------------------------------------------------------------------------
+# #540 review: a language can be accepted by the resolver and still have no
+# content. The response must then report the language it actually served.
+# --------------------------------------------------------------------------
+
+
+def test_faq_reports_the_served_language_not_the_requested_one() -> None:
+    """A catalog entry without a translation is served in the authority language.
+
+    Accepting the four new tags made `vi`/`th`/... resolvable, while the bundled
+    catalog carries only en/de/es/fr/pt for `consumer` and nothing at all for
+    `operator`. Echoing the requested tag beside Chinese text is a false
+    statement about the payload — the same shape this workstream removes
+    everywhere else.
+    """
+    from aiops_diagnostics.faq import FAQCatalog
+
+    catalog = FAQCatalog.bundled()
+    for language in _ADDED:
+        assert catalog.entry_served_language("consumer", "consumer.faq.q001", language) == "zh"
+        assert catalog.served_language("consumer", language) == "zh"
+    # A language the catalog DOES carry is reported as itself.
+    assert catalog.entry_served_language("consumer", "consumer.faq.q001", "en") == "en"
+    assert catalog.served_language("consumer", "en") == "en"
+    # The operator catalog has no translations at all, so even an old language
+    # is served Chinese there — pre-existing, and now reported honestly.
+    assert catalog.served_language("operator", "de") == "zh"
+
+
+def test_the_public_catalog_entry_shape_is_unchanged() -> None:
+    """The four-key entry contract survives: the honesty fix is not a shape change."""
+    from aiops_diagnostics.faq import FAQCatalog
+
+    entry = FAQCatalog.bundled().catalog("consumer")[0]
+    assert set(entry) == {"question_id", "question", "answer", "format"}
+
+
+def test_a_shortcut_row_reports_the_language_its_copy_is_in() -> None:
+    """Rows published before a language existed keep Chinese copy; say so.
+
+    The seed is not the listing: `seed_bundled` skips persisted rows, so a
+    deployment with already-published shortcuts serves the OLD copy whatever the
+    seed now contains. Reporting the requested tag for that row is the defect.
+    """
+    from aiops_diagnostics.shortcut_lifecycle import Shortcut
+
+    row = Shortcut(
+        shortcut_id="sc_1",
+        tenant_id="__platform__",
+        business_entry="consumer",
+        code="case_exploration",
+        intent="case_exploration",
+        requires_order=False,
+        sort_order=10,
+        status="published",
+        revision=1,
+        labels={"zh": "客户案例", "en": "Customer Cases"},
+        descriptions={"zh": "查看案例", "en": "Explore cases"},
+        question_templates={"zh": "我想看看客户案例", "en": "Show me customer cases"},
+        target_agent_version=None,
+        jump_path=None,
+        published_version=1,
+        created_by="test",
+        created_at="t",
+        updated_at="t",
+    )
+    assert row.served_language("en") == "en"
+    assert row.served_language("th") == "zh", "泰语行没有文案，应报实际服务的语言"
+    assert row.public("th")["language"] == "zh"
+    # And the row still renders — the fallback is not removed, only reported.
+    assert row.public("th")["label"] == "客户案例"
