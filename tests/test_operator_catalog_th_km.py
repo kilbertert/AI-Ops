@@ -143,13 +143,11 @@ def test_every_assistant_route_refuses_a_read_only_language(tmp_path) -> None:
     """Not just the generic path: the routes that START JOBS must refuse too.
 
     A check placed after Route 1/Route 2 still returns a diagnosis or promo job
-    that generates Chinese under a Thai label — the boundary has to be ahead of
-    every model-backed route, and "ahead of the one I was looking at" is not the
-    same thing. Exercised over the real HTTP surface, and asserting on the STUB's
-    own record of what it was asked to do rather than on one call list.
+    that generates Thai-labelled Chinese — the boundary has to be ahead of every
+    model-backed route, and "ahead of the one I was looking at" is not the same
+    thing. Exercised over the real HTTP surface, and asserting on the stub's own
+    record of what it was asked to do rather than on one call list.
     """
-    from tests.test_assistant_api import _client, _headers
-
     client, runtime = _client(tmp_path)
     for payload in (
         # explicit order -> Route 1
@@ -163,7 +161,7 @@ def test_every_assistant_route_refuses_a_read_only_language(tmp_path) -> None:
             response = client.post(
                 "/v1/assistant/questions",
                 json=payload,
-                headers={**_headers(), "Accept-Language": language},
+                headers={**_HEADERS, "Accept-Language": language},
             )
             assert response.status_code == 200, (language, payload)
             body = response.json()
@@ -184,13 +182,116 @@ def test_an_unowned_order_is_still_404_not_a_language_clarification(tmp_path) ->
     language clarification — the boundary would become a way to ask whether an
     order exists. The two questions are unrelated and each keeps its own answer.
     """
-    from tests.test_assistant_api import _client, _headers
-
     client, _ = _client(tmp_path, allowed_orders={"some-other-order"})
     response = client.post(
         "/v1/assistant/questions",
         json={"question": "ตรวจสอบคำสั่งซื้อ", "order_no": "2096164064667852801"},
-        headers={**_headers(), "Accept-Language": "th"},
+        headers={**_HEADERS, "Accept-Language": "th"},
     )
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "ORDER_NOT_FOUND"
+
+
+# --------------------------------------------------------------------------
+# A self-contained assistant client. The repo's tests never import one another
+# (`tests` is not a package under CI), so this builds the minimum surface the
+# route-refusal tests need. (That mistake has been made and corrected three
+# times on this workstream; this is the correction for the third.)
+# --------------------------------------------------------------------------
+
+
+class _Caller:
+    def resolve(self, token, **kwargs):
+        from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
+
+        del kwargs
+        subject = SubjectRecord(b_user_id="B-1", c_user_id="C-1", tenant_id="T-1")
+        return ScopeContext.build(
+            caller=subject,
+            subject=subject,
+            delegated=False,
+            effective_tenant_id="T-1",
+            data_scope=DataScope(type="self"),
+            roles=frozenset(),
+            permissions=frozenset({"aiops:orders:read"}),
+        )
+
+
+class _Authorizer:
+    """Authorizes only the orders it was given; everything else is `not owned`."""
+
+    def __init__(self, allowed: set[str]) -> None:
+        self.allowed = allowed
+
+    def can_access(self, context, order_no: str) -> bool:
+        del context
+        return order_no in self.allowed
+
+
+class _Directory:
+    def roles_for_c_user(self, c_user_id: str, tenant_id: str):
+        from aiops_diagnostics.faq import PlatformRoleRecord
+
+        return (PlatformRoleRecord("B-1", c_user_id, tenant_id, "consumer"),)
+
+    def roles_for_b_user(self, b_user_id: str, tenant_id: str):
+        return ()
+
+
+class _Jobs:
+    """Records every entry point that starts a job, and starts none."""
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, str]] = []
+        self.qa_calls: list[str] = []
+        self.classified = None
+
+    def classify_lightweight(self, question, *, language="zh", tenant_id=None):
+        del question, language, tenant_id
+        return self.classified
+
+    def start_standard_diagnosis(
+        self, context, order_no, question, indicator_code, language="zh", *, conversation_turn=None
+    ):
+        del context, indicator_code, conversation_turn
+        self.calls.append((order_no, question))
+        raise AssertionError("边界之后仍然启动了诊断作业")
+
+    def start_assistant_qa(self, context, question, **kwargs):
+        del context, kwargs
+        self.qa_calls.append(question)
+        raise AssertionError("边界之后仍然启动了问答作业")
+
+    def shutdown(self) -> None:
+        pass
+
+
+def _client(tmp_path, *, allowed_orders: set[str] | None = None):
+    from fastapi.testclient import TestClient
+
+    from aiops_diagnostics.faq import FAQCatalog
+    from aiops_diagnostics.gateway_api import create_gateway_app
+    from aiops_diagnostics.gateway_config import GatewayServerSettings
+    from aiops_diagnostics.gateway_store import GatewayStore
+    from aiops_diagnostics.faq import PlatformIdentityResolver
+
+    settings = GatewayServerSettings(
+        data_home=tmp_path,
+        database_file=tmp_path / "gateway.db",
+        server_config_file=tmp_path / "production.env",
+    )
+    settings.server_config_file.write_text("# test\n", encoding="utf-8")
+    runtime = _Jobs()
+    app = create_gateway_app(
+        settings=settings,
+        store=GatewayStore(settings.database_file),
+        runtime=runtime,  # type: ignore[arg-type]
+        caller_resolver=_Caller(),
+        order_authorizer=_Authorizer(allowed_orders or {"2096164064667852801"}),
+        platform_resolver=PlatformIdentityResolver(_Directory()),
+        faq_catalog=FAQCatalog.bundled(),
+    )
+    return TestClient(app), runtime
+
+
+_HEADERS = {"Authorization": "Bearer service", "X-Business-Entry": "consumer"}
