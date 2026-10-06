@@ -827,7 +827,7 @@ def create_gateway_app(
             except (ValueError, RuntimeError) as exc:
                 _release_conversation_turn(context, conversation, turn_no)
                 raise _runtime_unavailable("DIAGNOSIS_UNAVAILABLE", "diagnosis unavailable", exc) from exc
-            base = _standard_diagnosis_response(diagnosis)
+            base = _standard_diagnosis_response(diagnosis, language)
             return JSONResponse(
                 status_code=status.HTTP_202_ACCEPTED,
                 content={
@@ -901,7 +901,7 @@ def create_gateway_app(
                     # the non-own case the row was just dropped, and echoing a
                     # turn_no for it would point the frontend at nothing.
                     turn_field = {"turn_no": turn_no} if own_turn else {}
-                    base = _standard_diagnosis_response(diagnosis)
+                    base = _standard_diagnosis_response(diagnosis, language)
                     return JSONResponse(
                         status_code=status.HTTP_202_ACCEPTED,
                         content={
@@ -947,7 +947,7 @@ def create_gateway_app(
                         raise _runtime_unavailable(
                             "DIAGNOSIS_UNAVAILABLE", "diagnosis unavailable", exc
                         ) from exc
-                    base = _standard_diagnosis_response(diagnosis)
+                    base = _standard_diagnosis_response(diagnosis, language)
                     return JSONResponse(
                         status_code=status.HTTP_202_ACCEPTED,
                         content={
@@ -1516,12 +1516,13 @@ def create_gateway_app(
             )
         except (ValueError, RuntimeError) as exc:
             raise _runtime_unavailable("DIAGNOSIS_UNAVAILABLE", "diagnosis unavailable", exc) from exc
-        return _standard_diagnosis_response(diagnosis)
+        return _standard_diagnosis_response(diagnosis, language)
 
     @app.get("/v1/standard/diagnoses/{diagnosis_id}")
     def get_standard_diagnosis(
         diagnosis_id: str,
         caller: ScopeContext = Depends(authenticated_diagnosis_caller),  # noqa: B008
+        language: str = Depends(request_language),  # noqa: B008
     ) -> dict[str, Any]:
         try:
             diagnosis = context.runtime.get_standard_diagnosis(caller, diagnosis_id)
@@ -1546,7 +1547,7 @@ def create_gateway_app(
                 "DIAGNOSIS_NOT_FOUND",
                 "diagnosis not found",
             )
-        return _standard_diagnosis_response(diagnosis)
+        return _standard_diagnosis_response(diagnosis, language)
 
     @app.get("/v1/standard/diagnoses")
     def list_standard_diagnoses(
@@ -1560,6 +1561,7 @@ def create_gateway_app(
     def cancel_standard_diagnosis(
         diagnosis_id: str,
         caller: ScopeContext = Depends(authenticated_diagnosis_caller),  # noqa: B008
+        language: str = Depends(request_language),  # noqa: B008
     ) -> dict[str, Any]:
         """Stop one in-flight order diagnosis (#499).
 
@@ -1582,7 +1584,7 @@ def create_gateway_app(
                 "DIAGNOSIS_NOT_FOUND",
                 "diagnosis not found",
             )
-        return _standard_diagnosis_response(diagnosis)
+        return _standard_diagnosis_response(diagnosis, language)
 
     def _agent_error(exc: AgentError) -> StandardAPIError:
         if isinstance(exc, AgentNotFound):
@@ -3132,7 +3134,26 @@ def _start_promo_qa(
     )
 
 
-def _standard_diagnosis_response(diagnosis: dict[str, Any]) -> dict[str, Any]:
+def _standard_diagnosis_response(diagnosis: dict[str, Any], language: str) -> dict[str, Any]:
+    """One diagnosis row as the public body.
+
+    ``language`` is the language of THIS REQUEST, and it renders only the copy
+    the server writes now: `error.message`.
+
+    It deliberately does NOT drive the `language` field or `result`. A
+    diagnosis's prose is generated once, in the language it was STARTED in, and
+    is stored. Reporting the poller's language there would claim an English
+    diagnosis is French — a false statement about the payload, and the same
+    class of error this project has already refused elsewhere ("do not rewrite
+    a successful retrieval into `unavailable`"). The field therefore describes
+    the RESULT's language, not the request's; that had never been written down,
+    and two surfaces had drifted apart because of it (#549).
+
+    So the two are split by what they describe, not by which is newer:
+    per-request copy is rendered per request, stored prose is reported as
+    stored. The unified-assistant QA surface merges them into one field; this
+    one does not, and this comment is the contract.
+    """
     status_value = str(diagnosis["status"])
     error_code = diagnosis.get("error_code") or "DIAGNOSIS_FAILED"
     # The shared status set decides what is terminal, exactly as it decides what
@@ -3156,7 +3177,7 @@ def _standard_diagnosis_response(diagnosis: dict[str, Any]) -> dict[str, Any]:
                 # `error_message`. That field is the engineer's note (an
                 # upstream exception string, a restart notice); the contract
                 # promises this surface carries no internal run information.
-                "message": diagnosis_error_message(diagnosis.get("language") or DEFAULT_LANGUAGE, error_code),
+                "message": diagnosis_error_message(language, error_code),
                 "retryable": status_value in {DIAGNOSIS.failed, DIAGNOSIS.expired},
             }
             if status_value in {DIAGNOSIS.failed, DIAGNOSIS.expired}
