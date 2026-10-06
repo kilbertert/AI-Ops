@@ -200,3 +200,42 @@ def test_job_failure_branch_codes_come_out_of_real_responses(tmp_path: Path) -> 
         "completed_at": None,
     }
     assert _standard_diagnosis_response(dict(diagnosis), "en")["error"]["code"] == "DIAGNOSIS_FAILED"
+
+
+def test_health_report_job_envelope_is_the_unlocalized_one() -> None:
+    """The health-report job surface is the THIRD asynchronous face, and the
+    only one whose `error.message` is NOT localized.
+
+    It is in the contract table, so it needs a check for the same reason the
+    other two do — otherwise a change to its message or code would leave every
+    assertion green while the documented row became false. It takes no language
+    at all, which is the fact being pinned.
+    """
+    import inspect
+
+    from aiops_diagnostics.gateway_api import _health_job_response
+
+    # The signature is the proof: it cannot localize, because it is never given
+    # a language.
+    params = list(inspect.signature(_health_job_response).parameters)
+    assert params == ["job"], f"健康报告作业信封多接了参数 {params} —— 契约表要更新"
+
+    job = {
+        "job_id": "hr_1",
+        "order_no": "O-1",
+        "rule_version": "health-v2",
+        "status": "failed",
+        "report": None,
+        "error_code": None,  # absent -> the documented default
+        "error_message": "internal: source unavailable for tenant 12345",
+        "created_at": "t",
+        "updated_at": "t",
+        "completed_at": None,
+        "deadline_at": "t",
+        "expires_at": "t",
+    }
+    body = _health_job_response(dict(job))
+    # Default code when the row carries none, and the stored message is passed
+    # through unchanged — NOT rewritten by any language table.
+    assert body["error"]["code"] == "REPORT_FAILED"
+    assert body["error"]["message"] == "internal: source unavailable for tenant 12345"
