@@ -18,26 +18,34 @@
 | 检查 | 命令 | 结果 |
 |---|---|---|
 | 全量单测 | `uv run python -m pytest -q` | 退出码 0；输出与迁移前基线**逐字节一致**，无 FAILED |
-| 仍指向旧文件的引用 | 见下 | 空 |
-| 相对链接目标 | `README.md` 中 `[GLOSSARY.md](GLOSSARY.md)` | 目标文件存在 |
+| 迁移结果 | 见下三条 | 见下 |
 
-**「仍指向旧文件的引用」的判据**：不能用 `grep -rn 'CONTEXT.md'` —— 本页与
-`docs/开发进度.md` 的记录本身就在叙述这次改名，必然命中自己。判据是
-**仍然指向旧文件的链接/路径**，排除历史叙述：
+**迁移结果的判据（三条，均已实际执行）**：
+
+`grep -rn 'CONTEXT.md'` **不能**用作判据 —— 本页与 `docs/开发进度.md` 的记录本身就在
+叙述这次改名，必然命中自己。改用：
 
 ```
+# A 指向旧文件的 Markdown 链接：必须为空
+grep -rn '](CONTEXT\.md)' . --exclude-dir=.git --exclude-dir=.venv
+    -> 空
+
+# B 两处记录文件之外的裸文件名：必须为空
 grep -rn 'CONTEXT\.md' . --exclude-dir=.git --exclude-dir=.venv \
-  | grep -v '迁移' | grep -v '1\.4\.0'
-```
+  | grep -vE 'validation\.md|开发进度\.md'
+    -> 空（迁移前此项列出 README.md / AGENTS.md / docs/afk-workflow.md /
+       docs/handoff-brief.md / tests/... 等）
 
-迁移前的命中项为 `README.md` / `AGENTS.md` / `docs/afk-workflow.md` / `docs/handoff-brief.md` /
-`docs/validation.md` / `docs/开发进度.md`；迁移后仅剩本页与进度页中的**历史说明**。
+# C 文件状态
+    -> CONTEXT.md 不存在；GLOSSARY.md 存在
+```
 
 **对照方式说明**：基线取自迁移前的 `main` 检出，与本 worktree 跑同一条 pytest 命令，
 逐字节 diff 输出。worktree 下需 `uv sync --extra dev` 且显式 `PYTHONPATH`
 （editable install 在 worktree 中不自动生效），这是环境差异，与本次改动无关。
 
 **没有构造任何反向对照**：本次没有需要证伪的假设，故未编造对照。
+
 ## #499 诊断线的取消操作（2026-10-02）
 
 **新增** `POST /v1/standard/diagnoses/{diagnosis_id}/cancel`，与 qa 线的取消**同构**。
