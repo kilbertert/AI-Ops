@@ -1253,7 +1253,7 @@ PRD §1 数过：四张表、五份同形过期 SQL、两种极性的 claim-guar
 
 ## #486 平台身份判定三份合一份（2026-09-30）
 
-`CONTEXT.md` 对「平台身份判定」有权威定义，并附 `Avoid: 客户端自报 platform`。这条规则在网关层
+`GLOSSARY.md` 对「平台身份判定」有权威定义，并附 `Avoid: 客户端自报 platform`。这条规则在网关层
 被抄了三遍：`faq_identity` 与 `assistant_identity` 的 22 行**逐字节相同**，`shortcut_identity`
 与它们相差**且仅相差**一行 —— 一个返回对象，一个返回 `str(decision.platform)`。
 
@@ -5454,7 +5454,7 @@ INVALID_ACCESS_TOKEN`，符合公开合同。
 ### 关联
 
 - 规格 #260；切片 #261（字段）、#262（入口守卫）、#263（契约/领域模型/ADR）、#264（本验收）。
-- 领域模型变更见 `CONTEXT.md`「提示动作/跳转动作」与 `docs/adr/0006-shortcut-actions-extend-to-in-app-navigation.md`。
+- 领域模型变更见 `GLOSSARY.md`「提示动作/跳转动作」与 `docs/adr/0006-shortcut-actions-extend-to-in-app-navigation.md`。
 - 前端契约见 `docs/agents/frontend-api-brief.md` D.1/D.2a。
 
 ## 宣传动作「空库」误报修复与 41 实测（2026-09-16，PR #270）
@@ -6617,7 +6617,7 @@ OP-ACCEPT-POS-01..04 与本文末节，不用消费者会话或人造夹具冒�
 
 - 新增 `docs/agents/company-platform-integration-baseline.md`（立项根基：现状、证据、
   六条决定、五条未决）。
-- `ADR-0003` 的两处 README 引用、`CONTEXT.md` 的「身份委托句柄」词条、`ADR-0004` 各加
+- `ADR-0003` 的两处 README 引用、`GLOSSARY.md` 的「身份委托句柄」词条、`ADR-0004` 各加
   「未实现 / 目标形态」标注 —— 这是 ADR-0008 早已要求却一直没做到的
   （「任何提到会话身份的地方，要么写明偏离，要么不声称来源」）。
 - **本轮不改部署拓扑**（那是入口变更，需独立验收与回滚）；目标态已入档。
