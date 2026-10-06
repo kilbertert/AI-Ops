@@ -14,41 +14,11 @@ ORDER_STATUS = {
     5: "可控异常结束",
 }
 
-YKC_STOP_REASONS = {
-    64: "APP 远程停止",
-    65: "SOC 达到 100%",
-    66: "充电电量满足设定条件",
-    67: "充电金额满足设定条件",
-    68: "充电时间满足设定条件",
-    69: "手动停止充电",
-    70: "车端正常主动停止",
-    74: "启动失败：充电桩控制系统故障",
-    75: "启动失败：控制导引断开",
-    76: "启动失败：断路器跳位",
-    77: "启动失败：电表通信中断",
-    78: "启动失败：余额不足",
-    79: "启动失败：充电模块故障",
-    80: "启动失败：急停开入",
-    83: "启动失败：温度异常",
-    85: "启动失败：电子锁异常",
-    87: "启动失败：绝缘异常",
-    88: "启动失败：枪故障",
-    106: "异常中止：系统闭锁",
-    107: "异常中止：导引断开",
-    108: "异常中止：断路器跳位",
-    109: "异常中止：电表通信中断",
-    110: "异常中止：余额不足",
-    113: "异常中止：充电模块故障",
-    114: "异常中止：急停开入",
-    116: "异常中止：温度异常",
-    119: "异常中止：电子锁异常",
-    124: "异常中止：电池组过温",
-    131: "异常中止：充电桩断电",
-    138: "异常中止：设备故障",
-    141: "异常中止：枪故障",
-    142: "异常中止：充电数据异常",
-    144: "未知原因停止",
-}
+# The YKC code table moved to `health_report_copy.YKC_STOP_REASON_MESSAGES`,
+# which carries it in every language. It is NOT kept here as well: the two
+# copies were byte-identical, classification read only the new one, and a
+# duplicated catalog whose second copy nobody reads drifts the first time
+# someone edits one of them. (Review finding on #539.)
 
 
 @dataclass(slots=True)
