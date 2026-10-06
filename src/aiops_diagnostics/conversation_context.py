@@ -33,6 +33,14 @@ from aiops_diagnostics.redaction import redact_text
 DEFAULT_MAX_TURNS = CONTEXT_MAX_TURNS
 DEFAULT_MAX_TOKENS = CONTEXT_MAX_TOKENS
 
+#: The language these prompt-only labels fall back to. This module is the ONE
+#: place that falls back to English instead of the default language, and the
+#: reason is in the comment below — so the choice is named here rather than
+#: being an unremarked ``_LABELS["en"]`` at two call sites. (#527: fallback
+#: targets should be declared, not inferred from whichever key someone reached
+#: for.)
+_LABEL_FALLBACK_LANGUAGE = "en"
+
 #: Labels for the two speakers, per supported output language (``i18n``). An
 #: unknown language falls back to English rather than to Chinese: the label only
 #: has to be readable to the model, and a Chinese heading over a translated
@@ -73,11 +81,11 @@ _HEADERS: dict[str, str] = {
 
 
 def _labels(language: str) -> tuple[str, str]:
-    return _LABELS.get(language, _LABELS["en"])
+    return _LABELS.get(language, _LABELS[_LABEL_FALLBACK_LANGUAGE])
 
 
 def _header(language: str) -> str:
-    return _HEADERS.get(language, _HEADERS["en"])
+    return _HEADERS.get(language, _HEADERS[_LABEL_FALLBACK_LANGUAGE])
 
 
 def _answer_text(turn: dict[str, Any]) -> str:

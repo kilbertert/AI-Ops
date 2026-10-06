@@ -8,10 +8,88 @@ change routing semantics, or reach the incident manifest (#200 decision).
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
+
+
+@dataclass(frozen=True, slots=True)
+class LanguageSpec:
+    """One language, with the facts a consumer actually reads.
+
+    Only the facts something READS live here. An earlier draft of this carried
+    four capability booleans (rendering / prompting / routing / guarding); three
+    of them were read by nobody, so they were declarations that could be — and
+    were — wrong without anything failing. A flag nothing consumes is worse than
+    no flag: it reads as a settled decision while encoding nothing. The
+    capabilities come back one at a time, together with the consumer that reads
+    them.
+
+    What remains is what is genuinely needed today:
+
+    - the tag and its prompt-usable name (the old ``LANGUAGE_NAMES`` table);
+    - ``is_chinese``, which the leak guard's language set is derived from.
+
+    ``is_chinese`` is a property of the LANGUAGE, never derived from "is it the
+    default". Those coincided while the default was the only Chinese language; a
+    second Chinese script (``zh-Hant``) breaks the identity, and the guard would
+    then judge every legitimate Traditional answer a Chinese leak.
+    """
+
+    tag: str
+    name: str  # English display name, used in model prompts
+    is_chinese: bool
+
+
+# THE inventory. Adding a language is one entry here plus whatever its data
+# needs — not a sweep for hand-copied tuples. Every derived constant below is
+# computed from this list, and a consumer that enumerates languages itself is a
+# defect this list exists to prevent.
+LANGUAGES: tuple[LanguageSpec, ...] = (
+    LanguageSpec("zh", "Simplified Chinese", is_chinese=True),
+    LanguageSpec("en", "English", is_chinese=False),
+    LanguageSpec("de", "German", is_chinese=False),
+    LanguageSpec("fr", "French", is_chinese=False),
+    LanguageSpec("es", "Spanish", is_chinese=False),
+    LanguageSpec("pt", "Portuguese", is_chinese=False),
+)
 
 # Must stay aligned with the i18n catalog shipped in faq_catalog.json (#200).
-SUPPORTED_LANGUAGES: tuple[str, ...] = ("zh", "en", "de", "fr", "es", "pt")
+SUPPORTED_LANGUAGES: tuple[str, ...] = tuple(spec.tag for spec in LANGUAGES)
+
+# The default is the language a request falls back to when nothing is
+# acceptable, and the authority whose text the catalogs are written in. It is
+# also Chinese — but that is a consequence, not the definition: see
+# ``is_chinese`` above for why the two must not be conflated.
 DEFAULT_LANGUAGE = "zh"
+
+_BY_TAG = {spec.tag: spec for spec in LANGUAGES}
+
+
+def language_spec(language: str) -> LanguageSpec | None:
+    """The declared spec for ``language``, or ``None`` when it is unsupported."""
+    return _BY_TAG.get(language)
+
+
+def non_chinese_languages(specs: tuple[LanguageSpec, ...]) -> frozenset[str]:
+    """The languages whose answers the Chinese-leak guard judges.
+
+    Derived from the DECLARED ``is_chinese`` property, never from "is it the
+    default" (#527, ADR-0007's D-6).
+
+    A function rather than an inline comprehension so the RULE can be tested on
+    an inventory that distinguishes the two readings. With today's languages it
+    cannot be: `zh` is both the only Chinese language and the default, so
+    "declared Chinese" and "supported minus default" produce the same set and a
+    test over the real list would pass either way. The distinguishing case is a
+    second Chinese script — `zh-Hant` is not the default, so the old expression
+    would call it non-Chinese and the guard would replace every legitimate
+    Traditional answer with the fallback copy.
+    """
+    return frozenset(spec.tag for spec in specs if not spec.is_chinese)
+
+
+# Languages whose answers must not contain Chinese. Derived from the declared
+# property, never from "is it the default" — see `non_chinese_languages`.
+NON_CHINESE_LANGUAGES = non_chinese_languages(LANGUAGES)
 
 # CJK ideographs and CJK punctuation — what a stored Chinese value looks like
 # when it is copied into an answer meant for a reader of another language.
@@ -24,10 +102,6 @@ DEFAULT_LANGUAGE = "zh"
 # follows. The cost of the false positive is one retry; the cost of the false
 # negative was a customer reading a language they could not.
 CJK_TEXT = re.compile(r"[㐀-䶿一-鿿　-〿＀-￯]")
-
-# Languages whose answers must not contain Chinese. Derived, never listed, so a
-# new supported language is covered the moment it is added.
-NON_CHINESE_LANGUAGES = frozenset(SUPPORTED_LANGUAGES) - {DEFAULT_LANGUAGE}
 
 
 # A Chinese name glossed beside its Latin form — `TrendPower (趋势智能)`. The
@@ -73,14 +147,7 @@ def chinese_leak(text: str) -> str:
 
 
 # Human-readable names used inside model prompts (qa/diagnosis, #204).
-LANGUAGE_NAMES: dict[str, str] = {
-    "zh": "Simplified Chinese",
-    "en": "English",
-    "de": "German",
-    "fr": "French",
-    "es": "Spanish",
-    "pt": "Portuguese",
-}
+LANGUAGE_NAMES: dict[str, str] = {spec.tag: spec.name for spec in LANGUAGES}
 
 # Presentation copy for the qa retrieval fallback per language (#204).
 # zh is authoritative: a missing language falls back to the zh strings.
