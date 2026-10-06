@@ -93,6 +93,12 @@ _USER_FACING_MESSAGE_TABLES = (
     "PROMO_EMPTY_MESSAGES",
     "PROMO_UNAVAILABLE_MESSAGES",
     "CLARIFICATION_MESSAGES",
+    # Registered when they were added (#536/#549). They were user-facing from
+    # the start and the gate did not cover them, so the four languages added in
+    # #540 left them Chinese with nothing to say so — the exact "a new table
+    # must be registered here" case this comment has always described.
+    "DIAGNOSIS_FAILURE_MESSAGES",
+    "DIAGNOSIS_ERROR_MESSAGES",
 )
 
 

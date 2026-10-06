@@ -236,8 +236,8 @@ def test_language_fields_and_fallback(tmp_path: Path) -> None:
             "requires_order": False,
             "sort_order": 10,
             "labels": {"zh": "客户案例", "en": "Customer Cases"},
-            "descriptions": {"zh": "查看案例"},
-            "question_templates": {"zh": "看案例"},
+            "descriptions": {"zh": "查看案例", "en": "Explore cases"},
+            "question_templates": {"zh": "看案例", "en": "Show me cases"},
         },
     )
     assert created.status_code == 201
@@ -1201,10 +1201,14 @@ def test_copy_gap_gate_names_every_missing_field_and_language() -> None:
     gaps = shortcut_copy_gaps([row])
 
     assert {gap.code for gap in gaps} == {"solution_discovery"}
-    # All three copy fields lack de/fr/es/pt; `description` lacks en as well,
-    # which is the field that lines the fixture up with the live gap.
+    # All three copy fields lack every non-default language; `description`
+    # lacks en as well, which is the field that lines the fixture up with the
+    # live gap. Derived from the inventory, not hand-copied: a literal here has
+    # to be edited on every language addition, which is the drift #527 removed.
+    from aiops_diagnostics.i18n import NON_CHINESE_LANGUAGES
+
     assert {gap.field for gap in gaps} == {"label", "description", "question_template"}
-    assert {gap.language for gap in gaps} == {"de", "fr", "es", "pt", "en"}
+    assert {gap.language for gap in gaps} == set(NON_CHINESE_LANGUAGES)
     missing_pairs = {(gap.field, gap.language) for gap in gaps}
     assert ("description", "en") in missing_pairs
     assert ("label", "en") not in missing_pairs
@@ -1238,3 +1242,41 @@ def test_copy_gap_gate_is_empty_for_a_complete_row() -> None:
     )
 
     assert shortcut_copy_gaps([row]) == []
+
+
+def test_a_partially_translated_row_is_not_claimed_to_be_translated(tmp_path: Path) -> None:
+    """`language` must describe EVERY field, not whichever one happened to hit.
+
+    A row with an English label and Chinese description is not an English row:
+    reporting `en` claims the description too. The list-level field then falls
+    back to the authority language, and the per-row field says zh — because that
+    is what most of the row is.
+    """
+    client = _client(tmp_path)
+    created = client.post(
+        "/v1/shortcuts",
+        headers=_HEADERS,
+        json={
+            "business_entry": "consumer",
+            "code": "case_exploration",
+            "intent": "case_exploration",
+            "requires_order": False,
+            "sort_order": 10,
+            "labels": {"zh": "客户案例", "en": "Customer Cases"},
+            "descriptions": {"zh": "查看案例"},
+            "question_templates": {"zh": "看案例"},
+        },
+    )
+    assert created.status_code == 201
+    shortcut = created.json()
+    client.post(
+        f"/v1/shortcuts/{shortcut['shortcut_id']}/publish",
+        headers=_HEADERS,
+        json={"expected_revision": shortcut["revision"]},
+    )
+
+    body = client.get("/v1/shortcuts", headers={**_HEADERS, "Accept-Language": "en"}).json()
+    assert body["shortcuts"][0]["language"] == "zh", "部分翻译的行被当成了完全翻译"
+    assert body["language"] == "zh"
+    # The translated field is still served — the fallback reports, it does not strip.
+    assert body["shortcuts"][0]["label"] == "Customer Cases"
