@@ -19,9 +19,9 @@
 from __future__ import annotations
 
 import argparse
-import copy
 import json
 import re
+import subprocess
 import zipfile
 from pathlib import Path
 from xml.etree import ElementTree as ET
@@ -179,6 +179,25 @@ def _language_of_header(label: str) -> str | None:
 DEFAULT_FAQ_VERSION = "2026.09.12"
 
 
+def _committed(path: Path) -> str | None:
+    """The file's content at HEAD, or ``None`` when it is not in git.
+
+    The baseline for "did the content change" must be what was PUBLISHED, not
+    what the tool happened to read: an edit someone made to an input file is
+    indistinguishable from the baseline when the tool compares against its own
+    input. Only the committed revision answers "is this different from what we
+    already published".
+    """
+    result = subprocess.run(
+        ["git", "show", f"HEAD:{path.relative_to(ROOT)}"],
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+        check=False,
+    )
+    return result.stdout if result.returncode == 0 else None
+
+
 def default_languages(answers_dir: Path, prefix: str, wide_table: Path) -> tuple[str, ...]:
     """The languages this platform has BOTH a wide-table column and answers for.
 
@@ -272,10 +291,6 @@ def main() -> int:
             f"wide table has {len(rows)} rows, catalog {args.platform} has {len(entries)} entries"
         )
 
-    # Snapshot BEFORE the in-place merge below: `entries` holds the same dicts
-    # the catalog does, so a later comparison would compare the result to itself.
-    original_platforms = copy.deepcopy(catalog["platforms"][args.platform])
-
     for entry, row in zip(entries, rows, strict=True):
         qid = entry["question_id"]
         if _norm(row.get("zh", "")) != _norm(entry["question"]):
@@ -293,15 +308,6 @@ def main() -> int:
             existing[lang] = {"question": question, "answer": answer}
         entry["i18n"] = existing
 
-    changed = catalog["platforms"][args.platform] != original_platforms
-    if changed and args.version is None:
-        raise ValueError(
-            "内容已变化但没有给 --version：用当前修订号发布新内容，会让按版本号"
-            "比较的调用方看不到这次更新。请显式指定新版本。"
-        )
-    catalog["faq_version"] = version
-    CATALOG.write_text(json.dumps(catalog, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-
     recommendations = json.loads(RECOMMENDATIONS.read_text(encoding="utf-8"))
     titles = {entry["question_id"]: entry for entry in entries}
     rec_entries = recommendations["platforms"][args.platform]
@@ -312,6 +318,23 @@ def main() -> int:
         merged = dict(rec.get("i18n") or {})
         merged.update({lang: {"title": entry["i18n"][lang]["question"]} for lang in langs})
         rec["i18n"] = merged
+    # BOTH files are versioned outputs, so BOTH are part of the verdict — and
+    # the baseline is the COMMITTED revision, not what this run read. Comparing
+    # against the input made a human's edit to an input file undetectable (it is
+    # the input, so it always equals itself), and comparing only the catalog let
+    # a recommendation change ship under the old revision. Both are the same
+    # mistake: a baseline that cannot see the change being guarded against.
+    catalog_changed = json.dumps(catalog, ensure_ascii=False, indent=2) + "\n" != _committed(CATALOG)
+    recommendations_changed = json.dumps(recommendations, ensure_ascii=False, indent=2) + "\n" != _committed(
+        RECOMMENDATIONS
+    )
+    if (catalog_changed or recommendations_changed) and args.version is None:
+        raise ValueError(
+            "内容已变化但没有给 --version：用当前修订号发布新内容，会让按版本号"
+            "比较的调用方看不到这次更新。请显式指定新版本。"
+        )
+    catalog["faq_version"] = version
+    CATALOG.write_text(json.dumps(catalog, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     recommendations["faq_version"] = version
     RECOMMENDATIONS.write_text(
         json.dumps(recommendations, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"

@@ -156,3 +156,29 @@ def test_removing_a_language_is_allowed_when_asked_for_explicitly() -> None:
     finally:
         hidden.rename(answers)
         _restore(catalog, recommendations)
+
+
+def test_a_recommendation_only_change_also_requires_a_new_version() -> None:
+    """The guard must cover BOTH versioned outputs, not just the catalog.
+
+    Recommendations carry their own `i18n` titles, and the merge only rewrites
+    them for the languages it is merging — so a change to a language OUTSIDE
+    that set (or to the recommendation order) reaches the file untouched by the
+    catalog comparison. Comparing only the catalog let exactly that ship under
+    the old revision, which is the "guard covers one consumer" shape this
+    workstream keeps meeting.
+    """
+    recommendations = RECOMMENDATIONS.read_text(encoding="utf-8")
+    catalog = CATALOG.read_text(encoding="utf-8")
+    try:
+        payload = json.loads(recommendations)
+        # A language the run does NOT merge: the merge leaves it alone, so the
+        # edit survives into the output and the guard must notice.
+        entry = payload["platforms"]["operator"][1]  # index 0 already has de
+        entry.setdefault("i18n", {}).setdefault("de", {})["title"] = "nur-Empfehlung"
+        RECOMMENDATIONS.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        message = _run_expecting_failure("--platform", "operator", "--languages", "vi,mn")
+        assert "--version" in message
+        assert CATALOG.read_text(encoding="utf-8") == catalog
+    finally:
+        _restore(catalog, recommendations)
