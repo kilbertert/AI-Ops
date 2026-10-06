@@ -154,6 +154,7 @@ def run_zero_order_answer(
         provider_base_url=selected_provider.base_url,
         provider=selected_provider.name,
         key_slot=key_slot or selected_provider.resolved_key_slot(),
+        language=language,
     )
     session: SDKCodexSession | None = None
     try:
@@ -211,6 +212,7 @@ def classify_lightweight(
         provider_base_url=selected_provider.base_url,
         provider=selected_provider.name,
         key_slot=key_slot or selected_provider.resolved_key_slot(),
+        language=language,
     )
     session: SDKCodexSession | None = None
     try:

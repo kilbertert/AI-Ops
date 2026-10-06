@@ -280,6 +280,7 @@ class GatewayRuntime:
             provider_base_url=canonical_provider_base_url(selected_provider.base_url),
             provider=selected_provider.name,
             key_slot=selected_key_slot,
+            language=DEFAULT_LANGUAGE,
         )
         run = self.store.create_run(
             run_id=workspace.run_id,
@@ -364,6 +365,7 @@ class GatewayRuntime:
             provider_base_url=canonical_provider_base_url(selected_provider.base_url),
             provider=selected_provider.name,
             key_slot=selected_key_slot,
+            language=language,
         )
         diagnosis = self.store.create_standard_diagnosis(
             context.scope_fingerprint,
@@ -577,6 +579,7 @@ class GatewayRuntime:
             provider_base_url=canonical_provider_base_url(selected_provider.base_url),
             provider=selected_provider.name,
             key_slot=selected_key_slot,
+            language=language,
         )
         qa = self.store.create_assistant_question(
             context.scope_fingerprint,
