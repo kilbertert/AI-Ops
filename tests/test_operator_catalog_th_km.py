@@ -145,27 +145,52 @@ def test_every_assistant_route_refuses_a_read_only_language(tmp_path) -> None:
     A check placed after Route 1/Route 2 still returns a diagnosis or promo job
     that generates Chinese under a Thai label — the boundary has to be ahead of
     every model-backed route, and "ahead of the one I was looking at" is not the
-    same thing. Exercised over the real HTTP surface for the explicit-order,
-    extracted-order and promotional shapes.
+    same thing. Exercised over the real HTTP surface, and asserting on the STUB's
+    own record of what it was asked to do rather than on one call list.
     """
     from tests.test_assistant_api import _client, _headers
 
     client, runtime = _client(tmp_path)
-    for headers, payload in (
-        # explicit order -> Route 1 (a diagnosis job)
-        (_headers(), {"question": "ตรวจสอบคำสั่งซื้อ", "order_no": "2096164064667852801"}),
-        # no order -> would fall through to generic QA
-        (_headers(), {"question": "อากาศวันนี้เป็นอย่างไร"}),
+    for payload in (
+        # explicit order -> Route 1
+        {"question": "ตรวจสอบคำสั่งซื้อ", "order_no": "2096164064667852801"},
+        # embedded order in the text -> Route 1b
+        {"question": "ช่วยตรวจสอบคำสั่งซื้อ 2096164064667852801 ด้วย"},
+        # no order -> generic QA (Route 3)
+        {"question": "อากาศวันนี้เป็นอย่างไร"},
     ):
         for language in _READ_ONLY:
             response = client.post(
                 "/v1/assistant/questions",
                 json=payload,
-                headers={**headers, "Accept-Language": language},
+                headers={**_headers(), "Accept-Language": language},
             )
             assert response.status_code == 200, (language, payload)
             body = response.json()
             assert body["type"] == "clarification", (language, body.get("type"))
             assert body["language"] == language
             assert body["message"] == free_text_unavailable_message(language)
-    assert runtime.calls == [], "边界之后仍然启动了作业"
+
+    # No job of ANY kind: the stub records every entry point, including
+    # `start_assistant_qa`, which a single `calls` list would miss.
+    assert runtime.calls == [], "边界之后仍然启动了诊断作业"
+    assert runtime.qa_calls == [], "边界之后仍然启动了问答作业"
+
+
+def test_an_unowned_order_is_still_404_not_a_language_clarification(tmp_path) -> None:
+    """Authorization answers before the boundary does.
+
+    Ordering the boundary first would turn "you do not own this order" into a
+    language clarification — the boundary would become a way to ask whether an
+    order exists. The two questions are unrelated and each keeps its own answer.
+    """
+    from tests.test_assistant_api import _client, _headers
+
+    client, _ = _client(tmp_path, allowed_orders={"some-other-order"})
+    response = client.post(
+        "/v1/assistant/questions",
+        json={"question": "ตรวจสอบคำสั่งซื้อ", "order_no": "2096164064667852801"},
+        headers={**_headers(), "Accept-Language": "th"},
+    )
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "ORDER_NOT_FOUND"

@@ -822,6 +822,30 @@ def create_gateway_app(
         #
         # Placed before every job, turn claim and model call, so a refused
         # question leaves no row.
+        # An explicit order is AUTHORIZED before the language boundary, not
+        # after it. Ordering these the other way changes the answer to two
+        # questions that have nothing to do with language: an order the caller
+        # does not own would stop being a 404 (so the boundary became a probe),
+        # and an authorization outage would stop being a retryable 503. The
+        # boundary answers "can this language be asked in", and it must not
+        # answer "does this order exist" on the way.
+        order_verdict_before_boundary = (
+            _order_authorization(context, caller, payload.order_no) if payload.order_no else ""
+        )
+        if order_verdict_before_boundary in {UNAVAILABLE, NOT_OWNED}:
+            if order_verdict_before_boundary == UNAVAILABLE:
+                raise StandardAPIError(
+                    status.HTTP_503_SERVICE_UNAVAILABLE,
+                    "ORDER_AUTHORIZATION_UNAVAILABLE",
+                    "order authorization unavailable",
+                    retryable=True,
+                )
+            raise StandardAPIError(
+                status.HTTP_404_NOT_FOUND,
+                "ORDER_NOT_FOUND",
+                "order not found",
+            )
+
         if not can_prompt_in(language):
             return {
                 **decision.public(),
@@ -834,20 +858,6 @@ def create_gateway_app(
 
         # Route 1: explicit order → diagnosis semantics.
         if payload.order_no:
-            verdict = _order_authorization(context, caller, payload.order_no)
-            if verdict == UNAVAILABLE:
-                raise StandardAPIError(
-                    status.HTTP_503_SERVICE_UNAVAILABLE,
-                    "ORDER_AUTHORIZATION_UNAVAILABLE",
-                    "order authorization unavailable",
-                    retryable=True,
-                )
-            if verdict == NOT_OWNED:
-                raise StandardAPIError(
-                    status.HTTP_404_NOT_FOUND,
-                    "ORDER_NOT_FOUND",
-                    "order not found",
-                )
             # The conversation is resolved before routing so EVERY branch can
             # consult it; this one used to read none of its fields. Without the
             # claim the diagnosis is invisible to the conversation: no turn row
