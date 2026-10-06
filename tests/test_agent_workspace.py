@@ -191,9 +191,7 @@ def test_resumed_run_keeps_its_output_language(language: str, tmp_path) -> None:
     """
     from aiops_diagnostics.agent_workspace import AgentWorkspace
 
-    created = AgentWorkspace.create(
-        Path(__file__).parents[1], tmp_path, _manifest(), language=language
-    )
+    created = AgentWorkspace.create(Path(__file__).parents[1], tmp_path, _manifest(), language=language)
     reopened = AgentWorkspace.open(tmp_path, created.run_id)
     assert reopened.language == language
 
