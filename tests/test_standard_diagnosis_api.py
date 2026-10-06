@@ -16,7 +16,7 @@ from fastapi.testclient import TestClient
 from aiops_diagnostics.gateway_api import create_gateway_app
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_runtime import DIAGNOSIS_ORDER_OUT_OF_SCOPE
-from aiops_diagnostics.gateway_store import GatewayStore
+from aiops_diagnostics.gateway_store import ACTIVE_DIAGNOSIS_STATUSES, GatewayStore
 from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
 
 
@@ -99,6 +99,17 @@ class _Runtime:
 
     def list_standard_diagnoses(self, context: ScopeContext, *, limit: int) -> list[dict]:
         return self.store.list_standard_diagnoses(context.scope_fingerprint, limit=limit)
+
+    def cancel_standard_diagnosis(self, context: ScopeContext, diagnosis_id: str) -> dict | None:
+        """Mirror the runtime's idempotent stop: a terminal row comes back as it
+        stands, which is why the cancel body carries `error` for a failed row."""
+        diagnosis = self.store.get_standard_diagnosis(diagnosis_id, context.scope_fingerprint)
+        if diagnosis is None:
+            return None
+        if diagnosis["status"] in ACTIVE_DIAGNOSIS_STATUSES:
+            self.store.update_standard_diagnosis(diagnosis_id, status="cancelled")
+            return self.store.get_standard_diagnosis(diagnosis_id, context.scope_fingerprint)
+        return diagnosis
 
     def shutdown(self) -> None:
         pass
@@ -518,3 +529,43 @@ def test_two_poll_languages_over_one_row_change_the_message_not_the_result(
         assert body[lang]["language"] == "zh"  # the row was created with zh
         assert "provider returned 403" not in body[lang]["error"]["message"]
         assert body[lang]["error"]["code"] == "DIAGNOSIS_FAILED"
+
+
+@pytest.mark.parametrize(
+    ("lang", "fragment"),
+    [("zh", "本次诊断未能完成"), ("en", "could not be completed"), ("fr", "n'a pas pu aboutir")],
+)
+def test_cancel_of_a_failed_diagnosis_renders_in_the_request_language(
+    lang: str, fragment: str, tmp_path: Path
+) -> None:
+    """The cancel response carries a failed row's `error.message`, so it is
+    subject to the same rule as polling.
+
+    Cancelling is idempotent and non-probing: an already-terminal diagnosis is
+    returned as it stands (the runtime's own docstring), which means the cancel
+    body includes `error` for a failed row. It got the new language dependency
+    in the same change, so it needs its own assertion — a parameter threaded
+    through without a test is exactly the "looks wired, was never driven" shape.
+    """
+    client, store, _ = _client(tmp_path)
+    with client:
+        created = client.post(
+            "/v1/standard/diagnoses",
+            headers={"Authorization": "Bearer token"},
+            json={"order_no": "O-1", "question": "test"},
+        ).json()
+        store.update_standard_diagnosis(
+            created["diagnosis_id"],
+            status="failed",
+            error_code="DIAGNOSIS_FAILED",
+            error_message="internal: provider returned 403",
+        )
+        body = client.post(
+            f"/v1/standard/diagnoses/{created['diagnosis_id']}/cancel",
+            headers={"Authorization": "Bearer token", "Accept-Language": lang},
+        ).json()
+
+    assert body["status"] == "failed"  # terminal row returned as it stands
+    assert fragment in body["error"]["message"]
+    assert body["language"] == "zh"  # the stored result language, unchanged
+    assert "provider returned 403" not in body["error"]["message"]
