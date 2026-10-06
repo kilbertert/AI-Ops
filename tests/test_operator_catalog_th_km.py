@@ -75,9 +75,9 @@ def test_the_refusal_message_covers_every_language() -> None:
         assert free_text_unavailable_message(language).strip()
         for other in SUPPORTED_LANGUAGES:
             if other != language:
-                assert free_text_unavailable_message(language) != free_text_unavailable_message(
-                    other
-                ), f"{language} 与 {other} 的拒绝文案相同"
+                assert free_text_unavailable_message(language) != free_text_unavailable_message(other), (
+                    f"{language} 与 {other} 的拒绝文案相同"
+                )
 
 
 def test_the_boundary_is_the_read_only_languages_and_nothing_else() -> None:
