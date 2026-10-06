@@ -81,9 +81,11 @@ from aiops_diagnostics.gateway_store import (
 from aiops_diagnostics.i18n import (
     DEFAULT_LANGUAGE,
     QA_FALLBACK_MESSAGES,
+    can_prompt_in,
     clarification_message,
     diagnosis_error_message,
     effective_language,
+    free_text_unavailable_message,
     resolve_language,
 )
 from aiops_diagnostics.metrics_store import MetricsValidationError
@@ -795,22 +797,67 @@ def create_gateway_app(
                         "message": clarification_message(language, "order_no"),
                     }
 
-        # Route 1: explicit order → diagnosis semantics.
-        if payload.order_no:
-            verdict = _order_authorization(context, caller, payload.order_no)
-            if verdict == UNAVAILABLE:
+        # A language we can RENDER but not ROUTE. Thai and Khmer have no word
+        # boundaries, so `_normalize_keywords` swallows a run into pseudo-tokens
+        # and the matcher stops matching: measured, an UNRELATED Thai sentence
+        # scores a hit against a real entry (false positive), and a reworded one
+        # does not (false negative). The high-risk order cues cannot be written
+        # for these scripts at all.
+        #
+        # This is checked FIRST — ahead of EVERY model-backed route (explicit
+        # order, embedded order, active-order follow-up, promotional, FAQ match
+        # and generic QA), not just the one below it. Two reasons, both load-
+        # bearing:
+        #
+        # 1. Those routes START JOBS. A check after them returns a diagnosis job
+        #    that generates Chinese under a Thai label — exactly the silent
+        #    fallback this boundary exists to prevent.
+        # 2. The FAQ matcher is not SOUND for these scripts (measured: an
+        #    unrelated Thai sentence hits a real entry), so letting one through
+        #    would answer from a catalog entry chosen by a broken matcher.
+        #
+        # An explicit order still gets its authorization checked before this —
+        # see the order-authorization block above — so a caller cannot use the
+        # boundary to probe whether an order exists.
+        #
+        # Placed before every job, turn claim and model call, so a refused
+        # question leaves no row.
+        # An explicit order is AUTHORIZED before the language boundary, not
+        # after it. Ordering these the other way changes the answer to two
+        # questions that have nothing to do with language: an order the caller
+        # does not own would stop being a 404 (so the boundary became a probe),
+        # and an authorization outage would stop being a retryable 503. The
+        # boundary answers "can this language be asked in", and it must not
+        # answer "does this order exist" on the way.
+        order_verdict_before_boundary = (
+            _order_authorization(context, caller, payload.order_no) if payload.order_no else ""
+        )
+        if order_verdict_before_boundary in {UNAVAILABLE, NOT_OWNED}:
+            if order_verdict_before_boundary == UNAVAILABLE:
                 raise StandardAPIError(
                     status.HTTP_503_SERVICE_UNAVAILABLE,
                     "ORDER_AUTHORIZATION_UNAVAILABLE",
                     "order authorization unavailable",
                     retryable=True,
                 )
-            if verdict == NOT_OWNED:
-                raise StandardAPIError(
-                    status.HTTP_404_NOT_FOUND,
-                    "ORDER_NOT_FOUND",
-                    "order not found",
-                )
+            raise StandardAPIError(
+                status.HTTP_404_NOT_FOUND,
+                "ORDER_NOT_FOUND",
+                "order not found",
+            )
+
+        if not can_prompt_in(language):
+            return {
+                **decision.public(),
+                "type": "clarification",
+                "language": language,
+                "question": payload.question,
+                "missing_fields": ["language"],
+                "message": free_text_unavailable_message(language),
+            }
+
+        # Route 1: explicit order → diagnosis semantics.
+        if payload.order_no:
             # The conversation is resolved before routing so EVERY branch can
             # consult it; this one used to read none of its fields. Without the
             # claim the diagnosis is invisible to the conversation: no turn row

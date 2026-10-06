@@ -94,6 +94,48 @@ def can_prompt_in(language: str) -> bool:
     return bool(spec and spec.prompting)
 
 
+#: The reply a READ-ONLY language gets on the free-text path, in its own words.
+#:
+#: Thai and Khmer can be rendered but not ROUTED (no word boundaries — the
+#: deterministic matchers degrade to verbatim lookup and the word-boundary
+#: regexes cannot be written for them at all), so a free-text question in one of
+#: them cannot be answered in a way the pipeline can stand behind. The honest
+#: answer is to say so IN THAT LANGUAGE and point at the shortcuts — not to fall
+#: back to a Chinese model answer, which is the "looks like a reply, is not an
+#: answer" shape this workstream exists to remove.
+#:
+#: Present for every language so the message can be LOCALIZED even where the
+#: language itself is not promptable: the user reads their own language while
+#: the model is never asked to write in it.
+FREE_TEXT_UNAVAILABLE_MESSAGES: dict[str, str] = {
+    "zh": "本入口暂不支持用该语言直接提问，请使用下方快捷问题。",
+    "en": ("This entry cannot take free-text questions in this language yet — please use a shortcut below."),
+    "de": (
+        "Dieser Einstieg kann noch keine Freitextfragen in dieser Sprache annehmen "
+        "— bitte nutzen Sie unten eine Schnellaktion."
+    ),
+    "fr": (
+        "Cette entrée n'accepte pas encore de questions libres dans cette langue "
+        "— utilisez un raccourci ci-dessous."
+    ),
+    "es": (
+        "Esta entrada aún no admite preguntas de texto libre en este idioma; utilice un acceso directo abajo."
+    ),
+    "pt": "Esta entrada ainda não aceita perguntas de texto livre neste idioma — utilize um atalho abaixo.",
+    "vi": "Lối vào này chưa hỗ trợ câu hỏi tự do bằng ngôn ngữ này — vui lòng dùng câu hỏi nhanh bên dưới.",
+    "mn": (
+        "Энэ нэвтрэх хэсэг энэ хэлээр чөлөөт асуулт хүлээж авахгүй байна — доорх товч асуултыг ашиглана уу."
+    ),
+    "th": "ช่องทางนี้ยังไม่รองรับการพิมพ์คำถามด้วยภาษานี้ กรุณาใช้คำถามลัดด้านล่าง",
+    "km": "ផ្លូវចូលនេះមិនទាន់គាំទ្រការសួរជាអក្សរដោយភាសានេះទេ សូមប្រើសំណួររហ័សខាងក្រោម",
+}
+
+
+def free_text_unavailable_message(language: str) -> str:
+    """The read-only language's own words for "this entry cannot take this"."""
+    return FREE_TEXT_UNAVAILABLE_MESSAGES.get(language) or FREE_TEXT_UNAVAILABLE_MESSAGES[DEFAULT_LANGUAGE]
+
+
 def effective_language(language: str | None) -> str:
     """The language a model-backed answer will actually be written in.
 
@@ -612,7 +654,7 @@ DIAGNOSIS_FAILURE_MESSAGES: dict[str, dict[str, str]] = {
         "out_of_scope": "คำสั่งซื้อนี้อยู่นอกขอบเขตที่ได้รับอนุญาต จึงวินิจฉัยต่อไม่ได้",
     },
     "km": {
-        "incomplete": "ការវិនិច្ឆ័យមិនអាចដល់សេចក្តីសន្និដ្ឋានបានទេ ព័ត៌មានលម្អិតត្រូវបានកត់ត្រាសម្រាប់ពិនិត្យ",
+        "incomplete": ("ការវិនិច្ឆ័យមិនអាចដល់សេចក្តីសន្និដ្ឋានបានទេ ព័ត៌មានលម្អិតត្រូវបានកត់ត្រាសម្រាប់ពិនិត្យ"),
         "insufficient_evidence": "ភស្តុតាងដែលមានមិនគ្រប់គ្រាន់សម្រាប់សេចក្តីសន្និដ្ឋានទេ ព័ត៌មានលម្អិតត្រូវបានកត់ត្រាសម្រាប់ពិនិត្យ",
         "out_of_scope": "ការបញ្ជាទិញនេះស្ថិតនៅក្រៅវិសាលភាពដែលបានអនុញ្ញាត មិនអាចបន្តវិនិច្ឆ័យបានទេ",
     },

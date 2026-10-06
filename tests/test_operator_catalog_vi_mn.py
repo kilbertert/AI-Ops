@@ -16,8 +16,9 @@ from aiops_diagnostics.i18n import SUPPORTED_LANGUAGES, chinese_leak
 
 _ADDED = ("vi", "mn")
 #: Languages the operator catalog still does NOT carry. Kept explicit so adding
-#: one later has to be a deliberate edit here too.
-_NOT_YET = ("en", "de", "fr", "es", "pt", "th", "km")
+#: one later has to be a deliberate edit here too. (th/km left this list in
+#: #530 — moving one over is the point of keeping it written down.)
+_NOT_YET = ("en", "de", "fr", "es", "pt")
 
 
 def _catalog() -> FAQCatalog:
