@@ -7,6 +7,37 @@
 
 
 
+
+## afk-bootstrap 1.4.0 迁移：CONTEXT.md → GLOSSARY.md（2026-10-06）
+
+**本次为纯命名迁移，无产品代码或运行行为变化，因此没有真实故障案例。**
+按要求明确：**未完成业务验收**；以下仅为自动化验证。
+
+**自动化检查**：
+
+| 检查 | 命令 | 结果 |
+|---|---|---|
+| 全量单测 | `uv run python -m pytest -q` | 退出码 0；输出与迁移前基线**逐字节一致**，无 FAILED |
+| 仍指向旧文件的引用 | 见下 | 空 |
+| 相对链接目标 | `README.md` 中 `[GLOSSARY.md](GLOSSARY.md)` | 目标文件存在 |
+
+**「仍指向旧文件的引用」的判据**：不能用 `grep -rn 'CONTEXT.md'` —— 本页与
+`docs/开发进度.md` 的记录本身就在叙述这次改名，必然命中自己。判据是
+**仍然指向旧文件的链接/路径**，排除历史叙述：
+
+```
+grep -rn 'CONTEXT\.md' . --exclude-dir=.git --exclude-dir=.venv \
+  | grep -v '迁移' | grep -v '1\.4\.0'
+```
+
+迁移前的命中项为 `README.md` / `AGENTS.md` / `docs/afk-workflow.md` / `docs/handoff-brief.md` /
+`docs/validation.md` / `docs/开发进度.md`；迁移后仅剩本页与进度页中的**历史说明**。
+
+**对照方式说明**：基线取自迁移前的 `main` 检出，与本 worktree 跑同一条 pytest 命令，
+逐字节 diff 输出。worktree 下需 `uv sync --extra dev` 且显式 `PYTHONPATH`
+（editable install 在 worktree 中不自动生效），这是环境差异，与本次改动无关。
+
+**没有构造任何反向对照**：本次没有需要证伪的假设，故未编造对照。
 ## #499 诊断线的取消操作（2026-10-02）
 
 **新增** `POST /v1/standard/diagnoses/{diagnosis_id}/cancel`，与 qa 线的取消**同构**。
@@ -7076,21 +7107,3 @@ vhost 与令牌文件的新形状**保留**（客户端链路实测仍 200）。
 ⇒ 我据此断言「钥匙不是默认值」。**我把自己刚建立的隔离扔掉了**，把一个已知会独立造成 401
 的变量（`exp`）重新混进对照，从而得到一个支持我的观测。判据一旦建立，**反方向也必须用它来证**。
 
-## afk-bootstrap 1.4.0 迁移：CONTEXT.md → GLOSSARY.md（2026-10-06）
-
-**本次为纯命名迁移，无产品代码或运行行为变化，因此没有真实故障案例。**
-按要求明确：**未完成业务验收**；以下仅为自动化验证。
-
-**自动化检查**：
-
-| 检查 | 命令 | 结果 |
-|---|---|---|
-| 全量单测 | `uv run python -m pytest -q` | 退出码 0；输出与迁移前基线**逐字节一致**，无 FAILED |
-| 残留旧名引用 | `grep -rn 'CONTEXT.md' . --exclude-dir=.git --exclude-dir=.venv` | 空 |
-| 相对链接目标 | `README.md` 中 `[GLOSSARY.md](GLOSSARY.md)` | 目标文件存在 |
-
-**对照方式说明**：基线取自迁移前的 \`main\` 检出，与本 worktree 跑同一条 pytest 命令，
-逐字节 diff 输出。worktree 下需 \`uv sync --extra dev\` 且显式 \`PYTHONPATH\`
-（editable install 在 worktree 中不自动生效），这是环境差异，与本次改动无关。
-
-**没有构造任何反向对照**：本次没有需要证伪的假设，故未编造对照。
