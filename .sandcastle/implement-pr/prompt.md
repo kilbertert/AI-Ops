@@ -47,6 +47,16 @@ Not everything in here is necessarily actionable — reviewers may leave context
 2. For a code change, run the Economy ladder and stop at the first option that
    fully addresses the confirmed feedback.
 3. Make the code changes you decided on. Run `uv sync --extra dev && uv run pytest && uv run ruff check`, then `node .sandcastle/policy-check.mjs commit`, before committing. Use conventional-commit messages (`feat:`, `fix:`, `refactor:`, etc.). Do NOT use a `RALPH:` prefix.
+
+This repo HAS a project verification skill, `.claude/skills/verify-aiops-gateway`.
+If your change alters the Gateway's outward behavior (routes, auth, enrollment,
+response shapes), run that skill and capture its evidence before committing.
+Tests are not a substitute: it runs the real gateway on a throwaway data root and
+drives it over HTTP. **Never point it at the real AIOPS_DATA_HOME, and never
+record a device token in evidence or a commit.** It cannot prove `/diag/*` real
+diagnosis, model-backed runs, or KB liveness — say so rather than implying
+coverage. If you cannot run it, say so and why in the commit body; do not report
+it as done.
 4. If you made no changes that's fine — only commit when there's a real diff.
 
 You do not have to reply to every thread. Reply only where a reply adds value: confirming what you changed, explaining why you chose not to make a requested change, answering a question, or pointing out something the reviewer should look at. Silence is fine for context-only comments.

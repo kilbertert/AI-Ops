@@ -57,6 +57,14 @@ grep -rn "<host>\|ssh \|scp \|redis-cli\|systemctl restart" docs/ ops/ README.md
 - 代码、配置、打包或文档流程变更都要运行与风险匹配的 formatter、静态检查、测试和构建检查。
 - 本项目不出 Windows 交付物：CI 只在 Linux 上跑，Windows 便携包已下线（见 `docs/validation.md` 对应决策记录）。便携打包脚本 `packaging/build_portable.py` 保留为按需的本机构建入口，若要恢复 Windows 分发，必须先补回 Windows runner 上的构建与解压烟测。
 - 每次 PR 只解决一个逻辑任务；AI 审查是建议，不替代确定性 CI 和人工判断。
+- 改动影响 Gateway 的对外行为（路由、鉴权、注册、响应形状）时，单测不足以作为证明：
+  用 `verify-aiops-gateway` skill 在一次性数据根上把 gateway 真跑起来并驱动它，
+  留下证据。该 skill 的 `features/` 列出可本地验证的范围。
+- **该 skill 的边界要如实说**：它可证明 API 契约与鉴权模型，
+  **不能**证明 `/diag/*` 真实诊断、模型驱动的 run、KB 活性——这些依赖远端服务。
+  改动落在这些路径上时，明说本地无法证明，不要把本地绿灯当作覆盖。
+- 验证跑在临时数据根上；**永不对真实 `AIOPS_DATA_HOME` 运行**，
+  也**不要把设备令牌写进证据或提交**。
 
 <!-- afk-bootstrap:managed:start -->
 ## AFK workflow gate
