@@ -129,3 +129,104 @@ def _order(**overrides):
     }
     order.update(overrides)
     return order
+
+
+def test_reuse_is_per_language_not_across_languages(tmp_path) -> None:
+    """A job created in one language must not be handed to another.
+
+    The reuse predicate originally keyed on (scope, order, rule_version) only.
+    The report's prose is generated ONCE and stored, so an English request that
+    reused a completed Chinese job received a Chinese report while its response
+    reported the row's language — a correct-looking 200 whose content was in the
+    wrong language, which is the exact defect shape this workstream exists to
+    remove. Caught in review.
+    """
+    from aiops_diagnostics.gateway_store import GatewayStore
+
+    store = GatewayStore(tmp_path / "gateway.db")
+    zh_job, zh_created = store.create_or_reuse_health_job("scope-1", "O-1", "health-v2", language="zh")
+    en_job, en_created = store.create_or_reuse_health_job("scope-1", "O-1", "health-v2", language="en")
+
+    assert zh_created is True
+    assert en_created is True, "英文请求复用了中文作业 —— 会把中文报告交给英文请求者"
+    assert zh_job["job_id"] != en_job["job_id"]
+    assert zh_job["language"] == "zh"
+    assert en_job["language"] == "en"
+
+    # And same-language reuse still works — the fix narrows the predicate, it
+    # does not disable reuse.
+    again, created = store.create_or_reuse_health_job("scope-1", "O-1", "health-v2", language="en")
+    assert created is False
+    assert again["job_id"] == en_job["job_id"]
+
+
+@pytest.mark.parametrize("language", ["en", "de", "fr", "es", "pt"])
+def test_an_unlisted_ykc_code_does_not_emit_chinese(language: str) -> None:
+    """An unlisted code's fallback follows the language too.
+
+    It was briefly an English literal, which put English into a Chinese report —
+    a regression this test pins in the other direction.
+    """
+    from aiops_diagnostics.i18n import chinese_leak
+
+    text = classify_stop_reason("YKC", 999, None, language=language).description
+    assert chinese_leak(text) == "", text
+    assert "999" in text
+
+
+def test_an_unlisted_ykc_code_stays_chinese_for_zh() -> None:
+    text = classify_stop_reason("YKC", 999, None).description
+    assert text == "YKC 停止码 999"
+
+
+def test_a_predating_database_migrates_and_can_be_opened(tmp_path) -> None:
+    """The store must open a database that predates the `language` column.
+
+    This is the one failure a fresh database cannot reproduce, so it needs its
+    own check: the reuse index names `language`, and the CREATE TABLE script
+    that runs FIRST does not define it. Created there, the index was built
+    before the ALTER added the column, and opening the store — on the gateway's
+    own boot path — raised `no such column: language`. Every test that builds a
+    fresh store passed the whole time. Caught before merge by asking what an
+    EXISTING database would do.
+    """
+    import sqlite3
+
+    from aiops_diagnostics.gateway_store import GatewayStore
+
+    database = tmp_path / "predating.db"
+    connection = sqlite3.connect(database)
+    connection.executescript(
+        """
+        CREATE TABLE health_report_jobs (
+            job_id TEXT PRIMARY KEY,
+            scope_fingerprint TEXT NOT NULL,
+            order_no TEXT NOT NULL,
+            rule_version TEXT NOT NULL,
+            status TEXT NOT NULL,
+            report_json TEXT,
+            error_code TEXT,
+            error_message TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            deadline_at TEXT NOT NULL,
+            started_at TEXT,
+            completed_at TEXT,
+            expires_at TEXT
+        );
+        """
+    )
+    connection.commit()
+    connection.close()
+
+    store = GatewayStore(database)  # migration runs here
+    job, created = store.create_or_reuse_health_job("scope-1", "O-1", "health-v2", language="de")
+    assert created is True
+    assert job["language"] == "de"
+
+    # And the reuse index really exists on the migrated database.
+    names = {
+        str(row[0])
+        for row in sqlite3.connect(database).execute("SELECT name FROM sqlite_master WHERE type = 'index'")
+    }
+    assert "idx_health_jobs_reuse_language" in names

@@ -99,7 +99,11 @@ def classify_stop_reason(
     if normalized_protocol.startswith("YKC"):
         numeric = _parse_stop_code(code_text)
         if numeric is not None:
-            description = ykc_stop_reason(language, numeric, content_text or f"YKC stop code {numeric}")
+            description = ykc_stop_reason(
+                language,
+                numeric,
+                content_text or _fallback(language, "ykc_unknown_code").format(code=numeric),
+            )
             if numeric in {78, 110}:
                 return StopReason("balance_insufficient", description, True)
             if 74 <= numeric <= 102:

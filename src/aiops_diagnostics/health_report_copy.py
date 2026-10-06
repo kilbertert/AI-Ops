@@ -127,36 +127,42 @@ HEALTH_STOP_FALLBACK_MESSAGES: dict[str, dict[str, str]] = {
         "package_exhausted": "套餐耗尽",
         "start_failure": "启动失败",
         "unknown_stop_reason": "未提供停止原因",
+        "ykc_unknown_code": "YKC 停止码 {code}",
     },
     "en": {
         "manual_stop": "Stopped by the platform or the user",
         "package_exhausted": "Package exhausted",
         "start_failure": "Start-up failed",
         "unknown_stop_reason": "No stop reason provided",
+        "ykc_unknown_code": "YKC stop code {code}",
     },
     "de": {
         "manual_stop": "Von der Plattform oder dem Nutzer beendet",
         "package_exhausted": "Tarifpaket aufgebraucht",
         "start_failure": "Start fehlgeschlagen",
         "unknown_stop_reason": "Kein Stoppgrund angegeben",
+        "ykc_unknown_code": "YKC-Stoppcode {code}",
     },
     "fr": {
         "manual_stop": "Arrêt par la plateforme ou l'utilisateur",
         "package_exhausted": "Forfait épuisé",
         "start_failure": "Échec du démarrage",
         "unknown_stop_reason": "Aucun motif d'arrêt fourni",
+        "ykc_unknown_code": "Code d'arrêt YKC {code}",
     },
     "es": {
         "manual_stop": "Detenido por la plataforma o el usuario",
         "package_exhausted": "Paquete agotado",
         "start_failure": "Fallo de arranque",
         "unknown_stop_reason": "No se indicó el motivo de parada",
+        "ykc_unknown_code": "Código de parada YKC {code}",
     },
     "pt": {
         "manual_stop": "Parado pela plataforma ou pelo utilizador",
         "package_exhausted": "Pacote esgotado",
         "start_failure": "Falha no arranque",
         "unknown_stop_reason": "Motivo de paragem não indicado",
+        "ykc_unknown_code": "Código de paragem YKC {code}",
     },
 }
 
