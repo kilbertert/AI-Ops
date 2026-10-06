@@ -29,7 +29,11 @@ from aiops_diagnostics.health_report import (
     HealthReportError,
     build_minimal_health_report,
 )
-from aiops_diagnostics.i18n import DEFAULT_LANGUAGE, QA_FALLBACK_MESSAGES
+from aiops_diagnostics.i18n import (
+    DEFAULT_LANGUAGE,
+    QA_FALLBACK_MESSAGES,
+    can_prompt_in,
+)
 from aiops_diagnostics.jev_decisions import JevDecisionClient, JevSettings
 from aiops_diagnostics.journal import EvidenceJournal
 from aiops_diagnostics.knowledge_retrieval import (
@@ -348,12 +352,22 @@ class GatewayRuntime:
     ) -> dict[str, Any]:
         """Start an order diagnosis job.
 
+        ``language`` is normalised to one this pipeline can actually answer in:
+        a tag that cannot be PROMPTED (Thai, Khmer — no word boundaries, so the
+        matchers and rule layer cannot back a claim to answer in it) falls back
+        to the default here, at the point the job is created. Doing it here
+        rather than at render time matters: this value is what gets STORED, and
+        the stored language is what the response reports for the result's prose
+        (#549). Storing `th` while generating Chinese would make the row — and
+        every later poll of it — describe text it does not contain.
+
         With ``conversation_turn`` (T4/#172) the finished diagnosis is written
         back into the conversation's turn row and the generation slot is held
         until the job reaches a terminal state — the same shape the qa line
         (``start_assistant_qa``) already has. Without it nothing about the
         conversation changes.
         """
+        language = language if can_prompt_in(language) else DEFAULT_LANGUAGE
         selected_provider = self.diagnostic_settings.agent.select_provider(None)
         selected_key_slot = validate_key_slot_name(selected_provider.resolved_key_slot())
         if selected_key_slot not in self.allowed_key_slots:

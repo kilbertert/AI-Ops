@@ -37,6 +37,20 @@ class LanguageSpec:
     tag: str
     name: str  # English display name, used in model prompts
     is_chinese: bool
+    #: Whether this language may be injected into a MODEL prompt.
+    #:
+    #: Not every language we can render is one we can ask in. Thai and Khmer
+    #: have no word boundaries, so the deterministic matchers degrade to
+    #: verbatim lookup and the word-boundary regexes cannot be written for them
+    #: at all — a request in one of them can be READ but not reliably ROUTED.
+    #: Letting the diagnosis prompt say "write in Thai" claims a capability the
+    #: rest of the pipeline cannot back.
+    #:
+    #: This is the ONE capability flag that came back after #527 removed four
+    #: of them for having no consumer. It comes back with its consumer: the
+    #: diagnosis surface (#541). The others stay deleted until they have one —
+    #: that is the rule #527 settled, not a permanent verdict on the idea.
+    prompting: bool = True
 
 
 # THE inventory. Adding a language is one entry here plus whatever its data
@@ -52,8 +66,8 @@ LANGUAGES: tuple[LanguageSpec, ...] = (
     LanguageSpec("pt", "Portuguese", is_chinese=False),
     LanguageSpec("vi", "Vietnamese", is_chinese=False),
     LanguageSpec("mn", "Mongolian", is_chinese=False),
-    LanguageSpec("th", "Thai", is_chinese=False),
-    LanguageSpec("km", "Khmer", is_chinese=False),
+    LanguageSpec("th", "Thai", is_chinese=False, prompting=False),
+    LanguageSpec("km", "Khmer", is_chinese=False, prompting=False),
 )
 
 # Must stay aligned with the i18n catalog shipped in faq_catalog.json (#200).
@@ -66,6 +80,18 @@ SUPPORTED_LANGUAGES: tuple[str, ...] = tuple(spec.tag for spec in LANGUAGES)
 DEFAULT_LANGUAGE = "zh"
 
 _BY_TAG = {spec.tag: spec for spec in LANGUAGES}
+
+
+def can_prompt_in(language: str) -> bool:
+    """Whether a model prompt may be written in ``language`` (#541).
+
+    The diagnosis surface asks this before injecting the target language. A
+    request in a language that cannot be prompted falls back to the default —
+    the same answer `resolve_language` gives an unsupported tag, because to the
+    model it is unsupported.
+    """
+    spec = _BY_TAG.get(language)
+    return bool(spec and spec.prompting)
 
 
 def language_spec(language: str) -> LanguageSpec | None:
