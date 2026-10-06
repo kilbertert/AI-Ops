@@ -50,6 +50,10 @@ LANGUAGES: tuple[LanguageSpec, ...] = (
     LanguageSpec("fr", "French", is_chinese=False),
     LanguageSpec("es", "Spanish", is_chinese=False),
     LanguageSpec("pt", "Portuguese", is_chinese=False),
+    LanguageSpec("vi", "Vietnamese", is_chinese=False),
+    LanguageSpec("mn", "Mongolian", is_chinese=False),
+    LanguageSpec("th", "Thai", is_chinese=False),
+    LanguageSpec("km", "Khmer", is_chinese=False),
 )
 
 # Must stay aligned with the i18n catalog shipped in faq_catalog.json (#200).
@@ -218,6 +222,44 @@ QA_FALLBACK_MESSAGES: dict[str, dict[str, str]] = {
         "generation_failed": ("Não foi possível gerar esta resposta. Tente novamente mais tarde."),
         "limited": "Não foi possível concluir a busca. Tente novamente ou reformule a sua pergunta.",
     },
+    "vi": {
+        "not_found": (
+            "Không tìm thấy tài liệu nào thực sự liên quan trong kho kiến thức; "
+            "hiện chưa có câu trả lời dựa trên bằng chứng."
+        ),
+        "unavailable": (
+            "Kho kiến thức tạm thời không khả dụng và câu trả lời không thể được xác minh. "
+            "Vui lòng thử lại sau."
+        ),
+        "generation_failed": "Không thể tạo câu trả lời này. Vui lòng thử lại sau.",
+        "limited": "Không thể hoàn tất tra cứu này. Vui lòng thử lại hoặc diễn đạt lại câu hỏi.",
+    },
+    "mn": {
+        "not_found": (
+            "Мэдлэгийн санд энэ асуултад шууд хамаатай материал олдсонгүй; "
+            "нотолгоонд суурилсан хариулт өгөх боломжгүй байна."
+        ),
+        "unavailable": (
+            "Мэдлэгийн сан түр хугацаанд боломжгүй байгаа тул хариултыг баталгаажуулж чадсангүй. "
+            "Дараа дахин оролдоно уу."
+        ),
+        "generation_failed": "Энэ хариултыг үүсгэж чадсангүй. Дараа дахин оролдоно уу.",
+        "limited": "Энэ хайлтыг дуусгаж чадсангүй. Дараа дахин оролдох эсвэл асуултаа өөрөөр тавина уу.",
+    },
+    "th": {
+        "not_found": "ไม่พบเอกสารที่เกี่ยวข้องโดยตรงในฐานความรู้ จึงยังไม่มีคำตอบที่อ้างอิงหลักฐานได้",
+        "unavailable": "ฐานความรู้ไม่พร้อมใช้งานชั่วคราว และคำตอบนี้ไม่สามารถตรวจสอบได้ กรุณาลองใหม่ภายหลัง",
+        "generation_failed": "ไม่สามารถสร้างคำตอบนี้ได้ กรุณาลองใหม่ภายหลัง",
+        "limited": "การค้นหานี้ไม่สำเร็จ กรุณาลองใหม่หรือเปลี่ยนวิธีถาม",
+    },
+    "km": {
+        "not_found": ("រកមិនឃើញឯកសារពាក់ព័ន្ធដោយផ្ទាល់នៅក្នុងមូលដ្ឋានចំណេះដឹងទេ ដូច្នេះមិនអាចផ្តល់ចម្លើយដែលមានភស្តុតាងបានឡើយ"),
+        "unavailable": (
+            "មូលដ្ឋានចំណេះដឹងមិនអាចប្រើប្រាស់បានបណ្តោះអាសន្ន ហើយចម្លើយនេះមិនអាចផ្ទៀងផ្ទាត់បានទេ។ សូមព្យាយាមម្តងទៀតនៅពេលក្រោយ"
+        ),
+        "generation_failed": "មិនអាចបង្កើតចម្លើយនេះបានទេ។ សូមព្យាយាមម្តងទៀតនៅពេលក្រោយ",
+        "limited": "ការស្វែងរកនេះមិនបានសម្រេចទេ។ សូមព្យាយាមម្តងទៀត ឬសួរបែបផ្សេង",
+    },
 }
 
 # Honest empty promotional card when the pinned agent/KB has no match (#231).
@@ -252,6 +294,22 @@ PROMO_EMPTY_MESSAGES: dict[str, dict[str, str]] = {
     "pt": {
         "case_exploration": "Não há nenhum caso de cliente correspondente na biblioteca promocional.",
         "solution_discovery": "Não há nenhuma solução setorial correspondente na biblioteca promocional.",
+    },
+    "vi": {
+        "case_exploration": "Không có khách hàng điển hình nào phù hợp trong thư viện quảng bá.",
+        "solution_discovery": "Không có giải pháp ngành nào phù hợp trong thư viện quảng bá.",
+    },
+    "mn": {
+        "case_exploration": "Сурталчилгааны санд тохирох хэрэглэгчийн жишээ байхгүй.",
+        "solution_discovery": "Сурталчилгааны санд тохирох салбарын шийдэл байхгүй.",
+    },
+    "th": {
+        "case_exploration": "ไม่มีกรณีลูกค้าที่ตรงกันในคลังสื่อประชาสัมพันธ์",
+        "solution_discovery": "ไม่มีโซลูชันอุตสาหกรรมที่ตรงกันในคลังสื่อประชาสัมพันธ์",
+    },
+    "km": {
+        "case_exploration": "មិនមានករណីអតិថិជនដែលត្រូវគ្នានៅក្នុងបណ្ណាល័យផ្សព្វផ្សាយទេ",
+        "solution_discovery": "មិនមានដំណោះស្រាយឧស្សាហកម្មដែលត្រូវគ្នានៅក្នុងបណ្ណាល័យផ្សព្វផ្សាយទេ",
     },
 }
 
@@ -302,6 +360,22 @@ PROMO_UNAVAILABLE_MESSAGES: dict[str, dict[str, str]] = {
             "As soluções setoriais estão temporariamente indisponíveis. Tente novamente mais tarde."
         ),
     },
+    "vi": {
+        "case_exploration": "Dịch vụ khách hàng điển hình tạm thời không khả dụng. Vui lòng thử lại sau.",
+        "solution_discovery": "Dịch vụ giải pháp ngành tạm thời không khả dụng. Vui lòng thử lại sau.",
+    },
+    "mn": {
+        "case_exploration": "Хэрэглэгчийн жишээний үйлчилгээ түр боломжгүй байна. Дараа дахин оролдоно уу.",
+        "solution_discovery": "Салбарын шийдлийн үйлчилгээ түр боломжгүй байна. Дараа дахин оролдоно уу.",
+    },
+    "th": {
+        "case_exploration": "บริการกรณีลูกค้าไม่พร้อมใช้งานชั่วคราว กรุณาลองใหม่ภายหลัง",
+        "solution_discovery": "บริการโซลูชันอุตสาหกรรมไม่พร้อมใช้งานชั่วคราว กรุณาลองใหม่ภายหลัง",
+    },
+    "km": {
+        "case_exploration": "សេវាករណីអតិថិជនមិនអាចប្រើប្រាស់បានបណ្តោះអាសន្ន។ សូមព្យាយាមម្តងទៀតនៅពេលក្រោយ",
+        "solution_discovery": "សេវាដំណោះស្រាយឧស្សាហកម្មមិនអាចប្រើប្រាស់បានបណ្តោះអាសន្ន។ សូមព្យាយាមម្តងទៀតនៅពេលក្រោយ",
+    },
 }
 
 
@@ -347,6 +421,26 @@ CLARIFICATION_MESSAGES: dict[str, dict[str, str]] = {
         "context": "Forneça os dados do pedido ou do dispositivo para que eu possa continuar.",
         "wrong_entry": "Utilize o botão da página para abrir o ecrã correspondente.",
     },
+    "vi": {
+        "order_no": "Vui lòng chọn đơn hàng cần kiểm tra trước khi tôi tiếp tục.",
+        "context": "Vui lòng cung cấp thông tin đơn hàng hoặc thiết bị để tôi tiếp tục.",
+        "wrong_entry": "Vui lòng dùng nút trên trang để mở màn hình tương ứng.",
+    },
+    "mn": {
+        "order_no": "Үргэлжлүүлэхийн тулд эхлээд шалгах захиалгаа сонгоно уу.",
+        "context": "Үргэлжлүүлэхийн тулд захиалга эсвэл төхөөрөмжийн мэдээллийг өгнө үү.",
+        "wrong_entry": "Холбогдох хуудсыг хуудасны товчоор нээнэ үү.",
+    },
+    "th": {
+        "order_no": "กรุณาเลือกคำสั่งซื้อที่ต้องการตรวจสอบก่อน เพื่อให้ฉันดำเนินการต่อได้",
+        "context": "กรุณาให้ข้อมูลคำสั่งซื้อหรืออุปกรณ์ เพื่อให้ฉันดำเนินการต่อได้",
+        "wrong_entry": "กรุณาใช้ปุ่มบนหน้าเพื่อเปิดหน้าจอที่เกี่ยวข้อง",
+    },
+    "km": {
+        "order_no": "សូមជ្រើសរើសការបញ្ជាទិញដែលត្រូវពិនិត្យជាមុនសិន ដើម្បីឱ្យខ្ញុំបន្តបាន",
+        "context": "សូមផ្តល់ព័ត៌មានការបញ្ជាទិញ ឬឧបករណ៍ ដើម្បីឱ្យខ្ញុំបន្តបាន",
+        "wrong_entry": "សូមប្រើប៊ូតុងនៅលើទំព័រ ដើម្បីបើកអេក្រង់ដែលពាក់ព័ន្ធ",
+    },
 }
 
 CLARIFICATION_FALLBACK_KEY = "context"
@@ -365,6 +459,10 @@ ZERO_ORDER_REMINDER_MESSAGES: dict[str, str] = {
     "fr": "Indiquer un numéro de commande permet un résultat plus précis.",
     "es": "Indicar un número de pedido permite un resultado más preciso.",
     "pt": "Indicar um número de pedido permite um resultado mais preciso.",
+    "vi": "Cung cấp số đơn hàng sẽ cho kết quả chính xác hơn.",
+    "mn": "Захиалгын дугаараа оруулбал илүү нарийвчилсан үр дүн гарна.",
+    "th": "ระบุหมายเลขคำสั่งซื้อจะได้ผลลัพธ์ที่แม่นยำยิ่งขึ้น",
+    "km": "ការផ្តល់លេខការបញ្ជាទិញនឹងផ្តល់លទ្ធផលត្រឹមត្រូវជាង",
 }
 
 
@@ -454,6 +552,30 @@ DIAGNOSIS_FAILURE_MESSAGES: dict[str, dict[str, str]] = {
         ),
         "out_of_scope": ("Este pedido está fora do âmbito autorizado; o diagnóstico não pode continuar."),
     },
+    "vi": {
+        "incomplete": "Chẩn đoán không đưa ra được kết luận; chi tiết đã được ghi lại để rà soát.",
+        "insufficient_evidence": (
+            "Bằng chứng hiện có chưa đủ để kết luận; chi tiết đã được ghi lại để rà soát."
+        ),
+        "out_of_scope": "Đơn hàng này nằm ngoài phạm vi được phép, không thể tiếp tục chẩn đoán.",
+    },
+    "mn": {
+        "incomplete": "Оношилгоо дүгнэлт гаргаж чадсангүй; дэлгэрэнгүйг хянан шалгахаар бүртгэсэн.",
+        "insufficient_evidence": (
+            "Байгаа нотолгоо дүгнэлт гаргахад хүрэлцэхгүй байна; дэлгэрэнгүйг хянан шалгахаар бүртгэсэн."
+        ),
+        "out_of_scope": "Энэ захиалга зөвшөөрөгдсөн хүрээнээс гадуур тул оношилгоог үргэлжлүүлэх боломжгүй.",
+    },
+    "th": {
+        "incomplete": "การวินิจฉัยไม่สามารถสรุปผลได้ บันทึกรายละเอียดไว้ให้ตรวจสอบแล้ว",
+        "insufficient_evidence": "หลักฐานที่มีไม่เพียงพอต่อการสรุปผล บันทึกรายละเอียดไว้ให้ตรวจสอบแล้ว",
+        "out_of_scope": "คำสั่งซื้อนี้อยู่นอกขอบเขตที่ได้รับอนุญาต จึงวินิจฉัยต่อไม่ได้",
+    },
+    "km": {
+        "incomplete": "ការវិនិច្ឆ័យមិនអាចដល់សេចក្តីសន្និដ្ឋានបានទេ ព័ត៌មានលម្អិតត្រូវបានកត់ត្រាសម្រាប់ពិនិត្យ",
+        "insufficient_evidence": "ភស្តុតាងដែលមានមិនគ្រប់គ្រាន់សម្រាប់សេចក្តីសន្និដ្ឋានទេ ព័ត៌មានលម្អិតត្រូវបានកត់ត្រាសម្រាប់ពិនិត្យ",
+        "out_of_scope": "ការបញ្ជាទិញនេះស្ថិតនៅក្រៅវិសាលភាពដែលបានអនុញ្ញាត មិនអាចបន្តវិនិច្ឆ័យបានទេ",
+    },
 }
 
 
@@ -515,6 +637,34 @@ DIAGNOSIS_ERROR_MESSAGES: dict[str, dict[str, str]] = {
         "expired": "Este diagnóstico expirou. Inicie um novo.",
         "interrupted": "O reinício do serviço interrompeu este diagnóstico. Inicie um novo.",
         "generic": "Este diagnóstico não foi concluído.",
+    },
+    "vi": {
+        "out_of_scope": "Đơn hàng này nằm ngoài phạm vi được phép.",
+        "failed": "Chẩn đoán này không hoàn tất được. Vui lòng thử lại sau.",
+        "expired": "Chẩn đoán này đã quá hạn. Vui lòng bắt đầu lại.",
+        "interrupted": "Khởi động lại dịch vụ đã ngắt chẩn đoán này. Vui lòng bắt đầu lại.",
+        "generic": "Chẩn đoán này không hoàn tất được.",
+    },
+    "mn": {
+        "out_of_scope": "Энэ захиалга зөвшөөрөгдсөн хүрээнээс гадуур байна.",
+        "failed": "Энэ оношилгоо дуусгаж чадсангүй. Дараа дахин оролдоно уу.",
+        "expired": "Энэ оношилгооны хугацаа хэтэрсэн. Дахин эхлүүлнэ үү.",
+        "interrupted": "Үйлчилгээ дахин эхэлснээс энэ оношилгоо тасарсан. Дахин эхлүүлнэ үү.",
+        "generic": "Энэ оношилгоо дуусгаж чадсангүй.",
+    },
+    "th": {
+        "out_of_scope": "คำสั่งซื้อนี้อยู่นอกขอบเขตที่ได้รับอนุญาต",
+        "failed": "การวินิจฉัยนี้ไม่สำเร็จ กรุณาลองใหม่ภายหลัง",
+        "expired": "การวินิจฉัยนี้หมดเวลาแล้ว กรุณาเริ่มใหม่",
+        "interrupted": "การรีสตาร์ตบริการทำให้การวินิจฉัยนี้ถูกขัดจังหวะ กรุณาเริ่มใหม่",
+        "generic": "การวินิจฉัยนี้ไม่สำเร็จ",
+    },
+    "km": {
+        "out_of_scope": "ការបញ្ជាទិញនេះស្ថិតនៅក្រៅវិសាលភាពដែលបានអនុញ្ញាត",
+        "failed": "ការវិនិច្ឆ័យនេះមិនបានសម្រេចទេ។ សូមព្យាយាមម្តងទៀតនៅពេលក្រោយ",
+        "expired": "ការវិនិច្ឆ័យនេះផុតកំណត់ហើយ។ សូមចាប់ផ្តើមថ្មី",
+        "interrupted": "ការចាប់ផ្តើមសេវាឡើងវិញបានផ្អាកការវិនិច្ឆ័យនេះ។ សូមចាប់ផ្តើមថ្មី",
+        "generic": "ការវិនិច្ឆ័យនេះមិនបានសម្រេចទេ",
     },
 }
 

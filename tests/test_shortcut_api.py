@@ -1201,10 +1201,14 @@ def test_copy_gap_gate_names_every_missing_field_and_language() -> None:
     gaps = shortcut_copy_gaps([row])
 
     assert {gap.code for gap in gaps} == {"solution_discovery"}
-    # All three copy fields lack de/fr/es/pt; `description` lacks en as well,
-    # which is the field that lines the fixture up with the live gap.
+    # All three copy fields lack every non-default language; `description`
+    # lacks en as well, which is the field that lines the fixture up with the
+    # live gap. Derived from the inventory, not hand-copied: a literal here has
+    # to be edited on every language addition, which is the drift #527 removed.
+    from aiops_diagnostics.i18n import NON_CHINESE_LANGUAGES
+
     assert {gap.field for gap in gaps} == {"label", "description", "question_template"}
-    assert {gap.language for gap in gaps} == {"de", "fr", "es", "pt", "en"}
+    assert {gap.language for gap in gaps} == set(NON_CHINESE_LANGUAGES)
     missing_pairs = {(gap.field, gap.language) for gap in gaps}
     assert ("description", "en") in missing_pairs
     assert ("label", "en") not in missing_pairs
