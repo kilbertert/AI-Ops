@@ -50,6 +50,11 @@ docs/管家端.docx
 # 本地产品原型与验收脚本（不进入仓库）
 docs/原型/
 scripts/
+# 例外：仓库内的 agent skill 自带脚本属于交付物，必须入库。
+# `scripts/` 是裸模式，会在任意深度匹配，所以 verify-aiops-gateway 的
+# observe.py 曾被静默排除（skill 已在 main 上，脚本却没进去）。
+!.claude/skills/*/scripts/
+!.claude/skills/*/scripts/**
 
 # 知识库联调素材（业务方提供的原始 docx/mp4，仅上传 kb-service 用）
 docs/知识库材料/
