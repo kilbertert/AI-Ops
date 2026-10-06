@@ -313,11 +313,18 @@ class GatewayRuntime:
     def shutdown(self) -> None:
         self._executor.shutdown(wait=False, cancel_futures=False)
 
-    def start_health_report(self, context: ScopeContext, order_no: str) -> dict[str, Any]:
+    def start_health_report(
+        self,
+        context: ScopeContext,
+        order_no: str,
+        *,
+        language: str = DEFAULT_LANGUAGE,
+    ) -> dict[str, Any]:
         job, created = self.store.create_or_reuse_health_job(
             context.scope_fingerprint,
             order_no,
             HEALTH_RULE_VERSION,
+            language=language,
         )
         if not created:
             return job
@@ -998,10 +1005,21 @@ class GatewayRuntime:
         try:
             scope = resolve_query_scope(context)
             with scoped_live_sources(self.diagnostic_settings, scope=scope) as sources:
+                # The report's prose is generated ONCE and stored, like a
+                # diagnosis result — so it is written in the language the job
+                # was CREATED in, read back from the row, not from whatever
+                # Accept-Language a later poll happens to carry. Rendering the
+                # summary per-poll would also mean the stored report's language
+                # changed under a reader who already saw it.
+                job_language = str(
+                    self.store.get_health_job(job_id, context.scope_fingerprint).get("language")
+                    or DEFAULT_LANGUAGE
+                )
                 report = build_minimal_health_report(
                     sources,
                     order_no,
                     self.diagnostic_settings.safety,
+                    language=job_language,
                 )
                 order = sources.get_orders(order_no)[0]
                 device = str(order.get("child_device_code") or order.get("device_code"))
@@ -1017,7 +1035,7 @@ class GatewayRuntime:
                     report["source_summary"]["telemetry"] = "unavailable"
                 else:
                     report["source_summary"]["telemetry"] = "available" if samples else "unavailable"
-                report["curves"] = build_curves(samples)
+                report["curves"] = build_curves(samples, job_language)
                 report = enrich_report(report, samples, order)
             # Every terminal write below is checked, and the refusal is the
             # same quiet exit the qa line takes (`_execute_assistant_qa`, #355):

@@ -3,6 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
+from aiops_diagnostics.health_report_copy import stop_reason_fallback, ykc_stop_reason
+from aiops_diagnostics.i18n import DEFAULT_LANGUAGE
+
 ORDER_STATUS = {
     0: "充电中",
     1: "充电结束",
@@ -63,22 +66,40 @@ def status_label(status: object) -> str:
     return ORDER_STATUS.get(numeric, f"未定义状态({numeric})")
 
 
-def classify_stop_reason(protocol: str | None, code: object, content: str | None) -> StopReason:
+def _fallback(language: str, classification: str) -> str:
+    """Our own stop-reason text for a classification the upstream left blank.
+
+    Kept as a named lookup so the table stays the single source; the value is
+    never empty (``stop_reason_fallback`` falls back to the default language).
+    """
+    resolved = stop_reason_fallback(language, classification)
+    return resolved if resolved else classification
+
+
+def classify_stop_reason(
+    protocol: str | None,
+    code: object,
+    content: str | None,
+    *,
+    language: str = DEFAULT_LANGUAGE,
+) -> StopReason:
     normalized_protocol = (protocol or "").upper()
     code_text = "" if code is None else str(code).strip()
     content_text = (content or "").strip()
 
     if code_text == "-1":
-        return StopReason("manual_stop", content_text or "平台或用户主动停止", False)
+        return StopReason("manual_stop", content_text or _fallback(language, "manual_stop"), False)
     if code_text == "-2":
-        return StopReason("package_exhausted", content_text or "套餐耗尽", False)
+        return StopReason(
+            "package_exhausted", content_text or _fallback(language, "package_exhausted"), False
+        )
     if code_text == "-3":
-        return StopReason("start_failure", content_text or "启动失败", True)
+        return StopReason("start_failure", content_text or _fallback(language, "start_failure"), True)
 
     if normalized_protocol.startswith("YKC"):
         numeric = _parse_stop_code(code_text)
         if numeric is not None:
-            description = YKC_STOP_REASONS.get(numeric, content_text or f"YKC 停止码 {numeric}")
+            description = ykc_stop_reason(language, numeric, content_text or f"YKC stop code {numeric}")
             if numeric in {78, 110}:
                 return StopReason("balance_insufficient", description, True)
             if 74 <= numeric <= 102:
@@ -105,7 +126,7 @@ def classify_stop_reason(protocol: str | None, code: object, content: str | None
         return StopReason("communication_or_power_loss", content_text, True)
     if content_text:
         return StopReason("reported_stop_reason", content_text, None)
-    return StopReason("unknown_stop_reason", code_text or "未提供停止原因", None)
+    return StopReason("unknown_stop_reason", code_text or _fallback(language, "unknown_stop_reason"), None)
 
 
 def is_server_billing(protocol: str | None) -> bool:

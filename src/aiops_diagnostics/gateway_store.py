@@ -218,6 +218,8 @@ class GatewayStore:
         scope_fingerprint: str,
         order_no: str,
         rule_version: str,
+        *,
+        language: str = "zh",
     ) -> tuple[dict[str, Any], bool]:
         scope_fingerprint = _scope(scope_fingerprint, "scope_fingerprint")
         order_no = _scope(order_no, "order_no")
@@ -241,15 +243,16 @@ class GatewayStore:
             connection.execute(
                 """
                 INSERT INTO health_report_jobs (
-                    job_id, scope_fingerprint, order_no, rule_version, status,
+                    job_id, scope_fingerprint, order_no, rule_version, status, language,
                     created_at, updated_at, deadline_at
-                ) VALUES (?, ?, ?, ?, 'queued', ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?)
                 """,
                 (
                     job_id,
                     scope_fingerprint,
                     order_no,
                     rule_version,
+                    _language(language),
                     _iso(now),
                     _iso(now),
                     _iso(now + HEALTH_JOB_DEADLINE),
@@ -976,6 +979,7 @@ class GatewayStore:
                     order_no TEXT NOT NULL,
                     rule_version TEXT NOT NULL,
                     status TEXT NOT NULL,
+                    language TEXT NOT NULL DEFAULT 'zh',
                     report_json TEXT,
                     error_code TEXT,
                     error_message TEXT,
@@ -1041,6 +1045,13 @@ class GatewayStore:
             if "language" not in diagnosis_columns:
                 connection.execute(
                     "ALTER TABLE standard_diagnoses ADD COLUMN language TEXT NOT NULL DEFAULT 'zh'"
+                )
+            health_columns = {
+                str(row[1]) for row in connection.execute("PRAGMA table_info(health_report_jobs)").fetchall()
+            }
+            if "language" not in health_columns:
+                connection.execute(
+                    "ALTER TABLE health_report_jobs ADD COLUMN language TEXT NOT NULL DEFAULT 'zh'"
                 )
             # Constructing a store converges NOTHING (#492). This path used to
             # end every `queued`/`running` health job and diagnosis without a

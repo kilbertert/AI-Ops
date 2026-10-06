@@ -4,6 +4,8 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from aiops_diagnostics.config import SafetySettings
+from aiops_diagnostics.health_report_copy import health_summary
+from aiops_diagnostics.i18n import DEFAULT_LANGUAGE
 from aiops_diagnostics.rules import classify_stop_reason
 
 HEALTH_RULE_VERSION = "health-v1"
@@ -24,6 +26,7 @@ def build_minimal_health_report(
     sources: OrderSource,
     order_no: str,
     safety: SafetySettings,
+    language: str = DEFAULT_LANGUAGE,
 ) -> dict[str, Any]:
     orders = sources.get_orders(order_no)
     if not orders:
@@ -57,18 +60,20 @@ def build_minimal_health_report(
             str(order.get("device_protocol") or ""),
             code,
             content,
+            language=language,
         )
         status = "abnormal" if stop.abnormal is True else "normal" if stop.abnormal is False else "attention"
         indicator = _indicator(status=status, value=content or stop.description)
 
     completeness = 0.0 if indicator["status"] == "unavailable" else 1.0
-    summary = (
-        "本次充电健康报告包含 1 项正常指标"
+    summary_key = (
+        "normal"
         if indicator["status"] == "normal"
-        else "本次充电健康报告有 1 项指标需关注"
+        else "attention"
         if indicator["status"] in {"attention", "abnormal"}
-        else "本次充电健康报告有 1 项指标因数据不足无法评估"
+        else "insufficient"
     )
+    summary = health_summary(language, summary_key)
     return {
         "order_no": order_no,
         "order_window": {

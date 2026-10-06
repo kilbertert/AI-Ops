@@ -42,7 +42,7 @@ class _Runtime:
     def __init__(self, store: GatewayStore) -> None:
         self.store = store
 
-    def start_health_report(self, context: ScopeContext, order_no: str):
+    def start_health_report(self, context: ScopeContext, order_no: str, *, language: str = "zh"):
         job, _ = self.store.create_or_reuse_health_job(context.scope_fingerprint, order_no, "health-v1")
         return job
 

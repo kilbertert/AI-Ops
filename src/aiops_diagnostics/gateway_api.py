@@ -1444,6 +1444,7 @@ def create_gateway_app(
     def create_health_report_job(
         payload: HealthReportJobRequest,
         caller: ScopeContext = Depends(authenticated_caller),  # noqa: B008
+        language: str = Depends(request_language),  # noqa: B008
     ) -> dict[str, Any]:
         verdict = _order_authorization(context, caller, payload.order_no)
         if verdict == UNAVAILABLE:
@@ -1460,7 +1461,7 @@ def create_gateway_app(
                 "order not found",
             )
         try:
-            job = context.runtime.start_health_report(caller, payload.order_no)
+            job = context.runtime.start_health_report(caller, payload.order_no, language=language)
         except (ValueError, RuntimeError) as exc:
             raise _runtime_unavailable(
                 "REPORT_JOB_UNAVAILABLE", "health report job unavailable", exc
@@ -2386,6 +2387,11 @@ def _health_job_response(job: dict[str, Any]) -> dict[str, Any]:
         "rule_version": job["rule_version"],
         "status": status_value,
         "retry_after_ms": 1000 if status_value in ACTIVE_HEALTH_JOB_STATUSES else None,
+        # The report's prose language: the language the JOB was created in.
+        # It describes the stored `report`, not this request — a poller cannot
+        # relabel a report it did not create (same rule as the diagnosis
+        # surface; see `_standard_diagnosis_response`).
+        "language": job.get("language") or "zh",
         "report": job.get("report"),
         "error": (
             {
