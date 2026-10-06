@@ -422,7 +422,8 @@ def test_polling_stops_on_every_status_the_whitelist_accepts(tmp_path: Path) -> 
                 (status, diagnosis["diagnosis_id"]),
             )
         rendered[status] = _standard_diagnosis_response(
-            store.get_standard_diagnosis(diagnosis["diagnosis_id"], "scope-1")
+            store.get_standard_diagnosis(diagnosis["diagnosis_id"], "scope-1"),
+            "zh",
         )
 
     for status in sorted(ACTIVE_DIAGNOSIS_STATUSES):
