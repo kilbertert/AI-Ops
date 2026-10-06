@@ -258,6 +258,7 @@ flowchart TB
 | `rules.py` | 停止原因分类、服务端/桩端计费判定、状态标签 |
 | `order_visibility.py` | **租户可见性规则的唯一定义**，三种渲染（见推论三） |
 | `health_metrics.py` / `health_curves.py` | 充电健康指标计算与曲线降采样 |
+| `health_report_copy.py` | 健康报告文案（摘要 / 曲线名 / 停因，六语）|
 | `parsing.py` | `parse_request`：自然语言 → 结构化请求。**只提取订单号与意图**，不接受 SQL、不选表 |
 
 #### L2 身份与范围
@@ -467,7 +468,7 @@ docs/                     架构、契约、ADR、运行手册（见第十节路
 .github/workflows/        确定性 CI + AFK 治理面流水线
 .sandcastle/              AFK 执行层（TypeScript 编排、静态策略、投递状态机）
 AGENTS.md                 仓库级开发共识（中文文档、里程碑同步、业务边界）
-CONTEXT.md                领域词汇表（术语 + 应避免的同义词）
+GLOSSARY.md                领域词汇表（术语 + 应避免的同义词）
 SOP.md / 充电桩问题排查SOP.md   业务规则来源（后端行为的中文说明）
 acceptance.feature        Gherkin 可执行验收约束（31 Feature / 81 Rule / 240 Scenario）
 qa-plan.md                QA 用例（158 个用例 ID，含环境/前置/数据/动作/预期/清理）
@@ -619,7 +620,7 @@ runbook §5/§6 明确禁止 CI 自证。所以 CD 通过最多报告 `merged_wa
 |---|---|
 | 现在到哪一步了？ | [docs/agents/current-delivery-state.md](docs/agents/current-delivery-state.md) + [docs/validation.md](docs/validation.md) 首节 |
 | 某个历史决定为什么这么做？ | [docs/adr/](docs/adr/) |
-| 某个术语到底指什么？ | [CONTEXT.md](CONTEXT.md)（词汇表，不含规格） |
+| 某个术语到底指什么？ | [GLOSSARY.md](GLOSSARY.md)（词汇表，不含规格） |
 | 对外接口契约？ | 固定问答 [docs/faq-api.md](docs/faq-api.md)；健康报告与单问诊断 [docs/standard-api-contract.md](docs/standard-api-contract.md)（**冲突时以这两份为准**） |
 | 怎么跑起来？ | [docs/快速上手.md](docs/快速上手.md) |
 | 系统架构简述？ | [docs/architecture.md](docs/architecture.md) |

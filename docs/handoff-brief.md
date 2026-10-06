@@ -9,7 +9,7 @@ Created 2026-08-27._
 
 - **AFK workflow fully wired** in all 4 repos (Auto-Test / genesis-evidence /
   health-flow / AI-Ops): `.sandcastle` runner + planner (`pnpm ralph`) +
-  label Actions + `CONTEXT.md` + `CODING_STANDARDS.md` + `docs/afk-workflow.md`.
+  label Actions + `GLOSSARY.md` + `CODING_STANDARDS.md` + `docs/afk-workflow.md`.
 - **Plan A (no auto-claim) active** — no label auto-runs an issue; driven by
   `pnpm ralph` (planner), `pnpm afk` (single), or explicit `workflow_dispatch`.
 - **Providers** (AFK): `claude` and `claude-stepfun`. The four older profiles
@@ -66,7 +66,7 @@ T10  #43 收口(切流量+删凭据)                    ╎ needs #34, #37-41, #
 
 ## 5. What to tell Claude Code in AI-Ops
 
-- Read `CONTEXT.md`, `CODING_STANDARDS.md`, `docs/diag-query-api-plan.md`,
+- Read `GLOSSARY.md`, `CODING_STANDARDS.md`, `docs/diag-query-api-plan.md`,
   `docs/afk-workflow.md` first.
 - The AFK machinery is repo-local and ready: `.sandcastle` runner + planner +
   actions; use `pnpm afk -- <issue>` or `pnpm ralph` (planner) when an issue is

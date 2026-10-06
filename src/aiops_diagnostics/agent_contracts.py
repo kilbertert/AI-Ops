@@ -7,6 +7,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from aiops_diagnostics.i18n import DEFAULT_LANGUAGE
 from aiops_diagnostics.models import DiagnosticRequest
 from aiops_diagnostics.redaction import redact_text
 
@@ -144,6 +145,12 @@ class RunState(BaseModel):
     provider_base_url: str
     provider: str = ""
     key_slot: str
+    # The language this run answers in. Persisted here because a resumed run
+    # rebuilds its workspace from disk (`AgentWorkspace.open`) and would
+    # otherwise not know which language it was started in — the runtime
+    # contract would silently revert to the default mid-run. `provider`,
+    # `key_slot` and `provider_base_url` live here for the same reason.
+    language: str = DEFAULT_LANGUAGE
 
 
 def agent_turn_schema() -> dict[str, Any]:
@@ -155,7 +162,12 @@ def agent_turn_schema() -> dict[str, Any]:
 QA_TURN_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "text": {"type": "string", "description": "回答正文，简体中文"},
+        # The prose language is the REQUEST's, not a fixed one. Naming a
+        # language here contradicted the run prompt that names the target
+        # language, and the model obeyed both — the third instance of that
+        # defect shape (#285, #293). The schema describes the field; the
+        # language is stated once, in the runtime contract and the prompt.
+        "text": {"type": "string", "description": "回答正文，使用请求指定的输出语言"},
         "reminder": {
             "type": "boolean",
             "description": "是否在回答末尾提示用户提供订单号可获得更精确结果",
@@ -175,7 +187,7 @@ class QaBlock(BaseModel):
     """One `blocks[]` content block in the customer QA output contract (blocks-v1).
 
     `kind` selects the shape:
-      - text: `text` carries the prose (Simplified Chinese).
+      - text: `text` carries the prose in the request's output language.
       - image / video: `resource_id` must name a media resource issued to THIS
         turn by the harness's knowledge_search tool; the model may not invent
         URLs. `title` is optional display metadata.

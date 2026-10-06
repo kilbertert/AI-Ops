@@ -246,13 +246,13 @@ class AgentCoordinator:
                 except (ValidationError, ValueError) as exc:
                     state = self._request_contract_repair(state, [f"结构化输出无效: {exc}"])
                     if state.phase == "blocked":
-                        return self._finish_blocked(state, "Codex 多次返回无效结构化输出")
+                        return self._finish_blocked(state, "incomplete")
                     continue
 
                 if turn.kind == "tool_requests":
                     requested = len(turn.tool_requests)
                     if state.tool_call_count + requested > self.settings.max_tool_calls:
-                        return self._finish_blocked(state, "Codex 请求的工具调用超过运行上限")
+                        return self._finish_blocked(state, "incomplete")
                     self._record_event(
                         {
                             "type": "tool_batch_started",
@@ -278,18 +278,17 @@ class AgentCoordinator:
                 if turn.diagnosis is None:
                     state = self._request_contract_repair(state, ["diagnosis turn 缺少 diagnosis payload"])
                     if state.phase == "blocked":
-                        return self._finish_blocked(state, "Codex diagnosis turn 缺少 diagnosis payload")
+                        return self._finish_blocked(state, "incomplete")
                     continue
                 errors = self.validator.validate(turn.diagnosis)
                 if not errors:
                     return self._finish_success(state, turn.diagnosis)
                 state = self._request_contract_repair(state, errors)
                 if state.phase == "blocked":
-                    return self._finish_blocked(
-                        state,
-                        "Codex 最终诊断未满足证据与安全合同: " + "; ".join(errors),
-                    )
-            return self._finish_blocked(state, "达到最大 Codex turn 数仍未形成有效诊断")
+                    # The user-facing ending is bounded; the precise reason
+                    # stays in the run record. `errors` is engineer-facing.
+                    return self._finish_blocked(state, "insufficient_evidence", detail="; ".join(errors))
+            return self._finish_blocked(state, "incomplete")
         except AgentRuntimeError as exc:
             state = self.workspace.load_state().model_copy(update={"phase": "interrupted"})
             self.workspace.save_state(state)
@@ -308,7 +307,18 @@ class AgentCoordinator:
             "Your previous response did not satisfy the immutable delivery contract. "
             "Do not change incident identity or invent evidence. Correct the response using the same "
             "thread and existing journal. If evidence is insufficient, request more tools or return an "
-            "inconclusive/blocked diagnosis.\n\nValidation errors:\n- " + "\n- ".join(errors)
+            "inconclusive/blocked diagnosis.\n\n"
+            # The repair turn runs on the same thread but as a NEW instruction,
+            # and the only language statement lives in the initial prompt — so
+            # without this the retry ran with no language instruction at all and
+            # could come back in any language, including the Chinese the guard
+            # had just rejected. Restate it, and say the error list is a
+            # diagnosis of the response rather than text to reproduce: the
+            # errors are written in the harness's own language, and a model
+            # told only "fix these" can echo them into the answer.
+            f"Write the corrected response in {language_name(self.language)}. "
+            "The validation errors below are diagnostic notes about your previous response, "
+            "not text to reproduce.\n\nValidation errors:\n- " + "\n- ".join(errors)
         )
         updated = state.model_copy(update={"validation_attempts": attempts, "next_prompt": next_prompt})
         self._record_event({"type": "diagnosis_validation_failed", "attempt": attempts, "errors": errors})
@@ -321,11 +331,20 @@ class AgentCoordinator:
         self._record_event({"type": "diagnosis_completed", "status": result.status.value})
         return result
 
-    def _finish_blocked(self, state: RunState, reason: str) -> AgentDiagnosis:
-        result = self.validator.blocked_result(reason)
+    def _finish_blocked(self, state: RunState, failure_key: str, *, detail: str = "") -> AgentDiagnosis:
+        """End a run that produced no conclusion.
+
+        ``failure_key`` is a bounded user-facing ending; ``detail`` is the
+        engineer-facing reason and is recorded ONLY in the run event — it never
+        reaches the result the user reads. Keeping the two apart is the point:
+        the previous form put the harness's own reason (a tool budget, a
+        contract rule, a list of evidence IDs) into `root_cause`, where a 管家端
+        user met engine internals in the harness's authoring language.
+        """
+        result = self.validator.blocked_result(failure_key)
         self.workspace.save_result(result)
         self.workspace.save_state(state.model_copy(update={"phase": "blocked", "next_prompt": ""}))
-        self._record_event({"type": "diagnosis_blocked", "reason": reason})
+        self._record_event({"type": "diagnosis_blocked", "reason": failure_key, "detail": detail})
         return result
 
     def _record_event(self, event: dict[str, Any]) -> dict[str, Any]:

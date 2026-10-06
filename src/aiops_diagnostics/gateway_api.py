@@ -82,6 +82,8 @@ from aiops_diagnostics.i18n import (
     DEFAULT_LANGUAGE,
     QA_FALLBACK_MESSAGES,
     clarification_message,
+    diagnosis_error_message,
+    effective_language,
     resolve_language,
 )
 from aiops_diagnostics.metrics_store import MetricsValidationError
@@ -668,7 +670,7 @@ def create_gateway_app(
         _, decision = identity
         return {
             **decision.public(),
-            "language": language,
+            "language": context.faq_catalog.served_language(decision.platform, language),
             "faq_version": context.faq_catalog.version,
             "recommendations": context.faq_catalog.recommendations(decision.platform, language),
         }
@@ -681,7 +683,7 @@ def create_gateway_app(
         _, decision = identity
         return {
             **decision.public(),
-            "language": language,
+            "language": context.faq_catalog.served_language(decision.platform, language),
             "faq_version": context.faq_catalog.version,
             "entries": context.faq_catalog.catalog(decision.platform, language),
         }
@@ -701,7 +703,13 @@ def create_gateway_app(
             ) from exc
         return {
             **decision.public(),
-            "language": language,
+            # The language the ANSWER is in, which is the catalog's answer rather
+            # than the request's: an entry without a translation is served in the
+            # authority language, and reporting the requested tag beside Chinese
+            # text would make the payload lie about itself.
+            "language": context.faq_catalog.entry_served_language(
+                decision.platform, payload.question_id, language
+            ),
             "faq_version": context.faq_catalog.version,
             "question_id": answer["question_id"],
             "question": answer["question"],
@@ -826,13 +834,12 @@ def create_gateway_app(
             except (ValueError, RuntimeError) as exc:
                 _release_conversation_turn(context, conversation, turn_no)
                 raise _runtime_unavailable("DIAGNOSIS_UNAVAILABLE", "diagnosis unavailable", exc) from exc
-            base = _standard_diagnosis_response(diagnosis)
+            base = _standard_diagnosis_response(diagnosis, language)
             return JSONResponse(
                 status_code=status.HTTP_202_ACCEPTED,
                 content={
                     **base,
                     "type": "diagnosis",
-                    "language": language,
                     **(
                         {"conversation_id": conversation["conversation_id"], "turn_no": turn_no}
                         if conversation is not None and turn_no is not None
@@ -900,13 +907,12 @@ def create_gateway_app(
                     # the non-own case the row was just dropped, and echoing a
                     # turn_no for it would point the frontend at nothing.
                     turn_field = {"turn_no": turn_no} if own_turn else {}
-                    base = _standard_diagnosis_response(diagnosis)
+                    base = _standard_diagnosis_response(diagnosis, language)
                     return JSONResponse(
                         status_code=status.HTTP_202_ACCEPTED,
                         content={
                             **base,
                             "type": "diagnosis",
-                            "language": language,
                             "order_no_extracted": embedded,
                             **({"conversation_id": conversation["conversation_id"]} if conversation else {}),
                             **turn_field,
@@ -946,13 +952,12 @@ def create_gateway_app(
                         raise _runtime_unavailable(
                             "DIAGNOSIS_UNAVAILABLE", "diagnosis unavailable", exc
                         ) from exc
-                    base = _standard_diagnosis_response(diagnosis)
+                    base = _standard_diagnosis_response(diagnosis, language)
                     return JSONResponse(
                         status_code=status.HTTP_202_ACCEPTED,
                         content={
                             **base,
                             "type": "diagnosis",
-                            "language": language,
                             "order_no_from_context": active_order,
                             "conversation_id": conversation["conversation_id"],
                             **({"turn_no": turn_no} if turn_no is not None else {}),
@@ -1045,7 +1050,7 @@ def create_gateway_app(
             return {
                 **decision.public(),
                 "type": "faq",
-                "language": language,
+                "language": context.faq_catalog.entry_served_language(decision.platform, faq_id, language),
                 "faq_version": context.faq_catalog.version,
                 "question_id": answer["question_id"],
                 "question": answer["question"],
@@ -1443,6 +1448,7 @@ def create_gateway_app(
     def create_health_report_job(
         payload: HealthReportJobRequest,
         caller: ScopeContext = Depends(authenticated_caller),  # noqa: B008
+        language: str = Depends(request_language),  # noqa: B008
     ) -> dict[str, Any]:
         verdict = _order_authorization(context, caller, payload.order_no)
         if verdict == UNAVAILABLE:
@@ -1459,7 +1465,7 @@ def create_gateway_app(
                 "order not found",
             )
         try:
-            job = context.runtime.start_health_report(caller, payload.order_no)
+            job = context.runtime.start_health_report(caller, payload.order_no, language=language)
         except (ValueError, RuntimeError) as exc:
             raise _runtime_unavailable(
                 "REPORT_JOB_UNAVAILABLE", "health report job unavailable", exc
@@ -1515,12 +1521,13 @@ def create_gateway_app(
             )
         except (ValueError, RuntimeError) as exc:
             raise _runtime_unavailable("DIAGNOSIS_UNAVAILABLE", "diagnosis unavailable", exc) from exc
-        return _standard_diagnosis_response(diagnosis)
+        return _standard_diagnosis_response(diagnosis, language)
 
     @app.get("/v1/standard/diagnoses/{diagnosis_id}")
     def get_standard_diagnosis(
         diagnosis_id: str,
         caller: ScopeContext = Depends(authenticated_diagnosis_caller),  # noqa: B008
+        language: str = Depends(request_language),  # noqa: B008
     ) -> dict[str, Any]:
         try:
             diagnosis = context.runtime.get_standard_diagnosis(caller, diagnosis_id)
@@ -1545,7 +1552,7 @@ def create_gateway_app(
                 "DIAGNOSIS_NOT_FOUND",
                 "diagnosis not found",
             )
-        return _standard_diagnosis_response(diagnosis)
+        return _standard_diagnosis_response(diagnosis, language)
 
     @app.get("/v1/standard/diagnoses")
     def list_standard_diagnoses(
@@ -1559,6 +1566,7 @@ def create_gateway_app(
     def cancel_standard_diagnosis(
         diagnosis_id: str,
         caller: ScopeContext = Depends(authenticated_diagnosis_caller),  # noqa: B008
+        language: str = Depends(request_language),  # noqa: B008
     ) -> dict[str, Any]:
         """Stop one in-flight order diagnosis (#499).
 
@@ -1581,7 +1589,7 @@ def create_gateway_app(
                 "DIAGNOSIS_NOT_FOUND",
                 "diagnosis not found",
             )
-        return _standard_diagnosis_response(diagnosis)
+        return _standard_diagnosis_response(diagnosis, language)
 
     def _agent_error(exc: AgentError) -> StandardAPIError:
         if isinstance(exc, AgentNotFound):
@@ -1798,7 +1806,9 @@ def create_gateway_app(
             raise _shortcut_error(exc) from exc
         return {
             "type": "shortcut_list",
-            "language": language,
+            # The list-level language is only truthful when every row agrees;
+            # otherwise the per-row `language` is what a client must read.
+            "language": _shortcut_list_language(shortcuts, language),
             "count": len(shortcuts),
             "shortcuts": [item.public(language) for item in shortcuts],
         }
@@ -2383,6 +2393,11 @@ def _health_job_response(job: dict[str, Any]) -> dict[str, Any]:
         "rule_version": job["rule_version"],
         "status": status_value,
         "retry_after_ms": 1000 if status_value in ACTIVE_HEALTH_JOB_STATUSES else None,
+        # The report's prose language: the language the JOB was created in.
+        # It describes the stored `report`, not this request — a poller cannot
+        # relabel a report it did not create (same rule as the diagnosis
+        # surface; see `_standard_diagnosis_response`).
+        "language": job.get("language") or "zh",
         "report": job.get("report"),
         "error": (
             {
@@ -2688,7 +2703,10 @@ def _assistant_question_response(qa: dict[str, Any], language: str) -> dict[str,
     status_value = str(qa["status"])
     return {
         "type": "qa",
-        "language": language,
+        # The EFFECTIVE language: a non-promptable request is answered in the
+        # default, so reporting the raw request tag would describe text the
+        # answer does not contain (#541 review).
+        "language": effective_language(language),
         "qa_id": qa["qa_id"],
         "question": qa["question"],
         "status": status_value,
@@ -3131,8 +3149,46 @@ def _start_promo_qa(
     )
 
 
-def _standard_diagnosis_response(diagnosis: dict[str, Any]) -> dict[str, Any]:
+def _shortcut_list_language(shortcuts: Any, requested: str) -> str:
+    """The language a shortcut listing is uniformly in, else the authority one.
+
+    Rows are published independently, so a listing can mix a translated row with
+    an untranslated one. A single top-level field cannot describe that, and
+    claiming the requested language for a mixed list is the same false statement
+    as claiming it for one fallback row — so it reports the shared language only
+    when there is one, and the per-row `language` carries the truth otherwise.
+    """
+    if not shortcuts:
+        # No rows means no text, so there is nothing to contradict the request:
+        # reporting the authority language here would describe a payload that
+        # does not exist.
+        return requested
+    served = {item.served_language(requested) for item in shortcuts}
+    return served.pop() if len(served) == 1 else DEFAULT_LANGUAGE
+
+
+def _standard_diagnosis_response(diagnosis: dict[str, Any], language: str) -> dict[str, Any]:
+    """One diagnosis row as the public body.
+
+    ``language`` is the language of THIS REQUEST, and it renders only the copy
+    the server writes now: `error.message`.
+
+    It deliberately does NOT drive the `language` field or `result`. A
+    diagnosis's prose is generated once, in the language it was STARTED in, and
+    is stored. Reporting the poller's language there would claim an English
+    diagnosis is French — a false statement about the payload, and the same
+    class of error this project has already refused elsewhere ("do not rewrite
+    a successful retrieval into `unavailable`"). The field therefore describes
+    the RESULT's language, not the request's; that had never been written down,
+    and two surfaces had drifted apart because of it (#549).
+
+    So the two are split by what they describe, not by which is newer:
+    per-request copy is rendered per request, stored prose is reported as
+    stored. The unified-assistant QA surface merges them into one field; this
+    one does not, and this comment is the contract.
+    """
     status_value = str(diagnosis["status"])
+    error_code = diagnosis.get("error_code") or "DIAGNOSIS_FAILED"
     # The shared status set decides what is terminal, exactly as it decides what
     # the store accepts: a literal copy here is how a status the store now takes
     # (a stopped diagnosis) would render `retry_after_ms=1000` and keep a client
@@ -3149,8 +3205,12 @@ def _standard_diagnosis_response(diagnosis: dict[str, Any]) -> dict[str, Any]:
         "result": diagnosis.get("result") if status_value in DIAGNOSIS.completed else None,
         "error": (
             {
-                "code": diagnosis.get("error_code") or "DIAGNOSIS_FAILED",
-                "message": diagnosis.get("error_message") or "diagnosis failed",
+                "code": error_code,
+                # Bounded and localized, chosen by the code — NOT the stored
+                # `error_message`. That field is the engineer's note (an
+                # upstream exception string, a restart notice); the contract
+                # promises this surface carries no internal run information.
+                "message": diagnosis_error_message(language, error_code),
                 "retryable": status_value in {DIAGNOSIS.failed, DIAGNOSIS.expired},
             }
             if status_value in {DIAGNOSIS.failed, DIAGNOSIS.expired}

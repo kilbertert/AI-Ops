@@ -290,6 +290,7 @@ Content-Type: application/json                   # POST 时
 |---|---|---|
 | `code` | string | 稳定指标代码（如 `stop_reason`） |
 | `status` | string | `normal` \| `attention` \| `abnormal` \| `unavailable`，按此渲染，**不解析中文阈值** |
+| `language` | string | 报告正文的语言，**创建作业时**请求的语言；轮询带别的语言不会改写它 |
 | `value` | string \| number | 指标值 |
 | `unit` | string \| null | 单位 |
 | `reference` | string \| null | 参考条件 |
@@ -366,6 +367,8 @@ Content-Type: application/json                   # POST 时
 | `DIAGNOSIS_FAILED` | 其余运行失败（依赖不可用等） | 稍后重试并保留 `diagnosis_id` |
 
 `error.message` 只说明根因，不含租户标识、SQL、原始报文或内部 run 信息。
+**它不作为面向用户的展示文案** —— 前端按上表的 `code` 渲染自己的提示（该表就是为此而设）。
+信封里 `code` 与 `message` 的分工，见固定问答/标准接口契约的「错误信封的本地化约定」（#538）。
 
 创建时（`POST`）的越权订单按既有约定返回 `404 ORDER_NOT_FOUND`，不区分"不存在"与"不在授权范围"（不做所有权探测）。`DIAGNOSIS_ORDER_OUT_OF_SCOPE` 只在**轮询到终态后**才可能出现，用途是把授权问题与供应商问题分开；但它是纵深防御，不是必经终态：标准 API 面的 worker 携带冻结的 `QueryScope`，租户已以参数绑定的 SQL 谓词下推，行级规则只会看到 SQL 已放行的行，越权订单因此在创建阶段就已被拒绝、进不到 worker。只有"下推之后仍有行未通过行级规则"时才会产生该码（某一证据源无法下推，或创建与 worker 之间授权范围发生变化）。前端不应等待或依赖这个码：创建返回 `404 ORDER_NOT_FOUND` 就已经是越权的最终答复。
 

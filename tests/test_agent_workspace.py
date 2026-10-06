@@ -109,3 +109,93 @@ def test_journal_redacts_sensitive_fields_and_hashes_artifact(tmp_path: Path) ->
     (workspace.path / entry.artifact).write_text("{}\n", encoding="utf-8")
     with pytest.raises(ValueError, match="哈希不匹配"):
         journal.load_payload(entry)
+
+
+# --------------------------------------------------------------------------
+# #535: the run's output language is stated ONCE, and it is the request's.
+# --------------------------------------------------------------------------
+
+
+def _qa_workspace(language: str, tmp_path) -> "AgentWorkspace":
+    from aiops_diagnostics.agent_workspace import AgentWorkspace
+
+    return AgentWorkspace.create_qa(
+        Path(__file__).parents[1],
+        tmp_path,
+        provider_base_url="http://localhost:1/v1",
+        provider="test",
+        key_slot="default",
+        language=language,
+    )
+
+
+@pytest.mark.parametrize("language", ["zh", "en", "de", "fr", "es", "pt"])
+def test_qa_contract_names_the_requested_language_not_a_fixed_one(language, tmp_path) -> None:
+    """The workspace contract must name THIS run's language.
+
+    It used to name Simplified Chinese unconditionally while the run prompt
+    named the target language: two instructions in one run, disagreeing, and
+    the model obeyed both (the #285/#293 shape). This is the regression check
+    for that: a non-zh run must not be told to answer in Chinese anywhere.
+    """
+    from aiops_diagnostics.i18n import language_name
+
+    contract = (_qa_workspace(language, tmp_path).path / "AGENTS.md").read_text(encoding="utf-8")
+    assert f"Return a single `text` answer in {language_name(language)}." in contract
+    if language != "zh":
+        assert "Simplified Chinese" not in contract, "契约仍在命令模型用简体中文回答"
+        assert "简体中文" not in contract
+
+
+def test_qa_contract_reminder_line_is_not_a_mandatory_chinese_sentence(tmp_path) -> None:
+    """The reminder line the model must reproduce is in the run's language.
+
+    It used to be a Chinese literal demanded "exactly", so every non-Chinese
+    answer taking the order-hint branch carried a Chinese sentence — which the
+    output guard then rejected wholesale.
+    """
+    from aiops_diagnostics.i18n import zero_order_reminder
+
+    for language in ("en", "de", "fr", "es", "pt"):
+        contract = (_qa_workspace(language, tmp_path).path / "AGENTS.md").read_text(encoding="utf-8")
+        assert f'"{zero_order_reminder(language)}"' in contract
+        assert "提供订单号可获得更精确的结果哦。" not in contract
+
+
+def test_the_language_parameter_is_required_not_defaulted() -> None:
+    """A future call site must not silently inherit a default language.
+
+    A defaulted parameter is how the old behaviour would come back: the
+    contract would say Chinese, the prompt would say the target language, and
+    nothing would fail. The parameter is positional and required.
+    """
+    import inspect
+
+    from aiops_diagnostics.agent_workspace import _qa_runtime_instructions
+
+    parameter = inspect.signature(_qa_runtime_instructions).parameters["language"]
+    assert parameter.default is inspect.Parameter.empty, (
+        "language 参数必须必填；带默认值会让调用点静默沿用旧行为"
+    )
+
+
+@pytest.mark.parametrize("language", ["en", "de", "pt"])
+def test_resumed_run_keeps_its_output_language(language: str, tmp_path) -> None:
+    """A resumed run must answer in the language it was STARTED in.
+
+    The judging rule is the RESUME path, not the create path: `open()` rebuilds
+    the workspace from disk, so a language that only lived on the in-memory
+    object would silently revert to the default wherever the process restarted
+    mid-run — a 200 response whose language is wrong, which is exactly the
+    defect shape this whole ticket exists to remove.
+    """
+    from aiops_diagnostics.agent_workspace import AgentWorkspace
+
+    created = AgentWorkspace.create(Path(__file__).parents[1], tmp_path, _manifest(), language=language)
+    reopened = AgentWorkspace.open(tmp_path, created.run_id)
+    assert reopened.language == language
+
+    from aiops_diagnostics.codex_runtime import _developer_instructions
+    from aiops_diagnostics.i18n import language_name
+
+    assert f"field in {language_name(language)}:" in _developer_instructions(reopened.language)

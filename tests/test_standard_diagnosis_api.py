@@ -10,12 +10,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from aiops_diagnostics.gateway_api import create_gateway_app
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_runtime import DIAGNOSIS_ORDER_OUT_OF_SCOPE
-from aiops_diagnostics.gateway_store import GatewayStore
+from aiops_diagnostics.gateway_store import ACTIVE_DIAGNOSIS_STATUSES, GatewayStore
 from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
 
 
@@ -98,6 +99,17 @@ class _Runtime:
 
     def list_standard_diagnoses(self, context: ScopeContext, *, limit: int) -> list[dict]:
         return self.store.list_standard_diagnoses(context.scope_fingerprint, limit=limit)
+
+    def cancel_standard_diagnosis(self, context: ScopeContext, diagnosis_id: str) -> dict | None:
+        """Mirror the runtime's idempotent stop: a terminal row comes back as it
+        stands, which is why the cancel body carries `error` for a failed row."""
+        diagnosis = self.store.get_standard_diagnosis(diagnosis_id, context.scope_fingerprint)
+        if diagnosis is None:
+            return None
+        if diagnosis["status"] in ACTIVE_DIAGNOSIS_STATUSES:
+            self.store.update_standard_diagnosis(diagnosis_id, status="cancelled")
+            return self.store.get_standard_diagnosis(diagnosis_id, context.scope_fingerprint)
+        return diagnosis
 
     def shutdown(self) -> None:
         pass
@@ -409,6 +421,151 @@ def test_get_diagnosis_surfaces_the_out_of_scope_code_with_an_unchanged_shape(tm
         "completed_at",
     }
     assert set(body["error"]) == {"code", "message", "retryable"}
+    # The CODE is the contract a client branches on, and it is unchanged.
     assert body["error"]["code"] == DIAGNOSIS_ORDER_OUT_OF_SCOPE
-    assert body["error"]["message"] == "order is outside the authorized tenant scope"
+    # The MESSAGE is a bounded, localized sentence chosen by that code — NOT
+    # the stored `error_message`, which is an engineer's note. This surface
+    # already promised it carries no internal run information
+    # (standard-api-contract.md §error.message), and it used to return the
+    # stored string verbatim.
+    assert body["error"]["message"] == "该订单不在当前授权范围内。"
+    assert "order is outside the authorized tenant scope" not in body["error"]["message"]
     assert body["result"] is None
+
+
+# --------------------------------------------------------------------------
+# #549: per-request copy follows the request; stored prose reports as stored.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("poll_language", "expected_fragment"),
+    [("zh", "本次诊断未能完成"), ("en", "could not be completed"), ("de", "konnte nicht abgeschlossen")],
+)
+def test_failed_diagnosis_error_message_follows_the_request_language(
+    poll_language: str, expected_fragment: str
+) -> None:
+    """`error.message` is copy the server writes NOW, so it follows the request.
+
+    It used to follow the row's stored language, so polling an `en` diagnosis
+    with `Accept-Language: fr` answered in English — the QA surface had the
+    right rule and this one did not (#549).
+    """
+    from aiops_diagnostics.i18n import diagnosis_error_message
+
+    assert expected_fragment in diagnosis_error_message(poll_language, "DIAGNOSIS_FAILED")
+
+
+def test_stored_result_language_is_reported_as_stored_not_as_requested() -> None:
+    """`language` describes the RESULT, so a poller cannot relabel it.
+
+    The prose was generated once, in the language the diagnosis was STARTED in.
+    Echoing the poller's language here would claim an English diagnosis is
+    French — a false statement about the payload, and the same shape as
+    rewriting a successful retrieval into `unavailable`.
+    """
+    from aiops_diagnostics.gateway_api import _standard_diagnosis_response
+
+    row = {
+        "diagnosis_id": "dx_1",
+        "order_no": "O-1",
+        "question": "q",
+        "indicator_code": None,
+        "language": "en",  # started in English
+        "status": "failed",
+        "error_code": "DIAGNOSIS_FAILED",
+        "result": None,
+        "created_at": "t",
+        "updated_at": "t",
+        "completed_at": None,
+    }
+    body = _standard_diagnosis_response(dict(row), "fr")
+    # The stored prose language is reported as stored...
+    assert body["language"] == "en"
+    # ...while the copy the server renders now follows the request.
+    assert "abouti" in body["error"]["message"]  # fr
+    assert body["error"]["code"] == "DIAGNOSIS_FAILED"
+    assert body["error"]["retryable"] is True
+
+
+def test_two_poll_languages_over_one_row_change_the_message_not_the_result(
+    tmp_path: Path,
+) -> None:
+    """The end-to-end shape of #549, over HTTP.
+
+    One diagnosis row, polled twice with different `Accept-Language`:
+    `error.message` follows the request, `language` keeps reporting the stored
+    result. This is the assertion the ticket asks for, and it is the one that
+    fails if either rule is collapsed into the other.
+    """
+    client, store, _ = _client(tmp_path)
+    with client:
+        created = client.post(
+            "/v1/standard/diagnoses",
+            headers={"Authorization": "Bearer token"},
+            json={"order_no": "O-1", "question": "test"},
+        ).json()
+        store.update_standard_diagnosis(
+            created["diagnosis_id"],
+            status="failed",
+            error_code="DIAGNOSIS_FAILED",
+            error_message="internal: provider returned 403",
+        )
+        url = f"/v1/standard/diagnoses/{created['diagnosis_id']}"
+        body = {}
+        for lang in ("zh", "de"):
+            body[lang] = client.get(
+                url,
+                headers={"Authorization": "Bearer token", "Accept-Language": lang},
+            ).json()
+
+    # The copy the server writes now follows the REQUEST...
+    assert body["zh"]["error"]["message"] == "本次诊断未能完成，请稍后重试。"
+    assert "konnte nicht abgeschlossen" in body["de"]["error"]["message"]
+    assert body["zh"]["error"]["message"] != body["de"]["error"]["message"]
+    # ...while the stored prose language is still reported as stored, and the
+    # internal reason never appears.
+    for lang in ("zh", "de"):
+        assert body[lang]["language"] == "zh"  # the row was created with zh
+        assert "provider returned 403" not in body[lang]["error"]["message"]
+        assert body[lang]["error"]["code"] == "DIAGNOSIS_FAILED"
+
+
+@pytest.mark.parametrize(
+    ("lang", "fragment"),
+    [("zh", "本次诊断未能完成"), ("en", "could not be completed"), ("fr", "n'a pas pu aboutir")],
+)
+def test_cancel_of_a_failed_diagnosis_renders_in_the_request_language(
+    lang: str, fragment: str, tmp_path: Path
+) -> None:
+    """The cancel response carries a failed row's `error.message`, so it is
+    subject to the same rule as polling.
+
+    Cancelling is idempotent and non-probing: an already-terminal diagnosis is
+    returned as it stands (the runtime's own docstring), which means the cancel
+    body includes `error` for a failed row. It got the new language dependency
+    in the same change, so it needs its own assertion — a parameter threaded
+    through without a test is exactly the "looks wired, was never driven" shape.
+    """
+    client, store, _ = _client(tmp_path)
+    with client:
+        created = client.post(
+            "/v1/standard/diagnoses",
+            headers={"Authorization": "Bearer token"},
+            json={"order_no": "O-1", "question": "test"},
+        ).json()
+        store.update_standard_diagnosis(
+            created["diagnosis_id"],
+            status="failed",
+            error_code="DIAGNOSIS_FAILED",
+            error_message="internal: provider returned 403",
+        )
+        body = client.post(
+            f"/v1/standard/diagnoses/{created['diagnosis_id']}/cancel",
+            headers={"Authorization": "Bearer token", "Accept-Language": lang},
+        ).json()
+
+    assert body["status"] == "failed"  # terminal row returned as it stands
+    assert fragment in body["error"]["message"]
+    assert body["language"] == "zh"  # the stored result language, unchanged
+    assert "provider returned 403" not in body["error"]["message"]

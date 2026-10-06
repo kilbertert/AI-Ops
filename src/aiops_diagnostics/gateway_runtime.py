@@ -29,7 +29,11 @@ from aiops_diagnostics.health_report import (
     HealthReportError,
     build_minimal_health_report,
 )
-from aiops_diagnostics.i18n import DEFAULT_LANGUAGE, QA_FALLBACK_MESSAGES
+from aiops_diagnostics.i18n import (
+    DEFAULT_LANGUAGE,
+    QA_FALLBACK_MESSAGES,
+    effective_language,
+)
 from aiops_diagnostics.jev_decisions import JevDecisionClient, JevSettings
 from aiops_diagnostics.journal import EvidenceJournal
 from aiops_diagnostics.knowledge_retrieval import (
@@ -280,6 +284,7 @@ class GatewayRuntime:
             provider_base_url=canonical_provider_base_url(selected_provider.base_url),
             provider=selected_provider.name,
             key_slot=selected_key_slot,
+            language=DEFAULT_LANGUAGE,
         )
         run = self.store.create_run(
             run_id=workspace.run_id,
@@ -312,11 +317,18 @@ class GatewayRuntime:
     def shutdown(self) -> None:
         self._executor.shutdown(wait=False, cancel_futures=False)
 
-    def start_health_report(self, context: ScopeContext, order_no: str) -> dict[str, Any]:
+    def start_health_report(
+        self,
+        context: ScopeContext,
+        order_no: str,
+        *,
+        language: str = DEFAULT_LANGUAGE,
+    ) -> dict[str, Any]:
         job, created = self.store.create_or_reuse_health_job(
             context.scope_fingerprint,
             order_no,
             HEALTH_RULE_VERSION,
+            language=language,
         )
         if not created:
             return job
@@ -340,12 +352,22 @@ class GatewayRuntime:
     ) -> dict[str, Any]:
         """Start an order diagnosis job.
 
+        ``language`` is normalised to one this pipeline can actually answer in:
+        a tag that cannot be PROMPTED (Thai, Khmer — no word boundaries, so the
+        matchers and rule layer cannot back a claim to answer in it) falls back
+        to the default here, at the point the job is created. Doing it here
+        rather than at render time matters: this value is what gets STORED, and
+        the stored language is what the response reports for the result's prose
+        (#549). Storing `th` while generating Chinese would make the row — and
+        every later poll of it — describe text it does not contain.
+
         With ``conversation_turn`` (T4/#172) the finished diagnosis is written
         back into the conversation's turn row and the generation slot is held
         until the job reaches a terminal state — the same shape the qa line
         (``start_assistant_qa``) already has. Without it nothing about the
         conversation changes.
         """
+        language = effective_language(language)
         selected_provider = self.diagnostic_settings.agent.select_provider(None)
         selected_key_slot = validate_key_slot_name(selected_provider.resolved_key_slot())
         if selected_key_slot not in self.allowed_key_slots:
@@ -364,6 +386,7 @@ class GatewayRuntime:
             provider_base_url=canonical_provider_base_url(selected_provider.base_url),
             provider=selected_provider.name,
             key_slot=selected_key_slot,
+            language=language,
         )
         diagnosis = self.store.create_standard_diagnosis(
             context.scope_fingerprint,
@@ -555,6 +578,13 @@ class GatewayRuntime:
     ) -> dict[str, Any]:
         """Start a zero-order general-question job (T3/#153).
 
+        ``language`` is normalised to one this pipeline can prompt in, for the
+        same reason the diagnosis runtime does it: Thai and Khmer can be RENDERED
+        but not reliably ROUTED, so a claim to answer in them is one the rest of
+        the pipeline cannot back. The declaration alone would not have stopped
+        this route — the diagnosis face was its first consumer, and this is its
+        second (#541 review).
+
         With ``conversation`` + ``conversation_turn_no`` (T4/#172) the finished
         answer is written back into the conversation's turn row; failures drop
         the turn so an interrupted generation never survives as a reply.
@@ -567,6 +597,7 @@ class GatewayRuntime:
         greeting must not trigger a library lookup just because the run happens
         to have search capability wired.
         """
+        language = effective_language(language)
         selected_provider = self.diagnostic_settings.agent.select_provider(None)
         selected_key_slot = validate_key_slot_name(selected_provider.resolved_key_slot())
         if selected_key_slot not in self.allowed_key_slots:
@@ -577,6 +608,7 @@ class GatewayRuntime:
             provider_base_url=canonical_provider_base_url(selected_provider.base_url),
             provider=selected_provider.name,
             key_slot=selected_key_slot,
+            language=language,
         )
         qa = self.store.create_assistant_question(
             context.scope_fingerprint,
@@ -664,6 +696,8 @@ class GatewayRuntime:
         beside the old one so neither has to be right on the first day. Delete
         once Jev has run on real traffic for an agreed window.
         """
+        language = effective_language(language)
+
         settings = Settings.from_config(self.gateway_settings.server_config_file)
         settings.agent.run_root = self.diagnostic_settings.agent.run_root
         provider = settings.agent.select_provider(None)
@@ -995,10 +1029,21 @@ class GatewayRuntime:
         try:
             scope = resolve_query_scope(context)
             with scoped_live_sources(self.diagnostic_settings, scope=scope) as sources:
+                # The report's prose is generated ONCE and stored, like a
+                # diagnosis result — so it is written in the language the job
+                # was CREATED in, read back from the row, not from whatever
+                # Accept-Language a later poll happens to carry. Rendering the
+                # summary per-poll would also mean the stored report's language
+                # changed under a reader who already saw it.
+                job_language = str(
+                    self.store.get_health_job(job_id, context.scope_fingerprint).get("language")
+                    or DEFAULT_LANGUAGE
+                )
                 report = build_minimal_health_report(
                     sources,
                     order_no,
                     self.diagnostic_settings.safety,
+                    language=job_language,
                 )
                 order = sources.get_orders(order_no)[0]
                 device = str(order.get("child_device_code") or order.get("device_code"))
@@ -1014,7 +1059,7 @@ class GatewayRuntime:
                     report["source_summary"]["telemetry"] = "unavailable"
                 else:
                     report["source_summary"]["telemetry"] = "available" if samples else "unavailable"
-                report["curves"] = build_curves(samples)
+                report["curves"] = build_curves(samples, job_language)
                 report = enrich_report(report, samples, order)
             # Every terminal write below is checked, and the refusal is the
             # same quiet exit the qa line takes (`_execute_assistant_qa`, #355):
@@ -1100,7 +1145,7 @@ class GatewayRuntime:
                 diagnosis_id,
                 status="failed",
                 error_code="DIAGNOSIS_FAILED",
-                error_message=_public_error_message(exc, request.order_no),
+                error_message=_internal_error_message(exc, request.order_no),
             )
             # Only a write that landed has a terminal row to match: when the
             # row was expired or cancelled underneath us, the turn is dropped
@@ -1294,7 +1339,7 @@ class GatewayRuntime:
                 qa_id,
                 status="failed",
                 error_code="QA_FAILED",
-                error_message=_public_error_message(exc, ""),
+                error_message=_internal_error_message(exc, ""),
             ):
                 _finish_turn(None, cancelled=True)
                 return
@@ -1556,7 +1601,7 @@ class GatewayRuntime:
                 qa_id,
                 status="failed",
                 error_code="QA_FAILED",
-                error_message=_public_error_message(exc, ""),
+                error_message=_internal_error_message(exc, ""),
             ):
                 return TERMINAL_WRITE_REFUSED
             return {"status": "failed"}
@@ -1581,7 +1626,7 @@ class GatewayRuntime:
                 qa_id,
                 status="failed",
                 error_code="QA_FAILED",
-                error_message=_public_error_message(exc, ""),
+                error_message=_internal_error_message(exc, ""),
             ):
                 return TERMINAL_WRITE_REFUSED
             return {"status": "failed"}
@@ -1697,7 +1742,7 @@ class GatewayRuntime:
                 key_slot=state_key_slot,
             )
         except (AgentRuntimeError, SourceError) as exc:
-            error_message = _public_error_message(exc, request.order_no)
+            error_message = _internal_error_message(exc, request.order_no)
             self.store.update_run(
                 run_id,
                 status="interrupted",
@@ -1714,7 +1759,7 @@ class GatewayRuntime:
             )
             return
         except Exception as exc:
-            error_message = _public_error_message(exc, request.order_no)
+            error_message = _internal_error_message(exc, request.order_no)
             self.store.update_run(
                 run_id,
                 status="failed",
@@ -1834,8 +1879,19 @@ def _public_event(event: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def _public_error_message(error: Exception, order_no: str | None) -> str:
-    """Expose a bounded, redacted diagnostic reason without server secrets."""
+def _internal_error_message(error: Exception, order_no: str | None) -> str:
+    """The redacted reason, for the RECORD only — never for the response.
+
+    ``str(exc)`` is whatever the failing layer raised: an upstream SDK message,
+    a socket error, a parser's complaint. The contract already promised this
+    surface never carries internal run information (`standard-api-contract.md`
+    §error.message), and the promise was not kept: the raw string was returned
+    verbatim as the user-facing `message`, so a 管家端 user could read the
+    harness's internals in whatever language that layer happened to use.
+
+    The caller stores this in the job row, where an engineer reads it; the
+    response gets the bounded, coded copy instead (``DIAGNOSIS_ERROR_MESSAGES``).
+    """
     message = redact_text(str(error), preserve=(order_no or "",))
     return message[:1000] if message else error.__class__.__name__
 

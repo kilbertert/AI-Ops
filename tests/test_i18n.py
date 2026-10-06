@@ -5,7 +5,12 @@ from typing import Any
 
 import pytest
 
-from aiops_diagnostics.i18n import DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES, resolve_language
+from aiops_diagnostics.i18n import (
+    DEFAULT_LANGUAGE,
+    NON_CHINESE_LANGUAGES,
+    SUPPORTED_LANGUAGES,
+    resolve_language,
+)
 
 
 @pytest.mark.parametrize(
@@ -51,10 +56,33 @@ def test_resolve_language_matrix(header: Any, expected: str) -> None:
     assert resolve_language(header) == expected
 
 
-def test_supported_languages_and_default_match_the_i18n_catalog_plan() -> None:
-    assert DEFAULT_LANGUAGE == "zh"
-    assert SUPPORTED_LANGUAGES == ("zh", "en", "de", "fr", "es", "pt")
-    assert len(set(SUPPORTED_LANGUAGES)) == len(SUPPORTED_LANGUAGES)
+def test_the_language_inventory_is_self_consistent() -> None:
+    """The inventory is the single source; assert its PROPERTIES, not a literal.
+
+    A literal tuple here would have to be edited by hand on every language
+    addition, which is the drift this inventory exists to end (#527). What must
+    hold is that the list is well-formed and that the derived constants agree
+    with it — not that it happens to contain six specific tags.
+    """
+    from aiops_diagnostics.i18n import LANGUAGES, language_spec
+
+    tags = [spec.tag for spec in LANGUAGES]
+    assert len(set(tags)) == len(tags), "语言清单里有重复 tag"
+    assert tags == list(SUPPORTED_LANGUAGES), "SUPPORTED_LANGUAGES 与清单不同步"
+    assert DEFAULT_LANGUAGE in tags, "默认语言不在清单里"
+
+    # `is_chinese` is a declared property, and the guard set derives from it —
+    # NOT from "supported minus default" (#527). Those coincide only while the
+    # default is the sole Chinese language.
+    chinese = {spec.tag for spec in LANGUAGES if spec.is_chinese}
+    assert set(tags) - chinese == NON_CHINESE_LANGUAGES
+    assert DEFAULT_LANGUAGE in chinese, "默认语言应当是中文语系（清单里没这么声明）"
+
+    # Every supported tag resolves to a spec with a prompt-usable display name.
+    for tag in SUPPORTED_LANGUAGES:
+        spec = language_spec(tag)
+        assert spec is not None and spec.name.strip(), tag
+    assert language_spec("ja") is None, "未支持的语言不该有 spec"
 
 
 # Every table whose strings are shown to a user. Kept as a list so a NEW table
@@ -65,6 +93,12 @@ _USER_FACING_MESSAGE_TABLES = (
     "PROMO_EMPTY_MESSAGES",
     "PROMO_UNAVAILABLE_MESSAGES",
     "CLARIFICATION_MESSAGES",
+    # Registered when they were added (#536/#549). They were user-facing from
+    # the start and the gate did not cover them, so the four languages added in
+    # #540 left them Chinese with nothing to say so — the exact "a new table
+    # must be registered here" case this comment has always described.
+    "DIAGNOSIS_FAILURE_MESSAGES",
+    "DIAGNOSIS_ERROR_MESSAGES",
 )
 
 
@@ -135,12 +169,62 @@ def test_chinese_leak_is_empty_for_ascii_and_for_english_prose() -> None:
     assert chinese_leak("") == ""
 
 
-def test_non_chinese_languages_is_derived_from_the_supported_set() -> None:
+def test_the_default_language_is_not_in_the_guarded_set() -> None:
     from aiops_diagnostics.i18n import (
         DEFAULT_LANGUAGE,
         NON_CHINESE_LANGUAGES,
-        SUPPORTED_LANGUAGES,
     )
 
     assert DEFAULT_LANGUAGE not in NON_CHINESE_LANGUAGES
-    assert set(SUPPORTED_LANGUAGES) - {DEFAULT_LANGUAGE} == set(NON_CHINESE_LANGUAGES)
+    # NOT asserted as "supported minus default": that reading is the one this
+    # change replaced. A second Chinese script makes the two disagree, and this
+    # assertion would then be pinning the wrong rule — see
+    # `test_non_chinese_set_follows_the_declared_property_not_the_default`.
+
+
+def test_prompt_only_tables_are_covered_too() -> None:
+    """The prompt-only tables are inside the gate now, not beside it.
+
+    `conversation_context`'s label and header tables are user-*invisible* (the
+    model reads them), so they never appeared in `_USER_FACING_MESSAGE_TABLES`
+    and no check required them to cover a new language: adding one would leave
+    those tables short with nothing to say so (#527). Their values are not
+    user-facing; their COVERAGE is still a property worth holding.
+    """
+    from aiops_diagnostics import conversation_context as cc
+    from aiops_diagnostics.i18n import SUPPORTED_LANGUAGES
+
+    for table_name, table in (("_LABELS", cc._LABELS), ("_HEADERS", cc._HEADERS)):
+        # Every key must be a language the inventory knows. A typo'd or
+        # unsupported tag ("eng", "zh-Hant" before it is declared) is DEAD DATA:
+        # the entry is never selected and that language silently falls back.
+        ghosts = sorted(set(table) - set(SUPPORTED_LANGUAGES))
+        assert not ghosts, f"{table_name} 有清单里不存在的语言键：{ghosts}"
+        assert all(value for value in table.values()), f"{table_name} 有空值"
+        assert cc._LABEL_FALLBACK_LANGUAGE in table, f"{table_name} 缺回退语言"
+
+
+def test_non_chinese_set_follows_the_declared_property_not_the_default() -> None:
+    """The rule, proven on an inventory that can tell the two readings apart.
+
+    Asserting this over the real language list proves nothing: `zh` is both the
+    only Chinese language and the default, so "declared Chinese" and "supported
+    minus default" yield the same set and either implementation passes. The
+    distinguishing case is a SECOND Chinese script, which is exactly the
+    addition this workstream is heading for.
+    """
+    from aiops_diagnostics.i18n import LanguageSpec, non_chinese_languages
+
+    synthetic = (
+        LanguageSpec("zh", "Simplified Chinese", is_chinese=True),
+        LanguageSpec("zh-Hant", "Traditional Chinese", is_chinese=True),
+        LanguageSpec("en", "English", is_chinese=False),
+    )
+    result = non_chinese_languages(synthetic)
+
+    assert result == {"en"}, f"繁体被当成了非中文：{sorted(result)}"
+    # And the reading this replaced would have got it wrong — stated as an
+    # assertion so the reason for the function survives.
+    default = "zh"
+    old_reading = {spec.tag for spec in synthetic} - {default}
+    assert "zh-Hant" in old_reading and "zh-Hant" not in result

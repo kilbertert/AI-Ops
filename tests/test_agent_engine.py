@@ -500,3 +500,44 @@ def test_coordinator_default_language_is_simplified_chinese(tmp_path: Path) -> N
     coordinator.run()
 
     assert "Simplified Chinese" in session.prompts[0]
+
+
+@pytest.mark.parametrize("language", ["en", "de", "pt"])
+def test_repair_prompt_restates_the_target_language(language: str, tmp_path: Path) -> None:
+    """The repair turn must carry the language, not only the first prompt.
+
+    The only language statement lives on the INITIAL prompt. The repair turn is
+    a new instruction on the same thread, so without restating it the retry ran
+    with no language instruction at all and could come back in the language the
+    guard had just rejected — on the one surface that HAS a retry budget.
+
+    It must also say the error list is a diagnosis of the previous response,
+    not text to reproduce: the errors are written in the harness's language,
+    and a model told only "fix these" can echo them into the answer.
+    """
+    from aiops_diagnostics.i18n import language_name
+
+    _, manifest, workspace, journal, tools, settings = _context(tmp_path)
+    invalid = json.loads(_diagnosis(manifest))
+    invalid["diagnosis"]["order_no"] = "OTHER-ORDER"
+    # The run's OUTCOME is not what this test is about: the fixture's diagnosis
+    # text is Chinese, so a non-zh run also trips the leak guard and keeps
+    # asking for repairs. Supply enough turns for the loop to settle and assert
+    # on what the repair prompt SAYS.
+    session = _FakeSession([_tool_request()] + [json.dumps(invalid)] * 10)
+    coordinator = AgentCoordinator(
+        workspace,
+        manifest,
+        journal,
+        tools,
+        settings,
+        session_factory=lambda *_: session,
+        language=language,
+    )
+
+    coordinator.run()
+
+    repair = [p for p in session.prompts if "Validation errors" in p]
+    assert repair, "没有触发修复轮"
+    assert f"Write the corrected response in {language_name(language)}." in repair[0]
+    assert "not text to reproduce" in repair[0]

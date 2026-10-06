@@ -1,6 +1,6 @@
 # Domain docs
 
-This repository uses a single domain context. Read `CONTEXT.md` for glossary
+This repository uses a single domain context. Read `GLOSSARY.md` for glossary
 terms only; it must contain definitions and avoided synonyms, never a spec or
 implementation decision.
 
