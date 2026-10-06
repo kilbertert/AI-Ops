@@ -83,6 +83,7 @@ from aiops_diagnostics.i18n import (
     QA_FALLBACK_MESSAGES,
     clarification_message,
     diagnosis_error_message,
+    effective_language,
     resolve_language,
 )
 from aiops_diagnostics.metrics_store import MetricsValidationError
@@ -839,7 +840,6 @@ def create_gateway_app(
                 content={
                     **base,
                     "type": "diagnosis",
-                    "language": language,
                     **(
                         {"conversation_id": conversation["conversation_id"], "turn_no": turn_no}
                         if conversation is not None and turn_no is not None
@@ -913,7 +913,6 @@ def create_gateway_app(
                         content={
                             **base,
                             "type": "diagnosis",
-                            "language": language,
                             "order_no_extracted": embedded,
                             **({"conversation_id": conversation["conversation_id"]} if conversation else {}),
                             **turn_field,
@@ -959,7 +958,6 @@ def create_gateway_app(
                         content={
                             **base,
                             "type": "diagnosis",
-                            "language": language,
                             "order_no_from_context": active_order,
                             "conversation_id": conversation["conversation_id"],
                             **({"turn_no": turn_no} if turn_no is not None else {}),
@@ -2705,7 +2703,10 @@ def _assistant_question_response(qa: dict[str, Any], language: str) -> dict[str,
     status_value = str(qa["status"])
     return {
         "type": "qa",
-        "language": language,
+        # The EFFECTIVE language: a non-promptable request is answered in the
+        # default, so reporting the raw request tag would describe text the
+        # answer does not contain (#541 review).
+        "language": effective_language(language),
         "qa_id": qa["qa_id"],
         "question": qa["question"],
         "status": status_value,
