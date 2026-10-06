@@ -3,24 +3,36 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 from typing import Any
 
+from aiops_diagnostics.health_report_copy import curve_name
+from aiops_diagnostics.i18n import DEFAULT_LANGUAGE
+
 MAX_CURVE_POINTS = 300
 
 
-def build_curves(samples: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+def build_curves(
+    samples: Iterable[Mapping[str, Any]],
+    language: str = DEFAULT_LANGUAGE,
+) -> dict[str, Any]:
     rows = sorted(
         (row for row in samples if _number(row.get("_ts")) is not None),
         key=lambda row: _number(row.get("_ts")) or 0,
     )
     original_points = len(rows)
     curves = {
-        "power": _curve_group(rows, (("power", "实际功率", "kW"), ("outputCurrent", "输出电流", "A"))),
-        "voltage": _curve_group(rows, (("outputVoltage", "输出电压", "V"),)),
+        "power": _curve_group(
+            rows,
+            (
+                ("power", curve_name(language, "power"), "kW"),
+                ("outputCurrent", curve_name(language, "outputCurrent"), "A"),
+            ),
+        ),
+        "voltage": _curve_group(rows, (("outputVoltage", curve_name(language, "outputVoltage"), "V"),)),
         "temperature": _curve_group(
             rows,
             (
-                ("temperature", "电池温度", "degC"),
-                ("batteryMaxTemperature", "最高温度", "degC"),
-                ("batteryMinTemperature", "最低温度", "degC"),
+                ("temperature", curve_name(language, "temperature"), "degC"),
+                ("batteryMaxTemperature", curve_name(language, "batteryMaxTemperature"), "degC"),
+                ("batteryMinTemperature", curve_name(language, "batteryMinTemperature"), "degC"),
             ),
         ),
     }

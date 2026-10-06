@@ -290,6 +290,7 @@ Content-Type: application/json                   # POST 时
 |---|---|---|
 | `code` | string | 稳定指标代码（如 `stop_reason`） |
 | `status` | string | `normal` \| `attention` \| `abnormal` \| `unavailable`，按此渲染，**不解析中文阈值** |
+| `language` | string | 报告正文的语言，**创建作业时**请求的语言；轮询带别的语言不会改写它 |
 | `value` | string \| number | 指标值 |
 | `unit` | string \| null | 单位 |
 | `reference` | string \| null | 参考条件 |

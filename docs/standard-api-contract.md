@@ -138,6 +138,7 @@ Content-Type: application/json
   "order_no": "2094370061724549120",
   "rule_version": "health-v2",
   "status": "queued",
+  "language": "zh",
   "retry_after_ms": 1000,
   "report": null,
   "error": null,
@@ -146,6 +147,11 @@ Content-Type: application/json
   "completed_at": null
 }
 ```
+
+**`language` 的语义**：它描述 **`report` 正文的语言**，即**创建该作业时**的
+`Accept-Language` 解析结果 —— 报告在那一刻生成并存储，此后**不再改变**。轮询时带别的
+`Accept-Language` 不会改写它（把一份中文报告回显成英文是假陈述）。**只读 + 不缓存**：
+请求另一个语言会**新建一个作业**（复用判定含语言），不会把既有作业的正文换语言。
 
 ### 4.2 查询计算作业
 

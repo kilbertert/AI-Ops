@@ -218,6 +218,8 @@ class GatewayStore:
         scope_fingerprint: str,
         order_no: str,
         rule_version: str,
+        *,
+        language: str = "zh",
     ) -> tuple[dict[str, Any], bool]:
         scope_fingerprint = _scope(scope_fingerprint, "scope_fingerprint")
         order_no = _scope(order_no, "order_no")
@@ -229,10 +231,11 @@ class GatewayStore:
                 """
                 SELECT * FROM health_report_jobs
                 WHERE scope_fingerprint = ? AND order_no = ? AND rule_version = ?
+                  AND language = ?
                   AND status IN ('queued', 'running', 'completed')
                 ORDER BY created_at DESC LIMIT 1
                 """,
-                (scope_fingerprint, order_no, rule_version),
+                (scope_fingerprint, order_no, rule_version, _language(language)),
             ).fetchone()
             if row is not None:
                 return _health_job_from_row(row), False
@@ -241,15 +244,16 @@ class GatewayStore:
             connection.execute(
                 """
                 INSERT INTO health_report_jobs (
-                    job_id, scope_fingerprint, order_no, rule_version, status,
+                    job_id, scope_fingerprint, order_no, rule_version, status, language,
                     created_at, updated_at, deadline_at
-                ) VALUES (?, ?, ?, ?, 'queued', ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?)
                 """,
                 (
                     job_id,
                     scope_fingerprint,
                     order_no,
                     rule_version,
+                    _language(language),
                     _iso(now),
                     _iso(now),
                     _iso(now + HEALTH_JOB_DEADLINE),
@@ -976,6 +980,7 @@ class GatewayStore:
                     order_no TEXT NOT NULL,
                     rule_version TEXT NOT NULL,
                     status TEXT NOT NULL,
+                    language TEXT NOT NULL DEFAULT 'zh',
                     report_json TEXT,
                     error_code TEXT,
                     error_message TEXT,
@@ -1042,6 +1047,26 @@ class GatewayStore:
                 connection.execute(
                     "ALTER TABLE standard_diagnoses ADD COLUMN language TEXT NOT NULL DEFAULT 'zh'"
                 )
+            health_columns = {
+                str(row[1]) for row in connection.execute("PRAGMA table_info(health_report_jobs)").fetchall()
+            }
+            if "language" not in health_columns:
+                connection.execute(
+                    "ALTER TABLE health_report_jobs ADD COLUMN language TEXT NOT NULL DEFAULT 'zh'"
+                )
+            # Reuse is per-language: a report's prose is generated once, in the
+            # language its job was created in, so reusing another language's row
+            # would hand a reader a report in a language they did not ask for.
+            # The index is created HERE, not in the CREATE TABLE script above:
+            # it names a column that script does not define, so on a database
+            # predating this change the index would be created before the ALTER
+            # adds the column — opening the store would fail on the gateway's
+            # own boot path. (Caught before merge; a fresh database cannot
+            # reproduce it.)
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_health_jobs_reuse_language "
+                "ON health_report_jobs(scope_fingerprint, order_no, rule_version, language, created_at DESC)"
+            )
             # Constructing a store converges NOTHING (#492). This path used to
             # end every `queued`/`running` health job and diagnosis without a
             # deadline condition, and `__init__` runs on every construction —

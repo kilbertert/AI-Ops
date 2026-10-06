@@ -258,6 +258,7 @@ flowchart TB
 | `rules.py` | 停止原因分类、服务端/桩端计费判定、状态标签 |
 | `order_visibility.py` | **租户可见性规则的唯一定义**，三种渲染（见推论三） |
 | `health_metrics.py` / `health_curves.py` | 充电健康指标计算与曲线降采样 |
+| `health_report_copy.py` | 健康报告文案（摘要 / 曲线名 / 停因，六语）|
 | `parsing.py` | `parse_request`：自然语言 → 结构化请求。**只提取订单号与意图**，不接受 SQL、不选表 |
 
 #### L2 身份与范围
