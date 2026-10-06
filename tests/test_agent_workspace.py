@@ -177,3 +177,27 @@ def test_the_language_parameter_is_required_not_defaulted() -> None:
     assert parameter.default is inspect.Parameter.empty, (
         "language 参数必须必填；带默认值会让调用点静默沿用旧行为"
     )
+
+
+@pytest.mark.parametrize("language", ["en", "de", "pt"])
+def test_resumed_run_keeps_its_output_language(language: str, tmp_path) -> None:
+    """A resumed run must answer in the language it was STARTED in.
+
+    The judging rule is the RESUME path, not the create path: `open()` rebuilds
+    the workspace from disk, so a language that only lived on the in-memory
+    object would silently revert to the default wherever the process restarted
+    mid-run — a 200 response whose language is wrong, which is exactly the
+    defect shape this whole ticket exists to remove.
+    """
+    from aiops_diagnostics.agent_workspace import AgentWorkspace
+
+    created = AgentWorkspace.create(
+        Path(__file__).parents[1], tmp_path, _manifest(), language=language
+    )
+    reopened = AgentWorkspace.open(tmp_path, created.run_id)
+    assert reopened.language == language
+
+    from aiops_diagnostics.codex_runtime import _developer_instructions
+    from aiops_diagnostics.i18n import language_name
+
+    assert f"field in {language_name(language)}:" in _developer_instructions(reopened.language)

@@ -75,6 +75,7 @@ class AgentWorkspace:
                 provider_base_url=provider_base_url,
                 provider=provider,
                 key_slot=key_slot,
+                language=language,
             )
         )
         return workspace
@@ -117,6 +118,7 @@ class AgentWorkspace:
                 provider_base_url=provider_base_url,
                 provider=provider,
                 key_slot=key_slot,
+                language=language,
             )
         )
         return workspace
@@ -131,7 +133,12 @@ class AgentWorkspace:
         if not path.is_dir():
             raise FileNotFoundError(f"诊断运行不存在: {run_id}")
         validate_private_directory(path)
-        return cls(run_id=run_id, path=path)
+        # The language comes from the persisted state, not from the caller: a
+        # resumed run must keep answering in the language it was started in.
+        # Rebuilding without it would make the runtime contract revert to the
+        # default partway through a run wherever the process restarted.
+        workspace = cls(run_id=run_id, path=path)
+        return cls(run_id=run_id, path=path, language=workspace.load_state().language)
 
     def load_manifest(self) -> IncidentManifest:
         return IncidentManifest.model_validate(self.read_json("incident.json"))

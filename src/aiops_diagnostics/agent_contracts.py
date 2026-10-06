@@ -7,6 +7,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from aiops_diagnostics.i18n import DEFAULT_LANGUAGE
 from aiops_diagnostics.models import DiagnosticRequest
 from aiops_diagnostics.redaction import redact_text
 
@@ -144,6 +145,12 @@ class RunState(BaseModel):
     provider_base_url: str
     provider: str = ""
     key_slot: str
+    # The language this run answers in. Persisted here because a resumed run
+    # rebuilds its workspace from disk (`AgentWorkspace.open`) and would
+    # otherwise not know which language it was started in — the runtime
+    # contract would silently revert to the default mid-run. `provider`,
+    # `key_slot` and `provider_base_url` live here for the same reason.
+    language: str = DEFAULT_LANGUAGE
 
 
 def agent_turn_schema() -> dict[str, Any]:
