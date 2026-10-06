@@ -165,3 +165,38 @@ def _client(tmp_path: Path) -> TestClient:
         order_authorizer=_Orders(),
     )
     return TestClient(app)
+
+
+def test_job_failure_branch_codes_come_out_of_real_responses(tmp_path: Path) -> None:
+    """The job surfaces' branch codes come from responses too, not a list.
+
+    The request-level check covers 404/401; the FAILED-job codes (`QA_FAILED`,
+    `DIAGNOSIS_FAILED`) are what a client branches on to choose its retry copy,
+    so they belong here for the same reason: a hardcoded list stays green when
+    the server starts returning something else.
+    """
+    from aiops_diagnostics.gateway_api import _assistant_question_response, _standard_diagnosis_response
+
+    qa = {
+        "qa_id": "qa_1",
+        "question": "q",
+        "status": "failed",
+        "error_code": None,  # absent -> the documented default
+        "result": None,
+    }
+    assert _assistant_question_response(dict(qa), "en")["error"]["code"] == "QA_FAILED"
+
+    diagnosis = {
+        "diagnosis_id": "dx_1",
+        "order_no": "O-1",
+        "question": "q",
+        "indicator_code": None,
+        "language": "en",
+        "status": "failed",
+        "error_code": None,
+        "result": None,
+        "created_at": "t",
+        "updated_at": "t",
+        "completed_at": None,
+    }
+    assert _standard_diagnosis_response(dict(diagnosis), "en")["error"]["code"] == "DIAGNOSIS_FAILED"
