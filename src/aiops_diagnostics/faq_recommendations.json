@@ -1,5 +1,5 @@
 {
-  "faq_version": "2026.09.12",
+  "faq_version": "2026.10.07",
   "platforms": {
     "consumer": [
       {
@@ -623,87 +623,223 @@
       {
         "question_id": "operator.faq.q001",
         "title": "新建充电站的标准建站流程与核心业务配置是什么？",
-        "sort": 1
+        "sort": 1,
+        "i18n": {
+          "vi": {
+            "title": "Quy trình tiêu chuẩn và cấu hình nghiệp vụ cốt lõi để xây dựng một trạm sạc mới là gì?"
+          },
+          "mn": {
+            "title": "Шинээр цэнэглэх станц байгуулах стандарт үйл явц болон бизнесийн үндсэн тохиргоо юу вэ?"
+          }
+        }
       },
       {
         "question_id": "operator.faq.q002",
         "title": "充电桩设备如何建档入网？设备型号与桩枪对应关系如何维护？",
-        "sort": 2
+        "sort": 2,
+        "i18n": {
+          "vi": {
+            "title": "Thiết bị trụ sạc được tạo hồ sơ và kết nối mạng như thế nào? Làm thế nào để duy trì mối quan hệ giữa model thiết bị, trụ sạc và cổng sạc?"
+          },
+          "mn": {
+            "title": "Цэнэглэгч төхөөрөмжийг сүлжээнд хэрхэн бүртгэж холбох вэ? Төхөөрөмжийн загвар, цэнэглэгч болон хошууны холбоосыг хэрхэн удирдах вэ?"
+          }
+        }
       },
       {
         "question_id": "operator.faq.q003",
         "title": "如何利用【充电桩监控】实现高效远程运维？",
-        "sort": 3
+        "sort": 3,
+        "i18n": {
+          "vi": {
+            "title": "Làm thế nào để sử dụng [Giám sát trụ sạc] nhằm đạt hiệu quả vận hành và bảo trì từ xa?"
+          },
+          "mn": {
+            "title": "Алсын удирдлага, ашиглалт үйлчилгээг үр дүнтэй болгохын тулд [Цэнэглэгчийн хяналт]-ыг хэрхэн ашиглах вэ?"
+          }
+        }
       },
       {
         "question_id": "operator.faq.q004",
         "title": "如何配置多时段分时计费策略（尖峰平谷电价与服务费）？",
-        "sort": 4
+        "sort": 4,
+        "i18n": {
+          "vi": {
+            "title": "Làm thế nào để cấu hình chiến lược giá theo khung giờ (giá điện cao điểm, bình thường, thấp điểm và phí dịch vụ)?"
+          },
+          "mn": {
+            "title": "Олон цагийн бүсийн үнийн тарифын стратегийг (оргил, ердийн, хямд үеийн цахилгааны үнэ болон үйлчилгээний хөлс) хэрхэн тохируулах вэ?"
+          }
+        }
       },
       {
         "question_id": "operator.faq.q005",
         "title": "超时占位费计费模板如何配置以最大化场站周转率？",
-        "sort": 5
+        "sort": 5,
+        "i18n": {
+          "vi": {
+            "title": "Làm thế nào để cấu hình mẫu biểu phí quá giờ giữ chỗ nhằm tối đa hóa tỷ lệ quay vòng của trạm?"
+          },
+          "mn": {
+            "title": "Станцын эргэлтийг нэмэгдүүлэхийн тулд цаг хэтрүүлсний зогсоолын төлбөрийн загварыг хэрхэн тохируулах вэ?"
+          }
+        }
       },
       {
         "question_id": "operator.faq.q006",
         "title": "设备白名单功能的业务应用场景与操作规范是什么？",
-        "sort": 6
+        "sort": 6,
+        "i18n": {
+          "vi": {
+            "title": "Các kịch bản ứng dụng nghiệp vụ và quy chuẩn vận hành của tính năng danh sách trắng thiết bị là gì?"
+          },
+          "mn": {
+            "title": "Төхөөрөмжийн цагаан жагсаалт (whitelist) функцийн хэрэглээний хувилбарууд болон ашиглалтын журам юу вэ?"
+          }
+        }
       },
       {
         "question_id": "operator.faq.q007",
         "title": "平台在多运营商（Multi-运营商）模式下如何管理合作运营商？",
-        "sort": 7
+        "sort": 7,
+        "i18n": {
+          "vi": {
+            "title": "Nền tảng quản lý các nhà vận hành đối tác theo mô hình đa nhà vận hành (Multi-operator) như thế nào?"
+          },
+          "mn": {
+            "title": "Олон операторын (Multi-operator) загвар дахь хамтран ажиллагч операторуудыг платформ хэрхэн удирддаг вэ?"
+          }
+        }
       },
       {
         "question_id": "operator.faq.q008",
         "title": "加盟运营商的分润资金结算与提现审核流程是怎样的？",
-        "sort": 8
+        "sort": 8,
+        "i18n": {
+          "vi": {
+            "title": "Quy trình quyết toán phân chia lợi nhuận và xét duyệt rút tiền cho các nhà vận hành liên kết là gì?"
+          },
+          "mn": {
+            "title": "Франчайз операторуудын ашгийн хуваарилалтын тооцоо болон татан авалтын хяналтын процесс ямар байдаг вэ?"
+          }
+        }
       },
       {
         "question_id": "operator.faq.q009",
         "title": "如何策划与配置平台充值促销活动与优惠券分发？",
-        "sort": 9
+        "sort": 9,
+        "i18n": {
+          "vi": {
+            "title": "Làm thế nào để lập kế hoạch và cấu hình các chương trình khuyến mãi nạp tiền và phân phát phiếu giảm giá trên nền tảng?"
+          },
+          "mn": {
+            "title": "Платформын данс цэнэглэлтийн урамшуулал болон купон түгээлтийг хэрхэн төлөвлөж тохируулах вэ?"
+          }
+        }
       },
       {
         "question_id": "operator.faq.q010",
         "title": "【车队管理】模块如何支持网约车、物流车及公交车队的大客户精细化运营？",
-        "sort": 10
+        "sort": 10,
+        "i18n": {
+          "vi": {
+            "title": "Phân hệ [Quản lý đội xe] hỗ trợ vận hành chuyên sâu cho các khách hàng lớn như đội xe công nghệ, xe logistics và xe buýt như thế nào?"
+          },
+          "mn": {
+            "title": "[Флот удирдлага] модуль нь дуудлагын тэрэг, логистик болон нийтийн тээврийн томоохон харилцагчдын нарийвчилсан үйл ажиллагааг хэрхэн дэмждэг вэ?"
+          }
+        }
       },
       {
         "question_id": "operator.faq.q011",
         "title": "充电订单的全生命周期监控与异常订单处理 SOP 是怎样的？",
-        "sort": 11
+        "sort": 11,
+        "i18n": {
+          "vi": {
+            "title": "SOP giám sát toàn bộ vòng đời và xử lý đơn hàng sạc bất thường là gì?"
+          },
+          "mn": {
+            "title": "Цэнэглэх захиалгын бүтэн мөчлөгийн хяналт болон хэвийн бус захиалгыг шийдвэрлэх SOP журам ямар байдаг вэ?"
+          }
+        }
       },
       {
         "question_id": "operator.faq.q012",
         "title": "如何开展每日与每月的财务对账工作？（电网成本、用户流水与通道清算）",
-        "sort": 12
+        "sort": 12,
+        "i18n": {
+          "vi": {
+            "title": "Làm thế nào để thực hiện đối soát tài chính hàng ngày và hàng tháng? (Chi phí lưới điện, dòng tiền người dùng và thanh toán qua cổng thanh toán)"
+          },
+          "mn": {
+            "title": "Өдөр тутмын болон сар тутмын санхүүгийн тулгалтыг хэрхэн хийх вэ? (Сүлжээний цахилгааны зардал, хэрэглэгчийн гүйлгээ, төлбөрийн сувгийн тооцоо)"
+          }
+        }
       },
       {
         "question_id": "operator.faq.q013",
         "title": "平台发票管理功能如何支持税法合规与自动化交付？",
-        "sort": 13
+        "sort": 13,
+        "i18n": {
+          "vi": {
+            "title": "Tính năng quản lý hóa đơn của nền tảng hỗ trợ tuân thủ luật thuế và bàn giao tự động như thế nào?"
+          },
+          "mn": {
+            "title": "Платформын нэхэмжлэх удирдлагын функц нь татварын хууль тогтоомжийн нийцэл болон автомат хүргэлтийг хэрхэн дэмждэг вэ?"
+          }
+        }
       },
       {
         "question_id": "operator.faq.q014",
         "title": "什么是【有序充电】？其核心控制策略与商业价值是什么？",
-        "sort": 14
+        "sort": 14,
+        "i18n": {
+          "vi": {
+            "title": "[Sạc có trật tự / Smart Charging] là gì? Chiến lược điều khiển cốt lõi và giá trị thương mại của nó là gì?"
+          },
+          "mn": {
+            "title": "[Ухаалаг цэнэглэлт / Дараалалтай цэнэглэлт] гэж юу вэ? Үүний удирдлагын үндсэн стратеги болон бизнесийн үнэ цэнэ юу вэ?"
+          }
+        }
       },
       {
         "question_id": "operator.faq.q015",
         "title": "【首页数据总览】与【场站数据看板】包含哪些核心经营指标？如何指导运营？",
-        "sort": 15
+        "sort": 15,
+        "i18n": {
+          "vi": {
+            "title": "[Tổng quan dữ liệu trang chủ] và [Bảng điều khiển trạm] bao gồm những chỉ số vận hành cốt lõi nào? Chúng định hướng vận hành ra sao?"
+          },
+          "mn": {
+            "title": "[Нүүр хуудасны өгөгдлийн тойм] болон [Станцын хяналтын самбар]-т ямар гол үзүүлэлтүүд багтдаг вэ? Тэдгээр нь үйл ажиллагааг хэрхэн чиглүүлдэг вэ?"
+          }
+        }
       },
       {
         "question_id": "operator.faq.q016",
         "title": "如何通过【站场使用率看板】捕捉潮汐规律并优化定价策略？",
-        "sort": 16
+        "sort": 16,
+        "i18n": {
+          "vi": {
+            "title": "Làm thế nào để nắm bắt quy luật biến động theo giờ và tối ưu hóa chiến lược định giá qua [Bảng điều khiển tỷ lệ sử dụng trạm]?"
+          },
+          "mn": {
+            "title": "[Станцын ашиглалтын хяналтын самбар]-аар дамжуулан ачааллын хэлбэлзлийн зүй тогтлыг илрүүлж, үнийн стратегийг хэрхэн оновчлох вэ?"
+          }
+        }
       },
       {
         "question_id": "operator.faq.q017",
         "title": "【多维度数据统计】如何为 运营商 提供企业级管理报表？",
-        "sort": 17
+        "sort": 17,
+        "i18n": {
+          "vi": {
+            "title": "[Thống kê dữ liệu đa chiều] cung cấp báo cáo quản trị cấp doanh nghiệp cho các nhà vận hành như thế nào?"
+          },
+          "mn": {
+            "title": "[Олон хэмжээст өгөгдлийн статистик] нь операторуудад аж ахуйн нэгжийн түвшний удирдлагын тайланг хэрхэн гаргаж өгдөг вэ?"
+          }
+        }
       }
     ]
   }
