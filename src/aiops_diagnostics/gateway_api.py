@@ -82,6 +82,7 @@ from aiops_diagnostics.i18n import (
     DEFAULT_LANGUAGE,
     QA_FALLBACK_MESSAGES,
     clarification_message,
+    diagnosis_error_message,
     resolve_language,
 )
 from aiops_diagnostics.metrics_store import MetricsValidationError
@@ -3133,6 +3134,7 @@ def _start_promo_qa(
 
 def _standard_diagnosis_response(diagnosis: dict[str, Any]) -> dict[str, Any]:
     status_value = str(diagnosis["status"])
+    error_code = diagnosis.get("error_code") or "DIAGNOSIS_FAILED"
     # The shared status set decides what is terminal, exactly as it decides what
     # the store accepts: a literal copy here is how a status the store now takes
     # (a stopped diagnosis) would render `retry_after_ms=1000` and keep a client
@@ -3149,8 +3151,12 @@ def _standard_diagnosis_response(diagnosis: dict[str, Any]) -> dict[str, Any]:
         "result": diagnosis.get("result") if status_value in DIAGNOSIS.completed else None,
         "error": (
             {
-                "code": diagnosis.get("error_code") or "DIAGNOSIS_FAILED",
-                "message": diagnosis.get("error_message") or "diagnosis failed",
+                "code": error_code,
+                # Bounded and localized, chosen by the code — NOT the stored
+                # `error_message`. That field is the engineer's note (an
+                # upstream exception string, a restart notice); the contract
+                # promises this surface carries no internal run information.
+                "message": diagnosis_error_message(diagnosis.get("language") or DEFAULT_LANGUAGE, error_code),
                 "retryable": status_value in {DIAGNOSIS.failed, DIAGNOSIS.expired},
             }
             if status_value in {DIAGNOSIS.failed, DIAGNOSIS.expired}

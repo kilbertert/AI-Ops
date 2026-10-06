@@ -306,6 +306,170 @@ def zero_order_reminder(language: str) -> str:
     return ZERO_ORDER_REMINDER_MESSAGES.get(language) or ZERO_ORDER_REMINDER_MESSAGES[DEFAULT_LANGUAGE]
 
 
+# A diagnosis that did NOT produce a conclusion, stated for the USER.
+#
+# When a run blocks, the engine's reason is harness internals — "the tool-call
+# budget was exceeded", "the model returned invalid structured output", plus
+# about twenty validator error strings naming evidence IDs and contract rules.
+# Those are read by an engineer looking at the run record; a 管家端 user reading
+# them learns nothing about their own order and reads a language they may not
+# have asked for.
+#
+# So the user-facing surface says only WHICH KIND of ending this was, from a
+# closed set, and the run record keeps the precise reason (`_finish_blocked`
+# already records it as the `diagnosis_blocked` event). This is the same split
+# the codebase already uses for a QA failure: "the record is read by an
+# engineer and this response is read by a customer".
+#
+# Deliberately NOT a sentence about the data source. A blocked run is not proof
+# the knowledge base or the order data was unavailable — the run failed its own
+# contract. Claiming otherwise is the false-statement failure this project has
+# already paid for (ADR-0007).
+DIAGNOSIS_FAILURE_MESSAGES: dict[str, dict[str, str]] = {
+    "zh": {
+        "incomplete": "诊断未能形成结论，已记录运行详情供人工排查。",
+        "insufficient_evidence": "现有证据不足以形成诊断结论，已记录运行详情供人工排查。",
+        "out_of_scope": "该订单不在当前授权范围内，无法继续诊断。",
+    },
+    "en": {
+        "incomplete": "The diagnosis could not reach a conclusion; run details were recorded for review.",
+        "insufficient_evidence": (
+            "The available evidence was not sufficient for a conclusion; "
+            "run details were recorded for review."
+        ),
+        "out_of_scope": "This order is outside the authorized scope, so the diagnosis cannot continue.",
+    },
+    "de": {
+        "incomplete": (
+            "Die Diagnose konnte keine Schlussfolgerung erreichen; "
+            "Laufdetails wurden zur Prüfung festgehalten."
+        ),
+        "insufficient_evidence": (
+            "Die vorhandenen Belege reichten nicht für eine Schlussfolgerung; "
+            "Laufdetails wurden zur Prüfung festgehalten."
+        ),
+        "out_of_scope": (
+            "Dieser Auftrag liegt außerhalb des Berechtigungsbereichs; "
+            "die Diagnose kann nicht fortgesetzt werden."
+        ),
+    },
+    "fr": {
+        "incomplete": (
+            "Le diagnostic n'a pas pu aboutir ; les détails de l'exécution ont été enregistrés pour examen."
+        ),
+        "insufficient_evidence": (
+            "Les éléments disponibles ne suffisaient pas pour conclure ; "
+            "les détails de l'exécution ont été enregistrés pour examen."
+        ),
+        "out_of_scope": (
+            "Cette commande est hors du périmètre autorisé ; le diagnostic ne peut pas se poursuivre."
+        ),
+    },
+    "es": {
+        "incomplete": (
+            "El diagnóstico no pudo llegar a una conclusión; "
+            "se registraron los detalles de la ejecución para su revisión."
+        ),
+        "insufficient_evidence": (
+            "Las pruebas disponibles no bastaron para concluir; "
+            "se registraron los detalles de la ejecución para su revisión."
+        ),
+        "out_of_scope": ("Este pedido está fuera del ámbito autorizado; el diagnóstico no puede continuar."),
+    },
+    "pt": {
+        "incomplete": (
+            "O diagnóstico não conseguiu chegar a uma conclusão; "
+            "os detalhes da execução foram registados para análise."
+        ),
+        "insufficient_evidence": (
+            "Os elementos disponíveis não foram suficientes para concluir; "
+            "os detalhes da execução foram registados para análise."
+        ),
+        "out_of_scope": ("Este pedido está fora do âmbito autorizado; o diagnóstico não pode continuar."),
+    },
+}
+
+
+def diagnosis_failure_message(language: str, key: str) -> str:
+    """Bounded, localized text for a diagnosis that produced no conclusion."""
+    pack = DIAGNOSIS_FAILURE_MESSAGES.get(language) or DIAGNOSIS_FAILURE_MESSAGES[DEFAULT_LANGUAGE]
+    return pack.get(key) or DIAGNOSIS_FAILURE_MESSAGES[DEFAULT_LANGUAGE]["incomplete"]
+
+
+# The `error.message` a diagnosis job returns, chosen by its CODE.
+#
+# The stored `error_message` is an engineer's note (`_internal_error_message`):
+# an upstream exception string, or a restart notice. It is not a user-facing
+# sentence and must not be handed to a 管家端 user — `standard-api-contract.md`
+# already promises this surface carries no internal run information. So the
+# response carries a bounded sentence picked by the code, and the record keeps
+# the precise reason. Same split as the QA failure path.
+#
+# `code` stays English and non-localized so a client can branch on it.
+DIAGNOSIS_ERROR_MESSAGES: dict[str, dict[str, str]] = {
+    "zh": {
+        "out_of_scope": "该订单不在当前授权范围内。",
+        "failed": "本次诊断未能完成，请稍后重试。",
+        "expired": "本次诊断已超时，请重新发起。",
+        "interrupted": "服务重启导致本次诊断中断，请重新发起。",
+        "generic": "本次诊断未能完成。",
+    },
+    "en": {
+        "out_of_scope": "This order is outside the authorized scope.",
+        "failed": "This diagnosis could not be completed. Please try again later.",
+        "expired": "This diagnosis timed out. Please start a new one.",
+        "interrupted": "A service restart interrupted this diagnosis. Please start a new one.",
+        "generic": "This diagnosis could not be completed.",
+    },
+    "de": {
+        "out_of_scope": "Dieser Auftrag liegt außerhalb des Berechtigungsbereichs.",
+        "failed": "Diese Diagnose konnte nicht abgeschlossen werden. Bitte später erneut versuchen.",
+        "expired": "Diese Diagnose hat das Zeitlimit überschritten. Bitte neu starten.",
+        "interrupted": "Ein Dienstneustart hat diese Diagnose unterbrochen. Bitte neu starten.",
+        "generic": "Diese Diagnose konnte nicht abgeschlossen werden.",
+    },
+    "fr": {
+        "out_of_scope": "Cette commande est hors du périmètre autorisé.",
+        "failed": "Ce diagnostic n'a pas pu aboutir. Veuillez réessayer plus tard.",
+        "expired": "Ce diagnostic a expiré. Veuillez en lancer un nouveau.",
+        "interrupted": "Un redémarrage du service a interrompu ce diagnostic. Veuillez en lancer un nouveau.",
+        "generic": "Ce diagnostic n'a pas pu aboutir.",
+    },
+    "es": {
+        "out_of_scope": "Este pedido está fuera del ámbito autorizado.",
+        "failed": "Este diagnóstico no pudo completarse. Inténtelo de nuevo más tarde.",
+        "expired": "Este diagnóstico ha caducado. Inicie uno nuevo.",
+        "interrupted": "Un reinicio del servicio interrumpió este diagnóstico. Inicie uno nuevo.",
+        "generic": "Este diagnóstico no pudo completarse.",
+    },
+    "pt": {
+        "out_of_scope": "Este pedido está fora do âmbito autorizado.",
+        "failed": "Este diagnóstico não foi concluído. Tente novamente mais tarde.",
+        "expired": "Este diagnóstico expirou. Inicie um novo.",
+        "interrupted": "O reinício do serviço interrompeu este diagnóstico. Inicie um novo.",
+        "generic": "Este diagnóstico não foi concluído.",
+    },
+}
+
+
+# Error code -> message key. A code not listed here gets "generic": this map is
+# deliberately total-with-a-default rather than an exhaustive enumeration, so a
+# NEW code added later cannot make the surface fall back to the raw stored text.
+_DIAGNOSIS_ERROR_KEYS: dict[str, str] = {
+    "DIAGNOSIS_ORDER_OUT_OF_SCOPE": "out_of_scope",
+    "DIAGNOSIS_DEADLINE": "expired",
+    "DIAGNOSIS_INTERRUPTED_BY_RESTART": "interrupted",
+    "DIAGNOSIS_FAILED": "failed",
+    "DIAGNOSIS_BLOCKED": "failed",
+}
+
+
+def diagnosis_error_message(language: str, error_code: str | None) -> str:
+    """The bounded, localized `error.message` for a diagnosis failure."""
+    pack = DIAGNOSIS_ERROR_MESSAGES.get(language) or DIAGNOSIS_ERROR_MESSAGES[DEFAULT_LANGUAGE]
+    return pack[_DIAGNOSIS_ERROR_KEYS.get(error_code or "", "generic")]
+
+
 def clarification_message(language: str, key: str) -> str:
     """Localized clarification text, falling back to zh then to a safe default.
 

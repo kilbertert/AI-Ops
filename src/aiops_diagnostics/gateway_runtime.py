@@ -1103,7 +1103,7 @@ class GatewayRuntime:
                 diagnosis_id,
                 status="failed",
                 error_code="DIAGNOSIS_FAILED",
-                error_message=_public_error_message(exc, request.order_no),
+                error_message=_internal_error_message(exc, request.order_no),
             )
             # Only a write that landed has a terminal row to match: when the
             # row was expired or cancelled underneath us, the turn is dropped
@@ -1297,7 +1297,7 @@ class GatewayRuntime:
                 qa_id,
                 status="failed",
                 error_code="QA_FAILED",
-                error_message=_public_error_message(exc, ""),
+                error_message=_internal_error_message(exc, ""),
             ):
                 _finish_turn(None, cancelled=True)
                 return
@@ -1559,7 +1559,7 @@ class GatewayRuntime:
                 qa_id,
                 status="failed",
                 error_code="QA_FAILED",
-                error_message=_public_error_message(exc, ""),
+                error_message=_internal_error_message(exc, ""),
             ):
                 return TERMINAL_WRITE_REFUSED
             return {"status": "failed"}
@@ -1584,7 +1584,7 @@ class GatewayRuntime:
                 qa_id,
                 status="failed",
                 error_code="QA_FAILED",
-                error_message=_public_error_message(exc, ""),
+                error_message=_internal_error_message(exc, ""),
             ):
                 return TERMINAL_WRITE_REFUSED
             return {"status": "failed"}
@@ -1700,7 +1700,7 @@ class GatewayRuntime:
                 key_slot=state_key_slot,
             )
         except (AgentRuntimeError, SourceError) as exc:
-            error_message = _public_error_message(exc, request.order_no)
+            error_message = _internal_error_message(exc, request.order_no)
             self.store.update_run(
                 run_id,
                 status="interrupted",
@@ -1717,7 +1717,7 @@ class GatewayRuntime:
             )
             return
         except Exception as exc:
-            error_message = _public_error_message(exc, request.order_no)
+            error_message = _internal_error_message(exc, request.order_no)
             self.store.update_run(
                 run_id,
                 status="failed",
@@ -1837,8 +1837,19 @@ def _public_event(event: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def _public_error_message(error: Exception, order_no: str | None) -> str:
-    """Expose a bounded, redacted diagnostic reason without server secrets."""
+def _internal_error_message(error: Exception, order_no: str | None) -> str:
+    """The redacted reason, for the RECORD only — never for the response.
+
+    ``str(exc)`` is whatever the failing layer raised: an upstream SDK message,
+    a socket error, a parser's complaint. The contract already promised this
+    surface never carries internal run information (`standard-api-contract.md`
+    §error.message), and the promise was not kept: the raw string was returned
+    verbatim as the user-facing `message`, so a 管家端 user could read the
+    harness's internals in whatever language that layer happened to use.
+
+    The caller stores this in the job row, where an engineer reads it; the
+    response gets the bounded, coded copy instead (``DIAGNOSIS_ERROR_MESSAGES``).
+    """
     message = redact_text(str(error), preserve=(order_no or "",))
     return message[:1000] if message else error.__class__.__name__
 
