@@ -8,6 +8,68 @@
 
 
 
+## #536 端到端验收：用 41 生产库真实失败行对照修复前后（2026-10-06）
+
+**交付追踪**：分支 `fix/diagnosis-language-contract` → PR #546 → squash 合并
+`afd245d` → 本地 `main` 已快进。CD run `37441266187` 自动部署 41 成功
+（`/health version 0.1.0+afd245df8e75`、66 文件 sha 逐一致、备份
+`/var/backups/aiops-41/backup-20261006-171153`）。
+
+**业务验收状态：完成**（诊断失败分支，真实生产数据）。方法：在 41 上以
+**已部署的代码**（`/opt/aiops-41/src`，跑的是本 commit）对**生产库真实行**调用
+诊断响应构造函数，对照修复前后的用户可见输出。
+
+**为什么这不是"本地 fixture 验收"**：输入是 41 生产库里的真实行，代码是已部署的
+本 commit。它**不是**端到端 HTTP 链路验收（未用业务方签发的 `thirdSession`），
+也**不是**一次真实诊断运行的验收 —— 见下面的边界段。
+
+### 证据
+
+生产库里一条真实失败行（`dx_2389a9cdcff94fcbba0060c9bf6f3a06`，
+`status=failed`，`error_code=DIAGNOSIS_FAILED`，`language=zh`）。
+
+**其存储的 `error_message` 的形状**（不复制原文——本仓为 public，该串含凭据片段
+与账户余额）：
+
+> 一段上游异常串，包含：provider 返回的状态行、一个内部 Codex turn UUID、
+> **部分脱敏的供应商 key**、供应商的中文失败原因、以及**该账户的剩余额度与
+> 所需预扣额度**、外加一个 request id。
+
+**修复前**，这个字符串就是 `error.message` —— 用户会逐字读到上述全部内容，
+其中三项（凭据片段、账户余额、内部 turn id）都不是用户该从产品响应里看到的东西。
+
+**修复后**（同一行、同一份已部署代码）：
+
+```json
+{"code": "DIAGNOSIS_FAILED",
+ "message": "本次诊断未能完成，请稍后重试。",
+ "retryable": true}
+```
+
+blocked 结束语（`diagnosis_failure_message`）：
+- `en`: `The available evidence was not sufficient for a conclusion; run details were recorded for review.`
+- `zh`: `现有证据不足以形成诊断结论，已记录运行详情供人工排查。`
+
+**这次验收证明了什么**：
+
+- 生产库里的真实内部文本**不再**出现在 `error.message`；
+- `error.code` 与 `retryable` **未变**（客户端分支契约不受影响）；
+- 用户可见文案随语言变化，且是**有界**集合。
+
+**这次验收没有证明什么（不得越过）**：
+
+- **不是**公网 HTTP 链路验收，也**不是**真实诊断运行的验收 —— 那是
+  `env-41-runbook.md` §5 的范围，需业务方签发 `thirdSession`，由人执行。
+- **未覆盖** `blocked` 路径的真实触发（`blocked_result` 由引擎在运行中调用；
+  本次只验了渲染函数与真实数据，未触发一次真实 blocked 运行）。
+- **未覆盖**重试提示的行为效果（要真实模型跑一轮才能观察）。
+- 报告中**不写"live"**：本次部署已生效且响应面已用生产数据验证，但端到端业务
+  链路未由人按 §5 跑过。
+
+**只读性**：全程只读（`sqlite3` 以 `mode=ro` 打开），未写生产库、未改服务、
+未重启。临时脚本用完即删。生产库中带凭据前缀与账户余额的原始串**未复制进仓库**
+（上方证据为说明缺陷所需的最小摘录）。
+
 ## #536 诊断线语言契约：失败兜底、重试提示与 error.message（2026-10-06）
 
 **本票未做真实链路（41）业务验收**，全部为离线验证。端到端归 #542。
