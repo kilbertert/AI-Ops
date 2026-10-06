@@ -312,9 +312,21 @@ queued | running | completed | inconclusive | failed | expired | cancelled
 `DIAGNOSIS_ORDER_OUT_OF_SCOPE` / `DIAGNOSIS_BLOCKED` / `DIAGNOSIS_FAILED` 分三句，
 见前端接口说明）。
 
-**唯一例外：统一助手 QA 作业的失败信封。** 该面的 `message` **是本地化的**，
-因为客户端被明确要求**直接渲染它**（见前端接口说明的场景 B）。这条例外是**有意保留**的，
-不是历史遗留 —— 若要把它也改成"按 code 分支"，需要先改前端的渲染契约，属于前端变更。
+**例外：作业态信封的 `message` 是本地化的（两个面）。** 与请求级不同，
+**异步作业**（`/v1/assistant/questions`、`/v1/standard/diagnoses`）失败时的 `message`
+随请求语言变化。两个面**据此再分**：
+
+| 作业面 | `message` | 客户端被要求 |
+|---|---|---|
+| 统一助手 QA | 本地化 | **直接渲染它**（场景 B）⇒ 本地化是**必要的** |
+| 单问诊断 | 本地化 | **按 `code` 分支**，不渲染 `message` ⇒ 本地化**客户端不消费** |
+
+⇒ 一句话概括：**请求级信封的 `message` 不本地化；作业态信封的 `message` 本地化，
+但只有 QA 那条被要求渲染。**
+
+这条区分此前只在实现里，契约没写；本版把它写下来，因为"统一把信封都翻掉"或
+"统一都别翻"两种改动都会打破其中一个面的既有约定。诊断那条若要改成"按 code 分支"
+的纯英文形态，属**契约变更**，需要先改前端渲染约定。
 
 `message` 无论哪条路径都**不含**租户标识、SQL、原始报文、内部 run/turn id、
 provider 凭据或账户额度；上游异常串一律**不**直接透出（见 `_internal_error_message`
