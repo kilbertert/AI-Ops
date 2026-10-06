@@ -19,6 +19,7 @@ from openai_codex import ApprovalMode, Codex, CodexConfig
 from aiops_diagnostics.agent_contracts import agent_turn_schema
 from aiops_diagnostics.agent_workspace import AgentWorkspace
 from aiops_diagnostics.config import AgentSettings, ProviderConfig, canonical_provider_base_url
+from aiops_diagnostics.i18n import DEFAULT_LANGUAGE, language_name
 from aiops_diagnostics.private_files import (
     PrivatePathError,
     ensure_private_directory,
@@ -167,7 +168,7 @@ class SDKCodexSession:
             kwargs: dict[str, Any] = {
                 "approval_mode": ApprovalMode.deny_all,
                 "cwd": str(workspace.path),
-                "developer_instructions": _developer_instructions(),
+                "developer_instructions": _developer_instructions(workspace.language),
                 "model_provider": self._provider.name,
             }
             if self._provider.model:
@@ -390,8 +391,8 @@ def provider_key_fingerprint(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()[:12]
 
 
-def _developer_instructions() -> str:
-    return """You are the primary causal diagnostic actor for one charging-order incident.
+def _developer_instructions(language: str = DEFAULT_LANGUAGE) -> str:
+    text = """You are the primary causal diagnostic actor for one charging-order incident.
 The surrounding Python harness is intentionally thin. It enforces identity,
 read-only tools, evidence journaling, redaction, limits, resume, and output
 validation. It does not decide the root cause for you.
@@ -445,8 +446,10 @@ cost a retry. Comply exactly:
   "blocked" — no synonyms ("conclusive", "done", "resolved" are rejected).
 - diagnosis.confidence MUST be exactly one of "high", "medium", "low".
 
-Write every human-facing field in Simplified Chinese: summary, root_cause,
+Write every human-facing field in {output_language}: summary, root_cause,
 each hypothesis title and explanation, and each next_steps entry. Keep order
 numbers, tenant IDs, field names, tool names, evidence IDs, and other code
 identifiers in their original form without translation.
 """
+    # `replace`, not an f-string: the contract body contains JSON braces.
+    return text.replace("{output_language}", language_name(language))

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from aiops_diagnostics.agent_contracts import AgentDiagnosis, IncidentManifest, RunState
+from aiops_diagnostics.i18n import DEFAULT_LANGUAGE, language_name, zero_order_reminder
 from aiops_diagnostics.private_files import (
     append_private_text,
     ensure_private_directory,
@@ -34,6 +35,11 @@ BACKEND_REFERENCES = (
 class AgentWorkspace:
     run_id: str
     path: Path
+    # The request language this run answers in. It lives on the workspace
+    # because the session needs it to write the runtime contract, and the
+    # session is constructed from a workspace in several places — threading a
+    # second argument through all of them would let one call site forget it.
+    language: str = DEFAULT_LANGUAGE
 
     @classmethod
     def create(
@@ -46,6 +52,7 @@ class AgentWorkspace:
         provider_base_url: str = "",
         provider: str = "",
         key_slot: str = "default",
+        language: str = DEFAULT_LANGUAGE,
     ) -> AgentWorkspace:
         timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         run_id = f"run-{timestamp}-{manifest.source_hash[:8]}-{secrets.token_hex(2)}"
@@ -53,7 +60,7 @@ class AgentWorkspace:
         ensure_private_directory(path)
         for child in ("evidence", "references"):
             ensure_private_directory(path / child)
-        workspace = cls(run_id=run_id, path=path)
+        workspace = cls(run_id=run_id, path=path, language=language)
         workspace.write_json("incident.json", manifest.model_dump(mode="json"))
         workspace._stage_references(project_root.resolve())
         workspace.write_text("AGENTS.md", _runtime_instructions())
@@ -68,6 +75,7 @@ class AgentWorkspace:
                 provider_base_url=provider_base_url,
                 provider=provider,
                 key_slot=key_slot,
+                language=language,
             )
         )
         return workspace
@@ -81,6 +89,7 @@ class AgentWorkspace:
         provider_base_url: str = "",
         provider: str = "",
         key_slot: str = "default",
+        language: str = DEFAULT_LANGUAGE,
     ) -> AgentWorkspace:
         """Zero-order (general-question) workspace: references staged, no order
         incident manifest.
@@ -96,9 +105,9 @@ class AgentWorkspace:
         ensure_private_directory(path)
         for child in ("evidence", "references"):
             ensure_private_directory(path / child)
-        workspace = cls(run_id=run_id, path=path)
+        workspace = cls(run_id=run_id, path=path, language=language)
         workspace._stage_references(project_root.resolve())
-        workspace.write_text("AGENTS.md", _qa_runtime_instructions())
+        workspace.write_text("AGENTS.md", _qa_runtime_instructions(language))
         workspace.save_state(
             RunState(
                 run_id=run_id,
@@ -109,6 +118,7 @@ class AgentWorkspace:
                 provider_base_url=provider_base_url,
                 provider=provider,
                 key_slot=key_slot,
+                language=language,
             )
         )
         return workspace
@@ -123,7 +133,12 @@ class AgentWorkspace:
         if not path.is_dir():
             raise FileNotFoundError(f"诊断运行不存在: {run_id}")
         validate_private_directory(path)
-        return cls(run_id=run_id, path=path)
+        # The language comes from the persisted state, not from the caller: a
+        # resumed run must keep answering in the language it was started in.
+        # Rebuilding without it would make the runtime contract revert to the
+        # default partway through a run wherever the process restarted.
+        workspace = cls(run_id=run_id, path=path)
+        return cls(run_id=run_id, path=path, language=workspace.load_state().language)
 
     def load_manifest(self) -> IncidentManifest:
         return IncidentManifest.model_validate(self.read_json("incident.json"))
@@ -248,8 +263,19 @@ def _runtime_instructions() -> str:
 """
 
 
-def _qa_runtime_instructions() -> str:
-    return """# AI-Ops General Assistant Runtime
+def _qa_runtime_instructions(language: str) -> str:
+    """The zero-order workspace contract, written in the run's language.
+
+    The output language is a REQUIRED ARGUMENT, not a defaulted one. It used
+    to be absent from this function while the same run's prompt said "write
+    `text` in {target language}": two instructions in one run, contradicting
+    each other, and the model obeyed both. A default here would let a future
+    call site silently keep the old behaviour, so the parameter is positional
+    and required — every caller states the language it is answering in.
+    """
+    answer_language = language_name(language)
+    reminder_line = zero_order_reminder(language)
+    return f"""# AI-Ops General Assistant Runtime
 
 - This workspace contains general charging/new-energy references ONLY. There is
   NO order incident — do not invent or assume an order number, and do not query
@@ -259,9 +285,9 @@ def _qa_runtime_instructions() -> str:
   SPECIFIC order, bill, or refund, do not fabricate an answer: give general
   guidance and tell the user that providing an order number enables an exact
   diagnosis, then end with the reminder line exactly:
-  "提供订单号可获得更精确的结果哦。"
+  "{reminder_line}"
 - Read only files inside this run workspace. Do not inspect parent directories,
   home directories, credentials, or host configuration. No network access.
-- Return a single `text` answer in Simplified Chinese. The `reminder` field is
+- Return a single `text` answer in {answer_language}. The `reminder` field is
   always true.
 """

@@ -284,6 +284,27 @@ CLARIFICATION_MESSAGES: dict[str, dict[str, str]] = {
 
 CLARIFICATION_FALLBACK_KEY = "context"
 
+# The zero-order assistant's closing hint. It is emitted by the MODEL (the
+# workspace contract tells it to end with this line), so it is not a message
+# the server appends — but the line itself must follow the request language.
+# It used to be a Chinese literal the contract ordered the model to reproduce
+# "exactly", which made a Chinese sentence mandatory on every non-Chinese
+# answer that took the order-hint branch: the plan was Chinese text inside a
+# German answer, and the output guard then rejected the whole answer.
+ZERO_ORDER_REMINDER_MESSAGES: dict[str, str] = {
+    "zh": "提供订单号可获得更精确的结果哦。",
+    "en": "Providing an order number gives you a more precise result.",
+    "de": "Mit einer Auftragsnummer erhalten Sie ein präziseres Ergebnis.",
+    "fr": "Indiquer un numéro de commande permet un résultat plus précis.",
+    "es": "Indicar un número de pedido permite un resultado más preciso.",
+    "pt": "Indicar um número de pedido permite um resultado mais preciso.",
+}
+
+
+def zero_order_reminder(language: str) -> str:
+    """The closing hint the zero-order answer must end with, in ``language``."""
+    return ZERO_ORDER_REMINDER_MESSAGES.get(language) or ZERO_ORDER_REMINDER_MESSAGES[DEFAULT_LANGUAGE]
+
 
 def clarification_message(language: str, key: str) -> str:
     """Localized clarification text, falling back to zh then to a safe default.

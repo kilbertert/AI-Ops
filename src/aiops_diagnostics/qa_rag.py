@@ -181,6 +181,7 @@ def run_customer_qa_answer(
         provider_base_url=selected_provider.base_url,
         provider=selected_provider.name,
         key_slot=key_slot or selected_provider.resolved_key_slot(),
+        language=language,
     )
     guard = KnowledgeSearchGuard(
         search_client,

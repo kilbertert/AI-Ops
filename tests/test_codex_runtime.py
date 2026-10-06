@@ -265,3 +265,35 @@ def test_developer_instructions_describe_intent_relative_ladder() -> None:
     assert "never justifies inconclusive" in text
     # 机械交付合同（结构化输出）原样保留
     assert "The delivery contract is validated mechanically" in text
+
+
+@pytest.mark.parametrize("language", ["zh", "en", "de", "fr", "es", "pt"])
+def test_developer_instructions_state_the_run_language_not_a_fixed_one(language: str) -> None:
+    """The diagnosis developer instructions must name THIS run's language.
+
+    They used to say "Write every human-facing field in Simplified Chinese"
+    unconditionally. That was a second, always-present instruction disagreeing
+    with the run's own prompt — the #285/#293 shape — and it is worse here
+    than on the QA line because this text is injected into EVERY session.
+    """
+    from aiops_diagnostics.codex_runtime import _developer_instructions
+    from aiops_diagnostics.i18n import language_name
+
+    text = _developer_instructions(language)
+    assert f"Write every human-facing field in {language_name(language)}:" in text
+    if language != "zh":
+        assert "Simplified Chinese" not in text, "诊断指令仍在命令模型用简体中文写"
+
+
+def test_developer_instructions_keep_json_braces_intact() -> None:
+    """The contract body carries JSON braces, so it must not be an f-string.
+
+    An f-string here raises at call time on the first brace — which is how
+    this was caught — and a template that silently ate braces would corrupt
+    the delivery contract the model is asked to satisfy.
+    """
+    from aiops_diagnostics.codex_runtime import _developer_instructions
+
+    text = _developer_instructions("en")
+    assert '"tool_requests"' in text or "{" in text
+    assert "{output_language}" not in text, "占位符未被替换"
