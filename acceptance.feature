@@ -865,10 +865,14 @@ Feature: 41 环境 Gateway 切换
     Scenario: 41 多语言 FAQ 主链路按请求语言返回（11 门语言）
       Given 41 运行副本已部署 Accept-Language、11 语言目录和短路匹配实现
       And H5 登录接口返回与 41 会话库匹配的有效 thirdSession
-      When 使用 zh、zh-Hant、en、de、fr、es、pt、vi、mn、th、km 分别请求 FAQ 推荐与目录
+      When 使用 zh、zh-Hant、en、de、fr、es、pt、vi、mn、th、km 分别请求
+           FAQ 推荐、目录、固定答案和统一入口快捷问
       Then 每次响应均返回 HTTP 200
-      And language 字段等于请求语言（缺内容时如实回退 zh，不得回显请求语言却服务兜底文案）
-      And 条目非空，且标题和答案使用对应语言，未跨环境读取会话或数据
+      And 每个面按下面的两条判据之一成立：
+         · 该面有该语言的正文时，language 字段等于请求语言，且正文非空
+         · 该面缺该语言的正文时，language 字段等于正文实际所用的语言（zh），
+           且正文确实是该语言 —— 不得回显请求语言却服务兜底文案
+      And 标题和答案使用对应语言，未跨环境读取会话或数据
 
     Scenario: 泰语与高棉语是「能读不能问」
       Given 41 运行副本已部署 11 语言目录
