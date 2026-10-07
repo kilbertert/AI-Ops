@@ -41,37 +41,45 @@
 本模块只覆盖**确定性**回答面；模型侧 2/11 的实测、两处结构性缺口、以及"审计证明了什么/没证明什么"
 都写在那里，**使得读到"全绿"的人不会顺势读成"11 门都验过了"**。
 
-### 六、可复现命令（只读，全部在 41 上执行）
+### 六、可复现命令（只读，全部已实测跑过）
 
-四条结论各自的取数命令。**都是只读**（`mode=ro`），不写任何东西。
+四条结论各自的取数命令。**都是只读**（`mode=ro`）。用 `python -` 从 stdin 喂脚本，
+不用 `-c`：`-c` 里的引号要穿两层 shell，写出来好看、跑起来会断。
 
 ```bash
-# ① 语言维分布 + ② 总数（"47"这个数字的来源）
-ssh aiops-41 '/opt/aiops-41/.venv/bin/python -c "
+# ①② 语言维分布与总数（"47" 这个数字的来源）
+ssh aiops-41 '/opt/aiops-41/.venv/bin/python -' <<'PY'
 import sqlite3
-c = sqlite3.connect(\"file:/var/lib/aiops-41/gateway/gateway.db?mode=ro\", uri=True)
-print(\"总数:\", list(c.execute(\"select count(*) from standard_diagnoses\"))[0][0])
-print(dict(c.execute(\"select language, count(*) from standard_diagnoses group by language\").fetchall()))"'
+c = sqlite3.connect("file:/var/lib/aiops-41/gateway/gateway.db?mode=ro", uri=True)
+print("总数:", list(c.execute("select count(*) from standard_diagnoses"))[0][0])
+print(dict(c.execute("select language, count(*) from standard_diagnoses group by language").fetchall()))
+PY
+#   → 总数: 47 ；{'en': 14, 'zh': 33}
 
 # ③ en 诊断的时间窗口（判定"早于守卫"的依据）
-ssh aiops-41 '/opt/aiops-41/.venv/bin/python -c "
+ssh aiops-41 '/opt/aiops-41/.venv/bin/python -' <<'PY'
 import sqlite3
-c = sqlite3.connect(\"file:/var/lib/aiops-41/gateway/gateway.db?mode=ro\", uri=True)
-r = list(c.execute(\"select min(created_at), max(created_at) from standard_diagnoses where language=\'en\'\"))[0]
-print(r[0], \"..\", r[1])"'
+c = sqlite3.connect("file:/var/lib/aiops-41/gateway/gateway.db?mode=ro", uri=True)
+r = list(c.execute("select min(created_at), max(created_at) from standard_diagnoses where language='en'"))[0]
+print(r[0], "..", r[1])
+PY
+#   → 2026-09-18T09:41:32.400306+00:00 .. 2026-09-21T02:19:19.844248+00:00
 
 # ④ 守卫的引入时间（与 ③ 比对）
 git log --format="%ad %h %s" --date=short --diff-filter=A -- src/aiops_diagnostics/answer_language.py
 #   → 2026-09-22 c35f9de
 
 # ⑤ 两处结构性缺口
-ssh aiops-41 '/opt/aiops-41/.venv/bin/python -c "
+ssh aiops-41 '/opt/aiops-41/.venv/bin/python -' <<'PY'
 import sqlite3
-c = sqlite3.connect(\"file:/var/lib/aiops-41/gateway/gateway.db?mode=ro\", uri=True)
-for t in (\"assistant_questions\", \"health_report_jobs\"):
-    cols = [r[1] for r in c.execute(f\"PRAGMA table_info({t})\")]
-    n = list(c.execute(f\"select count(*) from {t}\"))[0][0]
-    print(t, \"language列=\", \"language\" in cols, \"行数=\", n)"'
+c = sqlite3.connect("file:/var/lib/aiops-41/gateway/gateway.db?mode=ro", uri=True)
+for t in ("assistant_questions", "health_report_jobs"):
+    cols = [r[1] for r in c.execute(f"PRAGMA table_info({t})")]
+    n = list(c.execute(f"select count(*) from {t}"))[0][0]
+    print(t, "language列:", "language" in cols, " 行数:", n)
+PY
+#   → assistant_questions language列: False  行数: 268
+#   → health_report_jobs  language列: True   行数: 0
 ```
 
 ### 七、业务验收状态：**未完成业务验收**（显式写出，不省略）
