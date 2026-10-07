@@ -5745,13 +5745,13 @@ AFK 治理契约已部署并通过确定性检查，不代表诊断准确率或�
 本次验证范围是 AFK 沙箱的模型端点注入方式，不涉及业务运行时。模板由 afk-bootstrap
 PR #46 收敛，本仓 PR #381 用该模板的 `upgrade-afk.sh` 迁入（非手工改）。
 
-- `.sandcastle/profile.ts` 只保留 `claude` 与 `claude-deepseek` 两个档案。四个旧档案
+- `.sandcastle/profile.ts` 只保留 `claude` 与 `claude-stepfun` 两个档案。四个旧档案
   （`claude-ark` / `agentrouter` / `psydo` / `aliyun-deepseek`）退役：前三个解析到
   `cliproxyapi/` 下上游配额已耗尽的 settings 文件，选中必然在 agent 启动前失败；
   `aliyun-deepseek` 曾是唯一的 Codex-provider 档案，其退役也让本仓 AFK 不再需要
   Codex agent 路径。
-- `claude-deepseek` 的端点由**宿主 settings 文件只读挂入**沙箱
-  （`~/cliproxyapi/settings.deepseek.json`，可用 `AFK_DEEPSEEK_SETTINGS` 覆盖），
+- `claude-stepfun` 的端点由**宿主 settings 文件只读挂入**沙箱
+  （`~/cliproxyapi/settings.stepfun.json`，可用 `AFK_STEPFUN_SETTINGS` 覆盖），
   而不是构建期烤进镜像。因此：密钥不进入任何镜像层；轮换只需改该宿主文件，不需要
   重建镜像，也不存在「secret 挂载不让层缓存失效、必须加 `--no-cache`」这个坑。
 - Dockerfile 中 #322 引入的 `ARG STEPFUN_BASE_URL` + `--mount=type=secret` +
@@ -5764,7 +5764,7 @@ PR #46 收敛，本仓 PR #381 用该模板的 `upgrade-afk.sh` 迁入（非手�
 
 未执行真实故障案例，因此无业务验收：本节只证明端点注入方式已改为挂载式并通过确定性
 检查，不代表 agent 在真实 issue 上的端到端运行已验收。**合并后必须先用新 Dockerfile
-重建 `sandcastle:ai-ops-governance`**；`AFK_PROFILE` 已是 `claude-deepseek`，镜像未
+重建 `sandcastle:ai-ops-governance`**；`AFK_PROFILE` 已是 `claude-stepfun`，镜像未
 重建时触发 AFK 运行会让 wrapper 因没有对应 dispatch 分支而 `exit 2`。
 
 ## T1 权限上下文解析验证（2026-08-31）
