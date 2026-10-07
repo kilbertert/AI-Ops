@@ -41,11 +41,44 @@
 本模块只覆盖**确定性**回答面；模型侧 2/11 的实测、两处结构性缺口、以及"审计证明了什么/没证明什么"
 都写在那里，**使得读到"全绿"的人不会顺势读成"11 门都验过了"**。
 
-### 六、业务验收状态：**未完成业务验收**（显式写出，不省略）
+### 六、可复现命令（只读，全部在 41 上执行）
+
+四条结论各自的取数命令。**都是只读**（`mode=ro`），不写任何东西。
+
+```bash
+# ① 语言维分布 + ② 总数（"47"这个数字的来源）
+ssh aiops-41 '/opt/aiops-41/.venv/bin/python -c "
+import sqlite3
+c = sqlite3.connect(\"file:/var/lib/aiops-41/gateway/gateway.db?mode=ro\", uri=True)
+print(\"总数:\", list(c.execute(\"select count(*) from standard_diagnoses\"))[0][0])
+print(dict(c.execute(\"select language, count(*) from standard_diagnoses group by language\").fetchall()))"'
+
+# ③ en 诊断的时间窗口（判定"早于守卫"的依据）
+ssh aiops-41 '/opt/aiops-41/.venv/bin/python -c "
+import sqlite3
+c = sqlite3.connect(\"file:/var/lib/aiops-41/gateway/gateway.db?mode=ro\", uri=True)
+r = list(c.execute(\"select min(created_at), max(created_at) from standard_diagnoses where language=\'en\'\"))[0]
+print(r[0], \"..\", r[1])"'
+
+# ④ 守卫的引入时间（与 ③ 比对）
+git log --format="%ad %h %s" --date=short --diff-filter=A -- src/aiops_diagnostics/answer_language.py
+#   → 2026-09-22 c35f9de
+
+# ⑤ 两处结构性缺口
+ssh aiops-41 '/opt/aiops-41/.venv/bin/python -c "
+import sqlite3
+c = sqlite3.connect(\"file:/var/lib/aiops-41/gateway/gateway.db?mode=ro\", uri=True)
+for t in (\"assistant_questions\", \"health_report_jobs\"):
+    cols = [r[1] for r in c.execute(f\"PRAGMA table_info({t})\")]
+    n = list(c.execute(f\"select count(*) from {t}\"))[0][0]
+    print(t, \"language列=\", \"language\" in cols, \"行数=\", n)"'
+```
+
+### 七、业务验收状态：**未完成业务验收**（显式写出，不省略）
 
 本行按 AGENTS.md「里程碑同步」第 2 项的要求写在前面：本条**不是**通过，也不是「本票不适用」。
 
-### 七、未完成项（据实）
+### 八、未完成项（据实）
 
 - **其余 9 门语言没有任何模型侧证据**，唯一的获取方式是在 41 上真的发起一次诊断/问答
   —— 会打真实模型额度、在真实订单上产生记录。**未执行。**
