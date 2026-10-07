@@ -7,10 +7,10 @@ two dated documents.
 
 ## The model-side surfaces it does NOT cover — and why that is stated, not implied
 
-#565's read-only production audit measured which languages have ever produced a
+#566's read-only production audit measured which languages have ever produced a
 model-backed result, and the answer is **2 of 11**:
 
-    51 standard_diagnoses:  zh 33,  en 14      (en window 2026-09-18 .. 09-21)
+    47 standard_diagnoses:  zh 33,  en 14      (en window 2026-09-18 .. 09-21)
     every other language:   0 rows
 
 So a "verify the catalog" pass measures 2/11 and a reader who sees only "green"
