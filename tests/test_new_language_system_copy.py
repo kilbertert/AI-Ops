@@ -162,9 +162,18 @@ def test_faq_reports_the_served_language_not_the_requested_one() -> None:
     # A language the catalog DOES carry is reported as itself.
     assert catalog.entry_served_language("consumer", "consumer.faq.q001", "en") == "en"
     assert catalog.served_language("consumer", "en") == "en"
-    # The operator catalog has no translations at all, so even an old language
-    # is served Chinese there — pre-existing, and now reported honestly.
-    assert catalog.served_language("operator", "de") == "zh"
+    # The operator catalog USED to have no translations at all, so even an old
+    # language was served Chinese there. #565 completed it, so what is asserted
+    # now is the same RULE on a language the operator side really lacks — an
+    # unsupported tag, and the one gap left anywhere in the catalog.
+    assert catalog.served_language("operator", "ja") == "zh"
+    unknown_or_missing = [
+        language
+        for language in ("vi", "mn", "th", "km")
+        if catalog.served_language("operator", language) != language
+    ]
+    for language in unknown_or_missing:
+        assert catalog.served_language("operator", language) == "zh"
 
 
 def test_the_public_catalog_entry_shape_is_unchanged() -> None:
