@@ -1538,7 +1538,9 @@ uv run pytest tests/test_assistant_api.py tests/test_conversation_api.py \
 - 预期：每个组合 **HTTP 200 且 `language` == 请求语言 且 条目非空**
 - **结果：PASS** —— 7 语言 × 2 路由 = **14 个组合全部通过**，各 28 条。
 - **未覆盖（据实）**：`de/fr/es/pt` 未在本轮命令内；**固定答案**（`POST /v1/faq/answer`）与
-  **统一入口快捷问**（`POST /v1/assistant/questions`）未测；operator 入口无可用会话。
+  **统一入口快捷问**（`POST /v1/assistant/questions`）未测 —— 且**泰语/高棉语对它一律拒绝**
+  （边界排在 FAQ 匹配之前，无论文本是否等于某条 FAQ 标题，见「能读不能问」场景），
+  这两门语言的固定答案只能走 `POST /v1/faq/answer`；operator 入口无可用会话。
   `zh` 简体、`zh-Hant` 繁体、`vi/mn/th/km` 各自语言的题面均正确返回
 - 清理：探测**未写任何东西**；前后各对账一次，三表在飞数与状态分布**均无变化**
 - 未覆盖（据实）：**operator 入口**（本仓库当前没有带管家范围的可解析会话）；
