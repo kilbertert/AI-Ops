@@ -156,15 +156,27 @@ def test_faq_reports_the_served_language_not_the_requested_one() -> None:
     from aiops_diagnostics.faq import FAQCatalog
 
     catalog = FAQCatalog.bundled()
-    for language in _ADDED:
-        assert catalog.entry_served_language("consumer", "consumer.faq.q001", language) == "zh"
-        assert catalog.served_language("consumer", language) == "zh"
-    # A language the catalog DOES carry is reported as itself.
-    assert catalog.entry_served_language("consumer", "consumer.faq.q001", "en") == "en"
-    assert catalog.served_language("consumer", "en") == "en"
-    # The operator catalog has no translations at all, so even an old language
-    # is served Chinese there — pre-existing, and now reported honestly.
-    assert catalog.served_language("operator", "de") == "zh"
+    # A language the catalog DOES carry is reported as itself — asserted on both
+    # an original and a #565-added tag, since the rule is what matters, not which
+    # generation of language it is.
+    for language in ("en", "vi", "km"):
+        assert catalog.entry_served_language("consumer", "consumer.faq.q001", language) == language
+        assert catalog.served_language("consumer", language) == language
+    # A language NO catalog carries is reported as the authority language.
+    assert catalog.entry_served_language("consumer", "consumer.faq.q001", "ja") == "zh"
+    assert catalog.served_language("consumer", "ja") == "zh"
+    # The operator catalog USED to have no translations at all, so even an old
+    # language was served Chinese there. #565 completed it, so what is asserted
+    # now is the same RULE on a language the operator side really lacks — an
+    # unsupported tag, and the one gap left anywhere in the catalog.
+    assert catalog.served_language("operator", "ja") == "zh"
+    unknown_or_missing = [
+        language
+        for language in ("vi", "mn", "th", "km")
+        if catalog.served_language("operator", language) != language
+    ]
+    for language in unknown_or_missing:
+        assert catalog.served_language("operator", language) == "zh"
 
 
 def test_the_public_catalog_entry_shape_is_unchanged() -> None:

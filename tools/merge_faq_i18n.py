@@ -44,6 +44,11 @@ WIDE_TABLES = {
 #: up the other platform's file by filename collision.
 ANSWER_PREFIX = {"consumer": "answers_", "operator": "operator_answers_"}
 
+#: Mirrors ANSWER_PREFIX so a question file cannot collide across platforms the
+#: same way an answer file cannot: `questions_vi.json` is consumer's,
+#: `operator_questions_vi.json` is the operator entry's.
+QUESTIONS_PREFIX = {"consumer": "questions_", "operator": "operator_questions_"}
+
 LANGS = ("en", "de", "fr", "es", "pt")
 
 #: Header label -> language tag, for the columns this tool reads. Matched by
@@ -205,21 +210,33 @@ def _committed(path: Path) -> str | None:
 DERIVED_LANGUAGES = frozenset({"zh-Hant"})
 
 
-def default_languages(answers_dir: Path, prefix: str, wide_table: Path) -> tuple[str, ...]:
-    """The languages this platform has BOTH a wide-table column and answers for.
+def default_languages(
+    answers_dir: Path,
+    prefix: str,
+    wide_table: Path,
+    questions_dir: Path,
+    questions_prefix: str,
+) -> tuple[str, ...]:
+    """The languages this platform has BOTH a question source and answers for.
+
+    A question source is a wide-table column OR a `questions_<lang>.json` file —
+    the consumer table predates vi/mn/th/km and has no column for them, so
+    requiring a column would make a plain re-run look like those languages had
+    been *removed* rather than added by a second route.
 
     Derived rather than listed: a fixed default serves whichever platform was
     written first and fails on the other with a FileNotFoundError before it
     reads a single entry.
     """
     rows, column_map = read_wide_table(wide_table)
-    available = set(column_map.values()) - {"zh"}
     if not rows:  # pragma: no cover - the table always has rows when valid
         return ()
+    from_table = set(column_map.values()) - {"zh"}
     return tuple(
         language
         for language in HEADER_LANGUAGES.values()
-        if language in available and (answers_dir / f"{prefix}{language}.json").is_file()
+        if (answers_dir / f"{prefix}{language}.json").is_file()
+        and (language in from_table or (questions_dir / f"{questions_prefix}{language}.json").is_file())
     )
 
 
@@ -258,6 +275,17 @@ def main() -> int:
         default=ANSWER_DIR,
         help="directory holding answers_<lang>.json or operator_answers_<lang>.json",
     )
+    parser.add_argument(
+        "--questions-dir",
+        type=Path,
+        default=None,
+        help=(
+            "directory holding questions_<lang>.json for languages the WIDE TABLE has no "
+            "column for. The consumer table predates vi/mn/th/km, so their questions have "
+            "no column to read; without a second source the merge cannot run for them at "
+            "all. Defaults to --answers-dir."
+        ),
+    )
     args = parser.parse_args()
 
     wide_table = args.xlsx or WIDE_TABLES[args.platform]
@@ -265,7 +293,13 @@ def main() -> int:
     if args.languages:
         langs = tuple(part.strip() for part in args.languages.split(",") if part.strip())
     else:
-        langs = default_languages(args.answers_dir, prefix, wide_table)
+        langs = default_languages(
+            args.answers_dir,
+            prefix,
+            wide_table,
+            args.questions_dir or args.answers_dir,
+            QUESTIONS_PREFIX[args.platform],
+        )
     if not langs:
         raise ValueError(f"no answer files found for {args.platform} in {args.answers_dir}")
 
@@ -292,7 +326,24 @@ def main() -> int:
         )
         for lang in langs
     }
-    rows, _ = read_wide_table(wide_table)
+    rows, column_map = read_wide_table(wide_table)
+    # A language the wide table HAS a column for is read from the table (the
+    # product artifact stays authoritative). One it does NOT — consumer predates
+    # vi/mn/th/km — is read from questions_<lang>.json, and a language with
+    # NEITHER source is refused rather than merged as an empty question.
+    questions_dir = args.questions_dir or args.answers_dir
+    table_languages = set(column_map.values())
+    questions_by_lang: dict[str, dict[str, str]] = {}
+    for lang in langs:
+        if lang in table_languages:
+            continue
+        path = questions_dir / f"{QUESTIONS_PREFIX[args.platform]}{lang}.json"
+        if not path.is_file():
+            raise ValueError(
+                f"{args.platform}: 宽表没有 {lang} 列，也没有 {path.name} —— "
+                "该语言的题面没有来源，拒绝合并出空题面"
+            )
+        questions_by_lang[lang] = json.loads(path.read_text(encoding="utf-8"))
     if len(rows) != len(entries):
         raise ValueError(
             f"wide table has {len(rows)} rows, catalog {args.platform} has {len(entries)} entries"
@@ -311,7 +362,10 @@ def main() -> int:
         # deleted `zh-Hant` from every entry on every run.
         existing = dict(entry.get("i18n") or {})
         for lang in langs:
-            question = (row.get(lang) or "").strip()
+            if lang in table_languages:
+                question = (row.get(lang) or "").strip()
+            else:
+                question = (questions_by_lang[lang].get(qid) or "").strip()
             answer = answers_by_lang[lang].get(qid, "").strip()
             if not question or not answer:
                 raise ValueError(f"{qid}: missing {lang} question or answer")

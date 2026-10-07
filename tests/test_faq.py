@@ -166,13 +166,44 @@ def test_bundled_catalog_carries_full_i18n_for_consumer() -> None:
 
 
 def test_catalog_falls_back_to_zh_for_missing_language() -> None:
-    """operator entries carry no i18n; unknown/None languages fall back to zh."""
+    """The fallback is to zh, asserted on a language the catalog genuinely lacks.
+
+    The original form used `en` and cited "operator entries carry no i18n" —
+    true when written (#200 excluded operator translation), false since #565
+    completed that catalog. `ja` is not in the inventory at all, so it exercises
+    the same rule without depending on which languages happen to be translated.
+    """
     catalog = FAQCatalog.bundled()
     zh = catalog.answer("operator", "operator.faq.q001")
-    for language in (None, "en", "ja"):
+    for language in (None, "ja"):
         assert catalog.answer("operator", "operator.faq.q001", language) == zh
-    assert catalog.recommendations("operator", "en") == catalog.recommendations("operator")
-    assert catalog.catalog("operator", "en") == catalog.catalog("operator")
+    assert catalog.recommendations("operator", "ja") == catalog.recommendations("operator")
+    assert catalog.catalog("operator", "ja") == catalog.catalog("operator")
+    # And a language the catalog DOES carry must not fall back — that is the
+    # other half, and it is what would silently regress if the lookup broke.
+    assert catalog.answer("operator", "operator.faq.q001", "en") != zh
+
+
+def test_a_missing_language_inside_a_translated_catalog_still_falls_back() -> None:
+    """Per-ENTRY fallback, not per-catalog: the consumer catalog lacks vi/mn/th/km.
+
+    #542 recorded that gap, #565 is closing it platform by platform. Whichever
+    way it lands, an entry missing one language must serve zh for that language
+    rather than an empty string — asserted here on the consumer side, which is
+    the one still carrying gaps.
+    """
+    catalog = FAQCatalog.bundled()
+    zh = catalog.answer("consumer", "consumer.faq.q001")
+    missing = [
+        language
+        for language in ("vi", "mn", "th", "km")
+        if catalog.served_language("consumer", language) != language
+    ]
+    if not missing:
+        return  # consumer is complete too; the property has no live case here
+    for language in missing:
+        assert catalog.answer("consumer", "consumer.faq.q001", language) == zh
+        assert catalog.entry_served_language("consumer", "consumer.faq.q001", language) == "zh"
 
 
 def test_catalog_rejects_invalid_i18n_language() -> None:

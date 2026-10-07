@@ -9,8 +9,10 @@ to run.
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
@@ -50,15 +52,54 @@ def test_the_default_languages_come_from_the_platforms_own_answer_files() -> Non
     try:
         consumer = _run()
         assert consumer["platform"] == "consumer"
-        assert consumer["languages"] == ["en", "de", "fr", "es", "pt"]
+        # The default grows as a platform gains languages, so it is asserted as
+        # a SUPERSET of the set it had when this test was written plus the four
+        # #565 added — a fixed literal would have to be edited every time, and
+        # editing it is exactly the drift this test is meant to catch.
+        assert {"en", "de", "fr", "es", "pt"} <= set(consumer["languages"])
+        assert {"vi", "mn", "th", "km"} <= set(consumer["languages"]), (
+            "consumer 默认集里少了 #565 新增的语言 —— 它们没有宽表列，是靠 questions_<lang>.json 被发现的"
+        )
         operator = _run("--platform", "operator")
         assert operator["platform"] == "operator"
-        # Derived, not a fixed list: the operator set grows as translations land
-        # (vi/mn in #529, th/km in #530). What must hold is that the default
-        # covers every language this platform actually has answers for — and
-        # that it is NOT the consumer set, which is the bug this pins.
         assert "vi" in operator["languages"]
-        assert operator["languages"] != consumer["languages"]
+        # The two sets are now EQUAL (both platforms are complete), so equality
+        # can no longer distinguish "derived per platform" from "one shared
+        # fixed literal" — which is the bug this test pins. The distinguishing
+        # move is to take a source away and watch the default follow. Done
+        # against a COPY of the answers dir so the repo's assets are untouched.
+        assert operator["languages"] == consumer["languages"], (
+            "两个平台都已补齐；若这行失败，说明某个平台的默认集没有跟着它的答案文件走"
+        )
+        with tempfile.TemporaryDirectory() as trimmed:
+            trimmed_dir = Path(trimmed)
+            for source in sorted((ROOT / "tools" / "faq_i18n").glob("operator_*.json")):
+                shutil.copy(source, trimmed_dir / source.name)
+            (trimmed_dir / "operator_answers_km.json").unlink()
+            # Run with the DEFAULT language set (no --languages). The tool's
+            # "a published language went missing" guard fires, and the language
+            # it names IS the evidence: the default discovery followed the
+            # answer sources instead of a fixed list.
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(TOOL),
+                    "--platform",
+                    "operator",
+                    "--answers-dir",
+                    str(trimmed_dir),
+                    "--questions-dir",
+                    str(trimmed_dir),
+                ],
+                capture_output=True,
+                text=True,
+                cwd=ROOT,
+                check=False,
+            )
+        assert result.returncode != 0
+        assert "km" in result.stderr, (
+            "移掉 km 的答案文件后，默认集仍认为 km 存在 —— 说明它不是从答案文件派生的"
+        )
     finally:
         _restore(original, recommendations)
 
@@ -187,3 +228,80 @@ def test_a_recommendation_only_change_also_requires_a_new_version() -> None:
         assert CATALOG.read_text(encoding="utf-8") == catalog
     finally:
         _restore(catalog, recommendations)
+
+
+def test_merge_refuses_a_language_with_no_question_source(tmp_path: Path) -> None:
+    """A language the wide table has no column for needs `questions_<lang>.json`.
+
+    The consumer table predates vi/mn/th/km, so asking the merge to add one of
+    them without a question source must FAIL — merging would otherwise write an
+    empty question into the catalog, which reads as a translation that exists.
+    """
+    answers = tmp_path / "answers"
+    answers.mkdir()
+    (answers / "answers_zz.json").write_text(json.dumps({}), encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(TOOL),
+            "--platform",
+            "consumer",
+            "--languages",
+            "zz",
+            "--answers-dir",
+            str(answers),
+        ],
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "题面没有来源" in result.stderr, result.stderr
+
+
+def test_merge_reads_questions_from_the_questions_dir(tmp_path: Path) -> None:
+    """And when the source IS present, the merge accepts it.
+
+    Guards the other direction: the refusal above must not be so eager that a
+    language with a proper question file is rejected too.
+    """
+    source = ROOT / "src" / "aiops_diagnostics" / "faq_catalog.json"
+    catalog = json.loads(source.read_text(encoding="utf-8"))
+    entries = catalog["platforms"]["consumer"]
+    # Build a fake language whose questions + answers exist for every entry.
+    questions = {entry["question_id"]: f"Q-{entry['question_id']}" for entry in entries}
+    answers = {entry["question_id"]: f"A-{entry['question_id']}" for entry in entries}
+
+    directory = tmp_path / "i18n"
+    directory.mkdir()
+    (directory / "questions_zz.json").write_text(json.dumps(questions, ensure_ascii=False), encoding="utf-8")
+    (directory / "answers_zz.json").write_text(json.dumps(answers, ensure_ascii=False), encoding="utf-8")
+
+    # Point the tool at a COPY of the catalog so the real one is untouched.
+    import shutil
+
+    shutil.copy(source, tmp_path / "faq_catalog.json")
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(TOOL),
+            "--platform",
+            "consumer",
+            "--languages",
+            "zz",
+            "--answers-dir",
+            str(directory),
+            "--questions-dir",
+            str(directory),
+        ],
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+        check=False,
+    )
+    # The run must get PAST question resolution; whether it then complains about
+    # the version bump is fine — the point is that it did not refuse the source.
+    assert "题面没有来源" not in result.stderr, result.stderr

@@ -121,8 +121,12 @@ def _client(tmp_path: Path) -> TestClient:
 #:
 #: Recorded as a KNOWN GAP with its reason, per #542's acceptance criterion:
 #: "失败/受阻用例写明原因，不得记为通过".
-CONSUMER_CATALOG_GAP = ("km", "mn", "th", "vi")
-OPERATOR_CATALOG_GAP = ("de", "en", "es", "fr", "pt")
+#: #565 把两个平台都补齐到 11/11：operator 的 en/de/es/fr/pt 取自产品宽表已给的译文；
+#: consumer 的 vi/mn/th/km 题面与答案均为起草（该宽表没有这四列）。两条缺口都清空。
+#: 这两个常量是**双向门**：缺口变化会让 `test_catalog_gaps_are_exactly_as_recorded` 失败，
+#: 从而强制更新验收记录，而不是留下一条已不成立的"已知缺口"。
+CONSUMER_CATALOG_GAP = ()
+OPERATOR_CATALOG_GAP = ()
 
 
 def _catalog_languages(platform: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
@@ -184,10 +188,10 @@ def test_catalog_gaps_are_exactly_as_recorded() -> None:
     # alphabetical, and the gap is a set of languages rather than a sequence.
     assert set(_catalog_languages("consumer")[1]) == set(CONSUMER_CATALOG_GAP)
     assert set(_catalog_languages("operator")[1]) == set(OPERATOR_CATALOG_GAP)
-    # And they really are complementary — that is the shape worth recording:
-    # no platform covers all 11, and no language is missing from both.
-    assert set(CONSUMER_CATALOG_GAP) & set(OPERATOR_CATALOG_GAP) == set()
-    assert set(CONSUMER_CATALOG_GAP) | set(OPERATOR_CATALOG_GAP) == set(LANGUAGES) - {"zh", "zh-Hant"}
+    # Both platforms are complete: no language falls back on either. Asserted
+    # explicitly rather than left to the two empty tuples — an empty constant
+    # compared to an empty result passes even if the lookup itself broke.
+    assert set(CONSUMER_CATALOG_GAP) | set(OPERATOR_CATALOG_GAP) == set()
 
 
 @pytest.mark.parametrize("language", LANGUAGES)
