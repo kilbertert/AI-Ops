@@ -7,7 +7,7 @@
 运行器接的是路径，不是功能名：
 
 ```bash
-# 回答面；输出逐语言一行
+# 回答面；输出逐语言一行（退出码 0=全过 / 1=有失败 / 2=未取证）
 python /tmp/probe.py --accept-live-app \
   --paths /v1/faq/recommendations,/v1/shortcuts --languages zh,en,zh-Hant,vi,mn,th,km
 

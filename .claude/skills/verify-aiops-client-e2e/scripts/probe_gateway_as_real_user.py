@@ -98,7 +98,12 @@ def _pick_session(runtime, settings, prefix: str, scope: str, entry: str) -> tup
         # a session that resolved: `self` is the consumer-shaped fallback, and
         # accepting it would probe the operator routes as a plain consumer and
         # report a defect that is really a wrong-session choice.
-        if entry == "operator" and str(getattr(context, "data_scope", "")).find("self") != -1:
+        # `operator` requires an operator-shaped scope. A consumer session
+        # resolves fine and carries the `self` fallback, so without this the
+        # probe would drive the operator routes as a plain consumer and report
+        # a defect that is really a wrong-session choice.
+        scope_type = str(getattr(getattr(context, "data_scope", None), "type", "") or "")
+        if entry == "operator" and scope_type in {"", "self"}:
             continue
         return candidate, context.effective_tenant_id
     return None
@@ -178,7 +183,14 @@ def main() -> int:
         for language in (tag.strip() for tag in args.languages.split(",") if tag.strip()):
             for path in (p.strip() for p in args.paths.split(",") if p.strip()):
                 print(f"  (计划) {language:8} GET {path}")
-        return 0
+        print()
+        print(
+            "❌ 以上是**计划**，不是结论：本次一个请求都没发，什么都没被验证。\n"
+            "   退出码 2 = 未取证（与 0=全部通过 / 1=有失败 区分），"
+            "以免把计划误记为验收通过。",
+            file=sys.stderr,
+        )
+        return 2
 
     app = create_gateway_app(settings=settings)
     failures = 0
@@ -200,7 +212,21 @@ def main() -> int:
                 except ValueError:
                     body = {}
                 served = body.get("language")
-                items = body.get("recommendations") or body.get("shortcuts") or []
+                # The content key differs per route: `/v1/faq/catalog` returns
+                # `entries`, `/v1/faq/recommendations` returns `recommendations`,
+                # `/v1/shortcuts` returns `shortcuts`. Reading only the last two
+                # made every non-empty CATALOG look empty — the non-empty
+                # assertion then failed the one route the operator probe uses.
+                items = body.get("recommendations") or body.get("shortcuts") or body.get("entries") or []
+                if not items and isinstance(body, dict):
+                    # An answer surface this script does not know the shape of:
+                    # say so instead of reporting a confident zero.
+                    items = [
+                        value
+                        for key, value in body.items()
+                        if isinstance(value, list) and key not in {"available_platforms"}
+                    ]
+                    items = items[0] if items else []
                 first = str(items[0].get("title") or items[0].get("label") or "")[:30] if items else ""
                 empty = not items
                 ok = response.status_code == 200 and served == language and (args.allow_empty or not empty)
