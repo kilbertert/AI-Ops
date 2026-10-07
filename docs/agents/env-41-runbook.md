@@ -1015,15 +1015,27 @@ ssh aiops-41 'cd /opt/aiops-41 && runuser -u aiops41 -- env PYTHONPATH=/opt/aiop
 ssh aiops-41 'cd /opt/aiops-41 && runuser -u aiops41 -- env PYTHONPATH=/opt/aiops-41/src \
   /opt/aiops-41/.venv/bin/python - <<PY
 from pathlib import Path
+import sqlite3
 from aiops_diagnostics.shortcut_lifecycle import ShortcutStore
 from aiops_diagnostics.i18n import SUPPORTED_LANGUAGES as L
 store = ShortcutStore(Path("/var/lib/aiops-41/gateway/gateway.db"))
-# 用 list_published：list_effective 会拒绝保留的平台租户 ID（"tenant id is reserved"）
+# 请求返回的是【按租户合并】后的列表，所以要按**真实租户**逐个复核，不能只看平台行：
+# 租户发布了同名覆盖动作时，其译文缺口不会出现在平台行的统计里。
+# （平台行用 list_published —— list_effective 会拒绝保留的平台租户 ID。）
+def check(label, rows):
+    bad = [(r.code, lang, r.public(lang)["language"])
+           for r in rows for lang in L if r.public(lang)["language"] != lang]
+    print(f"{label} 回退次数:", len(bad), bad)
+
 for entry in ("operator", "consumer"):
-    fallbacks = [(r.code, lang, r.public(lang)["language"])
-                 for r in store.list_published("__platform__", entry) for lang in L
-                 if r.public(lang)["language"] != lang]
-    print("__platform__", entry, "回退次数:", len(fallbacks), fallbacks)
+    check(f"__platform__/{entry}", store.list_published("__platform__", entry))
+
+conn = sqlite3.connect("file:/var/lib/aiops-41/gateway/gateway.db?mode=ro", uri=True)
+tenants = [r[0] for r in conn.execute("select distinct tenant_id from shortcuts where tenant_id != '__platform__'")]
+conn.close()
+for tenant in tenants:
+    for entry in ("operator", "consumer"):
+        check(f"{tenant}/{entry}", store.list_effective(tenant, entry))
 PY'
 ```
 
@@ -1040,7 +1052,7 @@ PY'
 # ① 查该动作的版本历史（库无 sqlite3 CLI，用 python 只读查）。
 #    迁移新生成的版本号最大；挑选它之前的那一版。labels 的语言数一眼可辨
 #    （迁移前 6 语、迁移后 11 语）。
-ssh aiops-41 '$V=/opt/aiops-41/.venv/bin/python; $V - <<PY
+ssh aiops-41 'V=/opt/aiops-41/.venv/bin/python; $V - <<PY
 import json, sqlite3
 c = sqlite3.connect("file:/var/lib/aiops-41/gateway/gateway.db?mode=ro", uri=True)
 c.row_factory = sqlite3.Row
