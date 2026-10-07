@@ -1,5 +1,5 @@
 {
-  "faq_version": "2026.10.08",
+  "faq_version": "2026.10.09",
   "platforms": {
     "consumer": [
       {
@@ -723,6 +723,21 @@
           },
           "zh-Hant": {
             "title": "新建充電站的標準建站流程與核心業務配置是什麼？"
+          },
+          "en": {
+            "title": "What are the standard station construction process and core business configurations for a new EV charging station?"
+          },
+          "de": {
+            "title": "Was sind der Standardprozess für den Stationsaufbau und die zentralen Geschäftskonfigurationen für eine neue Ladestation?"
+          },
+          "es": {
+            "title": "¿Cuál es el proceso estándar de creación de estaciones de carga y cuáles son las configuraciones de negocio clave?"
+          },
+          "fr": {
+            "title": "Quels sont le processus standard de création de station et les configurations métiers clés pour une nouvelle station de recharge ?"
+          },
+          "pt": {
+            "title": "Qual é o processo padrão de criação de estações de carregamento e quais são as configurações de negócio centrais?"
           }
         }
       },
@@ -745,6 +760,21 @@
           },
           "zh-Hant": {
             "title": "充電樁裝置如何建檔入網？裝置型號與樁槍對應關係如何維護？"
+          },
+          "en": {
+            "title": "How are EV chargers registered and networked? How is the mapping between charger models, chargers, and connectors maintained?"
+          },
+          "de": {
+            "title": "Wie werden Ladesäulen erfasst und vernetzt? Wie wird die Zuordnung zwischen Gerätemodellen, Ladesäulen und Anschlüssen gepflegt?"
+          },
+          "es": {
+            "title": "¿Cómo se registran y conectan a la red los cargadores? ¿Cómo se gestiona la correspondencia entre modelos, postes y mangueras?"
+          },
+          "fr": {
+            "title": "Comment les bornes de recharge sont-elles enregistrées et connectées au réseau ? Comment maintenir la relation entre modèles, bornes et connecteurs ?"
+          },
+          "pt": {
+            "title": "Como os carregadores são registados e ligados à rede? Como é mantida a correspondência entre modelos, postos e conectores?"
           }
         }
       },
@@ -767,6 +797,21 @@
           },
           "zh-Hant": {
             "title": "如何利用【充電樁監控】實現高效遠端運維？"
+          },
+          "en": {
+            "title": "How to use \"Charger Monitoring\" to achieve efficient remote operation and maintenance?"
+          },
+          "de": {
+            "title": "Wie kann „Ladesäulen-Überwachung“ für einen effizienten Remote-Betrieb und Wartung genutzt werden?"
+          },
+          "es": {
+            "title": "¿Cómo utilizar la \"Monitorización de cargadores\" para lograr una operación y mantenimiento remoto eficiente?"
+          },
+          "fr": {
+            "title": "Comment utiliser la « Surveillance des bornes » pour assurer une exploitation et maintenance à distance efficace ?"
+          },
+          "pt": {
+            "title": "Como utilizar a \"Monitorização de carregadores\" para alcançar uma operação e manutenção remotas eficientes?"
           }
         }
       },
@@ -789,6 +834,21 @@
           },
           "zh-Hant": {
             "title": "如何配置多時段分時計費策略（尖峰平谷電價與服務費）？"
+          },
+          "en": {
+            "title": "How to configure multi-period time-of-use (TOU) tariff strategies (sharp, peak, flat, and valley electricity prices and service fees)?"
+          },
+          "de": {
+            "title": "Wie werden zeitvariable Mehrzonen-Tarifstrategien (Spitzen-, Normal- und Nebentarife für Strom und Servicegebühren) konfiguriert?"
+          },
+          "es": {
+            "title": "¿Cómo configurar la estrategia de tarifas por tramos horarios (precios de electricidad en punta, llano y valle, y tarifas de servicio)?"
+          },
+          "fr": {
+            "title": "Comment configurer une tarification différenciée par tranches horaires (tarifs de pointe, pleins, creux et frais de service) ?"
+          },
+          "pt": {
+            "title": "Como configurar a estratégia de tarifas horárias por períodos múltiplos (preços de eletricidade de ponta, cheias e vazio, e taxas de serviço)?"
           }
         }
       },
@@ -811,6 +871,21 @@
           },
           "zh-Hant": {
             "title": "超時佔位費計費模板如何配置以最大化場站週轉率？"
+          },
+          "en": {
+            "title": "How to configure the idle fee / overstay billing template to maximize station turnover?"
+          },
+          "de": {
+            "title": "Wie wird die Vorlage für Überziehungsgebühren konfiguriert, um den Umschlag der Ladestation zu maximieren?"
+          },
+          "es": {
+            "title": "¿Cómo configurar la plantilla de tarifas por ocupación indebida para maximizar la rotación de la estación?"
+          },
+          "fr": {
+            "title": "Comment configurer le modèle de facturation des frais d'occupation prolongée afin de maximiser le taux de rotation de la station ?"
+          },
+          "pt": {
+            "title": "Como configurar o modelo de cobrança de taxas de ocupação prolongada para maximizar a rotatividade da estação?"
           }
         }
       },
@@ -833,6 +908,21 @@
           },
           "zh-Hant": {
             "title": "裝置白名單功能的業務應用場景與操作規範是什麼？"
+          },
+          "en": {
+            "title": "What are the business application scenarios and operational specifications for the device whitelist function?"
+          },
+          "de": {
+            "title": "Was sind die geschäftlichen Anwendungsszenarien und Betriebsvorschriften für die Geräte-Whitelist-Funktion?"
+          },
+          "es": {
+            "title": "¿Cuáles son los escenarios de aplicación comercial y las normas operativas de la función de lista blanca de dispositivos?"
+          },
+          "fr": {
+            "title": "Quels sont les scénarios d'application métier et les consignes d'exploitation de la fonction de liste blanche des appareils ?"
+          },
+          "pt": {
+            "title": "Quais são os cenários de aplicação empresarial e as normas operacionais da função de lista branca de dispositivos?"
           }
         }
       },
@@ -855,6 +945,21 @@
           },
           "zh-Hant": {
             "title": "平臺在多運營商（Multi-運營商）模式下如何管理合作運營商？"
+          },
+          "en": {
+            "title": "How does the platform manage partner CPOs under a multi-operator (Multi-CPO) model?"
+          },
+          "de": {
+            "title": "Wie verwaltet die Plattform Partnerbetreiber im Multi-Betreiber-Modell (Multi-CPO)?"
+          },
+          "es": {
+            "title": "¿Cómo gestiona la plataforma a los operadores asociados bajo el modelo multioperador?"
+          },
+          "fr": {
+            "title": "Comment la plateforme gère-t-elle les opérateurs partenaires dans un modèle multi-opérateurs ?"
+          },
+          "pt": {
+            "title": "Como a plataforma gere os operadores parceiros no modelo multioperador?"
           }
         }
       },
@@ -877,6 +982,21 @@
           },
           "zh-Hant": {
             "title": "加盟運營商的分潤資金結算與提現稽核流程是怎樣的？"
+          },
+          "en": {
+            "title": "What is the process for revenue-sharing settlement and withdrawal audit for franchised/partner operators?"
+          },
+          "de": {
+            "title": "Wie läuft der Prozess für die Abrechnung der Umsatzbeteiligung und die Auszahlungsprüfung für Partnerbetreiber ab?"
+          },
+          "es": {
+            "title": "¿Cuál es el proceso de liquidación de reparto de beneficios y auditoría de retiros para operadores afiliados?"
+          },
+          "fr": {
+            "title": "Quel est le processus de règlement du partage des revenus et d'approbation des retraits pour les opérateurs affiliés ?"
+          },
+          "pt": {
+            "title": "Qual é o processo de liquidação de partilha de receitas e auditoria de levantamentos para operadores associados?"
           }
         }
       },
@@ -899,6 +1019,21 @@
           },
           "zh-Hant": {
             "title": "如何策劃與配置平臺充值促銷活動與優惠券分發？"
+          },
+          "en": {
+            "title": "How to plan and configure platform top-up promotions and coupon distribution?"
+          },
+          "de": {
+            "title": "Wie plant und konfiguriert man Plattform-Aufladepromotionen und die Gutscheinverteilung?"
+          },
+          "es": {
+            "title": "¿Cómo planificar y configurar las promociones de recarga de la plataforma y la distribución de cupones?"
+          },
+          "fr": {
+            "title": "Comment planifier et configurer les promotions de recharge de la plateforme et la distribution de coupons ?"
+          },
+          "pt": {
+            "title": "Como planear e configurar promoções de recarga da plataforma e distribuição de cupões?"
           }
         }
       },
@@ -921,6 +1056,21 @@
           },
           "zh-Hant": {
             "title": "【車隊管理】模組如何支援網約車、物流車及公交車隊的大客戶精細化運營？"
+          },
+          "en": {
+            "title": "How does the \"Fleet Management\" module support refined operations for key accounts such as ride-hailing, logistics, and bus fleets?"
+          },
+          "de": {
+            "title": "Wie unterstützt das Modul „Flottenmanagement“ den präzisen Betrieb von Großkunden wie Fahrdienst-, Logistik- und Busflotten?"
+          },
+          "es": {
+            "title": "¿Cómo apoya el módulo de \"Gestión de flotas\" la operación refinada de grandes cuentas como flotas de VTC, logística y autobuses?"
+          },
+          "fr": {
+            "title": "Comment le module « Gestion de flotte » soutient-il la gestion raffinée des grands comptes (VTC, logistique et bus) ?"
+          },
+          "pt": {
+            "title": "Como o módulo de \"Gestão de frotas\" apoia a operação refinada de grandes contas, como frotas de TVDE, logística e autocarros?"
           }
         }
       },
@@ -943,6 +1093,21 @@
           },
           "zh-Hant": {
             "title": "充電訂單的全生命週期監控與異常訂單處理 SOP 是怎樣的？"
+          },
+          "en": {
+            "title": "What is the full lifecycle monitoring and SOP for handling abnormal charging orders?"
+          },
+          "de": {
+            "title": "Wie sieht das Überwachungs- und Standardbetriebsverfahren (SOP) für den gesamten Lebenszyklus und anormale Ladeaufträge aus?"
+          },
+          "es": {
+            "title": "¿Cuál es el SOP de monitorización del ciclo de vida completo y gestión de pedidos de carga anómalos?"
+          },
+          "fr": {
+            "title": "Quel est le SOP de surveillance du cycle de vie complet et de traitement des commandes de recharge anormales ?"
+          },
+          "pt": {
+            "title": "Qual é o SOP de monitorização do ciclo de vida completo e tratamento de pedidos de carregamento anómalos?"
           }
         }
       },
@@ -965,6 +1130,21 @@
           },
           "zh-Hant": {
             "title": "如何開展每日與每月的財務對賬工作？（電網成本、使用者流水與通道清算）"
+          },
+          "en": {
+            "title": "How to conduct daily and monthly financial reconciliations? (Grid power costs, user transactions, and payment gateway settlements)"
+          },
+          "de": {
+            "title": "Wie führt man tägliche und monatliche Finanzabstimmungen durch? (Netzkosten, Nutzertransaktionen und Zahlungs-Gateway-Clearing)"
+          },
+          "es": {
+            "title": "¿Cómo llevar a cabo la conciliación financiera diaria y mensual? (Costes de la red eléctrica, transacciones de usuarios y liquidación de pasarelas)"
+          },
+          "fr": {
+            "title": "Comment effectuer les rapprochements financiers quotidiens et mensuels ? (Coûts réseau, transactions utilisateurs et compensation de paiement)"
+          },
+          "pt": {
+            "title": "Como realizar a reconciliação financeira diária e mensal? (Custos da rede elétrica, transações de utilizadores e liquidação de gateways)"
           }
         }
       },
@@ -987,6 +1167,21 @@
           },
           "zh-Hant": {
             "title": "平臺發票管理功能如何支援稅法合規與自動化交付？"
+          },
+          "en": {
+            "title": "How does the platform invoice management function support tax compliance and automated delivery?"
+          },
+          "de": {
+            "title": "Wie unterstützt das Rechnungsmanagement der Plattform die Einhaltung von Steuervorschriften und die automatisierte Zustellung?"
+          },
+          "es": {
+            "title": "¿Cómo admite la función de gestión de facturas de la plataforma el cumplimiento fiscal y la entrega automatizada?"
+          },
+          "fr": {
+            "title": "Comment la gestion des factures de la plateforme prend-elle en charge la conformité fiscale et la livraison automatisée ?"
+          },
+          "pt": {
+            "title": "Como a funcionalidade de gestão de faturas da plataforma suporta a conformidade fiscal e a entrega automatizada?"
           }
         }
       },
@@ -1009,6 +1204,21 @@
           },
           "zh-Hant": {
             "title": "什麼是【有序充電】？其核心控制策略與商業價值是什麼？"
+          },
+          "en": {
+            "title": "What is \"Smart / Managed Charging\"? What are its core control strategies and commercial values?"
+          },
+          "de": {
+            "title": "Was ist „Intelligentes Laden (Smart Charging)“? Was sind seine zentralen Steuerungsstrategien und sein wirtschaftlicher Wert?"
+          },
+          "es": {
+            "title": "¿Qué es la \"Carga inteligente / ordenada\"? ¿Cuáles son sus estrategias de control básicas y su valor comercial?"
+          },
+          "fr": {
+            "title": "Qu'est-ce que la « Recharge intelligente » ? Quelles sont ses stratégies de contrôle de base et sa valeur commerciale ?"
+          },
+          "pt": {
+            "title": "O que é o \"Carregamento inteligente / ordenado\"? Quais são as suas estratégias de controlo essenciais e o seu valor comercial?"
           }
         }
       },
@@ -1031,6 +1241,21 @@
           },
           "zh-Hant": {
             "title": "【首頁資料總覽】與【場站資料看板】包含哪些核心經營指標？如何指導運營？"
+          },
+          "en": {
+            "title": "What core operating metrics are included in \"Home Data Overview\" and \"Station Dashboard\"? How do they guide operations?"
+          },
+          "de": {
+            "title": "Welche zentralen Betriebskennzahlen enthalten „Startseite-Datenübersicht“ und „Stations-Dashboard“? Wie leiten sie den Betrieb an?"
+          },
+          "es": {
+            "title": "¿Qué indicadores clave incluyen la \"Visión general de inicio\" y el \"Panel de control de estaciones\"? ¿Cómo guían las operaciones?"
+          },
+          "fr": {
+            "title": "Quels indicateurs clés figurent dans « Aperçu des données d'accueil » et « Tableau de bord de station » ? Comment guident-ils les opérations ?"
+          },
+          "pt": {
+            "title": "Que indicadores-chave estão incluídos na \"Visão geral inicial\" e no \"Painel de controlo da estação\"? Como orientam as operações?"
           }
         }
       },
@@ -1053,6 +1278,21 @@
           },
           "zh-Hant": {
             "title": "如何通過【站場使用率看板】捕捉潮汐規律並最佳化定價策略？"
+          },
+          "en": {
+            "title": "How to capture tidal demand patterns and optimize pricing strategies through the \"Station Utilization Dashboard\"?"
+          },
+          "de": {
+            "title": "Wie können Gezeitenmuster erfasst und Preisstrategien über das „Stationsauslastungs-Dashboard“ optimiert werden?"
+          },
+          "es": {
+            "title": "¿Cómo identificar patrones de demanda y optimizar las estrategias de precios mediante el \"Panel de utilización de estaciones\"?"
+          },
+          "fr": {
+            "title": "Comment capturer les tendances d'affluence et optimiser la tarification via le « Tableau de bord d'utilisation de station » ?"
+          },
+          "pt": {
+            "title": "Como identificar padrões de procura e otimizar estratégias de preços através do \"Painel de utilização da estação\"?"
           }
         }
       },
@@ -1075,6 +1315,21 @@
           },
           "zh-Hant": {
             "title": "【多維度資料統計】如何為 運營商 提供企業級管理報表？"
+          },
+          "en": {
+            "title": "How does \"Multi-Dimensional Statistics\" provide enterprise-level management reports for operators?"
+          },
+          "de": {
+            "title": "Wie stellt „Mehrdimensionale Datenstatistik“ Berichte auf Unternehmensebene für Betreiber bereit?"
+          },
+          "es": {
+            "title": "¿Cómo proporciona la \"Estadística multidimensional\" informes de gestión empresarial para los operadores?"
+          },
+          "fr": {
+            "title": "Comment les « Statistiques multidimensionnelles » fournissent-elles des rapports de gestion d'entreprise aux opérateurs ?"
+          },
+          "pt": {
+            "title": "Como as \"Estatísticas multidimensionais\" fornecem relatórios de gestão empresarial para os operadores?"
           }
         }
       }

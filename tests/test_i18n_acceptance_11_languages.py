@@ -121,8 +121,10 @@ def _client(tmp_path: Path) -> TestClient:
 #:
 #: Recorded as a KNOWN GAP with its reason, per #542's acceptance criterion:
 #: "失败/受阻用例写明原因，不得记为通过".
+#: #565 已把 operator 侧补齐到 11/11（en/de/es/fr/pt 由产品宽表中已给的译文入库）。
+#: consumer 侧的 vi/mn/th/km 仍在补齐中 —— 该缺口是本条的输入，不是本条的结论。
 CONSUMER_CATALOG_GAP = ("km", "mn", "th", "vi")
-OPERATOR_CATALOG_GAP = ("de", "en", "es", "fr", "pt")
+OPERATOR_CATALOG_GAP = ()
 
 
 def _catalog_languages(platform: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
@@ -184,10 +186,14 @@ def test_catalog_gaps_are_exactly_as_recorded() -> None:
     # alphabetical, and the gap is a set of languages rather than a sequence.
     assert set(_catalog_languages("consumer")[1]) == set(CONSUMER_CATALOG_GAP)
     assert set(_catalog_languages("operator")[1]) == set(OPERATOR_CATALOG_GAP)
-    # And they really are complementary — that is the shape worth recording:
-    # no platform covers all 11, and no language is missing from both.
+    # The two gaps are DISJOINT: no language is missing from both platforms, so
+    # no language is entirely unreachable through the fixed-QA catalog. That
+    # property survives one side being completed, so it stays asserted.
     assert set(CONSUMER_CATALOG_GAP) & set(OPERATOR_CATALOG_GAP) == set()
-    assert set(CONSUMER_CATALOG_GAP) | set(OPERATOR_CATALOG_GAP) == set(LANGUAGES) - {"zh", "zh-Hant"}
+    # NOT asserted: that their union covers every non-Chinese tag. That was true
+    # only while neither side was complete — #565 closing the operator gap is
+    # precisely the change that made it stop being true, and this test failing
+    # on it is how the record gets updated rather than going stale.
 
 
 @pytest.mark.parametrize("language", LANGUAGES)
