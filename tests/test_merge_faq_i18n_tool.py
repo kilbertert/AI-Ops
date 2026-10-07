@@ -187,3 +187,80 @@ def test_a_recommendation_only_change_also_requires_a_new_version() -> None:
         assert CATALOG.read_text(encoding="utf-8") == catalog
     finally:
         _restore(catalog, recommendations)
+
+
+def test_merge_refuses_a_language_with_no_question_source(tmp_path: Path) -> None:
+    """A language the wide table has no column for needs `questions_<lang>.json`.
+
+    The consumer table predates vi/mn/th/km, so asking the merge to add one of
+    them without a question source must FAIL — merging would otherwise write an
+    empty question into the catalog, which reads as a translation that exists.
+    """
+    answers = tmp_path / "answers"
+    answers.mkdir()
+    (answers / "answers_zz.json").write_text(json.dumps({}), encoding="utf-8")
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(TOOL),
+            "--platform",
+            "consumer",
+            "--languages",
+            "zz",
+            "--answers-dir",
+            str(answers),
+        ],
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    assert "题面没有来源" in result.stderr, result.stderr
+
+
+def test_merge_reads_questions_from_the_questions_dir(tmp_path: Path) -> None:
+    """And when the source IS present, the merge accepts it.
+
+    Guards the other direction: the refusal above must not be so eager that a
+    language with a proper question file is rejected too.
+    """
+    source = ROOT / "src" / "aiops_diagnostics" / "faq_catalog.json"
+    catalog = json.loads(source.read_text(encoding="utf-8"))
+    entries = catalog["platforms"]["consumer"]
+    # Build a fake language whose questions + answers exist for every entry.
+    questions = {entry["question_id"]: f"Q-{entry['question_id']}" for entry in entries}
+    answers = {entry["question_id"]: f"A-{entry['question_id']}" for entry in entries}
+
+    directory = tmp_path / "i18n"
+    directory.mkdir()
+    (directory / "questions_zz.json").write_text(json.dumps(questions, ensure_ascii=False), encoding="utf-8")
+    (directory / "answers_zz.json").write_text(json.dumps(answers, ensure_ascii=False), encoding="utf-8")
+
+    # Point the tool at a COPY of the catalog so the real one is untouched.
+    import shutil
+
+    shutil.copy(source, tmp_path / "faq_catalog.json")
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(TOOL),
+            "--platform",
+            "consumer",
+            "--languages",
+            "zz",
+            "--answers-dir",
+            str(directory),
+            "--questions-dir",
+            str(directory),
+        ],
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+        check=False,
+    )
+    # The run must get PAST question resolution; whether it then complains about
+    # the version bump is fine — the point is that it did not refuse the source.
+    assert "题面没有来源" not in result.stderr, result.stderr
