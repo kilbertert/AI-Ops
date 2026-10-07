@@ -146,3 +146,8 @@ Proof standards:
 - `ops/environments/` currently declares only `env-41.toml`. `admin reconcile`
   converges a real gateway store; running it locally proves the code path but not
   the production inventory.
+- **This map rots.** When a change makes a feature file wrong — a moved route, a
+  renamed control, a step that no longer works — update that file in the same
+  change. For a periodic pass over the whole map, run the
+  `maintain-verification-skill` skill. Do not let a stale entry stand: an
+  out-of-date map reports a pass it did not earn.
