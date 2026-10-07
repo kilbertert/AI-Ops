@@ -1,3 +1,100 @@
+## #566 模型侧 11 语言验收：可达性审计（2026-10-07，未改动生产）
+
+**分支** `test/model-side-11-language-acceptance`，基线 `origin/main` @ `fe57a6b`。
+
+本票的目标是模型侧四个面（统一助手 QA / 宣传卡片 / 单问诊断 / 健康报告）的 11 语言端到端验收。
+**开工前的只读审计已经推翻了票面隐含的乐观假设**，先记结论。
+
+### 一、语言维落库 —— 通过（且是**不读模型正文**就能拿到的证据）
+
+`standard_diagnoses.language` 实测分布 `{en: 14, zh: 33}`。
+> **存在 `language='en'` 的行本身就是证据**：若请求语言在链路上被折叠成默认值，
+> 就不会有任何非 `zh` 行。这条判据与模型正文无关，因此不受"模型是否听话"影响。
+
+### 二、2 条含汉字的 en 诊断 —— 成因**已判定**：守卫前的历史数据
+
+先前记为"成因未判定"，本次用时间线判掉：
+- en 诊断窗口实测 **2026-09-18 .. 2026-09-21**（14 条全部 `expired`）
+- 共享守卫 `answer_language.py` 的引入提交是 **2026-09-22**（`c35f9de`）
+
+**窗口完全早于守卫** ⇒ 那 2 条与守卫无关。⚠️ 这**不能**推出"现在的守卫有效"——
+本机与设备令牌都拿不到模型侧路由（401），本轮**没有触发过任何新请求**。
+
+### 三、11 语言覆盖实测：**2 / 11**
+
+| 语言 | 存量诊断 |
+|---|---|
+| zh | 33 |
+| en | 14 |
+| **其余 9 门**（zh-Hant/de/fr/es/pt/vi/mn/th/km） | **各 0 条** |
+
+⇒ 若"验收"只查存量，就是查了 2 门并报 11 门。**这正是本工作流反复要消灭的那种假陈述。**
+
+### 四、两处结构性缺口
+
+- `assistant_questions` **没有 `language` 列** —— 该面的语言维**无法从存储侧判定**。
+- `health_report_jobs` 有列但 **0 行** —— 该面在生产**从未跑过**。
+
+### 五、本票到此为止的部分（已写进常驻门）
+
+`tests/test_i18n_acceptance_11_languages.py` 的 docstring 已补上这段边界：
+本模块只覆盖**确定性**回答面；模型侧 2/11 的实测、两处结构性缺口、以及"审计证明了什么/没证明什么"
+都写在那里，**使得读到"全绿"的人不会顺势读成"11 门都验过了"**。
+
+### 六、可复现命令（只读，全部已实测跑过）
+
+四条结论各自的取数命令。**都是只读**（`mode=ro`）。用 `python -` 从 stdin 喂脚本，
+不用 `-c`：`-c` 里的引号要穿两层 shell，写出来好看、跑起来会断。
+
+```bash
+# ①② 语言维分布与总数（"47" 这个数字的来源）
+ssh aiops-41 '/opt/aiops-41/.venv/bin/python -' <<'PY'
+import sqlite3
+c = sqlite3.connect("file:/var/lib/aiops-41/gateway/gateway.db?mode=ro", uri=True)
+print("总数:", list(c.execute("select count(*) from standard_diagnoses"))[0][0])
+print(dict(c.execute("select language, count(*) from standard_diagnoses group by language").fetchall()))
+PY
+#   → 总数: 47 ；{'en': 14, 'zh': 33}
+
+# ③ en 诊断的时间窗口（判定"早于守卫"的依据）
+ssh aiops-41 '/opt/aiops-41/.venv/bin/python -' <<'PY'
+import sqlite3
+c = sqlite3.connect("file:/var/lib/aiops-41/gateway/gateway.db?mode=ro", uri=True)
+r = list(c.execute("select min(created_at), max(created_at) from standard_diagnoses where language='en'"))[0]
+print(r[0], "..", r[1])
+PY
+#   → 2026-09-18T09:41:32.400306+00:00 .. 2026-09-21T02:19:19.844248+00:00
+
+# ④ 守卫的引入时间（与 ③ 比对）
+git log --format="%ad %h %s" --date=short --diff-filter=A -- src/aiops_diagnostics/answer_language.py
+#   → 2026-09-22 c35f9de
+
+# ⑤ 两处结构性缺口
+ssh aiops-41 '/opt/aiops-41/.venv/bin/python -' <<'PY'
+import sqlite3
+c = sqlite3.connect("file:/var/lib/aiops-41/gateway/gateway.db?mode=ro", uri=True)
+for t in ("assistant_questions", "health_report_jobs"):
+    cols = [r[1] for r in c.execute(f"PRAGMA table_info({t})")]
+    n = list(c.execute(f"select count(*) from {t}"))[0][0]
+    print(t, "language列:", "language" in cols, " 行数:", n)
+PY
+#   → assistant_questions language列: False  行数: 268
+#   → health_report_jobs  language列: True   行数: 0
+```
+
+### 七、业务验收状态：**未完成业务验收**（显式写出，不省略）
+
+本行按 AGENTS.md「里程碑同步」第 2 项的要求写在前面：本条**不是**通过，也不是「本票不适用」。
+
+### 八、未完成项（据实）
+
+- **其余 9 门语言没有任何模型侧证据**，唯一的获取方式是在 41 上真的发起一次诊断/问答
+  —— 会打真实模型额度、在真实订单上产生记录。**未执行。**
+- 健康报告面**从未在生产运行**，无对象可测。
+- 宣传卡片需 KB 与宣传资料库存。
+
+---
+
 # 验证与验收计划
 
 > **阅读顺序**：本页按**时间倒序**追加，**顶部最新**。较早的条目写的是**当时**的状态，
@@ -8408,3 +8505,6 @@ consumer 的题面与答案**都是起草的**。代码只守结构，**不守�
 - **模型侧回答面不在本票**（统一助手 QA / 宣传卡片 / 单问诊断模型结论 / 健康报告生成）—— → #566。
 - 泰语/高棉语仍是**可读不可问**（能力维 `prompting=False`），不受本票影响。
 - 生产**未部署**：本票只改仓库内容，尚未按 `deploy/deploy-41.sh` 上线。
+
+---
+

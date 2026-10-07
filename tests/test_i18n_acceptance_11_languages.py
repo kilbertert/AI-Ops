@@ -5,6 +5,28 @@ as a gate rather than a one-off report: it runs on every CI pass, so a language
 that stops being served is caught by the suite instead of by a reader comparing
 two dated documents.
 
+## The model-side surfaces it does NOT cover — and why that is stated, not implied
+
+#566's read-only production audit measured which languages have ever produced a
+model-backed result, and the answer is **2 of 11**:
+
+    47 standard_diagnoses:  zh 33,  en 14      (en window 2026-09-18 .. 09-21)
+    every other language:   0 rows
+
+So a "verify the catalog" pass measures 2/11 and a reader who sees only "green"
+will assume 11/11. Two structural facts make that worse rather than better:
+`assistant_questions` has NO `language` column at all (its language dimension
+cannot be read from storage), and `health_report_jobs` has the column but **0
+rows** — that surface has never run in production.
+
+What the audit DID establish, without touching the model:
+- `standard_diagnoses.language` really carries the requested language — the
+  existence of `en` rows proves the tag reached the persistence layer. If the
+  chain folded everything to the default, no non-`zh` row could exist.
+- The two `en` rows containing Han characters predate the shared guard
+  (`answer_language.py`, introduced 2026-09-22) — they are history, not a guard
+  failure.
+
 ## What it covers, and what it explicitly does NOT
 
 Covers every surface whose copy is produced WITHOUT a model:
