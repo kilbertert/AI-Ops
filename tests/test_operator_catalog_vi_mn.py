@@ -76,14 +76,21 @@ def test_the_operator_catalog_is_now_complete() -> None:
     assert missing == [], f"operator 目录仍缺：{missing}"
 
 
-def test_the_consumer_catalog_is_untouched_by_the_operator_merge() -> None:
-    """Two platforms, two catalogs. The merge must not have reached across."""
+def test_the_two_platform_catalogs_stay_separate() -> None:
+    """Two platforms, two catalogs — content added to one must not appear in the other.
+
+    The original form proved this by asserting `consumer` had NOT gained `vi`.
+    #565 translated consumer's `vi` separately, so that assertion is now false
+    while the property it guarded still holds. It is asserted the way the
+    property actually reads: each platform serves its OWN entry text.
+    """
     catalog = _catalog()
-    for language in ("en", "de", "fr", "es", "pt"):
+    for language in ("en", "de", "fr", "es", "pt", "vi", "mn"):
         assert catalog.served_language("consumer", language) == language
-    # And the consumer catalog has NOT gained vi/mn through the operator merge:
-    # those are a separate slice, translated separately in #565.
-    assert catalog.served_language("consumer", "vi") == "zh"
+        assert catalog.served_language("operator", language) == language
+        assert catalog.answer("consumer", "consumer.faq.q001", language) != catalog.answer(
+            "operator", "operator.faq.q001", language
+        ), f"{language}: 两个平台返回了同一段正文"
 
 
 def test_tenant_facets_of_the_catalog_are_unchanged() -> None:
