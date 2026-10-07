@@ -146,8 +146,9 @@ Proof standards:
 - `ops/environments/` currently declares only `env-41.toml`. `admin reconcile`
   converges a real gateway store; running it locally proves the code path but not
   the production inventory.
-- **This map rots.** When a change makes a feature file wrong — a moved route, a
-  renamed control, a step that no longer works — update that file in the same
-  change. For a periodic pass over the whole map, run the
-  `maintain-verification-skill` skill. Do not let a stale entry stand: an
-  out-of-date map reports a pass it did not earn.
+- **本清单会腐烂。** 改动让某个 feature 文件失真时（路由搬了、控件改名了、
+  某一步不再可用），**在同一次改动里更新那个文件**。
+  需要定期通检整个清单时，运行 `maintain-verification-skill` —— 它来自
+  `pstack-verify` 插件（本仓不包含它；用 `claude plugin details pstack-verify`
+  确认是否已装，或 `claude plugin install pstack-verify@pstack-verify` 安装）。
+  不要让陈旧条目留着：**过期的清单会报一个它没挣到的通过**。
