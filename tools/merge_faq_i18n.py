@@ -210,21 +210,33 @@ def _committed(path: Path) -> str | None:
 DERIVED_LANGUAGES = frozenset({"zh-Hant"})
 
 
-def default_languages(answers_dir: Path, prefix: str, wide_table: Path) -> tuple[str, ...]:
-    """The languages this platform has BOTH a wide-table column and answers for.
+def default_languages(
+    answers_dir: Path,
+    prefix: str,
+    wide_table: Path,
+    questions_dir: Path,
+    questions_prefix: str,
+) -> tuple[str, ...]:
+    """The languages this platform has BOTH a question source and answers for.
+
+    A question source is a wide-table column OR a `questions_<lang>.json` file —
+    the consumer table predates vi/mn/th/km and has no column for them, so
+    requiring a column would make a plain re-run look like those languages had
+    been *removed* rather than added by a second route.
 
     Derived rather than listed: a fixed default serves whichever platform was
     written first and fails on the other with a FileNotFoundError before it
     reads a single entry.
     """
     rows, column_map = read_wide_table(wide_table)
-    available = set(column_map.values()) - {"zh"}
     if not rows:  # pragma: no cover - the table always has rows when valid
         return ()
+    from_table = set(column_map.values()) - {"zh"}
     return tuple(
         language
         for language in HEADER_LANGUAGES.values()
-        if language in available and (answers_dir / f"{prefix}{language}.json").is_file()
+        if (answers_dir / f"{prefix}{language}.json").is_file()
+        and (language in from_table or (questions_dir / f"{questions_prefix}{language}.json").is_file())
     )
 
 
@@ -281,7 +293,13 @@ def main() -> int:
     if args.languages:
         langs = tuple(part.strip() for part in args.languages.split(",") if part.strip())
     else:
-        langs = default_languages(args.answers_dir, prefix, wide_table)
+        langs = default_languages(
+            args.answers_dir,
+            prefix,
+            wide_table,
+            args.questions_dir or args.answers_dir,
+            QUESTIONS_PREFIX[args.platform],
+        )
     if not langs:
         raise ValueError(f"no answer files found for {args.platform} in {args.answers_dir}")
 

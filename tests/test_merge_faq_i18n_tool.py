@@ -9,8 +9,10 @@ to run.
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
@@ -50,15 +52,54 @@ def test_the_default_languages_come_from_the_platforms_own_answer_files() -> Non
     try:
         consumer = _run()
         assert consumer["platform"] == "consumer"
-        assert consumer["languages"] == ["en", "de", "fr", "es", "pt"]
+        # The default grows as a platform gains languages, so it is asserted as
+        # a SUPERSET of the set it had when this test was written plus the four
+        # #565 added — a fixed literal would have to be edited every time, and
+        # editing it is exactly the drift this test is meant to catch.
+        assert {"en", "de", "fr", "es", "pt"} <= set(consumer["languages"])
+        assert {"vi", "mn", "th", "km"} <= set(consumer["languages"]), (
+            "consumer 默认集里少了 #565 新增的语言 —— 它们没有宽表列，是靠 questions_<lang>.json 被发现的"
+        )
         operator = _run("--platform", "operator")
         assert operator["platform"] == "operator"
-        # Derived, not a fixed list: the operator set grows as translations land
-        # (vi/mn in #529, th/km in #530). What must hold is that the default
-        # covers every language this platform actually has answers for — and
-        # that it is NOT the consumer set, which is the bug this pins.
         assert "vi" in operator["languages"]
-        assert operator["languages"] != consumer["languages"]
+        # The two sets are now EQUAL (both platforms are complete), so equality
+        # can no longer distinguish "derived per platform" from "one shared
+        # fixed literal" — which is the bug this test pins. The distinguishing
+        # move is to take a source away and watch the default follow. Done
+        # against a COPY of the answers dir so the repo's assets are untouched.
+        assert operator["languages"] == consumer["languages"], (
+            "两个平台都已补齐；若这行失败，说明某个平台的默认集没有跟着它的答案文件走"
+        )
+        with tempfile.TemporaryDirectory() as trimmed:
+            trimmed_dir = Path(trimmed)
+            for source in sorted((ROOT / "tools" / "faq_i18n").glob("operator_*.json")):
+                shutil.copy(source, trimmed_dir / source.name)
+            (trimmed_dir / "operator_answers_km.json").unlink()
+            # Run with the DEFAULT language set (no --languages). The tool's
+            # "a published language went missing" guard fires, and the language
+            # it names IS the evidence: the default discovery followed the
+            # answer sources instead of a fixed list.
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(TOOL),
+                    "--platform",
+                    "operator",
+                    "--answers-dir",
+                    str(trimmed_dir),
+                    "--questions-dir",
+                    str(trimmed_dir),
+                ],
+                capture_output=True,
+                text=True,
+                cwd=ROOT,
+                check=False,
+            )
+        assert result.returncode != 0
+        assert "km" in result.stderr, (
+            "移掉 km 的答案文件后，默认集仍认为 km 存在 —— 说明它不是从答案文件派生的"
+        )
     finally:
         _restore(original, recommendations)
 
