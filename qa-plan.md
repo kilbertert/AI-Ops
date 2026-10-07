@@ -1520,3 +1520,38 @@ uv run pytest tests/test_assistant_api.py tests/test_conversation_api.py \
   指出是哪一层在起作用。
 - **未完成业务验收**：本条为离线真实栈（真实运行时、真实存储、真实路由），**没有在 41 公网链路
   上跑过一次真实取消**。联调前需按 `assistant-cancel-handoff.md` §8 复跑。
+
+### I18N-11L-01 回答面端到端：七门语言的推荐与目录（2026-10-07 实跑）
+
+> ⚠️ **范围就是标题写的范围**：本次命令覆盖 **7 门语言 × 2 个路由**。
+> `de / fr / es / pt` **不在本轮命令内**（它们属于既有六语，另有 `CUTOVER-41-07` 的历史记录，
+> 但那批不含新增语言）；**固定答案与统一入口快捷问也不在本轮**。
+> 「11 语言」指**目录制品已覆盖 11/11**（有自动化覆盖门守着），
+> **不等于**这 11 门都跑过端到端。
+
+- 环境：41 `47.97.160.153`，网关 `0.1.0+fe57a6b3ae8f`；**不经过 nginx**，直接驱动生产 ASGI 应用
+- 前置：`standard_diagnoses` / `assistant_questions` / `health_report_jobs` 三表**在飞作业数为 0**
+  （构造 app 会调 `recover_interrupted_jobs()`，有在飞作业时会把它们标 failed —— 见 runbook §5.6）
+- 测试数据：Redis `app:3rd_session:*` 中**第一个被生产解析器接受的**会话（租户 `1961353704485687296`），
+  加 nginx 注入用的同一个服务令牌
+- 动作：`python probe_gateway_as_real_user.py --accept-live-app --paths /v1/faq/recommendations,/v1/faq/catalog --languages zh,en,zh-Hant,vi,mn,th,km`
+- 预期：每个组合 **HTTP 200 且 `language` == 请求语言 且 条目非空**
+- **结果：PASS** —— 7 语言 × 2 路由 = **14 个组合全部通过**，各 28 条。
+- **未覆盖（据实）**：`de/fr/es/pt` 未在本轮命令内；**固定答案**（`POST /v1/faq/answer`）与
+  **统一入口快捷问**（`POST /v1/assistant/questions`）未测 —— 且**泰语/高棉语对它一律拒绝**
+  （边界排在 FAQ 匹配之前，无论文本是否等于某条 FAQ 标题，见「能读不能问」场景），
+  这两门语言的固定答案只能走 `POST /v1/faq/answer`；operator 入口无可用会话。
+  `zh` 简体、`zh-Hant` 繁体、`vi/mn/th/km` 各自语言的题面均正确返回
+- 清理：探测**未写任何东西**；前后各对账一次，三表在飞数与状态分布**均无变化**
+- 未覆盖（据实）：**operator 入口**（本仓库当前没有带管家范围的可解析会话）；
+  模型侧四个面（统一助手 QA / 宣传卡片 / 单问诊断 / 健康报告）—— 见 GitHub #566
+
+### I18N-11L-02 部署出去的客户端调了什么（2026-10-07 实跑）
+
+- 环境：41 的 nginx 访问日志 `/www/wwwlogs/api.mall.qushiyun.com.log`
+- 动作：`what_does_the_client_call.py <log> --since 07/Oct/2026 --ua Html5Plus --missing /v1/shortcuts`
+- 预期：给出该路径的请求计数与状态分布
+- **结果：`/v1/shortcuts` 在窗口内 0 次请求**（退出码 1 = 读到了、确实没有），
+  而同设备同期对 `/v1/faq/recommendations` 有 11 次 200
+- 用途：把「客户端从没调用」与「调了但失败」分开 —— 后者会留下 4xx/5xx 行，前者一行都没有
+- 边界：**这不等于前端缺陷结论**；前端侧的成因（构建差异等）需前端团队确认

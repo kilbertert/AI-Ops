@@ -862,13 +862,31 @@ Feature: 41 环境 Gateway 切换
       Then 返回 HTTP 202
       And 轮询终态为 completed 且 result.text 非空
 
-    Scenario: 41 多语言 FAQ 主链路按请求语言返回
-      Given 41 运行副本已部署 Accept-Language、FAQ 五语目录和短路匹配实现
+    Scenario: 41 多语言 FAQ 主链路按请求语言返回（11 门语言）
+      Given 41 运行副本已部署 Accept-Language、11 语言目录和短路匹配实现
       And H5 登录接口返回与 41 会话库匹配的有效 thirdSession
-      When 使用 zh-CN、en-US、de、fr、es、pt-BR 分别请求 FAQ 推荐、固定答案和统一入口快捷问
+      When 使用 zh、zh-Hant、en、de、fr、es、pt、vi、mn、th、km 分别请求
+           FAQ 推荐、目录和固定答案
       Then 每次响应均返回 HTTP 200
-      And language 字段分别解析为 zh、en、de、fr、es、pt
+      And 每个面按下面的两条判据之一成立：
+         · 该面有该语言的正文时，language 字段等于请求语言，且正文非空
+         · 该面缺该语言的正文时，language 字段等于正文实际所用的语言（zh），
+           且正文确实是该语言 —— 不得回显请求语言却服务兜底文案
       And 标题和答案使用对应语言，未跨环境读取会话或数据
+
+    Scenario: 泰语与高棉语是「能读不能问」
+      Given 41 运行副本已部署 11 语言目录
+      When 使用 th 或 km 向统一入口提交提问（无论文本是否等于某条 FAQ 标题）
+      Then 返回 type=clarification 且携带该语言自己的拒绝文案，并指向下方快捷问题
+      And 不把请求转给关键词匹配器或模型（这两门语言的能力声明里 prompting=false）
+      And 这两门语言的固定答案改由 POST /v1/faq/answer 单独验证 ——
+          统一入口对它们一律拒绝，这是能力边界而不是缺陷
+
+    Scenario: 繁体不是简体的折叠
+      Given 客户端发送 Accept-Language: zh-Hant
+      When 请求 FAQ 推荐或目录
+      Then language 字段为 zh-Hant，且题面与答案为繁体
+      And 同一请求去掉 zh-Hant 后仍返回简体（证明是语言选择而非整体改标签）
 
     Scenario: 41 客服问答返回多媒体检索块
       Given 41 租户存在已发布且绑定图片和视频知识库的客服智能体
