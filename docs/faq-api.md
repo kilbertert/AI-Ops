@@ -130,9 +130,21 @@ X-Business-Entry: consumer
 ## 真实验收状态
 
 **2026-10-07（本仓库当前可复现的做法）**：`.claude/skills/verify-aiops-client-e2e/` 在 41 上以**真实会话**驱动
-**生产**网关，`/v1/faq/recommendations` 与 `/v1/faq/catalog` 在 `zh / en / zh-Hant / vi / mn / th / km`
-七门语言上均 **HTTP 200 且 `language` == 请求语言、条目非空**。判据是**三合一**，只报 200 会放过
-「回显请求语言却服务兜底文案」。命令与边界见该技能的 SKILL.md 与 `docs/agents/env-41-runbook.md` §5.6。
+**生产**网关。实测矩阵 **7 语言 × 2 路由 = 14 个组合**，全部 **HTTP 200 且 `language` == 请求语言、
+条目非空（各 28 条）**：
+
+```
+✅ zh / en / zh-Hant / vi / mn / th / km  ×  /v1/faq/recommendations  n=28
+✅ zh / en / zh-Hant / vi / mn / th / km  ×  /v1/faq/catalog          n=28
+```
+
+判据是**三合一**（200 **且** served == 请求语言 **且** 非空）：只报 200 会放过「回显请求语言却服务兜底文案」，
+空列表会把「没有任何可看的内容」判成通过。命令与边界见该技能的 SKILL.md 与
+`docs/agents/env-41-runbook.md` §5.6。
+
+**探测的写风险与本次对账**：构造 app 会调 `recover_interrupted_jobs()`。本次探测**前后各对账一次**，
+三张作业表的在飞数与状态分布**均无变化**（`standard_diagnoses {expired:45, failed:2}` /
+`assistant_questions {completed:1, expired:267}` / `health_report_jobs {}`）。
 
 **2026-09-04（历史）**：使用测试 Gateway 和当时有效的真实 C 端会话完成 consumer 推荐、目录和固定答案调用，
 均返回 HTTP 200；跨平台问题 ID 返回 404 `FAQ_NOT_FOUND`，无 B 端映射时 operator 入口返回 503

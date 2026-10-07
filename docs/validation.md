@@ -8,9 +8,12 @@
 ### 一、产线实测结果（41 上，真实会话 + 真实 ASGI 面）
 
 ```
-✅ zh / en / zh-Hant / vi / th / km
-   × /v1/faq/recommendations（28 条）+ /v1/shortcuts（3 条）
+✅ zh / en / zh-Hant / vi / th / km  ×  /v1/faq/recommendations（28 条）+ /v1/shortcuts（3 条）
+✅ zh / en / zh-Hant / vi / mn / th / km  ×  /v1/faq/recommendations（28 条）+ /v1/faq/catalog（28 条）
 ```
+
+（第二行是评审指出"七语里缺 mn、且缺 catalog"之后**补测**的 —— 原记录只覆盖六语的推荐与快捷动作，
+而 `docs/faq-api.md` 声称七语两路由通过。**记录比证据走得远**，补测后才成立。）
 
 判据**三合一**：HTTP 200 **且** `language` == 请求语言 **且** 有内容。
 逐条实测值（`served` 与请求语言一致）已记入 PR #570 正文。
