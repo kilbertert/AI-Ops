@@ -128,10 +128,16 @@ class ShortcutError(RuntimeError):
 # only as the seed default; after creation the rows are ordinary managed
 # resources — operators edit/publish/disable them through the API.
 #
-# Copy covers ALL of SUPPORTED_LANGUAGES, matching the label/description tables
-# in i18n.py. A two-language seed is not harmless: resolve_language accepts six
-# languages and public() falls back to zh, so a de/fr/es/pt user silently gets
-# Chinese buttons while the response still echoes their language
+# Copy covers ALL of SUPPORTED_LANGUAGES. There is no separate label/description
+# table to match — i18n.py holds the language INVENTORY and the message catalogs,
+# while these seeds ARE the shortcut copy, keyed by the inventory's tags and
+# gated by the same coverage checks. The earlier comment pointed at i18n.py for
+# tables that do not live there, so replaying it reconstructed a premise that was
+# never true.
+#
+# A two-language seed is not harmless: resolve_language accepts every declared
+# language and public() falls back to zh, so a user of any other language
+# silently gets Chinese buttons while the response still echoes their language
 # (41 live, 2026-09-18).
 #
 # The operator entry (#427) reuses the SAME codes as consumer: both actions run
