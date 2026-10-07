@@ -104,10 +104,41 @@ X-Business-Entry: consumer
 
 ## 内容版本
 
-目录制品由 `tools/generate_faq_catalog.py` 从本地业务 DOCX 生成。DOCX 被 `.gitignore` 忽略，不能提交；生成后的 JSON 是服务运行时制品。内容变更通过代码评审、自动化校验和版本发布完成，废弃的 `question_id` 不复用。
+**当前 `faq_version`：`2026.10.09`**（以 `src/aiops_diagnostics/faq_catalog.json` 为准，此处只是快照）。
+
+制品来源分两层，**不要混为一谈**：
+
+| 层 | 来源 | 备注 |
+|---|---|---|
+| 题面 | 产品宽表（consumer 6 列 / operator 11 列）**或** `tools/faq_i18n/questions_<lang>.json` | consumer 的 `vi/mn/th/km` 宽表没有对应列，题面为起草 |
+| 答案 | `tools/faq_i18n/{answers,operator_answers}_<lang>.json` | **全部为起草**，以简体权威答案为源 |
+
+内容变更通过代码评审、自动化校验和版本发布完成，废弃的 `question_id` 不复用。
+
+### 受支持语言（11 门）
+
+`zh` `zh-Hant` `en` `de` `fr` `es` `pt` `vi` `mn` `th` `km`
+
+- **两个平台的固定问答目录均覆盖 11/11**（#565 补齐）。缺内容时回退 `zh`，
+  响应里的 `language` 字段**如实上报实际服务的语言**。
+- `zh-Hant` 由简体权威**派生**（`tools/derive_zh_hant.py`，opencc `s2twp`），不是另求一套翻译。
+- **泰语/高棉语：能读不能问。** 目录可渲染，但自由文本提问返回**该语言自己的**拒绝文案
+  —— 这两门语言的能力声明里 `prompting=False`（无词边界，确定性匹配器对它们不可靠）。
+- **译文质量未抽查**：代码只守结构（覆盖、无汉字残留、单位/标记未丢、长度带），
+  **不守译文正确性**。未抽查的语言不得当作已验收。
 
 ## 真实验收状态
 
-2026-09-04 使用测试 Gateway 和当前有效真实 C 端会话完成 consumer 推荐、目录和固定答案调用，均返回 HTTP 200；跨平台问题 ID 返回 404 `FAQ_NOT_FOUND`，无 B 端映射时 operator 入口返回 503 `PLATFORM_UNAVAILABLE`。验收过程未记录会话、用户或租户原文。
+**2026-10-07（本仓库当前可复现的做法）**：`.claude/skills/verify-aiops-client-e2e/` 在 41 上以**真实会话**驱动
+**生产**网关，`/v1/faq/recommendations` 与 `/v1/faq/catalog` 在 `zh / en / zh-Hant / vi / mn / th / km`
+七门语言上均 **HTTP 200 且 `language` == 请求语言、条目非空**。判据是**三合一**，只报 200 会放过
+「回显请求语言却服务兜底文案」。命令与边界见该技能的 SKILL.md 与 `docs/agents/env-41-runbook.md` §5.6。
+
+**2026-09-04（历史）**：使用测试 Gateway 和当时有效的真实 C 端会话完成 consumer 推荐、目录和固定答案调用，
+均返回 HTTP 200；跨平台问题 ID 返回 404 `FAQ_NOT_FOUND`，无 B 端映射时 operator 入口返回 503
+`PLATFORM_UNAVAILABLE`。验收过程未记录会话、用户或租户原文。
+
+**未验**：operator 入口的成功链路需要有效**管家用户会话**；本仓库当前**没有**带管家范围的会话可用，
+故 operator 侧的端到端仍为**未验**（不是通过）。
 
 当前可解析会话集合中未找到唯一 B 端主体映射，operator 成功链路待有效管家用户会话，不将 consumer 通过结果扩写为管家端验收通过。

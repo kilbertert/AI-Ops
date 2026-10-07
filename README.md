@@ -462,7 +462,8 @@ tests/                    77 个测试文件，按关注点平铺（无 conftest
 java/                     充电桩后端侧的 /diag/* 查询接口与审计切面工件 —— 见下方警告
 ops/                      TDengine 只读代理的 systemd 单元与环境清单
 packaging/                PyInstaller 规格与便携包构建 + 烟测
-tools/                    数据生成器（合成验收数据、FAQ 目录与多语言合并）
+tools/                    数据生成器与校验器（合成验收数据、FAQ 目录与多语言合并/派生/校验、
+                         存量快捷动作语言迁移）—— 见 tools/README.md
 examples/                 离线 fixture 与合成验收数据
 docs/                     架构、契约、ADR、运行手册（见第十节路由表）
 .github/workflows/        确定性 CI + AFK 治理面流水线
@@ -627,6 +628,9 @@ runbook §5/§6 明确禁止 CI 自证。所以 CD 通过最多报告 `merged_wa
 | agent 运行时细节？ | [docs/thin-harness.md](docs/thin-harness.md) |
 | 多端部署？ | [docs/gateway.md](docs/gateway.md) |
 | 里程碑历史？ | [docs/开发进度.md](docs/开发进度.md) |
+| 多语言支持到什么程度了？ | [docs/reviews/2026-10-07-i18n-program-retrospective.md](docs/reviews/2026-10-07-i18n-program-retrospective.md)（完成度复盘）+ [docs/faq-api.md](docs/faq-api.md)（契约侧语言清单） |
+| 怎么在生产上端到端验一次？ | `.claude/skills/verify-aiops-client-e2e/`（真用户会话驱动生产网关）+ `docs/agents/env-41-runbook.md` §5.5/§5.6 |
+| 数据生成/校验工具怎么用？ | [tools/README.md](tools/README.md) |
 
 **历史遗留文件（保留但不代表当前状态，不要据此判断）：**
 
