@@ -996,6 +996,8 @@ PY
   sha256sum /var/lib/aiops-41/backups/gateway.db.$TS; echo BACKUP_TS=$TS'
 
 # ② 把工具送上机（**只送工具**，不动 /opt/aiops-41 的源码 —— 那是部署产物）
+#    scp 不会创建中间目录，首次执行必须先建好，否则上传就在这一步停住。
+ssh aiops-41 'mkdir -p /tmp/mig542/tools'
 scp tools/migrate_shortcut_i18n.py aiops-41:/tmp/mig542/tools/
 ssh aiops-41 'chmod -R a+rX /tmp/mig542'
 
@@ -1016,11 +1018,12 @@ from pathlib import Path
 from aiops_diagnostics.shortcut_lifecycle import ShortcutStore
 from aiops_diagnostics.i18n import SUPPORTED_LANGUAGES as L
 store = ShortcutStore(Path("/var/lib/aiops-41/gateway/gateway.db"))
-for tenant, entry in (("__platform__","operator"),("__platform__","consumer")):
+# 用 list_published：list_effective 会拒绝保留的平台租户 ID（"tenant id is reserved"）
+for entry in ("operator", "consumer"):
     fallbacks = [(r.code, lang, r.public(lang)["language"])
-                 for r in store.list_effective(tenant, entry) for lang in L
+                 for r in store.list_published("__platform__", entry) for lang in L
                  if r.public(lang)["language"] != lang]
-    print(tenant, entry, "回退次数:", len(fallbacks), fallbacks)
+    print("__platform__", entry, "回退次数:", len(fallbacks), fallbacks)
 PY'
 ```
 
@@ -1029,7 +1032,48 @@ PY'
 ⚠️ **整库恢复会丢掉备份之后的所有写入** —— `gateway.db` 里还有诊断作业、会话、设备与租户数据，
 不只是快捷动作。整库恢复只作为**灾难恢复**手段，且必须先对当前状态再备一份。
 平时用**按动作回滚**：迁移为每个被改动作生成了**新的不可变版本**，
-`Shortcut.rollback` 用任意旧 `version_no` 恢复其文案；`disabled` 行本工具跳过、未被改动。
+`ShortcutManager.rollback` 用任意旧 `version_no` 恢复其文案；`disabled` 行本工具跳过、未被改动。
+
+**先查版本，再回滚。回滚自身也会生成一条新版本，所以它同样可逆。**
+
+```bash
+# ① 查该动作的版本历史（库无 sqlite3 CLI，用 python 只读查）。
+#    迁移新生成的版本号最大；挑选它之前的那一版。labels 的语言数一眼可辨
+#    （迁移前 6 语、迁移后 11 语）。
+ssh aiops-41 '$V=/opt/aiops-41/.venv/bin/python; $V - <<PY
+import json, sqlite3
+c = sqlite3.connect("file:/var/lib/aiops-41/gateway/gateway.db?mode=ro", uri=True)
+c.row_factory = sqlite3.Row
+sid = (c.execute("select shortcut_id from shortcuts where tenant_id=? and business_entry=? and code=?",
+                 ("__platform__", "operator", "case_exploration")).fetchone())["shortcut_id"]
+print("shortcut_id =", sid)
+for v in c.execute("select version_no, published_at, snapshot_json from shortcut_versions where shortcut_id=? order by version_no", (sid,)):
+    snap = json.loads(v["snapshot_json"])
+    labels = snap.get("labels") or snap.get("fields_json") or {}
+    if isinstance(labels, str): labels = json.loads(labels)
+    print(" v%d  %s  labels=%d 语" % (v["version_no"], v["published_at"][:19], len(labels.get("labels") or labels)))
+PY'
+
+# ② 回滚到迁移前那一版（把 <version_no> 换成 ① 里挑出的编号）。
+#    expected_revision 必须是**当前** revision —— 先读出来再回滚，两步之间不要有别的编辑。
+ssh aiops-41 'cd /opt/aiops-41 && runuser -u aiops41 -- env PYTHONPATH=/opt/aiops-41/src \
+  /opt/aiops-41/.venv/bin/python - <<PY
+from pathlib import Path
+from aiops_diagnostics.shortcut_lifecycle import PLATFORM_SCOPE, ShortcutManager, ShortcutStore
+store = ShortcutStore(Path("/var/lib/aiops-41/gateway/gateway.db")); mgr = ShortcutManager(store)
+ctx = type("Ctx", (), {"effective_tenant_id": "__platform__", "roles": frozenset({"ROLE_PLATFORM_ADMIN"}),
+                       "caller": type("U", (), {"b_user_id": "rollback"})()})()
+sid = "<上一步打印的 shortcut_id>"
+live = mgr.get(ctx, sid, scope=PLATFORM_SCOPE)
+print("当前 revision =", live.revision, " 当前 labels 语言数 =", len(live.labels))
+mgr.rollback(ctx, sid, version_no=<迁移前的 version_no>, expected_revision=live.revision, scope=PLATFORM_SCOPE)
+print("回滚后 =", len(mgr.get(ctx, sid, scope=PLATFORM_SCOPE).labels), "语（应为 6）")
+PY'
+
+# ③ 复核（与迁移的复核同一条命令）
+```
+
+⚠️ `rollback` **只接受 `published` 行**，且回滚会把行恢复成 `published` —— 本工具不动停用行，故无此问题。
 
 ### 本工具不做的
 
