@@ -1094,6 +1094,60 @@ PY'
 - **不覆盖已有值** —— 种子只补缺失语言；运营/租户自己的文案逐字保留。
 - **无种子的动作（`solution_discovery`）报为缺口**，不臆造文案。
 
+## 5.6 回答面的真用户端到端探测（2026-10-07 新增，含零写入默认）
+
+**何时用**：要证明**用户真正读到的面**（`/v1/faq/*`、`/v1/shortcuts`）在生产上真能服务一个真实用户。
+控制面（健康/注册/run）用 `verify-aiops-gateway`，那个跑在一次性数据根上、不碰生产。
+
+**技能**：`.claude/skills/verify-aiops-client-e2e/`。下面是最短可行命令。
+
+### ⚠️ 先读这一条：探测会写，且写的是别人的作业
+
+`create_gateway_app` 内部调 `recover_interrupted_jobs()`，**把每一条 queued/running 作业标 failed**。
+在启动路径上这是对的（持有那些作业的进程确实死了）；但探测是**在网关仍在运行时**再构造一个 app，
+于是会把**正在被 worker 处理**的作业标失败。**只读请求不会撤销这次写入。**
+
+脚本因此默认**不构造 app**（只打印计划、零写入）。真要探测时：
+
+```bash
+# ① 确认没有在飞作业。非空就别跑。
+ssh aiops-41 '/opt/aiops-41/.venv/bin/python -c "
+import sqlite3
+c = sqlite3.connect(\"file:/var/lib/aiops-41/gateway/gateway.db?mode=ro\", uri=True)
+for t in (\"standard_diagnoses\",\"assistant_questions\",\"health_report_jobs\"):
+    print(t, dict(c.execute(f\"select status,count(*) from {t} where status in (\x27queued\x27,\x27running\x27) group by status\").fetchall()))"'
+
+# ② 探测
+scp .claude/skills/verify-aiops-client-e2e/scripts/probe_gateway_as_real_user.py aiops-41:/tmp/probe.py
+ssh aiops-41 'chmod a+r /tmp/probe.py'
+ssh aiops-41 'cd /opt/aiops-41 && runuser -u aiops41 -- env \
+  $(tr "\0" "\n" < /proc/$(systemctl show -p MainPID --value aiops-gateway-41)/environ \
+    | grep -E "^AIOPS_" | xargs -d"\n") \
+  /opt/aiops-41/.venv/bin/python /tmp/probe.py --accept-live-app --languages zh,en,zh-Hant,vi,th,km'
+
+# ③ 复核对账：探测后的状态应与 ① 的应答一致（除本次正常完成的请求外无新增 failed）
+```
+
+**为什么必须 `runuser -u aiops41` + 服务自己的 env**：配置是 `0600 aiops41`（root 也读不到），
+且 `GatewayServerSettings.from_env()` 读的是**网关的** env，不是某个交互 shell 的。
+
+**判据三合一**：HTTP 200 **且** `language` == 请求语言 **且** 有内容。
+只报 200 会把「回显请求语言却服务兜底文案」判成通过；空列表会把「没有任何可看的按钮」判成通过。
+
+**凭据**：脚本读服务令牌 / Redis 口令 / 一个真实会话，**一个都不打印**。会话本身是凭据，
+用它即等同该用户身份直到过期 —— 不要把探测输出贴进任何会被提交的文件。
+
+### 客户端流量：先问「调没调」
+
+```bash
+ssh aiops-41 'python3 /dev/stdin /www/wwwlogs/<vhost>.log --since <DD/Mon/YYYY> --ua Html5Plus --missing /v1/shortcuts' \
+  < .claude/skills/verify-aiops-client-e2e/scripts/what_does_the_client_call.py
+```
+
+退出码 **0 = 有请求 / 1 = 确实 0 次 / 2 = 日志读不到**。
+**三种不要混用**：把「读不到」当成「零请求」，会得到一个关于某个路由、而没人真的看过的自信错判。
+`grep -l "v1/<route>" /www/wwwlogs/*.log` 反查 vhost，不要假设客户端用的是哪个域名。
+
 ## 6. 真实验收边界（不得逾越）
 
 - 本地 fixture / 替身模型 / SQLite 直查 / 模型单次调用，**都不是**真实业务验收。

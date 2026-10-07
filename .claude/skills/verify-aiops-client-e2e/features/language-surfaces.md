@@ -1,54 +1,45 @@
-# Language surfaces: what "served" means and where it comes from
+# 语言面：「served」是什么意思、它从哪来
 
-## The one assertion that matters
+## 唯一要紧的那条断言
 
-**The response's `language` field equals the requested `Accept-Language` tag.**
+**响应里的 `language` 字段 == 请求的 `Accept-Language` 标签。**
 
-Not "the request succeeded". A 200 that echoes `zh-Hant` while carrying
-Simplified copy is the exact failure this workstream spent many tickets removing
-(`docs/reviews/2026-10-07-i18n-program-retrospective.md`). Every surface that
-resolves a language reports what it ACTUALLY served, so the field is checkable
-without reading the copy — and reading the copy is not a reliable test anyway,
-because a translator may legitimately leave proper nouns in Latin script.
+不是「请求成功了」。200 回显 `zh-Hant` 却带简体文案，正是这套工作流花了很多票去消灭的形态
+（见 `docs/reviews/2026-10-07-i18n-program-retrospective.md`）。每个解析语言的面都会**如实上报它实际服务的语言**，
+所以这条判据不需要读正文 —— 而且读正文本来也不可靠：译者合法地会把专名留成拉丁写法。
 
-Per-row vs per-list: `/v1/shortcuts` reports `language` on each row AND at the
-list level. The list-level value is only truthful when every row agrees; when
-rows disagree, the per-row value is the one a client must read. A row published
-before a language existed serves `zh` and SAYS `zh` — honest, not a bug.
+逐行 vs 列表级：`/v1/shortcuts` 既在**每一行**上报 `language`，也在列表级上报。
+列表级的值只在所有行一致时才真实；行之间不一致时，客户端必须读逐行的值。
+在语言存在之前发布的行走 `zh` 并**如实说 `zh`** —— 诚实，不是 bug。
 
-## Where the language comes from
+## 语言从哪来
 
 ```
-Accept-Language  →  i18n.resolve_language  →  a declared tag  →  the copy table
-                     (RFC 7231 q-values)      (zh-Hant kept     (falls back to zh)
-                                               as itself)
+Accept-Language  →  i18n.resolve_language  →  一个声明的标签  →  文案表
+                     （RFC 7231 q 值）          （zh-Hant 保留          （缺则回退 zh）
+                                                 为它自己）
 ```
 
-Three places this has silently collapsed, all fixed, all worth re-checking if
-you touch them:
+下面三处曾经**静默**折叠过。都已修，但动到它们时要重新验：
 
-1. **The resolver folded script subtags.** `zh-Hant` → `zh`. Fixed; `zh-Hant-TW`
-   also keeps its script now.
-2. **Persistence truncated the tag.** Even a correct resolution was stored as
-   `zh`. Fixed in `gateway_store._language`.
-3. **"Non-Chinese" was derived from "not the default".** That classified
-   Traditional as non-Chinese, so the output guard withheld **every legitimate
-   Traditional answer**. It is a declared per-language property now.
+1. **解析层折叠了脚本子标签。** `zh-Hant` → `zh`。已修；`zh-Hant-TW` 现在也保脚本。
+2. **持久化截断了标签。** 即使解析对了，存进去仍是 `zh`。已在 `gateway_store._language` 修。
+3. **「非中文」原本是从「不等于默认语言」派生的。** 那会把繁体归入非中文，
+   于是输出守卫**扣下每一份合法繁体回答**。现在是逐语言声明的属性。
 
-## What is a defect and what is not
+## 哪些是缺陷、哪些不是
 
-| Observation | Verdict |
+| 观察到 | 判定 |
 |---|---|
-| `language` == requested, copy non-empty | ✅ |
-| `language` == requested, copy is the authority language | ❌ the false-statement shape |
-| `language` == `zh` while `zh-Hant` was requested | ❌ unless the row predates the tag — check the row's `language` |
-| Contract identifiers (`code`/`status`/`unit`) untranslated | ✅ correct — clients branch on them |
-| Resource names (`media[].title`) untranslated | ✅ correct — translating them orphans the asset |
-| Thai/Khmer free text refused with a Thai/Khmer message | ✅ correct — 能读不能问, declared |
+| `language` == 请求语言，文案非空 | ✅ |
+| `language` == 请求语言，文案却是权威语言 | ❌ 假陈述形态 |
+| 请求 `zh-Hant` 却 `language` == `zh` | ❌ —— 除非该行早于该标签，查该行的 `language` |
+| 契约标识符（`code`/`status`/`unit`）未翻译 | ✅ 正确，客户端按其分支 |
+| 资源名（`media[].title`）未翻译 | ✅ 正确，翻译会让素材与知识库对不上 |
+| 泰语/高棉语自由文本被**该语言自己的**文案拒绝 | ✅ 正确 —— 能读不能问，且已声明 |
 
-## Coverage is not correctness
+## 覆盖不等于正确
 
-Coverage (does every table have this language) is asserted by
-`tests/test_i18n_acceptance_11_languages.py`. **Translation quality has never
-been sampled** — the code checks structure, not whether the copy reads well. Do
-not report a green suite as "the translations are good".
+覆盖（每张表是否都有这门语言）由 `tests/test_i18n_acceptance_11_languages.py` 守着。
+**译文质量一次都没抽查过** —— 代码只守结构，不守读起来是否通顺。
+不要把一套全绿的测试报成「译文没问题」。

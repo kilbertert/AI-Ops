@@ -22,6 +22,7 @@ import argparse
 import collections
 import re
 import subprocess
+import sys
 
 #: Access-log lines look like:
 #:   ip - - [07/Oct/2026:15:20:08 +0800] "GET /v1/faq/answer HTTP/1.1" 200 938 "-" "UA"
@@ -32,12 +33,33 @@ LINE = re.compile(
 )
 
 
+class LogUnreadable(RuntimeError):
+    """The log could not be read — which is NOT the same as "no traffic"."""
+
+
 def _read(path: str, since: str | None) -> str:
     # The log is mode 700 www:www on 41, so this runs on the host. `--since` is
     # a plain substring match on the date field ("07/Oct/2026").
+    #
+    # `grep` exits 1 when it matched nothing, which is a legitimate empty result;
+    # everything else is a read failure. Collapsing the two is the dangerous
+    # direction: an unreadable log would render as "the client never called it",
+    # which is a confident wrong answer about a route nobody looked at.
     pattern = since or ""
     command = ["cat", path] if not pattern else ["grep", "-F", pattern, path]
-    return subprocess.run(command, capture_output=True, text=True, check=False).stdout
+    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    # Exit 1 means "no match" for grep but "could not read" for cat — one code,
+    # two meanings, so the two tools are judged separately. Treating cat's 1 as
+    # an empty result is exactly the false verdict this guard exists to stop.
+    if not pattern:
+        if result.returncode != 0:
+            raise LogUnreadable(
+                f"读不了日志 {path}（退出码 {result.returncode}）：{result.stderr.strip()[:200]}"
+            )
+        return result.stdout
+    if result.returncode not in (0, 1):
+        raise LogUnreadable(f"读不了日志 {path}（退出码 {result.returncode}）：{result.stderr.strip()[:200]}")
+    return "" if result.returncode == 1 else result.stdout
 
 
 def main() -> int:
@@ -49,7 +71,12 @@ def main() -> int:
     parser.add_argument("--missing", help="report this path's request count and FAIL LOUDLY if zero")
     args = parser.parse_args()
 
-    text = _read(args.log, args.since)
+    try:
+        text = _read(args.log, args.since)
+    except LogUnreadable as exc:
+        print(f"❌ {exc}", file=sys.stderr)
+        print("   ⇒ 这是**读不到**，不是「没有流量」。两种都不是结论，别当结论用。", file=sys.stderr)
+        return 2
     counts: collections.Counter[tuple[str, str, str]] = collections.Counter()
     total = 0
     for line in text.splitlines():
@@ -69,7 +96,9 @@ def main() -> int:
         print(f"  {count:6}  {method:4} {path}  {status}")
 
     if args.missing:
-        hits = sum(count for (_, path, _), count in counts.items() if path == args.missing)
+        # Compare the PATH only: a client calling `/v1/shortcuts?source=home` is
+        # still calling `/v1/shortcuts`, and missing it would invert the verdict.
+        hits = sum(count for (_, path, _), count in counts.items() if path.split("?", 1)[0] == args.missing)
         print()
         if hits:
             print(f"✅ {args.missing} 有 {hits} 次请求")
