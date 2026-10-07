@@ -89,6 +89,34 @@ def test_chinese_leak_never_fires_for_the_chinese_answer() -> None:
     assert answer_chinese_leak(surface, "zh") == ""
 
 
+def test_traditional_is_not_withheld_for_being_chinese() -> None:
+    """`zh-Hant` is Chinese, so an answer in it is not a leak (#531).
+
+    The reading this replaced — "non-Chinese means supported minus the default" —
+    classified Traditional as non-Chinese, so it withheld EVERY legitimate
+    Traditional answer: a 200 carrying the fallback copy instead of the answer.
+    That is the defect whose absence is asserted here.
+
+    The predicate is "does this text contain Chinese characters", and the
+    exemption is a property of the LANGUAGE rather than of the script — both
+    Chinese languages are exempt, exactly as `zh` always was.
+
+    Accepted limitation, recorded deliberately: a Traditional answer carrying
+    Simplified copy is NOT caught here, because telling the two scripts apart is
+    not what this predicate does. Closing it needs script-aware detection at the
+    guard, not a stricter call site. The second assertion is the other half of
+    the requirement — the languages this guard DOES judge still intercept Chinese
+    residue, so the exemption above opened nothing wider than the one tag.
+    """
+    traditional = AnswerSurface.from_public_blocks(
+        [{"kind": "text", "text": "訂單已強制停止，請檢查充電樁狀態。"}]
+    )
+    assert answer_chinese_leak(traditional, "zh-Hant") == ""
+
+    residue = AnswerSurface.from_public_blocks([{"kind": "text", "text": "订单已强制停止。"}])
+    assert answer_chinese_leak(residue, "en") != ""
+
+
 def test_unsupported_language_is_left_alone() -> None:
     """Upstream already resolves unknown tags to the default language."""
     surface = AnswerSurface.from_public_blocks([{"kind": "text", "text": "标题: 新加坡项目"}])

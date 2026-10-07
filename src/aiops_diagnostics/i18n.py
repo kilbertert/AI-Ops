@@ -58,7 +58,12 @@ class LanguageSpec:
 # computed from this list, and a consumer that enumerates languages itself is a
 # defect this list exists to prevent.
 LANGUAGES: tuple[LanguageSpec, ...] = (
+    # The SAME language in another script. `is_chinese` is true for both — that
+    # is the point of making it a declared property rather than deriving it from
+    # "is it the default": the output guard must not judge a legitimate
+    # Traditional answer a Chinese leak (#527's D-6, consumed here).
     LanguageSpec("zh", "Simplified Chinese", is_chinese=True),
+    LanguageSpec("zh-Hant", "Traditional Chinese", is_chinese=True),
     LanguageSpec("en", "English", is_chinese=False),
     LanguageSpec("de", "German", is_chinese=False),
     LanguageSpec("fr", "French", is_chinese=False),
@@ -109,6 +114,7 @@ def can_prompt_in(language: str) -> bool:
 #: the model is never asked to write in it.
 FREE_TEXT_UNAVAILABLE_MESSAGES: dict[str, str] = {
     "zh": "本入口暂不支持用该语言直接提问，请使用下方快捷问题。",
+    "zh-Hant": "本入口暫不支援用該語言直接提問，請使用下方快捷問題。",
     "en": ("This entry cannot take free-text questions in this language yet — please use a shortcut below."),
     "de": (
         "Dieser Einstieg kann noch keine Freitextfragen in dieser Sprache annehmen "
@@ -244,6 +250,12 @@ QA_FALLBACK_MESSAGES: dict[str, dict[str, str]] = {
         "generation_failed": "本次回答没能完成生成，请稍后重试。",
         "limited": "本次检索未能完成，请稍后重试或换个问法。",
     },
+    "zh-Hant": {
+        "not_found": "知識庫中沒有找到與當前問題直接相關的資料，暫時無法提供有依據的回答。",
+        "unavailable": "當前知識庫暫時不可用，本次回答無法基於知識庫確認，請稍後重試。",
+        "generation_failed": "本次回答沒能完成生成，請稍後重試。",
+        "limited": "本次檢索未能完成，請稍後重試或換個問法。",
+    },
     "en": {
         "not_found": (
             "No directly relevant material was found in the knowledge base; "
@@ -355,6 +367,10 @@ PROMO_EMPTY_MESSAGES: dict[str, dict[str, str]] = {
         "case_exploration": "当前没有可用的客户案例，未检索到匹配的宣传资料。",
         "solution_discovery": "当前没有可用的行业方案，未检索到匹配的宣传资料。",
     },
+    "zh-Hant": {
+        "case_exploration": "當前沒有可用的客戶案例，未檢索到匹配的宣傳資料。",
+        "solution_discovery": "當前沒有可用的行業方案，未檢索到匹配的宣傳資料。",
+    },
     "en": {
         "case_exploration": "No matching customer case is available in the promotional library.",
         "solution_discovery": "No matching industry solution is available in the promotional library.",
@@ -409,6 +425,10 @@ PROMO_UNAVAILABLE_MESSAGES: dict[str, dict[str, str]] = {
     "zh": {
         "case_exploration": "客户案例服务暂时不可用，请稍后重试。",
         "solution_discovery": "行业方案服务暂时不可用，请稍后重试。",
+    },
+    "zh-Hant": {
+        "case_exploration": "客戶案例服務暫時不可用，請稍後重試。",
+        "solution_discovery": "行業方案服務暫時不可用，請稍後重試。",
     },
     "en": {
         "case_exploration": "Customer cases are temporarily unavailable. Please try again later.",
@@ -476,6 +496,11 @@ CLARIFICATION_MESSAGES: dict[str, dict[str, str]] = {
         "context": "请补充订单或设备等必要信息后，我才能继续处理。",
         "wrong_entry": "请点击页面上的快捷按钮进入对应页面。",
     },
+    "zh-Hant": {
+        "order_no": "請先選擇需要檢測的訂單後，我才能繼續處理。",
+        "context": "請補充訂單或裝置等必要資訊後，我才能繼續處理。",
+        "wrong_entry": "請點選頁面上的快捷按鈕進入對應頁面。",
+    },
     "en": {
         "order_no": "Please select the order you want checked before I can continue.",
         "context": "Please provide the order or device details before I can continue.",
@@ -536,6 +561,7 @@ CLARIFICATION_FALLBACK_KEY = "context"
 # German answer, and the output guard then rejected the whole answer.
 ZERO_ORDER_REMINDER_MESSAGES: dict[str, str] = {
     "zh": "提供订单号可获得更精确的结果哦。",
+    "zh-Hant": "提供訂單號可獲得更精確的結果哦。",
     "en": "Providing an order number gives you a more precise result.",
     "de": "Mit einer Auftragsnummer erhalten Sie ein präziseres Ergebnis.",
     "fr": "Indiquer un numéro de commande permet un résultat plus précis.",
@@ -577,6 +603,11 @@ DIAGNOSIS_FAILURE_MESSAGES: dict[str, dict[str, str]] = {
         "incomplete": "诊断未能形成结论，已记录运行详情供人工排查。",
         "insufficient_evidence": "现有证据不足以形成诊断结论，已记录运行详情供人工排查。",
         "out_of_scope": "该订单不在当前授权范围内，无法继续诊断。",
+    },
+    "zh-Hant": {
+        "incomplete": "診斷未能形成結論，已記錄執行詳情供人工排查。",
+        "insufficient_evidence": "現有證據不足以形成診斷結論，已記錄執行詳情供人工排查。",
+        "out_of_scope": "該訂單不在當前授權範圍內，無法繼續診斷。",
     },
     "en": {
         "incomplete": "The diagnosis could not reach a conclusion; run details were recorded for review.",
@@ -685,6 +716,13 @@ DIAGNOSIS_ERROR_MESSAGES: dict[str, dict[str, str]] = {
         "interrupted": "服务重启导致本次诊断中断，请重新发起。",
         "generic": "本次诊断未能完成。",
     },
+    "zh-Hant": {
+        "out_of_scope": "該訂單不在當前授權範圍內。",
+        "failed": "本次診斷未能完成，請稍後重試。",
+        "expired": "本次診斷已超時，請重新發起。",
+        "interrupted": "服務重啟導致本次診斷中斷，請重新發起。",
+        "generic": "本次診斷未能完成。",
+    },
     "en": {
         "out_of_scope": "This order is outside the authorized scope.",
         "failed": "This diagnosis could not be completed. Please try again later.",
@@ -787,6 +825,36 @@ def language_name(language: str) -> str:
     return LANGUAGE_NAMES.get(language, LANGUAGE_NAMES[DEFAULT_LANGUAGE])
 
 
+def _declared_tag(tag: str) -> str:
+    """Fold a header tag onto a DECLARED language tag.
+
+    `zh-Hant` must survive as itself: a different script of the same language.
+    Collapsing it to `zh` was one of the two places a Traditional request
+    silently became Simplified. Every other region/script subtag still folds —
+    the fold is skipped only when the whole tag is one we declare, so `en-GB`
+    stays `en`.
+    """
+    # Case-insensitively: BCP 47 tags are case-insensitive and the header is
+    # lowercased before it gets here, while the declared tag carries its
+    # canonical casing (`zh-Hant`).
+    by_folded = {declared.lower(): declared for declared in SUPPORTED_LANGUAGES}
+    if tag in by_folded:
+        return by_folded[tag]
+    # A REGION subtag is dropped; a SCRIPT subtag is kept. `zh-Hant-TW` is
+    # Traditional as written in Taiwan, so folding it to `zh` answers in
+    # Simplified — the same silent script collapse this function exists to stop,
+    # one subtag further out. BCP 47 fixes the order as `language-script-region`,
+    # so the script is the second subtag when one is present (a script subtag is
+    # exactly four letters; a region is two or three). It is checked against the
+    # inventory rather than assumed, so an unknown script still folds.
+    parts = tag.split("-")
+    if len(parts) >= 3 and len(parts[1]) == 4:
+        with_script = f"{parts[0]}-{parts[1]}"
+        if with_script in by_folded:
+            return by_folded[with_script]
+    return parts[0]
+
+
 def resolve_language(accept_language: str | None) -> str:
     """Resolve one supported language tag from an ``Accept-Language`` header.
 
@@ -819,7 +887,7 @@ def resolve_language(accept_language: str | None) -> str:
                     break
         if malformed or weight <= 0.0:
             continue
-        base = tag.split("-", 1)[0]
+        base = _declared_tag(tag)
         if base not in SUPPORTED_LANGUAGES:
             continue
         if best is None or weight > best[0]:

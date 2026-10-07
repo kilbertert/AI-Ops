@@ -255,6 +255,61 @@ def test_language_fields_and_fallback(tmp_path: Path) -> None:
     de = client.get("/v1/shortcuts", headers={**_HEADERS, "Accept-Language": "de"}).json()
     assert de["shortcuts"][0]["label"] == "客户案例"
     assert de["shortcuts"][0]["description"] == "查看案例"
+    # zh-Hant has no copy on THIS row either — it was created before the tag
+    # existed. It falls back to zh and, crucially, REPORTS `zh`: the honesty half
+    # of the gap. Traditional copy on a freshly seeded row is covered by
+    # `test_zh_hant_request_serves_traditional_shortcut_copy` below (#531).
+    hant = client.get("/v1/shortcuts", headers={**_HEADERS, "Accept-Language": "zh-Hant"}).json()
+    assert hant["shortcuts"][0]["label"] == "客户案例"
+    assert hant["shortcuts"][0]["language"] == "zh", "缺繁体文案时必须如实报服务语言"
+
+
+def test_zh_hant_request_serves_traditional_shortcut_copy(tmp_path: Path) -> None:
+    """The HTTP surface serves Traditional copy for `zh-Hant` (#531).
+
+    Asserted over the real endpoint, not the store, because the two halves of
+    this ticket sit on opposite sides of it: the tag must survive resolution on
+    the way in, and the row's copy must be selected on the way out. A store call
+    would exercise only the second.
+    """
+    client = _client(tmp_path)
+    created = client.post(
+        "/v1/shortcuts",
+        headers=_HEADERS,
+        json={
+            "business_entry": "consumer",
+            "code": "case_exploration",
+            "intent": "case_exploration",
+            "requires_order": False,
+            "sort_order": 10,
+            "labels": {
+                "zh": "客户案例",
+                "zh-Hant": "客戶案例",
+                "en": "Customer Cases",
+            },
+        },
+    )
+    assert created.status_code == 201, created.text
+    shortcut = created.json()
+    published = client.post(
+        f"/v1/shortcuts/{shortcut['shortcut_id']}/publish",
+        headers=_HEADERS,
+        json={"expected_revision": shortcut["revision"]},
+    )
+    assert published.status_code == 200, published.text
+
+    hant = client.get("/v1/shortcuts", headers={**_HEADERS, "Accept-Language": "zh-Hant"}).json()
+    assert hant["shortcuts"][0]["label"] == "客戶案例"
+    assert hant["shortcuts"][0]["language"] == "zh-Hant"
+
+    # The control: `zh` still gets Simplified from the same row, so this is
+    # language selection rather than a blanket relabelling.
+    plain = client.get("/v1/shortcuts", headers=_HEADERS).json()
+    assert plain["shortcuts"][0]["label"] == "客户案例"
+
+    # And `en` is untouched by the addition of a second Chinese tag.
+    english = client.get("/v1/shortcuts", headers={**_HEADERS, "Accept-Language": "en"}).json()
+    assert english["shortcuts"][0]["label"] == "Customer Cases"
 
 
 def test_management_requires_scope_and_roles(tmp_path: Path) -> None:
@@ -1205,10 +1260,15 @@ def test_copy_gap_gate_names_every_missing_field_and_language() -> None:
     # lacks en as well, which is the field that lines the fixture up with the
     # live gap. Derived from the inventory, not hand-copied: a literal here has
     # to be edited on every language addition, which is the drift #527 removed.
-    from aiops_diagnostics.i18n import NON_CHINESE_LANGUAGES
 
     assert {gap.field for gap in gaps} == {"label", "description", "question_template"}
-    assert {gap.language for gap in gaps} == set(NON_CHINESE_LANGUAGES)
+    # Every non-Chinese language the row lacks, plus the OTHER Chinese script:
+    # `zh-Hant` is a supported language in its own right, so a `zh`-only row is
+    # missing it too. Expressed as the inventory minus the authority rather than
+    # as NON_CHINESE_LANGUAGES, which deliberately excludes both Chinese tags.
+    from aiops_diagnostics.i18n import SUPPORTED_LANGUAGES
+
+    assert {gap.language for gap in gaps} == set(SUPPORTED_LANGUAGES) - {"zh"}
     missing_pairs = {(gap.field, gap.language) for gap in gaps}
     assert ("description", "en") in missing_pairs
     assert ("label", "en") not in missing_pairs

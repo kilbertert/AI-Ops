@@ -20,6 +20,7 @@ from aiops_diagnostics.async_job_lifecycle import (
     RUN,
     expire_statements,
 )
+from aiops_diagnostics.i18n import DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES
 from aiops_diagnostics.private_files import ensure_private_directory, protect_private_file
 from aiops_diagnostics.redaction import redact_text
 
@@ -1172,9 +1173,20 @@ def _optional_indicator_code(value: str | None) -> str | None:
 
 
 def _language(value: str) -> str:
-    candidate = (value or "zh").strip().lower()
+    """Normalise a language tag for storage.
+
+    A DECLARED tag is stored as declared — `zh-Hant` stays `zh-Hant`. The old
+    unconditional `split("-", 1)[0]` was the second of the two places a
+    Traditional request silently became Simplified: even after the resolver
+    preserved the script, the row would have stored `zh`, so the diagnosis and
+    the report would report Simplified for an answer written in Traditional.
+    """
+    candidate = (value or DEFAULT_LANGUAGE).strip().lower()
     if not re.fullmatch(r"[a-z]{2,8}(?:-[a-z0-9]{2,8})?", candidate):
         raise ValueError("language is invalid")
+    for declared in SUPPORTED_LANGUAGES:
+        if declared.lower() == candidate:
+            return declared
     return candidate.split("-", 1)[0]
 
 

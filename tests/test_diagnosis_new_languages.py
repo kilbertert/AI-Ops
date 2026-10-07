@@ -116,12 +116,16 @@ def test_the_guard_covers_the_new_languages(language: str) -> None:
     assert answer_chinese_leak("Balance exhausted, order stopped", language) == ""
 
 
-def test_traditional_chinese_is_out_of_scope_for_this_ticket() -> None:
-    """`zh-Hant` is not in the inventory: adding it is #531's job, and until it
-    is added the tag folds to `zh` — so the diagnosis surface cannot serve it,
-    and this ticket does not pretend otherwise."""
-    assert "zh-Hant" not in SUPPORTED_LANGUAGES
-    assert resolve_language("zh-Hant") == "zh"
+def test_traditional_chinese_arrived_with_its_own_ticket() -> None:
+    """`zh-Hant` was out of scope for #541 and is IN scope now that #531 landed.
+
+    The earlier version of this test asserted it was absent and that the tag
+    folded to `zh`. Both are false now — that is what #531 changed — so the
+    assertion records the handover rather than being deleted.
+    """
+    assert "zh-Hant" in SUPPORTED_LANGUAGES
+    assert resolve_language("zh-Hant") == "zh-Hant"
+    assert can_prompt_in("zh-Hant") is True
 
 
 def test_every_model_prompting_route_normalises_a_non_promptable_language() -> None:

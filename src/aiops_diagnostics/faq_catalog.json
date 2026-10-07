@@ -26,6 +26,10 @@
           "pt": {
             "question": "Diferença entre carregador rápido, ultra e lento",
             "answer": "No local existem três tipos de pontos de recarga — escolha pela urgência da viagem e pela potência que o seu carro aceita:\nCarregadores rápidos DC (normalmente 60–240 kW): entregam corrente contínua de alta tensão direto à bateria; normalmente 20%→80% em 30–45 minutos. Ideais para a maioria dos elétricos e híbridos plug-in com carga rápida.\nCarregadores ultrarrápidos com cabo refrigerado a líquido (360–600 kW): cabos de alta corrente, mais finos e leves. Com plataforma de 800V (ex. Xpeng G9/G6, Zeekr 001/007, Li Auto MEGA/L versões topo, Porsche Taycan), recupera 300–400 km em apenas 10–15 minutos.\nCarregadores lentos AC (7 kW): 220V de corrente alternada convertidos pelo carregador de bordo (OBC); a carga completa leva 6–8 horas — ideal enquanto faz compras, refeições ou trabalha.\n💡 Dica: DC e AC usam conectores diferentes (9 pinos grande vs 7 pinos pequeno). Confira a tomada do seu carro antes de conectar."
+          },
+          "zh-Hant": {
+            "question": "快充樁、超充樁與慢充樁有什麼區別？我的車應該選哪種？",
+            "answer": "場站內的充電樁主要分為以下三類，您可以根據當前行程緊急程度和愛車支援的充電功率進行選擇：\n直流快充樁（常見功率 60kW～240kW）：直接輸出高壓直流電為動力電池充電，通常 30～45 分鐘即可將電量從 20% 充至 80%。適合絕大多數純電動車與支援快充的插電混動車型進行日常快速補能。\n液冷超充樁（功率 360kW～600kW）：採用大電流液冷迴圈散熱技術，充電線纜更細、更輕便。若您的車輛具備 800V 高壓超充平臺（如小鵬G9/G6、極氪001/007、理想MEGA/L系列高配、保時捷Taycan等），最快 10～15 分鐘即可補充 300～400 公里續航。\n交流慢充樁（功率 7kW）：輸出 220V 交流電，依靠車內充電機（OBC）將交流轉為直流。充滿通常需要 6～8 小時，適合在商場逛街、觀影、就餐或寫字樓辦公等長時間停放場景使用。\n💡 貼士建議：快充與慢充採用不同規格的充電介面（快充為 9 孔大插頭，慢充為 7 孔小插頭），插槍前請先核對車輛插口型別。"
           }
         }
       },
@@ -53,6 +57,10 @@
           "pt": {
             "question": "Estacionamento gratuito e isenção",
             "answer": "A maioria das estações parceiras inclui estacionamento gratuito ou com desconto durante a recarga:\nLimiar: uma ordem de recarga que cumpra o requisito base (normalmente ≥2 kWh entregues ou ≥15 minutos de carga) dá direito a 2 horas de estacionamento gratuito (veja a sinalização da estação).\nValidação automática: cadastre a placa real em App → Perfil → Meus veículos. Ao fim da carga, o sistema comunica o benefício à cancela automaticamente e você sai sem parar.\nExcedente: o tempo além do período gratuito é cobrado pelo estacionamento conforme os valores afixados e liquidado na cancela — nunca entra na sua fatura de recarga.\n💡 Dica: cadastre a placa antes de chegar para sair sem espera."
+          },
+          "zh-Hant": {
+            "question": "在場站充電可以享受免費停車嗎？停車費如何減免？",
+            "answer": "絕大多數合作場站均為您提供專屬的充電停車減免服務：\n減免門檻：單筆充電訂單滿足基礎要求（通常為充電量滿 2 度電 或 充電時長滿 15 分鐘），即可享受 2 小時免費停車（具體以場站詳情頁標牌為準）；\n減免方式：\n【自動減免】：若您已在 App「個人中心 - 我的車輛」綁定了真實車牌，系統會在充電完成後自動向車場道閘推送減免資訊，離場時直接抬杆通行；\n超時說明：超過免費減免時長（如停車超過 2 小時）的部分，將由停車場物業按其公示標準收取，該費用由車場道閘直接結算，不計入充電賬單中。\n💡 貼士建議：建議進場前先在 App 個人中心繫結真實車牌，離場無需等待即可無感抬杆通行。"
           }
         }
       },
@@ -80,6 +88,10 @@
           "pt": {
             "question": "Reserva de ponto de carga e não comparecimento",
             "answer": "Nas estações com reserva, as regras são:\nTempo de reserva: escolha um ponto livre marcado como reservável e toque em Reservar — a plataforma o retém por até 120 minutos; outros usuários que escanearem verão o aviso de reservado.\nTaxa: cobra-se um pequeno valor de reserva (normalmente 5–10 ¥) por período.\nCancelamento gratuito: cancele em até 10 minutos após reservar e o valor é reembolsado integralmente na hora.\nFalta: sem conexão em 30 minutos, a vaga é liberada automaticamente e o valor é retido para compensar a vaga ociosa.\n💡 Dica: planeje a rota para chegar dentro da janela reservada."
+          },
+          "zh-Hant": {
+            "question": "可以提前預約鎖定充電樁嗎？預約收費嗎？爽約怎麼處理？",
+            "answer": "支援提供預約功能的場站，操作規則如下：\n保留時效：在場站列表選擇支援預約的空閒樁，點選【預約充電】，系統會在平臺鎖定併為您保留目標充電槍最長 120 分鐘，期間其他使用者掃碼將提示已被預約佔用；\n費用說明：預約時系統會按照每時段扣除小額預約金（如 5～10 元）\n免費取消：若臨時行程有變，在預約後 10 分鐘內可免費取消預約，預約金即刻全額退款；\n爽約罰則：若超過 30 分鐘未到場插槍，系統將自動釋放車位，並扣除預約金用於補償場站車位閒置損失。\n💡 貼士建議：預約成功後請注意規劃行駛路線，確保在預約時間內抵達場站。"
           }
         }
       },
@@ -107,6 +119,10 @@
           "pt": {
             "question": "Vaga bloqueada por carro a combustão / não carregando",
             "answer": "Apoio no local: fale com nossa equipe pelo chat do App ou avise o pessoal de ronda — a operação ajudará a contatar o dono do veículo bloqueante para removê-lo."
+          },
+          "zh-Hant": {
+            "question": "場站車位被燃油車佔位或非充電車佔用怎麼辦？",
+            "answer": "現場運維協助：您也可以在 App 對話方塊聯絡客服或告知現場安全巡檢人員，運維人員將協助聯絡車主挪車；"
           }
         }
       },
@@ -134,6 +150,10 @@
           "pt": {
             "question": "Comodidades da estação e acesso noturno",
             "answer": "Estrutura: na página de detalhes da estação no App, a aba Comodidades mostra se há banheiros, sala de descanso, vending machines, Wi-Fi grátis, coberturas etc.\nHorários e cancelas: as estações podem ser 24 horas ou com horário limitado (ex. alguns shoppings 07:00–22:00). Havendo cancela noturna, a página de detalhes traz o aviso Orientação de entrada noturna; na cancela, informe ao segurança que vai recarregar e a passagem é liberada.\nSala de descanso: nas estações com sala própria, toque em Escanear para abrir a porta na tela de recarga do App e use grátis o ambiente climatizado com água.\n💡 Dica: se a cancela não abrir à noite, ligue para o telefone de plantão 24 h afixado no carregador."
+          },
+          "zh-Hant": {
+            "question": "場站有休息室、衛生間或 WiFi 嗎？夜間進場是否有門禁？",
+            "answer": "配套設施查詢：您可以在 App 場站詳情頁的「場站配套」標籤中檢視當前站點是否配備公共衛生間、車主休息室、自動販賣機、免費 WiFi、遮陽雨棚等設施；\n營業時間與門禁：場站分為 24 小時全天開放場站與定時開放場站（如部分商場地下車庫為 07:00～22:00）。若場站設有夜間地庫門禁，場站詳情頁會明確在圖片標註「夜間進場指引」，到達道閘處可告知保安前往充電即可放行；\n休息室使用：配備專屬休息室的場站，通常支援在 App 充電中頁面點選【掃碼開門】，即可免費進入休息室享用空調與飲水設施。\n💡 貼士建議：夜間進場充電如遇道閘未開，可撥打樁身張貼的 24 小時場站值班電話聯絡開門。"
           }
         }
       },
@@ -161,6 +181,10 @@
           "pt": {
             "question": "Passo a passo para plugar e iniciar recarga",
             "answer": "Siga esta sequência padrão para iniciar sem problemas:\nEstacione e desligue: entre bem na vaga, coloque P e desligue totalmente o veículo.\nAbra a tampa de carga: abertura grande para DC, pequena para AC.\nConecte com firmeza: retire o conector do suporte, alinhe e empurre reto até ouvir o clique — o trava mecânico deve assentar por completo.\nEscaneie ou passe o cartão: abra o App ou WeChat/Alipay, escaneie o QR do carregador, escolha o modo (carga automática, por valor…), confirme e toque em Iniciar recarga.\nAcompanhe o início: o indicador passa de azul (livre) a verde (carregando) e o App mostra kWh, potência e tensão em tempo real.\n💡 Dica: cabos DC são pesados; apoie o conector com uma mão e empurre o punho com a outra para os pinos assentarem bem."
+          },
+          "zh-Hant": {
+            "question": "標準的插槍與掃碼充電步驟是怎樣的？",
+            "answer": "請按照以下標準順序操作，確保充電順暢開啟：\n停穩熄火：將車輛平穩停入充電車位，掛入 P 檔並徹底關閉整車電源（車輛處於熄火下電狀態）；\n開啟充電口：開啟車輛充電口蓋（快充口為大孔，慢充口為小孔）；\n插緊充電槍：從樁體取下充電槍，將槍頭對準車輛充電口平直用力推入到底，直到聽到清脆的“咔噠”聲，確保機械卡扣完全鎖死；\n掃碼或刷卡：開啟 App 或微信/支付寶掃描樁身二維碼，選擇充電模式（如自動充滿、按金額充），確認後點擊【開始充電】；\n觀察啟動狀態：樁體指示燈會由藍色（空閒）轉為綠色（充電中），同時手機頁面進入充電監控介面，顯示即時電量、功率與電壓，即代表成功開啟充電。\n💡 貼士建議：直流快充槍線纜較重，插槍時建議一手托住槍身、一手扶握手柄用力推入，避免因重力下垂導致針腳接觸不良。"
           }
         }
       },
@@ -188,6 +212,10 @@
           "pt": {
             "question": "Falha ao iniciar ou carregador sem resposta",
             "answer": "Siga estes quatro passos — a maioria das falhas de partida se resolve rápido:\nPasso 1 – O conector está todo encaixado? Desconecte e verifique sujeira, objetos ou água no conector e na tomada; depois empurre com firmeza até o clique do trava mecânico.\nPasso 2 – O botão de emergência foi acionado? Verifique o botão vermelho cogumelo PARADA DE EMERGÊNCIA na frente ou lateral do carregador; se acionado, gire no sentido horário até destravar.\nPasso 3 – O carro está totalmente desligado? Ignição cortada, marcha P, luzes e ar-condicionado desligados e portas destravadas — alguns modelos recusam carga com o modo antifurto armado.\nPasso 4 – Escaneie de novo: aguarde 10 segundos e escaneie o QR novamente. Se falhar duas vezes, pode haver falha temporária de comunicação ou hardware — use o ponto livre vizinho; a falha fica registrada automaticamente.\n💡 Dica: se vários carregadores seguidos falham, talvez a comunicação da bateria ou o carregador de bordo estejam autobloqueados — desligue tudo, tranque o carro, espere 5 minutos e tente de novo."
+          },
+          "zh-Hant": {
+            "question": "插槍掃碼後，裝置沒有反應或提示“啟動失敗”怎麼辦？",
+            "answer": "請按以下四步順序排查，絕大部分啟動問題可快速解決：\n第 1 步【檢查槍頭是否插到底】：拔出充電槍，檢查槍頭孔內和車身插座是否有泥沙異物或積水；重新用力將槍頭推插到底，務必聽到清脆的“咔噠”機械鎖釦合聲；\n第 2 步【檢查急停旋鈕是否被按下】：檢視充電樁正面或側面的紅色蘑菇頭【緊急停機 (EMERGENCY STOP)】旋鈕。若被意外按下，請順時針旋轉旋鈕使其向外彈出復位；\n第 3 步【確認車輛完全熄火】：請確保車輛完全熄火、掛入 P 檔、關閉車燈與車載空調，解開車門中控鎖（部分車型處於防盜鎖死狀態下會拒絕充電連線）；\n第 4 步【重新掃碼啟動】：等待 10 秒後重新使用 App 掃描樁身二維碼。若連續嘗試 2 次仍無法啟動，該樁可能存在臨時通訊硬體故障，建議您挪至相鄰空閒樁充電，系統已同步記錄該樁故障狀態。\n💡 貼士建議：若更換多個樁位均提示啟動失敗，可能是車輛動力電池通訊或車載充電機臨時自鎖，建議整車斷電鎖車靜置 5 分鐘後重啟嘗試。"
           }
         }
       },
@@ -215,6 +243,10 @@
           "pt": {
             "question": "Como funciona e ativar o Autocharge (Plug & Charge)",
             "answer": "O que é: com o Plug & Charge (Autocharge) você dispensa o QR. Ao conectar, o carregador identifica o veículo pelo VIN (número de chassi), inicia a carga automaticamente e liquida no método de pagamento sem senha vinculado ao desconectar.\nComo ativar: App → Perfil → Plug & Charge → Adicionar veículo. Informe placa e VIN e garanta saldo suficiente na carteira para uma sessão.\nDesligar/desvincular: emprestou ou trocou de carro? A função pode ser desligada ou desvinculada a qualquer momento no App.\n💡 Dica: alguns modelos antigos ou com protocolos privados não padrão não transmitem o VIN automaticamente — consulte a lista de compatibilidade."
+          },
+          "zh-Hant": {
+            "question": "什麼是“即插即充”？如何開通與使用？",
+            "answer": "功能介紹：“即插即充”是面向車主的高效補能功能。開通後，無需每次掏出手機掃碼，到達場站直接插槍，樁端會自動識別車輛車架號（VIN碼）並自動開啟充電，拔槍後自動通過繫結的免密支付結算；\n開通方式：開啟 App，進入【我的】-【即插即充】-【新增車輛】，輸入您的車牌號與車輛識別程式碼（VIN碼），並充值錢包足夠完成充電服務的金額即可；\n關閉與解綁：如您更換車輛或將車輛借與他人使用，可在 App 內隨時一鍵關閉或解綁即插即充功能。\n💡 貼士建議：部分老舊車型或非國標私有協議車輛可能不支援硬體 VIN 碼自動透傳，具體以車型適配列表為準。"
           }
         }
       },
@@ -242,6 +274,10 @@
           "pt": {
             "question": "Vincular cartão RFID e iniciar por aproximação",
             "answer": "Vincular o cartão: App → Perfil → Gestão de cartões de recarga → Vincular novo cartão; informe o número de 16 dígitos e o código de verificação do verso.\nSaldo compartilhado: após vincular, o cartão físico usa direto o saldo da carteira do App ou seus benefícios de membro — não é preciso recarregar o cartão à parte.\nCarregar com o cartão: conecte o conector e encoste o cartão por 2–3 segundos na área RFID do carregador; ele apita, reconhece a conta e inicia a carga automaticamente.\nEncerrar com o cartão: ao terminar, encoste o mesmo cartão no leitor novamente — o equipamento corta a energia e fecha a ordem.\n💡 Dica: o cartão físico é ideal em garagens subterrâneas com sinal fraco ou para motoristas mais velhos."
+          },
+          "zh-Hant": {
+            "question": "物理充電卡（RFID卡）如何繫結、充值與刷卡充電？",
+            "answer": "繫結充電卡：在 App 內進入【我的】-【充電卡管理】-【繫結新卡】，輸入實體卡背面的 16 位卡號與初始校驗碼完成繫結；\n卡內餘額與賬戶互通：綁卡後，實體卡直接共享您 App 賬戶內的錢包餘額或會員套餐權益，無需單獨向實體卡充值；\n刷卡充電流程：插好充電槍後，將實體卡貼在充電樁正面的【刷卡感應區（RFID標識）】停留 2～3 秒，樁端蜂鳴提示並識別賬戶後即可自動啟動充電；\n刷卡結束充電：充電完成後，再次將同一張實體卡貼在感應區刷卡，裝置即刻停止供電並結算訂單；\n💡 貼士建議：實體卡特別適合在地下車庫等手機訊號弱的環境下，或供長輩駕駛員使用。"
           }
         }
       },
@@ -269,6 +305,10 @@
           "pt": {
             "question": "Conector travado? Guia de desbloqueio de emergência",
             "answer": "Não puxe com força! Normalmente o trava antifurto do veículo ou o da unidade não liberou. Tente nesta ordem:\nMétodo 1 – Destravar o carro várias vezes (resolve ~90% dos casos): na maioria dos modelos (Tesla, BYD, VW, Zeekr, Xpeng…) o trava da tampa está ligado às fechaduras — aperte 2–3 vezes o botão de destravar da chave ou toque na central «Encerrar carga e destravar tomada de carga».\nMétodo 2 – Empurrar-pressionar-puxar: empurre o conector firmemente para dentro da tomada (uma mão) para aliviar o trava, mantenha o microinterruptor do punho apertado (outra mão) e puxe reto e rápido sem soltar.\nMétodo 3 – Puxe a alça mecânica de emergência do carro: a maioria dos elétricos tem um anel de liberação manual (normalmente laranja/amarelo ou com ícone de plugue) no porta-malas, perto da tampa de carga, ou dentro dela; puxe levemente, o trava libera e você desconecta normalmente.\nMétodo 4 – Destravamento remoto pelo suporte: se nada funcionar, envie o número do carregador no chat do assistente — o suporte pode enviar comando de destravamento remoto ou despachar equipe ao local.\n⚠️ Atenção: forçar o conector pode quebrar o trava interno da tomada do veículo ou danificar os pinos de comunicação de alta tensão. Valores de ociosidade causados por conector travado são reembolsados integralmente."
+          },
+          "zh-Hant": {
+            "question": "充電結束後拔不出充電槍怎麼辦？（應急解鎖全指南）",
+            "answer": "切勿大力生拉硬拽！這通常是車輛防盜電子鎖或樁端鎖止機構未釋放，請依次嘗試以下解鎖方法：\n【方法一：車輛中控連續解鎖（解決 90% 的卡槍問題）】\n大部分車型（如特斯拉、比亞迪、大眾、極氪、小鵬等）的充電口防盜鎖與車門鎖聯動：\n拿出車鑰匙，連續按 2～3 次【開鎖鍵】；\n或進入車內在中控屏上點選“停止充電並解鎖充電口”。\n【方法二：推入按壓拔槍法（消除機械鎖釦應力）】\n單手托住充電槍用力向車身插孔內部推緊（減輕鎖舌卡滯阻力），另一隻手全力按死槍柄上的微動開關按鍵，保持按壓狀態快速向外平直拔出。\n【方法三：拉動車端應急機械拉繩】\n大部分純電動車在後備箱內側（靠近充電口一側的內襯板拉環裡）或充電口蓋內側設有手動應急拉繩（通常為橙色/黃色或帶有充電插頭圖示）；\n輕輕向外拉動拉繩，即可手動機械釋放鎖舌，隨後正常拔槍。\n【方法四：聯絡客服遠端下發解鎖指令】\n若上述方法均無效，請在智慧客服對話中傳送當前樁號，客服可直接向樁端下發遠端解鎖指令或派遣現場運維人員前往協助。\n⚠️ 注意事項：強行暴力拉扯可能導致車身充電插座內部機械卡扣斷裂或損壞高壓通訊針腳。因卡槍產生的超時佔位費一律全額退款。"
           }
         }
       },
@@ -296,6 +336,10 @@
           "pt": {
             "question": "Por que o carregamento parou inesperadamente?",
             "answer": "Uma parada inesperada no meio da carga normalmente é um mecanismo de autoproteção cumprindo sua função:\nProteção de isolação: se a impedância de isolação do circuito de alta tensão cair (sobretudo com chuva ou umidade), o sistema desarma em milissegundos para evitar fuga de corrente.\nProteção por temperatura: no calor intenso ou em alta potência, quando a bateria atinge o limite de segurança, o BMS do carro manda parar; deixe o veículo esfriar 10–15 minutos e recarregue.\nCorte por carga cheia: alguns carros são configurados para parar em um alvo de carga (80% ou 90%).\nLiquidação: após parada antecipada, o sistema mantém os kWh entregues e liquida normalmente; o prepago não consumido volta ao meio de pagamento original. Você pode simplesmente trocar de carregador.\n💡 Dica: se a carga cair após 1–2 minutos em vários carregadores diferentes, leve o carro à concessionária para verificar o carregador de bordo ou a isolação de alta tensão."
+          },
+          "zh-Hant": {
+            "question": "充電過程中突然自動停止（意外跳槍）是什麼原因？",
+            "answer": "充電中途意外中斷，通常由以下幾種系統自檢保護機制觸發，屬於正常安全防範動作：\n絕緣檢測保護：當裝置或車端檢測到高壓回路絕緣阻抗偏低（尤其在陰雨天氣或潮溼環境下），為防止漏電觸電，系統會自動毫秒級斷電跳閘；\n電池過溫保護：在夏季高溫天氣或高功率超充時，動力電池溫度若達到安全閾值上限，車輛 BMS 會向充電樁傳送終止指令；建議車輛熄火通風靜置 10～15 分鐘降溫後再充；\n充滿自停保護：部分車型設定了充電電量上限（例如車機設定充到 80% 或 90% 即停止）；\n費用結算說明：中途跳槍後，系統會自動儲存已充度數並進行最終結算，未使用的預付金額會原路退回，請您放心更換其他樁位繼續充電。\n💡 貼士建議：若連續在多臺充電樁上均出現充 1～2 分鐘即跳槍，建議前往車輛 4S 店檢測車載充電機或電池高壓系統絕緣效能。"
           }
         }
       },
@@ -323,6 +367,10 @@
           "pt": {
             "question": "Por que a potência de recarga é menor que a indicada?",
             "answer": "A potência real de carga não é a potência nominal do carregador — resulta do estado da bateria e do rateio dinâmico do equipamento:\nAcima de 80% – fase de gotejamento: para proteger as células e evitar lítio metálico, o BMS pede forte redução de corrente; a potência cai em degraus (ex. 80 kW → 15–30 kW). É proteção normal.\nDivisão em carregador de dois conectores: se outro carro carrega no bico vizinho, os módulos dividem a potência igualmente (120 kW → 60 kW + 60 kW); quando ele sai, a potência sobe de novo.\nProteção ao frio: abaixo de 0 °C a atividade da bateria cai; parte da energia aquece primeiro a bateria e a carga acelera quando as células atingem a temperatura de trabalho.\nLimite do próprio carro: alguns PHEV e plataformas de 400V são limitados de fábrica a 30–60 kW — mesmo num ultrarrápido de 480 kW, carregam no máximo permitido pelo veículo.\n💡 Dica: no dia a dia, desligue em 80–85% — é onde a eficiência global é maior e a espera menor."
+          },
+          "zh-Hant": {
+            "question": "為什麼實際充電功率比標稱慢很多？標稱 120kW 為什麼實際只有 30kW？",
+            "answer": "實際充電功率並不等於充電樁標稱的最大額定功率，而是由【車輛動力電池狀態】與【充電樁動態分配】共同決定的：\nSOC > 80% 涓流保護階段：當電量充到 80% 以上時，為了保護鋰電芯壽命、防止電池析鋰起火，車輛 BMS 會主動要求樁端大幅降低電流，功率會逐漸從 80kW 階梯式降至 15～30kW，屬於正常電池保護特性；\n單樁雙槍功率分流：若您使用的是雙槍充電樁，且相鄰槍位有另一輛車同時充電，樁內功率模組會自動均分（如 120kW 均分為 60kW + 60kW）。當鄰車充滿離開後，功率會自動回升；\n冬季低溫冷車保護：氣溫低於 0℃ 時電池活性下降，剛開始充電時系統會將部分功率用於給電池自加熱，待電芯升溫至適宜工作溫度後充電速度才會提速；\n整車最大輸入功率限制：部分混合動力（PHEV）車型或 400V 平臺乘用車自身設計的最高充電功率上限即為 30kW～60kW，即使插在 480kW 超充樁上也只能以車輛自身允許的最大功率充電。\n💡 貼士建議：日常補能充到 80%～85% 即可拔槍出發，此時整體補能效率最高、等待耗時最短。"
           }
         }
       },
@@ -350,6 +398,10 @@
           "pt": {
             "question": "Como encerrar a recarga antes do término",
             "answer": "Três formas seguras de encerrar a carga antes do fim:\nParada remota pelo App (recomendada): na tela de recarga do App ou miniprograma, toque no botão vermelho Encerrar recarga e confirme (senha de pagamento quando aplicável); o fornecimento corta e a conta é gerada na hora.\nTela do carregador: no display, toque em Parar recarga e confirme escaneando o QR exibido ou passando o cartão.\nCentral do carro: na gestão de recarga do veículo, toque em Parar recarga e destravar conector.\nApós a parada, espere 5–10 segundos pelo clique do relé, destrave o punho, desconecte e devolva o conector ao suporte.\n⚠️ Atenção: nunca arranque o conector com a carga ativa; o arco elétrico danifica os pinos."
+          },
+          "zh-Hant": {
+            "question": "充電過程中如何提前主動停止充電？",
+            "answer": "如果您需要提前結束充電出發，支援以下三種安全停止方式：\nApp 遠端停止（推薦）：在 App 或小程式充電中頁面，點選紅色的【結束充電】按鈕，輸入支付密碼或確認後，系統即刻停止供電並生成結算賬單；\n樁端觸控屏停止：在充電樁顯示屏上找到【停止充電】觸控按鈕，按提示掃描螢幕二維碼或刷卡確認停止；\n車載中控停止：在車輛中控大屏的充電管理介面，點選【停止充電並解鎖插頭】。\n停止充電後，請等待 5～10 秒聽到樁內繼電器“咔噠”斷開聲，再按下手柄卡扣拔出充電槍，插回樁身卡槽。\n⚠️ 注意事項：嚴禁在未停止充電的情況下直接強行拔槍，以免產生電弧損傷插孔針腳。"
           }
         }
       },
@@ -377,6 +429,10 @@
           "pt": {
             "question": "Posso ligar o ar-condicionado durante a recarga?",
             "answer": "Sim, o ar-condicionado pode ficar ligado: durante a recarga você pode permanecer no carro com o contato ligado e o A/C funcionando.\nEfeito na carga: com o compressor e outros consumos ativos, a potência líquida que chega à bateria pode cair cerca de 2–5 kW e a carga completa demorar um pouco mais.\nSegurança: o BMS coordena o consumo do A/C com a gestão térmica da carga rápida e tem proteção completa contra altas temperaturas — sem dano à vida útil da bateria.\n💡 Dica: no calor extremo com ventiladores no máximo, esperar na sala climatizada é mais confortável e mais eficiente."
+          },
+          "zh-Hant": {
+            "question": "可以在車內開著空調充電嗎？對電池和充電速度有影響嗎？",
+            "answer": "支援開啟車內空調：在充電過程中，車主可以正常在車內通電並開啟空調休息；\n對充電功率的影響：開啟車載空調、音響等用電裝置時，部分輸入電量將直接供給車載低壓與空調壓縮機系統，因此流入動力電池的淨充電功率可能會略微下降 2～5kW，充滿耗時可能稍有延長；\n電池安全性保障：車輛的電池管理系統（BMS）會統一協調空調負荷與電池快充熱管理，具備完備的高溫保護機制，不會對動力電池壽命造成損害。\n💡 貼士建議：在夏季極高溫環境下超充時，若電池散熱風扇全速運轉，建議儘量在空調休息室等候，補能效率更佳。"
           }
         }
       },
@@ -404,6 +460,10 @@
           "pt": {
             "question": "Composição de tarifas e taxas por horário de uso (TOU)",
             "answer": "Custo total = energia elétrica + serviço de recarga:\nEnergia: conforme a tarifa horária publicada pela concessionária (tramos ponta, fora de ponta, intermediário e vale).\nServiço: cobre operação, manutenção e uso do equipamento.\nCobrança exata por tramo: se a sessão cruza períodos tarifários (ex. intermediário 11:45 → ponta 12:30), o sistema divide a medição exatamente na fronteira: kWh de 11:45–12:00 pelo preço do intermediário e de 12:00–12:30 pelo da ponta. A fatura detalha kWh e preço por período — nunca a sessão inteira pelo preço mais alto.\n💡 Dica: carregue à noite ou de madrugada (normalmente 00:00–08:00, tramo vale): é o mais barato."
+          },
+          "zh-Hant": {
+            "question": "充電費用是怎麼計算的？什麼是尖峰平谷分時電價？",
+            "answer": "充電總費用由 【電費】 與 【充電服務費】 兩部分相加組成：\n基礎電費：根據電網公司公示的各時段目錄電價執行（分為尖峰、高峰、平段、低谷時段）；\n充電服務費：場站運營維護與裝置使用費用。\n【跨時段精準切片計費說明】\n如果您的充電過程跨越了不同的電價時段（例如從平段 11:45 一直充到高峰段 12:30），系統會以 12:00 為界點分段精確計量：11:45～12:00 消耗的電量按平段單價計算，12:00～12:30 消耗的電量按峰段單價計算。賬單明細中會清晰列出各時段度數與單價，絕不會按最高單價全程統一收取。\n💡 貼士建議：建議選擇夜間或清晨低谷時段（通常為 00:00～08:00）充電，綜合單價最為划算。"
           }
         }
       },
@@ -431,6 +491,10 @@
           "pt": {
             "question": "Taxa de ociosidade: Tarifas, tolerância e limite diário",
             "answer": "A taxa de ociosidade evita que um carro já carregado ocupe um ponto de que outro precisa:\nTolerância: após o fim da carga (automática ou manual), há 15–30 minutos grátis para remover o veículo.\nValor: passado o tempo de tolerância com o conector ainda conectado, cobra-se por minuto cerca de 0,5–1,0 ¥/min (≈30–60 ¥/hora), com teto diário por ordem (normalmente 100–200 ¥).\nAvisos: o sistema avisa várias vezes por SMS, popup no App e WeChat — quase cheio, carga encerrada, 5 minutos de tolerância restantes e início da cobrança.\nFim: a cobrança para assim que você desconecta e devolve o conector ao suporte.\n💡 Dica: se um conector travado causou a taxa, fale com o suporte — reembolso de 100%."
+          },
+          "zh-Hant": {
+            "question": "什麼是超時佔位費？計費標準與日封頂是多少？",
+            "answer": "為了避免車輛充滿後長時間佔用充電位、方便其他車主補能，場站設立了超時佔位費機制：\n免費挪車緩衝期：充電結束（充滿跳槍或主動停止）後，系統會提供 15～30 分鐘的免費挪車時間；\n佔位費計費標準：緩衝期結束後若仍未拔出充電槍並移開車輛，系統將按 0.5～1.0 元/分鐘（即 30～60 元/小時）按分鐘計收佔位費，單筆訂單設有日封頂上限（通常為 100～200 元）；\n提醒通知：在充電即將充滿、充電已結束、緩衝期剩餘 5 分鐘以及開始計收佔位費時，系統會通過簡訊、App 彈窗和微信通知進行多輪提醒；\n計費終止：只要您前往拔出充電槍並插回樁體卡槽，佔位計費立即終止。\n💡 貼士建議：若因充電槍卡死無法拔出導致產生佔位費，可直接聯絡客服申請 100% 全額減免退款。"
           }
         }
       },
@@ -458,6 +522,10 @@
           "pt": {
             "question": "Quando a pré-autorização é estornada?",
             "answer": "O prazo de devolução depende do meio de pagamento escolhido:\nCarteira pré-paga: o valor é bloqueado no início da sessão e o consumo real é cobrado ao final.\nSaldo da carteira da plataforma: o consumo é debitado ao final; o saldo restante pode ser sacado integralmente a qualquer momento em Perfil → Minha carteira → Solicitar reembolso, para a conta original em 1–3 dias úteis."
+          },
+          "zh-Hant": {
+            "question": "充電前支付的預授權/預充值金額，什麼時候退回？",
+            "answer": "根據您選擇的支付方式，退款到賬時效如下：\n使用充值錢包（先充後付）：預先凍結資金，充電結束後直接按實際消費金額扣款；\n平臺賬戶錢包餘額：充電結束扣除實際發生費用，多退少補；錢包內的剩餘可用餘額支援隨時在【我的錢包 - 申請退款】全額原路提現，1～3 個工作日內退回原支付賬戶；"
           }
         }
       },
@@ -485,6 +553,10 @@
           "pt": {
             "question": "Regras de cupons e por que o desconto não foi aplicado",
             "answer": "Regra de desconto: na liquidação, o sistema escolhe e marca automaticamente o seu melhor cupom. Um cupom por ordem; não acumulam.\nRestrições:\nCupons de serviço só abatem o serviço de recarga, nunca a energia com tarifa regulada.\nPedido mínimo: alguns cupons exigem valor mínimo (ex. «5 ¥ de desconto acima de 30 ¥») e não se aplicam abaixo disso.\nLimites de estação/horário: alguns valem só em estações específicas ou em tramos de vale definidos.\nDevolução: se a ordem falha e é reembolsada, o cupom consumido volta à sua carteira em 10 minutos com a validade prorrogada.\n💡 Dica: confira o alcance e a validade de cada cupom em Perfil → Carteira de cupons antes de carregar."
+          },
+          "zh-Hant": {
+            "question": "優惠券使用規則是什麼？為什麼結賬時沒有抵扣？",
+            "answer": "抵扣規則：系統在結算時會自動推薦並勾選優惠力度最大的一張優惠券；單筆訂單限用 1 張，不可疊加使用；\n專享限制：\n【服務費抵用券】：僅可抵扣賬單中的充電服務費部分，國家政策性基礎電費不可抵扣；\n【滿減門檻】：部分優惠券設有訂單滿額條件（如“滿 30 元減 5 元”），未達到門檻無法使用；\n【場站與時段限制】：部分優惠券僅限特定合作場站或指定低谷時段使用；\n異常退券：若訂單異常未充進電且產生退款，已消耗的有效優惠券會在 10 分鐘內自動退回您的卡券包中，有效期自動順延。\n💡 貼士建議：充電前可在 App【我的】-【卡券包】中檢視優惠券的具體適用範圍與到期時間。"
           }
         }
       },
@@ -512,6 +584,10 @@
           "pt": {
             "question": "Como emitir nota fiscal / recibo com impostos",
             "answer": "A emissão de notas é simples e plenamente conforme:\nOnde: App/miniprograma → Perfil → Gestão de notas → Emitir nota; marque as ordens de recarga históricas a faturar.\nTipos: são aceitas a nota eletrônica comum de IVA e a especial (formato de nota digital).\nConteúdo e alíquotas: conforme a lei tributária, a nota reflete o consumo real dividido em Energia (IVA 13%) e Serviço de recarga (IVA 6%).\nEntrega: em até dois dias úteis a nota eletrônica chega por e-mail; os PDFs podem ser vistos e baixados no histórico a qualquer momento.\nConsolidação: marque várias ordens para emitir uma única nota.\nValores: apenas o efetivamente pago é faturável — descontos de cupons e créditos promocionais ficam de fora.\n💡 Dica: frotas corporativas podem pré-cadastrar os dados da nota especial de IVA (CNPJ/inscrição, banco, conta) em Gestão de cabeçalhos para emitir mais rápido."
+          },
+          "zh-Hant": {
+            "question": "充電訂單如何開具發票？可以開專票嗎？支援合併開票嗎？",
+            "answer": "開具發票操作簡便且合規透明：\n開票入口：開啟 App/小程式，進入【我的】-【發票管理】-【開具發票】，勾選需要開票的歷史充電訂單；\n支援型別：支援開具增值稅電子普通發票與增值稅電子專用發票（數電票格式）；\n發票內容與稅率：根據稅法規定，發票將根據消費明細如實開具，分為「電費」（稅率13%）與「充電服務費」（稅率6%）；\n發票交付：提交申請後，系統會在工作日兩天內將電子發票傳送至您的電子郵箱，同時支援在開票歷史中隨時預覽和下載 PDF 檔案；\n合併開票：支援勾選多筆歷史充電訂單合併開具在一張發票中；\n開票金額說明：發票金額僅限車主實際支付的現金部分，優惠券抵扣金額、營銷贈送金不計入開票額度。\n💡 貼士建議：企業車隊使用者可先在【抬頭管理】中預設企業增值稅專用發票資質（稅號、開戶行、賬號），開票更快捷。"
           }
         }
       },
@@ -539,6 +615,10 @@
           "pt": {
             "question": "Reembolso de taxa de ociosidade por conector travado",
             "answer": "Taxas de ociosidade não causadas pelo motorista são reembolsadas integralmente:\nComo recorrer: App → Meus pedidos → a ordem de recarga → Contestar cobrança, ou fale direto com o suporte.\nCasos cobertos: conector travado mecanicamente após a carga que impediu mover o carro a tempo; saída bloqueada por veículos estacionados irregularmente; falha do App ou da rede que impediu a liquidação manual.\nAnálise e reembolso: conferidos os registros do equipamento, o suporte devolve o valor cobrado indevidamente ao meio de pagamento original em 1–24 horas.\n💡 Dica: quando os registros confirmam travamento por falha do equipamento, a taxa é devolvida 100%."
+          },
+          "zh-Hant": {
+            "question": "因充電槍卡死拔不出導致被扣超時佔位費，如何申請退款？",
+            "answer": "若非車主主觀原因導致的佔位費扣款，我們提供全額免責退款保障：\n申訴途徑：在 App【我的訂單】- 找到該筆充電訂單 - 點選【費用申訴】或直接聯絡客服；\n免責場景涵蓋：\n充電結束後充電槍機械鎖死，無法及時拔出移車；\n現場出車通道被其他違停車輛堵塞，導致無法按時駛離；\nApp 或網路通訊異常導致無法正常手動點選結算；\n稽核與退款時效：客服核實後臺裝置日誌確認後，誤扣的佔位費將在 1～24 小時內原路退回您的原支付渠道。\n💡 貼士建議：凡經後臺裝置日誌核實確屬裝置故障卡槍的，一律 100% 全額退還佔位費。"
           }
         }
       },
@@ -566,6 +646,10 @@
           "pt": {
             "question": "Cobrado sem receber carga? Como solicitar reembolso",
             "answer": "Se houve cobrança mas nenhuma energia foi entregue:\nReembolso expresso: para ordens problemáticas, fale com o suporte; verificados os kWh entregues, é acionado o reembolso expresso e o valor volta ao meio de pagamento original em segundos.\nCompensação de cupom: se a ordem falha consumiu um cupom, ele volta automaticamente à sua carteira com a validade prorrogada.\n💡 Dica: fique de olho no aviso de reembolso do assistente de pagamentos WeChat/Alipay."
+          },
+          "zh-Hant": {
+            "question": "扣費成功了但其實根本沒充上電，怎麼退款？",
+            "answer": "遇到扣費但未充上電的異常情況，退款處理如下：\n客服極速退款：若系統出現問題訂單，請在聯絡客服，客服核實充入電量 後，可即時為您開通極速退款通道，款項秒級原路退回；\n優惠券補償：若該筆異常訂單消耗了您的優惠券，優惠券會自動退回您的賬戶卡包中，有效期自動順延。\n💡 貼士建議：請留意微信/支付寶支付助手的「退款到賬通知」。"
           }
         }
       },
@@ -593,6 +677,10 @@
           "pt": {
             "question": "Dúvidas sobre a medição do contador e calibração",
             "answer": "Conformidade metrológica: todos os medidores dos carregadores em operação passam pela verificação obrigatória do órgão nacional de metrologia legal e carregam no corpo a etiqueta válida de verificação.\nPor que os números diferem: o carregador mede toda a energia entregue do seu lado; parte se perde no caminho — bombas de refrigeração da bateria, ar-condicionado do carro, aquecimento do cabo e perdas de conversão CA/CC (normalmente 5–10% no total) — por isso os kWh do carregador ficam um pouco acima dos kWh líquidos mostrados no painel do carro.\nPeça uma reverificação: com dúvida sobre um equipamento específico, reporte a falha no App; a operação vai revisar a ordem, conferir a calibração e emitir um relatório.\n💡 Dica: antes de carregar você pode conferir o número e a validade do certificado de verificação afixado no equipamento."
+          },
+          "zh-Hant": {
+            "question": "懷疑充電樁電錶計量不準（虛標電量）怎麼辦？",
+            "answer": "計量資質合規：平臺所有投入運營的充電樁電能表，均嚴格通過國家法制計量檢定機構的強制檢定，並在裝置機身上貼有有效的「電能計量強制檢定合格標籤」；\n損耗原理解釋：充電電錶計量的是從充電樁端輸出的總電能。在充電過程中，包含動力電池冷卻水泵運轉、整車空調消耗、高壓電纜發熱以及交直流電能轉換損耗（通常綜合損耗在 5%～10% 左右），因此樁端計量電量會略高於車載大屏顯示的實際充入電池淨電量；\n申請複檢：若您對某臺裝置的計量仍有疑問，可在 App 找到裝置故障提交反饋，運維人員將調取該筆訂單進行校準複核，並向您出具檢驗報告。\n💡 貼士建議：可在充電前檢視樁身貼附的《強制檢定合格證》編號與有效期。"
           }
         }
       },
@@ -620,6 +708,10 @@
           "pt": {
             "question": "Arranhões no veículo ou danos no equipamento na estação",
             "answer": "Mantenha a calma e proceda assim:\nSegurança primeiro: se o carro bateu no carregador, desligue imediatamente e verifique se o equipamento está tombando, com cabos expostos ou faíscas.\nFotografe tudo: a uma distância segura — cena geral, ponto de contato, placa e número de série do carregador.\nAvise a estação: ligue para a linha de plantão 24 h afixada no carregador e informe a ocorrência.\nResponsabilidade e seguro: havendo danos ao veículo ou ao equipamento, chame também a polícia de trânsito (122) para o boletim; a plataforma fornecerá às autoridades e à seguradora as gravações HD da estação.\n⚠️ Atenção: nunca toque nem puxe cabos expostos ou danificados — risco de choque."
+          },
+          "zh-Hant": {
+            "question": "在場站充電時車輛發生刮蹭或裝置損壞怎麼處理？",
+            "answer": "請保持冷靜，按以下步驟妥善處置：\n人身與現場安全第一：若發生車輛碰撞充電樁，請立即關閉車門熄火，觀察樁體是否有傾斜、裸露電線或冒火花現象；\n拍照留存證據：在安全距離拍攝現場全景照片、碰撞接觸部位特寫、車牌號碼及樁身編號；\n聯絡場站管理方：撥打樁身張貼的場站 24 小時運維值班熱線，報備現場情況；\n責任認定與保險理賠：涉及車輛刮蹭或公共設施受損，建議同步撥打 122 交警電話出具交通事故責任認定書，平臺將積極配合交警與保險公司調取場站高畫質監控錄影協助定損。\n⚠️ 注意事項：切勿在發生碰撞造成線纜裸露的情況下擅自拉扯充電線，以免發生觸電危險。"
           }
         }
       },
@@ -647,6 +739,10 @@
           "pt": {
             "question": "⚠️ Emergência: Fumaça, fogo, cheiro de queimado ou fuga elétrica",
             "answer": "⚠️ Se o carregador ou a tomada do veículo soltar fumaça, faíscas, cheiro forte de queimado ou a carroceria der choque, siga rigorosamente estes quatro passos:\nPasso 1 – Evacue imediatamente: todos se afastam pelo menos 10 metros, a barlavento, em espaço aberto. NÃO toque no carro, no punho nem nos cabos!\nPasso 2 – Acione a parada de emergência: apenas se for totalmente seguro (sem fogo e sem risco de choque), acione o botão vermelho PARADA DE EMERGÊNCIA da frente do carregador para cortar a alta tensão. Se já houver fogo, não se aproxime!\nPasso 3 – Chame os socorros: com chama aberta, ligue imediatamente aos bombeiros (119) informando que está pegando fogo uma bateria de veículo elétrico/carregador; ligue para a linha de emergência 24 h da estação (12306111) para corte e bloqueio da alimentação.\nPasso 4 – Nada de resgate improvisado: incêndio de bateria de tração exige grande volume contínuo de água ou extintores de pó; pessoal não especializado jamais deve jogar água num sistema de alta tensão sem corte.\n⚠️ Atenção: nunca toque em equipamentos possivelmente energizados; a vida vem sempre primeiro!"
+          },
+          "zh-Hant": {
+            "question": "⚠️ 【最高安全警示】充電裝置冒煙、起火、異味或漏電緊急處置",
+            "answer": "若現場發現充電樁或車輛充電口出現冒煙、火花、強烈燒焦異味、車身帶電麻手或漏電現象，請嚴格遵照以下應急四步執行：\n第 1 步【立即人員撤離】：現場所有人員立即撤離至距離充電樁 10 米以上的空曠上風口安全區域，嚴禁觸碰車身、槍把手及電纜！\n第 2 步【緊急拍下急停】：在確保自身絕對安全、無明火觸電風險的前提下，迅速拍下樁體正面醒目的紅色【急停旋鈕 (EMERGENCY STOP)】切斷高壓輸入；若火勢已起，切勿靠近！\n第 3 步【撥打報警電話】：\n發生明火立即撥打火警電話【119】，告知詳細地址、起火物為新能源汽車動力電池/充電樁；\n撥打場站 24 小時緊急救援電話【12306111】進行斷電閉鎖；\n第 4 步【嚴禁違規施救】：動力電池起火需專用大量持續水源降溫或乾粉滅火器，非專業人員切勿在未斷高壓電的情況下擅自潑水撲救。\n⚠️ 注意事項：嚴禁觸碰可能漏電的帶電裝置，生命安全永遠置於第一位！"
           }
         }
       },
@@ -674,6 +770,10 @@
           "pt": {
             "question": "Carregar sob chuva forte, tempestades ou poças d'água",
             "answer": "Os carregadores ao ar livre têm proteção contra chuva e poeira (IP54 ou superior), mas em mau tempo respeite estas regras:\nLinha vermelha da água: se a água cobrir metade da altura da roda ou alcançar a altura da tomada de carga, NÃO carregue — água conduz eletricidade.\nProteja da chuva: ao conectar/desconectar sob chuva, proteja o conector e a tomada com guarda-chuva ou com o próprio corpo; nunca deixe a chuva entrar direto na tomada. Verifique se há água no conector e seque antes de inserir.\nTempestades: durante alertas amarelo/laranja de raios, evite ultracarga ao ar livre e prefira estações subterrâneas.\nProibido improviso: nunca use extensões «voadoras» no exterior sob chuva ou neve.\n💡 Dica: inspecione a isolação do cabo antes de conectar; se houver rachaduras, pare e reporte."
+          },
+          "zh-Hant": {
+            "question": "下暴雨、打雷或路面積水時，可以在戶外露天充電嗎？",
+            "answer": "露天充電樁具備國家標準防雨防塵設計（IP54以上），但遇惡劣天氣仍需注意以下安全規範：\n地面積水深度的安全紅線：若車位地面積水已經沒過車輪輪轂半高（或積水已接近車身充電插口高度），嚴禁進行插槍充電，謹防積水導電；\n插拔槍防雨遮擋：在雨天插拔充電槍時，請使用雨傘或身體儘量遮擋槍頭和車端插座，嚴禁讓雨水直接衝淋進插孔內；插槍前請仔細觀察槍孔內是否有積水，如有積水請擦拭乾燥後再插；\n強雷暴閃電天氣：在雷暴黃色/橙色預警高發時段，建議儘量避免在空曠露天場站使用高壓超充，優先選擇地下室內充電站補能；\n嚴禁私拉亂接：切勿在雨雪天氣使用家用簡易插排在室外進行“飛線充電”。\n💡 貼士建議：插槍前觀察槍線絕緣外皮是否有破損開裂，若有破損請立即停止使用並向客服報修。"
           }
         }
       },
@@ -701,6 +801,10 @@
           "pt": {
             "question": "Dicas de recarga sob calor extremo e sol forte",
             "answer": "Prefira vagas com sombra: ao meio-dia de verão, escolha estacionamento subterrâneo ou coberto para o sol não aquecer ainda mais a bateria.\nDescanse após direção forte: depois de rodovia ou direção esportiva, a bateria já está quente; espere 5–10 minutos com o carro desligado para o circuito de refrigeração dissipar, então conecte a carga rápida.\nSaia do carro durante a carga: carga DC significa alta tensão, alta corrente e ventoinhas ruidosas — espere na sala climatizada ou no shopping em vez de ficar dentro do carro.\nPare em 80–90%: no calor intenso, evite carregar até 100% repetidamente; manter 80–90% retarda muito o envelhecimento das células em altas temperaturas.\n💡 Dica: se sentir cheiro de queimado ou ouvir alarme sonoro contínuo do carro, interrompa a carga e afaste-se imediatamente."
+          },
+          "zh-Hant": {
+            "question": "夏季高溫酷暑暴曬天氣充電，需要注意什麼？",
+            "answer": "優先選擇遮陽樁位：夏季正午地表溫度極高，優先選擇地下停車場或配備防曬雨棚的充電車位，避免陽光直射加劇動力電池升溫；\n避免激烈駕駛後立即高倍率超充：剛跑完高速或激烈駕駛後，電池內部溫度已處於高位。建議熄火靜置 5～10 分鐘讓車輛冷卻水路迴圈散熱後，再插槍開啟快充；\n充電時人員離車休息：快充時整車處於高壓大電流狀態，且車載散熱風扇全速運轉噪音較大，建議車主前往場站空調休息室或商場內等候，避免在車內開空調長時停留；\n充到 80%～90% 即停：高溫環境下儘量避免長期頻繁充滿至 100%，保持在 80%～90% 可大幅延緩電芯高溫衰減老化。\n💡 貼士建議：若充電過程中聞到焦糊味或聽到車輛發出持續劇烈蜂鳴報警，請立即停止充電並遠離車輛。"
           }
         }
       },
@@ -728,6 +832,10 @@
           "pt": {
             "question": "Trocar número de celular, senha ou excluir conta",
             "answer": "Trocar o número: Perfil → Configurações → Conta e segurança → Trocar número; valide com o código SMS no número antigo e informe o novo. Pedidos, pontos e saldo da carteira ficam preservados.\nEsqueci a senha: na tela de login, toque em Esqueci a senha, informe o número cadastrado e redefina a senha de acesso e de pagamento pelo código SMS.\nExclusão da conta: solicite em Configurações → Excluir conta. Se houver saldo sacável, reembolse primeiro; caso contrário os dados são apagados; a exclusão se completa após o reembolso, com os dados anonimizados.\n💡 Dica: comprovantes de notas não podem ser recuperados após a exclusão — emita e exporte as notas de que precisar antes."
+          },
+          "zh-Hant": {
+            "question": "如何更換註冊手機號、修改密碼或登出平臺賬號？",
+            "answer": "更換繫結手機號：進入 App【我的】-【設定】-【賬號與安全】-【更換手機號】，通過原手機號簡訊驗證碼驗證身份後，輸入新手機號即可無縫換綁，歷史訂單、積分及錢包資產完整保留；\n忘記密碼找回：在登入介面點選【忘記密碼】，輸入註冊手機號並獲取簡訊驗證碼即可重設登入密碼與支付密碼；\n賬號登出與餘額退還：在【設定】-【登出賬號】頁面提交申請。若賬戶內仍有未提現餘額，需要先完成退款否則資產資料會清空；退款完成後完成賬號登出與資料脫敏清除。\n💡 貼士建議：賬號登出後歷史發票開具憑證將無法恢復，建議登出前先將所需歷史訂單開具發票並匯出儲存。"
           }
         }
       },
@@ -755,6 +863,10 @@
           "pt": {
             "question": "Horário de atendimento humano e como falar com suporte",
             "answer": "Assistente + humano: o assistente inteligente responde na hora, 24/7.\nTransferência com um toque: para questões complexas ou se a resposta automática não bastar, digite atendente humano no chat ou toque em Transferir na base da tela.\nHorários:\nSuporte escrito online: 24/7.\nLinha telefônica (12306111): 24/7 para falhas urgentes, incidentes de segurança no local e contestações."
+          },
+          "zh-Hant": {
+            "question": "什麼時候可以聯絡人工客服？人工客服服務時間是怎樣的？",
+            "answer": "智慧客服與人工協同：智慧助手為您提供 7×24 小時全天候即時解答服務；\n一鍵轉接人工：如果您的問題較為複雜或對智慧解答不滿意，可隨時在對話方塊中輸入“人工客服”或點選底部快捷按鈕【轉接人工】；\n人工服務時間：\n線上文字人工客服：7×24 小時全天候線上；\n電話熱線客服（12306111）：7×24 小時全天候受理緊急故障、現場安全事故與爭議申訴；"
           }
         }
       }
@@ -780,6 +892,10 @@
           "km": {
             "question": "តើអ្វីជាដំណើរការសាងសង់ស្តង់ដារ និងការកំណត់រចនាសម្ព័ន្ធអាជីវកម្មស្នូលសម្រាប់ស្ថានីយសាកថ្មថ្មី?",
             "answer": "ការបង្កើតស្ថានីយសាកថ្មីលើវេទិកាត្រូវបំពេញវដ្តពេញលេញ \"លក្ខណៈសម្បត្តិមូលដ្ឋាន - ប៉ារ៉ាម៉ែត្រអាជីវកម្ម - ការភ្ជាប់ភ្ជាប់ - ពិនិត្យនិងផ្សព្វផ្សាយ\":\nការកំណត់លក្ខណៈសម្បត្តិមូលដ្ឋាន៖ ចូល [ការគ្រប់គ្រងឧបករណ៍សាក - ការគ្រប់គ្រងទីតាំង - បង្កើតស្ថានីយថ្មី] បំពេញឈ្មោះស្ថានីយ អ្នកប្រតិបត្តិការសម្រាប់ ទីតាំងភូមិសាស្ត្រ (កូអរដោនេរយៈទទឹង/រយៈបណ្តោយប្រើសម្រាប់កំណត់ទីតាំងស្ថានីយលើផែនទី) សមត្ថភាពសរុបរបស់ឧបករណ៍បំលែងចែកចាយ (kVA) កាលវិភាគបើកប្រតិបត្តិការ (24 ម៉ោង / កាលវិភាគកំណត់) ការពន្យល់ថ្លៃចតរថយន្ត និងបរិក្ខារបន្ថែមរបស់ស្ថានីយ (បង្គន់ បន្ទប់សម្រាក ដំបូល ฯលៈ);\nការភ្ជាប់ភ្ជាប់៖ ភ្ជាប់ទម្រង់គិតថ្លៃដែលសមស្របនឹងស្ថានីយ (គិតថ្លៃរថយន្ត / គិតថ្លៃម៉ូតូពីរកង់ / គិតថ្លៃកាន់កាប់កន្លែង) និងបែងចែកចំណុចដើម្បីកំណត់ទម្រង់;"
+          },
+          "zh-Hant": {
+            "question": "新建充電站的標準建站流程與核心業務配置是什麼？",
+            "answer": "在平臺中新建充電場站需完成“基礎屬性 - 業務引數 - 關聯繫結 - 稽核釋出”閉環：\n基礎屬性配置：進入【充電樁管理 - 場地管理 - 新建電站】，錄入電站名稱、所屬運營商、地理位置（經緯度座標用於站點地圖定位）、配電變壓器總容量（kVA）、開放運營時段（24小時/指定時段）、停車收費說明及場站配套設施（衛生間、休息室、雨棚等）；\n關聯繫結：為場站繫結對應的計費模板（汽車計費/兩輪車計費/佔位計費） 以及劃分點位將模板；"
           }
         }
       },
@@ -803,6 +919,10 @@
           "km": {
             "question": "តើឧបករណ៍បង្គោលសាកត្រូវចុះបញ្ជី និងភ្ជាប់បណ្តាញដោយរបៀបណា? តើទំនាក់ទំនងរវាងម៉ូដែលឧបករណ៍ បង្គោលសាក និងកាំភ្លើងសាកត្រូវបានគ្រប់គ្រងយ៉ាងដូចម្តេច?",
             "answer": "ការចុះបញ្ជីឧបករណ៍ពេញវដ្តជីវិតអនុវត្តតាមតក្ក \"គ្រប់គ្រងម៉ូដែល ➔ ចុះបញ្ជីឧបករណ៍ ➔ ភ្ជាប់ក្បាលសាក\":\nការគ្រប់គ្រងម៉ូដែលឧបករណ៍៖ នៅ [ការគ្រប់គ្រងឧបករណ៍ - ម៉ូដែលឧបករណ៍] ថែទាំឃ្លាំងម៉ូដែលរបស់អ្នកផលិត បំពេញលក្ខណៈអគ្គិសនីរបស់ឧបករណ៍ (AC ដំណាក់តែមួយ 7kW / DC ក្បាលពីរ 120kW / សាកលឿនបំផុតត្រជាក់ដោយរាវ 480kW) ជួរវ៉ុល និងចរន្តចេញ កំណែពិធីការ (OCPP 1.6J/2.0.1 ឬពិធីការស្តង់ដារជាតិ) និងថាមពលកំណត់;\nការបញ្ចូលឯកសារឧបករណ៍៖ នៅ [ការគ្រប់គ្រងឧបករណ៍] បំពេញលេខស៊េរីសម្គាល់តែមួយគត់របស់ដងខ្លួនស្ថានីយ (កូដ SN / លេខឧបករណ៍) និងស្ថានីយសម្រាប់;\nការផ្គូផ្គងក្បាលសាក និងការភ្ជាប់កូដ QR៖ សម្រាប់ឧបករណ៍ក្បាលពីរ ឬច្រើនក្បាល ប្រព័ន្ធនឹងបង្កើតកូដក្បាលដោយឡែកសម្រាប់ក្បាលនីមួយៗដោយស្វ័យប្រវត្តិ (ឧទាហរណ៍ ក្បាល 01, ក្បាល 02) ព្រមទាំងកូដ QR ស្កេនចាប់ផ្តើមសាកសម្រាប់កម្មវិធីអតិថិជន គាំទ្រការនាំចេញជាក្រុមដើម្បីបោះពុម្ពស្លាកដាក់ដងខ្លួនស្ថានីយ\n💡ដំបូន្មានអាជីវកម្ម៖ នៅពេលឧបករណ៍ផ្នែករឹងភ្ជាប់ចូលវេទិកា ត្រូវកំណត់នៅជាន់ក្រោមរបស់ឧបករណ៍សាកនូវអាសយដ្ឋានទំនាក់ទំនង WebSocket និងសោផ្ទៀងផ្ទាត់ដែលវេទិកាកំណត់ជាស្តង់ដារតែមួយ បន្ទាប់ពីឧបករណ៍ភ្ជាប់បណ្តាញ និងផ្ទៀងផ្ទាត់ខ្លួនឯងជោគជ័យ វានឹងបង្ហាញជា \"ទំនេរ (Available)\" នៅ [ការត្រួតពិនិត្យឧបករណ៍សាក] នៅផ្នែកខាងក្រោយ"
+          },
+          "zh-Hant": {
+            "question": "充電樁裝置如何建檔入網？裝置型號與樁槍對應關係如何維護？",
+            "answer": "裝置全生命週期建檔遵循“型號管理 ➔ 裝置檔案 ➔ 槍口繫結”邏輯：\n裝置型號管理：在【裝置管理 - 裝置型號】中維護硬體廠商型號庫，錄入裝置電氣屬性（交流單相7kW/直流雙槍120kW/液冷超充480kW）、輸出電壓電流範圍、協議版本（OCPP 1.6J/2.0.1 或國標協議）及額定功率；\n裝置檔案錄入：在【裝置管理】中錄入樁體唯一識別序列號（SN碼/裝置編號）、所屬站點；\n槍口對映與二維碼繫結：針對雙槍或多槍裝置，系統自動為每個槍口生成獨立的槍號編碼（如 01槍、02槍）及對應的客戶端掃碼啟充二維碼，支援批次匯出印刷樁身物料標貼。\n💡業務賦能與建議：當硬體裝置接入平臺時，需在充電樁底層設定平臺統一的 WebSocket 通訊地址與鑑權金鑰，樁端聯網自檢成功後將在後臺【充電樁監控】中顯示為“空閒（Available）”。"
           }
         }
       },
@@ -826,6 +946,10 @@
           "km": {
             "question": "តើធ្វើដូចម្តេចដើម្បីប្រើ [ការត្រួតពិនិត្យបង្គោលសាក] ដើម្បីសម្រេចបាននូវប្រតិបត្តិការ និងការថែទាំពីចម្ងាយប្រកបដោយប្រសិទ្ធភាព?",
             "answer": "ផ្ទាំងត្រួតពិនិត្យតាមពេលវេលាជាក់ស្តែង៖ ម៉ូឌុល [ការត្រួតពិនិត្យឧបករណ៍សាក] បង្ហាញស្ថានភាពរូបវន្តតាមពេលវេលាជាក់ស្តែងរបស់ឧបករណ៍ និងក្បាលសាកនៅគ្រប់ស្ថានីយទូទាំងបណ្តាញ ក្នុងទម្រង់ក្រាហ្វិក និងបញ្ជី (ទំនេរ កំពុងរៀបចំ កំពុងសាក ខូច អូហ្វឡាញ) ព្រមទាំងបង្ហាញតាមពេលវេលាជាក់ស្តែងនូវចំនួនគីឡូវ៉ាត់ម៉ោងដែលសាកក្នុងថ្ងៃនេះរបស់ឧបករណ៍មួយៗ ចំនួនដងបម្រើរថយន្ត វ៉ុល និងចរន្តចេញ ថាមពលជាក់ស្តែង និងចំណូលកកកុញ;"
+          },
+          "zh-Hant": {
+            "question": "如何利用【充電樁監控】實現高效遠端運維？",
+            "answer": "\n即時監控看板：【充電樁監控】模組以圖形化和列表形式展示全網各場站的樁槍即時物理狀態（空閒、準備中、充電中、故障、離線），並即時展示單樁當日充電度數、服務車次、輸出電壓電流、即時功率與累計收益；"
           }
         }
       },
@@ -849,6 +973,10 @@
           "km": {
             "question": "តើត្រូវកំណត់រចនាសម្ព័ន្ធយុទ្ធសាស្ត្រគិតថ្លៃតាមពេលវេលាច្រើនកម្រិត (តម្លៃអគ្គិសនីម៉ោងមមាញឹក/ធម្មតា/ទាប និងកម្រៃសេវា) យ៉ាងដូចម្តេច?",
             "answer": "[ការគ្រប់គ្រងថ្លៃសេវា - ទម្រង់ថ្លៃសេវាប្រតិបត្តិការ] ទទួលបន្ទុកផ្សំថ្លៃអគ្គិសនីតាមបញ្ជីរបស់បណ្តាញអគ្គិសនី ជាមួយថ្លៃសេវាប្រតិបត្តិការរបស់ស្ថានីយជាម៉ូឌុល គាំទ្រការចេញទម្រង់មួយទៅស្ថានីយច្រើនយ៉ាងរហ័ស៖\nការកាត់កាលវិភាគ 24 ម៉ោង៖ គាំទ្រការបែងចែកមួយថ្ងៃ 24 ម៉ោងជា 8~12 កាលវិភាគរង ដោយដាក់ស្លាករៀងៗខ្លួន [កំពូលខ្ពស់ កំពូល ធម្មតា ទាប ទាបជ្រៅ];\nការបំបែកថ្លៃសេវាពីរផ្លូវ៖ កាលវិភាគនីមួយៗមានផ្នែកថ្លៃសេវាពីរដោយឡែក៖\n[ថ្លៃអគ្គិសនីមូលដ្ឋាន]៖ ភ្ជាប់យ៉ាងតឹងរ៉ឹងទៅនឹងថ្លៃអគ្គិសនីតាមកាលវិភាគរបស់វិស័យឧស្សាហកម្ម និងពាណិជ្ជកម្មដែលការិយាល័យកំណែទម្រង់ និងអភិវឌ្ឍន៍ / ក្រុមហ៊ុនបណ្តាញអគ្គិសនីមូលដ្ឋានប្រកាសនៅក្នុងគ្រា;\n[ថ្លៃសេវា]៖ អត្រាប្រាក់ចំណេញថ្លៃសេវាប្រតិបត្តិការរបស់អ្នកប្រតិបត្តិការ គាំទ្រការកំណត់តម្លៃជាកាំជណ្តើរតាមកាលវិភាគ;"
+          },
+          "zh-Hant": {
+            "question": "如何配置多時段分時計費策略（尖峰平谷電價與服務費）？",
+            "answer": "【計費管理 - 運營計費模板】負責將電網目錄電價與場站運營服務費模組化組合，支援一套模板快速下發至多個場站：\n24小時時段切片：支援將一天 24 小時劃分為多達 8～12 個細分時段，分別標記為【尖峰、高峰、平段、低谷、深谷】；\n雙軌計費分離：每個時段均由獨立的兩部分費率組成：\n【基礎電價】：嚴格錨定當地發改委/電網公司的當期工商業分時目錄電價；\n【服務費率】：運營商 運營服務利潤費率，支援分時段階梯定價（如低谷期調低服務費吸引網約車充維，高峰期提高服務費平衡電網負荷）；\n💡業務賦能與建議：當跨時段充電發生時，系統以分時截斷點自動切片計量度數並分段求和，確保使用者賬單與 運營商 營收資料 100% 嚴密合規。"
           }
         }
       },
@@ -872,6 +1000,10 @@
           "km": {
             "question": "តើត្រូវកំណត់ទម្រង់គិតថ្លៃស្នាក់នៅហួសម៉ោងយ៉ាងដូចម្តេច ដើម្បីបង្កើនអត្រាប្តូរវេននៃស្ថានីយជាអតិបរមា?",
             "answer": "កំណត់យន្តការថ្លៃកាន់កាប់កន្លែងលើសម៉ោងជាវិទ្យាសាស្ត្រ តាមរយៈ [ការគ្រប់គ្រងថ្លៃសេវា - ទម្រង់ថ្លៃកាន់កាប់កន្លែង] ដើម្បីសមតុល្យរវាងបទពិសោធន៍របស់ម្ចាស់រថយន្ត និងអត្រាវិលជុំ៖\nរយៈពេលអនុគ្រោះឥតគិតថ្លៃ (Grace Period)៖ ជាធម្មតាណែនាំ 15~30 នាទី ដើម្បីឱ្យម្ចាស់រថយន្តមានពេលត្រឡប់មក និងដកក្បាលសាក បន្ទាប់ពីទទួលការជូនដំណឹងថាពេញ;\nអត្រាគិតថ្លៃជាកាំជណ្តើរ និងតាមនាទី៖ គាំទ្រការគិតតាមនាទី (ឧទាហរណ៍ 0.5 យន់/នាទី ឬ 1.0 យន់/នាទី គឺ 30~60 យន់/ម៉ោង);\nពិដានកំណត់ប្រចាំថ្ងៃ (Daily Cap)៖ ដើម្បីជៀសវាងជម្លោះពីចំនួនលេខដ៏ច្រើនក្នុងករណីខ្លាំង អាចកំណត់ពិដានខ្ពស់បំផុតក្នុងមួយការបញ្ជាទិញ (ឧទាហរណ៍ 100~200 យន់/ថ្ងៃ);\nកាលវិភាគ និងវិសាលភាពស្ថានីយ៖ គាំទ្របើកប្រើថ្លៃកាន់កាប់កន្លែងក្នុងពេលថ្ងៃ (08:00~22:00) និងអនុគ្រោះថ្លៃកាន់កាប់កន្លែងក្នុងពេលទាបពេលយប់ (22:00~08:00 ថ្ងៃបន្ទាប់) បង្កើនការពេញចិត្តរបស់ម្ចាស់រថយន្តដែលចតសាកពេលយប់;\n💡ដំបូន្មានអាជីវកម្ម៖ ចំណូលថ្លៃកាន់កាប់កន្លែងជាគណនីដោយឡែកក្នុងការផ្ទៀងផ្ទាត់ហិរញ្ញវត្ថុ គាំទ្រការបែងចែកស្ថិតិចេញពីថ្លៃអគ្គិសនី និងថ្លៃសេវាធម្មតាក្នុងរបាយការណ៍ខាងក្រោយ ងាយស្រួលក្នុងការគណនាចំណែកជាមួយដៃគូទីតាំង"
+          },
+          "zh-Hant": {
+            "question": "超時佔位費計費模板如何配置以最大化場站週轉率？",
+            "answer": "通過【計費管理 - 佔位計費模板】設定科學的超時佔位費機制，兼顧車主體驗與翻檯週轉率：\n免費緩衝時長（Grace Period）：通常建議設定為 15～30 分鐘，給車主從收到充滿通知到返回拔槍預留合理的步行時間；\n階梯與計費費率：支援按分鐘計費（如 0.5 元/分鐘 或 1.0 元/分鐘，即 30～60 元/小時）；\n日封頂限制（Daily Cap）：為避免極端情況下產生天文數字糾紛，可設定單筆訂單佔位費最高上限（如 100～200 元/天）；\n適用時段與站點範圍：支援針對白天忙時（08:00～22:00）啟用佔位費，夜間低谷期（22:00～次日08:00）可設定豁免佔位費，提升夜間停泊充電車主的滿意度。\n💡業務賦能與建議：佔位費收益在財務對賬中屬於獨立科目，支援在後臺報表中與常規電費、服務費分離統計，便於與場地合作方核算專屬分成。"
           }
         }
       },
@@ -895,6 +1027,10 @@
           "km": {
             "question": "តើអ្វីជាសេណារីយ៉ូនៃកម្មវិធីអាជីវកម្ម និងស្តង់ដារប្រតិបត្តិការសម្រាប់មុខងារបញ្ជីសឧបករណ៍ (Whitelist)?",
             "answer": "[ការគ្រប់គ្រងឧបករណ៍សាក - បញ្ជីសឧបករណ៍] ប្រើដើម្បីឱ្យអ្នកប្រើដែលកំណត់ ឬរថយន្តជាក់លាក់ទទួលការសាកឥតគិតថ្លៃ ឬមិនត្រូវការលេខសម្ងាត់នៅស្ថានីយកំណត់៖\nសេណារីយ៉ូអាជីវកម្មដែលប្រើ៖\n[ប្រតិបត្តិការស្ថានីយ និងការធ្វើតេស្តវិស្វកម្ម]៖ ផ្តល់កូតាតេស្តដល់បុគ្គលិកបច្ចេកទេសវាល ដើម្បីជៀសវាងការកាត់ប្រាក់ពិតអំឡុងពេលតេស្តដោះស្រាយបញ្ហា;\n[អត្ថប្រយោជន៍បុគ្គលិក និងអ្នកគ្រប់គ្រងខាងក្នុង]៖ ឧបករណ៍សាកប្រើខាងក្នុងសហគ្រាស ផ្តល់ការសាកឥតគិតថ្លៃសម្រាប់ការធ្វើដំណើរដល់រថយន្តរបស់បុគ្គលិកក្នុងបញ្ជីស;\n[�ៃគូយុទ្ធសាស្ត្រស្នូល]៖ សិទ្ធិលើកលែងពិសេសសម្រាប់រថយន្តសាកល្បងបើករបស់ក្រុមហ៊ុនរថយន្តដែលសហការ និងរថយន្តជាក់លាក់របស់ដៃគូទីតាំង;"
+          },
+          "zh-Hant": {
+            "question": "裝置白名單功能的業務應用場景與操作規範是什麼？",
+            "answer": "【充電樁管理 - 裝置白名單】用於實現指定使用者或特定車輛在指定站點內享受免費或免密充電：\n適用業務場景：\n【場站運維與工程測試】：為現場運維技術人員提供測試額度，避免排障測試過程中產生實際扣費；\n【內部員工與高管福利】：企業內部自用充電樁，為白名單員工車輛提供免費通勤補能；\n【核心戰略合作伙伴】：合作車企試駕車、場地合作方特定車輛的專屬免收權益；"
           }
         }
       },
@@ -918,6 +1054,10 @@
           "km": {
             "question": "តើវេទិកាគ្រប់គ្រងប្រតិបត្តិករដៃគូក្រោមទម្រង់ប្រតិបត្តិករច្រើន (Multi-operator) យ៉ាងដូចម្តេច?",
             "answer": "វេទិកាប្រើស្ថាបត្យកម្មពហុអ្នកជួល/ពហុអ្នកប្រតិបត្តិការដែលចាស់ទុំ គាំទ្រការផ្តល់សិទ្ធិរួម និងការគណនេយ្យដោយឡែកពីវេទិកាមេទៅអ្នកប្រតិបត្តិការដៃគូ:\nការពិនិត្យការចូលរបស់អ្នកប្រតិបត្តិការ៖ បន្ទាប់ពីអ្នកប្រតិបត្តិការដៃគូបញ្ជូនអាជ្ញាបណ្ណអាជីវកម្ម ការអនុញ្ញាតភ្ជាប់អគ្គិសនី និងគុណវុឌ្ឍិនីតិបុគ្គលតាមអនឡាញ អ្នកគ្រប់គ្រងមេធ្វើការពិនិត្យការចូល និងបើកគណនីនៅម៉ូឌុល [ការគ្រប់គ្រងប្រតិបត្តិការ - អ្នកប្រតិបត្តិការ];\nការភ្ជាប់កម្មសិទ្ធិទ្រព្យសម្បត្តិ និងស្ថានីយ៖ កំណត់ច្បាស់ថាស្ថានីយសាកនីមួយៗ ឧបករណ៍សាកនីមួយៗជាកម្មសិទ្ធិរបស់អ្នកប្រតិបត្តិការណាមួយ អ្នកប្រតិបត្តិការដៃគូនៅពេលចូលផ្នែកខាងក្រោយរងដោយឡែករបស់ខ្លួន អាចមើល និងគ្រប់គ្រងបានតែស្ថានីយ ឧបករណ៍ ការបញ្ជាទិញ និងទិន្នន័យចំណូលដែលនៅក្រោមឈ្មោះខ្លួន ធានាការញែកទិន្នន័យក្នុងកម្រិតរូបវន្ត;\nការកំណត់អត្រាថ្លៃសេវា និងសមាមាត្រចែករំលែក៖ កំណត់វិធានចែករំលែកសម្រាប់វេទិកាមេ និងអ្នកប្រតិបត្តិការដៃគូ (ឧទាហរណ៍ វេទិកាយកថ្លៃសេវាកម្មវិធី 5% អ្នកប្រតិបត្តិការដៃគូទទួលបាន 95% នៃថ្លៃអគ្គិសនី និងថ្លៃសេវា) ប្រព័ន្ធគណនាលំហូរបែងចែកតាមការបញ្ជាទិញជាក់ស្តែងដោយស្វ័យប្រវត្តិ;\n💡ដំបូន្មានអាជីវកម្ម៖ វេទិកាមេអាចឃើញទិន្នន័យរួមទាំងបណ្តាញក្នុងការចុចតែម្តង ព្រមទាំងផ្តល់សិទ្ធិកំណត់តម្លៃដោយខ្លួនឯង និងសិទ្ធិចេញគូប៉ុងទីផ្សារដល់អ្នកប្រតិបត្តិការដៃគូ"
+          },
+          "zh-Hant": {
+            "question": "平臺在多運營商（Multi-運營商）模式下如何管理合作運營商？",
+            "answer": "平臺採用成熟的多租戶/多運營商架構，支援主平臺對加盟運營商的統一賦能與獨立核算：\n運營商准入稽核：加盟 運營商 線上提交營業執照、電力接入許可及法人資質後，主管理員在【運營管理 - 運營商】模組中執行入駐稽核與賬號開通；\n資產與場站歸屬繫結：明確每個充電站、每臺充電樁的資產歸屬 運營商，加盟 運營商 登入其獨立子後臺僅能檢視與管理其名下的場站、裝置、訂單與收益資料，保障資料物理隔離；\n運營費率與分成比例設定：為主平臺與加盟 運營商 設定分成規則（如平臺收取 5% 軟體服務費，加盟 運營商 獲得 95% 電費及服務費收益），系統根據即時訂單全自動計算分賬流水。\n💡業務賦能與建議：主平臺可一鍵統攬全網聚合資料，同時賦予加盟 運營商 獨立的自主定價權與營銷發券許可權。"
           }
         }
       },
@@ -941,6 +1081,10 @@
           "km": {
             "question": "តើដំណើរការទូទាត់ប្រាក់ចំណេញ និងការត្រួតពិនិត្យដកប្រាក់សម្រាប់ប្រតិបត្តិករដែលចូលរួមជាសមាជិកយ៉ាងដូចម្តេច?",
             "answer": "វេទិកាផ្តល់ប្រព័ន្ធបែងចែកបញ្ជី និងទូទាត់ហិរញ្ញវត្ថុដ៏តឹងរឹង និងថ្លាសម្រាប់អ្នកប្រតិបត្តិការដៃគូ:\nការកត់ត្រាការបញ្ជាទិញតាមពេលវេលាជាក់ស្តែង៖ បន្ទាប់ពីការបញ្ជាទិញសាកនីមួយៗបញ្ចប់ ប្រព័ន្ធបំបែកតាមសមាមាត្រចែករំលែកដែលកំណត់ទុកជា [កម្មសិទ្ធិថ្លៃអគ្គិសនីមូលដ្ឋាន] [ចំណែកថ្លៃសេវារបស់អ្នកប្រតិបត្តិការ] និង [ថ្លៃសេវាបច្ចេកទេសរបស់វេទិកា] សរសេរចូលបញ្ជីលំហូរបែងចែក;\nការផ្ទៀងផ្ទាត់ជាវដ្ត និងការបញ្ជាក់វិក្កយបត្រ៖ នៅថ្ងៃទូទាត់កំណត់ជារៀងរាល់ខែ ប្រព័ន្ធបង្កើតសេចក្តីសង្ខេបទូទាត់ប្រចាំខែរបស់អ្នកប្រតិបត្តិការដៃគូនៅ [ការគ្រប់គ្រងហិរញ្ញវត្ថុ - វិក្កយបត្រផ្ទៀងផ្ទាត់] ដោយស្វ័យប្រវត្តិ រួមទាំងបរិមាណសាកពិត ចំណូលសរុប ការកាត់ត្រឡប់ប្រាក់ និងចំនួនចែករំលែកសុទ្ធដែលត្រូវទូទាត់;\nការស្នើសុំដកប្រាក់ និងការពិនិត្យច្រើនកម្រិត៖ អ្នកប្រតិបត្តិការដៃគូស្នើ [សំណើដកសមតុល្យកាបូប] នៅផ្នែកខាងក្រោយរបស់ខ្លួន អ្នកគ្រប់គ្រងហិរញ្ញវត្ថុរបស់វេទិកាមេ បន្ទាប់ពីផ្ទៀងផ្ទាត់គុណវុឌ្ឍិការចេញវិក្កយបត្រ និងវិក្កយបត្រផ្ទៀងផ្ទាត់ថាគ្មានកំហុស ទើបចុចអនុម័ត ប្រាក់ត្រូវបានផ្ទេរតាមធនាគារសហគ្រាស ឬឆានែលទូទាត់តតិយជន ត្រឡប់ទៅគណនីនីតិបុគ្គលរបស់អ្នកប្រតិបត្តិការ;\n⚠️ការរំលឹកអំពីហានិភ័យប្រតិបត្តិការ៖ មុនអនុម័តដកប្រាក់ គួរផ្ទៀងផ្ទាត់ថាអ្នកប្រតិបត្តិការនោះបានចេញវិក្កយបត្រពន្ធលើតម្លៃបន្ថែមពិសេសតាមចំនួនទឹកប្រាក់គ្រប់គ្រាន់ជូនវេទិកាហើយឬនៅ ធានាវដ្តឯកសារពន្ធត្រឹមត្រូវតាមច្បាប់"
+          },
+          "zh-Hant": {
+            "question": "加盟運營商的分潤資金結算與提現稽核流程是怎樣的？",
+            "answer": "平臺為加盟運營商提供嚴密、透明的財務分賬與結算體系：\n訂單即時記賬：每筆充電訂單完成後，系統自動根據預設的分成比例拆解為【基礎電費歸屬】、【運營商服務費分成】與【平臺技術服務費】，寫入清分流水賬；\n週期對賬與賬單確認：每月固定結賬日，系統自動在【財務管理 - 對賬賬單】生成加盟 運營商 的月度結算彙總單，包含實際充電量、總流水、退款衝抵項及應結分成淨額；\n提現申請與多級稽核：加盟 運營商 在其後臺發起【錢包餘額提現申請】，主平臺財務管理員在【財務管理 - 提現稽核】中核驗開票資質與對賬單無誤後，點選稽核通過，資金通過企業網銀或第三方支付渠道原路打款至 運營商 對公賬戶。\n⚠️運營風控提醒：提現稽核前應核驗該 運營商 是否已向平臺足額開具對應金額的增值稅專用發票，確保財稅票據合規閉環。"
           }
         }
       },
@@ -964,6 +1108,10 @@
           "km": {
             "question": "តើត្រូវរៀបចំផែនការ និងកំណត់រចនាសម្ព័ន្ធកម្មវិធីប្រូម៉ូសិនបញ្ចូលលុយ និងការចែកចាយប័ណ្ណបញ្ចុះតម្លៃយ៉ាងដូចម្តេច?",
             "answer": "ការកំណត់គូប៉ុងច្រើនវិមាត្រ៖ បង្កើតទ្រព្យសម្បត្តិគូប៉ុងនៅ [ការគ្រប់គ្រងឧបករណ៍សាក - គូប៉ុងសាក]:\n[ប្រភេទតម្លៃ]៖ កំណត់គូប៉ុងបញ្ចុះផ្ទាល់ (ឧទាហរណ៍ បញ្ចុះ 5 យន់) គូប៉ុងបញ្ចុះភាគរយ (ឧទាហរណ៍ ថ្លៃសេវាបញ្ចុះ 20%) ឬគូប៉ុងបញ្ចុះតាមកម្រិត (គ្រប់ 30 បញ្ចុះ 6 យន់);\n[លក្ខខណ្ឌប្រើ និងកំហិតកាលវិភាគ]៖ អាចកំណត់ឱ្យប្រើតែក្នុងពេលទាប ដើម្បីសម្រេចគោលដៅ \"កាត់កំពូលបំពេញរណ្តៅ នាំម្ចាស់រថយន្តប្រើអគ្គិសនីក្នុងពេលទាប\";\n[វិសាលភាពស្ថានីយ]៖ អាចកំណត់ជាពិសេសសម្រាប់ស្ថានីយដែលទើបបើកថ្មី ដើម្បីនាំចរាចរណ៍ទៅស្ថានីយដែលមានមនុស្សតិច ឬថ្មី;\nឆានែលចែកចាយ៖ គាំទ្រអ្នកប្រើយកគូប៉ុងដោយខ្លួនឯងនៅកម្មវិធីអតិថិជន ផ្ដល់គូប៉ុងដោយស្វ័យប្រវត្តិនៅពេលអ្នកប្រើថ្មីចុះឈ្មោះ និងអ្នកគ្រប់គ្រងចែកគូប៉ុងដោយដៃជាក់លាក់ដល់ម្ចាស់រថយន្តតម្លៃខ្ពស់ក្នុង [បញ្ជីសមាជិក];\n💡ដំបូន្មានអាជីវកម្ម៖ គូប៉ុងពេលទូទាត់អនុវត្តតាមលំដាប់កាត់យ៉ាងតឹងរ៉ឹង (ជាធម្មតាកាត់ថ្លៃសេវាមុន) ការបញ្ជាទិញដែលសាកមិនចូលអគ្គិសនីខុសប្រក្រតី ប្រព័ន្ធនឹងត្រឡប់គូប៉ុង និងបន្តអាយុកាលដោយស្វ័យប្រវត្តិ"
+          },
+          "zh-Hant": {
+            "question": "如何策劃與配置平臺充值促銷活動與優惠券分發？",
+            "answer": "\n優惠券多維度配置：在【充電樁管理 - 充電優惠券】中建立卡券資產：\n【面額型別】：配置立減券（如減 5 元）、折扣券（如服務費 8 折）或滿減券（滿 30 減 6 元）；\n【使用門檻與時段限制】：可限定僅在低谷時段使用，以達到“削峰填谷、引導車主低谷消納電量”的目的；\n【場站適用範圍】：可指定新上線場站專用，精準為冷門或新場站導流；\n發放途徑：支援使用者自主在客戶端領券、新使用者註冊自動送券，以及管理員在【會員列表】中針對高價值車主進行定向精準手動派券。\n💡業務賦能與建議：優惠券在結算時嚴格遵循抵扣順序（通常優先抵扣服務費），異常未充入電量的訂單系統會自動回退優惠券並順延有效期。"
           }
         }
       },
@@ -987,6 +1135,10 @@
           "km": {
             "question": "តើម៉ូឌុល [ការគ្រប់គ្រងកងយានយន្ត] គាំទ្រដល់ប្រតិបត្តិការយ៉ាងល្អិតល្អន់សម្រាប់អតិថិជនធំៗដូចជា រថយន្តតាក់ស៊ីបច្ចេកវិទ្យា ភស្តុភារ និងរថយន្តក្រុងយ៉ាងដូចម្តេច?",
             "answer": "ម៉ូឌុលកងយានយន្តផ្តល់សមត្ថភាពគ្រប់គ្រង B2B ពិសេសសម្រាប់ក្រុមអតិថិជនធំដែលប្រើញឹកញាប់ និងប្រើអគ្គិសនីច្រើន:\nការបង្កើតឯកសារអង្គការ និងសមាជិកកងយានយន្ត៖ បង្កើតឯកសារកងយានយន្តនៅ [ការគ្រប់គ្រងឧបករណ៍សាក - ការគ្រប់គ្រងកងយានយន្ត] បំពេញឈ្មោះក្រុមហ៊ុន អ្នកទំនាក់ទំនង ភ្ជាប់គណនីមូលនិធិពិសេសរបស់កងយានយន្ត និងនាំចូលគណនីអ្នកបើកបរ និងស្លាកលេខ / កូដ VIN របស់រថយន្តជាក្រុម;\nយុទ្ធសាស្ត្រគិតថ្លៃពិសេសសម្រាប់កងយានយន្ត៖ គាំទ្រការភ្ជាប់ទម្រង់គិតថ្លៃបញ្ចុះពិសេសឱ្យកងយានយន្តនីមួយៗ (ឧទាហរណ៍ ផ្តល់ការបញ្ចុះថ្លៃសេវា 30% ដល់កងយានយន្តភស្តុភារមួយ) នៅពេលអ្នកបើកបរសាក ប្រព័ន្ធស្គាល់អត្តសញ្ញាណកងយានយន្ត និងទូទាត់តាមតម្លៃក្នុងកិច្ចព្រមព្រៀង;\nការផ្ទៀងផ្ទាត់រួម និងការគ្រប់គ្រងកូតា៖ កងយានយន្តគាំទ្រការបញ្ចូលប្រាក់ជាមុនរួមតាមគណនីមេរបស់សហគ្រាស អ្នកបើកបរសាកនឹងកាត់ពីកូតាគណនីមេដោយផ្ទាល់ ចុងខែអ្នកប្រតិបត្តិការនាំចេញវិក្កយបត្រផ្ទៀងផ្ទាត់សង្ខេបរបស់កងយានយន្ត និងចេញវិក្កយបត្រពន្ធលើតម្លៃបន្ថែមរបស់សហគ្រាស;\n💡ដំបូន្មានអាជីវកម្ម៖ កងយានយន្តអតិថិជនធំផ្តល់បន្ទុកមូលដ្ឋានដ៏រឹងមាំ និងលំហូរសាច់ប្រាក់ដែលអាចព្យាករណ៍បានដល់ស្ថានីយ ជាសសរស្តម្ភសំខាន់ក្នុងការបង្កើនអត្រាប្រើប្រាស់ឧបករណ៍របស់ស្ថានីយថ្មី"
+          },
+          "zh-Hant": {
+            "question": "【車隊管理】模組如何支援網約車、物流車及公交車隊的大客戶精細化運營？",
+            "answer": "車隊模組針對高頻、大電量的大客戶群體，提供 B2B 專屬管理能力：\n車隊組織與成員建檔：在【充電樁管理 - 車隊管理】中建立車隊檔案，錄入企業名稱、聯絡人、繫結車隊專屬資金池賬戶，並批次匯入車隊司機賬號及車牌號/車輛 VIN 碼；\n專屬車隊計費策略：支援為不同車隊繫結專屬的折扣計費模板（如針對某物流車隊給予服務費 7 折優惠），司機充電時系統自動識別車隊身份並按協議價結算；\n集中對賬與額度管控：車隊支援企業主賬戶統一充值預存，司機充電直接劃扣主賬戶額度，月末由 運營商 匯出車隊彙總對賬單並開具企業增值稅發票。\n💡業務賦能與建議：大客戶車隊能為場站提供穩定的保底負荷與可預測的現金流，是提升新場站裝置利用率的關鍵支柱。"
           }
         }
       },
@@ -1010,6 +1162,10 @@
           "km": {
             "question": "តើ SOP នៃការត្រួតពិនិត្យវដ្តជីវិតពេញលេញ និងការដោះស្រាយការបញ្ជាទិញសាកថ្មមិនប្រក្រតីយ៉ាងដូចម្តេច?",
             "answer": "[ការគ្រប់គ្រងហិរញ្ញវត្ថុ - ការគ្រប់គ្រងការបញ្ជាទិញសាក] គាំទ្រការត្រួតពិនិត្យរូបភាពរួមសម្រាប់ការសាករថយន្ត ការសាកម៉ូតូពីរកង់ ការបញ្ជាទិញថ្លៃកាន់កាប់កន្លែង និងការបញ្ជាទិញខុសប្រក្រតី:\nការតាមដានស្ថានភាពបញ្ជាទិញពេញដំណើរការ៖ កត់ត្រាតាមពេលវេលាជាក់ស្តែងទាំងសារព័ត៌មាន និងទិន្នន័យពេញខ្សែសង្វាក់ពី \"បង្កើត ➔ ផ្គូផ្គងផ្ទៀងផ្ទាត់ ➔ កំពុងសាក ➔ កំពុងទូទាត់ ➔ បញ្ចប់/ត្រឡប់ប្រាក់រួច\" (រួម SOC ចាប់ផ្តើម SOC បញ្ចប់ ចំនួនគីឡូវ៉ាត់ម៉ោងសរុប ចំនួនទឹកប្រាក់បែងចែកតាមកាលវិភាគ ពេលដកក្បាលសាក ฯលៈ);\nការទប់ស្កាត់ និងចាត់ថ្នាក់ការបញ្ជាទិញខុសប្រក្រតីឆ្លាតវៃ៖ នៅពេលប្រព័ន្ធរកឃើញព្រឹត្តិការណ៍ខុសប្រក្រតីខាងក្រោម វានឹងដាក់ស្លាក [ការបញ្ជាទិញខុសប្រក្រតីរង់ចាំដោះស្រាយ] និងជូនដំណឹងការងាររង់ចាំដល់អ្នកគ្រប់គ្រងដោយស្វ័យប្រវត្តិ:\n[ការកាត់ថ្លៃសេវា 0 គីឡូវ៉ាត់ម៉ោងខុសប្រក្រតី]៖ ការបញ្ជាទិញត្រូវបានបង្កើត និងកាត់ប្រាក់រួច ប៉ុន្តែអគ្គិសនីដែលសាកចូលពិត < 0.2 kWh;\n[ក្បាលសាកកាត់ពាក់កណ្តាលដោយអូហ្វឡាញ]៖ ឧបករណ៍ដាច់ការតភ្ជាប់ភ្លាមៗ ឬផ្នែករឹងដាច់ចរន្ត បណ្តាលឱ្យទទួលសារ StopTransaction ធម្មតាមិនបាន;\nសកម្មភាពដោះស្រាយខុសប្រក្រតី៖ អ្នកគ្រប់គ្រងអាចទាញសារ MeterValues ដើមរបស់ឧបករណ៍មកផ្ទៀងផ្ទាត់តាមអនឡាញ រួចអនុវត្ត [ត្រឡប់ប្រាក់តាមផ្លូវដើមក្នុងការចុចតែម្តង] [កែចំនួនទឹកប្រាក់ទូទាត់ដោយដៃ] ឬ [លុបការបញ្ជាទិញ ហើយទូទាត់ឡើងវិញ];\n💡ដំបូន្មានអាជីវកម្ម៖ សម្រាប់ការកាត់ប្រាក់ខុសប្រក្រតីដែលបញ្ជាក់ថាកើតពីឧបករណ៍ខូច បន្ទាប់ពីហិរញ្ញវត្ថុអនុម័ត ប្រព័ន្ធនឹងចាប់ផ្តើមត្រឡប់ប្រាក់តាមផ្លូវដើមក្នុងរយៈពេល 5 នាទី ការពារសិទ្ធិស្របច្បាប់របស់ម្ចាស់រថយន្ត"
+          },
+          "zh-Hant": {
+            "question": "充電訂單的全生命週期監控與異常訂單處理 SOP 是怎樣的？",
+            "answer": "【財務管理 - 充電訂單管理】支援對汽車充電、兩輪車充電、佔位費訂單及異常訂單的全景監控：\n訂單狀態全流程跟蹤：即時記錄訂單從“建立 ➔ 鑑權握手 ➔ 充電中 ➔ 結算中 ➔ 已完成/已退款”全鏈路報文與資料（包含起始 SOC、結束 SOC、充電總度數、各時段分段金額、拔槍時間等）；\n異常訂單智慧攔截與歸類：當系統監測到以下異常事件時，會自動標記為【待處理異常訂單】並向管理員觸發待辦通知：\n【0度電扣費異常】：訂單建立並扣款但實際充入電量 < 0.2 kWh；\n【離線跳槍中斷】：樁端突發斷網或硬體掉電導致未收到正常 StopTransaction 報文；\n異常處理動作：管理員可線上調取樁端原始 MeterValues 報文核驗，執行【一鍵原路退款】、【手動修正結算金額】或【作廢訂單重新結算】。\n💡業務賦能與建議：對確認屬於裝置故障導致的異常扣款，財務稽核通過後系統將在 5 分鐘內發起原路秒級退還，保障車主合法權益。"
           }
         }
       },
@@ -1033,6 +1189,10 @@
           "km": {
             "question": "តើត្រូវធ្វើការផ្ទៀងផ្ទាត់ហិរញ្ញវត្ថុប្រចាំថ្ងៃ និងប្រចាំខែយ៉ាងដូចម្តេច? (ថ្លៃដើមបណ្តាញអគ្គិសនី លំហូរសាច់ប្រាក់របស់អ្នកប្រើប្រាស់ និងការទូទាត់ច្រកទូទាត់)",
             "answer": "បុគ្គលិកហិរញ្ញវត្ថុរបស់អ្នកប្រតិបត្តិការបំពេញការផ្ទៀងផ្ទាត់យ៉ាងតឹងរ៉ឹងរវាងលំហូរប្រាក់បីផ្លូវ និងលំហូរអាជីវកម្ម តាមរយៈ [ការគ្រប់គ្រងហិរញ្ញវត្ថុ - វិក្កយបត្រផ្ទៀងផ្ទាត់]:\nការផ្ទៀងផ្ទាត់ការបញ្ចូលប្រាក់ និងការចំណាយរបស់អ្នកប្រើ៖ ផ្ទៀងផ្ទាត់ចំនួនសរុបនៃការបញ្ចូលប្រាក់ពិតតាម WeChat / Alipay / កាតធនាគាររបស់អ្នកប្រើ ជាមួយព័ត៌មានលម្អិតនៃការផ្លាស់ប្តូរសមតុល្យកាបូបគណនីវេទិកា ([ប្រវត្តិបញ្ចូលប្រាក់] ធៀបនឹង [ព័ត៌មានលម្អិតសមតុល្យ]) ធានាបញ្ជីត្រូវនឹងការពិត;\nការគណនាប្រាក់ចំណេញដុលនៃថ្លៃអគ្គិសនី និងថ្លៃសេវារបស់អ្នកប្រតិបត្តិការ៖\n[ផ្នែកចំណូល]៖ នាំចេញ [ចំណូលថ្លៃអគ្គិសនីមូលដ្ឋាន] និង [ចំណូលថ្លៃសេវា] នៃការបញ្ជាទិញសាកដែលបានបញ្ចប់ទាំងអស់ក្នុងវដ្តនេះ;\n[ផ្នែកចំណាយ]៖ បំពេញវិក្កយបត្រថ្លៃអគ្គិសនីម៉ែត្រសរុបដែលបានបង់ពិតជូនក្រុមហ៊ុនបណ្តាញអគ្គិសនី (រួមថ្លៃសមត្ថភាពមូលដ្ឋានរបស់ឧបករណ៍បំលែង / ថ្លៃតម្រូវការ និងថ្លៃអគ្គិសនីតាមចំនួនគីឡូវ៉ាត់ម៉ោងសរុបពិត);\n⚠️ការរំលឹកអំពីហានិភ័យប្រតិបត្តិការ៖ ប្រសិនបើរកឃើញថាចំនួនគីឡូវ៉ាត់ម៉ោងរបស់ម៉ែត្រសរុបនៅស្ថានីយ ខុសពីផលបូកចំនួនគីឡូវ៉ាត់ម៉ោងចេញរបស់ឧបករណ៍នីមួយៗលើស 12% គួរប្រុងប្រយ័ត្នចំពោះការបាត់បង់ខ្សែដ៏ធំ ម៉ែត្រខូច ឬហានិភ័យលួចប្រើអគ្គិសនី ត្រូវបញ្ជូនក្រុមប្រតិបត្តិការទៅពិនិត្យនៅនឹងកន្លែង"
+          },
+          "zh-Hant": {
+            "question": "如何開展每日與每月的財務對賬工作？（電網成本、使用者流水與通道清算）",
+            "answer": "運營商 財務人員通過【財務管理 - 對賬賬單】完成三方資金流與業務流的嚴密對賬：\n使用者充值與消費對賬：核對使用者微信/支付寶/銀行卡實際充值流水總額與平臺賬戶錢包餘額變動明細（【充值記錄】vs【餘額明細】），確保賬實相符；\n運營商電費與服務費毛利核算：\n【營收端】：匯出本週期全部已完成充電訂單的【基礎電費收入】與【服務費收入】；\n【成本端】：錄入向電網公司實際繳納的總電錶電費賬單（包含變壓器基本容量費/需量費與實際總度數電費）；\n⚠️運營風控提醒：若發現場站總表度數與各樁輸出度數總和偏差超過 12%，應立即警惕電纜線損過大、電錶故障或存在偷漏電隱患，需派運維現場排查。"
           }
         }
       },
@@ -1056,6 +1216,10 @@
           "km": {
             "question": "តើមុខងារគ្រប់គ្រងវិក្កយបត្ររបស់វេទិកាគាំទ្រការអនុលោមតាមច្បាប់ពន្ធ និងការចែកចាយដោយស្វ័យប្រវត្តិយ៉ាងដូចម្តេច?",
             "answer": "[ការគ្រប់គ្រងហិរញ្ញវត្ថុ - ការគ្រប់គ្រងវិក្កយបត្រ] បំពេញតាមវិក្កយបត្រអេឡិចត្រូនិកជាតិ និងស្តង់ដារកូដចាត់ថ្នាក់ពន្ធយ៉ាងទូលំទូលាយ:\nយន្តការបំបែកអាជីវកម្ម និងអត្រាពន្ធ៖ តាមគោលនយោបាយពន្ធជាតិ ថ្លៃអគ្គិសនី និងថ្លៃសេវាក្នុងការបញ្ជាទិញសាក ស្ថិតក្នុងចំណាត់ថ្នាក់ពន្ធផ្សេងគ្នា:\n[ផ្នែកថ្លៃអគ្គិសនី]៖ ជាការលក់ទំនិញ អត្រាពន្ធលើតម្លៃបន្ថែមជាធម្មតា 13%;\n[ផ្នែកថ្លៃសេវាសាក]៖ ជាសេវាកម្មសម័យទំនើប អត្រាពន្ធលើតម្លៃបន្ថែមជាធម្មតា 6%; នៅពេលអ្នកប្រើស្នើចេញវិក្កយបត្រ ប្រព័ន្ធបំបែកចំនួនទឹកប្រាក់នៃការបញ្ជាទិញដែលបានជ្រើសតាមសមាមាត្រជាពីរចំណុចរង \"ថ្លៃអគ្គិសនី\" និង \"ថ្លៃសេវា\" ដោយស្វ័យប្រវត្តិ;\nរបៀបចេញវិក្កយបត្រដែលគាំទ្រ៖ គាំទ្រ [អ្នកប្រើស្នើដោយខ្លួនឯង ➔ ផ្នែកខាងក្រោយភ្ជាប់ចំណុចប្រទាក់ត្រួតពិនិត្យពន្ធរបស់វិក្កយបត្រអេឡិចត្រូនិកដើម្បីចេញដោយស្វ័យប្រវត្តិ ➔ ផ្ញើទៅអ៊ីមែលអ្នកប្រើដោយស្វ័យប្រវត្តិ] និងគាំទ្រករណីអតិថិជនសហគ្រាសធំស្នើវិក្កយបត្រពិសេសដោយអ្នកគ្រប់គ្រងហិរញ្ញវត្ថុធ្វើ [ចេញបន្ទាប់ពីពិនិត្យដោយដៃ];\nការគ្រប់គ្រងកូតាចេញវិក្កយបត្រប្រឆាំងការដកជាសាច់ប្រាក់៖ ប្រព័ន្ធអនុញ្ញាតឱ្យចេញវិក្កយបត្រតែសម្រាប់ \"ផ្នែកដែលបានចំណាយពិត និងទូទាត់រួចដែលបង់ដោយសាច់ប្រាក់\" ប្រាក់បញ្ចូលដែលមិនទាន់ចំណាយ ប្រាក់ជូនកម្មវិធី និងផ្នែកដែលកាត់ដោយគូប៉ុង ប្រព័ន្ធដកចេញពីកូតាចេញវិក្កយបត្រដោយស្វ័យប្រវត្តិ;\n💡ដំបូន្មានអាជីវកម្ម៖ តាមរយៈប្រវត្តិចេញវិក្កយបត្រនៅផ្នែកខាងក្រោយ ហិរញ្ញវត្ថុរបស់អ្នកប្រតិបត្តិការអាចនាំចេញព័ត៌មានលម្អិតពន្ធលើការលក់របស់ខែនោះក្នុងការចុចតែម្តង ប្រើដាក់របាយការណ៍ពន្ធជូនការិយាល័យពន្ធដារដោយផ្ទាល់"
+          },
+          "zh-Hant": {
+            "question": "平臺發票管理功能如何支援稅法合規與自動化交付？",
+            "answer": "【財務管理 - 發票管理】全面滿足國家數電發票與稅收分類編碼規範：\n業務與稅率分離機制：按國家稅務政策，充電訂單中的電費與服務費分屬不同稅目：\n【電費部分】：屬於貨物銷售，適用增值稅稅率通常為 13%；\n【充電服務費部分】：屬於現代服務業，適用增值稅稅率通常為 6%；系統在使用者申請開票時，自動將選中的訂單金額按比例拆分為“電費”與“服務費”兩個稅目子項；\n開票模式支援：支援【使用者自助申請 ➔ 後臺自動對接數電發票稅控介面開具 ➔ 自動推送至使用者郵箱】，也支援企業大客戶申請專票時由財務管理員進行【人工稽核確認後開具】；\n開票額度防套現風控：系統僅允許對“已實際消費且已完成結算的現金支付部分”開具發票，充值未消費金額、活動贈送金及優惠券抵扣部分系統自動剔除在開票額度之外。\n💡業務賦能與建議：通過後臺的發票開具流水，運營商 財務可一鍵匯出當月銷項稅額明細，直接用於向稅務局申報納稅。"
           }
         }
       },
@@ -1079,6 +1243,10 @@
           "km": {
             "question": "តើអ្វីទៅជា [ការសាកថ្មតាមលំដាប់លំដោយ / Smart Charging]? តើយុទ្ធសាស្ត្រត្រួតពិនិត្យស្នូល និងតម្លៃពាណិជ្ជកម្មរបស់វាគឺជាអ្វី?",
             "answer": "[ការសាកថ្មតាមលំដាប់លំដោយ] គឺជាបច្ចេកវិទ្យាឆ្លាតវៃស្នូលដែលអ្នកប្រតិបត្តិការប្រើដើម្បីដោះស្រាយសមត្ថភាពចែកចាយអគ្គិសនីរបស់បណ្តាញមិនគ្រប់គ្រាន់ កាត់បន្ថយថ្លៃតម្រូវការ និងការពារឧបករណ៍បំលែងផ្ទុកលើស:\nយុទ្ធសាស្ត្រប្រតិបត្តិការស្នូល៖ ក្រោមលក្ខខណ្ឌដែលសមត្ថភាពសរុបរបស់ឧបករណ៍បំលែងចែកចាយនៅស្ថានីយថេរ វេទិកាចេញបញ្ជាកែថាមពលបែបឌីណាមិកទៅឧបករណ៍សាកនីមួយៗ តាមបន្ទុកបណ្តាញពេលវេលាជាក់ស្តែង សញ្ញាថ្លៃអគ្គិសនីតាមកាលវិភាគ ស្ថានភាពសាក (SOC) របស់ថ្មរថយន្តនីមួយៗ និងពេលវេលាដែលម្ចាស់រថយន្តកំណត់ថានឹងចេញ;\n[ការពារឧបករណ៍បំលែងផ្ទុកលើស]៖ នៅពេលថាមពលសរុបដែលរថយន្តទាំងអស់បញ្ចូលក្បាលសាកព្រមគ្នាជិតដល់ពិដានសមត្ថភាពសុវត្ថិភាពរបស់ឧបករណ៍បំលែង (ឧទាហរណ៍ ខ្សែព្រមាន 85%) ប្រព័ន្ធកាត់បន្ថយ និងចែកស្មើថាមពលចេញរបស់ក្បាលនីមួយៗក្នុងកម្រិតមីលីវិនាទី ការពារកុងតាក់មេកាត់;\n[ការចាត់ចែងសេដ្ឋកិច្ចតាមថ្លៃកាលវិភាគ]៖ ចាត់ចែងសាកពេញថាមពល និងល្បឿនពេញក្នុងពេលថ្លៃទាបដោយស្វ័យប្រវត្តិ និងកំណត់ថាមពលឱ្យសមស្របក្នុងពេលកំពូលរបស់បណ្តាញ ខណៈបំពេញតម្រូវការសាកមូលដ្ឋានរបស់ម្ចាស់រថយន្ត ជួយបញ្ចុះថ្លៃអគ្គិសនីរួម;\n[អាល់ហ្គរីទឹមអាទិភាពករណីបន្ទាន់]៖ ប្រព័ន្ធបំពេញជាអាទិភាពនូវការសាកថាមពលខ្ពស់សម្រាប់រថយន្តដែលមានអគ្គិសនីតិចខ្លាំង (ឧទាហរណ៍ SOC < 20%) និងបញ្ចេញកូតាថាមពលលើសរបស់រថយន្តដែលសាកលើស 80% ដែលចូលដំណាក់កាលសាកតក់ៗ ទៅរថយន្តដែលទើបបញ្ចូលក្បាលថ្មីក្បែរនោះ;\nតម្លៃពាណិជ្ជកម្ម៖ អ្នកប្រតិបត្តិការមិនចាំបាច់ចំណាយដ៏ច្រើនសន្ធឹកសម្រាប់សុំពង្រីកឧបករណ៍បំលែងពីបណ្តាញអគ្គិសនី ក៏អាចបន្ថែមទីតាំងឧបករណ៍សាក 1.5~2 ដងក្នុងសមត្ថភាពចែកចាយដែលមានស្រាប់ បង្កើន ROI នៃការវិនិយោគសាងសង់ស្ថានីយមួយយ៉ាងខ្លាំង;\n💡ដំបូន្មានអាជីវកម្ម៖ ការសាកតាមលំដាប់លំដោយគាំទ្រការកំណត់វិធានគ្រប់គ្រង និងកម្រិតកំណត់សុវត្ថិភាពកំណត់របស់ឧបករណ៍បំលែងតាមស្ថានីយយ៉ាងបត់បែននៅ [មុខងារពិសេស - យុទ្ធសាស្ត្រសាកតាមលំដាប់លំដោយ] នៅផ្នែកខាងក្រោយ"
+          },
+          "zh-Hant": {
+            "question": "什麼是【有序充電】？其核心控制策略與商業價值是什麼？",
+            "answer": "【有序充電】是 運營商 應對電網配電容量不足、降低需量電費、防止變壓器過載的核心智慧化技術：\n核心執行策略：在場站總配電變壓器容量固定的前提下，平臺根據即時電網負荷、分時電價訊號、各車輛電池荷電狀態（SOC）及車主預留離開時間，動態向各充電樁下發功率調節指令：\n【變壓器防過載保護】：當場站所有車同時插槍充電總功率逼近變壓器安全容量上限（如 85% 預警線）時，系統自動對各槍輸出功率進行毫秒級動態降額平攤，防止主開關跳閘；\n【分時電價經濟排程】：在低谷電價時段自動排程全功率全速充電，在電網高峰時段在滿足車主基礎補能需求下適當限制功率，幫助降低綜合用電成本；\n【急需優先演算法】：系統優先保障電量極低（如 SOC < 20%）車輛的大功率補能，對已充至 80% 以上進入涓流階段的車輛釋放多餘功率配額給相鄰新插槍車輛；\n商業價值：運營商 無需花費巨資向電網申請變壓器擴容，即可在現有配電容量下增設 1.5～2 倍的充電樁位，大幅提升單站投建 ROI。\n💡業務賦能與建議：有序充電支援在後臺【專項功能 - 有序充電策略】中按場站靈活設定控制規則與變壓器額定安全閾值。"
           }
         }
       },
@@ -1102,6 +1270,10 @@
           "km": {
             "question": "តើសូចនាករប្រតិបត្តិការស្នូលអ្វីខ្លះដែលត្រូវបានរួមបញ្ចូលនៅក្នុង [ទិដ្ឋភាពទូទៅនៃទិន្នន័យទំព័រដើម] និង [ផ្ទាំងគ្រប់គ្រងទិន្នន័យស្ថានីយ]? តើពួកគេណែនាំប្រតិបត្តិការយ៉ាងដូចម្តេច?",
             "answer": "ម៉ូឌុលផ្ទាំងគ្រប់គ្រងគឺជាហាងបញ្ជាទិន្នន័យដែលអ្នកប្រតិបត្តិការប្រើដើម្បីចាប់យកនិន្នាការអាជីវកម្ម និងកំណត់យុទ្ធសាស្ត្របែបឌីណាមិក:\n[ទិដ្ឋភាពទូទៅទិន្នន័យទំព័រដើម - សូចនាករស្នូល]:\n[ចំណូលអាជីវកម្មសរុប]៖ ចំណូលសរុបកកកុញថ្ងៃនេះ/ខែនេះ បំបែកជាប្រាក់ចំណេញដុលនៃថ្លៃអគ្គិសនីមូលដ្ឋាន និងថ្លៃសេវាយ៉ាងច្បាស់ ធៀបការកើនចុះជាមួយម្សិលមិញ និងធៀបជាមួយខែមុន;\n[ចំនួនគីឡូវ៉ាត់ម៉ោង និងចំនួនដងសាក]៖ ចំនួនគីឡូវ៉ាត់ម៉ោងសរុបទូទាំងបណ្តាញ (kWh) ចំនួនដងបម្រើរថយន្តសរុប និងរយៈពេលសាកជាមធ្យមក្នុងមួយរថយន្ត;\n[សុខភាពប្រតិបត្តិការឧបករណ៍]៖ ចំនួនឧបករណ៍សរុបទូទាំងបណ្តាញ អត្រាអនឡាញ អត្រាខូច អត្រាទំនេរ និងសមាមាត្រកំពុងសាក;\n[តារាងចំណូលស្ថានីយ]៖ បង្ហាញតាមពេលវេលាជាក់ស្តែងនូវតារាង Top 10 ចំណូលទូទាំងបណ្តាញ និងស្ថានីយចុងក្រោយ ជួយកំណត់យ៉ាងច្បាស់នូវទ្រព្យសម្បត្តិមានគុណភាព និងស្ថានីយមានបញ្ហា;\n[ផ្ទាំងទិន្នន័យស្ថានីយ - ស្វែងយល់លម្អិត]៖ យកស្ថានីយតែមួយជាវិមាត្រមីក្រូ បង្ហាញនិន្នាការបរិមាណសាកជាមធ្យមប្រចាំថ្ងៃរបស់ស្ថានីយនោះ ទិន្នផលក្នុងមួយក្បាលក្នុងមួយថ្ងៃ (យន់/ក្បាល/ថ្ងៃ) ចំនួនដងបម្រើជាមធ្យមក្នុងមួយក្បាលក្នុងមួយថ្ងៃ និងអត្រាអ្នកប្រើត្រឡប់មកសាកម្តងទៀត ឆ្លុះបញ្ចាំងដោយផ្ទាល់នូវសុខភាពអាជីវកម្មរបស់ស្ថានីយនោះ;\n💡ដំបូន្មានអាជីវកម្ម៖ នៅក្នុងពិធីប្រជុំព្រឹកប្រចាំថ្ងៃ ក្រុមប្រតិបត្តិការអាចពិនិត្យឡើងវិញនូវការប្រែប្រួលចំណូលម្សិលមិញ និងសមាមាត្រឧបករណ៍ខូចជាចម្បង ព្រមទាំងបើកយុទ្ធនាការគូប៉ុងបញ្ចុះពេលទាបជាក់លាក់សម្រាប់ស្ថានីយដែលមានប្រសិទ្ធភាពទាបយ៉ាងទាន់ពេល"
+          },
+          "zh-Hant": {
+            "question": "【首頁資料總覽】與【場站資料看板】包含哪些核心經營指標？如何指導運營？",
+            "answer": "看板模組是 運營商 把握經營走勢、制定動態策略的資料駕駛艙：\n【首頁資料總覽】核心指標：\n【經營總營收】：今日/本月累計總收入，直觀拆解為基礎電費與服務費毛利，對比昨日環比與上月同比增減幅；\n【充電電量與次數】：全網總充電度數（kWh）、總服務車次及平均單車充電時長；\n【裝置執行健康度】：全網裝置總數、線上率、故障率、空閒率與充電中佔比；\n【場站營收榜單】：即時展示全網營收 Top 10 與墊底場站排行，輔助精準定位優質資產與問題站點；\n【場站資料看板】精細化下鑽：以單個場站為微觀維度，展示單站日均充電量走勢、單槍日產出（元/槍/天）、單槍日均服務車次及使用者復充留存率，直接反饋該場站的經營健康度。\n💡業務賦能與建議：每日早會運營團隊可重點復盤昨日營收波動與故障樁佔比，針對低效場站及時上線針對性的低谷折扣券活動。"
           }
         }
       },
@@ -1125,6 +1297,10 @@
           "km": {
             "question": "តើត្រូវចាប់យកលំនាំនៃការឡើងចុះនៃតម្រូវការ និងបង្កើនប្រសិទ្ធភាពយុទ្ធសាស្ត្រកំណត់តម្លៃតាមរយៈ [ផ្ទាំងគ្រប់គ្រងអត្រាប្រើប្រាស់ស្ថានីយ] យ៉ាងដូចម្តេច?",
             "answer": "[ការគ្រប់គ្រងឧបករណ៍សាក - ផ្ទាំងអត្រាប្រើប្រាស់ស្ថានីយ] យកទិន្នន័យស៊េរីពេលវេលានៃប្រតិបត្តិការសាកជាស្នូល គណនាអត្រាប្រើប្រាស់តាមពេលវេលា និងអត្រាប្រើប្រាស់តាមថាមពលរបស់ឧបករណ៍:\nម៉ូដែលគណនាអត្រាប្រើប្រាស់៖\n[អត្រាប្រើប្រាស់តាមពេលវេលា] = ;\n[អត្រាប្រើប្រាស់តាមថាមពល] = ;\nការវិភាគក្រាហ្វបន្ទាត់នៃការប្រែប្រួលអត្រាប្រើប្រាស់ 24 ម៉ោង៖ បង្ហាញយ៉ាងច្បាស់នូវកាលវិភាគកំពូលនៃប្រតិបត្តិការក្នុងមួយថ្ងៃរបស់ស្ថានីយ (ឧទាហរណ៍ កំពូលសាកពេលផ្លាស់វេនរបស់តាក់ស៊ី និងរថយន្តសាធារណៈពេល 12:00~14:00) និងកាលវិភាគរណ្តៅ (ឧទាហរណ៍ ពេលទំនេរ 02:00~06:00);\nការបង្កើនប្រសិទ្ធភាពការកំណត់តម្លៃ និងប្រតិបត្តិការបែបឌីណាមិក៖\nសម្រាប់កាលវិភាគរណ្តៅដែលអត្រាប្រើប្រាស់ទាបជាង 10% ពេញមួយឆ្នាំ៖ បញ្ចុះថ្លៃសេវា សហការជាមួយកងយានយន្តណែនាំកញ្ចប់ចត-សាកប្រចាំខែពេលយប់ បង្កើនចំណូលពីទ្រព្យសម្បត្តិទំនេរ;\nសម្រាប់កាលវិភាគកកស្ទះដែលអត្រាប្រើប្រាស់លើស 80%៖ ដំឡើងថ្លៃសេវាបន្តិច ឬបន្ថយរយៈពេលអនុគ្រោះថ្លៃកាន់កាប់កន្លែងលើសម៉ោង បង្កើនល្បឿនវិលជុំរថយន្ត នាំអ្នកប្រើដែលប្រកាន់តម្លៃមួយផ្នែកទៅស្ថានីយក្បែរខាង;\n💡ដំបូន្មានអាជីវកម្ម៖ តាមរយៈដងថ្លឹងតម្លៃ \"កាត់កំពូលបំពេញរណ្តៅ\" យ៉ាងច្បាស់ ជាធម្មតាអាចបង្កើនចំណូលរួមប្រចាំថ្ងៃរបស់ស្ថានីយ 15%~25% ព្រមទាំងបន្ថយការប៉ះទង្គិចលើបន្ទុកបណ្តាញអគ្គិសនី"
+          },
+          "zh-Hant": {
+            "question": "如何通過【站場使用率看板】捕捉潮汐規律並最佳化定價策略？",
+            "answer": "【充電樁管理 - 站場使用率看板】以充電交易時序資料為核心，計算裝置時間利用率與功率利用率：\n使用率計算模型：\n【時間利用率】= ；\n【功率利用率】= ；\n24小時使用率波動折線圖分析：直觀呈現場站一天內的交易高峰時段（如中午 12:00～14:00 出租網約車交接班充電高峰）與谷底時段（如凌晨 02:00～06:00 閒置期）；\n定價與運營動態最佳化：\n針對利用率常年低於 10% 的谷底時段：調低服務費，聯合車隊引入夜間包月停充套餐，提高閒置資產創收；\n針對利用率超過 80% 的排隊擁堵時段：適當上調服務費或縮短超時佔位費緩衝期，加速車輛翻檯，引導部分價格敏感型使用者分流至周邊友鄰站點充電。\n💡業務賦能與建議：通過精準的“削峰填谷”價格槓桿，通常可使場站綜合日收益提升 15%～25%，同時降低電網負荷衝擊。"
           }
         }
       },
@@ -1148,6 +1324,10 @@
           "km": {
             "question": "តើ [ស្ថិតិទិន្នន័យពហុវិមាត្រ] ផ្តល់របាយការណ៍គ្រប់គ្រងកម្រិតសហគ្រាសសម្រាប់ប្រតិបត្តិករយ៉ាងដូចម្តេច?",
             "answer": "[មុខងារពិសេស - ស្ថិតិទិន្នន័យ] ផ្តល់របាយការណ៍ស្ថិតិរួមបែបពហុទិដ្ឋភាព នាំចេញបាន និងគាំទ្រការស្វែងយល់លម្អិតច្រើនកម្រិត:\nស្ថិតិអ្នកប្រតិបត្តិការ៖ ធៀបទំហំទ្រព្យសម្បត្តិ ចំនួនគីឡូវ៉ាត់ម៉ោងសាក ពេលវេលាឆ្លើយតបចំពោះការខូច និងចំណែកចំណូលចូលវេទិការបស់អ្នកប្រតិបត្តិការដៃគូនីមួយៗ ដើម្បីវាយតម្លៃប្រសិទ្ធភាពសហការ;\nស្ថិតិស្ថានីយ៖ ស្ថិតិតាមតំបន់ និងប្រភេទស្ថានីយ អំពីរយៈពេលសងវិញនៃការវិនិយោគ (ROI) ចំណូលជាមធ្យមក្នុងមួយគីឡូវ៉ាត់ម៉ោង និងទិន្នផលក្នុងមួយឯកតាផ្ទៃ;\nស្ថិតិឧបករណ៍៖ ស្ថិតិតាមអ្នកផលិតផ្នែករឹង និងម៉ូដែល អំពីភាពញឹកញាប់នៃការខូចឧបករណ៍ (MTBF) រយៈពេលជួសជុលជាមធ្យម និងអត្រាដាច់ការតភ្ជាប់ទំនាក់ទំនង ជាមូលដ្ឋានវាយតម្លៃតឹងរ៉ឹងសម្រាប់ការដេញថ្លៃឧបករណ៍ និងការដកចេញអ្នកផ្គត់ផ្គង់នៅពេលក្រោយ;\nស្ថិតិអ្នកប្រើ និងរថយន្ត៖ ស្ថិតិចំនួនអ្នកប្រើចុះឈ្មោះថ្មី ចំនួនអ្នកប្រើសាកសកម្ម ការបែងចែកតម្លៃក្នុងមួយលើក និងការបែងចែកម៉ាកម៉ូដែលរថយន្តសាក និងសមត្ថភាពថ្ម ជួយវិភាគរូបភាពការសាក និងទម្លាប់ប្រើអគ្គិសនីរបស់ម្ចាស់រថយន្តក្រុមចម្បង;\n💡ដំបូន្មានអាជីវកម្ម៖ របាយការណ៍ស្ថិតិទាំងអស់គាំទ្រការបង្កើត និងនាំចេញជារបាយការណ៍ Excel ក្នុងការចុចតែម្តង តាមថ្ងៃ សប្តាហ៍ ខែ ឬរយៈពេលកំណត់ដោយខ្លួនឯង ងាយស្រួលសម្រាប់ហិរញ្ញវត្ថុ និងអ្នកគ្រប់គ្រងក្នុងការរាយការណ៍"
+          },
+          "zh-Hant": {
+            "question": "【多維度資料統計】如何為 運營商 提供企業級管理報表？",
+            "answer": "【專項功能 - 資料統計】提供多視角、可匯出、支援多級鑽取的綜合統計報表：\n運營商統計：對比各加盟 運營商 的資產規模、充電度數、故障響應時效與平臺收益貢獻，評估合作成效；\n電站統計：按區域、站點型別統計電站投資回報週期（ROI）、度電平均收益及坪效產出；\n裝置統計：按硬體廠商、型號統計裝置故障發生頻次（MTBF）、平均維修耗時及通訊掉線率，為後續裝置招投標與供應商淘汰提供硬性考核依據；\n使用者與車輛統計：統計新增註冊使用者數、活躍充電使用者數、客單價分佈，以及充電車型品牌與電池容量分佈，輔助分析主流車主的充電畫像與用電習慣。\n💡業務賦能與建議：所有統計報表均支援按日、周、月、自定義時間範圍一鍵生成並匯出 Excel 報表，便於財務與管理層彙報。"
           }
         }
       }
