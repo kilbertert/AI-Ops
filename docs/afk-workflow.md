@@ -59,21 +59,23 @@ Git bundles enter a clean delivery checkout before the host write token is used.
 Missing delivery credentials produce `agent:blocked`; there is no non-triggering
 `GITHUB_TOKEN` fallback.
 
-## Providers
+## 模型 provider
 
-The configured Sandcastle profile is server-global: `claude` or
-`claude-deepseek`. Set `AFK_PROFILE` for local runs or the repository variable
-for Actions; no project-side credential is needed.
+配置的 Sandcastle 档案是**服务端全局**的：`claude` 或 `claude-deepseek`。
+本机运行设 `AFK_PROFILE`，Actions 上设同名 repo variable；项目侧无需任何凭据。
 
-Both are one settings file the host owns, mounted read-only into the sandbox:
+两者都指向宿主持有的一个 settings 文件，只读挂入沙箱：
 
-- `claude` talks to the Anthropic API with whatever credential the host shell
-  already exports.
-- `claude-deepseek` points Claude Code at the host-local cli-proxy-api relay's Anthropic Messages
-  API through `~/cliproxyapi/settings.deepseek.json`, which holds
-  `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN` plus the three
-  `ANTHROPIC_DEFAULT_*_MODEL` entries. Override the path with
-  `AFK_DEEPSEEK_SETTINGS` when the file lives elsewhere.
+- `claude`：用宿主 shell 已导出的凭据直连 Anthropic API。
+- `claude-deepseek`：经宿主本机的 `cli-proxy-api` 中继（127.0.0.1:8317）
+  访问 Anthropic Messages API，配置文件为 `~/cliproxyapi/settings.deepseek.json`，
+  其中含 `ANTHROPIC_BASE_URL`、`ANTHROPIC_AUTH_TOKEN` 以及三个
+  `ANTHROPIC_DEFAULT_*_MODEL` 条目。文件在别处时用 `AFK_DEEPSEEK_SETTINGS` 覆盖路径。
+
+**该中继绑在宿主 loopback 上，因此沙箱必须共享宿主网络命名空间**
+（默认 bridge 的容器到不了宿主 127.0.0.1）。代价是沙箱失去 Docker bridge 隔离，
+可达宿主**其它** loopback 服务。这是知情的取舍，不是可忽略的细节；
+缓解方式是按 host 隔离——AFK 跑在 loopback 只有中继的宿主上。
 
 Because the endpoint is mounted rather than baked, rotating the token is an
 edit to that host file plus a container restart — there is no image rebuild,
