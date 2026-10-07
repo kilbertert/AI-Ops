@@ -152,6 +152,7 @@ _SHARED_ACTION_FIELDS: dict[str, dict[str, Any]] = {
         "sort_order": 10,
         "question_templates": {
             "zh": "我想看看客户案例",
+            "zh-Hant": "我想看看客戶案例",
             "vi": "Tôi muốn xem các trường hợp khách hàng",
             "mn": "Хэрэглэгчийн жишээг үзэхийг хүсэж байна",
             "th": "ฉันอยากดูกรณีตัวอย่างลูกค้า",
@@ -169,6 +170,7 @@ _SHARED_ACTION_FIELDS: dict[str, dict[str, Any]] = {
         "sort_order": 20,
         "question_templates": {
             "zh": "帮我检测这个订单的充电异常",
+            "zh-Hant": "幫我檢測這個訂單的充電異常",
             "vi": "Hãy kiểm tra bất thường sạc của đơn hàng này",
             "mn": "Энэ захиалгын цэнэглэлтийн алдааг шалгаж өгнө үү",
             "th": "ช่วยตรวจสอบความผิดปกติในการชาร์จของคำสั่งซื้อนี้",
@@ -189,6 +191,7 @@ _BUNDLED_SHORTCUTS: tuple[tuple[str, dict[str, dict[str, Any]]], ...] = (
                 **_SHARED_ACTION_FIELDS["case_exploration"],
                 "labels": {
                     "zh": "客户案例",
+                    "zh-Hant": "客戶案例",
                     "vi": "Trường hợp khách hàng",
                     "mn": "Хэрэглэгчийн жишээ",
                     "th": "กรณีตัวอย่างลูกค้า",
@@ -201,6 +204,7 @@ _BUNDLED_SHORTCUTS: tuple[tuple[str, dict[str, dict[str, Any]]], ...] = (
                 },
                 "descriptions": {
                     "zh": "查看不同行业的充电运营标杆案例",
+                    "zh-Hant": "檢視不同行業的充電運營標杆案例",
                     "vi": "Xem các trường hợp điển hình vận hành sạc theo ngành",
                     "mn": "Салбар бүрийн цэнэглэлтийн үйл ажиллагааны жишиг жишээг үзэх",
                     "th": "ดูกรณีตัวอย่างการดำเนินงานชาร์จในแต่ละอุตสาหกรรม",
@@ -216,6 +220,7 @@ _BUNDLED_SHORTCUTS: tuple[tuple[str, dict[str, dict[str, Any]]], ...] = (
                 **_SHARED_ACTION_FIELDS["smart_diagnosis"],
                 "labels": {
                     "zh": "智能检测",
+                    "zh-Hant": "智慧檢測",
                     "vi": "Kiểm tra thông minh",
                     "mn": "Ухаалаг шалгалт",
                     "th": "ตรวจสอบอัจฉริยะ",
@@ -228,6 +233,7 @@ _BUNDLED_SHORTCUTS: tuple[tuple[str, dict[str, dict[str, Any]]], ...] = (
                 },
                 "descriptions": {
                     "zh": "选择订单后自动诊断充电异常",
+                    "zh-Hant": "選擇訂單後自動診斷充電異常",
                     "vi": "Chọn đơn hàng để tự động chẩn đoán bất thường sạc",
                     "mn": "Захиалга сонгосны дараа цэнэглэлтийн алдааг автоматаар оношилно",
                     "th": "เลือกคำสั่งซื้อแล้วระบบจะวินิจฉัยความผิดปกติในการชาร์จอัตโนมัติ",
@@ -245,6 +251,7 @@ _BUNDLED_SHORTCUTS: tuple[tuple[str, dict[str, dict[str, Any]]], ...] = (
                 "sort_order": 30,
                 "labels": {
                     "zh": "故障上报",
+                    "zh-Hant": "故障上報",
                     "vi": "Báo lỗi",
                     "mn": "Гэмтэл мэдэгдэх",
                     "th": "แจ้งเหตุขัดข้อง",
@@ -257,6 +264,7 @@ _BUNDLED_SHORTCUTS: tuple[tuple[str, dict[str, dict[str, Any]]], ...] = (
                 },
                 "descriptions": {
                     "zh": "描述故障现象，由平台跟进处理",
+                    "zh-Hant": "描述故障現象，由平臺跟進處理",
                     "vi": "Mô tả hiện tượng lỗi, nền tảng sẽ theo dõi xử lý",
                     "mn": "Гэмтлийн шинж тэмдгийг тайлбарлана уу, платформ үргэлжлүүлэн шийдвэрлэнэ",
                     "th": "อธิบายอาการขัดข้อง แพลตฟอร์มจะติดตามจัดการให้",
@@ -269,6 +277,7 @@ _BUNDLED_SHORTCUTS: tuple[tuple[str, dict[str, dict[str, Any]]], ...] = (
                 },
                 "question_templates": {
                     "zh": "我要上报一个故障",
+                    "zh-Hant": "我要上報一個故障",
                     "vi": "Tôi muốn báo một lỗi",
                     "mn": "Би гэмтэл мэдэгдэхийг хүсэж байна",
                     "th": "ฉันต้องการแจ้งเหตุขัดข้อง",
@@ -294,6 +303,7 @@ _BUNDLED_SHORTCUTS: tuple[tuple[str, dict[str, dict[str, Any]]], ...] = (
                 **_SHARED_ACTION_FIELDS["case_exploration"],
                 "labels": {
                     "zh": "客户案例",
+                    "zh-Hant": "客戶案例",
                     "vi": "Trường hợp khách hàng",
                     "mn": "Хэрэглэгчийн жишээ",
                     "th": "กรณีตัวอย่างลูกค้า",
@@ -306,6 +316,7 @@ _BUNDLED_SHORTCUTS: tuple[tuple[str, dict[str, dict[str, Any]]], ...] = (
                 },
                 "descriptions": {
                     "zh": "查看与充电运营相关的标杆案例",
+                    "zh-Hant": "檢視與充電運營相關的標杆案例",
                     "vi": "Xem các trường hợp điển hình liên quan đến vận hành sạc",
                     "mn": "Цэнэглэлтийн үйл ажиллагаатай холбоотой жишиг жишээг үзэх",
                     "th": "ดูกรณีตัวอย่างที่เกี่ยวข้องกับการดำเนินงานชาร์จ",
@@ -321,6 +332,7 @@ _BUNDLED_SHORTCUTS: tuple[tuple[str, dict[str, dict[str, Any]]], ...] = (
                 **_SHARED_ACTION_FIELDS["smart_diagnosis"],
                 "labels": {
                     "zh": "订单检测",
+                    "zh-Hant": "訂單檢測",
                     "vi": "Kiểm tra đơn hàng",
                     "mn": "Захиалга шалгах",
                     "th": "ตรวจสอบคำสั่งซื้อ",
@@ -333,6 +345,7 @@ _BUNDLED_SHORTCUTS: tuple[tuple[str, dict[str, dict[str, Any]]], ...] = (
                 },
                 "descriptions": {
                     "zh": "选择订单，检测该订单的充电异常",
+                    "zh-Hant": "選擇訂單，檢測該訂單的充電異常",
                     "vi": "Chọn đơn hàng và kiểm tra bất thường sạc của đơn đó",
                     "mn": "Захиалга сонгоод тухайн захиалгын цэнэглэлтийн алдааг шалгах",
                     "th": "เลือกคำสั่งซื้อและตรวจสอบความผิดปกติในการชาร์จของคำสั่งซื้อนั้น",

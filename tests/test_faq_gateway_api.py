@@ -202,3 +202,61 @@ def test_faq_endpoints_return_localized_content(tmp_path: Path) -> None:
         assert catalog.json()["entries"][0]["question"] == (
             "Diferença entre carregador rápido, ultra e lento"
         )
+
+
+def test_faq_endpoints_serve_traditional_for_zh_hant(tmp_path: Path) -> None:
+    """`zh-Hant` is its own language key, not a fold onto `zh` (#531).
+
+    The ticket's headline claim is "a `zh-Hant` request really gets Traditional",
+    and this is the endpoint where that is observable. Both directions are
+    asserted: the operator catalog serves the Traditional question and answer,
+    and a plain `zh` request is unchanged — so the tag selects a script rather
+    than replacing one.
+    """
+    with _client(tmp_path) as client:
+        catalog = client.get(
+            "/v1/faq/catalog",
+            headers={
+                "Authorization": "Bearer service",
+                "X-Business-Entry": "operator",
+                "Accept-Language": "zh-Hant",
+            },
+        )
+        assert catalog.status_code == 200, catalog.text
+        body = catalog.json()
+        assert body["language"] == "zh-Hant"
+        entry = body["entries"][0]
+        assert entry["question"] == "新建充電站的標準建站流程與核心業務配置是什麼？"
+
+        answer = client.post(
+            "/v1/faq/answer",
+            headers={
+                "Authorization": "Bearer service",
+                "X-Business-Entry": "operator",
+                "Accept-Language": "zh-Hant",
+            },
+            json={"question_id": "operator.faq.q001"},
+        )
+        assert answer.status_code == 200, answer.text
+        answered = answer.json()
+        assert answered["language"] == "zh-Hant"
+        assert answered["question"] == "新建充電站的標準建站流程與核心業務配置是什麼？"
+        assert answered["answer"].startswith("在平臺中新建充電場站")
+
+        # The control, on BOTH endpoints: the Simplified authority is unchanged
+        # by the new key, so what the `zh-Hant` request got above is a selected
+        # script and not a blanket relabelling of every response.
+        zh_headers = {
+            "Authorization": "Bearer service",
+            "X-Business-Entry": "operator",
+            "Accept-Language": "zh",
+        }
+        simplified = client.get("/v1/faq/catalog", headers=zh_headers).json()
+        assert simplified["language"] == "zh"
+        assert simplified["entries"][0]["question"] == "新建充电站的标准建站流程与核心业务配置是什么？"
+
+        simplified_answer = client.post(
+            "/v1/faq/answer", headers=zh_headers, json={"question_id": "operator.faq.q001"}
+        ).json()
+        assert simplified_answer["question"] == "新建充电站的标准建站流程与核心业务配置是什么？"
+        assert simplified_answer["answer"].startswith("在平台中新建充电场站")

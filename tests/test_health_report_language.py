@@ -160,6 +160,44 @@ def test_reuse_is_per_language_not_across_languages(tmp_path) -> None:
     assert again["job_id"] == en_job["job_id"]
 
 
+def test_the_declared_script_survives_storage(tmp_path) -> None:
+    """`zh-Hant` is STORED as declared (#531) — the second drop point.
+
+    The resolver was only half the bug: even once it preserved the script, this
+    entry point truncated the tag before the row was written, so a Traditional
+    request got a `zh` row back and its own answer was reported as Simplified.
+    "Resolves but does not persist" is the failure mode that makes fixing one
+    of the two points look like a fix.
+
+    Asserted through the same store method the other language tests use, and on
+    the value READ BACK rather than the value passed in — a normaliser that
+    returns the right tag while the row keeps the truncated one would pass the
+    weaker form.
+    """
+    from aiops_diagnostics.gateway_store import GatewayStore
+
+    store = GatewayStore(tmp_path / "gateway.db")
+    job, created = store.create_or_reuse_health_job("scope-1", "O-1", "health-v2", language="zh-Hant")
+    assert created is True
+    assert job["language"] == "zh-Hant"
+
+    read_back, _ = store.create_or_reuse_health_job("scope-1", "O-1", "health-v2", language="zh-Hant")
+    assert read_back["language"] == "zh-Hant", "存进去的繁体标签被截断成了简体"
+
+    # Traditional and Simplified are DIFFERENT languages for reuse purposes:
+    # treating them as one would hand a Traditional reader a Simplified report.
+    zh_job, zh_created = store.create_or_reuse_health_job("scope-1", "O-1", "health-v2", language="zh")
+    assert zh_created is True, "繁体作业被复用给了简体请求"
+    assert zh_job["job_id"] != job["job_id"]
+
+    # NOT asserted here: a raw `zh-Hant-TW`. The store takes an ALREADY RESOLVED
+    # tag — its validator accepts at most one subtag, and the resolver folds the
+    # region away before this point, so the three-subtag form never arrives from
+    # the HTTP path. Widening the validator for an input nothing produces would
+    # be speculative; the resolver's handling of it is asserted in
+    # `tests/test_i18n.py`.
+
+
 @pytest.mark.parametrize("language", ["en", "de", "fr", "es", "pt"])
 def test_an_unlisted_ykc_code_does_not_emit_chinese(language: str) -> None:
     """An unlisted code's fallback follows the language too.

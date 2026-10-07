@@ -258,6 +258,11 @@ class FAQCatalog:
             raise ValueError("FAQ catalog i18n is invalid")
         parsed: dict[str, dict[str, str]] = {}
         for lang, fields in raw.items():
+            # `zh` itself is the authority and carries no `i18n` block, so it is
+            # still rejected — but `zh-Hant` is a SUPPORTED language in its own
+            # right (another script, same language) and belongs here like any
+            # other. Excluding every Chinese language would have made the
+            # Traditional block unloadable.
             if lang not in SUPPORTED_LANGUAGES or lang == DEFAULT_LANGUAGE:
                 raise ValueError(f"FAQ catalog i18n language is invalid: {lang}")
             if not isinstance(fields, dict):

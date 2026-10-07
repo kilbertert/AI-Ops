@@ -27,6 +27,13 @@ from aiops_diagnostics.i18n import (
         ("zh-Hans-CN", "zh"),
         ("pt-BR", "pt"),
         ("DE", "de"),
+        # ...but a SCRIPT subtag that names a declared language is KEPT, and a
+        # region after it is still dropped (#531): `zh-Hant-TW` is Traditional
+        # written in Taiwan, not Simplified.
+        ("zh-Hant", "zh-Hant"),
+        ("zh-Hant-TW", "zh-Hant"),
+        ("ZH-HANT-TW", "zh-Hant"),
+        ("zh-Hant-CN", "zh-Hant"),
         # Highest q wins regardless of list order.
         ("fr;q=0.9, en;q=0.5", "fr"),
         ("en;q=0.5, fr;q=0.9", "fr"),

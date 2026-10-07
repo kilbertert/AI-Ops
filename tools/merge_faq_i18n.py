@@ -198,6 +198,13 @@ def _committed(path: Path) -> str | None:
     return result.stdout if result.returncode == 0 else None
 
 
+#: Languages this tool does NOT translate: they are DERIVED from the authority
+#: by a script conversion, so they have no answer file by design. Treating them
+#: as missing would make the "a published language lost its answer file" guard
+#: fire on every run (#531).
+DERIVED_LANGUAGES = frozenset({"zh-Hant"})
+
+
 def default_languages(answers_dir: Path, prefix: str, wide_table: Path) -> tuple[str, ...]:
     """The languages this platform has BOTH a wide-table column and answers for.
 
@@ -273,7 +280,7 @@ def main() -> int:
     # language is a deliberate act: name it explicitly in `--languages`.
     if not args.languages:
         published = sorted({lang for entry in entries for lang in (entry.get("i18n") or {})})
-        dropped = [lang for lang in published if lang not in langs]
+        dropped = [lang for lang in published if lang not in langs and lang not in DERIVED_LANGUAGES]
         if dropped:
             raise ValueError(
                 f"{args.platform}: 已发布的语言 {dropped} 没有答案文件；"
@@ -299,6 +306,9 @@ def main() -> int:
         # en/de/fr/es/pt, and re-running this for a second language set must not
         # drop them. A replace was the shape that would silently lose a
         # language the moment a second merge ran.
+        # Derived languages are owned by tools/derive_zh_hant.py and are left
+        # untouched here — NOT removed. An earlier version popped them, which
+        # deleted `zh-Hant` from every entry on every run.
         existing = dict(entry.get("i18n") or {})
         for lang in langs:
             question = (row.get(lang) or "").strip()
