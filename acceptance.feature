@@ -1836,3 +1836,73 @@ Feature: 诊断线的取消操作（#499）
       When 其所有者取消它
       Then 返回 200 且 status 仍为 completed
       And 已完成的 result 原样返回
+
+Feature: 聊天页运营横幅与快捷动作同表不同面（#588）
+
+  Rule: 横幅不影响按钮列表这一个用户可见的契约
+
+    Scenario: 种子行落库后按钮列表逐字不变
+      Given 当前租户的 consumer 入口已发布三条按钮动作
+      When 系统种下并发布聊天页横幅行
+      Then GET /v1/shortcuts 仍只返回那三条按钮动作
+      And 返回的条目里不出现横幅的 code
+      And 列表的 language 与 count 与种下横幅之前一致
+
+    Scenario: 横幅行出现在它自己那一面
+      Given 聊天页横幅行已发布
+      When 按横幅面查询当前租户 consumer 入口的有效动作
+      Then 只返回横幅行
+      And 按钮动作不出现在这一面
+
+  Rule: 渲染形态由行自己声明，不由其他字段推导
+
+    Scenario: 没有兜底图的行仍然是横幅
+      Given 一条已发布的横幅行，其 image_url 为空
+      When 按横幅读取它的对外投影
+      Then 它仍被当作横幅返回
+      And 投影里的 image_url 为 null
+
+    Scenario: 横幅投影不下发提问相关字段
+      Given 一条已发布的横幅行
+      When 读取它的对外投影
+      Then 投影里没有 question_template
+      And 投影里没有 target_agent_version
+      And 投影里的 jump_path 与配置值逐字相同
+
+  Rule: 面在配置期就被固定，运行时不存在两者都满足的行
+
+    Scenario: 按钮不允许携带配图
+      Given 一条待创建的按钮动作
+      When 创建时带上 image_url
+      Then 返回校验失败且该行未被创建
+
+    Scenario: 横幅必须指向一个站内路径
+      Given 一条待创建的横幅动作
+      When 创建时不带 jump_path
+      Then 返回校验失败且该行未被创建
+
+    Scenario: 横幅配图只接受 http(s)
+      Given 一条待创建的横幅动作
+      When 它的 image_url 是 data:、javascript: 或 file: 形式的串
+      Then 返回校验失败且该行未被创建
+
+  Rule: 生命周期与快捷动作完全同构
+
+    Scenario: 横幅走同一套草稿与发布
+      Given 一条新种下的横幅草稿
+      When 未发布时按横幅读取
+      Then 读不到它
+
+    Scenario: 租户覆盖落在同一个面上
+      Given 平台已发布一条横幅，且当前租户尚无同 code 的行
+      When 运营停用该 code
+      Then 该租户下的横幅面变为空
+      And 按钮面不因此多出任何行
+
+  Rule: 既有数据库无需人工迁移
+
+    Scenario: 旧库补列后既有行仍是按钮
+      Given 一个在 kind 列存在之前创建的 shortcut 库
+      When 用当前版本打开它
+      Then 既有行读作按钮
+      And 按钮面的查询仍返回该行
