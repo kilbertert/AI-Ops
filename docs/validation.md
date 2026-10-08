@@ -98,6 +98,33 @@ APK build 21 的封装是 `utils/iotJavaRequest.js`：
 知识库真按这个形状消费」需 #579/#582 的真实实例验收，**未完成业务验收**。结束时已停进程并
 确认 8799/19380 无监听，临时根已删。
 
+### 三层审查的第一层（`ocr review`）：**未执行**，不是通过
+
+本仓 PR 门禁的三层是 `ocr review`（本地建议性）、Devin Review（PR 自动）、CI/Ruleset
+（唯一强制门）。本次按已提交形态跑**区间式**，并先 `--preview` 核对同一变更集：
+
+```
+ocr review --from origin/main --to feat/dify-knowledge-adapter --preview
+  12 file(s) changed  |  +907 -3
+  Will review (3): dify_knowledge_api.py, gateway_api.py, gateway_config.py
+  Excluded (9):    8 个 .md/.feature/.example（unsupported_ext）+ tests/（default_path）
+```
+
+覆盖率是**被测量的**：3/12 入选、9/12 被工具按扩展名与路径规则过滤，因此这次审查只覆盖
+**代码文件**，文案与验收制品仍需人工或 Devin 分诊。随后按同一变更集跑真审查，结果是
+**工具未完成**：
+
+```
+[ocr] Summary: 3 file(s) reviewed, 0 comment(s), ... 19m58s elapsed
+Review failed: 0 finding(s); 3 of 3 selected item(s) failed.
+Error: review failed: all 3 file review(s) failed — check your LLM configuration and API key
+```
+
+**0 条发现不等于干净** —— 它等于**一条判据都没跑成**。上一轮的同类现象是
+`Max tool requests reached` / `main_task did not complete before stopping`，且带
+`budget_exceeded=false`，即失败与 token 预算无关。按政策，这一层记为**未执行**，由人工或
+Devin Review 兜住；不得记为「已通过」。
+
 ### 失败与修复
 
 - 首轮第 6 步写错：用空登记表启动却按「命中」预期 —— 实际拿到 `404`（未登记 id），

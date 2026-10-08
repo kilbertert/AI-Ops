@@ -31,7 +31,7 @@ accurate at the moment it is generated and at the moment the commit lands.
 
 ## Tests
 
-- tests/ — 119 test file(s, recursive)
+- tests/ — 120 test file(s, recursive)
 - script "cd:watch:test": node .sandcastle/cd-watch.test.mjs
 - pytest (pyproject.toml / pytest.ini present)
 
@@ -135,6 +135,6 @@ src/
     agent_manifest.py
     agent_runner.py
     agent_validator.py
-    ... (57 more)
+    ... (58 more)
 ... (truncated — list the rest with `ls`/`find`)
 ```
