@@ -1,3 +1,91 @@
+## #566 模型侧回答面语言端到端实测（2026-10-08，41 生产）
+
+**分支** `test/model-surface-language-verification`，基线 `origin/main` @ `df3659a`。
+**工具** `.claude/skills/verify-aiops-client-e2e/scripts/verify_model_surface_language.py`（本票新增，可复跑）。
+**判据**：`completed` 且（中文语言 ∨ 服务端合成散文零汉字残留）⇒ PASS；
+**其余一律 UNVERIFIED，不记通过** —— 这是本票最重要的一条纪律，下面有真实的例子。
+
+### 结论：**一面 6/6 通过，两面受阻于 provider 余额，第三面未跑**
+
+| 面 | 结果 | 说明 |
+|---|---|---|
+| **健康报告** | ✅ **6/6 PASS** | zh / zh-Hant / en / vi / th / km 各一次真实作业，全部 `completed` |
+| **统一助手 QA** | ⛔ **UNVERIFIED ×2**（zh, en） | 作业 `failed`，provider 403 余额不足 |
+| **单问诊断** | ⛔ **UNVERIFIED ×1**（en） | 同上 |
+| 宣传卡片 | 未跑 | 需 KB 与宣传资料库存，且同受余额阻塞 |
+
+### 一、健康报告面：六语含三门前所未验的语言
+
+同会话、同订单、六门语言各建一次作业。**服务端合成的 `summary` 六语全部正确**，
+`rule_version` = `health-v2`：
+
+```
+zh       本次充电健康报告有 1 项指标需关注
+zh-Hant  本次充電健康報告有 1 項指標需關注
+en       This charging health report has 1 indicator that needs attention
+vi       Báo cáo sức khỏe sạc này có 1 chỉ số cần lưu ý
+th       รายงานสุขภาพการชาร์จนี้มีตัวชี้วัดที่ต้องเฝ้าระวัง 1 รายการ
+km       របាយការណ៍សុខភាពសាកថ្មនេះមានសូចនាករត្រូវយកចិត្តទុកដាក់ 1
+```
+
+**这是本轮唯一的模型侧真实通过证据**，且是本项目**第一次**在 `vi`/`th`/`km` 上拿到
+健康报告面的实测结果（此前 `health_report_jobs` 在生产是 **0 行** —— 本轮的六条是它的首批数据）。
+
+**⚠️ 但同一份报告里有一处泄漏，已单开缺陷票 #599**：`indicators[0].value` 在**六门语言下
+都是** `拔出断电`（上游 `stopped_reason_content` 逐字透传）。服务端合成的那一段是对的，
+漏的是上游原值那一段。本脚本把指标 `value` 的汉字残留**单列**出来、不并入上面的 PASS 判定 ——
+否则一个真实缺陷会变成把「服务端文案是否本地化」这个问题的答案一并淹没。
+
+### 二、QA 与诊断：受阻，**不是失败**
+
+七次尝试（QA zh/en 各两次、诊断 en 一次）全部 `failed`，`error_message` 逐字相同：
+
+```
+Codex turn … failed: unexpected status 403 Forbidden: [sk-x4CF**********86yU]
+预扣费额度失败, 用户剩余额度: ¥0.001780, 需要预扣费额度: ¥0.032610
+url: http://127.0.0.1:8799/responses
+```
+
+⇒ **provider 账户余额耗尽**（`AIOPS_PROVIDERS=baoyun`，经 41 本机 `127.0.0.1:8799` 中继）。
+**这一条必须记为「受阻 + 原因」，不得记为通过**（#566 acceptance criteria 明写）。
+
+另有一条**独立的、而非由余额引起的**干扰，本轮实测确认：
+**`AIOPS_GATEWAY_JEV_*` 指向的决策服务返回 404**（`decision service unavailable`，
+`routing decision unavailable: code=ROUTING_UNAVAILABLE error=JevUnavailable`）。
+它**不阻塞**请求 —— `classify_with_jev` 的契约是「拿不到决策就按没有决策继续」，
+日志里每次进内容路由都打一条。所以它不是本次 `failed` 的成因（成因是 403），
+但它会让路由提示长期失效，**属于该单独核的配置问题**。
+
+### 三、泰语/高棉语的边界：本轮**重新实测**，与既有记录吻合
+
+```
+th  http=200 type=clarification  'ช่องทางนี้ยังไม่รองรับการพิมพ์คำถามด้วยภาษานี้ กรุณาใช้คำถามลัดด้านล่าง'
+km  http=200 type=clarification  'ផ្លូវចូលនេះមិនទាន់គាំទ្រការសួរជាអក្សរដោយភាសានេះទេ សូមប្រើសំណួររហ័សខាងក្រោម'
+```
+
+即「可读不可问」：边界在匹配器**之前**，返回的是**该语言自己的**拒绝文案
+（不是中文兜底），HTTP 200 且 `type=clarification`、`missing_fields=["language"]`。
+`zh`/`en`/`vi` 同请求返回 `202 type=qa`（可达）。
+
+### 四、写入与对账（本票的 `--run` 会写，如实记）
+
+- **构造 app 会调 `recover_interrupted_jobs()`**：探测前后各对账一次三表在飞数，
+  **均为 0**，且网关进程 `ActiveEnterTimestamp` 全程停在 `17:20:33 CST`（早于本轮所有探测）
+  ⇒ **未重启服务，未把任何在飞作业标失败**。
+- **探测本身创建了真实作业**：6 条 `health_report_jobs`（**生产首批**）、
+  若干 `assistant_questions` / `standard_diagnoses`（均 `failed`，无有效产出）。
+- **凭据纪律**：脚本不打印服务令牌、Redis 口令、会话值与模型正文（`--show-copy` 才打印）；
+  本记录只引用语言与计数，**不含订单号、车牌、VIN、会话值**。
+
+### 五、验收口径（写进本记录，避免被误读）
+
+**可以说**：「健康报告面的**服务端合成文案**在 zh/zh-Hant/en/vi/th/km 六门上通过真实作业实测」。
+
+**不能说**：
+- 「模型侧 11 语言端到端已通过」—— 只有 1 个面、6 门语言，且 QA/诊断受阻；
+- 「健康报告面完全通过」—— 指标 `value` 有中文泄漏（#599）；
+- 「泰语/高棉语可以自由提问」—— 实测仍是明确拒绝。
+
 ## #590 公司端点直连实测：横幅个性化链路活口检查（2026-10-08）
 
 **分支** `chore/company-endpoint-live-check`，基线 `origin/main` @ `5cac228`。
