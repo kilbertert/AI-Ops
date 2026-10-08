@@ -1599,3 +1599,50 @@ uv run pytest tests/test_assistant_api.py tests/test_conversation_api.py \
 - **边界（据实）**：**未在 41 实跑**（端点未部署）。前端可读性、车图能否取到、
   报告页跳转是否成功打开 —— 均不在本票范围，见 #591 交接文档。
 - **清理**：一次性数据根随 tmp_path 丢弃；**未触碰 41 的任何生产数据**。
+## Dify 知识检索适配路由 QA 计划（#581 / PRD #577）
+
+接缝：**网关 HTTP 面**（先例 `tests/test_media_api.py`：真 `create_gateway_app` +
+`TestClient` + 桩 caller 解析器 + 桩 kb-service client）。不新增只在测试里存在的抽象。
+
+### DIFY-KB-01 契约形状与检索范围
+
+- 环境：AI-Ops 本地 Python 3.13，pytest，`TestClient`，桩 kb-service search client。
+- 前置条件:登记表把一个 `knowledge_id` 映射到租户 `T-1` + 知识库 `KB-A`；桩返回 KB-A 与
+  其他知识库的分段各若干。
+- 测试数据：一条 `content_with_weight`/`similarity`/`docnm_kwd` 的合法分段；一条越权 KB 分段；
+  一条缺 `doc_id` 的非法分段。
+- 有序动作：`POST /v1/dify/retrieval`，带 Bearer 凭据与 Dify 形状的 body（`retrieval_setting`
+  /`query`/`knowledge_id`/`metadata_condition`）。
+- 预期结果：200；顶层恒有 `records` 列表；每条含 `content`/`score`/`title`/`metadata` 且
+  `metadata` 非 null（Dify 侧只有 metadata 非 null 才读 score/title）；只含 KB-A 分段；
+  桩收到的知识库集合等于登记集合（不是请求里带来的）；空命中 → 200 空 `records`。
+- 清理：释放桩与临时 SQLite。
+- 结果：PASS（2026-10-08，pytest `tests/test_dify_knowledge_api.py`）。
+
+### DIFY-KB-02 授权、凭据与配置边界
+
+- 环境：同 DIFY-KB-01。
+- 前置条件：登记表只含一个 `knowledge_id`；网关配了 Dify 凭据。
+- 测试数据：未登记的 `knowledge_id`；缺 Authorization；错 Bearer；空 Authorization。
+- 有序动作：分别请求适配路由并观察桩是否被调用。
+- 预期结果：未登记 → 404 且桩零调用；缺/空 Headers → 401；错 Bearer → 403；三者都不调用
+  kb-service。未配置 Dify 凭据/登记表时该路径**整体 404**（未配置 == 不启用，与既有
+  `kb_service_base_url` 同一条机制保证）。
+- 清理：无。
+- 结果：PASS（2026-10-08，同文件）。
+
+### DIFY-KB-03 失败可区分
+
+- 环境：同 DIFY-KB-01。
+- 前置条件：桩抛 `KnowledgeSearchUnavailable`（kb-service 502/超时）。
+- 测试数据：一条普通查询。
+- 有序动作：请求适配路由。
+- 预期结果：**502**，响应体是网关统一错误信封（`error.code`），**不含 `records`**；绝不返回
+  200 的空 `records`——「暂时不可用」不能被表述成「没有找到」（同 `qa_rag` 的
+  `retrieval_status=unavailable` 口径）。
+- 清理：无。
+- 结果：PASS（2026-10-08，同文件）。
+
+**证据边界**：DIFY-KB-01..03 是离线自动化验证，打的是网关 HTTP 面这一跳。**未**连真实 Dify、
+真实 kb-service/RAGFlow、真实租户；Dify 侧「外接知识库真的按这个形状消费」需 #579/#582 的真实
+实例验收。端点集合登记表与段 1 CI 回归属 #583，不在本票。

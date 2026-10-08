@@ -1971,3 +1971,66 @@ Feature: 聊天页运营横幅的读取面（#589）
       Given 一个不带认证头的请求
       When 读取横幅
       Then 返回 401
+Feature: Dify 知识检索适配路由（External Knowledge API）
+  Dify 控制台里编排智能体时，通过「外接知识库」调用我们网关的适配路由。该
+  knowledge_id 对应哪个租户、哪些知识库由我们的登记表决定，Dify 既拿不到任何
+  数据面，也不决定检索范围（#581 / PRD #577）。
+
+  Rule: 形状与 Dify 的 External Knowledge API 逐字对齐
+
+    Scenario: 命中时返回 Dify 可消费的 records
+      Given 已登记的 knowledge_id 绑定租户 T-1 与知识库 KB-A
+      When Dify 以查询串和 retrieval_setting 请求适配路由
+      Then 返回 200 且响应体顶层只有 records
+      And 每条 record 含 content、score、title、metadata，且 metadata 不为 null
+
+    Scenario: 没有命中时返回空 records 而不是错误
+      Given 知识库服务对本次查询返回零分段
+      When Dify 请求适配路由
+      Then 返回 200 且 records 为空列表
+
+  Rule: 检索范围由我们的登记表决定，Dify 不能扩大
+
+    Scenario: 只返回登记知识库的分段
+      Given knowledge_id 登记的知识库集合是 KB-A
+      And 知识库服务返回了 KB-A 与其他知识库的分段
+      When Dify 请求适配路由
+      Then 只返回 KB-A 的分段
+      And 转调知识库服务时用的知识库集合是登记集合，不是请求里带来的
+
+    Scenario: top_k 由我们封顶
+      Given Dify 的 retrieval_setting 请求一个远超上限的 top_k
+      When Dify 请求适配路由
+      Then 转调知识库服务的 top_k 不超过登记上限
+
+    Scenario: 元数据条件不被支持时明确失败
+      Given Dify 的请求带有非空 metadata_condition
+      When Dify 请求适配路由
+      Then 返回 4xx 且错误码表明该能力不受支持
+      And 不返回任何 records
+
+  Rule: 未授权访问被拒，失败可区分
+
+    Scenario: 未登记的 knowledge_id 被拒
+      Given Dify 使用一个不在登记表里的 knowledge_id
+      When Dify 请求适配路由
+      Then 返回 404
+      And 不调用知识库服务
+
+    Scenario: 凭据缺失或错误被拒
+      Given 请求未带 Bearer 凭据，或凭据与配置不符
+      When 请求适配路由
+      Then 返回 401 或 403
+      And 不调用知识库服务
+
+    Scenario: 未配置时该路由整体不启用
+      Given 网关未配置 Dify 知识检索凭据与登记表
+      When 请求适配路由
+      Then 返回 404
+      And 不调用知识库服务
+
+    Scenario: 「暂时不可用」不被表述成「没有找到」
+      Given 知识库服务超时或返回上游错误
+      When Dify 请求适配路由
+      Then 返回 502 且响应体不含 records
+      And 不返回 200 的空 records
