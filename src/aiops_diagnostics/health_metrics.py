@@ -3,6 +3,18 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+#: The version of the rules that produce a health report — ONE notion, for both
+#: the report body and the job row that carries it.
+#:
+#: These were two constants with two values (`health-v1` on the row, `health-v2`
+#: in the body) and nothing compared them, so a response carrying both fields
+#: literally disagreed with itself. Measured on 41: row `health-v1`, body
+#: `health-v2` in all six completed jobs.
+#:
+#: Lives here rather than in `health_report` because `enrich_report` is what
+#: decides which rules actually ran: it stamps the body last, and the row must
+#: describe the same run. Bump it here when either the minimal report or the
+#: enrichment changes.
 RULE_VERSION = "health-v2"
 
 

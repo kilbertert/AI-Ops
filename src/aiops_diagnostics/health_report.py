@@ -4,11 +4,16 @@ from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from aiops_diagnostics.config import SafetySettings
+from aiops_diagnostics.health_metrics import RULE_VERSION as HEALTH_RULE_VERSION
 from aiops_diagnostics.health_report_copy import health_summary
 from aiops_diagnostics.i18n import DEFAULT_LANGUAGE
 from aiops_diagnostics.rules import classify_stop_reason
 
-HEALTH_RULE_VERSION = "health-v1"
+#: Re-exported from `health_metrics` so there is exactly ONE rule version.
+#: It used to be a second constant here with a different value
+#: (`health-v1`), while `enrich_report` stamped `health-v2` over the body —
+#: so one response carried two answers and nothing compared them (#602).
+#: Kept under this name because it is the one callers already import.
 
 
 class HealthReportError(RuntimeError):
