@@ -16,9 +16,9 @@ write. Your job is:
    `gh issue create`, and do not try to apply a label.
 
 The full process — including the methodology (deletion test, deepening,
-glossary), the loose-duplicate rule, the PRD shape, and the exact `<output>`
-schema — is documented in the project skill
-`improve-codebase-architecture-project`. Follow it.
+glossary), the loose-duplicate rule, and the PRD shape — is documented in the
+project skill `improve-codebase-architecture-project`. Follow it. The extraction
+pass carries the schema; this one just leaves the PRD in prose it can lift.
 
 # CONTEXT
 
@@ -33,6 +33,6 @@ recorded decision.
   close any issue.** This run's sandbox token cannot perform issue mutations,
   and the workflow performs the one creation this pass needs.
 - One PRD per run. If every reasonable candidate is already covered by a
-  prior `source:architecture-review` proposal, emit a `skipped` output and
-  stop.
+  prior `source:architecture-review` proposal, say so plainly and stop — the
+  next pass reports it as `skipped`, so it needs no structured output here.
 - No questions to a user — there is none. Make the call.
