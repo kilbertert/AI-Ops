@@ -147,33 +147,35 @@ deploy/dify-36/
 `nginx/` 与 `ssrf_proxy/` 是**上游文件的原样拷贝**，不是改写 —— 升级 Dify 时按
 `/tmp` 里的对应 tag 重新拷一份即可，无须重新推导。compose 里给它们挂了 `:ro`。
 
-## 首次登录
-
-1. `INIT_PASSWORD` 是初始管理员口令（现场生成，不落仓）。首次打开控制台时用它
-   建管理员账号。
-2. 建完管理员后，把 `INIT_PASSWORD` 从 `.env` 清掉（它只在没有账号时用得上）。
-3. 账号建完后，`ALLOW_REGISTER=false` / `ALLOW_CREATE_WORKSPACE=false` 生效 ——
-   外部无法自助注册。
-
 ## 落地记录（2026-10-08）
 
-产物身份：`sha256 25c8922e47e445b32062eb7152e5df5f1c6c6598b7d7bbc3fdd34eeecd3a7ca4`，
-源提交 `100c848ba3f8`。落点 `/opt/dify/deploy`，锚点记在 `ARTIFACT.sha256`。
+**产物身份不写在本文件里**：本文件在 tar 包内，写自己的 sha 会自指。锚点（tar 的
+sha256 + 源提交）记在落点的 `/opt/dify/deploy/ARTIFACT.sha256`，以及
+`fleet-ops/FLEET.md` §7.9。
+
+**落点**：移动云 36，`/opt/dify/deploy`，由 `dify.service`（root 跑
+`docker compose up -d`）拉起。
 
 **结果**：8/8 容器常驻（`init_permissions` 是一次性容器，跑完退出，属正常）。
-入口 `http://36.156.159.175:10008` 从宿主外部实测可达（`/` → 307 → `/init` 200），
-`/console/api/setup` 返回 `{"step":"not_started"}` —— **还没有管理员账号**，首次登录
-这一步等运营来做。`api` 经 nginx 到 `plugin_daemon:5002/health/check` 返回 200，
-即插件面在跑。
+入口 `http://36.156.159.175:10008` 从宿主外部实测可达（`/` → 307 → `/init` 200）。
+`api` 经 nginx 到 `plugin_daemon:5002/health/check` 返回 200。
+
+**落地过程不是一次成的**，依次修掉了五处才到这个状态（下一节逐条）。诚实记一笔：
+前三处落地期间就暴露了，第 4 处是首次初始化时暴露的，第 5 处是**导出 DSL** 时
+暴露的 —— 也就是说，它在一个只做"能开机、能登录"的验收里根本不会出现。
 
 **容量基线**（`docker stats --no-stream`，启动后静置）：api 421 MB、worker 405 MB、
 web 93 MB、其余四者合计约 65 MB，**本栈合计约 1.0 GB**，低于 README 正文 2.5–4.5 GB
 的估法（那按模型调用有负载时算）。宿主可用 11 GB，未挤压既有栈。
 
-### 启动期踩到的四处，以及为什么写在这里
+### 落地期踩到的五处，以及为什么写在这里
 
-1、2 两处是**变量缺失**（已在 `env.example` 里补成显式必填并写明症状）；
-3、4 两处是**宿主目录的属主/权限**，不是变量 —— 症状都指向别处，所以单独记。
+1、2、5 是**变量缺失**（已在 `env.example` 里补成显式必填并写明症状）；
+3、4 是**宿主目录的属主/权限**，不是变量 —— 症状都指向别处，所以单独记。
+
+共同点：**五处都不会在"容器起没起来"这一步暴露**。1、2 表现为起不来（最容易被
+发现的那种）；3、4、5 表现为"看着全好，只有真去用它才炸" —— 这一类的价值在于
+它们各自伪装成了别的问题。
 
 1. `plugin_daemon` 起不来，`Config.DBHost`/`Config.DBPort` 校验失败 + api 报
    `Error 111 connecting to localhost:6379`。根因：Dify 读不到 `DB_HOST`/`REDIS_HOST`
@@ -224,6 +226,29 @@ web 93 MB、其余四者合计约 65 MB，**本栈合计约 1.0 GB**，低于 RE
    stat -c '%u:%g %a %n' /opt/dify/deploy/volumes/db/data    # 期望 o+x，如 root:root 755
    ```
 
+5. **导出 app 的 DSL 失败**，`Failed to request plugin daemon … Errno 111 Connection
+   refused`。根因：裁剪上游 compose 时漏了 `PLUGIN_DAEMON_URL`，而 api 侧默认值是
+   `http://localhost:5002`（`configs/feature/__init__.py:230`）—— 那是上游**把 5002
+   发布到宿主**才能成立的写法。本实例为"内部服务不得发布端口"裁掉了那个发布口，
+   于是默认值指向空处。
+
+   **这一处最值得记的是它的伪装**：`plugin_daemon` 本身完全健康 —— api 经 nginx 打
+   `:5002/health/check` 返回 200，日志里 master 就位。**探活打的是 plugin_daemon
+   自己，不是 api 拨它的那条链**，所以"插件面探活绿"与"api 能用插件"是两件事。
+   只有真去用插件的路径才炸：导出 DSL 时 `_append_model_config_export_data` →
+   `generate_dependencies` 要查插件安装列表。
+
+   三个同名近亲容易记混，一并写明：`PLUGIN_DEBUGGING_HOST/PORT` 是 plugin_daemon
+   **对外**开的调试口；`PLUGIN_DIFY_INNER_API_URL` 是 plugin_daemon 拨 api 的
+   **反向**方向；`EXPOSE_PLUGIN_DAEMON_PORT` 只影响 host 发布（本实例不需要）。
+   修法：api 与 worker 都显式给 `${PLUGIN_DAEMON_URL:-http://plugin_daemon:5002}`，
+   `check.sh` 钉成断言。
+
+**这条链顺带产出了 #580 需要的真实 DSL 固件**：`dsl-fixtures/app-chat.dsl.yml`
+（1162 字节，`version: 0.7.0` / `kind: app`，顶层 `app` / `dependencies` /
+`model_config` / `version`，`mode: chat`，`model.provider: openai`）。它是本实例
+**真实导出**的，不是手写的样例 —— #580 的 DSL→draft 映射拿它当输入。
+
 ## 验收（本票的判据）
 
 运营能**登进控制台、新建一个 app、看到一个模型 provider 可选**。最后一项是
@@ -247,12 +272,41 @@ web 93 MB、其余四者合计约 65 MB，**本栈合计约 1.0 GB**，低于 RE
 | 判据 | 状态 | 依据 |
 |---|---|---|
 | 实例活着 | ✅ | 8/8 常驻，外部 `:10008` 可达 |
-| 控制台能打开 | ✅ | `/` → `/init` → 200；`setup` = `not_started` |
-| `plugin_daemon` 生效 | ✅ | api 经 nginx 到 `:5002/health/check` → 200，日志 master 就位 |
-| 登进控制台 | ⏸ 待运营 | 需要首次登录建管理员（且需先拿到 `INIT_PASSWORD`） |
-| 新建一个 app | ⏸ 待运营 | 需先有账号 |
+| 控制台能打开 | ✅ | `/` → `/init` → 200 |
+| `plugin_daemon` 生效 | ⚠ 部分 | 探活 `:5002/health/check` → 200（打的是 daemon 自己）；**上一版这里报 ✅ 是错的** —— 见第 5 点，探活 200 与 api 能用插件是两件事 |
+| 登进控制台 | ✅ | 首次初始化已完成（`setup_at` 有值），部署方代建管理员；凭据当场交给运营，**不落仓、不打印** |
+| 新建一个 app | ✅ | 代建一次性 chat app（`dify-dsl-fixture`）成功，`POST /console/api/apps` → 有 `id` |
 | 看到模型 provider 可选 | ⏸ 待条件 | 需一个 `.difypkg` + 一把可用供应商密钥；两者都是运营输入 |
 
-注意最后一项**不只是"等运营"**：`plugin_daemon` 空转时控制台里 provider 列表是空的，
+**"登进控制台 / 新建 app"这两行的边界要如实说**：它们是**部署方代跑的**（为了拿到
+#580 需要的真实 DSL），不是运营亲自在浏览器里过的。登录流与建 app 的 API 契约因此
+被证成了；"人在 10008 页面上点得动"没有被本票证明，那要运营真的去开一次。
+
+**最后一行不只是"等运营"**：`plugin_daemon` 空转时控制台里 provider 列表是空的，
 所以这一行在这票里**没有被证成**，也没有被"控制台能开"顶替。要证它，事后按同一
 路径补一次即可（上传 `.difypkg` → provider 出现在列表）。
+
+**代建的那个 app 可以删**：`dify-dsl-fixture` 只为导出 DSL 固件而建，固件已经落盘
+（见上一节），运营拿到账号后删掉它即可。删除动作本身不在本票内。
+
+## 首次登录
+
+1. `INIT_PASSWORD` 是初始管理员口令（现场生成，不落仓）。首次打开控制台时用它
+   建管理员账号。落点**当前已有管理员**（见「验收」的状态表），这一条只在全新重置时再用。
+2. 建完管理员后，把 `INIT_PASSWORD` 从 `.env` 清掉（它只在没有账号时用得上）。
+3. 账号建完后，`ALLOW_REGISTER=false` / `ALLOW_CREATE_WORKSPACE=false` 生效 ——
+   外部无法自助注册。
+
+**若走 API 而不是浏览器，四处会连着踩到**（都已在现场试过）。入口
+`POST /console/api/init` **校验 `INIT_PASSWORD` 并把 `is_init_validated` 写进
+session**，然后 `POST /console/api/setup` 读那个标记建管理员 —— 两处细节让
+"照文档调一次"不成立：
+
+1. **必须同一个会话** —— 两个 curl 进程会丢掉 session 标记，`setup` 得 401。
+2. **`INIT_PASSWORD` 必须 ≤30 字符** —— `InitValidatePayload.password` 有
+   `max_length=30`，超了 `init` 直接 422。
+3. **登录口的 `password` 是 base64，不是 RSA** —— `api/libs/encryption.py:21`
+   的 `FieldEncryption.decrypt_field` 只做 `b64decode`。这条不适用于首次初始化，
+   适用于之后用账号登录控制台 API。
+4. 登录后调控制台写端点要带 **`X-CSRF-Token`**（cookie `csrf_token`），且该 token
+   **随响应刷新** —— 每次请求前重读，别缓存一次用到底。

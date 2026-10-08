@@ -43,7 +43,7 @@ services:
   # 做幂等，但那个 flag **就落在它要保护的卷里** —— 一旦某次 chown 没生效而 touch
   # 生效了，flag 就永久锁住"已初始化"，之后每次 up 都早早退出，目录永远留在 root，
   # 而 api 以 uid 1001 跑，写 `privkeys/…` 时 `Permission denied`（症状见 README
-  # 「启动期踩到的三处」第 4 点）。对一个只有个位数文件的目录，每次 up 都 chown 的
+  # 「落地期踩到的五处」第 3 点）。对一个只有个位数文件的目录，每次 up 都 chown 的
   # 代价可以忽略 —— 用"总是修"换掉"记住修过了"，这个不变式就不再依赖历史。
   #
   # **第二件事**：给 postgres 数据目录的挂载根补 o+x。postgres 的 entrypoint 会以

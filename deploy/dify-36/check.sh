@@ -76,7 +76,7 @@ for name in ("db_postgres", "redis", "plugin_daemon", "ssrf_proxy", "api", "work
         raise SystemExit(f"FAIL: {name} 发布了端口；内部服务不得有 host 发布")
 print("ok: 其余服务无 host 端口发布")
 
-# postgres 数据目录的挂载根守卫（README「启动期踩到的三处」第 3 点）。
+# postgres 数据目录的挂载根守卫（README「落地期踩到的五处」第 4 点）。
 # 两条合起来才有意义：init_permissions 去补 o+x，且 db_postgres 必须等它跑完。
 # 少了任一条，uid-70 的 mkdir 就可能穿不过 770 的挂载根，症状是"服务在跑但
 # 连不上库"。这是个只会静默出错的形状，值得钉死。
