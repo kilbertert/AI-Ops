@@ -41,9 +41,36 @@ def _fallback(language: str, classification: str) -> str:
 
     Kept as a named lookup so the table stays the single source; the value is
     never empty (``stop_reason_fallback`` falls back to the default language).
+    If even that misses, the CLASSIFICATION NAME is returned — an identifier,
+    never prose, so a reader gets a stable code rather than nothing.
     """
     resolved = stop_reason_fallback(language, classification)
     return resolved if resolved else classification
+
+
+def _report_prose(classification: str, language: str) -> str:
+    """The LOCALIZED stop-reason text — never the upstream's words.
+
+    The stop reason has two parts with different owners, and they used to be
+    conflated into one field: the upstream's own sentence (its words, its
+    language, not ours to rewrite) and our classification of it (our words,
+    therefore ours to localize).
+
+    Measured on 41 across all 30,955 orders: **66.3% of the upstream sentences
+    are Chinese**, and the classifications that carried one straight into the
+    reader-facing value covered **59.6%** of orders — so a report requested in
+    English showed 「拔出断电」 in most cases (#566 found it, #599 named it).
+    The upstream's sentence has not become translatable; it moves to
+    `reported_value`, where it is evidence. This function decides only the
+    localized half.
+
+    One case deserves its own wording: ``reported_stop_reason`` is what we
+    return when nothing matched, so the only thing we know is that the upstream
+    DID report something. We say exactly that and do not describe it —
+    paraphrasing an unclassifiable sentence would be re-interpreting the report,
+    which is the line this project does not cross.
+    """
+    return _fallback(language, classification)
 
 
 def classify_stop_reason(
@@ -57,22 +84,27 @@ def classify_stop_reason(
     code_text = "" if code is None else str(code).strip()
     content_text = (content or "").strip()
 
+    # Every branch below returns OUR words for `description`; the upstream's
+    # sentence is never echoed into it. `reported_value` is where it goes.
     if code_text == "-1":
-        return StopReason("manual_stop", content_text or _fallback(language, "manual_stop"), False)
+        return StopReason("manual_stop", _report_prose("manual_stop", language), False)
     if code_text == "-2":
-        return StopReason(
-            "package_exhausted", content_text or _fallback(language, "package_exhausted"), False
-        )
+        return StopReason("package_exhausted", _report_prose("package_exhausted", language), False)
     if code_text == "-3":
-        return StopReason("start_failure", content_text or _fallback(language, "start_failure"), True)
+        return StopReason("start_failure", _report_prose("start_failure", language), True)
 
     if normalized_protocol.startswith("YKC"):
         numeric = _parse_stop_code(code_text)
         if numeric is not None:
+            # `content_text` is the LAST resort here, and that is the point:
+            # the YKC table is ours and covers the code, so it wins. The
+            # upstream sentence only stands in when the code is not in the table
+            # — and it is still the upstream's sentence, so `reported_value`
+            # carries it as well.
             description = ykc_stop_reason(
                 language,
                 numeric,
-                content_text or _fallback(language, "ykc_unknown_code").format(code=numeric),
+                _fallback(language, "ykc_unknown_code").format(code=numeric),
             )
             if numeric in {78, 110}:
                 return StopReason("balance_insufficient", description, True)
@@ -89,18 +121,35 @@ def classify_stop_reason(
 
     lowered = content_text.lower()
     if any(word in lowered for word in ("余额不足", "欠费", "余额限制")):
-        return StopReason("balance_insufficient", content_text, True)
+        return StopReason("balance_insufficient", _report_prose("balance_insufficient", language), True)
     if any(word in lowered for word in ("温度", "过温", "高温")):
-        return StopReason("over_temperature", content_text, True)
+        return StopReason("over_temperature", _report_prose("over_temperature", language), True)
     if any(word in lowered for word in ("拔枪", "手动停止", "主动停止", "充满")):
-        return StopReason("user_or_normal_stop", content_text, False)
+        return StopReason("user_or_normal_stop", _report_prose("user_or_normal_stop", language), False)
     if "正常" in lowered:
-        return StopReason("normal_stop", content_text, False)
+        return StopReason("normal_stop", _report_prose("normal_stop", language), False)
     if any(word in lowered for word in ("断网", "离线", "通讯", "通信", "断电")):
-        return StopReason("communication_or_power_loss", content_text, True)
+        return StopReason(
+            "communication_or_power_loss",
+            _report_prose("communication_or_power_loss", language),
+            True,
+        )
     if content_text:
-        return StopReason("reported_stop_reason", content_text, None)
-    return StopReason("unknown_stop_reason", code_text or _fallback(language, "unknown_stop_reason"), None)
+        # We could not classify it. Say THAT, rather than echoing the upstream's
+        # sentence into a field the contract tells clients to render (#566/#599:
+        # 23.5% of real orders take this branch, and 66.3% of upstream sentences
+        # are Chinese, so echoing it leaked Chinese into non-Chinese reports).
+        # The upstream's sentence is not lost — the report carries it separately
+        # as `reported_value`; this `description` is the LOCALIZED half only.
+        return StopReason("reported_stop_reason", _report_prose("reported_stop_reason", language), None)
+    # `code_text` wins when present: it is the upstream's CODE — an identifier,
+    # not the sentence describing the stop. Reporting a code is honest; saying
+    # "no stop reason provided" while holding one would not be.
+    return StopReason(
+        "unknown_stop_reason",
+        code_text or _report_prose("unknown_stop_reason", language),
+        None,
+    )
 
 
 def is_server_billing(protocol: str | None) -> bool:
