@@ -313,3 +313,42 @@ def test_preview_does_not_touch_the_database(tmp_path: Path, tool) -> None:
     with pytest.raises(SystemExit):
         tool.preview(missing)
     assert not missing.exists(), "预览凭空建了一个数据库"
+
+
+def test_a_language_backfill_preserves_the_banner_image(tmp_path: Path, tool) -> None:
+    """The tool's job is adding languages; it must not change what the row IS.
+
+    `update()` treats an absent `image_url` as "clear it", so a payload built
+    without the live value would silently wipe an operator's banner image while
+    claiming to have only added translations. Same failure the tool already
+    avoids for `jump_path` and `target_agent_version` (#588).
+    """
+    store = ShortcutStore(tmp_path / "gateway.db")
+    context = _ctx()
+    row = store.create(
+        "T-1",
+        "consumer",
+        "battery_report",
+        intent="knowledge",
+        requires_order=False,
+        sort_order=10,
+        labels=_six_lang("label"),
+        descriptions=_six_lang("desc"),
+        question_templates={},
+        target_agent_version=None,
+        jump_path="/aiPackage/pages/batteryReport/batteryReport",
+        kind="banner",
+        image_url="https://car3.autoimg.cn/cardfs/series/example.png",
+        created_by="test",
+    )
+    manager = ShortcutManager(store)
+    manager.publish(context, row.shortcut_id, expected_revision=row.revision)
+
+    outcome = tool.migrate_row(store, manager, _record(store, row.shortcut_id), "test")
+
+    assert "published 保持" in outcome
+    after = store.get(row.shortcut_id, "T-1")
+    assert set(after.labels) == set(SUPPORTED_LANGUAGES), "没有完成补齐"
+    assert after.kind == "banner", "语言回填把横幅改成了按钮"
+    assert after.image_url == "https://car3.autoimg.cn/cardfs/series/example.png"
+    assert after.jump_path == "/aiPackage/pages/batteryReport/batteryReport"

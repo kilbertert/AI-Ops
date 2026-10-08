@@ -1555,3 +1555,25 @@ uv run pytest tests/test_assistant_api.py tests/test_conversation_api.py \
   而同设备同期对 `/v1/faq/recommendations` 有 11 次 200
 - 用途：把「客户端从没调用」与「调了但失败」分开 —— 后者会留下 4xx/5xx 行，前者一行都没有
 - 边界：**这不等于前端缺陷结论**；前端侧的成因（构建差异等）需前端团队确认
+
+### BANNER-01 横幅与按钮的面隔离（#588，未在 41 实跑）
+
+- **环境**：本机工作树 `feat/banner-row-in-shortcuts`，基线 `origin/main` @ `5cac228`；
+  **未上 41** —— 本票是服务端存储与选面的改动，尚无对外端点（`/v1/banner` 是 #589），
+  因此在产线上没有可观测的新面。
+- **前置**：一次性数据根（`ShortcutStore(tmp_path / "gateway.db")`），种子草稿全部发布。
+- **测试数据**：`_BUNDLED_SHORTCUTS` 的 consumer 入口 —— 三条按钮 + 一条横幅。
+- **动作**：`uv run pytest tests/test_banner_row.py tests/test_operator_negative_acceptance.py -q`
+- **预期**：按钮面仍是 `case_exploration / smart_diagnosis / report_fault` 三条；
+  横幅面只有 `battery_report`；两面并集等于全部有效行且交集为空。
+- **结果：PASS** —— 25 条新增用例 + 既有护栏全绿；全量 `pytest` 通过。
+- **变异核对（四处，实跑各自转红）**：
+  ① 按钮路由去掉 `kind` 过滤 → 红在消费/管家入口那条既有护栏上；
+  ② `banner()` 泄漏 `question_template` → 红在投影形状那条；
+  ③ 行读取恒返回 `button` → 红在「无图仍是横幅」「快照冻结」「覆盖同面」三条；
+  ④ 把「每种语言都为空」的字段计入缺口 → 红在 11 语言覆盖的那批。
+- **边界（据实）**：`/v1/banner` 未实现，因此**前端此刻还拿不到横幅**；
+  端点的对外验收属于 #589。横幅文案的 `zh-Hant` 用本仓派生值
+  （`待生成智慧電池檢查報告`），与客户端 bundle 现在发的
+  `待產生智能電池檢查報告` 不一致 —— 已在 PR 正文与代码注释里记录，**未擅自统一**。
+- **清理**：一次性数据根随 tmp_path 丢弃；**未触碰 41 的任何生产数据**。

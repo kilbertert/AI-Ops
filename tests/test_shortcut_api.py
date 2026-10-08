@@ -639,15 +639,22 @@ def test_store_seed_bundled_is_idempotent(tmp_path: Path) -> None:
     manager = ShortcutManager(store)
     first = store.seed_bundled(_Ctx(), manager)  # type: ignore[arg-type]
     # Codes repeat across entries (identity is tenant+entry+code), so the seed
-    # is asserted per entry: consumer keeps its three, operator holds the two
-    # prompt actions the PRD names and no jump action.
+    # is asserted per entry: consumer keeps its three buttons plus the
+    # chat-page banner (#588), operator holds the two prompt actions the PRD
+    # names and no jump action.
     assert {(row.business_entry, row.code) for row in first} == {
+        ("consumer", "battery_report"),
         ("consumer", "case_exploration"),
         ("consumer", "report_fault"),
         ("consumer", "smart_diagnosis"),
         ("operator", "case_exploration"),
         ("operator", "smart_diagnosis"),
     }
+    # The kind is explicit on the row, not inferred from which fields are set.
+    kinds = {(row.business_entry, row.code): row.kind for row in first}
+    assert kinds[("consumer", "battery_report")] == "banner"
+    assert kinds[("consumer", "report_fault")] == "button"
+    assert all(kind == "button" for key, kind in kinds.items() if key != ("consumer", "battery_report"))
     # Second run creates nothing.
     assert store.seed_bundled(_Ctx(), manager) == []  # type: ignore[arg-type]
 
@@ -1089,7 +1096,15 @@ def test_bundled_seed_copy_covers_every_supported_language() -> None:
     got Chinese buttons while the response still echoed their language.
 
     public() falls back to zh per field, so a missing language is silent: the
-    request succeeds and looks localized."""
+    request succeeds and looks localized.
+
+    A field the spec omits entirely is skipped. That is not a hole: the gate is
+    about copy that EXISTS being complete, and an omitted field produces no
+    copy to fall back. The banner (#588) omits `question_templates` on purpose
+    — a jump action never reaches the assistant entry, so a preset prompt would
+    be dead copy the coverage gate would then demand in eleven languages. That
+    omission is asserted directly below rather than left implicit.
+    """
     from aiops_diagnostics.i18n import SUPPORTED_LANGUAGES
     from aiops_diagnostics.shortcut_lifecycle import _BUNDLED_SHORTCUTS
 
@@ -1097,7 +1112,10 @@ def test_bundled_seed_copy_covers_every_supported_language() -> None:
     for entry, specs in _BUNDLED_SHORTCUTS:
         assert entry in {"consumer", "operator"}
         for code, spec in specs.items():
+            assert spec["labels"]["zh"].strip(), f"{entry}/{code}: seed has no zh label"
             for field in ("labels", "descriptions", "question_templates"):
+                if field not in spec:
+                    continue
                 copy = spec.get(field) or {}
                 missing = [lang for lang in SUPPORTED_LANGUAGES if lang not in copy]
                 assert not missing, f"{entry}/{code}/{field} missing: {missing}"
@@ -1137,6 +1155,8 @@ def test_live_rows_report_missing_translations_instead_of_falling_back_silently(
         question_templates={"zh": "帮我检测这个订单的充电异常", "en": "Diagnose this order"},
         target_agent_version=None,
         jump_path=None,
+        kind="button",
+        image_url=None,
         published_version=1,
         created_by="tester",
         created_at="2026-09-20T00:00:00+00:00",
@@ -1178,6 +1198,8 @@ def test_a_fully_translated_row_warns_about_nothing(caplog) -> None:
         question_templates={"zh": "我要上报一个故障", "en": "I want to report a fault"},
         target_agent_version=None,
         jump_path="/charge/pages/faultReport/faultReportList",
+        kind="button",
+        image_url=None,
         published_version=1,
         created_by="tester",
         created_at="2026-09-20T00:00:00+00:00",
@@ -1211,6 +1233,8 @@ def test_the_default_language_is_never_reported_as_a_gap(caplog) -> None:
         question_templates={"zh": "我要上报一个故障"},
         target_agent_version=None,
         jump_path=None,
+        kind="button",
+        image_url=None,
         published_version=1,
         created_by="tester",
         created_at="2026-09-20T00:00:00+00:00",
@@ -1247,6 +1271,8 @@ def test_copy_gap_gate_names_every_missing_field_and_language() -> None:
         question_templates={"zh": "我想看看行业解决方案", "en": "Show me industry solutions"},
         target_agent_version=None,
         jump_path=None,
+        kind="button",
+        image_url=None,
         published_version=1,
         created_by="tester",
         created_at="2026-09-20T00:00:00+00:00",
@@ -1295,6 +1321,8 @@ def test_copy_gap_gate_is_empty_for_a_complete_row() -> None:
         question_templates={lang: f"template-{lang}" for lang in SUPPORTED_LANGUAGES},
         target_agent_version=None,
         jump_path=None,
+        kind="button",
+        image_url=None,
         published_version=1,
         created_by="tester",
         created_at="2026-09-20T00:00:00+00:00",

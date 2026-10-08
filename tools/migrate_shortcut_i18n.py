@@ -154,6 +154,13 @@ def migrate_row(store: ShortcutStore, manager: ShortcutManager, record: Any, act
             "question_templates": live.question_templates,
             "target_agent_version": live.target_agent_version,
             "jump_path": live.jump_path,
+            # Not copy, and not editable (`kind`). Carried through for the same
+            # reason `jump_path` already was: this tool's job is filling in
+            # languages, and an update that dropped these would turn a language
+            # backfill into a change of what the row IS. `image_url` especially —
+            # the request model defaults it to None, so omitting it would
+            # silently remove an operator's banner image.
+            "image_url": live.image_url,
             "expected_revision": live.revision,
         }
         for item in plans:

@@ -211,6 +211,8 @@ def test_a_shortcut_row_reports_the_language_its_copy_is_in() -> None:
         question_templates={"zh": "我想看看客户案例", "en": "Show me customer cases"},
         target_agent_version=None,
         jump_path=None,
+        kind="button",
+        image_url=None,
         published_version=1,
         created_by="test",
         created_at="t",
