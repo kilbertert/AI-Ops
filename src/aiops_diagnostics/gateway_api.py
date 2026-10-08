@@ -97,6 +97,8 @@ from aiops_diagnostics.query_scope import (
 from aiops_diagnostics.routing import money_question_context
 from aiops_diagnostics.scope_context import ScopeContext, ScopeError
 from aiops_diagnostics.shortcut_lifecycle import (
+    BANNER_KIND,
+    BUTTON_KIND,
     SHORTCUT_MANAGE_SCOPE,
     TENANT_SCOPE,
     ShortcutConflict,
@@ -1860,8 +1862,6 @@ def create_gateway_app(
         the same lifecycle, but it is served by ``GET /v1/banner`` — the split
         is a query selection here, not a filter a client has to apply (#588).
         """
-        from aiops_diagnostics.shortcut_lifecycle import BUTTON_KIND
-
         caller, decision = identity
         try:
             shortcuts = context.shortcut_manager.list_effective(
@@ -1876,6 +1876,49 @@ def create_gateway_app(
             "language": _shortcut_list_language(shortcuts, language),
             "count": len(shortcuts),
             "shortcuts": [item.public(language) for item in shortcuts],
+        }
+
+    @app.get("/v1/banner")
+    def list_banners(
+        identity: tuple[ScopeContext, PlatformDecision] = Depends(shortcut_identity),  # noqa: B008
+        language: str = Depends(request_language),  # noqa: B008
+    ) -> dict[str, Any]:
+        """The chat-page banner for this caller's entry — static configuration.
+
+        Same store, same lifecycle and same scope merge as the button listing
+        (#588); what differs is the surface. This response contains **no
+        order, no vehicle and no session-derived value**: it is identical for
+        every caller of the same entry, which is the whole design. A client
+        composes the personalized card itself from its own authenticated
+        company calls; the moment this endpoint started answering per-person it
+        would stop being an operations slot and become an authorization query,
+        welding two things with completely different change rates into one
+        response.
+
+        A banner is a jump action: `jump_path` is used verbatim, never
+        localized, and the server does not check that the page exists
+        (ADR-0006). `question_template` is deliberately absent — a jump action
+        never reaches the unified assistant entry.
+
+        An entry with no published banner is an **empty list, not a 404**: "no
+        banner configured" is a normal state, and the client's rule is to draw
+        nothing rather than half a card.
+        """
+        caller, decision = identity
+        try:
+            banners = context.shortcut_manager.list_effective(
+                caller, business_entry=decision.platform, kind=BANNER_KIND
+            )
+        except ShortcutError as exc:
+            raise _shortcut_error(exc) from exc
+        return {
+            "type": "banner",
+            # Same rule as the shortcut listing: a list-level language is only
+            # truthful when every row agrees, and the per-row `language` is
+            # what a client reads otherwise.
+            "language": _shortcut_list_language(banners, language),
+            "count": len(banners),
+            "banners": [item.banner(language) for item in banners],
         }
 
     @app.post("/v1/shortcuts", status_code=status.HTTP_201_CREATED)

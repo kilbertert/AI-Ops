@@ -44,11 +44,17 @@ API_FILE = "gateway_api.py"
 FACTORY = "platform_identity"
 #: The names the factory is bound to, and the scope each must carry.
 IDENTITY_NAMES = ("faq_identity", "assistant_identity", "shortcut_identity")
-#: One endpoint per identity, so a failure is observed on every surface.
+#: One endpoint per identity, so a failure is observed on every surface. An
+#: identity may back more than one endpoint (the banner and the shortcut
+#: listing share one); each is listed, because "the same rule answers the same
+#: way" is a claim about every endpoint that reads it, not about each name.
 SURFACES = {
     "faq_identity": ("GET", "/v1/faq/recommendations"),
     "assistant_identity": ("POST", "/v1/assistant/questions"),
     "shortcut_identity": ("GET", "/v1/shortcuts"),
+    # A fourth surface on the same identity: the banner shares the shortcut
+    # listing's scope, so it must also share its answer to an ambiguous entry.
+    "shortcut_identity/banner": ("GET", "/v1/banner"),
 }
 
 
@@ -243,6 +249,9 @@ SURFACE_HANDLERS = {
     "delete_conversation": "assistant_identity",
     "set_conversation_active_order": "assistant_identity",
     "list_shortcuts": "shortcut_identity",
+    # The banner is a product surface on the same entry, so it reads the same
+    # identity: anything the shortcut listing may show, the banner may too.
+    "list_banners": "shortcut_identity",
 }
 
 
