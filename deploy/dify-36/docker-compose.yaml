@@ -75,6 +75,10 @@ services:
     <<: *shared-api-worker
     environment:
       MODE: api
+      # api 拨 plugin_daemon 的地址。**必须显式给** —— 见 env.example 同名的说明：
+      # api 侧默认 `http://localhost:5002`，那是上游"把 5002 发布到宿主"的形状；
+      # 本实例不发布内部端口，默认值就指向空处（插件路径 Errno 111，探活却 200）。
+      PLUGIN_DAEMON_URL: ${PLUGIN_DAEMON_URL:-http://plugin_daemon:5002}
       PLUGIN_REMOTE_INSTALL_HOST: ${EXPOSE_PLUGIN_DEBUGGING_HOST:-localhost}
       PLUGIN_REMOTE_INSTALL_PORT: ${EXPOSE_PLUGIN_DEBUGGING_PORT:-5003}
       PLUGIN_MAX_PACKAGE_SIZE: ${PLUGIN_MAX_PACKAGE_SIZE:-52428800}
@@ -101,6 +105,8 @@ services:
     <<: *shared-api-worker
     environment:
       MODE: worker
+      # 与 api 同一个理由（插件安装/依赖分析跑在 worker 上）：见 env.example。
+      PLUGIN_DAEMON_URL: ${PLUGIN_DAEMON_URL:-http://plugin_daemon:5002}
       PLUGIN_MAX_PACKAGE_SIZE: ${PLUGIN_MAX_PACKAGE_SIZE:-52428800}
       INNER_API_KEY_FOR_PLUGIN: ${PLUGIN_DIFY_INNER_API_KEY}
     depends_on:

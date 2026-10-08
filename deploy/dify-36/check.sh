@@ -105,6 +105,19 @@ if "rm -f /app/api/storage/.init_permissions" not in init_cmd:
                      "flag 幂等会让 chown 被历史锁死，api 写 privkeys/ 时 Permission denied")
 print("ok: init_permissions 每次 up 无条件 chown storage 并清掉卷内 flag")
 
+# api/worker 拨 plugin_daemon 的地址。第 3 类"只会静默出错"的形状：留空不报错、
+# 探活 200，只有真用到插件的路径（导出 DSL 查插件安装）才 Errno 111 —— 因为 api 侧
+# 默认值是 `http://localhost:5002`，那是"5002 发布到宿主"的写法，而本实例不发布内部口。
+# 注意它**不是** PLUGIN_REMOTE_INSTALL_HOST（那个是调试口）、也不是
+# PLUGIN_DIFY_INNER_API_URL（那是反向）。
+for name in ("api", "worker"):
+    url = (d["services"][name].get("environment") or {}).get("PLUGIN_DAEMON_URL")
+    if url != "http://plugin_daemon:5002":
+        raise SystemExit(f"FAIL: {name}.PLUGIN_DAEMON_URL = {url!r}，"
+                         "必须是 http://plugin_daemon:5002；留空会退回 api 默认的 "
+                         "localhost:5002，插件相关路径 Errno 111 却探活 200")
+print("ok: api/worker 拨 plugin_daemon 的地址显式指向 compose 内网名")
+
 # 镜像源必须显式写死（Docker Hub 在 36 不可达）。
 for name, s in d["services"].items():
     if not s.get("image", "").startswith("docker.1panel.live/"):
