@@ -63,7 +63,17 @@ def build_minimal_health_report(
             language=language,
         )
         status = "abnormal" if stop.abnormal is True else "normal" if stop.abnormal is False else "attention"
-        indicator = _indicator(status=status, value=content or stop.description)
+        # `value` is the LOCALIZED text and `reported_value` is the upstream's
+        # own sentence. They were one field until #599: the value preferred the
+        # upstream sentence, so an English report showed 66.3%-of-orders' worth
+        # of Chinese. The two are now separate because they answer different
+        # questions — what happened (ours, translated) vs what the charger said
+        # (its words, language not guaranteed).
+        indicator = _indicator(
+            status=status,
+            value=stop.description,
+            reported_value=content or None,
+        )
 
     completeness = 0.0 if indicator["status"] == "unavailable" else 1.0
     summary_key = (
@@ -98,12 +108,24 @@ def _indicator(
     *,
     status: str,
     value: object,
+    reported_value: str | None = None,
+    reported_language: str | None = None,
     reason_code: str | None = None,
 ) -> dict[str, Any]:
     return {
         "code": "stop_reason",
         "status": status,
         "value": value,
+        # The upstream's own words, verbatim. Its language is NOT the report's
+        # and is not guaranteed to be any of ours, which is exactly why it is a
+        # separate field: a client can show it as a quotation and knows not to
+        # treat it as localized copy (#599).
+        "reported_value": reported_value,
+        # Null until the source actually tells us what language it wrote in —
+        # which today it never does. A guess here would be a claim we cannot
+        # support; the field exists so the shape does not change when one day
+        # a source does declare it.
+        "reported_language": reported_language,
         "unit": None,
         "reference": None,
         "reason_code": reason_code,

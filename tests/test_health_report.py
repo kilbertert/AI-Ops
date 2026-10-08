@@ -33,6 +33,14 @@ def _order(**overrides):
 
 
 def test_minimal_health_report_is_deterministic() -> None:
+    """`value` is OUR localized text; the upstream's words go to `reported_value`.
+
+    The fixture's upstream content is 「用户主动停止」 and the classification is
+    `user_or_normal_stop`. Before #599 the value was the upstream sentence
+    verbatim, so the two happened to read the same in Chinese — which is why
+    keeping them in one field looked fine here and leaked Chinese into every
+    other language's report.
+    """
     report = build_minimal_health_report(_Sources([_order()]), "O-1", SafetySettings())
 
     assert report["order_no"] == "O-1"
@@ -43,7 +51,9 @@ def test_minimal_health_report_is_deterministic() -> None:
         {
             "code": "stop_reason",
             "status": "normal",
-            "value": "用户主动停止",
+            "value": "用户主动停止或正常充满",
+            "reported_value": "用户主动停止",
+            "reported_language": None,
             "unit": None,
             "reference": None,
             "reason_code": None,

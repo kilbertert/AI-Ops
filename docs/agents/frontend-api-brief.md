@@ -279,10 +279,16 @@ Content-Type: application/json                   # POST 时
 | `order_window` | object | `{started_at, stopped_at}`，订单起止时间（ISO 8601） |
 | `summary` | string | 固定模板摘要，可直接展示 |
 | `indicators[]` | object[] | 单项指标，见下表 |
+| `radar[]` | object[] | **五维评分**：`{code, score, status}`；缺必要输入时该维 `score=null`、`status="unavailable"`（**先判 `status` 再读 `score`**，不要把 `null` 当 0 分渲染） |
+| `health_metrics` | object | 中间计算值：`temperature_delta` / `soc_delta` / `energy_charged_kwh` / `soh` / `soh_status`；数值缺失时为 `null` |
+| `curves` | object | 时序曲线：`power` / `voltage` / `temperature`，各含 `series` / `sample_range` / `output_points` / `original_points`；每条 `series` 最多 300 点（保留首点、末点与极值） |
 | `completeness` | number | 数据完整度 `0..1` |
 | `rule_version` | string | 计算公式版本 |
 | `data_as_of` | string | 本次计算实际使用数据的时间 |
 | `source_summary` | object | 各数据源可用状态：`order_snapshot` / `telemetry` / `protocol` / `vehicle_capacity` → `available` \| `not_requested` \| `unavailable` |
+
+> **`radar` / `health_metrics` / `curves` 三者的字段语义同时记在
+> [`../standard-api-contract.md`](../standard-api-contract.md) §5.3 附近**；两处必须一致。
 
 `indicators[]` 元素：
 
@@ -291,10 +297,22 @@ Content-Type: application/json                   # POST 时
 | `code` | string | 稳定指标代码（如 `stop_reason`） |
 | `status` | string | `normal` \| `attention` \| `abnormal` \| `unavailable`，按此渲染，**不解析中文阈值** |
 | `language` | string | 报告正文的语言，**创建作业时**请求的语言；轮询带别的语言不会改写它 |
-| `value` | string \| number | 指标值 |
+| `value` | string \| number | 指标值。**它可能是字符串**（如停因的分类文案），不是纯数字 |
+| `reported_value` | string \| null | **上游原值**，逐字保留、**语言不保证**（见下）。仅当该指标确有上游原值时非空 |
+| `reported_language` | string \| null | `reported_value` 的语言标签；上游未标明时为 `null` |
 | `unit` | string \| null | 单位 |
 | `reference` | string \| null | 参考条件 |
 | `reason_code` | string \| null | 不可用/异常的原因代码 |
+
+> **⚠️ `value` 与 `reported_value` 的分工（不要混用）**
+>
+> - **`value` 是给用户读的展示值，跟随报告语言**。`Accept-Language: en` 的报告里
+>   它**不会**是中文。
+> - **`reported_value` 是上游报的原文，不是文案**。它按定义**可能是任何语言**
+>   （实测：上游既发中文如「拔出断电」，也发英文如 `Remote` / `EVDisconnected`），
+>   **不要把它当成可翻译的文案，也不要期望它跟随报告语言**。它是「这台桩当初报了什么」的
+>   证据性字段；要展示时请按**引用**处理（例如标注为原值），而不是当作本地化文案。
+> - 中文报告（`zh` / `zh-Hant`）里两者常常**恰好相同**，这是正常的，不代表它们语义相同。
 
 **典型耗时**：秒级；轮询间隔按 `retry_after_ms`（1s）。
 
