@@ -1906,3 +1906,68 @@ Feature: 聊天页运营横幅与快捷动作同表不同面（#588）
       When 用当前版本打开它
       Then 既有行读作按钮
       And 按钮面的查询仍返回该行
+
+Feature: 聊天页运营横幅的读取面（#589）
+
+  Rule: 横幅配置是静态的，不按人回答
+
+    Scenario: 同一个入口下两个不同调用者拿到逐字相同的响应
+      Given 客户端入口已发布一条横幅
+      When 两个不同的已认证调用者各自读取横幅
+      Then 两次响应逐字相同
+
+    Scenario: 请求只带认证所需的最小集合也能读到
+      Given 客户端入口已发布一条横幅
+      When 一个不带任何角色的设备令牌读取横幅
+      Then 返回 200 且横幅可读
+
+  Rule: 横幅是跳转动作，不是提问
+
+    Scenario: 横幅不下发预设提示词
+      Given 客户端入口已发布一条横幅
+      When 读取它
+      Then 条目里没有 question_template
+      And 条目里没有 target_agent_version
+
+    Scenario: 跳转路径跨语言逐字相同
+      Given 客户端入口已发布一条横幅
+      When 分别用每一种受支持语言读取它
+      Then 所有语言返回的 jump_path 是同一个串
+
+  Rule: 没有横幅是一种正常状态
+
+    Scenario: 未发布时返回空列表而非 404
+      Given 客户端入口尚未发布任何横幅
+      When 读取横幅
+      Then 返回 200 且 banners 为空数组
+
+    Scenario: 停用后回到空态
+      Given 一条已发布的横幅
+      When 它被停用
+      Then 读取横幅返回 200 且 banners 为空数组
+
+  Rule: 横幅与按钮互不串面
+
+    Scenario: 横幅端点不返回按钮
+      Given 客户端入口已发布三条按钮动作与一条横幅
+      When 读取横幅
+      Then 只返回那一条横幅
+      And 按钮动作不出现在结果里
+
+    Scenario: 按钮端点不受横幅影响
+      Given 客户端入口已发布三条按钮动作与一条横幅
+      When 读取快捷动作列表
+      Then 仍只返回那三条按钮动作
+
+  Rule: 与既有身份面同形
+
+    Scenario: 入口无法唯一确定时与其它三条线同码
+      Given 一个同时具有两个平台身份的已认证调用者，且请求不带入口头
+      When 读取横幅
+      Then 返回 409 PLATFORM_AMBIGUOUS
+      And 与 FAQ 线、助手线、快捷动作线逐字相同
+
+    Scenario: 未认证请求被拒且不泄露配置
+      Given 一个不带认证头的请求
+      When 读取横幅
+      Then 返回 401

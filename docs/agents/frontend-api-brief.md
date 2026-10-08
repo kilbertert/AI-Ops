@@ -795,6 +795,67 @@ if (shortcut.jump_path) {
 - **tabBar 页面**：`uni.navigateTo` 无法跳转 tabBar 页面，需要 `uni.switchTab`。具体路径属于 tabBar 与否由前端确认。
 - **服务端不校验页面是否存在**。路径是客户端路由的键，可达性由前端验收；后端只保证格式（以 `/` 开头、长度上限）与如实下发。
 
+#### D.2b 聊天页运营横幅 —— `GET /v1/banner`（与跳转动作同族）
+
+聊天页顶部那张带图的卡片（截图里的「你有一份待生成智能电池检查报告」）由**自己的端点**给出。
+它与快捷动作**同表、同生命周期、同作用域合并、同语言规则**，区别只是**展示面**。
+
+```http
+GET /v1/banner
+X-Business-Entry: consumer
+Accept-Language: zh
+```
+
+```json
+{
+  "type": "banner",
+  "language": "zh",
+  "count": 1,
+  "banners": [
+    {
+      "code": "battery_report",
+      "language": "zh",
+      "label": "你有一份待生成智能电池检查报告",
+      "description": "想知道你的电池容量衰减多少？",
+      "jump_path": "/aiPackage/pages/batteryReport/batteryReport",
+      "image_url": null
+    }
+  ]
+}
+```
+
+| 字段 | 用途 |
+|---|---|
+| `code` | 稳定标识（同上表的 `code` 规则） |
+| `label` / `description` | 横幅的标题与副标题，按 `Accept-Language` 本地化（缺失回退中文） |
+| `jump_path` | **跳转目标**，与 D.2a **完全同一套规则**：原样使用、不做国际化、`uni.navigateTo`、服务端不校验页面存在 |
+| `image_url` | **运营配的兜底图**，可以是 `null`。**不是**「我的车」那张图 —— 见下 |
+
+**它是静态配置，不按人回答。** 这个响应里**没有订单、没有车辆、没有会话主体**：
+
+- 同一个入口下**人人同值**、可缓存；
+- **个性化车图由客户端自己合成** —— 客户端本来就有登录态与公司既有端点
+  （`/charging-pile/chMyCar/myCarList` 取「我的车」，优先默认车；再按车型名查
+  `/charging-pile/chCarSeries/page` 拿车系图）。**AI-Ops 不读任何业务表，也不返回任何订单/车辆派生值。**
+- 因此 `image_url` 为 `null` 是**常态**，不是「还没配好」：它只在运营想配一张兜底图时才非空。
+  拿不到车型图时回落到 `image_url`，两者都没有时**不要画半张卡片**。
+
+**行为约定**：
+
+- **横幅是跳转动作**：`banners[]` 里**不会**出现 `question_template` 或 `target_agent_version`。
+  别去猜它是不是提问类动作，它永远是导航。
+- **没有横幅是正常状态**：未发布、停用、或该入口本就没有横幅 ⇒
+  `{"type":"banner","count":0,"banners":[]}`，**HTTP 200**。**不是 404、不是 5xx。**
+- **横幅与按钮互不串门**：这个端点**只**给横幅行，`/v1/shortcuts` **只**给按钮行
+  （服务端按行自己的判别字段选面，前端**不需要**过滤）。两边的行数不会互相影响。
+- **鉴权与 `/v1/shortcuts` 同形**：只读 scope 即可，**不需要管理角色**。
+  401/403/409/503 与 §2.2 通用处理一致（409 = 平台无法唯一确定，同 FAQ 线）。
+- **当前只有客户端入口（consumer）有横幅**；管家端入口返回空列表。
+
+> **⚠️ 已知欠账（本期交付后仍然成立）**：报告页**还没有**接 AI-Ops 的健康报告接口，
+> 因此点横幅跳过去**大概率看不到截图那张报告**。这是「报告页指标对齐 + 前端接线」共同欠的账，
+> 不是横幅的缺陷。另外横幅的 `jump_path` 指向的报告页路由 **在客户端已注册**，导航本身可用。
+
 #### D.2 快捷动作的执行 —— 没有独立执行协议，走统一助手入口
 
 适用于 `jump_path` 为 `null` 的**提示动作**（含下面的 `requires_order` 规则）。点击后把 `question`（用 `question_template` 或用户输入）和 **`shortcut_code`** 提交到场景 B 的统一入口：

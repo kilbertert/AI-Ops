@@ -1577,3 +1577,25 @@ uv run pytest tests/test_assistant_api.py tests/test_conversation_api.py \
   （`待生成智慧電池檢查報告`），与客户端 bundle 现在发的
   `待產生智能電池檢查報告` 不一致 —— 已在 PR 正文与代码注释里记录，**未擅自统一**。
 - **清理**：一次性数据根随 tmp_path 丢弃；**未触碰 41 的任何生产数据**。
+
+### BANNER-02 横幅端点的对外契约（#589，未在 41 实跑）
+
+- **环境**：本机工作树 `feat/banner-read-endpoint`（叠于 #588 的
+  `feat/banner-row-in-shortcuts`，因其提供 `kind` 列与 `banner()` 投影）。
+  **未上 41** —— 端点尚未部署；产线上的验收属于该分支合并后的部署窗口。
+- **前置**：一次性数据根 + `TestClient(create_gateway_app(...))`；种子行全部发布。
+- **测试数据**：`_BUNDLED_SHORTCUTS` 的 consumer 入口（三条按钮 + 一条横幅）。
+- **动作**：`uv run pytest tests/test_banner_api.py tests/test_platform_identity_shapes.py -q`
+- **预期**：空态 200 + `banners: []`；有横幅时 `count=1` 且只有 `battery_report`；
+  `/v1/shortcuts` 仍是三条；11 语言各自回显且无中文兜底；跳转路径跨语言同一串；
+  设备令牌（零角色）可读；未认证 401；入口歧义 409 `PLATFORM_AMBIGUOUS`。
+- **结果：PASS** —— 10 条新增用例 + 身份面结构护栏全绿；全量 `pytest` 通过。
+- **变异核对（四处，实跑各自转红）**：
+  ① 横幅路由去掉 `kind` 过滤并改用 `public()` → 红在「只返回横幅」「管家端无横幅」
+     「停用后消失」三条；② 空态改抛 404 → 红在四条空态用例；
+  ③ 响应掺入调用者身份 → 红在「两个调用者逐字相同」；④ 服务时忽略请求语言
+     （恒用 `zh`） → 红在逐语言用例。另有一条结构变体：把 `list_banners` 从
+     身份面地图里拿掉 → `test_each_surface_asks_for_the_identity_that_carries_its_scope` 转红。
+- **边界（据实）**：**未在 41 实跑**（端点未部署）。前端可读性、车图能否取到、
+  报告页跳转是否成功打开 —— 均不在本票范围，见 #591 交接文档。
+- **清理**：一次性数据根随 tmp_path 丢弃；**未触碰 41 的任何生产数据**。
