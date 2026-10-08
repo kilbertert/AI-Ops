@@ -13,6 +13,26 @@
 | `check_translation_batch.py` | 译文批次的结构校验 | 入库前 |
 | `apply_path_map.py` | 把译好的界面路径映射套回答案 | 路径单独译时 |
 | `migrate_shortcut_i18n.py` | 生产已发布快捷动作的语言迁移 | 上线新语言后（**有写风险，见下**） |
+| `verify_banner_car_lookup.py` | 活口检查：横幅个性化依赖的三条**公司端点**是否真成立（#590） | 改过车图/个性化链路，或要复跑那次验收时 |
+
+## `verify_banner_car_lookup.py` 跑在**网关主机**上，不跑这里
+
+它要两样只在 41 上存在的东西：受试身份来自内网生产库 `ch_my_car`，
+凭据在服务自己的 env 里（`AIOPS_MYSQL_*`，0600，root 都读不到）。
+端点侧走**公网域名** —— 测的是公司对外真正暴露的那条路径，不是内网绕过。
+
+```bash
+scp tools/verify_banner_car_lookup.py aiops-41:/tmp/ && ssh aiops-41 'chmod a+r /tmp/verify_banner_car_lookup.py'
+ssh aiops-41 'cd /opt/aiops-41 && runuser -u aiops41 -- bash -c "set -a; . /etc/aiops-41/production.env; set +a; \
+  /opt/aiops-41/.venv/bin/python -I /tmp/verify_banner_car_lookup.py --run"'
+```
+
+**零写入**：只发 GET，且只碰读端点。写端点（`/add`、`/edit`、`DELETE /{id}`、
+`/switchEnableStatus`）一律不试 —— 它们有没有鉴权是公司侧要单独核的事。
+退出码 `0` 通过 / `1` 有失败 / `2` **未取证**（默认的 `--plan` 什么都不发；
+把"只列了计划"读成"验证通过"正是这个脚本要防的那种假陈述）。
+受试身份是真实用户凭据，因此**不打印**车牌、VIN、订单号、用户名与完整 id，
+只引用尾号；`--self-check` 是无网络的纯逻辑自检，改坏分桶或判定必转红。
 
 ## 依赖纪律：`opencc` 故意不在 `pyproject.toml` 里
 
