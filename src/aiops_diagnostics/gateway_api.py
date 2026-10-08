@@ -6,6 +6,7 @@ import json
 import logging
 import platform
 import re
+import secrets
 from contextlib import asynccontextmanager
 from typing import Annotated, Any
 
@@ -53,6 +54,12 @@ from aiops_diagnostics.conversation_store import (
     ConversationError,
     ConversationStore,
 )
+from aiops_diagnostics.dify_knowledge_api import (
+    DIFY_RETRIEVAL_PATH,
+    DifyRequestError,
+    dify_records,
+    parse_dify_retrieval_request,
+)
 from aiops_diagnostics.faq import (
     FAQ_NOT_FOUND,
     PLATFORM_AMBIGUOUS,
@@ -65,7 +72,7 @@ from aiops_diagnostics.faq import (
     PlatformDirectoryError,
     PlatformIdentityResolver,
 )
-from aiops_diagnostics.gateway_config import GatewayServerSettings
+from aiops_diagnostics.gateway_config import GatewayServerSettings, parse_dify_knowledge_bindings
 from aiops_diagnostics.gateway_runtime import GatewayRuntime, close_gateway_runtime
 from aiops_diagnostics.gateway_store import (
     ACTIVE_DIAGNOSIS_STATUSES,
@@ -87,6 +94,10 @@ from aiops_diagnostics.i18n import (
     effective_language,
     free_text_unavailable_message,
     resolve_language,
+)
+from aiops_diagnostics.knowledge_retrieval import (
+    KnowledgeSearchUnavailable,
+    normalize_search_response,
 )
 from aiops_diagnostics.metrics_store import MetricsValidationError
 from aiops_diagnostics.order_visibility import DeviceTenantError
@@ -664,6 +675,103 @@ def create_gateway_app(
     faq_identity = platform_identity(authenticated_faq_caller)
     assistant_identity = platform_identity(authenticated_diagnosis_caller)
     shortcut_identity = platform_identity(authenticated_shortcut_viewer)
+
+    def dify_shared_credential(
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> None:
+        """The Dify adapter's own door (#581).
+
+        Deliberately NOT the caller chain, and deliberately not named
+        ``authenticated_*``: Dify is a server, not one of our users. It has no
+        session and no UPMS subject, and an ``X-AIOps-Source-Key`` is not on
+        offer. The credential is the shared API key the operator configures on
+        both sides — the same shape as Dify's own External Knowledge API, where
+        the "API Key" is exactly this string.
+
+        Unconfigured means the route is **not enabled at all** (404, see the
+        route below), never "no key needed". Half-configuration is a startup
+        error, enforced in ``GatewayServerSettings.validate``.
+        """
+        configured = context.settings.dify_knowledge_api_key
+        if not configured:
+            raise StandardAPIError(status.HTTP_404_NOT_FOUND, "DIFY_RETRIEVAL_UNAVAILABLE", "route not found")
+        if not authorization or not authorization.startswith("Bearer "):
+            raise StandardAPIError(
+                status.HTTP_401_UNAUTHORIZED, "DIFY_CREDENTIAL_REQUIRED", "bearer credential required"
+            )
+        # Byte comparison, no normalization, same rule as `source_key_accepted`:
+        # the key is a fixed random string this side generated, and any
+        # "lenient compare" would only shorten its effective space.
+        if not secrets.compare_digest(
+            configured.encode("utf-8"), authorization.removeprefix("Bearer ").strip().encode("utf-8")
+        ):
+            raise StandardAPIError(
+                status.HTTP_403_FORBIDDEN, "DIFY_CREDENTIAL_REJECTED", "credential rejected"
+            )
+
+    @app.post(DIFY_RETRIEVAL_PATH)
+    def dify_retrieval(
+        payload: dict[str, Any],
+        _credential: None = Depends(dify_shared_credential),  # noqa: B008
+    ) -> dict[str, Any]:
+        """The External Knowledge API hop Dify calls (PRD #577 挂接跳数).
+
+        Everything the answer depends on already happened above this line:
+        the credential was checked, and the tenant plus the knowledge-base
+        allow-list are read from **our** registry keyed by ``knowledge_id``.
+        Nothing in the request body can widen either — that is what makes this
+        an adapter rather than a proxy.
+        """
+        bindings = parse_dify_knowledge_bindings(context.settings.dify_knowledge_bindings)
+        try:
+            request = parse_dify_retrieval_request(
+                payload, max_top_k=context.settings.dify_knowledge_max_top_k
+            )
+        except DifyRequestError as exc:
+            raise StandardAPIError(status.HTTP_400_BAD_REQUEST, exc.code, exc.message) from exc
+
+        binding = bindings.get(request.knowledge_id)
+        if binding is None:
+            # A knowledge_id we never registered. 404 says "not here" and
+            # reveals nothing about which ids exist, or about our data plane.
+            raise StandardAPIError(
+                status.HTTP_404_NOT_FOUND, "DIFY_KNOWLEDGE_NOT_FOUND", "knowledge source not found"
+            )
+
+        client = context.runtime.kb_search_client
+        signer = context.runtime.media_signer
+        if client is None or signer is None:
+            # kb-service or the media plane is unconfigured, or the search
+            # dependency is down. Both are "cannot answer now" — reported as
+            # exactly that, never as an empty 200 result set, because Dify
+            # reads a 200 as `records` and would render "nothing matched" for
+            # what is really an outage (#581 acceptance).
+            raise StandardAPIError(
+                status.HTTP_502_BAD_GATEWAY,
+                "DIFY_KNOWLEDGE_UNAVAILABLE",
+                "knowledge retrieval is temporarily unavailable",
+                retryable=True,
+            )
+        top_k = request.top_k or context.settings.dify_knowledge_max_top_k
+        try:
+            raw = client.search(binding.knowledge_base_ids, request.query, top_k)
+            chunks = normalize_search_response(
+                raw,
+                tenant_id=binding.tenant_id,
+                agent_version=f"dify:{binding.knowledge_id}",
+                session_id=None,
+                knowledge_base_ids=binding.knowledge_base_ids,
+                media_signer=signer,
+                max_results=context.settings.dify_knowledge_max_top_k,
+            )
+        except KnowledgeSearchUnavailable as exc:
+            raise StandardAPIError(
+                status.HTTP_502_BAD_GATEWAY,
+                "DIFY_KNOWLEDGE_UNAVAILABLE",
+                "knowledge retrieval is temporarily unavailable",
+                retryable=True,
+            ) from exc
+        return {"records": dify_records(chunks, score_threshold=request.score_threshold)}
 
     @app.get("/health")
     def health() -> dict[str, Any]:
