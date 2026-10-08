@@ -1,3 +1,57 @@
+## #580 Dify DSL 拉取与草稿映射（2026-10-08，离线）
+
+**分支** `feat/dify-dsl-pull-mapping`，基线 `origin/main` @ `94965f5`。
+**制品** `src/aiops_diagnostics/dify_dsl_pull.py` + `tests/test_dify_dsl_pull.py`。
+
+### 一、映射：用**真** DSL 固件驱动，不用手写样例
+
+固件 `tests/fixtures/dify-app-chat.dsl.yml` 是从 **36 上真实 Dify 实例的导出端点**
+拉出来的制品，不是按文档手写的样本（拉取手法与实例拓扑记在**姊妹票 #579** 的
+`deploy/dify-36/README.md`，该文件在 PR #601，尚未合入本分支；本票不重复记录，避免两处漂移）；
+同目录 `dify-app-chat-null-prompt.dsl.yml` 是它填提示词之前的形态。两条固件都进仓，
+因此映射测试离线可跑、不依赖在线 Dify。
+
+| 判据 | 结果 | 怎么证的 |
+|---|---|---|
+| 提示词确实进了草稿 | ✅ | 固件 `pre_prompt` 解出含 `小趋`，且含换行（PyYAML 把多行串还原为带 `\n` 的单串） |
+| 模型配置确实进了草稿 | ✅ | 固件 `model.name` = `deepseek-v4-flash` 落进 `AgentConfig.model` |
+| **开场白与预设问题不被消费** | ✅ | 固件里这两个字段**非空**（`欢迎使用充电服务助手…`、`充电桩无法启动怎么办？`），草稿里 `opening_questions`/`quick_commands` 均为空 |
+| 缺失值：DSL 无提示词 | ✅ 报错 | null-prompt 固件 → `DifyDslMalformed`，不落空草稿 |
+| 超集：DSL 有我们没有的字段 | ✅ 忽略 | 真固件本就是超集（`agent_mode`/`file_upload`/`user_input_form`…）；再插入一个不存在的未来字段，映射结果与插入前 **逐字段相同** |
+| 非法值：数据集绑定存在但读不出 | ✅ 报错 | 契约是「present 但不可读 = 报错」，不是「当成空」——静默丢绑定比拒绝映射更坏 |
+| 非法值：DSL 版本不匹配 | ✅ 报错 | `0.9.0` → `DifyDslVersionUnsupported`；`version: seven` / 无 version → `DifyDslMalformed` |
+| 非法值：坏 YAML、根不是对象、`kind` 非 `app`、无 `model_config` | ✅ 报错 | 各一条 |
+
+### 二、拉取客户端：三类失败各自一个信号，且不留半成品
+
+打的是 `bounded_http` 的传输边界（桩 `urlopen`，先例 `tests/test_gateway_client.py`）。
+
+| 场景 | 结果 |
+|---|---|
+| 正常导出 | ✅ 请求打在 `GET <base>/console/api/apps/<id>/export`，带 `Authorization: Bearer …` 与 `X-WORKSPACE-ID` |
+| Dify 不可达 | ✅ `DifyDslUnreachable` |
+| 凭据被拒（401） | ✅ `DifyDslAuthRejected`，**与不可达分开**（一个是配置问题，一个是网络问题） |
+| 信封里没有 DSL（空 `data` / 非 JSON） | ✅ `DifyDslMalformed` |
+| URL 带凭据/query/fragment、app_id 非法、无 key、超时越界 | ✅ 构造期 `ValueError`，**未发出任何请求** |
+
+**「不产生半成品草稿」的判据**：拉取失败后 `manager.list(ctx) == []`（无任何写入痕迹）。
+覆盖两条路径——映射失败（null-prompt 固件）与传输失败（URLError）。
+
+### 三、生命周期
+
+- 落地为 `status='draft'`、`published_version is None`、无版本号（`version(ctx, id, 1)` 抛
+  `AgentNotFound`）——**没有**直接落成已发布版本。
+- 重复拉取同一配置 → revision 不变（无写入）；已发布后重复拉取 → fork 成草稿且
+  **已发布快照逐字不变**；改了提示词再拉 → 草稿更新，版本 1 的快照仍是旧提示词。
+
+### 四、证据边界（据实）
+
+- 全部为**离线自动化**验证：映射打真固件，客户端打桩 `urlopen`。**未**连在线 Dify 实例，
+  **未**连真实租户数据面；因此**未完成业务验收**。
+- 未覆盖：把这条通路接到一个可触发的运营动作（CLI / 网关端点）——不在本票范围。
+- 已知真实风险（非本票缺陷）：Dify chat 前端整体替换 `dataset_configs`，在表单里改一次会
+  丢掉 `datasets` 子树；再拉取时映射如实报「无知识库绑定」。
+
 ## #566 模型侧回答面语言端到端实测（2026-10-08，41 生产）
 
 **分支** `test/model-surface-language-verification`，基线 `origin/main` @ `df3659a`。

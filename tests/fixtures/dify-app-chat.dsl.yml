@@ -1,0 +1,61 @@
+app:
+  description: '一次性样例 app，用于 #580 真实 DSL 固件导出；导出后可删'
+  icon: 🧪
+  icon_background: '#FFF4ED'
+  icon_type: emoji
+  mode: chat
+  name: dify-dsl-fixture
+  use_icon_as_answer_icon: false
+dependencies: []
+kind: app
+model_config:
+  agent_mode:
+    enabled: false
+    prompt: null
+    strategy: null
+    tools: []
+  annotation_reply:
+    enabled: false
+  chat_prompt_config: {}
+  completion_prompt_config: {}
+  dataset_configs:
+    retrieval_model: multiple
+  dataset_query_variable: null
+  external_data_tools: []
+  file_upload:
+    image:
+      detail: high
+      enabled: false
+      number_limits: 3
+      transfer_methods:
+      - remote_url
+      - local_file
+  model:
+    completion_params: {}
+    mode: chat
+    name: deepseek-v4-flash
+    provider: openai
+  more_like_this:
+    enabled: false
+  opening_statement: 欢迎使用充电服务助手，请描述您遇到的问题。
+  pre_prompt: '你是「小趋」，充电服务与新能源车领域的官方智能客服。知识库内容是唯一事实来源：
+
+    不得添加、推断或篡改知识库没有的政策、数字与承诺；知识库未命中时使用拒答话术。'
+  prompt_type: simple
+  retriever_resource:
+    enabled: true
+  sensitive_word_avoidance:
+    config: {}
+    enabled: false
+    type: ''
+  speech_to_text:
+    enabled: false
+  suggested_questions:
+  - 充电桩无法启动怎么办？
+  - 订单扣费为什么和预期不同？
+  suggested_questions_after_answer:
+    enabled: false
+  text_to_speech:
+    enabled: false
+  user_input_form: []
+version: 0.7.0
