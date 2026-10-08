@@ -1,3 +1,35 @@
+## AFK 脚手架 1.5.0 → 1.6.2 迁移（2026-10-08）
+
+**分支** `chore/afk-template-1-6-0`，基线 `origin/main` @ `e7a216d`。
+
+### 新增的自动化检查
+
+`.github/workflows/afk-policy.yml` 增加三步，本次迁移一并接上：
+
+- `npx tsx .sandcastle/mcp-config.check.ts` —— 断言沙箱拿到的 MCP server 集合、它们的挂载、
+  以及 Dockerfile 包装脚本读的那个路径三者一致；二进制必须存在且**可执行**。
+- `node .sandcastle/repo-map.check.mjs` —— 重新生成地图并与提交的比对，过期即红。
+- `node .sandcastle/repo-map.mjs --self-check` —— 生成器自身的解析与过滤规则。
+  刻意**不**并进上一条：地图检查必须走发布代码路径，否则是校验一个东西、发布另一个。
+
+### 真实环境验证
+
+镜像按新 Dockerfile 重建后，在本机容器里实测：`serena --version` → `Serena 1.7.0`；
+`uv` 在 PATH；`/usr/local/bin/claude` 的 `claude` 与 `claude-deepseek` 两个分支都带
+`--mcp-config /home/agent/.afk-mcp.json`。仓库变量 `AFK_PROFILE=claude-deepseek` 已确认。
+
+### 失败与修复
+
+迁移过程本身没出故障。上游模板修掉的两类缺陷记录在 afk-bootstrap 的 PR 里：
+MCP 配置原先就地截断写（并发 run 会读到半截配置）、codebase-memory 的可用性判定
+原先用「可读」（可读但不可执行的文件会被声明给 claude，而 claude 对启动不了的 server
+是静默跳过的）。
+
+### 未完成
+
+沙箱内 MCP 的**端到端**可用性本轮未验证 —— 需要一次真实 AFK run 观察工具确实被调用。
+本轮验证的是配置生成与镜像内容，不是 agent 实际用上了它们。**未完成业务验收。**
+
 ## 回答面真用户端到端探测：机制建立 + 产线实测（2026-10-07）
 
 **分支** `docs/e2e-integration-sop-skill`，基线 `origin/main` @ `b79cc4f`。
