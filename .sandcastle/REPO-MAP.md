@@ -13,11 +13,16 @@ answer how they work.
 
 - script "afk": tsx .sandcastle/main.ts (package.json)
 - script "ralph": tsx .sandcastle/planner.ts (package.json)
+- console script "aiops": aiops_diagnostics.cli:app (pyproject.toml)
+- console script "aiops-tdengine-proxy": aiops_diagnostics.tdengine_proxy:main (pyproject.toml)
+- console script "aiops-gateway": aiops_diagnostics.gateway_server:main (pyproject.toml)
+- console script "aiops-responses-adapter": aiops_diagnostics.responses_adapter:main (pyproject.toml)
 
 ## Tests
 
 - tests/ — 118 test file(s)
 - script "cd:watch:test": node .sandcastle/cd-watch.test.mjs
+- pytest (pyproject.toml / pytest.ini present)
 
 ## Docs
 
