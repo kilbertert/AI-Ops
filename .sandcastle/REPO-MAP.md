@@ -41,9 +41,9 @@ accurate at the moment it is generated and at the moment the commit lands.
 - AGENTS.md
 - CLAUDE.md
 - README.md
-- docs/ — 55 markdown file(s)
+- docs/ — 56 markdown file(s)
 - docs/adr/ — 10 markdown file(s)
-- docs/agents/ — 24 markdown file(s)
+- docs/agents/ — 25 markdown file(s)
 
 ## Tree (depth 2, first 80 lines; dependencies, build
 output and run residue omitted)
@@ -88,7 +88,7 @@ docs/
     company-repo-index.md
     current-delivery-state.md
     dev-gateway-acceptance.md
-    ... (14 more)
+    ... (15 more)
   architecture/
     ai-ops-architecture.html
     ai-ops-architecture.json
