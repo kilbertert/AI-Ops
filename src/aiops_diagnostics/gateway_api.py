@@ -306,6 +306,16 @@ class ShortcutFieldsRequest(BaseModel):
         # lifecycle validator, leaving the two layers disagreeing.
         pattern=r"^/(?:[^/]\S*)?$",
     )
+    image_url: str | None = Field(
+        default=None,
+        max_length=512,
+        # http(s) only. A `data:` payload is an unbounded blob through config,
+        # and `javascript:`/`file:` become execution or local-read primitives
+        # once a client hands the value to an image loader. The lifecycle
+        # validator enforces the same rule; this layer rejects it earlier with
+        # a 422 rather than a 4xx from deeper in.
+        pattern=r"^https?://\S+$",
+    )
 
 
 class ShortcutCreateRequest(ShortcutFieldsRequest):
@@ -1845,10 +1855,18 @@ def create_gateway_app(
         are unreachable. Each item carries the stable ``code`` the client
         wires behavior to (e.g. order picker for requires_order=True), plus
         copy localized in the request language (zh fallback).
+
+        Buttons only. The chat-page banner lives in the same store and shares
+        the same lifecycle, but it is served by ``GET /v1/banner`` — the split
+        is a query selection here, not a filter a client has to apply (#588).
         """
+        from aiops_diagnostics.shortcut_lifecycle import BUTTON_KIND
+
         caller, decision = identity
         try:
-            shortcuts = context.shortcut_manager.list_effective(caller, business_entry=decision.platform)
+            shortcuts = context.shortcut_manager.list_effective(
+                caller, business_entry=decision.platform, kind=BUTTON_KIND
+            )
         except ShortcutError as exc:
             raise _shortcut_error(exc) from exc
         return {

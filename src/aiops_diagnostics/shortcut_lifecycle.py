@@ -111,6 +111,21 @@ STABLE_CODES = frozenset({"case_exploration", "smart_diagnosis", "report_fault"}
 # in-app route, so it is not localized: one path per action, not per language.
 REPORT_FAULT_JUMP_PATH = "/charge/pages/faultReport/faultReportList"
 
+# The battery report the chat-page banner navigates to. Same rule as the fault
+# report: an in-app route, one path for every language (ADR-0006).
+BATTERY_REPORT_JUMP_PATH = "/aiPackage/pages/batteryReport/batteryReport"
+
+# Resource kind — the EXPLICIT discriminator between a chat-page banner and an
+# ordinary shortcut button. It is a column, not a `fields_json` convention and
+# not "image_url is set", because the serving query has to select a surface
+# without parsing JSON, and because deriving the surface from `image_url` would
+# make "which endpoint read this row" an implicit input to the shared
+# projection. Exactly two kinds; the value is what the row IS, so it is never
+# edited after creation.
+BUTTON_KIND = "button"
+BANNER_KIND = "banner"
+SHORTCUT_KINDS = frozenset({BUTTON_KIND, BANNER_KIND})
+
 VIEW_ROLES = frozenset(
     {"ROLE_AGENT_VIEWER", "ROLE_AGENT_ADMIN", "ROLE_AGENT_PUBLISHER", "ROLE_PLATFORM_ADMIN"}
 )
@@ -300,6 +315,67 @@ _BUNDLED_SHORTCUTS: tuple[tuple[str, dict[str, dict[str, Any]]], ...] = (
                 # in an ad-hoc migration command.
                 "jump_path": REPORT_FAULT_JUMP_PATH,
             },
+            # The chat-page banner (#578). Same table, same lifecycle, same
+            # copy coverage — but a card, on its own surface, reached through
+            # the banner endpoint. `kind` is what puts it there; the button
+            # listing never sees it.
+            #
+            # No `question_templates`: a jump action never reaches the unified
+            # assistant entry, so a preset prompt would be dead copy that the
+            # coverage gate would then demand in eleven languages.
+            #
+            # The copy is the product's own, taken from the shipped client
+            # bundle (build 21 / 1.2.12) where this banner is already live in
+            # all eleven languages — it is NOT invented here. Two caveats,
+            # both recorded rather than silently fixed:
+            #
+            #   * `zh-Hant` is the repo's own derivation of the `zh` authority
+            #     (opencc `s2twp`, enforced by tools/derive_zh_hant.py), which
+            #     yields 「待生成智慧電池檢查報告」. The client currently ships
+            #     「待產生智能電池檢查報告」 instead. Two strings for one banner;
+            #     the repo rule wins here, and the divergence is a frontend
+            #     question (does the client read this table or its own bundle?).
+            #   * GLOSSARY objects to 「待生成」 (it implies a queued,
+            #     unpersisted report — see 可生成报告订单). Product owns the
+            #     wording, so it is kept as shipped rather than rewritten here.
+            "battery_report": {
+                "intent": "knowledge",  # inert for a jump action; see the brief
+                "requires_order": False,
+                "sort_order": 10,
+                "labels": {
+                    "zh": "你有一份待生成智能电池检查报告",
+                    "zh-Hant": "你有一份待生成智慧電池檢查報告",
+                    "vi": "Bạn có một báo cáo kiểm tra pin thông minh đang chờ tạo",
+                    "mn": "Танд бэлтгэгдэх ухаалаг батерей шалгалтын тайлан байна",
+                    "th": "คุณมีรายงานการตรวจสภาพแบตเตอรี่อัจฉริยะรอสร้างอยู่",
+                    "km": "អ្នកមានរបាយការណ៍ត្រួតពិនិត្យអាគុយឆ្លាតវៃរង់ចាំការបង្កើត",
+                    "en": "You have a smart battery health report ready to generate",
+                    "de": "Ein smarter Batterieprüfbericht steht zur Erstellung bereit",
+                    "fr": "Vous avez un rapport d'état de batterie prêt à être généré",
+                    "es": "Tienes un informe inteligente de salud de batería listo para generar",
+                    "pt": "Você tem um relatório inteligente de saúde da bateria pronto para gerar",
+                },
+                "descriptions": {
+                    "zh": "想知道你的电池容量衰减多少？",
+                    "zh-Hant": "想知道你的電池容量衰減多少？",
+                    "vi": "Bạn muốn biết dung lượng pin đã suy giảm bao nhiêu?",
+                    "mn": "Батерейны багтаамж хэр буурсныг мэдэхийг хүсч байна уу?",
+                    "th": "ต้องการทราบว่าความจุแบตเตอรี่ของคุณลดลงเท่าไรหรือไม่?",
+                    "km": "ចង់ដឹងថាទំហំផ្ទុកអាគុយរបស់អ្នកថយចុះប៉ុន្មានដែរឬទេ?",
+                    "en": "Want to check your battery degradation and capacity?",
+                    "de": "Möchten Sie wissen, wie viel Kapazität Ihr Akku verloren hat?",
+                    "fr": "Vous voulez savoir comment votre batterie s'est dégradée ?",
+                    "es": "¿Quieres saber cuánta capacidad ha perdido tu batería?",
+                    "pt": "Quer saber quanto a sua bateria degradou?",
+                },
+                "jump_path": BATTERY_REPORT_JUMP_PATH,
+                "kind": BANNER_KIND,
+                # The operator's fallback image. Left unset in the seed: the
+                # personalized photo comes from the client's own car lookup, and
+                # the repo has no business hot-linking a third-party CDN from a
+                # seed. Ops sets this when they want a fallback.
+                "image_url": None,
+            },
         },
     ),
     (
@@ -403,6 +479,15 @@ class Shortcut:
     # discriminator: it makes this a jump action, which never reaches the
     # unified assistant entry. None keeps the prompt action behavior.
     jump_path: str | None
+    # Which surface this row belongs to. A column rather than a `fields_json`
+    # key because the serving query selects a surface, and because deriving it
+    # from `image_url` would make the reader an implicit input. Immutable after
+    # creation: a row does not become a different kind of resource.
+    kind: str
+    # Optional fallback image for a banner row (`None` for buttons). Frozen
+    # into the publish snapshot like every other served field; the client uses
+    # its own car lookup first and falls back here.
+    image_url: str | None
     published_version: int | None
     created_by: str
     created_at: str
@@ -446,6 +531,13 @@ class Shortcut:
         gap survive a whole release cycle: the request returned 200, the
         ``language`` echoed exactly what was asked for, and only the text was
         wrong. See :meth:`missing_translations`.
+
+        This is the BUTTON surface's shape, and it is byte-for-byte what it
+        always was (#588 acceptance: adding a banner must not change the
+        button listing). It therefore gained no `kind` and no `image_url`: a
+        banner never reaches it, and a button can never carry an image (see
+        `_validated_fields`). The banner has its own projection; see
+        :meth:`banner`.
         """
         for field, value in self.missing_translations(language):
             _warn_missing_translation(self, language, field, value)
@@ -466,6 +558,28 @@ class Shortcut:
             "jump_path": self.jump_path,
         }
 
+    def banner(self, language: str) -> dict[str, Any]:
+        """The banner surface's shape for ONE language.
+
+        Deliberately narrower than :meth:`public`: a banner is a jump action,
+        so it has no `question_template` (it never reaches the unified
+        assistant entry) and no `target_agent_version`. Sending them would
+        invite a client to use a field that is meaningless for the card, and
+        `question_template` is a product rule, not a trimming convenience.
+
+        `image_url` is the operator's fallback only. The personalized car photo
+        is the client's own business — AI-Ops reads no business table and
+        returns no order- or vehicle-derived value here.
+        """
+        return {
+            "code": self.code,
+            "language": self.served_language(language),
+            "label": self._localized_field(self.labels, language),
+            "description": self._localized_field(self.descriptions, language),
+            "jump_path": self.jump_path,
+            "image_url": self.image_url,
+        }
+
     @staticmethod
     def _localized_field(values: dict[str, str], language: str) -> str:
         return values.get(language) or values.get("zh", "")
@@ -476,6 +590,13 @@ class Shortcut:
         Empty when the language is fully covered, or when it is the default
         (zh is the authority, so its presence is not a gap). Also used by the
         coverage check, so the warning and the gate agree on what counts.
+
+        A field that is empty in EVERY language does not participate — the same
+        rule :meth:`served_language` applies. The case that made this
+        necessary: a banner is a jump action, so it carries no
+        `question_templates` at all, and counting that as a gap in eleven
+        languages would be eleven warnings per request and a CI failure for
+        copy that is deliberately absent rather than untranslated.
         """
         if language == DEFAULT_LANGUAGE:
             return []
@@ -485,6 +606,8 @@ class Shortcut:
             ("description", self.descriptions),
             ("question_template", self.question_templates),
         ):
+            if not values:
+                continue
             if not values.get(language):
                 missing.append((field, values.get(DEFAULT_LANGUAGE, "")))
         return missing
@@ -505,6 +628,8 @@ class Shortcut:
             "question_templates": dict(self.question_templates),
             "target_agent_version": self.target_agent_version,
             "jump_path": self.jump_path,
+            "kind": self.kind,
+            "image_url": self.image_url,
             "published_version": self.published_version,
             "created_by": self.created_by,
             "created_at": self.created_at,
@@ -541,12 +666,16 @@ class ShortcutStore:
         self._initialize()
 
     def seed_bundled(self, context: Any, manager: ShortcutManager) -> list[Shortcut]:
-        """Create the three initial stable-code shortcuts if absent (#230).
+        """Create the initial seed shortcuts if absent (#230, #588).
 
         Idempotent: existing rows in this tenant+entry keep their lifecycle
         state (an operator may have disabled them deliberately). The seeded
         rows are drafts — publishing is an explicit operator act per the
         PRD's governance boundary, never automatic.
+
+        The seed is not only buttons: the consumer entry also carries the
+        chat-page banner. Which surface a row belongs to is `kind`, taken from
+        the seed spec — never inferred from which fields happen to be set.
         """
         del manager
         seeded: list[Shortcut] = []
@@ -565,9 +694,11 @@ class ShortcutStore:
                         sort_order=spec["sort_order"],
                         labels=spec["labels"],
                         descriptions=spec["descriptions"],
-                        question_templates=spec["question_templates"],
+                        question_templates=spec.get("question_templates") or {},
                         target_agent_version=None,
                         jump_path=spec.get("jump_path"),
+                        kind=spec.get("kind", BUTTON_KIND),
+                        image_url=spec.get("image_url"),
                         created_by=_actor(context),
                     )
                 )
@@ -587,6 +718,8 @@ class ShortcutStore:
         question_templates: dict[str, str],
         target_agent_version: str | None,
         jump_path: str | None = None,
+        kind: str = BUTTON_KIND,
+        image_url: str | None = None,
         created_by: str,
     ) -> Shortcut:
         shortcut_id = "sct_" + uuid.uuid4().hex
@@ -605,8 +738,8 @@ class ShortcutStore:
                     INSERT INTO shortcuts (
                         shortcut_id, tenant_id, business_entry, code, intent,
                         requires_order, sort_order, status, revision, fields_json,
-                        published_version, created_by, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', 1, ?, NULL, ?, ?, ?)
+                        published_version, kind, image_url, created_by, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'draft', 1, ?, NULL, ?, ?, ?, ?, ?)
                     """,
                     (
                         shortcut_id,
@@ -617,6 +750,8 @@ class ShortcutStore:
                         int(requires_order),
                         sort_order,
                         _json(payload),
+                        kind,
+                        image_url,
                         created_by,
                         now,
                         now,
@@ -687,16 +822,26 @@ class ShortcutStore:
             ).fetchall()
         return [_shortcut_from_row(row) for row in rows]
 
-    def list_effective(self, tenant_id: str, business_entry: str) -> list[Shortcut]:
+    def list_effective(
+        self, tenant_id: str, business_entry: str, *, kind: str | None = None
+    ) -> list[Shortcut]:
         """Resolve the published platform defaults and tenant rows.
 
         A published tenant row replaces the platform row with the same code.
         A disabled tenant row suppresses that code; drafts do not affect the
         effective result. The merge is the single seam shared by listing and
         shortcut execution.
+
+        ``kind`` narrows the result to one surface (``button`` / ``banner``).
+        The split is enforced HERE rather than in a response filter, so a
+        banner row cannot reach the button listing by any route — including
+        through the merge, where a tenant override could otherwise change a
+        row's surface.
         """
         if tenant_id == PLATFORM_TENANT_ID:
             raise ShortcutValidationError("tenant id is reserved")
+        if kind is not None and kind not in SHORTCUT_KINDS:
+            raise ShortcutValidationError("kind is invalid")
         platform_rows = self.list_published(PLATFORM_TENANT_ID, business_entry)
         tenant_rows = self.list_all(tenant_id, business_entry)
         effective = {row.code: row for row in platform_rows}
@@ -705,7 +850,8 @@ class ShortcutStore:
                 effective[row.code] = row
             elif row.status == "disabled":
                 effective.pop(row.code, None)
-        return sorted(effective.values(), key=lambda row: (row.sort_order, row.code))
+        rows = [row for row in effective.values() if kind is None or row.kind == kind]
+        return sorted(rows, key=lambda row: (row.sort_order, row.code))
 
     def find_effective_by_code(self, tenant_id: str, business_entry: str, code: str) -> Shortcut | None:
         return next((row for row in self.list_effective(tenant_id, business_entry) if row.code == code), None)
@@ -724,7 +870,12 @@ class ShortcutStore:
         question_templates: dict[str, str],
         target_agent_version: str | None,
         jump_path: str | None = None,
+        image_url: str | None = None,
     ) -> Shortcut:
+        # `kind` is deliberately NOT a parameter: a row does not become a
+        # different kind of resource. Letting an edit move a row between
+        # surfaces would make "which endpoint serves this" mutable config,
+        # which is the implicit-input shape the explicit column exists to end.
         now = _iso(datetime.now(UTC))
         payload = {
             "labels": labels,
@@ -738,7 +889,7 @@ class ShortcutStore:
                 """
                 UPDATE shortcuts
                 SET intent = ?, requires_order = ?, sort_order = ?, fields_json = ?,
-                    revision = revision + 1, updated_at = ?
+                    image_url = ?, revision = revision + 1, updated_at = ?
                 WHERE shortcut_id = ? AND tenant_id = ? AND status = 'draft' AND revision = ?
                 """,
                 (
@@ -746,6 +897,7 @@ class ShortcutStore:
                     int(requires_order),
                     sort_order,
                     _json(payload),
+                    image_url,
                     now,
                     shortcut_id,
                     tenant_id,
@@ -897,6 +1049,8 @@ class ShortcutStore:
                     revision INTEGER NOT NULL,
                     fields_json TEXT NOT NULL,
                     published_version INTEGER,
+                    kind TEXT NOT NULL DEFAULT 'button',
+                    image_url TEXT,
                     created_by TEXT NOT NULL,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL,
@@ -916,6 +1070,17 @@ class ShortcutStore:
                 );
                 """
             )
+            # No migration framework in this repo: an existing database gets
+            # the columns added in place. Two separate additions because they
+            # arrived in the same release but one is NOT NULL, and a NOT NULL
+            # column must carry its default for the existing rows to be valid.
+            columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(shortcuts)").fetchall()}
+            if "kind" not in columns:
+                connection.execute(
+                    f"ALTER TABLE shortcuts ADD COLUMN kind TEXT NOT NULL DEFAULT '{BUTTON_KIND}'"
+                )
+            if "image_url" not in columns:
+                connection.execute("ALTER TABLE shortcuts ADD COLUMN image_url TEXT")
         protect_private_file(self.path)
 
     @contextmanager
@@ -959,6 +1124,8 @@ class ShortcutManager:
             question_templates=fields["question_templates"],
             target_agent_version=fields["target_agent_version"],
             jump_path=fields["jump_path"],
+            kind=fields["kind"],
+            image_url=fields["image_url"],
             created_by=_actor(context),
         )
 
@@ -979,11 +1146,13 @@ class ShortcutManager:
             raise ShortcutValidationError("business_entry is invalid")
         return self.store.list_published(context.effective_tenant_id, entry)
 
-    def list_effective(self, context: Any, *, business_entry: str) -> list[Shortcut]:
+    def list_effective(
+        self, context: Any, *, business_entry: str, kind: str | None = None
+    ) -> list[Shortcut]:
         entry = (business_entry or "").strip().lower()
         if entry not in {"consumer", "operator"}:
             raise ShortcutValidationError("business_entry is invalid")
-        return self.store.list_effective(context.effective_tenant_id, entry)
+        return self.store.list_effective(context.effective_tenant_id, entry, kind=kind)
 
     def get(self, context: Any, shortcut_id: str, *, scope: str = TENANT_SCOPE) -> Shortcut:
         tenant_id = self._scope_tenant(context, scope, VIEW_ROLES)
@@ -1004,6 +1173,13 @@ class ShortcutManager:
             {
                 **payload,
                 "jump_path": payload.get("jump_path") or current.jump_path,
+                # Same "absent means leave it alone" rule as jump_path, and for
+                # the same reason: the HTTP model defaults to None, so an
+                # unrelated label edit would otherwise wipe the banner's
+                # fallback image. `kind` is not in this merge because it is not
+                # editable at all — see the store's update().
+                "image_url": payload.get("image_url") or current.image_url,
+                "kind": current.kind,
             },
             for_publish=False,
         )
@@ -1021,6 +1197,7 @@ class ShortcutManager:
             question_templates=fields["question_templates"],
             target_agent_version=fields["target_agent_version"],
             jump_path=fields["jump_path"],
+            image_url=fields["image_url"],
         )
 
     def publish(
@@ -1072,6 +1249,11 @@ class ShortcutManager:
             question_templates=platform.question_templates,
             target_agent_version=None,
             jump_path=platform.jump_path,
+            # The override must land on the SAME surface as the row it
+            # shadows. Suppressing a banner by creating a button here would
+            # both fail to hide the banner and inject a stray button.
+            kind=platform.kind,
+            image_url=platform.image_url,
             created_by=_actor(context),
         )
         self.publish(context, created.shortcut_id, expected_revision=created.revision)
@@ -1120,6 +1302,7 @@ class ShortcutManager:
             question_templates=fields["question_templates"],
             target_agent_version=fields["target_agent_version"],
             jump_path=fields["jump_path"],
+            image_url=fields["image_url"],
         )
         return self.publish(context, updated.shortcut_id, expected_revision=updated.revision, scope=scope)
 
@@ -1182,6 +1365,21 @@ class ShortcutManager:
             payload.get("question_templates"), "question_templates", require_zh=False
         )
         jump_path = _jump_path(payload.get("jump_path"))
+        image_url = _image_url(payload.get("image_url"))
+        kind = str(payload.get("kind") or BUTTON_KIND)
+        if kind not in SHORTCUT_KINDS:
+            raise ShortcutValidationError("kind is invalid")
+        if kind == BANNER_KIND and jump_path is None:
+            # A banner IS a jump action: the product's banner navigates to the
+            # report page. A banner with no route would render a card that does
+            # nothing, and it would be creatable only by misconfiguration.
+            raise ShortcutValidationError("a banner must set jump_path")
+        if kind == BUTTON_KIND and image_url is not None:
+            # One discriminator, not two. A button carrying an image would
+            # satisfy the "image ⇒ card" rule a client may still hold, so the
+            # row would be served as a button by `kind` and rendered as a card
+            # by the client. Rejected rather than silently dropped.
+            raise ShortcutValidationError("image_url is only allowed for a banner")
         target = payload.get("target_agent_version")
         if target is not None:
             if not isinstance(target, str) or not _AGENT_VERSION.fullmatch(target):
@@ -1207,6 +1405,8 @@ class ShortcutManager:
             "question_templates": question_templates,
             "target_agent_version": target,
             "jump_path": jump_path,
+            "kind": kind,
+            "image_url": image_url,
         }
 
 
@@ -1227,6 +1427,8 @@ def _shortcut_from_row(row: sqlite3.Row) -> Shortcut:
         question_templates={str(k): str(v) for k, v in dict(fields.get("question_templates") or {}).items()},
         target_agent_version=fields.get("target_agent_version"),
         jump_path=fields.get("jump_path") or None,
+        kind=str(row["kind"]) if row["kind"] is not None else BUTTON_KIND,
+        image_url=str(row["image_url"]) if row["image_url"] is not None else None,
         published_version=int(row["published_version"]) if row["published_version"] is not None else None,
         created_by=str(row["created_by"]),
         created_at=str(row["created_at"]),
@@ -1274,6 +1476,37 @@ def _jump_path(value: Any) -> str | None:
         # the HTTP layer.
         raise ShortcutValidationError(
             f"jump_path must be a '/'-prefixed path (not '//') of at most {_JUMP_PATH_MAX} characters"
+        )
+    return candidate
+
+
+_IMAGE_URL_MAX = 512
+
+
+def _image_url(value: Any) -> str | None:
+    """Validate the optional banner fallback image.
+
+    Only ``http(s)`` is accepted. What that rules out is the part that
+    matters: a ``data:`` payload is an unbounded blob smuggled through config,
+    and ``javascript:`` / ``file:`` are the shapes a client navigator or image
+    loader turns into an execution or local-read primitive. This is a config
+    field an operator fills in, but it is still an external string reaching a
+    client, so it is validated at the boundary rather than trusted.
+
+    A third-party CDN URL is explicitly allowed: the car photos already are
+    those, and the availability / licensing consequences are recorded in the
+    frontend handoff rather than enforced here.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ShortcutValidationError("image_url is invalid")
+    candidate = value.strip()
+    if not candidate:
+        return None
+    if len(candidate) > _IMAGE_URL_MAX or not candidate.lower().startswith(("http://", "https://")):
+        raise ShortcutValidationError(
+            f"image_url must be an http(s) URL of at most {_IMAGE_URL_MAX} characters"
         )
     return candidate
 
