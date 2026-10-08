@@ -1,0 +1,268 @@
+# Dify 1.17.1 —— 36 上这套独立实例的 compose（#579 / PRD #577）
+#
+# 这份文件是从上游 `langgenius/dify` 1.17.1 的 `docker/docker-compose.yaml`
+# **裁剪**而来，不是手写：
+#   upstream ref: 8387590ace4a094de812b7847fc6a4c3a27cd52b (tag: 1.17.1)
+# 裁剪依据是 PRD #577 的容器集决定（8 个 + nginx 单一入口 = 9 个，向量库 0 个）：
+#
+#   保留：init_permissions, api, worker, web, db_postgres, redis,
+#         plugin_daemon, ssrf_proxy, nginx
+#   删除（并记明理由）：
+#     worker_beat         —— 只跑定时清理与插件升级检查；唯一一次外呼是
+#                            marketplace（见 README「被删掉的服务」）
+#     sandbox             —— Code 节点才用；本实例不需要
+#     local_sandbox       —— Dify 自有 Agent runtime 才用；智能体定义在我们侧
+#     agent_backend       —— 同上（api/worker 对它的依赖是 REQUIRED，故必须显式移除）
+#     agent_ssrf_proxy    —— 只服务 local_sandbox
+#     全部向量库 profile   —— 向量初始化是惰性的，知识面全走 External Knowledge API
+#     api_websocket       —— collaboration profile；非协作模式下 socket.io 由 api 承担
+#     db_mysql / oceanbase / seekdb / certbot —— 不用
+#   nginx 的 `/socket.io/` 因此改指 api（见 README，`NGINX_SOCKET_IO_UPSTREAM`）。
+#
+# 镜像来源：Docker Hub 在 36 不可达（registry-1.docker.io 连接被重置）。这里**不**
+# 改 docker daemon（那要重启 dockerd，会把 36 上的生产栈一起抖），而是在 compose
+# 里直接写镜像源前缀 —— 换一行就能回退，爆炸半径只有本栈。见 README「镜像来源」。
+#
+# 暴露：只有 nginx 发布端口，且绑 0.0.0.0:10008 —— 这是**已知的、临时的**暴露，
+# 已登记进主机暴露清单（"临时、待收口"）。其余服务一律只在 compose 内网。
+# 端口号取自 36 已声明的 10000-10999 池；10008 是本栈的**新增分配**。
+
+x-shared-api-worker: &shared-api-worker
+  image: ${DIFY_REGISTRY:-docker.1panel.live}/langgenius/dify-api:1.17.1
+  env_file:
+    - ./.env
+  restart: always
+  networks:
+    - ssrf_proxy_network
+    - default
+
+services:
+  # 首次启动时把存储目录的属主交给 api 容器内的非 root 用户（1001）。
+  # 上游用 flag 文件做幂等；保留原样，勿改 —— 它每次 up 都会跑，靠 flag 提前退出。
+  init_permissions:
+    image: ${DIFY_REGISTRY:-docker.1panel.live}/library/busybox:latest
+    command:
+      - sh
+      - -c
+      - |
+        FLAG_FILE="/app/api/storage/.init_permissions"
+        if [ -f "$${FLAG_FILE}" ]; then
+          echo "Permissions already initialized. Exiting."
+          exit 0
+        fi
+        echo "Initializing permissions for /app/api/storage"
+        chown -R 1001:1001 /app/api/storage && touch "$${FLAG_FILE}"
+        echo "Permissions initialized. Exiting."
+    volumes:
+      - ./volumes/app/storage:/app/api/storage
+    restart: "no"
+
+  api:
+    <<: *shared-api-worker
+    environment:
+      MODE: api
+      PLUGIN_REMOTE_INSTALL_HOST: ${EXPOSE_PLUGIN_DEBUGGING_HOST:-localhost}
+      PLUGIN_REMOTE_INSTALL_PORT: ${EXPOSE_PLUGIN_DEBUGGING_PORT:-5003}
+      PLUGIN_MAX_PACKAGE_SIZE: ${PLUGIN_MAX_PACKAGE_SIZE:-52428800}
+      PLUGIN_DAEMON_TIMEOUT: ${PLUGIN_DAEMON_TIMEOUT:-600.0}
+      INNER_API_KEY_FOR_PLUGIN: ${PLUGIN_DIFY_INNER_API_KEY}
+    depends_on:
+      init_permissions:
+        condition: service_completed_successfully
+      db_postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - ./volumes/app/storage:/app/api/storage
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # Celery worker。本实例只有一处异步消费方（api 发出的任务），worker_beat 已删。
+  worker:
+    <<: *shared-api-worker
+    environment:
+      MODE: worker
+      PLUGIN_MAX_PACKAGE_SIZE: ${PLUGIN_MAX_PACKAGE_SIZE:-52428800}
+      INNER_API_KEY_FOR_PLUGIN: ${PLUGIN_DIFY_INNER_API_KEY}
+    depends_on:
+      init_permissions:
+        condition: service_completed_successfully
+      db_postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    volumes:
+      - ./volumes/app/storage:/app/api/storage
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A celery_healthcheck.celery inspect ping"]
+      interval: ${COMPOSE_WORKER_HEALTHCHECK_INTERVAL:-30s}
+      timeout: ${COMPOSE_WORKER_HEALTHCHECK_TIMEOUT:-30s}
+      retries: 3
+      start_period: 60s
+      disable: ${COMPOSE_WORKER_HEALTHCHECK_DISABLED:-true}
+
+  web:
+    image: ${DIFY_REGISTRY:-docker.1panel.live}/langgenius/dify-web:1.17.1
+    restart: always
+    env_file:
+      - ./.env
+    environment:
+      CONSOLE_API_URL: ${CONSOLE_API_URL:-}
+      SERVER_CONSOLE_API_URL: ${SERVER_CONSOLE_API_URL:-http://api:5001}
+      APP_API_URL: ${APP_API_URL:-}
+      NEXT_PUBLIC_SOCKET_URL: ${NEXT_PUBLIC_SOCKET_URL:-ws://localhost}
+      NEXT_TELEMETRY_DISABLED: ${NEXT_TELEMETRY_DISABLED:-1}
+      MARKETPLACE_API_URL: ${MARKETPLACE_API_URL:-https://marketplace.dify.ai}
+      MARKETPLACE_URL: ${MARKETPLACE_URL:-https://marketplace.dify.ai}
+      TEXT_GENERATION_TIMEOUT_MS: ${TEXT_GENERATION_TIMEOUT_MS:-60000}
+      ENABLE_WEBSITE_JINAREADER: ${ENABLE_WEBSITE_JINAREADER:-true}
+      ENABLE_WEBSITE_FIRECRAWL: ${ENABLE_WEBSITE_FIRECRAWL:-true}
+      ENABLE_WEBSITE_WATERCRAWL: ${ENABLE_WEBSITE_WATERCRAWL:-true}
+    networks:
+      - default
+
+  db_postgres:
+    image: ${DIFY_REGISTRY:-docker.1panel.live}/library/postgres:15-alpine
+    restart: always
+    environment:
+      POSTGRES_USER: ${DB_USERNAME:-postgres}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_DATABASE:-dify}
+      PGDATA: ${PGDATA:-/var/lib/postgresql/data/pgdata}
+    command: >
+      postgres -c 'max_connections=${POSTGRES_MAX_CONNECTIONS:-100}'
+               -c 'shared_buffers=${POSTGRES_SHARED_BUFFERS:-128MB}'
+               -c 'work_mem=${POSTGRES_WORK_MEM:-4MB}'
+               -c 'maintenance_work_mem=${POSTGRES_MAINTENANCE_WORK_MEM:-64MB}'
+               -c 'effective_cache_size=${POSTGRES_EFFECTIVE_CACHE_SIZE:-1024MB}'
+    volumes:
+      - ./volumes/db/data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-h", "db_postgres", "-U", "${DB_USERNAME:-postgres}", "-d", "${DB_DATABASE:-dify}"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    networks:
+      - default
+
+  redis:
+    image: ${DIFY_REGISTRY:-docker.1panel.live}/library/redis:6-alpine
+    restart: always
+    environment:
+      REDISCLI_AUTH: ${REDIS_PASSWORD}
+    volumes:
+      - ./volumes/redis/data:/data
+    command: redis-server --requirepass ${REDIS_PASSWORD}
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a ${REDIS_PASSWORD} ping | grep -q PONG"]
+    networks:
+      - default
+
+  plugin_daemon:
+    image: ${DIFY_REGISTRY:-docker.1panel.live}/langgenius/dify-plugin-daemon:0.6.10-local
+    restart: always
+    env_file:
+      - ./.env
+    environment:
+      DB_DATABASE: ${DB_PLUGIN_DATABASE:-dify_plugin}
+      DB_SSL_MODE: ${DB_SSL_MODE:-disable}
+      SERVER_PORT: ${PLUGIN_DAEMON_PORT:-5002}
+      SERVER_KEY: ${PLUGIN_DAEMON_KEY}
+      MAX_PLUGIN_PACKAGE_SIZE: ${PLUGIN_MAX_PACKAGE_SIZE:-52428800}
+      DIFY_INNER_API_URL: ${PLUGIN_DIFY_INNER_API_URL:-http://api:5001}
+      DIFY_INNER_API_KEY: ${PLUGIN_DIFY_INNER_API_KEY}
+      PLUGIN_WORKING_PATH: ${PLUGIN_WORKING_PATH:-/app/storage/cwd}
+      FORCE_VERIFYING_SIGNATURE: ${FORCE_VERIFYING_SIGNATURE:-true}
+      PYTHON_ENV_INIT_TIMEOUT: ${PLUGIN_PYTHON_ENV_INIT_TIMEOUT:-120}
+      PLUGIN_MAX_EXECUTION_TIMEOUT: ${PLUGIN_MAX_EXECUTION_TIMEOUT:-600}
+      PLUGIN_STORAGE_TYPE: ${PLUGIN_STORAGE_TYPE:-local}
+      PLUGIN_STORAGE_LOCAL_ROOT: ${PLUGIN_STORAGE_LOCAL_ROOT:-/app/storage}
+      PLUGIN_INSTALLED_PATH: ${PLUGIN_INSTALLED_PATH:-plugin}
+      PLUGIN_PACKAGE_CACHE_PATH: ${PLUGIN_PACKAGE_CACHE_PATH:-plugin_packages}
+      PIP_MIRROR_URL: ${PIP_MIRROR_URL:-}
+    volumes:
+      - ./volumes/plugin_daemon:/app/storage
+    depends_on:
+      db_postgres:
+        condition: service_healthy
+    networks:
+      - ssrf_proxy_network
+      - default
+
+  # 转发出站请求的 squid。发行版默认只放行 .marketplace.dify.ai 与本地网段，
+  # 并以 `http_access deny all` 兜底 —— 直接打私有网段地址会被拦（PRD #577 记的坑）。
+  # 本实例的处置写在 README「SSRF 处置」：**保留过滤**，用 SSRF_PROXY_ALLOW_PRIVATE_*
+  # 显式加白名单，而不是清空它。
+  ssrf_proxy:
+    image: ${DIFY_REGISTRY:-docker.1panel.live}/ubuntu/squid:latest
+    restart: always
+    volumes:
+      - ./ssrf_proxy/squid.conf.template:/etc/squid/squid.conf.template:ro
+      - ./ssrf_proxy/squid-common.conf.template:/etc/squid/dify_common.conf.template:ro
+      - ./ssrf_proxy/docker-entrypoint.sh:/docker-entrypoint-mount.sh:ro
+    entrypoint:
+      [
+        "sh",
+        "-c",
+        "cp /docker-entrypoint-mount.sh /docker-entrypoint.sh && sed -i 's/\r$$//' /docker-entrypoint.sh && chmod +x /docker-entrypoint.sh && /docker-entrypoint.sh",
+      ]
+    environment:
+      HTTP_PORT: ${SSRF_HTTP_PORT:-3128}
+      COREDUMP_DIR: ${SSRF_COREDUMP_DIR:-/var/spool/squid}
+      SSRF_PROXY_ALLOW_PRIVATE_IPS: ${SSRF_PROXY_ALLOW_PRIVATE_IPS:-}
+      SSRF_PROXY_ALLOW_PRIVATE_DOMAINS: ${SSRF_PROXY_ALLOW_PRIVATE_DOMAINS:-}
+    networks:
+      - ssrf_proxy_network
+      - default
+
+  # 单一入口：console 与 web 都从这里进，只有它发布端口。
+  nginx:
+    image: ${DIFY_REGISTRY:-docker.1panel.live}/library/nginx:latest
+    restart: always
+    volumes:
+      - ./nginx/nginx.conf.template:/etc/nginx/nginx.conf.template:ro
+      - ./nginx/proxy.conf.template:/etc/nginx/proxy.conf.template:ro
+      - ./nginx/https.conf.template:/etc/nginx/https.conf.template:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d
+      - ./nginx/docker-entrypoint.sh:/docker-entrypoint-mount.sh:ro
+    entrypoint:
+      [
+        "sh",
+        "-c",
+        "cp /docker-entrypoint-mount.sh /docker-entrypoint.sh && sed -i 's/\r$$//' /docker-entrypoint.sh && chmod +x /docker-entrypoint.sh && /docker-entrypoint.sh",
+      ]
+    environment:
+      NGINX_SERVER_NAME: ${NGINX_SERVER_NAME:-_}
+      # 阶段 1 明确无 TLS（见 README「暴露与收口」）。改 true 需要证书就位。
+      NGINX_HTTPS_ENABLED: "false"
+      NGINX_PORT: "80"
+      NGINX_WORKER_PROCESSES: ${NGINX_WORKER_PROCESSES:-auto}
+      NGINX_CLIENT_MAX_BODY_SIZE: ${NGINX_CLIENT_MAX_BODY_SIZE:-100M}
+      NGINX_KEEPALIVE_TIMEOUT: ${NGINX_KEEPALIVE_TIMEOUT:-65}
+      NGINX_PROXY_READ_TIMEOUT: ${NGINX_PROXY_READ_TIMEOUT:-3600s}
+      NGINX_PROXY_SEND_TIMEOUT: ${NGINX_PROXY_SEND_TIMEOUT:-3600s}
+      NGINX_ENABLE_CERTBOT_CHALLENGE: "false"
+      # 非协作模式（ENABLE_COLLABORATION_MODE=false）下没有 api_websocket 容器，
+      # socket.io 由 api 进程承担 —— 所以这里指向 api，而不是上游默认的 api_websocket。
+      NGINX_SOCKET_IO_UPSTREAM: ${NGINX_SOCKET_IO_UPSTREAM:-api:5001}
+    depends_on:
+      - api
+      - web
+    ports:
+      # 0.0.0.0 是**刻意的**：这是本栈唯一对外的面，且是已知的临时暴露。
+      - "0.0.0.0:${DIFY_EXPOSE_PORT:-10008}:80"
+    networks:
+      - default
+
+networks:
+  # 上游原样保留：内部网，禁止出网；sandbox/api/ssrf_proxy 之间用。
+  ssrf_proxy_network:
+    driver: bridge
+    internal: true
+  default:
+    driver: bridge
