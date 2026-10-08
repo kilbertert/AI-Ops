@@ -1146,9 +1146,7 @@ class ShortcutManager:
             raise ShortcutValidationError("business_entry is invalid")
         return self.store.list_published(context.effective_tenant_id, entry)
 
-    def list_effective(
-        self, context: Any, *, business_entry: str, kind: str | None = None
-    ) -> list[Shortcut]:
+    def list_effective(self, context: Any, *, business_entry: str, kind: str | None = None) -> list[Shortcut]:
         entry = (business_entry or "").strip().lower()
         if entry not in {"consumer", "operator"}:
             raise ShortcutValidationError("business_entry is invalid")
