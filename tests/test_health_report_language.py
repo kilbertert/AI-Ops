@@ -63,13 +63,14 @@ def test_the_assembled_report_has_no_chinese_for_other_languages(language: str) 
 
     report = build_minimal_health_report(_Sources([_order()]), "O-1", SafetySettings(), language)
     assert chinese_leak(report["summary"]) == "", report["summary"]
-    # Every string in the report that WE author. `value` is excluded on purpose:
-    # it may carry the upstream's own text, which is passed through verbatim and
-    # is allowed to be Chinese.
+    # EVERY string we author, `stop_reason.value` included. This used to skip
+    # `stop_reason` on the grounds that it "may carry the upstream's own text" —
+    # and that carve-out is exactly how 66.3%-of-orders' worth of Chinese
+    # reached non-Chinese reports (#566 found it, #599 fixed it). The upstream's
+    # text now lives in `reported_value`, which is the field that is allowed to
+    # be any language; `value` is ours and is judged like every other.
     for indicator in report["indicators"]:
-        if indicator["code"] == "stop_reason":
-            continue
-        assert chinese_leak(str(indicator.get("value") or "")) == ""
+        assert chinese_leak(str(indicator.get("value") or "")) == "", indicator
 
 
 def test_our_stop_reason_words_follow_the_language() -> None:
@@ -80,16 +81,31 @@ def test_our_stop_reason_words_follow_the_language() -> None:
     assert en == "Start-up failed: insufficient balance"
 
 
-def test_upstream_stop_reason_content_is_passed_through_verbatim() -> None:
+def test_the_upstream_sentence_never_becomes_the_localized_description() -> None:
     """`content` is DATA describing what the source reported — not our copy.
 
-    Translating it would rewrite what the order actually recorded, which is the
-    same line this project refuses to cross elsewhere. Its language is whatever
-    the upstream sent, and it is surfaced as-is.
+    The PRINCIPLE this test was written for still holds and is unchanged:
+    translating the upstream's sentence would rewrite what the order actually
+    recorded, which is the line this project refuses to cross.
+
+    What changed (#599) is where the principle is APPLIED. The old assertion was
+    `result.description == upstream`, i.e. the upstream's sentence WAS the
+    reader-facing description — and since `value` was built from that
+    description, an English report carried Chinese for 59.6% of real orders.
+    Refusing to translate it was right; putting it where the contract says a
+    client renders localized copy was not.
+
+    The sentence is not dropped: the report carries it in `reported_value`.
+    This test now pins the half that belongs here — `description` is OUR words,
+    in the requested language — and `test_the_report_keeps_the_upstream_words_
+    beside_the_localized_value` pins the other half.
     """
+    from aiops_diagnostics.i18n import chinese_leak
+
     upstream = "余额耗尽停止订单"
     result = classify_stop_reason("", "-1", upstream, language="en")
-    assert result.description == upstream
+    assert result.description != upstream, "上游原句不得成为面向读者的本地化文案"
+    assert chinese_leak(result.description) == "", result.description
 
 
 def test_curve_series_names_are_localized_end_to_end() -> None:
@@ -268,3 +284,43 @@ def test_a_predating_database_migrates_and_can_be_opened(tmp_path) -> None:
         for row in sqlite3.connect(database).execute("SELECT name FROM sqlite_master WHERE type = 'index'")
     }
     assert "idx_health_jobs_reuse_language" in names
+
+
+def test_the_report_keeps_the_upstream_words_beside_the_localized_value() -> None:
+    """Both halves ship, in separate fields, with different guarantees (#599).
+
+    Measured on 41 across all 30,955 orders: 66.3% of the upstream sentences are
+    Chinese, and the classifications that echoed one into the reader-facing
+    value covered 59.6% of orders. So this is not a corner case — it is the
+    common path for a non-Chinese report.
+
+    What must hold:
+    * `value` is OUR localized text and carries no Chinese;
+    * `reported_value` is the upstream sentence, byte-for-byte, or null;
+    * `reported_language` is null — the source does not declare one today, and
+      guessing would be a claim we cannot support.
+    """
+    from aiops_diagnostics.i18n import chinese_leak
+
+    order = _order(stopped_reason_content="拔出断电", stopped_reason_code=-7)
+    report = build_minimal_health_report(_Sources([order]), "O-1", SafetySettings(), "en")
+    indicator = next(i for i in report["indicators"] if i["code"] == "stop_reason")
+
+    assert indicator["reported_value"] == "拔出断电", "上游原句必须逐字保留"
+    assert indicator["reported_language"] is None
+    assert indicator["value"] != "拔出断电"
+    assert chinese_leak(indicator["value"]) == "", indicator["value"]
+
+    # A Chinese report is unaffected: the upstream words are still Chinese and
+    # still the truth, only now they are in the field that says so.
+    zh = build_minimal_health_report(_Sources([order]), "O-1", SafetySettings(), "zh")
+    zh_indicator = next(i for i in zh["indicators"] if i["code"] == "stop_reason")
+    assert zh_indicator["reported_value"] == "拔出断电"
+
+
+def test_no_upstream_content_means_no_reported_value() -> None:
+    """`reported_value` is null, not an empty string, when there is nothing."""
+    order = _order(stopped_reason_content="", stopped_reason_code="-1")
+    report = build_minimal_health_report(_Sources([order]), "O-1", SafetySettings(), "en")
+    indicator = next(i for i in report["indicators"] if i["code"] == "stop_reason")
+    assert indicator["reported_value"] is None

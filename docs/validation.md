@@ -8811,3 +8811,78 @@ consumer 的题面与答案**都是起草的**。代码只守结构，**不守�
 
 **结论的用法**：这份记录是给"下一步派活"用的清单，不是免责声明 ——
 不能对外声称"支持 11 语言"，只能说"**确定性文案支持 11 语言，模型侧有代码路径但未经真实模型验证**"。
+
+## #599 + #602 P0 指标 value 语言与 rule_version 收口（2026-10-08）
+
+**分支** `feat/health-report-contract-p0`，基线 `origin/main` @ `c3eab37`。
+
+### 一、中文残留是遗漏，形状是「整条链路没有过非中文停因文案」
+
+**全表实测**（41，`ch_order_info` **30,955 行**）：
+
+| 量 | 值 |
+|---|---|
+| `stopped_reason_content` 含中文 | **20,513（66.3%）** |
+| 其中非空且不含中文 | 576（1.9%） |
+| 空 | 9,866（31.9%） |
+
+按**分类分支**看（英文报告下，改前）：
+
+| 分支 | 行数 | 面向读者的 `value` 取的是 |
+|---|---|---|
+| `unknown_stop_reason` | 9,866（31.9%） | 我们的兜底（已本地化） |
+| `reported_stop_reason` | 7,259（23.5%） | **上游原句** |
+| `user_or_normal_stop` | 4,753（15.4%） | **上游原句** |
+| `package_exhausted` | 2,817（9.1%） | **上游原句** |
+| `communication_or_power_loss` | 2,295（7.4%） | **上游原句** |
+| `normal_stop` | 1,713（5.5%） | 上游原句（实测该分支全部回显） |
+| 其余（manual_stop 等） | 2,252（7.3%） | 多为**上游原句** |
+
+⇒ **改前 en 下 `description` 含中文的行数：18,444（59.6%）**。
+
+**关键否证**：把 `value` 从「上游原句」改成「我们的 `stop.description`」**只降到同一量级**
+—— 因为 59.6% 里绝大多数行本来就归在「原文回显」那一支，`description` 本身就是原句。
+**所以这不是「换一个字段」能解决的，是缺一整句本地化文案。**
+
+### 二、修法：`value` 与上游原句拆成两个字段（用户 2026-10-08 拍板）
+
+```json
+{ "code": "stop_reason", "status": "abnormal",
+  "value": "The charger reported a stop reason",   ← 我们的文案，跟随报告语言
+  "reported_value": "拔出断电",                     ← 上游原句，逐字保留
+  "reported_language": null }
+```
+
+- 补齐 **7 个缺的兜底键 × 11 语言**（`user_or_normal_stop` / `communication_or_power_loss` /
+  `normal_stop` / `device_or_vehicle_fault` / `over_temperature` / `power_loss` /
+  `balance_insufficient`）—— 这些分类以前**没有兜底文案**（34/41 处直接回显原句）；
+- `reported_stop_reason` 新增中性文案：这一支只知道「上游说了点什么」，**不去描述它**；
+- **YKC 已知码优先用我们的表**（原句不再覆盖它）；
+- 11 语言复制表逐条查汉字：**0**。
+
+### 三、验证（实测，不是推断）
+
+把新代码对**全表 30,955 单**跑一遍：
+
+```
+en     rows whose DESCRIPTION leaks Chinese:      0 / 30955     （改前 18,444）
+vi     rows whose DESCRIPTION leaks Chinese:      0 / 30955
+th     rows whose DESCRIPTION leaks Chinese:      0 / 30955
+km     rows whose DESCRIPTION leaks Chinese:      0 / 30955
+```
+
+（在 41 上以 `/tmp/newsrc` 挂载新 `src` 只读跑，未改动生产代码、未重启服务。）
+
+### 四、rule_version 收口（#602 P0 的一部分）
+
+实测六条已完成作业：**作业行 `health-v1`、报告体 `health-v2`** —— 同一响应两个值，
+且无测试比较过。已统一到 `health_metrics.RULE_VERSION` 单一来源，并加回归。
+
+### 五、边界（据实）
+
+- **未部署**：本 PR 未上 41；上面那次是**只读**跑新代码对生产数据，不是部署。
+- `reported_language` **恒为 `null`** —— 来源今天不声明语言，不去猜。
+- **停因分类覆盖未收敛**：`unknown_stop_reason` 31.9% + `reported_stop_reason` 23.5%
+  仍要靠运维/产品给映射表，且 `(proto, code)` 不足以自动恢复语义（96 组码里 25 组对应多种内容）。
+- **文案措辞待产品过目**：新增的 7 条兜底与 1 条 `reported_stop_reason` 是工程起草的
+  中性表述，未被产品确认（同 #534 用户故事 20 的口径：未经确认的语言不算已验收）。
