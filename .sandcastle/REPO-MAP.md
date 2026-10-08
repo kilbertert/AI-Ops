@@ -41,7 +41,7 @@ accurate at the moment it is generated and at the moment the commit lands.
 - AGENTS.md
 - CLAUDE.md
 - README.md
-- docs/ — 54 markdown file(s)
+- docs/ — 55 markdown file(s)
 - docs/adr/ — 10 markdown file(s)
 - docs/agents/ — 24 markdown file(s)
 
@@ -96,12 +96,13 @@ docs/
     ai-ops-architecture.svg
   reviews/
     2026-10-07-i18n-program-retrospective.md
+  specs/
+    battery-inspection-metrics.md
   afk-workflow.md
   architecture.md
   diag-query-api-plan.md
   EV_Charging_FAQ_Multilingual_Wide_Table.xlsx
-  faq-api.md
-  ... (15 more)
+  ... (16 more)
 examples/
   fixtures/
     missing_tx_data.json
