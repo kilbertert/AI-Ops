@@ -326,18 +326,16 @@ _BUNDLED_SHORTCUTS: tuple[tuple[str, dict[str, dict[str, Any]]], ...] = (
             #
             # The copy is the product's own, taken from the shipped client
             # bundle (build 21 / 1.2.12) where this banner is already live in
-            # all eleven languages — it is NOT invented here. Two caveats,
-            # both recorded rather than silently fixed:
+            # all eleven languages — it is NOT invented here.
             #
-            #   * `zh-Hant` is the repo's own derivation of the `zh` authority
-            #     (opencc `s2twp`, enforced by tools/derive_zh_hant.py), which
-            #     yields 「待生成智慧電池檢查報告」. The client currently ships
-            #     「待產生智能電池檢查報告」 instead. Two strings for one banner;
-            #     the repo rule wins here, and the divergence is a frontend
-            #     question (does the client read this table or its own bundle?).
-            #   * GLOSSARY objects to 「待生成」 (it implies a queued,
-            #     unpersisted report — see 可生成报告订单). Product owns the
-            #     wording, so it is kept as shipped rather than rewritten here.
+            # ONE caveat, and it is a wording question rather than a copy bug:
+            # GLOSSARY objects to 「待生成」 because it implies a queued,
+            # unpersisted report (see 可生成报告订单). Product owns the wording,
+            # so it is kept as shipped rather than rewritten here. That applies
+            # to the zh authority and its zh-Hant derivation alike — the
+            # Traditional copy is the DERIVATION of this string, never a second
+            # hand-written one, which is what keeps the two scripts from
+            # drifting apart. See tools/derive_zh_hant.py.
             "battery_report": {
                 "intent": "knowledge",  # inert for a jump action; see the brief
                 "requires_order": False,
