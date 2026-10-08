@@ -95,6 +95,16 @@ if (db_dep or {}).get("condition") != "service_completed_successfully":
                      "冷启动时 postgres 的 uid-70 mkdir 会与那条 chmod 抢跑")
 print("ok: init_permissions 挂 db/data 且 db_postgres 等它完成（uid-70 遍历守卫在位）")
 
+# storage 属主不变式：init_permissions 必须**无条件** chown 1001:1001（不能靠
+# 卷内的 flag 文件幂等 —— flag 会锁住"已初始化"，而 api 以 uid 1001 跑）。
+init_cmd = " ".join(init_svc.get("command") or [])
+if "chown -R 1001:1001 /app/api/storage" not in init_cmd:
+    raise SystemExit("FAIL: init_permissions 不再 chown /app/api/storage")
+if "rm -f /app/api/storage/.init_permissions" not in init_cmd:
+    raise SystemExit("FAIL: init_permissions 没有清掉卷内 flag；"
+                     "flag 幂等会让 chown 被历史锁死，api 写 privkeys/ 时 Permission denied")
+print("ok: init_permissions 每次 up 无条件 chown storage 并清掉卷内 flag")
+
 # 镜像源必须显式写死（Docker Hub 在 36 不可达）。
 for name, s in d["services"].items():
     if not s.get("image", "").startswith("docker.1panel.live/"):

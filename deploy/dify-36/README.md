@@ -170,17 +170,26 @@ deploy/dify-36/
 web 93 MB、其余四者合计约 65 MB，**本栈合计约 1.0 GB**，低于 README 正文 2.5–4.5 GB
 的估法（那按模型调用有负载时算）。宿主可用 11 GB，未挤压既有栈。
 
-### 启动期踩到的三处，以及为什么写在这里
+### 启动期踩到的四处，以及为什么写在这里
 
-前两处是**变量缺失**（已在 `env.example` 里补成显式必填并写明症状），第三处是
-**宿主目录权限**，不是变量 —— 所以单独记：
+1、2 两处是**变量缺失**（已在 `env.example` 里补成显式必填并写明症状）；
+3、4 两处是**宿主目录的属主/权限**，不是变量 —— 症状都指向别处，所以单独记。
 
 1. `plugin_daemon` 起不来，`Config.DBHost`/`Config.DBPort` 校验失败 + api 报
    `Error 111 connecting to localhost:6379`。根因：Dify 读不到 `DB_HOST`/`REDIS_HOST`
    时**默认 `localhost`**，而容器里的 localhost 不是 db/redis 容器。
 2. `plugin_daemon` 无限重启，`plugin remote installing host is empty`。根因：
    GO 侧把 `PLUGIN_REMOTE_INSTALLING_HOST` 当 required，裁剪 compose 时漏了它。
-3. `plugin_daemon` panic，`FATAL: could not open file "global/pg_filenode.map":
+3. `api` 的存储目录属主卡在 root，首次初始化时报
+   `Setup failed: PermissionDenied (persistent) at write => permission denied …
+   path: privkeys/<uuid>/private.pem`。根因：上游 `init_permissions` 的 flag 文件
+   `/app/api/storage/.init_permissions` **就落在它要保护的卷里** —— 某次 chown 没生效
+   而 `touch` 生效后，flag 永久锁住"已初始化"，之后每次 up 都早早退出，而 api 以
+   uid 1001 跑、目录是 root，写 `privkeys/` 直接失败。**现状**：已去掉 flag 幂等，
+   每次 up 无条件 `chown -R 1001:1001 /app/api/storage`（并 `rm -f` 历史 flag）。
+   对一个只有个位数文件的目录，每次 chown 的代价可忽略 —— 用"总是修"换掉"记住修过了"。
+
+4. `plugin_daemon` panic，`FATAL: could not open file "global/pg_filenode.map":
    Permission denied (SQLSTATE 42501)`。**这一处不是变量**，要分开说，因为它的
    症状极具误导性：服务端能起来、`pg_isready` 能过、日志写 "ready to accept
    connections"，但**任何真实连接**都读不到关系映射文件 —— 只有 `plugin_daemon`

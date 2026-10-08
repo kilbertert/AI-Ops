@@ -38,15 +38,19 @@ x-shared-api-worker: &shared-api-worker
 
 services:
   # 首次启动时把存储目录的属主交给 api 容器内的非 root 用户（1001）。
-  # 上游用 flag 文件做幂等；保留原样，勿改 —— 它每次 up 都会跑，靠 flag 提前退出。
   #
-  # **加了第二件事**：给 postgres 数据目录的挂载根补 o+x。理由见 README「启动期
-  # 踩到的三处」第 3 点：postgres 的 entrypoint 会以 root 进去、chown 数据目录、
-  # 再 `exec gosu postgres` 以 uid 70 重跑自己；若 `PGDATA` 尚不存在，是 **uid 70**
-  # 去 mkdir 它 —— 挂载根若是 `770 root:root`，uid 70 穿不过，容器直接退出，症状是
-  # 服务端"看着在跑"但任何真实连接都读不到 `pg_filenode.map`。实测 770 必挂。
-  # 这一段**不做成 flag 幂等**（挂载根可能被任何一次重建 volumes/ 弄回 770），
-  # 每次 up 都核。
+  # **为什么去掉上游的 flag 文件幂等**：上游用 `/app/api/storage/.init_permissions`
+  # 做幂等，但那个 flag **就落在它要保护的卷里** —— 一旦某次 chown 没生效而 touch
+  # 生效了，flag 就永久锁住"已初始化"，之后每次 up 都早早退出，目录永远留在 root，
+  # 而 api 以 uid 1001 跑，写 `privkeys/…` 时 `Permission denied`（症状见 README
+  # 「启动期踩到的三处」第 4 点）。对一个只有个位数文件的目录，每次 up 都 chown 的
+  # 代价可以忽略 —— 用"总是修"换掉"记住修过了"，这个不变式就不再依赖历史。
+  #
+  # **第二件事**：给 postgres 数据目录的挂载根补 o+x。postgres 的 entrypoint 会以
+  # root 进去、chown 数据目录、再 `exec gosu postgres` 以 uid 70 重跑自己；若
+  # `PGDATA` 尚不存在，是 **uid 70** 去 mkdir 它 —— 挂载根 `770 root:root` 时 uid 70
+  # 穿不过，容器直接退出，症状是服务端"看着在跑"但任何真实连接都读不到
+  # `pg_filenode.map`。实测 770 必挂。见 README 第 3 点。
   init_permissions:
     image: ${DIFY_REGISTRY:-docker.1panel.live}/library/busybox:latest
     command:
@@ -57,13 +61,10 @@ services:
         echo "Ensuring postgres data dir mount root is traversable by uid 70"
         mkdir -p /db-data
         chmod o+x /db-data
-        FLAG_FILE="/app/api/storage/.init_permissions"
-        if [ -f "$${FLAG_FILE}" ]; then
-          echo "Permissions already initialized. Exiting."
-          exit 0
-        fi
         echo "Initializing permissions for /app/api/storage"
-        chown -R 1001:1001 /app/api/storage && touch "$${FLAG_FILE}"
+        # 清掉历史 flag（旧版本留下的、锁住幂等的那个），再无条件 chown。
+        rm -f /app/api/storage/.init_permissions
+        chown -R 1001:1001 /app/api/storage
         echo "Permissions initialized. Exiting."
     volumes:
       - ./volumes/app/storage:/app/api/storage
