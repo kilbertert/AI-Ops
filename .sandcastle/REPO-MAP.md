@@ -41,7 +41,7 @@ accurate at the moment it is generated and at the moment the commit lands.
 - AGENTS.md
 - CLAUDE.md
 - README.md
-- docs/ — 55 markdown file(s)
+- docs/ — 56 markdown file(s)
 - docs/adr/ — 10 markdown file(s)
 - docs/agents/ — 25 markdown file(s)
 
