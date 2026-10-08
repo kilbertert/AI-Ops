@@ -155,6 +155,66 @@ deploy/dify-36/
 3. 账号建完后，`ALLOW_REGISTER=false` / `ALLOW_CREATE_WORKSPACE=false` 生效 ——
    外部无法自助注册。
 
+## 落地记录（2026-10-08）
+
+产物身份：`sha256 25c8922e47e445b32062eb7152e5df5f1c6c6598b7d7bbc3fdd34eeecd3a7ca4`，
+源提交 `100c848ba3f8`。落点 `/opt/dify/deploy`，锚点记在 `ARTIFACT.sha256`。
+
+**结果**：8/8 容器常驻（`init_permissions` 是一次性容器，跑完退出，属正常）。
+入口 `http://36.156.159.175:10008` 从宿主外部实测可达（`/` → 307 → `/init` 200），
+`/console/api/setup` 返回 `{"step":"not_started"}` —— **还没有管理员账号**，首次登录
+这一步等运营来做。`api` 经 nginx 到 `plugin_daemon:5002/health/check` 返回 200，
+即插件面在跑。
+
+**容量基线**（`docker stats --no-stream`，启动后静置）：api 421 MB、worker 405 MB、
+web 93 MB、其余四者合计约 65 MB，**本栈合计约 1.0 GB**，低于 README 正文 2.5–4.5 GB
+的估法（那按模型调用有负载时算）。宿主可用 11 GB，未挤压既有栈。
+
+### 启动期踩到的三处，以及为什么写在这里
+
+前两处是**变量缺失**（已在 `env.example` 里补成显式必填并写明症状），第三处是
+**宿主目录权限**，不是变量 —— 所以单独记：
+
+1. `plugin_daemon` 起不来，`Config.DBHost`/`Config.DBPort` 校验失败 + api 报
+   `Error 111 connecting to localhost:6379`。根因：Dify 读不到 `DB_HOST`/`REDIS_HOST`
+   时**默认 `localhost`**，而容器里的 localhost 不是 db/redis 容器。
+2. `plugin_daemon` 无限重启，`plugin remote installing host is empty`。根因：
+   GO 侧把 `PLUGIN_REMOTE_INSTALLING_HOST` 当 required，裁剪 compose 时漏了它。
+3. `plugin_daemon` panic，`FATAL: could not open file "global/pg_filenode.map":
+   Permission denied (SQLSTATE 42501)`。**这一处不是变量**，要分开说，因为它的
+   症状极具误导性：服务端能起来、`pg_isready` 能过、日志写 "ready to accept
+   connections"，但**任何真实连接**都读不到关系映射文件 —— 只有 `plugin_daemon`
+   这种真去连库的组件才暴露它。
+
+   机制（已核实到 postgres 镜像的 entrypoint）：它先以 root 进去，跑
+   `find "$PGDATA" ! -user postgres -exec chown postgres '{}' +`，再
+   `exec gosu postgres "$0" "$@"` 以 **uid 70** 重跑自己。重跑那一遍如果数据目录
+   还不存在，是 **uid 70** 去 `mkdir "$PGDATA"`。
+
+   **已量出来的宿主前提**：数据目录的挂载根必须对 uid 70 **可穿过**（o+x）。
+   用 2×2 隔离（挂载根 755 vs 770 × `pgdata` 预建 vs 不存在）：
+
+   | 挂载根 | pgdata | 结果 |
+   |---|---|---|
+   | 755 | 预建 | 起（entrypoint 打印 `fixing permissions on existing directory ... ok`） |
+   | 770 | 预建 | **挂**：`mkdir ... Permission denied` |
+   | 755 | 不存在 | 起 |
+   | 770 | 不存在 | **挂**：同上 |
+
+   失败只发生在 770 这一列，与 pgdata 是否预建无关；且 root 属主的内容本身**不是**
+   问题 —— 只要挂载根可穿过，entrypoint 自己会把 `pgdata` 修成 `70:70`（上表第一行）。
+
+   **要如实说的边界**：本次线上那次报错发生在挂载根为 755 的时候，而 755 下
+   entrypoint 是能自愈的（上表已验证）—— 所以**那一次的触因没有被单独复现出来**，
+   不能声称两者是同一条链。已经把线上实例整个重建过一次（删空的 `pgdata` +
+   完整 `initdb`），当前实现是干净的，恢复后 `pg_filenode.map` 为 `70:70`、全栈健康。
+
+   **守卫**（数据目录重建后核一遍；挂载根缺 o+x 就会复发）：
+
+   ```
+   stat -c '%u:%g %a %n' /opt/dify/deploy/volumes/db/data    # 期望 o+x，如 root:root 755
+   ```
+
 ## 验收（本票的判据）
 
 运营能**登进控制台、新建一个 app、看到一个模型 provider 可选**。最后一项是
@@ -172,3 +232,18 @@ deploy/dify-36/
 （例如 OpenAI-compatible / Tongyi / 智谱）与一把可用的供应商密钥 —— 这两样是
 **运营输入**，不是本票能自造的。若两者都不到位，验收记为**待条件**，如实写，
 不拿"控制台能打开"冒名顶替"provider 可选"。
+
+**当前状态（2026-10-08）**：
+
+| 判据 | 状态 | 依据 |
+|---|---|---|
+| 实例活着 | ✅ | 8/8 常驻，外部 `:10008` 可达 |
+| 控制台能打开 | ✅ | `/` → `/init` → 200；`setup` = `not_started` |
+| `plugin_daemon` 生效 | ✅ | api 经 nginx 到 `:5002/health/check` → 200，日志 master 就位 |
+| 登进控制台 | ⏸ 待运营 | 需要首次登录建管理员（且需先拿到 `INIT_PASSWORD`） |
+| 新建一个 app | ⏸ 待运营 | 需先有账号 |
+| 看到模型 provider 可选 | ⏸ 待条件 | 需一个 `.difypkg` + 一把可用供应商密钥；两者都是运营输入 |
+
+注意最后一项**不只是"等运营"**：`plugin_daemon` 空转时控制台里 provider 列表是空的，
+所以这一行在这票里**没有被证成**，也没有被"控制台能开"顶替。要证它，事后按同一
+路径补一次即可（上传 `.difypkg` → provider 出现在列表）。

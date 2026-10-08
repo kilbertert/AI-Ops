@@ -76,6 +76,25 @@ for name in ("db_postgres", "redis", "plugin_daemon", "ssrf_proxy", "api", "work
         raise SystemExit(f"FAIL: {name} 发布了端口；内部服务不得有 host 发布")
 print("ok: 其余服务无 host 端口发布")
 
+# postgres 数据目录的挂载根守卫（README「启动期踩到的三处」第 3 点）。
+# 两条合起来才有意义：init_permissions 去补 o+x，且 db_postgres 必须等它跑完。
+# 少了任一条，uid-70 的 mkdir 就可能穿不过 770 的挂载根，症状是"服务在跑但
+# 连不上库"。这是个只会静默出错的形状，值得钉死。
+init_svc = d["services"]["init_permissions"]
+init_mounts = {(v.get("source") or "", v.get("target")) for v in (init_svc.get("volumes") or [])}
+# 源路径是相对的，compose 已把它解析成绝对路径；这里只比对尾部，免得绑死部署目录。
+want_targets = {("/volumes/app/storage", "/app/api/storage"),
+                ("/volumes/db/data", "/db-data")}
+got = {(s[s.rfind("/volumes/"):] if "/volumes/" in s else s, t) for s, t in init_mounts}
+if got != want_targets:
+    raise SystemExit(f"FAIL: init_permissions 的挂载不符 {sorted(init_mounts)}；"
+                     "它必须同时挂 app/storage 与 db/data（后者用来补挂载根的 o+x）")
+db_dep = (d["services"]["db_postgres"].get("depends_on") or {}).get("init_permissions")
+if (db_dep or {}).get("condition") != "service_completed_successfully":
+    raise SystemExit(f"FAIL: db_postgres 没有等 init_permissions 完成（现在是 {db_dep}）；"
+                     "冷启动时 postgres 的 uid-70 mkdir 会与那条 chmod 抢跑")
+print("ok: init_permissions 挂 db/data 且 db_postgres 等它完成（uid-70 遍历守卫在位）")
+
 # 镜像源必须显式写死（Docker Hub 在 36 不可达）。
 for name, s in d["services"].items():
     if not s.get("image", "").startswith("docker.1panel.live/"):
