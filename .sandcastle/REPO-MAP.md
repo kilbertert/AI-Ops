@@ -9,10 +9,20 @@
 Read this before exploring by hand. It answers where things are; it does not
 answer how they work.
 
+It is generated from the filesystem as it stands in this checkout, not from
+the set of tracked files — so an untracked directory outside the generator's
+skip list changes the map, and `repo-map.check.mjs` will ask for a
+regeneration. That is deliberate: an agent works in a checkout, and a mount
+point or a stray `output/` is part of what it sees.
+
 ## Entry points
 
 - script "afk": tsx .sandcastle/main.ts (package.json)
 - script "ralph": tsx .sandcastle/planner.ts (package.json)
+- script "afk:policy": node .sandcastle/policy-check.mjs all (package.json)
+- script "cd:watch": node .sandcastle/cd-watch.mjs (package.json)
+- script "cd:state": node .sandcastle/deploy-state.mjs (package.json)
+- script "cd:watch:test": node .sandcastle/cd-watch.test.mjs (package.json)
 - console script "aiops": aiops_diagnostics.cli:app (pyproject.toml)
 - console script "aiops-tdengine-proxy": aiops_diagnostics.tdengine_proxy:main (pyproject.toml)
 - console script "aiops-gateway": aiops_diagnostics.gateway_server:main (pyproject.toml)
@@ -20,7 +30,7 @@ answer how they work.
 
 ## Tests
 
-- tests/ — 118 test file(s)
+- tests/ — 117 test file(s, recursive)
 - script "cd:watch:test": node .sandcastle/cd-watch.test.mjs
 - pytest (pyproject.toml / pytest.ini present)
 
