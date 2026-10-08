@@ -184,7 +184,7 @@ AI-Ops 用独立服务身份回查——见 [ADR-0003](docs/adr/0003-bff-delegat
 flowchart TB
     L6["L6 服务边界与入口<br/>gateway_api · gateway_runtime · cli · gateway_server · gateway_cli<br/>gateway_client · admin_cli · gateway_config · gateway_tokens<br/>tdengine_proxy · responses_adapter · codex_launcher"]
     L5["L5 持久化<br/>gateway_store · conversation_store · metrics_store<br/>agent_lifecycle · shortcut_lifecycle"]
-    L4["L4 推理与产品能力<br/>agent_engine · codex_runtime · agent_runner · agent_validator · qa_rag<br/>turn_recovery · routing · faq · promo_agents · answer_language · agent_manifest · agent_debug"]
+    L4["L4 推理与产品能力<br/>agent_engine · codex_runtime · agent_runner · agent_validator · qa_rag<br/>turn_recovery · routing · faq · promo_agents · answer_language · agent_manifest · agent_debug<br/>dify_knowledge_api"]
     L3["L3 证据与诊断内核<br/>sources · diagnostic_tools · engine · journal<br/>agent_workspace · health_report · knowledge_retrieval · zero_order"]
     L2["L2 身份与范围<br/>scope_context · query_scope · caller_auth · third_session_auth<br/>company_token_auth"]
     L1["L1 领域规则（纯函数）<br/>rules · order_visibility · health_metrics · health_curves · parsing"]
@@ -302,6 +302,7 @@ flowchart TB
 | `promo_agents.py` | 宣传案例/方案路由：跑租户已发布的宣传智能体，与客服 FAQ 智能体隔离 |
 | `answer_language.py` | 回答面输出语言校验的**共享应用点**（挂到各回答面的定稿点） |
 | `agent_manifest.py` / `agent_debug.py` | 声明式环境清单收敛 / 草稿调试与真实知识绑定校验 |
+| `dify_knowledge_api.py` | 面向 Dify External Knowledge API 的知识检索适配（#581 / PRD #577）：请求/响应形状与 `records` 渲染。租户与知识库白名单由我们的登记表定，**不来自请求** |
 | `shortcut_migration.py` | 租户复制快捷动作 → 平台默认的幂等迁移 |
 
 #### L5 持久化（同一个 SQLite 文件，各自建表）
