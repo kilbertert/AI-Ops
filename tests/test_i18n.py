@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -235,3 +236,72 @@ def test_non_chinese_set_follows_the_declared_property_not_the_default() -> None
     default = "zh"
     old_reading = {spec.tag for spec in synthetic} - {default}
     assert "zh-Hant" in old_reading and "zh-Hant" not in result
+
+
+def _implicit_joins(path: Path) -> list[tuple[int, str, str]]:
+    """Source lines where two string literals would glue two word characters.
+
+    An implicit concatenation is `"a"` + `"b"` with nothing between them, and the
+    space between the words has to live INSIDE one of the literals. Put it at the
+    start of the next one and a re-wrap that strips leading whitespace removes it:
+    Python concatenates happily, nothing fails, and the user reads
+    `Please pickone of your own orders`. That reached production on 2026-10-09 in
+    five languages (`not_yours`), which is what this guard exists to prevent.
+
+    Tokens, not lines: `["a", "b"]` has a comma between the literals and is not a
+    join; only adjacent STRING tokens are. Escapes (`\\n`) and CJK boundaries are
+    skipped — an env-file fixture joins on purpose, and Chinese does not put
+    spaces between words, so neither is a defect.
+    """
+    import io
+    import tokenize
+
+    skip = {tokenize.NL, tokenize.COMMENT, tokenize.INDENT, tokenize.DEDENT, tokenize.NEWLINE}
+    try:
+        tokens = [
+            t
+            for t in tokenize.generate_tokens(io.StringIO(path.read_text(encoding="utf-8")).readline)
+            if t.type not in skip
+        ]
+    except (tokenize.TokenError, SyntaxError, UnicodeDecodeError):
+        return []
+
+    def body(text: str) -> str:
+        for quote in ('"""', "'''", '"', "'"):
+            if text.startswith(quote) and text.endswith(quote) and len(text) >= 2 * len(quote):
+                return text[len(quote) : -len(quote)]
+        return text
+
+    def needs_space(char: str) -> bool:
+        # CJK ideographs are written without spaces, so a join between them is
+        # correct. Everything else that is a letter or a digit is not.
+        return char.isalnum() and not ("　" <= char <= "鿿")
+
+    found: list[tuple[int, str, str]] = []
+    for first, second in zip(tokens, tokens[1:], strict=False):
+        if first.type != tokenize.STRING or second.type != tokenize.STRING:
+            continue
+        left, right = body(first.string), body(second.string)
+        if not left or not right:
+            continue
+        if left.endswith("\\") or right.startswith("\\"):
+            continue  # an escape: the join is intentional (env-file fixtures)
+        if needs_space(left[-1]) and needs_space(right[0]):
+            found.append((first.end[0], left[-30:], right[:30]))
+    return found
+
+
+def test_no_implicit_string_join_glues_two_words_together() -> None:
+    """Scans the source, because the defect is invisible in the assembled value.
+
+    `pickone` and `pick one` differ by one character and nothing else in the
+    suite can tell them apart — every table test asserts coverage and non-empty
+    text, both of which the glued string satisfies.
+    """
+    root = Path(__file__).parents[1]
+    offenders = [
+        (str(path.relative_to(root)), line, left, right)
+        for path in sorted((root / "src" / "aiops_diagnostics").glob("*.py"))
+        for line, left, right in _implicit_joins(path)
+    ]
+    assert not offenders, offenders
