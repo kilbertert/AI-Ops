@@ -52,6 +52,7 @@ from operator_support import (
     upms_settings,
 )
 
+from aiops_diagnostics.i18n import clarification_message
 from aiops_diagnostics.query_scope import QueryScope, resolve_query_scope
 from aiops_diagnostics.scope_context import (
     SCOPE_ERROR_UPMS_UNAVAILABLE,
@@ -406,7 +407,11 @@ def test_assistant_explicit_order_outside_the_operator_scope_is_refused(
 def test_assistant_embedded_order_outside_the_operator_scope_falls_through(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """问句内嵌集合外订单号 → 静默回落（既有契约），不是 404。"""
+    """问句内嵌集合外订单号 → 回落，但**不再无声**（#620），也不是 404。
+
+    集合外的订单与「不是本人的订单」在这里是同一件事：调用者无权查它。
+    回落本身没变（不 404、不建诊断），变的是答复**说出了真实原因**。
+    """
     client, runtime = _assistant_app(tmp_path, monkeypatch, Connection())
 
     resp = client.post(
@@ -415,9 +420,12 @@ def test_assistant_embedded_order_outside_the_operator_scope_falls_through(
         headers=_OPERATOR_HEADERS,
     )
 
-    assert resp.status_code == 202
-    assert resp.json()["type"] == "qa"
+    assert resp.status_code != 404
     assert runtime.diagnoses == []
+    body = resp.json()
+    assert body["type"] == "clarification"
+    assert body["missing_fields"] == []
+    assert body["message"] == clarification_message("zh", "not_yours")
 
 
 # --- #423 回归：运营商站点范围只在管家端入口生效 ---------------------------

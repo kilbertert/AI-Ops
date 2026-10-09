@@ -15,6 +15,7 @@ from aiops_diagnostics.gateway_api import (
 )
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_store import ASSISTANT_QUESTION_RESTART_ERROR_CODE, GatewayStore
+from aiops_diagnostics.i18n import clarification_message
 from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
 
 
@@ -623,17 +624,33 @@ def test_assistant_text_embedded_owned_order_routes_to_diagnosis(tmp_path: Path)
 
 def test_assistant_text_embedded_unowned_order_falls_through(tmp_path: Path) -> None:
     """A question with an order id the caller does NOT own falls through to the
-    general answer (NOT a hard 404), because no ownership was asserted."""
+    general answer (NOT a hard 404), because no ownership was asserted.
+
+    #620: it fell through SILENTLY until then, and the two states it conflated
+    are the reason this test changed. A user whose order number is not theirs
+    got a knowledgeable general answer about how the assistant cannot verify
+    orders — indistinguishable from "the platform cannot check this order",
+    with no diagnosis attempt behind either. The fall-through is unchanged (no
+    404, no existence oracle); what is new is that the answer says the true
+    thing. Measured cause: the app's own order list can carry another user's
+    order (#619), so a user really does reach this state by picking a row.
+    """
     client, runtime = _client(tmp_path, allowed_orders={"other-only"})
     resp = client.post(
         "/v1/assistant/questions",
         json={"question": "订单 2096164064667852801 怎么还没退款"},
         headers=_headers(),
     )
-    assert resp.status_code == 202
     body = resp.json()
-    assert body["type"] == "qa"
+    # Still not a 404 and still not a diagnosis — the two things this branch
+    # must never become.
+    assert resp.status_code != 404
     assert runtime.calls == []  # no diagnosis started
+    # ...but no longer indistinguishable from a general answer.
+    assert resp.status_code == 200, resp.text
+    assert body["type"] == "clarification"
+    assert body["missing_fields"] == [], "nothing is missing; the order is not the caller's"
+    assert body["message"] == clarification_message("zh", "not_yours")
 
 
 def test_assistant_responses_echo_resolved_language(tmp_path: Path) -> None:
@@ -1560,3 +1577,58 @@ def test_a_non_promptable_language_is_refused_before_any_job_starts(tmp_path: Pa
     # No job, no turn, no model call: the stub records what it was asked to do.
     assert runtime.calls == [], "边界之后仍然启动了作业"
     assert not getattr(runtime, "stored_language", "")
+
+
+def test_an_unowned_order_does_not_reveal_whether_it_exists(tmp_path: Path) -> None:
+    """The clarification must not become an existence oracle (#620).
+
+    `NOT_OWNED` is what the authorizer returns BOTH for "this order is someone
+    else's" and for "no such order" — that is the point of the verdict, and
+    T4/#154 relies on it. So the two must stay byte-identical here: if a
+    non-existent id answered differently from a real-but-foreign one, the
+    endpoint would answer "does this order exist" one request at a time.
+    """
+    client, runtime = _client(tmp_path, allowed_orders={"other-only"})
+    foreign = client.post(
+        "/v1/assistant/questions",
+        json={"question": "订单 2096164064667852801 怎么还没退款"},
+        headers=_headers(),
+    )
+    nonexistent = client.post(
+        "/v1/assistant/questions",
+        json={"question": "订单 2099999999999999999 怎么还没退款"},
+        headers=_headers(),
+    )
+
+    assert foreign.status_code == nonexistent.status_code == 200
+    # `question` echoes the request by design, so it differs; every other field
+    # must not.
+    assert {k: v for k, v in foreign.json().items() if k != "question"} == {
+        k: v for k, v in nonexistent.json().items() if k != "question"
+    }
+    assert runtime.calls == []
+
+
+def test_the_unowned_clarification_follows_the_request_language(tmp_path: Path) -> None:
+    """It is user-visible copy, so it obeys Accept-Language like every other.
+
+    The tests above pin zh; this pins the other direction, because a hardcoded
+    Chinese literal with an English `language` echoed beside it is the exact
+    defect #262/#282 removed from the other clarification branches, and the
+    same mistake is one literal away here.
+    """
+    from aiops_diagnostics.i18n import chinese_leak
+
+    client, runtime = _client(tmp_path, allowed_orders={"other-only"})
+    resp = client.post(
+        "/v1/assistant/questions",
+        json={"question": "订单 2096164064667852801 怎么还没退款"},
+        headers={**_headers(), "Accept-Language": "en"},
+    )
+
+    body = resp.json()
+    assert resp.status_code == 200
+    assert body["language"] == "en"
+    assert body["message"] == clarification_message("en", "not_yours")
+    assert chinese_leak(body["message"]) == "", body["message"]
+    assert runtime.calls == []

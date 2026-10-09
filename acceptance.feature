@@ -2229,3 +2229,30 @@ Feature: 面向 Dify 的调试身份（#586）
     Scenario: 调试身份不创建那条路由
       Given 给了调试三键但生产两键没配
       Then 服务拒绝启动
+
+Feature: 不是本人的订单不再伪装成通用回答（#620）
+
+  Rule: 归属失败既不是 404，也不是一个看不出问题的回答
+
+    Scenario: 问句里的订单不属于调用者时给出具名澄清
+      Given 一个已认证的调用者，其名下没有任何订单
+      When 该调用者在一句话里带上一个不属于他的订单号提问
+      Then 返回 200 且 type 为 clarification
+      And 提示里说明该订单不属于当前账号
+      And missing_fields 为空数组
+      And 不创建任何诊断作业
+
+    Scenario: 订单不存在与订单不属于本人给出逐字相同的答复
+      Given 一个已认证的调用者
+      When 他分别用「别人的真实订单号」与「不存在的订单号」提问
+      Then 两次响应的状态码与除 question 外的字段逐字相同
+      And 因此该答复不能用来探测订单是否存在
+
+  Rule: 这条提示与其它澄清一样跟随请求语言
+
+    Scenario: 非中文请求拿到该语言的提示且不含汉字
+      Given 一个已认证的调用者
+      When 他用 Accept-Language: en 提一个含他人订单号的问题
+      Then 响应的 language 为 en
+      And message 与 en 文案逐字相同
+      And message 里没有汉字残留
