@@ -9709,3 +9709,56 @@ B) 用另一个人的会话，发同一句话        -> HTTP 200 type: clarifica
 - 本修复**尚未部署到 41**（#620 已部署，这一处文案修正待下一个部署窗口）。
 - 客户端里显示的那段话仍是 **APK 内置**的，本仓只能保证服务端返回正确；
   前端换文案是独立的一步。
+
+## #617 凭据被拒 vs 上游不可用：更正两处结论并落地区分（2026-10-09）
+
+**分支** `fix/routing-auth-vs-outage`，基线 `origin/main` @ `203a781`。
+
+### 一、先记两处**我自己写错的结论**（在 #617 的评论里）
+
+| 我写的 | 实测 | 证据 |
+|---|---|---|
+| 「401 会被白重试一次」 | **错**：401/403/503 都是 `HTTPError`，第一次即抛，一次都不重试 | `bounded_http.py:435` 的 `deliberate` 短路；`tests/test_bounded_http.py:505` 钉住 `requests == 1` |
+| 「`routing` 没有成功侧计数」 | **错（陈旧）**：10-01 已由 #509（`abec666`）补上；生产里 `completed`/`failed` 两行都在（5/20） | `routing.py:230`、`:307` |
+
+两处都是从**注释与常量**推断出来的（`RetryPolicy(max_retries=1)` 的注释、`mem-20260930-ranlei-008`
+里的旧结论），**没有读短路条件、也没有核"这条是否已被修掉"**。已在票上更正。
+
+> 这是本仓记过的形态的又一次实例：**读上游实现时要确认它是活的**
+> （同 `mem-20260930-ranlei-008` 第 ② 条：从源码读到一段**注释掉的**过滤器就当成它在跑）。
+
+### 二、站得住的那条 —— 也是本票真正修的
+
+**「凭据被拒」与「服务不可用」在异常类、指标码、日志句三层上完全同形**：
+
+| 层 | 现状（改前） | 位置 |
+|---|---|---|
+| 异常类 | `auth_rejected` / `http_error` / 传输层**都** → `JevUnavailable` | `jev_decisions.py:378-384` |
+| 指标码 | 都 → `ROUTING_UNAVAILABLE` | `routing.py:216` |
+| 日志句 | 都 → `routing decision unavailable` | `routing.py:331` |
+
+**骨架本来是分开的** —— `classify_http_error` 给了 `AUTH_REJECTED` 这个独立的 `FailureKind`，
+**是这个客户端把它丢掉了**。后果在 41 上实测过：key 被永久拒绝，被记成「暂时不可用」**三周**。
+
+⚠️ 我上一条评论里说它「被记成 retryable」**措辞也不准**：那条路径上没有任何东西读 `retryable`，
+`JevUnavailable` 也没有这个属性。准确说法是**「被记成同一个可以等待的故障」**。
+
+### 三、改法
+
+`JevCredentialRejected(JevUnavailable)` —— **子类**，因为对调用方的契约完全相同
+（没拿到判定 → 照常继续），所以**现有 `except JevUnavailable` 一行都不用改**；
+新增指标码 `ROUTING_CREDENTIAL_REJECTED`；`classify_with_jev` **先捕子类**再捕基类；
+日志按码分两句。
+
+### 四、验证
+
+- 全量 `PYTHONPATH=$PWD/src uv run pytest tests/ -q` 通过；ruff 通过。
+- **变异两处，实跑各自转红**：① 把 `auth_rejected` 改回指向 `_unavailable` ⇒ 红；
+  ② 去掉子类的 `except`（回到只捕基类）⇒ 红。
+- 双向用例：401 → 专用类型；传输故障 → **不是**专用类型（防止"全都记成凭据问题"
+  这个反方向的错）。
+
+### 五、边界（据实）
+
+- **未部署到 41**。
+- 本轮生产上那次 401 是**靠换 key** 解决的；本票修的是**下次能看出来**，两者不互相替代。

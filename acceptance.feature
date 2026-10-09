@@ -2290,3 +2290,31 @@ Feature: 开场白与预设问题的内容制品权威（#585）
       Given 一份带 opening_statement 与 suggested_questions 的真实 DSL
       When 映射为我们的智能体配置
       Then 对应的两个位置为空
+
+Feature: 凭据被拒与上游不可用必须区分（#617）
+
+  Rule: 两者的处置不同，因此在每一层都要可分辨
+
+    Scenario: 凭据被拒产生它自己的错误类型
+      Given 判定服务对请求返回 401
+      When 客户端发起一次判定
+      Then 抛出的错误是凭据被拒这一类型
+      And 它同时仍是"不可用"的实例（调用方既有的兜底逻辑不受影响）
+
+    Scenario: 传输故障不会被误报成凭据问题
+      Given 判定服务连不上
+      When 客户端发起一次判定
+      Then 抛出的是普通的"不可用"
+      And 它不是凭据被拒这一类型
+
+    Scenario: 指标把两种失败记成两个码
+      Given 一次判定因为凭据被拒而失败
+      When 记录这次失败
+      Then 指标里的 error_code 是凭据被拒的专用码
+      And 不是上游不可用的那个码
+
+    Scenario: 上游不可用仍用原来的码
+      Given 一次判定因为上游不可用而失败
+      When 记录这次失败
+      Then 指标里的 error_code 仍是 ROUTING_UNAVAILABLE
+      And 既有判据引用的那个码没有被改名

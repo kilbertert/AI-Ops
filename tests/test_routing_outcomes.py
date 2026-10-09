@@ -18,6 +18,7 @@ from pathlib import Path
 from aiops_diagnostics.jev_decisions import JevUnavailable
 from aiops_diagnostics.metrics_store import MetricsStore
 from aiops_diagnostics.routing import (
+    ROUTING_CREDENTIAL_REJECTED,
     ROUTING_DECIDED,
     ROUTING_UNAVAILABLE,
     RoutingThresholds,
@@ -194,3 +195,50 @@ def test_the_summary_can_answer_the_window_question(tmp_path: Path) -> None:
     assert routing_row["failed"] == 0, routing_row
     # And the interaction totals stay clean: routing is component health.
     assert store.summary("T-1")["totals"]["runs"] == 0
+
+
+def test_a_rejected_credential_is_counted_under_its_own_code(tmp_path: Path) -> None:
+    """#617's core requirement: the metric must say WHICH failure this was.
+
+    An operator reads `ROUTING_CREDENTIAL_REJECTED` and knows to rotate a key.
+    Before the split both cases wrote `ROUTING_UNAVAILABLE`, whose remedy is to
+    wait — and waiting never rotated anything, which is exactly how a dead key
+    survived three weeks in production while looking like a flaky upstream.
+    """
+    from aiops_diagnostics.jev_decisions import JevCredentialRejected
+
+    store = _store(tmp_path)
+    import aiops_diagnostics.routing as routing
+
+    original = routing.decide
+    routing.decide = lambda question, client, *, thresholds: client.decide(question, thresholds)
+    try:
+        client = _Client(fails=JevCredentialRejected("decision service rejected the credential"))
+        result = classify_with_jev(
+            "问题", client, thresholds=RoutingThresholds(), metrics=store, tenant_id="T-1"
+        )
+    finally:
+        routing.decide = original
+
+    assert result is None
+    failed = next(row for row in store.summary("T-1")["by_route"] if row["route_type"] == "routing")
+    assert failed["failed"] == 1
+    assert _codes(store, "T-1") == {ROUTING_CREDENTIAL_REJECTED}
+
+
+def test_an_outage_keeps_the_original_unavailable_code(tmp_path: Path) -> None:
+    """And the split did not rename the outage: #405's criterion names it."""
+    from aiops_diagnostics.jev_decisions import JevUnavailable
+
+    store = _store(tmp_path)
+    import aiops_diagnostics.routing as routing
+
+    original = routing.decide
+    routing.decide = lambda question, client, *, thresholds: client.decide(question, thresholds)
+    try:
+        client = _Client(fails=JevUnavailable("decision service unavailable"))
+        classify_with_jev("问题", client, thresholds=RoutingThresholds(), metrics=store, tenant_id="T-1")
+    finally:
+        routing.decide = original
+
+    assert _codes(store, "T-1") == {ROUTING_UNAVAILABLE}

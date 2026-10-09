@@ -34,6 +34,7 @@ from typing import Any
 from aiops_diagnostics.jev_decisions import (
     Choice,
     ChoiceAnswer,
+    JevCredentialRejected,
     JevDecisionClient,
     JevError,
     JevInvalidResponse,
@@ -70,10 +71,16 @@ _INTENT_INSTRUCTIONS = "用户这句话属于哪一类意图？只能选一个�
 _RISK_INSTRUCTIONS = "这句话是否涉及高风险、需要人工确认的扣费、资金或投诉问题？"
 
 #: Failure codes. Stable strings, because they are counted and alerted on.
-#: Two codes rather than one because the remedies differ: an unreachable service
-#: is waited out, a contract violation means one of the two sides changed shape.
+#: THREE rather than one, because the remedies differ and a code nobody can act
+#: on is a code nobody reads:
+#:   * an unreachable service is waited out;
+#:   * a contract violation means one of the two sides changed shape;
+#:   * a REJECTED CREDENTIAL needs someone to rotate a key — and before this code
+#:     existed it shared ``ROUTING_UNAVAILABLE`` with an outage, which is how a
+#:     permanently rejected key read as a flaky upstream for three weeks (#617).
 ROUTING_UNAVAILABLE = "ROUTING_UNAVAILABLE"
 ROUTING_INVALID = "ROUTING_INVALID"
+ROUTING_CREDENTIAL_REJECTED = "ROUTING_CREDENTIAL_REJECTED"
 
 
 class RoutingContractError(JevError):
@@ -212,6 +219,11 @@ def classify_with_jev(
         return None
     try:
         decision = decide(question, client, thresholds=thresholds)
+    except JevCredentialRejected as exc:
+        # BEFORE JevUnavailable on purpose: the subclass must be caught first or
+        # it would be counted as an outage, which is the defect this split fixes.
+        _record_routing_failure(ROUTING_CREDENTIAL_REJECTED, exc, metrics=metrics, tenant_id=tenant_id)
+        return None
     except JevUnavailable as exc:
         _record_routing_failure(ROUTING_UNAVAILABLE, exc, metrics=metrics, tenant_id=tenant_id)
         return None
@@ -328,7 +340,18 @@ def _record_routing_outcome(
     it.
     """
     if exc is not None:
-        _LOGGER.warning("routing decision unavailable: code=%s error=%s", code, _safe_reason(exc))
+        # Two sentences, because they send an operator to two different places:
+        # "unavailable" says wait and watch it recover; a rejected credential
+        # says go rotate the key. One sentence for both is how the second case
+        # stayed invisible (#617).
+        _LOGGER.warning(
+            "%s: code=%s error=%s",
+            "routing decision credential rejected"
+            if code == ROUTING_CREDENTIAL_REJECTED
+            else "routing decision unavailable",
+            code,
+            _safe_reason(exc),
+        )
     if metrics is None or not tenant_id:
         return
     try:
