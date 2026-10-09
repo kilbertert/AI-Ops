@@ -1067,9 +1067,39 @@ def create_gateway_app(
         # Route 1b: text-embedded order number → diagnosis if authorizable.
         # The caller did not pass order_no explicitly, but the question text
         # contains a plausible order id. Verify ownership first; only then
-        # route to order diagnosis. If ownership fails, fall through to the
-        # generic answer — this is NOT a hard 404, because the caller did not
-        # assert ownership of a specific order (T4/#154).
+        # route to order diagnosis.
+        #
+        # When ownership FAILS the request still must not become a hard 404 and
+        # must not become an existence oracle (T4/#154) — but it must not become
+        # a silent zero-order answer either. It fell through to one until #620,
+        # and the cost was measured: the app sent "check anomalies for order
+        # (X)", X belonged to someone else, and the user got a knowledgeable
+        # paragraph about how the assistant cannot verify orders. Nothing in
+        # that reply said the order was not theirs, and the backend had made no
+        # diagnosis attempt at all — the two states below were indistinguishable,
+        # which is the failure mode this repository keeps having to remove.
+        #
+        # So the fall-through stays (no 404, no leak) and gains a NAMED state:
+        # the same `clarification` envelope every other "the request needs
+        # something it did not provide" branch uses, with a message that says
+        # the true thing. `missing_fields: []` keeps its established meaning
+        # from the jump-action guard — nothing is missing; the request is in the
+        # wrong place — as distinct from `["order_no"]`, which means "no order at
+        # all was recognisable". Neither one confirms the order exists: both
+        # answers are about the REQUEST, never about the order.
+        if not payload.order_no:
+            embedded = _extract_order_no(payload.question)
+            if embedded and order_verdict(embedded) == NOT_OWNED:
+                _record_route_metric(context, caller, route_type="clarification", outcome="completed")
+                return {
+                    **decision.public(),
+                    "type": "clarification",
+                    "language": language,
+                    "question": payload.question,
+                    "missing_fields": [],
+                    "message": clarification_message(language, "not_yours"),
+                }
+
         if not payload.order_no:
             embedded = _extract_order_no(payload.question)
             if embedded:

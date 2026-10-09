@@ -1717,3 +1717,22 @@ uv run pytest tests/test_assistant_api.py tests/test_conversation_api.py \
 **证据边界**：DIFY-DSL-01..05 全为**离线自动化**验证——映射打真固件，客户端打桩
 `urlopen`。**未**连在线 Dify 实例、**未**连真实租户数据面，**未完成业务验收**。把这条
 通路接到一个可触发的运营动作（CLI / 网关端点）不在本票范围。
+
+### ORDER-AUTH-01 非本人订单的可见性（#620，未在 41 实跑）
+
+- **环境**：本机工作树 `fix/unowned-order-fallthrough-visibility`，base `origin/main` @ `2b71193`。
+  **未上 41** —— 该分支只改网关的回答面，可在部署窗口按本 SOP 复跑。
+- **前置**：`TestClient(create_gateway_app(...))`，授权器为测试替身（只有 `allowed_orders` 内的订单算拥有）。
+- **测试数据**：一个不在 `allowed_orders` 里的真实格式订单号 + 一个不存在的同格式订单号。
+- **动作**：`uv run pytest tests/test_assistant_api.py tests/test_operator_order_authorization.py -q`
+- **预期**：两次提问都返回 `200 type=clarification`、`missing_fields: []`、
+  `message` 为该语言的 `not_yours`；除 `question` 外两响应逐字相同；不创建诊断作业。
+- **结果：PASS** —— 全量 `pytest` 通过。
+- **变异核对（3 处，实跑各自转红）**：
+  ① 恢复成静默回落 → 红在 4 条用例上（含管家端那条）；
+  ② 把文案写死成中文 → 红在「跟随请求语言」那条；
+  ③ 改成 404 → 红在 4 条用例上（含「不许探测存在性」那条）。
+- **边界（据实）**：**未在 41 实跑**；`not_yours` 的 11 语言文案是工程起草的中文/英文原稿
+  加译稿，**未经产品确认**（同 #534 用户故事 20 的口径）。
+  该状态能被用户走到，其上游成因是公司端点 #619（实测已确认），本票不处理。
+- **清理**：无写入；未触碰 41。

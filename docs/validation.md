@@ -9534,3 +9534,74 @@ km     rows whose DESCRIPTION leaks Chinese:      0 / 30955
   仍要靠运维/产品给映射表，且 `(proto, code)` 不足以自动恢复语义（96 组码里 25 组对应多种内容）。
 - **文案措辞待产品过目**：新增的 7 条兜底与 1 条 `reported_stop_reason` 是工程起草的
   中性表述，未被产品确认（同 #534 用户故事 20 的口径：未经确认的语言不算已验收）。
+
+## #620 不是本人的订单不再伪装成通用回答（2026-10-09）
+
+**分支** `fix/unowned-order-fallthrough-visibility`，基线 `origin/main` @ `2b71193`。
+
+### 一、成因（由 #566 的截图顺查出来的，三段证据链）
+
+用户截图里那句话是 App 生成的（bundle 里有 `chat.diagnosis.question = "Please check
+charging anomalies for order ({orderNo})"`），**App 把它当普通提问 POST 到 `/v1/assistant/questions`**，
+而那个订单不属于该调用者。后端在 Route 1b 判定 `NOT_OWNED` 后**静默回落到零阶问答**：
+
+```
+gateway_api.py（改前）：
+  owns = order_verdict(embedded) == OWNED
+  if owns:  ...建诊断...
+  # 否则什么都不做，继续往下走 → 落到 Route 3 通用问答
+```
+
+模型拿到的 workspace 契约明确写着「**没有订单上下文、你查不到订单数据**」
+（`agent_workspace._qa_runtime_instructions`），于是它只能老实说「我无法核实这个订单」。
+
+⇒ **「这单不是你的」与「平台查不了这单」在界面上逐字相同**，而后端
+**从未尝试过任何诊断**。同类形态本仓记录过（`mem-20260930-ranlei-008`：指标名与真实成因不一致）。
+
+### 二、这条状态**真的会被用户走到**（不是理论边角）
+
+用户是**从订单选择器里挑的**。而 `getOrderUserPage` 在 `user-id` 为空/缺失时
+**返回整个租户的订单** —— 实测 104/104（19 个不同 userId 出现在第 1 页），
+而 APK 在 `user_info` 不在 storage 时发的正是空串。已单开 **#619**（公司侧）。
+
+### 三、改法：回落保留，但**给它一个具名状态**
+
+改后返回与既有跳转动作兜底**同一形状**的澄清信封：
+
+```json
+{ "type": "clarification", "language": "zh", "missing_fields": [],
+  "message": "这个订单不属于当前账号，我无法为它做检测。请从订单列表里选择自己的订单后再试。" }
+```
+
+三个约束同时成立，各自都有用例钉住：
+
+| 约束 | 为什么 |
+|---|---|
+| **不是 404** | T4/#154 定下的：调用者没有明确断言归属，就不该按断言失败处理 |
+| **不泄露存在性** | 「别人的真实订单」与「不存在的订单」答复**除 `question` 外逐字相同**（新用例） |
+| **不建任何作业** | 与改前一致，`runtime.calls == []` |
+
+`missing_fields: []` 沿用跳转动作兜底那条既定含义 —— **不缺东西，是走错地方** ——
+与 `["order_no"]`（一个订单号都认不出来）区分开。
+
+### 四、文案：11 语言，且经既有门
+
+`CLARIFICATION_MESSAGES` 新增 `not_yours`，11 语言齐全；
+`test_every_user_facing_table_covers_all_supported_languages` 与
+`test_the_unowned_clarification_follows_the_request_language` 双向钉住
+（后者断言非中文不含汉字）。**措辞是工程起草的，未经产品确认**，见下面的边界。
+
+### 五、验证
+
+- 全量 `PYTHONPATH=$PWD/src uv run pytest tests/ -q` 通过；ruff check/format 通过。
+- **变异三处，实跑各自转红**：① 恢复静默回落 → 红 4 条（含管家端）；
+  ② 文案写死中文 → 红「跟随语言」那条；③ 改成 404 → 红 4 条（含「不许探测存在性」）。
+- 两条既有用例按新契约改写（`test_assistant_text_embedded_unowned_order_falls_through`
+  与管家端那条）：**回落本身没变，变的是它不再无声** —— 理由写在用例 docstring 里。
+
+### 六、边界（据实）
+
+- **未在 41 实跑**：本分支未部署。
+- **文案未确认**：11 语言的 `not_yours` 是工程起草 + 译稿，产品未过目
+  （按 #534 用户故事 20：未经确认的语言不算已验收）。
+- **上游成因未修**：用户会走到这个状态，根因是公司端点 #619，**本票不处理**。

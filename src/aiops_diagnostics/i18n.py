@@ -495,21 +495,31 @@ CLARIFICATION_MESSAGES: dict[str, dict[str, str]] = {
         "order_no": "请先选择需要检测的订单后，我才能继续处理。",
         "context": "请补充订单或设备等必要信息后，我才能继续处理。",
         "wrong_entry": "请点击页面上的快捷按钮进入对应页面。",
+        "not_yours": "这个订单不属于当前账号，我无法为它做检测。请从订单列表里选择自己的订单后再试。",
     },
     "zh-Hant": {
         "order_no": "請先選擇需要檢測的訂單後，我才能繼續處理。",
         "context": "請補充訂單或裝置等必要資訊後，我才能繼續處理。",
         "wrong_entry": "請點選頁面上的快捷按鈕進入對應頁面。",
+        "not_yours": "這個訂單不屬於目前帳號，我無法為它做檢測。請從訂單清單中選擇自己的訂單後再試。",
     },
     "en": {
         "order_no": "Please select the order you want checked before I can continue.",
         "context": "Please provide the order or device details before I can continue.",
         "wrong_entry": "Please use the shortcut button on the page to open the relevant screen.",
+        "not_yours": (
+            "This order does not belong to the current account, so I cannot check it. Please pick"
+            "one of your own orders and try again."
+        ),
     },
     "de": {
         "order_no": "Bitte wählen Sie zuerst den zu prüfenden Auftrag aus, damit ich fortfahren kann.",
         "context": "Bitte geben Sie die Auftrags- oder Gerätedaten an, damit ich fortfahren kann.",
         "wrong_entry": "Bitte öffnen Sie die entsprechende Seite über die Schaltfläche auf der Seite.",
+        "not_yours": (
+            "Dieser Auftrag gehört nicht zum aktuellen Konto; ich kann ihn nicht prüfen. Bitte"
+            "wählen Sie einen eigenen Auftrag."
+        ),
     },
     "fr": {
         "order_no": "Veuillez d'abord sélectionner la commande à vérifier pour que je puisse continuer.",
@@ -517,36 +527,57 @@ CLARIFICATION_MESSAGES: dict[str, dict[str, str]] = {
             "Veuillez fournir les informations de commande ou d'appareil pour que je puisse continuer."
         ),
         "wrong_entry": "Veuillez utiliser le bouton de la page pour ouvrir l'écran correspondant.",
+        "not_yours": (
+            "Cette commande n'appartient pas au compte actuel, je ne peux donc pas la vérifier. "
+            "Veuillez choisir l'une de vos commandes."
+        ),
     },
     "es": {
         "order_no": "Seleccione primero el pedido que desea revisar para que yo pueda continuar.",
         "context": "Facilite los datos del pedido o del dispositivo para que yo pueda continuar.",
         "wrong_entry": "Utilice el botón de la página para abrir la pantalla correspondiente.",
+        "not_yours": (
+            "Este pedido no pertenece a la cuenta actual, así que no puedo comprobarlo. Elija uno"
+            "de sus pedidos."
+        ),
     },
     "pt": {
         "order_no": "Selecione primeiro o pedido que deseja verificar para que eu possa continuar.",
         "context": "Forneça os dados do pedido ou do dispositivo para que eu possa continuar.",
         "wrong_entry": "Utilize o botão da página para abrir o ecrã correspondente.",
+        "not_yours": (
+            "Este pedido não pertence à conta atual, por isso não o posso verificar. Escolha um"
+            "dos seus pedidos."
+        ),
     },
     "vi": {
         "order_no": "Vui lòng chọn đơn hàng cần kiểm tra trước khi tôi tiếp tục.",
         "context": "Vui lòng cung cấp thông tin đơn hàng hoặc thiết bị để tôi tiếp tục.",
         "wrong_entry": "Vui lòng dùng nút trên trang để mở màn hình tương ứng.",
+        "not_yours": (
+            "Đơn hàng này không thuộc tài khoản hiện tại nên tôi không thể kiểm tra. Vui lòng"
+            "chọn một đơn hàng của bạn."
+        ),
     },
     "mn": {
         "order_no": "Үргэлжлүүлэхийн тулд эхлээд шалгах захиалгаа сонгоно уу.",
         "context": "Үргэлжлүүлэхийн тулд захиалга эсвэл төхөөрөмжийн мэдээллийг өгнө үү.",
         "wrong_entry": "Холбогдох хуудсыг хуудасны товчоор нээнэ үү.",
+        "not_yours": (
+            "Энэ захиалга одоогийн бүртгэлд хамаарахгүй тул шалгах боломжгүй. Өөрийн захиалгаа сонгоно уу."
+        ),
     },
     "th": {
         "order_no": "กรุณาเลือกคำสั่งซื้อที่ต้องการตรวจสอบก่อน เพื่อให้ฉันดำเนินการต่อได้",
         "context": "กรุณาให้ข้อมูลคำสั่งซื้อหรืออุปกรณ์ เพื่อให้ฉันดำเนินการต่อได้",
         "wrong_entry": "กรุณาใช้ปุ่มบนหน้าเพื่อเปิดหน้าจอที่เกี่ยวข้อง",
+        "not_yours": "คำสั่งซื้อนี้ไม่ใช่ของบัญชีปัจจุบัน ฉันจึงตรวจสอบให้ไม่ได้ กรุณาเลือกคำสั่งซื้อของคุณเอง",
     },
     "km": {
         "order_no": "សូមជ្រើសរើសការបញ្ជាទិញដែលត្រូវពិនិត្យជាមុនសិន ដើម្បីឱ្យខ្ញុំបន្តបាន",
         "context": "សូមផ្តល់ព័ត៌មានការបញ្ជាទិញ ឬឧបករណ៍ ដើម្បីឱ្យខ្ញុំបន្តបាន",
         "wrong_entry": "សូមប្រើប៊ូតុងនៅលើទំព័រ ដើម្បីបើកអេក្រង់ដែលពាក់ព័ន្ធ",
+        "not_yours": ("ការបញ្ជាទិញនេះមិនមែនជារបស់គណនីបច្ចុប្បន្នទេ ខ្ញុំមិនអាចពិនិត្យវាបានឡើយ។ សូមជ្រើសរើសការបញ្ជាទិញរបស់អ្នក។"),
     },
 }
 
