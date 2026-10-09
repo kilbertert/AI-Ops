@@ -1330,6 +1330,25 @@ PRD #428 的收口验收，**分两轨且不得混淆**。负向 + 回归轨道�
 | OP-ACCEPT-11 | 本地 dev | 参数化的解析失败：上游不可达、响应形状不可识别、店铺/站点数量超界、充电库不可用、范围 ID 不可用 | 构造会话身份 | PASS：一律空集合 + `can_access=False` + 一行 `operator_scope_unavailable code=…`；不把授权故障变成 500，也不放行；日志不含 C/B 端 id、租户与凭据 | `tests/test_operator_order_authorization.py::test_every_operator_scope_failure_denies_instead_of_raising`（#426） |
 | OP-ACCEPT-12 | 本地 dev | 参数化的实现退化（变异验证）：把运营商范围回落成 `self`；把店铺 id 直接当站点 id | 重跑上述用例集 | PASS：分别有 6 项与 12 项转红——证明负向断言不是恒真，退化会自己暴露 | 见 `docs/validation.md`「PRD #423 子票 #428」 |
 
+### 一之二、#638 口径用例（2026-10-09 补，同一负向轨道）
+
+产品裁定（#638 评论）：**管家端里，一个人「自己作为消费者下的单」不应可见**。因此
+`operator` 入口「替换 `self`」是**既定语义**，不是缺陷；#638 剩下的动作是把这个
+口径写进契约并给一条用例钉住。**本票无产品代码改动**。
+
+| ID | 环境 | 前置条件与数据 | 有序动作 | 预期可观察结果 | 清理/证据 |
+|---|---|---|---|---|---|
+| OP-ACCEPT-13 | 本地 dev | 同一账号的两种身份（同一 C 端会话 + 唯一 B 端主体）；一张**本人下单**、站点在运营商集合**外**的订单（`ORDER_OUTSIDE`）；行级镜像假 MySQL | 同一次运行内，分别以 `consumer` 与 `operator` 会话身份查这张订单 | PASS：`consumer` 可见（`True`）、`operator` 不可见（`False`），且断言二者**不相等**；范围形状分别为 `user_id=本人` 与 `site_id ∈ 集合`，两个谓词不相等 | `tests/test_operator_negative_acceptance.py::test_the_same_account_gets_opposite_answers_for_its_own_order_across_entries`、`...::test_the_two_identities_resolve_disjoint_ranges_for_the_same_order` |
+| OP-ACCEPT-14 | 本地 dev | 对照组：**本人下单**、站点在运营商集合**内**的订单（`ORDER_OWN_IN`） | 两个入口各查一次 | PASS：两侧都可见。没有它，「管家端把本人订单一律拒掉」也能让 OP-ACCEPT-13 全绿，成因就不是「站点不在集合内」 | `...::test_an_own_order_inside_the_operator_site_set_is_still_visible` |
+| OP-ACCEPT-15 | 本地 dev | 管家端入口（`shortcut_code=smart_diagnosis`）+ 集合外本人订单 | 经前端真实路径提交 `order_no` | PASS：`404 ORDER_NOT_FOUND`、零作业。把范围改成「运营商站点 ∪ 本人」会让它变成 `202` —— 这条在 HTTP 层挡住并集回归 | `...::test_the_operator_entry_is_not_a_union_of_sites_and_own_orders` |
+| OP-ACCEPT-16 | 本地 dev | 变异验证：把 `third_session_auth._data_scope` 的 `operator` 分支改回 `self` | 重跑本片 | PASS：转红项含 OP-ACCEPT-13/14/15 三条——证明这三条真的钉在「两种身份相反」上，而不是恒真 | 见 `docs/validation.md`「#638」 |
+
+**证据边界**：以上全部为**离线**用例（替身 + 真实授权判定 + 真实范围下推），
+**未**在 41 上以真实管家端登录复现（该链路的真实会话仍不可得，见本文件正向轨道与
+`docs/agents/butler-session-contract.md` §3）。41 侧只有 #638 评论里的**只读数据实测**
+（账号 `13928110252`：`sys_user_shop` 0 行、消费者身份下 1 张单），它是口径的**事实依据**，
+不是本节的通过证据。
+
 ### 二、正向轨道（待业务条件，本轮未执行）
 
 | ID | 环境 | 前置条件与数据 | 有序动作 | 预期可观察结果 | 清理/证据 |

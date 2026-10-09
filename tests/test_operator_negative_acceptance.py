@@ -44,6 +44,7 @@ from operator_support import (
     OperatorScope,
     assistant_app,
     b_subject,
+    build_authorizer,
     mysql_settings,
     operator_caller,
     operator_session,
@@ -62,8 +63,8 @@ from aiops_diagnostics.conversation_store import ConversationStore
 from aiops_diagnostics.gateway_runtime import GatewayRuntime
 from aiops_diagnostics.gateway_store import GatewayStore
 from aiops_diagnostics.i18n import SUPPORTED_LANGUAGES
-from aiops_diagnostics.query_scope import resolve_operator_site_scope
-from aiops_diagnostics.scope_context import SCOPE_TYPE_SELF
+from aiops_diagnostics.query_scope import QueryScope, resolve_operator_site_scope, resolve_query_scope
+from aiops_diagnostics.scope_context import SCOPE_TYPE_ORGAN, SCOPE_TYPE_SELF
 from aiops_diagnostics.sources import MySQLSource
 
 
@@ -699,4 +700,122 @@ def test_history_window_keeps_a_turn_whose_order_left_the_scope(
         Settings(),
     )
     history = real_runtime._conversation_history((cid, scope, turn_no), "zh")
-    assert "诊断结论" in history, "该轮不止在窗口里，而且真的经生产接线进了提示词"
+    assert "诊断结论" in history, "该轮不止在窗口里，而且真的经生产接线进过提示词"
+
+
+# --- 6. #638：同一张「自己下的单」，两个入口给出**相反**的答案 ----------------
+#
+# 这一节钉住的是**口径**，不是缺陷。产品裁定（2026-10-09，#638 评论）：管家端里，
+# 一个人「自己作为消费者下的单」**不应可见** —— 所以 ``operator`` 入口把 ``self``
+# **替换**成运营商站点集合是对的，两侧的相反答案都是既定语义。
+#
+# 但这条语义此前**没有任何地方写明**：本轮排查绕了半天，正是因为它只活在实现里。
+# 更糟的是它没有用例 —— 把范围改回「并集」这类回归没有任何一条会转红。因此这里
+# 用同一个账号、同一张订单、两个入口**同一次运行**断言这个不等。
+
+
+def _session_for_both_entries(monkeypatch: pytest.MonkeyPatch):
+    """同一个账号的两种身份：C 端会话身份（含 C→B 映射）与它的运营商站点集合。"""
+    return {
+        "consumer": resolve_session(
+            monkeypatch,
+            records=(b_subject(),),
+            operator_scope=OperatorScope(sites={"SHOP-1": (SITE_IN,)}),
+            platform_entry="consumer",
+        ),
+        "operator": resolve_session(
+            monkeypatch,
+            records=(b_subject(),),
+            operator_scope=OperatorScope(sites={"SHOP-1": (SITE_IN,)}),
+            platform_entry="operator",
+        ),
+    }
+
+
+def test_the_same_account_gets_opposite_answers_for_its_own_order_across_entries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """同一账号、同一张**自己下的**单：``consumer`` 可见 / ``operator`` 不可见。
+
+    #638 的产品裁定：管家端可见 = 运营商站点集合，**不含**本人作为消费者下的单
+    （PRD #423 的「替换 ``self``，不取并集」是既定设计）。因此这两个答案
+    **必须不相等** —— 相等就说明有人把并集加了回来，或者把替换收窄成了 ``self``。
+
+    订单 ``ORDER_OUTSIDE`` 就是「本人下的、站点在运营商集合外」的那一张。
+    """
+    sessions = _session_for_both_entries(monkeypatch)
+    authorizer = build_authorizer(monkeypatch, Connection())
+    own_order = next(row for row in Connection().orders if row["order_no"] == ORDER_OUTSIDE)
+    assert own_order["user_id"] == C_USER_ID, "前提：这一张确实是本人下的单"
+    assert own_order["site_id"] == SITE_OUT, "前提：它的站点确实在运营商集合外"
+
+    consumer_visible = authorizer.can_access(sessions["consumer"], ORDER_OUTSIDE)
+    operator_visible = authorizer.can_access(sessions["operator"], ORDER_OUTSIDE)
+
+    assert consumer_visible is True, "本人下的单在消费者身份下必须可见"
+    assert operator_visible is False, "管家身份下不得可见 —— 替换 self，不是并集"
+    assert consumer_visible != operator_visible, (
+        "两个身份对同一张自己下的单给出了相同答案：口径被改了（并集或退回 self）"
+    )
+
+
+def test_the_two_identities_resolve_disjoint_ranges_for_the_same_order(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """上面那条的**范围形状**：两侧不是「一大一小」，而是两个不相交的谓词。
+
+    ``consumer`` 是 ``user_id = 本人``（无站点谓词）；``operator`` 是
+    ``site_id ∈ 运营商站点集合``（无 ``user_id`` 谓词）。同一张本人下单的单因此
+    落在一侧之内、另一侧之外 —— 这正是产品看到的「矛盾」的机制。
+    """
+    sessions = _session_for_both_entries(monkeypatch)
+
+    consumer_scope = resolve_query_scope(sessions["consumer"])
+    operator_scope = resolve_query_scope(sessions["operator"])
+
+    assert consumer_scope == QueryScope(tenant_id=TENANT, site_ids=None, user_id=C_USER_ID)
+    assert operator_scope == QueryScope(tenant_id=TENANT, site_ids=(SITE_IN,), user_id=None)
+    assert consumer_scope != operator_scope
+
+
+def test_an_own_order_inside_the_operator_site_set_is_still_visible(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """对照：本人下的单若**站点恰好在**运营商集合内，管家身份下照常可见。
+
+    没有这一条，一个「管家端把本人订单一律拒掉」的实现也能让上面那条全绿 ——
+    被判不可见的成因就成了「本人」而不是「站点不在集合内」，与口径不是一回事。
+    """
+    sessions = _session_for_both_entries(monkeypatch)
+    authorizer = build_authorizer(monkeypatch, Connection())
+    own_in = next(row for row in Connection().orders if row["order_no"] == ORDER_OWN_IN)
+    assert own_in["user_id"] == C_USER_ID and own_in["site_id"] == SITE_IN
+
+    assert authorizer.can_access(sessions["consumer"], ORDER_OWN_IN) is True
+    assert authorizer.can_access(sessions["operator"], ORDER_OWN_IN) is True
+    assert sessions["operator"].data_scope.type == SCOPE_TYPE_ORGAN
+
+
+def test_the_operator_entry_is_not_a_union_of_sites_and_own_orders(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """端到端：管家端**入口**对本人下单的单也是 404 —— 并集会让它变成 202。
+
+    上一条断言的是授权判定的布尔结论；这一条走前端真实路径（``shortcut_code``），
+    让「把范围改成 运营商站点 ∪ 本人」这种退化在 HTTP 层就转红。
+    """
+    caller = Caller(
+        resolve_session(
+            monkeypatch,
+            records=(b_subject(),),
+            operator_scope=OperatorScope(sites={"SHOP-1": (SITE_IN,)}),
+            platform_entry="operator",
+        )
+    )
+    client, runtime = assistant_app(tmp_path, monkeypatch, caller, Connection())
+
+    resp = _click_order_diagnosis(client, ORDER_OUTSIDE)
+
+    assert resp.status_code == 404, resp.text
+    assert resp.json()["error"]["code"] == "ORDER_NOT_FOUND"
+    assert runtime.diagnoses == []

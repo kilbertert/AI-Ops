@@ -1,3 +1,61 @@
+## #638 管家端口径：「可见」不含本人作为消费者下的单 —— 写成契约 + 用例钉住（2026-10-09）
+
+**分支** `agent/issue-638-fix-operator`，基线 `origin/main` @ `8d627b0`。
+**无产品代码改动**：本票定的是**口径**，不是范围实现。
+
+### 一、结论（产品裁定，2026-10-09）
+
+管家端里，一个人「**自己作为消费者下的单**」**不应可见**。因此 `operator` 入口把
+会话的 `self` **替换**成运营商站点集合（PRD #423 的有意设计）**是对的**，
+「两种身份对同一张单给出相反答案」**不是缺陷，是既定语义**。
+
+⇒ **不改** `third_session_auth._data_scope` / `company_token_auth._data_scope`；
+本票的动作是把这个此前**没有任何地方写明**的口径写进契约，并给一条用例钉住。
+
+### 二、机制（三段，钉到行级）
+
+| 入口 | 范围来源 | 谓词 |
+|---|---|---|
+| `consumer` | `self` = 本人下的单 | `user_id = 会话 C 端 userId` |
+| `operator` | 令牌里 B 端 `id` 的运营商站点集合 | `site_id ∈ 集合`（**替换** `self`，非并集） |
+
+两者**不相交**，不是「一大一小」。41 只读实测（#638 评论）的账号 `13928110252`：
+消费者身份下确有 1 张单，而它的运营商站点集合为空 ⇒ `operator` 入口一律拒。
+「订单是这个账号的」与「订单不属于当前账号」**两边都对**，因为它们说的是**同一个人的
+两种身份**。
+
+### 三、判据与用例（断言的是对外可观察行为）
+
+| 判据 | 结果 | 怎么证的 |
+|---|---|---|
+| 同一账号、同一张**自己下的**单：`consumer` 可见 / `operator` 不可见，且两者**不相等** | ✅ | `test_operator_negative_acceptance.py::test_the_same_account_gets_opposite_answers_for_its_own_order_across_entries` |
+| 两个身份解析出的范围形状**不相等**（`user_id=本人` vs `site_id ∈ 集合`） | ✅ | `...::test_the_two_identities_resolve_disjoint_ranges_for_the_same_order` |
+| 对照组：本人的单**站点在集合内**时，管家端照常可见 | ✅ | `...::test_an_own_order_inside_the_operator_site_set_is_still_visible` |
+| 端到端：管家端入口对集合外的本人订单是 `404`（并集会让它变 `202`） | ✅ | `...::test_the_operator_entry_is_not_a_union_of_sites_and_own_orders` |
+| **反例 A（变异验证）**：把 `operator` 分支改回 `self` | ✅ | 本片转红项含上述三条（见 qa-plan OP-ACCEPT-16） |
+| **反例 B（并集方向）**：把范围改成「运营商站点 ∪ 本人」 | ✅（用等价变异证） | 并集**无法**用现有 `DataScope` 表达，因此不能直接实跑；但对 `ORDER_OUTSIDE`（本人的、集合外的单）而言，并集与「回落到 `self`」**行为等价**（两者都放行它），而反例 A 的变异已让 `...::test_the_operator_entry_is_not_a_union_of_sites_and_own_orders` 转红 ⇒ 该守卫对并集方向同样成立 |
+
+### 四、契约落点（本票的主要交付物）
+
+- `docs/agents/frontend-operator-handoff.md` §4.1 —— 给前端/BFF 的口径表与两条边界；
+- `docs/agents/butler-session-contract.md` §5.1 —— 给排「管家端鉴权失败」的人；
+- `acceptance.feature` 管家端 Feature 下补 2 个场景（相反答案 + 对照组）；
+- `qa-plan.md` OP-ACCEPT-13..16（含变异验证）。
+
+**为什么必须写下来**：本轮排查把它当成 bug 绕了半天 —— 因为这条语义此前只活在实现里，
+而用户看到的是一句「这个订单不属于当前账号」，它没说是**在哪种身份下**说的。
+文案那一半是 **#637**，订单选择器展示全租户订单那一半是 **#639**。
+
+### 五、证据边界（据实）
+
+- 上游事实（账号的店铺绑定、消费者订单、两种身份的范围）来自 #638 评论的 **41 只读实测**，
+  本票**未重跑**（不新增生产查询）；
+- 本票的用例全部是**离线**的：替身 + 真实授权判定 + 真实范围下推，
+  **不是**一次真实管家端登录（该链路的真实会话仍不可得，见
+  `docs/agents/butler-session-contract.md` §3）；
+- 本改动**不改变 Gateway 的对外行为**（无路由/鉴权/注册/响应形状改动），因此按
+  `AGENTS.md` 未跑 `verify-aiops-gateway`；且该 skill 也不覆盖依赖真实 MySQL 的订单授权路径。
+
 ## #587 阶段 1 第三跳收口：`canary-media-0911` 的 embedding 修复（2026-10-09，41/36 真机）
 
 **分支** `docs/kb-embedding-fix-evidence`，基线 `origin/main` @ `6c7727f`。
