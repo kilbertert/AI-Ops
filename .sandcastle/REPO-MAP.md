@@ -31,7 +31,7 @@ accurate at the moment it is generated and at the moment the commit lands.
 
 ## Tests
 
-- tests/ — 124 test file(s, recursive)
+- tests/ — 125 test file(s, recursive)
 - script "cd:watch:test": node .sandcastle/cd-watch.test.mjs
 - pytest (pyproject.toml / pytest.ini present)
 
@@ -127,9 +127,7 @@ ops/
   environments/
     env-41.toml
   aiops-tdengine-readonly-proxy.service
+  dify-exposure-registry.md
   README.md
-packaging/
-  aiops.spec
-  build_portable.py
 ... (truncated — list the rest with `ls`/`find`)
 ```
