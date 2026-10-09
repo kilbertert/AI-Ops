@@ -2034,3 +2034,69 @@ Feature: Dify 知识检索适配路由（External Knowledge API）
       When Dify 请求适配路由
       Then 返回 502 且响应体不含 records
       And 不返回 200 的空 records
+
+Feature: Dify DSL 拉取与草稿映射（#580）
+  运营在 Dify 控制台里编排智能体，我们侧按发布动作主动拉取它的导出 DSL，映射成
+  我们运行时的智能体配置，落成**草稿**——发布门留在我们这边（PRD #577）。
+
+  Rule: 拉回来的先落草稿，不直接上线
+
+    Scenario: 拉取成功落成草稿
+      Given 一份从 Dify 控制台导出端点取回的真实 DSL
+      When 按运营动作拉取并映射
+      Then 得到一个草稿态的智能体且没有已发布版本
+      And 该草稿可编辑、乐观并发不被绕过
+
+    Scenario: 提示词与模型是拉取的全部理由
+      Given 该 DSL 带有非空提示词与模型名
+      When 映射为我们的智能体配置
+      Then 提示词与模型名确实进入了草稿
+      And 只拿到参数不算成功
+
+  Rule: 开场白与预设问题不由 DSL 决定
+
+    Scenario: 不消费 DSL 的开场白与预设问题
+      Given 该 DSL 带有非空的开场白与预设问题
+      When 映射为我们的智能体配置
+      Then 草稿的开场白与快捷指令为空
+      And 它们由按语言版本化的内容制品提供
+
+  Rule: 字段缺失、超集与非法值都有明确行为
+
+    Scenario: DSL 缺少提示词
+      Given 一份未填写提示词的 DSL
+      When 映射为我们的智能体配置
+      Then 明确失败且不落任何草稿
+
+    Scenario: DSL 含我们没有的字段
+      Given 一份含有未知新增字段的 DSL
+      When 映射为我们的智能体配置
+      Then 结果与不含该字段时逐字段相同
+      And 该字段不进入草稿
+
+    Scenario: DSL 的值非法
+      Given 数据集绑定存在但读不出，或 DSL 版本不在支持范围
+      When 映射为我们的智能体配置
+      Then 明确失败并给出可区分的错误码
+      And 非法值不被静默吞掉
+
+  Rule: 拉取失败有单一明确信号且不留半成品
+
+    Scenario: Dify 不可达
+      Given Dify 实例不可达
+      When 按运营动作拉取
+      Then 失败信号表明是不可达
+      And 存储里没有任何草稿痕迹
+
+    Scenario: 凭据被拒
+      Given Dify 拒绝了受控凭据
+      When 按运营动作拉取
+      Then 失败信号表明是凭据被拒
+      And 与不可达是分开的两种信号
+      And 存储里没有任何草稿痕迹
+
+    Scenario: DSL 版本不兼容
+      Given 拉回的 DSL 版本超出支持范围
+      When 映射为我们的智能体配置
+      Then 失败信号表明是版本不兼容
+      And 不尝试猜测新版本的含义

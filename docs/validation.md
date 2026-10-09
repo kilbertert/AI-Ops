@@ -1,3 +1,145 @@
+## #580 Dify DSL 拉取与草稿映射（2026-10-08，离线）
+
+**分支** `feat/dify-dsl-pull-mapping`，基线 `origin/main` @ `94965f5`。
+**制品** `src/aiops_diagnostics/dify_dsl_pull.py` + `tests/test_dify_dsl_pull.py`。
+
+### 一、映射：用**真** DSL 固件驱动，不用手写样例
+
+固件 `tests/fixtures/dify-app-chat.dsl.yml` 是从 **36 上真实 Dify 实例的导出端点**
+拉出来的制品，不是按文档手写的样本（拉取手法与实例拓扑记在**姊妹票 #579** 的
+`deploy/dify-36/README.md`，该文件在 PR #601，尚未合入本分支；本票不重复记录，避免两处漂移）；
+同目录 `dify-app-chat-null-prompt.dsl.yml` 是它填提示词之前的形态。两条固件都进仓，
+因此映射测试离线可跑、不依赖在线 Dify。
+
+| 判据 | 结果 | 怎么证的 |
+|---|---|---|
+| 提示词确实进了草稿 | ✅ | 固件 `pre_prompt` 解出含 `小趋`，且含换行（PyYAML 把多行串还原为带 `\n` 的单串） |
+| 模型配置确实进了草稿 | ✅ | 固件 `model.name` = `deepseek-v4-flash` 落进 `AgentConfig.model` |
+| **开场白与预设问题不被消费** | ✅ | 固件里这两个字段**非空**（`欢迎使用充电服务助手…`、`充电桩无法启动怎么办？`），草稿里 `opening_questions`/`quick_commands` 均为空 |
+| 缺失值：DSL 无提示词 | ✅ 报错 | null-prompt 固件 → `DifyDslMalformed`，不落空草稿 |
+| 超集：DSL 有我们没有的字段 | ✅ 忽略 | 真固件本就是超集（`agent_mode`/`file_upload`/`user_input_form`…）；再插入一个不存在的未来字段，映射结果与插入前 **逐字段相同** |
+| 非法值：数据集绑定存在但读不出 | ✅ 报错 | 契约是「present 但不可读 = 报错」，不是「当成空」——静默丢绑定比拒绝映射更坏 |
+| 非法值：DSL 版本不匹配 | ✅ 报错 | `0.9.0` → `DifyDslVersionUnsupported`；`version: seven` / 无 version → `DifyDslMalformed` |
+| 非法值：坏 YAML、根不是对象、`kind` 非 `app`、无 `model_config` | ✅ 报错 | 各一条 |
+
+### 二、拉取客户端：三类失败各自一个信号，且不留半成品
+
+打的是 `bounded_http` 的传输边界（桩 `urlopen`，先例 `tests/test_gateway_client.py`）。
+
+| 场景 | 结果 |
+|---|---|
+| 正常导出 | ✅ 请求打在 `GET <base>/console/api/apps/<id>/export`，带 `Authorization: Bearer …` 与 `X-WORKSPACE-ID` |
+| Dify 不可达 | ✅ `DifyDslUnreachable` |
+| 凭据被拒（401） | ✅ `DifyDslAuthRejected`，**与不可达分开**（一个是配置问题，一个是网络问题） |
+| 信封里没有 DSL（空 `data` / 非 JSON） | ✅ `DifyDslMalformed` |
+| URL 带凭据/query/fragment、app_id 非法、无 key、超时越界 | ✅ 构造期 `ValueError`，**未发出任何请求** |
+
+**「不产生半成品草稿」的判据**：拉取失败后 `manager.list(ctx) == []`（无任何写入痕迹）。
+覆盖两条路径——映射失败（null-prompt 固件）与传输失败（URLError）。
+
+### 三、生命周期
+
+- 落地为 `status='draft'`、`published_version is None`、无版本号（`version(ctx, id, 1)` 抛
+  `AgentNotFound`）——**没有**直接落成已发布版本。
+- 重复拉取同一配置 → revision 不变（无写入）；已发布后重复拉取 → fork 成草稿且
+  **已发布快照逐字不变**；改了提示词再拉 → 草稿更新，版本 1 的快照仍是旧提示词。
+
+### 四、证据边界（据实）
+
+- 全部为**离线自动化**验证：映射打真固件，客户端打桩 `urlopen`。**未**连在线 Dify 实例，
+  **未**连真实租户数据面；因此**未完成业务验收**。
+- 未覆盖：把这条通路接到一个可触发的运营动作（CLI / 网关端点）——不在本票范围。
+- 已知真实风险（非本票缺陷）：Dify chat 前端整体替换 `dataset_configs`，在表单里改一次会
+  丢掉 `datasets` 子树；再拉取时映射如实报「无知识库绑定」。
+
+## #566 模型侧回答面语言端到端实测（2026-10-08，41 生产）
+
+**分支** `test/model-surface-language-verification`，基线 `origin/main` @ `df3659a`。
+**工具** `.claude/skills/verify-aiops-client-e2e/scripts/verify_model_surface_language.py`（本票新增，可复跑）。
+**判据**：`completed` 且（中文语言 ∨ 服务端合成散文零汉字残留）⇒ PASS；
+**其余一律 UNVERIFIED，不记通过** —— 这是本票最重要的一条纪律，下面有真实的例子。
+
+### 结论：**一面 6/6 通过，两面受阻于 provider 余额，第三面未跑**
+
+| 面 | 结果 | 说明 |
+|---|---|---|
+| **健康报告** | ✅ **6/6 PASS** | zh / zh-Hant / en / vi / th / km 各一次真实作业，全部 `completed` |
+| **统一助手 QA** | ⛔ **UNVERIFIED ×2**（zh, en） | 作业 `failed`，provider 403 余额不足 |
+| **单问诊断** | ⛔ **UNVERIFIED ×1**（en） | 同上 |
+| 宣传卡片 | 未跑 | 需 KB 与宣传资料库存，且同受余额阻塞 |
+
+### 一、健康报告面：六语含三门前所未验的语言
+
+同会话、同订单、六门语言各建一次作业。**服务端合成的 `summary` 六语全部正确**，
+`rule_version` = `health-v2`：
+
+```
+zh       本次充电健康报告有 1 项指标需关注
+zh-Hant  本次充電健康報告有 1 項指標需關注
+en       This charging health report has 1 indicator that needs attention
+vi       Báo cáo sức khỏe sạc này có 1 chỉ số cần lưu ý
+th       รายงานสุขภาพการชาร์จนี้มีตัวชี้วัดที่ต้องเฝ้าระวัง 1 รายการ
+km       របាយការណ៍សុខភាពសាកថ្មនេះមានសូចនាករត្រូវយកចិត្តទុកដាក់ 1
+```
+
+**这是本轮唯一的模型侧真实通过证据**，且是本项目**第一次**在 `vi`/`th`/`km` 上拿到
+健康报告面的实测结果（此前 `health_report_jobs` 在生产是 **0 行** —— 本轮的六条是它的首批数据）。
+
+**⚠️ 但同一份报告里有一处泄漏，已单开缺陷票 #599**：`indicators[0].value` 在**六门语言下
+都是** `拔出断电`（上游 `stopped_reason_content` 逐字透传）。服务端合成的那一段是对的，
+漏的是上游原值那一段。本脚本把指标 `value` 的汉字残留**单列**出来、不并入上面的 PASS 判定 ——
+否则一个真实缺陷会变成把「服务端文案是否本地化」这个问题的答案一并淹没。
+
+### 二、QA 与诊断：受阻，**不是失败**
+
+七次尝试（QA zh/en 各两次、诊断 en 一次）全部 `failed`，`error_message` 逐字相同：
+
+```
+Codex turn … failed: unexpected status 403 Forbidden: [sk-x4CF**********86yU]
+预扣费额度失败, 用户剩余额度: ¥0.001780, 需要预扣费额度: ¥0.032610
+url: http://127.0.0.1:8799/responses
+```
+
+⇒ **provider 账户余额耗尽**（`AIOPS_PROVIDERS=baoyun`，经 41 本机 `127.0.0.1:8799` 中继）。
+**这一条必须记为「受阻 + 原因」，不得记为通过**（#566 acceptance criteria 明写）。
+
+另有一条**独立的、而非由余额引起的**干扰，本轮实测确认：
+**`AIOPS_GATEWAY_JEV_*` 指向的决策服务返回 404**（`decision service unavailable`，
+`routing decision unavailable: code=ROUTING_UNAVAILABLE error=JevUnavailable`）。
+它**不阻塞**请求 —— `classify_with_jev` 的契约是「拿不到决策就按没有决策继续」，
+日志里每次进内容路由都打一条。所以它不是本次 `failed` 的成因（成因是 403），
+但它会让路由提示长期失效，**属于该单独核的配置问题**。
+
+### 三、泰语/高棉语的边界：本轮**重新实测**，与既有记录吻合
+
+```
+th  http=200 type=clarification  'ช่องทางนี้ยังไม่รองรับการพิมพ์คำถามด้วยภาษานี้ กรุณาใช้คำถามลัดด้านล่าง'
+km  http=200 type=clarification  'ផ្លូវចូលនេះមិនទាន់គាំទ្រការសួរជាអក្សរដោយភាសានេះទេ សូមប្រើសំណួររហ័សខាងក្រោម'
+```
+
+即「可读不可问」：边界在匹配器**之前**，返回的是**该语言自己的**拒绝文案
+（不是中文兜底），HTTP 200 且 `type=clarification`、`missing_fields=["language"]`。
+`zh`/`en`/`vi` 同请求返回 `202 type=qa`（可达）。
+
+### 四、写入与对账（本票的 `--run` 会写，如实记）
+
+- **构造 app 会调 `recover_interrupted_jobs()`**：探测前后各对账一次三表在飞数，
+  **均为 0**，且网关进程 `ActiveEnterTimestamp` 全程停在 `17:20:33 CST`（早于本轮所有探测）
+  ⇒ **未重启服务，未把任何在飞作业标失败**。
+- **探测本身创建了真实作业**：6 条 `health_report_jobs`（**生产首批**）、
+  若干 `assistant_questions` / `standard_diagnoses`（均 `failed`，无有效产出）。
+- **凭据纪律**：脚本不打印服务令牌、Redis 口令、会话值与模型正文（`--show-copy` 才打印）；
+  本记录只引用语言与计数，**不含订单号、车牌、VIN、会话值**。
+
+### 五、验收口径（写进本记录，避免被误读）
+
+**可以说**：「健康报告面的**服务端合成文案**在 zh/zh-Hant/en/vi/th/km 六门上通过真实作业实测」。
+
+**不能说**：
+- 「模型侧 11 语言端到端已通过」—— 只有 1 个面、6 门语言，且 QA/诊断受阻；
+- 「健康报告面完全通过」—— 指标 `value` 有中文泄漏（#599）；
+- 「泰语/高棉语可以自由提问」—— 实测仍是明确拒绝。
+
 ## #590 公司端点直连实测：横幅个性化链路活口检查（2026-10-08）
 
 **分支** `chore/company-endpoint-live-check`，基线 `origin/main` @ `5cac228`。
@@ -8799,3 +8941,78 @@ consumer 的题面与答案**都是起草的**。代码只守结构，**不守�
 
 **结论的用法**：这份记录是给"下一步派活"用的清单，不是免责声明 ——
 不能对外声称"支持 11 语言"，只能说"**确定性文案支持 11 语言，模型侧有代码路径但未经真实模型验证**"。
+
+## #599 + #602 P0 指标 value 语言与 rule_version 收口（2026-10-08）
+
+**分支** `feat/health-report-contract-p0`，基线 `origin/main` @ `c3eab37`。
+
+### 一、中文残留是遗漏，形状是「整条链路没有过非中文停因文案」
+
+**全表实测**（41，`ch_order_info` **30,955 行**）：
+
+| 量 | 值 |
+|---|---|
+| `stopped_reason_content` 含中文 | **20,513（66.3%）** |
+| 其中非空且不含中文 | 576（1.9%） |
+| 空 | 9,866（31.9%） |
+
+按**分类分支**看（英文报告下，改前）：
+
+| 分支 | 行数 | 面向读者的 `value` 取的是 |
+|---|---|---|
+| `unknown_stop_reason` | 9,866（31.9%） | 我们的兜底（已本地化） |
+| `reported_stop_reason` | 7,259（23.5%） | **上游原句** |
+| `user_or_normal_stop` | 4,753（15.4%） | **上游原句** |
+| `package_exhausted` | 2,817（9.1%） | **上游原句** |
+| `communication_or_power_loss` | 2,295（7.4%） | **上游原句** |
+| `normal_stop` | 1,713（5.5%） | 上游原句（实测该分支全部回显） |
+| 其余（manual_stop 等） | 2,252（7.3%） | 多为**上游原句** |
+
+⇒ **改前 en 下 `description` 含中文的行数：18,444（59.6%）**。
+
+**关键否证**：把 `value` 从「上游原句」改成「我们的 `stop.description`」**只降到同一量级**
+—— 因为 59.6% 里绝大多数行本来就归在「原文回显」那一支，`description` 本身就是原句。
+**所以这不是「换一个字段」能解决的，是缺一整句本地化文案。**
+
+### 二、修法：`value` 与上游原句拆成两个字段（用户 2026-10-08 拍板）
+
+```json
+{ "code": "stop_reason", "status": "abnormal",
+  "value": "The charger reported a stop reason",   ← 我们的文案，跟随报告语言
+  "reported_value": "拔出断电",                     ← 上游原句，逐字保留
+  "reported_language": null }
+```
+
+- 补齐 **7 个缺的兜底键 × 11 语言**（`user_or_normal_stop` / `communication_or_power_loss` /
+  `normal_stop` / `device_or_vehicle_fault` / `over_temperature` / `power_loss` /
+  `balance_insufficient`）—— 这些分类以前**没有兜底文案**（34/41 处直接回显原句）；
+- `reported_stop_reason` 新增中性文案：这一支只知道「上游说了点什么」，**不去描述它**；
+- **YKC 已知码优先用我们的表**（原句不再覆盖它）；
+- 11 语言复制表逐条查汉字：**0**。
+
+### 三、验证（实测，不是推断）
+
+把新代码对**全表 30,955 单**跑一遍：
+
+```
+en     rows whose DESCRIPTION leaks Chinese:      0 / 30955     （改前 18,444）
+vi     rows whose DESCRIPTION leaks Chinese:      0 / 30955
+th     rows whose DESCRIPTION leaks Chinese:      0 / 30955
+km     rows whose DESCRIPTION leaks Chinese:      0 / 30955
+```
+
+（在 41 上以 `/tmp/newsrc` 挂载新 `src` 只读跑，未改动生产代码、未重启服务。）
+
+### 四、rule_version 收口（#602 P0 的一部分）
+
+实测六条已完成作业：**作业行 `health-v1`、报告体 `health-v2`** —— 同一响应两个值，
+且无测试比较过。已统一到 `health_metrics.RULE_VERSION` 单一来源，并加回归。
+
+### 五、边界（据实）
+
+- **未部署**：本 PR 未上 41；上面那次是**只读**跑新代码对生产数据，不是部署。
+- `reported_language` **恒为 `null`** —— 来源今天不声明语言，不去猜。
+- **停因分类覆盖未收敛**：`unknown_stop_reason` 31.9% + `reported_stop_reason` 23.5%
+  仍要靠运维/产品给映射表，且 `(proto, code)` 不足以自动恢复语义（96 组码里 25 组对应多种内容）。
+- **文案措辞待产品过目**：新增的 7 条兜底与 1 条 `reported_stop_reason` 是工程起草的
+  中性表述，未被产品确认（同 #534 用户故事 20 的口径：未经确认的语言不算已验收）。
