@@ -1,3 +1,40 @@
+## #633 清理阶段 1 验收遗留物：停用 `canary-dify-pull`（2026-10-09，41 真机）
+
+**分支** `chore/dify-cleanup-canary`，基线 `origin/main` @ `d9c0573`。
+
+### 一、它是什么，为什么成了遗留物
+
+阶段 1（#587）跑第三跳与第五跳时，在租户 `1783022023241633792` 下发布了一个**从 Dify
+拉来**的版本（`canary-dify-pull` v2）。验证做完后它就成了**被选中**的版本：
+`select_customer_agent` 取「最新发布且带 KB 的 customer agent」，它比该租户原有的
+`canary-客服` v5 更新。
+
+### 二、处置：停用，不删除
+
+走 `AgentManager.disable`（生产路径，`expected_revision` 乐观并发）：
+
+```
+before: canary-dify-pull published rev 5 v 2
+after : canary-dify-pull disabled  v 2
+```
+
+**为什么不删**：停用已经让它退出选择，而保留行让"这个版本曾经存在过"留在审计里。
+`AgentManager` 本就没有 disabled→published 的路径（`fork_draft` 要求 published），
+删除与否对选择逻辑没有差别。
+
+### 三、判据核对
+
+| 判据（#633） | 结果 |
+|---|---|
+| 41 上该租户的选版结果**要么**回到「无被选中版本」，**要么**在文档里被显式标注为遗留物 | ✅ 两者都做到了：选版回到 `canary-客服` v5，且 `docs/agents/current-delivery-state.md` 显式标注 |
+| 线上租户 `1942105476598861824` 的选版结果**逐字不变** | ✅ 仍是 `canary-宣传案例` v3（对照，前后各取一次） |
+
+### 四、为什么它对真实用户始终不可见（据实）
+
+该租户**从未服务过任何作业**：`assistant_questions` 查该租户 **0 行**；
+`agent_run_metrics` 里它的 19 行中，16 行是本次验收自己产生的（2026-10-09 10:35–12:04），
+只有 3 行是 2026-09-12 的历史。线上流量全在 `1942105476598861824`（638 行）。
+
 ## #635 阶段 1 第五跳：回答正文的非中文由运行时派生（2026-10-09，41 真机 + 离线）
 
 **分支** `test/dify-lang-hop5`，基线 `origin/main` @ `b5469e8`。
