@@ -184,7 +184,7 @@ AI-Ops 用独立服务身份回查——见 [ADR-0003](docs/adr/0003-bff-delegat
 flowchart TB
     L6["L6 服务边界与入口<br/>gateway_api · gateway_runtime · cli · gateway_server · gateway_cli<br/>gateway_client · admin_cli · gateway_config · gateway_tokens<br/>tdengine_proxy · responses_adapter · codex_launcher"]
     L5["L5 持久化<br/>gateway_store · conversation_store · metrics_store<br/>agent_lifecycle · shortcut_lifecycle · dify_app_registry"]
-    L4["L4 推理与产品能力<br/>agent_engine · codex_runtime · agent_runner · agent_validator · qa_rag<br/>turn_recovery · routing · faq · promo_agents · answer_language · agent_manifest · agent_debug<br/>dify_dsl_pull · dify_knowledge_api"]
+    L4["L4 推理与产品能力<br/>agent_engine · codex_runtime · agent_runner · agent_validator · qa_rag<br/>turn_recovery · routing · faq · promo_agents · answer_language · agent_manifest · agent_debug<br/>dify_dsl_pull · dify_knowledge_api · dify_debug_identity"]
     L3["L3 证据与诊断内核<br/>sources · diagnostic_tools · engine · journal<br/>agent_workspace · health_report · knowledge_retrieval · zero_order"]
     L2["L2 身份与范围<br/>scope_context · query_scope · caller_auth · third_session_auth<br/>company_token_auth"]
     L1["L1 领域规则（纯函数）<br/>rules · order_visibility · health_metrics · health_curves · parsing"]
@@ -303,6 +303,7 @@ flowchart TB
 | `answer_language.py` | 回答面输出语言校验的**共享应用点**（挂到各回答面的定稿点） |
 | `agent_manifest.py` / `agent_debug.py` | 声明式环境清单收敛 / 草稿调试与真实知识绑定校验 |
 | `dify_knowledge_api.py` | 面向 Dify External Knowledge API 的知识检索适配（#581 / PRD #577）：请求/响应形状与 `records` 渲染。租户与知识库白名单由我们的登记表定，**不来自请求** |
+| `dify_debug_identity.py` | 面向 Dify 的**调试身份**（#586 / PRD #577）：**凭据决定身份**，请求里的任何字段都不参与判定。生产凭据 = 登记表全量；调试凭据 = 固定测试租户 + 显式列出的知识库子集。身份只**收窄**，从不扩张；子集为空即**什么都取不到**（不是『不收窄』）；越权与未登记同为 404 |
 | `dify_dsl_pull.py` | Dify 侧配置的**拉取**面（#580 / PRD #577）：从控制台导出端点取已导出 DSL，映射为 `AgentConfig` 并以**草稿**落地（经 `AgentManager`，绝不发布）。只消费 `pre_prompt` / `model.name` / `dataset_configs` 数据集 id；`opening_statement` 与 `suggested_questions` **不消费**（其权威来源是按语言版本化的内容制品，见姊妹票 #585）。拉取失败（不可达 / 凭据被拒 / DSL 版本不符 / 字段不可映射）各自一个错误码，且**不留下半成品草稿** |
 | `shortcut_migration.py` | 租户复制快捷动作 → 平台默认的幂等迁移 |
 

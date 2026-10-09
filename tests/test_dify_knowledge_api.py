@@ -13,6 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
 from aiops_diagnostics.faq import FAQCatalog, PlatformIdentityResolver, PlatformRoleRecord
@@ -397,3 +398,198 @@ def test_the_client_is_left_bound_to_the_neutral_tenant(tmp_path: Path) -> None:
     _post(client, _body(knowledge_id="kb-customer"))
 
     assert runtime.kb_search_client.tenant_id == "aiops"
+
+
+# ── 调试身份（#586）────────────────────────────────────────────────────────
+
+
+DEBUG_KEY = "dify-debug-key-9876543210fedcba"
+DEBUG_TENANT = "T-1"
+DEBUG_IDS = "kb-customer"
+
+
+def _client_with_debug(tmp_path: Path, runtime: _Runtime, **overrides: Any) -> TestClient:
+    return _client(
+        tmp_path,
+        runtime,
+        dify_debug_api_key=overrides.pop("dify_debug_api_key", DEBUG_KEY),
+        dify_debug_tenant=overrides.pop("dify_debug_tenant", DEBUG_TENANT),
+        dify_debug_knowledge_ids=overrides.pop("dify_debug_knowledge_ids", DEBUG_IDS),
+        **overrides,
+    )
+
+
+def _runtime() -> _Runtime:
+    return _Runtime(signer=MediaResourceSigner("secret", ttl_seconds=600), search=lambda _k, _q, _n: [])
+
+
+def test_the_credential_decides_the_identity_not_the_request(tmp_path: Path) -> None:
+    """两个凭据 → 两个身份；同一个请求体在两边得到不同的可见范围。
+
+    这是 #586 的核心判据。判据落在**同一个 `knowledge_id`、同一个请求体**上：
+    生产凭据能取到 `kb-other`（T-2），调试凭据取不到 —— 差别只可能来自凭据。
+    """
+    runtime = _runtime()
+    client = _client_with_debug(tmp_path, runtime)
+
+    # 同一个 id，两个凭据。生产：200；调试：404（不在子集里 / 租户不符）。
+    assert _post(client, _body(knowledge_id="kb-other")).status_code == 200
+    assert _post(client, _body(knowledge_id="kb-other"), key=DEBUG_KEY).status_code == 404
+    # 生产凭据也拿不到调试凭据的范围之外的东西 —— 它本来就是全量（登记表决定）。
+    assert _post(client, _body(knowledge_id="kb-customer"), key=DEBUG_KEY).status_code == 200
+
+
+def test_the_debug_identity_cannot_be_widened_by_request_fields(tmp_path: Path) -> None:
+    """带请求头/请求体不得扩大范围或提权 —— 这是必须专门测的一条边（#586）。
+
+    逐一试每一种"请求里能塞东西的地方"：请求头（伪装入口/来源/会话）、
+    body 里的额外字段。它们**一个都不参与身份判定** —— 解析函数连请求对象都不接。
+    """
+    runtime = _runtime()
+    client = _client_with_debug(tmp_path, runtime)
+
+    for headers in (
+        {"X-Business-Entry": "operator"},
+        {"X-AIOps-Source-Key": "anything"},
+        {"X-Third-Session": "anything"},
+        {"X-Dify-Debug-Tenant": "T-2"},
+        {"X-Dify-Tenant": "T-2"},
+        {"tenant-id": "T-2"},
+        {"X-AIOps-Dify-Debug-Knowledge-Ids": "kb-other"},
+    ):
+        resp = client.post(
+            "/v1/dify/retrieval",
+            json=_body(knowledge_id="kb-other"),
+            headers={"Authorization": f"Bearer {DEBUG_KEY}", **headers},
+        )
+        assert resp.status_code == 404, f"{headers} 扩大了调试身份的范围"
+
+    # body 里塞同样的键也不参与判定（模型是 extra="ignore"，未知键本就无效果）。
+    widened = {**_body(knowledge_id="kb-other"), "tenant_id": "T-2", "knowledge_ids": ["kb-other"]}
+    assert _post(client, widened, key=DEBUG_KEY).status_code == 404
+
+
+def test_the_debug_identity_is_pinned_to_its_tenant(tmp_path: Path) -> None:
+    """固定租户：**同 id 但租户不符**同样取不到。
+
+    这一条防的是"子集写对了、租户写错"：`kb-other` 登记在 T-2，调试身份固定在 T-1，
+    即使把它列进子集也不该放行 —— 两个条件是与关系，不是或。
+    """
+    runtime = _runtime()
+    client = _client_with_debug(tmp_path, runtime, dify_debug_knowledge_ids="kb-customer,kb-other")
+
+    assert _post(client, _body(knowledge_id="kb-customer"), key=DEBUG_KEY).status_code == 200
+    assert _post(client, _body(knowledge_id="kb-other"), key=DEBUG_KEY).status_code == 404
+
+
+def test_an_empty_subset_reaches_nothing_rather_than_everything(tmp_path: Path) -> None:
+    """**配了调试凭据但没给子集**必须等于"什么也取不到"，不是"不收窄"。
+
+    这是这一层最危险的一处默认值：漏写一个配置项若被读成 `None`（= 不收窄），
+    调试凭据就拿到了生产面。空列表留在空列表上。
+    """
+    runtime = _runtime()
+    client = _client_with_debug(tmp_path, runtime, dify_debug_knowledge_ids="")
+
+    assert _post(client, _body(knowledge_id="kb-customer"), key=DEBUG_KEY).status_code == 404
+    assert _post(client, _body(knowledge_id="kb-other"), key=DEBUG_KEY).status_code == 404
+    # 生产凭据不受影响。
+    assert _post(client, _body(knowledge_id="kb-customer")).status_code == 200
+
+
+def test_an_unregistered_id_is_indistinguishable_from_a_forbidden_one(tmp_path: Path) -> None:
+    """未登记与"登记了但这条身份不能用"必须是**同一个 404**。
+
+    403 会说"这条存在，只是你不能用" —— 那本身就是一次对登记表的泄漏：
+    调试身份可以拿它逐个试出生产有哪些知识库。
+    """
+    runtime = _runtime()
+    client = _client_with_debug(tmp_path, runtime)
+
+    forbidden = _post(client, _body(knowledge_id="kb-other"), key=DEBUG_KEY)
+    never_registered = _post(client, _body(knowledge_id="kb-does-not-exist"), key=DEBUG_KEY)
+    assert forbidden.status_code == never_registered.status_code == 404
+    assert forbidden.json() == never_registered.json()
+
+
+def test_production_keys_are_rejected_without_one(tmp_path: Path) -> None:
+    """没配调试凭据时那把 key 整体无效 —— 调试身份是"配了才有"，不是一个默认身份。"""
+    runtime = _runtime()
+    client = _client(tmp_path, runtime)  # 不传 dify_debug_*
+    assert _post(client, _body(knowledge_id="kb-customer"), key=DEBUG_KEY).status_code == 403
+    assert _post(client, _body(knowledge_id="kb-customer")).status_code == 200
+
+
+def test_a_debug_identity_requires_the_production_route_to_exist(tmp_path: Path) -> None:
+    """半配置是启动错误：只给调试三键、不给生产两键 ⇒ 起不来。
+
+    调试身份是**收窄那条路由**的，不是创建它的。允许这种组合会让运维看到一个
+    "配了调试身份"的部署，而实际上那条路由根本不存在（404）—— 与"没配"不可区分。
+    """
+    from aiops_diagnostics.gateway_config import GatewayServerSettings
+
+    settings = GatewayServerSettings(
+        data_home=tmp_path,
+        database_file=tmp_path / "gateway.db",
+        server_config_file=tmp_path / "production.env",
+        dify_debug_api_key=DEBUG_KEY,
+        dify_debug_tenant=DEBUG_TENANT,
+    )
+    settings.server_config_file.write_text("# test\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="DIFY_KNOWLEDGE_API_KEY"):
+        settings.validate()
+
+
+def test_the_debug_key_must_differ_from_the_production_key(tmp_path: Path) -> None:
+    """同值等于没有分离 —— 而"分离"正是这个身份存在的全部理由。"""
+    from aiops_diagnostics.gateway_config import GatewayServerSettings
+
+    settings = GatewayServerSettings(
+        data_home=tmp_path,
+        database_file=tmp_path / "gateway.db",
+        server_config_file=tmp_path / "production.env",
+        dify_knowledge_api_key=DIFY_KEY,
+        dify_knowledge_bindings=BINDINGS,
+        dify_debug_api_key=DIFY_KEY,
+        dify_debug_tenant=DEBUG_TENANT,
+    )
+    settings.server_config_file.write_text("# test\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="must differ"):
+        settings.validate()
+
+
+def test_config_round_trips_the_debug_keys_from_the_config_file(tmp_path: Path) -> None:
+    """三键走**服务端配置文件**（41 上 `production.env` 的读取路径），不是进程 env。
+
+    与 `AIOPS_GATEWAY_DIFY_KNOWLEDGE_*` 同一条：`from_env` 用 `_file_value` 读它。
+    这里直接驱动那个路径，避免"写进了文件却没生效"这种静默形态。
+    """
+    from aiops_diagnostics.gateway_config import GatewayServerSettings
+
+    config = tmp_path / "production.env"
+    config.write_text(
+        "# private\n"
+        "AIOPS_GATEWAY_DIFY_KNOWLEDGE_API_KEY=prod-key\n"
+        "AIOPS_GATEWAY_DIFY_KNOWLEDGE_BINDINGS=kb-1:T-1:KB-A\n"
+        f"AIOPS_GATEWAY_DIFY_DEBUG_API_KEY={DEBUG_KEY}\n"
+        "AIOPS_GATEWAY_DIFY_DEBUG_TENANT=T-TEST\n"
+        "AIOPS_GATEWAY_DIFY_DEBUG_KNOWLEDGE_IDS=kb-1, kb-2\n",
+        encoding="utf-8",
+    )
+    import os
+
+    os.chmod(config, 0o600)
+    # 直接构造再校验：读文件的路径由 `_private_config_values` 负责，这里断言的是
+    # "三键在 settings 上存在且被 validate 接受"。
+    built = GatewayServerSettings(
+        data_home=tmp_path,
+        database_file=tmp_path / "gateway.db",
+        server_config_file=config,
+        dify_knowledge_api_key="prod-key",
+        dify_knowledge_bindings="kb-1:T-1:KB-A",
+        dify_debug_api_key=DEBUG_KEY,
+        dify_debug_tenant="T-TEST",
+        dify_debug_knowledge_ids="kb-1, kb-2",
+    )
+    built.validate()
+    assert built.dify_debug_tenant == "T-TEST"

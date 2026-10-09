@@ -2177,3 +2177,55 @@ Feature: Dify 可达的公司系统面（登记表与可回归判据，#583）
       Then 每一个都不可达
       And 探针自检证明它自己是活的（同网络内必然可达的目标确实可达）
       And 探针自检不通过时结论记为未取证，而不是封锁成立
+
+Feature: 面向 Dify 的调试身份（#586）
+  运营在 Dify 的调试预览里要能打到公司数据，但不借生产凭据 —— 借了就等于把调试面
+  和生产面焊死。所以有一条专用身份：**凭据决定身份**，请求里的任何字段都不参与。
+
+  Rule: 身份由凭据决定，不由请求决定
+
+    Scenario: 同一个 knowledge_id、同一个请求体，两个凭据两种可见范围
+      Given 一把生产凭据与一把与它分离的调试凭据
+      When 用生产凭据请求一个登记在别的租户的 knowledge_id
+      Then 取得到
+      When 用调试凭据请求同一个 knowledge_id
+      Then 取不到
+
+    Scenario: 请求头与请求体都扩大不了调试身份的范围
+      Given 一把调试凭据
+      When 带上入口/来源密钥/会话头，或 body 里塞租户与子集字段
+      Then 范围不变
+      And 每一个都仍取不到子集之外的 knowledge_id
+
+  Rule: 调试身份只收窄，且不给探测者任何信息
+
+    Scenario: 固定测试租户不可改写
+      Given 一个登记在别的租户的 knowledge_id 被写进了子集
+      When 用调试凭据请求它
+      Then 仍然取不到
+      And 租户与子集是与关系，不是或
+
+    Scenario: 空子集等于什么都取不到
+      Given 配了调试凭据但子集为空
+      When 用调试凭据请求任何一个 knowledge_id
+      Then 全部取不到
+      And 这不是「不收窄」
+
+    Scenario: 越权与未登记同形
+      Given 一个已登记但这条身份不能用的 knowledge_id
+      When 用调试凭据请求它
+      Then 与请求一个从未登记的 id 得到逐字相同的响应
+
+  Rule: 半配置是启动错误
+
+    Scenario: 调试身份的两半必须成对
+      Given 只给调试凭据不给固定租户，或反之
+      Then 服务拒绝启动
+
+    Scenario: 调试凭据必须与生产凭据分离
+      Given 两把凭据取同一个值
+      Then 服务拒绝启动
+
+    Scenario: 调试身份不创建那条路由
+      Given 给了调试三键但生产两键没配
+      Then 服务拒绝启动

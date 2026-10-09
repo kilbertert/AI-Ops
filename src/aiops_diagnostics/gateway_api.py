@@ -54,6 +54,11 @@ from aiops_diagnostics.conversation_store import (
     ConversationError,
     ConversationStore,
 )
+from aiops_diagnostics.dify_debug_identity import (
+    PRODUCTION_IDENTITY,
+    DifyIdentity,
+    debug_dify_identity,
+)
 from aiops_diagnostics.dify_knowledge_api import (
     DIFY_RETRIEVAL_PATH,
     DifyRequestError,
@@ -678,8 +683,8 @@ def create_gateway_app(
 
     def dify_shared_credential(
         authorization: Annotated[str | None, Header()] = None,
-    ) -> None:
-        """The Dify adapter's own door (#581).
+    ) -> DifyIdentity:
+        """The Dify adapter's own door (#581) — which identity it is, is the credential (#586).
 
         Deliberately NOT the caller chain, and deliberately not named
         ``authenticated_*``: Dify is a server, not one of our users. It has no
@@ -687,6 +692,14 @@ def create_gateway_app(
         offer. The credential is the shared API key the operator configures on
         both sides — the same shape as Dify's own External Knowledge API, where
         the "API Key" is exactly this string.
+
+        **The credential decides the identity, and nothing else does.** That is
+        the whole of #586: a *debug* key resolves to the fixed debug tenant and
+        the read-only tool subset, so the operator can preview an app against
+        real data without ever holding a production credential. Every other
+        signal a request can carry — headers, query strings, the body — is
+        ignored on purpose, and ``plans_for`` takes no request-derived argument
+        for that reason.
 
         Unconfigured means the route is **not enabled at all** (404, see the
         route below), never "no key needed". Half-configuration is a startup
@@ -699,28 +712,33 @@ def create_gateway_app(
             raise StandardAPIError(
                 status.HTTP_401_UNAUTHORIZED, "DIFY_CREDENTIAL_REQUIRED", "bearer credential required"
             )
-        # Byte comparison, no normalization, same rule as `source_key_accepted`:
-        # the key is a fixed random string this side generated, and any
-        # "lenient compare" would only shorten its effective space.
-        if not secrets.compare_digest(
-            configured.encode("utf-8"), authorization.removeprefix("Bearer ").strip().encode("utf-8")
-        ):
-            raise StandardAPIError(
-                status.HTTP_403_FORBIDDEN, "DIFY_CREDENTIAL_REJECTED", "credential rejected"
-            )
+        presented = authorization.removeprefix("Bearer ").strip()
+        # Which slot did it match? Both comparisons are constant-time and both
+        # run, so which one matched is not observable from timing.
+        matches_production = secrets.compare_digest(configured.encode("utf-8"), presented.encode("utf-8"))
+        matches_debug = bool(context.settings.dify_debug_api_key) and secrets.compare_digest(
+            context.settings.dify_debug_api_key.encode("utf-8"), presented.encode("utf-8")
+        )
+        if matches_debug:
+            return debug_dify_identity(context.settings)
+        if matches_production:
+            return PRODUCTION_IDENTITY
+        raise StandardAPIError(status.HTTP_403_FORBIDDEN, "DIFY_CREDENTIAL_REJECTED", "credential rejected")
 
     @app.post(DIFY_RETRIEVAL_PATH)
     def dify_retrieval(
         payload: dict[str, Any],
-        _credential: None = Depends(dify_shared_credential),  # noqa: B008
+        identity: DifyIdentity = Depends(dify_shared_credential),  # noqa: B008
     ) -> dict[str, Any]:
         """The External Knowledge API hop Dify calls (PRD #577 挂接跳数).
 
         Everything the answer depends on already happened above this line:
-        the credential was checked, and the tenant plus the knowledge-base
-        allow-list are read from **our** registry keyed by ``knowledge_id``.
-        Nothing in the request body can widen either — that is what makes this
-        an adapter rather than a proxy.
+        the credential was checked (and it, not the request, decided *which*
+        identity this is), and the tenant plus the knowledge-base allow-list are
+        read from **our** registry keyed by ``knowledge_id``. Nothing in the
+        request body can widen either — that is what makes this an adapter
+        rather than a proxy. The debug identity narrows one step further: only
+        the knowledge ids its tool plan names are reachable through it.
         """
         bindings = parse_dify_knowledge_bindings(context.settings.dify_knowledge_bindings)
         try:
@@ -734,6 +752,15 @@ def create_gateway_app(
         if binding is None:
             # A knowledge_id we never registered. 404 says "not here" and
             # reveals nothing about which ids exist, or about our data plane.
+            raise StandardAPIError(
+                status.HTTP_404_NOT_FOUND, "DIFY_KNOWLEDGE_NOT_FOUND", "knowledge source not found"
+            )
+        if not identity.allows(request.knowledge_id, binding.tenant_id):
+            # Registered, but not for THIS identity (#586). Deliberately the same
+            # 404 as "never registered": a 403 here would say "this one exists and
+            # you may not use it", which is itself a disclosure about the registry.
+            # The debug identity can therefore probe for production knowledge ids
+            # and learn nothing.
             raise StandardAPIError(
                 status.HTTP_404_NOT_FOUND, "DIFY_KNOWLEDGE_NOT_FOUND", "knowledge source not found"
             )
