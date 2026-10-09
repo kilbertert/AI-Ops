@@ -7,6 +7,19 @@ KB-liveness-checked code path the HTTP API uses — with a synthetic admin
 scope context. This replaces on-box sqlite surgery for environments whose
 UPMS does not carry the ROLE_AGENT_ADMIN role family yet.
 
+The same file carries a second, narrower section (``[[dify_apps]]``) that
+converges the **runtime registry**: which Dify app serves a ``(tenant,
+business entry)``. It is the same idea — desired state declared here, converged
+by one reviewed command — but the two halves have different authorities and the
+manifest states them apart rather than blurring them:
+
+* ``[[agents]]`` is the **publish** authority for the pre-Dify path: an agent
+  exists, is published, and is versioned because this file says so.
+* ``[[dify_apps]]`` is a **runtime registry**, not a publish authority. It
+  publishes nothing and versions nothing; it records the mapping the runtime
+  reads to decide which app a tenant's question belongs to. An agent pulled from
+  Dify is still published by our own publish action, never by this file.
+
 The reconcile is idempotent: a second run against an unchanged manifest
 reports every agent ``unchanged`` and writes nothing.
 """
@@ -21,6 +34,12 @@ from typing import Any, Literal
 from aiops_diagnostics.agent_lifecycle import (
     AgentConfig,
     AgentManager,
+)
+from aiops_diagnostics.dify_app_registry import (
+    DifyAppBinding,
+    DifyAppRegistry,
+    DifyAppRegistryError,
+    validate_bindings,
 )
 
 # Only the fields AgentManager.create/publish need; output_contract defaults
@@ -41,6 +60,7 @@ class ManifestAgent:
 @dataclass(frozen=True, slots=True)
 class EnvironmentManifest:
     agents: tuple[ManifestAgent, ...]
+    dify_apps: tuple[DifyAppBinding, ...] = ()
 
 
 ReconcileAction = Literal[
@@ -65,6 +85,18 @@ class ReconcileReport:
     note: str = ""
 
 
+DifyRegistryAction = Literal["registered", "unchanged", "removed"]
+
+
+@dataclass(frozen=True, slots=True)
+class DifyRegistryReport:
+    tenant_id: str
+    business_entry: str
+    app_id: str
+    action: DifyRegistryAction
+    note: str = ""
+
+
 class ManifestError(ValueError):
     """The manifest cannot be turned into valid AgentConfig objects."""
 
@@ -79,7 +111,57 @@ def load_manifest(path: Path) -> EnvironmentManifest:
             agents.append(_manifest_agent(entry))
         except (KeyError, TypeError, ValueError) as exc:
             raise ManifestError(f"agents[{index}]: {exc}") from exc
-    return EnvironmentManifest(agents=tuple(agents))
+    bindings: list[DifyAppBinding] = []
+    for index, entry in enumerate(data.get("dify_apps", [])):
+        try:
+            bindings.append(_manifest_dify_app(entry))
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ManifestError(f"dify_apps[{index}]: {exc}") from exc
+    try:
+        validated = validate_bindings(bindings)
+    except DifyAppRegistryError as exc:
+        raise ManifestError(str(exc)) from exc
+    _require_bound_agents_declared(tuple(agents), validated)
+    return EnvironmentManifest(agents=tuple(agents), dify_apps=validated)
+
+
+def _require_bound_agents_declared(
+    agents: tuple[ManifestAgent, ...], bindings: tuple[DifyAppBinding, ...]
+) -> None:
+    """A binding must name an agent this manifest actually declares.
+
+    Checked at load, not at converge, for the same reason the model allow-list
+    is: the registry row and the agent it points at are one fact, and a fact
+    that is half-wrong must fail before the store has been written rather than
+    after. A binding naming an agent nobody publishes would otherwise be stored
+    happily and then silently select nothing at runtime — the failure this
+    registry exists to make impossible.
+    """
+    declared = {(agent.tenant_id, agent.name) for agent in agents}
+    unknown = sorted(
+        f"{binding.tenant_id}/{binding.business_entry} → {binding.agent_name}"
+        for binding in bindings
+        if (binding.tenant_id, binding.agent_name) not in declared
+    )
+    if unknown:
+        raise ManifestError(
+            "dify_apps 绑定的 agent_name 未在 [[agents]] 中声明（同一租户内）: " + "; ".join(unknown)
+        )
+
+
+def _manifest_dify_app(entry: dict[str, Any]) -> DifyAppBinding:
+    """One registry row. Every field is required and none is derived.
+
+    ``agent_name`` in particular is not defaulted to the app id or the tenant's
+    only agent: the whole point of this registry is that the runtime is told
+    which agent serves an entry, instead of working it out.
+    """
+    return DifyAppBinding(
+        tenant_id=str(entry["tenant_id"]),
+        business_entry=str(entry["business_entry"]),
+        app_id=str(entry["app_id"]),
+        agent_name=str(entry["agent_name"]),
+    )
 
 
 def _manifest_agent(entry: dict[str, Any]) -> ManifestAgent:
@@ -113,10 +195,12 @@ def reconcile(
     prune: bool = False,
     dry_run: bool = False,
 ) -> list[ReconcileReport]:
-    """Converge the manager's store toward the manifest; idempotent.
+    """Converge the manager's store toward the ``[[agents]]`` half; idempotent.
 
-    All structural and model preflight checks run before the first write,
-    so an invalid manifest leaves the store untouched.
+    All structural and model preflight checks run before the first write, so an
+    invalid manifest leaves the store untouched. The ``[[dify_apps]]`` half is a
+    separate table with a separate report and converges in the same run through
+    :func:`reconcile_dify_registry` — two stores, one declared state.
     """
     _preflight(manager, manifest)
     context_factory = _admin_context_factory()
@@ -131,6 +215,66 @@ def reconcile(
         for tenant_id, names in seen.items():
             context = context_factory(tenant_id)
             reports.extend(_prune_tenant(manager, context, names, dry_run))
+    return reports
+
+
+def reconcile_dify_registry(
+    registry: DifyAppRegistry,
+    manifest: EnvironmentManifest,
+    *,
+    prune: bool = False,
+    dry_run: bool = False,
+) -> list[DifyRegistryReport]:
+    """Converge the runtime registry toward ``[[dify_apps]]``; idempotent.
+
+    A row is written for every declared binding, and an unchanged binding writes
+    nothing. A binding that is in the store and not in the manifest is removed
+    only under ``prune`` — the same flag that governs agent removal, for the
+    same reason: deleting is the direction that needs to be asked for, and a
+    stray binding is visible (the runtime keeps serving it, and the report names
+    it) in a way a silently deleted one is not.
+
+    What this does **not** do is check that the named agent exists — that is a
+    property of the manifest alone and is enforced where the manifest is read
+    (:func:`load_manifest`), so both halves fail together and before any write.
+    """
+    desired = {(binding.tenant_id, binding.business_entry): binding for binding in manifest.dify_apps}
+    existing = {(binding.tenant_id, binding.business_entry): binding for binding in registry.all()}
+    reports: list[DifyRegistryReport] = []
+    for binding in desired.values():
+        key = (binding.tenant_id, binding.business_entry)
+        if existing.get(key) == binding:
+            reports.append(
+                DifyRegistryReport(binding.tenant_id, binding.business_entry, binding.app_id, "unchanged")
+            )
+            continue
+        if not dry_run:
+            registry.put(binding)
+        reports.append(
+            DifyRegistryReport(
+                binding.tenant_id,
+                binding.business_entry,
+                binding.app_id,
+                "registered",
+                "dry-run" if dry_run else "",
+            )
+        )
+    if not prune:
+        return reports
+    for key, binding in existing.items():
+        if key in desired:
+            continue
+        if not dry_run:
+            registry.delete(*key)
+        reports.append(
+            DifyRegistryReport(
+                binding.tenant_id,
+                binding.business_entry,
+                binding.app_id,
+                "removed",
+                "dry-run" if dry_run else "清单未声明",
+            )
+        )
     return reports
 
 

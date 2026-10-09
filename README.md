@@ -183,7 +183,7 @@ AI-Ops 用独立服务身份回查——见 [ADR-0003](docs/adr/0003-bff-delegat
 ```mermaid
 flowchart TB
     L6["L6 服务边界与入口<br/>gateway_api · gateway_runtime · cli · gateway_server · gateway_cli<br/>gateway_client · admin_cli · gateway_config · gateway_tokens<br/>tdengine_proxy · responses_adapter · codex_launcher"]
-    L5["L5 持久化<br/>gateway_store · conversation_store · metrics_store<br/>agent_lifecycle · shortcut_lifecycle"]
+    L5["L5 持久化<br/>gateway_store · conversation_store · metrics_store<br/>agent_lifecycle · shortcut_lifecycle · dify_app_registry"]
     L4["L4 推理与产品能力<br/>agent_engine · codex_runtime · agent_runner · agent_validator · qa_rag<br/>turn_recovery · routing · faq · promo_agents · answer_language · agent_manifest · agent_debug<br/>dify_dsl_pull · dify_knowledge_api"]
     L3["L3 证据与诊断内核<br/>sources · diagnostic_tools · engine · journal<br/>agent_workspace · health_report · knowledge_retrieval · zero_order"]
     L2["L2 身份与范围<br/>scope_context · query_scope · caller_auth · third_session_auth<br/>company_token_auth"]
@@ -317,6 +317,7 @@ flowchart TB
 | `metrics_store.py` | 脱敏运行指标。**按构造脱敏**：只存租户/路由/计数/延迟，不存问题与答案正文 |
 | `agent_lifecycle.py` | 智能体草稿与不可变已发布版本（租户隔离） |
 | `shortcut_lifecycle.py` | 产品快捷动作草稿与不可变版本（平台默认 + 租户覆盖） |
+| `dify_app_registry.py` | 运行时注册表（#584 / PRD #577）：`(租户, 业务入口) → Dify app` 的显式映射，同一 SQLite 文件一张表。Dify **没有租户概念**，租户判定只能在我们的运行时完成，所以这张表是那条边界的落点。查表**只返回绑定或空**，绝不推断；一旦有任何一行，未登记的组合**什么都不选**（fail closed），而表为空时保持注册表出现之前的选法不变（可安全地以惰性状态上线）|
 
 #### L6 服务边界与入口
 

@@ -350,8 +350,9 @@ class _PromoRuntime:
         promo_target: str | None = None,
         promo_intent: str | None = None,
         skip_retrieval: bool = False,
+        business_entry: str = "",
     ):
-        del context, conversation, conversation_turn_no, skip_retrieval
+        del context, conversation, conversation_turn_no, skip_retrieval, business_entry
         self.calls.append({"question": question, "promo_target": promo_target, "promo_intent": promo_intent})
         qa_id = "qa_test00000000000000000000000000000001"
         self._qa[qa_id] = {"qa_id": qa_id, "question": question, "status": "queued", "result": None}

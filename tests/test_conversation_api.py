@@ -123,8 +123,9 @@ class _Runtime:
         conversation_turn_no=None,
         language="zh",
         skip_retrieval=False,
+        business_entry="",
     ):
-        del skip_retrieval
+        del skip_retrieval, business_entry
         # Simulate the 409 surface: the API layer raises busy BEFORE us, so
         # reaching here means the slot was claimable. Record and answer async.
         del conversation, conversation_turn_no

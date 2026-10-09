@@ -181,6 +181,14 @@ class GatewayRuntime:
         from aiops_diagnostics.conversation_store import ConversationStore
 
         self.conversation_store = ConversationStore(store.path)
+        # Runtime registry (#584): which Dify app serves a (tenant, entry). Same
+        # DB file, built here rather than injected so every construction path —
+        # tests included — reads the real table. An empty table means the
+        # environment has not adopted the registry, and the selection rule is
+        # then exactly what it was before this existed.
+        from aiops_diagnostics.dify_app_registry import DifyAppRegistry
+
+        self.dify_app_registry = DifyAppRegistry(store.path)
         # Redacted run metrics (T7/#174): same DB file, lazy-built. Writes are
         # best-effort — a metrics failure must never fail the run itself.
         from aiops_diagnostics.metrics_store import MetricsStore
@@ -575,6 +583,7 @@ class GatewayRuntime:
         promo_target: str | None = None,
         promo_intent: str | None = None,
         skip_retrieval: bool = False,
+        business_entry: str = "",
     ) -> dict[str, Any]:
         """Start a zero-order general-question job (T3/#153).
 
@@ -596,6 +605,11 @@ class GatewayRuntime:
         it is answered from the staged references without a knowledge search. A
         greeting must not trigger a library lookup just because the run happens
         to have search capability wired.
+
+        ``business_entry`` (#584) is half the runtime registry's key, alongside
+        the caller's tenant. It is the platform the request was resolved into,
+        not a client-supplied header — the API layer passes ``decision.platform``
+        — so a caller cannot name an entry the platform rule did not grant it.
         """
         language = effective_language(language)
         selected_provider = self.diagnostic_settings.agent.select_provider(None)
@@ -643,6 +657,7 @@ class GatewayRuntime:
             promo_intent,
             registration.register_interrupt,
             skip_retrieval,
+            business_entry,
         )
         self._futures[qa["qa_id"]] = future
         # Once the future is done the job is terminal (or its worker is gone),
@@ -1261,6 +1276,7 @@ class GatewayRuntime:
         promo_intent: str | None = None,
         turn_registrar: Callable[[Any], None] | None = None,
         skip_retrieval: bool = False,
+        business_entry: str = "",
     ) -> None:
         def _finish_turn(answer: dict[str, Any] | None, *, cancelled: bool = False) -> None:
             self._complete_conversation_turn(conversation_turn, question, answer, cancelled=cancelled)
@@ -1302,6 +1318,7 @@ class GatewayRuntime:
                 promo_intent=promo_intent,
                 turn_registrar=turn_registrar,
                 history=history,
+                business_entry=business_entry,
             )
         if rag_result is not None:
             if rag_result is TERMINAL_WRITE_REFUSED:
@@ -1490,6 +1507,45 @@ class GatewayRuntime:
         )
         return result
 
+    def _registered_agent(self, tenant_id: str, business_entry: str) -> tuple[str | None, bool]:
+        """The runtime registry's answer for this pair: ``(agent_name, configured)``.
+
+        A store failure reads as "not configured", which keeps the pre-registry
+        rule — the same degrade direction ``select_customer_agent`` already uses
+        when it cannot read the agent store. The opposite direction (a read
+        failure meaning "configured, nothing mapped") would turn a database
+        hiccup into a blank answer for every tenant at once.
+        """
+        try:
+            registry = self.dify_app_registry
+            if not registry.is_configured():
+                return None, False
+            binding = registry.lookup(tenant_id, business_entry or "")
+        except Exception:  # noqa: BLE001 - unreadable registry keeps the old rule
+            return None, False
+        return (binding.agent_name if binding is not None else None), True
+
+    def _unmapped_tenant_result(self, qa_id: str, language: str) -> dict[str, Any] | None:
+        """Terminal result for a pair the registry does not map.
+
+        ``retrieval_status="unavailable"`` rather than "not_found", for the same
+        reason the promotional empty card uses it: nothing was searched, so
+        claiming the library holds no match would be a claim nobody made.
+
+        The copy is the existing ``unavailable`` string rather than a new one:
+        it already says the KB-backed answer could not be produced and carries
+        no claim about the library's contents, and adding an eleventh-language
+        table for a state the user cannot act on differently would buy nothing.
+        """
+        pack = QA_FALLBACK_MESSAGES.get(language) or QA_FALLBACK_MESSAGES[DEFAULT_LANGUAGE]
+        result: dict[str, Any] = {
+            "blocks": [{"kind": "text", "text": pack["unavailable"]}],
+            "retrieval_status": "unavailable",
+        }
+        if not self.store.update_assistant_question(qa_id, status="completed", result=result):
+            return TERMINAL_WRITE_REFUSED
+        return result
+
     def _try_customer_rag(
         self,
         qa_id: str,
@@ -1504,6 +1560,7 @@ class GatewayRuntime:
         promo_intent: str | None = None,
         turn_registrar: Callable[[Any], None] | None = None,
         history: str = "",
+        business_entry: str = "",
     ) -> dict[str, Any] | None:
         """Run the published customer agent path (T3/#170) or fall back.
 
@@ -1517,8 +1574,25 @@ class GatewayRuntime:
         instead of the customer-service agent; an unresolvable target or empty
         library returns the honest empty card and never falls through to
         FAQ/customer QA.
+
+        ``business_entry`` + the tenant are the key into the runtime registry
+        (#584), and it governs the customer-service app only: with a binding
+        registered for the pair, the agent it names serves and nothing else
+        does. An unregistered pair in a configured registry selects nothing —
+        it does not fall back to the newest published agent, and it does not
+        fall through to the zero-order answer either, because "no agent is
+        configured for you" is an answer about configuration, not a reason to
+        answer from a different agent's library. A binding that names an agent
+        nobody publishes is the same case: the registry said which app serves
+        this pair, and that app is not there.
+
+        The promotional route is deliberately outside this gate. It is not a
+        default mapping — it runs on an explicit pin — and it already has its
+        own honest-card rule for a target that does not resolve.
         """
         from aiops_diagnostics.qa_rag import run_customer_qa_answer, select_customer_agent
+
+        registered_name, registry_configured = self._registered_agent(tenant_id, business_entry)
 
         selection = None
         promo_prompt_text: str | None = None
@@ -1546,12 +1620,24 @@ class GatewayRuntime:
                 promo, question, language=language, intent=promo_intent, history=history
             )
         if selection is None:
+            if registry_configured and registered_name is None:
+                # Adopted, and this pair is not in it. Nothing was searched.
+                return self._unmapped_tenant_result(qa_id, language)
             if self.agent_store is None:
                 return None
             try:
-                selection = select_customer_agent(self.agent_store, tenant_id)
+                selection = select_customer_agent(
+                    self.agent_store,
+                    tenant_id,
+                    agent_name=registered_name if registry_configured else None,
+                )
             except Exception:
                 selection = None
+            if registry_configured and selection is None:
+                # The binding named an agent the store does not publish. Same
+                # answer as an unregistered pair: the registry decided, and
+                # what it decided is not available.
+                return self._unmapped_tenant_result(qa_id, language)
         if selection is None:
             return None
         assert isinstance(self.kb_search_client, KbServiceClient)

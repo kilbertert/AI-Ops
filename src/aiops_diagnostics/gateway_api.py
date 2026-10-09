@@ -1146,7 +1146,14 @@ def create_gateway_app(
         promo_target, promo_intent = _promo_route(context, caller, decision, payload)
         if promo_intent is not None:
             return _start_promo_qa(
-                context, caller, conversation, payload, language, promo_target, promo_intent
+                context,
+                caller,
+                conversation,
+                payload,
+                language,
+                promo_target,
+                promo_intent,
+                str(decision.platform),
             )
 
         # The routing decision, resolved at most once per request and reused by
@@ -1310,7 +1317,14 @@ def create_gateway_app(
                     forced_intent=str(classified.get("intent")),
                 )
                 return _start_promo_qa(
-                    context, caller, conversation, payload, language, promo_target, promo_intent
+                    context,
+                    caller,
+                    conversation,
+                    payload,
+                    language,
+                    promo_target,
+                    promo_intent,
+                    str(decision.platform),
                 )
 
         # Route 3: generic zero-order answer — start a real QA job (T3/#153).
@@ -1327,6 +1341,7 @@ def create_gateway_app(
                 conversation_turn_no=turn_no,
                 language=language,
                 skip_retrieval=casual_job,
+                business_entry=str(decision.platform),
             )
         except (ValueError, RuntimeError) as exc:
             _release_conversation_turn(context, conversation, turn_no)
@@ -3333,6 +3348,7 @@ def _start_promo_qa(
     language: str,
     promo_target: str | None,
     promo_intent: str,
+    platform: str,
 ) -> JSONResponse:
     """Start a promotional card QA job (#231): the public `qa` contract
     unchanged (202 + poll), served by the pinned promotional agent."""
@@ -3348,6 +3364,7 @@ def _start_promo_qa(
             language=language,
             promo_target=promo_target,
             promo_intent=promo_intent,
+            business_entry=platform,
         )
     except (ValueError, RuntimeError) as exc:
         _release_conversation_turn(context, conversation, turn_no)

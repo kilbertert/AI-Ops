@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Add runtime registry binding `(tenant, business entry)` to a Dify app (#584)
 - Add Dify DSL pull client and DSL→draft mapping (#580)
 - Add Dify knowledge retrieval adapter route `POST /v1/dify/retrieval` (#581)
 - Add read-only charging diagnostics runtime (#1)
