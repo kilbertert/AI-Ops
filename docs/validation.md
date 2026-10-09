@@ -1,3 +1,50 @@
+## #625 拉取并发布：把「运营在 Dify 改 → 冻结一个版本」做成可触发的动作（2026-10-09，离线）
+
+**分支** `feat/dify-pull-entry`，基线 `origin/main` @ `194d292`。
+**制品** `src/aiops_diagnostics/admin_cli.py`（`aiops admin pull-dify`）+
+`gateway_config.py`（三个控制台键）+ `agent_manifest.admin_context`（公开化）+ `tests/test_cli.py`（+4 例）。
+
+### 一、先记事实：这一跳此前**没有入口**
+
+```
+grep -rn "pull_agent_draft|converge_agent_draft" src/aiops_diagnostics/*.py | grep -v dify_dsl_pull.py
+→ 空
+```
+
+`pull_agent_draft` 只有**模块与测试**在调它。所以 #587（阶段 1 验收）的四条 `Blocked by`
+尽管全部 CLOSED，那条链的第二跳仍然**执行不了** —— "代码存在"与"有可触发的入口存在"
+是两种不同的强度，验收票需要的是后者。
+
+### 二、形状：三处是刻意选的
+
+| 决定 | 选择 | 为什么不是另一种 |
+|---|---|---|
+| 落在哪个面 | `aiops admin pull-dify`（与 `admin reconcile` 同族） | HTTP 面需要 `ROLE_AGENT_ADMIN`，而 UPMS 里还没有这个角色族（PRD #577 记在案），今天调不通 |
+| 凭据从哪来 | **服务端配置** `AIOPS_GATEWAY_DIFY_CONSOLE_API_KEY` | 命令行参数会进 shell 历史与进程表 |
+| 怎么发布 | `AgentManager.publish` —— 与 `/v1/agents`、`admin reconcile` **同一条**路径 | 绕过去直接写库会跳过角色校验、模型白名单与发布前 KB 活性校验 |
+| 要不要写登记表 | **不写** | 「这一次把哪个 app 落到哪个 agent」是本次参数；「哪个 app 服务哪个租户/入口」是运行时注册表（`[[dify_apps]]` + `reconcile`，#584）。混在一起会让一次拉取顺手改掉线上路由 |
+
+控制台三键的半配置（只给地址不给凭据、或反之）与既有两个面同一条纪律：**启动错误**。
+
+### 三、判据与测试（4 例，全部经 CLI 面）
+
+| 判据 | 怎么证的 |
+|---|---|
+| 一次动作走完拉取 → 映射 → 落草稿 → 发布 | 用**真 DSL 固件**（36 上拉的）桩住导出端点；断言请求打在 `/console/api/apps/<id>/export` 且带的是配置里那把凭据 |
+| **发布的是真版本**（不是"退出码 0 的空跑"） | 经 `AgentManager` 读回来：`status=published`、`published_version=1`、快照里的提示词含固件里的 `小趋` |
+| `--dry-run` **零写入** | **看库**：`AgentStore.list(tenant) == []`。只看输出的话，一个"打印了计划但顺手落草稿"的实现在输出上与正确实现完全一样 |
+| 拉取失败如实转述 + 不留痕迹 | 桩成不可达 ⇒ 退出码 1、输出含 `DIFY_DSL_UNREACHABLE`、库里为空 |
+| 缺控制台凭据 ⇒ 明确拒绝 | 退出码 2 且输出点名缺哪一个键 |
+
+**"钉得住"是实测的**：把 `--dry-run` 短路 ⇒ dry-run 那条转红；把 `publish` 换成假对象 ⇒
+发布那条转红。恢复后 15 例全过。
+
+### 四、证据边界（据实）
+
+- 全部**离线**：导出端点用桩、库用临时文件。**未**连真实 Dify 控制台（41 上还没配这三键），
+  **未**在 41 上执行过这个动作 ⇒ **未完成业务验收**。
+- 本票**只加一个入口**，不动拉取/映射/发布三者的既有实现（#580/#584 的那部分逐字未改）。
+
 ## #585 开场白与预设问题的内容制品权威 + 语言派生（2026-10-09，离线）
 
 **分支** `feat/dify-opening-content`，基线 `origin/main` @ `203a781`。

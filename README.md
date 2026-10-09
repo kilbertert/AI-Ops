@@ -304,6 +304,7 @@ flowchart TB
 | `agent_manifest.py` / `agent_debug.py` | 声明式环境清单收敛 / 草稿调试与真实知识绑定校验 |
 | `dify_knowledge_api.py` | 面向 Dify External Knowledge API 的知识检索适配（#581 / PRD #577）：请求/响应形状与 `records` 渲染。租户与知识库白名单由我们的登记表定，**不来自请求** |
 | `agent_content.py` | 开场白与预设问题的**版本化内容制品** + 按语言派生（#585 / PRD #577）：Dify 没有逐语言内容变体，所以这两类用户可见文案的权威在我们侧；**新增一门语言只改这里，不改 Dify 里的任何配置**。覆盖是判据（`starter_gaps()` 空元组才算完整），缺一门语言意味着那门语言的用户会看到中文 |
+| `admin_cli.py` 的 `pull-dify` | 把运营在 Dify 里改好的配置拉回来、经**我方发布门**冻结成一个已发布版本（#625 / PRD #577）。发布走 `AgentManager.publish` —— 与 `/v1/agents`、`admin reconcile` **同一条**生产路径；控制台凭据来自服务端配置而非命令行参数；**不写运行时登记表**（那是 `[[dify_apps]]` + `reconcile` 的事，混在一起会让一次拉取顺手改掉线上路由）|
 | `dify_debug_identity.py` | 面向 Dify 的**调试身份**（#586 / PRD #577）：**凭据决定身份**，请求里的任何字段都不参与判定。生产凭据 = 登记表全量；调试凭据 = 固定测试租户 + 显式列出的知识库子集。身份只**收窄**，从不扩张；子集为空即**什么都取不到**（不是『不收窄』）；越权与未登记同为 404 |
 | `dify_dsl_pull.py` | Dify 侧配置的**拉取**面（#580 / PRD #577）：从控制台导出端点取已导出 DSL，映射为 `AgentConfig` 并以**草稿**落地（经 `AgentManager`，绝不发布）。只消费 `pre_prompt` / `model.name` / `dataset_configs` 数据集 id；`opening_statement` 与 `suggested_questions` **不消费**（其权威来源是按语言版本化的内容制品，见姊妹票 #585）。拉取失败（不可达 / 凭据被拒 / DSL 版本不符 / 字段不可映射）各自一个错误码，且**不留下半成品草稿** |
 | `shortcut_migration.py` | 租户复制快捷动作 → 平台默认的幂等迁移 |

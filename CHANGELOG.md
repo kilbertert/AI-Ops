@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rebind the Dify adapter's kb search to the registered tenant (#612)
 
 ### Added
+- Add `aiops admin pull-dify`: fetch a Dify app's export and publish it through our gate (#625)
 - Add the versioned starters artifact and `GET /v1/assistant/starters` (#585)
 - Add a Dify debug identity: credential-chosen, fixed test tenant, read-only subset (#586)
 - Add the Dify exposure registry and its segment-1 CI regression (#583)

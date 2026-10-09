@@ -101,6 +101,14 @@ class GatewayServerSettings:
     #: 不是"不收窄" —— 「配了调试凭据但没给子集」与「给了一个空子集」在语义上必须是同一件事，
     #: 否则一次漏写子集就等于把生产面开给了调试凭据。
     dify_debug_knowledge_ids: str = ""
+    #: Dify 控制台导出端点的**只读凭据**（#625）。它服务的是「我方发布动作」这一跳：
+    #: `aiops admin pull-dify` 用它把运营在 Dify 里改好的配置拉回来。**与服务运行时的
+    #: 任何凭据都不同** —— 上面那几把是 Dify 调我们时用的，这把是我们调 Dify 时用的。
+    #: 留空 ⇒ 这个动作整体不可用（不半配置：地址有值而凭据为空时是启动错误）。
+    dify_console_base_url: str = ""
+    dify_console_api_key: str = field(repr=False, default="")
+    #: 导出请求要带的 workspace（Dify 的 admin-key 路径从它解析租户 owner）。留空 ⇒ 不带该头。
+    dify_console_workspace_id: str = ""
     #: Conversation context window (#482). The defaults ARE the contract's
     #: numbers (8 turns / 8k tokens, ``conversation_store`` owns the constants);
     #: they are configurable because a RAG or promotional turn also spends the
@@ -188,6 +196,12 @@ class GatewayServerSettings:
             or _file_value(file_values, "AIOPS_GATEWAY_DIFY_DEBUG_TENANT"),
             dify_debug_knowledge_ids=_env("AIOPS_GATEWAY_DIFY_DEBUG_KNOWLEDGE_IDS")
             or _file_value(file_values, "AIOPS_GATEWAY_DIFY_DEBUG_KNOWLEDGE_IDS"),
+            dify_console_base_url=_env("AIOPS_GATEWAY_DIFY_CONSOLE_BASE_URL")
+            or _file_value(file_values, "AIOPS_GATEWAY_DIFY_CONSOLE_BASE_URL"),
+            dify_console_api_key=_env("AIOPS_GATEWAY_DIFY_CONSOLE_API_KEY")
+            or _file_value(file_values, "AIOPS_GATEWAY_DIFY_CONSOLE_API_KEY"),
+            dify_console_workspace_id=_env("AIOPS_GATEWAY_DIFY_CONSOLE_WORKSPACE_ID")
+            or _file_value(file_values, "AIOPS_GATEWAY_DIFY_CONSOLE_WORKSPACE_ID"),
             jev_base_url=_env("AIOPS_GATEWAY_JEV_BASE_URL")
             or _file_value(file_values, "AIOPS_GATEWAY_JEV_BASE_URL"),
             jev_api_key=_env("AIOPS_GATEWAY_JEV_API_KEY")
@@ -255,6 +269,16 @@ class GatewayServerSettings:
             )
         if not 1 <= self.dify_knowledge_max_top_k <= 20:
             raise ValueError("AIOPS_GATEWAY_DIFY_KNOWLEDGE_MAX_TOP_K must be between 1 and 20")
+        # #625：控制台凭据的两半 —— 半配置同样是启动错误。只给地址会让运维以为
+        # 「发布动作配好了」，而拉取会在第一次运行时因缺凭据失败 —— 与「没配」不可区分。
+        if self.dify_console_base_url and not self.dify_console_api_key:
+            raise ValueError(
+                "AIOPS_GATEWAY_DIFY_CONSOLE_API_KEY is required when a Dify console base URL is set"
+            )
+        if self.dify_console_api_key and not self.dify_console_base_url:
+            raise ValueError(
+                "AIOPS_GATEWAY_DIFY_CONSOLE_BASE_URL is required when a Dify console API key is set"
+            )
         # #586：调试身份的两半 —— 凭据与固定租户 —— 必须成对。只给凭据会让运维以为
         # 「调试身份建好了」，而实际它连自己是哪个租户都不知道，于是要么整体无效（静默），
         # 要么退化成「用调试凭据拿到了生产范围」（危险）。交给启动失败。
