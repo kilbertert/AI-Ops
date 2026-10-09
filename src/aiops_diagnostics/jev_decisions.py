@@ -82,6 +82,26 @@ class JevUnavailable(JevError):
     """
 
 
+class JevCredentialRejected(JevUnavailable):
+    """The service REFUSED OUR CREDENTIAL (401/403) — not an outage.
+
+    A subclass of ``JevUnavailable`` because the caller contract is identical:
+    no decision was obtained, so the request proceeds without one and the user
+    is unaffected. Keeping it under that name means no existing `except` has to
+    change.
+
+    It exists because the two have completely different remedies and used to be
+    indistinguishable everywhere: an outage is waited out, a rejected credential
+    needs someone to rotate a key. Before this class they produced the same
+    exception, the same metric code and the same log sentence — so on 41 a
+    permanently rejected key was recorded as "temporarily unavailable" for three
+    weeks and read as a flaky upstream (#617).
+
+    The skeleton already drew this line (``AUTH_REJECTED`` is its own
+    ``FailureKind``); this client was the one discarding it.
+    """
+
+
 class JevInvalidResponse(JevError):
     """The service answered, but not with a decision this client can read.
 
@@ -369,6 +389,12 @@ class JevDecisionClient:
             # or a bad key would otherwise put service detail into our logs.
             return JevUnavailable("decision service unavailable")
 
+        def _auth_rejected(failure: HttpFailure) -> Exception:
+            # Same message, DIFFERENT class: the message is what a log reader
+            # needs, the class is what a caller branches on. Collapsing them was
+            # #617 — a rejected credential looked exactly like an outage.
+            return JevCredentialRejected("decision service rejected the credential")
+
         def _invalid_body(_failure: HttpFailure) -> Exception:
             return JevInvalidResponse("decision service returned a non-JSON body")
 
@@ -376,7 +402,7 @@ class JevDecisionClient:
             return JevInvalidResponse("decision service returned an unexpected envelope")
 
         return ErrorMapping(
-            auth_rejected=_unavailable,
+            auth_rejected=_auth_rejected,
             http_error=_unavailable,
             unavailable=_unavailable,
             invalid_body=_invalid_body,

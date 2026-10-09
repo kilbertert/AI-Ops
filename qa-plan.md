@@ -1736,3 +1736,21 @@ uv run pytest tests/test_assistant_api.py tests/test_conversation_api.py \
   加译稿，**未经产品确认**（同 #534 用户故事 20 的口径）。
   该状态能被用户走到，其上游成因是公司端点 #619（实测已确认），本票不处理。
 - **清理**：无写入；未触碰 41。
+
+### ROUTING-617-01 凭据被拒 vs 上游不可用（#617，未在 41 实跑）
+
+- **环境**：本机工作树 `fix/routing-auth-vs-outage`，base `origin/main` @ `203a781`。**未部署。**
+- **前置**：不需要真实上游 —— 两条路径都用替身注入（401 与 `URLError`）。
+- **动作**：`uv run pytest tests/test_jev_decisions.py tests/test_routing_outcomes.py -q`
+- **预期**：401 → `JevCredentialRejected`（且仍是 `JevUnavailable` 的子类）；
+  传输故障 → `JevUnavailable` 且**不是**子类；指标码分别为
+  `ROUTING_CREDENTIAL_REJECTED` 与 `ROUTING_UNAVAILABLE`。
+- **结果：PASS** —— 全量 `pytest` 通过。
+- **变异核对（2 处，实跑各自转红）**：
+  ① 把 `auth_rejected` 改回指向 `_unavailable`（即恢复 #617 的缺陷）⇒ 红；
+  ② 去掉子类那个 `except`（回到只捕基类）⇒ 红。
+- **边界（据实）**：**未在 41 实跑**；本轮生产上那次 401 是靠**换 key** 解决的，
+  本票修的是**下次能看出来**，两者不互相替代。
+- **另一条已更正**：我在 #617 里写的「401 会被重试一次」与「routing 没有成功侧计数」
+  **都是错的**（前者被 `bounded_http.py:435` 的短路否定，后者 10-01 已由 #509 修好），
+  已在票上更正并记入 `docs/validation.md`。

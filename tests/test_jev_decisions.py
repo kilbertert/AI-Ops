@@ -22,6 +22,7 @@ from aiops_diagnostics.jev_decisions import (
     DEFAULT_USER_AGENT,
     Choice,
     ChoiceAnswer,
+    JevCredentialRejected,
     JevDecisionClient,
     JevInvalidResponse,
     JevSettings,
@@ -391,3 +392,46 @@ def test_an_incomplete_base_url_is_rejected() -> None:
     for url in ("decision.example", "ftp://decision.example", "https://"):
         with pytest.raises(ValueError):
             JevSettings(base_url=url, api_key="k").validate()
+
+
+def test_a_rejected_credential_is_a_DISTINCT_error_from_an_outage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """401/403 and "cannot reach the service" need different remedies (#617).
+
+    They used to be the same exception, and therefore the same metric code and
+    the same log sentence. On 41 that made a permanently rejected key read as a
+    flaky upstream for three weeks: the remedy for an outage is to wait, and
+    waiting never rotated the key.
+
+    `JevCredentialRejected` stays a SUBCLASS of `JevUnavailable` on purpose — the
+    caller contract is identical (no decision, proceed without one), so no
+    existing `except JevUnavailable` changes meaning. What is new is that a
+    caller CAN tell them apart.
+    """
+    from aiops_diagnostics import bounded_http
+
+    def reject(_spec: RequestSpec) -> Any:
+        raise urllib.error.HTTPError(BASE, 401, "Unauthorized", {}, None)
+
+    monkeypatch.setattr(bounded_http, "open_response", reject)
+    with pytest.raises(JevCredentialRejected):
+        _client().decide("state", {"q": Noul(instructions="x?")})
+
+
+def test_a_transport_failure_stays_a_plain_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The other side of the split: an outage must NOT become a credential error.
+
+    Without this, a fix that mapped everything to `JevCredentialRejected` would
+    pass the test above — and would send every operator to rotate a key during an
+    outage.
+    """
+    from aiops_diagnostics import bounded_http
+
+    def boom(_spec: RequestSpec) -> Any:
+        raise urllib.error.URLError("connection refused")
+
+    monkeypatch.setattr(bounded_http, "open_response", boom)
+    with pytest.raises(JevUnavailable) as caught:
+        _client().decide("state", {"q": Noul(instructions="x?")})
+    assert not isinstance(caught.value, JevCredentialRejected)
