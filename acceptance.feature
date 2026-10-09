@@ -2318,3 +2318,36 @@ Feature: 凭据被拒与上游不可用必须区分（#617）
       When 记录这次失败
       Then 指标里的 error_code 仍是 ROUTING_UNAVAILABLE
       And 既有判据引用的那个码没有被改名
+
+Feature: 拉取并发布为一个可触发的运营动作（#625）
+  阶段 1 的链是「运营在 Dify 改 → 我方发布动作冻结版本 → 真实提问被这个版本服务」。
+  中间那一跳此前没有入口：`pull_agent_draft` 只有模块与测试在调。
+
+  Rule: 一次动作走完拉取与发布，发布走生产路径
+
+    Scenario: 拉取真 DSL 并冻结成一个已发布版本
+      Given 一个配置了控制台凭据的环境
+      When 对某个 app 执行拉取并发布
+      Then 产生一个已发布版本
+      And 该版本的快照里的提示词来自拉回来的 DSL
+      And 请求打的是控制台的导出端点
+
+    Scenario: 干跑零写入
+      Given 同一个环境
+      When 带干跑开关执行
+      Then 输出计划
+      And 库里一行 agent 都没有
+
+  Rule: 拉取失败如实转述，且不留痕迹
+
+    Scenario: Dify 不可达
+      Given 导出端点连不上
+      When 执行拉取并发布
+      Then 退出码非零
+      And 输出里能看出是不可达这一类
+      And 库里没有任何草稿
+
+    Scenario: 没配控制台凭据
+      Given 缺控制台凭据
+      When 执行拉取并发布
+      Then 明确拒绝并说清缺哪一个

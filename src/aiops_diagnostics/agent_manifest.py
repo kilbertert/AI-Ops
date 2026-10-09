@@ -416,6 +416,17 @@ def _prune_tenant(
     return reports
 
 
+def admin_context(tenant_id: str) -> Any:
+    """The synthetic admin scope one tenant's reconcile/publish runs under.
+
+    Public because it has a second caller now (#625): the Dify pull action needs
+    the same "an admin is publishing this" context, and two copies of it would
+    drift in exactly the way that matters — one of them would publish under a
+    context whose roles no longer satisfy ``AgentManager.PUBLISH_ROLES``.
+    """
+    return _admin_context_factory()(tenant_id)
+
+
 def _admin_context_factory() -> Any:
     """Synthetic admin ScopeContext per tenant (mirrors the test _context
     pattern in tests/test_agent_lifecycle.py; b_user_id flows into
