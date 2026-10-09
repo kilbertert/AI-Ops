@@ -56,6 +56,7 @@ from aiops_diagnostics.config import Settings
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.query_scope import static_site_mapper
 from aiops_diagnostics.scope_context import (
+    SCOPE_TYPE_ALL,
     SCOPE_TYPE_ORGAN,
     SCOPE_TYPE_SELF,
     ScopeError,
@@ -1395,3 +1396,55 @@ def test_every_documented_off_value_disables_the_company_parity_mode(
 
     monkeypatch.setenv("AIOPS_GATEWAY_COMPANY_TRUST_PAYLOAD", value)
     assert GatewayServerSettings.from_env().trust_company_payload is False, value
+
+
+# --- 顶层账号（平台/租户主账号）：可见范围是整个租户 --------------------------
+
+
+def test_a_tenant_level_token_sees_the_whole_tenant_not_an_empty_site_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``type='1'`` 的管家端令牌 → 整个租户范围，且**不做任何店铺/站点 I/O**。
+
+    这类账号（租户主账号，实测 ``ulink``）店铺集合恒为空，公司自己的店铺隔离门
+    对 ``type ∈ {-1,1}`` 也不做店铺隔离 ⇒ 其可见范围是整个租户。旧实现把它读成
+    「空站点集合」⇒ 一条订单都查不到。
+    """
+    mapper = _Mapper()
+    context = _resolve(monkeypatch, payload={**CLAIMS, "type": "1"}, mapper=mapper)
+
+    assert context.data_scope.type == SCOPE_TYPE_ALL
+    assert context.data_scope.site_ids == ()
+    assert mapper.opened == 0  # 整个租户范围与站点归属无关，不该发起映射查询
+
+
+@pytest.mark.parametrize("user_type", ["1", "-1"])
+def test_platform_and_tenant_types_are_both_tenant_level(
+    monkeypatch: pytest.MonkeyPatch, user_type: str
+) -> None:
+    context = _resolve(monkeypatch, payload={**CLAIMS, "type": user_type})
+    assert context.data_scope.type == SCOPE_TYPE_ALL
+
+
+def test_an_operator_token_still_gets_its_site_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``type='5'`` 代理商令牌不受影响 —— 回归不得放宽运营商账号。"""
+    context = _resolve(monkeypatch)  # CLAIMS 的 type 就是 "5"
+    assert context.data_scope.type == SCOPE_TYPE_ORGAN
+
+
+def test_a_tenant_level_token_does_not_read_the_shop_directory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """顶层令牌缺 ``shop_ids`` 时**不回退**去查 ``/shopuser/getShops``（范围与它无关）。"""
+    payload = {k: v for k, v in CLAIMS.items() if k != "shop_ids"}
+    transport_sent: list[Any] = []
+
+    def transport(request: Any, **_kwargs: Any) -> _Response:
+        transport_sent.append(request)
+        return _Response({**payload, "type": "1"})
+
+    context = _resolve(monkeypatch, transport=transport)
+
+    assert context.data_scope.type == SCOPE_TYPE_ALL
+    # 只应发 check_token 那一次；不该有 /shopuser/getShops 的第二跳。
+    assert len(transport_sent) == 1

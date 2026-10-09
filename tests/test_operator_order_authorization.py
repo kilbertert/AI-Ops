@@ -56,6 +56,7 @@ from aiops_diagnostics.i18n import clarification_message
 from aiops_diagnostics.query_scope import QueryScope, resolve_query_scope
 from aiops_diagnostics.scope_context import (
     SCOPE_ERROR_UPMS_UNAVAILABLE,
+    SCOPE_TYPE_ALL,
     SCOPE_TYPE_ORGAN,
     SCOPE_TYPE_SELF,
     DataScope,
@@ -489,3 +490,104 @@ def test_operator_entry_still_gets_the_operator_site_set(monkeypatch):
     )
     assert context.data_scope.type == SCOPE_TYPE_ORGAN
     assert context.data_scope.site_ids == ("SITE-IN-1",)
+
+
+# --- 顶层账号：没有店铺绑定 ≠ 看不到任何订单 -------------------------------
+
+
+def test_tenant_level_account_without_shop_binding_sees_the_whole_tenant(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``type='1'`` 租户主账号、零店铺绑定 → 可见范围是**整个租户**，不是空集合。
+
+    实测（2026-10-09，41 生产）：``ulink`` 是 ``type='1'``、``tenant_id=1942105476598861824``、
+    ``sys_user_shop`` 0 行、``/shopuser/getShops`` 返回 ``[]``。它要查的那张订单**就在它的
+    租户里**，却一律 404 —— 因为「没有店铺子集」被读成了「看不到任何订单」。
+
+    公司自己的店铺隔离门对这两个类型（``-1``/``1``）**不做店铺隔离**，所以这里正确的
+    读法是「不受站点维度约束」。租户谓词照常下推，放宽的只有站点维度。
+    """
+    context = resolve_session(
+        monkeypatch,
+        # 顶层账号经**会话**链进来（C→B 映射要求 c_user_id 与会话一致，因此会话形态
+        # 仍带 C 绑定；无 C 绑定的租户主账号只能走公司令牌链，见 test_company_token_auth）。
+        records=(b_subject(user_type="1"),),
+        # 店铺集合为空（真实值）：它若走运营商分支就会得到空站点。
+        operator_scope=OperatorScope(()),
+    )
+
+    assert context.data_scope.type == SCOPE_TYPE_ALL
+    assert resolve_query_scope(context) == QueryScope(tenant_id=TENANT, site_ids=None, user_id=None)
+
+
+def test_platform_account_type_is_tenant_level_too(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``type='-1'``（平台）与 ``type='1'`` 同属顶层：公司隔离门对两者一视同仁。"""
+    context = resolve_session(
+        monkeypatch,
+        records=(b_subject(user_type="-1"),),
+        operator_scope=OperatorScope(()),
+    )
+    assert context.data_scope.type == SCOPE_TYPE_ALL
+
+
+def test_an_operator_account_without_shop_binding_stays_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``type='5'`` 代理商空绑定 → **仍是空集合拒绝**：这一条不放宽。
+
+    「没有店铺绑定」对顶层账号（整个租户）与运营商账号（看不到任何订单）含义相反，
+    只有 ``sys_user.type`` 能区分。把这一条改宽会让所有未登记的代理商账号看到全租户。
+    """
+    context = resolve_session(
+        monkeypatch,
+        records=(b_subject(user_type="5"),),
+        operator_scope=OperatorScope(()),
+    )
+    assert context.data_scope.type == SCOPE_TYPE_ORGAN
+    assert context.data_scope.site_ids == ()
+    assert resolve_query_scope(context).empty_site_scope
+
+
+def test_missing_user_type_is_treated_as_the_narrow_branch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """拿不到 ``type`` 时不猜：按普通运营商账号处理（空集合 → 拒绝），不放宽成整租户。"""
+    context = resolve_session(
+        monkeypatch,
+        records=(b_subject(),),  # user_type 默认空串
+        operator_scope=OperatorScope(()),
+    )
+    assert context.data_scope.type == SCOPE_TYPE_ORGAN
+    assert context.data_scope.site_ids == ()
+
+
+def test_a_tenant_level_account_never_needs_the_shop_directory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """顶层账号的范围与店铺集合无关 ⇒ 一条 ``/shopuser/getShops`` 都不该发。
+
+    这一条同时钉住「提前返回」不是靠运气：``operator_scope`` 传一个**会抛错**的替身，
+    若实现仍走运营商分支就会在这里炸。
+    """
+    scope = OperatorScope(("SHOP-1",), {"SHOP-1": (SITE_IN,)}, error=AssertionError("不应调用店铺目录"))
+    context = resolve_session(
+        monkeypatch,
+        records=(b_subject(user_type="1"),),
+        operator_scope=scope,
+    )
+    assert context.data_scope.type == SCOPE_TYPE_ALL
+    assert scope.calls == []  # 站点范围解析器一次都没被调用
+    assert scope.shops.calls == []  # 店铺目录一次都没被调用
+
+
+def test_consumer_entry_keeps_self_for_a_tenant_level_account(monkeypatch: pytest.MonkeyPatch) -> None:
+    """顶层账号走**消费者入口**时逐字不变：仍是 ``self``，不放宽成整租户。
+
+    顶层范围的授予条件是「顶层账号 **且** operator 入口」；少了入口这一维，
+    一个恰好也有 C 端身份的租户主账号会在消费者侧看到全租户的订单。
+    """
+    context = resolve_session(
+        monkeypatch,
+        records=(b_subject(user_type="1"),),
+        operator_scope=OperatorScope(()),
+        platform_entry="consumer",
+    )
+    assert context.data_scope.type == SCOPE_TYPE_SELF

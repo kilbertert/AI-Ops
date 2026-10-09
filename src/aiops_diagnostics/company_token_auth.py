@@ -121,6 +121,7 @@ from aiops_diagnostics.query_scope import (
     operator_site_scope_from_shops,
 )
 from aiops_diagnostics.scope_context import (
+    SCOPE_TYPE_ALL,
     SCOPE_TYPE_ORGAN,
     SCOPE_TYPE_SELF,
     DataScope,
@@ -128,6 +129,7 @@ from aiops_diagnostics.scope_context import (
     ScopeError,
     SubjectRecord,
     is_operator_entry,
+    is_tenant_level_account,
 )
 from aiops_diagnostics.sources import SourceError, mysql_site_mapper
 
@@ -253,7 +255,10 @@ class CompanyTokenCallerResolver:
         #
         # 形状校验仍在解析内部保留（``_shop_ids_from_claims``）：管家端入口上一条形状不符的
         # ``shop_ids`` 照旧被拒 —— 那一条与入口无关，只是现在只在需要它的入口上发生。
-        if is_operator_entry(platform_entry):
+        # 顶层账号（平台/租户主账号）的范围是整个租户，与店铺集合无关，因此连解析都不做
+        # —— 提前返回与 ``_data_scope`` 里那一条同判据，并省掉可能触发 ``/shopuser/getShops``
+        # 的那一跳。
+        if is_operator_entry(platform_entry) and not is_tenant_level_account(subject.user_type):
             shop_ids = _shop_ids_from_claims(
                 claims, shop_directory=self._shop_directory, b_user_id=subject.b_user_id
             )
@@ -292,6 +297,13 @@ class CompanyTokenCallerResolver:
         """
         if not is_operator_entry(platform_entry):
             return DataScope(type=SCOPE_TYPE_SELF)
+        if is_tenant_level_account(subject.user_type):
+            # 与 ``third_session_auth._data_scope`` 同一条边界、同一个判据：顶层账号
+            # （平台/租户主账号，``type ∈ {-1,1}``）的可见范围是整个租户。
+            # **不解析店铺集合**：它的空集合在这里既不表示「看不到订单」，多打一次
+            # ``/shopuser/getShops`` 也改变不了结论（见 ``resolve`` 里对 shop_ids 的
+            # 按需取值）—— 令牌常常不带 ``shop_ids``，提前返回可省掉那一跳。
+            return DataScope(type=SCOPE_TYPE_ALL)
         try:
             with self._scope_mapper(self.scoped_settings) as mapper:
                 scope = operator_site_scope_from_shops(shop_ids, subject.tenant_id or "", mapper=mapper)
@@ -534,6 +546,10 @@ def _subject_from_claims(claims: Mapping[str, Any]) -> SubjectRecord:
         tenant_id=tenant_id,
         organ_id=_text(claims.get("organ_id")) or None,
         shop_id=_text(claims.get("shop_id")) or None,
+        # ``type`` 由 tokenEnhancer 逐字段写入（``BaseUser.getType()``），因此与 ``id``/
+        # ``tenant_id`` 同一条通道、同样的可信度。它决定「空店铺集合」的读法（见
+        # ``is_tenant_level_account``）；缺失时按最窄处理。
+        user_type=_text(claims.get("type")) or "",
     )
 
 

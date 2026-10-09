@@ -1,3 +1,68 @@
+## #628 顶层账号（平台/租户）被读成「无可见订单」—— 应为整个租户（2026-10-09）
+
+**分支** `fix/operator-tenant-level-account-scope`，基线 `origin/main` @ `7444a32`。
+
+### 一、现象与根因
+
+产品报租户主账号 `ulink` 在管家端查订单一律「查不到」，而该订单**就在它的租户里**。
+
+根因是**把「没有店铺子集」读成了「看不到任何订单」**。AI-Ops 的管家端可见范围
+= 「B 端主体的店铺集合 → `ch_site` 站点集合」，而 `ulink`：
+
+| 事实 | 值 | 怎么测的 |
+|---|---|---|
+| `sys_user.type` | `1`（**租户主账号**，非代理商） | 41 → `qumall_upms` 只读查询 |
+| `sys_user_shop` 绑定 | **0 行** | 同上 |
+| `/shopuser/getShops` | `{"code":0,"data":[],"ok":true}` | 41 用 `AIOPS_UPMS_INSIDE_TOKEN` 实测 |
+| 目标订单 `tenant_id` | `1942105476598861824` = **ulink 的租户** | `ch_order_info` 只读查询 |
+
+⇒ 站点集合 `()` ⇒ 谓词 `1=0` ⇒ 一律 `404`。
+
+### 二、公司自己的判据（不是我们发明的口径）
+
+`ShopIdInterceptor.judge()`（`qumall-common/cloud-common-data`，本地只读克隆）：
+
+```java
+if (StrUtil.equalsAny(user.getType(), "-1", "1")
+    && (StrUtil.isBlank(headShop) || StrUtil.equals("-1", headShop))) {
+    return false;   // 不做店铺隔离
+}
+```
+
+`type ∈ {-1,1}` 在店铺头为空/`-1` 时**完全不做店铺隔离** ⇒ 可见范围是整个租户。
+41 nginx 的 `/v1/` 只注入 `Authorization` / 来源密钥 / 入口 / 会话，**不含 `shop-id`**，
+因此这一类账号在公司体系里的语义就是租户全量。
+
+### 三、判据与测试（断言的是对外可观察行为）
+
+| 判据 | 结果 | 怎么证的 |
+|---|---|---|
+| 顶层账号（`type ∈ {-1,1}`）+ `operator` 入口 → 整个租户范围 | ✅ | `test_tenant_level_account_without_shop_binding_sees_the_whole_tenant`、`test_platform_and_tenant_types_are_both_tenant_level` |
+| 顶层账号**一条店铺/站点 I/O 都不发** | ✅ | `test_a_tenant_level_account_never_needs_the_shop_directory`（店铺目录传会抛错的替身）、`test_a_tenant_level_token_does_not_read_the_shop_directory`（只应有一次 check_token） |
+| `type=5` 代理商空绑定 → **仍空集合拒绝** | ✅ | `test_an_operator_account_without_shop_binding_stays_refused`、`test_an_operator_token_still_gets_its_site_set` |
+| 拿不到 `type` → **按最窄分支**（不放宽） | ✅ | `test_missing_user_type_is_treated_as_the_narrow_branch` |
+| 顶层账号走 `consumer` 入口 → 逐字不变（仍是 `self`） | ✅ | `test_consumer_entry_keeps_self_for_a_tenant_level_account` |
+| 消费者端零回归 | ✅ | 全量 `pytest`：唯一失败 `test_cd_deploy_scripts.py::test_remote_block_renders_and_parses`，**在 `main` 上同样失败**（依赖 41 当前部署版本），与本改动无关 |
+
+一条比"改后相等"更强的判据：**顶层账号分支下站点范围解析器与店铺目录的调用次数都是 0**
+（`scope.calls == []` / `scope.shops.calls == []`）。少了它，「提前返回」可能只是恰好没被调用。
+
+### 四、为什么同一条规则只有一份
+
+分派判据落在 `scope_context.is_tenant_level_account()`，两个解析器
+（`third_session_auth` 会话链、`company_token_auth` 公司令牌链）**共用**它 ——
+两份实现一旦漂移，漂移方向就是放宽。`SubjectRecord.user_type` 进范围指纹：
+同一个主体 id 在顶层/运营商两种读法下可见范围不同，属于改变可见性的属性。
+
+### 五、证据边界（据实）
+
+- 上游事实（`type`、店铺绑定、订单租户）是 **41 生产库只读实测**；
+- 但**未做**生产端到端（用真实管家端 App 登录 + 一次真诊断）—— `ulink` 经公司令牌链、
+  不带 `shop_ids` 时会回退查 `/shopuser/getShops`，而该账号在 Redis 里没有会话，
+  无法在 41 上驱动一次真实登录。**该账号的端到端仍标为「未验」**。
+- 本改动改变 Gateway 的对外可见范围，因此按 `AGENTS.md` 应跑 `verify-aiops-gateway`；
+  本 PR **未跑**（该 skill 不覆盖订单授权这条依赖真实 MySQL 的路径），见 PR 说明。
+
 ## #625 拉取并发布：把「运营在 Dify 改 → 冻结一个版本」做成可触发的动作（2026-10-09，离线）
 
 **分支** `feat/dify-pull-entry`，基线 `origin/main` @ `194d292`。
