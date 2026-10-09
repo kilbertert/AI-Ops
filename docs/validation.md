@@ -9632,9 +9632,9 @@ B) 用另一个人的会话，发同一句话        -> HTTP 200 type: clarifica
 `not_yours` 的五个语言（en/de/es/pt/vi）在源码里是**隐式拼接**的相邻字面量，
 而我在排版时把**空格放在了后一个字符串的开头**：
 
-```python
+```text
 "This order does not belong to the current account, so I cannot check it. Please pick"
-"one of your own orders and try again."      # ← 前一行结尾没有空格，后一行开头也没有
+"one of your own orders and try again."      <- 前一行结尾没有空格，后一行开头也没有
 ```
 
 **Python 照常拼接，什么都不会失败** —— 而表格类的测试只断言"覆盖全语言 / 非空"，
