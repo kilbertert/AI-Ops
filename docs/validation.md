@@ -1,3 +1,67 @@
+## #612 Dify 适配路由没有按登记的租户重绑 kb 客户端（2026-10-09，41 真机）
+
+**分支** `fix/dify-retrieval-tenant`，基线 `origin/main` @ `2bd271a`。
+**制品** `src/aiops_diagnostics/gateway_api.py`（`dify_retrieval`）+ `tests/test_dify_knowledge_api.py`（+3 例）。
+
+### 一、怎么发现的：把开关打开
+
+在 41 上配好 `AIOPS_GATEWAY_DIFY_KNOWLEDGE_API_KEY` +
+`AIOPS_GATEWAY_DIFY_KNOWLEDGE_BINDINGS`（`kb-canary-2` → 租户 `1942105476598861824`
++ 知识库 `8701c742b28111f18637d95f7710e3a3`）后重启，三种情形：
+
+| 请求 | 结果 |
+|---|---|
+| 不带凭据 | 401 ✅（门生效了） |
+| 带对凭据、**未登记**的 `knowledge_id` | 404 ✅（登记表生效了） |
+| 带对凭据、**已登记**的 `knowledge_id` | **502 `DIFY_KNOWLEDGE_UNAVAILABLE`** ❌ |
+
+### 二、根因：租户头
+
+直连 kb-service 对照，**同一组 (租户, 知识库)**：
+
+| 发出的 `tenant-id` | kb-service 回答 |
+|---|---|
+| `aiops`（网关**进程级**客户端的那个） | `code=102 Only owner of dataset 8701… authorized for this operation.` |
+| `1942105476598861824`（登记表里的那个） | ✅ 返回 chunks |
+
+网关日志里也看得见：502 那几条紧跟在 401/404 后面，请求本身到了门。
+
+`gateway_api.dify_retrieval` 用的是 `context.runtime.kb_search_client`，而它在
+`GatewayRuntime.from_settings` 里被**故意**绑在中性租户上（`tenant_id="aiops"`，注释原文：
+*"per-request tenant is applied by the QA worker"*）。客户 QA 路径**每一处都重绑**
+（`gateway_runtime.py:1466`、`:1649`，媒体面 `:1761`），**只有 Dify 适配这一处漏了**。
+于是请求带 `tenant-id: aiops` 打到 RAGFlow，按租户判权被拒，归一成 502。
+
+### 三、为什么 #581 的测试没抓到
+
+`tests/test_dify_knowledge_api.py` 当时的 `_FakeKbClient` **没有租户字段**，`search(...)`
+忽略租户直接返回预置 chunks —— **桩对"header 有没有传到门"是盲的**。这与本仓已记在案的
+那条同形（注入替身对 header 的盲区）。
+
+### 四、修法与"测试确实钉得住"
+
+- 修：检索前 `client.for_tenant(binding.tenant_id)`（与 QA 路径同一条纪律）；
+  `for_tenant` 不存在时保持原样（协议兼容）。**按请求重绑，不改写进程级客户端**。
+- 桩改成**记录实际发出的租户头**（`tenant_calls`），新增 3 例：
+  ① 单次检索发出的租户 == 登记的那个（**这一条在修复前是红的**——已实测：把修复临时回退，
+  它失败；恢复后通过）；
+  ② 两个不同知识库分属两个租户时，各自发自己的租户（防"只绑一次"或缓存串号）；
+  ③ 检索后进程级客户端的 `tenant_id` 仍是 `aiops`（防"重绑写穿了"，那会让下一个请求串租户）。
+- 全量：**1982 passed, 9 skipped**；`ruff check/format`、repo-map、policy-check 均通过。
+
+### 五、留档：这轮的环境改动
+
+按 `docs/agents/env-41-runbook.md` §1.4 的分工，两个键都放**服务端配置**文件
+`/etc/aiops-41/production.env`（`GatewayServerSettings.from_env` 用 `_file_value` 读它；
+实测确有配置项也在那里生效——`AIOPS_GATEWAY_KB_SERVICE_BASE_URL` 就在同一个文件里）。
+备份 `/etc/aiops-41/production.env.bak-dify-20261009-143921`，权限保持 `0600 aiops41`。
+**凭据本机生成、只存在该文件与 Dify 控制台两侧，不入仓、不打印、不写进本节。**
+
+### 六、本次修复**尚未部署**
+
+修复只在分支上；41 现在跑的还是带这个缺陷的版本。**未完成业务验收** ——
+部署后要复验的是"同一个已登记的 `knowledge_id` 从 502 变成 200 且带 `records`"。
+
 ## #583 Dify 暴露面登记表 + 段 1 CI 回归（2026-10-09，真机 + 离线）
 
 **分支** `feat/dify-exposure-registry`，基线 `origin/main` @ `809b1b0`。

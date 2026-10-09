@@ -40,14 +40,30 @@ class _Runtime:
 
 
 class _FakeKbClient:
-    """Stand-in for KbServiceClient that records what it was asked for."""
+    """Stand-in for KbServiceClient that records what it was asked for.
 
-    def __init__(self, search) -> None:
+    ``tenant_id`` is a real field, not decoration: the adapter must rebind the
+    process-level client to the **registered** tenant before searching (#612).
+    A stub that ignored the tenant would be blind to exactly that defect — the
+    original version of this file was, and the bug shipped.
+    """
+
+    def __init__(self, search, tenant_id: str = "aiops") -> None:
         self._search = search
+        self.tenant_id = tenant_id
+        #: Every search, with the tenant header it actually went out under.
         self.calls: list[tuple[tuple[str, ...], str, int]] = []
+        self.tenant_calls: list[str] = []
+
+    def for_tenant(self, tenant_id: str) -> _FakeKbClient:
+        bound = _FakeKbClient(self._search, tenant_id=tenant_id)
+        bound.calls = self.calls
+        bound.tenant_calls = self.tenant_calls
+        return bound
 
     def search(self, knowledge_base_ids: tuple[str, ...], question: str, top_k: int) -> Any:
         self.calls.append((tuple(knowledge_base_ids), question, top_k))
+        self.tenant_calls.append(self.tenant_id)
         return self._search(knowledge_base_ids, question, top_k)
 
 
@@ -327,3 +343,57 @@ def test_malformed_body_is_400(tmp_path: Path) -> None:
         resp = _post(client, bad)
         assert resp.status_code == 400, resp.text
         assert resp.json()["error"]["code"] == "DIFY_INVALID_REQUEST"
+
+
+def test_the_search_goes_out_under_the_registered_tenant(tmp_path: Path) -> None:
+    """The adapter must rebind to the REGISTERED tenant before searching (#612).
+
+    The process-level kb client is bound to the neutral ``aiops`` tenant on
+    purpose; every other consumer rebinds first. This one did not, so the search
+    went out as ``aiops``, RAGFlow's per-tenant ownership check rejected it
+    (``code=102``), and every registered ``knowledge_id`` answered 502 —
+    on 41, with a correct credential and a registered id.
+
+    The assertion is on the tenant header **that actually reached the client**,
+    not on the answer: that is the observable the bug moved, and the previous
+    stub could not see it.
+    """
+    runtime = _Runtime(signer=MediaResourceSigner("secret", ttl_seconds=600), search=lambda _k, _q, _n: [])
+    client = _client(tmp_path, runtime)
+
+    assert _post(client, _body(knowledge_id="kb-customer")).status_code == 200
+
+    assert runtime.kb_search_client.tenant_calls == ["T-1"], (
+        "检索没有按登记的租户重绑：发出去的是进程级客户端的租户，kb-service 会按它判权并拒掉"
+    )
+
+
+def test_two_registered_ids_go_out_under_their_own_tenants(tmp_path: Path) -> None:
+    """Two knowledge_ids bound to two tenants must not share one tenant header.
+
+    A rebind that happened once (or a cached bound client) would look correct on
+    a single-tenant test and silently cross tenants as soon as a second binding
+    exists.
+    """
+    runtime = _Runtime(signer=MediaResourceSigner("secret", ttl_seconds=600), search=lambda _k, _q, _n: [])
+    client = _client(tmp_path, runtime)
+
+    _post(client, _body(knowledge_id="kb-customer"))  # -> T-1
+    _post(client, _body(knowledge_id="kb-other"))  # -> T-2 (see BINDINGS)
+
+    assert runtime.kb_search_client.tenant_calls == ["T-1", "T-2"]
+
+
+def test_the_client_is_left_bound_to_the_neutral_tenant(tmp_path: Path) -> None:
+    """The rebind is per-request: the process-level client must not be mutated.
+
+    Sharing one runtime across tenants means a rebind that wrote through would
+    leak the last request's tenant into the next one — the failure mode that
+    makes this fix worse than the bug.
+    """
+    runtime = _Runtime(signer=MediaResourceSigner("secret", ttl_seconds=600), search=lambda _k, _q, _n: [])
+    client = _client(tmp_path, runtime)
+
+    _post(client, _body(knowledge_id="kb-customer"))
+
+    assert runtime.kb_search_client.tenant_id == "aiops"

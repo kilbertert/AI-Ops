@@ -753,8 +753,18 @@ def create_gateway_app(
                 retryable=True,
             )
         top_k = request.top_k or context.settings.dify_knowledge_max_top_k
+        # Rebind to the REGISTERED tenant (#612). The process-level client is
+        # deliberately bound to the neutral "aiops" tenant (see
+        # GatewayRuntime.from_settings), and every other consumer rebinds before
+        # searching — the customer QA path and the media fetch both do. Without
+        # this line the search goes out under "aiops", RAGFlow's per-tenant
+        # ownership check rejects it (code=102), and the adapter answers 502 for
+        # every registered knowledge_id. Found on 41 on 2026-10-09, by opening
+        # the switch: direct kb-service calls with the registered tenant header
+        # returned chunks while the same call through the adapter 502'd.
+        search_client = client.for_tenant(binding.tenant_id) if hasattr(client, "for_tenant") else client
         try:
-            raw = client.search(binding.knowledge_base_ids, request.query, top_k)
+            raw = search_client.search(binding.knowledge_base_ids, request.query, top_k)
             chunks = normalize_search_response(
                 raw,
                 tenant_id=binding.tenant_id,
