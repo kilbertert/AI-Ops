@@ -31,7 +31,7 @@ accurate at the moment it is generated and at the moment the commit lands.
 
 ## Tests
 
-- tests/ — 123 test file(s, recursive)
+- tests/ — 124 test file(s, recursive)
 - script "cd:watch:test": node .sandcastle/cd-watch.test.mjs
 - pytest (pyproject.toml / pytest.ini present)
 
@@ -58,6 +58,7 @@ deploy/
     docker-compose.yaml
     env.example
     README.md
+  check-41-editable.sh
   classify-remote-result.sh
   company-gitlab-api.sh
   d4-cutover.py

@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Add `deploy/check-41-editable.sh`, a read-only guard for 41's editable install (#609)
 - Add runtime registry binding `(tenant, business entry)` to a Dify app (#584)
 - Add the Dify tracer bullet: export → pull → publish → one question served (#582)
 - Add Dify DSL pull client and DSL→draft mapping (#580)

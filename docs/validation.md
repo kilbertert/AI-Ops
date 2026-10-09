@@ -1,3 +1,105 @@
+## #609 41 依赖环境更新（#605 引起的 pyyaml 漂移）+ editable 判据修正（2026-10-09，真机）
+
+**分支** `docs/env-41-deps-guard-20261009`，基线 `origin/main` @ `164fb8e`。
+**制品** `deploy/check-41-editable.sh` + `tests/test_env_41_editable_guard.py`；
+按 `docs/agents/env-41-dependency-update.md` 在 41 上执行，并修正该手册三处与实测不符的措辞。
+
+### 一、这次要动 41 的理由
+
+CD 从 2026-10-09 01:55 起连续三次 `failure`，**每一步都停在同一个地方**：
+`依赖漂移：目标 commit 的 pyproject.toml 与 41 上的不一致`。三次分别是 #605/#597/#607
+的合并提交 —— 也就是说 **#605 引入 `pyyaml` 之后，main 上没有任何提交能部署到 41**。
+差异只有一行（`diff` 41 的 pyproject 与目标 commit 的：唯一增量是 `"pyyaml>=6,<7"`）。
+
+| 文件 | 目标 commit `164fb8e` | 41（更新前） |
+|---|---|---|
+| `pyproject.toml` | `084e7854254f1569…` | `7a59681e8ba472aa…` |
+| `uv.lock` | `fed6f09308814ac6…` | `3621938c2bf465f0…` |
+
+### 二、执行（按手册第 1–7 步）
+
+| 步 | 动作 | 结果 |
+|---|---|---|
+| 1 | 备份环境 | `backup=/var/backups/aiops-41/deps-20261009-133946`（498M，含 `venv` 全量副本） |
+| 2 | 同步清单 | `uv sync --active --frozen` → `Prepared 2 packages`、`+ pyyaml==6.0.3`、`sync-exit=0`（uv 是 `/opt/aiops-41/.venv/bin/uv` 0.11.14） |
+| 3 | editable 守卫 | **首次按手册原措辞执行 ⇒ 误报失败**；按修正后的判据重跑 ⇒ 通过（见第三节） |
+| 4 | 重启 | `aiops-gateway-41.service` → `active` |
+| 5 | （未触发）回滚 | 未使用 |
+| 6 | 本节记录 | — |
+| 7 | 重跑部署 | `workflow_dispatch` run [37890268746](https://github.com/kilbertert/AI-Ops/actions/runs/37890268746) → **success**；41 `/health` → `0.1.0+164fb8e03225` |
+
+### 三、手册的三处措辞在真机上不成立（本轮修正）
+
+**① 第 3 步的 editable 判据是错的 —— 它会在完全正常的状态下误报。**
+
+原文：`if [ -d "$SP/aiops_diagnostics" ]; then 失败; fi`。但本包的 `pyproject.toml` 用
+hatch 的 force-include 把 `.env.example` / SOP / `faq_catalog.json` 等资产装进包目录，
+所以**那个目录在正常情况下就该存在**；`uv sync` 之后它必然出现。实测该目录下 12 个
+文件**全是静态资产**（`_bundle/*`、两个 json），一个 `.py` 都没有，`__init__.py` 也不存在。
+
+真正的判据是 **Python 的导入规则**：目录里若有 `__init__.py`，它就成了**常规包**，
+而常规包赢过 editable 的 `.pth`（`.pth` 追加在 `site-packages` 之后，常规包在更早的
+`site-packages` 里被找到）。没有 `__init__.py` 时它只是命名空间片段，`src` 的常规包照样赢。
+
+本地用一个最小复现钉住这条规则（两个世界各建一份，看解释器实际加载谁）：
+
+```
+site-packages 片段带 __init__.py  ⇒ winner = …/site-packages/aiops_diagnostics/__init__.py   （坏世界）
+site-packages 片段不带 __init__.py ⇒ winner = …/src/aiops_diagnostics/__init__.py             （正常态）
+```
+
+**② `uv` 不在 PATH**（`command -v uv` 失败），实体在 `/opt/aiops-41/.venv/bin/uv`（0.11.14）。
+原文那句 `command -v uv || {…exit 1}` 会直接退出。
+
+**③ `curl http://127.0.0.1:8788/health` 打不通** —— 41 上服务绑的是 `172.18.0.1:8788`
+（`ss -ltnp` 实测），`127.0.0.1:8788` 是 connection refused，**那不是故障**。
+
+三处都已在手册里就地改正并标注原因。
+
+### 四、被否掉的一条「更保险」的做法
+
+试过 `uv sync --active --frozen --no-install-package aiops-diagnostics`（想过绕开重装本包）。
+**它更坏**：`uv` 会把本包**卸载**、`.pth` 一并删除，`import aiops_diagnostics` 变成
+`ModuleNotFoundError`（实测）。带 `--no-install-package` 跑完的守卫输出：
+
+```
+OK 无实体目录
+FAIL pth 没了
+ModuleNotFoundError: No module named 'aiops_diagnostics'
+```
+
+即：用"实体目录"这个判据时它看起来**更干净**（目录没了），而实际把 editable 彻底打断。
+这正是要换判据的第二个理由 —— 面象指标可以把两种相反的故障显示成同一个样子。
+
+### 五、更新后的真机事实（四条观察，更新后与重跑部署后各一次）
+
+```
+import aiops_diagnostics    → /opt/aiops-41/src/aiops_diagnostics/__init__.py
+import .gateway_api         → /opt/aiops-41/src/aiops_diagnostics/gateway_api.py
+site-packages/aiops_diagnostics/__init__.py   不存在
+_editable_impl_aiops_diagnostics.pth          /opt/aiops-41/src
+files(pkg) faq_catalog.json → /opt/aiops-41/src/aiops_diagnostics/faq_catalog.json（825096 bytes 可读）
+pyyaml 6.0.3
+/health                     → {"ok":true,…,"version":"0.1.0+164fb8e03225","business_mutations":"disabled"}
+```
+
+`deploy/check-41-editable.sh` 把前四条做成一条可复跑的命令（退出码 0/1），
+`--self-check` 无网络即可跑判据本身。
+
+### 六、留在 41 上的东西
+
+- `/var/backups/aiops-41/deps-20261009-133946/`（回滚点，故意保留）。
+- 新留下的静态资产目录 `.venv/lib/python3.12/site-packages/aiops_diagnostics/`（`uv sync`
+  的产物，**不是**故障；由第五节的观察证明无害）。**没有**手工清理 —— 手工删会产生一条
+  手册里没有、下次没人复现的动作。
+
+### 七、边界（据实）
+
+- 本节证的是**「41 的依赖环境与 main 一致，且 editable 仍生效」**。它**不**证明任何业务
+  行为：网关的新代码路径（#581 适配路由 / #584 注册表 / #582 竖切）是**未验**的，
+  未配 `AIOPS_GATEWAY_DIFY_*`、未在 41 上跑过任何 Dify 相关请求 —— **未完成业务验收**。
+- 部署成功只说明"源码换到 `164fb8e` 且服务起来了"，与"那条链路能用"是两件事。
+
 ## #582 最小端到端竖切：Dify → 拉取 → 发布 → 一条提问被服务（2026-10-09，离线）
 
 **分支** `feat/dify-tracer-bullet`，基线 `origin/main` @ `6da3a5a`。
