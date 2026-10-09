@@ -57,10 +57,55 @@
 备份 `/etc/aiops-41/production.env.bak-dify-20261009-143921`，权限保持 `0600 aiops41`。
 **凭据本机生成、只存在该文件与 Dify 控制台两侧，不入仓、不打印、不写进本节。**
 
-### 六、本次修复**尚未部署**
+### 六、部署与部署后复验（2026-10-09）
 
-修复只在分支上；41 现在跑的还是带这个缺陷的版本。**未完成业务验收** ——
-部署后要复验的是"同一个已登记的 `knowledge_id` 从 502 变成 200 且带 `records`"。
+PR #613 合并（`a98d0aa`）后 CD 首次跑**失败**，但失败在**部署之后**：
+
+```
+== 远端部署 ==   → 服务 active、/health = 0.1.0+a98d0aac4ba4、selfcheck=passed
+== 部署后验证 == → dev-host: 主机清单不可读或不存在:/tmp/tmp.…/registry/hosts.toml
+                   ##[error]Process completed with exit code 65.
+```
+
+即**源码已换、服务已起**，倒在最后一步的 dev-host 回读上。**重跑一次即成功**
+（run 37896751798），且这次五条断言全过：服务 active ✓、`/health` ok ✓、
+`/health version 含 a98d0aac4ba4` ✓、文件数 70 == 预期 ✓、逐文件 sha 一致 ✓。
+➡️ 首次失败是**间歇性**的（重跑即过），留作后续观察项，本票不改。
+
+**部署后真机复验**（`172.18.0.1:8788`，机器内地址；Dify 的容器到不了它，见下）：
+
+```
+POST /v1/dify/retrieval  knowledge_id=kb-canary-2
+  → HTTP 200
+  → {"records":[…]}（2 条）
+  → 顶层键 = ["records"]；每条含 content/score/title/metadata，metadata 是对象
+```
+
+**这就是本票的验收判据**：同一个已登记的 `knowledge_id`，修复前 502、修复后 200 且带
+`records`。**修复的业务验收完成**（"经适配路由真取到知识"这一步）。
+
+### 七、`deploy/check_dify_exposure.py` 的段 2/段 3 在 41 上的复跑
+
+- 段 2（一次性数据根上的真网关）：`--runtime` **退出码 0**，`401 / 403 / 502` 三个观测不变。
+- 段 3（从 Dify 容器里探）：`--network --host yidong-36 --host-ip 172.18.0.1`
+  **退出码 0**，两个容器对 5 个内部目标全部 `BLOCKED`，探针自检 `healthy`。
+
+### 八、**未完成**的部分：公网入口那一跳（#614）
+
+41 的 nginx 把 `/v1/` 下的 `Authorization` 统一覆盖成 AI-Ops 自己的服务令牌
+（`proxy_set_header Authorization $aiops_auth;`）。所以 Dify 带着它的 key 从公网打进来时：
+
+```
+POST https://api.mall.qushiyun.com/v1/dify/retrieval   → 403 {"code":"DIFY_CREDENTIAL_REJECTED"}
+```
+
+**这是预期行为，不是缺陷**：适配路由本来就是按"上游 nginx 供凭据"设计的（与 `/v1/*`
+其余端点一致），而"Dify 自己带 key"是 PRD 里画的形态。两者不一致，需要**一次显式的暴露决定**
+（记在 #614），不是随手改一行 nginx。
+
+因此 **"运营在 Dify 控制台里挂上这个 endpoint 并能调通"仍未完成**；
+本轮完成的是"适配路由本身的租户重绑 + 经机器内地址端到端取到知识"。
+
 
 ## #583 Dify 暴露面登记表 + 段 1 CI 回归（2026-10-09，真机 + 离线）
 
