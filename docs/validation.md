@@ -1,3 +1,59 @@
+## #586 面向 Dify 的调试身份：凭据决定身份，请求不参与（2026-10-09，离线）
+
+**分支** `feat/dify-debug-identity`，基线 `origin/main` @ `35a0643`。
+**制品** `src/aiops_diagnostics/dify_debug_identity.py` +
+`gateway_config.py`（三个调试键）+ `gateway_api.py`（凭据 → 身份）+ `tests/test_dify_knowledge_api.py`（+9 例）。
+
+### 一、要解决的问题与它的形状
+
+运营在 Dify 的调试预览里要能打到真数据；但借生产凭据等于把调试面和生产线**焊死**。
+所以做一条专用身份：**凭据决定身份**。
+
+| 凭据 | 身份 | 能到哪 |
+|---|---|---|
+| `AIOPS_GATEWAY_DIFY_KNOWLEDGE_API_KEY` | `production` | 登记表里全部已登记的 `knowledge_id` |
+| `AIOPS_GATEWAY_DIFY_DEBUG_API_KEY` | `debug` | **只有**固定测试租户下、列在调试子集里的 id |
+
+**"由凭据决定"是这一层的全部要点**：请求能带的东西太多了（头、查询串、body 的
+`knowledge_id` 与 `retrieval_setting`）。只要其中任何一个能影响"我是谁"，这条边界就
+只是一个默认值。因此 `DifyIdentity` **不带任何来自请求的字段**，`allows(knowledge_id,
+tenant_id)` 也只接受**登记表侧**的两个值 —— 调用方想给调试身份提权，没有可传的参数。
+
+### 二、判据与测试
+
+| 判据（issue #586） | 结果 | 怎么证的 |
+|---|---|---|
+| 绑定**固定测试租户**，不可由请求改写 | ✅ | `test_the_debug_identity_is_pinned_to_its_tenant`（子集里写了 T-2 的 id，仍 404） |
+| 只可见**只读子集** | ✅ | `test_the_debug_identity_cannot_be_widened_by_request_fields`、`test_an_empty_subset_reaches_nothing_rather_than_everything` |
+| 带头/带体**不得**扩大范围或提权 | ✅ | 逐个头试：`X-Business-Entry`/`X-AIOps-Source-Key`/`X-Third-Session`/`tenant-id`/自定义的 `X-Dify-*`，**全部不参与判定** |
+| 专用凭据与生产**分离**，不入仓/入证据/打印 | ✅ | `repr=False`；同值即**启动失败**（`must differ`）；测试里用的是合成值 |
+| 生产链路**不受影响** | ✅ | `test_production_keys_are_rejected_without_one` + 全部既有 12 例逐字通过 |
+| 测试打在既有接缝上 | ✅ | 全部经**网关 HTTP 面**（`create_gateway_app` + `TestClient`），与 #581 同一先例 |
+
+**两个"必须有"的负向判据**，各自对应一处危险默认值：
+
+- **空子集 = 什么都取不到**，不是"不收窄"。漏写一个配置项若被读成 `None`（= 不收窄），
+  调试凭据就拿到了生产面 —— 这是这一层最危险的一处默认值。
+- **越权与未登记同为 404**。403 会说"这条存在，只是你不能用"，调试身份可以拿它逐个
+  试出生产有哪些知识库。
+
+**"测试钉得住"是实测的**：把 `identity.allows(...)` 那道门临时短路，**5 条测试转红**；
+恢复后 24 例全过。
+
+### 三、配置与半配置
+
+三个调试键都走**服务端配置**文件（41 上就是 `production.env`，与既有两个键同一条读取路径）。
+`validate()` 里三处半配置是**启动错误**：只给凭据没给租户 / 只给租户没给凭据 /
+给了调试身份但生产两键没配（调试身份**收窄那条路由**，不创建它）。另加一条
+"两把凭据不得同值" —— 同值等于没有分离，而分离正是这个身份存在的理由。
+
+### 四、证据边界（据实）
+
+- 全部为**离线自动化**（网关 HTTP 面 + 合成凭据）。**未连真实 Dify、未在 41 上配**这三个键
+  ⇒ **未完成业务验收**；"运营在 Dify 的调试预览里真的用这条身份取到了数据"属 #587。
+- 本票**不改**生产身份的任何行为：生产凭据解析到 `PRODUCTION_IDENTITY`（无固定租户、
+  无子集），与 #581 逐字一致。
+
 ## #614 公网入口那一跳：让 Dify 自己的 key 到达适配路由（2026-10-09，41 真机）
 
 **分支** `feat/dify-exposure-entry`，基线 `origin/main` @ `2179566`。

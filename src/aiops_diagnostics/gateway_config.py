@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import re
+import secrets
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -89,6 +90,17 @@ class GatewayServerSettings:
     #: 本路由转调知识库服务时的 top_k 上限。Dify 自己也会发 top_k；我们**封顶**而不是直接
     #: 采信，理由与 ``KnowledgeSearchGuard`` 的 ``max_results`` 相同：检索范围归我们控制。
     dify_knowledge_max_top_k: int = 5
+    #: 调试身份的**专用凭据**（#586）。与生产那把**分离**：运营在 Dify 的调试预览里用它，
+    #: 因此它不该是生产凭据（那把能到全部已登记的知识库）。留空 ⇒ 该身份整体不存在，
+    #: 配置里的调试子集也随之无效 —— 「没有调试身份」是一个合法状态，不是半配置。
+    dify_debug_api_key: str = field(repr=False, default="")
+    #: 调试身份固定的**测试租户**（#586）。它**不可由请求改写**：解析函数不接受任何请求字段，
+    #: 这个值直接进 ``DifyIdentity.fixed_tenant``。留空 ⇒ 调试身份无效（与凭据成对）。
+    dify_debug_tenant: str = ""
+    #: 调试身份可用的 ``knowledge_id`` 子集，逗号分隔。空 ⇒ 子集为空（调试身份**什么也取不到**），
+    #: 不是"不收窄" —— 「配了调试凭据但没给子集」与「给了一个空子集」在语义上必须是同一件事，
+    #: 否则一次漏写子集就等于把生产面开给了调试凭据。
+    dify_debug_knowledge_ids: str = ""
     #: Conversation context window (#482). The defaults ARE the contract's
     #: numbers (8 turns / 8k tokens, ``conversation_store`` owns the constants);
     #: they are configurable because a RAG or promotional turn also spends the
@@ -170,6 +182,12 @@ class GatewayServerSettings:
             dify_knowledge_bindings=_env("AIOPS_GATEWAY_DIFY_KNOWLEDGE_BINDINGS")
             or _file_value(file_values, "AIOPS_GATEWAY_DIFY_KNOWLEDGE_BINDINGS"),
             dify_knowledge_max_top_k=_env_int("AIOPS_GATEWAY_DIFY_KNOWLEDGE_MAX_TOP_K", 5),
+            dify_debug_api_key=_env("AIOPS_GATEWAY_DIFY_DEBUG_API_KEY")
+            or _file_value(file_values, "AIOPS_GATEWAY_DIFY_DEBUG_API_KEY"),
+            dify_debug_tenant=_env("AIOPS_GATEWAY_DIFY_DEBUG_TENANT")
+            or _file_value(file_values, "AIOPS_GATEWAY_DIFY_DEBUG_TENANT"),
+            dify_debug_knowledge_ids=_env("AIOPS_GATEWAY_DIFY_DEBUG_KNOWLEDGE_IDS")
+            or _file_value(file_values, "AIOPS_GATEWAY_DIFY_DEBUG_KNOWLEDGE_IDS"),
             jev_base_url=_env("AIOPS_GATEWAY_JEV_BASE_URL")
             or _file_value(file_values, "AIOPS_GATEWAY_JEV_BASE_URL"),
             jev_api_key=_env("AIOPS_GATEWAY_JEV_API_KEY")
@@ -237,6 +255,26 @@ class GatewayServerSettings:
             )
         if not 1 <= self.dify_knowledge_max_top_k <= 20:
             raise ValueError("AIOPS_GATEWAY_DIFY_KNOWLEDGE_MAX_TOP_K must be between 1 and 20")
+        # #586：调试身份的两半 —— 凭据与固定租户 —— 必须成对。只给凭据会让运维以为
+        # 「调试身份建好了」，而实际它连自己是哪个租户都不知道，于是要么整体无效（静默），
+        # 要么退化成「用调试凭据拿到了生产范围」（危险）。交给启动失败。
+        if self.dify_debug_api_key and not self.dify_debug_tenant:
+            raise ValueError("AIOPS_GATEWAY_DIFY_DEBUG_TENANT is required when a Dify debug API key is set")
+        if self.dify_debug_tenant and not self.dify_debug_api_key:
+            raise ValueError("AIOPS_GATEWAY_DIFY_DEBUG_API_KEY is required when a Dify debug tenant is set")
+        # 调试凭据不得与生产凭据同值：同值等于没有分离，而"分离"正是这个身份存在的理由。
+        if self.dify_debug_api_key and secrets.compare_digest(
+            self.dify_debug_api_key, self.dify_knowledge_api_key
+        ):
+            raise ValueError(
+                "AIOPS_GATEWAY_DIFY_DEBUG_API_KEY must differ from AIOPS_GATEWAY_DIFY_KNOWLEDGE_API_KEY"
+            )
+        # 生产面未启用时调试身份无从谈起（它只在同一条路由上生效）。
+        if self.dify_debug_api_key and not self.dify_knowledge_api_key:
+            raise ValueError(
+                "AIOPS_GATEWAY_DIFY_KNOWLEDGE_API_KEY is required when a Dify debug identity is set "
+                "(the debug identity narrows that route; it does not create it)"
+            )
         # 登记表在这里解析一次：解析失败是**启动错误**，而不是第一个请求到达时才发现 ——
         # 后者会把一个配置错误伪装成一次运行时故障。
         parse_dify_knowledge_bindings(self.dify_knowledge_bindings)
