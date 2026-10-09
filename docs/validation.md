@@ -39,6 +39,20 @@ grep -rn "pull_agent_draft|converge_agent_draft" src/aiops_diagnostics/*.py | gr
 **"钉得住"是实测的**：把 `--dry-run` 短路 ⇒ dry-run 那条转红；把 `publish` 换成假对象 ⇒
 发布那条转红。恢复后 15 例全过。
 
+### 三·补、在 41 上真跑时踩到并修掉的一处（提交后追加）
+
+第一次在 41 上执行时命令报 `缺少 Dify 控制台配置`，而配置**确实在** ——
+`--config /etc/aiops-41/production.env` 是既有调用形状（runbook §2/§3 全这么写）。
+
+根因：`GatewayServerSettings.from_env()` 只看 `AIOPS_GATEWAY_SERVER_CONFIG_FILE`
+（systemd 里指向 `gateway.env`）**与默认路径**，**不看 `--config`**。既有三个 admin
+命令没暴露这个问题，是因为它们的控制台键只在网关进程里用 —— 那里那个变量是对的。
+
+修法：`--config` 显式给了文件、且 `from_env` 没取到控制台键时，就**从那个文件读**
+（读的是同一个 `_private_config_values`，仍然过私有文件校验）。新增一条测试把两种来源
+**分开**摆好：控制台键只放进 `--config` 的文件，进程环境里没有 —— 这正是生产上的不一致。
+实测把那段回退 ⇒ 该条转红。
+
 ### 四、证据边界（据实）
 
 - 全部**离线**：导出端点用桩、库用临时文件。**未**连真实 Dify 控制台（41 上还没配这三键），
