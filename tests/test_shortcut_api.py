@@ -1368,3 +1368,87 @@ def test_a_partially_translated_row_is_not_claimed_to_be_translated(tmp_path: Pa
     assert body["language"] == "zh"
     # The translated field is still served — the fallback reports, it does not strip.
     assert body["shortcuts"][0]["label"] == "Customer Cases"
+
+
+# ── 开场白与预设问题（#585）────────────────────────────────────────────────
+
+
+def test_starters_come_from_our_artifact_in_the_requested_language(tmp_path: Path) -> None:
+    """制品是权威，语言是请求声明的那个 —— 不是 Dify 里存的。
+
+    Dify 没有逐语言内容变体（`opening_statement` / `suggested_questions` 各是一个字段
+    一个值），所以这两类文案的权威只能在我们的版本化制品里。这一条钉住的是"取到了
+    哪一门语言"，而不是"有没有返回字符串"。
+    """
+    from aiops_diagnostics.agent_content import AGENT_STARTERS
+
+    client = _client(tmp_path)
+
+    zh = client.get("/v1/assistant/starters", headers=_HEADERS).json()
+    en = client.get("/v1/assistant/starters", headers={**_HEADERS, "Accept-Language": "en"}).json()
+    vi = client.get("/v1/assistant/starters", headers={**_HEADERS, "Accept-Language": "vi"}).json()
+
+    assert zh["opening"] == AGENT_STARTERS.opening["zh"]
+    assert en["opening"] == AGENT_STARTERS.opening["en"]
+    assert vi["opening"] == AGENT_STARTERS.opening["vi"]
+    assert zh["suggested_questions"] == list(AGENT_STARTERS.suggested["zh"])
+    assert en["suggested_questions"] == list(AGENT_STARTERS.suggested["en"])
+    assert zh["starters_version"] == AGENT_STARTERS.version
+    assert zh["language"] == "zh" and en["language"] == "en" and vi["language"] == "vi"
+
+
+def test_starters_never_speak_chinese_to_a_non_chinese_reader(tmp_path: Path) -> None:
+    """非中文读者拿到的开场白里**一个汉字都不能有**。
+
+    这是"中文母版不被直接吐出"的判据。它比"两段字符串不相等"强：少了这一条，
+    一份只有 zh 的制品也能让前面那条测试看起来在跑。
+    """
+    import re
+
+    client = _client(tmp_path)
+    han = re.compile(r"[一-鿿]")
+    for language in ("en", "de", "fr", "es", "pt", "vi", "mn", "th", "km"):
+        body = client.get("/v1/assistant/starters", headers={**_HEADERS, "Accept-Language": language}).json()
+        assert body["language"] == language
+        assert not han.search(body["opening"]), f"{language} 的开场白里出现了汉字"
+        for question in body["suggested_questions"]:
+            assert not han.search(question), f"{language} 的预设问题里出现了汉字：{question}"
+
+
+def test_an_unsupported_language_falls_back_to_the_chinese_authority(tmp_path: Path) -> None:
+    """没声明过的语言回落到 zh 权威 —— 与 `resolve_language` 同一口径。"""
+    client = _client(tmp_path)
+    body = client.get("/v1/assistant/starters", headers={**_HEADERS, "Accept-Language": "xx"}).json()
+    assert body["language"] == "zh"
+    assert body["opening"]
+
+
+def test_the_artifact_covers_every_supported_language() -> None:
+    """覆盖是判据：缺一门语言不是"还没补完"，而是**用户会看到中文**。
+
+    `resolve_language` 接受所有已声明语言，而取不到就回退 zh —— 所以一份两门语言的
+    制品会静默地给其余九门语言发中文。这条把"缺"变成一个会红的结论。
+    """
+    from aiops_diagnostics.agent_content import starter_gaps
+
+    assert starter_gaps() == (), f"内容制品缺这些语言的文案：{starter_gaps()}"
+
+
+def test_the_pull_path_does_not_read_difys_copy_of_these_fields() -> None:
+    """与 #580 的"不从 DSL 取"互相印证：制品的权威性要求拉取路径**不消费**那两个字段。
+
+    这一条把两票之间的边界钉成一句可运行的断言：DSL 里带了这两个字段（真固件就带），
+    映射结果里对应位置**必须为空**。
+    """
+    import json
+    from pathlib import Path as _Path
+
+    from aiops_diagnostics.dify_dsl_pull import map_dsl_to_config
+
+    dsl = (_Path(__file__).parent / "fixtures" / "dify-app-chat.dsl.yml").read_text(encoding="utf-8")
+    assert "opening_statement" in dsl and "suggested_questions" in dsl, "固件里应该有这两个字段"
+    del json
+
+    config = map_dsl_to_config(dsl, agent_type="customer")
+    assert config.opening_questions == ()
+    assert config.quick_commands == ()

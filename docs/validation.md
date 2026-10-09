@@ -1,3 +1,48 @@
+## #585 开场白与预设问题的内容制品权威 + 语言派生（2026-10-09，离线）
+
+**分支** `feat/dify-opening-content`，基线 `origin/main` @ `203a781`。
+**制品** `src/aiops_diagnostics/agent_content.py` + `GET /v1/assistant/starters`
++ `tests/test_shortcut_api.py`（+5 例）。
+
+### 一、动因是已核实的事实
+
+Dify **没有逐语言的内容变体**：`opening_statement` / `suggested_questions` 各是**一个
+字段一个值**，没有按语言分支的形状。而这两类都是用户可见的，且 #580 的拉取路径已经
+**刻意不消费**它们（当时把权威指向了本票）。所以权威落在我们的**版本化制品**里，
+运行时按请求语言派生。
+
+**"新增一门语言不改 Dify 里的任何配置"**因此不是口号：改的是 `AGENT_STARTERS` 里的一行。
+
+### 二、判据与测试
+
+| 判据（issue #585） | 结果 | 怎么证的 |
+|---|---|---|
+| 三类字段的权威是我们**版本化**的制品，Dify 侧不被消费 | ✅ | 制品带 `STARTERS_VERSION` 并进载荷；`test_the_pull_path_does_not_read_difys_copy_of_these_fields` 用**真固件**（它里带这两个字段）证映射结果为空 |
+| 中文权威母版 + 运行时**派生**，不是人工复制多份 | ✅ | 一张表、11 门语言；缺该语言回退 zh 权威 |
+| 遵守既有**语言清单**；不自行枚举语言 | ✅ | 覆盖检查 `starter_gaps()` 直接遍历 `i18n.SUPPORTED_LANGUAGES` |
+| **新增一门语言不改 Dify 里的任何配置** | ✅ | 只需往制品里加一行；端点在运行时读制品 |
+| 两条入口的既有语言行为无回归 | ✅ | 端点用与 `/v1/shortcuts` **同一个** `shortcut_identity` 与 `request_language` 依赖；全量 2001 passed |
+| 测试打在既有接缝上 | ✅ | 全部经**网关 HTTP 面**（`create_gateway_app` + `TestClient`），先例 `test_shortcut_api.py` |
+
+**一条比"前后不相等"更强的判据**：非中文读者拿到的文案里**一个汉字都没有**
+（`test_starters_never_speak_chinese_to_a_non_chinese_reader`，正则扫 CJK 区）。
+少了它，一份只有 zh 的制品也能让"三种语言各取各的"看起来在跑。
+**实测钉得住**：把 `en` 的开场白临时换成中文那句，**该条转红**；换回后全过。
+
+### 三、为什么"覆盖"是判据而不是待办
+
+`resolve_language` 接受**所有已声明语言**，而取不到就回退 zh —— 所以一份两门语言的制品
+会**静默地**给其余九门语言发中文。`starter_gaps()` 把这件事变成一个会红的结论，
+`test_the_artifact_covers_every_supported_language` 断言它是空元组。
+（这与 `shortcut_lifecycle` 的语言覆盖门是同一条规则，同一种失败形态。）
+
+### 四、证据边界（据实）
+
+- 全部**离线自动化**。文案是**写下来的**，不是机器翻译的产物（短句机翻质量不足以直接
+  给用户看，而这一版的量很小）。**未**由语言专家复核，**未**在真机上以真用户身份取过
+  ⇒ **未完成业务验收**。
+- 本票**不改**任何既有端点的行为：新增一条只读端点，其余逐字不变。
+
 ## #586 面向 Dify 的调试身份：凭据决定身份，请求不参与（2026-10-09，离线）
 
 **分支** `feat/dify-debug-identity`，基线 `origin/main` @ `35a0643`。
