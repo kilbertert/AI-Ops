@@ -1476,3 +1476,98 @@ def test_the_recorded_cards_are_carried_by_the_exemption_alone(
     # The status still tells the truth about retrieval; only the alert says why.
     assert result["retrieval_status"] == "found"
     assert "language_fallback" not in result
+
+
+# --------------------------------------------------------------------------
+# 第五跳：回答正文的非中文由谁派生（#635）
+#
+# 阶段 1 的第五跳是「**非中文**由内容制品 + 运行时派生服务」。它有两半：
+#   界面文案 —— /v1/assistant/starters 覆盖 11 门语言（#585，已交付）；
+#   回答正文 —— 由**运行时**派生：Dify 只存一份中文权威母版，非中文请求由
+#              qa_rag 的初始提示词按目标语言指示模型产出，定稿点再由
+#              answer_language 的共享 guard 兜底。
+#
+# 下面两条把「派生发生在哪一层、以什么为权威」钉成可执行的话。判据用**独立实现**
+# 的中文扫描（正则直接写在断言里），不调用被测的 guard —— 否则是"用被测物判被测物"。
+# --------------------------------------------------------------------------
+
+#: CJK 区（与 i18n.CJK_TEXT 同区段，但这里独立写死）：非中文正文里出现任何一个
+#: 都算泄漏。不用被测模块的正则，是刻意让这条判据与实现解耦。
+_HAN = re.compile(r"[㐀-䶿一-鿿　-〿＀-￯]")
+
+
+def _text_blocks(result: dict[str, Any]) -> list[str]:
+    return [str(b.get("text") or "") for b in result["blocks"] if b.get("kind") == "text"]
+
+
+def test_non_chinese_answer_is_derived_by_the_runtime_not_read_from_dify(tmp_path: Path) -> None:
+    """非中文正文由**运行时**派生：同一份中文母版 + 非中文请求 ⇒ 正文不是中文。
+
+    这条同时说明「以什么为权威」：选择里的 `prompt` 是那份**中文**母版（Dify 存的那份），
+    而模型被告知用目标语言作答 —— 权威在运行时这一层，不在 Dify 的字段里。
+    """
+    session = _FakeSession(
+        [
+            _tool_request("charging"),
+            # 一个"照做了"的模型：正文用请求的语言，引用块的标题仍是资源名（豁免）。
+            _answer([_text_block("The charger will not start — press the latch and pull.")], "found"),
+        ]
+    )
+    result = _run(
+        tmp_path,
+        session,
+        _SearchClient([[dict(_IMAGE_CHUNK)]]),
+        question="Why won't my charger start?",
+        language="en",
+    )
+    texts = _text_blocks(result)
+    assert texts, result
+    for text in texts:
+        assert not _HAN.search(text), f"非中文回答里出现了汉字：{text!r}"
+    # 权威在运行时：提示词里带着目标语言，而母版本身是中文。
+    prompt = session.prompts[0]
+    assert "English" in prompt, "初始提示词必须声明目标输出语言"
+
+
+def test_a_chinese_answer_on_a_non_chinese_request_is_withheld_not_delivered(tmp_path: Path) -> None:
+    """模型漏中文时，**兜底替换**而不是把中文交付出去（定稿点的共享 guard）。
+
+    这是第五跳的另一半：派生只是提示词层面的引导，**兜底**才是保证。
+    判据写成「正文里没有汉字」而不是「前后不相等」—— 后者会被一份只有 zh 的制品
+    骗过（同 #585 的汉字门）。
+    """
+    session = _FakeSession(
+        [
+            _tool_request("charging"),
+            _answer([_text_block("充电桩无法启动时，请先按下卡扣再拔出枪头。")], "found"),
+        ]
+    )
+    result = _run(
+        tmp_path,
+        session,
+        _SearchClient([[dict(_IMAGE_CHUNK)]]),
+        question="Why won't my charger start?",
+        language="en",
+    )
+    texts = _text_blocks(result)
+    assert texts, result
+    for text in texts:
+        assert not _HAN.search(text), f"中文被交付给了非中文读者：{text!r}"
+    assert result["retrieval_status"] in {"found", "not_found", "unavailable", "limited"}
+
+
+def test_the_same_master_prompt_serves_every_language(tmp_path: Path) -> None:
+    """**同一份母版**服务每一门语言 —— 这是"派生"而不是"多份副本"的判据。
+
+    如果实现改成"每种语言一份提示词"，这里会红：母版应当逐字不变，
+    变的只有提示词里的目标语言声明。
+    """
+    prompts: dict[str, str] = {}
+    cases = (("en", "Why won't my charger start?"), ("vi", "Vì sao trụ sạc không khởi động?"))
+    for language, question in cases:
+        session = _FakeSession([_tool_request("charging"), _answer([_text_block("ok")], "found")])
+        _run(tmp_path, session, _SearchClient([[dict(_IMAGE_CHUNK)]]), question=question, language=language)
+        prompts[language] = session.prompts[0]
+    for language, prompt in prompts.items():
+        assert _selection().prompt in prompt, f"{language} 的提示词里没有那份中文母版"
+    assert "English" in prompts["en"] and "Vietnamese" in prompts["vi"]

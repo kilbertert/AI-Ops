@@ -1,3 +1,55 @@
+## #635 阶段 1 第五跳：回答正文的非中文由运行时派生（2026-10-09，41 真机 + 离线）
+
+**分支** `test/dify-lang-hop5`，基线 `origin/main` @ `b5469e8`。
+上一轮把第三跳跑到了 `found`（#634），这一轮补第五跳。
+
+### 一、第五跳有两半，之前只成立一半
+
+| 半边 | 状态 |
+|---|---|
+| **界面文案**的多语言 | ✅ `/v1/assistant/starters` 覆盖 11 门语言（#585） |
+| **回答正文**的非中文 | 本轮补齐 —— 见下 |
+
+### 二、41 真机：同一条已发布版本，四种语言
+
+对 `1783022023241633792` 那条**从 Dify 拉来、经我方发布门冻结**的版本
+（`canary-dify-pull` v2），用**真实运行时**各发一条提问：
+
+| 语言 | 提问 | status | retrieval | 正文 |
+|---|---|---|---|---|
+| zh | 新加坡无人电动巴士是什么？ | completed | found | 中文（应然） |
+| en | What is the Singapore unmanned electric bus project? | completed | found | 英文，**零汉字** |
+| vi | Dự án xe buýt điện không người lái Singapore là gì? | completed | found | 越南语，**零汉字** |
+| de | Was ist das unbemannte Elektrobus-Projekt in Singapur? | completed | **not_found** | 德语，**零汉字** |
+
+**判据用独立实现**（`/tmp/aiops-langcheck/mygate.py`，正则写死、**不 import 仓库代码**）
+—— 避免"用被测物判被测物"：非中文 3 条全部零汉字，退出码 0。
+
+**反证**：把 en 那条正文在内存里换成中文（不动生产数据），同一个脚本**转红**
+（`LEAK(18)`，退出码 1）。一份不会红的判据不是证据。
+
+**de 那条 `not_found` 不是失败**：它的正文仍然零汉字 —— 说明**兜底与派生都成立**，
+只是那一条查询在该库里没命中。
+
+### 三、"派生发生在哪一层、以什么为权威" —— 变成可执行的话
+
+`tests/test_qa_rag.py` 新增 3 例（判据里的 CJK 正则**独立写死**，不调被测 guard）：
+
+| 用例 | 钉住什么 |
+|---|---|
+| `test_non_chinese_answer_is_derived_by_the_runtime_not_read_from_dify` | 同一份**中文**母版 + 非中文请求 ⇒ 正文非中文；且初始提示词里带着目标语言 —— **权威在运行时这一层** |
+| `test_a_chinese_answer_on_a_non_chinese_request_is_withheld_not_delivered` | 模型漏中文时**兜底替换**（定稿点的共享 guard），不是把中文交付出去 |
+| `test_the_same_master_prompt_serves_every_language` | **同一份母版**服务每一门语言 —— 若改成"每种语言一份提示词"，它会红 |
+
+**"会红"是实测的**：把 `answer_language` 的泄漏判定临时短路 ⇒ 该文件 **6 条转红**
+（含新加的那条）；恢复后全过。
+
+### 四、证据边界（据实）
+
+- 41 上那次用的是**真运行时 + 真模型 + 真 KB**，但提问是**合成**的（不是真实终端用户）；
+- 语言覆盖只跑了 zh/en/vi/de 四门，**不是**全部 11 门；
+- 界面文案那一半（#585）**未在 41 上以真用户身份取过**。
+
 ## #587 阶段 1 第三跳收口：`canary-media-0911` 的 embedding 修复（2026-10-09，41/36 真机）
 
 **分支** `docs/kb-embedding-fix-evidence`，基线 `origin/main` @ `6c7727f`。
