@@ -2257,6 +2257,40 @@ Feature: 不是本人的订单不再伪装成通用回答（#620）
       And message 与 en 文案逐字相同
       And message 里没有汉字残留
 
+Feature: 开场白与预设问题的内容制品权威（#585）
+  Dify 没有逐语言内容变体 —— `opening_statement` / `suggested_questions` 各是一个字段
+  一个值。所以这两类用户可见文案的权威在我们侧的**版本化制品**里，运行时按语言派生。
+
+  Rule: 文案来自我们的制品，按请求声明的语言取用
+
+    Scenario: 三种语言各取各的
+      Given 一份覆盖全部受支持语言的内容制品
+      When 分别以 zh / en / vi 请求开场白与预设问题
+      Then 每次拿到的是那门语言的文案
+      And 载荷里带着制品的版本号
+
+    Scenario: 非中文读者不会看到中文
+      Given 一把非中文语言的请求
+      When 读开场白与预设问题
+      Then 一个汉字都没有
+
+    Scenario: 没声明过的语言回落到中文权威
+      Given 请求里是一门未声明的语言
+      Then 回落 zh，且文案非空
+
+  Rule: 覆盖与"Dify 侧不被消费"都是判据
+
+    Scenario: 制品必须覆盖语言清单里的每一门
+      Given i18n 的语言清单
+      When 检查制品的覆盖缺口
+      Then 空元组才算完整
+      And 缺一门意味着那门语言的用户会看到中文
+
+    Scenario: 拉取路径不读 Dify 里这两个字段
+      Given 一份带 opening_statement 与 suggested_questions 的真实 DSL
+      When 映射为我们的智能体配置
+      Then 对应的两个位置为空
+
 Feature: 凭据被拒与上游不可用必须区分（#617）
 
   Rule: 两者的处置不同，因此在每一层都要可分辨

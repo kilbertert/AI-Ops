@@ -249,6 +249,11 @@ SURFACE_HANDLERS = {
     "delete_conversation": "assistant_identity",
     "set_conversation_active_order": "assistant_identity",
     "list_shortcuts": "shortcut_identity",
+    # The starters copy is shown on the same chat surface as the shortcut
+    # buttons (#585): same caller, same tenant/entry resolution, so the same
+    # identity. Registering it here is the map's job — the guard exists so a new
+    # surface cannot pick an identity nobody looked at.
+    "assistant_starters": "shortcut_identity",
     # The banner is a product surface on the same entry, so it reads the same
     # identity: anything the shortcut listing may show, the banner may too.
     "list_banners": "shortcut_identity",

@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from aiops_diagnostics import __version__
+from aiops_diagnostics.agent_content import AGENT_STARTERS
 from aiops_diagnostics.agent_lifecycle import (
     AGENT_MANAGE_SCOPE,
     AgentConfig,
@@ -2035,6 +2036,30 @@ def create_gateway_app(
                 status.HTTP_409_CONFLICT, "SHORTCUT_REVISION_CONFLICT", "shortcut revision conflict"
             )
         return StandardAPIError(status.HTTP_422_UNPROCESSABLE_ENTITY, exc.code, str(exc))
+
+    @app.get("/v1/assistant/starters")
+    def assistant_starters(
+        identity: tuple[ScopeContext, PlatformDecision] = Depends(shortcut_identity),  # noqa: B008
+        language: str = Depends(request_language),  # noqa: B008
+    ) -> dict[str, Any]:
+        """This assistant's opening line and suggested questions (#585 / PRD #577).
+
+        **The copy is ours, not Dify's.** Dify has no per-language content
+        variants — ``opening_statement`` and ``suggested_questions`` are one
+        field with one value — so the authority lives in our versioned content
+        artifact (``agent_content.AGENT_STARTERS``) and the runtime derives the
+        requested language from it. Adding a language changes that artifact and
+        **nothing in Dify**; the pull path (#580) deliberately does not read the
+        DSL's copies of these two fields.
+
+        Read by the same callers the shortcut listing serves (both entries): the
+        copy is presentation, and the caller's platform is already resolved by
+        the time we get here. ``language`` is whatever the request asked for;
+        the artifact answers with the authoritative zh copy when a translation is
+        missing, and ``starter_gaps`` is the check that says so out loud.
+        """
+        del identity  # the platform is not part of the answer; the copy is shared
+        return {"type": "assistant_starters", **AGENT_STARTERS.public(language)}
 
     @app.get("/v1/shortcuts")
     def list_shortcuts(
