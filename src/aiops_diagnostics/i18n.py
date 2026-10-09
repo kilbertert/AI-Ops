@@ -508,8 +508,8 @@ CLARIFICATION_MESSAGES: dict[str, dict[str, str]] = {
         "context": "Please provide the order or device details before I can continue.",
         "wrong_entry": "Please use the shortcut button on the page to open the relevant screen.",
         "not_yours": (
-            "This order does not belong to the current account, so I cannot check it. Please pick"
-            "one of your own orders and try again."
+            "This order does not belong to the current account, so I cannot check it. "
+            "Please pick one of your own orders and try again."
         ),
     },
     "de": {
@@ -517,8 +517,8 @@ CLARIFICATION_MESSAGES: dict[str, dict[str, str]] = {
         "context": "Bitte geben Sie die Auftrags- oder Gerätedaten an, damit ich fortfahren kann.",
         "wrong_entry": "Bitte öffnen Sie die entsprechende Seite über die Schaltfläche auf der Seite.",
         "not_yours": (
-            "Dieser Auftrag gehört nicht zum aktuellen Konto; ich kann ihn nicht prüfen. Bitte"
-            "wählen Sie einen eigenen Auftrag."
+            "Dieser Auftrag gehört nicht zum aktuellen Konto; ich kann ihn nicht prüfen. "
+            "Bitte wählen Sie einen eigenen Auftrag."
         ),
     },
     "fr": {
@@ -537,8 +537,8 @@ CLARIFICATION_MESSAGES: dict[str, dict[str, str]] = {
         "context": "Facilite los datos del pedido o del dispositivo para que yo pueda continuar.",
         "wrong_entry": "Utilice el botón de la página para abrir la pantalla correspondiente.",
         "not_yours": (
-            "Este pedido no pertenece a la cuenta actual, así que no puedo comprobarlo. Elija uno"
-            "de sus pedidos."
+            "Este pedido no pertenece a la cuenta actual, así que no puedo comprobarlo. "
+            "Elija uno de sus pedidos."
         ),
     },
     "pt": {
@@ -546,8 +546,8 @@ CLARIFICATION_MESSAGES: dict[str, dict[str, str]] = {
         "context": "Forneça os dados do pedido ou do dispositivo para que eu possa continuar.",
         "wrong_entry": "Utilize o botão da página para abrir o ecrã correspondente.",
         "not_yours": (
-            "Este pedido não pertence à conta atual, por isso não o posso verificar. Escolha um"
-            "dos seus pedidos."
+            "Este pedido não pertence à conta atual, por isso não o posso verificar. "
+            "Escolha um dos seus pedidos."
         ),
     },
     "vi": {
@@ -555,8 +555,8 @@ CLARIFICATION_MESSAGES: dict[str, dict[str, str]] = {
         "context": "Vui lòng cung cấp thông tin đơn hàng hoặc thiết bị để tôi tiếp tục.",
         "wrong_entry": "Vui lòng dùng nút trên trang để mở màn hình tương ứng.",
         "not_yours": (
-            "Đơn hàng này không thuộc tài khoản hiện tại nên tôi không thể kiểm tra. Vui lòng"
-            "chọn một đơn hàng của bạn."
+            "Đơn hàng này không thuộc tài khoản hiện tại nên tôi không thể kiểm tra. "
+            "Vui lòng chọn một đơn hàng của bạn."
         ),
     },
     "mn": {

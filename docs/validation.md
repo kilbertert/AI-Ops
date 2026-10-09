@@ -9605,3 +9605,62 @@ gateway_api.py（改前）：
 - **文案未确认**：11 语言的 `not_yours` 是工程起草 + 译稿，产品未过目
   （按 #534 用户故事 20：未经确认的语言不算已验收）。
 - **上游成因未修**：用户会走到这个状态，根因是公司端点 #619，**本票不处理**。
+
+## #622 生产实测两张截图之后：`not_yours` 五语言文案粘字（2026-10-09）
+
+**分支** `fix/not-yours-copy-glued-words`，基线 `origin/main` @ `658778a`。
+
+### 一、先回答"截图那个情况解决了吗"——**已部署、已实测**
+
+41 的 `/health` 报 `0.1.0+0e2802282966`（= #620 的合并提交，**已上线**），
+部署树里 `not_yours` 在 `gateway_api.py` 与 `i18n.py` 都在。用**真实会话**驱动生产应用：
+
+```
+A) 用订单真实归属人的会话，发同一句话  -> type: diagnosis          （照常进诊断）
+B) 用另一个人的会话，发同一句话        -> HTTP 200 type: clarification
+                                          missing_fields: []
+                                          message: "This order does not belong to the current account, …"
+```
+
+⇒ **截图里那种「我无法核实这个订单」的通用答复，在后端已不再产生**。
+剩下的差别在客户端：它是 APK 内置版本，要等前端发版才换文案。
+
+### 二、但这次实测**照出了我自己刚引入的缺陷**
+
+上面 B 的 `message` 里有一处：`Please pickone of your own orders`。
+
+`not_yours` 的五个语言（en/de/es/pt/vi）在源码里是**隐式拼接**的相邻字面量，
+而我在排版时把**空格放在了后一个字符串的开头**：
+
+```python
+"This order does not belong to the current account, so I cannot check it. Please pick"
+"one of your own orders and try again."      # ← 前一行结尾没有空格，后一行开头也没有
+```
+
+**Python 照常拼接，什么都不会失败** —— 而表格类的测试只断言"覆盖全语言 / 非空"，
+两个条件它都满足。**这是同一类缺陷在同一小时内第二次出现**：
+前一次我把空格放在第二段开头，被排版的换行吃掉；这次的修法是把空格**放在前一段结尾**，
+并加一道**源码级门**（见下）来防它第三次。
+
+### 三、修法
+
+- 五个语言改为把空格留在**前一个字面量结尾**（对任何换行/换行宽度都安全）；
+- 新增 `test_no_implicit_string_join_glues_two_words_together`（`tests/test_i18n.py`）：
+  **按 token 扫描 `src/aiops_diagnostics/*.py`**，若两个相邻 STRING token 的边界
+  两侧都是"需要空格的字符"，即判失败。跳过：转义（env 文件固件是有意拼接）、CJK 边界
+  （中文不空格）。**这是源码级判据，不是取值级** —— 取值级判据看不见"少一个空格"。
+- 变异核对：把粘字版本改回去 ⇒ 该门转红。
+
+### 四、验证
+
+- 全量 `PYTHONPATH=$PWD/src uv run pytest tests/ -q` 通过；`ruff check`/`format` 通过。
+- 11 语言逐条重读：**无粘字、无双空格**。
+- 另跑了一次全树扫描（`src` + `tests` + `tools` + `.claude`），
+  除本处外剩余的隐式拼接全是**有意**的（env 文件固件里的 `\n`、Markdown 表格的换行），
+  **没有第二处粘字**。
+
+### 五、边界（据实）
+
+- 本修复**尚未部署到 41**（#620 已部署，这一处文案修正待下一个部署窗口）。
+- 客户端里显示的那段话仍是 **APK 内置**的，本仓只能保证服务端返回正确；
+  前端换文案是独立的一步。
