@@ -423,3 +423,39 @@ def test_pull_dify_needs_the_console_credential(tmp_path: Path) -> None:
     result = CliRunner().invoke(app, _pull_args(tmp_path), env=env)
     assert result.exit_code == 2, result.output
     assert "DIFY_CONSOLE_API_KEY" in result.output
+
+
+def test_pull_dify_reads_the_console_keys_from_the_config_flag(tmp_path: Path, monkeypatch) -> None:
+    """`--config <file>` 指的那个文件里的控制台三键必须被读到（#625 实测踩到）。
+
+    踩到的形状：41 上 `--config /etc/aiops-41/production.env` 是既有调用形状
+    （runbook §2/§3 全这么写），而 systemd 里 `AIOPS_GATEWAY_SERVER_CONFIG_FILE` 指向
+    **另一个**文件（`gateway.env`）。`GatewayServerSettings.from_env()` 只认后者，
+    于是配置明明在 `--config` 指定的文件里，命令却报"缺少 Dify 控制台配置"。
+
+    测试里把两个来源**分开**摆好：控制台键只放进 `--config` 的文件，进程环境里没有 ——
+    这正是生产上的那种不一致。既有三个命令没暴露它，是因为它们的控制台键只在网关进程里用。
+    """
+    _serve_dify_export(monkeypatch)
+    config = tmp_path / "server.env"
+    config.write_text(
+        "AIOPS_AGENT_MODEL=deepseek-v4-flash\n"
+        "AIOPS_GATEWAY_DIFY_CONSOLE_BASE_URL=http://dify.invalid:10008\n"
+        "AIOPS_GATEWAY_DIFY_CONSOLE_API_KEY=console-key-not-a-real-value\n",
+        encoding="utf-8",
+    )
+    if os.name != "nt":
+        import stat as _stat
+
+        config.chmod(_stat.S_IRUSR | _stat.S_IWUSR)
+
+    # `AIOPS_HOME` 指向一个**没有**控制台键的目录：若实现只读 from_env，它会报缺少配置。
+    env = {
+        "AIOPS_HOME": str(tmp_path / "empty-home"),
+        "AIOPS_GATEWAY_DATABASE_FILE": str(tmp_path / "gateway.db"),
+    }
+    (tmp_path / "empty-home").mkdir()
+
+    result = CliRunner().invoke(app, ["--config", str(config), *_pull_args(tmp_path)], env=env)
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["version_no"] == 1
