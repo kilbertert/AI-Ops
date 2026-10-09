@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Add the Dify tracer bullet: export → pull → publish → one question served (#582)
 - Add Dify DSL pull client and DSL→draft mapping (#580)
 - Add Dify knowledge retrieval adapter route `POST /v1/dify/retrieval` (#581)
 - Add read-only charging diagnostics runtime (#1)

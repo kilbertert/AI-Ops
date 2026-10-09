@@ -14,6 +14,26 @@
 | `apply_path_map.py` | 把译好的界面路径映射套回答案 | 路径单独译时 |
 | `migrate_shortcut_i18n.py` | 生产已发布快捷动作的语言迁移 | 上线新语言后（**有写风险，见下**） |
 | `verify_banner_car_lookup.py` | 活口检查：横幅个性化依赖的三条**公司端点**是否真成立（#590） | 改过车图/个性化链路，或要复跑那次验收时 |
+| `dify_vertical_slice.py` | 端到端竖切：#582 的那条链（Dify 导出 → 拉取 → 发布 → 一条提问被服务），跑在**一次性数据根**的真网关上 | 改动 Dify 拉取/发布/QA 运行时链路，或要复跑 #582 的验收时 |
+
+## `dify_vertical_slice.py` 是 #582 的**可复现调用**，也是 #587 的骨架
+
+它起一个**真的** uvicorn 网关（loopback、临时端口、一次性数据根），经
+`POST /v1/assistant/questions` 发一条真实提问，断言回答**确实出自刚发布的那个版本**
+（靠指标里的 `agent_version_key`，不是"某条路回了话"）。唯一被替换的是**模型会话**
+（`qa_rag.SDKCodexSession`）、改成一个脚本化两轮回答；入口判定、选 agent、有界检索闸、
+blocks-v1 校验、作业持久化、指标落库、HTTP 路由**全部是真的**。
+
+```bash
+PYTHONPATH=src python tools/dify_vertical_slice.py          # 退出码 0/1/2
+PYTHONPATH=src python tools/dify_vertical_slice.py --live-dify \
+  --base-url http://36.156.159.175:10008 --app-id <app> --api-key-env AIOPS_DIFY_CONSOLE_API_KEY
+```
+
+退出码 `2` 是**未取证**（例如 `--live-dify` 没给凭据环境变量）—— 它**不是**通过。
+边界写在证据文件的 `not_proven` 里：**不能**证明模型质量、真实 Dify 可达、生产入口与
+语言派生；那些属 #587 阶段 1 验收。证据默认落 `var/dify-tracer/`，该目录**不在
+`.gitignore`**：提交前删掉，或把制品贴进 PR 正文而不是树里。
 
 ## `verify_banner_car_lookup.py` 跑在**网关主机**上，不跑这里
 
