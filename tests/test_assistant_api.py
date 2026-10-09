@@ -137,8 +137,9 @@ class _Runtime:
         promo_target=None,
         promo_intent=None,
         skip_retrieval=False,
+        business_entry="",
     ):
-        del conversation, conversation_turn_no, promo_target, promo_intent
+        del conversation, conversation_turn_no, promo_target, promo_intent, business_entry
         self.qa_calls.append(question)
         self.skip_retrieval = skip_retrieval
         qa_id = "qa_test00000000000000000000000000000001"

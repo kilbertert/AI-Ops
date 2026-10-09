@@ -65,8 +65,9 @@ class CustomerAgentSelection:
 def select_customer_agent(
     store: AgentStore,
     tenant_id: str,
+    agent_name: str | None = None,
 ) -> CustomerAgentSelection | None:
-    """Return the newest published customer agent for the tenant, or None.
+    """Return the published customer agent that serves this tenant, or None.
 
     The store is tenant-scoped: a missing or cross-tenant agent is
     indistinguishable (absent), so no existence is leaked. Disabled agents and
@@ -75,6 +76,13 @@ def select_customer_agent(
     (#231) never serve plain customer QA — that path belongs to the
     customer-service agent; a promotional agent answers only via the
     promotional route.
+
+    ``agent_name`` (#584) is the runtime registry's answer to "which agent
+    serves this ``(tenant, entry)``". When it is given, only that agent is
+    considered — the selection stops being a search and becomes a lookup, which
+    is the point: the newest published agent is a reasonable default only while
+    nobody has declared otherwise. ``None`` keeps the pre-registry rule, for the
+    environments that have not adopted the registry yet.
     """
     from aiops_diagnostics.agent_lifecycle import AgentNotFound
 
@@ -84,9 +92,9 @@ def select_customer_agent(
     except Exception:  # store unavailable — fall back to the zero-order path
         return None
     for agent in agents:
-        if agent.agent_id in promo_targets:
+        if agent_name is not None and agent.name != agent_name:
             continue
-        if agent.status != "published" or agent.published_version is None:
+        if agent.agent_id in promo_targets:
             continue
         if agent.status != "published" or agent.published_version is None:
             continue
