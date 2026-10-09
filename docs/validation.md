@@ -1,3 +1,48 @@
+## #582 最小端到端竖切：Dify → 拉取 → 发布 → 一条提问被服务（2026-10-09，离线）
+
+**分支** `feat/dify-tracer-bullet`，基线 `origin/main` @ `6da3a5a`。
+**制品** `tools/dify_vertical_slice.py` + `tests/test_dify_tracer_bullet.py`。
+
+### 这一轮证明的是「脊梁存在」，以及它**不能**证明什么
+
+四跳走的是**真实代码路径**：Dify 导出制品 → `dify_dsl_pull` 映射 → `converge_agent_draft`
++ `AgentManager.publish`（我们的发布门）→ 一个**真的** uvicorn 网关上
+`POST /v1/assistant/questions`。**唯一被替换的是模型会话**（`qa_rag.SDKCodexSession`
+换成脚本化两轮回答），因此入口判定、选 agent、有界检索闸、blocks-v1 校验、媒体签名、
+作业持久化、指标落库、HTTP 路由全部真跑。
+
+这条替换是**刻意写进证据**的：`not_proven` 三条（模型质量 / 真实 Dify 可达 / 生产入口与
+语言派生），并有测试断言这三条**不许被删掉** —— 一份不说边界的证据会被读成「全验过了」，
+而那正是本轮要防的假陈述。
+
+| 判据（issue #582） | 结果 | 怎么证的 |
+|---|---|---|
+| 配好的 app 配置被拉回并冻成**不可变已发布版本** | ✅ | `published_version.version_no = 1`，`agent_version = agt_…#v1`；`agent_versions` 一行 |
+| 一条真实提问经运行时被该版本服务 | ✅ | 真 HTTP 面提问 → `completed`；`retrieval_status = found`；`kb_search_calls[0][0] == published.knowledge_base_ids` |
+| **回答确实出自那个版本**（不是「某条路回了话」） | ✅ | 指标 `agent_version_key` = 刚发布的 `agt_…#v1`（`metrics_runs` 原样留档） |
+| 返回体形状与今天一致 | ✅ | `block_kinds = ["text", "reference"]`，blocks-v1 |
+| 租户映射**显式**、不从请求推断 | ✅ | 证据 `mapping.declared` 原文：explicit CLI inputs, not inferred from the request |
+| 再次拉取并发布产生新版本，旧版本不被就地改写 | ✅ | `republish.version_no = 2` 且 `v1_prompt_unchanged = true`（v1 快照与首次映射的提示词逐字相等） |
+| 端到端可由**一次脚本化调用**复现 | ✅ | `PYTHONPATH=src python tools/dify_vertical_slice.py` → 退出码 0；`tests/test_dify_tracer_bullet.py` 4 例把这次调用当回归 |
+| 本票**不改**生产入口行为、**不动**生产数据 | ✅ | 全程在 `mktemp` 一次性数据根 + loopback 随机端口；结束即删，证据在树外 |
+
+### 退出码语义（同一套本仓既有纪律）
+
+`0` 通过 / `1` 有断言失败 / `2` **未取证**。`2` 不是通过：`--live-dify` 缺凭据或
+缺 `--app-id` 时它退 2，而不是安静地当作拉取成功。把「只准备了一下」读成「验证通过」
+是这类脚本最容易犯的假陈述。
+
+### 证据边界（据实）
+
+- **未连真实 Dify 实例**：本轮拉的是**已导出制品**（`tests/fixtures/dify-app-chat.dsl.yml`）；
+  `--live-dify` 需要实例凭据，本机没有，因此**实时拉取未取证**。
+- **模型是脚本化的**：不证明真实 provider 那一跳，更不证明回答质量。
+- **单租户、中文、loopback**：生产入口、真实租户映射（#584）、非中文语言派生（#585）
+  均未覆盖 ⇒ **未完成业务验收**。
+- `tests/test_cd_deploy_scripts.py::test_remote_block_renders_and_parses` 在**干净基线
+  `6da3a5a` 上同样失败**（`git stash` 复跑确认），与本轮改动无关：它是 #605 引入 `pyyaml`
+  后 41 主机的依赖漂移，正确处置是 41 上的运维依赖更新。
+
 ## #584 运行时注册表：租户/入口 → Dify app（2026-10-09，离线）
 
 **分支** `feat/dify-app-registry`，基线 `origin/main` @ `6da3a5a`。
