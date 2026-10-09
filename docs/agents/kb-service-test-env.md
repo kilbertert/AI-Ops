@@ -99,6 +99,51 @@ RAGFlow embedding 请求受百炼 `Arrearage` 阻塞，媒体 blocks 需恢复 e
 历史停机记录（2026-09-09 人为停机 120 栈、回滚快照 `/opt/ragflow-kb/rollback-20260909_151325/`）
 已被迁移取代。
 
+### 🔴 embedding 解析按「厂商名 + 实例名」硬路由：`@maas@Tongyi-Qianwen` 会被发到 DashScope（2026-10-09 实测）
+
+**症状**：某个知识库「能列出、能看文档、一检索就 502 `code=102 Internal server error`」。
+
+**第一层**：检索面失败、元数据面正常。RAGFlow 的 `search_datasets` 先
+`resolve_model_config(kb.tenant_id, EMBEDDING, kb.embd_id)`；解析失败 → 502。
+所以「元数据 200」推不出「这个库可用」—— 两者依赖不同。
+
+**第二层（本条的要点）**：解析成功后**仍然 401**。原因在
+`rag/llm/embedding_model.py` 的分派：
+
+| 类 | `_FACTORY_NAME` | 它怎么用 base_url |
+|---|---|---|
+| `OpenAIEmbed` | `OpenAI` | 纯 OpenAI schema，用实例的 `base_url` |
+| `QWenEmbed` | `Tongyi-Qianwen` | **走 DashScope SDK `dashscope.TextEmbedding.call`**；实例的 `base_url` 只在它是已知 DashScope 主机时才被采纳，否则**退回 SDK 默认端点** |
+
+实测（同一个实例 `maas`，`base_url=https://ai-api.baoyun.com/v1`，key 前缀 `sk-x4C`）：
+
+```
+直连 POST {base_url}/embeddings           -> 200（同一把 key）
+RAGFlow 走 QWenEmbed（factory=Tongyi-Qianwen）-> 401 InvalidApiKey
+  ↳ 日志：base_url is set but not recognized as a DashScope host;
+          using SDK default endpoint (https://ai-api.baoyun.com/v1)
+  ↳ 用进程内那把 key 直接 dashscope.TextEmbedding.call(...) -> 401
+```
+
+即：**key 是好的，是被发到了错误的端点**。这与 `mem-20260917-ranlei-002` 记的
+「RAGFlow 按厂商名硬路由、自定义端点要注册在 `OpenAI` factory 下」是**同一个根因**，
+那次是在 providers 注册时被静默丢掉，这次是在**检索时**才暴露。
+
+**当前状态（2026-10-09）**：`canary-media-0911`（租户 `1783022023241633792`）
+声明的 `text-embedding-v3@default@Tongyi-Qianwen` 在该租户下**无法解析**
+（`Model ... not found for model embedding`）；其唯一 provider 是
+`Tongyi-Qianwen`（无 `OpenAI` factory），而该 provider 下 `text-embedding-3-large`
+的实例端点其实是 baoyun 中继 → 即使解析成功也会走 DashScope 并被 401。
+**对照**：可用库 `41-客服知识库`（租户 `1942105476598861824`）的
+`text-embedding-3-large@baoyun@OpenAI` 落在 **`OpenAI` factory** 上，检索 200。
+
+**排查顺序（可复用）**：
+1. `POST /kb/knowledge-bases/<id>/search` 与 `GET .../<id>` 分面 —— 前者失败后者成功 ⇒ 查 embedding；
+2. 读 `knowledgebase.embd_id`，看 `<model>@<instance>@<factory>` 的 **factory**：
+   `Tongyi-Qianwen` = DashScope 硬路由，实例 base_url 基本不起作用；
+3. 从容器里直接 `POST {base_url}/embeddings`（用实例的 key）—— 200 说明 key 好，问题在路由；
+4. 容器日志里的 `Model ... not found` / `InvalidApiKey` 是两条不同分支，别混。
+
 ### 36 环境关键事实
 
 - **模型配置**：kb-service 懒注册只配 chat/embedding/rerank；**视频/图片解析需租户
