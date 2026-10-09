@@ -14,6 +14,7 @@
 | `apply_path_map.py` | 把译好的界面路径映射套回答案 | 路径单独译时 |
 | `migrate_shortcut_i18n.py` | 生产已发布快捷动作的语言迁移 | 上线新语言后（**有写风险，见下**） |
 | `verify_banner_car_lookup.py` | 活口检查：横幅个性化依赖的三条**公司端点**是否真成立（#590） | 改过车图/个性化链路，或要复跑那次验收时 |
+| `check_dify_exposure.py` | Dify 暴露面的段 2/段 3 探测（#583）：真网关上的鉴权/只读语义，以及从 **Dify 自己的容器里**探「登记集合之外一律不可达」 | 改动面向 Dify 的暴露面，或要复跑 #583 的验收时 |
 | `dify_vertical_slice.py` | 端到端竖切：#582 的那条链（Dify 导出 → 拉取 → 发布 → 一条提问被服务），跑在**一次性数据根**的真网关上 | 改动 Dify 拉取/发布/QA 运行时链路，或要复跑 #582 的验收时 |
 
 ## `dify_vertical_slice.py` 是 #582 的**可复现调用**，也是 #587 的骨架
@@ -77,3 +78,29 @@ CI 能保证每个 `zh-Hant` 条目**存在**；保证不了它等于其 `zh` �
 **另一个方向的坑**：`.claude/skills/verify-aiops-client-e2e/scripts/probe_gateway_as_real_user.py`
 构造 app 时会调 `recover_interrupted_jobs()`，把在飞作业标 failed —— 那是**验证工具**的写风险，
 不是本目录的，但两处都要求"先确认没有在飞作业"。
+
+## `check_dify_exposure.py`：段 2 在本机，段 3 **在 Dify 的容器里**
+
+段 1（`tests/test_dify_exposure_registry.py`）进 CI，证明"声明的 == 路由表里的"。本脚本补另两半：
+
+```bash
+PYTHONPATH=src python tools/check_dify_exposure.py --runtime                        # 段 2：本机真网关
+PYTHONPATH=src python tools/check_dify_exposure.py --network --host yidong-36 --host-ip 172.18.0.1  # 段 3
+PYTHONPATH=src python tools/check_dify_exposure.py                                  # 只列计划 ⇒ 退出码 2
+```
+
+退出码 `0/1/2`（`2` = **未取证**，不是通过），与 `verify_banner_car_lookup.py` 同一纪律。
+
+**段 3 的观察点是容器，不是宿主 —— 这不是细节，是这一段的全部意义。** 判据问的是
+"**Dify** 能触达到什么"，而 Dify 是容器：它的 `127.0.0.1` 是它自己，出网还要再经一层
+`ssrf_proxy`（squid）。实测（2026-10-09）：同一组内部端口，**宿主上全通**（kb-service 与
+RAGFlow 就在那台机器上）、**两个容器里全 `BLOCKED`**。拿宿主当观察点会得出相反的结论。
+
+段 3 还会**自证探针是活的**：先探一个同网络内必然可达的目标（Dify 自己的 redis）。
+`/dev/tcp` 是 bash 特性而镜像的 `/bin/sh` 是 dash —— 不显式 `bash -c` 会得到一堆假 `BLOCKED`。
+自检不通就退 `2`，绝不把"探针坏了"报成"封锁成立"。
+
+**`api.mall.qushiyun.com` 不在禁止集合里，这是有意的**：它是公司**公网**网关，Dify 的
+external knowledge endpoint 就该填它（`deploy/dify-36/README.md` 把这条写成白名单的**正确**填法）。
+判据要问的是"那一跳必须落在我们的适配路由上"（路径级，段 1/2），不是"这个域名不可达"。
+第一版把它误列进禁止集，跑出两条"REACHABLE ⇒ 失败"—— **错的是登记，不是生产**。
