@@ -233,9 +233,12 @@ POST /v1/assistant/questions
   **不写** `app:3rd_session:*`，所以 AI-Ops 的会话解析必然拒绝（实测三种发法全 `401`）。
   根因是 AI-Ops 不在公司网关之后，交付形状见
   [company-platform-integration-baseline.md](company-platform-integration-baseline.md)。
-- **订单范围：当前为空（数据缺口）**。验收账号的
-  `/shopuser/getShops` 返回 `[]`，运营商站点集合为 Ø ⇒ 订单查询一律 `404`。
+- **订单范围：代理商为空是数据缺口；顶层账号曾是被误判（#628 已修）**。
+  `type='5'` 代理商账号的 `/shopuser/getShops` 返回 `[]` ⇒ 站点集合 Ø ⇒ `404`，
   这是设计内的 fail closed，等业务侧补店铺绑定（butler-session-contract.md §5）。
+  ⚠️ **但 `type='1'` 租户主账号 / `type='-1'` 平台账号不适用这一条** —— 它们本来就
+  没有站点，可见范围是**整个租户**；此前被套用运营商分支 ⇒ 一律 `404`，是缺陷不是数据缺口。
+  见 #628 / butler-session-contract.md §5。
 
 - **前端硬编码按钮 ⇒ 多语言改动在前端改造前不可见。** 管家端前端当前把快捷动作按钮
   **写死在客户端**，不消费后端返回的已本地化 `label` / `description` / `question_template`。

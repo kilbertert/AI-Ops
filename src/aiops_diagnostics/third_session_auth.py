@@ -26,6 +26,7 @@ from aiops_diagnostics.scope_context import (
     C_MAPPING_NOT_CONFIGURED,
     C_MAPPING_NOT_FOUND,
     C_MAPPING_TENANT_MISMATCH,
+    SCOPE_TYPE_ALL,
     SCOPE_TYPE_ORGAN,
     SCOPE_TYPE_SELF,
     DataScope,
@@ -34,6 +35,7 @@ from aiops_diagnostics.scope_context import (
     SubjectRecord,
     UpmsDirectory,
     is_operator_entry,
+    is_tenant_level_account,
 )
 from aiops_diagnostics.sources import SourceError, mysql_site_mapper
 
@@ -253,6 +255,16 @@ class RedisThirdSessionResolver:
         # 漂移，漂移方向就是放宽。
         if not is_operator_entry(platform_entry):
             return DataScope(type=SCOPE_TYPE_SELF)
+
+        if is_tenant_level_account(subject.user_type):
+            # 顶层账号（平台/租户主账号）：公司自己的店铺隔离门对它**不做店铺隔离**
+            # （``ShopIdInterceptor.judge()`` 对 type ∈ {-1,1} 直接 return），因此它的
+            # 可见范围是**整个租户**，数据上表现为「没有店铺绑定」。
+            # 到本 PRD 为止这里走的是运营商分支，空店铺集合 ⇒ 空站点 ⇒ 一条订单都查不到；
+            # 那是把「不受站点维度约束」读成了「看不到任何订单」。
+            # 租户谓词照常下推（``resolve_query_scope`` 对 all 范围只保留租户过滤），
+            # 因此这里放宽的是**站点维度**，不是租户边界。
+            return DataScope(type=SCOPE_TYPE_ALL)
 
         directory = self.operator_scope
         if subject.b_subject_reason or directory is None:

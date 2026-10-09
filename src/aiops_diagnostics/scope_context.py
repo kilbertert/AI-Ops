@@ -64,6 +64,27 @@ SCOPE_TYPE_SELF = "self"
 
 _SCOPE_TYPES = frozenset({SCOPE_TYPE_ALL, SCOPE_TYPE_ORGAN, SCOPE_TYPE_SELF})
 
+#: 顶层账号的 ``sys_user.type`` 取值：``-1`` 平台、``1`` 租户主账号。
+#: 公司自己的店铺隔离门（``ShopIdInterceptor.judge()``）对这两个类型**不做店铺隔离**
+#: （店铺头为空或 ``-1`` 时直接 return），因此它们的可见范围是**整个租户**，
+#: 数据上表现为「没有店铺绑定」——那不是「看不到任何订单」，而是「不受站点维度约束」。
+#: 见 ``is_tenant_level_account``。
+TENANT_LEVEL_USER_TYPES = frozenset({"-1", "1"})
+
+
+def is_tenant_level_account(user_type: str | None) -> bool:
+    """该账号是否属于顶层（平台/租户主账号），因此可见范围是**整个租户**。
+
+    判据只有一处，因为它是**安全边界**：运营商分支（店铺 → 站点）与顶层分支
+    （整个租户）的分派靠它，两份实现一旦漂移，漂移方向就是**放宽**。
+
+    与 ``ShopIdInterceptor.judge()`` 同形：那里是
+    ``StrUtil.equalsAny(user.getType(), "-1", "1")``。空/缺失的类型返回 ``False``
+    （按最窄处理，不放宽）——拿不到类型就不猜。
+    """
+    return (user_type or "").strip() in TENANT_LEVEL_USER_TYPES
+
+
 USER_INFO_PATH = "/user/info"
 DATA_SCOPE_PATH = "/user/ds"
 USER_BY_B_ID_PATH = "/user/inside/byId"
@@ -149,6 +170,11 @@ class SubjectRecord:
     organ_id: str | None = None
     shop_id: str | None = None
     b_subject_reason: str = ""
+    #: ``sys_user.type`` 的原值（``-1`` 平台 / ``1`` 租户 / ``5`` 代理商 / …）。它决定
+    #: 「没有店铺绑定」该读成「看不到任何订单」还是「不受站点维度约束」——两者在数据上
+    #: 都是空店铺集合，只有类型能区分（见 ``is_tenant_level_account``）。缺失/空串按
+    #: 最窄处理（视为普通运营商账号，不放宽）。
+    user_type: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -639,10 +665,13 @@ def _scope_fingerprint(
 ) -> str:
     # B 端主体 id 已由 ``subject_b_user_id`` 覆盖（#424 的 C→B 映射因此自动进指纹）。
     # ``b_subject_reason`` 有意不入指纹：它不改变任何可见性，只说明 B 端主体为何缺失。
+    # ``subject_user_type`` **要**入指纹：同一个主体 id 在「顶层账号（整个租户）」与
+    # 「运营商账号（站点子集）」下可见范围不同，属于改变可见性的属性。
     payload = {
         "caller_b_user_id": caller.b_user_id,
         "subject_b_user_id": subject.b_user_id,
         "subject_c_user_id": subject.c_user_id,
+        "subject_user_type": subject.user_type,
         "delegated": delegated,
         "effective_tenant_id": effective_tenant_id,
         "data_scope": {
@@ -693,6 +722,9 @@ def _parse_subject(value: Any) -> SubjectRecord:
         tenant_id=_optional_text(value.get("tenantId")),
         organ_id=_optional_text(value.get("organId")),
         shop_id=_optional_text(value.get("shopId")),
+        # ``type`` 在 UPMS 用户对象里始终存在（``/user/inside/byId`` 与 ``byUserId`` 实测都带），
+        # 但缺失时按空串走最窄分支，不猜。
+        user_type=_optional_text(value.get("type")) or "",
     )
 
 
