@@ -1,0 +1,57 @@
+app:
+  description: '一次性样例 app，用于 #580 真实 DSL 固件导出；导出后可删'
+  icon: 🧪
+  icon_background: '#FFF4ED'
+  icon_type: emoji
+  mode: chat
+  name: dify-dsl-fixture
+  use_icon_as_answer_icon: false
+dependencies: []
+kind: app
+model_config:
+  agent_mode:
+    enabled: false
+    prompt: null
+    strategy: null
+    tools: []
+  annotation_reply:
+    enabled: false
+  chat_prompt_config: {}
+  completion_prompt_config: {}
+  dataset_configs:
+    retrieval_model: multiple
+  dataset_query_variable: null
+  external_data_tools: []
+  file_upload:
+    image:
+      detail: high
+      enabled: false
+      number_limits: 3
+      transfer_methods:
+      - remote_url
+      - local_file
+  model:
+    completion_params: {}
+    mode: chat
+    name: gpt-4o
+    provider: openai
+  more_like_this:
+    enabled: false
+  opening_statement: null
+  pre_prompt: null
+  prompt_type: simple
+  retriever_resource:
+    enabled: true
+  sensitive_word_avoidance:
+    config: {}
+    enabled: false
+    type: ''
+  speech_to_text:
+    enabled: false
+  suggested_questions: []
+  suggested_questions_after_answer:
+    enabled: false
+  text_to_speech:
+    enabled: false
+  user_input_form: []
+version: 0.7.0

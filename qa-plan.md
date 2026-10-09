@@ -1599,3 +1599,74 @@ uv run pytest tests/test_assistant_api.py tests/test_conversation_api.py \
 - **边界（据实）**：**未在 41 实跑**（端点未部署）。前端可读性、车图能否取到、
   报告页跳转是否成功打开 —— 均不在本票范围，见 #591 交接文档。
 - **清理**：一次性数据根随 tmp_path 丢弃；**未触碰 41 的任何生产数据**。
+
+## Dify DSL 拉取与草稿映射 QA 计划（#580 / PRD #577）
+
+接缝：**模块边界**（先例 `tests/test_agent_manifest.py`：真 `AgentManager` + 真
+`AgentStore` + 桩知识绑定校验器；传输边界先例 `tests/test_gateway_client.py`：桩
+`urllib.request.urlopen`）。不新增只在测试里存在的抽象。
+
+### DIFY-DSL-01 提示词与模型确实进了草稿
+
+- 环境：AI-Ops 本地 Python 3.13，pytest，临时 SQLite。
+- 前置条件：**真** DSL 固件 `tests/fixtures/dify-app-chat.dsl.yml`（从 36 的真实导出
+  端点拉到的制品，非手写样例）；桩 `urlopen` 返回 `{"data": <该固件文本>}`。
+- 测试数据：该固件——`pre_prompt` 非空且含换行，`model.name = deepseek-v4-flash`。
+- 有序动作：`pull_agent_draft(manager, ctx, source, ...)`。
+- 预期结果：`status == "draft"`、`published_version is None`、`version(ctx, id, 1)` 抛
+  `AgentNotFound`；草稿 `config.prompt` 含 `小趋`，`config.model == deepseek-v4-flash`；
+  请求带 `Authorization: Bearer …` 与 `X-WORKSPACE-ID`，路径为该控制台导出端点。
+- 清理：临时 SQLite 随 tmp_path 丢弃。
+- 结果：PASS（2026-10-08，pytest `tests/test_dify_dsl_pull.py`）。
+
+### DIFY-DSL-02 开场白与预设问题不从 DSL 取
+
+- 环境/前置：同 DIFY-DSL-01。
+- 测试数据：固件里 `opening_statement` 与 `suggested_questions` **都非空**
+  （`欢迎使用充电服务助手，请描述您遇到的问题。` / `充电桩无法启动怎么办？`）。
+- 有序动作：映射该固件。
+- 预期结果：`config.opening_questions == ()` 且 `config.quick_commands == ()`；同时断言
+  固件文本里确实含这两个非空串（否则这条不构成反向证据）。
+- 清理：无。
+- 结果：PASS（2026-10-08，同文件）。
+
+### DIFY-DSL-03 缺失 / 超集 / 非法值
+
+- 环境/前置：同 DIFY-DSL-01，另加 null-prompt 固件。
+- 测试数据：无提示词的固件；真固件 + 一个不存在的未来字段；`datasets` 存在但条目无 id、
+  条目非对象、`datasets` 不是对象；`version: 0.9.0` / `version: seven` / 无 version；
+  坏 YAML；根为列表；`kind: workflow`；无 `model_config`；`model.name: null`。
+- 有序动作：逐一映射。
+- 预期结果：**缺失**（提示词）→ `DifyDslMalformed`；**超集** → 映射结果与不加该字段时
+  **逐字段相同**（不报错、不落字段）；**非法值** → 各自 `DifyDslMalformed` /
+  `DifyDslVersionUnsupported`，**没有一条被静默吞掉**（尤其「数据集绑定存在但读不出」
+  必须报错，不得当成空）。
+- 清理：无。
+- 结果：PASS（2026-10-08，同文件）。
+
+### DIFY-DSL-04 拉取失败有信号且不留半成品
+
+- 环境：同 DIFY-DSL-01。
+- 前置条件：桩 `urlopen` 分别抛 `URLError` / 401 的 `HTTPError`；或返回空/非 JSON 信封。
+- 测试数据：一条正常 source 配置。
+- 有序动作：分别 `pull_agent_draft(...)`。
+- 预期结果：不可达 → `DifyDslUnreachable`；凭据被拒 → `DifyDslAuthRejected`（**与不可达
+  分开**）；信封无 DSL → `DifyDslMalformed`；且每次失败后 `manager.list(ctx) == []`。
+  构造期非法（URL 带凭据/query/fragment、app_id 非法、无 key、超时越界）→ `ValueError`
+  且**未发出任何请求**。
+- 清理：临时 SQLite 随 tmp_path 丢弃。
+- 结果：PASS（2026-10-08，同文件）。
+
+### DIFY-DSL-05 重复拉取与已发布快照的不可变性
+
+- 环境：同 DIFY-DSL-01，无桩（直接喂 `AgentConfig`）。
+- 前置条件：先落一次草稿。
+- 有序动作：① 同一配置再收敛一次；② 发布后再收敛；③ 发布后改动提示词再收敛。
+- 预期结果：① revision 不变（无写入）且仍只有一条智能体；② 变回草稿且 `agent_id` 不变，
+  版本 1 的快照**逐字不变**；③ 草稿提示词更新，版本 1 的快照仍是旧提示词。
+- 清理：临时 SQLite 随 tmp_path 丢弃。
+- 结果：PASS（2026-10-08，同文件）。
+
+**证据边界**：DIFY-DSL-01..05 全为**离线自动化**验证——映射打真固件，客户端打桩
+`urlopen`。**未**连在线 Dify 实例、**未**连真实租户数据面，**未完成业务验收**。把这条
+通路接到一个可触发的运营动作（CLI / 网关端点）不在本票范围。

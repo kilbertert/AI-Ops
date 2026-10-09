@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Add Dify DSL pull client and DSL→draft mapping (#580)
 - Add read-only charging diagnostics runtime (#1)
 - Add Codex-native diagnostic harness (#2)
 - Add portable Windows diagnostic package
