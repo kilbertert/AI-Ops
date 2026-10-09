@@ -200,8 +200,21 @@ def pull_dify(
         pull_agent_draft,
     )
 
-    settings = _reconcile_settings(ctx.obj.get("config_file") if ctx.obj else None)
+    config_file = ctx.obj.get("config_file") if ctx.obj else None
+    settings = _reconcile_settings(config_file)
+    # 控制台三键与 `admin reconcile` 读**同一个文件**。
+    #
+    # ⚠️ 这里踩过一次：`GatewayServerSettings.from_env()` 只会去看
+    # `AIOPS_GATEWAY_SERVER_CONFIG_FILE` / 默认路径，**不看 `--config`**。41 上
+    # `--config /etc/aiops-41/production.env` 是既有形状（runbook §2/§3 全这么写），
+    # 而那个变量在 systemd 里指向 `gateway.env` —— 于是配置明明在 `--config` 指定的
+    # 文件里，命令却报"缺少 Dify 控制台配置"。既有三个命令没有暴露这个问题，是因为
+    # 它们的控制台键只在网关进程里用（那里 `AIOPS_GATEWAY_SERVER_CONFIG_FILE` 是对的）。
     console = GatewayServerSettings.from_env()
+    if config_file is not None and not console.dify_console_api_key:
+        console = dataclasses.replace(
+            console, **_console_settings_from(Path(config_file).expanduser().resolve())
+        )
     if not console.dify_console_base_url or not console.dify_console_api_key:
         typer.secho(
             "缺少 Dify 控制台配置：需要 AIOPS_GATEWAY_DIFY_CONSOLE_BASE_URL 与 "
@@ -298,3 +311,22 @@ def pull_dify(
             indent=2,
         )
     )
+
+
+def _console_settings_from(path: Path) -> dict[str, str]:
+    """Read the three console keys out of an explicit ``--config`` file.
+
+    Kept here rather than in ``gateway_config`` because only this command reads a
+    config file *by path*: the gateway process takes the same values from its own
+    environment, and giving ``from_env`` a second source would make "which file am
+    I reading" ambiguous everywhere.
+    """
+    from aiops_diagnostics.gateway_config import _private_config_values
+
+    values = _private_config_values(path)
+    keys = (
+        "AIOPS_GATEWAY_DIFY_CONSOLE_BASE_URL",
+        "AIOPS_GATEWAY_DIFY_CONSOLE_API_KEY",
+        "AIOPS_GATEWAY_DIFY_CONSOLE_WORKSPACE_ID",
+    )
+    return {name.lower().removeprefix("aiops_gateway_"): (values.get(name) or "") for name in keys}

@@ -63,6 +63,92 @@ if (StrUtil.equalsAny(user.getType(), "-1", "1")
 - 本改动改变 Gateway 的对外可见范围，因此按 `AGENTS.md` 应跑 `verify-aiops-gateway`；
   本 PR **未跑**（该 skill 不覆盖订单授权这条依赖真实 MySQL 的路径），见 PR 说明。
 
+## #587 阶段 1 的第二跳与第四跳：在 41 上真跑通（2026-10-09，真机）
+
+**分支** `docs/stage1-hop2-evidence`，基线 `origin/main` @ `c536ae5`。
+本节是**既有代码在真机上跑出来的证据**，不含新实现（实现见 #625/PR #626、#627、#583/#584/#586）。
+
+### 一、这一节回答的是哪一段
+
+阶段 1 的链是「运营在 Dify 改 → 我方发布动作冻结版本 → 真实提问被这个版本服务」。
+#625 把第二跳做成了可触发的动作，但**入口存在 ≠ 它在真实路径上跑过**。
+本节是后者：41 上（`0.1.0+c536ae534664`）的真实执行。
+
+### 二、第二跳：拉取 + 发布（真实 Dify 控制台）
+
+```
+runuser -u aiops41 -- aiops --config /etc/aiops-41/production.env admin pull-dify \
+  --app-id a975c8e5-ad9e-425c-84c9-77581a0a2bed \
+  --tenant 1783022023241633792 --name canary-dify-pull
+→ {"agent_name":"canary-dify-pull","version_no":1,"agent_id":"agt_56d34a387ef54204b9ca0abd802e0d9e"}
+```
+
+前提是 36 上开了 Dify 的 `ADMIN_API_KEY_ENABLE=true` 并生成 `ADMIN_API_KEY`
+（默认关闭，见 `configs/feature/__init__.py`；凭据只在两侧的 0600 文件里，不入仓、不打印）。
+`--dry-run` 先跑过：拿到的 `prompt` 就是 Dify 控制台导出端点里那份（`model: deepseek-v4-flash`、
+`knowledge_base_ids: []` —— 空是**已知且正确**的，Dify 的 chat 表单会整体替换 `dataset_configs`，#580 记过）。
+
+### 三、第三/四跳：真实提问被这个 Dify 来源的版本服务
+
+给 `canary-dify-pull` 绑上该租户的知识库（走**发布门** `fork_draft → update → publish`，
+不绕过去写库；`expected_revision` 乐观并发生效）：
+
+```
+before: published rev 2 v1 kb ()
+forked -> rev 3 draft
+updated -> rev 4 kb ('4f4bc674ad8911f1ae704bfc8c544ea6',)
+published -> version_no 2
+```
+
+选择器随即选中它（`qa_rag.select_customer_agent` 取**最新发布且带 KB 的 customer agent**，
+`store.list` 是 `created_at DESC`）：
+
+```
+canary-dify-pull published v2   ← 被选中
+canary-客服      published v5
+```
+
+然后在这个租户上发一条真实提问，**指标里记的版本就是它**：
+
+```
+agt_56d34a387ef54204b9ca0abd802e0d9e#v2 | route_type=qa | outcome=completed | retrieval_status=unavailable
+```
+
+**这条 `agent_version_key` 就是本节的判据**：回答确实出自那个**从 Dify 拉来、经我方发布门
+冻结**的版本，而不是"某条路回了话"。
+
+### 四、`retrieval_status: unavailable` 的真因（**不是本改动造成的**）
+
+KB 检索在该库上失败，根因在 RAGFlow 容器日志里：
+
+```
+ERROR Model text-embedding-v3@default@Tongyi-Qianwen not found for model embedding
+LookupError: TenantModel id=text-embedding-v3@default@Tongyi-Qianwen not found.
+```
+
+即那个数据集是用一个**未绑定到该租户**的 embedding 模型建的（RAGFlow 的"模型实例双重绑定"陷阱，
+见 `mem-20260913-ranlei-002`）。对照：**元数据面正常**（`GET kb` 200、`GET docs` 200），
+**另一个租户的库检索正常**（`POST search` 200）—— 只有这一个库的检索面坏。
+
+因此：**绑定是对的，是那个数据集上游不可用**；运行时的诚实降级（`unavailable` 而不是
+`not_found`）也是对的 —— 它没检索到任何东西，就不该声称"库里没有"。
+
+### 五、影响面（据实，本节的合规前提）
+
+- 该租户（`1783022023241633792`）在本次之前**从未服务过任何作业**（`assistant_questions` 查该租户 0 行）；
+  线上流量全在 `1942105476598861824`。
+- 所以这次"换回答者"对真实用户**不可见**。
+- `env-41.toml` **刻意未加** `[[dify_apps]]` 行 —— 运行时注册表仍未启用，41 的行为与合并前一致。
+
+### 六、遗留（未闭合）
+
+- `canary-dify-pull` v2 现在是该租户的**被选中**版本，但因 KB 上游不可用而只回降级文案。
+  它是一件**验收遗留物**，不是产品功能；要不要删/停用由运营决定（本节的记录是它的来处）。
+- 阶段 1 的第五跳（**非中文**由内容制品 + 运行时派生服务）**未做**：`/v1/assistant/starters`
+  已交付 11 门语言并覆盖该判据的**界面文案**部分；"这个版本用非中文答得好"受 KB 与
+  Dify 只存中文母版的既定边界限制，要等一个可用的 KB。
+- 本票结论：**尚不可切换**。
+
 ## #625 拉取并发布：把「运营在 Dify 改 → 冻结一个版本」做成可触发的动作（2026-10-09，离线）
 
 **分支** `feat/dify-pull-entry`，基线 `origin/main` @ `194d292`。
@@ -103,6 +189,20 @@ grep -rn "pull_agent_draft|converge_agent_draft" src/aiops_diagnostics/*.py | gr
 
 **"钉得住"是实测的**：把 `--dry-run` 短路 ⇒ dry-run 那条转红；把 `publish` 换成假对象 ⇒
 发布那条转红。恢复后 15 例全过。
+
+### 三·补、在 41 上真跑时踩到并修掉的一处（提交后追加）
+
+第一次在 41 上执行时命令报 `缺少 Dify 控制台配置`，而配置**确实在** ——
+`--config /etc/aiops-41/production.env` 是既有调用形状（runbook §2/§3 全这么写）。
+
+根因：`GatewayServerSettings.from_env()` 只看 `AIOPS_GATEWAY_SERVER_CONFIG_FILE`
+（systemd 里指向 `gateway.env`）**与默认路径**，**不看 `--config`**。既有三个 admin
+命令没暴露这个问题，是因为它们的控制台键只在网关进程里用 —— 那里那个变量是对的。
+
+修法：`--config` 显式给了文件、且 `from_env` 没取到控制台键时，就**从那个文件读**
+（读的是同一个 `_private_config_values`，仍然过私有文件校验）。新增一条测试把两种来源
+**分开**摆好：控制台键只放进 `--config` 的文件，进程环境里没有 —— 这正是生产上的不一致。
+实测把那段回退 ⇒ 该条转红。
 
 ### 四、证据边界（据实）
 
