@@ -24,3 +24,12 @@ app  = "/opt/aiops-41/src"
 logs = "/var/log/aiops-41"
 ops  = "/opt/aiops-41/ops"
 backups = "/var/backups/aiops-41"
+
+[[targets]]
+name        = "36"
+host        = "yidong-36"
+description = "移动云 36 服务宿主:Dify 编排实例(/opt/dify,入口 :10008)"
+
+[targets.paths]
+app  = "/opt/dify"           # compose、env、镜像内数据卷的根
+assets = "/opt/dify/deploy"  # 部署产物落点(compose + nginx/ssrf 资产)

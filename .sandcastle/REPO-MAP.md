@@ -51,6 +51,13 @@ output and run residue omitted)
 ```
 .sandcastle/  (the AFK scaffold — see its README)
 deploy/
+  dify-36/
+    nginx/
+    ssrf_proxy/
+    check.sh
+    docker-compose.yaml
+    env.example
+    README.md
   classify-remote-result.sh
   company-gitlab-api.sh
   d4-cutover.py
@@ -123,18 +130,5 @@ ops/
 packaging/
   aiops.spec
   build_portable.py
-src/
-  aiops_diagnostics/
-    __init__.py
-    __main__.py
-    admin_cli.py
-    agent_contracts.py
-    agent_debug.py
-    agent_engine.py
-    agent_lifecycle.py
-    agent_manifest.py
-    agent_runner.py
-    agent_validator.py
-    ... (58 more)
 ... (truncated — list the rest with `ls`/`find`)
 ```
