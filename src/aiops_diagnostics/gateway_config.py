@@ -76,6 +76,19 @@ class GatewayServerSettings:
     kb_service_timeout_seconds: float = 10.0
     media_signing_secret: str = ""
     media_ttl_seconds: int = 600
+    #: 面向 Dify 的知识检索适配路由（#581 / PRD #577）。**三键全空 ⇒ 该路由整体 404**，
+    #: 与 ``kb_service_base_url`` 同一条「未配置即不启用」的机制保证；半配置是启动错误
+    #: （登记表有值说明运维确实想暴露这个面，此时凭据缺失若只落回「不构造」，结果是一个
+    #: 看起来正常、实际一律 401 的部署）。
+    #: 凭据用 ``repr=False``：它是 Dify 侧持有的共享密钥，不得出现在 repr / 日志 / 审计里。
+    dify_knowledge_api_key: str = field(repr=False, default="")
+    #: ``knowledge_id`` → 登记行 的映射单行形式：``id:tenant:kb1|kb2``。Dify 只发
+    #: ``knowledge_id``（一个不透明串），**没有租户概念**，所以「哪个租户、哪些知识库」
+    #: 必须由我们的登记表决定 —— 这正是「不能成为 Dify 要什么就给什么的后门」的落点。
+    dify_knowledge_bindings: str = ""
+    #: 本路由转调知识库服务时的 top_k 上限。Dify 自己也会发 top_k；我们**封顶**而不是直接
+    #: 采信，理由与 ``KnowledgeSearchGuard`` 的 ``max_results`` 相同：检索范围归我们控制。
+    dify_knowledge_max_top_k: int = 5
     #: Conversation context window (#482). The defaults ARE the contract's
     #: numbers (8 turns / 8k tokens, ``conversation_store`` owns the constants);
     #: they are configurable because a RAG or promotional turn also spends the
@@ -152,6 +165,11 @@ class GatewayServerSettings:
             media_signing_secret=_env("AIOPS_GATEWAY_MEDIA_SIGNING_SECRET")
             or _file_value(file_values, "AIOPS_GATEWAY_MEDIA_SIGNING_SECRET"),
             media_ttl_seconds=_env_int("AIOPS_GATEWAY_MEDIA_TTL_SECONDS", 600),
+            dify_knowledge_api_key=_env("AIOPS_GATEWAY_DIFY_KNOWLEDGE_API_KEY")
+            or _file_value(file_values, "AIOPS_GATEWAY_DIFY_KNOWLEDGE_API_KEY"),
+            dify_knowledge_bindings=_env("AIOPS_GATEWAY_DIFY_KNOWLEDGE_BINDINGS")
+            or _file_value(file_values, "AIOPS_GATEWAY_DIFY_KNOWLEDGE_BINDINGS"),
+            dify_knowledge_max_top_k=_env_int("AIOPS_GATEWAY_DIFY_KNOWLEDGE_MAX_TOP_K", 5),
             jev_base_url=_env("AIOPS_GATEWAY_JEV_BASE_URL")
             or _file_value(file_values, "AIOPS_GATEWAY_JEV_BASE_URL"),
             jev_api_key=_env("AIOPS_GATEWAY_JEV_API_KEY")
@@ -207,6 +225,21 @@ class GatewayServerSettings:
             raise ValueError(
                 f"AIOPS_GATEWAY_COMPANY_SOURCE_KEY must be at least {MIN_SOURCE_KEY_LENGTH} characters"
             )
+        # #581：登记表与凭据是**同一个面**的两半，半配置同样是启动错误。只配登记表会让运维
+        # 以为「面已经暴露了」，实际每一条请求都因缺凭据 401 —— 与「没配」在现象上不可区分。
+        if self.dify_knowledge_bindings and not self.dify_knowledge_api_key:
+            raise ValueError(
+                "AIOPS_GATEWAY_DIFY_KNOWLEDGE_API_KEY is required when Dify knowledge bindings are set"
+            )
+        if self.dify_knowledge_api_key and not self.dify_knowledge_bindings:
+            raise ValueError(
+                "AIOPS_GATEWAY_DIFY_KNOWLEDGE_BINDINGS is required when a Dify knowledge API key is set"
+            )
+        if not 1 <= self.dify_knowledge_max_top_k <= 20:
+            raise ValueError("AIOPS_GATEWAY_DIFY_KNOWLEDGE_MAX_TOP_K must be between 1 and 20")
+        # 登记表在这里解析一次：解析失败是**启动错误**，而不是第一个请求到达时才发现 ——
+        # 后者会把一个配置错误伪装成一次运行时故障。
+        parse_dify_knowledge_bindings(self.dify_knowledge_bindings)
         if not 0.1 <= self.jev_timeout_seconds <= 120:
             raise ValueError("AIOPS_GATEWAY_JEV_TIMEOUT_SECONDS must be between 0.1 and 120")
         if not 0.1 <= self.event_poll_interval_seconds <= 10:
@@ -215,6 +248,43 @@ class GatewayServerSettings:
             raise ValueError("AIOPS_GATEWAY_INTROSPECTION_TIMEOUT_SECONDS must be between 1 and 30")
         if self.server_config_file is None or not self.server_config_file.is_file():
             raise ValueError("gateway server production.env does not exist")
+
+
+@dataclass(frozen=True, slots=True)
+class DifyKnowledgeBinding:
+    """一条 ``knowledge_id`` 登记：它对应哪个租户、哪些知识库（#581）。
+
+    Dify 侧只发 ``knowledge_id``，所以**租户与知识库集合只能在这里定**。把它做成显式
+    登记而不是「从请求里读」，是本路由不是后门的唯一依据。
+    """
+
+    knowledge_id: str
+    tenant_id: str
+    knowledge_base_ids: tuple[str, ...]
+
+
+def parse_dify_knowledge_bindings(value: str) -> dict[str, DifyKnowledgeBinding]:
+    """解析 ``id:tenant:kb1|kb2`` 的多行/分号登记表。
+
+    非法行**抛错**而不是跳过：跳过会让运维看到「配了 5 条、实际生效 3 条」而毫无提示，
+    这正是本仓反复出现的「静默不生效」形态。
+    """
+    bindings: dict[str, DifyKnowledgeBinding] = {}
+    for row in value.replace(";", "\n").splitlines():
+        row = row.strip()
+        if not row or row.startswith("#"):
+            continue
+        knowledge_id, _, rest = row.partition(":")
+        tenant_id, _, kb_part = rest.partition(":")
+        kbs = tuple(dict.fromkeys(item.strip() for item in kb_part.split("|") if item.strip()))
+        if not knowledge_id.strip() or not tenant_id.strip() or not kbs:
+            raise ValueError(f"dify knowledge binding is malformed: {row!r}")
+        if knowledge_id in bindings:
+            raise ValueError(f"dify knowledge binding is duplicated: {knowledge_id!r}")
+        bindings[knowledge_id] = DifyKnowledgeBinding(
+            knowledge_id=knowledge_id, tenant_id=tenant_id, knowledge_base_ids=kbs
+        )
+    return bindings
 
 
 @dataclass(frozen=True, slots=True)

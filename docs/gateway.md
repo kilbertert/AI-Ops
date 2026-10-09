@@ -163,8 +163,35 @@ Gateway 使用只读 Redis 读取 `app:3rd_session:<thirdSession>`；Java 序列
 或其他端口；41 Gateway 只配置 `AIOPS_GATEWAY_KB_SERVICE_BASE_URL=http://127.0.0.1:29380`。
 这保持单一知识库资产、租户映射和模型配置，同时让 41 的会话/订单/诊断数据源独立。
 
-### 固定问答调用
+### Dify 知识检索适配路由（#581 / PRD #577）
 
+Dify 控制台里给智能体挂「外接知识库」时，端点填 `https://<host>/v1/dify`、API Key 填
+`AIOPS_GATEWAY_DIFY_KNOWLEDGE_API_KEY`。Dify 自己会拼成 `POST /v1/dify/retrieval`，
+请求体是它 External Knowledge API 的固定形状（`retrieval_setting{top_k,score_threshold}`、
+`query`、`knowledge_id`、`metadata_condition`），响应读 `records`。**形状以 Dify 源码为准，
+不凭印象**（依据见 PRD #577）。
+
+**这一跳是适配，不是代理**：请求体里既没有租户也没有知识库列表，二者由
+`AIOPS_GATEWAY_DIFY_KNOWLEDGE_BINDINGS` 按 `knowledge_id` 决定。Dify 因此拿不到数据面，
+也扩不了检索范围。
+
+失败语义（与 Dify 侧 `raise ValueError(response.text)` 的读法对齐）：
+
+| 情况 | 响应 |
+|---|---|
+| 命中 / 空命中 | 200 `{"records": [...]}`（空命中就是空列表，**不是错误**） |
+| `metadata_condition` 非空 | 400 `DIFY_FILTER_UNSUPPORTED`（不支持就明说，不是静默忽略） |
+| 体不合法 / `knowledge_id` 缺失 | 400 `DIFY_INVALID_REQUEST` |
+| 未登记 `knowledge_id`；路由未配置 | 404（无存在性泄露） |
+| 缺凭据 / 凭据错 | 401 / 403 |
+| kb-service 不可用 / 媒体面未配 | 502 `DIFY_KNOWLEDGE_UNAVAILABLE`（retryable）—— **绝不**用 200 空 `records` 表示故障 |
+
+两个键全空 ⇒ 路由整体 404；只配一个是**启动失败**（半配置不静默禁用，与本仓其余开关同一条）。
+`AIOPS_GATEWAY_DIFY_KNOWLEDGE_MAX_TOP_K` 是对 Dify 所发 `top_k` 的封顶值（1..20）。
+Dify 侧 `ssrf_proxy` 默认会拦私有网段地址，须显式处置（PRD #577 已记为「必须记录的一次
+显式选择」）。
+
+### 固定问答调用
 业务后端可使用服务 Bearer、`third-session` 和可信的 `X-Business-Entry` 调用
 `/v1/faq/recommendations`、`/v1/faq/catalog` 与 `/v1/faq/answer`。平台由 AI-Ops
 根据 C/B 身份关联和 UPMS 角色判定，前端不传 `platform` 或裸身份字段。完整输入输出见

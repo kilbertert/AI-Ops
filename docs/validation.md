@@ -200,6 +200,82 @@ APK build 21 的封装是 `utils/iotJavaRequest.js`：
 
 - **生产访问日志查不到 `X-Third-Session` 级细粒度**（日志不含自定义头），
   因此无法从日志区分「哪个会话调了 chCarSeries」。客户端身份的成立由**实测响应 + 对照**证明。
+## Dify 知识检索适配路由（#581 / PRD #577，2026-10-08）
+
+**分支** `feat/dify-knowledge-adapter`，基线 `origin/main` @ `5cac228`。
+
+### 新增的自动化检查
+
+`tests/test_dify_knowledge_api.py`（12 例，打在**网关 HTTP 面**：真 `create_gateway_app` +
+`TestClient` + 桩 kb-service client，先例 `tests/test_media_api.py`）：
+
+- 形状：响应体顶层只有 `records`，每条含 `content`/`score`/`title`/`metadata` 且 **`metadata`
+  非 null**（Dify 侧 `dataset_retrieval.py` 只在 metadata 非 null 时才读 score/title）。
+- 范围：桩返回了越权 KB 与缺 `doc_id` 的分段，路由只留登记 KB；断言**转调时用的 KB 集合等于
+  登记集合**，请求体里既没有租户也没有 KB 列表。
+- 封顶：请求 `top_k=500` 时上游实际收到 `AIOPS_GATEWAY_DIFY_KNOWLEDGE_MAX_TOP_K`。
+- 授权：未登记 `knowledge_id` → 404；缺凭据 → 401；错凭据 → 403；未配置 → 404；三者都断言
+  桩**零调用**。
+- 失败可区分：桩抛 `KnowledgeSearchUnavailable` → **502**，不是 200 空 `records`。
+- `.env.example` / `docs/gateway.md` / `README.md` 三处同步。
+
+### 真实环境验证（`verify-aiops-gateway` 技能，一次性数据根）
+
+在临时数据根（`mktemp -d`）上 `uv run aiops init` + `uv run aiops-gateway serve`
+（`AIOPS_GATEWAY_PORT=8799`，仅回环），驱动真实 HTTP 面，逐条判据：
+
+| # | 判据 | 实测 |
+|---|---|---|
+| 1 | 缺凭据 | `401 DIFY_CREDENTIAL_REQUIRED` |
+| 2 | 错凭据 | `403 DIFY_CREDENTIAL_REJECTED` |
+| 3 | 未登记 `knowledge_id` | `404 DIFY_KNOWLEDGE_NOT_FOUND` |
+| 4 | `metadata_condition` 非空 | `400 DIFY_FILTER_UNSUPPORTED` |
+| 5 | kb-service 不可达（`127.0.0.1:1`） | **`502 DIFY_KNOWLEDGE_UNAVAILABLE` retryable=true**，非 200 |
+| 6 | 挂一个回环桩 kb-service 后的命中 | `200`，`{"records":[{"content":"充电桩故障处理步骤：先断电，再复位。","score":0.91,"title":"处理手册","metadata":{"reference_id":"doc-1-c1","media":[]}}]}` |
+| 7 | 路由未配置 | `404 DIFY_RETRIEVAL_UNAVAILABLE`（不是「不需要凭据」） |
+| 8 | 只配登记表不配密钥 | 启动失败 `ValueError: AIOPS_GATEWAY_DIFY_KNOWLEDGE_API_KEY is required when Dify knowledge bindings are set` |
+
+桩 kb-service 只用于证明**这一跳转调成立、且返回形状可被 Dify 消费**；它返回的是构造数据，
+不是生产知识库内容。**未**连真实 Dify、真实 kb-service/RAGFlow、真实租户 —— Dify 侧「外接
+知识库真按这个形状消费」需 #579/#582 的真实实例验收，**未完成业务验收**。结束时已停进程并
+确认 8799/19380 无监听，临时根已删。
+
+### 三层审查的第一层（`ocr review`）：**未执行**，不是通过
+
+本仓 PR 门禁的三层是 `ocr review`（本地建议性）、Devin Review（PR 自动）、CI/Ruleset
+（唯一强制门）。本次按已提交形态跑**区间式**，并先 `--preview` 核对同一变更集：
+
+```
+ocr review --from origin/main --to feat/dify-knowledge-adapter --preview
+  12 file(s) changed  |  +907 -3
+  Will review (3): dify_knowledge_api.py, gateway_api.py, gateway_config.py
+  Excluded (9):    8 个 .md/.feature/.example（unsupported_ext）+ tests/（default_path）
+```
+
+覆盖率是**被测量的**：3/12 入选、9/12 被工具按扩展名与路径规则过滤，因此这次审查只覆盖
+**代码文件**，文案与验收制品仍需人工或 Devin 分诊。随后按同一变更集跑真审查，结果是
+**工具未完成**：
+
+```
+[ocr] Summary: 3 file(s) reviewed, 0 comment(s), ... 19m58s elapsed
+Review failed: 0 finding(s); 3 of 3 selected item(s) failed.
+Error: review failed: all 3 file review(s) failed — check your LLM configuration and API key
+```
+
+**0 条发现不等于干净** —— 它等于**一条判据都没跑成**。上一轮的同类现象是
+`Max tool requests reached` / `main_task did not complete before stopping`，且带
+`budget_exceeded=false`，即失败与 token 预算无关。按政策，这一层记为**未执行**，由人工或
+Devin Review 兜住；不得记为「已通过」。
+
+### 失败与修复
+
+- 首轮第 6 步写错：用空登记表启动却按「命中」预期 —— 实际拿到 `404`（未登记 id），
+  重跑时先挂桩 kb-service 并配好登记表才拿到 200。
+- `tests/test_caller_auth_mapping.py` 的约定检查正确地拦下了新依赖：它叫
+  `authenticated_dify` 却不走 `_authenticate_caller`。改名 `dify_shared_credential` ——
+  这条依赖**故意不是调用者链**（Dify 是服务器，没有会话也没有 UPMS 主体），改名让这一
+  区别写在名字上而不是靠注释。
+- `tests/test_readme_architecture.py` 拦下未登记的模块：`dify_knowledge_api` 已补进 README 三层表与架构图。
 
 ## AFK 脚手架 1.5.0 → 1.6.2 迁移（2026-10-08）
 
