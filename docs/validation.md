@@ -1,3 +1,54 @@
+## #584 运行时注册表：租户/入口 → Dify app（2026-10-09，离线）
+
+**分支** `feat/dify-app-registry`，基线 `origin/main` @ `6da3a5a`。
+**制品** `src/aiops_diagnostics/dify_app_registry.py` +
+`src/aiops_diagnostics/agent_manifest.py`（`[[dify_apps]]` + `reconcile_dify_registry`）+
+`src/aiops_diagnostics/gateway_runtime.py`（`_registered_agent` / `_unmapped_tenant_result`）+
+`tests/test_dify_app_registry.py`（12 例）。
+
+### 一、打在既有接缝上（HTTP 面 + 既有 reconcile 收敛风格）
+
+网关面用**真实** `GatewayRuntime` + `AgentStore` + `TestClient`（先例
+`test_assistant_api._real_runtime_client`）：只桩掉 `classify_lightweight`（路由不是本
+票关注点，且它本身是一次在线模型调用）与 `run_customer_qa_answer`（选**哪个** agent
+发生在模型调用之前）。**平台判定、入口、注册表查表、agent 选择全部跑真的**——"入口
+有没有传到门"这件事不能用替身来证。
+
+| 判据 | 结果 | 怎么证的 |
+|---|---|---|
+| 表为空 ⇒ 保持旧规则 | ✅ | 发布 `客服甲`/`客服乙`（后者更新）→ 模型收到的是**客服乙**的提示词 |
+| 已登记 ⇒ 由登记表指定的 agent 服务 | ✅ | 登记 `客服甲` 后，模型收到的是**客服甲**的提示词（不再是"最新已发布"）|
+| 未登记 ⇒ **不**默认映射 | ✅ | 表里只有 `T-OTHER` 的行（本环境已采用注册表），`T-1` 的提问 → `retrieval_status="unavailable"`、有可见文案、**模型一次都没被调用**（`prompts == []`）|
+| 入口是键的一半 | ✅ | 只登记 `operator` 时，`consumer` 的请求仍走"未登记"分支 |
+| 绑定指向不存在的 agent | ✅ | 登记一个没人发布的 `agent_name` → 同样 `unavailable`，**不**降级成"任意已发布 agent" |
+| 未登记 ≠ 库里没有 | ✅ | 断言状态是 `unavailable` 而非 `not_found`：什么都没检索 |
+| `load_manifest` 解析 `[[dify_apps]]` | ✅ | 四字段解出 `DifyAppBinding` |
+| 绑定指向未声明 agent ⇒ 加载期报错 | ✅ | `ManifestError`，`match="未在"` |
+| 非法 `business_entry` / 重复 (租户,入口) ⇒ 加载期报错 | ✅ | `ManifestError`（`business_entry` / `重复`）|
+| `reconcile_dify_registry` 幂等 | ✅ | 首跑 `registered`、再跑 `unchanged`、改 `app_id` 后 `registered` 且行已更新 |
+| 多余绑定默认**不删** | ✅ | 不加 `--prune` 时库里的 `operator` 行仍在；加了才 `removed` |
+| `--dry-run` 零写入 | ✅ | 报告 `registered` 但 `registry.all() == ()` |
+| 非法行（坏 tenant / 坏入口 / 空 app_id / 空白 agent_name） | ✅ | 逐条 `DifyAppRegistryError`，且 `registry.all() == ()` |
+
+### 二、`[[dify_apps]]` 定位降级写进文档（验收项 3）
+
+`ops/README.md` 明写「一个文件、两个不同权威的段」：`[[agents]]` 是**发布权威**，
+`[[dify_apps]]` 是**运行时注册表**（不发布、不版本化）。`README.md` 分层图与 L5 表
+新增 `dify_app_registry.py`（否则 `test_readme_architecture.py` 会红）。
+
+### 三、证据边界（据实）
+
+- 全部为**离线自动化**验证，打的是真实运行时与真实 SQLite，但**未连真实 Dify 实例**、
+  **未接真实租户数据面**，**未在 41 部署**——因此**未完成业务验收**。"注册表真的驱动了
+  一个从 Dify 拉来的 app"要等 #582 的端到端竖切片。
+- **未**给 `env-41.toml` 加 `[[dify_apps]]` 行，是刻意的：加了就等于对尚未登记的生产
+  租户把 fail-closed 门打开，会立刻破。
+- 全量 `pytest` 有 **1 例与本票无关的失败**：`test_cd_deploy_scripts.py::test_remote_block_renders_and_parses`，
+  原因是 41 上已存在的**依赖漂移**（#605 加了 `pyyaml` 后目标 commit 的 `pyproject.toml`
+  sha 与 41 不一致，部署脚本按设计 exit 1）。处理方式是按
+  `docs/agents/env-41-dependency-update.md` 人工更新 41 依赖，**不是**改部署脚本或回退
+  #605；本票未处理，如实记录。其余 `1953 passed, 9 skipped`。
+
 ## #580 Dify DSL 拉取与草稿映射（2026-10-08，离线）
 
 **分支** `feat/dify-dsl-pull-mapping`，基线 `origin/main` @ `94965f5`。

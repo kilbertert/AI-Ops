@@ -90,8 +90,9 @@ def reconcile(
     """按环境清单收敛 gateway agent（幂等；走 AgentManager 生产代码路径）。"""
     from aiops_diagnostics.agent_debug import KbBindingResolver, KbServiceKnowledgeClient
     from aiops_diagnostics.agent_lifecycle import AgentManager, AgentStore, allowed_models_from_settings
-    from aiops_diagnostics.agent_manifest import ManifestError, load_manifest
+    from aiops_diagnostics.agent_manifest import ManifestError, load_manifest, reconcile_dify_registry
     from aiops_diagnostics.agent_manifest import reconcile as reconcile_manifest
+    from aiops_diagnostics.dify_app_registry import DifyAppRegistry
 
     try:
         environment = load_manifest(manifest)
@@ -125,12 +126,22 @@ def reconcile(
 
     try:
         reports: list[Any] = reconcile_manifest(manager, environment, prune=prune, dry_run=dry_run)
+        # The runtime registry (#584) converges in the same run: it is the same
+        # declared state, and splitting it into a second command would let the
+        # two drift out of step between invocations.
+        registry_reports = reconcile_dify_registry(
+            DifyAppRegistry(database), environment, prune=prune, dry_run=dry_run
+        )
     except ManifestError as exc:
         typer.secho(f"收敛中止（库未变更）: {exc}", fg=typer.colors.RED, err=True)
         raise typer.Exit(code=2) from exc
     typer.echo(
         json.dumps(
-            {"dry_run": dry_run, "reports": [dataclasses.asdict(report) for report in reports]},
+            {
+                "dry_run": dry_run,
+                "reports": [dataclasses.asdict(report) for report in reports],
+                "dify_registry": [dataclasses.asdict(report) for report in registry_reports],
+            },
             ensure_ascii=False,
             indent=2,
         )
