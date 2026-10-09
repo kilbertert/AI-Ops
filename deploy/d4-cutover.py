@@ -76,10 +76,70 @@ location ^~ /v1/ {
 """
 
 
+# Dify 的 External Knowledge API 那一跳（#614）。
+#
+# 为什么必须单独一条 location：上面那条 `location ^~ /v1/` 用 AI-Ops 自己的服务令牌
+# **覆盖** Authorization（`proxy_set_header Authorization $aiops_auth;`），而 Dify 的
+# External Knowledge API **只支持 Bearer 自带 key** —— 它的 key 被覆盖掉，适配路由收到
+# 的不是它要的那把，回 403 DIFY_CREDENTIAL_REJECTED（2026-10-09 公网实测）。
+#
+# nginx 的 location 选择规则：**前缀最长者优先**，与书写顺序无关；正则 location 只在
+# 没有更长的前缀 location 命中时才参与。`/v1/dify/`（9 字符）比 `/v1/`（4 字符）长，
+# 所以这条会赢 —— 它不依赖出现在文件里的位置。
+#
+# 这一条**刻意做得比 `/v1/` 那条窄**，因为 Dify 不是我们的用户：它没有会话、没有 UPMS
+# 主体，拿的是 Dify 控制台里配置的共享凭据。所以：
+#   · 不 include 服务令牌 conf（那是调用者链的凭据）
+#   · 不注入 X-AIOps-Source-Key / X-Business-Entry / X-Third-Session（它一个都不该有）
+#   · **保留客户端带来的 Authorization**（就是 Dify 的 API Key）
+#   · 上游固定直连 AI-Ops —— 与入口无关，Dify 没有"入口"可言
+#
+# 端点仍然**只读**、租户与知识库集合仍由我们的 `AIOPS_GATEWAY_DIFY_KNOWLEDGE_BINDINGS`
+# 决定，集合之外一律不可达（见 ops/dify-exposure-registry.md）。
+DIFY_LOCATION_TEXT = r"""# Dify External Knowledge API 那一跳（#614）：保留 Dify 自带的 Authorization。
+# 前缀比 `/v1/` 长 ⇒ 按 nginx 的"最长前缀优先"规则命中这里，不依赖书写顺序。
+# 不 include 服务令牌 conf、不注入来源密钥/入口/会话 —— Dify 不是我们的用户。
+location ^~ /v1/dify/ {
+    proxy_pass http://172.18.0.1:8788;
+    rewrite ^/v1/dify/(.*)$ /v1/dify/$1 break;
+    proxy_http_version 1.1;
+    proxy_set_header Authorization      $http_authorization;
+    proxy_set_header Host               $host;
+    proxy_set_header X-Real-IP          $remote_addr;
+    proxy_set_header X-Forwarded-For    $proxy_add_x_forwarded_for;
+    proxy_connect_timeout 15s;
+    proxy_send_timeout  120s;
+    proxy_read_timeout  120s;
+    proxy_buffering off;
+}
+"""
+
+
 def replace_location(src: str) -> str:
-    start = src.index("location ^~ /v1/ {")
-    end = src.index("\nlocation ", start + 1)
-    return src[:start] + LOCATION_TEXT + src[end:]
+    """Write the `/v1/` location, and Dify's narrower one in front of it.
+
+    Idempotent by construction: what an `apply` leaves behind is exactly
+    ``DIFY_LOCATION_TEXT + LOCATION_TEXT`` in that spot, so if that concatenation
+    is already there the function returns the input unchanged. Anything else
+    (the original file, or a hand-edited variant) is matched by the umbrella
+    comment and the two `location` lines.
+
+    The umbrella comment is part of the extent because the original file has two
+    comment lines above `location ^~ /v1/` that this file's text supersedes;
+    locating by `location` alone would leave the stale disclaimer behind. The
+    Dify block sits *before* that comment so it is not swallowed by it.
+    """
+    written = DIFY_LOCATION_TEXT + LOCATION_TEXT
+    if written in src:
+        return src
+
+    umbrella = "# AI-Ops 入口：按内容域分流"
+    start = src.index(umbrella) if umbrella in src else src.index("location ^~ /v1/ {")
+    # One stale `location ^~ /v1/dify/` (an earlier revision of this file) sits
+    # between the umbrella comment and `/v1/`; walk past it if it is there.
+    after = src.index("location ^~ /v1/ {", start)
+    end = src.index("\nlocation ", after + 1)
+    return src[:start] + written + src[end + 1 :]
 
 
 def run(*cmd: str) -> None:
@@ -95,6 +155,8 @@ def main() -> int:
     if action == "dry-run":
         print(f"=== 将写入 {MAPFILE} ===")
         print(MAP_TEXT)
+        print(f"=== 将写入 {VHOST} 的 location ^~ /v1/dify/（#614，比 /v1/ 更靠前） ===")
+        print(DIFY_LOCATION_TEXT)
         print(f"=== 将写入 {VHOST} 的 location ^~ /v1/ ===")
         print(LOCATION_TEXT)
         print("（dry-run 不写任何文件）")

@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Keep Dify's own Authorization at the public entry so its key reaches the adapter (#614)
 - Rebind the Dify adapter's kb search to the registered tenant (#612)
 
 ### Added

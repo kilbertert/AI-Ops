@@ -38,6 +38,17 @@
   （`KnowledgeSearchGuard` 同一条纪律）。任何会改生产数据的端点都不得进这张表 ——
   见 `AGENTS.md` 的业务边界：第一版只允许诊断和证据交付。
 
+## 二·补、公网入口那一跳：`Authorization` 由谁提供（#614）
+
+适配路由自己认的是**共享凭据**（`AIOPS_GATEWAY_DIFY_KNOWLEDGE_API_KEY`），而它在公网上
+**前面还有一跳 nginx**。41 的 `location ^~ /v1/` 会用自己的服务令牌**覆盖** `Authorization`，
+那样 Dify 的 key 到不了门（403 `DIFY_CREDENTIAL_REJECTED`，2026-10-09 实测）。
+
+因此为 `/v1/dify/` 单开了一条**更长的前缀** location：保留客户端带来的 `Authorization`，
+并且**不**注入入口 / 来源密钥 / 会话 —— Dify 是服务器，不是我们的用户。
+形状、理由与验收三处观察点见 `docs/agents/env-41-runbook.md` §1.10。
+这是**暴露形态的一次显式决定**（记录在 #614），不是布局细节。
+
 ## 三、三段落地，只有第 1 段进 CI
 
 | 段 | 在哪跑 | 做什么 | 状态 |
