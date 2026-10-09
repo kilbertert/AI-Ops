@@ -1,3 +1,71 @@
+## #587 阶段 1 第三跳收口：`canary-media-0911` 的 embedding 修复（2026-10-09，41/36 真机）
+
+**分支** `docs/kb-embedding-fix-evidence`，基线 `origin/main` @ `6c7727f`。
+承接上一节（#632 记录了排查所得）。本节记**修复本身**与其真机证据。
+
+### 一、修的是什么
+
+`canary-media-0911`（租户 `1783022023241633792`）的检索面 502，两层根因：
+
+1. **`embd_id` 指向一个不存在的模型**：`text-embedding-v3@default@Tongyi-Qianwen`
+   在该租户下解析不出来（`Model ... not found for model embedding`）；
+2. **它唯一的 provider 是 `Tongyi-Qianwen`** —— 按 RAGFlow 的厂商名硬路由，即使解析成功
+   也会走 DashScope SDK 并被 401（#632 已记）。
+
+### 二、怎么修的（走 RAGFlow 公开 API，不直改库）
+
+用 **KB owner 自己的 api_token**（`/users/me` 自证 == `fe655284ad8811f1ae704bfc8c544ea6`）：
+
+| 步 | 动作 | 结果 |
+|---|---|---|
+| 1 | `PUT /providers` `{OpenAI}` | `code 0` —— 该 factory 原本未被这个租户启用 |
+| 2 | `POST /providers/OpenAI/instances` `{baoyun, base_url=…baoyun…, model_info: []}` | `code 0` |
+| 3 | `PUT /datasets/<kb>` `{embedding_model: text-embedding-3-large@baoyun@OpenAI}` | `code 0` |
+| 4 | 重建向量：drop 掉 Infinity 里那张表（旧维度 `q_1024_vec`），再 `POST .../documents/parse` | 两个文档 `run=DONE`，表变成 `q_3072_vec` |
+
+第 2 步**必须传空的 `model_info`**：传任何具体模型时 RAGFlow 会先做一次真实调用验证
+（`verify`），验证失败即 `No model passed verification` 且**不落库**（#617 那轮已见过这个形态）。
+空 `model_info` 跳过验证，随后再按需启用/停用模型。
+
+第 4 步是**必须的**：RAGFlow 的向量表按维度命名（`q_{dim}_vec`），换 embedding 模型就是换维度；
+只改 `embd_id` 不重建向量，检索会报 `Column: q_3072_vec doesn't exist`（实测）。
+
+### 三、真机验收
+
+| 判据 | 结果 |
+|---|---|
+| 经 **kb-service** 检索（我们运行时走的那条） | `POST /kb/knowledge-bases/<kb>/search` → **200**，`chunks=1` |
+| 检索内容确实是那两条文档之一 | `docnm=新加坡无人电动巴士.mp4`，content 是它的视频摘要 |
+| **经网关运行时的一条真实提问** | `retrieval_status: **found**`，blocks = `text` + `video` + `reference`；正文正确复述了视频内容（华为/比亚迪/TrendPower 新加坡无人巴士项目） |
+| 对照库未受影响 | `41-客服知识库` 仍 200 / `chunks=2` |
+| 其他租户的库未被改坏 | `p3-smoke`、`tenant-g-kb` 仍 502 —— **与修复前一致**（见下） |
+
+**"其他租户仍 502"是原状，不是回归**：它们的 `embd_id` 同样是那个不存在的
+`text-embedding-v3@default@Tongyi-Qianwen`，`resolve_model_config` 直接失败。修复前它们就 502，
+本轮没有碰它们。**这同时说明：同类缺陷不止这一个库。**
+
+### 四、视频那一跳的额外修复
+
+首次 parse 后视频分段的 `content` 是
+`**ERROR**: Both default and intl endpoint failed. … InvalidApiKey` —— RAGFlow 的
+**图片/视频解析走的是另一个模型轴**（`tenant.img2txt_id` / vision），而不是 embedding。
+该租户的 `img2txt_id` 指向 `qwen3-vl-plus@maas@Tongyi-Qianwen`，而 `maas` 实例的 base_url
+是 baoyun 中继 → 同样被发到 DashScope → 401。
+
+修法：在 `OpenAI/baoyun` 实例上把 `gpt-4o` 的 `model_type` 补成 `['chat','vision']`
+（该中继确实有 gpt-4o），并 `PATCH /models/default {model_type: vision}` 指过去。重跑 parse 后
+视频分段拿到了真实摘要。
+
+### 五、证据边界与遗留（据实）
+
+- 本条是**环境修复 + 真机验收**，不是代码改动；仓库里只多这一节记录。
+- **41 上 `env-41.toml` 仍无 `[[dify_apps]]` 行**，运行时注册表仍未启用。
+- `canary-media-0911` 的 `chunk_method` 仍是 `picture`（图片型库），
+  分段内容是视频摘要 + 一页图片文本 —— 这是该库原本的形态，不是本次改出来的。
+- **同类缺陷仍在**：`p3-smoke`、`tenant-g-kb` 等库的 `embd_id` 指向同一个不存在的模型；
+  它们是**测试残留**（`docs/agents/kb-service-test-env.md` 记过），本次**未动**。
+  若将来有人依赖它们，需要同样的修复。
+
 ## #628 顶层账号（平台/租户）被读成「无可见订单」—— 应为整个租户（2026-10-09）
 
 **分支** `fix/operator-tenant-level-account-scope`，基线 `origin/main` @ `7444a32`。
