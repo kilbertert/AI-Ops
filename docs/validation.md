@@ -1,3 +1,68 @@
+## #614 公网入口那一跳：让 Dify 自己的 key 到达适配路由（2026-10-09，41 真机）
+
+**分支** `feat/dify-exposure-entry`，基线 `origin/main` @ `2179566`。
+**制品** `deploy/d4-cutover.py`（新增 `/v1/dify/` location）+ `tests/test_dify_entry_cutover.py`（5 例）
++ `docs/agents/env-41-runbook.md` §1.10。
+
+### 一、决定与它为什么是"一次暴露决定"
+
+41 的 `location ^~ /v1/` 用 AI-Ops 自己的服务令牌**覆盖** `Authorization`。改动前实测：
+
+```
+公网 POST /v1/dify/retrieval  不带任何凭据   → 403 DIFY_CREDENTIAL_REJECTED
+公网 POST /v1/dify/retrieval  带任意 key     → 403 DIFY_CREDENTIAL_REJECTED
+```
+
+**两者同形** —— 因为 nginx 把两者都换成了我们的服务令牌。这不是缺陷：`/v1/` 那条按
+"nginx 供凭据"设计，而 Dify 是**服务器、不是我们的用户**（无会话、无 UPMS 主体），
+它的 External Knowledge API 只支持 Bearer 自带 key。
+
+所以这是一次**显式的暴露决定**：给该端点一条更长的前缀 location，把它的鉴权从
+"我们的服务令牌"换成"一把 Dify 控制台持有的共享凭据"。选项与取舍记在 #614。
+
+### 二、改动
+
+`deploy/d4-cutover.py` 生成并写入：
+
+```nginx
+location ^~ /v1/dify/ {
+    proxy_pass http://172.18.0.1:8788;
+    rewrite ^/v1/dify/(.*)$ /v1/dify/$1 break;
+    proxy_set_header Authorization      $http_authorization;   # 保留 Dify 的 key
+    …（不 include 服务令牌 conf、不注入 入口/来源密钥/会话）
+}
+```
+
+- nginx 按**最长前缀**选 location，与书写顺序无关；`/v1/dify/` > `/v1/`，所以它赢。
+- 幂等：`apply` 重跑不叠块、不残留被取代的旧注释（`replace_location` 认整段拼接，
+  在则原样返回）。
+- 回滚：`python3 /tmp/d4-cutover.py rollback` → 从 `/var/backups/aiops-41/d4-cutover-<ts>/`
+  恢复 vhost + map；`nginx -t` 失败会**自动回滚**。
+
+### 三、真机验收（三处观察点，缺一不可）
+
+| 观察点 | 无凭据 | 假 key | 真 key |
+|---|---|---|---|
+| 开发机 → 公网 `https://api.mall.qushiyun.com/v1/dify/retrieval` | 401 `DIFY_CREDENTIAL_REQUIRED` | 403 `DIFY_CREDENTIAL_REJECTED` | — |
+| 41 自身 → **同一个公网 URL** | — | — | **200**，顶层键 `["records"]`，2 条 |
+| **Dify 容器** `deploy-api-1` → 经 `ssrf_proxy` → 同一 URL | 401 | 403 | — |
+
+- 第一行证明 **key 真的到了门**：改动前两者都是 403（nginx 塞的是我们的令牌），
+  现在无凭据是 401、假 key 是 403 —— 这个**区分**就是"头没被覆盖"的证据。
+- 第二行是**与 Dify 完全相同的 URL 形状 + 真 key → 200 且带 records**。
+- 第三行证明**从 Dify 自己的网络位置**这条 URL 可达、门生效。
+- 真 key 那一格**没有**在容器里跑：凭据在 41 的 0600 文件里，探针读不到 —— 这是有意的边界。
+
+落地：`apply` 在 41 上执行 → `nginx -t` ok → `reload`；备份
+`/var/backups/aiops-41/d4-cutover-20261009-152424`。
+
+### 四、边界（据实）
+
+- 真 key 那一格经**公网域名**（与 Dify 完全相同的 URL），但**发出方是 41 而不是 Dify 容器**；
+  容器侧只证到"可达 + 门生效"。完整的"运营在控制台里配好并调通"仍属**阶段 1 验收（#587）**。
+- 这次改动**只动 nginx**，不动网关代码；`/v1/*` 其余端点的行为逐字不变
+  （`tests/test_dify_entry_cutover.py::test_the_other_locations_are_untouched` 钉住）。
+
 ## #612 Dify 适配路由没有按登记的租户重绑 kb 客户端（2026-10-09，41 真机）
 
 **分支** `fix/dify-retrieval-tenant`，基线 `origin/main` @ `2bd271a`。

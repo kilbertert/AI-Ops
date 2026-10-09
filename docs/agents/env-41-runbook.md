@@ -560,6 +560,67 @@ ssh aiops-41 'd=$(LC_ALL=C date "+%d/%b/%Y"); \
 
 ---
 
+## 1.10 Dify 的那一跳：`location ^~ /v1/dify/`（**2026-10-09 落地并验收**）
+
+### 为什么单开一条 location
+
+`location ^~ /v1/` 用 AI-Ops 自己的服务令牌**覆盖** `Authorization`
+（`proxy_set_header Authorization $aiops_auth;`）。而 Dify 的 External Knowledge API
+**只支持 Bearer 自带 key** —— 它的 key 被覆盖掉，适配路由收到的是我们的服务令牌，
+回 **403 `DIFY_CREDENTIAL_REJECTED`**（2026-10-09 公网实测）。这不是缺陷：
+`/v1/` 那条是按"nginx 供凭据"设计的，而 Dify 是**服务器、不是我们的用户**，
+它没有会话也没有 UPMS 主体。
+
+### 形状（已由 `deploy/d4-cutover.py` 生成，不要手改）
+
+```nginx
+location ^~ /v1/dify/ {
+    proxy_pass http://172.18.0.1:8788;
+    rewrite ^/v1/dify/(.*)$ /v1/dify/$1 break;
+    proxy_http_version 1.1;
+    proxy_set_header Authorization      $http_authorization;   # ← 保留 Dify 的 key
+    proxy_set_header Host               $host;
+    proxy_set_header X-Real-IP          $remote_addr;
+    proxy_set_header X-Forwarded-For    $proxy_add_x_forwarded_for;
+    proxy_connect_timeout 15s;
+    proxy_send_timeout  120s;
+    proxy_read_timeout  120s;
+    proxy_buffering off;
+}
+```
+
+三处**刻意**与 `/v1/` 那条不同，读的人不要"顺手对齐"：
+
+- **不** `include /etc/aiops-41/nginx-aiops-service-token.conf`（那是调用者链的凭据）；
+- **不**注入 `X-AIOps-Source-Key` / `X-Business-Entry` / `X-Third-Session` ——
+  注入它们会让下游以为这是某个真实用户发来的请求，而这条路由的前提正是"它不是"；
+- 上游**固定**直连 AI-Ops，不进 `$aiops_upstream` 的 map —— Dify 没有"入口"可言。
+
+**为什么它排在 `/v1/` 之前**：nginx 按**最长前缀优先**选 location，与书写顺序无关；
+`/v1/dify/` 比 `/v1/` 长，所以它赢。写在前面只是为了可读 —— 别把"顺序"当成判据。
+
+### 回滚
+
+```bash
+ssh aiops-41 'python3 /tmp/d4-cutover.py rollback'    # 从最近一次 d4-cutover-* 备份恢复 vhost + map
+```
+
+`apply` 会在写之前备份 vhost、map、token conf 三份到
+`/var/backups/aiops-41/d4-cutover-<ts>/`；`nginx -t` 失败会**自动回滚**。
+
+### 验收（2026-10-09 实测，三处观察点）
+
+| 观察点 | 无凭据 | 假 key | 真 key |
+|---|---|---|---|
+| 从开发机打公网 `https://api.mall.qushiyun.com/v1/dify/retrieval` | 401 `DIFY_CREDENTIAL_REQUIRED` | 403 `DIFY_CREDENTIAL_REJECTED` | — |
+| 从 41 自身打**同一个公网 URL** | — | — | **200 + `{"records":[…]}`（2 条）** |
+| 从 **Dify 容器**（`deploy-api-1`）经 `ssrf_proxy` 打 | 401 | 403 | —（key 在 41 的 0600 文件里，探针读不到） |
+
+**这三行合起来才是"Dify 打得通"**：第一行证明 key 真的到了门（改动前无凭据也是 403，
+因为 nginx 塞的是我们的服务令牌）；第二行是**与 Dify 完全相同的 URL 形状 + 真 key → 200**；
+第三行证明**从 Dify 自己的网络位置**这条 URL 可达且门生效。真 key 那一格没在容器里跑，
+是因为凭据不该进容器 —— 那是有意的边界，不是遗漏。
+
 ## 2. 部署（源码同步到 41）
 
 生产代码是文件拷贝部署（41 无 `.git`）。流程：**备份 → 传 → 校验 sha → 重启**。
