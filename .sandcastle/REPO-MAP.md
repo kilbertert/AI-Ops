@@ -31,7 +31,7 @@ accurate at the moment it is generated and at the moment the commit lands.
 
 ## Tests
 
-- tests/ — 126 test file(s, recursive)
+- tests/ — 127 test file(s, recursive)
 - script "cd:watch:test": node .sandcastle/cd-watch.test.mjs
 - pytest (pyproject.toml / pytest.ini present)
 
@@ -41,7 +41,7 @@ accurate at the moment it is generated and at the moment the commit lands.
 - AGENTS.md
 - CLAUDE.md
 - README.md
-- docs/ — 56 markdown file(s)
+- docs/ — 58 markdown file(s)
 - docs/adr/ — 10 markdown file(s)
 - docs/agents/ — 25 markdown file(s)
 
@@ -110,7 +110,7 @@ docs/
   architecture.md
   diag-query-api-plan.md
   EV_Charging_FAQ_Multilingual_Wide_Table.xlsx
-  ... (16 more)
+  ... (18 more)
 examples/
   fixtures/
     missing_tx_data.json
