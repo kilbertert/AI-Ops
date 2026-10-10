@@ -1,3 +1,82 @@
+## #587 收尾两件：Dify 侧改用**官方 DeepSeek key**（与网关那把隔离）+ 关回插件市场（2026-10-11，36 真机）
+
+**分支** `docs/stage1-closeout`，基线 `origin/main` @ `284a7ee`。
+**制品** 本节 + `docs/开发进度.md`。**这两件都是上一节留给运营/产品的待办，本轮按授权自主拍板并做掉。**
+
+### 一、Dify 侧改用官方 DeepSeek key（key 隔离）
+
+**问题**：上一节把 Dify 的 provider 配成了指向 baoyun 的 OpenAI 兼容端点，用的是**我们网关那把
+key** —— 与 PRD 的 User Story 3（"预览用的模型 key 配在 Dify 自己这边"）不一致，
+而且 Dify 侧一旦被攻破就握着我们网关的凭据。
+
+**做法**（三步，都在生产路径上）：
+
+```
+① 在 36 上把官方 key 落成 0600 文件（/root/dify-deepseek-official.key）
+② POST …/model-providers/langgenius/deepseek/deepseek/credentials
+     {"credentials": {"api_key": <官方 key>, "endpoint_url": "https://api.deepseek.com/v1"},
+      "name": "deepseek-official"}                                        → 201
+③ 删掉旧的 baoyun 那条凭据（DELETE …/credentials {"credential_id": <旧 id>}）→ 204
+   然后 provider 级 switch 指到官方那条（不带 models 段的那个端点）           → 200
+```
+
+**过程中踩到两个 Dify 的"沉默点"，都记在这里**：
+
+| 现象 | 真因 |
+|---|---|
+| 删掉旧凭据后，deepseek 的模型**整体从清单里消失** | 新凭据当时还不是"当前"（Dify 按 `ProviderCredential.created_at DESC` 选），provider 级 `credential_id` 为空 ⇒ Dify 认为这个 provider 没可用凭据 |
+| `…/models/credentials/switch` 报 `Credential record not found` | 那是 **model 级** switch（查 `provider_model_credentials`）；provider 级要用 **`…/credentials/switch`** |
+
+**验收（三处）**：
+
+```
+Dify 的 credentials/validate（它真调一次上游）→ 200 {"result":"success","error":null}
+模型的当前凭据： api_key 前缀 `sk-x4C…`（**baoyun 那把**）已不在；剩 deepseek-official（加密存储）
+Dify 侧的 provider 与模型清单：deepseek 4 个模型仍在 ['deepseek-flash','deepseek-v4-flash',…]
+```
+
+**官方 key 与模型名的关系（实测）**：官方 `GET /models` 只列 `['deepseek-flash','deepseek-v4-pro']`，
+但 `POST /chat/completions` **接受 `deepseek-v4-flash` 这个别名**（返回体里 `model` 归一成
+`deepseek-flash`）⇒ Dify 与网关两边继续用**同一个名字**，不需要映射。
+
+**隔离后的分工**：
+
+| 谁 | 用哪把 key | 指向 |
+|---|---|---|
+| 41 网关（生产链路） | `/etc/aiops-41/keys/baoyun.key` | `https://ai-api.baoyun.com/v1` |
+| Dify（编排 + 调试预览） | 官方 DeepSeek key（0600 在 36） | `https://api.deepseek.com/v1` |
+
+### 二、关回插件市场（对齐 PRD 的 User Story 19）
+
+PRD 明写"关掉插件市场外呼"。装插件时我把它打开过；**本轮关回去**：
+
+```
+MARKETPLACE_ENABLED=false（备份 .env.bak-marketplace-off-…）
+docker compose up -d api plugin_daemon
+```
+
+**关掉之后**（这三点是判据，不是期望）：已装的**两个插件仍在**、`model-types/llm` **仍列出**
+两个 provider 与各自的模型、app 的模型配置**未被改动**。⇒ 关市场不影响运行，
+只关掉"再装新的"。
+
+### 三、端到端复验（key 换完 + 市场关掉之后）
+
+```
+真实 Redis 会话经 https://api.mall.qushiyun.com/v1/assistant/questions：
+  [zh] 202 → completed  retrieval_status=found  [text,video,reference]
+  指标行 agent_version_key = agt_bf272600302a46bfa9279bad9bd1389a#v2（= pull-dify 冻结的那个）
+```
+
+⇒ **换 key 与关市场都没有改变链路**：服务它的仍是那条 Dify 来源的已发布版本。
+
+### 四、证据边界（据实）
+
+- 对 **36**：新增官方 key 凭据 + 删旧凭据 + `MARKETPLACE_ENABLED` 关回 + 重建两个容器。
+- 对 **41 零写入**（本轮）。
+- **官方 key 不落仓、不打印**：只落在 36 的 0600 文件与 Dify 的加密列里；
+  本节与 `docs/开发进度.md` 只写"存在哪、指向哪"，`grep` 仓库无明文。
+- 临时中转文件（41/36 的 `/tmp/ds.key`）用完即删。
+
 ## #587 **全链跑通**：运营在 Dify 改 → 我方发布门冻结 → 真实用户经生产入口被服务（2026-10-10，41/36 真机）
 
 **分支** `docs/stage1-full-chain-green`，基线 `origin/main` @ `124ed10`。
