@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Accept both spellings of the session header at the entry (`third-session` and
+  `X-Third-Session`) — the wrong one used to answer 401, which is the same code
+  the expired-session case returns (#649)
 - Give the gateway's own log lines a destination — `uvicorn.run()` was the only
   logging configuration and it never touched the root logger, so every `aiops.*`
   INFO line was dropped (measured: zero in 41's whole journal) (#636)

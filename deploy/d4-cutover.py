@@ -51,13 +51,37 @@ map $aiops_entry $aiops_srckey {
     # 留着它会让同一请求上有两个来源，而 AI-Ops 取第一个（谁先到取决于注入顺序）。
     "operator" "";
 }
+# 会话头的**两种拼写**都要认（#649）。
+#
+# nginx 的 `$http_<name>` 按**小写 + 下划线**取头：`$http_third_session` 只匹配
+# `third-session`（大小写不敏感），对 `X-Third-Session` 取到**空值** ——
+# 于是头被丢掉、网关没有会话、回 401 INVALID_ACCESS_TOKEN，**与「会话过期」同形**，
+# 而日志里查不到头名，排查会朝凭据方向走（2026-10-10 实测踩过一次）。
+#
+# 为什么入口要两种都认、而不是只在文档里写对一种：**两种拼写都已经被写进仓库** ——
+# 客户端文档（`docs/gateway.md`、`docs/standard-api-contract.md`、`docs/faq-api.md`）
+# 写 `third-session`，而本文件与网关的参数名、以及 `docs/agents/frontend-api-brief.md`
+# 那段 nginx 示例写 `X-Third-Session`。照后者接的对接方拿到的就是那个同形的 401。
+#
+# 一个变量、两种输入：前者为空时取后者，两者都为空时仍是空（不伪造会话）。
+map "$http_third_session:$http_x_third_session" $aiops_third_session {
+    default    $http_third_session;
+    "~^:(.+)$" $1;
+}
 """
 
-LOCATION_TEXT = r"""# AI-Ops 入口：按内容域分流（#448 / ADR-0009；D-4 于 2026-09-30 改向）。
+#: `/v1/` location 上方那段说明。单独拎出来是因为 `replace_location` 要认它，
+#: 而注释里出现了两处（替换范围的开头、以及生成的正文本身）——写一次就不会漂。
+V1_UMBRELLA = """# AI-Ops 入口：按内容域分流（#448 / ADR-0009；D-4 于 2026-09-30 改向）。
 #   consumer  → 直连 AI-Ops（172.18.0.1:8788）：服务令牌 + 会话，行为逐字不变
 #   operator  → 先经公司网关（127.0.0.1:30899 → cloud-gateway），由它注入来源密钥
+# 会话头两种拼写都归一到一个变量（#649，map 见 0.aiops-entry-map.conf）。
 # 变量式 proxy_pass 不会自动拼 URI，`rewrite … break` 是必需的。
-location ^~ /v1/ {
+"""
+
+LOCATION_TEXT = (
+    V1_UMBRELLA
+    + r"""location ^~ /v1/ {
     include /etc/aiops-41/nginx-aiops-service-token.conf;   # 只 set 变量，不直接设头
     proxy_pass $aiops_upstream;
     rewrite ^/v1/(.*)$ /v1/$1 break;
@@ -65,7 +89,8 @@ location ^~ /v1/ {
     proxy_set_header Authorization      $aiops_auth;
     proxy_set_header X-AIOps-Source-Key $aiops_srckey;
     proxy_set_header X-Business-Entry   $aiops_entry;
-    proxy_set_header X-Third-Session    $http_third_session;
+    # 两种拼写归一到一个变量（见 0.aiops-entry-map.conf 里的 map，#649）。
+    proxy_set_header X-Third-Session    $aiops_third_session;
     proxy_set_header Range              $http_range;
     proxy_set_header Host               $host;
     proxy_connect_timeout 15s;
@@ -74,6 +99,7 @@ location ^~ /v1/ {
     proxy_buffering off;
 }
 """
+)
 
 
 # Dify 的 External Knowledge API 那一跳（#614）。
@@ -115,31 +141,70 @@ location ^~ /v1/dify/ {
 """
 
 
+def _block_end(src: str, start: int) -> int:
+    """End offset of the `location` block whose header starts at ``start``.
+
+    Bracket-aware rather than "up to the next `\\nlocation `": the earlier
+    revision of this function walked to the next location, so a vhost that had
+    the Dify block *already present* on disk (i.e. after a first `apply`) got
+    that block swallowed and re-emitted — and, worse, anything between the two
+    blocks went with it. Counting braces cannot do that: it stops at the block's
+    own closing brace wherever the neighbours are.
+    """
+    depth = 0
+    index = src.index("{", start)
+    while index < len(src):
+        if src[index] == "{":
+            depth += 1
+        elif src[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return index + 1
+        index += 1
+    raise ValueError("未闭合的 location 块")
+
+
 def replace_location(src: str) -> str:
     """Write the `/v1/` location, and Dify's narrower one in front of it.
 
     Idempotent by construction: what an `apply` leaves behind is exactly
     ``DIFY_LOCATION_TEXT + LOCATION_TEXT`` in that spot, so if that concatenation
-    is already there the function returns the input unchanged. Anything else
-    (the original file, or a hand-edited variant) is matched by the umbrella
-    comment and the two `location` lines.
+    is already there the function returns the input unchanged. Anything else —
+    the original file, or the state a first `apply` left behind — is matched by
+    the umbrella comment and the two `location` lines.
 
     The umbrella comment is part of the extent because the original file has two
     comment lines above `location ^~ /v1/` that this file's text supersedes;
     locating by `location` alone would leave the stale disclaimer behind. The
     Dify block sits *before* that comment so it is not swallowed by it.
+
+    **Dify's own location, if it is already there, is kept**: its extent is
+    measured and re-emitted verbatim rather than being absorbed. That matters
+    because this script's output is *reconciled*, not appended — the first
+    version moved the block (visually harmless, but a diff that does not match
+    what the operator wrote is a diff nobody can review).
     """
     written = DIFY_LOCATION_TEXT + LOCATION_TEXT
     if written in src:
         return src
 
-    umbrella = "# AI-Ops 入口：按内容域分流"
+    # The umbrella's FIRST line, from the one place it is written: a prefix of
+    # `V1_UMBRELLA` so the two cannot drift apart when the comment is reworded.
+    umbrella = V1_UMBRELLA.splitlines()[0]
     start = src.index(umbrella) if umbrella in src else src.index("location ^~ /v1/ {")
-    # One stale `location ^~ /v1/dify/` (an earlier revision of this file) sits
-    # between the umbrella comment and `/v1/`; walk past it if it is there.
+
+    dify_marker = "location ^~ /v1/dify/ {"
+    kept_dify = ""
+    if start > 0 and dify_marker in src[:start]:
+        # A first `apply` already put it above the umbrella. Keep that block,
+        # byte for byte, and only rewrite what is below it.
+        dify_start = src.rindex(dify_marker, 0, start)
+        kept_dify = src[dify_start : _block_end(src, dify_start)] + "\n"
+        start = dify_start
+
     after = src.index("location ^~ /v1/ {", start)
-    end = src.index("\nlocation ", after + 1)
-    return src[:start] + written + src[end + 1 :]
+    end = _block_end(src, after)
+    return src[:start] + kept_dify + written + src[end:]
 
 
 def run(*cmd: str) -> None:
