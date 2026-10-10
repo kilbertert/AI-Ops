@@ -1,3 +1,80 @@
+## #587 全链：把「运营在 Dify 改 → 我方发布门冻结 → 真实用户被服务」整条跑一遍，**停在第二跳**（2026-10-10，41/36 真机）
+
+**分支** `docs/stage1-model-whitelist-gap`，基线 `origin/main` @ `4d7bde6`。
+**制品** 本节 + `docs/开发进度.md`。
+
+### 一、第一跳**做到了**（而且是经 API 与真浏览器两条）
+
+上一节说"改提示词撞在 provider 上"。provider 配好之后再试，**换了一个错**：
+
+```
+第一次（provider 未配）：400  model.provider is required and must be in []
+第二次（provider 已配）：400  model.name must be in the specified model list
+        —— 因为那个 app 存的模型名是 `deepseek-v4-flash`，而 Dify 现在认的是插件那 44 个
+```
+
+把 app 的模型换成 Dify 认的 `gpt-5.6` 之后：
+
+```
+POST /console/api/apps/<id>/model-config → **200** {"result":"success"}
+导出读回：提示词 len=79 → **104**，**含标记 `【运营在控制台里加的标记 2026-10-10】`** ✅
+读回 model：{"name": "gpt-5.6", "provider": "langgenius/openai/openai", "mode": "chat"}
+```
+
+⇒ **「运营在 Dify 里改一个智能体」这一跳成立**（改动真的落库，用导出端点读回作判据）。
+
+### 二、第二跳**过不去**，而这次是一个**真实的缺陷**
+
+`aiops admin pull-dify`（把刚改好的配置拉回来、经我方发布门冻结）：
+
+```
+$ … admin pull-dify --app-id a975c8e5-… --tenant 1783022023241633792 --name canary-dify-entry-1010 …
+  → --dry-run: 成功（拉到了带标记的提示词，见下）
+  → 真跑:     发布失败（库未变更）: AgentConflict: agent revision or state changed
+$ … --name canary-dify-model-probe（换个新名字，排除"已存在"这个因素）
+  → 发布失败（库未变更）: AgentValidationError: model is not allowlisted
+```
+
+**根因（读代码 + 实测确认）**：`pull-dify` 把 DSL 里的 `model.name` **原样**写进我们的 `AgentConfig`
+（`dify_dsl_pull.py:233 model=_required_model(model_config)`），然后经 `AgentManager.publish`
+过**模型白名单**（`allowed_models_from_settings`）。而 41 上那个白名单是
+
+```
+('deepseek-v4-flash',)        ← 只有这一个（来自 AIOPS_PROVIDER_BAOYUN_MODEL）
+```
+
+**Dify 控制台里能选的模型名与我们的白名单是两套互不相交的集合**：Dify 给的是
+`gpt-5.6 / gpt-6-astra / …`（插件那 44 个），我们只认 `deepseek-v4-flash`。
+
+⇒ **这条链在"运营改完 → 拉回来"这一步**结构性**断掉**：运营在 Dify 里能选的每一个模型，
+我们都不接受；我们接受的唯一那个，Dify 的插件列表里没有。
+
+**清理**：那次失败的 pull 留下了一个草稿 `canary-dify-model-probe`（草稿永不被选中，
+所以生产未受影响），已 `delete`。生产库回到原状（选版仍是 `canary-客服#v5`、
+注册表 2 行、`agents` 三条未变）。
+
+### 三、这不是"没做"，是**一个需要决定的接缝**
+
+三个选项，各自代价明确：
+
+| 选项 | 做什么 | 代价 |
+|---|---|---|
+| **A. 白名单认 Dify 的模型名** | 把 `AIOPS_PROVIDER_*` 加一条（或按 provider 派生）让 `gpt-5.6` 之类通过 | 网关**真的会用**这个名字去调 provider —— 而 baoyun 那边有没有这个名字要单独验；**运行时行为跟着变** |
+| **B. 拉取时做一次映射** | DSL 的 `model.name` → 我们白名单里的等价物（例如统一映射到 `deepseek-v4-flash`） | 改的是**产品语义**（"运营在 Dify 选的模型"不再等于"运行时用的模型"），要产品拍 |
+| **C. 让 Dify 的模型名就是我们的白名单** | 在 Dify 里只留一个能对上的模型名 | 需要 Dify 的插件模型清单里**存在**那个名字 —— 现在是 `deepseek-v4-flash` 不在其中 |
+
+**我停在第二跳**：它要求的是"我们的白名单与 Dify 的模型名如何对齐"这个**产品/架构决定**，
+不是一次实现。按纪律，**三选项都列出来、代价都写清**，而不是自己挑一个改下去。
+
+### 四、证据边界（据实）
+
+- 对 **36** 的改动只有那个 app 的 `model-config`（提示词 + 模型名），**可回滚**（读回值在 §一）。
+- 对 **41**：一次 `--dry-run`（零写入）+ 两次**失败的** `pull-dify`（各自"库未变更"）
+  + 删掉一个草稿。生产选版与注册表**未变**。
+- 全链的**第三跳（真实用户经生产入口被这条版本服务）**本轮没走到 —— 因为第二跳就断了；
+  它此前用**另一条路径**（不经过 pull，直接发布一个 Dify 来源的版本）验证过，
+  见本文件「#587 判据一收口」。
+
 ## #587 收尾取数（七）：把模型 provider 凭据填进 Dify（2026-10-10，36 真机）
 
 **分支** `docs/stage1-provider-credential`，基线 `origin/main` @ `6b1cb05`。
