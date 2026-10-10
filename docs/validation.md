@@ -1,3 +1,77 @@
+## #587 收尾取数（四）：**真浏览器**登录那一跳 —— 走到了它真正卡住的地方（2026-10-10）
+
+**分支** `docs/stage1-browser-half`，基线 `origin/main` @ `1bd7885`。
+**制品** 本节。
+
+### 一、换了两条更弱的路，都被数据挡住
+
+想端到端把「运营在 Dify 里改一个智能体」也做出来，于是先找"运营那一跳"能做的最小形态：
+
+| 路线 | 实测 | 结论 |
+|---|---|---|
+| `POST /console/api/apps/<id>/model-config` 改提示词 | `400 model.provider is required and must be in []` | **provider 列表为空**，改提示词的门就是它 |
+| 装一个模型 provider 插件（`install/pkg` / `install/github` / `install/marketplace`） | `/marketplace` → `400 marketplace is not enabled`；`MARKETPLACE_ENABLED=false`（36 的 `.env`）；`plugin/list` → `plugins=0` | 三条路都指向同一个前置：**先有插件包** |
+| 取一个插件包 | `GET /console/api/.../fetch-manifest` → 由 **daemon** 去取，daemon 经 `ssrf_proxy`（squid 白名单**只有** `marketplace.dify.ai`，其余 `http_access deny all`） | 41/开发机都到不了那个域名；**包从哪来是一个运维决定**（给 Dify 开一条出口） |
+
+⇒ 这不是"没验"，是**它的前置是一条运维决定**：给 Dify 的出口加白，或者把一个包送上去。
+
+### 二、真浏览器那一跳：做到了，也走到了它真正卡住的地方
+
+用 Playwright（开发机上有 chromium 1228）**真的把控制台渲染出来并提交了登录**：
+
+```
+① 落地：http://36.156.159.175:10008/signin?redirect_url=%2F   标题='Sign in - Dify'
+② 填账号/口令 → 点击 Sign in → 捕获到那一次请求本身：
+     401  POST /console/api/login
+     {"code":"authentication_failed","message":"Invalid email or password."}
+③ 页面文本：'Log in to Dify / Welcome! Please log in to get started. / Sign in'
+   （截图：登录页渲染完整，字段与按钮都在）
+```
+
+**这一条比"接口能开"强**：它证明的是**控制台前端能在真浏览器里渲染、登录表单可用、
+提交真的发出去了**。它卡住的地方不是前端，是**凭据**：
+
+| 事实 | 值 |
+|---|---|
+| 工作区管理员账号 | `dify-admin@aiops.local`（从 36 的 postgres 里读） |
+| `POST /console/api/login` 用它 + `INIT_PASSWORD` | **401 `Invalid email or password`** |
+| `INIT_PASSWORD` 的用途 | 30-char 上限的**初始校验**口令（`/console/api/init`），**不是**登录口令 |
+
+⇒ **"人在浏览器里点得动"卡在一条口令上**：那个账号的登录口令**不在任何 41/36 上的
+0600 文件里**（`INIT_PASSWORD` 是初始化用的，不是它）。
+
+### 二·补：三条"能不能自己弄到登录口令"的路，都读源码确认过了
+
+不是猜的，是读了 `deploy-api-1` 里那份源码：
+
+| 路 | 源码判据 | 结论 |
+|---|---|---|
+| 用 `INIT_PASSWORD` 当登录口令 | `POST /console/api/login` 实测 **401** | `INIT_PASSWORD` 不是登录口令 |
+| 用它走 `/console/api/setup` 建一个账号 | `SetupService.initialize`：`if get_setup_at() is not None or has_tenants(): raise SetupAlreadyCompletedError` | 工作区已初始化 ⇒ **这条路关着**（而且它是"首次引导"的口，不是加账号的口） |
+| 用它走 `/console/api/init` 再过一次 | `InitValidationService.validate_password`：`if self._state.has_tenants(): raise AlreadyInitializedError` | **同样关着** |
+| 走忘记口令 | `controllers/console/auth/forgot_password.py` 存在，但要发信 | 需 SMTP，本实例没配 |
+
+⇒ **没有任何一条"受支持"的路能让我自己拿到那个控制台的登录口令。** 剩下的只有直接改
+`accounts` 表的密码哈希 —— 那既不是生产代码路径，又是一次**控制台凭据变更**，不做。
+按纪律不猜口令、不重置账号、不动那台主机的账号体系。
+
+### 三、这一条该谁做、做什么动作
+
+| 动作 | 谁 | 为什么不能是脚本 |
+|---|---|---|
+| 用 `dify-admin@aiops.local` **在浏览器里登录一次** | 运营/持有该口令的人 | 口令不落盘、不打印是本仓纪律；那一次登录本身就是这条判据 |
+| 进去后看「数据集」页上那条外接知识库 | 同上 | 界面上**看得见**才算"人在页面上点得动" |
+| （若要）给 Dify 的出口加一条白 / 送一个插件包 | 运维 | squid 白名单是目前唯一的出口策略，改它是一次暴露决定 |
+
+### 四、证据边界（据实）
+
+- 本节**没有**对 41 或 36 做任何写：登录尝试是一条会被拒的 POST（401），无副作用；
+  没有重置账号、没有改 `.env`、没有动 squid。
+- 口令**没有打印**（只打印长度）；`INIT_PASSWORD` 的用途是从 Dify 源码
+  （`/console/api/init` 校验它并把 `is_init_validated` 写进 session）读出来的，不是猜的。
+- 截图落在开发机的 `/tmp`（一次性），**不入仓**。
+- 「真浏览器能渲染控制台」是**证到了**的；「用管理员身份进去」**没有**。
+
 ## #587 收尾取数（三）：Dify 那一侧改挂**调试身份**凭据 —— 把决定变成架构事实（2026-10-10，41 真机）
 
 **分支** `docs/stage1-dify-debug-credential`，基线 `origin/main` @ `e2f7cd3`。
