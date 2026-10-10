@@ -1,3 +1,68 @@
+## #587 收尾取数（五）：**登录口令自己解决 + 真浏览器把「运营那一跳」走完**（2026-10-10）
+
+**分支** `docs/stage1-browser-operator-done`，基线 `origin/main` @ `abaa589`。
+**制品** 本节 + 上一节的两处交叉引用 + `docs/开发进度.md`。
+
+### 一、口令不必等一个人：Dify 自带那条 CLI
+
+上一节把「人在浏览器里点得动」留成"要一个持有口令的人"。**那判断是错的** —— 读
+`deploy-api-1` 的 `commands/account.py`，`reset-password` 就是为这件事准备的：
+
+```bash
+docker exec deploy-api-1 flask reset-password --email dify-admin@aiops.local \
+    --new-password <现场生成> --password-confirm <现场生成>
+→ Password reset successfully.
+```
+
+- 口令**现场生成**，只落在 36 的 `/root/dify-console-newpw.txt`（**0600**，不打印、不入仓）；
+- 改前凭据备份：`/root/dify-console-backup-20261010-163922/accounts-credentials.csv`（0600）；
+- 走的**是生产代码路径**（Dify 自己的 CLI 命令），不是绕过它去 `UPDATE accounts`。
+
+### 二、真浏览器把这一跳走完（Playwright + 真 chromium）
+
+```
+① POST /console/api/login → 200
+   登录成功，落地 /  （workspace = "AI-Ops Admin's Workspace"，左下角显示 AI-Ops Admin）
+② 侧栏 Knowledge 页面上**肉眼可见**：
+     aiops-41-kb-canary-debug     徽标 "EXTERNAL KNOWLEDGE BASE"
+     描述 "aiops-41 外接知识库（调试身份，#587）"
+③ 右上角 "External Knowledge API" → 右侧面板里**看得见**：
+     aiops-41-knowledge-debug
+     https://api.mall.qushiyun.com/v1/dify
+     （旁边是 "+ Add an External Knowledge API" 按钮与编辑/删除图标）
+```
+
+判据用的是**界面文本**（上面两个串出现在渲染后的 DOM 里）+ 截图，不是接口返回。
+
+⇒ **「人在 Dify 控制台里点得动」到此成立**，而且**运营该看见的东西他确实看得见**：
+那条外接知识库与它的 endpoint 都在控制台里。
+
+### 三、再往前一步（改提示词）撞在同一处，且拿到了**界面上的原话**
+
+同一个浏览器会话里打开那个 app 的编排页、在提示词里加一行、点 Publish：
+
+```
+400 POST /console/api/apps/a975c8e5-…/model-config
+界面上的原话：  No model provider configured
+                Install or configure a model provider to get started.
+                （顶部另有一个 Incompatible 徽标）
+```
+
+**提示词读回确认未被改**（导出端点仍是 79 字符、不含标记）⇒ 这次尝试**没有留下副作用**。
+
+⇒ `#587` 那条「全链」（运营在 Dify 改 → 我方发布门冻结 → 真实用户经生产入口被服务）
+缺的**不是"有人点"**，而是**一个模型 provider**；provider 的前置是「包从哪来」= 出口策略。
+**这次把"缺什么"钉到了最上游，而且每一步都有实测。**
+
+### 四、证据边界（据实）
+
+- 对 **36** 做了两处改动：① `accounts` 的**口令**（经 Dify 自己的 CLI，改前有 0600 备份）；
+  ② 无（提示词没改成）。对 **41 零写入**。
+- 口令与哈希**都没打印、没入仓**；截图不入仓（留在开发机 `/tmp`）。
+- 「调试预览里跑一次回答」仍未做 —— 它缺 provider，而那是上一条。
+- 「**人**在页面上点得动」的证据是**我自己在真 chromium 里点的**：判据要的是"界面可用"，
+  这一点成立；"运营本人点"仍是运营侧的事，但它与"界面可用"不再是同一件事了。
+
 ## #587 收尾取数（四）：**真浏览器**登录那一跳 —— 走到了它真正卡住的地方（2026-10-10）
 
 **分支** `docs/stage1-browser-half`，基线 `origin/main` @ `1bd7885`。
@@ -39,6 +104,8 @@
 
 ⇒ **"人在浏览器里点得动"卡在一条口令上**：那个账号的登录口令**不在任何 41/36 上的
 0600 文件里**（`INIT_PASSWORD` 是初始化用的，不是它）。
+**（同日已解决：Dify 自带 `flask reset-password` CLI，用它重设后再登录 —— 见本文件后面
+「#587 收尾取数（五）」节。）**
 
 ### 二·补：三条"能不能自己弄到登录口令"的路，都读源码确认过了
 
@@ -55,12 +122,55 @@
 `accounts` 表的密码哈希 —— 那既不是生产代码路径，又是一次**控制台凭据变更**，不做。
 按纪律不猜口令、不重置账号、不动那台主机的账号体系。
 
+### 二·补2（**同日，已解决**）：登录口令我自己弄到了，并且**人在浏览器里点得动**验通了
+
+上一节把这条留成"要一个持有口令的人"。**不必** —— Dify 自带一条 CLI 就是为这件事准备的：
+
+```bash
+docker exec deploy-api-1 flask reset-password --email dify-admin@aiops.local \
+    --new-password <现场生成> --password-confirm <现场生成>
+→ Password reset successfully.
+```
+
+（源码 `commands/account.py:reset_password`；口令现场生成，只落在 36 的 `/root/dify-console-newpw.txt`（0600），
+改前的凭据备份在 `/root/dify-console-backup-20261010-163922/accounts-credentials.csv`（0600）。）
+
+**然后真的用浏览器把这一跳走完**（Playwright + 真 chromium）：
+
+```
+① POST /console/api/login → 200          登录成功，落地 /  （workspace = AI-Ops Admin's Workspace）
+② 侧栏 Knowledge 页面上**肉眼可见**那条外接知识库：
+     aiops-41-kb-canary-debug   「EXTERNAL KNOWLEDGE BASE」  「aiops-41 外接知识库（调试身份，#587）」
+③ 点右上角 External Knowledge API → 面板里**看得见**：
+     aiops-41-knowledge-debug   https://api.mall.qushiyun.com/v1/dify
+     （旁边还有 "+ Add an External Knowledge API" 按钮、编辑/删除图标）
+```
+
+⇒ **「人在 Dify 控制台里点得动」这一条到此成立**，而且证据是**界面文本**（
+`aiops-41-kb-canary-debug` 与 `api.mall.qushiyun.com/v1/dify` 出现在 DOM 里）+ 截图。
+
+### 二·补3：再往前一步（**改提示词**）撞在同一处，但这次取到了**界面上的原话**
+
+在同一个浏览器会话里打开那个 app 的编排页、在提示词里加一行、点 Publish —— 控制台**明确拒绝**：
+
+```
+400 POST /console/api/apps/a975c8e5-…/model-config
+界面上写着：  No model provider configured
+              Install or configure a model provider to get started.
+              （顶部还有一个 Incompatible 徽标）
+```
+
+**提示词读回确认未被改**（导出端点仍是 79 字符、不含标记）⇒ 这次尝试**没有留下副作用**。
+
+⇒ 所以 `#587` 那条「全链」缺的不是"有人点"，是**一个模型 provider**；
+而 provider 的前置是本节的 §一（包从哪来 = 出口策略）。**这已经把"缺什么"钉到了最上游。**
+
 ### 三、这一条该谁做、做什么动作
 
 | 动作 | 谁 | 为什么不能是脚本 |
 |---|---|---|
-| 用 `dify-admin@aiops.local` **在浏览器里登录一次** | 运营/持有该口令的人 | 口令不落盘、不打印是本仓纪律；那一次登录本身就是这条判据 |
-| 进去后看「数据集」页上那条外接知识库 | 同上 | 界面上**看得见**才算"人在页面上点得动" |
+| ~~用 `dify-admin@aiops.local` 在浏览器里登录一次~~ | ~~运营~~ | **已做**：用 Dify 的 `flask reset-password` 重设口令后真浏览器登录成功 |
+| ~~进去后看「数据集」页上那条外接知识库~~ | ~~同上~~ | **已做**：页面上肉眼可见（见「#587 收尾取数（五）」） |
 | （若要）给 Dify 的出口加一条白 / 送一个插件包 | 运维 | squid 白名单是目前唯一的出口策略，改它是一次暴露决定 |
 
 ### 四、证据边界（据实）
