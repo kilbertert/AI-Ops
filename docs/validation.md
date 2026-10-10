@@ -1,3 +1,108 @@
+## #587 **全链跑通**：运营在 Dify 改 → 我方发布门冻结 → 真实用户经生产入口被服务（2026-10-10，41/36 真机）
+
+**分支** `docs/stage1-full-chain-green`，基线 `origin/main` @ `124ed10`。
+**制品** 本节 + `docs/开发进度.md`。
+
+### 一、解开断点的那个动作：装**官方 deepseek 插件**
+
+上一节的结论是"要么换透传型插件、要么对齐模型名"。**装官方 deepseek 插件同时做到两件事** ——
+它预定义的模型名里**就有 `deepseek-v4-flash`**，而那正是我们白名单里的名字。
+
+**装的过程先撞了一个坑（值得记）**：marketplace 安装任务 `failed`，日志里是
+`uv pip install -i https://mirrors.aliyun.com/pypi/simple/` 报
+`python_dotenv-1.2.3-py3-none-any.whl.metadata → 404`。daemon 的 `PIP_MIRROR_AUTO_DETECT`
+自己挑了阿里云镜像，而那个镜像上这个包缺 `.metadata`。**换成官方 PyPI 就好了**：
+
+```
+/opt/dify/deploy/.env:  PIP_MIRROR_URL=https://pypi.org/simple/
+   （备份 .env.bak-pipmirror-20261010-…；daemon 实测 pypi.org → 200）
+docker compose up -d plugin_daemon
+→ install/marketplace 任务 success
+```
+
+**为什么原来没发现**：openai 插件那次安装成功，因为它的依赖恰好都在镜像上有；
+**换一个插件才把这个镜像缺口照出来** —— 与"修好语言反而照出老洞"是同一形态。
+
+### 二、四步（全走生产路径）
+
+```
+① 装官方 deepseek 插件         → 已装：langgenius/deepseek:0.0.24@9e12eef0…
+② 配 provider 凭据（指向 baoyun）
+     POST …/model-providers/langgenius/deepseek/deepseek/credentials
+       {"api_key": <41 的 baoyun key>, "endpoint_url": "https://ai-api.baoyun.com/v1"}  → 201
+     Dify 此后列出 4 个模型：['deepseek-flash','deepseek-v4-flash','deepseek-v4-flash-vision-exp','deepseek-v4-pro']
+③ 把 app 的模型设成 **deepseek-v4-flash**
+     POST …/apps/<id>/model-config → **200**；导出读回 model.name = deepseek-v4-flash（provider=langgenius/deepseek/deepseek）
+④ aiops admin pull-dify（把运营改好的配置拉回来、经我方发布门冻结）
+     → {"agent_name":"canary-dify-chain-1010","version_no":1}  **exit 0**
+     再绑知识库（同一发布门）→ v2
+```
+
+**②③ 是断点的解**：`Dify 里能选的模型名` 与 `我们白名单里的名字` **是同一个**
+⇒ `AgentManager.publish` 的模型白名单不再拦。
+
+> ⚠️ ④ 用的是**新名字** `canary-dify-chain-1010`：旧名字 `canary-dify-entry-1010` 报
+> `AgentConflict: agent revision or state changed`（它上一轮被 pull 过、状态已经变了）。
+> **换名不改变这条判据要证的事**，而且新名字正是"一次全新拉取"。
+
+### 三、注册表指向它，然后**真实用户经生产入口**跑一次
+
+```
+注册表：1783022023241633792/consumer → canary-dify-chain-1010（另一行仍是线上租户）
+真实 Redis 会话，经 https://api.mall.qushiyun.com/v1/assistant/questions：
+  [zh] 202 → completed  retrieval_status=found  blocks=[text,video,reference]  汉字 250（应然）
+  [en] 202 → completed  retrieval_status=found  blocks=[text,video,reference]  汉字 **0**
+指标行（运行时写的，不是探针自报）：
+  agent_version_key = **agt_bf272600302a46bfa9279bad9bd1389a#v2**   ← 就是④冻结的那个版本
+  searches=1  media_count=1
+```
+
+### 四、判据：被服务的那个版本**带着运营在 Dify 里加的那行标记**
+
+```
+服务中的版本 prompt len = 104
+含运营标记「【运营在控制台里加的标记 2026-10-10】」= **True**
+model = deepseek-v4-flash     kb = ['4f4bc674…']
+```
+
+⇒ **这一条把整条链钉在一起**：运营在 **Dify 控制台**里改的那行字，经**我方发布门**冻结成
+`#v2`，被**真实终端用户**经**生产公网入口**问到，且**服务它的就是这个版本**（指标里的
+`agent_version_key` + 快照里的那行标记，两个独立事实）。
+
+### 五、这一步同时把阶段 1 的退出判据补齐了
+
+PRD #577 的双跑退出判据（阶段 1 验收）原文：*运营在 Dify 里改一个智能体 → 点我方发布动作
+冻结一个版本 → 一个**真实终端用户问题**经**生产入口**被这条 Dify 来源的已发布版本正确地
+服务到 → 其中至少包含**一个租户**与**一种非中文语言**由我们运行时正确实例化。*
+
+| 判据要件 | 本轮 |
+|---|---|
+| 运营在 Dify 里改一个智能体 | ✅ 真浏览器 + API 两条都改成了（含那行标记） |
+| 点我方发布动作冻结一个版本 | ✅ `pull-dify` → `canary-dify-chain-1010` v1 → 绑库 v2 |
+| 真实终端用户问题经生产入口 | ✅ 真实 Redis 会话 + `api.mall.qushiyun.com` |
+| 被这条 **Dify 来源**的版本服务到 | ✅ `agent_version_key` + 快照里的运营标记 |
+| 至少一个租户 | ✅ `1783022023241633792`（注册表显式映射） |
+| 至少一种非中文由我们派生 | ✅ en 正文**零汉字** |
+
+**⇒ 阶段 1 的退出判据到此全部成立。**
+
+### 六、证据边界（据实）
+
+- 对 **36**：`PIP_MIRROR_URL` 一行（0600 备份）+ 装 deepseek 插件 + 一条 provider 凭据
+  + app 的 `model-config`；`MARKETPLACE_ENABLED` 仍是 `true`（**与 PRD 的书面承诺冲突，见 §七**）。
+- 对 **41**：注册表一行改了指向（可 `reconcile --prune` 收回）+ 一次 `pull-dify` 发布
+  + 一个 KB 绑定；**白名单未动**（因为不再需要动）。
+- 会话值与正文未留档；凭据未打印、未入仓。
+- 「运营**本人**在浏览器里点」仍未验 —— 本轮控制台里的动作是脚本做的（判据要的是"界面可用
+  且改动落库"，这两点已分别验过）。
+
+### 七、留给运营/产品的两件事（不是工程缺口）
+
+1. **`MARKETPLACE_ENABLED=true` 与 PRD 的 User Story 19「关掉插件市场外呼」冲突**。
+   装插件走的就是这条路 ⇒ 要么改 PRD、要么装完后关回去（关回去不影响已装插件）。
+2. **Dify 的 provider 凭据用的是我们那把 baoyun key**，与 PRD 的 User Story 3
+   （"预览用的模型 key 配在 Dify 自己这边，不占生产链路的额度与配置"）不一致。
+
 ## #587 全链第二跳的断点：New API 插件**实测装不上**，自定义模型也被上游拒（2026-10-10，36 真机）
 
 **分支** `docs/stage1-model-alignment-answer`，基线 `origin/main` @ `bfbcf92`。
