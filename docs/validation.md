@@ -1,3 +1,175 @@
+## #587 判据收口（生产）：注册表**在生产上开表并验收** + 调试三键**配齐并复验**（2026-10-10，41 真机）
+
+**分支** `docs/stage1-registry-flip-production`，基线 `origin/main` @ `e0c050d`。
+**制品** `ops/environments/env-41.toml`（两行 `[[dify_apps]]`）+ 本节 + 上一节的勘误。
+
+### 零、先纠正上一节的一个**错方向**的结论（它正是"要不要开表"的依据）
+
+`#647` 的 §五 用 `agent_run_metrics.token_count` 把零阶回答分成"空态 / 真答"，得出
+**"开关拿走的几乎全是空态"**。取数复核后**方向是反的**（勘误已写进那一节）：
+
+| 口径 | 结果 |
+|---|---|
+| `token_count`（`_estimate_turn_tokens` 的**字符数估算**） | 线上租户零阶 91 条里 75 条为 0 ⇒ "几乎全是空态" |
+| 实读 `result_json`（正文有**两处**：`blocks[].text` 与零阶的 `text`） | 零阶且有**可见正文**的共 **34 条**（无 agent 的 7 个租户 16 条、线上租户 17 条） |
+
+两个坑：① **零阶的正文存在 `text`，不是 `blocks`** —— 只看 `blocks` 会把 34 条真答读成空；
+② `assistant_questions` **没有租户列**（`runs` 表在生产上是空的，`internal_run_id` 指向不存在的行），
+租户只能与 `agent_run_metrics` **按秒对齐**；第一版对齐用 `completed_at` 的绝对差，
+把**不同租户**的行配到了一起，得出与直接查表矛盾的结论。
+
+**实测代价**（逐条，见 §五）：最近 30 天里，无 agent 的租户中 `1579289137893347328`
+拿到过 **5 条**真答（2026-09-22…09-24，51~307 字）、`2005573840461369344` 1 条、
+`2019588094906601472` 1 条；`1961353704485687296` 那 9 条是**本仓 2026-10-10 02:5x/03:1x 的探针**
+（自记）。⇒ 这次开关拿走的**真实用户零阶回答约 7 条**，不是"几乎全是空态"。
+
+### 一、开表：两行 `[[dify_apps]]`，走生产发布路径
+
+`ops/environments/env-41.toml` 新增两行（`consumer` 入口、`agent_name = "canary-客服"`），
+`app_id` 都是 `a975c8e5-ad9e-425c-84c9-77581a0a2bed`。
+
+**为什么两行必须一起写**：注册表是 **fail-closed** 的 —— 表里只要有**任何一行**，未登记的
+`(租户, 入口)` 就什么都不选。线上租户 `1942105476598861824` 也在未登记那一侧：
+**只写验收租户那一行，等于在生产上把线上租户的客服回答拿走**。
+
+**为什么 `app_id` 都是那一个**：控制台里一共 3 个 app，都叫 `dify-dsl-fixture`，只有这一个能
+导出 DSL（另外两个 `pre_prompt` 为空）。**三个租户 agent 的 prompt 与控制台里任何一个 app
+都不是逐字相同的**（`759 / 759 / 340` vs `79`）⇒ 它们**不是**从 Dify 拉来的，
+`app_id` 在这里**不是**"运行时会去拉的那个 app"，只是一个句柄。
+
+> ⚠️ **如实记一处语义含混**：`DifyAppBinding.app_id` 的 docstring 说它是"**pull 侧**需要的身份"，
+> 而**运行时并不读它**（`_registered_agent` 只看 `agent_name`；全仓 grep 无第二处使用）。
+> 这不是本次引入的，本次**沿用不改**（改字段语义要单独一票）。§四下记了推它一格时**撞到的墙**。
+
+**执行顺序**：先 `--dry-run` 看动作 → 真跑 → **立刻**验线上租户选版未变。
+
+```
+$ --dry-run   ⇒ agents 三条全 unchanged；dify_registry 两行 "registered"（note=dry-run）
+                注册表**实际行数仍为 0**（dry-run 确实没写）
+$ 真跑 2026-10-10T07:21:28Z
+              ⇒ agents 三条全 unchanged；dify_registry 两行 "registered"
+```
+
+`agents` 三条全 `unchanged` 本身就是判据：**这次动作没碰任何 agent，只写了注册表两行**。
+
+### 二、开表前后：逐 (租户, 入口) 的选版（**"没有回归"的判据**）
+
+用仓库里那份真选择代码 + **运行时那道门本身**（`GatewayRuntime._registered_agent`）算的：
+
+```
+  (租户, 入口)                          开表前                开表后（门给出 → 按门选）
+  1783022023241633792 / consumer   canary-客服#v5        'canary-客服' → canary-客服#v5   （不变）
+  1942105476598861824 / consumer   canary-客服#v3        'canary-客服' → canary-客服#v3   （不变）
+  1942105476598861824 / operator   旧规则选宣传 agent     (None, True) → unavailable        ★设计内
+  1961353704485687296 / consumer   零阶                   (None, True) → unavailable        ★设计内
+```
+
+注册表内容：`is_configured() = True`，两行都是 `('1783022023241633792'|'1942105476598861824', 'consumer', 'canary-客服')`。
+
+### 三、开表**之后**的真机端到端（这是"真的在驱动运行时"的判据）
+
+**（a）已登记的真实租户 × 生产公网入口 × 真实会话**：经
+`https://api.mall.qushiyun.com/v1/assistant/questions` 发 zh/en 两条：
+
+| 语言 | POST | 终态 | `retrieval_status` | blocks | 正文 | 汉字数 | **指标里的版本** |
+|---|---|---|---|---|---|---|---|
+| zh | 202 | completed | **found** | text+video+reference | 183 字 | 156（应然） | `agt_7156d07a…**#v5**` |
+| en | 202 | completed | **found** | text+video+reference | 668 字 | **0** | `agt_7156d07a…**#v5**` |
+
+`agent_version_key` 是**运行时写下的行**，不是探针自报 —— 开表后服务的仍是 `canary-客服#v5`，
+与开表前**逐字相同**。⇒ **登记的那一对由注册表指定的 agent 服务，没有回归。**
+
+**（b）未登记的真实租户 × 同一个生产入口**（fail-closed 那一半，必须实测不能只靠单测）：
+
+```
+租户 1961353704485687296（无 agent、本仓此前的探针租户）
+  POST /v1/assistant/questions → 202 ⇒ completed
+  retrieval_status = "unavailable"   searches = 0        agent_version_key = null
+  blocks = ["text"]（31 字的终态文案），不是空结果、不是 not_found
+  指标行：route_type=qa outcome=completed retrieval_status=unavailable
+```
+
+`searches = 0` 是这条判据的关键：**什么都没检索**，所以必须是 `unavailable` 而不是
+"库里没有"；`agent_version_key = null` 说明**没有回退到任何 agent**。
+
+### 四、调试身份（#586）在生产上配齐并复验
+
+**配置**（本次对 41 的 `/etc/aiops-41/production.env` 的唯一改动）：
+新增三键 `AIOPS_GATEWAY_DIFY_DEBUG_API_KEY`（现场生成）、`…_DEBUG_TENANT=1783022023241633792`、
+`…_DEBUG_KNOWLEDGE_IDS=kb-canary`；改动前备份 `production.env.bak-difydebug-20261010`（0600）。
+`gateway.env`（服务进程那份）**未动**；密钥只落在 0600 的服务端配置里，不打印、不入仓。
+`validate()` 通过（三键半配置即启动错误的规则在此未被触发）。
+
+**重启**：`systemctl restart aiops-gateway-41`（2026-10-10 15:15:38 CST）—— 这是本次唯一一次
+进程重启；重启前 `queued/running` 三项均为空。重启后从 `/proc/<pid>/environ` 读到的进程
+环境里三键已就位（**判据是进程实际加载的，不是文件里写了什么**）。
+
+**判据（经生产公网入口打登记表里唯一那一行 `POST /v1/dify/retrieval`）**：
+
+| 判据 | 结果 |
+|---|---|
+| 生产凭据 × 固定租户的 `kb-canary` | 200，`records` 1 条 |
+| **调试凭据** × 同一个 `kb-canary` | 200，`records` 1 条（子集内可达） |
+| 错凭据 | 403 `DIFY_CREDENTIAL_REJECTED` |
+| **调试凭据 × 已登记但不在子集里的 `kb-canary-2`**（线上租户那一个） | **404** |
+| 调试凭据 × 从未登记的 id | **404（与上一条同码）** |
+| 带请求头不得扩大范围：`tenant-id` / `X-User-Id` / `X-Business-Entry` / `X-AIOps-Source-Key` / 自称 `X-Dify-Identity: production` / 六者全带 | **全部与基线同为 404，逐字不变** |
+| 带请求体不得扩大范围：塞 `tenant_id` + `knowledge_base_ids` + `identity` + `scope` | **仍 404** |
+
+**"同码"是这条判据的要害**：403 会说"这一条存在、只是你不能用"，调试身份可以拿它逐个试出
+生产有哪些知识库；404 让越权与未登记**不可区分**。
+
+⇒ 调试身份在本票**复验通过，且这是它第一次在 41 上真的存在**。
+
+### 五、这一节改了什么、以及**没做成**的那一件（据实）
+
+| 动作 | 结果 |
+|---|---|
+| `env-41.toml` 加两行 + `reconcile` | ✅ 注册表 2 行；`agents` 全 unchanged |
+| `/etc/aiops-41/production.env` 加调试三键 + 重启 | ✅ 进程已加载；`gateway.env` 未动 |
+| 开表后真实用户经入口 × 已登记租户 | ✅ completed / found / `#v5` 未变 |
+| 开表后未登记租户经入口 | ✅ `unavailable` / `searches=0` / 无版本回退 |
+| 调试身份经生产入口四条判据 | ✅ 见 §四 |
+
+**没做成的一件：给两个 app 建"内容与租户线上那份逐字相同"的镜像 app。**
+动机是 §一 记的那处语义含混 —— 想让 `app_id` 指向一个内容对得上的 app。实测撞墙：
+
+- `POST /console/api/apps` 建 app 与 `DELETE` 删 app **都能用** `ADMIN_API_KEY`；
+- 但 `POST /console/api/apps/<id>/model-config` 设提示词被拒：`model.provider is required and
+  must be in []` —— **这个工作区里模型 provider 列表是空的**（`deploy/dify-36/README.md`
+  早已把"看到模型 provider 可选"标为**待条件**，需要一把供应商密钥才列得出来）；
+- 因此设了 `pre_prompt` 也没有 provider，`app_id` 那处含混**本次没有解决**。
+  试建的那个空 app 已 `DELETE`（204），控制台回到原来的 3 个 app。
+
+**这一件不是本票判据的一部分**，它是一次尝试；**不做它，本票的两条判据都成立**。
+把它记在这里，是因为"`app_id` 今天不被运行时读"这个事实是**下一位读者**会撞到的东西。
+
+### 六、证据边界（据实）
+
+- 本次**真的写了 41 的生产库**（注册表两行）与 **41 的生产配置**（调试三键），并**重启了一次**
+  网关进程；两者都留了现场凭据/备份，注册表可 `reconcile --prune` 收回，配置可整文件还原。
+- **没有动** `gateway.env`、`/opt/aiops-41/ops/environments/env-41.toml`（部署目录那份，
+  与仓库那份已知漂移，见 `#647` §八）、也没有动 nginx。
+- 会话值与正文**都没有留档**（会话即凭据；正文是生产内容）；本节只记**计数、判别位、长度、sha**。
+- **"运营在 Dify 控制台里点"这件事仍然没验**：本次控制台里的写动作（建/删 app）是**脚本**做的，
+  不是人在 10008 页面上点的；「运营在控制台把 external knowledge endpoint 挂上」也仍未做。
+- 语言只跑了 zh/en 两门；`agent_version_key` 的比对只覆盖开表前后各一次，不是长窗口。
+- 「Jev 判定路径连续运行」这类与本票无关的判据不在本节内（见 #405/#617）。
+
+### 七、判据现状
+
+| 判据（#587） | 现状 |
+|---|---|
+| 全链在生产入口上跑通 | ✅（本文件上一节 + 本节 §三a） |
+| 真实终端用户经生产入口被服务 | ✅ |
+| 回答出自 Dify 来源的版本 | ✅（上一节：prompt 与真控制台导出逐字相同、与我们清单不同） |
+| 至少一种非中文由运行时派生 | ✅（en 零汉字，真实用户身份） |
+| **至少一个真实租户经显式注册表映射被正确路由；未登记仍 fail closed** | ✅ **本节**：开表后真实用户经生产入口被 `canary-客服#v5` 服务（与开表前逐字相同）；未登记租户实测 `unavailable`/`searches=0` |
+| 回答经暴露并登记过的端点取知识 | ✅ 运行时侧 `found` + 端点侧 200/1 条 |
+| 调试身份（#586）在本票复验 | ✅ **本节 §四**：配齐并复验，带请求头/请求体均不扩大范围 |
+| **结论** | 阶段 1 的**判据**到此全部有生产证据。**业务切换**仍是另一个决定：注册表现在覆盖了 41 上**有 agent 的两个租户**，7 个无 agent 租户落进 fail-closed（代价见 §零：约 7 条历史零阶真答）；容量、TLS 收口仍属未决项。 |
+
+
 ## #587 判据一收口：**真实终端用户 × 生产公网入口 × Dify 来源的已发布版本**（2026-10-10，41 真机）
 
 **分支** `docs/stage1-dify-sourced-entry-evidence`，基线 `origin/main` @ `597d0c9`。
@@ -619,6 +791,20 @@ python 3.12.3 uvicorn 0.52.1
 > ⚠️ **这张表不能证明"空态很便宜"**：`token_count` 是 `_estimate_turn_tokens` 的**字符数
 > 估算**，零阶回答正文短时它也可能为 0。所以第 5 节只用于说明**量级**，不作为逐条定论；
 > 逐条定论要读 `assistant_questions.result_json`（本次未取）。
+
+> 🔴 **2026-10-10 勘误：这张表的方向是错的。** 上面那句"逐条定论要读
+> `assistant_questions.result_json`（本次未取）"后来取了，结论与本节相反：
+>
+> | 口径 | 结果 |
+> |---|---|
+> | 本节用的 `token_count`（**字符数估算**） | 线上租户零阶 91 条里 **75 条为 0** ⇒ 读成"几乎全是空态" |
+> | 实读 `result_json`（正文有**两处**：`blocks[].text` 与零阶的 `text`） | 零阶那 134 条里 **34 条有可见正文**；线上租户零阶 92 条里 **17 条** |
+>
+> 两个坑都踩到了：① 零阶的正文存在 `text` 而不是 `blocks`，只看 `blocks` 把 34 条真答读成空；
+> ② `assistant_questions` **没有租户列**，租户只能与 `agent_run_metrics` 按秒对齐 —— 第一版
+> 对齐用 `completed_at` 的绝对差，把**不同租户**的行配到了一起，得出与直接查表矛盾的结论。
+> ⇒ **`token_count` 是字符数估算，不是"有没有正文"的量**；拿它做二分把方向读反了。
+> 逐条数据见本文件「#587 判据收口（生产写入）」一节。
 
 ### 六、其余四条验收项在 41 上的现状
 
