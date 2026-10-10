@@ -1,3 +1,89 @@
+## #660 终验 1.7.3：索引钩子 + 两个 MCP server（2026-10-10，真实 AFK run）
+
+**分支** `agent/issue-660-ticket-1-7-3-mcp-server`，基线 `origin/main` @ `597d0c9`。
+**制品** 本节 + 提交 body（原始工具返回）。**只取证，不改产品代码。**
+
+### 一、两个 MCP server 都在一次调用内返回真实结果
+
+`mcp__serena__find_symbol`（本 run 第一次调用即命中，无 grep 兜底）：
+
+```
+入参: name_path_pattern="ScopeContext", relative_path="src/aiops_diagnostics/scope_context.py"
+返回（原文）:
+[{"name_path":"ScopeContext","kind":"Class",
+  "relative_path":"src/aiops_diagnostics/scope_context.py",
+  "body_location":{"start_line":245,"end_line":315}}]
+```
+
+serena 自己的 MCP 日志（`~/.serena/logs/2026-10-10/mcp_20261010-054713_117.txt`）
+记下同一次调用与返回值，可复现：
+
+```
+[Task-2:FindSymbolTool] find_symbol: name_path_pattern='ScopeContext', depth=0, relative_path='', …
+[Task-2:FindSymbolTool] Result: [{"name_path": "ScopeContext", "kind": "Class",
+  "relative_path": "src/aiops_diagnostics/scope_context.py", "body_location": {"start_line": 245, "end_line": 315}}, …]
+```
+
+**行号基座（实测）**：`body_location` 是 **0-based**。`start_line=245` 对应文件第 246 行
+`@dataclass(frozen=True, slots=True)`，`end_line=315` 对应第 316 行的类结尾 `}`。
+⇒ 行号只能抄工具返回本身，不能从目测相邻行推。
+
+`mcp__codebase-memory-mcp__search_graph`（`query="ScopeContext"`）：
+
+```
+total = 16（截断前，has_more=true）
+第一条 file_path = "src/aiops_diagnostics/scope_context.py"
+qualified_name = "home-agent-workspace.src.aiops_diagnostics.scope_context.ScopeContext.build"
+```
+
+图非空：`list_projects` → `nodes=24627, edges=121877, status="ready"`，
+根 `/home/agent/workspace`、branch = 本分支。**这是 #653 记的「codebase-memory 端到端未验证」
+的第一次观察。**
+
+### 二、索引钩子自限（1.7.3）
+
+本机 `.sandcastle/profile.ts:77-78` 的钩子命令：
+
+```
+timeout 120 <SANDBOX_CBM_BINARY> cli index_repository --repo-path . --mode fast || true
+timeoutMs = AFK_INDEX_TIMEOUT_MS ?? 5*60*1000
+```
+
+内层 `timeout 120`（120000 ms）**严格小于**外层 deadline 300000 ms ⇒ 索引缺失时 agent 退回
+grep 是**可接受**的结局，不会再是 `HookTimeoutError` fail 掉整个 run。
+
+本 run 实跑的自动化检查：
+
+```
+npx tsx .sandcastle/mcp-config.check.ts      → mcp-config check ok (2 servers, 2 mounts)
+npx tsx .sandcastle/sandbox-prepare.check.ts → sandbox-prepare check ok (script present, hook wired; hooks on run(), not on the provider)
+```
+
+### 三、本 run 里与索引相关的异常（据实记，不作结论）
+
+- 直接重跑钩子命令**本体**（项目库已就绪、增量）：`real 0m2.316s`，退出 0，
+  `{"status":"indexed","nodes":24627,"edges":121877}`。
+- 但同一 run 里另有一条**未解释**的索引路径：一个 codebase-memory 子进程 05:45:11 起、
+  05:45:16 在 13 KB 日志中途截断并变为 zombie（父进程已消失、无人收尸），**没有写出项目库**；
+  该日志片段无 `timeout 120` 前缀，是否即钩子命令**未确立**。
+- 同时经 **MCP 工具** `index_repository` 发起的一次索引等了 **15m5s** 才返回
+  （`mcp-logs-codebase-memory-mcp/*.jsonl`：`completed successfully in 15m 5s`），途中跳过两个
+  大 `.pkl`（`logs/home-agent-workspace-*.log`：`extract parse timeout`）。
+  **这条 MCP 工具路径没有 `timeout 120` 包裹** —— 1.7.3 只约束**钩子命令**，不约束 MCP 工具调用。
+
+⇒ 1.7.3 的断言（「钩子命令自带严格小于 deadline 的自限」）成立；本次**没有**重现到
+「钩子命令挂死」，所以 #658 记的挂起根因仍未查清。
+
+### 未完成 / 边界
+
+- **未完成业务验收**：本轮不改 `aiops-gateway` 的对外行为（路由、鉴权、注册、响应形状），
+  `verify-aiops-gateway` skill **不适用**，未运行。
+- 只证明**本容器本 run** 两个 server 可用，不外推到其它宿主或并发 run。
+- 交付检查：`uv run pytest` → **2052 passed, 1 failed, 11 skipped**；失败项
+  `tests/test_i18n.py::test_no_implicit_string_join_glues_two_words_together` 指向
+  `src/aiops_diagnostics/agent_engine.py:310`，落在**未改动的上游代码**；本地 run 未复现
+  CI 上的 2055 passed（**证据以 CI 为准**）。`uv run ruff check` 全过。
+
 ## #587 判据二（加强）：**Dify 来源**的版本经显式注册表映射给真实租户（2026-10-10，41 真机 + 真控制台）
 
 **分支** `docs/stage1-registry-route-evidence`（与上一节同一分支）。
