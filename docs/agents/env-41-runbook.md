@@ -754,20 +754,34 @@ ssh aiops-41 'rsync -an --delete --itemize-changes \
 
 清单追加 `[[agents]]`（字段见 `ops/README.md`）后：
 
+清单有**两份、内容不同**，先确认拿哪一份：
+
+| 文件 | 是什么 |
+|---|---|
+| `/opt/aiops-41/ops/environments/env-41.toml` | **已漂移**（3 个 agent 是 `qwen3.8-max-0902`、两个 KB id 是旧的）。拿它跑会在**任何写入之前**中止，实测退出码 2、库零变更：`收敛中止（库未变更）: 模型不在白名单 … 允许: deepseek-v4-flash` |
+| `/opt/aiops-41/ops/environments/env-41.toml.new` | 上次的人工放置副本，**可能也滞后**于仓库 |
+| **仓库 `ops/environments/env-41.toml`** | 权威（库与它一致） |
+
+⇒ **别用部署目录那两份**：把它们拷到别处、用**仓库那份**跑（或先把仓库那份 `install` 成
+`env-41.toml.new` 再跑）。`reconcile` **只从你给的那个路径**读清单，不会自己去部署目录找。
+
 ```bash
-ssh aiops-41 '
+# 在 41 上，把仓库那份（如 scp 到 /tmp/env-41.toml）装成一个明确的工作副本
 install -o aiops41 -g aiops41 -m 0640 /tmp/env-41.toml /opt/aiops-41/ops/environments/env-41.toml.new
 cd /opt/aiops-41
-runuser -u aiops41 -- /opt/aiops-41/.venv/bin/python -m aiops_diagnostics \
-  --config /etc/aiops-41/production.env admin reconcile \
+runuser -u aiops41 -- .venv/bin/aiops --config /etc/aiops-41/production.env admin reconcile \
   ops/environments/env-41.toml.new \
   --db /var/lib/aiops-41/gateway/gateway.db \
-  --kb-url http://127.0.0.1:29380 --dry-run'
+  --kb-url http://127.0.0.1:29380 --dry-run
 ```
 
-- `--dry-run` 先看动作（`created`/`unchanged`），确认后去掉 `--dry-run` 实跑。
+- `--dry-run` 先看动作（`created`/`unchanged`/`registered`），确认后去掉 `--dry-run` 实跑。
+  **dry-run 之后回查一次库**（例如 `dify_app_registry` 的行数仍为 0），否则"没写"只是假设。
 - **幂等验收**：连续实跑第二次应全部 `unchanged`。
 - `--db` 必须显式给（不 source env 时 `from_env()` 回退 XDG 会**静默建空库**）。
+- **`[[dify_apps]]` 是 fail-closed 的**：表里出现**任何一行**之后，未登记的
+  `(租户, 入口)` 就什么都不选（`unavailable`）。所以"加一行"是整台主机的一次开关 ——
+  会把**谁**的答案改成什么，先跑 `tools/dify_registry_blast_radius.py` 量出来再动。
 - 发布前 KB 活性校验会真实调用 kb-service；供应商欠费时（embedding 502）会误报
   "知识库不存在"，**这是误报**，充值后重试即恢复，不要据此删绑定。
 
