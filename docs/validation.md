@@ -1,3 +1,72 @@
+## #649 同一个会话头两个名字：失败信号指向别处（2026-10-10，渲染器改动 + 41 实测）
+
+**分支** `fix/entry-accept-both-session-header-names`，基线 `origin/main` @ `ba7f4bc`。
+**制品** `deploy/d4-cutover.py`（`MAP_TEXT` 新增归一 map、`LOCATION_TEXT` 改读该变量）+
+`tests/test_dify_entry_cutover.py`（+4 例）。
+
+### 一、缺陷的形状：两个名字，而错的那个的失败信号指向别处
+
+| 面 | 拼写 | 出处 |
+|---|---|---|
+| **客户端面** | `third-session`（全小写） | `docs/gateway.md`、`docs/standard-api-contract.md`、`docs/faq-api.md`、`docs/agents/frontend-api-brief.md` |
+| **实现者面** | `X-Third-Session` | 41 的 nginx `proxy_set_header`、网关的 `x_third_session: Header()`、`docs/开发进度.md`、`docs/validation.md`、`frontend-api-brief.md:535` |
+
+41 的 `location ^~ /v1/` 是 `proxy_set_header X-Third-Session $http_third_session;`，
+而 nginx 的 `$http_<name>` 按**小写 + 下划线**取头 ⇒ `third-session` 有值、
+**`X-Third-Session` 取到空值、头被丢掉** ⇒ 网关没有会话 ⇒ **401 `INVALID_ACCESS_TOKEN`**。
+
+**这个码与「会话过期」同形**，而日志里查不到头名 ⇒ 排查会朝会话与凭据方向走。
+本仓 2026-09-07 记录过一次（`frontend-api-brief.md` 那条「头名有坑」），
+**2026-10-10 又发生过一次**：我在 #587 收口时据此误报了 `fix(entry)` 那个缺陷。
+
+### 二、改动：入口两种拼写都认（一个变量、两种输入）
+
+```nginx
+map "$http_third_session:$http_x_third_session" $aiops_third_session {
+    default    $http_third_session;
+    "~^:(.+)$" $1;          # 前者为空、后者有值 ⇒ 取后者
+}
+```
+
+`location ^~ /v1/` 里改为 `proxy_set_header X-Third-Session $aiops_third_session;`。
+**两个都为空时仍是空**（不伪造会话）。放在 `MAP_TEXT` 而不是 location 里，是因为
+map 必须在 http 上下文，而 location 在 server 上下文。
+
+### 三、顺带修掉渲染器一个真实缺陷（在 41 的真实 vhost 上试出来的）
+
+`replace_location` 原来用「到下一个 `\nlocation `」找块尾。它在 41 的真实 vhost 上会遇到
+**已经存在**的 Dify 块（`apply` 过一次之后就是这样），于是那个块被**吞掉再原样吐出**，
+夹在它与 `/v1/` 之间的东西一起被吃掉；输出里 Dify 块的位置也从「在 `/v1/dify/` 那条注释之后」
+变成了「在它之前」。改用**括号配平**（`_block_end`）并把已存在的 Dify 块**逐字节回填**：
+
+```
+对 41 真机 vhost 的实际 diff（改后）：+17 / -1 行 —— 新增 Dify 块 16 行、会话头那 2 行，
+其余 165 行逐字不变；二次 apply 逐字不变。
+```
+
+### 四、判据与变异实测
+
+| 判据（issue #649） | 结果 | 怎么证的 |
+|---|---|---|
+| 三种拼写都归一到一个变量 | ✅ | `test_the_session_header_map_normalises_both_spellings`（断言 map 的形状与 5 个 map 的计数）|
+| `proxy_set_header` **不得**再读裸头（否则 map 形同虚设） | ✅ | `test_the_general_location_does_not_read_the_raw_header_again` |
+| Dify 那一跳**不**注入会话头 | ✅ | 同上（另一段断言）|
+| 已经 apply 过的 vhost 被**调和**而不是被吞 | ✅ | `test_an_already_applied_vhost_is_reconciled_not_swallowed`（幂等 + 只多一条 + 邻居字节不变）|
+| 改动**不动别的 location** | ✅ | 既有 `test_the_other_locations_are_untouched` 仍然通过 |
+| 去掉归一 map ⇒ 转红 | ✅ | 变异实测：**1 条红** |
+| location 退回读裸头 ⇒ 转红 | ✅ | 变异实测：**1 条红** |
+| 退回改动前的整版渲染器 ⇒ 转红 | ✅ | 变异实测：**5 条红** |
+
+全量：`PYTHONPATH=$PWD/src python -m pytest -p no:warnings` → **2051 passed, 9 skipped**。
+
+### 五、证据边界（据实）
+
+- **本票只改渲染器，没有在 41 上应用。** 也就是说：**41 现在仍然是只认 `third-session` 的旧配置**，
+  本节的 diff 是在**真机 vhost 的副本**上算出来的，不是已生效的配置。
+- nginx 的 map 求值本身**不在 CI 覆盖范围内**（CI 跑不了 nginx）；本票钉住的是**渲染出的配置形状**，
+  真机行为要在应用那一步用三种拼写各发一次请求才算取证。
+- 本票**不**证明任何客户端已经踩过这个坑：公网今天没有真机 App 的 `/v1/assistant/questions` 流量。
+
 ## #587 真实终端用户经生产公网入口被服务（2026-10-10，41 真机）
 
 **分支** `docs/stage1-client-face-evidence`，基线 `origin/main` @ `ba7f4bc`。

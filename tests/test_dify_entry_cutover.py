@@ -153,3 +153,80 @@ def test_the_other_locations_are_untouched() -> None:
             continue
         assert after[name] == body, f"{name} 被改动了"
     assert set(after) - set(before) == {"^~ /v1/dify/"}, "只应新增 Dify 这一条"
+
+
+# ── #649：会话头的两种拼写都要认 ─────────────────────────────────────────────
+
+
+def test_the_session_header_map_normalises_both_spellings() -> None:
+    """#649：`$http_third_session` 只匹配 `third-session`，对 `X-Third-Session` 取空值。
+
+    那个空值让头被丢掉、网关没有会话、回 401 `INVALID_ACCESS_TOKEN` —— 与「会话过期」
+    **同形**。而两种拼写**都已经被写进仓库**（客户端文档写前者、本文件与网关参数名写
+    后者），所以入口要两种都认，而不是只在文档里写对一种。
+
+    这里断言的是**映射的形状**：一个变量、两种输入，且两个都空时仍是空（不伪造会话）。
+    nginx 的 map 求值本身由 41 上的真机验收覆盖（本仓无法在 CI 里跑 nginx）。
+    """
+    module = _load()
+    text = module.MAP_TEXT
+    assert 'map "$http_third_session:$http_x_third_session" $aiops_third_session {' in text, (
+        "两种拼写必须归一到一个变量"
+    )
+    assert text.count("map ") == 5, "本文件现在应有 5 个 map（入口/上游/鉴权/来源/会话）"
+    body = text[text.index("$aiops_third_session") :]
+    assert "default    $http_third_session;" in body, "默认取小写拼写"
+    assert '"~^:(.+)$" $1;' in body, "前者为空、后者有值 ⇒ 取后者"
+
+
+def test_the_general_location_does_not_read_the_raw_header_again() -> None:
+    """反向：`proxy_set_header` 必须用归一后的变量。
+
+    留着 `$http_third_session` 会让 map 形同虚设 —— 而配置里**看不出**这件事，
+    因为两种写法都对 nginx 合法、只有一种会丢头。这就是这个用例存在的理由。
+    """
+    module = _load()
+    blocks = _blocks(module.LOCATION_TEXT)
+    general = blocks["^~ /v1/"]
+    assert "proxy_set_header X-Third-Session    $aiops_third_session;" in general
+    assert "$http_third_session" not in general, "不得再直接读裸头 —— 那会绕过归一"
+    dify = _blocks(module.DIFY_LOCATION_TEXT)["^~ /v1/dify/"]
+    assert "X-Third-Session" not in dify, "Dify 那一跳不注入会话（它不是我们的用户）"
+
+
+def test_the_umbrella_comment_has_one_definition() -> None:
+    """umbrella 的文本只写一次：`replace_location` 认它，生成的正文里也有它。
+
+    两处各写一遍时，改一处漏一处会让 `replace_location` 找不到锚点而**退到
+    `location ^~ /v1/ {` 兜底** —— 那时它会漏掉 umbrella 这一段，把注释留在原地，
+    而 nginx 仍然能起来（只是说明与实现不一致）。
+    """
+    module = _load()
+    assert module.LOCATION_TEXT.startswith(module.V1_UMBRELLA), "正文由同一个常量拼出来"
+    out = module.replace_location(_VHOST_SAMPLE)
+    assert out.count(module.V1_UMBRELLA.splitlines()[0]) == 1, (
+        "替换后 umbrella 应恰好出现一次 —— 出现两次说明锚点没命中、旧注释留在了原地"
+    )
+
+
+def test_an_already_applied_vhost_is_reconciled_not_swallowed() -> None:
+    """已经 apply 过的 vhost：不能被吃掉一块、也不能把块挪来挪去。
+
+    这是 #649 那次改动**在真机上试出来**的一个缺陷：`replace_location` 原来用
+    "到下一个 `\nlocation `" 找块尾，而它在 41 的真实 vhost 上会遇到**已经存在**的
+    Dify 块 —— 于是那个块被吞掉再原样吐出、夹在它和 `/v1/` 之间的东西一起被吃掉。
+
+    判据是**幂等 + 只多一条 + 邻居字节不变**三条一起：只测幂等会漏掉「吞掉再吐出」
+    （那也幂等），只测数量会漏掉位置漂移。
+    """
+    module = _load()
+    # 一个"已经 apply 过一次"的文件：Dify 块在上、umbrella 在下、后面还有别的 location。
+    applied = module.replace_location(_VHOST_SAMPLE)
+    assert applied.count("location ^~ /v1/dify/ {") == 1
+
+    again = module.replace_location(applied)
+    assert again == applied, "二次 apply 必须逐字不变"
+
+    # 中间的邻居（那个 `location ~* ^/(erp|qm|das)`）在任何一次替换后都不得消失。
+    assert again.count("location ~* ^/(erp|qm|das)") == 1
+    assert _blocks(again)["~* ^/(erp|qm|das)"] == _blocks(_VHOST_SAMPLE)["~* ^/(erp|qm|das)"]
