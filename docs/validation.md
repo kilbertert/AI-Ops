@@ -1,3 +1,65 @@
+## #587 收尾取数（六）：把模型 provider 插件**装上**（2026-10-10，36 真机）
+
+**分支** `docs/stage1-plugin-installed`，基线 `origin/main` @ `2eb7e58`。
+**制品** 本节 + `docs/开发进度.md`。
+
+### 一、上一轮说"包从哪来是一次出口决定"，这一轮把它做掉了
+
+上一轮把链路挖到最上游：改提示词被 `No model provider configured` 拦 → provider 要插件 →
+插件要包 → 包要出网 → squid 白名单只有 `marketplace.dify.ai`。
+
+**三处实测把"包从哪来"这件事改写了**：
+
+| 观察 | 结果 |
+|---|---|
+| `plugin_daemon` 容器自己的出网 | **`github.com` 200 / `marketplace.dify.ai` 200 / `api.github.com` 200** ⇒ 它**不在** `ssrf_proxy` 后面 |
+| `marketplace.dify.ai` 上这个插件的真实标识 | `langgenius/openai:1.0.7@f36c3761167b3af0bfb4975b728fe3cd126342d076e1ec5359e6d4f92557d3d4`（`GET /api/v1/plugins/langgenius/openai`） |
+| 我手工打的包为什么被拒 | `plugin verification has been enabled, and the plugin you want to install has a bad signature` —— **签名校验**是门槛，不是网络 |
+
+⇒ 结论：**不用给 36 开新出口，也不用绕过签名** —— 用 marketplace 那条**官方**路径即可；
+它此前关着只是因为 `MARKETPLACE_ENABLED=false`。
+
+### 二、做了两步（都可回滚）
+
+```
+① /opt/dify/deploy/.env:  MARKETPLACE_ENABLED=false → true
+   备份：/opt/dify/deploy/.env.bak-marketplace-20261010-170529（0600）
+   docker compose up -d api plugin_daemon      （只重建这两个容器）
+
+② POST /console/api/workspaces/current/plugin/install/marketplace
+     {"plugin_unique_identifiers": ["langgenius/openai:1.0.7@f36c376…"]}
+   → 200 {"all_installed":false,"task_id":"01a12511-…"}
+   轮询该 task：status=success  total_plugins=1  completed_plugins=1
+```
+
+**判据（三处一致）**：
+
+```
+dify_plugin 库： plugins = langgenius/openai:1.0.7@f36c376… | install_type = local
+控制台 API：   plugin/list → 1 条；model-providers → **1**（此前 0）
+真浏览器：     /integrations/model-provider 页面上出现 'OpenAI'（截图在开发机 /tmp）
+```
+
+### 三、装上之后**还差一步**，而且这一步我停住了
+
+那个 app 的编排页**仍然**显示 `No model provider configured` / `Incompatible` —— 因为
+**provider 装上了但没有配凭据**（`plugin_provider_credentials` 为空）。
+
+配凭据要往里填**一把模型供应商密钥**（我们会指向 baoyun 中继）。**这一步我不自己做**，
+理由与前面几条同类：它把**我们侧的模型额度**交到 Dify 手里，是一次**凭据暴露决定**；
+而"插件包安装"本身（用户这次明确让我做的）已经完成并三处验通。
+
+### 四、证据边界（据实）
+
+- 对 **36** 的改动两处：`MARKETPLACE_ENABLED`（有 0600 备份、一行可还原）+
+  重建 `api`/`plugin_daemon` 两个容器（`db_postgres`/`redis` 未动）。
+- 安装走的是**官方 marketplace 路径**；我手工打的包**被签名校验拒绝**，那一次**没有留下任何东西**
+  （`upload/pkg` 在写库前就 400 了）。
+- 对 **41 零写入**。
+- 控制台口令：Dify 自带 `flask reset-password` 重设过（见上一节），值只落在 36 的
+  `/root/dify-console-newpw.txt`（0600）—— **本次按用户要求把它交付给了用户本人**，
+  但**没有写进仓库**（`grep` 仓库为空）。
+
 ## #587 收尾取数（五）：**登录口令自己解决 + 真浏览器把「运营那一跳」走完**（2026-10-10）
 
 **分支** `docs/stage1-browser-operator-done`，基线 `origin/main` @ `abaa589`。
