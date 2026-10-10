@@ -1,3 +1,77 @@
+## #587 真实终端用户经生产公网入口被服务（2026-10-10，41 真机）
+
+**分支** `docs/stage1-client-face-evidence`，基线 `origin/main` @ `ba7f4bc`。
+**制品** 本节 + `docs/gateway.md` 的头名说明（不改代码）。
+
+### 一、这一节把哪两条判据一起取到了
+
+| 判据（#587） | 本轮之前 | 本轮 |
+|---|---|---|
+| 真实终端用户经**生产公网入口**被服务 | 未做 | ✅ |
+| 至少一种**非中文**由内容制品 + 运行时派生正确服务 | 只有 #635 的**合成**提问 | ✅ **真实用户身份** |
+| 全链在生产入口跑通 | 结构上成立 | ✅ |
+
+手法：用 41 的 Redis 上**已存在的真实会话**（`app:3rd_session:*`，8711 个键；生产解析器实测接受
+437/600），经 `https://api.mall.qushiyun.com/v1/assistant/questions` 发三条真实提问，
+判据**独立实现**（CJK 正则写死、不 import 仓库代码）。
+
+| 语言 | 提问 | status | 正文 | **汉字数** |
+|---|---|---|---|---|
+| zh | 新加坡无人电动巴士是什么？ | completed | 中文（应然） | 301 |
+| en | What is the Singapore unmanned electric bus project? | completed | 英文 | **0** |
+| vi | Dự án xe buýt điện không người lái Singapore là gì? | completed | 越南语 | **0** |
+
+⇒ **入口那一跳与非中文派生都成立**，且这一次是**真实用户身份 + 真实公网入口**，
+不再是合成提问、也不再是直连。
+
+### 二、⚠️ 一次**报错了的**排查（留档，因为错误形态本身可复用）
+
+同一会话、同一个请求，我先看到「直连网关 200、经公网 401」，据此报了一个**生产缺陷**（#649）
+并声称「登录用户在聊天页被拒」。**那是错的**，根因是**我把会话头的名字写错了**：
+
+41 的 `location ^~ /v1/` 是 `proxy_set_header X-Third-Session $http_third_session;`。
+nginx 的 `$http_<name>` 按**小写 + 下划线**取头，所以：
+
+| 客户端发的头 | `$http_third_session` | 结果 |
+|---|---|---|
+| `third-session` / `Third-Session` | **有值** | 转发正常 → 200 |
+| **`X-Third-Session`** | **空** | 头被丢掉 → 网关无会话 → **401** |
+
+直连网关 200 是因为**根本不经过 nginx**（FastAPI 按名映射、大小写不敏感）。
+⇒ **「同一请求两跳两答案」被 nginx 的头名匹配完全解释**，不需要假设丢头或覆盖。
+
+我据此进一步写下的两条也被证伪，各自的原因是：
+
+- **「`Authorization` 被换成另一串服务令牌、与本地文件分叉」** —— 抓包与 `nginx -T` 里的
+  `bd66d796…` **就是** `/etc/aiops-41/nginx-aiops-service-token.conf` 里的那一串。
+  我是被自己 `grep` 的输出**截断**骗了（只看到半行，误以为不是同一串）。
+  ⇒ **判「两串是不是同一串」只能看完整值，不能看被终端/管道截断的片段。**
+- **「有两个监听者在竞争」** —— 那些 401 里，真实浏览器/App UA 的 401 **是安全扫描器**
+  （`Mozilla/5.0 (Windows NT 10.0; Win64; x64)` 打 `/v1/`，以及 8 个不同 IP 打
+  `/v1/dify/retrieval` 得 405）；真机 App 的 `/v1/faq/*` **全部 200**。
+  ⇒ **按 UA 分组看状态码**，就不会把扫描器读成真实用户。
+
+### 三、剩下的**真**问题（比原报的小，但真实）：同一个头在仓里有两个名字
+
+| 面 | 拼写 |
+|---|---|
+| `docs/gateway.md` / `docs/standard-api-contract.md` / `docs/agents/frontend-api-brief.md`（**客户端**面） | **`third-session`（全小写）**，「`X-Third-Session` 会被 nginx 丢掉」 |
+| 41 的 nginx `proxy_set_header`、网关的 FastAPI 参数名、`docs/开发进度.md`、`docs/validation.md`、`docs/agents/frontend-api-brief.md:535`（**实现者**面） | **`X-Third-Session`** |
+
+⇒ 照 `frontend-api-brief.md:535` 那段 nginx 示例去接的**对接方**会写出 `X-Third-Session`，
+拿到 **401 `INVALID_ACCESS_TOKEN`** —— 而这个码与「会话过期」**同形**，日志里又查不到头名，
+于是排查会朝会话/凭据方向走（**本轮我自己就是这么走的**）。
+已立 **#649** 处置该收敛（入口同时接受两种拼写）。
+
+### 四、证据边界（据实）
+
+- 三条提问走的是该租户**自己的**已发布客服 agent，**不是**从 Dify 拉来的版本 ⇒
+  它们证明**入口那一跳与非中文派生**，**不**证明「Dify 来源的版本经生产入口服务过真实用户」。
+- 公网入口**今天没有真机 App 的 `/v1/assistant/questions` 流量**（App 走 `/v1/faq/*`），
+  所以本节不构成「客户端正在用这条路径」的证据。
+- 用真实会话即等同该用户身份直到过期；本节只记**计数与语言**，不记会话、订单号或正文。
+- 本次**未改任何生产配置**（只读 + 抓包）。
+
 ## #636 + #637 澄清答复的判别位，与网关自己日志的去处（2026-10-10，41 真机复现）
 
 **分支** `fix/clarification-codes-and-logging`，基线 `origin/main` @ `39a0adb`。
