@@ -1,3 +1,50 @@
+## #587 补验：**Dify 的调试预览真的打到了我们的知识**（2026-10-11，36/41 真机）
+
+**分支** `docs/stage1-preview-knowledge`。**制品** 本节 + `docs/开发进度.md`。
+
+### 一、为什么还要补这一验
+
+此前验的是"**运行时**回答经登记端点取知识"（我方链路）与"Dify 侧挂着外接知识库"。
+**没验过的是**：运营在 Dify 的**调试预览**里按一次发送，那一跳是不是真的落到我们的知识上。
+本轮去验，**第一次就发现它打不到** —— 两个成因都**静默**。
+
+### 二、两个静默成因（都只在 Dify 容器日志里留下一行 WARNING）
+
+| 成因 | 现象 |
+|---|---|
+| ① `dataset_configs.datasets.datasets[]` 的项形状写成了 `{"id":…,"enabled":true}` | `dataset/manager.py` 要求 `keys[0] == "dataset"`，否则 **continue** ⇒ `dataset_ids` 为空 ⇒ **检索根本不发生**，无任何报错 |
+| ② 外部数据集的 `retrieval_model` 为 **null** | 预览时 `dataset_retrieval.py:1277` 记一行 `Skipping dataset retrieval because retriever failed … error='NoneType' object has no attribute 'get'` ⇒ **整个外部检索被跳过**，回答退化成"拒答话术" |
+
+两处修好之后（形状改成 `{"dataset": {"id":…, "enabled":…}}`；`PATCH /console/api/datasets/<id>`
+补 `external_knowledge_id` + `external_retrieval_model`），**同一句提问**的预览回答里出现了
+**知识库那条内容的特征**：`华为、比亚迪和 TrendPower 合作推动的国家级无人电动巴士项目`
+—— 与我们运行时检索到的同一条 KB 内容一致。
+
+**判据（三处一起看）**：
+
+```
+Dify api 日志：POST https://api.mall.qushiyun.com/v1/dify/retrieval "HTTP/1.1 200 OK"
+41 入口访问日志：36.156.159.175 - - "POST /v1/dify/retrieval HTTP/1.1" 200 985 "-" "python-httpx/0.28.1"
+预览响应正文：含知识库内容特征（华为 / 比亚迪 / TrendPower / 无人巴士项目）
+```
+
+⇒ **「运营在 Dify 的调试预览里能打到公司数据」这一条成立**（PRD 的 User Story 2/4/7）。
+
+### 三、这一条同时说明了两件事（据实）
+
+- **Dify 侧"配了但没生效"的形态是静默的**：两个成因都不报错，只留 WARNING；
+  只看"接口 200"会以为配好了。**判据必须落在"那一跳有没有真的发生"上**
+  （入口访问日志 + 正文内容），不能落在"配置写进去了"。
+- **预览打的是知识检索**（External Knowledge API），**不是订单数据** ——
+  订单那一类要"只读工具子集"，而登记表里**今天只有知识检索这一行**（#583 已记）。
+
+### 四、证据边界（据实）
+
+- 对 **36**：改了两处 Dify 侧配置（app 的 `dataset_configs`、数据集的 `external_retrieval_model`）。
+- 对 **41 零写入**。
+- 预览回答由**官方 deepseek 插件**产生（Dify 侧用自己的 key）；正文含模型推理段（`<think>`），
+  本节只引用于判定知识是否到达，**未做质量评价**。
+
 ## #587 **端到端验收**（2026-10-11，41/36 真机）：判据逐条重取一遍，全部通过
 
 **分支** `docs/stage1-e2e-acceptance`，基线 `origin/main`。**制品** 本节 + `docs/开发进度.md`。
