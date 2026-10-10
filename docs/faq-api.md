@@ -33,6 +33,14 @@ X-Business-Entry: consumer
 
 上述 URL 供受信任业务后端/BFF 联调。前端不得直接持有 `aiops-service-token`；前端实际地址由 BFF 暴露。
 
+> **头名写错时的症状（2026-10-10 实测，41）**：会话头写成 `X-Third-Session` 会得到
+> **`401 INVALID_ACCESS_TOKEN`** —— 与「会话过期」**完全同形**，日志里也查不到头名，
+> 因此很容易朝会话/凭据方向排查。原因是 41 的 nginx 用
+> `proxy_set_header X-Third-Session $http_third_session` 取头，而 `$http_<name>` 按
+> **小写 + 下划线**匹配：`third-session` 有值、`X-Third-Session` 取到空值而被丢掉。
+> **直连网关（不经 nginx）两种拼写都认**，所以「直连 200、公网 401」不是丢头或覆盖。
+> 收敛处置见 #649。
+
 ### `GET /v1/faq/recommendations`
 
 返回当前平台的完整推荐候选。推荐项只有展示字段，不包含答案；前端可随版本选择其中一部分展示。
