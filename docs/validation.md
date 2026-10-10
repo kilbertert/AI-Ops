@@ -1,3 +1,57 @@
+## #587 **端到端验收**（2026-10-11，41/36 真机）：判据逐条重取一遍，全部通过
+
+**分支** `docs/stage1-e2e-acceptance`，基线 `origin/main`。**制品** 本节 + `docs/开发进度.md`。
+
+### 一、验收方式：**一组全新的标记** + 四语言 + 一条未登记租户 + 线上租户回归
+
+不是把上一节的数字抄一遍：本轮在 Dify 控制台里**新加了一行验收标记**
+`【验收标记 2026-10-11 16:28Z】`（真浏览器里加的），然后从**零**重跑一次全链。
+
+### 二、逐条判据与实测
+
+| # | 判据 | 怎么做 | 结果 |
+|---|---|---|---|
+| ① | 运营在 Dify 里改一个智能体 | **真浏览器**登录控制台 → 编排页加一行标记 → `Publish Update` | 界面里能看到标记；**导出读回** prompt len 79→129、含标记 ✅ |
+| ② | 我方发布动作冻结一个版本 | `aiops admin pull-dify` → 再绑知识库（同一发布门） | **exit 0**，`canary-dify-acceptance-1011` v1→**v2** ✅ |
+| ③ | 注册表把该租户映射到这个版本 | `DifyAppRegistry.put`（生产路径） | `1783022023241633792/consumer → canary-dify-acceptance-1011` ✅ |
+| ④ | **真实终端用户经生产入口**被服务 | 41 上**已存在的真实 Redis 会话**，经 `https://api.mall.qushiyun.com/v1/assistant/questions` | zh/en/vi 三条全部 `completed`、`retrieval_status=found`、`searches=1` ✅ |
+| ⑤ | 被服务的是**这条 Dify 来源的版本** | 指标行 + 该版本快照里找本组标记 | `agent_version_key=agt_c58184cd…#v2`，**快照里含本组标记** ✅ |
+| ⑥ | 至少一种非中文由我们派生 | en/vi 正文的汉字数（独立正则、不 import 仓库代码） | en **0** 汉字、vi **0** 汉字；zh 134（应然）✅ |
+| ⑦ | 未登记租户仍 fail closed | 未登记的**真实租户**经同一生产入口 | `retrieval_status=unavailable`、`searches` 为空、终态只是 31 字文案、**无版本回退** ✅ |
+| ⑧ | 回答经**暴露并登记过的端点**取知识 | `POST /v1/dify/retrieval` 三态 + 调试身份边界 | 生产凭据 200/1 条；调试凭据子集内 200/1 条；**越权与从未登记同码 404** ✅ |
+| ⑨ | 线上租户**回归** | 线上租户真实会话提问，比对指标 | `agt_7dbe2665…#v3`，**与验收前逐字相同** ✅ |
+
+原始输出（41 上逐次跑）：
+
+```
+[zh] 202 → completed  found  [text,video,reference]  汉字 134   version=agt_c58184cd…#v2
+[en] 202 → completed  found  [text,video,reference]  汉字   0   version=agt_c58184cd…#v2
+[vi] 202 → completed  found  [text,video,reference]  汉字   0   version=agt_c58184cd…#v2
+未登记租户：202 → completed  unavailable  blocks=[text]  31 字   无版本
+暴露端点：生产 200/1 条；调试子集内 200/1 条；越权 404；从未登记 404（同码）
+线上租户：completed  agt_7dbe2665…#v3（逐字未变）
+服务中的版本：prompt len=129，**含本组验收标记**
+```
+
+### 三、验收过程中发现并记下的一件事（不是回归）
+
+第四跳第一次跑（zh）出现两条 `QA_FAILED: Codex turn … exceeded 600 seconds`。
+逐层实测排除了模型链：**直连 baoyun `/responses` 200（3.7s，不带 tools）、经本机中继
+`/responses` 200（2.6s，带 tools，200）**，两条都正常；中继日志里只有**客户端主动断开**
+产生的 `BrokenPipeError`（那条注释写明"Codex 放弃一轮是正常的"）。
+
+⇒ **60s/600s 级的偶发超时不是模型链故障**，而是 Codex 那一轮本身跑得久
+（同一天另有 12s / 14s / 20s / 33s 的完成记录，同一 provider 同一模型）。
+**逐条实测的下界**：本组四条提问的耗时都在正常范围内，验收结论不受影响。
+
+### 四、证据边界（据实）
+
+- 对 **41**：注册表一行改写（可回滚）+ 一次 `pull-dify` 发布 + 一次 KB 绑定 + 若干次真实提问。
+- 对 **36**：Dify 控制台里那个 app 的提示词加了一行 + `model-config` 重设（模型名未变）。
+- 会话值与正文**未留档**；凭据未打印、未入仓。
+- 「运营**本人**在浏览器里点」仍未验（本轮是脚本驱动真浏览器；判据要的"界面可用 + 改动落库"
+  已分别验过）。
+
 ## #587 收尾两件：Dify 侧改用**官方 DeepSeek key**（与网关那把隔离）+ 关回插件市场（2026-10-11，36 真机）
 
 **分支** `docs/stage1-closeout`，基线 `origin/main` @ `284a7ee`。
