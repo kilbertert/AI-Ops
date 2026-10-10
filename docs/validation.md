@@ -1,3 +1,68 @@
+## #587 判据二（加强）：**Dify 来源**的版本经显式注册表映射给真实租户（2026-10-10，41 真机 + 真控制台）
+
+**分支** `docs/stage1-registry-route-evidence`（与上一节同一分支）。
+**制品** `tools/dify_registry_route_proof.py`（`--declared-agent` / `--declared-tenant`）。
+
+### 一、为什么还要加这一节
+
+上一节的判据 2 里，"注册表声明的那一个"是租户**自己**的 `canary-客服` —— 它证明了
+**注册表映射本身**，但没把 **Dify 来源**接进去。这一节把两者接上：声明的那个，
+是一次 `aiops admin pull-dify` 从**真 Dify 控制台**拉回来、经**我方发布门**冻结的版本。
+
+判据因此变成：**一个从 Dify 拉来、经我方发布门冻结的版本，被注册表显式映射给一个真实租户，
+且与"最新已发布"可区分。**
+
+### 二、四步（全在生产库副本上）
+
+```
+副本 → ① pull-dify（真控制台 console 导出端点）→ ② 绑知识库（同一发布门）
+     → ③ 注册表声明指向它 → ④ 断言：门给出声明的名字、旧规则给出别的
+```
+
+真机输出（节选）：
+
+```
+=== ① pull-dify --dry-run ===
+{ "dry_run": true, "app_id": "a975c8e5-…", "config": { "prompt": "你是「小趋」…",
+  "knowledge_base_ids": [], "model": "deepseek-v4-flash", … } }
+
+=== ② 真发布（只落副本）===
+{ "agent_id": "agt_a51e8630513c4c32a0a668fdc13a6407",
+  "agent_name": "canary-dify-pull-route-proof", "version_no": 1 }
+
+=== ②b 绑知识库（fork → update → publish）===
+after : canary-dify-pull-route-proof published v2 kb ('4f4bc674…',)
+
+=== ③④ 注册表路由取证 ===
+【判据 1b】4 个真实 (租户, 入口) 在启用后全部 (None, True) ⇒ unavailable ✓
+【判据 2】1783022023241633792：门给 'canary-dify-pull-route-proof'；
+          旧规则选 canary-registry-proof#v1；
+          按门选 canary-dify-pull-route-proof#v2（**可区分** ✓）
+```
+
+**这一条同时把三件事钉在一起**：Dify 控制台的配置拉得回来、经我方发布门冻成了不可变版本、
+注册表把它显式映射给了真实租户，而运行时那道门读出的正是它。
+
+### 三、两处刻意的选择
+
+- **不给 `pull-dify` 加 `--knowledge-base-id`**：那会把"这次拉取"与"这个 app 归谁"搅在一起
+  （#625 的笔记里写明了这条边界）。绑知识库是**运营侧的下一步**，本节的第 ②b 步用发布门
+  做同一件事。Dify 的 chat 表单会整体替换 `dataset_configs`，所以拉回来的 DSL 里
+  `knowledge_base_ids` 为空是**已知且正确**的（#580 记过）。
+- **副本里那个名字是新建的**（`canary-dify-pull-route-proof`），不是复用 `canary-dify-pull`：
+  后者在 41 上 **已 disabled**（#633 的处置），而 `AgentManager` 没有
+  disabled→published 的路径。换个名字不改变这条判据要证的事。
+
+### 四、证据边界（据实）
+
+- **库仍是副本**：`mktemp -d` 里一份 `cp`，生产库只被读过；`aiops admin pull-dify` 的
+  `--db` 指向副本，所以那次发布**没有进生产**。生产库与 `env-41.toml` **都没动**
+  （41 的注册表**仍然是空的**）。
+- **控制台凭据没有出现在任何输出里**：命令走的是服务端配置里的三键，`--app-id` 是运营已
+  登记在册的事实。
+- 本节的判据落在**运行时那道门**上，不是响应体；"一个真实提问被这个版本服务到"那条在本轮的
+  另一节里（走的是租户自己的 agent）。
+
 ## #587 判据二收口：真实租户经**显式注册表映射**被正确路由（2026-10-10，41 真机 + 生产库副本）
 
 **分支** `docs/stage1-registry-route-evidence`，基线 `origin/main` @ `f529377`。
