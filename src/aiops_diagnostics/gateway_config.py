@@ -11,6 +11,7 @@ from dotenv import dotenv_values
 
 from aiops_diagnostics.config import selected_config_file, validate_key_slot_name
 from aiops_diagnostics.conversation_store import CONTEXT_MAX_TOKENS, CONTEXT_MAX_TURNS
+from aiops_diagnostics.gateway_logging import DEFAULT_LOG_LEVEL, parse_log_level
 from aiops_diagnostics.platform_paths import config_root, data_root
 from aiops_diagnostics.private_files import PrivatePathError, validate_private_file
 
@@ -116,6 +117,12 @@ class GatewayServerSettings:
     #: trade-off is a knob rather than a second hardcoded copy.
     context_max_turns: int = CONTEXT_MAX_TURNS
     context_max_tokens: int = CONTEXT_MAX_TOKENS
+    #: 网关自身日志的最低级别（#636）。**默认是代码一直假定的那一级**：`INFO`。
+    #: 在这一项存在之前，网关根本没配过 logging —— uvicorn 只给 `uvicorn*` 挂 handler，
+    #: root 停在 WARNING 且无 handler，于是 `aiops.*` 的 INFO 行**一行都没出去过**
+    #: （41 的 journal 实测 0 行）。级别做成设置是因为调它是运维动作，
+    #: 而为了改一个日志级别重新部署是错的代价。非法值在 `validate()` 里是**启动错误**。
+    log_level: str = DEFAULT_LOG_LEVEL
 
     @classmethod
     def from_env(cls) -> GatewayServerSettings:
@@ -211,11 +218,15 @@ class GatewayServerSettings:
             routing_risk_at_least=_env_float("AIOPS_GATEWAY_ROUTING_RISK_AT_LEAST", 0.5),
             routing_confidence_at_least=_env_float("AIOPS_GATEWAY_ROUTING_CONFIDENCE_AT_LEAST", 0.8),
             routing_risk_always_asks=_env_bool("AIOPS_GATEWAY_ROUTING_RISK_ALWAYS_ASKS", True),
+            log_level=_env("AIOPS_GATEWAY_LOG_LEVEL", DEFAULT_LOG_LEVEL),
         )
 
     def validate(self) -> None:
         if not self.bind_host or any(character.isspace() for character in self.bind_host):
             raise ValueError("AIOPS_GATEWAY_BIND is invalid")
+        # 解析在这里做（结果丢弃）：级别名不对就该在起监听之前失败，而不是让服务起不来
+        # 日志却声称"已经打开了"。取用是 `serve()` 的事 —— 这里只负责判它与拒不拒。
+        parse_log_level(self.log_level)
         if not 1 <= self.port <= 65535:
             raise ValueError("AIOPS_GATEWAY_PORT must be between 1 and 65535")
         if not 1 <= self.max_workers <= 16:

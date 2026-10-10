@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import json
 import logging
 import platform
@@ -43,6 +44,16 @@ from aiops_diagnostics.caller_auth import (
     ScopedOrderAuthorizer,
     SourceKeyCallerResolver,
     UpmsCallerResolver,
+)
+from aiops_diagnostics.clarification import (
+    CLARIFY_ACCOUNT_HAS_NO_SITES,
+    CLARIFY_CONTEXT_REQUIRED,
+    CLARIFY_LANGUAGE_UNROUTABLE,
+    CLARIFY_ORDER_NOT_YOURS,
+    CLARIFY_ORDER_REQUIRED,
+    CLARIFY_WRONG_ENTRY,
+    MESSAGE_KEY_BY_CODE,
+    missing_fields_for,
 )
 from aiops_diagnostics.codex_runtime import AgentRuntimeError
 from aiops_diagnostics.company_token_auth import (
@@ -111,8 +122,8 @@ from aiops_diagnostics.query_scope import (
     ShopDirectory,
     UpmsShopDirectory,
 )
-from aiops_diagnostics.routing import money_question_context
-from aiops_diagnostics.scope_context import ScopeContext, ScopeError
+from aiops_diagnostics.routing import MISSING_ORDER_NO, money_question_context
+from aiops_diagnostics.scope_context import SCOPE_TYPE_ORGAN, ScopeContext, ScopeError
 from aiops_diagnostics.shortcut_lifecycle import (
     BANNER_KIND,
     BUTTON_KIND,
@@ -920,15 +931,14 @@ def create_gateway_app(
                 # guard and regardless of order context, because a jump action
                 # must never produce an answer or a diagnosis.
                 if shortcut.jump_path:
-                    _record_route_metric(context, caller, route_type="clarification", outcome="completed")
-                    return {
-                        **decision.public(),
-                        "type": "clarification",
-                        "language": language,
-                        "question": payload.question,
-                        "missing_fields": [],
-                        "message": clarification_message(language, "wrong_entry"),
-                    }
+                    return _clarification(
+                        context,
+                        caller,
+                        decision,
+                        code=CLARIFY_WRONG_ENTRY,
+                        question=payload.question,
+                        language=language,
+                    )
 
                 # (b) A clicked order-bound shortcut must not silently fall
                 # through to generic QA when the frontend omitted the order
@@ -945,15 +955,14 @@ def create_gateway_app(
                     and not payload.order_no
                     and _extract_order_no(payload.question) is None
                 ):
-                    _record_route_metric(context, caller, route_type="clarification", outcome="completed")
-                    return {
-                        **decision.public(),
-                        "type": "clarification",
-                        "language": language,
-                        "question": payload.question,
-                        "missing_fields": ["order_no"],
-                        "message": clarification_message(language, "order_no"),
-                    }
+                    return _clarification(
+                        context,
+                        caller,
+                        decision,
+                        code=CLARIFY_ORDER_REQUIRED,
+                        question=payload.question,
+                        language=language,
+                    )
 
         # A language we can RENDER but not ROUTE. Thai and Khmer have no word
         # boundaries, so `_normalize_keywords` swallows a run into pseudo-tokens
@@ -1005,14 +1014,16 @@ def create_gateway_app(
             )
 
         if not can_prompt_in(language):
-            return {
-                **decision.public(),
-                "type": "clarification",
-                "language": language,
-                "question": payload.question,
-                "missing_fields": ["language"],
-                "message": free_text_unavailable_message(language),
-            }
+            # This branch recorded no metric of its own before #636 — one of the
+            # reasons the metric dimension could not tell the branches apart.
+            return _clarification(
+                context,
+                caller,
+                decision,
+                code=CLARIFY_LANGUAGE_UNROUTABLE,
+                question=payload.question,
+                language=language,
+            )
 
         # Route 1: explicit order → diagnosis semantics.
         if payload.order_no:
@@ -1091,15 +1102,14 @@ def create_gateway_app(
         if not payload.order_no:
             embedded = _extract_order_no(payload.question)
             if embedded and order_verdict(embedded) == NOT_OWNED:
-                _record_route_metric(context, caller, route_type="clarification", outcome="completed")
-                return {
-                    **decision.public(),
-                    "type": "clarification",
-                    "language": language,
-                    "question": payload.question,
-                    "missing_fields": [],
-                    "message": clarification_message(language, "not_yours"),
-                }
+                return _clarification(
+                    context,
+                    caller,
+                    decision,
+                    code=_unowned_order_code(caller),
+                    question=payload.question,
+                    language=language,
+                )
 
         if not payload.order_no:
             embedded = _extract_order_no(payload.question)
@@ -1343,15 +1353,16 @@ def create_gateway_app(
             thresholds=getattr(context.runtime, "routing_thresholds", None),
         )
         if missing is not None:
-            _record_route_metric(context, caller, route_type="clarification", outcome="completed")
-            return {
-                **decision.public(),
-                "type": "clarification",
-                "language": language,
-                "question": payload.question,
-                "missing_fields": [missing],
-                "message": clarification_message(language, missing),
-            }
+            # The table's two identifiers ARE the two codes' only difference.
+            code = CLARIFY_ORDER_REQUIRED if missing == MISSING_ORDER_NO else CLARIFY_CONTEXT_REQUIRED
+            return _clarification(
+                context,
+                caller,
+                decision,
+                code=code,
+                question=payload.question,
+                language=language,
+            )
 
         if classified is not None:
             if classified.get("intent") == "casual":
@@ -3183,6 +3194,96 @@ def _order_authorization(
         )
         return UNAVAILABLE
     return OWNED if allowed else NOT_OWNED
+
+
+def _clarification(
+    context: Any,
+    caller: ScopeContext | None,
+    decision: Any,
+    *,
+    code: str,
+    question: str,
+    language: str,
+) -> dict[str, Any]:
+    """The one place a clarification reply is built and recorded (#636).
+
+    Before this, six branches each hand-built the same envelope and recorded an
+    indistinguishable `route_type='clarification'` row. Three things varied by
+    accident rather than by decision: whether the log line carried a stable
+    identifier, whether the metric row did, and whether the code and the message
+    could disagree. Now the CODE picks the fields — `missing_fields` and the
+    message key both come from the registry in `clarification.py` — so a branch
+    cannot ship a code that contradicts its own copy, and adding a branch without
+    registering its code fails a test rather than going quiet.
+
+    The metric rides the existing `error_code` column. It is not an error, and
+    that is a deliberate reuse: the column is the row's machine-readable
+    discriminant, renaming it would touch every reader, and a clarification that
+    is not distinguishable from the other five is the defect this closes.
+    """
+    missing = missing_fields_for(code)
+    if code == CLARIFY_LANGUAGE_UNROUTABLE:
+        message = free_text_unavailable_message(language)
+    else:
+        message = clarification_message(language, MESSAGE_KEY_BY_CODE[code])
+    _record_route_metric(context, caller, route_type="clarification", outcome="completed", error_code=code)
+    # The structural line the ticket asked for, minus the two things that must
+    # never be in it: no identity, no order number — only the hashes the FAQ
+    # module already logs for the same reason. It has somewhere to go now:
+    # `gateway_logging` attaches the root handler uvicorn never did.
+    _LOGGER.info(
+        "clarification_answered code=%s language=%s missing=%s subject_hash=%s tenant_hash=%s",
+        code,
+        language,
+        ",".join(missing) or "-",
+        _hash_identifier(getattr(getattr(caller, "subject", None), "b_user_id", "") or ""),
+        _hash_identifier(getattr(caller, "effective_tenant_id", "") or ""),
+    )
+    return {
+        **decision.public(),
+        "type": "clarification",
+        "language": language,
+        "question": question,
+        "missing_fields": missing,
+        "message": message,
+        "code": code,
+    }
+
+
+def _unowned_order_code(caller: ScopeContext | None) -> str:
+    """Which of the two "you cannot see this order" states this is (#637).
+
+    The two states were one message, and the message named the ORDER — so an
+    account whose operator site set resolves to EMPTY (`no_shop_binding`, or a
+    registered shop with no sites in the charging database) was told "this order
+    is not yours". That sends the reader to look at the order and the order list,
+    both of which are fine, while the thing to fix — the missing binding — is
+    unreachable from the sentence. It happened for real: the product owner read
+    it as an order problem and re-checked the order twice.
+
+    The distinction is `caller.data_scope`, which the identity layer already
+    decided: `DataScope.site_ids == ()` on an `organ` scope means "no site is
+    visible to this account", and `scope_where_sql` renders exactly that set as
+    `1=0`. An account that can see no site can see no order, whoever's it is.
+
+    Deliberately narrow: `None` site_ids is `all`-in-tenant (unrestricted) and
+    never takes this branch, and a tenant-level account never gets an `organ`
+    scope at all (#628) — for those, "no site" is normal and the order statement
+    remains the true one.
+    """
+    scope = getattr(caller, "data_scope", None)
+    if scope is None:
+        return CLARIFY_ORDER_NOT_YOURS
+    if getattr(scope, "type", "") != SCOPE_TYPE_ORGAN:
+        return CLARIFY_ORDER_NOT_YOURS
+    if getattr(scope, "site_ids", None):
+        return CLARIFY_ORDER_NOT_YOURS
+    return CLARIFY_ACCOUNT_HAS_NO_SITES
+
+
+def _hash_identifier(value: str) -> str:
+    """Short, non-reversible marker for a log line — never the identifier itself."""
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
 
 
 def _record_route_metric(

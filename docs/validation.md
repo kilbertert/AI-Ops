@@ -1,3 +1,243 @@
+## #636 + #637 澄清答复的判别位，与网关自己日志的去处（2026-10-10，41 真机复现）
+
+**分支** `fix/clarification-codes-and-logging`，基线 `origin/main` @ `39a0adb`。
+**制品** `src/aiops_diagnostics/clarification.py`（新）+
+`src/aiops_diagnostics/gateway_logging.py`（新）+ `gateway_api.py`（六个分支收敛到一处）+
+`gateway_config.py`（`AIOPS_GATEWAY_LOG_LEVEL`）+ `gateway_server.py`（`log_config=None`）+
+`i18n.py`（`account_no_sites` 11 语言）+ `.env.example` / `README.md`；
+`tests/test_clarification_codes.py`（7 例）、`tests/test_gateway_logging.py`（8 例）。
+
+### 一、#636 要的那个判别位，为什么不能是文案
+
+一次澄清在生产上只留下**一句本地化 `message`** 与一行 `route_type='clarification'`
+指标 —— `missing_fields` 描述的是"要客户端补什么"（`order_no`/`context`/`language`），
+不是"走的哪条分支"，而六条分支里有三条共用 `["order_no"]`。上一轮的排查因此退化成
+**把每条分支跑一遍量消息字节数**，而这个手段本身不成立：同一个 200 可以是任何一条。
+
+修法是给每种成因一个稳定、非本地化的码，且**同一条码在响应体、指标行、结构日志三处是同一个串**：
+
+| 码 | 触发分支 | `missing_fields` |
+|---|---|---|
+| `CLARIFY_WRONG_ENTRY` | 点了跳转动作却打到助手入口 | `[]` |
+| `CLARIFY_ORDER_REQUIRED` | 与订单绑定的动作没带订单号 | `["order_no"]` |
+| `CLARIFY_CONTEXT_REQUIRED` | 钱相关问题缺上下文 | `["context"]` |
+| `CLARIFY_ORDER_NOT_YOURS` | 指名了订单但调用者看不见它 | `[]` |
+| `CLARIFY_ACCOUNT_HAS_NO_SITES` | 账号的可见站点集合为空（#637） | `[]` |
+| `CLARIFY_LANGUAGE_UNROUTABLE` | 这门语言能渲染不能路由（th/km） | `["language"]` |
+
+**码决定 `missing_fields` 与文案键**（`clarification.py` 的登记表），所以答复不可能
+出现"码说一套、`missing_fields` 说另一套"。未登记的码是 `ValueError`，不是默认值。
+第六行那条分支**此前连指标行都没有** —— 这正是"只有指标"也读不出来的原因。
+
+指标行复用既有的 `error_code` 列。**它不是错误，这是有意的复用**：那一列本来就是该行
+的机器可读判别位，改名要动每一个读它的地方，而"和其他五条一模一样"才是本票要修的缺陷。
+
+### 二、#637：账号没有可见站点，说的话就不该是关于订单的
+
+空站点集合的运营商账号（`sys_user_shop` 0 行）拿到的文案是「这个订单不属于当前账号」——
+**指错了方向**：用户去翻自己的订单列表（那里也是空的）、运营去看订单归属（订单没问题），
+而真正该做的**给账号补店铺绑定**从那句话里推不出来。产品就是这么被绕进去的。
+
+判据落在身份层已经决定好的 `caller.data_scope` 上：`organ` 范围且 `site_ids == ()`
+就是"这个账号看不到任何站点"，而 `scope_where_sql` 正是把这个集合渲染成 `1=0`。
+**刻意收窄**：`site_ids is None` 是租户内不限（不取这条分支），顶层账号（`type ∈ {-1,1}`）
+根本不会得到 `organ` 范围（#628），对它们"没有站点"是正常的，订单那句话仍然成立。
+
+文案 `account_no_sites` 补齐 **11 语言**，并给出可行动的下一步（找管理员补绑定），
+不承诺"换个订单就能用"。一条用例逐语言断言两条文案**互不相同** —— 相同就等于没分。
+
+### 三、#636 的另一半：日志根本没有去处（41 真机复现）
+
+`uvicorn.run()` 带来的 `LOGGING_CONFIG` **只给 `uvicorn*` 挂 handler**，root 停在
+WARNING 且**没有 handler**；我们的模块 logger 没设级别、向上传播 —— 于是 `aiops.*`
+的 INFO 行**创建了就被丢掉**。在 **41 上、用 41 的 Python 3.12.3 与 uvicorn 0.52.1**
+把两种配置各跑一遍，同两条日志：
+
+```
+python 3.12.3 uvicorn 0.52.1
+① uvicorn 自己的配置        -> ''                    有 INFO 行吗: False
+② configure_gateway_logging -> 'INFO aiops.gateway faq_platform_decision platform=consumer\n
+                                WARNING aiops.gateway operator_site_scope_empty reason=no_shop_binding\n'
+                              有 INFO 行吗: True
+```
+
+**两条线索在这里合上**：41 的 journal 里 `aiops.` 前缀的行数是 **0**，而
+`company JWT signature key is shorter …` 那条 **WARNING** 却出现了、且**不带级别前缀** ——
+它走的是 `logging.lastResort`（Python 在"哪里都没配 handler"时挂的那个），
+而 `lastResort` 的级别是 WARNING。INFO 在任何一个 handler 被咨询之前就被挡掉了。
+
+修法是给 **root** 挂 handler、给我们两个命名空间（`aiops`、`aiops_diagnostics` ——
+三处用的是 `getLogger(__name__)`）设级别，**root 保持 WARNING**，所以调高我们的
+啰嗦程度不会把第三方依赖一起放开；`serve()` 里传 `log_config=None`（Python 文档给的
+"自己配日志再交给 uvicorn"的做法），否则 uvicorn 的 `dictConfig` 会把刚装的 handler 换掉。
+级别由 `AIOPS_GATEWAY_LOG_LEVEL` 定，默认 `INFO`（就是代码一直假定的那一级），
+**写错是启动失败**（`validate()` 里解析一次）而不是静默落回默认。
+
+### 四、判据与变异实测
+
+| 判据 | 结果 | 怎么证的 |
+|---|---|---|
+| 三种成因产生三个不同的码 | ✅ | `test_clarification_codes.py` 经**网关 HTTP 面**（真实 `ScopedOrderAuthorizer`）驱动 |
+| 响应体的码 == 那一行指标的码 | ✅ | 记录型运行时替身收到 `{route_type: clarification, error_code: <同一个码>}` |
+| 空站点账号得到"账号"那条，**不是**"订单"那条 | ✅ | 正反各一条：有站点的账号仍得订单那句 |
+| 两种成因在**响应体**上可区分（不只靠日志） | ✅ | 断言的是 `body["code"]` 与 `body["message"]`，不是日志 |
+| 拆回去就转红 | ✅ | 把 `CLARIFY_ACCOUNT_HAS_NO_SITES` 改回订单码 ⇒ **2 条红** |
+| 指标行不带码就转红 | ✅ | 去掉 `error_code=code` ⇒ **1 条红** |
+| 响应体去掉 `code` 就转红 | ✅ | 去掉该键 ⇒ **3 条红** |
+| INFO 真的被投递 | ✅ | `tests/test_gateway_logging.py`（8 例）；**41 上对照实测**见 §三 |
+| 去掉 root handler 就转红 | ✅ | 变异回 uvicorn 形态 ⇒ **2 条红** |
+
+全量：`PYTHONPATH=$PWD/src python -m pytest -p no:warnings` → **2047 passed, 9 skipped**。
+
+### 五、证据边界与遗留（据实）
+
+- **未部署到 41**：`production.env` / `gateway.env` 里**没有** `AIOPS_GATEWAY_LOG_LEVEL`
+  （不必有，默认即 INFO）。部署后 `clarification_answered` 与既有的
+  `operator_site_scope_empty` 才会真的进 journald。
+- **11 语言的 `account_no_sites` 是工程起草 + 译稿，产品未过目**（与 #620 的 `not_yours`
+  同一状态，按 #534 用户故事 20：未经确认的语言不算已验收）。
+- **#637 的上游成因未修**：账号没有店铺绑定这件事本身仍是运营动作（#619 是公司侧那条）。
+- **`error_code` 复用不是错误语义**：这一列现在同时承载真错误码与澄清分类码。若要区分
+  "真失败"，判据是 `route_type` + 是否 `completed`，不是这一列是否非空。
+
+## #587 阶段 1 收口前的取数：注册表开关的爆炸半径（2026-10-10，41 真机只读）
+
+**分支** `docs/stage1-registry-blast-radius`，基线 `origin/main` @ `39a0adb`。
+**制品** `tools/dify_registry_blast_radius.py` + `tests/test_dify_registry_blast_radius.py`（4 例）。
+
+### 一、这一节要回答的问题
+
+`#587` 的验收项里还差两条：**至少一个真实租户经显式注册表映射被正确路由**，以及
+**非中文由内容制品 + 运行时派生服务**（#635 已在 41 上跑过，但用的是合成提问）。
+两条都落在同一个动作上：**给 `env-41.toml` 加一行 `[[dify_apps]]`**。
+
+而注册表是 **fail-closed** 的（#584）：表里只要有**任何一行**，未登记的 `(租户, 入口)`
+就什么都不选。所以"加一行"不是局部改动，是**整台主机的一次开关**。先把开关量清楚，
+再决定要不要掰。
+
+### 二、复算方式：真选择代码 + **库副本**
+
+`tools/dify_registry_blast_radius.py --measure` 把 `gateway.db`（含 WAL/shm 边车）复制到
+临时目录，在副本上写入清单声明的绑定，然后用**仓库里那份真代码**
+（`AgentStore` / `select_customer_agent` / `DifyAppRegistry`）对每个 `(租户, 入口)` 各算两次。
+原件只以 `mode=ro` 打开，跑完副本即删。
+
+### 三、41 上的复算结果（提议：只给验收租户加一行）
+
+```
+清单声明 1 行绑定：1783022023241633792 / consumer → canary-客服
+
+租户                    入口        注册表关（现状）        注册表开（复算）
+1579289137893347328   consumer  （无 ⇒ SOP 兜底）      （未登记 ⇒ unavailable）   ← 变了
+1593429332028821504   consumer  （无 ⇒ SOP 兜底）      （未登记 ⇒ unavailable）   ← 变了
+1783022023241633792   consumer  canary-客服#v5      canary-客服#v5          （不变）
+1783022023241633792   operator  canary-客服#v5      （未登记 ⇒ unavailable）   ← 变了
+1899282205965029376   consumer  （无 ⇒ SOP 兜底）      （未登记 ⇒ unavailable）   ← 变了
+1941847786056323072   consumer  （无 ⇒ SOP 兜底）      （未登记 ⇒ unavailable）   ← 变了
+1942105476598861824   consumer  canary-客服#v3      （未登记 ⇒ unavailable）   ← 变了（线上租户）
+1961353704485687296   consumer  （无 ⇒ SOP 兜底）      （未登记 ⇒ unavailable）   ← 变了
+2005573840461369344   consumer  （无 ⇒ SOP 兜底）      （未登记 ⇒ unavailable）   ← 变了
+2019588094906601472   consumer  （无 ⇒ SOP 兜底）      （未登记 ⇒ unavailable）   ← 变了
+（另有每个租户的 operator 入口，同样全部 ← 变了）
+17 / 18 个 (租户, 入口) 组合的选版结果会变。
+```
+
+**"加一行"= 全机 17/18 个组合改结果。** 这不是措辞，是真选择代码在真数据上算出来的。
+
+### 四、拿走的与剩下的，各自值多少
+
+**注册表管的是"客服 app 选哪一个"，不是"整条回答链"**（`gateway_runtime._try_customer_rag`
+的门在 `promo_intent` 分支之后；宣传卡片路由在门之外）。所以下列部分**不受影响**：
+
+| 面 | 是否受开关影响 | 依据 |
+|---|---|---|
+| 固定问答目录（FAQ 短路） | **不受** | 在 `start_assistant_qa` 之前返回（`gateway_api` Route 2b） |
+| 快捷动作 / 横幅 / 开场白 / 宣传卡片 | **不受** | 宣传路由在门之外；`_pinned_promo_agents` 只列宣传 agent |
+| 单问诊断 / 健康报告 | **不受** | 不走 `select_customer_agent` |
+| **客服 RAG 回答**（有 agent 的租户） | **受影响** | 选了哪个 app 由注册表定 |
+
+**线上租户 `1942105476598861824` 的 19 条宣传指标（最近 2026-10-09 07:08）与全部
+`clarification`/`faq`/`diagnosis`/`routing` 流量都不在门的射程内。**
+
+### 五、无 agent 的租户今天拿到的是什么（决定"拿走"的代价）
+
+`agent_version_key IS NULL` 且 `route_type='qa'` 的行，按 `token_count` 分开看：
+
+| 租户 | `token_count=0`（未命中就返回的空态） | `token_count>0`（真答上了） | 最近一次 |
+|---|---|---|---|
+| 1579289137893347328 | 5 | 5 | 2026-10-01 17:15（0） |
+| 2019588094906601472 | 5 | 1 | 2026-09-30 06:55（0） |
+| 1899282205965029376 | 3 | 0 | 2026-09-16 01:43 |
+| 1961353704485687296 | 4 | 0 | 2026-10-08 09:38 |
+| 2005573840461369344 | 4 | 1 | 2026-09-14 01:24 |
+| 1941847786056323072 | 1 | 0 | 2026-09-28 05:38 |
+| 1593429332028821504 | 1 | 0 | 2026-09-12 13:09 |
+| **1942105476598861824**（线上） | **75** | 12（全部 2026-09-12/23） | 2026-10-09 11:27（0） |
+
+**线上租户的 148 条 `qa` 里，最近 30 天有 **75 条**是无 agent 服务的空态返回**（
+`token_count=0`，其中部分带 `QA_FAILED`）。也就是说：**今天这台主机上没有 agent 的租户，
+拿到的多半不是答案，是一个"没答上"的空态。** 开关拿走的正是这个。
+
+> ⚠️ **这张表不能证明"空态很便宜"**：`token_count` 是 `_estimate_turn_tokens` 的**字符数
+> 估算**，零阶回答正文短时它也可能为 0。所以第 5 节只用于说明**量级**，不作为逐条定论；
+> 逐条定论要读 `assistant_questions.result_json`（本次未取）。
+
+### 六、其余四条验收项在 41 上的现状
+
+| 判据（#587） | 现状 | 依据 |
+|---|---|---|
+| 至少一个真实租户经显式注册表映射被正确路由 | **未做** | 见上：这一行会改 17/18 个组合，需一次显式决定 + 可回滚 |
+| 至少一种非中文由运行时派生服务 | **做过但是合成的** | #635：41 真机真运行时真 KB，提问是脚本发的（en/vi/de 零汉字） |
+| 回答经暴露并登记的端点取知识 | **部分** | 适配路由 200 + 段 2/段 3 已跑（#583）；**但"运营在 Dify 控制台里挂上这个 endpoint"仍未做** |
+| 调试身份（#586）在本票复验 | **未做** | 41 的 `production.env` **没有**调试三键（`AIOPS_GATEWAY_DIFY_DEBUG_*`），该身份在本票开始前不存在 |
+
+### 七、结论（**不可切换**）与未决项
+
+**结论：不可切换。** 并且**本轮不建议**打开注册表开关，理由三条（每条都可复算）：
+
+1. **线上租户在未登记那一侧**。要开表，同一个动作里必须给 `1942105476598861824` 也写一行，
+   否则它从"选 `canary-客服` v3"变成"什么都不选"——那是**在生产上把客服回答拿走**，而
+   线上在跑的是**两条**（宣传卡片 19 条 + 客服 93 条）。只给验收租户写一行，等于用一次
+   生产事故换一条验收判据。
+2. **开关的位置不对**。真正的生产切换是**整台主机**而不是某个租户，所以它属于 PRD #577
+   明确的"本期之后的独立动作"，不属于验收票的收尾。用验收去开生产开关，是把两件事绑死。
+3. **收益与代价不成比例**。这一行的判据价值是"注册表真的驱动了一个从 Dify 拉来的 app"，
+   而这件事**已经在 41 上被证过**（`canary-dify-pull` v2 在租户 1783022023241633792 上
+   服务过一批真实提问，#587 第二/四跳与 #635）。
+
+**未决项（按要不要人决定排序）**：
+
+| 未决项 | 谁决定 | 备查 |
+|---|---|---|
+| 全机切换（含线上租户的 `[[dify_apps]]` 行） | 运营 + 工程，独立动作 | PRD #577「不做生产切换」 |
+| 真实终端用户（非合成提问）的非中文取证 | 需要一条真用户入口 | #635 的证据边界 |
+| 界面文案那一半以真用户身份取证 | 同上 | #585 的证据边界 |
+| 运营在 Dify 控制台里挂 endpoint | 运营动作 | #583 段 1–3 只证我方 |
+| 41 上配调试三键（#586） | 运营动作 | 本票开始前该身份在 41 上不存在 |
+| 容量、TLS 收口 | 运维 | PRD #577「风险与前置」已登记 |
+
+**证据边界（据实）**：本节全部是**只读取数**（生产库以 `mode=ro` 打开，写入只落在副本上，
+副本跑完即删）；不包括任何写入、重启或配置变更。注册表的**选版语义**是复算的，
+"运营在 Dify 控制台里的动作"与"真实终端用户"两类观察本票都没有取到。
+
+### 八、41 上部署的清单本身已经漂移（顺带取数，未处置）
+
+| 文件 | 与仓库 `ops/environments/env-41.toml` 的关系 |
+|---|---|
+| `/opt/aiops-41/ops/environments/env-41.toml`（Sep 15 12:34） | **已漂移**：3 个 agent 的 `model = "qwen3.8-max-0902"`、两个 KB id 是旧的 |
+| `/opt/aiops-41/ops/environments/env-41.toml.new`（Sep 20 17:37） | **与仓库逐字节相同**（`diff` 空） |
+
+**今天**若拿部署目录里那份 `env-41.toml` 跑 `aiops admin reconcile`，会在**任何写入之前**
+中止（模型白名单；实测退出码 2、库零变更）：
+
+```
+收敛中止（库未变更）: 模型不在白名单: …/canary-客服: qwen3.8-max-0902; …
+```
+
+拿 `env-41.toml.new`（或仓库那份）则 4 个 agent 全部 `unchanged`（`--dry-run` 实测），
+即**库与仓库一致、与部署目录那份不一致**。本票**没有**改动 41 上这两个文件：这是运维/交付
+目录的整理，应在**打开开关之前**明确"哪一份是权威"，否则一次"加一行"会连同这份漂移一起掰。
+
 ## #633 清理阶段 1 验收遗留物：停用 `canary-dify-pull`（2026-10-09，41 真机）
 
 **分支** `chore/dify-cleanup-canary`，基线 `origin/main` @ `d9c0573`。
