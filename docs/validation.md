@@ -1,3 +1,69 @@
+## #587 收尾取数（七）：把模型 provider 凭据填进 Dify（2026-10-10，36 真机）
+
+**分支** `docs/stage1-provider-credential`，基线 `origin/main` @ `6b1cb05`。
+**制品** 本节 + `docs/开发进度.md`。
+
+### 一、填了什么（形状取自插件自带 schema，不是猜的）
+
+从 `plugin_daemon` 里那份插件目录读到 `provider/openai.yaml` 的 `credential_form_schemas`：
+
+| 字段 | 本实例填的值 |
+|---|---|
+| `openai_api_key`（required，secret） | 41 上 `/etc/aiops-41/keys/baoyun.key`（**不打印**） |
+| `openai_api_base` | `https://ai-api.baoyun.com/v1` |
+| `api_protocol` | `chat`（**理由见 §三**） |
+
+调用：`POST /console/api/workspaces/current/model-providers/langgenius/openai/openai/credentials`
+→ **201 `{"result":"success"}`**（这一步 Dify 会**真的调一次上游**验证，所以 201 本身就是一次连通性证明）。
+
+### 二、三处验（缺一不可）
+
+```
+dify 库 provider_credentials： provider_name=langgenius/openai/openai
+                               credential_name=baoyun-via-aiops  has_config=t
+控制台 API： model-types/llm → 1 个提供方、**44 个模型**（此前 0）
+真浏览器：   /integrations/model-provider 上 OpenAI 显示 **Configured**
+             编排页上 "No model provider configured" **消失**
+```
+
+### 三、为什么 `api_protocol=chat` 而不是默认的 `responses`
+
+插件默认走 **Responses API**，而那条路在我们这里需要**我方中继**修复两个上游缺口
+（`responses_adapter.py` 记的两处：缺 item `status`、grammar 与 tools 不能同时用）。
+
+**中继在 41 上只绑 `127.0.0.1:8799`** —— 从 36 的 Dify 容器实测**到不了**
+（`172.17.0.1:8799` 与 `47.97.160.153:8799` 都 blocked），而 41 的公网入口**没有 `/llm` 位置**
+（`GET /llm/v1/models` → 404）。
+
+从 41 直连 baoyun 实测两条都通：
+
+```
+POST https://ai-api.baoyun.com/v1/chat/completions → 200（content: "ok"）
+POST https://ai-api.baoyun.com/v1/responses        → 200
+```
+
+⇒ **本步选 `chat`**：它不需要中继那一跳，所以**不必给 41 加一个公网位置**（那是一次暴露变更）。
+代价写在下面。
+
+### 四、这一处代价要如实写（它是一次**降级**）
+
+`chat` 绕过中继 ⇒ **同时也绕过了中继修的那两个缺口**。对我们的运行时**没有影响**
+（41 的网关仍走 `127.0.0.1:8799` → 中继 → responses，`AIOPS_PROVIDER_BAOYUN_WIRE_API=responses`
+未动），但**Dify 里的调试预览**若用需要 grammar/tools 的玩法，会撞上上游那两个 400。
+
+**要把它做成 `responses` 那条路**，需要给 41 的公网入口加一个指向中继的位置 ——
+**那是一次暴露变更**（新增一条对外可达的转发），我没有自行做。
+所以这里如实记：**本步把 provider 配通了，但 Dify 走的是 chat 那条更短的路。**
+
+### 五、证据边界（据实）
+
+- 对 **36** 的改动：`provider_credentials` 一行（含一把指向 baoyun 的密钥，Dify 加密存储）
+  + 之前那两处（`MARKETPLACE_ENABLED`、插件安装）。对 **41 零写入**。
+- **密钥不落仓**：本节与 `docs/开发进度.md` 都只写"取自 41 的哪个文件"，`grep` 仓库无明文。
+- 「运营在调试预览里**真的跑一次回答**」仍未做 —— 现在**只差那一次点击**（provider 已 Configured、
+  44 个模型可选）。这一条我没有代跑，因为它花的是**我们侧的模型额度**，且
+  **它就是运营要做的那个动作本身**（用户已在控制台里有账号）。
+
 ## #587 收尾取数（六）：把模型 provider 插件**装上**（2026-10-10，36 真机）
 
 **分支** `docs/stage1-plugin-installed`，基线 `origin/main` @ `2eb7e58`。
