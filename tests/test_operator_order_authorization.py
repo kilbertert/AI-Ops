@@ -591,3 +591,33 @@ def test_consumer_entry_keeps_self_for_a_tenant_level_account(monkeypatch: pytes
         platform_entry="consumer",
     )
     assert context.data_scope.type == SCOPE_TYPE_SELF
+
+
+def test_the_operators_own_consumer_order_is_not_visible_to_the_operator_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """同一账号两种身份对**同一张自己下的单**给出相反答案 —— 这是口径，不是缺陷。
+
+    产品 2026-10-10 裁定：管家端里「自己作为消费者下的单」**不应可见**。
+    运营商范围是**替换** ``self`` 而不是取并集，因此这两个集合不相交。
+
+    实测（41）：账号 ``13928110252`` 作为消费者有一张单，``consumer`` 入口 202、
+    ``operator`` 入口拒。这里把它钉成**断言不等**——将来若有人把两个范围改成并集，
+    本用例转红，那时要问的是「口径是否变了」，而不是直接接受这个改动。
+    """
+    order = {"order_no": ORDER_OWN_IN, "tenant_id": TENANT, "site_id": SITE_OUT, "user_id": C_USER_ID}
+    connection = Connection(orders=(order,))
+
+    # 同一张单、同一个 C 端用户：消费者入口按 self 可见……
+    consumer = consumer_session(monkeypatch)
+    consumer_authorizer = build_authorizer(monkeypatch, connection)
+    assert consumer_authorizer.can_access(consumer, ORDER_OWN_IN) is True
+
+    # ……管家入口按运营商站点集合判定，站点不在集合内 ⇒ 拒。
+    operator, _ = operator_session(monkeypatch, shop_ids=("SHOP-1",), sites={"SHOP-1": (SITE_IN,)})
+    operator_authorizer = build_authorizer(monkeypatch, connection)
+    assert operator_authorizer.can_access(operator, ORDER_OWN_IN) is False
+
+    # 两个范围是两种东西，不是一个的子集关系。
+    assert resolve_query_scope(consumer).user_id == C_USER_ID
+    assert resolve_query_scope(operator).user_id is None
