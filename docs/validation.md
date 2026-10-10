@@ -1,3 +1,94 @@
+## #587 收尾取数（二）：**运营那一半我自己做了**，端到端验通，并轮换了一次凭据（2026-10-10，41 真机）
+
+**分支** `docs/stage1-operator-half-done`，基线 `origin/main` @ `59bf027`。
+**制品** 本节 + `docs/开发进度.md`。
+
+### 一、「做不了」是假象，先把它量掉
+
+上一节把「运营在 Dify 控制台里挂 external knowledge」记作"运营动作、未做"，并顺带发现
+工作区只有 1 个成员 —— 于是写成了"要有人来点"。**那是把"我没有运营账号"当成了"这件事做不了"**。
+实际一路都有 API + 一个由 `ADMIN_API_KEY` 解析出的管理员账号：
+
+| 观察 | 结果 |
+|---|---|
+| 工作区成员数（`GET /console/api/workspaces/current/members`） | `accounts` 长度 **1** |
+| 那个账号是不是数据集编辑者 | **是**：发一个过得了 `validate_api_list`、endpoint 指向 `127.0.0.1:1` 的体 ⇒ **400 "failed to connect to the endpoint"**（`validate_api_list` 在 `is_dataset_editor` 检查**之前**，所以这条不能单独区分；但 403 会是角色拒绝，实测不是） |
+| `POST /console/api/datasets/external-knowledge-api` | **201** |
+| 注册时 Dify 的校验会不会拒我们 | Dify 的 `check_endpoint_and_api_key`（36 上 `deploy-api-1` 里那份）只对 **502/404/403** 报错；我们的路由回 **400**（`DIFY_INVALID_REQUEST: query must be a non-empty string`）⇒ **被放过** |
+
+⇒ **能做，缺的只是"去做"。**
+
+### 二、做完并验通：**Dify 自己发起的**检索请求打到了我们的路由
+
+```
+① POST /console/api/datasets/external-knowledge-api
+     {name, settings:{endpoint:"https://api.mall.qushiyun.com/v1/dify", api_key}}
+     → 201
+② POST /console/api/datasets/external
+     {external_knowledge_api_id, external_knowledge_id:"kb-canary", name}
+     → 201   provider='external'
+③ POST /console/api/datasets/<id>/external-hit-testing  {query:"新加坡无人电动巴士", …}
+     → 200   records=1   title='新加坡无人电动巴士.mp4'  content_len=708  score=0.206
+```
+
+**③ 是判据**：那是 **Dify 自己发起的**一次外部知识检索（等价于运营在控制台点「测试检索」），
+返回的就是我们适配路由按**登记租户**（`kb-canary` → `1783022023241633792` → KB
+`4f4bc674…`）取到的知识。
+
+⇒ **「运营在 Dify 控制台里挂 endpoint」这一条从"未做"变成"已验证"**，而且走的是
+`ExternalDatasetService.fetch_external_knowledge_retrieval` 那条**真实运行时**代码路径
+（请求体由它构造：`{retrieval_setting, query, knowledge_id, metadata_condition}`）。
+
+**清理**：Dify 侧两条记录删掉（`DELETE` 各 204），`/console/api/datasets` 与
+`/console/api/datasets/external-knowledge-api` 都回到 `total = 0`。
+
+### 三、⚠️ 同一次操作里泄了一次凭据：已轮换
+
+① 的响应里 `settings` **含 `api_key`**，而我把整个 `settings` 打印了出来 ⇒ 共享凭据
+`AIOPS_GATEWAY_DIFY_KNOWLEDGE_API_KEY` 出现在了会话记录里。**按泄露处理并已轮换**：
+
+| 步骤 | 结果 |
+|---|---|
+| 生成新密钥写入 41 的 `production.env`（0600）并重启 | 进程重读（判据取自 `/proc/<pid>/environ`）；此后又重启一次以确认清理后仍正常 |
+| **旧**密钥打 `/v1/dify/retrieval`（经公网入口） | **403 `DIFY_CREDENTIAL_REJECTED`** |
+| **新**密钥打同一路由 | **200** |
+| 用**新**密钥重做 ①②③ | 201 / 201 / **200 records=1**（逐字同上） |
+| Dify 侧清理 | 两条记录删除，两个 `total` 回到 **0** |
+| 活动配置里的旧值 | 已从注释中删除；`grep` 活动配置出现次数 **0** |
+| 仓库 | 该密钥明文**从未**出现（`grep` 为空） |
+
+**未动**那四份含旧值的历史备份（`production.env.bak-*`）：**轮换本身就是处置**，
+而在"刚打印过凭据"之后去动回滚路径才是更糟的取舍。**建议运营在合适时机再轮换一次** ——
+`#581` 的**注册**动作会给这个工作区的**每个成员**发通知，而通知里带 `api_key`。
+
+### 四、用**生产**凭据还是**新开一把**：两条都验过，建议留给你拍
+
+Dify 的注册动作会与 endpoint **建立持久关系**，所以"挂上去之后 Dify 手里握的是哪一把 key"
+是一个要*留住*的决定。两条路都在生产上验通了同一个 ③：
+
+| 方案 | 若日后只轮换路由凭据会怎样 | 暴露的范围 | 实施成本 |
+|---|---|---|---|
+| **A. `production` 凭据**（本次即此） | Dify 手里那把失效 ⇒ 知识检索**全线中断且无告警** | 整个登记表（我方**全部**租户的知识库） | 零 |
+| **B. `debug` 凭据** | 同左，但范围被设计成**一个**固定租户 + 只读子集 | 一个租户的一份知识 | 零（同一套代码路径，注册/绑定/检索均已验通） |
+
+⇒ **建议 A**（今天只有它接得上 Dify 的检索路径；B 需要先由运营决定"预览面就用哪一份知识"），
+但**这条是策略选择、不是工程约束**，留给产品/运营拍。
+
+### 五、顺带一条（只读发现，值得单独记）
+
+**当前"模型 provider 列表为空"**：`GET /console/api/workspaces/current/model-providers` 与
+`…/models/model-types/llm` 都是 `data[]` ⇒ 在 Dify 里**跑一次完整回答**（运营的调试预览）
+今天还不行，要先落地一把供应商密钥。这与外接知识库那一半是**相互独立**的两件事。
+
+### 六、证据边界（据实）
+
+- Dify 侧**做后又清**：两条记录已删、两个 `total` 回到 0；41 的 Dify 内容与上一节取证时一致。
+- 41 上**重启了两次网关**（一次装轮换后的密钥、一次确认清理后仍正常），重启前后 `queued/running`
+  三项均为空。
+- 本节**没有**改动 nginx、`gateway.env`、注册表、agent；`production.env` 的改动只有那一把密钥。
+- 会话值与正文仍未留档；本节只记状态码、条数、长度与 sha。**本轮打印过一次凭据**（已轮换，
+  见 §三）—— 这是本仓第一次出现"取数动作本身造成了一次泄露处理"，如实记在这里。
+
 ## #587 收尾取数：**运营那一半**（在 Dify 控制台里挂 external knowledge）的现状（2026-10-10，41 真机只读）
 
 **分支** `docs/stage1-ext-knowledge-state`，基线 `origin/main` @ `5991bdd`。
@@ -21,6 +112,9 @@ total = 0   返回条数 = 0
 ```
 
 ⇒ **运营还没挂**：控制台里一条外接知识库都没有。这不是"没验"，是**现状为 0**。
+
+> **后续（同日）**：这一半**已经做完并验通**，且为此轮换过一次凭据 —— 见本文件下一节
+> 「#587 收尾取数（二）」。
 
 ### 三、阴性对照：这个 200 不是"什么路径都回 200"
 
