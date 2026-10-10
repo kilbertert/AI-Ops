@@ -8,10 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Give the gateway's own log lines a destination — `uvicorn.run()` was the only
+  logging configuration and it never touched the root logger, so every `aiops.*`
+  INFO line was dropped (measured: zero in 41's whole journal) (#636)
+- Tell an operator account with no site binding that its ACCOUNT sees no orders,
+  instead of that the ORDER is not its own (#637)
 - Keep Dify's own Authorization at the public entry so its key reaches the adapter (#614)
 - Rebind the Dify adapter's kb search to the registered tenant (#612)
 
 ### Added
+- Give every clarification reply a stable, non-localized code — same string in
+  the response body, the metric row and the log line (#636)
 - Add `aiops admin pull-dify`: fetch a Dify app's export and publish it through our gate (#625)
 - Add the versioned starters artifact and `GET /v1/assistant/starters` (#585)
 - Add a Dify debug identity: credential-chosen, fixed test tenant, read-only subset (#586)

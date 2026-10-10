@@ -182,9 +182,9 @@ AI-Ops 用独立服务身份回查——见 [ADR-0003](docs/adr/0003-bff-delegat
 
 ```mermaid
 flowchart TB
-    L6["L6 服务边界与入口<br/>gateway_api · gateway_runtime · cli · gateway_server · gateway_cli<br/>gateway_client · admin_cli · gateway_config · gateway_tokens<br/>tdengine_proxy · responses_adapter · codex_launcher"]
+    L6["L6 服务边界与入口<br/>gateway_api · gateway_runtime · cli · gateway_server · gateway_cli<br/>gateway_client · admin_cli · gateway_config · gateway_tokens · gateway_logging<br/>tdengine_proxy · responses_adapter · codex_launcher"]
     L5["L5 持久化<br/>gateway_store · conversation_store · metrics_store<br/>agent_lifecycle · shortcut_lifecycle · dify_app_registry"]
-    L4["L4 推理与产品能力<br/>agent_engine · codex_runtime · agent_runner · agent_validator · qa_rag<br/>turn_recovery · routing · faq · promo_agents · answer_language · agent_manifest · agent_debug<br/>dify_dsl_pull · dify_knowledge_api · dify_debug_identity · agent_content"]
+    L4["L4 推理与产品能力<br/>agent_engine · codex_runtime · agent_runner · agent_validator · qa_rag<br/>turn_recovery · routing · faq · promo_agents · answer_language · agent_manifest · agent_debug<br/>dify_dsl_pull · dify_knowledge_api · dify_debug_identity · agent_content · clarification"]
     L3["L3 证据与诊断内核<br/>sources · diagnostic_tools · engine · journal<br/>agent_workspace · health_report · knowledge_retrieval · zero_order"]
     L2["L2 身份与范围<br/>scope_context · query_scope · caller_auth · third_session_auth<br/>company_token_auth"]
     L1["L1 领域规则（纯函数）<br/>rules · order_visibility · health_metrics · health_curves · parsing"]
@@ -308,6 +308,7 @@ flowchart TB
 | `dify_debug_identity.py` | 面向 Dify 的**调试身份**（#586 / PRD #577）：**凭据决定身份**，请求里的任何字段都不参与判定。生产凭据 = 登记表全量；调试凭据 = 固定测试租户 + 显式列出的知识库子集。身份只**收窄**，从不扩张；子集为空即**什么都取不到**（不是『不收窄』）；越权与未登记同为 404 |
 | `dify_dsl_pull.py` | Dify 侧配置的**拉取**面（#580 / PRD #577）：从控制台导出端点取已导出 DSL，映射为 `AgentConfig` 并以**草稿**落地（经 `AgentManager`，绝不发布）。只消费 `pre_prompt` / `model.name` / `dataset_configs` 数据集 id；`opening_statement` 与 `suggested_questions` **不消费**（其权威来源是按语言版本化的内容制品，见姊妹票 #585）。拉取失败（不可达 / 凭据被拒 / DSL 版本不符 / 字段不可映射）各自一个错误码，且**不留下半成品草稿** |
 | `shortcut_migration.py` | 租户复制快捷动作 → 平台默认的幂等迁移 |
+| `clarification.py` | 澄清类答复的**判别位**（#636）：每种成因一个稳定、非本地化的 `CLARIFY_*` 码，同一条码在**响应体、指标行、结构日志**三处是同一个串。此前六个分支共用一句本地化 `message` 与一个不分细分的 `route_type='clarification'` 指标行，排查只能靠把每条分支跑一遍量字节数（且不成立）。码决定 `missing_fields` 与文案键，所以答复不可能自相矛盾；未登记的码是错误而不是默认值 |
 
 #### L5 持久化（同一个 SQLite 文件，各自建表）
 
@@ -332,6 +333,7 @@ flowchart TB
 | `gateway_server.py` | `aiops-gateway`：`serve`、一次性注册码签发、设备管理 |
 | `gateway_cli.py` / `gateway_client.py` | `aiops remote …` 客户端子应用与它的 stdlib HTTP 客户端 |
 | `gateway_config.py` / `gateway_tokens.py` | Gateway 服务端设置与客户端 profile/令牌的磁盘持久化 |
+| `gateway_logging.py` | 网关自身日志的去处（#636）：**在这一模块之前，网关根本没配过 logging** —— uvicorn 只给 `uvicorn*` 挂 handler，root 停在 WARNING 且无 handler，于是 `aiops.*` 的 INFO 行一行都没出去过（41 实测 0 行），能出去的 WARNING 走 `lastResort`、形态是不带级别前缀的一行。本模块给 **root** 挂 handler、给我们的两个命名空间设级别（第三方不被带着一起变啰嗦），级别由 `AIOPS_GATEWAY_LOG_LEVEL` 定、写错是启动失败 |
 | `admin_cli.py` | `aiops admin …`：声明式环境清单收敛（`reconcile`）、快捷动作迁移 |
 | `tdengine_proxy.py` | `aiops-tdengine-proxy`：TDengine 前的严格只读 SQL 白名单代理 |
 | `responses_adapter.py` | `aiops-responses-adapter`：修复上游 Responses API 的两个兼容缺口（缺失 item `status`、grammar 与 tools 冲突），对客户端完全透明 |
