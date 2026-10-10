@@ -90,3 +90,33 @@ model = "deepseek-v4-flash"
 output_contract = "blocks-v1"
 opening_questions = ["我想看看客户案例"]
 quick_commands = ["客户案例"]
+
+# 运行时注册表（#584 / PRD #577）：`(租户, 入口) → 我们侧 agent 名`。
+#
+# ⚠️ **这一节是 fail-closed 的**：表里只要有**任何一行**，未登记的 `(租户, 入口)`
+# 就什么都不选（`retrieval_status="unavailable"`），既不会回退到"最新已发布"，
+# 也不会落到零阶回答。所以"加一行"是**整台主机的一次开关**，不是局部改动。
+# 会把谁的答案改成什么，见 `tools/dify_registry_blast_radius.py` 与 `docs/validation.md`
+# 的 #587 两节（爆炸半径 / 开表取证）。
+#
+# 为什么两行必须**一起**写：线上租户 `1942105476598861824` 也在未登记那一侧。
+# 只写验收租户那一行，等于在生产上把线上租户的客服回答拿走。
+#
+# `app_id` 的现状（**如实记**）：控制台里三个 app 都叫 `dify-dsl-fixture`，只有
+# `a975c8e5-…` 能导出 DSL；三个租户 agent 的 prompt 与它们**没有一个是逐字相同的**
+# （也就是它们并不是从 Dify 拉来的）。运行时**不读** `app_id`（只看 `agent_name`），
+# 所以这一列今天是一个句柄，不是"运行时会去拉的那个 app"。
+#
+# 顺序（先 --dry-run 再真跑）与验收见 `docs/agents/env-41-runbook.md`。
+
+[[dify_apps]]
+tenant_id = "1783022023241633792"
+business_entry = "consumer"
+app_id = "a975c8e5-ad9e-425c-84c9-77581a0a2bed"
+agent_name = "canary-客服"
+
+[[dify_apps]]
+tenant_id = "1942105476598861824"
+business_entry = "consumer"
+app_id = "a975c8e5-ad9e-425c-84c9-77581a0a2bed"
+agent_name = "canary-客服"
