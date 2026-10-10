@@ -51,6 +51,100 @@
 - 会话值与正文**未留档**；凭据未打印、未入仓。
 - 「运营**本人**在浏览器里点」仍未验（本轮是脚本驱动真浏览器；判据要的"界面可用 + 改动落库"
   已分别验过）。
+## #676 终验 1.7.7：出 PR 而不是报「no commits」（2026-10-10，真实 AFK run）
+
+**分支** `agent/issue-676-ticket-1-7-7-pr-no-commits`，基线 `origin/main` @ `0f54c6c`。
+**制品** 本节 + 提交 body（原始工具返回与命令输出）。**只取证，不改产品代码。**
+
+### 一、1.7.7 的修复点就是「按分支名数提交」
+
+`.sandcastle/implement/implement.ts:29-34`（本分支实测）：
+
+```ts
+const commitsAhead = Number(
+  execSync(`git rev-list --count "origin/main..${BRANCH}"`, { encoding: "utf8" }).trim()
+);
+if (!Number.isFinite(commitsAhead) || commitsAhead === 0) {
+  fail("Agent finished but no commits were made on the branch.");
+}
+```
+
+对比 1.7.7 之前的写法 `git rev-list --count main..HEAD`：runner 在独立 worktree 里干活，
+而 sandcastle 的 `branch` 策略在**宿主 checkout**（停在 `main`）上收尾，读 `HEAD` 恒为 0，
+于是 agent 提交了却被判「no commits」并标 `agent:blocked`。改成点名 `$BRANCH` 后，
+分支 ref 在 worktree 间共享，与宿主此刻在哪个分支无关。
+
+### 二、本 run 的 worktree 身份（1.7.4/1.7.6 的隔离前提）
+
+```
+git rev-parse --show-toplevel   → /home/agent/workspace
+git rev-parse --abbrev-ref HEAD → agent/issue-676-ticket-1-7-7-pr-no-commits
+cat .git                        → gitdir: /home/claude/Projects/_runners/AI-Ops-runner/
+                                   _work/AI-Ops/AI-Ops/.git/worktrees/
+                                   agent-issue-676-ticket-1-7-7-pr-no-commits
+git rev-parse --is-inside-work-tree → true
+```
+
+即本 session 是 **1.7.7 的 in-flight run `38069110783` 自己的沙箱**：agent 在
+`.sandcastle/worktrees/` 下的隔离 worktree 里提交，宿主 checkout 仍停在 `main`。
+这正是「宿主 `main..HEAD` = 0、而 `main..$BRANCH` ≥ 1」的那对数值 —— 1.7.7 修复的判据。
+
+### 三、两个 MCP server 一次调用取证（#657/#664/#670 同款）
+
+`mcp__serena__find_symbol(name_path_pattern="ScopeContext")` —— 首次调用即命中：
+
+```
+[{"name_path":"ScopeContext","kind":"Class",
+  "relative_path":"src/aiops_diagnostics/scope_context.py",
+  "body_location":{"start_line":245,"end_line":315}}]
+```
+
+serena 自己的 MCP 日志（`~/.serena/logs/2026-10-10/mcp_20261010-165109_207.txt`）记下同一次
+调用与返回，可复现；`Task-2:FindSymbolTool completed in 7.508 seconds`。
+
+**行号基座（实测）**：`body_location` 为 **0-based**。`start_line=245` 对应文件第 246 行
+`@dataclass(frozen=True, slots=True)`，`end_line=315` 对应第 316 行的类结尾 `}`。
+
+`mcp__codebase-memory-mcp__search_graph(query="ScopeContext")`（`project="home-agent-workspace"`）：
+
+```
+total = 4（has_more=false）
+第一条 file_path = "src/aiops_diagnostics/scope_context.py"
+qualified_name   = "home-agent-workspace.src.aiops_diagnostics.scope_context.ScopeContext.build"
+```
+
+图非空：`list_projects` → `nodes=9211, edges=35111, status="ready"`，branch = 本分支。
+codebase-memory 的 MCP 日志（`~/.cache/claude-cli-nodejs/…/mcp-logs-codebase-memory-mcp/`）
+记 `Tool 'search_graph' completed successfully in 23ms`。
+
+> 注：第一次调用误传 `project="AI-Ops"` 被拒 —— 返回
+> `{"error":"project not found or not indexed","available_projects":["home-agent-workspace"]}`。
+> **索引项目名是 `home-agent-workspace`（按 workspace 根路径派生），不是仓库名 `AI-Ops`。**
+
+### 四、本 run 实跑的确定性检查
+
+```
+node .sandcastle/repo-map.check.mjs          → repo-map check ok (134 lines)
+npx tsx .sandcastle/sandbox-prepare.check.ts → sandbox-prepare check ok
+npx tsx .sandcastle/mcp-config.check.ts      → 未跑通：EBUSY rename /home/agent/.afk-mcp.json
+```
+
+`mcp-config.check.ts` 失败点在 `writeMcpConfig` 落盘 `/home/agent/.afk-mcp.json` 时
+`EBUSY: resource busy or locked` —— 该文件是宿主只读挂入沙箱的（见 `docs/afk-workflow.md`
+「模型 provider」），沙箱内不可改名重写。这**不是** 1.7.7 的回归，属检查脚本在只读挂载上
+的既有约束，本轮**据实记下、未修复**（本票不改产品代码）。
+
+### 未完成 / 边界
+
+- **未完成业务验收**：本轮不改 `aiops-gateway` 的对外行为（路由、鉴权、注册、响应形状），
+  `verify-aiops-gateway` skill **不适用**，未运行。
+- 只证明**本容器本 run** 结论成立，不外推到其它宿主或并发 run。
+- 交付检查：`uv run pytest` → **2052 passed, 1 failed, 11 skipped**；失败项
+  `tests/test_i18n.py::test_no_implicit_string_join_glues_two_words_together` 指向
+  `src/aiops_diagnostics/agent_engine.py:310`，落在**未改动的上游代码**（**证据以 CI 为准**）。
+  `uv run ruff check` 全过。
+- 本轮无运维命令（无 ssh/redis-cli/systemctl 等），操作知识自检无需新增手册。
+
 
 ## #587 收尾两件：Dify 侧改用**官方 DeepSeek key**（与网关那把隔离）+ 关回插件市场（2026-10-11，36 真机）
 
