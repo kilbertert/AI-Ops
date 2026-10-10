@@ -1,3 +1,105 @@
+## #636 + #637 澄清答复的判别位，与网关自己日志的去处（2026-10-10，41 真机复现）
+
+**分支** `fix/clarification-codes-and-logging`，基线 `origin/main` @ `39a0adb`。
+**制品** `src/aiops_diagnostics/clarification.py`（新）+
+`src/aiops_diagnostics/gateway_logging.py`（新）+ `gateway_api.py`（六个分支收敛到一处）+
+`gateway_config.py`（`AIOPS_GATEWAY_LOG_LEVEL`）+ `gateway_server.py`（`log_config=None`）+
+`i18n.py`（`account_no_sites` 11 语言）+ `.env.example` / `README.md`；
+`tests/test_clarification_codes.py`（7 例）、`tests/test_gateway_logging.py`（8 例）。
+
+### 一、#636 要的那个判别位，为什么不能是文案
+
+一次澄清在生产上只留下**一句本地化 `message`** 与一行 `route_type='clarification'`
+指标 —— `missing_fields` 描述的是"要客户端补什么"（`order_no`/`context`/`language`），
+不是"走的哪条分支"，而六条分支里有三条共用 `["order_no"]`。上一轮的排查因此退化成
+**把每条分支跑一遍量消息字节数**，而这个手段本身不成立：同一个 200 可以是任何一条。
+
+修法是给每种成因一个稳定、非本地化的码，且**同一条码在响应体、指标行、结构日志三处是同一个串**：
+
+| 码 | 触发分支 | `missing_fields` |
+|---|---|---|
+| `CLARIFY_WRONG_ENTRY` | 点了跳转动作却打到助手入口 | `[]` |
+| `CLARIFY_ORDER_REQUIRED` | 与订单绑定的动作没带订单号 | `["order_no"]` |
+| `CLARIFY_CONTEXT_REQUIRED` | 钱相关问题缺上下文 | `["context"]` |
+| `CLARIFY_ORDER_NOT_YOURS` | 指名了订单但调用者看不见它 | `[]` |
+| `CLARIFY_ACCOUNT_HAS_NO_SITES` | 账号的可见站点集合为空（#637） | `[]` |
+| `CLARIFY_LANGUAGE_UNROUTABLE` | 这门语言能渲染不能路由（th/km） | `["language"]` |
+
+**码决定 `missing_fields` 与文案键**（`clarification.py` 的登记表），所以答复不可能
+出现"码说一套、`missing_fields` 说另一套"。未登记的码是 `ValueError`，不是默认值。
+第六行那条分支**此前连指标行都没有** —— 这正是"只有指标"也读不出来的原因。
+
+指标行复用既有的 `error_code` 列。**它不是错误，这是有意的复用**：那一列本来就是该行
+的机器可读判别位，改名要动每一个读它的地方，而"和其他五条一模一样"才是本票要修的缺陷。
+
+### 二、#637：账号没有可见站点，说的话就不该是关于订单的
+
+空站点集合的运营商账号（`sys_user_shop` 0 行）拿到的文案是「这个订单不属于当前账号」——
+**指错了方向**：用户去翻自己的订单列表（那里也是空的）、运营去看订单归属（订单没问题），
+而真正该做的**给账号补店铺绑定**从那句话里推不出来。产品就是这么被绕进去的。
+
+判据落在身份层已经决定好的 `caller.data_scope` 上：`organ` 范围且 `site_ids == ()`
+就是"这个账号看不到任何站点"，而 `scope_where_sql` 正是把这个集合渲染成 `1=0`。
+**刻意收窄**：`site_ids is None` 是租户内不限（不取这条分支），顶层账号（`type ∈ {-1,1}`）
+根本不会得到 `organ` 范围（#628），对它们"没有站点"是正常的，订单那句话仍然成立。
+
+文案 `account_no_sites` 补齐 **11 语言**，并给出可行动的下一步（找管理员补绑定），
+不承诺"换个订单就能用"。一条用例逐语言断言两条文案**互不相同** —— 相同就等于没分。
+
+### 三、#636 的另一半：日志根本没有去处（41 真机复现）
+
+`uvicorn.run()` 带来的 `LOGGING_CONFIG` **只给 `uvicorn*` 挂 handler**，root 停在
+WARNING 且**没有 handler**；我们的模块 logger 没设级别、向上传播 —— 于是 `aiops.*`
+的 INFO 行**创建了就被丢掉**。在 **41 上、用 41 的 Python 3.12.3 与 uvicorn 0.52.1**
+把两种配置各跑一遍，同两条日志：
+
+```
+python 3.12.3 uvicorn 0.52.1
+① uvicorn 自己的配置        -> ''                    有 INFO 行吗: False
+② configure_gateway_logging -> 'INFO aiops.gateway faq_platform_decision platform=consumer\n
+                                WARNING aiops.gateway operator_site_scope_empty reason=no_shop_binding\n'
+                              有 INFO 行吗: True
+```
+
+**两条线索在这里合上**：41 的 journal 里 `aiops.` 前缀的行数是 **0**，而
+`company JWT signature key is shorter …` 那条 **WARNING** 却出现了、且**不带级别前缀** ——
+它走的是 `logging.lastResort`（Python 在"哪里都没配 handler"时挂的那个），
+而 `lastResort` 的级别是 WARNING。INFO 在任何一个 handler 被咨询之前就被挡掉了。
+
+修法是给 **root** 挂 handler、给我们两个命名空间（`aiops`、`aiops_diagnostics` ——
+三处用的是 `getLogger(__name__)`）设级别，**root 保持 WARNING**，所以调高我们的
+啰嗦程度不会把第三方依赖一起放开；`serve()` 里传 `log_config=None`（Python 文档给的
+"自己配日志再交给 uvicorn"的做法），否则 uvicorn 的 `dictConfig` 会把刚装的 handler 换掉。
+级别由 `AIOPS_GATEWAY_LOG_LEVEL` 定，默认 `INFO`（就是代码一直假定的那一级），
+**写错是启动失败**（`validate()` 里解析一次）而不是静默落回默认。
+
+### 四、判据与变异实测
+
+| 判据 | 结果 | 怎么证的 |
+|---|---|---|
+| 三种成因产生三个不同的码 | ✅ | `test_clarification_codes.py` 经**网关 HTTP 面**（真实 `ScopedOrderAuthorizer`）驱动 |
+| 响应体的码 == 那一行指标的码 | ✅ | 记录型运行时替身收到 `{route_type: clarification, error_code: <同一个码>}` |
+| 空站点账号得到"账号"那条，**不是**"订单"那条 | ✅ | 正反各一条：有站点的账号仍得订单那句 |
+| 两种成因在**响应体**上可区分（不只靠日志） | ✅ | 断言的是 `body["code"]` 与 `body["message"]`，不是日志 |
+| 拆回去就转红 | ✅ | 把 `CLARIFY_ACCOUNT_HAS_NO_SITES` 改回订单码 ⇒ **2 条红** |
+| 指标行不带码就转红 | ✅ | 去掉 `error_code=code` ⇒ **1 条红** |
+| 响应体去掉 `code` 就转红 | ✅ | 去掉该键 ⇒ **3 条红** |
+| INFO 真的被投递 | ✅ | `tests/test_gateway_logging.py`（8 例）；**41 上对照实测**见 §三 |
+| 去掉 root handler 就转红 | ✅ | 变异回 uvicorn 形态 ⇒ **2 条红** |
+
+全量：`PYTHONPATH=$PWD/src python -m pytest -p no:warnings` → **2047 passed, 9 skipped**。
+
+### 五、证据边界与遗留（据实）
+
+- **未部署到 41**：`production.env` / `gateway.env` 里**没有** `AIOPS_GATEWAY_LOG_LEVEL`
+  （不必有，默认即 INFO）。部署后 `clarification_answered` 与既有的
+  `operator_site_scope_empty` 才会真的进 journald。
+- **11 语言的 `account_no_sites` 是工程起草 + 译稿，产品未过目**（与 #620 的 `not_yours`
+  同一状态，按 #534 用户故事 20：未经确认的语言不算已验收）。
+- **#637 的上游成因未修**：账号没有店铺绑定这件事本身仍是运营动作（#619 是公司侧那条）。
+- **`error_code` 复用不是错误语义**：这一列现在同时承载真错误码与澄清分类码。若要区分
+  "真失败"，判据是 `route_type` + 是否 `completed`，不是这一列是否非空。
+
 ## #587 阶段 1 收口前的取数：注册表开关的爆炸半径（2026-10-10，41 真机只读）
 
 **分支** `docs/stage1-registry-blast-radius`，基线 `origin/main` @ `39a0adb`。

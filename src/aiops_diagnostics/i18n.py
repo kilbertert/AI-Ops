@@ -496,12 +496,18 @@ CLARIFICATION_MESSAGES: dict[str, dict[str, str]] = {
         "context": "请补充订单或设备等必要信息后，我才能继续处理。",
         "wrong_entry": "请点击页面上的快捷按钮进入对应页面。",
         "not_yours": "这个订单不属于当前账号，我无法为它做检测。请从订单列表里选择自己的订单后再试。",
+        "account_no_sites": (
+            "当前账号还没有绑定任何门店或站点，所以看不到订单。请联系管理员为该账号补上门店绑定。"
+        ),
     },
     "zh-Hant": {
         "order_no": "請先選擇需要檢測的訂單後，我才能繼續處理。",
         "context": "請補充訂單或裝置等必要資訊後，我才能繼續處理。",
         "wrong_entry": "請點選頁面上的快捷按鈕進入對應頁面。",
         "not_yours": "這個訂單不屬於目前帳號，我無法為它做檢測。請從訂單清單中選擇自己的訂單後再試。",
+        "account_no_sites": (
+            "目前帳號還沒有綁定任何門店或站點，因此看不到訂單。請聯繫管理員為該帳號補上門店綁定。"
+        ),
     },
     "en": {
         "order_no": "Please select the order you want checked before I can continue.",
@@ -511,6 +517,10 @@ CLARIFICATION_MESSAGES: dict[str, dict[str, str]] = {
             "This order does not belong to the current account, so I cannot check it. "
             "Please pick one of your own orders and try again."
         ),
+        "account_no_sites": (
+            "This account has no store or site binding yet, so no orders are visible to it. "
+            "Please ask an administrator to add the store binding for this account."
+        ),
     },
     "de": {
         "order_no": "Bitte wählen Sie zuerst den zu prüfenden Auftrag aus, damit ich fortfahren kann.",
@@ -519,6 +529,11 @@ CLARIFICATION_MESSAGES: dict[str, dict[str, str]] = {
         "not_yours": (
             "Dieser Auftrag gehört nicht zum aktuellen Konto; ich kann ihn nicht prüfen. "
             "Bitte wählen Sie einen eigenen Auftrag."
+        ),
+        "account_no_sites": (
+            "Dieses Konto hat noch keine Filial- oder Standortzuordnung, daher sind für es "
+            "keine Aufträge sichtbar. Bitte bitten Sie einen Administrator, die "
+            "Filialzuordnung zu ergänzen."
         ),
     },
     "fr": {
@@ -531,6 +546,10 @@ CLARIFICATION_MESSAGES: dict[str, dict[str, str]] = {
             "Cette commande n'appartient pas au compte actuel, je ne peux donc pas la vérifier. "
             "Veuillez choisir l'une de vos commandes."
         ),
+        "account_no_sites": (
+            "Ce compte n'est associé à aucun magasin ni site : aucune commande ne lui est "
+            "visible. Veuillez demander à un administrateur d'ajouter cette association."
+        ),
     },
     "es": {
         "order_no": "Seleccione primero el pedido que desea revisar para que yo pueda continuar.",
@@ -539,6 +558,10 @@ CLARIFICATION_MESSAGES: dict[str, dict[str, str]] = {
         "not_yours": (
             "Este pedido no pertenece a la cuenta actual, así que no puedo comprobarlo. "
             "Elija uno de sus pedidos."
+        ),
+        "account_no_sites": (
+            "Esta cuenta aún no tiene ninguna tienda o sede asociada, por lo que no ve "
+            "ningún pedido. Pida a un administrador que añada la asociación de tienda."
         ),
     },
     "pt": {
@@ -549,6 +572,10 @@ CLARIFICATION_MESSAGES: dict[str, dict[str, str]] = {
             "Este pedido não pertence à conta atual, por isso não o posso verificar. "
             "Escolha um dos seus pedidos."
         ),
+        "account_no_sites": (
+            "Esta conta ainda não tem nenhuma loja ou local associado, por isso não vê "
+            "pedidos. Peça a um administrador para adicionar a associação de loja."
+        ),
     },
     "vi": {
         "order_no": "Vui lòng chọn đơn hàng cần kiểm tra trước khi tôi tiếp tục.",
@@ -558,6 +585,10 @@ CLARIFICATION_MESSAGES: dict[str, dict[str, str]] = {
             "Đơn hàng này không thuộc tài khoản hiện tại nên tôi không thể kiểm tra. "
             "Vui lòng chọn một đơn hàng của bạn."
         ),
+        "account_no_sites": (
+            "Tài khoản này chưa được gán cửa hàng hoặc địa điểm nào nên không thấy đơn "
+            "hàng nào. Vui lòng đề nghị quản trị viên thêm liên kết cửa hàng cho tài khoản này."
+        ),
     },
     "mn": {
         "order_no": "Үргэлжлүүлэхийн тулд эхлээд шалгах захиалгаа сонгоно уу.",
@@ -566,21 +597,32 @@ CLARIFICATION_MESSAGES: dict[str, dict[str, str]] = {
         "not_yours": (
             "Энэ захиалга одоогийн бүртгэлд хамаарахгүй тул шалгах боломжгүй. Өөрийн захиалгаа сонгоно уу."
         ),
+        "account_no_sites": (
+            "Энэ бүртгэлд дэлгүүр эсвэл цэгийн холбоос хараахан байхгүй тул ямар ч "
+            "захиалга харагдахгүй байна. Тухайн бүртгэлд дэлгүүрийн холбоос нэмэхийг "
+            "админд хүснэ үү."
+        ),
     },
     "th": {
         "order_no": "กรุณาเลือกคำสั่งซื้อที่ต้องการตรวจสอบก่อน เพื่อให้ฉันดำเนินการต่อได้",
         "context": "กรุณาให้ข้อมูลคำสั่งซื้อหรืออุปกรณ์ เพื่อให้ฉันดำเนินการต่อได้",
         "wrong_entry": "กรุณาใช้ปุ่มบนหน้าเพื่อเปิดหน้าจอที่เกี่ยวข้อง",
         "not_yours": "คำสั่งซื้อนี้ไม่ใช่ของบัญชีปัจจุบัน ฉันจึงตรวจสอบให้ไม่ได้ กรุณาเลือกคำสั่งซื้อของคุณเอง",
+        "account_no_sites": (
+            "บัญชีนี้ยังไม่ได้ผูกกับร้านค้าหรือสถานที่ใด จึงไม่เห็นคำสั่งซื้อใด ๆ กรุณาแจ้งผู้ดูแลระบบให้เพิ่มการผูกสาขาให้บัญชีนี้"
+        ),
     },
     "km": {
         "order_no": "សូមជ្រើសរើសការបញ្ជាទិញដែលត្រូវពិនិត្យជាមុនសិន ដើម្បីឱ្យខ្ញុំបន្តបាន",
         "context": "សូមផ្តល់ព័ត៌មានការបញ្ជាទិញ ឬឧបករណ៍ ដើម្បីឱ្យខ្ញុំបន្តបាន",
         "wrong_entry": "សូមប្រើប៊ូតុងនៅលើទំព័រ ដើម្បីបើកអេក្រង់ដែលពាក់ព័ន្ធ",
         "not_yours": ("ការបញ្ជាទិញនេះមិនមែនជារបស់គណនីបច្ចុប្បន្នទេ ខ្ញុំមិនអាចពិនិត្យវាបានឡើយ។ សូមជ្រើសរើសការបញ្ជាទិញរបស់អ្នក។"),
+        "account_no_sites": (
+            "គណនីនេះមិនទាន់ភ្ជាប់ជាមួយហាង ឬទីតាំងណាមួយទេ ដូច្នេះមិនឃើញការបញ្ជាទិញណាមួយឡើយ។ "
+            "សូមស្នើអ្នកគ្រប់គ្រងបន្ថែមការភ្ជាប់ហាងសម្រាប់គណនីនេះ។"
+        ),
     },
 }
-
 CLARIFICATION_FALLBACK_KEY = "context"
 
 # The zero-order assistant's closing hint. It is emitted by the MODEL (the

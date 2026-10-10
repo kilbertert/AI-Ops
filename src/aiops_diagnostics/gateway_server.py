@@ -9,6 +9,7 @@ from rich.console import Console
 from aiops_diagnostics.console_encoding import configure_windows_stdio
 from aiops_diagnostics.gateway_api import create_gateway_app
 from aiops_diagnostics.gateway_config import GatewayServerSettings
+from aiops_diagnostics.gateway_logging import configure_gateway_logging
 from aiops_diagnostics.gateway_store import GatewayStore
 
 configure_windows_stdio()
@@ -32,13 +33,21 @@ def serve(
     if port:
         settings.port = port
     settings.validate()
+    # After validate(): a bad log level is a startup error like any other bad
+    # setting, and it must fail before the port is taken rather than after.
+    configure_gateway_logging(settings.log_level)
     gateway = create_gateway_app(settings=settings)
+    # `log_config=None` keeps uvicorn from calling `dictConfig` over ours —
+    # Python's documented recipe for "configure logging yourself, then hand
+    # control to uvicorn". Without it uvicorn's config replaces the root
+    # handler we just installed and the drop comes straight back.
     uvicorn.run(
         gateway,
         host=settings.bind_host,
         port=settings.port,
         proxy_headers=False,
         server_header=False,
+        log_config=None,
     )
 
 
