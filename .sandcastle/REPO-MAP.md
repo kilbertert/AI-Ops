@@ -18,6 +18,20 @@ accurate at the moment it is generated and at the moment the commit lands.
 
 ## Entry points
 
+## Code intelligence
+
+A knowledge graph of this repository is available in the sandbox under the MCP server
+`codebase-memory-mcp`. The project name is **not** the directory name — pass it as
+`project`, or the server answers `project not found`:
+
+```json
+{"project": "AI-Ops", "query": "..."}
+```
+
+It maps symbols to files and line numbers (`search_graph`, `get_code_symbols`,
+`trace_path`). `serena` answers the same questions from the language server and needs
+no project argument. Both answer *where* something is; neither replaces reading it.
+
 - script "afk": tsx .sandcastle/main.ts (package.json)
 - script "ralph": tsx .sandcastle/planner.ts (package.json)
 - script "afk:policy": node .sandcastle/policy-check.mjs all (package.json)
