@@ -1,3 +1,154 @@
+## #587 判据一收口：**真实终端用户 × 生产公网入口 × Dify 来源的已发布版本**（2026-10-10，41 真机）
+
+**分支** `docs/stage1-dify-sourced-entry-evidence`，基线 `origin/main` @ `597d0c9`。
+**制品** 本节 + `docs/agents/current-delivery-state.md`。**不改代码**。
+
+### 一、这一节把此前分开的两半接上了
+
+此前每一半都单独成立过，但**从没在同一件事上**成立过：
+
+| 此前 | 成立了什么 | 缺的那一半 |
+|---|---|---|
+| 真实用户经生产入口 | 入口那一跳 + 非中文派生（真实 Redis 会话，`1961353704485687296`） | 走的是该租户**自己的** `canary-客服`，**不是** Dify 来源的版本 |
+| Dify 来源的版本被服务 | 第三/四跳（`canary-dify-pull` v2，`retrieval_status: found`） | 提问是**合成**的，且被服务的版本是「最新已发布」这条**旧规则**选中的，不经 Dify 来源这个事实去过 |
+| 注册表映射 | 可区分、fail closed（生产库副本） | 判据落在**运行时那道门**上，不是响应体；库还是副本 |
+
+这一节把三件事放进**同一次运行**：一个真实终端用户身份、经**生产公网入口**、
+被一个**从 Dify 控制台拉来、经我方发布门冻结**的版本服务，并把「服务它的就是这个版本」
+用**两个独立的生产事实**钉住。
+
+### 二、四步（前三步在 41 上，都是生产路径）
+
+| 步 | 动作 | 结果 |
+|---|---|---|
+| ① | `aiops admin pull-dify --app-id a975c8e5-… --tenant 1783022023241633792 --name canary-dify-entry-1010 --kb-url http://127.0.0.1:29380 --db /var/lib/aiops-41/gateway/gateway.db` | `canary-dify-entry-1010` v1（`agt_3a0e9c13e2e54bd08ce7dd589197e0ac`） |
+| ② | 绑知识库，走**同一个发布门**（`fork_draft → update → publish`，KB 活性由真 `KbBindingResolver` 对 kb-service 校验） | v2，`kb=('4f4bc674…',)` |
+| ③ | 选版核对：`select_customer_agent` 现在选中它 | `agt_3a0e9c…`**#v2**（不再是 `canary-客服` v5） |
+| ④ | **真实用户经公网入口**发提问 | 见下表 |
+
+①的 `--dry-run` 先跑过：控制台导出端点可达，`prompt` 长度 79（与 §四的 sha 一致）。
+**没写 `[[dify_apps]]`、没开注册表**（运行到最后一行时 `dify_app_registry` 仍是 0 行、
+`is_configured()` 仍为 `False`）—— 选版走的是「最新已发布且带 KB」这条**既有**规则，
+不是注册表。
+
+### 三、真机结果：真实用户 × 公网入口 × Dify 来源版本
+
+会话来自 41 上**已存在的真实 Redis 会话**（该租户名下 3 条，均被**生产解析器**按
+`scope=aiops:diagnoses:write` 接受，范围类型 `self`）；请求经
+`https://api.mall.qushiyun.com/v1/assistant/questions`（**经 nginx 那一跳，不直连网关**）。
+会话值与正文都不留档。
+
+| 语言 | POST | 终态 | `retrieval_status` | blocks | 正文 | **汉字数** |
+|---|---|---|---|---|---|---|
+| zh | 202 | completed | **found** | text+video+reference | 169 字 | 144（应然） |
+| en | 202 | completed | **found** | text+video+reference | 528 字 | **0** |
+
+**「服务它的就是这个 Dify 来源的版本」由两个独立的生产事实钉住**（都不是脚本自报的）：
+
+```
+agent_run_metrics（作业写下的行，不是探针打印的）：
+  2026-10-10T06:25:58  route_type=qa  outcome=completed
+    agent_version_key=agt_3a0e9c13e2e54bd08ce7dd589197e0ac#v2  retrieval_status=found  searches=1  media_count=1
+  2026-10-10T06:26:18  route_type=qa  outcome=completed
+    agent_version_key=agt_3a0e9c13e2e54bd08ce7dd589197e0ac#v2  retrieval_status=found  searches=1  media_count=1
+```
+
+* `agent_version_key` = 本步①/②冻结的那个 Dify 来源版本（**不是**任何其它版本）；
+* `searches=1` **且** `retrieval_status=found` **且** `media_count=1`：知识检索真的跑过一次
+  并命中（`found` 不是"没查到"的降级位）。
+
+`media_count=1` 与 `blocks` 里的 `video` 对得上 —— 该 KB 的内容就是那条新加坡无人巴士
+视频（#587 第三跳修好 embedding 后 `retrieval_status` 才从 `unavailable` 变成 `found`）。
+
+### 四、「Dify 来源」是**实测**的，不是措辞
+
+把三份 prompt 逐字比 sha256（只打印长度与摘要，不打印正文 —— 正文是生产内容）：
+
+| 面 | len | sha256[:16] |
+|---|---|---|
+| ① **Dify 控制台导出**（`GET /console/api/apps/<id>/export`） | 79 | `62f32252b5737c7f` |
+| ② **41 上被服务的那个版本**（`agent_versions.snapshot_json`） | 79 | `62f32252b5737c7f` |
+| ③ 仓库清单 `env-41.toml` 的 `canary-客服` | 759 | `c8002d1538efcb5e` |
+
+**① == ②** ⇒ 被服务的内容逐字就是 Dify 控制台导出的那份；
+**① != ③** ⇒ 它**不是**我们自己清单那份 —— 也就是说，"内容来源是 Dify 控制台"这件事
+不是靠命名与叙述，而是靠 ①与②同、①与③异**这两个方向**一起成立的。
+
+② 的 `knowledge_base_ids` 是 `['4f4bc674…']` 而 ①是 `[]`：**这是已知且正确的**（#580 记过
+Dify 的 chat 表单会整体替换 `dataset_configs`，拉回来的 DSL 不带启用的数据集），
+绑库由发布门那一步做（本节的第②步）。
+
+### 五、回答经**暴露并登记过的端点**取知识（从公网入口打）
+
+登记表（`ops/dify-exposure-registry.md`）里只有一行：`POST /v1/dify/retrieval`，
+鉴权是共享凭据。从**公网入口**打它，三个凭据形态各自给一个可区分的结果：
+
+| 凭据 | HTTP | 码 |
+|---|---|---|
+| 无 | 401 | `DIFY_CREDENTIAL_REQUIRED` |
+| 错 | 403 | `DIFY_CREDENTIAL_REJECTED` |
+| 对（服务端配置里那把，登记在册的 `kb-canary`） | **200** | `records` **1 条** |
+
+`401/403/200` 三者各自不同 —— 所以"200 那一次"不是"路由本来就会回 200"。
+这一条证的是 **Dify 控制台该填的那个 endpoint 本身是活的、活的**；
+"运行时取知识"那一半是 §三 的 `retrieval_status=found`，两者不是同一件事，本节都取了。
+
+### 六、收尾：验收遗留物**停用**，不删除（#633 的先例）
+
+`canary-dify-entry-1010` 不是 `env-41.toml` 声明的状态，不该继续**被选中**服务该租户。
+按第一次的先例走 `AgentManager.disable`（生产路径，`expected_revision` 乐观并发）：
+
+```
+before: canary-dify-entry-1010 published rev 5 v2
+after : canary-dify-entry-1010 disabled  rev 6 v2
+
+收尾后选版： agt_7156d07adad44e1bb70c7946eeddf99c#v5（= canary-客服 v5，本票开始前的状态）
+agents: [('canary-dify-entry-1010','disabled'), ('canary-dify-pull','disabled'), ('canary-客服','published')]
+在飞作业： standard_diagnoses {} / assistant_questions {} / health_report_jobs {}
+```
+
+`agents` / `agent_versions` / `agent_run_metrics` 里的行**全部保留** —— 停用让选版回到
+原状，证据不因停用而消失。
+
+### 七、证据边界（据实）
+
+- **本次改动了 41 的生产库**（这是本票所有取证里第一次真的写生产）：写入是**两步**，
+  各经**生产代码路径**（`pull-dify` → `AgentManager.publish`；绑库 → `fork_draft → update
+  → publish`），没有绕过去写库；最终**停用**回到原选版。
+- **`/etc/aiops-41/` 与 `gateway.env` 都没动**；**注册表仍是空的**（0 行，
+  `is_configured()=False`）—— **没有开表**。
+- **被服务的那个版本不是运行在真实客户端上的**：会话是真实用户身份，请求经真实公网入口，
+  但发起方是我在 41 上的脚本，**不是** App/浏览器。所以「客户端此刻在用这条路径」本节
+  **不构成证据**（公网入口今天没有真机 App 的 `/v1/assistant/questions` 流量，App 走
+  `/v1/faq/*`）。
+- 只有 **2 门语言**（zh/en），不是全部 11 门；zh 的 144 个汉字是**应然**（母版就是中文），
+  en 的 0 汉字才是派生的判据。
+- 会话值与正文都没留档（会话即凭据；正文是生产内容）。本节只记**计数、判别位、长度与 sha**。
+- 「运营在 Dify 控制台里挂上这个 endpoint」仍是**运营动作**，本节未做、也未声称做过。
+
+### 八、判据现状（本票）
+
+| 判据（#587） | 现状 |
+|---|---|
+| 全链在生产入口上跑通 | ✅ 生产入口 → 运行时 → Dify 来源的已发布版本 → 回答（本节§三） |
+| 真实终端用户经生产入口被服务 | ✅（§三；同一手法的前一轮见本文件「真实终端用户经生产公网入口」节） |
+| **回答出自 Dify 来源的版本** | ✅（§四：①==② 且 ①!=③） |
+| 至少一种非中文由运行时派生 | ✅（§三 en 零汉字；此前 #635 的合成提问同结论） |
+| 至少一个真实租户经**显式注册表映射**被正确路由 | ⚠️ 仍**未做**：理由不变（开关单位是整台主机，会改 17/18 个组合）；判据价值见 #647/#656 |
+| 回答经暴露并登记的端点取知识 | ✅ 运行时侧（§三 `found`）+ 端点侧（§五 200/1 条）；"运营在控制台挂 endpoint"仍属运营动作 |
+| 调试身份（#586）在本票复验 | ❌ 41 的 `production.env` **没有**调试三键，该身份在此主机上不存在 |
+| **结论** | 仍写 **不可切换** —— 不变的是那三条理由；本条把它的一条前置（Dify 来源版本经生产入口服务真实用户）从"未验"变成"已验" |
+
+**未决项**（与上一轮相比，划掉已解决的那一条）：
+
+| 未决项 | 谁决定 |
+|---|---|
+| 全机切换（含线上租户的 `[[dify_apps]]` 行） | 运营 + 工程，独立动作 |
+| ~~真实终端用户被 Dify 来源的版本服务~~ | ✅ 本节已取 |
+| 运营在 Dify 控制台里挂 endpoint | 运营动作 |
+| 41 上配调试三键（#586） | 运营动作 |
+| 容量、TLS 收口 | 运维 |
+
 ## #587 判据二（加强）：**Dify 来源**的版本经显式注册表映射给真实租户（2026-10-10，41 真机 + 真控制台）
 
 **分支** `docs/stage1-registry-route-evidence`（与上一节同一分支）。

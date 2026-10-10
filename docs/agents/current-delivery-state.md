@@ -16,7 +16,12 @@
 > 观察窗到期（#405，约 10-07）、41 实机复核（#413，**卡在模型账户余额**）；
 > 此前为 PR #409（CD 部署史与 FAQ 假阳性）。
 
-## 验收遗留物：`canary-dify-pull`（41，已停用）
+## 验收遗留物：`canary-dify-pull` / `canary-dify-entry-1010`（41，均已停用）
+
+> 两件都是阶段 1 验收（#587）的产物，处置方式相同（停用、不删）。第二件是 2026-10-10
+> 为「真实用户 × 生产入口 × **Dify 来源**的版本」这一条取证时发布的，见
+> `docs/validation.md` 的 #587 判据一收口节。
+
 
 **它不是产品功能，是阶段 1 验收（#587）留下的产物。**
 
@@ -40,6 +45,22 @@
 
 **若要恢复它**：`AgentManager` 没有 disabled→published 的路径（`fork_draft` 要求
 published），需人工重建后收敛 —— 与 `admin reconcile` 对 disabled 行的处理一致。
+
+### 2026-10-10：`canary-dify-entry-1010`（同上，已停用）
+
+同一租户、同一手法，用来把「真实用户 × 生产入口 × **Dify 来源**的版本」这一条一起取到。
+发布 → 绑库 → 被选版 → 真实用户经公网入口提问（`agent_version_key` 记的就是它）→ 停用。
+
+| 项 | 值 |
+|---|---|
+| agent | `canary-dify-entry-1010`，`agt_3a0e9c13e2e54bd08ce7dd589197e0ac` v2 |
+| 被服务的运行 | `route_type=qa`、`retrieval_status=found`、`searches=1`、`media_count=1` |
+| 与 Dify 控制台导出的关系 | prompt 逐字相同（sha256 `62f32252…`）；与仓库清单那份**不同** |
+| 收尾 | `disabled`（rev 6，v2）⇒ 选版回到 `canary-客服` v5 |
+
+**它与 `canary-dify-pull` 的唯一区别**：这一次服务的是**真实用户身份、经生产公网入口**，
+并且「服务它的就是这个 Dify 来源的版本」由 `agent_run_metrics.agent_version_key` 与
+prompt 的 sha 比对**两个方向**一起钉住（详见 `docs/validation.md`）。
 
 ## 一分钟结论
 
