@@ -1,3 +1,83 @@
+## #587 全链第二跳的断点：New API 插件**实测装不上**，自定义模型也被上游拒（2026-10-10，36 真机）
+
+**分支** `docs/stage1-model-alignment-answer`，基线 `origin/main` @ `bfbcf92`。
+**制品** 本节 + `docs/开发进度.md`。
+
+### 一、用户指出的那条路：装 **New API** 插件 —— 实测**装不上**
+
+`New API` 是第三方 provider 插件（`wanghualuoong/new_api`，marketplace 上确实有页面），
+若可用，它允许把**任意模型名**接到一个 OpenAI 兼容网关上 —— 正好是我们要的形状。实测：
+
+| 试法 | 结果 |
+|---|---|
+| `GET /api/v1/plugins/wanghualuoong/new_api`（控制台/daemon 走的那条） | `{"code":-1,"msg":"plugin not found"}` |
+| `…/new_api/versions` | `{"code":0,"data":{"versions":[]}}` —— 条目在，**没有任何可安装的版本** |
+| `…/new_api/0.1.4/download` | `{"code":-1,"msg":"plugin version not found"}` |
+| marketplace 列表翻页找 `*new*api*` | **975 个插件里 0 个**（页 1–10 全部翻过） |
+| 表单 POST `/api/v1/plugins {"query":"new_api"}` | 返回的是**不分页无关**的前 N 个（`query` 参数不被服务端采纳） |
+
+⇒ **它上架过，但当前没有任何版本可供安装**。这条路**不是"我没试"，是它取不到包**。
+
+### 二、那条路本来想解决什么：让 Dify 认我们的模型名
+
+断点的形状（上一节）：`pull-dify` 报 `model is not allowlisted`，因为
+**Dify 能选的模型名**（插件那 44 个）与**我们白名单里的名字**（`deepseek-v4-flash`）
+是两套不相交的集合。
+
+**把 `deepseek-v4-flash` 注册成 openai 插件的"自定义模型"** —— 我按官方那套 API 走完了全流程：
+
+```
+POST …/model-providers/langgenius/openai/openai/models/credentials  → 201（库里真的落了一行）
+PATCH …/models/enable                                               → 200
+POST …/preferred-provider-type {"custom"}                            → 200
+```
+
+**仍然失败**，而这次拿到了**上游的确切原因**（daemon 日志）：
+
+```
+File ".../models/llm/llm.py", line 198, in get_customizable_model_schema
+    raise ValueError(f"Base model {_base_model(model)} not found")
+ValueError: Base model deepseek-v4-flash not found
+→ Dify: ValueError: model.name must be in the specified model list
+```
+
+读源码（同一份容器）：`get_customizable_model_schema` 会先 `_base_model(model)` 去
+**预定义清单**里找同名项，找不到就抛。而 `_base_model` 只处理 `ft:` 前缀。
+⇒ **Dify 的"自定义模型"只能给预定义模型换端点，不能引入一个全新的模型名。**
+
+### 三、于是只剩两条**互斥**的路，都要你拍
+
+| 路 | 做什么 | 代价（都是实测过的） |
+|---|---|---|
+| **① 换插件：装一个"透传任意模型名"的 provider** | 例如 `abesticode/openai_api_compatible`（marketplace 上在架）或 New API（当前取不到包） | 换插件后**要重配凭据、要重设 app 的模型名**；且"运营在 Dify 里能选的模型名"会变成**网关侧要接的名字**，两边的清单要对齐 |
+| **② 对齐模型名** | 让"我们白名单里的名字"落在"插件预定义清单里" | **实测的硬约束**：`deepseek-v4-flash` **不在**那 44 个里；而 Dify 的 `gpt-*` 里 baoyun **确实能服务 18 个**（交集：`gpt-4.1` / `gpt-5.5` / `gpt-5.6-luna` …）⇒ 只要把 41 的白名单**加一个 Dify 清单里存在的名字**，这条链就通了 |
+
+**②的代价比看上去小，而且我能把它说清**：
+`AIOPS_PROVIDER_BAOYUN_MODEL` 是**白名单的来源**（`allowed_models_from_settings`），
+它同时是**诊断链路实际用的模型**。所以"加一个名字"= 让白名单接受它，而**不影响**现有诊断
+（诊断仍按 `AIOPS_PROVIDER_BAOYUN_MODEL` 选自己的 provider/model）。
+**但它是运行时行为的一次变更**（白名单就是发布门的一部分），所以我不自己动。
+
+**①的代价更结构**：换 provider 插件意味着"Dify 里选的那个模型名"要**与网关侧能接的名字一致** ——
+这件事与 ② 是同一个问题的两种解法，而不是两条独立的路。
+
+### 四、结论
+
+- **"用 New API 插件"这条具体路径：不可行**（当前无版本可装）—— 这是**实测结论**，不是偏好。
+- **"让 Dify 认我们的模型名"：官方那套自定义模型机制做不到**（上游硬性要求"基础模型必须在预定义清单里"）。
+- **真正要拍的是**：要不要把 41 的白名单加一个 **Dify 清单里存在、baoyun 也能服务**的名字
+  （候选 18 个，例如 `gpt-5.5`）；或者换一个能透传任意模型名的 provider 插件。
+- 本节**没有改动 41 的白名单**、也没有换插件；36 侧只留下那条**无效的**自定义模型记录
+  （它现在被 Dify 忽略：`get custom model schema failed` → 不进清单），可删。
+
+### 五、证据边界（据实）
+
+- 对 36：加了 `provider_model_credentials` 一行 + 切了 `preferred_provider_type=custom`；
+  两者都**不改变**现有行为（该模型进不了清单，app 仍用 `gpt-5.6`）。可回滚。
+- 对 **41 零写入**。
+- 结论里的"baoyun 能服务 18 个 Dify 名单里的模型"是**两个清单求交**得到的（各自真实接口读的），
+  不是推断。
+
 ## #587 全链：把「运营在 Dify 改 → 我方发布门冻结 → 真实用户被服务」整条跑一遍，**停在第二跳**（2026-10-10，41/36 真机）
 
 **分支** `docs/stage1-model-whitelist-gap`，基线 `origin/main` @ `4d7bde6`。
