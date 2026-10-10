@@ -20,6 +20,27 @@
 `DifyAppRegistry` / `GatewayRuntime._registered_agent`、真实租户与 agent 名。
 假的：库是**副本**（这正是它安全、且能凭空造"更晚的 agent"的原因）。
 
+## 连着「Dify 来源」一起做（#587 判据二的最强形态）
+
+`--declared-agent` / `--declared-tenant` 可以只对一对做判据 2 —— 这样就能把
+**一篇从 Dify 拉来的配置**当作"注册表声明的那一个"。四步（全在副本上）：
+
+```bash
+W=$(mktemp -d); cp /var/lib/aiops-41/gateway/gateway.db* "$W/"
+A=a975c8e5-ad9e-425c-84c9-77581a0a2bed          # Dify 控制台里的 app（36:10008）
+# ① 从**真控制台**拉（凭据在 production.env，0600）
+aiops --config /etc/aiops-41/production.env admin pull-dify \
+  --app-id $A --tenant 1783022023241633792 --name canary-dify-pull-route-proof \
+  --kb-url http://127.0.0.1:29380 --db "$W/gateway.db"
+# ② 给它绑知识库（走同一个发布门 fork→update→publish；Dify 的 DSL 不带启用的数据集）
+# ③ 注册表取证：把注册表的声明指向这个 **Dify 来源**的 agent
+python tools/dify_registry_route_proof.py --db "$W/gateway.db" \
+  --declared-tenant 1783022023241633792 --declared-agent canary-dify-pull-route-proof
+```
+
+判据 2 于是变成：「一个**从 Dify 拉来、经我方发布门冻结**的版本，被注册表显式映射给一个
+真实租户，且与"最新已发布"**可区分**」。
+
 退出码 0 = 可区分且两条判据都成立；1 = 断言失败（含"不可区分"）；2 = **未取证**。
 """
 
@@ -96,6 +117,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--db", default=DEFAULT_DB)
     parser.add_argument("--config", default="/etc/aiops-41/production.env")
     parser.add_argument("--probe-agent", default="canary-registry-proof")
+    parser.add_argument(
+        "--declared-agent",
+        default="",
+        help="只对这一对做判据 2（默认取每个租户最新的带知识库客服 agent）",
+    )
+    parser.add_argument("--declared-tenant", default="", help="与 --declared-agent 成对使用")
     args = parser.parse_args(argv)
 
     source = Path(args.db).expanduser().resolve()
@@ -131,6 +158,40 @@ def main(argv: list[str] | None = None) -> int:
             print(f"    跳过 {tenant}：{name} 被快捷动作钉为宣传目标 ⇒ 永远不被客服路由选中")
             continue
         declared[tenant] = (name, kb_id)
+    if args.declared_agent:
+        if not args.declared_tenant:
+            print("用法错误：--declared-agent 必须与 --declared-tenant 一起给", file=sys.stderr)
+            return 2
+        if args.declared_tenant not in declared:
+            print(
+                f"未取证：{args.declared_tenant} 名下没有带知识库的已发布客服 agent "
+                f"（有：{sorted(declared)}）",
+                file=sys.stderr,
+            )
+            return 2
+        # 声明的那个不一定是"最新"的 —— 恰恰相反，#587 想固定住的正是"它不最新"这一情形。
+        # 这里只要求它**可服务**：已发布、带知识库、不是宣传钉选。
+        with sqlite3.connect(f"file:{database}?mode=ro", uri=True) as connection:
+            row = connection.execute(
+                "SELECT agent_id, config_json, status FROM agents WHERE tenant_id=? AND name=?",
+                (args.declared_tenant, args.declared_agent),
+            ).fetchone()
+        if row is None:
+            print(f"未取证：{args.declared_tenant} 名下没有 {args.declared_agent}", file=sys.stderr)
+            return 2
+        agent_id, config_json, status = row
+        knowledge = json.loads(config_json).get("knowledge_base_ids") or []
+        if status != "published" or not knowledge:
+            print(
+                f"未取证：{args.declared_agent} 不是可服务的客服 agent"
+                f"（status={status}，知识库={knowledge}）",
+                file=sys.stderr,
+            )
+            return 2
+        if agent_id in _promo_pinned_ids(database, args.declared_tenant):
+            print(f"未取证：{args.declared_agent} 被宣传钉选 ⇒ 客服路由不会选它", file=sys.stderr)
+            return 2
+        declared = {args.declared_tenant: (args.declared_agent, knowledge[0])}
     if not declared:
         print("未取证：生产数据里没有带知识库的已发布客服 agent", file=sys.stderr)
         shutil.rmtree(database.parent, ignore_errors=True)
