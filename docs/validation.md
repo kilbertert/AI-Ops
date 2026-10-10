@@ -1,3 +1,49 @@
+## #587 收尾取数：**运营那一半**（在 Dify 控制台里挂 external knowledge）的现状（2026-10-10，41 真机只读）
+
+**分支** `docs/stage1-ext-knowledge-state`，基线 `origin/main` @ `5991bdd`。
+**制品** 本节 + 上一节的一处交叉引用。**不改代码、不改配置。**
+
+### 一、为什么这一条不再写"未做"，而是写"现状"
+
+`#583` 段 1–3 证的是**我方那一半**（登记表 + 运行时的鉴权与只读语义 + 网络面）。
+剩下那一半 —— **运营在 Dify 控制台里把 `/v1/dify` 挂成外接知识库** —— 一直记作"运营动作、
+未做"。一个"未做"读不出它是"没人去做"还是"做不了"，所以这里把**它此刻的现状**取出来。
+
+### 二、取数：控制台里那张登记表本身
+
+Dify 的外接知识库登记**在控制台里有一张表**，读取端点是
+`GET /console/api/datasets/external-knowledge-api`（用服务端配置里的控制台凭据，
+经 `/proc/<pid>/environ` 取，不打印）：
+
+```
+顶层键: ['data', 'has_more', 'limit', 'page', 'total']
+total = 0   返回条数 = 0
+```
+
+⇒ **运营还没挂**：控制台里一条外接知识库都没有。这不是"没验"，是**现状为 0**。
+
+### 三、阴性对照：这个 200 不是"什么路径都回 200"
+
+同一套 base 与头形状，路径写错一个词、少一段、加一段、以及一个确定不存在的路径：
+
+| 路径 | 结果 |
+|---|---|
+| `/console/api/datasets/external-knowledge-api` | **200**（真端点） |
+| `/console/api/datasets/external-knowledge-apis`（多一个 s） | 404 |
+| `/console/api/datasets/external-knowledge`（少一段） | 404 |
+| `/console/api/datasets/external-knowledge-api/nope`（加一段） | 404 |
+| `/console/api/no-such-thing-at-all` | 404 |
+
+⇒ 那个 200 说明**功能存在且这张表可达**；`total=0` 才是"运营还没挂"的判据。
+没有这道对照，"200 且 total=0"两个读数里任何一个出问题都不会被发现。
+
+### 四、证据边界（据实）
+
+- 全部是 **GET + 只读**；没有创建、没有修改、没有删除。
+- 读的是**控制台**（36:10008 的 console 面），不是 App 面；凭据来自服务端配置、未打印。
+- 本节**不**导出这张表的行内容（`total=0`，无行可导）；含凭据的字段一律只打印长度。
+- 「人在 10008 页面上点得动」仍然没验 —— 这一节证的是**后端状态**，不是**人的操作**。
+
 ## #587 判据收口（生产）：注册表**在生产上开表并验收** + 调试三键**配齐并复验**（2026-10-10，41 真机）
 
 **分支** `docs/stage1-registry-flip-production`，基线 `origin/main` @ `e0c050d`。
@@ -297,6 +343,8 @@ agents: [('canary-dify-entry-1010','disabled'), ('canary-dify-pull','disabled'),
   en 的 0 汉字才是派生的判据。
 - 会话值与正文都没留档（会话即凭据；正文是生产内容）。本节只记**计数、判别位、长度与 sha**。
 - 「运营在 Dify 控制台里挂上这个 endpoint」仍是**运营动作**，本节未做、也未声称做过。
+  **2026-10-10 补取了它此刻的现状**（见本文件「运营那一半的现状」节）：控制台里
+  `GET /console/api/datasets/external-knowledge-api` → `total = 0`，即**一条都没挂**。
 
 ### 八、判据现状（本票）
 
