@@ -1,3 +1,82 @@
+## #587 判据二收口：真实租户经**显式注册表映射**被正确路由（2026-10-10，41 真机 + 生产库副本）
+
+**分支** `docs/stage1-registry-route-evidence`，基线 `origin/main` @ `f529377`。
+**制品** `tools/dify_registry_route_proof.py` + `tests/test_dify_registry_route_proof.py`（4 例）。
+
+### 一、为什么这一条**不能在 41 的现状上**取
+
+41 的真实数据里，两个候选**恰好是同一个**：旧规则（"最新已发布的客服 agent"）与注册表
+**声明**的那个都指向 `canary-客服`。于是"打开注册表、读到的还是它"这句话**在两个实现下
+都成立** ⇒ **不可区分 ⇒ 它不是证据**。
+
+所以取数器在**生产库的副本**上先把这件事变得可区分：给每个有客服 agent 的真实租户各
+**多发布一个更晚**的客服 agent（`canary-registry-proof`），旧规则会选它、注册表不该选它。
+
+### 二、41 上的实跑
+
+```
+副本：/tmp/aiops-registry-route-…/gateway.db
+    跳过 1942105476598861824：canary-宣传案例 被快捷动作钉为宣传目标 ⇒ 永远不被客服路由选中
+生产数据里有客服 agent 的租户：['1783022023241633792']
+副本里每个租户各多了一个更晚的 canary-registry-proof ⇒ 旧规则会选它，注册表不该选它
+
+【判据 1a】注册表**未启用** ⇒ 保持注册表出现之前的选法（可安全惰性上线）
+    所有租户的 `_registered_agent` 都返回 (None, False) ⇒ 门未启用 ✓
+写入一行探针登记后，门已启用：True
+
+【判据 1b】注册表**已启用**、这一对**未登记** ⇒ 运行时返回 unavailable
+    1783022023241633792 / consumer → (None, True) ⇒ unavailable ✓
+    1783022023241633792 / operator → (None, True) ⇒ unavailable ✓
+    1942105476598861824 / consumer → (None, True) ⇒ unavailable ✓
+    1942105476598861824 / operator → (None, True) ⇒ unavailable ✓
+
+【判据 2】登记 ⇒ 由声明的那一个服务（而不是「最新已发布」）
+    1783022023241633792：门给 'canary-客服'；旧规则选 canary-registry-proof#v1；
+                        按门选 canary-客服#v5（**可区分** ✓）
+```
+
+**跑的是运行时那道门本身**（`GatewayRuntime._registered_agent`），不是复述它的条件 ——
+"未登记"这条判据如果靠复述 `registry_configured and name is None` 来断言，就等于把实现
+抄进测试里。
+
+### 三、"不可区分"是**会失败**的断言（实测）
+
+把 `_registered_agent` 里的 `if not registry.is_configured()` 改成 `if True`（注册表永远不生效），
+在 41 上重跑该取数器：
+
+```
+退出码 = 1
+断言失败：
+  - 1783022023241633792/consumer: 门给出 (None, False)，应为 (None, True)
+  - 1783022023241633792/operator: 门给出 (None, False)，应为 (None, True)
+  - 1942105476598861824/consumer: 门给出 (None, False)，应为 (None, True)
+  - 1942105476598861824/operator: 门给出 (None, False)，应为 (None, True)
+  - 1783022023241633792: 门给出 None，声明的是 'canary-客服'
+```
+
+变异文件用完即恢复，并与本仓 `main` 的 `gateway_runtime.py` **逐字比对确认一致**（`diff` 空）。
+
+### 四、31 条未登记的 (租户, 入口) 会变成 unavailable —— 这是**设计的**代价
+
+同一个数的另一面：41 的注册表**一旦启用**（任何一行），未登记的 4 个真实
+`(租户, 入口)` 组合都变成 `unavailable`。这正是 #647 量出的
+「17/18 个组合会变」在**有 agent 的两个租户**上的具体形态。
+
+因此本节的结论是**可路由、可区分、fail closed 都成立**，而不是"可以开表"：
+开表仍要同时给线上租户写行（#647 的三条理由不变）。判据二问的是**能力**，不是**切换决定**。
+
+### 五、证据边界（据实）
+
+- **库是副本**：整脚本在 `tempfile.mkdtemp()` 里跑，生产库只以 `mode=ro` 读过；脚本结束即删。
+  副本里那次 `publish` **没有进生产**（生产库里不存在 `canary-registry-proof`）。
+- **生产配置未改**：`/etc/aiops-41/production.env` 与 `env-41.toml` **都没动**；
+  41 的注册表**仍然是空的**（本节只是把"开了会怎样"在生产数据上算了一遍）。
+- **没有真模型参与**：本节的判据是"选哪个 agent"，因此不需要模型；这也是它不碰
+  provider 额度的原因。
+- **没有响应体**：断言落在运行时那道门上，不在回答上。"一个真实提问被这个映射服务到"
+  属 §上一条（本轮已用真实会话 + 生产入口取过，但那条走的是**该租户自己的** agent，
+  不是 Dify 来源的版本）。
+
 ## #649 同一个会话头两个名字：失败信号指向别处（2026-10-10，渲染器改动 + 41 实测）
 
 **分支** `fix/entry-accept-both-session-header-names`，基线 `origin/main` @ `ba7f4bc`。
