@@ -30,6 +30,7 @@ from aiops_diagnostics.bounded_http import (
     request_json,
 )
 from aiops_diagnostics.config import Settings
+from aiops_diagnostics.ops_analysis import ABNORMAL_STATUS
 from aiops_diagnostics.order_visibility import (
     TenantVisibility,
     caller_visibility,
@@ -303,6 +304,82 @@ class MySQLSource:
         with self._cursor() as cursor:
             cursor.execute(sql, params)
             return [_normalize_row(row) for row in cursor.fetchall()]
+
+    def aggregate_order_statuses(
+        self,
+        site_ids: tuple[str, ...],
+        window_start: str,
+        window_end: str,
+    ) -> dict[str, Any] | None:
+        """按站点集合 + 时间窗统计订单状态（#697 的运维分析第一刀）。
+
+        这是本仓**第一条聚合 SQL**，所以它的形状值得写下来：
+
+        * **交集在本函数内计算，不交给调用方。** 租户谓词永远下推（``_scope_where``
+          渲染的那一段），而请求的站点集合先与调用者可见站点取交集，**取完再**成为
+          ``site_id IN (...)``。把「调用方已经窄过了」当前提是本条最容易写错的地方：
+          一旦有一个调用方传进未经收窄的集合，超出范围的站点就会被如实统计出来，
+          而查询本身成功、数字本身"合理"。
+        * **空站点集合与空范围都短路，不发 SQL。** ``_scope_blocked()`` 是既有的空范围
+          短路口；调用者显式传来空集合时同样什么都不查。两者都返回 ``None``，
+          由上层说成 ``unavailable``（「没人查过的范围」不是「没有异常」）。
+        * **时间窗是半开的** ``[window_start, window_end)``：闭开区间让相邻两窗既不复算
+          也不漏算，而这一点写进对外契约的 ``definition``，不靠读代码才知道。
+        * 时间列 ``created_time``、状态列 ``status``、站点列 ``site_id`` 都在
+          ``ORDER_COLUMNS`` 里——列名来自固定表结构常量，不是客户端输入。
+
+        异常结束的取值见 ``ops_analysis.ABNORMAL_STATUS``（其证据也写在那里）。
+
+        只回四样东西：总数、异常结束数、正常结束数，以及异常最多的一台站点。
+        **成因分类不在这里做**：它住在 ``rules.classify_stop_reason`` 里，是 Python
+        不是列，按成因聚合需要把窗口内的行全拉回来——那会破掉「不下推就不查」这条房规
+        （见 ``ops_analysis._secondary``）。
+        """
+        if self._scope_blocked():
+            return None
+        # The intersection happens HERE, not in the caller: this is the layer
+        # that must not exceed the scope, so it cannot rely on the caller having
+        # narrowed the set correctly. ``scope.site_ids is None`` means the caller
+        # may see every site in the tenant, so the requested set stands as-is.
+        requested = tuple(dict.fromkeys(site_ids))
+        if self.scope is not None and self.scope.site_ids is not None:
+            allowed = set(self.scope.site_ids)
+            requested = tuple(site for site in requested if site in allowed)
+        if not requested:
+            return None
+        scope_where, params = self._scope_where(site_column=None, user_column=None)
+        fragments = [fragment for fragment in (scope_where,) if fragment]
+        fragments.append(f"site_id IN ({_placeholders(len(requested))})")
+        params.extend(requested)
+        fragments.append("created_time >= %s")
+        params.append(window_start)
+        fragments.append("created_time < %s")
+        params.append(window_end)
+        where = " AND ".join(fragments)
+        hint = f"/*+ MAX_EXECUTION_TIME({int(self.settings.safety.mysql_max_execution_ms)}) */"
+        sql = (
+            f"SELECT {hint} COUNT(*) AS total, "
+            f"SUM(CASE WHEN status = {ABNORMAL_STATUS} THEN 1 ELSE 0 END) AS abnormal_ended, "
+            "SUM(CASE WHEN status = 1 THEN 1 ELSE 0 END) AS normal_ended "
+            f"FROM `{self.database}`.`ch_order_info` WHERE {where}"
+        )
+        top_sql = (
+            f"SELECT {hint} site_id, COUNT(*) AS abnormal_ended "
+            f"FROM `{self.database}`.`ch_order_info` "
+            f"WHERE {where} AND status = {ABNORMAL_STATUS} "
+            "GROUP BY site_id ORDER BY abnormal_ended DESC, site_id ASC LIMIT 1"
+        )
+        with self._cursor() as cursor:
+            cursor.execute(sql, list(params))
+            row = cursor.fetchone() or {}
+            cursor.execute(top_sql, list(params))
+            top = cursor.fetchone()
+        return {
+            "total": _count_or_zero(row.get("total")),
+            "abnormal_ended": _count_or_zero(row.get("abnormal_ended")),
+            "normal_ended": _count_or_zero(row.get("normal_ended")),
+            "top_sites": ((str(top["site_id"]), _count_or_zero(top["abnormal_ended"])),) if top else (),
+        }
 
     def get_fee_template_record(self, order_no: str, tenant_id: str | None = None) -> dict[str, Any] | None:
         if self._scope_blocked():
@@ -1495,6 +1572,19 @@ def _format_time(value: datetime) -> str:
 
 def _format_http_time(value: datetime) -> str:
     return value.isoformat(timespec="milliseconds")
+
+
+def _count_or_zero(value: Any) -> int:
+    """把聚合结果里可能为 NULL 的计数收敛成整数。
+
+    ``SUM(CASE ...)`` 在**没有行**时返回 NULL 而不是 0，而「0 行」与「SQL 说不清」
+    在契约里是两个结论。这里把 NULL 判成 0 是安全的：行数由同一次查询的 ``COUNT(*)``
+    给出，因此「NULL 的 SUM」只可能意味着那一类计数确实是 0。
+    """
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):  # pragma: no cover - defensive
+        return 0
 
 
 def _normalize_row(row: dict[str, Any] | None) -> dict[str, Any]:

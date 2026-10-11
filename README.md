@@ -300,6 +300,8 @@ flowchart TB
 | `routing.py` | 路由判定（PRD #383）：把 Jev 的**类型化判定**翻成 `intent`/`risk`/`confidence`，六个 `intent` 字符串与旧模型逐字相同。取不到判定时**返回 None 而非失败**（路由只是优化），失败带错误码、可计数、日志可见（该组件曾静默失效过一次）|
 | `faq.py` | 平台隔离的固定问答目录与平台身份判定（`consumer` / `operator`） |
 | `promo_agents.py` | 宣传案例/方案路由：跑租户已发布的宣传智能体，与客服 FAQ 智能体隔离 |
+| `ops_analysis.py` | 运维分析面的确定性装配（#697 / PRD #693）：把「站点集合 + 时间窗」的一次聚合与模型写的两段散文装成第三份对外契约（`failure_rate / main_cause / secondary / risk / recommendation`）。数字全来自聚合、模型只写叙述（按名字读两个键，没有路径让模型写的数字进入数字字段）；空范围/窗外无单 ⇒ `unavailable` 而不是 0；本面是输出语言守卫的**第 4 个模块**（第 5 个面）。规则版本 `ops-analysis-v1`。 |
+| `ops_analysis_narrative.py` | 运维分析的**模型轮**（#697）：输入是已经算好的数字，输出只有 `main_cause` / `recommendation` 两段散文。结构化输出里**没有数字字段**——这是「模型写不出数字」的第一道墙（第二道在装配处按名字读两个键）。跑在零阶工作区上（那里没有订单数据可读），对话轮的容错解析与问答/诊断共用一份。 |
 | `answer_language.py` | 回答面输出语言校验的**共享应用点**（挂到各回答面的定稿点） |
 | `agent_manifest.py` / `agent_debug.py` | 声明式环境清单收敛 / 草稿调试与真实知识绑定校验 |
 | `dify_knowledge_api.py` | 面向 Dify External Knowledge API 的知识检索适配（#581 / PRD #577）：请求/响应形状与 `records` 渲染。租户与知识库白名单由我们的登记表定，**不来自请求** |

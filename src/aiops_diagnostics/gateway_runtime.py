@@ -7,6 +7,7 @@ import time
 from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
+from datetime import UTC
 from pathlib import Path
 from typing import Any
 
@@ -44,6 +45,15 @@ from aiops_diagnostics.knowledge_retrieval import (
     MediaProxy,
     MediaResourceSigner,
     MediaResponse,
+)
+from aiops_diagnostics.ops_analysis import (
+    REASON_NO_ORDERS,
+    REASON_SCOPE_EMPTY,
+    AnalysisAggregate,
+    build_failure_rate_contract,
+)
+from aiops_diagnostics.ops_analysis import (
+    RULE_VERSION as OPS_ANALYSIS_RULE_VERSION,
 )
 from aiops_diagnostics.order_visibility import TENANT_SCOPE_SOURCE, resolve_device_tenant
 from aiops_diagnostics.parsing import parse_request
@@ -344,6 +354,197 @@ class GatewayRuntime:
         self._futures[job["job_id"]] = future
         future.add_done_callback(lambda _: self._futures.pop(job["job_id"], None))
         return job
+
+    def start_operations_analysis(
+        self,
+        context: ScopeContext,
+        *,
+        site_ids: tuple[str, ...] | None,
+        window_start: str,
+        window_end: str,
+        language: str = DEFAULT_LANGUAGE,
+    ) -> dict[str, Any]:
+        """Start an operations-analysis job (#697): site set + time window.
+
+        ``site_ids=None`` means the caller's whole resolved site set — the same
+        convention ``QueryScope.site_ids`` already uses (``None`` = no site
+        narrowing) — while ``()`` is an explicit empty set and is refused here
+        rather than silently turning into a full-tenant scan.
+
+        The work happens on the worker, not here: the aggregate needs the SSH
+        tunnel and the read-only connection, neither of which belongs on the
+        request path.
+        """
+        if site_ids is not None and not site_ids:
+            raise ValueError("analysis requires at least one site")
+        job = self.store.create_analysis_job(
+            context.scope_fingerprint,
+            site_ids=site_ids,
+            window_start=window_start,
+            window_end=window_end,
+            rule_version=OPS_ANALYSIS_RULE_VERSION,
+            language=language,
+        )
+        future = self._executor.submit(
+            self._execute_operations_analysis,
+            job["diagnosis_id"],
+            context,
+            site_ids,
+            window_start,
+            window_end,
+            language,
+        )
+        self._futures[job["diagnosis_id"]] = future
+        future.add_done_callback(lambda _: self._futures.pop(job["diagnosis_id"], None))
+        return job
+
+    def get_operations_analysis(self, context: ScopeContext, analysis_id: str) -> dict[str, Any] | None:
+        return self.store.get_standard_diagnosis(analysis_id, context.scope_fingerprint)
+
+    def _execute_operations_analysis(
+        self,
+        analysis_id: str,
+        context: ScopeContext,
+        site_ids: tuple[str, ...] | None,
+        window_start: str,
+        window_end: str,
+        language: str,
+    ) -> None:
+        """Compute the aggregate, let the model explain it, and store both.
+
+        The numbers are computed first and the narrative second, but the two are
+        independent: a narrative failure ends the job as failed rather than
+        delivering numbers with an empty explanation — that shape reads as "the
+        aggregate had nothing to say", which is a different and false claim.
+        """
+        if not self.store.update_standard_diagnosis(analysis_id, status="running"):
+            return  # 行已终态（过期/被另一条路径收敛）：没有生成任何东西，直接退出
+        started_ms = time.monotonic()
+        try:
+            scope = resolve_query_scope(context)
+            # The job's own site set is the SUBSET the caller asked for; the
+            # scope's is the superset they may see. Empty after the intersection
+            # means the request was wider than the scope in the narrowing
+            # direction, so nothing is computed — the same honest empty the
+            # empty-scope short-circuit gives.
+            effective_sites = _intersect_sites(site_ids, scope.site_ids)
+            if scope.empty_site_scope or not effective_sites:
+                result = build_failure_rate_contract(
+                    AnalysisAggregate(0, 0, 0, ()),
+                    None,
+                    language=language,
+                    site_ids=site_ids,
+                    window_start=_as_datetime(window_start),
+                    window_end=_as_datetime(window_end),
+                    reason_code=REASON_SCOPE_EMPTY,
+                )
+            else:
+                with scoped_live_sources(self.diagnostic_settings, scope=scope) as sources:
+                    raw = sources.mysql.aggregate_order_statuses(
+                        effective_sites,
+                        _db_window_bound(window_start),
+                        _db_window_bound(window_end),
+                    )
+                if raw is None:
+                    result = build_failure_rate_contract(
+                        AnalysisAggregate(0, 0, 0, ()),
+                        None,
+                        language=language,
+                        site_ids=site_ids,
+                        window_start=_as_datetime(window_start),
+                        window_end=_as_datetime(window_end),
+                        reason_code=REASON_SCOPE_EMPTY,
+                    )
+                else:
+                    aggregate = AnalysisAggregate(
+                        total=int(raw["total"]),
+                        abnormal_ended=int(raw["abnormal_ended"]),
+                        normal_ended=int(raw["normal_ended"]),
+                        top_sites=tuple(raw.get("top_sites") or ()),
+                    )
+                    if aggregate.total == 0:
+                        result = build_failure_rate_contract(
+                            aggregate,
+                            None,
+                            language=language,
+                            site_ids=site_ids,
+                            window_start=_as_datetime(window_start),
+                            window_end=_as_datetime(window_end),
+                            reason_code=REASON_NO_ORDERS,
+                        )
+                    else:
+                        result = self._analyze_with_narrative(
+                            aggregate, context, site_ids, window_start, window_end, language
+                        )
+        except (SourceError, ValueError) as exc:
+            ok = self.store.update_standard_diagnosis(
+                analysis_id,
+                status="failed",
+                error_code="ANALYSIS_FAILED",
+                error_message=_internal_error_message(exc, ""),
+            )
+            if ok:
+                self._record_metric(
+                    tenant_id=context.effective_tenant_id,
+                    route_type="operations_analysis",
+                    outcome="failed",
+                    error_code="ANALYSIS_FAILED",
+                    duration_ms=int((time.monotonic() - started_ms) * 1000),
+                )
+            return
+        stored = self.store.update_standard_diagnosis(
+            analysis_id,
+            status="completed",
+            result=result,
+        )
+        if not stored:
+            return  # 行已终态：这次结果不是任何人等的那份（与诊断线同形）
+        self._record_metric(
+            tenant_id=context.effective_tenant_id,
+            route_type="operations_analysis",
+            outcome="completed",
+            duration_ms=int((time.monotonic() - started_ms) * 1000),
+        )
+
+    def _analyze_with_narrative(
+        self,
+        aggregate: Any,
+        context: ScopeContext,
+        site_ids: tuple[str, ...] | None,
+        window_start: str,
+        window_end: str,
+        language: str,
+    ) -> dict[str, Any]:
+        """The narrative turn, then assembly. Split out so the job-end writes above stay readable."""
+        from aiops_diagnostics.ops_analysis_narrative import run_narrative_turn
+
+        selected_provider = self.diagnostic_settings.agent.select_provider(None)
+        settings = Settings.from_config(self.gateway_settings.server_config_file)
+        settings.agent.run_root = self.diagnostic_settings.agent.run_root
+        facts = build_failure_rate_contract(
+            aggregate,
+            None,
+            language=language,
+            site_ids=site_ids,
+            window_start=_as_datetime(window_start),
+            window_end=_as_datetime(window_end),
+        )
+        payload = run_narrative_turn(
+            facts,
+            settings.agent,
+            provider=selected_provider,
+            key_slot=selected_provider.resolved_key_slot(),
+            language=language,
+            project_root=reference_root(),
+        )
+        return build_failure_rate_contract(
+            aggregate,
+            payload,
+            language=language,
+            site_ids=site_ids,
+            window_start=_as_datetime(window_start),
+            window_end=_as_datetime(window_end),
+        )
 
     def get_health_report(self, context: ScopeContext, job_id: str) -> dict[str, Any] | None:
         return self.store.get_health_job(job_id, context.scope_fingerprint)
@@ -1963,6 +2164,35 @@ def _public_event(event: dict[str, Any]) -> dict[str, Any]:
             if isinstance(item, dict)
         ]
     return result
+
+
+def _intersect_sites(
+    requested: tuple[str, ...] | None,
+    allowed: tuple[str, ...] | None,
+) -> tuple[str, ...]:
+    """The site set the job actually reads: what was asked for ∩ what is visible.
+
+    ``None`` on either side means "no narrowing at that layer" — the same
+    convention ``QueryScope.site_ids`` uses. The intersection is computed here
+    as well as ANDed into the SQL on purpose (defence in depth, matching how
+    the diagnosis line carries one range object): a mistranslated scope must not
+    be the only thing keeping a request inside its tenant.
+    """
+    if requested is None:
+        return tuple(allowed) if allowed is not None else ()
+    if allowed is None:
+        return tuple(requested)
+    return tuple(sorted(set(requested) & set(allowed)))
+
+
+def _db_window_bound(value: str) -> str:
+    """The timestamp string the SQL compares against, normalised to UTC.
+
+    The store already parsed and validated it; normalising again here keeps the
+    string the database sees independent of the offset a caller happened to
+    write (``+08:00`` and the equivalent ``Z`` must select the same rows).
+    """
+    return _as_datetime(value).astimezone(UTC).strftime("%Y-%m-%d %H:%M:%S")
 
 
 def _internal_error_message(error: Exception, order_no: str | None) -> str:

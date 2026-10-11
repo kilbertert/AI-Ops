@@ -285,16 +285,22 @@ def test_the_enumeration_covers_every_finalisation_point() -> None:
     ``gateway_api`` is deliberately absent since #391: chit-chat used to be
     answered inline there, and it is now the same zero-order job as every other
     general question, so its answer is finalised in ``gateway_runtime`` along
-    with the rest. Three surfaces remain, not four.
+    with the rest.
+
+    ``ops_analysis`` joins at #697: the failure-rate card is the fifth surface
+    and the fourth module to finalise an answer. It is listed here rather than
+    inferred, so that removing the guard from it turns this test red instead of
+    quietly shrinking the coverage it claims.
     """
     sites = [(path.name, call.lineno) for path, tree in _trees() for call in _entry_calls(tree)]
 
     assert {name for name, _ in sites} == {
         "agent_validator.py",
         "gateway_runtime.py",
+        "ops_analysis.py",
         "qa_rag.py",
     }
-    assert len(sites) == 3, sites
+    assert len(sites) == 4, sites
 
 
 # --------------------------------------------------------------------------
