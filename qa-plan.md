@@ -1780,3 +1780,34 @@ uv run pytest tests/test_assistant_api.py tests/test_conversation_api.py \
 - **未完成业务验收**：以上全部是离线真实栈（真实 HTTP 路由、真实 store、真实装配与聚合方法，
   只有 MySQL 连接被替换）。**没有**在 41 上对真实租户跑过一次这张卡，也**没有**验证过真实
   模型写出的叙述质量。生产验证属 #700。
+
+## 离线桩 + 故障码两张卡 QA（OPS-CARD，#698 / PRD #693）
+
+| ID | 环境 | 前置条件与数据 | 有序动作 | 预期可观察结果 | 清理/证据 |
+|---|---|---|---|---|---|
+| OPS-CARD-01 | 本地 dev（真实装配函数） | 一次离线聚合（12 条 / 9 台 / 4 条未恢复 / 480 分钟 / 分母 100） | 同参数装配两次（换叙述） | PASS：台数、时长、未恢复数、占比、等级逐字相同 | `tests/test_ops_cards.py::test_the_offline_card_is_deterministic_and_names_its_own_card`；突变：等级改看历史累计台数 → 红 |
+| OPS-CARD-02 | 本地 dev | 分母取不到（`devices_total=None`） | 装配两张卡 | PASS：占比 `null`、等级 `unavailable` —— **不是** `0.0` 与 `normal` | `...::test_a_missing_denominator_is_not_a_zero_ratio`；突变：`None` 当 0 处理 → 红 |
+| OPS-CARD-03 | 本地 dev | 一次离线聚合：历史 500 条 / 当前仅 1 条未恢复 | 装配 | PASS：等级是 `normal`（按**当前仍在离线中**的占比定级） | `...::test_offline_risk_is_decided_by_open_incidents_not_by_history` |
+| OPS-CARD-04 | 本地 dev | 一次故障码聚合（30 次 / 7 台 / E001×15、E002×9） | 装配 | PASS：排行与总数来自聚合；换叙述不动数字 | `...::test_the_fault_code_card_ranks_and_is_deterministic` |
+| OPS-CARD-05 | 本地 dev | 模型回包里塞 `top_codes`/`total_faults` | 装配故障码卡 | PASS：契约里的排行与总数仍是后端聚合的 | `...::test_a_model_written_rank_is_discarded` |
+| OPS-CARD-06 | 本地 dev | 三张卡各一次（各自的时间窗为空/范围为空） | 装配 | PASS：`SCOPE_EMPTY` 与 `NO_INCIDENTS` / `NO_FAULTS` 是三个不同的 `reason_code` | `...::test_an_empty_scope_and_an_empty_window_are_different_reasons`、`...::test_an_empty_fault_window_is_unavailable_with_its_own_reason` |
+| OPS-CARD-07 | 本地 dev | 目标语言 en，模型回中文叙述 | 装配两张卡 | PASS：`reason_code=PROSE_LEAKED`、叙述换成兜底、**数字与等级原样** | `...::test_a_chinese_narrative_on_the_offline_card_keeps_the_numbers`、`...::test_a_chinese_narrative_on_the_fault_card_keeps_the_numbers` |
+| OPS-CARD-08 | 本地 dev（真实聚合方法 + 连接替身） | 可见站点 `(S-1)`，请求 `(S-1,S-OUT)` | 调两个聚合 | PASS：`S-OUT` 不出现在 SQL 参数里、租户谓词仍在 | `...::test_an_out_of_scope_site_never_reaches_the_offline_sql`；突变：把请求集合直接下推 → 红 |
+| OPS-CARD-09 | 本地 dev | 空可见范围 | 调两个聚合 | PASS：返回 `None` 且**一条 SQL 都没发** | `...::test_an_empty_scope_short_circuits_before_any_card_query` |
+| OPS-CARD-10 | 本地 dev | 离线聚合 | 检查 SQL | PASS：时长用 `LEAST(recover_time, <窗口末端>)` 截断、`GREATEST(..., 0)` 兜负值、未恢复的单独成列 | `...::test_the_offline_sql_clamps_duration_and_separates_open_incidents` |
+| OPS-CARD-11 | 本地 dev | 故障码排行 | 检查 SQL | PASS：`error_code IS NOT NULL` + `LIMIT 7` + 窗口两句都在 | `...::test_the_fault_rank_is_bounded_and_requires_a_code` |
+| OPS-CARD-12 | 本地 dev | 分母查询，`site_ids=None` | 调 `count_devices` | PASS：仍按**调用者自己的站点集合**收窄——「不加条件」与「用我的范围」是两回事 | `...::test_the_device_total_uses_the_callers_scope_when_no_sites_are_named`；突变：`None` 原样返回、不拼 `IN` → 红 |
+| OPS-CARD-13 | 本地 dev | 分母查询，请求集合与范围无交集 | 调 `count_devices` | PASS：返回 `None` 且**不发 SQL** | `...::test_the_device_total_is_none_when_the_narrowed_set_is_empty` |
+| OPS-CARD-14 | 本地 dev（真实 HTTP 面 + 真实 store） | operator 会话 | `POST` 三个 card 值 | PASS：都 202，`card` 各自对应；不带 `card` 仍是 `failure_rate` | `tests/test_ops_analysis_api.py::test_the_other_two_cards_run_on_the_same_surface` |
+| OPS-CARD-15 | 本地 dev | consumer 会话 | `POST` offline / fault_code | PASS：都 403 `OPERATOR_ENTRY_REQUIRED`——入口门是**面**的性质，新卡不新开门 | `...::test_the_consumer_entry_cannot_reach_the_other_cards_either` |
+| OPS-CARD-16 | 本地 dev | 一个不认识的 card 值 | `POST` | PASS：422，且库里 0 行 | `...::test_an_unknown_card_is_refused_by_the_schema` |
+
+- **OPS-CARD-12 是本票最容易写错的一处。** 「调用方没指定站点」与「调用方没有站点限制」
+  看起来都是 `None`，但前者仍必须按调用者自己的站点集合收窄。把两者合并的实现会让一次
+  缺参数的请求变成一次全租户计数——而响应仍然成功、数字仍然"合理"。
+- **OPS-CARD-01 的等级与 OPS-CARD-03 是一对**：前者用「历史多多」的数据、后者用
+  「此刻很差」的数据，只有按当前未恢复占比定级时两条才会同时通过。
+- **未完成业务验收**：全部为离线真实栈（真实 HTTP 路由、真实 store、真实聚合与装配方法，
+  只有 MySQL 连接被替换）。**没有**在 41 上对真实租户跑过这两张卡，也**没有**验证过真实
+  模型写出的叙述质量；真实设备/故障表上的数据分布（尤其是 `iot_device_offline_monitor`
+  的 `tenant_id` 可空会漏掉多少行）**未测**。生产验证属 #700。

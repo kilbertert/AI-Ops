@@ -291,6 +291,12 @@ def test_the_enumeration_covers_every_finalisation_point() -> None:
     and the fourth module to finalise an answer. It is listed here rather than
     inferred, so that removing the guard from it turns this test red instead of
     quietly shrinking the coverage it claims.
+
+    It stays one module at #698 on purpose. The offline and fault-code cards are
+    two more cards on the same surface, and they finalise through the **same**
+    ``_prose_fields`` helper — so they add surfaces without adding a module. A
+    count that grew here would mean someone had given a card its own prose path,
+    which is the thing this pin exists to catch.
     """
     sites = [(path.name, call.lineno) for path, tree in _trees() for call in _entry_calls(tree)]
 

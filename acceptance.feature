@@ -2428,3 +2428,48 @@ Feature: 运维分析面的第一刀：失败率卡（#697）
       When 定稿
       Then 交付出去的叙述不是中文
       And 数字字段不被改写
+
+Feature: 离线桩与故障码两张卡（#698）
+  与失败率卡同一条运维分析面：同样的站点集合 + 时间窗，同样由后端算数字、模型只写叙述。
+  新增的是**卡**，不是新的机制——入口门、参数校验、错误形状、语言守卫全部共用。
+
+  Rule: 同一张面上的第三种与第四种卡
+
+    Scenario: 换一个 card 参数就换一张卡
+      Given 管家端会话与一个合法窗口
+      When 分别请求 failure_rate / offline / fault_code
+      Then 三张卡都受理，且响应里的 card 各自对应
+      And 不带 card 时仍是 failure_rate（既有调用方不变）
+
+    Scenario: 客户端仍不可达
+      Given consumer 入口的会话
+      When 请求 offline 或 fault_code
+      Then 明确拒绝，而不是返回一张空卡
+
+  Rule: 数字确定性（与失败率卡同一套）
+
+    Scenario: 同一输入两次运行
+      Given 同一组站点与同一时间窗
+      When 跑两次离线卡
+      Then 台数、时长、仍在离线中的条数逐字相同
+
+    Scenario: 模型写了排行也不作数
+      Given 一个在回包里给出 top_codes 的模型
+      When 装配故障码卡
+      Then 契约里的排行仍来自后端聚合
+
+  Rule: 分母缺失不等于零
+
+    Scenario: 取不到设备总数
+      Given 范围内的设备总数未取到
+      When 装配离线卡与故障码卡
+      Then 占比是 null、等级是 unavailable
+      And 不是 0.0 与 normal
+
+  Rule: 时长是下界
+
+    Scenario: 仍在离线中的记录不计入时长
+      Given 窗内有若干条未恢复的离线记录
+      When 聚合
+      Then 它们只计入 open_incidents
+      And 契约的 definition 写明时长是下界

@@ -394,8 +394,9 @@ class GatewayStore:
         window_end: str,
         rule_version: str,
         language: str = "zh",
+        card: str = "failure_rate",
     ) -> dict[str, Any]:
-        """Create an operations-analysis job (#697) on the diagnosis job table.
+        """Create an operations-analysis job (#697/#698) on the diagnosis job table.
 
         It shares ``standard_diagnoses`` deliberately: the status vocabulary, the
         claim guard, the expiry sweep and restart convergence are already right
@@ -432,6 +433,7 @@ class GatewayStore:
         if end <= start:
             raise ValueError("analysis window end must be after its start")
         rule_version = _scope(rule_version, "rule_version")
+        card = _scope(card, "card")
         language = _language(language)
         now = _utc_now()
         analysis_id = ANALYSIS_ID_PREFIX + uuid.uuid4().hex
@@ -442,8 +444,8 @@ class GatewayStore:
                 INSERT INTO standard_diagnoses (
                     diagnosis_id, scope_fingerprint, order_no, question, indicator_code, language,
                     internal_run_id, status, created_at, updated_at, deadline_at,
-                    kind, site_ids_json, window_start, window_end, rule_version
-                ) VALUES (?, ?, '', '', NULL, ?, NULL, 'queued', ?, ?, ?, 'analysis', ?, ?, ?, ?)
+                    kind, site_ids_json, window_start, window_end, rule_version, card
+                ) VALUES (?, ?, '', '', NULL, ?, NULL, 'queued', ?, ?, ?, 'analysis', ?, ?, ?, ?, ?)
                 """,
                 (
                     analysis_id,
@@ -456,6 +458,7 @@ class GatewayStore:
                     _iso(start),
                     _iso(end),
                     rule_version,
+                    card,
                 ),
             )
             row = connection.execute(
@@ -1139,6 +1142,7 @@ class GatewayStore:
                 ("window_start", "TEXT"),
                 ("window_end", "TEXT"),
                 ("rule_version", "TEXT"),
+                ("card", "TEXT"),
             ):
                 if name not in diagnosis_columns:
                     connection.execute(f"ALTER TABLE standard_diagnoses ADD COLUMN {name} {definition}")

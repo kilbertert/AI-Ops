@@ -162,6 +162,9 @@ OCCUPY_ORDER_LIMIT = 20
 #: 站点归属解析（ch_site）单次返回行数上限。
 SITE_SCOPE_MAX_ROWS = 1000
 
+#: 故障码排行取前几名：与公司 ``getErrRank`` 的 ``limit 7`` 一致（#698）。
+FAULT_CODE_RANK_LIMIT = 7
+
 
 #: pymysql 的参数占位符（paramstyle=format）；共享规则按此渲染租户谓词。
 _SQL_PARAM = "%s"
@@ -380,6 +383,182 @@ class MySQLSource:
             "normal_ended": _count_or_zero(row.get("normal_ended")),
             "top_sites": ((str(top["site_id"]), _count_or_zero(top["abnormal_ended"])),) if top else (),
         }
+
+    def count_devices(self, site_ids: tuple[str, ...] | None) -> int | None:
+        """范围内的设备总数——两张设备卡的**分母**（#698）。
+
+        没有分母就没有比率：一张只说「12 台离线」的卡无法回答「这算多吗」。
+        ``site_ids`` 为 ``None`` 表示用调用者范围内的全部站点；交集为空返回 ``None``
+        （与别处同形：没查过的范围不是「0 台设备」）。
+        """
+        if self._scope_blocked():
+            return None
+        requested = self._bounded_sites(site_ids)
+        if requested is not None and not requested:
+            return None
+        scope_where, params = self._scope_where(site_column=None, user_column=None)
+        fragments = [fragment for fragment in (scope_where,) if fragment]
+        if requested is not None:
+            fragments.append(f"site_id IN ({_placeholders(len(requested))})")
+            params.extend(requested)
+        where = " AND ".join(fragments) if fragments else "1=1"
+        hint = f"/*+ MAX_EXECUTION_TIME({int(self.settings.safety.mysql_max_execution_ms)}) */"
+        sql = (
+            f"SELECT {hint} COUNT(DISTINCT id) AS devices_total "
+            f"FROM `{self.database}`.`iot_charging_device` WHERE {where}"
+        )
+        with self._cursor() as cursor:
+            cursor.execute(sql, list(params))
+            row = cursor.fetchone() or {}
+        return _count_or_zero(row.get("devices_total"))
+
+    def aggregate_offline_incidents(
+        self,
+        site_ids: tuple[str, ...] | None,
+        window_start: str,
+        window_end: str,
+    ) -> dict[str, Any] | None:
+        """离线桩卡（#698）：台数、时长量级、仍在离线中的条数。
+
+        表与列的证据：``iot_device_offline_monitor`` 是公司自己的离线监控表，
+        建表语句在 ``cloud-charging-pile-core/src/main/resources/db/migration/
+        V1.0.110__iot_offline_monitor.sql``（列 ``device_id`` / ``site_id`` /
+        ``offline_time`` / ``recover_time`` / ``tenant_id``），加上
+        ``V1.1.37__add_vol.sql``（``status``）与 ``V1.1.92__add_field_device_type.sql``
+        （``operation_type``）。**列名是抄 DDL 的，不是猜的**——
+        ``offline_time`` 与 ``recover_time`` 都可空，所以下面两个 CASE 都要处理 NULL。
+
+        ⚠️ **该表的 ``tenant_id`` 可空**（DDL 如此），因此租户谓词会漏掉
+        ``tenant_id IS NULL`` 的行。本函数**仍然下推租户**：范围边界不能因为某张表
+        恰好写得不严就放宽；漏掉的行是**数据缺口**，其量级未在 41 上测过，
+        如实记在这里而不是靠放宽范围去"补上"。
+
+        **时长只累计已恢复的那些，并被窗口末端截断。** 仍在离线中的记录其结束时间
+        在查询时刻还不存在，用「现在」去算会让同一个窗口两次查询给出不同的数字——
+        那正是这张卡承诺要避免的事。因此未恢复的**只计数、不计时长**，并作为
+        ``open_incidents`` 单独交付：读的人据此知道时长是**下界**而不是全貌。
+        """
+        if self._scope_blocked():
+            return None
+        requested = self._bounded_sites(site_ids)
+        if requested is not None and not requested:
+            return None
+        scope_where, params = self._scope_where(site_column=None, user_column=None)
+        fragments = [fragment for fragment in (scope_where,) if fragment]
+        if requested is not None:
+            fragments.append(f"site_id IN ({_placeholders(len(requested))})")
+            params.extend(requested)
+        fragments.append("offline_time >= %s")
+        params.append(window_start)
+        fragments.append("offline_time < %s")
+        params.append(window_end)
+        where = " AND ".join(fragments)
+        hint = f"/*+ MAX_EXECUTION_TIME({int(self.settings.safety.mysql_max_execution_ms)}) */"
+        # The clamp is a SELECT-list parameter, so it precedes every WHERE
+        # parameter: the SQL is built top to bottom and the order must follow it.
+        sql = (
+            f"SELECT {hint} COUNT(*) AS incidents, "
+            "COUNT(DISTINCT device_id) AS offline_devices, "
+            "SUM(CASE WHEN recover_time IS NULL THEN 1 ELSE 0 END) AS open_incidents, "
+            "SUM(CASE WHEN recover_time IS NULL THEN 0 ELSE GREATEST("
+            "TIMESTAMPDIFF(MINUTE, offline_time, LEAST(recover_time, %s)), 0) END) AS offline_minutes "
+            f"FROM `{self.database}`.`iot_device_offline_monitor` WHERE {where}"
+        )
+        with self._cursor() as cursor:
+            cursor.execute(sql, [window_end, *params])
+            row = cursor.fetchone() or {}
+        return {
+            "incidents": _count_or_zero(row.get("incidents")),
+            "offline_devices": _count_or_zero(row.get("offline_devices")),
+            "open_incidents": _count_or_zero(row.get("open_incidents")),
+            "offline_minutes": _count_or_zero(row.get("offline_minutes")),
+        }
+
+    def aggregate_fault_codes(
+        self,
+        site_ids: tuple[str, ...] | None,
+        window_start: str,
+        window_end: str,
+    ) -> dict[str, Any] | None:
+        """故障码排行卡（#698）。
+
+        公式参考公司自己的 ``IotDeviceFailureRecordsMapper.getErrRank``
+        （``group by error_code order by errCount desc limit 7``）——**只参考公式**：
+        那一条**既没有租户条件也没有时间窗**，直接用会把全库排行当成某个租户某个区间
+        的排行。执行落在这里的只读 SQL 上，范围与时间窗都由 ``QueryScope`` 收。
+
+        表与列的证据：``V1.0.89__iot_failure_recore.sql``（表与 ``device_id`` /
+        ``error_code`` / ``error_reason`` / ``tenant_id``）、
+        ``V1.0.109__iot_failure_add.sql``（``site_id``）、
+        ``V1.0.104__iot_device_failure.sql``（``fault_time``）、
+        ``V1.1.28__add_colum_failure.sql``（``order_no``）。``fault_time`` 可空，
+        而窗口条件会把 NULL 排除——这是**有意的**：没有故障时间的记录无法归入任何
+        一个区间，硬塞进某一个会让这张卡的时间语义失真。
+        """
+        if self._scope_blocked():
+            return None
+        requested = self._bounded_sites(site_ids)
+        if requested is not None and not requested:
+            return None
+        scope_where, params = self._scope_where(site_column=None, user_column=None)
+        fragments = [fragment for fragment in (scope_where,) if fragment]
+        if requested is not None:
+            fragments.append(f"site_id IN ({_placeholders(len(requested))})")
+            params.extend(requested)
+        fragments.append("fault_time >= %s")
+        params.append(window_start)
+        fragments.append("fault_time < %s")
+        params.append(window_end)
+        where = " AND ".join(fragments)
+        hint = f"/*+ MAX_EXECUTION_TIME({int(self.settings.safety.mysql_max_execution_ms)}) */"
+        sql = (
+            f"SELECT {hint} COUNT(*) AS total_faults, "
+            "COUNT(DISTINCT device_id) AS faulty_devices "
+            f"FROM `{self.database}`.`iot_device_failure_records` WHERE {where}"
+        )
+        rank_sql = (
+            f"SELECT {hint} error_code, COUNT(*) AS fault_count "
+            f"FROM `{self.database}`.`iot_device_failure_records` WHERE {where} "
+            "AND error_code IS NOT NULL GROUP BY error_code "
+            f"ORDER BY fault_count DESC, error_code ASC LIMIT {FAULT_CODE_RANK_LIMIT}"
+        )
+        with self._cursor() as cursor:
+            cursor.execute(sql, list(params))
+            row = cursor.fetchone() or {}
+            cursor.execute(rank_sql, list(params))
+            ranked = cursor.fetchall() or []
+        return {
+            "total_faults": _count_or_zero(row.get("total_faults")),
+            "faulty_devices": _count_or_zero(row.get("faulty_devices")),
+            "top_codes": tuple(
+                (str(item["error_code"]), _count_or_zero(item["fault_count"])) for item in ranked
+            ),
+        }
+
+    def _bounded_sites(self, site_ids: tuple[str, ...] | None) -> tuple[str, ...] | None:
+        """本次查询**实际**要筛的站点集合，三种结果各不相同。
+
+        * ``None`` —— **不加站点条件**：调用方没指定，而它自己的可见范围本来就是
+          「租户内不限站点」（``scope.site_ids is None``）。此时租户谓词仍由
+          ``_scope_where`` 下推。
+        * ``()`` —— **筛出来是空的**：请求的集合与可见站点没有交集。调用方据此短路，
+          **不发 SQL**；把它当成「不收窄」会让一次越界的请求变成一次全租户扫描。
+        * 非空元组 —— 请求集合与可见站点的交集（去重后）。
+
+        交集放在本层而不是调用方，理由与 ``aggregate_order_statuses`` 相同：这一层
+        才是「不得超出范围」的守卫边界，把「调用方已经窄过了」当前提意味着任何一次
+        调用方疏忽都会如实统计出无权看到的站点，而查询成功、数字合理。
+        """
+        scope_sites = None if self.scope is None else self.scope.site_ids
+        if site_ids is None:
+            # No request-level narrowing: the caller's own range decides, and a
+            # range of `None` needs no site predicate at all.
+            return None if scope_sites is None else tuple(scope_sites)
+        requested = tuple(dict.fromkeys(site_ids))
+        if scope_sites is not None:
+            allowed = set(scope_sites)
+            requested = tuple(site for site in requested if site in allowed)
+        return requested
 
     def get_fee_template_record(self, order_no: str, tenant_id: str | None = None) -> dict[str, Any] | None:
         if self._scope_blocked():
