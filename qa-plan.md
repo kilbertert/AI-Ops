@@ -1755,6 +1755,25 @@ uv run pytest tests/test_assistant_api.py tests/test_conversation_api.py \
   **都是错的**（前者被 `bounded_http.py:435` 的短路否定，后者 10-01 已由 #509 修好），
   已在票上更正并记入 `docs/validation.md`。
 
+## 管家端诊断由已发布运维配方驱动 QA（OPS-AGENT，#695 / PRD #693）
+
+| ID | 环境 | 前置条件与数据 | 有序动作 | 预期可观察结果 | 清理/证据 |
+|---|---|---|---|---|---|
+| OPS-AGENT-01 | 本地 dev（真实 `GatewayRuntime` + 真实 `GatewayStore` + 真实 `AgentStore` + 真实登记表；只替换模型会话） | 租户 T 下发布两份 operations 配方（甲、乙），乙较新；`(T, operator)` 登记行点名**甲** | 带 `business_entry="operator"` 起动一次诊断 | PASS：诊断拿到的方法论是**甲**的正文（换标记可证伪） | `tests/test_operator_diagnosis_entry.py::test_the_operator_entry_runs_under_the_named_published_operations_prompt`、`::test_the_named_agent_is_used_even_when_it_is_not_the_newest`；突变：按「最新已发布」选版 → 红 |
+| OPS-AGENT-02 | 本地 dev | 同上，`(T, operator)` 行存在 | 以 `business_entry="consumer"` 起动一次诊断 | PASS：方法论为空字符串 | `...::test_the_consumer_entry_injects_nothing`；突变：无条件读登记表 → 红 |
+| OPS-AGENT-03 | 本地 dev | 登记表**一行都没有**，但租户下已发布一份 operations 配方 | 带 `business_entry="operator"` 起动诊断 | PASS：方法论为空、作业 completed —— 环境未采用登记表时旧行为不变 | `...::test_an_unadopted_registry_keeps_the_pre_695_behavior`；突变：把「未配置」也判成 fail-closed → 红 |
+| OPS-AGENT-04 | 本地 dev | 登记表已采用（另有租户的一行） | 三种点名服务不了的形状各跑一次：名字不存在 / 点名 customer 版本 / 点名只有草稿的名字 | PASS：三次都 `status=failed` + `error_code=DIAGNOSIS_AGENT_UNREGISTERED`，且**模型从未被触到** | `...::test_the_operator_entry_fails_closed_without_a_serviceable_operations_agent`；突变：回退烤死提示词 → 红 |
+| OPS-AGENT-05 | 本地 dev | 一个 coordinator，分别以空 / 空白 / 有值的方法论构造 | 取 `_initial_prompt()` 逐字比较 | PASS：空与空白时与基线**字符串相等**；有值时该段排在语言规则、标识符规则与收尾 schema 句**之前** | `tests/test_agent_scenarios.py::test_an_empty_methodology_leaves_the_diagnosis_prompt_byte_identical`、`::test_the_methodology_does_not_outrank_the_harness_rules` |
+| OPS-AGENT-06 | 本地 dev | —— | 读 `agent_workspace._runtime_instructions` / `codex_runtime._developer_instructions` / `agent_workspace._qa_runtime_instructions` 的签名 | PASS：护栏文本的生产者不接受入口或租户参数（只能接受输出语言） | `tests/test_agent_scenarios.py::test_the_guardrail_text_is_not_parameterised_by_entry_or_tenant` |
+| OPS-AGENT-07 | 本地 dev | 助手入口应用（真实授权判定 + 真实范围下推 + 注入式会话替身） | 带 `X-Business-Entry: operator` 且带可见订单，点击「订单检测」 | PASS：运行时收到的 `business_entry` 是 `"operator"` | `tests/test_operator_entry_actions.py::test_the_entry_header_reaches_the_diagnosis_runtime`；突变：删掉 forward 那行 → 红（而 OPS-AGENT-08 的形态断言仍绿，这正是它单独存在的理由） |
+| OPS-AGENT-08 | 本地 dev | 同上 | 同一 code 在 operator 与 consumer 各点一次（不带订单） | PASS：两侧同为 `clarification` / `missing_fields=["order_no"]` / 同一 `message` | `tests/test_operator_entry_actions.py::test_the_clicked_order_diagnosis_shares_the_clarification_shape_across_entries` |
+
+- **OPS-AGENT-07 与 -08 是成对的。** 形态断言（-08）在澄清处就返回，选版那一段根本没跑到，
+  因此它对「入口有没有被传进运行时」是盲的；只留 -08 会让删掉 forward 的实现全绿。
+- **未完成业务验收**：以上全部是离线真实栈（真实运行时、真实存储、真实登记表、真实路由），
+  **模型会话被替换**。真实模型下的措辞差异、41 上的生产选版与「Dify 提示词与护栏冲突时模型听谁的」
+  **没有验证** —— 后者按设计无强制机制（见 `docs/adr/0013` 的「护栏不可被覆盖」表），只能观测。
+  生产 `(租户, operator)` 登记行的补齐是运营动作，属后续票。
 ## 运维分析面第一刀：失败率卡 QA（OPS-ANALYSIS，#697 / PRD #693）
 
 | ID | 环境 | 前置条件与数据 | 有序动作 | 预期可观察结果 | 清理/证据 |

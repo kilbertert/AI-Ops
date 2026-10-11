@@ -91,9 +91,17 @@ class _Runtime:
         pass
 
     def start_standard_diagnosis(
-        self, context, order_no: str, question: str, indicator_code, language="zh", *, conversation_turn=None
+        self,
+        context,
+        order_no: str,
+        question: str,
+        indicator_code,
+        language="zh",
+        *,
+        conversation_turn=None,
+        business_entry: str | None = None,
     ):
-        del context, indicator_code
+        del context, indicator_code, business_entry
         self.calls.append((order_no, question))
         self.turns.append(conversation_turn)
         return {

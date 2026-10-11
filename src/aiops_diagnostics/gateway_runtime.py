@@ -88,6 +88,19 @@ _LOGGER = logging.getLogger("aiops.gateway_runtime")
 #: what a frontend may therefore rely on.
 DIAGNOSIS_ORDER_OUT_OF_SCOPE = "DIAGNOSIS_ORDER_OUT_OF_SCOPE"
 
+#: The operator entry named no serviceable operations agent (#695): the runtime
+#: registry is unconfigured, has no ``(tenant, operator)`` row, names an agent
+#: nobody published, or names one whose type is not ``operations``. All four are
+#: one answer — this entry is not served — and it is deliberately NOT a fallback
+#: to the hard-coded diagnostic prompt: that prompt is what the operations slot
+#: exists to replace.
+DIAGNOSIS_AGENT_UNREGISTERED = "DIAGNOSIS_AGENT_UNREGISTERED"
+
+#: Sentinel returned by ``_diagnosis_methodology`` when it already ended the job:
+#: the terminal write and the conversation turn are settled, so the worker must
+#: return without touching either a second time.
+_REFUSED = object()
+
 #: What ``_try_customer_rag`` hands back when the claim-guard refused the job's
 #: terminal write: another path (expiry today; cancellation once #357 lands)
 #: already put the row in a terminal state, so this worker's result was NOT
@@ -790,6 +803,7 @@ class GatewayRuntime:
         language: str = DEFAULT_LANGUAGE,
         *,
         conversation_turn: tuple[str, str, int] | None = None,
+        business_entry: str | None = None,
     ) -> dict[str, Any]:
         """Start an order diagnosis job.
 
@@ -807,6 +821,14 @@ class GatewayRuntime:
         until the job reaches a terminal state — the same shape the qa line
         (``start_assistant_qa``) already has. Without it nothing about the
         conversation changes.
+
+        ``business_entry`` (#695) is which content domain the caller is in —
+        the same header the assistant line already threads through for the QA
+        branch. It is consumed in the worker, not here: the workspace and the
+        job row are created before the registry is read, so an operator run
+        whose ``(tenant, operator)`` row is missing still gets a row that
+        reports *why* it is not being served, rather than a 202 that never
+        terminates. ``None`` keeps the pre-#695 behavior byte-for-byte.
         """
         language = effective_language(language)
         selected_provider = self.diagnostic_settings.agent.select_provider(None)
@@ -853,6 +875,7 @@ class GatewayRuntime:
             language,
             conversation_turn,
             registration.register_interrupt,
+            business_entry,
         )
         self._futures[diagnosis["diagnosis_id"]] = future
         future.add_done_callback(lambda _: self._futures.pop(diagnosis["diagnosis_id"], None))
@@ -1550,6 +1573,7 @@ class GatewayRuntime:
         language: str = DEFAULT_LANGUAGE,
         conversation_turn: tuple[str, str, int] | None = None,
         turn_registrar: Callable[[Any], None] | None = None,
+        business_entry: str | None = None,
     ) -> None:
         if not self.store.update_standard_diagnosis(diagnosis_id, status="running"):
             # Refused claim: the row was already terminalised by another path,
@@ -1571,6 +1595,16 @@ class GatewayRuntime:
         settings.agent.run_root = self.diagnostic_settings.agent.run_root
         try:
             query_scope = resolve_query_scope(context)
+            methodology = self._diagnosis_methodology(
+                context.effective_tenant_id,
+                business_entry,
+                diagnosis_id,
+                conversation_turn,
+                claim_stop,
+                started_ms,
+            )
+            if methodology is _REFUSED:
+                return
             # One range object: the tenant is carried once, as the frozen
             # ``QueryScope`` the SQL push-down and the tool layer both read. It
             # used to also arrive as ``allowed_tenants={context.effective_tenant_id}``
@@ -1587,6 +1621,7 @@ class GatewayRuntime:
                 language=language,
                 history=history,
                 turn_registrar=turn_registrar,
+                methodology=methodology,
             )
         except (AgentRuntimeError, SourceError, ValueError) as exc:
             ok = self.store.update_standard_diagnosis(
@@ -1939,6 +1974,109 @@ class GatewayRuntime:
             token_count=_estimate_turn_tokens("", result),
         )
         return result
+
+    def _diagnosis_methodology(
+        self,
+        tenant_id: str,
+        business_entry: str | None,
+        diagnosis_id: str,
+        conversation_turn: tuple[str, str, int] | None,
+        claim_stop: threading.Event | None,
+        started_ms: float,
+    ) -> Any:
+        """The operations methodology this diagnosis runs under, or ``""``.
+
+        Only the **operator** entry consults the registry (#695). Everything
+        else — the consumer entry, the CLI, and any caller that states no entry
+        — returns ``""``, which keeps the run's prompt byte-identical to the
+        one it had before the registry was read here at all. ``""`` rather than
+        ``None`` on purpose: the empty string is what the coordinator and
+        ``run_agent_diagnosis`` already mean by "no methodology", and returning
+        ``None`` here would make the one path that must not change the one path
+        that crashes on ``.strip()``.
+
+        For the operator entry the registry is authoritative and **fail-closed**,
+        the same direction the QA line already takes: an unregistered pair, or a
+        name the store does not publish, or a version whose type is not
+        ``operations``, all end the job with ``DIAGNOSIS_AGENT_UNREGISTERED``
+        rather than falling back to the hard-coded prompt. Falling back would
+        silently serve the operator a methodology nobody published — which is
+        precisely the coupling this ticket removes.
+
+        The one case that is **not** fail-closed is an *unadopted* deployment:
+        while the registry holds no row at all, the entry keeps the pre-#695
+        behavior — no injection — rather than refusing to serve. Refusing there
+        would migrate an environment that never opted into the registry, by
+        deployment accident instead of by decision; the QA line draws the same
+        line for the same reason (it keeps "newest published" until the first
+        row exists). The whole point of "any row makes the registry
+        authoritative" is that this gate ships inert and then closes on the
+        first declared binding.
+
+        A distinct case is deliberately **not** special-cased: when the registry
+        is adopted and configured for ``operator`` but no agent store is wired,
+        the entry fails closed like every other unserviceable pair. That is a
+        wiring defect, and reporting it as "not configured" is the useful
+        answer; treating it as "unadopted" would make a missing dependency look
+        like a deployment choice.
+
+        Returns ``_REFUSED`` when the terminal write landed and the caller must
+        stop (the conversation turn is already settled here, so the caller must
+        not settle it a second time).
+        """
+        from aiops_diagnostics.scope_context import is_operator_entry
+
+        if not is_operator_entry(business_entry):
+            return ""
+        registered_name, registry_configured = self._registered_agent(tenant_id, "operator")
+        if not registry_configured:
+            # Unadopted: no row exists for ANY pair, so this environment has not
+            # taken up the registry at all. It keeps the pre-#695 behavior —
+            # the hard-coded prompt, no injection — for the same reason the QA
+            # line keeps its pre-registry rule there: an environment that never
+            # opted in must not be migrated by deployment accident. Once any
+            # row exists the registry is authoritative for everyone, which is
+            # what makes the fail-closed half below safe to ship inert.
+            return ""
+        selection = None
+        if registered_name is not None and self.agent_store is not None:
+            from aiops_diagnostics.ops_agents import select_operations_agent
+
+            with contextlib.suppress(Exception):
+                selection = select_operations_agent(self.agent_store, tenant_id, registered_name)
+        if selection is None:
+            # Nothing was generated and nothing will be: the entry is not
+            # served. Reported as a terminal failure with its own code so the
+            # operator (and the next debugger) can tell "this pair has no
+            # operations agent" from "the model failed".
+            ok = self.store.update_standard_diagnosis(
+                diagnosis_id,
+                status="failed",
+                error_code=DIAGNOSIS_AGENT_UNREGISTERED,
+                error_message="operator entry has no published operations agent",
+            )
+            self._complete_conversation_turn(
+                conversation_turn,
+                "",
+                None,
+                cancelled=True,
+                guarded=not ok,
+                stop_renewer=claim_stop,
+            )
+            return _REFUSED
+        # #695: this is a terminal outcome that is neither a model failure nor a
+        # source failure, so it is counted here rather than in the workers'
+        # exception paths — the same reason the QA line records its metrics at
+        # the point the outcome is decided. ``error_code`` carries the same code
+        # the row reports, so the metric and the row cannot disagree.
+        self._record_metric(
+            tenant_id=tenant_id,
+            route_type="diagnosis",
+            outcome="failed",
+            error_code=DIAGNOSIS_AGENT_UNREGISTERED,
+            duration_ms=int((time.monotonic() - started_ms) * 1000),
+        )
+        return selection.prompt
 
     def _registered_agent(self, tenant_id: str, business_entry: str) -> tuple[str | None, bool]:
         """The runtime registry's answer for this pair: ``(agent_name, configured)``.

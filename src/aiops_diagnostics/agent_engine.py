@@ -168,6 +168,7 @@ class AgentCoordinator:
         language: str = DEFAULT_LANGUAGE,
         environment_notes: tuple[str, ...] = (),
         history: str = "",
+        methodology: str = "",
     ) -> None:
         self.workspace = workspace
         self.manifest = manifest
@@ -182,6 +183,11 @@ class AgentCoordinator:
         #: was unreadable, which leaves every prompt below byte-identical to the
         #: one this class built before it accepted history at all.
         self.history = history
+        #: The published operations agent's prompt (#695), injected as the
+        #: incident's *methodology*. Empty keeps the prompt byte-identical to
+        #: the one this class built before it accepted methodology at all —
+        #: that byte-identity is the consumer path's regression boundary.
+        self.methodology = methodology
         self.validator = AgentResultValidator(
             manifest,
             journal,
@@ -365,6 +371,20 @@ class AgentCoordinator:
 并将其影响写入 limitations 与 next_steps；如仍需请求，工具会自然失败：
 {notes}
 """
+        methodology_block = ""
+        if self.methodology.strip():
+            # The published operations agent's methodology (#695). It goes in
+            # as *context*, immediately before the tool list, so every rule the
+            # harness enforces — the language contract, the identifier rule, the
+            # closing schema sentence — is stated AFTER it and therefore reads
+            # as the later, governing instruction. Ordering is not the
+            # enforcement (the tool layer and the validator are); this block is
+            # a request, not a boundary.
+            methodology_block = f"""
+运维方法论（由运营在智能体平台编辑、经发布门冻结的版本正文）——它说明**怎么查**，
+不改变只读边界、证据纪律与输出契约，也不放宽任何一条：
+{self.methodology.strip()}
+"""
         return f"""Diagnose the immutable incident below.
 Start by reading `incident.json`, `AGENTS.md`, and `references/INDEX.md`.
 Then inspect only the staged references that are relevant.
@@ -374,7 +394,8 @@ Incident manifest:
 {incident}
 ```
 
-{self.history}Available read-only evidence tools:
+{self.history}{methodology_block}
+Available read-only evidence tools:
 {tools}
 {notes_block}
 Choose the smallest useful evidence set. Normally request `order_snapshot` first.

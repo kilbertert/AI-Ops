@@ -245,12 +245,17 @@ def test_clicked_order_diagnosis_with_a_visible_order_starts_the_diagnosis(
     assert runtime.questions == []
 
 
-def test_the_clicked_order_diagnosis_behaves_like_the_same_code_on_the_consumer_entry(
+def test_the_clicked_order_diagnosis_shares_the_clarification_shape_across_entries(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """「订单检测」未绑智能体版本，同 code 在两个入口的行为一致。
+    """「订单检测」未绑智能体版本，同 code 在两个入口的**请求形态**一致。
 
-    入口只决定内容域，不另开一条执行路径：同样的点击在两侧得到同一个澄清响应。
+    入口只决定内容域与「哪一份运维配方服务它」（#695），不另开一条执行路径：同样的
+    点击在两侧得到同一个澄清响应。
+
+    ⚠️ 这条断言**不足以**证明入口分流没坏——澄清发生在订单守卫处，选版那一段根本
+    没跑到。真正证明分流的是下面那两条：一条断言入口确实传到了运行时，一条断言两侧
+    拿到的选版结果不同。三条一起才是「一条执行路径、两个入口」。
     """
     client, runtime = _app(tmp_path, monkeypatch, published_entries=("consumer", "operator"))
 
@@ -272,6 +277,31 @@ def test_the_clicked_order_diagnosis_behaves_like_the_same_code_on_the_consumer_
     assert operator_body["missing_fields"] == consumer_body["missing_fields"] == ["order_no"]
     assert operator_body["message"] == consumer_body["message"]
     assert runtime.diagnoses == []
+
+
+def test_the_entry_header_reaches_the_diagnosis_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """入口头必须真的传进运行时——这是 #695 的接线那半边。
+
+    注入式替身对「header 有没有被传到门」是**盲的**：它照旧返回一个固定上下文，
+    于是把 forward 那行删掉，上面那条形态断言照样全绿。所以这条断言的是**收到的
+    参数**，而不是结果。
+    """
+    connection = Connection()
+    client, runtime = _app(tmp_path, monkeypatch, connection=connection)
+
+    client.post(
+        "/v1/assistant/questions",
+        json={
+            "question": DIAGNOSIS_QUESTION,
+            "shortcut_code": "smart_diagnosis",
+            "order_no": ORDER_INSIDE,
+        },
+        headers=_OPERATOR_HEADERS,
+    )
+
+    assert runtime.entries == ["operator"], runtime.entries
 
 
 # --- 3. 「客户案例」在知识库未就绪时返回明确的不可用 --------------------------
