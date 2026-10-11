@@ -55,8 +55,8 @@ no project argument. Both answer *where* something is; neither replaces reading 
 - AGENTS.md
 - CLAUDE.md
 - README.md
-- docs/ — 57 markdown file(s)
-- docs/adr/ — 10 markdown file(s)
+- docs/ — 58 markdown file(s)
+- docs/adr/ — 11 markdown file(s)
 - docs/agents/ — 26 markdown file(s)
 
 ## Tree (depth 2, first 80 lines; dependencies, build
@@ -84,6 +84,7 @@ deploy/
 docs/
   adr/
     0001-read-only-diagnostic-boundary.md
+    0002-adr-check-scope-and-self-application.md
     0002-trusted-pr-control-plane.md
     0003-bff-delegated-user-identity.md
     0004-bff-owns-frontend-api-boundary.md
@@ -92,7 +93,7 @@ docs/
     0007-answer-surface-language-guard.md
     0008-adr-0003-deviation-session-direct-read.md
     0009-operator-identity-via-company-oauth2-token.md
-    0010-reversal-of-prd-200-language-boundary.md
+    ... (1 more)
   afk-cutover/
     decisions.md
     pr-a-spec.md
