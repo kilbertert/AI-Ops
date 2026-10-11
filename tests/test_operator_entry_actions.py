@@ -21,14 +21,10 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-
-# 与 #426 共用同一套替身（行级镜像的假 MySQL、真实授权判定、运营商会话身份、发布
-# 后的入口应用）：替身各写一份会各自漂移，因此这里不重写。
 from operator_support import (
-    CONSUMER_HEADERS as _CONSUMER_HEADERS,
-)
-from operator_support import (
+    AGENT_VERSION_KEY,
     DIAGNOSIS_QUESTION,
+    FOLLOWUP_QUESTION,
     ORDER_INSIDE,
     SITE_IN,
     Caller,
@@ -42,6 +38,12 @@ from operator_support import (
     gateway_settings,
     operator_session,
     publish,
+)
+
+# 与 #426 共用同一套替身（行级镜像的假 MySQL、真实授权判定、运营商会话身份、发布
+# 后的入口应用）：替身各写一份会各自漂移，因此这里不重写。
+from operator_support import (
+    CONSUMER_HEADERS as _CONSUMER_HEADERS,
 )
 from operator_support import (
     OPERATOR_HEADERS as _OPERATOR_HEADERS,
@@ -301,6 +303,46 @@ def test_the_entry_header_reaches_the_diagnosis_runtime(
         headers=_OPERATOR_HEADERS,
     )
 
+    assert runtime.entries == ["operator"], runtime.entries
+
+
+def test_the_entry_header_reaches_the_runtime_on_the_active_order_path_too(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """**第三个**诊断调用点也要传入口：会话活跃订单的随访（route 1c）。
+
+    #695 把入口接到了诊断面上，而诊断面有**四个**调用点（标准诊断路由 + 助手的三条
+    订单分支）。上面那条用例只覆盖显式带订单号的那一条；对抗性突变（把 route 1c 的
+    `business_entry=` 删掉）证明**没有任何用例会因此转红**——四个调用点里三个有回归、
+    第四个没有。
+
+    这条走的是真实链路里最容易漏的那一条：追问只带会话 id、订单号来自会话的
+    `active_order_no`。它必须与其它三条一样，把入口传进运行时。
+    """
+    connection = Connection()
+    client, runtime = _app(tmp_path, monkeypatch, connection=connection)
+
+    created = client.post(
+        "/v1/conversations", json={"agent_version_key": AGENT_VERSION_KEY}, headers=_OPERATOR_HEADERS
+    )
+    assert created.status_code == 201, created.text
+    cid = created.json()["conversation_id"]
+    bound = client.post(
+        f"/v1/conversations/{cid}/active-order",
+        json={"order_no": ORDER_INSIDE},
+        headers=_OPERATOR_HEADERS,
+    )
+    assert bound.status_code == 200, bound.text
+
+    response = client.post(
+        "/v1/assistant/questions",
+        json={"question": FOLLOWUP_QUESTION, "conversation_id": cid},
+        headers=_OPERATOR_HEADERS,
+    )
+
+    assert response.status_code == 202, response.text
+    assert response.json()["type"] == "diagnosis"
+    assert response.json()["order_no_from_context"] == ORDER_INSIDE
     assert runtime.entries == ["operator"], runtime.entries
 
 
