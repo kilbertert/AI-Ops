@@ -2473,3 +2473,45 @@ Feature: 离线桩与故障码两张卡（#698）
       When 聚合
       Then 它们只计入 open_incidents
       And 契约的 definition 写明时长是下界
+
+Feature: 支付失败卡（#699）
+  本期唯一在公司侧没有现成聚合端点的卡。它的验收不住「把数字算对」，而在
+  「**算不出来时说清楚，而不是编一个**」——订单表上只有支付结果态。
+
+  Rule: 平台上没有「支付失败」这个事实
+
+    Scenario: 卡上不给失败率
+      Given 一个窗内的支付四分桶
+      When 装配支付卡
+      Then failure_rate 是 null、risk 是 unavailable
+      And reason_code 说明缺的是数据源而不是这张卡没算
+
+    Scenario: 模型写一个失败率也进不来
+      Given 一个在回包里给出 failure_rate 的模型
+      When 装配支付卡
+      Then 契约里的 failure_rate 仍是 null
+
+    Scenario: 缺口不阻断能对上账的那部分
+      Given 同样的四分桶
+      When 装配支付卡
+      Then 已支付 = 已退款 + 未退款、已支付 + 未支付 = 总数
+
+  Rule: 退款的占比以已支付为分母
+
+    Scenario: 分母是已支付而不是总数
+      Given 100 单里 80 单已支付、其中 20 单已退款
+      When 读 refund_share
+      Then 它是 0.25（20/80），不是 0.20
+
+    Scenario: 没有已支付订单时不给占比
+      Given 已支付为 0
+      When 读 refund_share
+      Then 它是 null，而不是 0.0
+
+  Rule: 与另外三张卡同一套规则
+
+    Scenario: 同一路由、同一入口门
+      Given 管家端会话
+      When 请求 card=payment
+      Then 202 且响应里的 card 是 payment
+      And consumer 入口请求它得到明确拒绝

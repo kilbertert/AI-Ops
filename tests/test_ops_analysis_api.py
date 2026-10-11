@@ -302,3 +302,18 @@ def test_an_unknown_card_is_refused_by_the_schema(tmp_path: Path) -> None:
 
     assert response.status_code == 422
     assert store.count_standard_diagnoses() == 0
+
+
+def test_the_payment_card_joins_the_same_surface(tmp_path: Path) -> None:
+    """#699：第四张卡走同一个路由与同一个入口门，并诚实地不带失败率。"""
+    client, _, runtime = _client(tmp_path)
+    with client:
+        created = client.post("/v1/standard/analyses", headers=_headers(), json={"card": "payment", **WINDOW})
+        forbidden = client.post(
+            "/v1/standard/analyses", headers=_headers("consumer"), json={"card": "payment", **WINDOW}
+        )
+
+    assert created.status_code == 202, created.text
+    assert created.json()["card"] == "payment"
+    assert runtime.cards == ["payment"]
+    assert forbidden.status_code == 403

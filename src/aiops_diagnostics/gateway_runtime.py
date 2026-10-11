@@ -49,6 +49,7 @@ from aiops_diagnostics.knowledge_retrieval import (
 from aiops_diagnostics.ops_analysis import (
     OPERATIONS_CARD_FAILURE_RATE,
     OPERATIONS_CARD_OFFLINE,
+    OPERATIONS_CARD_PAYMENT,
     OPERATIONS_CARDS,
     REASON_NO_FAULTS,
     REASON_NO_INCIDENTS,
@@ -57,9 +58,11 @@ from aiops_diagnostics.ops_analysis import (
     AnalysisAggregate,
     FaultCodeAggregate,
     OfflineAggregate,
+    PaymentAggregate,
     build_failure_rate_contract,
     build_fault_code_contract,
     build_offline_contract,
+    build_payment_contract,
 )
 from aiops_diagnostics.ops_analysis import (
     RULE_VERSION as OPS_ANALYSIS_RULE_VERSION,
@@ -534,6 +537,8 @@ class GatewayRuntime:
         )
         if card == OPERATIONS_CARD_OFFLINE:
             return build_offline_contract(OfflineAggregate(0, 0, 0, 0), None, **kwargs)
+        if card == OPERATIONS_CARD_PAYMENT:
+            return build_payment_contract(PaymentAggregate(0, 0, 0, 0, 0), None, **kwargs)
         return build_fault_code_contract(FaultCodeAggregate(0, 0, ()), None, **kwargs)
 
     def _compute_card(
@@ -570,6 +575,21 @@ class GatewayRuntime:
                 return build_offline_contract(aggregate, None, reason_code=REASON_NO_INCIDENTS, **window)
             payload = self._narrative_for(card, aggregate, window)
             return build_offline_contract(aggregate, payload, **window)
+        if card == OPERATIONS_CARD_PAYMENT:
+            raw_payment = sources.mysql.aggregate_payment_split(effective_sites, db_start, db_end)
+            if raw_payment is None:
+                return self._empty_card_result(card, language, site_ids, window_start, window_end)
+            payment = PaymentAggregate(
+                total=int(raw_payment["total"]),
+                paid=int(raw_payment["paid"]),
+                paid_refunded=int(raw_payment["paid_refunded"]),
+                paid_net=int(raw_payment["paid_net"]),
+                unpaid=int(raw_payment["unpaid"]),
+            )
+            if payment.total == 0:
+                return build_payment_contract(payment, None, reason_code=REASON_NO_ORDERS, **window)
+            payload = self._narrative_for(card, payment, window)
+            return build_payment_contract(payment, payload, **window)
         raw = sources.mysql.aggregate_fault_codes(effective_sites, db_start, db_end)
         if raw is None:
             return self._empty_card_result(card, language, site_ids, window_start, window_end)
@@ -595,11 +615,12 @@ class GatewayRuntime:
         """
         from aiops_diagnostics.ops_analysis_narrative import run_narrative_turn
 
-        facts = (
-            build_offline_contract(aggregate, None, **window)
-            if card == OPERATIONS_CARD_OFFLINE
-            else build_fault_code_contract(aggregate, None, **window)
-        )
+        if card == OPERATIONS_CARD_OFFLINE:
+            facts = build_offline_contract(aggregate, None, **window)
+        elif card == OPERATIONS_CARD_PAYMENT:
+            facts = build_payment_contract(aggregate, None, **window)
+        else:
+            facts = build_fault_code_contract(aggregate, None, **window)
         settings = Settings.from_config(self.gateway_settings.server_config_file)
         settings.agent.run_root = self.diagnostic_settings.agent.run_root
         selected = self.diagnostic_settings.agent.select_provider(None)

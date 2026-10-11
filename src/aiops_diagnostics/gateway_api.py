@@ -246,7 +246,7 @@ class OperationsAnalysisRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    card: str = Field(default="failure_rate", pattern=r"^(failure_rate|offline|fault_code)$")
+    card: str = Field(default="failure_rate", pattern=r"^(failure_rate|offline|fault_code|payment)$")
     site_ids: list[str] | None = Field(default=None, max_length=1000)
     window_start: datetime
     window_end: datetime

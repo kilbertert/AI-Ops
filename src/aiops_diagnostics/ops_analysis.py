@@ -43,8 +43,14 @@ RULE_VERSION = "ops-analysis-v1"
 OPERATIONS_CARD_FAILURE_RATE = "failure_rate"
 OPERATIONS_CARD_OFFLINE = "offline"
 OPERATIONS_CARD_FAULT_CODE = "fault_code"
+OPERATIONS_CARD_PAYMENT = "payment"
 OPERATIONS_CARDS = frozenset(
-    {OPERATIONS_CARD_FAILURE_RATE, OPERATIONS_CARD_OFFLINE, OPERATIONS_CARD_FAULT_CODE}
+    {
+        OPERATIONS_CARD_FAILURE_RATE,
+        OPERATIONS_CARD_OFFLINE,
+        OPERATIONS_CARD_FAULT_CODE,
+        OPERATIONS_CARD_PAYMENT,
+    }
 )
 
 #: ``ch_order_info.status`` 里「异常结束」的取值。证据：``rules.ORDER_STATUS[5]`` 是
@@ -76,6 +82,12 @@ REASON_NO_INCIDENTS = "NO_INCIDENTS_IN_WINDOW"
 REASON_NO_FAULTS = "NO_FAULTS_IN_WINDOW"
 REASON_PROSE_LEAKED = "PROSE_LEAKED"
 REASON_PROSE_INVALID = "PROSE_INVALID"
+#: 支付卡专属：**数字算出来了，但「支付失败」这件事在本仓没有被记录**。
+#: 公司的订单表只有结果态（`is_pay` 是布尔、`refund_status` 是 0/1/2），一次被支付
+#: 渠道拒绝后重试成功的支付在这两列上不留痕迹。因此这张卡交付的是可复核的**四分桶**
+#: （见 `PaymentAggregate`），而 `failure_rate` 位诚实标 `unavailable` —— 不是留空，
+#: 是明确说「这个平台上没有这个事实」，让读的人知道缺口在数据源而不在这张卡。
+REASON_NO_PAYMENT_FAILURE_SOURCE = "NO_PAYMENT_FAILURE_SOURCE"
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,6 +132,32 @@ class FaultCodeAggregate:
     faulty_devices: int
     top_codes: tuple[tuple[str, int], ...]
     devices_total: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PaymentAggregate:
+    """支付卡的四分桶（#699）：窗内订单按支付 / 退款状态互斥分类。
+
+    四个桶相加恒等于 ``total`` 且两两不交——这是一条可复核的恒等式，也是本卡之所以
+    诚实的原因：它不给一个带成因的「失败率」，只给能对上账的计数。
+    """
+
+    total: int
+    paid: int
+    paid_refunded: int
+    paid_net: int
+    unpaid: int
+
+    @property
+    def refund_share(self) -> float | None:
+        """已支付里被退款的比例，四位小数。分母是 ``paid``，不是 ``total``。
+
+        「退款占已支付的比例」与「退款占全部订单的比例」是两个问题；用错分母会把
+        「这个区间订单少」读成「退款少」。分母为 0 ⇒ ``None``，不是 0.0。
+        """
+        if self.paid <= 0:
+            return None
+        return round(self.paid_refunded / self.paid, 4)
 
 
 def risk_level(failure_rate: float | None, total: int) -> str:
@@ -342,6 +380,55 @@ def build_fault_code_contract(
         **_scope_fields(site_ids, window_start, window_end),
         "definition": {
             "fault": "iot_device_failure_records.fault_time in window",
+            "window": "half-open [start, end)",
+        },
+    }
+
+
+def build_payment_contract(
+    aggregate: PaymentAggregate,
+    payload: Any,
+    *,
+    language: str = DEFAULT_LANGUAGE,
+    site_ids: tuple[str, ...] | None = None,
+    window_start: datetime | None = None,
+    window_end: datetime | None = None,
+    reason_code: str | None = None,
+) -> dict[str, Any]:
+    """支付卡（#699）：形态与另外三张卡相同，但**不给失败率**。
+
+    ``failure_rate`` 位恒为 ``None``、``risk`` 恒为 ``unavailable``，原因码
+    ``NO_PAYMENT_FAILURE_SOURCE``：公司订单表上没有「支付失败」这个事实，只有结果态。
+    这不是留空——留空会让人以为是这张卡没算；明确的原因码说的是**数据源里没有这个字段**，
+    把缺口指回它该在的地方。
+
+    交付的是四个可复核的桶（相加等于总数）与一个退款占比（分母是**已支付**）。
+    模型仍然只写叙述，叙述被要求基于这四个桶，而不是解释一个不存在的失败率。
+    """
+    counted = reason_code is None
+    prose_fields, prose_reason = _prose_fields(
+        payload, language, counted=counted, surface="operations_analysis"
+    )
+    return {
+        # 这个位在本卡上**永远是 None**：见上面的原因码。保留字段是为了四张卡的
+        # 契约形状一致，读的人不必按卡记两套形状。
+        "failure_rate": None,
+        "card": OPERATIONS_CARD_PAYMENT,
+        "total": aggregate.total if counted else None,
+        "paid": aggregate.paid if counted else None,
+        "paid_refunded": aggregate.paid_refunded if counted else None,
+        "paid_net": aggregate.paid_net if counted else None,
+        "unpaid": aggregate.unpaid if counted else None,
+        "refund_share": aggregate.refund_share if counted else None,
+        "risk": "unavailable",
+        **prose_fields,
+        "rule_version": RULE_VERSION,
+        "reason_code": reason_code or prose_reason or REASON_NO_PAYMENT_FAILURE_SOURCE,
+        **_scope_fields(site_ids, window_start, window_end),
+        "definition": {
+            "buckets": "paid = paid_refunded + paid_net; paid + unpaid = total",
+            "refund_share": "paid_refunded / paid (denominator is PAID, not total)",
+            "unpaid": "is_pay IS NOT TRUE, including NULL",
             "window": "half-open [start, end)",
         },
     }
