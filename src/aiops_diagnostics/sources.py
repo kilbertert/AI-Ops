@@ -384,6 +384,71 @@ class MySQLSource:
             "top_sites": ((str(top["site_id"]), _count_or_zero(top["abnormal_ended"])),) if top else (),
         }
 
+    def aggregate_payment_split(
+        self,
+        site_ids: tuple[str, ...] | None,
+        window_start: str,
+        window_end: str,
+    ) -> dict[str, Any] | None:
+        """支付卡（#699）：窗内订单**按支付 / 退款状态**的四类计数。
+
+        **这不是「支付失败率」，这是能算出来的那一部分。** 公司的订单表上只有结果态，
+        没有「支付尝试失败」这个事实：``is_pay`` 是布尔（是否支付完成，见
+        ``V1.0.93`` 对 occupy 表同名列的 ``comment '是否支付'``），``refund_status``
+        是 0/1/2（未退款 / 全额 / 部分，见 ``V1.0.44__add_order.sql``）。一次被支付
+        渠道拒绝、随后重试成功的支付**在这两列上不留痕迹**——它是「已支付」。因此
+        本函数回的是四个**互斥且可复核**的桶，而不是一个带成因的比率：
+
+        * ``paid``：``is_pay`` 为真；
+        * ``paid_refunded``：已支付且 ``refund_status`` 非 0（全额或部分已退款）；
+        * ``paid_net``：已支付且未退款；
+        * ``unpaid``：``is_pay`` 不是真（含 NULL）。
+
+        ``is_pay`` 可空，所以判据写成 ``IS TRUE`` 前的显式三态：NULL **计入未支付**，
+        并在 ``definition`` 里写明。把它当"未知"丢掉会让两个桶的数量对不上总数，
+        而读者无从知道差额来自哪里。
+
+        接线（``gateway_runtime``）据此把卡的 ``failure_rate`` 判成 ``unavailable``
+        并给 ``reason_code=NO_PAYMENT_FAILURE_SOURCE`` —— 诚实标缺口是本票的验收项，
+        不是退让。
+        """
+        if self._scope_blocked():
+            return None
+        requested = self._bounded_sites(site_ids)
+        if requested is not None and not requested:
+            return None
+        scope_where, params = self._scope_where(site_column=None, user_column=None)
+        fragments = [fragment for fragment in (scope_where,) if fragment]
+        if requested is not None:
+            fragments.append(f"site_id IN ({_placeholders(len(requested))})")
+            params.extend(requested)
+        fragments.append("created_time >= %s")
+        params.append(window_start)
+        fragments.append("created_time < %s")
+        params.append(window_end)
+        where = " AND ".join(fragments)
+        hint = f"/*+ MAX_EXECUTION_TIME({int(self.settings.safety.mysql_max_execution_ms)}) */"
+        sql = (
+            f"SELECT {hint} COUNT(*) AS total, "
+            "SUM(CASE WHEN is_pay IS TRUE THEN 1 ELSE 0 END) AS paid, "
+            "SUM(CASE WHEN is_pay IS TRUE AND refund_status IS NOT NULL "
+            "AND refund_status <> 0 THEN 1 ELSE 0 END) AS paid_refunded, "
+            "SUM(CASE WHEN is_pay IS TRUE AND (refund_status IS NULL OR refund_status = 0) "
+            "THEN 1 ELSE 0 END) AS paid_net, "
+            "SUM(CASE WHEN is_pay IS NOT TRUE THEN 1 ELSE 0 END) AS unpaid "
+            f"FROM `{self.database}`.`ch_order_info` WHERE {where}"
+        )
+        with self._cursor() as cursor:
+            cursor.execute(sql, list(params))
+            row = cursor.fetchone() or {}
+        return {
+            "total": _count_or_zero(row.get("total")),
+            "paid": _count_or_zero(row.get("paid")),
+            "paid_refunded": _count_or_zero(row.get("paid_refunded")),
+            "paid_net": _count_or_zero(row.get("paid_net")),
+            "unpaid": _count_or_zero(row.get("unpaid")),
+        }
+
     def count_devices(self, site_ids: tuple[str, ...] | None) -> int | None:
         """范围内的设备总数——两张设备卡的**分母**（#698）。
 

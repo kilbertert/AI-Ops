@@ -1811,3 +1811,27 @@ uv run pytest tests/test_assistant_api.py tests/test_conversation_api.py \
   只有 MySQL 连接被替换）。**没有**在 41 上对真实租户跑过这两张卡，也**没有**验证过真实
   模型写出的叙述质量；真实设备/故障表上的数据分布（尤其是 `iot_device_offline_monitor`
   的 `tenant_id` 可空会漏掉多少行）**未测**。生产验证属 #700。
+
+## 支付卡 QA（OPS-PAY，#699 / PRD #693）
+
+| ID | 环境 | 前置条件与数据 | 有序动作 | 预期可观察结果 | 清理/证据 |
+|---|---|---|---|---|---|
+| OPS-PAY-01 | 本地 dev（真实装配函数） | 一个窗内的四分桶（总 100 / 已支付 80 / 已退款 20 / 未退款 60 / 未支付 20） | 装配支付卡 | PASS：`failure_rate=null`、`risk=unavailable`、`reason_code=NO_PAYMENT_FAILURE_SOURCE` | `tests/test_ops_payment_card.py::test_the_card_refuses_to_invent_a_failure_rate`；突变：把「未支付」当失败率 → 红 |
+| OPS-PAY-02 | 本地 dev | 模型回包里塞 `failure_rate=0.31` / `risk=abnormal` | 装配 | PASS：契约里的 `failure_rate` 仍是 `null` | `...::test_a_model_written_failure_rate_has_no_way_into_the_contract`；突变：装配改成从 payload 读 → 红 |
+| OPS-PAY-03 | 本地 dev | 同上 | 读 `definition` | PASS：桶恒等式与「`is_pay IS NOT TRUE` 含 NULL」都写在契约里，缺口不是留空 | `...::test_the_gap_is_named_in_the_contract_not_left_blank`、`...::test_the_buckets_still_add_up_when_the_rate_cannot_be_computed` |
+| OPS-PAY-04 | 本地 dev | 100 单 / 已支付 80 / 已退款 20 | 读 `refund_share` | PASS：`0.25`（20/80）——**不是** `0.20`（20/100） | `...::test_the_refund_share_uses_paid_as_its_denominator`；突变：分母换成总数 → 红 |
+| OPS-PAY-05 | 本地 dev | 已支付为 0 | 读 `refund_share` | PASS：`null`，不是 `0.0` | `...::test_no_paid_orders_means_no_share_not_a_zero_share` |
+| OPS-PAY-06 | 本地 dev | 窗内没有订单 | 装配 | PASS：`reason_code=NO_ORDERS_IN_WINDOW`，**没有**被「数据源缺字段」那个码盖掉 | `...::test_an_empty_window_keeps_its_own_reason_code` |
+| OPS-PAY-07 | 本地 dev（真实聚合方法 + 连接替身） | 一次支付聚合 | 检查 SQL | PASS：`is_pay IS TRUE` 与 `is_pay IS NOT TRUE` 三态写死、`refund_status <> 0` | `...::test_the_payment_sql_treats_a_null_is_pay_as_unpaid` |
+| OPS-PAY-08 | 本地 dev | 可见站点 `(S-1)`，请求 `(S-1,S-OUT)` | 调聚合 | PASS：`S-OUT` 不在参数里、租户谓词与窗口两句都在 | `...::test_the_payment_sql_is_scoped_and_windowed` |
+| OPS-PAY-09 | 本地 dev | 空可见范围 | 调聚合 | PASS：返回 `None` 且**一条 SQL 都没发** | `...::test_an_empty_scope_short_circuits` |
+| OPS-PAY-10 | 本地 dev | 聚合的 `SUM` 全为 NULL | 调聚合 | PASS：NULL 计为 0 | `...::test_the_sql_nulls_read_as_zero` |
+| OPS-PAY-11 | 本地 dev | 目标语言 en，模型回中文叙述 | 装配 | PASS：叙述换兜底、四个桶原样 | `...::test_a_chinese_narrative_keeps_the_buckets` |
+| OPS-PAY-12 | 本地 dev（真实 HTTP 面） | operator 会话 / consumer 会话 | `POST card=payment` | PASS：operator 202（`card=payment`）；consumer 403 `OPERATOR_ENTRY_REQUIRED` | `tests/test_ops_analysis_api.py::test_the_payment_card_joins_the_same_surface` |
+
+- **本票的验收形状与另外三张不同**：不是「把数字算对」，而是「**算不出来时把缺口指回数据源**」。
+  OPS-PAY-01 与 -02 是这条的一体两面——前者证明卡上不给失败率，后者证明模型想给也给不了。
+- **未完成业务验收**：全部为离线真实栈（真实 HTTP 路由、真实 store、真实装配与聚合方法，
+  只有 MySQL 连接被替换）。**没有**在 41 上对真实租户跑过这张卡；也没有验证过真实数据里
+  `is_pay` 为 NULL 的比例、退款状态的实际分布，或「支付渠道拒绝」在别的表里是否留了痕迹
+  （本轮只查了订单表与 `pay_receipt_info`，后者记录的是**回单**而不是失败）。属 #700。
