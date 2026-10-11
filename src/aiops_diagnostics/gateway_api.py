@@ -9,6 +9,7 @@ import platform
 import re
 import secrets
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
@@ -81,6 +82,7 @@ from aiops_diagnostics.faq import (
     FAQ_NOT_FOUND,
     PLATFORM_AMBIGUOUS,
     PLATFORM_FORBIDDEN,
+    PLATFORM_OPERATOR,
     PLATFORM_UNAVAILABLE,
     FAQCatalog,
     FAQError,
@@ -232,6 +234,16 @@ class StandardDiagnosisRequest(BaseModel):
         max_length=64,
         pattern=r"^[a-z][a-z0-9_]{0,63}$",
     )
+
+
+class OperationsAnalysisRequest(BaseModel):
+    """站点集合 + 时间窗（#697）。没有 ``order_no``——这是与诊断的根本区别。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    site_ids: list[str] | None = Field(default=None, max_length=1000)
+    window_start: datetime
+    window_end: datetime
 
 
 class FAQAnswerRequest(BaseModel):
@@ -691,6 +703,10 @@ def create_gateway_app(
     #   is enforced inside the store by the caller's effective tenant.
     faq_identity = platform_identity(authenticated_faq_caller)
     assistant_identity = platform_identity(authenticated_diagnosis_caller)
+    # Same required scope as the diagnosis line (an analysis is a read-heavy
+    # job on the same order data), same shape. Named for its gate rather than
+    # its scope: the entry check below is what makes it the operator face.
+    operator_diagnosis_identity = platform_identity(authenticated_diagnosis_caller)
     shortcut_identity = platform_identity(authenticated_shortcut_viewer)
 
     def dify_shared_credential(
@@ -1783,6 +1799,63 @@ def create_gateway_app(
         except (ValueError, RuntimeError) as exc:
             raise _runtime_unavailable("DIAGNOSIS_UNAVAILABLE", "diagnosis unavailable", exc) from exc
         return _standard_diagnosis_response(diagnosis, language)
+
+    @app.post("/v1/standard/analyses", status_code=status.HTTP_202_ACCEPTED)
+    def create_operations_analysis(
+        payload: OperationsAnalysisRequest,
+        identity: tuple[ScopeContext, Any] = Depends(operator_diagnosis_identity),  # noqa: B008
+        language: str = Depends(request_language),  # noqa: B008
+    ) -> dict[str, Any]:
+        """运维分析面（#697）：站点集合 + 时间窗 → 一张确定性报告卡。
+
+        **管家端专用。** 这是本票明确不给客户端开的一个新面——不是「客户端暂时用不上」，
+        而是它整个不成立：客户端身份的数据范围是「本人」，而这张卡问的是「这一组站点
+        这一段区间的整体情况」，两者不是同一个问题的不同粒度。因此这里显式拒绝，
+        而不是让它落进一个会返回空结果的路径（那会让调用方以为是数据问题）。
+        """
+        caller, decision = identity
+        if str(decision.platform) != PLATFORM_OPERATOR:
+            raise StandardAPIError(
+                status.HTTP_403_FORBIDDEN,
+                "OPERATOR_ENTRY_REQUIRED",
+                "operator entry required",
+            )
+        try:
+            job = context.runtime.start_operations_analysis(
+                caller,
+                site_ids=tuple(payload.site_ids) if payload.site_ids is not None else None,
+                window_start=payload.window_start.isoformat(),
+                window_end=payload.window_end.isoformat(),
+                language=language,
+            )
+        except (ValueError, RuntimeError) as exc:
+            raise _runtime_unavailable("ANALYSIS_UNAVAILABLE", "analysis unavailable", exc) from exc
+        return _analysis_job_response(job, language)
+
+    @app.get("/v1/standard/analyses/{analysis_id}")
+    def get_operations_analysis(
+        analysis_id: str,
+        identity: tuple[ScopeContext, Any] = Depends(operator_diagnosis_identity),  # noqa: B008
+        language: str = Depends(request_language),  # noqa: B008
+    ) -> dict[str, Any]:
+        caller, decision = identity
+        if str(decision.platform) != PLATFORM_OPERATOR:
+            raise StandardAPIError(
+                status.HTTP_403_FORBIDDEN,
+                "OPERATOR_ENTRY_REQUIRED",
+                "operator entry required",
+            )
+        try:
+            job = context.runtime.get_operations_analysis(caller, analysis_id)
+        except (ValueError, RuntimeError) as exc:
+            raise _runtime_unavailable("ANALYSIS_UNAVAILABLE", "analysis unavailable", exc) from exc
+        if job is None:
+            raise StandardAPIError(
+                status.HTTP_404_NOT_FOUND,
+                "ANALYSIS_NOT_FOUND",
+                "analysis not found",
+            )
+        return _analysis_job_response(job, language)
 
     @app.get("/v1/standard/diagnoses/{diagnosis_id}")
     def get_standard_diagnosis(
@@ -3591,6 +3664,46 @@ def _shortcut_list_language(shortcuts: Any, requested: str) -> str:
         return requested
     served = {item.served_language(requested) for item in shortcuts}
     return served.pop() if len(served) == 1 else DEFAULT_LANGUAGE
+
+
+def _analysis_job_response(job: dict[str, Any], language: str) -> dict[str, Any]:
+    """One analysis row as the public body (第三份契约，see ``ops_analysis``).
+
+    Deliberately NOT ``_standard_diagnosis_response``: that builder is the
+    single-order face, and its ``order_no`` / ``question`` / ``indicator_code``
+    fields describe an incident this job does not have. Reusing it would put an
+    empty ``order_no`` on the wire for an analysis — the shape equivalent of
+    saying "this card is about an order".
+    """
+    status_value = str(job["status"])
+    error_code = job.get("error_code") or "ANALYSIS_FAILED"
+    is_terminal = status_value in TERMINAL_DIAGNOSIS_STATUSES
+    return {
+        "analysis_id": job["diagnosis_id"],
+        "kind": job.get("kind") or "analysis",
+        "site_ids": json.loads(job["site_ids_json"]) if job.get("site_ids_json") else None,
+        "window_start": job.get("window_start"),
+        "window_end": job.get("window_end"),
+        "rule_version": job.get("rule_version"),
+        "language": job.get("language", "zh"),
+        "status": status_value,
+        "retry_after_ms": None if is_terminal else 1000,
+        "result": job.get("result") if status_value in DIAGNOSIS.completed else None,
+        "error": (
+            {
+                "code": error_code,
+                # Same split as the diagnosis face: the message is rendered per
+                # request from the code; the stored note is the engineer's.
+                "message": diagnosis_error_message(language, error_code),
+                "retryable": status_value in {DIAGNOSIS.failed, DIAGNOSIS.expired},
+            }
+            if status_value in {DIAGNOSIS.failed, DIAGNOSIS.expired}
+            else None
+        ),
+        "created_at": job.get("created_at"),
+        "updated_at": job.get("updated_at"),
+        "completed_at": job.get("completed_at"),
+    }
 
 
 def _standard_diagnosis_response(diagnosis: dict[str, Any], language: str) -> dict[str, Any]:

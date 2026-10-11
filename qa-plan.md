@@ -1754,3 +1754,29 @@ uv run pytest tests/test_assistant_api.py tests/test_conversation_api.py \
 - **另一条已更正**：我在 #617 里写的「401 会被重试一次」与「routing 没有成功侧计数」
   **都是错的**（前者被 `bounded_http.py:435` 的短路否定，后者 10-01 已由 #509 修好），
   已在票上更正并记入 `docs/validation.md`。
+
+## 运维分析面第一刀：失败率卡 QA（OPS-ANALYSIS，#697 / PRD #693）
+
+| ID | 环境 | 前置条件与数据 | 有序动作 | 预期可观察结果 | 清理/证据 |
+|---|---|---|---|---|---|
+| OPS-ANALYSIS-01 | 本地 dev（真实装配函数 + 真实 store；聚合走真实方法、连接替身） | 一次聚合（50 单 / 9 异常）+ 一段叙述 | 同参数装配两次 | PASS：`failure_rate` / `risk` / `counts` / `rule_version` 逐字相同 | `tests/test_ops_analysis.py::test_the_same_input_produces_the_same_every_number`；突变：把门限或四舍五入放到别处 → 红 |
+| OPS-ANALYSIS-02 | 本地 dev | 同上，换一段叙述 | 装配 | PASS：所有数字字段不变，只有叙述变 | `...::test_a_different_narrative_cannot_move_a_single_number` |
+| OPS-ANALYSIS-03 | 本地 dev | 模型回包里塞 `failure_rate=0.99` / `risk` / 伪造 `counts` | 装配 | PASS：契约里的数字仍来自聚合（0.18 / 50 / 9 / 40） | `...::test_a_number_written_by_the_model_is_discarded`；突变：装配改成从 payload 读数字 → 红 |
+| OPS-ANALYSIS-04 | 本地 dev | 调用者可见站点为 `()` | 调 `aggregate_order_statuses` | PASS：返回 `None` 且**一条 SQL 都没发** | `...::test_an_empty_site_scope_issues_no_sql_at_all`；突变：去掉 `_scope_blocked` 短路 → 红 |
+| OPS-ANALYSIS-05 | 本地 dev | 可见站点 `(S-1,S-2,S-3)`，请求 `(S-1,S-OUT)` | 调聚合 | PASS：SQL 参数里只有 `S-1`（越界站点在拼 SQL 之前就被剔除），租户谓词仍在 | `...::test_the_job_site_set_narrows_the_scope_instead_of_replacing_it`；突变：把请求集合直接下推 → 红 |
+| OPS-ANALYSIS-06 | 本地 dev | 窗口 `[10-01, 10-02)` | 检查 SQL | PASS：`created_time >= %s AND created_time < %s`（半开） | `...::test_the_window_is_half_open_in_the_sql` |
+| OPS-ANALYSIS-07 | 本地 dev | 零行聚合（`SUM` 回 NULL） | 调聚合 | PASS：NULL 计为 0，与「说不清」区分开 | `...::test_the_aggregate_reads_status_nulls_as_zero` |
+| OPS-ANALYSIS-08 | 本地 dev（真实 HTTP 面 + 真实 store） | operator 入口会话 | `POST /v1/standard/analyses` 后 `GET` | PASS：202 → `an_` id / `kind=analysis` / `rule_version`；轮询拿到结果；体内**没有** `order_no`/`question`/`indicator_code` | `tests/test_ops_analysis_api.py::test_the_operator_entry_creates_and_polls_an_analysis` |
+| OPS-ANALYSIS-09 | 本地 dev | consumer 入口会话 | `POST` 与 `GET` 该面 | PASS：两次都 403 `OPERATOR_ENTRY_REQUIRED` | `...::test_the_consumer_entry_cannot_reach_the_analysis_surface`；突变：去掉入口门 → 红 |
+| OPS-ANALYSIS-10 | 本地 dev | 不带 `site_ids` | `POST` | PASS：202，运行时收到 `None`（= 不收窄），不是空集合 | `...::test_no_site_list_means_the_callers_whole_visible_set` |
+| OPS-ANALYSIS-11 | 本地 dev | 倒置窗口 / 显式空站点集合 | `POST` | PASS：503 且**库里 0 行**（作业根本不存在） | `...::test_an_inverted_window_is_refused_before_a_job_exists`、`...::test_an_explicit_empty_site_list_is_refused` |
+| OPS-ANALYSIS-12 | 本地 dev | 先建一条分析作业 | `GET /v1/standard/diagnoses` | PASS：诊断列表为空（两个面不互相污染），且 `qa_` id 轮询分析面得 404 | `...::test_an_analysis_is_not_listed_as_an_order_diagnosis`、`...::test_a_qa_id_is_not_an_analysis_id` |
+| OPS-ANALYSIS-13 | 本地 dev | 目标语言 en，模型回中文叙述 | 装配 | PASS：`reason_code=PROSE_LEAKED`、叙述换成已本地化兜底、**数字与 risk 原样**（0.18 / abnormal） | `tests/test_ops_analysis.py::test_a_chinese_narrative_under_english_is_replaced_but_the_numbers_survive`；突变：命中后把 `failure_rate` 也撤掉 → 红 |
+| OPS-ANALYSIS-14 | 本地 dev | 目标语言 zh，模型回中文叙述 | 装配 | PASS：原样保留（守卫只对非中文目标判定） | `...::test_a_chinese_narrative_under_chinese_is_kept` |
+| OPS-ANALYSIS-15 | 本地 dev | provider 回了 dict 而不是字符串 | 装配 | PASS：`reason_code=PROSE_INVALID`，非文本**不被序列化**成正文 | `...::test_a_non_text_narrative_is_refused_not_serialised` |
+
+- **OPS-ANALYSIS-05 的判据是「参数里没有 S-OUT」而不是「有一句 IN」。** 只断言 `site_id IN (...)`
+  出现的写法在「把请求集合直接下推、租户谓词被替换」的实现下**仍然通过**——那正是本条要防的形状。
+- **未完成业务验收**：以上全部是离线真实栈（真实 HTTP 路由、真实 store、真实装配与聚合方法，
+  只有 MySQL 连接被替换）。**没有**在 41 上对真实租户跑过一次这张卡，也**没有**验证过真实
+  模型写出的叙述质量。生产验证属 #700。

@@ -2374,3 +2374,57 @@ Feature: 回答正文的非中文由运行时派生（#635）
       When 比较它们的初始提示词
       Then 两份提示词里都含有那份中文母版
       And 只有目标语言声明不同
+
+Feature: 运维分析面的第一刀：失败率卡（#697）
+  跨订单聚合是这套产品的差异化所在：诊断回答「这一条为什么坏」，这张卡回答
+  「这一段范围内坏得多不多、集中在哪」。数字由后端确定性算出，模型只写叙述。
+
+  Rule: 数字确定性，模型不参与
+
+    Scenario: 同一输入两次运行
+      Given 同一组站点与同一时间窗
+      When 跑两次这张卡
+      Then failure_rate 与 risk 逐字相同
+      And 规则版本是 ops-analysis-v1
+
+    Scenario: 换个说法不换数字
+      Given 同一次聚合
+      When 模型给出另一段 main_cause
+      Then 每一个数字字段都不变
+
+    Scenario: 模型塞进来的数字被丢弃
+      Given 一个在回包里写了 failure_rate 的模型
+      When 装配契约
+      Then 契约里的 failure_rate 仍来自后端聚合
+
+  Rule: 范围与时间窗
+
+    Scenario: 空站点集合不发查询
+      Given 调用者的可见站点为空
+      When 请求这张卡
+      Then 结果标 unavailable 且没有发出任何 SQL
+
+    Scenario: 请求里的站点超出可见范围
+      Given 请求包含一个调用者无权看到的站点
+      When 聚合执行
+      Then 该站点不出现在 SQL 参数里
+
+    Scenario: 窗外的订单不计入
+      Given 窗口边界两侧各有一条订单
+      When 聚合执行
+      Then 只有落在 [start, end) 内的那条参与计数
+
+  Rule: 客户端不可达
+
+    Scenario: 消费者身份请求这张卡
+      Given 一个 consumer 入口的会话
+      When 请求运维分析
+      Then 明确拒绝，而不是返回一张空卡
+
+  Rule: 输出语言守卫仍挂在这里
+
+    Scenario: 叙述漏了中文
+      Given 目标语言不是中文而模型回了一段中文
+      When 定稿
+      Then 交付出去的叙述不是中文
+      And 数字字段不被改写

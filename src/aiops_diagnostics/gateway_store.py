@@ -22,6 +22,7 @@ from aiops_diagnostics.async_job_lifecycle import (
 )
 from aiops_diagnostics.i18n import DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES
 from aiops_diagnostics.private_files import ensure_private_directory, protect_private_file
+from aiops_diagnostics.query_scope import MAX_SCOPE_IDS
 from aiops_diagnostics.redaction import redact_text
 
 SAFE_SCOPE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
@@ -384,6 +385,85 @@ class GatewayStore:
             ).fetchone()
         return _standard_diagnosis_from_row(row)
 
+    def create_analysis_job(
+        self,
+        scope_fingerprint: str,
+        *,
+        site_ids: tuple[str, ...] | None,
+        window_start: str,
+        window_end: str,
+        rule_version: str,
+        language: str = "zh",
+    ) -> dict[str, Any]:
+        """Create an operations-analysis job (#697) on the diagnosis job table.
+
+        It shares ``standard_diagnoses`` deliberately: the status vocabulary, the
+        claim guard, the expiry sweep and restart convergence are already right
+        for this job, and a second table would be a second copy of them. What
+        differs is one discriminator column (``kind``) plus the scope fields.
+
+        ``order_no`` is bound to the empty string rather than the column being
+        made nullable. Relaxing it needs a table rebuild, which this store has
+        never done and which would put every existing diagnosis row at risk for
+        no benefit; ``NOT NULL`` is satisfied by ``''``, and the response builder
+        omits the field for ``kind='analysis'``, so it never reaches the wire.
+        (``question`` likewise: it is ``NOT NULL`` and meaningless here.)
+
+        The window must be a real half-open interval. ``site_ids=None`` skips the
+        narrowing entirely rather than widening it: the worker intersects the
+        caller's live scope with it, so a request that names no sites reads
+        exactly the sites that caller may see — never the whole table.
+        """
+        scope_fingerprint = _scope(scope_fingerprint, "scope_fingerprint")
+        # ``None`` means "the caller's whole resolved site set" — the same
+        # convention ``QueryScope.site_ids`` uses — and the caller's live scope
+        # is only known in the worker, so the row stores NULL and the worker
+        # narrows it. An *explicit* empty tuple is a different thing: a request
+        # for nothing, refused rather than silently widened into a full scan.
+        if site_ids is not None and not site_ids:
+            raise ValueError("analysis requires at least one site")
+        if site_ids is not None and len(site_ids) > MAX_SCOPE_IDS:
+            raise ValueError(f"analysis job site count exceeds {MAX_SCOPE_IDS}")
+        clean_sites = (
+            tuple(_scope(site_id, "site_id") for site_id in site_ids) if site_ids is not None else None
+        )
+        start = _window_bound(window_start, "window_start")
+        end = _window_bound(window_end, "window_end")
+        if end <= start:
+            raise ValueError("analysis window end must be after its start")
+        rule_version = _scope(rule_version, "rule_version")
+        language = _language(language)
+        now = _utc_now()
+        analysis_id = ANALYSIS_ID_PREFIX + uuid.uuid4().hex
+        with self._connection(write=True) as connection:
+            self._expire_diagnoses(connection, now)
+            connection.execute(
+                """
+                INSERT INTO standard_diagnoses (
+                    diagnosis_id, scope_fingerprint, order_no, question, indicator_code, language,
+                    internal_run_id, status, created_at, updated_at, deadline_at,
+                    kind, site_ids_json, window_start, window_end, rule_version
+                ) VALUES (?, ?, '', '', NULL, ?, NULL, 'queued', ?, ?, ?, 'analysis', ?, ?, ?, ?)
+                """,
+                (
+                    analysis_id,
+                    scope_fingerprint,
+                    language,
+                    _iso(now),
+                    _iso(now),
+                    _iso(now + DIAGNOSIS_DEADLINE),
+                    json.dumps(list(clean_sites), ensure_ascii=False) if clean_sites is not None else None,
+                    _iso(start),
+                    _iso(end),
+                    rule_version,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM standard_diagnoses WHERE diagnosis_id = ?",
+                (analysis_id,),
+            ).fetchone()
+        return _standard_diagnosis_from_row(row)
+
     def diagnosis_is_finished(self, diagnosis_id: str) -> bool:
         """Whether this diagnosis row is already in a terminal state.
 
@@ -455,7 +535,7 @@ class GatewayStore:
         diagnosis_id: str,
         scope_fingerprint: str,
     ) -> dict[str, Any] | None:
-        if not diagnosis_id.startswith("dx_"):
+        if not diagnosis_id.startswith(("dx_", ANALYSIS_ID_PREFIX)):
             return None
         with self._connection(write=True) as connection:
             self._expire_diagnoses(connection, _utc_now())
@@ -483,7 +563,7 @@ class GatewayStore:
                 SELECT diagnosis_id, order_no, question, indicator_code, status,
                        created_at, updated_at
                 FROM standard_diagnoses
-                WHERE scope_fingerprint = ?
+                WHERE scope_fingerprint = ? AND kind = 'order'
                 ORDER BY created_at DESC LIMIT ?
                 """,
                 (scope_fingerprint, limit),
@@ -1048,6 +1128,29 @@ class GatewayStore:
                 connection.execute(
                     "ALTER TABLE standard_diagnoses ADD COLUMN language TEXT NOT NULL DEFAULT 'zh'"
                 )
+            # #697: the operations-analysis surface reuses this table (the status
+            # vocabulary, claim guard and expiry sweep are already right for it)
+            # and needs a discriminator plus its own scope fields. The default
+            # makes every existing row and every existing INSERT keep meaning
+            # exactly what it meant before.
+            for name, definition in (
+                ("kind", "TEXT NOT NULL DEFAULT 'order'"),
+                ("site_ids_json", "TEXT"),
+                ("window_start", "TEXT"),
+                ("window_end", "TEXT"),
+                ("rule_version", "TEXT"),
+            ):
+                if name not in diagnosis_columns:
+                    connection.execute(f"ALTER TABLE standard_diagnoses ADD COLUMN {name} {definition}")
+            # Created HERE, not in the CREATE TABLE script above: that script runs
+            # before the ALTER above adds the column, so on a database predating
+            # this change the index would name a column that does not exist yet
+            # and opening the store would fail on the gateway's own boot path.
+            # (The same trap the health-job language index documents below.)
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_standard_diagnoses_scope_kind_created "
+                "ON standard_diagnoses(scope_fingerprint, kind, created_at DESC)"
+            )
             health_columns = {
                 str(row[1]) for row in connection.execute("PRAGMA table_info(health_report_jobs)").fetchall()
             }
@@ -1139,6 +1242,25 @@ def _secret_hash(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
+def _window_bound(value: str, name: str) -> datetime:
+    """Parse one ISO-8601 window bound, or refuse it.
+
+    The bound is parsed here rather than trusted as text: the SQL compares it
+    against a datetime column, and a string that merely looks like a date would
+    be compared as one and silently match nothing (or everything, depending on
+    the engine's coercion). Naive input is read as UTC — the store's own clock,
+    and the only reading that keeps ``start < end`` meaningful.
+    """
+    text = (value or "").strip()
+    if not text:
+        raise ValueError(f"{name} is required")
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"{name} is not an ISO-8601 timestamp") from exc
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+
+
 def _scope(value: str, name: str) -> str:
     candidate = value.strip()
     if not SAFE_SCOPE.fullmatch(candidate):
@@ -1149,6 +1271,9 @@ def _scope(value: str, name: str) -> str:
 def _optional_scope(value: str | None, name: str) -> str | None:
     return _scope(value, name) if value and value.strip() else None
 
+
+#: 运维分析作业的 id 前缀（#697）。与 ``dx_`` 并列在诊断作业表上，靠它区分种类。
+ANALYSIS_ID_PREFIX = "an_"
 
 QUESTION_MAX_LEN = 4000
 INDICATOR_CODE_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
