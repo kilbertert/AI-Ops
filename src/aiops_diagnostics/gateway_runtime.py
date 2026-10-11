@@ -47,10 +47,19 @@ from aiops_diagnostics.knowledge_retrieval import (
     MediaResponse,
 )
 from aiops_diagnostics.ops_analysis import (
+    OPERATIONS_CARD_FAILURE_RATE,
+    OPERATIONS_CARD_OFFLINE,
+    OPERATIONS_CARDS,
+    REASON_NO_FAULTS,
+    REASON_NO_INCIDENTS,
     REASON_NO_ORDERS,
     REASON_SCOPE_EMPTY,
     AnalysisAggregate,
+    FaultCodeAggregate,
+    OfflineAggregate,
     build_failure_rate_contract,
+    build_fault_code_contract,
+    build_offline_contract,
 )
 from aiops_diagnostics.ops_analysis import (
     RULE_VERSION as OPS_ANALYSIS_RULE_VERSION,
@@ -384,6 +393,7 @@ class GatewayRuntime:
             window_end=window_end,
             rule_version=OPS_ANALYSIS_RULE_VERSION,
             language=language,
+            card=OPERATIONS_CARD_FAILURE_RATE,
         )
         future = self._executor.submit(
             self._execute_operations_analysis,
@@ -400,6 +410,207 @@ class GatewayRuntime:
 
     def get_operations_analysis(self, context: ScopeContext, analysis_id: str) -> dict[str, Any] | None:
         return self.store.get_standard_diagnosis(analysis_id, context.scope_fingerprint)
+
+    def start_operations_card(
+        self,
+        context: ScopeContext,
+        *,
+        card: str,
+        site_ids: tuple[str, ...] | None,
+        window_start: str,
+        window_end: str,
+        language: str = DEFAULT_LANGUAGE,
+    ) -> dict[str, Any]:
+        """Start one of the #698 cards (offline piles / fault codes) on the same surface.
+
+        Same job row, same window semantics, same scope push-down as the failure-rate
+        card — a third and fourth *kind* rather than a third and fourth mechanism.
+        ``card`` is stored on the row so the poller gets the same shape back that it
+        asked for, instead of having to remember which route it called.
+        """
+        if site_ids is not None and not site_ids:
+            raise ValueError("analysis requires at least one site")
+        if card not in OPERATIONS_CARDS:
+            raise ValueError("unknown operations card")
+        job = self.store.create_analysis_job(
+            context.scope_fingerprint,
+            site_ids=site_ids,
+            window_start=window_start,
+            window_end=window_end,
+            rule_version=OPS_ANALYSIS_RULE_VERSION,
+            language=language,
+            card=card,
+        )
+        future = self._executor.submit(
+            self._execute_operations_card,
+            job["diagnosis_id"],
+            context,
+            card,
+            site_ids,
+            window_start,
+            window_end,
+            language,
+        )
+        self._futures[job["diagnosis_id"]] = future
+        future.add_done_callback(lambda _: self._futures.pop(job["diagnosis_id"], None))
+        return job
+
+    def _execute_operations_card(
+        self,
+        analysis_id: str,
+        context: ScopeContext,
+        card: str,
+        site_ids: tuple[str, ...] | None,
+        window_start: str,
+        window_end: str,
+        language: str,
+    ) -> None:
+        """Compute the card's aggregate, let the model explain it, and store both."""
+        if not self.store.update_standard_diagnosis(analysis_id, status="running"):
+            return  # 行已终态：没有生成任何东西，直接退出
+        started_ms = time.monotonic()
+        try:
+            scope = resolve_query_scope(context)
+            effective_sites = _intersect_sites(site_ids, scope.site_ids)
+            if scope.empty_site_scope or not effective_sites:
+                result = self._empty_card_result(card, language, site_ids, window_start, window_end)
+            else:
+                with scoped_live_sources(self.diagnostic_settings, scope=scope) as sources:
+                    result = self._compute_card(
+                        card,
+                        sources,
+                        effective_sites,
+                        window_start,
+                        window_end,
+                        language,
+                        site_ids,
+                    )
+        except (SourceError, ValueError) as exc:
+            ok = self.store.update_standard_diagnosis(
+                analysis_id,
+                status="failed",
+                error_code="ANALYSIS_FAILED",
+                error_message=_internal_error_message(exc, ""),
+            )
+            if ok:
+                self._record_metric(
+                    tenant_id=context.effective_tenant_id,
+                    route_type="operations_analysis",
+                    outcome="failed",
+                    error_code="ANALYSIS_FAILED",
+                    duration_ms=int((time.monotonic() - started_ms) * 1000),
+                )
+            return
+        stored = self.store.update_standard_diagnosis(analysis_id, status="completed", result=result)
+        if not stored:
+            return
+        self._record_metric(
+            tenant_id=context.effective_tenant_id,
+            route_type="operations_analysis",
+            outcome="completed",
+            duration_ms=int((time.monotonic() - started_ms) * 1000),
+        )
+
+    def _empty_card_result(
+        self,
+        card: str,
+        language: str,
+        site_ids: tuple[str, ...] | None,
+        window_start: str,
+        window_end: str,
+    ) -> dict[str, Any]:
+        """The honest empty for a card whose scope resolved to nothing.
+
+        Which reason code it carries depends on the card, because they空的是不同的表:
+        an operator reading `NO_INCIDENTS` looks at the offline monitor, while
+        `SCOPE_EMPTY` means their own account resolved to no sites.
+        """
+        kwargs = dict(
+            language=language,
+            site_ids=site_ids,
+            window_start=_as_datetime(window_start),
+            window_end=_as_datetime(window_end),
+            reason_code=REASON_SCOPE_EMPTY,
+        )
+        if card == OPERATIONS_CARD_OFFLINE:
+            return build_offline_contract(OfflineAggregate(0, 0, 0, 0), None, **kwargs)
+        return build_fault_code_contract(FaultCodeAggregate(0, 0, ()), None, **kwargs)
+
+    def _compute_card(
+        self,
+        card: str,
+        sources: Any,
+        effective_sites: tuple[str, ...],
+        window_start: str,
+        window_end: str,
+        language: str,
+        site_ids: tuple[str, ...] | None,
+    ) -> dict[str, Any]:
+        """One card end to end: aggregate → optional model turn → assembled contract."""
+        db_start, db_end = _db_window_bound(window_start), _db_window_bound(window_end)
+        devices_total = sources.mysql.count_devices(effective_sites)
+        window = dict(
+            language=language,
+            site_ids=site_ids,
+            window_start=_as_datetime(window_start),
+            window_end=_as_datetime(window_end),
+        )
+        if card == OPERATIONS_CARD_OFFLINE:
+            raw = sources.mysql.aggregate_offline_incidents(effective_sites, db_start, db_end)
+            if raw is None:
+                return self._empty_card_result(card, language, site_ids, window_start, window_end)
+            aggregate = OfflineAggregate(
+                incidents=int(raw["incidents"]),
+                offline_devices=int(raw["offline_devices"]),
+                open_incidents=int(raw["open_incidents"]),
+                offline_minutes=int(raw["offline_minutes"]),
+                devices_total=devices_total,
+            )
+            if aggregate.incidents == 0:
+                return build_offline_contract(aggregate, None, reason_code=REASON_NO_INCIDENTS, **window)
+            payload = self._narrative_for(card, aggregate, window)
+            return build_offline_contract(aggregate, payload, **window)
+        raw = sources.mysql.aggregate_fault_codes(effective_sites, db_start, db_end)
+        if raw is None:
+            return self._empty_card_result(card, language, site_ids, window_start, window_end)
+        aggregate = FaultCodeAggregate(
+            total_faults=int(raw["total_faults"]),
+            faulty_devices=int(raw["faulty_devices"]),
+            top_codes=tuple(raw.get("top_codes") or ()),
+            devices_total=devices_total,
+        )
+        if aggregate.total_faults == 0:
+            return build_fault_code_contract(aggregate, None, reason_code=REASON_NO_FAULTS, **window)
+        payload = self._narrative_for(aggregate, window)
+        return build_fault_code_contract(aggregate, payload, **window)
+
+    def _narrative_for(self, card: str, aggregate: Any, window: dict[str, Any]) -> Any:
+        """The model's two prose fields for a card (never its numbers).
+
+        The prompt carries the **already-computed** contract — built with ``payload=None``,
+        which yields every number and no prose — so the model explains a settled result
+        rather than producing one. A failure here raises and fails the job: delivering
+        numbers with an empty explanation reads as "the aggregate had nothing to say",
+        which is a different and false claim.
+        """
+        from aiops_diagnostics.ops_analysis_narrative import run_narrative_turn
+
+        facts = (
+            build_offline_contract(aggregate, None, **window)
+            if card == OPERATIONS_CARD_OFFLINE
+            else build_fault_code_contract(aggregate, None, **window)
+        )
+        settings = Settings.from_config(self.gateway_settings.server_config_file)
+        settings.agent.run_root = self.diagnostic_settings.agent.run_root
+        selected = self.diagnostic_settings.agent.select_provider(None)
+        return run_narrative_turn(
+            facts,
+            settings.agent,
+            provider=selected,
+            key_slot=selected.resolved_key_slot(),
+            language=str(window["language"]),
+            project_root=reference_root(),
+        )
 
     def _execute_operations_analysis(
         self,

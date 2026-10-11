@@ -237,10 +237,16 @@ class StandardDiagnosisRequest(BaseModel):
 
 
 class OperationsAnalysisRequest(BaseModel):
-    """站点集合 + 时间窗（#697）。没有 ``order_no``——这是与诊断的根本区别。"""
+    """站点集合 + 时间窗 + 要哪张卡（#697 / #698）。没有 ``order_no``——这是与诊断的根本区别。
+
+    ``card`` 是同一张面上的**明确种类**，不是新路由：三种卡的作用域、时间窗语义、
+    范围下推与错误形状完全相同，差别只在聚合与契约里的字段。开三条路由会把同一套
+    入口门、参数校验与响应构建复制三份。
+    """
 
     model_config = ConfigDict(extra="forbid")
 
+    card: str = Field(default="failure_rate", pattern=r"^(failure_rate|offline|fault_code)$")
     site_ids: list[str] | None = Field(default=None, max_length=1000)
     window_start: datetime
     window_end: datetime
@@ -1820,14 +1826,25 @@ def create_gateway_app(
                 "OPERATOR_ENTRY_REQUIRED",
                 "operator entry required",
             )
+        site_ids = tuple(payload.site_ids) if payload.site_ids is not None else None
         try:
-            job = context.runtime.start_operations_analysis(
-                caller,
-                site_ids=tuple(payload.site_ids) if payload.site_ids is not None else None,
-                window_start=payload.window_start.isoformat(),
-                window_end=payload.window_end.isoformat(),
-                language=language,
-            )
+            if payload.card == "failure_rate":
+                job = context.runtime.start_operations_analysis(
+                    caller,
+                    site_ids=site_ids,
+                    window_start=payload.window_start.isoformat(),
+                    window_end=payload.window_end.isoformat(),
+                    language=language,
+                )
+            else:
+                job = context.runtime.start_operations_card(
+                    caller,
+                    card=payload.card,
+                    site_ids=site_ids,
+                    window_start=payload.window_start.isoformat(),
+                    window_end=payload.window_end.isoformat(),
+                    language=language,
+                )
         except (ValueError, RuntimeError) as exc:
             raise _runtime_unavailable("ANALYSIS_UNAVAILABLE", "analysis unavailable", exc) from exc
         return _analysis_job_response(job, language)
@@ -3681,6 +3698,9 @@ def _analysis_job_response(job: dict[str, Any], language: str) -> dict[str, Any]
     return {
         "analysis_id": job["diagnosis_id"],
         "kind": job.get("kind") or "analysis",
+        # Which card this job is. A poller that only remembers the id still gets
+        # the right shape back, instead of having to remember the route it used.
+        "card": job.get("card") or "failure_rate",
         "site_ids": json.loads(job["site_ids_json"]) if job.get("site_ids_json") else None,
         "window_start": job.get("window_start"),
         "window_end": job.get("window_end"),

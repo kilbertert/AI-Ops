@@ -207,7 +207,12 @@ def test_a_chinese_narrative_under_chinese_is_kept() -> None:
 
 
 def test_a_non_text_narrative_is_refused_not_serialised() -> None:
-    """形状漂移（provider 回了 dict）不得被当成正文交付。"""
+    """形状漂移（provider 回了 dict）不得被当成正文交付。
+
+    **数字不被撤**：#698 把三张卡的散文路径收成一条之后，散文出事与「什么都没算」
+    分成两种处置——前者换散文，后者才撤数字。契约里已有的 ``failure_rate`` 是**算过的
+    事实**，把它改写成「暂不可用」会是一句关于数据源的假陈述。
+    """
     contract = build_failure_rate_contract(
         _aggregate(),
         {"main_cause": {"nested": "object"}, "recommendation": ["a", "list"]},
@@ -218,7 +223,11 @@ def test_a_non_text_narrative_is_refused_not_serialised() -> None:
     )
 
     assert contract["reason_code"] == REASON_PROSE_INVALID
-    assert contract["failure_rate"] is None
+    # The dict/list never becomes prose, and the computed numbers survive.
+    assert isinstance(contract["main_cause"], str)
+    assert "nested" not in str(contract["main_cause"])
+    assert contract["failure_rate"] == 0.18
+    assert contract["counts"] == {"total": 50, "abnormal_ended": 9, "normal_ended": 40}
 
 
 # --- 4. 聚合 SQL：范围下推、站点集合求交、空集合短路 ---------------------------

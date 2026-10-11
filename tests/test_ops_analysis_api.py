@@ -68,6 +68,7 @@ class _Runtime:
     def __init__(self, store: GatewayStore) -> None:
         self.store = store
         self.calls: list[dict[str, object]] = []
+        self.cards: list[str] = []
 
     def start_operations_analysis(
         self, context: ScopeContext, *, site_ids, window_start, window_end, language="zh"
@@ -91,6 +92,20 @@ class _Runtime:
 
     def get_operations_analysis(self, context: ScopeContext, analysis_id: str):
         return self.store.get_standard_diagnosis(analysis_id, context.scope_fingerprint)
+
+    def start_operations_card(
+        self, context: ScopeContext, *, card, site_ids, window_start, window_end, language="zh"
+    ):
+        self.cards.append(card)
+        return self.store.create_analysis_job(
+            context.scope_fingerprint,
+            site_ids=site_ids,
+            window_start=window_start,
+            window_end=window_end,
+            rule_version=RULE_VERSION,
+            language=language,
+            card=card,
+        )
 
     def list_standard_diagnoses(self, context: ScopeContext, *, limit: int = 50):
         return self.store.list_standard_diagnoses(context.scope_fingerprint, limit=limit)
@@ -242,3 +257,48 @@ def test_the_request_schema_forbids_order_identity(tmp_path: Path, field: str) -
         response = client.post("/v1/standard/analyses", headers=_headers(), json={**WINDOW, field: "O-1"})
 
     assert response.status_code == 422
+
+
+def test_the_other_two_cards_run_on_the_same_surface(tmp_path: Path) -> None:
+    """#698：同一张面、同一个入口门、同一套参数，只是换一张卡。
+
+    三种卡的作用域与时间窗语义完全相同，所以它们是**同一个路由的一个参数**，
+    不是三条路由——开三条会把入口门、参数校验与响应构建复制三份。
+    """
+    client, _, runtime = _client(tmp_path)
+    with client:
+        offline = client.post("/v1/standard/analyses", headers=_headers(), json={"card": "offline", **WINDOW})
+        faults = client.post(
+            "/v1/standard/analyses", headers=_headers(), json={"card": "fault_code", **WINDOW}
+        )
+        default = client.post("/v1/standard/analyses", headers=_headers(), json=WINDOW)
+
+    assert offline.status_code == faults.status_code == 202, (offline.text, faults.text)
+    assert offline.json()["card"] == "offline"
+    assert faults.json()["card"] == "fault_code"
+    # The default keeps the surface's first card, so an existing caller is unchanged.
+    assert default.json()["card"] == "failure_rate"
+    assert runtime.cards == ["offline", "fault_code"]
+
+
+def test_the_consumer_entry_cannot_reach_the_other_cards_either(tmp_path: Path) -> None:
+    """入口门是**面**的性质，不是某张卡的：新卡不新开一条门。"""
+    client, _, _ = _client(tmp_path)
+    with client:
+        for card in ("offline", "fault_code"):
+            response = client.post(
+                "/v1/standard/analyses", headers=_headers("consumer"), json={"card": card, **WINDOW}
+            )
+            assert response.status_code == 403, card
+            assert response.json()["error"]["code"] == "OPERATOR_ENTRY_REQUIRED"
+
+
+def test_an_unknown_card_is_refused_by_the_schema(tmp_path: Path) -> None:
+    client, store, _ = _client(tmp_path)
+    with client:
+        response = client.post(
+            "/v1/standard/analyses", headers=_headers(), json={"card": "whatever", **WINDOW}
+        )
+
+    assert response.status_code == 422
+    assert store.count_standard_diagnoses() == 0
