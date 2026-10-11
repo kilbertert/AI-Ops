@@ -2553,3 +2553,38 @@ Feature: 支付失败卡（#699）
       When 请求 card=payment
       Then 202 且响应里的 card 是 payment
       And consumer 入口请求它得到明确拒绝
+Feature: 运行时登记表有一份写在仓库里的完整期望态（#696）
+  登记表决定「哪个租户的哪个入口由哪一份已发布版本服务」。它此前只是线上的既成事实，
+  清单里一行都没声明过——于是没人能从仓库看出线上到底是什么形状。
+
+  Rule: 清单是完整期望态，不是增量
+
+    Scenario: 库里的两行都在清单里
+      Given 41 的库里有验收租户与真实租户两行 consumer 登记
+      When 读仓库的 ops/environments/env-41.toml
+      Then 两行都有 [[dify_apps]] 声明，且 agent_name 与库里逐字相同
+
+    Scenario: 每一行的 agent_name 都在 [[agents]] 里有声明
+      Given 一个 [[dify_apps]] 行
+      When 加载清单
+      Then 它点名的 agent 在同一个租户下有 [[agents]] 声明（否则整份清单被拒）
+
+  Rule: 收敛是幂等的，且可验证它真的没写
+
+    Scenario: dry-run 不动库
+      Given 一份与库一致的清单
+      When 跑 reconcile --dry-run
+      Then 每个动作都是 unchanged
+      And 回查库证明行数与内容与跑前逐字相同
+
+    Scenario: 连续两次实跑
+      Given 同一份清单
+      When 连续跑两次 reconcile
+      Then 两次都全部 unchanged
+
+  Rule: 不改「谁服务谁」
+
+    Scenario: 收敛前后由同一个版本服务
+      Given 真实租户的 consumer 行
+      When 收敛
+      Then 该租户的选中版本与收敛前相同（本次为 canary-客服#v3）
