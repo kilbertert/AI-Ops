@@ -290,3 +290,84 @@ def test_initial_prompt_asks_for_evidence_translation_but_keeps_identifiers(
         assert kept in normalised, f"{kept} must be named as verbatim"
     # The old blanket rule must be gone: it is what produced the report.
     assert "quoted evidence verbatim regardless of output language" not in prompt
+
+
+def _prompt_for(tmp_path: Path, *, methodology: str = "") -> str:
+    """The initial prompt a coordinator builds, without running a turn."""
+    request = parse_request("订单 TEST-OCPP-0003 金额异常")
+    manifest = IncidentManifest.from_request(request)
+    workspace = AgentWorkspace.create(Path(__file__).parents[1], tmp_path, manifest)
+    journal = EvidenceJournal(workspace, manifest)
+    executor = DiagnosticToolExecutor(
+        FixtureSources(FIXTURES / "ocpp_consistent.json"),
+        request,
+        manifest,
+        journal,
+        safety=SafetySettings(),
+    )
+    coordinator = AgentCoordinator(
+        workspace,
+        manifest,
+        journal,
+        executor,
+        AgentSettings(codex_bin="/bin/true"),
+        language="en",
+        methodology=methodology,
+    )
+    return coordinator._initial_prompt()
+
+
+def test_an_empty_methodology_leaves_the_diagnosis_prompt_byte_identical(tmp_path: Path) -> None:
+    """#695 的回归边界：没有运维配方时，提示词与本票之前逐字相同。
+
+    这条断言的对象是**字符串相等**而不是「含有某段」。任何一次无意改动——多加一个
+    空行、把段落顺序挪一下——都会在 consumer 那条链上产生一个用户可见的差异，而
+    「看起来差不多」的断言抓不到它。
+    """
+    baseline = _prompt_for(tmp_path / "baseline")
+    explicit_empty = _prompt_for(tmp_path / "empty", methodology="")
+    whitespace = _prompt_for(tmp_path / "ws", methodology="  \n  ")
+
+    assert explicit_empty == baseline
+    assert whitespace == baseline
+
+
+def test_the_methodology_does_not_outrank_the_harness_rules(tmp_path: Path) -> None:
+    """运维配方说明「怎么查」，因此我方的每条规则都排在它**之后**。
+
+    顺序本身**不是**强制机制（工具层与校验器才是），但它决定了模型把哪一段读成
+    许可、哪一段读成边界——把运营可编辑的正文放在护栏之后，等于让最后一句成为
+    规则；因此这里断言的是「配方在前、规则在后」，而不是随手的拼接顺序。
+    """
+    prompt = _prompt_for(tmp_path, methodology="OPS-METHOD-先核对设备上报")
+    marker = prompt.index("OPS-METHOD-先核对设备上报")
+
+    assert "OPS-METHOD-先核对设备上报" in prompt
+    # Every harness rule is stated after the operator-editable text, so the
+    # last thing the model reads about language/identifiers/schema is ours.
+    assert marker < prompt.index("Write the ENTIRE response in English")
+    assert marker < prompt.index("EXACTLY as stored")
+    assert marker < prompt.index("Return only the structured response required by the output schema")
+    # The methodology does not displace the manifest or the tool list.
+    assert marker < prompt.index("Available read-only evidence tools")
+    # The block names itself as methodology, not as a second contract.
+    assert "运维方法论" in prompt
+
+
+def test_the_guardrail_text_is_not_parameterised_by_entry_or_tenant() -> None:
+    """护栏文本住在**没有入口/租户参数**的函数里，这是一个源码级判据。
+
+    「Dify 的提示词不能覆盖护栏」这句话如果不落成可执行判据，就会在下一个人
+    「顺手传个 tenant 进去」时悄悄失效。判据是：这两处文本的生产者签名里没有
+    任何能改变它们的输入。
+    """
+    import inspect
+
+    from aiops_diagnostics.agent_workspace import _qa_runtime_instructions, _runtime_instructions
+    from aiops_diagnostics.codex_runtime import _developer_instructions
+
+    assert list(inspect.signature(_runtime_instructions).parameters) == []
+    assert list(inspect.signature(_developer_instructions).parameters) == ["language"]
+    # The QA contract takes the answer language and nothing else: language is
+    # the run's presentation, not a way for a tenant to relax a rule.
+    assert list(inspect.signature(_qa_runtime_instructions).parameters) == ["language"]

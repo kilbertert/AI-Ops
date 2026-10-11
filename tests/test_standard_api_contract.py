@@ -48,9 +48,17 @@ class _Runtime:
         return self.store.get_health_job(job_id, context.scope_fingerprint)
 
     def start_standard_diagnosis(
-        self, context, order_no, question, indicator_code, language="zh", *, conversation_turn=None
+        self,
+        context,
+        order_no,
+        question,
+        indicator_code,
+        language="zh",
+        *,
+        conversation_turn=None,
+        business_entry: str | None = None,
     ):
-        del conversation_turn
+        del conversation_turn, business_entry
         return self.store.create_standard_diagnosis(
             context.scope_fingerprint, order_no, question, indicator_code
         )
