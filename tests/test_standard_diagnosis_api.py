@@ -74,6 +74,8 @@ class _Runtime:
     def __init__(self, store: GatewayStore) -> None:
         self.store = store
         self.started: list[str] = []
+        #: The ``X-Business-Entry`` value the route forwarded (#695).
+        self.entries: list[str | None] = []
 
     def start_standard_diagnosis(
         self,
@@ -84,8 +86,13 @@ class _Runtime:
         language: str = "zh",
         *,
         conversation_turn=None,
+        business_entry: str | None = None,
     ) -> dict:
+        # #695: the route forwards the entry now. This double records it so the
+        # forwarding itself is asserted, not just the fact that a diagnosis
+        # started.
         del conversation_turn
+        self.entries.append(business_entry)
         self.started.append(order_no)
         return self.store.create_standard_diagnosis(
             context.scope_fingerprint,

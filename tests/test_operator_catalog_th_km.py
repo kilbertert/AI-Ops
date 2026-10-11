@@ -251,9 +251,17 @@ class _Jobs:
         return self.classified
 
     def start_standard_diagnosis(
-        self, context, order_no, question, indicator_code, language="zh", *, conversation_turn=None
+        self,
+        context,
+        order_no,
+        question,
+        indicator_code,
+        language="zh",
+        *,
+        conversation_turn=None,
+        business_entry: str | None = None,
     ):
-        del context, indicator_code, conversation_turn
+        del context, indicator_code, conversation_turn, business_entry
         self.calls.append((order_no, question))
         raise AssertionError("边界之后仍然启动了诊断作业")
 

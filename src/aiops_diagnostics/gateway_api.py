@@ -1046,6 +1046,7 @@ def create_gateway_app(
                         if conversation is not None and turn_no is not None
                         else None
                     ),
+                    business_entry=str(decision.platform),
                 )
             except (ValueError, RuntimeError) as exc:
                 _release_conversation_turn(context, conversation, turn_no)
@@ -1140,6 +1141,7 @@ def create_gateway_app(
                                 if own_turn
                                 else None
                             ),
+                            business_entry=str(decision.platform),
                         )
                     except (ValueError, RuntimeError) as exc:
                         _release_conversation_turn(context, conversation, turn_no)
@@ -1191,6 +1193,7 @@ def create_gateway_app(
                                 if turn_no is not None
                                 else None
                             ),
+                            business_entry=str(decision.platform),
                         )
                     except (ValueError, RuntimeError) as exc:
                         _release_conversation_turn(context, conversation, turn_no)
@@ -1756,8 +1759,19 @@ def create_gateway_app(
     def create_standard_diagnosis(
         payload: StandardDiagnosisRequest,
         caller: ScopeContext = Depends(authenticated_diagnosis_caller),  # noqa: B008
+        business_entry: Annotated[str | None, Header(alias="X-Business-Entry")] = None,
         language: str = Depends(request_language),  # noqa: B008
     ) -> dict[str, Any]:
+        # #695: this route used to read `X-Business-Entry`, use it for scope,
+        # and drop it — so the diagnosis could not know which content domain
+        # it was answering in. It is forwarded now, and deliberately **as the
+        # raw header** rather than via `assistant_identity`: the entry decides
+        # which published operations agent's methodology is injected, and that
+        # is the same question `third_session_auth` already answers from this
+        # same header with the same predicate. Resolving the platform identity
+        # here instead would buy no authorization — the data range still comes
+        # from the session — while adding a platform-directory lookup to a
+        # route that does not otherwise need one.
         verdict = _order_authorization(context, caller, payload.order_no)
         if verdict == UNAVAILABLE:
             raise StandardAPIError(
@@ -1779,6 +1793,7 @@ def create_gateway_app(
                 payload.question,
                 payload.indicator_code,
                 language=language,
+                business_entry=business_entry,
             )
         except (ValueError, RuntimeError) as exc:
             raise _runtime_unavailable("DIAGNOSIS_UNAVAILABLE", "diagnosis unavailable", exc) from exc

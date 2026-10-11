@@ -353,6 +353,8 @@ class Runtime:
 
     def __init__(self) -> None:
         self.diagnoses: list[tuple[str, str]] = []
+        #: The entry the route forwarded for each diagnosis (#695).
+        self.entries: list[str | None] = []
         self.questions: list[dict[str, Any]] = []
 
     def shutdown(self) -> None:
@@ -367,8 +369,10 @@ class Runtime:
         language="zh",
         *,
         conversation_turn=None,
+        business_entry: str | None = None,
     ):
         del context, indicator_code, conversation_turn
+        self.entries.append(business_entry)
         self.diagnoses.append((order_no, question))
         return {
             "diagnosis_id": "dx_test000000000000000000000000000001",

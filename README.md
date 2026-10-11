@@ -300,6 +300,7 @@ flowchart TB
 | `routing.py` | 路由判定（PRD #383）：把 Jev 的**类型化判定**翻成 `intent`/`risk`/`confidence`，六个 `intent` 字符串与旧模型逐字相同。取不到判定时**返回 None 而非失败**（路由只是优化），失败带错误码、可计数、日志可见（该组件曾静默失效过一次）|
 | `faq.py` | 平台隔离的固定问答目录与平台身份判定（`consumer` / `operator`） |
 | `promo_agents.py` | 宣传案例/方案路由：跑租户已发布的宣传智能体，与客服 FAQ 智能体隔离 |
+| `ops_agents.py` | 管家端诊断的**运维配方**选择（#695 / PRD #693）：按运行时登记表点名的 agent 名取那份**已发布**的 `operations` 版本，把它的提示词作为「运维方法论」注入诊断；**只做查找、不做授权**，查不到即 `None`（调用方 fail-closed，不回退烤死提示词） |
 | `answer_language.py` | 回答面输出语言校验的**共享应用点**（挂到各回答面的定稿点） |
 | `agent_manifest.py` / `agent_debug.py` | 声明式环境清单收敛 / 草稿调试与真实知识绑定校验 |
 | `dify_knowledge_api.py` | 面向 Dify External Knowledge API 的知识检索适配（#581 / PRD #577）：请求/响应形状与 `records` 渲染。租户与知识库白名单由我们的登记表定，**不来自请求** |

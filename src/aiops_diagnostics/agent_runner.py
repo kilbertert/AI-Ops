@@ -76,6 +76,7 @@ def run_agent_diagnosis(
     language: str = DEFAULT_LANGUAGE,
     history: str = "",
     turn_registrar: Callable[[Any], None] | None = None,
+    methodology: str = "",
 ) -> AgentDiagnosis:
     """Run the shared read-only agent path for local CLI and gateway workers.
 
@@ -85,6 +86,11 @@ def run_agent_diagnosis(
     bound into a ``session_factory`` rather than passed to the coordinator
     directly, because the coordinator builds its session through that seam and
     a diagnosis runs exactly one session.
+
+    ``methodology`` (#695) is the published operations agent's prompt, injected
+    as the incident's *how to investigate* block. Empty — the CLI path, and any
+    environment whose registry maps no ``(tenant, operator)`` row — leaves the
+    prompt byte-identical to the one built before this parameter existed.
     """
     manifest = workspace.load_manifest()
     selected_provider = settings.agent.select_provider(provider)
@@ -118,6 +124,7 @@ def run_agent_diagnosis(
             progress_callback=progress_callback,
             language=language,
             history=history,
+            methodology=methodology,
             session_factory=_diagnosis_session_factory(turn_registrar),
         )
         return coordinator.run()

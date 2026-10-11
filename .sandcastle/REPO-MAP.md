@@ -45,7 +45,7 @@ no project argument. Both answer *where* something is; neither replaces reading 
 
 ## Tests
 
-- tests/ — 130 test file(s, recursive)
+- tests/ — 132 test file(s, recursive)
 - script "cd:watch:test": node .sandcastle/cd-watch.test.mjs
 - pytest (pyproject.toml / pytest.ini present)
 

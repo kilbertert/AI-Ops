@@ -871,6 +871,11 @@ _DIAGNOSIS_ERROR_KEYS: dict[str, str] = {
     "DIAGNOSIS_INTERRUPTED_BY_RESTART": "interrupted",
     "DIAGNOSIS_FAILED": "failed",
     "DIAGNOSIS_BLOCKED": "failed",
+    # #695: the operator entry has no serviceable operations agent. It reuses
+    # the "failed" wording rather than adding an eleventh-language table: the
+    # operator cannot act on the distinction from the client, and the code
+    # itself (not the prose) is what tells an engineer which failure it was.
+    "DIAGNOSIS_AGENT_UNREGISTERED": "failed",
 }
 
 

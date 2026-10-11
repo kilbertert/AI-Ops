@@ -88,8 +88,9 @@ class _Runtime:
         language="zh",
         *,
         conversation_turn=None,
+        business_entry: str | None = None,
     ):
-        del context, indicator_code, conversation_turn
+        del context, indicator_code, conversation_turn, business_entry
         self.calls.append((order_no, question))
         # The stub must STORE the language it was given, like the real runtime —
         # which normalises it before storing. A stub that dropped it made every
