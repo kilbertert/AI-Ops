@@ -91,6 +91,30 @@ output_contract = "blocks-v1"
 opening_questions = ["我想看看客户案例"]
 quick_commands = ["客户案例"]
 
+# 验收租户的「从 Dify 拉回并已发布」的客服版本（PRD #693 子票 #696）。
+#
+# ⚠️ **它不是运营特意挑的生产名，而是 2026-10-11 阶段 1 验收留下的版本**：名为
+# `canary-*` 是**名**，不是租户属性。它今天的**权威正文在 41 的库里**（本清单是它的
+# 声明态镜像，两侧逐字相同；其正文里带着两行验收标记）。
+#
+# 为什么它必须进这份清单：注册表某一行的 `agent_name` 只有在 `[[agents]]` 里声明过
+# 才被 `load_manifest` 接受（悬空绑定会被拒），而注册表要求**完整期望态**——库里那行
+# 的 agent 名在这里查不到，reconcile 就无法把它表达出来。
+[[agents]]
+tenant_id = "1783022023241633792"
+name = "canary-dify-acceptance-1011"
+# 空描述是**照实写**，不是漏填：库里那份的描述字段就是空串。写一段说明性文字会让
+# reconcile 把这一版重新发布一次（`description` 参与漂移判定），那是本票不需要的生产写入。
+description = ""
+agent_type = "customer"
+prompt = """你是「小趋」，充电服务与新能源车领域的官方智能客服。知识库内容是唯一事实来源：
+不得添加、推断或篡改知识库没有的政策、数字与承诺；知识库未命中时使用拒答话术。
+【运营在控制台里加的标记 2026-10-10】
+【验收标记 2026-10-11 16:28Z】"""
+knowledge_base_ids = ["4f4bc674ad8911f1ae704bfc8c544ea6"]
+model = "deepseek-v4-flash"
+output_contract = "blocks-v1"
+
 # 运行时注册表（#584 / PRD #577）：`(租户, 入口) → 我们侧 agent 名`。
 #
 # ⚠️ **这一节是 fail-closed 的**：表里只要有**任何一行**，未登记的 `(租户, 入口)`
@@ -110,13 +134,16 @@ quick_commands = ["客户案例"]
 # 顺序（先 --dry-run 再真跑）与验收见 `docs/agents/env-41-runbook.md`。
 
 [[dify_apps]]
-tenant_id = "1783022023241633792"
-business_entry = "consumer"
-app_id = "a975c8e5-ad9e-425c-84c9-77581a0a2bed"
-agent_name = "canary-客服"
-
-[[dify_apps]]
 tenant_id = "1942105476598861824"
 business_entry = "consumer"
 app_id = "a975c8e5-ad9e-425c-84c9-77581a0a2bed"
 agent_name = "canary-客服"
+
+# 验收租户那一行今天**指向一份从 Dify 拉回并已发布的 customer 版本**（#696 的验收项）。
+# 它此前指向 `canary-客服`；2026-10-11 阶段 1 验收把它改成了这一版，本清单现在如实
+# 收敛成库里那行。
+[[dify_apps]]
+tenant_id = "1783022023241633792"
+business_entry = "consumer"
+app_id = "a975c8e5-ad9e-425c-84c9-77581a0a2bed"
+agent_name = "canary-dify-acceptance-1011"
