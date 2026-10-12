@@ -15,19 +15,32 @@ concurrency:
 
 jobs:
   verify:
-    # GitHub-hosted, NOT self-hosted. The self-hosted runner was chosen while
-    # GitHub-hosted minutes for this repository were exhausted, and it was
-    # paired with a fork gate because a persistent runner must never execute
-    # untrusted pull-request code. The repository is public now, so standard
-    # GitHub-hosted runners cost nothing and the gate can go: GitHub counts a
-    # skipped required job as a success, so a gated job silently satisfies the
-    # branch Ruleset for every fork pull request.
+    # 🔴 **2026-10-12: back on the self-hosted runner, and that re-opens a gate.**
     #
-    # The agent-*.yml and architecture-review.yml workflows stay on the
-    # self-hosted runner: they need its persistent filesystem, AGENT_PAT and the
+    # This job was moved to `ubuntu-latest` with the argument above: a public
+    # repository's GitHub-hosted minutes are free, so the fork gate that a
+    # persistent runner needs could be retired. It is back on the persistent
+    # runner because **the account is currently locked for billing** ("The job
+    # was not started because your account is locked due to a billing issue") —
+    # every pull request's required checks refused to start, which blocks the
+    # default branch for *all* work, not just for forks.
+    #
+    # ⚠️ **What came back with it**: a persistent runner executes whatever the
+    # pull request contains. `add a fork guard` is only safe while this job is
+    # hosted; on `self-hosted` the protection is the repository's own boundary,
+    # measured (not assumed) on the day of the switch: `forks_count = 0`, and
+    # every pull request in the repository's history comes from the owner.
+    # **Re-measure before trusting it**, and move back to `ubuntu-latest` as
+    # soon as the account can start hosted jobs again:
+    #
+    #   gh api repos/kilbertert/AI-Ops --jq .forks_count
+    #   gh run list --workflow=ci.yml --limit 1 --json conclusion
+    #
+    # The agent-*.yml and architecture-review.yml workflows were never moved:
+    # they need the persistent filesystem, AGENT_PAT and the
     # controller/candidate/delivery isolation, and .sandcastle/policy-check.mjs
     # statically locks their owner-only same-repository gate.
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, AI-Ops]
     timeout-minutes: 20
     steps:
       - name: Check out repository
@@ -35,10 +48,26 @@ jobs:
         with:
           persist-credentials: false
 
+      # 🔴 `enable-cache: false` **because the runner is persistent** (#711).
+      #
+      # The action's post step prunes its cache directory, and on this host that
+      # prune hung the whole job: every real step (deps, lint, the full suite,
+      # compileall, `uv pip check`) had already finished green, then the job sat
+      # 5 minutes and failed on "Post Install uv" — the run reported **failure**
+      # for a suite that passed. (`package.yml` keeps `enable-cache: true`; it
+      # only runs on `v*` tags and manual dispatch, so a post-step hang there
+      # cannot close a required check.)
+      #
+      # The cache is not worth that risk here: it points at `/home/claude/.cache/uv`,
+      # which is a development-host cache with no run-to-run benefit on
+      # `ubuntu-latest` — where this job lived until the account's billing lock
+      # forced it back. If caching is wanted back, give it a
+      # `${{ runner.temp }}`-scoped directory **and** verify the post step
+      # completes before trusting it.
       - name: Install uv
         uses: astral-sh/setup-uv@bd01e18f51369d5a26f1651c3cb451d3417e3bba # v6.3.1
         with:
-          enable-cache: true
+          enable-cache: false
           python-version: "3.13"
 
       - name: Install locked dependencies
