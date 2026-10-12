@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import contextlib
 import logging
-import sqlite3
 import threading
 import time
 from collections.abc import Callable
@@ -558,18 +557,29 @@ class GatewayRuntime:
                         language,
                         site_ids,
                     )
-        # Same class as the failure-rate branch below (and the diagnosis line):
-        # every card's narrative turn can raise ``AgentRuntimeError``, and a
-        # handler that does not catch it writes no terminal row at all.
+        # `except Exception`, not an enumerated tuple, and that is the whole point
+        # (#700 → #721). Three separate passes added one class each time —
+        # `AgentRuntimeError` (a `RuntimeError`), then `TypeError` — and each fix
+        # left the next class still escaping, because the failure mode is not
+        # "which exceptions can be raised" but "a worker that raises anything
+        # unlisted writes no terminal row at all". The row then sits on `running`
+        # until the deadline expires, and the caller cannot tell it apart from
+        # work still in progress.
         #
-        # ``TypeError`` is in the tuple because of what #700 actually hit here: a
-        # call site that had lost an argument raised inside this worker, escaped
-        # every handler, and left the job on ``running`` until it expired — the
-        # exact symptom the narrower tuples above were chosen to prevent, reached
-        # by a different exception class. A job row that nothing will ever
-        # terminate is worse than a reported failure, so the last resort ends the
-        # job rather than letting the worker die silently.
-        except (AgentRuntimeError, SourceError, ValueError, TypeError, sqlite3.OperationalError) as exc:
+        # The fourth instance is why the shape changed rather than the tuple
+        # growing again: `resolve_query_scope` (called inside this `try`) raises
+        # `ScopeError`, a `RuntimeError` that was in **neither** list — so an
+        # oversized data scope, a `self` range with no bound C-end user, or a
+        # missing Dis directory hung the job exactly like the three before it.
+        # Enumerating classes cannot converge; ending the job can.
+        #
+        # `except Exception` does not swallow `KeyboardInterrupt`/`SystemExit`
+        # (not `Exception` subclasses), and it matches what `_end_analysis_job`
+        # already does for the terminal write — "a row nothing will ever
+        # terminate is worse than one that reports it could not record its
+        # outcome" applies to the computation too. A genuine bug now shows up as
+        # a failed job carrying its message, instead of a silent hang.
+        except Exception as exc:  # noqa: BLE001 - see above: escaping here means no terminal row
             ok = self.store.update_standard_diagnosis(
                 analysis_id,
                 status="failed",
@@ -794,10 +804,17 @@ class GatewayRuntime:
                         )
         # #700: 叙述轮在模型回散文/供应商失败时抛 ``AgentRuntimeError``（一个
         # ``RuntimeError``），而这里只接了源与取值两类 —— 于是那次运行**没有写任何
-        # 终态**，作业停在 ``running`` 直到过期。诊断线一直接的是这三类，同一种失败。
-        # ``TypeError`` 见 ``_execute_operations_card`` 的同名分支：调用点少传一个参数
-        # 时抛的就是它，而症状与上面那条一模一样。
-        except (AgentRuntimeError, SourceError, ValueError, TypeError, sqlite3.OperationalError) as exc:
+        # 终态**，作业停在 ``running`` 直到过期。
+        #
+        # 这已经是**第四次**同一个缺口，所以改的是**形状**而不是再往元组里塞一个名字：
+        # 第一版只接 ``SourceError``/``ValueError``，#700 补了 ``TypeError``，而
+        # ``resolve_query_scope`` 在上面那个 ``try`` 里抛的 ``ScopeError`` 同样是个
+        # ``RuntimeError``，**两个版本都没接** —— 范围超限 / ``self`` 范围但主体没绑
+        # C 端用户 / 代查缺 Dis 配置，都会让作业停在 ``running``。
+        # 在一个不断增长的名单上收敛不了；把作业终结掉可以。
+        # 与 ``_end_analysis_job`` 同一条理由：一个永远不会终结的行比一行「报了它记不下结果」
+        # 更糟。``except Exception`` 不会吞 ``KeyboardInterrupt``/``SystemExit``。
+        except Exception as exc:  # noqa: BLE001 - 见上：从这里逃出去就是没有终态行
             ok = self.store.update_standard_diagnosis(
                 analysis_id,
                 status="failed",

@@ -96,6 +96,88 @@ root 读它会被 `validate_private_file` 拒——实测），并直接**调用
 - 生产 41 未改任何配置；本轮新增的都是分析作业行（与 #700 验收同类）；
   会话值与订单号未留档，凭据未入仓。
 
+## #721 第三刀：失败路径的据实标注（2026-10-12，本地）
+
+**分支** `docs/721-failure-path-truth-telling`，基线 `origin/main`（`181f9f7`）。
+
+### 一、这一刀要回答的问题
+
+「失败路径被覆盖了吗？」——**没有，而且原因不是覆盖不够，是那条路径在本仓库无法由输入触发**。
+这一节把每张卡的终态逐个列出来、每个配一条断言，并把触发不了的那一类**写成触发不了**，
+而不是让它看起来像已覆盖。
+
+### 二、运维分析作业的**全部**终态（`DIAGNOSIS` profile：`deadline=15min`）
+
+| 终态 | 触发条件 | 触发得了吗 | 断言 |
+|---|---|---|---|
+| `completed` | 聚合与叙述都成立 | ✅ | `test_every_card_with_data_reaches_a_terminal_row`（三张卡）+ 整租户用例 |
+| `completed` + `reason_code` | 范围空 / 窗外无订单 / 无故障 / 无事件 / 无支付来源 | ✅ | `_empty_card_result`、各 `REASON_*` 分支 |
+| `failed` / `ANALYSIS_FAILED` | worker 内任何未预期的异常 | ✅（**任何**异常类都算，见三） | 见下 |
+| `expired` | 超出 `deadline`（15 分钟） | ⚠️ 只能靠时钟，不能由输入触发 | 由 `expire_statements` 的 claim/sweep 覆盖（既有） |
+| `cancelled` | 用户取消 | ❌ **不可达**：分析面**没有 cancel 路由**（只有 `/v1/standard/diagnoses` 与 `/v1/assistant/questions` 有） | 无 |
+| （重启收敛）| 进程死亡留下的 in-flight 行 | ⚠️ 靠重启 | `recover_interrupted_jobs`（既有） |
+
+### 三、`ANALYSIS_FAILED`：这条分支**能**触发，而且刚补了一个真实的漏
+
+「`ANALYSIS_FAILED` 无法由任何输入触发」这个说法**不准确**，本刀先把它纠正掉：
+它能被触发，因为它的触发条件是「worker 里抛了什么」——本刀的修复就是用**注入一个异常**
+把它触发出来的（见下）。真正触发不了的是**某几个具体成因**（provider 挂了、MySQL 不可达、
+进程被杀），那些才是环境性的。
+
+**并且本刀揪出了第四个漏，落点正是这里。** 两个分析 worker 的 `except` 是**枚举元组**：
+
+```
+except (AgentRuntimeError, SourceError, ValueError, TypeError, sqlite3.OperationalError)
+```
+
+`resolve_query_scope` 在同一个 `try` 内被调用，它抛的是 **`ScopeError`——一个 `RuntimeError`**，
+**两个版本（#700 之前与之后）都没接**。触发条件都是普通运行时状况：数据范围 ID 超限、
+`self` 范围但主体没绑 C 端用户、代查缺 Dis 配置。**症状与 #700 三次缺口逐字相同**：
+没有终态写入，作业停在 `running` 直到 15 分钟超时。
+
+实测（本刀新增的用例，注入真实 `ScopeError`）：修复前该作业**停在 `running`**，
+5 秒轮询窗口内一次终态都没出现；修复后 `failed` / `ANALYSIS_FAILED`。
+
+**改的是形状，不是再往元组里塞一个名字**：`#700` 已经三次补名单
+（先加 `AgentRuntimeError`，再加 `TypeError`），每次补完下一个类仍在名单外。
+收敛不了。现在两个 worker 改成 `except Exception` —— 与 `_end_analysis_job` 对终态写入
+已经采用的理由同一条：**一个永远不会终结的行，比一行「报了它记不下结果」更糟**。
+`except Exception` 不吞 `KeyboardInterrupt`/`SystemExit`（它们不是 `Exception` 子类）。
+
+**为什么这不是「把 bug 藏起来」**：真实 bug 现在表现为**一条带 message 的失败作业**，
+而不是一次静默挂起 —— 可观测性从这个改动里是**变多**的，不是变少。
+
+### 四、仍然存在的同类漏（**未修，另开票**）
+
+同一形状还留在另外三个 worker 里，本刀**只改了分析线**，理由不是它们更轻，而是修它们
+需要**逐个决定错误码**（健康报告用 `SOURCE_UNAVAILABLE`、诊断/QA 用各自的 `*_FAILED`），
+那是三处独立的**对外行为**改动，不该混在一次「据实标注」里：
+
+| worker | 今天的 `except` | 漏在哪 |
+|---|---|---|
+| `_execute_health_report` | `(SourceError, ValueError)` | 它自己也调 `resolve_query_scope` ⇒ `ScopeError` 逃逸 |
+| `_execute_standard_diagnosis` | `(AgentRuntimeError, SourceError, ValueError)` | 同上 |
+| `_execute_assistant_qa` | `(AgentRuntimeError, SourceError, ValueError)` | 无 `resolve_query_scope`，但 `KeyError`/`TypeError` 等任何未列类逃逸 |
+
+**已开 `#725`**（「终态收敛：另外三个 worker 的枚举元组」）跟踪，**本刀不宣称它们已修**。
+
+### 五、判据与验证
+
+| 判据 | 结果 |
+|---|---|
+| 注入真实 `ScopeError` ⇒ 作业终结（不是 `running`） | ✅ `test_a_scope_resolution_failure_ends_the_job_instead_of_leaving_it_running`；**突变复验**：把 `except Exception` 改回旧元组即转红 |
+| 全量回归 | ✅ `pytest`：**2183 passed / 9 skipped**（164s）；`ruff check` + `format --check` 全绿 |
+
+### 六、证据边界（据实）
+
+- **`ANALYSIS_FAILED` 的环境性成因**（provider 不可达、MySQL 掉线、进程被杀）**本轮仍未观察到**
+  —— 它们要真实故障窗口，不能由输入制造。本刀证明的是**入口是通的、未被任何类挡住**，
+  不是「那些成因已在生产上验过」。
+- `expired` 与「重启收敛」由既有的 `expire_statements` / `recover_interrupted_jobs` 覆盖，
+  **本刀未新增**这两条路径的验证。
+- `cancelled` 对分析面**结构上不可达**（无路由）——这是设计现状，不是缺口，记在这里
+  是为了让「六个终态」里的每一个都有交代。
+
 ## #700 叙述修复后的复跑（2026-10-12，41 真机，`0.1.0+0796dc8c3513`）
 
 **分支** `docs/stage1-acceptance-rerun-after-narrative-fix`，基线 `origin/main`（`0796dc8`）。
