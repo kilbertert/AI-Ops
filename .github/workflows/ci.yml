@@ -48,10 +48,26 @@ jobs:
         with:
           persist-credentials: false
 
+      # 🔴 `enable-cache: false` **because the runner is persistent** (#711).
+      #
+      # The action's post step prunes its cache directory, and on this host that
+      # prune hung the whole job: every real step (deps, lint, the full suite,
+      # compileall, `uv pip check`) had already finished green, then the job sat
+      # 5 minutes and failed on "Post Install uv" — the run reported **failure**
+      # for a suite that passed. (`package.yml` keeps `enable-cache: true`; it
+      # only runs on `v*` tags and manual dispatch, so a post-step hang there
+      # cannot close a required check.)
+      #
+      # The cache is not worth that risk here: it points at `/home/claude/.cache/uv`,
+      # which is a development-host cache with no run-to-run benefit on
+      # `ubuntu-latest` — where this job lived until the account's billing lock
+      # forced it back. If caching is wanted back, give it a
+      # `${{ runner.temp }}`-scoped directory **and** verify the post step
+      # completes before trusting it.
       - name: Install uv
         uses: astral-sh/setup-uv@bd01e18f51369d5a26f1651c3cb451d3417e3bba # v6.3.1
         with:
-          enable-cache: true
+          enable-cache: false
           python-version: "3.13"
 
       - name: Install locked dependencies
