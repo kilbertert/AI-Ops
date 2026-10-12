@@ -1864,10 +1864,10 @@ uv run pytest tests/test_assistant_api.py tests/test_conversation_api.py \
 
 | ID | 环境 | 前置条件与数据 | 有序动作 | 预期可观察结果 | 清理/证据 |
 |---|---|---|---|---|---|
-| PLANG-01 | 本地 dev（真实 HTTP 面） | 固定问答目录已装配 | 对 9 个平台语言值逐个请求 `/v1/faq/recommendations` | PASS：`served` 依次为 `zh/en/pt/es/th/vi/mn/km/zh-Hant`，且正文是对应语言 | `tests/test_i18n.py::test_resolve_language_matrix`；`acceptance.feature` 的 Examples 表 |
+| PLANG-01 | 本地 dev（真实 HTTP 面） | 固定问答目录已装配 | 对 9 个平台语言值逐个请求 `/v1/faq/recommendations` | PASS：`served` 依次为 `zh/en/pt/es/th/vi/mn/km/zh-Hant`，且正文是对应语言（非中文题面零汉字、繁体有繁体专用字且无简体专用字） | **HTTP 面**：`tests/test_faq_gateway_api.py::test_recommendations_answer_every_platform_language_value`（9 例，经 `create_gateway_app` + `TestClient`）；**解析面**：`tests/test_i18n.py::test_resolve_language_matrix`。突变：删别名表 / 从繁体地区集里去掉 `hk` → 均红 |
 | PLANG-02 | 本地 dev | 同上 | 发 `zh-TW` / `zh-HK` / `zh-MO` | PASS：解析为 `zh-Hant`（CLDR likelySubtags） | 同上；突变：清空 `_TRADITIONAL_CHINESE_REGIONS` → 红 |
 | PLANG-03 | 本地 dev | 同上 | 发 `zh-Hans-TW` / `zh-Hant-HK` | PASS：`zh` / `zh-Hant` —— 写出脚本时脚本压过地区 | 同上 |
-| PLANG-04 | 本地 dev | 同上 | 发 `tlh`（无端标签） | PASS：仍回退 `zh`，但 `aiops.i18n` 记一行含该标签的 INFO | `tests/test_i18n.py::test_an_unrecognized_tag_is_reported_before_it_falls_back`；突变：删掉日志块 → 红 |
+| PLANG-04 | 本地 dev | 同上 | 发 `tlh`（无端标签） | PASS：仍回退 `zh`，但 `aiops.i18n` 记一行含该标签的 INFO；该行**已消毒**（只留 `[a-z0-9-]`、截 24 字符），换行与空格都进不去 | `tests/test_i18n.py::test_an_unrecognized_tag_is_reported_before_it_falls_back`；突变：删掉日志块 → 红 |
 | PLANG-05 | 本地 dev | 同上 | 发 `en-US` | PASS：解析 `en`，且**不**产生上面那行日志 | 同上 |
 | PLANG-06 | 本地 dev | 全量套件 | `pytest tests/` | PASS：全绿（无 FAILED） | 见 PR 的验证小节 |
 | PLANG-07 | 41 实机 | 修复已部署 | 用真实生产 JWT，逐个平台语言值请求 `/v1/faq/recommendations` 与 `/v1/shortcuts` | PASS：三个曾经回退的值（`portuguese`/`spanish`/`zh-HK`）现在分别返回 `pt`/`es`/`zh-Hant`，其余逐字不变 | 本 PR 的验证小节（部署后实跑） |

@@ -1019,13 +1019,23 @@ def resolve_language(accept_language: str | None) -> str:
         # error), but falling back in SILENCE is what let `portuguese` answer in
         # Chinese for weeks while the response reported `zh` — a reader cannot
         # tell "your setting was not understood" from "there is no Portuguese
-        # copy yet". The tag is a language code, not user content, so naming it
-        # costs no privacy and makes the next one of these findable in the log.
+        # copy yet". So the tag is named.
+        #
+        # Sanitized, and that is not a detail: this value is
+        # **caller-controlled**, so a payload invented by a client would
+        # otherwise reach the journal. Log injection is the direct hazard (a
+        # newline forges a log line) and log poisoning is the indirect one
+        # (arbitrary text parked where an operator reads events). Keep only what
+        # a BCP 47 tag is made of, and cap the length; everything else becomes
+        # `?`. The line still answers the question it exists for — "the client
+        # sent something we do not know" — while ceasing to be a place to put
+        # content.
         if unrecognized:
+            sanitized = {re.sub(r"[^a-z0-9-]", "?", tag)[:24] for tag in unrecognized}
             _LOGGER.info(
                 "language tag not recognized, falling back to %s: %s",
                 DEFAULT_LANGUAGE,
-                ",".join(sorted(set(unrecognized))),
+                ",".join(sorted(sanitized)),
             )
         return DEFAULT_LANGUAGE
     return best[1]

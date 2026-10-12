@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from aiops_diagnostics.faq import FAQCatalog, PlatformIdentityResolver, PlatformRoleRecord
@@ -260,3 +262,59 @@ def test_faq_endpoints_serve_traditional_for_zh_hant(tmp_path: Path) -> None:
         ).json()
         assert simplified_answer["question"] == "新建充电站的标准建站流程与核心业务配置是什么？"
         assert simplified_answer["answer"].startswith("在平台中新建充电场站")
+
+
+# ── 平台的语言值（#712）────────────────────────────────────────────────────
+#
+# 端到端的那一半：`test_i18n.py` 只证解析函数认这些值，这一组证**HTTP 面**
+# 拿它们换回了对应语言的正文 —— 解析对了但接线丢了，是两件事。
+
+
+@pytest.mark.parametrize(
+    ("platform_value", "served"),
+    [
+        # 公司平台 `sys_language.lan` 的九行，逐字（后台「语言配置」页）。
+        ("zh-CN", "zh"),
+        ("en", "en"),
+        ("portuguese", "pt"),
+        ("spanish", "es"),
+        ("th", "th"),
+        ("vi", "vi"),
+        ("mn", "mn"),
+        ("km", "km"),
+        ("zh-HK", "zh-Hant"),
+    ],
+)
+def test_recommendations_answer_every_platform_language_value(
+    tmp_path: Path, platform_value: str, served: str
+) -> None:
+    """平台九行的每一个值，都要换回它自己的语言正文。
+
+    判据是三条一起：HTTP 200、`language` 等于该语言、正文**确实是**该语言
+    （不是回显了请求语言却给了中文 —— 那正是这条缺陷原本的形态）。
+    """
+    with _client(tmp_path) as client:
+        response = client.get(
+            "/v1/faq/recommendations",
+            headers={
+                "Authorization": "Bearer service",
+                "X-Business-Entry": "consumer",
+                "Accept-Language": platform_value,
+            },
+        )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["language"] == served, body
+    titles = [item["title"] for item in body["recommendations"]]
+    assert titles, body
+    han = re.compile(r"[㐀-䶿一-鿿]")
+    if served == "zh-Hant":
+        # 繁体：正文里必须有繁体专用字，且没有简体专用字。
+        joined = "".join(titles)
+        assert "體" in joined or "標" in joined or "麼" in joined, titles[0]
+        assert "体" not in joined and "标" not in joined, titles[0]
+    elif not served.startswith("zh"):
+        # 非中文：一个汉字都不能有 —— 少了这条，一份只有中文的目录也能
+        # 让「九行各取各的」看起来在跑。
+        for title in titles:
+            assert not han.search(title), f"{served} 的题面里出现了汉字：{title}"

@@ -98,6 +98,17 @@ def test_an_unrecognized_tag_is_reported_before_it_falls_back(caplog: Any) -> No
         assert resolve_language("tlh") == "zh"
     assert any("tlh" in record.getMessage() for record in caplog.records), caplog.text
 
+    # The tag is CALLER-CONTROLLED, so the line must not become a place to put
+    # content: a newline forges a log line and arbitrary text parked in a log
+    # poisons what an operator reads. Identifiers survive; everything else does
+    # not.
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="aiops.i18n"):
+        assert resolve_language("xx\nFAKE admin login OK") == "zh"
+    line = caplog.records[-1].getMessage()
+    assert "\n" not in line and "\r" not in line, repr(line)
+    assert " " not in line.split(": ", 1)[1], repr(line)
+
     # A tag we DO understand must not be reported as unrecognized.
     caplog.clear()
     with caplog.at_level(logging.INFO, logger="aiops.i18n"):
