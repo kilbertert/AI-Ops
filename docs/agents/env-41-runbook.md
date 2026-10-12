@@ -808,28 +808,36 @@ runuser -u aiops41 -- .venv/bin/aiops --config /etc/aiops-41/production.env admi
 from pathlib import Path
 from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
 from aiops_diagnostics.shortcut_lifecycle import (
-    PLATFORM_SCOPE, PLATFORM_TENANT_ID, ShortcutManager, ShortcutStore,
+    PLATFORM_SCOPE,
+    PLATFORM_TENANT_ID,
+    ShortcutManager,
+    ShortcutStore,
 )
+
 store = ShortcutStore(Path("/var/lib/aiops-41/gateway/gateway.db"))
 manager = ShortcutManager(store)
 subject = SubjectRecord(b_user_id="B-onbox-admin", tenant_id=PLATFORM_TENANT_ID)
 ctx = ScopeContext.build(
-    caller=subject, subject=subject, delegated=False,
-    effective_tenant_id=PLATFORM_TENANT_ID, data_scope=DataScope(type="self"),
-    roles=frozenset({"ROLE_PLATFORM_ADMIN"}),      # 必需：缺它会被 ShortcutForbidden 拒
+    caller=subject,
+    subject=subject,
+    delegated=False,
+    effective_tenant_id=PLATFORM_TENANT_ID,
+    data_scope=DataScope(type="self"),
+    roles=frozenset({"ROLE_PLATFORM_ADMIN"}),  # 必需：缺它会被 ShortcutForbidden 拒
     permissions=frozenset({"aiops:shortcuts:manage"}),
 )
 # ① 播种：只在缺失时创建，返回的是**草稿**。幂等（已存在则跳过），可安全重跑。
 manager.store.seed_bundled(ctx, manager)
 # ② 只发布要上线的那些 code。已 published 的跳过（避免 revision 冲突）。
 for code in ("operations_review",):
-    rows = [r for r in manager.list(ctx, scope=PLATFORM_SCOPE, business_entry="operator")
-            if r.code == code]
+    rows = [r for r in manager.list(ctx, scope=PLATFORM_SCOPE, business_entry="operator") if r.code == code]
     if not rows:
-        print(f"缺行: {code} —— 种子没进去"); continue
+        print(f"缺行: {code} —— 种子没进去")
+        continue
     cur = store.get(rows[0].shortcut_id, PLATFORM_TENANT_ID)
     if cur.status == "published":
-        print(f"已发布，跳过: {code}"); continue
+        print(f"已发布，跳过: {code}")
+        continue
     manager.publish(ctx, cur.shortcut_id, expected_revision=cur.revision, scope=PLATFORM_SCOPE)
     print(f"已发布: {code} rev={cur.revision}")
 ```
