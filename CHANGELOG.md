@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- Recognize the language values the company platform's own language picker
+  publishes (`portuguese` → `pt`, `spanish` → `es`) and derive the Chinese
+  script from the region (`zh-HK`/`zh-TW`/`zh-MO` → Traditional) instead of
+  silently answering in Chinese while echoing the request's own tag (#712)
 - Accept both spellings of the session header at the entry (`third-session` and
   `X-Third-Session`) — the wrong one used to answer 401, which is the same code
   the expired-session case returns (#649)

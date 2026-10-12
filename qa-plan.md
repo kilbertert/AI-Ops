@@ -1854,3 +1854,25 @@ uv run pytest tests/test_assistant_api.py tests/test_conversation_api.py \
   只有 MySQL 连接被替换）。**没有**在 41 上对真实租户跑过这张卡；也没有验证过真实数据里
   `is_pay` 为 NULL 的比例、退款状态的实际分布，或「支付渠道拒绝」在别的表里是否留了痕迹
   （本轮只查了订单表与 `pay_receipt_info`，后者记录的是**回单**而不是失败）。属 #700。
+
+## 平台语言值的跨端契约 QA（PLANG，#712）
+
+> **动因**：2026-10-12 前端反馈「切了语言但快捷指令/预设问题没跟着变」。实测确认是
+> **两套词汇表对不上**：客户端发的是公司平台 `sys_language.lan` 的值，其中
+> `portuguese` / `spanish` 不是 BCP 47 标签、`zh-HK` 是香港。服务端此前三者都静默回退 `zh`，
+> 且 `language` 回显 `zh` —— 用户分不出「设置没被听懂」与「还没有译文」。
+
+| ID | 环境 | 前置条件与数据 | 有序动作 | 预期可观察结果 | 清理/证据 |
+|---|---|---|---|---|---|
+| PLANG-01 | 本地 dev（真实 HTTP 面） | 固定问答目录已装配 | 对 9 个平台语言值逐个请求 `/v1/faq/recommendations` | PASS：`served` 依次为 `zh/en/pt/es/th/vi/mn/km/zh-Hant`，且正文是对应语言（非中文题面零汉字、繁体有繁体专用字且无简体专用字） | **HTTP 面**：`tests/test_faq_gateway_api.py::test_recommendations_answer_every_platform_language_value`（9 例，经 `create_gateway_app` + `TestClient`）；**解析面**：`tests/test_i18n.py::test_resolve_language_matrix`。突变：删别名表 / 从繁体地区集里去掉 `hk` → 均红 |
+| PLANG-02 | 本地 dev | 同上 | 发 `zh-TW` / `zh-HK` / `zh-MO` | PASS：解析为 `zh-Hant`（CLDR likelySubtags） | 同上；突变：清空 `_TRADITIONAL_CHINESE_REGIONS` → 红 |
+| PLANG-03 | 本地 dev | 同上 | 发 `zh-Hans-TW` / `zh-Hant-HK` | PASS：`zh` / `zh-Hant` —— 写出脚本时脚本压过地区 | 同上 |
+| PLANG-04 | 本地 dev | 同上 | 发 `tlh`（无端标签） | PASS：仍回退 `zh`，但 `aiops.i18n` 记一行含该标签的 INFO；该行**已消毒**（只留 `[a-z0-9-]`、截 24 字符），换行与空格都进不去 | `tests/test_i18n.py::test_an_unrecognized_tag_is_reported_before_it_falls_back`；突变：删掉日志块 → 红 |
+| PLANG-05 | 本地 dev | 同上 | 发 `en-US` | PASS：解析 `en`，且**不**产生上面那行日志 | 同上 |
+| PLANG-06 | 本地 dev | 全量套件 | `pytest tests/` | PASS：全绿（无 FAILED） | 见 PR 的验证小节 |
+| PLANG-07 | 41 实机 | 修复已部署 | 用真实生产 JWT，逐个平台语言值请求 `/v1/faq/recommendations` 与 `/v1/shortcuts` | PASS：三个曾经回退的值（`portuguese`/`spanish`/`zh-HK`）现在分别返回 `pt`/`es`/`zh-Hant`，其余逐字不变 | 本 PR 的验证小节（部署后实跑） |
+| PLANG-08 | 41 实机 | 同上 | 以同一个 JWT 请求 `/v1/shortcuts`（operator 入口） | PASS：`label`/`description`/`question_template` 按该语言返回 | 同上 |
+
+- **不在本票范围**：客户端的**缺省**链（请求头缺省 `"en"` 而 UI 缺省 `"zh-Hans"`）。
+  服务端已能正确认出平台值；缺省仍应在前端侧收敛成同一个值，本票不改前端。
+- **未完成业务验收**：PLANG-07/-08 是本 PR 的部署后实跑，执行结果记在本 PR 的验证小节。

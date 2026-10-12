@@ -12524,3 +12524,79 @@ B) 用另一个人的会话，发同一句话        -> HTTP 200 type: clarifica
 
 - **未部署到 41**。
 - 本轮生产上那次 401 是**靠换 key** 解决的；本票修的是**下次能看出来**，两者不互相替代。
+
+## #712 语言标识的跨端契约：客户端发的是平台的语言值（2026-10-12）
+
+**分支** `fix/platform-language-values`，基线 `origin/main`（`7d29e71`）。
+**制品** `src/aiops_diagnostics/i18n.py`（`_declared_tag` / `resolve_language`）
++ `docs/adr/0016-language-ingestion-company-vocabulary.md` + 三处记录。
+
+### 一、症状与第一层排查（先记一次**不完整**的结论）
+
+前端报「切了语言之后快捷指令与预设问题没跟着变」。第一轮在 41 上对
+`tcp port 8788` 抓包，382 条管家端 App 请求的 `Accept-Language` **100% 是 `en`**，
+于是当时的结论是「客户端没切语言，后端没问题」。
+
+**那个结论只对了一半。** 前端随后贴出平台后台「语言配置」页的截图：客户端取值的权威是
+`sys_language.lan`（9 行），其中 **`portuguese` / `spanish` 根本不是 BCP 47 语言标签**
+（是语言*名*），而 **`zh-HK` 是香港**。抓包只能证明「这一跳发了什么」，
+**证明不了「服务端认识它」** —— 这是本轮最该记住的一条。
+
+### 二、41 生产实测：逐值对照（同一真实 JWT，只改 `Accept-Language`）
+
+| 平台 语言 | `lan` 值 | 修复前 | 修复后 |
+|---|---|---|---|
+| 中文-简体 | `zh-CN` | `served=zh` | `zh` |
+| English | `en` | `en` | `en` |
+| Portugal | `portuguese` | **`served=zh`，中文题面** | `pt` |
+| España | `spanish` | **`served=zh`，中文题面** | `es` |
+| ภาษาไทย / Tiếng Việt / Монгол хэл / ភាសាខ្មែរ | `th`/`vi`/`mn`/`km` | 正常 | 逐字不变 |
+| 中文-繁體 | `zh-HK` | **`served=zh`，简体题面** | `zh-Hant`，繁体题面 |
+
+**这三格的形态是「假陈述」**：`language` 回显请求的语言，正文却是中文 ⇒ 用户与运维
+都分不出「设置没被听懂」与「这门语言还没有译文」。这正是本项目在 FAQ 目录、快捷动作、
+健康报告三处都消灭过的同一个形状。
+
+### 三、改了什么
+
+| # | 改动 | 判据来源 |
+|---|---|---|
+| 1 | `portuguese → pt`、`spanish → es`（显式别名表） | 平台后台「语言配置」页的 9 行逐字 |
+| 2 | `zh-TW`/`zh-HK`/`zh-MO → zh-Hant`；`zh-CN`/`zh-SG → zh`；写出脚本时脚本优先 | **CLDR `likelySubtags`**（覆盖全部地区，不靠枚举） |
+| 3 | 脚本分支的段数判据 `>= 3` → `>= 2` | 原实现让 `zh-Hant-TW` 返回 `zh`（注释宣称支持，测试从未覆盖） |
+| 4 | 回退时记一行 INFO，且该行**已消毒** | 见 §五 |
+
+### 四、可运行证据（本地）
+
+| 判据 | 结果 | 怎么证的 |
+|---|---|---|
+| 九行平台值各自换回对应语言正文 | ✅ | `tests/test_faq_gateway_api.py::test_recommendations_answer_every_platform_language_value`（9 例，经 `create_gateway_app` + `TestClient` 真实 HTTP 面；判据是 200 + `language` 相符 + **正文确实是该语言**：非中文零汉字、繁体有繁体专用字且无简体专用字） |
+| 解析矩阵（含地区推脚本、脚本压过地区、大小写） | ✅ | `tests/test_i18n.py::test_resolve_language_matrix`（新增 11 行） |
+| 无端标签回退时留痕、且可识别标签不留痕 | ✅ | `...::test_an_unrecognized_tag_is_reported_before_it_falls_back` |
+| **变异检查**：删别名表 / 从繁体地区集去掉 `hk` / 清空地区集 / 删日志块 | ✅ 四条均转红 | 逐条改坏后跑上述两组测试 |
+| 全量套件 | ✅ 全绿 | `uv run pytest -q`（exit 0） |
+| 静态检查 | ✅ | `ruff check .`、`ruff format --check .`、`compileall`、`policy-check all`、`repo-map.check`、`adr.check --base` |
+| **网关真跑（一次性数据根）** | ✅ | `verify-aiops-gateway`：boots / `/health` 契约 / 未鉴权 401 / enroll 201 / 已鉴权 `/v1/runs` 200 / `/v1/agents` 401，`all checks passed`；证据 `.verify-evidence/aiops-gateway.json` |
+
+### 五、一处被评审逮到并修掉的：日志里的调用方内容
+
+第一版把无法识别的标签**原样**写进 INFO。该值**由调用方控制**，于是
+journal 成了可以放内容的地方：换行可以伪造一行日志（log injection），
+任意文本可以停在运维读事件的位置（log poisoning）。
+
+修法：只保留 `[a-z0-9-]`、截 24 字符、其余替换为 `?`。判据是**它仍然有用**
+（「客户端发了个我们不认识的东西」正是这行的用途）而**不再是容器**
+（空格、换行、任意文本都进不去）。已由测试钉住。
+
+**边界**：它仍可能含调用方写的东西（如 `abcdefgh`）—— 只在它伪装不出来时才达标。
+这一点写在 `adr/0016` 的后果一节，不藏在这里。
+
+### 六、未完成业务验收（明写）
+
+- **PLANG-07 / -08（41 实机、部署后复跑）本 PR 不标记为通过** —— 那要等本 PR 合并、
+  CD 部署到 41 之后，用真实 JWT 逐值复跑。
+- **客户端的缺省链未覆盖**：请求头是 `getStorageSync("lang") || "en"`，而同一页 UI 是
+  `"" == c ? "zh-Hans" : c` —— 同一个 key、两套词汇、两个缺省。服务端已能正确认出
+  平台值；缺省应在前端侧收敛成同一个值。这是另一侧的工作，不在本票。
+- **旧 token 已过期**：排查用的那枚 JWT `exp` 为 2026-10-10 23:53Z，部署后复跑需要
+  前端重新提供一枚有效令牌。
