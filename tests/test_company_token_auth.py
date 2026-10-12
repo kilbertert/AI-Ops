@@ -684,6 +684,7 @@ def test_a_company_token_reaches_the_operator_actions_and_order_diagnosis(
     assert [item["code"] for item in listed.json()["shortcuts"]] == [
         "case_exploration",
         "smart_diagnosis",
+        "operations_review",
     ]
     assert inside.status_code == 202
     assert runtime.diagnoses == [(ORDER_INSIDE, question)]

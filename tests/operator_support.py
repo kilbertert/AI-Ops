@@ -392,6 +392,40 @@ class Runtime:
         del context, diagnosis_id
         return None
 
+    #: 运维分析作业（#721）：点一下「运维巡检」时被调用的那一处。
+    #: 记下**收到的窗口**，因为「窗口由服务端决定」正是本票要钉住的一条。
+    def start_operations_analysis(self, context, *, site_ids, window_start, window_end, language="zh"):
+        del context, language
+        self.analyses = getattr(self, "analyses", [])
+        self.analyses.append(
+            {
+                "site_ids": site_ids,
+                "window_start": window_start,
+                "window_end": window_end,
+            }
+        )
+        return {
+            "diagnosis_id": "an_test000000000000000000000000000001",
+            "kind": "analysis",
+            "card": "failure_rate",
+            "site_ids_json": None,
+            "window_start": window_start,
+            "window_end": window_end,
+            "rule_version": "ops-analysis-v1",
+            "language": "zh",
+            "status": "queued",
+            "result": None,
+            "error_code": None,
+            "error_message": None,
+            "created_at": "2026-09-07T00:00:00+00:00",
+            "updated_at": "2026-09-07T00:00:00+00:00",
+            "completed_at": None,
+        }
+
+    def get_operations_analysis(self, context, analysis_id):
+        del context, analysis_id
+        return None
+
     classified = None
 
     def classify_lightweight(self, question: str, *, language: str = "zh", tenant_id: str | None = None):

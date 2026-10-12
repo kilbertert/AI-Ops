@@ -640,14 +640,15 @@ def test_store_seed_bundled_is_idempotent(tmp_path: Path) -> None:
     first = store.seed_bundled(_Ctx(), manager)  # type: ignore[arg-type]
     # Codes repeat across entries (identity is tenant+entry+code), so the seed
     # is asserted per entry: consumer keeps its three buttons plus the
-    # chat-page banner (#588), operator holds the two prompt actions the PRD
-    # names and no jump action.
+    # chat-page banner (#588); operator holds the prompt actions plus the
+    # operations-review card (#721), and no jump action.
     assert {(row.business_entry, row.code) for row in first} == {
         ("consumer", "battery_report"),
         ("consumer", "case_exploration"),
         ("consumer", "report_fault"),
         ("consumer", "smart_diagnosis"),
         ("operator", "case_exploration"),
+        ("operator", "operations_review"),
         ("operator", "smart_diagnosis"),
     }
     # The kind is explicit on the row, not inferred from which fields are set.

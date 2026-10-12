@@ -98,6 +98,14 @@ SHORTCUT_MANAGE_SCOPE = "aiops:shortcuts:manage"
 SHORTCUT_INTENTS = frozenset(
     {"knowledge", "casual", "order_issue", "report_fault", "case_exploration", "solution_discovery"}
 )
+
+#: The operator entry's operations-review action (#721). Its `intent` is
+#: ``knowledge`` **on purpose**: a shortcut's intent is what the *classifier*
+#: may also produce from free text, and this action is a click-only surface —
+#: giving it its own intent would invite a sentence to route here. The code is
+#: what the client hard-wires behaviour to, which is why it is also listed in
+#: ``STABLE_CODES``.
+OPERATIONS_REVIEW_CODE = "operations_review"
 SHORTCUT_STATUSES = frozenset({"draft", "published", "disabled"})
 PLATFORM_SCOPE = "platform"
 TENANT_SCOPE = "tenant"
@@ -105,7 +113,7 @@ PLATFORM_TENANT_ID = "__platform__"
 SHORTCUT_SCOPES = frozenset({PLATFORM_SCOPE, TENANT_SCOPE})
 PLATFORM_ROLES = frozenset({"ROLE_PLATFORM_ADMIN"})
 # Stable codes the frontend may hard-wire behavior to (order picker etc.).
-STABLE_CODES = frozenset({"case_exploration", "smart_diagnosis", "report_fault"})
+STABLE_CODES = frozenset({"case_exploration", "smart_diagnosis", "report_fault", OPERATIONS_REVIEW_CODE})
 
 # Product default for the fault-reporting jump action. The path is an
 # in-app route, so it is not localized: one path per action, not per language.
@@ -406,6 +414,54 @@ _BUNDLED_SHORTCUTS: tuple[tuple[str, dict[str, dict[str, Any]]], ...] = (
                     "fr": "Consultez des cas de référence liés à l'exploitation de la recharge",
                     "es": "Consulte casos de referencia relacionados con la operación de carga",
                     "pt": "Consulte casos de referência relacionados à operação de recarga",
+                },
+            },
+            # 运维巡检（#721）：点一下拿一张跨订单的运维卡（当前是失败率）。
+            # `requires_order=False` —— 它问的是「这一组站点这一段区间整体如何」，
+            # 不是某一张单；这也是它与 `smart_diagnosis` 的根本区别。
+            # 种成 **draft**：发布是运营动作，与本入口其余动作同一条规矩。
+            "operations_review": {
+                "intent": "knowledge",
+                "requires_order": False,
+                "sort_order": 30,
+                "question_templates": {
+                    "zh": "帮我看一下最近的运维巡检",
+                    "zh-Hant": "幫我看一下最近的運維巡檢",
+                    "vi": "Hãy xem bản kiểm tra vận hành gần đây giúp tôi",
+                    "mn": "Сүүлийн үйл ажиллагааны шалгалтыг харж өгнө үү",
+                    "th": "ช่วยดูผลตรวจสอบการดำเนินงานล่าสุดให้หน่อย",
+                    "km": "សូមមើលការត្រួតពិនិត្យប្រតិបត្តិការថ្មីៗ",
+                    "en": "Show me the recent operations review",
+                    "de": "Zeigen Sie mir die letzte Betriebsprüfung",
+                    "fr": "Montrez-moi la dernière revue d'exploitation",
+                    "es": "Muéstrame la revisión de operaciones reciente",
+                    "pt": "Mostre-me a revisão de operações recente",
+                },
+                "labels": {
+                    "zh": "运维巡检",
+                    "zh-Hant": "運維巡檢",
+                    "vi": "Kiểm tra vận hành",
+                    "mn": "Үйл ажиллагааны шалгалт",
+                    "th": "ตรวจสอบการดำเนินงาน",
+                    "km": "ត្រួតពិនិត្យប្រតិបត្តិការ",
+                    "en": "Operations Review",
+                    "de": "Betriebsprüfung",
+                    "fr": "Revue d'exploitation",
+                    "es": "Revisión de operaciones",
+                    "pt": "Revisão de operações",
+                },
+                "descriptions": {
+                    "zh": "查看本运营商站点最近的整体运行情况",
+                    "zh-Hant": "檢視本運營商站點最近的整體運行情況",
+                    "vi": "Xem tình hình vận hành tổng thể gần đây của các trạm thuộc đơn vị bạn",
+                    "mn": "Өөрийн станцуудын сүүлийн ерөнхий ажиллагааг харах",
+                    "th": "ดูภาพรวมการดำเนินงานล่าสุดของสถานีในสังกัดคุณ",
+                    "km": "មើលស្ថានភាពប្រតិបត្តិការរួមថ្មីៗនៃស្ថានីយរបស់អ្នក",
+                    "en": "See how your stations have been running recently",
+                    "de": "Wie Ihre Ladestationen zuletzt gelaufen sind",
+                    "fr": "Voir le fonctionnement récent de vos stations",
+                    "es": "Consulte el funcionamiento reciente de sus estaciones",
+                    "pt": "Veja o funcionamento recente das suas estações",
                 },
             },
             "smart_diagnosis": {
