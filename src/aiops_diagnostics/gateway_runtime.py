@@ -372,6 +372,7 @@ class GatewayRuntime:
             order_no,
             HEALTH_RULE_VERSION,
             language=language,
+            tenant_id=context.effective_tenant_id,
         )
         if not created:
             return job
@@ -410,6 +411,7 @@ class GatewayRuntime:
             rule_version=OPS_ANALYSIS_RULE_VERSION,
             language=language,
             card=OPERATIONS_CARD_FAILURE_RATE,
+            tenant_id=context.effective_tenant_id,
         )
         future = self._executor.submit(
             self._execute_operations_analysis,
@@ -456,6 +458,7 @@ class GatewayRuntime:
             rule_version=OPS_ANALYSIS_RULE_VERSION,
             language=language,
             card=card,
+            tenant_id=context.effective_tenant_id,
         )
         future = self._executor.submit(
             self._execute_operations_card,
@@ -944,6 +947,7 @@ class GatewayRuntime:
             indicator_code,
             language=language,
             internal_run_id=workspace.run_id,
+            tenant_id=context.effective_tenant_id,
         )
         # #499: registered before the worker exists, exactly like the qa line —
         # a stop arriving a millisecond after this return must already find the
@@ -1088,11 +1092,41 @@ class GatewayRuntime:
         effective_roles = frozenset(getattr(context, "roles", ()))
         if not effective_roles.intersection(VIEW_ROLES):
             raise AgentRuntimeError("agent access is not permitted")
-        return self.metrics_store.summary(
-            getattr(context, "effective_tenant_id", "") or "",
+        tenant_id = getattr(context, "effective_tenant_id", "") or ""
+        summary = self.metrics_store.summary(
+            tenant_id,
             agent_id=agent_id,
             limit_hours=window_hours,
         )
+        # `expired` is not an outcome the metrics store ever records — the expiry
+        # sweep runs as raw SQL and writes no metric row — so a tenant whose jobs
+        # all ran out their deadline read as "nothing failed, nothing cancelled".
+        # The count comes from the JOB rows instead, which now carry the tenant.
+        #
+        # TWO review findings shaped this, and both were right:
+        #
+        # ① `agent_id` narrows every other number in this payload, so an
+        #    unfiltered expiry count would contradict them (X shows 0 runs and 1
+        #    expiry). Job rows carry no agent id — `agent_id` is a QA/RAG notion
+        #    and these rows predate it — so the count cannot be narrowed. It is
+        #    therefore **omitted entirely** under an agent filter rather than
+        #    reported as a number that means something else.
+        #
+        # ② The job tables have no tenant predicate to apply here (that is the
+        #    reason this counter exists), so the store scans every tenant and the
+        #    result comes back keyed by tenant. Values for OTHER tenants must
+        #    never leave this method: a count of another tenant's expired jobs is
+        #    cross-tenant data, and `expired_unattributed` (the NULL-tenant rows)
+        #    is the worst case because it is one global number shared by all.
+        from datetime import UTC, datetime, timedelta
+
+        totals = dict(summary.get("totals") or {})
+        if agent_id is None:
+            cutoff = (datetime.now(UTC) - timedelta(hours=window_hours)).isoformat()
+            expired = self.store.count_expired_jobs_by_tenant(since=cutoff)
+            totals["expired"] = expired.get(tenant_id, 0)
+        summary["totals"] = totals
+        return summary
 
     def list_agent_metrics_runs(
         self,
@@ -1170,6 +1204,7 @@ class GatewayRuntime:
             context.scope_fingerprint,
             question,
             internal_run_id=workspace.run_id,
+            tenant_id=context.effective_tenant_id,
         )
         # Registered before the worker exists: a stop request that arrives a
         # millisecond after this return must already find the job interruptible

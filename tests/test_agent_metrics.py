@@ -582,3 +582,63 @@ def test_rag_result_agent_version_tag_does_not_reach_conversation_turn() -> None
     turn_payload = {key: value for key, value in tagged.items() if key != "agent_version"}
     assert "agent_version" not in turn_payload
     assert tagged["agent_version"] == "agt_x#v1"  # metrics attribution intact
+
+
+def test_the_summary_endpoint_reports_this_tenants_expired_jobs(tmp_path: Path) -> None:
+    """`totals.expired` 通过 HTTP 面可见，且**只算本租户**（评审在 #731 上要求走真面）。
+
+    `verify-aiops-gateway` 跑过了，但它的边界表写着**够不到**这个面：路由要求
+    `ROLE_AGENT_VIEWER/ADMIN`，而那个技能只注册设备令牌。因此响应形状在这里按
+    HTTP 面钉住 —— 这是能用的最强观测（真路由 + 真依赖 + 真响应体）。
+
+    这条同时钉住两处评审发现：① 别的租户的过期作业不进本租户的载荷（作业表没有租户谓词，
+    这个计数是按租户扫出来再取**本租户那一格**的）；② `agent_id` 筛选下**不报**这个数
+    （其余数字都被智能体窄化了，而作业行没有智能体 id，报出来就是自相矛盾）。
+    """
+    from datetime import UTC, datetime
+
+    from aiops_diagnostics.gateway_runtime import GatewayRuntime
+    from aiops_diagnostics.gateway_store import GatewayStore
+
+    metrics = MetricsStore(tmp_path / "gateway.db")
+    store = GatewayStore(tmp_path / "gateway.db")
+    runtime = object.__new__(GatewayRuntime)
+    runtime.metrics_store = metrics
+    runtime.store = store
+
+    def _expired(tenant_id: str | None) -> str:
+        job = store.create_analysis_job(
+            f"scope-{tenant_id}",
+            site_ids=None,
+            window_start="2026-10-01T00:00:00+00:00",
+            window_end="2026-10-02T00:00:00+00:00",
+            rule_version="ops-analysis-v1",
+            language="zh",
+            tenant_id=tenant_id,
+        )
+        with store._connection(write=True) as connection:  # noqa: SLF001
+            connection.execute(
+                "UPDATE standard_diagnoses SET status='running', deadline_at=?, expires_at=? "
+                "WHERE diagnosis_id = ?",
+                ("2020-01-01T00:00:00+00:00", "2020-01-01T00:00:00+00:00", job["diagnosis_id"]),
+            )
+            store._expire_diagnoses(connection, datetime.now(UTC))  # noqa: SLF001
+        return job["diagnosis_id"]
+
+    _expired("tenant-a")
+    _expired("tenant-b")
+    _expired(None)  # the pre-migration shape: no tenant at all
+
+    with _app(tmp_path, context=_context(), runtime=runtime) as client:
+        resp = client.get("/v1/agent-metrics/summary", headers={"Authorization": "Bearer token"})
+        assert resp.status_code == 200, resp.text
+        totals = resp.json()["totals"]
+        assert totals["expired"] == 1, totals
+        assert "expired_unattributed" not in totals, totals
+
+        filtered = client.get(
+            "/v1/agent-metrics/summary?agent_id=agt_x",
+            headers={"Authorization": "Bearer token"},
+        )
+        assert filtered.status_code == 200, filtered.text
+        assert "expired" not in filtered.json()["totals"], filtered.json()["totals"]
