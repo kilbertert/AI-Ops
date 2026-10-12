@@ -181,6 +181,10 @@ def test_qa_contract_reminder_line_is_not_a_mandatory_chinese_sentence(tmp_path)
         assert f'"{zero_order_reminder(language)}"' not in narrative
         assert "`main_cause` and `recommendation`" in narrative
         assert "`text` answer" not in narrative
+        # The filesystem/network guardrail is not part of the shape: it must be
+        # in the narrative contract too.
+        assert "Do not inspect parent directories" in narrative
+        assert "No network access" in narrative
 
 
 def test_the_language_parameter_is_required_not_defaulted() -> None:

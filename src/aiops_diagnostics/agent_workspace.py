@@ -309,8 +309,6 @@ def _qa_runtime_instructions(language: str, answer_contract: str = QA_ANSWER_CON
   guidance and tell the user that providing an order number enables an exact
   diagnosis, then end with the reminder line exactly:
   "{reminder_line}"
-- Read only files inside this run workspace. Do not inspect parent directories,
-  home directories, credentials, or host configuration. No network access.
 - Return a single `text` answer in {answer_language}. The `reminder` field is
   always true.
 """
@@ -319,4 +317,6 @@ def _qa_runtime_instructions(language: str, answer_contract: str = QA_ANSWER_CON
 - This workspace contains general charging/new-energy references ONLY. There is
   NO order incident — do not invent or assume an order number, and do not query
   any order data (you cannot reach it).
+- Read only files inside this run workspace. Do not inspect parent directories,
+  home directories, credentials, or host configuration. No network access.
 {answer_block}"""

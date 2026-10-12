@@ -385,13 +385,16 @@ def test_the_guardrail_text_is_not_parameterised_by_entry_or_tenant() -> None:
     )
 
     assert {QA_ANSWER_CONTRACT, NARRATIVE_ANSWER_CONTRACT} == {"text", "narrative"}
-    # The shape is the ONLY difference: strip the shape block and the two
-    # contracts are byte-identical.
-    texts = {}
-    for contract in (QA_ANSWER_CONTRACT, NARRATIVE_ANSWER_CONTRACT):
-        text = _qa_runtime_instructions("en", contract)
-        texts[contract] = text
+    # The shape is the ONLY difference: everything before the shape block — the
+    # "no order data" rule and the filesystem/network guardrail — is shared,
+    # byte for byte.
+    texts = {c: _qa_runtime_instructions("en", c) for c in (QA_ANSWER_CONTRACT, NARRATIVE_ANSWER_CONTRACT)}
     shared = texts[QA_ANSWER_CONTRACT].split("- Answer the user's general charging")[0]
+    assert shared.strip(), "split found nothing — the shape block moved"
     assert texts[NARRATIVE_ANSWER_CONTRACT].startswith(shared)
-    assert "no order data" not in texts[NARRATIVE_ANSWER_CONTRACT]  # guardrail wording lives above
-    assert "NEVER" not in texts[NARRATIVE_ANSWER_CONTRACT]
+    # ...and the narrative one really does carry the guardrail, not just the
+    # shape line. A review caught an earlier version that had dropped it.
+    narrative = texts[NARRATIVE_ANSWER_CONTRACT]
+    assert "do not query\n  any order data" in narrative
+    assert "Do not inspect parent directories" in narrative
+    assert "No network access" in narrative

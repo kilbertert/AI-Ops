@@ -501,7 +501,10 @@ class GatewayRuntime:
                         language,
                         site_ids,
                     )
-        except (SourceError, ValueError) as exc:
+        # Same class as the failure-rate branch below (and the diagnosis line):
+        # every card's narrative turn can raise ``AgentRuntimeError``, and a
+        # handler that does not catch it writes no terminal row at all.
+        except (AgentRuntimeError, SourceError, ValueError) as exc:
             ok = self.store.update_standard_diagnosis(
                 analysis_id,
                 status="failed",
