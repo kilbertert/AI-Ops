@@ -1,3 +1,103 @@
+## #700 合并部署后的端到端验收（2026-10-12，41 真机，`0.1.0+7c0e00f334d0`）
+
+**分支** `docs/stage1-e2e-acceptance-2026-10-12`，基线 `origin/main`（`7c0e00f`）。
+**制品** 本节 + `docs/开发进度.md`。**触发**：#700 合并 → CD 自动部署 → 用户要求自主规划一轮验收。
+
+### 一、验收取数的方式（可复跑）
+
+在 41 上以 `runuser -u aiops41` + **服务自己的 env** 跑一个脚本，全部经**公网入口**
+`https://api.mall.qushiyun.com`：真实租户的 `third-session` 走 consumer，
+`X-Business-Entry: operator` + 按生产形状自签的令牌走管家端。
+**每一个动词都带同一套凭据**（第一次跑漏了轮询那一步的凭据，得到四条
+`ACCESS_TOKEN_REQUIRED` —— 那是脚本的错，不是面的错）。
+
+### 二、判据与实测
+
+| # | 判据 | 结果 |
+|---|---|---|
+| A | `/health` 报出部署 commit | `0.1.0+7c0e00f334d0` |
+| B | consumer 回归（真实 Redis 会话） | `completed / retrieval_status=found`，`[text, video, reference]` |
+| C | 四张卡都到终态 | 四张全 `completed`，`error_code=None` |
+| D | 失败率数字与只读对照 | 卡 `{total:48, abnormal_ended:0, normal_ended:44}` rate=0.0；对照逐字相同 |
+| D2 | 契约自描述 | `rule_version=ops-analysis-v1`，`definition={order_status=5, half-open}` |
+| D3 | `risk` 与数字一致 | `normal`（异常数为 0） |
+| E | 两个运营商身份各看自己的站点 | 7 店铺 → `total=48`；1 店铺 → `total=1`，与其站点对照一致 |
+| F | 面隔离 | consumer → `403 OPERATOR_ENTRY_REQUIRED`；未知 id → `404 ANALYSIS_NOT_FOUND` |
+
+**19/19 通过**（唯一未过的是脚本里写死旧 commit 的 SHA 断言）。
+
+### 三、四张卡交付的正文（从 `gateway.db` 取出，非转述）
+
+```
+failure_rate  counts={48,0,44} rate=0.0 risk=normal
+offline       incidents=87 offline_devices=9 offline_minutes=170580 risk=abnormal
+fault_code    total_faults=94 faulty_devices=4
+              top_codes=[NoError 78, OtherError 12, PowerMeterFailure 2, WeakSignal 2]
+payment       total=48 paid=47 paid_net=12 unpaid=1 ; failure_rate=null
+              reason_code=NO_PAYMENT_FAILURE_SOURCE
+```
+
+最值得记的是 **`fault_code` 的叙述**：
+
+> 该区间内的故障记录高度集中在少数设备上，且错误码为 NoError 的记录占据主导，说明大部分
+> 被计入的故障并非明确的设备硬件故障，更可能是设备心跳丢失、连接状态异常或上报过程失败
+> 被按故障记录统计；具备明确故障语义的仅有 PowerMeterFailure 与 WeakSignal 两类。
+
+**这句话只有拿到故障码排名才写得出来** —— 而在此之前，提示词只带失败率那一套键，
+离线卡在 41 上交付的成因是「风险被标记为 abnormal，是因为…触发离线监测规则」：
+**从 `risk` 标签反推**。同一张卡、同一套数据，接入真数字前后的差别就在这段正文里。
+
+### ⚠️ 更正：`payment` 的散文为空**不是**设计，是一处真缺陷（本轮验收的边缘逮到的）
+
+我先前在这里写过「散文为空是设计，`NO_PAYMENT_FAILURE_SOURCE` 是确定性结论、不读模型」。
+**那是错的**，回查 41 上的运行日志后确认：
+
+那条叙述轮**确实被调用了**：提示词里带着四个桶（`paid: 47 / paid_refunded: 35 /
+paid_net: 12 / unpaid: 1 / refund_share: 0.7447`），模型也**回了**——
+回的是一段 `{"kind": "tool_requests", …}`（它请求订单快照做前置证据）。
+而它被当成一份合法叙述收下了：`_parse_narrative` 只要**解析得出一个 dict** 就返回，
+`_looks_like_narrative` 这个谓词只在 `parse_turn` 的**截断修复**回退路径里被用到，
+主路径不查它。于是 `_narrative` 按名字取 `main_cause` / `recommendation` 两个键，
+两个都取不到 ⇒ 两个字段都是 `None`，而作业以 **`completed`** 落库、
+**没有任何原因码**。
+
+判据（回查该次运行的 rollout 得出）：七次工具调用全部返回沙箱致命错误
+（`bwrap: loopback: Failed RTM_ADDDR: Operation not permitted`），
+模型的最后一条消息就是那次 `tool_requests`。
+
+⇒ 所以这不是「确定性答案不读模型」，而是**一份工具请求被当成了叙述**：
+`{"kind": "tool_requests"}` 让谓词为假、让装配取不到键、让作业在**没有解释**的情况下
+报 `completed`。`failure_rate` 恒为 `null` 那半**是**设计（见 `build_payment_contract`
+的文档字符串），两件事必须分开记。
+
+**待修**（未含在本 PR 内，另立）：`_parse_narrative` 应当**要求**那两个键之一存在，
+否则抛 `AgentRuntimeError` —— 那样这条会如实落成 `failed`，而不是一张静默的半成品卡。
+
+### 四、这一轮之前的两处修复（都在同一晚，已合并）
+
+| 缺陷 | 症状 | 为什么此前没发现 |
+|---|---|---|
+| `_narrative_for(aggregate, window)` 少传 `card`（#698 加了该参数） | 故障码卡**只要有数据**就 `TypeError`，行永远 `running` | 本地替身只回**空**聚合 ⇒ 走「确定性答案」分支、根本不碰模型，那条有数据才走到的路一次都没被跑到 |
+| 其余三张卡的 worker 不接 `AgentRuntimeError` | 叙述轮失败时同样没有终态 | 我只修了失败率那一条 |
+| `narrative` 合同把只读/禁网护栏一起省掉 | 护栏随答案形状一起被换掉 | 旧断言只在「形状块之前相同」，护栏被挪进 `else` 时它恰好也通过 |
+
+第三条的修法值得单记：断言改成**正面**要求（「叙述合同里确实有这三条」），
+因为**「两块在此处相同」这种写法在内容被搬走时仍然成立**。
+
+### 五、证据边界（据实）
+
+- 对 **41**：CD 自动部署一次；新增若干分析作业行与诊断行；**未触碰任何已有行**。
+- 会话值与订单号未留档；凭据未入仓；本轮自签令牌用的密钥与既有验收同一把
+  （公司源码默认值，且签名与 `exp` 都不参与判定）。
+- **验收脚本本身**是本轮的工作制品，不随仓库交付。
+
+### 六、未验证（据实）
+
+- 真实 **App 登录令牌**参加验收（与既有验收同一条：本轮用按生产形状自签的令牌）。
+- 运营**本人**在浏览器里的操作（Dify 正文经控制台 API 改）。
+- **并发下的表现**：本轮四次卡作业是依次发起的；`GATEWAY_MAX_WORKERS=2` 下同时多张卡的
+  行为本轮**没有**单独量过。
+
 ## #700 阶段 1 端到端取证：真实租户上的诊断接线 + 失败率卡（2026-10-12，41 真机）
 
 **分支** `docs/stage1-e2e-700`，基线 `origin/main`（`7d29e71`）。
