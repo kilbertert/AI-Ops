@@ -1876,3 +1876,5 @@ uv run pytest tests/test_assistant_api.py tests/test_conversation_api.py \
 - **不在本票范围**：客户端的**缺省**链（请求头缺省 `"en"` 而 UI 缺省 `"zh-Hans"`）。
   服务端已能正确认出平台值；缺省仍应在前端侧收敛成同一个值，本票不改前端。
 - **PLANG-07/-08 已在 41 上实跑并 PASS（9/9 + 三字段逐项）**，结果记在 `docs/validation.md` §六。
+- **回答面全量端到端同样是 PASS**：五个 GET 面 + `faq/answer`，每个面 × 九种平台语言值，
+  判据含「正文确实是该语言」；外加 17 例边界与一次入口对照 —— 见 `docs/validation.md` §八。

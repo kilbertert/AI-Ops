@@ -12715,6 +12715,57 @@ journal 成了可以放内容的地方：换行可以伪造一行日志（log in
 `description` / `question_template` **全部非空且是该语言**（如 `portuguese` 的
 `Casos de cliente` / `Consulte casos de referênc…` / `Quero ver casos de cliente`）。
 
+### 八、回答面全量端到端（2026-10-12，41 生产，只读）
+
+上一节只覆盖两个端点。这一节把**回答面上每一个按语言取文案的面**都跑了一遍，
+外加边界与两次对照。
+
+**扫描面**：`/v1/faq/recommendations`、`/v1/faq/catalog`、`/v1/shortcuts`、
+`/v1/assistant/starters`、`/v1/banner`，以及 `POST /v1/faq/answer`（operator 目录第一条）。
+每个面 × 九种平台语言值。判据三条：HTTP 200、`language` 等于期望、
+**正文确实是该语言**（非中文零汉字；繁体有繁体字且不含简体专用字）。
+
+| 面 | zh-CN | en | portuguese | spanish | th | vi | mn | km | zh-HK |
+|---|---|---|---|---|---|---|---|---|---|
+| `/v1/faq/recommendations` | zh ✓ | en ✓ | **pt ✓** | **es ✓** | th ✓ | vi ✓ | mn ✓ | km ✓ | **zh-Hant ✓** |
+| `/v1/faq/catalog` | zh ✓ | en ✓ | **pt ✓** | **es ✓** | th ✓ | vi ✓ | mn ✓ | km ✓ | **zh-Hant ✓** |
+| `/v1/shortcuts` | zh ✓ | en ✓ | **pt ✓** | **es ✓** | th ✓ | vi ✓ | mn ✓ | km ✓ | **zh-Hant ✓** |
+| `/v1/assistant/starters` | zh ✓ | en ✓ | **pt ✓** | **es ✓** | th ✓ | vi ✓ | mn ✓ | km ✓ | **zh-Hant ✓** |
+| `/v1/banner` | zh ✓ | en ✓ | **pt ✓** | **es ✓** | th ✓ | vi ✓ | mn ✓ | km ✓ | **zh-Hant ✓**（本条为空列表 ⇒ 只判语言字段）|
+| `POST /v1/faq/answer` | zh ✓ | en ✓ | **pt ✓** | **es ✓** | th ✓ | vi ✓ | mn ✓ | km ✓ | **zh-Hant ✓** |
+
+**繁体的字面量核对**（不是只看 `language` 字段）：
+
+```
+zh-CN  /v1/faq/recommendations  新建充电站的标准建站流程与核心业务配置是什么？
+zh-HK  /v1/faq/recommendations  新建充電站的標準建站流程與核心業務配置是什麼？
+zh-CN  /v1/shortcuts            客户案例 查看与充电运营相关的标杆案例
+zh-HK  /v1/shortcuts            客戶案例 檢視與充電運營相關的標杆案例
+```
+
+**边界（17 例全过）**：不带头 / 空串 / `*` / 未知标签 / `zh-Hant` / `zh-Hans` /
+`zh-TW` / `zh-MO` / `zh-SG` / `zh-Hans-TW`（脚本压过地区）/ q 值取最大 / q 值排序 /
+大小写 / 非法 q / 非法 q + 合法 / 超长 2000 字符 / 含空格与纯符号 —— 全部 200 且
+服务语言符合预期，正文非空。
+
+**一条不在我们这条链上的 400（如实记，附证据边界）**：`Accept-Language` 里带控制字符
+（如 `\x0b`）时返回 **400 且响应体为空**。判断依据：
+- nginx 访问日志有这一行（`400 0`，UA 是我的探针），而**网关 journal 在同一秒没有任何
+  对应请求** —— 与它前后正常的请求（有 `faq_platform_decision` 行）形成对照；
+- 该请求**不带** `Authorization`，因此「401 缺失」这一竞争解释被排除（401 会留下日志行）。
+
+⇒ 拒绝发生在 nginx 解析请求行的阶段，请求没到网关。**边界**：这是「访问日志有行 +
+journal 无行」的推断，不是抓包直证；判成 nginx 的建议动作（一个带控制字符的请求 + 抓包）
+本轮没做。
+
+**入口对照**：`/v1/*` 在 41 上有三条到达方式，其中**只有公网 https 那条对本部署可用**：
+
+| 到达方式 | 结果 |
+|---|---|
+| 公网 `https://api.mall.qushiyun.com`（本次全程使用） | 200 |
+| 直连 `http://172.18.0.1:8788` | 401（需服务令牌，不是终端用户的路径） |
+| 受限口 `https://127.0.0.1:8789` | 403（`allow 120.55.45.59; deny all;`，只放行 120） |
+
 ### 七、那行日志：从「取不到」到取到，以及一次**错的归因**
 
 第一版本节写的是「401 是因为 JWT 过期，所以日志产生不了」。**那个归因是错的** ——
