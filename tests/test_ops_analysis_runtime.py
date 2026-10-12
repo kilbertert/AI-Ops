@@ -118,6 +118,14 @@ def _tenant_wide_scope() -> ScopeContext:
     )
 
 
+def _scope_error(site_ids: tuple[str, ...]):
+    """The real ``ScopeError`` the resolver raises for an oversized data scope."""
+    from aiops_diagnostics.query_scope import MAX_SCOPE_IDS, SCOPE_ERROR_SCOPE_TOO_LARGE, ScopeError
+
+    assert len(site_ids) > MAX_SCOPE_IDS
+    return ScopeError(f"数据范围 ID 数量超过上限 {MAX_SCOPE_IDS}", code=SCOPE_ERROR_SCOPE_TOO_LARGE)
+
+
 def _runtime(tmp_path: Path, monkeypatch) -> tuple[GatewayRuntime, GatewayStore]:
     gateway_settings = GatewayServerSettings(
         data_home=tmp_path,
@@ -655,3 +663,51 @@ def test_the_whole_tenant_caller_actually_gets_its_orders_counted(tmp_path: Path
     # The decisive assertion: the aggregate ran, and it was asked for *no site
     # narrowing* — not for the empty set, which returns before any SQL.
     assert _SEEN_SITES == [None], _SEEN_SITES
+
+
+def test_a_scope_resolution_failure_ends_the_job_instead_of_leaving_it_running(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """范围解析抛 ``ScopeError`` ⇒ 作业终结，**不是**停在 ``running``。
+
+    ``ScopeError`` 继承 ``RuntimeError``，而两个 worker 的 ``except`` 收的是
+    ``AgentRuntimeError, SourceError, ValueError, TypeError, sqlite3.OperationalError``
+    —— 也就是说它**不在**那个元组里。而 ``resolve_query_scope`` 正是在 worker 的
+    ``try`` 内被调用，它会抛 ``ScopeError``（数据范围超限、``self`` 范围但主体没绑
+    C 端用户、代查缺 Dis 配置…），每一种都是普通的运行时状况，不是编程错误。
+
+    这条判据是「**收敛到共用元组**」的直接反例：今天四个 worker 各自手写了一份
+    异常元组（#700 的三次缺口正是这么来的），所以这里按**行为**钉住，
+    而不是断言元组内容 —— 元组可以再漂。
+    """
+    runtime, store = _runtime(tmp_path, monkeypatch)
+    from aiops_diagnostics.query_scope import MAX_SCOPE_IDS
+
+    over_limit = tuple(f"S-{i}" for i in range(MAX_SCOPE_IDS + 1))
+    try:
+        created = runtime.start_operations_analysis(
+            _scope(),
+            site_ids=(SITE,),
+            window_start=WINDOW[0],
+            window_end=WINDOW[1],
+            language="zh",
+        )
+        aid = created["diagnosis_id"]
+        # Replace the resolved scope with one that overflows, so the NEXT resolve
+        # inside the worker raises ScopeError. `_scope()` itself is well-formed;
+        # this is the shape a real oversized data scope takes.
+        monkeypatch.setattr(
+            "aiops_diagnostics.gateway_runtime.resolve_query_scope",
+            lambda *_a, **_k: (_ for _ in ()).throw(_scope_error(over_limit)),
+        )
+        deadline = time.monotonic() + 5
+        current = created
+        while current["status"] not in {"completed", "failed", "inconclusive"}:
+            assert time.monotonic() < deadline, current
+            time.sleep(0.01)
+            current = store.get_standard_diagnosis(aid, _scope().scope_fingerprint)
+    finally:
+        runtime.shutdown()
+
+    assert current["status"] == "failed", current
+    assert current["error_code"] == "ANALYSIS_FAILED", current
