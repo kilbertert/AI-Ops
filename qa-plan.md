@@ -1870,9 +1870,9 @@ uv run pytest tests/test_assistant_api.py tests/test_conversation_api.py \
 | PLANG-04 | 本地 dev | 同上 | 发 `tlh`（无端标签） | PASS：仍回退 `zh`，但 `aiops.i18n` 记一行含该标签的 INFO；该行**已消毒**（只留 `[a-z0-9-]`、截 24 字符），换行与空格都进不去 | `tests/test_i18n.py::test_an_unrecognized_tag_is_reported_before_it_falls_back`；突变：删掉日志块 → 红 |
 | PLANG-05 | 本地 dev | 同上 | 发 `en-US` | PASS：解析 `en`，且**不**产生上面那行日志 | 同上 |
 | PLANG-06 | 本地 dev | 全量套件 | `pytest tests/` | PASS：全绿（无 FAILED） | 见 PR 的验证小节 |
-| PLANG-07 | 41 实机 | 修复已部署 | 用真实生产 JWT，逐个平台语言值请求 `/v1/faq/recommendations` 与 `/v1/shortcuts` | PASS：三个曾经回退的值（`portuguese`/`spanish`/`zh-HK`）现在分别返回 `pt`/`es`/`zh-Hant`，其余逐字不变 | 本 PR 的验证小节（部署后实跑） |
-| PLANG-08 | 41 实机 | 同上 | 以同一个 JWT 请求 `/v1/shortcuts`（operator 入口） | PASS：`label`/`description`/`question_template` 按该语言返回 | 同上 |
+| PLANG-07 | 41 实机 | 修复已部署（`0.1.0+15b434c429a0`） | 用真实生产 JWT，逐个平台语言值请求 `/v1/faq/recommendations` 与 `/v1/shortcuts` | **PASS 9/9**：三个曾经回退的值现在分别返回 `pt`/`es`/`zh-Hant`，其余六格逐字不变 | `docs/validation.md` §六（部署后实跑，2026-10-12） |
+| PLANG-08 | 41 实机 | 同上 | 以同一个 JWT 请求 `/v1/shortcuts`（operator 入口） | **PASS**：九种语言下 `label`/`description`/`question_template` **三个字段都非空且是该语言**（逐字段打印核对） | `docs/validation.md` §六 |
 
 - **不在本票范围**：客户端的**缺省**链（请求头缺省 `"en"` 而 UI 缺省 `"zh-Hans"`）。
   服务端已能正确认出平台值；缺省仍应在前端侧收敛成同一个值，本票不改前端。
-- **未完成业务验收**：PLANG-07/-08 是本 PR 的部署后实跑，执行结果记在本 PR 的验证小节。
+- **PLANG-07/-08 已在 41 上实跑并 PASS（9/9 + 三字段逐项）**，结果记在 `docs/validation.md` §六。
