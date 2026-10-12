@@ -53,6 +53,51 @@ def ops_narrative_schema() -> dict[str, Any]:
     return OPS_NARRATIVE_SCHEMA
 
 
+#: Facts the prompt shows the model. A **name list**, not "whatever is in the
+#: dict": it was the latter's failure mode that #700's review caught — every
+#: card explains its *own* numbers, and the offline / fault-code / payment
+#: contracts carry `incidents` / `offline_minutes` / `total_faults` /
+#: `top_codes` / `buckets` …, none of which this tuple named. The model then got
+#: a risk label and a window and nothing to explain, so a "check this error code
+#: first" recommendation could not be grounded in the card's own ranking.
+#: `definition` and `reason_code` stay in: they are what tells the model which
+#: rule produced the numbers it is describing.
+_PROMPT_FACT_KEYS = (
+    "card",
+    "failure_rate",
+    "risk",
+    "counts",
+    "secondary",
+    "incidents",
+    "offline_devices",
+    "open_incidents",
+    "offline_minutes",
+    "offline_ratio",
+    "total_faults",
+    "faulty_devices",
+    "top_codes",
+    "faulty_ratio",
+    "total",
+    "paid",
+    "paid_refunded",
+    "paid_net",
+    "unpaid",
+    "refund_share",
+    "devices_total",
+    "window",
+    "site_ids",
+    "definition",
+    "reason_code",
+)
+
+
+#: ``None`` means "the surface could not compute this one". Sending it as a fact
+#: would invite the model to explain an absence as if it were a measured value —
+#: the same false claim ``reason_code`` exists to prevent.
+def _fact_lines(facts: dict[str, Any]) -> list[str]:
+    return [f"- {key}: {facts[key]}" for key in _PROMPT_FACT_KEYS if key in facts and facts[key] is not None]
+
+
 def build_narrative_prompt(facts: dict[str, Any], *, language: str = DEFAULT_LANGUAGE) -> str:
     """把确定性事实渲染成一次「解释它」的请求。
 
@@ -61,9 +106,7 @@ def build_narrative_prompt(facts: dict[str, Any], *, language: str = DEFAULT_LAN
     没有增量。
     """
     lines = ["以下是一段区间聚合的**确定性结果**（已由后端算出，不需要你复核或重算）："]
-    for key in ("failure_rate", "risk", "counts", "secondary", "window", "site_ids", "definition"):
-        if key in facts:
-            lines.append(f"- {key}: {facts[key]}")
+    lines.extend(_fact_lines(facts))
     lines.append("")
     lines.append(
         "请只输出**一个 JSON 对象**，两个字段都是字符串："

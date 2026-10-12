@@ -26,6 +26,7 @@ from aiops_diagnostics.config import Settings
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_runtime import GatewayRuntime
 from aiops_diagnostics.gateway_store import GatewayStore
+from aiops_diagnostics.ops_analysis_narrative import build_narrative_prompt
 from aiops_diagnostics.query_scope import QueryScope
 from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
 
@@ -308,6 +309,82 @@ def test_every_card_with_data_reaches_a_terminal_row(tmp_path: Path, monkeypatch
     assert current["status"] == "completed", (card, current)
     result = current.get("result") or {}
     assert result.get("main_cause") == "成因", (card, result)
-    # The card's own numbers, by the field its contract actually uses.
-    numbers = [result.get(key) for key in ("counts", "total_faults", "incidents", "total")]
-    assert any(value is not None for value in numbers), (card, result)
+    # The card's own numbers, by the fields its contract actually uses, and by
+    # **the values the fake returned** — not merely "something is not None".
+    # Asserting the values is what catches an aggregate that silently comes back
+    # empty: a review pointed out that `is not None` (never mind `> 0`) would
+    # pass on the very regression this file exists to prevent.
+    expected = {
+        "offline": {"incidents": 3, "offline_devices": 2, "open_incidents": 1, "offline_minutes": 42},
+        "fault_code": {"total_faults": 9, "faulty_devices": 2},
+        "payment": {"total": 10, "paid": 8, "paid_refunded": 2, "paid_net": 6, "unpaid": 2},
+    }[card]
+    for key, value in expected.items():
+        assert result.get(key) == value, (card, key, result.get(key), result)
+    if card == "fault_code":
+        assert result.get("top_codes") == [
+            {"error_code": "NoError", "fault_count": 5},
+            {"error_code": "OtherError", "fault_count": 4},
+        ], result.get("top_codes")
+
+
+def test_the_narrative_prompt_carries_each_card_own_numbers() -> None:
+    """提示词必须把**这张卡自己的**数字交给模型。
+
+    这是评审在 #710 上逮到的：``build_narrative_prompt`` 里的键名写死成失败率那一套，
+    于是首次真正走到有数据的故障码卡时，模型只拿到一个 risk 标签与时间窗 ——
+    **没有故障数、没有故障码排名**，而它仍被要求写「先查哪个码」。离线卡与支付卡同理
+    （分别缺 incidents/offline_minutes 与 four buckets）。
+
+    判据落在**真正发出去的那段提示词**上：键改名、契约加字段、某张卡少传一个数，
+    都会在这里显形。断言到值，不是「含有某个词」。
+    """
+    from aiops_diagnostics.ops_analysis import (
+        FaultCodeAggregate,
+        OfflineAggregate,
+        PaymentAggregate,
+        build_fault_code_contract,
+        build_offline_contract,
+        build_payment_contract,
+    )
+
+    window = {"language": "zh", "site_ids": ("S-1",)}
+    cases = {
+        "fault_code": (
+            build_fault_code_contract(
+                FaultCodeAggregate(
+                    total_faults=9,
+                    faulty_devices=2,
+                    top_codes=(("NoError", 5), ("OtherError", 4)),
+                    devices_total=7,
+                ),
+                None,
+                **window,
+            ),
+            ("total_faults: 9", "faulty_devices: 2", "NoError", "OtherError"),
+        ),
+        "offline": (
+            build_offline_contract(
+                OfflineAggregate(
+                    incidents=3, offline_devices=2, open_incidents=1, offline_minutes=42, devices_total=7
+                ),
+                None,
+                **window,
+            ),
+            ("incidents: 3", "offline_devices: 2", "offline_minutes: 42", "open_incidents: 1"),
+        ),
+        "payment": (
+            build_payment_contract(
+                PaymentAggregate(total=10, paid=8, paid_refunded=2, paid_net=6, unpaid=2),
+                None,
+                **window,
+            ),
+            ("total: 10", "paid: 8", "paid_refunded: 2", "paid_net: 6", "unpaid: 2"),
+        ),
+    }
+    for card, (facts, wanted) in cases.items():
+        prompt = build_narrative_prompt(facts, language="zh")
+        for fragment in wanted:
+            assert fragment in prompt, (card, fragment, prompt)
+        # The failure-rate keys it used to hard-code are not what grounds these.
+        assert "counts:" not in prompt, (card, prompt)
