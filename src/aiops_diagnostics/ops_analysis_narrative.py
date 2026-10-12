@@ -189,9 +189,26 @@ def _parse_narrative(raw: str) -> dict[str, Any] | None:
     upstream). None of that tolerance decides what the narrative *says* — it
     only decides whether the text is readable at all — so a shape that cannot be
     recovered is a failure rather than a half-parsed answer.
+
+    **But "a dict" is not the contract.** #700 caught this on 41: ``parse_turn``
+    returned the first dict it could parse, so a ``{"kind": "tool_requests", …}``
+    turn — the diagnosis/QA turn protocol, which this workspace's prompt never
+    asks for — was accepted as a narrative, ``_narrative`` read its two keys and
+    found neither, and the job **completed with an empty explanation and no
+    reason code**. A card that says ``completed`` with no ``main_cause`` reads
+    as "the aggregate had nothing to say", which is a different and false claim;
+    the same reasoning ``_narrative_for`` already uses to fail rather than ship
+    numbers without prose.
+
+    ``_looks_like_narrative`` was written for this and was only reachable from
+    ``parse_turn``'s truncated-head repair path — a predicate that only guards
+    a fallback is not a contract. It is checked here, on the main path, so a
+    turn without the fields the assembler reads is a failure.
     """
     parsed = parse_turn(raw, openings=_NARRATIVE_OPENINGS, is_valid=_looks_like_narrative)
-    return parsed if isinstance(parsed, dict) else None
+    if not isinstance(parsed, dict) or not _looks_like_narrative(parsed):
+        return None
+    return parsed
 
 
 def _looks_like_narrative(payload: Any) -> bool:
