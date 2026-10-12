@@ -47,8 +47,31 @@ payment       total=48 paid=47 paid_net=12 unpaid=1 ; failure_rate=null
 离线卡在 41 上交付的成因是「风险被标记为 abnormal，是因为…触发离线监测规则」：
 **从 `risk` 标签反推**。同一张卡、同一套数据，接入真数字前后的差别就在这段正文里。
 
-`payment` 的散文为空是**设计**：`NO_PAYMENT_FAILURE_SOURCE` 是确定性结论，不读模型、
-不编叙述；卡的 `failure_rate` 恒为 `null`，交付的是四分桶。
+### ⚠️ 更正：`payment` 的散文为空**不是**设计，是一处真缺陷（本轮验收的边缘逮到的）
+
+我先前在这里写过「散文为空是设计，`NO_PAYMENT_FAILURE_SOURCE` 是确定性结论、不读模型」。
+**那是错的**，回查 41 上的运行日志后确认：
+
+那条叙述轮**确实被调用了**：提示词里带着四个桶（`paid: 47 / paid_refunded: 35 /
+paid_net: 12 / unpaid: 1 / refund_share: 0.7447`），模型也**回了**——
+回的是一段 `{"kind": "tool_requests", …}`（它请求订单快照做前置证据）。
+而它被当成一份合法叙述收下了：`_parse_narrative` 只要**解析得出一个 dict** 就返回，
+`_looks_like_narrative` 这个谓词只在 `parse_turn` 的**截断修复**回退路径里被用到，
+主路径不查它。于是 `_narrative` 按名字取 `main_cause` / `recommendation` 两个键，
+两个都取不到 ⇒ 两个字段都是 `None`，而作业以 **`completed`** 落库、
+**没有任何原因码**。
+
+判据（回查该次运行的 rollout 得出）：七次工具调用全部返回沙箱致命错误
+（`bwrap: loopback: Failed RTM_ADDDR: Operation not permitted`），
+模型的最后一条消息就是那次 `tool_requests`。
+
+⇒ 所以这不是「确定性答案不读模型」，而是**一份工具请求被当成了叙述**：
+`{"kind": "tool_requests"}` 让谓词为假、让装配取不到键、让作业在**没有解释**的情况下
+报 `completed`。`failure_rate` 恒为 `null` 那半**是**设计（见 `build_payment_contract`
+的文档字符串），两件事必须分开记。
+
+**待修**（未含在本 PR 内，另立）：`_parse_narrative` 应当**要求**那两个键之一存在，
+否则抛 `AgentRuntimeError` —— 那样这条会如实落成 `failed`，而不是一张静默的半成品卡。
 
 ### 四、这一轮之前的两处修复（都在同一晚，已合并）
 
