@@ -12715,6 +12715,34 @@ journal 成了可以放内容的地方：换行可以伪造一行日志（log in
 `description` / `question_template` **全部非空且是该语言**（如 `portuguese` 的
 `Casos de cliente` / `Consulte casos de referênc…` / `Quero ver casos de cliente`）。
 
+### 七、那行日志：从「取不到」到取到，以及一次**错的归因**
+
+第一版本节写的是「401 是因为 JWT 过期，所以日志产生不了」。**那个归因是错的** ——
+生产默认的令牌判据 `trust_company_payload=True` **不判 `exp`**（与公司一致，见
+`company_token_auth.py` 的说明）。真正的原因是**报文形状**：
+
+| 形状 | 结果 |
+|---|---|
+| JWT + `X-Business-Entry: operator` | **200** |
+| JWT + `X-Business-Entry: consumer`（本租户是代理商，consumer 入口解析不出会话） | 401 `INVALID_ACCESS_TOKEN` |
+| 我们的服务令牌（无 JWT） | 401 `INVALID_ACCESS_TOKEN` |
+
+复跑时用的是第三种形状，于是 401 发生在**语言解析之前**，日志自然不产生。
+换成第一种形状后，41 的 journal 当场得到：
+
+```
+Oct 12 13:08:10 … INFO aiops.i18n language tag not recognized, falling back to zh: zzz-unknown
+```
+
+**所以那行在线上是取到了的**（这条与「形状 B/C 的 401」是两件事，别再把它们混在一起）。
+
+**未完成业务验收（明写）**：客户端缺省链（请求头缺省 `"en"` 而 UI 缺省 `"zh-Hans"`）属前端。
+- **客户端的缺省链未覆盖**：请求头是 `getStorageSync("lang") || "en"`，而同一页 UI 是
+  `"" == c ? "zh-Hans" : c` —— 同一个 key、两套词汇、两个缺省。服务端已能正确认出
+  平台值；缺省应在前端侧收敛成同一个值。这是另一侧的工作，不在本票。
+- **旧 token 已过期**：排查用的那枚 JWT `exp` 为 2026-10-10 23:53Z，部署后复跑需要
+  前端重新提供一枚有效令牌。
+
 ### 八、回答面全量端到端（2026-10-12，41 生产，只读）
 
 上一节只覆盖两个端点。这一节把**回答面上每一个按语言取文案的面**都跑了一遍，
@@ -12722,6 +12750,7 @@ journal 成了可以放内容的地方：换行可以伪造一行日志（log in
 
 **扫描面**：`/v1/faq/recommendations`、`/v1/faq/catalog`、`/v1/shortcuts`、
 `/v1/assistant/starters`、`/v1/banner`，以及 `POST /v1/faq/answer`（operator 目录第一条）。
+**其中 `/v1/banner` 的正文没验到**（见下表的脚注）——它当前是空列表，所以那一行只证了语言字段。
 每个面 × 九种平台语言值。判据三条：HTTP 200、`language` 等于期望、
 **正文确实是该语言**（非中文零汉字；繁体有繁体字且不含简体专用字）。
 
@@ -12731,7 +12760,7 @@ journal 成了可以放内容的地方：换行可以伪造一行日志（log in
 | `/v1/faq/catalog` | zh ✓ | en ✓ | **pt ✓** | **es ✓** | th ✓ | vi ✓ | mn ✓ | km ✓ | **zh-Hant ✓** |
 | `/v1/shortcuts` | zh ✓ | en ✓ | **pt ✓** | **es ✓** | th ✓ | vi ✓ | mn ✓ | km ✓ | **zh-Hant ✓** |
 | `/v1/assistant/starters` | zh ✓ | en ✓ | **pt ✓** | **es ✓** | th ✓ | vi ✓ | mn ✓ | km ✓ | **zh-Hant ✓** |
-| `/v1/banner` | zh ✓ | en ✓ | **pt ✓** | **es ✓** | th ✓ | vi ✓ | mn ✓ | km ✓ | **zh-Hant ✓**（本条为空列表 ⇒ 只判语言字段）|
+| `/v1/banner` | zh ✓ | en ✓ | **pt ✓** | **es ✓** | th ✓ | vi ✓ | mn ✓ | km ✓ | **zh-Hant ✓**（⚠️ **本条为空列表**：未发布横幅 ⇒ 只证了 `language` 字段，**横幅正文的多语言未验**）|
 | `POST /v1/faq/answer` | zh ✓ | en ✓ | **pt ✓** | **es ✓** | th ✓ | vi ✓ | mn ✓ | km ✓ | **zh-Hant ✓** |
 
 **繁体的字面量核对**（不是只看 `language` 字段）：
@@ -12765,31 +12794,3 @@ journal 无行」的推断，不是抓包直证；判成 nginx 的建议动作�
 | 公网 `https://api.mall.qushiyun.com`（本次全程使用） | 200 |
 | 直连 `http://172.18.0.1:8788` | 401（需服务令牌，不是终端用户的路径） |
 | 受限口 `https://127.0.0.1:8789` | 403（`allow 120.55.45.59; deny all;`，只放行 120） |
-
-### 七、那行日志：从「取不到」到取到，以及一次**错的归因**
-
-第一版本节写的是「401 是因为 JWT 过期，所以日志产生不了」。**那个归因是错的** ——
-生产默认的令牌判据 `trust_company_payload=True` **不判 `exp`**（与公司一致，见
-`company_token_auth.py` 的说明）。真正的原因是**报文形状**：
-
-| 形状 | 结果 |
-|---|---|
-| JWT + `X-Business-Entry: operator` | **200** |
-| JWT + `X-Business-Entry: consumer`（本租户是代理商，consumer 入口解析不出会话） | 401 `INVALID_ACCESS_TOKEN` |
-| 我们的服务令牌（无 JWT） | 401 `INVALID_ACCESS_TOKEN` |
-
-复跑时用的是第三种形状，于是 401 发生在**语言解析之前**，日志自然不产生。
-换成第一种形状后，41 的 journal 当场得到：
-
-```
-Oct 12 13:08:10 … INFO aiops.i18n language tag not recognized, falling back to zh: zzz-unknown
-```
-
-**所以那行在线上是取到了的**（这条与「形状 B/C 的 401」是两件事，别再把它们混在一起）。
-
-**未完成业务验收（明写）**：客户端缺省链（请求头缺省 `"en"` 而 UI 缺省 `"zh-Hans"`）属前端。
-- **客户端的缺省链未覆盖**：请求头是 `getStorageSync("lang") || "en"`，而同一页 UI 是
-  `"" == c ? "zh-Hans" : c` —— 同一个 key、两套词汇、两个缺省。服务端已能正确认出
-  平台值；缺省应在前端侧收敛成同一个值。这是另一侧的工作，不在本票。
-- **旧 token 已过期**：排查用的那枚 JWT `exp` 为 2026-10-10 23:53Z，部署后复跑需要
-  前端重新提供一枚有效令牌。
