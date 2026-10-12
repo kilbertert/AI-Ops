@@ -1,3 +1,58 @@
+## #721 运维巡检入口 + 整租户范围缺陷（2026-10-12，本地）
+
+**分支** `feat/operator-operations-review`，基线 `origin/main`（`0796dc8`）。
+**这是本票的第一刀**（入口动作）；41 真机验收与失败路径的据实标注在后续两刀，**尚未做**。
+
+### 一、交付了什么
+
+管家端点「运维巡检」直接起一张跨订单的运维卡：新增 operator 侧种子动作
+`operations_review`（11 语言文案、`requires_order=False`、`sort_order=30`），
+`POST /v1/assistant/questions` 的 **Route 0**（排在 Route 1 之前）把它接到既有的
+`start_operations_analysis`；窗口由**服务端**定（`OPERATIONS_REVIEW_WINDOW_HOURS = 24`），
+`site_ids=None` = 调用者自己的整个可见站点集。
+
+**这台入口不是新面孔**：`_analysis_job_response` 就是 `POST /v1/standard/analyses`
+已经在用的那一份，`type: "analysis"` 只是告诉轮询方该去哪个面取结果。
+
+### 二、审查逮到的一个真缺陷：整租户账号的巡检恒为空
+
+`_intersect_sites` 第一版把「两侧都是 `None`」收敛成 `()`，而下游（`sources._bounded_sites`
+及其全部调用者的约定）读 `()` 是「交集为空、别发 SQL」，读 `None` 才是「租户内不限站点」。
+于是**范围最宽的那个账号——正是这个面为之存在的管家账号——恒得一张空卡**：
+失败率为 `SCOPE_EMPTY` / `total=0`，三张设备与支付卡则走 `_empty_card_result`。
+`_intersect_sites` 现在回三值（`None` / `()` / 非空元组），与下游同形。
+
+同类缺陷在本仓**已发生过一次**：`#628`「顶层账号被读成无可见订单」——
+「没有店铺子集」被读成「看不到任何订单」。这次是它在**聚合层**的复现
+（「没有站点收窄」被读成「没有站点」）。两条的修法同形：把「未收窄」与「空」分开。
+
+**为什么本地用例没逮到**：这条线上此前的每一处用例都用 `self` 范围 + 显式站点集
+（两侧都非 `None`），那条路径一直是好的；只有 `site_ids=None` 的整租户账号会踩到。
+新增两条用例：`test_the_whole_tenant_scope_is_no_narrowing_not_an_empty_one`
+（真值表）与 `test_the_whole_tenant_caller_actually_gets_its_orders_counted`
+（整条作业 + **聚合确实被调用、且收到的是 `None`**）。
+
+### 三、验证
+
+| 判据 | 结果 | 怎么证的 |
+|---|---|---|
+| 整租户范围 = 不收窄，不是空集 | ✅ | 真值表五态；**突变复验**：把函数体改回 `()` 那版 ⇒ 两条用例转红 |
+| 整租户账号的作业走完全程并**统计到订单** | ✅ | `reason_code=None`、`counts.total=10`、`failure_rate=0.2`、聚合收到 `None` |
+| 新增动作在 operator 动作列表里、consumer 不可见 | ✅ | `test_operator_entry_actions.py` 5 条新用例（第三条 + 排序 + 入口隔离） |
+| 点击走 Route 0、窗口由服务端定 | ✅ | 记录 `start_operations_analysis` 收到的窗口，断言 24h |
+| 全量回归 | ✅ | `pytest`：2180 passed / 9 skipped（162s），`ruff check` + `format --check` 全绿 |
+
+### 四、证据边界（据实）
+
+- **41 真机验收未做** —— 本刀只到本地。入口能不能真的被点击、卡能不能在真实租户上
+  出数字，**都还没证**；`docs/开发进度.md` 里按未完成记。
+- **`verify-aiops-gateway` 未跑**：该 skill 的边界写明它证不了 `/diag/*` 与模型 run，
+  而本刀改的是「点击 → 起作业」的接线与一个纯函数范围收敛，两者都不在它能覆盖的范围内。
+  真实端到端走 41（下一刀），不用一次性数据根假装证过。
+- **失败路径的据实标注未做**（本票第二刀）：`failed / ANALYSIS_FAILED` 那条分支
+  在本仓库**无法由任何输入触发**（成因全是环境性的），这一点要写下来而不是让它看着像已覆盖。
+- 生产 41 未改任何配置。
+
 ## #700 叙述修复后的复跑（2026-10-12，41 真机，`0.1.0+0796dc8c3513`）
 
 **分支** `docs/stage1-acceptance-rerun-after-narrative-fix`，基线 `origin/main`（`0796dc8`）。

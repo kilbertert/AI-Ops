@@ -545,7 +545,7 @@ class GatewayRuntime:
         try:
             scope = resolve_query_scope(context)
             effective_sites = _intersect_sites(site_ids, scope.site_ids)
-            if scope.empty_site_scope or not effective_sites:
+            if effective_sites == ():
                 result = self._empty_card_result(card, language, site_ids, window_start, window_end)
             else:
                 with scoped_live_sources(self.diagnostic_settings, scope=scope) as sources:
@@ -623,7 +623,7 @@ class GatewayRuntime:
         self,
         card: str,
         sources: Any,
-        effective_sites: tuple[str, ...],
+        effective_sites: tuple[str, ...] | None,
         window_start: str,
         window_end: str,
         language: str,
@@ -744,7 +744,7 @@ class GatewayRuntime:
             # direction, so nothing is computed — the same honest empty the
             # empty-scope short-circuit gives.
             effective_sites = _intersect_sites(site_ids, scope.site_ids)
-            if scope.empty_site_scope or not effective_sites:
+            if effective_sites == ():
                 result = build_failure_rate_contract(
                     AnalysisAggregate(0, 0, 0, ()),
                     None,
@@ -2608,17 +2608,31 @@ def _public_event(event: dict[str, Any]) -> dict[str, Any]:
 def _intersect_sites(
     requested: tuple[str, ...] | None,
     allowed: tuple[str, ...] | None,
-) -> tuple[str, ...]:
+) -> tuple[str, ...] | None:
     """The site set the job actually reads: what was asked for ∩ what is visible.
 
-    ``None`` on either side means "no narrowing at that layer" — the same
-    convention ``QueryScope.site_ids`` uses. The intersection is computed here
-    as well as ANDed into the SQL on purpose (defence in depth, matching how
-    the diagnosis line carries one range object): a mistranslated scope must not
-    be the only thing keeping a request inside its tenant.
+    The three-valued convention is ``sources._bounded_sites``'s, because that is
+    what the aggregate layer downstream actually consumes: ``site_ids is None``
+    means "a site predicate is not needed here" (the tenant predicate still
+    narrows), while ``()`` means "the intersection was empty, read nothing".
+    ``None`` on either side means "no narrowing at that layer", so:
+
+    * both ``None`` → ``None``; a tenant-wide account asks for nothing narrower
+      than its whole tenant. Returning ``()`` here instead turned every
+      whole-tenant run into a ``SCOPE_EMPTY`` card that counted no orders at
+      all — the account the feature is *for* was the one account it never
+      answered (found in the review of #721).
+    * either side ``None``, the other a tuple → that tuple (the ``None`` side
+      narrows nothing).
+    * both tuples → the intersection, which may be legitimately empty.
+
+    The intersection is computed here as well as ANDed into the SQL on purpose
+    (defence in depth, matching how the diagnosis line carries one range
+    object): a mistranslated scope must not be the only thing keeping a request
+    inside its tenant.
     """
     if requested is None:
-        return tuple(allowed) if allowed is not None else ()
+        return None if allowed is None else tuple(allowed)
     if allowed is None:
         return tuple(requested)
     return tuple(sorted(set(requested) & set(allowed)))

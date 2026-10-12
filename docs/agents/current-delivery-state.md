@@ -348,6 +348,9 @@ fail closed；门装在**会话那一级之前**）。**但管家端今天仍然
 - PRD #423 / #427 的管家端入口内容与订单检测成功路径：**2026-09-28 已在 41 发布并验收**。
   `operator` 侧两个动作（`smart_diagnosis` 订单检测、`case_exploration` 客户案例）
   以**平台默认**发布（走 `ShortcutManager` 生命周期，非直接插库；改前已冷备 gateway.db）。
+  **2026-10-12（#721）**：该入口新增第三个动作 `operations_review`（运维巡检），
+  起一张跨订单的运维卡；本条所说的「两个动作」是当时的历史计数，**41 上仍是旧的 2 条**，
+  第三个要等 #721 合并部署后才会出现。
   实测：`operator` 入口 `count=2`；订单检测无订单号 → `clarification`；
   站点外订单 → `404`；客户案例 → `completed` 且 `retrieval_status=unavailable`
   （文案为「客户案例服务暂时不可用」，不含「未检索到匹配的宣传资料」）；
