@@ -147,3 +147,30 @@ tenant_id = "1783022023241633792"
 business_entry = "consumer"
 app_id = "a975c8e5-ad9e-425c-84c9-77581a0a2bed"
 agent_name = "canary-dify-acceptance-1011"
+
+# 管家端诊断的方法论配方（#700）：从 Dify `operator-methodology-700` 拉回并经发布门冻结。
+# 运行时注册表把它绑给 `(1942105476598861824, operator)`，诊断因此在**该入口**上跑这份
+# 正文 —— 而在 consumer 入口上跑的是另一份，两者互不影响。
+[[agents]]
+tenant_id = "1942105476598861824"
+name = "ops-methodology-700"
+description = ""
+agent_type = "operations"
+prompt = """你是充电运维诊断的方法论助手。下面这段是**方法论**，不是结论：
+1) 先读 incident.json 与 references/INDEX.md，再按需取证，不要一次读完。
+2) 每个结论都要有 evidence id；拿不到证据就写进 limitations，不要补。
+3) 涉及时间窗时写明窗口与口径。
+4) 只输出既定的诊断 JSON 契约，不要输出过程叙述。
+【运维方法论标记 2026-10-12 E2E-700-A】
+"""
+knowledge_base_ids = []
+model = "deepseek-v4-flash"
+output_contract = "diagnosis-v1"
+
+# 注册表为真实租户**新增 operator 一行**（consumer 那行不动）。
+# 未登记的 `(租户, 入口)` 仍然 fail closed；本次只把这一对从「没登记」变成「点名一份」。
+[[dify_apps]]
+tenant_id = "1942105476598861824"
+business_entry = "operator"
+app_id = "25c20f09-5871-4d8b-8eb6-1bb3d400d46c"
+agent_name = "ops-methodology-700"

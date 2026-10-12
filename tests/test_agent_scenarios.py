@@ -368,6 +368,33 @@ def test_the_guardrail_text_is_not_parameterised_by_entry_or_tenant() -> None:
 
     assert list(inspect.signature(_runtime_instructions).parameters) == []
     assert list(inspect.signature(_developer_instructions).parameters) == ["language"]
-    # The QA contract takes the answer language and nothing else: language is
-    # the run's presentation, not a way for a tenant to relax a rule.
-    assert list(inspect.signature(_qa_runtime_instructions).parameters) == ["language"]
+    # The QA contract takes the answer language and the answer *shape* (#700),
+    # and nothing else. Both are closed vocabularies owned by this module — the
+    # shape is how the operations-analysis narrative turn asks for
+    # ``{main_cause, recommendation}`` instead of the zero-order ``{text}``
+    # envelope it was otherwise told to produce. Neither can name an entry, a
+    # tenant, or a rule, so the guardrails themselves are still unparameterised:
+    # everything above the shape block is byte-identical between the two.
+    assert list(inspect.signature(_qa_runtime_instructions).parameters) == [
+        "language",
+        "answer_contract",
+    ]
+    from aiops_diagnostics.agent_workspace import (  # noqa: PLC0415 - keeps the signature check the subject
+        NARRATIVE_ANSWER_CONTRACT,
+        QA_ANSWER_CONTRACT,
+    )
+
+    assert {QA_ANSWER_CONTRACT, NARRATIVE_ANSWER_CONTRACT} == {"text", "narrative"}
+    # The shape is the ONLY difference: everything before the shape block — the
+    # "no order data" rule and the filesystem/network guardrail — is shared,
+    # byte for byte.
+    texts = {c: _qa_runtime_instructions("en", c) for c in (QA_ANSWER_CONTRACT, NARRATIVE_ANSWER_CONTRACT)}
+    shared = texts[QA_ANSWER_CONTRACT].split("- Answer the user's general charging")[0]
+    assert shared.strip(), "split found nothing — the shape block moved"
+    assert texts[NARRATIVE_ANSWER_CONTRACT].startswith(shared)
+    # ...and the narrative one really does carry the guardrail, not just the
+    # shape line. A review caught an earlier version that had dropped it.
+    narrative = texts[NARRATIVE_ANSWER_CONTRACT]
+    assert "do not query\n  any order data" in narrative
+    assert "Do not inspect parent directories" in narrative
+    assert "No network access" in narrative

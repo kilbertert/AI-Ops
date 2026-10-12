@@ -501,7 +501,10 @@ class GatewayRuntime:
                         language,
                         site_ids,
                     )
-        except (SourceError, ValueError) as exc:
+        # Same class as the failure-rate branch below (and the diagnosis line):
+        # every card's narrative turn can raise ``AgentRuntimeError``, and a
+        # handler that does not catch it writes no terminal row at all.
+        except (AgentRuntimeError, SourceError, ValueError) as exc:
             ok = self.store.update_standard_diagnosis(
                 analysis_id,
                 status="failed",
@@ -721,7 +724,10 @@ class GatewayRuntime:
                         result = self._analyze_with_narrative(
                             aggregate, context, site_ids, window_start, window_end, language
                         )
-        except (SourceError, ValueError) as exc:
+        # #700: 叙述轮在模型回散文/供应商失败时抛 ``AgentRuntimeError``（一个
+        # ``RuntimeError``），而这里只接了源与取值两类 —— 于是那次运行**没有写任何
+        # 终态**，作业停在 ``running`` 直到过期。诊断线一直接的是这三类，同一种失败。
+        except (AgentRuntimeError, SourceError, ValueError) as exc:
             ok = self.store.update_standard_diagnosis(
                 analysis_id,
                 status="failed",
@@ -2063,19 +2069,19 @@ class GatewayRuntime:
                 guarded=not ok,
                 stop_renewer=claim_stop,
             )
+            # #700 在生产上逮到这段 `_record_metric` 落在**分支之外**：它按方法的
+            # 缩进执行，于是每一次**被服务**的管家端诊断都记一条
+            # `failed / DIAGNOSIS_AGENT_UNREGISTERED`（而行里是 completed），
+            # 而真正 fail-closed 的那条路径在上面就 `return _REFUSED` 了 ——
+            # 一条也不记。注释说的「指标与行不会各说各话」恰好被它自己破掉。
+            self._record_metric(
+                tenant_id=tenant_id,
+                route_type="diagnosis",
+                outcome="failed",
+                error_code=DIAGNOSIS_AGENT_UNREGISTERED,
+                duration_ms=int((time.monotonic() - started_ms) * 1000),
+            )
             return _REFUSED
-        # #695: this is a terminal outcome that is neither a model failure nor a
-        # source failure, so it is counted here rather than in the workers'
-        # exception paths — the same reason the QA line records its metrics at
-        # the point the outcome is decided. ``error_code`` carries the same code
-        # the row reports, so the metric and the row cannot disagree.
-        self._record_metric(
-            tenant_id=tenant_id,
-            route_type="diagnosis",
-            outcome="failed",
-            error_code=DIAGNOSIS_AGENT_UNREGISTERED,
-            duration_ms=int((time.monotonic() - started_ms) * 1000),
-        )
         return selection.prompt
 
     def _registered_agent(self, tenant_id: str, business_entry: str) -> tuple[str | None, bool]:

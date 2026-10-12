@@ -1,3 +1,109 @@
+## #700 阶段 1 端到端取证：真实租户上的诊断接线 + 失败率卡（2026-10-12，41 真机）
+
+**分支** `docs/stage1-e2e-700`，基线 `origin/main`（`7d29e71`）。
+**制品** 本节 + `docs/开发进度.md` + 四处缺陷的修复与其回归用例。
+
+### 一、这一轮证的是什么、不证什么
+
+**证的是**：① 运营在 Dify 改一份正文 → 我方发布门冻结 → 一个真实管家端身份的诊断，
+其**实际交给模型的那段提示词**逐字带着那次改动（换标记后可证伪）；② 同一租户同一入口，
+一张失败率卡的数字与 QueryScope 下的只读对照逐字一致；③ consumer 侧未被动过；
+④ 未登记的入口仍然 fail closed。
+
+**不证**：真实 App 登录令牌、运营本人在浏览器里的操作、以及这段文案的业务质量
+（Dify 侧那个 app 是验收用的，不是一个经过业务评审的配方）。
+
+### 二、四处缺陷：都是取证时自己撞出来的
+
+| # | 位置 | 症状 | 成因 |
+|---|---|---|---|
+| 1 | `gateway_runtime._execute_operations_analysis` | 作业永远 `running`（第一次真跑，10 分钟不终结） | 叙述轮的 `AgentRuntimeError` 不在 `except (SourceError, ValueError)` 里 ⇒ 无终态写入 |
+| 2 | `ops_analysis_narrative.run_narrative_turn` | 模型按散文回答 | `output_schema` 声明了却**没传给** `session.run` |
+| 3 | `agent_workspace._qa_runtime_instructions` | 模型回 `{"text": …}` 信封 | 零阶护栏写着「相关问题、末尾提醒语、返回 `text`」，与叙述轮的提示词**互相矛盾** |
+| 4 | `metrics_store.ROUTE_TYPES` | 分析线**零指标** | 不认 `operations_analysis`；异常被 `_record_metric` 的抑制吞掉 |
+| 5 | `gateway_runtime._diagnosis_methodology` | 成功的诊断也记一条失败码 | `_record_metric` 落在 `if selection is None` **之外** |
+
+第 1、2、3 条是**先后**发生的：第一版跑出 1（作业挂住）→ 补上 1 之后跑出 2 与 3
+（模型回散文 / 回信封）→ 每补一次就在 41 上真跑一次，直到卡片交付。
+
+第 5 条是从**指标表**里看出来的：两条 `completed` 的行旁边各有一条
+`failed / DIAGNOSIS_AGENT_UNREGISTERED`。它与 #695 那轮对抗性验证同一种教训 ——
+一条用例可以为任何原因保持绿色，包括**它根本没走到那段代码**。
+
+### 三、判据一：换标记可证伪
+
+Dify 侧正文里那一行标记，**改一次、重发一次、再跑一次**：
+
+| 步 | 命令/做法 | 观察 |
+|---|---|---|
+| ① 建 app 并发布正文（标记 A） | 控制台 API `POST /console/api/apps` + `…/model-config` | 导出读回含 A |
+| ② 拉回并经发布门冻结 | `admin pull-dify --agent-type operations --tenant 1942105476598861824` | `agent_versions` 加一行（v1） |
+| ③ 登记表加 `(该租户, operator)` 行 | `env-41.toml` + `admin reconcile`（dry-run → 回查 → 真跑） | 该行 `registered`；两行 consumer `unchanged` |
+| ④ 真实管家端身份诊断 | 公网入口 `POST /v1/standard/diagnoses` | `202` → `completed` |
+| ⑤ **该次运行实际发给模型的提示词** | run workspace `state.json` + codex rollout | 逐字含 **A** |
+| ⑥ **换成标记 B** 重发 | 控制台改正文 → 再 `pull-dify`（v2） | 新版正文含 B |
+| ⑦ 再跑一次诊断 | 同上 | 新会话的提示词逐字含 **B**、**不含 A** |
+
+判据**不落在**「库里那一版是什么」，而落在**这一次运行真正交给模型的那段文字**上：
+那才是「接线接通了」与「库里存了一份」的区别。④⑦ 两次诊断都 `completed`。
+
+### 四、判据二：失败率卡与只读对照
+
+窗口 `[2026-09-01T00:00+08, 2026-10-12T00:00+08)`，租户 = 真实租户，站点集合 = `null`
+（即调用者可见集合，由 worker 与实时 scope 求交）。
+
+```
+卡片   failure_rate=0.0   counts={total:48, abnormal_ended:0, normal_ended:44}   risk=normal
+       rule_version=ops-analysis-v1   definition={order_status=5, half-open [start,end)}
+对照   total=48  abnormal=0  normal=44  rate=0.0        ← 独立只读查询（QueryScope 下推）
+越界   site 2094981220835291137 窗口内 20 行（status=1）—— **未被计入**
+```
+
+**数字可复核的判据是「两边逐字一致」，不是「数字合理」。** 这个 `0` 之所以可信，是因为
+范围里有订单、且越界站点上的记录确实被排除了。
+
+### 五、判据三/四与口径
+
+- **consumer 回归**：同一租户 C 端会话（真实 Redis 会话）经公网提问 →
+  `completed / retrieval_status=found`，正文 `[text, video, reference]`；
+  指标 `agt_7dbe2665b2ed44e8949ef1d97141228a#v3` —— 正是登记表为该租户点名的版本，
+  改动前后逐字相同。
+- **未登记入口 fail-closed**：另一个**未登记**的真租户（有运营商账号、有落在其可见站点内
+  的真实订单）、用真运营商身份发起诊断 → `failed / DIAGNOSIS_AGENT_UNREGISTERED`；
+  指标**恰好一条**且同码。
+- **不把公司运维 HTTP 无凭据 200 当授权**：UPMS `/user/inside/byId/{id}` 与
+  `/shopuser/getShops?userId=` 实测**无凭据即 200**。本轮把它们**只**当归属查询
+  （用来确定「哪个 B 端主体 / 哪些店铺」，与后端 `@ShopDataScope` 同源），
+  从未据此宣称授权已通——授权门始终是入口头经公司网关那一跳。
+
+### 六、证据边界（据实）
+
+- 对 **41 有真实写入**：一份已发布 `operations` 版本（1 行）、注册表一行、
+  若干次真实诊断与分析作业。改前备份：
+  `sqlite .backup` → `/var/lib/aiops-41/backups/gateway.db.700-20261012-083520`
+  （sha256 `e79b7afb…`）；源码部署前 → `/var/backups/aiops-41/backup-20261012-*`（四份）。
+- 会话值、订单号、提示词正文**未留档**；凭据**未入仓**、未写进本文。
+- 本轮**打印过一次服务签名密钥**（为按生产形状自签管家端令牌，与既有验收同一手法）。
+  该密钥是公司源码默认值、且签名与 `exp` 都**不参与判定**（`trust_company_payload=True`），
+  因此这次打印没有扩大暴露面；仍如实记在这里。
+- 为验证第 4 条缺陷（指标真能落库），直接建过**一行探针指标**并**已删除**
+  （复查：`tenant_id='probe-700'` 残留 0 行）。
+- 本地：`uv run pytest` 全绿（新增 `tests/test_ops_analysis_runtime.py` 与两条指标一致性用例）、
+  `ruff check` / `ruff format --check` 通过。
+
+### 七、这一轮暴露的形态（值得单独记）
+
+三处缺陷是**同一个形状**：**门装在了错的那一层**。
+
+- 作业终态的门（`except`）漏了一类异常；
+- 会话的门（`output_schema`）声明了没传；
+- 护栏的门（AGENTS.md）与轮次提示词各说各的形状；
+- 度量的门（`ROUTE_TYPES`）不认这个 `route_type`。
+
+四处**都不会报错**：一条永远 `running` 的作业、一段散文、一个信封、一张空指标表 ——
+全部是「看着像在工作」的状态。**判据必须落在「实际发生的那一跳」上**（实际发出的提示词、
+实际写下的行、实际记下的指标），而不是落在「配置写进去了 / 代码里有这段」。
+
 ## #695 补：对抗性验证逮到的覆盖缺口（2026-10-12，本地）
 
 **分支** `fix/issue-695-route1c-entry-regression`。**制品** 本节 + `docs/开发进度.md`。

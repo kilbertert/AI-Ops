@@ -27,3 +27,4 @@ deploy/record-manual-deploy.sh <commit> "<为什么走手工>"
 | 时间 (UTC) | commit | 操作者 | 原因 | 事后核对 |
 |---|---|---|---|---|
 | 2026-09-23T05:51Z | `4a1ac3a4c041` | claude | 误判 run `35842173479` 卡住而抢在它前面手工 rsync；**这是错的**，CD 当时只是在等批准 | 三份运行时参考资料与 main 的 sha 逐一相同、`/health` 正常、非 venv 的 root 归属文件 0 个 —— **未造成偏差，但那是运气不是流程**。已停止手工部署 |
+| 2026-10-12T01:28:56Z | `ddb6c2983c51` | claude | PR #709（#700 阶段 1 端到端取证）尚未合并 ⇒ CD 不会触发；但取证需要在真实租户上跑通修复后的分析面，故先手工 rsync 到 41 取证据。合并后 CD 会覆盖到同一棵树。 | `src/` 逐文件 sha 与 `ddb6c29` **完全相同**（216 个 `.py` 逐条比对）；`systemctl is-active` = active；`/health` 200；`cd.yml` 无待批准 run（最近的 CD run 都是 completed）；该次部署的改动已由 PR #709 承载，合并后 CD 会覆盖到同一棵树 |

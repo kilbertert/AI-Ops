@@ -293,3 +293,67 @@ def test_the_operator_entry_fails_closed_without_a_serviceable_operations_agent(
     assert job["status"] == "failed", (name, job)
     assert job["error_code"] == "DIAGNOSIS_AGENT_UNREGISTERED", (name, job)
     assert recorded == [], "fail-closed 的运行不得触到模型"
+
+
+# --- 5. 指标与作业行必须说同一件事（#700 在生产上逮到的不一致） ----------------
+
+
+def _diagnosis_metric_rows(store: GatewayStore) -> list[tuple[str, str | None]]:
+    import sqlite3
+
+    with sqlite3.connect(store.path) as connection:
+        return connection.execute(
+            "SELECT outcome, error_code FROM agent_run_metrics WHERE route_type = 'diagnosis'"
+        ).fetchall()
+
+
+def test_a_served_operator_run_records_no_failure_metric(tmp_path: Path, monkeypatch) -> None:
+    """**被服务**的那一次运行不得记一条失败指标。
+
+    #700 在 41 上从真实运行的指标里看出这件事：两条 ``completed`` 的诊断旁边，各有一条
+    ``route_type=diagnosis / outcome=failed / error_code=DIAGNOSIS_AGENT_UNREGISTERED``。
+    成因不是失败，而是那段 ``_record_metric`` 落在了 ``if selection is None`` **之外**
+    —— 于是每次**成功**的服务都记一条它并不属于的失败码，而真正 fail-closed 的那条路径
+    （它在上面就 ``return`` 了）一条也不记。
+
+    断言的形状是「**没有任何一条**指标带着这个码」，而不是「指标表是空的」：这条成功路径
+    另外会记一条 ``completed``（那是它应得的），把「空表」当判据会顺带断言掉一件与本票无关
+    的事，也会在下一次合理的度量变更时误报。
+    """
+    runtime, store, recorded = _runtime(tmp_path, monkeypatch)
+    try:
+        _publish_agent(
+            AgentStore(store.path), name="运维乙", agent_type="operations", prompt=METHODOLOGY_MARKER
+        )
+        _bind_operator(store.path, "运维乙")
+
+        job = _run(runtime, store, business_entry="operator")
+    finally:
+        runtime.shutdown()
+
+    assert job["status"] == "completed", job
+    # Every row this run recorded must be the success it was. Written as
+    # "all rows are the completed one", not "there are no rows" and not
+    # "there is exactly one row": the completed metric is written *after* the
+    # terminal row, so `_run` can return before it lands — asserting a count
+    # here is a race, and asserting an empty table failed in CI for exactly
+    # that reason. What must hold is the *code*: no failure code on a run that
+    # succeeded.
+    assert [row for row in _diagnosis_metric_rows(store) if row != ("completed", None)] == []
+
+
+def test_a_fail_closed_operator_run_records_exactly_one_failure_metric(tmp_path: Path, monkeypatch) -> None:
+    """未登记的那一次要**恰好**一条失败指标，且带的就是它写进行里的那个码。"""
+    runtime, store, _ = _runtime(tmp_path, monkeypatch)
+    try:
+        _publish_agent(
+            AgentStore(store.path), name="运维乙", agent_type="operations", prompt=METHODOLOGY_MARKER
+        )
+        _bind_operator(store.path, "运维乙", tenant_id="T-OTHER")
+
+        job = _run(runtime, store, business_entry="operator")
+    finally:
+        runtime.shutdown()
+
+    assert job["status"] == "failed", job
+    assert _diagnosis_metric_rows(store) == [("failed", "DIAGNOSIS_AGENT_UNREGISTERED")]
