@@ -316,8 +316,9 @@ def test_a_served_operator_run_records_no_failure_metric(tmp_path: Path, monkeyp
     —— 于是每次**成功**的服务都记一条它并不属于的失败码，而真正 fail-closed 的那条路径
     （它在上面就 ``return`` 了）一条也不记。
 
-    判据说到底只有一句：行与指标不能各说各的。这条断言「服务成功 ⇒ 没有失败指标」，
-    下一条断言「fail-closed ⇒ 恰好一条」。两条合起来才钉得住缩进。
+    断言的形状是「**没有任何一条**指标带着这个码」，而不是「指标表是空的」：这条成功路径
+    另外会记一条 ``completed``（那是它应得的），把「空表」当判据会顺带断言掉一件与本票无关
+    的事，也会在下一次合理的度量变更时误报。
     """
     runtime, store, recorded = _runtime(tmp_path, monkeypatch)
     try:
@@ -331,11 +332,18 @@ def test_a_served_operator_run_records_no_failure_metric(tmp_path: Path, monkeyp
         runtime.shutdown()
 
     assert job["status"] == "completed", job
-    assert _diagnosis_metric_rows(store) == []
+    # Every row this run recorded must be the success it was. Written as
+    # "all rows are the completed one", not "there are no rows" and not
+    # "there is exactly one row": the completed metric is written *after* the
+    # terminal row, so `_run` can return before it lands — asserting a count
+    # here is a race, and asserting an empty table failed in CI for exactly
+    # that reason. What must hold is the *code*: no failure code on a run that
+    # succeeded.
+    assert [row for row in _diagnosis_metric_rows(store) if row != ("completed", None)] == []
 
 
 def test_a_fail_closed_operator_run_records_exactly_one_failure_metric(tmp_path: Path, monkeypatch) -> None:
-    """未登记的那一次要**恰好**记一条，且带的就是它写进行里的那个码。"""
+    """未登记的那一次要**恰好**一条失败指标，且带的就是它写进行里的那个码。"""
     runtime, store, _ = _runtime(tmp_path, monkeypatch)
     try:
         _publish_agent(

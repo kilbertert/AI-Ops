@@ -7,7 +7,7 @@ import pytest
 from pydantic import ValidationError
 
 from aiops_diagnostics.agent_contracts import IncidentManifest, ToolName
-from aiops_diagnostics.agent_workspace import AgentWorkspace
+from aiops_diagnostics.agent_workspace import NARRATIVE_ANSWER_CONTRACT, AgentWorkspace
 from aiops_diagnostics.journal import EvidenceJournal
 from aiops_diagnostics.parsing import parse_request
 from aiops_diagnostics.private_files import validate_private_directory, validate_private_file
@@ -158,8 +158,29 @@ def test_qa_contract_reminder_line_is_not_a_mandatory_chinese_sentence(tmp_path)
 
     for language in ("en", "de", "fr", "es", "pt"):
         contract = (_qa_workspace(language, tmp_path).path / "AGENTS.md").read_text(encoding="utf-8")
+        # The zero-order shape still demands the reminder line...
         assert f'"{zero_order_reminder(language)}"' in contract
         assert "提供订单号可获得更精确的结果哦。" not in contract
+    # ...and the narrative shape (#700) must not demand it at all: that turn
+    # explains numbers the backend already computed and has nowhere to put a
+    # reminder line — telling it to end with one is the same "two contradicting
+    # instructions in one run" shape this file's tests exist to catch.
+    for language in ("en", "de", "fr", "es", "pt"):
+        narrative = (
+            AgentWorkspace.create_qa(
+                Path(__file__).parents[1],
+                tmp_path,
+                provider_base_url="http://localhost:1/v1",
+                provider="test",
+                key_slot="default",
+                language=language,
+                answer_contract=NARRATIVE_ANSWER_CONTRACT,
+            ).path
+            / "AGENTS.md"
+        ).read_text(encoding="utf-8")
+        assert f'"{zero_order_reminder(language)}"' not in narrative
+        assert "`main_cause` and `recommendation`" in narrative
+        assert "`text` answer" not in narrative
 
 
 def test_the_language_parameter_is_required_not_defaulted() -> None:
