@@ -12691,10 +12691,52 @@ journal 成了可以放内容的地方：换行可以伪造一行日志（log in
 **边界**：它仍可能含调用方写的东西（如 `abcdefgh`）—— 只在它伪装不出来时才达标。
 这一点写在 `adr/0016` 的后果一节，不藏在这里。
 
-### 六、未完成业务验收（明写）
+### 六、41 实机复跑（PLANG-07 / -08）：**PASS 9/9**
 
-- **PLANG-07 / -08（41 实机、部署后复跑）本 PR 不标记为通过** —— 那要等本 PR 合并、
-  CD 部署到 41 之后，用真实 JWT 逐值复跑。
+部署：PR #713 合并 → CD 自动部署 → 41 报 `0.1.0+15b434c429a0`（本次合并的 commit）。
+用真实生产 JWT（`client-type: APP`、`X-Business-Entry: operator`）逐值复跑九行：
+
+| 平台 语言 | `lan` 值 | 期望 | `recommendations` | `shortcuts` | 题面 |
+|---|---|---|---|---|---|
+| 中文-简体 | `zh-CN` | zh | ✅ zh | ✅ zh | 新建充电站的标准建站流程… |
+| English | `en` | en | ✅ en | ✅ en | What are the standard … |
+| Portugal | `portuguese` | **pt** | ✅ pt | ✅ pt | Qual é o processo padr… |
+| España | `spanish` | **es** | ✅ es | ✅ es | ¿Cuál es el proceso es… |
+| ภาษาไทย | `th` | th | ✅ th | ✅ th | ขั้นตอนมาตรฐานและข้อกำ… |
+| Tiếng Việt | `vi` | vi | ✅ vi | ✅ vi | Quy trình tiêu chuẩn v… |
+| Монгол хэл | `mn` | mn | ✅ mn | ✅ mn | Шинээр цэнэглэх станц … |
+| ភាសាខ្មែរ | `km` | km | ✅ km | ✅ km | តើអ្វីជាដំណើរការសាងសង់… |
+| 中文-繁體 | `zh-HK` | **zh-Hant** | ✅ zh-Hant | ✅ zh-Hant | 新建**充電站**的標準建站流程… |
+
+**三格修复在线上生效**：`portuguese`/`spanish` 从中文变为 `pt`/`es`，`zh-HK` 从简体变为
+繁体（题面里 `充電站`、`標準`、`配置` 是繁体字形）。
+
+`/v1/shortcuts` 三个文案字段逐语言核对（PLANG-08）：九种语言下 `label` /
+`description` / `question_template` **全部非空且是该语言**（如 `portuguese` 的
+`Casos de cliente` / `Consulte casos de referênc…` / `Quero ver casos de cliente`）。
+
+### 七、那行日志：从「取不到」到取到，以及一次**错的归因**
+
+第一版本节写的是「401 是因为 JWT 过期，所以日志产生不了」。**那个归因是错的** ——
+生产默认的令牌判据 `trust_company_payload=True` **不判 `exp`**（与公司一致，见
+`company_token_auth.py` 的说明）。真正的原因是**报文形状**：
+
+| 形状 | 结果 |
+|---|---|
+| JWT + `X-Business-Entry: operator` | **200** |
+| JWT + `X-Business-Entry: consumer`（本租户是代理商，consumer 入口解析不出会话） | 401 `INVALID_ACCESS_TOKEN` |
+| 我们的服务令牌（无 JWT） | 401 `INVALID_ACCESS_TOKEN` |
+
+复跑时用的是第三种形状，于是 401 发生在**语言解析之前**，日志自然不产生。
+换成第一种形状后，41 的 journal 当场得到：
+
+```
+Oct 12 13:08:10 … INFO aiops.i18n language tag not recognized, falling back to zh: zzz-unknown
+```
+
+**所以那行在线上是取到了的**（这条与「形状 B/C 的 401」是两件事，别再把它们混在一起）。
+
+**未完成业务验收（明写）**：客户端缺省链（请求头缺省 `"en"` 而 UI 缺省 `"zh-Hans"`）属前端。
 - **客户端的缺省链未覆盖**：请求头是 `getStorageSync("lang") || "en"`，而同一页 UI 是
   `"" == c ? "zh-Hans" : c` —— 同一个 key、两套词汇、两个缺省。服务端已能正确认出
   平台值；缺省应在前端侧收敛成同一个值。这是另一侧的工作，不在本票。
