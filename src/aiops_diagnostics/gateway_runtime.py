@@ -504,7 +504,15 @@ class GatewayRuntime:
         # Same class as the failure-rate branch below (and the diagnosis line):
         # every card's narrative turn can raise ``AgentRuntimeError``, and a
         # handler that does not catch it writes no terminal row at all.
-        except (AgentRuntimeError, SourceError, ValueError) as exc:
+        #
+        # ``TypeError`` is in the tuple because of what #700 actually hit here: a
+        # call site that had lost an argument raised inside this worker, escaped
+        # every handler, and left the job on ``running`` until it expired — the
+        # exact symptom the narrower tuples above were chosen to prevent, reached
+        # by a different exception class. A job row that nothing will ever
+        # terminate is worse than a reported failure, so the last resort ends the
+        # job rather than letting the worker die silently.
+        except (AgentRuntimeError, SourceError, ValueError, TypeError) as exc:
             ok = self.store.update_standard_diagnosis(
                 analysis_id,
                 status="failed",
@@ -617,7 +625,13 @@ class GatewayRuntime:
         )
         if aggregate.total_faults == 0:
             return build_fault_code_contract(aggregate, None, reason_code=REASON_NO_FAULTS, **window)
-        payload = self._narrative_for(aggregate, window)
+        # #700: this call lost its `card` argument when ``_narrative_for`` gained
+        # one (#698) — so every fault-code card with data raised `TypeError` here,
+        # inside the worker, where no handler catches it: no terminal write, and
+        # the job sat on `running` until it expired. It survived two review passes
+        # and the local suite because the local double never reaches this line
+        # (the aggregate is non-empty only against real data).
+        payload = self._narrative_for(card, aggregate, window)
         return build_fault_code_contract(aggregate, payload, **window)
 
     def _narrative_for(self, card: str, aggregate: Any, window: dict[str, Any]) -> Any:
@@ -727,7 +741,9 @@ class GatewayRuntime:
         # #700: 叙述轮在模型回散文/供应商失败时抛 ``AgentRuntimeError``（一个
         # ``RuntimeError``），而这里只接了源与取值两类 —— 于是那次运行**没有写任何
         # 终态**，作业停在 ``running`` 直到过期。诊断线一直接的是这三类，同一种失败。
-        except (AgentRuntimeError, SourceError, ValueError) as exc:
+        # ``TypeError`` 见 ``_execute_operations_card`` 的同名分支：调用点少传一个参数
+        # 时抛的就是它，而症状与上面那条一模一样。
+        except (AgentRuntimeError, SourceError, ValueError, TypeError) as exc:
             ok = self.store.update_standard_diagnosis(
                 analysis_id,
                 status="failed",

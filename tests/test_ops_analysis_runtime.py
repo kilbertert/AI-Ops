@@ -19,6 +19,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from aiops_diagnostics.codex_runtime import AgentRuntimeError, CodexTurnOutput
 from aiops_diagnostics.config import Settings
 from aiops_diagnostics.gateway_config import GatewayServerSettings
@@ -44,7 +46,12 @@ class _FakeCursor:
 
 
 class _FakeMySql:
-    """真实聚合被换掉；本文件关心的是**作业**怎么终结，不是数字怎么算。"""
+    """真实聚合被换掉；本文件关心的是**作业**怎么终结，不是数字怎么算。
+
+    每一张卡都给**非空**结果：空结果走的是「确定性答案」那条分支，根本不碰模型，
+    也就照不到本文件要照的那些路径。#700 踩到的正是这个差别 —— 本地替身一直给空数据，
+    所以那条有数据才走到的分支从来没被跑到。
+    """
 
     def count_devices(self, sites: tuple[str, ...]) -> int:
         del sites
@@ -53,6 +60,18 @@ class _FakeMySql:
     def aggregate_order_statuses(self, sites: tuple[str, ...], start: str, end: str) -> dict[str, Any]:
         del sites, start, end
         return {"total": 10, "abnormal_ended": 2, "normal_ended": 8, "top_sites": ((SITE, 2),)}
+
+    def aggregate_offline_incidents(self, sites: tuple[str, ...], start: str, end: str) -> dict[str, Any]:
+        del sites, start, end
+        return {"incidents": 3, "offline_devices": 2, "open_incidents": 1, "offline_minutes": 42}
+
+    def aggregate_fault_codes(self, sites: tuple[str, ...], start: str, end: str) -> dict[str, Any]:
+        del sites, start, end
+        return {"total_faults": 9, "faulty_devices": 2, "top_codes": (("NoError", 5), ("OtherError", 4))}
+
+    def aggregate_payment_split(self, sites: tuple[str, ...], start: str, end: str) -> dict[str, Any]:
+        del sites, start, end
+        return {"total": 10, "paid": 8, "paid_refunded": 2, "paid_net": 6, "unpaid": 2}
 
 
 class _FakeSources:
@@ -247,3 +266,48 @@ def test_the_analysis_route_type_is_a_recordable_metric(tmp_path: Path) -> None:
     metrics = MetricsStore(tmp_path / "gateway.db")
     metrics.record(tenant_id=TENANT, route_type="operations_analysis", outcome="completed")
     assert [row["route_type"] for row in metrics.list_runs(TENANT, limit=5)] == ["operations_analysis"]
+
+
+@pytest.mark.parametrize("card", ["offline", "fault_code", "payment"])
+def test_every_card_with_data_reaches_a_terminal_row(tmp_path: Path, monkeypatch, card: str) -> None:
+    """**有数据的**三张卡也必须到终态（不是停在 ``running``）。
+
+    #700 部署后跑验收时才逮到：``fault_code`` 那一路的 ``_narrative_for`` 调用点少传了
+    ``card`` 参数（``_narrative_for`` 在 #698 加了这个参数，调用点没跟上），于是**只要有
+    故障码数据**就在 worker 里抛 ``TypeError`` —— 没有任何 handler 接住它，作业停在
+    ``running`` 直到过期。
+
+    这条判据此前不存在的原因正是本文件第一版的问题：替身只回**空**聚合，空结果走
+    「确定性答案」分支、根本不碰模型，所以那条有数据才走到的路一次都没被跑到。
+    修法不只是补上那个参数（见 ``_compute_card``），还包括让这个替身**回非空数据**——
+    否则同一个形状下次还会以另一种面貌回来。
+    """
+    runtime, store = _runtime(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "aiops_diagnostics.ops_analysis_narrative.run_narrative_turn",
+        lambda *a, **k: {"main_cause": "成因", "recommendation": "建议"},
+    )
+    try:
+        created = runtime.start_operations_card(
+            _scope(),
+            card=card,
+            site_ids=(SITE,),
+            window_start=WINDOW[0],
+            window_end=WINDOW[1],
+            language="zh",
+        )
+        deadline = time.monotonic() + 5
+        current = created
+        while current["status"] not in {"completed", "failed", "inconclusive"}:
+            assert time.monotonic() < deadline, (card, current)
+            time.sleep(0.01)
+            current = store.get_standard_diagnosis(created["diagnosis_id"], _scope().scope_fingerprint)
+    finally:
+        runtime.shutdown()
+
+    assert current["status"] == "completed", (card, current)
+    result = current.get("result") or {}
+    assert result.get("main_cause") == "成因", (card, result)
+    # The card's own numbers, by the field its contract actually uses.
+    numbers = [result.get(key) for key in ("counts", "total_faults", "incidents", "total")]
+    assert any(value is not None for value in numbers), (card, result)
