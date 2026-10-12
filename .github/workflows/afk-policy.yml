@@ -12,7 +12,12 @@ permissions:
 jobs:
   workflows:
     name: Workflow policy
-    runs-on: ubuntu-latest
+    # See `ci.yml`: this pair is a REQUIRED check, and the account's billing lock
+    # refuses to start hosted jobs at all — which blocks every pull request, not
+    # just untrusted ones. Back on the persistent runner until hosted jobs start
+    # again; `self-hosted` alone would match any self-hosted runner in the
+    # account, so the label set is explicit.
+    runs-on: [self-hosted, AI-Ops]
     timeout-minutes: 5
     steps:
       - name: Check out repository
