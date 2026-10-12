@@ -303,6 +303,46 @@ def test_an_explicitly_empty_site_set_issues_no_sql_at_all() -> None:
     assert source.cursor_obj.executed == []
 
 
+def test_neither_side_narrowing_issues_sql_without_a_site_predicate() -> None:
+    """**整租户账号**：两侧都不收窄 ⇒ 发 SQL，且**不带**站点条件。
+
+    ``None`` 与 ``()`` 在这里必须给出相反的结果：``()`` 是「查了也没有」（上面那条），
+    ``None`` 是「调用方没要求收窄，而它的可见范围本就是整个租户」，租户谓词照下推。
+    把两者读成同一个值，就是整租户账号恒得空卡的那个缺陷。
+
+    这条是本层唯一的回归点：#721 在 ``gateway_runtime`` 侧把范围收敛改回三值之后，
+    才发现 ``aggregate_order_statuses`` 自己还是二值的（它是这条线上最早写的一条，
+    那三个同族卡函数一开始就是三值的）—— 于是修复在离缺陷最近的那一层其实还没落地，
+    本地全绿、41 上真跑才逮到。这行注释就是留给下一个人看的：**改上面那层之前，
+    先确认这一层收不收得下三值。**
+    """
+    source = _FakeSource(_scope(None), {"total": 7, "abnormal_ended": 1, "normal_ended": 6})
+
+    result = source.aggregate_order_statuses(None, "2026-10-01 00:00:00", "2026-10-02 00:00:00")
+
+    sql, params = source.cursor_obj.executed[0]
+    assert "tenant_id=%s" in sql
+    assert "site_id IN" not in sql, "整租户不该有站点条件"
+    assert params == ["T-1", "2026-10-01 00:00:00", "2026-10-02 00:00:00"]
+    assert result is not None and result["total"] == 7
+
+
+def test_no_requested_narrowing_builds_the_visible_site_predicate() -> None:
+    """对照：``None`` 请求 + **有**可见站点集 ⇒ 用调用者自己的站点集合收窄。
+
+    ``None`` 不是「什么条件都不加」：调用者自己可见的那一组站点仍然是边界
+    （``_bounded_sites`` 的第二种情形），少了它，一次未指定站点的请求会变成全租户扫描。
+    """
+    source = _FakeSource(_scope(("S-1", "S-2")), {"total": 3, "abnormal_ended": 0, "normal_ended": 3})
+
+    result = source.aggregate_order_statuses(None, "2026-10-01 00:00:00", "2026-10-02 00:00:00")
+
+    sql, params = source.cursor_obj.executed[0]
+    assert "site_id IN (%s, %s)" in sql
+    assert params == ["T-1", "S-1", "S-2", "2026-10-01 00:00:00", "2026-10-02 00:00:00"]
+    assert result is not None and result["total"] == 3
+
+
 def test_the_job_site_set_narrows_the_scope_instead_of_replacing_it() -> None:
     """租户谓词永远下推；请求的站点集合先与可见站点取交集，再成为筛选条件。
 

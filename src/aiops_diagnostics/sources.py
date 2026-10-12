@@ -310,7 +310,7 @@ class MySQLSource:
 
     def aggregate_order_statuses(
         self,
-        site_ids: tuple[str, ...],
+        site_ids: tuple[str, ...] | None,
         window_start: str,
         window_end: str,
     ) -> dict[str, Any] | None:
@@ -323,9 +323,14 @@ class MySQLSource:
           ``site_id IN (...)``。把「调用方已经窄过了」当前提是本条最容易写错的地方：
           一旦有一个调用方传进未经收窄的集合，超出范围的站点就会被如实统计出来，
           而查询本身成功、数字本身"合理"。
-        * **空站点集合与空范围都短路，不发 SQL。** ``_scope_blocked()`` 是既有的空范围
-          短路口；调用者显式传来空集合时同样什么都不查。两者都返回 ``None``，
-          由上层说成 ``unavailable``（「没人查过的范围」不是「没有异常」）。
+        * **``None`` 与 ``()`` 是两件事**（``_bounded_sites`` 的同一套三值约定，本函数
+          在 #721 才补上 —— 它是最早写的一条，另外三条卡同族函数一开始就有）。
+          ``None`` = **调用方没要求收窄**，此时若调用者自己的可见范围本来就是
+          「租户内不限站点」（``scope.site_ids is None``）就**不加站点条件**，租户谓词
+          照下推；``()`` = **交集为空**，短路不发 SQL。把它俩一起读成「空」会让
+          **范围最宽的账号——整租户账号——恒得空结果**，而那正是这个面为之存在的账号。
+        * **``_scope_blocked()``（可见范围本身为空的短路口）同样不发 SQL。** 与 ``()``
+          一样返回 ``None``，由上层说成 ``unavailable``（「没人查过的范围」不是「没有异常」）。
         * **时间窗是半开的** ``[window_start, window_end)``：闭开区间让相邻两窗既不复算
           也不漏算，而这一点写进对外契约的 ``definition``，不靠读代码才知道。
         * 时间列 ``created_time``、状态列 ``status``、站点列 ``site_id`` 都在
@@ -342,18 +347,15 @@ class MySQLSource:
             return None
         # The intersection happens HERE, not in the caller: this is the layer
         # that must not exceed the scope, so it cannot rely on the caller having
-        # narrowed the set correctly. ``scope.site_ids is None`` means the caller
-        # may see every site in the tenant, so the requested set stands as-is.
-        requested = tuple(dict.fromkeys(site_ids))
-        if self.scope is not None and self.scope.site_ids is not None:
-            allowed = set(self.scope.site_ids)
-            requested = tuple(site for site in requested if site in allowed)
-        if not requested:
+        # narrowed the set correctly.
+        requested = self._bounded_sites(site_ids)
+        if requested == ():
             return None
         scope_where, params = self._scope_where(site_column=None, user_column=None)
         fragments = [fragment for fragment in (scope_where,) if fragment]
-        fragments.append(f"site_id IN ({_placeholders(len(requested))})")
-        params.extend(requested)
+        if requested is not None:
+            fragments.append(f"site_id IN ({_placeholders(len(requested))})")
+            params.extend(requested)
         fragments.append("created_time >= %s")
         params.append(window_start)
         fragments.append("created_time < %s")
