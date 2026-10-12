@@ -212,4 +212,17 @@ def _parse_narrative(raw: str) -> dict[str, Any] | None:
 
 
 def _looks_like_narrative(payload: Any) -> bool:
-    return isinstance(payload, dict) and any(key in payload for key in ("main_cause", "recommendation"))
+    """**两个**散文字段都在、都是非空字符串 —— 就是 schema 声明的那两个。
+
+    ``any(...)`` 是不够的（评审在 #718 上逮到）：只带回 ``recommendation`` 的回包
+    同样能过，装配器把 ``main_cause`` 留成 ``None``，作业仍然 ``completed`` ——
+    与「一份工具请求被当成叙述」是**同一类假陈述**，只是少一个键而不是少两个。
+
+    ``OPS_NARRATIVE_SCHEMA`` 这个结构里两个字段都是 ``required``，所以这里要求的
+    正是声明过的东西，不是新加的门槛。
+    """
+    if not isinstance(payload, dict):
+        return False
+    return all(
+        isinstance(payload.get(key), str) and payload[key].strip() for key in ("main_cause", "recommendation")
+    )
