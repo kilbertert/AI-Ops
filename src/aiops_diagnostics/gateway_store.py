@@ -102,6 +102,12 @@ class EnrollmentResult:
     token: str
 
 
+#: The three asynchronous job tables, in the order their deadlines run. Named
+#: here rather than imported from `async_job_lifecycle` so the sweep helper and
+#: the counting helper cannot drift over which tables are "jobs".
+JOB_TABLES = ("health_report_jobs", "standard_diagnoses", "assistant_questions")
+
+
 class GatewayStore:
     """Single-node durable store with an interface that can later move to PostgreSQL."""
 
@@ -222,6 +228,7 @@ class GatewayStore:
         rule_version: str,
         *,
         language: str = "zh",
+        tenant_id: str | None = None,
     ) -> tuple[dict[str, Any], bool]:
         scope_fingerprint = _scope(scope_fingerprint, "scope_fingerprint")
         order_no = _scope(order_no, "order_no")
@@ -247,8 +254,8 @@ class GatewayStore:
                 """
                 INSERT INTO health_report_jobs (
                     job_id, scope_fingerprint, order_no, rule_version, status, language,
-                    created_at, updated_at, deadline_at
-                ) VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?)
+                    created_at, updated_at, deadline_at, tenant_id
+                ) VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?, ?)
                 """,
                 (
                     job_id,
@@ -259,6 +266,7 @@ class GatewayStore:
                     _iso(now),
                     _iso(now),
                     _iso(now + HEALTH_JOB_DEADLINE),
+                    tenant_id,
                 ),
             )
             row = connection.execute(
@@ -348,10 +356,12 @@ class GatewayStore:
         indicator_code: str | None,
         language: str = "zh",
         internal_run_id: str | None = None,
+        tenant_id: str | None = None,
     ) -> dict[str, Any]:
         scope_fingerprint = _scope(scope_fingerprint, "scope_fingerprint")
         order_no = _scope(order_no, "order_no")
         question = _question(question, "question")
+        tenant_id = _optional_scope(tenant_id, "tenant_id")
         indicator_code = _optional_indicator_code(indicator_code)
         language = _language(language)
         internal_run_id = _optional_scope(internal_run_id, "internal_run_id")
@@ -363,8 +373,8 @@ class GatewayStore:
                 """
                 INSERT INTO standard_diagnoses (
                     diagnosis_id, scope_fingerprint, order_no, question, indicator_code, language,
-                    internal_run_id, status, created_at, updated_at, deadline_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)
+                    internal_run_id, status, created_at, updated_at, deadline_at, tenant_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?, ?)
                 """,
                 (
                     diagnosis_id,
@@ -377,6 +387,7 @@ class GatewayStore:
                     _iso(now),
                     _iso(now),
                     _iso(now + DIAGNOSIS_DEADLINE),
+                    tenant_id,
                 ),
             )
             row = connection.execute(
@@ -394,6 +405,7 @@ class GatewayStore:
         window_end: str,
         rule_version: str,
         language: str = "zh",
+        tenant_id: str | None = None,
         card: str = "failure_rate",
     ) -> dict[str, Any]:
         """Create an operations-analysis job (#697/#698) on the diagnosis job table.
@@ -444,8 +456,8 @@ class GatewayStore:
                 INSERT INTO standard_diagnoses (
                     diagnosis_id, scope_fingerprint, order_no, question, indicator_code, language,
                     internal_run_id, status, created_at, updated_at, deadline_at,
-                    kind, site_ids_json, window_start, window_end, rule_version, card
-                ) VALUES (?, ?, '', '', NULL, ?, NULL, 'queued', ?, ?, ?, 'analysis', ?, ?, ?, ?, ?)
+                    kind, site_ids_json, window_start, window_end, rule_version, card, tenant_id
+                ) VALUES (?, ?, '', '', NULL, ?, NULL, 'queued', ?, ?, ?, 'analysis', ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     analysis_id,
@@ -459,6 +471,7 @@ class GatewayStore:
                     _iso(end),
                     rule_version,
                     card,
+                    tenant_id,
                 ),
             )
             row = connection.execute(
@@ -588,9 +601,11 @@ class GatewayStore:
         question: str,
         *,
         internal_run_id: str | None = None,
+        tenant_id: str | None = None,
     ) -> dict[str, Any]:
         scope_fingerprint = _scope(scope_fingerprint, "scope_fingerprint")
         question = _question(question, "question")
+        tenant_id = _optional_scope(tenant_id, "tenant_id")
         now = _utc_now()
         qa_id = "qa_" + uuid.uuid4().hex
         with self._connection(write=True) as connection:
@@ -599,8 +614,8 @@ class GatewayStore:
                 """
                 INSERT INTO assistant_questions (
                     qa_id, scope_fingerprint, question, internal_run_id,
-                    status, created_at, updated_at, deadline_at
-                ) VALUES (?, ?, ?, ?, 'queued', ?, ?, ?)
+                    status, created_at, updated_at, deadline_at, tenant_id
+                ) VALUES (?, ?, ?, ?, 'queued', ?, ?, ?, ?)
                 """,
                 (
                     qa_id,
@@ -610,6 +625,7 @@ class GatewayStore:
                     _iso(now),
                     _iso(now),
                     _iso(now + DIAGNOSIS_DEADLINE),
+                    tenant_id,
                 ),
             )
             row = connection.execute(
@@ -825,6 +841,36 @@ class GatewayStore:
         statements = expire_statements("assistant_questions", QUESTION, _iso(now))
         connection.execute(*statements.claim)
         connection.execute(*statements.sweep)
+
+    def count_expired_jobs_by_tenant(self, *, since: str | None = None) -> dict[str, int]:
+        """Jobs that ended by EXPIRY, counted per tenant (#725 follow-up).
+
+        This exists because the expiry sweep writes no metric row at all: it runs
+        as raw SQL inside `_expire_*`, so a job that ran out its deadline used to
+        leave **no trace in the tenant-scoped metrics** — `expired` was invisible
+        and "everything looks completed" was the only reading available. A metric
+        row per expiry would have meant teaching a pure store layer to write
+        metrics; counting the tagged rows answers the same question without that
+        coupling, and it answers it from the **job** rather than from a second
+        record of the job.
+
+        ``tenant_id`` is nullable and **not backfilled** (see the migration):
+        rows written before that column existed report as ``""``, so "unknown"
+        stays visibly unknown instead of being folded into a real tenant.
+        """
+        cutoff = since or "1970-01-01T00:00:00+00:00"
+        counts: dict[str, int] = {}
+        for table in JOB_TABLES:
+            with self._connection() as connection:
+                rows = connection.execute(
+                    f"SELECT tenant_id, COUNT(*) AS n FROM {table} "
+                    "WHERE status = 'expired' AND created_at >= ? GROUP BY tenant_id",
+                    (cutoff,),
+                ).fetchall()
+            for row in rows:
+                key = str(row["tenant_id"]) if row["tenant_id"] else ""
+                counts[key] = counts.get(key, 0) + int(row["n"])
+        return counts
 
     # NOTE (#492): `runs` is deliberately absent from `recover_interrupted_jobs`.
     # The device path is scheduled for retirement and this table has no deadline
@@ -1175,6 +1221,20 @@ class GatewayStore:
                 "CREATE INDEX IF NOT EXISTS idx_health_jobs_reuse_language "
                 "ON health_report_jobs(scope_fingerprint, order_no, rule_version, language, created_at DESC)"
             )
+            # #725 follow-up: the three job tables carry only `scope_fingerprint`,
+            # which is an **irreversible digest** — so a job that ended by expiry
+            # or by restart could not be attributed to a tenant, and `expired`
+            # never appeared in the tenant-scoped metrics at all. The digest
+            # proves "this row ran under that range"; the tenant id is the part
+            # `tenant_id = ?` filtering needs. Nullable, and **not backfilled**:
+            # "unknown" is the honest value for rows written before this column
+            # existed, and a wrong tenant is worse than a missing one.
+            for table in ("standard_diagnoses", "health_report_jobs", "assistant_questions"):
+                table_columns = {
+                    str(row[1]) for row in connection.execute(f"PRAGMA table_info({table})").fetchall()
+                }
+                if "tenant_id" not in table_columns:
+                    connection.execute(f"ALTER TABLE {table} ADD COLUMN tenant_id TEXT")
             # Constructing a store converges NOTHING (#492). This path used to
             # end every `queued`/`running` health job and diagnosis without a
             # deadline condition, and `__init__` runs on every construction —

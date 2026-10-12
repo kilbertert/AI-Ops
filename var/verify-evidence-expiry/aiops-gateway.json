@@ -1,0 +1,17 @@
+{
+  "base": "http://127.0.0.1:8787",
+  "temp_root": "/tmp/aiops-verify-ws3covyl",
+  "health": {
+    "ok": true,
+    "service": "aiops-gateway",
+    "version": "0.1.0",
+    "api_version": "v1",
+    "platform": "linux",
+    "business_mutations": "disabled"
+  },
+  "unauthenticated_runs_status": 401,
+  "enroll_status": 201,
+  "enroll_device_id": "dev_d25f2bfa76a44ad08b5e5ddfd403542b",
+  "authenticated/v1/runs": 200,
+  "authenticated/v1/agents": 401
+}

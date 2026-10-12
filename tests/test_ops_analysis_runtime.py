@@ -711,3 +711,120 @@ def test_a_scope_resolution_failure_ends_the_job_instead_of_leaving_it_running(
 
     assert current["status"] == "failed", current
     assert current["error_code"] == "ANALYSIS_FAILED", current
+
+
+def test_a_job_that_ran_out_its_deadline_is_visible_per_tenant(tmp_path: Path) -> None:
+    """作业过期后，**这个租户**的指标里必须看得到它（#725 follow-up）。
+
+    过期的作业发不出任何指标行：清扫是 `_expire_*` 里的裸 SQL，它不写
+    `agent_run_metrics`。于是「跑完了 12 个、超时了 40 个」这种状态在指标面上读成
+    「没有失败、没有取消」—— 而这正是 `mem-20260930-ranlei-008` 那条的形状
+    （*只记失败侧的指标证明不了"在跑"*；这里反过来是*只记成功侧，看不见"没跑完"*）。
+
+    这条判据同时钉住两件事：① 作业行**记下了租户**（在它之前只有不可逆的
+    `scope_fingerprint`，所以过期根本归不到租户头上）；② 汇总把它算进来。
+    """
+    import json
+    from datetime import UTC, datetime
+
+    from aiops_diagnostics.gateway_config import GatewayServerSettings
+    from aiops_diagnostics.gateway_runtime import GatewayRuntime
+    from aiops_diagnostics.gateway_store import GatewayStore
+    from aiops_diagnostics.metrics_store import MetricsStore
+
+    gateway_settings = GatewayServerSettings(
+        data_home=tmp_path,
+        database_file=tmp_path / "gateway.db",
+        server_config_file=tmp_path / "production.env",
+    )
+    gateway_settings.server_config_file.write_text("# test\n", encoding="utf-8")
+    store = GatewayStore(gateway_settings.database_file)
+    runtime = GatewayRuntime(store, gateway_settings, Settings())
+
+    job = store.create_analysis_job(
+        "scope-fingerprint-1",
+        site_ids=None,
+        window_start="2026-10-01T00:00:00+00:00",
+        window_end="2026-10-02T00:00:00+00:00",
+        rule_version="ops-analysis-v1",
+        language="zh",
+        tenant_id=TENANT,
+    )
+    # The row really carries the tenant, not just the digest.
+    row = store.get_standard_diagnosis(job["diagnosis_id"], "scope-fingerprint-1")
+    assert row is not None
+    with store._connection() as connection:  # noqa: SLF001 - the column is what is under test
+        raw = connection.execute(
+            "SELECT tenant_id FROM standard_diagnoses WHERE diagnosis_id = ?",
+            (job["diagnosis_id"],),
+        ).fetchone()
+    assert raw["tenant_id"] == TENANT, dict(raw)
+
+    # Force it past its deadline and sweep, exactly like the store's own path does.
+    with store._connection(write=True) as connection:
+        connection.execute(
+            "UPDATE standard_diagnoses SET status='running', deadline_at=?, expires_at=? "
+            "WHERE diagnosis_id = ?",
+            ("2020-01-01T00:00:00+00:00", "2020-01-01T00:00:00+00:00", job["diagnosis_id"]),
+        )
+        store._expire_diagnoses(connection, datetime.now(UTC))  # noqa: SLF001
+    swept = store.get_standard_diagnosis(job["diagnosis_id"], "scope-fingerprint-1")
+    assert swept["status"] == "expired", swept
+
+    # No metric row exists for it — that is the whole reason this needed a
+    # different source.
+    metrics = MetricsStore(gateway_settings.database_file)
+    assert metrics.list_runs(TENANT, limit=10) == []
+
+    viewer = ScopeContext.build(
+        caller=SubjectRecord(b_user_id="B-1", c_user_id="C-1", tenant_id=TENANT),
+        subject=SubjectRecord(b_user_id="B-1", c_user_id="C-1", tenant_id=TENANT),
+        delegated=False,
+        effective_tenant_id=TENANT,
+        data_scope=DataScope(type="all"),
+        roles=frozenset({"ROLE_AGENT_VIEWER"}),
+        permissions=frozenset(),
+    )
+    summary = runtime.get_agent_metrics_summary(viewer)
+    assert summary["totals"]["expired"] == 1, json.dumps(summary["totals"], ensure_ascii=False)
+
+    # ① Another tenant's expired job must not appear in this tenant's payload, and
+    #    the NULL-tenant rows (a single global number shared by every tenant) must
+    #    not be reported AT ALL — it would take one tenant to leak every other
+    #    tenant's job counts. Security finding in the #730/#731 reviews.
+    other = store.create_analysis_job(
+        "scope-fingerprint-2",
+        site_ids=None,
+        window_start="2026-10-01T00:00:00+00:00",
+        window_end="2026-10-02T00:00:00+00:00",
+        rule_version="ops-analysis-v1",
+        language="zh",
+        tenant_id="T-OTHER",
+    )
+    unattributed = store.create_analysis_job(
+        "scope-fingerprint-3",
+        site_ids=None,
+        window_start="2026-10-01T00:00:00+00:00",
+        window_end="2026-10-02T00:00:00+00:00",
+        rule_version="ops-analysis-v1",
+        language="zh",
+        tenant_id=None,
+    )
+    with store._connection(write=True) as connection:  # noqa: SLF001
+        for job_id in (other["diagnosis_id"], unattributed["diagnosis_id"]):
+            connection.execute(
+                "UPDATE standard_diagnoses SET status='running', deadline_at=?, expires_at=? "
+                "WHERE diagnosis_id = ?",
+                ("2020-01-01T00:00:00+00:00", "2020-01-01T00:00:00+00:00", job_id),
+            )
+        store._expire_diagnoses(connection, datetime.now(UTC))  # noqa: SLF001
+
+    after = runtime.get_agent_metrics_summary(viewer)["totals"]
+    assert after["expired"] == 1, after  # still only THIS tenant's
+    assert "expired_unattributed" not in after, after
+
+    # ② Under an agent filter every other number is narrowed to that agent, and
+    #    job rows carry no agent id — so the count is omitted rather than
+    #    reported as a number that means something else (the #731 BUG finding).
+    filtered = runtime.get_agent_metrics_summary(viewer, agent_id="agt_deadbeef00000000")["totals"]
+    assert "expired" not in filtered, filtered
