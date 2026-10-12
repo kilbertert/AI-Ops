@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import ast
 import threading
+import time
 from pathlib import Path
 
 from aiops_diagnostics.gateway_store import ACTIVE_DIAGNOSIS_STATUSES, TERMINAL_DIAGNOSIS_STATUSES
@@ -289,15 +290,28 @@ def test_a_refused_health_write_is_logged(tmp_path, monkeypatch, caplog) -> None
     ]
 
 
-#: Every worker that runs one job in a thread. Listed rather than inferred, so
-#: that adding one — or deleting a worker — is a deliberate edit here.
-ASYNC_WORKERS = (
-    "_execute_health_report",
-    "_execute_standard_diagnosis",
-    "_execute_assistant_qa",
-    "_execute_operations_analysis",
-    "_execute_operations_card",
-)
+def _submitted_workers(tree: ast.Module) -> set[str]:
+    """Every worker this runtime hands to the thread pool, discovered from the code.
+
+    **Discovered, not listed.** A fixed list is the wrong shape for this pin: a
+    sixth worker added later would simply not appear in it, and the check would
+    keep passing while covering five of six — the same "guard that finds no call
+    site passes vacuously" failure this file exists to catch (raised in the
+    #730 review). Reading the `self._executor.submit(...)` call sites makes a new
+    worker enter the check by construction.
+    """
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not (isinstance(func, ast.Attribute) and func.attr == "submit"):
+            continue
+        for arg in node.args:
+            name = getattr(arg, "attr", None)
+            if isinstance(arg, ast.Attribute) and name and name.startswith("_execute_"):
+                found.add(name)
+    return found
 
 
 def test_every_async_worker_converges_on_any_exception() -> None:
@@ -323,9 +337,11 @@ def test_every_async_worker_converges_on_any_exception() -> None:
     that a sixth cannot be added the old way.
     """
     tree = _runtime_tree()
+    workers = _submitted_workers(tree)
+    assert workers, "found no submitted workers — the discovery rule is broken, not the code"
     seen: dict[str, list[str]] = {}
     for node in ast.walk(tree):
-        if not isinstance(node, ast.FunctionDef) or node.name not in ASYNC_WORKERS:
+        if not isinstance(node, ast.FunctionDef) or node.name not in workers:
             continue
         handlers = [
             handler
@@ -337,9 +353,9 @@ def test_every_async_worker_converges_on_any_exception() -> None:
             ast.unparse(handler.type) if handler.type is not None else "bare except" for handler in handlers
         ]
 
-    assert set(seen) == set(ASYNC_WORKERS), (
-        f"worker(s) not found in {RUNTIME}: {sorted(set(ASYNC_WORKERS) - set(seen))}"
-    )
+    # Every discovered worker must be a real function in this module: discovery
+    # that matches a name with no definition would silently cover nothing.
+    assert set(seen) == workers, f"submitted but not defined here: {sorted(workers - set(seen))}"
     offenders = {
         name: caught
         for name, caught in seen.items()
@@ -349,3 +365,101 @@ def test_every_async_worker_converges_on_any_exception() -> None:
         "an escaping exception means no terminal row, and a list of classes always "
         f"leaves the next one outside; workers without `except Exception`: {offenders}"
     )
+
+
+def _runtime_with_settings(tmp_path: Path, monkeypatch):
+    """A runtime whose `Settings.from_config` the test can make fail.
+
+    The config file itself is not what matters — what the worker does when loading
+    it raises is.
+    """
+    from aiops_diagnostics.config import Settings
+    from aiops_diagnostics.gateway_config import GatewayServerSettings
+    from aiops_diagnostics.gateway_runtime import GatewayRuntime
+    from aiops_diagnostics.gateway_store import GatewayStore
+
+    gateway_settings = GatewayServerSettings(
+        data_home=tmp_path,
+        database_file=tmp_path / "gateway.db",
+        server_config_file=tmp_path / "production.env",
+    )
+    gateway_settings.server_config_file.write_text("# test\n", encoding="utf-8")
+    runtime_settings = Settings()
+    runtime_settings.agent.run_root = str(tmp_path / "runs")
+    return GatewayRuntime(GatewayStore(gateway_settings.database_file), gateway_settings, runtime_settings)
+
+
+def test_an_unreadable_config_still_ends_the_job(tmp_path, monkeypatch) -> None:
+    """A **supported** failure of `Settings.from_config` must not strand a job (#730).
+
+    Three workers load settings after claiming the row `running`, and
+    `Settings.from_config` raises `ValueError` when the configured file is missing
+    or invalid — a config file removed after startup is an ordinary operational
+    event, not a programming error. Two of the three loaded it **before** the block
+    that catches anything, so the row stayed `running` until its deadline: the same
+    "caller cannot tell it apart from work still in progress" shape as #700/#721,
+    reached through a gap between the claim and the `try` rather than a class the
+    tuple omitted.
+
+    The rule the #730 review states: **everything after the `running` claim belongs
+    inside the catchable block.** This drives the diagnosis worker, which had the
+    widest gap, and asserts the row terminates.
+    """
+    from test_standard_diagnosis_runtime import _scope
+
+    runtime = _runtime_with_settings(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "aiops_diagnostics.gateway_runtime.Settings.from_config",
+        lambda *_a, **_k: (_ for _ in ()).throw(ValueError("server config does not exist")),
+    )
+    try:
+        created = runtime.start_standard_diagnosis(_scope(), "ORDER-1", "为什么跳枪", None)
+        deadline = time.monotonic() + 5
+        current = created
+        while current["status"] not in TERMINAL_DIAGNOSIS_STATUSES:
+            assert time.monotonic() < deadline, current
+            time.sleep(0.01)
+            current = runtime.store.get_standard_diagnosis(
+                created["diagnosis_id"], _scope().scope_fingerprint
+            )
+    finally:
+        runtime.shutdown()
+
+    assert current["status"] == "failed", current
+    assert current["error_code"] == "DIAGNOSIS_FAILED", current
+
+
+def test_a_newly_caught_exception_keeps_its_text_off_the_wire(tmp_path, monkeypatch) -> None:
+    """The health surface RETURNS `error_message` verbatim — so it must carry no internals.
+
+    `_health_job_response` hands the stored `error_message` to the caller as
+    `error.message`. `_internal_error_message` **redacts**: it strips PII and leaves
+    internal diagnostics in place — right for a record an engineer reads, wrong for a
+    response body. So a newly-caught class contributes its **class name only**, while
+    the two classes that were already caught keep the shape they already had.
+
+    Security finding in the #730 review.
+    """
+    from test_standard_diagnosis_runtime import _scope
+
+    from aiops_diagnostics.gateway_api import _health_job_response
+
+    runtime = _runtime_with_settings(tmp_path, monkeypatch)
+    secret = "connect to 10.1.2.3:3306 as readonly failed: upstream SDK detail"
+    context = _scope()
+    monkeypatch.setattr(
+        "aiops_diagnostics.gateway_runtime.resolve_query_scope",
+        lambda *_a, **_k: (_ for _ in ()).throw(KeyError(secret)),
+    )
+    try:
+        job, _ = runtime.store.create_or_reuse_health_job(context.scope_fingerprint, "ORDER-1", "health-v1")
+        runtime._execute_health_report(job["job_id"], context, "ORDER-1")
+        stored = runtime.store.get_health_job(job["job_id"], context.scope_fingerprint)
+    finally:
+        runtime.shutdown()
+
+    assert stored is not None, "the job row vanished"
+    assert stored["error_code"] == "SOURCE_UNAVAILABLE", stored
+    assert secret not in str(stored["error_message"]), stored["error_message"]
+    # And the wire is what actually matters on this surface.
+    assert secret not in _health_job_response(stored)["error"]["message"]

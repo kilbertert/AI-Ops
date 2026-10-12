@@ -1646,14 +1646,22 @@ class GatewayRuntime:
         # class at a time left `ScopeError` (a `RuntimeError`, raised by
         # `resolve_query_scope` inside this very `try`) in neither list.
         #
-        # The message keeps the old shape for the two original classes and is
-        # REDACTED for a newly-caught one. That is not cosmetic: this surface
-        # returns the stored `error_message` verbatim to the user
-        # (`_health_job_response`), so `SOURCE_UNAVAILABLE` deliberately carries
-        # only "Class: message" today. A newly-caught class can be an upstream
-        # SDK message or a socket error, and putting that on the wire is the
-        # exact leak `_internal_error_message` exists to prevent — the code
-        # stays specific so an engineer can still tell which failure it was.
+        # The message must be safe to RETURN, not merely redacted. This surface
+        # hands the stored `error_message` to the caller verbatim
+        # (`_health_job_response`), so "redacted" is not enough — `redact_text`
+        # removes PII and leaves internal diagnostics in place, which is the
+        # right trade for a record an engineer reads and the wrong one for a
+        # response body. The two original classes therefore keep their existing
+        # "Class: message" shape (unchanged behaviour), and a newly-caught one
+        # contributes its CLASS NAME only — no upstream SDK text, no socket
+        # error, no internal wording. The code stays `SOURCE_UNAVAILABLE` so an
+        # engineer can still tell which failure it was, and the specific text is
+        # still in the worker's log.
+        #
+        # (Pre-existing and NOT made worse here: a source failure that carries
+        # detail in `str(exc)` was returned verbatim before this change too.
+        # Fixing that means changing this surface's message contract for an
+        # already-shipped code, which is a separate decision.)
         except Exception as exc:  # noqa: BLE001 - see above: escaping here means no terminal row
             self._finish_health_job(
                 job_id,
@@ -1662,7 +1670,7 @@ class GatewayRuntime:
                 error_message=(
                     f"{exc.__class__.__name__}: {exc}"
                     if isinstance(exc, (SourceError, ValueError))
-                    else _internal_error_message(exc, None)
+                    else exc.__class__.__name__
                 ),
             )
 
@@ -1695,9 +1703,17 @@ class GatewayRuntime:
         # below, on a stop, on expiry, or when the claim stops being ours.
         claim_stop = self._turn_claim_renewer(diagnosis_id, conversation_turn)
         history = self._conversation_history(conversation_turn, language)
-        settings = Settings.from_config(self.gateway_settings.server_config_file)
-        settings.agent.run_root = self.diagnostic_settings.agent.run_root
         try:
+            # INSIDE the try, not before it (#730 review). `Settings.from_config`
+            # raises `ValueError` when the configured file is missing or invalid and
+            # that is a SUPPORTED failure, not an impossible one: a config file
+            # removed after startup reached this line and, because the catchable
+            # block started one statement later, the job stayed `running` until its
+            # deadline while the conversation claim held the slot. The rule is the
+            # whole reason this `try` exists — everything after the `running` claim
+            # must be inside it.
+            settings = Settings.from_config(self.gateway_settings.server_config_file)
+            settings.agent.run_root = self.diagnostic_settings.agent.run_root
             query_scope = resolve_query_scope(context)
             methodology = self._diagnosis_methodology(
                 context.effective_tenant_id,
@@ -1867,60 +1883,60 @@ class GatewayRuntime:
         history = self._conversation_history(conversation_turn, language)
         # #232 route metric: promotional card runs get their own bucket.
         route_tag = "promo" if promo_intent else "qa"
-        settings = Settings.from_config(self.gateway_settings.server_config_file)
-        settings.agent.run_root = self.diagnostic_settings.agent.run_root
-        rag_result = None
-        if promo_intent and (not tenant_id or self.kb_search_client is None or self.media_signer is None):
-            from aiops_diagnostics.promo_agents import promo_empty_result
-
-            # No search capability is wired here, so nothing was searched. Same
-            # rule as the other card sites: do not claim the library is empty.
-            rag_result = promo_empty_result(language, promo_intent, retrieval_status="unavailable")
-            if not self.store.update_assistant_question(qa_id, status="completed", result=rag_result):
-                _finish_turn(None, cancelled=True)
-                return
-        elif (
-            not skip_retrieval
-            and tenant_id
-            and self.kb_search_client is not None
-            and self.media_signer is not None
-        ):
-            rag_result = self._try_customer_rag(
-                qa_id,
-                question,
-                tenant_id,
-                settings,
-                provider,
-                key_slot,
-                language,
-                promo_target=promo_target,
-                promo_intent=promo_intent,
-                turn_registrar=turn_registrar,
-                history=history,
-                business_entry=business_entry,
-            )
-        if rag_result is not None:
-            if rag_result is TERMINAL_WRITE_REFUSED:
-                _finish_turn(None, cancelled=True)
-                return
-            if isinstance(rag_result, dict) and rag_result.get("status") == "failed":
-                self._record_metric(
-                    tenant_id=tenant_id,
-                    route_type=route_tag,
-                    outcome="failed",
-                    error_code="QA_FAILED",
-                    duration_ms=int((time.monotonic() - started_ms) * 1000),
-                )
-                _finish_turn(None, cancelled=True)
-            else:
-                self._record_qa_metric(
-                    rag_result, tenant_id, started_ms, conversation_turn, route_type=route_tag
-                )
-                # The metrics-only tag must not persist into the conversation
-                # turn (it would surface through GET /v1/conversations/{id}).
-                _finish_turn({key: value for key, value in rag_result.items() if key != "agent_version"})
-            return
         try:
+            settings = Settings.from_config(self.gateway_settings.server_config_file)
+            settings.agent.run_root = self.diagnostic_settings.agent.run_root
+            rag_result = None
+            if promo_intent and (not tenant_id or self.kb_search_client is None or self.media_signer is None):
+                from aiops_diagnostics.promo_agents import promo_empty_result
+
+                # No search capability is wired here, so nothing was searched. Same
+                # rule as the other card sites: do not claim the library is empty.
+                rag_result = promo_empty_result(language, promo_intent, retrieval_status="unavailable")
+                if not self.store.update_assistant_question(qa_id, status="completed", result=rag_result):
+                    _finish_turn(None, cancelled=True)
+                    return
+            elif (
+                not skip_retrieval
+                and tenant_id
+                and self.kb_search_client is not None
+                and self.media_signer is not None
+            ):
+                rag_result = self._try_customer_rag(
+                    qa_id,
+                    question,
+                    tenant_id,
+                    settings,
+                    provider,
+                    key_slot,
+                    language,
+                    promo_target=promo_target,
+                    promo_intent=promo_intent,
+                    turn_registrar=turn_registrar,
+                    history=history,
+                    business_entry=business_entry,
+                )
+            if rag_result is not None:
+                if rag_result is TERMINAL_WRITE_REFUSED:
+                    _finish_turn(None, cancelled=True)
+                    return
+                if isinstance(rag_result, dict) and rag_result.get("status") == "failed":
+                    self._record_metric(
+                        tenant_id=tenant_id,
+                        route_type=route_tag,
+                        outcome="failed",
+                        error_code="QA_FAILED",
+                        duration_ms=int((time.monotonic() - started_ms) * 1000),
+                    )
+                    _finish_turn(None, cancelled=True)
+                else:
+                    self._record_qa_metric(
+                        rag_result, tenant_id, started_ms, conversation_turn, route_type=route_tag
+                    )
+                    # The metrics-only tag must not persist into the conversation
+                    # turn (it would surface through GET /v1/conversations/{id}).
+                    _finish_turn({key: value for key, value in rag_result.items() if key != "agent_version"})
+                return
             answer = run_zero_order_answer(
                 question,
                 settings,
@@ -2498,11 +2514,16 @@ class GatewayRuntime:
         run_id = workspace.run_id
         self.store.update_run(run_id, status="running")
         self.store.append_event(run_id, {"type": "gateway_worker_started", "run_id": run_id})
-        settings = Settings.from_config(self.gateway_settings.server_config_file)
-        settings.agent.run_root = self.diagnostic_settings.agent.run_root
-        state_key_slot = workspace.load_state().key_slot
-        settings.agent.key_slot = state_key_slot
         try:
+            # Everything after the `running` claim is inside the catchable block
+            # (#730 review). `Settings.from_config` raises `ValueError` for a
+            # missing or invalid file, and `workspace.load_state()` reads from
+            # disk; both used to sit above this `try`, so either one leaving the
+            # run stranded on `running` with no terminal write.
+            settings = Settings.from_config(self.gateway_settings.server_config_file)
+            settings.agent.run_root = self.diagnostic_settings.agent.run_root
+            state_key_slot = workspace.load_state().key_slot
+            settings.agent.key_slot = state_key_slot
             result = run_agent_diagnosis(
                 workspace,
                 request,

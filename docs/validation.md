@@ -232,7 +232,7 @@ except (AgentRuntimeError, SourceError, ValueError, TypeError, sqlite3.Operation
   不是带鉴权的 HTTP 管理面 —— 后者在 41 上结构上不可达（见 §3.1-bis 的信任边界一节）。
   这是本手册明确记录的**运维动作**，不是面向人的自助入口。
 
-## #725 终态收敛：另外三个 worker（2026-10-12，本地）
+## #725 终态收敛：另外三个 worker + 评审逮到的两处（2026-10-12，本地）
 
 **分支** `fix/725-worker-terminal-convergence`，基线 `origin/main`（`670556c`）。
 
@@ -268,10 +268,40 @@ worker，本节把剩下三个一起收掉。
 |---|---|---|
 | 五个 worker 都收敛（结构） | 对 `gateway_runtime` 做 AST 扫描，枚举**五个** worker 并断言每个都有 `except Exception` | ✅ `test_every_async_worker_converges_on_any_exception` |
 | 注入 `ScopeError` ⇒ 诊断终结（行为） | 把 `resolve_query_scope` 换成抛真实 `ScopeError`，断言该行 `failed` / `DIAGNOSIS_FAILED` | ✅ `test_a_scope_resolution_failure_ends_the_diagnosis_instead_of_leaving_it_running` |
-| 全量回归 | `pytest` | ✅ **2185 passed / 9 skipped**（172s） |
+| `running` 认领后配置加载失败 ⇒ 作业终结 | 让 `Settings.from_config` 抛 `ValueError`，断言该行 `failed` / `DIAGNOSIS_FAILED` | ✅ `test_an_unreadable_config_still_ends_the_job` |
+| 新接住的异常不上响应 | 让 `resolve_query_scope` 抛带内部文本的 `KeyError`，断言存储值与 `_health_job_response` 的 `error.message` 都不含它 | ✅ `test_a_newly_caught_exception_keeps_its_text_off_the_wire` |
+| 全量回归 | `pytest` | ✅ **2187 passed / 9 skipped**（155s） |
 
-**突变复验**：把五个 handler 全部改回枚举元组 ⇒ **两条同时转红**，且行为那条的失败形态
-正是缺陷本身（作业停在 `running`，轮询超时）。
+**突变复验**：① 把五个 handler 全部改回枚举元组 ⇒ 结构判据与诊断行为用例**同时转红**，
+且行为那条的失败形态正是缺陷本身（作业停在 `running`，轮询超时）；② 把配置加载移回
+`try` 之外 ⇒ 配置用例转红；③ 把健康报告那行改回脱敏版 ⇒ 泄漏用例转红。
+
+### 三-bis、评审（PR #730）逮到的两处，都成立
+
+**① 收尾兜底再上一处：`running` 认领与 `try` 之间还有可抛的语句。**
+三个 worker 都在认领 `running` **之后、`try` 之前**加载配置，而
+`Settings.from_config` 对「配置文件缺失/非法」抛 `ValueError` —— 那是**受支持的失败**
+（启动后配置被移除是普通运维事件），不是编程错误。于是作业照样停在 `running`。
+`_execute_assistant_qa` 还多一处：它的 RAG 分支整段在 `try` 之外。
+⇒ 规则改写为**「认领 `running` 之后的每一句都在可捕获块里」**：
+诊断、QA、`_execute_run` 三个 worker 的配置加载（QA 另有 RAG 分支、`_execute_run` 另有
+`workspace.load_state()`）都移进 `try`。
+
+**② （安全）健康报告的 `error.message` 会**逐字**上响应，脱敏不够。**
+`_health_job_response` 把存储的 `error_message` 直接当 `error.message` 返回，
+而 `_internal_error_message` 只**脱敏**（去 PII、保留内部信息）—— 那对「工程师读的记录」
+是对的，对「响应体」是错的。新接住的类因此**只贡献类名**（不带上游报文、不带 socket 文本）；
+原来那两类保持原样。**这一处是我上一版的漏洞**（我让它走脱敏，等于仍把内部文本送出去）。
+
+**未加重、也未修的既有行为**：`SOURCE_UNAVAILABLE` 由 `SourceError`/`ValueError` 带出的
+`str(exc)` 本来就逐字上响应 —— 改它要动这条已发布 code 的消息契约，是另一个决定。
+
+### 三-ter、结构判据改为**发现式**（评审指出）
+
+原判据把五个 worker **列死**在 `ASYNC_WORKERS` 里 —— 那正是一个「空转的守卫」：
+第六个 worker 加进来时它根本不在名单里，判据继续通过而覆盖率悄悄少一个。
+现在从 `self._executor.submit(...)` 的调用点**发现** worker（实测发现 6 个，
+多出的 `_execute_run` 果然也有同样的缺口，一并修了）。
 
 ### 四、为什么是结构判据而不是「再列一遍类」
 
@@ -283,9 +313,9 @@ worker，本节把剩下三个一起收掉。
 
 - 环境性成因（provider 掉线 / MySQL 不可达 / 进程被杀）**仍未观察到**，本节的依据是
   **注入**的真实异常类，不是真实故障窗口。
-- 健康报告那条的**脱敏分支**没有单独的行为用例：它需要一个「新接住的类」带着
-  上游报文，而今天构造那个替身的价值全在「message 不上响应」这一点上，已由
-  `_health_job_response` 的既有契约与本节的结构判据覆盖。**如实记为未单独取证。**
+- 健康报告那条的**既有两个类**（`SourceError` / `ValueError`）的旧形状**未改**
+  —— 它们今天仍可能把 `str(exc)` 逐字送上响应。这是**既有行为**，本票没有加重它，
+  也**没有修**它（修它要动一条已发布 code 的消息契约）。**如实记为已知的既有缺口。**
 
 ## #700 叙述修复后的复跑（2026-10-12，41 真机，`0.1.0+0796dc8c3513`）
 
