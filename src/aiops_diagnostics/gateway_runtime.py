@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import sqlite3
 import threading
 import time
 from collections.abc import Callable
@@ -471,6 +472,62 @@ class GatewayRuntime:
         future.add_done_callback(lambda _: self._futures.pop(job["diagnosis_id"], None))
         return job
 
+    def _end_analysis_job(
+        self,
+        analysis_id: str,
+        tenant_id: str,
+        *,
+        result: dict[str, Any] | None,
+        started_ms: float,
+        error_code: str | None = None,
+        error_message: str = "",
+    ) -> None:
+        """End one operations-analysis job, and never let that write escape.
+
+        The shape this exists for (#700, seen on 41): the terminal write sits
+        *after* the worker's ``except`` block, so an exception raised by the
+        write itself — a locked database, a disk error — escaped the worker with
+        no handler reached: no terminal row, no metric, no log line, and the job
+        sat on ``running`` until the 15-minute deadline expired. Enumerating
+        exception classes cannot cover a write that happens outside their
+        ``try``; the only shape that can is "try to end the job, and if even
+        that fails, end it anyway".
+
+        Both workers share this so the two cannot drift: the failure-rate path
+        and the card path had byte-identical terminal blocks before, which is
+        exactly how one of them would have kept the hole.
+        """
+        status = "failed" if error_code else "completed"
+        try:
+            stored = self.store.update_standard_diagnosis(
+                analysis_id,
+                status=status,
+                result=result,
+                error_code=error_code,
+                error_message=error_message or None,
+            )
+        except Exception:  # noqa: BLE001 - the whole point is that this cannot escape
+            stored = False
+        if not stored:
+            # Either the write failed or the row was already terminal. One more
+            # attempt, terminal regardless: a row nothing will ever terminate is
+            # worse than one that reports it could not record its outcome.
+            with contextlib.suppress(Exception):
+                self.store.update_standard_diagnosis(
+                    analysis_id,
+                    status="failed",
+                    error_code=error_code or "ANALYSIS_FAILED",
+                    error_message=error_message or "analysis job could not record its outcome",
+                )
+            return
+        self._record_metric(
+            tenant_id=tenant_id,
+            route_type="operations_analysis",
+            outcome="completed" if status == "completed" else "failed",
+            error_code=error_code,
+            duration_ms=int((time.monotonic() - started_ms) * 1000),
+        )
+
     def _execute_operations_card(
         self,
         analysis_id: str,
@@ -504,7 +561,15 @@ class GatewayRuntime:
         # Same class as the failure-rate branch below (and the diagnosis line):
         # every card's narrative turn can raise ``AgentRuntimeError``, and a
         # handler that does not catch it writes no terminal row at all.
-        except (AgentRuntimeError, SourceError, ValueError) as exc:
+        #
+        # ``TypeError`` is in the tuple because of what #700 actually hit here: a
+        # call site that had lost an argument raised inside this worker, escaped
+        # every handler, and left the job on ``running`` until it expired — the
+        # exact symptom the narrower tuples above were chosen to prevent, reached
+        # by a different exception class. A job row that nothing will ever
+        # terminate is worse than a reported failure, so the last resort ends the
+        # job rather than letting the worker die silently.
+        except (AgentRuntimeError, SourceError, ValueError, TypeError, sqlite3.OperationalError) as exc:
             ok = self.store.update_standard_diagnosis(
                 analysis_id,
                 status="failed",
@@ -520,14 +585,11 @@ class GatewayRuntime:
                     duration_ms=int((time.monotonic() - started_ms) * 1000),
                 )
             return
-        stored = self.store.update_standard_diagnosis(analysis_id, status="completed", result=result)
-        if not stored:
-            return
-        self._record_metric(
-            tenant_id=context.effective_tenant_id,
-            route_type="operations_analysis",
-            outcome="completed",
-            duration_ms=int((time.monotonic() - started_ms) * 1000),
+        self._end_analysis_job(
+            analysis_id,
+            context.effective_tenant_id,
+            result=result,
+            started_ms=started_ms,
         )
 
     def _empty_card_result(
@@ -617,7 +679,13 @@ class GatewayRuntime:
         )
         if aggregate.total_faults == 0:
             return build_fault_code_contract(aggregate, None, reason_code=REASON_NO_FAULTS, **window)
-        payload = self._narrative_for(aggregate, window)
+        # #700: this call lost its `card` argument when ``_narrative_for`` gained
+        # one (#698) — so every fault-code card with data raised `TypeError` here,
+        # inside the worker, where no handler catches it: no terminal write, and
+        # the job sat on `running` until it expired. It survived two review passes
+        # and the local suite because the local double never reaches this line
+        # (the aggregate is non-empty only against real data).
+        payload = self._narrative_for(card, aggregate, window)
         return build_fault_code_contract(aggregate, payload, **window)
 
     def _narrative_for(self, card: str, aggregate: Any, window: dict[str, Any]) -> Any:
@@ -727,7 +795,9 @@ class GatewayRuntime:
         # #700: 叙述轮在模型回散文/供应商失败时抛 ``AgentRuntimeError``（一个
         # ``RuntimeError``），而这里只接了源与取值两类 —— 于是那次运行**没有写任何
         # 终态**，作业停在 ``running`` 直到过期。诊断线一直接的是这三类，同一种失败。
-        except (AgentRuntimeError, SourceError, ValueError) as exc:
+        # ``TypeError`` 见 ``_execute_operations_card`` 的同名分支：调用点少传一个参数
+        # 时抛的就是它，而症状与上面那条一模一样。
+        except (AgentRuntimeError, SourceError, ValueError, TypeError, sqlite3.OperationalError) as exc:
             ok = self.store.update_standard_diagnosis(
                 analysis_id,
                 status="failed",
@@ -743,18 +813,11 @@ class GatewayRuntime:
                     duration_ms=int((time.monotonic() - started_ms) * 1000),
                 )
             return
-        stored = self.store.update_standard_diagnosis(
+        self._end_analysis_job(
             analysis_id,
-            status="completed",
+            context.effective_tenant_id,
             result=result,
-        )
-        if not stored:
-            return  # 行已终态：这次结果不是任何人等的那份（与诊断线同形）
-        self._record_metric(
-            tenant_id=context.effective_tenant_id,
-            route_type="operations_analysis",
-            outcome="completed",
-            duration_ms=int((time.monotonic() - started_ms) * 1000),
+            started_ms=started_ms,
         )
 
     def _analyze_with_narrative(
