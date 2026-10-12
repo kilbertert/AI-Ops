@@ -15,15 +15,19 @@
 
 from __future__ import annotations
 
+import sqlite3
 import time
 from pathlib import Path
 from typing import Any
+
+import pytest
 
 from aiops_diagnostics.codex_runtime import AgentRuntimeError, CodexTurnOutput
 from aiops_diagnostics.config import Settings
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_runtime import GatewayRuntime
 from aiops_diagnostics.gateway_store import GatewayStore
+from aiops_diagnostics.ops_analysis_narrative import build_narrative_prompt
 from aiops_diagnostics.query_scope import QueryScope
 from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
 
@@ -44,7 +48,12 @@ class _FakeCursor:
 
 
 class _FakeMySql:
-    """真实聚合被换掉；本文件关心的是**作业**怎么终结，不是数字怎么算。"""
+    """真实聚合被换掉；本文件关心的是**作业**怎么终结，不是数字怎么算。
+
+    每一张卡都给**非空**结果：空结果走的是「确定性答案」那条分支，根本不碰模型，
+    也就照不到本文件要照的那些路径。#700 踩到的正是这个差别 —— 本地替身一直给空数据，
+    所以那条有数据才走到的分支从来没被跑到。
+    """
 
     def count_devices(self, sites: tuple[str, ...]) -> int:
         del sites
@@ -53,6 +62,18 @@ class _FakeMySql:
     def aggregate_order_statuses(self, sites: tuple[str, ...], start: str, end: str) -> dict[str, Any]:
         del sites, start, end
         return {"total": 10, "abnormal_ended": 2, "normal_ended": 8, "top_sites": ((SITE, 2),)}
+
+    def aggregate_offline_incidents(self, sites: tuple[str, ...], start: str, end: str) -> dict[str, Any]:
+        del sites, start, end
+        return {"incidents": 3, "offline_devices": 2, "open_incidents": 1, "offline_minutes": 42}
+
+    def aggregate_fault_codes(self, sites: tuple[str, ...], start: str, end: str) -> dict[str, Any]:
+        del sites, start, end
+        return {"total_faults": 9, "faulty_devices": 2, "top_codes": (("NoError", 5), ("OtherError", 4))}
+
+    def aggregate_payment_split(self, sites: tuple[str, ...], start: str, end: str) -> dict[str, Any]:
+        del sites, start, end
+        return {"total": 10, "paid": 8, "paid_refunded": 2, "paid_net": 6, "unpaid": 2}
 
 
 class _FakeSources:
@@ -247,3 +268,194 @@ def test_the_analysis_route_type_is_a_recordable_metric(tmp_path: Path) -> None:
     metrics = MetricsStore(tmp_path / "gateway.db")
     metrics.record(tenant_id=TENANT, route_type="operations_analysis", outcome="completed")
     assert [row["route_type"] for row in metrics.list_runs(TENANT, limit=5)] == ["operations_analysis"]
+
+
+@pytest.mark.parametrize("card", ["offline", "fault_code", "payment"])
+def test_every_card_with_data_reaches_a_terminal_row(tmp_path: Path, monkeypatch, card: str) -> None:
+    """**有数据的**三张卡也必须到终态（不是停在 ``running``）。
+
+    #700 部署后跑验收时才逮到：``fault_code`` 那一路的 ``_narrative_for`` 调用点少传了
+    ``card`` 参数（``_narrative_for`` 在 #698 加了这个参数，调用点没跟上），于是**只要有
+    故障码数据**就在 worker 里抛 ``TypeError`` —— 没有任何 handler 接住它，作业停在
+    ``running`` 直到过期。
+
+    这条判据此前不存在的原因正是本文件第一版的问题：替身只回**空**聚合，空结果走
+    「确定性答案」分支、根本不碰模型，所以那条有数据才走到的路一次都没被跑到。
+    修法不只是补上那个参数（见 ``_compute_card``），还包括让这个替身**回非空数据**——
+    否则同一个形状下次还会以另一种面貌回来。
+    """
+    runtime, store = _runtime(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "aiops_diagnostics.ops_analysis_narrative.run_narrative_turn",
+        lambda *a, **k: {"main_cause": "成因", "recommendation": "建议"},
+    )
+    try:
+        created = runtime.start_operations_card(
+            _scope(),
+            card=card,
+            site_ids=(SITE,),
+            window_start=WINDOW[0],
+            window_end=WINDOW[1],
+            language="zh",
+        )
+        deadline = time.monotonic() + 5
+        current = created
+        while current["status"] not in {"completed", "failed", "inconclusive"}:
+            assert time.monotonic() < deadline, (card, current)
+            time.sleep(0.01)
+            current = store.get_standard_diagnosis(created["diagnosis_id"], _scope().scope_fingerprint)
+    finally:
+        runtime.shutdown()
+
+    assert current["status"] == "completed", (card, current)
+    result = current.get("result") or {}
+    assert result.get("main_cause") == "成因", (card, result)
+    # The card's own numbers, by the fields its contract actually uses, and by
+    # **the values the fake returned** — not merely "something is not None".
+    # Asserting the values is what catches an aggregate that silently comes back
+    # empty: a review pointed out that `is not None` (never mind `> 0`) would
+    # pass on the very regression this file exists to prevent.
+    expected = {
+        "offline": {"incidents": 3, "offline_devices": 2, "open_incidents": 1, "offline_minutes": 42},
+        "fault_code": {"total_faults": 9, "faulty_devices": 2},
+        "payment": {"total": 10, "paid": 8, "paid_refunded": 2, "paid_net": 6, "unpaid": 2},
+    }[card]
+    for key, value in expected.items():
+        assert result.get(key) == value, (card, key, result.get(key), result)
+    if card == "fault_code":
+        assert result.get("top_codes") == [
+            {"error_code": "NoError", "fault_count": 5},
+            {"error_code": "OtherError", "fault_count": 4},
+        ], result.get("top_codes")
+
+
+def test_the_narrative_prompt_carries_each_card_own_numbers() -> None:
+    """提示词必须把**这张卡自己的**数字交给模型。
+
+    这是评审在 #710 上逮到的：``build_narrative_prompt`` 里的键名写死成失败率那一套，
+    于是首次真正走到有数据的故障码卡时，模型只拿到一个 risk 标签与时间窗 ——
+    **没有故障数、没有故障码排名**，而它仍被要求写「先查哪个码」。离线卡与支付卡同理
+    （分别缺 incidents/offline_minutes 与 four buckets）。
+
+    判据落在**真正发出去的那段提示词**上：键改名、契约加字段、某张卡少传一个数，
+    都会在这里显形。断言到值，不是「含有某个词」。
+    """
+    from aiops_diagnostics.ops_analysis import (
+        FaultCodeAggregate,
+        OfflineAggregate,
+        PaymentAggregate,
+        build_fault_code_contract,
+        build_offline_contract,
+        build_payment_contract,
+    )
+
+    window = {"language": "zh", "site_ids": ("S-1",)}
+    cases = {
+        "fault_code": (
+            build_fault_code_contract(
+                FaultCodeAggregate(
+                    total_faults=9,
+                    faulty_devices=2,
+                    top_codes=(("NoError", 5), ("OtherError", 4)),
+                    devices_total=7,
+                ),
+                None,
+                **window,
+            ),
+            ("total_faults: 9", "faulty_devices: 2", "NoError", "OtherError"),
+        ),
+        "offline": (
+            build_offline_contract(
+                OfflineAggregate(
+                    incidents=3, offline_devices=2, open_incidents=1, offline_minutes=42, devices_total=7
+                ),
+                None,
+                **window,
+            ),
+            ("incidents: 3", "offline_devices: 2", "offline_minutes: 42", "open_incidents: 1"),
+        ),
+        "payment": (
+            build_payment_contract(
+                PaymentAggregate(total=10, paid=8, paid_refunded=2, paid_net=6, unpaid=2),
+                None,
+                **window,
+            ),
+            ("total: 10", "paid: 8", "paid_refunded: 2", "paid_net: 6", "unpaid: 2"),
+        ),
+    }
+    for card, (facts, wanted) in cases.items():
+        prompt = build_narrative_prompt(facts, language="zh")
+        for fragment in wanted:
+            assert fragment in prompt, (card, fragment, prompt)
+        # The failure-rate keys it used to hard-code are not what grounds these.
+        assert "counts:" not in prompt, (card, prompt)
+
+
+def test_a_locked_database_ends_the_job_instead_of_leaving_it_running(tmp_path: Path, monkeypatch) -> None:
+    """**收尾写本身失败**时，作业也必须终结。
+
+    第 41 上部署后的验收里有一张故障码卡停在 ``running`` 直到过期，而进程里
+    **没有任何 traceback / 日志 / 指标**：叙述轮已经跑完，失败发生在**收尾写**上
+    （``sqlite3.OperationalError: database is locked``），而那段写在 worker 的
+    ``except`` **之外** —— 枚举异常类的写法天然覆盖不到它。
+
+    判据不依赖锁从哪来：把收尾写换成抛 ``OperationalError``，作业仍必须离开 ``running``。
+    至于它落在 ``failed`` 还是短暂 ``running``（因为兜底那一笔也可能撞同一把锁），
+    由下面两条断言分开表达——**重要的性质是「不会永远挂着」**，而写成功时它必须是
+    ``failed`` 而不是 ``completed``（那会是一句假陈述）。
+    """
+    runtime, store = _runtime(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "aiops_diagnostics.ops_analysis_narrative.run_narrative_turn",
+        lambda *a, **k: {"main_cause": "成因", "recommendation": "建议"},
+    )
+    real_end = GatewayRuntime._end_analysis_job
+    seen: list[dict[str, Any]] = []
+
+    def recording(self: GatewayRuntime, analysis_id: str, tenant_id: str, **kwargs: Any) -> None:
+        seen.append({"result": kwargs.get("result"), "error_code": kwargs.get("error_code")})
+        return real_end(self, analysis_id, tenant_id, **kwargs)
+
+    monkeypatch.setattr(GatewayRuntime, "_end_analysis_job", recording)
+    real_update = GatewayStore.update_standard_diagnosis
+    fail_once = {"done": False}
+
+    def flaky(self: GatewayStore, diagnosis_id: str, **kwargs: Any) -> bool:
+        # The ``running`` claim succeeds; the *first* terminal write meets the lock.
+        if kwargs.get("status") in ("completed", "failed") and not fail_once["done"]:
+            fail_once["done"] = True
+            raise sqlite3.OperationalError("database is locked")
+        return real_update(self, diagnosis_id, **kwargs)
+
+    monkeypatch.setattr(GatewayStore, "update_standard_diagnosis", flaky)
+    try:
+        created = runtime.start_operations_card(
+            _scope(),
+            card="fault_code",
+            site_ids=(SITE,),
+            window_start=WINDOW[0],
+            window_end=WINDOW[1],
+            language="zh",
+        )
+        aid = created["diagnosis_id"]
+        deadline = time.monotonic() + 5
+        status = "queued"
+        while time.monotonic() < deadline:
+            time.sleep(0.01)
+            with sqlite3.connect(store.path) as connection:
+                row = connection.execute(
+                    "SELECT status FROM standard_diagnoses WHERE diagnosis_id = ?", (aid,)
+                ).fetchone()
+            status = row[0] if row else "missing"
+            if status in {"completed", "failed", "inconclusive"}:
+                break
+    finally:
+        runtime.shutdown()
+
+    # The helper was reached at all — i.e. the terminal path no longer dies in place.
+    assert seen, "收尾写没有走到兜底入口"
+    # And the job is no longer ``running``: the lock is transient, so the
+    # helper's own retry lands it. Never ``completed`` — that would claim a
+    # result it could not store.
+    assert status == "failed", status
+    assert seen[0]["error_code"] is None, "第一次收尾写是「成功」那一条，锁是在它内部抛的"

@@ -307,6 +307,24 @@ def _diagnosis_metric_rows(store: GatewayStore) -> list[tuple[str, str | None]]:
         ).fetchall()
 
 
+def _diagnosis_metrics_settled(
+    store: GatewayStore, expected: list[tuple[str, str | None]], *, timeout: float = 5.0
+) -> list[tuple[str, str | None]]:
+    """Wait for the metric write to land, then return what is there.
+
+    The terminal row and the metric are two separate writes, and `_run` returns
+    on the **row** — so reading the metric table immediately afterwards is a race
+    (it failed intermittently in CI, and 4/6 locally, before this helper). The
+    assertion is still about the *content*; this only removes the timing.
+    """
+    deadline = time.monotonic() + timeout
+    rows = _diagnosis_metric_rows(store)
+    while rows != expected and time.monotonic() < deadline:
+        time.sleep(0.01)
+        rows = _diagnosis_metric_rows(store)
+    return rows
+
+
 def test_a_served_operator_run_records_no_failure_metric(tmp_path: Path, monkeypatch) -> None:
     """**被服务**的那一次运行不得记一条失败指标。
 
@@ -339,7 +357,7 @@ def test_a_served_operator_run_records_no_failure_metric(tmp_path: Path, monkeyp
     # here is a race, and asserting an empty table failed in CI for exactly
     # that reason. What must hold is the *code*: no failure code on a run that
     # succeeded.
-    assert [row for row in _diagnosis_metric_rows(store) if row != ("completed", None)] == []
+    assert _diagnosis_metrics_settled(store, [("completed", None)]) == [("completed", None)]
 
 
 def test_a_fail_closed_operator_run_records_exactly_one_failure_metric(tmp_path: Path, monkeypatch) -> None:
@@ -356,4 +374,5 @@ def test_a_fail_closed_operator_run_records_exactly_one_failure_metric(tmp_path:
         runtime.shutdown()
 
     assert job["status"] == "failed", job
-    assert _diagnosis_metric_rows(store) == [("failed", "DIAGNOSIS_AGENT_UNREGISTERED")]
+    rows = _diagnosis_metrics_settled(store, [("failed", "DIAGNOSIS_AGENT_UNREGISTERED")])
+    assert rows == [("failed", "DIAGNOSIS_AGENT_UNREGISTERED")], rows
