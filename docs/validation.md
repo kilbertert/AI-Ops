@@ -1,8 +1,9 @@
 ## #721 运维巡检入口 + 整租户范围缺陷（2026-10-12，本地 + 41 真机）
 
-**分支** `feat/operator-operations-review`，基线 `origin/main`（`0796dc8`）；合并后 `691eca0`，
-已 CD 部署 41（`/health` = `0.1.0+691eca09dbf5`，实测）。
-**本票共三刀**：入口动作（已交付）、41 验收（本节）、失败路径据实标注（未做）。
+**分支** `feat/operator-operations-review`（PR #722）→ `fix/operations-analysis-whole-tenant-aggregate-scope`（PR #723），
+基线 `origin/main`（`0796dc8`）；合并后 `fb808a5`，已 CD 部署 41
+（`/health` = `0.1.0+fb808a50e958`，实测）。
+**本票共三刀**：入口动作（已交付）、41 验收（本节）、失败路径据实标注（**未做**）。
 
 ### 一、交付了什么
 
@@ -15,68 +16,86 @@
 响应复用 `_analysis_job_response`（`POST /v1/standard/analyses` 已在用的那一份），
 不新增第二份契约。
 
-### 二、审查逮到的缺陷：整租户账号的巡检恒为空（**两处，只修了一处**）
+### 二、审查逮到的缺陷：整租户账号的巡检恒为空（**两处，第二处是 41 上才逮到的**）
 
-`_intersect_sites` 把「两侧都是 `None`」收敛成 `()`，而下游读 `()` 是
+`_intersect_sites` 把「两侧都不收窄（`None`）」收敛成 `()`，而下游读 `()` 是
 「交集为空、别发 SQL」、读 `None` 才是「租户内不限站点」。于是**范围最宽的账号——
 正是这个面为之存在的管家账号——恒得一张空卡**。
 
-**第一处**（`gateway_runtime._intersect_sites`）：已修，回三值。
+**第一处**（`gateway_runtime._intersect_sites`，PR #722）：已修，回三值。
 
-**第二处**（`sources.aggregate_order_statuses`）：**本地全绿之后才在 41 上被逮到。**
+**第二处**（`sources.aggregate_order_statuses`，PR #723）：**本地全绿之后才在 41 上被逮到。**
 第一个修复把 `None` 正确地透传下去了，但 `aggregate_order_statuses` 自己**从未采用
-三值约定**——它是这条线上最早写的一条，签名是 `tuple[str, ...]`，体内
-`tuple(dict.fromkeys(site_ids))` 对 `None` 直接 `TypeError`。而它那三个同族卡函数
-（离线 / 故障码 / 支付）一开始就是三值的。
+三值约定**——它是这条线上最早写的一条，签名 `tuple[str, ...]`，体内
+`tuple(dict.fromkeys(site_ids))` 对 `None` 直接 `TypeError`；而它那三个同族卡函数
+（离线 / 故障码 / 支付）一开始就调 `_bounded_sites`，本来就是三值的。
 
-⇒ **修复写在离缺陷最近的那一层才算落地。** 41 实测（修复前）：`POST /v1/standard/analyses`
-用真实 type=1 整租户账号得到 `202` → 终态 `failed`、`counts={}`、`failure_rate=None` ——
-空卡变成了失败卡。现在两处同形。
+⇒ **修复要写在离缺陷最近的那一层才算落地。** 41 实测（#722 部署后）：
+`POST /v1/standard/analyses` 用真实 type=1 整租户账号得到 `202` → 终态 `failed`、
+`counts={}`、`failure_rate=None`——空卡变成了失败卡。#723 之后同一路径转绿。
 
 同类缺陷本仓**已发生过一次**：`#628`「顶层账号被读成无可见订单」（「没有店铺子集」
 被读成「看不到任何订单」）。**两次的教训同形：把「未收窄」读成「空」。**
 
-**为什么本地用例没逮到**：这条线上此前的每一处用例都用 `self` 范围 + 显式站点集
-（两侧都非 `None`），那条路径一直是好的；只有 `site_ids=None` 的整租户账号会踩到。
-新增两条用例：`test_the_whole_tenant_scope_is_no_narrowing_not_an_empty_one`
-（真值表）与 `test_the_whole_tenant_caller_actually_gets_its_orders_counted`
-（整条作业 + **聚合确实被调用、且收到的是 `None`**）。
+### 三、41 真机验收（判据 A–F 全绿）
 
-### 三、41 真机验收（如实）
-
-取数：一个**真实 type=1（租户主账号）** 的整租户身份（该租户近 3 天 44 笔订单），
-按生产形状自签令牌 + 服务自己的来源密钥打 `172.18.0.1:8788`；
-只读对照直接**调用线上那份聚合代码**（不让对照与卡漂移）。
+取数脚本在 41 上以 `root` 跑，**凭据运行时从服务自己的环境读、一个都不打印**：
+来源密钥与签名密钥来自 `/proc/<gateway pid>/environ`，令牌按生产形状自签。
+身份是真实的 **type=1（租户主账号）** 整租户账号（该租户近 3 天 44 笔订单）。
+只读对照**作为 `aiops41`** 跑（`production.env` 是 `0600 aiops41:aiops41`，
+root 读它会被 `validate_private_file` 拒——实测），并直接**调用线上那份聚合代码**，
+不让对照与卡漂移。
 
 | # | 判据 | 结果 |
 |---|---|---|
-| A | 部署 commit | ✅ `/health` = `0.1.0+691eca09dbf5` |
+| A | 部署 commit | ✅ `/health` = `0.1.0+fb808a50e958` |
 | B | 无凭据打分析面 | ✅ `401 ACCESS_TOKEN_REQUIRED`（不开门） |
-| C | 整租户账号起卡 | ✅ `202` → 终态 `completed` |
-| D | 卡的数字与只读对照一致 | ✅ 逐字相同（`total` / `abnormal` / `normal` / `failure_rate`） |
-| E | `reason_code` 为空（聚合**真的跑了**，不是空范围） | ✅ |
-| F | consumer 入口到达不了该面 | ✅ 拒绝 |
-
-**C/D 在修复前是红的**（`failed` + `counts={}`），修后为绿。
+| C | 整租户账号起卡 | ✅ `202` → 终态 `completed`（#722 部署后此处是 `failed`） |
+| D | 卡的数字与只读对照一致 | ✅ 逐字相同：卡 `{total:12, abnormal:0, normal:12}` / 对照同 |
+| D2 | `failure_rate` 与对照同 | ✅ 两侧 `0.0`（`abnormal_status=5`） |
+| E | `reason_code=null`、`site_ids=null`、`rule_version=ops-analysis-v1`、`definition` 随数字交付 | ✅ 聚合**真的跑了**，不是空范围 |
+| F | 同一令牌走 consumer 入口 | ✅ `403 PLATFORM_FORBIDDEN`（该面对客户端不成立） |
 
 ### 四、证据边界（据实 —— 这一节是本节最重要的部分）
 
-- 🔴 **「运维巡检」这个动作在 41 上还不存在，因此点击路径今天不可达。**
-  实测 `GET /v1/shortcuts`（operator）返回的动作仍是 `smart_diagnosis` /
-  `case_exploration` 两条。原因不是代码没写，而是**它的种子从未在生产上落过**：
-  `seed_bundled` 在全仓**没有任何启动路径的调用方**（只在自身 docstring 与
-  `tools/migrate_shortcut_i18n.py` 里被提到），而走 HTTP 发布需要
-  `ROLE_AGENT_PUBLISHER/ADMIN` 或 `ROLE_PLATFORM_ADMIN`——**41 上没有任何身份带这些角色**
-  （公司令牌路径 `roles=frozenset()`）。⇒ 这个动作要**由运营在后台播种并发布**，
-  和既有两条动作的来历一样（它们正是 2026-09-28 手动发布进 41 的）。
-  **因此本节 C–F 验的是它下游那条作业面（也是本刀修的范围缺陷），不是点击路径本身；
-  点击路径标为「未验」。**
+- 🔴 **「运维巡检」这个动作在 41 上还不存在，点击路径今天仍不可达。**
+  实测 `GET /v1/shortcuts`（operator）返回的仍是 `case_exploration` / `smart_diagnosis`
+  两条。原因不是代码没写，而是**它的种子从未在生产上落过**：`seed_bundled` 在全仓
+  **没有任何启动路径的调用方**（只在自身 docstring 与 `tools/migrate_shortcut_i18n.py`
+  里被提到），而走 HTTP 发布需要 `ROLE_AGENT_PUBLISHER/ADMIN` 或 `ROLE_PLATFORM_ADMIN`
+  ——**41 上没有任何身份带这些角色**（公司令牌路径 `roles=frozenset()`）。
+  ⇒ 这个动作要**由运营在后台播种并发布**，与既有两条动作的来历相同（它们正是
+  2026-09-28 手动发布进 41 的）。
+  **因此判据 A–F 验的是它下游那条作业面（也就是本刀修的范围缺陷），
+  不是点击路径本身；点击路径标为「未验」。**
 - **未跑** `verify-aiops-gateway`：它的边界写明证不了 `/diag/*` 与模型 run，
   而本刀改的是接线与一个纯函数收敛，不在其覆盖范围；真实端到端走 41（本节）。
 - **失败路径的据实标注未做**（第三刀）：`failed / ANALYSIS_FAILED` 那条分支
   在本仓库**无法由任何输入触发**（成因全是环境性的），要写下来而不是让它看着像已覆盖。
+  ⚠️ 本轮生产上确实出现过一条 `ANALYSIS_FAILED`，但**它既不是那条环境性分支，
+  也不是 `failed` 状态**——把它的机制写准（评审在 PR #724 上要求核对错误码）：
+
+  | 事实 | 值（`an_cf6fcef6…`，已核对该行） |
+  |---|---|
+  | 记录状态 | **`expired`**（不是 `failed`） |
+  | `error_code` | `ANALYSIS_FAILED` |
+  | `error_message` | `'NoneType' object is not iterable` |
+  | `completed_at` | 等于 `started_at`（**同一毫秒级瞬间**） |
+
+  ⇒ 三条合起来才说得通：worker **同步**抛 `TypeError`（#722 只透传了 `None`
+  而 `aggregate_order_statuses` 收不下），被 #700 加的收尾兜底接住并写下
+  `status=failed` + `ANALYSIS_FAILED`；随后**过期清扫**（`expire_statements` 的
+  `claim` 只改 `status`，**不碰 `error_code`**）把这条已终态、已过 `expires_at`
+  的行扫成了 `expired`。所以今天读到的状态是 `expired`，而 `error_code` 留着。
+
+  **这不能当「`failed / ANALYSIS_FAILED` 分支已被验证」**，两个理由：
+  ① 它验的是「收尾兜底在同步 `TypeError` 下会写终态行」（这条确实**被验证了**，
+  有价值），**不是**那条环境性成因；
+  ② 它连**状态**都不是 `failed`——`expired` 意味着「该作业超出时限」，
+  与「收尾时写下的终态」在对外契约上是两句话。
 - 生产 41 未改任何配置；本轮新增的都是分析作业行（与 #700 验收同类）；
   会话值与订单号未留档，凭据未入仓。
+
 ## #700 叙述修复后的复跑（2026-10-12，41 真机，`0.1.0+0796dc8c3513`）
 
 **分支** `docs/stage1-acceptance-rerun-after-narrative-fix`，基线 `origin/main`（`0796dc8`）。
