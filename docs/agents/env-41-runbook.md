@@ -785,6 +785,72 @@ runuser -u aiops41 -- .venv/bin/aiops --config /etc/aiops-41/production.env admi
 - 发布前 KB 活性校验会真实调用 kb-service；供应商欠费时（embedding 502）会误报
   "知识库不存在"，**这是误报**，充值后重试即恢复，不要据此删绑定。
 
+### 3.1-ter 新增一条代码里的**种子动作**要先播种再发布（2026-10-12 新增）
+
+**用途**：代码里新加了一个 `_BUNDLED_SHORTCUTS` 种子动作（例：`#721` 的
+`operations_review`）之后，**入口不会自己出现**。合并 + CD 部署只更新源码，
+**不落数据行**。本节是「让它在 41 上真的可见」的步骤，也是 `#721` 在 41 上
+发现入口不可达之后的沉淀。
+
+**先看清事实**（三条，缺一条就会做出错误预期）：
+
+1. **`seed_bundled` 没有启动路径的调用方。** 全仓搜 `seed_bundled` 只会命中它自身的
+   docstring 与 `tools/migrate_shortcut_i18n.py` —— 网关启动**不会**播种。
+2. **播种出来的行是草稿**（`status=draft`，设计如此：发布是运营动作），入口看不到。
+3. **走 HTTP 发布在 41 上不可达**：管理面要求 `ROLE_AGENT_PUBLISHER/ADMIN` 或
+   `ROLE_PLATFORM_ADMIN`，而 41 的公司令牌路径 `roles=frozenset()`（见 §3.1-bis 的
+   信任边界一节）。⇒ **只能走主机旁路**。
+
+**步骤**（先按 §3.1-bis 做 WAL 安全的库备份；下列脚本在服务运行下写库）：
+
+```python
+# install -m 644 到 /tmp，cd /opt/aiops-41，runuser -u aiops41 -- …/python /tmp/seed.py
+from pathlib import Path
+from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
+from aiops_diagnostics.shortcut_lifecycle import (
+    PLATFORM_SCOPE, PLATFORM_TENANT_ID, ShortcutManager, ShortcutStore,
+)
+store = ShortcutStore(Path("/var/lib/aiops-41/gateway/gateway.db"))
+manager = ShortcutManager(store)
+subject = SubjectRecord(b_user_id="B-onbox-admin", tenant_id=PLATFORM_TENANT_ID)
+ctx = ScopeContext.build(
+    caller=subject, subject=subject, delegated=False,
+    effective_tenant_id=PLATFORM_TENANT_ID, data_scope=DataScope(type="self"),
+    roles=frozenset({"ROLE_PLATFORM_ADMIN"}),      # 必需：缺它会被 ShortcutForbidden 拒
+    permissions=frozenset({"aiops:shortcuts:manage"}),
+)
+# ① 播种：只在缺失时创建，返回的是**草稿**。幂等（已存在则跳过），可安全重跑。
+manager.store.seed_bundled(ctx, manager)
+# ② 只发布要上线的那些 code。已 published 的跳过（避免 revision 冲突）。
+for code in ("operations_review",):
+    rows = [r for r in manager.list(ctx, scope=PLATFORM_SCOPE, business_entry="operator")
+            if r.code == code]
+    if not rows:
+        print(f"缺行: {code} —— 种子没进去"); continue
+    cur = store.get(rows[0].shortcut_id, PLATFORM_TENANT_ID)
+    if cur.status == "published":
+        print(f"已发布，跳过: {code}"); continue
+    manager.publish(ctx, cur.shortcut_id, expected_revision=cur.revision, scope=PLATFORM_SCOPE)
+    print(f"已发布: {code} rev={cur.revision}")
+```
+
+**验收**（不要只看脚本输出）：
+
+```bash
+# 带 operator 入口头打公网；codes 里必须出现新动作
+ssh aiops-41 'curl -sS -H "Authorization: Bearer <服务令牌>" -H "X-Business-Entry: operator" \
+  https://api.mall.qushiyun.com/v1/shortcuts' | python3 -c 'import json,sys; print([s["code"] for s in json.load(sys.stdin)["shortcuts"]])'
+```
+
+**常见坑**：
+
+- **合并部署 ≠ 入口上线。** 只做完 CD 就以为入口有了，是本手册主张「部署后要按
+  真实验收边界验收」的直接反例；`#721` 的 41 验收就在这里落过一次。
+- **`seed_bundled` 是幂等的，但 `create` 不是**：首次 create 成功而 publish 中断后再跑，
+  应直接 publish（上表三种状态），**不要**再 create。
+- **平台行与租户行都要看**：`list_effective` 里租户已发布行覆盖平台默认行，只发一条会分叉。
+- 这是一次**运维动作**，执行记录要留（谁、什么时候、发了什么）。
+
 ### 3.1-bis 把动作发布为**平台默认**（2026-09-28 新增）
 
 **用途**：让**所有租户**的某个入口都能看到该动作（consumer 侧现有的 4 条平台默认
@@ -1222,6 +1288,60 @@ ssh aiops-41 'python3 /dev/stdin /www/wwwlogs/<vhost>.log --since <DD/Mon/YYYY> 
 退出码 **0 = 有请求 / 1 = 确实 0 次 / 2 = 日志读不到**。
 **三种不要混用**：把「读不到」当成「零请求」，会得到一个关于某个路由、而没人真的看过的自信错判。
 `grep -l "v1/<route>" /www/wwwlogs/*.log` 反查 vhost，不要假设客户端用的是哪个域名。
+
+## 5.7 运维分析卡的真机复跑（#721，2026-10-12 新增）
+
+**用途**：验收「一张跨订单的运维卡在这台机器上真的算出来了，且数字与只读对照一致」。
+**这是个写动作**：每次复跑都会在 `standard_diagnoses` 里留下一条 `kind=analysis` 的作业行
+（与 §5.6 的探测同一类，量级可接受）。跑之前确认没有在飞作业。
+
+**为什么要专门记这一节**：`#721` 的范围缺陷是**只有整租户账号才踩得到**的，
+而整租户账号在 41 上**没有会话**（Redis 里一条都没有）——它的身份只能**自签**。
+并且这条链上有一个必须绕开的坑：`/tmp` 下留着历史探测脚本（含一个 `platform.py`），
+而 `python /tmp/x.py` 把 `/tmp` 放在 `sys.path[0]`，会**遮蔽标准库 `platform`**
+（`uuid`/`redis` 导入它），于是 `import` 阶段就崩在一个和本任务无关的地方。
+⇒ 脚本必须先修 `sys.path`，或把库导入放在 `/opt/aiops-41` 下运行。
+
+**步骤**：
+
+```text
+# ① 取整租户（type ∈ {-1,1}）身份：UPMS sys_user。租户要与充电库里有近期订单的一致。
+#    口令/来源密钥/签名密钥一律**运行时**从服务自己的环境读，不打印、不入仓：
+#      systemctl show aiops-gateway-41 -p MainPID --value
+#      tr '\0' '\n' < /proc/<pid>/environ | grep '^AIOPS_GATEWAY_COMPANY_SOURCE_KEY'
+#    （41 是 company-parity 模式：TRUST_PAYLOAD 未设 ⇒ 不验签，判据是 nginx 注入的来源密钥）
+# ② 自签 HS256 令牌，声明含 id/tenant_id/type/exp/username
+# ③ POST /v1/standard/analyses（172.18.0.1:8788）
+#      headers: Authorization: Bearer <自签令牌>, X-AIOps-Source-Key: <服务密钥>,
+#               X-Business-Entry: operator
+#      body: {"card":"failure_rate","site_ids":null,
+#             "window_start":<ISO>,"window_end":<ISO>}
+#      site_ids=null 就是**整租户**——这正是缺陷所在的那一档，不要传具体站点集
+# ④ 轮询 GET /v1/standard/analyses/<id> 到终态
+# ⑤ 只读对照：**作为 aiops41 跑**（production.env 是 0600 aiops41:aiops41，
+#    root 读会被 validate_private_file 拒），直接调线上那份聚合代码，别手写 SQL
+```
+
+**判据**（同时成立才算通过）：
+
+| 判据 | 期望 |
+|---|---|
+| 无凭据 | `401`（这个面不开门） |
+| 整租户起卡 | `202` → 终态 `completed`（**不是** `expired`/`failed`） |
+| `result.reason_code` | `null`（聚合真的跑了，不是空范围） |
+| `result.site_ids` | `null`（真的没有收窄） |
+| `result.counts` | 与只读对照**逐字相同** |
+| `result.failure_rate` | 等于 `round(abnormal/total, 4)`，与对照同 |
+| 同一令牌走 consumer 入口 | 拒绝（该面对客户端不成立） |
+
+**常见坑**：
+
+- **读错层级**：数字在 `result` 里，**不在**作业行顶层。只看顶层会得到
+  `counts={}`/`failure_rate=None`，看起来像卡坏了，其实是读错了地方。
+- **`error_code` 会骗人**：过期清扫只改 `status`、**不碰 `error_code`**，所以一条
+  今天读到的 `expired` 行可能留着收尾时写的 `ANALYSIS_FAILED`。判断「作业为什么终结」
+  要连 `status` + `error_code` + `completed_at` 一起看，不能只看错误码。
+- **对照必须调线上代码**：手写 SQL 会与卡的定义漂移（半开区间、`ABNORMAL_STATUS`）。
 
 ## 6. 真实验收边界（不得逾越）
 

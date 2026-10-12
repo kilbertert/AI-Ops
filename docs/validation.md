@@ -72,11 +72,30 @@ root 读它会被 `validate_private_file` 拒——实测），并直接**调用
   而本刀改的是接线与一个纯函数收敛，不在其覆盖范围；真实端到端走 41（本节）。
 - **失败路径的据实标注未做**（第三刀）：`failed / ANALYSIS_FAILED` 那条分支
   在本仓库**无法由任何输入触发**（成因全是环境性的），要写下来而不是让它看着像已覆盖。
-  ⚠️ 本轮**顺带**在生产上见到过一次 `failed`——但成因是 #722 的半截修复
-  （`TypeError: 'NoneType' object is not iterable`），**不是**那条环境性分支，
-  不能拿它当「ANALYSIS_FAILED 分支已被验证」。
+  ⚠️ 本轮生产上确实出现过一条 `ANALYSIS_FAILED`，但**它既不是那条环境性分支，
+  也不是 `failed` 状态**——把它的机制写准（评审在 PR #724 上要求核对错误码）：
+
+  | 事实 | 值（`an_cf6fcef6…`，已核对该行） |
+  |---|---|
+  | 记录状态 | **`expired`**（不是 `failed`） |
+  | `error_code` | `ANALYSIS_FAILED` |
+  | `error_message` | `'NoneType' object is not iterable` |
+  | `completed_at` | 等于 `started_at`（**同一毫秒级瞬间**） |
+
+  ⇒ 三条合起来才说得通：worker **同步**抛 `TypeError`（#722 只透传了 `None`
+  而 `aggregate_order_statuses` 收不下），被 #700 加的收尾兜底接住并写下
+  `status=failed` + `ANALYSIS_FAILED`；随后**过期清扫**（`expire_statements` 的
+  `claim` 只改 `status`，**不碰 `error_code`**）把这条已终态、已过 `expires_at`
+  的行扫成了 `expired`。所以今天读到的状态是 `expired`，而 `error_code` 留着。
+
+  **这不能当「`failed / ANALYSIS_FAILED` 分支已被验证」**，两个理由：
+  ① 它验的是「收尾兜底在同步 `TypeError` 下会写终态行」（这条确实**被验证了**，
+  有价值），**不是**那条环境性成因；
+  ② 它连**状态**都不是 `failed`——`expired` 意味着「该作业超出时限」，
+  与「收尾时写下的终态」在对外契约上是两句话。
 - 生产 41 未改任何配置；本轮新增的都是分析作业行（与 #700 验收同类）；
   会话值与订单号未留档，凭据未入仓。
+
 ## #700 叙述修复后的复跑（2026-10-12，41 真机，`0.1.0+0796dc8c3513`）
 
 **分支** `docs/stage1-acceptance-rerun-after-narrative-fix`，基线 `origin/main`（`0796dc8`）。
