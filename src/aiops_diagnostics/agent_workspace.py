@@ -68,7 +68,6 @@ class AgentWorkspace:
         provider: str = "",
         key_slot: str = "default",
         language: str = DEFAULT_LANGUAGE,
-        answer_contract: str = QA_ANSWER_CONTRACT,
     ) -> AgentWorkspace:
         timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         run_id = f"run-{timestamp}-{manifest.source_hash[:8]}-{secrets.token_hex(2)}"
