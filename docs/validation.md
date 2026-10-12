@@ -219,9 +219,13 @@ except (AgentRuntimeError, SourceError, ValueError, TypeError, sqlite3.Operation
 
 ### 四、证据边界（据实）
 
-- 本轮**改了生产数据**（一条平台级动作行），已按 §3.1-bis 的纪律先备份；
-  回滚 = 用那份 `shortcuts-20261012-173816` 备份，或按 §5.5 的**按动作回滚**
-  （该行有 `rev=1` 草稿与 `rev=2` 发布两版，`rollback` 可退回）。
+- 本轮**改了生产数据**（一条平台级动作行），已按 §3.1-bis 的纪律先备份。
+  🔴 **撤回路径已更正**（评审在 PR #727 上逮到，实测确认）：**`rollback` 撤不掉这条新动作。**
+  `shortcuts.rev` 与 `shortcut_versions.version_no` **不是同一个序列** —— 创建即 `rev=1`，
+  发布把行推到 `rev=2` 并写下 `version_no=1`；而 `rollback` 要求目标 version_no 存在、
+  且当前行已发布，它做的是「把旧版内容**再发布一次**」⇒ 只有 v1 的新动作，"回滚到 v1"
+  等于再发一遍同一份内容。**正确撤回是 `ShortcutManager.disable`**（入口立刻不再返回它），
+  整库备份只作灾难恢复。步骤已写进 `env-41-runbook.md` §3.1-ter。
 - 点击用的是**自签的整租户身份**（41 上该租户没有会话），**不是运营本人的浏览器**。
   「运营在后台点一下」那一步仍未验 —— 与既有验收同一条已披露形状。
 - 这次发布走的是**主机旁路**（`ROLE_PLATFORM_ADMIN` 上下文在主机上构造），

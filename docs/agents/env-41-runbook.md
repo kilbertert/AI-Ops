@@ -826,20 +826,46 @@ ctx = ScopeContext.build(
     roles=frozenset({"ROLE_PLATFORM_ADMIN"}),  # 必需：缺它会被 ShortcutForbidden 拒
     permissions=frozenset({"aiops:shortcuts:manage"}),
 )
-# ① 播种：只在缺失时创建，返回的是**草稿**。幂等（已存在则跳过），可安全重跑。
-manager.store.seed_bundled(ctx, manager)
-# ② 只发布要上线的那些 code。已 published 的跳过（避免 revision 冲突）。
-for code in ("operations_review",):
-    rows = [r for r in manager.list(ctx, scope=PLATFORM_SCOPE, business_entry="operator") if r.code == code]
-    if not rows:
-        print(f"缺行: {code} —— 种子没进去")
-        continue
-    cur = store.get(rows[0].shortcut_id, PLATFORM_TENANT_ID)
-    if cur.status == "published":
-        print(f"已发布，跳过: {code}")
-        continue
-    manager.publish(ctx, cur.shortcut_id, expected_revision=cur.revision, scope=PLATFORM_SCOPE)
-    print(f"已发布: {code} rev={cur.revision}")
+
+# ① 定点创建**一个**动作，文案取自代码里的种子规格（不手抄，因此与代码不可能漂移）。
+#
+# ⚠️ **不要用 `manager.store.seed_bundled(ctx, manager)` 播种。** 它遍历
+# **两个入口的全部**种子，会顺手把 41 上所有缺失的行都造出来（2026-10-12 实测：
+# 它还会创建 3 条 `battery_report` consumer 行，且都是**草稿**——入口看不到，
+# 却在管理列表里多出三行无人认领的东西）。要上线一个动作就只建那一个。
+from aiops_diagnostics.shortcut_lifecycle import _BUNDLED_SHORTCUTS  # noqa: PLC2701 - 文案的单一来源
+
+ENTRY, CODE = "operator", "operations_review"
+spec = next(fields[CODE] for entry, fields in _BUNDLED_SHORTCUTS if entry == ENTRY)
+
+row = store.find_by_code(PLATFORM_TENANT_ID, ENTRY, CODE)
+if row is None:
+    row = manager.create(
+        ctx,
+        {
+            "business_entry": ENTRY,
+            "code": CODE,
+            "intent": spec["intent"],
+            "requires_order": spec["requires_order"],
+            "sort_order": spec["sort_order"],
+            "labels": spec["labels"],
+            "descriptions": spec.get("descriptions") or {},
+            "question_templates": spec.get("question_templates") or {},
+            "target_agent_version": None,
+            "jump_path": spec.get("jump_path"),
+            "kind": spec.get("kind", "button"),
+        },
+        scope=PLATFORM_SCOPE,
+    )
+    print(f"已创建(草稿): {CODE} rev={row.revision}")
+
+# ② 发布。三个状态分别处理（这一段本身幂等，可重跑）。
+if row.status == "published":
+    print(f"已发布，跳过: {CODE} rev={row.revision}")
+else:
+    manager.publish(ctx, row.shortcut_id, expected_revision=row.revision, scope=PLATFORM_SCOPE)
+    after = store.find_by_code(PLATFORM_TENANT_ID, ENTRY, CODE)
+    print(f"已发布: {CODE} status={after.status} rev={after.revision} labels={len(after.labels)} 语")
 ```
 
 **验收**（不要只看脚本输出）：
@@ -849,6 +875,26 @@ for code in ("operations_review",):
 ssh aiops-41 'curl -sS -H "Authorization: Bearer <服务令牌>" -H "X-Business-Entry: operator" \
   https://api.mall.qushiyun.com/v1/shortcuts' | python3 -c 'import json,sys; print([s["code"] for s in json.load(sys.stdin)["shortcuts"]])'
 ```
+
+**撤回：用 `disable`，不是 `rollback`，更不是恢复整库。**
+
+🔴 **首次发布出来的动作，`rollback` 撤不掉它。** 判据（2026-10-12 实测该行）：
+`shortcuts` 行的 `rev` 与 `shortcut_versions` 的 `version_no` **不是同一个序列** ——
+创建即 `rev=1`，发布把行推到 `rev=2` 并写下 `version_no=1`。
+而 `ShortcutManager.rollback` 要求**目标 version_no 存在**、且**当前行已发布**，
+它做的是「把某个旧版的内容**重新发布**」⇒ 只有 `version_no=1` 的新动作，
+"回滚到 v1" 就是**再发布一次同一份内容**，入口照样返回它。
+
+```python
+# 正确的撤回：把它禁用掉，入口立刻不再返回该动作。
+cur = store.find_by_code(PLATFORM_TENANT_ID, ENTRY, CODE)
+manager.disable(ctx, cur.shortcut_id, expected_revision=cur.revision, scope=PLATFORM_SCOPE)
+# 复核（判据是「入口里没有它了」）：
+#   GET /v1/shortcuts operator 的 codes 不得再含该 code
+```
+
+整库恢复（§3.1-bis 那份备份）**只作灾难恢复** —— 它会把备份之后的**其他**写入一起丢掉
+（本手册 §5.5 的恢复一节已经写过这一条；这里再点一次，是因为新建动作这条路**没有**可用的按版本回滚）。
 
 **常见坑**：
 
