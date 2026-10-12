@@ -293,3 +293,59 @@ def test_the_operator_entry_fails_closed_without_a_serviceable_operations_agent(
     assert job["status"] == "failed", (name, job)
     assert job["error_code"] == "DIAGNOSIS_AGENT_UNREGISTERED", (name, job)
     assert recorded == [], "fail-closed 的运行不得触到模型"
+
+
+# --- 5. 指标与作业行必须说同一件事（#700 在生产上逮到的不一致） ----------------
+
+
+def _diagnosis_metric_rows(store: GatewayStore) -> list[tuple[str, str | None]]:
+    import sqlite3
+
+    with sqlite3.connect(store.path) as connection:
+        return connection.execute(
+            "SELECT outcome, error_code FROM agent_run_metrics WHERE route_type = 'diagnosis'"
+        ).fetchall()
+
+
+def test_a_served_operator_run_records_no_failure_metric(tmp_path: Path, monkeypatch) -> None:
+    """**被服务**的那一次运行不得记一条失败指标。
+
+    #700 在 41 上从真实运行的指标里看出这件事：两条 ``completed`` 的诊断旁边，各有一条
+    ``route_type=diagnosis / outcome=failed / error_code=DIAGNOSIS_AGENT_UNREGISTERED``。
+    成因不是失败，而是那段 ``_record_metric`` 落在了 ``if selection is None`` **之外**
+    —— 于是每次**成功**的服务都记一条它并不属于的失败码，而真正 fail-closed 的那条路径
+    （它在上面就 ``return`` 了）一条也不记。
+
+    判据说到底只有一句：行与指标不能各说各的。这条断言「服务成功 ⇒ 没有失败指标」，
+    下一条断言「fail-closed ⇒ 恰好一条」。两条合起来才钉得住缩进。
+    """
+    runtime, store, recorded = _runtime(tmp_path, monkeypatch)
+    try:
+        _publish_agent(
+            AgentStore(store.path), name="运维乙", agent_type="operations", prompt=METHODOLOGY_MARKER
+        )
+        _bind_operator(store.path, "运维乙")
+
+        job = _run(runtime, store, business_entry="operator")
+    finally:
+        runtime.shutdown()
+
+    assert job["status"] == "completed", job
+    assert _diagnosis_metric_rows(store) == []
+
+
+def test_a_fail_closed_operator_run_records_exactly_one_failure_metric(tmp_path: Path, monkeypatch) -> None:
+    """未登记的那一次要**恰好**记一条，且带的就是它写进行里的那个码。"""
+    runtime, store, _ = _runtime(tmp_path, monkeypatch)
+    try:
+        _publish_agent(
+            AgentStore(store.path), name="运维乙", agent_type="operations", prompt=METHODOLOGY_MARKER
+        )
+        _bind_operator(store.path, "运维乙", tenant_id="T-OTHER")
+
+        job = _run(runtime, store, business_entry="operator")
+    finally:
+        runtime.shutdown()
+
+    assert job["status"] == "failed", job
+    assert _diagnosis_metric_rows(store) == [("failed", "DIAGNOSIS_AGENT_UNREGISTERED")]

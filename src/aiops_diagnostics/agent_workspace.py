@@ -31,6 +31,21 @@ BACKEND_REFERENCES = (
 )
 
 
+#: The answer shape a zero-order turn is expected to return. Two shapes share
+#: the workspace because they share everything else (no incident, no order data,
+#: references only); the *shape* is the one thing that differs, so it is the one
+#: thing passed in.
+QA_ANSWER_CONTRACT = "text"
+#: ``{"main_cause": str, "recommendation": str}`` — the operations-analysis
+#: narrative turn (#700). That turn only *explains numbers the backend already
+#: computed*, and this workspace's default contract says "answer the charging
+#: question and end with the reminder line" — which the model obeyed, returning
+#: a ``{"text": …}`` envelope the narrative parser then refused. Two contradicting
+#: instructions in one run is the failure this module's docstring records once
+#: already; passing the contract keeps them in step.
+NARRATIVE_ANSWER_CONTRACT = "narrative"
+
+
 @dataclass(frozen=True, slots=True)
 class AgentWorkspace:
     run_id: str
@@ -53,6 +68,7 @@ class AgentWorkspace:
         provider: str = "",
         key_slot: str = "default",
         language: str = DEFAULT_LANGUAGE,
+        answer_contract: str = QA_ANSWER_CONTRACT,
     ) -> AgentWorkspace:
         timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         run_id = f"run-{timestamp}-{manifest.source_hash[:8]}-{secrets.token_hex(2)}"
@@ -90,6 +106,7 @@ class AgentWorkspace:
         provider: str = "",
         key_slot: str = "default",
         language: str = DEFAULT_LANGUAGE,
+        answer_contract: str = QA_ANSWER_CONTRACT,
     ) -> AgentWorkspace:
         """Zero-order (general-question) workspace: references staged, no order
         incident manifest.
@@ -107,7 +124,7 @@ class AgentWorkspace:
             ensure_private_directory(path / child)
         workspace = cls(run_id=run_id, path=path, language=language)
         workspace._stage_references(project_root.resolve())
-        workspace.write_text("AGENTS.md", _qa_runtime_instructions(language))
+        workspace.write_text("AGENTS.md", _qa_runtime_instructions(language, answer_contract))
         workspace.save_state(
             RunState(
                 run_id=run_id,
@@ -263,7 +280,7 @@ def _runtime_instructions() -> str:
 """
 
 
-def _qa_runtime_instructions(language: str) -> str:
+def _qa_runtime_instructions(language: str, answer_contract: str = QA_ANSWER_CONTRACT) -> str:
     """The zero-order workspace contract, written in the run's language.
 
     The output language is a REQUIRED ARGUMENT, not a defaulted one. It used
@@ -272,15 +289,22 @@ def _qa_runtime_instructions(language: str) -> str:
     each other, and the model obeyed both. A default here would let a future
     call site silently keep the old behaviour, so the parameter is positional
     and required — every caller states the language it is answering in.
+
+    ``answer_contract`` (#700) likewise: the guardrail text and the run's own
+    prompt must describe the same answer. ``narrative`` swaps the answer shape
+    and the closing instruction; every guardrail above it — no order data, read
+    only this workspace, no network — is identical for both shapes.
     """
     answer_language = language_name(language)
     reminder_line = zero_order_reminder(language)
-    return f"""# AI-Ops General Assistant Runtime
-
-- This workspace contains general charging/new-energy references ONLY. There is
-  NO order incident — do not invent or assume an order number, and do not query
-  any order data (you cannot reach it).
-- Answer the user's general charging/EV question using the staged references
+    if answer_contract == NARRATIVE_ANSWER_CONTRACT:
+        answer_block = f"""- Return a single JSON object with exactly two string fields,
+  `main_cause` and `recommendation`, both written in {answer_language}. Do not
+  restate or recompute any number: the numbers came from the backend and are
+  already given to you.
+"""
+    else:
+        answer_block = f"""- Answer the user's general charging/EV question using the staged references
   (SOP, backend docs) plus your own knowledge. If the question is about a
   SPECIFIC order, bill, or refund, do not fabricate an answer: give general
   guidance and tell the user that providing an order number enables an exact
@@ -291,3 +315,9 @@ def _qa_runtime_instructions(language: str) -> str:
 - Return a single `text` answer in {answer_language}. The `reminder` field is
   always true.
 """
+    return f"""# AI-Ops General Assistant Runtime
+
+- This workspace contains general charging/new-energy references ONLY. There is
+  NO order incident — do not invent or assume an order number, and do not query
+  any order data (you cannot reach it).
+{answer_block}"""

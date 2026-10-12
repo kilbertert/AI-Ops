@@ -8,6 +8,12 @@
 为什么用**零阶工作区**（``AgentWorkspace.create_qa``）：它的 AGENTS.md 已经写明
 「这里没有订单元数据、也没有任何订单数据可读」，正是一个只能解释数字、不能去查证据的
 回合所需要的护栏。为这一轮另写一份护栏文本会是第二份需要维护的契约。
+
+**但答案形状不同**（#700 在生产上逮到）：零阶那份护栏还写着「回答问题、末尾附提醒语、
+返回 ``text``」——这一轮照做了，于是回的是 ``{"text": …}``，而这里要的是
+``{"main_cause", "recommendation"}``。护栏与轮次自己的提示词各说各话，正是本模块
+第一段记录的同一个失败形态。``answer_contract`` 参数把形状差异交给调用方，护栏其余部分
+逐字共用。
 """
 
 from __future__ import annotations
@@ -15,7 +21,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from aiops_diagnostics.agent_workspace import AgentWorkspace
+from aiops_diagnostics.agent_workspace import NARRATIVE_ANSWER_CONTRACT, AgentWorkspace
 from aiops_diagnostics.codex_runtime import AgentRuntimeError, CodexSession, SDKCodexSession
 from aiops_diagnostics.config import AgentSettings, ProviderConfig
 from aiops_diagnostics.i18n import DEFAULT_LANGUAGE, language_name
@@ -60,10 +66,15 @@ def build_narrative_prompt(facts: dict[str, Any], *, language: str = DEFAULT_LAN
             lines.append(f"- {key}: {facts[key]}")
     lines.append("")
     lines.append(
-        "请只输出两段文字："
+        "请只输出**一个 JSON 对象**，两个字段都是字符串："
         f"`main_cause` 解释这些数字最可能的成因（不要复述数字，也不要编造未给出的数据），"
         f"`recommendation` 给出值班工程师下一步该看什么 / 做什么。"
-        f"两段都用{language_name(language)}书写，不要出现任何中文字符。"
+        f"两段都用{language_name(language)}书写。"
+        # #700: the answer *shape* is stated here in the run's own words, not only
+        # in AGENTS.md. The model answered this prompt with `main_cause：…` as
+        # plain prose twice on 41 — it had read "只输出两段文字" literally, and the
+        # workspace guardrail was not enough to make it emit an object. Same rule
+        # as the language line above: say it in the turn, not one file away.
     )
     return "\n".join(lines)
 
@@ -97,10 +108,24 @@ def run_narrative_turn(
             provider=selected_provider.name,
             key_slot=key_slot or selected_provider.resolved_key_slot(),
             language=language,
+            # The workspace's default contract says "answer the charging question
+            # and end with the reminder line" — which this turn did, returning
+            # ``{"text": …}`` that the narrative parser then refused (#700).
+            answer_contract=NARRATIVE_ANSWER_CONTRACT,
         )
         session = SDKCodexSession(workspace, agent_settings, provider=selected_provider)
     try:
-        output = session.run(build_narrative_prompt(facts, language=language))
+        # #700: the schema goes to the turn, like every other JSON turn in this
+        # runtime (``qa_rag``, the diagnosis coordinator). It was declared in this
+        # module and never passed, so the model was free to answer in prose —
+        # which is exactly what the first end-to-end run on 41 did, and the job
+        # then **hung on `running` forever**: the turn succeeded, the parse
+        # raised `AgentRuntimeError`, and the worker's `except (SourceError,
+        # ValueError)` did not catch it, so no terminal write ever happened.
+        output = session.run(
+            build_narrative_prompt(facts, language=language),
+            output_schema=ops_narrative_schema(),
+        )
         payload = _parse_narrative(output.final_response)
         if payload is None:
             raise AgentRuntimeError("operations-analysis narrative returned invalid JSON")

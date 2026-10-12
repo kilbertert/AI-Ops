@@ -31,8 +31,25 @@ METRICS_RETENTION_DAYS = 30
 #: ``routing`` is the classifier's own decision path (#392): it is not a
 #: user-visible route, but a failed decision is exactly the kind of silent
 #: breakage that went unnoticed once, so it gets a counted row of its own.
+#: ``operations_analysis`` (#697) is the operations-analysis surface's own route
+#: type — it was already the value ``_execute_operations_analysis`` /
+#: ``_execute_operations_card`` pass to ``_record_metric``. It was missing from
+#: this set, so ``MetricsStore.record`` raised ``MetricsValidationError`` inside
+#: ``_record_metric``'s ``contextlib.suppress(Exception)`` — the analysis line
+#: recorded **nothing at all**, silently, and the omission was invisible because
+#: the suppression is (correctly) there for exactly this kind of failure.
 ROUTE_TYPES = frozenset(
-    {"faq", "qa", "diagnosis", "debug", "clarification", "promo", "routing", "order_auth"}
+    {
+        "faq",
+        "qa",
+        "diagnosis",
+        "debug",
+        "clarification",
+        "promo",
+        "routing",
+        "order_auth",
+        "operations_analysis",
+    }
 )
 RETRIEVAL_STATUSES = frozenset({"", "found", "not_found", "unavailable", "limited"})
 OUTCOME_TYPES = frozenset({"completed", "failed", "cancelled", "busy"})
