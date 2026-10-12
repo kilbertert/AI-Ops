@@ -15,19 +15,22 @@ concurrency:
 
 jobs:
   verify:
-    # GitHub-hosted, NOT self-hosted. The self-hosted runner was chosen while
-    # GitHub-hosted minutes for this repository were exhausted, and it was
-    # paired with a fork gate because a persistent runner must never execute
-    # untrusted pull-request code. The repository is public now, so standard
-    # GitHub-hosted runners cost nothing and the gate can go: GitHub counts a
-    # skipped required job as a success, so a gated job silently satisfies the
-    # branch Ruleset for every fork pull request.
+    # 2026-10-12 起住自托管 runner：账号被判 `locked due to a billing issue` 时，
+    # GitHub **托管**作业一个都起不来（公开仓库也停），而这条是 Ruleset 的必需检查 ——
+    # 结果是**每个 PR 都合不了**，不只是不受信任的那些。
     #
-    # The agent-*.yml and architecture-review.yml workflows stay on the
-    # self-hosted runner: they need its persistent filesystem, AGENT_PAT and the
-    # controller/candidate/delivery isolation, and .sandcastle/policy-check.mjs
-    # statically locks their owner-only same-repository gate.
-    runs-on: ubuntu-latest
+    # 🔴 回自托管等于把当初撤掉的那道门重新装上：**持久 runner 会执行 PR 里的代码**。
+    # 当初迁到 `ubuntu-latest` 的理由正是「公开仓库的托管分钟免费，于是那道 fork 门可以撤」；
+    # 这条理由在账号被锁时**不成立**（`locked` 是账号级开关，与仓库可见性无关）。
+    #
+    # 当前的风险边界是**量出来的**（切换当天实测：`forks_count=0`，历史 PR 全部来自 owner）：
+    #   gh api repos/kilbertert/AI-Ops --jq .forks_count
+    # 复核命令与回退条件同在 `afk-policy.yml`；托管作业恢复后应改回 `ubuntu-latest`。
+    #
+    # 其余 agent-*.yml / architecture-review.yml **本来就在**自托管上：它们要那个持久
+    # 文件系统、AGENT_PAT 与 controller/candidate/delivery 隔离，且
+    # `.sandcastle/policy-check.mjs` 静态锁死了它们「仅同仓」的门。
+    runs-on: [self-hosted, AI-Ops]
     timeout-minutes: 20
     steps:
       - name: Check out repository
@@ -35,10 +38,20 @@ jobs:
         with:
           persist-credentials: false
 
+      # `enable-cache: false` **因为 runner 是持久的**：该 action 的收尾步骤会 prune
+      # 它自己的缓存目录，而在这个宿主上那一步会挂住 —— 真实步骤（依赖、lint、完整
+      # 测试、compileall、uv pip check）全绿之后，任务再卡五分钟并以 **failure** 收场，
+      # 把一次通过的套件报成红的，从而关掉必需检查。
+      #
+      # 缓存目录是 `/home/claude/.cache/uv`（开发主机的缓存），而这条 job 在被计费锁
+      # 逼回来之前一直住 `ubuntu-latest`，在那里本来也没有跨运行收益。
+      # 要恢复缓存：先用 `${{ runner.temp }}` 划一个运行域内的目录，**并先验证收尾步骤
+      # 能跑完**再信它。（`package.yml` 仍是 `enable-cache: true`：它只在 `v*` tag 与
+      # 手动触发上跑，在那里挂住关不掉任何必需检查。）
       - name: Install uv
         uses: astral-sh/setup-uv@bd01e18f51369d5a26f1651c3cb451d3417e3bba # v6.3.1
         with:
-          enable-cache: true
+          enable-cache: false
           python-version: "3.13"
 
       - name: Install locked dependencies

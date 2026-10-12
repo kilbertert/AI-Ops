@@ -12,7 +12,16 @@ permissions:
 jobs:
   workflows:
     name: Workflow policy
-    runs-on: ubuntu-latest
+    # 同时见 `ci.yml` 的说明：这条与 `verify` 是一对**必需检查**，账号计费锁会让
+    # 托管作业一个都起不来 —— 那是把默认分支对**所有人**关上，不是只对不受信任的 PR。
+    #
+    # 🔴 **这是一条回退，不是常态**：本文件检出的正是 PR 的 `head.sha`，所以在自托管
+    # runner 上它会被贡献者改写后再执行。它的安全性完全依赖**仓库里没有外部贡献者**：
+    #   gh api repos/kilbertert/AI-Ops --jq .forks_count      # 切换当天 = 0
+    #   gh run list --workflow=ci.yml --limit 1 --json conclusion
+    # 一旦能起托管作业，**改回 `ubuntu-latest`**；一旦出现非 owner 的 PR，先装回门。
+    # 用显式标签集而不是裸 `self-hosted`：后者会匹配账号里任何自托管 runner。
+    runs-on: [self-hosted, AI-Ops]
     timeout-minutes: 5
     steps:
       - name: Check out repository
