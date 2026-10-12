@@ -9,7 +9,7 @@ import platform
 import re
 import secrets
 from contextlib import asynccontextmanager
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
@@ -129,6 +129,7 @@ from aiops_diagnostics.scope_context import SCOPE_TYPE_ORGAN, ScopeContext, Scop
 from aiops_diagnostics.shortcut_lifecycle import (
     BANNER_KIND,
     BUTTON_KIND,
+    OPERATIONS_REVIEW_CODE,
     SHORTCUT_MANAGE_SCOPE,
     TENANT_SCOPE,
     ShortcutConflict,
@@ -1044,6 +1045,27 @@ def create_gateway_app(
                 decision,
                 code=CLARIFY_LANGUAGE_UNROUTABLE,
                 question=payload.question,
+                language=language,
+            )
+
+        # Route 0: the operations-review shortcut → an aggregation job.
+        #
+        # It sits AHEAD of Route 1 on purpose. A clicked action is the most
+        # explicit signal a request carries, and this branch is the only thing
+        # the action means; letting an order in the sentence or the
+        # conversation's active order claim it first would answer a *different
+        # question* than the button asked.
+        #
+        # The window is the SERVER's, not the client's (see
+        # ``OPERATIONS_REVIEW_WINDOW_HOURS``): a window is a 口径, and a 口径
+        # each client invents is one per client. Callers who need to choose one
+        # keep using ``POST /v1/standard/analyses``, which takes it explicitly.
+        if payload.shortcut_code == OPERATIONS_REVIEW_CODE and shortcut is not None:
+            return _start_operations_review(
+                context,
+                caller,
+                decision,
+                payload,
                 language=language,
             )
 
@@ -3696,6 +3718,60 @@ def _shortcut_list_language(shortcuts: Any, requested: str) -> str:
         return requested
     served = {item.served_language(requested) for item in shortcuts}
     return served.pop() if len(served) == 1 else DEFAULT_LANGUAGE
+
+
+#: How far back a *clicked* operations-review action looks. The server owns
+#: this number because a window is a 口径: if the frontend picks it, there is
+#: one definition per client and two clients can disagree about the same card.
+#: Callers that must choose a window use ``POST /v1/standard/analyses``, which
+#: takes it explicitly.
+#:
+#: 24 hours is a **engineering default, not a business calibration** — nothing
+#: in the repo has ever defined a review window, and changing it is this line.
+OPERATIONS_REVIEW_WINDOW_HOURS = 24
+
+
+def _start_operations_review(
+    context: Any,
+    caller: ScopeContext,
+    decision: Any,
+    payload: AssistantQuestionRequest,
+    *,
+    language: str,
+) -> JSONResponse:
+    """Start the operations-review card the operator clicked, and answer 202.
+
+    The body mirrors the ``type: "diagnosis"`` shape (an id + the polled
+    window) rather than inventing a second convention: the client polls the
+    same analysis surface it would have used anyway, and this action adds no
+    new contract — only a way to reach an existing one.
+
+    ``site_ids=None`` means "the caller's whole resolved site set", the same
+    convention ``POST /v1/standard/analyses`` uses: the worker intersects it
+    with the caller's live scope, so a click can never read wider than the
+    caller may see.
+    """
+    now = datetime.now(UTC)
+    window_start = now - timedelta(hours=OPERATIONS_REVIEW_WINDOW_HOURS)
+    try:
+        job = context.runtime.start_operations_analysis(
+            caller,
+            site_ids=None,
+            window_start=window_start.isoformat(),
+            window_end=now.isoformat(),
+            language=language,
+        )
+    except (ValueError, RuntimeError) as exc:
+        raise _runtime_unavailable("ANALYSIS_UNAVAILABLE", "analysis unavailable", exc) from exc
+    base = _analysis_job_response(job, language)
+    return JSONResponse(
+        status_code=status.HTTP_202_ACCEPTED,
+        content={
+            **base,
+            "type": "analysis",
+            "shortcut_code": OPERATIONS_REVIEW_CODE,
+        },
+    )
 
 
 def _analysis_job_response(job: dict[str, Any], language: str) -> dict[str, Any]:

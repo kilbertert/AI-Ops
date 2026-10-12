@@ -175,7 +175,8 @@ AI-Ops 到 #628 为止一律走运营商分支，于是顶层账号得到空站�
 `docs/validation.md` 与 [frontend-operator-handoff.md](frontend-operator-handoff.md)
 写的「管家端入口与订单运营商级授权已在 41 端到端验收通过」，需要收窄：
 
-- **仍然成立**：运营商站点范围的判定与 fail closed、`operator` 动作列表（2 条）、
+- **仍然成立**：运营商站点范围的判定与 fail closed、`operator` 动作列表（当时 2 条；
+  `#721` 起为 3 条，见 `current-delivery-state.md`）、
   显式 `operator` 的订单检测路径、入口判据、会话按入口隔离。
 - **需要更正**：验收用的是**代造的会话行**（在租户内挑了一条裸 uuid 的会话记录并
   直接发它），**不是一次管家端真实登录**。管家端 App 的登录链路

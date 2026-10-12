@@ -121,16 +121,20 @@ def test_the_two_entries_share_one_definition_of_the_execution_fields() -> None:
     assert operator["smart_diagnosis"]["labels"]["zh"] == "订单检测"
 
 
-def test_operator_entry_holds_the_two_actions_and_nothing_else() -> None:
-    """PRD #427：operator 内容域的两个动作复用既有 code，且只此两个。
+def test_operator_entry_holds_the_three_actions_and_nothing_else() -> None:
+    """operator 内容域的动作复用既有 code，且只此三个（#427 的两个 + #721 的运维巡检）。
 
     「订单检测」是 `smart_diagnosis`：`requires_order` 为真（靠订单守卫弹澄清），
     **不能**绑智能体版本——生命周期校验只允许宣传类意图绑定，绑了连草稿都存不进去。
-    「客户案例」是 `case_exploration`。跳转动作不进助手入口，因此管家端没有第三个动作。
+    「客户案例」是 `case_exploration`。跳转动作不进助手入口。
+
+    「运维巡检」是 #721 新加的那一个：`requires_order` 为假（它问的是站点集合 + 时间窗，
+    不是某一张单），`intent` 用 `knowledge` 而**不是**新意图——意图是分类器也能从自由文本
+    产出的东西，给它一个自己的意图等于让一句话也能路由进来。
     """
     specs = dict(_BUNDLED_SHORTCUTS)["operator"]
 
-    assert set(specs) == {"smart_diagnosis", "case_exploration"}
+    assert set(specs) == {"smart_diagnosis", "case_exploration", "operations_review"}
     order = specs["smart_diagnosis"]
     assert order["intent"] == "order_issue"
     assert order["requires_order"] is True
@@ -144,10 +148,14 @@ def test_operator_entry_holds_the_two_actions_and_nothing_else() -> None:
     assert case.get("jump_path") is None
 
 
-def test_operator_entry_lists_both_actions_after_the_publish(
+def test_operator_entry_lists_all_three_actions_after_the_publish(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """发布后，`operator` 入口列出「订单检测」与「客户案例」。"""
+    """发布后，`operator` 入口列出「客户案例」「订单检测」「运维巡检」。
+
+    排序按 `sort_order`：案例 10 → 订单检测 20 → 运维巡检 30。第三条是 #721 加的，
+    它排最后是刻意的 —— 巡检是**周期性**动作，不像前两条是围绕当前这一单/这一次对话。
+    """
     client, _ = _app(tmp_path, monkeypatch)
 
     listed = client.get("/v1/shortcuts", headers=_OPERATOR_HEADERS)
@@ -155,7 +163,11 @@ def test_operator_entry_lists_both_actions_after_the_publish(
     assert listed.status_code == 200, listed.text
     body = listed.json()
     assert body["type"] == "shortcut_list"
-    assert [item["code"] for item in body["shortcuts"]] == ["case_exploration", "smart_diagnosis"]
+    assert [item["code"] for item in body["shortcuts"]] == [
+        "case_exploration",
+        "smart_diagnosis",
+        "operations_review",
+    ]
     assert all(item["target_agent_version"] is None for item in body["shortcuts"])
     smart = next(item for item in body["shortcuts"] if item["code"] == "smart_diagnosis")
     assert smart["requires_order"] is True
@@ -164,6 +176,7 @@ def test_operator_entry_lists_both_actions_after_the_publish(
     assert {item["code"]: item["label"] for item in body["shortcuts"]} == {
         "case_exploration": "客户案例",
         "smart_diagnosis": "订单检测",
+        "operations_review": "运维巡检",
     }
     # 每个受支持语言都拿到自己的文案，而不是悄悄回落到 zh（41 live, 2026-09-18
     # 的语言缺口就是这样 invisible 的：请求照旧 200，只是按钮变成了中文）。
@@ -171,6 +184,7 @@ def test_operator_entry_lists_both_actions_after_the_publish(
     assert {item["code"]: item["label"] for item in english["shortcuts"]} == {
         "case_exploration": "Customer Cases",
         "smart_diagnosis": "Order Diagnosis",
+        "operations_review": "Operations Review",
     }
 
 
@@ -397,3 +411,105 @@ def test_clicked_customer_cases_report_the_missing_library_not_an_empty_one(
     text = result["blocks"][0]["text"]
     assert "未检索到匹配的宣传资料" not in text
     assert "不可用" in text
+
+
+# --- 3. 「运维巡检」：点击 → 一张跨订单的运维卡（#721） -------------------------
+
+
+def test_the_operator_entry_lists_the_operations_review_action(tmp_path: Path, monkeypatch) -> None:
+    """管家的可用动作里有「运维巡检」，且它**不需要订单**。"""
+    client, _ = _app(tmp_path, monkeypatch)
+    body = client.get("/v1/shortcuts", headers=_OPERATOR_HEADERS).json()
+
+    codes = [item["code"] for item in body["shortcuts"]]
+    assert "operations_review" in codes, codes
+    review = next(item for item in body["shortcuts"] if item["code"] == "operations_review")
+    # 「不需要订单」是这张卡与「订单检测」的根本区别：它问的是
+    # 「这一组站点这一段区间整体如何」，不是某一张单。
+    assert review["requires_order"] is False
+    assert review["label"] == "运维巡检"
+
+
+def test_the_consumer_entry_does_not_see_the_operations_review_action(tmp_path: Path, monkeypatch) -> None:
+    """客户端入口看不到它 —— 判据是**列出有效动作**，不是「代码里有没有那一行」。"""
+    client, _ = _app(tmp_path, monkeypatch, published_entries=("consumer",))
+    body = client.get("/v1/shortcuts", headers=_CONSUMER_HEADERS).json()
+
+    codes = [item["code"] for item in body["shortcuts"]]
+    assert "operations_review" not in codes, codes
+
+
+def test_clicking_operations_review_starts_an_analysis_job_not_a_diagnosis(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """点它起的是**分析**作业，且**窗口由服务端决定**。
+
+    断言三件事，缺一条都可能是错的实现：
+    ① 起的是分析作业（不是诊断）；
+    ② `site_ids=None` —— 「调用者可见的全部站点」，由 worker 与实时 scope 求交；
+    ③ 窗口是服务端给的 `OPERATIONS_REVIEW_WINDOW_HOURS`，且**长度正确**、
+        `window_end` 贴近请求时刻。判据用**长度**而不是字面值，因为字面值会是
+        「测试写死了今天的日期」那种明天就烂的断言。
+    """
+    from datetime import datetime
+
+    from aiops_diagnostics.gateway_api import OPERATIONS_REVIEW_WINDOW_HOURS
+
+    client, runtime = _app(tmp_path, monkeypatch)
+    response = client.post(
+        "/v1/assistant/questions",
+        headers=_OPERATOR_HEADERS,
+        json={"question": "帮我看一下最近的运维巡检", "shortcut_code": "operations_review"},
+    )
+
+    assert response.status_code == 202, response.text
+    body = response.json()
+    assert body["type"] == "analysis", body
+    assert body["analysis_id"].startswith("an_"), body
+    assert runtime.diagnoses == [], "点击运维巡检不得起一张订单诊断"
+
+    job = runtime.analyses[-1]
+    assert job["site_ids"] is None, job
+    start = datetime.fromisoformat(job["window_start"])
+    end = datetime.fromisoformat(job["window_end"])
+    assert (end - start).total_seconds() == OPERATIONS_REVIEW_WINDOW_HOURS * 3600, job
+    assert abs((datetime.now(start.tzinfo) - end).total_seconds()) < 120, job
+
+
+def test_a_clicked_operations_review_is_not_hijacked_by_an_order_in_the_sentence(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """问句里出现订单号也不得把这张卡改成一次订单诊断。
+
+    点击是最明确的意图信号；让 Route 1 先认领它，等于回答了**按钮没问的那个问题**。
+    """
+    client, runtime = _app(tmp_path, monkeypatch)
+    response = client.post(
+        "/v1/assistant/questions",
+        headers=_OPERATOR_HEADERS,
+        json={
+            "question": f"帮我看一下最近的运维巡检（{ORDER_INSIDE}）",
+            "shortcut_code": "operations_review",
+        },
+    )
+
+    assert response.status_code == 202, response.text
+    assert response.json()["type"] == "analysis", response.json()
+    assert runtime.diagnoses == [], "订单号不得把运维巡检变成订单诊断"
+
+
+def test_operations_review_requires_a_published_action(tmp_path: Path, monkeypatch) -> None:
+    """草稿行的 `shortcut_code` 不生效 —— 种子是草稿，发布才是运营动作。
+
+    同一条规矩适用于入口其余动作：未发布时点击**不能**起作业。
+    """
+    client, runtime = _app(tmp_path, monkeypatch, published_entries=())
+    response = client.post(
+        "/v1/assistant/questions",
+        headers=_OPERATOR_HEADERS,
+        json={"question": "帮我看一下最近的运维巡检", "shortcut_code": "operations_review"},
+    )
+
+    assert response.status_code == 202
+    assert response.json()["type"] != "analysis", response.json()
+    assert getattr(runtime, "analyses", []) == [], "未发布的动作不得起分析作业"

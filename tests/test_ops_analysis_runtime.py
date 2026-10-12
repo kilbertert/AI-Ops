@@ -35,6 +35,9 @@ TENANT = "T-1"
 WINDOW = ("2026-10-01T00:00:00+00:00", "2026-10-02T00:00:00+00:00")
 SITE = "S-1"
 
+#: What the aggregate was called with, per test. Reset in ``_runtime``.
+_SEEN_SITES: list[tuple[str, ...] | None] = []
+
 
 class _FakeCursor:
     def execute(self, sql: str, params: Any = None) -> None:
@@ -55,12 +58,17 @@ class _FakeMySql:
     所以那条有数据才走到的分支从来没被跑到。
     """
 
-    def count_devices(self, sites: tuple[str, ...]) -> int:
+    def count_devices(self, sites: tuple[str, ...] | None) -> int:
         del sites
         return 1
 
-    def aggregate_order_statuses(self, sites: tuple[str, ...], start: str, end: str) -> dict[str, Any]:
-        del sites, start, end
+    def aggregate_order_statuses(self, sites: tuple[str, ...] | None, start: str, end: str) -> dict[str, Any]:
+        #: Recorded, not `del`'d: "did the aggregate get asked to run at all, and
+        #: with what site narrowing" is exactly what the whole-tenant regression
+        #: is about — a card that never reaches this line still terminates, just
+        #: with the wrong answer.
+        del start, end
+        _SEEN_SITES.append(sites)
         return {"total": 10, "abnormal_ended": 2, "normal_ended": 8, "top_sites": ((SITE, 2),)}
 
     def aggregate_offline_incidents(self, sites: tuple[str, ...], start: str, end: str) -> dict[str, Any]:
@@ -93,6 +101,23 @@ def _scope() -> ScopeContext:
     )
 
 
+def _tenant_wide_scope() -> ScopeContext:
+    """A caller whose range is the **whole tenant** — ``resolve_query_scope`` gives
+    it ``site_ids=None``. This is the 管家 account the surface exists for, and the
+    one the review of #721 proved never got an answer.
+    """
+    subject = SubjectRecord(b_user_id="B-1", c_user_id="C-1", tenant_id=TENANT)
+    return ScopeContext.build(
+        caller=subject,
+        subject=subject,
+        delegated=False,
+        effective_tenant_id=TENANT,
+        data_scope=DataScope(type="all"),
+        roles=frozenset(),
+        permissions=frozenset({"aiops:diagnoses:write"}),
+    )
+
+
 def _runtime(tmp_path: Path, monkeypatch) -> tuple[GatewayRuntime, GatewayStore]:
     gateway_settings = GatewayServerSettings(
         data_home=tmp_path,
@@ -108,6 +133,7 @@ def _runtime(tmp_path: Path, monkeypatch) -> tuple[GatewayRuntime, GatewayStore]
         "aiops_diagnostics.gateway_runtime.scoped_live_sources",
         lambda settings, *, scope: _sources(settings, scope),
     )
+    _SEEN_SITES.clear()
     return GatewayRuntime(store, gateway_settings, settings), store
 
 
@@ -563,3 +589,69 @@ def test_a_half_narrative_is_not_a_narrative_either(tmp_path: Path, monkeypatch)
 
     assert current["status"] == "failed", current
     assert current["error_code"] == "ANALYSIS_FAILED", current
+
+
+def test_the_whole_tenant_scope_is_no_narrowing_not_an_empty_one() -> None:
+    """范围收敛的三值真值表（评审在 #721 上逮到的整条错路）。
+
+    ``site_ids=None`` 在这条线上是**规范化谓词**，不是"没有范围"：它表示
+    「租户内不限站点」，聚合层据此**不发**站点条件、只下推租户谓词。
+    ``_intersect_sites`` 第一版把「两侧都是 ``None``」写成 ``()`` —— 而 ``()`` 在
+    下游是「交集为空、什么都别读」，于是：
+
+    * 失败率卡：**全租户账号恒得 ``SCOPE_EMPTY``**，`total=0`，一笔订单都不统计；
+    * 三张卡（离线 / 故障码 / 支付）：走 ``_empty_card_result``，
+      读者的「本窗无事发生」实际是「我们根本没查」。
+
+    **这张表就是这个缺陷**：它只对一种账号出错（范围最宽的那个，也恰恰是功能为之
+    存在的那个），而本文件此前每一处都在用 ``self`` 范围 + 显式站点集，
+    两侧都非 ``None`` —— 那条路径一直是好的。加一条"整租户"的用例不是补充覆盖，
+    是唯一能照到这个账号的位置。
+    """
+    from aiops_diagnostics.gateway_runtime import _intersect_sites
+
+    assert _intersect_sites(None, None) is None, "整租户 = 不收窄，不是空集合"
+    assert _intersect_sites(None, ("S-1", "S-2")) == ("S-1", "S-2")
+    assert _intersect_sites(("S-1",), None) == ("S-1",)
+    assert _intersect_sites(("S-1",), ("S-2",)) == (), "两侧都有值且不相交 = 真的空"
+    assert _intersect_sites(("S-1", "S-2"), ("S-2", "S-1")) == ("S-1", "S-2")
+
+
+def test_the_whole_tenant_caller_actually_gets_its_orders_counted(tmp_path: Path, monkeypatch) -> None:
+    """整租户账号走完一整个作业：聚合**被调用**，且拿到的是「不收窄」。
+
+    上一条钉住判据本身，这一条钉住它**接到哪儿**：真值表对了但接线处仍写着
+    ``not effective_sites`` 的话，整租户账号照旧短路。两条一起才是一条能被证伪的修复。
+    """
+    runtime, store = _runtime(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "aiops_diagnostics.ops_analysis_narrative.run_narrative_turn",
+        lambda *a, **k: {"main_cause": "成因", "recommendation": "建议"},
+    )
+    try:
+        created = runtime.start_operations_analysis(
+            _tenant_wide_scope(),
+            site_ids=None,  # 管家端巡检：站点范围交给调用者自己的范围
+            window_start=WINDOW[0],
+            window_end=WINDOW[1],
+            language="zh",
+        )
+        deadline = time.monotonic() + 5
+        current = created
+        while current["status"] not in {"completed", "failed", "inconclusive"}:
+            assert time.monotonic() < deadline, current
+            time.sleep(0.01)
+            current = store.get_standard_diagnosis(
+                created["diagnosis_id"], _tenant_wide_scope().scope_fingerprint
+            )
+    finally:
+        runtime.shutdown()
+
+    assert current["status"] == "completed", current
+    result = current.get("result") or {}
+    assert result.get("reason_code") is None, result
+    assert result.get("counts", {}).get("total") == 10, result
+    assert result.get("failure_rate") == 0.2, result
+    # The decisive assertion: the aggregate ran, and it was asked for *no site
+    # narrowing* — not for the empty set, which returns before any SQL.
+    assert _SEEN_SITES == [None], _SEEN_SITES
