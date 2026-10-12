@@ -459,3 +459,107 @@ def test_a_locked_database_ends_the_job_instead_of_leaving_it_running(tmp_path: 
     # result it could not store.
     assert status == "failed", status
     assert seen[0]["error_code"] is None, "第一次收尾写是「成功」那一条，锁是在它内部抛的"
+
+
+def test_a_tool_request_turn_is_not_a_narrative(tmp_path: Path, monkeypatch) -> None:
+    """工具请求回合**不是**叙述 —— 作业必须落 ``failed``，不是静默的 ``completed``。
+
+    #700 在 41 上逮到：支付卡的叙述轮回了 ``{"kind": "tool_requests", …}``
+    （那一轮的工具调用全部因沙箱不可用失败，模型转而请求订单快照）。``_parse_narrative``
+    当时**只要解析得出一个 dict 就收下**，于是 ``_narrative`` 按名字取两个键都取不到
+    ⇒ 两个散文字段都是 ``None``，而作业以 **``completed``** 落库、**没有原因码**。
+
+    一张说 ``completed`` 却没有 ``main_cause`` 的卡，读起来像「聚合本身没话说」——
+    那句假陈述正是 ``_narrative_for`` 的文档字符串里已经写过的、必须要失败的那种情形。
+    判据落在**作业终态**上，不是落在某个函数返回什么。
+    """
+    runtime, store = _runtime(tmp_path, monkeypatch)
+
+    # The seam is the **parser**, not the turn: stub the session so the real
+    # ``run_narrative_turn`` reads a real model answer through the real parser.
+    class _Session:
+        def run(self, prompt: str, *, output_schema: Any = None) -> CodexTurnOutput:
+            del prompt, output_schema
+            return CodexTurnOutput(
+                turn_id="t-1",
+                final_response='{"kind": "tool_requests", "tool_requests": [{"tool": "order_snapshot"}]}',
+                usage={},
+            )
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(
+        "aiops_diagnostics.ops_analysis_narrative.SDKCodexSession",
+        lambda *a, **k: _Session(),
+    )
+    try:
+        created = runtime.start_operations_card(
+            _scope(),
+            card="payment",
+            site_ids=(SITE,),
+            window_start=WINDOW[0],
+            window_end=WINDOW[1],
+            language="zh",
+        )
+        aid = created["diagnosis_id"]
+        deadline = time.monotonic() + 5
+        current = created
+        while current["status"] not in {"completed", "failed", "inconclusive"}:
+            assert time.monotonic() < deadline, current
+            time.sleep(0.01)
+            current = store.get_standard_diagnosis(aid, _scope().scope_fingerprint)
+    finally:
+        runtime.shutdown()
+
+    assert current["status"] == "failed", current
+    assert current["error_code"] == "ANALYSIS_FAILED", current
+
+
+def test_a_half_narrative_is_not_a_narrative_either(tmp_path: Path, monkeypatch) -> None:
+    """只带回**一个**散文字段的回包同样不算叙述（评审在 #718 上逮到的）。
+
+    ``any(...)`` 的写法会让「只有 recommendation」过门，装配器把 ``main_cause`` 留成
+    ``None``，作业照样 ``completed`` —— 与整份工具请求被当成叙述是同一类假陈述，
+    只是少一个键而不是少两个。``OPS_NARRATIVE_SCHEMA`` 里两个字段都是 required，
+    所以这条要求的正是声明过的东西。
+    """
+    runtime, store = _runtime(tmp_path, monkeypatch)
+
+    class _Session:
+        def run(self, prompt: str, *, output_schema: Any = None) -> CodexTurnOutput:
+            del prompt, output_schema
+            return CodexTurnOutput(
+                turn_id="t-1",
+                final_response='{"recommendation": "先看站点 S-1"}',
+                usage={},
+            )
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(
+        "aiops_diagnostics.ops_analysis_narrative.SDKCodexSession",
+        lambda *a, **k: _Session(),
+    )
+    try:
+        created = runtime.start_operations_card(
+            _scope(),
+            card="payment",
+            site_ids=(SITE,),
+            window_start=WINDOW[0],
+            window_end=WINDOW[1],
+            language="zh",
+        )
+        aid = created["diagnosis_id"]
+        deadline = time.monotonic() + 5
+        current = created
+        while current["status"] not in {"completed", "failed", "inconclusive"}:
+            assert time.monotonic() < deadline, current
+            time.sleep(0.01)
+            current = store.get_standard_diagnosis(aid, _scope().scope_fingerprint)
+    finally:
+        runtime.shutdown()
+
+    assert current["status"] == "failed", current
+    assert current["error_code"] == "ANALYSIS_FAILED", current

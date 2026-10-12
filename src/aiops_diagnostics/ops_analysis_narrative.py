@@ -189,10 +189,40 @@ def _parse_narrative(raw: str) -> dict[str, Any] | None:
     upstream). None of that tolerance decides what the narrative *says* — it
     only decides whether the text is readable at all — so a shape that cannot be
     recovered is a failure rather than a half-parsed answer.
+
+    **But "a dict" is not the contract.** #700 caught this on 41: ``parse_turn``
+    returned the first dict it could parse, so a ``{"kind": "tool_requests", …}``
+    turn — the diagnosis/QA turn protocol, which this workspace's prompt never
+    asks for — was accepted as a narrative, ``_narrative`` read its two keys and
+    found neither, and the job **completed with an empty explanation and no
+    reason code**. A card that says ``completed`` with no ``main_cause`` reads
+    as "the aggregate had nothing to say", which is a different and false claim;
+    the same reasoning ``_narrative_for`` already uses to fail rather than ship
+    numbers without prose.
+
+    ``_looks_like_narrative`` was written for this and was only reachable from
+    ``parse_turn``'s truncated-head repair path — a predicate that only guards
+    a fallback is not a contract. It is checked here, on the main path, so a
+    turn without the fields the assembler reads is a failure.
     """
     parsed = parse_turn(raw, openings=_NARRATIVE_OPENINGS, is_valid=_looks_like_narrative)
-    return parsed if isinstance(parsed, dict) else None
+    if not isinstance(parsed, dict) or not _looks_like_narrative(parsed):
+        return None
+    return parsed
 
 
 def _looks_like_narrative(payload: Any) -> bool:
-    return isinstance(payload, dict) and any(key in payload for key in ("main_cause", "recommendation"))
+    """**两个**散文字段都在、都是非空字符串 —— 就是 schema 声明的那两个。
+
+    ``any(...)`` 是不够的（评审在 #718 上逮到）：只带回 ``recommendation`` 的回包
+    同样能过，装配器把 ``main_cause`` 留成 ``None``，作业仍然 ``completed`` ——
+    与「一份工具请求被当成叙述」是**同一类假陈述**，只是少一个键而不是少两个。
+
+    ``OPS_NARRATIVE_SCHEMA`` 这个结构里两个字段都是 ``required``，所以这里要求的
+    正是声明过的东西，不是新加的门槛。
+    """
+    if not isinstance(payload, dict):
+        return False
+    return all(
+        isinstance(payload.get(key), str) and payload[key].strip() for key in ("main_cause", "recommendation")
+    )

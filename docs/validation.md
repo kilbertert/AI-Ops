@@ -70,8 +70,11 @@ paid_net: 12 / unpaid: 1 / refund_share: 0.7447`），模型也**回了**——
 报 `completed`。`failure_rate` 恒为 `null` 那半**是**设计（见 `build_payment_contract`
 的文档字符串），两件事必须分开记。
 
-**待修**（未含在本 PR 内，另立）：`_parse_narrative` 应当**要求**那两个键之一存在，
-否则抛 `AgentRuntimeError` —— 那样这条会如实落成 `failed`，而不是一张静默的半成品卡。
+**已修**（PR #718）：`_parse_narrative` 现在**要求 schema 声明的那两个键都在、且都是非空
+字符串** —— 不满足就抛 `AgentRuntimeError`，这条如实落成 `failed / ANALYSIS_FAILED`，
+而不是一张静默的半成品卡。评审在 #718 上又往前推了一步：只带回**一个**字段
+（如只有 `recommendation`）同样要拒 —— `any(...)` 与「整份工具请求」是同一类假陈述，
+只是少一个键而不是少两个。两条判据都断在**作业终态**上，各做过突变复验。
 
 ### 四、这一轮之前的两处修复（都在同一晚，已合并）
 
