@@ -7,8 +7,11 @@ change routing semantics, or reach the incident manifest (#200 decision).
 
 from __future__ import annotations
 
+import logging
 import re
 from dataclasses import dataclass
+
+_LOGGER = logging.getLogger("aiops.i18n")
 
 
 @dataclass(frozen=True, slots=True)
@@ -903,14 +906,51 @@ def language_name(language: str) -> str:
     return LANGUAGE_NAMES.get(language, LANGUAGE_NAMES[DEFAULT_LANGUAGE])
 
 
+#: Chinese regions whose DEFAULT script is Traditional, not Simplified.
+#:
+#: This is CLDR's ``likelySubtags`` — the standard that answers "what script is
+#: this region's Chinese written in" — and it is not a guess: `zh-TW`, `zh-HK`
+#: and `zh-MO` are Traditional by default, while `zh-CN`/`zh-SG` are Simplified.
+#:
+#: These three are the reason the region-fold rule below is not unconditional.
+#: Folding them to `zh` answers a Traditional request in Simplified while the
+#: response still reports the request's own tag — the exact silent script
+#: collapse this module already fought once (#531, for the explicit `zh-Hant`
+#: spelling). The earlier version only kept a script that was *written out*,
+#: so the traditional-region *shorthand* fell straight through.
+_TRADITIONAL_CHINESE_REGIONS = frozenset({"tw", "hk", "mo"})
+
+#: Tags whose word is not a BCP 47 tag at all, but which clients do send.
+#:
+#: The company platform's 语言配置 table is the authority for what its own
+#: clients put in this header, and two of its nine rows are English *names*:
+#: `portuguese` and `spanish`. Neither is a language tag — an unregistered
+#: primary subtag can never match the inventory, so both fell back to Chinese
+#: while the response reported `zh`, i.e. a Portuguese reader got Chinese and
+#: could not tell whether the setting had taken effect (2026-10-12, 41 live).
+#:
+#: Kept as an explicit table rather than a fuzzy match: these are exactly the
+#: values a real client sends, and a guess about an unknown word would silently
+#: answer in a language nobody asked for. An unmapped unknown still falls back
+#: — but now it is countable (see `resolve_language`).
+_KNOWN_UNREGISTERED_TAGS = {"portuguese": "pt", "spanish": "es"}
+
+
 def _declared_tag(tag: str) -> str:
     """Fold a header tag onto a DECLARED language tag.
 
+    Three transforms, each undoing a distinct silent collapse:
+
+    1. **An unregistered word that clients actually send** (`portuguese`) is
+       mapped to its language. Not a tag, so nothing standard answers it.
+    2. **A Chinese region decides the script** (`zh-HK` → `zh-Hant`) per CLDR
+       ``likelySubtags``. Dropping the region would answer in Simplified.
+    3. Everything else folds by dropping subtags — a written-out script first
+       (`zh-Hant-TW` → `zh-Hant`), then the base tag (`en-GB` → `en`).
+
     `zh-Hant` must survive as itself: a different script of the same language.
     Collapsing it to `zh` was one of the two places a Traditional request
-    silently became Simplified. Every other region/script subtag still folds —
-    the fold is skipped only when the whole tag is one we declare, so `en-GB`
-    stays `en`.
+    silently became Simplified.
     """
     # Case-insensitively: BCP 47 tags are case-insensitive and the header is
     # lowercased before it gets here, while the declared tag carries its
@@ -918,18 +958,20 @@ def _declared_tag(tag: str) -> str:
     by_folded = {declared.lower(): declared for declared in SUPPORTED_LANGUAGES}
     if tag in by_folded:
         return by_folded[tag]
-    # A REGION subtag is dropped; a SCRIPT subtag is kept. `zh-Hant-TW` is
-    # Traditional as written in Taiwan, so folding it to `zh` answers in
-    # Simplified — the same silent script collapse this function exists to stop,
-    # one subtag further out. BCP 47 fixes the order as `language-script-region`,
-    # so the script is the second subtag when one is present (a script subtag is
-    # exactly four letters; a region is two or three). It is checked against the
-    # inventory rather than assumed, so an unknown script still folds.
+    mapped = _KNOWN_UNREGISTERED_TAGS.get(tag)
+    if mapped is not None:
+        return mapped
     parts = tag.split("-")
-    if len(parts) >= 3 and len(parts[1]) == 4:
+    # BCP 47 fixes the order as `language-script-region`, so the script is the
+    # second subtag when one is present (a script subtag is exactly four
+    # letters; a region is two or three). It is checked against the inventory
+    # rather than assumed, so an unknown script still folds.
+    if len(parts) >= 2 and len(parts[1]) == 4:
         with_script = f"{parts[0]}-{parts[1]}"
         if with_script in by_folded:
             return by_folded[with_script]
+    if parts[0] == "zh" and len(parts) >= 2 and parts[1] in _TRADITIONAL_CHINESE_REGIONS:
+        return by_folded["zh-hant"]
     return parts[0]
 
 
@@ -946,6 +988,7 @@ def resolve_language(accept_language: str | None) -> str:
     if not accept_language or not accept_language.strip():
         return DEFAULT_LANGUAGE
     best: tuple[float, str] | None = None
+    unrecognized: list[str] = []
     for entry in accept_language.split(","):
         parts = [part.strip() for part in entry.split(";")]
         tag = parts[0].lower()
@@ -967,7 +1010,22 @@ def resolve_language(accept_language: str | None) -> str:
             continue
         base = _declared_tag(tag)
         if base not in SUPPORTED_LANGUAGES:
+            unrecognized.append(tag)
             continue
         if best is None or weight > best[0]:
             best = (weight, base)
-    return best[1] if best else DEFAULT_LANGUAGE
+    if best is None:
+        # Falling back is correct (the contract promises a language, never an
+        # error), but falling back in SILENCE is what let `portuguese` answer in
+        # Chinese for weeks while the response reported `zh` — a reader cannot
+        # tell "your setting was not understood" from "there is no Portuguese
+        # copy yet". The tag is a language code, not user content, so naming it
+        # costs no privacy and makes the next one of these findable in the log.
+        if unrecognized:
+            _LOGGER.info(
+                "language tag not recognized, falling back to %s: %s",
+                DEFAULT_LANGUAGE,
+                ",".join(sorted(set(unrecognized))),
+            )
+        return DEFAULT_LANGUAGE
+    return best[1]

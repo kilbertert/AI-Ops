@@ -2588,3 +2588,53 @@ Feature: 运行时登记表有一份写在仓库里的完整期望态（#696）
       Given 真实租户的 consumer 行
       When 收敛
       Then 该租户的选中版本与收敛前相同（本次为 canary-客服#v3）
+
+Feature: 客户端语言标识的跨端契约（平台语言值 / 中文地区脚本）
+  As a 使用公司平台自带语言选择的用户
+  I want 我选的每一种语言都被服务端如实认出
+  So that 我切了语言之后看到的就是那门语言，而不是被静默换成中文
+
+  # 2026-10-12：41 实测。公司平台「语言配置」页（sys_language）的 `lan` 列有 9 行，
+  # 其中 portuguese / spanish 根本不是 BCP 47 语言标签（是语言名），zh-HK 是香港。
+  # 这三个此前各静默回退一次，且响应回显 `zh` —— 用户分不出「设置没被听懂」
+  # 与「这门语言还没有文案」。
+
+  Rule: 平台的语言值原样发过来也能对上
+
+    Scenario Outline: 平台九行的每一个值都能拿到它自己的语言
+      Given AI-Ops 已部署 11 门语言的固定问答目录
+      When 以 <语言值> 作为 Accept-Language 请求 /v1/faq/recommendations
+      Then HTTP 200 且 language 字段为 <served>
+      And 条目正文确实是该语言
+
+      Examples:
+        | 语言值       | served  |
+        | zh-CN        | zh      |
+        | en           | en      |
+        | portuguese   | pt      |
+        | spanish      | es      |
+        | th           | th      |
+        | vi           | vi      |
+        | mn           | mn      |
+        | km           | km      |
+        | zh-HK        | zh-Hant |
+
+    Scenario: 中文地区决定脚本，而不是被丢掉
+      Given 客户端发送 Accept-Language: zh-TW
+      When 请求 /v1/faq/recommendations
+      Then language 字段为 zh-Hant，且题面为繁体
+      And 同一请求发 zh-CN 时 language 为 zh，题面为简体
+
+    Scenario: 写出了脚本时，脚本压过地区
+      Given 客户端发送 Accept-Language: zh-Hans-TW
+      When 请求 /v1/faq/recommendations
+      Then language 字段为 zh（脚本是权威，不是地区）
+
+  Rule: 认不出来的时候要留痕，不能只是静默换语言
+
+    Scenario: 无法识别的标签仍回退，但会记一行
+      Given 客户端发送 Accept-Language: tlh
+      When 请求 /v1/faq/recommendations
+      Then HTTP 200 且 language 字段为 zh
+      And 网关 journal 里有一条 language tag not recognized, falling back to zh: tlh
+      But 可识别的标签（如 en-US）不产生这行日志

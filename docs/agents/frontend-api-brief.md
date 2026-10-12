@@ -114,7 +114,11 @@ Content-Type: application/json                   # POST 时
 ### 2.4 语言标识（`Accept-Language`，国际化）
 
 - 前端按当前用户语言在请求头携带 `Accept-Language`（现有行为保留，如 `en`、`zh-CN`），AI-Ops 以此判断输出语言。
-- 解析规则：按 RFC 7231 取 q 值最高的受支持语言；区域/文字子标签折叠（`en-US → en`、`pt-BR → pt`）；受支持集合 `zh/en/de/fr/es/pt`；缺失、为空、`*` 通配或不受支持的语言一律回退 `zh`，同权重取先出现者。
+- 解析规则：按 RFC 7231 取 q 值最高的受支持语言；受支持集合 `zh/zh-Hant/en/de/fr/es/pt/vi/mn/th/km`（11 门）；缺失、为空、`*` 通配或不受支持的语言一律回退 `zh`，同权重取先出现者。
+- **中文地区子标签决定脚本**（2026-10-12 起，CLDR `likelySubtags`）：`zh-TW` / `zh-HK` / `zh-MO` → **`zh-Hant`**（繁体），`zh-CN` / `zh-SG` → `zh`（简体）；写出了脚本时以脚本为准（`zh-Hans-TW` → `zh`）。此前是「地区一律丢弃」，于是 `zh-HK` 被当成简体服务。
+- **客户端直接发平台「语言值」是可以的**（2026-10-12 起）：公司的语言配置表（`sys_language`）里 `Portuguese` 的值是 `portuguese`、`España` 是 `spanish`——这两个**不是 BCP 47 语言标签**，此前一律回退中文。现在它们分别映射到 `pt` / `es`。**其余值已经就是标准标签**（`zh-CN`/`en`/`th`/`vi`/`mn`/`km`），直接发即可。
+- **回落会留一条日志**：无法识别的标签仍回退 `zh`（契约不变），但会在网关 journal 记一行 `language tag not recognized, falling back to zh: <tag>`。判断「用户切了语言但没生效」时先看这行——它把「不认识这个设置」与「这门语言还没有文案」分开。
+- 其他子标签仍按文字/地区折叠：`en-US → en`、`pt-BR → pt`、`zh-Hans-CN → zh`。
 - 响应回显：FAQ 三个只读端点（recommendations/catalog/answer）与统一问答入口（faq 200、qa 202、qa 轮询、qa 列表、diagnosis 202）均带 `language` 字段，前端可据此核对生效语言。
 - FAQ 内容已按语言输出（2026-09-12 起）：recommendations 的 `title`、catalog 的条目、answer 与 faq 短路分支的 `question/answer` 会返回 `Accept-Language` 对应语言（en/de/fr/es/pt）；中文（zh）为权威回退，operator 端与缺失翻译条目保持中文。
 - 模型回答的语言注入已全链路实测（2026-09-14 起）：qa 自由提问（`Accept-Language: en` 轮询 completed，text 为英文知识库回答）与订单诊断（summary/root_cause/limitations/next_steps 英文书写、id/编号保持原样）均已在 41 公网真实会话下验证；知识库片段与证据原文保持原样；检索未命中/不可用的兜底提示同样本地化。

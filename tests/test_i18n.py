@@ -58,10 +58,51 @@ from aiops_diagnostics.i18n import (
         ("en;q=1.5", "zh"),
         ("en;q=-1", "zh"),
         ("en;q=abc, fr", "fr"),
+        # A Chinese REGION decides the script (CLDR likelySubtags). Folding
+        # these to `zh` answered a Traditional request in Simplified while the
+        # response still reported the requested tag — the same silent collapse
+        # #531 fixed for the written-out `zh-Hant`, one spelling further out.
+        ("zh-TW", "zh-Hant"),
+        ("zh-HK", "zh-Hant"),
+        ("zh-MO", "zh-Hant"),
+        # ...while the Simplified regions still fold to Simplified.
+        ("zh-CN", "zh"),
+        ("zh-SG", "zh"),
+        # An explicit script always beats what the region would imply.
+        ("zh-Hans-TW", "zh"),
+        ("zh-Hant-HK", "zh-Hant"),
+        # Not language tags at all, but the company platform's 语言配置 table
+        # publishes exactly these two words as its 语言值, and its clients pass
+        # them straight through. Both used to fall back to Chinese.
+        ("portuguese", "pt"),
+        ("spanish", "es"),
+        ("Portuguese", "pt"),
     ],
 )
 def test_resolve_language_matrix(header: Any, expected: str) -> None:
     assert resolve_language(header) == expected
+
+
+def test_an_unrecognized_tag_is_reported_before_it_falls_back(caplog: Any) -> None:
+    """Falling back is the contract; falling back in SILENCE is the defect.
+
+    `portuguese` (a platform 语言值, not a language tag) answered in Chinese for
+    days while the response reported `zh` — a reader cannot tell "your setting
+    was not understood" from "there is no Portuguese copy yet". The tag is a
+    language code rather than user content, so naming it is what makes the next
+    one of these findable instead of waiting for a bug report.
+    """
+    import logging
+
+    with caplog.at_level(logging.INFO, logger="aiops.i18n"):
+        assert resolve_language("tlh") == "zh"
+    assert any("tlh" in record.getMessage() for record in caplog.records), caplog.text
+
+    # A tag we DO understand must not be reported as unrecognized.
+    caplog.clear()
+    with caplog.at_level(logging.INFO, logger="aiops.i18n"):
+        assert resolve_language("en-US") == "en"
+    assert not caplog.records, caplog.text
 
 
 def test_the_language_inventory_is_self_consistent() -> None:
