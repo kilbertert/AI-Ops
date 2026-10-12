@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 import time
 from pathlib import Path
 from typing import Any
@@ -388,3 +389,73 @@ def test_the_narrative_prompt_carries_each_card_own_numbers() -> None:
             assert fragment in prompt, (card, fragment, prompt)
         # The failure-rate keys it used to hard-code are not what grounds these.
         assert "counts:" not in prompt, (card, prompt)
+
+
+def test_a_locked_database_ends_the_job_instead_of_leaving_it_running(tmp_path: Path, monkeypatch) -> None:
+    """**收尾写本身失败**时，作业也必须终结。
+
+    第 41 上部署后的验收里有一张故障码卡停在 ``running`` 直到过期，而进程里
+    **没有任何 traceback / 日志 / 指标**：叙述轮已经跑完，失败发生在**收尾写**上
+    （``sqlite3.OperationalError: database is locked``），而那段写在 worker 的
+    ``except`` **之外** —— 枚举异常类的写法天然覆盖不到它。
+
+    判据不依赖锁从哪来：把收尾写换成抛 ``OperationalError``，作业仍必须离开 ``running``。
+    至于它落在 ``failed`` 还是短暂 ``running``（因为兜底那一笔也可能撞同一把锁），
+    由下面两条断言分开表达——**重要的性质是「不会永远挂着」**，而写成功时它必须是
+    ``failed`` 而不是 ``completed``（那会是一句假陈述）。
+    """
+    runtime, store = _runtime(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        "aiops_diagnostics.ops_analysis_narrative.run_narrative_turn",
+        lambda *a, **k: {"main_cause": "成因", "recommendation": "建议"},
+    )
+    real_end = GatewayRuntime._end_analysis_job
+    seen: list[dict[str, Any]] = []
+
+    def recording(self: GatewayRuntime, analysis_id: str, tenant_id: str, **kwargs: Any) -> None:
+        seen.append({"result": kwargs.get("result"), "error_code": kwargs.get("error_code")})
+        return real_end(self, analysis_id, tenant_id, **kwargs)
+
+    monkeypatch.setattr(GatewayRuntime, "_end_analysis_job", recording)
+    real_update = GatewayStore.update_standard_diagnosis
+    fail_once = {"done": False}
+
+    def flaky(self: GatewayStore, diagnosis_id: str, **kwargs: Any) -> bool:
+        # The ``running`` claim succeeds; the *first* terminal write meets the lock.
+        if kwargs.get("status") in ("completed", "failed") and not fail_once["done"]:
+            fail_once["done"] = True
+            raise sqlite3.OperationalError("database is locked")
+        return real_update(self, diagnosis_id, **kwargs)
+
+    monkeypatch.setattr(GatewayStore, "update_standard_diagnosis", flaky)
+    try:
+        created = runtime.start_operations_card(
+            _scope(),
+            card="fault_code",
+            site_ids=(SITE,),
+            window_start=WINDOW[0],
+            window_end=WINDOW[1],
+            language="zh",
+        )
+        aid = created["diagnosis_id"]
+        deadline = time.monotonic() + 5
+        status = "queued"
+        while time.monotonic() < deadline:
+            time.sleep(0.01)
+            with sqlite3.connect(store.path) as connection:
+                row = connection.execute(
+                    "SELECT status FROM standard_diagnoses WHERE diagnosis_id = ?", (aid,)
+                ).fetchone()
+            status = row[0] if row else "missing"
+            if status in {"completed", "failed", "inconclusive"}:
+                break
+    finally:
+        runtime.shutdown()
+
+    # The helper was reached at all — i.e. the terminal path no longer dies in place.
+    assert seen, "收尾写没有走到兜底入口"
+    # And the job is no longer ``running``: the lock is transient, so the
+    # helper's own retry lands it. Never ``completed`` — that would claim a
+    # result it could not store.
+    assert status == "failed", status
+    assert seen[0]["error_code"] is None, "第一次收尾写是「成功」那一条，锁是在它内部抛的"
