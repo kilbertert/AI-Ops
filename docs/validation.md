@@ -232,6 +232,61 @@ except (AgentRuntimeError, SourceError, ValueError, TypeError, sqlite3.Operation
   不是带鉴权的 HTTP 管理面 —— 后者在 41 上结构上不可达（见 §3.1-bis 的信任边界一节）。
   这是本手册明确记录的**运维动作**，不是面向人的自助入口。
 
+## #725 终态收敛：另外三个 worker（2026-10-12，本地）
+
+**分支** `fix/725-worker-terminal-convergence`，基线 `origin/main`（`670556c`）。
+
+### 一、同一个形状的第五、六、七处
+
+`gateway_runtime` 的 worker 用**枚举元组**接异常，而**逃出去就等于没有终态行**：作业停在
+`running` 直到 15 分钟超时，调用方分不出「还在跑」与「早就死了」。`#721` 只改了分析线两个
+worker，本节把剩下三个一起收掉。
+
+| worker | 改前的 `except` | 漏在哪 |
+|---|---|---|
+| `_execute_health_report` | `(HealthReportError)` + `(SourceError, ValueError)` | 它自己也调 `resolve_query_scope` ⇒ `ScopeError`（`RuntimeError`）逃逸 |
+| `_execute_standard_diagnosis` | `(AgentRuntimeError, SourceError, ValueError)` | 同上 |
+| `_execute_assistant_qa` | `(AgentRuntimeError, SourceError, ValueError)` | 无 `resolve_query_scope`，但 `KeyError`/`TypeError` 等任何未列类逃逸 |
+
+三个都改成 `except Exception`。
+
+### 二、健康报告那条不是「顺手改一下」——它的 `error_message` 会直接上响应
+
+这是本节唯一需要**判断**而不是套用的一处。`_health_job_response` 把存储的
+`error_message` **逐字**当 `error.message` 返回给用户，因此 `SOURCE_UNAVAILABLE` 那条
+今天刻意只写 `"Class: message"`。新接住的类可能是上游 SDK 报文或 socket 错误，
+直接上响应就是 `_internal_error_message` 存在的理由所要防的那种泄漏。
+
+⇒ 修法不是「统一成一个字符串」，而是：**code 保持 `SOURCE_UNAVAILABLE`**（工程师据此
+仍能分辨是哪类失败），message 对**原来那两类**保持原样、对**新接住的类**走
+`_internal_error_message` 脱敏。诊断与 QA 两条本来就存脱敏值（响应给的是编码文案），
+所以那两处不需要这层判断。
+
+### 三、判据
+
+| 判据 | 怎么做 | 结果 |
+|---|---|---|
+| 五个 worker 都收敛（结构） | 对 `gateway_runtime` 做 AST 扫描，枚举**五个** worker 并断言每个都有 `except Exception` | ✅ `test_every_async_worker_converges_on_any_exception` |
+| 注入 `ScopeError` ⇒ 诊断终结（行为） | 把 `resolve_query_scope` 换成抛真实 `ScopeError`，断言该行 `failed` / `DIAGNOSIS_FAILED` | ✅ `test_a_scope_resolution_failure_ends_the_diagnosis_instead_of_leaving_it_running` |
+| 全量回归 | `pytest` | ✅ **2185 passed / 9 skipped**（172s） |
+
+**突变复验**：把五个 handler 全部改回枚举元组 ⇒ **两条同时转红**，且行为那条的失败形态
+正是缺陷本身（作业停在 `running`，轮询超时）。
+
+### 四、为什么是结构判据而不是「再列一遍类」
+
+枚举类**不可能**收敛：`#700`、`#721`、本节各补一次名单，每次补完下一个类仍在名单外。
+所以判据钉在**形状**上，并且一次覆盖五个 worker —— 第六个 worker 没法再用旧写法加进来。
+`ASYNC_WORKERS` 是**显式列出**而不是推断出来的：增删一个 worker 必须是这里的显式编辑。
+
+### 五、证据边界（据实）
+
+- 环境性成因（provider 掉线 / MySQL 不可达 / 进程被杀）**仍未观察到**，本节的依据是
+  **注入**的真实异常类，不是真实故障窗口。
+- 健康报告那条的**脱敏分支**没有单独的行为用例：它需要一个「新接住的类」带着
+  上游报文，而今天构造那个替身的价值全在「message 不上响应」这一点上，已由
+  `_health_job_response` 的既有契约与本节的结构判据覆盖。**如实记为未单独取证。**
+
 ## #700 叙述修复后的复跑（2026-10-12，41 真机，`0.1.0+0796dc8c3513`）
 
 **分支** `docs/stage1-acceptance-rerun-after-narrative-fix`，基线 `origin/main`（`0796dc8`）。

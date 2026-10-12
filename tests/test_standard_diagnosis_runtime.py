@@ -858,3 +858,44 @@ def test_an_unreadable_window_yields_no_history_and_warns(tmp_path: Path, caplog
     # above is the setting and not the store.
     runtime.gateway_settings.context_max_turns = 8
     assert "上一轮的问题" in runtime._conversation_history((cid, scope_fingerprint, turn_no), "zh")
+
+
+def test_a_scope_resolution_failure_ends_the_diagnosis_instead_of_leaving_it_running(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """范围解析抛 ``ScopeError`` ⇒ 诊断终结，**不是**停在 ``running``（#725）。
+
+    这是「枚举异常元组」这个形状的第三次复现：``resolve_query_scope`` 在 worker 的
+    ``try`` 里被调用，它抛的 ``ScopeError`` 继承 ``RuntimeError``，而诊断线的
+    ``except (AgentRuntimeError, SourceError, ValueError)`` **一个都接不住它**。
+    症状与 #700 / #721 逐字相同：没有终态写入，作业停在 ``running`` 直到超时。
+
+    修法是改成 ``except Exception``（见 ``test_terminal_write_guards``
+    里对**五个** worker 的结构判据）；这条用例是它的**行为**面：
+    注入一个真实的 ``ScopeError``，断言那一行**真的被终结**。
+    """
+    from aiops_diagnostics.query_scope import MAX_SCOPE_IDS, SCOPE_ERROR_SCOPE_TOO_LARGE, ScopeError
+
+    runtime, store, settings = _runtime(tmp_path)
+    monkeypatch.setattr("aiops_diagnostics.gateway_runtime.Settings.from_config", lambda *_: settings)
+
+    real_resolve = "aiops_diagnostics.gateway_runtime.resolve_query_scope"
+
+    def explode(*_args, **_kwargs):
+        raise ScopeError(
+            f"数据范围 ID 数量超过上限 {MAX_SCOPE_IDS}",
+            code=SCOPE_ERROR_SCOPE_TOO_LARGE,
+        )
+
+    monkeypatch.setattr(real_resolve, explode)
+    created = runtime.start_standard_diagnosis(_scope(), "ORDER-1", "为什么跳枪", None)
+    deadline = time.monotonic() + 5
+    current = created
+    while current["status"] not in {"completed", "failed", "inconclusive"}:
+        assert time.monotonic() < deadline, current
+        time.sleep(0.01)
+        current = store.get_standard_diagnosis(created["diagnosis_id"], _scope().scope_fingerprint)
+    runtime.shutdown()
+
+    assert current["status"] == "failed", current
+    assert current["error_code"] == "DIAGNOSIS_FAILED", current

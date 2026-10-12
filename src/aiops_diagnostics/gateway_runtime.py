@@ -1640,12 +1640,30 @@ class GatewayRuntime:
                 error_code=exc.code,
                 error_message=str(exc),
             )
-        except (SourceError, ValueError) as exc:
+        # `except Exception`, for the reason written out in `_execute_operations_card`
+        # (#700 → #721 → #725): an escaping exception means no terminal row at all,
+        # so the job sits on `running` until the deadline. Three passes adding one
+        # class at a time left `ScopeError` (a `RuntimeError`, raised by
+        # `resolve_query_scope` inside this very `try`) in neither list.
+        #
+        # The message keeps the old shape for the two original classes and is
+        # REDACTED for a newly-caught one. That is not cosmetic: this surface
+        # returns the stored `error_message` verbatim to the user
+        # (`_health_job_response`), so `SOURCE_UNAVAILABLE` deliberately carries
+        # only "Class: message" today. A newly-caught class can be an upstream
+        # SDK message or a socket error, and putting that on the wire is the
+        # exact leak `_internal_error_message` exists to prevent — the code
+        # stays specific so an engineer can still tell which failure it was.
+        except Exception as exc:  # noqa: BLE001 - see above: escaping here means no terminal row
             self._finish_health_job(
                 job_id,
                 status="failed",
                 error_code="SOURCE_UNAVAILABLE",
-                error_message=f"{exc.__class__.__name__}: {exc}",
+                error_message=(
+                    f"{exc.__class__.__name__}: {exc}"
+                    if isinstance(exc, (SourceError, ValueError))
+                    else _internal_error_message(exc, None)
+                ),
             )
 
     def _execute_standard_diagnosis(
@@ -1709,7 +1727,14 @@ class GatewayRuntime:
                 turn_registrar=turn_registrar,
                 methodology=methodology,
             )
-        except (AgentRuntimeError, SourceError, ValueError) as exc:
+        # `except Exception`: see `_execute_operations_card` for the full reason
+        # (#700 → #721 → #725). `resolve_query_scope` runs inside this `try` and
+        # raises `ScopeError` — a `RuntimeError` that was in none of the
+        # enumerated lists, so an oversized data scope or a missing Dis
+        # directory left the diagnosis on `running` until its deadline.
+        # `error_message` is the redacted record; the response carries the coded
+        # copy (`diagnosis_error_message`), so nothing new reaches the wire.
+        except Exception as exc:  # noqa: BLE001 - see above: escaping here means no terminal row
             ok = self.store.update_standard_diagnosis(
                 diagnosis_id,
                 status="failed",
@@ -1905,7 +1930,11 @@ class GatewayRuntime:
                 turn_registrar=turn_registrar,
                 history=history,
             )
-        except (AgentRuntimeError, SourceError, ValueError) as exc:
+        # `except Exception`: same shape as the two workers above (#725). This one
+        # never calls `resolve_query_scope`, but `KeyError`/`TypeError`/anything
+        # else unlisted escaped just as silently — and a QA job stuck on
+        # `running` is indistinguishable from one still being answered.
+        except Exception as exc:  # noqa: BLE001 - see above: escaping here means no terminal row
             if not self.store.update_assistant_question(
                 qa_id,
                 status="failed",

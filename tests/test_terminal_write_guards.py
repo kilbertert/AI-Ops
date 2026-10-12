@@ -287,3 +287,65 @@ def test_a_refused_health_write_is_logged(tmp_path, monkeypatch, caplog) -> None
     assert any("health job terminal write refused" in record.getMessage() for record in caplog.records), [
         record.getMessage() for record in caplog.records
     ]
+
+
+#: Every worker that runs one job in a thread. Listed rather than inferred, so
+#: that adding one — or deleting a worker — is a deliberate edit here.
+ASYNC_WORKERS = (
+    "_execute_health_report",
+    "_execute_standard_diagnosis",
+    "_execute_assistant_qa",
+    "_execute_operations_analysis",
+    "_execute_operations_card",
+)
+
+
+def test_every_async_worker_converges_on_any_exception() -> None:
+    """A worker that catches an enumerated list of classes does not converge.
+
+    The rule is not "the right classes are listed" — it is that **nothing a
+    worker can raise may escape it**, because escaping means no terminal row:
+    the job sits on `running` until its deadline and the caller cannot tell it
+    apart from work still in progress.
+
+    That is not hypothetical. It was reached by a different exception class
+    three separate times, each fixed by appending one name:
+
+    * `AgentRuntimeError` (a `RuntimeError`) — #700's first end-to-end run;
+    * `TypeError` from a call site that had lost an argument — #700's review;
+    * `ScopeError` (also a `RuntimeError`, raised by `resolve_query_scope`
+      **inside the very `try`**) — #721's acceptance run, in the two analysis
+      workers, and still present in the other three until #725.
+
+    Enumerating cannot converge: every pass adds one class and leaves the next
+    outside. So the pin is on the *shape* — each worker's handler must catch
+    `Exception` — and the assertion is written over all five workers at once so
+    that a sixth cannot be added the old way.
+    """
+    tree = _runtime_tree()
+    seen: dict[str, list[str]] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef) or node.name not in ASYNC_WORKERS:
+            continue
+        handlers = [
+            handler
+            for try_node in ast.walk(node)
+            if isinstance(try_node, ast.Try)
+            for handler in try_node.handlers
+        ]
+        seen[node.name] = [
+            ast.unparse(handler.type) if handler.type is not None else "bare except" for handler in handlers
+        ]
+
+    assert set(seen) == set(ASYNC_WORKERS), (
+        f"worker(s) not found in {RUNTIME}: {sorted(set(ASYNC_WORKERS) - set(seen))}"
+    )
+    offenders = {
+        name: caught
+        for name, caught in seen.items()
+        if not any(spelling in {"Exception", "BaseException"} for spelling in caught)
+    }
+    assert offenders == {}, (
+        "an escaping exception means no terminal row, and a list of classes always "
+        f"leaves the next one outside; workers without `except Exception`: {offenders}"
+    )
