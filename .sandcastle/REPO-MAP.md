@@ -55,9 +55,9 @@ no project argument. Both answer *where* something is; neither replaces reading 
 - AGENTS.md
 - CLAUDE.md
 - README.md
-- docs/ — 64 markdown file(s)
+- docs/ — 65 markdown file(s)
 - docs/adr/ — 17 markdown file(s)
-- docs/agents/ — 26 markdown file(s)
+- docs/agents/ — 27 markdown file(s)
 
 ## Tree (depth 2, first 80 lines; dependencies, build
 output and run residue omitted)
@@ -111,7 +111,7 @@ docs/
     company-platform-integration-baseline.md
     company-repo-index.md
     current-delivery-state.md
-    ... (16 more)
+    ... (17 more)
   architecture/
     ai-ops-architecture.html
     ai-ops-architecture.json
