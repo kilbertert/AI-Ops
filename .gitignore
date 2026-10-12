@@ -24,6 +24,21 @@ node_modules/
 
 # pnpm lockfiles (repo uses npm)
 pnpm-lock.yaml
+
+# `.serena/` 是**工具目录**，不是仓库内容（与 `.venv/`、`.ruff_cache/` 同性质）：
+# `project.yml` 由 serena 的 `serena project index` 生成，`project.local.yml` 与
+# `cache/` 是本机状态。它**曾被误提交**一次（有人在主 checkout 上用 `git add -A`，
+# 见 README/进度记录里那条「任务分支一律用 dev-worktree」的由来），现已移除。
+#
+# 为什么不留：`project.yml` 顶部的语言服务器清单自己写着
+# 「This list may be outdated; generated with scripts/print_language_list.py」——
+# 一份由工具重生成的配置，进仓库就是一条**会漂移的声明**，而它漂移的方式是
+# 「提交者本机装了哪些语言服务器」，与这个项目是什么无关。
+#
+# ⚠️ `.sandcastle/mcp-config.check.ts` 断言的是**沙箱镜像里有 serena**、
+# 以及 `.sandcastle/Dockerfile` 装了它 —— 那是 AFK 侧另一件事，**不**依赖本目录入库。
+# 一个新的 checkout 首次用 serena 时，它自己会生成这份配置。
+.serena/
 pnpm-workspace.yaml
 
 # Local working copies of upstream repos used as read-only references
