@@ -504,6 +504,42 @@ canary 入口），已合并的 PR #196 运行版本；请求只带前端应有�
   这是授权隔离的正确行为，不代表健康报告或诊断成功路径已通过。补验需要业务方提供该会话
   有权访问的一笔订单，不应通过伪造订单号或扩大数据范围绕过。
 
+### 3.1-bis 订单选择器的取数约束（2026-10-13，#639 查证）
+
+**这一节的存在理由**：本文件此前只写「用户订单列表由 **BFF 既有接口**提供」——**没说是哪一个**。
+前端据此挑了名字最像"用户订单"的那一个（`/charging-pile/chOrderInfo/getOrderUserPage`），
+而它**与 AI-Ops 的可见范围不同源**，于是选择器把站外订单摆到了用户面前，提交必然 `404`。
+
+**两个端点，别选错**（同一 controller，语义完全不同）：
+
+| 端点 | 报的 `user-id` 语义 | Mapper 注解 | 结果 |
+|---|---|---|---|
+| `/chOrderInfo/getOrderUserPage`（**用户端**） | **C 端** `ch_order_info.user_id` | `getOrderPage` **无注解** | 只带 `tenant-id` ⇒ **整租户**；带 B 端 id ⇒ **0 条** |
+| `/chOrderInfo/page`（**管理端**） | 按 `site_id` 范围 | `getPage` 带 `@ShopDataScope(column="site_id", realTime=true)` | 设计上按**调用者站点集合**下推 |
+
+**判据（唯一一条）**：**选择器里出现的订单号，提交后必须能被服务端接受**；
+服务端会拒的订单，不允许出现在选择器里。
+
+⚠️ **但 `/chOrderInfo/page` 今天也拿不到收窄结果** —— 实测（2026-10-13，41 公网）：
+
+| 请求 | `total` |
+|---|---|
+| 基线（无 `client-type`） | 14 |
+| `client-type: admin` | **14**（未收窄） |
+| `client-type: admin` + `shop-id: -1` | **14**（平台哨兵 ⇒ 全部） |
+| `client-type: admin` + `shop-id: <某站点>` | 0（`shop-id` 是**单站点**过滤，不是集合） |
+
+**根因（读运行中产物 + 路由表，不是读源码注释）**：`@ShopDataScope` 由 `ShopIdInterceptor` 施加，
+它 `judge()` 要求 `client-type ∈ {admin, supply-admin, tenant-app}`；而**注入这个头的是公司网关** ——
+`cloud-charging-pile` 那条路由的 `filters` 是**空数组**（其他路由如 `trade`/`php`/`das`
+都挂着 `AdminProxyHeadFilter`）⇒ **对 charging-pile 全程不注入**，注解因此从不生效。
+
+⇒ **取数换源不是改一个参数就能完成的**：要先有人把 `AdminProxyHeadFilter` 挂到 charging-pile 路由上
+（公司侧配置决定，跨团队），或者由 **BFF/Java 侧**提供一个显式施加该范围的订单列表端点。
+
+**在那之前，前端不得让用户从「整租户」列表里选单** —— 这就是 #619 那条端点语义
+（空 `user-id` 返回全租户）。选择器可以先只做「无可用订单」的空态（见 #637 的文案拆分）。
+
 ## 10. 前端真实链路诊断（2026-09-05，Pyrovolt Move 1.0.3 APK 实测）
 
 > 背景：前端反馈"都没按要求传参、最基础的推荐问题用不了"。经对 APK（`pyrovolt.move.qushiyun`，PGYer v1.0.3 build 5）逆向与服务器实测，**根因不在前端传参，在部署链路**。诊断明细见 GitHub issue《前端真实链路三断点》。
@@ -778,7 +814,7 @@ Accept-Language: zh                              # 可选，影响 label/descrip
 |---|---|
 | `code` | **稳定标识**，前端把交互行为绑到它，不要绑 `label`（文案会改）；点击时原样回传（见 D.2） |
 | `intent` | 服务端内部意图（`case_exploration`/`solution_discovery`/`order_issue`/`report_fault` 等），仅供前端区分展示形态，**不需要回传** |
-| `requires_order` | `true` → 点击后先弹**订单选择器**（用户订单列表由 BFF 既有接口提供），选完再把 `order_no`+问题提交统一入口；`false` → 直接提交 |
+| `requires_order` | `true` → 点击后先弹**订单选择器**（列表来源**必须与 AI-Ops 的可见范围同源**，**不是**任一个 BFF 订单列表端点 —— 见下方「订单选择器的取数约束」），选完再把 `order_no`+问题提交统一入口；`false` → 直接提交 |
 | `sort_order` | 按升序渲染按钮 |
 | `label` / `description` / `question_template` | 按 `Accept-Language` 本地化（缺失翻译回退中文）；`question_template` 可作为默认问题文案预填输入框 |
 | `target_agent_version` | 宣传类快捷动作绑定的已发布 agent 版本，**前端不需要理解，原样忽略**（服务端路由用；不要展示给用户）。与 `jump_path` **互斥**：跳转动作不会到达 agent，因此不允许同时绑定 |

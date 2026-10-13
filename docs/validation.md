@@ -620,6 +620,100 @@ AI-Ops 那条链**不验签、不判 `exp`**（`TRUST_PAYLOAD` 未设） ⇒
   **「上面那条推理只依赖 Nginx 自身，而 nginx 用回环与 LAN 两个地址、都不走 eth0」**，
   以及改后两条合法上游的实测。
 
+## #639 订单选择器：取数源与 AI-Ops 可见范围不同源（2026-10-13，只读查证）
+
+**分支** `docs/639-picker-source-contract`，基线 `origin/main`（`a9c9508`）。
+**本票不改应用代码、不改公司仓库**：全部为只读查证 + 契约更正。**业务验收：不适用**（无代码改动）。
+
+### 一、票里写对的与写错的
+
+**写对的**：错在**选择器的取数**，不在 AI-Ops 的拒绝。`operator` 入口的可见范围就是
+「该 B 端主体名下运营商的站点集合」，站外订单一律拒 —— **拒是对的**。
+
+**写错的一条**（本节主要更正）：票里说「**没有现成接口能给出『这个管家账号应该看到的订单』**，
+所以要新一跳」。**公司侧已经有那一跳**，只是没被挂上。
+
+### 二、两个端点的差别（同一 controller，语义不同）
+
+源码：`cloud-charging-pile` 仓 `release` 分支（本地只读克隆，2004 个 java）。
+
+| 端点 | 源码注释 | Mapper 方法 | 注解 |
+|---|---|---|---|
+| `/chOrderInfo/getOrderUserPage` | 「**用户端**订单分页」 | `ChOrderInfoMapper.getOrderPage`（:73） | **无** |
+| `/chOrderInfo/page` | 「**管理端**订单分页」 | `ChOrderInfoMapper.getPage`（:59） | **`@ShopDataScope(column = "site_id", realTime = true)`** |
+
+`@ShopDataScope` 的语义由 `qumall-common/cloud-common-data/.../datascope/shop/ShopIdInterceptor.java` 定义：
+`beforeQuery` 用 jsqlparser 改写 SQL，追加 `site_id IN (<调用者的站点集合>)`；
+集合在 `realTime=true` 时来自 `UpmsAdminFeignClient.getShops(user.getId())`（即 `GET /shopuser/getShops`）。
+
+⇒ **这正是 AI-Ops `operator_site_scope_from_shops` 在做的同一条规则**，由公司自己在 Mapper 上施加。
+**票里说"不存在"的那一跳，存在。**
+
+### 三、但它今天不生效 —— 根因在路由表，不在源码注释
+
+`ShopIdInterceptor.judge()` 的硬门（源码）：
+
+```java
+if (!StrUtil.equalsAny(clientType, "admin", "supply-admin", "tenant-app")) return false;
+if (user == null) return false;
+```
+
+⇒ 需要**两件同时成立**：`client-type ∈ {admin, supply-admin, tenant-app}`，**且**能解析出用户。
+
+**实测（2026-10-13，41，经公网 `api.mall.qushiyun.com`）**：
+
+| 请求 | `total` |
+|---|---|
+| `/chOrderInfo/page` 基线（无 `client-type`） | 14 |
+| `+ client-type: admin` | **14**（未收窄） |
+| `+ client-type: admin + shop-id: -1` | **14**（平台哨兵 ⇒ 全部） |
+| `+ client-type: admin + shop-id: <该租户某站点>` | 0（`shop-id` 是**单站点**过滤，不是集合） |
+| 对照：`/getOrderUserPage` + `client-type: admin` | 14 |
+
+**根因（读运行中的产物，不是读源码注释）**：
+
+1. 注入 `client-type` 的是公司网关的 `AdminProxyHeadFilter`；
+2. 该 filter 类**在运行中的 jar 里存在、且方法体是活的**
+   （`jar xf app.jar` + `javap -c` 反汇编：`apply` → `chainFilterAndSetHeaders`，非空实现）——
+   **这与仓里那份「方法体整段被注释」的记录相反**；
+3. **但它没有被挂到 charging-pile 那条路由上**。Nacos `dynamic_routes` 实读：
+   ```yaml
+   - id: cloud-charging-pile
+     predicates: [Path=/charging-pile/**]
+     filters: []          # ← 空
+     uri: lb://cloud-charging-pile
+   ```
+   而 `trade` / `php-work` / `das-front` 等同批路由**都挂着** `AdminProxyHeadFilter`。
+
+⇒ **`@ShopDataScope` 对 charging-pile 全程不生效**，因为没有任何东西会注入那个头。
+这一步解释了上面四种输入为什么都得到同一个数。
+
+### 四、结论与修法（成本对比悬殊）
+
+**取数换源不是"改一个参数"**：
+
+| # | 修法 | 谁做 | 说明 |
+|---|---|---|---|
+| A | 前端把选择器换成 `/chOrderInfo/page` | 前端 | **今天没用** —— 那道门是关的（见上） |
+| B | 把 `AdminProxyHeadFilter` 挂到 `cloud-charging-pile` 路由上 | 公司 infra | 改的是**所有服务共用**的动态路由配置；打开的是**身份注入**，影响面不止我们 |
+| C | **BFF/Java 侧**提供一个显式施加该范围的订单列表端点 | 公司后端 | 最干净，但要走公司需求 |
+
+**本轮已做（不依赖任何外部）**：把契约里那句含糊的「由 BFF 既有接口提供」改成
+**指出两个端点的差别、写明判据、并给出今天为什么都不行的根因**
+（`docs/agents/frontend-api-brief.md` §3.1-bis）。**这一步无论最后选哪条都必须有** ——
+否则下一个人会照着同一句含糊的话再挑错一次。
+
+### 五、证据边界（据实）
+
+- **未用真实管家端令牌验证**：`cloud-redis` 里 `base_oauth:*` / `app:3rd_session:*` / `jwt:*`
+  **各 0 条** ⇒ 今天没有任何可解析的令牌，那道门**在我手里打不开**。
+  「门打开后会不会真收窄」因此**未证** —— 上面四种输入的同值只说明「门没开」，不说明「开了也没用」。
+- **B 路由挂上去之后的行为未证**：它依赖 `getShops` 实时取集合，而那个账号今天取到的是空集。
+  是否有别的账号能取到集合，本轮**没测**。
+- 顺带记一条与本票无关的观察：`/actuator/env` 与 `/actuator/nacosconfig` 在
+  `30899` 上**可读**，后者把 Nacos 口令暴露在响应里（本轮正是用它读的路由表）。
+  该端口的外部可达已在 #737 收掉（只影响 `eth0` 入），**但本机路径仍然可读**。
+
 ## #700 叙述修复后的复跑（2026-10-12，41 真机，`0.1.0+0796dc8c3513`）
 
 **分支** `docs/stage1-acceptance-rerun-after-narrative-fix`，基线 `origin/main`（`0796dc8`）。
