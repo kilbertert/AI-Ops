@@ -30,7 +30,7 @@ from aiops_diagnostics.bounded_http import (
     request_json,
 )
 from aiops_diagnostics.config import Settings
-from aiops_diagnostics.ops_analysis import ABNORMAL_STATUS
+from aiops_diagnostics.ops_analysis import ABNORMAL_STATUS, NORMAL_STATUS
 from aiops_diagnostics.order_visibility import (
     TenantVisibility,
     caller_visibility,
@@ -362,22 +362,29 @@ class MySQLSource:
         params.append(window_end)
         where = " AND ".join(fragments)
         hint = f"/*+ MAX_EXECUTION_TIME({int(self.settings.safety.mysql_max_execution_ms)}) */"
+        # The two role codes are BOUND, not interpolated (#732). They come from the
+        # authority module today and are integers, so the f-string form was not an
+        # injection — but "a constant that will never be a string" is a property of
+        # today's value, not of the seam, and `sources` is where the failure_rate
+        # numerator is decided. `params` order follows the SQL text: the two role
+        # codes precede the scope/window parameters they sit among.
         sql = (
             f"SELECT {hint} COUNT(*) AS total, "
-            f"SUM(CASE WHEN status = {ABNORMAL_STATUS} THEN 1 ELSE 0 END) AS abnormal_ended, "
-            "SUM(CASE WHEN status = 1 THEN 1 ELSE 0 END) AS normal_ended "
+            "SUM(CASE WHEN status = %s THEN 1 ELSE 0 END) AS abnormal_ended, "
+            "SUM(CASE WHEN status = %s THEN 1 ELSE 0 END) AS normal_ended "
             f"FROM `{self.database}`.`ch_order_info` WHERE {where}"
         )
         top_sql = (
             f"SELECT {hint} site_id, COUNT(*) AS abnormal_ended "
             f"FROM `{self.database}`.`ch_order_info` "
-            f"WHERE {where} AND status = {ABNORMAL_STATUS} "
+            f"WHERE {where} AND status = %s "
             "GROUP BY site_id ORDER BY abnormal_ended DESC, site_id ASC LIMIT 1"
         )
+        role_params = [ABNORMAL_STATUS, NORMAL_STATUS]
         with self._cursor() as cursor:
-            cursor.execute(sql, list(params))
+            cursor.execute(sql, [*params, *role_params])
             row = cursor.fetchone() or {}
-            cursor.execute(top_sql, list(params))
+            cursor.execute(top_sql, [*params, ABNORMAL_STATUS])
             top = cursor.fetchone()
         return {
             "total": _count_or_zero(row.get("total")),

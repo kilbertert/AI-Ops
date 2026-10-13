@@ -7,6 +7,7 @@ from aiops_diagnostics.config import SafetySettings
 from aiops_diagnostics.health_metrics import RULE_VERSION as HEALTH_RULE_VERSION
 from aiops_diagnostics.health_report_copy import health_summary
 from aiops_diagnostics.i18n import DEFAULT_LANGUAGE
+from aiops_diagnostics.order_status import is_charging
 from aiops_diagnostics.rules import classify_stop_reason
 
 #: Re-exported from `health_metrics` so there is exactly ONE rule version.
@@ -40,7 +41,9 @@ def build_minimal_health_report(
         raise HealthReportError("order is ambiguous", code="ORDER_AMBIGUOUS")
 
     order = orders[0]
-    if _integer(order.get("status")) == 0:
+    # `is_charging`, not `== 0` (#732): "which status means still charging" is the
+    # authority's answer. The error code and its semantics are unchanged.
+    if is_charging(order.get("status")):
         raise HealthReportError("order has not ended", code="ORDER_NOT_ENDED")
     if not (order.get("child_device_code") or order.get("device_code")):
         raise HealthReportError("order device is missing", code="DEVICE_MISSING")
@@ -147,10 +150,3 @@ def _datetime(value: object) -> datetime | None:
             return None
         return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
     return None
-
-
-def _integer(value: object) -> int | None:
-    try:
-        return int(value) if value is not None else None
-    except (TypeError, ValueError):
-        return None

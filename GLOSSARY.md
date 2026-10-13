@@ -132,6 +132,12 @@ _Avoid_: 「支付失败率」、把未支付直接叫失败、按桶算出一�
 **异常结束订单**：`ch_order_info.status = 5` 的订单——设备已上报结束事件、但停止原因被判定为非正常。**只计状态 5**；状态 2（不可控异常）与 3（已人工处理）是另外两种状态。运维分析的 `failure_rate` 分母是窗内全部订单、分子是这一种，定义随数字一起交付。
 _Avoid_: 「任何异常」（那是三种状态的并集）、按停止码现算、把未支付也算进去
 
+> **角色判定在代码里只有一个落点**：`order_status.role_of` / `is_abnormal_end` /
+> `is_normal_end` / `is_charging`（`src/aiops_diagnostics/order_status.py`）。
+> `rules.ORDER_STATUS` 是**标签**权威（它叫什么），角色权威是它下面的语义（它是什么），
+> 两张表覆盖同一组 code。`failure_rate` 的分子、`engine` 的分类、SQL 谓词与
+> `definition.abnormal` 都由角色派生 —— 它们此前各写一份（PRD #732）。
+
 **媒体资产**：知识库文档或分段关联、可由授权用户查看的图片或视频资源；媒体资产不是模型生成内容，也不是 RAGFlow 内部的 `image_id`。
 _Avoid_: 附件字符串、裸对象存储 URL、模型幻觉出的图片/视频
 

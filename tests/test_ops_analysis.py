@@ -20,6 +20,7 @@ from aiops_diagnostics.answer_language import answer_chinese_leak
 from aiops_diagnostics.config import Settings
 from aiops_diagnostics.ops_analysis import (
     ABNORMAL_STATUS,
+    NORMAL_STATUS,
     REASON_NO_ORDERS,
     REASON_PROSE_INVALID,
     REASON_PROSE_LEAKED,
@@ -323,7 +324,7 @@ def test_neither_side_narrowing_issues_sql_without_a_site_predicate() -> None:
     sql, params = source.cursor_obj.executed[0]
     assert "tenant_id=%s" in sql
     assert "site_id IN" not in sql, "整租户不该有站点条件"
-    assert params == ["T-1", "2026-10-01 00:00:00", "2026-10-02 00:00:00"]
+    assert params == ["T-1", "2026-10-01 00:00:00", "2026-10-02 00:00:00", ABNORMAL_STATUS, NORMAL_STATUS]
     assert result is not None and result["total"] == 7
 
 
@@ -339,7 +340,15 @@ def test_no_requested_narrowing_builds_the_visible_site_predicate() -> None:
 
     sql, params = source.cursor_obj.executed[0]
     assert "site_id IN (%s, %s)" in sql
-    assert params == ["T-1", "S-1", "S-2", "2026-10-01 00:00:00", "2026-10-02 00:00:00"]
+    assert params == [
+        "T-1",
+        "S-1",
+        "S-2",
+        "2026-10-01 00:00:00",
+        "2026-10-02 00:00:00",
+        ABNORMAL_STATUS,
+        NORMAL_STATUS,
+    ]
     assert result is not None and result["total"] == 3
 
 
@@ -363,7 +372,17 @@ def test_the_job_site_set_narrows_the_scope_instead_of_replacing_it() -> None:
     assert "tenant_id=%s" in sql
     assert "site_id IN (%s)" in sql
     assert "created_time >= %s" in sql and "created_time < %s" in sql
-    assert params == ["T-1", "S-1", "2026-10-01 00:00:00", "2026-10-02 00:00:00"]
+    # The two role codes are BOUND now (#732), so they are the trailing params.
+    # The property this test is about — the out-of-scope site being dropped —
+    # is unchanged and still asserted above.
+    assert params == [
+        "T-1",
+        "S-1",
+        "2026-10-01 00:00:00",
+        "2026-10-02 00:00:00",
+        ABNORMAL_STATUS,
+        NORMAL_STATUS,
+    ]
     assert result is not None and result["top_sites"] == (("S-2", 2),)
 
 
