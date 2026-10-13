@@ -7,6 +7,13 @@ from typing import Any
 
 from aiops_diagnostics.config import SafetySettings
 from aiops_diagnostics.models import DiagnosticReport, DiagnosticRequest, Evidence, Intent, Severity
+from aiops_diagnostics.order_status import (
+    StatusRole,
+    is_abnormal_end,
+    is_charging,
+    is_normal_end,
+    role_of,
+)
 from aiops_diagnostics.rules import (
     classify_stop_reason,
     is_server_billing,
@@ -100,22 +107,25 @@ class DiagnosticEngine:
         label = status_label(status)
         severity = Severity.INFO
         observation = f"订单状态为 {label}"
-        if status == 2:
+        # The classification NAME is `role_of`'s own value (#732): one source for
+        # "what is this status", instead of a second vocabulary spelled out here.
+        # Behaviour is unchanged — every branch below is the one it replaced,
+        # matched through the role rather than through a literal.
+        role = role_of(status)
+        if role is StatusRole.UNCONTROLLABLE_EXCEPTION:
             severity = Severity.CRITICAL
-            report.classifications.append("uncontrollable_exception")
+            report.classifications.append(str(role))
             observation += "，源码定义为断网、离线等不可控异常"
-        elif status == 3:
+        elif role is StatusRole.EXCEPTION_ALREADY_HANDLED:
             severity = Severity.WARNING
-            report.classifications.append("exception_already_handled")
+            report.classifications.append(str(role))
             observation += "，后续交易数据会被业务代码拒绝重复处理"
-        elif status == 5:
+        elif role is StatusRole.CONTROLLED_ABNORMAL_END:
             severity = Severity.WARNING
-            report.classifications.append("controlled_abnormal_end")
+            report.classifications.append(str(role))
             observation += "，设备已上报结束事件，但停止原因被判定为非正常"
-        elif status == 0:
-            report.classifications.append("charging")
-        elif status == 1:
-            report.classifications.append("finished")
+        elif role is StatusRole.CHARGING or role is StatusRole.FINISHED:
+            report.classifications.append(str(role))
         else:
             severity = Severity.WARNING
             report.classifications.append("unknown_order_status")
@@ -147,7 +157,12 @@ class DiagnosticEngine:
         if stop.abnormal:
             _append_once(report.classifications, stop.classification)
 
-        inconsistent = (status == 5 and stop.abnormal is False) or (status == 1 and stop.abnormal is True)
+        # `is_abnormal_end` / `is_normal_end` rather than the literals 5 and 1: this
+        # is the same rule the `failure_rate` numerator uses, and it used to be
+        # written out again here.
+        inconsistent = (is_abnormal_end(status) and stop.abnormal is False) or (
+            is_normal_end(status) and stop.abnormal is True
+        )
         if inconsistent:
             _append_once(report.classifications, "status_stop_reason_inconsistent")
             report.evidence.append(
@@ -213,7 +228,7 @@ class DiagnosticEngine:
                     severity=Severity.CRITICAL,
                 )
             )
-        elif status == 0:
+        elif is_charging(status):
             report.evidence.append(
                 Evidence(
                     source="mysql",

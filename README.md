@@ -258,6 +258,7 @@ flowchart TB
 
 | 模块 | 职责 |
 |---|---|
+| `order_status.py` | 订单状态码 → **业务角色**的唯一落点（`role_of` / `is_abnormal_end` / `is_normal_end` / `is_charging`）。它回答「是什么角色」（判定用），`rules.ORDER_STATUS` 回答「叫什么」（给人读）；同一份角色不再各处拼写（PRD #732） |
 | `rules.py` | 停止原因分类、服务端/桩端计费判定、状态标签 |
 | `order_visibility.py` | **租户可见性规则的唯一定义**，三种渲染（见推论三） |
 | `health_metrics.py` / `health_curves.py` | 充电健康指标计算与曲线降采样 |

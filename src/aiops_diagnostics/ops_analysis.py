@@ -33,6 +33,7 @@ from typing import Any
 
 from aiops_diagnostics.answer_language import answer_chinese_leak, record_answer_language_fallback
 from aiops_diagnostics.i18n import DEFAULT_LANGUAGE, QA_FALLBACK_MESSAGES
+from aiops_diagnostics.order_status import abnormal_definition, abnormal_end_codes, normal_end_codes
 
 #: 这一族规则的版本。与 ``health_metrics.RULE_VERSION`` 分开：健康报告的规则版本一变，
 #: 不该连带让运维分析的复用失效，反之亦然。契约与作业行都盖这一个值。
@@ -53,13 +54,20 @@ OPERATIONS_CARDS = frozenset(
     }
 )
 
-#: ``ch_order_info.status`` 里「异常结束」的取值。证据：``rules.ORDER_STATUS[5]`` 是
-#: 「可控异常结束」，``engine._analyze_status`` 把它分类为 ``controlled_abnormal_end``，
-#: 而 staged 的 ``AbnormalOrderTxDataHandler.java`` 写明 YKC 停止码 64–73 记正常结束、
-#: 其余记异常结束（落库为 5）。**只计 5**：状态 2（不可控异常）与 3（已人工处理）是另外
-#: 两种状态，把它们并进来会让这个数字不再可复核。契约里带着这条定义，所以读的人不会
-#: 把 ``failure_rate`` 当成「任何异常」。
-ABNORMAL_STATUS = 5
+#: ``ch_order_info.status`` 里「异常结束」的取值 —— **由角色权威派生**，不再手写。
+#:
+#: 口径（只计 5；状态 2/3 是另外两种状态）见 ``GLOSSARY.md`` 的「异常结束订单」，
+#: 而「5 是什么角色」的唯一落点是 ``order_status``。此前这里是一个数字常量，配着一段
+#: **人工复述证据链**的注释（引用 ``rules.ORDER_STATUS[5]``、``engine._analyze_status``、
+#: staged 的 ``AbnormalOrderTxDataHandler.java``）—— 那是一次重新推导，不是一次取用，
+#: 而 ``tests/`` 里没有任何一处能发现它漂移（PRD #732 的删除测试）。
+#:
+#: **单元素解包**，不是 ``[0]``：多值时这里会**在导入期炸**，而不是静默丢掉第二个 code。
+#: 扩成多值要动的是**渲染**（`sources` 的两条 SQL 现在是 `status = %s` + 一个绑定值，
+#: 多值要变 `IN (...)` + N 个占位符），所以那个改动者必须被拦下来看一眼 ——
+#: `[0]` 会让他以为"只改 `_ROLE_BY_STATUS` 一处"就够了，而 SQL 仍在只数第一个。
+(ABNORMAL_STATUS,) = abnormal_end_codes()
+(NORMAL_STATUS,) = normal_end_codes()
 
 #: 风险等级的门限。**这不是本仓既有规则**——树里没有任何一处定义过失败率门限
 #: （``engine.py`` 只分类、``rules.py`` 只给标签、原型里那张「异常/失败率」卡没有公式）。
@@ -297,7 +305,9 @@ def build_failure_rate_contract(
             "normal_ended": aggregate.normal_ended if counted else None,
         },
         # 定义随数字一起交付：没有它，`failure_rate` 会被读成「任何异常」。
-        "definition": {"abnormal": "order_status=5", "window": "half-open [start, end)"},
+        # **由权威格式化生成**，不再手写 "order_status=5"（对外文本逐字不变）——
+        # 手写的那一份会让契约字符串与它描述的数字各自漂移。
+        "definition": {"abnormal": abnormal_definition(), "window": "half-open [start, end)"},
     }
 
 

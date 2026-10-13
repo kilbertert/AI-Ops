@@ -394,6 +394,104 @@ QA 作业的智能体在 `result` 里而不在列上），为此加一列是给�
   自己就写着够不到。因此响应形状改在 **HTTP 面**上钉（真路由 + 真依赖 + 真响应体），
   这是能用的最强观测。**不拿控制面的绿冒充这个面的验收。**
 
+## #732 订单状态角色的单一权威（2026-10-13，本地）
+
+**分支** `refactor/order-status-single-authority`，基线 `origin/main`（`29e4267`）。
+
+### 一、要修的是什么
+
+「一个 `ch_order_info.status` 在业务上**是什么角色**」是本仓的一条规则，而它在 #732 之前
+有**五份拼写**：`rules.ORDER_STATUS` 的标签、`engine._analyze_status` 的分类词、
+`ops_analysis.ABNORMAL_STATUS` 的数字常量、`sources` 里插进 SQL 的 f-string
+（还另抄了一遍 `status = 1`）、以及契约里手写的 `"order_status=5"`。
+
+**这不是"两个模块长得像"**，因为 `failure_rate` 的分子（SQL）与诊断的分类（`engine`）
+是同一条订单的两种读法，漂移的后果是用户可见的：**看板说 8% 失败，点进任何一张单都写着「正常结束」**。
+
+### 二、删除测试：本仓此前**一条都测不出**（本轮实测复核）
+
+| 声明（#732） | 实测 |
+|---|---|
+| `tests/` 里 `ORDER_STATUS` | **0 命中** |
+| `tests/` 里 `status == 5` / `status = 1` | **0 / 0** |
+| `ABNORMAL_STATUS` 的唯一使用者 | `test_ops_analysis.py:131`，断言 `definition.abnormal == f"order_status={ABNORMAL_STATUS}"` —— **拿同一个常量做期望值** |
+
+⇒ 把 `ABNORMAL_STATUS` 改成 7，此前**一条测试都不会红**，而 KPI 的分子含义已经换了。
+
+### 三、做法与判据
+
+新增 `order_status.py`（纯函数 + 冻结值，与 `order_visibility.py` 同形）：
+`StatusRole` / `role_of` / `is_abnormal_end` / `is_normal_end` / `is_charging` /
+`abnormal_end_codes` / `abnormal_definition`。四处消费方改为**取用**：
+
+| 位置 | 改前 | 改后 |
+|---|---|---|
+| `engine._analyze_status` | `if status == 2 / 3 / 5 / 0 / 1` | `role_of(status) is …`，分类名即角色值 |
+| `engine.py` 的 `inconsistent` | `(status == 5 and …) or (status == 1 and …)` | `is_abnormal_end` / `is_normal_end` |
+| `engine.py` 交易数据段 | `elif status == 0` | `elif is_charging(status)` |
+| `ops_analysis.ABNORMAL_STATUS` | 数字常量 + 人工复述证据链的注释 | `abnormal_end_codes()[0]`（**由角色派生**） |
+| `sources` 的两条 SQL | f-string 插值 `{ABNORMAL_STATUS}`、硬编码 `status = 1` | **参数绑定**，`NORMAL_STATUS` 派生 |
+| `ops_analysis` 契约 | 手写 `"order_status=5"` | `abnormal_definition()` **生成**（对外文本逐字不变） |
+| `health_report` | `_integer(...) == 0` | `is_charging(...)`（并删掉随之无用的 `_integer`） |
+
+| 判据 | 结果 |
+|---|---|
+| 角色表直测（含 `None` / 非数字 / 布尔 / 未知 code / `"5.0"`） | ✅ 13 例 |
+| 标签表与角色表**取值域相等** | ✅ 多一个少一个都红 |
+| 每个角色都可达（无死角色） | ✅ |
+| **跨面等价**：`engine` 的分类与 `failure_rate` 的分子对同一 status 同答 | ✅ 8 例 |
+| 契约字符串**由权威生成**，且改错角色表会红 | ✅ 期望值取自 `is_abnormal_end` 的真值集合 |
+| **结构守护**：`status == <数字>` 不再出现在权威之外 | ✅ AST 扫描，只扫比较表达式（`response.status == 404` 是同名不同物，不误伤） |
+| **占位符 ↔ 取值逐位配对**（评审新增） | ✅ 按文本顺序配对；绑反即红 |
+| `health_report` 的判据**在列的取值域上**等价 | ✅ `tinyint` 实测域 `{0,1,2,3,5}`；差异只在列产不出的输入上 |
+| 全量回归 | ✅ **2224 passed / 9 skipped**（165s），新增 35 条 |
+
+**突变复验（本轮最强的一条）**：把角色表里 `5 → 4`（即 #732 说"今天测不出"的那个改动）
+⇒ **11 条转红**，其中既有新判据、也有既有的 `test_engine.py`
+（`controlled_abnormal_end` 的分类与「状态与停止原因不一致」的检出）。
+**改动前同一操作是 0 条转红。** 另：把参数绑定顺序改回去 ⇒ **4 条转红**（见三-bis ①）。
+
+### 三-bis、评审（PR #735）逮到的三处，逐条处理
+
+**① 🔴 BUG，成立且是我的错 —— 参数绑定顺序写反了。**
+两个角色码在**汇总查询的 SELECT 列表里**（文本上在 WHERE **之前**），我把它们绑在了
+`params` **之后** ⇒ 租户 id 被当成状态码、窗口末端被当成租户谓词。**它不抛错**，
+只是数出**看起来合理**的错行 —— 正是这个面存在的理由所要防的那类假陈述。
+已改为 `[*role_params, *params]`（`top_sql` 的占位符在 WHERE 之后，保持绑在末尾）。
+
+**为什么测试没看见**：游标只**记录**参数、不执行，所以没有任何东西比对过
+「占位符 ↔ 它拿到的值」。新增 `test_the_status_placeholders_bind_the_status_codes_and_nothing_else`：
+按 SQL **文本顺序**把每个 `%s` 与它拿到的值逐位配对。**突变复验**：把顺序改回去 ⇒ 该用例
+与三条既有参数断言**同时转红**。
+
+**② ANALYSIS，成立 —— "将来只改一处"这句话在我这里是不成立的。**
+`ABNORMAL_STATUS = abnormal_end_codes()[0]` 会**静默丢掉**第二个 code，而两条 SQL 仍是
+`status = %s`（单值）。已把注释改成实话，并把取值改成**单元素解包** `(ABNORMAL_STATUS,) = ...`：
+多值时**导入期就炸**，逼那个改动者去看 SQL 渲染（他要把它改成 `IN (...)` + N 个占位符）。
+
+**③ ANALYSIS，成立 —— 等价面比原来窄。** 实测 `ch_order_info.status` 是 **`tinyint`**，
+实际取值恰好 `{0,1,2,3,5}`（41 只读实测）。在这个域上旧的 `int(value) == 0` 与
+`is_charging` 给出同一答案；差异只在**列产不出**的输入上：`'0.0'` / `'0.5'`
+（旧实现读不出 0，新的读成 0）与 `False`（`int(False) == 0`，而布尔从来不是状态码）。
+新增一条用例把**等价面本身**写下来（域在哪、差异在哪），域一变就会红。
+
+### 四、对外契约不变（逐条核对）
+
+`/v1/*` 响应形状、错误码字符串、`rule_version`（`ops-analysis-v1`）一律未动；
+`definition.abnormal` 逐字仍是 `order_status=5`（已断言）。
+`engine` 的分类名逐字不变（`test_engine.py` 的既有断言全绿，且突变时它们会红——说明它们真在判）。
+**SQL 参数位置有变**（两条角色码现在落在末尾），`test_ops_analysis.py` 的三条参数断言已同步更新。
+
+### 五、证据边界（据实）
+
+- 本轮**未在 41 上跑**：它是纯内部收敛，`failure_rate` 的数值与契约逐字不变；
+  41 上的 `failure_rate` 验收（#700）与本次不是同一个观测面，**不构成它的验收**，
+  也不需要重跑。**如实记为"本地验证，无生产观测变化"。**
+- **`ABNORMAL_STATUS` 仍是单值**（只计 5）：本 PRD 不把「异常结束」扩成多个 code，
+  那是 `GLOSSARY.md` 已定的产品口径。改的是它**从哪来**（常量 → 派生），不是它是几。
+- `sources` 里另有两处按状态过滤的 SQL（离线/故障码卡）**不经过状态角色**
+  （它们按各自的表与列），因此不在本次收敛范围内 —— 已确认它们没有状态码字面量。
+
 ## #700 叙述修复后的复跑（2026-10-12，41 真机，`0.1.0+0796dc8c3513`）
 
 **分支** `docs/stage1-acceptance-rerun-after-narrative-fix`，基线 `origin/main`（`0796dc8`）。
