@@ -1,3 +1,59 @@
+## #758 开场白/预设问题（Dify 中文母版）+ `model` 据实（2026-10-14，本地 + verify skill）
+
+**分支** `feat/dify-openers-and-model-label`，基线 `origin/main`（`fff75cc`）。PR-4 + PR-5；ADR-0020。
+
+### 一、确定性检查
+
+```
+pytest                     → 2275 passed (exit 0)
+ruff check / format --check → All checks passed / 346 files already formatted
+repo-map.check.mjs         → ok (149 lines)
+policy-check delivery      → passed
+adr.check.mjs --base origin/main → ok (20 records)
+```
+
+### 二、突变复验（去掉 ⇒ 对应用例转红）
+
+| 守卫 | 突变 | 结果 |
+|---|---|---|
+| 拉取保留 `model` 现值 | 去掉 `replace(model=…)` | 转红 |
+| 开场白覆盖 | 覆盖调用置 `None` | 转红 |
+| **只覆盖 zh** | 去掉 `language != DEFAULT_LANGUAGE` 守卫 | 转红 |
+| 预设问题覆盖 | 快照读取置 `()` | 转红 |
+
+### 三、`verify-aiops-gateway`（真进程，一次性数据根）
+
+```
+temp root: /tmp/aiops-verify-tr4qkqaq
+  /health -> 200
+  unauthenticated /v1/runs -> 401
+  POST /v1/enroll -> 201
+  authenticated /v1/runs -> 200
+  authenticated /v1/agents -> 401
+all checks passed
+```
+
+### 四、据实：本 skill **没有覆盖**本 PR 改的那条路由
+
+该 skill 的可验证范围是**注册、鉴权、run 生命周期**（`features/` 四份：auth-boundary /
+enrollment / run-lifecycle）。**`GET /v1/assistant/starters` 不在其中** —— 它需要一个
+已发布的 customer agent + 已绑定的 Dify 注册行 + 真实 store，本 skill 不构造这些。
+
+所以本轮的据实结论是：
+
+- **本 PR 的行为由单测证明**，且用例驱动的是**真的 FastAPI app、真的 `AgentStore`、
+  真的 `DifyAppRegistry`**（不是替身）—— `test_the_opening_comes_from_the_published_agent_when_dify_provided_one`
+  就是在真 store 上发布一个带 `opening_statement` 的 agent，再经 HTTP 读回。
+- **端到端仍待 41**：「运营在 Dify 控制台改 → 发布门冻结 → 中文读者看到」这条链里的
+  **控制台那一跳**需要有人的 Dify 控制台动作。本机证明不了，**不声称**。
+- 该 skill 也证明不了 `model` 那条 —— 它本来就与线上模型无关（这正是 PR-4 的结论）。
+
+### 五、未做的机器验收
+
+- 41 上 `GET /v1/assistant/starters` 在改了 Dify 开场白之后读回 `opening_source="dify"`，
+  且 `Accept-Language: en` 的响应里 `opening_source="artifact"` —— **未做**（需部署后跑）。
+- 41 上 `reconcile --dry-run` 对存量清单应**零漂移**（本 PR 未改任何清单文件）—— **未做**。
+
 ## #757 工具白名单（2026-10-14，本地 + verify skill）
 
 **分支** `feat/dify-tool-allowlist`，基线 `origin/main`（`7a7d465`）。
