@@ -18,7 +18,7 @@ What this module is, and is not:
 * It is **not** the tenant↔app registry, the Dify instance, or the publish
   action.
 
-Two boundaries are deliberate:
+Three boundaries are deliberate:
 
 * ``agent_type`` and ``output_contract`` are the caller's, not the DSL's. Dify
   stores neither — they are our concepts — so a DSL that omits them is not a
@@ -28,6 +28,17 @@ Two boundaries are deliberate:
   authoritative source is our own versioned content artifact (#585): Dify has
   no per-language variants at all, so reading them here would bind the agent to
   one language and bypass the artifact we own.
+* The DSL's ``dataset_configs.datasets[].id`` is **not consumed either**, and
+  for a sharper reason: it is a Dify *dataset* UUID, while
+  ``AgentConfig.knowledge_base_ids`` holds *our* knowledge-base ids. The two are
+  different id spaces, so copying one into the other is a type error — the
+  value is well-formed and meaningless at once. It is not hypothetical: on 41
+  that value (``df0f1d4a-…``, Dify's ``aiops-41-kb-canary-debug`` external
+  dataset) reached the publish gate as if it were a knowledge base and every
+  ``admin pull-dify`` for a bound app failed with ``知识库 df0f1d4a-… 不存在``.
+  The binding is therefore the **operator's explicit input**
+  (``knowledge_base_ids``), and a DSL that declares a dataset while none was
+  given fails loudly instead of publishing the wrong id.
 
 Failure is one signal, never a half-built draft: the DSL is fetched, parsed and
 mapped in full *before* the first write.
@@ -36,7 +47,7 @@ mapped in full *before* the first write.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -202,6 +213,7 @@ def map_dsl_to_config(
     *,
     agent_type: str,
     output_contract: str | None = None,
+    knowledge_base_ids: tuple[str, ...] | None = None,
 ) -> AgentConfig:
     """Map exported DSL text onto the ``AgentConfig`` fields we run on.
 
@@ -209,6 +221,12 @@ def map_dsl_to_config(
     holds a value we cannot use raises instead of being defaulted — an app we
     cannot map is never silently half-imported. ``opening_statement`` and
     ``suggested_questions`` are not read at all; see the module docstring.
+
+    ``knowledge_base_ids`` is the caller's, like ``agent_type``: the DSL's
+    dataset ids are Dify's, not ours (module docstring). ``None`` means the
+    caller did not state a binding, and a DSL that *does* declare one then
+    fails loudly — the alternative is publishing a Dify UUID as a knowledge
+    base. An explicit tuple (including ``()``) is taken as stated.
     """
     try:
         document = yaml.safe_load(dsl_text)
@@ -226,13 +244,64 @@ def map_dsl_to_config(
     if not isinstance(model_config, dict):
         raise DifyDslMalformed("DSL has no model_config object (only chat/completion apps carry one)")
 
+    declared = _declared_dataset_ids(model_config)
+    if knowledge_base_ids is None:
+        if declared:
+            raise DifyDslMalformed(
+                "DSL 声明了知识库数据集（"
+                + ", ".join(declared)
+                + "），但那是 Dify 的 dataset id，不是我们的知识库 id —— 两者不是同一个 id 空间。"
+                "请显式给出 knowledge_base_ids（`admin pull-dify --knowledge-base-id`），不要按字面搬运。"
+            )
+        knowledge_base_ids = ()
+
     return AgentConfig(
         agent_type=agent_type,
         prompt=_required_prompt(model_config),
-        knowledge_base_ids=_knowledge_base_ids(model_config),
+        knowledge_base_ids=tuple(knowledge_base_ids),
         model=_required_model(model_config),
         output_contract=output_contract or _default_output_contract(agent_type),
     )
+
+
+def resolve_pulled_config(
+    manager: AgentManager,
+    context: Any,
+    source: DifyDslSource,
+    *,
+    name: str,
+    agent_type: str,
+    output_contract: str | None = None,
+    knowledge_base_ids: tuple[str, ...] | None = None,
+) -> AgentConfig:
+    """Fetch, map and settle the config a pull would land — **no writes at all**.
+
+    This is the single place the pulled config is decided. Dry-run and the real
+    pull both call it, so what a dry-run reports is *the same object* the real
+    pull would publish rather than a second implementation of the same rules.
+    (A hand-rolled copy in the CLI's dry-run branch is exactly how the retained
+    knowledge binding came to be reported as empty while the real pull kept it.)
+
+    ``knowledge_base_ids`` is the operator's binding, not the DSL's; see
+    :func:`map_dsl_to_config`. When it is ``None`` the existing agent's binding
+    is **kept**, never cleared: "this pull did not state a knowledge base" and
+    "this agent has no knowledge base" are different statements, and only the
+    second one should empty the field. Without that, pulling a dataset-free app
+    (the shape the production app now has) would silently drop a live
+    customer-service agent off the RAG path — the same silent-overwrite the
+    manifest's prompt handling already guards against (#739).
+    """
+    config = map_dsl_to_config(
+        DifyDslClient(source).export_dsl(),
+        agent_type=agent_type,
+        output_contract=output_contract,
+        knowledge_base_ids=knowledge_base_ids,
+    )
+    if knowledge_base_ids is None:
+        existing = _find_by_name(manager, context, name)
+        if existing is not None:
+            config = replace(config, knowledge_base_ids=existing.config.knowledge_base_ids)
+    return config
 
 
 def pull_agent_draft(
@@ -244,14 +313,24 @@ def pull_agent_draft(
     description: str,
     agent_type: str,
     output_contract: str | None = None,
+    knowledge_base_ids: tuple[str, ...] | None = None,
 ) -> Agent:
     """Pull ``source`` and land the result as a draft. Never publishes.
 
     The fetch, the parse and the mapping all complete before the first write,
     so any failure leaves the store exactly as it was — no half-built draft.
+    The config itself comes from :func:`resolve_pulled_config`, which the
+    dry-run path calls too, so the two cannot drift.
     """
-    dsl_text = DifyDslClient(source).export_dsl()
-    config = map_dsl_to_config(dsl_text, agent_type=agent_type, output_contract=output_contract)
+    config = resolve_pulled_config(
+        manager,
+        context,
+        source,
+        name=name,
+        agent_type=agent_type,
+        output_contract=output_contract,
+        knowledge_base_ids=knowledge_base_ids,
+    )
     return converge_agent_draft(manager, context, config, name=name, description=description)
 
 
@@ -327,18 +406,23 @@ def _required_model(model_config: dict[str, Any]) -> str:
     return name
 
 
-def _knowledge_base_ids(model_config: dict[str, Any]) -> tuple[str, ...]:
-    """Read the enabled dataset ids out of ``dataset_configs.datasets.datasets``.
+def _declared_dataset_ids(model_config: dict[str, Any]) -> tuple[str, ...]:
+    """Read the enabled **Dify** dataset ids out of ``dataset_configs``.
+
+    These are reported, never assigned: see the module docstring on why a Dify
+    dataset id must not become one of our ``knowledge_base_ids``. Callers use
+    this to say "the app declares knowledge, but you have not told me which of
+    ours that is" instead of silently carrying the wrong id space forward.
 
     Absent means "no knowledge attached", which is a real state — both fixtures
-    pulled from 36 carry exactly that — so it maps to an empty tuple. A *present
-    but unreadable* value raises instead: treating it as empty would quietly
-    drop a binding the operator configured.
+    pulled from 36 carry exactly that. A *present but unreadable* value raises
+    instead: treating it as empty would quietly lose a binding the operator
+    configured.
 
     Note for whoever reviews a draft: Dify's chat frontend replaces
     ``dataset_configs`` wholesale, so a change made in that form keeps only
     ``retrieval_model`` and loses the ``datasets`` subtree. A later pull then
-    sees no knowledge bound, which this mapping reports honestly as empty.
+    sees no knowledge declared, which this reports honestly as empty.
     """
     dataset_configs = model_config.get("dataset_configs")
     if dataset_configs is None:

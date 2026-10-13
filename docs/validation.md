@@ -13662,3 +13662,136 @@ journal 无行」的推断，不是抓包直证；判成 nginx 的建议动作�
 | 公网 `https://api.mall.qushiyun.com`（本次全程使用） | 200 |
 | 直连 `http://172.18.0.1:8788` | 401（需服务令牌，不是终端用户的路径） |
 | 受限口 `https://127.0.0.1:8789` | 403（`allow 120.55.45.59; deny all;`，只放行 120） |
+
+## 拉回那一跳是断的：Dify 的 dataset id 不是我们的知识库 id（2026-10-13，PR-2）
+
+**分支** `feat/dify-pull-kb-binding`，基线 `origin/main`（`46f8c4a`）。
+**业务验收**：✅ 生产 Dify + 生产库实测。**生产改动**：1 次建 app、2 次 model-config 写入、
+1 次 registry 收敛（每次都在「先备份、先干跑、再回读」之下）。
+
+### 一、PR-2 的前提被取证推翻了
+
+PR-1 之后记下的计划是「先把 759 字真正文放进 Dify，再切登记」。**动手前先量了一下那一跳**：
+
+```
+$ aiops admin pull-dify --app-id a975c8e5-… --tenant 1942105476598861824 … --kb-url http://127.0.0.1:29380
+发布失败（库未变更）: AgentPublishError: 知识库 df0f1d4a-3d6e-404e-9656-c88da6df3d1e 不存在或不在当前租户下
+```
+
+对**两个租户**都是这一条。⇒ 「用 Dify 管理智能体」缺的不只是「没人真的用 Dify 编辑」，
+而是**编辑完也拿不回来**。这一跳今天对每一个绑了 Dify 的 app 都断。
+
+### 二、根因：两个 id 空间被当成了一个
+
+| | 值 | 是什么 |
+|---|---|---|
+| DSL `dataset_configs.datasets[].id` | `df0f1d4a-…` | **Dify 的 dataset**（external KB `aiops-41-kb-canary-debug` → `kb-canary` → **验收租户**的 `4f4bc674…`） |
+| `AgentConfig.knowledge_base_ids` | `8701c742-…` | **我们的**知识库 id（kb-service 校验的那个） |
+
+`dify_dsl_pull._knowledge_base_ids` 把前者**原样**写进后者。那个值是合法 UUID，
+所以三层（映射 → 落草稿 → 发布门）都放行，直到发布门的活性校验才炸 —— **一次类型错误
+穿过了三道门**，因为每一道门都只问「格式对不对」。全仓没有任何一处做这个翻译
+（`grep external_knowledge` 只命中注释）。
+
+同一形状在 #585 已经有过先例：`opening_statement` / `suggested_questions` **刻意不消费**，
+理由是「权威在我们侧」。dataset 绑定是漏掉的第三处。
+
+### 三、改法：绑定由调用者给；DSL 只用来判断「给没给」
+
+| 情形 | 行为 |
+|---|---|
+| `knowledge_base_ids=None`（调用者没说）+ DSL 无 dataset | `()` |
+| `knowledge_base_ids=None` + DSL **声明了** dataset | **拒**（`DifyDslMalformed`，点明 id 空间不同） |
+| 显式 tuple（含 `()`） | 按字面采纳 |
+
+`admin pull-dify` 新增 `--knowledge-base-id`（可重复）。`_knowledge_base_ids` 改名
+`_declared_dataset_ids` —— 只报告，不再赋值。
+
+### 四、评审前自查逮到的两处（都是我自己写的）
+
+**① `--knowledge-base-id` 只接了干跑那条路径。** 非干跑那条 `pull_agent_draft(...)` 没传，
+于是真跑照样退 0，而线上那一版**没有知识库**（客服到不了 RAG 路径），**输出上看不出来**。
+已补，并加 `test_pull_dify_either_path_binds_the_knowledge_base_the_caller_gave`：
+同一条命令，干跑报告的 `config` ≡ 真跑落库的快照（把两条路径钉成同一个答案）。
+
+**② 同一种静默覆盖的第二处。** 拉一个 dataset-free 的 app（生产那个现在就是）时，
+`knowledge_base_ids` 是空的；直接落库会把线上客服**悄悄摘掉 RAG 路径**。已改成
+「没说 ⇒ 保留库中现值」，显式 `()` 才是「就是要它没有」。这与 #739 在 prompt 上挡的
+是同一种缺陷 —— **不是「这次没提」就等于「把它清掉」**。
+
+### 五、41 上的逐步动作（每步都先备份 / 先干跑 / 后回读）
+
+**① 备份**：Dify 全量 `model_config`（4 个 app）→ `/tmp/pr2-dify-before.json`；
+`gateway.db`；41 上那份清单（`c81f783f…`）。
+
+**② 先在一次性 app 上排练写形状**（不碰任何既有 app）：
+`POST /console/api/apps`（name+mode）→ `POST …/model-config` → `GET …/export` → `DELETE`。
+结果：**回读逐字相同**，export 出来的 DSL 里 `pre_prompt` 也逐字相同。写形状因此是确定的，
+不是照着源码猜的。
+
+**③ 建线上客服自己的 app**：`aiops-41-canary-kefu` = `98441c5b-1f82-4dc4-a6c0-795dc169ee54`，
+正文 = 库中 `canary-客服` 那 **759 字**（逐字，不重写）。
+
+```
+production prompt: 759 chars | operator prompt: 218 chars (marker A)
+[1] created 98441c5b-… ; model-config -> 200 ; export back: 759 chars, exact=True
+[2] operator 25c20f09 : model-config -> 200 ; export back: exact=True
+```
+
+**④ operator app 的正文由标记 B 改回 A。** 线上运行的是 `#v3`（标记 **A**，2026-10-12
+02:11 发布），而 Dify 上留着 **B** —— #700 回滚那一步只回了我方一侧，**两个权威一旦
+允许并存就一定会漂移**。写 A 让 Dify 与「实际在跑的那一版」一致。
+
+**⑤ 登记表收敛**（先在同一份库副本上 dry-run 看过报告，再真跑）：
+
+```
+dify_registry:  (1942…, consumer) registered → 98441c5b   ← 只此一行
+                (1783…, consumer) unchanged
+                (1942…, operator) unchanged
+reports:        5 agents 全部 unchanged
+```
+
+**⑥ 回读复核**：8 个 agent 的 `revision/published_version/updated_at` **全部未变**；
+registry 三行如上报；两个一次性 app 的 `pre_prompt` 与 `updated_at` **完全未变**。
+
+### 六、🔴 计划里没料到的结构阻塞：一个 app 被绑给两个 agent
+
+`a975c8e5` 同时被绑给**两个** agent：`861824/canary-客服`（线上 759 字）与
+`633792/canary-dify-acceptance-1011`（129 字）。而**一个 Dify app 只有一个 `pre_prompt`**
+⇒ 它不可能同时是两者的权威正文。四处证据都指向它是**验收 app**：
+
+| 证据 | 值 |
+|---|---|
+| 名字 | `dify-dsl-fixture` |
+| 描述 | 「一次性样例 app，用于 #580 真实 DSL 固件导出；导出后可删」 |
+| 正文 | 129 字（与**验收租户**的 agent 逐字相同） |
+| dataset | `df0f1d4a-…` → `kb-canary` → **验收租户**的 KB `4f4bc674…` |
+
+⇒ 「线上租户的 Dify 绑定」此前**没有可编辑的对象**；那条绑定只是一行悬空的登记。
+这正是 #739 在 prompt 维度关掉的「两个权威」，在 **app 维度**上的同一件事。
+处置：线上租户改用**它自己的** app（③），验收租户那一行**一字不动**（它本来是真的）。
+
+### 七、判据与复验
+
+| 判据 | 结果 |
+|---|---|
+| 全量回归 | ✅ **2237 passed / 9 skipped**（基线 2232） |
+| ruff `check` + `format --check` | ✅ |
+| 去掉「id 空间」判定 ⇒ 转红 | ✅ **突变复验**，报出正是那个错值 `'df0f1d4a-…' != '8701c742-…'` |
+| 非干跑路径丢掉绑定 ⇒ 转红 | ✅ **突变复验**（`Right contains one more item: '8701c742…'`） |
+| 去掉「保留现值」⇒ 转红 | ✅ **突变复验** |
+| 三个**真实 DSL** 实测 | ✅ 给了绑定 ⇒ 无泄漏；未给且 DSL 声明数据集 ⇒ 拒（共享 app 那条） |
+| Dify 写入逐字回读 | ✅ API 回读 + DSL export **两条都逐字相同** |
+| 生产行为是否改变 | ✅ **没有**：`agent_name` 未动（运行时只读它）；8 个 agent 版本未动 |
+
+### 八、据实（未做与边界）
+
+- **`app_id` 不参与运行时选择**（实测：`grep` 全部读取点只有存储 / 报告 / 格式校验），
+  所以 ⑤ 不改变任何线上行为 —— 它改的是**那句「这个租户的正文从哪个 app 来」的话是真的**。
+- **`a975c8e5` 的 Dify 侧 dataset 仍指向验收租户的 KB**。拉取不受影响（绑定由调用者给），
+  但**运营在 Dify 里预览检索时会打到那个 KB**。共享 app 的 workspace 级错配，**未修**。
+- **PR-1 的代码早已在 41 上**（`agent_manifest.py` 的 mtime 与 `_PROMPT_FROM_DIFY` 实测），
+  而本轮修的是**另一条**路径，与它不冲突。
+- **41 上两份清单是死的**：`/opt/aiops-41/ops/environments/env-41.toml{,.new}` 仍是
+  `qwen3.8-max-0902` + 内联 prompt 的旧快照，拿去 reconcile 会**硬拒**（模型不在白名单，
+  exit 2、零写入）—— 拒得对。真正可用的是**仓里那份**（本轮 5 agents 全 unchanged 即证）。

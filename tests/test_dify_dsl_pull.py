@@ -194,18 +194,50 @@ def _with_dataset(entries: str) -> str:
     )
 
 
-def test_enabled_dataset_ids_become_knowledge_bindings_and_disabled_ones_do_not() -> None:
+def test_the_dsls_dataset_ids_are_never_taken_as_our_knowledge_bindings() -> None:
+    """Dify's dataset UUID and our knowledge-base id are different id spaces.
+
+    On 41 the app bound to the live tenant declares Dify's ``df0f1d4a-…`` external
+    dataset. Copying that into ``knowledge_base_ids`` made every ``admin pull-dify``
+    for a bound app fail at the publish gate with ``知识库 df0f1d4a-… 不存在`` — and
+    a caller that handed the value straight to a store would instead have published
+    a knowledge base that cannot be resolved.
+    """
+    dsl = _with_dataset(
+        "      - dataset:\n          enabled: true\n          id: df0f1d4a-3d6e-404e-9656-c88da6df3d1e\n"
+    )
+    # Not stated by the caller ⇒ refuse, rather than carry the Dify id forward.
+    with pytest.raises(DifyDslMalformed, match="id 空间"):
+        map_dsl_to_config(dsl, agent_type="customer")
+
+
+def test_an_explicit_knowledge_binding_wins_and_the_dsls_dataset_does_not_leak_in() -> None:
     dsl = _with_dataset(
         "      - dataset:\n"
         "          enabled: true\n"
-        "          id: 4f4bc674ad8911f1ae704bfc8c544ea6\n"
+        "          id: df0f1d4a-3d6e-404e-9656-c88da6df3d1e\n"
         "      - dataset:\n"
         "          enabled: false\n"
-        "          id: 8701c742b28111f18637d95f7710e3a3\n"
+        "          id: 4f4bc674ad8911f1ae704bfc8c544ea6\n"
     )
-    assert map_dsl_to_config(dsl, agent_type="customer").knowledge_base_ids == (
-        "4f4bc674ad8911f1ae704bfc8c544ea6",
+    config = map_dsl_to_config(
+        dsl,
+        agent_type="customer",
+        knowledge_base_ids=("8701c742b28111f18637d95f7710e3a3",),
     )
+    assert config.knowledge_base_ids == ("8701c742b28111f18637d95f7710e3a3",)
+    # An explicit empty tuple is a real intent ("this agent has no knowledge base"),
+    # and must be honoured as stated rather than treated as "not given".
+    assert map_dsl_to_config(dsl, agent_type="customer", knowledge_base_ids=()).knowledge_base_ids == ()
+
+
+def test_a_dsl_with_no_dataset_maps_to_no_knowledge_binding() -> None:
+    """Both real 36 fixtures carry `dataset_configs` with only `retrieval_model`."""
+    assert map_dsl_to_config(REAL_DSL, agent_type="customer").knowledge_base_ids == ()
+    disabled = _with_dataset(
+        "      - dataset:\n          enabled: false\n          id: df0f1d4a-3d6e-404e-9656-c88da6df3d1e\n"
+    )
+    assert map_dsl_to_config(disabled, agent_type="customer").knowledge_base_ids == ()
 
 
 def test_a_present_but_unreadable_dataset_binding_is_an_error_not_an_empty_tuple() -> None:
@@ -366,3 +398,40 @@ def test_repull_after_a_prompt_edit_updates_the_draft_and_keeps_versions_immutab
     assert updated.revision > current.revision
     assert "唯一权威事实来源" in updated.config.prompt
     assert "唯一权威事实来源" not in manager.version(admin, agent.agent_id, 1).snapshot["prompt"]
+
+
+def test_a_pull_that_states_no_knowledge_base_keeps_the_existing_one(monkeypatch, tmp_path: Path) -> None:
+    """「这次拉取没提知识库」≠「这个 agent 没有知识库」。
+
+    dataset-free 的 app（生产那个现在就是）拉回来时 `knowledge_base_ids` 是空的；
+    若直接落库，线上客服会被悄悄摘掉 RAG 路径 —— 而命令照样退 0。这与 #739 在
+    prompt 上挡的**是同一种静默覆盖**。
+    """
+    _serve(monkeypatch, body=_export_body())  # REAL_DSL: 无 dataset
+    manager = _manager(tmp_path)
+    admin = _context()
+
+    seeded = manager.create(
+        admin,
+        name="小趋-客服",
+        description="d",
+        config=map_dsl_to_config(REAL_DSL, agent_type="customer", knowledge_base_ids=("kb-live",)),
+    )
+    manager.publish(admin, seeded.agent_id, expected_revision=seeded.revision)
+
+    pulled = pull_agent_draft(
+        manager, admin, _source(), name="小趋-客服", description="d", agent_type="customer"
+    )
+    assert pulled.config.knowledge_base_ids == ("kb-live",)
+
+    # 显式给了空 tuple ⇒ 那才是「就是要它没有知识库」，按字面采纳。
+    explicit = pull_agent_draft(
+        manager,
+        admin,
+        _source(),
+        name="小趋-客服",
+        description="d",
+        agent_type="customer",
+        knowledge_base_ids=(),
+    )
+    assert explicit.config.knowledge_base_ids == ()

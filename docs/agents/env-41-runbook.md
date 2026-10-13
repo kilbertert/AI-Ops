@@ -1127,6 +1127,40 @@ manager.publish(admin, updated.shortcut_id, expected_revision=updated.revision)
 - **平台默认行与租户行都要改**：`list_effective` 中租户已发布行覆盖平台默认行，只改一条会分叉。
 - 改前先做精确 SQLite 备份（见 §5 的备份纪律）。
 
+
+### 3.1-quater 拉回：`admin pull-dify`（2026-10-13 新增，PR-2）
+
+**用途**：运营在 Dify 控制台改好一个 app 的正文之后，把它**拉回并经我方发布门冻结**。
+这是阶段 1 链的第二跳；第一跳在 Dify，第三跳是运行时服务提问。
+
+```bash
+cd /opt/aiops-41
+runuser -u aiops41 -- .venv/bin/aiops --config /etc/aiops-41/production.env admin pull-dify \
+  --app-id <dify app id> --tenant <租户 id> --name <我方 agent 名> \
+  --agent-type customer \
+  --knowledge-base-id <我们的知识库 id> \
+  --db /var/lib/aiops-41/gateway/gateway.db \
+  --kb-url http://127.0.0.1:29380
+```
+
+**三条会踩到的事**：
+
+1. **`--knowledge-base-id` 必须显式给。** Dify 的 dataset id **不是**我们的知识库 id
+   （两个 id 空间）。不给而 DSL 里声明了数据集 ⇒ 命令**拒**；不给而 DSL 里没有 ⇒
+   **保留库里现值**。「没提」不等于「清掉」。
+2. **`--db` 必须显式给**（与 reconcile 同一条守卫：缺省会静默回退 XDG 建空库）。
+3. **控制台凭据在 `production.env`**（不是 `gateway.env`）：`AIOPS_GATEWAY_DIFY_CONSOLE_*`
+   三键。缺了会明确报缺哪一个 —— 不要把它写进命令行参数（会进 shell 历史与进程表）。
+
+**登记表不在这一步**：这次拉取把哪个 app 落到哪个 agent 是**这一次的参数**；
+「哪个 app 服务哪个租户/入口」是 `[[dify_apps]]` + `reconcile` 的事。两件事分开，
+一次拉取才不会顺手改掉线上路由。
+
+**Dify 侧的写**：Dify 没有推送，运营只能在它的控制台里改。若要**程序化**改（本轮 PR-2
+做过），形状是 `POST /console/api/apps/<id>/model-config`，body 取该 app 当前的
+`model_config`、只改要改的字段 —— **不要发一个不完整的 body**，那会把别的字段重置。
+落笔前先在**一次性 app** 上排练一遍（create → model-config → export → delete），
+并在写后 `GET …/export` **逐字回读**核对。
 ## 4. 真实会话与数据（验收前置）
 
 ### 4.1 取有效 thirdSession

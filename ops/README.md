@@ -72,6 +72,34 @@ agent_name                  # 该 app 落到我们库里的 agent **名字**
   绝不把"正文在别处"这个状态发布成线上提示词。
 - **从 Dify 切回清单**（写回 `prompt`、去掉绑定）时，库里的旧绑定**必须先清掉**
   （`reconcile --prune`），否则注册表那条旧行还在、线上仍是两个来源。
+- 同一条规则也管 `app_id`：**一个 Dify app 只有一个 `pre_prompt`**，所以它不可能同时是
+  两个 agent 的正文权威。同一个 `app_id` 出现在两行上，是把「两个权威」从 prompt 维度
+  搬到了 app 维度。
+
+### 拉回：`admin pull-dify`，知识库绑定**必须显式给**（#577 拉回那一跳）
+
+```bash
+aiops --config /etc/aiops-41/production.env admin pull-dify \
+  --app-id <dify app id> --tenant <tenant> --name <agent 名> \
+  --agent-type customer \
+  --knowledge-base-id <我们的知识库 id>      # 可重复；不填 ⇒ 见下
+  --db /var/lib/aiops-41/gateway/gateway.db --kb-url http://127.0.0.1:29380
+```
+
+**DSL 里的 dataset id 不是我们的知识库 id，两者不是同一个 id 空间。** Dify 的
+`dataset_configs.datasets[].id` 是它的 dataset UUID；`AgentConfig.knowledge_base_ids`
+是 kb-service 用来校验的那个 id。把前者按字面搬过去，发布门会以
+`知识库 df0f1d4a-… 不存在或不在当前租户下` 失败 —— 那是**设计如此**，不是故障。
+
+| `--knowledge-base-id` | DSL 里有 dataset | 结果 |
+|---|---|---|
+| 没给 | 有 | **拒**（点明两个 id 空间不同，不按字面搬运） |
+| 没给 | 没有 | 库里**已存在**这个 agent ⇒ 保留它的现值；新建 ⇒ `()` |
+| 给了（可多个） | 任意 | 按字面采纳 |
+
+⚠️ **最后两行是两种不同的意图，不要混**：「这次拉取没提知识库」≠「这个 agent 没有
+知识库」。拉一个 dataset-free 的 app 时后者会让线上客服**悄悄摘掉 RAG 路径**，
+而命令照样退 0。真要去掉绑定就用**别的显式动作**，不要靠省略参数。
 
 **fail closed。** 注册表为空时（清单里没有 `[[dify_apps]]`）保持注册表出现之前
 的选法不变——所以这个开关可以**惰性地**上线，未采用它的环境行为逐字不变。一旦
