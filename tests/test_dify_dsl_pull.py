@@ -435,3 +435,99 @@ def test_a_pull_that_states_no_knowledge_base_keeps_the_existing_one(monkeypatch
         knowledge_base_ids=(),
     )
     assert explicit.config.knowledge_base_ids == ()
+
+
+# --- 知识库桥：dataset UUID → 操作员的句柄 → 我们的知识库 id（PR-2）------------
+
+
+class _FakeConsole:
+    """A console whose per-dataset route answers with the handle we choose."""
+
+    def __init__(self, handles: dict[str, str | None]) -> None:
+        self.handles = handles
+        self.asked: list[str] = []
+
+    def dataset_knowledge_id(self, dataset_id: str) -> str:
+        self.asked.append(dataset_id)
+        handle = self.handles.get(dataset_id)
+        if handle is None:
+            raise DifyDslMalformed(f"Dify dataset {dataset_id} 没有 external_knowledge_id")
+        return handle
+
+
+class _Binding:
+    """Stand-in for gateway_config.DifyKnowledgeBinding (structural on purpose)."""
+
+    def __init__(self, tenant_id: str, kbs: tuple[str, ...]) -> None:
+        self.tenant_id = tenant_id
+        self.knowledge_base_ids = kbs
+
+
+def _with_external_dataset(dataset_id: str = "df0f1d4a-3d6e-404e-9656-c88da6df3d1e") -> str:
+    return _with_dataset(f"      - dataset:\n          enabled: true\n          id: {dataset_id}\n")
+
+
+def test_a_declared_dataset_is_translated_through_the_registry() -> None:
+    """**桥的作用**：Dify 的 dataset UUID 经句柄翻译成**我们的**知识库 id。"""
+    from aiops_diagnostics.dify_dsl_pull import _resolve_declared_datasets
+
+    client = _FakeConsole({"df0f1d4a-x": "kb-canary"})
+    registry = {"kb-canary": _Binding("T-1", ("kb-aaa", "kb-bbb"))}
+    got = _resolve_declared_datasets(("df0f1d4a-x",), registry, client, tenant_id="T-1")
+    assert got == ("kb-aaa", "kb-bbb")
+    assert client.asked == ["df0f1d4a-x"], "必须真的去问控制台要句柄"
+
+
+def test_an_unregistered_handle_is_refused_not_guessed() -> None:
+    """句柄不在登记表 ⇒ **拒**（绝不猜它属于哪个租户）。"""
+    from aiops_diagnostics.dify_dsl_pull import _resolve_declared_datasets
+
+    client = _FakeConsole({"df-x": "kb-nobody-registered"})
+    with pytest.raises(DifyDslMalformed, match="没有它|登记"):
+        _resolve_declared_datasets(("df-x",), {}, client, tenant_id="T-1")
+
+
+def test_a_dataset_registered_to_another_tenant_is_refused() -> None:
+    """登记行属于**另一个租户** ⇒ 拒（防把别人的知识库挂上来）。"""
+    from aiops_diagnostics.dify_dsl_pull import _resolve_declared_datasets
+
+    client = _FakeConsole({"df-x": "kb-canary"})
+    registry = {"kb-canary": _Binding("T-OTHER", ("kb-aaa",))}
+    with pytest.raises(DifyDslMalformed, match="另一个租户|租户"):
+        _resolve_declared_datasets(("df-x",), registry, client, tenant_id="T-1")
+
+
+def test_a_native_dataset_is_refused() -> None:
+    """原生 dataset（没有句柄）⇒ 拒，且消息点明原因。"""
+    from aiops_diagnostics.dify_dsl_pull import _resolve_declared_datasets
+
+    client = _FakeConsole({})  # 任何 id 都拿不到句柄
+    with pytest.raises(DifyDslMalformed):
+        _resolve_declared_datasets(("df-native",), {}, client, tenant_id="T-1")
+
+
+def test_the_mapper_calls_the_resolver_only_when_a_dataset_is_declared() -> None:
+    """**没有声明 dataset ⇒ 完全不碰解析器**（"没声明"与"声明了"必须可区分）。"""
+    from aiops_diagnostics.dify_dsl_pull import map_dsl_to_config
+
+    calls: list[tuple[str, ...]] = []
+
+    def resolver(ids: tuple[str, ...]) -> tuple[str, ...]:
+        calls.append(ids)
+        return ("kb-x",)
+
+    config = map_dsl_to_config(REAL_DSL, agent_type="customer", dataset_resolver=resolver)
+    assert config.knowledge_base_ids == ()
+    assert calls == [], "DSL 没声明 dataset，解析器不该被调用"
+
+    config = map_dsl_to_config(_with_external_dataset(), agent_type="customer", dataset_resolver=resolver)
+    assert config.knowledge_base_ids == ("kb-x",)
+    assert calls == [("df0f1d4a-3d6e-404e-9656-c88da6df3d1e",)]
+
+
+def test_a_declared_dataset_with_no_resolver_still_refuses() -> None:
+    """**不给解析器**（旧行为）⇒ 声明了 dataset 仍旧拒，绝不静默搬运 UUID。"""
+    from aiops_diagnostics.dify_dsl_pull import map_dsl_to_config
+
+    with pytest.raises(DifyDslMalformed, match="id 空间"):
+        map_dsl_to_config(_with_external_dataset(), agent_type="customer")

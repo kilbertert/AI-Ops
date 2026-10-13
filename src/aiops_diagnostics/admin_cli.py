@@ -214,6 +214,8 @@ def pull_dify(
     # 控制台三键与 `admin reconcile` 读**同一个文件**；守卫与 `sync-from-dify` 共用一份，
     # 免得 #625 修的那个「`--config` 里的控制台键读不到」只对其中一条命令生效。
     console, database = _dify_console_and_db(ctx, db)
+    # 声明的 dataset 靠这张表翻译成我们的知识库（与检索路由用的是同一张、同一个解析器）。
+    knowledge_registry = _dify_knowledge_registry(console)
 
     knowledge_resolver = None
     if kb_url:
@@ -252,6 +254,7 @@ def pull_dify(
                 agent_type=agent_type,
                 output_contract=output_contract,
                 knowledge_base_ids=None if knowledge_base_id is None else tuple(knowledge_base_id),
+                knowledge_registry=knowledge_registry,
             )
             typer.echo(
                 json.dumps(
@@ -276,6 +279,7 @@ def pull_dify(
             agent_type=agent_type,
             output_contract=output_contract,
             knowledge_base_ids=None if knowledge_base_id is None else tuple(knowledge_base_id),
+            knowledge_registry=knowledge_registry,
         )
         draft_revision = agent.revision
         if agent.status != "draft" and agent.published_version is not None:
@@ -304,13 +308,33 @@ def pull_dify(
     )
 
 
+def _dify_knowledge_registry(console: Any) -> Any:
+    """The operator's ``knowledge_id → (tenant, our kb ids)`` table, parsed once.
+
+    The **same** parser the inbound retrieval route uses
+    (``parse_dify_knowledge_bindings``); the pull reads it in the other
+    direction. Sharing the parser is the point — two parsers for one table is
+    the "one rule, two implementations" defect this repo keeps re-learning.
+    """
+    from aiops_diagnostics.gateway_config import parse_dify_knowledge_bindings
+
+    return parse_dify_knowledge_bindings(getattr(console, "dify_knowledge_bindings", "") or "")
+
+
 def _console_settings_from(path: Path) -> dict[str, str]:
-    """Read the three console keys out of an explicit ``--config`` file.
+    """Read the Dify console keys out of an explicit ``--config`` file.
 
     Kept here rather than in ``gateway_config`` because only this command reads a
     config file *by path*: the gateway process takes the same values from its own
     environment, and giving ``from_env`` a second source would make "which file am
     I reading" ambiguous everywhere.
+
+    ``AIOPS_GATEWAY_DIFY_KNOWLEDGE_BINDINGS`` is here for the same reason the
+    console keys are: the pull resolves a declared dataset through it, and
+    reading it from the process environment instead would mean the one file the
+    operator passed to ``--config`` decides most of the pull but not that part.
+    That is #625's defect shape — a fix that reaches one consumer and not the
+    other.
     """
     from aiops_diagnostics.gateway_config import _private_config_values
 
@@ -319,6 +343,7 @@ def _console_settings_from(path: Path) -> dict[str, str]:
         "AIOPS_GATEWAY_DIFY_CONSOLE_BASE_URL",
         "AIOPS_GATEWAY_DIFY_CONSOLE_API_KEY",
         "AIOPS_GATEWAY_DIFY_CONSOLE_WORKSPACE_ID",
+        "AIOPS_GATEWAY_DIFY_KNOWLEDGE_BINDINGS",
     )
     return {name.lower().removeprefix("aiops_gateway_"): (values.get(name) or "") for name in keys}
 
@@ -333,9 +358,16 @@ def _dify_console_and_db(ctx: typer.Context, db: Path | None) -> tuple[Any, Path
     """
     config_file = ctx.obj.get("config_file") if ctx.obj else None
     console = GatewayServerSettings.from_env()
-    if config_file is not None and not console.dify_console_api_key:
+    if config_file is not None:
+        # Merge **per key**, not all-or-nothing: an environment that supplies
+        # the console keys but not the bindings (or the reverse) must still get
+        # the file's value for whichever one it lacks. Deciding on the single
+        # condition "is the console key set?" is how one of the four keys ends
+        # up silently read from the wrong place.
+        from_file = _console_settings_from(Path(config_file).expanduser().resolve())
         console = dataclasses.replace(
-            console, **_console_settings_from(Path(config_file).expanduser().resolve())
+            console,
+            **{name: value for name, value in from_file.items() if value and not getattr(console, name, "")},
         )
     if not console.dify_console_base_url or not console.dify_console_api_key:
         typer.secho(
@@ -412,6 +444,7 @@ def sync_from_dify(
 
     console, database = _dify_console_and_db(ctx, db)
     settings = _reconcile_settings(ctx.obj.get("config_file") if ctx.obj else None)
+    knowledge_registry = _dify_knowledge_registry(console)
     knowledge_resolver = None
     if kb_url:
         from aiops_diagnostics.agent_debug import KbBindingResolver, KbServiceKnowledgeClient
@@ -450,7 +483,12 @@ def sync_from_dify(
         )
         try:
             outcome = sync_binding_from_dify(
-                manager, admin_context(binding.tenant_id), binding, source, dry_run=dry_run
+                manager,
+                admin_context(binding.tenant_id),
+                binding,
+                source,
+                dry_run=dry_run,
+                knowledge_registry=knowledge_registry,
             )
             outcomes.append(dataclasses.asdict(outcome))
             if outcome.action == "failed":

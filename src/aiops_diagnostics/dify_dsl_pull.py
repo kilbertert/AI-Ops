@@ -47,6 +47,7 @@ mapped in full *before* the first write.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any
 from urllib.parse import urlsplit
@@ -70,6 +71,12 @@ from aiops_diagnostics.bounded_http import (
 #: (``extensions/ext_login.py``). A session credential resolves it implicitly;
 #: the header is what makes the same call work with a controlled credential.
 DIFY_EXPORT_PATH = "/console/api/apps/{app_id}/export"
+#: The console's per-dataset route. Needed because the **exported DSL does not
+#: carry** the one field that lets us translate a dataset: measured on 41, a
+#: dataset entry in the DSL is exactly ``{enabled, id}`` — no
+#: ``external_knowledge_info``. The operator's handle (`kb-canary`) is only on
+#: this route. See :func:`dataset_knowledge_id`.
+DIFY_DATASET_PATH = "/console/api/datasets/{dataset_id}"
 DIFY_WORKSPACE_HEADER = "X-WORKSPACE-ID"
 
 #: The only DSL shape we parse. A newer Dify is an unknown shape, and guessing
@@ -173,6 +180,52 @@ class DifyDslClient:
             retry=_EXPORT_RETRY,
         )
 
+    def dataset_knowledge_id(self, dataset_id: str) -> str:
+        """The operator's handle for one Dify dataset — or a loud failure.
+
+        This is the **only** bridge between the two id spaces, and it is one
+        hop, not a translation: Dify's dataset carries the
+        ``external_knowledge_id`` the operator typed into Dify's External
+        Knowledge API form, and that same string is the key in our own
+        ``AIOPS_GATEWAY_DIFY_KNOWLEDGE_BINDINGS`` registry. The DSL does not
+        carry it (measured: a DSL dataset entry is exactly ``{enabled, id}``),
+        so it has to be read from here.
+
+        Absent means one of two things, and both are failures rather than
+        "no knowledge attached": the dataset is a **native** Dify dataset
+        (nothing of ours is behind it), or the operator never registered the
+        external API. Guessing either way would put a Dify id into
+        ``knowledge_base_ids`` — the exact defect #741 fixed. So a missing or
+        empty value raises.
+        """
+        target = dataset_id.strip()
+        if not target:
+            raise ValueError("Dify dataset id is empty")
+        headers = {
+            "Accept": "application/json",
+            "Authorization": bearer_auth_header(self.source.api_key),
+        }
+        if self.source.workspace_id:
+            headers[DIFY_WORKSPACE_HEADER] = self.source.workspace_id
+        payload = request_json(
+            RequestSpec(
+                url=join_url(self.base_url, DIFY_DATASET_PATH.format(dataset_id=target)),
+                headers=headers,
+                timeout=self.source.timeout,
+            ),
+            mapping=_error_mapping(),
+            envelope=_dataset_envelope,
+            retry=_EXPORT_RETRY,
+        )
+        external = (payload.get("external_knowledge_info") or {}).get("external_knowledge_id")
+        if not isinstance(external, str) or not external.strip():
+            raise DifyDslMalformed(
+                f"Dify dataset {target} 没有 external_knowledge_id —— 它不是一个外接知识库"
+                "（原生 dataset 背后没有我们的知识库）。请在 Dify 控制台把它改成挂"
+                "「外接知识库 API」，或从 app 上移除这个数据集。"
+            )
+        return external.strip()
+
 
 def _export_envelope(payload: Any, mapping: ErrorMapping) -> str:
     """The Dify export envelope: ``{"data": "<DSL YAML text>"}``.
@@ -185,6 +238,21 @@ def _export_envelope(payload: Any, mapping: ErrorMapping) -> str:
     if not isinstance(inner, str) or not inner.strip():
         raise mapping.invalid_envelope(HttpFailure("invalid_envelope", detail="missing export payload"))
     return inner
+
+
+def _dataset_envelope(payload: Any, mapping: ErrorMapping) -> dict[str, Any]:
+    """The dataset route answers with the object itself, not a ``data`` wrapper.
+
+    Kept explicit (rather than reusing ``parse_data_key_envelope``) because the
+    two routes really do differ: the export route wraps its DSL in ``data``,
+    this one does not. Silently accepting either shape here would let a future
+    change to one route go unnoticed on the other.
+    """
+    if not isinstance(payload, dict):
+        raise mapping.invalid_envelope(
+            HttpFailure("invalid_envelope", detail="dataset payload is not an object")
+        )
+    return payload
 
 
 def _error_mapping() -> ErrorMapping:
@@ -214,6 +282,7 @@ def map_dsl_to_config(
     agent_type: str,
     output_contract: str | None = None,
     knowledge_base_ids: tuple[str, ...] | None = None,
+    dataset_resolver: Callable[[tuple[str, ...]], tuple[str, ...]] | None = None,
 ) -> AgentConfig:
     """Map exported DSL text onto the ``AgentConfig`` fields we run on.
 
@@ -227,6 +296,14 @@ def map_dsl_to_config(
     caller did not state a binding, and a DSL that *does* declare one then
     fails loudly — the alternative is publishing a Dify UUID as a knowledge
     base. An explicit tuple (including ``()``) is taken as stated.
+
+    ``dataset_resolver`` is how a declared dataset stops being a dead end: the
+    caller injects a function that turns Dify's dataset id into **our**
+    knowledge-base ids (via the operator's handle — see
+    :meth:`DifyDslClient.dataset_knowledge_id`). Kept as a parameter rather
+    than a call from here so this function stays pure and testable with no
+    network. ``None`` keeps the old behaviour exactly: a declared dataset with
+    nowhere to resolve it is a hard failure, never a silent copy.
     """
     try:
         document = yaml.safe_load(dsl_text)
@@ -246,14 +323,17 @@ def map_dsl_to_config(
 
     declared = _declared_dataset_ids(model_config)
     if knowledge_base_ids is None:
-        if declared:
+        if declared and dataset_resolver is not None:
+            knowledge_base_ids = dataset_resolver(declared)
+        elif declared:
             raise DifyDslMalformed(
                 "DSL 声明了知识库数据集（"
                 + ", ".join(declared)
                 + "），但那是 Dify 的 dataset id，不是我们的知识库 id —— 两者不是同一个 id 空间。"
                 "请显式给出 knowledge_base_ids（`admin pull-dify --knowledge-base-id`），不要按字面搬运。"
             )
-        knowledge_base_ids = ()
+        else:
+            knowledge_base_ids = ()
 
     return AgentConfig(
         agent_type=agent_type,
@@ -262,6 +342,59 @@ def map_dsl_to_config(
         model=_required_model(model_config),
         output_contract=output_contract or _default_output_contract(agent_type),
     )
+
+
+def _resolve_declared_datasets(
+    dataset_ids: tuple[str, ...],
+    registry: Mapping[str, Any],
+    client: DifyDslClient,
+    *,
+    tenant_id: str = "",
+) -> tuple[str, ...]:
+    """Translate Dify dataset ids into **our** knowledge-base ids, or refuse.
+
+    Two hops, and every failure is a refusal rather than a fallback:
+
+    * dataset id → the operator's handle (``external_knowledge_id``), read from
+      the console. A **native** Dify dataset has no handle, so it is a refusal:
+      there is nothing of ours behind it.
+    * handle → our knowledge-base ids, through the same registry the inbound
+      retrieval route uses. An unregistered handle is a refusal: we never guess
+      which tenant a dataset belongs to.
+
+    ``tenant_id`` is checked when given: a registry row for **another tenant**
+    is refused rather than bound. The registry is a global table, and without
+    this a dataset pointed at the wrong operator's handle would quietly attach
+    that operator's knowledge base to this agent.
+
+    All-or-nothing on purpose. Accepting three of four declared datasets would
+    look like a successful pull while an operator's edit silently went missing,
+    which is the failure this whole change exists to remove.
+
+    Typed against ``Any`` rather than ``gateway_config.DifyKnowledgeBinding``
+    so this module does not depend on the server-config module: it only ever
+    reads ``knowledge_base_ids`` and ``tenant_id`` off the row.
+    """
+    resolved: list[str] = []
+    for dataset_id in dataset_ids:
+        handle = client.dataset_knowledge_id(dataset_id)
+        binding = registry.get(handle)
+        if binding is None:
+            raise DifyDslMalformed(
+                f"Dify dataset {dataset_id} 的外接知识库句柄是 {handle!r}，但 "
+                "AIOPS_GATEWAY_DIFY_KNOWLEDGE_BINDINGS 里没有它 —— 我们不知道它对应哪个"
+                "租户、哪些知识库。请先在 41 上登记这个句柄，或在 Dify 里改挂已登记的那一个。"
+            )
+        if tenant_id and str(getattr(binding, "tenant_id", "")) != tenant_id:
+            raise DifyDslMalformed(
+                f"Dify dataset {dataset_id} 的句柄 {handle!r} 登记在另一个租户名下"
+                f"（{getattr(binding, 'tenant_id', '')}），而这个 agent 属于 {tenant_id} —— "
+                "拒绝把别的租户的知识库挂上来。"
+            )
+        for knowledge_base_id in binding.knowledge_base_ids:
+            if knowledge_base_id not in resolved:
+                resolved.append(knowledge_base_id)
+    return tuple(resolved)
 
 
 def resolve_pulled_config(
@@ -273,6 +406,8 @@ def resolve_pulled_config(
     agent_type: str,
     output_contract: str | None = None,
     knowledge_base_ids: tuple[str, ...] | None = None,
+    knowledge_registry: Mapping[str, Any] | None = None,
+    tenant_id: str = "",
 ) -> AgentConfig:
     """Fetch, map and settle the config a pull would land — **no writes at all**.
 
@@ -283,21 +418,44 @@ def resolve_pulled_config(
     knowledge binding came to be reported as empty while the real pull kept it.)
 
     ``knowledge_base_ids`` is the operator's binding, not the DSL's; see
-    :func:`map_dsl_to_config`. When it is ``None`` the existing agent's binding
-    is **kept**, never cleared: "this pull did not state a knowledge base" and
-    "this agent has no knowledge base" are different statements, and only the
-    second one should empty the field. Without that, pulling a dataset-free app
-    (the shape the production app now has) would silently drop a live
+    :func:`map_dsl_to_config`. When it is ``None`` **and Dify declares no
+    dataset**, the existing agent's binding is **kept**, never cleared: "this
+    pull did not state a knowledge base" and "this agent has no knowledge base"
+    are different statements, and only the second one should empty the field.
+    Without that, pulling a dataset-free app would silently drop a live
     customer-service agent off the RAG path — the same silent-overwrite the
     manifest's prompt handling already guards against (#739).
+
+    ``knowledge_registry`` is what makes an operator's Dify-side dataset change
+    **take effect**. It is the *same* table the inbound retrieval route uses
+    (:func:`parse_dify_knowledge_bindings`), read in the other direction: a
+    dataset id becomes the operator's handle, and the handle names our
+    knowledge-base ids. ``None`` keeps the pre-bridge behaviour — a declared
+    dataset with nowhere to resolve is a hard failure, never a silent copy.
     """
+    client = DifyDslClient(source)
+    #: Set by the resolver below, which the mapper calls **only** when the DSL
+    #: declares a dataset. That is how we tell "Dify said nothing" (keep the
+    #: live binding) from "Dify named one" (its ids win) without parsing the
+    #: DSL a second time and risking the two answers disagreeing.
+    declared: list[tuple[str, ...]] = []
+
+    def resolver(ids: tuple[str, ...]) -> tuple[str, ...]:
+        declared.append(ids)
+        return _resolve_declared_datasets(ids, knowledge_registry or {}, client, tenant_id=tenant_id)
+
     config = map_dsl_to_config(
-        DifyDslClient(source).export_dsl(),
+        client.export_dsl(),
         agent_type=agent_type,
         output_contract=output_contract,
         knowledge_base_ids=knowledge_base_ids,
+        dataset_resolver=resolver if knowledge_registry else None,
     )
-    if knowledge_base_ids is None:
+    if knowledge_base_ids is None and not declared:
+        # Only "Dify said nothing" keeps the live binding. When Dify *does*
+        # declare a dataset, the resolved ids already won; keeping the live
+        # ones on top would make the operator's edit invisible, which is the
+        # whole point of this change.
         existing = _find_by_name(manager, context, name)
         if existing is not None:
             config = replace(config, knowledge_base_ids=existing.config.knowledge_base_ids)
@@ -314,6 +472,7 @@ def pull_agent_draft(
     agent_type: str,
     output_contract: str | None = None,
     knowledge_base_ids: tuple[str, ...] | None = None,
+    knowledge_registry: Mapping[str, Any] | None = None,
 ) -> Agent:
     """Pull ``source`` and land the result as a draft. Never publishes.
 
@@ -330,6 +489,8 @@ def pull_agent_draft(
         agent_type=agent_type,
         output_contract=output_contract,
         knowledge_base_ids=knowledge_base_ids,
+        knowledge_registry=knowledge_registry,
+        tenant_id=str(getattr(context, "effective_tenant_id", "") or ""),
     )
     return converge_agent_draft(manager, context, config, name=name, description=description)
 
@@ -496,6 +657,7 @@ def sync_binding_from_dify(
     source: DifyDslSource,
     *,
     dry_run: bool = False,
+    knowledge_registry: Mapping[str, Any] | None = None,
 ) -> SyncOutcome:
     """Bring one registry binding's agent up to what **Dify currently holds**.
 
@@ -568,6 +730,7 @@ def sync_binding_from_dify(
         agent_type=live.agent_type,
         output_contract=live.output_contract,
         knowledge_base_ids=live.knowledge_base_ids,
+        knowledge_registry=knowledge_registry,
     )
 
     try:
