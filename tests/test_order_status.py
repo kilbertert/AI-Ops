@@ -263,3 +263,31 @@ def test_no_second_inline_status_to_role_judgement() -> None:
     """
     offenders = _inline_status_comparisons()
     assert offenders == [], "订单状态的数字判据只许出现在 order_status.py: " + ", ".join(offenders)
+
+
+# --- 6. 与 `health_report` 被替换掉的那个判据逐条等价 --------------------------
+
+
+def test_health_reports_status_check_is_equivalent_on_every_column_value() -> None:
+    """`health_report` 的「订单未结束」判据：**在列的取值域上**逐条等价。
+
+    `ch_order_info.status` 是 `tinyint`（41 只读实测），实际取值恰好 `{0,1,2,3,5}`。
+    在这个域上，被替换掉的 `int(value) == 0` 与本模块的 `is_charging` 给出**同一答案**：
+    能造出差异的输入是 `'0.0'` / `'0.5'`（旧实现读不出 0，新的读成 0）与 `False`
+    （`int(False) == 0`，而布尔从来不是状态码）—— **列产不出这三者**。
+
+    这条判据的作用不是证明"永远等价"，而是把**等价面写在测试里**：
+    哪一天列的取值域变了（例如出现小数状态），这里会先红。
+    """
+    column_values = (0, 1, 2, 3, 5, None)  # tinyint 的实测域
+
+    def old_guard(value: object) -> bool:
+        try:
+            return (int(value) if value is not None else None) == 0
+        except (TypeError, ValueError):
+            return False
+
+    assert [old_guard(v) for v in column_values] == [is_charging(v) for v in column_values]
+    # 差异只出现在列产不出的输入上 —— 如实记下来，而不是声称"完全等价"。
+    assert is_charging("0.0") is True and old_guard("0.0") is False
+    assert is_charging(False) is False and old_guard(False) is True

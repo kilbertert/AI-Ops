@@ -62,10 +62,12 @@ OPERATIONS_CARDS = frozenset(
 #: staged 的 ``AbnormalOrderTxDataHandler.java``）—— 那是一次重新推导，不是一次取用，
 #: 而 ``tests/`` 里没有任何一处能发现它漂移（PRD #732 的删除测试）。
 #:
-#: 今天恰好是单值。扩成多值是产品口径的事；真要做时只改 ``order_status._ROLE_BY_STATUS`` 一处。
-ABNORMAL_STATUS = abnormal_end_codes()[0]
-#: 「正常结束」的取值，同样派生 —— 此前 `sources` 里另抄了一个字面量 1。
-NORMAL_STATUS = normal_end_codes()[0]
+#: **单元素解包**，不是 ``[0]``：多值时这里会**在导入期炸**，而不是静默丢掉第二个 code。
+#: 扩成多值要动的是**渲染**（`sources` 的两条 SQL 现在是 `status = %s` + 一个绑定值，
+#: 多值要变 `IN (...)` + N 个占位符），所以那个改动者必须被拦下来看一眼 ——
+#: `[0]` 会让他以为"只改 `_ROLE_BY_STATUS` 一处"就够了，而 SQL 仍在只数第一个。
+(ABNORMAL_STATUS,) = abnormal_end_codes()
+(NORMAL_STATUS,) = normal_end_codes()
 
 #: 风险等级的门限。**这不是本仓既有规则**——树里没有任何一处定义过失败率门限
 #: （``engine.py`` 只分类、``rules.py`` 只给标签、原型里那张「异常/失败率」卡没有公式）。

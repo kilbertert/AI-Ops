@@ -366,8 +366,16 @@ class MySQLSource:
         # authority module today and are integers, so the f-string form was not an
         # injection — but "a constant that will never be a string" is a property of
         # today's value, not of the seam, and `sources` is where the failure_rate
-        # numerator is decided. `params` order follows the SQL text: the two role
-        # codes precede the scope/window parameters they sit among.
+        # numerator is decided.
+        #
+        # ⚠️ **Order is the SQL's, not the statement's.** In this summary the two
+        # status placeholders sit in the SELECT list, which is emitted BEFORE the
+        # WHERE — so they bind first and the scope/window values follow. The
+        # `top_sql` below has its placeholder AFTER the WHERE and therefore binds
+        # last. Getting this backwards does not raise: it silently counts the wrong
+        # rows (a tenant id bound as a status). Caught in the #735 review — and the
+        # tests could not see it, because their cursor records parameters instead of
+        # executing, so nothing ever compared a placeholder to its value.
         sql = (
             f"SELECT {hint} COUNT(*) AS total, "
             "SUM(CASE WHEN status = %s THEN 1 ELSE 0 END) AS abnormal_ended, "
@@ -380,9 +388,9 @@ class MySQLSource:
             f"WHERE {where} AND status = %s "
             "GROUP BY site_id ORDER BY abnormal_ended DESC, site_id ASC LIMIT 1"
         )
-        role_params = [ABNORMAL_STATUS, NORMAL_STATUS]
+        role_params = [ABNORMAL_STATUS, NORMAL_STATUS]  # SELECT-list order
         with self._cursor() as cursor:
-            cursor.execute(sql, [*params, *role_params])
+            cursor.execute(sql, [*role_params, *params])
             row = cursor.fetchone() or {}
             cursor.execute(top_sql, [*params, ABNORMAL_STATUS])
             top = cursor.fetchone()

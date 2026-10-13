@@ -324,7 +324,7 @@ def test_neither_side_narrowing_issues_sql_without_a_site_predicate() -> None:
     sql, params = source.cursor_obj.executed[0]
     assert "tenant_id=%s" in sql
     assert "site_id IN" not in sql, "整租户不该有站点条件"
-    assert params == ["T-1", "2026-10-01 00:00:00", "2026-10-02 00:00:00", ABNORMAL_STATUS, NORMAL_STATUS]
+    assert params == [ABNORMAL_STATUS, NORMAL_STATUS, "T-1", "2026-10-01 00:00:00", "2026-10-02 00:00:00"]
     assert result is not None and result["total"] == 7
 
 
@@ -341,13 +341,13 @@ def test_no_requested_narrowing_builds_the_visible_site_predicate() -> None:
     sql, params = source.cursor_obj.executed[0]
     assert "site_id IN (%s, %s)" in sql
     assert params == [
+        ABNORMAL_STATUS,
+        NORMAL_STATUS,
         "T-1",
         "S-1",
         "S-2",
         "2026-10-01 00:00:00",
         "2026-10-02 00:00:00",
-        ABNORMAL_STATUS,
-        NORMAL_STATUS,
     ]
     assert result is not None and result["total"] == 3
 
@@ -376,12 +376,12 @@ def test_the_job_site_set_narrows_the_scope_instead_of_replacing_it() -> None:
     # The property this test is about — the out-of-scope site being dropped —
     # is unchanged and still asserted above.
     assert params == [
+        ABNORMAL_STATUS,
+        NORMAL_STATUS,
         "T-1",
         "S-1",
         "2026-10-01 00:00:00",
         "2026-10-02 00:00:00",
-        ABNORMAL_STATUS,
-        NORMAL_STATUS,
     ]
     assert result is not None and result["top_sites"] == (("S-2", 2),)
 
@@ -459,3 +459,48 @@ def test_an_analysis_row_is_not_an_order_diagnosis(tmp_path: Path) -> None:
     assert store.get_standard_diagnosis(diagnosis["diagnosis_id"], "scope-1") is not None
     assert store.get_standard_diagnosis(analysis["diagnosis_id"], "scope-1") is not None
     assert store.get_standard_diagnosis("qa_" + "0" * 32, "scope-1") is None
+
+
+def _placeholder_values(sql: str, params: list[Any]) -> list[Any]:
+    """Pair each `%s` in the SQL TEXT with the parameter bound to it, in order.
+
+    This is the check the #735 review found missing: the cursor above **records**
+    parameters but never executes, so it cannot see a placeholder bound to the
+    wrong value — it only sees the list. A binding-order mistake does not raise;
+    it silently counts the wrong rows (a tenant id read as a status), which is
+    exactly the class of defect this whole surface is about.
+    """
+    values = iter(params)
+    return [next(values, "<missing>") for _ in sql.replace("%s", "\x00%s\x00").split("\x00") if _ == "%s"]
+
+
+def test_the_status_placeholders_bind_the_status_codes_and_nothing_else() -> None:
+    """**每个 `%s` 拿到的是它该拿的值** —— 按 SQL 文本顺序逐位配对。
+
+    #732 把两个角色码从 f-string 插值改成参数绑定，而它们在**汇总查询的 SELECT
+    列表里**，即出现在 WHERE **之前** ⇒ 必须先绑。绑反了（我先写成的样子）不会抛错，
+    只会把租户 id 当成一个状态码去数行 —— 而失败率会因此给出**看起来合理**的错数字。
+    这条判据此前不存在：游标只记录参数、不执行，所以没有任何东西比对过
+    「占位符 ↔ 它拿到的值」。
+    """
+    source = _FakeSource(
+        _scope(("S-1",)),
+        {"total": 10, "abnormal_ended": 2, "normal_ended": 8},
+        {"site_id": "S-1", "abnormal_ended": 2},
+    )
+
+    source.aggregate_order_statuses(("S-1",), "2026-10-01 00:00:00", "2026-10-02 00:00:00")
+
+    summary_sql, summary_params = source.cursor_obj.executed[0]
+    summary_values = _placeholder_values(summary_sql, summary_params)
+    # The two SELECT-list status placeholders come first in the text, so they must
+    # be the two status codes — not the tenant or a window bound.
+    assert summary_values[:2] == [ABNORMAL_STATUS, NORMAL_STATUS], summary_values
+    assert summary_values[2:] == ["T-1", "S-1", "2026-10-01 00:00:00", "2026-10-02 00:00:00"]
+
+    top_sql, top_params = source.cursor_obj.executed[1]
+    top_values = _placeholder_values(top_sql, top_params)
+    # The top-site query's status placeholder sits AFTER the WHERE, so it binds last.
+    assert top_values[-1] == ABNORMAL_STATUS, top_values
+    assert top_values[:-1] == ["T-1", "S-1", "2026-10-01 00:00:00", "2026-10-02 00:00:00"]
+    assert len(top_values) == top_sql.count("%s"), top_sql
