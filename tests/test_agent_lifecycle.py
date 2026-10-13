@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
+from aiops_diagnostics.agent_contracts import ALL_TOOL_NAMES
 from aiops_diagnostics.agent_lifecycle import (
     AgentConfig,
     AgentConflict,
@@ -68,7 +69,9 @@ def _context(
     )
 
 
-def _config(*, agent_type: str = "customer", model: str = "aiops-api") -> AgentConfig:
+def _config(
+    *, agent_type: str = "customer", model: str = "aiops-api", allowed_tools=ALL_TOOL_NAMES
+) -> AgentConfig:
     return AgentConfig(
         agent_type=agent_type,
         prompt="回答必须引用已授权的业务资料。",
@@ -77,6 +80,7 @@ def _config(*, agent_type: str = "customer", model: str = "aiops-api") -> AgentC
         output_contract="blocks-v1" if agent_type == "customer" else "diagnosis-v1",
         opening_questions=("怎么处理？",),
         quick_commands=("查看步骤",),
+        allowed_tools=allowed_tools,
     )
 
 
@@ -217,3 +221,32 @@ def test_agent_management_api_enforces_role_and_returns_opaque_lifecycle_contrac
     with TestClient(viewer_app) as client:
         denied = client.post("/v1/agents", headers={"Authorization": "Bearer token"}, json=payload)
     assert denied.status_code == 403
+
+
+def test_publish_rejects_an_unknown_tool_name(tmp_path: Path) -> None:
+    """白名单里的名字必须是**已枚举**的工具。
+
+    不拦的后果是不对称的：写错一个字会静默地要么全放行、要么全拦住，而运营在
+    Dify 里看到的是一次成功的发布。空名单合法（"一个工具都不许跑"），所以这条
+    门只查"名字认不认得"。
+    """
+    store = AgentStore(tmp_path / "gateway.db")
+    manager = AgentManager(store, knowledge_resolver=_Knowledge())
+    admin = _context()
+    # 门在 create 就拦（create 也过 _validate_config），比 publish 更早 ——
+    # 更早失败是更好的方向：坏配置一个字节都不落库。
+    with pytest.raises(AgentValidationError, match="allowed_tools"):
+        manager.create(
+            admin, name="坏工具", description="", config=_config(allowed_tools=("order_snapshott",))
+        )
+    assert manager.list(admin) == [], "坏配置不该留下任何行"
+
+
+def test_an_empty_allowlist_is_a_legal_publish(tmp_path: Path) -> None:
+    """空名单是一个**真实意图**（一个工具都不许跑），不是错误 —— 与"没写"分开。"""
+    store = AgentStore(tmp_path / "gateway.db")
+    manager = AgentManager(store, knowledge_resolver=_Knowledge())
+    admin = _context()
+    agent = manager.create(admin, name="无工具", description="", config=_config(allowed_tools=()))
+    version = manager.publish(admin, agent.agent_id, expected_revision=agent.revision)
+    assert version.version_no == 1

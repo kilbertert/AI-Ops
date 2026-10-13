@@ -77,6 +77,7 @@ def run_agent_diagnosis(
     history: str = "",
     turn_registrar: Callable[[Any], None] | None = None,
     methodology: str = "",
+    allowed_tools: tuple[str, ...] | None = None,
 ) -> AgentDiagnosis:
     """Run the shared read-only agent path for local CLI and gateway workers.
 
@@ -105,6 +106,7 @@ def run_agent_diagnosis(
             safety=settings.safety,
             scope=scope,
             allowed_tenants=allowed_tenants,
+            allowed_tools=allowed_tools,
         )
         environment_notes = preflight_environment(sources, request, journal)
         coordinator = AgentCoordinator(
@@ -125,6 +127,7 @@ def run_agent_diagnosis(
             language=language,
             history=history,
             methodology=methodology,
+            allowed_tools=allowed_tools,
             session_factory=_diagnosis_session_factory(turn_registrar),
         )
         return coordinator.run()

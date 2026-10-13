@@ -175,6 +175,25 @@ Dify 控制台里给智能体挂「外接知识库」时，端点填 `https://<h
 `AIOPS_GATEWAY_DIFY_KNOWLEDGE_BINDINGS` 按 `knowledge_id` 决定。Dify 因此拿不到数据面，
 也扩不了检索范围。
 
+## 工具白名单：Dify 声明，执行器强制（#577 / ADR-0019）
+
+`AgentConfig.allowed_tools` 决定这个 agent 能跑哪几个工具。**强制点在执行器**
+（`DiagnosticToolExecutor.execute`），不在提示词：白名单外的工具记一条 `blocked` 证据、
+**不取数**，而且这条判定**先于 journal 缓存** —— 否则早先运行缓存下的成功结果会绕过它。
+
+三个方向都要知道：
+
+- **默认 = 全部七个工具**（`agent_contracts.ALL_TOOL_NAMES`）。它让这个字段对存量
+  **零影响**：没有快照会因为多了这一维而被全量重发。
+- **Dify 拥有这个字段，清单不得写**（`agent_manifest.DIFY_OWNED_FIELDS`）。绑定了 Dify
+  的 agent 在 `[[agents]]` 里写 `allowed_tools` ⇒ 装载期**拒**；`reconcile` 也会**保留**
+  库中现值，不会把运营改过的白名单改回默认。
+- **今天还改不动它**：缺少「Dify 工具身份 → 我们的 `ToolName`」的映射键，而那个键需要
+  先有一个真实样本（在 Dify 里真挂一个工具，读回 `provider_id`/`tool_name`）。实测 36 上
+  两个 app 的 `agent_mode.tools` **都是空的**，所以本仓没有可验证的映射键，也**不发明**它。
+  在那之前，DSL 里**声明了**工具的 app 会被拉回侧**拒**（点明那是 Dify 的工具身份），
+  这是刻意的：拒比静默忽略诚实。
+
 失败语义（与 Dify 侧 `raise ValueError(response.text)` 的读法对齐）：
 
 | 情况 | 响应 |

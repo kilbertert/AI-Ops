@@ -31,6 +31,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
 
+from aiops_diagnostics.agent_contracts import ALL_TOOL_NAMES
 from aiops_diagnostics.agent_lifecycle import (
     AgentConfig,
     AgentManager,
@@ -107,10 +108,29 @@ class ManifestError(ValueError):
 #: 与"我没写、它由别处来"必须能分开。
 _PROMPT_FROM_DIFY = "\x00prompt-from-dify\x00"
 
+#: 同上的哨兵，给工具白名单：清单没写 = 它由 Dify 拥有（R3）。
+#: 空元组与它不同 —— 空元组是一个**真实意图**（"这个 agent 一个工具都不许跑"）。
+_TOOLS_FROM_DIFY = ("\x00tools-from-dify\x00",)
+
 
 def prompt_from_dify(agent: ManifestAgent) -> bool:
     """这个 agent 的提示词是不是**不来自清单**（即由 Dify 那一侧提供）。"""
     return agent.config.prompt == _PROMPT_FROM_DIFY
+
+
+def tools_from_dify(agent: ManifestAgent) -> bool:
+    """这个 agent 的工具白名单是不是**不来自清单**（即由 Dify 那一侧提供）。"""
+    return agent.config.allowed_tools == _TOOLS_FROM_DIFY
+
+
+#: 由 **Dify** 拥有、清单**不得**承载的字段（R3）。提示词是第一个（#739），
+#: 工具白名单是第二个（#577 的 PR-3）：两者都经发布门从 Dify 拉回。
+#:
+#: 为什么需要一个**具名集合**而不是继续逐个特判：漏掉一个的后果是不对称的 ——
+#: 漏掉 `prompt` 会让 reconcile 把线上正文覆盖成哨兵（#739 逮到过），漏掉
+#: `allowed_tools` 会让它把运营刚设好的白名单改回默认。两种都是"看着收敛成功、
+#: 实际把运营的改动改掉了"。加字段时**只改这一处**。
+DIFY_OWNED_FIELDS: tuple[str, ...] = ("prompt", "allowed_tools")
 
 
 def load_manifest(path: Path) -> EnvironmentManifest:
@@ -133,13 +153,13 @@ def load_manifest(path: Path) -> EnvironmentManifest:
         validated = validate_bindings(bindings)
     except DifyAppRegistryError as exc:
         raise ManifestError(str(exc)) from exc
-    _require_bound_agents_declared(tuple(agents), validated)
-    return EnvironmentManifest(agents=tuple(agents), dify_apps=validated)
+    agents = _require_bound_agents_declared(tuple(agents), validated)
+    return EnvironmentManifest(agents=agents, dify_apps=validated)
 
 
 def _require_bound_agents_declared(
     agents: tuple[ManifestAgent, ...], bindings: tuple[DifyAppBinding, ...]
-) -> None:
+) -> tuple[ManifestAgent, ...]:
     """两份声明必须互为**同一个事实**：绑定必须指向已声明的 agent，且二者不可各写一份提示词。
 
     两条都在**装载期**判，不在 converge 判。理由与模型白名单同源：注册行与它指向的
@@ -190,6 +210,30 @@ def _require_bound_agents_declared(
             "未绑定 Dify app 的 agent 必须有 prompt（否则它没有任何正文来源）: " + "; ".join(orphan)
         )
 
+    # R3 · 工具白名单与 prompt 同构：**Dify 拥有它** ⇒ 绑定的 agent 不得在清单里写。
+    # 写了就是一个会静默生效的第二权威：reconcile 会把运营在 Dify 里设好的白名单
+    # 覆盖成清单里那一份，而报告只说「updated」。
+    tools_both = sorted(
+        f"{agent.tenant_id}/{agent.name}"
+        for agent in agents
+        if (agent.tenant_id, agent.name) in bound and not tools_from_dify(agent)
+    )
+    if tools_both:
+        raise ManifestError(
+            "绑定了 Dify app 的 agent 不能又在 [[agents]] 里写 allowed_tools（工具白名单由 Dify 拥有）: "
+            + "; ".join(tools_both)
+        )
+
+    # 未绑定的 agent 没写 ``allowed_tools`` 时哨兵必须**归一成默认值**，否则它会带着
+    # 那个不可能匹配任何 ``ToolName`` 的字符串进发布门，被当成"未知工具名"拒掉 ——
+    # 一个只是没写这个字段的合法清单会因此装载失败。
+    return tuple(
+        replace(agent, config=replace(agent.config, allowed_tools=ALL_TOOL_NAMES))
+        if tools_from_dify(agent)
+        else agent
+        for agent in agents
+    )
+
 
 def _manifest_dify_app(entry: dict[str, Any]) -> DifyAppBinding:
     """One registry row. Every field is required and none is derived.
@@ -220,6 +264,12 @@ def _manifest_agent(entry: dict[str, Any]) -> ManifestAgent:
         output_contract=output_contract,
         opening_questions=tuple(str(item) for item in entry.get("opening_questions", [])),
         quick_commands=tuple(str(item) for item in entry.get("quick_commands", [])),
+        # 与 ``prompt`` 同构：缺失 = 哨兵（由 Dify 拥有），是否合法由装载期守卫判定。
+        allowed_tools=(
+            tuple(str(item) for item in entry["allowed_tools"])
+            if "allowed_tools" in entry
+            else _TOOLS_FROM_DIFY
+        ),
     )
     state = str(entry.get("state") or "published")
     if state not in MANIFEST_STATES:
@@ -396,9 +446,17 @@ def _converge_one(
     # （grep 出来的字面量，不是提示词）。而"把清单里的 prompt 删掉、改由 Dify 编辑"
     # 恰恰是这个改动要促成的状态 —— 也就是说，不修这里，"收敛"会把功能一起收掉。
     #
-    # 其余字段仍以清单为准：**只有 prompt 这一个字段**是"可能由别处提供"的。
-    if prompt_from_dify(agent) and existing is not None:
-        agent = replace(agent, config=replace(agent.config, prompt=existing.config.prompt))
+    # 其余字段仍以清单为准：``DIFY_OWNED_FIELDS`` 里的每一个都走这条分支，别的一个都不走。
+    # 逐个字段而不是"整个 config 都继承"：知识库/模型/契约仍是清单的权威，只有
+    # Dify 真正拥有的那两个不是。
+    if existing is not None:
+        preserved: dict[str, Any] = {}
+        if prompt_from_dify(agent):
+            preserved["prompt"] = existing.config.prompt
+        if tools_from_dify(agent):
+            preserved["allowed_tools"] = existing.config.allowed_tools
+        if preserved:
+            agent = replace(agent, config=replace(agent.config, **preserved))
 
     if agent.state == "disabled":
         if existing is None:

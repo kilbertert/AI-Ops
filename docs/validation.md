@@ -1,3 +1,66 @@
+## #757 工具白名单（2026-10-14，本地 + verify skill）
+
+**分支** `feat/dify-tool-allowlist`，基线 `origin/main`（`7a7d465`）。
+**本票**：`AgentConfig.allowed_tools` + 三处强制 + R3 + 删死代码；ADR-0019。
+
+### 一、确定性检查
+
+```
+pytest                     → 2271 passed (exit 0)
+ruff check / format --check → All checks passed / 345 files already formatted
+repo-map.check.mjs         → ok (149 lines)
+policy-check delivery      → passed
+adr.check.mjs --base origin/main → ok (19 records)
+```
+
+### 二、每处守卫的突变复验（去掉 ⇒ 对应用例转红）
+
+| 守卫 | 突变 | 结果 |
+|---|---|---|
+| 执行器白名单（`execute`） | 判定置 `False` | 2 条用例转红 |
+| 提示词只广告白名单 | 过滤置 `True` | 1 条转红 |
+| R3 装载期拒（绑定又写） | 条件置 `False` | 1 条转红 |
+| R3 归一化（哨兵→默认） | 去掉 `replace` | 1 条转红 |
+| `_converge_one` 保留现值 | 改成"保留**默认值**"（真实失效形态） | 1 条转红 |
+| 拉回侧工具声明拒 | 分支置 `False` | 1 条转红 |
+
+### 三、`verify-aiops-gateway`（真进程，一次性数据根）
+
+```
+temp root: /tmp/aiops-verify-hu6utrlc
+gateway  : http://127.0.0.1:8787
+  /health -> 200
+  unauthenticated /v1/runs -> 401 (401 expected)
+  issued enrollment code: yes
+  POST /v1/enroll -> 201
+  authenticated /v1/runs -> 200
+  authenticated /v1/agents -> 401
+all checks passed
+```
+
+**⇒ 端到端证明的是**：网关真起得来、`/health` 契约成立、注册与鉴权边界未被本 PR 影响。
+
+### 四、据实：本 skill **证明不了**本 PR 的核心
+
+`AGENTS.md` 明写该 skill「不能证明模型驱动的 run、KB 活性」。**本 PR 的强制点恰恰在
+模型驱动的诊断路径上** —— 白名单拦截发生在 `DiagnosticToolExecutor.execute`，而跑到那里
+需要一次真实的诊断（`/diag/*` + MySQL/TDengine/Redis + provider key）。本地会话里
+**跑不到那一步**。
+
+以及 skill 自己列出的一条：**agent publish/reconcile 需要 UPMS 的管理员角色**，本地
+也证明不了 —— 而本 PR 的另两处（发布门、R3）正在那条路径上。
+
+所以本轮的据实结论是：**本 PR 的强制语义由单测（含突变复验）证明，不由端到端证明**；
+端到端只证明了"网关照常起、契约未破"。**真实诊断路径上的白名单强制仍待 41 验收**
+（需要在 41 上把一个 agent 的白名单收窄成单个工具，再让模型去请求另一个，读回
+`blocked` 证据且**没有取数**）。这一条**未做**，不声称。
+
+### 五、未做的机器验收（延续 #753 的边界）
+
+- 运营在 Dify 里**真的挂一个工具**并读回 `agent_mode.tools` 的真实形状 —— 本 PR 的
+  映射键前置，**未做**（36 上两个 app 都是空表，没有样本）。
+- 41 上 `reconcile --dry-run` 对存量清单应报 `unchanged` —— **未做**（需要部署后跑）。
+
 ## #721 运维巡检入口 + 整租户范围缺陷（2026-10-12，本地 + 41 真机）
 
 **分支** `feat/operator-operations-review`（PR #722）→ `fix/operations-analysis-whole-tenant-aggregate-scope`（PR #723），

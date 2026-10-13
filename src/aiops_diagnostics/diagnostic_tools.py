@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
@@ -171,7 +172,12 @@ class DiagnosticToolExecutor:
         safety: Any,
         scope: QueryScope | None = None,
         allowed_tenants: set[str] | None = None,
+        allowed_tools: Iterable[str] | None = None,
     ) -> None:
+        # 白名单在**执行器**里生效，不在提示词里（ADR-0015 §五）。提示词只告诉模型
+        # 可以要什么；真正决定"跑不跑"的是这里。``None`` = 不加约束（默认全放行），
+        # 与 ``AgentConfig.allowed_tools`` 的默认值同向，所以存量调用点逐字不变。
+        self.allowed_tools = None if allowed_tools is None else frozenset(str(t) for t in allowed_tools)
         self.sources = sources
         self.request = request
         self.manifest = manifest
@@ -191,6 +197,20 @@ class DiagnosticToolExecutor:
         return [self.execute(item.tool) for item in requests]
 
     def execute(self, tool: ToolName) -> ToolOutcome:
+        # The allow-list is checked **before** the cache is consulted: a tool
+        # that is not allowed must not be served from a previous run's cache
+        # either, or narrowing the list would leave the old evidence readable
+        # and the block would look like it worked while it did not.
+        if self.allowed_tools is not None and str(tool) not in self.allowed_tools:
+            entry = self.journal.record(
+                tool=tool,
+                source="harness:tool_allowlist",
+                status="blocked",
+                request=self._identity_request(),
+                payload={"allowed_tools": sorted(self.allowed_tools)},
+                error=f"工具 {tool} 不在这个智能体的工具白名单里，未执行、未取数",
+            )
+            return self._outcome(tool, entry)
         cached = self.journal.latest_success(tool)
         if cached:
             try:

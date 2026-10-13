@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from aiops_diagnostics.agent_contracts import ALL_TOOL_NAMES
 from aiops_diagnostics.agent_lifecycle import AgentManager, AgentStore
 from aiops_diagnostics.agent_manifest import (
     _PROMPT_FROM_DIFY,
@@ -15,6 +16,7 @@ from aiops_diagnostics.agent_manifest import (
     load_manifest,
     prompt_from_dify,
     reconcile,
+    tools_from_dify,
 )
 from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
 
@@ -424,3 +426,78 @@ def test_the_switch_back_is_allowed_once_the_binding_is_gone(tmp_path: Path) -> 
     manifest = _manifest(_manifest_agent(prompt="改回清单提供的正文"))
     reports = reconcile_dify_registry(DifyAppRegistry(tmp_path / "gateway.db"), manifest)
     assert reports == []
+
+
+def test_a_bound_agent_may_not_also_carry_allowed_tools(tmp_path: Path) -> None:
+    """工具白名单与 prompt 同构：**Dify 拥有它**，清单写了就是第二权威（R3）。
+
+    不比 prompt 那条门宽松：写了 `allowed_tools` 的绑定清单，reconcile 会把运营在
+    Dify 里设好的白名单覆盖成清单里那一份，而报告只说「updated」——运营的改动
+    被静默改回去，且没有任何信号。
+    """
+    with pytest.raises(ManifestError, match="allowed_tools"):
+        load_manifest(
+            _write(
+                tmp_path,
+                """
+                [[agents]]
+                tenant_id = "t1"
+                name = "客服"
+                agent_type = "customer"
+                model = "aiops-api"
+                allowed_tools = ["order_snapshot"]
+
+                [[dify_apps]]
+                tenant_id = "t1"
+                business_entry = "consumer"
+                app_id = "app-1"
+                agent_name = "客服"
+                """,
+            )
+        )
+
+
+def test_an_unbound_agent_without_allowed_tools_gets_every_tool(tmp_path: Path) -> None:
+    """没写 `allowed_tools` 的未绑定 agent 必须归一成**默认值**，不是哨兵。
+
+    哨兵会带着那个不可能匹配任何 `ToolName` 的字符串进发布门，被当成"未知工具名"
+    拒掉 —— 一个只是没写这个字段的合法清单会因此装载失败。
+    """
+    manifest = load_manifest(
+        _write(
+            tmp_path,
+            """
+            [[agents]]
+            tenant_id = "t1"
+            name = "客服"
+            agent_type = "customer"
+            model = "aiops-api"
+            prompt = "正文"
+            """,
+        )
+    )
+    assert manifest.agents[0].config.allowed_tools == ALL_TOOL_NAMES
+    assert not tools_from_dify(manifest.agents[0])
+
+
+def test_reconcile_preserves_the_operators_tool_allowlist(tmp_path: Path) -> None:
+    """R3 的另一半：reconcile 不得把运营在 Dify 里设的白名单改回默认。
+
+    只拦住"清单里写死"是不够的 —— 真正的失效形态是：运营在 Dify 里把工具收窄成
+    一个，下一次 `reconcile` 因为清单没有这个字段而用默认值（全部）覆盖掉它，报告
+    还说 `unchanged`。这里把库中现值设成收窄后的，再收敛一次清单，断言它**没被动**。
+    """
+    manager = _manager(tmp_path)
+    context = _context()
+    narrow = _manifest_agent()
+    narrow = replace(narrow, config=replace(narrow.config, allowed_tools=("order_snapshot",)))
+    reconcile(manager, _manifest(narrow))
+    assert manager.list(context)[0].config.allowed_tools == ("order_snapshot",)
+
+    # 清单这一轮把 allowed_tools 留空（= 由 Dify 拥有）⇒ 现值必须保住
+    from aiops_diagnostics.agent_manifest import _TOOLS_FROM_DIFY
+
+    manifest = _manifest(replace(narrow, config=replace(narrow.config, allowed_tools=_TOOLS_FROM_DIFY)))
+    reports = reconcile(manager, manifest)
+    assert _actions(reports) == ["unchanged"], "没有漂移就不该发布新版本"
+    assert manager.list(context)[0].config.allowed_tools == ("order_snapshot",), "运营设的白名单被改回去了"
