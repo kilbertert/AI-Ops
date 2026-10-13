@@ -504,41 +504,6 @@ canary 入口），已合并的 PR #196 运行版本；请求只带前端应有�
   这是授权隔离的正确行为，不代表健康报告或诊断成功路径已通过。补验需要业务方提供该会话
   有权访问的一笔订单，不应通过伪造订单号或扩大数据范围绕过。
 
-### 3.1-bis 订单选择器的取数约束（2026-10-13，#639 查证）
-
-**这一节的存在理由**：本文件此前只写「用户订单列表由 **BFF 既有接口**提供」——**没说是哪一个**。
-前端据此挑了名字最像"用户订单"的那一个（`/charging-pile/chOrderInfo/getOrderUserPage`），
-而它**与 AI-Ops 的可见范围不同源**，于是选择器把站外订单摆到了用户面前，提交必然 `404`。
-
-**两个端点，别选错**（同一 controller，语义完全不同）：
-
-| 端点 | 报的 `user-id` 语义 | Mapper 注解 | 结果 |
-|---|---|---|---|
-| `/chOrderInfo/getOrderUserPage`（**用户端**） | **C 端** `ch_order_info.user_id` | `getOrderPage` **无注解** | 只带 `tenant-id` ⇒ **整租户**；带 B 端 id ⇒ **0 条** |
-| `/chOrderInfo/page`（**管理端**） | 按 `site_id` 范围 | `getPage` 带 `@ShopDataScope(column="site_id", realTime=true)` | 设计上按**调用者站点集合**下推 |
-
-**判据（唯一一条）**：**选择器里出现的订单号，提交后必须能被服务端接受**；
-服务端会拒的订单，不允许出现在选择器里。
-
-⚠️ **但 `/chOrderInfo/page` 今天也拿不到收窄结果** —— 实测（2026-10-13，41 公网）：
-
-| 请求 | `total` |
-|---|---|
-| 基线（无 `client-type`） | 14 |
-| `client-type: admin` | **14**（未收窄） |
-| `client-type: admin` + `shop-id: -1` | **14**（平台哨兵 ⇒ 全部） |
-| `client-type: admin` + `shop-id: <某站点>` | 0（`shop-id` 是**单站点**过滤，不是集合） |
-
-**根因（读运行中产物 + 路由表，不是读源码注释）**：`@ShopDataScope` 由 `ShopIdInterceptor` 施加，
-它 `judge()` 要求 `client-type ∈ {admin, supply-admin, tenant-app}`；而**注入这个头的是公司网关** ——
-`cloud-charging-pile` 那条路由的 `filters` 是**空数组**（其他路由如 `trade`/`php`/`das`
-都挂着 `AdminProxyHeadFilter`）⇒ **对 charging-pile 全程不注入**，注解因此从不生效。
-
-⇒ **取数换源不是改一个参数就能完成的**：要先有人把 `AdminProxyHeadFilter` 挂到 charging-pile 路由上
-（公司侧配置决定，跨团队），或者由 **BFF/Java 侧**提供一个显式施加该范围的订单列表端点。
-
-**在那之前，前端不得让用户从「整租户」列表里选单** —— 这就是 #619 那条端点语义
-（空 `user-id` 返回全租户）。选择器可以先只做「无可用订单」的空态（见 #637 的文案拆分）。
 
 ## 10. 前端真实链路诊断（2026-09-05，Pyrovolt Move 1.0.3 APK 实测）
 
@@ -814,7 +779,7 @@ Accept-Language: zh                              # 可选，影响 label/descrip
 |---|---|
 | `code` | **稳定标识**，前端把交互行为绑到它，不要绑 `label`（文案会改）；点击时原样回传（见 D.2） |
 | `intent` | 服务端内部意图（`case_exploration`/`solution_discovery`/`order_issue`/`report_fault` 等），仅供前端区分展示形态，**不需要回传** |
-| `requires_order` | `true` → 点击后先弹**订单选择器**（列表来源**必须与 AI-Ops 的可见范围同源**，**不是**任一个 BFF 订单列表端点 —— 见下方「订单选择器的取数约束」），选完再把 `order_no`+问题提交统一入口；`false` → 直接提交 |
+| `requires_order` | `true` → 点击后先弹**订单选择器**（列表来源**必须与 AI-Ops 的可见范围同源**，**不是**任一个 BFF 订单列表端点 —— 见 §11「订单选择器」），选完再把 `order_no`+问题提交统一入口；`false` → 直接提交 |
 | `sort_order` | 按升序渲染按钮 |
 | `label` / `description` / `question_template` | 按 `Accept-Language` 本地化（缺失翻译回退中文）；`question_template` 可作为默认问题文案预填输入框 |
 | `target_agent_version` | 宣传类快捷动作绑定的已发布 agent 版本，**前端不需要理解，原样忽略**（服务端路由用；不要展示给用户）。与 `jump_path` **互斥**：跳转动作不会到达 agent，因此不允许同时绑定 |
@@ -1079,3 +1044,82 @@ DELETE /v1/conversations/{id}                    → 删除
 - 每轮重新鉴权：权限/订单归属撤销后绑定自动失效，follow-up 回落通用问答。
   （绑定失效 ≠ 那一轮从窗口消失 —— 见上面那条 `#497` 的风险声明。）
 - 非本人/过期会话 → 统一 404，无存在性泄露。
+
+## 11. 订单选择器（2026-10-13，#639 查证）
+
+**这一节的存在理由**：本文件此前只写「用户订单列表由 **BFF 既有接口**提供」——**没说是哪一个**。
+前端据此挑了名字最像"用户订单"的那一个（`/charging-pile/chOrderInfo/getOrderUserPage`），
+而它**与 AI-Ops 的可见范围不同源**，于是选择器把站外订单摆到了用户面前，提交必然 `404`。
+
+**唯一判据**：**选择器里出现的订单号，提交后必须能被服务端接受**；
+服务端会拒的订单，不允许出现在选择器里。
+
+#### 一、两个端点（同一 controller，语义不同）
+
+| 端点 | 源码注释 | Mapper 方法 | 注解 |
+|---|---|---|---|
+| `/chOrderInfo/getOrderUserPage` | 「**用户端**订单分页」 | `ChOrderInfoMapper.getOrderPage`(:73) | **无** |
+| `/chOrderInfo/page` | 「**管理端**订单分页」 | `ChOrderInfoMapper.getPage`(:59) | 有 `@ShopDataScope(column="site_id", realTime=true)` |
+
+前者按 **C 端** `ch_order_info.user_id` 过滤（只带 `tenant-id` ⇒ **整租户**；带 B 端 id ⇒ **0 条**）。
+这就是 #619 那条端点语义。
+
+#### 二、实测：管理端端点**今天也没有收窄**（2026-10-13，41 公网）
+
+| 请求 | `total` |
+|---|---|
+| 基线（无 `client-type`） | 14 |
+| `client-type: admin` | **14（未收窄）** |
+| `client-type: admin` + `shop-id: -1` | **14**（平台哨兵 ⇒ 全部） |
+| `client-type: admin` + `shop-id: <某站点>` | 0（`shop-id` 是**单站点**过滤，不是集合） |
+| 对照：`/getOrderUserPage` + `client-type: admin` | 14 |
+
+⇒ **只有显式 `shop-id` 会收窄，且它按单站点过滤**；`client-type` 这个头**没有**让注解生效。
+
+#### 三、为什么没生效：**未查清**（先前给的解释已被推翻，记下来免得重走）
+
+这个仓库此前有一份「网关的 `AdminProxyHeadFilter` 方法体整段被注释」的记录。
+本轮读**运行中的产物**（不是源码注释）得到的是**相反**的观测：
+`AdminProxyHeadFilter` **在运行中的 jar 里存在、方法体是活的**（`javap -c` 反汇编：
+`apply` → `chainFilterAndSetHeaders` 非空实现）。
+
+⚠️ 我先据此写成「网关那条路由没挂这个 filter ⇒ 注解不生效」。**那个解释是错的，已撤回**：
+`ShopIdInterceptor` 由 `cloud-common-data` 的 `MybatisPlusConfig` **无条件注册**
+（`spring.factories` 自动装配；相邻两个拦截器有 `getEnable()` 开关，**它没有**）。
+所以"路由没挂 filter"不能解释注解为什么不生效。
+
+**已列出但【尚未验证】的候选成因**（按可疑度，未定）：
+
+1. **身份解析**：拦截器先取 `SecurityUtils.getUser()`，取不到即整段跳过；
+2. **mapper 白名单**：`ShopScopeHelper.isolation(mapperId)` 查一份缓存，而那份清单来自
+   Nacos 配置 `base.shop.datascope.mappers`（**本轮未能读取**，Nacos 需要凭据）——
+   `getPage` 不在清单里就等于没有隔离；
+3. `client-type` 的取值与那道门认的三种（`admin` / `supply-admin` / `tenant-app`）不符。
+
+**本轮不在这三者之间下结论。** 要定需要读那份白名单，或拿到一个可解析真实令牌的会话。
+
+#### 四、🔴 就算门打开，两个列表也**不保证是同一个集合**
+
+这一条比"换哪个端点"更要紧，它决定修法能不能成立：
+
+1. **店铺 id ≠ 站点 id。** 公司那套把 `getShops` 返回的**店铺 id**直接当 `site_id` 过滤
+   （`ShopIdInterceptor` 注入 `scopeName IN (<shopIds>)`，`scopeName` = `site_id`）；
+   而 AI-Ops 走 `operator_site_scope_from_shops` → `site_ids_by_shops` 做**映射**
+   （`ch_site.shop_id → ch_site.id`）。真实数据 954 行站点里 **953 行两者相同、1 行不同**
+   ⇒ 在那一行上，两边给出的集合**必然不同**。
+2. **时间点不同。** 公司 `realTime=true` ⇒ 每次查询**实时**取 `getShops`；
+   而 AI-Ops 管家端令牌采用的是**签发时刻的 `shop_ids` 快照**（`company_token_auth`，
+   见 ADR-0009 的取舍）。绑定变更后、令牌过期前，两边读的是**不同时刻**的店铺关系。
+
+⇒ **"两边都按站点过滤"不等于"两边是同一个集合"。** 选择器的取数必须与
+**本次请求那条链**用同一套集合计算、同一份快照 —— 否则判据（"选得到就提交得上"）仍会破。
+
+#### 五、修法（都需公司侧参与，本轮不改）
+
+| # | 修法 | 说明 |
+|---|---|---|
+| A | 前端换成 `/chOrderInfo/page` | **今天没用**（未收窄，见二）；且即便收窄也过不了四 |
+| B | 公司把 `AdminProxyHeadFilter` / 隔离挂到 charging-pile | 改共用路由配置；且**仍过不了四** |
+| C | **BFF/Java 侧**提供订单列表端点，**显式复用 AI-Ops 的站点映射，并接受同一份令牌快照** | 唯一能同时满足五条判据的形态 |
+
+**在那之前**：前端**不得**让用户从「整租户」列表里选单。选择器可以先只做「无可用订单」的空态。

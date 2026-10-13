@@ -685,8 +685,33 @@ if (user == null) return false;
    ```
    而 `trade` / `php-work` / `das-front` 等同批路由**都挂着** `AdminProxyHeadFilter`。
 
-⇒ **`@ShopDataScope` 对 charging-pile 全程不生效**，因为没有任何东西会注入那个头。
-这一步解释了上面四种输入为什么都得到同一个数。
+**⚠️ 我据上一步写过「网关那条路由没挂 filter ⇒ 注解不生效」——那个解释是错的，已撤回。**
+`ShopIdInterceptor` 由 `cloud-common-data` 的 `MybatisPlusConfig` **无条件注册**
+（`spring.factories` 自动装配；相邻两个拦截器有 `getEnable()` 开关，**它没有**）。
+所以"路由没挂 filter"解释不了注解为什么不生效。
+
+**另说一句准确地**：上表**并非四种输入同一个数** —— `shop-id: <某站点>` 那一行是 **0**，
+即**显式 `shop-id` 确实会收窄**（按单站点）。真正没有效果的是 `client-type` 这个头。
+
+**未查清的成因（已列出，本轮不下结论）**：① 身份解析（`SecurityUtils.getUser()`）；
+② mapper 白名单（`base.shop.datascope.mappers`，来自 Nacos，**本轮未能读取** —— 需要凭据）；
+③ `client-type` 取值与门认的三种不符。
+
+### 三-bis、🔴 就算门打开，两个列表也**不保证是同一个集合**（评审新增，成立）
+
+这一条比"换哪个端点"更要紧，它决定修法能不能成立：
+
+1. **店铺 id ≠ 站点 id。** 公司那套把 `getShops` 返回的**店铺 id**直接当 `site_id` 过滤
+   （`ShopIdInterceptor` 注入 `scopeName IN (<shopIds>)`，而 `scopeName` = `site_id`）；
+   而 AI-Ops 走 `operator_site_scope_from_shops` → `site_ids_by_shops` 做**映射**
+   （`ch_site.shop_id → ch_site.id`）。真实数据 954 行站点里 **953 行两者相同、1 行不同**
+   ⇒ 在那一行上，两边给出的集合**必然不同**。
+2. **时间点不同。** 公司 `realTime=true` ⇒ 每次查询**实时**取 `getShops`；
+   而 AI-Ops 管家端令牌采用的是**签发时刻的 `shop_ids` 快照**（`company_token_auth`，
+   ADR-0009 的取舍）。绑定变更后、令牌过期前，两边读的是**不同时刻**的店铺关系。
+
+⇒ **"两边都按站点过滤"不等于"两边是同一个集合"。** 取数必须与**本次请求那条链**
+用同一套集合计算、同一份快照，否则判据（"选得到就提交得上"）仍会破。
 
 ### 四、结论与修法（成本对比悬殊）
 
@@ -696,7 +721,7 @@ if (user == null) return false;
 |---|---|---|---|
 | A | 前端把选择器换成 `/chOrderInfo/page` | 前端 | **今天没用** —— 那道门是关的（见上） |
 | B | 把 `AdminProxyHeadFilter` 挂到 `cloud-charging-pile` 路由上 | 公司 infra | 改的是**所有服务共用**的动态路由配置；打开的是**身份注入**，影响面不止我们 |
-| C | **BFF/Java 侧**提供一个显式施加该范围的订单列表端点 | 公司后端 | 最干净，但要走公司需求 |
+| C | **BFF/Java 侧**提供订单列表端点，**显式复用 AI-Ops 的站点映射并接受同一份令牌快照** | 公司后端 | **唯一能同时满足全部判据的形态**（A/B 都过不了三-bis） |
 
 **本轮已做（不依赖任何外部）**：把契约里那句含糊的「由 BFF 既有接口提供」改成
 **指出两个端点的差别、写明判据、并给出今天为什么都不行的根因**
