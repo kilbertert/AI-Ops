@@ -388,8 +388,9 @@ QA 作业的智能体在 `result` 里而不在列上），为此加一列是给�
 - `assistant_questions` / `health_report_jobs` 两张表同样加了列与绑定，
   但**只为分析线写了行为用例**；另两张由同一条路径覆盖（同一次创建点收口），
   未各自单测。**如实记为未单独取证。**
-- **`verify-aiops-gateway` 跑了**（一次性数据根，`all checks passed`，证据
-  `var/verify-evidence-expiry/aiops-gateway.json`）—— 但**它证不了这个面**：
+- **`verify-aiops-gateway` 跑了**（一次性数据根，`all checks passed`；它写下的证据
+  `aiops-gateway.json` 是**本机运行产物**，`.gitignore` 已忽略 `var/`，**不入仓** ——
+  本记录只留结论与复跑方法，不指向一个仓库里没有的文件）—— 但**它证不了这个面**：
   该技能只注册设备令牌，而这条路由要求 `ROLE_AGENT_VIEWER/ADMIN`，它的边界表
   自己就写着够不到。因此响应形状改在 **HTTP 面**上钉（真路由 + 真依赖 + 真响应体），
   这是能用的最强观测。**不拿控制面的绿冒充这个面的验收。**
