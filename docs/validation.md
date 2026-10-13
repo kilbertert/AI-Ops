@@ -13795,3 +13795,26 @@ registry 三行如上报；两个一次性 app 的 `pre_prompt` 与 `updated_at`
 - **41 上两份清单是死的**：`/opt/aiops-41/ops/environments/env-41.toml{,.new}` 仍是
   `qwen3.8-max-0902` + 内联 prompt 的旧快照，拿去 reconcile 会**硬拒**（模型不在白名单，
   exit 2、零写入）—— 拒得对。真正可用的是**仓里那份**（本轮 5 agents 全 unchanged 即证）。
+
+### 九、部署后验收（CD `d19847e`，在 41 实机、用**已部署**的代码）
+
+前八节是合并前的取证。**部署之后重做了一遍**，因为"源码对了"与"线上那台是对的"是两件事。
+`/health` = `0.1.0+d19847e62821`，服务 `ActiveEnterTimestamp` 19:03:07 CST。
+
+| # | 判据 | 结果 |
+|---|---|---|
+| A1 | 已部署代码：拉**真实生产 app**（`98441c5b`，给了 `--knowledge-base-id`） | `version_no=1` —— **成功发布**（修前对任何绑 Dify 的 app 都必失败） |
+| A2 | 用**合并后的**清单 reconcile（库副本）：5 agents + 3 bindings | **全部 `unchanged`**，零非幂等项 |
+| A3 | 线上 `861824/canary-客服` 与 registry | kb/正文/版本未变；registry 与清单**逐行一致** |
+| B1 | **对照（可证伪）**：共享 app `a975c8e5`、**不给** `--knowledge-base-id` | **exit 1**，`DIFY_DSL_MALFORMED` 并点明"不是同一个 id 空间" |
+| B2 | 共享 app、**给**验收租户的 KB | `version_no=1` **成功** |
+
+⇒ 两种方向都在**线上代码**上成立：声明了数据集而不给绑定 ⇒ **拒**（且是 fail-closed 的
+非零退出）；给了绑定 ⇒ 过发布门。**A1 是"这一跳今天能用"的直接证据**，B1 是"它没有变成
+一个什么都放行的开关"的直接证据。
+
+**过程中一处自己踩的坑（据实记）**：第一次做 A2 时我拿的清单是**本机 checkout 上那份**，
+而**本目录当时停在另一个会话的分支 `chore/afk-1.7.19`**（afk 模板迁移，不是 `main`），
+于是测的是**旧的 app_id**，报了一个 `registered`。看起来像"收敛不幂等"，实际是**我读错了源**。
+改用 `git show d19847e:ops/environments/env-41.toml` 那份（合并后的真值）重测 ⇒ 全 `unchanged`。
+**教训与 §五 那条同形**：结论前先确认你读的是**哪一份**文件，而不是"文件名一样"。
