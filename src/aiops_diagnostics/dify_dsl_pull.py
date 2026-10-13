@@ -283,6 +283,7 @@ def map_dsl_to_config(
     output_contract: str | None = None,
     knowledge_base_ids: tuple[str, ...] | None = None,
     dataset_resolver: Callable[[tuple[str, ...]], tuple[str, ...]] | None = None,
+    tool_resolver: Callable[[tuple[str, ...]], tuple[str, ...]] | None = None,
 ) -> AgentConfig:
     """Map exported DSL text onto the ``AgentConfig`` fields we run on.
 
@@ -335,12 +336,32 @@ def map_dsl_to_config(
         else:
             knowledge_base_ids = ()
 
+    # 工具白名单：Dify 声明了就必须**翻译得出**，翻译不出就拒（与知识库同一条纪律）。
+    # 什么都没声明 ⇒ ``None`` 交给调用方保留库中现值 —— 与知识库的「没说 ⇒ 保留」
+    # 逐字同向，理由也一样：把"没声明"当成"要清空"会让一次无关的保存摘掉运营设好的白名单。
+    declared_tools = _declared_tool_names(model_config)
+    if declared_tools and tool_resolver is not None:
+        allowed_tools: tuple[str, ...] | None = tool_resolver(declared_tools)
+    elif declared_tools:
+        raise DifyDslMalformed(
+            "DSL 声明了智能体工具（"
+            + ", ".join(declared_tools)
+            + "），但那是 Dify 的工具身份（provider_id/tool_name），不是我们的 ToolName。"
+            "请显式给出工具白名单（或在 AIOPS_GATEWAY_DIFY_TOOL_BINDINGS 里登记映射），"
+            "不要按字面搬运。"
+        )
+    else:
+        allowed_tools = None
+
     return AgentConfig(
         agent_type=agent_type,
         prompt=_required_prompt(model_config),
         knowledge_base_ids=tuple(knowledge_base_ids),
         model=_required_model(model_config),
         output_contract=output_contract or _default_output_contract(agent_type),
+        **(  # 没声明就沿用 dataclass 的默认（全部工具），与"不加约束"同义
+            {"allowed_tools": allowed_tools} if allowed_tools is not None else {}
+        ),
     )
 
 
@@ -615,6 +636,52 @@ def _declared_dataset_ids(model_config: dict[str, Any]) -> tuple[str, ...]:
             raise DifyDslMalformed(f"enabled dataset entry {index} has no id")
         ids.append(dataset_id)
     return tuple(ids)
+
+
+def _declared_tool_names(model_config: dict[str, Any]) -> tuple[str, ...]:
+    """Read the tools an app declares in ``agent_mode.tools`` — as **reported**, never assigned.
+
+    Same contract as :func:`_declared_dataset_ids`, for the same reason: these
+    are Dify's tool identities, and our allow-list is a tuple of ``ToolName``.
+    Neither side can be turned into the other by string equality — Dify's entry
+    carries ``provider_id`` plus ``tool_name`` (verified from Dify 1.17.1's own
+    ``core/agent/entities.py``: ``AgentToolEntity(provider_type, provider_id,
+    tool_name, tool_parameters, plugin_unique_identifier, credential_id)``), and
+    nothing in this repo has ever seen a populated example — both apps on 36
+    carry ``tools: []``.
+
+    So the mapping key is deliberately **not invented here**. A declaration is
+    reported so the caller can refuse it, which is what keeps this from being
+    the "looks like it is managed" half of a feature: silently reading nothing
+    would make an operator's attached tools vanish with no signal, and guessing
+    a key would publish a binding nobody can verify.
+
+    Note ``agent_mode.enabled``: when it is false the app is not running the
+    tool loop at all, so ``tools`` is inert. It is still read, because an
+    operator who attached a tool and left the switch off should hear about the
+    tool rather than about a switch they did not set.
+    """
+    agent_mode = model_config.get("agent_mode")
+    if agent_mode is None:
+        return ()
+    if not isinstance(agent_mode, dict):
+        raise DifyDslMalformed("DSL model_config.agent_mode must be an object")
+    tools = agent_mode.get("tools")
+    if tools is None:
+        return ()
+    if not isinstance(tools, list):
+        raise DifyDslMalformed("DSL model_config.agent_mode.tools must be a list")
+
+    names: list[str] = []
+    for index, entry in enumerate(tools):
+        if not isinstance(entry, dict):
+            raise DifyDslMalformed(f"tool entry {index} must be an object, got {type(entry).__name__}")
+        tool_name = entry.get("tool_name")
+        if not isinstance(tool_name, str) or not tool_name.strip():
+            raise DifyDslMalformed(f"tool entry {index} has no tool_name")
+        provider_id = entry.get("provider_id")
+        names.append(f"{provider_id}/{tool_name}" if isinstance(provider_id, str) else tool_name)
+    return tuple(names)
 
 
 def _default_output_contract(agent_type: str) -> str:

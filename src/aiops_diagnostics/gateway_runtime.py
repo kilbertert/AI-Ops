@@ -1760,6 +1760,7 @@ class GatewayRuntime:
             )
             if methodology is _REFUSED:
                 return
+            methodology, allowed_tools = methodology
             # One range object: the tenant is carried once, as the frozen
             # ``QueryScope`` the SQL push-down and the tool layer both read. It
             # used to also arrive as ``allowed_tenants={context.effective_tenant_id}``
@@ -1777,6 +1778,7 @@ class GatewayRuntime:
                 history=history,
                 turn_registrar=turn_registrar,
                 methodology=methodology,
+                allowed_tools=allowed_tools,
             )
         # `except Exception`: see `_execute_operations_card` for the full reason
         # (#700 → #721 → #725). `resolve_query_scope` runs inside this `try` and
@@ -2150,7 +2152,12 @@ class GatewayRuntime:
         claim_stop: threading.Event | None,
         started_ms: float,
     ) -> Any:
-        """The operations methodology this diagnosis runs under, or ``""``.
+        """``(methodology, allowed_tools)`` for this diagnosis, or ``_REFUSED``.
+
+        ``allowed_tools`` is the published operations agent's own tool
+        allow-list (``None`` = the entry did not consult the registry, or the
+        snapshot predates the field — both mean "no narrowing", which is what
+        every run meant before the field existed).
 
         Only the **operator** entry consults the registry (#695). Everything
         else — the consumer entry, the CLI, and any caller that states no entry
@@ -2193,7 +2200,7 @@ class GatewayRuntime:
         from aiops_diagnostics.scope_context import is_operator_entry
 
         if not is_operator_entry(business_entry):
-            return ""
+            return "", None
         registered_name, registry_configured = self._registered_agent(tenant_id, "operator")
         if not registry_configured:
             # Unadopted: no row exists for ANY pair, so this environment has not
@@ -2203,7 +2210,7 @@ class GatewayRuntime:
             # opted in must not be migrated by deployment accident. Once any
             # row exists the registry is authoritative for everyone, which is
             # what makes the fail-closed half below safe to ship inert.
-            return ""
+            return "", None
         selection = None
         if registered_name is not None and self.agent_store is not None:
             from aiops_diagnostics.ops_agents import select_operations_agent
@@ -2242,7 +2249,7 @@ class GatewayRuntime:
                 duration_ms=int((time.monotonic() - started_ms) * 1000),
             )
             return _REFUSED
-        return selection.prompt
+        return selection.prompt, selection.allowed_tools
 
     def _registered_agent(self, tenant_id: str, business_entry: str) -> tuple[str | None, bool]:
         """The runtime registry's answer for this pair: ``(agent_name, configured)``.

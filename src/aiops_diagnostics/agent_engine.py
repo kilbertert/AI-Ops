@@ -169,6 +169,7 @@ class AgentCoordinator:
         environment_notes: tuple[str, ...] = (),
         history: str = "",
         methodology: str = "",
+        allowed_tools: Iterable[str] | None = None,
     ) -> None:
         self.workspace = workspace
         self.manifest = manifest
@@ -188,6 +189,11 @@ class AgentCoordinator:
         #: the one this class built before it accepted methodology at all —
         #: that byte-identity is the consumer path's regression boundary.
         self.methodology = methodology
+        #: This run's tool allow-list, mirrored from the published agent config.
+        #: ``None`` = every tool, which is what every caller meant before the
+        #: field existed. Only the prompt's advertisement reads it here; the
+        #: enforcement is in the executor, where the tool would actually run.
+        self.allowed_tools = None if allowed_tools is None else frozenset(str(t) for t in allowed_tools)
         self.validator = AgentResultValidator(
             manifest,
             journal,
@@ -361,7 +367,14 @@ class AgentCoordinator:
         return payload
 
     def _initial_prompt(self) -> str:
-        tools = "\n".join(f"- {name.value}: {description}" for name, description in TOOL_DESCRIPTIONS.items())
+        # 只广告白名单里的工具。这不是强制 —— 强制在执行器里（ADR-0015 §五）——
+        # 但"广告了却不许跑"会让模型每一轮都去试一个必然被 blocked 的工具，把回合
+        # 浪费在一个已知答案上。
+        tools = "\n".join(
+            f"- {name.value}: {description}"
+            for name, description in TOOL_DESCRIPTIONS.items()
+            if self.allowed_tools is None or name.value in self.allowed_tools
+        )
         incident = json.dumps(self.manifest.model_dump(mode="json"), ensure_ascii=False, indent=2)
         notes_block = ""
         if self.environment_notes:

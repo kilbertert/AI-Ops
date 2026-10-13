@@ -34,6 +34,17 @@ class ToolName(StrEnum):
     KNOWN_RUNBOOK = "known_runbook"
 
 
+#: Every tool, in one place. This is the **default** value of
+#: ``AgentConfig.allowed_tools``, and the default is "all" on purpose: an
+#: agent that declares nothing keeps exactly today's behaviour, so the field
+#: can be added without a single existing snapshot comparing unequal (and
+#: therefore without republishing every agent). The fail-closed half of the
+#: allow-list lives in the **executor**, not in this default — a narrow list
+#: is enforced where the tool would actually run (see
+#: ``diagnostic_tools.DiagnosticToolExecutor.execute``).
+ALL_TOOL_NAMES: tuple[str, ...] = tuple(tool.value for tool in ToolName)
+
+
 class IncidentManifest(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 

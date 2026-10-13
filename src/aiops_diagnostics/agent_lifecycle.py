@@ -18,6 +18,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
+from aiops_diagnostics.agent_contracts import ALL_TOOL_NAMES
 from aiops_diagnostics.private_files import ensure_private_directory, protect_private_file
 
 AGENT_MANAGE_SCOPE = "aiops:agents:manage"
@@ -81,6 +82,13 @@ class AgentConfig:
     output_contract: str
     opening_questions: tuple[str, ...] = ()
     quick_commands: tuple[str, ...] = ()
+    #: Which diagnostic tools this agent may run. ``ALL_TOOL_NAMES`` (the
+    #: default) means "no narrowing" and keeps every pre-existing config
+    #: byte-identical, so adding the field republishes nothing. A narrower
+    #: tuple is enforced by the **executor**, never by the prompt alone
+    #: (ADR-0015 §五): advertising fewer tools only tells the model what it
+    #: may ask for, it does not stop it asking for the rest.
+    allowed_tools: tuple[str, ...] = ALL_TOOL_NAMES
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -91,6 +99,7 @@ class AgentConfig:
             "output_contract": self.output_contract,
             "opening_questions": list(self.opening_questions),
             "quick_commands": list(self.quick_commands),
+            "allowed_tools": list(self.allowed_tools),
         }
 
 
@@ -122,6 +131,7 @@ def config_from_snapshot(snapshot: dict[str, Any]) -> AgentConfig:
         output_contract=str(snapshot.get("output_contract", "")),
         opening_questions=tuple(snapshot.get("opening_questions", ())),
         quick_commands=tuple(snapshot.get("quick_commands", ())),
+        allowed_tools=tuple(snapshot.get("allowed_tools", ALL_TOOL_NAMES)),
     )
 
 
@@ -541,6 +551,12 @@ class AgentManager:
                 raise AgentValidationError(f"{label} is invalid")
         if any(not SAFE_ID.fullmatch(item) for item in config.knowledge_base_ids):
             raise AgentValidationError("knowledge_base_ids contains an invalid id")
+        # 白名单里的名字必须是**已枚举**的工具：一个拼错的名字会静默地什么都放行
+        # （如果实现是"不在名单里才拦"）或者静默地什么都不放行 —— 两种都不是运营
+        # 在 Dify 里写错一个字时想要的答案。空名单是合法的（"一个工具都不许跑"）。
+        unknown_tools = sorted(set(config.allowed_tools) - set(ALL_TOOL_NAMES))
+        if unknown_tools:
+            raise AgentValidationError(f"allowed_tools contains unknown tool(s): {', '.join(unknown_tools)}")
 
 
 def _agent_from_row(row: sqlite3.Row) -> Agent:
@@ -560,6 +576,7 @@ def _agent_from_row(row: sqlite3.Row) -> Agent:
             output_contract=str(config["output_contract"]),
             opening_questions=tuple(config.get("opening_questions", ())),
             quick_commands=tuple(config.get("quick_commands", ())),
+            allowed_tools=tuple(config.get("allowed_tools", ALL_TOOL_NAMES)),
         ),
         published_version=int(row["published_version"]) if row["published_version"] is not None else None,
         created_at=str(row["created_at"]),

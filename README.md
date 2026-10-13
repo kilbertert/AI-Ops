@@ -185,7 +185,7 @@ flowchart TB
     L6["L6 服务边界与入口<br/>gateway_api · gateway_runtime · cli · gateway_server · gateway_cli<br/>gateway_client · admin_cli · gateway_config · gateway_tokens · gateway_logging<br/>tdengine_proxy · responses_adapter · codex_launcher"]
     L5["L5 持久化<br/>gateway_store · conversation_store · metrics_store<br/>agent_lifecycle · shortcut_lifecycle · dify_app_registry"]
     L4["L4 推理与产品能力<br/>agent_engine · codex_runtime · agent_runner · agent_validator · qa_rag<br/>turn_recovery · routing · faq · promo_agents · answer_language · agent_manifest · agent_debug<br/>dify_dsl_pull · dify_knowledge_api · dify_debug_identity · agent_content · clarification"]
-    L3["L3 证据与诊断内核<br/>sources · diagnostic_tools · engine · journal<br/>agent_workspace · health_report · knowledge_retrieval · zero_order"]
+    L3["L3 证据与诊断内核<br/>sources · diagnostic_tools · engine · journal<br/>agent_workspace · health_report · knowledge_retrieval"]
     L2["L2 身份与范围<br/>scope_context · query_scope · caller_auth · third_session_auth<br/>company_token_auth"]
     L1["L1 领域规则（纯函数）<br/>rules · order_visibility · health_metrics · health_curves · parsing"]
     L0["L0 基础设施与契约<br/>agent_contracts · models · config · bounded_http · redaction<br/>i18n · private_files · platform_paths · http_auth · render · console_encoding<br/>jev_decisions"]
@@ -280,13 +280,12 @@ flowchart TB
 | 模块 | 职责 |
 |---|---|
 | `sources.py` | `DiagnosticSources` 协议 + 全部实现（见 [4.1](#41-证据源接缝)）。**最大单文件（1550 行）** |
-| `diagnostic_tools.py` | `DiagnosticToolExecutor`：模型可点名的 7 个工具在此落地；含 `preflight_environment` 环境预检（advisory） |
+| `diagnostic_tools.py` | `DiagnosticToolExecutor`：模型可点名的 7 个工具在此落地；**工具白名单在这里强制**（`allowed_tools`，白名单外记 `blocked` 且不取数，见 [ADR-0019](docs/adr/0019-tool-allowlist-enforced-in-executor.md)）；含 `preflight_environment` 环境预检（advisory） |
 | `engine.py` | `DiagnosticEngine`：确定性规则诊断（`--mode deterministic`）。**同时被 `diagnostic_tools` 复用来提供 `known_runbook` 参考证据** |
 | `journal.py` | `EvidenceJournal`：追加式证据日志，每个结果存 artifact + SHA-256 |
 | `agent_workspace.py` | 运行目录的磁盘契约：manifest/state/result/events，run_id 创建 |
 | `health_report.py` | 最小健康报告装配，带更窄的 `OrderSource` 协议 |
 | `knowledge_retrieval.py` | 有界知识检索与媒体签发：`KbServiceClient`、`KnowledgeSearchGuard`、`MediaResourceSigner`、`MediaProxy` |
-| `zero_order.py` | 零订单工具集的**默认拒绝**白名单边界（当前白名单为空集）。任何订单相关工具在到达数据源前就被拦下 |
 
 #### L4 推理与产品能力
 
@@ -418,7 +417,7 @@ flowchart TB
 
 | 决策 | 落在哪些模块 |
 |---|---|
-| [ADR-0001](docs/adr/0001-read-only-diagnostic-boundary.md) 只读诊断边界 | `diagnostic_tools.py`（工具白名单）、`sources.py`（有界查询）、`config.SafetySettings`、`ops/` 代理、`zero_order.py` |
+| [ADR-0001](docs/adr/0001-read-only-diagnostic-boundary.md) 只读诊断边界 | `diagnostic_tools.py`（工具白名单）、`sources.py`（有界查询）、`config.SafetySettings`、`ops/` 代理 |
 | [ADR-0002](docs/adr/0002-trusted-pr-control-plane.md) 可信 PR 控制面 | `.github/workflows/agent-*.yml`、`.sandcastle/policy-check.mjs`、`.sandcastle/trusted-pr-delivery.sh` |
 | [ADR-0003](docs/adr/0003-bff-delegated-user-identity.md) BFF 委托用户身份（**未实现**，现行是共享会话直读：见 [ADR-0008](docs/adr/0008-adr-0003-deviation-session-direct-read.md)） | `caller_auth.py`、`scope_context.py`、`third_session_auth.py`、`gateway_api.py` 的 `authenticated_caller` |
 | [ADR-0004](docs/adr/0004-bff-owns-frontend-api-boundary.md) BFF 拥有前端接口边界 | `gateway_api.py` 的标准 API 面、`docs/standard-api-contract.md` |
@@ -502,7 +501,7 @@ qa-plan.md                QA 用例（158 个用例 ID，含环境/前置/数据
 | 我想… | 先读 | 主要改动点 | 注意 |
 |---|---|---|---|
 | 加一条诊断业务规则 | `rules.py`、`engine.py` | `rules.py`（纯函数）+ 必要时 `engine._finalize` 的分类优先级 | 规则来源必须是后端源码或 SOP，不能凭直觉；置信度阶梯要同步 |
-| 加一个只读证据工具 | `diagnostic_tools.py`、`agent_contracts.ToolName` | `ToolName` 枚举 + `TOOL_DESCRIPTIONS`/`TOOL_SOURCES` + executor 分支 | 必须同时修改零订单白名单判断（默认拒绝），并补 fixture 与测试 |
+| 加一个只读证据工具 | `diagnostic_tools.py`、`agent_contracts.ToolName` | `ToolName` 枚举 + `TOOL_DESCRIPTIONS`/`TOOL_SOURCES` + executor 分支 | `ALL_TOOL_NAMES` 会**自动**带上它（默认值由枚举推出）；补 fixture 与测试 |
 | 改租户/站点可见性 | `order_visibility.py`（先读模块文档） | 只改这一处；三种渲染会一起生效 | **绝对不要**在入口或数据源里另写一份过滤——这正是六次重复的由来 |
 | 换模型 provider 或加 key slot | `docs/thin-harness.md`、`config.AgentSettings` | 环境变量注册表（`AIOPS_PROVIDERS` 等） | 不改代码即可切换；跨 provider 的格式差异在 `agent_engine._parse_agent_turn` 归一化 |
 | 加一条 Gateway 路由 | `gateway_api.py`、`gateway_runtime.py` | 路由 + 请求模型 + runtime 执行方法 + store 表 | 权限必须经 `ScopeContext`，不能从请求体取 `user_id`/`tenant_id` 当授权依据 |

@@ -477,3 +477,65 @@ def test_execute_still_runs_after_preflight(tmp_path: Path) -> None:
 def _current_manifest() -> IncidentManifest:
     request = parse_request("订单 TEST-OCPP-0003 金额异常")
     return IncidentManifest.from_request(request)
+
+
+def _allowlist_executor(
+    tmp_path: Path, allowed: tuple[str, ...]
+) -> tuple[DiagnosticToolExecutor, EvidenceJournal]:
+    """An executor with a narrow allow-list, over the same fixture as the rest."""
+    request = parse_request("订单 TEST-OCPP-0003 金额异常")
+    manifest = IncidentManifest.from_request(request)
+    workspace = AgentWorkspace.create(Path(__file__).parents[1], tmp_path, manifest)
+    journal = EvidenceJournal(workspace, manifest)
+    return (
+        DiagnosticToolExecutor(
+            FixtureSources(FIXTURE),
+            request,
+            manifest,
+            journal,
+            safety=SafetySettings(),
+            allowed_tools=allowed,
+        ),
+        journal,
+    )
+
+
+def test_a_tool_outside_the_allowlist_is_blocked_and_reads_no_data(tmp_path: Path) -> None:
+    """The real enforcement: not advertised is not enough, it must not run.
+
+    `order_snapshot` is the only tool allowed, `fee_snapshot` is not. The
+    blocked call must leave a `blocked` record and must NOT reach the source —
+    a status alone would pass even if the read had happened.
+    """
+    executor, _ = _allowlist_executor(tmp_path, (ToolName.ORDER_SNAPSHOT.value,))
+
+    allowed = executor.execute(ToolName.ORDER_SNAPSHOT)
+    blocked = executor.execute(ToolName.FEE_SNAPSHOT)
+
+    assert allowed.status == "success"
+    assert blocked.status == "blocked"
+    assert blocked.evidence_id  # it is journalled, not silently dropped
+
+
+def test_a_blocked_tool_is_not_served_from_a_previous_runs_cache(tmp_path: Path) -> None:
+    """Narrowing the list must also hide evidence an earlier run already cached.
+
+    Checked before the journal cache on purpose: a cached success would
+    otherwise be returned as if the tool were allowed, and the block would
+    look like it worked while the data still flowed.
+    """
+    wide, _ = _allowlist_executor(tmp_path, tuple(t.value for t in ToolName))
+    # order_snapshot first: fee_snapshot also depends on it, and a dependency
+    # refusal would be a different reason than the one under test here.
+    assert wide.execute(ToolName.ORDER_SNAPSHOT).status == "success"
+    assert wide.execute(ToolName.FEE_SNAPSHOT).status == "success"
+
+    narrow, _ = _allowlist_executor(tmp_path, (ToolName.ORDER_SNAPSHOT.value,))
+    assert narrow.execute(ToolName.ORDER_SNAPSHOT).status == "success"
+    assert narrow.execute(ToolName.FEE_SNAPSHOT).status == "blocked"
+
+
+def test_no_allowlist_keeps_every_tool_available(tmp_path: Path) -> None:
+    """`None` (the default) must stay "no narrowing" — the whole back-compat claim."""
+    executor, _ = _executor(tmp_path)
+    assert executor.execute(ToolName.ORDER_SNAPSHOT).status == "success"

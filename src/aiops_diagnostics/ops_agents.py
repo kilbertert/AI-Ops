@@ -33,6 +33,10 @@ class OperationsAgentSelection:
     agent_id: str
     version_no: int
     prompt: str
+    #: The published version's tool allow-list. ``None`` = the snapshot
+    #: predates the field, which the executor reads as "every tool" — the same
+    #: meaning the config default has, so an old snapshot changes nothing.
+    allowed_tools: tuple[str, ...] | None = None
 
 
 def select_operations_agent(
@@ -80,9 +84,11 @@ def select_operations_agent(
             # direction as the empty knowledge-base skip in
             # ``select_customer_agent``.
             continue
+        published_tools = snapshot.get("allowed_tools")
         return OperationsAgentSelection(
             agent_id=agent.agent_id,
             version_no=version.version_no,
             prompt=prompt,
+            allowed_tools=None if published_tools is None else tuple(str(t) for t in published_tools),
         )
     return None

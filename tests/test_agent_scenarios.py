@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from aiops_diagnostics.agent_contracts import IncidentManifest
+from aiops_diagnostics.agent_contracts import IncidentManifest, ToolName
 from aiops_diagnostics.agent_engine import AgentCoordinator
 from aiops_diagnostics.agent_workspace import AgentWorkspace
 from aiops_diagnostics.codex_runtime import CodexTurnOutput
@@ -292,7 +292,9 @@ def test_initial_prompt_asks_for_evidence_translation_but_keeps_identifiers(
     assert "quoted evidence verbatim regardless of output language" not in prompt
 
 
-def _prompt_for(tmp_path: Path, *, methodology: str = "") -> str:
+def _prompt_for(
+    tmp_path: Path, *, methodology: str = "", allowed_tools: tuple[str, ...] | None = None
+) -> str:
     """The initial prompt a coordinator builds, without running a turn."""
     request = parse_request("订单 TEST-OCPP-0003 金额异常")
     manifest = IncidentManifest.from_request(request)
@@ -313,6 +315,7 @@ def _prompt_for(tmp_path: Path, *, methodology: str = "") -> str:
         AgentSettings(codex_bin="/bin/true"),
         language="en",
         methodology=methodology,
+        allowed_tools=allowed_tools,
     )
     return coordinator._initial_prompt()
 
@@ -398,3 +401,25 @@ def test_the_guardrail_text_is_not_parameterised_by_entry_or_tenant() -> None:
     assert "do not query\n  any order data" in narrative
     assert "Do not inspect parent directories" in narrative
     assert "No network access" in narrative
+
+
+def test_a_narrow_allowlist_advertises_only_the_allowed_tools(tmp_path: Path) -> None:
+    """第三个落点：提示词只广告白名单里的工具。
+
+    这不是强制（强制在执行器里），但"广告了却不许跑"会让模型每一轮都去试一个
+    必然被 blocked 的工具。断言两个方向：留下的在、去掉的不在 —— 只断言前者
+    会在"整段广告都被删掉"时通过。
+    """
+    narrow = tuple(t.value for t in ToolName)
+    narrow = tuple(t for t in narrow if t != ToolName.GUN_TIMESERIES.value)
+
+    prompt = _prompt_for(tmp_path, allowed_tools=narrow)
+
+    assert ToolName.ORDER_SNAPSHOT.value in prompt
+    assert ToolName.GUN_TIMESERIES.value not in prompt
+
+
+def test_no_allowlist_still_advertises_every_tool(tmp_path: Path) -> None:
+    """回归边界：`None`（默认）下提示词逐字不变 —— 存量 agent 一个都不受影响。"""
+    assert _prompt_for(tmp_path / "a") == _prompt_for(tmp_path / "b", allowed_tools=None)
+    assert ToolName.GUN_TIMESERIES.value in _prompt_for(tmp_path / "c")

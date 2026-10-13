@@ -531,3 +531,55 @@ def test_a_declared_dataset_with_no_resolver_still_refuses() -> None:
 
     with pytest.raises(DifyDslMalformed, match="id 空间"):
         map_dsl_to_config(_with_external_dataset(), agent_type="customer")
+
+
+def test_an_app_that_declares_no_tools_leaves_the_default_in_place() -> None:
+    """没声明工具 ⇒ 不加约束（dataclass 默认 = 全部）。存量 app 全是这一支。"""
+    from aiops_diagnostics.agent_contracts import ALL_TOOL_NAMES
+
+    config = map_dsl_to_config(REAL_DSL, agent_type="customer")
+    assert config.allowed_tools == ALL_TOOL_NAMES
+
+
+def test_a_declared_tool_is_refused_rather_than_silently_ignored() -> None:
+    """声明了工具但没人能翻译 ⇒ **拒**，不静默丢掉。
+
+    这是本仓反复出现的形态：静默丢掉会让运营"我给这个 app 挂了工具"与线上行为
+    各说各话，而且没有任何信号。实测两个 app 的 `agent_mode.tools` 都是空的，
+    所以映射键**没有被发明出来**（见 `_declared_tool_names` 的 docstring）。
+    """
+    import yaml
+
+    from aiops_diagnostics.dify_dsl_pull import DifyDslMalformed
+
+    doc = yaml.safe_load(REAL_DSL)
+    doc["model_config"]["agent_mode"] = {
+        "enabled": True,
+        "strategy": "router",
+        "tools": [{"provider_type": "builtin", "provider_id": "p1", "tool_name": "order_snapshot"}],
+    }
+    with pytest.raises(DifyDslMalformed, match="工具"):
+        map_dsl_to_config(yaml.safe_dump(doc, allow_unicode=True), agent_type="customer")
+
+
+def test_a_declared_tool_goes_through_the_resolver_when_one_is_given() -> None:
+    """给了翻译器就用它 —— 与知识库那条桥同形（翻译，不复制）。"""
+    import yaml
+
+    doc = yaml.safe_load(REAL_DSL)
+    doc["model_config"]["agent_mode"] = {
+        "enabled": True,
+        "strategy": "router",
+        "tools": [{"provider_type": "builtin", "provider_id": "p1", "tool_name": "mine"}],
+    }
+    seen: list[tuple[str, ...]] = []
+
+    def resolver(names):
+        seen.append(names)
+        return ("order_snapshot",)
+
+    config = map_dsl_to_config(
+        yaml.safe_dump(doc, allow_unicode=True), agent_type="customer", tool_resolver=resolver
+    )
+    assert config.allowed_tools == ("order_snapshot",)
+    assert seen == [("p1/mine",)], "翻译器收到的是 Dify 的身份（provider_id/tool_name）"
