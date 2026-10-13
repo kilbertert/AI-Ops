@@ -103,15 +103,21 @@ def _live_looking_database(tmp_path: Path) -> Path:
 
 
 def _manifest(tmp_path: Path, *, rows: str) -> Path:
+    """The manifest under test. ``rows`` decides how the agent gets its prompt.
+
+    #577 的规则是「一个 agent 的正文只有一个来源」：绑定了 Dify 的**不写** prompt，
+    没绑定的**必须写**。所以这个 helper 不能对两种情形用同一份 body —— 早先那版
+    四种情形共用一份"既绑定又写 prompt"的清单，那正是新规则要拒掉的形态。
+    """
     path = tmp_path / "env.toml"
+    prompt = "" if "dify_apps" in rows else 'prompt = "你是客服"\n'
     path.write_text(
         f"""
 [[agents]]
 tenant_id = "{TENANT_WITH_AGENT}"
 name = "客服甲"
 agent_type = "customer"
-prompt = "你是客服"
-knowledge_base_ids = ["kb-a"]
+{prompt}knowledge_base_ids = ["kb-a"]
 model = "aiops-api"
 {rows}
 """,
