@@ -253,6 +253,21 @@ class OperationsAnalysisRequest(BaseModel):
     window_end: datetime
 
 
+class DifyPublishRequest(BaseModel):
+    """Only an app id. Everything else about the binding is ours, not the caller's.
+
+    That restriction *is* the security property (``dify_publish``): a leaked key
+    can ask to re-freeze a declared binding's current content, and nothing else.
+    An ``extra="forbid"`` model is what keeps it that way — a field added here
+    later (say a tenant, or a prompt) would widen the blast radius, so it has to
+    be a deliberate edit to this class rather than a quiet one to a route.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    app_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+
+
 class FAQAnswerRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -844,6 +859,124 @@ def create_gateway_app(
                 retryable=True,
             ) from exc
         return {"records": dify_records(chunks, score_threshold=request.score_threshold)}
+
+    def dify_publish_credential(
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> None:
+        """The publish route's own door — a **separate** shared key, not the
+        knowledge one and not any user credential.
+
+        Three credentials are in play on the ``/v1/dify/`` prefix and they must
+        not collapse into one (see ``dify_publish_api_key`` in
+        ``gateway_config``): the knowledge key is presented on every retrieval,
+        the console key stays server-side, and this one authorises a *write*
+        (a new published version). Reusing the knowledge key would make "the
+        operator's preview app can read knowledge" mean "whoever can read
+        knowledge can publish". Reusing the console key would put the write
+        credential on the caller's side, where it is no longer the server's.
+
+        The user-credential chain is deliberately **not** consulted. On this
+        deployment the company token's payload is not verified (company-parity
+        mode), so a caller-supplied JWT is *claimable*, not proven — measured
+        on 41: a token signed with a made-up key reached the business layer of
+        ``/v1/standard/diagnoses`` (404, not 401). A publish action gated on
+        that would be gated on nothing.
+
+        Unconfigured means the route is **not enabled at all** (404), never
+        "no key needed" — the same mechanism as the retrieval route.
+        """
+        configured = context.settings.dify_publish_api_key
+        if not configured:
+            raise StandardAPIError(status.HTTP_404_NOT_FOUND, "DIFY_PUBLISH_UNAVAILABLE", "route not found")
+        if not authorization or not authorization.startswith("Bearer "):
+            raise StandardAPIError(
+                status.HTTP_401_UNAUTHORIZED, "DIFY_CREDENTIAL_REQUIRED", "bearer credential required"
+            )
+        presented = authorization.removeprefix("Bearer ").strip()
+        if not secrets.compare_digest(configured.encode("utf-8"), presented.encode("utf-8")):
+            raise StandardAPIError(
+                status.HTTP_403_FORBIDDEN, "DIFY_CREDENTIAL_REJECTED", "credential rejected"
+            )
+
+    @app.post("/v1/dify/publish")
+    def dify_publish(
+        payload: DifyPublishRequest,
+        _: None = Depends(dify_publish_credential),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Freeze what Dify currently holds as a new published version (#577).
+
+        **This is the operator's own step**, so it no longer needs an engineer
+        on the box: they edit the prompt in Dify, then call this with the app
+        id. It is the same action ``aiops admin sync-from-dify`` performs — one
+        implementation, so the two cannot drift.
+
+        The blast radius is the design. The request names **one already-bound
+        Dify app**; the tenant, the agent name, its type, its output contract
+        and its knowledge binding all come from ``dify_app_registry``. So the
+        worst a leaked key buys is *re-freezing the current content of a
+        binding that was already declared* — it cannot add a binding, move a
+        route, switch a type, attach a knowledge base, or inject arbitrary
+        text. Re-publishing unchanged content is a no-op by construction (the
+        sync compares against the published snapshot first), so "worst case"
+        collapses to "nothing changed".
+
+        Why an explicit call rather than a timer: Dify has no draft area.
+        ``export_dsl`` reads ``app.app_model_config_id`` — the single pointer a
+        save overwrites — so Dify cannot say "this is unfinished", and a timer
+        would publish half-typed prompts. A human pressing this is the only
+        honest signal that they are done.
+        """
+        binding = next(
+            (item for item in context.runtime.dify_app_registry.all() if item.app_id == payload.app_id),
+            None,
+        )
+        if binding is None:
+            # Same shape as an unregistered knowledge_id: 404 says "not here"
+            # and discloses nothing about which apps exist.
+            raise StandardAPIError(
+                status.HTTP_404_NOT_FOUND, "DIFY_APP_NOT_BOUND", "app is not a bound agent source"
+            )
+        from aiops_diagnostics.agent_manifest import admin_context
+        from aiops_diagnostics.dify_dsl_pull import DifyDslError, DifyDslSource, sync_binding_from_dify
+
+        console = context.settings
+        if not console.dify_console_base_url or not console.dify_console_api_key:
+            raise StandardAPIError(
+                status.HTTP_502_BAD_GATEWAY,
+                "DIFY_CONSOLE_UNAVAILABLE",
+                "the Dify console credential is not configured on this server",
+            )
+        source = DifyDslSource(
+            base_url=console.dify_console_base_url,
+            app_id=binding.app_id,
+            api_key=console.dify_console_api_key,
+            workspace_id=console.dify_console_workspace_id,
+        )
+        try:
+            outcome = sync_binding_from_dify(
+                context.agent_manager,
+                admin_context(binding.tenant_id),
+                binding,
+                source,
+            )
+        except DifyDslError as exc:
+            # Dify itself refused or was unreachable. Transcribed with its own
+            # code — the caller needs to tell "credential rejected" from "down"
+            # (``exc.code`` is the subclass's own, e.g. ``DIFY_DSL_AUTH_REJECTED``).
+            raise StandardAPIError(status.HTTP_502_BAD_GATEWAY, exc.code, "dify pull failed") from exc
+        except Exception as exc:  # noqa: BLE001 - the publish gate's own rules, transcribed
+            raise StandardAPIError(
+                status.HTTP_409_CONFLICT, "DIFY_PUBLISH_REJECTED", f"publish rejected: {type(exc).__name__}"
+            ) from exc
+        return {
+            "app_id": outcome.app_id,
+            "tenant_id": outcome.tenant_id,
+            "business_entry": outcome.business_entry,
+            "agent_name": outcome.agent_name,
+            "action": outcome.action,
+            "version_no": outcome.version_no,
+            "note": outcome.note,
+        }
 
     @app.get("/health")
     def health() -> dict[str, Any]:

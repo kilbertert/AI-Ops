@@ -110,6 +110,15 @@ class GatewayServerSettings:
     dify_console_api_key: str = field(repr=False, default="")
     #: 导出请求要带的 workspace（Dify 的 admin-key 路径从它解析租户 owner）。留空 ⇒ 不带该头。
     dify_console_workspace_id: str = ""
+    #: **运营自助发布**的共享凭据（`POST /v1/dify/publish`）。留空 ⇒ 该路由整体 404，
+    #: 与 ``dify_knowledge_api_key`` 同一条「未配置即不启用」的机制。
+    #:
+    #: 它为什么**必须**与 ``dify_knowledge_api_key`` 分开：那把是 Dify 调**知识检索**用的，
+    #: 会在每一个检索请求上出现；这把能触发一次**发布**。合成一把会让"运营的预览 app 能查
+    #: 知识库"顺带等于"谁能查知识库就能发布" —— 那是把两件不同的事绑成一个权限。
+    #: 另一半是它必须与 ``dify_console_api_key`` 分开：那把在**服务端**，这把要给到
+    #: **触发方**，一把钥匙两处持有就不再是"服务端凭据"了。
+    dify_publish_api_key: str = field(repr=False, default="")
     #: Conversation context window (#482). The defaults ARE the contract's
     #: numbers (8 turns / 8k tokens, ``conversation_store`` owns the constants);
     #: they are configurable because a RAG or promotional turn also spends the
@@ -209,6 +218,8 @@ class GatewayServerSettings:
             or _file_value(file_values, "AIOPS_GATEWAY_DIFY_CONSOLE_API_KEY"),
             dify_console_workspace_id=_env("AIOPS_GATEWAY_DIFY_CONSOLE_WORKSPACE_ID")
             or _file_value(file_values, "AIOPS_GATEWAY_DIFY_CONSOLE_WORKSPACE_ID"),
+            dify_publish_api_key=_env("AIOPS_GATEWAY_DIFY_PUBLISH_API_KEY")
+            or _file_value(file_values, "AIOPS_GATEWAY_DIFY_PUBLISH_API_KEY"),
             jev_base_url=_env("AIOPS_GATEWAY_JEV_BASE_URL")
             or _file_value(file_values, "AIOPS_GATEWAY_JEV_BASE_URL"),
             jev_api_key=_env("AIOPS_GATEWAY_JEV_API_KEY")
@@ -290,6 +301,29 @@ class GatewayServerSettings:
             raise ValueError(
                 "AIOPS_GATEWAY_DIFY_CONSOLE_BASE_URL is required when a Dify console API key is set"
             )
+        # 发布路由要用**服务端**的控制台凭据去拉 Dify。只给发布密钥而不给控制台凭据，
+        # 会得到一个"门开着、但每次调用都 502"的部署 —— 那正是 #586 那条「半配置是启动
+        # 错误」的同一种形状：看起来装好了，实际整体不可用。
+        if self.dify_publish_api_key and not (self.dify_console_base_url and self.dify_console_api_key):
+            raise ValueError(
+                "AIOPS_GATEWAY_DIFY_CONSOLE_BASE_URL/API_KEY are required when the Dify publish "
+                "route is enabled (the route pulls from that console)"
+            )
+        # 三把钥匙必须互不相同。同值等于把两件事绑成一个权限 —— #586 对调试凭据已经立过
+        # 这条，这里的每一对都有各自的理由（见字段注释）。
+        for other_name, other in (
+            ("AIOPS_GATEWAY_DIFY_KNOWLEDGE_API_KEY", self.dify_knowledge_api_key),
+            ("AIOPS_GATEWAY_DIFY_DEBUG_API_KEY", self.dify_debug_api_key),
+        ):
+            if (
+                self.dify_publish_api_key
+                and other
+                and secrets.compare_digest(self.dify_publish_api_key, other)
+            ):
+                raise ValueError(
+                    f"AIOPS_GATEWAY_DIFY_PUBLISH_API_KEY must differ from {other_name} "
+                    "(one key must not authorise both reading knowledge and publishing)"
+                )
         # #586：调试身份的两半 —— 凭据与固定租户 —— 必须成对。只给凭据会让运维以为
         # 「调试身份建好了」，而实际它连自己是哪个租户都不知道，于是要么整体无效（静默），
         # 要么退化成「用调试凭据拿到了生产范围」（危险）。交给启动失败。
