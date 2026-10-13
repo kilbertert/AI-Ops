@@ -262,20 +262,25 @@ def _manager(store_path: Path, model: str):
 
 
 def _mapped_config(dsl_text: str, args):
-    """Map the DSL; if it declares no knowledge base, take the explicit input.
+    """Map the DSL, taking the knowledge binding from the operator, never the DSL.
 
-    The real 36 export carries no enabled dataset — Dify's chat form wipes
-    ``dataset_configs`` wholesale (#580 recorded it). An agent with no knowledge
-    base cannot reach the RAG path, so the binding is an EXPLICIT operator input,
-    stated as such in the evidence, never silently defaulted."""
+    The binding is an EXPLICIT operator input: Dify's dataset id and our
+    knowledge-base id are different id spaces, so the DSL's value is never ours
+    to take (#577). An agent with no knowledge base cannot reach the RAG path,
+    which is why the input is required rather than defaulted — and it is stated
+    as such in the evidence, never silently assumed.
+    """
     from aiops_diagnostics.dify_dsl_pull import map_dsl_to_config
 
-    config = map_dsl_to_config(dsl_text, agent_type="customer", output_contract="blocks-v1")
-    if config.knowledge_base_ids:
-        return config, "dsl"
     if not args.knowledge_base_id:
-        raise Untaken("DSL 未声明知识库，且未给 --knowledge-base-id（无知识库的客服 agent 到不了 RAG 路径）")
-    return replace(config, knowledge_base_ids=(args.knowledge_base_id,)), "explicit-operator-input"
+        raise Untaken("未给 --knowledge-base-id（无知识库的客服 agent 到不了 RAG 路径）")
+    config = map_dsl_to_config(
+        dsl_text,
+        agent_type="customer",
+        output_contract="blocks-v1",
+        knowledge_base_ids=(args.knowledge_base_id,),
+    )
+    return config, "explicit-operator-input"
 
 
 def _pull(args) -> tuple[str, str]:
