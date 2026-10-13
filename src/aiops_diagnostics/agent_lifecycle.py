@@ -82,6 +82,14 @@ class AgentConfig:
     output_contract: str
     opening_questions: tuple[str, ...] = ()
     quick_commands: tuple[str, ...] = ()
+    #: #585 的反转（PR-5）：Dify 的 ``opening_statement``，**中文母版**。它只覆盖
+    #: ``zh``；其余语言仍由 `agent_content.AGENT_STARTERS` 那份手写制品回答 ——
+    #: 运行时没有翻译机制，这是"端口存中文母版、我们派生"那个决定的直接后果。
+    #: 空串 = 这个 agent 没有 Dify 覆盖，服务端回退制品（与新增字段前的行为逐字相同）。
+    opening_statement: str = ""
+    #: Dify 的 ``suggested_questions``（中文母版），与 ``opening_statement`` 同一纪律：
+    #: 只覆盖 zh，其余语言用手写制品。空元组 = 不覆盖。
+    suggested_questions: tuple[str, ...] = ()
     #: Which diagnostic tools this agent may run. ``ALL_TOOL_NAMES`` (the
     #: default) means "no narrowing" and keeps every pre-existing config
     #: byte-identical, so adding the field republishes nothing. A narrower
@@ -99,6 +107,8 @@ class AgentConfig:
             "output_contract": self.output_contract,
             "opening_questions": list(self.opening_questions),
             "quick_commands": list(self.quick_commands),
+            "opening_statement": self.opening_statement,
+            "suggested_questions": list(self.suggested_questions),
             "allowed_tools": list(self.allowed_tools),
         }
 
@@ -131,6 +141,8 @@ def config_from_snapshot(snapshot: dict[str, Any]) -> AgentConfig:
         output_contract=str(snapshot.get("output_contract", "")),
         opening_questions=tuple(snapshot.get("opening_questions", ())),
         quick_commands=tuple(snapshot.get("quick_commands", ())),
+        opening_statement=str(snapshot.get("opening_statement", "")),
+        suggested_questions=tuple(str(item) for item in snapshot.get("suggested_questions", ())),
         allowed_tools=tuple(snapshot.get("allowed_tools", ALL_TOOL_NAMES)),
     )
 
@@ -554,6 +566,13 @@ class AgentManager:
         # 白名单里的名字必须是**已枚举**的工具：一个拼错的名字会静默地什么都放行
         # （如果实现是"不在名单里才拦"）或者静默地什么都不放行 —— 两种都不是运营
         # 在 Dify 里写错一个字时想要的答案。空名单是合法的（"一个工具都不许跑"）。
+        if len(config.opening_statement) > 500:
+            raise AgentValidationError("opening_statement is too long")
+        for collection, label in ((config.suggested_questions, "suggested_questions"),):
+            if len(collection) > 20 or any(
+                not isinstance(item, str) or not item.strip() or len(item) > 500 for item in collection
+            ):
+                raise AgentValidationError(f"{label} is invalid")
         unknown_tools = sorted(set(config.allowed_tools) - set(ALL_TOOL_NAMES))
         if unknown_tools:
             raise AgentValidationError(f"allowed_tools contains unknown tool(s): {', '.join(unknown_tools)}")
@@ -576,6 +595,8 @@ def _agent_from_row(row: sqlite3.Row) -> Agent:
             output_contract=str(config["output_contract"]),
             opening_questions=tuple(config.get("opening_questions", ())),
             quick_commands=tuple(config.get("quick_commands", ())),
+            opening_statement=str(config.get("opening_statement", "")),
+            suggested_questions=tuple(str(item) for item in config.get("suggested_questions", ())),
             allowed_tools=tuple(config.get("allowed_tools", ALL_TOOL_NAMES)),
         ),
         published_version=int(row["published_version"]) if row["published_version"] is not None else None,

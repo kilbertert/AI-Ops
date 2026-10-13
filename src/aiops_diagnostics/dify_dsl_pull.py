@@ -359,6 +359,11 @@ def map_dsl_to_config(
         knowledge_base_ids=tuple(knowledge_base_ids),
         model=_required_model(model_config),
         output_contract=output_contract or _default_output_contract(agent_type),
+        # #585 的反转（PR-5）：`opening_statement` 现在**被读取**。它只覆盖 zh ——
+        # 其余语言由制品回答（运行时没有翻译机制）。空/缺失 = 内层默认 ""，
+        # 服务端回退制品，与新增该字段前的行为逐字相同。
+        opening_statement=_optional_opening_statement(model_config),
+        suggested_questions=_optional_suggested_questions(model_config),
         **(  # 没声明就沿用 dataclass 的默认（全部工具），与"不加约束"同义
             {"allowed_tools": allowed_tools} if allowed_tools is not None else {}
         ),
@@ -472,14 +477,27 @@ def resolve_pulled_config(
         knowledge_base_ids=knowledge_base_ids,
         dataset_resolver=resolver if knowledge_registry else None,
     )
-    if knowledge_base_ids is None and not declared:
+    existing = _find_by_name(manager, context, name)
+    if knowledge_base_ids is None and not declared and existing is not None:
         # Only "Dify said nothing" keeps the live binding. When Dify *does*
         # declare a dataset, the resolved ids already won; keeping the live
         # ones on top would make the operator's edit invisible, which is the
         # whole point of this change.
-        existing = _find_by_name(manager, context, name)
-        if existing is not None:
-            config = replace(config, knowledge_base_ids=existing.config.knowledge_base_ids)
+        config = replace(config, knowledge_base_ids=existing.config.knowledge_base_ids)
+    if existing is not None:
+        # **``model`` 保持库中现值，永不从 Dify 覆盖。**
+        #
+        # 实测：运行时**不读** ``AgentConfig.model`` —— 真实模型来自 provider 配置
+        # （``codex_runtime`` 读 ``provider.model``；全仓对 ``config.model`` 只有
+        # 发布门与相等比较两处消费）。所以从 Dify 拉它**不改变线上模型**，
+        # 却会经发布门产生一个用户可见的后果：运营在 Dify 里换了模型名而它不在
+        # ``allowed_models`` 里时，**整个发布失败**；在允许列表里时，则是一次
+        # 静默无效的改动 —— 两种都不是运营想要的答案。
+        #
+        # 因此这里的口径是「清单/库中值权威，Dify 那一侧不参与」：
+        # 拉取不再动它，运营改它不会坏掉发布，也不会让谁以为线上模型变了。
+        # 新建（库中不存在）时仍取 DSL 的值 —— 那时没有现值可保，且它要过发布门。
+        config = replace(config, model=existing.config.model)
     return config
 
 
@@ -636,6 +654,47 @@ def _declared_dataset_ids(model_config: dict[str, Any]) -> tuple[str, ...]:
             raise DifyDslMalformed(f"enabled dataset entry {index} has no id")
         ids.append(dataset_id)
     return tuple(ids)
+
+
+def _optional_suggested_questions(model_config: dict[str, Any]) -> tuple[str, ...]:
+    """Dify 的 ``suggested_questions``，缺失/None 时是空元组（= 不覆盖）。
+
+    与开场白同一条纪律：不可读的值**抛错**，不静默当成"没给"。条目里的空串被跳过
+    （Dify 的空行不是一条问题），但**整个字段类型不对**仍然抛。
+    """
+    value = model_config.get("suggested_questions")
+    if value is None:
+        return ()
+    if not isinstance(value, list):
+        raise DifyDslMalformed(
+            f"DSL model_config.suggested_questions must be a list, got {type(value).__name__}"
+        )
+    out: list[str] = []
+    for index, item in enumerate(value):
+        if not isinstance(item, str):
+            raise DifyDslMalformed(
+                f"DSL model_config.suggested_questions[{index}] must be a string, got {type(item).__name__}"
+            )
+        if item.strip():
+            out.append(item.strip())
+    return tuple(out)
+
+
+def _optional_opening_statement(model_config: dict[str, Any]) -> str:
+    """Dify 的 ``opening_statement``，缺失/空交付时是空串（= 不覆盖）。
+
+    ``None`` 是一个 Dify 会**写出来**的值（新建 app 时它是 null），而它和空串在这里
+    同义：这个 app 没给开场白。**一个不可读的值仍然抛错** —— 静默当成"没给"会让
+    运营写进去的开场白消失且没有任何信号。
+    """
+    value = model_config.get("opening_statement")
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise DifyDslMalformed(
+            f"DSL model_config.opening_statement must be a string, got {type(value).__name__}"
+        )
+    return value.strip()
 
 
 def _declared_tool_names(model_config: dict[str, Any]) -> tuple[str, ...]:

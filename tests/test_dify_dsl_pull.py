@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from aiops_diagnostics.agent_lifecycle import AgentManager, AgentNotFound, AgentStore
+from aiops_diagnostics.agent_lifecycle import AgentConfig, AgentManager, AgentNotFound, AgentStore
 from aiops_diagnostics.dify_dsl_pull import (
     DifyDslAuthRejected,
     DifyDslClient,
@@ -583,3 +583,49 @@ def test_a_declared_tool_goes_through_the_resolver_when_one_is_given() -> None:
     )
     assert config.allowed_tools == ("order_snapshot",)
     assert seen == [("p1/mine",)], "翻译器收到的是 Dify 的身份（provider_id/tool_name）"
+
+
+def test_a_pull_never_changes_the_live_model(monkeypatch, tmp_path: Path) -> None:
+    """`model` 保持库中现值 —— 因为运行时**不读**它，而从 Dify 拉它会伤到发布。
+
+    实测：真实模型来自 provider 配置（``codex_runtime`` 读 ``provider.model``）；
+    `AgentConfig.model` 只有发布门与相等比较两处消费。所以从 Dify 覆盖它既不改变
+    线上模型，又会在运营换了 Dify 侧模型名时让**整个发布失败**（不在 allowed_models
+    里）或产生一次静默无效的改动。
+    """
+    _serve(monkeypatch, body=_export_body())
+    manager = _manager(tmp_path)
+    admin = _context()
+
+    # 库中已有一个该名字的 agent，模型是清单那一份
+    manager.create(
+        admin,
+        name="小趋-客服",
+        description="",
+        config=AgentConfig(
+            agent_type="customer",
+            prompt="旧正文",
+            knowledge_base_ids=(),
+            model="aiops-api",
+            output_contract="blocks-v1",
+        ),
+    )
+    draft = pull_agent_draft(
+        manager, admin, _source(), name="小趋-客服", description="从 Dify 拉取", agent_type="customer"
+    )
+
+    assert draft.config.model == "aiops-api", "Dify 的 model.name 不该覆盖库中那份"
+    assert "小趋" in draft.config.prompt, "正文仍然从 Dify 来"
+
+
+def test_a_first_pull_still_takes_the_dsl_model(monkeypatch, tmp_path: Path) -> None:
+    """库中还不存在时没有现值可保 ⇒ 取 DSL 的值（它要过发布门）。
+
+    这条与上一条成对：只断言"不变"会在"从来没建过 agent"时把模型也变成空。
+    """
+    _serve(monkeypatch, body=_export_body())
+    manager = _manager(tmp_path)
+    draft = pull_agent_draft(
+        manager, _context(), _source(), name="新的", description="", agent_type="customer"
+    )
+    assert draft.config.model == "deepseek-v4-flash"

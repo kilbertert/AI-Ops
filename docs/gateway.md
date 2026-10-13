@@ -175,6 +175,25 @@ Dify 控制台里给智能体挂「外接知识库」时，端点填 `https://<h
 `AIOPS_GATEWAY_DIFY_KNOWLEDGE_BINDINGS` 按 `knowledge_id` 决定。Dify 因此拿不到数据面，
 也扩不了检索范围。
 
+## 开场白与预设问题：Dify 存中文母版，其余语言用制品（#577 / ADR-0020）
+
+`GET /v1/assistant/starters` 的 `opening` 与 `suggested_questions` 有两个来源，载荷会
+**明说**用的是哪一个：
+
+| 来源标记 | 何时 | 内容 |
+|---|---|---|
+| `dify` | 语言是 `zh` **且**该 agent 的**已发布快照**里有运营写的值 | 运营在 Dify 里写的那一份 |
+| `artifact` | 其余一切：非 zh、没绑定 agent、该版没写、读取出错 | `agent_content.AGENT_STARTERS` 里手写的文案 |
+
+**为什么只有 zh**：Dify 一个字段只有一个值，所以"运营改开场白"在结构上只可能改到中文
+那一份；其余语言必须是**写下来的文案**（运行时没有翻译机制）。
+
+**为什么要有来源标记**：没有它，「哪几门语言还停在制品上」不可观测 —— 运营会以为全语言
+都改了。标记让这件事**可观测**，但它**不能**消除"非中文滞后"这个代价，那是决定的直接后果。
+
+**未自动化的部分**：`quick_commands` 不参与（Dify 无对应字段）；`opening_statement` /
+`suggested_questions` 的**草稿**不算数，只认已发布快照。
+
 ## 工具白名单：Dify 声明，执行器强制（#577 / ADR-0019）
 
 `AgentConfig.allowed_tools` 决定这个 agent 能跑哪几个工具。**强制点在执行器**
