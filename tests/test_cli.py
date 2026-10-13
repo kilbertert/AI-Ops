@@ -586,3 +586,198 @@ def test_pull_dify_dry_run_reports_the_retained_binding_the_real_pull_keeps(
     agent = manager.get(context, json.loads(real.stdout)["agent_id"])
     snapshot = manager.version(context, agent.agent_id, agent.published_version).snapshot
     assert snapshot["knowledge_base_ids"] == dry_config["knowledge_base_ids"]
+
+
+# --- sync-from-dify: 运营改完 Dify 之后的那一步 --------------------------------
+
+
+def _seed_registry_and_agent(tmp_path: Path, *, prompt: str, tenant: str = "T-SYNC"):
+    """建一个已发布 agent，并让注册表点名它 —— 与 41 上的形状一致。"""
+    from aiops_diagnostics.agent_lifecycle import AgentManager, AgentStore
+    from aiops_diagnostics.agent_manifest import admin_context
+    from aiops_diagnostics.dify_app_registry import DifyAppBinding, DifyAppRegistry
+    from aiops_diagnostics.dify_dsl_pull import map_dsl_to_config
+
+    manager = AgentManager(
+        AgentStore(tmp_path / "gateway.db"),
+        knowledge_resolver=_AllowAll(),
+        allowed_models=("deepseek-v4-flash",),
+    )
+    context = admin_context(tenant)
+    agent = manager.create(
+        context,
+        name="小趋-客服",
+        description="同步用",
+        config=map_dsl_to_config(
+            DSL_FIXTURE.read_text(encoding="utf-8"),
+            agent_type="customer",
+            knowledge_base_ids=("kb-live",),
+        ),
+    )
+    # 让库里的正文与 Dify 侧可区分：直接把 prompt 设成调用者给的。
+    from dataclasses import replace as _replace
+
+    agent = manager.update(
+        context,
+        agent.agent_id,
+        expected_revision=agent.revision,
+        name="小趋-客服",
+        description="同步用",
+        config=_replace(agent.config, prompt=prompt),
+    )
+    manager.publish(context, agent.agent_id, expected_revision=agent.revision)
+    DifyAppRegistry(tmp_path / "gateway.db").put(
+        DifyAppBinding(
+            tenant_id=tenant,
+            business_entry="consumer",
+            app_id="a975c8e5-ad9e-425c-84c9-77581a0a2bed",
+            agent_name="小趋-客服",
+        )
+    )
+    return manager, context
+
+
+def _sync_args(tmp_path: Path, *extra: str) -> list[str]:
+    return ["admin", "sync-from-dify", "--db", str(tmp_path / "gateway.db"), *extra]
+
+
+def test_sync_freezes_a_new_version_when_dify_changed(tmp_path: Path, monkeypatch) -> None:
+    """Dify 里正文变了 ⇒ 冻结一个新版本，且**类型/知识库沿用库里的**（不由 DSL 决定）。"""
+    monkeypatch.setattr(
+        "aiops_diagnostics.agent_debug.KbBindingResolver.validate",
+        lambda self, tenant_id, knowledge_base_ids: None,
+    )
+    manager, context = _seed_registry_and_agent(tmp_path, prompt="旧正文")
+    _serve_dify_export(monkeypatch)  # 固件里的正文与「旧正文」不同
+
+    result = CliRunner().invoke(
+        app, [*_sync_args(tmp_path), "--kb-url", "http://kb.invalid"], env=_pull_env(tmp_path)
+    )
+    assert result.exit_code == 0, result.output
+    body = json.loads(result.stdout)
+    assert [o["action"] for o in body["outcomes"]] == ["synced"]
+
+    agent = manager.get(context, manager.list(context)[0].agent_id)
+    snap = manager.version(context, agent.agent_id, agent.published_version).snapshot
+    assert snap["prompt"] != "旧正文"
+    assert snap["knowledge_base_ids"] == ["kb-live"], "知识库必须沿用库里的，不能来自 DSL"
+    assert snap["agent_type"] == "customer"
+
+
+def test_sync_is_idempotent_and_never_publishes_a_duplicate(tmp_path: Path, monkeypatch) -> None:
+    """**同一个 Dify 内容跑两次 ⇒ 只有第一个版本**。
+
+    这条是本命令能安全重复跑的全部理由。没有「先比较」这一步，每次都会 fork 出一个
+    内容相同的新版本，而线上正在服务的那一版会在跑的一刻被换掉 —— Dify 侧什么都没改。
+    """
+    monkeypatch.setattr(
+        "aiops_diagnostics.agent_debug.KbBindingResolver.validate",
+        lambda self, tenant_id, knowledge_base_ids: None,
+    )
+    manager, context = _seed_registry_and_agent(tmp_path, prompt="旧正文")
+
+    _serve_dify_export(monkeypatch)
+    first = CliRunner().invoke(
+        app, [*_sync_args(tmp_path), "--kb-url", "http://kb.invalid"], env=_pull_env(tmp_path)
+    )
+    assert first.exit_code == 0, first.output
+    assert json.loads(first.stdout)["outcomes"][0]["action"] == "synced"
+
+    _serve_dify_export(monkeypatch)
+    second = CliRunner().invoke(
+        app, [*_sync_args(tmp_path), "--kb-url", "http://kb.invalid"], env=_pull_env(tmp_path)
+    )
+    assert second.exit_code == 0, second.output
+    assert json.loads(second.stdout)["outcomes"][0]["action"] == "unchanged", "内容没变却又发布了一版"
+
+    agent = manager.get(context, manager.list(context)[0].agent_id)
+    assert agent.published_version == 2, f"只应有 v1（初始）与 v2（首次同步），实得 {agent.published_version}"
+
+
+def test_sync_dry_run_reports_without_writing(tmp_path: Path, monkeypatch) -> None:
+    """干跑报 `synced` 但**一行都不写**（看库，不看输出）。"""
+    monkeypatch.setattr(
+        "aiops_diagnostics.agent_debug.KbBindingResolver.validate",
+        lambda self, tenant_id, knowledge_base_ids: None,
+    )
+    manager, context = _seed_registry_and_agent(tmp_path, prompt="旧正文")
+    before = manager.get(context, manager.list(context)[0].agent_id).revision
+
+    _serve_dify_export(monkeypatch)
+    result = CliRunner().invoke(
+        app,
+        [*_sync_args(tmp_path, "--dry-run"), "--kb-url", "http://kb.invalid"],
+        env=_pull_env(tmp_path),
+    )
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.stdout)["outcomes"][0]["action"] == "synced"
+    agent = manager.get(context, manager.list(context)[0].agent_id)
+    assert agent.revision == before, "干跑写了库"
+    assert agent.published_version == 1
+
+
+def test_sync_refuses_when_the_named_agent_is_missing(tmp_path: Path, monkeypatch) -> None:
+    """注册表点名了一个库里没有的 agent ⇒ 报 refused，不是崩、也不是悄悄建一个。"""
+    from aiops_diagnostics.dify_app_registry import DifyAppBinding, DifyAppRegistry
+
+    DifyAppRegistry(tmp_path / "gateway.db").put(
+        DifyAppBinding(
+            tenant_id="T-SYNC",
+            business_entry="consumer",
+            app_id="a975c8e5-ad9e-425c-84c9-77581a0a2bed",
+            agent_name="库里没有这个",
+        )
+    )
+    _serve_dify_export(monkeypatch)
+    result = CliRunner().invoke(
+        app, [*_sync_args(tmp_path), "--kb-url", "http://kb.invalid"], env=_pull_env(tmp_path)
+    )
+    assert result.exit_code == 0, result.output
+    outcomes = json.loads(result.stdout)["outcomes"]
+    assert outcomes[0]["action"] == "refused"
+    assert "库里没有这个 agent" in outcomes[0]["note"]
+
+
+def test_sync_reports_a_dify_failure_per_binding_without_stopping(tmp_path: Path, monkeypatch) -> None:
+    """Dify 不可达 ⇒ 如实转述 + 非零退出，且**不写库**。"""
+    import urllib.error
+
+    monkeypatch.setattr(
+        "aiops_diagnostics.agent_debug.KbBindingResolver.validate",
+        lambda self, tenant_id, knowledge_base_ids: None,
+    )
+    manager, context = _seed_registry_and_agent(tmp_path, prompt="旧正文")
+    _serve_dify_export(monkeypatch, error=urllib.error.URLError("connection refused"))
+
+    result = CliRunner().invoke(
+        app, [*_sync_args(tmp_path), "--kb-url", "http://kb.invalid"], env=_pull_env(tmp_path)
+    )
+    assert result.exit_code == 1, result.output
+    assert "DIFY_DSL_UNREACHABLE" in result.stdout
+    agent = manager.get(context, manager.list(context)[0].agent_id)
+    assert agent.published_version == 1
+
+
+def test_sync_refuses_a_draft_agent_rather_than_publishing_it(tmp_path: Path, monkeypatch) -> None:
+    """agent 不是 `published`（比如被停用/留在草稿）⇒ **拒**，不替人发布。
+
+    这条守的是「同步只更新正文」那句话：草稿状态是一个**没有已发布版本可比**的状态，
+    替它发布等于把一个人为的中间态推上线。用 `disable` 造这个状态。
+    """
+    monkeypatch.setattr(
+        "aiops_diagnostics.agent_debug.KbBindingResolver.validate",
+        lambda self, tenant_id, knowledge_base_ids: None,
+    )
+    manager, context = _seed_registry_and_agent(tmp_path, prompt="旧正文")
+    agent = manager.list(context)[0]
+    manager.disable(context, agent.agent_id, expected_revision=agent.revision)
+
+    _serve_dify_export(monkeypatch)
+    result = CliRunner().invoke(
+        app, [*_sync_args(tmp_path), "--kb-url", "http://kb.invalid"], env=_pull_env(tmp_path)
+    )
+    assert result.exit_code == 0, result.output
+    outcomes = json.loads(result.stdout)["outcomes"]
+    assert outcomes[0]["action"] == "refused", outcomes
+    assert "disabled" in outcomes[0]["note"]
+    assert manager.get(context, agent.agent_id).status == "disabled"

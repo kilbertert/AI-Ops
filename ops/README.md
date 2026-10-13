@@ -133,3 +133,28 @@ production.env 就执行时，会回退 XDG 默认
 - 清单内模型不在白名单时在任何写入前失败（exit 2，库零变更）。
 - 写的是运行中 gateway 的 sqlite（WAL + 短事务），首跑建议低峰窗口并先
   `cp gateway.db gateway.db.bak-<date>`。
+
+### 运营改完 Dify 之后：`admin sync-from-dify`（无参数）
+
+```bash
+aiops --config /etc/aiops-41/production.env admin sync-from-dify \
+  --db /var/lib/aiops-41/gateway/gateway.db --kb-url http://127.0.0.1:29380
+```
+
+和 `pull-dify` 的分工：**`pull-dify` 是装配**（7 个参数：某个 app → 某个租户的某个 agent，
+它会改路由/类型/KB），**`sync-from-dify` 是例行**（零参数：把「现在生效的那一版」更新成
+Dify 现在这一份，**只改正文与模型**）。运营改完正文之后走的是后者。
+
+七个参数全部从库里推：`app_id`/`agent_name`/`tenant_id` 来自 `dify_app_registry`
+（`[[dify_apps]]` 收敛的），`agent_type`/`output_contract`/`description`/`knowledge_base_ids`
+来自库里那个 agent 现在是什么。所以它不会顺手改掉线上路由。
+
+**幂等靠比较。** 拉回的正文与**已发布**版本逐字相同 ⇒ `unchanged`，一行不写。
+Dify 侧真的变了才 `synced`。所以这条命令可以放心重复跑。
+
+**为什么是显式动作、不做定时器**：Dify **没有草稿区**（41 实测：保存即导出，未点 Publish
+的正文立刻可被导出），定时同步会把运营**打字打到一半**的正文推给真实用户。
+触发的前提是有人知道"我改完了"。
+
+**拒的三档**（报 `refused`，都不写库）：注册表点名的 agent 不存在 / 不是 `published`
+状态 / 已发布版本的类型与当前 agent 不一致。这三档都要求人先解决，而不是让同步去覆盖。

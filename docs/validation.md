@@ -13926,3 +13926,71 @@ Available read-only evidence tools:
   **「运营本人用真实 App 点」仍未验**（前端还没发 `X-Business-Entry`，B3）。
 - **本轮打印过一次服务签名密钥**（自签令牌所需，与 #700 同一手法）。该密钥是**公司源码
   默认值**且**签名不参与判定**（company-parity），所以没有扩大暴露面；仍如实记下。
+
+## 运营自助改口径：`admin sync-from-dify`（2026-10-13）
+
+**分支** `feat/dify-sync-from-dify`，基线 `origin/main`（`036352a`）。
+**业务验收**：✅ 在 41 上对**真实 Dify** 改一次正文、跑一次同步、核对线上版本；
+**生产状态未改变**（见下「在哪儿跑的」）。
+
+### 一、决策依据（三个测量）
+
+| 测量 | 结果 | 决定了什么 |
+|---|---|---|
+| Dify 有没有草稿区？ | **没有** —— 保存即导出，未点 Publish 的正文立刻可读（一次性 app 上实测：`VERSION_TWO_NOT_PUBLISHED` 保存后原样被导出）；`a975c8e5` 两天积 **9 行** `app_model_configs` | **否掉自动/定时同步** —— 它会把打字打到一半的正文推给真实用户 |
+| 运营有可触发的冻结动作吗？ | **没有** —— `pull-dify` 要 **7 个参数**（含 app UUID），只有 41 上 root/aiops41 能跑 | 这就是缺口 |
+| 那 7 个参数能从库里推出来吗？ | **全都能** —— 注册表 `(租户,入口)→(app_id,agent_name)`；类型/KB/描述在库里 | 所以做成**零参数**命令 |
+
+### 二、判据（41 上，对真实 Dify）
+
+**① 三个真实绑定，dry-run ⇒ 全 `unchanged`**（Dify 与线上一致，命令认得出）：
+
+```
+1783022023241633792/consumer  canary-dify-acceptance-1011  unchanged v2
+1942105476598861824/consumer  canary-客服                   unchanged v3
+1942105476598861824/operator  ops-methodology-700          unchanged v3
+```
+
+**② 真改一次 Dify 正文**（给 `25c20f09` 的 `pre_prompt` 追加一个标记）⇒ 再跑：
+
+| 步骤 | 结果 |
+|---|---|
+| sync（真跑） | `ops-methodology-700` → **`synced` v3→v4** |
+| 立刻再 dry-run | **`unchanged` v4** ⇒ **幂等**（内容没变就不多发版本） |
+| 版本快照核对 | v3 = 218 字、**不含**标记；**v4 = 243 字、含标记** |
+
+**③ 还原**：把 Dify 的正文改回原稿 ⇒ `GET …/export` 读回与**原稿逐字相同**。
+
+### 三、在哪儿跑的（据实）
+
+**写动作只发生在库副本上**（`/tmp/syncprobe/gateway.db`，跑完已删）；**生产库未被写**：
+
+```
+生产库 ops-methodology-700: published_version=3  revision=8   （未变）
+生产库 v4 行数 = 0
+生产库 ops agent 正文尾部 = '…【运维方法论标记 2026-10-12 E2E-700-A】'
+```
+
+**但 Dify 上那次编辑是真的**（那是外部系统，没有副本）—— 已改回并**逐字核对**过。
+这一步是必要的：不真的改一次，`synced` 那半就没有证据。
+
+### 四、代码判据
+
+`pytest` **2244 passed / 9 skipped**；`ruff` 干净；**三处突变复验**各自转红：
+
+| 突变 | 转红的用例 |
+|---|---|
+| 去掉「与已发布版本比较」的幂等分支 | `test_sync_is_idempotent_and_never_publishes_a_duplicate` |
+| 知识库不再沿用库里的（改从 DSL / 置空） | `test_sync_freezes_a_new_version_when_dify_changed` |
+| 去掉「不是 published 就拒」的守卫 | `test_sync_refuses_a_draft_agent_rather_than_publishing_it` |
+
+**顺带修掉一处既有隐患**：`pull-dify` 原本**无条件 `publish`** —— 内容没变也 fork→publish，
+跑两次就多两个内容相同的版本。`sync-from-dify` 不会（先比较）。
+
+### 五、据实（边界）
+
+- **运维侧仍是 CLI**：这条命令补的是「不用记 7 个参数」，不是「运营能自己点」。
+  运营今天仍是：改 Dify → 告诉运维 → 运维跑一条无参数命令。
+- **不做定时器**是有意的（见一），不是没做。
+- Dify 侧那次验收编辑**已被还原**并逐字核对；验收期间 v4 短暂存在于**库副本**里，
+  生产库从未见过它。

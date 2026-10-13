@@ -210,38 +210,10 @@ def pull_dify(
         resolve_pulled_config,
     )
 
-    config_file = ctx.obj.get("config_file") if ctx.obj else None
-    settings = _reconcile_settings(config_file)
-    # 控制台三键与 `admin reconcile` 读**同一个文件**。
-    #
-    # ⚠️ 这里踩过一次：`GatewayServerSettings.from_env()` 只会去看
-    # `AIOPS_GATEWAY_SERVER_CONFIG_FILE` / 默认路径，**不看 `--config`**。41 上
-    # `--config /etc/aiops-41/production.env` 是既有形状（runbook §2/§3 全这么写），
-    # 而那个变量在 systemd 里指向 `gateway.env` —— 于是配置明明在 `--config` 指定的
-    # 文件里，命令却报"缺少 Dify 控制台配置"。既有三个命令没有暴露这个问题，是因为
-    # 它们的控制台键只在网关进程里用（那里 `AIOPS_GATEWAY_SERVER_CONFIG_FILE` 是对的）。
-    console = GatewayServerSettings.from_env()
-    if config_file is not None and not console.dify_console_api_key:
-        console = dataclasses.replace(
-            console, **_console_settings_from(Path(config_file).expanduser().resolve())
-        )
-    if not console.dify_console_base_url or not console.dify_console_api_key:
-        typer.secho(
-            "缺少 Dify 控制台配置：需要 AIOPS_GATEWAY_DIFY_CONSOLE_BASE_URL 与 "
-            "AIOPS_GATEWAY_DIFY_CONSOLE_API_KEY（放在服务端配置文件或进程环境里）。",
-            fg=typer.colors.RED,
-            err=True,
-        )
-        raise typer.Exit(code=2)
-    database = db or GatewayServerSettings.from_env().database_file
-    if db is None and not os.environ.get("AIOPS_GATEWAY_DATABASE_FILE"):
-        typer.secho(
-            "缺少 --db：缺省会静默回退 XDG 默认并新建空库。请显式给出 --db <gateway.db>，"
-            "或 export AIOPS_GATEWAY_DATABASE_FILE=<gateway.db>。",
-            fg=typer.colors.RED,
-            err=True,
-        )
-        raise typer.Exit(code=2)
+    settings = _reconcile_settings(ctx.obj.get("config_file") if ctx.obj else None)
+    # 控制台三键与 `admin reconcile` 读**同一个文件**；守卫与 `sync-from-dify` 共用一份，
+    # 免得 #625 修的那个「`--config` 里的控制台键读不到」只对其中一条命令生效。
+    console, database = _dify_console_and_db(ctx, db)
 
     knowledge_resolver = None
     if kb_url:
@@ -349,3 +321,171 @@ def _console_settings_from(path: Path) -> dict[str, str]:
         "AIOPS_GATEWAY_DIFY_CONSOLE_WORKSPACE_ID",
     )
     return {name.lower().removeprefix("aiops_gateway_"): (values.get(name) or "") for name in keys}
+
+
+def _dify_console_and_db(ctx: typer.Context, db: Path | None) -> tuple[Any, Path]:
+    """Resolve the Dify console settings and the gateway DB path, or exit.
+
+    Shared by ``pull-dify`` and ``sync-from-dify``: both read the **same three
+    console keys from the same file** and both need ``--db`` spelled out. Two
+    copies of this is how the console-keys-from-``--config`` fix (#625) would
+    silently apply to one command and not the other.
+    """
+    config_file = ctx.obj.get("config_file") if ctx.obj else None
+    console = GatewayServerSettings.from_env()
+    if config_file is not None and not console.dify_console_api_key:
+        console = dataclasses.replace(
+            console, **_console_settings_from(Path(config_file).expanduser().resolve())
+        )
+    if not console.dify_console_base_url or not console.dify_console_api_key:
+        typer.secho(
+            "缺少 Dify 控制台配置：需要 AIOPS_GATEWAY_DIFY_CONSOLE_BASE_URL 与 "
+            "AIOPS_GATEWAY_DIFY_CONSOLE_API_KEY（放在服务端配置文件或进程环境里）。",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    database = db or GatewayServerSettings.from_env().database_file
+    if db is None and not os.environ.get("AIOPS_GATEWAY_DATABASE_FILE"):
+        typer.secho(
+            "缺少 --db：缺省会静默回退 XDG 默认并新建空库。请显式给出 --db <gateway.db>，"
+            "或 export AIOPS_GATEWAY_DATABASE_FILE=<gateway.db>。",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    return console, database
+
+
+@admin_app.command("sync-from-dify")
+def sync_from_dify(
+    ctx: typer.Context,
+    db: Annotated[
+        Path | None,
+        typer.Option("--db", help="gateway 数据库文件（与 reconcile 同一条守卫）"),
+    ] = None,
+    kb_url: Annotated[
+        str | None,
+        typer.Option(
+            "--kb-url",
+            envvar="AIOPS_GATEWAY_KB_SERVICE_BASE_URL",
+            help="kb-service 地址（带 KB 绑定时发布校验需要）",
+        ),
+    ] = None,
+    tenant: Annotated[
+        str | None,
+        typer.Option("--tenant", help="只同步这个租户（缺省：注册表里全部）"),
+    ] = None,
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="只报告会做什么，零写入")] = False,
+) -> None:
+    """把 Dify 上的正文同步成已发布版本 —— **运营改完 Dify 之后的那一步**（无参数）。
+
+    `pull-dify` 要七个参数（含 app UUID），因为它是一条**装配**动作：把某个 app 落到某个
+    租户的某个 agent 上。而运营改完正文之后要的是一件**例行**动作：把「现在生效的那一版」
+    更新成 Dify 里现在这一份。两者需要的信息量不同，所以是两条命令，不是一条带默认值的。
+
+    七个参数里除了 `app_id` **全部从库里推出来**：
+
+    * `app_id` / `agent_name` / `tenant_id` —— 运行时注册表那三行（#584）；
+    * `agent_type` / `output_contract` / `description` / `knowledge_base_ids` —— 库里
+      那个 agent 现在是什么。
+
+    因此这条命令**不改路由、不改类型、不改知识库**：它只把正文（与模型）更新成 Dify 的
+    现值。要改别的，那是清单 + `reconcile` 的事，需要人显式决定。
+
+    **幂等靠比较，不靠信任**：Dify **没有草稿区**（实测：保存即导出，未点 Publish 的
+    正文立刻可被导出），所以 Dify 说不出"这一版还没定稿"。唯一诚实的门是**变化**——
+    拉回的正文与**已发布**版本逐字相同就什么都不写。没有这一层，每次跑都会 fork 出一个
+    内容相同的新版本，线上正在服务的那一版会在脚下被换掉。
+
+    **为什么不是自动定时跑**：正因为 Dify 没有草稿区，定时跑会**把运营打字打到一半的
+    正文推上线**。所以这是一条**显式动作**，由知道"我改完了"的人触发。
+    """
+    from aiops_diagnostics.agent_lifecycle import AgentManager, AgentStore, allowed_models_from_settings
+    from aiops_diagnostics.agent_manifest import admin_context
+    from aiops_diagnostics.dify_app_registry import DifyAppRegistry
+    from aiops_diagnostics.dify_dsl_pull import (
+        DifyDslError,
+        DifyDslSource,
+        sync_binding_from_dify,
+    )
+
+    console, database = _dify_console_and_db(ctx, db)
+    settings = _reconcile_settings(ctx.obj.get("config_file") if ctx.obj else None)
+    knowledge_resolver = None
+    if kb_url:
+        from aiops_diagnostics.agent_debug import KbBindingResolver, KbServiceKnowledgeClient
+
+        knowledge_resolver = KbBindingResolver(
+            KbServiceKnowledgeClient(kb_url, tenant_id="aiops", timeout=10)
+        )
+    manager = AgentManager(
+        AgentStore(database),
+        knowledge_resolver=knowledge_resolver,
+        allowed_models=allowed_models_from_settings(settings),
+    )
+    bindings = [
+        binding
+        for binding in DifyAppRegistry(database).all()
+        if tenant is None or binding.tenant_id == tenant
+    ]
+    if not bindings:
+        typer.echo(
+            json.dumps(
+                {"dry_run": dry_run, "outcomes": [], "note": "注册表里没有可同步的绑定"},
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        return
+
+    outcomes: list[dict[str, Any]] = []
+    worst = 0
+    for binding in bindings:
+        source = DifyDslSource(
+            base_url=console.dify_console_base_url,
+            app_id=binding.app_id,
+            api_key=console.dify_console_api_key,
+            workspace_id=console.dify_console_workspace_id,
+        )
+        try:
+            outcome = sync_binding_from_dify(
+                manager,
+                admin_context(binding.tenant_id),
+                DifyAppRegistry(database),
+                binding,
+                source,
+                dry_run=dry_run,
+            )
+            outcomes.append(dataclasses.asdict(outcome))
+            if outcome.action == "failed":
+                worst = max(worst, 1)
+        except DifyDslError as exc:
+            outcomes.append(
+                {
+                    "tenant_id": binding.tenant_id,
+                    "business_entry": binding.business_entry,
+                    "app_id": binding.app_id,
+                    "agent_name": binding.agent_name,
+                    "action": "failed",
+                    "version_no": None,
+                    "note": f"[{exc.code}] {exc}",
+                }
+            )
+            worst = max(worst, 1)
+        except Exception as exc:  # noqa: BLE001 - 逐个绑定转述，不让一个坏绑定吞掉其余
+            outcomes.append(
+                {
+                    "tenant_id": binding.tenant_id,
+                    "business_entry": binding.business_entry,
+                    "app_id": binding.app_id,
+                    "agent_name": binding.agent_name,
+                    "action": "failed",
+                    "version_no": None,
+                    "note": f"{type(exc).__name__}: {exc}",
+                }
+            )
+            worst = max(worst, 1)
+    typer.echo(json.dumps({"dry_run": dry_run, "outcomes": outcomes}, ensure_ascii=False, indent=2))
+    if worst:
+        raise typer.Exit(code=1)
