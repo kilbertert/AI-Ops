@@ -958,6 +958,7 @@ def create_gateway_app(
                 admin_context(binding.tenant_id),
                 binding,
                 source,
+                knowledge_registry=parse_dify_knowledge_bindings(context.settings.dify_knowledge_bindings),
             )
         except DifyDslError as exc:
             # Dify itself refused or was unreachable. Transcribed with its own
