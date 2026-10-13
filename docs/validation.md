@@ -1,3 +1,74 @@
+## PRD #577 四字段终验（2026-10-14，41 真机）
+
+**分支** `docs/dify-four-fields-41-acceptance`，基线 `origin/main`（`28ae3dd`）。
+**已部署**：41 `/health` = `0.1.0+28ae3dd40722`（实测）。**零生产写入**（见 §四）。
+
+本条回应的需求：**运营在 Dify 里改 知识库 / 开场白 / 预设问题 / 工具，都能生效**。
+五个 PR 已合并：PR-1 幂等比较（`#752`）、PR-2 知识库桥（`#753`）、PR-3 工具白名单
+（`#757`）、PR-4+5 开场白/预设问题（`#758`）。
+
+### 一、用**真实生产 Dify** 验证四字段映射（只读，`--dry-run`，零写入）
+
+对线上租户真正的那个 app（`98441c5b-…`，`aiops-41-canary-kefu`）跑 `pull-dify --dry-run`：
+
+| 字段 | 拉回的值 | 结论 |
+|---|---|---|
+| `prompt` | 759 字正文（与库中现值逐字相同） | 运营改它 → 生效（PR-1/PR-2 已交付） |
+| `knowledge_base_ids` | `["8701c742b28111f18637d95f7710e3a3"]` | **dataset 被翻译成我们的 KB id**，不是 Dify UUID（PR-2） |
+| `opening_statement` | `"欢迎使用充电服务助手，请描述您遇到的问题。"` | **现在被读**（PR-5 的 #585 反转） |
+| `suggested_questions` | `["充电桩无法启动怎么办？", "订单扣费为什么和预期不同？"]` | 同上 |
+| `allowed_tools` | 全部 7 个 `ToolName` | 默认值（该 app 未声明工具）；PR-3 |
+
+**反向对照（必须有差异，否则上面的"读到了"可能只是默认值）**：对另一个真实 app
+（`25c20f09-…`，`operator-methodology-700`）跑同一条命令：
+
+```
+opening_statement:   ''        ← 与上面不同（那个 app 没写）
+suggested_questions: []        ← 与上面不同
+model:               deepseek-v4-flash
+```
+
+**⇒ 两个 app 给出**不同**答案，且与各自在 Dify 里的内容对应** —— 这是"真的读到了
+运营写的东西"，不是两个都落到同一个默认值。
+
+**`model` 的据实（PR-4）**：两个 app 的 `model` 都是 `deepseek-v4-flash`，而**运行时
+不读它**。拉取保留库中现值（上面那条命令因为库中无此 agent 才取了 DSL 的值）。
+运营在 Dify 里改模型名**不会**改变线上模型，也**不会**再让发布失败。
+
+### 二、工具白名单的强制点（用 41 上的已部署代码证明）
+
+拉回侧声明了工具而没有映射键 ⇒ **拒**。这是刻意的：`agent_mode.tools` 在 36 上
+两个 app 都是空表，**没有真实样本**能定映射键，所以**不发明它**。
+（`_declared_tool_names` 的 docstring 与 ADR-0019 记了这条。）
+
+### 三、零影响的证明（本次改动的关键安全性质）
+
+直接读 41 的 `gateway.db`：**线上三个 agent 的已发布快照里，三个新字段全部 absent**。
+
+```
+ops-methodology-700      published=5  opening_statement=<absent>  allowed_tools=<absent>
+canary-宣传案例           published=3  opening_statement=<absent>  allowed_tools=<absent>
+canary-客服               published=3  opening_statement=<absent>  allowed_tools=<absent>
+```
+
+**⇒ 服务今天逐字不变**：`agent_versions.snapshot_json` 里没有这三个键 ⇒
+`config_from_snapshot` 用默认值 ⇒ 开场白仍取制品、工具仍是全部。
+「加一个字段不该改变任何线上行为」这条**在真机上成立**，不是推断。
+
+### 四、据实：**用户可见的那一步没有做**
+
+要让"运营改的开场白被真实用户看到"，需要一次**发布**（`sync-from-dify` / 运营自助发布）
+把新版本冻结进 `agent_versions`。那会**改变真实用户看到的中文开场白**：
+
+| | 现在的线上（制品） | 发布后会变成（Dify） |
+|---|---|---|
+| 中文开场白 | 您好，我是智能客服小趋。充电、订单或车辆的问题都可以问我。 | 欢迎使用充电服务助手，请描述您遇到的问题。 |
+
+那是**对外可见的生产改动**，不是取数。已捕获回滚点（`canary-客服` v3 快照全文 +
+Dify 侧现值），**未执行**，等明确确认。
+
+**这一段是本条验收里唯一没有做完的部分，不声称它已完成。**
+
 ## #758 开场白/预设问题（Dify 中文母版）+ `model` 据实（2026-10-14，本地 + verify skill）
 
 **分支** `feat/dify-openers-and-model-label`，基线 `origin/main`（`fff75cc`）。PR-4 + PR-5；ADR-0020。
