@@ -47,7 +47,7 @@ mapped in full *before* the first write.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -281,7 +281,13 @@ def pull_agent_draft(
     so any failure leaves the store exactly as it was — no half-built draft.
 
     ``knowledge_base_ids`` is the operator's binding, not the DSL's; see
-    :func:`map_dsl_to_config`.
+    :func:`map_dsl_to_config`. When it is ``None`` the existing agent's binding
+    is **kept**, never cleared: "this pull did not state a knowledge base" and
+    "this agent has no knowledge base" are different statements, and only the
+    second one should empty the field. Without that, pulling a dataset-free app
+    (the shape the production app now has) would silently drop a live
+    customer-service agent off the RAG path — the same silent-overwrite the
+    manifest's prompt handling already guards against (#739).
     """
     dsl_text = DifyDslClient(source).export_dsl()
     config = map_dsl_to_config(
@@ -290,6 +296,10 @@ def pull_agent_draft(
         output_contract=output_contract,
         knowledge_base_ids=knowledge_base_ids,
     )
+    if knowledge_base_ids is None:
+        existing = _find_by_name(manager, context, name)
+        if existing is not None:
+            config = replace(config, knowledge_base_ids=existing.config.knowledge_base_ids)
     return converge_agent_draft(manager, context, config, name=name, description=description)
 
 

@@ -398,3 +398,40 @@ def test_repull_after_a_prompt_edit_updates_the_draft_and_keeps_versions_immutab
     assert updated.revision > current.revision
     assert "唯一权威事实来源" in updated.config.prompt
     assert "唯一权威事实来源" not in manager.version(admin, agent.agent_id, 1).snapshot["prompt"]
+
+
+def test_a_pull_that_states_no_knowledge_base_keeps_the_existing_one(monkeypatch, tmp_path: Path) -> None:
+    """「这次拉取没提知识库」≠「这个 agent 没有知识库」。
+
+    dataset-free 的 app（生产那个现在就是）拉回来时 `knowledge_base_ids` 是空的；
+    若直接落库，线上客服会被悄悄摘掉 RAG 路径 —— 而命令照样退 0。这与 #739 在
+    prompt 上挡的**是同一种静默覆盖**。
+    """
+    _serve(monkeypatch, body=_export_body())  # REAL_DSL: 无 dataset
+    manager = _manager(tmp_path)
+    admin = _context()
+
+    seeded = manager.create(
+        admin,
+        name="小趋-客服",
+        description="d",
+        config=map_dsl_to_config(REAL_DSL, agent_type="customer", knowledge_base_ids=("kb-live",)),
+    )
+    manager.publish(admin, seeded.agent_id, expected_revision=seeded.revision)
+
+    pulled = pull_agent_draft(
+        manager, admin, _source(), name="小趋-客服", description="d", agent_type="customer"
+    )
+    assert pulled.config.knowledge_base_ids == ("kb-live",)
+
+    # 显式给了空 tuple ⇒ 那才是「就是要它没有知识库」，按字面采纳。
+    explicit = pull_agent_draft(
+        manager,
+        admin,
+        _source(),
+        name="小趋-客服",
+        description="d",
+        agent_type="customer",
+        knowledge_base_ids=(),
+    )
+    assert explicit.config.knowledge_base_ids == ()
