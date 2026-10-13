@@ -459,3 +459,75 @@ def test_pull_dify_reads_the_console_keys_from_the_config_flag(tmp_path: Path, m
     result = CliRunner().invoke(app, ["--config", str(config), *_pull_args(tmp_path)], env=env)
     assert result.exit_code == 0, result.output
     assert json.loads(result.stdout)["version_no"] == 1
+
+
+def test_pull_dify_either_path_binds_the_knowledge_base_the_caller_gave(tmp_path: Path, monkeypatch) -> None:
+    """`--knowledge-base-id` 在**两条路径**上都必须生效（干跑看输出，真跑看库）。
+
+    Dify 的 dataset id 不是我们的知识库 id（两个 id 空间），所以绑定只能由调用者给。
+    两条路径各写一次同一个参数是很容易漏的：干跑那条改对了、真跑那条没改，命令照样
+    退 0，而线上那一版**没有知识库** —— 客服因此到不了 RAG 路径，且从输出上看不出来。
+    这条把两条路径钉成同一个答案：同一份输入，干跑报告的 config 与真跑落库的快照
+    逐字相同。
+    """
+    kb = "8701c742b28111f18637d95f7710e3a3"
+
+    # 发布门的知识库活性校验本身已有独立用例（`test_agent_debug`）。这里要钉的是
+    # **绑定有没有被传到那一步**，所以把校验这一层换成空实现，不重复测 HTTP 客户端。
+    monkeypatch.setattr(
+        "aiops_diagnostics.agent_debug.KbBindingResolver.validate",
+        lambda self, tenant_id, knowledge_base_ids: None,
+    )
+    _serve_dify_export(monkeypatch)
+    dry = CliRunner().invoke(
+        app,
+        [*_pull_args(tmp_path), "--knowledge-base-id", kb, "--kb-url", "http://kb.invalid", "--dry-run"],
+        env=_pull_env(tmp_path),
+    )
+    assert dry.exit_code == 0, dry.output
+    dry_config = json.loads(dry.stdout)["config"]
+
+    _serve_dify_export(monkeypatch)
+    real = CliRunner().invoke(
+        app,
+        [*_pull_args(tmp_path), "--knowledge-base-id", kb, "--kb-url", "http://kb.invalid"],
+        env=_pull_env(tmp_path),
+    )
+    assert real.exit_code == 0, real.output
+
+    from aiops_diagnostics.agent_lifecycle import AgentManager, AgentStore
+    from aiops_diagnostics.agent_manifest import admin_context
+
+    manager = AgentManager(
+        AgentStore(tmp_path / "gateway.db"),
+        knowledge_resolver=_AllowAll(),
+        allowed_models=("deepseek-v4-flash",),
+    )
+    context = admin_context("T-PULL")
+    agent = manager.get(context, json.loads(real.stdout)["agent_id"])
+    snapshot = manager.version(context, agent.agent_id, agent.published_version).snapshot
+
+    assert snapshot["knowledge_base_ids"] == [kb]
+    assert dry_config["knowledge_base_ids"] == [kb]
+
+
+def test_pull_dify_refuses_a_dsl_that_declares_a_dataset_when_none_was_given(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """DSL 声明了数据集、调用者没给 ⇒ 拒，且**库里不留痕**（不是静默按字面搬运）。"""
+    dsl = DSL_FIXTURE.read_text(encoding="utf-8").replace(
+        "  dataset_configs:\n    retrieval_model: multiple\n",
+        "  dataset_configs:\n    retrieval_model: multiple\n"
+        "    datasets:\n      datasets:\n"
+        "      - dataset:\n          enabled: true\n"
+        "          id: df0f1d4a-3d6e-404e-9656-c88da6df3d1e\n",
+    )
+    _serve_dify_export(monkeypatch, dsl_text=dsl)
+    result = CliRunner().invoke(app, _pull_args(tmp_path), env=_pull_env(tmp_path))
+
+    assert result.exit_code == 1, result.output
+    assert "id 空间" in result.output
+
+    from aiops_diagnostics.agent_lifecycle import AgentStore
+
+    assert AgentStore(tmp_path / "gateway.db").list("T-PULL") == []

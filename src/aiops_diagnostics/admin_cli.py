@@ -168,6 +168,16 @@ def pull_dify(
     output_contract: Annotated[
         str | None, typer.Option("--output-contract", help="缺省按 agent_type 推导")
     ] = None,
+    knowledge_base_id: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--knowledge-base-id",
+            help=(
+                "绑给这个 agent 的**我们的**知识库 id（可重复）。Dify 的 dataset id 不是它 —— "
+                "DSL 声明了数据集而这里没给，命令会拒，不按字面搬运。"
+            ),
+        ),
+    ] = None,
     kb_url: Annotated[
         str | None,
         typer.Option(
@@ -262,6 +272,7 @@ def pull_dify(
                 DifyDslClient(source).export_dsl(),
                 agent_type=agent_type,
                 output_contract=output_contract,
+                knowledge_base_ids=None if knowledge_base_id is None else tuple(knowledge_base_id),
             )
             typer.echo(
                 json.dumps(
@@ -285,6 +296,7 @@ def pull_dify(
             description=description,
             agent_type=agent_type,
             output_contract=output_contract,
+            knowledge_base_ids=None if knowledge_base_id is None else tuple(knowledge_base_id),
         )
         draft_revision = agent.revision
         if agent.status != "draft" and agent.published_version is not None:
