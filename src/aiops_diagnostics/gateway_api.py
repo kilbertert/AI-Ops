@@ -2309,29 +2309,90 @@ def create_gateway_app(
             )
         return StandardAPIError(status.HTTP_422_UNPROCESSABLE_ENTITY, exc.code, str(exc))
 
+    def _dify_starters(
+        context: Any, caller: Any, business_entry: str, language: str
+    ) -> tuple[str | None, tuple[str, ...] | None]:
+        """运营在 Dify 里写的开场白，**只对 ``zh`` 且只对已发布的那一版**。
+
+        返回 ``None`` 表示"用制品" —— 三种情形合并成同一答案，因为它们对调用方是同一件事：
+        语言不是 zh（非中文一律走手写制品，运行时没有翻译）、这个租户/入口没有绑定的
+        agent、或者那一版没写过开场白。**不区分**是有意的：区分出来的信息只有"运营配没配
+        这一项"，而处置完全相同。
+
+        读的是**已发布快照**（与运行时服务用户时的口径一致）—— 草稿里的开场白不算数，
+        否则运营打字打到一半的文案会直接被用户看到，这正是 Dify 没有草稿区所要求的那条纪律。
+
+        任何读取失败都回退制品（``None``）：开场白是**呈现**，读不到它不该让会话页
+        打不开 —— 与 ``select_customer_agent`` 在 store 不可读时的降级方向一致。
+        """
+        if language != DEFAULT_LANGUAGE:
+            return None, None
+        tenant_id = str(getattr(caller, "effective_tenant_id", "") or "")
+        entry = str(business_entry or "").strip().lower()
+        if not tenant_id or not entry:
+            return None, None
+        try:
+            runtime = context.runtime
+            store = getattr(runtime, "agent_store", None)
+            registry = getattr(runtime, "dify_app_registry", None)
+            if store is None or registry is None or not registry.is_configured():
+                return None, None
+            from aiops_diagnostics.qa_rag import select_customer_agent
+
+            registered_name, configured = runtime._registered_agent(tenant_id, entry)
+            if not configured or registered_name is None:
+                return None, None
+            selection = select_customer_agent(store, tenant_id, agent_name=registered_name)
+            if selection is None:
+                return None, None
+            version = store.version(selection.agent_id, tenant_id, selection.version_no)
+            opening = str(version.snapshot.get("opening_statement") or "").strip()
+            suggested = tuple(
+                str(item).strip()
+                for item in (version.snapshot.get("suggested_questions") or ())
+                if str(item).strip()
+            )
+        except Exception:  # noqa: BLE001 - presentation must never break the page
+            return None, None
+        return (opening or None), (suggested or None)
+
     @app.get("/v1/assistant/starters")
     def assistant_starters(
         identity: tuple[ScopeContext, PlatformDecision] = Depends(shortcut_identity),  # noqa: B008
         language: str = Depends(request_language),  # noqa: B008
+        business_entry: Annotated[str | None, Header(alias="X-Business-Entry")] = None,
     ) -> dict[str, Any]:
         """This assistant's opening line and suggested questions (#585 / PRD #577).
 
-        **The copy is ours, not Dify's.** Dify has no per-language content
-        variants — ``opening_statement`` and ``suggested_questions`` are one
-        field with one value — so the authority lives in our versioned content
-        artifact (``agent_content.AGENT_STARTERS``) and the runtime derives the
-        requested language from it. Adding a language changes that artifact and
-        **nothing in Dify**; the pull path (#580) deliberately does not read the
-        DSL's copies of these two fields.
+        **中文母版来自 Dify，其余语言来自我们的制品**（PR-5 的 #585 反转）。
 
-        Read by the same callers the shortcut listing serves (both entries): the
-        copy is presentation, and the caller's platform is already resolved by
-        the time we get here. ``language`` is whatever the request asked for;
-        the artifact answers with the authoritative zh copy when a translation is
-        missing, and ``starter_gaps`` is the check that says so out loud.
+        这一条改动的方向要说清：Dify 的 ``opening_statement`` **现在被消费**，但只覆盖
+        ``zh``。理由是 Dify 没有逐语言的内容变体 —— 它一个字段一个值 —— 所以
+        「运营在 Dify 改开场白」只可能改中文那一份；其余语言仍是
+        ``agent_content.AGENT_STARTERS`` 里**手写**的文案（运行时**没有**翻译机制，
+        这是「Dify 存中文母版、我们派生」那个决定的直接后果）。
+
+        **`opening_source` 是刻意暴露的**：没有它，「哪几门语言还停在制品上」不可观测，
+        运营会以为全语言都改了。``dify`` = 这个语言取到了运营的值；``artifact`` =
+        回退到制品（非中文，或该 agent 没有覆盖）。
+
+        ``suggested_questions`` 仍然**只**来自制品：Dify 那个字段在 chat 应用里是
+        按语言无分支的同一种形状，而本期只反转了开场白这一项。
         """
-        del identity  # the platform is not part of the answer; the copy is shared
-        return {"type": "assistant_starters", **AGENT_STARTERS.public(language)}
+        caller, _ = identity
+        payload = AGENT_STARTERS.public(language)
+        opening, suggested = _dify_starters(context, caller, business_entry or "", language)
+        if opening is not None:
+            payload["opening"] = opening
+            payload["opening_source"] = "dify"
+        else:
+            payload["opening_source"] = "artifact"
+        if suggested is not None:
+            payload["suggested_questions"] = list(suggested)
+            payload["suggested_source"] = "dify"
+        else:
+            payload["suggested_source"] = "artifact"
+        return {"type": "assistant_starters", **payload}
 
     @app.get("/v1/shortcuts")
     def list_shortcuts(

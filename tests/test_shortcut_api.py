@@ -1435,11 +1435,12 @@ def test_the_artifact_covers_every_supported_language() -> None:
     assert starter_gaps() == (), f"内容制品缺这些语言的文案：{starter_gaps()}"
 
 
-def test_the_pull_path_does_not_read_difys_copy_of_these_fields() -> None:
-    """与 #580 的"不从 DSL 取"互相印证：制品的权威性要求拉取路径**不消费**那两个字段。
+def test_the_pull_path_reads_the_opening_but_still_not_the_suggested_questions() -> None:
+    """PR-5 反转了 #585 的一半，这条钉住"反转的是哪一半"。
 
-    这一条把两票之间的边界钉成一句可运行的断言：DSL 里带了这两个字段（真固件就带），
-    映射结果里对应位置**必须为空**。
+    开场白现在**被读**（运营在 Dify 写的 zh 母版，服务端覆盖制品）；预设问题**仍不读**
+    （Dify 那个字段没有逐语言形状，本期不动它）。``opening_questions`` / ``quick_commands``
+    两个元组字段同样**仍然不被触碰** —— 它们是清单/库中值，与 Dify 文案无关。
     """
     import json
     from pathlib import Path as _Path
@@ -1453,3 +1454,107 @@ def test_the_pull_path_does_not_read_difys_copy_of_these_fields() -> None:
     config = map_dsl_to_config(dsl, agent_type="customer")
     assert config.opening_questions == ()
     assert config.quick_commands == ()
+
+
+def test_the_opening_comes_from_the_published_agent_when_dify_provided_one(tmp_path: Path) -> None:
+    """PR-5 的主判据：运营在 Dify 写的 zh 开场白，经已发布版本到达**中文**读者。
+
+    这里用**真** store + 真 registry（不是替身）：替身对"读的是不是已发布快照"
+    是盲的，而那条正是本改动的纪律（草稿里的开场白不能给用户看）。
+    """
+    from aiops_diagnostics.agent_lifecycle import AgentConfig, AgentManager, AgentStore
+    from aiops_diagnostics.dify_app_registry import DifyAppBinding, DifyAppRegistry
+
+    db = tmp_path / "gateway.db"
+    store = AgentStore(db)
+
+    class _Knowledge:
+        def validate(self, tenant_id: str, knowledge_base_ids: tuple[str, ...]) -> None:
+            return None
+
+    manager = AgentManager(store, knowledge_resolver=_Knowledge(), allowed_models=("aiops-api",))
+    registry = DifyAppRegistry(db)
+
+    context = ScopeContext.build(
+        caller=SubjectRecord(b_user_id="c:T-1", c_user_id="T-1", tenant_id="T-1"),
+        subject=SubjectRecord(b_user_id="c:T-1", c_user_id="T-1", tenant_id="T-1"),
+        delegated=False,
+        effective_tenant_id="T-1",
+        data_scope=DataScope(type="self"),
+        roles=frozenset({"ROLE_AGENT_ADMIN"}),
+        permissions=frozenset({"aiops:agents:manage"}),
+    )
+    agent = manager.create(
+        context,
+        name="客服",
+        description="",
+        config=AgentConfig(
+            agent_type="customer",
+            prompt="正文",
+            knowledge_base_ids=("kb-a",),
+            model="aiops-api",
+            output_contract="blocks-v1",
+            opening_statement="运营写的开场白",
+            suggested_questions=("运营写的问题一", "运营写的问题二"),
+        ),
+    )
+    manager.publish(context, agent.agent_id, expected_revision=agent.revision)
+
+    class _RuntimeWithStore:
+        def __init__(self) -> None:
+            self.agent_store = store
+            self.dify_app_registry = registry
+
+        def _registered_agent(self, tenant_id: str, business_entry: str):
+            binding = registry.lookup(tenant_id, business_entry)
+            return (binding.agent_name if binding else None), registry.is_configured()
+
+        def shutdown(self) -> None:
+            pass
+
+    registry.put(DifyAppBinding("T-1", "consumer", "app-1", "客服"))
+
+    settings = GatewayServerSettings(
+        data_home=tmp_path,
+        database_file=db,
+        server_config_file=tmp_path / "production.env",
+    )
+    settings.server_config_file.write_text("# test\n", encoding="utf-8")
+    app = create_gateway_app(
+        settings=settings,
+        store=GatewayStore(db),
+        runtime=_RuntimeWithStore(),  # type: ignore[arg-type]
+        caller_resolver=_Caller(),
+        order_authorizer=lambda: None,  # type: ignore[arg-type]
+        platform_resolver=PlatformIdentityResolver(_Directory()),
+        faq_catalog=FAQCatalog.bundled(),
+    )
+    client = TestClient(app)
+    headers = {**_HEADERS, "X-Business-Entry": "consumer"}
+
+    zh = client.get("/v1/assistant/starters", headers=headers).json()
+    en = client.get("/v1/assistant/starters", headers={**headers, "Accept-Language": "en"}).json()
+
+    assert zh["opening"] == "运营写的开场白"
+    assert zh["opening_source"] == "dify"
+    assert zh["suggested_questions"] == ["运营写的问题一", "运营写的问题二"]
+    assert zh["suggested_source"] == "dify"
+    # 非中文一律走制品 —— 语言没丢，这是本改动最要紧的那条边界
+    assert en["opening"] != "运营写的开场白"
+    assert en["opening_source"] == "artifact"
+    # 非中文一律走制品 —— 预设问题也守这条（所以 en 与 zh 不同，且来源标记不同）
+    from aiops_diagnostics.agent_content import AGENT_STARTERS
+
+    assert en["suggested_questions"] == list(AGENT_STARTERS.suggested["en"])
+    assert en["suggested_source"] == "artifact"
+
+
+def test_the_artifact_answers_when_nobody_published_an_opening(tmp_path: Path) -> None:
+    """没有 Dify 覆盖时逐字回退制品，且**说出来**它是制品（来源标记）。"""
+    from aiops_diagnostics.agent_content import AGENT_STARTERS
+
+    body = _client(tmp_path).get("/v1/assistant/starters", headers=_HEADERS).json()
+    assert body["opening"] == AGENT_STARTERS.opening["zh"]
+    assert body["opening_source"] == "artifact"
+    assert body["suggested_questions"] == list(AGENT_STARTERS.suggested["zh"])
+    assert body["suggested_source"] == "artifact"
