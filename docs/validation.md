@@ -13855,7 +13855,7 @@ registry 三行如上报；两个一次性 app 的 `pre_prompt` 与 `updated_at`
 |---|---|---|
 | 1 | 无凭据打这个面 | **401** `INVALID_ACCESS_TOKEN` |
 | 2 | 真实运营商身份起诊断 | **202**，`diagnosis_id=dx_0b6256749ceb40a1bfddfeb5480b17c2` |
-| 3 | 作业终态 | `failed / DIAGNOSIS_BLOCKED`（**环境性**：`failed_sources` 两条 TDengine；见下） |
+| 3 | 作业终态 | **两次 `completed`**、一次 `failed / DIAGNOSIS_BLOCKED`（**环境性**：`failed_sources` 两条 TDengine；见下） |
 | 4 | **注入是否真的发生** | ✅ 运行实际发出的提示词里**逐字含** `运维方法论标记 2026-10-12 E2E-700-A` |
 | 5 | 方法论区块与护栏同现 | ✅ 同一条消息里紧跟只读工具清单与证据纪律 |
 | 6 | 运行确实跑了 | `turn_count=5`、`tool_call_count=5`、7 条 evidence、`result.json` 给出订单/租户 |
@@ -13911,10 +13911,13 @@ Available read-only evidence tools:
 
 ### 六、据实（边界与未做）
 
-- **终态是 `failed`，不是 `completed`**：`failed_sources` 为
+- **三次尝试里两次 `completed`、一次 `failed`。** 那条 `failed` 的 `failed_sources` 是
   `tdengine:charging-pile_comm`、`tdengine:charging-gun_property` —— **环境性**，与本次
-  要证的「方法论注入」无关。**不能把这次 `failed` 当成「诊断链挂了」，也不能当成
-  「`completed` 已验」**。
+  要证的「方法论注入」无关。**三条运行的 rollout 里都含那个标记**（`E2E-700-A` 各 2 次），
+  所以注入与终态**相互独立**：终态取决于 TDengine 当时可不可用，注入取决于注册表。
+  ⚠️ 第一次记录时我**只查了那条 `failed` 的作业就写下了结论**，漏看了同一分钟里两条
+  `completed` —— 这条更正就是那次漏查的产物。**据实**：判据「谁服务了这次诊断」不因
+  终态而变，但「终态是什么」必须按实际的三次来写，而不是按先看到的那一条。
 - **判据 4 是这次运行里的字符串实证**，不是「随便哪次都会有」的因果证明：方法论区块由
   `agent_engine` 在 `methodology.strip()` 非空时拼接，而值来自 `_diagnosis_methodology`
   的返回值 —— 本次该返回值的来源（注册表 → 名字 → 已发布 `operations` 版本）由**四**的
