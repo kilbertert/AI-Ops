@@ -620,6 +620,125 @@ AI-Ops 那条链**不验签、不判 `exp`**（`TRUST_PAYLOAD` 未设） ⇒
   **「上面那条推理只依赖 Nginx 自身，而 nginx 用回环与 LAN 两个地址、都不走 eth0」**，
   以及改后两条合法上游的实测。
 
+## #639 订单选择器：取数源与 AI-Ops 可见范围不同源（2026-10-13，只读查证）
+
+**分支** `docs/639-picker-source-contract`，基线 `origin/main`（`a9c9508`）。
+**本票不改应用代码、不改公司仓库**：全部为只读查证 + 契约更正。**业务验收：不适用**（无代码改动）。
+
+### 一、票里写对的与写错的
+
+**写对的**：错在**选择器的取数**，不在 AI-Ops 的拒绝。`operator` 入口的可见范围就是
+「该 B 端主体名下运营商的站点集合」，站外订单一律拒 —— **拒是对的**。
+
+**写错的一条**（本节主要更正）：票里说「**没有现成接口能给出『这个管家账号应该看到的订单』**，
+所以要新一跳」。**公司侧已经有那一跳**，只是没被挂上。
+
+### 二、两个端点的差别（同一 controller，语义不同）
+
+源码：`cloud-charging-pile` 仓 `release` 分支（本地只读克隆，2004 个 java）。
+
+| 端点 | 源码注释 | Mapper 方法 | 注解 |
+|---|---|---|---|
+| `/chOrderInfo/getOrderUserPage` | 「**用户端**订单分页」 | `ChOrderInfoMapper.getOrderPage`（:73） | **无** |
+| `/chOrderInfo/page` | 「**管理端**订单分页」 | `ChOrderInfoMapper.getPage`（:59） | **`@ShopDataScope(column = "site_id", realTime = true)`** |
+
+`@ShopDataScope` 的语义由 `qumall-common/cloud-common-data/.../datascope/shop/ShopIdInterceptor.java` 定义：
+`beforeQuery` 用 jsqlparser 改写 SQL，追加 `site_id IN (<调用者的站点集合>)`；
+集合在 `realTime=true` 时来自 `UpmsAdminFeignClient.getShops(user.getId())`（即 `GET /shopuser/getShops`）。
+
+⇒ **这正是 AI-Ops `operator_site_scope_from_shops` 在做的同一条规则**，由公司自己在 Mapper 上施加。
+**票里说"不存在"的那一跳，存在。**
+
+### 三、但它今天不生效 —— 根因在路由表，不在源码注释
+
+`ShopIdInterceptor.judge()` 的硬门（源码）：
+
+```java
+if (!StrUtil.equalsAny(clientType, "admin", "supply-admin", "tenant-app")) return false;
+if (user == null) return false;
+```
+
+⇒ 需要**两件同时成立**：`client-type ∈ {admin, supply-admin, tenant-app}`，**且**能解析出用户。
+
+**实测（2026-10-13，41，经公网 `api.mall.qushiyun.com`）**：
+
+| 请求 | `total` |
+|---|---|
+| `/chOrderInfo/page` 基线（无 `client-type`） | 14 |
+| `+ client-type: admin` | **14**（未收窄） |
+| `+ client-type: admin + shop-id: -1` | **14**（平台哨兵 ⇒ 全部） |
+| `+ client-type: admin + shop-id: <该租户某站点>` | 0（`shop-id` 是**单站点**过滤，不是集合） |
+| 对照：`/getOrderUserPage` + `client-type: admin` | 14 |
+
+**根因（读运行中的产物，不是读源码注释）**：
+
+1. 注入 `client-type` 的是公司网关的 `AdminProxyHeadFilter`；
+2. 该 filter 类**在运行中的 jar 里存在、且方法体是活的**
+   （`jar xf app.jar` + `javap -c` 反汇编：`apply` → `chainFilterAndSetHeaders`，非空实现）——
+   **这与仓里那份「方法体整段被注释」的记录相反**；
+3. **但它没有被挂到 charging-pile 那条路由上**。Nacos `dynamic_routes` 实读：
+   ```yaml
+   - id: cloud-charging-pile
+     predicates: [Path=/charging-pile/**]
+     filters: []          # ← 空
+     uri: lb://cloud-charging-pile
+   ```
+   而 `trade` / `php-work` / `das-front` 等同批路由**都挂着** `AdminProxyHeadFilter`。
+
+**⚠️ 我据上一步写过「网关那条路由没挂 filter ⇒ 注解不生效」——那个解释是错的，已撤回。**
+`ShopIdInterceptor` 由 `cloud-common-data` 的 `MybatisPlusConfig` **无条件注册**
+（`spring.factories` 自动装配；相邻两个拦截器有 `getEnable()` 开关，**它没有**）。
+所以"路由没挂 filter"解释不了注解为什么不生效。
+
+**另说一句准确地**：上表**并非四种输入同一个数** —— `shop-id: <某站点>` 那一行是 **0**，
+即**显式 `shop-id` 确实会收窄**（按单站点）。真正没有效果的是 `client-type` 这个头。
+
+**未查清的成因（已列出，本轮不下结论）**：① 身份解析（`SecurityUtils.getUser()`）；
+② mapper 白名单（`base.shop.datascope.mappers`，来自 Nacos，**本轮未能读取** —— 需要凭据）；
+③ `client-type` 取值与门认的三种不符。
+
+### 三-bis、🔴 就算门打开，两个列表也**不保证是同一个集合**（评审新增，成立）
+
+这一条比"换哪个端点"更要紧，它决定修法能不能成立：
+
+1. **店铺 id ≠ 站点 id。** 公司那套把 `getShops` 返回的**店铺 id**直接当 `site_id` 过滤
+   （`ShopIdInterceptor` 注入 `scopeName IN (<shopIds>)`，而 `scopeName` = `site_id`）；
+   而 AI-Ops 走 `operator_site_scope_from_shops` → `site_ids_by_shops` 做**映射**
+   （`ch_site.shop_id → ch_site.id`）。真实数据 954 行站点里 **953 行两者相同、1 行不同**
+   ⇒ 在那一行上，两边给出的集合**必然不同**。
+2. **时间点不同。** 公司 `realTime=true` ⇒ 每次查询**实时**取 `getShops`；
+   而 AI-Ops 管家端令牌采用的是**签发时刻的 `shop_ids` 快照**（`company_token_auth`，
+   ADR-0009 的取舍）。绑定变更后、令牌过期前，两边读的是**不同时刻**的店铺关系。
+
+⇒ **"两边都按站点过滤"不等于"两边是同一个集合"。** 取数必须与**本次请求那条链**
+用同一套集合计算、同一份快照，否则判据（"选得到就提交得上"）仍会破。
+
+### 四、结论与修法（成本对比悬殊）
+
+**取数换源不是"改一个参数"**：
+
+| # | 修法 | 谁做 | 说明 |
+|---|---|---|---|
+| A | 前端把选择器换成 `/chOrderInfo/page` | 前端 | **今天没用** —— 那道门是关的（见上） |
+| B | 把 `AdminProxyHeadFilter` 挂到 `cloud-charging-pile` 路由上 | 公司 infra | 改的是**所有服务共用**的动态路由配置；打开的是**身份注入**，影响面不止我们 |
+| C | **BFF/Java 侧**提供订单列表端点，**显式复用 AI-Ops 的站点映射并接受同一份令牌快照** | 公司后端 | **唯一能同时满足全部判据的形态**（A/B 都过不了三-bis） |
+
+**本轮已做（不依赖任何外部）**：把契约里那句含糊的「由 BFF 既有接口提供」改成
+**指出两个端点的差别、写明判据、并给出今天为什么都不行的根因**
+（`docs/agents/frontend-api-brief.md` §3.1-bis）。**这一步无论最后选哪条都必须有** ——
+否则下一个人会照着同一句含糊的话再挑错一次。
+
+### 五、证据边界（据实）
+
+- **未用真实管家端令牌验证**：`cloud-redis` 里 `base_oauth:*` / `app:3rd_session:*` / `jwt:*`
+  **各 0 条** ⇒ 今天没有任何可解析的令牌，那道门**在我手里打不开**。
+  「门打开后会不会真收窄」因此**未证** —— 上面四种输入的同值只说明「门没开」，不说明「开了也没用」。
+- **B 路由挂上去之后的行为未证**：它依赖 `getShops` 实时取集合，而那个账号今天取到的是空集。
+  是否有别的账号能取到集合，本轮**没测**。
+- 顺带记一条与本票无关的观察：`/actuator/env` 与 `/actuator/nacosconfig` 在
+  `30899` 上**可读**，后者把 Nacos 口令暴露在响应里（本轮正是用它读的路由表）。
+  该端口的外部可达已在 #737 收掉（只影响 `eth0` 入），**但本机路径仍然可读**。
+
 ## #700 叙述修复后的复跑（2026-10-12，41 真机，`0.1.0+0796dc8c3513`）
 
 **分支** `docs/stage1-acceptance-rerun-after-narrative-fix`，基线 `origin/main`（`0796dc8`）。
