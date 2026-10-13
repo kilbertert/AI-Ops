@@ -582,7 +582,14 @@ AI-Ops 那条链**不验签、不判 `exp`**（`TRUST_PAYLOAD` 未设） ⇒
 | 无凭据打 `/upms/user/check` | **200** | — |
 
 **处置**：`cloud-gateway-port-restrict.service`（已 enable、幂等、`PartOf=docker.service`），
-在 `DOCKER-USER` 链首丢「`-i eth0` → `172.18.0.8:8080`」。
+在 `DOCKER-USER` 链首丢「原始目的端口 = 30899」（`-m conntrack --ctstate DNAT --ctorigdstport 30899`）。
+
+> 🔴 **这一版是改过的，第一版有缺陷（评审在 PR #737 上指出）。**
+> 第一版写成 `-i eth0 -d 172.18.0.8 --dport 8080` —— **把规则绑在了容器当前的 IP 上**。
+> `cloud-gateway` 一旦重建就会换地址（`docker compose up -d` / 重新调度都会），
+> 规则随即**静默失效**：公网又通，而没有任何报错、没有任何东西转红。
+> `--ctorigdstport 30899` 取的是 DNAT **之前**的目的端口，与容器 IP、容器端口都无关，
+> 对「容器换 IP / 改端口映射」都免疫。判据仍是上面那张表（换规则后重测过一遍）。
 
 | 判据 | 改前 | 改后 |
 |---|---|---|
