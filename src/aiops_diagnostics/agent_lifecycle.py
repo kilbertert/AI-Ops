@@ -94,6 +94,37 @@ class AgentConfig:
         }
 
 
+def config_from_snapshot(snapshot: dict[str, Any]) -> AgentConfig:
+    """Read an ``AgentConfig`` back out of a published snapshot.
+
+    The inverse of :meth:`AgentConfig.to_dict`, and the reason it lives here
+    rather than at each caller: "did this config change?" must compare **the
+    whole config**, and a comparison is only as complete as its reader. Written
+    where the writer is, so adding a field to ``to_dict`` is adding it here in
+    the same file, next to the dataclass that defines it.
+
+    A key **absent** from the snapshot (an old version published before the
+    field existed) takes the field's default — not "missing means different".
+    Otherwise the first deployment after a new field ships would read every
+    existing published version as changed and republish every bound agent.
+
+    Deliberately **not** shared with ``_agent_from_row``: a live row always
+    carries every key, so that reader indexes them directly and a missing one
+    is a real error. Here a missing key is normal (old snapshots) and must be
+    defaulted. Same shape, different contract — collapsing them would make the
+    live-row reader quietly tolerate a corrupt row.
+    """
+    return AgentConfig(
+        agent_type=str(snapshot.get("agent_type", "")),
+        prompt=str(snapshot.get("prompt", "")),
+        knowledge_base_ids=tuple(snapshot.get("knowledge_base_ids", ())),
+        model=str(snapshot.get("model", "")),
+        output_contract=str(snapshot.get("output_contract", "")),
+        opening_questions=tuple(snapshot.get("opening_questions", ())),
+        quick_commands=tuple(snapshot.get("quick_commands", ())),
+    )
+
+
 @dataclass(frozen=True, slots=True)
 class Agent:
     agent_id: str

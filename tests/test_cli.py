@@ -781,3 +781,111 @@ def test_sync_refuses_a_draft_agent_rather_than_publishing_it(tmp_path: Path, mo
     assert outcomes[0]["action"] == "refused", outcomes
     assert "disabled" in outcomes[0]["note"]
     assert manager.get(context, agent.agent_id).status == "disabled"
+
+
+def test_a_change_to_a_field_other_than_the_prompt_is_synced(tmp_path: Path, monkeypatch) -> None:
+    """**除正文/模型以外的字段变了，也必须发布**（PR-1 的核心判据）。
+
+    幂等比较曾经只比 `prompt` 与 `model`：任何别的字段变了都会被报成 `unchanged`、
+    什么都不发布 —— 报告说"没什么可做的"，而变更**静默丢失**。
+
+    ⚠️ **据实**：今天从 DSL 流入的只有 `prompt` 与 `model` 两个字段，所以这条缺陷
+    在**当前**字段集下是**潜伏的**，不是线上已发。它会在 PR-2/3/5 往 config 里加字段的
+    那一刻变成真缺陷 —— 本用例**先把库状态造成那一刻的形状**（已发布快照与 live 行在
+    一个非正文字段上不同），从而现在就把它钉住。
+
+    构造：直接改库里的**已发布快照**（模拟"这一版的知识库与现在不同"），
+    然后跑 sync —— 正文与模型都不变，只有快照的 `knowledge_base_ids` 不同。
+    """
+    import sqlite3
+
+    from aiops_diagnostics.agent_lifecycle import AgentManager, AgentStore
+    from aiops_diagnostics.agent_manifest import admin_context
+    from aiops_diagnostics.dify_app_registry import DifyAppBinding, DifyAppRegistry
+    from aiops_diagnostics.dify_dsl_pull import map_dsl_to_config
+
+    monkeypatch.setattr(
+        "aiops_diagnostics.agent_debug.KbBindingResolver.validate",
+        lambda self, tenant_id, knowledge_base_ids: None,
+    )
+    db = tmp_path / "gateway.db"
+    manager = AgentManager(
+        AgentStore(db), knowledge_resolver=_AllowAll(), allowed_models=("deepseek-v4-flash",)
+    )
+    context = admin_context("T-SYNC")
+    agent = manager.create(
+        context,
+        name="小趋-客服",
+        description="同步用",
+        config=map_dsl_to_config(
+            DSL_FIXTURE.read_text(encoding="utf-8"), agent_type="customer", knowledge_base_ids=("kb-live",)
+        ),
+    )
+    manager.publish(context, agent.agent_id, expected_revision=agent.revision)
+    DifyAppRegistry(db).put(
+        DifyAppBinding(
+            tenant_id="T-SYNC",
+            business_entry="consumer",
+            app_id="a975c8e5-ad9e-425c-84c9-77581a0a2bed",
+            agent_name="小趋-客服",
+        )
+    )
+
+    # 把**已发布快照**的知识库改成别的（正文与模型逐字不变）。
+    conn = sqlite3.connect(db)
+    row = conn.execute(
+        "SELECT snapshot_json FROM agent_versions WHERE agent_id = ?", (agent.agent_id,)
+    ).fetchone()
+    snapshot = json.loads(row[0])
+    assert snapshot["knowledge_base_ids"] == ["kb-live"]
+    snapshot["knowledge_base_ids"] = ["kb-from-an-older-publish"]
+    conn.execute(
+        "UPDATE agent_versions SET snapshot_json = ? WHERE agent_id = ?",
+        (json.dumps(snapshot, ensure_ascii=False), agent.agent_id),
+    )
+    conn.commit()
+    conn.close()
+
+    # 拉回时不给 KB ⇒ 从 live 行取（kb-live）。正文/模型与快照相同，只有快照的 KB 不同。
+    _serve_dify_export(monkeypatch)
+    result = CliRunner().invoke(
+        app, [*_sync_args(tmp_path), "--kb-url", "http://kb.invalid"], env=_pull_env(tmp_path)
+    )
+    assert result.exit_code == 0, result.output
+    action = json.loads(result.stdout)["outcomes"][0]["action"]
+    assert action == "synced", (
+        f"只有（快照的）knowledge_base_ids 不同，却报 {action!r} —— 变化被静默丢弃（比较漏了字段）"
+    )
+
+
+def test_a_snapshot_predating_a_field_is_not_read_as_a_change(tmp_path: Path) -> None:
+    """旧快照缺某个 key ⇒ 取该字段的**默认值**，不是「缺 = 不同」。
+
+    不加这条，第一次加入一个新字段之后，**每一个存量已发布版本**都会被读成「变了」，
+    于是下一次 sync/reconcile 把全部绑定 agent 重发一遍 —— 一次静默的全量发布。
+    这条直接打在 `config_from_snapshot` 上（比较的读法就是它）。
+    """
+    from aiops_diagnostics.agent_lifecycle import AgentConfig, config_from_snapshot
+
+    full = AgentConfig(
+        agent_type="customer",
+        prompt="p",
+        knowledge_base_ids=("kb",),
+        model="m",
+        output_contract="blocks-v1",
+        opening_questions=("q",),
+        quick_commands=("c",),
+    )
+    # 一个**未来**的字段（模拟"发布这份快照时还没有它"）：整键缺失。
+    snapshot = full.to_dict()
+    snapshot.pop("quick_commands")
+    snapshot.pop("opening_questions")
+    assert config_from_snapshot(snapshot) == AgentConfig(
+        agent_type="customer",
+        prompt="p",
+        knowledge_base_ids=("kb",),
+        model="m",
+        output_contract="blocks-v1",
+        opening_questions=(),
+        quick_commands=(),
+    )
