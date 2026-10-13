@@ -472,8 +472,9 @@ class SyncOutcome:
     ``action`` is one of:
 
     * ``unchanged`` — Dify's prompt already equals the **published** version's
-      prompt; nothing was written. This is the common case and the reason the
-      command is safe to run on a timer.
+      prompt; nothing was written. This is the common case, and it is what makes
+      re-running the command harmless — **not** a licence to put it on a timer
+      (see :func:`sync_binding_from_dify` on why it must stay an explicit act).
     * ``synced`` — the prompt differed; a new version was frozen.
     * ``refused`` — the binding cannot be synced as declared (see ``note``).
     * ``failed`` — Dify or the publish gate rejected it (see ``note``).
@@ -491,7 +492,6 @@ class SyncOutcome:
 def sync_binding_from_dify(
     manager: AgentManager,
     context: Any,
-    registry: Any,
     binding: Any,
     source: DifyDslSource,
     *,
@@ -514,17 +514,26 @@ def sync_binding_from_dify(
     every run — several identical versions, and the one the runtime serves
     changes under it each time.
 
-    Refusals are deliberate and all fail closed:
+    Refusals — returned as ``refused`` and **written to nothing** — are:
 
     * the agent the row names does not exist in this tenant;
     * it is not ``published`` (a draft or disabled agent has no live version to
       compare against, and forking one would publish a state nobody froze);
-    * the pulled config's type or knowledge binding disagrees with what the
-      live agent runs — that is a manifest/Dify divergence a human must
-      resolve, not something to converge by overwriting the live agent.
+    * the published snapshot cannot be read.
 
-    The knowledge binding is **taken from the live agent**, never from the DSL:
-    Dify's dataset ids are not our knowledge-base ids (module docstring).
+    Anything the **publish gate** rejects (model off the allowlist, a knowledge
+    base that no longer resolves, a contract that does not match the type) is
+    not a refusal here: it raises out of the converge/publish calls and the
+    caller reports it as ``failed``. Keeping the two apart matters — ``refused``
+    means "this binding is not syncable as declared", ``failed`` means "it was
+    syncable and something upstream said no".
+
+    Two disagreements are **not** checked, and deliberately so: the knowledge
+    binding is taken from the live agent (never the DSL — module docstring), so
+    it cannot differ; and the *type* cannot differ either, because
+    ``AgentStore.update`` only touches rows whose ``status = 'draft'`` — a
+    published agent's config is immutable until it is forked. A guard on either
+    would be dead code that reads like a check.
     """
     from aiops_diagnostics.agent_lifecycle import AgentNotFound
 
@@ -574,16 +583,6 @@ def sync_binding_from_dify(
             "已发布版本的快照读不到",
         )
     snapshot = published.snapshot
-    if str(snapshot.get("agent_type")) != live.agent_type:
-        return SyncOutcome(
-            binding.tenant_id,
-            binding.business_entry,
-            binding.app_id,
-            binding.agent_name,
-            "refused",
-            existing.published_version,
-            "已发布版本的类型与当前 agent 不一致；先解决这个漂移",
-        )
     live_prompt = str(snapshot.get("prompt") or "")
     live_model = str(snapshot.get("model") or "")
     if config.prompt == live_prompt and config.model == live_model:

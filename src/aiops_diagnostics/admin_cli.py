@@ -450,12 +450,7 @@ def sync_from_dify(
         )
         try:
             outcome = sync_binding_from_dify(
-                manager,
-                admin_context(binding.tenant_id),
-                DifyAppRegistry(database),
-                binding,
-                source,
-                dry_run=dry_run,
+                manager, admin_context(binding.tenant_id), binding, source, dry_run=dry_run
             )
             outcomes.append(dataclasses.asdict(outcome))
             if outcome.action == "failed":
