@@ -264,6 +264,46 @@ def map_dsl_to_config(
     )
 
 
+def resolve_pulled_config(
+    manager: AgentManager,
+    context: Any,
+    source: DifyDslSource,
+    *,
+    name: str,
+    agent_type: str,
+    output_contract: str | None = None,
+    knowledge_base_ids: tuple[str, ...] | None = None,
+) -> AgentConfig:
+    """Fetch, map and settle the config a pull would land — **no writes at all**.
+
+    This is the single place the pulled config is decided. Dry-run and the real
+    pull both call it, so what a dry-run reports is *the same object* the real
+    pull would publish rather than a second implementation of the same rules.
+    (A hand-rolled copy in the CLI's dry-run branch is exactly how the retained
+    knowledge binding came to be reported as empty while the real pull kept it.)
+
+    ``knowledge_base_ids`` is the operator's binding, not the DSL's; see
+    :func:`map_dsl_to_config`. When it is ``None`` the existing agent's binding
+    is **kept**, never cleared: "this pull did not state a knowledge base" and
+    "this agent has no knowledge base" are different statements, and only the
+    second one should empty the field. Without that, pulling a dataset-free app
+    (the shape the production app now has) would silently drop a live
+    customer-service agent off the RAG path — the same silent-overwrite the
+    manifest's prompt handling already guards against (#739).
+    """
+    config = map_dsl_to_config(
+        DifyDslClient(source).export_dsl(),
+        agent_type=agent_type,
+        output_contract=output_contract,
+        knowledge_base_ids=knowledge_base_ids,
+    )
+    if knowledge_base_ids is None:
+        existing = _find_by_name(manager, context, name)
+        if existing is not None:
+            config = replace(config, knowledge_base_ids=existing.config.knowledge_base_ids)
+    return config
+
+
 def pull_agent_draft(
     manager: AgentManager,
     context: Any,
@@ -279,27 +319,18 @@ def pull_agent_draft(
 
     The fetch, the parse and the mapping all complete before the first write,
     so any failure leaves the store exactly as it was — no half-built draft.
-
-    ``knowledge_base_ids`` is the operator's binding, not the DSL's; see
-    :func:`map_dsl_to_config`. When it is ``None`` the existing agent's binding
-    is **kept**, never cleared: "this pull did not state a knowledge base" and
-    "this agent has no knowledge base" are different statements, and only the
-    second one should empty the field. Without that, pulling a dataset-free app
-    (the shape the production app now has) would silently drop a live
-    customer-service agent off the RAG path — the same silent-overwrite the
-    manifest's prompt handling already guards against (#739).
+    The config itself comes from :func:`resolve_pulled_config`, which the
+    dry-run path calls too, so the two cannot drift.
     """
-    dsl_text = DifyDslClient(source).export_dsl()
-    config = map_dsl_to_config(
-        dsl_text,
+    config = resolve_pulled_config(
+        manager,
+        context,
+        source,
+        name=name,
         agent_type=agent_type,
         output_contract=output_contract,
         knowledge_base_ids=knowledge_base_ids,
     )
-    if knowledge_base_ids is None:
-        existing = _find_by_name(manager, context, name)
-        if existing is not None:
-            config = replace(config, knowledge_base_ids=existing.config.knowledge_base_ids)
     return converge_agent_draft(manager, context, config, name=name, description=description)
 
 

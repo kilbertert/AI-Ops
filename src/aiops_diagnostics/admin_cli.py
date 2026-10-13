@@ -206,8 +206,8 @@ def pull_dify(
     from aiops_diagnostics.dify_dsl_pull import (
         DifyDslError,
         DifyDslSource,
-        map_dsl_to_config,
         pull_agent_draft,
+        resolve_pulled_config,
     )
 
     config_file = ctx.obj.get("config_file") if ctx.obj else None
@@ -266,10 +266,17 @@ def pull_dify(
         if dry_run:
             # 拉取、解析、映射全部完成于第一次写入之前（#580 已保证），所以 dry-run
             # 只要走到映射这一步就能回答"这次会得到什么"，且**零写入**。
-            from aiops_diagnostics.dify_dsl_pull import DifyDslClient
+            #
+            # ⚠️ 走的是**真跑那条同一个函数**。这里曾经自己映射一遍，于是真跑会
+            # 保留库中知识库绑定、干跑却报空的 —— 同一份输入两个答案。凡是
+            # "干跑与真跑各算一次"的地方都会这样漂，所以只有一处算。
+            from aiops_diagnostics.dify_dsl_pull import resolve_pulled_config
 
-            config = map_dsl_to_config(
-                DifyDslClient(source).export_dsl(),
+            config = resolve_pulled_config(
+                manager,
+                context,
+                source,
+                name=name,
                 agent_type=agent_type,
                 output_contract=output_contract,
                 knowledge_base_ids=None if knowledge_base_id is None else tuple(knowledge_base_id),

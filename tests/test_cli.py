@@ -531,3 +531,58 @@ def test_pull_dify_refuses_a_dsl_that_declares_a_dataset_when_none_was_given(
     from aiops_diagnostics.agent_lifecycle import AgentStore
 
     assert AgentStore(tmp_path / "gateway.db").list("T-PULL") == []
+
+
+def test_pull_dify_dry_run_reports_the_retained_binding_the_real_pull_keeps(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """**保留**的情形也要两条路径一致（评审在 PR #741 上逮到）。
+
+    上一条只覆盖了「显式给了 `--knowledge-base-id`」。而**没给**时真跑会保留库中现值、
+    干跑却报空 —— 于是操作员在干跑里看到的与真跑会发布的不是一个配置。这正是
+    dataset-free 的 app + 已有 RAG 绑定的 agent 那个组合。
+
+    根因是干跑那条分支**自己映射了一遍**；现在两条都走 `resolve_pulled_config`，
+    所以这条断言的是同一份输入下**两条路径给出同一个 config**。
+    """
+    monkeypatch.setattr(
+        "aiops_diagnostics.agent_debug.KbBindingResolver.validate",
+        lambda self, tenant_id, knowledge_base_ids: None,
+    )
+    live_kb = "8701c742b28111f18637d95f7710e3a3"
+
+    # 库里先有一个带知识库的已发布 agent（DSL 是 dataset-free 的那份真固件）。
+    from aiops_diagnostics.agent_lifecycle import AgentManager, AgentStore
+    from aiops_diagnostics.agent_manifest import admin_context
+    from aiops_diagnostics.dify_dsl_pull import map_dsl_to_config
+
+    seeded_declared = DSL_FIXTURE.read_text(encoding="utf-8")
+    manager = AgentManager(
+        AgentStore(tmp_path / "gateway.db"),
+        knowledge_resolver=_AllowAll(),
+        allowed_models=("deepseek-v4-flash",),
+    )
+    context = admin_context("T-PULL")
+    seeded = manager.create(
+        context,
+        name="小趋-客服",
+        description="",
+        config=map_dsl_to_config(seeded_declared, agent_type="customer", knowledge_base_ids=(live_kb,)),
+    )
+    manager.publish(context, seeded.agent_id, expected_revision=seeded.revision)
+
+    # 不给 --knowledge-base-id：干跑与真跑都必须报/存**那个**绑定。
+    _serve_dify_export(monkeypatch)
+    dry = CliRunner().invoke(app, [*_pull_args(tmp_path), "--dry-run"], env=_pull_env(tmp_path))
+    assert dry.exit_code == 0, dry.output
+    dry_config = json.loads(dry.stdout)["config"]
+    assert dry_config["knowledge_base_ids"] == [live_kb], "干跑把保留的绑定报成了空"
+
+    _serve_dify_export(monkeypatch)
+    real = CliRunner().invoke(
+        app, [*_pull_args(tmp_path), "--kb-url", "http://kb.invalid"], env=_pull_env(tmp_path)
+    )
+    assert real.exit_code == 0, real.output
+    agent = manager.get(context, json.loads(real.stdout)["agent_id"])
+    snapshot = manager.version(context, agent.agent_id, agent.published_version).snapshot
+    assert snapshot["knowledge_base_ids"] == dry_config["knowledge_base_ids"]
