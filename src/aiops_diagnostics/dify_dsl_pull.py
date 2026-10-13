@@ -53,7 +53,7 @@ from urllib.parse import urlsplit
 
 import yaml
 
-from aiops_diagnostics.agent_lifecycle import Agent, AgentConfig, AgentManager
+from aiops_diagnostics.agent_lifecycle import Agent, AgentConfig, AgentManager, config_from_snapshot
 from aiops_diagnostics.bounded_http import (
     ErrorMapping,
     HttpFailure,
@@ -583,9 +583,16 @@ def sync_binding_from_dify(
             "已发布版本的快照读不到",
         )
     snapshot = published.snapshot
-    live_prompt = str(snapshot.get("prompt") or "")
-    live_model = str(snapshot.get("model") or "")
-    if config.prompt == live_prompt and config.model == live_model:
+    # Compare **the whole config**, never a hand-picked pair of fields.
+    #
+    # This was `config.prompt == snapshot["prompt"] and config.model ==
+    # snapshot["model"]`, which made every OTHER field invisible: a pull that
+    # changed only `knowledge_base_ids` (or any field added later) reported
+    # `unchanged` and published nothing, while the report said there was
+    # nothing to do. `config_from_snapshot` is the inverse of `to_dict`, so a
+    # field added to the dataclass joins this comparison automatically instead
+    # of needing someone to remember to extend an `and` here.
+    if config == config_from_snapshot(snapshot):
         # Dify holds exactly what the live version runs — the common case.
         return SyncOutcome(
             binding.tenant_id,
