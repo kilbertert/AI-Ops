@@ -35,7 +35,7 @@ TDengine Community Edition 3.4 允许非超级用户写入已有数据库，并�
 [[agents]]                  # 每个期望的 agent（发布权威）
 tenant_id / name / description
 agent_type                  # customer | operations
-prompt                      # 1-8000 字符（发布时校验）
+prompt                      # 1-8000 字符；**绑定了 Dify 的 agent 不写这一行**（见下）
 knowledge_base_ids = [...]  # 发布时对 kb-service 做活性校验
 model                       # 必须在 Settings.providers 白名单内
 output_contract             # 可省，按 agent_type 推导（customer→blocks-v1）
@@ -52,9 +52,26 @@ agent_name                  # 该 app 落到我们库里的 agent **名字**
 `agent_name` 是名字而不是 `agent_id`：id 每次重新发布都会变，而名字已经是
 `agent_manifest` 的收敛键，也是同一个租户内唯一的。四字段**全部必填、没有一个
 是推导出来的**——注册表的全部意义就是"运行时被告知哪个 agent 服务这个入口"，
-而不是自己算出来。绑定的 `agent_name` 必须在本清单的 `[[agents]]` 里声明过
-（同租户内），否则 `load_manifest` 在**任何写入之前**就失败：注册表行和它指向的
-agent 是同一个事实，半个错的事实不能先落库。
+而不是自己算出来。
+
+### 一个 agent 的正文**只能有一个来源**（#739 / PRD #577）
+
+两条规则互为反面，`load_manifest` 在**任何写入之前**就会判：
+
+| 这个 agent | `[[agents]]` 里的 `prompt` | `[[dify_apps]]` 里的绑定 |
+|---|---|---|
+| 由 **Dify** 编辑 | **不写** | 写 |
+| 由 **清单** 承载 | **必须写** | 不写 |
+
+- 绑定的 `agent_name` 必须在本清单的 `[[agents]]` 里声明过（同租户内），
+  否则失败：注册表行和它指向的 agent 是同一个事实，半个错的事实不能先落库。
+- **两者都写**会被拒：同一份正文两个权威，而线上该用哪一份没有规则可答。
+  本仓确实撞上过（Dify 上 129 字存根 vs 清单里 759 字真稿）。
+- **都没有**（未绑定又不写 prompt）也会被拒：那这个 agent 就没有正文来源了。
+- **库中还没有这个 agent、正文又不在清单里** ⇒ 收敛**拒绝创建**（报 `manual-action-required`），
+  绝不把"正文在别处"这个状态发布成线上提示词。
+- **从 Dify 切回清单**（写回 `prompt`、去掉绑定）时，库里的旧绑定**必须先清掉**
+  （`reconcile --prune`），否则注册表那条旧行还在、线上仍是两个来源。
 
 **fail closed。** 注册表为空时（清单里没有 `[[dify_apps]]`）保持注册表出现之前
 的选法不变——所以这个开关可以**惰性地**上线，未采用它的环境行为逐字不变。一旦

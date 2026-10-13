@@ -349,6 +349,7 @@ def _manifest_with_binding(agent_name: str = "客服甲", app_id: str = "dify-ap
 
 
 def test_load_manifest_parses_dify_apps(tmp_path: Path) -> None:
+    # 绑定了 Dify ⇒ 清单里**不写** prompt（#577：正文只有一个来源）
     path = _write_manifest(
         tmp_path / "env.toml",
         """
@@ -356,7 +357,6 @@ def test_load_manifest_parses_dify_apps(tmp_path: Path) -> None:
         tenant_id = "t1"
         name = "客服"
         agent_type = "customer"
-        prompt = "你是客服"
         knowledge_base_ids = ["kb-1"]
         model = "aiops-api"
 

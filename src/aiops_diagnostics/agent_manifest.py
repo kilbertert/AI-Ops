@@ -27,7 +27,7 @@ reports every agent ``unchanged`` and writes nothing.
 from __future__ import annotations
 
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Literal
 
@@ -101,6 +101,18 @@ class ManifestError(ValueError):
     """The manifest cannot be turned into valid AgentConfig objects."""
 
 
+#: ``[[agents]]`` 里缺 ``prompt`` 时的占位值。**不是一个合法提示词**：装载期守卫要求
+#: 「有 Dify 绑定 ⇔ 缺 prompt」，而 converge 要求「值是它 ⇔ 时不覆盖库中 prompt」。
+#: 用哨兵而不是空串，是因为空串是**一个真实的意图**（"把这个 agent 的提示词设空"），
+#: 与"我没写、它由别处来"必须能分开。
+_PROMPT_FROM_DIFY = "\x00prompt-from-dify\x00"
+
+
+def prompt_from_dify(agent: ManifestAgent) -> bool:
+    """这个 agent 的提示词是不是**不来自清单**（即由 Dify 那一侧提供）。"""
+    return agent.config.prompt == _PROMPT_FROM_DIFY
+
+
 def load_manifest(path: Path) -> EnvironmentManifest:
     """Parse and structurally validate a TOML environment manifest."""
     with path.open("rb") as handle:
@@ -128,14 +140,16 @@ def load_manifest(path: Path) -> EnvironmentManifest:
 def _require_bound_agents_declared(
     agents: tuple[ManifestAgent, ...], bindings: tuple[DifyAppBinding, ...]
 ) -> None:
-    """A binding must name an agent this manifest actually declares.
+    """两份声明必须互为**同一个事实**：绑定必须指向已声明的 agent，且二者不可各写一份提示词。
 
-    Checked at load, not at converge, for the same reason the model allow-list
-    is: the registry row and the agent it points at are one fact, and a fact
-    that is half-wrong must fail before the store has been written rather than
-    after. A binding naming an agent nobody publishes would otherwise be stored
-    happily and then silently select nothing at runtime — the failure this
-    registry exists to make impossible.
+    两条都在**装载期**判，不在 converge 判。理由与模型白名单同源：注册行与它指向的
+    agent 是同一个事实，半错的事实必须在写库**之前**失败，而不是之后。
+
+    第二条（本条是 #577「Dify 是权威编辑面」缺的那道门）：一个 agent **要么**由 Dify
+    编辑（有 ``dify_apps`` 绑定 ⇒ 不写 ``prompt``），**要么**由清单承载（写 ``prompt``
+    ⇒ 不绑定）。两者都写就是**两个权威**，而线上该用哪一份**没有规则**可以回答 ——
+    本仓确实撞上过：绑定指向 Dify 上的 129 字存根，而 reconcile 发布的是清单里的 758 字。
+    允许这种状态，等于允许一份只有专门去查才看得见的漂移。
     """
     declared = {(agent.tenant_id, agent.name) for agent in agents}
     unknown = sorted(
@@ -146,6 +160,34 @@ def _require_bound_agents_declared(
     if unknown:
         raise ManifestError(
             "dify_apps 绑定的 agent_name 未在 [[agents]] 中声明（同一租户内）: " + "; ".join(unknown)
+        )
+
+    # 上一轮被绑定、这一轮**既没带绑定、又改了正文**的 agent：装载期看不到库里的旧注册行，
+    # 因此这里查不出来 —— 那道判定必须在能读到注册表的地方做（`_preflight`）。
+    bound = {(binding.tenant_id, binding.agent_name) for binding in bindings}
+    both = sorted(
+        f"{agent.tenant_id}/{agent.name}"
+        for agent in agents
+        if (agent.tenant_id, agent.name) in bound and not prompt_from_dify(agent)
+    )
+    if both:
+        raise ManifestError(
+            "同一个 agent 不能既绑定 Dify app、又在 [[agents]] 里写 prompt（两个权威，"
+            "线上该用哪一份没有规则可答）。绑定了 Dify 的请删掉 prompt；不打算由 Dify 编辑的请删掉绑定: "
+            + "; ".join(both)
+        )
+
+    # 反向：**没有** Dify 绑定的 agent，prompt 就是它唯一的正文来源。
+    # 少了这一条，「prompt 可选」会顺手允许一个"既没有 Dify、也没有正文"的 agent ——
+    # 那是把「必须有一个来源」这条规则换成「可以一个都没有」。
+    orphan = sorted(
+        f"{agent.tenant_id}/{agent.name}"
+        for agent in agents
+        if (agent.tenant_id, agent.name) not in bound and prompt_from_dify(agent)
+    )
+    if orphan:
+        raise ManifestError(
+            "未绑定 Dify app 的 agent 必须有 prompt（否则它没有任何正文来源）: " + "; ".join(orphan)
         )
 
 
@@ -169,7 +211,10 @@ def _manifest_agent(entry: dict[str, Any]) -> ManifestAgent:
     output_contract = str(entry.get("output_contract") or DEFAULT_OUTPUT_CONTRACTS[agent_type])
     config = AgentConfig(
         agent_type=agent_type,
-        prompt=str(entry["prompt"]),
+        # ``prompt`` 现在**可选**：绑定了 Dify app 的 agent，其提示词由 Dify 编辑、
+        # 经发布门拉回（#577）。缺失时用这个哨兵占位，是否合法由装载期的守卫判定 ——
+        # 这里是**结构**解析，守卫是**语义**判定，两者分开。
+        prompt=str(entry["prompt"]) if "prompt" in entry else _PROMPT_FROM_DIFY,
         knowledge_base_ids=tuple(str(item) for item in entry.get("knowledge_base_ids", [])),
         model=str(entry["model"]),
         output_contract=output_contract,
@@ -218,6 +263,34 @@ def reconcile(
     return reports
 
 
+def _require_no_source_switch(registry: DifyAppRegistry, manifest: EnvironmentManifest) -> None:
+    """从「Dify 编辑」切回「清单编辑」时，库里那条旧绑定必须**先被清掉**。
+
+    装载期只能看见**文件里**的绑定，所以「上一轮绑定、这一轮改回内联 prompt」在文件上
+    看起来完全合法。而本函数默认 `prune=False`（未变），旧注册行会留着 ⇒
+    **线上的双来源继续存在**，只是看不见了。因此判定必须落在**读得到注册表的地方**。
+
+    （第一版写在 `_preflight` 里、用 `getattr(manager, "dify_registry", None)` 取注册表 ——
+    而 `AgentManager` 根本没有这个属性，`getattr` 恒为 None ⇒ **那段守卫是死的**。
+    评审的这一条把两个问题一起暴露了：判定要能读到注册表，而且不能靠猜属性名。）
+    """
+    live = {(binding.tenant_id, binding.agent_name) for binding in registry.all()}
+    declared = {(binding.tenant_id, binding.agent_name) for binding in manifest.dify_apps}
+    switched = sorted(
+        f"{agent.tenant_id}/{agent.name}"
+        for agent in manifest.agents
+        if (agent.tenant_id, agent.name) in live
+        and (agent.tenant_id, agent.name) not in declared
+        and not prompt_from_dify(agent)
+    )
+    if switched:
+        raise ManifestError(
+            "这些 agent 库里仍绑着 Dify app，本轮却改由清单提供正文（旧绑定不会被自动清除，"
+            "线上会出现两个来源）。请在清单里保留绑定、把正文交给 Dify，"
+            "或先带 --prune 清掉旧绑定再切: " + "; ".join(switched)
+        )
+
+
 def reconcile_dify_registry(
     registry: DifyAppRegistry,
     manifest: EnvironmentManifest,
@@ -238,6 +311,7 @@ def reconcile_dify_registry(
     property of the manifest alone and is enforced where the manifest is read
     (:func:`load_manifest`), so both halves fail together and before any write.
     """
+    _require_no_source_switch(registry, manifest)
     desired = {(binding.tenant_id, binding.business_entry): binding for binding in manifest.dify_apps}
     existing = {(binding.tenant_id, binding.business_entry): binding for binding in registry.all()}
     reports: list[DifyRegistryReport] = []
@@ -315,6 +389,17 @@ def _converge_one(
     def report(action: str, version: int | None, note: str = "") -> ReconcileReport:
         return ReconcileReport(agent.tenant_id, agent.name, existing_id, action, version, note)
 
+    # **提示词不由清单承载时，收敛必须保留库里那一份。**
+    #
+    # 不这么做会有一个很坏的下场：这类 agent 的 ``config.prompt`` 是哨兵，与库中
+    # 现值不等 ⇒ ``drift`` 恒为真 ⇒ 每一次 reconcile 都会把线上提示词**覆盖成哨兵**
+    # （grep 出来的字面量，不是提示词）。而"把清单里的 prompt 删掉、改由 Dify 编辑"
+    # 恰恰是这个改动要促成的状态 —— 也就是说，不修这里，"收敛"会把功能一起收掉。
+    #
+    # 其余字段仍以清单为准：**只有 prompt 这一个字段**是"可能由别处提供"的。
+    if prompt_from_dify(agent) and existing is not None:
+        agent = replace(agent, config=replace(agent.config, prompt=existing.config.prompt))
+
     if agent.state == "disabled":
         if existing is None:
             return report("unchanged", None, "清单状态 disabled 且库里不存在，无需操作")
@@ -326,6 +411,17 @@ def _converge_one(
         return report("disabled", existing.published_version)
 
     if existing is None:
+        # 🔴 **没有库中版本时，占位符绝不能成为线上提示词。**
+        # 一条"只绑定 Dify、不写 prompt"的清单在**空库**上收敛时，这里没有可继承的现值 ——
+        # 而 `AgentManager._validate_config` 只查长度（实测），所以哨兵会**通过校验并被发布**，
+        # 那个入口从此用一段 grep 出来的字面量回答用户。（评审在 #739 上逮到。）
+        if prompt_from_dify(agent):
+            return report(
+                "manual-action-required",
+                None,
+                "库中还没有这个 agent，正文又不在清单里 —— 先把它创建并发布（或写 prompt），"
+                "Dify 侧的正文要经 `admin pull-dify` 落成已发布版本后才存在",
+            )
         if dry_run:
             return report("created", None, "dry-run")
         created = manager.create(context, name=agent.name, description=agent.description, config=agent.config)
