@@ -40,7 +40,7 @@ jobs:
     # they need the persistent filesystem, AGENT_PAT and the
     # controller/candidate/delivery isolation, and .sandcastle/policy-check.mjs
     # statically locks their owner-only same-repository gate.
-    runs-on: [self-hosted, AI-Ops]
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - name: Check out repository

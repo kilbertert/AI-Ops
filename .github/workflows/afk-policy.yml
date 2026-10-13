@@ -17,7 +17,7 @@ jobs:
     # just untrusted ones. Back on the persistent runner until hosted jobs start
     # again; `self-hosted` alone would match any self-hosted runner in the
     # account, so the label set is explicit.
-    runs-on: [self-hosted, AI-Ops]
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Check out repository
