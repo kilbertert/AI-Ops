@@ -463,3 +463,163 @@ def _default_output_contract(agent_type: str) -> str:
         return DEFAULT_OUTPUT_CONTRACTS[agent_type]
     except KeyError as exc:
         raise DifyDslMalformed(f"agent_type {agent_type!r} has no default output contract") from exc
+
+
+@dataclass(frozen=True, slots=True)
+class SyncOutcome:
+    """One registry binding's result, named so the caller can print and count it.
+
+    ``action`` is one of:
+
+    * ``unchanged`` — Dify's prompt already equals the **published** version's
+      prompt; nothing was written. This is the common case, and it is what makes
+      re-running the command harmless — **not** a licence to put it on a timer
+      (see :func:`sync_binding_from_dify` on why it must stay an explicit act).
+    * ``synced`` — the prompt differed; a new version was frozen.
+    * ``refused`` — the binding cannot be synced as declared (see ``note``).
+    * ``failed`` — Dify or the publish gate rejected it (see ``note``).
+    """
+
+    tenant_id: str
+    business_entry: str
+    app_id: str
+    agent_name: str
+    action: str
+    version_no: int | None = None
+    note: str = ""
+
+
+def sync_binding_from_dify(
+    manager: AgentManager,
+    context: Any,
+    binding: Any,
+    source: DifyDslSource,
+    *,
+    dry_run: bool = False,
+) -> SyncOutcome:
+    """Bring one registry binding's agent up to what **Dify currently holds**.
+
+    Everything the pull needs is derived from the registry row and the agent it
+    already names — ``app_id`` from the row, and ``agent_type``,
+    ``output_contract``, ``description`` and ``knowledge_base_ids`` from the
+    live agent. That is the whole point of the command: the operator edits a
+    prompt in Dify, and *this* turns it into a published version without anyone
+    re-typing seven parameters.
+
+    **Idempotent by comparison, not by trust.** Dify has no draft area: saving
+    a config is immediately what ``export`` returns, so Dify cannot tell us
+    "this is unfinished". The only honest gate is therefore *change*: if the
+    pulled prompt already equals the **published** version's prompt, nothing is
+    written. Without this the command would fork and publish a new version on
+    every run — several identical versions, and the one the runtime serves
+    changes under it each time.
+
+    Refusals — returned as ``refused`` and **written to nothing** — are:
+
+    * the agent the row names does not exist in this tenant;
+    * it is not ``published`` (a draft or disabled agent has no live version to
+      compare against, and forking one would publish a state nobody froze);
+    * the published snapshot cannot be read.
+
+    Anything the **publish gate** rejects (model off the allowlist, a knowledge
+    base that no longer resolves, a contract that does not match the type) is
+    not a refusal here: it raises out of the converge/publish calls and the
+    caller reports it as ``failed``. Keeping the two apart matters — ``refused``
+    means "this binding is not syncable as declared", ``failed`` means "it was
+    syncable and something upstream said no".
+
+    Two disagreements are **not** checked, and deliberately so: the knowledge
+    binding is taken from the live agent (never the DSL — module docstring), so
+    it cannot differ; and the *type* cannot differ either, because
+    ``AgentStore.update`` only touches rows whose ``status = 'draft'`` — a
+    published agent's config is immutable until it is forked. A guard on either
+    would be dead code that reads like a check.
+    """
+    from aiops_diagnostics.agent_lifecycle import AgentNotFound
+
+    existing = _find_by_name(manager, context, binding.agent_name)
+    if existing is None:
+        return SyncOutcome(
+            binding.tenant_id,
+            binding.business_entry,
+            binding.app_id,
+            binding.agent_name,
+            "refused",
+            None,
+            f"库里没有这个 agent（{binding.agent_name}）—— 先按清单创建它",
+        )
+    if existing.status != "published" or existing.published_version is None:
+        return SyncOutcome(
+            binding.tenant_id,
+            binding.business_entry,
+            binding.app_id,
+            binding.agent_name,
+            "refused",
+            existing.published_version,
+            f"agent 状态是 {existing.status}，没有可对比的已发布版本；先让它成为一个已发布版本",
+        )
+
+    live = existing.config
+    config = resolve_pulled_config(
+        manager,
+        context,
+        source,
+        name=binding.agent_name,
+        agent_type=live.agent_type,
+        output_contract=live.output_contract,
+        knowledge_base_ids=live.knowledge_base_ids,
+    )
+
+    try:
+        published = manager.version(context, existing.agent_id, existing.published_version)
+    except AgentNotFound:  # pragma: no cover - published_version pointed at a missing row
+        return SyncOutcome(
+            binding.tenant_id,
+            binding.business_entry,
+            binding.app_id,
+            binding.agent_name,
+            "refused",
+            existing.published_version,
+            "已发布版本的快照读不到",
+        )
+    snapshot = published.snapshot
+    live_prompt = str(snapshot.get("prompt") or "")
+    live_model = str(snapshot.get("model") or "")
+    if config.prompt == live_prompt and config.model == live_model:
+        # Dify holds exactly what the live version runs — the common case.
+        return SyncOutcome(
+            binding.tenant_id,
+            binding.business_entry,
+            binding.app_id,
+            binding.agent_name,
+            "unchanged",
+            existing.published_version,
+        )
+
+    if dry_run:
+        return SyncOutcome(
+            binding.tenant_id,
+            binding.business_entry,
+            binding.app_id,
+            binding.agent_name,
+            "synced",
+            existing.published_version,
+            "dry-run：Dify 与已发布版本不同，会冻结一个新版本",
+        )
+
+    # Converge the live agent onto the pulled config, then publish it. This is
+    # the same fork→update→publish path `admin reconcile` and `/v1/agents` use.
+    agent = converge_agent_draft(
+        manager, context, config, name=binding.agent_name, description=existing.description
+    )
+    if agent.status != "draft":
+        agent = manager.get(context, agent.agent_id)
+    version = manager.publish(context, agent.agent_id, expected_revision=agent.revision)
+    return SyncOutcome(
+        binding.tenant_id,
+        binding.business_entry,
+        binding.app_id,
+        binding.agent_name,
+        "synced",
+        version.version_no,
+    )

@@ -1161,6 +1161,65 @@ runuser -u aiops41 -- .venv/bin/aiops --config /etc/aiops-41/production.env admi
 `model_config`、只改要改的字段 —— **不要发一个不完整的 body**，那会把别的字段重置。
 落笔前先在**一次性 app** 上排练一遍（create → model-config → export → delete），
 并在写后 `GET …/export` **逐字回读**核对。
+### 3.1-quinquies 运营改完 Dify 之后：`admin sync-from-dify`（2026-10-13 新增）
+
+**用途**：运营在 Dify 控制台改了某个智能体的正文，**把这一改动变成线上生效的版本**。
+这是「运营自助改口径」这条链**唯一还缺的那一步**（第一跳在 Dify，第三跳是运行时服务提问）。
+
+```bash
+cd /opt/aiops-41
+# 先看会做什么（零写入）
+runuser -u aiops41 -- .venv/bin/aiops --config /etc/aiops-41/production.env admin sync-from-dify \
+  --db /var/lib/aiops-41/gateway/gateway.db --kb-url http://127.0.0.1:29380 --dry-run
+# 确认为 1 条 synced / 其余 unchanged 之后，去掉 --dry-run 实跑
+```
+
+**它与 `3.1-quater` 的 `pull-dify` 有什么区别**（这是两条命令，不是一条带默认值）：
+
+| | `pull-dify` | `sync-from-dify` |
+|---|---|---|
+| 用途 | **装配**：把某个 app 落到某个租户的某个 agent | **例行**：把「现在生效的那一版」更新成 Dify 现在这一份 |
+| 参数 | **7 个**（含 app UUID、租户、agent 名、类型、KB…） | **零个**（`--db` 之外全从库里推） |
+| 会改路由/类型/KB 吗 | 会（它就是那些参数的产物） | **不会** —— 只改正文与模型 |
+| 什么时候用 | 新增一个智能体、换绑定 | 运营改完正文之后，每次都走这条 |
+
+**七个参数全部从库里推出来**：`app_id`/`agent_name`/`tenant_id` 来自运行时注册表那三行
+（#584）；`agent_type`/`output_contract`/`description`/`knowledge_base_ids` 来自库里那个
+agent 现在是什么。因此它**不会**顺手改掉线上路由。
+
+**🔴 幂等靠比较，不靠信任；而且有意做成显式动作、不做定时器。**
+
+Dify **没有草稿区** —— 41 上实测：保存 config 之后，`GET …/export` **立刻**返回那段正文，
+连「还没点 Publish」的也一样（`VERSION_TWO_NOT_PUBLISHED` 被原样读出）。并且同一个 app
+两天里积了 **9 行** `app_model_configs`（每次保存一行）。两条合起来说明：
+
+- **不能自动/定时同步** —— 那会把运营**打字打到一半**的正文推给真实用户；
+- 所以这是一条**由人触发的显式动作**，触发的前提是那个人知道"我改完了"。
+
+它仍然足够安全重复跑：拉回的正文与**已发布**版本逐字相同就**什么都不写**。
+命令报 `unchanged` 就是没动；报 `synced` 才是真冻了一版。
+
+**拒的三档**（都 fail-closed，报 `refused`，都不写库）：
+
+| 情形 | 为什么拒 |
+|---|---|
+| 注册表点名的 agent 库里不存在 | 先按清单建它，不是让同步顺手造一个 |
+| agent 不是 `published`（草稿/停用） | 没有**已发布版本**可比；替它发布等于把人为中间态推上线 |
+| 已发布版本的类型与当前 agent 不一致 | 那是清单/Dify 的漂移，要人解决，不是覆盖 |
+
+**运营侧的真实手顺**（今天）：
+1. 打开 `http://36.156.159.175:10008`（Dify 控制台）→ 登录 → **按名字**找对 app；
+2. **只改提示词那个框**，保存；
+3. 告诉运维「XX app 改完了」→ 运维跑上面那条 `sync-from-dify`。
+
+**必须知道的三条**（否则会改到不该改的地方）：
+
+| 在 Dify 里改 | 结果 |
+|---|---|
+| **提示词** | ✅ 唯一真正生效的编辑 |
+| 模型 | ⚠️ 改成白名单外（非 `deepseek-v4-flash`）会让**拉取失败** |
+| 开场白 / 预设问题 / 知识库 / 工具 / 编排 | ❌ 运行时**不读**（权威在我们侧，#585；Dify 的 dataset id 也不是我们的知识库 id） |
+
 ## 4. 真实会话与数据（验收前置）
 
 ### 4.1 取有效 thirdSession
