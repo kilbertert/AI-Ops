@@ -889,3 +889,131 @@ def test_a_snapshot_predating_a_field_is_not_read_as_a_change(tmp_path: Path) ->
         opening_questions=(),
         quick_commands=(),
     )
+
+
+def test_sync_translates_a_dataset_declared_in_dify(tmp_path: Path, monkeypatch) -> None:
+    """**sync 这条路也要走知识库桥**（评审自查逮到：原先没走）。
+
+    这条打在 `sync-from-dify` 上，不是打在解析器上 —— 因为缺陷恰恰是
+    「解析器写好了，但 sync 传了 `knowledge_base_ids=live...`，于是它根本没被调用」。
+    单测解析器会全绿，而运营真正走的那条路**桥是死的**。
+
+    构造：Dify 的 app 声明一个外接 dataset（句柄 `kb-canary`），登记表把它映射到
+    `kb-registry`；库里的 agent 目前绑的是 `kb-live`。sync 之后**必须是 `kb-registry`**。
+    """
+
+    from aiops_diagnostics.agent_lifecycle import AgentManager, AgentStore
+    from aiops_diagnostics.agent_manifest import admin_context
+    from aiops_diagnostics.dify_app_registry import DifyAppBinding, DifyAppRegistry
+    from aiops_diagnostics.dify_dsl_pull import map_dsl_to_config
+
+    monkeypatch.setattr(
+        "aiops_diagnostics.agent_debug.KbBindingResolver.validate",
+        lambda self, tenant_id, knowledge_base_ids: None,
+    )
+    # Dify 声明一个 dataset；控制台的 dataset 路由回答句柄 `kb-canary`。
+    dsl = DSL_FIXTURE.read_text(encoding="utf-8").replace(
+        "  dataset_configs:\n    retrieval_model: multiple\n",
+        "  dataset_configs:\n    retrieval_model: multiple\n"
+        "    datasets:\n      datasets:\n"
+        "      - dataset:\n          enabled: true\n"
+        "          id: df0f1d4a-3d6e-404e-9656-c88da6df3d1e\n",
+    )
+    _serve_dify_export(monkeypatch, dsl_text=dsl)
+    # 控制台的 dataset 导出：回答句柄（这一跳由 DifyDslClient 发出）。
+    monkeypatch.setattr(
+        "aiops_diagnostics.dify_dsl_pull.DifyDslClient.dataset_knowledge_id",
+        lambda self, dataset_id: "kb-canary",
+    )
+    env = _pull_env(tmp_path)
+    env["AIOPS_GATEWAY_DIFY_KNOWLEDGE_BINDINGS"] = "kb-canary:T-SYNC:kb-registry"
+
+    db = tmp_path / "gateway.db"
+    manager = AgentManager(
+        AgentStore(db), knowledge_resolver=_AllowAll(), allowed_models=("deepseek-v4-flash",)
+    )
+    context = admin_context("T-SYNC")
+    agent = manager.create(
+        context,
+        name="小趋-客服",
+        description="同步用",
+        config=map_dsl_to_config(dsl, agent_type="customer", knowledge_base_ids=("kb-live",)),
+    )
+    manager.publish(context, agent.agent_id, expected_revision=agent.revision)
+    DifyAppRegistry(db).put(
+        DifyAppBinding(
+            tenant_id="T-SYNC",
+            business_entry="consumer",
+            app_id="a975c8e5-ad9e-425c-84c9-77581a0a2bed",
+            agent_name="小趋-客服",
+        )
+    )
+
+    _serve_dify_export(monkeypatch, dsl_text=dsl)
+    result = CliRunner().invoke(app, [*_sync_args(tmp_path), "--kb-url", "http://kb.invalid"], env=env)
+    assert result.exit_code == 0, result.output
+    live = manager.list(context)[0]
+    snapshot = manager.version(context, live.agent_id, live.published_version).snapshot
+    assert snapshot["knowledge_base_ids"] == ["kb-registry"], (
+        "sync 没有走知识库桥 —— Dify 声明的 dataset 被忽略了（运营换的知识库不生效）"
+    )
+
+
+def test_sync_refuses_a_dataset_registered_to_another_tenant(tmp_path: Path, monkeypatch) -> None:
+    """sync 路上，**别的租户**的句柄 ⇒ 拒（跨租户守卫必须在真跑路径上生效）。
+
+    与上一条同理：守卫写在解析器里、单测覆盖过，但若 sync 没把 `tenant_id` 传下去，
+    它在运营真正走的那条路上就是死的。
+    """
+    from aiops_diagnostics.agent_lifecycle import AgentManager, AgentStore
+    from aiops_diagnostics.agent_manifest import admin_context
+    from aiops_diagnostics.dify_app_registry import DifyAppBinding, DifyAppRegistry
+    from aiops_diagnostics.dify_dsl_pull import map_dsl_to_config
+
+    monkeypatch.setattr(
+        "aiops_diagnostics.agent_debug.KbBindingResolver.validate",
+        lambda self, tenant_id, knowledge_base_ids: None,
+    )
+    dsl = DSL_FIXTURE.read_text(encoding="utf-8").replace(
+        "  dataset_configs:\n    retrieval_model: multiple\n",
+        "  dataset_configs:\n    retrieval_model: multiple\n"
+        "    datasets:\n      datasets:\n"
+        "      - dataset:\n          enabled: true\n"
+        "          id: df0f1d4a-3d6e-404e-9656-c88da6df3d1e\n",
+    )
+    _serve_dify_export(monkeypatch, dsl_text=dsl)
+    monkeypatch.setattr(
+        "aiops_diagnostics.dify_dsl_pull.DifyDslClient.dataset_knowledge_id",
+        lambda self, dataset_id: "kb-canary",
+    )
+    env = _pull_env(tmp_path)
+    # 句柄登记在**另一个租户**名下。
+    env["AIOPS_GATEWAY_DIFY_KNOWLEDGE_BINDINGS"] = "kb-canary:T-OTHER:kb-not-ours"
+
+    db = tmp_path / "gateway.db"
+    manager = AgentManager(
+        AgentStore(db), knowledge_resolver=_AllowAll(), allowed_models=("deepseek-v4-flash",)
+    )
+    context = admin_context("T-SYNC")
+    agent = manager.create(
+        context,
+        name="小趋-客服",
+        description="同步用",
+        config=map_dsl_to_config(dsl, agent_type="customer", knowledge_base_ids=("kb-live",)),
+    )
+    manager.publish(context, agent.agent_id, expected_revision=agent.revision)
+    DifyAppRegistry(db).put(
+        DifyAppBinding(
+            tenant_id="T-SYNC",
+            business_entry="consumer",
+            app_id="a975c8e5-ad9e-425c-84c9-77581a0a2bed",
+            agent_name="小趋-客服",
+        )
+    )
+
+    _serve_dify_export(monkeypatch, dsl_text=dsl)
+    result = CliRunner().invoke(app, [*_sync_args(tmp_path), "--kb-url", "http://kb.invalid"], env=env)
+    assert result.exit_code == 1, result.output
+    assert "另一个租户" in result.stdout or "租户" in result.stdout
+    live = manager.list(context)[0]
+    assert live.published_version == 1, "被拒的同步不该发布任何版本"

@@ -722,6 +722,13 @@ def sync_binding_from_dify(
         )
 
     live = existing.config
+    # ``knowledge_base_ids=None`` on purpose: it lets Dify's own dataset
+    # declaration decide. Passing the live agent's ids here — which this did
+    # until review — makes the knowledge bridge **dead on the sync path**,
+    # because a non-``None`` value skips the resolver entirely. Sync is the
+    # path an operator actually triggers, so that would have shipped a bridge
+    # that never ran. ``resolve_pulled_config`` keeps the live binding by
+    # itself when Dify declares nothing, which is the behaviour this preserves.
     config = resolve_pulled_config(
         manager,
         context,
@@ -729,8 +736,9 @@ def sync_binding_from_dify(
         name=binding.agent_name,
         agent_type=live.agent_type,
         output_contract=live.output_contract,
-        knowledge_base_ids=live.knowledge_base_ids,
+        knowledge_base_ids=None,
         knowledge_registry=knowledge_registry,
+        tenant_id=binding.tenant_id,
     )
 
     try:
