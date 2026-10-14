@@ -207,11 +207,12 @@ Dify 控制台里给智能体挂「外接知识库」时，端点填 `https://<h
 - **Dify 拥有这个字段，清单不得写**（`agent_manifest.DIFY_OWNED_FIELDS`）。绑定了 Dify
   的 agent 在 `[[agents]]` 里写 `allowed_tools` ⇒ 装载期**拒**；`reconcile` 也会**保留**
   库中现值，不会把运营改过的白名单改回默认。
-- **今天还改不动它**：缺少「Dify 工具身份 → 我们的 `ToolName`」的映射键，而那个键需要
-  先有一个真实样本（在 Dify 里真挂一个工具，读回 `provider_id`/`tool_name`）。实测 36 上
-  两个 app 的 `agent_mode.tools` **都是空的**，所以本仓没有可验证的映射键，也**不发明**它。
-  在那之前，DSL 里**声明了**工具的 app 会被拉回侧**拒**（点明那是 Dify 的工具身份），
-  这是刻意的：拒比静默忽略诚实。
+- **怎么改**：在 `AIOPS_GATEWAY_DIFY_TOOL_BINDINGS` 里登记 Dify 的身份 →
+  我们的工具，格式 `provider_id/tool_name:our_tool`（多行/分号分隔），例如
+  `time/timezone_conversion:known_runbook`。实测 Dify 1.17.1 的工具条目是
+  `{provider_id, provider_type, tool_name, tool_parameters}`，身份取其 `provider_id/tool_name`。
+- **未登记的身份会被拒**：拉回侧报出那个 Dify 身份并要求登记，**绝不按字面搬运** ——
+  两个命名空间里名字相等不代表语义相同（它那边的 `order_snapshot` 与我们的不是同一个东西）。
 
 失败语义（与 Dify 侧 `raise ValueError(response.text)` 的读法对齐）：
 
