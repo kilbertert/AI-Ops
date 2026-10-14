@@ -28,6 +28,7 @@ from aiops_diagnostics.dify_login_provision import DifyConsoleSettings, account_
 from aiops_diagnostics.dify_login_proxy import (
     CAPTCHA_ROUTE,
     LOGIN_ROUTE,
+    PUBLISH_CHECK_ROUTE,
     mint_console_session,
     sign_console_jwt,
 )
@@ -44,6 +45,7 @@ COMPANY_USER_ID = "a53ad893-6139-4566-a38a-0b77ed697631"
 DIFY_ACCOUNT_ID = "b647e9c0-1111-4222-8333-444455556666"
 OWNER_ACCOUNT_ID = "c758f0d1-2222-4333-8444-555566667777"
 EDIT_PERMISSION = "aiops:agent:edit"
+PUBLISH_PERMISSION = "aiops:agent:publish"
 
 
 class _FakeCompany(BaseHTTPRequestHandler):
@@ -214,6 +216,7 @@ def stack(tmp_path: Path):
         dify=DifyConsoleSettings(base_url=dify_url, secret_key=SECRET_KEY),
         data_dir=str(tmp_path / "data"),
         edit_permission=EDIT_PERMISSION,
+        publish_permission=PUBLISH_PERMISSION,
         owner_user_id=OWNER_ACCOUNT_ID,
         backoff_threshold=3,
         backoff_window_seconds=60,
@@ -504,3 +507,72 @@ def test_the_session_lifetime_defines_the_revocation_window(stack) -> None:
     ages = [segment.strip() for segment in cookies.split(";") if segment.strip().startswith("Max-Age=")]
     assert ages, cookies
     assert set(ages) == {"Max-Age=3600"}, f"access/refresh 寿命不一致或不是配置值：{ages}"
+
+
+# --------------------------------------------------------------------------- #
+# #780 发布权查询端点：验我们自签的会话 → 查映射 → 答能不能发布                    #
+# --------------------------------------------------------------------------- #
+
+
+def _check_publish(base: str, session: str) -> dict[str, Any]:
+    connection = http.client.HTTPConnection(base.removeprefix("http://"))
+    connection.request(
+        "POST",
+        PUBLISH_CHECK_ROUTE,
+        body=json.dumps({"session": session}),
+        headers={"Content-Type": "application/json"},
+    )
+    response = connection.getresponse()
+    payload = json.loads(response.read())
+    connection.close()
+    return payload
+
+
+def _login_and_get_session(base: str) -> str:
+    """登录一次，取**我们下发的 access token**（Dify 会话 cookie 的值）。"""
+    import re
+
+    _, _, headers = _login(base)
+    cookies = headers["set-cookie-all"]
+    match = re.search(r"(?<!refresh_)(?<!csrf_)access_token=([^;]+)", cookies)
+    assert match, cookies
+    return match.group(1)
+
+
+def test_the_publish_check_allows_a_session_whose_user_has_the_publish_permission(stack) -> None:
+    base, data_dir = stack
+    session = _login_and_get_session(base)
+    # 默认只有编辑权码 ⇒ 拒。
+    denied = _check_publish(base, session)
+    assert denied["allowed"] is False
+    assert denied["reason"] == "MISSING_PUBLISH_PERMISSION"
+    # 给上发布权码再登录一次 ⇒ 放行，且带回审计要的三个字段。
+    _FakeCompany.permissions = [EDIT_PERMISSION, PUBLISH_PERMISSION]
+    session2 = _login_and_get_session(base)
+    allowed = _check_publish(base, session2)
+    assert allowed["allowed"] is True
+    assert allowed["company_user_id"] == COMPANY_USER_ID
+    assert allowed["dify_account_id"]
+
+
+def test_the_publish_check_refuses_a_forged_session(stack) -> None:
+    """伪造/无效会话 ⇒ 拒，且**不透露**是"没这个映射"还是"会话无效"以外的细节。"""
+    base, _ = stack
+    forged = sign_console_jwt({"user_id": DIFY_ACCOUNT_ID, "exp": 4102444800}, "wrong-key")
+    verdict = _check_publish(base, forged)
+    assert verdict["allowed"] is False
+    assert verdict["reason"] == "SESSION_INVALID"
+
+
+def test_the_publish_check_refuses_an_account_with_no_mapping(stack) -> None:
+    """会话是我们签的，但那个 Dify 账号不在映射表里 ⇒ NO_MAPPING。"""
+    base, _ = stack
+    orphan = mint_console_session(
+        "11111111-2222-3333-4444-555555555555",
+        secret_key=SECRET_KEY,
+        deployment_edition="COMMUNITY",
+        access_expire_minutes=60,
+    )
+    verdict = _check_publish(base, orphan.access_token)
+    assert verdict["allowed"] is False
+    assert verdict["reason"] == "NO_MAPPING"

@@ -113,6 +113,11 @@ _CONTENT_LENGTH_RE = re.compile(r"[0-9]{1,6}")
 
 _PUBLISH_ROUTE = "/__aiops/publish"
 
+#: 发布权查询（#780）：登录代理上的只读端点。**未配置它 = 维持过渡行为**
+#: （按 Dify 的 owner/admin 判），所以身份闭环上线前行为逐字不变。
+_PUBLISH_CHECK_PATH = "/__aiops/publish/check"
+_REFUSED_PUBLISH_PERMISSION = "公司账号没有发布到 AI-Ops 的权限，请联系公司管理员"
+
 
 class ConsolePublishError(RuntimeError):
     """桥自己的一步失败了（不是"运营无权"，而是"这一步没做成"）。"""
@@ -387,6 +392,7 @@ def publish_current_app(
     workspace_id: str,
     referer: str | None,
     allowed_roles: frozenset[str] = DEFAULT_ALLOWED_ROLES,
+    login_proxy_url: str = "",
     timeout: float = 15.0,
 ) -> ConsolePublishResult:
     """运营点了按钮之后，这一层做的全部事情。顺序不能换：
@@ -424,7 +430,25 @@ def publish_current_app(
         # 不记录对方的工作空间 id：日志只需知道"不是钉住的那个"。
         _LOGGER.info("console publish refused: current workspace is not the pinned one")
         return ConsolePublishResult(False, _REFUSED_WORKSPACE)
-    if role not in allowed_roles:
+    # 放行判据（#780）。**配了映射来源 ⇒ 公司权限码裁定**；没配 ⇒ 维持 owner/admin
+    # 过渡行为（身份闭环上线前不切换，PRD #772 D 的明确要求）。
+    initiator_headers: dict[str, str] = {}
+    if login_proxy_url:
+        verdict = _publish_permission_verdict(
+            login_proxy_url,
+            console_session=console_session,
+            timeout=timeout,
+        )
+        if verdict is None:
+            # 查不到 = 代理不可达或会话不是我们签的：**拒**（fail-closed），
+            # 不退回 owner/admin —— 那会让"查不通"悄悄变成"按旧规则放行"。
+            _LOGGER.info("console publish refused: publish-permission check unavailable")
+            return ConsolePublishResult(False, "暂时无法核对发布权限，请稍后重试")
+        allowed, initiator_headers = verdict
+        if not allowed:
+            _LOGGER.info("console publish refused: no company publish permission")
+            return ConsolePublishResult(False, _REFUSED_PUBLISH_PERMISSION)
+    elif role not in allowed_roles:
         _LOGGER.info("console publish refused: role %r not allowed", role[:32])
         return ConsolePublishResult(False, _REFUSED_ROLE)
 
@@ -440,6 +464,7 @@ def publish_current_app(
             "Authorization": f"Bearer {publish_key}",
             "Content-Type": "application/json",
             "Accept": "application/json",
+            **initiator_headers,
         },
         body={"app_id": app_id},
         timeout=timeout,
@@ -449,6 +474,56 @@ def publish_current_app(
         _LOGGER.info("console publish refused by gateway: HTTP %s", http_status)
         return ConsolePublishResult(False, "发布未通过我们的发布门，请联系工程查看原因")
     return _interpret_publish_outcome(outcome, app_id)
+
+
+def _publish_permission_verdict(
+    login_proxy_url: str,
+    *,
+    console_session: ConsoleSession,
+    timeout: float,
+) -> tuple[bool, dict[str, str]] | None:
+    """Ask the login proxy whether this Dify session may publish (#780).
+
+    ``None`` means the check could not be made (proxy down, malformed answer, or
+    a session we did not issue) — the caller refuses, because falling back to the
+    old rule would turn "cannot verify" into "allowed".
+
+    On success returns ``(allowed, initiator_headers)``: the headers carry the
+    company user's identity for the gateway's audit ledger. They are **audit
+    metadata only** — the gateway does not use them to authorize (the bridge has
+    already decided), so a forged value here would change what the ledger records
+    and nothing else. The session itself is what the proxy verified, and the
+    proxy is the only party that can mint a value it accepts.
+
+    The session token the proxy issued is **its own access token**; the browser
+    holds it as the Dify console cookie. The bridge forwards that cookie verbatim
+    (it never reads or re-signs it).
+    """
+    try:
+        http_status, verdict = _request(
+            login_proxy_url.rstrip("/") + _PUBLISH_CHECK_PATH,
+            method="POST",
+            headers={"Content-Type": "application/json", "Accept": "application/json"},
+            body={"session": console_session.access_token},
+            timeout=timeout,
+        )
+    except Exception:  # noqa: BLE001 - 查不通一律按"不能确认"处置
+        return None
+    if not 200 <= http_status < 300 or not isinstance(verdict, dict):
+        return None
+    if verdict.get("allowed") is not True:
+        return False, {}
+    headers = {}
+    company_user_id = _str_field(verdict, "company_user_id") or ""
+    if company_user_id:
+        headers["X-AIOps-Initiator"] = company_user_id
+    company_username = _str_field(verdict, "company_username") or ""
+    if company_username:
+        headers["X-AIOps-Initiator-Name"] = company_username
+    dify_account_id = _str_field(verdict, "dify_account_id") or ""
+    if dify_account_id:
+        headers["X-AIOps-Dify-Account"] = dify_account_id
+    return True, headers
 
 
 def _interpret_publish_outcome(outcome: Any, app_id: str) -> ConsolePublishResult:
@@ -497,6 +572,9 @@ class BridgeSettings:
     #: 网关导出 DSL 所用的工作空间必须与之相同 —— 部署侧约束，桥无法自证。
     workspace_id: str
     allowed_roles: frozenset[str] = DEFAULT_ALLOWED_ROLES
+    #: 登录代理地址（#780）。**留空 = 维持过渡行为**（按 Dify owner/admin 判）——
+    #: 于是"没配"与"配了但代理挂了"是两件不同的事：后者 fail-closed 拒发布。
+    login_proxy_url: str = ""
     timeout: float = 15.0
 
     def __post_init__(self) -> None:
@@ -529,6 +607,7 @@ class BridgeSettings:
             console_origin=origin,
             workspace_id=required("AIOPS_CONSOLE_BRIDGE_WORKSPACE_ID"),
             allowed_roles=parse_allowed_roles(os.environ.get("AIOPS_CONSOLE_BRIDGE_ALLOWED_ROLES")),
+            login_proxy_url=os.environ.get("AIOPS_CONSOLE_BRIDGE_LOGIN_PROXY_URL", "").strip().rstrip("/"),
         )
 
 
@@ -565,6 +644,7 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
                 workspace_id=self.settings.workspace_id,
                 referer=referer,
                 allowed_roles=self.settings.allowed_roles,
+                login_proxy_url=self.settings.login_proxy_url,
                 timeout=self.settings.timeout,
             )
         except _Rejected as exc:

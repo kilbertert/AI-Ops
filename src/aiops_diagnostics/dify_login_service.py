@@ -134,6 +134,39 @@ class MappingStore:
             ).fetchone()
         return dict(row) if row is not None else None
 
+    def by_dify_account(self, dify_account_id: str) -> dict[str, Any] | None:
+        """Reverse lookup: which company user owns this Dify account (#780).
+
+        The bridge's only identity input is the Dify console session, and the
+        session names a **Dify account**. Mapping it back to a company user is
+        this hop; if there is no row, the account was never opened by us, which
+        the caller treats as "no mapping" (refuse to publish).
+        """
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT * FROM dify_login_mappings WHERE dify_account_id = ? LIMIT 1",
+                (dify_account_id,),
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def permissions_of(self, row: dict[str, Any]) -> tuple[str, ...]:
+        """The permission codes captured at this mapping's **last login** (#780).
+
+        Deliberately a snapshot and not a live read: the proxy has no way to ask
+        the company about an arbitrary user without that user's own login, so the
+        honest semantics are "what was true when they last logged in". #779 keeps
+        that snapshot fresh (a lost permission disables the mapping at next
+        login), and the session lifetime bounds the window.
+        """
+        import json
+
+        raw = row.get("permissions_json") or "[]"
+        try:
+            parsed = json.loads(raw)
+        except ValueError:
+            return ()
+        return tuple(str(item) for item in parsed if isinstance(item, str) and item)
+
     def upsert(
         self,
         *,

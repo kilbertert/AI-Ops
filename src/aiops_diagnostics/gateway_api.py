@@ -285,6 +285,11 @@ class DifyPublishRequest(BaseModel):
     An ``extra="forbid"`` model is what keeps it that way — a field added here
     later (say a tenant, or a prompt) would widen the blast radius, so it has to
     be a deliberate edit to this class rather than a quiet one to a route.
+
+    The initiator (#780) rides on **headers**, not this body, and for the same
+    reason: it is audit metadata, never an authorization input. A caller that
+    omits it gets a normal publish with "unknown" recorded — it can neither
+    grant nor deny anything.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -506,7 +511,66 @@ def request_language(
     return resolve_language(accept_language)
 
 
-def _publish_bound_app(context: Any, app_id: str) -> dict[str, Any]:
+def _publish_initiator(
+    company_user_id: str | None,
+    company_username: str | None,
+    dify_account_id: str | None,
+) -> tuple[str, str, str]:
+    """Normalise the initiator headers (#780) — trimmed，never an authorization input.
+
+    Empty means "unknown" and is recorded as such. The values are redacted to the
+    store's own scope charset by the caller's ``_scope`` guard, so a malformed
+    header cannot smuggle anything into the ledger.
+    """
+    return (
+        (company_user_id or "").strip()[:128],
+        (company_username or "").strip()[:128],
+        (dify_account_id or "").strip()[:128],
+    )
+
+
+def _record_publish_audit(
+    context: Any,
+    *,
+    app_id: str,
+    action: str,
+    reason_code: str,
+    initiator: tuple[str, str, str],
+    binding: Any = None,
+    version_no: int | None = None,
+) -> None:
+    """Write one ledger row, best-effort. **Never raises into the publish path.**
+
+    The ledger is observability: a disk problem must not turn a legitimate
+    publish into a failure, and a missing initiator must not either (it is
+    recorded as empty, not refused). Values are trimmed and length-capped so a
+    caller-supplied header cannot bloat a row.
+    """
+    company_user_id, company_username, dify_account_id = initiator
+    store = getattr(context, "store", None)
+    if store is None or not hasattr(store, "record_publish_audit"):  # pragma: no cover
+        return
+    with contextlib.suppress(Exception):
+        store.record_publish_audit(
+            app_id=app_id[:128],
+            action=action,
+            reason_code=reason_code[:64],
+            tenant_id=str(getattr(binding, "tenant_id", "") or "")[:128],
+            business_entry=str(getattr(binding, "business_entry", "") or "")[:64],
+            agent_name=str(getattr(binding, "agent_name", "") or "")[:128],
+            company_user_id=company_user_id,
+            company_username=company_username,
+            dify_account_id=dify_account_id,
+            version_no=version_no,
+        )
+
+
+def _publish_bound_app(
+    context: Any,
+    app_id: str,
+    *,
+    initiator: tuple[str, str, str] = ("", "", ""),
+) -> dict[str, Any]:
     """把一个**已绑定**的 Dify app 的当前内容冻结成新的已发布版本。
 
     **两条路共用的唯一实现**（共享密钥路由与 operator 会话身份路由）：一处实现，
@@ -516,13 +580,28 @@ def _publish_bound_app(context: Any, app_id: str) -> dict[str, Any]:
     爆炸半径是设计出来的：请求只带 ``app_id``，租户/agent 名/类型/契约/知识库
     全部来自 ``dify_app_registry``。最坏情况因此是**重新冻结一个已声明绑定的当前
     内容**；重复发布未变内容按构造是 no-op（先与已发布快照逐字比较）。
+
+    ``initiator``（#780）是**审计元数据**：``(company_user_id, company_username,
+    dify_account_id)``。它**不是**授权依据 —— 授权在桥那一侧（公司发布权限码）
+    已经完成；这里把它记进审计账本，好回答"谁在何时把哪一版发上了生产"。三个字段
+    都可能是空串（调用方没带），那记成未知，发布照常。
     """
+    company_user_id, company_username, dify_account_id = initiator
     binding = next(
         (item for item in context.runtime.dify_app_registry.all() if item.app_id == app_id),
         None,
     )
     if binding is None:
         # 与未登记的知识句柄同形：404 说"不在这里"，不透露有哪些绑定。
+        # **被拒的尝试也入账**（#780）：未绑定的 app_id 是"有人试图发布一个没登记的东西"，
+        # 正是审计要看见的；它没有任何租户可归，所以租户留空。
+        _record_publish_audit(
+            context,
+            app_id=app_id,
+            action="refused",
+            reason_code="DIFY_APP_NOT_BOUND",
+            initiator=initiator,
+        )
         raise StandardAPIError(
             status.HTTP_404_NOT_FOUND, "DIFY_APP_NOT_BOUND", "app is not a bound agent source"
         )
@@ -553,11 +632,40 @@ def _publish_bound_app(context: Any, app_id: str) -> dict[str, Any]:
         )
     except DifyDslError as exc:
         # Dify 自己拒绝或不可达：带它自己的码转达，调用方要能区分「凭据被拒」与「服务挂了」。
+        # 被拒的**尝试**一样入账；租户与 agent 名此刻是知道的（绑定查到了）。
+        _record_publish_audit(
+            context,
+            app_id=app_id,
+            action="refused",
+            reason_code=exc.code,
+            binding=binding,
+            initiator=initiator,
+        )
         raise StandardAPIError(status.HTTP_502_BAD_GATEWAY, exc.code, "dify pull failed") from exc
     except Exception as exc:  # noqa: BLE001 - 发布门自己的规则，原样转达
+        _record_publish_audit(
+            context,
+            app_id=app_id,
+            action="refused",
+            reason_code=f"PUBLISH_GATE_{type(exc).__name__}",
+            binding=binding,
+            initiator=initiator,
+        )
         raise StandardAPIError(
             status.HTTP_409_CONFLICT, "DIFY_PUBLISH_REJECTED", f"publish rejected: {type(exc).__name__}"
         ) from exc
+    # 成功：记版本号与动作（``synced`` / ``unchanged``）。``unchanged`` 也是"成功的一次
+    # 发布尝试"，只是内容没变 —— 审计要能分辨它，否则"某人点了一百次但什么都没发"与
+    # "发了 0 次"看起来一样。
+    _record_publish_audit(
+        context,
+        app_id=outcome.app_id,
+        action="published" if outcome.action == "synced" else "unchanged",
+        reason_code="",
+        binding=binding,
+        initiator=initiator,
+        version_no=outcome.version_no if isinstance(outcome.version_no, int) else None,
+    )
     return {
         "app_id": outcome.app_id,
         "tenant_id": outcome.tenant_id,
@@ -1009,6 +1117,9 @@ def create_gateway_app(
     def dify_publish(
         payload: DifyPublishRequest,
         _: None = Depends(dify_publish_credential),  # noqa: B008
+        company_user_id: Annotated[str | None, Header(alias="X-AIOps-Initiator")] = None,
+        company_username: Annotated[str | None, Header(alias="X-AIOps-Initiator-Name")] = None,
+        dify_account_id: Annotated[str | None, Header(alias="X-AIOps-Dify-Account")] = None,
     ) -> dict[str, Any]:
         """Freeze what Dify currently holds as a new published version (#577).
 
@@ -1033,7 +1144,11 @@ def create_gateway_app(
         would publish half-typed prompts. A human pressing this is the only
         honest signal that they are done.
         """
-        return _publish_bound_app(context, payload.app_id)
+        return _publish_bound_app(
+            context,
+            payload.app_id,
+            initiator=_publish_initiator(company_user_id, company_username, dify_account_id),
+        )
 
     @app.post("/v1/operator/publish")
     def operator_publish(
@@ -1083,7 +1198,13 @@ def create_gateway_app(
             raise StandardAPIError(
                 status.HTTP_404_NOT_FOUND, "DIFY_APP_NOT_BOUND", "app is not a bound agent source"
             )
-        return _publish_bound_app(context, payload.app_id)
+        # 这条路由的发起人是**会话身份**（有 caller 可得），不是请求头 —— 与共享密钥那条
+        # 相比，这里能给出更具体的人，所以审计里记的是会话里的公司用户 id。
+        return _publish_bound_app(
+            context,
+            payload.app_id,
+            initiator=(str(getattr(caller, "subject", None) and caller.subject.b_user_id or ""), "", ""),
+        )
 
     def dify_tools_credential(authorization: Annotated[str | None, Header()] = None) -> None:
         """The 3A catalog credential — a key that can do exactly one thing (#772 E).

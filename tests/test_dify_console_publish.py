@@ -938,3 +938,127 @@ def test_duplicate_sensitive_headers_never_reach_upstream(
     status, _ = _post(bridge, headers=headers)
     assert status == 400
     assert upstream.calls == []
+
+
+# --------------------------------------------------------------------------- #
+# #780：放行判据改由公司权限码裁定（配了映射来源时）；未配 ⇒ 过渡行为逐字不变        #
+# --------------------------------------------------------------------------- #
+
+
+class _PermissionSource:
+    """假登录代理：只实现 /_aiops/publish/check 的答法。"""
+
+    def __init__(self, *, allowed: bool, status: int = 200, body: Any = None) -> None:
+        self.allowed = allowed
+        self.status = status
+        self.body = body
+        self.calls: list[dict[str, Any]] = []
+        self.base = ""
+        src = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *a: Any) -> None:
+                pass
+
+            def do_POST(self) -> None:  # noqa: N802
+                length = int(self.headers.get("Content-Length") or 0)
+                raw = self.rfile.read(length) if length else b""
+                src.calls.append({"path": self.path, "body": json.loads(raw) if raw else None})
+                if src.body is not None:
+                    payload = src.body
+                elif src.allowed:
+                    payload = {
+                        "allowed": True,
+                        "reason": "",
+                        "company_user_id": "B-42",
+                        "company_username": "zhang",
+                        "dify_account_id": "acct-1",
+                    }
+                else:
+                    payload = {"allowed": False, "reason": "MISSING_PUBLISH_PERMISSION"}
+                data = json.dumps(payload).encode()
+                self.send_response(src.status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+        self._server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=self._server.serve_forever, daemon=True).start()
+        host, port = self._server.server_address
+        self.base = f"http://{host}:{port}"
+
+    def close(self) -> None:
+        self._server.shutdown()
+
+
+def test_a_company_publish_permission_lets_the_publish_through_and_carries_the_initiator() -> None:
+    """持发布权限码 ⇒ 发布成功，且网关的请求**带上发起人三字段**（审计用）。"""
+    upstream = _Upstream()
+    server = _serve(upstream)
+    permissions = _PermissionSource(allowed=True)
+    try:
+        result = _publish(upstream, login_proxy_url=permissions.base)
+    finally:
+        server.shutdown()
+        permissions.close()
+    assert result.published is True, result.reason
+    gateway = next(call for call in upstream.calls if call["path"] == GATEWAY_PATH)
+    assert gateway["headers"]["x-aiops-initiator"] == "B-42"
+    assert gateway["headers"]["x-aiops-initiator-name"] == "zhang"
+    assert gateway["headers"]["x-aiops-dify-account"] == "acct-1"
+
+
+def test_only_the_edit_permission_is_refused_and_the_gateway_is_never_called() -> None:
+    """只有编辑权码 ⇒ 403 形状的拒绝，且**不调用 AI-Ops**。"""
+    upstream = _Upstream()
+    server = _serve(upstream)
+    permissions = _PermissionSource(allowed=False)
+    try:
+        result = _publish(upstream, login_proxy_url=permissions.base)
+    finally:
+        server.shutdown()
+        permissions.close()
+    assert result.published is False
+    assert "发布" in result.reason
+    assert not any(call["path"] == GATEWAY_PATH for call in upstream.calls), "被拒却打了网关"
+
+
+def test_no_mapping_is_refused_the_same_way() -> None:
+    """无映射（会话不是我们签的）⇒ 同一形状的拒绝，不调网关。"""
+    upstream = _Upstream()
+    server = _serve(upstream)
+    permissions = _PermissionSource(allowed=False, body={"allowed": False, "reason": "NO_MAPPING"})
+    try:
+        result = _publish(upstream, login_proxy_url=permissions.base)
+    finally:
+        server.shutdown()
+        permissions.close()
+    assert result.published is False
+    assert not any(call["path"] == GATEWAY_PATH for call in upstream.calls)
+
+
+def test_an_unreachable_permission_source_fails_closed() -> None:
+    """代理不可达 ⇒ **拒**（fail-closed）。不退回 owner/admin —— 那会把"查不通"变成"放行"。"""
+    upstream = _Upstream()
+    server = _serve(upstream)
+    try:
+        result = _publish(upstream, login_proxy_url="http://127.0.0.1:1")
+    finally:
+        server.shutdown()
+    assert result.published is False
+    assert not any(call["path"] == GATEWAY_PATH for call in upstream.calls)
+
+
+def test_without_a_permission_source_the_owner_admin_rule_is_unchanged() -> None:
+    """**过渡开关的回归**：没配映射来源 ⇒ 行为与现状逐字一致（owner/admin 判）。"""
+    upstream = _Upstream()
+    server = _serve(upstream)
+    try:
+        ok = _publish(upstream)  # role=owner
+        upstream.summary_body = {"id": TENANT_ID, "name": "ws", "role": "editor", "plan": None, "credits": -1}
+        refused = _publish(upstream)
+    finally:
+        server.shutdown()
+    assert ok.published is True
+    assert refused.published is False, "过渡期非 owner/admin 仍应被拒"

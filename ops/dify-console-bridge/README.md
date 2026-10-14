@@ -53,7 +53,19 @@ AIOPS_CONSOLE_BRIDGE_PORT=10118
 AIOPS_CONSOLE_BRIDGE_CONSOLE_ORIGIN=<浏览器实际访问的控制台 origin>
 AIOPS_CONSOLE_BRIDGE_WORKSPACE_ID=<网关导出配置使用的同一个 Dify 工作区 ID>
 AIOPS_CONSOLE_BRIDGE_ALLOWED_ROLES=owner,admin
+# 留空 ⇒ **过渡行为**（按 Dify 的 owner/admin 判）。填了 ⇒ 放行判据改为
+# 「登录代理说这个会话对应的公司用户持有发布权限码」（#780）。
+AIOPS_CONSOLE_BRIDGE_LOGIN_PROXY_URL=http://127.0.0.1:10119
 ```
+
+**`AIOPS_CONSOLE_BRIDGE_LOGIN_PROXY_URL` 的两种含义要分清**（#780）：
+
+- **留空**：维持现状 —— 按固定工作区内的 owner/admin 放行。身份闭环上线前就是这个状态。
+- **填了但代理不可达**：**拒绝发布**（fail-closed）。不退回 owner/admin —— 那会让
+  "核对不通"悄悄变成"按旧规则放行"，而两者是完全不同的事。
+
+配上之后，桥把运营的 **Dify 会话**（也就是登录代理签出的那枚）交给代理核对，代理回
+「能不能发布」与审计用的发起人；桥把发起人转成 `X-AIOps-Initiator*` 头交给网关入账。
 
 **为什么桥走 `/v1/dify/publish`（共享密钥）而不是 `/v1/operator/publish`**：
 后者认的是「运营的**网关**会话」，而桥手上只有运营的**Dify** 会话 —— 两者换不通。

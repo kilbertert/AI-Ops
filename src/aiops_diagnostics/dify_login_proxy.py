@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hmac
 import json
 import logging
 import re
@@ -64,6 +65,11 @@ _COMPANY_SUCCESS_CODE = 0
 CAPTCHA_ROUTE = "/__aiops/login/captcha"
 LOGIN_ROUTE = "/__aiops/login"
 LOGOUT_ROUTE = "/__aiops/login/logout"
+#: 发布权查询（#780）。发布桥拿运营的 **Dify 会话**调它，问"这个账号能发布吗"。
+#: 代理验自己签出的会话 → 从映射表取公司用户与该次登录的权限码 → 答是/否。
+#: 放在代理上而不是让桥直接读映射表：**身份边界**（代理持 SECRET_KEY 与映射数据，
+#: 桥不该持证据的汇总）。查询只读、只回一个布尔与审计用的发起人，不回权限码全集。
+PUBLISH_CHECK_ROUTE = "/__aiops/publish/check"
 
 #: 账号邮箱从公司用户 id **确定性**生成，且用不可投递的保留域名（RFC 2606 ``.invalid``）。
 #: 确定性是为了"同一公司用户永远映射到同一个 Dify 账号"（用户故事 14）。
@@ -184,6 +190,42 @@ def sign_console_jwt(payload: Mapping[str, Any], secret_key: str) -> str:
 
     signature = _hmac.new(secret_key.encode("utf-8"), signing_input, hashlib.sha256).digest()
     return f"{header}.{body}.{_b64url(signature)}"
+
+
+def verify_console_jwt(token: str, secret_key: str) -> dict[str, Any] | None:
+    """Verify one of **our own** console tokens (#780). ``None`` = not ours / invalid.
+
+    This is the mirror of :func:`sign_console_jwt`, and it is only ever used on
+    tokens this service itself minted. It is what lets the bridge ask "which Dify
+    account is this session?" without holding the mapping database: the proxy
+    verifies the session it issued and answers on the database's behalf.
+    """
+    import hashlib
+    import hmac as _hmac
+
+    parts = token.split(".")
+    if len(parts) != 3:
+        return None
+    header_b64, body_b64, signature_b64 = parts
+    expected = _hmac.new(
+        secret_key.encode("utf-8"), f"{header_b64}.{body_b64}".encode("ascii"), hashlib.sha256
+    ).digest()
+    try:
+        given = base64.urlsafe_b64decode(signature_b64 + "=" * (-len(signature_b64) % 4))
+    except (binascii.Error, ValueError):
+        return None
+    if not hmac.compare_digest(expected, given):
+        return None
+    try:
+        payload = json.loads(base64.urlsafe_b64decode(body_b64 + "=" * (-len(body_b64) % 4)))
+    except (binascii.Error, ValueError, UnicodeDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    exp = payload.get("exp")
+    if not isinstance(exp, int) or exp < int(time.time()):
+        return None
+    return payload
 
 
 @dataclass(frozen=True, slots=True)
