@@ -73,7 +73,7 @@ from aiops_diagnostics.platform_paths import reference_root
 from aiops_diagnostics.query_scope import resolve_query_scope
 from aiops_diagnostics.redaction import redact_text
 from aiops_diagnostics.routing import RoutingThresholds, classify_with_jev
-from aiops_diagnostics.scope_context import ScopeContext
+from aiops_diagnostics.scope_context import SCOPE_TYPE_ALL, DataScope, ScopeContext, SubjectRecord
 from aiops_diagnostics.sources import SourceError, scoped_live_sources
 
 FIXTURE_NAMES = frozenset({"ocpp_consistent.json", "ykc_amount_mismatch.json", "missing_tx_data.json"})
@@ -222,6 +222,15 @@ class GatewayRuntime:
         # environment has not adopted the registry, and the selection rule is
         # then exactly what it was before this existed.
         from aiops_diagnostics.dify_app_registry import DifyAppRegistry
+
+        # 试运行（#772 F / #781）：并发闸与"作业 → 上下文"登记。刻意不是线程池的一部分 ——
+        # 试运行用**独立的闸门**，这样"不许超过 N 条试运行"与"诊断池还有没有位置"互不牵连，
+        # 一次试运行不会因为占满池子而拖住线上诊断的提交。默认 1（按人串行；本票固定工作区
+        # 只有 owner/admin，所以"按人"与"全局"在 V1 是同一个数）。
+        self._trial_lock = threading.Lock()
+        self._trial_jobs: set[str] = set()
+        self._trial_contexts: dict[str, tuple[Any, Any, str, str]] = {}
+        self._trial_max_concurrent = 1
 
         self.dify_app_registry = DifyAppRegistry(store.path)
         # Redacted run metrics (T7/#174): same DB file, lazy-built. Writes are
@@ -1033,6 +1042,136 @@ class GatewayRuntime:
         limit: int = 50,
     ) -> list[dict[str, Any]]:
         return self.store.list_standard_diagnoses(context.scope_fingerprint, limit=limit)
+
+    # ── 试运行（#772 F / #781）──────────────────────────────────────────────
+    #
+    # 它**不是**第二条诊断路径：作业体调用 ``dify_trial.run_trial``，后者走
+    # ``run_agent_diagnosis``（CLI 那一个入口），只把 methodology 与 allowed_tools
+    # 换成草稿值。这里负责的是**作业**那一层：并发闸、审计行、结果落库。
+
+    def start_trial(
+        self,
+        initiator: str,
+        order_no: str,
+        draft: Any,
+        language: str,
+    ) -> dict[str, Any] | None:
+        """提交一次试运行，或返回 ``None`` 表示并发超限（路由转 429）。
+
+        **执行范围不来自调用方**：它由配置的调试租户决定（见 :meth:`trial_run_context`）。
+        ``initiator`` 只进审计，**不是**授权依据（授权在这一层之外：钥匙决定能不能调，
+        配置的租户决定能看什么）。
+        """
+        run_context = self.trial_run_context()
+        with self._trial_lock:
+            if len(self._trial_jobs) >= self._trial_max_concurrent:
+                # 并发闸：试运行打的是**真数据源**与真模型，本票刻意串行 ——
+                # "一次一人一条"是这个入口对自己可能压垮生产只读库的唯一防线。
+                return None
+            trial = self.store.create_trial_job(
+                run_context.scope_fingerprint,
+                order_no=order_no,
+                draft_fingerprint=draft.fingerprint(),
+                initiator=initiator,
+                language=language,
+                tenant_id=run_context.effective_tenant_id,
+            )
+            trial_id = str(trial["diagnosis_id"])
+            self._trial_jobs.add(trial_id)
+            # 登记未落库前把闸门信息放好：worker 需要 run_context（范围）与草稿。
+            self._trial_contexts[trial_id] = (run_context, draft, order_no, language)
+            future = self._executor.submit(self._execute_trial, trial_id)
+            self._futures[trial_id] = future
+            future.add_done_callback(lambda _: self._futures.pop(trial_id, None))
+            future.add_done_callback(lambda _: self._release_trial(trial_id))
+        return trial
+
+    def _release_trial(self, trial_id: str) -> None:
+        with self._trial_lock:
+            self._trial_jobs.discard(trial_id)
+            self._trial_contexts.pop(trial_id, None)
+
+    def trial_run_context(self) -> ScopeContext:
+        """试运行的**执行范围**：配置的固定调试租户，按**顶层账号口径**（整租户可见）。
+
+        **为什么不是 ``admin_context``**：那个合成上下文是 ``data_scope(type="self")``
+        且主体没有 C 端用户，``resolve_query_scope`` 对它直接抛 ``SCOPE_ERROR_EMPTY_SCOPE``
+        —— 它是给"不碰订单数据"的发布/对账用的。试运行要真的查一张订单，所以它要的是
+        顶层账号那一个口径（``type="all"`` = 不受站点维度约束），这也是客户身份在
+        ``third_session_auth`` / ``company_token_auth`` 里走的那条。写成字面量而不是
+        从某处"借"一个，是因为这个范围**本票就是硬编码的固定调试租户** —— #782 会把它
+        换成发起人的公司身份（``operator`` 口径），届时只改这一个方法，路由与 worker 不动。
+
+        **路由与 worker 必须用同一个范围**（路由拿它问订单授权、worker 拿它执行），
+        所以它只在这里构造一次，不让两处各算一遍 —— 授权问的是 A、执行看的是 B 是
+        "越权只在问了之后才发生"的形状。
+        """
+        return _tenant_wide_context(self.gateway_settings.dify_trial_debug_tenant)
+
+    def get_trial(self, context: ScopeContext, trial_id: str) -> dict[str, Any] | None:
+        return self.store.get_standard_diagnosis(trial_id, context.scope_fingerprint)
+
+    def _execute_trial(self, trial_id: str) -> None:
+        """作业体：认领一行 → 跑草稿 → 写终态。与诊断 worker 同一条纪律。
+
+        **每一个失败都必须落一个终态**：worker 若从 ``running`` 逃逸出去，这一行会一直
+        挂到 deadline，而试运行的并发闸是按"在跑的作业数"算的 —— 一行挂死会让那个发起人
+        永久占掉一个名额。
+        """
+        entry = self._trial_contexts.get(trial_id)
+        if entry is None:  # pragma: no cover - 只在释放竞态下发生
+            return
+        run_context, draft, order_no, language = entry
+        if not self.store.update_standard_diagnosis(trial_id, status="running"):
+            return
+        started_ms = time.monotonic()
+        try:
+            # 与诊断 worker 同一条规则：``Settings.from_config`` 在 try **里面**，
+            # 因为它会因配置文件缺失/非法抛 ValueError，那是受支持的失败而不是不可能的事。
+            settings = Settings.from_config(self.gateway_settings.server_config_file)
+            settings.agent.run_root = self.diagnostic_settings.agent.run_root
+            from aiops_diagnostics.dify_trial import run_trial
+
+            result = run_trial(
+                settings,
+                scope_context=run_context,
+                order_no=order_no,
+                question="",
+                draft=draft,
+                language=language,
+            )
+        except Exception as exc:  # noqa: BLE001 - 逃出去就等于没有终态行
+            self.store.update_standard_diagnosis(
+                trial_id,
+                status="failed",
+                error_code="TRIAL_FAILED",
+                error_message=f"{type(exc).__name__}: {exc}",
+            )
+            self._record_trial_metric(run_context, "failed", started_ms)
+            return
+        # 「超出预算时结果标为未完成」：``blocked`` / ``inconclusive`` 都是**正常终态**，
+        # 照实落库；只有真正的异常才是 failed。状态用字符串原样存，与诊断行同一套词表。
+        self.store.update_standard_diagnosis(
+            trial_id,
+            status="completed",
+            result={
+                "status": result.status,
+                "report": result.report,
+                "evidence_ids": list(result.evidence_ids),
+                "blocked_tools": list(result.blocked_tools),
+                "failed_sources": list(result.failed_sources),
+                "language": result.language,
+            },
+        )
+        self._record_trial_metric(run_context, "completed", started_ms)
+
+    def _record_trial_metric(self, context: ScopeContext, outcome: str, started_ms: float) -> None:
+        self._record_metric(
+            tenant_id=context.effective_tenant_id,
+            route_type="trial",
+            outcome=outcome,
+            duration_ms=int((time.monotonic() - started_ms) * 1000),
+        )
 
     def _record_metric(self, **fields: Any) -> None:
         """Best-effort redacted metric row (T7/#174); never fails the run."""
@@ -2814,3 +2953,22 @@ def _blocked_diagnosis_error(workspace: AgentWorkspace) -> tuple[str, str]:
 def close_gateway_runtime(runtime: GatewayRuntime) -> None:
     with contextlib.suppress(Exception):
         runtime.shutdown()
+
+
+def _tenant_wide_context(tenant_id: str) -> ScopeContext:
+    """固定调试租户的**顶层账号**范围：整个租户可见，不受站点维度约束。
+
+    与 ``agent_manifest.admin_context`` 的区别是数据范围：那个是 ``self``（不碰订单），
+    这个是 ``all``。合成身份的字段照抄那条既有约定（``b_user_id="aiops-admin"``），
+    为的是审计里能看出"这不是一个真实公司用户"。
+    """
+    subject = SubjectRecord(b_user_id="aiops-admin", tenant_id=tenant_id)
+    return ScopeContext.build(
+        caller=subject,
+        subject=subject,
+        delegated=False,
+        effective_tenant_id=tenant_id,
+        data_scope=DataScope(type=SCOPE_TYPE_ALL),
+        roles=frozenset({"ROLE_AGENT_ADMIN"}),
+        permissions=frozenset({"aiops:agents:manage"}),
+    )

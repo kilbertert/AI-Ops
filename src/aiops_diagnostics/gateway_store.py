@@ -480,6 +480,68 @@ class GatewayStore:
             ).fetchone()
         return _standard_diagnosis_from_row(row)
 
+    def create_trial_job(
+        self,
+        scope_fingerprint: str,
+        *,
+        order_no: str,
+        draft_fingerprint: str,
+        initiator: str,
+        question: str = "",
+        language: str = "zh",
+        tenant_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Create a **试运行** job (#772 F / #781). Shares ``standard_diagnoses``.
+
+        Same reasoning as ``create_analysis_job``: the status vocabulary, the
+        claim guard, the expiry sweep and restart convergence are already right,
+        so a second table would be a second copy of them. What the trial adds is
+        one discriminator value (``kind='trial'``) plus an audit column.
+
+        **It produces no agent version and touches no routing.** The row is a
+        record of one execution so an auditor can answer "who ran which draft
+        against which order"; nothing reads it to decide what production serves.
+        ``draft_fingerprint`` is a hash, not the prompt: the审计 answers "was it
+        the same draft" without copying operator text into a second store.
+        """
+        scope_fingerprint = _scope(scope_fingerprint, "scope_fingerprint")
+        order_no = _scope(order_no, "order_no")
+        draft_fingerprint = _scope(draft_fingerprint, "draft_fingerprint")
+        initiator = _scope(initiator, "initiator")
+        tenant_id = _optional_scope(tenant_id, "tenant_id")
+        language = _language(language)
+        now = _utc_now()
+        trial_id = TRIAL_ID_PREFIX + uuid.uuid4().hex
+        with self._connection(write=True) as connection:
+            self._expire_diagnoses(connection, now)
+            connection.execute(
+                """
+                INSERT INTO standard_diagnoses (
+                    diagnosis_id, scope_fingerprint, order_no, question, indicator_code, language,
+                    internal_run_id, status, created_at, updated_at, deadline_at,
+                    kind, trial_draft_fingerprint, trial_initiator, tenant_id
+                ) VALUES (?, ?, ?, ?, NULL, ?, NULL, 'queued', ?, ?, ?, 'trial', ?, ?, ?)
+                """,
+                (
+                    trial_id,
+                    scope_fingerprint,
+                    order_no,
+                    redact_text(question),
+                    language,
+                    _iso(now),
+                    _iso(now),
+                    _iso(now + DIAGNOSIS_DEADLINE),
+                    draft_fingerprint,
+                    initiator,
+                    tenant_id,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM standard_diagnoses WHERE diagnosis_id = ?",
+                (trial_id,),
+            ).fetchone()
+        return _standard_diagnosis_from_row(row)
+
     def diagnosis_is_finished(self, diagnosis_id: str) -> bool:
         """Whether this diagnosis row is already in a terminal state.
 
@@ -551,7 +613,7 @@ class GatewayStore:
         diagnosis_id: str,
         scope_fingerprint: str,
     ) -> dict[str, Any] | None:
-        if not diagnosis_id.startswith(("dx_", ANALYSIS_ID_PREFIX)):
+        if not diagnosis_id.startswith(("dx_", ANALYSIS_ID_PREFIX, TRIAL_ID_PREFIX)):
             return None
         with self._connection(write=True) as connection:
             self._expire_diagnoses(connection, _utc_now())
@@ -1189,6 +1251,10 @@ class GatewayStore:
                 ("window_end", "TEXT"),
                 ("rule_version", "TEXT"),
                 ("card", "TEXT"),
+                # #781 试运行：kinds='trial' 行用这两列记审计（发起人与草稿摘要哈希）。
+                # 默认 NULL 让存量行与存量 INSERT 的含义逐字不变。
+                ("trial_draft_fingerprint", "TEXT"),
+                ("trial_initiator", "TEXT"),
             ):
                 if name not in diagnosis_columns:
                     connection.execute(f"ALTER TABLE standard_diagnoses ADD COLUMN {name} {definition}")
@@ -1338,6 +1404,9 @@ def _optional_scope(value: str | None, name: str) -> str | None:
 
 #: 运维分析作业的 id 前缀（#697）。与 ``dx_`` 并列在诊断作业表上，靠它区分种类。
 ANALYSIS_ID_PREFIX = "an_"
+#: 试运行作业的 id 前缀（#781）。与 ``an_`` / ``dx_`` 一样带前缀，是为了让
+#: ``get_standard_diagnosis`` 能在不查库的前提下把明显不是本表的 id 判掉。
+TRIAL_ID_PREFIX = "tr_"
 
 QUESTION_MAX_LEN = 4000
 INDICATOR_CODE_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
