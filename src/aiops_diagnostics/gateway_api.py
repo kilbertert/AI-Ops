@@ -79,6 +79,7 @@ from aiops_diagnostics.dify_knowledge_api import (
     parse_dify_retrieval_request,
 )
 from aiops_diagnostics.dify_tools_catalog import AI_OPS_TOOL_NAMES, CATALOG_NOTE
+from aiops_diagnostics.dify_trial import TrialDraft, TrialRefused
 from aiops_diagnostics.faq import (
     FAQ_NOT_FOUND,
     PLATFORM_AMBIGUOUS,
@@ -289,6 +290,26 @@ class DifyPublishRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     app_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+
+
+class DifyTrialRequest(BaseModel):
+    """一次试运行：订单号 + **草稿**。范围与发起人**都不在这里**（#772 F / #781）。
+
+    ``extra="forbid"`` 是这条路由安全主张的一半：请求体里加一个 ``tenant_id`` 或
+    ``site_ids`` 会让人以为它起了作用，而实际从不参与判定。所以多一个字段就是 400，
+    而不是安静忽略 —— 试运行的订单范围只由**服务端配置的调试租户**决定（#782 上线后
+    改为发起人的公司身份）。
+
+    ``allowed_tools`` 缺省为**空**：本票的语义是"草稿可以收窄"，所以勾了什么就是什么；
+    空表示这份草稿不要任何工具（与 ADR-0019 的"不声明 = 全部"不同，那是**发布**侧的
+    默认，试运行不该继承它 —— 试运行试的就是你眼前这份勾选）。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    order_no: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$")
+    prompt: str = Field(min_length=1, max_length=20000)
+    allowed_tools: list[str] = Field(default_factory=list, max_length=7)
 
 
 class FAQAnswerRequest(BaseModel):
@@ -1117,6 +1138,102 @@ def create_gateway_app(
         if tool not in AI_OPS_TOOL_NAMES:
             raise StandardAPIError(status.HTTP_404_NOT_FOUND, "DIFY_TOOL_UNKNOWN", "tool not found")
         return {"tool": tool, "note": CATALOG_NOTE}
+
+    def dify_trial_credential(
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> None:
+        """试运行的凭据闸（#772 F / #781）—— 第六把独立的 Dify 钥匙。
+
+        与其他 Dify 路由同一条机制：未配置 ⇒ 整组 404，**不是**"不需要钥匙"。
+
+        它为什么必须再独立一把：这条路由触发一次**真实模型执行**（真跑执行器与只读数据源），
+        所以"能列工具目录"或"能发布"都不该顺带等于"能在真数据上跑一次诊断"。
+        钥匙决定**能不能调**；能看哪些订单由 ``dify_trial_debug_tenant`` 决定 ——
+        两件事分开，正是这一层不去猜发起人身份的原因。
+        """
+        configured = context.settings.dify_trial_api_key
+        if not configured:
+            raise StandardAPIError(status.HTTP_404_NOT_FOUND, "DIFY_TRIAL_UNAVAILABLE", "route not found")
+        if not authorization or not authorization.startswith("Bearer "):
+            raise StandardAPIError(
+                status.HTTP_401_UNAUTHORIZED, "DIFY_CREDENTIAL_REQUIRED", "bearer credential required"
+            )
+        presented = authorization.removeprefix("Bearer ").strip()
+        if not secrets.compare_digest(configured.encode("utf-8"), presented.encode("utf-8")):
+            raise StandardAPIError(
+                status.HTTP_403_FORBIDDEN, "DIFY_CREDENTIAL_REJECTED", "credential rejected"
+            )
+
+    @app.post("/v1/dify/trial", status_code=status.HTTP_202_ACCEPTED)
+    def dify_trial(
+        payload: DifyTrialRequest,
+        _: None = Depends(dify_trial_credential),  # noqa: B008
+        initiator: Annotated[str | None, Header(alias="X-AIOps-Initiator")] = None,
+        language: str = Depends(request_language),  # noqa: B008
+    ) -> dict[str, Any]:
+        """在一张订单上跑一次**草稿**，不产生版本、不改路由（#772 F / #781）。
+
+        **订单可见性用与生产同一条判据**：``_order_authorization`` 拿服务端配置的调试
+        租户去问 ``order_authorizer``，答案的含义只在这一处决定 —— 越权与不存在同为 404。
+        请求体里的任何范围字段都不被读取（模型 ``extra="forbid"``，多一个就 400）。
+        """
+        try:
+            draft = TrialDraft.from_payload(
+                {"prompt": payload.prompt, "allowed_tools": payload.allowed_tools}
+            )
+        except TrialRefused as exc:
+            raise StandardAPIError(status.HTTP_400_BAD_REQUEST, "TRIAL_DRAFT_REJECTED", str(exc)) from exc
+        run_context = context.runtime.trial_run_context()
+        verdict = _order_authorization(context, run_context, payload.order_no)
+        if verdict == UNAVAILABLE:
+            raise StandardAPIError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "ORDER_AUTHORIZATION_UNAVAILABLE",
+                "order authorization unavailable",
+                retryable=True,
+            )
+        if verdict == NOT_OWNED:
+            # 与生产同一形状：越权与不存在不可区分。
+            raise StandardAPIError(status.HTTP_404_NOT_FOUND, "ORDER_NOT_FOUND", "order not found")
+        try:
+            trial = context.runtime.start_trial(
+                (initiator or "").strip() or "unknown",
+                payload.order_no,
+                draft,
+                language,
+            )
+        except (ValueError, RuntimeError) as exc:
+            raise _runtime_unavailable("TRIAL_UNAVAILABLE", "trial unavailable", exc) from exc
+        if trial is None:
+            raise StandardAPIError(
+                status.HTTP_429_TOO_MANY_REQUESTS,
+                "TRIAL_BUSY",
+                "another trial is already running",
+                retryable=True,
+            )
+        return {"trial_id": trial["diagnosis_id"], "status": trial["status"]}
+
+    @app.get("/v1/dify/trial/{trial_id}")
+    def get_dify_trial(
+        trial_id: str,
+        _: None = Depends(dify_trial_credential),  # noqa: B008
+        language: str = Depends(request_language),  # noqa: B008
+    ) -> dict[str, Any]:
+        """读一次试运行的状态与结果（诊断报告 + 证据 + 被挡工具 + 数据源失败）。"""
+        trial = context.runtime.get_trial(context.runtime.trial_run_context(), trial_id)
+        if trial is None:
+            raise StandardAPIError(status.HTTP_404_NOT_FOUND, "TRIAL_NOT_FOUND", "trial not found")
+        body: dict[str, Any] = {
+            "trial_id": trial["diagnosis_id"],
+            "status": trial["status"],
+            "order_no": trial.get("order_no", ""),
+        }
+        result = trial.get("result")
+        if isinstance(result, dict):
+            body["result"] = result
+        if trial.get("error_code"):
+            body["error_code"] = trial["error_code"]
+        return body
 
     @app.get("/health")
     def health() -> dict[str, Any]:

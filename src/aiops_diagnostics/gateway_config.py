@@ -108,6 +108,19 @@ class GatewayServerSettings:
     #: 不是"不收窄" —— 「配了调试凭据但没给子集」与「给了一个空子集」在语义上必须是同一件事，
     #: 否则一次漏写子集就等于把生产面开给了调试凭据。
     dify_debug_knowledge_ids: str = ""
+    #: **试运行**（`POST /v1/dify/trial`，#772 F / #781）的专用凭据。留空 ⇒ 整组路由 404，
+    #: 与其他 Dify 路由同一条「未配置即不启用」的机制。
+    #:
+    #: 第六把独立钥匙。它触发一次**真实模型执行**（真跑执行器与只读数据源），所以不能
+    #: 与检索面（`dify_knowledge_api_key`）、调试面、发布面（`dify_publish_api_key`）、
+    #: 工具目录面、以及我们调 Dify 用的那把（`dify_console_api_key`）同值 —— 同值等于
+    #: 把"能列目录"或"能发布"绑成了"能在真数据上跑一次诊断"。启动期校验它们互不相同。
+    dify_trial_api_key: str = field(repr=False, default="")
+    #: **试运行**的固定调试租户（#772 F / #586）。它**不可由请求改写**：试运行的订单范围
+    #: 由它（经 :func:`admin_context`）决定，浏览器提交的任何租户/站点/用户字段一律忽略。
+    #: 留空 ⇒ 试运行整体不可用（与凭据成对，半配置是启动错误）—— 没有固定租户就等于
+    #: "按请求给的租户跑"，那正是 #782 要接管的按人范围，不是本票的语义。
+    dify_trial_debug_tenant: str = ""
     #: Dify 控制台导出端点的**只读凭据**（#625）。它服务的是「我方发布动作」这一跳：
     #: `aiops admin pull-dify` 用它把运营在 Dify 里改好的配置拉回来。**与服务运行时的
     #: 任何凭据都不同** —— 上面那几把是 Dify 调我们时用的，这把是我们调 Dify 时用的。
@@ -231,6 +244,10 @@ class GatewayServerSettings:
             or _file_value(file_values, "AIOPS_GATEWAY_DIFY_DEBUG_TENANT"),
             dify_debug_knowledge_ids=_env("AIOPS_GATEWAY_DIFY_DEBUG_KNOWLEDGE_IDS")
             or _file_value(file_values, "AIOPS_GATEWAY_DIFY_DEBUG_KNOWLEDGE_IDS"),
+            dify_trial_api_key=_env("AIOPS_GATEWAY_DIFY_TRIAL_API_KEY")
+            or _file_value(file_values, "AIOPS_GATEWAY_DIFY_TRIAL_API_KEY"),
+            dify_trial_debug_tenant=_env("AIOPS_GATEWAY_DIFY_TRIAL_DEBUG_TENANT")
+            or _file_value(file_values, "AIOPS_GATEWAY_DIFY_TRIAL_DEBUG_TENANT"),
             dify_console_base_url=_env("AIOPS_GATEWAY_DIFY_CONSOLE_BASE_URL")
             or _file_value(file_values, "AIOPS_GATEWAY_DIFY_CONSOLE_BASE_URL"),
             dify_console_api_key=_env("AIOPS_GATEWAY_DIFY_CONSOLE_API_KEY")
@@ -379,6 +396,31 @@ class GatewayServerSettings:
                 "AIOPS_GATEWAY_DIFY_KNOWLEDGE_API_KEY is required when a Dify debug identity is set "
                 "(the debug identity narrows that route; it does not create it)"
             )
+        # #781：试运行的两半 —— 凭据与固定调试租户 —— 必须成对。只给凭据会让运维以为
+        # 「试运行建好了」，而它连该在哪个租户上跑都不知道；那会退化成"按请求给的租户跑"，
+        # 正是 #782 才要接管的按人范围。交给启动失败。
+        if self.dify_trial_api_key and not self.dify_trial_debug_tenant:
+            raise ValueError(
+                "AIOPS_GATEWAY_DIFY_TRIAL_DEBUG_TENANT is required when the Dify trial route is enabled"
+            )
+        if self.dify_trial_debug_tenant and not self.dify_trial_api_key:
+            raise ValueError(
+                "AIOPS_GATEWAY_DIFY_TRIAL_API_KEY is required when a Dify trial debug tenant is set"
+            )
+        # 试运行触发一次**真实模型执行**，所以它的钥匙必须与其余每一把都不同 ——
+        # 同值等于把"能读知识库 / 能发布 / 能列目录"悄悄绑成"能在真数据上跑一次诊断"。
+        for other_name, other in (
+            ("AIOPS_GATEWAY_DIFY_KNOWLEDGE_API_KEY", self.dify_knowledge_api_key),
+            ("AIOPS_GATEWAY_DIFY_DEBUG_API_KEY", self.dify_debug_api_key),
+            ("AIOPS_GATEWAY_DIFY_PUBLISH_API_KEY", self.dify_publish_api_key),
+            ("AIOPS_GATEWAY_DIFY_TOOLS_API_KEY", self.dify_tools_api_key),
+            ("AIOPS_GATEWAY_DIFY_CONSOLE_API_KEY", self.dify_console_api_key),
+        ):
+            if self.dify_trial_api_key and other and secrets.compare_digest(self.dify_trial_api_key, other):
+                raise ValueError(
+                    f"AIOPS_GATEWAY_DIFY_TRIAL_API_KEY must differ from {other_name} "
+                    "(one key must not authorise both running a trial and another Dify surface)"
+                )
         # 登记表在这里解析一次：解析失败是**启动错误**，而不是第一个请求到达时才发现 ——
         # 后者会把一个配置错误伪装成一次运行时故障。
         parse_dify_knowledge_bindings(self.dify_knowledge_bindings)
