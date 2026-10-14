@@ -34,11 +34,34 @@
 **不是回到 ADR-0018 否掉的那个命题**：那条否认的是「JWT 签名证明身份」（不验签 ⇒ 可自报）；
 这条用的是**服务端从 Redis 取出的会话** —— 请求伪造不了。
 
-**② 生产 app 迁到 Agent 模式**
+**② 生产 app 迁到 Agent 模式 —— ⚠️ 本节首版记错了对象，以下是更正后的**
 
-新建 `aiops-41-kefu-agent`（`agent-chat`），把旧的提示词/开场白/预设问题/知识库**逐字搬过去**
-（读回核对：`pre_prompt` 759 字、开场白、两条预设问题、同一个 dataset 全部一致），
-再把注册表 `(1942, consumer)` 指过去。**旧 app 原样留着当回滚点。**
+**首版把迁移对象记成了客服（C 端）。那是错的**，由用户指出后核实确认。铁证是全仓
+`DiagnosticToolExecutor` **只有一个构造点**：
+
+```
+src/aiops_diagnostics/agent_runner.py:101   ← 在 run_agent_diagnosis 里
+```
+
+| agent | `agent_type` | 走哪条路 | 有工具执行器吗 |
+|---|---|---|---|
+| `canary-客服` | `customer` | `run_customer_qa_answer` | **没有** |
+| `ops-methodology-700` | `operations` | `run_agent_diagnosis` | **有** |
+
+⇒ **工具是 B 端管家端诊断独有的能力**；把 C 端客服迁到 Agent 模式，等于给一条
+**没有工具执行器**的路径开了工具 UI —— 运营在那儿配了也没有东西去执行。
+
+**实际做的是**：新建 `aiops-41-ops-methodology-agent`（`agent-chat`）承接
+`ops-methodology-700`（`pre_prompt` 218 字逐字一致），注册表 `(1942, operator)` 指过去；
+**客服的绑定改回旧的 chat app**。旧 operator app 原样留着当回滚点。
+
+**当前注册表（41 实测）**：
+
+```
+1783022023241633792 / consumer -> canary-dify-acceptance-1011  a975c8e5-…（该 app 已 404，坏行）
+1942105476598861824 / consumer -> canary-客服                  98441c5b-…（chat，改回）
+1942105476598861824 / operator -> ops-methodology-700          e35f8fda-…（agent-chat）✅
+```
 
 ### 四、验收
 
@@ -14517,3 +14540,65 @@ v4  244 字  含标记=True     ← 由发布密钥经公网触发
   恰因为它在本部署可自报（实测 `404 ORDER_NOT_FOUND` 而非 401），发布授权才必须走共享密钥。
 - **暴露面是一次显式例外**，论证与四种被否掉的替代形态记在 ADR-0018；登记表已加行，
   且这次 CI **真的拦了一次**漏登记。
+
+## 2026-10-14 · 机制实测：Dify 的「保存」是唯一入口，「发布」改的是另一组字段
+
+**背景**：用户问「点了 Dify 的发布按钮，能不能端到端更新我们线上的智能体」。答案是
+**不能**，而且原因不是"没接线"，是**那个按钮根本不在我们的链上**。三条实测把机制钉死：
+
+### 一、我们拉回读的是**保存**，与发布按钮无关
+
+在生产 app 上「**只保存、不点发布**」，然后读我们的 export：
+
+```
+★ 只保存、不点 Dify 发布，我们 export 读到的: '…E2E-700-A】\n【机制探针-未发布】'
+★ 我们读的是【保存】，与 Dify 发布按钮无关: True
+```
+
+⇒ 运营在编辑器里一改，Dify 自动保存就把当前值写进 `app.app_model_config_id` 指向的行；
+`export_dsl` 读的正是那一行。**发布这个动作对 export 的结果没有影响。**
+
+### 二、点「发布更新」时，打到服务端的请求是 `model-config` —— 与保存同一个接口
+
+用真浏览器 + 真实点击抓包（控制台显示 "Up to date" 之后）：
+
+```
+点『发布更新』期间的请求：
+  POST /console/api/apps/e35f8fda-…/model-config
+```
+
+**⇒ Dify chat app 没有独立的"发布"接口。** 点发布时前端把当前草稿**保存**一次，
+"发布"本身是前端的本地语义。
+
+### 三、但发布**确实**改了另一组字段 —— 用隔离 app 做对照
+
+一次性 app，逐步读回 `agent_mode`：
+
+| 步骤 | `agent_mode` |
+|---|---|
+| 新建 | `{enabled: false, strategy: null, tools: [], prompt: null}` |
+| 保存一次 | `{enabled: false, strategy: "router", tools: [], prompt: null}` |
+| **点发布** | `{max_iteration: 10, enabled: true, strategy: "function_call", tools: [], prompt: null}` |
+
+⇒ 发布把 `strategy` 从 `router` 换成 `function_call`、补上 `max_iteration`、`enabled` 置真 ——
+**这些是 Dify 自己运行时的编排参数**，我们的拉回侧一个都不读（我们只读 `agent_mode.tools`）。
+
+### 四、结论（对使用者是可操作的）
+
+| Dify 上的动作 | 对我们的链 |
+|---|---|
+| **保存**（含自动保存） | ✅ **就是这个** —— `export` 立刻反映 |
+| **发布 / 发布更新** | ❌ 只改 Dify 自己的编排参数与调试/web 应用 |
+
+**所以"运营点发布就上线"在 Dify 侧没有现成的信号可接**；而且因为自动保存与它打同一个
+接口，**也无法用"这个接口被调了"来区分"改完了"与"打字打到一半"** —— 这正是 ADR-0018
+写下"人来触发"那条纪律的实测依据。
+
+### 五、对已在跑的两个 app 的实测核对（41）
+
+```
+canary-客服          v14  prompt_sha=c8002d1538ef  allowed_tools 键不存在 ⇒ 取默认全集（7）
+ops-methodology-700  v5   prompt_sha=3eeb31dc4ce2  allowed_tools 键不存在 ⇒ 取默认全集（7）
+```
+
+⇒ 两个 agent 的工具白名单**都是"未收窄"**（键不存在，不是空表），**今天没有被拦掉的工具**。
