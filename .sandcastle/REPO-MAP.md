@@ -141,7 +141,10 @@ java/
 ops/
   dify-console-bridge/
     aiops-dify-console-bridge.service
-    nginx-inject.conf
+    dify-console-10008.conf
+    dify-console-publish.conf
+    dify-publish-button.js
+    README.md
   environments/
     env-41.toml
   aiops-tdengine-readonly-proxy.service
