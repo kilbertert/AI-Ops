@@ -6,7 +6,9 @@
 #
 # 覆盖两件会静默出错的事：
 #   1. 发布的端口集合。多一个口就是多一个对外面；绑定地址写错（127.0.0.1 vs 0.0.0.0）
-#      在 `docker compose config` 里看得出来，但没人天天看。
+#      在 `docker compose config` 里看得出来，但没人天天看。拓扑（ops/dify-console-bridge/）：
+#      浏览器 → 宿主 nginx 36:10008 → 127.0.0.1:10018（本栈 nginx）；本栈**只**发布回环口。
+#      第 1b 项是反例：把绑定改成 0.0.0.0 / 不写地址，第 1 项必须报错 —— 钉住"检查真的会拒"。
 #   2. **squid 白名单真的落在私有网段 deny 之前**。#579 选的处置是"保留 SSRF 过滤 +
 #      加白名单"，而这条路有一个沉默的失败态：`http_access allow` 若排在
 #      `http_access deny to_private_networks` 之后，白名单就是一条不生效的规则 ——
@@ -29,7 +31,7 @@ tmp_env="$tmp_dir/.env"
 # 只为通过 compose 的变量插值；**不写任何真实凭据**。
 {
   echo "DIFY_REGISTRY=docker.1panel.live"
-  echo "DIFY_EXPOSE_PORT=10008"
+  echo "DIFY_EXPOSE_PORT=10018"
   echo "SECRET_KEY=$(printf 'x%.0s' {1..43})"
   echo "INIT_PASSWORD=$(printf 'x%.0s' {1..16})"
   echo "DB_PASSWORD=$(printf 'x%.0s' {1..16})"
@@ -39,9 +41,56 @@ tmp_env="$tmp_dir/.env"
   echo "CELERY_BROKER_URL=redis://:x@redis:6379/1"
 } >"$tmp_env"
 
-docker compose -f "$tmp_dir/docker-compose.yaml" --env-file "$tmp_env" config --format json \
-  >"$tmp_dir/resolved.json" 2>/dev/null \
+resolve() { # $1=compose file $2=env file $3=out json
+  docker compose -f "$1" --env-file "$2" config --format json >"$3" 2>/dev/null
+}
+
+# 发布端口判据：整个栈只有 nginx 一条发布，且是 127.0.0.1:10018 -> :80。
+# 0.0.0.0、空 host_ip（= 全部网卡）、[::]、换端口、多一条，全部拒。
+check_ports() { # $1=resolved json
+  python3 - "$1" <<'PY'
+import json, sys
+d = json.load(open(sys.argv[1]))
+ports = [(name, p.get("published"), p.get("target"), p.get("host_ip"))
+         for name, s in d["services"].items() for p in (s.get("ports") or [])]
+if ports != [("nginx", "10018", 80, "127.0.0.1")]:
+    raise SystemExit(f"FAIL: 发布端口集合不符，实际 {ports}；本栈只允许 nginx 发布 "
+                     "127.0.0.1:10018（对外入口是宿主 nginx 的 10008，绑非回环会绕过注入层）")
+print("ok: 唯一发布端口 nginx 127.0.0.1:10018 -> :80（仅回环）")
+PY
+}
+
+resolve "$tmp_dir/docker-compose.yaml" "$tmp_env" "$tmp_dir/resolved.json" \
   || fail "docker compose config rejected docker-compose.yaml"
+check_ports "$tmp_dir/resolved.json" || exit 1
+
+# 不设 DIFY_EXPOSE_PORT 时 compose 的缺省值也必须落在同一个回环口上。
+grep -v '^DIFY_EXPOSE_PORT=' "$tmp_env" >"$tmp_dir/noport.env"
+resolve "$tmp_dir/docker-compose.yaml" "$tmp_dir/noport.env" "$tmp_dir/noport.json" \
+  || fail "docker compose config rejected docker-compose.yaml (无 DIFY_EXPOSE_PORT)"
+check_ports "$tmp_dir/noport.json" >/dev/null \
+  || fail "DIFY_EXPOSE_PORT 缺省值不是 127.0.0.1:10018"
+ok "DIFY_EXPOSE_PORT 缺省 ⇒ 仍是 127.0.0.1:10018"
+
+# env.example 是部署时 .env 的来源；它若还写着 10008，会与宿主 nginx 抢同一个口。
+grep -qx 'DIFY_EXPOSE_PORT=10018' env.example \
+  || fail "env.example 的 DIFY_EXPOSE_PORT 不是 10018（与 compose / 宿主 nginx 拓扑不一致）"
+ok "env.example DIFY_EXPOSE_PORT=10018 与 compose 一致"
+
+# 1b. 反例：判据必须真的拒掉非回环绑定（否则第 1 项可能是一条永远绿的检查）。
+for bad in '0.0.0.0:${DIFY_EXPOSE_PORT:-10018}:80' '${DIFY_EXPOSE_PORT:-10018}:80' \
+           '[::]:${DIFY_EXPOSE_PORT:-10018}:80'; do
+  sed "s|\"127.0.0.1:\${DIFY_EXPOSE_PORT:-10018}:80\"|\"$bad\"|" \
+    "$tmp_dir/docker-compose.yaml" >"$tmp_dir/neg.yaml"
+  cmp -s "$tmp_dir/docker-compose.yaml" "$tmp_dir/neg.yaml" \
+    && fail "反例没有生效（compose 的 ports 行变了，sed 没替换到）：$bad"
+  resolve "$tmp_dir/neg.yaml" "$tmp_env" "$tmp_dir/neg.json" \
+    || fail "反例 compose 无法解析：$bad"
+  if check_ports "$tmp_dir/neg.json" >/dev/null 2>&1; then
+    fail "端口判据放过了非回环绑定：$bad"
+  fi
+done
+ok "反例：0.0.0.0 / 省略地址 / [::] 绑定均被判据拒绝"
 
 python3 - "$tmp_dir/resolved.json" <<'PY' || exit 1
 import json, sys
@@ -61,14 +110,7 @@ for forbidden in ("sandbox", "local_sandbox", "agent_backend", "agent_ssrf_proxy
     if forbidden in svcs:
         raise SystemExit(f"FAIL: 不该出现的服务在：{forbidden}")
 
-ports = []
-for name, s in d["services"].items():
-    for p in s.get("ports") or []:
-        ports.append((name, p.get("published"), p.get("target"), p.get("host_ip")))
-if ports != [("nginx", "10008", 80, "0.0.0.0")]:
-    raise SystemExit(f"FAIL: 发布端口集合不符，实际 {ports}；"
-                     "本栈只允许 nginx 发布 10008，且必须显式绑 0.0.0.0（已登记为临时暴露）")
-print("ok: 唯一发布端口 nginx 0.0.0.0:10008 -> :80")
+# 发布端口集合由下面的 check_ports 单独判（第 1 / 1b 项共用同一个判据）。
 
 # 数据库与缓存不得对外发布。
 for name in ("db_postgres", "redis", "plugin_daemon", "ssrf_proxy", "api", "worker", "web"):

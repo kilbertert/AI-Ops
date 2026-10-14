@@ -1,51 +1,69 @@
-"""Dify 控制台里那颗「发布到 AI-Ops」按钮的**后端桥**。
+"""Dify 控制台里那颗「发布到 AI-Ops」按钮的**后端桥**（ADR-0021）。
 
 ## 这一层在解决什么
 
-运营在 Dify 控制台里编辑智能体，改完必须让**线上**生效。那条路我们早就有了
-（``POST /v1/operator/publish``，ADR-0018 的第二种门），但它**没有界面** ——
-运营要改完再找工程敲一条命令。这一层就是那个界面背后的东西。
+运营在 Dify 控制台里编辑智能体，改完必须让**线上**生效。发布实现早就有了
+（网关的 ``_publish_bound_app``），但它**没有界面**。这一层就是那个界面背后的东西。
 
-## 它不持有任何"发布权"，它只是把运营**已经有的**能力做完
+## 形态是 BFF：先把"人"验明白，再以"机器"的身份把事做完
 
-发布按钮**不引入新的权限**。理由要写清楚，否则下一个读代码的人会以为这里有个洞：
+* **人**：桥拿浏览器带来的**运营自己的 Dify 控制台凭据**问 Dify。Dify 1.17.1 的
+  ``/console/api/*`` 要求的完整凭据是 ``access_token`` cookie + ``csrf_token``
+  cookie + 与后者相同的 ``X-CSRF-Token`` 头（``api/libs/token.py`` 的
+  ``check_csrf_token``，GET 也校验）。少任何一样 Dify 都回 401。
+* **角色**：能 ``GET`` 到一个 app 只说明"看得见"，不说明"有权让改动上线"。桥先问
+  ``GET /console/api/workspaces/current/summary``（返回该账号**当前工作空间**的 ``id``
+  与 ``TenantAccountJoin.role``），默认只放行 ``owner`` / ``admin``（与 Dify 自己的
+  ``TenantAccountRole.is_privileged_role`` 同一集合）。
+* **工作空间被钉住**：summary 的 ``id`` 必须（常量时间）等于配置的
+  ``AIOPS_CONSOLE_BRIDGE_WORKSPACE_ID``，否则既不查 app 也不发布。没有这一条，
+  "当前工作空间"在两次调用之间可以被运营切换：角色来自 X（owner），app 查询落在
+  W（只是 editor）。钉住保证**角色**来自配置的工作空间。它**不能**单独关掉 summary
+  与 app 查询之间的切换窗口：那时 app 查询可能落在 W 并成功。这个窗口由下游关上：
+  网关只发布已绑定的 app，且**以配置的工作空间导出 DSL** —— W 里的 app 在那里导不出来。
+  所以"网关导出所用工作空间 == ``AIOPS_CONSOLE_BRIDGE_WORKSPACE_ID``"是本层安全性的
+  前提，属于部署侧约束，桥本身证明不了。**不依赖** app 回答里有 ``tenant_id``
+  （Dify 1.17.1 的 ``AppDetail`` 没有这个字段）。
+* **app**：再问 ``GET /console/api/apps/<id>`` —— Dify 按**当前工作空间**限定
+  （``App.tenant_id == current_tenant_id``），并核对回答里的 ``id`` 就是这个 app。
+* **机器**：最后以服务端密钥调 ``POST /v1/dify/publish``（共享密钥门）。**不是**
+  ``/v1/operator/publish`` —— 那条认的是运营的**网关/公司**会话，桥手上只有 Dify
+  会话，两者换不通。两条门最终走同一个 ``_publish_bound_app``，它只接受**已绑定**的 app。
 
-> **能登进 Dify 控制台改这个 app 的提示词的人，本来就已经能改这个智能体的行为。**
+## 浏览器侧的门
 
-提示词是智能体的全部定义；编辑它就是改行为。所以"点一下让这个改动上线"**不给**
-那个人任何他本来没有的能力 —— 它只是把他已经做出的改动走完最后一步。真正要防的不是
-"谁能点"，而是"点了能不能跨出租户/跨出这个 app" —— 而那一层由
-``/v1/operator/publish`` 的门自己堵（它只接受"这个 (租户,入口) 绑定的那一个 app"）。
+* **来源**：只认配置的**控制台公开源**（``AIOPS_CONSOLE_BRIDGE_CONSOLE_ORIGIN``，
+  浏览器地址栏里那个源，不是桥访问 Dify 用的内网地址）。``Origin`` 必须精确等于它；
+  ``Sec-Fetch-Site`` 出现时必须是 ``same-origin``；``Referer`` 也必须在这个源上。
+* **这些只校验请求上下文，不是授权。** 同源检查回答的是"这次点击像不像从我们的
+  控制台页面发出"，挡的是跨站伪造请求；它不回答"这个人能不能发布这个 app"。
+  ``Referer`` 是调用方可控的（非浏览器客户端可以随意写），所以 app_id **可以被指定**
+  为任意 uuid —— 挡住越权的是后面 Dify 对该会话的角色、工作空间与 app 回答。
+* **app_id 取自 Referer 的页面路径**（``/app/<规范 uuid>/<页>``），不另设请求体字段。
+  请求体只允许为空或 ``{}``，``Content-Type`` 必须是 ``application/json``
+  （跨源的简单表单请求发不出它）。
+* **不转发任意头。** 发往 Dify 的只有那两枚 cookie 和 CSRF 头；发往网关的只有密钥。
+* **不跟随重定向。** 跟随会把运营的 cookie 或服务端密钥带去 ``Location``。
 
-## 因此唯一的凭据是**运营自己的 Dify 会话**，不是任何共享密钥
+## 失败得"很无聊"，成功不可伪造
 
-这一条是刻意的，而且是这一层与"给浏览器发一把密钥"的关键区别：
-
-* **密钥不进浏览器。** 那把 ``AIOPS_GATEWAY_DIFY_PUBLISH_API_KEY`` 只存在于服务端
-  配置文件里，浏览器永远看不到它 —— 它在**这一层**被使用。
-* **身份由 Dify 自己回答。** 桥拿请求里的 ``access_token`` cookie 去问 Dify
-  ``GET /console/api/apps/<app_id>``：Dify 认了，说明这个会话有效且对这个 app 有可见性；
-  Dify 拒了（401/403），桥就拒。
-* **app_id 由 Dify 自己回答，不由请求体给。** 桥问的是**当前页面那个 app** ——
-  它从注入的按钮所在的 URL 里取（``/app/<id>/configuration``）。所以请求体里
-  **没有** app_id 可伪造，桥也不会去猜"运营想发布哪个"。
-
-## 一处刻意的坏味道：它会失败得"很无聊"
-
-桥的每一个失败分支都返回**同一个形状**（``{"published": false, "reason": ...}``），
-而不是把 Dify 的错误码原样透出去。原因：这一层是给运营看的一句话（"发布成功/失败"），
-而"你的会话过期了"与"Dify 拒绝了"对看的人是同一件事 —— 都是"再登一次/再点一次"。
-把内部码透到浏览器里只会让一个界面按钮变成一次信息泄漏面。
+每一个失败分支都返回同一个形状（``{"published": false, "reason": ...}``），不把
+Dify/网关的错误码透出去。反过来，网关回 2xx 也**不等于**发布成功：``action`` 必须是
+``synced`` / ``unchanged`` 且 ``version_no`` 是正整数、``app_id`` 对得上；网关自己的
+``refused`` / ``failed`` 是拒绝（409），形状不对是"结果未确认"（502）。
 """
 
 from __future__ import annotations
 
+import hmac
 import json
 import logging
 import os
+import re
 import urllib.parse
+import uuid
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, ClassVar
 
@@ -54,19 +72,46 @@ from aiops_diagnostics.bounded_http import (
     HttpFailure,
     RequestSpec,
     json_body,
-    parse_raw_envelope,
     request_json,
 )
 
 _LOGGER = logging.getLogger("aiops.dify_console_publish")
 
-#: Dify 控制台的会话 cookie 名。它是**运营自己的**登录态，不是我们的任何凭据。
+#: Dify 1.17.1 的控制台凭据名（``api/constants/__init__.py``）。都是**运营自己的**登录态。
+#: https 且未设 COOKIE_DOMAIN 时 Dify 加 __Host- 前缀；解析时保留实际凭据名。
 CONSOLE_ACCESS_TOKEN_COOKIE = "access_token"
+CONSOLE_CSRF_COOKIE = "csrf_token"
+CONSOLE_CSRF_HEADER = "X-CSRF-Token"
 
-#: 桥只打这两跳。都是**相对路径**，所以"打到谁"由部署决定（nginx 把它指到 Dify /
-#: 指到网关），代码里没有地址。
+#: 桥只打这三跳，都是相对路径 —— "打到谁"由部署配置决定。
+DIFY_WORKSPACE_SUMMARY_PATH = "/console/api/workspaces/current/summary"
 DIFY_APP_PATH = "/console/api/apps/{app_id}"
-PUBLISH_PATH = "/v1/operator/publish"
+#: 机器门（共享密钥）。**不是** ``/v1/operator/publish``：那条要运营的网关会话。
+PUBLISH_PATH = "/v1/dify/publish"
+
+#: Dify ``TenantAccountRole`` 的全部取值（``api/models/account.py``）。
+KNOWN_ROLES = frozenset({"owner", "admin", "editor", "normal", "dataset_operator"})
+#: 默认只放行 Dify 自己的 ``is_privileged_role`` 集合。
+DEFAULT_ALLOWED_ROLES = frozenset({"owner", "admin"})
+
+#: 网关 ``SyncOutcome.action``（``dify_dsl_pull.py``）：前两种是成功，后两种是拒绝。
+_PUBLISHED_ACTIONS = frozenset({"synced", "unchanged"})
+_REFUSED_ACTIONS = frozenset({"refused", "failed"})
+
+#: 请求体只允许为空或 ``{}``；上限远小于 nginx 的 ``client_max_body_size 4k``。
+MAX_REQUEST_BODY_BYTES = 256
+#: 上游响应体上限。超限即截断 → JSON 解码失败 → 按"这一步没做成"处置（失败关闭）。
+MAX_UPSTREAM_RESPONSE_BYTES = 1024 * 1024
+#: 单个 cookie / CSRF 值的长度上限（JWT 远小于它）。
+MAX_TOKEN_CHARS = 8192
+
+#: RFC 6265 §4.1.1 的 cookie-octet（不含引号、逗号、分号、反斜杠、空白与控制字符）。
+#: CSRF 头的值就是 csrf_token cookie 的副本，用同一字符集。值会被拼进转发出去的头，
+#: 所以这一条同时是**头注入**的防线。
+_TOKEN_RE = re.compile(r"[\x21\x23-\x2B\x2D-\x3A\x3C-\x5B\x5D-\x7E]+")
+_CONTENT_LENGTH_RE = re.compile(r"[0-9]{1,6}")
+
+_PUBLISH_ROUTE = "/__aiops/publish"
 
 
 class ConsolePublishError(RuntimeError):
@@ -75,42 +120,190 @@ class ConsolePublishError(RuntimeError):
 
 @dataclass(frozen=True, slots=True)
 class ConsolePublishResult:
-    """一次按钮点击的结果 —— 面向前端，刻意只有三个字段。"""
+    """一次按钮点击的结果 —— 面向前端，刻意只有三个字段（``status`` 只给 HTTP 面用）。"""
 
     published: bool
     reason: str
-    #: 发布实现自己的回答（``unchanged`` / ``synced`` / …）。失败时为空串。
+    #: 发布实现自己的回答（``unchanged`` / ``synced``）。失败时为空串。
     action: str = ""
+    #: 桥回给浏览器的 HTTP 状态：200 成功、403 拒绝、409 发布门拒绝、502 结果未确认。
+    status: int = 403
 
     def public(self) -> dict[str, Any]:
         return {"published": self.published, "reason": self.reason, "action": self.action}
 
 
-def app_id_from_referer(referer: str | None) -> str | None:
-    """从**页面自己的 URL** 里取出当前 app 的 id，取不到就是 ``None``。
+@dataclass(frozen=True, slots=True)
+class ConsoleSession:
+    """运营的 Dify 控制台凭据：两枚 cookie（CSRF 头就是 ``csrf_token`` 的副本）。"""
 
-    这是 app_id 的唯一来源，而它来自浏览器**已经打开的页面**，不是请求体 ——
-    所以调用方伪造不了"我要发布哪个 app"。取不到（Referer 缺失或形状不对）时
-    返回 ``None``，调用方据此拒绝；**猜一个默认值**在这里是最坏的做法。
+    access_token: str = field(repr=False)
+    csrf_token: str = field(repr=False)
+    cookie_prefix: str = ""
 
-    形状取自 Dify 自己的路由：``/app/<uuid>/configuration``。只认这一段路径，
-    不认查询串、不认 fragment —— 它们在 Referer 里可能出现，且与是哪个 app 无关。
+    def cookie_header(self) -> str:
+        return (
+            f"{self.cookie_prefix}{CONSOLE_ACCESS_TOKEN_COOKIE}={self.access_token}; "
+            f"{self.cookie_prefix}{CONSOLE_CSRF_COOKIE}={self.csrf_token}"
+        )
+
+    def dify_headers(self) -> dict[str, str]:
+        """发往 Dify 的**全部**头 —— 除此之外浏览器带来的什么都不转。"""
+        return {
+            "Cookie": self.cookie_header(),
+            CONSOLE_CSRF_HEADER: self.csrf_token,
+            "Accept": "application/json",
+        }
+
+
+def _is_token(value: str) -> bool:
+    return 0 < len(value) <= MAX_TOKEN_CHARS and _TOKEN_RE.fullmatch(value) is not None
+
+
+def console_session_from_headers(cookie_header: str | None, csrf_header: str | None) -> ConsoleSession | None:
+    """从 ``Cookie:`` 与 ``X-CSRF-Token:`` 取出完整的控制台凭据；不完整就是 ``None``。
+
+    规则（任一不满足 ⇒ ``None`` ⇒ 拒绝，而不是抛异常）：
+
+    * ``access_token`` 与 ``csrf_token`` 两枚 cookie **各恰好一次**（同名出现两次时
+      不知道 Dify 会取哪一个，桥不替它猜）；
+    * 值是合法 cookie-octet（它们会被原样拼进转发的 ``Cookie`` 头）；
+    * ``X-CSRF-Token`` 与 ``csrf_token`` cookie 逐字相同（Dify 的双提交规则，桥先在本地判，
+      不合规的请求不去打扰 Dify）。
+
+    不用 ``http.cookies``：它对畸形输入会抛异常或静默跳过，这里两者都不是想要的。
     """
-    if not referer:
+    if not cookie_header or not csrf_header:
+        return None
+    found: dict[str, list[str]] = {
+        prefix + name: []
+        for prefix in ("", "__Host-")
+        for name in (CONSOLE_ACCESS_TOKEN_COOKIE, CONSOLE_CSRF_COOKIE)
+    }
+    for chunk in cookie_header.split(";"):
+        name, sep, value = chunk.strip().partition("=")
+        if name in found:
+            found[name].append(value if sep else "")
+    plain = bool(found[CONSOLE_ACCESS_TOKEN_COOKIE] or found[CONSOLE_CSRF_COOKIE])
+    prefixed = bool(found["__Host-access_token"] or found["__Host-csrf_token"])
+    if plain and prefixed:
+        return None
+    prefix = "__Host-" if prefixed else ""
+    access, csrf = found[prefix + CONSOLE_ACCESS_TOKEN_COOKIE], found[prefix + CONSOLE_CSRF_COOKIE]
+    if len(access) != 1 or len(csrf) != 1:
+        return None
+    if not (_is_token(access[0]) and _is_token(csrf[0]) and _is_token(csrf_header)):
+        return None
+    if not hmac.compare_digest(csrf[0].encode("ascii"), csrf_header.encode("ascii")):
+        return None
+    return ConsoleSession(access_token=access[0], csrf_token=csrf[0], cookie_prefix=prefix)
+
+
+# ── 来源与 app_id ───────────────────────────────────────────────────────────
+
+
+def _origin_and_path(raw: str | None) -> tuple[str, urllib.parse.SplitResult] | None:
+    """把一个绝对 http(s) URL 拆成（规范化的源, 拆分结果）；不是就 ``None``。
+
+    规范化按 RFC 6454 的源三元组：协议与主机小写、默认端口省略。带 userinfo 的
+    URL 一律不认（``http://x@host`` 常被用来让人眼看错主机）。
+    """
+    if not raw or any(ord(char) <= 32 or ord(char) == 127 for char in raw):
         return None
     try:
-        path = urllib.parse.urlsplit(referer).path
+        parts = urllib.parse.urlsplit(raw)
+        port = parts.port
     except ValueError:
         return None
-    parts = [segment for segment in path.split("/") if segment]
-    if len(parts) < 2 or parts[0] != "app":
+    scheme = parts.scheme.lower()
+    host = parts.hostname
+    if scheme not in {"http", "https"} or not host or "@" in parts.netloc:
         return None
-    candidate = parts[1]
-    # app id 是 uuid 形状；不做正则，只做"像不像一个 id"的最小校验，避免把
-    # `/app/settings` 这类路由当成一个 app。
-    if not candidate or len(candidate) > 64 or candidate in {"settings", "new"}:
+    if ":" in host:  # IPv6 字面量
+        host = f"[{host}]"
+    default_port = 443 if scheme == "https" else 80
+    origin = f"{scheme}://{host}" if port in {None, default_port} else f"{scheme}://{host}:{port}"
+    return origin, parts
+
+
+def normalize_origin(raw: str | None) -> str | None:
+    """规范化一个**源**（只有协议/主机/端口，可带一个结尾 ``/``）；否则 ``None``。
+
+    ``"null"``（不透明源）、带路径/查询/片段的值都不是源。
+    """
+    split = _origin_and_path(raw)
+    if split is None:
         return None
-    return candidate
+    origin, parts = split
+    if parts.path not in {"", "/"} or parts.query or parts.fragment:
+        return None
+    return origin
+
+
+def _is_canonical_uuid(candidate: str) -> bool:
+    """Dify 的 app id 是 uuid4，路由里是小写带连字符的规范形；别的形状一律不认。"""
+    try:
+        return str(uuid.UUID(candidate)) == candidate
+    except ValueError:
+        return False
+
+
+def app_id_from_referer(referer: str | None, *, console_origin: str) -> str | None:
+    """从**控制台本源页面**的 URL 里取出当前 app 的 id，取不到就是 ``None``。
+
+    这是 app_id 的唯一来源。它校验的是**请求上下文**（像不像从我们控制台某个 app 页面
+    点的），**不是授权**：Referer 由调用方控制，非浏览器客户端可以写任意 app 的 uuid。
+    越权由后续 Dify 对该会话的工作空间/角色/app 回答挡住。三条都要满足：
+
+    * Referer 的源**精确等于**配置的控制台公开源（外来页面不算）；
+    * 路径形如 Dify 自己的路由 ``/app/<id>/<页>``（``configuration`` / ``workflow`` …）；
+    * ``<id>`` 是规范 uuid。
+
+    取不到时返回 ``None``，调用方据此拒绝；**猜一个默认值**在这里是最坏的做法。
+    """
+    expected = normalize_origin(console_origin)
+    split = _origin_and_path(referer)
+    if expected is None or split is None:
+        return None
+    origin, parts = split
+    if origin != expected:
+        return None
+    segments = parts.path.split("/")
+    # "/app/<id>/<页>..." → ["", "app", "<id>", "<页>", ...]
+    if len(segments) < 4 or segments[0] != "" or segments[1] != "app" or not segments[3]:
+        return None
+    candidate = segments[2]
+    return candidate if _is_canonical_uuid(candidate) else None
+
+
+def parse_allowed_roles(raw: str | None) -> frozenset[str]:
+    """解析 ``AIOPS_CONSOLE_BRIDGE_ALLOWED_ROLES``（逗号分隔）；缺省为所有者/管理员。
+
+    未知角色名**启动即失败** —— 拼错一个角色名静默变成"谁都不放行"或"放行了别的"
+    都比报错更糟。
+    """
+    if raw is None or not raw.strip():
+        return DEFAULT_ALLOWED_ROLES
+    roles = frozenset(item.strip() for item in raw.split(",") if item.strip())
+    if not roles:
+        raise ValueError("AIOPS_CONSOLE_BRIDGE_ALLOWED_ROLES must name at least one role")
+    unknown = roles - KNOWN_ROLES
+    if unknown:
+        raise ValueError(f"AIOPS_CONSOLE_BRIDGE_ALLOWED_ROLES has unknown roles: {sorted(unknown)}")
+    return roles
+
+
+# ── 出站：一跳有界 HTTP ─────────────────────────────────────────────────────
+
+
+def _any_json(payload: Any, mapping: ErrorMapping) -> Any:
+    """不套信封：解码后的 JSON 原样交给调用方，**形状由调用方逐字段判**。
+
+    不用 ``parse_raw_envelope``：它把标量载荷判成传输故障（502），而这里一个 2xx 的
+    标量回答应当走"形状不对"的同一条拒绝/未确认分支。
+    """
+    del mapping
+    return payload
 
 
 def _request(
@@ -123,11 +316,14 @@ def _request(
 ) -> tuple[int, Any]:
     """一跳有界 HTTP，走仓库**唯一**的出站骨架（``bounded_http``）。
 
-    返回 ``(status, decoded_or_text)``。这里**不复用骨架的错误映射**是有意的：
-    这一层要的是"拿状态码自己判"，而不是把 401/403/5xx 折成领域异常 ——
-    桥的每一个失败分支最后都收敛成同一句话，见模块 docstring。
+    返回 ``(status, decoded_json)``。两条硬约束：
 
-    桥自己那一步失败（连不上/超时/解码不了）抛 ``ConsolePublishError``。
+    * **不跟随重定向**（``follow_redirects=False``）：3xx 原样作为状态码返回，调用方按
+      "非 2xx"拒绝。跟随会把运营的 cookie / 服务端密钥带去 ``Location``。
+    * **响应体有上限**：超限即截断，JSON 解码失败 → ``ConsolePublishError``。
+
+    这里**不复用骨架的错误映射**是有意的：这一层要"拿状态码自己判"。桥自己那一步失败
+    （连不上/超时/解码不了）抛 ``ConsolePublishError``。
     """
     failures: list[HttpFailure] = []
 
@@ -152,21 +348,33 @@ def _request(
         headers=dict(headers or {}),
         body=json_body(dict(body)) if body is not None else None,
         timeout=timeout,
+        max_read_bytes=MAX_UPSTREAM_RESPONSE_BYTES,
+        follow_redirects=False,
     )
     try:
-        payload = request_json(spec, mapping=mapping, envelope=parse_raw_envelope)
+        payload = request_json(spec, mapping=mapping, envelope=_any_json)
     except ConsolePublishError:
-        # 骨架把 HTTP 状态折成了异常 —— 但那不是"桥失败了"，是**上游明确回答**。
-        # 把它还原成状态码，让调用方按状态判（这正是这一层要的粒度）。
-        if not failures:
+        # 骨架把 HTTP 状态折成了异常 —— 那不是"桥失败了"，是**上游明确回答**（含 3xx）。
+        if not failures or failures[0].status is None:
+            # 传输/解码故障**没有状态码** —— "这一步没做成"，让上层的 502 分支接住。
             raise
-        failure = failures[0]
-        if failure.status is None:
-            # 传输层故障（连不上/超时/解码失败）**没有状态码** —— 它是"这一步没做成"，
-            # 不是"上游回答了一个码"。原样抛，让上层的 502 分支接住。
-            raise
-        return failure.status, ""
+        return failures[0].status, None
     return 200, payload
+
+
+def _str_field(payload: Any, key: str) -> str | None:
+    if not isinstance(payload, Mapping):
+        return None
+    value = payload.get(key)
+    return value if isinstance(value, str) and value else None
+
+
+# ── 一次点击 ────────────────────────────────────────────────────────────────
+
+_REFUSED_SESSION = "Dify 会话已失效或你看不到这个智能体，请重新登录后再试"
+_REFUSED_ROLE = "只有工作空间的所有者或管理员可以发布到线上"
+_REFUSED_WORKSPACE = "当前不在可发布的工作空间，请切换到正确的工作空间后再试"
+_UNCONFIRMED = "发布结果无法确认，请到 AI-Ops 核对线上版本后再试"
 
 
 def publish_current_app(
@@ -174,57 +382,97 @@ def publish_current_app(
     dify_base_url: str,
     gateway_base_url: str,
     publish_key: str,
-    console_session: str,
+    console_session: ConsoleSession,
+    console_origin: str,
+    workspace_id: str,
     referer: str | None,
+    allowed_roles: frozenset[str] = DEFAULT_ALLOWED_ROLES,
     timeout: float = 15.0,
 ) -> ConsolePublishResult:
-    """运营点了按钮之后，这一层做的全部事情。
+    """运营点了按钮之后，这一层做的全部事情。顺序不能换：
 
-    三步，顺序不能换（第 2 步是第 1 步授权的，第 3 步是第 2 步定址的）：
-
-    1. 从 Referer 取当前 app 的 id；取不到 ⇒ 拒绝（**不猜**）。
-    2. 拿运营的会话问 Dify ``GET /console/api/apps/<id>``：不是 2xx ⇒ 拒绝。
-       这一步同时干了两件事 —— 验会话**有效**，且验该会话**看得见这个 app**。
-    3. 用**服务端**的发布密钥调 ``POST /v1/operator/publish``，body 只有 ``app_id``。
-
-    第 3 步用的是 ``X-Business-Entry: operator`` —— 与运营在管家端是同一个入口。
-    ``/v1/operator/publish`` 自己还会再判一次"这个 app 是不是该 (租户,operator) 绑的"，
-    所以即使第 2 步被绕过，越界发布也过不去。
+    1. 从 Referer 取当前 app 的 id（页面必须在控制台公开源上、id 是规范 uuid）；
+       取不到 ⇒ 拒绝（**不猜**），一个上游都不问。这一步是请求上下文，不是授权。
+    2. 问 Dify ``GET /console/api/workspaces/current/summary``：非 2xx、``id`` 不等于
+       钉住的 ``workspace_id``、或 ``role`` 不在 ``allowed_roles`` 里 ⇒ 拒绝，
+       **不查 app、不打网关**。能看见 app 不等于能发布。
+    3. 问 Dify ``GET /console/api/apps/<id>``：非 2xx、或回答的 ``id`` 不是这个 app ⇒
+       拒绝。Dify 按**当前**工作空间限定这一查。若运营恰在第 2、3 步之间切了工作空间，
+       这一查可能落在别的空间并成功 —— 桥关不掉这个窗口（app 回答不带 ``tenant_id``）；
+       它由第 4 步关上：网关以配置的工作空间导出 DSL，别的空间的 app 导不出来。
+    4. 用**服务端**密钥调 ``POST /v1/dify/publish``，body 只有 ``app_id``；
+       网关只接受**已绑定**的 app，并把它的回答逐字段核对后才报成功。
     """
-    app_id = app_id_from_referer(referer)
+    app_id = app_id_from_referer(referer, console_origin=console_origin)
     if app_id is None:
         return ConsolePublishResult(False, "无法确定当前是哪个智能体（请从编排页点这个按钮）")
 
-    dify_url = dify_base_url.rstrip("/") + DIFY_APP_PATH.format(app_id=urllib.parse.quote(app_id, safe=""))
-    http_status, _ = _request(
-        dify_url,
-        headers={"Cookie": f"{CONSOLE_ACCESS_TOKEN_COOKIE}={console_session}"},
-        timeout=timeout,
+    dify_base = dify_base_url.rstrip("/")
+    dify_headers = console_session.dify_headers()
+
+    http_status, summary = _request(
+        dify_base + DIFY_WORKSPACE_SUMMARY_PATH, headers=dify_headers, timeout=timeout
     )
     if not 200 <= http_status < 300:
-        return ConsolePublishResult(False, "Dify 会话已失效或你看不到这个智能体，请重新登录后再试")
+        return ConsolePublishResult(False, _REFUSED_SESSION)
+    role = _str_field(summary, "role")
+    current_workspace = _str_field(summary, "id")
+    if role is None or current_workspace is None:
+        _LOGGER.info("console publish refused: workspace summary has no role/id")
+        return ConsolePublishResult(False, _REFUSED_SESSION)
+    if not hmac.compare_digest(current_workspace.encode("utf-8"), workspace_id.encode("utf-8")):
+        # 不记录对方的工作空间 id：日志只需知道"不是钉住的那个"。
+        _LOGGER.info("console publish refused: current workspace is not the pinned one")
+        return ConsolePublishResult(False, _REFUSED_WORKSPACE)
+    if role not in allowed_roles:
+        _LOGGER.info("console publish refused: role %r not allowed", role[:32])
+        return ConsolePublishResult(False, _REFUSED_ROLE)
 
-    gateway_url = gateway_base_url.rstrip("/") + PUBLISH_PATH
-    http_status, payload = _request(
-        gateway_url,
+    app_url = dify_base + DIFY_APP_PATH.format(app_id=urllib.parse.quote(app_id, safe=""))
+    http_status, app = _request(app_url, headers=dify_headers, timeout=timeout)
+    if not 200 <= http_status < 300 or _str_field(app, "id") != app_id:
+        return ConsolePublishResult(False, _REFUSED_SESSION)
+
+    http_status, outcome = _request(
+        gateway_base_url.rstrip("/") + PUBLISH_PATH,
         method="POST",
         headers={
             "Authorization": f"Bearer {publish_key}",
-            "X-Business-Entry": "operator",
             "Content-Type": "application/json",
+            "Accept": "application/json",
         },
         body={"app_id": app_id},
         timeout=timeout,
     )
     if not 200 <= http_status < 300:
-        # 发布实现自己的错误码不透出去：对点按钮的人，"你的会话过期了"和"Dify 拒绝了"
-        # 是同一件事（再登一次/再点一次）。透出内部码只会多一个信息面。
+        # 发布门的错误码不透出去：对点按钮的人，它们是同一件事。
+        _LOGGER.info("console publish refused by gateway: HTTP %s", http_status)
         return ConsolePublishResult(False, "发布未通过我们的发布门，请联系工程查看原因")
-    action = str((payload or {}).get("action") or "")
+    return _interpret_publish_outcome(outcome, app_id)
+
+
+def _interpret_publish_outcome(outcome: Any, app_id: str) -> ConsolePublishResult:
+    """网关 2xx 的回答**逐字段**核对后才算成功（形状取自 ``_publish_bound_app``）。
+
+    * ``action`` ∈ {``refused``, ``failed``} ⇒ 发布门拒绝（409）；
+    * ``action`` ∈ {``synced``, ``unchanged``} 且 ``version_no`` 是正整数、``app_id``
+      就是请求的那个 ⇒ 成功；
+    * 其余一切 ⇒ 结果未确认（502）。不能报成功，也不能断言没发 —— 让人去核对。
+    """
+    action = _str_field(outcome, "action")
+    if _str_field(outcome, "app_id") != app_id:
+        _LOGGER.warning("console publish: gateway answer does not name the requested app")
+        return ConsolePublishResult(False, _UNCONFIRMED, status=502)
+    if action in _REFUSED_ACTIONS:
+        _LOGGER.info("console publish refused by publish gate: action=%s", action)
+        return ConsolePublishResult(False, "发布门拒绝了这次改动，请联系工程查看原因", status=409)
+    version = outcome.get("version_no")
+    if action not in _PUBLISHED_ACTIONS or type(version) is not int or version < 1:
+        _LOGGER.warning("console publish: gateway answer has an unexpected shape")
+        return ConsolePublishResult(False, _UNCONFIRMED, status=502)
     if action == "unchanged":
-        return ConsolePublishResult(True, "线上已是最新，无需改动", action)
-    version = (payload or {}).get("version_no")
-    return ConsolePublishResult(True, f"已发布到线上（版本 {version}）", action)
+        return ConsolePublishResult(True, f"线上已是最新（版本 {version}），无需改动", action, status=200)
+    return ConsolePublishResult(True, f"已发布到线上（版本 {version}）", action, status=200)
 
 
 # ── HTTP 面：注入的按钮打的那一跳 ────────────────────────────────────────────
@@ -236,14 +484,28 @@ class BridgeSettings:
 
     listen_host: str
     listen_port: int
-    #: Dify 自己（我们注入的页面所在的那个栈）。桥拿运营的会话去问它"你是谁"。
+    #: Dify 自己（桥从服务端访问它的地址，通常是内网/回环）。桥拿运营的凭据去问它。
     dify_base_url: str
     #: 我们的网关。发布实现住在那里。
     gateway_base_url: str
-    #: 服务端持有的发布密钥。与 ``AIOPS_GATEWAY_DIFY_PUBLISH_API_KEY`` 同一把 ——
-    #: 桥不引入新凭据，它只是替运营**拿着**那把已有的服务端密钥。
+    #: 服务端持有的发布密钥。与 ``AIOPS_GATEWAY_DIFY_PUBLISH_API_KEY`` 同一把。
     publish_key: str
+    #: 浏览器地址栏里的**控制台公开源**（如 ``http://36.156.159.175:10008``）。
+    #: ``Origin`` / ``Referer`` 只按它判；**不是** ``dify_base_url``（那是内网地址）。
+    console_origin: str
+    #: 钉住的 Dify 工作空间（tenant）id。summary 回答的当前工作空间必须就是它。
+    #: 网关导出 DSL 所用的工作空间必须与之相同 —— 部署侧约束，桥无法自证。
+    workspace_id: str
+    allowed_roles: frozenset[str] = DEFAULT_ALLOWED_ROLES
     timeout: float = 15.0
+
+    def __post_init__(self) -> None:
+        if normalize_origin(self.console_origin) != self.console_origin:
+            raise ValueError("console_origin must be a normalized origin (scheme://host[:port])")
+        if not self.workspace_id or self.workspace_id != self.workspace_id.strip():
+            raise ValueError("workspace_id must be a non-empty id without surrounding whitespace")
+        if not self.allowed_roles or not self.allowed_roles <= KNOWN_ROLES:
+            raise ValueError("allowed_roles must be a non-empty subset of Dify roles")
 
     @classmethod
     def from_env(cls) -> BridgeSettings:
@@ -253,85 +515,155 @@ class BridgeSettings:
                 raise ValueError(f"{name} is required")
             return value
 
+        origin = normalize_origin(required("AIOPS_CONSOLE_BRIDGE_CONSOLE_ORIGIN"))
+        if origin is None:
+            raise ValueError(
+                "AIOPS_CONSOLE_BRIDGE_CONSOLE_ORIGIN must be an http(s) origin (scheme://host[:port])"
+            )
         return cls(
             listen_host=os.environ.get("AIOPS_CONSOLE_BRIDGE_HOST", "127.0.0.1"),
             listen_port=int(os.environ.get("AIOPS_CONSOLE_BRIDGE_PORT", "10118")),
             dify_base_url=required("AIOPS_CONSOLE_BRIDGE_DIFY_URL").rstrip("/"),
             gateway_base_url=required("AIOPS_CONSOLE_BRIDGE_GATEWAY_URL").rstrip("/"),
             publish_key=required("AIOPS_GATEWAY_DIFY_PUBLISH_API_KEY"),
+            console_origin=origin,
+            workspace_id=required("AIOPS_CONSOLE_BRIDGE_WORKSPACE_ID"),
+            allowed_roles=parse_allowed_roles(os.environ.get("AIOPS_CONSOLE_BRIDGE_ALLOWED_ROLES")),
         )
 
 
-def _console_session_from_cookie(header: str | None) -> str | None:
-    """从 ``Cookie:`` 头里取出 Dify 的 ``access_token``。取不到就是 ``None``。
+class _Rejected(Exception):  # noqa: N818 - 控制流信号，不是错误
+    """请求在问任何上游之前就被拒了。"""
 
-    只做最小解析：按 ``;`` 切、按第一个 ``=`` 切。不用 ``http.cookies`` 是有意的 ——
-    那个模块会为畸形输入抛异常，而这里畸形输入的正确处置是"当作没有"（→ 拒绝），
-    不是"抛出去"。
-    """
-    if not header:
-        return None
-    for chunk in header.split(";"):
-        name, _, value = chunk.strip().partition("=")
-        if name == CONSOLE_ACCESS_TOKEN_COOKIE and value:
-            return value.strip()
-    return None
+    def __init__(self, status: int, reason: str) -> None:
+        super().__init__(reason)
+        self.status = status
+        self.reason = reason
 
 
 class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
     """一个端点：``POST /__aiops/publish``。
 
     与仓库里既有的 ``TDengineReadonlyHandler`` 同款（stdlib、有界、不做框架）。
-    这里**只有这一个**路径 —— 桥不做代理、不做转发、不留后门；它只回答"发布成不成"。
+    这里**只有这一个**路径 —— 桥不做代理、不做转发、不留后门。
     """
 
     settings: ClassVar[BridgeSettings]
 
     def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler 的协议
-        if urllib.parse.urlsplit(self.path).path != "/__aiops/publish":
-            self._json(404, {"published": False, "reason": "not found"})
-            return
-        # 长度上限：这个 body 允许为空，但**不允许很大** —— 桥不读它的内容，
-        # 读掉它只是为了不把连接留在半读状态。
-        length = int(self.headers.get("Content-Length") or 0)
-        if length > 4096:
-            self._json(413, {"published": False, "reason": "payload too large"})
-            return
-        if length:
-            self.rfile.read(length)
-        session = _console_session_from_cookie(self.headers.get("Cookie"))
-        if session is None:
-            self._json(401, {"published": False, "reason": "未登录 Dify，请重新登录后再试"})
-            return
         try:
+            if urllib.parse.urlsplit(self.path).path != _PUBLISH_ROUTE:
+                raise _Rejected(404, "not found")
+            session, referer = self._check_browser_request()
+            self._read_empty_body()
             result = publish_current_app(
                 dify_base_url=self.settings.dify_base_url,
                 gateway_base_url=self.settings.gateway_base_url,
                 publish_key=self.settings.publish_key,
                 console_session=session,
-                referer=self.headers.get("Referer"),
+                console_origin=self.settings.console_origin,
+                workspace_id=self.settings.workspace_id,
+                referer=referer,
+                allowed_roles=self.settings.allowed_roles,
                 timeout=self.settings.timeout,
             )
+        except _Rejected as exc:
+            self._json(exc.status, {"published": False, "reason": exc.reason, "action": ""})
+            return
         except ConsolePublishError as exc:
             # 桥自己那一步没做成（网络/解码）。**不透出内部细节**，只记在服务端。
             self.log_message("console publish bridge failed: %s", exc)
-            self._json(502, {"published": False, "reason": "发布链路暂时不可用，请稍后再试"})
+            self._json(502, {"published": False, "reason": "发布链路暂时不可用，请稍后再试", "action": ""})
             return
-        self._json(200 if result.published else 403, result.public())
+        self._json(result.status, result.public())
+
+    def _single_header(self, name: str) -> str | None:
+        """安全敏感头必须恰好一次；重复时拒绝，免得桥与代理对"取哪一个"理解不同。"""
+        values = self.headers.get_all(name, [])
+        if len(values) > 1:
+            raise _Rejected(400, "duplicate request header")
+        return values[0] if values else None
+
+    def _check_browser_request(self) -> tuple[ConsoleSession, str]:
+        """浏览器侧的门，**一条没过就不问任何上游**。
+
+        必须是控制台同源 POST：``Origin`` 精确匹配，``Sec-Fetch-Site`` 若出现则必须是
+        ``same-origin``（老浏览器可能不发它，所以缺失时仍靠 Origin 与 CSRF 两条门）。
+        不接受 ``same-site``：同站不等于同源，兄弟子域被攻陷不该能让这里发布。
+        """
+        origin = self._single_header("Origin")
+        if origin is None or normalize_origin(origin) != self.settings.console_origin:
+            raise _Rejected(403, "请从 Dify 控制台内点发布按钮")
+        fetch_site = self._single_header("Sec-Fetch-Site")
+        if fetch_site is not None and fetch_site != "same-origin":
+            raise _Rejected(403, "请从 Dify 控制台内点发布按钮")
+        referer = self._single_header("Referer")
+        if (
+            referer is None
+            or app_id_from_referer(referer, console_origin=self.settings.console_origin) is None
+        ):
+            raise _Rejected(403, "无法确定当前是哪个智能体（请从编排页点这个按钮）")
+        content_type = self._single_header("Content-Type")
+        if not content_type or content_type.split(";", 1)[0].strip().lower() != "application/json":
+            raise _Rejected(415, "请求必须是 application/json")
+        session = console_session_from_headers(
+            self._single_header("Cookie"), self._single_header(CONSOLE_CSRF_HEADER)
+        )
+        if session is None:
+            raise _Rejected(401, "Dify 登录凭据不完整，请重新登录后再试")
+        return session, referer
+
+    def _read_empty_body(self) -> None:
+        """只允许空 body 或 ``{}``，有界读取。畸形长度一律 4xx，绝不拿负数去 ``read``。
+
+        RFC 9110 §8.6：Content-Length 是十进制非负整数。这里不接受重复长度，也不接受
+        Transfer-Encoding（本端点没实现 chunked，不能让前置代理与桥分帧不同）。
+        """
+        if self._single_header("Transfer-Encoding") is not None:
+            raise _Rejected(400, "transfer encoding is not supported")
+        raw_length = self._single_header("Content-Length")
+        if raw_length is None:
+            length = 0
+        elif not raw_length.isascii() or not raw_length.isdecimal():
+            raise _Rejected(400, "invalid content length")
+        elif _CONTENT_LENGTH_RE.fullmatch(raw_length) is None:
+            # 全数字但很长：不交给 int（Python 自己也有位数上限），按超限处置。
+            raise _Rejected(413, "payload too large")
+        else:
+            length = int(raw_length)
+        if length > MAX_REQUEST_BODY_BYTES:
+            raise _Rejected(413, "payload too large")
+        if length == 0:
+            return
+        # ponytail: 单请求占一个线程；5 秒读超时限制慢 body，占用量大时交给前置代理限流。
+        self.connection.settimeout(5.0)
+        try:
+            raw = self.rfile.read(length)
+        except (OSError, TimeoutError):
+            raise _Rejected(400, "incomplete request body") from None
+        if len(raw) != length:
+            raise _Rejected(400, "incomplete request body")
+        try:
+            payload = json.loads(raw)
+        except (ValueError, UnicodeError):
+            raise _Rejected(400, "invalid request body") from None
+        if payload != {}:
+            raise _Rejected(400, "request body must be empty")
 
     def _json(self, status: int, payload: dict[str, Any]) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
-        # 只有同源的页面会调它；浏览器不带凭据跨源也调不动。
         self.send_header("Cache-Control", "no-store")
+        # 失败时可能还没读 body；关闭而非复用半读连接（也避免 HTTP/1.1 管线请求歧义）。
+        self.send_header("Connection", "close")
+        self.close_connection = True
         self.end_headers()
         self.wfile.write(body)
 
     def log_message(self, fmt: str, *args: Any) -> None:
-        # 默认实现往 stderr 打**整行请求**，其中包含 Cookie。桥的会话是运营的登录态，
-        # 不进日志 —— 覆盖掉，只打我们自己给的那句。
+        # 不打印请求头（Cookie/CSRF 都是凭据）。只打我们自己给的那句。
         _LOGGER.info("console-publish-bridge: " + fmt, *args)
 
 

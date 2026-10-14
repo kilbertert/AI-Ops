@@ -140,10 +140,12 @@ java/
   README.md
 ops/
   dify-console-bridge/
+    acceptance.feature
     aiops-dify-console-bridge.service
     dify-console-10008.conf
     dify-console-publish.conf
     dify-publish-button.js
+    qa-plan.md
     README.md
   environments/
     env-41.toml
