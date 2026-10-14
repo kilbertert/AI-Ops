@@ -617,7 +617,8 @@ def _declared_dataset_ids(model_config: dict[str, Any]) -> tuple[str, ...]:
     Absent means "no knowledge attached", which is a real state — both fixtures
     pulled from 36 carry exactly that. A *present but unreadable* value raises
     instead: treating it as empty would quietly lose a binding the operator
-    configured.
+    configured. (Entry shape: flat ``{enabled, id}``, measured on Dify 1.17.1 —
+    see the loop below.)
 
     Note for whoever reviews a draft: Dify's chat frontend replaces
     ``dataset_configs`` wholesale, so a change made in that form keeps only
@@ -644,12 +645,14 @@ def _declared_dataset_ids(model_config: dict[str, Any]) -> tuple[str, ...]:
     for index, entry in enumerate(entries):
         if not isinstance(entry, dict):
             raise DifyDslMalformed(f"dataset entry {index} must be an object, got {type(entry).__name__}")
-        dataset = entry.get("dataset")
-        if not isinstance(dataset, dict):
-            raise DifyDslMalformed(f"dataset entry {index} must carry a 'dataset' object")
-        if not dataset.get("enabled", False):
+        # 形状**实测**自 Dify 1.17.1 的 `GET …/export`：条目是**平铺**的
+        # `{"enabled": true, "id": "<uuid>"}`，**没有**嵌套的 `dataset` 对象。
+        # 旧实现要求嵌套 ⇒ 对每一个真的挂了知识库的 app 都报「must carry a 'dataset'
+        # object」。它能活到现在只是因为**从来没有一个 app 真的挂过**（两个 fixture 都
+        # 连 `datasets` 键都没有），所以那条分支一次都没被走到。
+        if not entry.get("enabled", False):
             continue
-        dataset_id = dataset.get("id")
+        dataset_id = entry.get("id")
         if not isinstance(dataset_id, str) or not dataset_id.strip():
             raise DifyDslMalformed(f"enabled dataset entry {index} has no id")
         ids.append(dataset_id)

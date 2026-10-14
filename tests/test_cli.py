@@ -519,8 +519,8 @@ def test_pull_dify_refuses_a_dsl_that_declares_a_dataset_when_none_was_given(
         "  dataset_configs:\n    retrieval_model: multiple\n",
         "  dataset_configs:\n    retrieval_model: multiple\n"
         "    datasets:\n      datasets:\n"
-        "      - dataset:\n          enabled: true\n"
-        "          id: df0f1d4a-3d6e-404e-9656-c88da6df3d1e\n",
+        "      - enabled: true\n"
+        "        id: df0f1d4a-3d6e-404e-9656-c88da6df3d1e\n",
     )
     _serve_dify_export(monkeypatch, dsl_text=dsl)
     result = CliRunner().invoke(app, _pull_args(tmp_path), env=_pull_env(tmp_path))
@@ -916,8 +916,8 @@ def test_sync_translates_a_dataset_declared_in_dify(tmp_path: Path, monkeypatch)
         "  dataset_configs:\n    retrieval_model: multiple\n",
         "  dataset_configs:\n    retrieval_model: multiple\n"
         "    datasets:\n      datasets:\n"
-        "      - dataset:\n          enabled: true\n"
-        "          id: df0f1d4a-3d6e-404e-9656-c88da6df3d1e\n",
+        "      - enabled: true\n"
+        "        id: df0f1d4a-3d6e-404e-9656-c88da6df3d1e\n",
     )
     _serve_dify_export(monkeypatch, dsl_text=dsl)
     # 控制台的 dataset 导出：回答句柄（这一跳由 DifyDslClient 发出）。
@@ -978,8 +978,8 @@ def test_sync_refuses_a_dataset_registered_to_another_tenant(tmp_path: Path, mon
         "  dataset_configs:\n    retrieval_model: multiple\n",
         "  dataset_configs:\n    retrieval_model: multiple\n"
         "    datasets:\n      datasets:\n"
-        "      - dataset:\n          enabled: true\n"
-        "          id: df0f1d4a-3d6e-404e-9656-c88da6df3d1e\n",
+        "      - enabled: true\n"
+        "        id: df0f1d4a-3d6e-404e-9656-c88da6df3d1e\n",
     )
     _serve_dify_export(monkeypatch, dsl_text=dsl)
     monkeypatch.setattr(

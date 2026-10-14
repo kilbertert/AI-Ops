@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
+import yaml
 
 from aiops_diagnostics.agent_lifecycle import AgentConfig, AgentManager, AgentNotFound, AgentStore
 from aiops_diagnostics.dify_dsl_pull import (
@@ -203,9 +204,7 @@ def test_the_dsls_dataset_ids_are_never_taken_as_our_knowledge_bindings() -> Non
     a caller that handed the value straight to a store would instead have published
     a knowledge base that cannot be resolved.
     """
-    dsl = _with_dataset(
-        "      - dataset:\n          enabled: true\n          id: df0f1d4a-3d6e-404e-9656-c88da6df3d1e\n"
-    )
+    dsl = _with_dataset("      - enabled: true\n        id: df0f1d4a-3d6e-404e-9656-c88da6df3d1e\n")
     # Not stated by the caller ⇒ refuse, rather than carry the Dify id forward.
     with pytest.raises(DifyDslMalformed, match="id 空间"):
         map_dsl_to_config(dsl, agent_type="customer")
@@ -213,12 +212,10 @@ def test_the_dsls_dataset_ids_are_never_taken_as_our_knowledge_bindings() -> Non
 
 def test_an_explicit_knowledge_binding_wins_and_the_dsls_dataset_does_not_leak_in() -> None:
     dsl = _with_dataset(
-        "      - dataset:\n"
-        "          enabled: true\n"
-        "          id: df0f1d4a-3d6e-404e-9656-c88da6df3d1e\n"
-        "      - dataset:\n"
-        "          enabled: false\n"
-        "          id: 4f4bc674ad8911f1ae704bfc8c544ea6\n"
+        "      - enabled: true\n"
+        "        id: df0f1d4a-3d6e-404e-9656-c88da6df3d1e\n"
+        "      - enabled: false\n"
+        "        id: 4f4bc674ad8911f1ae704bfc8c544ea6\n"
     )
     config = map_dsl_to_config(
         dsl,
@@ -234,16 +231,14 @@ def test_an_explicit_knowledge_binding_wins_and_the_dsls_dataset_does_not_leak_i
 def test_a_dsl_with_no_dataset_maps_to_no_knowledge_binding() -> None:
     """Both real 36 fixtures carry `dataset_configs` with only `retrieval_model`."""
     assert map_dsl_to_config(REAL_DSL, agent_type="customer").knowledge_base_ids == ()
-    disabled = _with_dataset(
-        "      - dataset:\n          enabled: false\n          id: df0f1d4a-3d6e-404e-9656-c88da6df3d1e\n"
-    )
+    disabled = _with_dataset("      - enabled: false\n        id: df0f1d4a-3d6e-404e-9656-c88da6df3d1e\n")
     assert map_dsl_to_config(disabled, agent_type="customer").knowledge_base_ids == ()
 
 
 def test_a_present_but_unreadable_dataset_binding_is_an_error_not_an_empty_tuple() -> None:
     """Dropping a binding the operator configured is worse than refusing to map."""
     with pytest.raises(DifyDslMalformed, match="no id"):
-        map_dsl_to_config(_with_dataset("      - dataset:\n          enabled: true\n"), agent_type="customer")
+        map_dsl_to_config(_with_dataset("      - enabled: true\n"), agent_type="customer")
     with pytest.raises(DifyDslMalformed):
         map_dsl_to_config(_with_dataset("      - enabled: true\n"), agent_type="customer")
     with pytest.raises(DifyDslMalformed):
@@ -464,7 +459,7 @@ class _Binding:
 
 
 def _with_external_dataset(dataset_id: str = "df0f1d4a-3d6e-404e-9656-c88da6df3d1e") -> str:
-    return _with_dataset(f"      - dataset:\n          enabled: true\n          id: {dataset_id}\n")
+    return _with_dataset(f"      - enabled: true\n        id: {dataset_id}\n")
 
 
 def test_a_declared_dataset_is_translated_through_the_registry() -> None:
@@ -629,3 +624,49 @@ def test_a_first_pull_still_takes_the_dsl_model(monkeypatch, tmp_path: Path) -> 
         manager, _context(), _source(), name="新的", description="", agent_type="customer"
     )
     assert draft.config.model == "deepseek-v4-flash"
+
+
+#: 2026-10-14 从**生产** Dify 1.17.1 的 `GET …/export` 逐字抄回来的片段：
+#: app 真的挂了一个知识库时的 `dataset_configs`。条目是**平铺**的。
+_PRODUCTION_DATASET_CONFIGS = """  dataset_configs:
+    datasets:
+      datasets:
+      - enabled: true
+        id: a7a8aad3-d7bf-4765-babd-f9984dcd1d7b
+    retrieval_model: multiple
+"""
+
+
+def test_the_production_export_shape_yields_the_dataset_id() -> None:
+    """**回归**：真的挂了知识库的 app，其导出形状必须被读出来。
+
+    这条钉的是一个实测缺陷。在 41 上给生产 app 挂上知识库之后，
+    `sync-from-dify` 报的是
+    `[DIFY_DSL_MALFORMED] dataset entry 0 must carry a 'dataset' object` ——
+    解析器要求条目是嵌套的 `{"dataset": {...}}`，而 Dify 1.17.1 导出的是**平铺**的
+    `{"enabled": true, "id": "…"}`。
+
+    它为什么能潜伏至今：两个 fixture 的 `dataset_configs` **连 `datasets` 键都没有**，
+    所以这条分支**一次都没被执行过** —— 所有现有用例走的都是"什么都没声明"那条早返回。
+    """
+    from aiops_diagnostics.dify_dsl_pull import _declared_dataset_ids
+
+    model_config = yaml.safe_load(_PRODUCTION_DATASET_CONFIGS)
+    assert _declared_dataset_ids(model_config) == ("a7a8aad3-d7bf-4765-babd-f9984dcd1d7b",)
+
+
+def test_a_production_shaped_dataset_is_routed_through_the_resolver() -> None:
+    """同一个形状在**映射**层面也要成立：声明了就必须翻译得出，翻译不出就拒。"""
+    dsl = REAL_DSL.replace("  dataset_configs:\n    retrieval_model: multiple\n", _PRODUCTION_DATASET_CONFIGS)
+    with pytest.raises(DifyDslMalformed, match="id 空间"):
+        map_dsl_to_config(dsl, agent_type="customer")
+
+    seen: list[tuple[str, ...]] = []
+
+    def resolver(ids: tuple[str, ...]) -> tuple[str, ...]:
+        seen.append(ids)
+        return ("8701c742b28111f18637d95f7710e3a3",)
+
+    config = map_dsl_to_config(dsl, agent_type="customer", dataset_resolver=resolver)
+    assert config.knowledge_base_ids == ("8701c742b28111f18637d95f7710e3a3",)
+    assert seen == [("a7a8aad3-d7bf-4765-babd-f9984dcd1d7b",)]
