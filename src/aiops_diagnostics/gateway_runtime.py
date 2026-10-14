@@ -231,6 +231,8 @@ class GatewayRuntime:
         self._trial_jobs: set[str] = set()
         self._trial_contexts: dict[str, tuple[Any, Any, str, str]] = {}
         self._trial_max_concurrent = 1
+        #: 运营商站点范围解析器（#782）：由装配层注入；None ⇒ 空范围（fail-closed）。
+        self._trial_operator_scope: Any = None
 
         self.dify_app_registry = DifyAppRegistry(store.path)
         # Redacted run metrics (T7/#174): same DB file, lazy-built. Writes are
@@ -1055,6 +1057,7 @@ class GatewayRuntime:
         order_no: str,
         draft: Any,
         language: str,
+        trial_initiator: Any = None,
     ) -> dict[str, Any] | None:
         """提交一次试运行，或返回 ``None`` 表示并发超限（路由转 429）。
 
@@ -1062,7 +1065,11 @@ class GatewayRuntime:
         ``initiator`` 只进审计，**不是**授权依据（授权在这一层之外：钥匙决定能不能调，
         配置的租户决定能看什么）。
         """
-        run_context = self.trial_run_context()
+        run_context = (
+            self.trial_context_for(trial_initiator)
+            if trial_initiator is not None
+            else self.trial_run_context()
+        )
         with self._trial_lock:
             if len(self._trial_jobs) >= self._trial_max_concurrent:
                 # 并发闸：试运行打的是**真数据源**与真模型，本票刻意串行 ——
@@ -1107,6 +1114,35 @@ class GatewayRuntime:
         "越权只在问了之后才发生"的形状。
         """
         return _tenant_wide_context(self.gateway_settings.dify_trial_debug_tenant)
+
+    def trial_context_for(self, initiator: Any) -> ScopeContext:
+        """发起人的**按人范围**（#782）：公司身份 → 运营商站点范围。
+
+        与 ``trial_run_context`` 的区别只在数据范围来自谁：那个是固定的调试租户，
+        这个是发起人本人在管家的可见范围。**规则只有一份** —— 站点解析复用网关已有
+        的 ``UpmsOperatorSiteScope``（UPMS ``/shopuser/getShops`` + 既有隧道映射），
+        ``build_trial_scope`` 把它折成 ``ScopeContext``。
+
+        这条**同一个** ``ScopeContext`` 既用于订单授权（路由问它），也用于执行
+        （worker 拿它跑），所以"问的"与"跑的"不可能漂。
+        """
+        from aiops_diagnostics.dify_trial import build_trial_scope
+
+        return build_trial_scope(initiator, operator_scope=self._trial_operator_scope)
+
+    def set_trial_operator_scope(self, scope: Any) -> None:
+        """注入运营商站点范围解析器（#782），由 API 装配层负责构造。
+
+        **为什么是注入而不是在这里 import**：``gateway_api`` 已经 import 本模块，
+        反向 import 会形成 ``gateway_api -> gateway_runtime -> gateway_api`` 的环
+        （README 的分层说明会被 ``test_package_import_graph_stays_acyclic`` 判为失效）。
+        构造它需要 ``Settings`` 与内部凭据，那正是装配层（``create_gateway_app``）
+        已经持有的东西，所以放在那边构造、这里只接。
+
+        未注入 ⇒ 运营商范围解析不出 ⇒ 试运行落到**空站点集合**（fail-closed），
+        绝不回落成租户级。
+        """
+        self._trial_operator_scope = scope
 
     def get_trial(self, context: ScopeContext, trial_id: str) -> dict[str, Any] | None:
         return self.store.get_standard_diagnosis(trial_id, context.scope_fingerprint)

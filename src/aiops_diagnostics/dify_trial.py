@@ -50,6 +50,7 @@ from aiops_diagnostics.journal import EvidenceJournal
 from aiops_diagnostics.parsing import parse_request
 from aiops_diagnostics.platform_paths import reference_root
 from aiops_diagnostics.query_scope import resolve_query_scope
+from aiops_diagnostics.scope_context import ScopeContext, SubjectRecord
 
 _LOGGER = logging.getLogger("aiops.dify_trial")
 
@@ -118,6 +119,86 @@ class TrialDraft:
         digest.update(b"\x00")
         digest.update(",".join(self.allowed_tools).encode("utf-8"))
         return digest.hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class TrialInitiator:
+    """发起试运行的**公司用户**（#782），由桥从登录代理的映射表转达。
+
+    四个字段都来自**桥**（服务端到服务端），浏览器提交的同名字段一律被忽略 ——
+    试运行的范围只能由身份决定，不能由请求决定。缺任一字段 ⇒ 桥没给身份 ⇒ 退回
+    #781 的固定调试租户行为（仍是 fail-closed：只见那一个租户）。
+    """
+
+    b_user_id: str
+    tenant_id: str
+    user_type: str
+    username: str = ""
+
+    @classmethod
+    def from_headers(
+        cls,
+        b_user_id: str | None,
+        tenant_id: str | None,
+        user_type: str | None,
+        username: str | None = None,
+    ) -> TrialInitiator | None:
+        b, t = (b_user_id or "").strip(), (tenant_id or "").strip()
+        if not b or not t:
+            return None
+        return cls(
+            b_user_id=b[:128],
+            tenant_id=t[:128],
+            user_type=(user_type or "").strip()[:16],
+            username=(username or "").strip()[:128],
+        )
+
+
+def build_trial_scope(initiator: TrialInitiator, *, operator_scope: Any) -> ScopeContext:
+    """把发起人的公司身份变成试运行的可见范围（#782），规则与**会话路径同一份**。
+
+    镜像 ``third_session_auth`` 的 ``_data_scope``：顶层账号（``type ∈ {-1,1}``）看整个
+    租户；其余（代理商）走 ``OperatorSiteScope`` 的「店铺 → 站点」解析；解析失败一律
+    fail-closed 成**空站点集合**（拒绝全部订单），不回落成租户级放行、也不套用 ``self``
+    —— 后者会把"查不到范围"伪装成"只能看本人的单"。
+
+    ``operator_scope`` 就是网关**已有**的那条链（``UpmsOperatorSiteScope``：UPMS
+    ``/shopuser/getShops`` + 既有隧道上的站点归属映射），不新开连接路径。
+    """
+    from aiops_diagnostics.scope_context import (
+        SCOPE_TYPE_ALL,
+        SCOPE_TYPE_ORGAN,
+        SCOPE_TYPE_SELF,
+        DataScope,
+        is_tenant_level_account,
+    )
+
+    if is_tenant_level_account(initiator.user_type):
+        data_scope = DataScope(type=SCOPE_TYPE_ALL)
+    elif operator_scope is None:
+        # 没配 UPMS/凭据 ⇒ 解析不出运营商范围。**不放宽**：落到"什么都看不到"。
+        data_scope = DataScope(type=SCOPE_TYPE_ORGAN, site_ids=())
+    else:
+        try:
+            scope = operator_scope.site_scope_by_b_user_id(initiator.b_user_id, initiator.tenant_id)
+            data_scope = DataScope(type=SCOPE_TYPE_ORGAN, site_ids=scope.site_ids)
+        except Exception:  # noqa: BLE001 - 解析失败一律 fail-closed（同会话路径）
+            data_scope = DataScope(type=SCOPE_TYPE_ORGAN, site_ids=())
+    del SCOPE_TYPE_SELF  # 只用作文档：本路径**不**用 self 兜底
+    subject = SubjectRecord(
+        b_user_id=initiator.b_user_id,
+        tenant_id=initiator.tenant_id,
+        user_type=initiator.user_type,
+    )
+    return ScopeContext.build(
+        caller=subject,
+        subject=subject,
+        delegated=False,
+        effective_tenant_id=initiator.tenant_id,
+        data_scope=data_scope,
+        roles=frozenset(),
+        permissions=frozenset(),
+    )
 
 
 @dataclass(frozen=True, slots=True)

@@ -59,7 +59,12 @@ class _Runtime:
             permissions=frozenset({"aiops:agents:manage"}),
         )
 
-    def start_trial(self, initiator: str, order_no: str, draft: Any, language: str):
+    def trial_context_for(self, initiator: Any) -> ScopeContext:
+        # #782 的桩：把发起人当顶层账号（整租户），与 trial_run_context 同范围 ——
+        # 本文件只测接缝，范围规则由 tests/test_dify_trial_scope.py 覆盖。
+        return self.trial_run_context()
+
+    def start_trial(self, initiator: str, order_no: str, draft: Any, language: str, trial_initiator=None):
         self.started.append(
             {
                 "initiator": initiator,

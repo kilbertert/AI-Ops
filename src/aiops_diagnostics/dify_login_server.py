@@ -302,6 +302,9 @@ class LoginProxyHandler(BaseHTTPRequestHandler):
                 "company_user_id": str(row.get("company_user_id") or ""),
                 "company_username": str(row.get("company_username") or ""),
                 "dify_account_id": account_id,
+                # #782：试运行要按发起人的公司身份算范围，所以把这两个一起给桥。
+                "company_tenant_id": str(row.get("tenant_id") or ""),
+                "company_user_type": str(row.get("user_type") or ""),
             },
         )
 
