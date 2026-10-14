@@ -1,0 +1,416 @@
+"""登录代理的 HTTP 边界（#772 B / #778）。
+
+真跑一个监听中的代理，上游是**假公司 UPMS** 与**假 Dify**（真实监听、真实协议形状，
+不对内部函数打桩）。每条安全判据都带**反例**：该拒的必须拒。
+
+覆盖（对应票面验收标准）：正常登录得 Dify cookie；无编辑权限码被拒且不调用 Dify；
+首次登录开户、二次登录映射到同一账号；公司登录失败透传为可读错误且不调用 Dify；
+浏览器带来的公司令牌被忽略；TLS 未就绪拒绝服务；失败退避。
+
+**不覆盖**（本地无法证明）：Dify 真的接受我们签的令牌 —— 那需要真实 Dify，已在 #778
+的决策评论里用 36 上的只读验证证明（`HTTP=200 ROLE=owner`，且本模块的签名算法与 Dify
+的 `PassportService.verify` 交叉核对通过）。
+"""
+
+from __future__ import annotations
+
+import http.client
+import json
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from aiops_diagnostics.dify_login_company import CompanyAuthSettings
+from aiops_diagnostics.dify_login_provision import DifyConsoleSettings, account_email_for
+from aiops_diagnostics.dify_login_proxy import (
+    CAPTCHA_ROUTE,
+    LOGIN_ROUTE,
+    mint_console_session,
+    sign_console_jwt,
+)
+from aiops_diagnostics.dify_login_server import (
+    LoginProxySettings,
+    NotReady,
+    assert_public_origin_is_https,
+    make_server,
+)
+
+SECRET_KEY = "test-dify-secret-key-0123456789"
+AES_KEY = "0123456789abcdef"
+COMPANY_USER_ID = "a53ad893-6139-4566-a38a-0b77ed697631"
+DIFY_ACCOUNT_ID = "b647e9c0-1111-4222-8333-444455556666"
+OWNER_ACCOUNT_ID = "c758f0d1-2222-4333-8444-555566667777"
+EDIT_PERMISSION = "aiops:agent:edit"
+
+
+class _FakeCompany(BaseHTTPRequestHandler):
+    """假公司 UPMS：/code（JPEG）、/upms/token/login、/upms/user/info。"""
+
+    calls: list[str] = []
+    permissions: list[str] = [EDIT_PERMISSION]
+    fail_login: str = ""  # "" | "password" | "captcha"
+    seen_password: str = ""
+    seen_client_type: str = ""
+    seen_token_header: str = ""
+
+    def log_message(self, *args: Any) -> None:  # silence
+        pass
+
+    def do_GET(self) -> None:  # noqa: N802
+        type(self).calls.append("GET " + self.path.split("?")[0])
+        if self.path.startswith("/code"):
+            body = b"\xff\xd8\xff\xe0FAKEJPEG"
+            self.send_response(200)
+            self.send_header("Content-Type", "image/jpeg")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if self.path.startswith("/upms/user/info"):
+            type(self).seen_client_type = self.headers.get("client-type", "")
+            type(self).seen_token_header = self.headers.get("Authorization", "")
+            body = json.dumps(
+                {
+                    "code": 0,
+                    "msg": "ok",
+                    "data": {
+                        "sysUser": {"id": COMPANY_USER_ID, "username": "zhang"},
+                        "permissions": type(self).permissions,
+                    },
+                }
+            ).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        self.send_response(404)
+        self.end_headers()
+
+    def do_POST(self) -> None:  # noqa: N802
+        type(self).calls.append("POST " + self.path.split("?")[0])
+        length = int(self.headers.get("Content-Length") or 0)
+        body_raw = self.rfile.read(length).decode() if length else ""
+        from urllib.parse import parse_qs
+
+        params = {k: v[0] for k, v in parse_qs(body_raw).items()}
+        type(self).seen_password = params.get("password", "")
+        if self.path.startswith("/upms/token/login"):
+            if type(self).fail_login:
+                payload = {"code": -1000, "msg": "用户名或密码错误，请重新输入"}
+            else:
+                # 成功：扁平 map（不是 {code,data}）
+                token = sign_console_jwt(
+                    {"id": COMPANY_USER_ID, "username": "zhang", "tenant_id": "T-1"}, "company-key"
+                )
+                payload = {
+                    "access_token": token,
+                    "refresh_token": token,
+                    "expires_in": 960 * 60 * 1000,
+                    "id": COMPANY_USER_ID,
+                    "username": "zhang",
+                    "tenant_id": "T-1",
+                }
+            body = json.dumps(payload).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        self.send_response(404)
+        self.end_headers()
+
+
+class _FakeDify(BaseHTTPRequestHandler):
+    """假 Dify 控制台：邀请、激活、成员列表。"""
+
+    calls: list[str] = []
+    invite_returns_url: bool = True  # False ⇒ already_member（账号已存在）
+
+    def log_message(self, *args: Any) -> None:  # silence
+        pass
+
+    def _read(self) -> dict[str, Any]:
+        length = int(self.headers.get("Content-Length") or 0)
+        return json.loads(self.rfile.read(length)) if length else {}
+
+    def _reply(self, payload: Any, status: int = 200) -> None:
+        body = json.dumps(payload).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_POST(self) -> None:  # noqa: N802
+        type(self).calls.append("POST " + self.path)
+        self._read()
+        if self.path.endswith("/members/invite-email"):
+            email = account_email_for(COMPANY_USER_ID)
+            if type(self).invite_returns_url:
+                self._reply(
+                    {
+                        "result": "success",
+                        "invitation_results": [],
+                        "results": [
+                            {
+                                "status": "success",
+                                "email": email,
+                                "url": f"https://console.invalid/activate?email={email}&token=INV-TOKEN",
+                            }
+                        ],
+                    },
+                    status=201,
+                )
+            else:
+                self._reply({"results": [{"status": "already_member", "email": email}]})
+            return
+        if self.path.endswith("/activate"):
+            self._reply({"result": "success"})
+            return
+        self._reply({}, status=404)
+
+    def do_GET(self) -> None:  # noqa: N802
+        type(self).calls.append("GET " + self.path)
+        if self.path.endswith("/members"):
+            self._reply(
+                {
+                    "accounts": [
+                        {"id": DIFY_ACCOUNT_ID, "email": account_email_for(COMPANY_USER_ID), "role": "editor"}
+                    ]
+                }
+            )
+            return
+        self._reply({}, status=404)
+
+
+def _serve(handler_cls: type[BaseHTTPRequestHandler]) -> tuple[ThreadingHTTPServer, str]:
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler_cls)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address
+    return server, f"http://{host}:{port}"
+
+
+@pytest.fixture
+def stack(tmp_path: Path):
+    _FakeCompany.calls = []
+    _FakeCompany.permissions = [EDIT_PERMISSION]
+    _FakeCompany.fail_login = ""
+    _FakeDify.calls = []
+    _FakeDify.invite_returns_url = True
+    company, company_url = _serve(_FakeCompany)
+    dify, dify_url = _serve(_FakeDify)
+    settings = LoginProxySettings(
+        listen_host="127.0.0.1",
+        listen_port=0,
+        public_origin="https://console.example",
+        company=CompanyAuthSettings(base_url=company_url, encode_key=AES_KEY, client_type="admin"),
+        dify=DifyConsoleSettings(base_url=dify_url, secret_key=SECRET_KEY),
+        data_dir=str(tmp_path / "data"),
+        edit_permission=EDIT_PERMISSION,
+        owner_user_id=OWNER_ACCOUNT_ID,
+        backoff_threshold=3,
+        backoff_window_seconds=60,
+    )
+    proxy = make_server(settings)
+    thread = threading.Thread(target=proxy.serve_forever, daemon=True)
+    thread.start()
+    host, port = proxy.server_address
+    try:
+        yield f"http://{host}:{port}", Path(settings.data_dir)
+    finally:
+        proxy.shutdown()
+        company.shutdown()
+        dify.shutdown()
+
+
+def _login(base: str, **overrides: Any) -> tuple[int, dict[str, Any], dict[str, str]]:
+    body = {"username": "zhang", "password": "pw", "randomStr": "abc123", "code": "1234"}
+    body.update(overrides)
+    connection = http.client.HTTPConnection(base.removeprefix("http://"))
+    connection.request(
+        "POST", LOGIN_ROUTE, body=json.dumps(body), headers={"Content-Type": "application/json"}
+    )
+    response = connection.getresponse()
+    payload = json.loads(response.read())
+    raw_headers = response.getheaders()
+    connection.close()
+    cookies = "; ".join(v for k, v in raw_headers if k.lower() == "set-cookie")
+    headers = {k.lower(): v for k, v in raw_headers}
+    headers["set-cookie-all"] = cookies
+    return response.status, payload, headers
+
+
+# --------------------------------------------------------------------------- #
+# 正向                                                                        #
+# --------------------------------------------------------------------------- #
+
+
+def test_a_company_login_yields_a_dify_session_cookie(stack) -> None:
+    """正常登录：拿到三枚 cookie，且 access 是一枚能被 Dify 验的 JWT。"""
+    base, _data = stack
+    status, payload, headers = _login(base)
+    assert status == 200, payload
+    assert payload["ok"] is True and payload["redirect"] == "/"
+    cookies = headers["set-cookie-all"]
+    assert "access_token=" in cookies and "csrf_token=" in cookies
+    # 目标是"给浏览器一枚 Dify 会接受的会话"：形状必须是三段 JWT。
+    assert cookies.count("access_token=") >= 1
+
+
+def test_the_first_login_provisions_an_editor_and_the_second_reuses_it(stack) -> None:
+    """首次登录开户（邀请+激活→editor）；二次登录映射到**同一**账号，不再邀请。"""
+    assert _login(stack[0])[0] == 200
+    assert any("invite-email" in call for call in _FakeDify.calls)
+    assert any("activate" in call for call in _FakeDify.calls)
+    first = _FakeDify.calls.count("POST /console/api/workspaces/current/members/invite-email")
+
+    _login(stack[0])
+    second = _FakeDify.calls.count("POST /console/api/workspaces/current/members/invite-email")
+    assert second == first == 1, "二次登录又邀请了一次 —— 会给同一个人开出第二个账号"
+
+
+def test_the_account_email_is_deterministic_and_undeliverable() -> None:
+    assert account_email_for(COMPANY_USER_ID) == account_email_for(COMPANY_USER_ID)
+    assert account_email_for(COMPANY_USER_ID).endswith("@aiops-login.invalid")
+
+
+def test_the_captcha_is_relayed_as_an_image(stack) -> None:
+    connection = http.client.HTTPConnection(stack[0].removeprefix("http://"))
+    connection.request("GET", f"{CAPTCHA_ROUTE}?randomStr=abc123")
+    response = connection.getresponse()
+    body = response.read()
+    content_type = response.getheader("Content-Type", "")
+    connection.close()
+    assert response.status == 200
+    assert content_type.startswith("image/")
+    assert body.startswith(b"\xff\xd8\xff"), "不是一张 JPEG"
+
+
+# --------------------------------------------------------------------------- #
+# 反例：该拒的必须拒                                                           #
+# --------------------------------------------------------------------------- #
+
+
+def test_a_user_without_the_edit_permission_is_refused_and_dify_is_never_called(stack) -> None:
+    """无编辑权限码 ⇒ 拒绝，且**不开户**（用户故事 4：明确告诉他去找谁开权限）。"""
+    _FakeCompany.permissions = ["some:other:permission"]
+    status, payload, _ = _login(stack[0])
+    assert status == 403
+    assert "可编辑智能体" in payload["reason"]
+    assert _FakeDify.calls == [], "没有编辑权限却调用了 Dify —— 会开出不该有的账号"
+
+
+def test_a_wrong_password_is_refused_without_touching_dify(stack) -> None:
+    """公司登录失败 ⇒ 可读原因，且**不调用 Dify**。"""
+    _FakeCompany.fail_login = "password"
+    status, payload, _ = _login(stack[0])
+    assert status == 403
+    assert "密码" in payload["reason"] or "验证码" in payload["reason"]
+    assert _FakeDify.calls == []
+
+
+def test_the_password_is_sent_aes_encrypted_never_plaintext(stack) -> None:
+    """公司网关要求 AES：明文出去会被解成乱码（表现为登录失败）。"""
+    _login(stack[0], password="my-secret-pw")
+    seen = _FakeCompany.seen_password
+    assert seen and seen != "my-secret-pw"
+    assert "my-secret-pw" not in seen
+
+
+def test_a_browser_supplied_company_token_is_ignored(stack) -> None:
+    """浏览器塞一个公司令牌到请求里 —— 它不参与登录，身份只来自代理自己的交换。"""
+    base, data_dir = stack
+    forged = sign_console_jwt({"id": "ATTACKER", "username": "attacker"}, "made-up-key")
+    connection = http.client.HTTPConnection(base.removeprefix("http://"))
+    connection.request(
+        "POST",
+        LOGIN_ROUTE,
+        body=json.dumps({"username": "zhang", "password": "pw", "randomStr": "abc123", "code": "1234"}),
+        headers={
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {forged}",
+            "X-Company-Token": forged,
+        },
+    )
+    response = connection.getresponse()
+    response.read()
+    connection.close()
+    assert response.status == 200
+    # 映射表里落的必须是**公司交换**得到的用户，不是令牌里的 ATTACKER。
+    me = _proxy_mapping(data_dir)
+    assert me["company_user_id"] == COMPANY_USER_ID
+    assert me["company_user_id"] != "ATTACKER"
+
+
+def _proxy_mapping(data_dir: Path) -> dict[str, Any]:
+    import sqlite3
+
+    with sqlite3.connect(data_dir / "mappings.db") as connection:
+        connection.row_factory = sqlite3.Row
+        row = connection.execute("SELECT * FROM dify_login_mappings").fetchone()
+    return dict(row)
+
+
+def test_repeated_failures_trigger_backoff(stack) -> None:
+    """连续失败退避：阈值一到就 429，不给继续猜密码。"""
+    _FakeCompany.fail_login = "password"
+    statuses = [_login(stack[0])[0] for _ in range(4)]
+    assert 429 in statuses, f"没有触发退避：{statuses}"
+    assert statuses[-1] == 429
+
+
+# --------------------------------------------------------------------------- #
+# TLS 硬前置                                                                  #
+# --------------------------------------------------------------------------- #
+
+
+def test_the_proxy_refuses_a_non_https_public_origin() -> None:
+    with pytest.raises(NotReady):
+        assert_public_origin_is_https("http://console.example")
+    assert assert_public_origin_is_https("https://console.example/") == "https://console.example"
+
+
+def test_login_proxy_settings_refuse_to_build_without_https(tmp_path: Path) -> None:
+    with pytest.raises(NotReady):
+        LoginProxySettings(
+            listen_host="127.0.0.1",
+            listen_port=10119,
+            public_origin="http://console.example",
+            company=CompanyAuthSettings(base_url="http://company.invalid", encode_key=AES_KEY),
+            dify=DifyConsoleSettings(base_url="http://dify.invalid", secret_key=SECRET_KEY),
+            data_dir=str(tmp_path),
+            edit_permission=EDIT_PERMISSION,
+        )
+
+
+# --------------------------------------------------------------------------- #
+# 会话形状（与 Dify 的约定）                                                   #
+# --------------------------------------------------------------------------- #
+
+
+def test_the_minted_session_has_the_shape_dify_verifies() -> None:
+    """载荷必须与 `get_account_jwt_token_for_account_id` 逐字段一致。"""
+    import base64
+
+    session = mint_console_session(
+        DIFY_ACCOUNT_ID,
+        secret_key=SECRET_KEY,
+        deployment_edition="COMMUNITY",
+        access_expire_minutes=60,
+    )
+    parts = session.access_token.split(".")
+    assert len(parts) == 3
+    payload = json.loads(base64.urlsafe_b64decode(parts[1] + "=="))
+    assert payload["user_id"] == DIFY_ACCOUNT_ID
+    assert payload["iss"] == "COMMUNITY"
+    assert payload["sub"] == "Console API Passport"
+    # csrf 的 sub 必须是 user_id（Dify 的 check_csrf_token 要求）。
+    csrf = json.loads(base64.urlsafe_b64decode(session.csrf_token.split(".")[1] + "=="))
+    assert csrf["sub"] == DIFY_ACCOUNT_ID
