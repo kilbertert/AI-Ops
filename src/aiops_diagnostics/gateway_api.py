@@ -129,7 +129,12 @@ from aiops_diagnostics.query_scope import (
     UpmsShopDirectory,
 )
 from aiops_diagnostics.routing import MISSING_ORDER_NO, money_question_context
-from aiops_diagnostics.scope_context import SCOPE_TYPE_ORGAN, ScopeContext, ScopeError
+from aiops_diagnostics.scope_context import (
+    SCOPE_TYPE_ORGAN,
+    ScopeContext,
+    ScopeError,
+    is_operator_entry,
+)
 from aiops_diagnostics.shortcut_lifecycle import (
     BANNER_KIND,
     BUTTON_KIND,
@@ -255,6 +260,19 @@ class OperationsAnalysisRequest(BaseModel):
     site_ids: list[str] | None = Field(default=None, max_length=1000)
     window_start: datetime
     window_end: datetime
+
+
+class OperatorPublishRequest(BaseModel):
+    """运营自助发布（#577）：只有 ``app_id``。
+
+    与 ``DifyPublishRequest`` 同形状是刻意的 —— 两条路走**同一个发布实现**，
+    请求体都窄到只能点名一个**已声明**的绑定。租户与入口由**调用者身份**决定，
+    调用方无法用请求体改写它们。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    app_id: str = Field(min_length=1, max_length=64)
 
 
 class DifyPublishRequest(BaseModel):
@@ -464,6 +482,69 @@ def request_language(
     only — never part of auth, routing, or the incident manifest.
     """
     return resolve_language(accept_language)
+
+
+def _publish_bound_app(context: Any, app_id: str) -> dict[str, Any]:
+    """把一个**已绑定**的 Dify app 的当前内容冻结成新的已发布版本。
+
+    **两条路共用的唯一实现**（共享密钥路由与 operator 会话身份路由）：一处实现，
+    两条路就不可能漂。谁能调到这一层由各自的**门**决定 —— 这里只做「点名一个
+    已声明的绑定，把它现在的内容过一遍发布门」。
+
+    爆炸半径是设计出来的：请求只带 ``app_id``，租户/agent 名/类型/契约/知识库
+    全部来自 ``dify_app_registry``。最坏情况因此是**重新冻结一个已声明绑定的当前
+    内容**；重复发布未变内容按构造是 no-op（先与已发布快照逐字比较）。
+    """
+    binding = next(
+        (item for item in context.runtime.dify_app_registry.all() if item.app_id == app_id),
+        None,
+    )
+    if binding is None:
+        # 与未登记的知识句柄同形：404 说"不在这里"，不透露有哪些绑定。
+        raise StandardAPIError(
+            status.HTTP_404_NOT_FOUND, "DIFY_APP_NOT_BOUND", "app is not a bound agent source"
+        )
+    from aiops_diagnostics.agent_manifest import admin_context
+    from aiops_diagnostics.dify_dsl_pull import DifyDslError, DifyDslSource, sync_binding_from_dify
+
+    console = context.settings
+    if not console.dify_console_base_url or not console.dify_console_api_key:
+        raise StandardAPIError(
+            status.HTTP_502_BAD_GATEWAY,
+            "DIFY_CONSOLE_UNAVAILABLE",
+            "the Dify console credential is not configured on this server",
+        )
+    source = DifyDslSource(
+        base_url=console.dify_console_base_url,
+        app_id=binding.app_id,
+        api_key=console.dify_console_api_key,
+        workspace_id=console.dify_console_workspace_id,
+    )
+    try:
+        outcome = sync_binding_from_dify(
+            context.agent_manager,
+            admin_context(binding.tenant_id),
+            binding,
+            source,
+            knowledge_registry=parse_dify_knowledge_bindings(context.settings.dify_knowledge_bindings),
+            tool_registry=parse_dify_tool_bindings(context.settings.dify_tool_bindings),
+        )
+    except DifyDslError as exc:
+        # Dify 自己拒绝或不可达：带它自己的码转达，调用方要能区分「凭据被拒」与「服务挂了」。
+        raise StandardAPIError(status.HTTP_502_BAD_GATEWAY, exc.code, "dify pull failed") from exc
+    except Exception as exc:  # noqa: BLE001 - 发布门自己的规则，原样转达
+        raise StandardAPIError(
+            status.HTTP_409_CONFLICT, "DIFY_PUBLISH_REJECTED", f"publish rejected: {type(exc).__name__}"
+        ) from exc
+    return {
+        "app_id": outcome.app_id,
+        "tenant_id": outcome.tenant_id,
+        "business_entry": outcome.business_entry,
+        "agent_name": outcome.agent_name,
+        "action": outcome.action,
+        "version_no": outcome.version_no,
+        "note": outcome.note,
+    }
 
 
 def create_gateway_app(
@@ -930,59 +1011,57 @@ def create_gateway_app(
         would publish half-typed prompts. A human pressing this is the only
         honest signal that they are done.
         """
-        binding = next(
-            (item for item in context.runtime.dify_app_registry.all() if item.app_id == payload.app_id),
-            None,
+        return _publish_bound_app(context, payload.app_id)
+
+    @app.post("/v1/operator/publish")
+    def operator_publish(
+        payload: OperatorPublishRequest,
+        identity: tuple[ScopeContext, Any] = Depends(operator_diagnosis_identity),  # noqa: B008
+        business_entry: Annotated[str | None, Header(alias="X-Business-Entry")] = None,
+    ) -> dict[str, Any]:
+        """运营**自己**触发的那一步（#577 的最后一跳；ADR-0018 的第二种门）。
+
+        与 ``POST /v1/dify/publish`` 是**同一个实现**（``_publish_bound_app``）；
+        区别只在**谁被允许调**：那条凭一把独立的共享密钥，这条凭运营自己的会话。
+
+        **三个条件全部满足才放行**：
+
+        1. 调用者解析得出身份（会话有效）；
+        2. ``X-Business-Entry`` 必须是 ``operator`` —— 客户端会话不该能触发发布；
+        3. 该 ``(租户, 入口)`` 在注册表里**确实绑了** agent。
+
+        第 3 条不是多余的：没有它，任何运营会话都能拿任意 ``app_id`` 去试，而
+        ``_publish_bound_app`` 的 404 就成了一次**绑定枚举**。加它之后，一个入口
+        只能发布**它自己被点名的那一个** app。
+
+        为什么不像知识检索那条要求 source key：那条是**服务器**在调（Dify），
+        这条是**人**在调（运营在网页上点），运营没有 source key。
+        """
+        caller, _decision = identity
+        if not is_operator_entry(business_entry):
+            raise StandardAPIError(
+                status.HTTP_403_FORBIDDEN,
+                "OPERATOR_ENTRY_REQUIRED",
+                "publishing requires the operator entry",
+            )
+        registered_name, configured = context.runtime._registered_agent(
+            caller.effective_tenant_id, "operator"
         )
-        if binding is None:
-            # Same shape as an unregistered knowledge_id: 404 says "not here"
-            # and discloses nothing about which apps exist.
+        if not configured or registered_name is None:
+            raise StandardAPIError(
+                status.HTTP_404_NOT_FOUND,
+                "OPERATOR_NOT_BOUND",
+                "this tenant has no bound operator agent",
+            )
+        # 归属用注册表**自己的**按 (租户, 入口) 查（`lookup`），不在这里写租户比较 ——
+        # 本仓的租户判据只有 `order_visibility` 一处实现，这是 `test_order_visibility`
+        # 拦住的那类漂移。`lookup` 直接由主键给出这一对绑定的是谁，正好是要问的问题。
+        binding = context.runtime.dify_app_registry.lookup(caller.effective_tenant_id, "operator")
+        if binding is None or binding.app_id != payload.app_id:
             raise StandardAPIError(
                 status.HTTP_404_NOT_FOUND, "DIFY_APP_NOT_BOUND", "app is not a bound agent source"
             )
-        from aiops_diagnostics.agent_manifest import admin_context
-        from aiops_diagnostics.dify_dsl_pull import DifyDslError, DifyDslSource, sync_binding_from_dify
-
-        console = context.settings
-        if not console.dify_console_base_url or not console.dify_console_api_key:
-            raise StandardAPIError(
-                status.HTTP_502_BAD_GATEWAY,
-                "DIFY_CONSOLE_UNAVAILABLE",
-                "the Dify console credential is not configured on this server",
-            )
-        source = DifyDslSource(
-            base_url=console.dify_console_base_url,
-            app_id=binding.app_id,
-            api_key=console.dify_console_api_key,
-            workspace_id=console.dify_console_workspace_id,
-        )
-        try:
-            outcome = sync_binding_from_dify(
-                context.agent_manager,
-                admin_context(binding.tenant_id),
-                binding,
-                source,
-                knowledge_registry=parse_dify_knowledge_bindings(context.settings.dify_knowledge_bindings),
-                tool_registry=parse_dify_tool_bindings(context.settings.dify_tool_bindings),
-            )
-        except DifyDslError as exc:
-            # Dify itself refused or was unreachable. Transcribed with its own
-            # code — the caller needs to tell "credential rejected" from "down"
-            # (``exc.code`` is the subclass's own, e.g. ``DIFY_DSL_AUTH_REJECTED``).
-            raise StandardAPIError(status.HTTP_502_BAD_GATEWAY, exc.code, "dify pull failed") from exc
-        except Exception as exc:  # noqa: BLE001 - the publish gate's own rules, transcribed
-            raise StandardAPIError(
-                status.HTTP_409_CONFLICT, "DIFY_PUBLISH_REJECTED", f"publish rejected: {type(exc).__name__}"
-            ) from exc
-        return {
-            "app_id": outcome.app_id,
-            "tenant_id": outcome.tenant_id,
-            "business_entry": outcome.business_entry,
-            "agent_name": outcome.agent_name,
-            "action": outcome.action,
-            "version_no": outcome.version_no,
-            "note": outcome.note,
-        }
+        return _publish_bound_app(context, payload.app_id)
 
     @app.get("/health")
     def health() -> dict[str, Any]:
