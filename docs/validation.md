@@ -1,3 +1,112 @@
+## 2026-10-14 · 知识库与工具：41 全链路打通并验收（含一个实测缺陷、一次自我更正）
+
+**分支** `docs/dify-kb-tools-e2e-acceptance`，基线 `origin/main`（`f1b6159`）。
+**已部署**：41 `/health` = `0.1.0+f1b6159bb54d`。
+**生产改动**：Dify 侧 4 次写入 + 网关配置 2 次改动 + 8 次发布（v7–v14），**已还原**，逐步如下。
+
+上一轮我报「四项里只有开场白真做完」。本轮把**知识库**与**工具**都打通了，
+并**更正**上一轮关于知识库的一个错误结论。
+
+### 一、更正：生产租户的知识库**早就登记了**
+
+上一轮我说「生产租户在 Dify 里无库可挂，登记表里没有 1942 的句柄」。**那个结论是错的**，
+错在取证方式：我用 `bash -c '. production.env'` **source** 那个文件，而
+`AIOPS_GATEWAY_DIFY_KNOWLEDGE_BINDINGS` 的值**含分号** —— shell 把 `;` 当命令分隔符，
+于是我只读到了第一行。
+
+用**消费者真正的读法**（`gateway_config._private_config_values` → `parse_dify_knowledge_bindings`）
+读回来，登记表**一直是两行**：
+
+```
+kb-canary            1783022023241633792  ('4f4bc674ad8911f1ae704bfc8c544ea6',)
+kb-canary-2          1942105476598861824  ('8701c742b28111f18637d95f7710e3a3',)
+```
+
+**⇒ 这与 `gh` 那次是同一类错误**：不是代码错，是我的**取证工具**读错了供给方。
+教训写进 §六。
+
+### 二、实测缺陷：真的挂了知识库的 app，拉回必失败（已修，`#761`）
+
+给生产 app **真的挂上** dataset 之后，`sync-from-dify` 报
+`[DIFY_DSL_MALFORMED] dataset entry 0 must carry a 'dataset' object`。
+
+**根因**：解析器要求条目嵌套 `{"dataset": {...}}`，而 Dify 1.17.1 导出的是**平铺**的
+`{"enabled": true, "id": "<uuid>"}`。**它潜伏至今**，因为两个 fixture 的 `dataset_configs`
+连 `datasets` 键都没有 —— **那条分支一次都没被执行过**，而从来没有一个 app 真的挂过知识库。
+
+已修并部署；加了两条回归用例，其中一条把**生产导出片段逐字抄进测试常量**。
+突变复验：改回嵌套形状 ⇒ 4 条用例转红。
+
+### 三、知识库：全链路（正向 + 反向对照）
+
+| 跳 | 做法 |
+|---|---|
+| ① 运营在 Dify 挂库 | 在生产 app 上把 dataset 换成 `kb-canary-2-second`（真控制台路由） |
+| ② 发布门冻结 | `sync-from-dify`（真网关库 + 真 kb-service 活性校验） |
+| ③ 线上绑定 | 读 `agent_versions.snapshot_json` |
+
+**正向**：v6 `knowledge_base_ids = ['8701c742…']` → **v7 = `['1d299c8e…']`**。
+**⇒ 运营换库，线上绑定真的跟着变了**（Dify UUID 没有泄漏进结果）。
+
+**反向对照**：`no-such-handle` 打 `/v1/dify/retrieval` → **404 `DIFY_KNOWLEDGE_NOT_FOUND`**；
+跨租户 KB 在 kb-service 侧 → **502 `lacks permission`**。两个方向都表现**不同**。
+
+### 四、工具：全链路（样本 → 映射键 → 强制）
+
+**样本（本轮第一次拿到）**：在生产 app 上真挂内置工具 `time` 的 `timezone_conversion`，
+读回导出形状 `{provider_id: time, provider_type: builtin, tool_name: timezone_conversion}`。
+**⇒ 映射键定为 `provider_id/tool_name`**（`#762`，ADR-0019 补齐）。
+
+| 主张 | 结果 |
+|---|---|
+| 登记了就翻译 | 登记 `time/timezone_conversion:known_runbook` ⇒ **v9 `allowed_tools=['known_runbook']`** |
+| **未登记就拒** | 挂 `time/current_time` ⇒ **failed**，note 点明 `time/current_time` |
+| **执行器真的拦** | 用 v9 白名单驱动真执行器：`order_snapshot`/`fee_snapshot`/`gun_timeseries`/`redis_sync` **全部 `blocked`**，`source=harness:tool_allowlist` |
+| **拦截时没有取数** | 数据源替身在任何属性被访问时raise —— **一次都没被触发** |
+
+### 五、预设问题：上一轮的判据**不成立**，本轮重做
+
+上一轮我报「预设问题已验证」，判据是「返回了 Dify 那两条」。**那个判据是无效的**：
+制品的 zh 预设问题**前两条与 Dify 完全相同**（第三条才不同）—— 把整段代码删掉，断言照样通过。
+
+**本轮用不同的值重做**：运营在 Dify 写 `["【验收问题 2026-10-14】这是运营写的第一条", "运营写的第二条"]`。
+
+| 语言 | `suggested_source` | 值 |
+|---|---|---|
+| **zh** | **`dify`** | 运营写的那两条 |
+| en | `artifact` | 制品三问 |
+
+**⇒ 这次是真的：值与制品不同，所以断言能区分来源。**
+
+### 六、教训（我自己的，写下来）
+
+**两个环境变量都含分号，`bash -c '. file'` 会把它截成第一段。** 上一轮的知识库结论错在这里，
+`gh` 那次错在同一类「取证工具读错供给方」。**读一个含分隔符的配置值，必须用消费它的那个解析器，
+不要用 shell source。**
+
+### 七、还原
+
+| 项 | 终态 |
+|---|---|
+| Dify app 的 dataset | 摘掉（回到验收前） |
+| Dify app 的工具 | 摘掉 |
+| Dify 的预设问题 / 开场白 | 逐字回到原稿（标记出现 0 次） |
+| `AIOPS_GATEWAY_DIFY_TOOL_BINDINGS` | 删掉临时行（**保留**该键本身，供运营登记） |
+| 临时第二知识库 | **已删**（`DELETE /kb/knowledge-bases/1d299c8e…` → 200） |
+| 线上已发布版本 | `canary-客服` **v12**：kb `8701c742…`、全部 7 个工具、原稿文案 —— 与验收前**语义一致**（版本号从 v6 走到 v12，因为中间确实发生过真实发布） |
+
+**保留的交付物**：`aiops-41-knowledge-production`（生产身份外接 API）、
+`aiops-41-kb-prod-kefu`（句柄 `kb-canary-2` → 1942 的 KB `8701c742…`）、
+登记表里的 `kb-canary-2` 一行。**⇒ 运营今天打开控制台就能看到并挂上生产租户的知识库。**
+
+### 八、据实（边界）
+
+- **① 走的是 Dify 的后端路由，不是人在浏览器里点击。** 与 #587 结论一致：界面可用，未由运营本人点。
+- **③ 的调用者身份是构造的**：本部署只启用 `thirdSession` 链，而 Redis 里有 **8330 条真实用户会话**
+  —— 借用任何一条都是冒充真实客户，不做。
+- **工具那条链只验到「发布快照里的白名单 + 执行器拦截」**，没有跑一次**模型驱动的完整诊断**
+  （那需要一次真实诊断 run）。执行器那一半是**真跑的**（真执行器 + 真白名单 + 真数据源替身）。
+
 ## PRD #577 四字段：41 全链路端到端真实验收（2026-10-14）
 
 **分支** `docs/dify-four-fields-e2e-acceptance`，基线 `origin/main`（`f21a5d8`）。
