@@ -216,6 +216,7 @@ def pull_dify(
     console, database = _dify_console_and_db(ctx, db)
     # 声明的 dataset 靠这张表翻译成我们的知识库（与检索路由用的是同一张、同一个解析器）。
     knowledge_registry = _dify_knowledge_registry(console)
+    tool_registry = _dify_tool_registry(console)
 
     knowledge_resolver = None
     if kb_url:
@@ -255,6 +256,7 @@ def pull_dify(
                 output_contract=output_contract,
                 knowledge_base_ids=None if knowledge_base_id is None else tuple(knowledge_base_id),
                 knowledge_registry=knowledge_registry,
+                tool_registry=tool_registry,
             )
             typer.echo(
                 json.dumps(
@@ -321,6 +323,13 @@ def _dify_knowledge_registry(console: Any) -> Any:
     return parse_dify_knowledge_bindings(getattr(console, "dify_knowledge_bindings", "") or "")
 
 
+def _dify_tool_registry(console: Any) -> Any:
+    """Dify 工具身份 → ``ToolName`` 的登记表，与知识库那张同一条解析纪律。"""
+    from aiops_diagnostics.gateway_config import parse_dify_tool_bindings
+
+    return parse_dify_tool_bindings(getattr(console, "dify_tool_bindings", "") or "")
+
+
 def _console_settings_from(path: Path) -> dict[str, str]:
     """Read the Dify console keys out of an explicit ``--config`` file.
 
@@ -344,6 +353,7 @@ def _console_settings_from(path: Path) -> dict[str, str]:
         "AIOPS_GATEWAY_DIFY_CONSOLE_API_KEY",
         "AIOPS_GATEWAY_DIFY_CONSOLE_WORKSPACE_ID",
         "AIOPS_GATEWAY_DIFY_KNOWLEDGE_BINDINGS",
+        "AIOPS_GATEWAY_DIFY_TOOL_BINDINGS",
     )
     return {name.lower().removeprefix("aiops_gateway_"): (values.get(name) or "") for name in keys}
 
@@ -445,6 +455,7 @@ def sync_from_dify(
     console, database = _dify_console_and_db(ctx, db)
     settings = _reconcile_settings(ctx.obj.get("config_file") if ctx.obj else None)
     knowledge_registry = _dify_knowledge_registry(console)
+    tool_registry = _dify_tool_registry(console)
     knowledge_resolver = None
     if kb_url:
         from aiops_diagnostics.agent_debug import KbBindingResolver, KbServiceKnowledgeClient
@@ -489,6 +500,7 @@ def sync_from_dify(
                 source,
                 dry_run=dry_run,
                 knowledge_registry=knowledge_registry,
+                tool_registry=tool_registry,
             )
             outcomes.append(dataclasses.asdict(outcome))
             if outcome.action == "failed":

@@ -91,7 +91,11 @@ from aiops_diagnostics.faq import (
     PlatformDirectoryError,
     PlatformIdentityResolver,
 )
-from aiops_diagnostics.gateway_config import GatewayServerSettings, parse_dify_knowledge_bindings
+from aiops_diagnostics.gateway_config import (
+    GatewayServerSettings,
+    parse_dify_knowledge_bindings,
+    parse_dify_tool_bindings,
+)
 from aiops_diagnostics.gateway_runtime import GatewayRuntime, close_gateway_runtime
 from aiops_diagnostics.gateway_store import (
     ACTIVE_DIAGNOSIS_STATUSES,
@@ -959,6 +963,7 @@ def create_gateway_app(
                 binding,
                 source,
                 knowledge_registry=parse_dify_knowledge_bindings(context.settings.dify_knowledge_bindings),
+                tool_registry=parse_dify_tool_bindings(context.settings.dify_tool_bindings),
             )
         except DifyDslError as exc:
             # Dify itself refused or was unreachable. Transcribed with its own

@@ -370,6 +370,28 @@ def map_dsl_to_config(
     )
 
 
+def _resolve_declared_tools(declared: tuple[str, ...], registry: Mapping[str, str]) -> tuple[str, ...]:
+    """把 Dify 的工具身份翻译成我们的 ``ToolName``，翻不出就**拒**。
+
+    与知识库那条桥同形、同一条纪律：Dify 的 ``provider_id/tool_name`` 与我们的
+    ``ToolName`` 是两个命名空间（实测：``time/timezone_conversion``），**名字相等不代表
+    语义相同** —— 它那边的 ``order_snapshot`` 与我们的不是同一个东西。所以只能查一张
+    **显式登记表**；查不到 ⇒ 报出那个 Dify 身份并要求登记，**绝不按字面搬运**。
+    """
+    resolved: list[str] = []
+    for name in declared:
+        our_tool = registry.get(name)
+        if our_tool is None:
+            raise DifyDslMalformed(
+                f"DSL 声明了 Dify 工具 {name!r}，但 AIOPS_GATEWAY_DIFY_TOOL_BINDINGS 里没有它 —— "
+                "我们不知道它对应哪个 ToolName。请先在 41 上登记这个身份"
+                "（`provider_id/tool_name:our_tool`），或在 Dify 里摘掉它。"
+            )
+        if our_tool not in resolved:
+            resolved.append(our_tool)
+    return tuple(resolved)
+
+
 def _resolve_declared_datasets(
     dataset_ids: tuple[str, ...],
     registry: Mapping[str, Any],
@@ -433,6 +455,7 @@ def resolve_pulled_config(
     output_contract: str | None = None,
     knowledge_base_ids: tuple[str, ...] | None = None,
     knowledge_registry: Mapping[str, Any] | None = None,
+    tool_registry: Mapping[str, str] | None = None,
     tenant_id: str = "",
 ) -> AgentConfig:
     """Fetch, map and settle the config a pull would land — **no writes at all**.
@@ -470,12 +493,16 @@ def resolve_pulled_config(
         declared.append(ids)
         return _resolve_declared_datasets(ids, knowledge_registry or {}, client, tenant_id=tenant_id)
 
+    def tool_resolver(names: tuple[str, ...]) -> tuple[str, ...]:
+        return _resolve_declared_tools(names, tool_registry or {})
+
     config = map_dsl_to_config(
         client.export_dsl(),
         agent_type=agent_type,
         output_contract=output_contract,
         knowledge_base_ids=knowledge_base_ids,
         dataset_resolver=resolver if knowledge_registry else None,
+        tool_resolver=tool_resolver if tool_registry is not None else None,
     )
     existing = _find_by_name(manager, context, name)
     if knowledge_base_ids is None and not declared and existing is not None:
@@ -512,6 +539,7 @@ def pull_agent_draft(
     output_contract: str | None = None,
     knowledge_base_ids: tuple[str, ...] | None = None,
     knowledge_registry: Mapping[str, Any] | None = None,
+    tool_registry: Mapping[str, str] | None = None,
 ) -> Agent:
     """Pull ``source`` and land the result as a draft. Never publishes.
 
@@ -529,6 +557,7 @@ def pull_agent_draft(
         output_contract=output_contract,
         knowledge_base_ids=knowledge_base_ids,
         knowledge_registry=knowledge_registry,
+        tool_registry=tool_registry,
         tenant_id=str(getattr(context, "effective_tenant_id", "") or ""),
     )
     return converge_agent_draft(manager, context, config, name=name, description=description)
@@ -787,6 +816,7 @@ def sync_binding_from_dify(
     *,
     dry_run: bool = False,
     knowledge_registry: Mapping[str, Any] | None = None,
+    tool_registry: Mapping[str, str] | None = None,
 ) -> SyncOutcome:
     """Bring one registry binding's agent up to what **Dify currently holds**.
 
@@ -867,6 +897,7 @@ def sync_binding_from_dify(
         output_contract=live.output_contract,
         knowledge_base_ids=None,
         knowledge_registry=knowledge_registry,
+        tool_registry=tool_registry,
         tenant_id=binding.tenant_id,
     )
 

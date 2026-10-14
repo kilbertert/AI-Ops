@@ -88,6 +88,12 @@ class GatewayServerSettings:
     #: ``knowledge_id``（一个不透明串），**没有租户概念**，所以「哪个租户、哪些知识库」
     #: 必须由我们的登记表决定 —— 这正是「不能成为 Dify 要什么就给什么的后门」的落点。
     dify_knowledge_bindings: str = ""
+    #: Dify 工具身份 → 我们的 ``ToolName`` 的登记表（``provider_id/tool_name:our_tool``，
+    #: 多行/分号分隔）。Dify 的工具名与我们的 ``ToolName`` **不是同一个命名空间**
+    #: （实测：``provider_id=time`` / ``tool_name=timezone_conversion``），所以只能靠
+    #: 一张**显式登记表**翻译 —— 与知识库那条桥同形。空表 = 不认任何 Dify 工具声明
+    #: （声明了就拒，绝不按字面搬运）。
+    dify_tool_bindings: str = ""
     #: 本路由转调知识库服务时的 top_k 上限。Dify 自己也会发 top_k；我们**封顶**而不是直接
     #: 采信，理由与 ``KnowledgeSearchGuard`` 的 ``max_results`` 相同：检索范围归我们控制。
     dify_knowledge_max_top_k: int = 5
@@ -205,6 +211,8 @@ class GatewayServerSettings:
             or _file_value(file_values, "AIOPS_GATEWAY_DIFY_KNOWLEDGE_API_KEY"),
             dify_knowledge_bindings=_env("AIOPS_GATEWAY_DIFY_KNOWLEDGE_BINDINGS")
             or _file_value(file_values, "AIOPS_GATEWAY_DIFY_KNOWLEDGE_BINDINGS"),
+            dify_tool_bindings=_env("AIOPS_GATEWAY_DIFY_TOOL_BINDINGS")
+            or _file_value(file_values, "AIOPS_GATEWAY_DIFY_TOOL_BINDINGS"),
             dify_knowledge_max_top_k=_env_int("AIOPS_GATEWAY_DIFY_KNOWLEDGE_MAX_TOP_K", 5),
             dify_debug_api_key=_env("AIOPS_GATEWAY_DIFY_DEBUG_API_KEY")
             or _file_value(file_values, "AIOPS_GATEWAY_DIFY_DEBUG_API_KEY"),
@@ -347,6 +355,7 @@ class GatewayServerSettings:
         # 登记表在这里解析一次：解析失败是**启动错误**，而不是第一个请求到达时才发现 ——
         # 后者会把一个配置错误伪装成一次运行时故障。
         parse_dify_knowledge_bindings(self.dify_knowledge_bindings)
+        parse_dify_tool_bindings(self.dify_tool_bindings)
         if not 0.1 <= self.jev_timeout_seconds <= 120:
             raise ValueError("AIOPS_GATEWAY_JEV_TIMEOUT_SECONDS must be between 0.1 and 120")
         if not 0.1 <= self.event_poll_interval_seconds <= 10:
@@ -391,6 +400,36 @@ def parse_dify_knowledge_bindings(value: str) -> dict[str, DifyKnowledgeBinding]
         bindings[knowledge_id] = DifyKnowledgeBinding(
             knowledge_id=knowledge_id, tenant_id=tenant_id, knowledge_base_ids=kbs
         )
+    return bindings
+
+
+def parse_dify_tool_bindings(value: str) -> dict[str, str]:
+    """解析 ``dify_provider/tool:our_tool`` 的多行/分号登记表。
+
+    与知识库那张表**同一条纪律**：非法行抛错而不是跳过。键是 Dify 的工具身份
+    （``provider_id/tool_name``，实测形状见 ADR-0019），值必须是合法的 ``ToolName``
+    —— 后半句在发布门里兜底，这里只做结构校验（``gateway_config`` 不 import
+    ``agent_contracts``，那条依赖方向要保住）。
+    """
+    from aiops_diagnostics.agent_contracts import ALL_TOOL_NAMES
+
+    bindings: dict[str, str] = {}
+    for row in value.replace(";", "\n").splitlines():
+        row = row.strip()
+        if not row or row.startswith("#"):
+            continue
+        dify_id, sep, our_tool = row.partition(":")
+        dify_id, our_tool = dify_id.strip(), our_tool.strip()
+        if not sep or not dify_id or not our_tool:
+            raise ValueError(f"dify tool binding is malformed: {row!r}")
+        if our_tool not in ALL_TOOL_NAMES:
+            raise ValueError(
+                f"dify tool binding maps to an unknown tool: {our_tool!r} "
+                f"(known: {', '.join(ALL_TOOL_NAMES)})"
+            )
+        if dify_id in bindings:
+            raise ValueError(f"dify tool binding is duplicated: {dify_id!r}")
+        bindings[dify_id] = our_tool
     return bindings
 
 

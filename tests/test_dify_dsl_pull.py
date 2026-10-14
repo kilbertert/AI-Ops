@@ -670,3 +670,82 @@ def test_a_production_shaped_dataset_is_routed_through_the_resolver() -> None:
     config = map_dsl_to_config(dsl, agent_type="customer", dataset_resolver=resolver)
     assert config.knowledge_base_ids == ("8701c742b28111f18637d95f7710e3a3",)
     assert seen == [("a7a8aad3-d7bf-4765-babd-f9984dcd1d7b",)]
+
+
+#: 2026-10-14 从**生产** Dify 1.17.1 读回的真实工具形状（给 app 真的挂上 time 工具后）。
+_PRODUCTION_TOOLS_DECLARATION = """  agent_mode:
+    enabled: true
+    strategy: router
+    tools:
+    - plugin_unique_identifier: null
+      provider_id: time
+      provider_type: builtin
+      tool_name: timezone_conversion
+      tool_parameters: {}
+"""
+
+
+def _with_tools(decl: str) -> str:
+    return REAL_DSL.replace(
+        "  agent_mode:\n    enabled: false\n    prompt: null\n    strategy: null\n    tools: []\n", decl
+    )
+
+
+def test_the_production_tool_shape_is_read_as_dify_identities() -> None:
+    """**实测形状**：Dify 的工具身份是 ``provider_id/tool_name``，不是我们的 ToolName。"""
+    from aiops_diagnostics.dify_dsl_pull import _declared_tool_names
+
+    mc = yaml.safe_load(_PRODUCTION_TOOLS_DECLARATION)
+    assert _declared_tool_names(mc) == ("time/timezone_conversion",)
+
+
+def test_a_production_tool_declaration_is_refused_without_a_registry() -> None:
+    """声明了工具而没人能翻译 ⇒ **拒**，点明那个 Dify 身份（不按字面搬运）。"""
+    with pytest.raises(DifyDslMalformed, match="time/timezone_conversion"):
+        map_dsl_to_config(_with_tools(_PRODUCTION_TOOLS_DECLARATION), agent_type="customer")
+
+
+def test_a_registered_tool_identity_is_translated() -> None:
+    """登记了就能翻译 —— 与知识库那条桥同形。"""
+    seen: list[tuple[str, ...]] = []
+
+    def resolver(names: tuple[str, ...]) -> tuple[str, ...]:
+        seen.append(names)
+        return ("known_runbook",)
+
+    config = map_dsl_to_config(
+        _with_tools(_PRODUCTION_TOOLS_DECLARATION), agent_type="customer", tool_resolver=resolver
+    )
+    assert config.allowed_tools == ("known_runbook",)
+    assert seen == [("time/timezone_conversion",)]
+
+
+def test_the_tool_bindings_table_translates_and_refuses() -> None:
+    """登记表本身：合法行翻译，未知名与重复键都**抛错**（不静默跳过）。"""
+    from aiops_diagnostics.gateway_config import parse_dify_tool_bindings
+
+    assert parse_dify_tool_bindings("time/timezone_conversion:known_runbook") == {
+        "time/timezone_conversion": "known_runbook"
+    }
+    assert parse_dify_tool_bindings("") == {}
+    with pytest.raises(ValueError, match="unknown tool"):
+        parse_dify_tool_bindings("time/timezone_conversion:not_a_tool")
+    with pytest.raises(ValueError, match="duplicated"):
+        parse_dify_tool_bindings("a/b:known_runbook;a/b:known_runbook")
+    with pytest.raises(ValueError, match="malformed"):
+        parse_dify_tool_bindings("no-colon-here")
+
+
+def test_the_bridge_refuses_a_tool_whose_identity_is_not_registered() -> None:
+    """走**真桥**（`_resolve_declared_tools`）：登记表里没有那个身份 ⇒ 拒。
+
+    与上一条的区别很重要：`map_dsl_to_config` 在**没有** resolver 时自己就拒了，
+    所以只测它会漏掉桥本身。这里直接打桥，确保它在被真的调用时也拒。
+    """
+    from aiops_diagnostics.dify_dsl_pull import _resolve_declared_tools
+
+    with pytest.raises(DifyDslMalformed, match="time/timezone_conversion"):
+        _resolve_declared_tools(("time/timezone_conversion",), {"x/y": "known_runbook"})
+    assert _resolve_declared_tools(
+        ("time/timezone_conversion",), {"time/timezone_conversion": "known_runbook"}
+    ) == ("known_runbook",)

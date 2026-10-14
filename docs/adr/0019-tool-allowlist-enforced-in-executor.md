@@ -51,12 +51,28 @@ PRD #577 让 Dify 成为智能体的编辑面。到这一步为止，Dify 能管
   变成"不能调工具"，而运营没有做过这个决定 —— 一次字段新增不该改变任何线上行为。
 - **`allowed_tools` 放进清单**。那会让同一个字段有两个权威，且失效方向很坏：
   reconcile 静默覆盖运营的改动，报告说 `unchanged`。
-- **发明一个 Dify 工具名 → `ToolName` 的映射键。** 实测 Dify 1.17.1 的
-  `AgentToolEntity` 是 `provider_type/provider_id/tool_name/tool_parameters/
-  plugin_unique_identifier/credential_id`，而 36 上两个 app 的 `agent_mode.tools`
-  **都是空的** —— 仓内**没有任何一个真实样本**能验证映射键。所以本 ADR **不发明它**，
-  只把声明**报出来并要求调用方拒**。发明一个没人验证过的键，等于把一个"看起来配好了"
-  的行为上线。
+- **发明一个 Dify 工具名 → `ToolName` 的映射键。** 本 ADR 初版写下这句时，仓内
+  **没有任何真实样本**（36 上两个 app 的 `agent_mode.tools` 都是空的），所以当时
+  **不发明它**，只把声明报出来要求调用方拒。
+
+  **2026-10-14 补齐**：在 41 的生产 app 上**真挂了一个工具**（`time` 内置工具的
+  `timezone_conversion`），读回导出形状 —— 于是样本有了：
+
+  ```yaml
+  agent_mode:
+    enabled: true
+    strategy: router
+    tools:
+    - provider_id: time
+      provider_type: builtin
+      tool_name: timezone_conversion
+      tool_parameters: {}
+  ```
+
+  **⇒ 映射键定为 `provider_id/tool_name`**（`time/timezone_conversion`），登记在
+  `AIOPS_GATEWAY_DIFY_TOOL_BINDINGS`（`dify_id:our_tool`，与知识库那张表**同形**）。
+  未登记 ⇒ **拒**，点明那个 Dify 身份，绝不按字面搬运 —— 因为两个命名空间里
+  **名字相等不代表语义相同**（它那边的 `order_snapshot` 与我们的不是同一个东西）。
 - **删掉 `ZERO_ORDER_ALLOWED_TOOLS` 就地替换成它。** 一并删（它是死代码：只有自身与
   它的测试引用，生产路径从不调用），新白名单在**执行器**里的那个才是真的强制。
   留着一个没人调的守卫比没有更糟 —— 它让人以为有保护。
@@ -64,10 +80,9 @@ PRD #577 让 Dify 成为智能体的编辑面。到这一步为止，Dify 能管
 ## 后果
 
 - 存量快照、存量清单、存量发布**逐字不变**：默认值即旧行为。
-- 运营在 Dify 里挂工具**今天还不能生效** —— 缺少「Dify 工具身份 → 我们的 `ToolName`」
-  的映射键，而该键需要**先有一个真实样本**（在 Dify 里真挂一个工具，读回它的
-  `provider_id`/`tool_name`）。在那之前，声明了工具的 app **会被拒**，这是刻意的：
-  拒比静默忽略诚实。
+- 运营在 Dify 里挂工具**已经能生效**：把它的身份登记进
+  `AIOPS_GATEWAY_DIFY_TOOL_BINDINGS`（`provider_id/tool_name:our_tool`）即可。未登记的
+  身份**会被拒**，点明是哪一个 —— 拒比静默忽略诚实。
 - `agent_mode.enabled=false` 时 tools 是惰性的，但仍会被读 —— 运营挂了工具却没开开关，
   应该听到**工具**这件事，而不是一个他没设过的开关。
 - 本 ADR 只覆盖**诊断路径**（`operations` agent）。客服路径没有工具执行器，因此不获得
