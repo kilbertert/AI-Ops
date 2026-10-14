@@ -1,0 +1,29 @@
+[Unit]
+Description=AI-Ops Dify console publish bridge
+# 它服务于 Dify 控制台里那颗按钮，因此要等那几个容器起来。
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# 服务身份：与本机其它 AI-Ops 旁路服务同一个（非交互、无 sudo、无登录）。
+User=aiopsbridge
+Group=aiopsbridge
+WorkingDirectory=/opt/aiops-console-bridge
+# 密钥只从这里读，**不进命令行**（命令行会进进程表）。
+EnvironmentFile=/etc/aiops-console-bridge/bridge.env
+ExecStart=/opt/aiops-console-bridge/.venv/bin/python -m aiops_diagnostics.dify_console_publish
+Restart=always
+RestartSec=5
+
+# 只监听回环：宿主 nginx 在同机。
+# 加固（与其它旁路服务同款）：它不需要写任何地方，也不需要新建进程。
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/opt/aiops-console-bridge
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target
