@@ -76,6 +76,30 @@ Dify 库里存着的工具/模型凭据（`libs/encryption.py` 的字段加密�
   做法不再需要 —— 没人拿密码进 Dify 第二次。
 * **会话寿命**由代理签发时决定（`AIOPS_LOGIN_PROXY_ACCESS_MINUTES`，默认 60）：
   撤权后最晚一个访问令牌周期内失效，比原方案（靠 Dify 的 refresh 寿命）更短、更可控。
+## 追加（#779）：失权封禁**不**去 Dify 做，落在映射状态上
+
+票面原本写「把对应 Dify 账号置为 `banned`（Dify 在下一次请求即拒，已核实）」。实现时核实
+这句话**不成立**，两处：
+
+1. **没有写入口。** `AccountStatus.BANNED` 只在**读取**侧被检查（`load_user` 抛
+   `Unauthorized`）；Dify 1.17.1 的控制台 API 里**没有任何 moderation / ban 接口**
+   （grep `banned` 只命中 `error.py` 的错误定义与 oauth 的提示文案）。
+2. **退路不可逆。** 「把成员从工作区移除」（`remove_member_from_tenant`）会把该成员的
+   app / dataset **转给 owner**，而重新加入的条件是 `status == PENDING or RBAC_ENABLED`；
+   本实例 **`RBAC_ENABLED=False`**，于是一个已激活账号被移除后，重新邀请**静默不生效**
+   ——不建 join、也抛不出 `AccountAlreadyInTenantError`。把它当封禁手段等于：永久失去该成员，
+   并且悄悄改掉他的 app 归属。
+
+**所以封禁落在 `dify_login_mappings.status`**（我们自己的一张表），语义与票面一致：
+
+* 每次登录重读权限码；**失去**编辑权限码 ⇒ 拒绝，并把此前 active 的映射置为 `disabled`，
+  审计记 `revoked`。
+* **重新获得**权限码后再登录 ⇒ 放行，状态改回 `active`，审计记 `reactivated`（可逆）。
+* 公司登录**失败**（密码错等）**绝不**改变状态 —— 一次手误不该变成一次锁定。
+* **活着的会话随之失效的边界是令牌寿命**：会话无状态，代理不在请求路径上。撤权窗口 =
+  `AIOPS_LOGIN_PROXY_ACCESS_MINUTES`（默认 60 分钟，比公司令牌 960 分钟短一个量级）。
+  `access` 与 `refresh` 签成同一寿命，所以这个窗口是**硬**的，不是"两个中较短的那个"。
+
 * **账号仍必须是 `active` 且是该工作区成员**：`load_user` 对 `banned` 直接 401，
   `account_initialization_required` 对 `uninitialized` 拒绝。开户仍要真的做。
 * 公司用户仍**只给 editor**；`SECRET_KEY` 只在代理内，不进浏览器。

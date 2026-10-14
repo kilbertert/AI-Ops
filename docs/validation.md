@@ -1,3 +1,21 @@
+## 2026-10-14 · #779 账号生命周期：单测 + 部署自检
+
+**构建身份**：分支 `feat/login-lifecycle`，基线 `03d9a73`。
+
+**自动化**：新增 5 例 —— 失权后下一次登录被拒**且**映射置 `disabled` 并记审计 `revoked`；重新获得权限码后放行并改回 `active` 记 `reactivated`（可逆）；密码错**不**改状态；从未有权限码则拒绝且**不调用 Dify**；`access` 与 `refresh` 的 `Max-Age` **相等且等于配置值**（撤权窗口是硬的）。全量 pytest / ruff / format 通过。
+
+**部署自检**：`deploy/dify-36/check.sh` 新增第 3 项断言（会话寿命显式且成对），并带**反例**：把 `REFRESH_TOKEN_EXPIRE_DAYS` 改回上游默认 30 天必须被拒 —— 钉住"检查真的会拒"。
+
+**未完成**：真实公司权限码与真实浏览器链路（#777 / #783）。**不宣称业务验收完成。**
+
+**发现一处与本票无关但由上一票触发的红灯（记录，不处理）**：
+`tests/test_cd_deploy_scripts.py::test_remote_block_renders_and_parses` 失败，原因是
+`deploy/deploy-41.sh` 的**依赖漂移门禁**生效 —— #778 引入了运行时依赖
+`cryptography`（`pyproject.toml` 变了），而 41 上的依赖环境还没按
+`docs/agents/env-41-dependency-update.md` 的人工流程更新。在**干净的 main**
+（`03d9a73`）上重跑同一命令，失败逐字相同，所以它**不是 #779 引入的**。已停止、未上传、
+未写入、未重启。处理方式归依赖更新流程（要求备份 + editable 守卫 + 留记录），不在本次改动内。
+
 ## 2026-10-14 · #778 Dify 登录代理：单测 + 36 只读会话验证
 
 **构建身份**：分支 `feat/dify-login-proxy`，基线 `a42c2dc`。

@@ -414,3 +414,93 @@ def test_the_minted_session_has_the_shape_dify_verifies() -> None:
     # csrf 的 sub 必须是 user_id（Dify 的 check_csrf_token 要求）。
     csrf = json.loads(base64.urlsafe_b64decode(session.csrf_token.split(".")[1] + "=="))
     assert csrf["sub"] == DIFY_ACCOUNT_ID
+
+
+# --------------------------------------------------------------------------- #
+# #779 账号生命周期：登录时按权限码封禁/解封（自签模型下封禁是**我们自己的映射**）  #
+# --------------------------------------------------------------------------- #
+
+
+def _audit(data_dir: Path) -> list[dict[str, Any]]:
+    import sqlite3
+
+    with sqlite3.connect(data_dir / "mappings.db") as connection:
+        connection.row_factory = sqlite3.Row
+        rows = connection.execute("SELECT * FROM dify_login_audit ORDER BY id").fetchall()
+    return [dict(row) for row in rows]
+
+
+def _status(data_dir: Path) -> str:
+    import sqlite3
+
+    with sqlite3.connect(data_dir / "mappings.db") as connection:
+        row = connection.execute("SELECT status FROM dify_login_mappings LIMIT 1").fetchone()
+    return str(row[0]) if row else ""
+
+
+def test_losing_the_edit_permission_disables_the_mapping(stack) -> None:
+    """失权后的下一次登录：被拒，且映射置为 disabled，审计记 `revoked`。
+
+    "封禁"在自签模型下是我们自己的映射状态（Dify 无 ban 接口、成员移除不可逆，见代码注释）。
+    """
+    base, data_dir = stack
+    assert _login(base)[0] == 200
+    assert _status(data_dir) == "active"
+
+    _FakeCompany.permissions = []  # 公司侧撤掉了编辑权限码
+    status, payload, _ = _login(base)
+    assert status == 403
+    assert "可编辑智能体" in payload["reason"]
+    assert _status(data_dir) == "disabled"
+    assert any(row["action"] == "revoked" for row in _audit(data_dir))
+
+
+def test_regaining_the_permission_reactivates_the_mapping(stack) -> None:
+    """重新获得权限码后再登录：放行，映射改回 active，审计记 `reactivated`。
+
+    这是与封禁**可逆**的那一半 —— 没有它，"撤权"就成了一次性死刑。
+    """
+    base, data_dir = stack
+    assert _login(base)[0] == 200
+    _FakeCompany.permissions = []
+    assert _login(base)[0] == 403
+    assert _status(data_dir) == "disabled"
+
+    _FakeCompany.permissions = [EDIT_PERMISSION]
+    status, _, _ = _login(base)
+    assert status == 200
+    assert _status(data_dir) == "active"
+    assert any(row["action"] == "reactivated" for row in _audit(data_dir))
+
+
+def test_a_bad_password_never_disables_the_mapping(stack) -> None:
+    """公司登录**失败**（密码错）绝不封禁 —— 一次手误不该变成一次锁定。"""
+    base, data_dir = stack
+    assert _login(base)[0] == 200
+    _FakeCompany.fail_login = "password"
+    assert _login(base)[0] == 403
+    assert _status(data_dir) == "active", "密码错把映射封了 —— 会把一次手误变成一次锁定"
+    assert not any(row["action"] == "revoked" for row in _audit(data_dir))
+
+
+def test_a_never_authorised_user_is_denied_and_never_provisioned(stack) -> None:
+    """从头就没有编辑权限码 ⇒ 拒绝、**不开户**、审计记 denied。"""
+    base, data_dir = stack
+    _FakeCompany.permissions = []
+    assert _login(base)[0] == 403
+    assert _FakeDify.calls == []
+    assert any(row["action"] == "denied" for row in _audit(data_dir))
+
+
+def test_the_session_lifetime_defines_the_revocation_window(stack) -> None:
+    """撤权窗口 = 会话寿命：`access` 与 `refresh` 的 Max-Age 必须**相等且等于配置值**。
+
+    会话是无状态的（Dify 不查会话存储），所以一枚已签出的令牌在它的有效期里一直有效 ——
+    部署要把这个窗口调小只能靠这个配置，测试钉住"两个都跟着它走"。
+    """
+    base, _ = stack
+    _, _, headers = _login(base)
+    cookies = headers["set-cookie-all"]
+    ages = [segment.strip() for segment in cookies.split(";") if segment.strip().startswith("Max-Age=")]
+    assert ages, cookies
+    assert set(ages) == {"Max-Age=3600"}, f"access/refresh 寿命不一致或不是配置值：{ages}"
