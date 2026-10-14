@@ -175,6 +175,26 @@ Dify 控制台里给智能体挂「外接知识库」时，端点填 `https://<h
 `AIOPS_GATEWAY_DIFY_KNOWLEDGE_BINDINGS` 按 `knowledge_id` 决定。Dify 因此拿不到数据面，
 也扩不了检索范围。
 
+## 运营自助发布：`POST /v1/operator/publish`（#577 / ADR-0018 追加）
+
+运营改完 Dify 之后**自己**触发的那一步。与 `POST /v1/dify/publish` 是**同一个实现**，
+区别只在谁被允许调：
+
+| 路由 | 谁在调 | 凭据 |
+|---|---|---|
+| `/v1/dify/publish` | 机器（运维脚本） | 一把独立的共享密钥 |
+| **`/v1/operator/publish`** | **人（运营在页面上点）** | 运营自己的 `thirdSession` |
+
+**三个条件全部满足才放行**：会话有效 → `X-Business-Entry: operator` → 该
+`(租户, operator)` 绑了 agent 且请求点的 `app_id` 就是它绑的那一个。
+
+请求体**只有 `app_id`**（`extra="forbid"`）：租户、agent 名、类型、契约、知识库
+全部来自运行时注册表，调用方改不了。所以最坏情况是「重新冻结一个**已声明**绑定的
+当前内容」，而重复发布未变内容是 no-op。
+
+**据实**：该租户 operator 入口下**任何**登录用户都能发 —— 按人到角色的授权要等
+UPMS 的 `ROLE_AGENT_PUBLISHER`（尚未建）。
+
 ## 开场白与预设问题：Dify 存中文母版，其余语言用制品（#577 / ADR-0020）
 
 `GET /v1/assistant/starters` 的 `opening` 与 `suggested_questions` 有两个来源，载荷会

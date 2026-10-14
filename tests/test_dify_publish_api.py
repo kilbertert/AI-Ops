@@ -33,10 +33,14 @@ APP_ID = "a975c8e5-ad9e-425c-84c9-77581a0a2bed"
 
 
 class _Runtime:
-    def __init__(self) -> None:
+    def __init__(self, db: Path | None = None) -> None:
         from aiops_diagnostics.dify_app_registry import DifyAppRegistry
 
-        self.dify_app_registry = DifyAppRegistry.__new__(DifyAppRegistry)
+        if db is None:
+            self.dify_app_registry = DifyAppRegistry.__new__(DifyAppRegistry)
+        else:
+            # 真注册表（本文件新加的两条用例要它按 (租户,入口) 查）
+            self.dify_app_registry = DifyAppRegistry(db)
         self._bindings: tuple[Any, ...] = ()
 
     def shutdown(self) -> None:  # pragma: no cover - not exercised
@@ -246,3 +250,201 @@ def test_the_publish_key_must_differ_from_the_other_dify_keys(tmp_path) -> None:
             dify_debug_api_key="same-key-value",
             dify_debug_tenant="T",  # type: ignore[arg-type]
         ).validate()
+
+
+# ── 运营自助发布（operator 会话身份那条门）──────────────────────────────────
+
+
+class _OperatorDecisions:
+    """按 ``X-Business-Entry`` 给出平台决策 —— 内容不影响本路由，入口才影响。"""
+
+    def __init__(self) -> None:
+        self.seen: list[Any] = []
+
+    def resolve(self, caller, *, platform_entry=None):
+        self.seen.append(platform_entry)
+        from aiops_diagnostics.faq import PlatformDecision
+
+        return PlatformDecision(
+            platform=str(platform_entry or "consumer"), available_platforms=(), b_subject_ids=(), reason="ok"
+        )
+
+
+class _OperatorCaller:
+    """一个会话解析器：交出运营租户的身份。入口由测试通过 header 声明。"""
+
+    def resolve(self, token, *, required_scope, third_session=None, platform_entry=None, source_key=None):
+        from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
+
+        subject = SubjectRecord(b_user_id="c:T-1", c_user_id="T-1", tenant_id="T-1")
+        return ScopeContext.build(
+            caller=subject,
+            subject=subject,
+            delegated=False,
+            effective_tenant_id="T-1",
+            data_scope=DataScope(type="self"),
+            roles=frozenset(),
+            permissions=frozenset({required_scope}),
+        )
+
+
+def _operator_client(tmp_path: Path, runtime: _Runtime, **overrides: Any) -> TestClient:
+    settings = GatewayServerSettings(
+        data_home=tmp_path,
+        database_file=tmp_path / "gateway.db",
+        server_config_file=tmp_path / "production.env",
+        dify_console_base_url="http://dify.invalid:10008",
+        dify_console_api_key=CONSOLE_KEY,
+        **overrides,
+    )
+    settings.server_config_file.write_text("# test\n", encoding="utf-8")
+    app = create_gateway_app(
+        settings=settings,
+        store=GatewayStore(settings.database_file),
+        runtime=runtime,  # type: ignore[arg-type]
+        caller_resolver=_OperatorCaller(),  # type: ignore[arg-type]
+        order_authorizer=None,  # type: ignore[arg-type]
+        platform_resolver=PlatformIdentityResolver(_Directory()),
+        faq_catalog=FAQCatalog.bundled(),
+    )
+    return TestClient(app)
+
+
+def _bind_operator(runtime: _Runtime, tmp_path: Path) -> None:
+    """**真的**往注册表写一行 (T-1, operator) → APP_ID，并让 `_registered_agent` 认。
+
+    用真注册表而不是打桩 `lookup`：本路由的绑定枚举防线正是打在 `lookup` 上的，
+    把 lookup 换成桩就等于把要测的东西换掉了。
+    """
+    runtime.dify_app_registry.put(_binding(entry="operator", name="ops-methodology-700"))
+    runtime._registered_agent = lambda t, e: (("ops-methodology-700" if e == "operator" else None), True)
+
+
+def _run_sync_ok(monkeypatch) -> None:
+    """把真正的 sync 换成一个可观察的桩（本文件测的是**门**，不是发布本身）。"""
+    from aiops_diagnostics.dify_dsl_pull import SyncOutcome
+
+    calls: list[Any] = []
+
+    def fake_sync(manager, context, binding, source, **kwargs):
+        calls.append((binding.app_id, kwargs))
+        return SyncOutcome(
+            tenant_id=binding.tenant_id,
+            business_entry=binding.business_entry,
+            app_id=binding.app_id,
+            agent_name=binding.agent_name,
+            action="unchanged",
+            version_no=1,
+            note="",
+        )
+
+    monkeypatch.setattr("aiops_diagnostics.dify_dsl_pull.sync_binding_from_dify", fake_sync)
+    return calls
+
+
+def test_the_operator_route_needs_no_shared_key(tmp_path, monkeypatch) -> None:
+    """**没有**发布密钥也能调 —— 这正是"把触发权交给运营"的意思。"""
+    runtime = _Runtime(tmp_path / "gateway.db")
+    _bind_operator(runtime, tmp_path)
+    calls = _run_sync_ok(monkeypatch)
+    client = _operator_client(tmp_path, runtime)  # 注意：没有 dify_publish_api_key
+    r = client.post(
+        "/v1/operator/publish",
+        json={"app_id": APP_ID},
+        headers={"Authorization": "Bearer session-token", "X-Business-Entry": "operator"},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["action"] == "unchanged"
+    assert calls and calls[0][0] == APP_ID
+
+
+def test_the_consumer_entry_cannot_publish(tmp_path, monkeypatch) -> None:
+    """客户端入口**不能**触发发布 —— 这条门的第一道。"""
+    runtime = _Runtime(tmp_path / "gateway.db")
+    _bind_operator(runtime, tmp_path)
+    calls = _run_sync_ok(monkeypatch)
+    client = _operator_client(tmp_path, runtime)
+    r = client.post(
+        "/v1/operator/publish",
+        json={"app_id": APP_ID},
+        headers={"Authorization": "Bearer session-token", "X-Business-Entry": "consumer"},
+    )
+    assert r.status_code == 403
+    assert r.json()["error"]["code"] == "OPERATOR_ENTRY_REQUIRED"
+    assert calls == [], "被拒就不该走到发布实现"
+
+
+def test_a_tenant_without_a_bound_operator_agent_is_a_404(tmp_path, monkeypatch) -> None:
+    runtime = _Runtime(tmp_path / "gateway.db")
+    runtime._registered_agent = lambda t, e: (None, True)  # 注册表已采纳但没有这一对
+    calls = _run_sync_ok(monkeypatch)
+    client = _operator_client(tmp_path, runtime)
+    r = client.post(
+        "/v1/operator/publish",
+        json={"app_id": APP_ID},
+        headers={"Authorization": "Bearer s", "X-Business-Entry": "operator"},
+    )
+    assert r.status_code == 404
+    assert r.json()["error"]["code"] == "OPERATOR_NOT_BOUND"
+    assert calls == []
+
+
+def test_an_app_that_is_not_this_entnry_binding_is_a_404(tmp_path, monkeypatch) -> None:
+    """**绑定枚举防线**：拿一个**别的** app_id 来试 ⇒ 404，且不走到发布实现。
+
+    没有这一条时，任何运营会话都能用任意 app_id 探测有哪些绑定存在。
+    """
+    runtime = _Runtime(tmp_path / "gateway.db")
+    _bind_operator(runtime, tmp_path)
+    calls = _run_sync_ok(monkeypatch)
+    client = _operator_client(tmp_path, runtime)
+    r = client.post(
+        "/v1/operator/publish",
+        json={"app_id": "00000000-0000-0000-0000-000000000000"},
+        headers={"Authorization": "Bearer s", "X-Business-Entry": "operator"},
+    )
+    assert r.status_code == 404
+    assert r.json()["error"]["code"] == "DIFY_APP_NOT_BOUND"
+    assert calls == []
+
+
+def test_the_operator_body_cannot_carry_anything_but_an_app_id(tmp_path, monkeypatch) -> None:
+    """请求体只许有 app_id：多一个字段就是 422，租户/入口**无法**被请求体改写。"""
+    runtime = _Runtime(tmp_path / "gateway.db")
+    _bind_operator(runtime, tmp_path)
+    _run_sync_ok(monkeypatch)
+    client = _operator_client(tmp_path, runtime)
+    r = client.post(
+        "/v1/operator/publish",
+        json={"app_id": APP_ID, "tenant_id": "T-OTHER"},
+        headers={"Authorization": "Bearer s", "X-Business-Entry": "operator"},
+    )
+    assert r.status_code == 422
+
+
+def test_an_operator_cannot_publish_another_tenants_app(tmp_path, monkeypatch) -> None:
+    """**跨租户防线**：T-1 的运营会话去发布 T-2 绑的 app ⇒ 404，不发布。
+
+    这一条是上面「不属于本入口」那一条的**真形态** —— 上一条里那个 app_id 在注册表里
+    根本不存在，所以 `_publish_bound_app` 自己也会 404，两条防线分不开。
+    这里 T-2 的 app **确实存在**：若只靠 `_publish_bound_app`，它会照发不误。
+    """
+    from aiops_diagnostics.dify_app_registry import DifyAppBinding
+
+    other = "11111111-1111-1111-1111-111111111111"
+    runtime = _Runtime(tmp_path / "gateway.db")
+    _bind_operator(runtime, tmp_path)
+    # 另一个租户真的绑了另一个 app
+    runtime.dify_app_registry.put(
+        DifyAppBinding(tenant_id="T-2", business_entry="operator", app_id=other, agent_name="别的")
+    )
+    calls = _run_sync_ok(monkeypatch)
+    client = _operator_client(tmp_path, runtime)
+    r = client.post(
+        "/v1/operator/publish",
+        json={"app_id": other},
+        headers={"Authorization": "Bearer s", "X-Business-Entry": "operator"},
+    )
+    assert r.status_code == 404
+    assert r.json()["error"]["code"] == "DIFY_APP_NOT_BOUND"
+    assert calls == [], "跨租户的 app 一个字节都不该被发布"
