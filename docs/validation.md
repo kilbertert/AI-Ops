@@ -1,3 +1,86 @@
+## 2026-10-14 · 运营自助发布 + 生产 app 迁到 Agent 模式（41 真机）
+
+**分支** `docs/dify-agent-mode-and-publish`，基线 `origin/main`（`adadfa7`）。已部署。
+**生产改动**：Dify 建 app ×1、网关注册表切行 ×1、8 次发布（v13/v14 在 41 上），**已还原**。
+
+### 一、两个诉求的由来（都是上一轮答复运营时撞出来的）
+
+1. **工具白名单够不着**：功能的三处强制都装好了，**但运营在界面上看不见工具区块** ——
+   两个 app 都是 `chat` 模式，而工具区块只在 `agent-chat` 模式渲染。
+2. **「发布」按钮不等于上线**：`/v1/dify/publish` 早就有（ADR-0018），但它是给**机器**的，
+   **没有任何界面调它**。运营改完 Dify 触发不了我方发布门。
+
+### 二、实测：工具区块确实只在 Agent 模式出现
+
+先做了一个**决定性实验**：用 API 把工具写进 `chat` app 的 `agent_mode.tools`，再开控制台 ——
+**界面布局一字不变**，仍无工具区块。再建一个 `agent-chat` app 对比：它的页面**有**
+`Tools 0/0 Enabled | Add`，头部标 **AGENT**。
+
+⇒ 不是内容问题，是**模式**决定渲染。两个 app 都是 `chat`（`mode=chat`）。
+
+同时确认：**我们的拉回侧完全兼容 `agent-chat`**（导出形状相同，六个字段全在，
+含 `agent_mode.tools`），所以迁移不需要改拉回逻辑。
+
+**Dify 没有切换模式的 API**（`PATCH /apps/<id>`=405、`/apps/<id>/mode`=404）⇒ 只能重建。
+
+### 三、做了什么
+
+**① `POST /v1/operator/publish`（`#764`，ADR-0018 追加）**
+
+凭**运营自己的会话**发布，与共享密钥那条走**同一个实现**（`_publish_bound_app`）。
+三个条件：会话有效 → `X-Business-Entry: operator` → 该 `(租户, operator)` 绑了 agent
+且点的 `app_id` **就是它绑的那一个**（第三条是绑定枚举防线）。
+
+**不是回到 ADR-0018 否掉的那个命题**：那条否认的是「JWT 签名证明身份」（不验签 ⇒ 可自报）；
+这条用的是**服务端从 Redis 取出的会话** —— 请求伪造不了。
+
+**② 生产 app 迁到 Agent 模式**
+
+新建 `aiops-41-kefu-agent`（`agent-chat`），把旧的提示词/开场白/预设问题/知识库**逐字搬过去**
+（读回核对：`pre_prompt` 759 字、开场白、两条预设问题、同一个 dataset 全部一致），
+再把注册表 `(1942, consumer)` 指过去。**旧 app 原样留着当回滚点。**
+
+### 四、验收
+
+| 主张 | 证据 |
+|---|---|
+| 新 app 界面**有**工具区块 | 控制台实测：`Tools 0/0 Enabled \| Add`，头部 `AGENT` |
+| 挂上工具能被我们读到 | 给它挂 `time/timezone_conversion` ⇒ 导出 `agent_mode.tools` 里有它 |
+| **未登记就拒**（不是静默忽略） | `sync-from-dify` 报 `DIFY_DSL_MALFORMED`，点明 `time/timezone_conversion` |
+| 登记了就翻译 | 登记后 `synced` ⇒ **v13 `allowed_tools=['known_runbook']`** |
+| 内容逐字未变 | **v14 的 `prompt` sha256 = `c8002d1538efcb5e`**，与迁移前 v3 **同一个值** |
+| 知识库仍绑对 | v14 `knowledge_base_ids=['8701c742…']` |
+| 开场白/预设问题仍在 | v14 逐字为原稿 |
+
+### 五、据实：`/v1/operator/publish` **没有在 41 上端到端跑通**
+
+我试了三条身份链，**都在 41 上止步于同一个地方**：
+
+| 链路 | 结果 |
+|---|---|
+| `thirdSession` 会话 | 会话解析要 C→B 目录，打到 `qumall_mall.sys_user`（该表不存在） |
+| 公司令牌 + source key | 走到 `PLATFORM_UNAVAILABLE`（平台身份解析不可用） |
+| **既有 operator 路由对照** | `/v1/assistant/starters`、`/v1/shortcuts` 用同一凭证是**同一个 503** |
+
+**⇒ 最后一行是判断依据**：既有 operator 路由（与我这条**共用同一条身份依赖链**）在生产上
+同样 503 —— 所以这**不是我这道门的问题**，是那条身份链在这个环境里需要 UPMS 目录，
+而我的构造调用者满足不了。**发布执行本身用 CLI 证明是通的**（v13/v14 都是真发布）。
+
+**不声称** `/v1/operator/publish` 在 41 上被端到端驱动过 —— 它的**门**由 6 条单测
+（含跨租户那条）证明，**执行**由 CLI 证明，**两者之间的那条 HTTP 路径在生产上未验**。
+
+### 六、还原
+
+| 项 | 终态 |
+|---|---|
+| 新 app 的开场白 | 逐字回到原稿（标记消失） |
+| 新 app 的工具 | 摘掉（运营要用时自己挂 + 工程登记） |
+| `AIOPS_GATEWAY_DIFY_TOOL_BINDINGS` | 删掉临时行 |
+| 注册表 | **保留指向新 Agent app** —— 这是本轮交付物，不是验收痕迹 |
+| 旧 chat app | **原样留着**（回滚点） |
+| 线上已发布版本 | `canary-客服` **v14**：与迁移前**逐字同内容**（prompt sha 相同） |
+| 播种的验证会话 | 已从 Redis 删除 |
+
 ## 2026-10-14 · 知识库与工具：41 全链路打通并验收（含一个实测缺陷、一次自我更正）
 
 **分支** `docs/dify-kb-tools-e2e-acceptance`，基线 `origin/main`（`f1b6159`）。
