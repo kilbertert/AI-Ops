@@ -78,6 +78,7 @@ from aiops_diagnostics.dify_knowledge_api import (
     dify_records,
     parse_dify_retrieval_request,
 )
+from aiops_diagnostics.dify_tools_catalog import AI_OPS_TOOL_NAMES, CATALOG_NOTE
 from aiops_diagnostics.faq import (
     FAQ_NOT_FOUND,
     PLATFORM_AMBIGUOUS,
@@ -1062,6 +1063,60 @@ def create_gateway_app(
                 status.HTTP_404_NOT_FOUND, "DIFY_APP_NOT_BOUND", "app is not a bound agent source"
             )
         return _publish_bound_app(context, payload.app_id)
+
+    def dify_tools_credential(authorization: Annotated[str | None, Header()] = None) -> None:
+        """The 3A catalog credential — a key that can do exactly one thing (#772 E).
+
+        Configured-or-absent is the same mechanism the other two Dify routes use:
+        an unconfigured key means the whole route group is **404**, never "no key
+        needed". Half-configuration cannot happen here (there is no second half —
+        the endpoint calls no upstream), so the only rule left is that it must
+        differ from every other Dify key, which ``GatewayServerSettings.validate``
+        enforces at startup.
+
+        **Why this endpoint is safe to expose at all.** Dify's custom-API-tool
+        credential is workspace-shared and visible to every admin who can edit
+        the provider, so it is the least protected secret in this picture. The
+        answer is not to protect it better but to make it worth nothing: this
+        route reads no data source, creates no run, and returns one fixed
+        string. A leaked key tells an attacker what our seven tools are called —
+        which is in an OpenAPI document an operator pastes into a console, not a
+        secret. Keeping it a **separate** key from the retrieval and publish
+        credentials is what stops "can list the catalog" from equalling either.
+        """
+        configured = context.settings.dify_tools_api_key
+        if not configured:
+            raise StandardAPIError(status.HTTP_404_NOT_FOUND, "DIFY_TOOLS_UNAVAILABLE", "route not found")
+        if not authorization or not authorization.startswith("Bearer "):
+            raise StandardAPIError(
+                status.HTTP_401_UNAUTHORIZED, "DIFY_CREDENTIAL_REQUIRED", "bearer credential required"
+            )
+        presented = authorization.removeprefix("Bearer ").strip()
+        if not secrets.compare_digest(configured.encode("utf-8"), presented.encode("utf-8")):
+            raise StandardAPIError(
+                status.HTTP_403_FORBIDDEN, "DIFY_CREDENTIAL_REJECTED", "credential rejected"
+            )
+
+    @app.post("/v1/dify/tools/{tool}")
+    def dify_tool_note(tool: str, _: None = Depends(dify_tools_credential)) -> dict[str, Any]:  # noqa: B008
+        """One fixed note per tool — the catalog Dify's preview calls land on (#772 E).
+
+        It returns ``CATALOG_NOTE`` whatever the tool is, and **reads nothing**:
+        no order, no device, no run, no model. That is the point of 3A — the
+        operator gets our seven tools *selectable in Dify*, while the natively
+        driven Dify loop stays unable to touch production data. Dify's own
+        "调试与预览" cannot reach our executor, so a preview answer would never
+        reflect production behaviour anyway; saying so in the response is more
+        honest than returning something that looks like a diagnosis.
+
+        A ``tool`` outside the seven is a **404**, not a 200 for every path:
+        with a fixed reply this is the only observable difference the path can
+        carry, and answering "ok" to ``/v1/dify/tools/drop_table`` is how a
+        catalog starts looking like an arbitrary endpoint.
+        """
+        if tool not in AI_OPS_TOOL_NAMES:
+            raise StandardAPIError(status.HTTP_404_NOT_FOUND, "DIFY_TOOL_UNKNOWN", "tool not found")
+        return {"tool": tool, "note": CATALOG_NOTE}
 
     @app.get("/health")
     def health() -> dict[str, Any]:

@@ -45,7 +45,7 @@ no project argument. Both answer *where* something is; neither replaces reading 
 
 ## Tests
 
-- tests/ — 139 test file(s, recursive)
+- tests/ — 140 test file(s, recursive)
 - script "cd:watch:test": node .sandcastle/cd-watch.test.mjs
 - pytest (pyproject.toml / pytest.ini present)
 
@@ -147,6 +147,8 @@ ops/
     dify-publish-button.js
     qa-plan.md
     README.md
+  dify-tools/
+    aiops-tools.openapi.json
   environments/
     env-41.toml
   aiops-tdengine-readonly-proxy.service

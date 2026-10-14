@@ -54,6 +54,7 @@ from urllib.parse import urlsplit
 
 import yaml
 
+from aiops_diagnostics.agent_contracts import ALL_TOOL_NAMES
 from aiops_diagnostics.agent_lifecycle import Agent, AgentConfig, AgentManager, config_from_snapshot
 from aiops_diagnostics.bounded_http import (
     ErrorMapping,
@@ -65,27 +66,7 @@ from aiops_diagnostics.bounded_http import (
     parse_data_key_envelope,
     request_json,
 )
-
-#: The export route is the console one, and it needs the workspace the app
-#: lives in: Dify's admin-key path resolves the tenant owner from this header
-#: (``extensions/ext_login.py``). A session credential resolves it implicitly;
-#: the header is what makes the same call work with a controlled credential.
-DIFY_EXPORT_PATH = "/console/api/apps/{app_id}/export"
-#: The console's per-dataset route. Needed because the **exported DSL does not
-#: carry** the one field that lets us translate a dataset: measured on 41, a
-#: dataset entry in the DSL is exactly ``{enabled, id}`` — no
-#: ``external_knowledge_info``. The operator's handle (`kb-canary`) is only on
-#: this route. See :func:`dataset_knowledge_id`.
-DIFY_DATASET_PATH = "/console/api/datasets/{dataset_id}"
-DIFY_WORKSPACE_HEADER = "X-WORKSPACE-ID"
-
-#: The only DSL shape we parse. A newer Dify is an unknown shape, and guessing
-#: at an unknown shape is how a field silently lands in the wrong place — so a
-#: version bump fails loudly here and the mapping gets read again.
-SUPPORTED_DSL_MAJOR = 0
-SUPPORTED_DSL_MINOR = 7
-_DSL_VERSION = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
-_APP_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+from aiops_diagnostics.dify_tools_catalog import AI_OPS_PROVIDER_NAME
 
 #: Retrying the export is safe because it is a read (``RetryPolicy`` limits
 #: retries to GET by default). A transient blip should not fail the operator's
@@ -121,6 +102,32 @@ class DifyDslVersionUnsupported(DifyDslError):
     """The DSL version is outside the shape this mapping was written against."""
 
     code = "DIFY_DSL_VERSION_UNSUPPORTED"
+
+
+#: The export route is the console one, and it needs the workspace the app
+#: lives in: Dify's admin-key path resolves the tenant owner from this header
+#: (``extensions/ext_login.py``). A session credential resolves it implicitly;
+#: the header is what makes the same call work with a controlled credential.
+DIFY_EXPORT_PATH = "/console/api/apps/{app_id}/export"
+#: The console's per-dataset route. Needed because the **exported DSL does not
+#: carry** the one field that lets us translate a dataset: measured on 41, a
+#: dataset entry in the DSL is exactly ``{enabled, id}`` — no
+#: ``external_knowledge_info``. The operator's handle (`kb-canary`) is only on
+#: this route. See :func:`dataset_knowledge_id`.
+DIFY_DATASET_PATH = "/console/api/datasets/{dataset_id}"
+DIFY_WORKSPACE_HEADER = "X-WORKSPACE-ID"
+#: 工作区的 API 工具提供方清单（#774）。返回的是 ``[{id, name, type, tools, …}]``，
+#: 其中 ``id`` 就是工具条目里 ``provider_id`` 要填的那个 UUID —— 这是把「提供方
+#: 名称」翻成「DSL 里那个 id」的唯一一跳。``type=api`` 只取自定义 API 提供方。
+DIFY_TOOL_PROVIDERS_PATH = "/console/api/workspaces/current/tool-providers?type=api"
+
+#: The only DSL shape we parse. A newer Dify is an unknown shape, and guessing
+#: at an unknown shape is how a field silently lands in the wrong place — so a
+#: version bump fails loudly here and the mapping gets read again.
+SUPPORTED_DSL_MAJOR = 0
+SUPPORTED_DSL_MINOR = 7
+_DSL_VERSION = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
+_APP_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,6 +186,44 @@ class DifyDslClient:
             envelope=_export_envelope,
             retry=_EXPORT_RETRY,
         )
+
+    def tool_provider_ids(self) -> dict[str, str]:
+        """``provider_name → ApiToolProvider.id`` for this workspace's API tools.
+
+        The one hop the 3A tool rule needs and cannot get from the DSL. Dify's
+        tool entry names a provider by ``provider_id``, and for a **custom API**
+        provider that value is the ``ApiToolProvider`` row **UUID** — verified
+        in 1.17.1's ``ToolManager.get_api_provider_controller``, which looks the
+        provider up by ``ApiToolProvider.id == provider_id``. The DSL entry
+        carries no provider *name* at all, so a name can only be read from the
+        console — this call.
+
+        The UUID is therefore resolved **per pull and never stored**: it appears
+        in no config file, no registry row and no repository artifact, which is
+        what keeps a rebuilt Dify instance (or a rebuilt provider) from
+        invalidating anything already published. A stored UUID would be exactly
+        the drift #772 E rules out.
+
+        Provider names are unique per tenant (``unique_api_tool_provider`` on
+        ``(name, tenant_id)``), so this map has no ambiguity to resolve.
+        """
+        headers = {
+            "Accept": "application/json",
+            "Authorization": bearer_auth_header(self.source.api_key),
+        }
+        if self.source.workspace_id:
+            headers[DIFY_WORKSPACE_HEADER] = self.source.workspace_id
+        payload = request_json(
+            RequestSpec(
+                url=join_url(self.base_url, DIFY_TOOL_PROVIDERS_PATH),
+                headers=headers,
+                timeout=self.source.timeout,
+            ),
+            mapping=_error_mapping(),
+            envelope=_tool_providers_envelope,
+            retry=_EXPORT_RETRY,
+        )
+        return payload
 
     def dataset_knowledge_id(self, dataset_id: str) -> str:
         """The operator's handle for one Dify dataset — or a loud failure.
@@ -255,6 +300,26 @@ def _dataset_envelope(payload: Any, mapping: ErrorMapping) -> dict[str, Any]:
     return payload
 
 
+def _tool_providers_envelope(payload: Any, mapping: ErrorMapping) -> dict[str, str]:
+    """``[{id, name, …}]`` → ``{name: id}``，形状不对就拒（不返回半个表）。
+
+    拒而不是跳过的原因与知识库那条桥相同：一个解析不出的清单会让「提供方没找到」
+    与「清单本身坏了」看起来一样，而前者会让运营去 Dify 里查一个其实配好的东西。
+    """
+    if not isinstance(payload, list):
+        raise DifyDslMalformed(f"Dify 的工具提供方清单应当是数组，实际是 {type(payload).__name__}")
+    table: dict[str, str] = {}
+    for index, item in enumerate(payload):
+        if not isinstance(item, dict):
+            raise DifyDslMalformed(f"工具提供方条目 {index} 不是对象")
+        name = item.get("name")
+        identifier = item.get("id")
+        if not isinstance(name, str) or not isinstance(identifier, str) or not name or not identifier:
+            raise DifyDslMalformed(f"工具提供方条目 {index} 缺少 name 或 id")
+        table[name] = identifier
+    return table
+
+
 def _error_mapping() -> ErrorMapping:
     """One clear failure signal per cause; a rejected credential is not an outage."""
 
@@ -283,7 +348,7 @@ def map_dsl_to_config(
     output_contract: str | None = None,
     knowledge_base_ids: tuple[str, ...] | None = None,
     dataset_resolver: Callable[[tuple[str, ...]], tuple[str, ...]] | None = None,
-    tool_resolver: Callable[[tuple[str, ...]], tuple[str, ...]] | None = None,
+    tool_resolver: Callable[[tuple[Any, ...]], tuple[str, ...]] | None = None,
 ) -> AgentConfig:
     """Map exported DSL text onto the ``AgentConfig`` fields we run on.
 
@@ -339,18 +404,25 @@ def map_dsl_to_config(
     # 工具白名单：Dify 声明了就必须**翻译得出**，翻译不出就拒（与知识库同一条纪律）。
     # 什么都没声明 ⇒ ``None`` 交给调用方保留库中现值 —— 与知识库的「没说 ⇒ 保留」
     # 逐字同向，理由也一样：把"没声明"当成"要清空"会让一次无关的保存摘掉运营设好的白名单。
-    declared_tools = _declared_tool_names(model_config)
-    if declared_tools and tool_resolver is not None:
-        allowed_tools: tuple[str, ...] | None = tool_resolver(declared_tools)
-    elif declared_tools:
+    declared_tools = _declared_tools(model_config)
+    #: 「有效声明」= 至少有一条**开着**。全被关掉的声明与「什么都没声明」同义
+    #: （#772 E：「暂时关掉」与「删除」效果一致），所以它必须走 ``None`` 那条路
+    #: —— 否则 resolver 会（正确地）返回空元组，而那读作「一个工具都不许跑」，
+    #: 线上的诊断会突然全被白名单挡掉，报告却只说这次拉取成功。
+    effective = tuple(entry for entry in declared_tools if entry.enabled)
+    if effective and tool_resolver is not None:
+        allowed_tools: tuple[str, ...] | None = tool_resolver(effective)
+    elif effective:
         raise DifyDslMalformed(
             "DSL 声明了智能体工具（"
-            + ", ".join(declared_tools)
-            + "），但那是 Dify 的工具身份（provider_id/tool_name），不是我们的 ToolName。"
-            "请显式给出工具白名单（或在 AIOPS_GATEWAY_DIFY_TOOL_BINDINGS 里登记映射），"
-            "不要按字面搬运。"
+            + ", ".join(entry.identity for entry in effective)
+            + "），但这次拉取没有工具映射可用。"
+            "请在 Dify 里把工具挂在 aiops 提供方下（那七个工具直接对应我们的 ToolName），"
+            "或为这个 Dify 身份在 AIOPS_GATEWAY_DIFY_TOOL_BINDINGS 里登记映射，不要按字面搬运。"
         )
     else:
+        # 没声明工具，或声明里每一条都被关掉了 —— 沿用 ADR-0019 的默认（全部七个），
+        # 于是已发布的老版本行为不变。
         allowed_tools = None
 
     return AgentConfig(
@@ -370,26 +442,47 @@ def map_dsl_to_config(
     )
 
 
-def _resolve_declared_tools(declared: tuple[str, ...], registry: Mapping[str, str]) -> tuple[str, ...]:
-    """把 Dify 的工具身份翻译成我们的 ``ToolName``，翻不出就**拒**。
+def _resolve_tools(
+    declared: tuple[Any, ...],
+    *,
+    aiops_provider_id: str,
+    registry: Mapping[str, str],
+) -> tuple[str, ...]:
+    """把 Dify 声明的工具翻译成我们的 ``ToolName``，翻不出就**拒**（#774 / #772 E）。
 
-    与知识库那条桥同形、同一条纪律：Dify 的 ``provider_id/tool_name`` 与我们的
-    ``ToolName`` 是两个命名空间（实测：``time/timezone_conversion``），**名字相等不代表
-    语义相同** —— 它那边的 ``order_snapshot`` 与我们的不是同一个东西。所以只能查一张
-    **显式登记表**；查不到 ⇒ 报出那个 Dify 身份并要求登记，**绝不按字面搬运**。
+    两条判断落在 :func:`aiops_diagnostics.dify_tools_catalog.partition_aiops_tools`
+    里，这里只负责把「翻不出的条目」变成一次**拒绝**。拒绝而不是部分接受，理由与知识库
+    那条桥相同：接受四个里的三个会看起来像一次成功的拉取，而运营的一处编辑悄悄消失。
+
+    ``aiops_provider_id`` 由调用方**当场**从控制台解析（模块 docstring：它是
+    ``ApiToolProvider`` 行 UUID，绝不落库、不落配置）。解析不到时不是"没有 aiops
+    提供方所以什么都不认"，而是所有 api 提供方的条目都会掉进下面那条错误里 ——
+    运营会看到"请在 Dify 里挂到 aiops 提供方"，正是要做的那件事。
     """
-    resolved: list[str] = []
-    for name in declared:
-        our_tool = registry.get(name)
-        if our_tool is None:
-            raise DifyDslMalformed(
-                f"DSL 声明了 Dify 工具 {name!r}，但 AIOPS_GATEWAY_DIFY_TOOL_BINDINGS 里没有它 —— "
-                "我们不知道它对应哪个 ToolName。请先在 41 上登记这个身份"
-                "（`provider_id/tool_name:our_tool`），或在 Dify 里摘掉它。"
+    from aiops_diagnostics.dify_tools_catalog import partition_aiops_tools
+
+    allowed, unmapped = partition_aiops_tools(
+        declared, aiops_provider_id=aiops_provider_id, bindings=registry
+    )
+    if unmapped:
+        hint = (
+            "aiops 提供方下的七个工具直接对应我们的 ToolName（"
+            + " / ".join(sorted(ALL_TOOL_NAMES))
+            + "）；其他提供方必须在 AIOPS_GATEWAY_DIFY_TOOL_BINDINGS 里显式登记"
+            "（`provider_id/tool_name:our_tool`）。"
+        )
+        if not aiops_provider_id:
+            hint += (
+                " 本次拉取在 Dify 工作区里**没有找到名为 aiops 的 API 工具提供方** —— "
+                "先在控制台注册它（#775），或为这些身份逐个登记映射。"
             )
-        if our_tool not in resolved:
-            resolved.append(our_tool)
-    return tuple(resolved)
+        raise DifyDslMalformed(
+            "DSL 声明了这些工具，但没有它们对应哪个 AI-Ops 工具的依据："
+            + ", ".join(entry.identity for entry in unmapped)
+            + "。"
+            + hint
+        )
+    return allowed
 
 
 def _resolve_declared_datasets(
@@ -493,8 +586,16 @@ def resolve_pulled_config(
         declared.append(ids)
         return _resolve_declared_datasets(ids, knowledge_registry or {}, client, tenant_id=tenant_id)
 
-    def tool_resolver(names: tuple[str, ...]) -> tuple[str, ...]:
-        return _resolve_declared_tools(names, tool_registry or {})
+    #: The ``aiops`` provider's UUID, resolved **once, here, from the console** —
+    #: never from config (module docstring). Looked up lazily on first use so a
+    #: DSL with no declared tools costs no extra console call; the console read
+    #: happens only when the file actually names one.
+    aiops_ids: list[str] = []
+
+    def tool_resolver(names: tuple[Any, ...]) -> tuple[str, ...]:
+        if not aiops_ids:
+            aiops_ids.append(client.tool_provider_ids().get(AI_OPS_PROVIDER_NAME, ""))
+        return _resolve_tools(names, aiops_provider_id=aiops_ids[0], registry=tool_registry or {})
 
     config = map_dsl_to_config(
         client.export_dsl(),
@@ -729,29 +830,19 @@ def _optional_opening_statement(model_config: dict[str, Any]) -> str:
     return value.strip()
 
 
-def _declared_tool_names(model_config: dict[str, Any]) -> tuple[str, ...]:
-    """Read the tools an app declares in ``agent_mode.tools`` — as **reported**, never assigned.
+def _declared_tools(model_config: dict[str, Any]) -> tuple[Any, ...]:
+    """The declared ``agent_mode.tools`` as :class:`DeclaredTool`, or refuse.
 
-    Same contract as :func:`_declared_dataset_ids`, for the same reason: these
-    are Dify's tool identities, and our allow-list is a tuple of ``ToolName``.
-    Neither side can be turned into the other by string equality — Dify's entry
-    carries ``provider_id`` plus ``tool_name`` (verified from Dify 1.17.1's own
-    ``core/agent/entities.py``: ``AgentToolEntity(provider_type, provider_id,
-    tool_name, tool_parameters, plugin_unique_identifier, credential_id)``), and
-    nothing in this repo has ever seen a populated example — both apps on 36
-    carry ``tools: []``.
-
-    So the mapping key is deliberately **not invented here**. A declaration is
-    reported so the caller can refuse it, which is what keeps this from being
-    the "looks like it is managed" half of a feature: silently reading nothing
-    would make an operator's attached tools vanish with no signal, and guessing
-    a key would publish a binding nobody can verify.
-
-    Note ``agent_mode.enabled``: when it is false the app is not running the
-    tool loop at all, so ``tools`` is inert. It is still read, because an
-    operator who attached a tool and left the switch off should hear about the
-    tool rather than about a switch they did not set.
+    Same contract as :func:`_declared_dataset_ids` — read as **reported**, never
+    assigned — but it keeps the fields the 3A rule keys on (``provider_type``,
+    ``provider_id``, ``enabled``) instead of flattening them to
+    ``provider_id/tool_name``. 3A matches the provider by **UUID**, and a string
+    that has been joined cannot be un-joined reliably (a UUID never contains
+    ``/``, but the flattening is what made the first version of this rule
+    unimplementable, so it is not repeated).
     """
+    from aiops_diagnostics.dify_tools_catalog import DeclaredTool
+
     agent_mode = model_config.get("agent_mode")
     if agent_mode is None:
         return ()
@@ -763,7 +854,7 @@ def _declared_tool_names(model_config: dict[str, Any]) -> tuple[str, ...]:
     if not isinstance(tools, list):
         raise DifyDslMalformed("DSL model_config.agent_mode.tools must be a list")
 
-    names: list[str] = []
+    entries: list[DeclaredTool] = []
     for index, entry in enumerate(tools):
         if not isinstance(entry, dict):
             raise DifyDslMalformed(f"tool entry {index} must be an object, got {type(entry).__name__}")
@@ -771,8 +862,17 @@ def _declared_tool_names(model_config: dict[str, Any]) -> tuple[str, ...]:
         if not isinstance(tool_name, str) or not tool_name.strip():
             raise DifyDslMalformed(f"tool entry {index} has no tool_name")
         provider_id = entry.get("provider_id")
-        names.append(f"{provider_id}/{tool_name}" if isinstance(provider_id, str) else tool_name)
-    return tuple(names)
+        entries.append(
+            DeclaredTool(
+                provider_type=str(entry.get("provider_type") or ""),
+                provider_id=provider_id.strip() if isinstance(provider_id, str) else "",
+                tool_name=tool_name.strip(),
+                # Dify 的开关缺省为「开」：没写 enabled 的条目是有效条目，
+                # 而不是一个需要运营去补字段的残缺声明。
+                enabled=entry.get("enabled", True) is not False,
+            )
+        )
+    return tuple(entries)
 
 
 def _default_output_contract(agent_type: str) -> str:

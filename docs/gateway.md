@@ -227,11 +227,19 @@ UPMS 的 `ROLE_AGENT_PUBLISHER`（尚未建）。
 - **Dify 拥有这个字段，清单不得写**（`agent_manifest.DIFY_OWNED_FIELDS`）。绑定了 Dify
   的 agent 在 `[[agents]]` 里写 `allowed_tools` ⇒ 装载期**拒**；`reconcile` 也会**保留**
   库中现值，不会把运营改过的白名单改回默认。
-- **怎么改**：在 `AIOPS_GATEWAY_DIFY_TOOL_BINDINGS` 里登记 Dify 的身份 →
-  我们的工具，格式 `provider_id/tool_name:our_tool`（多行/分号分隔），例如
-  `time/timezone_conversion:known_runbook`。实测 Dify 1.17.1 的工具条目是
-  `{provider_id, provider_type, tool_name, tool_parameters}`，身份取其 `provider_id/tool_name`。
-- **未登记的身份会被拒**：拉回侧报出那个 Dify 身份并要求登记，**绝不按字面搬运** ——
+- **怎么改（两条路，#772 E / ADR-0019 §修订）**：
+  - **推荐**：在 Dify 里把工具挂在 **`aiops` 提供方**下（运营粘贴
+    `ops/dify-tools/aiops-tools.openapi.json` 注册一次）。该提供方下的七个工具
+    `operationId` **直接**对应我们的七个 `ToolName`，勾选即生效。匹配按提供方的
+    **UUID**做，而那个 UUID 每次拉取**当场从控制台解析**、不落任何配置 —— 所以重建
+    Dify 实例或重建提供方都不会让已发布的映射失效。
+  - **其他提供方**：登记进 `AIOPS_GATEWAY_DIFY_TOOL_BINDINGS`，格式
+    `provider_id/tool_name:our_tool`（多行/分号分隔）。Dify 1.17.1 的工具条目是
+    `{provider_id, provider_type, tool_name, tool_parameters}` —— 注意它是**自定义
+    API 提供方**时 `provider_id` 是**行 UUID**，且**没有提供方名字这个字段**。
+- **`enabled=false` 与「删除」同义**：不进白名单。**全被关掉 / 一个都没勾** ⇒ 沿用默认
+  （全部七个），与「不声明工具」逐字同向。
+- **翻不出的身份会被拒**：拉回侧报出那个条目并要求登记，**绝不按字面搬运** ——
   两个命名空间里名字相等不代表语义相同（它那边的 `order_snapshot` 与我们的不是同一个东西）。
 
 失败语义（与 Dify 侧 `raise ValueError(response.text)` 的读法对齐）：

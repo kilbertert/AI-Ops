@@ -184,7 +184,7 @@ AI-Ops 用独立服务身份回查——见 [ADR-0003](docs/adr/0003-bff-delegat
 flowchart TB
     L6["L6 服务边界与入口<br/>gateway_api · gateway_runtime · cli · gateway_server · gateway_cli<br/>gateway_client · admin_cli · gateway_config · gateway_tokens · gateway_logging<br/>tdengine_proxy · responses_adapter · codex_launcher"]
     L5["L5 持久化<br/>gateway_store · conversation_store · metrics_store<br/>agent_lifecycle · shortcut_lifecycle · dify_app_registry"]
-    L4["L4 推理与产品能力<br/>agent_engine · codex_runtime · agent_runner · agent_validator · qa_rag<br/>turn_recovery · routing · faq · promo_agents · answer_language · agent_manifest · agent_debug<br/>dify_dsl_pull · dify_knowledge_api · dify_debug_identity · agent_content · clarification"]
+    L4["L4 推理与产品能力<br/>agent_engine · codex_runtime · agent_runner · agent_validator · qa_rag<br/>turn_recovery · routing · faq · promo_agents · answer_language · agent_manifest · agent_debug<br/>dify_dsl_pull · dify_tools_catalog · dify_knowledge_api · dify_debug_identity · agent_content · clarification"]
     L3["L3 证据与诊断内核<br/>sources · diagnostic_tools · engine · journal<br/>agent_workspace · health_report · knowledge_retrieval"]
     L2["L2 身份与范围<br/>scope_context · query_scope · caller_auth · third_session_auth<br/>company_token_auth"]
     L1["L1 领域规则（纯函数）<br/>rules · order_visibility · health_metrics · health_curves · parsing"]
@@ -310,6 +310,7 @@ flowchart TB
 | `admin_cli.py` 的 `pull-dify` | 把运营在 Dify 里改好的配置拉回来、经**我方发布门**冻结成一个已发布版本（#625 / PRD #577）。发布走 `AgentManager.publish` —— 与 `/v1/agents`、`admin reconcile` **同一条**生产路径；控制台凭据来自服务端配置而非命令行参数；**不写运行时登记表**（那是 `[[dify_apps]]` + `reconcile` 的事，混在一起会让一次拉取顺手改掉线上路由）|
 | `dify_debug_identity.py` | 面向 Dify 的**调试身份**（#586 / PRD #577）：**凭据决定身份**，请求里的任何字段都不参与判定。生产凭据 = 登记表全量；调试凭据 = 固定测试租户 + 显式列出的知识库子集。身份只**收窄**，从不扩张；子集为空即**什么都取不到**（不是『不收窄』）；越权与未登记同为 404 |
 | `dify_dsl_pull.py` | Dify 侧配置的**拉取**面（#580 / PRD #577）：从控制台导出端点取已导出 DSL，映射为 `AgentConfig` 并以**草稿**落地（经 `AgentManager`，绝不发布）。只消费 `pre_prompt` / `model.name` / `dataset_configs` 数据集 id；`opening_statement` 与 `suggested_questions` **不消费**（其权威来源是按语言版本化的内容制品，见姊妹票 #585）。拉取失败（不可达 / 凭据被拒 / DSL 版本不符 / 字段不可映射）各自一个错误码，且**不留下半成品草稿** |
+| `dify_tools_catalog.py` | **七工具目录**（#774 / PRD #772 E）：一份 OpenAPI 3.0 文档（`ops/dify-tools/aiops-tools.openapi.json`，运营粘贴进 Dify 的 API 工具提供方）+ 把运营的勾选翻译成生产工具白名单的规则。规则只认两种身份：`aiops` 提供方下的七个 `operationId`（**按提供方 UUID 匹配**，UUID 每次拉取当场从控制台解析，绝不落库/落配置），或其他提供方经 `AIOPS_GATEWAY_DIFY_TOOL_BINDINGS` 显式登记。`enabled=false` 的条目与「删除」同义。目录端点只回一段固定说明、不读任何数据源 |
 | `dify_console_publish.py` | Dify 控制台里那颗「发布到 AI-Ops」按钮的**后端桥**（#577 的最后一跳）：从页面 URL 取 app_id → 拿**运营自己的 Dify 会话**问 Dify「你是谁、看得见这个 app 吗」→ 再用**服务端**的发布密钥调 `/v1/operator/publish`。密钥**不进浏览器**；app_id **不由请求体给**（伪造不了发哪个）；每一个失败都收敛成同一句话，不透内部错误码。它不引入新权限 —— 能登控制台改提示词的人本来就能改这个智能体的行为 |
 | `shortcut_migration.py` | 租户复制快捷动作 → 平台默认的幂等迁移 |
 | `clarification.py` | 澄清类答复的**判别位**（#636）：每种成因一个稳定、非本地化的 `CLARIFY_*` 码，同一条码在**响应体、指标行、结构日志**三处是同一个串。此前六个分支共用一句本地化 `message` 与一个不分细分的 `route_type='clarification'` 指标行，排查只能靠把每条分支跑一遍量字节数（且不成立）。码决定 `missing_fields` 与文案键，所以答复不可能自相矛盾；未登记的码是错误而不是默认值 |
