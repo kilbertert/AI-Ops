@@ -226,5 +226,24 @@ echo "$out" | grep -q 'http_access allow client_localnet dify_allowed_private_ne
   || fail "IP 白名单没有生成放行行"
 ok "squid 非空白名单 ⇒ acl+allow 形状正确"
 
+# ------------------------------------------------- 3. 会话寿命（#772 B / #779）
+# 自签模型下会话是无状态的，撤权后的窗口就是令牌寿命 —— 所以这个值必须**显式且成对**
+# 地写在这份示例里，而不是继承上游默认（30 天，与公司令牌不同量级）。
+grep -q '^ACCESS_TOKEN_EXPIRE_MINUTES=60$' env.example \
+  || fail "env.example 缺 ACCESS_TOKEN_EXPIRE_MINUTES=60"
+grep -q '^REFRESH_TOKEN_EXPIRE_DAYS=1$' env.example \
+  || fail "env.example 缺 REFRESH_TOKEN_EXPIRE_DAYS=1（会话寿命不得继承上游 30 天默认）"
+# 反例：把 refresh 改回上游默认，判据必须报错 —— 钉住"检查真的会拒"。
+tmp_env2="$(mktemp)"
+sed 's/^REFRESH_TOKEN_EXPIRE_DAYS=1$/REFRESH_TOKEN_EXPIRE_DAYS=30/' env.example > "$tmp_env2"
+if grep -q '^REFRESH_TOKEN_EXPIRE_DAYS=1$' "$tmp_env2"; then
+  rm -f "$tmp_env2"
+  fail "反例构造失败：sed 没改到 refresh 那一行"
+fi
+! grep -q '^REFRESH_TOKEN_EXPIRE_DAYS=1$' "$tmp_env2" \
+  || { rm -f "$tmp_env2"; fail "会话寿命判据没有拒掉 30 天默认"; }
+rm -f "$tmp_env2"
+ok "会话寿命显式且成对（access=60min / refresh=1day），反例被拒"
+
 echo
 echo "全部通过。"

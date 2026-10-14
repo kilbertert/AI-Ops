@@ -34,6 +34,7 @@ from aiops_diagnostics.dify_login_provision import (
     provision_editor,
 )
 from aiops_diagnostics.dify_login_proxy import (
+    CompanyLoginRejected,
     ConsoleSession,
     PermissionDenied,
     mint_console_session,
@@ -41,11 +42,27 @@ from aiops_diagnostics.dify_login_proxy import (
 
 _LOGGER = logging.getLogger("aiops.dify_login_proxy.service")
 
-#: 映射状态。``active`` 能登录；``disabled`` 是"公司侧已失权"的本地落点 —— 自签模型下
-#: 封禁是**我们自己的映射**，不是去 Dify 发一个 banned（那个动作在自签模型里既无必要
-#: 也无人可见：没人拿密码进 Dify）。#779 会在这里加"每次登录重读权限码"的封禁/解封。
+#: 映射状态。``active`` 能登录；``disabled`` 是"公司侧已失权"的本地落点。
+#:
+#: **为什么是本地状态而不是去 Dify 封禁账号**（#779，两处源码核实）：
+#: 1. Dify 1.17.1 **没有** moderation/ban 的 HTTP 接口 —— `AccountStatus.BANNED` 只在
+#:    读取侧被检查（`load_user` 401），没有任何写入口。
+#: 2. 退路「把成员从工作区移除」**不可逆**：`remove_member_from_tenant` 会把该成员的
+#:    app/dataset 转给 owner，而重新加入的条件是 `status == PENDING or RBAC_ENABLED`；
+#:    本实例 `RBAC_ENABLED=False`，一个已激活账号被移除后，重新邀请**静默不生效**
+#:    （不建 join、也抛不出 `AccountAlreadyInTenantError`）。用它当封禁手段＝永久失去该
+#:    成员且悄悄改掉归属。
+#: ⇒ 封禁落在**我们自己的映射**上，而"活着的会话随之失效"由令牌寿命界定（见
+#:    :data:`SESSION_MAX_MINUTES_NOTE`）—— 代理不在请求路径上时，这是能诚实给出的边界。
 STATUS_ACTIVE = "active"
 STATUS_DISABLED = "disabled"
+
+#: 自签会话的有效期就是撤权窗口：会话是**无状态**的（Dify 不查会话存储），所以一枚已
+#: 签出的令牌在它 `exp` 之前一直有效。代理把 `access` 与 `refresh` 都签成同一个有效期，
+#: 于是"公司撤权 → 该用户彻底登不进来"的最坏情形就是这一个窗口。默认 60 分钟，比公司
+#: 令牌（960 分钟）短一个量级 —— PRD 要求的"不超过公司令牌同量级"因此**更强地**满足。
+#: 要让窗口更小就把 `AIOPS_LOGIN_PROXY_ACCESS_MINUTES` 调小。
+SESSION_MAX_MINUTES_NOTE = "access/refresh 同寿命；撤权窗口 = ACCESS_MINUTES"
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,6 +99,26 @@ class MappingStore:
                     last_reconciled_at TEXT
                 )
                 """
+            )
+            # 审计账本（#779）：**追加写**，一行一个动作。与"当前状态"分开存，因为
+            # "现在是什么状态"与"谁在什么时候把它改成了什么"是两个问题，合成一列会让
+            # 后者被前者覆盖掉。here 记的只有非敏感字段：公司用户 id、Dify 账号 id、
+            # 动作、原因码、时间 —— 没有密码、没有令牌、没有会话。
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS dify_login_audit (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    at TEXT NOT NULL,
+                    company_user_id TEXT NOT NULL,
+                    dify_account_id TEXT NOT NULL DEFAULT '',
+                    action TEXT NOT NULL,
+                    reason_code TEXT NOT NULL DEFAULT ''
+                )
+                """
+            )
+            connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_dify_login_audit_user"
+                " ON dify_login_audit(company_user_id, at DESC)"
             )
 
     def _connect(self) -> sqlite3.Connection:
@@ -142,6 +179,42 @@ class MappingStore:
                 ),
             )
 
+    def record_audit(
+        self,
+        *,
+        company_user_id: str,
+        dify_account_id: str,
+        action: str,
+        reason_code: str = "",
+    ) -> None:
+        """Append one lifecycle action. Never raises into the login path.
+
+        审计写在**登录成功/失败的关键分支**上；它是可观测性，不是授权判据 ——
+        所以一次磁盘写入失败不该把一次合法登录变成失败（但会告警）。
+        """
+        try:
+            with self._lock, self._connect() as connection:
+                connection.execute(
+                    "INSERT INTO dify_login_audit"
+                    " (at, company_user_id, dify_account_id, action, reason_code)"
+                    " VALUES (?, ?, ?, ?, ?)",
+                    (_utc_now(), company_user_id, dify_account_id, action, reason_code),
+                )
+        except sqlite3.Error:  # pragma: no cover - 磁盘问题不该挡登录
+            _LOGGER.warning("dify-login: audit write failed for %s/%s", company_user_id, action)
+
+    def audit_entries(self, company_user_id: str | None = None) -> list[dict[str, Any]]:
+        """读审计行（新在前）；给测试与运维查询用。"""
+        with self._connect() as connection:
+            if company_user_id is None:
+                rows = connection.execute("SELECT * FROM dify_login_audit ORDER BY id DESC").fetchall()
+            else:
+                rows = connection.execute(
+                    "SELECT * FROM dify_login_audit WHERE company_user_id = ? ORDER BY id DESC",
+                    (company_user_id,),
+                ).fetchall()
+        return [dict(row) for row in rows]
+
     def set_status(self, company_user_id: str, status: str) -> None:
         with self._lock, self._connect() as connection:
             connection.execute(
@@ -197,19 +270,39 @@ class LoginService:
         失败一律抛 :class:`DifyLoginError`，``code`` 稳定、``message`` 面向运营。
         **公司密码与令牌不在这里落任何地方。**
         """
-        identity: CompanyIdentity = company_login(
-            self.company, username=username, password=password, random_str=random_str, code=code
-        )
+        try:
+            identity: CompanyIdentity = company_login(
+                self.company, username=username, password=password, random_str=random_str, code=code
+            )
+        except CompanyLoginRejected:
+            # 公司登录**失败**（密码错、账号停用/不存在）**绝不改变映射状态** —— 失败可能
+            # 只是密码打错，据此封禁会把一次手误变成一次锁定（#779 的明确要求）。
+            raise
         permissions = read_permissions(self.company, identity)
 
         existing = self.store.get(identity.user_id)
-        if existing is not None and existing["status"] == STATUS_DISABLED:
-            # 本地已失权：即使公司此刻又给了权限码，也要求一次显式的重新启用（#779）。
-            raise PermissionDenied("MAPPING_DISABLED", "该账号已被停用，请联系管理员")
 
         if not self.policy.may_edit(permissions):
-            # 没有编辑权限码 ⇒ **不开户、不签会话**。用户故事 4：明确告诉他去找谁开权限，
-            # 而不是给一个空工作区。
+            # 失去编辑权限码 ⇒ **无论此前是什么状态**都拒绝登录。若此前是 active，就地
+            # 置为 disabled 并记审计 —— 这一次登录就是撤权生效点（#779）。此后即使公司又给回
+            # 权限码，重登也会重新授权并把状态改回 active（下一段），所以它是**可逆**的。
+            if existing is not None and existing["status"] == STATUS_ACTIVE:
+                self.store.set_status(identity.user_id, STATUS_DISABLED)
+                self.store.record_audit(
+                    company_user_id=identity.user_id,
+                    dify_account_id=str(existing["dify_account_id"]),
+                    action="revoked",
+                    reason_code="MISSING_EDIT_PERMISSION",
+                )
+                _LOGGER.info("dify-login: revoked company_user=%s (lost edit permission)", identity.user_id)
+            elif existing is None:
+                self.store.record_audit(
+                    company_user_id=identity.user_id,
+                    dify_account_id="",
+                    action="denied",
+                    reason_code="MISSING_EDIT_PERMISSION",
+                )
+            # 用户故事 4：明确告诉他去找谁开权限，而不是给一个空工作区。
             required = self.policy.edit_permission or "未配置"
             raise PermissionDenied(
                 "MISSING_EDIT_PERMISSION",
@@ -226,6 +319,10 @@ class LoginService:
             )
         from aiops_diagnostics.dify_login_provision import account_email_for
 
+        # 解封：此前 disabled 而现在又有编辑权限码 ⇒ 改回 active（#779 的"重新获得权限后
+        # 再登录，解除封禁"）。**这是与封禁可逆的那一半**，所以必须在 upsert 之前判出方向
+        # 以便记审计 —— upsert 自己就会把状态写成 active。
+        reactivated = existing is not None and existing["status"] == STATUS_DISABLED
         self.store.upsert(
             company_user_id=identity.user_id,
             username=identity.username,
@@ -235,6 +332,21 @@ class LoginService:
             permissions=permissions,
             status=STATUS_ACTIVE,
         )
+        if reactivated:
+            self.store.record_audit(
+                company_user_id=identity.user_id,
+                dify_account_id=account_id,
+                action="reactivated",
+                reason_code="EDIT_PERMISSION_REGAINED",
+            )
+            _LOGGER.info("dify-login: reactivated company_user=%s", identity.user_id)
+        elif existing is None:
+            self.store.record_audit(
+                company_user_id=identity.user_id,
+                dify_account_id=account_id,
+                action="provisioned",
+                reason_code="FIRST_LOGIN",
+            )
         session = mint_console_session(
             account_id,
             secret_key=self.dify.secret_key,
