@@ -50,12 +50,23 @@ AIOPS_CONSOLE_BRIDGE_DIFY_URL=http://127.0.0.1:10018
 AIOPS_CONSOLE_BRIDGE_GATEWAY_URL=https://api.mall.qushiyun.com
 AIOPS_CONSOLE_BRIDGE_HOST=127.0.0.1
 AIOPS_CONSOLE_BRIDGE_PORT=10118
+AIOPS_CONSOLE_BRIDGE_CONSOLE_ORIGIN=<浏览器实际访问的控制台 origin>
+AIOPS_CONSOLE_BRIDGE_WORKSPACE_ID=<网关导出配置使用的同一个 Dify 工作区 ID>
+AIOPS_CONSOLE_BRIDGE_ALLOWED_ROLES=owner,admin
 ```
 
 **为什么桥走 `/v1/dify/publish`（共享密钥）而不是 `/v1/operator/publish`**：
 后者认的是「运营的**网关**会话」，而桥手上只有运营的**Dify** 会话 —— 两者换不通。
-桥的形态是 BFF：**先把"人"验明白（拿 Dify 会话问 Dify），再以"机器"的身份把事做完**。
-两条门各司其职，最终都走同一个 `_publish_bound_app`。
+桥的形态是 BFF：**先把“人”验明白，再以“机器”的身份把事做完**。校验次序为：
+
+1. 浏览器请求的 Origin 与配置的控制台 origin 一致，Cookie 与 CSRF 完整且相符。
+2. Dify 返回的工作区 ID 必须等于桥固定的工作区 ID；该 ID 必须与网关 DSL 导出的工作区配置一致。
+3. 该工作区中的角色默认只能是 owner/admin；能查看 app 不代表可以发布。
+4. Dify 在该工作区找到对应 app，随后网关确认它是已登记绑定的 app，才执行发布。
+
+Referer 只是请求上下文，用户能自行构造，不能代替授权。机器发布密钥覆盖哪些绑定由网关决定；桥没有公司租户级发布身份，不能宣称它继承了 `/v1/operator/publish` 的用户范围。权限默认限于固定工作区的 owner/admin，细粒度发布授权仍需另行设计。
+
+上游重定向不跟随；非预期结果、`refused`/`failed` 均不得报告发布成功。两条门最终复用同一个 `_publish_bound_app`，但凭据与授权模型不同。
 
 ## 失败的方向
 

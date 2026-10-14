@@ -1,3 +1,14 @@
+## 2026-10-14 · session:2558e481 发布桥复验：未通过，修复本地验证通过但尚未部署
+
+**交付追踪**：分支 `fix/dify-publish-acceptance`，基线 `ee41e2d`（#768）。本节不代表生产验收通过。
+
+- **确认缺陷**：36 部署模块与 main 不一致（CSRF 传递与 `/v1/dify/publish` 路由只在部署副本）；main 重部署会失效。原桥用 app 查看权限代替发布权限，且默认跟随重定向、把不明确的 2xx 当成功。
+- **修复**：固定控制台 origin 与 Dify 工作区，默认发布角色 owner/admin；工作区摘要必须匹配固定 ID，防止跨工作区角色与 app 查询混用。仅转发 Dify 必需的 Cookie/CSRF，不跟随重定向，严格验证发布结果。Referer 不承担授权。
+- **独立专项验证**：显式 `PYTHONPATH=<修复 worktree>/src`，`uv run --frozen pytest tests/test_order_status.py::test_no_second_inline_status_to_role_judgement tests/test_dify_console_publish.py -q -o addopts=''`：**205 passed**；Ruff 与 `git diff --check` 通过。全量测试：**2483 passed, 9 skipped, 19 warnings**（263.34 秒），显式加载修复 worktree 源码。
+- **部署资产验证**：`bash deploy/dify-36/check.sh` 通过，Dify 内部入口改为回环 10018，非回环三种反例均被拒。
+- **生产只读核对**：桥当前 env 未配置新增的 workspace/origin/roles。新制品部署前必须补齐；桥工作区 ID 必须与网关导出 DSL 的工作区一致。未修改生产。
+- **业务验收：未完成**。尚未提交/合并/部署修复，真实浏览器与 APK 复验未完成。系统用例与清理要求见发布桥目录的验收计划。
+
 ## 2026-10-14 · 运营自助发布 + 生产 app 迁到 Agent 模式（41 真机）
 
 **分支** `docs/dify-agent-mode-and-publish`，基线 `origin/main`（`adadfa7`）。已部署。
