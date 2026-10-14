@@ -1,8 +1,8 @@
 # 工具白名单：Dify 声明，执行器强制，清单不许承载
 
 日期：2026-10-14
-状态：已采纳
-影响版本：PRD #577（Dify 作为权威编辑面）；`agent_contracts.ALL_TOOL_NAMES`、`AgentConfig.allowed_tools`、`agent_manifest.DIFY_OWNED_FIELDS`
+状态：已采纳（2026-10-14 **修订**：工具识别规则改为「`aiops` 提供方 + `operationId` 对齐」，见 §修订）
+影响版本：PRD #577（Dify 作为权威编辑面）；PRD #772 E（3A 工具目录）；`agent_contracts.ALL_TOOL_NAMES`、`AgentConfig.allowed_tools`、`agent_manifest.DIFY_OWNED_FIELDS`
 
 ## 背景
 
@@ -42,6 +42,51 @@ PRD #577 让 Dify 成为智能体的编辑面。到这一步为止，Dify 能管
 **拉回侧 fail-closed**：DSL 的 `agent_mode.tools` 若**声明了**工具而调用方没有给出
 翻译器 ⇒ **拒**，点明那是 Dify 的工具身份；什么都没声明 ⇒ 不加约束（存量行为）。
 
+## 修订（2026-10-14，PRD #772 E / 3A）：从「显式绑定」改为「`aiops` 提供方 + `operationId` 对齐」
+
+上面那条「映射键定为 `provider_id/tool_name`」是**当时唯一可行**的做法：仓内没有
+真实的**外接 API 工具**样本，只有一个内置工具（`time/timezone_conversion`），而内置
+提供方的 `provider_id` 恰好是个短名。现在 3A 要在 Dify 里注册一个**自定义 API 提供方**
+`aiops`，把七个真实工具暴露成可勾选的条目 —— 那条命名空间就撑不住了，原因是**事实**，
+不是偏好：
+
+- **自定义 API 提供方的 `provider_id` 是它数据库行的 UUID**（`ApiToolProvider.id`）。
+  Dify 1.17.1 源码 `ToolManager.get_api_provider_controller` 就是按
+  `ApiToolProvider.id == provider_id` 查的。所以「按名字匹配」在 API 提供方上根本不存在：
+  条目里写的是一个 UUID，不是 `aiops`。
+- **条目里没有提供方名字这个字段**。`core/agent/entities.py` 的 `AgentToolEntity` 是
+  `(provider_type, provider_id, tool_name, tool_parameters, plugin_unique_identifier,
+  credential_id)`；DSL 导出（`app_dsl_service.py`）也只把 `credential_id` 抹掉，
+  不补名字。⇒ PRD 初稿写的 `provider_name == "aiops"` **在导出形状里没有可读的字段**。
+- **那条短名映射只是巧合，不是契约**。`provider_id/tool_name` 作为字符串键能成立，
+  靠的是"UUID 里不含 `/`"。把它当契约，等于把两个提供方的**同名工具**放进同一个
+  命名空间 —— 而「名字相等不代表语义相同」正是本 ADR 上一节立下的纪律。
+
+**决定（两层）：**
+
+1. **`aiops` 提供方下的条目按 `provider_type == "api"` 且 `provider_id == <该提供方
+   的 UUID>` 匹配**，键是 `operationId`，**直接映射到同名 `ToolName`**。七个之外的名字
+   **拒**（报出条目），不按字面搬运。
+2. **其他提供方继续只走 `AIOPS_GATEWAY_DIFY_TOOL_BINDINGS`** 显式登记表。这条**不变**。
+
+**那个 UUID 不落任何地方是这一节的重点。** PRD 要求「重建 Dify 实例或重建提供方后已
+发布的映射不失效」；把 UUID 写进配置/清单/代码都会违反它。所以 UUID 是**拉取时当场**
+从控制台 `GET /console/api/workspaces/current/tool-providers?type=api` 解析出来的
+（`DifyDslClient.tool_provider_ids`），只活在一次拉取的调用栈里。重建之后重新解析出来的
+新 UUID 一样能用 —— `test_the_same_dsl_under_a_different_provider_uuid_resolves_the_same_way`
+是这条的可执行形式。
+
+**第二个不变式（保持 ADR-0019 原意）：执行器仍是唯一强制点。** 这里解析出的白名单只是
+一个 `AgentConfig.allowed_tools`，与拉取路径的其他字段同源同门；白名单外的工具在执行器里
+记 `blocked`、不取数。目录端点（`POST /v1/dify/tools/<tool>`）**不执行任何工具**，
+只回一段固定说明 —— 它在 Dify 侧的存在意义是"让运营**看得见、勾得到**"，而 Dify 自己的
+智能体循环碰不到我们的执行器，所以预览结果**本来就不代表生产行为**（@772 F 的试运行
+是唯一的真实路径）。
+
+**`enabled=false` 与「删除」同义**（PRD #772 E）：不进入白名单。而**全被关掉 / 什么都没勾**
+⇒ 沿用 ADR-0019 的默认（全部七个）—— 与"不声明工具"逐字同向，理由是同一个：把一个工具
+切到关闭、而它本来就是默认全开的，不该产生一次"白名单变空"的静默收窄。
+
 ## 被否掉的替代形态
 
 - **只在提示词里收窄。** 那只是告诉模型"可以要什么"，模型请求白名单外的工具时执行器
@@ -80,9 +125,11 @@ PRD #577 让 Dify 成为智能体的编辑面。到这一步为止，Dify 能管
 ## 后果
 
 - 存量快照、存量清单、存量发布**逐字不变**：默认值即旧行为。
-- 运营在 Dify 里挂工具**已经能生效**：把它的身份登记进
-  `AIOPS_GATEWAY_DIFY_TOOL_BINDINGS`（`provider_id/tool_name:our_tool`）即可。未登记的
-  身份**会被拒**，点明是哪一个 —— 拒比静默忽略诚实。
+- 运营在 Dify 里挂工具**已经能生效**：`aiops` 提供方下的七个直接生效（见 §修订）；
+  其他身份登记进 `AIOPS_GATEWAY_DIFY_TOOL_BINDINGS`（`provider_id/tool_name:our_tool`）。
+  翻不出的身份**会被拒**，点明是哪一个 —— 拒比静默忽略诚实。
+- **3A 上线后 `time/timezone_conversion` 这条占位映射退役**：它证明的是翻译管道通了，
+  不是"运营能挑真实工具"。登记表的**解析能力保留**（第三方提供方仍走它）。
 - `agent_mode.enabled=false` 时 tools 是惰性的，但仍会被读 —— 运营挂了工具却没开开关，
   应该听到**工具**这件事，而不是一个他没设过的开关。
 - 本 ADR 只覆盖**诊断路径**（`operations` agent）。客服路径没有工具执行器，因此不获得

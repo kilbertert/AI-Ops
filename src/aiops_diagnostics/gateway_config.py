@@ -125,6 +125,17 @@ class GatewayServerSettings:
     #: 另一半是它必须与 ``dify_console_api_key`` 分开：那把在**服务端**，这把要给到
     #: **触发方**，一把钥匙两处持有就不再是"服务端凭据"了。
     dify_publish_api_key: str = field(repr=False, default="")
+    #: **3A 工具说明端点**（`POST /v1/dify/tools/<tool>`）的共享凭据。留空 ⇒ 整组路由 404，
+    #: 与 `dify_knowledge_api_key` 同一条「未配置即不启用」的机制。
+    #:
+    #: 五把钥匙各自的理由，为什么这一把必须**再新开一把**（#772 E）：它是 Dify 侧
+    #: **每一个**能编辑该 API 工具提供方的人都看得见的那把（Dify 的提供方凭据是工作区
+    #: 共享的），所以它必须是**只能读到一段固定说明文本**的钥匙 —— 不能查知识库
+    #: （`dify_knowledge_api_key`），不能查调试面（`dify_debug_api_key`），不能发布
+    #: （`dify_publish_api_key`），也不是我们调 Dify 用的那把（`dify_console_api_key`）。
+    #: 用法相同（登记表里的每一对都各有理由）而**权限最小**，这正是 3A 端点除了说明
+    #: 文本什么都不返回的原因：泄露这把钥匙拿不到任何业务数据。
+    dify_tools_api_key: str = field(repr=False, default="")
     #: Conversation context window (#482). The defaults ARE the contract's
     #: numbers (8 turns / 8k tokens, ``conversation_store`` owns the constants);
     #: they are configurable because a RAG or promotional turn also spends the
@@ -228,6 +239,8 @@ class GatewayServerSettings:
             or _file_value(file_values, "AIOPS_GATEWAY_DIFY_CONSOLE_WORKSPACE_ID"),
             dify_publish_api_key=_env("AIOPS_GATEWAY_DIFY_PUBLISH_API_KEY")
             or _file_value(file_values, "AIOPS_GATEWAY_DIFY_PUBLISH_API_KEY"),
+            dify_tools_api_key=_env("AIOPS_GATEWAY_DIFY_TOOLS_API_KEY")
+            or _file_value(file_values, "AIOPS_GATEWAY_DIFY_TOOLS_API_KEY"),
             jev_base_url=_env("AIOPS_GATEWAY_JEV_BASE_URL")
             or _file_value(file_values, "AIOPS_GATEWAY_JEV_BASE_URL"),
             jev_api_key=_env("AIOPS_GATEWAY_JEV_API_KEY")
@@ -317,6 +330,20 @@ class GatewayServerSettings:
                 "AIOPS_GATEWAY_DIFY_CONSOLE_BASE_URL/API_KEY are required when the Dify publish "
                 "route is enabled (the route pulls from that console)"
             )
+        # #772 E：3A 工具说明端点只用一把钥匙，没有第二个半（它不调任何上游）。这里要判的
+        # 是它**不能**与任何既有钥匙同值 —— 同值等于把五件不同的事绑成一个权限，而那把
+        # 钥匙是暴露给 Dify 侧的。
+        for other_name, other in (
+            ("AIOPS_GATEWAY_DIFY_KNOWLEDGE_API_KEY", self.dify_knowledge_api_key),
+            ("AIOPS_GATEWAY_DIFY_DEBUG_API_KEY", self.dify_debug_api_key),
+            ("AIOPS_GATEWAY_DIFY_PUBLISH_API_KEY", self.dify_publish_api_key),
+            ("AIOPS_GATEWAY_DIFY_CONSOLE_API_KEY", self.dify_console_api_key),
+        ):
+            if self.dify_tools_api_key and other and secrets.compare_digest(self.dify_tools_api_key, other):
+                raise ValueError(
+                    f"AIOPS_GATEWAY_DIFY_TOOLS_API_KEY must differ from {other_name} "
+                    "(one key must not authorise both reading the tool catalog and another surface)"
+                )
         # 三把钥匙必须互不相同。同值等于把两件事绑成一个权限 —— #586 对调试凭据已经立过
         # 这条，这里的每一对都有各自的理由（见字段注释）。
         for other_name, other in (
