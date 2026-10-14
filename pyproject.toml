@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
   "openai-codex>=0.144.4,<0.145",
+  "cryptography>=46,<47",
   "fastapi>=0.115,<1",
   "keyring>=25,<26",
   "python-dotenv>=1.0,<2",

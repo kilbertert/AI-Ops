@@ -1,0 +1,238 @@
+"""在 Dify 里为一个公司用户开一个 editor 账号（#772 B / #778）。
+
+三步，都用**官方接口**，且**全程不经过邮件**：
+
+1. 以应急 owner 的**自签会话**调邀请接口 → 得到一个邀请 `token`（Dify 把它放在响应的
+   `url` 里，不寄信）。
+2. 用同一个 `token` 调 `/console/api/activate` 完成激活。
+3. 在 Dify 里按邮箱查回账号 id（`/console/api/workspaces/current/members`）。
+
+**为什么不用自带注册或 `INNER_API`/`ADMIN_API_KEY`**：前者的 `ALLOW_REGISTER` 是 PRD 明确
+要保持关闭的；后两者是权力过宽的共享静态密钥（能管整个实例），而这里只需要"邀请一个人"。
+
+**账号邮箱**由公司用户 id 确定性生成、落在不可投递的保留域（``.invalid``）—— 自签会话模型
+下没有任何人需要收到那封信，而"同一公司用户永远同一个 Dify 账号"靠的就是这个确定性。
+"""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass, field
+from typing import Any
+
+from aiops_diagnostics.bounded_http import (
+    ErrorMapping,
+    HttpFailure,
+    RequestSpec,
+    json_body,
+    request_json,
+)
+from aiops_diagnostics.dify_login_proxy import (
+    _MAX_NAME_CHARS,
+    ACCOUNT_EMAIL_DOMAIN,
+    ConsoleSession,
+    DifyLoginError,
+)
+
+_LOGGER = logging.getLogger("aiops.dify_login_proxy.provision")
+
+INVITE_PATH = "/console/api/workspaces/current/members/invite-email"
+ACTIVATE_PATH = "/console/api/activate"
+MEMBERS_PATH = "/console/api/workspaces/current/members"
+
+#: 公司用户在 Dify 里**只给 editor**（#772 B / 用户故事 9）：拿不到 API 工具密钥、
+#: 管不了成员、也不能借工具测试接口让服务端访问任意地址。
+MEMBER_ROLE = "editor"
+
+
+class DifyProvisionError(DifyLoginError):
+    """开户/查账号这一步没做成。"""
+
+
+@dataclass(frozen=True, slots=True)
+class DifyConsoleSettings:
+    """代理访问 Dify 控制台所需的一切。``secret_key`` 只用于**自签会话**。"""
+
+    base_url: str
+    secret_key: str = field(repr=False, default="")
+    deployment_edition: str = "COMMUNITY"
+    access_expire_minutes: int = 60
+    timeout: float = 15.0
+    #: 邀请时带上，让激活页语言一致；可选。
+    language: str = "zh-Hans"
+
+
+def account_email_for(company_user_id: str) -> str:
+    """公司用户 id → **确定性** Dify 账号邮箱（用户故事 14）。
+
+    只保留 id 里 URL/邮箱安全的字符；确定性是硬要求，所以不做任何随机化或哈希 ——
+    同一用户二次登录必须落到同一个账号，否则历史编辑与发布记录会断。
+    """
+    safe = "".join(ch if (ch.isalnum() or ch in "-_") else "-" for ch in company_user_id).strip("-")
+    if not safe:
+        raise DifyProvisionError("COMPANY_USER_ID_INVALID", "公司用户 id 不含可用字符")
+    return f"{safe}@{ACCOUNT_EMAIL_DOMAIN}"
+
+
+def account_name_for(company_user_id: str, username: str) -> str:
+    """展示名：用户名优先，退回归一化后的 id；Dify 上限 30 字符。"""
+    candidate = (username or company_user_id).strip() or company_user_id
+    return candidate[:_MAX_NAME_CHARS]
+
+
+def _mapping() -> ErrorMapping:
+    def rejected(failure: HttpFailure) -> Exception:
+        return DifyProvisionError("DIFY_AUTH_REJECTED", f"Dify 拒绝了会话：{failure.detail}")
+
+    def unavailable(failure: HttpFailure) -> Exception:
+        return DifyProvisionError("DIFY_UNAVAILABLE", f"Dify 不可用：{failure.detail}")
+
+    def malformed(failure: HttpFailure) -> Exception:
+        return DifyProvisionError("DIFY_MALFORMED", f"Dify 返回无法解释：{failure.detail}")
+
+    return ErrorMapping(
+        auth_rejected=rejected,
+        http_error=unavailable,
+        unavailable=unavailable,
+        invalid_body=malformed,
+        invalid_envelope=malformed,
+    )
+
+
+def _map_envelope(payload: Any, mapping: ErrorMapping) -> Any:
+    if isinstance(payload, (dict, list)):
+        return payload
+    raise mapping.invalid_envelope(HttpFailure(kind="invalid_envelope", detail="invalid response"))
+
+
+def _console_headers(session: ConsoleSession) -> dict[str, str]:
+    """控制台的**双提交**：Bearer + `X-CSRF-Token` + 与头逐字相同的 csrf cookie。"""
+    return {
+        "Accept": "application/json",
+        "Authorization": f"Bearer {session.access_token}",
+        "X-CSRF-Token": session.csrf_token,
+        "Cookie": f"csrf_token={session.csrf_token}",
+    }
+
+
+def _post(settings: DifyConsoleSettings, session: ConsoleSession, path: str, payload: dict[str, Any]) -> Any:
+    headers = _console_headers(session)
+    headers["Content-Type"] = "application/json"
+    return request_json(
+        RequestSpec(
+            url=settings.base_url.rstrip("/") + path,
+            method="POST",
+            headers=headers,
+            body=json_body(payload),
+            timeout=settings.timeout,
+        ),
+        mapping=_mapping(),
+        envelope=_map_envelope,
+    )
+
+
+def _get(settings: DifyConsoleSettings, session: ConsoleSession, path: str) -> Any:
+    return request_json(
+        RequestSpec(
+            url=settings.base_url.rstrip("/") + path,
+            method="GET",
+            headers=_console_headers(session),
+            timeout=settings.timeout,
+        ),
+        mapping=_mapping(),
+        envelope=_map_envelope,
+    )
+
+
+def _invite_token(result: Any, email: str) -> str | None:
+    """从邀请响应里取出该邮箱的激活 token，或（已存在则）返回 ``None``。
+
+    Dify 把 token 放在 `url` 的查询串里（`.../activate?email=…&token=…`），这就是
+    "不寄信也能激活"的全部机制 —— 它是**接口语义**里的字段，不是从页面里抠的。
+    """
+    if not isinstance(result, dict):
+        return None
+    results = result.get("results")
+    if not isinstance(results, list):
+        return None
+    for item in results:
+        if not isinstance(item, dict) or str(item.get("email", "")).lower() != email.lower():
+            continue
+        status = str(item.get("status", ""))
+        if status == "already_member":
+            return None
+        url = item.get("url")
+        if not isinstance(url, str) or "token=" not in url:
+            continue
+        query = urllib_parse_qs(url)
+        token = query.get("token")
+        if token and token[0]:
+            return token[0]
+    return None
+
+
+def urllib_parse_qs(url: str) -> dict[str, list[str]]:
+    import urllib.parse
+
+    return urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+
+
+def find_account_id(settings: DifyConsoleSettings, session: ConsoleSession, email: str) -> str:
+    """在成员列表里按邮箱查回 Dify 账号 id（**不建重复账号**的前提）。"""
+    payload = _get(settings, session, MEMBERS_PATH)
+    accounts = payload.get("accounts") if isinstance(payload, dict) else None
+    if not isinstance(accounts, list):
+        raise DifyProvisionError("DIFY_MALFORMED", "成员列表响应缺少 accounts")
+    for account in accounts:
+        if isinstance(account, dict) and str(account.get("email", "")).lower() == email.lower():
+            account_id = account.get("id")
+            if isinstance(account_id, str) and account_id:
+                return account_id
+    raise DifyProvisionError("DIFY_ACCOUNT_MISSING", "邀请/激活后仍找不到该账号")
+
+
+def provision_editor(
+    settings: DifyConsoleSettings,
+    *,
+    owner_session: ConsoleSession,
+    company_user_id: str,
+    username: str,
+) -> str:
+    """确保该邮箱在 Dify 里是一个 editor 账号，返回它的账号 id。
+
+    幂等：账号已存在（`already_member`）时跳过邀请，直接查回 id。这样"二次登录"与
+    "首次登录"走同一条代码路径，不会给同一个人开出第二个账号。
+    """
+    email = account_email_for(company_user_id)
+    invited = _post(
+        settings,
+        owner_session,
+        INVITE_PATH,
+        {"emails": [email], "role": MEMBER_ROLE, "language": settings.language},
+    )
+    token = _invite_token(invited, email)
+    if token is not None:
+        _post(
+            settings,
+            owner_session,
+            ACTIVATE_PATH,
+            {
+                "email": email,
+                "token": token,
+                "name": account_name_for(company_user_id, username),
+                "interface_language": settings.language,
+                "timezone": "Asia/Shanghai",
+            },
+        )
+    return find_account_id(settings, owner_session, email)
+
+
+__all__ = [
+    "MEMBER_ROLE",
+    "DifyConsoleSettings",
+    "DifyProvisionError",
+    "account_email_for",
+    "account_name_for",
+    "find_account_id",
+    "provision_editor",
+]

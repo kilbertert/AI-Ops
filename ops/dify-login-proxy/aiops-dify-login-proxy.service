@@ -1,0 +1,32 @@
+[Unit]
+Description=AI-Ops Dify login proxy (company account -> Dify console session)
+# 它服务于 Dify 控制台的登录页，因此要等那几个容器起来；并且必须在 TLS 入口之后
+# 才有意义（代理自己会在 PUBLIC_ORIGIN 非 https 时拒绝启动）。
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+# 服务身份：与本机其它 AI-Ops 旁路服务同一类（非交互、无 sudo、无登录）。
+# 它持有 Dify 的 SECRET_KEY，因此与其它服务**不共享**身份 —— 见 ADR-0023 的代价一节。
+User=aiopslogin
+Group=aiopslogin
+WorkingDirectory=/opt/aiops-login-proxy
+# 全部配置（含 Dify SECRET_KEY、公司 AES key）只从这里读，**不进命令行**。
+EnvironmentFile=/etc/aiops-login-proxy/login-proxy.env
+ExecStart=/opt/aiops-login-proxy/.venv/bin/python -m aiops_diagnostics.dify_login_server
+Restart=always
+RestartSec=5
+
+# 只监听回环：宿主 nginx 在同机做同源反代（与发布桥同一拓扑）。
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/opt/aiops-login-proxy
+# 映射表要能写（它是代理自己的数据目录），其余只读。
+ReadWritePaths=/var/lib/aiops-login-proxy
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

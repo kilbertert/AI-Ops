@@ -1,3 +1,22 @@
+## 2026-10-14 · #778 Dify 登录代理：单测 + 36 只读会话验证
+
+**构建身份**：分支 `feat/dify-login-proxy`，基线 `a42c2dc`。
+
+**自动化**：新增 12 例，全部跑**真监听**的代理实例 + 假公司 UPMS + 假 Dify（真实协议形状，
+不打桩内部函数）：正向登录得三枚 cookie 且 access 是能被 Dify 验的三段 JWT；无编辑权限码
+被拒**且不调用 Dify**；首次登录开户（邀请+激活）、二次登录映射到**同一**账号（不重复邀请）；
+公司登录失败回可读原因且不碰 Dify；明文密码不出网（AES 编码）；浏览器自带的伪造公司令牌被
+忽略（映射表落的是公司交换得到的用户）；连续失败触发 429 退避；TLS 未就绪拒绝启动；会话载荷
+与 Dify `get_account_jwt_token_for_account_id` 逐字段一致。
+
+**对真实 Dify 的只读验证**（36，**未改任何数据**）：按 Dify 自己的实现签一枚会话打
+`/console/api/workspaces/current/summary` → `HTTP=200 ROLE=owner WS=True`；把本仓的签名算法
+拿到容器内用 Dify 的 `PassportService().verify` 验 → `VERIFY=PASS user_id_ok=True`。
+两枚令牌（access + csrf）都是必需的：只带 access 是 401（控制台双提交）。
+
+**未完成（本地无法证明）**：真实公司 UPMS 的登录/权限码端到端、真实浏览器在新 TLS 域名下
+走完整条链路。二者依赖 #776 与 #777，且归 #783。**不宣称业务验收完成。**
+
 ## 2026-10-14 · #781 试运行（AI-Ops 侧）：单测 + 网关取证
 
 **构建身份**：分支 `feat/dry-run-mode`，基线 `4a8fdaa`。
