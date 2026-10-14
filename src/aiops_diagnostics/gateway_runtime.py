@@ -1058,10 +1058,9 @@ class GatewayRuntime:
     ) -> dict[str, Any] | None:
         """提交一次试运行，或返回 ``None`` 表示并发超限（路由转 429）。
 
-        **执行范围不来自调用方**：它是 ``dify_trial_debug_tenant`` 的 ``admin_context``
-        —— 与 ``aiops admin`` 那些动作同一个合成上下文（同一个 ``admin_context`` 工厂，
-        不是它的副本）。``initiator`` 只进审计，**不是**授权依据（授权在这一层之外：
-        钥匙决定能不能调，配置的租户决定能看什么）。
+        **执行范围不来自调用方**：它由配置的调试租户决定（见 :meth:`trial_run_context`）。
+        ``initiator`` 只进审计，**不是**授权依据（授权在这一层之外：钥匙决定能不能调，
+        配置的租户决定能看什么）。
         """
         run_context = self.trial_run_context()
         with self._trial_lock:
