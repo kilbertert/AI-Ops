@@ -46,10 +46,6 @@ from aiops_diagnostics.agent_contracts import ALL_TOOL_NAMES
 #: to the provider's UUID at run time (module docstring), never the other way.
 AI_OPS_PROVIDER_NAME = "aiops"
 
-#: ``aiops/<tool_name>`` — the identity prefix this module reports for entries it
-#: recognises. Only used in messages: the value is resolved, never stored.
-AI_OPS_TOOL_PREFIX = f"{AI_OPS_PROVIDER_NAME}/"
-
 #: Our tool names, as the set a ``<tool_name>`` must be a member of.
 AI_OPS_TOOL_NAMES: frozenset[str] = frozenset(ALL_TOOL_NAMES)
 

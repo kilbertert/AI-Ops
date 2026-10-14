@@ -129,11 +129,6 @@ SUPPORTED_DSL_MINOR = 7
 _DSL_VERSION = re.compile(r"^(\d+)\.(\d+)\.(\d+)$")
 _APP_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 
-#: Retrying the export is safe because it is a read (``RetryPolicy`` limits
-#: retries to GET by default). A transient blip should not fail the operator's
-#: action; a rejected credential still fails on the first response.
-_EXPORT_RETRY = RetryPolicy(max_retries=2)
-
 
 @dataclass(frozen=True, slots=True)
 class DifyDslSource:
@@ -410,21 +405,24 @@ def map_dsl_to_config(
     # 什么都没声明 ⇒ ``None`` 交给调用方保留库中现值 —— 与知识库的「没说 ⇒ 保留」
     # 逐字同向，理由也一样：把"没声明"当成"要清空"会让一次无关的保存摘掉运营设好的白名单。
     declared_tools = _declared_tools(model_config)
-    if declared_tools and tool_resolver is not None:
-        allowed_tools: tuple[str, ...] | None = tool_resolver(declared_tools)
-    elif declared_tools and any(entry.enabled for entry in declared_tools):
+    #: 「有效声明」= 至少有一条**开着**。全被关掉的声明与「什么都没声明」同义
+    #: （#772 E：「暂时关掉」与「删除」效果一致），所以它必须走 ``None`` 那条路
+    #: —— 否则 resolver 会（正确地）返回空元组，而那读作「一个工具都不许跑」，
+    #: 线上的诊断会突然全被白名单挡掉，报告却只说这次拉取成功。
+    effective = tuple(entry for entry in declared_tools if entry.enabled)
+    if effective and tool_resolver is not None:
+        allowed_tools: tuple[str, ...] | None = tool_resolver(effective)
+    elif effective:
         raise DifyDslMalformed(
             "DSL 声明了智能体工具（"
-            + ", ".join(entry.identity for entry in declared_tools)
+            + ", ".join(entry.identity for entry in effective)
             + "），但这次拉取没有工具映射可用。"
             "请在 Dify 里把工具挂在 aiops 提供方下（那七个工具直接对应我们的 ToolName），"
             "或为这个 Dify 身份在 AIOPS_GATEWAY_DIFY_TOOL_BINDINGS 里登记映射，不要按字面搬运。"
         )
     else:
-        # 没声明工具，或声明里每一条都被运营关掉了 —— 两者**同义**（#772 E：
-        # 「暂时关掉」与「删除」效果一致）。此时沿用 ADR-0019 的默认（全部七个），
-        # 于是已发布的老版本行为不变：把一个工具切到 enabled=false 而它本来就是
-        # 默认全开，不该产生一次"白名单变成空"的静默收窄。
+        # 没声明工具，或声明里每一条都被关掉了 —— 沿用 ADR-0019 的默认（全部七个），
+        # 于是已发布的老版本行为不变。
         allowed_tools = None
 
     return AgentConfig(
