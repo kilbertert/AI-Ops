@@ -1,3 +1,47 @@
+## 2026-10-15 · 41 依赖环境更新（`cryptography`）与部署到 `a2322d7`
+
+> 按 `docs/agents/env-41-dependency-update.md` 的人工流程执行。**动因**：#778 为登录代理
+> 的自签会话引入了运行时依赖 `cryptography`，41 的依赖环境未随之更新，`deploy-41.sh` 的
+> **依赖漂移门禁**因此拒绝部署（并在干净 main 上表现为 `test_cd_deploy_scripts` 红灯）。
+
+**目标 commit**：`a2322d76d354c312912ea1bca674353af2954472`（`origin/main`）。
+
+**清单 sha（前 24 位）**：
+
+| 文件 | 更新前（41） | 更新后（= 目标 commit） |
+|---|---|---|
+| `pyproject.toml` | `084e7854254f1569…` | `71281060d6ef39dc…` |
+| `uv.lock` | `fed6f09308814ac6…` | `994a8a12fa58ab83…` |
+
+**执行步骤与结果**
+
+1. **备份**：`/var/backups/aiops-41/deps-20261015-004604`（502M，含 `.venv` 与两份清单）。
+2. **sync**：`cp` 目标清单 → 41，以 `/opt/aiops-41/.venv/bin/uv sync --active --frozen --no-progress` 执行。
+   结果：`cryptography` 已装（**49.0.0**）。既有 `uv` 在 venv 内、不在 PATH（与手册一致）。
+3. **editable 守卫**（必做）：`deploy/check-41-editable.sh` → **passed**（四条观察全绿：
+   `import` 与子模块都解析到 `/opt/aiops-41/src`、`site-packages` 无 `__init__.py`、`.pth` 在、
+   包内数据来自 src）。
+4. **重启并校验**：服务 `active`；`/health` `ok:true`（此时 version 仍是旧 commit，符合预期 ——
+   源码还没换）。
+5. **重跑部署**：`deploy/deploy-41.sh --commit origin/main` → 成功。
+   - `version 0.1.0+a2322d76d354` ✓
+   - 文件数 85 == 预期 ✓；逐文件 sha 一致 ✓；三份参考资料一致 ✓
+   - 产物 sha256 `aa7be9f5d67451c32dbd919797bec938ccbebe88716699762e2d89a20f990c83`
+   - 源码备份 `/var/backups/aiops-41/backup-20261015-005231`
+6. **部署后再跑一次 editable 守卫** → **passed**（手册第 7 步：把"换完代码后 editable 仍生效"
+   变成被观测到的事实，而不是从"部署前是对的"推出来）。
+7. **部署后自检**：`dify_login_proxy` / `dify_trial` / `dify_login_server` 均可 import；
+   `BridgeSettings` 已有 `login_proxy_url` 字段 —— 新代码真的在跑。
+
+**回滚路径**（未使用）：`cp -a /var/backups/aiops-41/deps-20261015-004604/{pyproject.toml,uv.lock}
+/opt/aiops-41/ && rm -rf /opt/aiops-41/.venv && cp -a …/venv /opt/aiops-41/.venv && systemctl
+restart aiops-gateway-41.service`，再跑 editable 守卫。
+
+**边界 / 未完成**：本次只更新依赖环境并同步源码。**这不等于业务验收** —— §5 的真实端到端
+仍需业务方签发的 thirdSession，按 runbook §5 由人执行。新端点（工具目录 / 试运行 / 登录代理）
+**尚未配置密钥**，因此对公网仍然是 404 形状（未配置即不启用）；打开它们属于 #783。
+`cryptography` 只服务登录代理这条旁路，网关自身不 import 它。
+
 ## 2026-10-15 · #782 试运行按人范围：单测
 
 **构建身份**：分支 `feat/trial-operator-scope`，基线 `f1d08c1`。
