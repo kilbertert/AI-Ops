@@ -79,7 +79,7 @@ from aiops_diagnostics.dify_knowledge_api import (
     parse_dify_retrieval_request,
 )
 from aiops_diagnostics.dify_tools_catalog import AI_OPS_TOOL_NAMES, CATALOG_NOTE
-from aiops_diagnostics.dify_trial import TrialDraft, TrialRefused
+from aiops_diagnostics.dify_trial import TrialDraft, TrialInitiator, TrialRefused
 from aiops_diagnostics.faq import (
     FAQ_NOT_FOUND,
     PLATFORM_AMBIGUOUS,
@@ -700,6 +700,18 @@ def create_gateway_app(
     # end live work; that mistake is what #492 fixed.
     selected_store.recover_interrupted_jobs()
     selected_runtime = runtime or GatewayRuntime.from_settings(selected_store, selected_settings)
+    # #782：把试运行要用的运营商站点范围解析器注入运行时。构造它需要 Settings 与内部凭据，
+    # 正是装配层已经持有的东西；放在这里而不是运行时里 import（那会形成
+    # gateway_api → gateway_runtime → gateway_api 的环）。注入失败 ⇒ 不设 ⇒ 试运行的
+    # 运营商范围落到空集合（fail-closed），不是租户级。
+    # **整块**都在 suppress 里，`hasattr` 也不例外：一个 `__getattr__` 会抛的替身
+    # （测试用的直白替身就是这样）在 `hasattr` 那一刻就会炸。这里的语义是"能配就配上，
+    # 配不上就让试运行的运营商范围落到空集合（fail-closed）"，所以任何失败都不该逸出。
+    trial_scope: Any = None
+    with contextlib.suppress(Exception):
+        trial_scope = _operator_site_scope(Settings.from_config(selected_settings.server_config_file))
+        if hasattr(selected_runtime, "set_trial_operator_scope"):
+            selected_runtime.set_trial_operator_scope(trial_scope)
     selected_resolver = caller_resolver or _caller_resolver(selected_settings)
     diagnostic_settings = getattr(selected_runtime, "diagnostic_settings", None)
     selected_authorizer = order_authorizer or (
@@ -1290,13 +1302,19 @@ def create_gateway_app(
         payload: DifyTrialRequest,
         _: None = Depends(dify_trial_credential),  # noqa: B008
         initiator: Annotated[str | None, Header(alias="X-AIOps-Initiator")] = None,
+        initiator_tenant: Annotated[str | None, Header(alias="X-AIOps-Initiator-Tenant")] = None,
+        initiator_type: Annotated[str | None, Header(alias="X-AIOps-Initiator-Type")] = None,
+        initiator_name: Annotated[str | None, Header(alias="X-AIOps-Initiator-Name")] = None,
         language: str = Depends(request_language),  # noqa: B008
     ) -> dict[str, Any]:
-        """在一张订单上跑一次**草稿**，不产生版本、不改路由（#772 F / #781）。
+        """在一张订单上跑一次**草稿**，不产生版本、不改路由（#772 F / #781 / #782）。
 
-        **订单可见性用与生产同一条判据**：``_order_authorization`` 拿服务端配置的调试
-        租户去问 ``order_authorizer``，答案的含义只在这一处决定 —— 越权与不存在同为 404。
-        请求体里的任何范围字段都不被读取（模型 ``extra="forbid"``，多一个就 400）。
+        **订单可见性用与生产同一条判据**：``_order_authorization`` 拿**这次试运行的范围**
+        去问 ``order_authorizer``，答案的含义只在这一处决定 —— 越权与不存在同为 404。
+
+        范围（#782）来自**发起人的公司身份**，经请求头由桥转达；浏览器提交的租户/站点/
+        用户字段一律不被读取（模型 ``extra="forbid"``，多一个就 400）。桥没给身份
+        （缺 ``X-AIOps-Initiator`` 或 ``-Tenant``）⇒ 退回 #781 的固定调试租户行为。
         """
         try:
             draft = TrialDraft.from_payload(
@@ -1304,7 +1322,14 @@ def create_gateway_app(
             )
         except TrialRefused as exc:
             raise StandardAPIError(status.HTTP_400_BAD_REQUEST, "TRIAL_DRAFT_REJECTED", str(exc)) from exc
-        run_context = context.runtime.trial_run_context()
+        trial_initiator = TrialInitiator.from_headers(
+            initiator, initiator_tenant, initiator_type, initiator_name
+        )
+        run_context = (
+            context.runtime.trial_context_for(trial_initiator)
+            if trial_initiator is not None
+            else context.runtime.trial_run_context()
+        )
         verdict = _order_authorization(context, run_context, payload.order_no)
         if verdict == UNAVAILABLE:
             raise StandardAPIError(
@@ -1322,6 +1347,7 @@ def create_gateway_app(
                 payload.order_no,
                 draft,
                 language,
+                trial_initiator=trial_initiator,
             )
         except (ValueError, RuntimeError) as exc:
             raise _runtime_unavailable("TRIAL_UNAVAILABLE", "trial unavailable", exc) from exc

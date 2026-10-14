@@ -66,6 +66,10 @@ class CompanyIdentity:
     username: str
     tenant_id: str
     token: str = field(repr=False)
+    #: 公司 B 端账号种类（``sys_user.type``：-1 平台 / 1 租户 / 2 店主 / 5 代理商…）。
+    #: 试运行（#782）要它来判"顶层账号看整租户、其余按店铺→站点"，所以从
+    #: ``/upms/user/info`` 的 ``data.sysUser.type`` 读回来。缺失即空串（fail-closed 到空范围）。
+    user_type: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -202,13 +206,26 @@ def _first_str(*values: Any) -> str:
     return ""
 
 
-def read_permissions(settings: CompanyAuthSettings, identity: CompanyIdentity) -> tuple[str, ...]:
-    """用**本次登录拿到的令牌**读权限码；读的是 `data.permissions`。
+def read_user_type(settings: CompanyAuthSettings, identity: CompanyIdentity) -> str:
+    """``data.sysUser.type`` —— 顶层/代理商的判据（#782）。
 
-    `client-type` 必须在这里带上（公司侧从请求线程本地读它，缺省 `admin`）。**未知值
-    会得到空角色集** —— 那会表现为"没有权限"，是 fail-closed 的，可以接受；但配置
-    写错时运营看到的是"你没权限"，所以部署文档要指明这个值来自公司。
+    与 :func:`read_permissions` 打同一个端点，所以调用方**只多调一次**不如一次读全：
+    这里单独暴露是因为权限码是"能不能进"，`type` 是"能看多大范围"，两件事分开更清楚。
+    读不到即空串：空串**不是**顶层账号（``is_tenant_level_account`` 只认 ``-1/1``），
+    因此会走 fail-closed 的店铺→站点解析。
     """
+    payload = _user_info(settings, identity)
+    sys_user = payload.get("sysUser")
+    if not isinstance(sys_user, dict):
+        return ""
+    value = sys_user.get("type")
+    if value is None:
+        return ""
+    return str(value).strip()[:16]
+
+
+def _user_info(settings: CompanyAuthSettings, identity: CompanyIdentity) -> dict[str, Any]:
+    """GET ``/upms/user/info`` 并返回 **data** 段（权限码与 sysUser 都在里面）。"""
     from aiops_diagnostics.bounded_http import join_url
 
     client_type = settings.info_client_type or settings.client_type
@@ -233,6 +250,17 @@ def read_permissions(settings: CompanyAuthSettings, identity: CompanyIdentity) -
     data = payload.get("data")
     if not isinstance(data, dict):
         raise CompanyUnreachable("COMPANY_MALFORMED", "公司用户信息缺少 data")
+    return data
+
+
+def read_permissions(settings: CompanyAuthSettings, identity: CompanyIdentity) -> tuple[str, ...]:
+    """用**本次登录拿到的令牌**读权限码；读的是 `data.permissions`。
+
+    `client-type` 必须在这里带上（公司侧从请求线程本地读它，缺省 `admin`）。**未知值
+    会得到空角色集** —— 那会表现为"没有权限"，是 fail-closed 的，可以接受；但配置
+    写错时运营看到的是"你没权限"，所以部署文档要指明这个值来自公司。
+    """
+    data = _user_info(settings, identity)
     raw = data.get("permissions")
     if not isinstance(raw, list):
         raise CompanyUnreachable("COMPANY_MALFORMED", "公司用户信息缺少 permissions")
@@ -273,4 +301,5 @@ __all__ = [
     "company_login",
     "fetch_captcha",
     "read_permissions",
+    "read_user_type",
 ]

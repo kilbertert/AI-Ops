@@ -1,3 +1,23 @@
+## 2026-10-15 · #782 试运行按人范围：单测
+
+**构建身份**：分支 `feat/trial-operator-scope`，基线 `f1d08c1`。
+
+**自动化**：新增 13 例，驱动 `build_trial_scope`（纯函数）：代理商（`type=2`）⇒ 站点集合 = 名下站点且租户来自身份；顶层（`-1`/`1`）⇒ `all` 且**不查店铺**；空店铺绑定 ⇒ 空站点集合（不是租户级）；解析抛错 ⇒ 空集合（fail-closed）；`operator_scope=None` ⇒ 空集合（绝不放宽成整租户）；范围携带发起人主体/租户/`user_type` 供授权；身份头不完整 ⇒ `None`（退回 #781 调试租户）；`type` 缺失 ⇒ 空串 ⇒ **不**当作顶层；非 `-1/1` 的各种取值一律走站点解析。
+
+**一条被测试拦下的真缺陷**：范围构造器最初在 `gateway_runtime` 里 import `gateway_api`，形成 `gateway_api → gateway_runtime → gateway_api` 的包内导入环（`test_package_import_graph_stays_acyclic` 判 README 分层失效）。改为装配层构造 + 注入。
+
+**真实服务取证**（`verify-aiops-gateway`，一次性数据根，2026-10-15）：
+
+| 请求 | 实测 |
+|---|---|
+| `GET /health` | 200 |
+| `POST /v1/dify/trial`（不完整身份头：有 id、缺 tenant） | 503 `ORDER_AUTHORIZATION_UNAVAILABLE`（未配控制台凭据 ⇒ 授权器不可用；退回调试租户路径） |
+| 同上（**完整**身份头：代理商 `type=2`，未配 UPMS） | **404** `ORDER_NOT_FOUND` —— 运营商范围解析不出 ⇒ **空站点集合** ⇒ 看不到任何订单（fail-closed，未放宽） |
+
+网关已停止、`127.0.0.1:8787` 已关闭、临时数据根已删除；证据不含任何密钥明文。
+
+**未完成**：真实公司身份（#777）与浏览器端到端（#783）。**不宣称业务验收完成。**
+
 ## 2026-10-14 · #780 桥侧：发布权改由公司权限码裁定
 
 **构建身份**：分支 `feat/dify-publish-authority`，基线 `248d709`。

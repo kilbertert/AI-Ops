@@ -28,6 +28,7 @@ from aiops_diagnostics.dify_login_company import (
     CompanyIdentity,
     company_login,
     read_permissions,
+    read_user_type,
 )
 from aiops_diagnostics.dify_login_provision import (
     DifyConsoleSettings,
@@ -90,6 +91,7 @@ class MappingStore:
                     company_user_id TEXT PRIMARY KEY,
                     company_username TEXT NOT NULL,
                     tenant_id TEXT NOT NULL DEFAULT '',
+                    user_type TEXT NOT NULL DEFAULT '',
                     dify_account_id TEXT NOT NULL,
                     dify_email TEXT NOT NULL,
                     permissions_json TEXT NOT NULL DEFAULT '[]',
@@ -116,6 +118,13 @@ class MappingStore:
                 )
                 """
             )
+            mapping_columns = {
+                str(row[1]) for row in connection.execute("PRAGMA table_info(dify_login_mappings)").fetchall()
+            }
+            if "user_type" not in mapping_columns:
+                connection.execute(
+                    "ALTER TABLE dify_login_mappings ADD COLUMN user_type TEXT NOT NULL DEFAULT ''"
+                )
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_dify_login_audit_user"
                 " ON dify_login_audit(company_user_id, at DESC)"
@@ -177,6 +186,7 @@ class MappingStore:
         dify_email: str,
         permissions: tuple[str, ...],
         status: str = STATUS_ACTIVE,
+        user_type: str = "",
     ) -> None:
         import json
 
@@ -185,12 +195,13 @@ class MappingStore:
             connection.execute(
                 """
                 INSERT INTO dify_login_mappings (
-                    company_user_id, company_username, tenant_id, dify_account_id, dify_email,
+                    company_user_id, company_username, tenant_id, user_type, dify_account_id, dify_email,
                     permissions_json, status, created_at, last_login_at, last_reconciled_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(company_user_id) DO UPDATE SET
                     company_username = excluded.company_username,
                     tenant_id = excluded.tenant_id,
+                    user_type = excluded.user_type,
                     dify_account_id = excluded.dify_account_id,
                     dify_email = excluded.dify_email,
                     permissions_json = excluded.permissions_json,
@@ -202,6 +213,7 @@ class MappingStore:
                     company_user_id,
                     username,
                     tenant_id,
+                    user_type,
                     dify_account_id,
                     dify_email,
                     json.dumps(list(permissions), ensure_ascii=False),
@@ -312,6 +324,7 @@ class LoginService:
             # 只是密码打错，据此封禁会把一次手误变成一次锁定（#779 的明确要求）。
             raise
         permissions = read_permissions(self.company, identity)
+        user_type = read_user_type(self.company, identity)
 
         existing = self.store.get(identity.user_id)
 
@@ -364,6 +377,7 @@ class LoginService:
             dify_email=account_email_for(identity.user_id),
             permissions=permissions,
             status=STATUS_ACTIVE,
+            user_type=user_type,
         )
         if reactivated:
             self.store.record_audit(
