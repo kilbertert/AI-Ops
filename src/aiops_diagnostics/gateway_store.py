@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import secrets
 import sqlite3
@@ -24,6 +25,8 @@ from aiops_diagnostics.i18n import DEFAULT_LANGUAGE, SUPPORTED_LANGUAGES
 from aiops_diagnostics.private_files import ensure_private_directory, protect_private_file
 from aiops_diagnostics.query_scope import MAX_SCOPE_IDS
 from aiops_diagnostics.redaction import redact_text
+
+_LOGGER = logging.getLogger("aiops.gateway_store")
 
 SAFE_SCOPE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 TERMINAL_RUN_STATUSES = RUN.terminal
@@ -479,6 +482,71 @@ class GatewayStore:
                 (analysis_id,),
             ).fetchone()
         return _standard_diagnosis_from_row(row)
+
+    def record_publish_audit(
+        self,
+        *,
+        app_id: str,
+        action: str,
+        tenant_id: str = "",
+        business_entry: str = "",
+        agent_name: str = "",
+        company_user_id: str = "",
+        company_username: str = "",
+        dify_account_id: str = "",
+        version_no: int | None = None,
+        reason_code: str = "",
+    ) -> None:
+        """Append one publish attempt to the ledger (#772 D / #780).
+
+        Append-only in the same sense the trial audit is appended: nothing here
+        is updated or deleted, so "what happened, in order" survives whatever
+        the registry later says the binding is.
+
+        **Never raises into the publish path.** The ledger is observability, not
+        an authorization input: a disk error must not turn a legitimate publish
+        into a failure (it warns instead, and the surrounding code may still
+        refuse for its own reasons). ``company_user_id`` empty means the
+        initiator was unknown — that is recorded, not refused.
+        """
+        try:
+            with self._connection(write=True) as connection:
+                connection.execute(
+                    """
+                    INSERT INTO publish_audit_ledger (
+                        at, app_id, tenant_id, business_entry, agent_name,
+                        company_user_id, company_username, dify_account_id,
+                        version_no, action, reason_code
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        _iso(_utc_now()),
+                        app_id,
+                        tenant_id,
+                        business_entry,
+                        agent_name,
+                        company_user_id,
+                        company_username,
+                        dify_account_id,
+                        version_no,
+                        action,
+                        reason_code,
+                    ),
+                )
+        except sqlite3.Error:  # pragma: no cover - 磁盘问题不该挡发布
+            _LOGGER.warning("publish audit write failed for app=%s action=%s", app_id, action)
+
+    def publish_audit_entries(self, *, app_id: str | None = None) -> list[dict[str, Any]]:
+        """Read the ledger, newest first (for tests and operator queries)."""
+        with self._connection() as connection:
+            if app_id is None:
+                rows = connection.execute("SELECT * FROM publish_audit_ledger ORDER BY id DESC").fetchall()
+            else:
+                rows = connection.execute(
+                    "SELECT * FROM publish_audit_ledger WHERE app_id = ? ORDER BY id DESC",
+                    (app_id,),
+                ).fetchall()
+        return [dict(row) for row in rows]
 
     def create_trial_job(
         self,
@@ -1225,6 +1293,32 @@ class GatewayStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_assistant_questions_scope_created
                     ON assistant_questions(scope_fingerprint, created_at DESC);
+                -- 发布审计账本（#772 D / #780）：**追加写**，一行一次发布尝试。
+                --
+                -- 它与 ``standard_diagnoses`` 是两件事：那张表记"一次智能体版本的
+                -- 终态"，这张记"谁在何时把哪一版发上了生产（含被拒的尝试）"。合表会
+                -- 让被拒的尝试无处安放（它不产生版本），而那正是要审计的东西之一。
+                --
+                -- 发起人三列**不是授权依据**：授权在桥那一侧完成（#780），这里只记
+                -- "是谁发的"。所以缺发起人时照常发布，只把它记成未知。
+                CREATE TABLE IF NOT EXISTS publish_audit_ledger (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    at TEXT NOT NULL,
+                    app_id TEXT NOT NULL,
+                    tenant_id TEXT NOT NULL DEFAULT '',
+                    business_entry TEXT NOT NULL DEFAULT '',
+                    agent_name TEXT NOT NULL DEFAULT '',
+                    company_user_id TEXT NOT NULL DEFAULT '',
+                    company_username TEXT NOT NULL DEFAULT '',
+                    dify_account_id TEXT NOT NULL DEFAULT '',
+                    version_no INTEGER,
+                    action TEXT NOT NULL,
+                    reason_code TEXT NOT NULL DEFAULT ''
+                );
+                CREATE INDEX IF NOT EXISTS idx_publish_audit_at
+                    ON publish_audit_ledger(at DESC);
+                CREATE INDEX IF NOT EXISTS idx_publish_audit_app
+                    ON publish_audit_ledger(app_id, at DESC);
                 """
             )
             columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(runs)").fetchall()}

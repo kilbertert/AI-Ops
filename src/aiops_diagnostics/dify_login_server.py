@@ -40,12 +40,19 @@ from aiops_diagnostics.dify_login_proxy import (
     CAPTCHA_ROUTE,
     LOGIN_ROUTE,
     LOGOUT_ROUTE,
+    PUBLISH_CHECK_ROUTE,
     CompanyLoginRejected,
     CompanyUnreachable,
     DifyLoginError,
     PermissionDenied,
+    verify_console_jwt,
 )
-from aiops_diagnostics.dify_login_service import LoginPolicy, LoginService, MappingStore
+from aiops_diagnostics.dify_login_service import (
+    STATUS_ACTIVE,
+    LoginPolicy,
+    LoginService,
+    MappingStore,
+)
 
 _LOGGER = logging.getLogger("aiops.dify_login_proxy.server")
 
@@ -183,6 +190,9 @@ class LoginProxyHandler(BaseHTTPRequestHandler):
         if parsed.path == LOGOUT_ROUTE:
             self._logout()
             return
+        if parsed.path == PUBLISH_CHECK_ROUTE:
+            self._publish_check()
+            return
         self._json(404, {"ok": False, "reason": "not found"})
 
     # ── 三跳 ────────────────────────────────────────────────────────────────
@@ -251,6 +261,49 @@ class LoginProxyHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _publish_check(self) -> None:
+        """发布权查询（#780）：验会话 → 查映射 → 答能不能发布。
+
+        **只回答案，不回权限码全集**：桥需要的是"能不能发布"+审计用的发起人三字段；
+        把运营的权限码清单交出去会扩大本层泄漏面，而它没有任何用处。
+
+        失败一律 `{"allowed": false}` + 稳定原因码，**不区分**"没这个映射"与"会话无效"
+        之外的更多细节 —— 对外只有"不能发布"这一种结论。
+        """
+        try:
+            payload = self._read_json()
+        except ValueError as exc:
+            self._json(400, {"allowed": False, "reason": str(exc)})
+            return
+        session_token = str(payload.get("session", ""))
+        claims = verify_console_jwt(session_token, self.settings.dify.secret_key)
+        if claims is None:
+            self._json(200, {"allowed": False, "reason": "SESSION_INVALID"})
+            return
+        account_id = str(claims.get("user_id") or "")
+        row = self.service.store.by_dify_account(account_id) if account_id else None
+        if row is None:
+            self._json(200, {"allowed": False, "reason": "NO_MAPPING"})
+            return
+        if row.get("status") != STATUS_ACTIVE:
+            self._json(200, {"allowed": False, "reason": "MAPPING_DISABLED"})
+            return
+        permissions = self.service.store.permissions_of(row)
+        # 白名单里配了发布权限码才判：没配 = 该部署还没切到公司权限码 → 桥维持过渡行为。
+        publish_permission = self.settings.publish_permission
+        allowed = bool(publish_permission) and publish_permission in permissions
+        self._json(
+            200,
+            {
+                "allowed": allowed,
+                "reason": "" if allowed else "MISSING_PUBLISH_PERMISSION",
+                # 审计用：桥把这些原样转给网关的发布请求头。
+                "company_user_id": str(row.get("company_user_id") or ""),
+                "company_username": str(row.get("company_username") or ""),
+                "dify_account_id": account_id,
+            },
+        )
 
     def _logout(self) -> None:
         # Dify 原生登出由前端调它自己的 `/console/api/logout`；代理这里只负责清掉

@@ -448,3 +448,122 @@ def test_an_operator_cannot_publish_another_tenants_app(tmp_path, monkeypatch) -
     assert r.status_code == 404
     assert r.json()["error"]["code"] == "DIFY_APP_NOT_BOUND"
     assert calls == [], "跨租户的 app 一个字节都不该被发布"
+
+
+# --------------------------------------------------------------------------- #
+# #780：发布审计账本（追加写；成功与被拒都记；发起人只是审计、不是授权）             #
+# --------------------------------------------------------------------------- #
+
+
+def _ledger(tmp_path: Path):
+    from aiops_diagnostics.gateway_store import GatewayStore
+
+    return GatewayStore(tmp_path / "gateway.db")
+
+
+def test_a_successful_publish_records_the_initiator(tmp_path, monkeypatch) -> None:
+    """成功发布入账，且带上发起人（三个字段）与版本号。"""
+    runtime = _Runtime()
+    monkeypatch.setattr(runtime.dify_app_registry, "all", lambda: (_binding(),))
+    monkeypatch.setattr(
+        "aiops_diagnostics.dify_dsl_pull.sync_binding_from_dify",
+        lambda *a, **k: __import__("aiops_diagnostics.dify_dsl_pull", fromlist=["SyncOutcome"]).SyncOutcome(
+            "T-1", "consumer", APP_ID, "小趋-客服", "synced", 7
+        ),
+    )
+    client = _client(tmp_path, runtime, dify_publish_api_key=PUBLISH_KEY)
+    resp = client.post(
+        "/v1/dify/publish",
+        json={"app_id": APP_ID},
+        headers={
+            "Authorization": f"Bearer {PUBLISH_KEY}",
+            "X-AIOps-Initiator": "B-42",
+            "X-AIOps-Initiator-Name": "zhang",
+            "X-AIOps-Dify-Account": "a53ad893-6139-4566-a38a-0b77ed697631",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    rows = _ledger(tmp_path).publish_audit_entries(app_id=APP_ID)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["action"] == "published"
+    assert row["company_user_id"] == "B-42"
+    assert row["company_username"] == "zhang"
+    assert row["dify_account_id"] == "a53ad893-6139-4566-a38a-0b77ed697631"
+    assert row["version_no"] == 7
+    assert row["tenant_id"] == "T-1"
+    assert row["agent_name"] == "小趋-客服"
+
+
+def test_a_refused_publish_is_recorded_too(tmp_path, monkeypatch) -> None:
+    """**被拒的尝试也入账** —— 未绑定的 app_id 正是审计要看见的那一类。"""
+    runtime = _Runtime()
+    monkeypatch.setattr(runtime.dify_app_registry, "all", lambda: (_binding(),))
+    client = _client(tmp_path, runtime, dify_publish_api_key=PUBLISH_KEY)
+    resp = client.post(
+        "/v1/dify/publish",
+        json={"app_id": "00000000-0000-0000-0000-000000000000"},
+        headers={"Authorization": f"Bearer {PUBLISH_KEY}", "X-AIOps-Initiator": "B-9"},
+    )
+    assert resp.status_code == 404
+    rows = _ledger(tmp_path).publish_audit_entries()
+    assert len(rows) == 1
+    assert rows[0]["action"] == "refused"
+    assert rows[0]["reason_code"] == "DIFY_APP_NOT_BOUND"
+    assert rows[0]["company_user_id"] == "B-9"
+
+
+def test_a_publish_without_an_initiator_still_publishes_and_records_unknown(tmp_path, monkeypatch) -> None:
+    """发起人缺失 ⇒ **照常发布**，审计里记成未知。它不是授权依据。"""
+    runtime = _Runtime()
+    monkeypatch.setattr(runtime.dify_app_registry, "all", lambda: (_binding(),))
+    monkeypatch.setattr(
+        "aiops_diagnostics.dify_dsl_pull.sync_binding_from_dify",
+        lambda *a, **k: __import__("aiops_diagnostics.dify_dsl_pull", fromlist=["SyncOutcome"]).SyncOutcome(
+            "T-1", "consumer", APP_ID, "小趋-客服", "unchanged", 7
+        ),
+    )
+    client = _client(tmp_path, runtime, dify_publish_api_key=PUBLISH_KEY)
+    resp = client.post(
+        "/v1/dify/publish", json={"app_id": APP_ID}, headers={"Authorization": f"Bearer {PUBLISH_KEY}"}
+    )
+    assert resp.status_code == 200, resp.text
+    row = _ledger(tmp_path).publish_audit_entries()[0]
+    assert row["company_user_id"] == ""
+    # `unchanged` 与 `published` 要能分辨：点了没变化 ≠ 什么都没发生。
+    assert row["action"] == "unchanged"
+
+
+def test_the_initiator_is_a_header_and_not_accepted_in_the_body(tmp_path, monkeypatch) -> None:
+    """发起人走**头**，请求体仍然只准一个 app_id（爆炸半径不变）。"""
+    runtime = _Runtime()
+    monkeypatch.setattr(runtime.dify_app_registry, "all", lambda: (_binding(),))
+    client = _client(tmp_path, runtime, dify_publish_api_key=PUBLISH_KEY)
+    resp = client.post(
+        "/v1/dify/publish",
+        json={"app_id": APP_ID, "company_user_id": "B-42"},
+        headers={"Authorization": f"Bearer {PUBLISH_KEY}"},
+    )
+    assert resp.status_code == 422, "请求体接受了发起人字段 —— 爆炸半径被放宽了"
+
+
+def test_the_ledger_is_append_only_across_publishes(tmp_path, monkeypatch) -> None:
+    """两次尝试 = 两行，旧的不会被覆盖 —— 审计的"按时间"才有意义。"""
+    runtime = _Runtime()
+    monkeypatch.setattr(runtime.dify_app_registry, "all", lambda: (_binding(),))
+    monkeypatch.setattr(
+        "aiops_diagnostics.dify_dsl_pull.sync_binding_from_dify",
+        lambda *a, **k: __import__("aiops_diagnostics.dify_dsl_pull", fromlist=["SyncOutcome"]).SyncOutcome(
+            "T-1", "consumer", APP_ID, "小趋-客服", "synced", 8
+        ),
+    )
+    client = _client(tmp_path, runtime, dify_publish_api_key=PUBLISH_KEY)
+    client.post(
+        "/v1/dify/publish", json={"app_id": APP_ID}, headers={"Authorization": f"Bearer {PUBLISH_KEY}"}
+    )
+    client.post(
+        "/v1/dify/publish",
+        json={"app_id": "00000000-0000-0000-0000-000000000000"},
+        headers={"Authorization": f"Bearer {PUBLISH_KEY}"},
+    )
+    assert len(_ledger(tmp_path).publish_audit_entries()) == 2
