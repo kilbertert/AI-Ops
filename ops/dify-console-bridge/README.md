@@ -10,7 +10,8 @@
 
 | 文件 | 装到 | 作用 |
 |---|---|---|
-| `dify-console-10008.conf` | `/www/server/panel/vhost/nginx/` (36) | 宿主 nginx 的 10008 server 块：转发 Dify + 注入 |
+| `dify-console-TLS.conf` | `/www/server/panel/vhost/nginx/` (36) | **TLS 域名入口**（#776）：`dify.ranlei.work` 的 80 跳转 + 443，反代到 10008 |
+| `dify-console-10008.conf` | `/www/server/panel/vhost/nginx/` (36) | 10008 server 块：转发 Dify + 注入（TLS 入口的下游，也是回滚路径） |
 | `dify-console-publish.conf` | `/www/server/panel/vhost/nginx/snippets/` | 桥的同源转发（含 cookie 与 CSRF 头） |
 | `dify-publish-button.js` | `/srv/aiops-console-assets/` | 注入进页面的脚本。**不含任何凭据** |
 | `aiops-dify-console-bridge.service` | `/etc/systemd/system/` | 桥的服务单元（身份 `aiopsbridge`） |
@@ -18,17 +19,22 @@
 ## 拓扑
 
 ```
-浏览器 ──► 36:10008（宿主 nginx，本目录的第一个 conf）
-             ├─ /            ──► 127.0.0.1:10018（Dify 自己的 nginx）
-             ├─ /__aiops/publish-button.js  ← 注入脚本从这里出
-             └─ /__aiops/publish            ──► 127.0.0.1:10118（桥）
+浏览器 ──► https://dify.ranlei.work（dify-console-TLS.conf，443）
+             └─► 127.0.0.1:10008（dify-console-10008.conf）
+                   ├─ /            ──► 127.0.0.1:10018（Dify 自己的 nginx）
+                   ├─ /__aiops/publish-button.js  ← 注入脚本从这里出
+                   └─ /__aiops/publish            ──► 127.0.0.1:10118（桥）
 ```
+
+**TLS 那一层反代到 10008，不是 10018。** 注入、发布脚本与桥的三个 location 都在 10008
+那一层；指到 10018 会把它们整个绕过。10008 同时是本次变更的**回滚路径**（退役是另一件
+有观测依据的单独动作）。详见 `dify-console-TLS.conf` 顶部的注释。
 
 **Dify 的发布端口必须收进回环**：`deploy/docker-compose.yaml` 里
 `127.0.0.1:${DIFY_EXPOSE_PORT:-10018}:80`。绑 `0.0.0.0` 会让 10018 成为绕过注入层的
 第二条路。
 
-## 三处**容易踩空**的地方（都是实测踩过的）
+## 四处**容易踩空**的地方（都是实测踩过的）
 
 1. **CSRF 头必须转下去。** Dify 的 `/console/api/*` 除了 cookie 还要
    `X-CSRF-Token`，少了它一律 401 `CSRF token is missing or invalid` ——
@@ -39,6 +45,20 @@
    `gzip off`；少了这两行，替换**静默失败**（看着配了其实没注入）。
    另外脚本里的符号全部带 `aiops` 前缀 —— 第一版直接叫 `publish`/`toast`，
    与 Dify 自己的 bundle 撞名，报 `publish is not a function`。
+4. **⚠️ cookie 名随 scheme 变，读 cookie 必须两种前缀都试。** Dify 在
+   **https 且 `COOKIE_DOMAIN` 为空**时给控制台 cookie 加 `__Host-` 前缀
+   （`api/libs/token.py` 的 `is_secure() and _cookie_domain() is None`），http 下是裸名。
+   #776 把控制台收到 https 后名字就从 `csrf_token` 变成了 `__Host-csrf_token`。
+   - **桥侧已经兼容**（`console_session_from_headers` 同时识别两种，转发时按实际前缀回填）；
+   - **注入的按钮脚本也必须兼容**，否则 `aiopsReadCookie('csrf_token')` 读到空串 →
+     提交空 CSRF → 桥 401，而**界面上完全看不出原因**（按钮在、点了就失败）。
+   判据：在 https 控制台里 `document.cookie` 应含 `__Host-access_token` / `__Host-csrf_token`。
+   设计取舍：**用 `__Host-`，不设 `COOKIE_DOMAIN` 把它关掉** —— 前缀带来的隔离更强，
+   代价就是这一类读 cookie 的地方都得跟着改（v2 的登录代理也有同样的待办，见 #776 记录）。
+
+   附带一条同源的实测：**多层 `proxy_pass` 下 `sub_filter` 是逐层独立的**。TLS 那一层
+   反代到 10008 时，注入仍由 10008 负责；若将来把注入挪到外层，**必须同时删掉内层那份**，
+   否则页面里会出现两个 `/__aiops/publish-button.js`。验收时数它出现几次即可。
 
 ## 桥读什么
 
