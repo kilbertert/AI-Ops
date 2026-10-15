@@ -154,6 +154,7 @@ ops/
     README.md
   dify-tools/
     aiops-tools.openapi.json
+    README.md
   environments/
     env-41.toml
   aiops-tdengine-readonly-proxy.service

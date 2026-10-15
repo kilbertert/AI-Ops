@@ -1,3 +1,92 @@
+## 2026-10-15 · #775 七工具目录上线 41/36 + 浏览器验收
+
+> PRD #772 子票 #775。**业务验收：完成。** 全程 A→B→C→D，每步留证据。
+> **本记录不含任何密钥、口令或 Cookie 明文** —— 需要取值的地方只写"从受控位置现场取"。
+
+**目标 commit**：`a2322d76d354c312912ea1bca674353af2954472`（与 #791 同批，`origin/main`）。
+**本次未改任何代码**：`git status --short` 干净；41 上 `dify_tools_catalog.py` /
+`gateway_api.py` 的 sha256 与仓库**逐字相同**（`a3afcdffa988529f…` / `e82036c6273ed18e…`）。
+
+### A · 41 配置工具端点密钥并重启
+
+1. **备份**：`/etc/aiops-41/production.env.bak-toolskey-20261015-102940`。
+2. 追加 `AIOPS_GATEWAY_DIFY_TOOLS_API_KEY`（48 字符随机值，专为本路由新生成；
+   启动期校验它与其余四把 Dify 密钥互不相同）。文件保持 `0600 aiops41:aiops41`。
+3. **重启**：`systemctl restart aiops-gateway-41.service` → `active`；
+   `/health` `ok:true`，`version 0.1.0+a2322d76d354`；journal 无 warning。
+4. **三态验证**（41 本机回环 `172.18.0.1:8788`）：
+
+| 请求 | 结果 | 判据 |
+|---|---|---|
+| `POST /v1/dify/tools/order_snapshot` 无密钥 | **401** `DIFY_CREDENTIAL_REQUIRED` | 未配置 ⇒ 404，配置后 ⇒ 401 |
+| 同上，错误密钥 | **403** `DIFY_CREDENTIAL_REJECTED` | 密钥本身被拒 |
+| 同上，正确密钥 | **200** + 固定说明文本 | 命中 |
+| 同上，`/v1/dify/tools/drop_table` | **404** `DIFY_TOOL_UNKNOWN` | 七个之外仍是 404 |
+
+5. **真实链路**（从 Dify 容器经 squid 走公网域名）：
+
+| 路径 | 结果 |
+|---|---|
+| `curl -x ssrf_proxy:3128 … https://api.mall.qushiyun.com/v1/dify/tools/order_snapshot` 带密钥 | **200** + 固定说明 |
+| 同路径不带密钥 | **401** |
+
+### B · Dify 出站到网关的路径 —— 实测定为**公网域名**
+
+| 从 `deploy-api-1` 出发（2026-10-15 实测） | 结果 | 含义 |
+|---|---|---|
+| squid → `https://api.mall.qushiyun.com/...`（无密钥） | **404** `DIFY_TOOLS_UNAVAILABLE` | 请求**到达网关**（当时路由未配密钥） |
+| squid → `http://10.0.0.1/` | **403** | 私有网段过滤**仍生效** |
+| squid → 同公网域名，HTTP | 405 | 同样到达网关 |
+
+**决定（票面授权由我自判）：走公网域名，`SSRF_PROXY_ALLOW_PRIVATE_*` 两个变量都留空。**
+那个 403 反例是决定依据：加白名单本可放行内网，而公网域名本来就通 —— 留空 = 过滤全开
+**且** 目录可用。论证写入 `deploy/dify-36/README.md` §2.1。
+
+### C · 在 36 的 Dify 注册 `aiops` 提供方
+
+以**应急 owner 会话**经控制台 API 完成（口令从 `/root/dify-console-newpw.txt` 现场读取，
+0600；**不落证据**。★ `deploy/FIRST-LOGIN.txt` 里那份口令**已失效** —— 与库中 pbkdf2
+哈希比对不符，实际生效的是 2026-10-10 轮换后的那份）。
+
+- 提供方 `aiops`，id `86392bb8-037b-463c-9a5b-8e012bdd2266`；schema 为仓库
+  `ops/dify-tools/aiops-tools.openapi.json`，`servers[0].url` 按现网换成
+  `https://api.mall.qushiyun.com`。
+- **踩到一个只在调用时暴露的坑**：Dify 的 `api_key_header_prefix` **默认 `basic`**，
+  会在调用时把 `Bearer <key>` 组装成 `Basic Bearer <key>`，网关一律 401。
+  正确填法是 prefix 显式设 `bearer`、`api_key_value` **不带** `Bearer ` 前缀。
+  判据：401（前缀没组装对）与 403（密钥值不对）是两回事。
+  已写入 `ops/dify-tools/README.md`。
+- **端到端验证（不点界面）**：`POST /console/api/workspaces/current/tool-provider/api/test/pre`
+  —— Dify **自己的**可用性检查端点，与界面走同一段凭据组装代码。七个 `tool_name`
+  各调一次，**7/7 通过**，均返回 `{"tool": …, "note": "本工具只在 AI-Ops 运行时执行…"}`。
+
+**同时证明"不读任何数据源"**：调用前后 41 的 gateway journal 行数**增量为 0**；
+`ss` 无该进程到 3306/6030/6041 的连接。
+
+### D · 浏览器验收（真实 chromium，Playwright）
+
+| 判据 | 结果 |
+|---|---|
+| 工具列表显示七个工具及中文说明 | ✅ `/integrations/tools/api` 提供方卡片可见：作者 AI-Ops Admin、`包含 7 个 ACTIONS`、七个工具名与中文说明逐字可见，与仓库 OpenAPI 文档一致 |
+| 勾选部分工具 + 禁用其一 → 原生保存/发布 | ✅ 编排页工具区由 `0/0 启用` → `3/3 启用`（勾 order_snapshot / fee_snapshot / device_snapshot）→ 点开关禁用 device_snapshot → `2/3 启用` |
+| 新版本 `allowed_tools` 与勾选一致 | ✅ **版本 11**：`["order_snapshot","fee_snapshot"]` —— 禁用的 `device_snapshot` 被正确剔除（#774 的 `enabled=false` 规则在生产真实生效） |
+| 恢复验收前配置 | ✅ **版本 12**：七个工具全开，与验收前 **v10 逐字相同** |
+| Dify 预览调工具得固定说明、网关无取数 | ✅ 见 C 节：7/7 固定说明；journal 增量 0 |
+
+**一处诚实说明**：Dify 1.17.1 的 provider 详情页**只有「编辑」、没有独立「测试」按钮**，
+界面上点不到一次孤立的工具调用；我改用 Dify 同一条调用端点取证（上表 C 节），
+并在真实浏览器里确认了七个工具在界面上**可选、说明文字正确**。**未做的**是"勾完工具后
+在预览面板里跑一句完整对话" —— 那需要模型供应商额度，属另一件事，本票不含。
+
+**原生发布的实现核对**（读 Dify 1.17.1 源码）：编排页「发布」是下拉，「发布更新」执行
+`POST /console/api/apps/<id>/model-config` 落草稿；我方「发布到 AI-Ops」再把它经发布门
+冻结成版本。本次观测到的调用序列与该实现一致：
+`POST …/model-config` → `POST /__aiops/publish` → toast「已发布到线上（版本 11）」。
+
+**收尾**：验收后 agent 已恢复（v12 == v10）；执行中在 41 上落地的临时密钥文件已删除；
+41 服务 `active`。
+
+---
 ## 2026-10-15 · 41 依赖环境更新（`cryptography`）与部署到 `a2322d7`
 
 > 按 `docs/agents/env-41-dependency-update.md` 的人工流程执行。**动因**：#778 为登录代理
