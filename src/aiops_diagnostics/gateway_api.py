@@ -15,7 +15,7 @@ from typing import Annotated, Any
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from aiops_diagnostics import __version__
 from aiops_diagnostics.agent_content import AGENT_STARTERS
@@ -305,16 +305,45 @@ class DifyTrialRequest(BaseModel):
     而不是安静忽略 —— 试运行的订单范围只由**服务端配置的调试租户**决定（#782 上线后
     改为发起人的公司身份）。
 
-    ``allowed_tools`` 缺省为**空**：本票的语义是"草稿可以收窄"，所以勾了什么就是什么；
-    空表示这份草稿不要任何工具（与 ADR-0019 的"不声明 = 全部"不同，那是**发布**侧的
-    默认，试运行不该继承它 —— 试运行试的就是你眼前这份勾选）。
+    草稿来源有**两条**，且必须恰好给一条：
+
+    * ``prompt`` —— 调用方直接给方法论正文（原 #781 的形状，测试与 CLI 用）；
+    * ``app_id`` —— **服务端自己去 Dify 拉**这个 app 最近一次保存的配置。
+
+    第二条是给控制台按钮用的（#775 部署层）：Dify 1.17.1 的 chat 应用**没有服务端草稿
+    层**（#773 结论），编辑页里"还没点发布更新"的内容只在浏览器内存里 —— 任何 API 都
+    读不到。所以"试运行当前草稿"实际能拿到的就是**最近一次保存**的配置，而读它的正确
+    地点是**网关**（它已有 console 凭据，且 `resolve_pulled_config` 是"这份草稿发布出去
+    会变成什么"的唯一定义处）。让浏览器或那个薄桥去解析 DSL，会造出第二份映射规则 ——
+    正是 `resolve_pulled_config` 的 docstring 记下的那类漂移。
+
+    ``allowed_tools`` 缺省为**空**（仅在 ``prompt`` 那条路上有约束意义）：本票的语义是
+    "草稿可以收窄"，所以勾了什么就是什么；空表示这份草稿不要任何工具（与 ADR-0019 的
+    "不声明 = 全部"不同，那是**发布**侧的默认，试运行不该继承它 —— 试运行试的就是你
+    眼前这份勾选）。
     """
 
     model_config = ConfigDict(extra="forbid")
 
     order_no: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,63}$")
-    prompt: str = Field(min_length=1, max_length=20000)
+    prompt: str | None = Field(default=None, min_length=1, max_length=20000)
+    app_id: str | None = Field(default=None, min_length=1, max_length=64, pattern=r"^[0-9a-fA-F-]{8,64}$")
     allowed_tools: list[str] = Field(default_factory=list, max_length=7)
+
+    @model_validator(mode="after")
+    def _exactly_one_draft_source(self) -> DifyTrialRequest:
+        """草稿要么显式给，要么给个 app_id 让服务端去拉 —— **不能两个都无、也不能都填**。
+
+        两个都填是歧义（谁赢？），两个都无是"跑一次没有方法论的诊断"。两者都拒，而不是
+        挑一个 —— 挑一个会让调用方以为自己那半边生效了。
+        """
+        has_prompt = bool(self.prompt)
+        has_app = bool(self.app_id)
+        if has_prompt and has_app:
+            raise ValueError("给 prompt 与 app_id 二者只能有一个（草稿来源必须唯一）")
+        if not has_prompt and not has_app:
+            raise ValueError("必须给 prompt（显式草稿）或 app_id（服务端拉最近一次保存的配置）")
+        return self
 
 
 class FAQAnswerRequest(BaseModel):
@@ -675,6 +704,72 @@ def _publish_bound_app(
         "version_no": outcome.version_no,
         "note": outcome.note,
     }
+
+
+def _trial_draft_from_console(context: Any, app_id: str) -> tuple[str, tuple[str, ...]]:
+    """读出这个 app **最近一次保存**的配置，作为试运行的草稿（#775 部署层）。
+
+    返回 ``(prompt, allowed_tools)``。
+
+    **为什么读出来的是"最近一次保存"而不是"编辑框里现在的内容"**：Dify 1.17.1 的 chat
+    应用没有服务端草稿层 —— ``app_model_config_id`` 是单指针，"发布更新"与"保存"打的是
+    同一个 ``POST /console/api/apps/<id>/model-config``（#773 实测）。编辑页里尚未保存的
+    内容只在浏览器内存里，**任何 API 都读不到**。所以这是能力的边界，不是选择；界面上
+    必须写明"以最近一次保存的配置为准"。
+
+    **为什么在网关读而不在那个薄桥里读**：导出的 DSL 里工具条目**只有 provider 的 UUID，
+    没有提供方名字**，所以读草稿必须当场从控制台解析 ``aiops`` 提供方的 UUID 再做映射。
+    那套映射（``map_dsl_to_config`` + ``partition_aiops_tools``）在网关这里**已经有了**，
+    而且正是发布路径用的同一份；让桥或浏览器再实现一遍，就是
+    ``resolve_pulled_config`` 的 docstring 记下的那种漂移（"干跑报空、真拉却保留了绑定"）。
+
+    拉不到一律**显式失败**，不退回空草稿：空草稿会跑出一次"没有方法论的诊断"，而运营会
+    以为那就是他草稿的效果。
+    """
+    from aiops_diagnostics.dify_dsl_pull import (
+        DifyDslError,
+        DifyDslSource,
+        resolve_pulled_config,
+    )
+
+    binding = next(
+        (item for item in context.runtime.dify_app_registry.all() if item.app_id == app_id),
+        None,
+    )
+    if binding is None:
+        # 与发布路径同形：未登记就是"不在这里"，不透露有哪些绑定。
+        raise StandardAPIError(
+            status.HTTP_404_NOT_FOUND, "DIFY_APP_NOT_BOUND", "app is not a bound agent source"
+        )
+    console = context.settings
+    if not console.dify_console_base_url or not console.dify_console_api_key:
+        raise StandardAPIError(
+            status.HTTP_502_BAD_GATEWAY,
+            "DIFY_CONSOLE_UNAVAILABLE",
+            "the Dify console credential is not configured on this server",
+        )
+    from aiops_diagnostics.agent_manifest import admin_context
+
+    source = DifyDslSource(
+        base_url=console.dify_console_base_url,
+        app_id=binding.app_id,
+        api_key=console.dify_console_api_key,
+        workspace_id=console.dify_console_workspace_id,
+    )
+    try:
+        config = resolve_pulled_config(
+            context.agent_manager,
+            admin_context(binding.tenant_id),
+            source,
+            name=binding.agent_name,
+            agent_type=binding.business_entry,
+            knowledge_registry=parse_dify_knowledge_bindings(context.settings.dify_knowledge_bindings),
+            tool_registry=parse_dify_tool_bindings(context.settings.dify_tool_bindings),
+        )
+    except DifyDslError as exc:
+        # Dify 自己拒绝或不可达：带它自己的码转达（调用方要能区分「凭据被拒」与「服务挂了」）。
+        raise StandardAPIError(status.HTTP_502_BAD_GATEWAY, exc.code, "dify pull failed") from exc
+    return config.prompt, tuple(config.allowed_tools or ())
 
 
 def create_gateway_app(
@@ -1317,9 +1412,16 @@ def create_gateway_app(
         （缺 ``X-AIOps-Initiator`` 或 ``-Tenant``）⇒ 退回 #781 的固定调试租户行为。
         """
         try:
-            draft = TrialDraft.from_payload(
-                {"prompt": payload.prompt, "allowed_tools": payload.allowed_tools}
-            )
+            if payload.prompt is not None:
+                draft_payload: dict[str, Any] = {
+                    "prompt": payload.prompt,
+                    "allowed_tools": payload.allowed_tools,
+                }
+            else:
+                # ``app_id`` 那条路：服务端去 Dify 拉**最近一次保存**的配置当草稿。
+                prompt_text, tools = _trial_draft_from_console(context, str(payload.app_id))
+                draft_payload = {"prompt": prompt_text, "allowed_tools": list(tools)}
+            draft = TrialDraft.from_payload(draft_payload)
         except TrialRefused as exc:
             raise StandardAPIError(status.HTTP_400_BAD_REQUEST, "TRIAL_DRAFT_REJECTED", str(exc)) from exc
         trial_initiator = TrialInitiator.from_headers(

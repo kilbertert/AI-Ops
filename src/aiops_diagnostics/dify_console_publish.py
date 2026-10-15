@@ -88,6 +88,8 @@ DIFY_WORKSPACE_SUMMARY_PATH = "/console/api/workspaces/current/summary"
 DIFY_APP_PATH = "/console/api/apps/{app_id}"
 #: 机器门（共享密钥）。**不是** ``/v1/operator/publish``：那条要运营的网关会话。
 PUBLISH_PATH = "/v1/dify/publish"
+#: 试运行（#781 / #782 的部署层）。草稿由**网关**自己从 Dify 读回来，桥只递 app_id。
+TRIAL_PATH = "/v1/dify/trial"
 
 #: Dify ``TenantAccountRole`` 的全部取值（``api/models/account.py``）。
 KNOWN_ROLES = frozenset({"owner", "admin", "editor", "normal", "dataset_operator"})
@@ -112,6 +114,17 @@ _TOKEN_RE = re.compile(r"[\x21\x23-\x2B\x2D-\x3A\x3C-\x5B\x5D-\x7E]+")
 _CONTENT_LENGTH_RE = re.compile(r"[0-9]{1,6}")
 
 _PUBLISH_ROUTE = "/__aiops/publish"
+
+#: 试运行（#781 / #782 的部署层）。与发布同源、同一套浏览器三门，但 body 要带订单号。
+_TRIAL_ROUTE = "/__aiops/trial"
+
+#: 试运行请求体上限。它只带 ``{order_no}``（几十字节），但给足余量，免得一个异常的
+#: 调用方因为多带了一个字段而拿到一个看不懂的 400。**草稿不从这里进** —— 草稿由网关
+#: 自己去 Dify 拉（见 ``_TRIAL_PAYLOAD_KEYS`` 的注释）。
+MAX_TRIAL_BODY_BYTES = 32 * 1024
+
+#: 试运行请求体**只允许**这几个键。``app_id`` 由 Referer 决定，不从 body 读。
+_TRIAL_PAYLOAD_KEYS = frozenset({"order_no"})
 
 #: 发布权查询（#780）：登录代理上的只读端点。**未配置它 = 维持过渡行为**
 #: （按 Dify 的 owner/admin 判），所以身份闭环上线前行为逐字不变。
@@ -550,6 +563,58 @@ def _interpret_publish_outcome(outcome: Any, app_id: str) -> ConsolePublishResul
     return ConsolePublishResult(True, f"已发布到线上（版本 {version}）", action, status=200)
 
 
+def submit_trial(
+    *,
+    gateway_base_url: str,
+    trial_key: str,
+    app_id: str,
+    order_no: str,
+    timeout: float = 15.0,
+) -> ConsolePublishResult:
+    """把一次试运行**提交**给网关（#781 / #782 的部署层）。
+
+    与 :func:`publish_current_app` 的形状差别只有一处，而且是**有意**的：
+
+    * 发布那条路把"读草稿 + 映射工具"整件事留在网关里（``/v1/dify/publish`` 自己拉 DSL）；
+    * 试运行同样如此 —— 桥只递 ``app_id`` 与 ``order_no``，**草稿由网关自己读**。
+      桥这一侧读不懂那份草稿：导出的 DSL 里工具条目只有提供方的 UUID，映射规则
+      （``partition_aiops_tools``）住在网关，而且 36 上的 python 没有 pydantic，
+      桥连 ``dify_dsl_pull`` 都 import 不了。让桥再实现一遍就是第二份规则。
+
+    网关的 202 回答里 ``trial_id`` 与 ``status`` 都要在，缺任何一个都算**未确认**：
+    不能报成功，也不能断言没提交。
+    """
+    http_status, answer = _request(
+        gateway_base_url.rstrip("/") + TRIAL_PATH,
+        method="POST",
+        headers={
+            # 这是**第六把**独立钥匙：能发布不等于能在真数据上跑一次诊断。
+            "Authorization": f"Bearer {trial_key}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        },
+        body={"app_id": app_id, "order_no": order_no},
+        timeout=timeout,
+    )
+    # 名字用 ``http_status`` 与本文件其余部分一致（``publish_current_app`` 也是这么叫的）：
+    # 裸名 ``status`` 会让 ``tests/test_order_status.py`` 的结构判据把它当成**订单状态**
+    # 的内联数字判据 —— 那条判据是 PRD #732 用来拦住"订单状态又多一份拼写"的，不该为了
+    # 一个 HTTP 状态码去放宽它。
+    if http_status == 404:
+        return ConsolePublishResult(False, "这个智能体没有登记成 AI-Ops 的绑定来源，无法试运行", status=404)
+    if http_status == 429:
+        return ConsolePublishResult(False, "已经有一次试运行在跑，请等它结束再试", status=429)
+    if not 200 <= http_status < 300 or not isinstance(answer, dict):
+        _LOGGER.warning("console trial: gateway answered status=%s", http_status)
+        return ConsolePublishResult(False, _UNCONFIRMED, status=502)
+    trial_id = _str_field(answer, "trial_id")
+    trial_status = _str_field(answer, "status")
+    if not trial_id or not trial_status:
+        _LOGGER.warning("console trial: gateway answer has an unexpected shape")
+        return ConsolePublishResult(False, _UNCONFIRMED, status=502)
+    return ConsolePublishResult(True, f"已提交试运行（{trial_id}），状态：{trial_status}", status=202)
+
+
 # ── HTTP 面：注入的按钮打的那一跳 ────────────────────────────────────────────
 
 
@@ -572,6 +637,10 @@ class BridgeSettings:
     #: 网关导出 DSL 所用的工作空间必须与之相同 —— 部署侧约束，桥无法自证。
     workspace_id: str
     allowed_roles: frozenset[str] = DEFAULT_ALLOWED_ROLES
+    #: 服务端持有的**试运行**密钥。与 ``AIOPS_GATEWAY_DIFY_TRIAL_API_KEY`` 同一把。
+    #: 它必须与发布密钥**不同**（网关在启动期就强制两者互不相同）：能发布不等于能在
+    #: 真数据上跑一次诊断，这是两条不同的授权。留空 ⇒ 试运行那条路 404。
+    trial_key: str = ""
     #: 登录代理地址（#780）。**留空 = 维持过渡行为**（按 Dify owner/admin 判）——
     #: 于是"没配"与"配了但代理挂了"是两件不同的事：后者 fail-closed 拒发布。
     login_proxy_url: str = ""
@@ -604,6 +673,7 @@ class BridgeSettings:
             dify_base_url=required("AIOPS_CONSOLE_BRIDGE_DIFY_URL").rstrip("/"),
             gateway_base_url=required("AIOPS_CONSOLE_BRIDGE_GATEWAY_URL").rstrip("/"),
             publish_key=required("AIOPS_GATEWAY_DIFY_PUBLISH_API_KEY"),
+            trial_key=os.environ.get("AIOPS_GATEWAY_DIFY_TRIAL_API_KEY", "").strip(),
             console_origin=origin,
             workspace_id=required("AIOPS_CONSOLE_BRIDGE_WORKSPACE_ID"),
             allowed_roles=parse_allowed_roles(os.environ.get("AIOPS_CONSOLE_BRIDGE_ALLOWED_ROLES")),
@@ -630,8 +700,12 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
     settings: ClassVar[BridgeSettings]
 
     def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler 的协议
+        path = urllib.parse.urlsplit(self.path).path
         try:
-            if urllib.parse.urlsplit(self.path).path != _PUBLISH_ROUTE:
+            if path == _TRIAL_ROUTE:
+                self._post_trial()
+                return
+            if path != _PUBLISH_ROUTE:
                 raise _Rejected(404, "not found")
             session, referer = self._check_browser_request()
             self._read_empty_body()
@@ -656,6 +730,44 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
             self._json(502, {"published": False, "reason": "发布链路暂时不可用，请稍后再试", "action": ""})
             return
         self._json(result.status, result.public())
+
+    def _post_trial(self) -> None:
+        """试运行那条路（#781 / #782 的部署层）。
+
+        与发布共用**同一套浏览器三门**（同源 Origin、Sec-Fetch-Site、Referer+CSRF）——
+        运营点的是同一张页面里的按钮，不该有两套门。**app_id 取自 Referer**，不从请求体
+        读：任何能构造请求体的人都能写一个别人的 app_id，而 Referer 至少还要求"你站在这
+        个页面上"（它仍然不是授权，授权是那枚 Dify 会话）。
+
+        未配 ``AIOPS_GATEWAY_DIFY_TRIAL_API_KEY`` ⇒ **404**，与网关那条路由同一机制：
+        "这个部署没开试运行"不是"试运行不需要钥匙"。
+        """
+        if not self.settings.trial_key:
+            raise _Rejected(404, "not found")
+        session, referer = self._check_browser_request()
+        app_id = app_id_from_referer(referer, console_origin=self.settings.console_origin)
+        if app_id is None:  # pragma: no cover - _check_browser_request 已保证
+            raise _Rejected(403, "无法确定当前是哪个智能体（请从编排页点这个按钮）")
+        payload = self._read_bounded_json(MAX_TRIAL_BODY_BYTES, _TRIAL_PAYLOAD_KEYS)
+        order_no = payload.get("order_no")
+        if not isinstance(order_no, str) or not order_no.strip():
+            raise _Rejected(400, "请填写要试运行的订单号")
+        try:
+            result = submit_trial(
+                gateway_base_url=self.settings.gateway_base_url,
+                trial_key=self.settings.trial_key,
+                app_id=app_id,
+                order_no=order_no.strip(),
+                timeout=self.settings.timeout,
+            )
+        except ConsolePublishError as exc:
+            self.log_message("console trial bridge failed: %s", exc)
+            self._json(502, {"submitted": False, "reason": "试运行链路暂时不可用，请稍后再试"})
+            return
+        self._json(
+            result.status,
+            {"submitted": result.published, "reason": result.reason, "action": result.action},
+        )
 
     def _single_header(self, name: str) -> str | None:
         """安全敏感头必须恰好一次；重复时拒绝，免得桥与代理对"取哪一个"理解不同。"""
@@ -729,6 +841,47 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
             raise _Rejected(400, "invalid request body") from None
         if payload != {}:
             raise _Rejected(400, "request body must be empty")
+
+    def _read_bounded_json(self, limit: int, allowed_keys: frozenset[str]) -> dict[str, Any]:
+        """有界读一个 JSON object，且**只允许** ``allowed_keys`` 里的键。
+
+        与 :meth:`_read_empty_body` 同一套长度/编码/超时纪律（RFC 9110 §8.6：不接受重复
+        长度、不接受 Transfer-Encoding —— 本端点没实现 chunked，不能让前置代理与桥分帧
+        不同）。多出来的键一律 **400，不是安静忽略** —— 与网关那条请求体的
+        ``extra="forbid"`` 同一条主张：多一个字段会让人以为它起了作用。
+        """
+        if self._single_header("Transfer-Encoding") is not None:
+            raise _Rejected(400, "transfer encoding is not supported")
+        raw_length = self._single_header("Content-Length")
+        if raw_length is None:
+            raise _Rejected(411, "content length required")
+        if not raw_length.isascii() or not raw_length.isdecimal():
+            raise _Rejected(400, "invalid content length")
+        if _CONTENT_LENGTH_RE.fullmatch(raw_length) is None:
+            raise _Rejected(413, "payload too large")
+        length = int(raw_length)
+        if length > limit:
+            raise _Rejected(413, "payload too large")
+        if length == 0:
+            raise _Rejected(400, "request body must not be empty")
+        # ponytail: 单请求占一个线程；5 秒读超时限制慢 body，占用量大时交给前置代理限流。
+        self.connection.settimeout(5.0)
+        try:
+            raw = self.rfile.read(length)
+        except (OSError, TimeoutError):
+            raise _Rejected(400, "incomplete request body") from None
+        if len(raw) != length:
+            raise _Rejected(400, "incomplete request body")
+        try:
+            payload = json.loads(raw)
+        except (ValueError, UnicodeError):
+            raise _Rejected(400, "invalid request body") from None
+        if not isinstance(payload, dict):
+            raise _Rejected(400, "request body must be an object")
+        extra = set(payload) - allowed_keys
+        if extra:
+            raise _Rejected(400, "unexpected field in request body")
+        return payload
 
     def _json(self, status: int, payload: dict[str, Any]) -> None:
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
