@@ -749,7 +749,21 @@ def _trial_draft_from_console(context: Any, app_id: str) -> tuple[str, tuple[str
             "the Dify console credential is not configured on this server",
         )
     from aiops_diagnostics.agent_manifest import admin_context
+    from aiops_diagnostics.dify_dsl_pull import _find_by_name
 
+    agent_context = admin_context(binding.tenant_id)
+    # ``agent_type`` 与 ``output_contract`` 取自**库里那个 agent**，不取自绑定行、也不取自
+    # DSL —— 与发布路径（``sync_binding_from_dify``）同一处来源。绑定行的
+    # ``business_entry``（如 ``operator``）是**入口**，不是 agent 类型；把它当 agent_type
+    # 会得到 ``has no default output contract``（实测踩到）。DSL 里也没有这两样：它们是
+    # 「这个 app 在我们这边是一个什么样的智能体」，只有库里知道。
+    live = _find_by_name(context.agent_manager, agent_context, binding.agent_name)
+    if live is None:
+        raise StandardAPIError(
+            status.HTTP_404_NOT_FOUND,
+            "AGENT_NOT_REGISTERED",
+            "the bound agent is not registered in this environment",
+        )
     source = DifyDslSource(
         base_url=console.dify_console_base_url,
         app_id=binding.app_id,
@@ -759,12 +773,14 @@ def _trial_draft_from_console(context: Any, app_id: str) -> tuple[str, tuple[str
     try:
         config = resolve_pulled_config(
             context.agent_manager,
-            admin_context(binding.tenant_id),
+            agent_context,
             source,
             name=binding.agent_name,
-            agent_type=binding.business_entry,
+            agent_type=live.config.agent_type,
+            output_contract=live.config.output_contract,
             knowledge_registry=parse_dify_knowledge_bindings(context.settings.dify_knowledge_bindings),
             tool_registry=parse_dify_tool_bindings(context.settings.dify_tool_bindings),
+            tenant_id=binding.tenant_id,
         )
     except DifyDslError as exc:
         # Dify 自己拒绝或不可达：带它自己的码转达（调用方要能区分「凭据被拒」与「服务挂了」）。
