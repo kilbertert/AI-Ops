@@ -1,3 +1,130 @@
+## 2026-10-15 · #776 Dify 控制台 TLS 域名入口收口
+
+> PRD #772 子票 #776。**业务验收：完成。** 10008 保持可用作回滚路径。
+> 本记录不含任何口令、令牌或 Cookie 明文 —— cookie 只记**名字**，不记值。
+
+**范围变化（先记一笔）**：用户决定**第一版继续由 Dify 的 owner/admin 裁定发布权**
+（桥的 `LOGIN_PROXY_URL` 未配置已是既成事实，登录代理未部署）。于是「公司口令不得走明文」
+这条硬门禁在第一版不成立，TLS 从「#783 的硬前置」降为**真实的现状改善**：它解掉的是
+**控制台会话 JWT 一直明文过公网**这个既有问题，并为 v2 的公司登录备好入口。
+
+### 域名与证书
+
+| 项 | 值 |
+|---|---|
+| 域名 | `dify.ranlei.work`（用户自有的 `ranlei.work`，DNS 在 Cloudflare） |
+| 记录 | **A** `36.156.159.175`，proxied=**false（灰云）**，TTL 300，id `1e7ed09de82d148d6d2f181ce846c8e0` |
+| 证书 | **Let's Encrypt**，`CN=dify.ranlei.work`，签发 `10:13:35Z`，到期 **2027-01-13**，自动续期已建立 |
+| 链验证 | `openssl s_client` → **`Verify return code: 0 (ok)`**；`curl` 严格校验 `ssl_verify=0` |
+
+**为什么是灰云而不是橙云**：橙云（CF 代理）要由 Cloudflare 终结 TLS，用户的控制台口令会
+在第三方侧可见；用户选了灰云（TLS 由 36 自己终结、源站 IP 暴露，而 10008 本来就已经裸在
+公网上）。因此 36 上那张现成的 `*.ranlei.work` **Origin CA 证书用不上**（Origin CA 只在 CF
+代理后被信任），改签 LE。
+
+**36 上原无该域名站点**：变更前 `http://dify.ranlei.work/` 落默认 catchall（200）、
+`:443` 拿自签 `CN=catchall.invalid`。
+
+**签发路径**：36 无 `certbot`/`acme.sh`；`get.acme.sh` 的安装器要从 **GitHub raw** 取主体，
+而 **GitHub 从 36 不可达**（`000` 连接失败）⇒ acme.sh 不可行。改用 `apt install certbot`
+（Ubuntu 24.04 官方源，2.9.0）。http-01 webroot 签发成功。
+
+### Cookie 前缀 —— 本次唯一的阻塞性发现
+
+Dify 在 **https 且 `COOKIE_DOMAIN` 为空**时给控制台 cookie 加 `__Host-` 前缀
+（`api/libs/token.py` 的 `is_secure() and _cookie_domain() is None`）。改 `.env` 后
+`CONSOLE_WEB_URL`/`CONSOLE_API_URL` 都是 https、`COOKIE_DOMAIN` 仍为空 ⇒ **前缀生效**。
+
+**实测**：登录后 `document.cookie` 的名字是 `__Host-access_token` / `__Host-csrf_token` /
+`__Host-refresh_token`（**只记名字**）。
+
+| 组件 | 是否已兼容 | 处置 |
+|---|---|---|
+| Dify 后端 | — | 前缀由它自己加 |
+| Dify 前端 | ✅ | `web/config/index.ts` 已按 `isSecure` 分支 |
+| 发布桥 | ✅ 双前缀兼容 | `dify_console_publish.py` 的 `console_session_from_headers` |
+| **注入的按钮** | ❌ **写死裸名** | **已改**：`aiopsReadCsrfCookie()` 先试 `__Host-csrf_token` 再回退 `csrf_token` |
+
+选择用 `__Host-`（不设 `COOKIE_DOMAIN` 关掉它）：隔离更强。代价是这一类读 cookie 的地方
+都得跟着改 —— **v2 待办**：登录代理的 `dify_login_service.py`（`cookie_prefix` 恒为空）与
+`dify_login_server.py` 的 `_logout()`（只清裸名）在 v2 上线前必须一并改。
+
+### 改了什么
+
+**仓库（部署资产）**
+- `ops/dify-console-bridge/dify-console-TLS.conf`（新）：80 跳转 + 443，`proxy_pass` 到 **10008
+  而非 10018** —— 透明复用 10008 那一层的转发、HTML 注入、按钮脚本与发布桥；指到 10018
+  会把注入与桥整个绕过。
+- `ops/dify-console-bridge/dify-publish-button.js`：cookie 名双前缀兼容。
+- `ops/dify-console-bridge/README.md`：拓扑加 TLS 层；「三处容易踩空」扩为**四处**。
+
+**36（以产物落位，哈希与仓库逐字一致）**
+
+| 文件 | sha256(16) |
+|---|---|
+| `/www/server/panel/vhost/nginx/dify-console-TLS.conf` | `2c575641dac44554` |
+| `/srv/aiops-console-assets/dify-publish-button.js` | `bd2ae6eb5778fa79` |
+
+- 证书目录 `/www/server/panel/vhost/cert/dify.ranlei.work/`（`600`，与既有 `*.xyseeker.com`
+  站点同构）；**续期钩子** `/etc/letsencrypt/renewal-hooks/deploy/10-reload-nginx.sh`
+  （拷证书 → `nginx -t && nginx -s reload`）。
+  ⚠️ **为什么不直接指向 `/etc/letsencrypt/live/`**：那里是 `700 root`，nginx **worker**
+  （宝塔下是 `systemd+` 身份）读不到 —— 现在能起只是因为 master 以 root 解析配置，是个
+  不该依赖的隐含假设。拷贝这一步换来的是"worker 真的能读到"。
+- `/opt/dify/deploy/.env`：`CONSOLE_WEB_URL` / `CONSOLE_API_URL` / `SERVICE_API_URL` /
+  `APP_WEB_URL` → `https://dify.ranlei.work`；`NEXT_PUBLIC_SOCKET_URL` `ws://` → **`wss://`**。
+  备份 `.env.bak-tls-20261015-191534`。
+- `/etc/aiops-console-bridge/bridge.env`：`CONSOLE_ORIGIN` → `https://dify.ranlei.work`。
+  备份 `bridge.env.bak-tls-20261015-191534`。
+
+**不需要改**（已核实）：`dify-console-publish.conf`（Host/Origin/Referer 全透传，`proxy_pass`
+是 http 回环）；`CONSOLE_CORS_ALLOW_ORIGINS`（别名回退到 `CONSOLE_WEB_URL`，改它就自动带上）。
+
+### 验收（每条留证据）
+
+| 判据 | 结果 |
+|---|---|
+| HTTPS 证书有效、`curl` 严格校验通过 | ✅ `Verify return code: 0 (ok)`、`ssl_verify=0`、307 |
+| HTTP 跳转到 HTTPS | ✅ `301` → `Location: https://dify.ranlei.work/` |
+| 真实浏览器在新域名完成登录、编辑、原生保存、发布 | ✅ Playwright：登录成功 → 编排页 → 工具目录 7/7 → 点「发布到 AI-Ops」→ 桥 `POST /__aiops/publish` **200** |
+| Cookie 名与 #773 结论一致、桥在新入口下解析通过 | ✅ `__Host-` 前缀三枚；按钮读到 `__Host-csrf_token`；桥放行（若前缀没对上会是 401） |
+| 10008 在本票内保持可用 | ✅ `307`，注入脚本 `200` |
+| 暴露登记与 `deploy/dify-36/README.md` 记录本次决定 | ✅ 见下节 |
+
+**发布落地判据（网关侧权威依据）**：`publish_audit_ledger` 新增
+`at=2026-10-15T11:17:49.181067Z, agent=ops-methodology-700, version_no=12, action='unchanged'`
+—— 与本机 `19:17:49` 的桥日志**精确对应**。`unchanged` 是**正确**的：Dify 草稿与已发布
+的 v12 内容相同，网关按设计记 no-op（ADR-0018「最坏情况是 no-op」）。
+`company_user_id`/`dify_account_id` 为空是**预期**（登录代理未部署，桥处于 owner/admin
+过渡态，无发起人头）。
+
+**其它站点未受影响**：`https://xyadmin.xyseeker.com/` → 200、`https://xyapi.xyseeker.com/`
+→ 200；`nginx -t` 通过（唯一的 `duplicate MIME type "text/html"` 警告是**既有的**，非本次引入）。
+
+### 一处补上的观测能力（票面要求的观测在本机做不到）
+
+`nginx -T` 证实 10008 的 server 块**不含 `access_log`**，全局那条写在 http 块内一个
+`location /\.` 里（作用域无效）⇒ **该端口流量从未写入任何日志**。因此票面「切换前先观察
+10008 的实际访问流量」在本机现有条件下**不具备观测能力**（不是"观测结果为空"）。
+新入口已补 `access_log /www/wwwlogs/dify.ranlei.work.log`，下一次暴露变更（退役 10008）
+第一次有依据。
+
+### 回滚
+
+1. `bridge.env` 的 `CONSOLE_ORIGIN` 改回 `http://36.156.159.175:10008`，重启桥。
+2. `.env` 五处改回 http/ws，`docker compose up -d web api`。
+3. 移除 `/www/server/panel/vhost/nginx/dify-console-TLS.conf`，`nginx -t && nginx -s reload`。
+4. 10008 全程未被改动 ⇒ 任何一步失败都能立刻退回原状。
+5. DNS 记录保留（无害）；撤销用 `DELETE /zones/<zone>/dns_records/1e7ed09de82d148d6d2f181ce846c8e0`。
+
+### 未做
+
+- **不关 10008**（回滚路径；退役是另一件有观测依据的单独步骤）。
+- 不动 Dify 原生登录接口（封入口属 #783）。
+- 未设 `COOKIE_DOMAIN`（保持空 ⇒ 走 `__Host-`）。
+- 未打开容器内的 `NGINX_HTTPS_ENABLED`（那是 10018 一跳，与公网收口是两件事）。
+
+---
 ## 2026-10-15 · #775 七工具目录上线 41/36 + 浏览器验收
 
 > PRD #772 子票 #775。**业务验收：完成。** 全程 A→B→C→D，每步留证据。

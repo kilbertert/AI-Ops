@@ -27,6 +27,20 @@
     return '';
   }
 
+  /*
+   * Dify 的 cookie 名**随 scheme 变**（`api/libs/token.py`）：https 且未设
+   * COOKIE_DOMAIN 时加 `__Host-` 前缀，http 下是裸名。Dify 自己的前端也是这么
+   * 分支的（`web/config/index.ts` 的 `isSecure ? '__Host-csrf_token' : ...`）。
+   *
+   * ⚠️ **两种都要试，且不能只试一种。** #776 把控制台收到 https 后，裸名会变成
+   * `__Host-csrf_token`；只读裸名会拿到空串 → 提交空 CSRF → 桥 401，而**界面上
+   * 看不出为什么**（按钮还在、点了就失败）。这与桥侧的解析口径一致
+   * （`dify_console_publish.py` 的 `console_session_from_headers` 同时识别两种前缀）。
+   */
+  function aiopsReadCsrfCookie() {
+    return aiopsReadCookie('__Host-csrf_token') || aiopsReadCookie('csrf_token');
+  }
+
   function aiopsToast(msg, ok) {
     var el = document.createElement('div');
     el.textContent = msg;
@@ -52,7 +66,7 @@
         'Content-Type': 'application/json',
         // Dify 的 console API 要求这个头（csrf_token cookie 的副本）—— 缺了它会
         // 401 CSRF token is missing。桥把它**原样**转给 Dify 去验。
-        'X-CSRF-Token': aiopsReadCookie('csrf_token'),
+        'X-CSRF-Token': aiopsReadCsrfCookie(),
       },
       body: JSON.stringify({}),
     })

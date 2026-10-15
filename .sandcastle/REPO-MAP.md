@@ -55,8 +55,8 @@ no project argument. Both answer *where* something is; neither replaces reading 
 - AGENTS.md
 - CLAUDE.md
 - README.md
-- docs/ — 73 markdown file(s)
-- docs/adr/ — 25 markdown file(s)
+- docs/ — 74 markdown file(s)
+- docs/adr/ — 26 markdown file(s)
 - docs/agents/ — 27 markdown file(s)
 
 ## Tree (depth 2, first 80 lines; dependencies, build
@@ -93,7 +93,7 @@ docs/
     0008-adr-0003-deviation-session-direct-read.md
     0009-operator-identity-via-company-oauth2-token.md
     0010-reversal-of-prd-200-language-boundary.md
-    ... (15 more)
+    ... (16 more)
   afk-cutover/
     decisions.md
     pr-a-spec.md
@@ -144,6 +144,7 @@ ops/
     aiops-dify-console-bridge.service
     dify-console-10008.conf
     dify-console-publish.conf
+    dify-console-TLS.conf
     dify-publish-button.js
     qa-plan.md
     README.md
