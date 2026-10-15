@@ -47,6 +47,14 @@ class _Runtime:
         self.started: list[dict[str, Any]] = []
         self.busy = False
 
+    class _EmptyRegistry:
+        def all(self) -> list[Any]:
+            return []
+
+    #: ``app_id`` 那条路要按**绑定表**查（与发布路径同一张）。本文件不测拉草稿的
+    #: 成功路径（那要真连 Dify），只测"未登记 ⇒ 不进入执行器"，所以给一张空表。
+    dify_app_registry = _EmptyRegistry()
+
     def trial_run_context(self) -> ScopeContext:
         subject = SubjectRecord(b_user_id="aiops-admin", tenant_id=DEBUG_TENANT)
         return ScopeContext.build(
@@ -226,6 +234,42 @@ def test_a_draft_rejects_a_scope_field_rather_than_ignoring_it() -> None:
         TrialDraft.from_payload({"prompt": "p", "tenant_id": "T-OTHER"})
     with pytest.raises(TrialRefused, match="site_ids"):
         TrialDraft.from_payload({"prompt": "p", "allowed_tools": [], "site_ids": ["S-1"]})
+
+
+def test_the_draft_source_is_exactly_one_of_prompt_or_app_id(tmp_path: Path) -> None:
+    """草稿要么显式给 ``prompt``，要么给 ``app_id`` 让服务端去拉 —— **不能两个都无、也不能都填**。
+
+    两个都填是歧义（谁赢）；两个都无是"跑一次没有方法论的诊断"。两者都拒，不挑一个。
+    """
+    client, runtime = _client(tmp_path)
+    # 两个都无
+    assert client.post(
+        "/v1/dify/trial", json={"order_no": ORDER}, headers={"Authorization": f"Bearer {TRIAL_KEY}"}
+    ).status_code in (400, 422)
+    # 两个都填
+    assert client.post(
+        "/v1/dify/trial",
+        json={"order_no": ORDER, "prompt": "x", "app_id": "e35f8fda-dd4e-4317-b05c-d29f23b4f395"},
+        headers={"Authorization": f"Bearer {TRIAL_KEY}"},
+    ).status_code in (400, 422)
+    # 两次都被拒 ⇒ 一次都没进执行器
+    assert runtime.started == []
+
+
+def test_an_unbound_app_id_is_404_and_never_reaches_the_runner(tmp_path: Path) -> None:
+    """``app_id`` 那条路要经**发布路径同一张绑定表**：没登记就是"不在这里"。
+
+    这里没有配置 console 凭据，所以更早的一关会先拒（未绑定的 app 根本查不到绑定）——
+    两种拒绝都不该进入执行器，本用例断言的是"没有越过 404/502 这道门"。
+    """
+    client, runtime = _client(tmp_path)
+    resp = client.post(
+        "/v1/dify/trial",
+        json={"order_no": ORDER, "app_id": "e35f8fda-dd4e-4317-b05c-d29f23b4f395"},
+        headers={"Authorization": f"Bearer {TRIAL_KEY}"},
+    )
+    assert resp.status_code in (404, 502), resp.text
+    assert runtime.started == []
 
 
 def test_a_draft_needs_a_prompt_and_is_length_bounded() -> None:

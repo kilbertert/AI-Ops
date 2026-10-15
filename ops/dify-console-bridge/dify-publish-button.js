@@ -12,6 +12,7 @@
   'use strict';
   var AIOPS_APP_RE = /^\/app\/([0-9a-fA-F-]{8,64})\//;
   var AIOPS_BTN_ID = 'aiops-publish-btn';
+  var AIOPS_TRIAL_BTN_ID = 'aiops-trial-btn';
 
   function currentAppId() {
     var m = AIOPS_APP_RE.exec(location.pathname);
@@ -76,9 +77,66 @@
       .finally(function () { btn.disabled = false; btn.textContent = original; });
   }
 
+  /*
+   * 「在 AI-Ops 试运行」（#781 / #782 的部署层）。
+   *
+   * **拿的是"最近一次保存"的配置，不是编辑框里此刻的内容。** Dify 1.17.1 的 chat 应用
+   * 没有服务端草稿层：编辑页里没点过「发布更新」的改动只活在浏览器内存里，任何 API 都
+   * 读不到（#773 实测）。所以按钮文案必须说清这件事，否则运营会以为它跑的是眼前这份。
+   *
+   * 订单号**只能由人来给**：编排页里没有订单上下文，而试运行必须落到一张具体订单上。
+   */
+  function aiopsTrial(btn) {
+    if (!currentAppId()) { aiopsToast('请从某个智能体的编排页点这个按钮', false); return; }
+    var orderNo = window.prompt(
+      '在 AI-Ops 上用真实数据试运行这份草稿。\n\n' +
+        '注意：以**最近一次保存**的配置为准（未点「发布更新」的改动 Dify 不保存）。\n' +
+        '输入要试运行的订单号：'
+    );
+    if (orderNo === null) { return; }
+    orderNo = (orderNo || '').trim();
+    if (!orderNo) { aiopsToast('请填写订单号', false); return; }
+    btn.disabled = true;
+    var original = btn.textContent;
+    btn.textContent = '提交中…';
+    fetch('/__aiops/trial', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/json',
+        // 与发布同一枚 CSRF（桥用同一套浏览器三门）。
+        'X-CSRF-Token': aiopsReadCsrfCookie(),
+      },
+      body: JSON.stringify({ order_no: orderNo }),
+    })
+      .then(function (r) { return r.json().catch(function () { return {}; }); })
+      .then(function (d) {
+        aiopsToast(d.reason || (d.submitted ? '已提交试运行' : '试运行没能开始'), !!d.submitted);
+      })
+      .catch(function () { aiopsToast('试运行请求没能送达，请稍后再试', false); })
+      .finally(function () { btn.disabled = false; btn.textContent = original; });
+  }
+
+  function aiopsMakeButton(id, label, bg) {
+    var btn = document.createElement('button');
+    btn.id = id;
+    btn.type = 'button';
+    btn.textContent = label;
+    btn.style.cssText =
+      'margin-right:8px;padding:0 14px;height:32px;border-radius:6px;cursor:pointer;' +
+      'border:1px solid ' + bg + ';background:' + bg + ';color:#fff;font-size:13px;';
+    return btn;
+  }
+
   function aiopsMount() {
     if (!currentAppId()) { return; }          // 只在编排页
-    if (document.getElementById(AIOPS_BTN_ID)) { return; }
+    // 两颗按钮各自去重：只查发布那颗会让试运行那颗在重试中被挂第二遍。
+    if (
+      document.getElementById(AIOPS_BTN_ID) &&
+      document.getElementById(AIOPS_TRIAL_BTN_ID)
+    ) {
+      return;
+    }
     // 挂靠点：包含「发布/Publish」那个按钮的**同一个 flex 容器**，
     // 插在它前面。选择器是实测出来的（Dify 1.17.1 的编排页顶栏）；
     // 找不到就静默不挂 —— 没有按钮，Dify 照常。
@@ -93,13 +151,14 @@
     }
     if (!publish || !publish.parentNode) { return; }
     var anchor = publish;
-    var btn = document.createElement('button');
-    btn.id = AIOPS_BTN_ID;
-    btn.type = 'button';
-    btn.textContent = '发布到 AI-Ops';
-    btn.style.cssText =
-      'margin-right:8px;padding:0 14px;height:32px;border-radius:6px;cursor:pointer;' +
-      'border:1px solid #12805c;background:#12805c;color:#fff;font-size:13px;';
+    // 试运行在前（它是更轻的那个动作），发布在后，都插在 Dify 原生按钮之前。
+    if (!document.getElementById(AIOPS_TRIAL_BTN_ID)) {
+      var trialBtn = aiopsMakeButton(AIOPS_TRIAL_BTN_ID, '在 AI-Ops 试运行', '#0b6ba8');
+      trialBtn.addEventListener('click', function () { aiopsTrial(trialBtn); });
+      anchor.parentNode.insertBefore(trialBtn, anchor);
+    }
+    if (document.getElementById(AIOPS_BTN_ID)) { return; }
+    var btn = aiopsMakeButton(AIOPS_BTN_ID, '发布到 AI-Ops', '#12805c');
     btn.addEventListener('click', function () { aiopsPublish(btn); });
     anchor.parentNode.insertBefore(btn, anchor);
   }
@@ -112,6 +171,9 @@
   var timer = setInterval(function () {
     tries += 1;
     try { aiopsMount(); } catch (e) { /* 静默降级 */ }
-    if (document.getElementById(AIOPS_BTN_ID) || tries > 40) { clearInterval(timer); }
+    // 两颗都挂上才停；只看发布那颗会让试运行那颗在第一颗挂上后就再也不重试。
+    var mounted =
+      document.getElementById(AIOPS_BTN_ID) && document.getElementById(AIOPS_TRIAL_BTN_ID);
+    if (mounted || tries > 40) { clearInterval(timer); }
   }, 500);
 })();

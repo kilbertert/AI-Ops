@@ -44,8 +44,10 @@ CSRF = "a-dify-csrf-token"
 ORIGIN = "http://console.local:10008"
 REFERER = f"{ORIGIN}/app/{APP_ID}/configuration"
 PUBLISH_KEY = "server-side-publish-key"
+TRIAL_KEY = "server-side-trial-key"
 SUMMARY_PATH = "/console/api/workspaces/current/summary"
 GATEWAY_PATH = "/v1/dify/publish"
+TRIAL_GATEWAY_PATH = "/v1/dify/trial"
 
 
 class _Upstream:
@@ -73,6 +75,9 @@ class _Upstream:
         #: 非空时，对应路径前缀改为回 ``(status, location)`` 的重定向。
         self.redirects: dict[str, tuple[int, str]] = {}
         self.base = ""
+        #: ``POST /v1/dify/trial`` 的回答（与网关试运行路由同形：202 + trial_id/status）。
+        self.trial_status = 202
+        self.trial_body: Any = {"trial_id": "tr_abc123", "status": "queued"}
 
 
 def _serve(upstream: _Upstream) -> ThreadingHTTPServer:
@@ -104,6 +109,8 @@ def _serve(upstream: _Upstream) -> ThreadingHTTPServer:
                 self._reply(upstream.app_status, upstream.app_body)
             elif self.path == GATEWAY_PATH and method == "POST":
                 self._reply(upstream.publish_status, upstream.publish_body)
+            elif self.path == TRIAL_GATEWAY_PATH and method == "POST":
+                self._reply(upstream.trial_status, upstream.trial_body)
             else:
                 self._reply(404, {"code": "not_found"})
 
@@ -679,6 +686,26 @@ def bridge(upstream: _Upstream) -> Any:
     server.server_close()
 
 
+@pytest.fixture
+def trial_bridge(upstream: _Upstream) -> Any:
+    """与 ``bridge`` 同形，但**配了**试运行密钥（否则那条路是 404，见下面的反例）。"""
+    settings = BridgeSettings(
+        listen_host="127.0.0.1",
+        listen_port=0,
+        dify_base_url=upstream.base,
+        gateway_base_url=upstream.base,
+        publish_key=PUBLISH_KEY,
+        trial_key=TRIAL_KEY,
+        console_origin=ORIGIN,
+        workspace_id=TENANT_ID,
+    )
+    server = make_server(settings)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield server.server_address[:2]
+    server.shutdown()
+    server.server_close()
+
+
 def _browser_headers(**overrides: str | None) -> list[tuple[str, str]]:
     """浏览器里那颗按钮实际发出的头（``dify-publish-button.js``）。值为 ``None`` 即去掉该头。"""
     headers: dict[str, str | None] = {
@@ -1062,3 +1089,82 @@ def test_without_a_permission_source_the_owner_admin_rule_is_unchanged() -> None
         server.shutdown()
     assert ok.published is True
     assert refused.published is False, "过渡期非 owner/admin 仍应被拒"
+
+
+# ── 试运行那一跳（#781 / #782 的部署层）─────────────────────────────────────
+
+
+def _trial_post(
+    address: tuple[str, int],
+    *,
+    body: Any = None,
+    headers: list[tuple[str, str]] | None = None,
+    path: str = "/__aiops/trial",
+) -> tuple[int, dict[str, Any]]:
+    raw = json.dumps(body if body is not None else {"order_no": "O-1"}).encode()
+    return _post(address, path=path, headers=headers, body=raw)
+
+
+def test_the_trial_route_is_absent_when_its_key_is_unconfigured(bridge: Any) -> None:
+    """未配试运行钥匙 ⇒ **404**，与网关那条路由同一机制（"没开"不是"不需要钥匙"）。"""
+    status, _ = _trial_post(bridge)
+    assert status == 404
+
+
+def test_the_trial_route_forwards_the_order_and_uses_its_own_key(
+    trial_bridge: Any, upstream: _Upstream
+) -> None:
+    """桥只递 ``app_id``（取自 Referer）+ ``order_no``；用的是**试运行那把**钥匙。"""
+    status, body = _trial_post(trial_bridge, body={"order_no": "O-987"})
+    assert status == 202, body
+    assert body["submitted"] is True
+    calls = _paths(upstream, TRIAL_GATEWAY_PATH)
+    assert len(calls) == 1
+    assert calls[0]["body"] == {"app_id": APP_ID, "order_no": "O-987"}
+    assert calls[0]["headers"]["authorization"] == f"Bearer {TRIAL_KEY}"
+    # 发布那把钥匙**不**出现在试运行那一跳上（两条不同的授权）
+    assert PUBLISH_KEY not in calls[0]["headers"]["authorization"]
+
+
+def test_the_trial_route_rejects_a_scope_field_rather_than_ignoring_it(trial_bridge: Any) -> None:
+    """body 里多一个 ``tenant_id`` ⇒ 400。忽略它会让人以为范围由它决定。"""
+    status, _ = _trial_post(trial_bridge, body={"order_no": "O-1", "tenant_id": "T-OTHER"})
+    assert status == 400
+
+
+def test_the_trial_route_needs_a_non_empty_order_no(trial_bridge: Any) -> None:
+    assert _trial_post(trial_bridge, body={"order_no": "   "})[0] == 400
+    assert _trial_post(trial_bridge, body={})[0] == 400
+
+
+def test_the_trial_route_keeps_the_same_browser_gates(trial_bridge: Any) -> None:
+    """与发布**同一套**浏览器三门：换源、跨站、缺 CSRF 一律在问上游之前就被拒。"""
+    assert _trial_post(trial_bridge, headers=_browser_headers(Origin="https://evil.test"))[0] == 403
+    assert _trial_post(trial_bridge, headers=_browser_headers(**{"Sec-Fetch-Site": "cross-site"}))[0] == 403
+    assert _trial_post(trial_bridge, headers=_browser_headers(**{"X-CSRF-Token": None}))[0] == 401
+
+
+def test_the_trial_route_reports_a_busy_trial_as_429(trial_bridge: Any, upstream: _Upstream) -> None:
+    upstream.trial_status = 429
+    upstream.trial_body = {"error": {"code": "TRIAL_BUSY"}}
+    status, body = _trial_post(trial_bridge)
+    assert status == 429
+    assert body["submitted"] is False
+
+
+def test_the_trial_route_reports_an_unbound_app_as_404(trial_bridge: Any, upstream: _Upstream) -> None:
+    upstream.trial_status = 404
+    upstream.trial_body = {"error": {"code": "DIFY_APP_NOT_BOUND"}}
+    status, body = _trial_post(trial_bridge)
+    assert status == 404
+    assert body["submitted"] is False
+
+
+def test_the_trial_route_treats_a_shapeless_answer_as_unconfirmed(
+    trial_bridge: Any, upstream: _Upstream
+) -> None:
+    """2xx 但缺 ``trial_id`` / ``status`` ⇒ **未确认**，不许报成功。"""
+    upstream.trial_body = {"something": "else"}
+    status, body = _trial_post(trial_bridge)
+    assert status == 502
+    assert body["submitted"] is False
