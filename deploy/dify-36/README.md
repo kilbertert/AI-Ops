@@ -71,6 +71,26 @@ http_access allow client_localnet <name>
 **清空 `SSRF_PROXY_*` 这条路没有被选**，代价是失去 SSRF 过滤：Dify 里任何能发
 HTTP 请求的节点都能打内网，包括 `169.254.169.254` 这类云元数据地址。不做。
 
+### 2.1 七工具目录（#775）走公网域名，**不**加白名单 —— 实测决定
+
+#775 要在 Dify 里注册 `aiops` API 工具提供方，目标端点是网关的
+`https://api.mall.qushiyun.com`（公网域名）。上面「二选一」的两个选项都**不需要**用上，
+因为公网域名不在 squid 的 `to_private_networks` 里：
+
+| 从 `deploy-api-1` 出发（实测 2026-10-15） | 结果 | 含义 |
+|---|---|---|
+| `curl -x ssrf_proxy:3128 https://api.mall.qushiyun.com/v1/dify/tools/order_snapshot`（无密钥） | **404** `DIFY_TOOLS_UNAVAILABLE` | 请求**到达了网关**（路由当时未配密钥） |
+| 同一路径带正确密钥 | **200** + 固定说明文本 | 全链路可用 |
+| `curl -x ssrf_proxy:3128 http://10.0.0.1/` | **403** | 私有网段过滤**仍然生效** |
+
+**决定：`SSRF_PROXY_ALLOW_PRIVATE_IPS` / `SSRF_PROXY_ALLOW_PRIVATE_DOMAINS` 都保持留空。**
+理由不是"省事"，是那条 403 反例：加白名单本可以放行内网地址，而公网域名本来就通，
+所以留白名单为空 = 过滤全开 **且** 工具目录可用。用私有地址换来的只是"不经过公网再回来"
+这一跳，代价是把一个内网面开给 Dify 里任何能发 HTTP 的节点 —— 不值得。
+
+**这与「保留过滤 + 显式白名单」不冲突**：那条规则说的是"要加白名单时必须按机制加"，
+本票的结论是**本目标不需要加白名单**。
+
 `deploy/dify-36/check.sh` 把这套顺序**钉成断言**：它会失败在白名单 include 掉到
 deny 之后的配置上。沉默的失败态（配了却不生效）值得一条自检。
 
