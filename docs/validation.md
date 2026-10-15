@@ -1,3 +1,74 @@
+## 2026-10-15 · 试运行上线（#795，补 #781 / #782 的部署层）
+
+> PRD #772 子票 #795。**业务验收：完成。** 本记录不含任何密钥、令牌或 Cookie 明文
+> —— cookie 只出现在浏览器验收里，且只记事务结果，不记值。
+
+**动因**：#781 / #782 的 `Out of scope` 都写着「部署（#783）」，所以代码早已合入却
+**从未上线**。上线前实测：41 的 `AIOPS_GATEWAY_DIFY_TRIAL_API_KEY` 未配 ⇒ 路由 **404**；
+36 的桥没有 `/__aiops/trial`；控制台没有试运行按钮。
+
+### 交付
+
+| 端 | 改动 |
+|---|---|
+| 41 | `AIOPS_GATEWAY_DIFY_TRIAL_API_KEY`（新生成 48 字符，自检与其余五把都不撞）+ `AIOPS_GATEWAY_DIFY_TRIAL_DEBUG_TENANT=1942105476598861824`（**Ulink**）。成对，半配置是启动错误。 |
+| 41 代码 | `1900e2ceabee` → 修复版 `0a6c280c06d6`（`deploy/deploy-41.sh`，逐文件 sha 一致） |
+| 36 桥 | `/__aiops/trial`，与发布**共用同一套浏览器三门**；`bridge.env` 加同一把 trial key |
+| 36 nginx | `dify-console-publish.conf` 加 `/__aiops/trial`（32k 上限，桥自己也再判一次） |
+| 36 控制台 | 同一个注入脚本挂**两颗**按钮（试运行 + 发布）。**不新建脚本**：`sub_filter_once on` 让"再加一条 sub_filter"根本不生效（第二条匹配不到已被替换的 `</body>`，会**静默不注入**且 `nginx -t` 不报错） |
+
+**备份**：41 `/etc/aiops-41/production.env.bak-trial-20261015-204026`；
+36 `/root/trial-deploy-backup-20261015-210032`（桥代码 / bridge.env / snippet / 按钮脚本）。
+
+### 草稿来源：网关读，桥不读（记入 ADR-0027）
+
+Dify 导出的 DSL 里工具条目**只有提供方 UUID、没有名字**，所以读草稿必须当场从控制台解析
+`aiops` 的 UUID 再映射；那套映射住在网关，且正是发布路径用的同一份
+（`resolve_pulled_config` 自称"这份草稿发布出去会变成什么"的唯一定义处）。而 36 上的
+python **有 yaml 没有 pydantic**，桥连 `dify_dsl_pull` 都 import 不了 —— 让桥读就是造
+第二份规则。于是 `/v1/dify/trial` 增加 `app_id` 那条草稿来源（`prompt` 改可选，两者恰一个）。
+
+### 验收（每条留证据）
+
+| 判据 | 结果 |
+|---|---|
+| 三态 | 无钥匙 **401** / 错钥匙 **403** / **别的 Dify 钥匙 403**（不能通用） |
+| 越权 | 不属于该租户的订单 ⇒ **404**（与不存在同形） |
+| **真实执行** | 订单 `2110199767941656577`：`tr_fe1768413e4c…` → **`completed`**，`report.status=diagnosed`，证据 `ev-003…ev-008`，`blocked_tools=[]`（七个工具都被允许 ⇒ 草稿确实读到了），`failed_sources` 如实记两条 TDengine 取数失败 |
+| **不产生版本** | `agent_versions` 42 → **42** | 
+| **真实浏览器** | `https://dify.ranlei.work` 编排页：两颗按钮都挂上、注入脚本**恰好一次**、点试运行 → 自动填订单号 → toast「已提交试运行（`tr_927fad5bc5fd…`），状态：queued」；该次随后也跑到 **`completed`** |
+| 回归 | 发布路由 200、工具目录 200、10008 仍可用；`agent_versions` 未变 |
+
+**一次绝佳的对照**：第一次试运行（修复前，手工传 `allowed_tools=[]`）得
+`report.status=blocked`、`blocked_tools=['order_snapshot','known_runbook']`；
+修复后（草稿来自已保存配置，含七个工具）得 `report.status=diagnosed`、`blocked_tools=[]`。
+两者之差正是"白名单确实在生效"的正反两面。
+
+### 端到端才暴露的一个缺陷（已修，PR #797）
+
+首轮真跑得到 502 `DIFY_DSL_MALFORMED`：我把 `binding.business_entry`（`operator`，
+**入口**）当成了 `agent_type`，于是 `map_dsl_to_config` 找不到该类型的默认输出契约，
+整份草稿被拒。修法与发布路径逐字对齐 —— `agent_type` 与 `output_contract` 取自
+**库里那个已注册的 agent**（`live.config.*`），既不取自绑定行也不取自 DSL。
+**三条草稿来源的单测全绿，因为替身给的 agent_type 本来就是对的** —— 这个缺陷只有真跑
+（真控制台 + 真 app）才会暴露，是该票做真实验收的直接价值。
+
+同时踩到两个环境坑：① 桥代码我按 `600 root` 落盘，而桥以 `aiopsbridge` 跑 ⇒
+`PermissionError`，改回 `644 root`（与原来一致）；② 41 部署中途一次 SSH 超时，
+但服务已换成新版本且健康（超时命中的是后续校验步骤），核实后未重跑。
+
+### 边界与遗留
+
+- 订单范围是**固定调试租户**（Ulink）。**按人范围未启用**（要等登录代理上线 + #777 的权限码）。
+- 结果面板未做：本次只报"已提交"与失败原因；轮询 UI 是后续。
+- **v2 地雷（本次不触发，别丢）**：`GET /v1/dify/trial/{id}` 用的是 `trial_run_context()`，
+  而提交路由在有发起人头时用 `trial_context_for()` —— 两者产出**不同的 `scope_fingerprint`**，
+  按人范围一启用，提交返回的 `trial_id` 就**读不回来**（404）。现有测试的替身恰好让两者相等。
+  修法：GET 也传发起人头，或让作业行落在一个两者都能命中的 scope 上。
+- 另两条 v2 待办（#776 记的）：登录代理的 `cookie_prefix`/`_logout()` 仍是裸名；
+  桥若走按人范围需多转发 `company_tenant_id`/`company_user_type` 两个头（登录代理已返回）。
+
+---
 ## 2026-10-15 · #776 Dify 控制台 TLS 域名入口收口
 
 > PRD #772 子票 #776。**业务验收：完成。** 10008 保持可用作回滚路径。
