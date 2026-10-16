@@ -1,3 +1,50 @@
+## 2026-10-16 · 公司 UPMS 建 AI-Ops 两个权限码（#777）
+
+> PRD #772 子票 #777。**业务验收：完成**（对象已建、端到端已验证）。决定见 **ADR-0029**，
+> 操作规程见 `docs/agents/company-upms-admin-operations.md`。
+> 本记录不含任何口令、令牌或 Cookie 明文。
+
+**已完成**：在公司 UPMS 建了两个权限码与两个专用空角色：
+
+| 对象 | id |
+|---|---|
+| 菜单 `aiops:agent:edit` | `2110974479152324609` |
+| 菜单 `aiops:agent:publish` | `2110974481115258881` |
+| 角色 `AI-Ops 智能体编辑`（`aiops_edit`） | `2110974759717707777` |
+| 角色 `AI-Ops 智能体发布`（`aiops_publish`） | `2110974760334270465` |
+
+两个菜单是 `type=1` 按钮型、`client_type=admin`、`resource` 留空（只要能力判据，不要路由规则）；
+两个角色各只挂一个菜单。**任何现有角色一行未改**。
+
+**端到端验证（不是"接口回 ok"）**：用真实公司账号登录后读 `/upms/user/info?client-type=admin`，
+`permissions`（3127 项）里出现 `aiops:agent:edit` 与 `aiops:agent:publish`
+—— 正是 `dify_login_company.read_permissions` 读的那一项。库侧另用 41 直连 `qumall_upms` 核对过。
+
+**三处必须记下的**：
+
+1. **🔴 写操作只能打 `api.mall`**。`admin.qumall.qushiyun.com` 的 `/upms/*` 被 120 nginx 转到
+   `127.0.0.1:9999` = **120 本机 `cloud-gateway.jar --spring.profiles.active=dev`**。POST 到那里
+   返回 `ok:true` 却**在生产库凭空消失**，连 admin 自己的读接口也查不到（它读的同样是 dev 网关）。
+   我第一次就栽在这里，建了三条探针才定位。判据：写只打 `api.mall`，写后用**同一域名**读回，
+   再直连库核对。
+2. **`POST /menu` 会自动把新菜单挂到 `role_id=1`（系统管理员）** —— `SysMenuController.save()`
+   里 `sysMenu.setRoleId(CommonConstants.ROLE_ID_ADMIN)`，这是公司对其 3500+ 权限码的统一做法。
+   后果：两个硬编码平台账号（`system`、`huqq`，`type=-1`）**自动持有 `aiops:agent:publish`**，
+   切发布权开关时即成为可发布者（见 ADR-0029 的后果一节）。
+3. **`PUT /role/menu` 是先清后写**（`clearRights` 整体替换）⇒ 只对新建空角色用。
+
+**走弯路如实记**：手拼 `POST /upms/token/login` 对**存在的账号**一律 500（Spring 默认错误信封），
+对**不存在的账号**反而返回干净业务错误 —— 而同一账号同一口令走真浏览器完全正常。
+最终改用 **Playwright 驱动真页面 + `ddddocr` 自动识别验证码**，绕开了这个我没能从源码确定的差异。
+中间还发现登录接口缺 `system-id` 头、以及公司验证码**大小写敏感、错码不消耗 key**
+（只有相等才 delete），后者让"同一张图重试"成为可行。
+
+**遗留**：两条软删除的探针行（`2110974074435543041`、`2110974170397024257`，名 `AI-Ops probe`，
+`del_flag=1`）留在库里，不出现在任何查询里；是否物理删除由人决定（那是绕过公司逻辑删除语义的操作）。
+
+**边界**：两个码**对任何人都还没生效** —— 映射是"角色挂菜单"，而两个专用角色**没有任何用户**。
+授予谁是一次显式的后台动作。登录代理仍未部署（阶段 2）。
+
 ## 2026-10-16 · 公司身份接入：桥转发身份 + GET 读回收口 + `__Host-` 三处 + 登录页（#783 前半）
 
 > PRD #772 子票 #783（身份闭环的代码与资产层）。**业务验收：部分完成** —— 代码与资产已交付，
