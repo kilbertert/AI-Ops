@@ -447,7 +447,7 @@ def publish_current_app(
     # 过渡行为（身份闭环上线前不切换，PRD #772 D 的明确要求）。
     initiator_headers: dict[str, str] = {}
     if login_proxy_url:
-        verdict = _publish_permission_verdict(
+        verdict = _identity_and_publish_verdict(
             login_proxy_url,
             console_session=console_session,
             timeout=timeout,
@@ -457,7 +457,7 @@ def publish_current_app(
             # 不退回 owner/admin —— 那会让"查不通"悄悄变成"按旧规则放行"。
             _LOGGER.info("console publish refused: publish-permission check unavailable")
             return ConsolePublishResult(False, "暂时无法核对发布权限，请稍后重试")
-        allowed, initiator_headers = verdict
+        initiator_headers, allowed = verdict
         if not allowed:
             _LOGGER.info("console publish refused: no company publish permission")
             return ConsolePublishResult(False, _REFUSED_PUBLISH_PERMISSION)
@@ -489,28 +489,34 @@ def publish_current_app(
     return _interpret_publish_outcome(outcome, app_id)
 
 
-def _publish_permission_verdict(
+def _identity_and_publish_verdict(
     login_proxy_url: str,
     *,
     console_session: ConsoleSession,
     timeout: float,
-) -> tuple[bool, dict[str, str]] | None:
-    """Ask the login proxy whether this Dify session may publish (#780).
+) -> tuple[dict[str, str], bool] | None:
+    """问代理两件事：这个会话**是谁**，以及他**能不能发布**（#780 / #782）。
 
-    ``None`` means the check could not be made (proxy down, malformed answer, or
-    a session we did not issue) — the caller refuses, because falling back to the
-    old rule would turn "cannot verify" into "allowed".
+    ``None`` = 查不通、会话不是我们签的、或没有可用映射 —— **身份也拿不到**。
+    两个调用方（发布与试运行）都据此拒绝，理由各自写在调用处。
 
-    On success returns ``(allowed, initiator_headers)``: the headers carry the
-    company user's identity for the gateway's audit ledger. They are **audit
-    metadata only** — the gateway does not use them to authorize (the bridge has
-    already decided), so a forged value here would change what the ledger records
-    and nothing else. The session itself is what the proxy verified, and the
-    proxy is the only party that can mint a value it accepts.
+    ``(headers, False)`` 是**合法且常见**的组合：有映射、身份齐全，但缺发布权限码。
+    试运行只要求「这个会话是公司认可的人」，**不要求发布权** —— 所以发布路径看第二个
+    返回值，试运行只看第一个。把两者混成一个布尔会让「只有编辑权的人连试运行都做不了」。
 
-    The session token the proxy issued is **its own access token**; the browser
-    holds it as the Dify console cookie. The bridge forwards that cookie verbatim
-    (it never reads or re-signs it).
+    ``headers`` 是发起人身份，给网关做审计账本与**试运行范围**。对发布而言它们只是
+    审计元数据（授权已在桥这边判完）；对试运行而言 ``-Tenant`` / ``-Type`` 是**范围
+    的输入** —— 网关按它们算订单可见性。所以身份字段虽不是"授权"，在试运行那条路上
+    它确实改变行为，这一点与发布不同，写在这里以免被误读成同一种东西。
+
+    **身份是否齐全由字段在不在判定**（``company_user_id`` + ``company_tenant_id``
+    都非空），不解析 ``reason`` 字符串 —— 那会把代理的文案变成桥的契约。
+    ``company_tenant_id`` 为空必须当作"身份不全"而不是"照发"：网关的
+    ``TrialInitiator.from_headers`` 在租户为空时会**静默退回整租户的调试租户行为**，
+    那是一次范围放宽，不能由上游一个空字段触发。
+
+    代理验的是**它自己签的**会话，而浏览器的 Dify 控制台 cookie 就是那枚令牌
+    （桥原样转发、从不读取或重签）。
     """
     try:
         http_status, verdict = _request(
@@ -524,19 +530,25 @@ def _publish_permission_verdict(
         return None
     if not 200 <= http_status < 300 or not isinstance(verdict, dict):
         return None
-    if verdict.get("allowed") is not True:
-        return False, {}
-    headers = {}
-    company_user_id = _str_field(verdict, "company_user_id") or ""
-    if company_user_id:
-        headers["X-AIOps-Initiator"] = company_user_id
-    company_username = _str_field(verdict, "company_username") or ""
+    company_user_id = (_str_field(verdict, "company_user_id") or "").strip()
+    company_tenant_id = (_str_field(verdict, "company_tenant_id") or "").strip()
+    if not company_user_id or not company_tenant_id:
+        # 没有映射 / 映射被停用 / 会话无效：代理这两个字段是空的（或整个没回）。
+        _LOGGER.info("console identity: proxy did not resolve a company identity")
+        return None
+    headers = {"X-AIOps-Initiator": company_user_id}
+    company_username = (_str_field(verdict, "company_username") or "").strip()
     if company_username:
         headers["X-AIOps-Initiator-Name"] = company_username
-    dify_account_id = _str_field(verdict, "dify_account_id") or ""
+    dify_account_id = (_str_field(verdict, "dify_account_id") or "").strip()
     if dify_account_id:
         headers["X-AIOps-Dify-Account"] = dify_account_id
-    return True, headers
+    # #782：试运行的订单范围来自这两项，网关按发起人的公司身份算可见站点。
+    headers["X-AIOps-Initiator-Tenant"] = company_tenant_id
+    company_user_type = (_str_field(verdict, "company_user_type") or "").strip()
+    if company_user_type:
+        headers["X-AIOps-Initiator-Type"] = company_user_type
+    return headers, verdict.get("allowed") is True
 
 
 def _interpret_publish_outcome(outcome: Any, app_id: str) -> ConsolePublishResult:
@@ -569,6 +581,8 @@ def submit_trial(
     trial_key: str,
     app_id: str,
     order_no: str,
+    login_proxy_url: str = "",
+    console_session: ConsoleSession | None = None,
     timeout: float = 15.0,
 ) -> ConsolePublishResult:
     """把一次试运行**提交**给网关（#781 / #782 的部署层）。
@@ -581,9 +595,37 @@ def submit_trial(
       （``partition_aiops_tools``）住在网关，而且 36 上的 python 没有 pydantic，
       桥连 ``dify_dsl_pull`` 都 import 不了。让桥再实现一遍就是第二份规则。
 
-    网关的 202 回答里 ``trial_id`` 与 ``status`` 都要在，缺任何一个都算**未确认**：
-    不能报成功，也不能断言没提交。
+    ## 发起人身份（#782）：试运行的**订单范围**由它决定
+
+    配了 ``login_proxy_url`` 就先去问代理"这个 Dify 会话是谁"，把公司身份当请求头
+    转给网关，网关据此算这个人的可见站点（顶层账号整租户／代理商只看自己据点）。
+    **只取身份，不看发布权** —— 拿不到发布权的人照样能试运行（他没越过任何授权：
+    试运行不产生版本、不改路由）。
+
+    ## 取不到身份时**退回固定调试租户**（用户 2026-10-16 选定）
+
+    这里与发布那条路的 fail-closed **方向不同**，写下来不藏：发布那边"配了但查不通"
+    ⇒ 拒，因为退回旧规则等于放宽**授权**。试运行这边退回调试租户意味着范围从
+    "只看自己据点"放宽到"看整个调试租户"—— 但那是一个**已经上了线的既有行为**
+    （#781 的第一版就是这个），而不是一个新的越权：钥匙仍然是那把独立的试运行钥匙，
+    调用方仍然是控制台里的会话。选它的理由是身份闭环刚上线时可能有人还没映射，
+    退回能让功能不断。
+
+    代价明确、可单独收紧：把下面那个 ``return`` 换成拒绝即可（一行），或把这条路
+    改成 fail-closed。**先让功能可用，再谈收紧**，而两者的切换点只有这一处。
     """
+    initiator_headers: dict[str, str] = {}
+    if login_proxy_url:
+        if console_session is None:  # pragma: no cover - 调用方保证成对给
+            return ConsolePublishResult(False, "会话缺失，无法核对身份", status=403)
+        verdict = _identity_and_publish_verdict(
+            login_proxy_url, console_session=console_session, timeout=timeout
+        )
+        if verdict is None:
+            # 代理不可达 / 会话不是我们签的 / 没有可用映射 ⇒ 不给身份 ⇒ 网关退回调试租户。
+            _LOGGER.info("console trial: identity unavailable, falling back to the debug tenant")
+        else:
+            initiator_headers, _allowed = verdict
     http_status, answer = _request(
         gateway_base_url.rstrip("/") + TRIAL_PATH,
         method="POST",
@@ -592,6 +634,7 @@ def submit_trial(
             "Authorization": f"Bearer {trial_key}",
             "Content-Type": "application/json",
             "Accept": "application/json",
+            **initiator_headers,
         },
         body={"app_id": app_id, "order_no": order_no},
         timeout=timeout,
@@ -641,8 +684,15 @@ class BridgeSettings:
     #: 它必须与发布密钥**不同**（网关在启动期就强制两者互不相同）：能发布不等于能在
     #: 真数据上跑一次诊断，这是两条不同的授权。留空 ⇒ 试运行那条路 404。
     trial_key: str = ""
-    #: 登录代理地址（#780）。**留空 = 维持过渡行为**（按 Dify owner/admin 判）——
-    #: 于是"没配"与"配了但代理挂了"是两件不同的事：后者 fail-closed 拒发布。
+    #: 登录代理地址。它是**公司身份的来源开关**，一个键驱动三件事（#780 / #782）：
+    #:
+    #: 1. **发布权**：配了 ⇒ 放行判据换成公司 ``aiops:agent:publish`` 权限码；
+    #:    留空 ⇒ 维持过渡行为（按 Dify owner/admin 判）。
+    #: 2. **试运行的订单范围**：配了 ⇒ 按发起人的公司身份算可见站点；留空 ⇒ 固定调试租户。
+    #: 3. **审计发起人**：配了 ⇒ 发布账本里记下是谁。
+    #:
+    #: "没配"与"配了但代理挂了"是两件不同的事：发布那条路后者 **fail-closed 拒**，
+    #: 试运行那条路后者**退回固定调试租户**（理由写在 :func:`submit_trial`）。
     login_proxy_url: str = ""
     timeout: float = 15.0
 
@@ -758,6 +808,8 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
                 trial_key=self.settings.trial_key,
                 app_id=app_id,
                 order_no=order_no.strip(),
+                login_proxy_url=self.settings.login_proxy_url,
+                console_session=session,
                 timeout=self.settings.timeout,
             )
         except ConsolePublishError as exc:

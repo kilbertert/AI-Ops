@@ -106,12 +106,19 @@ def _map_envelope(payload: Any, mapping: ErrorMapping) -> Any:
 
 
 def _console_headers(session: ConsoleSession) -> dict[str, str]:
-    """控制台的**双提交**：Bearer + `X-CSRF-Token` + 与头逐字相同的 csrf cookie。"""
+    """控制台的**双提交**：Bearer + `X-CSRF-Token` + 与头逐字相同的 csrf cookie。
+
+    cookie 名必须带 ``session.cookie_prefix``：Dify 的 ``check_csrf_token`` 要求头与
+    **它自己读到的那个 cookie** 逐字相同，而 https 下 `_real_cookie_name` 会给名字加
+    前缀 ⇒ 写死裸名会读到空值，表现为 `CSRF token is missing or invalid` 的 401。
+    开户这一跳（`invite-email`）走 `@login_required`，撞上它的后果是**新账号开不出来**，
+    而**已有映射的账号完全不受影响** —— 间歇性、极难定位。
+    """
     return {
         "Accept": "application/json",
         "Authorization": f"Bearer {session.access_token}",
         "X-CSRF-Token": session.csrf_token,
-        "Cookie": f"csrf_token={session.csrf_token}",
+        "Cookie": f"{session.cookie_prefix}csrf_token={session.csrf_token}",
     }
 
 

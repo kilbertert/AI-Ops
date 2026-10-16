@@ -38,6 +38,7 @@ from aiops_diagnostics.dify_login_company import CompanyAuthSettings, fetch_capt
 from aiops_diagnostics.dify_login_provision import DifyConsoleSettings
 from aiops_diagnostics.dify_login_proxy import (
     CAPTCHA_ROUTE,
+    CONSOLE_COOKIE_PREFIXED_NAMES,
     LOGIN_ROUTE,
     LOGOUT_ROUTE,
     PUBLISH_CHECK_ROUTE,
@@ -62,6 +63,35 @@ _RANDOM_STR_RE = re.compile(r"^[A-Za-z0-9]{1,64}$")
 
 class NotReady(RuntimeError):
     """TLS 未就绪 —— 代理**不得**对外提供登录页。"""
+
+
+#: 登录成功后跳回哪里 —— 站内相对路径的长度上限。
+_MAX_REDIRECT_CHARS = 512
+
+
+def safe_redirect_path(raw: Any) -> str:
+    """把调用方给的 `redirect` 折成一个**站内**相对路径；不合法一律回落 ``/``。
+
+    登录页会把 Dify 送来的 `redirect_url`（例如 `/apps`，来自
+    `GET /auth/refresh?redirect_url=%2Fapps` 那条 303）原样带进来，所以这个值是
+    **外部输入**。它是开放重定向（钓鱼跳板）的唯一入口，因此判据必须在这里、
+    而不是在页面的 JS 里 —— 页面能被绕过，服务端不能。
+
+    **只认单个 `/` 开头**，因为 `//evil.com` 与 `/\\evil.com` 都是浏览器认的
+    **协议相对 URL**（会跳到外站）。用白名单正着写，不用黑名单 —— "先去掉再判断"
+    那类启发式正是绕过重定向白名单的常见手法。
+    """
+    if not isinstance(raw, str):
+        return "/"
+    text = raw.strip()
+    if not text or len(text) > _MAX_REDIRECT_CHARS:
+        return "/"
+    if not text.startswith("/") or text.startswith("//"):
+        return "/"
+    # 反斜杠与 CR/LF：前者被部分浏览器当分隔符，后者是响应头注入的形状。
+    if "\\" in text or "\r" in text or "\n" in text:
+        return "/"
+    return text
 
 
 def assert_public_origin_is_https(origin: str) -> str:
@@ -257,19 +287,30 @@ class LoginProxyHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         for cookie in session.cookies(secure=True):
             self.send_header("Set-Cookie", cookie)
-        body = json.dumps({"ok": True, "redirect": "/"}, ensure_ascii=False).encode("utf-8")
+        body = json.dumps(
+            {"ok": True, "redirect": safe_redirect_path(payload.get("redirect"))},
+            ensure_ascii=False,
+        ).encode("utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
 
     def _publish_check(self) -> None:
-        """发布权查询（#780）：验会话 → 查映射 → 答能不能发布。
+        """会话身份查询：验会话 → 查映射 → 答**这个人是谁** + 能不能发布。
 
-        **只回答案，不回权限码全集**：桥需要的是"能不能发布"+审计用的发起人三字段；
-        把运营的权限码清单交出去会扩大本层泄漏面，而它没有任何用处。
+        **只回答案与身份，不回权限码全集**：桥需要的是"是谁"（审计与试运行范围）与
+        "能不能发布"；把运营的权限码清单交出去会扩大本层泄漏面，而它没有任何用处。
 
-        失败一律 `{"allowed": false}` + 稳定原因码，**不区分**"没这个映射"与"会话无效"
-        之外的更多细节 —— 对外只有"不能发布"这一种结论。
+        ## 身份与放行是**两件事**
+
+        `allowed` 单独表达发布权；身份五字段只要映射存在且 active 就回，与 `allowed`
+        无关。这个形状是刻意的：试运行与发布用**同一个**调用取身份，但它们要的不是
+        同一种授权 —— 试运行只要"我是谁"来算订单范围（#782），发布还要"我能不能发"。
+        所以**没有发布权的人仍然拿得到自己的身份**，桥那边不会因为
+        `allowed=false` 就把身份一起丢掉（那正是这一段要防的误用）。
+
+        会话无效 / 无映射 / 映射被禁用这三态**只回 `allowed=false` 加原因码** ——
+        没有身份可给，也不该在这里区分更多细节。
         """
         try:
             payload = self._read_json()
@@ -311,9 +352,13 @@ class LoginProxyHandler(BaseHTTPRequestHandler):
     def _logout(self) -> None:
         # Dify 原生登出由前端调它自己的 `/console/api/logout`；代理这里只负责清掉
         # 我们下发的三枚 cookie，避免"退出后 cookie 还在"。
+        #
+        # 名字必须带 `__Host-`：清一枚**另一个名字**的 cookie 什么都不做，而"退出后
+        # 还能用"正是这一段要防的事（#776 把控制台收到 https 后名字就变了）。
+        # `Secure` 一并带上 —— 与登录时下发的属性一致，浏览器才会认成同一枚。
         self.send_response(200)
-        for name in ("access_token", "refresh_token", "csrf_token"):
-            self.send_header("Set-Cookie", f"{name}=; Path=/; Max-Age=0")
+        for name in CONSOLE_COOKIE_PREFIXED_NAMES:
+            self.send_header("Set-Cookie", f"{name}=; Path=/; Secure; Max-Age=0")
         body = b'{"ok": true}'
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))

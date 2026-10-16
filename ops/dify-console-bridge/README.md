@@ -78,6 +78,23 @@ AIOPS_CONSOLE_BRIDGE_ALLOWED_ROLES=owner,admin
 AIOPS_CONSOLE_BRIDGE_LOGIN_PROXY_URL=http://127.0.0.1:10119
 ```
 
+**`AIOPS_CONSOLE_BRIDGE_LOGIN_PROXY_URL` 的三种含义要分清**（#780 / #782 / ADR-0028）：
+
+它是**公司身份的来源开关** —— 一个键同时决定三件事（发布权、试运行的订单范围、
+审计发起人），所以"半开"不可能发生：
+
+| 状态 | 发布权 | 试运行的订单范围 |
+|---|---|---|
+| **留空** | Dify owner/admin（过渡行为） | 固定调试租户 |
+| **配了，代理可达** | 公司 `aiops:agent:publish` 权限码 | **发起人的公司身份** |
+| **配了，代理查不通** | **拒**（fail-closed） | **退回固定调试租户** |
+
+第三条两个方向的差别是**有意**的：发布退回旧规则等于放宽**授权**；试运行退回的是
+一个已经上线并验收过的既有行为（#781 的第一版），不是新的越权。理由与代价写在
+`submit_trial` 的 docstring 与 ADR-0028。
+
+### 原来的两种含义（保留，仍未过时）
+
 **`AIOPS_CONSOLE_BRIDGE_LOGIN_PROXY_URL` 的两种含义要分清**（#780）：
 
 - **留空**：维持现状 —— 按固定工作区内的 owner/admin 放行。身份闭环上线前就是这个状态。
