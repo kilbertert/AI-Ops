@@ -387,35 +387,24 @@ _BUNDLED_SHORTCUTS: tuple[tuple[str, dict[str, dict[str, Any]]], ...] = (
     (
         "operator",
         {
-            "case_exploration": {
-                **_SHARED_ACTION_FIELDS["case_exploration"],
-                "labels": {
-                    "zh": "客户案例",
-                    "zh-Hant": "客戶案例",
-                    "vi": "Trường hợp khách hàng",
-                    "mn": "Хэрэглэгчийн жишээ",
-                    "th": "กรณีตัวอย่างลูกค้า",
-                    "km": "ករណីអតិថិជន",
-                    "en": "Customer Cases",
-                    "de": "Kundenfälle",
-                    "fr": "Cas clients",
-                    "es": "Casos de cliente",
-                    "pt": "Casos de cliente",
-                },
-                "descriptions": {
-                    "zh": "查看与充电运营相关的标杆案例",
-                    "zh-Hant": "檢視與充電運營相關的標杆案例",
-                    "vi": "Xem các trường hợp điển hình liên quan đến vận hành sạc",
-                    "mn": "Цэнэглэлтийн үйл ажиллагаатай холбоотой жишиг жишээг үзэх",
-                    "th": "ดูกรณีตัวอย่างที่เกี่ยวข้องกับการดำเนินงานชาร์จ",
-                    "km": "មើលករណីគំរូពាក់ព័ន្ធនឹងប្រតិបត្តិការសាក",
-                    "en": "Browse benchmark cases from charging operations",
-                    "de": "Benchmark-Fälle aus dem Ladebetrieb ansehen",
-                    "fr": "Consultez des cas de référence liés à l'exploitation de la recharge",
-                    "es": "Consulte casos de referencia relacionados con la operación de carga",
-                    "pt": "Consulte casos de referência relacionados à operação de recarga",
-                },
-            },
+            # ⚠️ **`operator` 入口刻意没有 `case_exploration`**（2026-10-16 用户决定：
+            # 「管家端用户不要看到客户案例卡片」）。它此前在本入口被种子化，并在 41 上
+            # 发布过（#427），但那个入口**结构上不可能**产出这张卡：平台行不允许携带
+            # `target_agent_version`（见 `_validated_fields` 与
+            # `ShortcutManager.create` 的 PLATFORM_SCOPE 守卫），而 `operator` 侧只有
+            # 平台行 ⇒ `_promo_route` 恒解析不出宣传智能体 ⇒ 每次点击都是一张
+            # 「客户案例服务暂时不可用」的空卡。10-15 生产上实测过 8 次，全部
+            # `unavailable` + 9–13ms（真人跑一次要几十秒，这个耗时等于根本没启动）。
+            #
+            # 所以这不是「素材没配」，是**这个入口不该有这张卡**：运维人员要的是他
+            # 名下站点的运行情况（`operations_review`）与单张订单的根因
+            # （`smart_diagnosis`），客户案例是给终端车主的销售叙事。
+            #
+            # 移除它是**删数据行的种子**，不是改行为：真正的可见性由已发布行决定，
+            # 41 上那行要靠 disable 停用（见 `env-41-runbook.md` §3.1-ter 的撤回一节）。
+            # 本入口的自由文本问「客户案例」仍会走宣传面并拿到那张空卡 ——
+            # 用户明确选择不动那条路（本刀只摘按钮）。
+            #
             # 运维巡检（#721）：点一下拿一张跨订单的运维卡（当前是失败率）。
             # `requires_order=False` —— 它问的是「这一组站点这一段区间整体如何」，
             # 不是某一张单；这也是它与 `smart_diagnosis` 的根本区别。

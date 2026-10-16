@@ -33,10 +33,12 @@ Content-Type: application/json
 ```
 
 > ✅ **2026-09-29 后端已启用**：41 公网入口实测 —— `X-Business-Entry: operator` + 用户 JWT
-> ⇒ `GET /v1/shortcuts` 返回 `count=2`（订单检测 / 客户案例）；订单检测不带单号
+> ⇒ `GET /v1/shortcuts` 返回动作列表；订单检测不带单号
 > ⇒ `200 clarification` + `missing_fields=["order_no"]`。**前端现在可以按这份文档联调。**
-> 仍缺两项（不由前端负责但会影响你看到的终态）：验收账号**无店铺绑定** ⇒ 带单号仍 `404`；
-> 客户案例 `target_agent_version: null` ⇒ 仍 `unavailable`。
+> 仍缺一项（不由前端负责但会影响你看到的终态）：验收账号**无店铺绑定** ⇒ 带单号仍 `404`。
+>
+> ⚠️ **2026-10-16 起管家端是「订单检测 + 运维巡检」两条**，「客户案例」已移除（§3.2）。
+> 任何写死 `case_exploration` 的旧联调代码都会对这版失效。
 >
 > ⚠️ **2026-09-29 状态更正：上面这段是「客户端那条链路」的形状，不是管家端的目标形状。**
 > 管家端最终走的是**用户 JWT**（不是服务令牌 + 会话），由 41 的 nginx 按入口分流
@@ -72,7 +74,7 @@ GET  https://api.mall.qushiyun.com/v1/shortcuts
 
 ## 2. 动作列表（直接照这个联调）
 
-`GET /v1/shortcuts`，41 公网实测（2026-09-28，`X-Business-Entry: operator`）：
+`GET /v1/shortcuts`，`X-Business-Entry: operator` 下**两个**动作（下方第二个 `abridged`）：
 
 ```json
 {
@@ -80,17 +82,6 @@ GET  https://api.mall.qushiyun.com/v1/shortcuts
   "language": "zh",
   "count": 2,
   "shortcuts": [
-    {
-      "code": "case_exploration",
-      "intent": "case_exploration",
-      "requires_order": false,
-      "sort_order": 10,
-      "label": "客户案例",
-      "description": "查看与充电运营相关的标杆案例",
-      "question_template": "有哪些充电运营的客户案例",
-      "target_agent_version": null,
-      "jump_path": null
-    },
     {
       "code": "smart_diagnosis",
       "intent": "order_issue",
@@ -101,16 +92,30 @@ GET  https://api.mall.qushiyun.com/v1/shortcuts
       "question_template": "帮我检测这个订单的充电异常",
       "target_agent_version": null,
       "jump_path": null
+    },
+    {
+      "code": "operations_review",
+      "intent": "knowledge",
+      "requires_order": false,
+      "sort_order": 30,
+      "label": "运维巡检",
+      "description": "查看本运营商站点最近的整体运行情况",
+      "question_template": "帮我看一下最近的运维巡检",
+      "target_agent_version": null,
+      "jump_path": null
     }
   ]
 }
 ```
 
+> ⚠️ **「客户案例」(`case_exploration`) 已于 2026-10-16 从管家端移除**，不要照旧文档
+> 硬编码它 —— 见 §3.2。列表以服务端返回为准，前端**不要**写死 `code` 清单。
+
 **怎么渲染**（与客户端同样的规则）：
 
 | 字段 | 前端行为 |
 |---|---|
-| `jump_path` 有值 | **本地跳转**，不发请求（管家端这两个都是 `null`，所以都属下面的"提示动作"） |
+| `jump_path` 有值 | **本地跳转**，不发请求（管家端两个动作都是 `null`，所以都属下面的"提示动作"） |
 | `jump_path` 为 `null` | **提示动作**：点击后带着 `code` 调助手入口（见 §3） |
 | `requires_order: true` | 点击后**先弹订单选择器**（见下方"主流程与兜底"） |
 | `target_agent_version` | 管家端两个动作都是 `null`，**不要**据此做任何绑定假设 |
@@ -160,42 +165,44 @@ POST /v1/assistant/questions
   （用例 `tests/test_assistant_api.py::test_assistant_text_embedded_unowned_order_falls_through`）。
 - **会话里已确认的活跃订单**、追问时无权限：同样静默回落，并清掉该绑定。
 
-### 3.2 客户案例（`case_exploration`，`requires_order: false`）
+### 3.2 客户案例：**管家端没有这个动作**（2026-10-16 起）
+
+**管家端不要再渲染「客户案例」按钮，也不要向它发 `shortcut_code=case_exploration`。**
 
 ```http
 POST /v1/assistant/questions
-{"question": "有哪些充电运营的客户案例", "shortcut_code": "case_exploration"}
+{"question": "...", "shortcut_code": "case_exploration"}   # ← operator 入口：不要发
 ```
 
-→ `202` `type=qa` → 轮询至 `completed`。
+**为什么移除**：不是素材没配，是**这个入口结构上产不出这张卡**。
+`target_agent_version` 只允许落在**租户行**，而平台行明确禁止携带它
+（`platform shortcuts cannot bind a tenant agent version`）；`operator` 侧只有平台行
+⇒ 运行时**永远解析不出宣传智能体** ⇒ 每次点击都是一张「客户案例服务暂时不可用」。
+10-15 生产实测 8 次，全部 `unavailable` + **9–13ms**（真人跑一次要几十秒，
+这个耗时等于根本没启动）。用户决定：**管家端用户不要看到客户案例卡片**。
 
-**当前真实终态（41 实测）**：`retrieval_status: "unavailable"`，
-文案「客户案例服务暂时不可用，请稍后重试。」
+**本入口的宣传面只剩自由文本一条路**（用户选择：只摘按钮）：问句里自带「客户案例 /
+行业方案」这类线索时，仍会走宣传面并拿到「客户案例服务暂时不可用」。
+那条路的知识库素材同样尚未配置 —— 前端若收到，按下面这条渲染即可。
 
-⚠️ **这是预期行为，不是故障**：该动作的知识库素材**尚未配置**。
-前端应把它渲染成「暂不可用」，**不要**渲染成"没有找到案例" ——
-后端刻意区分了这两种状态（`unavailable` vs `not_found`），
-把配置缺口说成"确实没有案例"会让用户与运维都找错方向。
+**若将来产品改主意、要让管家端也出卡片**，步骤见 §3.2-bis（三步，缺一不可）。
+**在那之前不要向前端承诺"素材到位即可用"。**
 
-**素材配好后**：同样的请求会返回 `retrieval_status: "found"` 与内容块，
-前端**不需要**改代码。
+### 3.2-bis 若日后要在管家端恢复这张卡（三步，缺一不可）
 
-⚠️ **但"配好素材"不止是传知识库**。当前 `case_exploration` 的
-`target_agent_version` 是 `null`，而运行时在**解析不出该动作绑定的宣传智能体**时
-**直接返回 `unavailable`**（`gateway_runtime.py`：`promo is None` 分支）——
-**光有知识库、没有绑定的智能体，仍然不会 `found`**。完整的上线步骤是：
+⚠️ **光有知识库不会 `found`**：运行时在解析不出动作绑定的宣传智能体时**直接返回
+`unavailable`**（`gateway_runtime.py` 的 `promo is None` 分支）。完整步骤是：
 
 1. 建并**发布**一个宣传类智能体（绑定目标知识库）；
-2. 把它的 `agt_…#vN` 绑到该动作上 —— ⚠️ **但绑定只能落在「租户行」，不能落在平台默认行**：
-   `ShortcutManager` 明确禁止平台动作携带 `target_agent_version`
-   （`platform shortcuts cannot bind a tenant agent version`），且
-   `select_promo_agent` **只在请求所属租户内**解析该版本。
-   所以正确形状是 **平台行给可见性 + 租户行给绑定**（`list_effective` 里租户已发布行
-   会覆盖同 code 的平台行）。**不是**去改那条平台默认行。
-3. 租户行建好后需**发布**（见 runbook 的发布流程）。
+2. 把它的 `agt_…#vN` 绑到该动作上 —— ⚠️ **绑定只能落在「租户行」，不能落在平台默认行**
+   （`ShortcutManager` 禁平台行携带 `target_agent_version`，且 `select_promo_agent`
+   **只在请求所属租户内**解析该版本）。正确形状是 **平台行给可见性 + 租户行给绑定**
+   （`list_effective` 里租户已发布行会覆盖同 code 的平台行）。
+3. **把 `case_exploration` 加回 `_BUNDLED_SHORTCUTS["operator"]` 并发布**（种子是代码里的
+   常量，不是数据行 —— 见 runbook §3.1-ter）。这一步在 2026-10-16 被删掉了。
 
-三件都做完才会 `found`。当前 `operator` 侧只有平台行、没有租户覆盖行，因此恒为 `unavailable`。
-**此前不要向前端承诺"素材到位即可用"。**
+⚠️ **还欠一步**：内容侧 —— 现在那个宣传智能体绑的库是重卡流量平台的**销售物料**，
+文案是面向客户的措辞，直接给运维人员看是错的语境。恢复前要先有面向运营商的素材。
 
 ## 4. 与客户端共用的部分（不要重复实现）
 
@@ -217,7 +224,9 @@ POST /v1/assistant/questions
 - [ ] 订单检测：`requires_order: true` 时**点击即弹选择器**（主流程）；同时**处理**后端
       返回的 `clarification` + `missing_fields`（兜底）—— 两者共用同一个选择器组件。
 - [ ] 显式带 `order_no` 得到 `404` 时，提示"订单不存在或无权查看"，**不重试**。
-- [ ] 客户案例：`retrieval_status=unavailable` 渲染成"暂不可用"，不写成"没有案例"。
+- [ ] 客户案例：**管家端没有这个动作**（§3.2，2026-10-16 移除），不要硬编码它。
+      ⚠️ 若用户自由文本问到「客户案例」，仍可能收到 `retrieval_status=unavailable`
+      的宣传卡 —— 渲染成"暂不可用"，**不要**写成"没有案例"（两者后端刻意区分）。
 - [ ] 不要保存、打印或打包 AI-Ops 服务令牌（它只在 BFF 与 Nginx 之间）。
 - [ ] 不要试图用 `client-type` 切换入口（见[另一篇](client-type-vs-business-entry.md)）。
 - [ ] **先把「AI-Ops 收谁的身份」定下来**：见
@@ -272,7 +281,8 @@ GET /charging-pile/chOrderInfo/getOrderUserPage?current=1&size=10&status=1
 
 ## 6. 已知边界（后端如实告知）
 
-- **「客户案例」暂无知识库素材**，恒为 `unavailable`（§3.2）。素材由产品提供。
+- **管家端**「客户案例」动作**已移除**（2026-10-16，§3.2）—— 不是素材缺口，是该入口
+  结构上产不出这张卡。若产品日后要恢复，先看 §3.2-bis 的三步与内容侧前置。
 - **入口头是调用方自报的**：41 的 Nginx 只做"没带就当 `consumer`"的兜底，
   不校验自报值。真实前端按入口发它即可；这不放大到"无范围"（管家端范围仍受运营商站点集合约束）。
 - **管家端登录链路：不通，已定位**。管家端 App 走 `/upms/token/login` 的 OAuth2 令牌，

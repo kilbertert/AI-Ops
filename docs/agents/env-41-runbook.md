@@ -920,7 +920,68 @@ manager.disable(ctx, cur.shortcut_id, expected_revision=cur.revision, scope=PLAT
 #   GET /v1/shortcuts operator 的 codes 不得再含该 code
 ```
 
-整库恢复（§3.1-bis 那份备份）**只作灾难恢复** —— 它会把备份之后的**其他**写入一起丢掉
+### 3.1-sexies 从入口**移除**一个已发布动作：改种子 + `disable` 数据行（2026-10-16 新增）
+
+**用途**：产品决定某个动作不该再出现在某个入口时。**2026-10-16 的实例**：管家端移除
+「客户案例」（`case_exploration`）—— 见 `frontend-operator-handoff.md` §3.2 与该日
+`validation.md`。
+
+**两条独立的事，缺一条就只是"代码里没了"**：
+
+1. **改种子**（代码）：从 `shortcut_lifecycle._BUNDLED_SHORTCUTS["<entry>"]` 里删掉那个
+   `code`。这只影响**将来新播种**的租户 —— 已存在的行不受影响（`seed_bundled` 跳过已存在）。
+2. **停用已发布行**（数据）：**必须**做，否则入口照旧返回它。**用 `disable`，
+   不是 `rollback`**：
+
+```python
+from pathlib import Path
+from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
+from aiops_diagnostics.shortcut_lifecycle import (
+    PLATFORM_TENANT_ID,
+    ShortcutManager,
+    ShortcutStore,
+)
+
+# 平台行用 PLATFORM_SCOPE + ROLE_PLATFORM_ADMIN；租户行换成该租户 id 与 ROLE_AGENT_ADMIN。
+store = ShortcutStore(Path("/var/lib/aiops-41/gateway/gateway.db"))
+manager = ShortcutManager(store)
+ctx = ScopeContext.build(
+    caller=SubjectRecord(b_user_id="B-onbox-admin", tenant_id=PLATFORM_TENANT_ID),
+    subject=SubjectRecord(b_user_id="B-onbox-admin", tenant_id=PLATFORM_TENANT_ID),
+    delegated=False,
+    effective_tenant_id=PLATFORM_TENANT_ID,
+    data_scope=DataScope(type="self"),
+    roles=frozenset({"ROLE_PLATFORM_ADMIN"}),
+    permissions=frozenset({"aiops:shortcuts:manage"}),
+)
+row = store.find_by_code(PLATFORM_TENANT_ID, "operator", "case_exploration")
+if row is not None and row.status != "disabled":
+    manager.disable(ctx, row.shortcut_id, expected_revision=row.revision, scope="platform")
+```
+
+🔴 **为什么不是 `rollback`**：判据与 §3.1-ter 撤回那节同一条 —— 该动作只有
+`version_no=1`，而 `rollback` 做的是「把某个旧版内容**重新发布**」，
+"回滚到 v1" 就是**再发布一次同一份内容**，入口照样返回它。
+
+**验收（判据是入口，不是库）**：
+
+```bash
+ssh aiops-41 'curl -sS -H "Authorization: Bearer <服务令牌>" -H "X-Business-Entry: operator" \
+  https://api.mall.qushiyun.com/v1/shortcuts' \
+  | python3 -c 'import json,sys; c=[s["code"] for s in json.load(sys.stdin)["shortcuts"]]; print(c); assert "case_exploration" not in c'
+```
+
+⚠️ **前端仍会照旧渲染**：管家端前端**硬编码了按钮**（不消费后端返回的列表，见
+`frontend-operator-handoff.md` §6 末条）。所以停用数据行之后，**用户界面可能仍然显示
+那颗按钮**，点下去落进普通问答。这不是停用失败 —— 是那条既有前端偏差，要在前端改造里一起收。
+
+**常见坑**：
+
+- **只改种子不停用数据行** ⇒ 入口照旧返回（本手册反复出现的那条：合并部署 ≠ 入口变化）。
+- **`disable` 之后不要删行**：保留它才有「这个动作曾经存在过」的审计痕迹，
+  且 `list_effective` 里 disabled 行**抑制**同 code 的平台行，正是我们要的语义。
+
+
 （本手册 §5.5 的恢复一节已经写过这一条；这里再点一次，是因为新建动作这条路**没有**可用的按版本回滚）。
 
 **常见坑**：
