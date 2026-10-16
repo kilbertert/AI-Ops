@@ -1,3 +1,59 @@
+## 2026-10-16 · 登录代理上线（#783 阶段 2）：公司账号登录 Dify 已可用
+
+> PRD #772 身份闭环的部署层。**业务验收：完成**（真实浏览器端到端）。本记录不含任何
+> 口令、令牌或 Cookie 明文；cookie **只记名字**。
+
+**基线**：`111158e`。**分支**：`feat/dify-login-proxy-deploy`。
+
+**已完成**：运营打开 `https://dify.ranlei.work` 看到的是**我们的登录页**，用**公司账号 +
+密码 + 公司验证码**登录，拿到一枚 Dify 控制台会话。
+
+- **36**：`aiopslogin` 服务身份（uid 991）；`/opt/aiops-login-proxy/aiops_diagnostics/`
+  8 个文件（依赖闭包实测只有 stdlib + `cryptography`，**不需要 venv** —— 与桥同一形态）；
+  `/etc/aiops-login-proxy/login-proxy.env`(0640 root:aiopslogin)；systemd 单元。
+- **控制台 10008 层**：`include dify-login-proxy.conf` + `location = /signin` 精确匹配
+  指到 `/srv/aiops-console-assets/dify-login-page.html`（CSP `default-src 'none'`）。
+  **挂在 10008 而非 TLS 层**：那一层被 `:443` 与明文 `:10008` 两个入口共用，挂一处两个入口
+  同时生效（实测两个入口都返回我们的页）。
+- **41**：未改。
+
+**端到端验收（真浏览器，2026-10-16）**：
+
+| 判据 | 结果 |
+|---|---|
+| `/signin` | TLS 与明文**两个入口**都返回我们的页（`<title>登录 - AI-Ops 智能体控制台</title>`） |
+| 拒绝路径 | 错口令 ⇒ 403 + 「公司账号或密码不正确，或验证码无效」 |
+| 成功路径 | 200 ⇒ 跳 `/`，cookie = `__Host-access_token` / `__Host-csrf_token` / `__Host-refresh_token` |
+| 会话有效 | `/apps` 打开为真实工作区（标题「工作室 - Dify」），`/console/api/workspaces/current/summary` ⇒ `role: editor`（用户故事 9） |
+| 开户 | 首次登录自动在 Dify 建账号，`accounts.status = **active**`，`tenant_account_joins.role = editor` |
+| 映射 | `dify_login_mappings` 一行，`status=active`，邮箱为确定性 `.invalid` 地址；审计 1 行 |
+| 回归 | 控制台注入仍**恰好一次**；登录页**不经**注入（精确匹配优先）；10008/10118/10018 均正常 |
+
+**部署期发现并修掉 3 个真缺陷**（都是"单测全绿但真上游上必炸"，因为替身没复现上游行为）：
+
+1. **验证码取不到**：`fetch_captcha` 发 `Accept: image/jpeg`，而公司网关对 `/code` **按 Accept
+   过滤** —— 非 `*/*` 一律 **404**。表现是"验证码取不到"，完全看不出是内容协商。
+   ⇒ 去掉该头；替身也复现此行为，反向验证两条用例转红。
+2. **登录请求参数放错位置**：`company_login` 把参数放 **body**，而公司网关的两个过滤器都只读
+   **query string**（`uri.getRawQuery()`）：验证码校验读 `code`、口令解密读 `password`。
+   后果是双重的 —— `code` 看不见 ⇒「验证码不能为空」；`password` 不解密 ⇒ 拿密文比 bcrypt。
+   ⇒ 改成 query（与管理后台前端实测一致）；**替身原来只读 body，所以这个错一直绿着**，
+   改成按 query 解析后 13 条用例会红。
+3. **开户静默不完成**：`_invite_token` 只读 `results`，而 Dify 1.17.1 回的键是
+   **`invitation_results`** ⇒ 拿不到 token ⇒ **激活那一步被整个跳过** ⇒ 账号停在 `pending`。
+   而 pending 的账号在自签会话模型下**照样能登录**（会话是验签 + 查库，不查 status），
+   所以这条链**没有任何一处报错**。⇒ 修解析（两个键都认）+ 把"邀请成功却拿不到 token"
+   从静默跳过改成**显式报错**。另发现 `/activate` 不能带 owner 会话（Dify 会把激活者当成
+   `current_account_with_tenant()` 那个账号，与邀请编码的账号不符 ⇒ `InvitationAccountMismatch`），
+   改为 **token-only**（Dify 明确保留该路径）。
+
+**同一条教训出现了三次**：替身"比真上游宽松"时，缺陷会一直绿着。三处都改成复现真行为，
+并逐条做了反向验证（改回旧实现 ⇒ 用例转红）。
+
+**边界**：桥的 `AIOPS_CONSOLE_BRIDGE_LOGIN_PROXY_URL` **未配** ⇒ 发布权仍是 Dify owner/admin、
+试运行仍走固定调试租户（**逐字不变**）。公网**未**收口 Dify 原生入口（按用户选择放在登录页
+验收之后）。映射表里目前只有 `system` 一个账号（我就是用它验收的）。
+
 ## 2026-10-16 · 公司 UPMS 建 AI-Ops 两个权限码（#777）
 
 > PRD #772 子票 #777。**业务验收：完成**（对象已建、端到端已验证）。决定见 **ADR-0029**，
