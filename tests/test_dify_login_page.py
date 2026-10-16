@@ -31,8 +31,8 @@ def test_the_login_page_is_a_single_self_contained_file(page: str) -> None:
     assert page.lstrip().startswith("<!DOCTYPE html>")
     assert "<style>" in page and "<script>" in page
     # 外部资源一个都不要 —— 每一条都是可以被动手脚的信任边。
-    assert "src=\"http" not in page and "src='http" not in page
-    assert "href=\"http" not in page and "href='http" not in page
+    assert 'src="http' not in page and "src='http" not in page
+    assert 'href="http' not in page and "href='http" not in page
 
 
 def _executable(page: str) -> str:
