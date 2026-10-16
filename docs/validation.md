@@ -1,3 +1,103 @@
+## 2026-10-16 · 公司身份接入：桥转发身份 + GET 读回收口 + `__Host-` 三处 + 登录页（#783 前半）
+
+> PRD #772 子票 #783（身份闭环的代码与资产层）。**业务验收：部分完成** —— 代码与资产已交付，
+> 36 的部署与公网收口在后续阶段。本记录不含任何密钥、令牌或 Cookie 明文；cookie **只记名字**。
+
+**基线**：`5372a76`。**分支**：`feat/dify-company-identity`。决定见 **ADR-0028**。
+
+**这条票最初被判断为"被 #777 阻塞"。实测推翻了那个判断**，所以先做没有阻塞的那一半。
+
+### 一、先证实了三件不能假定的事
+
+1. **按人范围这条链今天是通的**（41 实测，不是推断）。`AIOPS_UPMS_BASE_URL` 指向
+   `cloud-upms-admin`（`/actuator/mappings` 的 contexts = `cloud-upms-admin-1`）；
+   `GET /shopuser/getShops?userId=<B 端 id>` 用既有的 `AIOPS_UPMS_INSIDE_TOKEN` 通了；
+   在 41 上真跑 `_operator_site_scope(settings)` → `site_scope_by_b_user_id(...)` 拿到了
+   真实站点集合。⇒ **不需要新凭据、不需要新连接路径**；`AIOPS_UPMS_INSIDE_TOKEN` 有值。
+
+2. **Dify 的 refresh token 不是 JWT，是 Redis 里的一次性随机串**
+   （`deploy-api-1` 的 `account_login_adapters.resolve_refresh_token` 就是 `redis.get(key)`），
+   而 #778 的自签会话把 `refresh_token` 下成与 access 同值的 JWT ⇒
+   `POST /console/api/refresh-token` 永远 401。**它是不是致命缺陷取决于前端会不会把有有效
+   access cookie 的人打回去**，所以实测：
+   - 不带 cookie `GET /` ⇒ `307 → /auth/refresh?redirect_url=%2F` ⇒ `303 → /signin`；
+   - 带自签的 `__Host-access_token` + `__Host-csrf_token` ⇒ `GET /` 与 `GET /apps` **都是 200**。
+   结论：**前端不会打回去**；refresh 失败的那天落到的是**我们的**登录页，这正是要的行为。
+   会话寿命（`AIOPS_LOGIN_PROXY_ACCESS_MINUTES`）因此是硬上界。
+
+3. **公司侧两个权限码确实还不存在**：`sys_menu` 里 `permission LIKE 'aiops%'` **0 行**，
+   `sys_role` 里 aiops 角色 **0 行**。测试账号 `13333102001` 的角色是
+   `Agent`（`client_type=admin`，190 个菜单）与 `CPOs`（`client_type=tenant-app`）
+   ⇒ `client_type=admin` 是这个租户真实在用的，与登录代理的配置相符。
+
+### 二、改了四组代码 + 一处资产
+
+1. **代理的身份与放行解耦**（`dify_login_server._publish_check`）：`allowed` 单独表达发布权，
+   身份五字段只要映射存在且 active 就回。理由是试运行与发布用**同一个调用**取身份，
+   但要的不是同一种授权 —— 合成一个布尔会让"只有编辑权的人连试运行都做不了"。
+
+2. **桥补两个头，并且试运行也去取身份**（`dify_console_publish.py`）：
+   `_publish_permission_verdict` → `_identity_and_publish_verdict`，返回值从 `(bool, headers)`
+   改成 `(headers, bool)`，补上 `X-AIOps-Initiator-Tenant` / `-Type` —— **这两个字段代理早就
+   回了，是桥丢掉的**，也正是"按人范围从未被驱动"的全部原因。`submit_trial` 增加
+   `login_proxy_url` + `console_session`；身份不全（`company_user_id` 或 `company_tenant_id`
+   为空）一律当"没有身份"，因为空租户会被网关的 `from_headers` 静默接受并退回整租户。
+
+3. **`GET /v1/dify/trial/{trial_id}` 与提交走同一个范围构造**（`gateway_api._trial_run_context`）。
+   原来 GET 用 `trial_run_context()`，提交在有发起人时用 `trial_context_for()`，两者
+   `scope_fingerprint` 不同 ⇒ 按人范围一启用 `trial_id` 就永远读不回来（404）。
+
+   **它为什么一直没被发现**：`tests/test_dify_trial.py` 的替身把 `trial_context_for` 桩成了
+   `trial_run_context`，两个指纹恰好相等。那条桩**故意改成不同范围**，并新增三条回归
+   （同头读回自己提交的 200；换个发起人 404；缺租户时退回调试租户仍自洽）。
+   **反向验证过**：把 GET 改回旧写法，第一条立刻红。
+
+4. **`__Host-` 前缀共三处**（原本只记了两处）：代理下发（`ConsoleSession` 默认前缀 +
+   "带前缀却不带 Secure 直接抛错"）、登出清理、以及**第三处**
+   `dify_login_provision._console_headers()` 里写死的裸名 csrf cookie。第三处的后果形态最阴：
+   开户那一步（`invite-email`）会 401，于是**新账号开不出来**，而**已有映射的账号完全不受影响**
+   —— 间歇性、极难定位。所以验收里必须有"用一个从未登录过的账号走完整登录"。
+
+5. **登录页资产**（新增 `ops/dify-login-proxy/dify-login-page.html`，单文件自包含）+
+   nginx 接线：`location = /signin`（**精确匹配**）接管 Dify 原生登录页，`alias` 到该资产，
+   配 `default-src 'none'` 的 CSP 与 `no-referrer`。挂在 **10008** 而不是 TLS 层 ——
+   那一层被 `dify.ranlei.work:443` 与明文 `:10008` **两个入口共用**，挂 TLS 层等于给明文入口
+   留一条绕过口。`redirect_url` 过服务端 `safe_redirect_path` 白名单（拒 `//evil.test` 与
+   `/\evil.test` 这类协议相对 URL），页面不做第二遍判断。
+
+### 三、验证
+
+**单测**：`tests/test_dify_login_proxy.py`（含新增的 `__Host-` 名字判据、登出清理、
+`safe_redirect_path` 15 条反例 + 5 条正例、前缀缺 Secure 抛错）、
+`tests/test_dify_console_publish.py`（新增 5 条：身份转发到网关、发布权拒绝行为逐字不变、
+代理挂掉退回调试租户且不带任何身份头、无映射退回、空租户不回退）、
+`tests/test_dify_trial.py`（新增 3 条回归）、`tests/test_dify_login_page.py`（新增 9 条静态判据）。
+**全量 pytest 通过**，`ruff` 无告警。
+
+**41 真机按人范围验收**（真 Settings + 真 `UpmsOperatorSiteScope` + 真
+`ScopedOrderAuthorizer` + 真 MySQL，2026-10-16）：
+
+| 判据 | 结果 |
+|---|---|
+| 运营商范围解析 | 账号 `1909814746819665921`（`type=5` 代理商）⇒ 13 个站点 |
+| **正例**：自己站点的订单 | `can_access` = **True**（3/3） |
+| **反例**：别的租户的订单 | `can_access` = **False**（2/2），而**调试租户对同一张单 = True** |
+| 两种范围指纹 | 按人 `08454d1c…` ≠ 调试租户 `6b3c294f…` |
+
+反例是关键的那一条：同一个 authorizer、同一张订单，只有范围不同 —— 所以"拒"归因于**按人范围**，
+不是"订单不存在"或"数据源坏了"。
+
+**一处如实记录的业务事实**：你给的运营商测试账号 `13333102001`（`type=5`，租户 = ulink）
+名下 3 个站点**当前没有任何订单**，因此它给不出正例。上面那个 13 站点的账号是同一租户体系下
+另一个代理商。这不影响判据成立，但如果要用 `13333102001` 做演示，得先让它名下站点有单。
+
+### 四、边界
+
+- **未部署**：登录代理与登录页都还没有装到 36；桥的 `LOGIN_PROXY_URL` 未配 ⇒
+  发布权仍是 owner/admin、试运行仍走固定调试租户。**这一步单独回滚**（清一个环境键）。
+- **未做**：公网收口 Dify 原生入口（`/console/api/login` 等），按用户选择放在登录页验收**之后**。
+- **公司生产未动**：#777 的两个权限码仍未创建（`sys_menu` 0 行）。
+
 ## 2026-10-15 · 试运行上线（#795，补 #781 / #782 的部署层）
 
 > PRD #772 子票 #795。**业务验收：完成。** 本记录不含任何密钥、令牌或 Cookie 明文

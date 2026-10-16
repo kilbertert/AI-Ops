@@ -558,6 +558,23 @@ def _publish_initiator(
     )
 
 
+def _trial_run_context(context: Any, initiator: TrialInitiator | None) -> Any:
+    """试运行的范围：**提交与读取都走这里**，因为两者必须算出同一个指纹。
+
+    作业行按 ``scope_fingerprint`` 隔离（`gateway_store.get_standard_diagnosis`），
+    而那个哈希含数据范围与主体类型 —— 提交用 A 范围、读取用 B 范围时，返回的
+    ``trial_id`` 会**永远读不回来**，且表现与"这个 id 不存在"完全一样。所以
+    "读结果"这条路由一开始就漏传发起人头是个真缺陷（#782 留下的 v2 地雷），
+    只有把选择收成一处才不会重演。
+
+    ``initiator is None``（桥没给全身份，或本来就没走公司身份）⇒ 固定调试租户，
+    即 #781 的第一版行为，逐字不变。
+    """
+    if initiator is None:
+        return context.runtime.trial_run_context()
+    return context.runtime.trial_context_for(initiator)
+
+
 def _record_publish_audit(
     context: Any,
     *,
@@ -1443,11 +1460,7 @@ def create_gateway_app(
         trial_initiator = TrialInitiator.from_headers(
             initiator, initiator_tenant, initiator_type, initiator_name
         )
-        run_context = (
-            context.runtime.trial_context_for(trial_initiator)
-            if trial_initiator is not None
-            else context.runtime.trial_run_context()
-        )
+        run_context = _trial_run_context(context, trial_initiator)
         verdict = _order_authorization(context, run_context, payload.order_no)
         if verdict == UNAVAILABLE:
             raise StandardAPIError(
@@ -1482,10 +1495,23 @@ def create_gateway_app(
     def get_dify_trial(
         trial_id: str,
         _: None = Depends(dify_trial_credential),  # noqa: B008
+        initiator: Annotated[str | None, Header(alias="X-AIOps-Initiator")] = None,
+        initiator_tenant: Annotated[str | None, Header(alias="X-AIOps-Initiator-Tenant")] = None,
+        initiator_type: Annotated[str | None, Header(alias="X-AIOps-Initiator-Type")] = None,
+        initiator_name: Annotated[str | None, Header(alias="X-AIOps-Initiator-Name")] = None,
         language: str = Depends(request_language),  # noqa: B008
     ) -> dict[str, Any]:
-        """读一次试运行的状态与结果（诊断报告 + 证据 + 被挡工具 + 数据源失败）。"""
-        trial = context.runtime.get_trial(context.runtime.trial_run_context(), trial_id)
+        """读一次试运行的状态与结果（诊断报告 + 证据 + 被挡工具 + 数据源失败）。
+
+        **发起人头与提交路由逐字相同，而且是必须的**：作业行按 ``scope_fingerprint``
+        隔离，而那个哈希含数据范围（站点集合）与主体类型 —— 按人范围启用后，提交时算出的
+        指纹与 ``trial_run_context()`` 的**不一样**，于是带发起人的提交会读不回来（404）。
+        两个路由走同一个 ``_trial_run_context``，这条不可能漂。
+        """
+        trial_initiator = TrialInitiator.from_headers(
+            initiator, initiator_tenant, initiator_type, initiator_name
+        )
+        trial = context.runtime.get_trial(_trial_run_context(context, trial_initiator), trial_id)
         if trial is None:
             raise StandardAPIError(status.HTTP_404_NOT_FOUND, "TRIAL_NOT_FOUND", "trial not found")
         body: dict[str, Any] = {

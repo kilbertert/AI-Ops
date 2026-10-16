@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<!--
+  AI-Ops 的 Dify 控制台登录页（#772 B / #778 / #783）。
+
+  它接管 Dify 原生的 `/signin`（nginx `location = /signin` 指到这里），所以运营看到的是
+  公司账号登录，而不是 Dify 自己的邮箱密码框。
+
+  三条纪律，改这一页时不要破：
+
+  1. **不落任何凭据。** 不进 localStorage / sessionStorage，不写 document.cookie，
+     不发任何第三方请求。这页接的是公司口令，XSS 或一条多余的 `<script src>` 就等于
+     把口令交出去。nginx 那一层配了 `default-src 'none'` 的 CSP 兜底。
+  2. **成功后跳服务端给的那个 redirect。** 那已经过 `safe_redirect_path` 白名单
+     （只有站内相对路径能过），这一页不做第二次判断 —— 两处判断迟早会漂，
+     而安全的那一处必须在服务端。
+  3. **验证码是一次性的。** 提交后无论成败都要换一张：公司那边同一个 randomStr 用第二次
+     会失败，而"重试却总说验证码错"是个查不出原因的循环。
+
+  刷新验证码 = 换一个 randomStr 再重设 img.src，没有更复杂的东西。
+-->
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>登录 - AI-Ops 智能体控制台</title>
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    background: #f5f6f8; color: #1f2329;
+  }
+  @media (prefers-color-scheme: dark) { body { background: #17181a; color: #e8e8e8; } }
+  .card {
+    width: 100%; max-width: 360px; padding: 32px 28px; border-radius: 12px;
+    background: #fff; box-shadow: 0 2px 16px rgba(0, 0, 0, .08);
+  }
+  @media (prefers-color-scheme: dark) {
+    .card { background: #232426; box-shadow: 0 2px 16px rgba(0, 0, 0, .4); }
+  }
+  h1 { margin: 0 0 4px; font-size: 18px; font-weight: 600; }
+  p.sub { margin: 0 0 24px; font-size: 13px; color: #8a8f99; }
+  label { display: block; margin-bottom: 6px; font-size: 13px; color: #4a4f57; }
+  @media (prefers-color-scheme: dark) { label { color: #a8adb5; } }
+  input {
+    width: 100%; height: 38px; padding: 0 10px; margin-bottom: 16px;
+    border: 1px solid #d8dbe0; border-radius: 6px; background: transparent;
+    color: inherit; font-size: 14px;
+  }
+  input:focus { outline: none; border-color: #1a6cf5; }
+  @media (prefers-color-scheme: dark) { input { border-color: #3a3d42; } }
+  .captcha-row { display: flex; gap: 10px; align-items: flex-start; }
+  .captcha-row input { flex: 1; }
+  #captcha {
+    width: 120px; height: 38px; border: 1px solid #d8dbe0; border-radius: 6px;
+    cursor: pointer; background: #fff; flex: none;
+  }
+  @media (prefers-color-scheme: dark) { #captcha { border-color: #3a3d42; } }
+  button {
+    width: 100%; height: 40px; border: 0; border-radius: 6px; background: #1a6cf5;
+    color: #fff; font-size: 14px; font-weight: 500; cursor: pointer;
+  }
+  button:disabled { opacity: .6; cursor: default; }
+  #error {
+    margin: 0 0 16px; padding: 9px 11px; border-radius: 6px; font-size: 13px;
+    background: #fdecec; color: #c0392b; display: none;
+  }
+  @media (prefers-color-scheme: dark) { #error { background: #3a2222; color: #ff9c8f; } }
+</style>
+</head>
+<body>
+<main class="card">
+  <h1>AI-Ops 智能体控制台</h1>
+  <p class="sub">请用公司账号登录</p>
+
+  <div id="error" role="alert"></div>
+
+  <form id="form" autocomplete="on">
+    <label for="username">公司账号</label>
+    <input id="username" name="username" type="text" autocomplete="username"
+           autocapitalize="off" autocorrect="off" spellcheck="false" required>
+
+    <label for="password">密码</label>
+    <input id="password" name="password" type="password" autocomplete="current-password" required>
+
+    <label for="code">验证码</label>
+    <div class="captcha-row">
+      <input id="code" name="code" type="text" inputmode="text" autocomplete="off"
+             autocapitalize="off" autocorrect="off" spellcheck="false" required>
+      <img id="captcha" alt="点击刷新验证码" title="点击刷新">
+    </div>
+
+    <button id="submit" type="submit">登录</button>
+  </form>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var form = document.getElementById("form");
+  var errorBox = document.getElementById("error");
+  var captcha = document.getElementById("captcha");
+  var button = document.getElementById("submit");
+  var randomStr = "";
+
+  function showError(message) {
+    errorBox.textContent = message;
+    errorBox.style.display = "block";
+  }
+
+  function clearError() {
+    errorBox.textContent = "";
+    errorBox.style.display = "none";
+  }
+
+  // 换一个 randomStr 再重设 src ⇒ 公司那边出一张新图。没有缓存参数的必要：
+  // randomStr 本身就不同，URL 已经变了。
+  function refreshCaptcha() {
+    var bytes = new Uint8Array(16);
+    (window.crypto || window.msCrypto).getRandomValues(bytes);
+    randomStr = Array.prototype.map
+      .call(bytes, function (b) { return ("0" + b.toString(16)).slice(-2); })
+      .join("");
+    captcha.src = "/__aiops/login/captcha?randomStr=" + randomStr;
+  }
+
+  captcha.addEventListener("click", refreshCaptcha);
+  refreshCaptcha();
+
+  form.addEventListener("submit", function (event) {
+    event.preventDefault();
+    clearError();
+    button.disabled = true;
+    button.textContent = "登录中…";
+
+    var redirect = new URLSearchParams(window.location.search).get("redirect_url") || "/";
+
+    fetch("/__aiops/login", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      // 只发这四个字段加一个 redirect —— 服务端不认的字段没有意义。
+      body: JSON.stringify({
+        username: document.getElementById("username").value,
+        password: document.getElementById("password").value,
+        randomStr: randomStr,
+        code: document.getElementById("code").value,
+        redirect: redirect
+      })
+    })
+      .then(function (response) {
+        return response.json().then(function (data) {
+          return { status: response.status, data: data };
+        });
+      })
+      .then(function (result) {
+        if (result.status === 200 && result.data && result.data.ok) {
+          // 服务端已经把 redirect 过了一遍白名单；这里不再判断第二遍。
+          window.location.assign(result.data.redirect || "/");
+          return;
+        }
+        // 服务端给的是一句面向运营的中文原因；**不在这里拼装或翻译**。
+        showError((result.data && result.data.reason) || "登录未完成，请稍后重试");
+        refreshCaptcha();
+        document.getElementById("code").value = "";
+        button.disabled = false;
+        button.textContent = "登录";
+      })
+      .catch(function () {
+        showError("无法连接登录服务，请稍后重试");
+        refreshCaptcha();
+        button.disabled = false;
+        button.textContent = "登录";
+      });
+  });
+})();
+</script>
+</body>
+</html>

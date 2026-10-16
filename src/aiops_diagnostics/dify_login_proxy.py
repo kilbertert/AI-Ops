@@ -228,6 +228,24 @@ def verify_console_jwt(token: str, secret_key: str) -> dict[str, Any] | None:
     return payload
 
 
+#: 控制台 cookie 的 `__Host-` 前缀（#776 / ADR-0026；本模块是它的 v2 待办）。
+#:
+#: Dify 在 **https 且 `COOKIE_DOMAIN` 为空**时给控制台 cookie 加这个前缀
+#: （`api/libs/token.py` 的 `is_secure() and _cookie_domain() is None`）。控制台入口
+#: 已在 #776 收到 https，而本部署**没有**设 `COOKIE_DOMAIN`，所以这里必须与它一致 ——
+#: 否则我们下发的三枚 cookie 落在**另一个名字**上，控制台读 `.access_token` 得到空值，
+#: 表现是"登录成功但立刻又要求登录"，而界面上完全看不出原因。
+#:
+#: `__Host-` 的约束（浏览器强制）：必须 `Secure`、必须 `Path=/`、**不得带 `Domain`**。
+#: `cookies()` 三条都满足，见那里的 `attrs`。
+CONSOLE_COOKIE_PREFIX = "__Host-"
+CONSOLE_COOKIE_PREFIXED_NAMES = (
+    CONSOLE_COOKIE_PREFIX + "access_token",
+    CONSOLE_COOKIE_PREFIX + "refresh_token",
+    CONSOLE_COOKIE_PREFIX + "csrf_token",
+)
+
+
 @dataclass(frozen=True, slots=True)
 class ConsoleSession:
     """一次成功的登录要交给浏览器的两枚令牌。
@@ -239,7 +257,7 @@ class ConsoleSession:
 
     access_token: str = field(repr=False)
     csrf_token: str = field(repr=False)
-    cookie_prefix: str = ""
+    cookie_prefix: str = CONSOLE_COOKIE_PREFIX
     access_max_age: int = 3600
     csrf_max_age: int = 3600
 
@@ -248,8 +266,16 @@ class ConsoleSession:
 
         refresh 与 access 同值：Dify 的刷新路径只要求它是一枚合法的会话令牌，而自签
         模型下"刷新"就是再签一枚 —— 于是把同一枚当 refresh 下发，前端行为不变。
+
+        前缀默认 `__Host-`（见 :data:`CONSOLE_COOKIE_PREFIX`）：它对 cookie 的
+        `Secure` / `Path=/` / 无 `Domain` 三条要求正好与下面的 `attrs` 一致。
         """
         prefix = self.cookie_prefix
+        if prefix and not secure:
+            # `__Host-` 要求 `Secure`。带了前缀却不带 Secure 时浏览器**静默丢弃**这三枚
+            # cookie —— 正是"登录成功但立刻又要求登录"那种查不出来的故障。所以在这里
+            # 失败，而不是发一个注定被丢掉的东西。
+            raise ValueError("__Host- 前缀的 cookie 必须带 Secure")
         attrs = "; Path=/; SameSite=Lax"
         secure_attr = "; Secure" if secure else ""
         tail = f"HttpOnly{secure_attr}{attrs}"
@@ -266,13 +292,16 @@ def mint_console_session(
     secret_key: str,
     deployment_edition: str,
     access_expire_minutes: int,
-    cookie_prefix: str = "",
+    cookie_prefix: str = CONSOLE_COOKIE_PREFIX,
 ) -> ConsoleSession:
     """为 ``account_id`` 签一枚 Dify 会接受的控制台会话（#772 B / ADR-0023）。
 
     载荷形状照抄 `AccountService.get_account_jwt_token_for_account_id`：
     ``{user_id, exp, iss, sub}``。``iss`` 必须是部署版本（社区版即 ``COMMUNITY``）——
     写错不会立刻报错，但下一个读 `iss` 的地方会拒。
+
+    ``cookie_prefix`` 默认 :data:`CONSOLE_COOKIE_PREFIX`：本部署的控制台入口是 https
+    且未设 `COOKIE_DOMAIN`，所以 Dify 自己签的 cookie 也带 `__Host-`，我们必须一致。
     """
     now = int(time.time())
     exp = now + access_expire_minutes * 60

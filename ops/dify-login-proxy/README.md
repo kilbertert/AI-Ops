@@ -23,8 +23,13 @@
 |---|---|---|
 | `aiops-dify-login-proxy.service` | `/etc/systemd/system/` | 服务单元（身份 `aiopslogin`，**独立于**发布桥的 `aiopsbridge`） |
 | `login-proxy.env.example` | `/etc/aiops-login-proxy/login-proxy.env`（0600） | 全部配置，含两把密钥 |
-| `dify-login-proxy.conf` | 控制台 server 块 / snippets | 三跳同源反代 |
+| `dify-login-proxy.conf` | 控制台 server 块 / snippets | 四跳同源反代（登录/验证码/登出/发布检查） |
+| `dify-login-page.html` | `/srv/aiops-console-assets/` | **登录页**（单文件自包含），由 10008 的 `location = /signin` 提供 |
 | 代码 | `/opt/aiops-login-proxy/`（venv） | `python -m aiops_diagnostics.dify_login_server` |
+
+**登录页为什么在 `ops/dify-console-bridge/` 的 conf 里接线、而不是本目录**：
+`location = /signin` 必须挂在**被两个入口共用**的那一层（10008），否则明文入口
+`http://36.156.159.175:10008/signin` 会绕过它。见 `dify-console-10008.conf` 的注释与 ADR-0028。
 
 ## 三条硬前置（不满足就别装）
 
@@ -34,6 +39,17 @@
    权限码所挂的 `client_type` **一致**；否则公司侧取到空角色集，表现为"你没有权限"。
 3. **公网已封掉 Dify 原生账号入口**（#783）：`/console/api/login`、找回密码、邮箱验证码、
    注册、`/activate`。不封，公司登录就不是唯一入口。
+
+## 两处**已知且被接受**的行为（别当成故障排查）
+
+1. **refresh 永远失败，这不是缺陷。** Dify 的 refresh token 是 Redis 里的一次性随机串，
+   而本代理（#778 的自签模型）把它下成与 access 同值的 JWT ⇒ `POST /console/api/refresh-token`
+   必然 401。**实测确认前端不会因此把有有效 access cookie 的人打回去**（带
+   `__Host-access_token` 时 `GET /` 与 `GET /apps` 都是 200）。所以会话到期后落到的是**我们的**
+   登录页 —— 这正是要的行为。**会话寿命因此是硬上界**：`AIOPS_LOGIN_PROXY_ACCESS_MINUTES`。
+2. **`__Host-` 前缀在 https 下是确定的**（#776 起控制台就是 https，且本部署未设
+   `COOKIE_DOMAIN`）。共三处要带前缀：下发、登出清理、以及 `dify_login_provision` 里
+   开户时那个写死的 csrf cookie 名 —— 第三处漏了会让**新账号开不出来**而老账号没事。
 
 ## 密钥与后果（ADR-0023 的代价）
 

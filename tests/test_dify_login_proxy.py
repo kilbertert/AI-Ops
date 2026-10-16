@@ -28,7 +28,9 @@ from aiops_diagnostics.dify_login_provision import DifyConsoleSettings, account_
 from aiops_diagnostics.dify_login_proxy import (
     CAPTCHA_ROUTE,
     LOGIN_ROUTE,
+    LOGOUT_ROUTE,
     PUBLISH_CHECK_ROUTE,
+    ConsoleSession,
     mint_console_session,
     sign_console_jwt,
 )
@@ -37,6 +39,7 @@ from aiops_diagnostics.dify_login_server import (
     NotReady,
     assert_public_origin_is_https,
     make_server,
+    safe_redirect_path,
 )
 
 SECRET_KEY = "test-dify-secret-key-0123456789"
@@ -233,12 +236,15 @@ def stack(tmp_path: Path):
         dify.shutdown()
 
 
-def _login(base: str, **overrides: Any) -> tuple[int, dict[str, Any], dict[str, str]]:
-    body = {"username": "zhang", "password": "pw", "randomStr": "abc123", "code": "1234"}
-    body.update(overrides)
+def _call(
+    base: str, path: str, body: dict[str, Any] | None = None
+) -> tuple[int, dict[str, Any], dict[str, str]]:
     connection = http.client.HTTPConnection(base.removeprefix("http://"))
     connection.request(
-        "POST", LOGIN_ROUTE, body=json.dumps(body), headers={"Content-Type": "application/json"}
+        "POST",
+        path,
+        body=json.dumps(body or {}),
+        headers={"Content-Type": "application/json"},
     )
     response = connection.getresponse()
     payload = json.loads(response.read())
@@ -248,6 +254,89 @@ def _login(base: str, **overrides: Any) -> tuple[int, dict[str, Any], dict[str, 
     headers = {k.lower(): v for k, v in raw_headers}
     headers["set-cookie-all"] = cookies
     return response.status, payload, headers
+
+
+def _login(base: str, **overrides: Any) -> tuple[int, dict[str, Any], dict[str, str]]:
+    body = {"username": "zhang", "password": "pw", "randomStr": "abc123", "code": "1234"}
+    body.update(overrides)
+    return _call(base, LOGIN_ROUTE, body)
+
+
+def _logout(base: str) -> tuple[int, dict[str, Any], dict[str, str]]:
+    return _call(base, LOGOUT_ROUTE)
+
+
+# --------------------------------------------------------------------------- #
+# redirect 白名单：登录页把 Dify 送来的 redirect_url 原样带进来（开放重定向）      #
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "//evil.test",
+        "//evil.test/path",
+        "/\\evil.test",
+        "https://evil.test",
+        "http://evil.test/apps",
+        "javascript:alert(1)",
+        "\\\\evil.test",
+        "/apps\r\nSet-Cookie: x=1",
+        "/apps\nX: 1",
+        "",
+        "   ",
+        "apps",
+        "/a" * 400,  # 超过 512 字符上限
+        None,
+        123,
+    ],
+)
+def test_an_offsite_or_malformed_redirect_falls_back_to_the_root(raw: Any) -> None:
+    """不合法一律回落 ``/`` —— 这一页接公司口令，不能当钓鱼跳板。
+
+    `//evil.test` 与 `/\\evil.test` 都是浏览器认的**协议相对 URL**（会跳到外站），
+    所以它们必须与 `https://evil.test` 同样被拒。
+    """
+    assert safe_redirect_path(raw) == "/"
+
+
+@pytest.mark.parametrize(
+    "raw,expected",
+    [
+        ("/", "/"),
+        ("/apps", "/apps"),
+        ("/apps?page=2", "/apps?page=2"),
+        ("/app/abc/configuration", "/app/abc/configuration"),
+        ("  /apps  ", "/apps"),
+    ],
+)
+def test_a_same_site_relative_path_is_kept(raw: str, expected: str) -> None:
+    assert safe_redirect_path(raw) == expected
+
+
+def test_the_login_response_carries_the_validated_redirect(stack) -> None:
+    """端到端：请求里给 redirect ⇒ 返回体里是**校验过**的那个。"""
+    _status, payload, _headers = _login(stack[0], redirect="//evil.test")
+    assert payload["redirect"] == "/"
+    _status, payload, _headers = _login(stack[0], redirect="/apps")
+    assert payload["redirect"] == "/apps"
+
+
+def test_prefixed_cookies_refuse_to_be_issued_without_secure() -> None:
+    """带 `__Host-` 前缀却不带 `Secure` 时**直接报错**，而不是发一个浏览器会丢掉的 cookie。
+
+    静默丢弃的表现是"登录成功但立刻又要求登录"，而界面上完全看不出原因 ——
+    所以宁可在这里失败。
+    """
+    session = mint_console_session(
+        "acct-1", secret_key=SECRET_KEY, deployment_edition="COMMUNITY", access_expire_minutes=60
+    )
+    with pytest.raises(ValueError, match="Secure"):
+        session.cookies(secure=False)
+    assert session.cookies(secure=True)  # 反过来是正常的
+    # 显式关掉前缀（例如本地 http 调试）时不该报错。
+    plain = ConsoleSession(access_token="a", csrf_token="c", cookie_prefix="")
+    assert plain.cookies(secure=False)
 
 
 # --------------------------------------------------------------------------- #
@@ -265,6 +354,38 @@ def test_a_company_login_yields_a_dify_session_cookie(stack) -> None:
     assert "access_token=" in cookies and "csrf_token=" in cookies
     # 目标是"给浏览器一枚 Dify 会接受的会话"：形状必须是三段 JWT。
     assert cookies.count("access_token=") >= 1
+
+
+def test_the_session_cookies_carry_the_host_prefix_and_secure(stack) -> None:
+    """三枚 cookie 的名字必须带 `__Host-` 前缀，且带 `Secure`（#776 的 v2 待办）。
+
+    判据是**名字**，不是子串：`"access_token=" in cookies` 对
+    `__Host-access_token=` 也为真，所以那条断言在前缀漏掉时**照样绿**。
+    而漏掉的后果是控制台读不到会话 —— "登录成功但立刻又要求登录"，界面上看不出原因。
+
+    `__Host-` 同时要求 `Secure`、`Path=/`、不得带 `Domain`：浏览器会**静默丢弃**
+    不满足的三条，所以逐条断言。
+    """
+    _status, _payload, headers = _login(stack[0])
+    cookies = headers["set-cookie-all"]
+    for name in ("access_token", "refresh_token", "csrf_token"):
+        assert f"__Host-{name}=" in cookies, cookies
+        assert f" {name}=" not in cookies.replace(f"__Host-{name}=", ""), (
+            f"还有一枚不带前缀的 {name} —— 两枚同名 cookie 会让谁生效变得不可预期"
+        )
+    assert cookies.count("; Secure") >= 3
+    assert "Domain=" not in cookies
+    assert cookies.count("Path=/") >= 3
+
+
+def test_logout_clears_the_prefixed_cookies(stack) -> None:
+    """登出清的是**带前缀的**那三枚 —— 清另一个名字等于什么都没做。"""
+    base, _data = stack
+    status, payload, headers = _logout(base)
+    assert status == 200 and payload["ok"] is True
+    cookies = headers["set-cookie-all"]
+    for name in ("access_token", "refresh_token", "csrf_token"):
+        assert f"__Host-{name}=;" in cookies, cookies
 
 
 def test_the_first_login_provisions_an_editor_and_the_second_reuses_it(stack) -> None:

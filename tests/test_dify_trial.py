@@ -68,9 +68,24 @@ class _Runtime:
         )
 
     def trial_context_for(self, initiator: Any) -> ScopeContext:
-        # #782 的桩：把发起人当顶层账号（整租户），与 trial_run_context 同范围 ——
-        # 本文件只测接缝，范围规则由 tests/test_dify_trial_scope.py 覆盖。
-        return self.trial_run_context()
+        # #782 的桩：**故意与 trial_run_context 不同范围**（站点集合 + 主体类型都不同），
+        # 因为两个 context 相等恰好是"GET 用错 context 读不回来"那个缺陷的藏身处 ——
+        # 相等时它不会红，而线上按人范围一启用就 404。范围规则本身由
+        # tests/test_dify_trial_scope.py 覆盖，这里只保证两个指纹**可区分**。
+        subject = SubjectRecord(
+            b_user_id=initiator.b_user_id,
+            tenant_id=initiator.tenant_id,
+            user_type=initiator.user_type,
+        )
+        return ScopeContext.build(
+            caller=subject,
+            subject=subject,
+            delegated=False,
+            effective_tenant_id=initiator.tenant_id,
+            data_scope=DataScope(type="organ", site_ids=("S-1", "S-2")),
+            roles=frozenset(),
+            permissions=frozenset(),
+        )
 
     def start_trial(self, initiator: str, order_no: str, draft: Any, language: str, trial_initiator=None):
         self.started.append(
@@ -84,7 +99,12 @@ class _Runtime:
         )
         if self.busy:
             return None
-        context = self.trial_run_context()
+        # 与真 runtime 同一条选择：给了发起人就用按人范围，否则固定调试租户。
+        context = (
+            self.trial_context_for(trial_initiator)
+            if trial_initiator is not None
+            else self.trial_run_context()
+        )
         row = self.store.create_trial_job(
             context.scope_fingerprint,
             order_no=order_no,
@@ -395,6 +415,73 @@ def test_a_trial_writes_no_agent_version(tmp_path: Path) -> None:
     assert versions == 0, "试运行产生了一个智能体版本 —— 跑一次不等于发布"
     # 注册表里没有任何绑定；试运行不该凭空写一条。
     assert DifyAppRegistry(tmp_path / "gateway.db").all() == ()
+
+
+def _initiator_headers(b_user: str, tenant: str = "T-1", user_type: str = "2") -> dict[str, str]:
+    return {
+        "Authorization": f"Bearer {TRIAL_KEY}",
+        "X-AIOps-Initiator": b_user,
+        "X-AIOps-Initiator-Tenant": tenant,
+        "X-AIOps-Initiator-Type": user_type,
+    }
+
+
+def test_a_trial_submitted_with_an_initiator_can_be_read_back(tmp_path: Path) -> None:
+    """**提交与读取必须算出同一个范围指纹**（#782 留下的那个 v2 地雷）。
+
+    作业行按 ``scope_fingerprint`` 隔离；带发起人头提交时范围来自公司身份，而读结果
+    那条路由若还用固定调试租户，返回的 ``trial_id`` 就**永远读不回来**，且表现与
+    "这个 id 不存在"完全一样（404）。这条就是那个缺陷的回归判据。
+
+    反证：把 ``get_dify_trial`` 改回 ``trial_run_context()``，这条会红。
+    """
+    client, _ = _client(tmp_path)
+    headers = _initiator_headers("B-77")
+    submitted = client.post(
+        "/v1/dify/trial",
+        json={"order_no": ORDER, "prompt": "诊断一下", "allowed_tools": ["order_snapshot"]},
+        headers=headers,
+    )
+    assert submitted.status_code == 202, submitted.text
+    trial_id = submitted.json()["trial_id"]
+    read = client.get(f"/v1/dify/trial/{trial_id}", headers=headers)
+    assert read.status_code == 200, read.text
+    assert read.json()["trial_id"] == trial_id
+
+
+def test_another_initiator_cannot_read_that_trial(tmp_path: Path) -> None:
+    """换个发起人读**同一条** trial_id ⇒ 404 —— 范围隔离确实按指纹生效。
+
+    没有这一条，上面那条只证明了"同一个头能读回自己的"，不能排除
+    "其实谁都读得到"。
+    """
+    client, _ = _client(tmp_path)
+    submitted = client.post(
+        "/v1/dify/trial",
+        json={"order_no": ORDER, "prompt": "诊断一下", "allowed_tools": []},
+        headers=_initiator_headers("B-77"),
+    )
+    trial_id = submitted.json()["trial_id"]
+    other = client.get(f"/v1/dify/trial/{trial_id}", headers=_initiator_headers("B-88"))
+    assert other.status_code == 404
+
+
+def test_headers_without_a_tenant_still_use_the_debug_tenant(tmp_path: Path) -> None:
+    """头给不全（缺租户）⇒ 退回固定调试租户，**且那条路仍然自洽**（#781 行为逐字不变）。
+
+    这一条钉住的是"过渡行为没被这次改动碰坏"：桥没给全身份时提交与读取都退回
+    调试租户，于是读回仍然成立。
+    """
+    client, _ = _client(tmp_path)
+    headers = {"Authorization": f"Bearer {TRIAL_KEY}", "X-AIOps-Initiator": "B-99"}
+    submitted = client.post(
+        "/v1/dify/trial",
+        json={"order_no": ORDER, "prompt": "诊断一下", "allowed_tools": []},
+        headers=headers,
+    )
+    assert submitted.status_code == 202, submitted.text
+    trial_id = submitted.json()["trial_id"]
+    assert client.get(f"/v1/dify/trial/{trial_id}", headers=headers).status_code == 200
 
 
 def _fingerprint_of(tmp_path: Path) -> str:

@@ -1000,9 +1000,21 @@ class _PermissionSource:
                         "company_user_id": "B-42",
                         "company_username": "zhang",
                         "dify_account_id": "acct-1",
+                        "company_tenant_id": "T-1",
+                        "company_user_type": "2",
                     }
                 else:
-                    payload = {"allowed": False, "reason": "MISSING_PUBLISH_PERMISSION"}
+                    # 有映射但**没有发布权限码**：真实代理在 `allowed=false` 时**仍然回
+                    # 身份五字段**（身份与放行是两件事）。这些字段是试运行那条路要的。
+                    payload = {
+                        "allowed": False,
+                        "reason": "MISSING_PUBLISH_PERMISSION",
+                        "company_user_id": "B-42",
+                        "company_username": "zhang",
+                        "dify_account_id": "acct-1",
+                        "company_tenant_id": "T-1",
+                        "company_user_type": "2",
+                    }
                 data = json.dumps(payload).encode()
                 self.send_response(src.status)
                 self.send_header("Content-Type", "application/json")
@@ -1017,6 +1029,16 @@ class _PermissionSource:
 
     def close(self) -> None:
         self._server.shutdown()
+
+    def shutdown(self) -> None:
+        """模拟"代理挂了"：**连监听套接字一起关掉**。
+
+        只停 ``serve_forever`` 是不够的 —— 套接字还开着、内核照常完成 TCP 握手，
+        于是调用方**不是**立刻收到「连接被拒」，而是一直等到自己的读超时。那测出来的是
+        "超时"而不是"不可达"，与被测的那条分支不是同一件事。
+        """
+        self._server.shutdown()
+        self._server.server_close()
 
 
 def test_a_company_publish_permission_lets_the_publish_through_and_carries_the_initiator() -> None:
@@ -1124,6 +1146,150 @@ def test_the_trial_route_forwards_the_order_and_uses_its_own_key(
     assert calls[0]["headers"]["authorization"] == f"Bearer {TRIAL_KEY}"
     # 发布那把钥匙**不**出现在试运行那一跳上（两条不同的授权）
     assert PUBLISH_KEY not in calls[0]["headers"]["authorization"]
+
+
+def _identity_bridge(upstream: _Upstream, source: _PermissionSource) -> Any:
+    """配了 ``login_proxy_url`` 的桥 —— 试运行那条路会先去问代理"这个会话是谁"。"""
+    server = make_server(
+        BridgeSettings(
+            listen_host="127.0.0.1",
+            listen_port=0,
+            dify_base_url=upstream.base,
+            gateway_base_url=upstream.base,
+            publish_key=PUBLISH_KEY,
+            trial_key=TRIAL_KEY,
+            console_origin=ORIGIN,
+            workspace_id=TENANT_ID,
+            login_proxy_url=source.base,
+        )
+    )
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def test_the_trial_carries_the_company_identity_from_the_proxy(
+    upstream: _Upstream,
+) -> None:
+    """配了代理 ⇒ 试运行**带上发起人的公司身份**，网关据此算订单可见范围（#782）。
+
+    这条路径原本是断的：代理早就把 ``company_tenant_id`` / ``company_user_type`` 回了，
+    但桥只转发了三个头，于是网关每次都退回固定调试租户 —— "按人范围"的代码在库里
+    躺了很久却从未被驱动过。
+    """
+    source = _PermissionSource(allowed=False)  # 没有发布权
+    server = _identity_bridge(upstream, source)
+    try:
+        status, body = _trial_post(server.server_address[:2], body={"order_no": "O-5"})
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert status == 202, body
+    calls = _paths(upstream, TRIAL_GATEWAY_PATH)
+    assert len(calls) == 1
+    headers = calls[0]["headers"]
+    assert headers["x-aiops-initiator"] == "B-42"
+    assert headers["x-aiops-initiator-tenant"] == "T-1"
+    assert headers["x-aiops-initiator-type"] == "2"
+    # 试运行**只取身份**：没有发布权照样能试运行（它不产生版本、不改路由）。
+    assert headers["authorization"] == f"Bearer {TRIAL_KEY}"
+
+
+def test_the_publish_route_still_refuses_without_the_publish_permission(
+    upstream: _Upstream,
+) -> None:
+    """身份与放行分开之后，**发布权的拒绝行为必须逐字不变**。
+
+    代理在 `allowed=false` 时仍回身份字段，所以"有身份"不等于"能发布" —— 这一条
+    钉住那个区分：同一个假代理，试运行放行、发布仍拒。
+    """
+    source = _PermissionSource(allowed=False)
+    server = _identity_bridge(upstream, source)
+    try:
+        status, body = _post(server.server_address[:2], headers=_browser_headers())
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert status == 403, body
+    assert body["published"] is False
+    # 没有权限就不该走到网关：被拒的尝试一次都没发出去。
+    assert _paths(upstream, "/v1/dify/publish") == []
+
+
+def test_the_trial_falls_back_to_the_debug_tenant_when_the_proxy_is_down(
+    upstream: _Upstream,
+) -> None:
+    """代理不可达 ⇒ **不给身份**，网关退回固定调试租户（用户 2026-10-16 选定）。
+
+    与发布那条路的 fail-closed **方向不同**，理由写在 ``submit_trial``：试运行退回的
+    是"已经上线过的既有行为"，不是新的越权。这里钉住的是"取不到身份时照常提交"，
+    并断言**一个身份头都没有带**。
+    """
+    source = _PermissionSource(allowed=True)
+    dead = source.base  # 拿到地址后立刻关掉，模拟代理挂掉
+    server = _identity_bridge(upstream, source)
+    source.shutdown()
+    try:
+        status, body = _trial_post(server.server_address[:2], body={"order_no": "O-6"})
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert status == 202, f"{body} (probe url was {dead})"
+    calls = _paths(upstream, TRIAL_GATEWAY_PATH)
+    assert len(calls) == 1
+    for name in ("x-aiops-initiator", "x-aiops-initiator-tenant", "x-aiops-initiator-type"):
+        assert name not in calls[0]["headers"], name
+
+
+def test_the_trial_falls_back_when_the_proxy_reports_no_mapping(
+    upstream: _Upstream,
+) -> None:
+    """代理回"没有映射"（只有 reason、无身份字段）⇒ 同样退回调试租户。
+
+    租户为空是**必须**当作身份不全的：网关的 `TrialInitiator.from_headers` 在租户
+    为空时静默退回调试租户，那是一次范围放宽，不能由上游一个空字段触发。
+    """
+    source = _PermissionSource(allowed=False, body={"allowed": False, "reason": "NO_MAPPING"})
+    server = _identity_bridge(upstream, source)
+    try:
+        status, body = _trial_post(server.server_address[:2], body={"order_no": "O-7"})
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert status == 202, body
+    calls = _paths(upstream, TRIAL_GATEWAY_PATH)
+    assert "x-aiops-initiator-tenant" not in calls[0]["headers"]
+
+
+def test_the_trial_falls_back_when_the_tenant_field_is_empty(
+    upstream: _Upstream,
+) -> None:
+    """身份字段**在**但租户是空串 ⇒ 仍算身份不全，不把空租户转给网关。
+
+    这一条守的是形状而不是值：网关只判"字段有没有"，一个空串会通过它那一关，
+    于是范围悄悄变成"整租户"。
+    """
+    source = _PermissionSource(
+        allowed=True,
+        body={
+            "allowed": True,
+            "reason": "",
+            "company_user_id": "B-42",
+            "company_username": "zhang",
+            "dify_account_id": "acct-1",
+            "company_tenant_id": "",
+            "company_user_type": "2",
+        },
+    )
+    server = _identity_bridge(upstream, source)
+    try:
+        status, _ = _trial_post(server.server_address[:2], body={"order_no": "O-8"})
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert status == 202
+    calls = _paths(upstream, TRIAL_GATEWAY_PATH)
+    assert "x-aiops-initiator-tenant" not in calls[0]["headers"]
+    assert "x-aiops-initiator" not in calls[0]["headers"]
 
 
 def test_the_trial_route_rejects_a_scope_field_rather_than_ignoring_it(trial_bridge: Any) -> None:
