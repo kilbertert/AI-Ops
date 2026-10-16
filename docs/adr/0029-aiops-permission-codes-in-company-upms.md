@@ -85,8 +85,36 @@ public R save(@Valid @RequestBody SysMenu sysMenu) {
 
 **这不是缺陷，是公司对其全部 3500+ 权限码的一贯做法**，我们不去改它。但它有一个必须
 被知道的外溢后果：**cutover 打开 `AIOPS_CONSOLE_BRIDGE_LOGIN_PROXY_URL` 的那一刻，
-这两个平台账号就能发布到 AI-Ops。** 接受它，或者在切开关前显式把这两个账号的角色处理掉 ——
-这是一个需要人来拍板的决定，不是实现细节。
+这两个平台账号就能发布到 AI-Ops。**
+
+### 这个后果被**显式接受**（用户 2026-10-16 拍板），理由要说清楚
+
+按 `findUserInfo` 的 SQL 语义实测：`system` 与 `huqq` 通过 role 1 带出
+`['aiops:agent:edit', 'aiops:agent:publish']`。**确实持有。**
+
+曾考虑"把 role 1 从这两个账号摘掉"，核对源码后**否掉**：登录路径里有一道
+
+```java
+if (ArrayUtil.isEmpty(userInfo.getRoles()) || ArrayUtil.isEmpty(userInfo.getPermissions())) {
+    return R.failed("账号没有权限，请找管理员先配置权限！");
+}
+```
+
+而这两个账号的权限**全部来自 role 1**（`sys_user_role` 里各只有那一行）⇒ 摘掉之后它们
+`permissions` 为空、**再也登不进 UPMS 后台**，而它们是应急通道。
+**「让系统管理员不持有发布权」与「保留系统管理员能登录」在这个模型里互斥** ——
+要同时成立只能改公司代码，而那是外部治理资产。
+
+因此选择接受，并记下**为什么这个接受是低风险的**：
+
+1. **发布路径上的发起人不是 UPMS 登录**，而是「Dify 会话 → 代理映射表 → 公司用户」。
+   在这两个平台账号被**显式映射**到 Dify 账号之前，持有权限码没有任何路径能用到它。
+2. 它们本就是公司的最高权限账号（`type=-1`、`tenant_id=-1`、硬编码全量菜单）。
+3. 代价是**审计可见**的：若它们真的发布了，`publish_audit_ledger` 里记的就是它们，
+   不是无声的。
+
+**收紧的动作仍然只有一处**：切开关前把这两个账号从 role 1 摘掉（代价见上），
+或改用别的判据。这是一个可逆的、单点的选择。
 
 ### 2. 写操作只能打 `api.mall`，**不能**打 `admin.qumall`
 
@@ -128,7 +156,11 @@ public R save(@Valid @RequestBody SysMenu sysMenu) {
 - **两个码对任何人都还没生效**：映射是"角色挂菜单"，而两个专用角色**没有任何用户**。
   要授予谁，就在公司后台把该角色给那个人 —— 这是一次**显式**的授权动作。
 - **两条软删除的探针行**（`2110974074435543041`、`2110974170397024257`，名字 `AI-Ops probe`，
-  `del_flag=1`）留在库里。它们不出现在任何查询里（都带 `del_flag='0'`）。物理删除由人决定。
+  `del_flag=1`）留在库里。**决定保留，不物删**（用户 2026-10-16 确认）：它们
+  `sys_role_menu` 挂载为 0、不被任何表引用、也不出现在任何查询里（都带 `del_flag='0'`）——
+  是孤儿行而不是坏数据。而物删要绕过两件事：`removeMenuById` 的逻辑删除是公司**刻意**的语义；
+  且删除路径会跑 `menuSyncService.sync()`（可能跨库）。为一个纯视觉的收益去发一条
+  未走应用逻辑的生产写语句，风险不对等。
 - 端到端验证（不是"接口回了 ok"）：用真实公司账号登录后读
   `/upms/user/info?client-type=admin`，`permissions` 里出现这两个码 —— 正是
   `dify_login_company.read_permissions` 读的那一项。
