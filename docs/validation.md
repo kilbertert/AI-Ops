@@ -15365,3 +15365,77 @@ ops-methodology-700  v5   prompt_sha=3eeb31dc4ce2  allowed_tools 键不存在 �
 - **这是嫁接**：按钮靠 DOM 选择器挂靠，Dify 改版可能失效。做成**静默降级** ——
   注入不上就只是没那颗按钮，Dify 本身不受影响。
 - **公司账号登 Dify 仍未做**（用户已明确挂起）：那需要 Dify 企业版 SSO。
+
+## 2026-10-16 · 管家端「客户案例」动作的移除（#427 收窄）
+
+> **业务验收：证据充分（判定），改动本身未部署。** 基线 `111158e`，分支
+> `fix/operator-drop-case-exploration-action`。本记录不含任何密钥、令牌或会话明文。
+
+### 一、判据：生产上它从来没出过卡片，而且从没启动过
+
+41 生产 `agent_run_metrics`（`route_type='promo'`）10-15 全天 **8 次**，逐条：
+
+| 时刻（UTC） | 入口（同秒 journal） | `retrieval_status` | `duration_ms` | 智能体版本 |
+|---|---|---|---|---|
+| 02:03:03 | operator | `unavailable` | 13 | 无 |
+| 02:04:18 | consumer | `unavailable` | 10 | 无 |
+| 09:37:19 | operator | `unavailable` | 9 | 无 |
+| 11:17:58 / 11:21:17 / 11:21:23 / 11:21:25 / 11:21:26 | operator | `unavailable` | 9–13 | 无 |
+
+**反向对照（关键）**：10-14 17:16:42 那次**真跑成功**的是
+`agt_ed443cae…#v2` / `found` / **41951 ms**，同一次请求的入口在 journal 里是
+`reason=consumer_entry`。
+
+⇒ 两张表一起看：**真跑一次要几十秒，而那 8 次都是 ~10ms。** 10ms 不是"跑了但没结果"，
+是**根本没启动**（`_promo_route` 解析不出宣传智能体，直接落 `promo_empty_result`）。
+另：10-15 19:21（=11:21 UTC）那个窗口里 journal **只有** `platform=operator`，
+`reason=consumer_entry` **0 条** —— 那 5 次属于管家端，不是客户端。
+
+### 二、根因（读代码，不是猜）
+
+`target_agent_version` 只允许落在**租户行**：`ShortcutManager.create` / `update` 对
+`scope == PLATFORM_SCOPE` 显式拒绝（`platform shortcuts cannot bind a tenant agent version`），
+`_validated_fields` 另要求它属于 `case_exploration` / `solution_discovery` 两个宣传意图。
+
+而 41 上 `operator` 侧**只有平台行**：
+```
+('__platform__', 'operator', 'case_exploration', 'published', None)   ← target 恒为 NULL
+('1942105476598861824', 'consumer', 'case_exploration', 'published',
+ 'agt_ed443cae10ac4ba78c81b9d1b43fd91d#v2')                           ← 只有 consumer 有绑定
+```
+⇒ `_promo_route(..., platform="operator")` 恒得 `(None, "case_exploration")`
+（在 41 上用**线上代码 + 线上库**直接跑过：consumer 得 `…v2`，operator 得 `None`）
+⇒ `select_promo_agent` 拿不到 → `promo_empty_result(unavailable)` → 9ms 返回。
+
+**机制本身没有拦路**（`_validated_fields` 不区分入口、`select_promo_agent` 只看租户），
+所以这不是"缺陷"而是**该入口不该有这张卡** —— 运维要的是名下站点的运行情况与单张订单
+的根因，客户案例是给终端车主的销售叙事。（对比：10-15 17:37:19 UTC 那次问句是
+「有哪些充电运营的客户案例」，确由 operator 入口发出，同样是空卡。）
+
+### 三、改动与判据
+
+- **代码**：`_BUNDLED_SHORTCUTS["operator"]` 删 `case_exploration` 整块（含理由注释）。
+- **测试**：`test_operator_entry_holds_the_two_actions` 断言集合 == `{smart_diagnosis,
+  operations_review}` 且 `"case_exploration" not in specs`；`test_operator_entry_lists_
+  both_actions_after_the_publish` 断列表与中英文案；新增
+  `test_the_operator_button_cannot_reach_the_promo_surface` 直接断 `_promo_route`
+  返回 `(None, None)`；原 #427 的空卡用例改为从**自由文本**驱动（用户选择保留那条路）。
+- **通过**：`pytest` 全量 **2620 passed / 9 skipped / 0 failed**；`ruff check` /
+  `ruff format --check` 干净。
+- **突变复验**：把该块加回 operator 种子 ⇒ **6 条转红**（两条入口动作集断言、列表断言、
+  `_promo_route` 断言、`test_store_seed_bundled_is_idempotent`、
+  `test_bundled_seed_copy_covers_every_supported_language`）；还原后全绿。
+
+### 四、据实（边界）
+
+- **未部署**：41 上那行 `sct_0553808505ea458190723256f284adaa` 仍是 `published`。
+  撤回要用 **`disable`**，不是 `rollback` —— 该动作只有 `version_no=1`，
+  "回滚到 v1"等于把同一份内容**再发布一次**，入口照样返回它（runbook §3.1-ter 已记）。
+- **前端产物仍硬编码按钮**：本刀只改后端期望态与文档；`frontend-operator-handoff.md`
+  §6 末条记的「前端写死按钮，不消费后端已本地化文案」这条偏差**仍然成立**，
+  所以**用户在改造前看不到这次移除**。
+- **自由文本那条路按用户选择保留**：管家端问「客户案例」仍会拿到
+  「客户案例服务暂时不可用」。这是一次**显式选择**，不是遗漏。
+- **一个仍未归因的观测**：10-14 那次成功的是 consumer 入口，而 10-15 02:04:18 那次
+  **也是 consumer 入口**却仍是 `unavailable` + 10ms。按当前线上代码重跑，consumer 入口
+  能解析出 `…v2`，所以这一条**没有可复现的成因**。不编原因，如实记为未归因。
