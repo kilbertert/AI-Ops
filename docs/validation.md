@@ -1,3 +1,69 @@
+## 2026-10-16 · 发布权切换（#783 阶段 4）：一条键，发布权 + 试运行范围同时切
+
+> PRD #772 D。**业务验收：完成**。决定见 **ADR-0028**。本记录不含任何口令、令牌或 Cookie 明文。
+
+**基线**：`148ccb9`。**分支**：`feat/bridge-identity-switch`。
+
+**动因**：桥在 36 上跑的还是**旧代码**（`submit_trial` 没有 `login_proxy_url`、
+`_identity_and_publish_verdict` 不存在）—— PR #800 的代码**从未部署到 36**。
+所以切开关之前必须先部署代码，否则开关打开也什么都不变。
+
+**已完成**：
+
+1. **36 桥代码部署到 PR #800 版本**（`dify_console_publish.py`，sha256 与仓库一致），
+   依赖闭包只有 `bounded_http`（36 上已有），无需新增文件。备份在
+   `dify_console_publish.py.bak-<ts>`。
+2. **`bridge.env` 加 `AIOPS_CONSOLE_BRIDGE_LOGIN_PROXY_URL=http://127.0.0.1:10119`**
+   （备份 `bridge.env.bak-loginproxy-<ts>`），重启后**逐字核对 `/proc/<pid>/environ`**
+   —— 变量确实进了进程（不是只写了文件，这是本仓踩过的坑）。
+
+**验收（每一条都对着"开关真的生效了"）**：
+
+| 判据 | 结果 |
+|---|---|
+| **发布审计按人记账** | 切换**后**那一行：`company_user_id=1454348737375174658`、`company_username=system`；而切换**前**所有历史行这两个字段**都是空的** ⇒ 桥现在真的去代理取身份了 |
+| **拒绝路径（判据 4）** | 假代理回 `allowed=false` ⇒ `publish_current_app` 返回 **403**「公司账号没有发布到 AI-Ops 的权限，请联系公司管理员」，且**网关一次都没被调用**（被拒的尝试不发出） |
+| **身份头完整** | `_identity_and_publish_verdict` 返回的 headers 含 `X-AIOps-Initiator` / `-Name` / `-Dify-Account` / **`-Tenant`** / **`-Type`** —— 后两个正是 PR #800 之前被丢掉、导致「按人范围从未被驱动」的那两个 |
+| **代理可达** | `POST /__aiops/publish/check` 回 200；无映射会话回 `{"allowed": false, "reason": "SESSION_INVALID"}`，桥据此 fail-closed |
+| **发布权判据** | 源码级确认：`allowed = publish_permission in permissions`；`allowed=false` 时 `reason=MISSING_PUBLISH_PERMISSION` |
+
+**正例的诚实说明**：验收用的公司账号是 `system`，它**恰好持有** `aiops:agent:publish`
+（通过 role 1 —— 见 ADR-0029 里那处"显式接受的残余"），所以它的发布返回 **200
+`unchanged`**（版本 12 内容未变，no-op 是设计行为）。**这不是判据**：它无法区分
+"开关生效"与"仍在按 owner/admin 放行"。真正区分两者的是**审计账本里出现了发起人**。
+
+**一处当时还没做的业务动作 —— 现已完成**：两个专用角色（`aiops_edit` / `aiops_publish`）
+原本**成员数都是 0**（`sys_user_role` 实测），所以那时只能验证拒绝、不能验证放行。
+2026-10-16 已给运营商账号 `13333102001` 授予这两个角色（见下节）。
+
+### 授予 `13333102001`（用户授权自主完成）
+
+**结果**：该账号现在持有 **4 个角色** —— 原有 `Agent`(`331222`)、`CPOs`(`1`) **一个没丢**，
+加上 `aiops_edit`(`2110974759717707777`)、`aiops_publish`(`2110974760334270465`)。
+库层复现 `findUserInfo` 的查询：`client-type=admin` 下解析出 3 个 admin 角色，
+权限码集合（共 234 个）含 `aiops:agent:edit` + `aiops:agent:publish`。
+
+**两个差点造成损失的陷阱**（都在写入前拦下，都来自"信了接口返回"）：
+
+1. `PUT /upms/user` 的 `roleIds` 是**整体替换**（`removeOldRoles` = `delete from sys_user_role
+   where user_id=#{id}` @InterceptorIgnore(tenantLine)，然后逐条插入）⇒ 必须带上现有全部角色，
+   否则**清空这个人的角色**。
+2. **该接口回的"现状"不可信**：`roles` / `roleIds` / `roleNames` 都可能是 `null`，
+   真正的数组字段叫 `roleList`；而 `roleList` 里每个对象的 **`id` 是用户自己的 id、不是角色 id**，
+   且**会漏角色**（此人库里 2 个角色，接口只回 1 个）。
+   照它拼 `roleIds` 会：删掉现有角色 + 写入一行指向不存在角色的**垃圾数据**
+   （第一次写入确实产生了 `role_id=1980205180737404929` 这行，已用库里的真 id 重写清除）。
+   ⇒ **判据：改角色前后都以 `sys_user_role` 表为准，不以接口返回为准。**
+
+**`sys_user_role.tenant_id` 留 `NULL`（决定：不写）**：`updateUser` 插行时只设 `userId` 与
+`roleId`，**从不设 `tenant_id`** ⇒ 该路径写出的行必然是 NULL（全表 45/2471 是 NULL，
+就是这个路径的指纹）。且所有角色查询只 join `user_id` + `role_id`，
+**没有一处按 `sys_user_role.tenant_id` 过滤** ⇒ NULL 无害。回填反而会让这些行与
+"应用自己写出来的形状"不一致。**这是对先前一次建议的更正**（先只看到值变了，没先读应用怎么写）。
+
+**回滚**：清空 `AIOPS_CONSOLE_BRIDGE_LOGIN_PROXY_URL` + 重启桥 ⇒ 回到 owner/admin +
+固定调试租户。代码与登录代理都留着。
+
 ## 2026-10-16 · 登录代理上线（#783 阶段 2）：公司账号登录 Dify 已可用
 
 > PRD #772 身份闭环的部署层。**业务验收：完成**（真实浏览器端到端）。本记录不含任何
