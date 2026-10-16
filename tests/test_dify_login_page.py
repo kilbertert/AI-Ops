@@ -124,3 +124,73 @@ def test_the_login_proxy_conf_forwards_the_four_routes() -> None:
     for route in ("/__aiops/login", "/__aiops/login/captcha", "/__aiops/login/logout"):
         assert f"location = {route}" in conf, route
     assert "127.0.0.1:10119" in conf
+
+
+# --------------------------------------------------------------------------- #
+# 收口：Dify 原生账号入口（#783 阶段 3）                                        #
+# --------------------------------------------------------------------------- #
+
+#: 必须在两个入口都关掉的原生账号入口。判据是"运营不可能拿 Dify 邮箱密码登录"。
+CLOSED_NATIVE_ENTRIES = (
+    "/signup",
+    "/install",
+    "/forgot-password",
+    "/reset-password",
+    "/activate",
+    "/console/api/login",
+    "/console/api/forgot-password",
+    "/console/api/forgot-password/validity",
+    "/console/api/forgot-password/resets",
+    "/console/api/reset-password",
+    "/console/api/email-code-login",
+    "/console/api/email-code-login/validity",
+    "/console/api/email-register",
+    "/console/api/email-register/send-email",
+    "/console/api/email-register/validity",
+    "/console/api/activate",
+    "/console/api/activate/check",
+)
+
+
+def test_every_native_account_entry_is_closed() -> None:
+    """逐条断言关闭规则**存在**（#783 阶段 3）。
+
+    为什么要一条条钉住而不是"看起来封了"：这份清单漏掉任何一条，那条入口就是
+    **绕过公司身份闭环的活口** —— 而它不会让任何测试变红，只会让运营继续用邮箱密码
+    直登。所以清单在这里，加一条就补一条。
+    """
+    conf = CONSOLE_CONF.read_text(encoding="utf-8")
+    missing = [p for p in CLOSED_NATIVE_ENTRIES if f"location = {p}" not in conf]
+    assert not missing, f"这些原生入口没有关闭规则：{missing}"
+
+
+def test_logout_and_refresh_are_deliberately_left_open() -> None:
+    """`logout` 与 `refresh-token` **故意不封**，写下来免得被"顺手统一封掉"。
+
+    `logout` 是正常流程；`refresh-token` 封了之后"会话过期"会变成硬 404，
+    而不是跳登录页 —— 留着它，refresh 失败会 303 到 `/signin`，**正好落到我们的登录页**。
+    """
+    conf = CONSOLE_CONF.read_text(encoding="utf-8")
+    for keep in ("/console/api/logout", "/console/api/refresh-token"):
+        assert f"location = {keep}" not in conf, f"{keep} 被误封了"
+
+
+def test_the_emergency_owner_entry_binds_loopback_only() -> None:
+    """应急 owner 的原生入口只绑回环。
+
+    绑 `0.0.0.0` 就等于给公网留一个绕过全部收口的入口 —— 那与"应急"是两件事。
+    """
+    conf = CONSOLE_CONF.read_text(encoding="utf-8")
+    assert "listen 127.0.0.1:10009;" in conf
+    assert "listen 10009;" not in conf and "listen 0.0.0.0:10009;" not in conf
+    # 它是**原样**反代到 Dify 自己（所以原生登录在那个入口仍然可用）
+    assert "listen 127.0.0.1:10009;" in conf and conf.count("proxy_pass http://127.0.0.1:10018;") >= 2
+
+
+def test_the_closure_lives_on_the_shared_layer_not_the_tls_layer() -> None:
+    """封禁规则必须在 10008 那一层，**不能**只写在 TLS 层。
+
+    10008 被 `:443` 与明文 `:10008` 两个入口共用；只封 TLS 层等于给明文入口留绕过口。
+    """
+    tls = (ROOT / "ops" / "dify-console-bridge" / "dify-console-TLS.conf").read_text(encoding="utf-8")
+    assert "location = /console/api/login" not in tls, "收口写到了 TLS 层 —— 明文入口会绕过它"
