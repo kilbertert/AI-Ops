@@ -67,6 +67,14 @@ class _FakeCompany(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802
         type(self).calls.append("GET " + self.path.split("?")[0])
         if self.path.startswith("/code"):
+            # ⚠️ 生产网关**按 Accept 过滤**这个端点：不是 */* 就回 404（2026-10-16 实测）。
+            # 替身必须复现这个行为，否则"带 Accept 也能过"会一直绿着，直到真上游上炸。
+            accept = (self.headers.get("Accept") or "*/*").strip()
+            if accept not in ("*/*", ""):
+                self.send_response(404)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
             body = b"\xff\xd8\xff\xe0FAKEJPEG"
             self.send_response(200)
             self.send_header("Content-Type", "image/jpeg")
@@ -99,11 +107,26 @@ class _FakeCompany(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         type(self).calls.append("POST " + self.path.split("?")[0])
         length = int(self.headers.get("Content-Length") or 0)
-        body_raw = self.rfile.read(length).decode() if length else ""
-        from urllib.parse import parse_qs
+        if length:
+            self.rfile.read(length)  # 消费掉 body（浏览器发的是空 body）
+        from urllib.parse import parse_qs, urlsplit
 
-        params = {k: v[0] for k, v in parse_qs(body_raw).items()}
+        # ⚠️ 公司网关的两个过滤器都只读 **query string**（`uri.getRawQuery()`）：
+        # 验证码校验读 `code`/`randomStr`，口令解密读 `password`。所以参数放 body 是
+        # 静默失败 —— 替身早期只读 body，于是"参数放错了地方"这件事**永远绿着**，
+        # 直到部署到真上游才暴露。**替身必须按 query 解析**，与真公司一致。
+        params = {k: v[0] for k, v in parse_qs(urlsplit(self.path).query).items()}
         type(self).seen_password = params.get("password", "")
+        # 真网关的等价判据：没有 code ⇒ 验证码不能为空（登录根本到不了 UPMS）。
+        if self.path.startswith("/upms/token/login") and not params.get("code"):
+            payload = {"code": 1, "msg": "验证码不能为空", "data": None, "ok": False}
+            data = json.dumps(payload).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         if self.path.startswith("/upms/token/login"):
             if type(self).fail_login:
                 payload = {"code": -1000, "msg": "用户名或密码错误，请重新输入"}
@@ -158,24 +181,36 @@ class _FakeDify(BaseHTTPRequestHandler):
         if self.path.endswith("/members/invite-email"):
             email = account_email_for(COMPANY_USER_ID)
             if type(self).invite_returns_url:
+                # ⚠️ 键名照 Dify 1.17.1 实际回的 ``invitation_results``（2026-10-16 实测）——
+                # 替身早期回的是 ``results``，于是解析器只认 ``results`` 也一直绿着，
+                # 而线上拿不到 token ⇒ **激活被静默跳过** ⇒ 账号停在 pending 却能登录。
                 self._reply(
                     {
                         "result": "success",
-                        "invitation_results": [],
-                        "results": [
+                        "invitation_results": [
                             {
                                 "status": "success",
                                 "email": email,
                                 "url": f"https://console.invalid/activate?email={email}&token=INV-TOKEN",
                             }
                         ],
+                        "tenant_id": "T-1",
                     },
                     status=201,
                 )
             else:
-                self._reply({"results": [{"status": "already_member", "email": email}]})
+                self._reply({"invitation_results": [{"status": "already_member", "email": email}]})
             return
         if self.path.endswith("/activate"):
+            # ⚠️ 复现 Dify 的真规则（2026-10-16 实测踩到）：requests 一旦**带了控制台会话**，
+            # 激活者就被当成 `current_account_with_tenant()` 那个账号，与邀请里编码的账号不符
+            # ⇒ `InvitationAccountMismatchError`。我们的开户是"以 owner 身份激活别人的邀请"，
+            # 于是必须走 **token-only**（不带 Authorization）。
+            # 替身早期无条件回 success，所以"带会话去激活会静默失败"这件事一直绿着 ——
+            # 而线上表现是账号留在 `pending`、登录却照样能用，极难发现。
+            if self.headers.get("Authorization"):
+                self._reply({"code": "invitation_account_mismatch", "message": "mismatch"}, status=400)
+                return
             self._reply({"result": "success"})
             return
         self._reply({}, status=404)
@@ -200,6 +235,11 @@ def _serve(handler_cls: type[BaseHTTPRequestHandler]) -> tuple[ThreadingHTTPServ
     thread.start()
     host, port = server.server_address
     return server, f"http://{host}:{port}"
+
+
+#: `stack` fixture 里那个假公司的 URL。fixture 只 yield 了代理的地址，而有一条用例
+#: 要直接对着**假公司**发请求（验证码的 Accept 行为），所以在这里记一份。
+_FAKE_COMPANY_URL = ""
 
 
 @pytest.fixture
@@ -228,6 +268,8 @@ def stack(tmp_path: Path):
     thread = threading.Thread(target=proxy.serve_forever, daemon=True)
     thread.start()
     host, port = proxy.server_address
+    global _FAKE_COMPANY_URL
+    _FAKE_COMPANY_URL = company_url
     try:
         yield f"http://{host}:{port}", Path(settings.data_dir)
     finally:
@@ -415,6 +457,25 @@ def test_the_captcha_is_relayed_as_an_image(stack) -> None:
     assert response.status == 200
     assert content_type.startswith("image/")
     assert body.startswith(b"\xff\xd8\xff"), "不是一张 JPEG"
+
+
+def test_the_captcha_request_does_not_pin_an_accept_type(stack) -> None:
+    """代理取验证码时**不得**指定 Accept（生产网关按 Accept 过滤，非 `*/*` 一律 404）。
+
+    2026-10-16 部署后实测：第一版发 `Accept: image/jpeg` ⇒ 公司网关回 **404**，
+    表现为"验证码取不到"，完全看不出是内容协商。54 个单测当时全绿 —— 因为替身
+    不看 Accept。**替身现在复现这个行为**，于是这条用例会红在 `fetch_captcha` 上，
+    而不是等到真上游。
+
+    `_FakeCompany` 的地址从它自己的 `_serve` 拿不到（fixture 只 yield 了代理），
+    所以直接复用 fixture 里那个假公司的 URL —— 见 fixture 顶部。
+    """
+    from aiops_diagnostics.dify_login_company import CompanyAuthSettings, fetch_captcha
+
+    settings = CompanyAuthSettings(base_url=_FAKE_COMPANY_URL, client_type="admin")
+    body, content_type = fetch_captcha(settings, "abc123")
+    assert body.startswith(b"\xff\xd8\xff")
+    assert content_type.startswith("image/")
 
 
 # --------------------------------------------------------------------------- #

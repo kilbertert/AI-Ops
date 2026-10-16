@@ -32,7 +32,6 @@ from aiops_diagnostics.bounded_http import (
     ErrorMapping,
     HttpFailure,
     RequestSpec,
-    form_body,
     request_json,
 )
 from aiops_diagnostics.dify_login_proxy import (
@@ -149,12 +148,20 @@ def company_login(
     headers = {"Content-Type": "application/x-www-form-urlencoded", "client-type": settings.client_type}
     if settings.basic_auth:
         headers["Authorization"] = settings.basic_auth
+    # ⚠️ 参数必须走 **query string**，不能放 body（2026-10-16 实测踩到）。
+    #
+    # 公司的路径是：网关 `PasswordDecoderFilter` 从 `uri.getRawQuery()` 取 `password`
+    # 解密后**重写 query** 再转发。参数放 body 的后果是双重的、且都表现为难以归因的错误：
+    #   1. `code` 网关看不见 ⇒ 过滤器回「验证码不能为空」（而运营看到的是"服务暂时不可用"）；
+    #   2. 就算绕过验证码，`password` 也不会被解密 ⇒ UPMS 拿密文比 bcrypt ⇒ 「密码错误」。
+    #
+    # 管理后台前端发的是 query（`admin.qumall` 实测抓包：query keys = code, deviceType,
+    # grant_type, password, randomStr, scope, username，POST body 为空），所以照它。
     payload = request_json(
         RequestSpec(
-            url=join_url(settings.base_url, COMPANY_LOGIN_PATH),
+            url=join_url(settings.base_url, COMPANY_LOGIN_PATH, query=params),
             method="POST",
             headers=headers,
-            body=form_body(params),
             timeout=settings.timeout,
         ),
         mapping=_mapping(),
@@ -272,14 +279,22 @@ def fetch_captcha(settings: CompanyAuthSettings, random_str: str) -> tuple[bytes
 
     `randomStr` 由**调用方生成**并一路带到登录：公司那边用它当 Redis 键存答案，
     响应里不带它。所以生成与携带必须是同一个值。
-    """
 
+    ## ⚠️ 不要指定 ``Accept``（2026-10-16 实测踩到）
+
+    公司网关对 ``GET /code`` **按 Accept 过滤**：只要 ``Accept`` 不是 ``*/*``（或干脆不发），
+    就回 **404** —— 而那个 404 的表现是"验证码取不到"，完全看不出是内容协商。
+    实测：``image/jpeg`` / ``image/*`` / ``image/png`` / ``text/html`` 全部 404，
+    ``*/*`` 与**不发该头**返回 200 ``image/jpeg``。
+
+    所以这里**故意不带 Accept**（第一版带了 `image/jpeg`，部署后才暴露：
+    54 个单测全绿也测不出它 —— 它只在真上游上发生）。
+    """
     from aiops_diagnostics.bounded_http import join_url, open_response, read_body
 
     spec = RequestSpec(
         url=join_url(settings.base_url, COMPANY_CAPTCHA_PATH, query={"randomStr": random_str}),
         method="GET",
-        headers={"Accept": "image/jpeg"},
         timeout=settings.timeout,
     )
     try:

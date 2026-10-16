@@ -138,6 +138,40 @@ def _post(settings: DifyConsoleSettings, session: ConsoleSession, path: str, pay
     )
 
 
+def _activate_without_session(settings: DifyConsoleSettings, payload: dict[str, Any]) -> Any:
+    """用**邀请 token 本身**激活，**不带任何会话**（ADR-0023 的开户第二步）。
+
+    ## 为什么必须不带会话（2026-10-16 实测）
+
+    Dify 的 `ActivateApi.post` 里有一句：
+
+    ```python
+    if extract_access_token(request) is not None:
+        authenticated_account_id = current_account_with_tenant().account.id
+    ```
+
+    而我们的开户是**以 owner 的身份**去激活**别人**的邀请 —— 于是
+    `account_activation.activate(..., authenticated_account_id=<owner>)` 与邀请里编码的账号
+    不符，抛 `InvitationAccountMismatchError`。**而 `_post` 的返回值被丢弃、异常被吞**，
+    所以这一步**静默失败**：映射照建、会话照签、登录照能用，只有 `accounts.status`
+    留在 `pending`。这就是它难被发现的原因。
+
+    token-only 是 Dify 明确保留的路径（docstring 原文："Token-only activation remains
+    available for legacy clients."），也正是这一步需要的语义：激活凭的是邀请 token。
+    """
+    return request_json(
+        RequestSpec(
+            url=settings.base_url.rstrip("/") + ACTIVATE_PATH,
+            method="POST",
+            headers={"Accept": "application/json", "Content-Type": "application/json"},
+            body=json_body(payload),
+            timeout=settings.timeout,
+        ),
+        mapping=_mapping(),
+        envelope=_map_envelope,
+    )
+
+
 def _get(settings: DifyConsoleSettings, session: ConsoleSession, path: str) -> Any:
     return request_json(
         RequestSpec(
@@ -156,13 +190,29 @@ def _invite_token(result: Any, email: str) -> str | None:
 
     Dify 把 token 放在 `url` 的查询串里（`.../activate?email=…&token=…`），这就是
     "不寄信也能激活"的全部机制 —— 它是**接口语义**里的字段，不是从页面里抠的。
+
+    ## ⚠️ 键名是 ``invitation_results``，不是 ``results``（2026-10-16 实测）
+
+    本函数原来只读 ``results``，而 Dify 1.17.1 实际回的顶层键是
+    **``invitation_results``**，且 ``results`` 经常**根本不存在**。后果是一条
+    **完全静默**的失败链：解析不到 token ⇒ ``provision_editor`` 里
+    ``if token is not None`` 为假 ⇒ **激活那一步被整个跳过** ⇒ 映射照建、会话照签、
+    登录照用，只有 ``accounts.status`` 永远留在 ``pending``。
+
+    为什么它这么难发现：**没有任何一处报错**，而且 pending 的账号在这个自签会话模型下
+    **照样能登录**（会话是验签 + 查库，不查 status）。所以既要修解析，也要修"跳过"
+    这个设计 —— 见 :func:`provision_editor` 里对"拿不到 token"的显式处理。
+
+    两个键都接受：Dify 还有其他版本/路径回 ``results``，少读一个就少一条通路。
     """
     if not isinstance(result, dict):
         return None
-    results = result.get("results")
-    if not isinstance(results, list):
-        return None
-    for item in results:
+    items: list[Any] = []
+    for key in ("invitation_results", "results"):
+        value = result.get(key)
+        if isinstance(value, list):
+            items.extend(value)
+    for item in items:
         if not isinstance(item, dict) or str(item.get("email", "")).lower() != email.lower():
             continue
         status = str(item.get("status", ""))
@@ -219,10 +269,8 @@ def provision_editor(
     )
     token = _invite_token(invited, email)
     if token is not None:
-        _post(
+        activated = _activate_without_session(
             settings,
-            owner_session,
-            ACTIVATE_PATH,
             {
                 "email": email,
                 "token": token,
@@ -231,7 +279,50 @@ def provision_editor(
                 "timezone": "Asia/Shanghai",
             },
         )
+        # 这一步以前是 `_post(...)` 且**丢弃返回值**，异常也不看 ⇒ 失败是静默的
+        # （账号留在 pending，而登录照样能用）。现在显式检查：激活不了就明确报错，
+        # 因为"开户没完成"是应当被看见的故障，不是可以忽略的细节。
+        _require_activated(activated, email)
+    else:
+        # 邀请成功（新账号）却拿不到 token ⇒ 激活会被整个跳过，账号停在 pending。
+        # **不能静默**：这正是那个"pending 却能登录"的缺陷的成因（2026-10-16）。
+        # 唯一合法的"没有 token"是 `already_member`（账号早就激活过了）—— 那种情况下
+        # 下面这一次 `find_account_id` 会查回一个真正的成员，本就是幂等路径。
+        if not _is_already_member(invited, email):
+            raise DifyProvisionError("DIFY_INVITE_TOKEN_MISSING", f"邀请成功但取不到激活 token（{email}）")
     return find_account_id(settings, owner_session, email)
+
+
+def _is_already_member(result: Any, email: str) -> bool:
+    """邀请响应里这个邮箱是不是 ``already_member``（⇒ 不需要激活，是幂等路径）。"""
+    if not isinstance(result, dict):
+        return False
+    for key in ("invitation_results", "results"):
+        for item in result.get(key) or []:
+            if (
+                isinstance(item, dict)
+                and str(item.get("email", "")).lower() == email.lower()
+                and str(item.get("status", "")) == "already_member"
+            ):
+                return True
+    return False
+
+
+def _require_activated(result: Any, email: str) -> None:
+    """激活必须真的成功。判据是 Dify 的回执，不是"没抛异常"。
+
+    实测 Dify 1.17.1 的 `/activate` 成功时回的是
+    ``{"data": {"result": "success"}, "code": 0, ...}``（信封）或扁平
+    ``{"result": "success"}``，两种都接受；其余形状一律当失败
+    —— 静默接受一个没激活的账号，正是这条分支以前的老毛病。
+    """
+    candidates: list[Any] = [result]
+    if isinstance(result, dict) and isinstance(result.get("data"), dict):
+        candidates.append(result["data"])
+    for candidate in candidates:
+        if isinstance(candidate, dict) and str(candidate.get("result", "")).lower() == "success":
+            return
+    raise DifyProvisionError("DIFY_ACTIVATE_FAILED", f"激活未完成（{email}）")
 
 
 __all__ = [

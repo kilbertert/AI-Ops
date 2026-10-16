@@ -14,7 +14,15 @@ Group=aiopslogin
 WorkingDirectory=/opt/aiops-login-proxy
 # 全部配置（含 Dify SECRET_KEY、公司 AES key）只从这里读，**不进命令行**。
 EnvironmentFile=/etc/aiops-login-proxy/login-proxy.env
-ExecStart=/opt/aiops-login-proxy/.venv/bin/python -m aiops_diagnostics.dify_login_server
+# 用**系统 python**，与发布桥同一形态（`aiops-dify-console-bridge` 也是这么跑的）。
+# 本机实测 `/usr/bin/python3` = 3.12.3 且**已装 cryptography 41.0.7**（本代理唯一的第三方
+# 依赖，且是延迟 import），所以不需要 venv —— 多一个 venv 就多一处要跟着 36 的系统升级走。
+# ⚠️ 这一行曾写成 `/opt/aiops-login-proxy/.venv/bin/python`，而 36 上**从来没有那个 venv**：
+#    照着旧配置装会起不来。以本行为准。
+ExecStart=/usr/bin/python3 -m aiops_diagnostics.dify_login_server
+# `-m` 要靠 sys.path 找到包；WorkingDirectory 是它，但显式给 PYTHONPATH 更稳
+# （systemd 的 WorkingDirectory 不参与 import 解析的假设，不值得依赖）。
+Environment=PYTHONPATH=/opt/aiops-login-proxy
 Restart=always
 RestartSec=5
 
