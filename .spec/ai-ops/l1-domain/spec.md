@@ -1,0 +1,30 @@
+---
+title: l1-domain
+desc: 纯函数领域规则——无状态、无依赖、无 IO
+hue: 160
+code:
+  - src/aiops_diagnostics/order_visibility.py
+related:
+  - src/aiops_diagnostics/order_status.py
+  - src/aiops_diagnostics/rules.py
+  - src/aiops_diagnostics/health_metrics.py
+  - src/aiops_diagnostics/health_curves.py
+  - src/aiops_diagnostics/health_report_copy.py
+  - src/aiops_diagnostics/parsing.py
+---
+# l1-domain
+
+业务规则本身：状态码的含义、停止原因的分类、可见性规则、健康指标算法。
+
+## raw source
+
+规则的来源必须是**后端源码或 SOP**，不能凭直觉写。这一层不 import 数据源、不读环境变量、
+不发请求，因此可以在没有数据库、没有模型的测试里被完整驱动。
+
+## 不变量
+
+- **租户可见性只有一处定义**（见 [[order-visibility]]），三种渲染共用它。
+- `order_status.role_of` 回答「是什么角色」（判定用），`rules.ORDER_STATUS` 回答「叫什么」
+  （给人读）。同一份角色不再各处拼写。
+- `parsing.parse_request` 只提取订单号与意图：**不接受 SQL、不选表**。它是自然语言的入口，
+  不是查询构造器；让它决定查什么，等于把范围判定交给用户输入。

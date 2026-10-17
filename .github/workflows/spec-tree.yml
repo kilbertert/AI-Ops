@@ -1,0 +1,53 @@
+name: Spec Tree
+
+# The `.spec/` tree is project source, and its drift rule is computed from git
+# history on every read. Two consequences decide this workflow's shape:
+#
+#   * `fetch-depth: 0` is REQUIRED, not an optimisation. Measured on a real
+#     depth-1 clone: lint reported `0 error 0 warning` after an anchored unit had
+#     been modified. A check that passes when it should fail is worse than no
+#     check at all.
+#   * the version is PINNED. The tree format is committed to this repository, so
+#     an unpinned CLI could change the format underneath it.
+#
+# Deliberately on `ubuntu-latest` and not `self-hosted`: this job needs nothing
+# but a checkout and node, and the repository's own `ci.yml` records that a
+# persistent runner executes whatever a pull request contains. A read-only
+# checker gains nothing from that exposure.
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: spec-tree-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: spec-tree lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: "22"
+
+      - name: Install the pinned spec CLI
+        run: npm install --global spexcode@0.7.0
+
+      - name: Lint the spec tree
+        run: spex spec lint
