@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Rebind the Dify adapter's kb search to the registered tenant (#612)
 
 ### Added
+- 新增默认关闭的本人订单充电状态读取入口，复用既有订单授权并裁剪业务响应。
 - Give every clarification reply a stable, non-localized code — same string in
   the response body, the metric row and the log line (#636)
 - Add `aiops admin pull-dify`: fetch a Dify app's export and publish it through our gate (#625)
