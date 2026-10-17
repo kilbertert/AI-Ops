@@ -3,6 +3,11 @@
 **范围**：新增默认关闭的 `GET /v1/orders/{order_no}/charging-status`（设计见
 [ADR-0033](adr/0033-consumer-charging-status.md)）。这是本地验证摘要，不是业务验收。
 
+**交付复核**：提交后全量独立复跑 `2633 passed / 9 skipped / 23 warnings`（313.10s）。
+提交后的 ADR、repo-map、治理检查通过，Spex 0 error / 0 warning。
+风险验证与可复跑 QA 见 [CS-READ](../qa-plan.md#cs-read-本人充电状态直读合成环境)：
+新读取模块分支覆盖率 100%，圈复杂度 8，三种安全故障均由既有回归检出。
+
 **验证**（在本候选树上实跑）：
 
 - 全量 `uv run pytest`：**2633 passed / 9 skipped**（按仓库 CI 命令；
