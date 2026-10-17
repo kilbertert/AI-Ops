@@ -1,0 +1,108 @@
+{
+  "kind": "m2_close_01_isolated_ic",
+  "started_at_utc": "2026-10-17T18:32:46.497833+00:00",
+  "timestamp_utc": "2026-10-17T18:32:46.497833+00:00",
+  "finished_at_utc": "2026-10-17T18:35:07.652748+00:00",
+  "status": "PASS",
+  "synthetic_data": true,
+  "real_model": false,
+  "real_company_services": false,
+  "platform": {
+    "source": "gitee aizuda/snail-ai",
+    "commit": "10c1d3e50b701be62da23a3403d79a41187ab8cd"
+  },
+  "artifacts": {
+    "node_jar": "tools/m2_close/node/target/aiops-execution-node.jar",
+    "node_jar_sha256": "ee2bd2391ffaee4c3258b5e89eacd26d5910bd7f73e64adfc7200def79c5b22e"
+  },
+  "substituted": [
+    "model (scripted stub: NORMAL / SILENT / ADVERSARIAL)",
+    "company CPMS (loopback stub with call counting)",
+    "caller identity (fixed token -> fixed consumer ScopeContext)",
+    "order authorization source (SQLite synthetic_orders, same owner predicate)"
+  ],
+  "checks": {
+    "IC-01": "PASS：真 Snail 服务端与真节点调用真实 M2 读取代码（业务上游为桩）",
+    "IC-02": "PASS：无身份、他人、不存在的订单都不建授权/不调平台/不读业务",
+    "IC-03": "PASS：篡改字段 422；只持 run_id/错凭据 401；旧票据口 404",
+    "IC-04": "PASS：两个用户各自的订单交错领取，run_id/冻结身份/快照/回执各归其主；同一用户的同单多轮得到不同 run_id 而身份指纹相同",
+    "IC-05": "PASS：并发领取只读一次；丢响应重试返回逐字段相同的快照",
+    "IC-07": "PASS：对抗模型逐一点名 shell / http_request / rag_search / read_skill，均被节点拒绝（No ToolCallback found），每次业务读取次数均不变",
+    "IC-08": "PASS：本次 run_id 精确出现在节点日志；授权记录指纹不出现在节点/Snail 日志；四把凭据（含第二用户令牌）不在 Gateway/Snail/节点三跳日志与模型请求里；工具结果字段已观察到且不超出 8 个约定字段；上游 PII 未进入快照与节点日志",
+    "IC-06": "PASS：到期与撤销（含已有成功快照的记录）都拒绝释放；重启不改写 running 由契约测试覆盖；读取后节点被停用时也不再释放",
+    "IC-09": "PASS：授权变化后新委派 404；已有成功快照的记录也不再释放",
+    "IC-10": "PASS：实际节点与构建标识来自节点认证与节点声明，不是模型文本"
+  },
+  "code_identity": {
+    "files": {
+      "src/aiops_diagnostics/gateway_api.py": "f1e21270a9f074997885ae060a0309d80f493e784b8e29c6dcfb4a4265df4a6e",
+      "src/aiops_diagnostics/agent_runs.py": "eb60e292cc8b93aeccbe1b21a5387082fe1ba43ffe4afde68d981950ba73c646",
+      "src/aiops_diagnostics/gateway_config.py": "dade1204471c08d9f0e05f68b5f3436dad1e0ee47695ff3f04aa74f7c655f9d6",
+      "src/aiops_diagnostics/charging_status.py": "b1960d477bfecd52b2c99e76336a3a81e5554a4d249bfae3d91e6c6c6de7185e",
+      "tools/m2_close/harness_guard.py": "5be81932096cc6a9cd2c6de39bd311a4a38535dd701c1c48155df39718453dec",
+      "tools/m2_close/run_ic.py": "1e8096e395b6d76ca57abf5c0d968694201574ff674614fc6baa093c173964cc",
+      "tools/m2_close/synthetic_upstream.py": "b81f3d76e4cc9fdb45c0d1202e891ad3497ed8e2fa226328e8eb04bd55cd1682",
+      "tools/m2_close/gateway_launcher.py": "89c458af58e936066aa851503c2810e3f97dc2b80ea7730bf4504400f1020ef4",
+      "tools/m2_close/verify_real_gateway.py": "dc42a79cba231e8244c62e45b84bbb227a5b940c97bc168162af94f7a5ce44e3",
+      "tools/m2_close/node/pom.xml": "fe35c32bc24f9088989dddd60eaa9f0b006299222eb1f8aa22e2d95fcd306bea",
+      "tools/m2_close/node/src/main/resources/application.yml": "dff667694b7345cdcd1f1dd5c46f42da303370462d8799ed3aac47b5b0b0f97e",
+      "tools/m2_close/node/src/main/java/com/trendpower/aiops/node/GovernedToolRuntime.java": "9b3ef3031a63157c2f601827812b816f68029b4d2f64590a5f3af93b7d3e015a",
+      "tools/m2_close/node/src/main/java/com/trendpower/aiops/node/ControlledChargingStatusTool.java": "b6cbc607e277af621262173a6ca3000457837e5492777336c7549d072bb4f11a",
+      "tools/m2_close/node/src/main/java/com/trendpower/aiops/node/ExecutionNodeApplication.java": "96f6adbfc6adc774a368f240681e13a0038854b9eca6cc1fcb609320c8e33d45"
+    },
+    "node_jar_sha256": "ee2bd2391ffaee4c3258b5e89eacd26d5910bd7f73e64adfc7200def79c5b22e",
+    "platform_commit": "10c1d3e50b701be62da23a3403d79a41187ab8cd",
+    "platform_jar_sha256": "8dd6b63504eae7cc479e1c3a7d674aa1529069d44e7967e4ed2158ef645d5cb0"
+  },
+  "sample_receipt": {
+    "run_id": "run_sd6TRU2f685PdL8Goiu2w5lnUpscoEXMuXzauqw9YOQ",
+    "state": "succeeded",
+    "reason": null,
+    "operation": "charging_status",
+    "scope_fingerprint": "de5c72ad125e1b686fe16e1b0faa3d93c6dcf476f3ff82dea266531a516f7737",
+    "expected_environment": "env-a",
+    "expected_app_id": "aiops-m2close",
+    "expected_agent_id": "1",
+    "expected_node_id": "node-a1",
+    "actual_node_id": "node-a1",
+    "node_build": "m2close-node-1",
+    "gateway_version": "0.1.0",
+    "agent_version": null,
+    "agent_version_gap": "not_wired",
+    "result_sha256": "65bc021cad7c6933eac2e72e11b010f6741dda0298152d100a9d90d9b36a4859",
+    "created_at": "2026-10-17T18:34:42.452869+00:00",
+    "expires_at": "2026-10-17T18:37:42.452869+00:00",
+    "claimed_at": "2026-10-17T18:34:46.791598+00:00",
+    "completed_at": "2026-10-17T18:34:46.813606+00:00"
+  },
+  "counts": {
+    "charging_info": 5,
+    "unknown_order": 0,
+    "model_calls": 15,
+    "adversarial_calls": 4,
+    "max_in_flight": 1,
+    "stub_rev": 6
+  },
+  "code_identity_end": {
+    "files": {
+      "src/aiops_diagnostics/gateway_api.py": "f1e21270a9f074997885ae060a0309d80f493e784b8e29c6dcfb4a4265df4a6e",
+      "src/aiops_diagnostics/agent_runs.py": "eb60e292cc8b93aeccbe1b21a5387082fe1ba43ffe4afde68d981950ba73c646",
+      "src/aiops_diagnostics/gateway_config.py": "dade1204471c08d9f0e05f68b5f3436dad1e0ee47695ff3f04aa74f7c655f9d6",
+      "src/aiops_diagnostics/charging_status.py": "b1960d477bfecd52b2c99e76336a3a81e5554a4d249bfae3d91e6c6c6de7185e",
+      "tools/m2_close/harness_guard.py": "5be81932096cc6a9cd2c6de39bd311a4a38535dd701c1c48155df39718453dec",
+      "tools/m2_close/run_ic.py": "1e8096e395b6d76ca57abf5c0d968694201574ff674614fc6baa093c173964cc",
+      "tools/m2_close/synthetic_upstream.py": "b81f3d76e4cc9fdb45c0d1202e891ad3497ed8e2fa226328e8eb04bd55cd1682",
+      "tools/m2_close/gateway_launcher.py": "89c458af58e936066aa851503c2810e3f97dc2b80ea7730bf4504400f1020ef4",
+      "tools/m2_close/verify_real_gateway.py": "dc42a79cba231e8244c62e45b84bbb227a5b940c97bc168162af94f7a5ce44e3",
+      "tools/m2_close/node/pom.xml": "fe35c32bc24f9088989dddd60eaa9f0b006299222eb1f8aa22e2d95fcd306bea",
+      "tools/m2_close/node/src/main/resources/application.yml": "dff667694b7345cdcd1f1dd5c46f42da303370462d8799ed3aac47b5b0b0f97e",
+      "tools/m2_close/node/src/main/java/com/trendpower/aiops/node/GovernedToolRuntime.java": "9b3ef3031a63157c2f601827812b816f68029b4d2f64590a5f3af93b7d3e015a",
+      "tools/m2_close/node/src/main/java/com/trendpower/aiops/node/ControlledChargingStatusTool.java": "b6cbc607e277af621262173a6ca3000457837e5492777336c7549d072bb4f11a",
+      "tools/m2_close/node/src/main/java/com/trendpower/aiops/node/ExecutionNodeApplication.java": "96f6adbfc6adc774a368f240681e13a0038854b9eca6cc1fcb609320c8e33d45"
+    },
+    "node_jar_sha256": "ee2bd2391ffaee4c3258b5e89eacd26d5910bd7f73e64adfc7200def79c5b22e",
+    "platform_commit": "10c1d3e50b701be62da23a3403d79a41187ab8cd",
+    "platform_jar_sha256": "8dd6b63504eae7cc479e1c3a7d674aa1529069d44e7967e4ed2158ef645d5cb0"
+  },
+  "status_reasons": []
+}

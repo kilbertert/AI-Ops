@@ -2871,3 +2871,52 @@ Feature: 放行决定只用授权之后重读到的状态
       Given 绑定表把 agentId 或 appId 改成另一个
       When 领取旧记录
       Then 拒绝；旧记录不被解释成新绑定
+
+Feature: 执行节点上的工具集合与运行证据（合成实验）
+
+  上一组证明 Gateway 侧的授权与生命周期；这一组证明「谁来执行」这一端的边界：
+  节点只解析一个受控工具，被禁入口在解析层就被拒，运行证据由两条独立路径核对。
+  实验起真实的编排平台服务端、真实的执行节点与仓库自身的 Gateway 代码；
+  模型与业务上游是桩。
+
+  Rule: 可执行集合只剩一个受控工具
+
+    Scenario: EX-01 被禁入口逐个被点名并拒绝
+      Given 模型桩依次点名 shell、http_request、rag_search、read_skill
+      When 节点处理每一次调用
+      Then 每一次都得到「没有这个工具」
+      And 每一次业务读取次数都不变
+
+    Scenario: EX-02 受控工具不接受业务参数
+      Given 受控工具的签名
+      Then 它不接受订单号、租户、用户、URL 或 run_id 作为模型参数
+      And run_id 只从执行上下文取，且不出现在发给模型的请求里
+
+  Rule: 一次执行，确定性的重试
+
+    Scenario: EX-03 两次 HTTP 领取真正重叠
+      Given 一个会延迟的上游与一个屏障
+      When 两个执行者同时领取同一记录
+      Then 一个 200、一个 409（执行中），上游恰被读一次
+      And 丢响应后的重试返回逐字段相同的快照
+
+    Scenario: EX-04 两个身份交错执行
+      Given 两个调用者各自一张本人订单
+      When 交错建立记录并交错领取
+      Then run_id、冻结身份指纹、快照与回执各归其主
+      And 同一用户的同单多轮得到不同 run_id 而指纹相同
+
+    Scenario: EX-05 执行编号与凭据不外泄
+      Given 一次完整委托
+      When 检查 Gateway、平台与节点三跳日志以及模型请求
+      Then 本次 run_id 精确可见
+      And 调用者令牌、第二身份令牌、节点凭据与平台应用令牌都不出现
+      And 工具结果字段不超出约定集合
+
+  Rule: 验收报告本身要可靠地失败
+
+    Scenario: EX-06 缺项、UNEXPECTED 或执行期异常一律 FAIL
+      Given 缺少编号、出现 UNEXPECTED，或十个编号已 PASS 之后又抛异常
+      When 计算总判定
+      Then 结果为 FAIL、退出码非零，并列出原因
+      And 只有十个编号齐全且全为 PASS 时才输出 PASS

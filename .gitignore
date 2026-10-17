@@ -94,3 +94,8 @@ docs/*.xlsx
 docs/*.csv
 docs/*.docx
 *.netcatty-*.part
+
+# 隔离实验的执行节点构建产物（约 102MB fat jar）：由 `mvn -f tools/m2_close/node/pom.xml package`
+# 生成，不是仓库内容。见 tools/README.md 的 `m2_close/` 一节。
+tools/m2_close/node/target/
+*.gateway-output.log

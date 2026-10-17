@@ -1,0 +1,41 @@
+server:
+  port: ${AIOPS_NODE_HTTP_PORT:8081}
+
+spring:
+  threads:
+    virtual:
+      enabled: true
+
+logging:
+  level:
+    root: INFO
+    com.aizuda.snail.ai: INFO
+    com.trendpower.aiops: INFO
+    io.micrometer.observation.contextpropagation: ERROR
+
+aiops:
+  node:
+    name: ${AIOPS_NODE_NAME:unnamed}
+    # 合成节点不把 tenant 写进工具：身份与订单输入只来自 Gateway 的授权记录。
+    build: ${AIOPS_NODE_BUILD:unknown}
+  gateway:
+    # 本环境 Gateway 的回环入口；由部署配置钉住，绝不来自模型或调度 DTO。
+    base-url: ${AIOPS_GATEWAY_BASE_URL:http://127.0.0.1:8787}
+    # 节点自己的服务凭据（与本环境绑定）；只在 Authorization 头出现。
+    node-token: ${AIOPS_NODE_TOKEN:}
+    timeout-seconds: ${AIOPS_GATEWAY_TIMEOUT_SECONDS:30}
+
+snail-ai:
+  enabled: true
+  server:
+    host: ${SNAIL_SERVER_HOST:aiops-m1-server}
+    port: ${SNAIL_SERVER_PORT:18888}
+  app-id: ${SNAIL_AI_APP_ID:}
+  token: ${SNAIL_AI_TOKEN:}
+  port: ${AIOPS_NODE_GRPC_PORT:18889}
+  host: ${AIOPS_NODE_HOST:127.0.0.1}
+  skill-temp-dir: ${AIOPS_NODE_HOME:/tmp/node}/skills
+  shell-temp-dir: ${AIOPS_NODE_HOME:/tmp/node}/script
+  memory:
+    short-term:
+      store-type: memory

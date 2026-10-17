@@ -57,6 +57,30 @@ ssh aiops-41 'cd /opt/aiops-41 && runuser -u aiops41 -- bash -c "set -a; . /etc/
 受试身份是真实用户凭据，因此**不打印**车牌、VIN、订单号、用户名与完整 id，
 只引用尾号；`--self-check` 是无网络的纯逻辑自检，改坏分桶或判定必转红。
 
+## `m2_close/` 是委托执行的**隔离实验**，不是部署件
+
+`run_ic.py` 起一套本机 Docker 网络：MySQL + 编排平台服务端 + 执行节点 + Gateway 代码 +
+桩模型 + 桩业务上游，然后跑 IC-01…IC-10。它要两个预置产物（脚本不构建、不下载）：
+`SNAIL_SRC`（平台源码 checkout）与 `tools/m2_close/node` 的构建产物。
+
+从**仓库根**执行：
+
+```bash
+docker run --rm -v "$PWD":/work -v "$HOME/.m2":/root/.m2 -w /work \
+  maven:3.9-eclipse-temurin-21 mvn -f tools/m2_close/node/pom.xml -DskipTests=false package
+SNAIL_SRC=/tmp/snail-ai uv run python tools/m2_close/run_ic.py --out /tmp/m2-close.json
+uv run python tools/m2_close/verify_real_gateway.py --out /tmp/m2-close-http.json
+```
+
+退出码 `0` 通过 / `1` 有判据失败 / `2` **环境不足**（预置产物缺失）/ `3` 实验忙。
+两脚本固定共用 `/tmp/aiops-m2close-experiment.lock`，持锁覆盖启动到清理；`M2CLOSE_LOCK`
+不生效，不能用不同锁路径同时操作同名容器。退出自动释放文件锁，不手动删除锁文件。报告里逐条列出被替换的
+依赖与**未证明**的范围；不要把它读成业务验收。`verify_real_gateway.py` **不**启动平台、
+也不执行节点 —— 那部分只在 `run_ic.py` 的容器实验里。
+
+两个容易误读的地方：`--keep` 会把容器留下来便于排查（下一次运行前先删掉，否则会撞名字）；
+桩业务上游必须与 Gateway **同容器**，因为 `canonical_gateway_url` 只允许对回环地址用明文 HTTP。
+
 ## 依赖纪律：`opencc` 故意不在 `pyproject.toml` 里
 
 `derive_zh_hant.py` 需要 opencc，但它**刻意不写进依赖清单**：

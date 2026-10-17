@@ -1964,4 +1964,29 @@ CLI 段证明拒绝方向；成功段注入合成订单授权源。未完成业�
 两个测试文件。**未覆盖**：执行节点上「工具集合只剩一个受控工具」、真实平台与真实模型、
 真实公司身份与授权源、跨主机网络与部署。本片因此不声称任何节点已读过真实业务数据。
 
+## EX-NODE 执行节点与聚合门（合成实验）
+
+前置：Docker、固定平台源码 checkout（`SNAIL_SRC`）、节点 jar 已构建；全部在本机内网。
+数据：合成调用者身份、合成订单、桩模型与桩业务上游；不接公司服务、不读生产数据。
+执行：`uv run pytest tests/test_m2_close_aggregation.py`（16 项）与
+`SNAIL_SRC=… uv run python tools/m2_close/run_ic.py --out /tmp/m2-close.json`。
+
+| ID | 对应验收场景 | 预期观察 | 本轮结果 |
+|---|---|---|---|
+| EX-NODE-01 | EX-01 | 模型点名 shell / http_request / rag_search / read_skill，四次都报「没有这个工具」，业务读取次数不变 | 容器 IC 通过 |
+| EX-NODE-02 | EX-02 | 受控工具零业务参数；run_id 只来自执行上下文，不出现在发给模型的请求里 | 容器 IC 通过 |
+| EX-NODE-03 | EX-03 | 两次 HTTP 领取真重叠：一个 200、一个 409，上游恰读一次；重试逐字段相同 | 容器 IC 通过 |
+| EX-NODE-04 | EX-04 | 两个身份交错，run_id/指纹/快照/回执各归其主 | 容器 IC 通过 |
+| EX-NODE-05 | EX-05 | run_id 精确可见；四把凭据在三跳日志与模型请求里都不出现 | 容器 IC 通过 |
+| EX-NODE-06 | EX-06 | 缺项、UNEXPECTED、十项 PASS 后抛异常都判 FAIL、退出码非零 | 16 项回归通过 |
+| EX-NODE-07 | 真进程 HTTP | 两个入口的 401/403/404/422/409/502/503 与 no-store | 21 项报告通过 |
+| EX-NODE-08 | 实验互斥 | 第二个实验在任何 Docker/清理动作之前报 busy 退出（退出码 3）；锁在进程退出后释放 | 2 项回归通过 |
+| EX-NODE-09 | 身份取证 | 两份报告各含开始/结束两次 `code_identity`；运行期间改动即判 FAIL | 两份报告均无漂移（当前源码哈希全部匹配） |
+| EX-NODE-10 | 锁不可绕过 | `M2CLOSE_LOCK` 环境变量不能改变真实锁路径 | 通过 |
+
+追溯：`acceptance.feature` 的执行节点 Feature → 上述用例 → 聚合门回归、容器实验报告
+`docs/validation/m2-close-r3.json` 与真进程报告 `docs/validation/m2-close-real-gateway.json`。
+**未覆盖**：真实模型质量、真实公司身份与业务数据、跨主机网络与部署；
+`rag_search` 的拒绝不等于动态 MCP 连接已实测。
+
 本轮补充回归：订单授权期间另一领取者完成记录，授权拒绝或故障后仍必须落为 failed；恢复授权不能重用旧 run。

@@ -1,3 +1,45 @@
+## 2026-10-17 · 执行节点与隔离实验：本地验证摘要
+
+**范围**：`tools/m2_close/` —— 受控执行节点（Java）、隔离实验驱动与聚合门、桩上游、
+Gateway 启动器、真实进程 HTTP 验证；以及聚合门的反向回归。
+
+**验证**（在本候选树上实跑）：
+
+- 聚合门反向回归 `tests/test_m2_close_aggregation.py`：**16 passed**（11 项聚合 + 5 项互斥/身份）
+- 与委派/领取契约、记录层、直读片与文档守卫一并回归：**128 passed**
+- 全量 `uv run pytest`：**2738 passed / 9 skipped**（347.73s，本候选树实跑）
+- `ruff check .` / `ruff format --check .`：通过
+- `npx spexcode@0.7.0 spec lint`：0 error / 0 warning
+- 节点构建：`mvn -f tools/m2_close/node/pom.xml -DskipTests=false package` 在固定镜像内 exit 0
+  （该模块当前没有 `src/test/java`，所以「不跳过测试」是声明而非一条已执行的测试证据）
+- 容器实验：报告 [m2-close-r3.json](validation/m2-close-r3.json) —— **十项齐全、PASS**
+- 真进程 HTTP：[m2-close-real-gateway.json](validation/m2-close-real-gateway.json)（21 项）
+
+**本轮补齐的四件事**：
+
+1. **代码身份由脚本产生**：两份报告在开始与结束各采一次 `code_identity`
+   （`gateway_api` / `agent_runs` / `gateway_config` / `charging_status` / 三个脚本 /
+   节点 Java、配置与 pom 的 sha256，外加节点 jar 摘要与平台 commit），源文件用仓库相对路径。
+   两次不一致即判 FAIL 并列出变化的文件。
+2. **分阶段写明替换项**：容器实验替换模型、业务上游、调用者身份与订单授权源；HTTP 脚本分
+   A/B 两段 —— A 段用真 CLI、订单授权源**缺席**（只能到 503），B 段用同一工厂 + 固定身份
+   resolver + SQLite 订单授权替身。检查名照实写 503。
+3. **公开报告不含开发机路径**：`gateway_output_tail` 不再内联，改为同目录的私有日志
+   （`.gateway-output.log`，已 gitignore）；`artifacts.node_jar` 是仓库相对路径。
+4. **跨工作树互斥锁**：两个脚本在**任何 Docker 调用之前**拿同一把 `flock`；拿不到就报
+   `experiment busy`、退出码 3、不做任何清理。锁路径写死、不接受环境变量覆盖 ——
+   固定容器名不能靠换一把锁绕开互斥。回归共 5 项：第二个进程一次 docker 都没调用、
+   锁在进程退出后释放、环境变量改不了锁路径、缺失源文件不能算作有效身份、
+   平台 commit/jar 在运行期间变化时报告判 FAIL。
+
+**独立验收**：`docs/validation/m2-self-accept.py`（同一份脚本在 B2/C 都用）在本候选树上
+28 项全过（`m2-self-accept.json`），且对回退修复前的实现会让两条缺陷各 4 项转红。
+
+**边界（如实）**：模型是脚本化桩、业务上游是桩、调用者身份用固定令牌换成固定范围；
+真实公司身份/数据/模型、跨主机网络、TLS 与部署都未验证。`rag_search` 的拒绝只证明
+RAG 解析器没把工具带进来，**不**等于动态 MCP 连接已实测。`agent_version` 保持
+`null` + `not_wired`，版本冻结是后续里程碑的事。
+
 ## 2026-10-17 · 委托执行的委派与领取入口：本地验证摘要
 
 **范围**：两个默认关闭的入口 —— `POST /v1/orders/{order_no}/charging-status/delegated`
@@ -10,7 +52,7 @@
 - 契约回归 `tests/test_m2_close_contract.py`：**55 passed**（48 + 本轮 7 项放行复核回归）
 - 记录层 `tests/test_agent_run_records.py`：**34 passed**（继承 B1 最终版）
 - 与已交付的直读片、README 形状与标准接口契约一并回归：**112 passed**
-- 全量 `uv run pytest`：**2722 passed / 9 skipped**（354.71s，本候选树实跑）
+- 全量 `uv run pytest`：**2722 passed / 9 skipped**（357.75s，本候选树实跑）
 - `ruff check .` / `ruff format --check .`：通过
 - `npx spexcode@0.7.0 spec lint`：0 error / 0 warning
 
@@ -23,16 +65,6 @@
    对 `succeeded` 什么也不做 —— 实测 403/503 之后记录仍是 succeeded，恢复授权后同一 run
    又返回 200。修复后先尝试条件 `fail()`；若未更新，再尝试 `refuse()`，不依据授权前的旧状态分流；
    拒绝只在**节点凭据已认过之后**发生，因此错凭据或兄弟节点不会破坏别人的记录。
-
-**独立验收（不复用本片的测试代码）**：`docs/validation/m2-self-accept.py` 自己起 app、
-自己造订单授权/上游/身份替身，按 Codex 的判据重跑 28 项；结果
-`docs/validation/m2-self-accept.json`（PASS）。同一脚本对**回退修复前**的实现跑一次
-（`m2-self-accept-prefix.json`），两条缺陷各有 4 项判据转红 —— 这是「验收能抓住缺陷」的证据，
-不是再跑一遍单测。用法：
-
-```bash
-PYTHONPATH=src .venv/bin/python docs/validation/m2-self-accept.py --repo .
-```
 
 **覆盖的形状**：未认证/错令牌 401；非 consumer 与缺入口头 403；他人与不存在订单 404 且不建记录；
 请求体多字段 422；只持 `run_id` 领取 401；错节点与停用节点 401/403；并发领取一个赢家；

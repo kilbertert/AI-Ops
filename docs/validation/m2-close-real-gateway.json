@@ -1,0 +1,167 @@
+{
+  "kind": "m2close_real_gateway_http",
+  "started_at_utc": "2026-10-17T18:35:13.675597+00:00",
+  "status": "PASS",
+  "synthetic_data": true,
+  "real_company_services": false,
+  "substituted": {
+    "A": [
+      "introspection endpoint (loopback)",
+      "CPMS (loopback)",
+      "order authorization source (absent: production needs the internal business DB)"
+    ],
+    "B": [
+      "CPMS (loopback)",
+      "caller identity (fixed resolver)",
+      "order authorization source (SQLite synthetic_orders, same owner predicate)"
+    ]
+  },
+  "code_identity": {
+    "files": {
+      "src/aiops_diagnostics/gateway_api.py": "f1e21270a9f074997885ae060a0309d80f493e784b8e29c6dcfb4a4265df4a6e",
+      "src/aiops_diagnostics/agent_runs.py": "eb60e292cc8b93aeccbe1b21a5387082fe1ba43ffe4afde68d981950ba73c646",
+      "src/aiops_diagnostics/gateway_config.py": "dade1204471c08d9f0e05f68b5f3436dad1e0ee47695ff3f04aa74f7c655f9d6",
+      "src/aiops_diagnostics/charging_status.py": "b1960d477bfecd52b2c99e76336a3a81e5554a4d249bfae3d91e6c6c6de7185e",
+      "tools/m2_close/harness_guard.py": "5be81932096cc6a9cd2c6de39bd311a4a38535dd701c1c48155df39718453dec",
+      "tools/m2_close/run_ic.py": "1e8096e395b6d76ca57abf5c0d968694201574ff674614fc6baa093c173964cc",
+      "tools/m2_close/synthetic_upstream.py": "b81f3d76e4cc9fdb45c0d1202e891ad3497ed8e2fa226328e8eb04bd55cd1682",
+      "tools/m2_close/gateway_launcher.py": "89c458af58e936066aa851503c2810e3f97dc2b80ea7730bf4504400f1020ef4",
+      "tools/m2_close/verify_real_gateway.py": "dc42a79cba231e8244c62e45b84bbb227a5b940c97bc168162af94f7a5ce44e3",
+      "tools/m2_close/node/pom.xml": "fe35c32bc24f9088989dddd60eaa9f0b006299222eb1f8aa22e2d95fcd306bea",
+      "tools/m2_close/node/src/main/resources/application.yml": "dff667694b7345cdcd1f1dd5c46f42da303370462d8799ed3aac47b5b0b0f97e",
+      "tools/m2_close/node/src/main/java/com/trendpower/aiops/node/GovernedToolRuntime.java": "9b3ef3031a63157c2f601827812b816f68029b4d2f64590a5f3af93b7d3e015a",
+      "tools/m2_close/node/src/main/java/com/trendpower/aiops/node/ControlledChargingStatusTool.java": "b6cbc607e277af621262173a6ca3000457837e5492777336c7549d072bb4f11a",
+      "tools/m2_close/node/src/main/java/com/trendpower/aiops/node/ExecutionNodeApplication.java": "96f6adbfc6adc774a368f240681e13a0038854b9eca6cc1fcb609320c8e33d45"
+    },
+    "node_jar_sha256": "ee2bd2391ffaee4c3258b5e89eacd26d5910bd7f73e64adfc7200def79c5b22e"
+  },
+  "checks": [
+    {
+      "name": "/health",
+      "ok": true,
+      "detail": "status=200"
+    },
+    {
+      "name": "/health 不带 no-store（缓存声明只作用于本切片）",
+      "ok": true,
+      "detail": "cache-control 缺失"
+    },
+    {
+      "name": "阶段 A 无授权源时直读 503（fail closed，不是放行）",
+      "ok": true,
+      "detail": "status=503"
+    },
+    {
+      "name": "503 带 no-store",
+      "ok": true,
+      "detail": "None"
+    },
+    {
+      "name": "[无授权源时] 他人订单 503",
+      "ok": true,
+      "detail": "status=503"
+    },
+    {
+      "name": "[无授权源时] 不存在的订单 503",
+      "ok": true,
+      "detail": "status=503"
+    },
+    {
+      "name": "阶段 A 全程未读业务（计数跨所有请求包围）",
+      "ok": true,
+      "detail": "0 -> 0"
+    },
+    {
+      "name": "未配置绑定表时委派 404",
+      "ok": true,
+      "detail": "status=404"
+    },
+    {
+      "name": "委派入口多余字段 422",
+      "ok": true,
+      "detail": "status=422"
+    },
+    {
+      "name": "422 带 no-store",
+      "ok": true,
+      "detail": "None"
+    },
+    {
+      "name": "领取无凭据 401",
+      "ok": true,
+      "detail": "status=401"
+    },
+    {
+      "name": "领取错误响应带 no-store",
+      "ok": true,
+      "detail": "None"
+    },
+    {
+      "name": "领取错凭据 401",
+      "ok": true,
+      "detail": "status=401"
+    },
+    {
+      "name": "[阶段B] 本人订单 200",
+      "ok": true,
+      "detail": "status=200"
+    },
+    {
+      "name": "[阶段B] 响应只有 7 个字段",
+      "ok": true,
+      "detail": "fields=['environment', 'gateway_version', 'observed_at', 'order_no', 'source', 'status_code', 'status_role']"
+    },
+    {
+      "name": "[阶段B] 成功响应 Cache-Control: no-store",
+      "ok": true,
+      "detail": "None"
+    },
+    {
+      "name": "[阶段B] 上游 PII 未出现在响应里",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "[阶段B] 他人订单 404",
+      "ok": true,
+      "detail": "status=404"
+    },
+    {
+      "name": "[阶段B] 不存在 404",
+      "ok": true,
+      "detail": "status=404"
+    },
+    {
+      "name": "[阶段B] 负例没有读业务",
+      "ok": true,
+      "detail": "1 -> 1"
+    },
+    {
+      "name": "[阶段B] 平台不可达时委派 502",
+      "ok": true,
+      "detail": "status=502"
+    }
+  ],
+  "finished_at_utc": "2026-10-17T18:35:21.892122+00:00",
+  "counts": {},
+  "gateway_output_log": "sub-http.gateway-output.log",
+  "code_identity_end": {
+    "files": {
+      "src/aiops_diagnostics/gateway_api.py": "f1e21270a9f074997885ae060a0309d80f493e784b8e29c6dcfb4a4265df4a6e",
+      "src/aiops_diagnostics/agent_runs.py": "eb60e292cc8b93aeccbe1b21a5387082fe1ba43ffe4afde68d981950ba73c646",
+      "src/aiops_diagnostics/gateway_config.py": "dade1204471c08d9f0e05f68b5f3436dad1e0ee47695ff3f04aa74f7c655f9d6",
+      "src/aiops_diagnostics/charging_status.py": "b1960d477bfecd52b2c99e76336a3a81e5554a4d249bfae3d91e6c6c6de7185e",
+      "tools/m2_close/harness_guard.py": "5be81932096cc6a9cd2c6de39bd311a4a38535dd701c1c48155df39718453dec",
+      "tools/m2_close/run_ic.py": "1e8096e395b6d76ca57abf5c0d968694201574ff674614fc6baa093c173964cc",
+      "tools/m2_close/synthetic_upstream.py": "b81f3d76e4cc9fdb45c0d1202e891ad3497ed8e2fa226328e8eb04bd55cd1682",
+      "tools/m2_close/gateway_launcher.py": "89c458af58e936066aa851503c2810e3f97dc2b80ea7730bf4504400f1020ef4",
+      "tools/m2_close/verify_real_gateway.py": "dc42a79cba231e8244c62e45b84bbb227a5b940c97bc168162af94f7a5ce44e3",
+      "tools/m2_close/node/pom.xml": "fe35c32bc24f9088989dddd60eaa9f0b006299222eb1f8aa22e2d95fcd306bea",
+      "tools/m2_close/node/src/main/resources/application.yml": "dff667694b7345cdcd1f1dd5c46f42da303370462d8799ed3aac47b5b0b0f97e",
+      "tools/m2_close/node/src/main/java/com/trendpower/aiops/node/GovernedToolRuntime.java": "9b3ef3031a63157c2f601827812b816f68029b4d2f64590a5f3af93b7d3e015a",
+      "tools/m2_close/node/src/main/java/com/trendpower/aiops/node/ControlledChargingStatusTool.java": "b6cbc607e277af621262173a6ca3000457837e5492777336c7549d072bb4f11a",
+      "tools/m2_close/node/src/main/java/com/trendpower/aiops/node/ExecutionNodeApplication.java": "96f6adbfc6adc774a368f240681e13a0038854b9eca6cc1fcb609320c8e33d45"
+    },
+    "node_jar_sha256": "ee2bd2391ffaee4c3258b5e89eacd26d5910bd7f73e64adfc7200def79c5b22e"
+  }
+}
