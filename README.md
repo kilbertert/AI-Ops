@@ -42,7 +42,7 @@
 治理面产出的 PR 改的是产品面代码。本文档以产品面为主，治理面见
 [第八节](#八验证与交付纪律) 与 [docs/afk-workflow.md](docs/afk-workflow.md)。
 
-产品面的对外能力（Gateway 共 53 条路由）分四组：
+产品面的对外能力（Gateway 共 63 条路由）分四组：
 
 - **诊断**：设备运行路径 `/v1/runs`（workspace 设备令牌）、标准 API
   `/v1/standard/diagnoses`（调用者身份委托）。
@@ -285,6 +285,7 @@ flowchart TB
 | `journal.py` | `EvidenceJournal`：追加式证据日志，每个结果存 artifact + SHA-256 |
 | `agent_workspace.py` | 运行目录的磁盘契约：manifest/state/result/events，run_id 创建 |
 | `health_report.py` | 最小健康报告装配，带更窄的 `OrderSource` 协议 |
+| `charging_status.py` | 本人订单**充电状态快照**的读取（`GET /v1/orders/{order_no}/charging-status` 的下游一半）：经 `bounded_http` 打一笔按订单号钉住的 CPMS `chargingInfo` 接口，**禁止重定向**（不把身份头带去别处）、断言响应里的订单号就是被授权的那一笔；状态码**不重新定义**，交 `order_status.py` 定角色。调用方必须先完成身份与订单授权 —— 本模块不回答「这单是不是你的」 |
 | `knowledge_retrieval.py` | 有界知识检索与媒体签发：`KbServiceClient`、`KnowledgeSearchGuard`、`MediaResourceSigner`、`MediaProxy` |
 
 #### L4 推理与产品能力
@@ -334,7 +335,7 @@ flowchart TB
 
 | 模块 | 职责 |
 |---|---|
-| `gateway_api.py` | FastAPI 应用工厂 + **全部 53 条路由** + 请求/响应 schema。**最大单文件（3330 行）** |
+| `gateway_api.py` | FastAPI 应用工厂 + **全部 63 条路由** + 请求/响应 schema。**最大单文件（4715 行）** |
 | `gateway_runtime.py` | Gateway 的服务端编排核心：持有数据库凭据、Codex session、线程池，执行 run / QA / 健康报告 / 标准诊断 |
 | `cli.py` | Typer 根应用 `aiops`：`init`/`key-install`/`paths`/`diagnose`/`doctor`/`shell`/`agent-resume`/`agent-doctor`，并挂载 `admin` 与 `remote` 子应用 |
 | `gateway_server.py` | `aiops-gateway`：`serve`、一次性注册码签发、设备管理 |
@@ -438,7 +439,7 @@ flowchart TB
 | 命令 | 入口 | 起什么 |
 |---|---|---|
 | `aiops` | `cli.py:app`（Typer） | 工程师本地诊断：`diagnose` / `doctor` / `shell` / `agent-resume` / `agent-doctor` / `init` / `key-install` / `paths`，并挂 `admin` 与 `remote` 子应用 |
-| `aiops-gateway` | `gateway_server.py:main` | 多端服务：`serve` 起 uvicorn 承载 53 条路由；`issue-enrollment` / `devices` / `revoke-device` 管设备 |
+| `aiops-gateway` | `gateway_server.py:main` | 多端服务：`serve` 起 uvicorn 承载 63 条路由；`issue-enrollment` / `devices` / `revoke-device` 管设备 |
 | `aiops-tdengine-proxy` | `tdengine_proxy.py:main` | loopback-only 的 TDengine 严格只读代理 |
 | `aiops-responses-adapter` | `responses_adapter.py:main` | Responses API 兼容反向代理 |
 
@@ -489,7 +490,7 @@ docs/                     架构、契约、ADR、运行手册（见第十节路
 AGENTS.md                 仓库级开发共识（中文文档、里程碑同步、业务边界）
 GLOSSARY.md                领域词汇表（术语 + 应避免的同义词）
 SOP.md / 充电桩问题排查SOP.md   业务规则来源（后端行为的中文说明）
-acceptance.feature        Gherkin 可执行验收约束（31 Feature / 81 Rule / 240 Scenario）
+acceptance.feature        Gherkin 可执行验收约束（52 Feature / 140 Rule / 370 Scenario）
 qa-plan.md                QA 用例（158 个用例 ID，含环境/前置/数据/动作/预期/清理）
 ```
 

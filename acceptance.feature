@@ -2638,3 +2638,62 @@ Feature: 客户端语言标识的跨端契约（平台语言值 / 中文地区�
       Then HTTP 200 且 language 字段为 zh
       And 网关 journal 里有一条 language tag not recognized, falling back to zh: tlh
       But 可识别的标签（如 en-US）不产生这行日志
+
+Feature: C 端读取本人订单的充电状态（M2 受控读取）
+  M1 证明了执行节点可以按 appId 分开；M2 要的是**真实业务能力**，不是节点上的合成订单。
+  公司侧已有按订单号读状态的接口，但它自己不回答「这单是不是你的」——
+  公开面不能把用户自报的订单号当成授权。所以这条链的顺序是固定的：
+  先身份、再订单可见性、最后才允许打业务接口。
+
+  Rule: 身份与订单可见性先于业务接口调用
+
+    Scenario: CS-01 本人订单
+      Given 有效消费者身份且该订单属于本人
+      When GET /v1/orders/{order_no}/charging-status
+      Then 200 且返回业务系统状态码、既有 StatusRole、UTC 读取时间、固定 source
+      And 还带逻辑环境与 Gateway 构建版本
+      And 响应**不含**金额、车牌、用户标识、设备信息与上游原始响应
+
+    Scenario: CS-02 无身份、非 consumer 入口或试图扩大范围
+      Given 请求缺凭据，或入口不是 consumer，或数据范围不是 self，或身份带代查
+      When 请求该接口
+      Then 401 / 403
+      And **一次业务接口调用都不发生**
+
+    Scenario: CS-03 不存在的订单与他人的订单不可区分
+      Given 订单号不在本人可见范围内（不存在，或属于他人）
+      When 请求该接口
+      Then 两种情况同为 404 ORDER_NOT_FOUND
+      And 不以任何状态码或响应体泄露它其实存在
+
+    Scenario: CS-04 授权依赖不可用
+      Given 订单授权源（业务库）不可用
+      When 请求该接口
+      Then 503 ORDER_AUTHORIZATION_UNAVAILABLE（retryable），而不是 404
+
+  Rule: 不编造当前状态
+
+    Scenario: CS-05 未知状态码与上游失败要分开
+      Given 上游返回公司定义之外的状态码（含 "0.5" 这类非整数）
+      When 读取充电状态
+      Then status_code 原样保留而 status_role 为 unknown
+      And 上游失败（非成功信封 / 无 status / 订单号对不上）返回 502 而不是 unknown
+      And 未知**绝不**被解释成「充电已结束」
+
+    Scenario: CS-06 上游返回另一笔订单或要求重定向
+      Given 上游把响应换成了别的订单号，或回应 302
+      When 读取充电状态
+      Then 拒绝该响应，且**不向重定向目标发送身份头**（只发出去一次请求）
+
+  Rule: 默认不启用，且不改变既有面
+
+    Scenario: CS-07 未配置基础地址时路由不存在
+      Given 部署未设 AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL
+      When 已认证用户请求该接口
+      Then 404，且其余接口行为逐字不变
+
+    Scenario: CS-08 配置只认可信来源
+      Given 配了业务接口基础地址
+      When 验证 Gateway 配置
+      Then 非 HTTPS（非回环）地址被拒，且必须同时给出合法逻辑环境名
+      And 基础地址只来自部署配置，请求里的任何字段都不能影响它
