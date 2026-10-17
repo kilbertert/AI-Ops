@@ -46,6 +46,7 @@ from aiops_diagnostics.caller_auth import (
     SourceKeyCallerResolver,
     UpmsCallerResolver,
 )
+from aiops_diagnostics.charging_status import ChargingStatusError, read_charging_status
 from aiops_diagnostics.clarification import (
     CLARIFY_ACCOUNT_HAS_NO_SITES,
     CLARIFY_CONTEXT_REQUIRED,
@@ -133,6 +134,7 @@ from aiops_diagnostics.query_scope import (
 from aiops_diagnostics.routing import MISSING_ORDER_NO, money_question_context
 from aiops_diagnostics.scope_context import (
     SCOPE_TYPE_ORGAN,
+    SCOPE_TYPE_SELF,
     ScopeContext,
     ScopeError,
     is_operator_entry,
@@ -909,7 +911,7 @@ def create_gateway_app(
     app.state.gateway = context
 
     @app.exception_handler(StandardAPIError)
-    async def standard_api_error_handler(_: Request, exc: StandardAPIError) -> JSONResponse:
+    async def standard_api_error_handler(request: Request, exc: StandardAPIError) -> JSONResponse:
         return JSONResponse(
             status_code=exc.status_code,
             content={
@@ -919,10 +921,11 @@ def create_gateway_app(
                     "retryable": exc.retryable,
                 }
             },
+            headers=_no_store_headers(request),
         )
 
     @app.exception_handler(RequestValidationError)
-    async def validation_error_handler(_: Request, exc: RequestValidationError) -> JSONResponse:
+    async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
         del exc
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -933,6 +936,7 @@ def create_gateway_app(
                     "retryable": False,
                 }
             },
+            headers=_no_store_headers(request),
         )
 
     def authenticated_device(
@@ -2432,6 +2436,22 @@ def create_gateway_app(
             "accessible": True,
             "scope_fingerprint": caller.scope_fingerprint,
         }
+
+    @app.get("/v1/orders/{order_no}/charging-status")
+    def charging_status(
+        order_no: str,
+        response: Response,
+        caller: ScopeContext = Depends(authenticated_caller),  # noqa: B008
+        business_entry: Annotated[str | None, Header(alias="X-Business-Entry")] = None,
+    ) -> dict[str, Any]:
+        # 业务快照是**按人**的授权结果，不是公共资源。RFC 9111 §5.2.2.5 的 no-store
+        # 让它不进入任何共享缓存；这条声明不替代 TLS 与授权，只是不让中间层多存一份。
+        response.headers["Cache-Control"] = "no-store"
+        if not selected_settings.charging_status_base_url:
+            raise StandardAPIError(404, "CHARGING_STATUS_DISABLED", "route not found")
+        _require_consumer_self_order(caller, business_entry, order_no)
+        _require_visible_order(context, caller, order_no)
+        return _charged_snapshot_response(selected_settings, context, caller, order_no)
 
     @app.post("/v1/health-report-jobs", status_code=status.HTTP_202_ACCEPTED)
     def create_health_report_job(
@@ -4027,6 +4047,87 @@ ORDER_AUTH_ROUTE = "order_auth"
 #: The code the warning and the metric row both carry, so an operator can grep
 #: for one string and find both.
 ORDER_AUTHENTICATION_UNAVAILABLE = "ORDER_AUTHORIZATION_UNAVAILABLE"
+
+
+#: 只有本切片的三个端点拒绝中间层缓存：它们是**按人**的授权结果，不是公共资源。
+NO_STORE_PATH_PREFIXES = (
+    "/v1/orders/",
+    "/v1/internal/charging-status/",
+)
+
+
+def _no_store_headers(request: Request) -> dict[str, str]:
+    """错误响应也带 ``Cache-Control: no-store``，但**只**对充电状态那一组路径。
+
+    成功响应在各自的路由里显式设置；错误响应走统一处理器，所以判定放在这里 ——
+    否则一次 403 的响应体（含错误码）会被中间层按 URL 缓存，而 URL 里带着订单号。
+    只按路径前缀放行，避免把整份 API 的缓存语义一起改掉。
+    """
+    if request.url.path.startswith(NO_STORE_PATH_PREFIXES):
+        return {"Cache-Control": "no-store"}
+    return {}
+
+
+def _require_consumer_self_order(caller: ScopeContext, business_entry: str | None, order_no: str) -> None:
+    """两个充电状态入口共用的入口判据与订单号形状。
+
+    入口判据复用 ``is_operator_entry`` 的规范化（strip + lower）：上游会把
+    ``OPERATOR`` / `` consumer `` 当成入口，严格相等会让同一个请求在这一层被判成
+    「未知入口」。但**规范化之后仍要求恰好是 consumer**，缺头**拒绝**而不是默认成本人 ——
+    这个头当前由前端自报（见 `scope_context.is_operator_entry` 的说明），
+    「缺省即本人」等于让一个漏发的头静默换成本人范围。
+    C 端 App 走的是 `X-Business-Entry: consumer`，它本来就发。
+    """
+    if (
+        (business_entry or "").strip().lower() != "consumer"
+        or caller.delegated
+        or caller.data_scope.type != SCOPE_TYPE_SELF
+        or not caller.subject.c_user_id
+    ):
+        raise StandardAPIError(403, "CONSUMER_SCOPE_REQUIRED", "consumer self scope required")
+    if not SAFE_ORDER_NO.fullmatch(order_no):
+        raise StandardAPIError(400, "INVALID_ORDER_NO", "invalid order number")
+
+
+def _require_visible_order(context: Any, caller: ScopeContext, order_no: str) -> None:
+    """既有订单可见性判据；越权与不存在同形。返回 None，失败即抛。"""
+    verdict = _order_authorization(context, caller, order_no)
+    if verdict == UNAVAILABLE:
+        raise StandardAPIError(
+            503, "ORDER_AUTHORIZATION_UNAVAILABLE", "order authorization unavailable", retryable=True
+        )
+    if verdict == NOT_OWNED:
+        raise StandardAPIError(404, "ORDER_NOT_FOUND", "order not found")
+
+
+def _authorized_charging_snapshot(
+    settings: GatewayServerSettings, caller: ScopeContext, order_no: str
+) -> dict[str, Any]:
+    """读业务：**只**在有授权保证的路径上调用 ``read_charging_status``。
+
+    直读入口与节点回呼入口都走这里 —— 契约 §3.6 要求两个入口共用同一份授权读取规则，
+    不能在内部端点上另造一条更宽松的。身份取自已验证的 ScopeContext，不取请求头。
+    """
+    return read_charging_status(
+        settings.charging_status_base_url,
+        order_no,
+        tenant_id=caller.effective_tenant_id,
+        user_id=caller.subject.c_user_id or "",
+    )
+
+
+def _charged_snapshot_response(
+    settings: GatewayServerSettings, context: Any, caller: ScopeContext, order_no: str
+) -> dict[str, Any]:
+    try:
+        snapshot = _authorized_charging_snapshot(settings, caller, order_no)
+    except ChargingStatusError as exc:
+        raise StandardAPIError(502, "CHARGING_STATUS_UNAVAILABLE", "charging status unavailable") from exc
+    return {
+        **snapshot,
+        "environment": settings.execution_environment,
+        "gateway_version": __version__,
+    }
 
 
 def _order_authorization(

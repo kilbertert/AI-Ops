@@ -1,0 +1,161 @@
+{
+  "kind": "a_consumer_charging_status_http",
+  "started_at_utc": "2026-10-17T07:40:01.694694+00:00",
+  "status": "PASS",
+  "synthetic_data": true,
+  "real_company_services": false,
+  "phases": {
+    "A": "real `aiops-gateway serve`, charging disabled, loopback introspection + CPMS",
+    "B": "real `aiops-gateway serve`, real IntrospectionCallerResolver, loopback introspection + CPMS, no order source",
+    "C": "same create_gateway_app factory, real introspection resolver, loopback synthetic order authorizer"
+  },
+  "substituted": {
+    "A": [
+      "introspection endpoint (loopback)",
+      "CPMS (loopback)"
+    ],
+    "B": [
+      "introspection endpoint (loopback)",
+      "CPMS (loopback)",
+      "order authorization source (absent by design)"
+    ],
+    "C": [
+      "introspection endpoint (loopback)",
+      "CPMS (loopback)",
+      "order authorization source (synthetic table)"
+    ]
+  },
+  "checks": [
+    {
+      "name": "A/health 200 且 business_mutations=disabled",
+      "ok": true,
+      "detail": "status=200 body={'ok': True, 'service': 'aiops-gateway', 'version': '0.1.0', 'api_version': 'v1', 'platform': 'linux', 'business_mutations': 'disabled'}"
+    },
+    {
+      "name": "A//health 不带 no-store（缓存声明只作用于本切片）",
+      "ok": true,
+      "detail": "None"
+    },
+    {
+      "name": "A/同一令牌在既有端点上通过认证（503 = 授权源缺席，不是 401）",
+      "ok": true,
+      "detail": "status=503"
+    },
+    {
+      "name": "A/未配置业务接口时 404（默认关闭）",
+      "ok": true,
+      "detail": "status=404"
+    },
+    {
+      "name": "A/默认关闭的 404 带 no-store",
+      "ok": true,
+      "detail": "no-store"
+    },
+    {
+      "name": "B/无凭据 401",
+      "ok": true,
+      "detail": "status=401"
+    },
+    {
+      "name": "B/401 带 no-store",
+      "ok": true,
+      "detail": "no-store"
+    },
+    {
+      "name": "B/无效令牌 401（introspection 判 inactive）",
+      "ok": true,
+      "detail": "status=401"
+    },
+    {
+      "name": "B/非 consumer 入口 403（不落到授权）",
+      "ok": true,
+      "detail": "status=403"
+    },
+    {
+      "name": "B/缺 X-Business-Entry 403（不默认成本人）",
+      "ok": true,
+      "detail": "status=403"
+    },
+    {
+      "name": "B/订单授权源缺席时 503（fail closed，不是放行）",
+      "ok": true,
+      "detail": "status=503"
+    },
+    {
+      "name": "B/503 带 no-store",
+      "ok": true,
+      "detail": "no-store"
+    },
+    {
+      "name": "B/拒绝方向全程未读 CPMS",
+      "ok": true,
+      "detail": "0 -> 0"
+    },
+    {
+      "name": "C/本人订单 200",
+      "ok": true,
+      "detail": "status=200"
+    },
+    {
+      "name": "C/成功响应带 no-store",
+      "ok": true,
+      "detail": "no-store"
+    },
+    {
+      "name": "C/响应字段恰好七个且不含车牌/用户标识",
+      "ok": true,
+      "detail": "[\"environment\", \"gateway_version\", \"observed_at\", \"order_no\", \"source\", \"status_code\", \"status_role\"]"
+    },
+    {
+      "name": "C/成功读取恰好读一次 CPMS",
+      "ok": true,
+      "detail": "0 -> 1"
+    },
+    {
+      "name": "C/他人订单 404",
+      "ok": true,
+      "detail": "status=404"
+    },
+    {
+      "name": "C/不存在订单 404（与越权同形）",
+      "ok": true,
+      "detail": "status=404"
+    },
+    {
+      "name": "C/两条 404 都不读 CPMS",
+      "ok": true,
+      "detail": "1"
+    },
+    {
+      "name": "C/信封不对 502（不透传上游正文）",
+      "ok": true,
+      "detail": "status=502"
+    },
+    {
+      "name": "C/上游 302 被拒（不把身份头带去别处）→ 502",
+      "ok": true,
+      "detail": "status=502"
+    }
+  ],
+  "finished_at_utc": "2026-10-17T07:40:07.221987+00:00",
+  "invocation": "uv run python tools/verify_consumer_charging_status_http.py --out docs/validation/a-charging-status-http.json",
+  "code_identity": {
+    "baseline": "e013d0bbd27348b1dc8c55e270a4df074d45714b",
+    "files": {
+      "src/aiops_diagnostics/charging_status.py": "b1960d477bfecd52b2c99e76336a3a81e5554a4d249bfae3d91e6c6c6de7185e",
+      "src/aiops_diagnostics/gateway_api.py": "5268bf9c04799652ae20328560df43aac78dab79bc6ff73f1f211637e1a6354e",
+      "src/aiops_diagnostics/gateway_config.py": "dd5806758f0fcac81b380a2981a2489b06ba4d62a0ac7ade44f04593648c23aa",
+      "tools/verify_consumer_charging_status_http.py": "9ae4a368f116f0decd663c98b5392f649ef9452c21f721aab25863939efafef5",
+      "tests/test_consumer_charging_status.py": "8177d4ef091435134b87c2e997a32f18f96ec089ab63ce18e4d05fd06f88d07d",
+      "docs/adr/0033-consumer-charging-status.md": "fe00a13a16cc6033a46d53ba1d2da089b7649ea4b68a1f020419ae7d87014980"
+    },
+    "tree_status": "local candidate, uncommitted"
+  },
+  "candidate": "feat/m2-a-public-pr (local, uncommitted)",
+  "notes": [
+    "A/B 段使用 `python -m aiops_diagnostics.gateway_server serve` 的真实 CLI 装配；C 段使用同一个 create_gateway_app 工厂。",
+    "三段都经回环 introspection 桩认证（生产代码路径 IntrospectionCallerResolver）；CPMS 是回环桩。",
+    "C 段的订单授权源是合成表（判据：订单 owner == 主体 C 端用户），这是本脚本唯一替换的授权依赖。",
+    "本证据为合成验证：不含真实公司身份、真实业务数据或生产地址。"
+  ]
+}

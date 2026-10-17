@@ -1880,3 +1880,27 @@ uv run pytest tests/test_assistant_api.py tests/test_conversation_api.py \
   外加 17 例边界与一次入口对照 —— 见 `docs/validation.md` §八。
   ⚠️ **其中 `/v1/banner` 只证了语言字段**（该入口当前无已发布横幅，返回空列表），
   **横幅正文的多语言未验**；其余四个 GET 面与 `faq/answer` 的判据都含「正文确实是该语言」。
+
+
+## CS-READ 本人充电状态直读（合成环境）
+
+前置：Linux、仓库锁定依赖、空闲回环端口；不得使用生产数据根或真实凭据。
+数据：脚本内的 USER-A/USER-B、ORDER-A/ORDER-B 与不存在订单，回环 introspection/CPMS 桩。
+执行：从仓库根运行 `uv run python tools/verify_consumer_charging_status_http.py --out /tmp/charging-status-http.json`。
+脚本创建一次性数据根，停止进程并删除临时数据；报告留在指定输出位置。
+
+| ID | 对应验收规则 / 动作 | 预期观察 | 本轮结果 |
+|---|---|---|---|
+| CS-READ-01 | 认证成立后请求未配置业务地址的新入口 | 404 + no-store；health 正常且不带 no-store | HTTP A 段通过 |
+| CS-READ-02 | 无凭据、无效令牌、非 consumer、缺入口头、授权源缺席 | 依次 401/401/403/403/503；零次 CPMS 读取 | HTTP B 段通过 |
+| CS-READ-03 | 本人订单读取，再请求他人与不存在订单 | 本人 200、字段恰好七个；后两次同为 404 且不取数 | HTTP C 段通过 |
+| CS-READ-04 | 上游坏信封与重定向 | 502，不转发上游正文或跟随重定向 | HTTP C 段通过 |
+
+追溯：`acceptance.feature` 的本人充电状态 Feature → 上述用例 →
+`tests/test_consumer_charging_status.py`（17 项）与合成 HTTP 报告（22 项）。
+CLI 段证明拒绝方向；成功段注入合成订单授权源。未完成业务验收，真实客户端、真实公司身份/数据与 TLS 待验证。
+
+风险验证：`charging_status.py` 的分支覆盖率 100%（21 语句、4 分支）；Radon 6.0.1
+测得 `read_charging_status` 圈复杂度 8，按覆盖率计算 CRAP=8。临时源码副本分别注入
+绕过订单授权、接受错单、跟随重定向三种故障，现有测试均失败（3/3 检出）。这是定向
+突变检验，未宣称穷举 mutation score；原仓库代码未受突变影响。

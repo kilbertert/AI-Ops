@@ -45,6 +45,8 @@ class GatewayServerSettings:
     introspection_timeout_seconds: int = 5
     third_session_service_token: str = ""
     third_session_key_prefix: str = "app:3rd_session:"
+    charging_status_base_url: str = ""
+    execution_environment: str = ""
     #: 管家端公司 OAuth2 令牌的校验入口与客户端凭据（#443 / ADR-0009）。三个键**全部缺省为空**，
     #: 全空时该路径整体不构造 ⇒ 行为与启用前逐字一致（这既是「先合不启用」的机制保证，也是
     #: 回滚路径：清空即回退）。只设了其中一部分是启动错误，不是静默禁用 —— 与
@@ -202,6 +204,10 @@ class GatewayServerSettings:
             or _file_value(file_values, "AIOPS_GATEWAY_THIRD_SESSION_SERVICE_TOKEN"),
             third_session_key_prefix=_env("AIOPS_GATEWAY_THIRD_SESSION_KEY_PREFIX")
             or _file_value(file_values, "AIOPS_GATEWAY_THIRD_SESSION_KEY_PREFIX", "app:3rd_session:"),
+            charging_status_base_url=_env("AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL")
+            or _file_value(file_values, "AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL"),
+            execution_environment=_env("AIOPS_GATEWAY_EXECUTION_ENVIRONMENT")
+            or _file_value(file_values, "AIOPS_GATEWAY_EXECUTION_ENVIRONMENT"),
             company_check_token_url=_env("AIOPS_GATEWAY_COMPANY_CHECK_TOKEN_URL")
             or _file_value(file_values, "AIOPS_GATEWAY_COMPANY_CHECK_TOKEN_URL"),
             company_token_client_id=_env("AIOPS_GATEWAY_COMPANY_TOKEN_CLIENT_ID")
@@ -271,6 +277,10 @@ class GatewayServerSettings:
         )
 
     def validate(self) -> None:
+        if self.charging_status_base_url:
+            canonical_gateway_url(self.charging_status_base_url)
+            if not SAFE_PROFILE_NAME.fullmatch(self.execution_environment):
+                raise ValueError("charging status requires a logical execution environment")
         if not self.bind_host or any(character.isspace() for character in self.bind_host):
             raise ValueError("AIOPS_GATEWAY_BIND is invalid")
         # 解析在这里做（结果丢弃）：级别名不对就该在起监听之前失败，而不是让服务起不来
