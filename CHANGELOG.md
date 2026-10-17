@@ -25,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - 新增默认关闭的本人订单充电状态读取入口，复用既有订单授权并裁剪业务响应。
+- 新增请求级「授权记录」存储：冻结一次已授权读取的身份与节点绑定，以条件 UPDATE 做原子领取，
+  撤销/过期/放行复核失败都是不可逆终态。**尚未接入 HTTP 入口**，因此本版不改变任何对外行为。
 - Give every clarification reply a stable, non-localized code — same string in
   the response body, the metric row and the log line (#636)
 - Add `aiops admin pull-dify`: fetch a Dify app's export and publish it through our gate (#625)
