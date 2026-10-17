@@ -9,6 +9,7 @@ related:
   - src/aiops_diagnostics/caller_auth.py
   - src/aiops_diagnostics/third_session_auth.py
   - src/aiops_diagnostics/company_token_auth.py
+  - src/aiops_diagnostics/agent_runs.py
 ---
 # l2-identity
 
@@ -26,6 +27,10 @@ related:
   —— 一律拒绝，**不回退为无范围直查**，且不触发任何业务数据库查询（解析器不持有数据源）。
 - 站点集合为 `None`（all）与 `()`（空）是**不同**的语义：空集合表示最终可见站点为空，
   查询短路返回空证据，不发起数据库请求。
+- **冻结身份的重建必须校验指纹。** `agent_runs.py` 把 `ScopeContext` 序列化进授权记录，
+  读回时要求已有合法的 `scope_fingerprint` 并核对既有范围语义；缺失、空值或不符均拒绝重建。
+  指纹不是完整快照签名，不覆盖 permissions、resolved_at 等非指纹字段，也不防可重算摘要的数据库写入者。
+  记录里的身份只用于**再授权一次**，不是授权本身。
 - 凭证只透传给目录服务，绝不进入 `ScopeContext`、审计摘要或错误消息；
   `ScopeContext` 不持久化任何数据库凭据或完整权限副本。
 - `scope_fingerprint` 是下游键：范围变了，键就变，缓存与授权随之失效。

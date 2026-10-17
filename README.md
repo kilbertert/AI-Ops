@@ -286,6 +286,7 @@ flowchart TB
 | `agent_workspace.py` | 运行目录的磁盘契约：manifest/state/result/events，run_id 创建 |
 | `health_report.py` | 最小健康报告装配，带更窄的 `OrderSource` 协议 |
 | `charging_status.py` | 本人订单**充电状态快照**的读取（`GET /v1/orders/{order_no}/charging-status` 的下游一半）：经 `bounded_http` 打一笔按订单号钉住的 CPMS `chargingInfo` 接口，**禁止重定向**（不把身份头带去别处）、断言响应里的订单号就是被授权的那一笔；状态码**不重新定义**，交 `order_status.py` 定角色。调用方必须先完成身份与订单授权 —— 本模块不回答「这单是不是你的」 |
+| `agent_runs.py` | **委托执行的授权记录**（尚未接入任何 HTTP 入口）：一次已授权的读取可以由可信执行节点代跑。记录留在 Gateway（`issued→running→succeeded`，另有 `failed`/`revoked`/`expired`，固定 180 秒不续期）；执行节点只拿到一个高熵 `run_id`，**知道它本身不授予读取权限**，回呼时必须用自己的独立凭据认身。节点凭据只以 SHA-256 存进绑定表并用它派生身份；`claim` 是一条带条件的 UPDATE，所以并发领取只有一个赢家、成功后重试返回同一份快照。冻结的 `ScopeContext` 随记录落库，放行前要**用冻结身份重新授权一次** —— 授权变了连已算好的结果也不释放。见 [ADR-0033](docs/adr/0033-consumer-charging-status.md) |
 | `knowledge_retrieval.py` | 有界知识检索与媒体签发：`KbServiceClient`、`KnowledgeSearchGuard`、`MediaResourceSigner`、`MediaProxy` |
 
 #### L4 推理与产品能力
@@ -490,7 +491,7 @@ docs/                     架构、契约、ADR、运行手册（见第十节路
 AGENTS.md                 仓库级开发共识（中文文档、里程碑同步、业务边界）
 GLOSSARY.md                领域词汇表（术语 + 应避免的同义词）
 SOP.md / 充电桩问题排查SOP.md   业务规则来源（后端行为的中文说明）
-acceptance.feature        Gherkin 可执行验收约束（52 Feature / 140 Rule / 370 Scenario）
+acceptance.feature        Gherkin 可执行验收约束（53 Feature / 144 Rule / 380 Scenario）
 qa-plan.md                QA 用例（158 个用例 ID，含环境/前置/数据/动作/预期/清理）
 ```
 

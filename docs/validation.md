@@ -1,3 +1,32 @@
+## 2026-10-17 · 委托执行的授权记录：本地验证摘要
+
+**范围**：`src/aiops_diagnostics/agent_runs.py` —— 请求级授权记录的存储、冻结身份与节点绑定。
+**本片不接 HTTP**；领取与委派路由不在本 PR。
+
+**验证**（在本候选树上实跑）：
+
+- 专项 `tests/test_agent_run_records.py`：**34 passed**
+- 与已交付的充电状态直读一并回归：`tests/test_consumer_charging_status.py`（17）、
+  `tests/test_readme_architecture.py`（5）、`tests/test_standard_api_contract.py`（1）
+  —— 合计 **57 passed**
+- 全量 `uv run pytest`：**2667 passed / 9 skipped**（314.09s，本候选树实跑）
+- `ruff check .` / `ruff format --check .`：通过
+- `npx spexcode@0.7.0 spec lint`：0 error / 0 warning
+
+**风险与突变**（可复跑方法见 [AR-REC](../qa-plan.md#ar-rec-授权记录的存储与生命周期合成环境)）：
+`agent_runs.py` 语句覆盖 100%、分支覆盖 25/26（96.15%；178/178 语句），最高圈复杂度 12
+（`AgentRunConfig.load`，包含节点状态类型与摘要格式/唯一性校验）。
+三条定向突变（领取去掉 `state='issued'` 条件、`complete` 去掉期限条件、重建时不交回存下的
+指纹）都被现有用例检出。
+
+**没有证明的**：任何节点是否真的读到过业务数据 —— 没有入口，也没有平台派发；
+跨主机、真实平台凭据与真实授权源都不在本片范围内。
+
+**独立复核与修正**：拒绝非布尔 `active`、重复/非法节点摘要和空/非法冻结指纹。
+增加到期瞬间直接 `complete()` 的回归，证明不依赖 `get()` 提前收敛状态。三种突变均维持
+有效 SQL 与参数个数，由行为断言检出；到期突变仅由新增边界用例检出。指纹只校验既有范围
+语义，不是完整快照签名。补充 ADR-0033 的授权记录存储取舍。未完成业务验收。
+
 ## 2026-10-17 · 充电状态直读端点：本地验证摘要
 
 **范围**：新增默认关闭的 `GET /v1/orders/{order_no}/charging-status`（设计见

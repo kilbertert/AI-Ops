@@ -2697,3 +2697,68 @@ Feature: C 端读取本人订单的充电状态（M2 受控读取）
       When 验证 Gateway 配置
       Then 非 HTTPS（非回环）地址被拒，且必须同时给出合法逻辑环境名
       And 基础地址只来自部署配置，请求里的任何字段都不能影响它
+
+Feature: 委托执行的授权记录（尚未接入 HTTP 入口）
+
+  一次已授权的读取可以交给可信执行节点代跑。入口、订单授权与受控读取是已交付的那一片；
+  这里约束的是**记录本身**：冻结身份、原子领取、终态与节点绑定。
+  本片段没有领取端点，因此不声称任何节点已经读到过业务数据。
+
+  Rule: 记录冻结身份，且只有一次领取会赢
+
+    Scenario: AR-01 签发
+      Given 一个已授权的本人订单与一份合法绑定配置
+      When 签发一条执行记录
+      Then 状态为 issued，环境、appId、agentId、预期节点与冻结身份一并落库
+      And 有效期固定，不续期
+
+    Scenario: AR-02 并发领取
+      Given 同一条 issued 记录
+      When 多个调用者同时领取
+      Then 恰好一个成功，其余失败
+      And 失败者不会因为重试而在之后拿到同一次授权
+
+    Scenario: AR-03 重启
+      Given 一条 running 记录
+      When 进程重启后重新打开同一个库
+      Then 它仍是 running，不会被改回 issued 或重领
+
+  Rule: 终态不可逆，且失败不冒充成功
+
+    Scenario: AR-04 撤销与拒绝释放
+      Given 一条任何非终态记录
+      When 撤销它
+      Then 状态为 revoked
+      And 撤销后节点再交回结果也不落库
+
+    Scenario: AR-05 过期
+      Given 一条超过有效期的记录
+      Then 读取时收敛为 expired，领取失败
+
+    Scenario: AR-06 放行复核失败
+      Given 一条 succeeded 记录
+      When 放行前的复核不通过
+      Then 记录被钉成 failed，之后任何重试都不再释放结果
+
+  Rule: 绑定与配置不接受不完整的值
+
+    Scenario: AR-07 配置文件
+      Given 绑定配置文件
+      When 它是组/其他可读，或摘要不是 sha256 十六进制，或摘要重复，或 active 不是 JSON 布尔值，或预期节点未登记，或文件不存在
+      Then 拒绝构造，而不是带着不完整的绑定继续运行
+
+    Scenario: AR-08 停用节点
+      Given 一个在绑定表里被停用的节点
+      Then 它的凭据无法认证；正确且启用的凭据可以认证
+
+    Scenario: AR-09 冻结身份被篡改
+      Given 一条记录里存下的冻结身份
+      When 改动指纹覆盖的范围语义，或清空已存指纹后再重建
+      Then 重建当场失败（已存指纹非法或与范围不符）
+
+  Rule: 不改写同库的既有内容
+
+    Scenario: AR-10 建表
+      Given 同一个 SQLite 文件里已有其他表与记录
+      When 打开或重新打开记录存储
+      Then 其他表与记录原样保留，既有记录不被改写
