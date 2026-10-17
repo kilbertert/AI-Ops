@@ -1,0 +1,276 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "AI-Ops 分层：向下为主，六条向上依赖真实存在",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "legend": {
+      "mode": "hidden"
+    },
+    "repository": {
+      "url": "https://github.com/kilbertert/AI-Ops",
+      "revision": "96ee54d25d964ddee3937d34396ab9f60b48ebc4"
+    },
+    "note": "纵向是层序，箭头向下表示依赖。本包实测无环，但不是严格单向栈：README 第三章逐条列出了六条真实向上依赖并给出理由，本图只画其中最承重的两条——L3 证据层依赖 L2 身份层（范围必须作为参数绑定谓词下推进 SQL，而不是取出数据再过滤），以及 L2 身份层依赖 L1 规则层（租户可见性是业务规则，不是技术细节）。其余四条向上依赖（qa_rag / agent_manifest / agent_debug / shortcut_migration 指向 L5）画出来会让图变成线团，它们记在 [[l5-persistence]] 与 [[l4-inference]] 的正文里。图不画分层本身没陈述的关系：L6 到各层的实际引用由其正文陈述，这里只画相邻层的依赖序。"
+  },
+  "components": [
+    {
+      "id": "l6-boundary",
+      "type": "frontend",
+      "label": "L6 服务边界与入口",
+      "sublabel": "四条独立进程 · 53 条路由",
+      "sources": [
+        {
+          "path": ".spec/ai-ops/l6-boundary/spec.md",
+          "label": "spec"
+        },
+        {
+          "path": "src/aiops_diagnostics/gateway_api.py",
+          "label": "code"
+        }
+      ],
+      "pos": [
+        200,
+        40
+      ],
+      "size": [
+        300,
+        64
+      ]
+    },
+    {
+      "id": "l5-persistence",
+      "type": "database",
+      "label": "L5 持久化",
+      "sublabel": "一个 SQLite 文件 · 五个 store",
+      "sources": [
+        {
+          "path": ".spec/ai-ops/l5-persistence/spec.md",
+          "label": "spec"
+        },
+        {
+          "path": "src/aiops_diagnostics/gateway_store.py",
+          "label": "code"
+        }
+      ],
+      "pos": [
+        600,
+        190
+      ],
+      "size": [
+        240,
+        64
+      ]
+    },
+    {
+      "id": "l4-inference",
+      "type": "cloud",
+      "label": "L4 推理与产品能力",
+      "sublabel": "模型 harness · 各回答面",
+      "sources": [
+        {
+          "path": ".spec/ai-ops/l4-inference/spec.md",
+          "label": "spec"
+        },
+        {
+          "path": "src/aiops_diagnostics/agent_engine.py",
+          "label": "code"
+        }
+      ],
+      "pos": [
+        200,
+        190
+      ],
+      "size": [
+        300,
+        64
+      ]
+    },
+    {
+      "id": "l3-evidence",
+      "type": "backend",
+      "label": "L3 证据与诊断内核",
+      "sublabel": "有界只读查询 · 工具白名单",
+      "sources": [
+        {
+          "path": ".spec/ai-ops/l3-evidence/spec.md",
+          "label": "spec"
+        },
+        {
+          "path": "src/aiops_diagnostics/diagnostic_tools.py",
+          "label": "code"
+        }
+      ],
+      "pos": [
+        200,
+        340
+      ],
+      "size": [
+        300,
+        64
+      ]
+    },
+    {
+      "id": "l2-identity",
+      "type": "security",
+      "label": "L2 身份与范围",
+      "sublabel": "ScopeContext · 全部 fail closed",
+      "sources": [
+        {
+          "path": ".spec/ai-ops/l2-identity/spec.md",
+          "label": "spec"
+        },
+        {
+          "path": "src/aiops_diagnostics/scope_context.py",
+          "label": "code"
+        }
+      ],
+      "pos": [
+        200,
+        490
+      ],
+      "size": [
+        300,
+        64
+      ]
+    },
+    {
+      "id": "l1-domain",
+      "type": "backend",
+      "label": "L1 领域规则（纯函数）",
+      "sublabel": "可见性规则的唯一定义",
+      "sources": [
+        {
+          "path": ".spec/ai-ops/l1-domain/spec.md",
+          "label": "spec"
+        },
+        {
+          "path": "src/aiops_diagnostics/order_visibility.py",
+          "label": "code"
+        }
+      ],
+      "pos": [
+        200,
+        640
+      ],
+      "size": [
+        300,
+        64
+      ]
+    },
+    {
+      "id": "l0-contracts",
+      "type": "backend",
+      "label": "L0 基础设施与契约",
+      "sublabel": "共享词汇 · 入度最高",
+      "sources": [
+        {
+          "path": ".spec/ai-ops/l0-contracts/spec.md",
+          "label": "spec"
+        },
+        {
+          "path": "src/aiops_diagnostics/agent_contracts.py",
+          "label": "code"
+        }
+      ],
+      "pos": [
+        200,
+        790
+      ],
+      "size": [
+        300,
+        64
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "l6-boundary",
+      "to": "l4-inference",
+      "label": "提交运行",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        350,
+        147
+      ]
+    },
+    {
+      "from": "l6-boundary",
+      "to": "l5-persistence",
+      "label": "落库",
+      "fromSide": "right",
+      "toSide": "left",
+      "labelAt": [
+        550,
+        222
+      ]
+    },
+    {
+      "from": "l4-inference",
+      "to": "l3-evidence",
+      "label": "索取证据",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        350,
+        297
+      ]
+    },
+    {
+      "from": "l3-evidence",
+      "to": "l2-identity",
+      "label": "范围下推",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        350,
+        447
+      ]
+    },
+    {
+      "from": "l2-identity",
+      "to": "l1-domain",
+      "label": "可见性规则",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        350,
+        597
+      ]
+    },
+    {
+      "from": "l1-domain",
+      "to": "l0-contracts",
+      "label": "共享词汇",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        350,
+        747
+      ]
+    }
+  ],
+  "cards": [
+    {
+      "dot": "amber",
+      "title": "两条加粗的边是向上依赖",
+      "items": [
+        "L3 → L2：范围必须下推进 SQL，不能取出再过滤",
+        "L2 → L1：可见性是业务规则，不是技术细节"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "为什么 L0 在最底",
+      "items": [
+        "入度 12，被所有层导入",
+        "契约是共享词汇，编排是流程",
+        "放错层会让向上依赖从 6 条变 8 条"
+      ]
+    }
+  ]
+}

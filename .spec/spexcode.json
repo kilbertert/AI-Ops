@@ -1,0 +1,10 @@
+{
+  "dashboard": {
+    "title": "AI-Ops"
+  },
+  "lint": {
+    "governedRoots": [
+      "src"
+    ]
+  }
+}
