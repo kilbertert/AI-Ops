@@ -2,7 +2,8 @@
 
 日期：2026-10-17
 状态：已采纳
-影响版本：新增 `.spec/` 规格树（17 个节点）与 `.github/workflows/spec-tree.yml`；不改任何运行时代码
+影响版本：新增 `.spec/` 规格树（1 个根节点 + 7 个层节点 + 10 个规则/子系统节点）与
+`.github/workflows/spec-tree.yml`；不改任何运行时代码
 
 ## 背景
 
@@ -33,7 +34,8 @@
 L3 证据内核 / L4 推理与产品能力 / L5 持久化 / L6 服务边界，共 7 个层节点；
 再把仓库里最贵的七条规则单独成节点并锚定到承载它们的单元——`order-visibility`、
 `scope-context`、`tool-allowlist`、`job-lifecycle`、`metrics-redaction`、
-`ops-analysis`、`tdengine-proxy`。
+`ops-analysis`、`tdengine-proxy`；外加三个有独立 ADR 的多模块子系统
+（`dify-login`、`ops-agents`、`faq-catalog`），它们塞进父节点的 `related:` 会被藏起来。
 
 采用时确立四条：
 
@@ -97,7 +99,7 @@ L3 证据内核 / L4 推理与产品能力 / L5 持久化 / L6 服务边界，�
 **一处已知的当前状态。** `spec-tree` 作业目前**不是必需检查**（必需检查为
 `Workflow policy` + `verify`）。今天它会在 PR 上变红但不阻断合并。
 把它提升为必需检查是一个独立决定，应先观察它在本仓库的误报率——
-本仓库 85 个源文件、17 个节点，误报率还没有数据。
+本仓库 85 个源文件、18 个节点，误报率还没有数据。
 
 **本记录明确不主张的。** 它不主张 `.spec/` 取代 README 第三章、`docs/adr/`、`GLOSSARY.md`
 或 `.sandcastle/REPO-MAP.md`。分工是：ADR 回答"为什么这样决定、否掉了什么"；
