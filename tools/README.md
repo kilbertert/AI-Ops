@@ -13,6 +13,7 @@
 | `check_translation_batch.py` | 译文批次的结构校验 | 入库前 |
 | `apply_path_map.py` | 把译好的界面路径映射套回答案 | 路径单独译时 |
 | `migrate_shortcut_i18n.py` | 生产已发布快捷动作的语言迁移 | 上线新语言后（**有写风险，见下**） |
+| `verify_consumer_charging_status_http.py` | A 片自己的 HTTP 面证据：真 `aiops-gateway serve` 在一次性数据根上验证默认关闭、鉴权、拒绝与 no-store；成功读取用同一 app 工厂 + 回环合成授权源 | 改过直读路由的鉴权/缓存/读取行为，或要复跑 A 的 HTTP 证据时 |
 | `verify_banner_car_lookup.py` | 活口检查：横幅个性化依赖的三条**公司端点**是否真成立（#590） | 改过车图/个性化链路，或要复跑那次验收时 |
 | `check_dify_exposure.py` | Dify 暴露面的段 2/段 3 探测（#583）：真网关上的鉴权/只读语义，以及从 **Dify 自己的容器里**探「登记集合之外一律不可达」 | 改动面向 Dify 的暴露面，或要复跑 #583 的验收时 |
 | `dify_vertical_slice.py` | 端到端竖切：#582 的那条链（Dify 导出 → 拉取 → 发布 → 一条提问被服务），跑在**一次性数据根**的真网关上 | 改动 Dify 拉取/发布/QA 运行时链路，或要复跑 #582 的验收时 |

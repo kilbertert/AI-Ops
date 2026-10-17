@@ -1,3 +1,35 @@
+## 2026-10-17 · 充电状态直读端点：本地验证摘要
+
+**范围**：新增默认关闭的 `GET /v1/orders/{order_no}/charging-status`（设计见
+[ADR-0033](adr/0033-consumer-charging-status.md)）。这是本地验证摘要，不是业务验收。
+
+**交付复核**：提交后全量独立复跑 `2633 passed / 9 skipped / 23 warnings`（313.10s）。
+提交后的 ADR、repo-map、治理检查通过，Spex 0 error / 0 warning。
+风险验证与可复跑 QA 见 [CS-READ](../qa-plan.md#cs-read-本人充电状态直读合成环境)：
+新读取模块分支覆盖率 100%，圈复杂度 8，三种安全故障均由既有回归检出。
+
+**验证**（在本候选树上实跑）：
+
+- 全量 `uv run pytest`：**2633 passed / 9 skipped**（按仓库 CI 命令；
+  这里的数字以本次候选树实际输出为准）
+- 专项 `tests/test_consumer_charging_status.py`：**17 passed**
+- `ruff check .` / `ruff format --check .` / `compileall` / `uv pip check`：通过
+- `node .sandcastle/adr.check.mjs --base origin/main`：ok（新记录 0033 结构完整）
+- `npx spexcode@0.7.0 spec lint`：0 error / 0 warning
+
+**HTTP 证据**：[a-charging-status-http.json](validation/a-charging-status-http.json)
+（22 项检查，`synthetic_data=true`、`real_company_services=false`）。三段边界：
+
+| 段 | 启动方式 | 覆盖 | 替换的外部依赖 |
+|---|---|---|---|
+| A | 真 `python -m aiops_diagnostics.gateway_server serve` | 认证成立（既有端点 503 而非 401）、默认关闭 404 且带 no-store、`/health` 不带 no-store | 回环 introspection、回环 CPMS |
+| B | 同上 | 无凭据 401、无效令牌 401、非 consumer 与缺入口头 403、授权源缺席 503，且零业务读取 | 同上；订单授权源按设计缺席 |
+| C | 同一 `create_gateway_app` 工厂 | 本人 200（字段恰好七个）、他人与不存在同为 404 且不读上游、坏信封 502、上游 302 被拒 | 同上 + 合成订单授权表 |
+
+**没有证明的**：真实公司身份、真实业务数据、真实模型、TLS、部署与端到端链路；
+只覆盖 consumer 本人这一条范围路径。合成依赖与替身判据沿用
+[ADR-0030](adr/0030-test-doubles-must-be-bitter-than-reality.md)。
+
 ## 2026-10-16 · 收口 Dify 原生账号入口（#783 阶段 3）：公司登录成为唯一入口
 
 > PRD #772 B 的「入口收口」。**业务验收：完成**。本记录不含任何口令、令牌或 Cookie 明文。

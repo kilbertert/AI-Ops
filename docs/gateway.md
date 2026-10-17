@@ -42,6 +42,21 @@ flowchart LR
 - `GET /v1/orders/{order_no}/access`：标准 Bearer token 的订单授权探针；只返回
   `order_no`、可访问标记和范围指纹，不返回订单正文。该端点是后续标准健康报告与
   单问诊断 API 的认证 tracer bullet。
+- `GET /v1/orders/{order_no}/charging-status`：该订单在业务系统里记录的**充电状态快照**
+  （[ADR-0033](adr/0033-consumer-charging-status.md)）。**默认关闭**：未配置
+  `AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL` 时按 404 处理（路由不存在）；配置了业务地址
+  就要求同时给出合法的逻辑环境名（`AIOPS_GATEWAY_EXECUTION_ENVIRONMENT`），否则**启动失败**；
+  只配环境名而业务地址为空时路由仍然关闭。只接受
+  **consumer 的非代查本人范围**；顺序固定为「解析身份 → 复用订单可见性判定 →
+  才调业务接口」，因此**越权与不存在同为 404**、授权源不可用是 503。响应只有
+  7 个键（`order_no`/`status_code`/`status_role`/`observed_at`/`source`/`environment`/
+  `gateway_version`）—— 上游响应里还带车牌、用户标识、设备信息等与本面无关的字段，
+  裁剪在这一层做。
+  入口头按 `OPERATOR`/` consumer ` 规范化后要求**恰好是 `consumer`**；**缺失也拒绝**
+  （这个头当前由前端自报，缺省成本人等于让一个漏发的头静默换成本人范围；
+  反代若补这个头，接口也不依赖那一跳）。
+  状态码不在这里重新定义（交 `order_status.py`），未知码是 `unknown`，**不解释成充电结束**。
+  `observed_at` 是**我们读取的时刻**，不是设备上报时刻。
 
 ### 标准资源 API 认证
 
