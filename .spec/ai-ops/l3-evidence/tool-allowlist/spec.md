@@ -21,3 +21,6 @@ code:
 - `ALL_TOOL_NAMES` 由枚举推出（默认值自动带上新工具），因此加工具的改动面是
   `ToolName` + 描述 + 执行分支，不是到处补清单。
 - 环境预检是 **advisory**：它报告，不否决。
+
+- 合成执行节点的 `GovernedToolRuntime` 覆盖默认解析器，只返回一个受控零参数工具。
+  shell、通用 HTTP、RAG 与技能入口的逐个拒绝由 C 隔离实验验证；动态 MCP 连接未实测。

@@ -45,7 +45,7 @@ no project argument. Both answer *where* something is; neither replaces reading 
 
 ## Tests
 
-- tests/ — 147 test file(s, recursive)
+- tests/ — 148 test file(s, recursive)
 - script "cd:watch:test": node .sandcastle/cd-watch.test.mjs
 - pytest (pyproject.toml / pytest.ini present)
 
@@ -125,6 +125,8 @@ docs/
     a-charging-status-http.json
     m2-b2-release-review.json
     m2-b2-release-review.py
+    m2-close-r3.json
+    m2-close-real-gateway.json
     m2-self-accept-prefix.json
     m2-self-accept.json
     m2-self-accept.py
