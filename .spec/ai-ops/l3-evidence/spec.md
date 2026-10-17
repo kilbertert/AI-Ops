@@ -10,6 +10,7 @@ related:
   - src/aiops_diagnostics/journal.py
   - src/aiops_diagnostics/agent_workspace.py
   - src/aiops_diagnostics/health_report.py
+  - src/aiops_diagnostics/charging_status.py
   - src/aiops_diagnostics/knowledge_retrieval.py
 ---
 # l3-evidence
