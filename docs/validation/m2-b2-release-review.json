@@ -1,0 +1,30 @@
+{
+  "timestamp_utc": "2026-10-17T15:56:45.967966+00:00",
+  "code_identity": {
+    "src/aiops_diagnostics/gateway_api.py": "f1e21270a9f074997885ae060a0309d80f493e784b8e29c6dcfb4a4265df4a6e"
+  },
+  "results": [
+    {
+      "case": "expected_node_rebind_final_authorization",
+      "status": 403,
+      "hooks": [
+        10
+      ],
+      "released_order": null
+    },
+    {
+      "case": "denied_cached_then_restored",
+      "first_status": 403,
+      "state_after_refusal": "failed",
+      "retry_status": 403,
+      "released_order": null
+    },
+    {
+      "case": "unavailable_cached_then_restored",
+      "first_status": 503,
+      "state_after_refusal": "failed",
+      "retry_status": 403,
+      "released_order": null
+    }
+  ]
+}

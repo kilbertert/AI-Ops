@@ -2762,3 +2762,112 @@ Feature: 委托执行的授权记录（尚未接入 HTTP 入口）
       Given 同一个 SQLite 文件里已有其他表与记录
       When 打开或重新打开记录存储
       Then 其他表与记录原样保留，既有记录不被改写
+
+Feature: 委托执行——授权留在 Gateway（默认关闭）
+  M2 的直读接口证明「Gateway 能读」；这一条证明「交给可信执行节点读」时授权仍然只在 Gateway。
+  订单、租户、用户从来不是模型参数：节点拿到的只有一个不授予权限的关联编号。
+
+  Rule: 授权留在 Gateway，节点只凭自己的凭据领取
+
+    Scenario: MC-01 一次委托落到绑定的执行位置
+      Given 已认证消费者、本人订单与一份服务端绑定表
+      When POST /v1/orders/{order_no}/charging-status/delegated
+      Then 记录走到 succeeded，领取回执里的 actual_node_id 与预期节点一致
+      And 回执含 gateway_version，且 agent_version 为 null 并标注 not_wired
+      And 绑定表、环境、appId、agentId 全部来自服务端配置，请求体无法影响
+
+    Scenario: MC-02 不成立的前置不建授权
+      Given 无凭据、非 consumer、代查、他人或不存在的订单
+      When 请求委托入口
+      Then 401 / 403 / 404，且授权记录与业务调用次数都不增加
+
+    Scenario: MC-03 篡改与错凭据都拿不到数据
+      Given 请求体里带 appId、agentId、环境、sid 或订单号
+      When 请求委托入口
+      Then 422（严格模型拒绝而不是忽略）
+      And 只持 run_id 或无节点凭据领取时 401
+
+  Rule: 一次执行，确定性的重试
+
+    Scenario: MC-04 并发领取只有一个赢家
+      Given 一条 issued 记录
+      When 多个执行者同时领取
+      Then 只有一个进入 running，其余得到 409 或终态
+
+    Scenario: MC-05 成功后的重试不再读一次业务
+      Given 一条已经 succeeded 的记录
+      When 同一节点在有效期内再次领取
+      Then 返回同一份快照，且业务接口调用次数不变
+
+    Scenario: MC-06 过期、撤销与重启
+      Given 记录已过期或被撤销，或进程在 running 之后重启
+      When 再次领取
+      Then 403 AGENT_RUN_NOT_ACTIVE；重启不改写 running（不会被重新领取）
+
+Feature: 领取者的身份与执行位置不可自报
+
+  Rule: 节点身份只从凭据派生
+
+    Scenario: MC-09 授权在两次请求之间变化
+      Given 记录已签发，订单随后转给他人或授权源不可用
+      When 节点来领取
+      Then 拒绝（403 或 503），且不释放已算好的快照
+
+    Scenario: MC-10 执行位置不可自报
+      Given 领取请求伪造 X-Node-Id 或 Host-Id
+      When 节点领取成功
+      Then 回执里的实际节点来自凭据派生
+      And 没有回呼时不产生成功证据
+
+Feature: 放行时点的复核（撤销、停用与授权变化）
+  复核发现：记录已撤销、节点已停用、期限已到之后，仍能把**已经算好的快照**交出去。
+  这一组场景把「放行是一次独立判定」钉死。
+
+  Rule: 业务正文只在最后一次放行判定通过后才交出去
+
+    Scenario: RC-01 已有成功快照的记录被撤销
+      Given 一条 succeeded 记录
+      When 在订单授权回调里或完成之后撤销它
+      Then 领取返回 403 且不含订单字段
+      And 记录终态为 revoked
+
+    Scenario: RC-02 读取期间节点被停用
+      Given 一次正在进行且已算出快照的读取
+      When 绑定表把该节点置为 inactive
+      Then 领取返回 403 AGENT_RUN_NODE_INACTIVE
+      And 记录被钉成 failed/node_deactivated，后续重试同样拿不到
+
+    Scenario: RC-03 读取期间期限到达或授权变化
+      Given 一次正在进行且已算出快照的读取
+      When 记录过期，或订单转给他人
+      Then 403；快照不落库、不释放；记录记为对应失败原因
+
+  Rule: 按人的授权结果不进共享缓存
+
+    Scenario: RC-04 no-store 只作用于本切片
+      Given 直读、委派、领取三个端点的成功与错误响应
+      When 检查响应头
+      Then 全部带 Cache-Control: no-store
+      And /health 等无关端点不带该头
+
+Feature: 放行决定只用授权之后重读到的状态
+  复核发现：最终放行在调完外部授权之后，仍然 return 了授权**之前**读到的那份记录。
+  这一组场景要求「释放的快照只能来自这次决定」。
+
+  Rule: 放行决定在外部授权之后做出，且只用重读到的状态
+
+    Scenario: RD-01 授权回调期间的变化必须影响同一次放行
+      Given 一条已有成功快照的记录
+      When 在最后一次订单授权的回调内部撤销、置为过期、停用节点或改动绑定
+      Then 响应为 403 且不含订单字段
+      And 记录终态反映该变化（revoked / expired / failed）
+
+    Scenario: RD-02 真实完成之后再撤销
+      Given 一次已经真实执行 complete() 并成功的读取
+      When 之后撤销该记录再领取
+      Then 403，且不返回快照
+
+    Scenario: RD-03 绑定比对包含应用与智能体
+      Given 绑定表把 agentId 或 appId 改成另一个
+      When 领取旧记录
+      Then 拒绝；旧记录不被解释成新绑定

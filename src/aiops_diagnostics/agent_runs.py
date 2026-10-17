@@ -4,10 +4,10 @@
 **知道它本身不授予任何读取权限**：节点要用自己的独立凭据回呼领取端点，Gateway 先认节点、
 核对绑定，再用记录里冻结的身份**重新做一次订单授权**，然后才读业务。
 
-本模块只管三件事：节点/环境绑定配置、请求级授权记录及其生命周期、冻结身份的序列化。
+本模块管四件事：节点/环境绑定配置、请求级授权记录及其生命周期、冻结身份的序列化，
+以及调用编排平台的那一跳。
 HTTP 路由在 ``gateway_api``，授权读取规则与公共
 ``/v1/orders/{order_no}/charging-status`` 共用同一组函数（不在这里另造一份）。
-向编排平台发起对话的那一跳不在这里。
 
 不在本期：跨节点重选/负载均衡、续期、分布式队列、HMAC/JWT 票据格式。
 """
@@ -20,6 +20,7 @@ import re
 import secrets
 import sqlite3
 import stat
+import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -27,6 +28,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from aiops_diagnostics.bounded_http import ErrorMapping, HttpFailure, RequestSpec, request_json
 from aiops_diagnostics.gateway_config import canonical_gateway_url
 from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
 
@@ -48,6 +50,10 @@ AGENT_VERSION_GAP = "not_wired"
 
 class AgentRunConfigError(ValueError):
     pass
+
+
+class AgentRunDispatchError(RuntimeError):
+    """编排平台那一跳失败；正文不向调用方转述。"""
 
 
 # --------------------------------------------------------------------------
@@ -491,3 +497,65 @@ def _run_from_row(row: sqlite3.Row) -> AgentRun:
         claimed_at=_ts(row["claimed_at"]),
         completed_at=_ts(row["completed_at"]),
     )
+
+
+# --------------------------------------------------------------------------
+# 编排平台那一跳
+# --------------------------------------------------------------------------
+
+
+def _dispatch_failure(_failure: HttpFailure) -> AgentRunDispatchError:
+    return AgentRunDispatchError("agent platform unavailable")
+
+
+def _parse_snail_envelope(payload: Any, mapping: ErrorMapping) -> Any:
+    # Snail 的 Result：status==1 为成功；其余一律视为平台不可用，正文不转述。
+    if isinstance(payload, dict) and payload.get("status") == 1 and isinstance(payload.get("data"), dict):
+        return payload["data"]
+    raise mapping.invalid_envelope(HttpFailure("invalid_envelope", detail="agent platform rejected"))
+
+
+class SnailDispatcher:
+    """以 Gateway 自己的平台应用凭据发起一次对话。
+
+    传给平台的只有：服务端绑定的 agentId、``sid=run_id``、一句固定的提问。
+    订单号、用户、租户都**不**进平台请求 —— 节点工具的业务输入从 Gateway 记录读。
+    """
+
+    question = "请查询本次已授权订单的当前充电状态，并用一句话回答。"
+
+    def dispatch(self, config: AgentRunConfig, run_id: str) -> str:
+        data = request_json(
+            RequestSpec(
+                url=f"{config.snail_base_url}/snail-ai/openapi/v1/agent/chat/sync",
+                method="POST",
+                headers={
+                    "Content-Type": "application/json",
+                    "Snail-Ai-App-Id": config.snail_app_id,
+                    "Snail-Ai-Token": config.snail_app_token,
+                },
+                body=json.dumps(
+                    {
+                        "agentId": config.snail_agent_id,
+                        "openId": config.snail_open_id,
+                        # 每次一个全新会话：不能让上一轮历史混进这一轮。
+                        "conversationId": "conv_" + uuid.uuid4().hex,
+                        "content": self.question,
+                        "sid": run_id,
+                        "timeout": 60,
+                    }
+                ).encode("utf-8"),
+                timeout=75,
+                max_read_bytes=65536,
+                follow_redirects=False,
+            ),
+            mapping=ErrorMapping(
+                auth_rejected=_dispatch_failure,
+                http_error=_dispatch_failure,
+                unavailable=_dispatch_failure,
+                invalid_body=_dispatch_failure,
+                invalid_envelope=_dispatch_failure,
+            ),
+            envelope=_parse_snail_envelope,
+        )
+        return str(data.get("content") or "")

@@ -47,6 +47,11 @@ class GatewayServerSettings:
     third_session_key_prefix: str = "app:3rd_session:"
     charging_status_base_url: str = ""
     execution_environment: str = ""
+    #: M2-CLOSE-01：执行环境 → 编排平台应用/智能体/节点的**可信绑定**（契约 §3.1）。
+    #: 缺省为空 ⇒ 委派入口整体不启用（fail closed，与 ``third_session_service_token``
+    #: 同一条「全空即与今天逐字一致」的形状）。路径必须指向 0600 的 JSON：它持有
+    #: Gateway 自己的平台应用令牌（明文），而节点凭据只存 SHA-256。
+    agent_run_config_file: str = ""
     #: 管家端公司 OAuth2 令牌的校验入口与客户端凭据（#443 / ADR-0009）。三个键**全部缺省为空**，
     #: 全空时该路径整体不构造 ⇒ 行为与启用前逐字一致（这既是「先合不启用」的机制保证，也是
     #: 回滚路径：清空即回退）。只设了其中一部分是启动错误，不是静默禁用 —— 与
@@ -208,6 +213,8 @@ class GatewayServerSettings:
             or _file_value(file_values, "AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL"),
             execution_environment=_env("AIOPS_GATEWAY_EXECUTION_ENVIRONMENT")
             or _file_value(file_values, "AIOPS_GATEWAY_EXECUTION_ENVIRONMENT"),
+            agent_run_config_file=_env("AIOPS_GATEWAY_AGENT_RUN_CONFIG_FILE")
+            or _file_value(file_values, "AIOPS_GATEWAY_AGENT_RUN_CONFIG_FILE"),
             company_check_token_url=_env("AIOPS_GATEWAY_COMPANY_CHECK_TOKEN_URL")
             or _file_value(file_values, "AIOPS_GATEWAY_COMPANY_CHECK_TOKEN_URL"),
             company_token_client_id=_env("AIOPS_GATEWAY_COMPANY_TOKEN_CLIENT_ID")
@@ -281,6 +288,10 @@ class GatewayServerSettings:
             canonical_gateway_url(self.charging_status_base_url)
             if not SAFE_PROFILE_NAME.fullmatch(self.execution_environment):
                 raise ValueError("charging status requires a logical execution environment")
+        # 委派入口要求业务接口与逻辑环境都已配置：这两项是领取时「再用记录里的身份
+        # 做一次授权读取」的前提，缺一项就不是 fail closed 而是「配了一半就开门」。
+        if self.agent_run_config_file and not (self.charging_status_base_url and self.execution_environment):
+            raise ValueError("agent run delegation requires charging status settings")
         if not self.bind_host or any(character.isspace() for character in self.bind_host):
             raise ValueError("AIOPS_GATEWAY_BIND is invalid")
         # 解析在这里做（结果丢弃）：级别名不对就该在起监听之前失败，而不是让服务起不来

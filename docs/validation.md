@@ -1,3 +1,51 @@
+## 2026-10-17 · 委托执行的委派与领取入口：本地验证摘要
+
+**范围**：两个默认关闭的入口 —— `POST /v1/orders/{order_no}/charging-status/delegated`
+（已认证消费者）与 `POST /v1/internal/charging-status/claims/{run_id}`（仅节点），
+以及 `agent_runs.py` 里发往编排平台的那一跳。契约见
+[委托执行契约](m2-close-01-wiring.md)。**本片仍不包含执行节点本身。**
+
+**验证**（在本候选树上实跑）：
+
+- 契约回归 `tests/test_m2_close_contract.py`：**55 passed**（48 + 本轮 7 项放行复核回归）
+- 记录层 `tests/test_agent_run_records.py`：**34 passed**（继承 B1 最终版）
+- 与已交付的直读片、README 形状与标准接口契约一并回归：**112 passed**
+- 全量 `uv run pytest`：**2722 passed / 9 skipped**（354.71s，本候选树实跑）
+- `ruff check .` / `ruff format --check .`：通过
+- `npx spexcode@0.7.0 spec lint`：0 error / 0 warning
+
+**本轮修掉的两条放行缺陷**（独立复现脚本在修复前后各跑一次，见下）：
+
+1. **最后授权期间切换预期节点**：旧实现只比对「出示凭据的节点」与记录的 `expected_node_id`，
+   两者都还是 `node-a1`，于是旧节点拿到 `200 + ORDER-A`。修复后绑定复核包含**配置里的
+   预期节点**；同一放行函数覆盖新读与成功缓存；回归在最终授权期间及缓存重试时改变绑定，旧节点与新节点都拿不回旧 run。
+2. **成功记录在授权拒绝/故障后未进终态**：旧实现调 `fail()`，它只作用于 issued/running，
+   对 `succeeded` 什么也不做 —— 实测 403/503 之后记录仍是 succeeded，恢复授权后同一 run
+   又返回 200。修复后先尝试条件 `fail()`；若未更新，再尝试 `refuse()`，不依据授权前的旧状态分流；
+   拒绝只在**节点凭据已认过之后**发生，因此错凭据或兄弟节点不会破坏别人的记录。
+
+**独立验收（不复用本片的测试代码）**：`docs/validation/m2-self-accept.py` 自己起 app、
+自己造订单授权/上游/身份替身，按 Codex 的判据重跑 28 项；结果
+`docs/validation/m2-self-accept.json`（PASS）。同一脚本对**回退修复前**的实现跑一次
+（`m2-self-accept-prefix.json`），两条缺陷各有 4 项判据转红 —— 这是「验收能抓住缺陷」的证据，
+不是再跑一遍单测。用法：
+
+```bash
+PYTHONPATH=src .venv/bin/python docs/validation/m2-self-accept.py --repo .
+```
+
+**覆盖的形状**：未认证/错令牌 401；非 consumer 与缺入口头 403；他人与不存在订单 404 且不建记录；
+请求体多字段 422；只持 `run_id` 领取 401；错节点与停用节点 401/403；并发领取一个赢家；
+成功后重试同快照且不再读上游；过期/撤销/授权变化/绑定改变全部拒绝且**不释放已算好的快照**；
+三个端点的成功与错误响应都带 `Cache-Control: no-store`，`/health` 不受影响。
+
+**没有证明的**：真实编排平台、真实执行节点与真实模型；「节点上的工具集合只剩一个」那一类
+证据不在本片；真实公司身份、授权源、业务数据、TLS 与部署都未验证。合成依赖的取舍沿用
+[ADR-0030](adr/0030-test-doubles-must-be-bitter-than-reality.md)。
+
+
+**并发复核**：授权检查期间另一领取者完成记录，拒绝后仍必须变为 failed；恢复授权后旧 run 仍为 403。两条确定性交错回归覆盖授权拒绝与故障。
+
 ## 2026-10-17 · 委托执行的授权记录：本地验证摘要
 
 **范围**：`src/aiops_diagnostics/agent_runs.py` —— 请求级授权记录的存储、冻结身份与节点绑定。

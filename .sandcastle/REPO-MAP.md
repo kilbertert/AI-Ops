@@ -45,7 +45,7 @@ no project argument. Both answer *where* something is; neither replaces reading 
 
 ## Tests
 
-- tests/ — 146 test file(s, recursive)
+- tests/ — 147 test file(s, recursive)
 - script "cd:watch:test": node .sandcastle/cd-watch.test.mjs
 - pytest (pyproject.toml / pytest.ini present)
 
@@ -55,7 +55,7 @@ no project argument. Both answer *where* something is; neither replaces reading 
 - AGENTS.md
 - CLAUDE.md
 - README.md
-- docs/ — 84 markdown file(s)
+- docs/ — 85 markdown file(s)
 - docs/adr/ — 33 markdown file(s)
 - docs/agents/ — 29 markdown file(s)
 
@@ -123,10 +123,15 @@ docs/
     battery-inspection-metrics.md
   validation/
     a-charging-status-http.json
+    m2-b2-release-review.json
+    m2-b2-release-review.py
+    m2-self-accept-prefix.json
+    m2-self-accept.json
+    m2-self-accept.py
   afk-workflow.md
   architecture.md
   diag-query-api-plan.md
-  ... (18 more)
+  ... (19 more)
 examples/
   fixtures/
     missing_tx_data.json
@@ -138,30 +143,6 @@ examples/
 java/
   cloud-charging-pile-web/
     src/
-  README.md
-ops/
-  dify-console-bridge/
-    acceptance.feature
-    aiops-dify-console-bridge.service
-    dify-console-10008.conf
-    dify-console-publish.conf
-    dify-console-TLS.conf
-    dify-publish-button.js
-    qa-plan.md
-    README.md
-  dify-login-proxy/
-    aiops-dify-login-proxy.service
-    dify-login-page.html
-    dify-login-proxy.conf
-    login-proxy.env.example
-    README.md
-  dify-tools/
-    aiops-tools.openapi.json
-    README.md
-  environments/
-    env-41.toml
-  aiops-tdengine-readonly-proxy.service
-  dify-exposure-registry.md
   README.md
 ... (truncated — list the rest with `ls`/`find`)
 ```

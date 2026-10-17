@@ -10,6 +10,7 @@ import re
 import secrets
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
@@ -29,6 +30,19 @@ from aiops_diagnostics.agent_lifecycle import (
     AgentNotFound,
     AgentStore,
     allowed_models_from_settings,
+)
+from aiops_diagnostics.agent_runs import (
+    EXPIRED,
+    FAILED,
+    REVOKED,
+    SUCCEEDED,
+    AgentRun,
+    AgentRunConfig,
+    AgentRunConfigError,
+    AgentRunDispatchError,
+    AgentRunStore,
+    SnailDispatcher,
+    scope_from_json,
 )
 from aiops_diagnostics.async_job_lifecycle import DIAGNOSIS, QUESTION
 from aiops_diagnostics.caller_auth import (
@@ -195,6 +209,22 @@ class RunCreateRequest(BaseModel):
     key_slot: str | None = Field(default=None, max_length=64)
     provider: str | None = Field(default=None, max_length=64)
     fixture_name: str | None = Field(default=None, max_length=128)
+
+
+class ChargingStatusDelegationRequest(BaseModel):
+    """委派入口的请求体：**空**。
+
+    环境、appId、agentId、sid 都不接受：``extra="forbid"`` 下多一个字段就是 422。
+    这比「收下但忽略」强 —— 后者会让一次成功的越权提交看起来像正常请求。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class NodeClaimRequest(BaseModel):
+    """节点领取端点的请求体：同样为空，用于拒绝任何覆盖身份或业务范围的尝试。"""
+
+    model_config = ConfigDict(extra="forbid")
 
 
 class HealthReportJobRequest(BaseModel):
@@ -511,6 +541,9 @@ class GatewayAPI:
         # Conversation store shares the gateway database file (its own
         # tables); lazy so existing embedders (tests) need no new argument.
         self.conversation_store = ConversationStore(store.path)
+        # M2-CLOSE-01：节点委派的请求级授权记录。同样是共用数据库文件的独立表，
+        # 惰性构造，既有嵌入方不需要新增参数。
+        self.agent_run_store = AgentRunStore(store.path)
 
 
 class StandardAPIError(RuntimeError):
@@ -2453,6 +2486,269 @@ def create_gateway_app(
         _require_visible_order(context, caller, order_no)
         return _charged_snapshot_response(selected_settings, context, caller, order_no)
 
+    @app.post("/v1/orders/{order_no}/charging-status/delegated")
+    def delegated_charging_status(
+        order_no: str,
+        payload: ChargingStatusDelegationRequest,
+        response: Response,
+        caller: ScopeContext = Depends(authenticated_caller),  # noqa: B008
+        business_entry: Annotated[str | None, Header(alias="X-Business-Entry")] = None,
+    ) -> dict[str, Any]:
+        """把一次**已授权**的读取交给可信执行节点跑（M2-CLOSE-01 / 契约修订 A）。
+
+        这条路与上面的直读共用同一组判据与同一段取数代码；差别只在「谁来读」。
+        授权记录留在本进程，平台与应用/节点绑定由服务端配置决定，客户端提交不了。
+        """
+        del payload  # 空的严格模型：请求体里多一个字段就是 422，没有任何字段参与决策。
+        response.headers["Cache-Control"] = "no-store"
+        if not selected_settings.agent_run_config_file:
+            raise StandardAPIError(404, "AGENT_RUN_DISABLED", "route not found")
+        _require_consumer_self_order(caller, business_entry, order_no)
+        _require_visible_order(context, caller, order_no)
+        try:
+            config = AgentRunConfig.load(Path(selected_settings.agent_run_config_file))
+        except AgentRunConfigError as exc:
+            raise StandardAPIError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "AGENT_RUN_CONFIG_UNAVAILABLE",
+                "agent run unavailable",
+                retryable=True,
+            ) from exc
+        if config.environment != selected_settings.execution_environment:
+            # 绑定表说的是另一个环境：宁可不跑，也不把请求派到对不上的地方。
+            raise StandardAPIError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "AGENT_RUN_ENVIRONMENT_MISMATCH",
+                "agent run unavailable",
+                retryable=True,
+            )
+        run = context.agent_run_store.issue(
+            scope=caller, order_no=order_no, config=config, gateway_version=__version__
+        )
+        try:
+            SnailDispatcher().dispatch(config, run.run_id)
+        except AgentRunDispatchError as exc:
+            context.agent_run_store.fail(run.run_id, "platform_unavailable")
+            raise StandardAPIError(
+                status.HTTP_502_BAD_GATEWAY, "AGENT_RUN_UNAVAILABLE", "agent run unavailable"
+            ) from exc
+        settled = context.agent_run_store.get(run.run_id)
+        if settled is None:
+            raise StandardAPIError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "AGENT_RUN_UNAVAILABLE",
+                "agent run unavailable",
+                retryable=True,
+            )
+        if settled.state != SUCCEEDED:
+            # 平台回了话但节点没有交回结果（工具没跑、被拒、上游失败）。
+            # 这里**不**用平台自报的文本作答，也不把预期节点填进回执。
+            raise StandardAPIError(
+                status.HTTP_502_BAD_GATEWAY, "AGENT_RUN_NO_RESULT", "agent run produced no result"
+            )
+        return settled.receipt()
+
+    @app.post("/v1/internal/charging-status/claims/{run_id}")
+    def claim_charging_status(
+        run_id: str,
+        payload: NodeClaimRequest,
+        response: Response,
+        authorization: Annotated[str | None, Header()] = None,
+        node_build: Annotated[str | None, Header(alias="X-AI-Ops-Node-Build")] = None,
+    ) -> dict[str, Any]:
+        """节点领取端点：节点凭据决定身份，**自报字段不参与判定**。
+
+        顺序是硬的：认节点 → 核对记录/环境/节点 → **再执行一次订单授权** → 才
+        允许读业务或返回已有结果。请求体是一个空的严格模型：任何覆盖身份或业务范围的
+        字段都是 422，而不是被忽略（契约 §3.5）。
+
+        **放行是一个单独判定，三条路径共用**（R1-1）：新读一次、成功快照的重试、
+        以及领取竞争失败后读到的那份成功结果，都要在**交出去之前**重新核对
+        「记录仍有效 / 节点此刻仍有效 / 环境绑定未变」，否则撤销与节点停用会在这三条
+        路径上各漏一次。
+        """
+        del payload  # 同上：请求体不参与任何决策
+        response.headers["Cache-Control"] = "no-store"
+        if not selected_settings.agent_run_config_file:
+            raise StandardAPIError(404, "AGENT_RUN_DISABLED", "route not found")
+        token = (authorization or "").removeprefix("Bearer ").strip()
+
+        def load_config() -> AgentRunConfig:
+            # 每次领取（含最后一次放行）都重读：撤销节点就是改这个文件，下一次判定立刻生效。
+            try:
+                return AgentRunConfig.load(Path(selected_settings.agent_run_config_file))
+            except AgentRunConfigError as exc:
+                raise StandardAPIError(
+                    status.HTTP_503_SERVICE_UNAVAILABLE,
+                    "AGENT_RUN_CONFIG_UNAVAILABLE",
+                    "agent run unavailable",
+                    retryable=True,
+                ) from exc
+
+        def release_candidate(run_id_: str) -> AgentRun:
+            """最后的放行判定。**只在把业务正文交出去之前调用。**
+
+            顺序是刻意的（R2-1）：**先**完成可能阻塞的外部授权，**再**读配置与记录做本地判定。
+            反过来的话，授权器返回之后我们手里握着的仍是授权**之前**读到的那份快照 ——
+            在授权期间撤销、到期或停用节点，全都会被漏掉（实测三次都是 200 + 业务正文）。
+
+            授权之后的三项判定：节点凭据此刻仍有效、节点/环境与记录的绑定仍相符、
+            记录仍是 ``succeeded`` 且未过期。任一不成立就 ``refuse()`` 或抛错，绝不返回快照。
+            适用边界：此刻之前已发生的撤销/过期/停用一定拒绝；已经发出去的数据不追溯撤回，
+            也不跨外部授权源做分布式事务。
+            """
+            # 1) 可能阻塞的外部授权先做完。用授权前加载的记录只为取「要授权哪张单、哪个身份」。
+            before = context.agent_run_store.get(run_id_)
+            if before is None:
+                raise StandardAPIError(
+                    status.HTTP_404_NOT_FOUND, "AGENT_RUN_NOT_FOUND", "agent run not found"
+                )
+            if before.state != SUCCEEDED:
+                raise StandardAPIError(
+                    status.HTTP_403_FORBIDDEN, "AGENT_RUN_NOT_ACTIVE", "agent run is not active"
+                )
+            verdict = _order_authorization(context, scope_from_json(before.scope_json), before.order_no)
+            if verdict == UNAVAILABLE:
+                context.agent_run_store.refuse(run_id_, "authorization_unavailable")
+                raise StandardAPIError(
+                    status.HTTP_503_SERVICE_UNAVAILABLE,
+                    "ORDER_AUTHORIZATION_UNAVAILABLE",
+                    "order authorization unavailable",
+                    retryable=True,
+                )
+            if verdict == NOT_OWNED:
+                context.agent_run_store.refuse(run_id_, "order_not_visible")
+                raise StandardAPIError(
+                    status.HTTP_403_FORBIDDEN, "AGENT_RUN_ORDER_NOT_VISIBLE", "agent run refused"
+                )
+
+            # 2) 授权返回之后**重读**配置与记录：这是唯一被允许据以释放的对象。
+            current = load_config()
+            current_node = current.authenticate_node(token)
+            if current_node is None:
+                context.agent_run_store.refuse(run_id_, "node_deactivated")
+                raise StandardAPIError(
+                    status.HTTP_403_FORBIDDEN, "AGENT_RUN_NODE_INACTIVE", "agent run refused"
+                )
+            latest = context.agent_run_store.get(run_id_)
+            if latest is None:
+                raise StandardAPIError(
+                    status.HTTP_404_NOT_FOUND, "AGENT_RUN_NOT_FOUND", "agent run not found"
+                )
+            # 读记录时已把过期的非终态收敛为 expired，所以这里涵盖「授权期间到期」。
+            if latest.state != SUCCEEDED:
+                raise StandardAPIError(
+                    status.HTTP_403_FORBIDDEN, "AGENT_RUN_NOT_ACTIVE", "agent run is not active"
+                )
+            # 绑定复核必须比对**配置里的预期节点**，而不只是「出示凭据的那个节点」。
+            # 只比后者时，把 expected_node_id 从 node-a1 改成 node-a2 之后，旧节点仍然
+            # 与记录的 expected 相等 —— 实测就是这条漏检让旧节点拿到了 200 + 业务正文。
+            if (
+                current_node.node_id != latest.expected_node_id
+                or current.expected_node_id != latest.expected_node_id
+                or current_node.environment != latest.environment
+                or current.environment != latest.environment
+                or current.snail_app_id != latest.app_id
+                or str(current.snail_agent_id) != latest.agent_id
+            ):
+                context.agent_run_store.refuse(run_id_, "binding_changed")
+                raise StandardAPIError(status.HTTP_403_FORBIDDEN, "AGENT_RUN_WRONG_NODE", "agent run refused")
+            return latest
+
+        config = load_config()
+        node = config.authenticate_node(token)
+        if node is None:
+            raise StandardAPIError(
+                status.HTTP_401_UNAUTHORIZED, "NODE_TOKEN_REQUIRED", "node credential required"
+            )
+        run = context.agent_run_store.get(run_id)
+        if run is None:
+            raise StandardAPIError(status.HTTP_404_NOT_FOUND, "AGENT_RUN_NOT_FOUND", "agent run not found")
+        if run.environment != config.environment:
+            raise StandardAPIError(
+                status.HTTP_403_FORBIDDEN, "AGENT_RUN_WRONG_ENVIRONMENT", "agent run refused"
+            )
+        if node.environment != run.environment or node.node_id != run.expected_node_id:
+            # 同环境的另一个节点也领不到：比的是节点，不只是环境。
+            raise StandardAPIError(status.HTTP_403_FORBIDDEN, "AGENT_RUN_WRONG_NODE", "agent run refused")
+        if run.state in {EXPIRED, REVOKED, FAILED}:
+            raise StandardAPIError(
+                status.HTTP_403_FORBIDDEN, "AGENT_RUN_NOT_ACTIVE", "agent run is not active"
+            )
+
+        # 用记录里冻结的身份**再授权一次**。授权在这期间变化（订单不可见 / 授权源故障）
+        # 时不放行 —— 包括「已有成功快照」的那条路：不释放旧记录的结果（IC-09）。
+        try:
+            frozen = scope_from_json(run.scope_json)
+        except (ValueError, TypeError) as exc:
+            context.agent_run_store.fail(run_id, "scope_unreadable", actual_node_id=node.node_id)
+            raise StandardAPIError(
+                status.HTTP_403_FORBIDDEN, "AGENT_RUN_SCOPE_INVALID", "agent run refused"
+            ) from exc
+
+        def deny(reason: str) -> None:
+            """预授权失败要把记录钉成终态 —— 但只能钉自己这条记录。
+
+            ``fail()`` 只作用于 issued/running，所以对一条**已有成功快照**的记录它什么也不做：
+            实测授权变更 → 403 之后记录仍是 succeeded，恢复授权后同一个 run 又能返回 200。
+            对 succeeded 用 ``refuse()``（放行复核失败的专用终态），其余用 ``fail()``。
+
+            只在节点凭据已经认过之后调用，所以「拿错凭据乱试」不会破坏别人的记录。
+            """
+            # 授权期间另一个领取者可能已经 complete，不能依据授权前的 run.state 分流。
+            if not context.agent_run_store.fail(run_id, reason, actual_node_id=node.node_id):
+                context.agent_run_store.refuse(run_id, reason)
+
+        verdict = _order_authorization(context, frozen, run.order_no)
+        if verdict == UNAVAILABLE:
+            deny("authorization_unavailable")
+            raise StandardAPIError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "ORDER_AUTHORIZATION_UNAVAILABLE",
+                "order authorization unavailable",
+                retryable=True,
+            )
+        if verdict == NOT_OWNED:
+            deny("order_not_visible")
+            raise StandardAPIError(
+                status.HTTP_403_FORBIDDEN, "AGENT_RUN_ORDER_NOT_VISIBLE", "agent run refused"
+            )
+
+        if run.state == SUCCEEDED:
+            # 有效期内重试：交回**同一份**快照，不再读一次业务（IC-05）。
+            # 但必须先过放行判定 —— 快照存在不等于此刻仍可交出。
+            return _claim_payload(release_candidate(run_id))
+        if not context.agent_run_store.claim(run_id):
+            latest = context.agent_run_store.get(run_id)
+            if latest is not None and latest.state == SUCCEEDED:
+                # 并发者已经成功：走同一条放行判定，而不是直接返回它。
+                return _claim_payload(release_candidate(run_id))
+            raise StandardAPIError(
+                status.HTTP_409_CONFLICT,
+                "AGENT_RUN_IN_PROGRESS",
+                "agent run is already being executed",
+                retryable=True,
+            )
+        try:
+            snapshot = _authorized_charging_snapshot(selected_settings, frozen, run.order_no)
+        except ChargingStatusError as exc:
+            context.agent_run_store.fail(run_id, "upstream_failed", actual_node_id=node.node_id)
+            raise StandardAPIError(
+                status.HTTP_502_BAD_GATEWAY, "CHARGING_STATUS_UNAVAILABLE", "charging status unavailable"
+            ) from exc
+        if not context.agent_run_store.complete(
+            run_id,
+            snapshot=snapshot,
+            actual_node_id=node.node_id,
+            node_build=(node_build or "")[:128] or None,
+        ):
+            # 读取期间被撤销或已过期：结果不落库、也不返回。
+            raise StandardAPIError(
+                status.HTTP_403_FORBIDDEN, "AGENT_RUN_NOT_ACTIVE", "agent run is not active"
+            )
+        # 落库之后、交出去之前再判一次：撤销/停用可能就发生在这一次读取期间。
+        return _claim_payload(release_candidate(run_id))
+
     @app.post("/v1/health-report-jobs", status_code=status.HTTP_202_ACCEPTED)
     def create_health_report_job(
         payload: HealthReportJobRequest,
@@ -4127,6 +4423,21 @@ def _charged_snapshot_response(
         **snapshot,
         "environment": settings.execution_environment,
         "gateway_version": __version__,
+    }
+
+
+def _claim_payload(run: AgentRun) -> dict[str, Any]:
+    """回给执行节点的**唯一合法载荷**：7 字段快照 + 服务端观察到的执行位置。
+
+    ``actual_node_id`` 来自节点认证结果，不是节点自报的头，也不是模型文本。
+    """
+    snapshot = run.snapshot or {}
+    return {
+        **snapshot,
+        "environment": run.environment,
+        "gateway_version": run.gateway_version,
+        "actual_node_id": run.actual_node_id,
+        "run_state": run.state,
     }
 
 
