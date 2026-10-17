@@ -19,7 +19,7 @@
       "id": "l6-boundary",
       "type": "frontend",
       "label": "L6 服务边界与入口",
-      "sublabel": "四条独立进程 · 63 条路由",
+      "sublabel": "四条独立进程 · 65 条路由",
       "sources": [
         {
           "path": ".spec/ai-ops/l6-boundary/spec.md",

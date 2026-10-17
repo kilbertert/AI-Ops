@@ -1,6 +1,6 @@
 ---
 title: l6-boundary
-desc: 进程边界与入口——四条独立的进程、63 条路由
+desc: 进程边界与入口——四条独立的进程、65 条路由
 hue: 0
 code:
   - src/aiops_diagnostics/gateway_api.py

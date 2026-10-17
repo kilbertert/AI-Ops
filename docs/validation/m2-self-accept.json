@@ -1,0 +1,153 @@
+{
+  "kind": "m2_self_acceptance",
+  "repo": "AI-Ops-m2-b2-public-prep",
+  "timestamp_utc": "2026-10-17T16:33:22.244143+00:00",
+  "status": "PASS",
+  "checks": [
+    {
+      "name": "默认关闭：未配置绑定表时委派入口 404",
+      "ok": true,
+      "detail": "status=404"
+    },
+    {
+      "name": "委托入口在 502 之前确实建了记录",
+      "ok": true,
+      "detail": "records=1"
+    },
+    {
+      "name": "节点领取成功",
+      "ok": true,
+      "detail": "status=200"
+    },
+    {
+      "name": "领取回执的七个字段 + 位置",
+      "ok": true,
+      "detail": "['actual_node_id', 'environment', 'gateway_version', 'observed_at', 'order_no', 'run_state', 'source', 'status_code', 'status_role']"
+    },
+    {
+      "name": "敏感字段被裁掉",
+      "ok": true,
+      "detail": ""
+    },
+    {
+      "name": "第二条记录先成功",
+      "ok": true,
+      "detail": "status=200"
+    },
+    {
+      "name": "钩子确实在最后一次授权里触发",
+      "ok": true,
+      "detail": "allow_calls=8"
+    },
+    {
+      "name": "最后授权期间切换预期节点 ⇒ 拒绝",
+      "ok": true,
+      "detail": "status=403"
+    },
+    {
+      "name": "拒绝时不含 order_no",
+      "ok": true,
+      "detail": "{\"error\": {\"code\": \"AGENT_RUN_WRONG_NODE\", \"message\": \"agent run refused\", \"retryable\": false}}"
+    },
+    {
+      "name": "记录被钉成 failed/binding_changed",
+      "ok": true,
+      "detail": "failed/binding_changed"
+    },
+    {
+      "name": "旧节点不能再用旧 run 恢复",
+      "ok": true,
+      "detail": "status=403"
+    },
+    {
+      "name": "新预期节点也不能把旧 run 恢复出来",
+      "ok": true,
+      "detail": "status=403"
+    },
+    {
+      "name": "新的成功记录可领取",
+      "ok": true,
+      "detail": "status=200"
+    },
+    {
+      "name": "授权变更 ⇒ 403",
+      "ok": true,
+      "detail": "status=403"
+    },
+    {
+      "name": "拒绝后记录进入终态 failed/order_not_visible",
+      "ok": true,
+      "detail": "failed/order_not_visible"
+    },
+    {
+      "name": "恢复授权后同一 run 仍拒绝",
+      "ok": true,
+      "detail": "status=403"
+    },
+    {
+      "name": "恢复后不再读一次上游",
+      "ok": true,
+      "detail": "3 -> 3"
+    },
+    {
+      "name": "授权源故障 ⇒ 503 且可重试",
+      "ok": true,
+      "detail": "status=503"
+    },
+    {
+      "name": "503 同时进入终态",
+      "ok": true,
+      "detail": "failed/authorization_unavailable"
+    },
+    {
+      "name": "授权源恢复后仍拒绝",
+      "ok": true,
+      "detail": "status=403"
+    },
+    {
+      "name": "未登记凭据 ⇒ 401",
+      "ok": true,
+      "detail": "status=401"
+    },
+    {
+      "name": "兄弟节点 ⇒ 403",
+      "ok": true,
+      "detail": "status=403"
+    },
+    {
+      "name": "别人的请求没有把记录改成终态",
+      "ok": true,
+      "detail": "succeeded"
+    },
+    {
+      "name": "委派入口多字段 ⇒ 422",
+      "ok": true,
+      "detail": "status=422"
+    },
+    {
+      "name": "领取入口多字段 ⇒ 422",
+      "ok": true,
+      "detail": "status=422"
+    },
+    {
+      "name": "成功响应带 no-store",
+      "ok": true,
+      "detail": "no-store"
+    },
+    {
+      "name": "错误响应也带 no-store",
+      "ok": true,
+      "detail": "no-store"
+    },
+    {
+      "name": "/health 不带 no-store",
+      "ok": true,
+      "detail": ""
+    }
+  ],
+  "code_identity": {
+    "src/aiops_diagnostics/gateway_api.py": "f1e21270a9f074997885ae060a0309d80f493e784b8e29c6dcfb4a4265df4a6e",
+    "src/aiops_diagnostics/agent_runs.py": "eb60e292cc8b93aeccbe1b21a5387082fe1ba43ffe4afde68d981950ba73c646",
+    "src/aiops_diagnostics/gateway_config.py": "dade1204471c08d9f0e05f68b5f3436dad1e0ee47695ff3f04aa74f7c655f9d6"
+  }
+}

@@ -42,7 +42,7 @@
 治理面产出的 PR 改的是产品面代码。本文档以产品面为主，治理面见
 [第八节](#八验证与交付纪律) 与 [docs/afk-workflow.md](docs/afk-workflow.md)。
 
-产品面的对外能力（Gateway 共 63 条路由）分四组：
+产品面的对外能力（Gateway 共 65 条路由）分四组：
 
 - **诊断**：设备运行路径 `/v1/runs`（workspace 设备令牌）、标准 API
   `/v1/standard/diagnoses`（调用者身份委托）。
@@ -279,14 +279,14 @@ flowchart TB
 
 | 模块 | 职责 |
 |---|---|
-| `sources.py` | `DiagnosticSources` 协议 + 全部实现（见 [4.1](#41-证据源接缝)）。**最大单文件（1550 行）** |
+| `sources.py` | `DiagnosticSources` 协议 + 全部实现（见 [4.1](#41-证据源接缝)）。**最大单文件（5026 行）** |
 | `diagnostic_tools.py` | `DiagnosticToolExecutor`：模型可点名的 7 个工具在此落地；**工具白名单在这里强制**（`allowed_tools`，白名单外记 `blocked` 且不取数，见 [ADR-0019](docs/adr/0019-tool-allowlist-enforced-in-executor.md)）；含 `preflight_environment` 环境预检（advisory） |
 | `engine.py` | `DiagnosticEngine`：确定性规则诊断（`--mode deterministic`）。**同时被 `diagnostic_tools` 复用来提供 `known_runbook` 参考证据** |
 | `journal.py` | `EvidenceJournal`：追加式证据日志，每个结果存 artifact + SHA-256 |
 | `agent_workspace.py` | 运行目录的磁盘契约：manifest/state/result/events，run_id 创建 |
 | `health_report.py` | 最小健康报告装配，带更窄的 `OrderSource` 协议 |
 | `charging_status.py` | 本人订单**充电状态快照**的读取（`GET /v1/orders/{order_no}/charging-status` 的下游一半）：经 `bounded_http` 打一笔按订单号钉住的 CPMS `chargingInfo` 接口，**禁止重定向**（不把身份头带去别处）、断言响应里的订单号就是被授权的那一笔；状态码**不重新定义**，交 `order_status.py` 定角色。调用方必须先完成身份与订单授权 —— 本模块不回答「这单是不是你的」 |
-| `agent_runs.py` | **委托执行的授权记录**（尚未接入任何 HTTP 入口）：一次已授权的读取可以由可信执行节点代跑。记录留在 Gateway（`issued→running→succeeded`，另有 `failed`/`revoked`/`expired`，固定 180 秒不续期）；执行节点只拿到一个高熵 `run_id`，**知道它本身不授予读取权限**，回呼时必须用自己的独立凭据认身。节点凭据只以 SHA-256 存进绑定表并用它派生身份；`claim` 是一条带条件的 UPDATE，所以并发领取只有一个赢家、成功后重试返回同一份快照。冻结的 `ScopeContext` 随记录落库，放行前要**用冻结身份重新授权一次** —— 授权变了连已算好的结果也不释放。见 [ADR-0033](docs/adr/0033-consumer-charging-status.md) |
+| `agent_runs.py` | **委托执行的授权记录与派发**：一次已授权的读取可以交给可信执行节点跑。记录留在 Gateway（`issued→running→succeeded`，另有 `failed`/`revoked`/`expired`，固定 180 秒不续期）；执行节点只拿到一个高熵 `run_id`，**知道它本身不授予读取权限**，回呼时必须用自己的独立凭据认身。节点凭据只以 SHA-256 存进绑定表；`claim` 是一条带条件的 UPDATE，所以并发领取只有一个赢家、成功后重试返回同一份快照。放行前用冻结身份**再授权一次** —— 授权变了连已算好的结果也不释放。`SnailDispatcher` 是发往编排平台的那一跳（只传 agentId、`sid`、一句固定提问）。见 [ADR-0033](docs/adr/0033-consumer-charging-status.md) |
 | `knowledge_retrieval.py` | 有界知识检索与媒体签发：`KbServiceClient`、`KnowledgeSearchGuard`、`MediaResourceSigner`、`MediaProxy` |
 
 #### L4 推理与产品能力
@@ -336,7 +336,7 @@ flowchart TB
 
 | 模块 | 职责 |
 |---|---|
-| `gateway_api.py` | FastAPI 应用工厂 + **全部 63 条路由** + 请求/响应 schema。**最大单文件（4715 行）** |
+| `gateway_api.py` | FastAPI 应用工厂 + **全部 65 条路由** + 请求/响应 schema。**最大单文件（5026 行）** |
 | `gateway_runtime.py` | Gateway 的服务端编排核心：持有数据库凭据、Codex session、线程池，执行 run / QA / 健康报告 / 标准诊断 |
 | `cli.py` | Typer 根应用 `aiops`：`init`/`key-install`/`paths`/`diagnose`/`doctor`/`shell`/`agent-resume`/`agent-doctor`，并挂载 `admin` 与 `remote` 子应用 |
 | `gateway_server.py` | `aiops-gateway`：`serve`、一次性注册码签发、设备管理 |
@@ -440,7 +440,7 @@ flowchart TB
 | 命令 | 入口 | 起什么 |
 |---|---|---|
 | `aiops` | `cli.py:app`（Typer） | 工程师本地诊断：`diagnose` / `doctor` / `shell` / `agent-resume` / `agent-doctor` / `init` / `key-install` / `paths`，并挂 `admin` 与 `remote` 子应用 |
-| `aiops-gateway` | `gateway_server.py:main` | 多端服务：`serve` 起 uvicorn 承载 63 条路由；`issue-enrollment` / `devices` / `revoke-device` 管设备 |
+| `aiops-gateway` | `gateway_server.py:main` | 多端服务：`serve` 起 uvicorn 承载 65 条路由；`issue-enrollment` / `devices` / `revoke-device` 管设备 |
 | `aiops-tdengine-proxy` | `tdengine_proxy.py:main` | loopback-only 的 TDengine 严格只读代理 |
 | `aiops-responses-adapter` | `responses_adapter.py:main` | Responses API 兼容反向代理 |
 
@@ -491,7 +491,7 @@ docs/                     架构、契约、ADR、运行手册（见第十节路
 AGENTS.md                 仓库级开发共识（中文文档、里程碑同步、业务边界）
 GLOSSARY.md                领域词汇表（术语 + 应避免的同义词）
 SOP.md / 充电桩问题排查SOP.md   业务规则来源（后端行为的中文说明）
-acceptance.feature        Gherkin 可执行验收约束（53 Feature / 144 Rule / 380 Scenario）
+acceptance.feature        Gherkin 可执行验收约束（57 Feature / 150 Rule / 395 Scenario）
 qa-plan.md                QA 用例（158 个用例 ID，含环境/前置/数据/动作/预期/清理）
 ```
 

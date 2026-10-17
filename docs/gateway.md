@@ -58,6 +58,17 @@ flowchart LR
   状态码不在这里重新定义（交 `order_status.py`），未知码是 `unknown`，**不解释成充电结束**。
   `observed_at` 是**我们读取的时刻**，不是设备上报时刻。
 
+- `POST /v1/orders/{order_no}/charging-status/delegated`：把一次**已授权**的读取交给可信执行节点
+  （[委托执行契约](m2-close-01-wiring.md)）。判据与直读入口完全相同；差别只在「谁来读」。
+  **默认关闭**：未配置 `AIOPS_GATEWAY_AGENT_RUN_CONFIG_FILE` 时 404。请求体是**空的严格模型**
+  —— 环境、appId、agentId、sid 都不接受（多一个字段就是 422），绑定来自服务端配置。
+  回执含 `actual_node_id` / `node_build` / `gateway_version`，`agent_version` 为 null 且标注
+  `not_wired`（版本追溯仍是缺口，不冒充已通过）。
+- `POST /v1/internal/charging-status/claims/{run_id}`：**仅节点**可调。节点凭据走
+  `Authorization`，身份由凭据派生（自报的 node/host 头不参与判定）；请求体同样是空的严格模型。
+  顺序是硬的：认节点 → 核对记录/环境/节点 → **再执行一次订单授权** → 才读业务或返回已有结果。
+  同一记录最多启动一次业务读取；成功后重试返回同一份快照。
+
 ### 标准资源 API 认证
 
 标准资源接口与既有 `aops_*` 设备接口并存，二者不能互换。标准接口只接受
