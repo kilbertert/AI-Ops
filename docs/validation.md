@@ -48,7 +48,8 @@ HTTP 200 与模型响应都收到了，但客户端退出码是 56
 必须被重写成自洽帧、上游 4xx 保留状态码与完整 body、`curl --http1.1` 退出 0。
 客户端使用 `suppress_ragged_eofs=False`，默认的 `True` 会把这次缺陷静默当成正常结束。
 
-**全量与门禁**：`uv run pytest -n auto` **2867 passed / 9 skipped**（51.96s）。首跑出现一次
+**全量与门禁**：`uv run pytest -n auto` **2867 passed / 9 skipped**（51.96s）；
+并入当时最新 `main` 后重跑 **2874 passed / 9 skipped**（52.87s，主干新增七条）。首跑出现一次
 `tests/test_dify_tracer_bullet.py` 失败；该用例单独跑与整文件并行跑均通过，重跑全量通过，
 判为与本次改动无关的偶发，如实记在这里。Ruff、format（449 文件）、compileall、`uv pip check`、
 ADR 结构检查、policy、repo-map、Spec lint 通过。
