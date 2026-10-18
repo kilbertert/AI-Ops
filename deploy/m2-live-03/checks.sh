@@ -90,8 +90,8 @@ preflight() {
   disk_kb=$(df -Pk "$STATE" 2>/dev/null | awk 'NR==2{print $4}')
   say "  内存可用 $((avail_kb / 1024)) MiB"
   say "  $STATE 所在盘余量 $(( ${disk_kb:-0} / 1024 )) MiB"
-  if [ "$avail_kb" -lt $((3764 * 1024)) ]; then
-    bad "预算不足：需要 ≥3764 MiB 可用（栈 2864 + 宿主余量 900），实际 $((avail_kb / 1024)) MiB"
+  if [ "$avail_kb" -lt $((3892 * 1024)) ]; then
+    bad "预算不足：需要 ≥3892 MiB 可用（栈 2992 + 宿主余量 900），实际 $((avail_kb / 1024)) MiB"
   else
     ok "余量够整栈预算"
   fi
@@ -259,6 +259,18 @@ PY
     fi
   fi
 
+  say "== 模型出口（固定目标，必填） =="
+  if [ -n "${M2LIVE_MODEL_UPSTREAM:-}" ]; then
+    ok "上游目标已给出（不在此打印值）"
+  else
+    bad "M2LIVE_MODEL_UPSTREAM 未设置：模型调用没有受控出口"
+  fi
+  if [ -n "${M2LIVE_MODEL_ID:-}" ] || [ "${M2LIVE_SYNTH_MODE:-0}" = "1" ]; then
+    ok "供应商模型标识已给出（合成模式有默认）"
+  else
+    bad "M2LIVE_MODEL_ID 未设置：正式模式必须有供应商模型标识"
+  fi
+
   say "== 路由归属 =="
   local prod_env=/etc/aiops-41/gateway.env
   # 本栈的三个开关必须**显式非空**：Gateway 读取顺序是「环境变量 or 生产配置文件」，
@@ -297,6 +309,9 @@ up() {
   # 随后被拒绝的状态根上，会把别人的目录变成「本栈的」。原子创建（临时文件 + mv），
   # 且绝不覆盖不属于本项目的标记。
   claim_state_root || return $?
+  # 模型出口的两个凭据（节点→出口、出口→供应商）。缺供应商凭据时在这里失败，
+  # 而不是等第一次模型调用。
+  "$HERE/prepare-secrets.sh" || return 2
   say "== 启动 =="
   "${COMPOSE[@]}" up -d || return 2
   ready
@@ -328,11 +343,12 @@ PY
     sleep 4
   done
   local missing=""
-  # 冷启动顺序：首次 up 时节点还没有平台应用凭据（要等 bootstrap），所以「节点未注册」
-  # 在凭据尚未生成时是预期的，不是失败。凭据存在后仍不注册才是失败。
+  # 冷启动顺序：首次 up 时节点还没有平台应用凭据（要等 bootstrap）。这**不是**就绪：
+  # 报告 pending 并返回非零，`ready` 的成功只表示「四项在同一轮都成立」。
+  # 把 pending 当成通过会让「节点已注册」这句话在什么都没注册时也成立。
   if [ $node -eq 0 ] && [ ! -s "${M2LIVE_CONFIG:-/etc/aiops-m2-live}/node/node.env" ]; then
-    say "  pending node：节点凭据尚未生成 —— 先跑 bootstrap.sh，再跑 checks.sh ready"
-    node=1
+    red "  pending node：节点凭据尚未生成 —— 先跑 bootstrap.sh，再跑 checks.sh ready"
+    return 1
   fi
   [ $store -eq 1 ] || missing+=" store"
   [ $platform -eq 1 ] || missing+=" platform"
@@ -349,7 +365,7 @@ PY
     return 1
   fi
   grn "  四项就绪：store / platform / 节点注册 / 隔离 Gateway"
-  say "== 实际占用（对照预算 2864 MiB / 1.5 CPU） =="
+  say "== 实际占用（对照预算 2992 MiB / 1.49 CPU） =="
   docker stats --no-stream --format '  {{.Name}}  mem={{.MemUsage}}  cpu={{.CPUPerc}}' \
     $(containers) 2>/dev/null
 }
@@ -394,13 +410,26 @@ verify() {
     fi
   fi
 
-  # 无出网：节点只接 internal 网络。用一次真实 TCP 连接判定 ——「解析得到地址」
-  # 在 DNS 之外什么也证明不了（internal 网络可以有两个网络时照常解析）。
-  if docker exec m2live03-node sh -c 'exec 3<>/dev/tcp/1.1.1.1/443' 2>/dev/null; then
+  # 无出网：节点只接两张 internal 网络。判据必须有**正对照**，否则一个根本连不上的
+  # 客户端会让「禁止目标不可达」变成空话：基础 JVM 镜像的 /bin/sh 是 dash，它没有
+  # /dev/tcp —— 上一版正是因此把「从未发起连接」报成了「隔离成功」。
+  # 这里用镜像里确实存在的 bash（/bin/bash）：
+  #   正对照 model-proxy:9101 必须可达（节点到受控出口）
+  #   禁止目标 1.1.1.1:443 必须不可达（节点没有任意外联）
+  local probe=/bin/bash
+  docker exec m2live03-node "$probe" -c 'true' 2>/dev/null || {
+    red "  节点里没有可用的 bash，无法做正对照 —— 不接受「无出网」的结论"
+    return 1
+  }
+  if ! docker exec m2live03-node "$probe" -c 'exec 3<>/dev/tcp/model-proxy/9101' 2>/dev/null; then
+    red "  正对照失败：节点连不到受控模型出口 model-proxy:9101"
+    return 1
+  fi
+  if docker exec m2live03-node "$probe" -c 'exec 3<>/dev/tcp/1.1.1.1/443' 2>/dev/null; then
     red "  节点容器仍能建立外网 TCP 连接 —— internal 网络未生效"
     return 1
   fi
-  grn "  节点无出网"
+  grn "  节点可达受控模型出口、不可达外网（正对照成立）"
 }
 
 # 正式依赖可达性：从**隔离 Gateway 的同一网络空间**验证，而不是在宿主上 curl。

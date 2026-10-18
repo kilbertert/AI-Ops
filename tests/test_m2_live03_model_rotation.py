@@ -121,7 +121,50 @@ def test_endpoint_mismatch_is_reported_as_such(bootstrap, monkeypatch):
     monkeypatch.setattr(
         bootstrap,
         "call",
-        lambda *a, **k: (200, {"status": 1, "data": [dict(_config(), apiEndpoint="https://other.test/v1")]}),
+        lambda *a, **k: (
+            200,
+            {"status": 1, "data": [dict(_config(), apiEndpoint="https://other.test/v1")]},
+        ),
     )
     with pytest.raises(SystemExit):
-        bootstrap.ensure_model("t", "https://api.example.test/v1", "k")
+        bootstrap.ensure_model("t", "https://api.example.test/v1", "k", "vendor-model")
+
+
+def test_a_missing_model_id_is_refused_before_touching_the_platform(bootstrap, monkeypatch):
+    """缺供应商模型标识时必须在**改平台状态之前**拒绝，不能先建一个不认识的 modelKey。"""
+    calls: list[str] = []
+    monkeypatch.setattr(bootstrap, "call", lambda path, *a, **k: calls.append(path) or (200, {}))
+    with pytest.raises(SystemExit):
+        bootstrap.ensure_model("t", "https://api.example.test/v1", "k", "")
+    assert calls == [], "缺模型标识时不应该发出任何平台请求"
+
+
+def test_an_internal_name_left_as_model_key_is_refused(bootstrap, monkeypatch):
+    """上一版把项目名写成了 modelKey：供应商会收到一个不认识的模型标识。"""
+    monkeypatch.setattr(
+        bootstrap,
+        "call",
+        lambda *a, **k: (
+            200,
+            {"status": 1, "data": [dict(_config(), modelKey=bootstrap.SERVICE)]},
+        ),
+    )
+    with pytest.raises(SystemExit):
+        bootstrap.ensure_model("t", "https://api.example.test/v1", "k", "vendor-model")
+
+
+def test_the_created_config_carries_the_vendor_model_id(bootstrap, monkeypatch):
+    created: dict = {}
+
+    def fake_call(path, body=None, headers=None, method=None):
+        if path == "/ai-model/by-type/CHAT":
+            return 200, {"status": 1, "data": []}
+        if path == "/ai-model/providers":
+            return 200, {"status": 1, "data": [{"id": 1, "providerKey": "openai"}]}
+        created.update(body or {})
+        return 200, {"status": 1, "data": 9}
+
+    monkeypatch.setattr(bootstrap, "call", fake_call)
+    bootstrap.ensure_model("t", "https://api.example.test/v1", "k", "vendor-model")
+    assert created["modelKey"] == "vendor-model", "发给供应商的 model 必须是供应商标识"
+    assert bootstrap.SERVICE in created["modelName"], "内部资源名只应出现在显示名里"

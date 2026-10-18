@@ -27,6 +27,9 @@ from pathlib import Path
 # SSL_CERT_FILE 指向本栈 CA。**不经过回环中继**，也不关闭校验。
 BASE = os.environ.get("M2LIVE_PLATFORM_URL", "https://platform:8900").rstrip("/") + "/snail-ai"
 SERVICE = os.environ.get("M2LIVE_SERVICE", "aiops-m2live03")
+# 供应商实际收到的 `model` 字段。**不是**内部资源名：把它写成项目名会让供应商收到一个
+# 它不认识的模型标识。正式模式必须显式给出；合成模式由 bootstrap.sh 传桩模型名。
+MODEL_ID = os.environ.get("M2LIVE_MODEL_ID", "").strip()
 MODE = os.environ.get("M2LIVE_BOOTSTRAP_MODE", "apply")
 ADMIN_FILE = "/tmp/platform_admin"
 BINDINGS_IN = "/tmp/agent-runs.in.json"
@@ -247,11 +250,19 @@ def rotate_model_key(token: str, config: dict, endpoint: str, api_key: str) -> N
         fail("写入后读回的模型凭据与本次不一致")
 
 
-def ensure_model(token: str, endpoint: str, api_key: str) -> int:
+def ensure_model(token: str, endpoint: str, api_key: str, model_id: str) -> int:
+    if not model_id:
+        # 在**改平台状态之前**拒绝：否则会留下一个供应商不认识的 modelKey。
+        fail("M2LIVE_MODEL_ID 未设置：正式模式必须显式给出供应商模型标识")
     status, body = call("/ai-model/by-type/CHAT", None, {"Snail-Ai-Auth": token}, "GET")
     for config in (body or {}).get("data", []) or []:
-        if config.get("modelKey") != SERVICE:
+        if config.get("modelKey") not in {model_id, SERVICE}:
             continue
+        if config.get("modelKey") == SERVICE:
+            fail(
+                "平台上已有以内部资源名作 modelKey 的模型配置（上一版遗留）："
+                "供应商会收到一个不认识的模型标识。删除该配置后重跑"
+            )
         if not endpoint_matches(config, endpoint):
             fail(
                 "已有模型配置的端点与本次不一致："
@@ -266,8 +277,9 @@ def ensure_model(token: str, endpoint: str, api_key: str) -> int:
         "/ai-model/config",
         {
             "providerId": provider_id,
-            "modelName": SERVICE,
-            "modelKey": SERVICE,
+            # `modelName` 是平台里的显示名；`modelKey` 是**发给供应商的 model**。
+            "modelName": f"{SERVICE} ({model_id})",
+            "modelKey": model_id,
             "modelType": "CHAT",
             "adapterKey": "openai-compatible",
             # 平台用服务端配置的 key/iv 加密后存储；这里传的是真实凭据（来自 0600 文件）。
@@ -379,7 +391,7 @@ def main() -> int:
         fail("M2LIVE_MODEL_ENDPOINT 未设置：正式试运行不接受合成模型端点")
     # 正式模式必须拿到真实模型凭据；合成模式用桩端点，凭据同样走 0600 文件
     # （由 bootstrap.sh 写入一个占位值），保证「凭据不经过命令行」这条对两种模式一致。
-    model_id = ensure_model(token, endpoint, model_api_key())
+    model_id = ensure_model(token, endpoint, model_api_key(), MODEL_ID)
     agent_id = ensure_agent(token, app["appId"], model_id)
     open_id = ensure_openapi_user(app["appId"], app_token, agent_id)
 

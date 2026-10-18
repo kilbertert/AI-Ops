@@ -30,6 +30,7 @@ def mounts(argv: list[str]) -> int:
         os.path.realpath(os.path.join(config, "platform")),
         os.path.realpath(os.path.join(config, "tls", "public")),
         os.path.realpath(os.path.join(config, "tls", "platform")),
+        os.path.realpath(os.path.join(config, "tls", "proxy")),
         os.path.realpath(os.path.join(config, "gateway", "runtime.env")),
     }
     readonly_allow.update(os.path.realpath(p) for p in argv[3:])

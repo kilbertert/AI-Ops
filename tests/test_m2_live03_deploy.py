@@ -66,9 +66,28 @@ def test_only_the_gateway_mounts_production_read_only(compose):
         assert entry.endswith(":ro"), f"生产挂载必须是只读: {entry}"
 
 
-def test_the_internal_network_has_no_egress_and_node_uses_only_it(compose):
+def test_node_reaches_only_internal_networks(compose):
+    """节点不得接入可出网网络。模型调用经**固定目标的受控出口**，不是通用 egress。"""
     assert compose["networks"]["trial"]["internal"] is True
-    assert compose["services"]["node"]["networks"] == ["trial"], "节点不得接入可出网网络"
+    assert compose["networks"]["modellink"]["internal"] is True
+    assert compose["services"]["node"]["networks"] == ["trial", "modellink"], "节点只能接内部网络"
+    egress_members = [
+        name for name, spec in compose["services"].items() if "egress" in (spec.get("networks") or [])
+    ]
+    assert "node" not in egress_members
+    # 出口本身是可出网的，且只转发到一个固定目标。
+    proxy = compose["services"]["model-proxy"]
+    assert "egress" in proxy["networks"]
+    command = " ".join(proxy.get("command", []))
+    assert "${M2LIVE_MODEL_UPSTREAM" in command, "出口的上游目标没有在部署件里钉住"
+
+
+def test_the_model_proxy_never_sees_the_business_credentials(compose):
+    proxy = compose["services"]["model-proxy"]
+    joined = " ".join(str(v) for v in proxy.get("volumes", []))
+    assert "/etc/aiops-41" not in joined, "模型出口挂到了生产配置"
+    assert "/tls/proxy" in joined
+    assert "tls/public" not in joined.split("/tls/proxy")[0]
 
 
 def test_gateway_state_lives_under_the_stack_root(compose):

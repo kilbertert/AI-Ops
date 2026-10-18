@@ -15,9 +15,24 @@
 #   M2LIVE_SYNTH_MODE=1 bash deploy/m2-live-03/checks.sh up
 
 services:
+  model-proxy:
+    # 合成模式的出口目标就是桩模型；桩只在 egress 上，节点够不到它。
+    environment:
+      M2LIVE_MODEL_UPSTREAM: http://modelstub:9100
+    command:
+      - --listen-port
+      - "9101"
+      - --upstream
+      - http://modelstub:9100
+      - --upstream-key-file
+      - /etc/m2live/upstream_api_key
+      - --proxy-token-file
+      - /etc/m2live/proxy_token
+
   gateway:
     environment:
-      AIOPS_M2_LOCAL_TOKEN: ${M2LIVE_SYNTH_TOKEN:?synthetic caller token required}
+      # 合成模式的令牌只影响**运行**；`down` 不该因为变量没导出而失败。
+      AIOPS_M2_LOCAL_TOKEN: ${M2LIVE_SYNTH_TOKEN:-}
       AIOPS_M2_ORDERS_DB: /data/gateway-orders.db
       AIOPS_M2_TENANT: TENANT-A
       M2LIVE_SYNTH_MODE: "1"
@@ -51,10 +66,15 @@ services:
     # 启动不下载）。
     image: ${M2LIVE_GATEWAY_IMAGE:?build the gateway image first (build-image.sh)}
     container_name: m2live03-modelstub
-    networks: [trial]
+    # **只在 egress 上**：节点接不到它。节点必须经 model-proxy 才够得着模型，
+    # 否则合成成功又会掩盖「真实供应商不可达」。
+    networks: [egress]
     user: "${M2LIVE_UID:-999}:${M2LIVE_GID:-987}"
     environment:
       M2CLOSE_MODEL_ONLY: "1"
+      # 桩必须检查 model：把内部资源名当成供应商模型标识时拒绝，而不是照单全收。
+      M2CLOSE_EXPECTED_MODEL: ${M2LIVE_MODEL_ID:-m2live03-synthetic}
+      M2CLOSE_REJECTED_MODEL: aiops-m2live03
     # 合成 CPMS 的订单表也由这个桩提供，路径与 Gateway 侧一致。
     volumes:
       - ${M2LIVE_CONFIG:-/etc/aiops-m2-live}/gateway:/etc/m2live:ro

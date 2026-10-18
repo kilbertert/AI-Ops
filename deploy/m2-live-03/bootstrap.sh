@@ -16,6 +16,10 @@ set -euo pipefail
 
 HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 CONFIG=${M2LIVE_CONFIG:-/etc/aiops-m2-live}
+PROJECT=${M2LIVE_PROJECT:-m2-live-03}
+COMPOSE=(docker compose -f "$HERE/compose.yaml")
+[ -n "${M2LIVE_COMPOSE_EXTRA:-}" ] && COMPOSE+=(-f "$M2LIVE_COMPOSE_EXTRA")
+COMPOSE+=(--project-name "$PROJECT")
 SERVICE=aiops-m2live03
 MODE=apply
 [ "${1:-}" = "--check" ] && MODE=check
@@ -56,27 +60,30 @@ copy_in "$work/node_token" /tmp/node_token
 # ——正式模式不接受合成桩的默认端点。
 # `--check` 只验证默认凭据已不可用，不建模型，因此不需要端点与密钥。
 MODEL_ENDPOINT=""
+MODEL_ID=""
 if [ "$MODE" = "apply" ]; then
+  # 正式模式的端点**必须**是受控出口（model-proxy），不是供应商本体：
+  # 调用发生在节点进程里，而节点没有任意外联。
   MODEL_ENDPOINT=${M2LIVE_MODEL_ENDPOINT:-}
-  if [ -z "$MODEL_ENDPOINT" ]; then
-    if [ "${M2LIVE_SYNTH_MODE:-0}" = "1" ]; then
-      MODEL_ENDPOINT=http://modelstub:9100/v1
-    else
-      echo "bootstrap: M2LIVE_MODEL_ENDPOINT 未设置（正式模式不接受合成端点）" >&2
-      exit 2
-    fi
+  MODEL_ID=${M2LIVE_MODEL_ID:-}
+  if [ "${M2LIVE_SYNTH_MODE:-0}" = "1" ]; then
+    # 平台下发给节点的端点是**受控出口的源**；OpenAI 兼容客户端自己追加
+    # /v1/chat/completions，出口按白名单转发同一路径。
+    MODEL_ENDPOINT=${MODEL_ENDPOINT:-https://model-proxy:9101}
+    MODEL_ID=${MODEL_ID:-m2live03-synthetic}
   fi
-  MODEL_KEY=${M2LIVE_MODEL_API_KEY_FILE:-$CONFIG/secrets/model_api_key}
+  if [ -z "$MODEL_ENDPOINT" ] || [ -z "$MODEL_ID" ]; then
+    echo "bootstrap: 正式模式需要 M2LIVE_MODEL_ENDPOINT（受控出口）与 M2LIVE_MODEL_ID（供应商模型标识）" >&2
+    exit 2
+  fi
+  # 平台下发给节点的凭据是**出口专用令牌**，不是供应商 key：节点只应能调用受控出口，
+  # 供应商凭据只存在于出口容器里。两者由 prepare-secrets.sh 分别生成。
+  MODEL_KEY=${M2LIVE_MODEL_API_KEY_FILE:-$CONFIG/gateway/proxy_token}
   if [ ! -r "$MODEL_KEY" ]; then
-    if [ "${M2LIVE_SYNTH_MODE:-0}" = "1" ]; then
-      printf 'synthetic-not-a-real-key\n' > "$work/model_api_key"
-    else
-      echo "bootstrap: 读不到模型凭据文件 $MODEL_KEY" >&2
-      exit 2
-    fi
-  else
-    cp "$MODEL_KEY" "$work/model_api_key"
+    echo "bootstrap: 读不到模型出口令牌 $MODEL_KEY（先跑 checks.sh up）" >&2
+    exit 2
   fi
+  cp "$MODEL_KEY" "$work/model_api_key"
   chmod 600 "$work/model_api_key"
   copy_in "$work/model_api_key" /tmp/model_api_key
 fi
@@ -87,6 +94,7 @@ docker exec \
   -e "M2LIVE_BOOTSTRAP_MODE=$MODE" \
   -e "M2LIVE_SYNTH_MODE=${M2LIVE_SYNTH_MODE:-0}" \
   -e "M2LIVE_MODEL_ENDPOINT=$MODEL_ENDPOINT" \
+  -e "M2LIVE_MODEL_ID=$MODEL_ID" \
   m2live03-gateway python /tmp/bootstrap_platform.py
 rc=$?
 set -e
@@ -100,7 +108,16 @@ if [ $rc -eq 0 ] && [ "$MODE" = "apply" ]; then
   mv "$work/agent-runs.json" "$CONFIG/gateway/agent-runs.json"
   docker cp m2live03-gateway:/tmp/node.env.out "$work/node.env" >/dev/null
   chmod 600 "$work/node.env"
-  mv "$work/node.env" "$CONFIG/node/node.env"
+  if cmp -s "$work/node.env" "$CONFIG/node/node.env" 2>/dev/null; then
+    echo "bootstrap: 节点凭据未变化，不重启节点"
+  else
+    mv "$work/node.env" "$CONFIG/node/node.env"
+    # 节点只在**容器创建时**读取自己的 env_file：`docker restart` 沿用旧环境，
+    # 心跳会一直失败。必须重建容器。冷启动顺序因此是
+    # `up`（节点 pending）→ `bootstrap`（重建节点）→ `ready`。
+    "${COMPOSE[@]}" up -d --force-recreate node >/dev/null
+    echo "bootstrap: 节点凭据已更新，节点容器已重建"
+  fi
   echo "bootstrap: ok（绑定表与节点凭据已回填；管理员口令在 $TOKEN_FILE）"
 elif [ $rc -eq 0 ]; then
   echo "bootstrap: 默认凭据已不可用"

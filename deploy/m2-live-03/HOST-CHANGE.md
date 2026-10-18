@@ -35,8 +35,9 @@
 | 18889/tcp | 容器网络内 | 节点 gRPC | 否 |
 | 6379/tcp | `hostloop` 网络内 | `gateway-host-relay` → 宿主回环 Redis | 否 |
 
-三张网络：`trial`（`internal: true`，无出站 NAT）、`egress`（平台与 Gateway 外联）、
-`hostloop`（**只有** gateway 与 host-relay 接它）。
+四张网络：`trial`（`internal: true`，无出站 NAT）、`modellink`（`internal: true`，
+**只有** node 与 model-proxy）、`egress`（平台、模型出口、Gateway 外联）、`hostloop`
+（**只有** gateway 与 host-relay）。节点只接两张 internal 网络。
 
 **生产 Redis 监听不变**（仍是宿主 `0.0.0.0:6379` 的既有容器）。本栈不打开、不代理它的
 公网访问；中继只把宿主回环映射进一张仅 Gateway 可见的网络。
@@ -50,8 +51,9 @@
 | `m2live03-node` | eclipse-temurin:21-jdk | 500 MiB | 0.25 | trial | 999:987 |
 | `m2live03-gateway` | `aiops-m2-live-03-gateway`（构建） | 400 MiB | 0.22 | trial + egress + hostloop | 999:987 |
 | `m2live03-host-relay` | 同一个构建镜像 | 64 MiB | 0.05 | hostloop | 999:987 |
+| `m2live03-model-proxy` | 同一个构建镜像 | 128 MiB | 0.10 | modellink + egress | 999:987 |
 
-合计 **2864 MiB / 1.47 CPU**，含辅助中继。41 当前 MemAvailable 约 6.4 GiB。
+合计 **2992 MiB / 1.49 CPU**，含辅助中继与受控模型出口。41 当前 MemAvailable 约 6.4 GiB。
 生产 Gateway 延迟/错误或宿主内存压力是停机条件，不用 swap 顶。
 
 ## 4. 制品身份
@@ -76,7 +78,8 @@ preflight 对**镜像 ID**、`m2live.source` 标签、基础镜像 ref→image I
 | `platform/application.properties` | 数据源指向 `store`；SM4 key/iv（不与生产共用） | 新生成 |
 | `gateway/gateway.env` | 隔离 Gateway 的键 | `gateway.env.template`；业务接口与逻辑环境名来自私有记录 |
 | `gateway/runtime.env` | **只读业务依赖白名单**（会话库/业务库/UPMS/TDengine/thirdSession） | `build-runtime-config.sh` 从生产配置文件抽取；不完整即拒绝 |
-| `tls/{ca.crt,ca.key,platform.crt,platform.key,platform.p12,password}` | 本地 CA 与平台证书 | `make-certs.sh`；幂等 |
+| `tls/{ca.crt,ca.key,platform.crt,platform.key,platform.p12,password,model-proxy.*}` | 本地 CA、平台与受控出口的叶子证书 | `make-certs.sh`；幂等 |
+| `gateway/{proxy_token,upstream_api_key}` | 节点→出口的令牌 / 出口→供应商的凭据 | `prepare-secrets.sh`（0600；后者来自 `M2LIVE_MODEL_API_KEY_FILE`） |
 | `gateway/agent-runs.json` | 环境 → appId/agentId/预期节点 + 节点凭据摘要 | `bootstrap.sh` 回填 |
 | `node/node.env` | 节点自己的 appId/token 与回呼凭据 | 同上 |
 

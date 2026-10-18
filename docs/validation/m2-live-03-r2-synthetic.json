@@ -1,0 +1,64 @@
+{
+  "record": "m2-live-03-r2-synthetic",
+  "scope": "M2-LIVE-03-R2：受控模型出口、供应商模型标识、对话凭据解析与网络正对照的完整冷启动验收。合成供应商，**不是**真实供应商验收。",
+  "started_at": "2026-10-18T17:22:11Z",
+  "finished_at": "2026-10-18T17:38:45Z",
+  "baseline": "origin/main 074a91c；本报告对应的部署件提交见同分支 PR #815 head",
+  "host": "开发机（不是 41）",
+  "artifacts": {
+    "gateway_image_id_this_run": "sha256:3e4b2dbbbda9a12f84cb782541b66ce237bd09bc687ece8deb7a69a7f5decef4",
+    "gateway_source_sha256": "757c82e45a4e29cb7effca79a8ef2cb83d89c6d98ddd4ff53037c97d9700f711",
+    "uv_lock_sha256": "994a8a12fa58ab833985b1e864427679dca6c0ed95b74c759941f94302aa3e13",
+    "platform_jar_sha256": "8dd6b63504eae7cc479e1c3a7d674aa1529069d44e7967e4ed2158ef645d5cb0",
+    "node_jar_sha256": "b27da717743d7534b6103f5a4339bd1a630ae5b631c1d60bce3388429da9372a",
+    "truststore_sha256_prefix": "f0b64f28903f93b6",
+    "note": "本报告与旧报告 m2-live-03-synthetic.json 不是同一轮：旧报告的 source_sha256=baffeeaa… 与当前锁不一致，保留为历史，不在此追加 PASS。"
+  },
+  "topology_this_run": {
+    "networks": ["trial (internal)", "modellink (internal)", "egress", "hostloop"],
+    "node_networks": ["trial", "modellink"],
+    "model_call_location": "执行节点进程（ClientChatExecutor 在节点构造 ChatClient）",
+    "model_path": "node -> model-proxy:9101 (TLS, 本栈 CA) -> 合成上游 (仅在 egress)",
+    "stub_network": "egress only —— 节点无法解析或连接 modelstub"
+  },
+  "substituted": {
+    "caller_identity": "固定本地令牌 -> 固定 consumer ScopeContext",
+    "order_authority": "同一 SQLite 里的 synthetic_orders 表",
+    "model_upstream": "合成上游（桩）：记录实际收到的 model 与工具调用",
+    "cpms": "桩 CPMS，只记录调用次数"
+  },
+  "checks": [
+    {"id": "fresh-config-from-templates", "result": "pass", "evidence": "从 .env/gateway.env/node.env 模板与空状态根出发生成配置；未手工预种应用或节点。"},
+    {"id": "preflight", "result": "pass", "evidence": "退出码 0：隔离门禁、挂载边界、UID、镜像身份、制品摘要、模型出口目标与模型标识、路由归属。"},
+    {"id": "up-pending-is-not-ready", "result": "pass", "evidence": "首次 up 后 ready 报 `pending node` 并返回非零 —— pending 不计为注册成功。"},
+    {"id": "bootstrap-then-ready", "result": "pass", "evidence": "bootstrap 回填凭据并**重建节点容器**；随后 ready 四项在同一轮成立。"},
+    {"id": "verify", "result": "pass", "evidence": "/health 200；无会话 401；委派无会话 401；四个服务以服务 UID 运行；默认凭据已不可用；节点可达受控出口且不可达外网（正对照成立）。"},
+    {"id": "deps", "result": "pass", "evidence": "运行中平台的服务端证书与本栈文件一致；gateway 信任库含当前 CA；platform UP。会话库在开发机判 FAIL（本机 Redis 只绑宿主回环），在 41 上才是真判据。"},
+    {"id": "model-path-through-proxy", "result": "pass", "evidence": "合成上游收到的 model 逐字为 m2live03-synthetic（不是内部资源名 aiops-m2live03）；上游收到的是供应商 key，节点令牌未出现在上游请求里。"},
+    {"id": "node-cannot-reach-stub", "result": "pass", "evidence": "节点内 `getent hosts modelstub` 解析失败、TCP 连接失败；停掉 model-proxy 后同一次委派返回 502，重启后恢复 succeeded —— 证明模型调用确实经过受控出口而不是直连。"},
+    {"id": "egress-positive-control", "result": "pass", "evidence": "同一探针：model-proxy:9101 可达、1.1.1.1:443 不可达。使用镜像内存在的 /bin/bash；dash 的 /dev/tcp 缺失会让旧判据在从未连接时报成功。"},
+    {"id": "nine-negatives", "result": "pass", "evidence": "无身份/错凭据/他人订单（直读与委派）/委派多余字段/领取无凭据/错凭据/未知 run；桩 CPMS 计数在这些请求前后不变（0）。"},
+    {"id": "delegated-success", "result": "pass", "run_id": "run_k7fqjNvqh7UUK8lxmsr_O1hypXtT1ax74n_M31tn9Mo", "state": "succeeded", "expected_environment": "live-trial-41", "expected_app_id": "aiops-m2live03", "expected_agent_id": "1", "expected_node_id": "node-41", "actual_node_id": "node-41", "node_build": "m2live03-node-1"},
+    {"id": "down", "result": "pass", "evidence": "checks.sh down 移除全部容器与网络，保留状态目录；停栈命令不依赖运行期变量是否仍导出。"}
+  ],
+  "resources_observed": {
+    "note": "docker stats 单次采样，不是峰值保证",
+    "budget": "2992 MiB / 1.49 CPU（含受控模型出口）",
+    "observed": "store 约 380 MiB、platform 约 300 MiB、node 约 170 MiB、gateway 约 110 MiB、relay 约 11 MiB、model-proxy 约 30 MiB"
+  },
+  "defects_found_and_fixed": [
+    {"id": "model-called-from-node", "symptom": "真实供应商链路不可达：只有 platform 有 egress，节点只有 internal", "cause": "规划假设模型调用发生在平台侧；实际在 ClientChatExecutor（节点）", "fix": "新增固定目标的受控出口 model-proxy + modellink 内部网络；桩移到 egress 使合成不再掩盖"},
+    {"id": "model-key-was-internal-name", "symptom": "上行 model 字段是项目名 aiops-m2live03", "cause": "bootstrap 把内部资源名同时当作 modelKey", "fix": "M2LIVE_MODEL_ID 显式给出；内部名只出现在显示名；桩对错误 model 返回 400 并计数"},
+    {"id": "redis-probe-quoted-password", "symptom": "配置正确时认证失败", "cause": "探针自己 split('=')，把 dotenv 会去掉的引号算进密码", "fix": "复用 dotenv 语义（与 Gateway 一致）；AUTH 答复逐字判 +OK"},
+    {"id": "egress-probe-dash-tcp", "symptom": "从未发起连接却报告「节点无出网」", "cause": "基础 JVM 镜像的 /bin/sh 是 dash，没有 /dev/tcp", "fix": "改用 /bin/bash，并加正对照（受控出口必须可达）"},
+    {"id": "node-restart-does-not-reload-env", "symptom": "bootstrap 后节点仍用旧凭据心跳失败", "cause": "docker restart 沿用容器创建时的 env_file", "fix": "凭据变化时重建节点容器"},
+    {"id": "down-needed-runtime-vars", "symptom": "变量未导出时 down 失败", "cause": "compose 的 :? 必填在 down 时也会插值", "fix": "必填性由 preflight 负责；compose 用默认空值"}
+  ],
+  "not_covered": [
+    "真实供应商（端点、模型标识、凭据轮换）—— 本报告只证明调用位置、model 字段与路径成立",
+    "41 上 Redis 的实际认证结果",
+    "真实公司身份与真实本人订单、真实 CPMS",
+    "模型回答质量、App 客户端、公网启用",
+    "41 上未执行任何写操作"
+  ]
+}

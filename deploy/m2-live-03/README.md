@@ -38,6 +38,13 @@
 **只有隔离 Gateway 访问业务系统与会话库**。平台与节点不挂载生产 env、不挂载生产
 Gateway 库、不持有业务库凭据；节点只接内部网络，没有出网。
 
+**模型调用在节点进程里发生**（`ClientChatExecutor` 在节点构造 ChatClient 并直接请求
+模型端点），因此节点需要一条到模型的通路。部署件给它的是**固定目标的受控出口**
+`model-proxy`（`modellink` 内部网络，只有 node 与它相连）：出口只转发到部署件钉住的
+一个上游，接受 `/chat/completions` 与 `/v1/chat/completions`（适配器两种拼法）以及
+`/v1/models`，不实现 CONNECT，不接受请求里的 URL。供应商 key 只在出口，节点只拿到出口
+专用令牌。
+
 ## 为什么同宿主
 
 Gateway 与业务依赖已在 41；同宿主先避免跨主机 gRPC、隧道与新增公网暴露。首轮只做一条
@@ -53,6 +60,7 @@ Gateway 与业务依赖已在 41；同宿主先避免跨主机 gRPC、隧道与�
 | 会话库（Redis，宿主回环 6379） | `gateway-host-relay`：只接 `hostloop` 网络，目标钉死 `host-gateway:6379` | 只有隔离 Gateway |
 | 模型（已批准供应商的 HTTPS 端点） | 平台直连；端点由 `bootstrap.sh` 的 `M2LIVE_MODEL_ENDPOINT` 给出 | 平台 |
 | 编排平台（HTTPS） | 平台用本地 CA 签发的证书讲 HTTPS；Gateway 用 `SSL_CERT_FILE` 信任该 CA | 只有隔离 Gateway |
+| 模型（HTTPS，供应商端点） | `model-proxy`：只转发到一个固定目标，路径白名单；节点只接 `modellink` | 节点经出口；供应商 key 只在出口 |
 
 `canonical_gateway_url` 仍然要求远端是 HTTPS，**校验没有被放宽**：不再用回环中继把
 「地址是回环」凑出来（那是审查否掉的形状）。证书由 `make-certs.sh` 生成，SAN 含
@@ -64,11 +72,12 @@ Gateway 与业务依赖已在 41；同宿主先避免跨主机 gRPC、隧道与�
 | 组件 | 内存上限 | CPU |
 |---|---:|---:|
 | 平台存储（MySQL 8） | 700 MiB | 0.5 |
-| 平台服务端 | 1200 MiB | 0.45 |
-| 执行节点 | 500 MiB | 0.25 |
+| 平台服务端 | 1200 MiB | 0.40 |
+| 执行节点 | 500 MiB | 0.22 |
 | 隔离 Gateway | 400 MiB | 0.22 |
 | 宿主回环中继 | 64 MiB | 0.05 |
-| **合计** | **2864 MiB** | **1.47** |
+| **受控模型出口** | **128 MiB** | **0.10** |
+| **合计** | **2992 MiB** | **1.49** |
 
 上限按指令的 3 GiB / 1.5 CPU 之内分配；**不是峰值保证**。上线前复测宿主余量，
 预算不足就报告差额，不用 swap 顶。辅助中继也计入预算。

@@ -45,6 +45,11 @@ SECRETS = [
     )
     if value
 ]
+#: 桩模型**期望**收到的 model 字段（由部署件给出）。空 = 不检查（旧调用方）。
+EXPECTED_MODEL = os.environ.get("M2CLOSE_EXPECTED_MODEL", "").strip()
+#: 明确拒绝的 model：项目内部资源名被误当成供应商模型标识时，这里必须拒绝，
+#: 否则「名对了没有」这件事会一直用一次成功来掩盖。
+REJECTED_MODEL = os.environ.get("M2CLOSE_REJECTED_MODEL", "").strip()
 STATE: dict[str, Any] = {
     "model_tool_sets": [],
     "secret_hits": [],
@@ -178,6 +183,20 @@ class ModelHandler(_JsonHandler):
         length = int(self.headers.get("Content-Length") or 0)
         body = json.loads(self.rfile.read(length) or b"{}")
         COUNTS["model_calls"] += 1
+        # 记录**实际收到的 model**：把它与部署件声明的 M2LIVE_MODEL_ID 对照，
+        # 是「供应商会收到什么」的唯一直接证据。
+        received_model = str(body.get("model") or "")
+        STATE.setdefault("models_seen", []).append(received_model)
+        if EXPECTED_MODEL and received_model != EXPECTED_MODEL:
+            COUNTS["bad_model"] = COUNTS.get("bad_model", 0) + 1
+            log(f"model mismatch: expected={EXPECTED_MODEL!r} got={received_model!r}")
+            self._send({"error": {"code": "stub.unexpected_model", "message": "model mismatch"}}, 400)
+            return
+        if REJECTED_MODEL and received_model == REJECTED_MODEL:
+            COUNTS["bad_model"] = COUNTS.get("bad_model", 0) + 1
+            log(f"model rejected: {REJECTED_MODEL!r}")
+            self._send({"error": {"code": "stub.rejected_model", "message": "internal name as model"}}, 400)
+            return
         messages = body.get("messages") or []
         offered = [item.get("function", {}).get("name") for item in (body.get("tools") or [])]
         tool_results = [m for m in messages if m.get("role") == "tool"]

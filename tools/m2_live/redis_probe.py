@@ -1,12 +1,14 @@
-"""会话库（Redis）的就绪探测：**用实际的只读配置认证**，只报告结果。
+"""会话库（Redis）的就绪探测：**用 Gateway 自己的配置解析**认证，只报告结论。
 
-为什么不能只发未认证 `PING`：生产会话库启用密码时，未认证连接会收到
-`NOAUTH Authentication required.`，于是一条本来健康的通路被报成 FAIL ——
-这正是「部署件的探针自己制造了它要报告的错误」。
+为什么不能另写一套解析：Gateway 用 `python-dotenv` 读 `AIOPS_GATEWAY_SERVER_CONFIG_FILE`
+（`Settings.from_config`，`interpolate=False`），所以 `AIOPS_REDIS_PASSWORD="p@ss"` 的
+生效值是 `p@ss`（引号是引号，不是密码的一部分）。上一版探针自己 `split("=")`，把引号
+算进密码，于是**配置正确时认证失败**——探针自己制造了它要报告的错误。
 
-凭据来源与真正的 Gateway 相同：`AIOPS_REDIS_*`（进程环境优先，其次
-`AIOPS_GATEWAY_SERVER_CONFIG_FILE` 指向的只读配置文件）。**只打印结论与错误类型**，
-绝不打印口令或会话值。
+同理，认证答复要按 Redis 协议**逐字**判 `+OK`，不能用子串匹配代替密码相等。
+
+凭据来源与真正的 Gateway 相同：环境变量优先，其次只读配置文件。**只打印结论与异常
+类型**，绝不打印口令或会话值。
 """
 
 from __future__ import annotations
@@ -26,16 +28,26 @@ DEFAULTS = {
 
 
 def read_settings(environ: dict[str, str] | None = None) -> dict[str, str]:
+    """与 `Settings.from_config` 同一条解析：dotenv 语义 + 环境变量优先。"""
     env = dict(os.environ if environ is None else environ)
     config_file = env.get("AIOPS_GATEWAY_SERVER_CONFIG_FILE", "")
-    if config_file and Path(config_file).is_file():
-        for line in Path(config_file).read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            key, _, value = line.partition("=")
-            env.setdefault(key.strip(), value)
-    return {key: env.get(key, default) for key, default in DEFAULTS.items()}
+    values: dict[str, str | None] = {}
+    if config_file:
+        path = Path(config_file)
+        if path.is_file():
+            from dotenv import dotenv_values
+
+            # 与 Gateway 一致：不插值。引号由 dotenv 去掉，值本身保留。
+            values = dict(dotenv_values(path, interpolate=False))
+        elif "AIOPS_CONFIG_FILE" in env:
+            raise SystemExit(f"配置文件不存在: {path}")
+    merged: dict[str, str] = {}
+    for key, default in DEFAULTS.items():
+        raw = env.get(key)
+        if raw is None:
+            raw = values.get(key)
+        merged[key] = (raw if raw is not None else default).strip()
+    return merged
 
 
 def _command(*parts: str) -> bytes:
@@ -45,6 +57,15 @@ def _command(*parts: str) -> bytes:
         encoded = part.encode()
         out.append(f"${len(encoded)}\r\n".encode() + encoded + b"\r\n")
     return b"".join(out)
+
+
+def _reply(sock: socket.socket) -> bytes:
+    return sock.recv(256)
+
+
+def _ok(reply: bytes) -> bool:
+    """Redis 的简单字符串成功答复必须是 `+OK`，逐字比较。"""
+    return reply.rstrip(b"\r\n") == b"+OK"
 
 
 def probe(settings: dict[str, str], host: str | None = None, port: int | None = None) -> tuple[bool, str]:
@@ -59,17 +80,16 @@ def probe(settings: dict[str, str], host: str | None = None, port: int | None = 
             if password:
                 parts = ("AUTH", username, password) if username else ("AUTH", password)
                 sock.sendall(_command(*parts))
-                reply = sock.recv(256)
-                if not reply.startswith(b"+OK"):
-                    return False, "auth failed"
+                if not _ok(_reply(sock)):
+                    return False, "auth rejected"
             if database and database != "0":
                 sock.sendall(_command("SELECT", database))
-                reply = sock.recv(256)
-                if not reply.startswith(b"+OK"):
-                    return False, "select failed"
+                if not _ok(_reply(sock)):
+                    return False, "select rejected"
             sock.sendall(_command("PING"))
-            reply = sock.recv(256)
-        return (b"PONG" in reply.upper()), ("pong" if b"PONG" in reply.upper() else "unexpected reply")
+            reply = _reply(sock)
+        healthy = reply.rstrip(b"\r\n") == b"+PONG"
+        return healthy, ("pong" if healthy else "unexpected reply")
     except OSError as exc:  # 只报类型：消息里可能带地址或口令
         return False, type(exc).__name__
 

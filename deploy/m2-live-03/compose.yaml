@@ -3,11 +3,12 @@
 # 起停用 `checks.sh`，不要直接 `docker compose up`：那份脚本会在起容器之前先做隔离与
 # 产物检查，失败时干净地停下（不留半套栈）。
 #
-# 网络分三张：
+# 网络分四张：
 #   trial      内部网络（internal: true）—— 容器之间互通，**没有出站 NAT**
-#   egress     可出网 —— 只有真的需要外联的组件接它（平台访问模型、隔离 Gateway 访问 CPMS）
+#   modellink  内部网络（internal: true）—— 只有 node 与 model-proxy 在上面
+#   egress     可出网 —— 只有真的需要外联的组件接它（平台、模型出口、隔离 Gateway 访问 CPMS）
 #   hostloop   宿主回环依赖面 —— 只在 gateway-host-relay 上，别处不可见
-# 节点只接 trial，所以它连不出宿主。
+# 节点只接 trial 与 modellink，所以它连不出宿主；模型调用走**固定目标**的受控出口。
 #
 # 凭据边界：平台与节点**不挂载** `/etc/aiops-41`；只有隔离 Gateway 只读挂载它。
 #
@@ -23,6 +24,9 @@ name: m2-live-03
 
 networks:
   trial:
+    driver: bridge
+    internal: true
+  modellink:
     driver: bridge
     internal: true
   egress:
@@ -52,6 +56,34 @@ services:
       - "host-gateway:host-gateway"
     mem_limit: 64m
     cpus: 0.05
+    restart: unless-stopped
+
+  # 受控模型出口。模型调用发生在**执行节点**进程里（`ClientChatExecutor` 在节点构造
+  # ChatClient 并直接请求模型端点），而节点没有任意外联。这个出口只转发到一个固定目标，
+  # 不接受请求里的 URL、不实现 CONNECT。真实供应商 key 只在这里；节点只拿到代理令牌。
+  model-proxy:
+    image: ${M2LIVE_GATEWAY_IMAGE:?build the gateway image first (build-image.sh)}
+    container_name: m2live03-model-proxy
+    networks: [modellink, egress]
+    user: "${M2LIVE_UID:-999}:${M2LIVE_GID:-987}"
+    entrypoint: ["python", "/opt/aiops-src/tools/m2_live/model_proxy.py"]
+    environment:
+      M2LIVE_MODEL_UPSTREAM: ${M2LIVE_MODEL_UPSTREAM:-}
+      SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
+    volumes:
+      - ${M2LIVE_CONFIG:-/etc/aiops-m2-live}/gateway:/etc/m2live:ro
+      - ${M2LIVE_CONFIG:-/etc/aiops-m2-live}/tls/proxy:/etc/m2live-tls:ro
+    command:
+      - --listen-port
+      - "9101"
+      - --upstream
+      - ${M2LIVE_MODEL_UPSTREAM:-}
+      - --upstream-key-file
+      - /etc/m2live/upstream_api_key
+      - --proxy-token-file
+      - /etc/m2live/proxy_token
+    mem_limit: 128m
+    cpus: 0.1
     restart: unless-stopped
 
   store:
@@ -108,7 +140,7 @@ services:
       - ${M2LIVE_CONFIG:-/etc/aiops-m2-live}/tls/platform:/etc/m2live-tls:ro
       - ${M2LIVE_STATE:-/var/lib/aiops-m2-live}/platform:/var/lib/snail-ai
     mem_limit: 1200m
-    cpus: 0.45
+    cpus: 0.40
     # 8890 是平台的 **HTTPS** 面（TLS 材料见 make-certs.sh），18888 是节点注册用的
     # gRPC 端口。两个都只暴露在栈的内网，不映射到宿主。
     expose: ["8890", "18888"]
@@ -117,7 +149,8 @@ services:
   node:
     image: ${M2LIVE_JAVA_IMAGE:-eclipse-temurin:21-jdk}
     container_name: m2live03-node
-    networks: [trial]
+    # modellink 只通向 model-proxy；trial 是栈内其余组件。两者都不可出网。
+    networks: [trial, modellink]
     depends_on:
       platform: {condition: service_started}
     user: "${M2LIVE_UID:-999}:${M2LIVE_GID:-987}"
@@ -131,14 +164,22 @@ services:
       SNAIL_SERVER_HOST: platform
       SNAIL_SERVER_PORT: "18888"
       AIOPS_GATEWAY_BASE_URL: http://gateway:8794
+      # 模型调用发生在**本进程**里；受控出口用本栈 CA 签发的证书，JVM 不认 SSL_CERT_FILE，
+      # 所以给它一份只含该 CA 的 truststore。校验不可关闭。
+      JAVA_TOOL_OPTIONS: >-
+        -Djavax.net.ssl.trustStore=/etc/m2live-tls/truststore.p12
+        -Djavax.net.ssl.trustStorePassword=m2live-trust
+        -Djavax.net.ssl.trustStoreType=PKCS12
     env_file:
       - ${M2LIVE_CONFIG:-/etc/aiops-m2-live}/node/node.env
     command: ["java", "-jar", "/app/aiops-execution-node.jar"]
     volumes:
       - ${M2LIVE_DIST:-/opt/aiops-m2-live}/node:/app:ro
       - ${M2LIVE_STATE:-/var/lib/aiops-m2-live}/node:/home/node
+      # 只有公开证书与 truststore：节点不持有任何私钥。
+      - ${M2LIVE_CONFIG:-/etc/aiops-m2-live}/tls/public:/etc/m2live-tls:ro
     mem_limit: 500m
-    cpus: 0.25
+    cpus: 0.22
     restart: unless-stopped
 
   gateway:
