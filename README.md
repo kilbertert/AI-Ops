@@ -250,6 +250,7 @@ flowchart TB
 | `redaction.py` | `redact_text` / `sanitize_data` / `contains_secret` |
 | `i18n.py` | `Accept-Language` 解析、语言表、`chinese_leak` 判定。**纯头部解析**，结果只用于呈现，不得改变权限或路由 |
 | `private_files.py` | 私有目录/文件创建与权限加固（POSIX `0700`/`0600`，Windows 当前用户 DACL） |
+| `isolation_guard.py` | **试运行实例的隔离门禁**：可写状态、只读业务依赖、运行 UID 与属主必须在声明的隔离根内，且在 `create_gateway_app()` 打开任何库**之前**判定。未设置 `M2LIVE_ISOLATION_ROOT` 时是空操作（生产启动路径逐字不变）；`python -m aiops_diagnostics.isolation_guard` 是 preflight 用的同一份判据 |
 | `platform_paths.py` | 平台私有路径解析：`config_root`、`data_root`、`reference_root`（开发态指向仓库、冻结态指向 `_bundle`） |
 | `http_auth.py` | HMAC-SHA256 `X-Internal-Token` 签发与校验，与 Java 侧 `InternalTokenManager` 兼容 |
 | `console_encoding.py` / `render.py` | Windows stdio UTF-8 兜底 / Rich 渲染 |

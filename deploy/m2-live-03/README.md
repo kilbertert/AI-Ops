@@ -1,0 +1,135 @@
+# M2-LIVE-03 受控试运行栈（41 同宿主，隔离）
+
+一次**真实只读链路**的验证环境：公司身份 → Gateway → 编排平台 → 指定节点 → 唯一受控工具
+→ 真实业务状态。它是**部署件**，不是实验脚本，也不是长期控制面布局。
+
+## 它是什么 / 不是什么
+
+| 是 | 不是 |
+|---|---|
+| 41 上的一组容器，独立网络、独立数据目录、显式运行 UID | 生产 Gateway 的一部分（生产 `aiops-gateway-41.service` 不改、不重启） |
+| 隔离 Gateway，持有既有只读业务依赖 | 带业务库凭据给平台或节点 |
+| 平台与节点只拿自己的凭据 | 新增公网端口（全部绑定回环或容器内网） |
+| 真实模型经已批准的渠道 | 公司会话、令牌、完整订单进入平台或模型 |
+| 构建好、按摘要锁定的 Gateway 镜像 | 启动时下载或解析依赖 |
+
+## 逻辑拓扑
+
+```
+                ┌────────── 41 宿主（本文件所在的部署件） ──────────┐
+  真实 App ──?──▶ nginx :8789 ──▶ 生产 Gateway :8788（不动）        │
+                                        │                          │
+  受控测试 ──▶ 隔离 Gateway :8794 ◀─────┘（同一份代码，独立状态库） │
+                    │  OpenAPI（经回环中继）                          │
+                    ▼                                                 │
+              平台（编排服务端） :8900                                  │
+                    │  gRPC 调度（:18888）                            │
+                    ▼                                                 │
+              执行节点 :18889  ──回呼──▶ 隔离 Gateway :8794            │
+                    │                                                 │
+                    └── 唯一工具：charging_status_snapshot            │
+                                                                      │
+  平台存储：MySQL 8（容器内，独立数据卷）                              │
+  CPMS：真实 HTTPS（只由隔离 Gateway 访问）                            │
+  会话库：宿主回环 :6379 ──gateway-host-relay──▶ 仅 Gateway 可见       │
+                └────────────────────────────────────────────────────┘
+```
+
+**只有隔离 Gateway 访问业务系统与会话库**。平台与节点不挂载生产 env、不挂载生产
+Gateway 库、不持有业务库凭据；节点只接内部网络，没有出网。
+
+## 为什么同宿主
+
+Gateway 与业务依赖已在 41；同宿主先避免跨主机 gRPC、隧道与新增公网暴露。首轮只做一条
+真实只读链路。36 保留为后续控制面候选。
+
+## 正式身份依赖怎么接上
+
+生产 `production.env` 里 `AIOPS_REDIS_HOST=127.0.0.1`、端口 6379 —— 那是**宿主**回环，
+而隔离 Gateway 在 bridge 网络里。部署件用两种最小通路接上，都不改生产监听、不新增公网口：
+
+| 依赖 | 通路 | 谁能访问 |
+|---|---|---|
+| 会话库（Redis，宿主回环 6379） | `gateway-host-relay`：只接 `hostloop` 网络，目标钉死 `host-gateway:6379` | 只有隔离 Gateway |
+| 模型（已批准供应商的 HTTPS 端点） | 平台直连；端点由 `bootstrap.sh` 的 `M2LIVE_MODEL_ENDPOINT` 给出 | 平台 |
+| 编排平台（HTTPS） | 平台用本地 CA 签发的证书讲 HTTPS；Gateway 用 `SSL_CERT_FILE` 信任该 CA | 只有隔离 Gateway |
+
+`canonical_gateway_url` 仍然要求远端是 HTTPS，**校验没有被放宽**：不再用回环中继把
+「地址是回环」凑出来（那是审查否掉的形状）。证书由 `make-certs.sh` 生成，SAN 含
+`platform`；CA 带 `keyUsage=keyCertSign,cRLSign`（缺它 OpenSSL 3 会在链校验时拒绝）。
+`checks.sh deps` 从隔离 Gateway 的**同一网络空间**验证这两条通路，是真实请求之前的门。
+
+## 资源预算（整栈，不是每进程）
+
+| 组件 | 内存上限 | CPU |
+|---|---:|---:|
+| 平台存储（MySQL 8） | 700 MiB | 0.5 |
+| 平台服务端 | 1200 MiB | 0.45 |
+| 执行节点 | 500 MiB | 0.25 |
+| 隔离 Gateway | 400 MiB | 0.22 |
+| 宿主回环中继 | 64 MiB | 0.05 |
+| **合计** | **2864 MiB** | **1.47** |
+
+上限按指令的 3 GiB / 1.5 CPU 之内分配；**不是峰值保证**。上线前复测宿主余量，
+预算不足就报告差额，不用 swap 顶。辅助中继也计入预算。
+
+## 文件
+
+| 文件 | 用途 |
+|---|---|
+| `compose.yaml` | 五个容器、三张网络、资源上限、显式 UID、只读挂载 |
+| `gateway.Dockerfile` + `gateway-requirements.txt` | Gateway 镜像：依赖由 `uv.lock` 导出并带哈希，启动不下载 |
+| `build-image.sh` | 构建镜像并记录精确身份（镜像 ID + 内容摘要标签）；`--update-lock` 写回锁文件 |
+| `bootstrap.sh` / `bootstrap_platform.py` | 平台初始化：换默认管理员口令、禁用 demo 应用、注册应用/模型/智能体、回填绑定表（幂等） |
+| `compose.synthetic.yaml` | **只给开发机**：模型/CPMS/调用者身份替身，用于部署件本身的验收 |
+| `images.lock.json` | 平台与节点制品摘要、基础镜像身份（按 ref）、Gateway 构建身份 |
+| `.env.template` | 非敏感参数与**键名**；真实值来自宿主上的 0600 文件 |
+| `make-certs.sh` | 生成本地 CA 与 platform 的服务端证书（幂等） |
+| `build-runtime-config.sh` | 从生产配置抽取**只读依赖白名单**；不完整就拒绝 |
+| `checks.sh` | preflight / up / ready / verify / deps / status / down |
+| `HOST-CHANGE.md` | 41 上的精确变更清单（不是授权） |
+
+## 数据与凭据边界
+
+- 宿主目录：`/opt/aiops-m2-live/`（制品）与 `/var/lib/aiops-m2-live/`（状态）。
+- 隔离 Gateway 的状态库、运行目录、key 目录都在 `/var/lib/aiops-m2-live/gateway/`，
+  与生产 `/var/lib/aiops-41` **不交叉**。`aiops_diagnostics.isolation_guard` 在
+  `create_gateway_app()` 打开任何库**之前**判定；它就是 `gateway_server serve` 的启动路径，
+  不是另写一份检查。
+- 隔离 Gateway 读 `build-runtime-config.sh` 生成的**白名单子集**
+  （`/etc/m2live/runtime.env`：会话库、业务库、UPMS、TDengine、thirdSession 令牌），
+  以及生产 `keys/`（只读）。它**不写**这些路径。
+  不挂整份 `production.env` 的理由：设置读取是「环境变量 or 配置文件」，整份文件会让
+  试运行实例继承生产里所有未覆盖的开关与凭据。
+- 平台与节点只挂自己的配置目录（`/etc/aiops-m2-live/{platform,node}`），不挂 `/etc/aiops-41`。
+- 绑定表（`agent-runs.json`）在 Gateway 的只读配置里，0600；节点凭据只以 SHA-256 出现在其中。
+- 平台 schema 自带的 `admin/admin123` 与 demo 应用 token 在导入任何真实模型凭据或业务结果
+  之前由 `bootstrap.sh` 替换/禁用；`bootstrap.sh --check` 验证默认凭据已不可用。
+
+## 运行身份
+
+`platform` / `node` / `gateway` / `gateway-host-relay` 都显式给出数字 UID/GID
+（宿主上是项目身份 `aiops41`，合成验收时是开发机当前用户），渲染后再核对一次。
+`store` 是唯一例外：官方 mysql 镜像的入口点先以 root 做一次 initdb，随后长期以
+`mysql(999)` 运行；这一条短暂初始化不泛化到其它服务。
+
+## 合成验收（开发机）
+
+```bash
+M2LIVE_SYNTH_TOKEN=$(openssl rand -hex 16) \
+M2LIVE_PROJECT=m2-live-03-syn \
+M2LIVE_COMPOSE_EXTRA=deploy/m2-live-03/compose.synthetic.yaml \
+M2LIVE_CONFIG=/tmp/m2live03-local/etc M2LIVE_STATE=/tmp/m2live03-local/state \
+M2LIVE_DIST=/tmp/m2live03-local/dist AIOPS41_CONFIG_DIR=/tmp/m2live03-local/etc41 \
+M2LIVE_UID=$(id -u) M2LIVE_GID=$(id -g) M2LIVE_SYNTH_MODE=1 \
+bash deploy/m2-live-03/checks.sh up
+```
+
+它验证的是**部署件**：冷启动、运行身份、只读挂载、无出网、节点注册、平台调度、
+sid 到节点、领取端点按凭据拒绝。正例（真实身份 → 本人订单）只能到 41 上跑；
+结果记在 `docs/validation/m2-live-03-synthetic.json`。
+
+## 不在这份部署件里的
+
+真实业务验收、模型回答质量、App 客户端、发布版本冻结、公网全量启用。
+`agent_version` 仍是 `null` + `not_wired`。

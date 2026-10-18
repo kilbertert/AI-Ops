@@ -45,7 +45,7 @@ no project argument. Both answer *where* something is; neither replaces reading 
 
 ## Tests
 
-- tests/ — 149 test file(s, recursive)
+- tests/ — 160 test file(s, recursive)
 - script "cd:watch:test": node .sandcastle/cd-watch.test.mjs
 - pytest (pyproject.toml / pytest.ini present)
 
@@ -55,8 +55,8 @@ no project argument. Both answer *where* something is; neither replaces reading 
 - AGENTS.md
 - CLAUDE.md
 - README.md
-- docs/ — 90 markdown file(s)
-- docs/adr/ — 38 markdown file(s)
+- docs/ — 92 markdown file(s)
+- docs/adr/ — 40 markdown file(s)
 - docs/agents/ — 29 markdown file(s)
 
 ## Tree (depth 2, first 80 lines; dependencies, build
@@ -72,6 +72,18 @@ deploy/
     docker-compose.yaml
     env.example
     README.md
+  m2-live-03/
+    schema/
+    bootstrap_platform.py
+    bootstrap.sh
+    build-image.sh
+    build-runtime-config.sh
+    checks.sh
+    compose.synthetic.yaml
+    compose.yaml
+    gateway-requirements.txt
+    gateway.Dockerfile
+    ... (8 more)
   check-41-editable.sh
   classify-remote-result.sh
   company-gitlab-api.sh
@@ -80,7 +92,7 @@ deploy/
   manual-deploys.md
   record-manual-deploy.sh
   routing-window.sh
-  test-rollback-classifier.sh
+  ... (1 more)
 docs/
   adr/
     0001-read-only-diagnostic-boundary.md
@@ -93,7 +105,7 @@ docs/
     0008-adr-0003-deviation-session-direct-read.md
     0009-operator-identity-via-company-oauth2-token.md
     0010-reversal-of-prd-200-language-boundary.md
-    ... (28 more)
+    ... (30 more)
   afk-cutover/
     decisions.md
     pr-a-spec.md
@@ -127,6 +139,7 @@ docs/
     m2-b2-release-review.py
     m2-close-r3.json
     m2-close-real-gateway.json
+    m2-live-03-synthetic.json
     m2-self-accept-prefix.json
     m2-self-accept.json
     m2-self-accept.py
@@ -134,17 +147,5 @@ docs/
   architecture.md
   diag-query-api-plan.md
   ... (19 more)
-examples/
-  fixtures/
-    missing_tx_data.json
-    ocpp_consistent.json
-    ykc_amount_mismatch.json
-  synthetic-acceptance/
-    manifest.json
-    synthetic_acceptance.json
-java/
-  cloud-charging-pile-web/
-    src/
-  README.md
 ... (truncated — list the rest with `ls`/`find`)
 ```

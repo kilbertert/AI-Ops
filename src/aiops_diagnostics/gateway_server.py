@@ -27,6 +27,16 @@ def serve(
     host: Annotated[str | None, typer.Option("--host", help="覆盖监听地址")] = None,
     port: Annotated[int | None, typer.Option("--port", help="覆盖监听端口")] = None,
 ) -> None:
+    # 隔离门禁先于一切：设置 `M2LIVE_ISOLATION_ROOT` 的运行必须证明自己的可写状态、
+    # 只读依赖与属主都在隔离根里，否则在打开任何库之前退出。未设置时为空操作 ——
+    # 生产 Gateway 的启动路径逐字不变。
+    from aiops_diagnostics.isolation_guard import IsolationError, enforce_from_env
+
+    try:
+        enforce_from_env()
+    except IsolationError as exc:
+        console.print(f"[red]isolation refused: {exc}[/red]")
+        raise typer.Exit(code=2) from exc
     settings = GatewayServerSettings.from_env()
     if host:
         settings.bind_host = host
