@@ -1,10 +1,12 @@
 name: AFK Policy
 
+# `pull_request` only — see the note in `ci.yml`. This is one of the three
+# workflows that re-ran on `push: main` against a tree identical to the one the
+# pull request had already checked, and `main` requires it (via the `Workflow
+# policy` check), so the branch entry point is already guarded.
+
 on:
   pull_request:
-  push:
-    branches:
-      - main
 
 permissions:
   contents: read

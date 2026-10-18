@@ -15,11 +15,13 @@ name: Spec Tree
 # persistent runner executes whatever a pull request contains. A read-only
 # checker gains nothing from that exposure.
 
+# `pull_request` only, plus a manual trigger — see the note in `ci.yml`. This is
+# one of the three workflows that re-ran on `push: main` against a tree identical
+# to the one the pull request had already checked. Run this workflow against a
+# branch directly with `workflow_dispatch` when a spec change needs re-checking
+# without opening a pull request.
 on:
   pull_request:
-  push:
-    branches:
-      - main
   workflow_dispatch:
 
 permissions:

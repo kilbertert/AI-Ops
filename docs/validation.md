@@ -211,6 +211,27 @@ codex rollout 日志里模型那一回合的实际输出：
 **未完成业务验收**：本次无用户可见行为变化；上表是执行层面的度量，
 **不构成任何业务路径的可用性证据**。
 
+## 2026-10-18 · 去掉 main 上重复的一遍 CI：本地验证摘要
+
+**范围**：`.github/workflows/ci.yml`、`afk-policy.yml`、`spec-tree.yml`（各去掉 `push: main`）。
+**不改源码、不改测试断言。**
+
+| 项 | 结果 |
+|---|---|
+| `on:` 解析（PyYAML） | ci=`{pull_request}`；afk-policy=`{pull_request}`；spec-tree=`{pull_request, workflow_dispatch}` |
+| 全量套件 `-n auto` | 2873 passed / 9 skipped |
+| `adr.check --base origin/main` / `policy-check` / `repo-map.check` | 均 ok |
+| `ruff check` / `format --check` | 干净 |
+
+**判据不是「少跑了几次」，而是「去掉的那次跑的是同一份内容」**：实测 #828 的
+PR head tree 与 squash 合并后 tree 都是 `9e754088…`（逐字节相同），
+所以第二次运行测的是同样的字节。安全性依据是 `main` 的 ruleset
+（必需检查 `verify` + `Workflow policy`、禁止非快速前进推送），
+与 `cd.yml` 自己依赖的前提一致；且 CD 不读 CI 在 main 上的结论（已 grep 确认）。
+
+**未完成业务验收**：本次无用户可见行为变化；上表是执行层面的度量，
+**不构成任何业务路径的可用性证据**。
+
 ## 2026-10-18 · 脚手架 1.7.27（替身保真判据下发）：本地验证摘要
 
 **范围**：`.sandcastle/review-prompt.md`、`.sandcastle/review/axis-prompt.md`、
