@@ -58,7 +58,6 @@ Gateway 与业务依赖已在 41；同宿主先避免跨主机 gRPC、隧道与�
 | 依赖 | 通路 | 谁能访问 |
 |---|---|---|
 | 会话库（Redis，宿主回环 6379） | `gateway-host-relay`：只接 `hostloop` 网络，目标钉死 `host-gateway:6379` | 只有隔离 Gateway |
-| 模型（已批准供应商的 HTTPS 端点） | 平台直连；端点由 `bootstrap.sh` 的 `M2LIVE_MODEL_ENDPOINT` 给出 | 平台 |
 | 编排平台（HTTPS） | 平台用本地 CA 签发的证书讲 HTTPS；Gateway 用 `SSL_CERT_FILE` 信任该 CA | 只有隔离 Gateway |
 | 模型（HTTPS，供应商端点） | `model-proxy`：只转发到一个固定目标，路径白名单；节点只接 `modellink` | 节点经出口；供应商 key 只在出口 |
 | 供应商基路径 | `M2LIVE_MODEL_UPSTREAM_BASE_PATH`（默认 `/v1`）：适配器只追加 `/chat/completions` | 部署配置，不是运行时猜测 |
@@ -87,7 +86,7 @@ Gateway 与业务依赖已在 41；同宿主先避免跨主机 gRPC、隧道与�
 
 | 文件 | 用途 |
 |---|---|
-| `compose.yaml` | 五个容器、三张网络、资源上限、显式 UID、只读挂载 |
+| `compose.yaml` | 六个容器、四张网络、资源上限、显式 UID、只读挂载 |
 | `gateway.Dockerfile` + `gateway-requirements.txt` | Gateway 镜像：依赖由 `uv.lock` 导出并带哈希，启动不下载 |
 | `build-image.sh` | 构建镜像并记录精确身份（镜像 ID + 内容摘要标签）；`--update-lock` 写回锁文件 |
 | `bootstrap.sh` / `bootstrap_platform.py` | 平台初始化：换默认管理员口令、禁用 demo 应用、注册应用/模型/智能体、回填绑定表（幂等） |
@@ -125,7 +124,7 @@ Gateway 与业务依赖已在 41；同宿主先避免跨主机 gRPC、隧道与�
 
 ## 运行身份
 
-`platform` / `node` / `gateway` / `gateway-host-relay` 都显式给出数字 UID/GID
+`platform` / `node` / `gateway` / `gateway-host-relay` / `model-proxy` 都显式给出数字 UID/GID
 （宿主上是项目身份 `aiops41`，合成验收时是开发机当前用户），渲染后再核对一次。
 `store` 是唯一例外：官方 mysql 镜像的入口点先以 root 做一次 initdb，随后长期以
 `mysql(999)` 运行；这一条短暂初始化不泛化到其它服务。
