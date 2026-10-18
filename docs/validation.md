@@ -1,4 +1,34 @@
 
+## 2026-10-18 · 并行测试装配加固：本地验证摘要
+
+**范围**：`.github/workflows/ci.yml`（安装方式 + 测试步骤断言）、
+`tests/test_parallel_setup.py`（新增）、`docs/adr/0038`（补「修订」节）、README。
+**无源码改动、无测试断言改动。**
+
+**起因**：把同一个并行改动套用到 health-flow 时，`tests/test_e2e_seed.py` 当场变红。
+查下去发现根因是 `--with` 本身，不是隔离。
+
+**验证**：
+
+| 项 | 结果 |
+|---|---|
+| 全量（新配方） | **2741 passed / 9 skipped**（2738 + 新增 3 条钉子） |
+| 反向对照：干净 venv + `--with` | `test_parallel_setup.py` **2 failed / 1 passed** |
+| 正向：新配方 | **3 passed** |
+| CI 断言负向对照 | 空收集 / 只跑 5 个 / 跳过 20 个 → 全部拦下；正常 → 放行 |
+| `uv.lock` / `pyproject.toml` | 均未被改动 |
+
+**两条实测支撑的机制结论**：
+
+1. `uv run --with X` 在 **X 不在 venv 里**时，把命令放进 `~/.cache/uv/builds-v0/.tmp*/`
+   覆盖环境执行，`sys.executable` 与 `purelib` 一并改道；X 已在 venv 里时则不改道。
+   ⇒ 同一命令在「干净 CI」与「本机装过」下行为不同。
+2. `pytest -q` 叠在 `addopts = "-q"` 上得到 `-qq`，**汇总行被整个吞掉**。
+   上一版 CI 日志没有汇总行、只能数进度点，根因就是这个。
+
+**未完成业务验收**：本次无用户可见行为变化；上表是执行层面的度量，
+**不构成任何业务路径的可用性证据**。
+
 ## 2026-10-18 · 测试套件可并行：本地验证摘要
 
 **范围**：`tests/test_merge_faq_i18n_tool.py`（重写为私有工作树）、`.github/workflows/ci.yml`、

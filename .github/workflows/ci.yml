@@ -71,27 +71,62 @@ jobs:
           python-version: "3.13"
 
       - name: Install locked dependencies
-        run: uv sync --locked --dev
+        # `--inexact` 允许 venv 里存在 lockfile 之外的东西，供下一步装并行调度器。
+        # 不加它，下一步 `uv run` 的隐式同步会把刚装上的 xdist 删掉
+        # （实测：`uv sync --locked --dev` 之后 `import xdist` → ModuleNotFoundError）。
+        run: uv sync --locked --inexact --dev
 
       - name: Run static checks
         run: |
           uv run ruff check .
           uv run ruff format --check .
 
+      # 并行调度器**故意不进 pyproject.toml**：加一个 dev 依赖会改 uv.lock，而
+      # deploy-41.sh 的依赖漂移门拿 uv.lock 的 sha256 与 41 上的比，于是"加一个
+      # 测试依赖"会拦住整条 CD，直到人工更新 41 的环境。
+      #
+      # 装进**项目 venv**，不用 `uv run --with` —— 后者会把 `sys.executable` 和
+      # `sysconfig` 的 purelib 整体改道到 uv 的临时覆盖环境
+      # （实测：`--with` 下 `sys.executable` = `.cache/uv/builds-v0/.tmpXXXX/bin/python`）。
+      # 凡是拿 `sys.executable` 起子进程、或按 purelib 找 site-packages 的测试，
+      # 在 `--with` 下会看到**另一个环境**。本仓目前没有这样的测试，所以是潜伏的
+      # bug；health-flow 有一处正好依赖 purelib，在那里 `--with` 当场就红。
+      # 这条不变量（sys.executable 必须是项目 venv）由 tests/test_parallel_setup.py 钉住。
+      #
+      # ⚠️ 代价：`--inexact` 让 venv 可以有 lockfile 之外的内容，所以这个 job 的环境
+      # **不是** lockfile 的精确复现。测试集合仍是确定的（下方断言 passed/skipped）。
+      - name: Install the parallel test scheduler
+        run: uv pip install "pytest-xdist==3.8.0" "execnet==2.1.2"
+
       - name: Run tests
-        # 并行，但 **xdist 不进 pyproject.toml**（见 ADR 0038）：加一个 dev 依赖会改
-        # uv.lock，而 deploy-41.sh 的依赖漂移门拿 uv.lock 的 sha256 与 41 上的比，
-        # 于是"加一个测试依赖"会拦住整条 CD，直到人工更新 41 的环境。
-        # `--with` 只装进 uv 的临时覆盖环境，lockfile 与 pyproject 都不动。
-        #
-        # ⚠️ 确定性边界（诚实记录，见 ADR 0038）：`--with` 的解析**不在 uv.lock 里**，
-        # 所以这不是"逐字节可复现"。锁定的是**直接依赖**（xdist 与 execnet 都写死版本，
-        # `pytest` 由下面 `uv sync --locked` 提供），但 `execnet` 的元数据若日后变化，
-        # 解析结果仍可能与今天不同。判据是：**测试集合（2738 passed / 9 skipped）
-        # 不随并行度变化**——实测 -n 2/4/6/8/auto 与串行逐字相同。
-        # 若想连解析也钉死，唯一办法是把 xdist 写进 lockfile，那要连带一次 41 的
-        # 环境更新，代价见 ADR 0038。
-        run: uv run --with pytest-xdist==3.8.0 --with execnet==2.1.2 pytest -q -n auto
+        # 绿之外还要有量。三件事可能让这一步"绿得没有意义"：
+        #   1. 收集为空（import 错误吞掉整个目录）——pytest 会以 0 退出；
+        #   2. xdist worker 崩掉，它那份没跑；
+        #   3. 测试静默变成 skip —— **记成 pass 的 skip 是假绿**（本机另一仓
+        #      health-flow 的 CI 注释专门写过这个形状：`445 passed, 4 skipped` 被读成通过）。
+        # 所以：要求有 passed 计数，且跳过数不超过基线 9（用上限而非等号，
+        # 新增测试不会让这条腐化）。`-rs` 让每条跳过都打印原因。
+        run: |
+          set -eo pipefail
+          # ⚠️ **不要再加 `-q`**：`pyproject.toml` 的 addopts 已经是 `-q`，再加一个
+          # 就是 `-qq`，而 `-qq` 会把那句 "N passed, M skipped" 汇总行**整个吞掉**。
+          # （这正是本步骤第一版的 bug：grep 汇总行永远匹配不到，于是"跳过数=0"
+          # 读成一个通过的空集合。上一次 PR 里 CI 日志没有汇总行、只能靠数进度点
+          # 才知道跑了多少测试，根因就是它。）
+          uv run pytest -n auto -rs | tee /tmp/pytest.log
+          # ⚠️ `-rs` 会把逐条跳过原因排在**最后**，所以汇总行在它**上面**。
+          # 用 `tail -1` 取会拿到一条 SKIPPED 明细，`[0-9]+ skipped` 便永远匹配不到
+          # 而回退成 0（这个 bug 在本步骤的第一版里真实存在，靠跑一遍才发现）。
+          summary=$(grep -E "[0-9]+ passed" /tmp/pytest.log | tail -1)
+          [ -n "$summary" ] || {
+            echo "::error::输出里没有 'N passed' 汇总行 —— 收集或执行没有真的发生"; exit 1; }
+          total=$(printf '%s' "$summary" | grep -oE "^[0-9]+")
+          skipped=$(printf '%s' "$summary" | grep -oE "[0-9]+ skipped" | grep -oE "[0-9]+" || echo 0)
+          echo "汇总：passed=$total skipped=$skipped"
+          [ "$total" -ge 2700 ] || {
+            echo "::error::只跑了 $total 个测试（基线约 2738）—— 有测试没被收集"; exit 1; }
+          [ "$skipped" -le 9 ] || {
+            echo "::error::跳过数 $skipped 超过基线 9 —— 有测试在悄悄跳过"; exit 1; }
 
       - name: Check imports and dependencies
         run: |
