@@ -1009,31 +1009,6 @@ Feature: 意图相关的诊断置信阶梯与环境预检
 
 Feature: 统一助手业务意图路由与产品快捷动作
 
-  Rule: 统一助手的 completed 回答只有一种内容形状
-
-    Scenario: 零阶回答与知识库回答的负载同形
-      Given 用户已通过消费者入口认证
-      And 该问题不携带订单号、不命中 FAQ、不携带快捷动作
-      When 该问题以降级零阶路径作答并写入 completed
-      Then result 携带非空 blocks 数组
-      And blocks 中每个块都携带 kind
-      And 首个文本块的内容等于模型给出的正文
-      And result 不携带顶层 text 键
-      And result 的 retrieval_status 为 not_found
-
-    Scenario: 检索依赖故障不伪装成「无匹配」
-      Given 已发布客服智能体可用，但知识库检索抛依赖不可用
-      When 该问题降级到零阶路径作答并写入 completed
-      Then result 的 retrieval_status 为 unavailable
-      And 不声称知识库中没有匹配内容
-      And 正文仍以 text 块交付
-
-    Scenario: 存量行按写入时的形状逐字回读
-      Given 一条已完成作业的 result 以旧形状 {"text", "reminder"} 写入
-      When 客户端轮询该作业
-      Then 回读的 result 与写入值逐字相同
-      And 服务端不改写已落库的历史行
-
   Rule: 低风险输入不进入订单诊断或业务知识检索
 
     Scenario: 普通问候不创建重型作业

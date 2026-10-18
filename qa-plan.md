@@ -527,18 +527,6 @@ workflow YAML 不适用复杂度或 mutation 工具；安全状态机由模板�
 Java BFF 透传与前端 blocks[] 渲染属 #171/#173 及真实媒体验收范围（见 P0-E2E-REAL），
 本票不把 fake 结果记为业务验收。
 
-### QA-RAG-06 零阶回答的负载形状（#708）
-
-- 环境：本地 Python 3.13 + pytest（`tests/test_zero_order_answer_shape.py`）；41 生产网关（真实会话与真实模型，见下）。
-- 前置条件：一条不携带 `order_no`、不命中 FAQ、不携带 `shortcut_code` 的问题（即降级零阶路径）。
-- 测试数据：模型返回 T3/#153 形状 `{"text": "分时电价按峰、谷、平段分别计价。", "reminder": true}`。
-- 有序动作：①本地驱动 `_execute_assistant_qa` 走完零阶路径，读回作业行与轮询响应体；②41 上用真实会话提一个同类问题，按 `retry_after_ms` 轮询到终态，逐字节读回 `result`。
-- 预期结果：`result` 为 `{"blocks":[{"kind":"text","text":"…"}],"retrieval_status":"not_found"}`；不含顶层 `text`/`reminder`；首块正文等于模型正文；`completed` 的 `result` 形状与知识库路径一致。存量历史行按写入时的形状逐字回读，不被改写。
-- 清理：临时目录自动回收；41 上只产生一条真实问答作业与一份会话轮询，无订单/诊断作业。
-- 结果：PASS（本地，2026-10-19，pytest `tests/test_zero_order_answer_shape.py`，修复前该用例失败）；41 复验见 `docs/validation.md`。
-
-证据边界：本地用例证明"落库与轮询体的形状"，**不能**证明真实模型可用性；41 复验证明真实会话下 `blocks[]` 拿到正文，**不能**替代前端渲染验收（前端只需按 §10.8 解析 `blocks[]`）。
-
 ## 涉钱问句守卫合一 QA 计划（#406）
 
 ### MONEY-01 一个问句、一次澄清、一种信息

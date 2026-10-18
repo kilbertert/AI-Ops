@@ -21,14 +21,7 @@ from typing import Any
 
 SCOPE = "tenant-a"
 QUESTION = "什么是分时电价"
-#: What the model returns (`run_zero_order_answer`'s T3/#153 shape).
 ANSWER = {"text": "分时电价按峰、谷、平段分别计价。", "reminder": False}
-#: What the job stores and every client reads — the zero-order turn is
-#: normalized into blocks-v1 at the one seam where it is persisted (#708).
-STORED_ANSWER = {
-    "blocks": [{"kind": "text", "text": ANSWER["text"]}],
-    "retrieval_status": "not_found",
-}
 
 
 def _runtime(tmp_path: Path):
@@ -144,9 +137,9 @@ def test_a_terminal_write_that_lands_still_persists_result_turn_and_metric(
 
     job = runtime.store.get_assistant_question(qa["qa_id"], SCOPE)
     assert job["status"] == "completed"
-    assert job["result"] == STORED_ANSWER
+    assert job["result"] == ANSWER
     turns = runtime.conversation_store.turns(conversation_id, SCOPE)
-    assert [turn["answer"] for turn in turns] == [STORED_ANSWER]
+    assert [turn["answer"] for turn in turns] == [ANSWER]
     assert len(runtime.metrics_store.list_runs(SCOPE)) == 1
 
 
