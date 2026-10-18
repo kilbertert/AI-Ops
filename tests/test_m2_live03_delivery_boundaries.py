@@ -94,13 +94,18 @@ def test_bootstrap_never_passes_the_supplier_key_to_the_node(prepared, tmp_path)
         "a = sys.argv[1:]\n"
         "if a[0] == 'cp' and a[2].endswith(':/tmp/model_api_key'):\n"
         "    shutil.copyfile(a[1], os.environ['M2_TEST_CAPTURE'])\n"
-        "if a[0] == 'exec' and a[-1] == '/tmp/model_api_key':\n"
+        "if a[0] == 'exec' and '-c' in a and a[-1] == '/tmp/model_api_key':\n"
         "    pathlib.Path(os.environ['M2_TEST_CAPTURE']).write_bytes(sys.stdin.buffer.read())\n"
         "if a[-2:] == ['python', '/tmp/bootstrap_platform.py']:\n"
         "    sys.exit(19)\n"
     )
     docker.chmod(0o700)
-    env.update(PATH=f"{bin_dir}:{env['PATH']}", M2_TEST_CAPTURE=str(captured))
+    env.update(
+        PATH=f"{bin_dir}:{env['PATH']}",
+        M2_TEST_CAPTURE=str(captured),
+        M2LIVE_UID=str(os.getuid()),
+        M2LIVE_GID=str(os.getgid()),
+    )
     result = subprocess.run(
         ["bash", str(DEPLOY / "bootstrap.sh")], env=env, capture_output=True, text=True, timeout=10
     )

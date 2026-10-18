@@ -1,6 +1,9 @@
 """初始化在 docker cp 不可用时传输配置，失败时保留原有宿主文件。"""
 
+import hashlib
+import importlib.util
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -24,6 +27,7 @@ def transfer(tmp_path):
     }
     for name, value in originals.items():
         (config / name).write_text(value)
+        (config / name).chmod(0o600)
     bin_dir.mkdir()
     docker = bin_dir / "docker"
     docker.write_text(
@@ -40,14 +44,30 @@ if "python" in a:
     cmd = a[a.index("python"):]
     if cmd[1] == "-c":
         cmd[-1] = str(root / cmd[-1].lstrip("/"))
-        sys.exit(subprocess.run([sys.executable, *cmd[1:]], input=sys.stdin.buffer.read()).returncode)
+        result = subprocess.run([sys.executable, *cmd[1:]], input=sys.stdin.buffer.read())
+        if cmd[-1].endswith("bootstrap_platform.py"):
+            import hashlib
+            digest = hashlib.sha256(pathlib.Path(cmd[-1]).read_bytes()).hexdigest()
+            (root / "bootstrap-input-sha").write_text(digest)
+        sys.exit(result.returncode)
     assert (root / "tmp/model_api_key").read_text().strip() == "synthetic-proxy-token"
+    admin = root.parent / "platform-password"
+    proposed = (root / "tmp/platform_admin").read_text()
+    if admin.exists():
+        assert admin.read_text() == proposed
+    else:
+        admin.write_text(proposed)
     for name, value in {
-        "platform_admin": "new-admin\n",
         "agent-runs.out.json": '{"environment":"new"}',
         "node.env.out": "AIOPS_NODE_TOKEN=new-node\n",
     }.items():
         (root / "tmp" / name).write_text(value)
+    sys.exit(0)
+if "rm" in a:
+    if os.environ.get("FAIL_CLEANUP"):
+        sys.exit(18)
+    for name in a[a.index("-f") + 1:]:
+        (root / name.lstrip("/")).unlink(missing_ok=True)
     sys.exit(0)
 if "cat" in a:
     source = a[-1]
@@ -81,13 +101,14 @@ def test_bootstrap_transfers_without_docker_cp_and_preserves_identity(transfer):
     config, container, _, env = transfer
     result = run_bootstrap(env)
     assert result.returncode == 0, result.stderr
-    assert (container / "tmp/bootstrap_platform.py").read_bytes() == (
-        DEPLOY / "bootstrap_platform.py"
-    ).read_bytes()
+    assert not list((container / "tmp").iterdir())
+    assert (container / "bootstrap-input-sha").read_text() == hashlib.sha256(
+        (DEPLOY / "bootstrap_platform.py").read_bytes()
+    ).hexdigest()
     for name, expected in (
         ("gateway/agent-runs.json", '{"environment":"new"}'),
         ("node/node.env", "AIOPS_NODE_TOKEN=new-node\n"),
-        ("secrets/platform_admin", "new-admin\n"),
+        ("secrets/platform_admin", "old-admin\n"),
     ):
         path = config / name
         assert path.read_text() == expected
@@ -97,7 +118,7 @@ def test_bootstrap_transfers_without_docker_cp_and_preserves_identity(transfer):
 
 
 @pytest.mark.parametrize("failure", ["FAIL_SOURCE", "EMPTY_SOURCE"])
-@pytest.mark.parametrize("source", ["platform_admin", "agent-runs.out.json", "node.env.out"])
+@pytest.mark.parametrize("source", ["agent-runs.out.json", "node.env.out"])
 def test_failed_or_empty_download_preserves_all_originals(transfer, failure, source):
     config, _, originals, env = transfer
     env[failure] = "/tmp/" + source
@@ -105,3 +126,51 @@ def test_failed_or_empty_download_preserves_all_originals(transfer, failure, sou
     assert result.returncode != 0
     for name, value in originals.items():
         assert (config / name).read_text() == value
+
+
+def test_first_rotation_survives_failed_transfer_and_gateway_replacement(transfer):
+    config, container, _, env = transfer
+    admin = config / "secrets/platform_admin"
+    admin.unlink()
+    env["FAIL_SOURCE"] = "/tmp/node.env.out"
+    result = run_bootstrap(env)
+    assert result.returncode != 0
+    password = admin.read_text()
+    assert password == (container.parent / "platform-password").read_text()
+    assert admin.stat().st_mode & 0o777 == 0o600
+    assert not list((container / "tmp").iterdir())
+    shutil.rmtree(container)
+    (container / "tmp").mkdir(parents=True)
+    del env["FAIL_SOURCE"]
+    assert run_bootstrap(env).returncode == 0
+    assert admin.read_text() == password
+    assert not list((container / "tmp").iterdir())
+
+
+def test_admin_rotation_uses_host_persisted_password(tmp_path, monkeypatch):
+    spec = importlib.util.spec_from_file_location("bootstrap_under_test", DEPLOY / "bootstrap_platform.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    password = tmp_path / "platform_admin"
+    password.write_text("host-durable-password")
+    monkeypatch.setattr(module, "ADMIN_FILE", str(password))
+    state = {"password": "admin123"}
+    monkeypatch.setattr(module, "login", lambda value: "token" if value == state["password"] else None)
+
+    def change(path, body, headers, method):
+        assert path == "/user/password" and method == "PUT"
+        state["password"] = body["newPassword"]
+        return 200, {"status": 1}
+
+    monkeypatch.setattr(module, "call", change)
+    assert module.ensure_admin_rotated() == "token"
+    assert state["password"] == password.read_text().strip() == "host-durable-password"
+    assert module.ensure_admin_rotated() == "token"
+
+
+def test_cleanup_failure_cannot_report_success(transfer):
+    _, _, _, env = transfer
+    env["FAIL_CLEANUP"] = "1"
+    result = run_bootstrap(env)
+    assert result.returncode != 0
+    assert "临时凭据清理失败" in result.stderr.decode()

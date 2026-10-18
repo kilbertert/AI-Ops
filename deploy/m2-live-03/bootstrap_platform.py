@@ -2,8 +2,8 @@
 
 三件事，按顺序，全部幂等：
 
-1. 换掉默认管理员口令。schema 里是 `admin/admin123`；新口令随机生成，写在
-   `/tmp/platform_admin`（由 bootstrap.sh 带回宿主）。
+1. 换掉默认管理员口令。schema 里是 `admin/admin123`；轮换目标由 bootstrap.sh
+   预先保存在宿主，再通过 `/tmp/platform_admin` 传入。
 2. 禁用 schema 自带的 demo 应用（`snail-ai-agent-demo` 的固定 token）。
 3. 建本栈的应用 / 模型配置 / 智能体 / OpenAPI 用户与订阅，并把 appId、agentId、
    app token、openId 回填进绑定表。
@@ -16,8 +16,6 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import secrets
-import string
 import sys
 import urllib.error
 import urllib.request
@@ -100,19 +98,16 @@ def admin_token() -> str:
     return token
 
 
-def generate_password() -> str:
-    alphabet = string.ascii_letters + string.digits
-    return "".join(secrets.choice(alphabet) for _ in range(24))
-
-
 def ensure_admin_rotated() -> str:
     """确保默认口令**已经**被换掉，并返回可用令牌。
 
     三种情形：口令文件可用 ⇒ 直接用；口令文件失效但库仍是默认状态（重建过）⇒
-    丢掉陈旧文件、重新轮换；口令文件失效且默认口令也不可用 ⇒ 交人工处理。
+    使用宿主预先保存的口令轮换；口令文件失效且默认口令也不可用 ⇒ 交人工处理。
     """
+    password = None
     if os.path.exists(ADMIN_FILE):
-        saved = login(Path(ADMIN_FILE).read_text().strip())
+        password = Path(ADMIN_FILE).read_text().strip()
+        saved = login(password)
         if saved:
             return saved
         if not _fresh_database():
@@ -120,12 +115,12 @@ def ensure_admin_rotated() -> str:
                 "已保存的管理员口令登录失败，且默认口令也不可用："
                 "该口令文件不是这台平台的口令，需要人工恢复管理员"
             )
-        os.unlink(ADMIN_FILE)
-        print("bootstrap: 口令文件与平台不匹配，但库仍是默认状态 —— 重新轮换", flush=True)
+        print("bootstrap: 库仍是默认状态，使用已持久保存的目标口令轮换", flush=True)
     legacy = login(DEFAULT_PASSWORD)
     if legacy is None:
         fail("默认口令已不可用但没有口令文件：无法继续（人工恢复）")
-    password = generate_password()
+    if not password:
+        fail("缺少宿主预先保存的目标口令：拒绝轮换")
     status, body = call(
         "/user/password",
         {"oldPassword": DEFAULT_PASSWORD, "newPassword": password},

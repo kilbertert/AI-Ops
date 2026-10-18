@@ -2,8 +2,9 @@
 
 修复隔离 Gateway 对整份生产 keys 的只读挂载；只保留生成的业务依赖白名单，
 同步真实启动与 preflight 的挂载集合，拒绝重新引入生产目录/keys/完整 env。
-bootstrap 改用 exec 标准流，由服务 UID 创建输入；三份输出全部传输成功且非空后，
-以服务 UID/0600 原子替换对应宿主文件。传输失败保留旧配置，不将凭据放入 argv/日志。
+bootstrap 改用 exec 标准流，由服务 UID 创建输入；管理员轮换目标先持久保存在宿主，
+绑定/节点输出全部成功且非空后以服务 UID/0600 逐文件原子替换。传输失败保留旧绑定，
+重建 Gateway 后可恢复；退出时清理容器临时凭据。不将凭据放入 argv/日志。
 
 专项 119 passed；全量 2860 passed / 9 skipped；三条关键回归在旧实现上失败。
 Ruff/format、编译、依赖、shell、policy、Spec lint 通过；ADR-0042 同步执行边界，提交后检查覆盖。

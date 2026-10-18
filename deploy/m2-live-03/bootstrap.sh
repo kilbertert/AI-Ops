@@ -25,7 +25,18 @@ MODE=apply
 [ "${1:-}" = "--check" ] && MODE=check
 
 work=$(mktemp -d "$CONFIG/.bootstrap-XXXXXX")
-trap 'rm -rf "$work"' EXIT
+cleanup() {
+  local rc=$?
+  if ! docker exec m2live03-gateway rm -f \
+    /tmp/bootstrap_platform.py /tmp/agent-runs.in.json /tmp/agent-runs.out.json \
+    /tmp/node.env.out /tmp/platform_admin /tmp/node_token /tmp/model_api_key >/dev/null 2>&1; then
+    echo "bootstrap: 容器临时凭据清理失败" >&2
+    [ "$rc" -ne 0 ] || rc=1
+  fi
+  rm -rf "$work"
+  exit "$rc"
+}
+trap cleanup EXIT
 
 # 标准流避开 daemon 对嵌套只读挂载的 cp 故障；文件由容器服务 UID 创建。
 copy_in() {  # copy_in <host-path> <container-path>
@@ -53,6 +64,13 @@ copy_in "$HERE/bootstrap_platform.py" /tmp/bootstrap_platform.py
 copy_in "$CONFIG/gateway/agent-runs.json" /tmp/agent-runs.in.json
 
 TOKEN_FILE="$CONFIG/secrets/platform_admin"
+if [ "$MODE" = "apply" ] && [ ! -s "$TOKEN_FILE" ]; then
+  # 在任何平台状态改变之前持久保存轮换目标；容器丢失也能幂等恢复。
+  openssl rand -hex 24 > "$work/platform_admin"
+  chmod 600 "$work/platform_admin"
+  chown "${M2LIVE_UID:-999}:${M2LIVE_GID:-987}" "$work/platform_admin"
+  publish "$work/platform_admin" "$TOKEN_FILE"
+fi
 if [ -f "$TOKEN_FILE" ]; then
   copy_in "$TOKEN_FILE" /tmp/platform_admin
 fi
@@ -110,12 +128,10 @@ rc=$?
 set -e
 
 if [ $rc -eq 0 ] && [ "$MODE" = "apply" ]; then
-  # 新口令与新绑定表都带出来：容器是一次性的，文件才是状态。
-  # 三份全部成功取回才发布，失败/半份/空输出不覆盖原配置。
-  copy_out /tmp/platform_admin "$work/platform_admin"
+  # 管理员轮换目标已在宿主保存；绑定与节点两份全部取回才发布。
+  # 失败/半份/空输出不覆盖原绑定与节点配置。
   copy_out /tmp/agent-runs.out.json "$work/agent-runs.json"
   copy_out /tmp/node.env.out "$work/node.env"
-  publish "$work/platform_admin" "$TOKEN_FILE"
   publish "$work/agent-runs.json" "$CONFIG/gateway/agent-runs.json"
   if cmp -s "$work/node.env" "$CONFIG/node/node.env" 2>/dev/null; then
     echo "bootstrap: 节点凭据未变化，不重启节点"
