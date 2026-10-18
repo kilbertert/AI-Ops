@@ -155,6 +155,33 @@ uv run --with pytest-xdist==3.8.0 python -c 'import sys; print(sys.executable)'
   基础解释器的符号链接（`-> ~/miniconda3/bin/python3.13`），先 `resolve()` 会把路径
   移出 venv，让好好的环境也判失败。
 
+### 第三个坑（review 抓出）：这条钉子差点把 AFK 审查链路钉死
+
+第一版的第 3 条断言写的是**无条件** `import xdist`。review 指出：本仓有**三条**
+跑全量的路径，只有 CI 装那个包：
+
+| 路径 | 怎么同步依赖 | 有 xdist 吗 |
+|---|---|---|
+| CI | `uv sync --locked --inexact --dev` + `uv pip install` | 有 |
+| `.sandcastle/sandbox-prepare.sh:13` | `uv sync --locked --dev` | **没有** |
+| `.sandcastle/review/prompt.md` 第 3 步 | `uv sync --extra dev && uv run pytest` | **没有** |
+
+后两条是 **AFK 审查/修复流程的强制验证步骤**。无条件 import 会让它们在**这个
+专门用来阻止静默破坏的改动**里静默变红。这正是本 ADR 通篇在说的那个形状，
+只是这次出现在我自己的守卫上。
+
+改法：条据**这次运行**而不是**意图** —— xdist 会在每个 worker 里设
+`PYTEST_XDIST_WORKER`，所以条件写成「只有带着 worker 标记却没有 xdist 才是错」，
+其余情况 skip（且在串行时 skip 是**正确的**，不是掩盖）。
+
+三种模式实测：
+
+| 场景 | 结果 |
+|---|---|
+| 串行 + 装了 xdist | 3 passed |
+| `-n auto` | 3 passed |
+| 无 xdist + 串行（AFK 沙箱） | **2 passed, 1 skipped**（之前是 1 failed） |
+
 ### 同一轮修掉的第二个坑：`-qq` 吞掉汇总行
 
 CI 的 Tests 步骤原来写 `uv run pytest -q -n auto`。`pyproject.toml` 的 `addopts`

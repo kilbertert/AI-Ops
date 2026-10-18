@@ -32,9 +32,12 @@ never fired here has to be shown to fire somewhere, or it is decoration.
 
 from __future__ import annotations
 
+import os
 import sys
 import sysconfig
 from pathlib import Path
+
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -84,11 +87,37 @@ def test_purelib_is_the_project_venv_too() -> None:
 
 
 def test_the_parallel_scheduler_can_be_imported() -> None:
-    """The suite is meant to run with `-n auto`; without the plugin pytest would
-    reject `-n` outright, and CI would fail with an unexplained argument error.
+    """The scheduler must be importable *where something asks for it*.
 
-    This asserts only that the import works. Whether the plugin is *used* is the
-    CI step's business, and asserting on worker count here would be a probe of
-    the invocation rather than of the environment.
+    The suite is meant to run with `-n auto`; without the plugin pytest rejects
+    `-n` outright, and the job dies with an unexplained argument error that looks
+    like a code fault.
+
+    **Why this is not an unconditional assertion.** `xdist` is deliberately not a
+    declared dependency (see ADR 0038: adding one changes `uv.lock` and the CD
+    dependency-drift gate then refuses to deploy). Three runners execute this
+    suite and only CI installs the scheduler explicitly:
+
+    - CI installs it after `uv sync --locked --inexact --dev`;
+    - `.sandcastle/sandbox-prepare.sh` runs plain `uv sync --locked --dev`;
+    - `.sandcastle/review/prompt.md` runs `uv sync --extra dev && uv run pytest`.
+
+    An unconditional `import xdist` fails in the last two — which is what review
+    caught: it would have broken the AFK review/fix workflow's mandatory
+    verification step, and it would have broken it *inside the change that exists
+    to stop silent breakage*. So the requirement is conditioned on the run that
+    actually needs it.
+
+    The condition is `PYTEST_XDIST_WORKER`, which xdist sets in each worker
+    process — a fact about *this* invocation rather than a guess about intent.
     """
-    import xdist  # noqa: F401  (import is the assertion)
+    under_xdist = "PYTEST_XDIST_WORKER" in os.environ
+    try:
+        import xdist  # noqa: F401
+    except ImportError:
+        if under_xdist:
+            raise AssertionError(
+                "本次运行带着 xdist worker（PYTEST_XDIST_WORKER 已设），却 import 不到 xdist —— "
+                "说明并行调度器与 runner 不是从同一个环境来的。"
+            ) from None
+        pytest.skip("未装 xdist：本次是串行运行，不需要它（见本函数 docstring）")

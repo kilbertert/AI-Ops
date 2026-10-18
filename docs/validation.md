@@ -38,6 +38,21 @@
 而 `-rs` 打印的原因让「多出来的这一条是有意的」一眼可判 —— 换成一个只有计数的断言，
 这里就只能靠猜。基线已按 CI 的真实值改正并写进注释。
 
+**第三条发现（review 抓出）：钉子差点钉死 AFK 审查链路。**
+
+第一版的 `import xdist` 是无条件的，而本仓有三条跑全量的路径，只有 CI 装那个包：
+`sandbox-prepare.sh:13`（`uv sync --locked --dev`）与 `review/prompt.md` 第 3 步
+（`uv sync --extra dev && uv run pytest`）都不会装。后两条是 AFK 审查/修复的**强制验证步骤**，
+会让它们在「专门用来阻止静默破坏的改动」里静默变红。
+
+改为按**这次运行**判定（xdist 在每个 worker 里设 `PYTEST_XDIST_WORKER`）：
+
+| 场景 | 结果 |
+|---|---|
+| 串行 + 装了 xdist | 3 passed |
+| `-n auto` | 3 passed |
+| 无 xdist + 串行（AFK 沙箱） | **2 passed, 1 skipped**（改前 1 failed） |
+
 **未完成业务验收**：本次无用户可见行为变化；上表是执行层面的度量，
 **不构成任何业务路径的可用性证据**。
 
