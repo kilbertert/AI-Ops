@@ -1,0 +1,90 @@
+# **仅用于开发机合成验收**，不部署到任何服务宿主。
+#
+# 正式 compose.yaml 里被替换的东西**只有两处外部依赖**，全部在这里单列：
+#   1. 模型：平台配置指向 `http://modelstub:9100/v1`，这里起一个 OpenAI 兼容桩；
+#   2. CPMS：隔离 Gateway 容器内起桩 CPMS（真实上游在 41 上才可达）。
+# 另外调用者身份与订单授权源换成固定替身（本地没有生产 Redis 会话和业务库）——
+# 它由 `gateway_launcher.py` 提供，启动时打印 substituted 清单。
+#
+# 这**不是**「真实身份路径」的替代品：正式 compose 用的是镜像里的
+# `gateway_server serve` 与真实 resolver/授权器。合成结果不能证明真实链路。
+#
+# 用法：
+#   M2LIVE_SYNTH_TOKEN=$(openssl rand -hex 16) \
+#   M2LIVE_PROJECT=m2-live-03-syn M2LIVE_COMPOSE_EXTRA=.../compose.synthetic.yaml \
+#   M2LIVE_SYNTH_MODE=1 bash deploy/m2-live-03/checks.sh up
+
+services:
+  model-proxy:
+    # 合成模式的出口目标就是桩模型；桩只在 egress 上，节点够不到它。
+    environment:
+      M2LIVE_MODEL_UPSTREAM: http://modelstub:9100
+      M2LIVE_SYNTH_MODE: "1"
+      # 合成上游把 /v1/chat/completions 与 /chat/completions 都实现了，所以前缀留空：
+      # 请求原样到达，路径由桩自己记录（正式模式必须显式给前缀）。
+      M2LIVE_MODEL_UPSTREAM_BASE_PATH: ""
+    command:
+      - --listen-port
+      - "9101"
+      - --upstream
+      - http://modelstub:9100
+      - --upstream-key-file
+      - /etc/m2live/upstream_api_key
+      - --proxy-token-file
+      - /etc/m2live/proxy_token
+      - --upstream-base-path
+      - ""
+
+  gateway:
+    environment:
+      # 合成模式的令牌只影响**运行**；`down` 不该因为变量没导出而失败。
+      AIOPS_M2_LOCAL_TOKEN: ${M2LIVE_SYNTH_TOKEN:-}
+      AIOPS_M2_ORDERS_DB: /data/gateway-orders.db
+      AIOPS_M2_TENANT: TENANT-A
+      M2LIVE_SYNTH_MODE: "1"
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        # 与正式 compose 相同：信任库 = 系统 bundle + 本栈 CA（SSL_CERT_FILE 是替换）。
+        cat /etc/ssl/certs/ca-certificates.crt /etc/m2live-tls/ca.crt > /data/ca-bundle.crt
+        # 合成订单表放在**测试夹具**里，由部署件只读挂载；不给真实业务留位置。
+        M2CLOSE_ORDERS_FILE=/etc/m2live/nodes.json \
+          python /opt/aiops-src/tools/m2_close/synthetic_upstream.py &
+        # 平台这一跳是**真 HTTPS**（正式 compose 也一样），合成模式不再起回环中继。
+        python - <<'PY'
+        import json, sqlite3
+        from pathlib import Path
+        table = json.loads(Path("/etc/m2live/nodes.json").read_text())
+        conn = sqlite3.connect("/data/gateway-orders.db")
+        conn.execute("CREATE TABLE IF NOT EXISTS synthetic_orders "
+                     "(order_no TEXT PRIMARY KEY, user_id TEXT NOT NULL, tenant_id TEXT NOT NULL)")
+        for order_no, record in table.items():
+            conn.execute("INSERT OR REPLACE INTO synthetic_orders VALUES (?, ?, 'TENANT-A')",
+                         (order_no, record["user"]))
+        conn.commit(); conn.close()
+        PY
+        exec python /opt/aiops-src/tools/m2_close/gateway_launcher.py
+
+  modelstub:
+    # 桩模型要跑仓库里的合成上游，因此用**同一个 Gateway 镜像**（依赖已在镜像里，
+    # 启动不下载）。
+    image: ${M2LIVE_GATEWAY_IMAGE:?build the gateway image first (build-image.sh)}
+    container_name: m2live03-modelstub
+    # **只在 egress 上**：节点接不到它。节点必须经 model-proxy 才够得着模型，
+    # 否则合成成功又会掩盖「真实供应商不可达」。
+    networks: [egress]
+    user: "${M2LIVE_UID:-999}:${M2LIVE_GID:-987}"
+    environment:
+      M2CLOSE_MODEL_ONLY: "1"
+      # 桩必须检查 model：把内部资源名当成供应商模型标识时拒绝，而不是照单全收。
+      M2CLOSE_EXPECTED_MODEL: ${M2LIVE_MODEL_ID:-m2live03-synthetic}
+      M2CLOSE_REJECTED_MODEL: aiops-m2live03
+    # 合成 CPMS 的订单表也由这个桩提供，路径与 Gateway 侧一致。
+    volumes:
+      - ${M2LIVE_CONFIG:-/etc/aiops-m2-live}/gateway:/etc/m2live:ro
+    entrypoint: ["python", "/opt/aiops-src/tools/m2_close/synthetic_upstream.py"]
+    mem_limit: 200m
+    cpus: 0.25
+    restart: unless-stopped

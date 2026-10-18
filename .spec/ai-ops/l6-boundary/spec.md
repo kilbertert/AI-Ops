@@ -8,6 +8,7 @@ related:
   - src/aiops_diagnostics/gateway_runtime.py
   - src/aiops_diagnostics/cli.py
   - src/aiops_diagnostics/gateway_server.py
+  - src/aiops_diagnostics/isolation_guard.py
   - src/aiops_diagnostics/gateway_cli.py
   - src/aiops_diagnostics/gateway_client.py
   - src/aiops_diagnostics/gateway_config.py
@@ -37,6 +38,10 @@ related:
   的既有判定后才允许打业务接口；越权与不存在同为 404，授权源不可用是 503。
   `Cache-Control: no-store` 加在这一组路径的成功与错误响应上。
 - `tdengine_proxy` 是**严格只读白名单代理**，且只监听回环：它是 SQL 进入 TDengine 的唯一门。
+- **试运行实例必须在打开任何库之前证明自己隔离**。`gateway_server serve` 读到
+  `M2LIVE_ISOLATION_ROOT` 时，先由 `isolation_guard` 核对可写状态、只读业务依赖与运行 UID；
+  任一条不成立就不监听端口。未设置该变量时门禁是空操作，生产启动路径逐字不变 ——
+  这条区别本身就是「试运行实例不能写生产库」的机制，而不是一段文档承诺。
 - 适配器对客户端**完全透明**：它修复上游的两个兼容缺口，不引入新语义。
 - **日志配置必须显式**：在这一层出现之前，网关根本没配过 logging——uvicorn 只给自身挂 handler，
   root 停在 WARNING 且无 handler，于是 `aiops.*` 的 INFO 一行都没出去过（实测 0 行）。

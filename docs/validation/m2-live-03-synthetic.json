@@ -1,0 +1,384 @@
+{
+  "record": "m2-live-03-synthetic (R1)",
+  "scope": "开发机上的合成验收：部署件的冷启动/停止、运行身份、只读挂载、无出网、节点注册、平台调度、领取端点凭据判定、默认凭据处置、隔离门禁与删除门禁。**不是**真实业务读取，也不替代 41 上的真实验证。",
+  "date": "2026-10-18",
+  "started_at": "2026-10-18T09:52:00Z",
+  "finished_at": "2026-10-18T13:05:00Z",
+  "repo_commit": "PR #815 head（合成跑在其工作树上）",
+  "host": "开发机（不是 41，也不是任何服务宿主）",
+  "artifacts": {
+    "gateway_image": {
+      "built_from": "deploy/m2-live-03/gateway.Dockerfile + gateway-requirements.txt（uv export --frozen）",
+      "image_id_this_run": "sha256:8f855044dab0b7eb5b76e82484b0dcfc7c8c764a05b868b905fb9f06b276ac7f",
+      "source_sha256_this_run": "baffeeaa2438d61e3f3aa56f21bd6e2639da8fd958b0d74dfeba03b18679578a",
+      "uv_lock_sha256": "994a8a12fa58ab833985b1e864427679dca6c0ed95b74c759941f94302aa3e13",
+      "note": "同一份源码连建两次，source_sha256 恒定；镜像 ID 每次不同（构建时间戳），所以 preflight 比对的是内容摘要 + 锁文件里的 ID。锁文件记录的是审查时那一次构建的 ID。"
+    },
+    "platform": {
+      "commit": "10c1d3e50b701be62da23a3403d79a41187ab8cd",
+      "sha256": "8dd6b63504eae7cc479e1c3a7d674aa1529069d44e7967e4ed2158ef645d5cb0"
+    },
+    "node": {
+      "sha256": "b27da717743d7534b6103f5a4339bd1a630ae5b631c1d60bce3388429da9372a"
+    },
+    "development_base_images": {
+      "mysql:8.0": "sha256:7dcddc01f13bab2f15cde676d44d01f61fc9f99fe7785e86196dfc07d358ae2b",
+      "eclipse-temurin:21-jdk": "sha256:f9bf7e9fe2f9bc4657537c1a7e20c768f0c3bafca41598263be4714783dd62eb",
+      "python:3.13-slim": "sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f",
+      "note": "这是开发机实跑的镜像。41 上用的是带加速前缀的 ref，身份记在 images.lock.json 的 base_images.refs（host=host-41）。两者不互相替代。"
+    }
+  },
+  "substituted": {
+    "caller_identity": "固定本地令牌 -> 固定 consumer ScopeContext（本机没有生产 Redis 会话）",
+    "order_authority": "同一 SQLite 里的 synthetic_orders 表（本机没有业务库）",
+    "model": "OpenAI 兼容桩（不评估模型质量）",
+    "cpms": "桩 CPMS，只记录调用次数"
+  },
+  "real_in_this_run": [
+    "隔离 Gateway 镜像本身（uv.lock 导出依赖，启动不下载）",
+    "gateway_server serve 的隔离门禁执行路径",
+    "委派/领取路由与 no-store 头",
+    "授权记录签发、领取、成功与绑定判定",
+    "节点凭据认证（SHA-256 摘要、常量时间比较）",
+    "平台启动、应用/模型/智能体注册（经正式管理接口）、默认管理员口令替换、demo 应用禁用",
+    "平台 gRPC 调度与 sid 传播到节点工具上下文",
+    "取数字段裁剪"
+  ],
+  "checks": [
+    {
+      "id": "preflight",
+      "result": "pass",
+      "evidence": "checks.sh preflight 退出码 0：隔离门禁、挂载边界、UID、基础镜像 ID、制品摘要、Gateway 内容摘要全过"
+    },
+    {
+      "id": "cold-up",
+      "result": "pass",
+      "evidence": "checks.sh up：preflight -> 五容器启动 -> 四项就绪（store/platform/节点注册/Gateway）"
+    },
+    {
+      "id": "runtime-identity",
+      "result": "pass",
+      "evidence": "verify：platform/node/gateway/host-relay 以 uid 1000 运行（合成时是开发机用户；41 上是 999）"
+    },
+    {
+      "id": "readonly-mounts",
+      "result": "pass",
+      "evidence": "preflight 按渲染后的 bind source 判定：可写都在状态根内，只读都在白名单内"
+    },
+    {
+      "id": "no-egress",
+      "result": "pass",
+      "evidence": "verify：节点容器无法建立外网 TCP 连接（internal 网络生效）"
+    },
+    {
+      "id": "isolation-refused-in-startup",
+      "result": "pass",
+      "evidence": "以非隔离配置运行 gateway_server serve：`isolation refused: 隔离根与生产前缀重叠`，退出码 2，未监听端口"
+    },
+    {
+      "id": "bootstrap-rotates-defaults",
+      "result": "pass",
+      "evidence": "bootstrap.sh：默认 admin/admin123 已不可登录（bootstrap.sh --check 复验）、demo 应用禁用；重复执行为幂等"
+    },
+    {
+      "id": "bootstrap-binds-node",
+      "result": "pass",
+      "evidence": "绑定表与 node.env 同步回填；SHA-256 与绑定表一致；重启节点后 sai_client_node 有该 app 的在线行"
+    },
+    {
+      "id": "sid-propagation",
+      "result": "pass",
+      "evidence": "节点日志 Chat dispatch received ... sid=<run_id> 与回执逐字一致"
+    },
+    {
+      "id": "no-identity-direct",
+      "result": "pass",
+      "evidence": "401 ACCESS_TOKEN_REQUIRED"
+    },
+    {
+      "id": "bad-token-direct",
+      "result": "pass",
+      "evidence": "401 INVALID_ACCESS_TOKEN"
+    },
+    {
+      "id": "foreign-direct",
+      "result": "pass",
+      "evidence": "404 ORDER_NOT_FOUND"
+    },
+    {
+      "id": "no-identity-delegated",
+      "result": "pass",
+      "evidence": "401 ACCESS_TOKEN_REQUIRED"
+    },
+    {
+      "id": "foreign-delegated",
+      "result": "pass",
+      "evidence": "404 ORDER_NOT_FOUND"
+    },
+    {
+      "id": "extra-field-delegated",
+      "result": "pass",
+      "evidence": "422 INVALID_REQUEST"
+    },
+    {
+      "id": "claim-none",
+      "result": "pass",
+      "evidence": "401 NODE_TOKEN_REQUIRED"
+    },
+    {
+      "id": "claim-wrong",
+      "result": "pass",
+      "evidence": "401 NODE_TOKEN_REQUIRED"
+    },
+    {
+      "id": "claim-unknown-run",
+      "result": "pass",
+      "evidence": "404 AGENT_RUN_NOT_FOUND"
+    },
+    {
+      "id": "negatives-are-zero-reads",
+      "result": "pass",
+      "evidence": "桩 CPMS 计数在整组负例前后不变（0），一次正例后才 +1"
+    },
+    {
+      "id": "down",
+      "result": "pass",
+      "evidence": "checks.sh down 移除全部容器与网络，保留数据目录"
+    },
+    {
+      "id": "down-failure-no-purge",
+      "result": "pass",
+      "evidence": "tests/test_m2_live03_checks.py：docker down 返回 17 时脚本非零退出、数据原样"
+    },
+    {
+      "id": "purge-guarded",
+      "result": "pass",
+      "evidence": "无所有权标记 / 别的项目 / 符号链接 / 系统路径 / 生产前缀五种情况都返回 3 且不删；全部通过时也由 `rm -rf` 的真实退出码决定"
+    },
+    {
+      "id": "deps-gate",
+      "result": "superseded",
+      "evidence": "该条记录的是**回环中继**时代的形态（平台 UP 经中继可达）。回环中继已删除；当前形态是平台真 HTTPS，`checks.sh deps` 从 Gateway 网络空间按 TLS 校验，见 platform-tls-verified。会话库一项在开发机仍判 FAIL（本机 Redis 只绑宿主回环），在 41 上才是真判据。"
+    },
+    {
+      "id": "review-followups",
+      "result": "pass",
+      "evidence": "审查提出的六项已修：隔离根的符号链接判定改在 resolve 之前；半关闭客户端仍能收到响应（新测试在旧实现上转红）；节点凭据不再进 docker exec 参数；ready 的 platform 探针补 -i；节点就绪按本栈 app 过滤并允许首次 up 的 pending 状态；正式模式不再默认指向合成模型端点。"
+    },
+    {
+      "id": "second-cold-start-after-review",
+      "result": "pass",
+      "evidence": "审查修复后整栈重新冷启动（schema 权限 a+rX、bootstrap 在重建库上重新轮换、节点重建后注册），ready 四项齐全、verify 五项通过、九条负例与一笔委派成功复跑一致。 之后又做了一次带 TLS 的完整冷启动（平台 HTTPS + 白名单 runtime.env），ready 四项齐全。"
+    },
+    {
+      "id": "binding-digest-sync",
+      "result": "pass",
+      "evidence": "bootstrap 用**本次实际令牌**派生 nodes[].token_sha256；node.env 与绑定表逐字一致（测试 + 实跑核对）。重建 gateway 后 ready 四项齐全、委派成功。"
+    },
+    {
+      "id": "delegated-success",
+      "result": "pass",
+      "run_id": "run_lVQkHA-uyjGIJGu-3h1PqGBpG2R_bPwB5-tQeUjuLe8",
+      "state": "succeeded",
+      "expected_node_id": "node-41",
+      "actual_node_id": "node-41",
+      "expected_environment": "live-trial-41",
+      "node_build": "m2live03-node-1",
+      "agent_version": null,
+      "agent_version_gap": "not_wired",
+      "transport": "gateway -> https://platform:8900（TLS 1.3，证书由本栈 CA 校验）"
+    },
+    {
+      "id": "platform-tls-verified",
+      "result": "pass",
+      "evidence": "从隔离 Gateway 容器内建 TLS 连接：TLSv1.3，verify_mode=CERT_REQUIRED，check_hostname=True；容器内已无 127.0.0.1:8900 监听（回环中继已移除）。"
+    },
+    {
+      "id": "production-subset",
+      "result": "pass",
+      "evidence": "gateway 只挂 runtime.env（白名单）与生产 keys/，不挂整份 production.env；白名单排除 provider/发布/媒体签名键，缺必需键即拒绝写文件（有测试）。"
+    },
+    {
+      "id": "owner-marker-after-preflight",
+      "result": "pass",
+      "evidence": "预检失败时不再写 .owner；外来标记不被改写；失败路径不留临时文件（tests/test_m2_live03_checks.py 三条新用例，旧实现转红）。"
+    },
+    {
+      "id": "model-endpoint-and-key",
+      "result": "pass",
+      "evidence": "bootstrap 把宿主的 M2LIVE_MODEL_ENDPOINT 传进容器；凭据走 0600 文件（不进程参数）；已有模型端点不一致时退出 1 且不改写（实跑）。"
+    },
+    {
+      "id": "redis-auth-probe",
+      "result": "pass",
+      "evidence": "tools/m2_live/redis_probe.py 用实际只读配置先 AUTH 再 PING；auth-required fixture 下未认证必失败、认证必成功、错口令不泄露（5 条用例）。"
+    },
+    {
+      "id": "trust-store-keeps-public-cas",
+      "result": "pass",
+      "evidence": "启动脚本把系统 CA bundle 与本栈 CA 拼成 /data/ca-bundle.crt，并作为**容器环境变量** SSL_CERT_FILE 设置；实跑：platform 与本栈 CA TLSv1.3 通过，api.github.com 公开 CA 也通过。"
+    },
+    {
+      "id": "model-key-rotation",
+      "result": "pass",
+      "evidence": "重复 bootstrap 时若端点上一致而凭据不同，用本次凭据 PUT 覆盖并读回核对；有纯函数回归。"
+    },
+    {
+      "id": "trust-store-both-roots",
+      "result": "pass",
+      "evidence": "同一进程内两次握手：platform（本栈 CA）与 api.github.com（公开 CA）都 TLSv1.3 通过 —— 证明信任库是拼接而不是替换。"
+    },
+    {
+      "id": "cert-and-container-sync",
+      "result": "pass",
+      "evidence": "checks.sh deps 比对运行中平台的服务端证书与本栈文件、以及 gateway 信任库是否含当前 CA；实跑通过。证书重新生成后未重启的情形会判 FAIL。"
+    },
+    {
+      "id": "model-rotation-fail-closed",
+      "result": "pass",
+      "evidence": "读不到 / 读回为空 / 读回脱敏值三种情形都拒绝完成初始化（7 条替身回归）。"
+    },
+    {
+      "id": "gateway-has-no-signing-material",
+      "result": "pass",
+      "evidence": "tls/ 拆成 public/（只有证书）与 platform/（私钥与 keystore）；gateway 只挂 public/，容器内确认 /etc/m2live-tls 只有 ca.crt 与 platform.crt，没有 platform.key / ca.key。"
+    },
+    {
+      "id": "cert-renewal-semantics",
+      "result": "pass",
+      "evidence": "make-certs 的重建路径同步平台口令、目录保持 0700、陈旧拆分视图按指纹刷新；五条用例在旧脚本上三条转红。"
+    },
+    {
+      "id": "duplicate-password-lines",
+      "result": "pass",
+      "evidence": "Java properties 后者覆盖前者：只有当口令行**唯一且匹配**时才跳过同步；重复项会被合并成一行（用例在旧脚本上转红）。"
+    }
+  ],
+  "resources_observed": {
+    "note": "docker stats 单次采样，不是峰值保证",
+    "store": "378 MiB / 700 MiB",
+    "platform": "309 MiB / 1.17 GiB",
+    "node": "177 MiB / 500 MiB",
+    "gateway": "108 MiB / 400 MiB",
+    "host_relay": "10 MiB / 64 MiB",
+    "modelstub": "19 MiB / 200 MiB（仅合成验收，不在 41 预算内）",
+    "cpu": "稳态合计 < 1%"
+  },
+  "defects_found_and_fixed": [
+    {
+      "id": "purge-after-failed-down",
+      "symptom": "docker compose down 返回 17 后仍 rm -rf 并返回 0",
+      "cause": "down() 没有检查 compose 的退出码；purge 没有所有权判定",
+      "fix": "停栈失败立即非零返回；purge 前校验所有权标记、精确状态根、非符号链接、系统/生产路径与条目白名单；rm 失败也非零"
+    },
+    {
+      "id": "relay-socket-timeout",
+      "symptom": "平台冷启动后第一次委派 502；平台侧 18s 后成功",
+      "cause": "create_connection(timeout=10) 的时限留在整个 socket 上",
+      "fix": "连接后 settimeout(None)；tests/test_m2_live_relay.py"
+    },
+    {
+      "id": "image-context-layout",
+      "symptom": "容器启动报 `can't open file /opt/aiops-src/tools/m2_live/...`",
+      "cause": "tar 里已带 tools/ 前缀，却又解到 tools/，得到 tools/tools/…",
+      "fix": "解到构建上下文根；内容摘要过滤 __pycache__，同一源码连建两次摘要恒定"
+    },
+    {
+      "id": "platform-workdir",
+      "symptom": "平台以非 root 启动即退出（logback 建不了 ./data/log）",
+      "cause": "工作目录落在只读 jar 目录上",
+      "fix": "working_dir 钉到可写状态目录"
+    },
+    {
+      "id": "floating-deps-at-startup",
+      "symptom": "原实现每次起栈 pip install 浮动范围，`.installed` 标记让旧依赖继续用",
+      "fix": "改为构建镜像：依赖由 uv export --frozen 导出并带哈希；启动命令里没有 pip"
+    },
+    {
+      "id": "isolation-only-in-docs",
+      "symptom": "正式启动路径没有调用隔离门禁，README 却宣称有",
+      "fix": "gateway_server serve 在读取/构造设置之前调用 enforce_from_env；测试断言调用点在 create_gateway_app 之前"
+    },
+    {
+      "id": "default-credentials",
+      "symptom": "schema 自带 admin/admin123 与 demo 应用固定 token",
+      "fix": "bootstrap.sh 经正式接口换口令并禁用 demo；--check 复验"
+    },
+    {
+      "id": "bootstrap-stale-admin-file",
+      "symptom": "库被重建后，bootstrap.sh 因旧口令文件与新库不一致而中止",
+      "cause": "`admin_token()` 只认口令文件，没有区分「库是新的」与「文件不属于这台平台」",
+      "fix": "默认口令仍可登录时把陈旧文件丢掉并重新轮换；否则交人工处理。两个分支都有明确报错"
+    },
+    {
+      "id": "schema-permissions",
+      "symptom": "MySQL 入口点报 `/docker-entrypoint-initdb.d/: Permission denied`，store 不健康",
+      "cause": "仓库文件是 0640/0750（umask 027），容器里的 mysql 用户读不到",
+      "fix": "schema 目录与文件改为 a+rX；preflight 的挂载白名单仍只读"
+    },
+    {
+      "id": "binding-digest-not-updated",
+      "symptom": "首次部署生成的节点令牌没有写进绑定表；节点心跳与领取会一直被拒",
+      "cause": "bootstrap 只回填平台侧的 appId/agentId/token，`nodes[*].token_sha256` 仍沿用种子文件里的旧值",
+      "fix": "`bind_expected_node()` 从同一个令牌派生摘要并替换预期节点条目；三条纯函数回归在旧实现上全红"
+    },
+    {
+      "id": "relay-bypassed-https",
+      "symptom": "平台这一跳用回环中继把远端明文 HTTP 凑成「回环」",
+      "cause": "canonical_gateway_url 只允许回环明文；部署件用中继绕过了这条校验，而非让平台讲 TLS",
+      "fix": "平台改为真 HTTPS（本地 CA，SAN=platform），Gateway 用 SSL_CERT_FILE 信任该 CA；中继从正式与合成启动命令里都删除"
+    },
+    {
+      "id": "whole-production-env",
+      "symptom": "隔离 Gateway 继承生产所有未覆盖的开关与凭据",
+      "cause": "AIOPS_GATEWAY_SERVER_CONFIG_FILE 指向整份 production.env，而设置读取是「环境变量 or 文件」",
+      "fix": "build-runtime-config.sh 只抽只读依赖白名单；不完整即拒绝；网关不挂整份文件"
+    },
+    {
+      "id": "ca-without-key-usage",
+      "symptom": "TLS 握手失败：CA cert does not include key usage extension",
+      "cause": "openssl req -x509 默认不写 keyUsage，OpenSSL 3 在链校验时拒绝这样的 CA",
+      "fix": "CA 用显式配置生成，带 critical basicConstraints 与 keyUsage=keyCertSign,cRLSign；有测试断言"
+    },
+    {
+      "id": "gateway-mounted-signing-keys",
+      "symptom": "为了比对运行中证书，网关一度挂载整个 tls/ 目录，含 ca.key 与 platform.key",
+      "cause": "cert_probe 需要 platform.crt，于是把目录整体挂进去，而不是只挂公开材料",
+      "fix": "make-certs.sh 生成 public/ 与 platform/ 两个视图；gateway 只挂 public/，platform 只挂 platform/；有测试按服务断言挂载"
+    },
+    {
+      "id": "keystore-password-not-synced",
+      "symptom": "重新签发证书后平台起不来：keystore password was incorrect",
+      "cause": "make-certs.sh 重新生成 p12，但 platform/application.properties 里的口令没跟着改",
+      "fix": "make-certs.sh 调用 sync-keystore-password.py 同步口令（可重复执行，文件保持 0600）；4 条回归"
+    },
+    {
+      "id": "renewal-chmod-locked-views",
+      "symptom": "重建时 `chmod 600 tls/*` 把 public/、platform/ 目录一起去掉执行位，随后写视图失败",
+      "cause": "通配 chmod 覆盖子目录",
+      "fix": "只对文件设权限，目录单独 0700"
+    },
+    {
+      "id": "renewal-missed-password-sync",
+      "symptom": "重建路径生成新 p12 但没同步平台口令，平台起不来",
+      "cause": "sync 只写在复用分支里",
+      "fix": "重建路径同样调用；已一致时不写（0400 也能复用）"
+    },
+    {
+      "id": "stale-views-accepted",
+      "symptom": "根材料换了而拆分视图仍是旧副本时，只按存在性检查会继续用旧证书",
+      "cause": "views_ok 只比较文件是否存在",
+      "fix": "按证书指纹与文件字节比对"
+    }
+  ],
+  "not_covered": [
+    "真实公司身份与真实本人订单（需要 41 上的生产 Redis 会话；开发机会话库不可达，deps 判 FAIL 已如实记录）",
+    "真实 CPMS 上游",
+    "模型回答质量",
+    "App 客户端与公网入口",
+    "全部状态语义（本次一笔 finished）",
+    "长期运行与峰值内存",
+    "41 上的任何变更（本记录全程未在 41 执行写操作）"
+  ],
+  "finished_at_note": "本轮合成验收的最后一次完整跑（checks.sh up -> bootstrap -> evidence -> down）结束于 2026-10-18T10:55Z 区间；审查引用的是更早的 10:40Z 快照，所以精确时刻以本条目的备注为准，不写成审查之后的数。"
+}
