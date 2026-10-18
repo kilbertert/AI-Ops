@@ -58,12 +58,11 @@ def test_platform_and_node_never_mount_the_production_config(compose):
         assert "/var/lib/aiops-41" not in joined, f"{name} 挂载了生产状态库"
 
 
-def test_only_the_gateway_mounts_production_read_only(compose):
+def test_gateway_uses_only_the_generated_business_config(compose):
     volumes = compose["services"]["gateway"].get("volumes", [])
     prod = [str(v) for v in volumes if "/etc/aiops-41" in str(v)]
-    assert prod, "隔离 Gateway 应只读挂载既有业务依赖"
-    for entry in prod:
-        assert entry.endswith(":ro"), f"生产挂载必须是只读: {entry}"
+    assert not prod, "整份生产 keys 可能含供应商凭据，不能进入 Gateway"
+    assert any("/gateway/runtime.env:/etc/m2live/runtime.env:ro" in str(v) for v in volumes)
 
 
 def test_node_reaches_only_internal_networks(compose):

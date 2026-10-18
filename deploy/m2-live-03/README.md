@@ -114,7 +114,7 @@ Gateway 与业务依赖已在 41；同宿主先避免跨主机 gRPC、隧道与�
   不是另写一份检查。
 - 隔离 Gateway 读 `build-runtime-config.sh` 生成的**白名单子集**
   （`/etc/m2live/runtime.env`：会话库、业务库、UPMS、TDengine、thirdSession 令牌），
-  以及生产 `keys/`（只读）。它**不写**这些路径。
+  不挂生产 `keys/`：业务只读路径不需要模型密钥。只读挂载也会泄露目录内的凭据。
   不挂整份 `production.env` 的理由：设置读取是「环境变量 or 配置文件」，整份文件会让
   试运行实例继承生产里所有未覆盖的开关与凭据。
 - 平台与节点只挂自己的配置目录（`/etc/aiops-m2-live/{platform,node}`），不挂 `/etc/aiops-41`。
@@ -136,7 +136,7 @@ M2LIVE_SYNTH_TOKEN=$(openssl rand -hex 16) \
 M2LIVE_PROJECT=m2-live-03-syn \
 M2LIVE_COMPOSE_EXTRA=deploy/m2-live-03/compose.synthetic.yaml \
 M2LIVE_CONFIG=/tmp/m2live03-local/etc M2LIVE_STATE=/tmp/m2live03-local/state \
-M2LIVE_DIST=/tmp/m2live03-local/dist AIOPS41_CONFIG_DIR=/tmp/m2live03-local/etc41 \
+M2LIVE_DIST=/tmp/m2live03-local/dist \
 M2LIVE_UID=$(id -u) M2LIVE_GID=$(id -g) M2LIVE_SYNTH_MODE=1 \
 bash deploy/m2-live-03/checks.sh up
 ```
@@ -149,3 +149,10 @@ sid 到节点、领取端点按凭据拒绝。正例（真实身份 → 本人�
 
 真实业务验收、模型回答质量、App 客户端、发布版本冻结、公网全量启用。
 `agent_version` 仍是 `null` + `not_wired`。
+
+## 初始化文件传输
+
+`bootstrap.sh` 通过 `docker exec` 标准输入/输出传输初始化脚本与凭据，不使用
+`docker cp`：后者在部分 daemon/嵌套只读挂载组合下会拒绝复制。输入由容器的服务 UID
+创建为 0600；三份输出全部成功、非空后才以正确 UID/0600 原子替换宿主配置。
+传输失败或空输出返回非零并保留宿主原文件；不把凭据放入命令行或日志。

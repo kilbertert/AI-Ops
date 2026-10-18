@@ -24,20 +24,29 @@ SERVICE=aiops-m2live03
 MODE=apply
 [ "${1:-}" = "--check" ] && MODE=check
 
-work=$(mktemp -d "${TMPDIR:-/tmp}/m2live-bootstrap-XXXXXX")
+work=$(mktemp -d "$CONFIG/.bootstrap-XXXXXX")
 trap 'rm -rf "$work"' EXIT
 
-# 在 Gateway 容器里跑（它已经在 trial 网络上，并且有可达平台回环中继）。
-# `docker cp` 保留源文件的属主。脚本以 root 运行时，复制进容器的文件是 root 的，
-# 以服务 UID 运行的 Python 读不到（表现为「文件不存在」）。所以先复制进**临时目录**、
-# 统一改属主，再放到位 —— 每一步都验证容器内可读。
+# 标准流避开 daemon 对嵌套只读挂载的 cp 故障；文件由容器服务 UID 创建。
 copy_in() {  # copy_in <host-path> <container-path>
-  local staged="$work/stage-$(basename "$2")"
-  cp "$1" "$staged" && chmod 600 "$staged"
-  chown "${M2LIVE_UID:-999}:${M2LIVE_GID:-987}" "$staged" 2>/dev/null || true
-  docker cp "$staged" "m2live03-gateway:$2" >/dev/null
-  docker exec m2live03-gateway sh -c "test -r '$2'" \
-    || { echo "bootstrap: 容器内不可读: $2（属主不是服务 UID）" >&2; return 1; }
+  docker exec -i m2live03-gateway python -c '
+import os, pathlib, sys
+p = pathlib.Path(sys.argv[1])
+os.umask(0o077)
+p.write_bytes(sys.stdin.buffer.read())
+p.chmod(0o600)
+' "$2" < "$1"
+}
+
+copy_out() {  # copy_out <container-path> <staged-host-path>
+  docker exec m2live03-gateway cat "$1" > "$2"
+  [ -s "$2" ] || { echo "bootstrap: 容器输出为空: $1" >&2; return 1; }
+  chmod 600 "$2"
+  chown "${M2LIVE_UID:-999}:${M2LIVE_GID:-987}" "$2"
+}
+
+publish() {  # 同一配置根内原子替换；跨文件系统时拒绝退化成复制。
+  python3 -c 'import os,sys; os.replace(sys.argv[1], sys.argv[2])' "$1" "$2"
 }
 
 copy_in "$HERE/bootstrap_platform.py" /tmp/bootstrap_platform.py
@@ -102,17 +111,16 @@ set -e
 
 if [ $rc -eq 0 ] && [ "$MODE" = "apply" ]; then
   # 新口令与新绑定表都带出来：容器是一次性的，文件才是状态。
-  docker cp m2live03-gateway:/tmp/platform_admin "$TOKEN_FILE.new" >/dev/null
-  chmod 600 "$TOKEN_FILE.new" && mv "$TOKEN_FILE.new" "$TOKEN_FILE"
-  docker cp m2live03-gateway:/tmp/agent-runs.out.json "$work/agent-runs.json" >/dev/null
-  chmod 600 "$work/agent-runs.json"
-  mv "$work/agent-runs.json" "$CONFIG/gateway/agent-runs.json"
-  docker cp m2live03-gateway:/tmp/node.env.out "$work/node.env" >/dev/null
-  chmod 600 "$work/node.env"
+  # 三份全部成功取回才发布，失败/半份/空输出不覆盖原配置。
+  copy_out /tmp/platform_admin "$work/platform_admin"
+  copy_out /tmp/agent-runs.out.json "$work/agent-runs.json"
+  copy_out /tmp/node.env.out "$work/node.env"
+  publish "$work/platform_admin" "$TOKEN_FILE"
+  publish "$work/agent-runs.json" "$CONFIG/gateway/agent-runs.json"
   if cmp -s "$work/node.env" "$CONFIG/node/node.env" 2>/dev/null; then
     echo "bootstrap: 节点凭据未变化，不重启节点"
   else
-    mv "$work/node.env" "$CONFIG/node/node.env"
+    publish "$work/node.env" "$CONFIG/node/node.env"
     # 节点只在**容器创建时**读取自己的 env_file：`docker restart` 沿用旧环境，
     # 心跳会一直失败。必须重建容器。冷启动顺序因此是
     # `up`（节点 pending）→ `bootstrap`（重建节点）→ `ready`。
