@@ -87,14 +87,28 @@ Conventional Commits。这两条对一次性 fixture 没有意义。
 所以 CI 用：
 
 ```yaml
-uv run --with pytest-xdist==3.8.0 pytest -q -n auto
+uv run --with pytest-xdist==3.8.0 --with execnet==2.1.2 pytest -q -n auto
 ```
 
 `--with` 把 xdist 装进 uv 的**临时覆盖环境**，不改 `uv.lock`、不改 `pyproject.toml`
 ——实测跑完两者哈希均未变，`uv sync --locked --dev` 仍然通过。
 
-**版本写死 `==3.8.0`**：`deterministic-ci` 是**不可豁免不变量**，它要求门禁是确定性的。
-浮动版本等于让门禁的耗时与行为随上游漂移，所以固定。
+**两个包都写死版本**（`pytest-xdist==3.8.0` 与它的直接依赖 `execnet==2.1.2`）。
+这是 review 抓出来的：第一版只钉了 xdist，而 `execnet>=2.1` 会被无版本约束地解析
+——「钉子只钉了直接依赖」。`pytest` 本身由上面的 `uv sync --locked --dev` 提供，
+在 lockfile 里。
+
+### ⚠️ 确定性边界（不要把它说成"逐字节可复现"）
+
+`--with` 的解析**不在 `uv.lock` 里**。所以这个门禁的**依赖图**不是被锁死的，
+只是**直接依赖被写死了版本**；`execnet` 的元数据若日后变化，解析结果仍可能与今天不同。
+
+那它凭什么满足 `deterministic-ci`？凭**判据是「测试集合不随并行度变化」**，
+而不是「依赖逐字节相同」：实测 `-n 2/4/6/8/auto` 与串行的
+`passed/skipped` **逐字相同**（2738 / 9）。测试**跑什么**是确定的；只有
+**用哪个并行调度器去跑**是浮动但锁了直接版本的。
+
+想连解析也钉死，唯一办法是把 xdist 写进 lockfile——那要连带一次 41 的环境更新（见下）。
 
 ## 结果
 
@@ -138,6 +152,10 @@ uv run --with pytest-xdist==3.8.0 pytest -q -n auto
 
 - **`-n 8` 以上。** 实测不更快（8 核已饱和），且内存余量只剩约 1 G，再高是在赌。
 
+- **只钉 `pytest-xdist`，不钉 `execnet`。** PR 的第一版就是这样，review 指出
+  `execnet>=2.1` 仍是无约束解析。想用「反正 xdist 版本固定了」来省掉第二个钉子，
+  就是把确定性寄托在一个未声明的传递依赖上。
+
 ## 后果
 
 - **全量 218.65 s → ~65 s**（相对最初 299.62 s 是 **4.6×**），CI 的 Tests 步骤同受益。
@@ -147,6 +165,6 @@ uv run --with pytest-xdist==3.8.0 pytest -q -n auto
 - **代价（说清楚）**：每个 worker 各复制一份模板树（13 ms/用例），
   以及 xdist 成为一个**需要在 workflow 里手动跟进版本**的依赖——它不在 lockfile 里，
   所以 `uv sync` 不会替你升级或审计它。这是为了不碰生产依赖而付的钱。
-- **仍未解决**：`test_caller_auth_mapping.py`（26 s）、`test_cd_deploy_scripts.py`（26 s）
+- **未解决**：`test_caller_auth_mapping.py`（26 s）、`test_cd_deploy_scripts.py`（26 s）
   等文件是**真的在干活**（真实子进程、真实验证），不是固定等待，本记录不动它们。
   0037 与本文都没有把「减少测试」当提速手段。
