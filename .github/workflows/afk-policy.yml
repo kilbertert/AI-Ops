@@ -1,9 +1,13 @@
 name: AFK Policy
 
-# `pull_request` only — see the note in `ci.yml`. This is one of the three
-# workflows that re-ran on `push: main` against a tree identical to the one the
-# pull request had already checked, and `main` requires it (via the `Workflow
-# policy` check), so the branch entry point is already guarded.
+# `pull_request` only — see the note in `ci.yml`. Like `verify`, this is a
+# REQUIRED check (`Workflow policy`), so a failure cannot enter `main` and the
+# `push: main` re-run tested a byte-identical tree for no signal.
+#
+# ⚠️ `spec-tree.yml` deliberately keeps its main trigger. Its job is not required,
+# so a spec drift can merge, and that post-merge run was the only place it
+# surfaced. The rule is "drop the main trigger only for a check that blocks the
+# merge", not "drop it everywhere".
 
 on:
   pull_request:

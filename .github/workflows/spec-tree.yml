@@ -15,13 +15,26 @@ name: Spec Tree
 # persistent runner executes whatever a pull request contains. A read-only
 # checker gains nothing from that exposure.
 
-# `pull_request` only, plus a manual trigger — see the note in `ci.yml`. This is
-# one of the three workflows that re-ran on `push: main` against a tree identical
-# to the one the pull request had already checked. Run this workflow against a
-# branch directly with `workflow_dispatch` when a spec change needs re-checking
-# without opening a pull request.
+# `pull_request` AND `push: main` — deliberately unlike `ci.yml` and
+# `afk-policy.yml`, which dropped the main trigger.
+#
+# The difference is whether a failure BLOCKS the merge. `verify` and
+# `Workflow policy` are required checks, so a failing one cannot enter `main`, and
+# re-running them after a squash merge tests a byte-identical tree for no signal.
+# This job is NOT a required check — `docs/adr/0032` records that as the current
+# state ("spec-tree 作业目前不是必需检查… 今天它会在 PR 上变红但不阻断合并").
+# So a spec drift can merge, and before this change the `push: main` run was the
+# only place it surfaced afterwards. Dropping it would have turned a known
+# unchecked condition into a silent one — found by review, not by the smoke run.
+#
+# Removing this trigger becomes correct only together with making the check
+# required (or with data that its false-positive rate makes it unusable, per ADR
+# 0032). That is an independent decision, so this file keeps both triggers.
 on:
   pull_request:
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:

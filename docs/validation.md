@@ -213,12 +213,12 @@ codex rollout 日志里模型那一回合的实际输出：
 
 ## 2026-10-18 · 去掉 main 上重复的一遍 CI：本地验证摘要
 
-**范围**：`.github/workflows/ci.yml`、`afk-policy.yml`、`spec-tree.yml`（各去掉 `push: main`）。
-**不改源码、不改测试断言。**
+**范围**：`.github/workflows/ci.yml`、`afk-policy.yml`（各去掉 `push: main`）。
+`spec-tree.yml` **保留** `push: main`（理由见下）。**不改源码、不改测试断言。**
 
 | 项 | 结果 |
 |---|---|
-| `on:` 解析（PyYAML） | ci=`{pull_request}`；afk-policy=`{pull_request}`；spec-tree=`{pull_request, workflow_dispatch}` |
+| `on:` 解析（PyYAML） | ci=`{pull_request}`；afk-policy=`{pull_request}`；spec-tree=`{pull_request, push:main, workflow_dispatch}` |
 | 全量套件 `-n auto` | 2873 passed / 9 skipped |
 | `adr.check --base origin/main` / `policy-check` / `repo-map.check` | 均 ok |
 | `ruff check` / `format --check` | 干净 |
