@@ -1,3 +1,44 @@
+
+## 2026-10-18 · 脚手架 1.7.23（验证按风险成形）：本地验证摘要
+
+**范围**：`.sandcastle/` 的三个实现 prompt、`CODING_STANDARDS.md`、`.afk-bootstrap.json`、
+`docs/adr/0034`。**无源码改动**，不改任何运行时行为。
+
+**验证**（在本候选树上实跑）：
+
+- `node .sandcastle/adr.check.mjs --base 7db46f70`：ok（34 records，0 flagged）
+- `node .sandcastle/policy-check.mjs all`：passed
+- `node .sandcastle/repo-map.check.mjs`：ok（151 行）
+- `uv run pytest -q tests/test_cli.py`：通过（scoped 运行）
+- CI（PR #813）：`Workflow policy` / `spec-tree lint` / `verify` 全绿
+
+**判据（行为断言，不是"文件被改过"）**：
+
+| 判据 | 结果 |
+|---|---|
+| 三个 prompt 中 `RED: write one failing test` 计数 | 0 |
+| 新指引（`Do not manufacture a test to satisfy a quota.`）计数 | 各 1 |
+| 本仓验证命令逐字未变（含 `uv run pytest`） | 是 |
+| 本步骤是否注入 `npm run check` | 否（0） |
+| 本仓手写验证 skill 段落（`verify-aiops-gateway`） | 仍在 |
+| 设备 token 红线 | 仍在 |
+
+**失败与修复（本轮真实发生，非 fixture）**：
+
+1. 首次提交后 CI `Workflow policy` **fail**：`adr.check.mjs` 报这些 `.sandcastle/`
+   改动缺少决策记录。**门禁是对的**——`docs/agents/architecture-decisions.md` 明文把
+   「Test strategy — what is verified how, and what is deliberately not」列为欠记录情形。
+   修复：补 `docs/adr/0034`。
+2. 补 ADR 后 CI 再次 fail：新增 ADR 改变仓库文件集，`REPO-MAP.md` 过期。
+   修复：按门禁提示跑 `node .sandcastle/repo-map.mjs`（3 行差异，ADR 计数）。
+3. 期间另有一处被同一门禁拦下：我起初给 ADR 编号 `0033`，而该号已被
+   `0033-consumer-charging-status.md` 占用（本地检出过期，`dev-worktree` 基于最新
+   `origin/main` 才暴露）。`adr.check.mjs` 报 `number 0033 is used by 2 records`，
+   改到 `0034`。
+
+**未完成业务验收**：本次无用户可见行为变化，未做真实业务验收；上表全部为脚手架文件级
+与 prompt 文本级断言，**不构成任何业务路径的可用性证据**。
+
 ## 2026-10-17 · 执行节点与隔离实验：本地验证摘要
 
 **范围**：`tools/m2_close/` —— 受控执行节点（Java）、隔离实验驱动与聚合门、桩上游、
