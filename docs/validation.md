@@ -279,7 +279,7 @@ review 产出，本记录不作该断言。
 
 **验证**（在本候选树上实跑，记录见 [m2-live-03-r2-synthetic.json](validation/m2-live-03-r2-synthetic.json)）：
 
-- 全量 `pytest`：**2843 passed / 10 skipped**（248.46s）；`ruff check` / `format` 干净
+- 全量 `pytest`：**2851 passed / 9 skipped**（236.16s）；`ruff check` / `format` 干净
 - 从**模板与空状态根**出发的一次完整冷启动：`up`（节点 pending，`ready` 返回非零）→
   `bootstrap`（重建节点容器）→ `ready` 四项在同一轮成立 → 九条负例 → 一次委派成功 → `down`
 - 模型调用路径实测：节点 → `model-proxy`（TLS，本栈 CA）→ 合成上游；上游收到的 model
