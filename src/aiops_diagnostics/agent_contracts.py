@@ -190,8 +190,52 @@ QA_TURN_SCHEMA: dict[str, Any] = {
 
 
 def qa_turn_schema() -> dict[str, Any]:
-    """Strict structured-output schema for the zero-order general assistant."""
+    """Strict structured-output schema for the zero-order general assistant.
+
+    The caller MUST pass this to ``CodexSession.run``. Omitting it is not a
+    harmless default: ``run`` falls back to ``agent_turn_schema()``, which is
+    the DIAGNOSIS schema, and a strict provider then makes the model answer in
+    that shape regardless of what the prompt asked for. Measured on 41
+    (2026-10-19): a "你好" zero-order turn returned
+    ``{"kind":"diagnosis","diagnosis":{...}}``, so ``payload["text"]`` was
+    absent, the turn failed with "zero-order answer returned empty text", and
+    the user got nothing — intermittently, only when the provider enforced the
+    schema. The prompt cannot fix this; only the schema can.
+    """
     return QA_TURN_SCHEMA
+
+
+#: The routing classifier's own answer shape (`classify_lightweight`). Same
+#: reason as QA_TURN_SCHEMA: without it the turn is handed the diagnosis schema
+#: and returns no `intent` at all, which reads downstream as "no routing
+#: decision" — a silent loss of casual handling, promotional intents and the
+#: high-risk clarification rule, not a visible error.
+CLASSIFIER_TURN_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "intent": {
+            "type": "string",
+            "enum": [
+                "knowledge",
+                "casual",
+                "order_issue",
+                "report_fault",
+                "case_exploration",
+                "solution_discovery",
+            ],
+        },
+        "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
+        "risk": {"type": "string", "enum": ["low", "high"]},
+        "answer": {"type": "string", "description": "仅当 intent 为 casual 时的直接回答"},
+    },
+    "required": ["intent", "confidence", "risk"],
+    "additionalProperties": False,
+}
+
+
+def classifier_turn_schema() -> dict[str, Any]:
+    """Strict structured-output schema for the routing classifier turn."""
+    return CLASSIFIER_TURN_SCHEMA
 
 
 class QaBlock(BaseModel):
