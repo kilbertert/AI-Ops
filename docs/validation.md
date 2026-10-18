@@ -1,4 +1,35 @@
 
+## 2026-10-18 · 脚手架 1.7.24（审查者拿到对抗授权）：本地验证摘要
+
+**范围**：`.sandcastle/review-prompt.md`（新增 `## 0. You are the adversary, not the author`）、
+`.afk-bootstrap.json`、`docs/adr/0035`、`docs/开发进度.md`。**无源码改动**，不改任何运行时行为。
+
+**验证**（在本候选树上实跑）：
+
+- `node .sandcastle/adr.check.mjs --base 276e9e39`：ok（35 records，0 flagged）
+- `node .sandcastle/policy-check.mjs all`：passed
+- `node .sandcastle/repo-map.check.mjs`：ok
+- CI（PR）：`Workflow policy` / `spec-tree lint` / `verify`
+
+**判据（行为断言，不是"文件被改过"）**：
+
+| 判据 | 结果 |
+|---|---|
+| `adversary, not the author` 计数 | 1 |
+| 该节是否位于 `## 1. Read the diff` **之前** | 是 |
+| 1.7.23 的改动是否回退（`RED: write one failing test`） | 0（未回退） |
+| 本仓验证命令是否被改写（含 `uv run pytest`） | 未改写 |
+| 本步骤是否注入 `npm run check` | 否 |
+
+**本轮真实失败与修复（发生在 afk-bootstrap，不在本仓）**：1.7.23 只把这一节写进
+`scaffold/.sandcastle/review-prompt.md`，而那是 **bootstrap 的源**——只发到此后新建的项目。
+实测三个已存在的仓（含本仓）**0 of 3** 收到。`adr.check.mjs` / `policy-check.mjs` /
+`repo-map.check.mjs` 都不会发现这类漏发。由 1.7.24 补齐，本仓这次升级就是那次修复的落地。
+
+**未完成业务验收**：本次无用户可见行为变化；上表全部为脚手架文件级与 prompt 文本级断言，
+**不构成任何业务路径的可用性证据**。审查者行为的实际改善需要观察后续 AFK 运行的
+review 产出，本记录不作该断言。
+
 ## 2026-10-18 · 脚手架 1.7.23（验证按风险成形）：本地验证摘要
 
 **范围**：`.sandcastle/` 的三个实现 prompt、`CODING_STANDARDS.md`、`.afk-bootstrap.json`、
