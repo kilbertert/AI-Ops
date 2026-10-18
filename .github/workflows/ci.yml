@@ -104,8 +104,14 @@ jobs:
         #   2. xdist worker 崩掉，它那份没跑；
         #   3. 测试静默变成 skip —— **记成 pass 的 skip 是假绿**（本机另一仓
         #      health-flow 的 CI 注释专门写过这个形状：`445 passed, 4 skipped` 被读成通过）。
-        # 所以：要求有 passed 计数，且跳过数不超过基线 9（用上限而非等号，
-        # 新增测试不会让这条腐化）。`-rs` 让每条跳过都打印原因。
+        #
+        # 基线：**CI 上 2740 passed / 10 skipped**。
+        # ⚠️ 比本机多一条跳过，不是异常：`test_cd_deploy_scripts.py` 的 dry-run
+        # 需要 `dev-host`，而那东西只在开发机上 —— CI 是 GitHub-hosted，所以它跳过。
+        # 本机是 2741 / 9，差的就是这一条。（这个基线差异是本步骤第一版没料到的：
+        # 当时写死 `<= 9`，CI 立刻红，失败信息就是下面那句。是 `-rs` 打印的原因
+        # 让"多出来的这一条是有意的"一眼可判——换成一个只有计数的断言，这里就得靠猜。）
+        # 用上限而非等号：新增测试不会让这条腐化。
         run: |
           set -eo pipefail
           # ⚠️ **不要再加 `-q`**：`pyproject.toml` 的 addopts 已经是 `-q`，再加一个
@@ -124,9 +130,10 @@ jobs:
           skipped=$(printf '%s' "$summary" | grep -oE "[0-9]+ skipped" | grep -oE "[0-9]+" || echo 0)
           echo "汇总：passed=$total skipped=$skipped"
           [ "$total" -ge 2700 ] || {
-            echo "::error::只跑了 $total 个测试（基线约 2738）—— 有测试没被收集"; exit 1; }
-          [ "$skipped" -le 9 ] || {
-            echo "::error::跳过数 $skipped 超过基线 9 —— 有测试在悄悄跳过"; exit 1; }
+            echo "::error::只跑了 $total 个测试（基线约 2740）—— 有测试没被收集"; exit 1; }
+          [ "$skipped" -le 10 ] || {
+            echo "::error::跳过数 $skipped 超过 CI 基线 10 —— 看上面 -rs 的原因列表，"
+            echo "::error::确认多出来的是有意的环境跳过，而不是测试在悄悄跳过"; exit 1; }
 
       - name: Check imports and dependencies
         run: |
