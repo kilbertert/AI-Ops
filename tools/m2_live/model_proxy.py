@@ -159,6 +159,8 @@ class ProxyHandler(BaseHTTPRequestHandler):
         # 头会让客户端看到与 body 不符的声明。有长度就透传长度（非流式客户端不必
         # 靠连接关闭判定结束）；没有长度就按 chunked 重写。不缓冲 body —— 模型
         # 调用可能是流式的，缓冲会同时破坏流式语义和内存上限。
+        # ponytail: `read(65536)` 是块读，SSE 增量最多攒到一个块再转发；真要做
+        # 低延迟流式推送时换成 `read1()`，语义与帧化都不用动。
         bodyless = self.command == "HEAD" or response.status in (204, 304)
         chunked = length is None and not bodyless
         if chunked:
