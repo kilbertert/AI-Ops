@@ -79,7 +79,15 @@ jobs:
           uv run ruff format --check .
 
       - name: Run tests
-        run: uv run pytest -q
+        # 并行，但 **xdist 不进 pyproject.toml**（见 ADR 0038）：加一个 dev 依赖会改
+        # uv.lock，而 deploy-41.sh 的依赖漂移门拿 uv.lock 的 sha256 与 41 上的比，
+        # 于是"加一个测试依赖"会拦住整条 CD，直到人工更新 41 的环境。
+        # `--with` 只装进 uv 的临时覆盖环境，lockfile 与 pyproject 都不动。
+        # 版本写死：deterministic-ci 是不可豁免不变量，门禁不能随上游漂移。
+        # `auto` 取 runner 的核数。⚠️ 本 job 现在跑在 `ubuntu-latest`（4 核），
+        # 而 ADR 0038 的数字是本机 8 核测的；换回 self-hosted（8 核）会更快，
+        # 但两种 runner 都只是**变快**，不改变结论。
+        run: uv run --with pytest-xdist==3.8.0 pytest -q -n auto
 
       - name: Check imports and dependencies
         run: |
