@@ -24,6 +24,10 @@ SERVICE=aiops-m2live03
 MODE=apply
 [ "${1:-}" = "--check" ] && MODE=check
 
+umask 077
+# 固定容器临时路径由本栈的 apply/check 共用；持锁直到 EXIT 清理结束。
+exec 9>>"$CONFIG/.bootstrap.lock"
+flock -n 9 || { echo "bootstrap: 另一个初始化/检查仍在运行" >&2; exit 3; }
 work=$(mktemp -d "$CONFIG/.bootstrap-XXXXXX")
 cleanup() {
   local rc=$?

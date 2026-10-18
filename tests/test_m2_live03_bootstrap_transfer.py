@@ -1,5 +1,6 @@
 """初始化在 docker cp 不可用时传输配置，失败时保留原有宿主文件。"""
 
+import fcntl
 import hashlib
 import importlib.util
 import os
@@ -174,3 +175,19 @@ def test_cleanup_failure_cannot_report_success(transfer):
     result = run_bootstrap(env)
     assert result.returncode != 0
     assert "临时凭据清理失败" in result.stderr.decode()
+
+
+@pytest.mark.parametrize("args", [[], ["--check"]])
+def test_concurrent_invocation_cannot_touch_active_transfer(transfer, args):
+    config, container, originals, env = transfer
+    sentinel = container / "tmp/node_token"
+    sentinel.write_text("active-transfer")
+    with (config / ".bootstrap.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        result = subprocess.run(
+            ["bash", str(DEPLOY / "bootstrap.sh"), *args], env=env, capture_output=True, timeout=5
+        )
+    assert result.returncode == 3
+    assert sentinel.read_text() == "active-transfer"
+    for name, value in originals.items():
+        assert (config / name).read_text() == value
