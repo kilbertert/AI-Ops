@@ -666,8 +666,6 @@ GET https://api.qumall.qushiyun.com/v1/assistant/questions/{qa_id}
 - `media.url` 是**同域相对路径**（`/v1/media/...`），直接当 `src` 用，**不需要 Authorization 头**——短时签名就在 URL 里，有效期约 10 分钟。
 - 媒体块失效时 `media: null` 且带 `unavailable: true`：**保留文本与引用**，显示"资源不可用"，不要整条消息报错。
 - `retrieval_status`：`found`（命中知识库）/ `not_found`（无命中，通用回答）/ `unavailable`（检索依赖故障，文本仍可交付）/ `limited`（达检索上限）。
-- **`completed` 只有这一种 `result` 形状（重要）**：无论这次回答走的是知识库、宣传卡还是**零阶通用问答**，`completed` 的 `result` 恒为 `{"blocks": [...], "retrieval_status": ...}`，正文一定在某个 `kind="text"` 块里。前端**只解析 `blocks[]`**，不要去读 `result.text` / `result.reminder`——那个形状是零阶路径在 2026-10-19 前的历史写法（#708 起统一），且在网关里**已彻底移除**；曾按它取正文的客户端会对每一个零阶回答显示"未找到"（UlinkEV 1.2.14 实测，见 `docs/validation.md`）。
-  零阶回答的 `retrieval_status` 是 `not_found`（本次没有检索知识库），这不是错误。
 - **`status=failed` 处理（重要）**：failed 是**终态**——收到即**停止轮询该 `qa_id`**（failed 的作业永远不会变成 completed）。轮询响应此时带 `error: {code, message, retryable}`（与订单诊断线同形状，多为模型限流）：
 
 ```json
