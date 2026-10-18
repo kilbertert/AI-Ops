@@ -142,9 +142,9 @@ docs/
     m2-live-03-frozen.json
     m2-live-03-r2-synthetic.json
     m2-live-03-synthetic.json
+    m2-live05-recovery-synthetic.json
     m2-live05-synthetic.json
-    m2-self-accept-prefix.json
-    ... (2 more)
+    ... (3 more)
   afk-workflow.md
   architecture.md
   diag-query-api-plan.md
