@@ -42,7 +42,7 @@ body: {"question": "...", "order_no": "可选"}
 | `家用充电桩安装需要向物业申请什么手续` | 202 type=qa |
 | `电动车长期不开的话电池应该保持多少电量存放` | 202 type=qa |
 
-轮询：`GET /v1/assistant/questions/{qa_id}`，按 `retry_after_ms`（1s）节流，终态 `completed` 读 `result.text`（真实模型回答，通常 30–90 秒）。
+轮询：`GET /v1/assistant/questions/{qa_id}`，按 `retry_after_ms`（1s）节流，终态 `completed` 读 `result.blocks[]` 的 `text` 块（真实模型回答，通常 30–90 秒）。**不要读 `result.text`** —— `completed` 只有 blocks-v1 一种形状（见 §3 下方）。
 
 ### type=diagnosis —— 带订单号的提问（异步 202）
 
@@ -87,7 +87,7 @@ curl -i "https://api.qumall.qushiyun.com/v1/assistant/questions" \
 # 期望: 202 {"type":"qa","qa_id":"qa_..."}
 curl -i "https://api.qumall.qushiyun.com/v1/assistant/questions/<qa_id>" \
   -H "$H2" -H "$H3" -H "$H4"
-# 期望: {"status":"completed","result":{"text":"...","reminder":true}}
+# 期望: {"status":"completed","result":{"blocks":[{"kind":"text","text":"..."}],"retrieval_status":"not_found"}}
 
 # 场景3 diagnosis（创建+轮询）
 curl -i "https://api.qumall.qushiyun.com/v1/assistant/questions" \
@@ -112,7 +112,9 @@ switch (res.type) {
   case 'qa':
     result = await poll(`/v1/assistant/questions/${res.qa_id}`,
                         () => 1000 /* retry_after_ms */);
-    renderAnswer(result.text);           // completed 时
+    // completed 的 result 恒为 {blocks[], retrieval_status}；正文在 text 块里。
+    // 零阶回答的 retrieval_status 是 not_found（本次没检索知识库），不是错误。
+    renderBlocks(result.blocks);
     break;
   case 'diagnosis':
     result = await poll(`/v1/standard/diagnoses/${res.diagnosis_id}`,

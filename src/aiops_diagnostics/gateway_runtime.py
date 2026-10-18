@@ -112,6 +112,34 @@ _REFUSED = object()
 #: outcome, not a failure, and the worker must exit quietly rather than raise.
 TERMINAL_WRITE_REFUSED = {"status": "refused"}
 
+#: The retrieval_status the zero-order turn records when the reason it is on
+#: the zero-order path is that the knowledge search FAILED. `_try_customer_rag`
+#: returns this instead of a bare `None` for that one cause, so the two ways of
+#: reaching the fall-through stay distinguishable: refusing to pick a customer
+#: agent means nothing was searched (`not_found`), while a kb-service outage
+#: means the library was never read (`unavailable`). Collapsing them would let
+#: an outage read as "no matching knowledge" — the exact claim
+#: `promo_empty_result` refuses to make for the other card sites.
+KB_RETRIEVAL_UNAVAILABLE = "unavailable"
+
+#: Default for a zero-order turn that reached the fall-through for any reason
+#: other than an outage: no customer agent was selected, so no search ran.
+ZERO_ORDER_RETRIEVAL_STATUS = "not_found"
+
+
+class _KbOutageFallback:
+    """Marker returned by `_try_customer_rag` when the search itself failed.
+
+    An object rather than a string or a dict: every other return from that
+    method is a result payload or `None`, and the caller's next check is
+    `isinstance(rag_result, dict)`. A distinguishable sentinel is what keeps
+    "we could not search" from being read as "we searched and found nothing".
+    """
+
+
+#: The one instance. Identity comparison is the contract.
+KB_OUTAGE = _KbOutageFallback()
+
 
 @dataclass
 class JobRegistration:
@@ -2099,6 +2127,11 @@ class GatewayRuntime:
             settings = Settings.from_config(self.gateway_settings.server_config_file)
             settings.agent.run_root = self.diagnostic_settings.agent.run_root
             rag_result = None
+            # Why this turn is on the zero-order path, when the reason is not
+            # "no search was attempted". Only `KB_OUTAGE` sets it (below) —
+            # every other route into `run_zero_order_answer` genuinely did not
+            # search, and `not_found` is then the honest status.
+            retrieval_status = ZERO_ORDER_RETRIEVAL_STATUS
             if promo_intent and (not tenant_id or self.kb_search_client is None or self.media_signer is None):
                 from aiops_diagnostics.promo_agents import promo_empty_result
 
@@ -2132,23 +2165,33 @@ class GatewayRuntime:
                 if rag_result is TERMINAL_WRITE_REFUSED:
                     _finish_turn(None, cancelled=True)
                     return
-                if isinstance(rag_result, dict) and rag_result.get("status") == "failed":
-                    self._record_metric(
-                        tenant_id=tenant_id,
-                        route_type=route_tag,
-                        outcome="failed",
-                        error_code="QA_FAILED",
-                        duration_ms=int((time.monotonic() - started_ms) * 1000),
-                    )
-                    _finish_turn(None, cancelled=True)
+                if rag_result is KB_OUTAGE:
+                    # The search failed, so this turn falls through to the
+                    # zero-order answer — which is still an answer. Keep the
+                    # cause so the completed row does not report an outage as
+                    # "no matching knowledge". No `return`: the fall-through
+                    # below is the whole point of this branch.
+                    retrieval_status = KB_RETRIEVAL_UNAVAILABLE
                 else:
-                    self._record_qa_metric(
-                        rag_result, tenant_id, started_ms, conversation_turn, route_type=route_tag
-                    )
-                    # The metrics-only tag must not persist into the conversation
-                    # turn (it would surface through GET /v1/conversations/{id}).
-                    _finish_turn({key: value for key, value in rag_result.items() if key != "agent_version"})
-                return
+                    if isinstance(rag_result, dict) and rag_result.get("status") == "failed":
+                        self._record_metric(
+                            tenant_id=tenant_id,
+                            route_type=route_tag,
+                            outcome="failed",
+                            error_code="QA_FAILED",
+                            duration_ms=int((time.monotonic() - started_ms) * 1000),
+                        )
+                        _finish_turn(None, cancelled=True)
+                    else:
+                        self._record_qa_metric(
+                            rag_result, tenant_id, started_ms, conversation_turn, route_type=route_tag
+                        )
+                        # The metrics-only tag must not persist into the conversation
+                        # turn (it would surface through GET /v1/conversations/{id}).
+                        _finish_turn(
+                            {key: value for key, value in rag_result.items() if key != "agent_version"}
+                        )
+                    return
             answer = run_zero_order_answer(
                 question,
                 settings,
@@ -2181,7 +2224,9 @@ class GatewayRuntime:
                 )
             _finish_turn(None, cancelled=True)
             return
-        answer = _guard_zero_order_language(answer, language)
+        answer = as_blocks_result(
+            _guard_zero_order_language(answer, language), retrieval_status=retrieval_status
+        )
         if not self.store.update_assistant_question(
             qa_id,
             status="completed",
@@ -2595,7 +2640,13 @@ class GatewayRuntime:
             # retrieval_status=unavailable — but the runtime cannot reach the
             # model without the search guard either, so degrade to the plain
             # zero-order answer instead of failing the job.
-            return None
+            #
+            # The marker carries WHY: the answer that follows is honest only if
+            # the job records that no search could run. Returning a bare `None`
+            # made this cause indistinguishable from "no customer agent was
+            # selected", and the caller then stamped `not_found` — an outage
+            # reported to the client as "the library holds no match".
+            return KB_OUTAGE
         except AgentContractError as exc:
             # The model answered but violated the blocks contract. That is a
             # defect, not an outage: report it as a failure so it stays visible
@@ -2808,6 +2859,45 @@ class GatewayRuntime:
         if not path.is_file():
             raise ValueError("gateway fixture is missing")
         return path
+
+
+def as_blocks_result(answer: dict[str, Any], *, retrieval_status: str = "not_found") -> dict[str, Any]:
+    """Normalize a zero-order answer into the blocks-v1 shape the job stores.
+
+    Every ``completed`` assistant-question payload is one shape on the wire:
+    ``{"blocks": [...], "retrieval_status": ...}``. The RAG and promotional
+    paths already write it; the plain zero-order turn returned
+    ``{"text", "reminder"}`` and was stored verbatim, so a client that renders
+    ``blocks[]`` — which is what ``docs/agents/frontend-api-brief.md`` §10.8
+    scenario B tells it to do, and what the shipped UlinkEV build does — showed
+    its fallback copy ("未找到") for an answer that had arrived intact. Verified
+    on 41: 9 of 33 completed rows carried the text-only shape, and the shipping
+    APK renders none of them.
+
+    The model's prose is data, not a schema: it is moved into a ``text`` block
+    and nothing else is added. ``reminder`` is dropped rather than promoted to
+    a block kind, because no client in the contract reads it (#708 established
+    that the reminder is already folded into the model's own prose).
+
+    ``retrieval_status`` defaults to ``not_found`` — the same value
+    ``qa_rag._finalize`` normalizes a model self-reporting ``not_needed`` to,
+    and the honest one for a zero-order turn, which ran no knowledge search.
+    The caller passes ``unavailable`` when the reason this answer is on the
+    zero-order path at all is that the knowledge search FAILED: claiming "no
+    match" there is a statement about a library nobody read, which is the rule
+    ``_try_customer_rag`` and ``promo_empty_result`` already state. An answer
+    that already carries ``blocks`` is returned unchanged: this is a
+    normalizer, not a second contract.
+    """
+    if not isinstance(answer, dict) or answer.get("blocks"):
+        return answer
+    text = answer.get("text")
+    if not isinstance(text, str) or not text.strip():
+        return answer
+    return {
+        "blocks": [{"kind": "text", "text": text}],
+        "retrieval_status": retrieval_status,
+    }
 
 
 def _guard_zero_order_language(answer: dict[str, Any], language: str) -> dict[str, Any]:
