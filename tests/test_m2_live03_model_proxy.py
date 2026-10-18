@@ -10,6 +10,8 @@
 from __future__ import annotations
 
 import json
+import shutil
+import socket
 import ssl
 import subprocess
 import sys
@@ -31,6 +33,9 @@ from m2_live import model_proxy  # noqa: E402
 class _Upstream(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     seen: list[dict] = []
+    # 真实供应商三种形状都出现过：定长 JSON、chunked、以及带错误状态码的 JSON。
+    mode = "content-length"
+    status = 200
 
     def log_message(self, *_args):
         return
@@ -46,16 +51,23 @@ class _Upstream(BaseHTTPRequestHandler):
             }
         )
         payload = json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode()
-        self.send_response(200)
+        self.send_response(type(self).status)
         self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(payload)))
-        self.end_headers()
-        self.wfile.write(payload)
+        if type(self).mode == "chunked":
+            self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+            self.wfile.write(b"%x\r\n%s\r\n0\r\n\r\n" % (len(payload), payload))
+        else:
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
 
 
 @pytest.fixture
 def upstream_port():
     _Upstream.seen = []
+    _Upstream.mode = "content-length"
+    _Upstream.status = 200
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Upstream)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     yield server.server_address[1]
@@ -94,8 +106,6 @@ def _certs(tmp_path: Path) -> tuple[Path, Path]:
 
 def _start(tmp_path: Path, upstream: str, *, base_path: str = "") -> int:
     cert, key = _certs(tmp_path)
-    import socket
-
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
@@ -214,3 +224,136 @@ def test_a_base_path_without_a_leading_slash_is_refused(tmp_path):
             "k",
             upstream_base_path="v1",
         )
+
+
+def _raw_post(port: int, path: str = "/v1/chat/completions") -> tuple[int, dict[str, str], bytes, bool]:
+    """严格客户端：按 HTTP 帧读完整响应，并要求 TLS 以 close_notify 收尾。
+
+    `suppress_ragged_eofs=False` 是关键 —— 默认的 `True` 会把「没有 close_notify
+    的 EOF」静默当成正常结束，而那正是 41 真实链路上 curl 56 的成因：body 收全了，
+    连接却是被硬断开的。
+    """
+    context = ssl.create_default_context()
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE  # 自签测试证书
+    body = json.dumps({"model": "vendor-model", "messages": []}).encode()
+    request = (
+        f"POST {path} HTTP/1.1\r\nHost: localhost\r\nAuthorization: Bearer proxy-token\r\n"
+        f"Content-Type: application/json\r\nContent-Length: {len(body)}\r\n\r\n"
+    ).encode() + body
+    raw = socket.create_connection(("127.0.0.1", port), timeout=10)
+    with context.wrap_socket(raw, suppress_ragged_eofs=False) as tls:
+        tls.sendall(request)
+        data = b""
+        while b"\r\n\r\n" not in data:
+            chunk = tls.recv(65536)
+            if not chunk:
+                raise AssertionError("响应头之前连接就结束了")
+            data += chunk
+        head, _, payload = data.partition(b"\r\n\r\n")
+        lines = head.decode().split("\r\n")
+        status = int(lines[0].split()[1])
+        headers = {}
+        for line in lines[1:]:
+            name, _, value = line.partition(":")
+            headers[name.strip().lower()] = value.strip()
+
+        if headers.get("transfer-encoding", "").lower() == "chunked":
+            while not payload.endswith(b"0\r\n\r\n"):
+                chunk = tls.recv(65536)
+                if not chunk:
+                    raise AssertionError("chunked 响应在终止块之前结束")
+                payload += chunk
+            decoded, rest = b"", payload
+            while True:
+                size_line, _, rest = rest.partition(b"\r\n")
+                size = int(size_line, 16)
+                if size == 0:
+                    break
+                decoded += rest[:size]
+                rest = rest[size + 2 :]
+            payload = decoded
+        else:
+            length = int(headers.get("content-length", "0"))
+            while len(payload) < length:
+                chunk = tls.recv(65536)
+                if not chunk:
+                    raise AssertionError("body 在 Content-Length 之前结束")
+                payload += chunk
+
+        # 帧内 body 已经读完。接下来的 EOF 必须是干净的 TLS 关闭。
+        clean_eof = True
+        try:
+            while tls.recv(65536):
+                pass
+        except ssl.SSLEOFError:
+            clean_eof = False
+        except OSError:
+            clean_eof = False
+        return status, headers, payload, clean_eof
+
+
+def test_a_content_length_response_ends_with_a_clean_tls_close(tmp_path, upstream_port):
+    """真实链路回归：200 + 完整 body，但连接没有 close_notify ⇒ curl 56。
+
+    修复前这条会红：客户端收到 `unexpected eof while reading`。
+    """
+    port = _start(tmp_path, f"http://127.0.0.1:{upstream_port}")
+    status, headers, payload, clean_eof = _raw_post(port)
+    assert status == 200
+    assert payload == json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode()
+    assert headers["content-length"] == str(len(payload)), "有长度就必须按长度声明，别让客户端靠断开猜结束"
+    assert clean_eof, "TLS 连接没有以 close_notify 收尾（严格客户端会读成 unexpected eof）"
+
+
+def test_a_chunked_upstream_response_is_reframed_consistently(tmp_path, upstream_port):
+    """上游 chunked、下游必须给出自洽帧：要么有长度，要么是合法 chunked。"""
+    _Upstream.mode = "chunked"
+    port = _start(tmp_path, f"http://127.0.0.1:{upstream_port}")
+    status, headers, payload, clean_eof = _raw_post(port)
+    assert status == 200
+    assert payload == json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode()
+    assert not (headers.get("content-length") and headers.get("transfer-encoding")), (
+        "不能同时声明 Content-Length 与 Transfer-Encoding"
+    )
+    assert clean_eof
+
+
+def test_an_upstream_error_status_keeps_its_body_and_framing(tmp_path, upstream_port):
+    _Upstream.status = 400
+    port = _start(tmp_path, f"http://127.0.0.1:{upstream_port}")
+    status, headers, payload, clean_eof = _raw_post(port)
+    assert status == 400, "错误响应必须保留上游状态码，不能被改写成 200/502"
+    assert json.loads(payload)["choices"], "错误响应体也要完整送达"
+    assert headers["content-length"] == str(len(payload))
+    assert clean_eof
+
+
+def test_curl_completes_cleanly_against_a_non_streaming_completion(tmp_path, upstream_port):
+    """41 上的原症状复现：curl 必须退出 0，而不是 56。"""
+    curl = shutil.which("curl")
+    if curl is None:
+        pytest.skip("curl 不在 PATH 上")
+    port = _start(tmp_path, f"http://127.0.0.1:{upstream_port}")
+    result = subprocess.run(
+        [
+            curl,
+            "-sS",
+            "-k",
+            "--http1.1",
+            "-w",
+            "%{http_code}",
+            "-H",
+            "Authorization: Bearer proxy-token",
+            "-H",
+            "Content-Type: application/json",
+            "--data",
+            '{"model": "vendor-model", "messages": []}',
+            f"https://127.0.0.1:{port}/v1/chat/completions",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, f"curl 退出 {result.returncode}：{result.stderr}"
+    assert result.stdout.endswith("200")

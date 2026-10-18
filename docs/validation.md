@@ -1,3 +1,41 @@
+## 2026-10-19 · 模型出口响应 framing 收口（M2-LIVE-06）
+
+**范围**：`tools/m2_live/model_proxy.py`、`tests/test_m2_live03_model_proxy.py`、
+`docs/adr/0041`。不改上游转发目标、路径白名单、TLS 校验、凭据隔离与网络边界。
+
+**上一轮没收回来的那条**：M2-LIVE-05 的真实只读链路上，节点经受控出口调用批准供应商，
+HTTP 200 与模型响应都收到了，但客户端退出码是 56
+（`curl: (56) OpenSSL SSL_read: ... unexpected eof while reading`），探针据此判 `pass=false`。
+所以那次只有委派链路是成功证据，**模型出口这一跳当时不算通过**。
+
+**根因（两层，都在出口自己这一侧）**：
+① 代理把上游的 `Transfer-Encoding` / `Content-Length` 一并丢弃，只靠关闭连接表示结束；
+② `BaseHTTPRequestHandler` 只关 TCP、不发 TLS `close_notify`，严格客户端把「body 已收全
+但连接被硬断开」读成 unexpected eof。
+
+**修复**：上游给 `Content-Length` 就原样转达；没有长度就按 `chunked` 重写；`finish()`
+在关闭前做 TLS shutdown（`unwrap()`，有超时与异常兜底）。逐跳头与 `Server`/`Date` 由本进程
+重新表达，避免重复头。**不缓冲响应体**：模型调用可能是流式的，缓冲会同时破坏流式语义与
+内存上限，因此没有引入「响应大小上限」这个旋钮，只按块重写帧。
+
+**验证（修复前先红）**：把 `model_proxy.py` 回到 `origin/main` 后，新增的四条回归全部失败，
+其中 curl 那条的实际输出就是 `curl 退出 56：... unexpected eof while reading`；
+修复后专项 **14 passed**，相关 M2 子集（proxy / 部署边界 / 隔离 / 网络）**63 passed**。
+新增断言覆盖：定长响应必须声明 `Content-Length` 且以 `close_notify` 收尾、上游 chunked
+必须被重写成自洽帧、上游 4xx 保留状态码与完整 body、`curl --http1.1` 退出 0。
+客户端使用 `suppress_ragged_eofs=False`，默认的 `True` 会把这次缺陷静默当成正常结束。
+
+**全量与门禁**：`uv run pytest -n auto` **2867 passed / 9 skipped**（51.96s）。首跑出现一次
+`tests/test_dify_tracer_bullet.py` 失败；该用例单独跑与整文件并行跑均通过，重跑全量通过，
+判为与本次改动无关的偶发，如实记在这里。Ruff、format（449 文件）、compileall、`uv pip check`、
+ADR 结构检查、policy、repo-map、Spec lint 通过。
+
+**边界**：本次只证明「出口对非流式/定长与 chunked 响应的 framing 是自洽的」。
+它**不证明**真实供应商可用、模型质量、App/公网启用或 `agent_version`；上游自己提前断流
+时客户端仍会看到真实错误。
+
+**未完成业务验收**：没有再次发送真实订单或模型请求，未访问 41。
+
 ## 2026-10-19 · 隔离部署凭据挂载与初始化传输修复（候选）
 
 修复隔离 Gateway 对整份生产 keys 的只读挂载；只保留生成的业务依赖白名单，
