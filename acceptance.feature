@@ -2920,3 +2920,27 @@ Feature: 执行节点上的工具集合与运行证据（合成实验）
       When 计算总判定
       Then 结果为 FAIL、退出码非零，并列出原因
       And 只有十个编号齐全且全为 PASS 时才输出 PASS
+
+Feature: 隔离栈的凭据挂载与初始化传输
+
+  Rule: 只允许业务依赖白名单进入 Gateway
+
+    Scenario: LIVE-DEPLOY-01 生产目录含模型供应商凭据
+      Given 生产 keys 目录包含一把合成供应商密钥
+      When 渲染并启动隔离部署件
+      Then Gateway、平台和节点都看不到该目录
+      And 重新加入整份生产配置或 keys 的挂载会被预检拒绝
+
+  Rule: 初始化不依赖 daemon 的目录复制
+
+    Scenario: LIVE-DEPLOY-02 容器具有嵌套只读挂载
+      Given Gateway 的配置目录及 runtime.env 都是只读挂载
+      When 执行 bootstrap.sh
+      Then 初始化代码与输入文件按字节传入
+      And 输出配置以服务 UID 和 0600 权限原子落位
+
+    Scenario: LIVE-DEPLOY-03 任一初始化输出传输失败或为空
+      Given 宿主已有管理员口令、绑定表和节点配置
+      When 三份输出中的任意一份传输失败或为空
+      Then 初始化非零退出
+      And 宿主三份原配置全部保持原样

@@ -23,7 +23,7 @@ COMPOSE=(docker compose -f "$HERE/compose.yaml")
 COMPOSE+=(--project-name "$PROJECT")
 
 # 栈的容器名带项目后缀之外的前缀，所有按名字的操作都必须先确认「这是本项目的」。
-containers() { printf '%s\n' m2live03-store m2live03-platform m2live03-node m2live03-gateway m2live03-host-relay; }
+containers() { printf '%s\n' m2live03-store m2live03-platform m2live03-node m2live03-gateway m2live03-host-relay m2live03-model-proxy; }
 project_of() {  # project_of <container> -> compose project label（不存在则空）
   docker inspect -f '{{ index .Config.Labels "com.docker.compose.project" }}' "$1" 2>/dev/null
 }
@@ -71,10 +71,9 @@ guard() {
     -v "$CONFIG/gateway:/etc/m2live:ro" \
     -v "$CONFIG/gateway/runtime.env:/etc/m2live/runtime.env:ro" \
     -v "$CONFIG/tls/public:/etc/m2live-tls:ro" \
-    -v "${AIOPS41_CONFIG_DIR:-/etc/aiops-41}/keys:/etc/aiops-41/keys:ro" \
     -e "M2LIVE_ISOLATION_ROOT=/data" \
     -e "M2LIVE_EXPECTED_UID=$uid" \
-    -e "M2LIVE_READONLY_PATHS=/etc/m2live/runtime.env:/etc/aiops-41/keys:/etc/m2live:/etc/m2live-tls" \
+    -e "M2LIVE_READONLY_PATHS=/etc/m2live/runtime.env:/etc/m2live:/etc/m2live-tls" \
     "$image" python -m aiops_diagnostics.isolation_guard
 }
 
@@ -148,7 +147,7 @@ preflight() {
     rendered_json='{}'
   fi
   mount_report=$(printf '%s' "$rendered_json" | python3 "$HERE/stack_checks.py" mounts \
-    "$STATE" "${AIOPS41_CONFIG_DIR:-/etc/aiops-41}" "$CONFIG" \
+    "$STATE" "$CONFIG" \
     "$DIST/platform" "$DIST/node" "$DIST/gateway-src" "$HERE/schema") && mount_rc=0 || mount_rc=$?
   if [ $mount_rc -eq 0 ]; then
     ok "所有可写 bind mount 都在 $STATE 之内；只读挂载都在白名单内"
@@ -163,7 +162,7 @@ preflight() {
   user_report=$(printf '%s' "$rendered_json" | python3 "$HERE/stack_checks.py" users \
     "${want_uid}:${want_gid}") && user_rc=0 || user_rc=$?
   if [ $user_rc -eq 0 ]; then
-    ok "platform/node/gateway/host-relay 都显式指定运行 UID"
+    ok "platform/node/gateway/host-relay/model-proxy 都显式指定运行 UID"
   else
     bad "运行 UID 未显式指定或与期望不符: $user_report"
   fi
@@ -389,7 +388,7 @@ verify() {
   # 运行身份：不是 root，且各服务一致。store 单独判定 —— 官方 mysql 镜像的入口点
   # 以 root 启动、随后把 mysqld 降到 mysql(999)，那是该镜像的既定模型。
   local want_uid=${M2LIVE_UID:-$(id -u)} c uid
-  for c in m2live03-platform m2live03-node m2live03-gateway m2live03-host-relay; do
+  for c in m2live03-platform m2live03-node m2live03-gateway m2live03-host-relay m2live03-model-proxy; do
     uid=$(docker exec "$c" id -u 2>/dev/null)
     if [ "$uid" != "$want_uid" ]; then
       red "  $c 以 uid ${uid:-?} 运行，期望 $want_uid"
@@ -401,7 +400,7 @@ verify() {
     red "  store 的 mysql 用户 uid=${uid:-?}，期望 999（官方镜像的固定值）"
     return 1
   fi
-  grn "  四个服务以 uid $want_uid 运行；store 的 mysqld 以 mysql(999)"
+  grn "  五个服务以 uid $want_uid 运行；store 的 mysqld 以 mysql(999)"
 
   # 默认凭据：平台起来之后、任何人发真实请求之前，schema 自带的 admin/admin123 与
   # demo 应用必须已经被处置。这里直接复用 bootstrap 的 --check，不另写一份判断。

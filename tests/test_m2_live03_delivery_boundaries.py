@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -54,6 +55,33 @@ def test_only_model_proxy_mounts_the_supplier_key(prepared):
         assert visible == (service == "model-proxy"), service
 
 
+def test_gateway_cannot_see_a_supplier_key_in_production_keys(prepared, tmp_path):
+    config, _ = prepared
+    production = tmp_path / "production"
+    secret = production / "keys/provider.key"
+    secret.parent.mkdir(parents=True)
+    secret.write_text("synthetic-supplier-key")
+    for service in ("gateway", "node", "platform", "model-proxy"):
+        for path in _mounted_sources(service, config):
+            source = Path(re.sub(r"\$\{AIOPS41_CONFIG_DIR:-[^}]+\}", str(production), str(path)))
+            assert source != secret and source not in secret.parents, service
+
+
+def test_preflight_rejects_reintroduced_production_mounts(tmp_path):
+    production, config, state = (tmp_path / name for name in ("production", "config", "state"))
+    for source in (production, production / "keys", production / "production.env"):
+        rendered = {
+            "services": {"gateway": {"volumes": [{"type": "bind", "source": str(source), "read_only": True}]}}
+        }
+        result = subprocess.run(
+            [sys.executable, str(DEPLOY / "stack_checks.py"), "mounts", str(state), str(config)],
+            input=json.dumps(rendered),
+            capture_output=True,
+            text=True,
+        )
+        assert result.returncode == 1, str(source)
+
+
 def test_bootstrap_never_passes_the_supplier_key_to_the_node(prepared, tmp_path):
     config, env = prepared
     bin_dir = tmp_path / "bin"
@@ -62,10 +90,12 @@ def test_bootstrap_never_passes_the_supplier_key_to_the_node(prepared, tmp_path)
     docker = bin_dir / "docker"
     docker.write_text(
         f"#!{sys.executable}\n"
-        "import os, shutil, sys\n"
+        "import os, pathlib, shutil, sys\n"
         "a = sys.argv[1:]\n"
         "if a[0] == 'cp' and a[2].endswith(':/tmp/model_api_key'):\n"
         "    shutil.copyfile(a[1], os.environ['M2_TEST_CAPTURE'])\n"
+        "if a[0] == 'exec' and a[-1] == '/tmp/model_api_key':\n"
+        "    pathlib.Path(os.environ['M2_TEST_CAPTURE']).write_bytes(sys.stdin.buffer.read())\n"
         "if a[-2:] == ['python', '/tmp/bootstrap_platform.py']:\n"
         "    sys.exit(19)\n"
     )

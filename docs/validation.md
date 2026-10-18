@@ -1,3 +1,19 @@
+## 2026-10-19 · 隔离部署凭据挂载与初始化传输修复（候选）
+
+修复隔离 Gateway 对整份生产 keys 的只读挂载；只保留生成的业务依赖白名单，
+同步真实启动与 preflight 的挂载集合，拒绝重新引入生产目录/keys/完整 env。
+bootstrap 改用 exec 标准流，由服务 UID 创建输入；三份输出全部传输成功且非空后，
+以服务 UID/0600 原子替换对应宿主文件。传输失败保留旧配置，不将凭据放入 argv/日志。
+
+专项 119 passed；全量 2860 passed / 9 skipped；三条关键回归在旧实现上失败。
+Ruff/format、编译、依赖、shell、policy、Spec lint 通过；ADR-0042 同步执行边界，提交后检查覆盖。
+原生脚本完成空根冷启动、bootstrap、ready、verify、九条负例、合成委派与 down；
+负例期间 CPMS 计数不变，Gateway/节点不挂生产密钥，传输字节、UID/0600 与令牌摘要匹配。
+采集脚本名称修正后重跑，共两次合成委派；开发机会话库依赖失败，整体 deps 为 partial。
+证据见 [m2-live05-synthetic.json](validation/m2-live05-synthetic.json)。
+**未完成业务验收**。分支 `fix/m2-live-bootstrap-boundaries`，基线 `e24d52d`；
+先完成 PR 门禁，再从合并制品执行已授权的一次受控真实链路。
+
 
 ## 2026-10-19 · 冻结制品独立复核
 
