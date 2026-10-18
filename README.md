@@ -525,14 +525,17 @@ qa-plan.md                QA 用例（158 个用例 ID，含环境/前置/数据
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) 一个 job，GitHub-hosted：
 
 ```bash
-uv sync --locked --dev
+uv sync --locked --inexact --dev
 uv run ruff check . && uv run ruff format --check .
-uv run --with pytest-xdist==3.8.0 pytest -q -n auto
+uv pip install "pytest-xdist==3.8.0" "execnet==2.1.2"   # 并行调度器，见下
+uv run pytest -n auto -rs
 uv run python -m compileall -q src tests && uv pip check
 ```
 
-> 并行用的 `pytest-xdist` 走 `--with`，**故意不进 `pyproject.toml`**：加一个 dev 依赖
-> 会改 `uv.lock`，而 CD 的依赖漂移门拿 `uv.lock` 的 sha256 与 41 上的比，会拦住整条部署。
+> 并行用的 `pytest-xdist` **故意不进 `pyproject.toml`**：加一个 dev 依赖会改 `uv.lock`，
+> 而 CD 的依赖漂移门拿 `uv.lock` 的 sha256 与 41 上的比，会拦住整条部署。
+> 装进项目 venv（不是 `uv run --with`，那会把 `sys.executable` 改道到临时覆盖环境）。
+> ⚠️ 本地跑测试前若执行过 `uv sync`，需要重跑那句 `uv pip install`。
 > 理由与实测见 `docs/adr/0038`。
 
 ### 持续部署（[:cd.yml](.github/workflows/cd.yml) + [:deploy/deploy-41.sh](deploy/deploy-41.sh)）

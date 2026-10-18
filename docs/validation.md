@@ -1,4 +1,61 @@
 
+## 2026-10-18 · 并行测试装配加固：本地验证摘要
+
+**范围**：`.github/workflows/ci.yml`（安装方式 + 测试步骤断言）、
+`tests/test_parallel_setup.py`（新增）、`docs/adr/0038`（补「修订」节）、README。
+**无源码改动、无测试断言改动。**
+
+**起因**：把同一个并行改动套用到 health-flow 时，`tests/test_e2e_seed.py` 当场变红。
+查下去发现根因是 `--with` 本身，不是隔离。
+
+**验证**：
+
+| 项 | 结果 |
+|---|---|
+| 全量（新配方） | **2741 passed / 9 skipped**（2738 + 新增 3 条钉子） |
+| 反向对照：干净 venv + `--with` | `test_parallel_setup.py` **2 failed / 1 passed** |
+| 正向：新配方 | **3 passed** |
+| CI 断言负向对照 | 空收集 / 只跑 5 个 / 跳过 20 个 → 全部拦下；正常 → 放行 |
+| `uv.lock` / `pyproject.toml` | 均未被改动 |
+
+**两条实测支撑的机制结论**：
+
+1. `uv run --with X` 在 **X 不在 venv 里**时，把命令放进 `~/.cache/uv/builds-v0/.tmp*/`
+   覆盖环境执行，`sys.executable` 与 `purelib` 一并改道；X 已在 venv 里时则不改道。
+   ⇒ 同一命令在「干净 CI」与「本机装过」下行为不同。
+2. `pytest -q` 叠在 `addopts = "-q"` 上得到 `-qq`，**汇总行被整个吞掉**。
+   上一版 CI 日志没有汇总行、只能数进度点，根因就是这个。
+
+**CI 与本机的跳过基线差一条（本步骤第一次 CI 跑就撞上了）**：
+
+| | passed | skipped |
+|---|---|---|
+| 本机（开发机） | 2741 | 9 |
+| CI（GitHub-hosted） | **2740** | **10** |
+
+多出来的是 `test_cd_deploy_scripts.py` 的 dry-run：它需要 `dev-host`，而那东西只在
+开发机上。**这条差异是被新加的断言抓出来的**（当时写死 `<= 9`，CI 立刻红），
+而 `-rs` 打印的原因让「多出来的这一条是有意的」一眼可判 —— 换成一个只有计数的断言，
+这里就只能靠猜。基线已按 CI 的真实值改正并写进注释。
+
+**第三条发现（review 抓出）：钉子差点钉死 AFK 审查链路。**
+
+第一版的 `import xdist` 是无条件的，而本仓有三条跑全量的路径，只有 CI 装那个包：
+`sandbox-prepare.sh:13`（`uv sync --locked --dev`）与 `review/prompt.md` 第 3 步
+（`uv sync --extra dev && uv run pytest`）都不会装。后两条是 AFK 审查/修复的**强制验证步骤**，
+会让它们在「专门用来阻止静默破坏的改动」里静默变红。
+
+改为按**这次运行**判定（xdist 在每个 worker 里设 `PYTEST_XDIST_WORKER`）：
+
+| 场景 | 结果 |
+|---|---|
+| 串行 + 装了 xdist | 3 passed |
+| `-n auto` | 3 passed |
+| 无 xdist + 串行（AFK 沙箱） | **2 passed, 1 skipped**（改前 1 failed） |
+
+**未完成业务验收**：本次无用户可见行为变化；上表是执行层面的度量，
+**不构成任何业务路径的可用性证据**。
+
 ## 2026-10-18 · 测试套件可并行：本地验证摘要
 
 **范围**：`tests/test_merge_faq_i18n_tool.py`（重写为私有工作树）、`.github/workflows/ci.yml`、

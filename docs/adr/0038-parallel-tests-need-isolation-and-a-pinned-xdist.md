@@ -110,6 +110,108 @@ uv run --with pytest-xdist==3.8.0 --with execnet==2.1.2 pytest -q -n auto
 
 想连解析也钉死，唯一办法是把 xdist 写进 lockfile——那要连带一次 41 的环境更新（见下）。
 
+### 修订（2026-10-18，同日第二次提交）：`--with` 换掉了
+
+上面那套 `--with` 方案**在被推广前就被一件事推翻了**：把同一改动套用到
+health-flow 时，`tests/test_e2e_seed.py` 立刻变红。查下去发现根因不是隔离，
+是 `--with` 本身：
+
+```
+uv run python -c 'import sys; print(sys.executable)'
+    -> <repo>/.venv/bin/python3
+uv run --with pytest-xdist==3.8.0 python -c 'import sys; print(sys.executable)'
+    -> ~/.cache/uv/builds-v0/.tmpXXXXXX/bin/python
+```
+
+**`--with` 不只是多装一个包，它把整条命令放进一个临时覆盖环境执行**，
+`sys.executable` 与 `sysconfig` 的 `purelib`/`platlib` 全都跟着改道。于是任何
+**拿 `sys.executable` 起子进程、或按 purelib 找 site-packages** 的测试，看到的是
+另一个环境 —— 而它会把这件事报成**代码故障**。health-flow 有一处正好依赖 purelib
+（脚本模式在 editable install 失效时自举 `import app`），当场就红。
+
+**本仓当时是侥幸没红**（`test_env_41_editable_guard` 用 `sys.executable` 起子进程，
+但它只需要一个能读 `PYTHONPATH` 的解释器）。侥幸不是决策，所以改了：
+
+```yaml
+- run: uv sync --locked --inexact --dev          # --inexact 才不会被下一步删掉
+- run: uv pip install "pytest-xdist==3.8.0" "execnet==2.1.2"
+- run: uv run pytest -n auto -rs | tee /tmp/pytest.log   # 不再传 -q，见下
+```
+
+装进**项目 venv**，`sys.executable` 保持是项目自己的解释器。
+
+- **必须有 `--inexact`**：不加它，下一句 `uv run` 的隐式同步会把刚装上的 xdist
+  删掉（实测 `uv sync --locked --dev` 之后 `import xdist` → `ModuleNotFoundError`）。
+- **不用 `uv run --with` 的另一个理由**：它**只有在包不在 venv 里时才**建覆盖环境
+  （实测：venv 里已有 xdist 时 `--with` 的 `sys.executable` 是正常的）。
+  于是同一个命令在"干净 CI"和"开发者本机装过"两种情况下**行为不同** ——
+  这正是 CI 与本地不一致最容易骗人的形状。
+- **代价（说清楚）**：`--inexact` 让 venv 可以有 lockfile 之外的内容，
+  所以这个 job 的环境**不是** lockfile 的精确复现。判据仍是「测试集合不随并行度变化」。
+- **回归钉子**：`tests/test_parallel_setup.py` 钉住「测试解释器 = 项目 venv」
+  这条不变量。它**做过反向验证**：干净 venv + `--with` 下 3 条里挂 2 条，
+  新配方下 3 条全过。没做过反向验证的钉子只证明自己会绿。
+  ⚠️ 它比对的是**未解析的** `sys.executable`：venv 的 `bin/python3` 是指向
+  基础解释器的符号链接（`-> ~/miniconda3/bin/python3.13`），先 `resolve()` 会把路径
+  移出 venv，让好好的环境也判失败。
+
+### 第三个坑（review 抓出）：这条钉子差点把 AFK 审查链路钉死
+
+第一版的第 3 条断言写的是**无条件** `import xdist`。review 指出：本仓有**三条**
+跑全量的路径，只有 CI 装那个包：
+
+| 路径 | 怎么同步依赖 | 有 xdist 吗 |
+|---|---|---|
+| CI | `uv sync --locked --inexact --dev` + `uv pip install` | 有 |
+| `.sandcastle/sandbox-prepare.sh:13` | `uv sync --locked --dev` | **没有** |
+| `.sandcastle/review/prompt.md` 第 3 步 | `uv sync --extra dev && uv run pytest` | **没有** |
+
+后两条是 **AFK 审查/修复流程的强制验证步骤**。无条件 import 会让它们在**这个
+专门用来阻止静默破坏的改动**里静默变红。这正是本 ADR 通篇在说的那个形状，
+只是这次出现在我自己的守卫上。
+
+改法：条据**这次运行**而不是**意图** —— xdist 会在每个 worker 里设
+`PYTEST_XDIST_WORKER`，所以条件写成「只有带着 worker 标记却没有 xdist 才是错」，
+其余情况 skip（且在串行时 skip 是**正确的**，不是掩盖）。
+
+三种模式实测：
+
+| 场景 | 结果 |
+|---|---|
+| 串行 + 装了 xdist | 3 passed |
+| `-n auto` | 3 passed |
+| 无 xdist + 串行（AFK 沙箱） | **2 passed, 1 skipped**（之前是 1 failed） |
+
+### 同一轮修掉的第二个坑：`-qq` 吞掉汇总行
+
+CI 的 Tests 步骤原来写 `uv run pytest -q -n auto`。`pyproject.toml` 的 `addopts`
+**已经是 `-q`**，再加一个就是 `-qq`，而 **`-qq` 会把 "N passed, M skipped" 汇总行
+整个吞掉**。上一版 PR 里 CI 日志没有汇总行、只能靠数进度点确认跑了多少测试，
+根因就是这个。
+
+现在这一步不止断言"绿"，还断言**量**，因为三件事都能让绿变得没有意义：
+收集为空（import 错误吞掉整个目录，pytest 仍以 0 退出）、worker 崩掉漏跑、
+测试静默变成 skip（**记成 pass 的 skip 是假绿**）。所以要求有汇总行、
+`passed ≥ 2700`、`skipped ≤ 10`，并用 `-rs` 打印每条跳过的原因。
+
+**基线是 CI 的值，不是本机的值**（这条差异在第一次 CI 跑时就撞上了）：
+
+| | passed | skipped |
+|---|---|---|
+| 本机（开发机） | 2741 | 9 |
+| CI（GitHub-hosted） | **2740** | **10** |
+
+多出来的是 `test_cd_deploy_scripts.py` 的 dry-run：它需要 `dev-host`，而那东西只在
+开发机上。断言第一版写死 `<= 9`，CI 立刻红 —— **这条断言在第一次真实运行时就抓到了
+一个量差**（虽然这次是良性的）。而 `-rs` 打印的原因让「多出来的是有意的环境跳过」
+一眼可判；换成一个只有计数的断言，这里就只能靠猜，或者把阈值调到"反正不会红"。
+
+四条负向对照都真跑过：空收集 / 只跑 5 个 / 跳过 20 个 / 正常，全部按预期拦下或放行。
+
+> 顺带纠正上一版 ADR 里的一句话：它说 `-n 8` 那次 flake「已消失」。
+> 本仓范围内是对的（隔离确实修掉了它），但把它当成"`--with` 方案可用"的证据
+> 是错的——真正推翻 `--with` 的是 health-flow，不是这里。
+
 ## 结果
 
 同一台机（8 核 / 15 G），同一份代码：
@@ -155,6 +257,11 @@ uv run --with pytest-xdist==3.8.0 --with execnet==2.1.2 pytest -q -n auto
 - **只钉 `pytest-xdist`，不钉 `execnet`。** PR 的第一版就是这样，review 指出
   `execnet>=2.1` 仍是无约束解析。想用「反正 xdist 版本固定了」来省掉第二个钉子，
   就是把确定性寄托在一个未声明的传递依赖上。
+
+- **`uv run --with pytest-xdist …`（第一版，已换掉）。** 见上文「修订」一节：
+  它会把整个进程放进临时覆盖环境，`sys.executable`/`purelib` 一并改道。
+  它在本仓**看起来是能用的**，这才是它危险的地方 —— 一个只在别的仓才炸的机制，
+  在这里会一路绿灯通过 review。
 
 ## 后果
 
