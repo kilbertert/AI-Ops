@@ -1,4 +1,33 @@
 
+## 2026-10-18 · 脚手架 1.7.25（第二条审查链路）：本地验证摘要
+
+**范围**：`.sandcastle/review/axis-prompt.md`（新增 `# YOUR JOB`）、`.afk-bootstrap.json`、
+`docs/adr/0036`、`docs/开发进度.md`。**无源码改动**。
+
+**验证**（在本候选树上实跑）：
+
+- `node .sandcastle/adr.check.mjs --base 367b8f71`：ok（36 records）
+- `node .sandcastle/policy-check.mjs all`：passed
+- `node .sandcastle/repo-map.check.mjs`：ok
+- CI（PR）：`Workflow policy` / `spec-tree lint` / `verify`
+
+**判据（行为断言）**：
+
+| 判据 | 结果 |
+|---|---|
+| `a demonstrated failure beats a described one` 计数 | 1 |
+| 1.7.24 的改动未回退（`adversary, not the author`） | 1 |
+| 1.7.23 的改动未回退（`RED: write one failing test`） | 0 |
+| 本仓验证命令是否被改写 | 未改写 |
+
+**本轮真实失败与修复（发生在 afk-bootstrap）**：1.7.24 只覆盖两条审查链路中的一条。
+Devin Review 在消费仓 PR 上提问后核实，由 1.7.25 补齐。同轮还有两处自伤：新守卫用了
+子串匹配（项目只是**提到**标题就被当成已交付）、以及一条「该审查者不能执行」的**未核实断言**
+（实测它有 sandbox）。两者都已在 afk-bootstrap 修正并写入 ADR 0009。
+
+**未完成业务验收**：本次无用户可见行为变化；上表全部为脚手架文件级与 prompt 文本级断言，
+**不构成任何业务路径的可用性证据**。审查者行为的实际改善需观察后续 AFK 的 review 产出。
+
 ## 2026-10-18 · 脚手架 1.7.24（审查者拿到对抗授权）：本地验证摘要
 
 **范围**：`.sandcastle/review-prompt.md`（新增 `## 0. You are the adversary, not the author`）、
