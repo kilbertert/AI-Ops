@@ -527,9 +527,13 @@ qa-plan.md                QA 用例（158 个用例 ID，含环境/前置/数据
 ```bash
 uv sync --locked --dev
 uv run ruff check . && uv run ruff format --check .
-uv run pytest -q
+uv run --with pytest-xdist==3.8.0 pytest -q -n auto
 uv run python -m compileall -q src tests && uv pip check
 ```
+
+> 并行用的 `pytest-xdist` 走 `--with`，**故意不进 `pyproject.toml`**：加一个 dev 依赖
+> 会改 `uv.lock`，而 CD 的依赖漂移门拿 `uv.lock` 的 sha256 与 41 上的比，会拦住整条部署。
+> 理由与实测见 `docs/adr/0038`。
 
 ### 持续部署（[:cd.yml](.github/workflows/cd.yml) + [:deploy/deploy-41.sh](deploy/deploy-41.sh)）
 

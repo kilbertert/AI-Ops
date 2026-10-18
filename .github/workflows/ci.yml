@@ -79,7 +79,19 @@ jobs:
           uv run ruff format --check .
 
       - name: Run tests
-        run: uv run pytest -q
+        # 并行，但 **xdist 不进 pyproject.toml**（见 ADR 0038）：加一个 dev 依赖会改
+        # uv.lock，而 deploy-41.sh 的依赖漂移门拿 uv.lock 的 sha256 与 41 上的比，
+        # 于是"加一个测试依赖"会拦住整条 CD，直到人工更新 41 的环境。
+        # `--with` 只装进 uv 的临时覆盖环境，lockfile 与 pyproject 都不动。
+        #
+        # ⚠️ 确定性边界（诚实记录，见 ADR 0038）：`--with` 的解析**不在 uv.lock 里**，
+        # 所以这不是"逐字节可复现"。锁定的是**直接依赖**（xdist 与 execnet 都写死版本，
+        # `pytest` 由下面 `uv sync --locked` 提供），但 `execnet` 的元数据若日后变化，
+        # 解析结果仍可能与今天不同。判据是：**测试集合（2738 passed / 9 skipped）
+        # 不随并行度变化**——实测 -n 2/4/6/8/auto 与串行逐字相同。
+        # 若想连解析也钉死，唯一办法是把 xdist 写进 lockfile，那要连带一次 41 的
+        # 环境更新，代价见 ADR 0038。
+        run: uv run --with pytest-xdist==3.8.0 --with execnet==2.1.2 pytest -q -n auto
 
       - name: Check imports and dependencies
         run: |
