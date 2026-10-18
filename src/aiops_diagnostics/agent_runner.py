@@ -194,7 +194,13 @@ def run_zero_order_answer(
             raise AgentRuntimeError("zero-order answer returned invalid JSON")
         text = str(payload.get("text") or "")
         reminder = bool(payload.get("reminder"))
-        if not text:
+        # `.strip()`: a whitespace-only body is not an answer either. It used to
+        # pass this check and reach storage as a "completed" turn whose prose is
+        # blank — which the normalizer then refuses to wrap into a text block
+        # (the block contract requires non-empty text), so the row lands in the
+        # legacy shape and a blocks[] client renders its own fallback for an
+        # answer nobody gave. Failing here is the honest outcome.
+        if not text.strip():
             raise AgentRuntimeError("zero-order answer returned empty text")
         return {"text": text, "reminder": reminder}
     finally:

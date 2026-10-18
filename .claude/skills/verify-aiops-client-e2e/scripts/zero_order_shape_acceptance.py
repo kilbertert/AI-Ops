@@ -103,6 +103,17 @@ def _verdict(status: str, body: dict) -> tuple[str, str]:
         if isinstance(result.get("text"), str) and result["text"].strip():
             return "FAIL", "result 是旧形状 {text,reminder} —— blocks[] 客户端读不到正文"
         return "UNVERIFIED", f"result 既无 blocks 也无 text（键：{sorted(result)}）"
+    # Route proof, and it has to come BEFORE the shape verdict: the customer RAG
+    # path emits blocks[] too (since #170), so "has blocks" alone would PASS
+    # without the zero-order path ever having run — the probe would report
+    # success for a question that never exercised the code under test.
+    # `searches` is the runtime's own attribution: only the RAG/promo seams add
+    # it (qa_rag._finalize, promo_agents), and the zero-order path never does.
+    if "searches" in result:
+        return "UNVERIFIED", (
+            "这条由知识库路径作答（result 带 searches），没有走到零阶路径 —— "
+            "判据不适用，换一条不触发检索的问题或改在无客服智能体的租户上跑"
+        )
     kinds = [b.get("kind") for b in blocks if isinstance(b, dict)]
     if len(kinds) != len(blocks) or any(k is None for k in kinds):
         return "FAIL", "blocks 里有块缺 kind"
@@ -111,7 +122,9 @@ def _verdict(status: str, body: dict) -> tuple[str, str]:
         return "FAIL", "blocks 里没有非空 text 块"
     if "text" in result:
         return "FAIL", "result 同时带顶层 text 键 —— 两种形状并存"
-    return "PASS", f"blocks={len(blocks)} kinds={kinds} retrieval_status={result.get('retrieval_status')!r}"
+    return "PASS", (
+        f"零阶路径 blocks={len(blocks)} kinds={kinds} retrieval_status={result.get('retrieval_status')!r}"
+    )
 
 
 def main() -> int:
@@ -142,7 +155,7 @@ def main() -> int:
 
     app = create_gateway_app(settings=settings)
     headers = {
-        "Authorization": f"Bearer {settings.third_session.service_token}",
+        "Authorization": f"Bearer {settings.third_session_service_token}",
         "X-Business-Entry": "consumer",
         "X-Third-Session": session,
     }
@@ -180,8 +193,45 @@ def main() -> int:
     for verdict in ("PASS", "FAIL", "UNVERIFIED"):
         print(f"  {verdict}: {sum(1 for row in rows if row[1] == verdict)}")
     print("\nUNVERIFIED 不是通过 —— 它写的是「这一门没有产出可判的正文」。")
-    return 1 if any(row[1] == "FAIL" for row in rows) else 0
+    # Exit code has three states, not two: a run where NOTHING was judged must
+    # not look like a pass to whatever called this (devin review, #828). "No
+    # PASS" is not "PASS": 0 means at least one language passed and none failed.
+    if any(row[1] == "FAIL" for row in rows):
+        return 1
+    if not any(row[1] == "PASS" for row in rows):
+        print("❌ 没有任何一门产出可判的正文 —— 记未验，不记通过", file=sys.stderr)
+        return 1
+    return 0
+
+
+def _self_check() -> None:
+    """The verdict function against inputs whose answer is known by hand.
+
+    It decides PASS/FAIL/UNVERIFIED and is the only thing standing between "the
+    fix works" and a green check, so it is exercised without a network: a
+    mistake here would report the defect as fixed.
+    """
+    comp = "completed"
+    blocks_text = {"blocks": [{"kind": "text", "text": "正文"}], "retrieval_status": "not_found"}
+    cases = [
+        # (status, result, expected verdict)
+        (comp, blocks_text, "PASS"),
+        (comp, {**blocks_text, "searches": 1}, "UNVERIFIED"),  # RAG answered, not zero-order
+        (comp, {"text": "正文", "reminder": True}, "FAIL"),  # the pre-#708 shape
+        (comp, {"blocks": [{"kind": "text", "text": "  "}], "retrieval_status": "not_found"}, "FAIL"),
+        (comp, {**blocks_text, "text": "并存"}, "FAIL"),
+        (comp, {}, "UNVERIFIED"),
+        ("failed", blocks_text, "UNVERIFIED"),
+        (comp, {"blocks": [{"text": "缺 kind"}], "retrieval_status": "not_found"}, "FAIL"),
+    ]
+    for status, result, want in cases:
+        got, note = _verdict(status, {"result": result})
+        assert got == want, f"verdict({status}, {result}) = {got}, 期望 {want}（{note}）"
+    print(f"自检通过：{len(cases)} 种输入")
 
 
 if __name__ == "__main__":
+    if "--self-check" in sys.argv:
+        _self_check()
+        raise SystemExit(0)
     raise SystemExit(main())

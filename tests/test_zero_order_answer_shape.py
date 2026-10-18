@@ -7,16 +7,20 @@ render ``blocks[]``. The RAG and promotional paths already wrote it, but the
 plain zero-order turn stored its model payload verbatim as
 ``{"text", "reminder"}``.
 
-The cost was measured, not hypothetical: on 41, 9 of the 33 completed rows
-carried the text-only shape, and the shipped UlinkEV 1.2.14 build reads
-``blocks[]`` only — it renders its own "未找到" fallback for every one of
-them, so a user's question was answered and then displayed as unanswered.
+The cost was measured, not hypothetical: on 41, 42 of 386 stored rows carried
+the text-only shape (every zero-order turn ever written — the sole `completed`
+one being a real user's "你好" at 2026-10-18 21:51Z), and the shipped UlinkEV
+1.2.14 build reads ``blocks[]`` only — it renders its own "未找到" fallback for
+every one of them, so a user's question was answered and then displayed as
+unanswered.
 """
 
 from __future__ import annotations
 
 import os
 from pathlib import Path
+
+import pytest
 
 SCOPE = "tenant-a"
 QUESTION = "什么是分时电价"
@@ -140,6 +144,42 @@ def test_normalizer_is_not_a_second_contract() -> None:
     # blocks array, which the QaAnswer contract forbids (min_length=1).
     assert as_blocks_result({"text": "   ", "reminder": False}) == {"text": "   ", "reminder": False}
     assert as_blocks_result({}) == {}
+
+
+def test_whitespace_only_model_output_is_rejected_not_stored(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A blank body must fail the turn, not become a renderable-less row.
+
+    The normalizer correctly refuses to wrap blank prose in a text block (the
+    block contract requires non-empty text), so a whitespace-only body used to
+    pass the producer's check and be stored verbatim — a ``completed`` row in
+    the legacy shape, which is exactly the defect this change removes. The
+    producer has to reject it, and the rejection has to be visible as a failed
+    job rather than as an answer the client cannot render.
+    """
+    from aiops_diagnostics.codex_runtime import CodexTurnOutput
+
+    class _Session:
+        def __init__(self, *args, **kwargs):
+            del args, kwargs
+
+        def run(self, prompt: str, **kwargs):
+            del kwargs, prompt
+            return CodexTurnOutput(turn_id="t", final_response='{"text": "   ", "reminder": true}', usage={})
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr("aiops_diagnostics.codex_runtime.SDKCodexSession", _Session)
+    from aiops_diagnostics.agent_runner import run_zero_order_answer
+    from aiops_diagnostics.codex_runtime import AgentRuntimeError
+    from aiops_diagnostics.config import Settings
+
+    settings = Settings()
+    settings.agent.run_root = str(tmp_path / "runs")
+    with pytest.raises(AgentRuntimeError, match="empty text"):
+        run_zero_order_answer(QUESTION, settings, language="zh", history="")
 
 
 def test_legacy_rows_are_read_back_verbatim(tmp_path: Path) -> None:
