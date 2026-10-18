@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
-from aiops_diagnostics.agent_contracts import AgentDiagnosis
+from aiops_diagnostics.agent_contracts import AgentDiagnosis, classifier_turn_schema, qa_turn_schema
 from aiops_diagnostics.agent_engine import AgentCoordinator, ProgressCallback, SessionFactory
 from aiops_diagnostics.agent_workspace import AgentWorkspace
 from aiops_diagnostics.codex_runtime import AgentRuntimeError, CodexSession, resolve_provider_api_key
@@ -181,7 +181,7 @@ def run_zero_order_answer(
             # Empty history leaves this byte-identical to the prompt that had no
             # history parameter at all — the change's safety boundary.
         )
-        result = session.run(prompt)
+        result = session.run(prompt, output_schema=qa_turn_schema())
         # The same shared parser: this path lost the head of its JSON to the
         # identical transport defect, and its own fence-tolerance here was a
         # third copy of the logic.
@@ -245,7 +245,7 @@ def classify_lightweight(
             f"If intent is casual, answer in {language_name(language)}; do not claim real-time data.\n\n"
             f"User request: {question}"
         )
-        result = session.run(prompt)
+        result = session.run(prompt, output_schema=classifier_turn_schema())
         # Same tolerant parser as the QA turn. The classifier used to carry its
         # own copy with no head-loss fallback, so a provider that dropped the
         # opening characters turned into a routing failure here while the QA
