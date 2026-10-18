@@ -207,9 +207,17 @@ def qa_turn_schema() -> dict[str, Any]:
 
 #: The routing classifier's own answer shape (`classify_lightweight`). Same
 #: reason as QA_TURN_SCHEMA: without it the turn is handed the diagnosis schema
-#: and returns no `intent` at all, which reads downstream as "no routing
-#: decision" — a silent loss of casual handling, promotional intents and the
-#: high-risk clarification rule, not a visible error.
+#: and returns no `intent` at all — which `_classify_for_routing` turns into
+#: "no routing decision", losing casual handling, promotional intents and the
+#: high-risk clarification rule. That degrade logs one warning, but it is not an
+#: error the user sees: routing simply stops happening.
+#:
+#: Every property is in `required`, matching `_make_strict_response_schema`'s
+#: rule for Pydantic-built schemas: a strict provider rejects a schema with
+#: optional properties outright, so declaring `answer` without requiring it
+#: would fail the whole classifier request rather than make the field optional.
+#: `answer` is therefore required-but-often-empty; the parser still treats it
+#: as optional on the way in (`payload.get("answer")`).
 CLASSIFIER_TURN_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -226,9 +234,9 @@ CLASSIFIER_TURN_SCHEMA: dict[str, Any] = {
         },
         "confidence": {"type": "string", "enum": ["high", "medium", "low"]},
         "risk": {"type": "string", "enum": ["low", "high"]},
-        "answer": {"type": "string", "description": "仅当 intent 为 casual 时的直接回答"},
+        "answer": {"type": "string", "description": "仅当 intent 为 casual 时的直接回答，否则空字符串"},
     },
-    "required": ["intent", "confidence", "risk"],
+    "required": ["intent", "confidence", "risk", "answer"],
     "additionalProperties": False,
 }
 
