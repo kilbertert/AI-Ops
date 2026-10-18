@@ -1,4 +1,23 @@
 
+## 2026-10-18 · 脚手架 1.7.26（两个语言无关提示词的检查命令）：本地验证摘要
+
+**范围**：`.sandcastle/merge-prompt.md`、`.sandcastle/update-branch/prompt.md`、
+`.afk-bootstrap.json`。**不改任何源码、不改任何测试断言。**
+
+| 项 | 结果 |
+|---|---|
+| `upgrade-afk.sh --dry-run` 列出的改动 | 只这 3 个文件 |
+| dry-run 后仓库是否被写脏 | **否**（`git status --porcelain` 为空） |
+| 实跑后 `grep -rn 'npm run check' .sandcastle/` | **0 命中** |
+| 两个文件是否拿到本仓命令 | 各 1 处 `uv sync --extra dev && uv run pytest && uv run ruff check` |
+| `git diff --stat` | 3 files changed, 3 insertions(+), 3 deletions(-) |
+
+**未做**：本仓测试套件未针对这次改动跑过（它只改提示词文本与版本字段，不触及被测试的
+代码路径）。CI 的 `verify` 跑全量，那一次的结果才是套件证据。
+
+**未完成业务验收**：本次无用户可见行为变化；上表是「改动确实落地」的执行层证据，
+**不构成任何业务路径的可用性证据**。
+
 ## 2026-10-18 · 并行测试装配加固：本地验证摘要
 
 **范围**：`.github/workflows/ci.yml`（安装方式 + 测试步骤断言）、
