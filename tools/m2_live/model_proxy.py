@@ -141,8 +141,35 @@ class ProxyHandler(BaseHTTPRequestHandler):
             log(f"upstream unreachable: {type(exc).__name__}")
             self._json(502, {"error": {"code": "proxy.upstream_unavailable"}})
             return
+        # RFC 9112 §6.3：Transfer-Encoding 与 Content-Length 同时出现时，长度有歧义
+        # （可能是一次响应拆分/走私尝试）。转发的中间件必须先去掉 CL；这里的响应体
+        # 是按流透传的，若按 http.client 解出的 chunked 正确重帧、却仍带着上游的 CL，
+        # 下游就会只读到 CL 个字节 —— 这正是「curl 退出 0、body 却是 `{`」那次。
+        # 与其猜，不如拒绝一条自相矛盾的上游响应。
+        transfer_encodings = response.headers.get_all("Transfer-Encoding") or []
+        content_lengths = [
+            item.strip()
+            for value in response.headers.get_all("Content-Length") or []
+            for item in value.split(",")
+            if item.strip()
+        ]
+        # RFC 9112 §6.3 rule 5：多个 CL 只有在「都能解析且全部相同」时才可以按单个值处理；
+        # http.client 对逗号列表不做这一步，所以我们自己判，判不了就拒绝。
+        unparseable_length = bool(content_lengths) and (
+            len(set(content_lengths)) > 1
+            or not all(item.isdigit() for item in content_lengths)
+            or response.length is None
+        )
+        if bool(transfer_encodings) and bool(content_lengths) or unparseable_length:
+            log("upstream response framing is ambiguous or invalid")
+            connection.close()
+            self._json(502, {"error": {"code": "proxy.upstream_response_ambiguous"}})
+            return
         self.send_response(response.status)  # 已发出本进程的 Server / Date
-        length = response.getheader("Content-Length")
+        # 下游的帧化按 http.client **实际解出的语义**重写，不看原始头：chunked 已由它
+        # 解开（此时 length 为 None），定长取它解析后的整数值（无效/负数会被置 None）。
+        bodyless = self.command == "HEAD" or response.status in (204, 304)
+        declared_length = None if bodyless else response.length
         for name, value in response.getheaders():
             # 逐跳头由本进程重新表达；Server/Date 是单例，原样再发一次就成了重复头。
             if name.lower() in {
@@ -155,25 +182,25 @@ class ProxyHandler(BaseHTTPRequestHandler):
             }:
                 continue
             self.send_header(name, value)
-        # 帧化由本进程重写：上游的 chunked 已被 http.client 解开，原样透传那两个
-        # 头会让客户端看到与 body 不符的声明。有长度就透传长度（非流式客户端不必
-        # 靠连接关闭判定结束）；没有长度就按 chunked 重写。不缓冲 body —— 模型
-        # 调用可能是流式的，缓冲会同时破坏流式语义和内存上限。
+        # 有长度就声明长度（非流式客户端不必靠连接关闭判定结束）；没有长度就按
+        # chunked 重写。不缓冲 body —— 模型调用可能是流式的，缓冲会同时破坏流式
+        # 语义和内存上限。
         # ponytail: `read(65536)` 是块读，SSE 增量最多攒到一个块再转发；真要做
         # 低延迟流式推送时换成 `read1()`，语义与帧化都不用动。
-        bodyless = self.command == "HEAD" or response.status in (204, 304)
-        chunked = length is None and not bodyless
+        chunked = declared_length is None and not bodyless
         if chunked:
             self.send_header("Transfer-Encoding", "chunked")
-        elif length is not None:
-            self.send_header("Content-Length", length)
+        elif declared_length is not None:
+            self.send_header("Content-Length", str(declared_length))
         self.send_header("Connection", "close")
         self.end_headers()
+        relayed = 0
         try:
             while True:
                 chunk = response.read(65536)
                 if not chunk:
                     break
+                relayed += len(chunk)
                 if chunked:
                     self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
                 else:
@@ -182,8 +209,13 @@ class ProxyHandler(BaseHTTPRequestHandler):
             if chunked:
                 self.wfile.write(b"0\r\n\r\n")
                 self.wfile.flush()
-        except OSError:
-            pass
+        except (OSError, http.client.HTTPException) as exc:
+            # 上游提前断流：不发终止块、也不补齐长度，让下游按帧判出「不完整」，
+            # 而不是把一个残缺的上游响应包装成干净的成功响应。
+            log(f"upstream body ended early: {type(exc).__name__}")
+        else:
+            if declared_length is not None and relayed != declared_length:
+                log(f"upstream body ended early: {relayed} of {declared_length} bytes")
         finally:
             connection.close()
             self.close_connection = True

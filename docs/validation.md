@@ -36,23 +36,36 @@ HTTP 200 与模型响应都收到了，但客户端退出码是 56
 ② `BaseHTTPRequestHandler` 只关 TCP、不发 TLS `close_notify`，严格客户端把「body 已收全
 但连接被硬断开」读成 unexpected eof。
 
-**修复**：上游给 `Content-Length` 就原样转达；没有长度就按 `chunked` 重写；`finish()`
-在关闭前做 TLS shutdown（`unwrap()`，有超时与异常兜底）。逐跳头与 `Server`/`Date` 由本进程
-重新表达，避免重复头。**不缓冲响应体**：模型调用可能是流式的，缓冲会同时破坏流式语义与
-内存上限，因此没有引入「响应大小上限」这个旋钮，只按块重写帧。
+**修复**：下游帧化按 `http.client` 实际解出的语义重写（定长声明长度、其余按 `chunked`），
+`finish()` 在关闭前做 TLS shutdown（`unwrap()`，有超时与异常兜底）。逐跳头与
+`Server`/`Date` 由本进程重新表达，避免重复头。**不缓冲响应体**：模型调用可能是流式的，
+缓冲会同时破坏流式语义与内存上限，因此没有引入「响应大小上限」这个旋钮，只按块重写帧。
 
-**验证（修复前先红）**：把 `model_proxy.py` 回到 `origin/main` 后，新增的四条回归全部失败，
-其中 curl 那条的实际输出就是 `curl 退出 56：... unexpected eof while reading`；
-修复后专项 **14 passed**，相关 M2 子集（proxy / 部署边界 / 隔离 / 网络）**63 passed**。
-新增断言覆盖：定长响应必须声明 `Content-Length` 且以 `close_notify` 收尾、上游 chunked
-必须被重写成自洽帧、上游 4xx 保留状态码与完整 body、`curl --http1.1` 退出 0。
-客户端使用 `suppress_ragged_eofs=False`，默认的 `True` 会把这次缺陷静默当成正常结束。
+**第二轮（代码审查发现的阻断）**：上游同时给 `Transfer-Encoding: chunked` 与
+`Content-Length: 1` 时，`http.client` 按 chunked 解帧，而代理仍读原始 `Content-Length`
+向下游声明。独立复现：`curl_exit=0`、`body="{"`、`complete_json=false` —— 一个完整响应
+被截成语法不完整的片段，且**不报错**。按 RFC 9112 §6.3 修：下游帧化只按 `http.client`
+实际解出的语义写（`response.length` / `response.chunked`），不再读原始头；TE 与 CL 同现、
+重复 CL 不一致或不可解析时返回 `502 proxy.upstream_response_ambiguous`，不猜也不截断；
+上游提前断流时不补终止块、不补齐长度。先前「按原始 `Content-Length` 转达」的说法随之作废。
 
-**全量与门禁**：`uv run pytest -n auto` **2867 passed / 9 skipped**（51.96s）；
-并入当时最新 `main` 后重跑 **2874 passed / 9 skipped**（52.87s，主干新增七条）。首跑出现一次
-`tests/test_dify_tracer_bullet.py` 失败；该用例单独跑与整文件并行跑均通过，重跑全量通过，
-判为与本次改动无关的偶发，如实记在这里。Ruff、format（449 文件）、compileall、`uv pip check`、
-ADR 结构检查、policy、repo-map、Spec lint 通过。
+**验证（修复前先红）**：
+- 第一轮：把 `model_proxy.py` 回到 `origin/main` 后，四条回归全红；curl 那条实际输出
+  `curl 退出 56：... unexpected eof while reading`。
+- 第二轮：把 `model_proxy.py` 回到上一版（本分支 `9f7e192`）后，歧义长度两条转红 ——
+  `assert 200 == 502`，以及 curl 拿到 `{` 后 `json.decoder.JSONDecodeError`。
+- 修复后专项 **20 passed**；相关 M2 子集（proxy / 部署边界 / 隔离 / 网络）**69 passed**。
+- 断言覆盖：定长响应声明 `Content-Length` 且以 `close_notify` 收尾、上游 chunked 被重写成
+  自洽帧、上游 4xx 保留状态码与完整 body、`curl --http1.1` 退出 0 且 body 逐字节完整、
+  歧义长度被拒（HTTP 与 curl 两条）、重复且相同的 CL 按单值接受、重复且冲突的 CL 被拒、
+  定长与 chunked 上游提前截断都不被包装成「完整成功」。
+- 客户端使用 `suppress_ragged_eofs=False`，默认的 `True` 会把第一轮的缺陷静默当成正常结束。
+
+**全量与门禁**：并入最新 `main`（`ffed614`）后 `uv run pytest -n auto`
+**2883 passed / 9 skipped**（50.60s）。首轮曾出现一次 `tests/test_dify_tracer_bullet.py`
+失败；该用例单独跑与整文件并行跑均通过，重跑全量通过，判为与本次改动无关的偶发，如实记在
+这里。Ruff、format（454 文件）、compileall、`uv pip check`、ADR 结构检查、policy、repo-map、
+Spec lint 通过。
 
 **边界**：本次只证明「出口对非流式/定长与 chunked 响应的 framing 是自洽的」。
 它**不证明**真实供应商可用、模型质量、App/公网启用或 `agent_version`；上游自己提前断流

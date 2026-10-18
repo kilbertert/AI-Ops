@@ -16,9 +16,13 @@
 > **未收口的一项（已在代码里修掉、待下一次受控链路复测）**：同一轮里节点经受控模型出口调用
 > 批准供应商，探针**收到了 HTTP 200 和模型响应**，但客户端退出码为 56
 > （`unexpected eof while reading`），因此那一跳当时判失败。根因是出口丢弃了上游的
-> `Content-Length`/`Transfer-Encoding` 且关闭时不发 TLS `close_notify`；M2-LIVE-06 已改为
-> 有长度则转达、无长度则重写 chunked、收尾发 `close_notify`，并有四条回归钉住
-> （`curl` 退出 0、干净 EOF、chunked 重帧、上游 4xx 保留语义）。
+> `Content-Length`/`Transfer-Encoding` 且关闭时不发 TLS `close_notify`；M2-LIVE-06 改为
+> 按 `http.client` 实际解出的语义重帧、收尾发 `close_notify`。代码审查随后发现第二种形态：
+> 上游同时给 TE 与 CL 时，代理按原始 CL 声明，`curl` 退出 0 却只拿到 `{`。现已按
+> RFC 9112 §6.3 处理 —— TE+CL、重复 CL 冲突或不可解析一律 `502`
+> `proxy.upstream_response_ambiguous`，提前截断的上游也不被包装成完整成功。
+> 十条回归钉住（curl 退出 0 且 body 逐字节完整、干净 EOF、chunked 重帧、4xx 保留语义、
+> 歧义拒绝、重复 CL 同值/冲突、两种截断）。
 > **它不等于真实供应商验收** —— 真实那一跳要在下一次已授权链路里复跑。
 >
 > **本页的边界**：M2-LIVE-05 **不**证明 App 客户端、公网启用、模型质量或 `agent_version`；
