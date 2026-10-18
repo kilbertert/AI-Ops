@@ -45,7 +45,7 @@ Ruff/format、编译、依赖、shell、policy、Spec lint 通过；ADR-0042 同
   后一条是本 PR 评审指出后补的：`as_blocks_result` 第一版把状态硬写成 `not_found`，
   于是 kb-service 故障被写成「知识库里没有匹配内容」—— 与 `promo_empty_result`
   一直拒绝做的那个声明同类。
-- 全量：**2857 passed / 9 skipped / 0 failed**（与 main 基线 2851/9 相比多出的正是
+- 全量：**2869 passed / 9 skipped / 0 failed**（基线 `aa30a09`；比该基线多出的正是
   新增的 6 条）；`ruff check .`、`ruff format --check .`、`compileall`、`uv pip check`、
   `spex spec lint`、repo-map、`adr.check` 全干净。
 - `verify-aiops-gateway` 在一次性数据根上跑通（`var/verify-evidence-708/aiops-gateway.json`：

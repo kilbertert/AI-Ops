@@ -113,7 +113,10 @@ switch (res.type) {
     result = await poll(`/v1/assistant/questions/${res.qa_id}`,
                         () => 1000 /* retry_after_ms */);
     // completed 的 result 恒为 {blocks[], retrieval_status}；正文在 text 块里。
-    // 零阶回答的 retrieval_status 是 not_found（本次没检索知识库），不是错误。
+    // 零阶回答的 retrieval_status 有两种，都不是错误，但含义不同：
+    //   not_found   —— 本次没检索知识库（没有可用的客服智能体）
+    //   unavailable —— 知识库检索**失败**，本次答案是降级兜底（kb-service 故障等）
+    // 两者都照常渲染 blocks[]；要区分时看这个字段，别把 unavailable 当成"没内容"。
     renderBlocks(result.blocks);
     break;
   case 'diagnosis':
