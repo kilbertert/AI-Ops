@@ -225,6 +225,13 @@ def test_kb_outage_is_not_reported_as_no_match(tmp_path: Path, monkeypatch) -> N
     assert stored["result"]["retrieval_status"] == "unavailable"
     assert stored["result"]["blocks"] == [{"kind": "text", "text": MODEL_ANSWER["text"]}]
 
+    # The metric must mirror the result, not the empty value: the dashboard's
+    # question is "was retrieval broken", and this row is the answer. The RAG
+    # path already records `retrieval_status` from its result payload; omitting
+    # it here would count an outage as "not recorded".
+    rows = runtime.metrics_store.list_runs(SCOPE, route_type="qa")
+    assert [row["retrieval_status"] for row in rows] == ["unavailable"]
+
 
 def test_no_agent_selected_stays_not_found(tmp_path: Path, monkeypatch) -> None:
     """The other fall-through cause keeps `not_found`: nothing was searched.

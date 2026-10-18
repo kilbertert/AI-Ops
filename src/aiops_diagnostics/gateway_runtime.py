@@ -2239,6 +2239,13 @@ class GatewayRuntime:
                 tenant_id=tenant_id,
                 route_type=route_tag,
                 outcome="completed",
+                # The metric must report the status the result carries: the
+                # dashboard's question is "was retrieval broken", and a
+                # zero-order answer that exists because the search FAILED is
+                # exactly that. Omitting it (the pre-#708 behavior for every
+                # zero-order turn) counted an outage as the empty value, which
+                # reads as "not recorded" rather than "the library was down".
+                retrieval_status=retrieval_status,
                 duration_ms=int((time.monotonic() - started_ms) * 1000),
                 token_count=_estimate_turn_tokens(question, answer),
             )
