@@ -120,6 +120,52 @@ Ruff/format、编译、依赖、shell、policy、Spec lint 通过；ADR-0042 同
 不覆盖后续恢复/锁改动。先完成 PR #824 门禁，再从合并制品执行已授权的一次受控真实链路。
 
 
+## 2026-10-19 · 零阶回合的输出 schema 接线：本地证据
+
+**范围**：`agent_runner.run_zero_order_answer` 与 `classify_lightweight` 显式传
+`output_schema`。**用户可见行为**：零阶回答不再间歇性地整轮失败。
+
+### 一、问题是怎么被发现的（不是推断）
+
+在 41 上用真实会话复验上一条改动时，一次零阶「你好」**失败**了。作业行：
+
+```
+status: failed   error_code: QA_FAILED
+error_message: zero-order answer returned empty text
+```
+
+codex rollout 日志里模型那一回合的实际输出：
+
+```json
+{"kind":"diagnosis","diagnosis":{"schema_version":"1.0","incident_id":"",...,"summary":"","root_cause":""}}
+```
+
+而同一条 rollout 里模型的推理摘要写着"应该用中文友好问候用户"——它**读懂了任务**，
+输出的却是诊断形状。原因是 `SDKCodexSession.run` 的缺省
+`output_schema or agent_turn_schema()` 把**诊断** schema 交给了这个回合。
+
+**排除"是我上一轮改的"**：`payload.get("text")` 对诊断形状得 `None`，
+与新增的 `.strip()` 无关——同一输入在改动前也会失败。41 全库 `failed` 行里
+这一条 `empty text` 只出现 **1 次**（就是本次），所以它是间歇的，
+不是稳定回归。（同日 7 次实测复现 1 次。）
+
+### 二、本地判据
+
+- `tests/test_turn_output_schemas.py` 2 条：捕获每个回合实际收到的 `output_schema`，
+  断言零阶回合有 `text` 且**没有** `diagnosis`、分类器回合有 `intent` 且没有
+  `diagnosis`。**去掉 `output_schema=` 参数后两条都失败**（复跑确认）；
+  正负两侧都断言，才抓得住"被给了错的 schema"而不只是"什么都没给"。
+- 全量：**2881 passed / 0 failed / 9 skipped**（pytest `--junitxml` 实测，基线 `89c2612`）；
+  `ruff check .`、`ruff format --check .`、`spex spec lint`、repo-map、`adr.check` 全干净。
+
+### 三、据实（边界）
+
+- **间歇性**：只有 provider 真正执行 schema 时才复现。因此判据落在**接线断言**
+  （schema 有没有传、传的是哪个）而不是"多跑几次都过了"——后者对间歇缺陷不成立。
+- **41 的真实复验在部署之后**，本记录不声称「41 已通过」。
+- **`run` 的缺省仍是诊断 schema**：诊断线合法依赖它，把缺省改成"必须显式传"是后续项，
+  不在本次范围。本记录只保证两个漏传点接上了线。
+
 ## 2026-10-19 · 零阶问答的负载形状：本地证据（#708）
 
 **范围**：`gateway_runtime.as_blocks_result`（零阶答案落库前归一化为 blocks-v1）。
