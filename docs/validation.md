@@ -1,4 +1,24 @@
 
+## 2026-10-18 · 部署 dry-run 测试的超时边界：本地验证摘要
+
+**范围**：`tests/test_cd_deploy_scripts.py`（新增 `_run_bounded`，一处调用改用）。
+**不改任何源码、不改任何测试断言。**
+
+| 项 | 结果 |
+|---|---|
+| 正常路径（`timeout=300`） | 24.26s，通过 |
+| 反向验证：`timeout=3` | `subprocess.TimeoutExpired`，**立刻失败不挂住**，错误点名完整 argv |
+| 进程组回收的独立验证 | `os.killpg(SIGTERM)` 把孙进程一并带走（`bash -c 'sleep 300 & wait'` 形状实测） |
+| 全量 `-n auto` | 2741 passed / 9 skipped |
+| `ruff check` / `format --check` / `adr.check --base origin/main` | 均干净 |
+
+**为什么用进程组而不是 `subprocess.run(timeout=…)`**：后者只杀直接子进程，
+卡住的 `dev-host` 会留下；且 SIGKILL 跳过 bash 的 EXIT trap，暂存目录也留下。
+超时会同时漏一个进程和一个目录，却报成一个干净失败（review 抓出）。
+
+**未完成业务验收**：本次无用户可见行为变化；上表是执行层面的度量，
+**不构成任何业务路径的可用性证据**。
+
 ## 2026-10-18 · 脚手架 1.7.26（两个语言无关提示词的检查命令）：本地验证摘要
 
 **范围**：`.sandcastle/merge-prompt.md`、`.sandcastle/update-branch/prompt.md`、
