@@ -97,8 +97,6 @@ ADR 结构检查、policy、repo-map、Spec lint 通过。
   `_runners/AI-Ops-deploy` 两个 worktree、`/etc/aiops-41/` 下的所有配置
   （mtime 仍早于本会话）。
 
->>>>>>> origin/main
-
 ## 2026-10-19 · 隔离部署凭据挂载与初始化传输修复（候选）
 
 修复隔离 Gateway 对整份生产 keys 的只读挂载；只保留生成的业务依赖白名单，
@@ -119,6 +117,68 @@ Ruff/format、编译、依赖、shell、policy、Spec lint 通过；ADR-0042 同
 后重建 Gateway，原生脚本恢复成功、临时凭据已清理；新一轮九条负例及一次合成委派通过。
 当前证据为 [恢复报告](validation/m2-live05-recovery-synthetic.json)；首轮报告保留，
 不覆盖后续恢复/锁改动。先完成 PR #824 门禁，再从合并制品执行已授权的一次受控真实链路。
+
+
+## 2026-10-19 · 零阶问答的负载形状：本地证据（#708）
+
+**范围**：`gateway_runtime.as_blocks_result`（零阶答案落库前归一化为 blocks-v1）。
+**用户可见行为**：自由提问（无订单号、不命中 FAQ、无快捷动作）的回答从此能被渲染。
+
+### 一、问题是怎么被量出来的（不是推断）
+
+| 观测 | 值 | 怎么来的 |
+|---|---|---|
+| 41 `assistant_questions` 全部 386 行 | **42 行**是 `{text, reminder}`（另 211 行 blocks-v1、133 行无结果） | 只读 SQLite（2026-10-19 复核） |
+| 41 的 `completed` 行 | 1 条，正是 `{text, reminder}` —— 用户 10-18 21:51Z 的「你好」 | 只读 SQLite |
+| 线上 UlinkEV 1.2.14 里 `result.text` 出现次数 | **0** | `app-service.js`（19.5 MB）全文搜索 |
+| 客户端只读哪个字段 | `e.blocks \|\| e.result.blocks`，兜底 `chat.status.notFound` = `"未找到"` | `showAssistantAnswer()` / `pickAssistantAnswer()` 源码 |
+| 10-17 真机会话轮询体 | 181 B → **787 B**（该条 DB 里正是 `text+reminder`） | 访问日志 + 按响应体复算 |
+
+四个观测各自独立：库里是旧形状、客户端不读它、客户端兜底文案正是截图那两个字、线上体积对得上。
+（这 42 行**早于** #708 的存在证明它是长期既存形状，不是本次改动引入。）
+
+### 二、本地判据
+
+- `tests/test_zero_order_answer_shape.py` 6 条：落库形状、轮询体字段、归一化不越界、
+  存量行逐字回读，以及**两种降级成因的区分**（检索失败 → `unavailable`；未选中客服
+  智能体 → `not_found`）。**关掉归一化后复跑，其中 3 条失败**
+  （`test_zero_order_answer_is_stored_as_blocks`、`test_kb_outage_is_not_reported_as_no_match`、
+  `test_no_agent_selected_stays_not_found`），打开后全绿。
+- 全量：**2878 passed / 0 failed / 9 skipped**（pytest `--junitxml` 实测，基线 `3f80ee5`）；
+  `ruff check .`、`ruff format --check .`、`spex spec lint`、repo-map、`adr.check` 全干净。
+- `verify-aiops-gateway` 在一次性数据根上跑通（`var/verify-evidence-708/aiops-gateway.json`：
+  `/health` 200 且 `business_mutations=disabled`、未认证 `/v1/runs` 401、注册
+  `POST /v1/enroll` 201、`/v1/runs` 200）。**该技能覆盖不到本次改动的响应形状**，
+  见下。
+
+**为什么判据落在测试而不是 `verify-aiops-gateway`**：本项目 AGENTS.md 要求
+「改动影响 Gateway 对外行为时用该技能留证据」。这里据实说明它为什么够不到：
+该技能靠**设备令牌**（本地注册）驱动控制面，而 assistant 路由要求**平台身份**
+（第三方会话 / 公司令牌，`assistant_identity` 用的是诊断线那套 scope）——
+同一份 skill 的 README 自己写着设备令牌在 agent 类路由上合法地 401。
+所以它能证明的是「网关在一次性数据根上起得来、鉴权门还在」，**证不了**
+`/v1/assistant/questions` 轮询体的形状。判据因此落在直接断言**线格式**的测试上：
+`test_poll_response_carries_the_blocks_the_client_renders` 断言的是客户端真正 walk 的
+那个字段（`blocks[].kind == "text"` 且非空），不是内部 helper 的返回值。
+真实会话下的端到端取证在部署后用 41 补（见下「边界」）。
+
+### 三、据实（边界）
+
+- **这是重新落地，不是首次落地**：同一改动曾以 PR #825 合并（`75ef55b`），随后按仓库
+  所有者指示整体回滚（PR #826，`3f80ee5`）。本次撤销那次回滚取回已评审版本，
+  源码逐字相同；本记录里的观测数字已按 2026-10-19 复核后的库存量更新。
+- **41 的真实复验在部署之后**：本记录写下时该改动**尚未部署**，因此**不记任何
+  「41 已通过」**。部署后的取证（真实会话 → 零阶提问 → 读回 `result.blocks[]`）
+  补记在下方同一条目里。
+- **不改零阶回答的内容与语言判定**；`retrieval_status` 由空变为 `not_found` 是唯一
+  新增字段值。
+- **前端仍需按 §10.8 解析 `blocks[]`**：本次修的是网关把正文放错容器，
+  不是前端渲染本身；渲染验收不在本仓。
+- **`.claude/skills/verify-aiops-client-e2e` 的 QA 面此前会对零阶回答报
+  `UNVERIFIED`**（`_collect_text` 对 `qa` 只走 `blocks[]`，旧的 `{text}` 形状取不到正文）——
+  该输出当时如实记录了「取不到正文」，但它其实是这条形状错配的**症状**，不是语言问题。
+  本改动之后同一个脚本对零阶回答会取到正文。
+
 
 
 ## 2026-10-19 · 冻结制品独立复核
