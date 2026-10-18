@@ -22,8 +22,8 @@
 | 状态目录 | `/var/lib/aiops-m2-live/{store,gateway,node,platform}` | `aiops41:aiops41`，`0700`（`store` 由 MySQL 入口点初始化为 `999`） |
 | 所有权标记 | `/var/lib/aiops-m2-live/.owner` | `checks.sh up` 写入项目名；`down --purge` 只认它 |
 
-隔离 Gateway 只读挂载生产 `keys/` 与另行生成的白名单子集 `runtime.env`，不挂整份
-`production.env`。生产状态根 `/var/lib/aiops-41` 不挂入任何试运行容器。
+隔离 Gateway 只读挂载另行生成的业务依赖白名单 `runtime.env`；不挂生产配置目录或
+生产 `keys/`（其中可能含供应商凭据）。生产状态根 `/var/lib/aiops-41` 不挂入任何试运行容器。
 
 ## 2. 端口与网络
 

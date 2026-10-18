@@ -10,7 +10,7 @@
 #   hostloop   宿主回环依赖面 —— 只在 gateway-host-relay 上，别处不可见
 # 节点只接 trial 与 modellink，所以它连不出宿主；模型调用走**固定目标**的受控出口。
 #
-# 凭据边界：平台与节点**不挂载** `/etc/aiops-41`；只有隔离 Gateway 只读挂载它。
+# 凭据边界：所有容器都不挂生产配置目录；Gateway 只读另行生成的业务依赖白名单。
 #
 # 运行身份：全部显式给出数字 UID/GID，不靠基础镜像默认。状态目录的属主必须在起栈前
 # 就是这个 UID —— 隔离门禁会核对。
@@ -201,14 +201,10 @@ services:
     volumes:
       - ${M2LIVE_STATE:-/var/lib/aiops-m2-live}/gateway:/data
       - ${M2LIVE_CONFIG:-/etc/aiops-m2-live}/gateway:/etc/m2live:ro
-      # 只读挂载生产配置与 key：既有只读业务依赖从这里读，**不写回**。
-      # 源目录由 AIOPS41_CONFIG_DIR 指定（宿主上是 /etc/aiops-41；合成测试可指向替身），
-      # 容器内路径固定 —— 网关读的是同一个路径，不因环境而变。
       # 只挂**公开证书**：网关需要验证平台，不需要任何签名能力。
       - ${M2LIVE_CONFIG:-/etc/aiops-m2-live}/tls/public:/etc/m2live-tls:ro
       # 业务依赖：**只读**的受限子集，不是整份生产配置。见 build-runtime-config.sh。
       - ${M2LIVE_CONFIG:-/etc/aiops-m2-live}/gateway/runtime.env:/etc/m2live/runtime.env:ro
-      - ${AIOPS41_CONFIG_DIR:-/etc/aiops-41}/keys:/etc/aiops-41/keys:ro
     # 以宿主上的服务用户运行：网关的私有文件检查要求「所有者 == 当前用户」，
     # 用 root 跑会让 /data 的属主对不上而拒绝启动。
     user: "${M2LIVE_UID:-999}:${M2LIVE_GID:-987}"
@@ -231,7 +227,7 @@ services:
       # —— 隔离门禁（真实启动路径） ——
       M2LIVE_ISOLATION_ROOT: /data
       M2LIVE_EXPECTED_UID: "${M2LIVE_UID:-999}"
-      M2LIVE_READONLY_PATHS: /etc/m2live/runtime.env:/etc/aiops-41/keys:/etc/m2live:/etc/m2live-tls
+      M2LIVE_READONLY_PATHS: /etc/m2live/runtime.env:/etc/m2live:/etc/m2live-tls
       # 信任库由启动脚本拼成（系统 bundle + 本栈 CA）。设成**容器环境变量**而不是只在
       # command 里 export：`docker exec` 起的探针进程也要看到同一个信任库，否则
       # 「容器能连平台、探针连不上」会变成一个解释不清的差异。

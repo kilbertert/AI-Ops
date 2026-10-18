@@ -1,0 +1,285 @@
+{
+  "synthetic_data": true,
+  "real_company_services": false,
+  "started_at": "2026-10-18T20:53:50.601596+00:00",
+  "negatives": [
+    {
+      "name": "no-identity-direct",
+      "status": 401,
+      "expected": 401,
+      "pass": true
+    },
+    {
+      "name": "bad-token-direct",
+      "status": 401,
+      "expected": 401,
+      "pass": true
+    },
+    {
+      "name": "foreign-direct",
+      "status": 404,
+      "expected": 404,
+      "pass": true
+    },
+    {
+      "name": "no-identity-delegated",
+      "status": 401,
+      "expected": 401,
+      "pass": true
+    },
+    {
+      "name": "foreign-delegated",
+      "status": 404,
+      "expected": 404,
+      "pass": true
+    },
+    {
+      "name": "extra-field-delegated",
+      "status": 422,
+      "expected": 422,
+      "pass": true
+    },
+    {
+      "name": "claim-none",
+      "status": 401,
+      "expected": 401,
+      "pass": true
+    },
+    {
+      "name": "claim-wrong",
+      "status": 401,
+      "expected": 401,
+      "pass": true
+    },
+    {
+      "name": "claim-unknown-run",
+      "status": 404,
+      "expected": 404,
+      "pass": true
+    }
+  ],
+  "counts_before": {
+    "charging_info": 1,
+    "unknown_order": 0,
+    "model_calls": 0,
+    "adversarial_calls": 0,
+    "max_in_flight": 1,
+    "stub_rev": 3
+  },
+  "counts_after_negatives": {
+    "charging_info": 1,
+    "unknown_order": 0,
+    "model_calls": 0,
+    "adversarial_calls": 0,
+    "max_in_flight": 1,
+    "stub_rev": 3
+  },
+  "negative_cpms_unchanged": true,
+  "positive": {
+    "run_id": "run_Tw02bmDiaspIuQM1PoEOrZDKtujZuAyrWQeBAnfoy4I",
+    "state": "succeeded",
+    "expected_environment": "live-trial-41",
+    "expected_app_id": "aiops-m2live03",
+    "expected_agent_id": "1",
+    "expected_node_id": "node-41",
+    "actual_node_id": "node-41",
+    "node_build": "m2live03-node-1",
+    "agent_version": null,
+    "agent_version_gap": "not_wired",
+    "status": 200,
+    "no_store": true
+  },
+  "node_log_contains_run_id": true,
+  "counts_after_positive": {
+    "charging_info": 2,
+    "unknown_order": 0,
+    "model_calls": 0,
+    "adversarial_calls": 0,
+    "max_in_flight": 1,
+    "stub_rev": 3
+  },
+  "gateway_node_no_production_keys": true,
+  "bootstrap_input_sha256": "783763ec4a1aa7f8e6296e786bbfb10ba9b7398f3ce9a20f00c1a2cdbf967c2b",
+  "transferred_files": {
+    "gateway/agent-runs.json": {
+      "uid": 1000,
+      "mode": "0o600"
+    },
+    "node/node.env": {
+      "uid": 1000,
+      "mode": "0o600"
+    },
+    "secrets/platform_admin": {
+      "uid": 1000,
+      "mode": "0o600"
+    }
+  },
+  "bindings_node_digest_match": true,
+  "collector_rerun_reason": "First collector verified nine negatives and delegated success, then failed on incorrect hostloop container name; corrected to host-relay. This collector issued a second synthetic delegated request.",
+  "synthetic_delegated_requests": 2,
+  "finished_at": "2026-10-18T20:53:56.465964+00:00",
+  "pass": true,
+  "mount_inventory": {
+    "gateway": [
+      {
+        "destination": "/etc/m2live",
+        "read_only": true,
+        "source_class": "trial-config"
+      },
+      {
+        "destination": "/etc/m2live-tls",
+        "read_only": true,
+        "source_class": "trial-config"
+      },
+      {
+        "destination": "/etc/m2live/runtime.env",
+        "read_only": true,
+        "source_class": "trial-config"
+      },
+      {
+        "destination": "/data",
+        "read_only": false,
+        "source_class": "isolated-state"
+      }
+    ],
+    "platform": [
+      {
+        "destination": "/opt/platform",
+        "read_only": true,
+        "source_class": "versioned-artifact"
+      },
+      {
+        "destination": "/etc/m2live",
+        "read_only": true,
+        "source_class": "trial-config"
+      },
+      {
+        "destination": "/etc/m2live-tls",
+        "read_only": true,
+        "source_class": "trial-config"
+      },
+      {
+        "destination": "/var/lib/snail-ai",
+        "read_only": false,
+        "source_class": "isolated-state"
+      }
+    ],
+    "node": [
+      {
+        "destination": "/app",
+        "read_only": true,
+        "source_class": "versioned-artifact"
+      },
+      {
+        "destination": "/home/node",
+        "read_only": false,
+        "source_class": "isolated-state"
+      },
+      {
+        "destination": "/etc/m2live-tls",
+        "read_only": true,
+        "source_class": "trial-config"
+      }
+    ],
+    "model-proxy": [
+      {
+        "destination": "/etc/m2live",
+        "read_only": true,
+        "source_class": "trial-config"
+      },
+      {
+        "destination": "/etc/m2live-tls",
+        "read_only": true,
+        "source_class": "trial-config"
+      }
+    ],
+    "host-relay": [],
+    "store": [
+      {
+        "destination": "/docker-entrypoint-initdb.d",
+        "read_only": true,
+        "source_class": "versioned-artifact"
+      },
+      {
+        "destination": "/run/secrets/mysql_root",
+        "read_only": true,
+        "source_class": "trial-config"
+      },
+      {
+        "destination": "/var/lib/mysql",
+        "read_only": false,
+        "source_class": "isolated-state"
+      }
+    ]
+  },
+  "steps": {
+    "up": {
+      "exit": 1,
+      "result": "pending node"
+    },
+    "bootstrap": {
+      "exit": 0,
+      "transport": "native exec stdin/stdout"
+    },
+    "ready": {
+      "exit": 0
+    },
+    "verify": {
+      "exit": 0
+    },
+    "deps": {
+      "exit": 1,
+      "result": "partial; platform HTTPS/current CA pass; developer session store TimeoutError"
+    },
+    "down": {
+      "exit": 0,
+      "containers_remaining": 0,
+      "networks_remaining": 0,
+      "port_listening": false,
+      "state_retained": true
+    }
+  },
+  "artifact": {
+    "image": "aiops-m2-live-03-gateway:m2live05",
+    "image_id": "sha256:eafaed80e18cb47e12c31459368774c40dd2e3d2e721ea451ddf8892aeac244f",
+    "source_sha256": "74c6a371fb3cada6548b4a2ce28fd4b101da4c9dfcc6e16f39d018770d678a51",
+    "uv_lock_sha256": "994a8a12fa58ab833985b1e864427679dca6c0ed95b74c759941f94302aa3e13",
+    "base_image": "python:3.13-slim",
+    "base_digest": "python@sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f"
+  },
+  "code_identity": {
+    "deploy/m2-live-03/HOST-CHANGE.md": "67412bc293874374d18dafe68708e30b97a332ff980eab15b2d73e0561cd98ec",
+    "deploy/m2-live-03/README.md": "669836493ff9f8c8abbff1b61f49816450b24f6576766c47ab816c2995eedd07",
+    "deploy/m2-live-03/bootstrap.sh": "82728ddf8f843b37f9d53a75e584623f13c141824fb999d294e6866a5d620e1f",
+    "deploy/m2-live-03/bootstrap_platform.py": "783763ec4a1aa7f8e6296e786bbfb10ba9b7398f3ce9a20f00c1a2cdbf967c2b",
+    "deploy/m2-live-03/build-image.sh": "a1aa52a6565eab25aba3515af7783e2a3acab1c76f32a93e962177e1e28eb246",
+    "deploy/m2-live-03/build-runtime-config.sh": "cf57e30b7ea1c0c0d0c228d96822a63e103efd2115fded6310d9b2939a872630",
+    "deploy/m2-live-03/checks.sh": "26bece3bbdd92ca4c75f15ef1ba9f654222f719d2ac01838080285b1e4f7523d",
+    "deploy/m2-live-03/compose.synthetic.yaml": "6a6f4407c3ff02bc639169460f7f0f319ab52b4c537024a0654fca5a79f5f9f9",
+    "deploy/m2-live-03/compose.yaml": "94eed055c94fd0a009da251f90ebf90695fa32b36197bae129a5104d53d7b9f7",
+    "deploy/m2-live-03/gateway-requirements.txt": "614325af267d69476aa8c0f8e0d6af18fedfc7df1c8cffdecca3fbeda8e1884f",
+    "deploy/m2-live-03/gateway.Dockerfile": "9fe3fd920156effaed5ecfd8f5d68462f4e6e2a5be18ac82b695a35fe8f44241",
+    "deploy/m2-live-03/gateway.env.template": "0ada5a040fd22b2ff77245a3cc0adb20fe957d4f6d493b098c25b199ba5a17cc",
+    "deploy/m2-live-03/images.lock.json": "0142ae5ff2264aeb66826d37e58c9318d6a2cbc9fd86c6b0a16e08c72a401ac5",
+    "deploy/m2-live-03/make-certs.sh": "c98d249d6c6a877998867b026b9cab1844758a57ec13d5c475ebab5b51cdf146",
+    "deploy/m2-live-03/node.env.template": "2dc31fefbb418ab152696946a157185b624b59228f3fb9428d2f29921fc1c7b2",
+    "deploy/m2-live-03/prepare-secrets.sh": "4a3c934fa6206e6e63847ed577707b8c10a39503cb6a89fb87797a6f8542a05e",
+    "deploy/m2-live-03/schema/snail_ai_schema.sql": "737edd4c4ccb49cb1ee384fa244eeecf04705d4636398e85936b965567647f18",
+    "deploy/m2-live-03/stack_checks.py": "b3648d1c4046499648fd86f5f602a7d70a51dca2f9cee41d33008de532b8cfac",
+    "deploy/m2-live-03/sync-keystore-password.py": "0826408d01f98e8df2170b9bf9991c07992a95eef3f57214eb3f5676dd21899d"
+  },
+  "local_docker_cp_control": {
+    "docker_version": "29.4.2",
+    "exit": 0,
+    "note": "本机 cp 对照未复现 daemon 故障；故障分支由拒绝所有 cp 的回归验证。"
+  },
+  "prior_setup_failures": [
+    "首轮 schema 目录权限导致 MySQL 不健康，已停栈。",
+    "第二轮与尚未结束的 down 重叠，网络被删除，已完整停栈；最终轮使用新空状态根。"
+  ],
+  "boundaries": [
+    "未连接公司业务系统或真实模型供应商",
+    "未完成业务验收",
+    "agent_version=null; gap=not_wired"
+  ]
+}

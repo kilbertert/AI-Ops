@@ -2,7 +2,7 @@
 
 输入是 `docker compose config --format json` 的输出（stdin）；参数是判定所需的路径。
 
-    stack_checks.py mounts <state> <aiops41-dir> <config-dir>
+    stack_checks.py mounts <state> <config-dir>
     stack_checks.py users  <uid>:<gid>
 
 退出码 0 通过；1 不通过（原因写 stdout，一行）。
@@ -16,16 +16,13 @@ import sys
 
 
 def mounts(argv: list[str]) -> int:
-    """`mounts <state> <aiops41-dir> <config-dir> [extra-readonly-root...]`
+    """`mounts <state> <config-dir> [extra-readonly-root...]`
 
-    可写挂载必须在状态根之内。只读挂载必须在白名单里：生产配置/key、本栈配置，
+    可写挂载必须在状态根之内。只读挂载必须在白名单里：本栈配置，
     以及额外给出的制品/部署目录（平台与节点 jar、初始化 schema）。
     """
-    state, aio41, config = (os.path.realpath(p) for p in argv[:3])
+    state, config = (os.path.realpath(p) for p in argv[:2])
     readonly_allow = {
-        os.path.realpath(aio41),
-        os.path.realpath(os.path.join(aio41, "keys")),
-        os.path.realpath(os.path.join(aio41, "production.env")),
         os.path.realpath(os.path.join(config, "gateway")),
         os.path.realpath(os.path.join(config, "platform")),
         os.path.realpath(os.path.join(config, "tls", "public")),
@@ -35,7 +32,7 @@ def mounts(argv: list[str]) -> int:
         # 模型出口只挂自己的目录（供应商 key 与代理令牌），看不到业务配置。
         os.path.realpath(os.path.join(config, "model-proxy")),
     }
-    readonly_allow.update(os.path.realpath(p) for p in argv[3:])
+    readonly_allow.update(os.path.realpath(p) for p in argv[2:])
     data = json.load(sys.stdin) or {}
     problems: list[str] = []
     for name, spec in (data.get("services") or {}).items():
@@ -57,7 +54,7 @@ def users(argv: list[str]) -> int:
     want = argv[0]
     data = json.load(sys.stdin) or {}
     problems: list[str] = []
-    for name in ("platform", "node", "gateway", "gateway-host-relay"):
+    for name in ("platform", "node", "gateway", "gateway-host-relay", "model-proxy"):
         spec = (data.get("services") or {}).get(name) or {}
         actual = str(spec.get("user") or "")
         if actual != want:
