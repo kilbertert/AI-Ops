@@ -96,6 +96,23 @@ def _pick_session(settings) -> tuple[str | None, str]:
     return None, ""
 
 
+def _fallback_copy() -> str:
+    """The zero-order `unavailable` fallback string, or "" if unreadable.
+
+    Imported from the deployed package rather than copied: this string is what
+    `_guard_zero_order_language` substitutes, and a hand-copied duplicate would
+    drift the moment the copy is reworded — silently turning this check back
+    into the false PASS it exists to prevent.
+    """
+    try:
+        from aiops_diagnostics.i18n import DEFAULT_LANGUAGE, QA_FALLBACK_MESSAGES
+
+        pack = QA_FALLBACK_MESSAGES.get("zh") or QA_FALLBACK_MESSAGES[DEFAULT_LANGUAGE]
+        return str(pack.get("unavailable") or "")
+    except Exception:  # noqa: BLE001 - the probe degrades, it does not crash
+        return ""
+
+
 def _verdict(status: str, body: dict) -> tuple[str, str]:
     if status in {"failed", "cancelled", "expired"}:
         return "UNVERIFIED", f"作业终态 {status}，没有产出可判的正文"
@@ -108,6 +125,14 @@ def _verdict(status: str, body: dict) -> tuple[str, str]:
     if not blocks:
         # The pre-#708 shape. The text is present but no blocks[] client can
         # read it — this is the defect, stated as a verdict rather than a crash.
+        #
+        # Kept honest about its own scope: only the zero-order path ever wrote
+        # this shape, so a `{text}` row here IS the regression. But the verdict
+        # names what it observed rather than asserting a cause it did not verify
+        # — if some future route also emits a bare `text`, this line should be
+        # re-read rather than trusted as a zero-order statement (devin review,
+        # #830). No route marker can settle it: `searches` is a RAG marker and
+        # this shape carries no markers at all, which is the whole point.
         if isinstance(result.get("text"), str) and result["text"].strip():
             return "FAIL", "result 是旧形状 {text,reminder} —— blocks[] 客户端读不到正文"
         return "UNVERIFIED", f"result 既无 blocks 也无 text（键：{sorted(result)}）"
@@ -145,6 +170,18 @@ def _verdict(status: str, body: dict) -> tuple[str, str]:
         return "FAIL", "blocks 里没有非空 text 块"
     if "text" in result:
         return "FAIL", "result 同时带顶层 text 键 —— 两种形状并存"
+    # The language guard (`_guard_zero_order_language`) swaps a leaking answer
+    # for the localized fallback copy and deliberately keeps `retrieval_status`
+    # as it was, so a leaked-then-replaced turn still reads `not_found` and would
+    # PASS above. Its copy is a fixed string, so it is matchable: a body equal to
+    # that sentinel is an outage notice with a model's answer nowhere in it, not
+    # evidence that a zero-order answer renders.
+    sentinel = _fallback_copy()
+    if sentinel and any(t.strip() == sentinel for t in texts):
+        return "UNVERIFIED", (
+            "正文等于语言守卫的兜底文案 —— 模型答了但被语言守卫替换（或本回合就是降级兜底），"
+            "这不是模型正文，不能作为通过证据"
+        )
     return "PASS", (
         f"零阶路径 blocks={len(blocks)} kinds={kinds} retrieval_status={result.get('retrieval_status')!r}"
     )
@@ -241,6 +278,11 @@ def _self_check() -> None:
         """A degraded card: blocks[] present, but nothing was answered."""
         return {"blocks": [{"kind": "text", "text": copy}], "retrieval_status": "unavailable"}
 
+    def guarded(copy: str) -> dict:
+        """What the language guard leaves: fallback copy, status untouched."""
+        return {"blocks": [{"kind": "text", "text": copy}], "retrieval_status": "not_found"}
+
+    sentinel = _fallback_copy()
     cases = [
         # (status, result, expected verdict)
         (comp, blocks_text, "PASS"),
@@ -258,10 +300,15 @@ def _self_check() -> None:
         ("failed", blocks_text, "UNVERIFIED"),
         (comp, {"blocks": [{"text": "缺 kind"}], "retrieval_status": "not_found"}, "FAIL"),
     ]
+    # The language-guard case only means something when the sentinel is
+    # readable; asserting it unconditionally would make the self-check fail
+    # for a reason that has nothing to do with the verdict logic.
+    if sentinel:
+        cases.append((comp, guarded(sentinel), "UNVERIFIED"))
     for status, result, want in cases:
         got, note = _verdict(status, {"result": result})
         assert got == want, f"verdict({status}, {result}) = {got}, 期望 {want}（{note}）"
-    print(f"自检通过：{len(cases)} 种输入")
+    print(f"自检通过：{len(cases)} 种输入（兜底文案哨兵{'已读到' if sentinel else '读不到，跳过该组'}）")
 
 
 if __name__ == "__main__":
