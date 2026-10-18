@@ -30,6 +30,25 @@
 **未完成业务验收**：本次无用户可见行为变化；上表是执行层面的度量，
 **不构成任何业务路径的可用性证据**。
 
+## 2026-10-18 · 脚手架 1.7.27（替身保真判据下发）：本地验证摘要
+
+**范围**：`.sandcastle/review-prompt.md`、`.sandcastle/review/axis-prompt.md`、
+`.sandcastle/review/prompt.md`、`.afk-bootstrap.json`。**不改源码、不改测试断言。**
+
+| 项 | 结果 |
+|---|---|
+| `upgrade-afk.sh --dry-run` 列出的改动 | 只这 4 个文件 |
+| dry-run 后仓库是否被写脏 | **否** |
+| 实跑后 `grep -rn 'npm run check' .sandcastle/` | **0 命中**（1.7.26 的语言替换被保住） |
+| 三个文件各含新判据 | axis / planner / fixer 各 1 处，语言替换各在位 |
+| `git diff --stat` | 4 files changed, 83 insertions(+), 3 deletions(-) |
+
+**未做**：本仓测试套件未针对这次改动跑过（只改提示词文本与版本字段）。
+CI 的 `verify` 跑全量，那一次的结果才是套件证据。
+
+**未完成业务验收**：本次无用户可见行为变化；上表是「改动确实落地」的执行层证据，
+**不构成任何业务路径的可用性证据**。
+
 ## 2026-10-18 · 脚手架 1.7.26（两个语言无关提示词的检查命令）：本地验证摘要
 
 **范围**：`.sandcastle/merge-prompt.md`、`.sandcastle/update-branch/prompt.md`、
