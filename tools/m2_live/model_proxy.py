@@ -13,11 +13,15 @@
   两者都只从文件读，不进命令行、不进日志。
 - **TLS 双向校验**：节点→代理由本栈 CA 签发（SAN=model-proxy），代理→供应商用系统
   公开 CA 校验。任何一侧都不提供「关闭校验」的开关。
+- **响应帧化自洽、不缓冲**：上游给了 `Content-Length` 就原样转达（非流式客户端凭它
+  判定结束）；没有长度（流式/HTTP1.0）就按 `chunked` 重写；连接以 TLS `close_notify`
+  收尾。没有长度上限就谈不上缓冲 —— body 是按块转发的，不整段读进内存。
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hmac
 import http.client
 import json
@@ -64,6 +68,23 @@ class ProxyHandler(BaseHTTPRequestHandler):
         self.send_header("Connection", "close")
         self.end_headers()
         self.wfile.write(body)
+
+    def finish(self) -> None:
+        """TLS 收尾必须发 close_notify，否则客户端看到的是「被截断的」响应。
+
+        只关 TCP 而不做 TLS shutdown，会让严格客户端把「body 已完整收到」读成
+        `unexpected eof` —— 41 真实链路就是这样：供应商 200 与模型响应都到了，
+        curl 却以 56 退出，探针因此判失败。close-delimited 的响应尤其依赖这个
+        干净的 EOF 才能收尾。
+        """
+        with contextlib.suppress(OSError):
+            self.wfile.flush()
+        connection = self.connection
+        if isinstance(connection, ssl.SSLSocket):
+            with contextlib.suppress(OSError, ValueError):
+                connection.settimeout(2)
+                connection.unwrap()
+        super().finish()
 
     def do_CONNECT(self) -> None:  # noqa: N802 - 明确不支持
         self._json(405, {"error": {"code": "proxy.connect_not_allowed"}})
@@ -120,22 +141,81 @@ class ProxyHandler(BaseHTTPRequestHandler):
             log(f"upstream unreachable: {type(exc).__name__}")
             self._json(502, {"error": {"code": "proxy.upstream_unavailable"}})
             return
-        self.send_response(response.status)
+        # RFC 9112 §6.3：Transfer-Encoding 与 Content-Length 同时出现时，长度有歧义
+        # （可能是一次响应拆分/走私尝试）。转发的中间件必须先去掉 CL；这里的响应体
+        # 是按流透传的，若按 http.client 解出的 chunked 正确重帧、却仍带着上游的 CL，
+        # 下游就会只读到 CL 个字节 —— 这正是「curl 退出 0、body 却是 `{`」那次。
+        # 与其猜，不如拒绝一条自相矛盾的上游响应。
+        transfer_encodings = response.headers.get_all("Transfer-Encoding") or []
+        content_lengths = [
+            item.strip()
+            for value in response.headers.get_all("Content-Length") or []
+            for item in value.split(",")
+            if item.strip()
+        ]
+        # RFC 9112 §6.3 rule 5：多个 CL 只有在「都能解析且全部相同」时才可以按单个值处理；
+        # http.client 对逗号列表不做这一步，所以我们自己判，判不了就拒绝。
+        unparseable_length = bool(content_lengths) and (
+            len(set(content_lengths)) > 1
+            or not all(item.isdigit() for item in content_lengths)
+            or response.length is None
+        )
+        if bool(transfer_encodings) and bool(content_lengths) or unparseable_length:
+            log("upstream response framing is ambiguous or invalid")
+            connection.close()
+            self._json(502, {"error": {"code": "proxy.upstream_response_ambiguous"}})
+            return
+        self.send_response(response.status)  # 已发出本进程的 Server / Date
+        # 下游的帧化按 http.client **实际解出的语义**重写，不看原始头：chunked 已由它
+        # 解开（此时 length 为 None），定长取它解析后的整数值（无效/负数会被置 None）。
+        bodyless = self.command == "HEAD" or response.status in (204, 304)
+        declared_length = None if bodyless else response.length
         for name, value in response.getheaders():
-            if name.lower() in {"transfer-encoding", "connection", "content-length"}:
+            # 逐跳头由本进程重新表达；Server/Date 是单例，原样再发一次就成了重复头。
+            if name.lower() in {
+                "transfer-encoding",
+                "connection",
+                "content-length",
+                "server",
+                "date",
+                "trailer",
+            }:
                 continue
             self.send_header(name, value)
+        # 有长度就声明长度（非流式客户端不必靠连接关闭判定结束）；没有长度就按
+        # chunked 重写。不缓冲 body —— 模型调用可能是流式的，缓冲会同时破坏流式
+        # 语义和内存上限。
+        # ponytail: `read(65536)` 是块读，SSE 增量最多攒到一个块再转发；真要做
+        # 低延迟流式推送时换成 `read1()`，语义与帧化都不用动。
+        chunked = declared_length is None and not bodyless
+        if chunked:
+            self.send_header("Transfer-Encoding", "chunked")
+        elif declared_length is not None:
+            self.send_header("Content-Length", str(declared_length))
         self.send_header("Connection", "close")
         self.end_headers()
+        relayed = 0
         try:
             while True:
                 chunk = response.read(65536)
                 if not chunk:
                     break
-                self.wfile.write(chunk)
+                relayed += len(chunk)
+                if chunked:
+                    self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
+                else:
+                    self.wfile.write(chunk)
                 self.wfile.flush()
-        except OSError:
-            pass
+            if chunked:
+                self.wfile.write(b"0\r\n\r\n")
+                self.wfile.flush()
+        except (OSError, http.client.HTTPException) as exc:
+            # 上游提前断流：不发终止块、也不补齐长度，让下游按帧判出「不完整」，
+            # 而不是把一个残缺的上游响应包装成干净的成功响应。
+            log(f"upstream body ended early: {type(exc).__name__}")
+        else:
+            if declared_length is not None and relayed != declared_length:
+                log(f"upstream body ended early: {relayed} of {declared_length} bytes")
         finally:
             connection.close()
             self.close_connection = True

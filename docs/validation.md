@@ -1,3 +1,125 @@
+## 2026-10-19 · M2-LIVE-05 真实只读链路（唯一一条成功记录）
+
+**范围**：从合并制品（PR #824 的合并提交 `aa30a094`）在 41 上起受控试运行栈，跑**一次**
+真实只读链路：固定消费者身份 → 隔离 Gateway → 编排平台 → 指定节点 → 唯一受控工具 →
+本人订单状态。未启用任何生产开关，未修改生产配置。
+
+| 判据 | 观测 |
+|---|---|
+| 制品与镜像 | 镜像、源码摘要、两份 Java 制品与冻结记录一致 |
+| 启动链路 | preflight / bootstrap / ready / verify / deps 全部通过 |
+| 委派记录 | **恰好一条**，状态 `succeeded`；节点、逻辑环境与结果摘要均与预期一致 |
+| 订单范围 | 请求与返回的订单是同一个固定目标；快照字段为标准字段集 |
+| 清理 | `down` 后容器 0、网络 0、8794 不再监听；状态目录保留 |
+| 生产面 | 生产服务全程 active，版本声明与会话前后的配置摘要未变 |
+| 模型出口 | **未通过**：HTTP 200 与模型响应已收到，客户端退出码 56（见下节） |
+
+**这次证明了什么**：委派链路（身份 → 平台 → 节点 → 工具 → 本人订单状态）在生产宿主上
+成立，且隔离栈的启停不碰生产面。
+
+**这次没有证明什么**：真实供应商那一跳（见下节，已在代码里修掉、待复测）；
+App 客户端、公网启用、模型质量与 `agent_version` 仍未验收。
+本记录不含会话、订单号、令牌、主机凭据与私有路径。
+
+## 2026-10-19 · 模型出口响应 framing 收口（M2-LIVE-06）
+
+**范围**：`tools/m2_live/model_proxy.py`、`tests/test_m2_live03_model_proxy.py`、
+`docs/adr/0041`。不改上游转发目标、路径白名单、TLS 校验、凭据隔离与网络边界。
+
+**上一轮没收回来的那条**：M2-LIVE-05 的真实只读链路上，节点经受控出口调用批准供应商，
+HTTP 200 与模型响应都收到了，但客户端退出码是 56
+（`curl: (56) OpenSSL SSL_read: ... unexpected eof while reading`），探针据此判 `pass=false`。
+所以那次只有委派链路是成功证据，**模型出口这一跳当时不算通过**。
+
+**根因（两层，都在出口自己这一侧）**：
+① 代理把上游的 `Transfer-Encoding` / `Content-Length` 一并丢弃，只靠关闭连接表示结束；
+② `BaseHTTPRequestHandler` 只关 TCP、不发 TLS `close_notify`，严格客户端把「body 已收全
+但连接被硬断开」读成 unexpected eof。
+
+**修复**：下游帧化按 `http.client` 实际解出的语义重写（定长声明长度、其余按 `chunked`），
+`finish()` 在关闭前做 TLS shutdown（`unwrap()`，有超时与异常兜底）。逐跳头与
+`Server`/`Date` 由本进程重新表达，避免重复头。**不缓冲响应体**：模型调用可能是流式的，
+缓冲会同时破坏流式语义与内存上限，因此没有引入「响应大小上限」这个旋钮，只按块重写帧。
+
+**第二轮（代码审查发现的阻断）**：上游同时给 `Transfer-Encoding: chunked` 与
+`Content-Length: 1` 时，`http.client` 按 chunked 解帧，而代理仍读原始 `Content-Length`
+向下游声明。独立复现：`curl_exit=0`、`body="{"`、`complete_json=false` —— 一个完整响应
+被截成语法不完整的片段，且**不报错**。按 RFC 9112 §6.3 修：下游帧化只按 `http.client`
+实际解出的语义写（`response.length` / `response.chunked`），不再读原始头；TE 与 CL 同现、
+重复 CL 不一致或不可解析时返回 `502 proxy.upstream_response_ambiguous`，不猜也不截断；
+上游提前断流时不补终止块、不补齐长度。先前「按原始 `Content-Length` 转达」的说法随之作废。
+
+**验证（修复前先红）**：
+- 第一轮：把 `model_proxy.py` 回到 `origin/main` 后，四条回归全红；curl 那条实际输出
+  `curl 退出 56：... unexpected eof while reading`。
+- 第二轮：把 `model_proxy.py` 回到上一版（本分支 `9f7e192`）后，歧义长度两条转红 ——
+  `assert 200 == 502`，以及 curl 拿到 `{` 后 `json.decoder.JSONDecodeError`。
+- 修复后专项 **20 passed**；相关 M2 子集（proxy / 部署边界 / 隔离 / 网络）**69 passed**。
+- 断言覆盖：定长响应声明 `Content-Length` 且以 `close_notify` 收尾、上游 chunked 被重写成
+  自洽帧、上游 4xx 保留状态码与完整 body、`curl --http1.1` 退出 0 且 body 逐字节完整、
+  歧义长度被拒（HTTP 与 curl 两条）、重复且相同的 CL 按单值接受、重复且冲突的 CL 被拒、
+  定长与 chunked 上游提前截断都不被包装成「完整成功」。
+- 客户端使用 `suppress_ragged_eofs=False`，默认的 `True` 会把第一轮的缺陷静默当成正常结束。
+
+**全量与门禁**：并入 `main`（`ffed614`）后 `uv run pytest -n auto`
+**2883 passed / 9 skipped**（50.60s）；随后普通合并 `2d401fc`（#830，保留两侧验收记录），
+全量仍为 **2883 passed / 9 skipped**（51.61s）。首轮曾出现一次 `tests/test_dify_tracer_bullet.py`
+失败；该用例单独跑与整文件并行跑均通过，重跑全量通过，判为与本次改动无关的偶发，如实记在
+这里。Ruff、format（454 文件）、compileall、`uv pip check`、ADR 结构检查、policy、repo-map、
+Spec lint 退出 0，**0 error / 1 warning**：继承 main 的 `l0-contracts` 对
+`agent_contracts.py` 的漂移警告，本片没有修改这两个对象，也没有替它们执行 ack。
+
+**部署制品检查**：开发机构建候选镜像成功；重新计算构建上下文，与镜像标签一致，
+`source_sha256=151f25de09a8214225e826d2a438094a8a91754ad0cf92a53106ef1422f8fcb5`。
+`images.lock.json` 更新此内容摘要，`uv.lock` 摘要未变；镜像内出口源码与候选文件逐字节一致。
+Image ID 与构建时间保留在本地 `identity.json`，不把本次构建冒充为 41 加载或整栈复跑。
+Codex 独立复跑出口专项 20 项通过；验收场景与复跑方法见 `acceptance.feature` 的
+`MODEL-FRAME-*` 和 `qa-plan.md` 同名条目。
+
+**边界**：本次只证明「出口对非流式/定长与 chunked 响应的 framing 是自洽的」。
+它**不证明**真实供应商可用、模型质量、App/公网启用或 `agent_version`；上游自己提前断流
+时客户端仍会看到真实错误。
+
+**未完成业务验收**：没有再次发送真实订单或模型请求，未访问 41。
+
+## 2026-10-19 · 回滚 #825：零阶回答的负载形状恢复原状
+
+**范围**：撤销 #825（`as_blocks_result` 归一化、`KB_OUTAGE` 哨兵及其对
+`retrieval_status`/指标面的影响）。`main` 受保护，以 revert 提交回滚。
+
+**等价性证据（这是本次唯一"证明"该回滚正确的东西）**：
+
+| 项 | 值 |
+|---|---|
+| 回滚提交 `e2261e3` 的 tree 哈希 | `1602dfde4559b4565ad9e3d7311d2a69410036c8` |
+| #825 合并前 `aa30a09` 的 tree 哈希 | `1602dfde4559b4565ad9e3d7311d2a69410036c8` |
+| 结论 | **逐字节相同** —— 代码回到原点，不是"接近" |
+| 分支 head `050e8fe` 的 tree 哈希 | `faacec57c97c497c6890d188761fb6d1a3d94f35`（≠ 上两者） |
+
+⚠️ **范围说清楚**：哈希相等证明的是**回滚提交**（代码面）等价。分支 head 另含本次
+回滚自己的文档记录（`docs/validation.md`、`docs/开发进度.md` 两个文件），因此 head
+的树哈希与之不同是**预期的**。`git diff --name-only aa30a09 050e8fe` 只列出这两个文件
+——即除本记录外，没有任何代码或合同文件的差异。
+
+**本地判据**：全量 **2862 passed / 10 skipped / 0 failed**；`ruff check .`、
+`ruff format --check .`、`spex spec lint`、repo-map、`adr.check` 全干净。
+（10th skip 是本 worktree 未装 xdist 的环境跳过。）
+
+**据实（边界）**：
+
+- **回滚会再重启一次 41 的生产网关**：#825 已由 CD 部署（版本 `0.1.0+75ef55b46326`），
+  回滚合并后 CD 再部署一次。这是回滚的代价，按所有者指示执行，
+  且与 41 上并行的 `m2-live-03` 栈错开（该栈本次未被触碰，状态根 owner marker 仍是
+  `m2-live-03`）。
+- **未做真实客户端复验**：本次不产生新行为，只恢复原状，因此没有可复验的新判据；
+  不记任何"41 已通过"。**未完成业务验收。**
+- **评审在回滚 PR 上重新提出的三个功能缺陷**（零阶正文在只读 `blocks[]` 的客户端上不可见、
+  检索故障与"无匹配"不可分、指引示例与知识库回答不一致）是**撤回该修复后必然恢复的
+  既存行为**，不是本次回滚引入的缺陷。它们的上下文保留在 PR #825 与其评审线程里。
+- **未触碰**：41 上 `m2-live-03` 试验栈、`AI-Ops-dify-publish-acceptance` 与
+  `_runners/AI-Ops-deploy` 两个 worktree、`/etc/aiops-41/` 下的所有配置
+  （mtime 仍早于本会话）。
+
 ## 2026-10-19 · 零阶回答的部署后真机取证（41）
 
 **范围**：部署后的端到端取证，以及**验收探针本身**的修正。这是 #708 负载形状与
