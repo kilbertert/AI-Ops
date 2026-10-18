@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import signal
 import subprocess
 from pathlib import Path
 
@@ -18,6 +19,46 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEPLOY_DIR = REPO_ROOT / "deploy"
 CD_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "cd.yml"
+
+
+def _run_bounded(
+    argv: list[str], *, cwd: Path, env: dict[str, str], timeout: int
+) -> subprocess.CompletedProcess[bytes]:
+    """Run ``argv`` and, on timeout, take its **whole process tree** down.
+
+    ``subprocess.run(timeout=…)`` only signals the child it started. That is the
+    wrong shape here: the child is `bash`, which starts `dev-host`, which starts
+    `ssh`. Killing bash leaves those running, and — because SIGKILL bypasses
+    bash's EXIT trap — it also skips the `mktemp -d` staging removal that trap
+    does. A timeout would then leak both a process and a staging directory while
+    reporting a clean failure. Both halves measured on this repository,
+    2026-10-18; caught by review on the first version of this change.
+
+    So: put the child in its own process group and signal the GROUP. `start_new_session`
+    is the Python spelling of `setsid`, which makes the child a session and group
+    leader, so every descendant inherits the group unless it deliberately leaves.
+    SIGTERM first gives bash the chance to run its trap; the SIGKILL after the wait
+    covers a child that ignores it.
+    """
+    process = subprocess.Popen(
+        argv,
+        cwd=cwd,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        os.killpg(process.pid, signal.SIGTERM)
+        try:
+            process.communicate(timeout=30)
+        except subprocess.TimeoutExpired:
+            os.killpg(process.pid, signal.SIGKILL)
+            process.communicate()
+        raise
+    return subprocess.CompletedProcess(argv, process.returncode, stdout, stderr)
 
 
 def _run(script: Path, *args: str, stdin: str = "") -> subprocess.CompletedProcess[str]:
@@ -55,13 +96,23 @@ def test_remote_block_renders_and_parses() -> None:
     这一条把 dry-run 的输出取出来单独做语法检查 —— 本轮就是这样抓到一个只在实际
     渲染后才出现的错误：heredoc 里写的函数用 `$1` 而没有转义，bash 在**本机**展开它，
     于是 `set -u` 下报 unbound variable。静态检查看不到，因为它那时还只是一段字符串。
+
+    ⚠️ `timeout` 是必需的，不是保险。这条是本仓**唯一**把外部工具（`bash deploy-41.sh`，
+    它再拉起 `dev-host` → `ssh`）拉起来却没有时限的 subprocess 调用 —— AST 扫描
+    `tests/`：46 处 subprocess，33 处无 timeout，其中只有这一条拉起外部工具，
+    其余是 `git`/本机 python 之类本机快命令。而它是全量里最慢的一条（25s），
+    所以它一旦挂住，CI 只能等 job 的 `timeout-minutes: 20` 才失败 —— 20 分钟里
+    没有任何输出告诉人卡在哪。
+
+    ⚠️ 用的是 `_run_bounded` 而不是 `subprocess.run(..., timeout=…)`：后者只杀它
+    直接起的那个子进程，而卡住的往往是更深一层的 `dev-host`；且 SIGKILL 会跳过
+    bash 的 EXIT trap，于是 `mktemp -d` 的暂存目录也留在盘上。拒绝要拒绝得干净。
     """
     repo = DEPLOY_DIR.parent
-    result = subprocess.run(  # noqa: S603 - fixed argv, no shell
+    result = _run_bounded(  # noqa: S603 - fixed argv, no shell
         ["bash", str(DEPLOY_DIR / "deploy-41.sh"), "--commit", "HEAD", "--dry-run"],
-        capture_output=True,
         cwd=repo,
-        check=False,
+        timeout=300,
         env={**os.environ, "PATH": f"/home/claude/miniconda3/bin:{os.environ.get('PATH', '')}"},
     )
     # 部署脚本里有中文；`cut -c` 之类会从多字节字符中间截断。用 errors="replace"
