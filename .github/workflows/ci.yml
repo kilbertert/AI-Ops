@@ -1,10 +1,27 @@
 name: CI
 
+# `pull_request` only — deliberately NOT `push: main`.
+#
+# On `push: main` this job re-ran content CI had already verified on the pull
+# request, and the content is provably the same: a squash merge (this repository's
+# rule) produces a commit whose tree is byte-identical to the PR head's. Measured
+# 2026-10-18 on #828: `6684b5f6^{tree}` (PR head) and `89c2612e^{tree}` (merge)
+# are both `9e754088`. So the second run tested the same bytes twice.
+#
+# What the second run was buying — "the gate re-stands on the protected branch" —
+# is already bought by the ruleset: `main` requires the `verify` and
+# `Workflow policy` checks and forbids non-fast-forward pushes, so nothing reaches
+# `main` except through a pull request that passed them. That is the same premise
+# `cd.yml` already relies on; its own comment says it does not repeat the checks
+# "because main can only be entered through a PR carrying the required checks".
+#
+# This is NOT the same trade as skipping CI for docs-only changes, which was
+# measured and rejected: `tests/test_readme_architecture.py` asserts against
+# `README.md`, so a path filter would let a documentation edit bypass a test that
+# reads it.
+
 on:
   pull_request:
-  push:
-    branches:
-      - main
 
 permissions:
   contents: read
