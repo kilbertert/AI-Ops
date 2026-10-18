@@ -55,12 +55,20 @@ def test_remote_block_renders_and_parses() -> None:
     这一条把 dry-run 的输出取出来单独做语法检查 —— 本轮就是这样抓到一个只在实际
     渲染后才出现的错误：heredoc 里写的函数用 `$1` 而没有转义，bash 在**本机**展开它，
     于是 `set -u` 下报 unbound variable。静态检查看不到，因为它那时还只是一段字符串。
+
+    ⚠️ `timeout` 是必需的，不是保险。这条是本仓**唯一**把外部工具（`bash deploy-41.sh`）
+    拉起来却没有时限的 subprocess 调用 —— 实测另外 32 处无 timeout 的调用都只跑
+    本机快命令（AST 扫描 `tests/`：46 处 subprocess，33 处无 timeout，其中只有
+    这一条拉起外部工具——其余是 `git`/本机 python 之类）。而它是全量里最慢的一条（25s），
+    所以它一旦挂住，CI 只能等 job 的 `timeout-minutes: 20` 才失败 —— 20 分钟里
+    没有任何输出告诉人卡在哪。
     """
     repo = DEPLOY_DIR.parent
     result = subprocess.run(  # noqa: S603 - fixed argv, no shell
         ["bash", str(DEPLOY_DIR / "deploy-41.sh"), "--commit", "HEAD", "--dry-run"],
         capture_output=True,
         cwd=repo,
+        timeout=300,
         check=False,
         env={**os.environ, "PATH": f"/home/claude/miniconda3/bin:{os.environ.get('PATH', '')}"},
     )
