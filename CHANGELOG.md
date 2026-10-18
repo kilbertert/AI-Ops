@@ -516,4 +516,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 并行测试装配加固 —— 换掉 --with，并把「绿」变成有量的绿 (#819)
 - 给唯一的无时限外部调用加上 timeout (#821)
 - Isolate production credentials and stream bootstrap files
+- Persist admin rotation before platform changes
+- Serialize bootstrap apply and credential checks
 
