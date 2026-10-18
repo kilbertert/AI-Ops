@@ -2975,3 +2975,25 @@ Feature: 隔离栈的凭据挂载与初始化传输
       When 后续传输失败且 Gateway 被重建
       Then 重跑可用已保存的口令继续初始化
       And 成功或失败退出都清理容器临时凭据
+
+Feature: 受控模型出口的响应完整性
+
+  Rule: 客户端能区分完整响应与截断响应
+
+    Scenario: MODEL-FRAME-01 完整响应干净结束
+      Given 固定上游返回完整的定长或分块响应
+      When 严格 TLS 客户端经受控出口读取响应
+      Then 状态码与响应体完整保留，帧化无歧义
+      And 连接发送 close_notify，curl 退出 0
+
+    Scenario: MODEL-FRAME-02 上游长度声明有歧义
+      Given 上游同时声明 Transfer-Encoding 与 Content-Length 或声明冲突的重复长度
+      When 客户端经受控出口读取响应
+      Then 返回 502 和 proxy.upstream_response_ambiguous
+      And 不把响应前缀当成完整成功结果
+
+    Scenario: MODEL-FRAME-03 上游提前断流
+      Given 上游没有兑现声明的长度或没有发送分块终止块
+      When 严格客户端经受控出口读取响应
+      Then 客户端识别响应不完整
+      And 出口不补齐响应体或分块终止块

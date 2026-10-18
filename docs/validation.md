@@ -61,11 +61,20 @@ HTTP 200 与模型响应都收到了，但客户端退出码是 56
   定长与 chunked 上游提前截断都不被包装成「完整成功」。
 - 客户端使用 `suppress_ragged_eofs=False`，默认的 `True` 会把第一轮的缺陷静默当成正常结束。
 
-**全量与门禁**：并入最新 `main`（`ffed614`）后 `uv run pytest -n auto`
-**2883 passed / 9 skipped**（50.60s）。首轮曾出现一次 `tests/test_dify_tracer_bullet.py`
+**全量与门禁**：并入 `main`（`ffed614`）后 `uv run pytest -n auto`
+**2883 passed / 9 skipped**（50.60s）；随后普通合并 `2d401fc`（#830，保留两侧验收记录），
+全量仍为 **2883 passed / 9 skipped**（51.61s）。首轮曾出现一次 `tests/test_dify_tracer_bullet.py`
 失败；该用例单独跑与整文件并行跑均通过，重跑全量通过，判为与本次改动无关的偶发，如实记在
 这里。Ruff、format（454 文件）、compileall、`uv pip check`、ADR 结构检查、policy、repo-map、
-Spec lint 通过。
+Spec lint 退出 0，**0 error / 1 warning**：继承 main 的 `l0-contracts` 对
+`agent_contracts.py` 的漂移警告，本片没有修改这两个对象，也没有替它们执行 ack。
+
+**部署制品检查**：开发机构建候选镜像成功；重新计算构建上下文，与镜像标签一致，
+`source_sha256=151f25de09a8214225e826d2a438094a8a91754ad0cf92a53106ef1422f8fcb5`。
+`images.lock.json` 更新此内容摘要，`uv.lock` 摘要未变；镜像内出口源码与候选文件逐字节一致。
+Image ID 与构建时间保留在本地 `identity.json`，不把本次构建冒充为 41 加载或整栈复跑。
+Codex 独立复跑出口专项 20 项通过；验收场景与复跑方法见 `acceptance.feature` 的
+`MODEL-FRAME-*` 和 `qa-plan.md` 同名条目。
 
 **边界**：本次只证明「出口对非流式/定长与 chunked 响应的 framing 是自洽的」。
 它**不证明**真实供应商可用、模型质量、App/公网启用或 `agent_version`；上游自己提前断流
