@@ -1,0 +1,192 @@
+{
+  "record": "m2-live-03-frozen",
+  "scope": "M2-LIVE-03-FREEZE：对最终冻结制品的完整集成验收（合成供应商）。不是真实供应商验收，也不替代 41 上的试运行。",
+  "started_at": "2026-10-18T18:48:00Z",
+  "finished_at": "2026-10-18T18:59:47Z",
+  "base_commit": "403d07a（Codex 在同一候选树上的补修）",
+  "previous_records": {
+    "m2-live-03-synthetic.json": "属于更早的制品（source_sha256=baffeeaa…），保留为历史",
+    "m2-live-03-r2-synthetic.json": "绑定 5d08610 的制品（source_sha256=757c82e4…），保留为历史；本报告是新的一轮"
+  },
+  "artifacts": {
+    "gateway_image_id": "sha256:ffdf5bf312c352e952df88364dea8dd694e09536838b58ee8846121516ef652a",
+    "gateway_source_sha256": "74c6a371fb3cada6548b4a2ce28fd4b101da4c9dfcc6e16f39d018770d678a51",
+    "uv_lock_sha256": "994a8a12fa58ab833985b1e864427679dca6c0ed95b74c759941f94302aa3e13",
+    "platform_jar_sha256": "8dd6b63504eae7cc479e1c3a7d674aa1529069d44e7967e4ed2158ef645d5cb0",
+    "node_jar_sha256": "b27da717743d7534b6103f5a4339bd1a630ae5b631c1d60bce3388429da9372a",
+    "config_sha256": "f802d3cb008b308ec8b77b8d4d10e1701fa19750c84b1cd00d1d3390c1a50d60",
+    "truststore_sha256_prefix": "a8fa6e3e704dbb9f",
+    "config_note": "配置身份只覆盖非 TLS 文件（TLS 材料每次生成都不同，单独记录 truststore 摘要）。"
+  },
+  "topology": {
+    "networks": [
+      "trial (internal)",
+      "modellink (internal)",
+      "egress",
+      "hostloop"
+    ],
+    "node_networks": [
+      "trial",
+      "modellink"
+    ],
+    "model_path": "node -> model-proxy:9101 (TLS, 本栈 CA) -> 合成上游（只在 egress）",
+    "credentials": "供应商 key 只在 model-proxy/upstream_api_key；节点只持代理令牌；两者是不同的合成值"
+  },
+  "substituted": {
+    "caller_identity": "固定本地令牌 -> 固定 consumer ScopeContext",
+    "order_authority": "同一 SQLite 里的 synthetic_orders 表",
+    "model_upstream": "合成上游（桩）：记录实际收到的 model、请求路径与工具调用",
+    "cpms": "桩 CPMS，只记录调用次数"
+  },
+  "checks": [
+    {
+      "id": "fresh-config",
+      "result": "pass",
+      "evidence": "从模板与空状态根生成 /tmp/m2live03-frozen/etc；未手工预种应用或节点；供应商凭据与代理令牌是不同值。"
+    },
+    {
+      "id": "preflight",
+      "result": "pass",
+      "exit": 0
+    },
+    {
+      "id": "up",
+      "result": "partial",
+      "exit": 1,
+      "evidence": "容器全部启动；返回 1 是因为 ready 阶段节点尚未注册（见下一条）。"
+    },
+    {
+      "id": "ready-before-bootstrap",
+      "result": "pass",
+      "exit": 1,
+      "evidence": "输出 `pending node：节点凭据尚未生成` 并返回非零 —— pending 不计为注册成功。"
+    },
+    {
+      "id": "bootstrap",
+      "result": "pass",
+      "exit": 0,
+      "evidence": "换默认管理员口令、禁用 demo、注册应用/模型/智能体、回填绑定表；节点凭据变化后**重建**节点容器。"
+    },
+    {
+      "id": "ready",
+      "result": "pass",
+      "exit": 0,
+      "evidence": "四项在同一轮成立：store 健康 / platform UP / 本 app 的节点注册 / 隔离 Gateway /health。"
+    },
+    {
+      "id": "verify",
+      "result": "pass",
+      "exit": 0,
+      "evidence": "/health 200；无会话 401；委派无会话 401；四个服务以服务 UID 运行；默认凭据已不可用；节点可达受控出口、不可达外网（正对照）。"
+    },
+    {
+      "id": "deps",
+      "result": "partial",
+      "exit": 1,
+      "evidence": "平台真 HTTPS 与本栈 CA 校验通过（ok）；会话库在开发机判 FAIL（本机 Redis 只绑宿主回环）。这是**部分通过**，不写成整条 PASS。"
+    },
+    {
+      "id": "nine-negatives",
+      "result": "pass",
+      "evidence": "无身份/错凭据/他人订单（直读与委派）/委派多余字段/领取无凭据/错凭据/未知 run。"
+    },
+    {
+      "id": "negatives-are-zero-reads",
+      "result": "pass",
+      "evidence": "桩 CPMS 计数在整组负例前后不变（charging_info 0 → 0）。"
+    },
+    {
+      "id": "delegated-success",
+      "result": "pass",
+      "run_id": "run_Cp8Aa946gB3WLpSvUz-VaHz2SBBvGdOv1cvoZxHmgNg",
+      "state": "succeeded",
+      "expected_environment": "live-trial-41",
+      "expected_app_id": "aiops-m2live03",
+      "expected_agent_id": "1",
+      "expected_node_id": "node-41",
+      "actual_node_id": "node-41",
+      "node_build": "m2live03-node-1",
+      "agent_version": null,
+      "agent_version_gap": "not_wired"
+    },
+    {
+      "id": "model-name-and-path",
+      "result": "pass",
+      "evidence": "合成上游收到 model=m2live03-synthetic（逐字，不是内部资源名 aiops-m2live03）；收到路径 /chat/completions（适配器把 baseUrl 之后算作该路径）。正式模式的基路径由 M2LIVE_MODEL_UPSTREAM_BASE_PATH 显式给出（默认 /v1）。"
+    },
+    {
+      "id": "boundary-proxy-cannot-read-business",
+      "result": "pass",
+      "evidence": "model-proxy 的 /etc/m2live 只有 proxy_token 与 upstream_api_key；读不到 runtime.env（business Redis/MySQL 凭据）。"
+    },
+    {
+      "id": "boundary-no-vendor-key-outside-proxy",
+      "result": "pass",
+      "evidence": "gateway 与 node 都读不到 upstream_api_key；代理令牌与供应商 key 不是同一份内容。"
+    },
+    {
+      "id": "proxy-wrong-token",
+      "result": "pass",
+      "evidence": "错误代理令牌 → 401，且上游 model_calls 计数前后不变（2 → 2）。"
+    },
+    {
+      "id": "formal-http-upstream-refused",
+      "result": "pass",
+      "evidence": "不带合成标记时，HTTP 上游启动即被拒绝（`正式模式的 M2LIVE_MODEL_UPSTREAM 必须使用 HTTPS`）；同一上游在合成标记下可启动（对照）。"
+    },
+    {
+      "id": "egress-down-fails-without-fallback",
+      "result": "pass",
+      "evidence": "停掉 model-proxy 后同一次委派返回 502 AGENT_RUN_NO_RESULT；节点无法解析合成上游（无直连备用目标）。"
+    },
+    {
+      "id": "egress-recovery",
+      "result": "pass",
+      "run_id": "run_nSUruWXGNNVEb-U50h09lXjstuRoY3wQO-Z3i0d7e3g",
+      "evidence": "重启 model-proxy 后同一调用恢复 succeeded。"
+    },
+    {
+      "id": "down",
+      "result": "pass",
+      "exit": 0,
+      "evidence": "容器与网络移除，状态目录保留。"
+    }
+  ],
+  "observed_resources": {
+    "note": "docker stats 单次采样，不是峰值保证",
+    "budget": "2992 MiB / 1.49 CPU（含受控模型出口）"
+  },
+  "defects_found_this_round": [
+    {
+      "id": "readiness-pending-detection",
+      "symptom": "模板的 node.env 只有键名时，pending 判定不成立，ready 报「未就绪: node」而不是 pending",
+      "cause": "判据是「文件非空」，模板本身就非空",
+      "fix": "判据改为 `SNAIL_AI_APP_ID` 有值"
+    },
+    {
+      "id": "upstream-path-prefix",
+      "symptom": "适配器请求 `/chat/completions`，供应商需要 `/v1/chat/completions`",
+      "cause": "基路径未显式配置；接受任意路径的桩掩盖了 404",
+      "fix": "新增 `M2LIVE_MODEL_UPSTREAM_BASE_PATH`（部署配置，默认 /v1）；桩记录实际路径；合成留空以便观察真实拼法"
+    },
+    {
+      "id": "down-needed-runtime-vars",
+      "symptom": "变量未导出时 down 失败",
+      "cause": "compose 的 `:?` 必填在 down 时也插值",
+      "fix": "必填性移交 preflight；compose 用默认空值"
+    }
+  ],
+  "evidence_files": {
+    "note": "日志摘要在本机私有根 /tmp/m2live03-frozen/evidence/，不入仓；sha256 记录在此以便复核同一份内容",
+    "boundaries.log": "d2ffb6ed3d138ef7341b6026d4223899c7716f2f0c9dd5f99aa8cc97694ec708",
+    "egress-down.log": "6cbb8aa72a014eadd2f6f0ae33385be623381b7ff03db4d5608953a0232fc5e8",
+    "formal-http-refusal.log": "55ed050e034193f7b88e58b832f7c25e2b456b905c45965f09731c99c66854af",
+    "proxy-controls.log": "d7c953c79bac57eb852ec6b77de3985fcf27be1db5b8819193668ee0bab1f29d"
+  },
+  "not_covered": [
+    "真实供应商（端点、模型标识、凭据轮换）与 41 上 Redis 的实际认证结果",
+    "真实公司身份与真实本人订单、真实 CPMS",
+    "模型回答质量、App 客户端、公网启用",
+    "41 上未执行任何写操作"
+  ]
+}

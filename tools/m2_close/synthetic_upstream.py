@@ -187,6 +187,9 @@ class ModelHandler(_JsonHandler):
         # 是「供应商会收到什么」的唯一直接证据。
         received_model = str(body.get("model") or "")
         STATE.setdefault("models_seen", []).append(received_model)
+        # 记录**实际收到的请求路径**：冻结验收要证明端点的 /v1 组合与选定供应商一致，
+        # 而不是靠一个接受任意路径的桩把 404 掩盖掉。
+        STATE.setdefault("paths_seen", []).append(self.path)
         if EXPECTED_MODEL and received_model != EXPECTED_MODEL:
             COUNTS["bad_model"] = COUNTS.get("bad_model", 0) + 1
             log(f"model mismatch: expected={EXPECTED_MODEL!r} got={received_model!r}")

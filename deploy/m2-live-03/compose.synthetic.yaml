@@ -19,6 +19,10 @@ services:
     # 合成模式的出口目标就是桩模型；桩只在 egress 上，节点够不到它。
     environment:
       M2LIVE_MODEL_UPSTREAM: http://modelstub:9100
+      M2LIVE_SYNTH_MODE: "1"
+      # 合成上游把 /v1/chat/completions 与 /chat/completions 都实现了，所以前缀留空：
+      # 请求原样到达，路径由桩自己记录（正式模式必须显式给前缀）。
+      M2LIVE_MODEL_UPSTREAM_BASE_PATH: ""
     command:
       - --listen-port
       - "9101"
@@ -28,6 +32,8 @@ services:
       - /etc/m2live/upstream_api_key
       - --proxy-token-file
       - /etc/m2live/proxy_token
+      - --upstream-base-path
+      - ""
 
   gateway:
     environment:

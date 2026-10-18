@@ -18,7 +18,7 @@
 |---|---|---|
 | 服务身份 | **复用 `aiops41`**（uid 999 / gid 987） | 与生产 Gateway 同属 AI-Ops 项目；两者不共享任何可写路径。4 个服务容器**以 999:987 运行**，不是 root |
 | 分发目录 | `/opt/aiops-m2-live/{platform,node}` | `aiops41:aiops41`，`0750`；只放只读制品 |
-| 配置目录 | `/etc/aiops-m2-live/{gateway,node,platform,secrets}` | `aiops41:aiops41`，目录 `0750`；文件 `0600` |
+| 配置目录 | `/etc/aiops-m2-live/{gateway,node,platform,model-proxy,secrets}` | `aiops41:aiops41`，目录 `0750`；文件 `0600` |
 | 状态目录 | `/var/lib/aiops-m2-live/{store,gateway,node,platform}` | `aiops41:aiops41`，`0700`（`store` 由 MySQL 入口点初始化为 `999`） |
 | 所有权标记 | `/var/lib/aiops-m2-live/.owner` | `checks.sh up` 写入项目名；`down --purge` 只认它 |
 
@@ -79,7 +79,7 @@ preflight 对**镜像 ID**、`m2live.source` 标签、基础镜像 ref→image I
 | `gateway/gateway.env` | 隔离 Gateway 的键 | `gateway.env.template`；业务接口与逻辑环境名来自私有记录 |
 | `gateway/runtime.env` | **只读业务依赖白名单**（会话库/业务库/UPMS/TDengine/thirdSession） | `build-runtime-config.sh` 从生产配置文件抽取；不完整即拒绝 |
 | `tls/{ca.crt,ca.key,platform.crt,platform.key,platform.p12,password,model-proxy.*}` | 本地 CA、平台与受控出口的叶子证书 | `make-certs.sh`；幂等 |
-| `gateway/{proxy_token,upstream_api_key}` | 节点→出口的令牌 / 出口→供应商的凭据 | `prepare-secrets.sh`（0600；后者来自 `M2LIVE_MODEL_API_KEY_FILE`） |
+| `model-proxy/{proxy_token,upstream_api_key}` | 节点→出口的令牌 / 出口→供应商的凭据 | `prepare-secrets.sh`（0600；后者来自 `M2LIVE_MODEL_API_KEY_FILE`）；只有出口挂载此目录，bootstrap 只传前者 |
 | `gateway/agent-runs.json` | 环境 → appId/agentId/预期节点 + 节点凭据摘要 | `bootstrap.sh` 回填 |
 | `node/node.env` | 节点自己的 appId/token 与回呼凭据 | 同上 |
 

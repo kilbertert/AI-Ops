@@ -69,9 +69,12 @@ services:
     entrypoint: ["python", "/opt/aiops-src/tools/m2_live/model_proxy.py"]
     environment:
       M2LIVE_MODEL_UPSTREAM: ${M2LIVE_MODEL_UPSTREAM:-}
+      # 供应商基路径（通常是 /v1）是**部署配置**：适配器只追加 /chat/completions，
+      # 前缀必须在这里显式给出，不能靠接受任意路径的桩掩盖。
+      M2LIVE_MODEL_UPSTREAM_BASE_PATH: ${M2LIVE_MODEL_UPSTREAM_BASE_PATH:-/v1}
       SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
     volumes:
-      - ${M2LIVE_CONFIG:-/etc/aiops-m2-live}/gateway:/etc/m2live:ro
+      - ${M2LIVE_CONFIG:-/etc/aiops-m2-live}/model-proxy:/etc/m2live:ro
       - ${M2LIVE_CONFIG:-/etc/aiops-m2-live}/tls/proxy:/etc/m2live-tls:ro
     command:
       - --listen-port
@@ -82,6 +85,8 @@ services:
       - /etc/m2live/upstream_api_key
       - --proxy-token-file
       - /etc/m2live/proxy_token
+      - --upstream-base-path
+      - ${M2LIVE_MODEL_UPSTREAM_BASE_PATH:-/v1}
     mem_limit: 128m
     cpus: 0.1
     restart: unless-stopped

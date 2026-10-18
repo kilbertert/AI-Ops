@@ -45,7 +45,7 @@ no project argument. Both answer *where* something is; neither replaces reading 
 
 ## Tests
 
-- tests/ — 161 test file(s, recursive)
+- tests/ — 162 test file(s, recursive)
 - script "cd:watch:test": node .sandcastle/cd-watch.test.mjs
 - pytest (pyproject.toml / pytest.ini present)
 
@@ -55,8 +55,8 @@ no project argument. Both answer *where* something is; neither replaces reading 
 - AGENTS.md
 - CLAUDE.md
 - README.md
-- docs/ — 93 markdown file(s)
-- docs/adr/ — 41 markdown file(s)
+- docs/ — 94 markdown file(s)
+- docs/adr/ — 42 markdown file(s)
 - docs/agents/ — 29 markdown file(s)
 
 ## Tree (depth 2, first 80 lines; dependencies, build
@@ -105,7 +105,7 @@ docs/
     0008-adr-0003-deviation-session-direct-read.md
     0009-operator-identity-via-company-oauth2-token.md
     0010-reversal-of-prd-200-language-boundary.md
-    ... (31 more)
+    ... (32 more)
   afk-cutover/
     decisions.md
     pr-a-spec.md
@@ -139,11 +139,12 @@ docs/
     m2-b2-release-review.py
     m2-close-r3.json
     m2-close-real-gateway.json
+    m2-live-03-frozen.json
     m2-live-03-r2-synthetic.json
     m2-live-03-synthetic.json
     m2-self-accept-prefix.json
     m2-self-accept.json
-    m2-self-accept.py
+    ... (1 more)
   afk-workflow.md
   architecture.md
   diag-query-api-plan.md

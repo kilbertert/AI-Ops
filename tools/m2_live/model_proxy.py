@@ -103,10 +103,11 @@ class ProxyHandler(BaseHTTPRequestHandler):
             )
         else:  # 合成模式：上游在栈内，仍是同一个固定目标
             connection = http.client.HTTPConnection(target.hostname, target.port or 80, timeout=60)
-        # 上游只给**源**（scheme/host/port），路径原样沿用客户端的请求路径。
-        # 允许上游带路径前缀会让「前缀 + 已含 /v1 的路径」拼成 /v1/v1/… ——
-        # 那是配置歧义，不是运行时该猜的事，启动时就拒绝。
-        path = self.path
+        # 上游只给**源**；前缀是部署配置里的一个固定值，路径是客户端请求路径。
+        # 两者拼接是确定性的：`base_path + request_path`。不猜测、不去重 ——
+        # 若配置成 `/v1` 而客户端也发 `/v1/...`，结果会明显是 `/v1/v1/...` 并被上游 404，
+        # 那时是配置错，不是运行时该替它修的事。
+        path = self.upstream_base_path + self.path
         headers = {
             "Authorization": f"Bearer {self.upstream_key}",
             "Content-Type": self.headers.get("Content-Type", "application/json"),
@@ -141,20 +142,31 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
 
 def serve(
-    listen_host: str,
+    listen_host: int | str,
     listen_port: int,
     upstream: str,
     upstream_key: str,
     proxy_token: str,
     certfile: str,
     keyfile: str,
+    synthetic: bool = False,
+    upstream_base_path: str = "",
 ) -> None:
     parsed = urllib.parse.urlsplit(upstream)
     if parsed.scheme not in {"http", "https"} or not parsed.hostname:
         raise SystemExit("M2LIVE_MODEL_UPSTREAM 必须是完整的 http/https URL")
+    if parsed.scheme != "https" and not synthetic:
+        raise SystemExit("正式模式的 M2LIVE_MODEL_UPSTREAM 必须使用 HTTPS")
     if parsed.path not in ("", "/"):
-        raise SystemExit("M2LIVE_MODEL_UPSTREAM 只能是源（不要带路径前缀）；路径由请求决定")
+        raise SystemExit("M2LIVE_MODEL_UPSTREAM 只能是源（不要带路径前缀）；前缀由 --upstream-base-path 给出")
+    # 供应商的基路径（通常是 `/v1`）是**部署配置**，不是从请求里学的。
+    # 适配器把 `baseUrl` 之后的路径算作 `/chat/completions`（实测 openai-java 4.39.1），
+    # 所以要落到供应商的 `/v1/chat/completions`，前缀必须在这里显式拼上。
+    base_path = upstream_base_path.strip()
+    if base_path and (not base_path.startswith("/") or ".." in base_path or "?" in base_path):
+        raise SystemExit("--upstream-base-path 必须是以 / 开头的固定前缀")
     ProxyHandler.upstream = parsed
+    ProxyHandler.upstream_base_path = base_path.rstrip("/")
     ProxyHandler.upstream_key = upstream_key
     ProxyHandler.proxy_token = proxy_token
     # 故意**不**记录上游主机名之外的任何东西：也绝不记录 key。
@@ -174,6 +186,7 @@ def main() -> int:
     parser.add_argument("--upstream", default=os.environ.get("M2LIVE_MODEL_UPSTREAM", ""))
     parser.add_argument("--upstream-key-file", default="/etc/m2live/upstream_api_key")
     parser.add_argument("--proxy-token-file", default="/etc/m2live/proxy_token")
+    parser.add_argument("--upstream-base-path", default=os.environ.get("M2LIVE_MODEL_UPSTREAM_BASE_PATH", ""))
     parser.add_argument("--cert", default="/etc/m2live-tls/model-proxy.crt")
     parser.add_argument("--key", default="/etc/m2live-tls/model-proxy.key")
     args = parser.parse_args()
@@ -189,6 +202,8 @@ def main() -> int:
         read_secret(args.proxy_token_file),
         args.cert,
         args.key,
+        synthetic=os.environ.get("M2LIVE_SYNTH_MODE") == "1",
+        upstream_base_path=args.upstream_base_path,
     )
     return 0
 

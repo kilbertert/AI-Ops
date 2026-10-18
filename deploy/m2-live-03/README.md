@@ -61,6 +61,7 @@ Gateway 与业务依赖已在 41；同宿主先避免跨主机 gRPC、隧道与�
 | 模型（已批准供应商的 HTTPS 端点） | 平台直连；端点由 `bootstrap.sh` 的 `M2LIVE_MODEL_ENDPOINT` 给出 | 平台 |
 | 编排平台（HTTPS） | 平台用本地 CA 签发的证书讲 HTTPS；Gateway 用 `SSL_CERT_FILE` 信任该 CA | 只有隔离 Gateway |
 | 模型（HTTPS，供应商端点） | `model-proxy`：只转发到一个固定目标，路径白名单；节点只接 `modellink` | 节点经出口；供应商 key 只在出口 |
+| 供应商基路径 | `M2LIVE_MODEL_UPSTREAM_BASE_PATH`（默认 `/v1`）：适配器只追加 `/chat/completions` | 部署配置，不是运行时猜测 |
 
 `canonical_gateway_url` 仍然要求远端是 HTTPS，**校验没有被放宽**：不再用回环中继把
 「地址是回环」凑出来（那是审查否掉的形状）。证书由 `make-certs.sh` 生成，SAN 含
@@ -99,6 +100,13 @@ Gateway 与业务依赖已在 41；同宿主先避免跨主机 gRPC、隧道与�
 | `HOST-CHANGE.md` | 41 上的精确变更清单（不是授权） |
 
 ## 数据与凭据边界
+
+模型出口使用独立的 `model-proxy/` 配置目录，只挂载自己的供应商 key 与代理令牌。
+它不挂 `gateway/`，因此看不到业务库、会话库及订单绑定配置；Gateway 也不挂出口的
+供应商 key。`M2LIVE_MODEL_API_KEY_FILE` 只供 `prepare-secrets.sh` 读取供应商凭据；
+`bootstrap.sh` 固定读取 `model-proxy/proxy_token` 下发给节点，两者不得共用变量覆盖。
+正式出口只接受 HTTPS 上游；HTTP 仅供显式 `M2LIVE_SYNTH_MODE=1` 的合成上游。
+复跑时使用新配置根，旧合成根内 `gateway/upstream_api_key` 不应带入新部署。
 
 - 宿主目录：`/opt/aiops-m2-live/`（制品）与 `/var/lib/aiops-m2-live/`（状态）。
 - 隔离 Gateway 的状态库、运行目录、key 目录都在 `/var/lib/aiops-m2-live/gateway/`，

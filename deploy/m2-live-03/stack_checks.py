@@ -32,6 +32,8 @@ def mounts(argv: list[str]) -> int:
         os.path.realpath(os.path.join(config, "tls", "platform")),
         os.path.realpath(os.path.join(config, "tls", "proxy")),
         os.path.realpath(os.path.join(config, "gateway", "runtime.env")),
+        # 模型出口只挂自己的目录（供应商 key 与代理令牌），看不到业务配置。
+        os.path.realpath(os.path.join(config, "model-proxy")),
     }
     readonly_allow.update(os.path.realpath(p) for p in argv[3:])
     data = json.load(sys.stdin) or {}

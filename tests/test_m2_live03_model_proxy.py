@@ -92,7 +92,7 @@ def _certs(tmp_path: Path) -> tuple[Path, Path]:
     return cert, key
 
 
-def _start(tmp_path: Path, upstream: str) -> int:
+def _start(tmp_path: Path, upstream: str, *, base_path: str = "") -> int:
     cert, key = _certs(tmp_path)
     import socket
 
@@ -102,6 +102,7 @@ def _start(tmp_path: Path, upstream: str) -> int:
     threading.Thread(
         target=model_proxy.serve,
         args=("127.0.0.1", port, upstream, "vendor-key", "proxy-token", str(cert), str(key)),
+        kwargs={"upstream_base_path": base_path, "synthetic": True},
         daemon=True,
     ).start()
     time.sleep(0.5)
@@ -187,3 +188,29 @@ def test_connect_is_not_supported(tmp_path):
     source = inspect.getsource(model_proxy.ProxyHandler.do_CONNECT)
     assert "405" in source
     assert "connect_not_allowed" in source
+
+
+def test_a_configured_base_path_is_prepended_exactly_once(tmp_path, upstream_port):
+    """供应商的 `/v1` 是部署配置：请求 `/chat/completions` 必须落到 `/v1/chat/completions`。"""
+    port = _start(tmp_path, f"http://127.0.0.1:{upstream_port}", base_path="/v1")
+    assert _post(port, "/chat/completions", "proxy-token")[0] == 200
+    assert _Upstream.seen[-1]["path"] == "/v1/chat/completions"
+
+
+def test_a_base_path_without_a_leading_slash_is_refused(tmp_path):
+    import socket
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    with pytest.raises(SystemExit):
+        model_proxy.serve(
+            "127.0.0.1",
+            port,
+            "http://127.0.0.1:1",
+            "k",
+            "t",
+            "c",
+            "k",
+            upstream_base_path="v1",
+        )

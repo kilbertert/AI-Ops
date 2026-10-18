@@ -1,5 +1,6 @@
 {
   "record": "m2-live-03-r2-synthetic",
+  "review_note": "本记录保留候选 5d08610 的历史结果。后续凭据挂载、正式 HTTPS 与就绪检查修复改变了源码；最终制品需重建并独立复跑，不能沿用本报告声明当前镜像通过。",
   "scope": "M2-LIVE-03-R2：受控模型出口、供应商模型标识、对话凭据解析与网络正对照的完整冷启动验收。合成供应商，**不是**真实供应商验收。",
   "started_at": "2026-10-18T17:22:11Z",
   "finished_at": "2026-10-18T17:38:45Z",
@@ -33,7 +34,7 @@
     {"id": "up-pending-is-not-ready", "result": "pass", "evidence": "首次 up 后 ready 报 `pending node` 并返回非零 —— pending 不计为注册成功。"},
     {"id": "bootstrap-then-ready", "result": "pass", "evidence": "bootstrap 回填凭据并**重建节点容器**；随后 ready 四项在同一轮成立。"},
     {"id": "verify", "result": "pass", "evidence": "/health 200；无会话 401；委派无会话 401；四个服务以服务 UID 运行；默认凭据已不可用；节点可达受控出口且不可达外网（正对照成立）。"},
-    {"id": "deps", "result": "pass", "evidence": "运行中平台的服务端证书与本栈文件一致；gateway 信任库含当前 CA；platform UP。会话库在开发机判 FAIL（本机 Redis 只绑宿主回环），在 41 上才是真判据。"},
+    {"id": "deps", "result": "partial", "evidence": "运行中平台的服务端证书与本栈文件一致；gateway 信任库含当前 CA；platform UP。会话库在开发机判 FAIL（本机 Redis 只绑宿主回环），在 41 上才是真判据。"},
     {"id": "model-path-through-proxy", "result": "pass", "evidence": "合成上游收到的 model 逐字为 m2live03-synthetic（不是内部资源名 aiops-m2live03）；上游收到的是供应商 key，节点令牌未出现在上游请求里。"},
     {"id": "node-cannot-reach-stub", "result": "pass", "evidence": "节点内 `getent hosts modelstub` 解析失败、TCP 连接失败；停掉 model-proxy 后同一次委派返回 502，重启后恢复 succeeded —— 证明模型调用确实经过受控出口而不是直连。"},
     {"id": "egress-positive-control", "result": "pass", "evidence": "同一探针：model-proxy:9101 可达、1.1.1.1:443 不可达。使用镜像内存在的 /bin/bash；dash 的 /dev/tcp 缺失会让旧判据在从未连接时报成功。"},

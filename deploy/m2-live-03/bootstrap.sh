@@ -78,7 +78,8 @@ if [ "$MODE" = "apply" ]; then
   fi
   # 平台下发给节点的凭据是**出口专用令牌**，不是供应商 key：节点只应能调用受控出口，
   # 供应商凭据只存在于出口容器里。两者由 prepare-secrets.sh 分别生成。
-  MODEL_KEY=${M2LIVE_MODEL_API_KEY_FILE:-$CONFIG/gateway/proxy_token}
+  # M2LIVE_MODEL_API_KEY_FILE 只供 prepare-secrets 读取供应商 key；不能下发给节点。
+  MODEL_KEY=$CONFIG/model-proxy/proxy_token
   if [ ! -r "$MODEL_KEY" ]; then
     echo "bootstrap: 读不到模型出口令牌 $MODEL_KEY（先跑 checks.sh up）" >&2
     exit 2

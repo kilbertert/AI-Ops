@@ -111,6 +111,7 @@ preflight() {
   local d
   for d in "$DIST/platform" "$DIST/node" \
            "$CONFIG/gateway" "$CONFIG/node" "$CONFIG/platform" "$CONFIG/secrets" \
+           "$CONFIG/model-proxy" \
            "$STATE/store" "$STATE/gateway" "$STATE/node"; do
     [ -d "$d" ] && ok "$d" || bad "缺目录 $d"
   done
@@ -321,6 +322,7 @@ ready() {
   say "== 就绪检查（最多 240s） =="
   local deadline=$((SECONDS + 240)) gateway=0 store=0 platform=0 node=0
   while [ $SECONDS -lt $deadline ]; do
+    gateway=0; store=0; platform=0; node=0
     curl -fsS -m 3 http://127.0.0.1:8794/health >/dev/null 2>&1 && gateway=1
     [ "$(docker inspect -f '{{.State.Health.Status}}' m2live03-store 2>/dev/null)" = healthy ] && store=1
     docker exec -i -e "M2LIVE_PLATFORM_URL=${M2LIVE_PLATFORM_URL:-https://platform:8900}" \
@@ -346,7 +348,9 @@ PY
   # 冷启动顺序：首次 up 时节点还没有平台应用凭据（要等 bootstrap）。这**不是**就绪：
   # 报告 pending 并返回非零，`ready` 的成功只表示「四项在同一轮都成立」。
   # 把 pending 当成通过会让「节点已注册」这句话在什么都没注册时也成立。
-  if [ $node -eq 0 ] && [ ! -s "${M2LIVE_CONFIG:-/etc/aiops-m2-live}/node/node.env" ]; then
+  # 「模板只有键名」不等于「凭据已生成」：判据是 appId **有值**，不是文件非空。
+  local node_env="${M2LIVE_CONFIG:-/etc/aiops-m2-live}/node/node.env"
+  if [ $node -eq 0 ] && ! grep -qE '^SNAIL_AI_APP_ID=.+' "$node_env" 2>/dev/null; then
     red "  pending node：节点凭据尚未生成 —— 先跑 bootstrap.sh，再跑 checks.sh ready"
     return 1
   fi

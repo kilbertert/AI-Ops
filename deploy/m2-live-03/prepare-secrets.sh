@@ -9,12 +9,12 @@
 set -euo pipefail
 
 CONFIG=${M2LIVE_CONFIG:-/etc/aiops-m2-live}
-GATEWAY="$CONFIG/gateway"
-PROXY_TOKEN="$GATEWAY/proxy_token"
-UPSTREAM_KEY="$GATEWAY/upstream_api_key"
+PROXY="$CONFIG/model-proxy"
+PROXY_TOKEN="$PROXY/proxy_token"
+UPSTREAM_KEY="$PROXY/upstream_api_key"
 
-mkdir -p "$GATEWAY"
 umask 077
+mkdir -p "$PROXY"
 
 if [ ! -s "$PROXY_TOKEN" ]; then
   openssl rand -hex 32 > "$PROXY_TOKEN"
