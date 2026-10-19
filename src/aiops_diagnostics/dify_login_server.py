@@ -282,6 +282,31 @@ class LoginProxyHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _login(self) -> None:
+        # ── TLS 硬前置，**按请求判** ──────────────────────────────────────
+        # 模块 docstring 与 `assert_public_origin_is_https` 说的都是同一件事：
+        # 公司密码不得经明文 HTTP 传输。但那一条看的是**配置字符串**，不看这一次请求；
+        # 而 10008 是明文入口（`listen 10008`，公网可达），它和 TLS 入口共用同一份
+        # nginx 配置 ⇒ 口令会照常被收下、AES 加密后发往公司。
+        #
+        # 而且这个入口**不可能登录成功**：会话 cookie 恒定 `Secure` + `__Host-`，
+        # 浏览器在 http 源上把它们**静默丢弃** ⇒ 登录 200、跳转 /、立刻弹回 /signin。
+        # 所以"接受口令"换不来任何东西，只换来一次明文传输。
+        #
+        # 判据取 nginx 的 `X-Forwarded-Proto`（覆盖写）。缺失按非 TLS 处理：
+        # 这个进程只监听回环、回环上只有宿主 nginx，缺失说明有人直连 —— 那也不该收口令。
+        if not self._arrived_over_tls():
+            _LOGGER.warning(
+                "dify-login: refused a plaintext login from %s",
+                self.client_address[0] if self.client_address else "unknown",
+            )
+            self._json(
+                400,
+                {
+                    "ok": False,
+                    "reason": "此入口是明文 HTTP，不能提交公司口令。请使用 https://dify.ranlei.work 登录",
+                },
+            )
+            return
         try:
             payload = self._read_json()
         except ValueError as exc:
@@ -429,6 +454,18 @@ class LoginProxyHandler(BaseHTTPRequestHandler):
             return forwarded[:64]
         address = self.client_address[0] if self.client_address else ""
         return address or "unknown"
+
+    def _arrived_over_tls(self) -> bool:
+        """这次请求是否经 TLS 到达。
+
+        取 nginx 覆盖写的 ``X-Forwarded-Proto``（TLS 入口那块的 `location /` 设了它，
+        值来自 `$scheme`）。缺失 ⇒ 非 TLS ⇒ **拒绝收口令**（fail-closed）。
+
+        为什么不看 `AIOPS_LOGIN_PROXY_PUBLIC_ORIGIN`：那一条证明的是"我们**有一个**
+        TLS 入口"，证明不了"**这一次**请求是从它进来的" —— 而 10008 明文入口与它共用
+        同一份 nginx 配置，正是从这个缺口进去的。
+        """
+        return (self.headers.get("X-Forwarded-Proto") or "").strip().lower() == "https"
 
     def _read_json(self) -> dict[str, Any]:
         length_header = self.headers.get("Content-Length")

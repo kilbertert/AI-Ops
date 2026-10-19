@@ -321,12 +321,17 @@ def _call(
     return response.status, payload, headers
 
 
+#: 宿主 nginx 在 TLS 入口上设的那一个头。代理按**请求**判 TLS（#849），所以正常
+#: 登录用例必须带上它 —— 不带就等于模拟"经明文入口进来"，那本来就该被拒。
+TLS_HEADERS = {"X-Forwarded-Proto": "https"}
+
+
 def _login(
     base: str, *, headers: dict[str, str] | None = None, **overrides: Any
 ) -> tuple[int, dict[str, Any], dict[str, str]]:
     body = {"username": "zhang", "password": "pw", "randomStr": "abc123", "code": "1234"}
     body.update(overrides)
-    return _call(base, LOGIN_ROUTE, body, headers=headers)
+    return _call(base, LOGIN_ROUTE, body, headers={**TLS_HEADERS, **(headers or {})})
 
 
 def _logout(base: str) -> tuple[int, dict[str, Any], dict[str, str]]:
@@ -609,6 +614,7 @@ def test_a_browser_supplied_company_token_is_ignored(stack) -> None:
             "Content-Type": "application/json",
             "Authorization": f"Bearer {forged}",
             "X-Company-Token": forged,
+            **TLS_HEADERS,
         },
     )
     response = connection.getresponse()
@@ -628,6 +634,66 @@ def _proxy_mapping(data_dir: Path) -> dict[str, Any]:
         connection.row_factory = sqlite3.Row
         row = connection.execute("SELECT * FROM dify_login_mappings").fetchone()
     return dict(row)
+
+
+def test_a_plaintext_entry_never_receives_company_credentials(stack) -> None:
+    """明文入口不收口令 —— 而且**一个请求都不往公司发**。
+
+    10008 是 `listen 10008` 的明文入口、公网可达，与 TLS 入口共用同一份 nginx 配置。
+    实测（2026-10-19）：向它 POST 一个明文 password，代理照常 AES 加密后发往公司。
+
+    那句「公司密码不得经明文 HTTP 传输」原本只看**配置字符串**
+    （`AIOPS_LOGIN_PROXY_PUBLIC_ORIGIN` 是不是 https），证明不了**这一次**请求从哪进来。
+
+    ## 判据为什么钉"公司零调用"
+
+    只看状态码不够：代理完全可以在拒掉之前先把口令发出去（那就是真正的泄漏）。
+    `_FakeCompany.calls` 里有任何一条，就说明口令已经离开过这台机器。
+    """
+    _FakeCompany.calls = []
+    base = stack[0]
+    connection = http.client.HTTPConnection(base.removeprefix("http://"))
+    connection.request(
+        "POST",
+        LOGIN_ROUTE,
+        body=json.dumps(
+            {"username": "zhang", "password": "plaintext-secret", "randomStr": "abc123", "code": "1234"}
+        ),
+        headers={"Content-Type": "application/json"},  # 没有 X-Forwarded-Proto ⇒ 明文
+    )
+    response = connection.getresponse()
+    payload = json.loads(response.read())
+    connection.close()
+
+    assert response.status == 400, f"明文入口收下了口令：{response.status} {payload}"
+    assert "https" in payload["reason"], payload["reason"]
+    assert _FakeCompany.calls == [], f"口令已经发往公司：{_FakeCompany.calls}"
+
+
+def test_a_plain_http_forwarded_proto_is_also_refused(stack) -> None:
+    """nginx 明说 `http` 时同样拒绝 —— 判据是"是不是 https"，不是"头在不在"。"""
+    status, payload, _ = _call(
+        stack[0],
+        LOGIN_ROUTE,
+        {"username": "zhang", "password": "pw", "randomStr": "abc123", "code": "1234"},
+        headers={"X-Forwarded-Proto": "http"},
+    )
+    assert status == 400
+    assert _FakeCompany.calls == []
+
+
+def test_the_captcha_is_still_relayed_over_plain_http(stack) -> None:
+    """验证码取图不受影响：它不含凭据，而且登录页在揭示错误之前就要先把图显示出来。
+
+    拦住它只会让明文入口的页面变成一张空白图，把"你走错了入口"藏起来。
+    """
+    connection = http.client.HTTPConnection(stack[0].removeprefix("http://"))
+    connection.request("GET", f"{CAPTCHA_ROUTE}?randomStr=abc123")
+    response = connection.getresponse()
+    body = response.read()
+    connection.close()
+    assert response.status == 200
+    assert body.startswith(b"\xff\xd8\xff")
 
 
 def test_repeated_failures_trigger_backoff(stack) -> None:
