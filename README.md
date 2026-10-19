@@ -515,6 +515,7 @@ qa-plan.md                QA 用例（158 个用例 ID，含环境/前置/数据
 | 加一项持久化 | `gateway_store.py` 等 | 在既有 SQLite 文件上建自己的表 | 迁移到 PostgreSQL 时需一并处理 |
 | 改输出语言行为 | `i18n.py`（判定）、`answer_language.py`（应用） | 挂到目标回答面的**定稿点** | 判定只有一处；不要用提示词兜底（ADR-0007 明文禁止） |
 | 调安全上限 | `config.SafetySettings` | 构造时校验区间 | 上限是设计的一部分，放宽需说明理由 |
+| 调知识库检索深度 | `gateway_config.GatewayServerSettings` | `AIOPS_GATEWAY_KB_SEARCH_MAX_RESULTS`（1..20，默认 **10**） | **一个口径，两条路径共用**：客户问答/宣传卡片与 Dify 适配路由都读它，Dify 另对它传来的 `top_k` 封顶。默认 10 是实测定的（图片型知识库的媒体块坐落在第 5~10 名），见 [docs/gateway.md](docs/gateway.md) 与 ADR 0049 |
 | 改 AFK 交付流程 | `.sandcastle/policy-check.mjs`（先读它的断言） | workflow + policy check 同步改 | policy check 是静态断言，改 workflow 不改它会让 CI 红 |
 
 ---
