@@ -279,14 +279,14 @@ def stack(tmp_path: Path):
 
 
 def _call(
-    base: str, path: str, body: dict[str, Any] | None = None
+    base: str, path: str, body: dict[str, Any] | None = None, *, headers: dict[str, str] | None = None
 ) -> tuple[int, dict[str, Any], dict[str, str]]:
     connection = http.client.HTTPConnection(base.removeprefix("http://"))
     connection.request(
         "POST",
         path,
         body=json.dumps(body or {}),
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", **(headers or {})},
     )
     response = connection.getresponse()
     payload = json.loads(response.read())
@@ -298,10 +298,12 @@ def _call(
     return response.status, payload, headers
 
 
-def _login(base: str, **overrides: Any) -> tuple[int, dict[str, Any], dict[str, str]]:
+def _login(
+    base: str, *, headers: dict[str, str] | None = None, **overrides: Any
+) -> tuple[int, dict[str, Any], dict[str, str]]:
     body = {"username": "zhang", "password": "pw", "randomStr": "abc123", "code": "1234"}
     body.update(overrides)
-    return _call(base, LOGIN_ROUTE, body)
+    return _call(base, LOGIN_ROUTE, body, headers=headers)
 
 
 def _logout(base: str) -> tuple[int, dict[str, Any], dict[str, str]]:
@@ -549,6 +551,90 @@ def test_repeated_failures_trigger_backoff(stack) -> None:
     statuses = [_login(stack[0])[0] for _ in range(4)]
     assert 429 in statuses, f"没有触发退避：{statuses}"
     assert statuses[-1] == 429
+
+
+def test_one_operator_failing_does_not_lock_out_everyone_else(stack) -> None:
+    """退避的来源是**运营的地址**，不是 nginx 的。
+
+    这个进程只监听回环，所有浏览器都经宿主 nginx 进来 ⇒ ``client_address`` 恒为
+    127.0.0.1。按它计数等于把来源这一维抹平成常量（2026-10-19 在 41 实测：6 个不同
+    用户名连续失败，第 5 个起全部 429，窗口 300 秒）。nginx 已经设了 ``X-Real-IP``。
+
+    判据：同一条代理连接、6 个**不同**来源地址各失败一次 ⇒ 没有一个被 429。
+    """
+    _FakeCompany.fail_login = "password"
+    statuses = [
+        _login(stack[0], headers={"X-Real-IP": f"203.0.113.{n}"}, username=f"operator-{n}")[0]
+        for n in range(1, 7)
+    ]
+    assert 429 not in statuses, f"一个运营的失败锁死了其他人：{statuses}"
+
+
+def test_the_same_source_still_backs_off(stack) -> None:
+    """反向判据：**同一个**来源连续失败仍然退避 —— 修来源判定不能把退避本身修没了。"""
+    _FakeCompany.fail_login = "password"
+    statuses = [_login(stack[0], headers={"X-Real-IP": "203.0.113.9"}, username="zhang")[0] for _ in range(4)]
+    assert statuses[-1] == 429, f"同一来源却没有退避：{statuses}"
+
+
+def test_rotating_both_keys_still_hits_a_global_cap(stack) -> None:
+    """伪造来源头 + 轮换用户名**不能换来无限次尝试**。
+
+    Devin 在 PR #851 指出：能连上 10119 的本机进程同样能自带 `X-Real-IP`，轮换它加
+    轮换用户名就能同时绕过 `src:` 与 `acct:` 两条键。应用层分不出"这是 nginx 还是本机
+    进程"，所以不假装能分 —— 另记一条与来源无关的全局键，把收益封在倍数以内。
+
+    fixture 的阈值是 3、倍数 5 ⇒ 第 16 次必然 429。
+    """
+    _FakeCompany.fail_login = "password"
+    statuses = [
+        _login(stack[0], headers={"X-Real-IP": f"198.51.100.{n}"}, username=f"rotating-{n}")[0]
+        for n in range(1, 20)
+    ]
+    assert 429 in statuses, f"轮换两条键就绕过了退避：{statuses}"
+    assert statuses[:15] == [403] * 15, statuses[:15]
+
+
+def test_the_same_account_backs_off_across_sources(stack) -> None:
+    """账号这个键仍然跨来源生效：换 IP 不能换来无限次猜同一个账号。"""
+    _FakeCompany.fail_login = "password"
+    statuses = [
+        _login(stack[0], headers={"X-Real-IP": f"203.0.113.{n}"}, username="zhang")[0] for n in range(1, 5)
+    ]
+    assert statuses[-1] == 429, f"换来源就绕过了账号退避：{statuses}"
+
+
+def test_a_logged_rejection_carries_a_result_code_and_no_secrets(stack, caplog) -> None:
+    """失败必须留下**可据以行动**的一行：结果码 + 来源，且不含任何凭据。
+
+    这一条来自一次真实的排查代价：2026-10-19 的那次 502 在 journal 里只有
+    ``"POST /__aiops/login" 502``，八种成因无法区分，只能靠回放重建。
+    """
+    _FakeCompany.fail_login = "password"
+    with caplog.at_level("WARNING", logger="aiops.dify_login_proxy.server"):
+        _login(stack[0], password="super-secret-pw", headers={"X-Real-IP": "203.0.113.77"})
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("COMPANY_LOGIN_REJECTED" in m for m in messages), messages
+    assert any("203.0.113.77" in m for m in messages), "来源没进日志，退避问题无从查起"
+    joined = "\n".join(messages)
+    assert "super-secret-pw" not in joined
+    assert "1234" not in joined, "验证码字符不得进日志"
+
+
+def test_a_forged_x_forwarded_for_does_not_change_the_source(stack) -> None:
+    """只认 ``X-Real-IP``（nginx 覆盖写），不认客户端可自带的 ``X-Forwarded-For``。
+
+    采信后者等于给"换一个假 IP 绕过退避"开门。
+
+    判据方向要看清：6 个**不同**用户名、每个带一个新的 ``X-Forwarded-For``。若那个头
+    被当成了来源，6 次都会是 403（各自独立）；实际应当仍然是同一个来源 ⇒ 第 4 次起 429。
+    """
+    _FakeCompany.fail_login = "password"
+    statuses = [
+        _login(stack[0], headers={"X-Forwarded-For": f"198.51.100.{n}"}, username=f"spoof-{n}")[0]
+        for n in range(1, 7)
+    ]
+    assert 429 in statuses, f"X-Forwarded-For 被当成了来源，退避被绕过：{statuses}"
 
 
 # --------------------------------------------------------------------------- #
