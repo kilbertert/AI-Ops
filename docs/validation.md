@@ -97,11 +97,76 @@ commit）。**修触发点，不是修受害者。**
   不证明 APK 的渲染结果。
 - 会话与凭据**未打印**；两处 rollout 引用只给文件名与行号，不给会话值。
 
+## 2026-10-19 · 管家端「客户案例」恢复：41 数据侧补绑定 + 构造身份经真实 HTTP 出卡
+
+**范围**：PR #844（`948ba7ff`）部署到 41 之后的**真实端到端**。本节取代本节下面那份
+"代码侧判据与 41 只读复核"的**结论部分**（那份写的是"数据侧尚未执行、点击仍是空卡"，
+现在数据侧已执行）。代码侧判据与只读复核仍然有效，见下。
+
+⚠️ **本节标题里的「出卡」指的是「网关经真实 HTTP 交付了正确的卡片」，
+不是「管家端 App 已验收」** —— 点击由一个**构造的身份**发起（见 §三），
+不经过 App。不要把本节读成 App 端到端已通过。
+
+### 一、41 数据侧变更（**写生产库**，2026-10-19）
+
+先说清楚**为什么需要写**：平台行给可见性、租户行给绑定。平台行被代码明确禁止携带
+`target_agent_version`，所以在建租户覆盖行之前，`_promo_route` 在 `operator` 入口恒得
+`(None, "case_exploration")` ⇒ 点击是一张诚实但空的卡（`retrieval_status=unavailable`）。
+
+- **备份**（§3.1-bis 的 WAL 安全流程，停服务 + 校验 + trap 恢复）：
+  `/var/backups/aiops-41/shortcuts-20261019-161407/gateway.db`，表数 18，副本内 `operator`
+  平台三行齐全。
+- **写入**（走生产代码路径 `ShortcutStore.create` + `ShortcutManager.publish`，非直接插库）：
+  租户 `1942105476598861824` / `operator` / `case_exploration`，`sort_order=10`，11 语，
+  `target_agent_version=agt_ed443cae10ac4ba78c81b9d1b43fd91d#v3`。
+  行 id `sct_c6189f730ecc425ba313fc2c9a13f368`，`draft` rev1 → `published` rev2。
+- **写前预演**（无 `--apply`）与**写前解析校验**都跑过：`#v2`/`#v3` 均经
+  `select_promo_agent` 解析成功（版本号与 KB `8701c742…` 一致）。选 **v3** 而非 `consumer`
+  侧钉的 `#v2`：两版唯一差异是 v3 要求四个段落标题用请求语言书写（见 ADR-0050）。
+- **`consumer` 侧未动**：`list_effective` 复核，其 `case_exploration` 仍是 `#v2`。
+
+### 二、判据（逐条实测，非推断）
+
+| 判据 | 期望 | 实测 |
+|---|---|---|
+| 部署版本 | 含 `948ba7f` | `/health` = `0.1.0+948ba7ff5de2` ✅ |
+| `operator` 入口列出三条 | `case_exploration` 在列、`sort_order=10` | `['case_exploration','smart_diagnosis','operations_review']` ✅ |
+| `list_effective` 租户合并 | 租户行覆盖平台行、带 target | `operator`: `#v3`；`consumer`: `#v2`（未变） ✅ |
+| `_promo_route`（线上代码 + 线上库） | operator 解析出目标 | `('agt_ed443cae…#v3', 'case_exploration')` ✅ |
+| **点击路径真出卡** | `202` → `completed` → **`found`** + 内容块 | `retrieval_status=found`，14 块 = 4×text + **3×image** + 7×reference ✅ |
+| 无凭据 | 401 | 见下"边界" |
+
+点击路径是**真实 HTTP**：带 `X-Business-Entry: operator` 调 `172.18.0.1:8788`
+（网关宿主侧地址），`POST /v1/assistant/questions`
+`{"question":"我想看看客户案例","shortcut_code":"case_exploration"}` → `202 type=qa`
+→ 轮询 `/v1/assistant/questions/<qa_id>` 至终态。
+
+### 三、据实（边界）
+
+- **身份是构造的，不是真人**：自签 HS256 令牌走 company-jwt-key 本地通道
+  （41 是 company-parity 模式，`TRUST_PAYLOAD` 未设 ⇒ 不验签，判据是来源密钥那一跳），
+  声明用了一个**明确带"演示"字样**的 `type='1'` 测试账号
+  （`username=ceshi演示`，租户内 UPMS 真实存在）。与 runbook §5.7 是同一条已披露形状。
+  **这不证明真人的登录链路**（那条仍卡在 App 侧不发 `third_session`，见 §6 既有边界）。
+- **上一次尝试用了一个虚构的 B 端 id**，得到 `503 PLATFORM_UNAVAILABLE operator identity
+  is unavailable` —— 这正是"身份必须在 UPMS 里真实存在"的判据；记下来是因为它证明
+  该面不是"编个 id 就能进"。
+- **`case_exploration` 点击路径写了 1 条 `assistant_questions` 行**（`completed`）。
+  这是验收的固有写入，与 §5.6/§5.7 同类，量级可接受。
+- **内容质量不在本节判据内**：卡片出了图，但素材是重卡流量平台的销售物料，
+  是否适合运维语境是**产品问题**（ADR-0050 §后果已记）。
+- **只覆盖了一个租户，另一个 operator 入口租户仍会拿到空卡**：41 的日志里有**两个**租户
+  走过 `operator` 入口 —— `1942105476598861824`（本次绑定，575 次）与
+  `1961353704485687296`（27 次）。后者在 `agents` 表里**一条智能体都没有**，
+  所以它看到按钮、点下去仍是 `unavailable` 空卡。这是**该租户没有宣传素材**，
+  不是本次改动漏绑；本节不声称"所有 operator 租户都能出卡"。
+- **前端硬编码按钮**这条既有偏差未变：本节证明网关交付了正确的卡片，不证明 APK 渲染。
+
 ## 2026-10-19 · 恢复管家端「客户案例」：代码侧判据与 41 只读复核
 
 **范围**：`shortcut_lifecycle._BUNDLED_SHORTCUTS["operator"]` 加回 `case_exploration`
-（反转 ADR-0031 / #803）。本记录只覆盖**代码侧**与**只读复核**；41 的数据侧变更
-（补租户覆盖行）**尚未执行**，本节不声称管家端客户案例已可用。
+（反转 ADR-0031 / #803）。**本节记录写于数据侧变更之前**，其中"数据侧尚未执行、
+点击仍是空卡"的结论已被上一节取代；代码侧判据与只读复核仍然有效。
 
 ### 一、自动化判据
 
@@ -143,8 +208,8 @@ __platform__ / operator / operations_review  published  sort=30  rev=2  v1
 
 ### 三、据实（边界）
 
-- **未做真实点击验收**：本节没有在 41 上发起过 `POST /v1/assistant/questions`。
-  出卡与否的判据（`retrieval_status=found` + 内容块）**待数据侧补完后另记**。
+- ~~**未做真实点击验收**~~ **已于 2026-10-19 补做**：见本节上方「41 数据侧补绑定 +
+  真机点击出卡」，`retrieval_status=found` + 3 个 image 块。
 - **不覆盖内容质量**：即便补上绑定，卡片文案来自重卡流量平台的销售物料，
   是否适合运维语境是**产品问题**，自动化判据无法回答，本节不作评价。
 - **前端渲染不在本仓**：管家端前端硬编码按钮这条既有偏差未变（见
