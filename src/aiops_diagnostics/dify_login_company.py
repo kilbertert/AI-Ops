@@ -56,6 +56,14 @@ _MSG_PASSWORD_ERROR = "用户名或密码错误"
 _MSG_LOCKED = "账号已被锁定"
 _MSG_NOT_EXISTS = "账号不存在"
 
+#: 公司网关**验证码过滤器**的拒绝状态码（2026-10-19 实测）。
+#:
+#: 这是本模块唯一需要声明额外拒绝状态码的地方：那个过滤器在网关里先于密码校验，
+#: 三个分支（不能为空 / 失效 / 错误）**都回 428**，语义区分只在响应体的 `msg` 里。
+#: 通用默认 `{401, 403}` 对它不成立，于是 428 会被归成「上游不可用」—— 运营输错一次
+#: 验证码，看到的是"公司登录服务暂时不可用"。**用户输入问题被说成上游故障。**
+COMPANY_CAPTCHA_REJECTED_STATUS = 428
+
 
 @dataclass(frozen=True, slots=True)
 class CompanyIdentity:
@@ -83,9 +91,32 @@ class CompanyAuthSettings:
     basic_auth: str = field(repr=False, default="")
 
 
-def _mapping() -> ErrorMapping:
+def _mapping(*, login: bool) -> ErrorMapping:
+    """公司的两类端点各有自己的拒绝语义，所以映射分两份。
+
+    ``login=True``（``/upms/token/login``）：这个端点上的凭据拒绝是**运营的输入问题**
+    —— 密码错、账号停用、验证码不对 —— 必须变成 :class:`CompanyLoginRejected`，
+    运营才会看到"你输错了"而不是"服务挂了"。
+
+    **只把 428 认作这一类。** 401/403 在登录端点上不是"运营输错了"：实测（2026-10-19）
+    密码错是 **200 + `code:-1000`**，而 401/403 在这条链上意味着**网关层面**的问题
+    （我们配置的 Basic 凭据、来源限制、网关自身的拒绝）。把它说成"你密码错了"会让运维
+    去查一个根本不存在的输错 —— 这与本条要修的缺陷是同一类错误，只是方向相反。
+
+    ``login=False``（``/upms/user/info``）：这里失败不是运营的输入问题，是我们刚拿到
+    的那枚令牌不被接受 —— 那是我们自己的链路问题，一律 ``CompanyUnreachable``。
+    """
+
     def rejected(failure: HttpFailure) -> Exception:
         return CompanyUnreachable("COMPANY_AUTH_REJECTED", f"公司侧拒绝了凭据：{failure.detail}")
+
+    def login_rejected(failure: HttpFailure) -> Exception:
+        reason = _reason_from_message(failure.detail)
+        if reason == _FALLBACK_REJECTION:
+            # 走到这里只可能是 428 —— 它只由验证码过滤器产生。报文读不出来也仍然是
+            # "验证码这一关没过"，不要说成一句无处可查的中性拒因。
+            reason = "验证码不正确或已失效，请重新获取"
+        return CompanyLoginRejected("COMPANY_LOGIN_REJECTED", reason)
 
     def unavailable(failure: HttpFailure) -> Exception:
         return CompanyUnreachable("COMPANY_UNAVAILABLE", f"公司侧不可用：{failure.detail}")
@@ -94,11 +125,16 @@ def _mapping() -> ErrorMapping:
         return CompanyUnreachable("COMPANY_MALFORMED", f"公司侧返回无法解释：{failure.detail}")
 
     return ErrorMapping(
-        auth_rejected=rejected,
+        # 428 = 验证码过滤器（只有登录端点有它）。401/403 有意**不**在这里声明：
+        # 它们在本链路上是网关的问题，走 http_error → CompanyUnreachable。
+        auth_rejected=login_rejected if login else rejected,
         http_error=unavailable,
         unavailable=unavailable,
         invalid_body=malformed,
         invalid_envelope=malformed,
+        auth_rejected_statuses=(
+            frozenset({COMPANY_CAPTCHA_REJECTED_STATUS}) if login else frozenset({401, 403})
+        ),
     )
 
 
@@ -164,7 +200,7 @@ def company_login(
             headers=headers,
             timeout=settings.timeout,
         ),
-        mapping=_mapping(),
+        mapping=_mapping(login=True),
         envelope=_raw_envelope,
     )
     if not isinstance(payload, dict):
@@ -187,23 +223,34 @@ def company_login(
     )
 
 
-def _login_reason(payload: dict[str, Any]) -> str:
+#: 判不出具体成因时的中性拒因。**不猜**：猜错会把运营引向错误的方向。
+_FALLBACK_REJECTION = "公司登录被拒绝"
+
+
+def _reason_from_message(message: str) -> str:
     """把公司的中文提示转成"运营看得懂、且不泄漏内部"的一句话。
 
     三种成因（密码错 / 锁定 / 不存在）在源码里是三个 i18n 键，但**渲染文案来自
     Nacos/i18n 服务**，仓里读不到确切字符串。于是这里按"能不能从 msg 判出来"分流，
     判不出就回一句中性的拒因 —— 猜错文案会把运营引向错误的方向。
+
+    验证码那条**排在密码之前**判：公司的验证码过滤器先于密码校验，所以"验证码错误"
+    的报文里不会出现"密码"；反过来若哪天两者同时出现，那是验证码这一关没过，不是密码。
     """
-    msg = _company_message(payload)
-    if _MSG_PASSWORD_ERROR in msg or "密码" in msg:
-        return "公司账号或密码不正确"
-    if "锁定" in msg or "冻结" in msg:
-        return "公司账号已被锁定或冻结，请联系公司管理员"
-    if "不存在" in msg:
-        return "公司账号不存在"
-    if "验证码" in msg:
+    if "验证码" in message:
         return "验证码不正确或已失效，请重新获取"
-    return "公司登录被拒绝"
+    if _MSG_PASSWORD_ERROR in message or "密码" in message:
+        return "公司账号或密码不正确"
+    if "锁定" in message or "冻结" in message:
+        return "公司账号已被锁定或冻结，请联系公司管理员"
+    if "不存在" in message:
+        return "公司账号不存在"
+    return _FALLBACK_REJECTION
+
+
+def _login_reason(payload: dict[str, Any]) -> str:
+    """登录失败（200 + ``code``）时的拒因。见 :func:`_reason_from_message`。"""
+    return _reason_from_message(_company_message(payload))
 
 
 def _first_str(*values: Any) -> str:
@@ -247,7 +294,7 @@ def _user_info(settings: CompanyAuthSettings, identity: CompanyIdentity) -> dict
             },
             timeout=settings.timeout,
         ),
-        mapping=_mapping(),
+        mapping=_mapping(login=False),
         envelope=_raw_envelope,
     )
     if not isinstance(payload, dict):
