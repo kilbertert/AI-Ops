@@ -170,16 +170,22 @@ class ProxyHandler(BaseHTTPRequestHandler):
         # 解开（此时 length 为 None），定长取它解析后的整数值（无效/负数会被置 None）。
         bodyless = self.command == "HEAD" or response.status in (204, 304)
         declared_length = None if bodyless else response.length
+        # RFC 9110 §7.6.1：Connection 的每个选项也命名了本跳专属字段。
+        # 合并所有 Connection 行，大小写无关；端到端字段仍原样交给下游。
+        hop_headers = {
+            "connection",
+            "transfer-encoding",
+            "trailer",
+            "keep-alive",
+            "proxy-connection",
+            "te",
+            "upgrade",
+        }
+        for value in response.headers.get_all("Connection") or []:
+            hop_headers.update(option.strip().lower() for option in value.split(",") if option.strip())
         for name, value in response.getheaders():
             # 逐跳头由本进程重新表达；Server/Date 是单例，原样再发一次就成了重复头。
-            if name.lower() in {
-                "transfer-encoding",
-                "connection",
-                "content-length",
-                "server",
-                "date",
-                "trailer",
-            }:
+            if name.lower() in hop_headers or name.lower() in {"content-length", "server", "date"}:
                 continue
             self.send_header(name, value)
         # 有长度就声明长度（非流式客户端不必靠连接关闭判定结束）；没有长度就按
