@@ -366,8 +366,9 @@ nginx 在**同一个 location 内**对同名头**不做覆盖**，而是**两条
 - `gateway.env`：`AIOPS_GATEWAY_COMPANY_JWT_KEY` + `AIOPS_GATEWAY_COMPANY_SOURCE_KEY` 已配，
   `CHECK_TOKEN_URL` 留空。
 - 实测：客户端 200（不变）/ 管家端 `operator` 200 `count=2` / 非法入口 401 / 订单检测 `platform=operator`。
-- **仍开放**：验收账号无店铺绑定 ⇒ 站点范围 Ø；客户案例 `target_agent_version: null`；
-  密钥仍是公司源码默认值（启动日志每次告警）。
+- **仍开放**：验收账号无店铺绑定 ⇒ 站点范围 Ø；密钥仍是公司源码默认值（启动日志每次告警）。
+  （原列在此的「客户案例 `target_agent_version: null`」已于 2026-10-19 解除：
+  该租户的 `operator` 覆盖行已建并绑定 `#v3`，点击实测 `found` —— 见 §3.1-septies。）
 
 ### 里程碑记录
 
@@ -1058,6 +1059,10 @@ ssh aiops-41 'curl -sS -H "Authorization: Bearer <服务令牌>" -H "X-Business-
 **用途**：反转 §3.1-sexies 那次移除。**2026-10-19 的实例**：管家端恢复「客户案例」
 （`case_exploration`）—— 见 ADR-0050 与 `frontend-operator-handoff.md` §3.2。
 
+✅ **本节已于 2026-10-19 在 41 实做过一次**（租户 `1942105476598861824`，绑定
+`agt_ed443cae…#v3`），备份 `/var/backups/aiops-41/shortcuts-20261019-161407`，
+点击路径实测 `retrieval_status=found`。证据见 `../validation.md` 同名节。
+
 **关键区别：恢复比移除少一步，多另一条完全不同的步骤。**
 
 | | 种子（代码） | 数据行 |
@@ -1072,6 +1077,11 @@ __platform__        / operator / case_exploration   published  target=NULL   ←
 1942105476598861824 / operator / case_exploration   （不存在）                ← 缺的就是这行
 1942105476598861824 / consumer / case_exploration   published  target=agt_ed443cae…#v2  ← 对照
 ```
+
+> ⚠️ **上表是 2026-10-19 写库「之前」的快照，不是现在。** 那次执行之后
+> `1942105476598861824 / operator / case_exploration` 已存在且 `published`
+> （`target=…`、`sort_order=10`）。**再执行本例时先按同样方式只读查一遍当前形状**，
+> 不要拿这张表当现状去判断"还缺什么"；若那一行已在且绑定一致，脚本会直接跳过。
 
 🔴 **`__platform__` 那行本来就是 `published`，所以按钮早就在入口里返回了 —— 不要再去动它。**
 移除那次从没执行过 `disable`，所以库里没有东西需要"翻回来"。恢复出卡缺的**只有租户覆盖行**。
