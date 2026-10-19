@@ -141,7 +141,20 @@ ssh yidong-36 'curl -sS --interface 127.0.0.2 -o /dev/null -w "%{http_code}\n" \
 代理自己的 TLS 闸门对任何缺这个头的请求都返 400，与 nginx 是新是旧无关。必须带上那个
 伪造头、并**从非回环接口发**，才有区分性。
 
-（`curl --interface 127.0.0.2` 依赖本机有 127.0.0.2；若没有，用另一台内网机器发同样的请求。）
+**若 36 上没有 `127.0.0.2`**（先 `ssh yidong-36 'curl --interface 127.0.0.2 -s -o /dev/null -w "%{http_code}" http://127.0.0.1:10008/__aiops/login'`
+看它是否报 `bind failed`），**换一台机器从外部打 36 的公网 `:10008`**，不要再 `ssh`：
+
+```bash
+# 在**另一台**机器上执行（不是 36），目标写 36 的地址
+curl -sS -o /dev/null -w "%{http_code}\n" \
+  -X POST http://36.156.159.175:10008/__aiops/login \
+  -H "Content-Type: application/json" -H "X-Forwarded-Proto: https" \
+  -d "{\"username\":\"x\",\"password\":\"y\",\"randomStr\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"code\":\"zzzz\"}"
+# 期望 400
+```
+
+这条的区分性来自**对端不是回环**（是那台外部机器），同样成立。注意三点：
+不要 `ssh yidong-36`、不要 `--interface 127.0.0.2`、目标必须是 36 的地址而非 `127.0.0.1`。
 
 ## 5. 重启与版本核对
 
