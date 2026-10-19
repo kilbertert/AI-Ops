@@ -165,6 +165,17 @@ class _Backoff:
 
     进程内存的粗略实现（重启即清零）：这一层的目的是挡住持续猜密码，不是做计费级限流；
     真要跨重启，映射表旁边加一列即可，现在不需要。
+
+    ## 来源必须是**运营的地址**，不是 nginx 的
+
+    这个进程只监听回环，所有请求都经宿主 nginx 同源反代进来，因此
+    ``self.client_address`` **恒为 127.0.0.1**。按它计数等于把"来源"这个维度
+    抹平成常量：一个运营连错五次，**所有运营**在窗口内都被 429（2026-10-19 实测）。
+    nginx 已经在三处设了 ``X-Real-IP``，读它即可。
+
+    只认 nginx 设的那一个头，不认 ``X-Forwarded-For``：后者是**调用方可以自带的**，
+    采信它等于给"换一个假 IP 绕过退避"开一道门。而 ``X-Real-IP`` 在 nginx 配置里是
+    ``proxy_set_header`` **覆盖写**，客户端送什么都会被替换掉。
     """
 
     def __init__(self, threshold: int, window_seconds: int) -> None:
@@ -260,7 +271,7 @@ class LoginProxyHandler(BaseHTTPRequestHandler):
         if not username or not password or not random_str or not code:
             self._json(400, {"ok": False, "reason": "账号、密码、验证码均不能为空"})
             return
-        source = self.client_address[0] if self.client_address else "unknown"
+        source = self._client_source()
         account_key = f"acct:{username.lower()}"
         if self.backoff.too_many(f"src:{source}", account_key):
             self._json(429, {"ok": False, "reason": "尝试过于频繁，请稍后再试"})
@@ -272,6 +283,12 @@ class LoginProxyHandler(BaseHTTPRequestHandler):
         except (CompanyLoginRejected, CompanyUnreachable, PermissionDenied, DifyLoginError) as exc:
             self.backoff.record_failure(f"src:{source}", account_key)
             status = 403 if isinstance(exc, (CompanyLoginRejected, PermissionDenied)) else 502
+            _LOGGER.warning(
+                "dify-login: rejected code=%s status=%s source=%s",
+                getattr(exc, "code", "UNKNOWN"),
+                status,
+                source,
+            )
             # 只回一句面向运营的原因；**不回显**异常里的上游细节。
             self._json(status, {"ok": False, "reason": _public_reason(exc)})
             return
@@ -366,6 +383,19 @@ class LoginProxyHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     # ── 工具 ────────────────────────────────────────────────────────────────
+
+    def _client_source(self) -> str:
+        """这次登录的**来源**，用于退避计数。
+
+        优先 ``X-Real-IP``（宿主 nginx 覆盖写的那一个），缺失才回落到对端地址。
+        回环对端**不是**来源 —— 所有浏览器都从它进来；只在直连（无 nginx）时才用，
+        那时它就是真的来源。
+        """
+        forwarded = (self.headers.get("X-Real-IP") or "").strip()
+        if forwarded:
+            return forwarded[:64]
+        address = self.client_address[0] if self.client_address else ""
+        return address or "unknown"
 
     def _read_json(self) -> dict[str, Any]:
         length_header = self.headers.get("Content-Length")
