@@ -1,3 +1,33 @@
+## 2026-10-19 · 41 端到端：知识库回答产出图片与视频（真实会话）
+
+**范围**：`commandcode` 上游 + 适配器 `drop_null_object_fields` 修复后的真实会话取证。
+
+### 一、取证结果（41，逐条实测）
+
+| 问题 | 状态 | retrieval | 内容块 | media 取字节 |
+|---|---|---|---|---|
+| `你好` | completed | `not_found` | `['text']` | — |
+| `我想看客户案例` | completed | `found` | text×4 + **image** + reference×5 | **200，81,813 B** |
+| `新加坡无人电动巴士有视频吗` | completed | `found` | text×5 + **video** + reference | **200，82,348,365 B** |
+
+`media blocks=2  served_200=2`，Range 请求返回 **206**（1024 B 分段）。
+即：知识库检索命中了带图/带视频的文档，模型把资源包成 media 块，
+**且签名 URL 真的取得到字节** —— 「APK 里能回图片和视频」在网关侧端到端成立。
+
+### 二、这次取证同时也是媒体 403 的验收
+
+media 一律 403 的根因是 `_is_active` 要求「签发 grant 的版本 == 当前 published_version」，
+而宣传 agent 已于 2026-09-20 从 v2 发布到 v3（ADR 0046）。本次两组 media 都是**宣传路径**
+产出的，全部 200 —— 修复在真实流量上生效。
+
+### 三、据实（边界）
+
+- **前端渲染不在本仓**：本记录证明网关交付了正确的 blocks 且 URL 可下载，
+  不证明 APK 的渲染结果。
+- **baoyun 仍欠费**（¥0.0046），备用 provider 目前不可用；服务靠 commandcode 单跑。
+- 本次为验证做过一次**临时部署**（手工 scp 适配器文件到 41），与 PR 代码一致；
+  合并后由 CD 以制品覆盖，不会残留手工改动。
+
 ## 2026-10-19 · 适配器的 `reasoning: null` 兼容：本地用例与上游实测
 
 **范围**：`responses_adapter.drop_null_reasoning`。
