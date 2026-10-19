@@ -1,3 +1,77 @@
+## 2026-10-19 · 执行配置守卫：最终契约与本地合成验收（节点侧）
+
+**范围**：节点侧守卫 —— 真实节点装配在**调用模型之前**拒绝配置漂移。不改 Gateway、
+不写运行记录、不访问 41、不接真实供应商；**本地合成结果不证明执行配置已冻结**。
+
+### 一、被测方与最终契约
+
+被测方是**真实节点装配**（`--network=none` 容器、非 root、锁定依赖 113 份 jar、锁定 JDK 镜像）：
+Spring 上下文按节点方式扫描 `com.trendpower.aiops.node`（`GuardedChatModelFactory` 与
+`GovernedToolRuntime` 的 `@Primary` 接管是真的接管）；模型经真实
+`OpenAiCompatibleChatModelAdapter` 造出真实 `OpenAiChatModel`；工具经真实
+`DefaultToolCallingManager` + `ToolCallingAdvisor` 执行；驱动入口是
+`ChatSessionRuntime.execute`（节点收到派发后真正走的流式路径）。**唯一替身是上游**：
+本机 loopback 上自写的合成 HTTP 服务，记录真实收到的 `model`/`tools`/选项/路径/消息。
+
+期望值按「哪一面真的能被观测到」分发，并且**构造之后仍可被改写的面都在最终边界每轮复查**：
+
+| 面 | 校验什么 | 谁校验 | 频率 |
+|---|---|---|---|
+| 派发体的 `ModelConfig` | provider / adapter / 模型标识 / endpoint | `GuardedChatModelFactory.requireRunConfig` | 发模型**之前**一次（同步） |
+| 构造出来的模型 | 模型标识、选项旋钮 | `GuardedChatModelFactory.build` | 构造期 |
+| 解析出来的工具集合 | name + description + schema | `GovernedToolRuntime.resolve` | 解析期 |
+| **最终 `Prompt` 的有效选项** | 模型标识、选项旋钮、工具定义、baseUrl、**请求扩展为空** | `GuardedChatModel.ExecGuard.verifyPrompt` | **每次 call/stream** |
+| 最终 `Prompt` 的消息 | **完整** system 消息集合、消息形状 | 同上 | 每次 call/stream |
+
+两条比较语义是逐字的：**模型标识按完整字符串比较**（不做任何前缀截断），
+**数值按数值比较**（`0.2` 与 `0.20` 自然等价，`0.2000001` 判为不同）。固定配置模式下
+**非空 `extraBody` 一律拒绝**（它会被按原样合并进上行体、覆盖已检查的字段）。
+
+### 二、结果
+
+- **启用守卫 198 PASS / 0 FAIL**；**反向控制 108 PASS / 22 RED-AS-EXPECTED / 0 FAIL**。
+- 流式工具循环正例：上游收到 `model=synthetic-model`、`tools=1`、`temperature=0.2`、
+  路径 `/v1/chat/completions`；受控工具执行 **1 次**、模型 **2 次**（真实工具循环）、
+  业务领取 **1 次**、`streamRequests=2`。
+- 被拒的漂移（首个上游请求前拒绝，双计数为 0）：
+  消息改写/追加、模型标识（含仅差命名空间前缀）、endpoint、数值选项（含六位小数内的差异）、
+  同名工具的 description 与 schema、请求扩展 `extraBody.model` / `extraBody.messages`、
+  历史/媒体/记忆输入、动态 MCP。其中构造后的模型、数值、同名工具定义及请求扩展改写，
+  分别覆盖 call 与真实订阅的 stream。
+- **工具循环中途的漂移**（真实流式）：第一轮的模型调用、工具执行与业务领取计数**全部保留**，
+  第二轮被拒（`chatCalls` 不再增长、`kind=SYSTEM_PROMPT`），没有 final 文本。
+- **启用即不可降级**：清单缺失/权限过宽/为空/非法 JSON/schema 不受支持/`history_policy`
+  非 `none` 一律在装配阶段拒绝。
+- **两个 run 交错**：两个不同的合法 `run_id`；放行点钉在「上游记录到 A 的第一次 chat 请求」，
+  所以顺序确定。归属由业务替身记录的 **claim 路径**直接核对：只有 runA，
+  不出现 runB 或第三个身份；A `+2/+1/+1` 且拿到 final，B 在首个上游请求前被拒、贡献 0。
+- **反向控制**：同一份夹具、同一批漂移，**不指向清单**时改动确实到达上游
+  （`EVIL-SYSTEM`、`evil-model`、`temperature=0.9`、被替换的消息），并**只在真的观测到**
+  被改写的值时才记 `RED-AS-EXPECTED`；正对照变体不参与敏感性断言。
+- **脚本失败传播**：`java … | tee` 会把非零退出码换成 `tee` 的 0。现在不把 java 放进管道、
+  容器内 `pipefail`、每步先查退出码再要求出现 `STATUS=PASS`；自检递归调用**真实阶段**并注入
+  故意失败（`M3NODE_SELFTEST=1`），断言：故意失败程序自身的标记出现、Java 确实以 **17** 退出、
+  对应阶段与顶层都非零且不以整体成功收尾。把 `run_phase` 改成 `return 0` 会让自检**转红**。
+
+### 三、复跑
+
+```bash
+export M3NODE_JDK_IMAGE='eclipse-temurin:21-jdk@sha256:<pinned>'
+export M3NODE_DEPS=/path/to/locked-artifacts
+tools/m2_close/m3node/run.sh    # 正常验收；缺锁定依赖即非零退出
+
+# 保留上面的两个依赖环境变量，再运行失败传播自检：
+M3NODE_SELFTEST=1 tools/m2_close/m3node/run.sh
+```
+
+### 四、据实（边界）
+
+- **本地合成**：不证明真实供应商、真实模型、真实订单、生产装配或 `agent_version`。
+- **Java 守卫的证据与 Python CI 是两回事**：普通 Python 套件不代表节点侧守卫已验证；
+  本轮 Python 无源码变更，沿用既有证据（**2921 passed / 9 skipped**，基线变化后需重新评估）。
+- `spex spec lint` 的 2 条 warning 是继承的既有漂移（`agent_contracts.py`、`agent_engine.py`），
+  未在本片顺手修复。
+- Gateway 签发与持久化、`agent_version` 回执**未做**（后续切片）。
 ## 2026-10-19 · CI 竞态：fixture 的 `git commit` 会留一个后台 maintenance 子进程
 
 **现象**：纯文档 PR #843 的 `verify` 第一次红，报

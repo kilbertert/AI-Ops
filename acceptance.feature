@@ -3003,3 +3003,185 @@ Feature: 受控模型出口的响应完整性
       When 客户端经受控出口读取响应
       Then 这些字段与已知逐跳字段均不传给下游
       And 端到端字段、状态码、完整响应体与干净 TLS 收尾均保留
+
+Feature: 执行配置身份——一次委派关联到被受控路径验证过的配置（M3-RUN-CONFIG-01）
+  期望值只来自**受控部署产物**预置的执行配置清单，不来自任何一次运行的首次观测。
+  版本号只表示我方可控的执行配置，不承诺供应商权重冻结，也不是远程硬件证明。
+  本片不改变 M2 的对外契约：未启用清单时行为与今天逐字一致。
+
+  # 本 Feature 的 EXECCFG-01..09 是**整条链路**的需求，含 Gateway 签发/持久化与回执字段，
+  # 那一半留给下一片（M3-RUN-CONFIG 的 Gateway 侧）。本片只交付**节点侧**：见文件末尾
+  # 「执行配置守卫在真实节点装配前生效（M3-NODE-GUARD-01）」。需求不删减，只标注归属。
+
+  Rule: 期望来自清单，实际来自真实消费对象
+
+    Scenario: EXECCFG-01 正常一轮：版本与 run 关联，模型调用次数符合工具循环、业务读取一次
+      Given 已启用执行配置清单，且清单与节点实际配置一致
+      When 一次已授权的委派完成
+      Then 回执里的 agent_version 等于清单的内容身份（原始字节 sha256）
+      And agent_version_gap 为空，且该身份与 run_id 一同落在记录里
+      And 模型调用次数等于该轮明确工具循环的次数（无工具调用时为 1，发生一次工具调用后回填时为 2）
+      And 业务调用计数为 1
+
+    Scenario: EXECCFG-02 系统提示词漂移在模型调用之前失败
+      Given 清单声明的 system_prompt 与实际被消费的系统提示词不同
+      When 该次委派执行
+      Then 显式失败（不是返回替身、不是空工具集合）
+      And 模型调用计数为 0 且业务调用计数为 0
+      And 记录终态为失败并写明原因，不产生可用的版本回执
+
+    Scenario: EXECCFG-03 模型与有效选项漂移同样拒绝
+      Given 清单声明的 modelKey / adapterKey / providerKey / 受支持的 configJson 选项
+       与实际构造出的模型不同
+      When 该次委派执行
+      Then 显式失败，且模型调用计数与业务调用计数均为 0
+
+    Scenario: EXECCFG-04 工具漂移（定义与开关）同样拒绝
+      Given 清单声明的有效工具名/描述/输入 schema/相关开关与实际注册的不一致
+      When 该次委派执行
+      Then 显式失败，且模型调用计数与业务调用计数均为 0
+      And 不以「返回空工具集合」冒充拒绝
+
+    Scenario: EXECCFG-05 customizer 之后的改写不能绕过校验
+      Given 一个在受控 customizer 之后仍然修改 prompt 或模型选项的扩展
+      When 该次委派执行
+      Then 校验发生在真实消费对象上，改写被拒绝
+      And 模型调用计数与业务调用计数均为 0
+
+    Scenario: EXECCFG-06 跨 run 与错版本拿不到数据
+      Given 一条已签发且带期望身份的记录，以及另一个节点或另一份清单身份
+      When 用不匹配的身份领取，或用另一个 run 的凭据
+      Then 拒绝且不释放任何快照；错凭据与兄弟节点不影响他人的记录
+
+  Rule: 启用即不可降级
+
+    Scenario: EXECCFG-07 启用后缺清单不降级
+      Given 已启用执行配置清单，但清单文件缺失或权限过宽
+      When 服务启动或签发一次委派
+      Then 显式失败，不退回未验证模式，不产出 agent_version 为 null 的成功回执
+
+    Scenario: EXECCFG-08 旧库升级与旧回执保真
+      Given 一个迁移前建立的库与其中的历史记录
+      When 执行迁移并再次读取历史记录
+      Then 迁移幂等、旧记录、快照与时间戳保持不变
+      And 历史回执仍为 agent_version=null 且 agent_version_gap=not_wired（不回填）
+
+  Rule: 固定模式下的输入约束
+
+    Scenario: EXECCFG-09 无历史模式的输入被显式约束
+      Given 本片固定为无历史模式
+      When 执行配置声明了非 none 的历史策略，或运行输入携带历史/媒体/记忆
+      Then 策略取值不被支持时拒绝清单；运行输入按固定模式被显式限制而非默默带入
+
+Feature: 执行配置守卫在真实节点装配前生效（M3-NODE-GUARD-01）
+  守卫落在**真实节点**的模型构造与最终调用边界上：真实 Spring AI 装配、真实
+  OpenAI-compatible 适配器、真实工具管理器与受控工具，上游是本机合成 HTTP 服务。
+  默认不启用：没有配置清单时行为与今天逐字一致；一旦启用，清单缺失、无效或不一致
+  一律显式失败，**不退回**未验证模式。本 Feature 不涉及 Gateway、不写运行记录。
+
+  Rule: 清单是期望的唯一来源
+
+    Scenario: EXECCFG-NODE-01 未配置清单时行为与今天逐字一致
+      Given 节点没有配置执行配置清单
+      When 一次委派在本地合成上游上完成
+      Then 正常完成且不启用任何守卫
+      And 与框架默认构造走同一段代码路径
+
+    Scenario: EXECCFG-NODE-02 启用后清单缺失或不合格则拒绝，且不降级
+      Given 节点配置了清单路径
+      When 清单文件缺失、不可读、权限过宽、不是合法 JSON、schema 不受支持、
+        history_policy 不是 none，或未声明受控工具
+      Then 节点在装配阶段显式失败
+      And 不退回未验证模式，也不产出「未启用」的成功结果
+
+  Rule: 漂移在真实消费对象上被发现
+
+    Scenario: EXECCFG-NODE-03 首个模型请求之前的漂移：两条计数都为 0
+      Given 已启用清单，且派发体或运行输入与清单不一致
+        （system 消息被改/追加、模型标识、endpoint、有效选项、工具名或同名工具的
+        描述与输入 schema、历史/媒体/记忆输入）
+      When 该次委派执行
+      Then 显式失败且不产生任何模型调用与业务调用
+      And 合成上游与业务计数均为 0
+
+    Scenario: EXECCFG-NODE-04 工具循环中途的漂移：保留已发生的、拦住下一次
+      Given 一次委派已发生真实的工具循环调用
+      When 之后的某一轮出现配置漂移
+      Then 显式失败，已发生的调用如实保留在计数里
+      And 阻止的是**下一次**上游调用，不把已发生的调用抹去
+
+    Scenario: EXECCFG-NODE-05 受控构造之后的改写同样被拒
+      Given 一个在受控构造之后才生效的 customizer 或 advisor 改写 prompt 或模型选项
+      When 该次委派执行
+      Then 校验发生在真实消费对象上，改写被拒绝
+      And 模型调用计数为 0
+
+    Scenario: EXECCFG-NODE-06 两个 run 交错执行不串配置
+      Given 两次委派在同一进程内交错执行，各自持有自己的期望
+      When 两者的模型调用与工具调用交替发生
+      Then 两次都按各自的清单判定
+      And 不共享任何跨 run 的可变状态
+
+  Rule: stream 才是节点真实使用的路径
+
+    Scenario: EXECCFG-NODE-07 流式工具循环正例
+      Given 已启用清单，且清单与节点实际配置一致
+      When 一次委派按节点真实使用的方式流式执行并真实订阅
+      Then 上游收到受控工具定义与清单声明的模型与选项
+      And 受控业务工具恰好执行一次，且 run_id 与本次委派一致
+      And 模型调用次数等于该轮工具循环的实际次数（不预设为 1）
+
+    Scenario: EXECCFG-NODE-09 构造之后的 advisor 改写有效模型与选项被拒
+      Given 已启用清单，且一个 order 晚于工具调用 advisor 的真实 advisor 在最终调用前改写
+        有效模型标识或有效选项
+      When 该次委派分别以 call 与真实订阅的 stream 执行
+      Then 两条路径都在首个上游请求之前显式失败
+      And 模型调用计数与业务调用计数均为 0
+
+    Scenario: EXECCFG-NODE-10 同名工具的 description/schema 在构造之后被改写同样被拒
+      Given 已启用清单，且上述 advisor 保持工具名不变、只改描述或输入 schema
+      When 该次委派分别以 call 与真实订阅的 stream 执行
+      Then 两条路径都显式失败，且模型调用计数与业务调用计数均为 0
+
+    Scenario: EXECCFG-NODE-11 未接守卫时同样的改写必须真的到达上游
+      Given 同一份夹具但不指向清单
+      When 上述四种改写分别执行
+      Then 上游确实收到被改写的值（据此记为「先红」），而不是默认记红
+
+    Scenario: EXECCFG-NODE-13 请求扩展（extraBody）在固定配置模式下被拒
+      Given 已启用清单，且构造之后的改写把消息或模型放进请求扩展字段
+      When 该次委派分别以 call 与真实订阅的 stream 执行
+      Then 两条路径都显式失败，且模型调用计数与业务调用计数均为 0
+      And 不以「只检查类型化字段后继续放行覆盖层」冒充拒绝
+
+    Scenario: EXECCFG-NODE-14 模型标识按完整字符串比较，不做有损归一化
+      Given 已启用清单，且构造之后的改写把模型标识改成只差一个命名空间前缀的名字
+      When 该次委派执行
+      Then 显式失败，且上游未收到任何请求
+
+    Scenario: EXECCFG-NODE-15 数值按数值比较，不先格式化
+      Given 已启用清单，且构造之后的改写把某个数值选项改成六位小数内看不出差别的值
+      When 该次委派执行
+      Then 显式失败；而同一数值的不同书写（如 0.2 与 0.20）视为相同
+
+    Scenario: EXECCFG-NODE-16 工具循环中途的漂移在真实流式路径上被拒
+      Given 已启用清单，一次委派已在流式路径上完成第一轮工具调用
+      When 第二轮发生配置漂移
+      Then 第一轮的模型调用、工具执行与业务领取计数全部保留
+      And 第二轮的模型调用被拒绝，上游不再收到新的请求
+
+    Scenario: EXECCFG-NODE-17 脚本自检必须覆盖真实执行路径
+      Given 一个被改成「永远成功」的阶段函数
+      When 自检注入真实阶段的故意失败
+      Then 自检转红，而不是照旧报 PASS
+
+    Scenario: EXECCFG-NODE-12 验收脚本的失败必须逐级传播
+      Given 一个故意失败的验收进程
+      When 顶层脚本运行启用守卫与反向控制两条路径
+      Then 顶层以非零退出，且不打印整体验收成功
+
+    Scenario: EXECCFG-NODE-08 流式路径上的漂移同样被拒
+      Given 已启用清单
+      When 在流式路径上触发配置漂移
+      Then 显式失败且上游调用计数为 0
+      And 不以「返回空工具集合」或「返回替身」冒充拒绝

@@ -5,6 +5,23 @@ All notable changes to this project are documented in this file.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- 执行节点接入执行配置守卫（M3-NODE-GUARD-01，节点侧）：受控清单
+  （`AIOPS_EXEC_MANIFEST`，默认不配置）为期望值的唯一来源，身份＝清单原始字节 sha256；
+  启用后在**调用模型之前**按面拒绝配置漂移 —— 派发体的 provider/adapter/模型/endpoint、
+  构造出来的模型的标识与有效选项、解析出来的工具集合的 name+description+schema、
+  最终 `Prompt` 的完整 system 集合与消息形状（固定无历史模式）。
+  清单缺失/权限过宽/非法 JSON/schema 不受支持/`history_policy` 非 `none` 在装配阶段拒绝，
+  不降级；未启用时行为与今天逐字一致。
+- 节点侧合成验收工具 `tools/m2_close/m3node/`（`run.sh` 单命令复跑；缺锁定依赖即非零退出），
+  用真实适配器 + 真实工具管理器 + 本机合成上游驱动真实装配的**流式**工具循环。
+
+### Notes
+- 本条目为节点侧实现，**未接 Gateway**：签发时固定期望、领取时对照并持久化、
+  `agent_version` 回执留到下一片。本地合成结果不证明真实供应商、真实订单或生产装配。
+
 ## [0.1.0] - 2026-10-18
 
 ### Added
