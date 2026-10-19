@@ -30,19 +30,22 @@ import java.util.Map;
  * </ul>
  */
 @Component
-class ControlledChargingStatusTool implements ToolCallback {
+public class ControlledChargingStatusTool implements ToolCallback {
 
-    static final String TOOL_NAME = "charging_status_snapshot";
+    public static final String TOOL_NAME = "charging_status_snapshot";
 
-    private static final String INPUT_SCHEMA = """
-            {"type":"object","properties":{},"required":[],"additionalProperties":false}
-            """;
+    /** 受控工具的描述与输入 schema 是**发布契约**的一部分：清单声明的就是这两个值。 */
+    public static final String DESCRIPTION =
+            "Return the charging status snapshot for the order already authorized for this "
+                    + "conversation. Takes no arguments; the order and identity come from the Gateway.";
+
+    public static final String SCHEMA =
+            "{\"type\":\"object\",\"properties\":{},\"required\":[],\"additionalProperties\":false}";
 
     private static final ToolDefinition DEFINITION = DefaultToolDefinition.builder()
             .name(TOOL_NAME)
-            .description("Return the charging status snapshot for the order already authorized for this "
-                    + "conversation. Takes no arguments; the order and identity come from the Gateway.")
-            .inputSchema(INPUT_SCHEMA)
+            .description(DESCRIPTION)
+            .inputSchema(SCHEMA)
             .build();
 
     private final String gatewayBaseUrl;
@@ -119,6 +122,7 @@ class ControlledChargingStatusTool implements ToolCallback {
     public String toString() {
         return TOOL_NAME;
     }
+
 
     private static String runId(ToolContext toolContext) {
         if (toolContext == null) {

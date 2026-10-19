@@ -99,3 +99,7 @@ docs/*.docx
 # 生成，不是仓库内容。见 tools/README.md 的 `m2_close/` 一节。
 tools/m2_close/node/target/
 *.gateway-output.log
+
+# M3-NODE-GUARD-01 合成验收的构建产物
+tools/m2_close/m3node/build/
+tools/m2_close/node/target/

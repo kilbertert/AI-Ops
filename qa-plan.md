@@ -2029,3 +2029,109 @@ TLS 出口发请求并读取到 EOF；夹具关闭服务与连接，临时目录
 追溯：上述编号对应 `acceptance.feature` 与出口专项的同类回归；专项共 21 项通过。
 旧实现的 curl 56 与旧候选的单字符截断均已复现，详见 `docs/validation.md` 的 M2-LIVE-06。
 本地结果不证明真实供应商、App、公网启用、模型质量或版本冻结已验收。
+
+## EXECCFG-BOUNDARY 最终调用边界拒绝改写（本地合成，M3-FINAL-BOUNDARY-01）
+
+环境与数据：Linux 开发机、锁定节点依赖（spring-ai 2.0.0）、无网络容器、本地合成计数 `ChatModel`；
+不接真实供应商、不访问生产。被测方为真实框架类（`ChatClient`/`ChatClientCustomizer`/`CallAdvisor`/
+`ToolCallingChatOptions`/`Prompt`/`SystemMessage`），只有下游模型是合成替身。
+**本轮为局部可行性证据：无 Gateway 迁移、无运行绑定完成。**
+
+| 编号 | 前提与动作 | 预期可观察结果 | 本轮结果 |
+|---|---|---|---|
+| EXECCFG-BOUNDARY-01 | 真实 customizer 改 model 标识 | 拒绝，类型 MODEL，下游调用计数 0 | 部分通过（仅 call） |
+| EXECCFG-BOUNDARY-02 | 真实 advisor 改 SystemMessage | 拒绝，类型 SYSTEM_PROMPT，下游计数 0 | 部分通过（仅 call） |
+| EXECCFG-BOUNDARY-03 | 真实 advisor 注入工具（仅**工具名集合**由 `[]` 变 `[evil]`） | 拒绝，类型 TOOLS，下游计数 0 | 通过（名字集合层）；同名工具的 description/schema 变化**未测**，由下一节 EXECCFG-TOOL-03/04 补上并**纠正**为"在模型边界可拒、在 manager 层不可拒" |
+| EXECCFG-BOUNDARY-03b | 真实 advisor **追加第二条** system 消息（绕过只读首条的守卫） | 拒绝，类型 SYSTEM_PROMPT，下游计数 0 | 通过（红→绿：先复现反例再修好） |
+| EXECCFG-BOUNDARY-04 | 同上四项但守卫关闭 | 改动到达下游（调用计数 1，观察值为被改后的值） | 通过 |
+| EXECCFG-BOUNDARY-05 | 无改动的正对照，call 与 stream 各一次 | 各调用下游 1 次，stream 真执行并收到内容 | 通过（stream 仅此正例） |
+| EXECCFG-BOUNDARY-06 | stream 路径的拒绝（注入改写后订阅） | 拒绝且下游计数 0 | **BLOCKED 未测** |
+| EXECCFG-BOUNDARY-07 | 真实 ToolCallingAdvisor/Manager + 一次真实 tool call | 业务工具调用计数与拒绝行为可观察 | **已由 EXECCFG-TOOL-05 补上**：`modelCalls=2, toolExec=1`、final 与 `ToolContext.run_id` 可读；本行的 `toolExec=0` 是当时 fixture 未接 `getOptions()` 所致，不是平台事实 |
+| EXECCFG-BOUNDARY-08 | 供应商最终配置（endpoint/key/默认选项）纳入冻结 | 边界所验即供应商所见 | **BLOCKED 未测**（wrapper 所见 Prompt options 不等于下游模型最终配置） |
+
+追溯：对应 `acceptance.feature` 的 EXECCFG-05 前半句与"模型调用计数为 0"。
+**未覆盖**：EXECCFG-05 的"业务调用计数为 0"；完整配置冻结（endpoint/key/默认选项须另绑受控模型构造）；
+stream 侧拒绝。本地结果不证明真实模型、真实供应商或端到端已验收。
+
+## EXECCFG-TOOLLAYER 有效工具定义的消费层与同名漂移（本地合成，M3-TOOL-BOUNDARY-01）
+
+环境与数据：同上一节（锁定依赖、无网络容器、合成 ChatModel 为唯一替身）；真实框架类为
+`ChatClient`、`ToolCallingAdvisor`、`DefaultToolCallingManager`、`ToolCallback`。
+执行方式与原始输出见私有实验记录。**本轮无 Gateway 迁移、无运行绑定。**
+
+| 编号 | 前提与动作 | 预期可观察结果 | 本轮结果 |
+|---|---|---|---|
+| EXECCFG-TOOL-01 | 真实 manager 对携带工具回调的 `ToolCallingChatOptions` 解析定义 | 解析出 name+description+schema | 通过（manager 可解析；但**不足以**拦截同名漂移）|
+| EXECCFG-TOOL-02 | 守卫关闭时，同名工具仅改 description 的定义进入 manager | 漂移定义被解析出来（差异控制） | 通过 |
+| EXECCFG-TOOL-03 | 守卫开启时，同名工具仅改 description | 拒绝，类型 TOOL_DEFINITION，模型 0 调用 | 通过 |
+| EXECCFG-TOOL-04 | 守卫开启时，同名工具仅改 schema | 拒绝，类型 TOOL_DEFINITION，模型 0 调用 | 通过 |
+| EXECCFG-TOOL-05 | 真实 ToolCallingAdvisor/Manager 驱动一次真实 tool call 并执行本地工具 | 业务工具执行恰好一次，得到 final | 通过：`modelCalls=2, toolExec=1`，final 与 `ToolContext.run_id` 可读（模型次数按实测为 2）|
+| EXECCFG-TOOL-06 | 上游模型 override `getOptions()` 后，模型边界观察有效工具定义 | 工具定义（name+description+schema）在模型边界可读 | 通过：`DefaultToolCallingChatOptions`，含完整定义；未 override 时为普通 `DefaultChatOptions`（fixture 差异，不是框架丢弃）|
+| EXECCFG-TOOL-07 | 真实适配器把工具回调转成上游 tools 字段 | 上游请求带工具定义 | **未做/未证** |
+| EXECCFG-TOOL-08 | 同名工具仅改 description / schema，分别只开模型边界守卫或只开 manager 守卫 | 定位可靠守卫层 | 模型边界**能拒**（模型 0 调用）；**manager 层不能拒**（FINDING）；两层全关的对照显示漂移到达模型并执行 |
+
+追溯：对应 `acceptance.feature` 的 EXECCFG-03/04 与 EXECCFG-05。**未覆盖**：工具执行全链、
+`run_id` 于 `ToolContext` 的实际读取、stream、`returnDirect`、真实适配器与供应商。
+上一节 EXECCFG-BOUNDARY-03 的"仅名字集合"结论由本节**纠正**：同名工具的 description/schema
+漂移**能**在最终 ChatModel 边界被拒（EXECCFG-TOOL-03/04），而 **manager 层不能拒**（FINDING，
+EXECCFG-TOOL-08）。此前"已在 manager 层可拒"的写法与实测相反，已更正。
+
+## EXECCFG-NODE 守卫接入真实节点装配（本地合成，M3-NODE-GUARD-01）
+
+环境与数据：Linux 开发机、锁定节点依赖（spring-ai 2.0.0，113 份 jar）、无网络容器、非 root；
+上游＝本机 loopback 上自写的合成 HTTP 服务（记录收到的 model、tools、允许的选项与请求路径）；
+业务领取端＝本机计数 HTTP 替身。被测方为**真实节点装配**：真实
+`OpenAiCompatibleChatModelAdapter` → 真实 `OpenAiChatModel`、真实 `DefaultToolCallingManager`、
+`ToolCallingAdvisor`、`ClientChatExecutor`、`ChatSessionRuntime`、`GovernedToolRuntime`、
+`ControlledChargingStatusTool`、本片新增的 `GuardedChatModelFactory`/`GuardedChatModel`。
+不接真实供应商、不访问 41、不读生产凭据。**本片不改 Gateway、不写运行记录。**
+
+执行方式：仓库内 `tools/m2_close/m3node/`（无私有绝对路径；缺依赖时非零退出，不跳过后报通过）；
+原始输出留在私有目录。单命令复跑见该目录 README。
+
+| 编号 | 前提与动作 | 预期可观察结果 | 本轮结果 |
+|---|---|---|---|
+| EXECCFG-NODE-01 | 不配置清单，走同一段真实装配 | 行为与框架默认一致，守卫不介入 | 通过：`enabled=false`，同一夹具下正常完成（反向控制也随之记 `RED-AS-EXPECTED`） |
+| EXECCFG-NODE-02 | 配置清单但文件缺失/权限过宽/非法 JSON/schema 不支持/`history_policy` 非 `none` | 装配阶段显式失败，不降级 | 通过 6/6：`reject-missing`、`reject-loosened`、`reject-empty`、`reject-schema`、`reject-history`、`reject-not-json` |
+| EXECCFG-NODE-03 | 首个模型请求前分别制造 system、模型、endpoint、选项、工具（含同名描述/schema）、历史/媒体/记忆/MCP 漂移 | 显式失败，上游与业务计数**均为 0** | 通过 10/10：每例 kind 与预期一致，`chatCalls=0`、`claimCalls=0` |
+| EXECCFG-NODE-04 | 工具循环中途制造漂移（order 晚于 `ToolCallingAdvisor` 的 advisor 追加 system 消息） | 显式失败；已发生的调用保留，拦住的是下一次 | 通过：第一轮真实发生（`chatCalls=1`、工具执行 1 次），第二轮被拒（仍 `chatCalls=1`） |
+| EXECCFG-NODE-05 | 受控构造之后由 customizer/advisor 改写（`advisor-appends-system`，以及 R1 新增的 model/temperature/同名工具描述/同名工具 schema，call+stream 各一份） | 拒绝，上游计数 0 | 通过：8 条 `advisor-*` 全部 kind 匹配、`chatCalls=0`、`claimCalls=0`、工具执行 0；**旧实现全放行**（见 R1 节） |
+| EXECCFG-NODE-06 | 两个 run 交错执行（两个不同合法 `run_id` + `CyclicBarrier` 确定性同时进入） | 各按自己的清单判定，无跨 run 状态 | **通过**：A `chatCalls+2`、工具 `+1`、业务 `+1` 且拿到 final；B 在首个上游请求前被拒（`MODEL`）、贡献 0 |
+| EXECCFG-NODE-07 | 流式正例：真实订阅、真实工具循环 | 上游收到受控工具定义与清单模型/选项；受控工具执行 1 次；模型次数按实测 | 通过：`model=synthetic-model`、`tools=1`、`temperature=0.2`、路径 `/v1/chat/completions`、工具执行 1 次、模型 2 次、业务领取 1 次、`streamRequests=2`（工具走框架默认管理器执行，未做任何装配覆盖） |
+| EXECCFG-NODE-08 | 流式路径上的漂移 | 拒绝，上游计数 0 | 通过：所有负例都走同一条流式驱动（`ChatSessionRuntime.execute`） |
+| EXECCFG-NODE-R1 | 每条负例配"守卫关闭"对照 | 同一改动**确实到达**上游，且守卫启用时那条断言在未接守卫时**确实不成立** | 通过：`EVIL-SYSTEM` / `evil-model` / `temperature=0.9` / 多出的用户消息都到达上游，并逐条记 `RED-AS-EXPECTED` |
+
+### R1 追加（M3-NODE-GUARD-R1）
+
+| 编号 | 前提与动作 | 预期可观察结果 | 本轮结果 |
+|---|---|---|---|
+| EXECCFG-NODE-09 | 构造之后、最终调用之前，由 order 晚于 `ToolCallingAdvisor` 的真实 advisor 改写有效 `model` | 拒绝 `MODEL`，上游/业务计数 0 | 通过（call 与 stream 各一）|
+| EXECCFG-NODE-10 | 同上改写 `temperature` | 拒绝 `OPTIONS`，上游/业务计数 0 | 通过（call 与 stream 各一）|
+| EXECCFG-NODE-11 | 同上改写同名工具的 description | 拒绝 `TOOLS`，上游/业务计数 0 | 通过（call 与 stream 各一）|
+| EXECCFG-NODE-12 | 同上改写同名工具的 input schema | 拒绝 `TOOLS`，上游/业务计数 0 | 通过（call 与 stream 各一）|
+| EXECCFG-NODE-13 | 旧实现（`b5c21d8`）跑 09–12 | 全部失败 | 通过（红→绿成立）|
+| EXECCFG-NODE-14 | 去掉最终边界的有效选项复查（定向变异） | 09–12 立刻转红 | 通过 |
+| EXECCFG-NODE-15 | `run.sh` 故意失败的类（`M3NODE_SELFTEST=both`） | 顶层非零退出且不打印整体成功 | 通过（guarded 与 reverse 两条路径）|
+
+### R2 追加（M3-NODE-GUARD-R2）
+
+| 编号 | 前提与动作 | 预期可观察结果 | 本轮结果 |
+|---|---|---|---|
+| EXECCFG-NODE-16 | 构造之后改 `extraBody.model=evil-model` | 拒绝 `EXTRA_BODY`，上游/业务计数 0 | 通过（call 与 stream 各一）|
+| EXECCFG-NODE-17 | 构造之后改 `extraBody.messages` 替换消息 | 拒绝 `EXTRA_BODY`，计数 0 | 通过（call 与 stream 各一）|
+| EXECCFG-NODE-18 | 模型改为 `evil/synthetic-model`（仅前缀不同） | 拒绝 `MODEL`，计数 0 | 通过（call 与 stream 各一）|
+| EXECCFG-NODE-19 | `temperature=0.2000001` | 拒绝 `OPTIONS`，计数 0 | 通过（call 与 stream 各一）|
+| EXECCFG-NODE-20 | 旧 `f0817c9` 跑 16–19 | 全部失败且上游收到被改写值 | 通过（红→绿成立）|
+| EXECCFG-NODE-21 | 流式中途漂移（真实订阅） | 第一轮计数保留、第二轮拒绝 | 通过（模型/工具/业务各 1 保留）|
+| EXECCFG-NODE-22 | 两 run 交错，以 A 的第一次上游请求为放行点 | A 完整成功、B 拒绝且贡献 0 | 通过 |
+| EXECCFG-NODE-23 | 自检注入真实阶段失败（`M3NODE_SELFTEST=1`） | 顶层非零退出且不以成功收尾 | 通过（guarded 与 reverse）|
+| EXECCFG-NODE-24 | 把 `run_phase` 改成 `return 0` 的变异 | 自检必须转红 | 通过（转红）|
+
+追溯：对应 `acceptance.feature` 的 `EXECCFG-NODE-01..08`。复跑：
+`M3NODE_JDK_IMAGE=… M3NODE_DEPS=… tools/m2_close/m3node/run.sh`（缺依赖即非零退出）。
+
+**未覆盖**：Gateway 签发与持久化、`agent_version` 回执、真实供应商与真实模型、
+真实业务订单、生产节点与生产节点身份；`EXECCFG-NODE-02` 的「未声明工具/未声明 system」
+两条未单独列例（同一处 parse 分支，由 `reject-empty` 与清单必填字段覆盖）；
+`baseUrl` 运行时改写**不会改道**（模型自带 baseUrl 优先），故该条只作纵深防御。
+本地合成结果不证明 M3 已验收。
