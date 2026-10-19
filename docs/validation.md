@@ -40,13 +40,19 @@
 
 ### 二、结果
 
-- 本片用例 **32 passed**（原 21 + 新增 11）；委托执行 55、记录存储全部未回归；
-  全量 **2986 passed / 9 skipped / 0 failed**。
-- **红→绿**：新增的 9 条断言在**修复前的实现**上全部失败（`drift_is_terminal` 3 条、
-  `terminal_refusal_committed` 3 条、回执 3 条），修复后全绿。
-- **跨语言清单对照**：`tools/m2_close/m3node/manifest_parity.py` 用 11 份样本同时喂给
-  Python 与 Java 的**真实加载器**，11/11 结论一致、接受样例的身份逐字相同。把 Python 侧
-  的必填判据退回修复前的写法，对照立刻报出 4 处不一致（`FAIL`）—— 判据本身是被钉住的。
+- 本片用例 **43 passed**；委托执行 55、记录存储全部未回归；
+  全量 **2998 passed / 9 skipped / 0 failed**。
+- **红→绿**（两轮，各自对旧实现）：R1 的 9 条断言（`drift_is_terminal` 3 条、
+  终检拒绝 3 条、回执 3 条）在修复前全部失败；FINAL 的 6 条最终核对断言（`refuse` 与
+  `expires` 各三条路径）在修好终态后、补有效期前同样全部失败 —— 把 `confirm_exec_config`
+  里那次过期收敛删掉，`expires-*` 三条立刻转红，三条正对照与三条 `refuse` 不变。
+- **有效期边界**：到期前一刻 200、**恰好到期** 403 `expired`/`ttl_elapsed`、明显过期 403。
+- **跨语言清单对照**：`tools/m2_close/m3node/manifest_parity.py` 用
+  `manifest_samples_expected.json` 里**独立声明**的期望判定（11 份语义样本 + 2 个权限负例），
+  两端真实加载器逐条比对，13/13 符合期望、正例 `accept-normal` 身份逐字相同。
+  **不是「两侧一致就算过」**：把语义样本以 0644 落盘（Git 检出模式）复现 Codex 的条件，
+  脚本判 `FAIL`（正例两端都被拒 + 「no positive sample was accepted」），不再空转通过。
+  把 Python 侧的必填判据退回修复前的写法，同样报 4 处不一致。
 - **真实 HTTP**（`tools/m2_close/m3node/verify_gateway_exec_config.py`，一次性数据根，
   真 `create_gateway_app` + 回环 CPMS/平台替身，平台替身扮演节点回呼领取入口）：
   一致 ⇒ 领取 200 且记录 `matched`、回执 `agent_version` 等于清单身份；

@@ -12,11 +12,12 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
 
-from aiops_diagnostics import execution_manifest
+from aiops_diagnostics import agent_runs, execution_manifest
 from aiops_diagnostics.agent_runs import AgentRun, AgentRunStore
 
 NODE_TOKEN = "node-token-alpha-0123456789"
@@ -611,58 +612,228 @@ def _prepare_succeeded(fixture):
     return run_id
 
 
+def _drive_to_release_path(fixture, release_path: str) -> str:
+    """把记录推到某条**放行路径**的起点，并返回目标 run_id。
+
+    ``race_release`` 的关键是：记录仍是 ``issued``、本请求的 ``claim()`` **真的**输给
+    另一个领取者，另一个领取者随后把这条记录跑成功。早先这里先把记录置成 ``succeeded``，
+    于是路由直接走「成功快照重试」分支，``claim()`` 一次都没被调用 —— 「覆盖了三条路径」
+    只是参数名在宣称，``monkeypatch.setattr(store, "claim", lambda _: False)`` 也从未生效。
+    """
+    run_id = _run_id(fixture)
+    if release_path == "first_claim":
+        return run_id
+    if release_path == "retry_release":
+        return _prepare_succeeded(fixture)
+    # race_release：记录**必须仍是 issued**。竞争发生在 claim() 那一瞬间（见下面的
+    # `lose_claim_to_other_request`）：本请求读到的还是 issued，要 claim 时另一个领取者
+    # 已经领走并跑成功。事先把它置成 succeeded 会让路由直接走「成功快照重试」，
+    # claim() 一次都不会被调用 —— 那正是上一版用例宣称覆盖、实际没覆盖的路径。
+    return run_id
+
+
+def _install_final_gate_probe(fixture, monkeypatch, *, event, calls, before=None):
+    """在**真正的最终核对点**（第二次 `confirm_exec_config`）注入一次事件。
+
+    为什么是「第二次」：领取路径上有两次核对 —— 领取前的预检与放行前的终检。
+    只挂「下一次」会落在预检里，测到的不是最终放行。
+
+    ``before`` 会被填上**最终事务执行前**那一刻的 `exec_config_state`：之后要用它证明
+    终态没有被最终事务改写。在请求之外采这一份是不对的 —— 那时预检还没发生。
+    """
+    store = fixture["app"].state.gateway.agent_run_store
+    original = store.confirm_exec_config
+    expires = fixture["store"].get(_run_id(fixture)).expires_at
+
+    def at_final_gate(run_id_, observed, **kwargs):
+        calls.append(run_id_)
+        if len(calls) == 2:
+            if before is not None:
+                before.append(_rows(fixture["store"])[0]["exec_config_state"])
+            if event == "refuse":
+                # 另一个已认证请求把记录拒绝成终态。
+                if not fixture["store"].fail(run_id_, "exec_config_drift"):
+                    fixture["store"].refuse(run_id_, "exec_config_drift")
+            else:
+                # 让时间在最终事务之前越过到期点。
+                monkeypatch.setattr(agent_runs, "_now", lambda: expires + timedelta(seconds=1))
+        return original(run_id_, observed, **kwargs)
+
+    monkeypatch.setattr(store, "confirm_exec_config", at_final_gate)
+    return expires
+
+
 @pytest.mark.parametrize("release_path", ["first_claim", "retry_release", "race_release"])
-def test_terminal_refusal_committed_before_final_check_blocks_the_snapshot(
-    tmp_path, monkeypatch, release_path
-):
-    """**本请求的最终检查/写入之前，另一个请求的拒绝已提交** ⇒ 不得返回快照。
+@pytest.mark.parametrize("event", ["refuse", "expires"])
+def test_final_gate_blocks_refused_or_expired_records(tmp_path, monkeypatch, release_path, event):
+    """**本请求的最终核对之前**，别的请求拒绝、或时间越过到期点 ⇒ 不返回快照。
 
-    复现材料里这条返回 200 + 业务正文，而库里已是 ``failed``/``exec_config_drift``、
-    还被写成 ``exec_config_state=matched`` —— 因为核对与放行依据的是两次独立读，
-    且写入是无条件 UPDATE。现在三者同处一个写事务，且返回的是写入之后读到的记录。
-
-    三条放行路径各测一次：首次领取、成功快照重试、领取竞争失败后读到的那条成功结果。
+    复现材料里这两件事都返回了 ``200 + ORDER-A``，而记录已经是 ``failed``/``succeeded``。
+    三条放行路径各跑一遍，并断言：
+    - 核对确实发生了**两次**（预检 + 终检），且我们注入的是第二次；
+    - ``race_release`` 的 ``claim()`` 确实被调用并输掉（真实竞争，不是参数名）。
     """
     manifest = _write_manifest(tmp_path)
     identity = _identity(manifest)
     fixture = _fixture(tmp_path, monkeypatch, manifest=manifest)
     assert _delegate(fixture).status_code == 502
-    run_id = _run_id(fixture)
-
-    if release_path == "first_claim":
-        # 仍在 issued：走首次领取那一跳。
-        target = run_id
-    elif release_path == "retry_release":
-        # 已成功：重试走 success snapshot 的重试放行。
-        target = _prepare_succeeded(fixture)
-    else:
-        # 领取竞争：记录已成功，本请求的 claim() 失败，走竞争后的放行。
-        target = _prepare_succeeded(fixture)
+    run_id = _drive_to_release_path(fixture, release_path)
 
     store = fixture["app"].state.gateway.agent_run_store
-    original = store.confirm_exec_config
-    seen: list[str] = []
+    calls: list[str] = []
+    competitions: list[str] = []
+    if release_path == "race_release":
+        # 真实竞争：本请求的 claim() 里，另一个领取者先赢并跑成功，然后本请求输掉。
+        # 记录在这之前仍是 issued，所以路由确实走进 claim 竞争分支。
+        original_claim = store.claim
 
-    def refuse_then_confirm(run_id_, observed, **kwargs):
-        seen.append(run_id_)
-        # 在**本请求写入之前**让另一个已认证请求把记录拒绝成终态。
-        # `fail()` 管 issued/running、`refuse()` 管 succeeded —— 与路由里的 `deny()`
-        # 同一条分流：只调其中一个会让对应状态的那条用例测不到交错。
-        if not fixture["store"].fail(run_id_, "exec_config_drift"):
-            fixture["store"].refuse(run_id_, "exec_config_drift")
+        def lose_claim_to_other_request(rid):
+            competitions.append(rid)
+            assert original_claim(rid) is True  # 另一个领取者赢
+            assert (
+                fixture["store"].complete(
+                    rid,
+                    snapshot={"order_no": "ORDER-A"},
+                    actual_node_id="node-a1",
+                    node_build="other",
+                )
+                is True
+            )
+            return False  # 本请求输掉
+
+        monkeypatch.setattr(store, "claim", lose_claim_to_other_request)
+
+    before: list[object] = []
+    _install_final_gate_probe(fixture, monkeypatch, event=event, calls=calls, before=before)
+
+    response = _claim_with(fixture, run_id, identity)
+
+    assert len(calls) == 2, f"{release_path}/{event}: 必须走到最终核对（预检+终检）"
+    assert len(competitions) == (1 if release_path == "race_release" else 0)
+    assert response.status_code == 403, response.text
+    assert "order_no" not in response.json(), "拒绝时绝不能带业务正文"
+    row = _rows(fixture["store"])[0]
+    # 「终态之后不得写 matched」是**顺序**要求：预检那次核对写下的 matched 是当时的事实，
+    # 不能因为之后进入终态就反过来要求它消失，更不能在终态**之后**再盖一次。
+    # 所以比较的是「最终事务之前」与「最终事务之后」的值。
+    assert before, "探针必须真的在最终事务处采到状态"
+    assert row["exec_config_state"] == before[0], "最终事务不得在终态之后改写身份核对状态"
+    # 库里的快照可以留着（`refuse()` 从不删已算出的结果，那是审计材料）；
+    # 判据是它**没有被交出去** —— 上一行的 `order_no not in response` 就是这件事。
+    if event == "refuse":
+        assert row["state"] == "failed"
+        assert row["reason"] == "exec_config_drift"
+    else:
+        # 过期沿用既有语义：与「读的时候发现过期」同一个状态与原因。
+        assert row["state"] == "expired"
+        assert row["reason"] == "ttl_elapsed"
+
+
+@pytest.mark.parametrize("release_path", ["first_claim", "retry_release", "race_release"])
+def test_live_record_releases_the_snapshot_at_the_final_gate(tmp_path, monkeypatch, release_path):
+    """**正对照**：同样的三条路径，不注入任何事件时必须在最终核对后交出快照。
+
+    没有这一条，「三条路径都返回 403」也可能只是三条路径都坏了。
+    """
+    manifest = _write_manifest(tmp_path)
+    identity = _identity(manifest)
+    fixture = _fixture(tmp_path, monkeypatch, manifest=manifest)
+    assert _delegate(fixture).status_code == 502
+    run_id = _drive_to_release_path(fixture, release_path)
+
+    store = fixture["app"].state.gateway.agent_run_store
+    calls: list[str] = []
+
+    def observe(run_id_, observed, **kwargs):
+        calls.append(run_id_)
         return original(run_id_, observed, **kwargs)
 
-    monkeypatch.setattr(store, "confirm_exec_config", refuse_then_confirm)
-    if release_path == "race_release":
-        monkeypatch.setattr(store, "claim", lambda _run_id: False)
+    original = store.confirm_exec_config
+    monkeypatch.setattr(store, "confirm_exec_config", observe)
 
-    response = _claim_with(fixture, target, identity)
+    response = _claim_with(fixture, run_id, identity)
 
-    assert seen, "本请求必须真的走到执行配置核对这一关"
-    assert response.status_code == 403, response.text
-    assert "order_no" not in response.json()
-    row = _rows(fixture["store"])[0]
-    assert row["state"] == "failed"
-    assert row["reason"] == "exec_config_drift"
-    # 终态之后不得写成 matched。
-    assert row["exec_config_state"] != "matched"
+    assert len(calls) == 2
+    assert response.status_code == 200, response.text
+    assert response.json()["order_no"] == "ORDER-A"
+    assert _rows(fixture["store"])[0]["exec_config_state"] == "matched"
+
+
+def test_expiry_boundary_uses_the_existing_semantics(tmp_path, monkeypatch):
+    """到期判据是 ``expires_at <= now``，不是「已经过了一阵子」。
+
+    三档：到期前一刻放行、**恰好到期**拒绝、明显过期拒绝。中间那一档是边界 ——
+    用 ``<`` 代替 ``<=`` 会让一次恰好在到期瞬间到达的放行通过。
+    """
+    manifest = _write_manifest(tmp_path)
+    identity = _identity(manifest)
+    cases = []
+    for label, offset in (("before", -1), ("exact", 0), ("after", 1)):
+        case_dir = tmp_path / label
+        case_dir.mkdir()
+        fixture = _fixture(case_dir, monkeypatch, manifest=manifest)
+        assert _delegate(fixture).status_code == 502
+        run_id = _prepare_succeeded(fixture)
+        expires = fixture["store"].get(run_id).expires_at
+        monkeypatch.setattr(agent_runs, "_now", lambda e=expires, o=offset: e + timedelta(seconds=o))
+        response = _claim_with(fixture, run_id, identity)
+        cases.append((label, response.status_code, _rows(fixture["store"])[0]["state"]))
+        monkeypatch.undo()
+
+    assert cases[0][:2] == ("before", 200), cases
+    assert cases[1] == ("exact", 403, "expired"), cases
+    assert cases[2] == ("after", 403, "expired"), cases
+
+
+# --------------------------------------------------------------------------
+# 清单对照自身的判据（不需要 JDK：只验「独立期望」这一层）
+# --------------------------------------------------------------------------
+
+
+def test_every_manifest_sample_declares_an_independent_expectation():
+    """对照表必须覆盖每份样本，且**至少一个正例** —— 否则对照会在两端全坏时仍「一致」。
+
+    Codex 的复现：把所有样本以 0644 复制过去，两端连正常样例都拒绝，接受数量为 0，
+    旧脚本照样 PASS。根因是判据只比较「两侧相同」，没有比较「各自应当是什么」。
+    """
+    import json
+
+    root = Path(__file__).resolve().parents[1] / "tools/m2_close/m3node"
+    samples = {path.name for path in (root / "manifest-samples").glob("*.json")}
+    declared = json.loads((root / "manifest_samples_expected.json").read_text())
+    expectations = {name: spec for name, spec in declared.items() if not name.startswith("_")}
+
+    assert samples == set(expectations), f"未声明期望的样本：{samples - set(expectations)}"
+    assert any(spec["accept"] for spec in expectations.values()), "必须至少声明一个正例"
+
+
+def test_normal_sample_is_accepted_and_identity_is_the_raw_bytes_digest(tmp_path):
+    """正例必须真的被接受；身份是原始字节 sha256。"""
+    root = Path(__file__).resolve().parents[1] / "tools/m2_close/m3node"
+    source = root / "manifest-samples/accept-normal.json"
+    sample = tmp_path / "accept-normal.json"
+    sample.write_bytes(source.read_bytes())
+    sample.chmod(0o600)
+
+    manifest = execution_manifest.load(sample)
+    assert manifest is not None, "合规清单必须被接受（这是对照的正例）"
+    assert manifest.identity == hashlib.sha256(source.read_bytes()).hexdigest()
+
+
+@pytest.mark.parametrize(
+    "mode",
+    [0o644, 0o640, 0o604],
+)
+def test_group_or_other_access_is_rejected_regardless_of_checkout_mode(tmp_path, mode):
+    """权限负例**独立构造**，不依赖 Git 是否保存 0600。
+
+    这同时解释了为什么对照脚本要把样本复制到一次性目录再显式设权限：
+    Git 不保存 0600，检出通常就是 0644，直接读工作树会让「全部拒绝」变成常态。
+    """
+    root = Path(__file__).resolve().parents[1] / "tools/m2_close/m3node"
+    sample = tmp_path / "sample.json"
+    sample.write_bytes((root / "manifest-samples/accept-normal.json").read_bytes())
+    sample.chmod(mode)
+
+    with pytest.raises(execution_manifest.ExecutionManifestError):
+        execution_manifest.load(sample)

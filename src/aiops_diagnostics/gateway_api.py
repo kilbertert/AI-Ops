@@ -4410,10 +4410,12 @@ def _require_matching_exec_config(
       **不返回快照**；
     - 相等 ⇒ 把实际值写进记录，再放行。
 
-    关键点：**比较用什么、写什么、放行依据什么，是同一个写事务里的同一份记录**。
-    早先这里是「读一次记录 → 无条件 UPDATE → 返回早先读到的成功对象」，于是另一个
-    请求的拒绝提交进来之后，本请求仍会返回快照，并且把 ``matched`` 写在一条终态记录上。
-    现在交给 :meth:`AgentRunStore.confirm_exec_config`，它返回的是写入之后读到的记录。
+    关键点：**比较用什么、写什么、放行依据什么、以及此刻是否过期，是同一个写事务里的
+    同一份记录**。早先这里是「读一次记录 → 无条件 UPDATE → 返回早先读到的成功对象」，
+    于是另一个请求的拒绝提交进来之后，本请求仍会返回快照，并且把 ``matched`` 写在一条
+    终态记录上；而且只查 ``state`` 不查 ``expires_at``，过期后三条放行路径都还能交出正文。
+    现在交给 :meth:`AgentRunStore.confirm_exec_config`，它返回的是写入（含过期收敛）之后
+    读到的记录；终态记录原样返回，由调用方按既有语义拒绝。
 
     调用点在 ``claim_charging_status`` 里共有两处（首次领取、以及 ``release_candidate``
     的最后一次放行），重试路径与它共用同一段 —— R1-1 的教训是放行路径各有一次机会，
@@ -4426,6 +4428,7 @@ def _require_matching_exec_config(
         run.run_id, observed, actual_node_id=actual_node_id
     )
     if confirmed is None:
+        # 身份不一致（记录已被钉成 failed + exec_config_drift）或记录不存在。
         raise StandardAPIError(status.HTTP_403_FORBIDDEN, "AGENT_RUN_EXEC_CONFIG_DRIFT", "agent run refused")
     return confirmed
 

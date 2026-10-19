@@ -13,9 +13,14 @@ uv run python tools/m2_close/m3node/verify_gateway_exec_config.py --out /tmp/exe
 # 迁移与回滚：旧库副本、重复启动、用升级前的代码读升级后的库
 uv run python tools/m2_close/m3node/verify_migration_rollback.py --out /tmp/migration.json
 
-# 跨语言清单对照：同一组样本喂给 Python 与 Java 的真实加载器
+# 跨语言清单对照：独立声明的期望 + 两端真实加载器
 M3NODE_DEPS=… M3NODE_JDK_IMAGE=… uv run python tools/m2_close/m3node/manifest_parity.py
 ```
+
+`manifest_samples_expected.json` 是**期望的唯一来源**：脚本不用任何一侧的结果当正确答案。
+语义样本会被复制到一次性目录并显式设 0600（Git 不保存 0600，检出通常 0644，而权限本身
+就是判据），权限与符号链接负例另行构造。**必须至少有一个正例被两端接受** ——
+「两端全部拒绝」是空转一致，不是通过。
 
 三者互不替代：单测证判据、真实 HTTP 证进程与路由、迁移脚本证部署影响。
 `manifest-samples/` 是两端**共用**的样本；加样本要同时跑 Java 一侧，否则对照会遮住新分歧。

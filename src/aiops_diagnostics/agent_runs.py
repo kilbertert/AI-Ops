@@ -344,6 +344,22 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
+def _expire_in(connection: sqlite3.Connection, run_id: str) -> None:
+    """把已过期的非终态收敛为 ``expired``。**过期语义只此一处**。
+
+    ``expires_at <= now`` 即过期（与 ``claim``/``complete`` 的 ``expires_at > now`` 互补）。
+    抽成函数是为了让「读路径顺手收敛」与「放行事务内核对」用同一条语句 ——
+    复制一份判据是两套语义的开始。
+    """
+    connection.execute(
+        """
+        UPDATE agent_runs SET state = ?, reason = COALESCE(reason, 'ttl_elapsed')
+         WHERE run_id = ? AND state IN (?, ?, ?) AND expires_at <= ?
+        """,
+        (EXPIRED, run_id, ISSUED, RUNNING, SUCCEEDED, _now().isoformat()),
+    )
+
+
 def _ts(value: str | None) -> datetime | None:
     return datetime.fromisoformat(value) if value else None
 
@@ -462,13 +478,7 @@ class AgentRunStore:
 
     def _expire(self, run_id: str) -> None:
         with self._connection(write=True) as connection:
-            connection.execute(
-                """
-                UPDATE agent_runs SET state = ?, reason = COALESCE(reason, 'ttl_elapsed')
-                 WHERE run_id = ? AND state IN (?, ?, ?) AND expires_at <= ?
-                """,
-                (EXPIRED, run_id, ISSUED, RUNNING, SUCCEEDED, _now().isoformat()),
-            )
+            _expire_in(connection, run_id)
 
     def claim(self, run_id: str) -> bool:
         """``issued → running``。返回 True 的那一个调用者是唯一被允许读业务的人。"""
@@ -518,18 +528,37 @@ class AgentRunStore:
         快照交出去 —— 这正是复现里 ``200 + 快照``、而库里已经是 ``failed`` 的交错。
 
         返回值语义：
-        - ``None`` ⇒ 不放行。要么身份不一致（已把记录钉成 ``failed`` + ``reason``，
-          并留下实际值供审计），要么记录已被别人钉成终态（不复活、不覆盖原因）。
-        - 返回的记录 ⇒ **本事务内**写入之后读到的它，调用方必须用它放行，
+        - ``None`` ⇒ 记录已不存在（被删或从未创建），调用方按「找不到」处理。
+        - 身份不一致 ⇒ 已把记录钉成 ``failed`` + ``reason``、留下实际值供审计，然后返回
+          **None**（不放行且不区分原因，避免把记录状态当放行信号）。
+        - 记录已是终态（别人钉的 ``failed``/``revoked``，或本事务刚按 ``expires_at <= now``
+          收敛的 ``expired``）⇒ **原样返回该记录**，由调用方按既有终态语义拒绝。
+          用「执行配置漂移」去描述一条过期或被撤销的记录是错的原因码。
+        - 其余 ⇒ **本事务内**写入之后读到的记录，调用方必须用它放行，
           而不是之前读到的那一份。
         - 未启用清单（没有期望）⇒ 原样返回记录，不写任何列，行为与今天逐字一致。
+
+        **有效期必须在这里查**：拿记录的那一刻没有过期，不代表放行的这一瞬间没有。
+        `get()` 只会在**读**的时候顺手收敛，而放行的判据是本事务内的这一份 ——
+        只查 ``state`` 不查 ``expires_at``，就等于把「上一次读时还有效」当成「现在仍有效」。
+        实测：把时钟推过到期点后，首次领取、成功重试、竞争后放行三条路径都返回了
+        200 + 业务正文，而库里状态还是 ``succeeded``。
         """
         with self._connection(write=True) as connection:
+            # 先按既有语义收敛过期，再读：这样「过期」与「被别人拒绝」走同一条读取路径，
+            # 不需要在下面另写一个 if。
+            _expire_in(connection, run_id)
             row = connection.execute("SELECT * FROM agent_runs WHERE run_id = ?", (run_id,)).fetchone()
             if row is None:
                 return None
             run = _run_from_row(row)
             if run.expected_agent_version is None:
+                # 未启用：原样返回，不写任何列，行为与今天逐字一致（终态由调用方按既有语义拒绝）。
+                return run
+            if run.state in TERMINAL_STATES:
+                # 已过期（上面刚收敛）或别人钉的 failed/revoked：不放行、不改写、不覆盖原因。
+                # 返回记录本身，由调用方按**既有**终态语义拒绝（`AGENT_RUN_NOT_ACTIVE`）——
+                # 用「执行配置漂移」描述一条被撤销的记录是错的原因码。
                 return run
             if observed != run.expected_agent_version:
                 # 漂移：**已签发、已领取、已有成功快照**三种状态都要落终态。早先只调
@@ -574,9 +603,10 @@ class AgentRunStore:
                 ),
             )
             if updated.rowcount != 1:
-                # 核对通过，但记录在本事务之前的瞬间已被拒绝/撤销/过期：不写 `matched`，
-                # 也不放行。写不进去就是不放行，不吞掉这个结果。
-                return None
+                # 核对通过但没写进去：记录在读到写之间变成了终态。写不进去就是不放行，
+                # 返回那条记录让调用方按既有终态语义拒绝（而不是谎报成漂移）。
+                latest = connection.execute("SELECT * FROM agent_runs WHERE run_id = ?", (run_id,)).fetchone()
+                return _run_from_row(latest) if latest else None
             confirmed = connection.execute("SELECT * FROM agent_runs WHERE run_id = ?", (run_id,)).fetchone()
             return _run_from_row(confirmed) if confirmed else None
 
