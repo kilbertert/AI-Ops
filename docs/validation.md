@@ -362,6 +362,107 @@ rollout-2026-10-19T11-56-18-*.jsonl`）里，模型的 tool_request 逐字为：
   根本没产出媒体块 —— 排除这一支。
 - 回放使用生产凭据环境读取（`/etc/aiops-41/production.env`），**未打印任何凭据**。
 
+## 2026-10-19 · 测试接口清单的逐条验收（真实会话，41 生产）
+
+**对象**：`docs/agents/testing-api-reference.md` 里写给产品测试的每一条断言。
+**方法**：在 41 上以**生产配置**构造生产应用（`create_gateway_app(settings)`），用**真实会话**
+（生产 `RedisThirdSessionResolver` 选中的那个）驱动**真实 ASGI 面**。不是 TestClient 冒烟，
+不是读代码推断。脚本 `/tmp/verify_doc.py`（退役后不留存，方法已记录在 §方法）。
+
+**判据**：HTTP 状态 **且** 错误码 **且** 文档声称的形状，三者一致才算通过。
+
+### 一、结果：22 条中 21 条通过，1 条**未取证**（不是失败）
+
+| 组 | 条数 | 结果 |
+|---|---:|---|
+| 只读面（health / faq×3 / shortcuts / banner / starters） | 7 | ✅ 全通过 |
+| 负向断言（401 / 403 / 404 / 422 / 订单越权 404） | 5 | ✅ 全通过 |
+| 助手入口（type=faq / qa / clarification ×2） | 5 | ✅ 全通过 |
+| 管家端拦截（consumer 打 analyses ⇒ 403） | 1 | ✅ 通过 |
+| 诊断线（他人订单 ⇒ 404） | 1 | ✅ 通过 |
+| charging-status 未配置 ⇒ 404 | 1 | ✅ 通过 |
+| conversations | 1 | ✅ 通过 |
+| **operator 会话** | 1 | ⚠️ **未取证** —— 见 §二 |
+
+关键实测值：`/health` = `0.1.0+baaac3903809`；`faq/catalog` **28 条**；
+`shortcuts` consumer **3 条**（`case_exploration` / `smart_diagnosis` / `report_fault`）；
+`banner` **`count=0`**（印证"空态是 200 不是 404"）；`assistant/questions` 的
+`type=qa` 轮询 **completed**（1.7s / 3.0s 两次）；
+`smart_diagnosis` 不带单号 ⇒ `clarification` + `missing_fields=["order_no"]`；
+文本内嵌他人订单 ⇒ `clarification` + `CLARIFY_ORDER_NOT_YOURS`（**不报错、不 404**）。
+
+### 一之补：管家端「客户案例」恢复后的复验（2026-10-19 追加）
+
+另一个会话恢复了该动作（PR #844，反转 ADR-0031；数据侧 #846）。本条记录**我方独立复验**：
+
+**三层证据，逐层可复跑：**
+
+| 层 | 判据 | 结果 |
+|---|---|---|
+| 数据侧 | 41 上 `operator` 的 `list_effective` | `case_exploration`(sort=10, `#v3`) / `smart_diagnosis`(20) / `operations_review`(30) |
+| 路由侧 | 线上代码跑 `_promo_route(platform="operator")` | 解析出 `agt_ed443cae…#v3`；`select_promo_agent` 亦成功 |
+| 端到端 | 真实会话 + 生产配置跑同机制宣传作业 | **`completed` / `retrieval_status=found` / 12 块（2 image + 6 reference）/ 51s** |
+
+**两个入口绑定不同版本是设计，不是漂移**：管家端 `#v3`、客户端 `#v2` —— 各自冻结自己的版本。
+
+**同时照出一条必须写进文档的测试前置**：第一次复验用错了会话（`self` 形状），
+`GET /v1/shortcuts`(operator) 返回 **503**、宣传作业 `unavailable`。
+根因不是动作没恢复，而是**算子端需要 operator 形状的会话**（站点范围）。
+已在 `testing-api-reference.md` §3.3 写明：看到 503/`unavailable` 先查会话形状。
+
+**仍未取证的部分不变**：生产 Redis 8103 条会话中**没有一条是 operator 形状**
+（`data_scope` 全为 `self`），所以 operator 的 HTTP 面（`/v1/shortcuts`、`/v1/standard/analyses`）
+**仍无法在真实会话下验收**。上表第三行验的是**同机制的 consumer 路径**——
+它证明宣传卡片这条执行链是通的，不证明 operator 入口的鉴权门与范围解析。
+
+### 二、唯一未取证项：管家端（operator）
+
+扫描生产 Redis **8092 条会话**，用生产 resolver 逐条试三种入口：
+
+```
+(None,     'self') 357      ← 全部可用会话的 data_scope 都是 self
+('consumer','self') 357
+('operator','self') 357     ← 没有任何一条是 operator 形状（站点范围）
+```
+
+⇒ **生产上今天没有 operator 形状的会话**，所以：
+
+- `GET /v1/shortcuts`（operator）、`POST /v1/standard/analyses`（202）**无法在真实会话下验收**；
+- 现有证据只有**代码层断言**：`operator_diagnosis_identity` 之后显式检查
+  `platform != operator ⇒ 403 OPERATOR_ENTRY_REQUIRED`，而「consumer 入口打 analyses ⇒ 403」
+  已实测通过（上表）。
+- **不得把这条记成通过**。给产品的文档里已写明：管家端需要运维额外准备公司用户 JWT 与
+  确认那条链可用；若未打通，先只测客户端。
+
+### 三、这次验收照出的两处文档修正（已改）
+
+1. **「公网自动注入 Authorization，测试方不要带」只对 consumer 成立。**
+   41 的 nginx `map` 对 `operator` 是 `$http_authorization`（透传调用方 JWT），
+   并从公司网关注入 `X-AIOps-Source-Key`。初稿把两者写混，会让测试方以为管家端也能直接打。
+2. **头名的两个名字在不同场景下都"对"**：公网必须 `third-session`
+   （`proxy_set_header X-Third-Session $http_third_session` 按小写+下划线取头）；
+   直连网关时 FastAPI 归一 `X-Third-Session` → `x_third_session`，反而认后者。
+   验收脚本走直连，所以用 `X-Third-Session`；**测试方走公网，必须用 `third-session`**。
+
+### 四、方法（可复跑）
+
+```bash
+# 0. 先确认没有在飞作业（构造 app 会 recover_interrupted_jobs，把在飞作业标 failed）
+ssh aiops-41 'runuser -u aiops41 -- /opt/aiops-41/.venv/bin/python -c "
+import sqlite3; c=sqlite3.connect(\"file:/var/lib/aiops-41/gateway/gateway.db?mode=ro\",uri=True)
+for t in (\"standard_diagnoses\",\"assistant_questions\",\"health_report_jobs\"):
+    print(t, dict(c.execute(\"select status,count(*) from \"+t+\" group by status\")))"'
+
+# 1. 用服务自己的 env + 服务账号跑（配置 0600 aiops41，root 读不到）
+ssh aiops-41 'cd /opt/aiops-41 && runuser -u aiops41 -- env \
+  $(tr "\0" "\n" < /proc/$(systemctl show -p MainPID --value aiops-gateway-41)/environ \
+    | grep -E "^AIOPS_" | xargs -d"\n") PYTHONPATH=/tmp \
+  /opt/aiops-41/.venv/bin/python /tmp/verify_doc.py --accept-live-app'
+```
+
+**2026-10-19 这次运行的前置条件**：三张作业表在飞数为 0（`standard_diagnoses` 2 completed /
+159 expired；`assistant_questions` 2 completed / 447 expired；`health_report_jobs` 6 completed）。
+
 ## 2026-10-19 · 41 端到端：知识库回答产出图片与视频（真实会话）
 
 **范围**：`commandcode` 上游 + 适配器 `drop_null_object_fields` 修复后的真实会话取证。
