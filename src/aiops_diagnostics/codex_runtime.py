@@ -229,16 +229,68 @@ class SDKCodexSession:
         # safe while it is 0 (see `run`): after a turn, the thread carries
         # context a standby cannot be given.
         self._turns_run = 0
+        self._codex = None
+        self._run_build_chain(thread_id=thread_id)
+
+    def _run_build_chain(self, *, thread_id: str | None) -> None:
+        """Build this session, walking the provider chain if construction fails.
+
+        Construction walks the chain for the same reason `run` does: a primary
+        that cannot even be BUILT (missing key file, dead base URL) is the same
+        class of provider failure as one that cannot answer, and it is just as
+        recoverable. Building only the primary used to leave the standby
+        unreachable for an outage that happens before the first turn.
+
+        ``thread_id`` pins the session to the provider that owns that thread, so
+        a resume never walks the chain — switching there would resume a different
+        provider's thread.
+        """
+        chain = (self._provider,) if thread_id else self.settings.provider_chain(self._provider.name)
+        last: Exception | None = None
+        for index, candidate in enumerate(chain):
+            if index:
+                self._provider = candidate
+            try:
+                self._build(thread_id=thread_id)
+            except Exception as exc:  # noqa: BLE001 - classified below
+                last = exc
+                self._teardown_codex()
+                if index == len(chain) - 1:
+                    break
+                if not is_provider_outage(exc):
+                    raise
+                self._record_event(
+                    {
+                        "type": "codex_provider_failover_init",
+                        "to_provider": chain[index + 1].name,
+                        "error": str(exc)[:300],
+                    }
+                )
+                continue
+            return
+        assert last is not None  # the loop records one before it can fall through
+        raise last
+
+    def _teardown_codex(self) -> None:
+        codex = self._codex
+        self._codex = None
+        if codex is not None:
+            with contextlib.suppress(Exception):
+                codex.__exit__(None, None, None)
+
+    def _build(self, *, thread_id: str | None) -> None:
+        """Build this session's Codex runtime on the currently selected provider."""
+        self._teardown_codex()
         provider_key = ""
         codex: Codex | None = None
         try:
-            provider_key = resolve_provider_api_key(settings, provider=self._provider)
+            provider_key = resolve_provider_api_key(self.settings, provider=self._provider)
             self._provider_key = provider_key
-            runtime_home = prepare_runtime_home(settings, provider=self._provider)
-            launch_args = codex_launch_args(settings)
+            runtime_home = prepare_runtime_home(self.settings, provider=self._provider)
+            launch_args = codex_launch_args(self.settings)
             config = CodexConfig(
                 launch_args_override=launch_args,
-                cwd=str(workspace.path),
+                cwd=str(self.workspace.path),
                 env={
                     "CODEX_HOME": str(runtime_home),
                     PROVIDER_KEY_ENV: provider_key,
@@ -251,8 +303,8 @@ class SDKCodexSession:
             codex.__enter__()
             kwargs: dict[str, Any] = {
                 "approval_mode": ApprovalMode.deny_all,
-                "cwd": str(workspace.path),
-                "developer_instructions": _developer_instructions(workspace.language),
+                "cwd": str(self.workspace.path),
+                "developer_instructions": _developer_instructions(self.workspace.language),
                 "model_provider": self._provider.name,
             }
             if self._provider.model:
@@ -262,13 +314,21 @@ class SDKCodexSession:
             else:
                 self._thread = self._codex.thread_start(**kwargs)
                 with contextlib.suppress(Exception):
-                    self._thread.set_name(f"AI-Ops {workspace.run_id}")
+                    self._thread.set_name(f"AI-Ops {self.workspace.run_id}")
         except Exception as exc:
             if codex is not None:
                 with contextlib.suppress(Exception):
                     codex.__exit__(None, None, None)
             message = str(exc).replace(provider_key, "REDACTED")
-            raise AgentRuntimeError(f"Codex app-server initialization failed: {message}") from exc
+            # Classified, not blanket-wrapped: the caller walks the chain only
+            # for a provider-side cause, so a genuine configuration defect still
+            # surfaces as itself instead of being retried on every provider.
+            failure: AgentRuntimeError = AgentRuntimeError(
+                f"Codex app-server initialization failed: {message}"
+            )
+            if is_provider_outage(failure):
+                raise ProviderOutage(str(failure)) from exc
+            raise failure from exc
 
     @property
     def thread_id(self) -> str:
@@ -346,51 +406,18 @@ class SDKCodexSession:
         raise quiet
 
     def _switch_provider(self, provider: ProviderConfig) -> None:
-        """Tear down this session's provider and rebuild the session on ``provider``."""
-        previous = self._codex
-        self._codex = None
-        if previous is not None:
-            with contextlib.suppress(Exception):
-                previous.__exit__(None, None, None)
+        """Move this session onto ``provider`` with a fresh thread.
+
+        A fresh thread, never a resume: the old thread belongs to the provider
+        that failed, and replaying it elsewhere would send that provider's
+        context to a different model. Failover only happens before the first
+        successful turn (see `run`), so there is no conversation to preserve.
+        """
         self._provider = provider
-        provider_key = ""
         try:
-            provider_key = resolve_provider_api_key(self.settings, provider=provider)
-            self._provider_key = provider_key
-            runtime_home = prepare_runtime_home(self.settings, provider=provider)
-            config = CodexConfig(
-                launch_args_override=codex_launch_args(self.settings),
-                cwd=str(self.workspace.path),
-                env={
-                    "CODEX_HOME": str(runtime_home),
-                    PROVIDER_KEY_ENV: provider_key,
-                },
-                client_name="aiops_diagnostics",
-                client_title="AI-Ops Diagnostic Harness",
-            )
-            codex = Codex(config)
-            self._codex = codex
-            codex.__enter__()
-            kwargs: dict[str, Any] = {
-                "approval_mode": ApprovalMode.deny_all,
-                "cwd": str(self.workspace.path),
-                "developer_instructions": _developer_instructions(self.workspace.language),
-                "model_provider": provider.name,
-            }
-            if provider.model:
-                kwargs["model"] = provider.model
-            self._thread = self._codex.thread_start(**kwargs)
-            with contextlib.suppress(Exception):
-                self._thread.set_name(f"AI-Ops {self.workspace.run_id}")
-        except Exception as exc:
-            if self._codex is not None:
-                with contextlib.suppress(Exception):
-                    self._codex.__exit__(None, None, None)
-                self._codex = None
-            message = str(exc).replace(provider_key, "REDACTED")
-            raise ProviderOutage(
-                f"standby provider {provider.name} could not be initialized: {message}"
-            ) from exc
+            self._build(thread_id=None)
+        except ProviderOutage as exc:
+            raise ProviderOutage(f"standby provider {provider.name} could not be initialized: {exc}") from exc
 
     def _run_once(self, prompt: str, *, output_schema: dict[str, Any] | None = None) -> CodexTurnOutput:
         handle = self._thread.turn(prompt, output_schema=output_schema or agent_turn_schema())

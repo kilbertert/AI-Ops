@@ -2776,6 +2776,16 @@ class GatewayRuntime:
             alternative is a product surface that silently shows nothing.
             Disabling the agent still cuts URLs off immediately, which is the
             revocation the acceptance criterion actually asked for.
+
+            The knowledge-base binding is checked against BOTH the signing
+            version and the agent's CURRENT published version. Checking only the
+            historical snapshot would keep serving media after a republish that
+            REMOVED that knowledge base — the bytes would stay reachable for the
+            rest of the TTL even though the operator just took that library away
+            from this agent. Requiring the current binding too keeps "the agent
+            may still serve this library" true at the moment of the fetch, while
+            still allowing a plain prompt/keyword republish (which is what broke
+            on 41) because that leaves the binding intact.
             """
             if self.agent_store is None:
                 return False
@@ -2785,12 +2795,14 @@ class GatewayRuntime:
             try:
                 published = self.agent_store.get(agent_id, grant.tenant_id)
                 version = self.agent_store.version(agent_id, grant.tenant_id, int(version_part))
+                current = self.agent_store.version(agent_id, grant.tenant_id, published.published_version)
             except Exception:
                 return False
             if published.status != "published":
                 return False
-            snapshot_kbs = tuple(version.snapshot.get("knowledge_base_ids") or ())
-            return grant.knowledge_base_id in snapshot_kbs
+            signed_kbs = tuple(version.snapshot.get("knowledge_base_ids") or ())
+            current_kbs = tuple(current.snapshot.get("knowledge_base_ids") or ())
+            return grant.knowledge_base_id in signed_kbs and grant.knowledge_base_id in current_kbs
 
         try:
             return self._media_proxy.serve_signed(signed_id, range_header=range_header, is_active=_is_active)

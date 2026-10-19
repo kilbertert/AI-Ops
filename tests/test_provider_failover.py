@@ -293,3 +293,92 @@ class TestSessionFailover:
         with pytest.raises(ProviderOutage):
             session.run("hi")
         assert session.switches == []
+
+
+class TestConstructionFailover:
+    """An outage can happen before the first turn — during construction."""
+
+    def test_construction_walks_the_chain(self, tmp_path) -> None:
+        """A primary that cannot be BUILT must not block a buildable standby.
+
+        The live failure mode: the primary's key file or base URL is bad, so the
+        session never gets as far as running a turn. Building only the primary
+        left the standby unreachable for exactly the outage that happened first.
+        """
+
+        from types import SimpleNamespace
+
+        from aiops_diagnostics.codex_runtime import ProviderOutage, SDKCodexSession
+        from aiops_diagnostics.config import AgentSettings, ProviderConfig
+
+        settings = AgentSettings(
+            providers=(
+                ProviderConfig(name="primary", base_url="https://a.example/v1", model="m"),
+                ProviderConfig(name="standby", base_url="https://b.example/v1", model="m"),
+            ),
+            default_provider="primary",
+            key_dir=str(tmp_path),
+        )
+        built: list[str] = []
+
+        def _fake_build(self, *, thread_id):
+            del thread_id
+            built.append(self._provider.name)
+            if self._provider.name == "primary":
+                # What `_build` actually raises after classification: a
+                # provider-side cause, wrapped as an outage.
+                raise ProviderOutage("Codex app-server initialization failed: 503 Service Unavailable")
+            self._thread = SimpleNamespace(id=f"thread-{self._provider.name}")
+
+        session = object.__new__(SDKCodexSession)
+        session.workspace = SimpleNamespace(path=str(tmp_path), run_id="run", language="zh")
+        session.settings = settings
+        session._provider = settings.select_provider(None)
+        session._progress_callback = None
+        session._turn_registrar = None
+        session._turns_run = 0
+        session._codex = None
+        session.events = []
+        session._record_event = session.events.append
+        session._build = _fake_build.__get__(session, SDKCodexSession)
+        session._teardown_codex = lambda: None
+        session._run_build_chain(thread_id=None)
+
+        assert built == ["primary", "standby"]
+        assert session._provider.name == "standby"
+
+    def test_resume_never_walks_the_chain(self, tmp_path) -> None:
+        """A resume is pinned to the provider that owns the thread."""
+        from types import SimpleNamespace
+
+        from aiops_diagnostics.codex_runtime import SDKCodexSession
+        from aiops_diagnostics.config import AgentSettings, ProviderConfig
+
+        settings = AgentSettings(
+            providers=(
+                ProviderConfig(name="primary", base_url="https://a.example/v1", model="m"),
+                ProviderConfig(name="standby", base_url="https://b.example/v1", model="m"),
+            ),
+            default_provider="primary",
+        )
+        built: list[str] = []
+
+        def _fake_build(self, *, thread_id):
+            built.append(self._provider.name)
+            self._thread = SimpleNamespace(id=thread_id or "fresh")
+
+        session = object.__new__(SDKCodexSession)
+        session.workspace = SimpleNamespace(path=str(tmp_path), run_id="run", language="zh")
+        session.settings = settings
+        session._provider = settings.select_provider(None)
+        session._progress_callback = None
+        session._turn_registrar = None
+        session._turns_run = 0
+        session._codex = None
+        session.events = []
+        session._record_event = session.events.append
+        session._build = _fake_build.__get__(session, SDKCodexSession)
+        session._teardown_codex = lambda: None
+        session._run_build_chain(thread_id="t-123")
+
+        assert built == ["primary"], "a resume must not switch provider"

@@ -895,3 +895,97 @@ def test_serving_survives_the_agent_being_republished(tmp_path: Path) -> None:
     manager.disable(admin, agent.agent_id, expected_revision=latest.revision)
     response = runtime.serve_media(signed_id)
     assert response is not None and response.status_code == 403
+
+
+def test_republish_that_removes_the_knowledge_base_revokes_media(tmp_path: Path) -> None:
+    """Relaxing the version check must not relax the KB binding.
+
+    The signature of this bug is subtle: checking only the SIGNING version's
+    snapshot keeps a URL alive after a republish that REMOVED that knowledge
+    base, because the historical snapshot still lists it. The operator took the
+    library away; the bytes must stop being served.
+    """
+    from aiops_diagnostics.agent_lifecycle import AgentConfig, AgentManager, AgentStore
+    from aiops_diagnostics.config import Settings
+    from aiops_diagnostics.gateway_runtime import GatewayRuntime
+    from aiops_diagnostics.scope_context import DataScope, SubjectRecord
+
+    settings = GatewayServerSettings(
+        data_home=tmp_path,
+        database_file=tmp_path / "gateway.db",
+        server_config_file=tmp_path / "production.env",
+    )
+    settings.server_config_file.write_text("# test\n", encoding="utf-8")
+    store = GatewayStore(settings.database_file)
+    agent_store = AgentStore(settings.database_file)
+    signer = MediaResourceSigner("secret", ttl_seconds=600)
+    runtime = GatewayRuntime(
+        store,
+        settings,
+        Settings(agent=Settings().agent),  # type: ignore[arg-type]
+        kb_search_client=_FakeKbClient(lambda _grant: b"PNGDATA"),
+        media_signer=signer,
+        agent_store=agent_store,
+    )
+    subject = SubjectRecord(b_user_id="B-1", tenant_id="tenant-a")
+    admin = ScopeContext.build(
+        caller=subject,
+        subject=subject,
+        delegated=False,
+        effective_tenant_id="tenant-a",
+        data_scope=DataScope(type="self"),
+        roles=frozenset({"ROLE_AGENT_ADMIN"}),
+        permissions=frozenset({"aiops:agents:manage"}),
+    )
+    manager = AgentManager(
+        agent_store, allowed_models=("aiops-api",), knowledge_resolver=_AlwaysValidKnowledge()
+    )
+    keeper = _AlwaysValidKnowledge()
+
+    def _config(kbs: tuple[str, ...]) -> AgentConfig:
+        return AgentConfig(
+            agent_type="customer",
+            prompt="宣传语气。",
+            knowledge_base_ids=kbs,
+            model="aiops-api",
+            output_contract="blocks-v1",
+        )
+
+    agent = manager.create(admin, name="宣传案例", description="x", config=_config(("kb-promo", "kb-extra")))
+    v1 = manager.publish(admin, agent.agent_id, expected_revision=agent.revision)
+    keeper.validate("tenant-a", ("kb-promo", "kb-extra"))
+
+    resource = signer.issue(
+        tenant_id="tenant-a",
+        agent_version=f"{agent.agent_id}#v{v1.version_no}",
+        session_id=None,
+        knowledge_base_id="kb-promo",
+        document_id="doc-1",
+        chunk_id="chunk-1",
+        backend_id="backend-1",
+        kind="image",
+        mime_type="image/png",
+        title="海报.png",
+        reference_id="chunk-1",
+    )
+    signed_id = resource.url.rsplit("/", 1)[-1]
+    assert runtime.serve_media(signed_id).status_code == 200
+
+    # Republish WITHOUT kb-promo: the operator took that library away.
+    rev = manager.get(admin, agent.agent_id).revision
+    draft = manager.fork_draft(admin, agent.agent_id, expected_revision=rev)
+    updated = manager.update(
+        admin,
+        agent.agent_id,
+        expected_revision=draft.revision,
+        name="宣传案例",
+        description="x",
+        config=_config(("kb-extra",)),
+    )
+    manager.publish(admin, agent.agent_id, expected_revision=updated.revision)
+
+    response = runtime.serve_media(signed_id)
+    assert response is not None
+    assert response.status_code == 403, (
+        f"a KB removed by republish must revoke its media, got {response.status_code}"
+    )
