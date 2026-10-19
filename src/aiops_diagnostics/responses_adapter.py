@@ -110,6 +110,33 @@ def drop_conflicting_grammar(payload: Any) -> tuple[Any, int]:
     return {**payload, "text": replacement}, 1
 
 
+def drop_null_reasoning(payload: Any) -> tuple[Any, int]:
+    """Return ``(payload, dropped_count)`` with a `null` reasoning field removed.
+
+    The Codex CLI sends ``"reasoning": null`` whenever it has no metadata for
+    the model it was told to use, and some endpoints reject a null where an
+    object is expected:
+
+        {"error":{"message":"Invalid input: expected object, received null",
+                  "type":"invalid_request_error","param":"reasoning"}}
+
+    Measured on commandcode's Responses endpoint (2026-10-19): every model it
+    serves returns 400 for that body, and 200 for the identical body with the
+    field omitted — so the field carries no information the endpoint can use,
+    and dropping it changes nothing about the answer. The baoyun endpoint
+    tolerates the null, which is why a single-upstream deployment never met
+    this.
+
+    Only ``None`` is dropped. An explicit object (``{"effort": "low"}``) is a
+    real instruction and is left exactly as sent.
+    """
+    if not isinstance(payload, dict) or "reasoning" not in payload:
+        return payload, 0
+    if payload.get("reasoning") is not None:
+        return payload, 0
+    return {key: value for key, value in payload.items() if key != "reasoning"}, 1
+
+
 def patch_responses_payload(payload: Any) -> tuple[Any, int]:
     """Return ``(payload, patched_count)`` with `status` filled in.
 
@@ -151,6 +178,8 @@ def patch_body(raw: bytes) -> tuple[bytes, int]:
         return raw, 0
 
     payload, dropped = drop_conflicting_grammar(payload)
+    payload, dropped_reasoning = drop_null_reasoning(payload)
+    dropped += dropped_reasoning
     patched_payload, count = patch_responses_payload(payload)
     count += dropped
     if not count:
