@@ -35,8 +35,15 @@ received null","type":"invalid_request_error","param":"reasoning"}}
 适配器（`aiops-responses-adapter`）本来就承担"修请求形状 + 补响应 `status`"的职责，
 `reasoning: null` 属于同一类：**形状的差异，不是语义的差异**。
 
-- 新增 `drop_null_reasoning`：**只在值为 `null` 时**丢字段。显式的
+- 新增 `drop_null_object_fields`：对**被 Responses API 声明为对象类型**的顶层字段
+  （目前 `reasoning`、`text`），**只在值为 `null` 时**丢字段。显式的
   `{"effort": "low"}` 是真实指令，原样保留。
+- 同时改正一处**早已写错的兜底**：`drop_conflicting_grammar` 在丢掉 `text.format`
+  后，若 `text` 没有别的键，原来把整个 `text` 置成 `null`。实测 commandcode：
+  `text: {}` → 200、`text: null` → **400 "expected record, received null"**、
+  省略该键 → 200。所以「置 null」本身就是错的——那条注释写着"上游没有理由接受空的
+  text"，但上游接受的是**省略**，不是 **null**。现在改为删键。
+  这个错误一直没有暴露，是因为 baoyun 容忍 null；**换上游就是照出它的那束光**。
 - 它**不持有凭据**：客户端 `Authorization` 头原样透传，key 仍由 Gateway 的
   `key_slot` 文件提供。所以多起一个实例不需要多管一份秘密。
 - 实例之间只差 `PORT` 与 `UPSTREAM`；`.env.example` 补了此前**完全没有登记**的
@@ -84,6 +91,11 @@ received null","type":"invalid_request_error","param":"reasoning"}}
 转移过去仍会失败（只是失败得更快、报错更诚实）。真正的教训是：
 **登记备用之前，要按"主 provider 当前在用的模型"去验，而不是按 provider 名字验。**
 要做成"按模型选备用"需要 provider 表里有能力声明，本次未做。
+
+上限：`_NULL_REJECTING_OBJECT_FIELDS` 是**白名单**，不是"把所有 null 都删掉"。
+一个从未被观测到会拒 null 的字段不会被加进去；反过来，任何新上游的怪癖都要**先有实测
+的拒绝**才允许加字段。这条刻意留窄：广泛改写请求体的适配器，迟早会改坏一个本来能用的
+请求（而它的失败会表现为"上游返回了奇怪的东西"，难查）。
 
 上限：适配器只修**已知**的形状差异。一个没见过的上游怪癖仍然会以原始报错的形式
 冒出来——这是刻意的：`patch_body` 对看不懂的 body 原样转发，不去猜。
