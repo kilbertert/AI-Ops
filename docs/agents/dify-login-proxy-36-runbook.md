@@ -108,23 +108,40 @@ ssh yidong-36 'nginx -s reload'
 ```
 
 ⚠️ **这两条必须在 36 上跑**（注意 `ssh yidong-36`）。在开发机上执行只会动本机的 nginx。
-reload 之后**必须用一次真实请求**确认，不能只看 `nginx -T`：
+
+### 4.4 怎么判断**运行中**的配置真的是新的
+
+三种检查回答三个不同的问题，**不能互相替代**：
+
+| 检查 | 回答的问题 | 不能回答 |
+|---|---|---|
+| `nginx -t` | 磁盘上的配置语法对不对 | 加载了没有 |
+| `nginx -T \| grep -c …` | 磁盘上的文件里有没有这一行 | 加载了没有（它新起进程重新解析磁盘） |
+| `systemctl is-active nginx` | 那个单元的状态 | 什么都不相关（该单元自 2026-09-11 起就 failed，进程由别的方式管理） |
+
+**唯一能证明"运行中的 master 加载了它"的是行为**。而且判据必须**有区分性** ——
+一个新旧配置都会给出的结果什么都证明不了。
+
+用这一条（从**非回环**对端发，并伪造 `X-Forwarded-Proto: https`）：
 
 ```bash
-# 行为判据：明文入口的 POST 应被拒（说明新 snippet 真的生效了）
-ssh yidong-36 'curl -sS -o /dev/null -w "%{http_code}\n" -X POST \
-  http://127.0.0.1:10008/__aiops/login -H "Content-Type: application/json" \
-  -d "{\"username\":\"x\",\"password\":\"y\",\"randomStr\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"code\":\"1234\"}"'
-# 期望 400（"此入口是明文 HTTP"）。若是 200/404/其它，说明配置没生效或路由没对上
+ssh yidong-36 'curl -sS --interface 127.0.0.2 -o /dev/null -w "%{http_code}\n" \
+  -X POST http://127.0.0.1:10008/__aiops/login \
+  -H "Content-Type: application/json" -H "X-Forwarded-Proto: https" \
+  -d "{\"username\":\"x\",\"password\":\"y\",\"randomStr\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"code\":\"zzzz\"}"'
+# 期望 400（"此入口是明文 HTTP"）
 ```
 
-⚠️ **不要用 `nginx -T | grep` 当判据**：`nginx -T` 是新起一个进程**重新解析磁盘配置**，
-它证明磁盘上的文件是什么，**不证明运行中的 master 加载了它**。reload 失败时它照样能通过。
-（2026-10-19 实测：master 自 6-23 起就没重启过，只有 worker 被 reload —— 所以"进程还在跑"
-这件事本身也说明不了配置新不新。）
+**为什么这条有区分性**：新配置用 `map $realip_remote_addr` 只在真实对端是回环时采信上游
+声明的协议；非回环对端送来的 `X-Forwarded-Proto` 被抹成空 ⇒ 代理判为明文 ⇒ 400。
+**旧配置没有那段 map**，客户端自带的 `X-Forwarded-Proto: https` 会被原样透传 ⇒ 代理以为
+是 TLS ⇒ 放行 ⇒ 403。所以 400 只可能是新配置，403 说明 reload 没生效。
 
-（`systemctl is-active nginx` 在 36 上是 `failed` —— 那是 2026-09-11 起的既有债，
-进程由别的方式管理；判据是上面那条 `nginx -T` 与端口，不是那个单元。）
+⚠️ **反向的坑**：不带 `X-Forwarded-Proto` 的普通明文 POST 也返回 400，但那**不能**当判据 ——
+代理自己的 TLS 闸门对任何缺这个头的请求都返 400，与 nginx 是新是旧无关。必须带上那个
+伪造头、并**从非回环接口发**，才有区分性。
+
+（`curl --interface 127.0.0.2` 依赖本机有 127.0.0.2；若没有，用另一台内网机器发同样的请求。）
 
 ## 5. 重启与版本核对
 
