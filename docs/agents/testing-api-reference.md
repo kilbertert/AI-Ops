@@ -67,6 +67,9 @@ proxy_set_header X-Third-Session $http_third_session;
 > 而**直连网关**（只有我方运维在 41 本机自查时会这么做）时走的是 FastAPI，它把
 > `X-Third-Session` 归一成 `x_third_session`，反而认 `X-Third-Session`。
 > **测试方一律走公网，所以一律用 `third-session`。**
+>
+> ✅ **这一条已在 41 的现行配置上核对过**：`nginx -T` 输出里
+> `proxy_set_header X-Third-Session $http_third_session;` 实际生效（不是"配置了但没部署"）。
 
 ---
 
@@ -153,8 +156,20 @@ curl -s -X POST 'https://api.mall.qushiyun.com/v1/assistant/questions' \
 | `conversation_id` | ❌ | 绑定多轮会话（`conv_` 开头） |
 | `shortcut_code` | ❌ | 点击快捷动作时带（如 `case_exploration`） |
 
-**轮询**：按响应里的 `retry_after_ms`（通常是 1000ms）节流。终态是 `completed` 或 `failed`。
-**收到 `failed` 就停止轮询**，它不会再变；要重试就重新 POST 一个新作业。
+**轮询**：按响应里的 `retry_after_ms`（通常是 1000ms）节流。
+
+**停止条件只有一条：`retry_after_ms` 变成 `null`。** 那一刻作业已到终态，不会再更新。
+终态不止 `completed` / `failed`：
+
+| 面 | 全部终态 |
+|---|---|
+| `type=qa`（助手问答） | `completed` / `failed` / `expired` / `cancelled` / `inconclusive` |
+| `type=diagnosis`（诊断） | 同上（另有诊断特有的 `failed` 错误码） |
+| 健康报告作业 | `completed` / `failed` / `expired` |
+| 运维分析作业 | 同上 |
+
+⚠️ **只判 `failed` 会漏掉一半**：`expired`（超过时效被清扫）与 `cancelled`（用户/系统中断）
+都是终态，继续轮询只会空转到超时。**判 `retry_after_ms == null` 最稳** —— 它与终态严格对应。
 
 ### 2.3 需要订单号的
 
@@ -189,17 +204,22 @@ curl -s -X POST 'https://api.mall.qushiyun.com/v1/health-report-jobs' \
 |---|---|---|
 | `/v1/assistant/starters` | GET | 开场白（进入会话页时展示） |
 | `/v1/shortcuts` | GET | 快捷动作按钮列表 |
-| `/v1/banner` | GET | 聊天页横幅 —— ⚠️ **当前恒返回空列表**，见 §4 |
+| `/v1/banner` | GET | 聊天页横幅 —— ⚠️ **当前无已发布横幅，返回空列表**（是数据状态，不是接口约束），见 §4 |
 | `/v1/media/{signed_id}` | GET | 取图片/视频（**签名约 10 分钟过期**） |
 
 ---
 
 ## 3. 管家端（operator）能测什么
 
-`X-Business-Entry: operator`
+⚠️ **先说清楚凭据**（见 §0.1）：管家端**不是**只带 `third-session` 就能测。
+公网那一跳对 `operator` 是**透传你的 `Authorization`**（公司用户 JWT），
+所以**所有 operator 请求都必须带 `Authorization: Bearer <公司用户 JWT>`**。
+这是运维要提供的东西，不是测试方能自己配的。
+
+`X-Business-Entry: operator` + `Authorization: Bearer <公司用户 JWT>`
 
 ### 3.1 与客户端**完全相同**的部分
-固定问答、统一助手入口、会话管理、媒体 —— **路径、请求体、响应形状一模一样**，只是入口头不同。
+固定问答、统一助手入口、会话管理、媒体 —— **路径、请求体、响应形状一模一样**，只是入口头与凭据不同。
 
 ### 3.2 管家端**独有**
 
@@ -210,7 +230,8 @@ curl -s -X POST 'https://api.mall.qushiyun.com/v1/health-report-jobs' \
 
 ```bash
 curl -s -X POST 'https://api.mall.qushiyun.com/v1/standard/analyses' \
-  -H 'third-session: <会话值>' -H 'X-Business-Entry: operator' \
+  -H 'Authorization: Bearer <公司用户 JWT>' \
+  -H 'X-Business-Entry: operator' \
   -H 'Content-Type: application/json' \
   -d '{"card": "failure_rate",
        "window_start": "2026-10-19T00:00:00+08:00",
@@ -232,19 +253,20 @@ curl -s -X POST 'https://api.mall.qushiyun.com/v1/standard/analyses' \
 | 路由侧 | 线上代码实跑 `_promo_route(platform="operator")` → 解析出 `#v3`；`select_promo_agent` 也解析成功 |
 | 端到端 | 同机制的宣传作业经真实会话执行：**`completed` + `retrieval_status=found`**，产出 **12 个内容块（含 2 个 image + 6 个 reference）**，耗时 51s |
 
-**怎么测**（预期与客户端一致）：
+**怎么测**（预期与客户端一致，但凭据是 JWT 不是会话）：
 
 ```bash
 curl -s -X POST 'https://api.mall.qushiyun.com/v1/assistant/questions' \
-  -H 'third-session: <会话值>' -H 'X-Business-Entry: operator' \
+  -H 'Authorization: Bearer <公司用户 JWT>' \
+  -H 'X-Business-Entry: operator' \
   -H 'Content-Type: application/json' \
   -d '{"question": "我想看看客户案例"}'
 # 期望：202 type=qa → 轮询 → completed，retrieval_status=found
 ```
 
-> ⚠️ **仍有一个前置条件**：管家端入口需要 operator 形状的会话（运营商店点范围）。
-> 见 §0.1 —— 这是运维要准备的，不是测试方自己能解决的。
-> 若拿到的是 `self` 形状会话，`GET /v1/shortcuts`（operator）会返回 **503**，那是**会话不对**，
+> ⚠️ **前置条件**：管家端需要公司用户 JWT（由公司网关注入来源密钥），
+> 且该身份要有运营商站点范围。见 §0.1 —— 这是运维要准备的，不是测试方自己能解决的。
+> 若拿 consumer 那条链去测（只有 `third-session`），会得到 **401/503**，那是**凭据不对**，
 > 不是动作没恢复。
 
 ---
@@ -253,15 +275,16 @@ curl -s -X POST 'https://api.mall.qushiyun.com/v1/assistant/questions' \
 
 | 现象 | 是 bug 吗 | 说明 |
 |---|---|---|
-| `/v1/banner` 返回 `count: 0` | ❌ 不是 | 横幅数据**尚未配置**，路由是好的。空态是 200，不是 404 |
+| `/v1/banner` 返回 `count: 0` | ❌ 不是 | **当前生产上没有已发布的横幅行**，路由是好的。空态是 200，不是 404。运营发布横幅后即非空 |
 | 管家端「客户案例」返回 `unavailable` | ⚠️ 看会话形状 | 该动作**已恢复**（§3.3）。若仍 `unavailable`，先确认会话是 operator 形状 —— `self` 形状拿不到站点范围，宣传路由会 fail-closed |
 | 泰语 / 高棉语提问得到 `type=clarification` | ❌ 不是 | `th`/`km` **可读不可问**：返回 `200` + `missing_fields:["language"]`，不建作业 |
 | 订单不存在 vs 无权查看，都返回 **404** | ❌ 不是 | 刻意不区分，避免泄露「这单存在」 |
-| 字段写错返回 **422** 不是 400 | ❌ 不是 | 本项目的字段校验**一律 422**。⚠️ 例外：`/v1/orders/{no}/access` 与 charging-status 的订单号形状非法返回 **400** |
+| 字段写错返回 **422** 不是 400 | ❌ 不是 | **请求体**校验一律 422（`extra="forbid"`）。⚠️ **路径参数**例外：`/v1/orders/{no}/access` 与 charging-status 的订单号形状非法返回 **400 `INVALID_ORDER_NO`** |
 | 多传一个字段就 422 | ❌ 不是 | `extra="forbid"`，严格拒绝 |
 | `type=qa` 的 `result` 里读不到 `text` | ❌ 不是 | 用 `blocks[]`；读 `result.text` 的旧写法已废弃 |
 | 同一会话连续提问得到 `409 CONVERSATION_BUSY` | ❌ 不是 | 一次只能有一个生成中的轮次，等它结束 |
 | 轮询拿到 `failed` | ⚠️ 看错误码 | `DIAGNOSIS_BLOCKED` = 模型配额受限，可重试；其他见错误码 |
+| 轮询拿到 `expired` / `cancelled` | ❌ 不是 bug | 都是**终态**（超时清扫 / 被中断）。重新 POST 一个新作业即可 |
 | `/v1/orders/{no}/charging-status` 返回 404 | ❌ 不是 | 该能力**默认关闭**（未配业务地址），不是路由不存在 |
 
 ---
