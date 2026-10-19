@@ -62,6 +62,18 @@ class TestOutageClassification:
         assert is_provider_outage(AgentContractError(message)) is False
         assert is_provider_outage(AgentRuntimeError(message)) is False
 
+    def test_turn_id_containing_a_status_code_is_not_an_outage(self) -> None:
+        """Ids are opaque and the wrapper embeds them: "Codex turn t-403 failed".
+
+        Matching a bare "403" anywhere would let an unrelated failure look like
+        an outage, and the standby's answer would then hide it.
+        """
+        assert is_provider_outage(AgentRuntimeError("Codex turn t-403 failed: boom")) is False
+        assert is_provider_outage(AgentRuntimeError("Codex turn abc500xyz failed: boom")) is False
+        # A real status, in the shapes providers actually emit, still matches.
+        assert is_provider_outage(AgentRuntimeError("Codex turn t failed: status 500 boom")) is True
+        assert is_provider_outage(AgentRuntimeError("Codex turn t failed: 429 Too Many Requests")) is True
+
     def test_timeout_is_not_a_provider_outage(self) -> None:
         """We cut it off; that is our deadline, not their outage.
 
@@ -142,6 +154,7 @@ class TestSessionFailover:
         session._turn_registrar = None
         session._progress_callback = None
         session._codex = None
+        session._turns_run = 0
         session.events = []
         session.switches = []
 
@@ -217,6 +230,63 @@ class TestSessionFailover:
         with pytest.raises(AgentContractError):
             session.run("hi")
         assert session.switches == [], "a contract violation must not reach the standby"
+
+    def test_a_broken_standby_does_not_block_the_next_one(self) -> None:
+        """One misconfigured backup must not stop the ones behind it.
+
+        A standby that cannot even be built (missing key file, bad base URL, no
+        model) raises while switching. That must be recorded and skipped, not
+        propagated — otherwise a single bad entry in the registry disables every
+        provider after it.
+        """
+        session = self._session(
+            "baoyun",
+            "broken",
+            "good",
+            default="baoyun",
+            outcome={"error": None},
+        )
+        tried: list[str] = []
+
+        def _switch_provider(provider):
+            session.switches.append(provider.name)
+            if provider.name == "broken":
+                raise ProviderOutage("standby provider broken could not be initialized: no key")
+            session._provider = provider
+
+        def _run_once(prompt, *, output_schema=None):
+            del prompt, output_schema
+            tried.append(session._provider.name)
+            if session._provider.name == "baoyun":
+                raise ProviderOutage("403 Forbidden 预扣费额度失败")
+            from aiops_diagnostics.codex_runtime import CodexTurnOutput
+
+            return CodexTurnOutput("t", "third provider answered", {})
+
+        session._switch_provider = _switch_provider
+        session._run_once = _run_once
+        result = session.run("hi")
+        assert result.final_response == "third provider answered"
+        assert tried == ["baoyun", "good"], tried
+        assert any(e["type"] == "codex_provider_failover_skipped" for e in session.events)
+
+    def test_failover_is_refused_after_the_first_turn(self) -> None:
+        """A mid-conversation switch would drop the context the prompt refers to.
+
+        `next_prompt` in a diagnosis builds on what the model already reported.
+        Serving it from a fresh thread on another provider is not a retry — it is
+        a different, worse question that would look like a successful answer.
+        """
+        session = self._session(
+            "baoyun",
+            "commandcode",
+            default="baoyun",
+            outcome={"error": ProviderOutage("503")},
+        )
+        session._turns_run = 1  # one turn already completed on this thread
+        with pytest.raises(ProviderOutage):
+            session.run("follow-up that needs the earlier turns")
+        assert session.switches == [], "no switch may happen mid-conversation"
 
     def test_single_provider_outage_raises_without_switching(self) -> None:
         session = self._session("only", default="only", outcome={"error": ProviderOutage("503")})
