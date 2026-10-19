@@ -40,10 +40,15 @@
 
 | 检查 | 结果 |
 |---|---|
-| 全量套件 | **2934 passed / 0 failed / 9 skipped**（基线 `baaac390` 为 2921，新增 13 条） |
+| 全量套件（**本机**） | **2934 passed / 0 failed / 9 skipped**，收集 2943。基线 `baaac390` 在同一台机为 **2921 passed / 9 skipped**，收集 2930 ——父提交的记录把**收集数**当成了 passed 写出，本条一律按 passed 记 |
 | `ruff check src tests` | 通过 |
 | `ruff format --check src tests` | 254 文件已格式化 |
 | `repo-map.check.mjs` / `adr.check.mjs` | 通过 |
+
+**CI 与本机的差异（据实）**：CI 在 GitHub-hosted runner 上跑，多跳过一条
+`tests/test_cd_deploy_scripts.py`（dry-run 需要 dev-host），所以同一次改动 CI 报
+2926 passed / 10 skipped 而本机报 2926+... 时口径不同。**本节的数字一律是本机口径**，
+并写出收集数，避免与父提交那条把收集数写成 passed 的记录互相矛盾。
 
 新用例（13 条）：默认值为 10、env 可覆盖、**私有配置文件可作回退**且进程 env 优先、
 不可解析的值启动报错、三种越界值（0 / -1 / 21）报错、「配置的深度真的到达知识库」（k=10）、
