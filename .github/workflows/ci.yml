@@ -32,6 +32,31 @@ concurrency:
 
 jobs:
   verify:
+    # ── Do not run while the pull request is a draft ────────────────────────────
+    # A draft is the platform's own word for "not ready to be judged", and this
+    # repository already uses it: `agent-implement.yml` and `agent-implement-prd.yml`
+    # open delivery PRs with `gh pr create --draft`.
+    #
+    # Why this is not just tidiness. Measured 2026-10-18: one AFK pull request
+    # (#825) ran this workflow 11 times — 8 successes plus 3 cancelled — about 16
+    # minutes of runner time. Nothing consumed a single one of those results:
+    # `grep -rn 'gh pr checks|statusCheckRollup|/check-runs' .sandcastle/ .github/`
+    # returns nothing, so no agent, review pass, or workflow reads a PR's CI
+    # conclusion. The agent verifies locally instead — `.sandcastle/implement.md`
+    # step 3 tells it to run the project's own check before committing.
+    #
+    # The rule this encodes: a CI run is worth its cost only when it (a) covers the
+    # content that is about to enter main AND (b) its result is used. A draft fails
+    # both. The moment the PR is marked ready, `ready_for_review` fires and this
+    # job runs on the exact content that will be judged.
+    #
+    # ⚠️ Written as a guard rather than as a `types: [...]` filter on purpose.
+    # `types: [ready_for_review]` alone would mean a NON-draft pull request never
+    # runs at all — it is already ready when `opened` fires. Keeping the trigger
+    # broad and the condition explicit is what makes "will this run?" readable from
+    # the file; a filter that silently drops events is the failure ADR 0010 and the
+    # 1.7.26 work both exist to prevent.
+    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     # 🔴 **2026-10-12: back on the self-hosted runner, and that re-opens a gate.**
     #
     # This job was moved to `ubuntu-latest` with the argument above: a public
