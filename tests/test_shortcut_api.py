@@ -640,17 +640,14 @@ def test_store_seed_bundled_is_idempotent(tmp_path: Path) -> None:
     first = store.seed_bundled(_Ctx(), manager)  # type: ignore[arg-type]
     # Codes repeat across entries (identity is tenant+entry+code), so the seed
     # is asserted per entry: consumer keeps its three buttons plus the
-    # chat-page banner (#588); operator holds its prompt actions plus the
+    # chat-page banner (#588); operator holds the prompt actions plus the
     # operations-review card (#721), and no jump action.
-    #
-    # `operator` deliberately has no `case_exploration` (2026-10-16, user
-    # decision): that entry structurally cannot serve the promo card, so the
-    # button was removed rather than left to return a permanent "unavailable".
     assert {(row.business_entry, row.code) for row in first} == {
         ("consumer", "battery_report"),
         ("consumer", "case_exploration"),
         ("consumer", "report_fault"),
         ("consumer", "smart_diagnosis"),
+        ("operator", "case_exploration"),
         ("operator", "operations_review"),
         ("operator", "smart_diagnosis"),
     }
