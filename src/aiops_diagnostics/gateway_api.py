@@ -2526,8 +2526,7 @@ def create_gateway_app(
                 "agent run unavailable",
                 retryable=True,
             )
-        # 每次签发**重读**清单：撤销/轮换必须像节点凭据一样「下一次立刻生效」，
-        # 而不是拖到下一次重启（见 CONTRACT-M3-GATEWAY.md §6）。
+        # 每次签发重读清单；已有 run 继续使用签发时固定的身份，不回填。
         try:
             manifest = execution_manifest.load(selected_settings.execution_manifest_file)
         except execution_manifest.ExecutionManifestError as exc:

@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Gateway 可在签发时固定执行配置身份，并在领取及最终放行事务内核对身份、终态与有效期。
+  配置默认关闭；启用后缺失或不匹配的身份被拒绝，已拒绝记录不能通过重试恢复。
+  数据库幂等新增三列，历史行保持 NULL；未启用时保留原回执字段。
 - 执行节点接入执行配置守卫（M3-NODE-GUARD-01，节点侧）：受控清单
   （`AIOPS_EXEC_MANIFEST`，默认不配置）为期望值的唯一来源，身份＝清单原始字节 sha256；
   启用后在**调用模型之前**按面拒绝配置漂移 —— 派发体的 provider/adapter/模型/endpoint、

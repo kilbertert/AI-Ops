@@ -43,9 +43,9 @@
 - 本片用例 **43 passed**；委托执行 55、记录存储全部未回归；
   全量 **2998 passed / 9 skipped / 0 failed**。
 - **红→绿**（两轮，各自对旧实现）：R1 的 9 条断言（`drift_is_terminal` 3 条、
-  终检拒绝 3 条、回执 3 条）在修复前全部失败；FINAL 的 6 条最终核对断言（`refuse` 与
-  `expires` 各三条路径）在修好终态后、补有效期前同样全部失败 —— 把 `confirm_exec_config`
-  里那次过期收敛删掉，`expires-*` 三条立刻转红，三条正对照与三条 `refuse` 不变。
+  终检拒绝 3 条、回执 3 条）在修复前全部失败。FINAL 的独立复核确认：补有效期前，
+  `expires-*` 三条失败，`refuse-*` 三条通过；修复后六条均通过。删除 `confirm_exec_config`
+  里的过期收敛，`expires-*` 三条再次转红，三条正对照与三条 `refuse` 不变。
 - **有效期边界**：到期前一刻 200、**恰好到期** 403 `expired`/`ttl_elapsed`、明显过期 403。
 - **跨语言清单对照**：`tools/m2_close/m3node/manifest_parity.py` 用
   `manifest_samples_expected.json` 里**独立声明**的期望判定（11 份语义样本 + 2 个权限负例），

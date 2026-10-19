@@ -56,9 +56,8 @@ Python 与 Java 的真实加载器，逐条比对结论，接受样例还要比�
 | 签发 | 每次**重读**清单并写 `expected_agent_version` | 读不到 ⇒ 503 `EXEC_CONFIG_UNAVAILABLE` |
 | 领取 | 回传头与期望逐字相等，**且此刻未过期** | 不等/缺失 ⇒ 记录落终态、403 `AGENT_RUN_EXEC_CONFIG_DRIFT`、**不返回快照**；已过期 ⇒ 既有 `expired` 语义、403 |
 
-**每次重读，不是启动读一次**：节点凭据的既有纪律就是「每次调用都重读」（撤销即改文件，
-下一次立刻生效）。清单是同一类受控产物；启动读一次会把撤销时延从「下一次领取」拖到
-「下一次重启」。
+**每次签发重读**：新 run 使用签发当时的清单身份；已签发 run 继续按记录中固定的期望
+核对，直到过期或撤销。更换清单不会回填旧记录，也不等同于撤销已有 run。
 
 ## 4. 状态与终态
 
@@ -104,9 +103,9 @@ R1-1 的教训是放行路径各有一次机会，只覆盖其中一条会让另
 - 旧行三列保持 `NULL`，**不回填、不猜**；历史列逐字不变。
 - **回滚**：清空 `AIOPS_GATEWAY_EXECUTION_MANIFEST_FILE` ⇒ 走未启用分支；代码回滚后三列
   成了旧代码可忽略的附加列。已用**升级前的 `agent_runs.py`** 对升级后的库实测可读。
-- 证据：`tools/m2_close/m3node/verify_migration_rollback.py`（10 条判据）。
+- 证据：`tools/m2_close/m3node/verify_migration_rollback.py`（9 条判据）。
 
-## 7. 验收（见 `qa-plan.md` 的 EXECCFG-GW-01..15）
+## 7. 验收（见 `qa-plan.md` 的 EXECCFG-GW-01..17）
 
 单测不够。对外行为变化必须用**真实进程**驱动：
 
