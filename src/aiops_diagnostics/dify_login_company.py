@@ -96,8 +96,12 @@ def _mapping(*, login: bool) -> ErrorMapping:
 
     ``login=True``（``/upms/token/login``）：这个端点上的凭据拒绝是**运营的输入问题**
     —— 密码错、账号停用、验证码不对 —— 必须变成 :class:`CompanyLoginRejected`，
-    运营才会看到"你输错了"而不是"服务挂了"。验证码过滤器另占一个状态码
-    （见 :data:`COMPANY_CAPTCHA_REJECTED_STATUS`）。
+    运营才会看到"你输错了"而不是"服务挂了"。
+
+    **只把 428 认作这一类。** 401/403 在登录端点上不是"运营输错了"：实测（2026-10-19）
+    密码错是 **200 + `code:-1000`**，而 401/403 在这条链上意味着**网关层面**的问题
+    （我们配置的 Basic 凭据、来源限制、网关自身的拒绝）。把它说成"你密码错了"会让运维
+    去查一个根本不存在的输错 —— 这与本条要修的缺陷是同一类错误，只是方向相反。
 
     ``login=False``（``/upms/user/info``）：这里失败不是运营的输入问题，是我们刚拿到
     的那枚令牌不被接受 —— 那是我们自己的链路问题，一律 ``CompanyUnreachable``。
@@ -107,11 +111,10 @@ def _mapping(*, login: bool) -> ErrorMapping:
         return CompanyUnreachable("COMPANY_AUTH_REJECTED", f"公司侧拒绝了凭据：{failure.detail}")
 
     def login_rejected(failure: HttpFailure) -> Exception:
-        captcha = failure.status == COMPANY_CAPTCHA_REJECTED_STATUS
         reason = _reason_from_message(failure.detail)
-        if captcha and reason == _FALLBACK_REJECTION:
-            # 428 只由验证码过滤器产生：报文读不出来也仍然是"验证码这一关没过"，
-            # 不要说成一句无处可查的中性拒因。
+        if reason == _FALLBACK_REJECTION:
+            # 走到这里只可能是 428 —— 它只由验证码过滤器产生。报文读不出来也仍然是
+            # "验证码这一关没过"，不要说成一句无处可查的中性拒因。
             reason = "验证码不正确或已失效，请重新获取"
         return CompanyLoginRejected("COMPANY_LOGIN_REJECTED", reason)
 
@@ -122,14 +125,15 @@ def _mapping(*, login: bool) -> ErrorMapping:
         return CompanyUnreachable("COMPANY_MALFORMED", f"公司侧返回无法解释：{failure.detail}")
 
     return ErrorMapping(
+        # 428 = 验证码过滤器（只有登录端点有它）。401/403 有意**不**在这里声明：
+        # 它们在本链路上是网关的问题，走 http_error → CompanyUnreachable。
         auth_rejected=login_rejected if login else rejected,
         http_error=unavailable,
         unavailable=unavailable,
         invalid_body=malformed,
         invalid_envelope=malformed,
-        # 只有登录端点会碰到验证码过滤器；``user/info`` 上出现 428 不该被读成"你输错了"。
         auth_rejected_statuses=(
-            frozenset({401, 403, COMPANY_CAPTCHA_REJECTED_STATUS}) if login else frozenset({401, 403})
+            frozenset({COMPANY_CAPTCHA_REJECTED_STATUS}) if login else frozenset({401, 403})
         ),
     )
 

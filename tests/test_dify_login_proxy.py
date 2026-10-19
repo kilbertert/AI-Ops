@@ -59,6 +59,8 @@ class _FakeCompany(BaseHTTPRequestHandler):
     fail_login: str = ""  # "" | "password"
     #: "" | "empty" | "stale" | "wrong" —— 验证码过滤器的三种拒绝，真网关都回 428。
     captcha_fail: str = ""
+    #: "" | "gateway" —— 网关层面的拒绝（401），不是"运营输错了"。
+    gateway_reject: str = ""
     seen_password: str = ""
     seen_client_type: str = ""
     seen_token_header: str = ""
@@ -123,25 +125,28 @@ class _FakeCompany(BaseHTTPRequestHandler):
         # 验证码这一关在密码之前，三个分支**都是 HTTP 428**，语义只在 `msg` 里。
         # 替身早先这一分支回的是 **200**，于是"428 被归成上游不可用"这件事永远绿着
         # —— 而线上表现是运营把验证码输错一次就被告知"公司登录服务暂时不可用"。
-        if self.path.startswith("/upms/token/login") and type(self).captcha_fail:
-            messages = {"stale": "验证码失效", "wrong": "验证码错误", "empty": "验证码不能为空"}
-            body = json.dumps(
-                {"code": 1, "msg": messages[type(self).captcha_fail], "data": None, "ok": False}
-            ).encode()
-            self.send_response(428)
+        if self.path.startswith("/upms/token/login"):
+            branch = (
+                type(self).captcha_fail
+                or ("" if params.get("code") else "empty")
+                or type(self).gateway_reject
+            )
+        else:
+            branch = ""
+        if branch:
+            if branch == "gateway":
+                # 401/403 在**登录端点**上不是"你输错了"：密码错是 200 + code:-1000。
+                # 这两个码意味着网关本身拒了（Basic 凭据、来源限制…）。
+                body = b'{"error":"unauthorized"}'
+                self.send_response(401)
+            else:
+                messages = {"stale": "验证码失效", "wrong": "验证码错误", "empty": "验证码不能为空"}
+                body = json.dumps({"code": 1, "msg": messages[branch], "data": None, "ok": False}).encode()
+                self.send_response(428)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
-            return
-        if self.path.startswith("/upms/token/login") and not params.get("code"):
-            payload = {"code": 1, "msg": "验证码不能为空", "data": None, "ok": False}
-            data = json.dumps(payload).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Content-Length", str(len(data)))
-            self.end_headers()
-            self.wfile.write(data)
             return
         if self.path.startswith("/upms/token/login"):
             if type(self).fail_login:
@@ -264,6 +269,7 @@ def stack(tmp_path: Path):
     _FakeCompany.permissions = [EDIT_PERMISSION]
     _FakeCompany.fail_login = ""
     _FakeCompany.captcha_fail = ""
+    _FakeCompany.gateway_reject = ""
     _FakeDify.calls = []
     _FakeDify.invite_returns_url = True
     company, company_url = _serve(_FakeCompany)
@@ -544,6 +550,22 @@ def test_the_captcha_filters_428_is_a_rejection_not_an_outage(stack, branch, exp
     assert expected in payload["reason"], payload["reason"]
     assert "暂时不可用" not in payload["reason"]
     assert _FakeDify.calls == [], "验证码没过却调用了 Dify"
+
+
+def test_a_gateway_level_rejection_is_not_blamed_on_the_operator(stack) -> None:
+    """登录端点上的 401/403 是**网关的问题**，不是"你密码错了"。
+
+    实测（2026-10-19）：密码错是 **200 + `code:-1000`**；401/403 意味着网关自己拒了
+    （我们配的 Basic 凭据、来源限制、网关故障）。把它说成"你输错了"会把运维引去查一个
+    不存在的输错 —— 与本次要修的缺陷是同一类错误，方向相反。
+
+    判据：401 ⇒ 502 + 「暂时不可用」，且**不是**「密码不正确」。
+    """
+    _FakeCompany.gateway_reject = "gateway"
+    status, payload, _ = _login(stack[0])
+    assert status == 502, f"网关拒绝被说成了运营输错：{status} {payload}"
+    assert "暂时不可用" in payload["reason"]
+    assert "密码" not in payload["reason"]
 
 
 def test_a_genuinely_unreachable_company_is_still_reported_as_an_outage(stack, monkeypatch) -> None:
