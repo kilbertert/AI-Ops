@@ -18,7 +18,8 @@
 从一个**已合并的 main 提交**打包，不要从工作区打：
 
 ```bash
-cd /home/claude/Projects/AI-Ops                  # 本仓的规范检出
+cd /home/claude/Projects/AI-Ops || exit 1        # 本仓在该机上的实际检出路径；失败就停
+pwd; git remote get-url origin                   # 确认是这个仓，不是别的 checkout
 git fetch origin --quiet
 git rev-parse origin/main                        # 记下这个 sha，验收要用
 rm -rf /tmp/stage && mkdir -p /tmp/stage         # ← 少了这行，下一步立即失败
@@ -72,8 +73,10 @@ ssh yidong-36 'cd /opt/aiops-login-proxy && tar -xzf /tmp/aiops-login-sync.tgz
 
 ### 4.1 传上去
 
+（§1 已经 `cd` 到本仓并确认过 origin；若中途换了 shell，重跑那两行）
+
 ```bash
-cd /home/claude/Projects/AI-Ops
+cd /home/claude/Projects/AI-Ops || exit 1
 git show origin/main:ops/dify-console-bridge/dify-console-10008.conf > /tmp/new-10008.conf
 git show origin/main:ops/dify-login-proxy/dify-login-proxy.conf   > /tmp/new-snippet.conf
 
@@ -105,11 +108,20 @@ ssh yidong-36 'nginx -s reload'
 ```
 
 ⚠️ **这两条必须在 36 上跑**（注意 `ssh yidong-36`）。在开发机上执行只会动本机的 nginx。
-reload 之后可以确认新配置真的进了内存：
+reload 之后**必须用一次真实请求**确认，不能只看 `nginx -T`：
 
 ```bash
-ssh yidong-36 'nginx -T 2>/dev/null | grep -c aiops_upstream_proto'   # 应 ≥ 1
+# 行为判据：明文入口的 POST 应被拒（说明新 snippet 真的生效了）
+ssh yidong-36 'curl -sS -o /dev/null -w "%{http_code}\n" -X POST \
+  http://127.0.0.1:10008/__aiops/login -H "Content-Type: application/json" \
+  -d "{\"username\":\"x\",\"password\":\"y\",\"randomStr\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"code\":\"1234\"}"'
+# 期望 400（"此入口是明文 HTTP"）。若是 200/404/其它，说明配置没生效或路由没对上
 ```
+
+⚠️ **不要用 `nginx -T | grep` 当判据**：`nginx -T` 是新起一个进程**重新解析磁盘配置**，
+它证明磁盘上的文件是什么，**不证明运行中的 master 加载了它**。reload 失败时它照样能通过。
+（2026-10-19 实测：master 自 6-23 起就没重启过，只有 worker 被 reload —— 所以"进程还在跑"
+这件事本身也说明不了配置新不新。）
 
 （`systemctl is-active nginx` 在 36 上是 `failed` —— 那是 2026-09-11 起的既有债，
 进程由别的方式管理；判据是上面那条 `nginx -T` 与端口，不是那个单元。）

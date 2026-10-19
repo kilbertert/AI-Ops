@@ -38,6 +38,15 @@ external plaintext POST -> 400
 
 这条补上了「公网可达的明文入口会不会被拒」这个缺口。
 
+B（验证码 GET）也补了一次公网外部的：
+
+```
+external captcha GET -> 200  size=1887  ctype=image/jpeg
+file: JPEG image data, 120x50, components 3
+```
+
+于是 A/B 都有本机与公网外部两份证据；C 本来就走的公网域名。
+
 
 | # | 动作 | 期望 | 实测 |
 |---|---|---|---|
