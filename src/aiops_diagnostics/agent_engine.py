@@ -251,6 +251,15 @@ class AgentCoordinator:
                     state = state.model_copy(update={"phase": "interrupted"})
                     self.workspace.save_state(state)
                     raise
+                # Re-read the thread id after the turn, not only before it: a
+                # provider failover rebuilds the session on a standby and gets a
+                # NEW thread, so the id captured at line 237 names a thread that
+                # no longer exists. Persisting that would send the next resume
+                # back to the failed provider's thread and lose every turn the
+                # standby answered.
+                if session.thread_id != state.thread_id:
+                    self._record_event({"type": "codex_thread_changed", "thread_id": session.thread_id})
+                    state = state.model_copy(update={"thread_id": session.thread_id})
                 state = state.model_copy(update={"turn_count": state.turn_count + 1})
                 self.workspace.save_state(state)
                 try:

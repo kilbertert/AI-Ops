@@ -2753,10 +2753,39 @@ class GatewayRuntime:
             promotional card produced was rejected with 403 — media was
             retrievable but never displayable (41 live, 2026-09-18).
 
-            The grant names its agent, so the honest check is: that agent is
-            still published at exactly that version, and still bound to the
-            knowledge base the grant cites. A disabled agent version or an
-            unbound KB still invalidates URLs immediately.
+            The rule is about the AGENT, not about which version is newest:
+
+              * the agent is still published (a disabled agent invalidates its
+                URLs immediately), and
+              * the version that signed the grant still exists and is bound to
+                the knowledge base the grant cites.
+
+            It deliberately does NOT require the signing version to still be the
+            agent's CURRENT ``published_version``. That extra condition was here
+            and it broke every promotional image and video on 41 from
+            2026-09-20 onward: the shortcut pins `canary-宣传案例#v2`, the agent
+            was republished as v3 that day, and `3 != 2` made every URL a 403 —
+            so media was produced and never once displayable. Publishing a
+            TUNED prompt must not 403 the images the previous version already
+            produced; nothing about that republish makes those bytes wrong.
+
+            The cost of dropping it is explicit: an image or video signed by an
+            older-but-still-present version keeps working for the rest of its
+            short TTL (~10 minutes) even after a newer version is published.
+            That is the correct trade — the URL expires on its own, and the
+            alternative is a product surface that silently shows nothing.
+            Disabling the agent still cuts URLs off immediately, which is the
+            revocation the acceptance criterion actually asked for.
+
+            The knowledge-base binding is checked against BOTH the signing
+            version and the agent's CURRENT published version. Checking only the
+            historical snapshot would keep serving media after a republish that
+            REMOVED that knowledge base — the bytes would stay reachable for the
+            rest of the TTL even though the operator just took that library away
+            from this agent. Requiring the current binding too keeps "the agent
+            may still serve this library" true at the moment of the fetch, while
+            still allowing a plain prompt/keyword republish (which is what broke
+            on 41) because that leaves the binding intact.
             """
             if self.agent_store is None:
                 return False
@@ -2766,12 +2795,14 @@ class GatewayRuntime:
             try:
                 published = self.agent_store.get(agent_id, grant.tenant_id)
                 version = self.agent_store.version(agent_id, grant.tenant_id, int(version_part))
+                current = self.agent_store.version(agent_id, grant.tenant_id, published.published_version)
             except Exception:
                 return False
-            if published.status != "published" or published.published_version != int(version_part):
+            if published.status != "published":
                 return False
-            snapshot_kbs = tuple(version.snapshot.get("knowledge_base_ids") or ())
-            return grant.knowledge_base_id in snapshot_kbs
+            signed_kbs = tuple(version.snapshot.get("knowledge_base_ids") or ())
+            current_kbs = tuple(current.snapshot.get("knowledge_base_ids") or ())
+            return grant.knowledge_base_id in signed_kbs and grant.knowledge_base_id in current_kbs
 
         try:
             return self._media_proxy.serve_signed(signed_id, range_header=range_header, is_active=_is_active)

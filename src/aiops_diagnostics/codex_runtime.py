@@ -4,6 +4,7 @@ import contextlib
 import hashlib
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -104,6 +105,85 @@ class AgentTurnTimeout(AgentRuntimeError):
     """A Codex turn exceeded the configured deadline and was interrupted."""
 
 
+class ProviderOutage(AgentRuntimeError):
+    """The provider could not serve the turn, and a standby may be able to.
+
+    Raised only for causes that are about the PROVIDER rather than about this
+    request: credentials, quota/balance, rate limits, an unreachable endpoint,
+    or a 5xx. Those are exactly the failures where trying another provider is
+    both safe and useful.
+
+    Deliberately NOT raised for a contract violation: a model that answers in
+    the wrong shape answered, and re-asking a different provider would replace a
+    visible defect with a plausible-looking answer from elsewhere — the mistake
+    `AgentContractError` exists to prevent (2026-09-17).
+    """
+
+
+#: Substrings that mark a provider-side outage rather than a request defect.
+#: Matched case-insensitively against the provider's error text.
+#:
+#: Two families, and both are needed because providers disagree about how to
+#: say "you cannot use this account":
+#:   - HTTP status words, which the harness sees verbatim from the transport.
+#:   - Quota/billing vocabulary, which arrives with a 200 or 403 depending on
+#:     the relay. The live case (41, 2026-10-19) was a 403 whose text was
+#:     Chinese: "预扣费额度失败, 用户剩余额度: ¥0.007319" — none of the English
+#:     status words appear in it, so a status-only rule would have missed the
+#:     very failure this exists for.
+_PROVIDER_OUTAGE_MARKERS: tuple[str, ...] = (
+    "unauthorized",
+    "forbidden",
+    "invalid api key",
+    "invalid_api_key",
+    "authentication",
+    "insufficient",
+    "quota",
+    "rate limit",
+    "too many requests",
+    "balance",
+    "arrearage",
+    "欠费",
+    "余额",
+    "预扣费",
+    "额度",
+    "connection",
+    "timed out",
+    "timeout",
+    "temporarily unavailable",
+    "bad gateway",
+    "service unavailable",
+)
+
+#: An HTTP status as it appears in provider error text ("403", "status 500",
+#: "429 Too Many Requests"). Anchored so a digit run inside an identifier does
+#: not qualify: `is_provider_outage` sees the whole wrapped message, which begins
+#: with the turn id ("Codex turn <id> failed: …") and ids are opaque — one
+#: containing "403" would make an unrelated failure look like an outage and let
+#: a standby hide it.
+_HTTP_STATUS = re.compile(r"(?<![0-9A-Za-z_-])(?:4[0-9]{2}|5[0-9]{2})(?![0-9A-Za-z_-])")
+
+
+def is_provider_outage(exc: BaseException) -> bool:
+    """Whether ``exc`` looks like the provider failing, not the request.
+
+    Conservative by construction: an unrecognised error returns False, so a
+    failure nobody anticipated surfaces as itself instead of being silently
+    retried against a second provider (which would hide it).
+    """
+    if isinstance(exc, (AgentContractError, AgentTurnTimeout)):
+        # The model answered badly, or we cut it off. Neither is the provider
+        # failing, and retrying either elsewhere would misreport it.
+        return False
+    if not isinstance(exc, AgentRuntimeError):
+        return False
+    text = str(exc)
+    if _HTTP_STATUS.search(text):
+        return True
+    lowered = text.lower()
+    return any(marker in lowered for marker in _PROVIDER_OUTAGE_MARKERS)
+
+
 @dataclass(frozen=True, slots=True)
 class CodexTurnOutput:
     turn_id: str
@@ -145,16 +225,72 @@ class SDKCodexSession:
         self._provider = provider or settings.select_provider(None)
         self._progress_callback: Callable[[dict[str, Any]], None] | None = None
         self._turn_registrar = turn_registrar
+        # How many turns this session has successfully run. Failover is only
+        # safe while it is 0 (see `run`): after a turn, the thread carries
+        # context a standby cannot be given.
+        self._turns_run = 0
+        self._codex = None
+        self._run_build_chain(thread_id=thread_id)
+
+    def _run_build_chain(self, *, thread_id: str | None) -> None:
+        """Build this session, walking the provider chain if construction fails.
+
+        Construction walks the chain for the same reason `run` does: a primary
+        that cannot even be BUILT (missing key file, dead base URL) is the same
+        class of provider failure as one that cannot answer, and it is just as
+        recoverable. Building only the primary used to leave the standby
+        unreachable for an outage that happens before the first turn.
+
+        ``thread_id`` pins the session to the provider that owns that thread, so
+        a resume never walks the chain — switching there would resume a different
+        provider's thread.
+        """
+        chain = (self._provider,) if thread_id else self.settings.provider_chain(self._provider.name)
+        last: Exception | None = None
+        for index, candidate in enumerate(chain):
+            if index:
+                self._provider = candidate
+            try:
+                self._build(thread_id=thread_id)
+            except Exception as exc:  # noqa: BLE001 - classified below
+                last = exc
+                self._teardown_codex()
+                if index == len(chain) - 1:
+                    break
+                if not is_provider_outage(exc):
+                    raise
+                self._record_event(
+                    {
+                        "type": "codex_provider_failover_init",
+                        "to_provider": chain[index + 1].name,
+                        "error": str(exc)[:300],
+                    }
+                )
+                continue
+            return
+        assert last is not None  # the loop records one before it can fall through
+        raise last
+
+    def _teardown_codex(self) -> None:
+        codex = self._codex
+        self._codex = None
+        if codex is not None:
+            with contextlib.suppress(Exception):
+                codex.__exit__(None, None, None)
+
+    def _build(self, *, thread_id: str | None) -> None:
+        """Build this session's Codex runtime on the currently selected provider."""
+        self._teardown_codex()
         provider_key = ""
         codex: Codex | None = None
         try:
-            provider_key = resolve_provider_api_key(settings, provider=self._provider)
+            provider_key = resolve_provider_api_key(self.settings, provider=self._provider)
             self._provider_key = provider_key
-            runtime_home = prepare_runtime_home(settings, provider=self._provider)
-            launch_args = codex_launch_args(settings)
+            runtime_home = prepare_runtime_home(self.settings, provider=self._provider)
+            launch_args = codex_launch_args(self.settings)
             config = CodexConfig(
                 launch_args_override=launch_args,
-                cwd=str(workspace.path),
+                cwd=str(self.workspace.path),
                 env={
                     "CODEX_HOME": str(runtime_home),
                     PROVIDER_KEY_ENV: provider_key,
@@ -167,8 +303,8 @@ class SDKCodexSession:
             codex.__enter__()
             kwargs: dict[str, Any] = {
                 "approval_mode": ApprovalMode.deny_all,
-                "cwd": str(workspace.path),
-                "developer_instructions": _developer_instructions(workspace.language),
+                "cwd": str(self.workspace.path),
+                "developer_instructions": _developer_instructions(self.workspace.language),
                 "model_provider": self._provider.name,
             }
             if self._provider.model:
@@ -178,13 +314,21 @@ class SDKCodexSession:
             else:
                 self._thread = self._codex.thread_start(**kwargs)
                 with contextlib.suppress(Exception):
-                    self._thread.set_name(f"AI-Ops {workspace.run_id}")
+                    self._thread.set_name(f"AI-Ops {self.workspace.run_id}")
         except Exception as exc:
             if codex is not None:
                 with contextlib.suppress(Exception):
                     codex.__exit__(None, None, None)
             message = str(exc).replace(provider_key, "REDACTED")
-            raise AgentRuntimeError(f"Codex app-server initialization failed: {message}") from exc
+            # Classified, not blanket-wrapped: the caller walks the chain only
+            # for a provider-side cause, so a genuine configuration defect still
+            # surfaces as itself instead of being retried on every provider.
+            failure: AgentRuntimeError = AgentRuntimeError(
+                f"Codex app-server initialization failed: {message}"
+            )
+            if is_provider_outage(failure):
+                raise ProviderOutage(str(failure)) from exc
+            raise failure from exc
 
     @property
     def thread_id(self) -> str:
@@ -194,6 +338,88 @@ class SDKCodexSession:
         self._progress_callback = callback
 
     def run(self, prompt: str, *, output_schema: dict[str, Any] | None = None) -> CodexTurnOutput:
+        """Run one turn, falling over to a standby provider if this one is out.
+
+        The chain comes from ``AgentSettings.provider_chain`` (registry order is
+        priority order). Only a `ProviderOutage` moves to the next provider: a
+        contract violation, a timeout, or any unrecognised error is raised where
+        it happened, because serving it from a second provider would misreport a
+        defect as a successful answer.
+
+        **Failover is only safe on the FIRST turn of a thread.** A thread carries
+        the conversation, and a standby gets a fresh thread — so switching
+        mid-conversation would hand the standby the latest follow-up prompt with
+        none of the turns it refers to. For a multi-turn diagnosis (`next_prompt`
+        builds on what the model already reported) that is not a retry, it is a
+        different and worse question, and it would look like a successful answer.
+        Once a thread has run a turn here, an outage is raised rather than
+        silently re-asked elsewhere; a caller that wants to start over does so
+        from its own state.
+        """
+        chain = self.settings.provider_chain(self._provider.name)
+        if len(chain) > 1 and not self._turns_run:
+            return self._run_with_failover(prompt, chain, output_schema=output_schema)
+        self._turns_run += 1
+        return self._run_once(prompt, output_schema=output_schema)
+
+    def _run_with_failover(
+        self, prompt: str, chain: tuple[ProviderConfig, ...], *, output_schema: dict[str, Any] | None
+    ) -> CodexTurnOutput:
+        """Try each provider in turn; only a provider-side outage moves on."""
+        quiet: ProviderOutage | None = None
+        for index, provider in enumerate(chain):
+            if index:
+                try:
+                    self._switch_provider(provider)
+                except ProviderOutage as exc:
+                    # This standby could not even be built (missing key file,
+                    # bad base URL). Record it and keep going: a later provider
+                    # may still serve, and stopping here would let one
+                    # misconfigured backup block the ones behind it.
+                    quiet = exc
+                    self._record_event(
+                        {
+                            "type": "codex_provider_failover_skipped",
+                            "provider": provider.name,
+                            "error": str(exc)[:300],
+                        }
+                    )
+                    continue
+            try:
+                result = self._run_once(prompt, output_schema=output_schema)
+            except ProviderOutage as exc:
+                quiet = exc
+                if index == len(chain) - 1:
+                    break
+                self._record_event(
+                    {
+                        "type": "codex_provider_failover",
+                        "from_provider": self._provider.name,
+                        "to_provider": chain[index + 1].name,
+                        "error": str(exc)[:300],
+                    }
+                )
+                continue
+            self._turns_run += 1
+            return result
+        assert quiet is not None  # recorded before the loop can fall through
+        raise quiet
+
+    def _switch_provider(self, provider: ProviderConfig) -> None:
+        """Move this session onto ``provider`` with a fresh thread.
+
+        A fresh thread, never a resume: the old thread belongs to the provider
+        that failed, and replaying it elsewhere would send that provider's
+        context to a different model. Failover only happens before the first
+        successful turn (see `run`), so there is no conversation to preserve.
+        """
+        self._provider = provider
+        try:
+            self._build(thread_id=None)
+        except ProviderOutage as exc:
+            raise ProviderOutage(f"standby provider {provider.name} could not be initialized: {exc}") from exc
+
+    def _run_once(self, prompt: str, *, output_schema: dict[str, Any] | None = None) -> CodexTurnOutput:
         handle = self._thread.turn(prompt, output_schema=output_schema or agent_turn_schema())
         if self._turn_registrar is not None:
             # Hand the live turn to whoever may interrupt it, before the turn
@@ -232,7 +458,16 @@ class SDKCodexSession:
                     "error": message,
                 }
             )
-            raise AgentRuntimeError(f"Codex turn {handle.id} failed: {message}") from exc
+            # Classified, not blanket-wrapped: a provider-side outage becomes
+            # ProviderOutage so the chain in `run` may try a standby, while
+            # anything unrecognised stays a plain AgentRuntimeError and surfaces
+            # as itself. Wrapping everything would have made every unknown
+            # failure look retryable, and a second provider's plausible answer
+            # would then mask it.
+            failure = AgentRuntimeError(f"Codex turn {handle.id} failed: {message}")
+            if is_provider_outage(failure):
+                raise ProviderOutage(str(failure)) from exc
+            raise failure from exc
         finally:
             heartbeat_stop.set()
             heartbeat_thread.join(timeout=1)
