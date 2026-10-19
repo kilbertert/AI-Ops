@@ -463,10 +463,12 @@ class LoginProxyHandler(BaseHTTPRequestHandler):
 
 
 def _public_reason(exc: Exception) -> str:
-    if isinstance(exc, PermissionDenied):
+    if isinstance(exc, (PermissionDenied, CompanyLoginRejected)):
+        # 这两类的 message **本身就是要给运营看的那句话**（由 `_reason_from_message`
+        # 从公司提示分流而来，永远是本仓库的固定字符串，不含上游原文或凭据）。
+        # 这里再套一层"或验证码无效"的通用文案会把已知成因重新抹平 ——
+        # 运营分不清是自己密码打错还是验证码过期。
         return str(exc)
-    if isinstance(exc, CompanyLoginRejected):
-        return "公司账号或密码不正确，或验证码无效"
     if isinstance(exc, CompanyUnreachable):
         return "公司登录服务暂时不可用，请稍后重试"
     return "登录未完成，请稍后重试或联系管理员"
