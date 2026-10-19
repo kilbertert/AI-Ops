@@ -137,12 +137,16 @@ P3 回环对端未声明协议
 **为什么单测绿着**：假公司替身的「验证码不能为空」分支回的是 **HTTP 200**，真网关回 428。
 替身把状态码写软了，分类器走不到 428。
 
-**改动**：`_mapping(*, login: bool)` 按端点分两份 —— 登录端点的凭据拒绝是**运营的输入问题**
-（`CompanyLoginRejected`，状态码集合加 428），读权限码端点的拒绝是**我们令牌的问题**
-（保持 `CompanyUnreachable`）。`_public_reason` 不再把已分好的成因抹平成「密码或验证码无效」。
+**改动**：`_mapping(*, login: bool)` 按端点分两份 —— 登录端点上**只有 428** 是
+"运营的输入问题"（`CompanyLoginRejected`；401/403 是网关层面的拒绝，仍走
+`CompanyUnreachable`），读权限码端点的拒绝是我们令牌的问题（同样 `CompanyUnreachable`）。`_public_reason` 不再把已分好的成因抹平成「密码或验证码无效」。
 
-**判据**：`uv run pytest -n auto` → **2945 passed, 9 skipped**（含 3 条新参数化用例）；
+**判据**：`uv run pytest -n auto` → **2952 passed, 9 skipped**（本分支 `3b7a2a0`，实测）；
+`tests/test_dify_login_proxy.py` 单独跑 **56 passed**；
 `ruff check` / `ruff format --check` / `compileall` 干净。
+
+> 口径：全量数量随 rebase 变化 —— 本分支基于 `a663400`（#851 已合），比写下这条判据时的
+> 基线多出 #851 带来的一组用例。**报数一律以本次提交实测为准**，不沿用旧快照。
 
 **突变复验（关键）**：只把 `auth_rejected_statuses` 里的 428 去掉、**保留全部用例** ⇒
 `test_the_captcha_filters_428_is_a_rejection_not_an_outage` 三条全红，逐字报出
