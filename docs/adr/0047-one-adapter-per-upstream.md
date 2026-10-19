@@ -44,15 +44,18 @@ received null","type":"invalid_request_error","param":"reasoning"}}
 
 ## 决策二：`deepseek-v4.1-flash` 走 commandcode
 
-实测两边对同一个模型名的支持是**互斥**的：
+实测两边对模型的支持**不是对称的**（commandcode 两个都收，baoyun 只收其中一个）：
 
 | 上游 | `deepseek-v4.1-flash` | `deepseek-v4-flash` |
 |---|---|---|
 | baoyun（直连） | **503**（不支持） | 200（上游实际返回 `deepseek-v4-flash-ga-260731`） |
 | commandcode | **200** | 200 |
 
-需求要用的模型是 `deepseek-v4.1-flash`，而 baoyun 不提供它。所以 commandcode 不能
-只当备用——**它必须是主 provider**，baoyun 退为备用（等它充值后对 `v4-flash` 仍然可用）。
+需求要用的模型是 `deepseek-v4.1-flash`，**baoyun 不提供它**（503）。所以 commandcode
+不能只当备用——**它必须做主 provider**，baoyun 退为备用（它充值后对 `deepseek-v4-flash`
+仍然可用，是这个模型上的真实退路）。注意备用的价值因此是**部分**的：故障转移过去之后，
+网关会带着 `v4.1-flash` 这个名字去问 baoyun，而它不支持 —— 那条路会失败。
+这一点在下方的「上限」里写明。
 
 ## 被否掉的替代形态
 
@@ -75,6 +78,12 @@ received null","type":"invalid_request_error","param":"reasoning"}}
 
 更难：**一台上游一个实例**，实例多了要各自起 systemd 单元并登记端口；
 端口从 41 的主机端口登记表里分配，不能随手挑。
+
+上限：**备用对模型名的支持可能窄于主 provider，而故障转移不看模型。**
+本例即如此：静态图上 baoyun 是 `deepseek-v4.1-flash` 的备用，实际上它不提供该模型，
+转移过去仍会失败（只是失败得更快、报错更诚实）。真正的教训是：
+**登记备用之前，要按"主 provider 当前在用的模型"去验，而不是按 provider 名字验。**
+要做成"按模型选备用"需要 provider 表里有能力声明，本次未做。
 
 上限：适配器只修**已知**的形状差异。一个没见过的上游怪癖仍然会以原始报错的形式
 冒出来——这是刻意的：`patch_body` 对看不懂的 body 原样转发，不去猜。
