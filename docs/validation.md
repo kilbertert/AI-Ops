@@ -1,3 +1,56 @@
+## 2026-10-19 · #837 + #838 合并后 41 复验（真实会话，经公网入口）
+
+**范围**：41 生产（`/health` = `0.1.0+33b7c86e847b`，即 #840 `b3e0258` + #841 `33b7c86`
+两个 squash 合并后的部署），经**公网入口** `https://api.mall.qushiyun.com` 以真实会话
+驱动 ask/answer 面。租户 `1942105476598821824`（ulink，宣传素材所属租户）。
+本节是**修复后的线上行为**，与上面两节的「成因与判据」是两件事。
+
+### 一、结果
+
+| 问题 | status | retrieval | blocks | media 取字节 |
+|---|---|---|---|---|
+| `有客户案例嘛` | completed | found / searches=1 | 4×text + **image** + 3×reference | **200，41,646 B**（`ffd8ffe0` = JPEG） |
+| `新加坡无人电动巴士有视频吗` | completed | found / searches=1 | 5×text + **video** + reference | **200，82,348,365 B**（`ftyp` = MP4） |
+
+后者正是修复前那份「回答了但没有媒体」的报告问句的同类问题；本次两条都带媒体块。
+
+### 二、决定性证据：修复真的在这条路径上生效（rollout 逐轮）
+
+`/var/lib/aiops-41/codex-home/sessions/2026/10/19/rollout-2026-10-19T15-45-11-*.jsonl`
+（该 run 为 `run-20261019T074510Z-qa-46da`）：
+
+```
+[17] MODEL tool_request: {"tool":"knowledge_search","reason":"未指定行业，先检索一个…"}   ← 没有 query
+[24] ★★ HARNESS RE-ASK FIRED                                                      ← #837 的修复
+[32] MODEL tool_request: {"tool":"knowledge_search","query":"充电 客户案例 标杆项目", …} ← 补上了关键词
+[39] search back; media descriptors=17
+[42] MODEL final answer (resource_id cites=8)
+```
+
+即：**模型漏 `query` → harness 重问 → 模型补关键词 → 检索带回媒体 → 答案引用资源 id**。
+修复前这条路径会把 `reason` 整句当检索词、返回 0 个媒体块，而答案仍是
+`retrieval_status: found` —— 表面完全正常。
+
+### 三、深度（#838）在 41 上的生效状态
+
+- 进程 env 未设 `AIOPS_GATEWAY_KB_SEARCH_MAX_RESULTS`，走**代码默认 10**；
+  `GatewayServerSettings.from_env().kb_search_max_results == 10`（41 实测）。
+- 部署源码 `gateway_runtime.py` 两处调用点均传
+  `max_results=self.gateway_settings.kb_search_max_results`（2336 / 2631 行）。
+- **边界（据实）**：k 值对**线上媒体块出现率**的统计影响未做对照实验 —— 本节只证明
+  生效值确为 10，以及两条真实问句都产出了媒体块。「k=5 → k=10 使覆盖从 5/16 升到
+  12/16」那条判据来自上面的只读回放，不是线上流量统计。
+
+### 四、边界与纪律
+
+- **会写**：本复验向 `assistant_questions` 写入了两条真实问答行
+  （`qa_8504414d0c3d47c4ab09f8e4f8071c15`、`qa_0e18ea4e64294fa4bd32f87e8cac45a2`）——
+  这正是「用户问一个问题」的正常可见效果，不是绕过产品面。未改任何配置、未部署、
+  未触碰订单数据。
+- **前端渲染不在本仓**：证明的是网关交付了正确的 blocks 且签名 URL 可取字节，
+  不证明 APK 的渲染结果。
+- 会话与凭据**未打印**；两处 rollout 引用只给文件名与行号，不给会话值。
+
 ## 2026-10-19 · #838 深度判据：16 种 query 形状 × 深度的覆盖表（只读回放）
 
 **范围**：41 生产知识库（`8701c742b28111f18637d95f7710e3a3`，`chunk_method=picture`）
