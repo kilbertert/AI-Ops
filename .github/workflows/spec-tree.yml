@@ -61,8 +61,16 @@ jobs:
     #
     # The rule this encodes: a CI run is worth its cost only when it (a) covers the
     # content that is about to enter main AND (b) its result is used. A draft fails
-    # both. The moment the PR is marked ready, `ready_for_review` fires and this
-    # job runs on the exact content that will be judged.
+    # both.
+    #
+    # ⚠️ `ready_for_review` MUST be exempted, and that is not a detail. Measured on
+    # this repository (PR #833): when a draft is marked ready, the `ready_for_review`
+    # event fires, but its `pull_request.draft` field still reads `true` — the
+    # payload describes the transition, not the state after it. A guard that only
+    # tested `draft` therefore skipped the run for the one event that means "now
+    # judge it", and the PR ended with all three checks `skipping` and no way to
+    # revisit them. The exemption is what makes the guard correct rather than
+    # merely quiet.
     #
     # ⚠️ Written as a guard rather than as a `types: [...]` filter on purpose.
     # `types: [ready_for_review]` alone would mean a NON-draft pull request never
@@ -70,7 +78,10 @@ jobs:
     # broad and the condition explicit is what makes "will this run?" readable from
     # the file; a filter that silently drops events is the failure ADR 0010 and the
     # 1.7.26 work both exist to prevent.
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.action == 'ready_for_review' ||
+      github.event.pull_request.draft == false
     name: spec-tree lint
     runs-on: ubuntu-latest
     timeout-minutes: 10

@@ -349,6 +349,29 @@ codex rollout 日志里模型那一回合的实际输出：
 **未完成业务验收**：本次无用户可见行为变化；上表是执行层面的度量，
 **不构成任何业务路径的可用性证据**。
 
+## 2026-10-19 · draft 期间不跑 CI：本地与线上验证摘要
+
+**范围**：`.github/workflows/{ci,afk-policy,spec-tree}.yml` 各加 job 级 draft 守卫。
+**不改源码、不改测试断言。**
+
+**判据**：一次 CI 运行值得它的成本 ⟺ (a) 覆盖即将进 main 的内容 ∧ (b) 结论会被用到。
+(b) 有取证：全仓 grep `gh pr checks|statusCheckRollup|/check-runs` **返回空**。
+
+| 项 | 结果 |
+|---|---|
+| 全量套件 `-n auto`（本地） | 2883 passed / 9 skipped |
+| `adr.check` / `policy-check` / `repo-map.check` / `ruff` | 均 ok |
+| **线上**：draft 状态（实验 PR #833） | 三个检查 **`skipping`**，PR 未被 wedge |
+| **线上**：标 ready 后 push | `verify` **pass**、`spec-tree lint` **pass** |
+
+**两个被推翻的假设**（都靠实测，不靠记忆）：
+① 平台**不会**原生跳过 draft 的 pull_request workflow —— #825 从未 ready 却跑了 11 次；
+② 只测 `draft == false` 会把 `ready_for_review` 那一刻也跳过 —— 该事件的 payload 里
+   `draft` **仍读作 true**，必须显式放行。
+
+**未完成业务验收**：本次无用户可见行为变化；上表是执行层面的度量，
+**不构成任何业务路径的可用性证据**。
+
 ## 2026-10-18 · 去掉 main 上重复的一遍 CI：本地验证摘要
 
 **范围**：`.github/workflows/ci.yml`、`afk-policy.yml`（各去掉 `push: main`）。

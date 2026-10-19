@@ -76,6 +76,41 @@ jobs:
           gh pr edit "$PR_NUMBER" --remove-label "agent:blocked" || true
           gh pr edit "$PR_NUMBER" --add-label "agent:in-progress"
 
+      # ── Back to draft while this job edits the branch ────────────────────────
+      # This job fixes review findings on a pull request that has ALREADY been
+      # marked ready, then pushes. Every one of those pushes re-ran the full
+      # check suite (see ADR 0045: the CI workflows skip drafts, but a ready PR
+      # is not a draft). Marking it a draft for the duration is what makes that
+      # skip apply here too — the same rule, one step further out.
+      #
+      # `--draft` is a GraphQL mutation (`convertPullRequestToDraft`), and the
+      # workflow token is refused for it — the identical refusal `agent-review.yml`
+      # documents at length for `gh pr ready` ("Resource not accessible by
+      # integration", which a trailing `|| true` then hid). So this uses
+      # AGENT_PAT, and like that step it READS BACK rather than trusting a
+      # successful call: a draft that silently did not happen means the pushes
+      # below cost the suite again, and nothing would say so.
+      - name: Mark the pull request draft while it is being edited
+        if: steps.state.outputs.proceed == 'true' && steps.inputs.outputs.proceed == 'true'
+        env:
+          AGENT_PAT: ${{ secrets.AGENT_PAT }}
+        run: |
+          set -euo pipefail
+          if [ -z "$AGENT_PAT" ]; then
+            echo "AGENT_PAT is required to draft the pull request before editing it." > "${RUNNER_TEMP}/failure_reason.txt"
+            exit 1
+          fi
+          if ! GH_TOKEN="$AGENT_PAT" gh pr ready "$PR_NUMBER" --undo; then
+            echo "AGENT_PAT could not mark the pull request draft." > "${RUNNER_TEMP}/failure_reason.txt"
+            exit 1
+          fi
+          is_draft=$(GH_TOKEN="$AGENT_PAT" gh pr view "$PR_NUMBER" --json isDraft --jq '.isDraft')
+          if [ "$is_draft" != "true" ]; then
+            echo "::error::PR #${PR_NUMBER} is not a draft after being marked draft"
+            exit 1
+          fi
+          echo "PR #${PR_NUMBER} is a draft while this job edits it."
+
       - name: Checkout trusted controller
         if: steps.state.outputs.proceed == 'true' && steps.inputs.outputs.proceed == 'true'
         uses: actions/checkout@v4
@@ -264,3 +299,29 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh pr edit "$PR_NUMBER" --remove-label "agent:in-progress" || true
+
+      # Hand it back ready — in `always()` so a failed edit run does not leave the
+      # pull request stuck in draft, which would strand it: a draft cannot be
+      # merged, and the human who would notice is not watching for that.
+      # Marking it ready is also what triggers the check suite on the new content,
+      # so this step is the point at which CI becomes worth running (ADR 0045).
+      - name: Mark the pull request ready again
+        if: always() && steps.state.outputs.proceed == 'true' && steps.inputs.outputs.proceed == 'true'
+        env:
+          AGENT_PAT: ${{ secrets.AGENT_PAT }}
+        run: |
+          set -euo pipefail
+          if [ -z "$AGENT_PAT" ]; then
+            echo "AGENT_PAT is required to mark the pull request ready again." >&2
+            exit 1
+          fi
+          if ! GH_TOKEN="$AGENT_PAT" gh pr ready "$PR_NUMBER"; then
+            echo "AGENT_PAT could not mark the pull request ready again." >&2
+            exit 1
+          fi
+          is_draft=$(GH_TOKEN="$AGENT_PAT" gh pr view "$PR_NUMBER" --json isDraft --jq '.isDraft')
+          if [ "$is_draft" = "true" ]; then
+            echo "::error::PR #${PR_NUMBER} is still a draft after being marked ready"
+            exit 1
+          fi
+          echo "PR #${PR_NUMBER} is ready again; the check suite runs on the new content."
