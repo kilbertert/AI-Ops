@@ -357,12 +357,19 @@ def test_grammar_is_dropped_when_the_request_also_declares_tools() -> None:
     assert result["tools"] == [_tool()]
 
 
-def test_the_empty_text_object_is_dropped_too_not_left_as_a_stub() -> None:
+def test_the_empty_text_object_is_removed_not_left_as_a_null_stub() -> None:
+    """The key goes; it must NOT become `text: null`.
+
+    This test used to assert `text is None` — the very shape commandcode 400s on
+    ("expected record, received null", measured 2026-10-19). Setting the field
+    to null is not the same as removing it: an endpoint that types `text` as an
+    object accepts the omission and rejects the null.
+    """
     payload = {"input": _statused_input(), "tools": [_tool()], "text": {"format": _grammar()}}
 
     patched, _ = patch_body(json.dumps(payload).encode())
 
-    assert json.loads(patched)["text"] is None
+    assert "text" not in json.loads(patched)
 
 
 def test_grammar_survives_when_there_are_no_tools() -> None:
@@ -449,3 +456,29 @@ def test_null_reasoning_and_the_other_gaps_are_repaired_together() -> None:
     assert result["input"][0]["status"] == DEFAULT_STATUS
     assert "format" not in (result.get("text") or {})
     assert "reasoning" not in result
+
+
+def test_a_null_text_field_is_removed() -> None:
+    """`text: null` is rejected upstream; omitting it is accepted.
+
+    commandcode (measured 2026-10-19): `text: {}` -> 200, `text: null` -> 400
+    "Invalid input: expected record, received null", omitted -> 200.
+    """
+    payload = {"input": _statused_input(), "text": None}
+
+    patched, count = patch_body(json.dumps(payload).encode())
+
+    assert count == 1
+    assert "text" not in json.loads(patched)
+
+
+def test_both_null_object_fields_are_removed_together() -> None:
+    """The Codex CLI emits both when it lacks model metadata."""
+    payload = {"input": _statused_input(), "reasoning": None, "text": None}
+
+    patched, count = patch_body(json.dumps(payload).encode())
+
+    assert count == 2
+    result = json.loads(patched)
+    assert "reasoning" not in result
+    assert "text" not in result

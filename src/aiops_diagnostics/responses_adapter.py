@@ -104,37 +104,50 @@ def drop_conflicting_grammar(payload: Any) -> tuple[Any, int]:
         return payload, 0
 
     remaining = {key: value for key, value in text.items() if key != "format"}
-    # `text` had nothing but the grammar, so the whole object goes too — an
-    # empty `text` is a shape the endpoint has no reason to accept.
-    replacement: Any = remaining if remaining else None
-    return {**payload, "text": replacement}, 1
+    # `text` had nothing but the grammar, so the key goes entirely rather than
+    # being set to `null`. Measured on commandcode (2026-10-19): `text: {}` is
+    # accepted, `text: null` is rejected with "expected record, received null",
+    # and omitting the key is accepted. Setting it to `null` — which this used
+    # to do — broke every request on an upstream that types the field as a
+    # record.
+    if not remaining:
+        return {key: value for key, value in payload.items() if key != "text"}, 1
+    return {**payload, "text": remaining}, 1
 
 
-def drop_null_reasoning(payload: Any) -> tuple[Any, int]:
-    """Return ``(payload, dropped_count)`` with a `null` reasoning field removed.
+#: Top-level request fields the Responses API types as an OBJECT. A `null` for
+#: one of these is rejected by an endpoint that enforces the type
+#: ("Invalid input: expected record, received null"), while omitting the key is
+#: accepted — the field is optional, its null value is not.
+#:
+#: Measured on commandcode (2026-10-19): `reasoning: null` and `text: null` both
+#: 400, and the identical requests without those keys 200. The Codex CLI emits
+#: `null` for exactly these when it has no model metadata, so this is the
+#: harness's normal output rather than a malformed request.
+#:
+#: Deliberately a LIST of object-typed fields, not "strip every null": a null is
+#: meaningful for some fields, and a blanket rule would silently rewrite
+#: requests the endpoint accepts (and eventually one where null means something).
+#: A new field joins this list only with a measured rejection to justify it.
+_NULL_REJECTING_OBJECT_FIELDS: tuple[str, ...] = ("reasoning", "text")
 
-    The Codex CLI sends ``"reasoning": null`` whenever it has no metadata for
-    the model it was told to use, and some endpoints reject a null where an
-    object is expected:
 
-        {"error":{"message":"Invalid input: expected object, received null",
-                  "type":"invalid_request_error","param":"reasoning"}}
+def drop_null_object_fields(payload: Any) -> tuple[Any, int]:
+    """Return ``(payload, dropped_count)`` with null-valued object fields removed.
 
-    Measured on commandcode's Responses endpoint (2026-10-19): every model it
-    serves returns 400 for that body, and 200 for the identical body with the
-    field omitted — so the field carries no information the endpoint can use,
-    and dropping it changes nothing about the answer. The baoyun endpoint
-    tolerates the null, which is why a single-upstream deployment never met
-    this.
-
-    Only ``None`` is dropped. An explicit object (``{"effort": "low"}``) is a
-    real instruction and is left exactly as sent.
+    Only for the fields in ``_NULL_REJECTING_OBJECT_FIELDS``, and only when the
+    value is ``None``. A real object (``{"effort": "low"}``) is a genuine
+    instruction and is left exactly as sent.
     """
-    if not isinstance(payload, dict) or "reasoning" not in payload:
+    if not isinstance(payload, dict):
         return payload, 0
-    if payload.get("reasoning") is not None:
+    present = [key for key in _NULL_REJECTING_OBJECT_FIELDS if key in payload]
+    if not present:
         return payload, 0
-    return {key: value for key, value in payload.items() if key != "reasoning"}, 1
+    removable = [key for key in present if payload[key] is None]
+    if not removable:
+        return payload, 0
+    return {key: value for key, value in payload.items() if key not in removable}, len(removable)
 
 
 def patch_responses_payload(payload: Any) -> tuple[Any, int]:
@@ -178,8 +191,8 @@ def patch_body(raw: bytes) -> tuple[bytes, int]:
         return raw, 0
 
     payload, dropped = drop_conflicting_grammar(payload)
-    payload, dropped_reasoning = drop_null_reasoning(payload)
-    dropped += dropped_reasoning
+    payload, dropped_nulls = drop_null_object_fields(payload)
+    dropped += dropped_nulls
     patched_payload, count = patch_responses_payload(payload)
     count += dropped
     if not count:
