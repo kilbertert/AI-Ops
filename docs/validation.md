@@ -180,11 +180,10 @@ Devin 指出那会把**网关层面**的拒绝（我们配的 Basic 凭据、来
 一次明文传输。**
 
 **改动**：`_login` 第一步（早于读请求体）判 `X-Forwarded-Proto == https`，缺失即拒
-（fail-closed）。`ops/dify-login-proxy/dify-login-proxy.conf` 在 `location = /__aiops/login`
-自己补一行 `proxy_set_header X-Forwarded-Proto $scheme` —— `proxy_set_header` 不跨
-location 继承，外层 `location /` 那行管不到精确匹配块。验证码路由不受影响。
+（fail-closed）。验证码路由不受影响 —— 它不含凭据，且页面要先出图。
 
-**判据**：`uv run pytest tests/test_dify_login_proxy.py` → 48 passed（新增 3 条）。
+**判据**：`uv run pytest -n auto` → **2955 passed, 9 skipped**（本提交实测）；
+`tests/test_dify_login_proxy.py` 单独 **59 passed**（新增 3 条）。
 关键的一条钉的是 **`_FakeCompany.calls == []`**：只看状态码不够，代理完全可以在拒掉之前
 先把口令发出去（那就是真正的泄漏）。
 
