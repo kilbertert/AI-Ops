@@ -45,6 +45,30 @@ EXPIRED = "expired"
 
 #: 智能体发布版本还没有接线（M1/M3 的追溯缺口）。回执里显式写出缺口，
 #: 而不是留一个 null 让人读成「字段齐全」。
+#: M3：执行配置身份。签发时固定**期望**，领取时落入**实际**，两者都只来自受控来源。
+EXEC_CONFIG_COLUMNS = (
+    "expected_agent_version",
+    "observed_agent_version",
+    "exec_config_state",
+)
+
+#: 未接线时的回执取值（与今天逐字一致）。
+EXEC_CONFIG_NOT_WIRED = "not_wired"
+
+
+def _migrate_execution_config_columns(connection: sqlite3.Connection) -> None:
+    """给已有的库补 M3 的三列。
+
+    ``CREATE TABLE IF NOT EXISTS`` **不会**给已存在的表加列 —— 所以列变更必须显式迁移，
+    不能只改建表语句（那会让人以为"新库有、旧库也有"）。
+    幂等：已有的列跳过；旧行保持 ``NULL``，**不回填、不猜**。
+    """
+    existing = {row["name"] for row in connection.execute("PRAGMA table_info(agent_runs)")}
+    for column in EXEC_CONFIG_COLUMNS:
+        if column not in existing:
+            connection.execute(f"ALTER TABLE agent_runs ADD COLUMN {column} TEXT")
+
+
 AGENT_VERSION_GAP = "not_wired"
 
 
@@ -230,6 +254,9 @@ class AgentRun:
     snapshot: dict[str, Any] | None
     actual_node_id: str | None
     node_build: str | None
+    expected_agent_version: str | None
+    observed_agent_version: str | None
+    exec_config_state: str | None
     gateway_version: str
     created_at: datetime
     expires_at: datetime
@@ -258,8 +285,10 @@ class AgentRun:
             # 节点声明的构建标识：受信节点的声明，不是镜像/硬件远程证明。
             "node_build": self.node_build,
             "gateway_version": self.gateway_version,
-            "agent_version": None,
-            "agent_version_gap": AGENT_VERSION_GAP,
+            # 期望与实际都来自**记录**（签发时固定 / 领取时对照），没有一个取自模型输出。
+            "agent_version": self.expected_agent_version,
+            "agent_version_observed": self.observed_agent_version,
+            "agent_version_gap": (None if self.expected_agent_version is not None else EXEC_CONFIG_NOT_WIRED),
             "result_sha256": digest,
             "created_at": self.created_at.isoformat(),
             "expires_at": self.expires_at.isoformat(),
@@ -317,6 +346,7 @@ class AgentRunStore:
                     ON agent_runs(scope_fingerprint, created_at DESC);
                 """
             )
+            _migrate_execution_config_columns(connection)
 
     @contextmanager
     def _connection(self, *, write: bool = False) -> Iterator[sqlite3.Connection]:
@@ -343,6 +373,7 @@ class AgentRunStore:
         order_no: str,
         config: AgentRunConfig,
         gateway_version: str,
+        expected_agent_version: str | None = None,
     ) -> AgentRun:
         # 32 字节随机；只作关联编号，不承载任何身份或范围。
         run_id = "run_" + secrets.token_urlsafe(32)
@@ -353,8 +384,9 @@ class AgentRunStore:
                 INSERT INTO agent_runs (
                     run_id, scope_fingerprint, scope_json, order_no, operation,
                     environment, app_id, agent_id, expected_node_id, state,
-                    gateway_version, created_at, expires_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    gateway_version, created_at, expires_at,
+                    expected_agent_version, exec_config_state
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -370,6 +402,8 @@ class AgentRunStore:
                     gateway_version,
                     now.isoformat(),
                     (now + timedelta(seconds=RUN_TTL_SECONDS)).isoformat(),
+                    expected_agent_version,
+                    (None if expected_agent_version is None else "expected"),
                 ),
             )
         run = self.get(run_id)
@@ -402,6 +436,19 @@ class AgentRunStore:
                  WHERE run_id = ? AND state = ? AND expires_at > ?
                 """,
                 (RUNNING, _now().isoformat(), run_id, ISSUED, _now().isoformat()),
+            )
+            return cursor.rowcount == 1
+
+    def record_observed_config(self, run_id: str, observed_agent_version: str) -> bool:
+        """领取时把节点回传的**实际**身份落库（仅供审计，不覆盖签发时的期望）。"""
+        with self._connection(write=True) as connection:
+            cursor = connection.execute(
+                """
+                UPDATE agent_runs
+                   SET observed_agent_version = ?, exec_config_state = ?
+                 WHERE run_id = ?
+                """,
+                (observed_agent_version, "matched", run_id),
             )
             return cursor.rowcount == 1
 
@@ -491,6 +538,9 @@ def _run_from_row(row: sqlite3.Row) -> AgentRun:
         snapshot=json.loads(snapshot) if snapshot else None,
         actual_node_id=row["actual_node_id"],
         node_build=row["node_build"],
+        expected_agent_version=row["expected_agent_version"],
+        observed_agent_version=row["observed_agent_version"],
+        exec_config_state=row["exec_config_state"],
         gateway_version=row["gateway_version"],
         created_at=datetime.fromisoformat(row["created_at"]),
         expires_at=datetime.fromisoformat(row["expires_at"]),

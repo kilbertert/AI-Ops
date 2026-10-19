@@ -18,7 +18,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from aiops_diagnostics import __version__
+from aiops_diagnostics import __version__, execution_manifest
 from aiops_diagnostics.agent_content import AGENT_STARTERS
 from aiops_diagnostics.agent_lifecycle import (
     AGENT_MANAGE_SCOPE,
@@ -2526,8 +2526,23 @@ def create_gateway_app(
                 "agent run unavailable",
                 retryable=True,
             )
+        # 每次签发**重读**清单：撤销/轮换必须像节点凭据一样「下一次立刻生效」，
+        # 而不是拖到下一次重启（见 CONTRACT-M3-GATEWAY.md §6）。
+        try:
+            manifest = execution_manifest.load(selected_settings.execution_manifest_file)
+        except execution_manifest.ExecutionManifestError as exc:
+            raise StandardAPIError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "EXEC_CONFIG_UNAVAILABLE",
+                "agent run unavailable",
+                retryable=True,
+            ) from exc
         run = context.agent_run_store.issue(
-            scope=caller, order_no=order_no, config=config, gateway_version=__version__
+            scope=caller,
+            order_no=order_no,
+            config=config,
+            gateway_version=__version__,
+            expected_agent_version=(manifest.identity if manifest is not None else None),
         )
         try:
             SnailDispatcher().dispatch(config, run.run_id)
@@ -2559,6 +2574,7 @@ def create_gateway_app(
         response: Response,
         authorization: Annotated[str | None, Header()] = None,
         node_build: Annotated[str | None, Header(alias="X-AI-Ops-Node-Build")] = None,
+        exec_config: Annotated[str | None, Header(alias="X-AI-Ops-Exec-Config")] = None,
     ) -> dict[str, Any]:
         """节点领取端点：节点凭据决定身份，**自报字段不参与判定**。
 
@@ -2657,6 +2673,7 @@ def create_gateway_app(
             ):
                 context.agent_run_store.refuse(run_id_, "binding_changed")
                 raise StandardAPIError(status.HTTP_403_FORBIDDEN, "AGENT_RUN_WRONG_NODE", "agent run refused")
+            _require_matching_exec_config(context, latest, exec_config)
             return latest
 
         config = load_config()
@@ -2679,6 +2696,7 @@ def create_gateway_app(
             raise StandardAPIError(
                 status.HTTP_403_FORBIDDEN, "AGENT_RUN_NOT_ACTIVE", "agent run is not active"
             )
+        _require_matching_exec_config(context, run, exec_config)
 
         # 用记录里冻结的身份**再授权一次**。授权在这期间变化（订单不可见 / 授权源故障）
         # 时不放行 —— 包括「已有成功快照」的那条路：不释放旧记录的结果（IC-09）。
@@ -4366,6 +4384,27 @@ def _no_store_headers(request: Request) -> dict[str, str]:
     if request.url.path.startswith(NO_STORE_PATH_PREFIXES):
         return {"Cache-Control": "no-store"}
     return {}
+
+
+def _require_matching_exec_config(context: Any, run: AgentRun, observed: str | None) -> None:
+    """领取时对照执行配置身份。**签发时固定、领取时对照、并把实际值落库。**
+
+    三件事刻意分开：
+    - 记录里**没有**期望（清单未启用）⇒ 什么都不做，行为与今天逐字一致；
+    - 有期望而节点回传缺失或不等 ⇒ ``refuse("exec_config_drift")``，**不返回快照**；
+    - 相等 ⇒ 把实际值写进记录供审计，再放行。
+
+    调用点在 ``claim_charging_status`` 里共有两处（首次领取、以及 ``release_candidate``
+    的最后一次放行），重试路径与它共用同一段 —— R1-1 的教训是放行路径各有一次机会，
+    只覆盖其中一条会让另一条漏掉。
+    """
+    expected = run.expected_agent_version
+    if expected is None:
+        return
+    if not observed or observed != expected:
+        context.agent_run_store.refuse(run.run_id, "exec_config_drift")
+        raise StandardAPIError(status.HTTP_403_FORBIDDEN, "AGENT_RUN_EXEC_CONFIG_DRIFT", "agent run refused")
+    context.agent_run_store.record_observed_config(run.run_id, observed)
 
 
 def _require_consumer_self_order(caller: ScopeContext, business_entry: str | None, order_no: str) -> None:

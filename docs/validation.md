@@ -1,3 +1,42 @@
+## 2026-10-19 · Gateway 签发时固定执行配置身份，领取时对照并持久化（M3-GATEWAY-01）
+
+**范围**：Gateway 侧。节点片已合并（#842）；本片不改节点守卫逻辑，不进通用版本平台。
+**不访问 41、不调真实供应商、不发真实订单。**
+
+### 一、契约
+
+受控清单 `AIOPS_GATEWAY_EXECUTION_MANIFEST_FILE`（默认空＝未启用，行为与今天逐字一致），
+身份＝清单**原始字节** sha256（与节点侧同算法，不做 JSON 归一化）。三层判定：
+
+| 时机 | 判定 | 失败表现 |
+|---|---|---|
+| 启动 | 清单可读性/普通文件/非符号链接/权限不宽于 0600/JSON/schema/`history_policy`/工具非空 | **启动即拒**（`ValueError`），不降级 |
+| 签发 | 每次**重读**清单并写入 `expected_agent_version` | 读不到 ⇒ 503 `EXEC_CONFIG_UNAVAILABLE` |
+| 领取 | 节点回传 `X-AI-Ops-Exec-Config` 与期望逐字相等 | 不等/缺失 ⇒ `refuse("exec_config_drift")` 403，**不返回快照** |
+
+列变更做**真迁移**：`PRAGMA table_info` + `ALTER TABLE` 幂等补三列；旧行保持 `NULL`，不回填。
+回执 `agent_version` 取自记录；未启用时 `null` + `not_wired`。
+
+### 二、结果
+
+- 本片用例 **21 passed**；既有委托执行 55 未回归；全量 **2958 passed / 9 skipped / 0 failed**。
+- 覆盖 GW-01..GW-10：一致身份落库并回执、不一致/缺失拒绝且不释放快照、未启用行为不变、
+  启动拒绝（坏 schema、只配清单不配委派）、**重试放行同样复核**、错凭据拿到既有
+  `NODE_TOKEN_REQUIRED` 401 且记录不变、旧库幂等迁移不破坏历史字段、回执不取自模型文本。
+- **定向变异**：把领取对照改成恒真 ⇒ GW-02 转红（`assert 200 == 403`）。
+- **真进程证据**（`verify-aiops-gateway` skill，临时数据根）：
+  - 基线脚本全项通过（`/health` 200、未认证 401、注册 201、认证 200）；
+  - **坏清单**：`aiops-gateway serve` **rc=1**，报
+    `execution manifest is invalid: unsupported execution manifest schema`，端口**未监听**；
+  - **合法清单**：服务正常起来，`/health` 返回 `{"ok":true,...}`。
+
+### 三、边界
+
+- 本地合成与一次性数据根：**不**证明真实供应商、真实订单、生产装配。
+- 本片改 `src/**`，**命中生产 CD 触发路径** —— 与节点片不同，合并前需单独评估。
+- `agent_version_observed` 是审计字段；`exec_config_state` 目前只有 `expected`/`matched`
+  两个取值，漂移时不写（记录已被 `refuse` 钉成终态）。
+
 ## 2026-10-19 · 执行配置守卫：最终契约与本地合成验收（节点侧）
 
 **范围**：节点侧守卫 —— 真实节点装配在**调用模型之前**拒绝配置漂移。不改 Gateway、
