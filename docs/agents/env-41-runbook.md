@@ -648,6 +648,75 @@ ssh aiops-41 'python3 /tmp/d4-cutover.py rollback'    # 从最近一次 d4-cutov
 第三行证明**从 Dify 自己的网络位置**这条 URL 可达且门生效。真 key 那一格没在容器里跑，
 是因为凭据不该进容器 —— 那是有意的边界，不是遗漏。
 
+## 1.11 模型上游与适配器实例（**一个上游一个实例**，2026-10-19 新增）
+
+每个 Responses 上游在 41 上有一个**独立的适配器实例**（`aiops-responses-adapter`），
+只差 `PORT` 与 `UPSTREAM`。适配器负责把上游未必接受的请求形状修掉、并把响应里的
+`status` 字段补全；它**不持有凭据**（客户端的 `Authorization` 原样透传，key 仍由
+Gateway 的 `key_slot` 文件提供），所以多起一个实例不需要多管一份秘密。
+
+当前两个实例：
+
+| 端口 | upstream | 用途 |
+|---|---|---|
+| 8799 | `https://ai-api.baoyun.com/v1` | baoyun |
+| 8800 | `https://api.commandcode.ai/provider/v1` | commandcode |
+
+### 新起一个实例（照抄 8799 的单元，改 PORT/UPSTREAM）
+
+```bash
+# 1) 端口从 41 的主机端口登记表分配，不要随手挑；确认未被占用：
+ss -lntp | grep -w 8800 || echo "8800 free"
+
+# 2) 复制单元并改两行（Desc/Port/Upstream），不要改别的加固项
+cp /etc/systemd/system/aiops-responses-adapter.service \
+   /etc/systemd/system/aiops-responses-adapter-commandcode.service
+#   Environment=AIOPS_RESPONSES_ADAPTER_PORT=8800
+#   Environment=AIOPS_RESPONSES_ADAPTER_UPSTREAM=https://api.commandcode.ai/provider/v1
+
+systemctl daemon-reload
+systemctl enable --now aiops-responses-adapter-commandcode.service
+ss -lntp | grep -w 8800        # 必须只监听 127.0.0.1
+
+# 3) 自检（不带凭据应被上游拒绝，带凭据应 200）—— 这一步只为证明实例活着：
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8800/healthz   # 期望 200
+```
+
+### 把 Gateway 指过去
+
+`/etc/aiops-41/production.env`（**不是** `gateway.env`）：
+
+```bash
+# 顺序即优先级：前面是主，后面是备用（ADR 0046）
+AIOPS_PROVIDERS=commandcode,baoyun
+AIOPS_DEFAULT_PROVIDER=commandcode
+AIOPS_PROVIDER_COMMANDCODE_BASE_URL=http://127.0.0.1:8800
+AIOPS_PROVIDER_COMMANDCODE_MODEL=deepseek/deepseek-v4.1-flash
+AIOPS_PROVIDER_COMMANDCODE_KEY_SLOT=commandcode
+AIOPS_PROVIDER_COMMANDCODE_WIRE_API=responses
+```
+
+> **`deepseek-v4.1-flash` 只能走 commandcode**：实测 baoyun 对该模型返回 **503 不支持**
+> （它只提供 `deepseek-v4-flash`，上游实际返回 `deepseek-v4-flash-ga-260731`）。
+> 这不是配置偏好，是可用性事实。
+
+改完 `systemctl restart aiops-gateway-41`，然后**必须**核对落地的链：
+
+```bash
+cd /opt/aiops-41 && MP=$(systemctl show -p MainPID --value aiops-gateway-41)
+runuser -u aiops41 -- env $(tr '\0' '\n' < /proc/$MP/environ | grep -E '^AIOPS_' | xargs -d'\n') \
+  .venv/bin/python - <<'EOF'
+import pathlib
+from aiops_diagnostics.config import Settings
+from aiops_diagnostics.gateway_config import GatewayServerSettings
+s = Settings.from_config(GatewayServerSettings.from_env().server_config_file)
+print([p.name for p in s.agent.provider_chain(None)])
+EOF
+```
+
+期望打印 `['commandcode', 'baoyun']`。**provider 配置来自 `production.env`，不是进程
+环境** —— 不要去 `/proc/<pid>/environ` 里找它们（见 §1.4 的踩坑记录）。
+
 ## 2. 部署（源码同步到 41）
 
 生产代码是文件拷贝部署（41 无 `.git`）。流程：**备份 → 传 → 校验 sha → 重启**。

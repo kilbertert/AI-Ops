@@ -1,3 +1,35 @@
+## 2026-10-19 · 适配器的 `reasoning: null` 兼容：本地用例与上游实测
+
+**范围**：`responses_adapter.drop_null_reasoning`。
+
+### 一、上游实测（41 与直连，2026-10-19）
+
+| 试验 | 结果 |
+|---|---|
+| commandcode `/responses` 带 `reasoning: null` | **400**（`param: reasoning`），所有模型一致 |
+| 同一请求省略 `reasoning` | **200**，`object=response status=completed` |
+| commandcode `deepseek/deepseek-v4.1-flash` 不带 null | **200**，正文 `OK` |
+| baoyun 适配器（8799）带 `reasoning: null` | **200** —— 容忍 |
+| Codex CLI `-m deepseek/deepseek-v4-flash`（无元数据） | 失败，CLI 打出 `reasoning effort: none` |
+| Codex CLI 不加 `-m`（已知模型） | **200**，正文 `OK` |
+
+### 二、本地判据
+
+- `tests/test_responses_adapter.py` 新增 3 条：`null` 被丢掉；
+  **真实的 `{"effort":"low"}` 不被改动**；与另外两种修补（补 `status`、丢 `text.format`）
+  在同一遍里一起生效（计数 3）。
+- 去掉补丁后 `test_null_reasoning_is_dropped` 与
+  `test_null_reasoning_and_the_other_gaps_are_repaired_together` **双双失败**（复跑确认）。
+- 全量 **2928 passed / 0 failed / 9 skipped**。
+
+### 三、据实（边界）
+
+- **41 上尚未部署第二个适配器实例**，本记录只覆盖本地用例与直连上游的实测；
+  端到端（网关 → 适配器 → commandcode → 真实会话）的取证在部署后补记。
+- 适配器只修**已知**形状差异；看不懂的 body 原样转发，不去猜（这是刻意的）。
+- `deepseek-v4.1-flash` 在 baoyun 上 503 不支持，是本次把 commandcode 设为主 provider
+  的直接原因，不是配置偏好。
+
 ## 2026-10-19 · M2-LIVE-06 合并后审查：逐跳字段
 
 基于 #827 合并提交 `eaf7215`，修复上游 `Connection` 指定的额外字段仍被转发的问题。

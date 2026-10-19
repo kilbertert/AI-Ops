@@ -406,3 +406,46 @@ def test_both_gaps_are_repaired_in_one_pass() -> None:
     assert count == 2, "one history item patched, one grammar dropped"
     assert result["input"][0]["status"] == "completed"
     assert json.loads(patched).get("text") is None
+
+
+def test_null_reasoning_is_dropped() -> None:
+    """The Codex CLI sends `reasoning: null` when it lacks model metadata.
+
+    commandcode's Responses endpoint rejects that body with 400
+    ("Invalid input: expected object, received null") for every model it serves,
+    and accepts the identical body with the field omitted — measured
+    2026-10-19. The field carries no information in that state, so dropping it
+    cannot change the answer.
+    """
+    payload = {"input": _statused_input(), "reasoning": None}
+
+    patched, count = patch_body(json.dumps(payload).encode())
+
+    assert count == 1
+    assert "reasoning" not in json.loads(patched)
+
+
+def test_a_real_reasoning_object_is_left_alone() -> None:
+    """Only a NULL is meaningless. An explicit effort is a real instruction."""
+    payload = {"input": _statused_input(), "reasoning": {"effort": "low"}}
+    body = json.dumps(payload).encode()
+
+    assert patch_body(body) == (body, 0)
+
+
+def test_null_reasoning_and_the_other_gaps_are_repaired_together() -> None:
+    payload = {
+        "input": [{"type": "function_call", "name": "order_snapshot"}],
+        "tools": [_tool()],
+        "text": {"format": _grammar()},
+        "reasoning": None,
+    }
+
+    patched, count = patch_body(json.dumps(payload).encode())
+
+    # 1 status + 1 grammar drop + 1 reasoning drop
+    assert count == 3
+    result = json.loads(patched)
+    assert result["input"][0]["status"] == DEFAULT_STATUS
+    assert "format" not in (result.get("text") or {})
+    assert "reasoning" not in result
