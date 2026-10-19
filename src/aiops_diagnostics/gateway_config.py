@@ -52,6 +52,9 @@ class GatewayServerSettings:
     #: 同一条「全空即与今天逐字一致」的形状）。路径必须指向 0600 的 JSON：它持有
     #: Gateway 自己的平台应用令牌（明文），而节点凭据只存 SHA-256。
     agent_run_config_file: str = ""
+    #: M3：受控**执行配置清单**（期望值的唯一来源）。缺省为空 ⇒ 守卫不启用，行为与今天
+    #: 逐字一致；配了就必须读得到且权限合规，否则**启动即拒**（不降级）。
+    execution_manifest_file: str = ""
     #: 管家端公司 OAuth2 令牌的校验入口与客户端凭据（#443 / ADR-0009）。三个键**全部缺省为空**，
     #: 全空时该路径整体不构造 ⇒ 行为与启用前逐字一致（这既是「先合不启用」的机制保证，也是
     #: 回滚路径：清空即回退）。只设了其中一部分是启动错误，不是静默禁用 —— 与
@@ -221,6 +224,8 @@ class GatewayServerSettings:
             or _file_value(file_values, "AIOPS_GATEWAY_EXECUTION_ENVIRONMENT"),
             agent_run_config_file=_env("AIOPS_GATEWAY_AGENT_RUN_CONFIG_FILE")
             or _file_value(file_values, "AIOPS_GATEWAY_AGENT_RUN_CONFIG_FILE"),
+            execution_manifest_file=_env("AIOPS_GATEWAY_EXECUTION_MANIFEST_FILE")
+            or _file_value(file_values, "AIOPS_GATEWAY_EXECUTION_MANIFEST_FILE"),
             company_check_token_url=_env("AIOPS_GATEWAY_COMPANY_CHECK_TOKEN_URL")
             or _file_value(file_values, "AIOPS_GATEWAY_COMPANY_CHECK_TOKEN_URL"),
             company_token_client_id=_env("AIOPS_GATEWAY_COMPANY_TOKEN_CLIENT_ID")
@@ -303,6 +308,23 @@ class GatewayServerSettings:
         # 做一次授权读取」的前提，缺一项就不是 fail closed 而是「配了一半就开门」。
         if self.agent_run_config_file and not (self.charging_status_base_url and self.execution_environment):
             raise ValueError("agent run delegation requires charging status settings")
+        # 执行配置清单只在**已启用委派**时有意义：没有委派就没有 run 可固定身份。
+        if self.execution_manifest_file and not self.agent_run_config_file:
+            raise ValueError("execution manifest requires agent run delegation")
+        if self.execution_manifest_file:
+            # 启动时就完整校验一次：坏清单必须在起监听之前失败，而不是等第一次签发
+            # 才变成运行期不可用（那就是「配一半就开门」）。
+            from aiops_diagnostics.execution_manifest import (  # noqa: PLC0415 - 避免循环导入
+                ExecutionManifestError,
+            )
+            from aiops_diagnostics.execution_manifest import (
+                load as load_execution_manifest,
+            )
+
+            try:
+                load_execution_manifest(self.execution_manifest_file)
+            except ExecutionManifestError as exc:
+                raise ValueError(f"execution manifest is invalid: {exc}") from exc
         if not self.bind_host or any(character.isspace() for character in self.bind_host):
             raise ValueError("AIOPS_GATEWAY_BIND is invalid")
         # 解析在这里做（结果丢弃）：级别名不对就该在起监听之前失败，而不是让服务起不来

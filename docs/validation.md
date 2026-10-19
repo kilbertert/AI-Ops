@@ -1,3 +1,83 @@
+## 2026-10-19 · Gateway 签发时固定执行配置身份，领取时对照并持久化（M3-GATEWAY-01 / R1）
+
+**范围**：Gateway 侧。节点片已合并（#842）；本片不改节点守卫逻辑，不进通用版本平台。
+**未完成业务验收。不访问 41、不调真实供应商、不发真实订单。**
+
+### 一、契约
+
+受控清单 `AIOPS_GATEWAY_EXECUTION_MANIFEST_FILE`（默认空＝未启用，行为与今天逐字一致），
+身份＝清单**原始字节** sha256（与节点侧同算法，不做 JSON 归一化）。三层判定：
+
+| 时机 | 判定 | 失败表现 |
+|---|---|---|
+| 启动 | 清单可读性/普通文件/非符号链接/权限不宽于 0600/JSON/schema/`history_policy`/模型必填字段/**`model_options`**/工具三项（name+description+input_schema） | **启动即拒**（`ValueError`），不降级 |
+| 签发 | 每次**重读**清单并写入 `expected_agent_version` | 读不到 ⇒ 503 `EXEC_CONFIG_UNAVAILABLE` |
+| 领取 | 节点回传 `X-AI-Ops-Exec-Config` 与期望逐字相等 | 不等/缺失 ⇒ **记录落终态**（`failed` + `reason=exec_config_drift`）403，**不返回快照** |
+
+列变更做**真迁移**：`PRAGMA table_info` + `ALTER TABLE` 幂等补三列；旧行保持 `NULL`，不回填。
+
+**R1 修掉的两项阻断**（Codex 复现材料 `codex-m3-gateway-review/`）：
+
+1. **漂移拒绝没落终态**：原来只调 `refuse()`，而它只认 `succeeded`。`issued`/`running`
+   的记录被拒后仍然活着 —— `DRIFT_THEN_RETRY 403 after_drift=issued reason=None retry=200
+   final=succeeded`。现在身份核对、终态写入、以及用于放行的状态都在
+   `AgentRunStore.confirm_exec_config()` 的**同一个写事务**里；`issued`/`running`/`succeeded`
+   三种起点都落终态，已有终态不被改写、不复活。
+2. **最终放行拿陈旧对象**：原来「读记录 → 无条件 UPDATE → 返回之前读到的成功对象」，
+   于是另一个请求的拒绝提交进来之后仍返回 200 + 业务正文，还把 `matched` 写在一条
+   `failed` 记录上（`RACE_RESULT 200 state=failed config_state=matched`）。现在写不进去
+   就是不放行，返回的是**同事务写入之后**读到的记录。
+
+另外三处对齐：
+
+- **回执**：`agent_version` 只在**核对一致**之后给出。存在 `expected` 不等于已核实，
+  未核实时 `agent_version=null` + `gap="not_confirmed"`；未启用时回执字段集合与升级前
+  **逐字相同**（`agent_version_observed` 不再无条件出现）。
+- **清单判据**：与节点侧同一组必填字段（`model_options`、工具 description/schema）。
+  此前 Gateway 收、节点拒 —— 同一份清单两端结论不同。
+- **漂移留证**：实际收到的摘要写进 `observed_agent_version`、状态写 `mismatched`，
+  原因继续落在既有的 `reason`，不新增原因列、不扩展统计设施。
+
+### 二、结果
+
+- 初次候选本片用例 **43 passed**；全量 **2998 passed / 9 skipped / 0 failed**。
+  PR #854 补充空白工具名回归后，本片 **44 passed**，相关回归 **133 passed**；最新全量以 PR CI 为准。
+- **红→绿**（两轮，各自对旧实现）：R1 的 9 条断言（`drift_is_terminal` 3 条、
+  终检拒绝 3 条、回执 3 条）在修复前全部失败。FINAL 的独立复核确认：补有效期前，
+  `expires-*` 三条失败，`refuse-*` 三条通过；修复后六条均通过。删除 `confirm_exec_config`
+  里的过期收敛，`expires-*` 三条再次转红，三条正对照与三条 `refuse` 不变。
+- **有效期边界**：到期前一刻 200、**恰好到期** 403 `expired`/`ttl_elapsed`、明显过期 403。
+- **跨语言清单对照**：`tools/m2_close/m3node/manifest_parity.py` 用
+  `manifest_samples_expected.json` 里**独立声明**的期望判定（11 份语义样本 + 2 个权限负例），
+  两端真实加载器逐条比对，13/13 符合期望、正例 `accept-normal` 身份逐字相同。
+  **不是「两侧一致就算过」**：把语义样本以 0644 落盘（Git 检出模式）复现 Codex 的条件，
+  脚本判 `FAIL`（正例两端都被拒 + 「no positive sample was accepted」），不再空转通过。
+  把 Python 侧的必填判据退回修复前的写法，同样报 4 处不一致。
+- **真实 HTTP**（`tools/m2_close/m3node/verify_gateway_exec_config.py`，一次性数据根，
+  真 `create_gateway_app` + 回环 CPMS/平台替身，平台替身扮演节点回呼领取入口）：
+  一致 ⇒ 领取 200 且记录 `matched`、回执 `agent_version` 等于清单身份；
+  缺失 ⇒ 403 `AGENT_RUN_EXEC_CONFIG_DRIFT`、`failed`/`exec_config_drift`、无快照；
+  错摘要 ⇒ 同上且 `observed` 落库、`mismatched`；
+  兄弟节点 ⇒ 403 `AGENT_RUN_WRONG_NODE`、记录仍是 `issued` 未被改写。**11/11 PASS**。
+- **迁移与回滚**（`tools/m2_close/m3node/verify_migration_rollback.py`）：旧库副本迁移后
+  历史行逐字不变、三列 `NULL`；重复启动结构与文件摘要都不再变；**用升级前的
+  `agent_runs.py` 读升级后的库**能读到原有状态（保留列的代码回滚可行）；清空开关后
+  再启动不改动任何行。**9/9 PASS**。
+
+PR #854 审查修正：空白工具名现在被 Gateway 与节点共同拒绝，新增样本后清单对照 **14/14**、
+正例 1；对应回归在修复前失败。删除只跑 Python 的选项，避免单侧结果被当成跨语言验证。
+
+### 三、边界
+
+- 本地合成与一次性数据根：**不**证明真实供应商、真实模型、真实订单、生产装配。
+  上面的真实 HTTP 证据证明的是 API 契约、鉴权与领取判据，**不**证明模型驱动路径。
+- **默认关闭不等于生产库无变化**：无论清单是否启用，`AgentRunStore` 初始化都会
+  `ALTER TABLE` 加三列。合并即触发该迁移，需与 CD 一起评估（证据见上）。
+- `exec_config_state` 取值为 `expected`（已固定期望）/`matched`（已核对一致）/
+  `mismatched`（已核对但不一致）。漂移拒绝同时写 `reason=exec_config_drift`。
+- **节点发送端尚未接线**：本片没有任何代码让真实节点回传该头；测试里的头是测试自己发的，
+  不冒充真实节点。第一次 claim 成功也不等于整轮模型执行成功 —— 那部分留给下一片。
+
 ## 2026-10-19 · 登录代理三联修：36 上线后的真实复验（#847 / #848 / #849）
 
 **部署身份**：`b93635e`（#852 squash）+ `a91e1e1`（#850）+ `a663400`（#851），三票按依赖顺序合并。

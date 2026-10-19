@@ -288,6 +288,7 @@ flowchart TB
 | `health_report.py` | 最小健康报告装配，带更窄的 `OrderSource` 协议 |
 | `charging_status.py` | 本人订单**充电状态快照**的读取（`GET /v1/orders/{order_no}/charging-status` 的下游一半）：经 `bounded_http` 打一笔按订单号钉住的 CPMS `chargingInfo` 接口，**禁止重定向**（不把身份头带去别处）、断言响应里的订单号就是被授权的那一笔；状态码**不重新定义**，交 `order_status.py` 定角色。调用方必须先完成身份与订单授权 —— 本模块不回答「这单是不是你的」 |
 | `agent_runs.py` | **委托执行的授权记录与派发**：一次已授权的读取可以交给可信执行节点跑。记录留在 Gateway（`issued→running→succeeded`，另有 `failed`/`revoked`/`expired`，固定 180 秒不续期）；执行节点只拿到一个高熵 `run_id`，**知道它本身不授予读取权限**，回呼时必须用自己的独立凭据认身。节点凭据只以 SHA-256 存进绑定表；`claim` 是一条带条件的 UPDATE，所以并发领取只有一个赢家、成功后重试返回同一份快照。放行前用冻结身份**再授权一次** —— 授权变了连已算好的结果也不释放。`SnailDispatcher` 是发往编排平台的那一跳（只传 agentId、`sid`、一句固定提问）。见 [ADR-0033](docs/adr/0033-consumer-charging-status.md) |
+| `execution_manifest.py` | **执行配置清单的身份读取**：受控文件是「一次委派应当跑在什么配置上」的唯一期望来源，身份＝**清单原始字节的 sha256**（不做 JSON 归一化，两端可直接比）。未配置时是空操作，行为与今天逐字一致；配了就必须读得到、是普通文件、非符号链接、权限不宽于 0600，否则**启动即拒** —— 不降级、不留「配一半就开门」。清单里没有凭据，只有期望。见 [ADR-0051](docs/adr/0051-execution-config-is-verified-per-surface.md) |
 | `knowledge_retrieval.py` | 有界知识检索与媒体签发：`KbServiceClient`、`KnowledgeSearchGuard`、`MediaResourceSigner`、`MediaProxy` |
 
 #### L4 推理与产品能力

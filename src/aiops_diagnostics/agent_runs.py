@@ -45,6 +45,46 @@ EXPIRED = "expired"
 
 #: 智能体发布版本还没有接线（M1/M3 的追溯缺口）。回执里显式写出缺口，
 #: 而不是留一个 null 让人读成「字段齐全」。
+#: M3：执行配置身份。签发时固定**期望**，领取时落入**实际**，两者都只来自受控来源。
+EXEC_CONFIG_COLUMNS = (
+    "expected_agent_version",
+    "observed_agent_version",
+    "exec_config_state",
+)
+
+#: 未接线时的回执取值（与今天逐字一致）。
+EXEC_CONFIG_NOT_WIRED = "not_wired"
+
+#: 已固定期望、但从未核对一致（含漂移与「还没领过」）：不冒充一个有效版本。
+EXEC_CONFIG_NOT_CONFIRMED = "not_confirmed"
+
+#: 身份漂移写进 ``reason`` —— 与其它拒绝原因同一个落点，不另造原因列。
+EXEC_CONFIG_DRIFT = "exec_config_drift"
+
+#: 终态集合：这些状态下的记录不复活，也不因补审计被改写。
+TERMINAL_STATES = frozenset({FAILED, REVOKED, EXPIRED})
+
+#: ``exec_config_state`` 的三个取值。``expected`` 只说明「签发时固定了期望」，
+#: **不**说明核对过 —— 后者是 ``matched``。两者混用会让一个从未核对过的记录
+#: 在回执里看起来像已验证。
+EXEC_CONFIG_EXPECTED = "expected"
+EXEC_CONFIG_MATCHED = "matched"
+EXEC_CONFIG_MISMATCHED = "mismatched"
+
+
+def _migrate_execution_config_columns(connection: sqlite3.Connection) -> None:
+    """给已有的库补 M3 的三列。
+
+    ``CREATE TABLE IF NOT EXISTS`` **不会**给已存在的表加列 —— 所以列变更必须显式迁移，
+    不能只改建表语句（那会让人以为"新库有、旧库也有"）。
+    幂等：已有的列跳过；旧行保持 ``NULL``，**不回填、不猜**。
+    """
+    existing = {row["name"] for row in connection.execute("PRAGMA table_info(agent_runs)")}
+    for column in EXEC_CONFIG_COLUMNS:
+        if column not in existing:
+            connection.execute(f"ALTER TABLE agent_runs ADD COLUMN {column} TEXT")
+
+
 AGENT_VERSION_GAP = "not_wired"
 
 
@@ -230,20 +270,37 @@ class AgentRun:
     snapshot: dict[str, Any] | None
     actual_node_id: str | None
     node_build: str | None
+    expected_agent_version: str | None
+    observed_agent_version: str | None
+    exec_config_state: str | None
     gateway_version: str
     created_at: datetime
     expires_at: datetime
     claimed_at: datetime | None
     completed_at: datetime | None
 
+    @property
+    def exec_config_confirmed(self) -> bool:
+        """核对过**且**一致。``expected`` 只说明签发时固定了期望，不是核对。"""
+        return (
+            self.exec_config_state == EXEC_CONFIG_MATCHED
+            and self.observed_agent_version is not None
+            and self.observed_agent_version == self.expected_agent_version
+        )
+
     def receipt(self) -> dict[str, Any]:
-        """执行回执：全部字段来自服务端记录与认证结果，没有一个取自模型输出。"""
+        """执行回执：全部字段来自服务端记录与认证结果，没有一个取自模型输出。
+
+        ``agent_version`` 只在**核对一致**之后才给出取值。此前只要存在期望就回填它，
+        于是一条漂移被拒的记录在回执里看起来像「跑在这个版本上」—— 那不是缺口标注，
+        是把未核实的东西写成了已核实。
+        """
         digest = (
             hashlib.sha256(json.dumps(self.snapshot, sort_keys=True).encode("utf-8")).hexdigest()
             if self.snapshot is not None
             else None
         )
-        return {
+        receipt: dict[str, Any] = {
             "run_id": self.run_id,
             "state": self.state,
             "reason": self.reason,
@@ -258,18 +315,49 @@ class AgentRun:
             # 节点声明的构建标识：受信节点的声明，不是镜像/硬件远程证明。
             "node_build": self.node_build,
             "gateway_version": self.gateway_version,
-            "agent_version": None,
-            "agent_version_gap": AGENT_VERSION_GAP,
-            "result_sha256": digest,
-            "created_at": self.created_at.isoformat(),
-            "expires_at": self.expires_at.isoformat(),
-            "claimed_at": self.claimed_at.isoformat() if self.claimed_at else None,
-            "completed_at": self.completed_at.isoformat() if self.completed_at else None,
         }
+        if self.expected_agent_version is not None:
+            # 启用清单后新增的两个键。未启用时**一个都不加**：回执字段集合与今天逐字一致，
+            # 这是 GW-04 的可机械判定形式（键集合相等，不是「看起来没变」）。
+            receipt["agent_version_observed"] = self.observed_agent_version
+        receipt.update(
+            {
+                # 期望与实际都来自**记录**（签发时固定 / 领取时对照），没有一个取自模型输出。
+                "agent_version": (self.expected_agent_version if self.exec_config_confirmed else None),
+                "agent_version_gap": self._version_gap(),
+                "result_sha256": digest,
+                "created_at": self.created_at.isoformat(),
+                "expires_at": self.expires_at.isoformat(),
+                "claimed_at": self.claimed_at.isoformat() if self.claimed_at else None,
+                "completed_at": self.completed_at.isoformat() if self.completed_at else None,
+            }
+        )
+        return receipt
+
+    def _version_gap(self) -> str | None:
+        if self.expected_agent_version is None:
+            return EXEC_CONFIG_NOT_WIRED
+        return None if self.exec_config_confirmed else EXEC_CONFIG_NOT_CONFIRMED
 
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def _expire_in(connection: sqlite3.Connection, run_id: str) -> None:
+    """把已过期的非终态收敛为 ``expired``。**过期语义只此一处**。
+
+    ``expires_at <= now`` 即过期（与 ``claim``/``complete`` 的 ``expires_at > now`` 互补）。
+    抽成函数是为了让「读路径顺手收敛」与「放行事务内核对」用同一条语句 ——
+    复制一份判据是两套语义的开始。
+    """
+    connection.execute(
+        """
+        UPDATE agent_runs SET state = ?, reason = COALESCE(reason, 'ttl_elapsed')
+         WHERE run_id = ? AND state IN (?, ?, ?) AND expires_at <= ?
+        """,
+        (EXPIRED, run_id, ISSUED, RUNNING, SUCCEEDED, _now().isoformat()),
+    )
 
 
 def _ts(value: str | None) -> datetime | None:
@@ -317,6 +405,7 @@ class AgentRunStore:
                     ON agent_runs(scope_fingerprint, created_at DESC);
                 """
             )
+            _migrate_execution_config_columns(connection)
 
     @contextmanager
     def _connection(self, *, write: bool = False) -> Iterator[sqlite3.Connection]:
@@ -343,6 +432,7 @@ class AgentRunStore:
         order_no: str,
         config: AgentRunConfig,
         gateway_version: str,
+        expected_agent_version: str | None = None,
     ) -> AgentRun:
         # 32 字节随机；只作关联编号，不承载任何身份或范围。
         run_id = "run_" + secrets.token_urlsafe(32)
@@ -353,8 +443,9 @@ class AgentRunStore:
                 INSERT INTO agent_runs (
                     run_id, scope_fingerprint, scope_json, order_no, operation,
                     environment, app_id, agent_id, expected_node_id, state,
-                    gateway_version, created_at, expires_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    gateway_version, created_at, expires_at,
+                    expected_agent_version, exec_config_state
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -370,6 +461,8 @@ class AgentRunStore:
                     gateway_version,
                     now.isoformat(),
                     (now + timedelta(seconds=RUN_TTL_SECONDS)).isoformat(),
+                    expected_agent_version,
+                    (None if expected_agent_version is None else EXEC_CONFIG_EXPECTED),
                 ),
             )
         run = self.get(run_id)
@@ -385,13 +478,7 @@ class AgentRunStore:
 
     def _expire(self, run_id: str) -> None:
         with self._connection(write=True) as connection:
-            connection.execute(
-                """
-                UPDATE agent_runs SET state = ?, reason = COALESCE(reason, 'ttl_elapsed')
-                 WHERE run_id = ? AND state IN (?, ?, ?) AND expires_at <= ?
-                """,
-                (EXPIRED, run_id, ISSUED, RUNNING, SUCCEEDED, _now().isoformat()),
-            )
+            _expire_in(connection, run_id)
 
     def claim(self, run_id: str) -> bool:
         """``issued → running``。返回 True 的那一个调用者是唯一被允许读业务的人。"""
@@ -404,6 +491,124 @@ class AgentRunStore:
                 (RUNNING, _now().isoformat(), run_id, ISSUED, _now().isoformat()),
             )
             return cursor.rowcount == 1
+
+    def record_observed_config(self, run_id: str, observed_agent_version: str) -> bool:
+        """领取时把节点回传的**实际**身份落库（仅供审计，不覆盖签发时的期望）。
+
+        条件写：只有记录仍处于可放行状态才写。此前的版本不带任何 `WHERE` 条件，
+        于是**终态之后仍能写进 `matched`** —— 记录已经被别人拒绝成 `failed`，
+        这边却把「核对一致」盖上去，两个字段自相矛盾。
+        """
+        with self._connection(write=True) as connection:
+            cursor = connection.execute(
+                """
+                UPDATE agent_runs
+                   SET observed_agent_version = ?, exec_config_state = ?
+                 WHERE run_id = ? AND state NOT IN (?, ?, ?)
+                """,
+                (
+                    observed_agent_version,
+                    EXEC_CONFIG_MATCHED,
+                    run_id,
+                    FAILED,
+                    REVOKED,
+                    EXPIRED,
+                ),
+            )
+            return cursor.rowcount == 1
+
+    def confirm_exec_config(
+        self, run_id: str, observed: str | None, *, actual_node_id: str | None = None
+    ) -> AgentRun | None:
+        """**一个写事务里**完成身份核对、记录写入，并把要放行的对象读回来。
+
+        为什么必须是这个方法而不是「先读记录、再 `refuse()`、再返回早先读到的对象」：
+        放行的判据（身份相等）与放行依据的状态（``succeeded``）如果来自两次独立读，
+        中间任何一次别的请求的拒绝/撤销提交进来，我们就会拿着**陈旧的成功对象**把
+        快照交出去 —— 这正是复现里 ``200 + 快照``、而库里已经是 ``failed`` 的交错。
+
+        返回值语义：
+        - ``None`` ⇒ 记录已不存在（被删或从未创建），调用方按「找不到」处理。
+        - 身份不一致 ⇒ 已把记录钉成 ``failed`` + ``reason``、留下实际值供审计，然后返回
+          **None**（不放行且不区分原因，避免把记录状态当放行信号）。
+        - 记录已是终态（别人钉的 ``failed``/``revoked``，或本事务刚按 ``expires_at <= now``
+          收敛的 ``expired``）⇒ **原样返回该记录**，由调用方按既有终态语义拒绝。
+          用「执行配置漂移」去描述一条过期或被撤销的记录是错的原因码。
+        - 其余 ⇒ **本事务内**写入之后读到的记录，调用方必须用它放行，
+          而不是之前读到的那一份。
+        - 未启用清单（没有期望）⇒ 原样返回记录，不写任何列，行为与今天逐字一致。
+
+        **有效期必须在这里查**：拿记录的那一刻没有过期，不代表放行的这一瞬间没有。
+        `get()` 只会在**读**的时候顺手收敛，而放行的判据是本事务内的这一份 ——
+        只查 ``state`` 不查 ``expires_at``，就等于把「上一次读时还有效」当成「现在仍有效」。
+        实测：把时钟推过到期点后，首次领取、成功重试、竞争后放行三条路径都返回了
+        200 + 业务正文，而库里状态还是 ``succeeded``。
+        """
+        with self._connection(write=True) as connection:
+            # 先按既有语义收敛过期，再读：这样「过期」与「被别人拒绝」走同一条读取路径，
+            # 不需要在下面另写一个 if。
+            _expire_in(connection, run_id)
+            row = connection.execute("SELECT * FROM agent_runs WHERE run_id = ?", (run_id,)).fetchone()
+            if row is None:
+                return None
+            run = _run_from_row(row)
+            if run.expected_agent_version is None:
+                # 未启用：原样返回，不写任何列，行为与今天逐字一致（终态由调用方按既有语义拒绝）。
+                return run
+            if run.state in TERMINAL_STATES:
+                # 已过期（上面刚收敛）或别人钉的 failed/revoked：不放行、不改写、不覆盖原因。
+                # 返回记录本身，由调用方按**既有**终态语义拒绝（`AGENT_RUN_NOT_ACTIVE`）——
+                # 用「执行配置漂移」描述一条被撤销的记录是错的原因码。
+                return run
+            if observed != run.expected_agent_version:
+                # 漂移：**已签发、已领取、已有成功快照**三种状态都要落终态。早先只调
+                # 只认 ``succeeded`` 的 ``refuse()``，于是 ``issued``/``running`` 的记录
+                # 拒绝之后仍是可领取的，换正确摘要再来一次就 200。
+                # 已是终态的记录不在此列：不改写、不复活、不覆盖既有原因。
+                connection.execute(
+                    """
+                    UPDATE agent_runs
+                       SET state = ?, reason = ?, observed_agent_version = ?,
+                           exec_config_state = ?, completed_at = ?,
+                           actual_node_id = COALESCE(actual_node_id, ?)
+                     WHERE run_id = ? AND state IN (?, ?, ?)
+                    """,
+                    (
+                        FAILED,
+                        EXEC_CONFIG_DRIFT,
+                        observed,
+                        EXEC_CONFIG_MISMATCHED,
+                        _now().isoformat(),
+                        actual_node_id,
+                        run_id,
+                        ISSUED,
+                        RUNNING,
+                        SUCCEEDED,
+                    ),
+                )
+                return None
+            updated = connection.execute(
+                """
+                UPDATE agent_runs
+                   SET observed_agent_version = ?, exec_config_state = ?
+                 WHERE run_id = ? AND state NOT IN (?, ?, ?)
+                """,
+                (
+                    observed,
+                    EXEC_CONFIG_MATCHED,
+                    run_id,
+                    FAILED,
+                    REVOKED,
+                    EXPIRED,
+                ),
+            )
+            if updated.rowcount != 1:
+                # 核对通过但没写进去：记录在读到写之间变成了终态。写不进去就是不放行，
+                # 返回那条记录让调用方按既有终态语义拒绝（而不是谎报成漂移）。
+                latest = connection.execute("SELECT * FROM agent_runs WHERE run_id = ?", (run_id,)).fetchone()
+                return _run_from_row(latest) if latest else None
+            confirmed = connection.execute("SELECT * FROM agent_runs WHERE run_id = ?", (run_id,)).fetchone()
+            return _run_from_row(confirmed) if confirmed else None
 
     def complete(
         self,
@@ -491,6 +696,9 @@ def _run_from_row(row: sqlite3.Row) -> AgentRun:
         snapshot=json.loads(snapshot) if snapshot else None,
         actual_node_id=row["actual_node_id"],
         node_build=row["node_build"],
+        expected_agent_version=row["expected_agent_version"],
+        observed_agent_version=row["observed_agent_version"],
+        exec_config_state=row["exec_config_state"],
         gateway_version=row["gateway_version"],
         created_at=datetime.fromisoformat(row["created_at"]),
         expires_at=datetime.fromisoformat(row["expires_at"]),

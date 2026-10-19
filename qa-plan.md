@@ -2135,3 +2135,43 @@ EXECCFG-TOOL-08）。此前"已在 manager 层可拒"的写法与实测相反，
 两条未单独列例（同一处 parse 分支，由 `reject-empty` 与清单必填字段覆盖）；
 `baseUrl` 运行时改写**不会改道**（模型自带 baseUrl 优先），故该条只作纵深防御。
 本地合成结果不证明 M3 已验收。
+
+## EXECCFG-GATEWAY 签发固定身份、领取对照并持久化（Gateway 侧，M3-GATEWAY-01 / R1）
+
+环境与数据：Linux 开发机、一次性数据根；上游 CPMS 与编排平台都是**本机回环替身**，
+不接真实供应商、不访问 41、不读生产凭据。被测方为真实 `create_gateway_app` 装配：
+委派路由、领取路由、`AgentRunStore` 生命周期、清单加载与身份对照、回执组装。
+
+复跑（三条互不替代；第二条需要 JDK 与锁定依赖，第三条只读 Git 历史）：
+
+```bash
+uv run pytest tests/test_m3_gateway_exec_config.py tests/test_m2_close_contract.py -o addopts='' -q
+M3NODE_DEPS=… M3NODE_JDK_IMAGE=… uv run python tools/m2_close/m3node/manifest_parity.py
+uv run python tools/m2_close/m3node/verify_gateway_exec_config.py --out /tmp/exec-config-http.json
+uv run python tools/m2_close/m3node/verify_migration_rollback.py --out /tmp/migration.json
+```
+
+| 编号 | 前提与动作 | 预期可观察结果 | 本机结果 |
+|---|---|---|---|
+| EXECCFG-GW-01 | 启用清单，节点回传**一致**身份，走完一次委派 | 记录 `expected == observed ==` 清单身份、`matched`；回执 `agent_version` 逐字相等、`gap` 为空 | 通过（单测 + 真实 HTTP） |
+| EXECCFG-GW-02 | 回传**不一致**身份（`issued`/`running`/`succeeded` 三种起点） | 记录落终态 `failed`+`exec_config_drift`+`mismatched`，实际摘要落库，**无快照** | 通过 3/3（修复前 3/3 转红） |
+| EXECCFG-GW-03 | 节点**不带**该头 | 同上按漂移处理（缺省不等于一致） | 通过（单测 + 真实 HTTP） |
+| EXECCFG-GW-04 | 未启用清单 | 行为与升级前逐字一致；**回执字段集合相等**（不多出审计键） | 通过 |
+| EXECCFG-GW-05 | 清单权限过宽/符号链接/非普通文件/空/非法 JSON/schema 或 `history_policy` 不支持 | **启动即拒**，端口不监听 | 通过（单测 + 真进程 rc=1） |
+| EXECCFG-GW-06 | 旧库升级 | 幂等迁移、旧行三列 `NULL`、历史列逐字不变；重复启动文件摘要不变 | 通过 |
+| EXECCFG-GW-07 | 成功快照的**重试**放行 | 重试同样复核；清单轮换后拒绝 | 通过（单测 + 真实 HTTP 重试路径） |
+| EXECCFG-GW-08 | 错凭据 / 兄弟节点 | 与升级前一致（`NODE_TOKEN_REQUIRED` / `AGENT_RUN_WRONG_NODE`），他人记录不被改写 | 通过（真实 HTTP） |
+| EXECCFG-GW-09 | 回执来源 | `agent_version` 只取自已核对记录，绝不取模型文本或节点自报以外的解析结果 | 通过 |
+| EXECCFG-GW-10 | 定向变异 | 领取对照改恒真 ⇒ GW-02 转红 | 通过（`assert 200 == 403`） |
+| EXECCFG-GW-11 | 另一请求的拒绝**在本请求最终检查前**已提交（首次领取/成功重试/真实 claim 竞争三条路径） | 不返回快照，且最终事务不得改写身份核对状态 | 通过 6/6（`refuse` 与 `expires` 各三条；修复前 6/6 转红） |
+| EXECCFG-GW-12 | 回执区分「已固定期望」与「已核对成功」 | 仅存在 `expected` 时 `agent_version=null` + `gap="not_confirmed"` | 通过（修复前 3/3 转红） |
+| EXECCFG-GW-13 | 已有 `failed`/`revoked` 记录再收到漂移 | 不改写、不复活、原因不被覆盖 | 通过 |
+| EXECCFG-GW-14 | 同一组清单样本分别喂给 Python 与 Java 的真实加载器（11 份语义 + 2 个权限负例） | 逐条符合**独立声明**的期望，正例身份逐字相同，且至少一个正例真的被接受 | 通过 13/13；样本以 0644 落盘 ⇒ FAIL（不再空转通过）；Python 必填判据退回旧写法 ⇒ 4 处不一致 |
+| EXECCFG-GW-15 | 用**升级前**的 `agent_runs.py` 读升级后的库 | 读到原有状态、不报错（保留列的代码回滚可行） | 通过 |
+| EXECCFG-GW-16 | 最终事务前时间越过到期点（三条放行路径） | 403、无业务正文、记录 `expired`/`ttl_elapsed`；到期前一刻 200、恰好到期拒绝 | 通过（修复前 3/3 返回 200 + 正文） |
+| EXECCFG-GW-17 | 三条放行路径的正对照（不注入任何事件） | 200 + 快照，`matched` | 通过 3/3 |
+
+**未覆盖**：真实供应商、真实模型、真实订单、生产装配；真实 HTTP 证据证明 API 契约、
+鉴权与领取判据，**不**证明模型驱动路径。**节点发送端尚未接线** —— 领取请求里的
+`X-AI-Ops-Exec-Config` 在以上所有证据里都由测试或替身发出，不冒充真实节点；
+「第一次 claim 成功」也不等于整轮模型执行成功，那部分留到节点与 Gateway 接线之后。

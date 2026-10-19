@@ -1,0 +1,15 @@
+{
+  "_comment": "每份样本的独立期望。判据不拿任何一侧的实现结果当正确答案。",
+  "accept-normal.json": {"accept": true, "reason": "完全合规的清单：两端都必须接受，且身份逐字相同"},
+  "reject-history.json": {"accept": false},
+  "reject-model-key-missing.json": {"accept": false},
+  "reject-model-options-missing.json": {"accept": false},
+  "reject-name-missing.json": {"accept": false},
+  "reject-schema.json": {"accept": false},
+  "reject-system-empty.json": {"accept": false},
+  "reject-tool-description-blank.json": {"accept": false},
+  "reject-tool-description-missing.json": {"accept": false},
+  "reject-tool-schema-missing.json": {"accept": false},
+  "reject-tools-empty.json": {"accept": false},
+  "reject-tool-name-blank.json": {"accept": false}
+}
