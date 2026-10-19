@@ -446,8 +446,13 @@ def test_kb_client_maps_http_200_unknown_business_error_to_unavailable(monkeypat
 def test_runtime_serve_media_rechecks_published_agent_liveness(tmp_path: Path) -> None:
     """The real GatewayRuntime liveness check: an issued URL serves while the
     tenant's customer agent stays published with the same KB binding, and
-    turns 403 once the agent is disabled or republished at another version —
-    before the 600s TTL runs out (#168 acceptance: stale URLs must fail)."""
+    turns 403 once the agent is disabled — before the 600s TTL runs out
+    (#168 acceptance: stale URLs must fail).
+
+    Note what is NOT required: the signing version still being the agent's
+    CURRENT published version. That condition used to be here and it 403'd every
+    promotional image and video on 41 from 2026-09-20 (see
+    `test_serving_survives_the_agent_being_republished`)."""
     from aiops_diagnostics.agent_lifecycle import AgentConfig, AgentManager, AgentStore
     from aiops_diagnostics.config import Settings
     from aiops_diagnostics.gateway_runtime import GatewayRuntime
@@ -781,4 +786,112 @@ def test_promo_media_grant_validates_against_its_own_agent(tmp_path: Path) -> No
         reference_id="chunk-1",
     )
     response = runtime.serve_media(other.url.rsplit("/", 1)[-1])
+    assert response is not None and response.status_code == 403
+
+
+def test_serving_survives_the_agent_being_republished(tmp_path: Path) -> None:
+    """41 live (2026-10-19): every promotional image and video was a 403.
+
+    `canary-宣传案例` was republished v2 -> v3 on 2026-09-20, while the
+    `case_exploration` shortcut kept pinning `#v2`. `_is_active` required the
+    signing version to still equal the agent's current `published_version`, so
+    from that day every media URL the promotional card produced was refused —
+    media was generated, stored in the result payload, and never once displayed.
+
+    A republish is a normal editorial act (better prompt, new KB). It must not
+    revoke the images the previous version already produced: those bytes did not
+    change, and the URL expires on its own within the TTL. Disabling the agent
+    remains the revocation that takes effect immediately.
+    """
+    from aiops_diagnostics.agent_lifecycle import AgentConfig, AgentManager, AgentStore
+    from aiops_diagnostics.config import Settings
+    from aiops_diagnostics.gateway_runtime import GatewayRuntime
+    from aiops_diagnostics.scope_context import DataScope, SubjectRecord
+
+    settings = GatewayServerSettings(
+        data_home=tmp_path,
+        database_file=tmp_path / "gateway.db",
+        server_config_file=tmp_path / "production.env",
+    )
+    settings.server_config_file.write_text("# test\n", encoding="utf-8")
+    store = GatewayStore(settings.database_file)
+    agent_store = AgentStore(settings.database_file)
+    signer = MediaResourceSigner("secret", ttl_seconds=600)
+    runtime = GatewayRuntime(
+        store,
+        settings,
+        Settings(agent=Settings().agent),  # type: ignore[arg-type]
+        kb_search_client=_FakeKbClient(lambda _grant: b"PNGDATA"),
+        media_signer=signer,
+        agent_store=agent_store,
+    )
+
+    subject = SubjectRecord(b_user_id="B-1", tenant_id="tenant-a")
+    admin = ScopeContext.build(
+        caller=subject,
+        subject=subject,
+        delegated=False,
+        effective_tenant_id="tenant-a",
+        data_scope=DataScope(type="self"),
+        roles=frozenset({"ROLE_AGENT_ADMIN"}),
+        permissions=frozenset({"aiops:agents:manage"}),
+    )
+    manager = AgentManager(
+        agent_store,
+        allowed_models=("aiops-api",),
+        knowledge_resolver=_AlwaysValidKnowledge(),
+    )
+    agent = manager.create(
+        admin,
+        name="宣传案例",
+        description="宣传卡片 agent",
+        config=AgentConfig(
+            agent_type="customer",
+            prompt="宣传语气，事实只来自检索。",
+            knowledge_base_ids=("kb-promo",),
+            model="aiops-api",
+            output_contract="blocks-v1",
+        ),
+    )
+    v1 = manager.publish(admin, agent.agent_id, expected_revision=agent.revision)
+
+    # A media URL produced by v1 — what the promotional card hands the client.
+    resource = signer.issue(
+        tenant_id="tenant-a",
+        agent_version=f"{agent.agent_id}#v{v1.version_no}",
+        session_id=None,
+        knowledge_base_id="kb-promo",
+        document_id="doc-1",
+        chunk_id="chunk-1",
+        backend_id="backend-1",
+        kind="image",
+        mime_type="image/png",
+        title="产品海报.png",
+        reference_id="chunk-1",
+    )
+    signed_id = resource.url.rsplit("/", 1)[-1]
+    assert runtime.serve_media(signed_id).status_code == 200
+
+    # The editorial act that used to break it: publish a newer version.
+    latest = manager.get(admin, agent.agent_id).revision
+    draft = manager.fork_draft(admin, agent.agent_id, expected_revision=latest)
+    v2 = manager.publish(admin, agent.agent_id, expected_revision=draft.revision)
+    current = agent_store.get(agent.agent_id, "tenant-a")
+    assert v2.version_no != v1.version_no
+    assert current.published_version != v1.version_no, (
+        "precondition failed: the agent must now be on a newer version"
+    )
+
+    # The v1 URL must still serve; this is the regression.
+    response = runtime.serve_media(signed_id)
+    assert response is not None
+    assert response.status_code == 200, (
+        f"a republish must not revoke media the previous version produced, got {response.status_code}"
+    )
+    assert response.body == b"PNGDATA"
+
+    # Revocation still works: an UNPUBLISHED agent refuses its URLs at once.
+    latest = manager.get(admin, agent.agent_id)
+    manager.disable(admin, agent.agent_id, expected_revision=latest.revision)
+    response = runtime.serve_media(signed_id)
     assert response is not None and response.status_code == 403

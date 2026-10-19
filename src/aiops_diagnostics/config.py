@@ -381,6 +381,32 @@ class AgentSettings:
     def provider_names(self) -> tuple[str, ...]:
         return tuple(provider.name for provider in self.providers)
 
+    def provider_chain(self, name: str | None) -> tuple[ProviderConfig, ...]:
+        """The selected provider, then the standbys that may serve in its place.
+
+        **Registry order is the priority order.** The chosen provider comes
+        first and every provider declared AFTER it is a standby, in declaration
+        order. Deliberately not a second configuration key: a list of standby
+        names that must agree with ``AIOPS_PROVIDERS`` is a list that drifts
+        from it, and the failure mode of drift here is silent — a standby that
+        nothing selects looks exactly like one that was never configured. That
+        is how a paid provider running dry (41 live, 2026-10-19: upstream `403`
+        "预扣费额度失败, 用户剩余额度: ¥0.007") became a total product outage while
+        a funded key slot sat unused beside it.
+
+        Providers declared BEFORE the selected one are never standbys: setting
+        ``AIOPS_DEFAULT_PROVIDER`` to the second entry means the first is
+        superseded, not that it takes priority back on the next failure.
+
+        A legacy single-provider configuration yields a one-element chain, so
+        callers need no special case for it.
+        """
+        primary = self.select_provider(name)
+        if not self.providers:
+            return (primary,)
+        ordered = list(self.providers)
+        return tuple(ordered[ordered.index(primary) :])
+
     def validate(self) -> None:
         codex_bin = Path(self.codex_bin).expanduser()
         if not codex_bin.is_file() or not os.access(codex_bin, os.X_OK):

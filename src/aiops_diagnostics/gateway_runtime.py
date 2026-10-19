@@ -2753,10 +2753,29 @@ class GatewayRuntime:
             promotional card produced was rejected with 403 — media was
             retrievable but never displayable (41 live, 2026-09-18).
 
-            The grant names its agent, so the honest check is: that agent is
-            still published at exactly that version, and still bound to the
-            knowledge base the grant cites. A disabled agent version or an
-            unbound KB still invalidates URLs immediately.
+            The rule is about the AGENT, not about which version is newest:
+
+              * the agent is still published (a disabled agent invalidates its
+                URLs immediately), and
+              * the version that signed the grant still exists and is bound to
+                the knowledge base the grant cites.
+
+            It deliberately does NOT require the signing version to still be the
+            agent's CURRENT ``published_version``. That extra condition was here
+            and it broke every promotional image and video on 41 from
+            2026-09-20 onward: the shortcut pins `canary-宣传案例#v2`, the agent
+            was republished as v3 that day, and `3 != 2` made every URL a 403 —
+            so media was produced and never once displayable. Publishing a
+            TUNED prompt must not 403 the images the previous version already
+            produced; nothing about that republish makes those bytes wrong.
+
+            The cost of dropping it is explicit: an image or video signed by an
+            older-but-still-present version keeps working for the rest of its
+            short TTL (~10 minutes) even after a newer version is published.
+            That is the correct trade — the URL expires on its own, and the
+            alternative is a product surface that silently shows nothing.
+            Disabling the agent still cuts URLs off immediately, which is the
+            revocation the acceptance criterion actually asked for.
             """
             if self.agent_store is None:
                 return False
@@ -2768,7 +2787,7 @@ class GatewayRuntime:
                 version = self.agent_store.version(agent_id, grant.tenant_id, int(version_part))
             except Exception:
                 return False
-            if published.status != "published" or published.published_version != int(version_part):
+            if published.status != "published":
                 return False
             snapshot_kbs = tuple(version.snapshot.get("knowledge_base_ids") or ())
             return grant.knowledge_base_id in snapshot_kbs

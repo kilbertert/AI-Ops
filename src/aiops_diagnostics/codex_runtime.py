@@ -104,6 +104,82 @@ class AgentTurnTimeout(AgentRuntimeError):
     """A Codex turn exceeded the configured deadline and was interrupted."""
 
 
+class ProviderOutage(AgentRuntimeError):
+    """The provider could not serve the turn, and a standby may be able to.
+
+    Raised only for causes that are about the PROVIDER rather than about this
+    request: credentials, quota/balance, rate limits, an unreachable endpoint,
+    or a 5xx. Those are exactly the failures where trying another provider is
+    both safe and useful.
+
+    Deliberately NOT raised for a contract violation: a model that answers in
+    the wrong shape answered, and re-asking a different provider would replace a
+    visible defect with a plausible-looking answer from elsewhere — the mistake
+    `AgentContractError` exists to prevent (2026-09-17).
+    """
+
+
+#: Substrings that mark a provider-side outage rather than a request defect.
+#: Matched case-insensitively against the provider's error text.
+#:
+#: Two families, and both are needed because providers disagree about how to
+#: say "you cannot use this account":
+#:   - HTTP status words, which the harness sees verbatim from the transport.
+#:   - Quota/billing vocabulary, which arrives with a 200 or 403 depending on
+#:     the relay. The live case (41, 2026-10-19) was a 403 whose text was
+#:     Chinese: "预扣费额度失败, 用户剩余额度: ¥0.007319" — none of the English
+#:     status words appear in it, so a status-only rule would have missed the
+#:     very failure this exists for.
+_PROVIDER_OUTAGE_MARKERS: tuple[str, ...] = (
+    "401",
+    "402",
+    "403",
+    "429",
+    "500",
+    "502",
+    "503",
+    "504",
+    "unauthorized",
+    "forbidden",
+    "invalid api key",
+    "invalid_api_key",
+    "authentication",
+    "insufficient",
+    "quota",
+    "rate limit",
+    "too many requests",
+    "balance",
+    "arrearage",
+    "欠费",
+    "余额",
+    "预扣费",
+    "额度",
+    "connection",
+    "timed out",
+    "timeout",
+    "temporarily unavailable",
+    "bad gateway",
+    "service unavailable",
+)
+
+
+def is_provider_outage(exc: BaseException) -> bool:
+    """Whether ``exc`` looks like the provider failing, not the request.
+
+    Conservative by construction: an unrecognised error returns False, so a
+    failure nobody anticipated surfaces as itself instead of being silently
+    retried against a second provider (which would hide it).
+    """
+    if isinstance(exc, (AgentContractError, AgentTurnTimeout)):
+        # The model answered badly, or we cut it off. Neither is the provider
+        # failing, and retrying either elsewhere would misreport it.
+        return False
+    if not isinstance(exc, AgentRuntimeError):
+        return False
+    text = str(exc).lower()
+    return any(marker in text for marker in _PROVIDER_OUTAGE_MARKERS)
+
+
 @dataclass(frozen=True, slots=True)
 class CodexTurnOutput:
     turn_id: str
@@ -194,6 +270,88 @@ class SDKCodexSession:
         self._progress_callback = callback
 
     def run(self, prompt: str, *, output_schema: dict[str, Any] | None = None) -> CodexTurnOutput:
+        """Run one turn, falling over to a standby provider if this one is out.
+
+        The chain comes from ``AgentSettings.provider_chain`` (registry order is
+        priority order). Only a `ProviderOutage` moves to the next provider: a
+        contract violation, a timeout, or any unrecognised error is raised where
+        it happened, because serving it from a second provider would misreport a
+        defect as a successful answer.
+
+        A standby gets a FRESH thread, never a resumed one: the thread belongs to
+        the provider that failed, and replaying it elsewhere would send that
+        provider's context to a different model.
+        """
+        chain = self.settings.provider_chain(self._provider.name)
+        last: ProviderOutage | None = None
+        for index, provider in enumerate(chain):
+            if index:
+                self._switch_provider(provider)
+            try:
+                return self._run_once(prompt, output_schema=output_schema)
+            except ProviderOutage as exc:
+                last = exc
+                if index == len(chain) - 1:
+                    break
+                self._record_event(
+                    {
+                        "type": "codex_provider_failover",
+                        "from_provider": self._provider.name,
+                        "to_provider": chain[index + 1].name,
+                        "error": str(exc)[:300],
+                    }
+                )
+        assert last is not None  # the loop records one before it can fall through
+        raise last
+
+    def _switch_provider(self, provider: ProviderConfig) -> None:
+        """Tear down this session's provider and rebuild the session on ``provider``."""
+        previous = self._codex
+        self._codex = None
+        if previous is not None:
+            with contextlib.suppress(Exception):
+                previous.__exit__(None, None, None)
+        self._provider = provider
+        provider_key = ""
+        try:
+            provider_key = resolve_provider_api_key(self.settings, provider=provider)
+            self._provider_key = provider_key
+            runtime_home = prepare_runtime_home(self.settings, provider=provider)
+            config = CodexConfig(
+                launch_args_override=codex_launch_args(self.settings),
+                cwd=str(self.workspace.path),
+                env={
+                    "CODEX_HOME": str(runtime_home),
+                    PROVIDER_KEY_ENV: provider_key,
+                },
+                client_name="aiops_diagnostics",
+                client_title="AI-Ops Diagnostic Harness",
+            )
+            codex = Codex(config)
+            self._codex = codex
+            codex.__enter__()
+            kwargs: dict[str, Any] = {
+                "approval_mode": ApprovalMode.deny_all,
+                "cwd": str(self.workspace.path),
+                "developer_instructions": _developer_instructions(self.workspace.language),
+                "model_provider": provider.name,
+            }
+            if provider.model:
+                kwargs["model"] = provider.model
+            self._thread = self._codex.thread_start(**kwargs)
+            with contextlib.suppress(Exception):
+                self._thread.set_name(f"AI-Ops {self.workspace.run_id}")
+        except Exception as exc:
+            if self._codex is not None:
+                with contextlib.suppress(Exception):
+                    self._codex.__exit__(None, None, None)
+                self._codex = None
+            message = str(exc).replace(provider_key, "REDACTED")
+            raise ProviderOutage(
+                f"standby provider {provider.name} could not be initialized: {message}"
+            ) from exc
+
+    def _run_once(self, prompt: str, *, output_schema: dict[str, Any] | None = None) -> CodexTurnOutput:
         handle = self._thread.turn(prompt, output_schema=output_schema or agent_turn_schema())
         if self._turn_registrar is not None:
             # Hand the live turn to whoever may interrupt it, before the turn
@@ -232,7 +390,16 @@ class SDKCodexSession:
                     "error": message,
                 }
             )
-            raise AgentRuntimeError(f"Codex turn {handle.id} failed: {message}") from exc
+            # Classified, not blanket-wrapped: a provider-side outage becomes
+            # ProviderOutage so the chain in `run` may try a standby, while
+            # anything unrecognised stays a plain AgentRuntimeError and surfaces
+            # as itself. Wrapping everything would have made every unknown
+            # failure look retryable, and a second provider's plausible answer
+            # would then mask it.
+            failure = AgentRuntimeError(f"Codex turn {handle.id} failed: {message}")
+            if is_provider_outage(failure):
+                raise ProviderOutage(str(failure)) from exc
+            raise failure from exc
         finally:
             heartbeat_stop.set()
             heartbeat_thread.join(timeout=1)
