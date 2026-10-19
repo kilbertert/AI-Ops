@@ -31,7 +31,15 @@ name: Spec Tree
 # required (or with data that its false-positive rate makes it unusable, per ADR
 # 0032). That is an independent decision, so this file keeps both triggers.
 on:
+  # ⚠️ Activity types are listed EXPLICITLY, and `ready_for_review` is among them.
+  # GitHub's default set is `opened, synchronize, reopened` — and a job skipped
+  # because the PR was a draft records a `skipped` conclusion, which SATISFIES a
+  # required status check. So a draft that is marked ready without another push
+  # would never run this job and could still merge, unverified. Listing
+  # `ready_for_review` is what closes that hole; the job-level guard below is what
+  # keeps it from running during draft edits.
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches:
       - main

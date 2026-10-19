@@ -57,6 +57,39 @@ PR 停在「三个检查全是 skipping、且没有途径重判」的状态。
 payload 描述的是这次转变，不是转变之后的状态。
 所以 `ready_for_review` 必须显式放行；这不是细节，是让守卫**正确**而不是仅仅**安静**的东西。
 
+## 审查抓出的洞：`skipped` 满足必需检查
+
+这是本记录最重的一条，也是最反直觉的一条。
+
+**job 级 `if` 被跳过时，检查结论是 `skipped` —— 而 `skipped` 是满足必需状态检查的。**
+三条 workflow 的 `pull_request` 触发原本用 GitHub 的默认 activity types
+（`opened, synchronize, reopened`），**不含 `ready_for_review`**。于是：
+
+```
+draft 打开   → 三个 job 全 skip → 检查记作 skipped（满足必需检查）
+标 ready     → 不在订阅列表 → 不起任何新 run
+不 push      → 这份内容可以未经检查进入 main
+```
+
+我的第一次验证之所以看起来通过，是因为**标 ready 之后我还 push 了一次** ——
+把 push 的效果记到了 ready 头上。把两者分开才看得见洞。
+
+修正：三个 workflow 的 `pull_request` **显式列出** activity types：
+
+```yaml
+pull_request:
+  types: [opened, synchronize, reopened, ready_for_review]
+```
+
+两层各管一件事，缺一不可：
+
+| 层 | 作用 |
+|---|---|
+| `types: [... ready_for_review]` | 标 ready 时**起一次 run** |
+| job 级 `draft == false` 守卫 | draft 编辑期间**不起 run** |
+
+只有守卫 = 标 ready 后仍未验证；只有 types = draft 每次 push 都跑。**两个一起才是设计。**
+
 ## 被否掉的替代形态
 
 - **`types: [ready_for_review]`（只在该事件跑）。** 看起来最贴合本决策的意图，
