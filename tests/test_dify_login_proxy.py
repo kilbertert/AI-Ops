@@ -577,6 +577,24 @@ def test_the_same_source_still_backs_off(stack) -> None:
     assert statuses[-1] == 429, f"同一来源却没有退避：{statuses}"
 
 
+def test_rotating_both_keys_still_hits_a_global_cap(stack) -> None:
+    """伪造来源头 + 轮换用户名**不能换来无限次尝试**。
+
+    Devin 在 PR #851 指出：能连上 10119 的本机进程同样能自带 `X-Real-IP`，轮换它加
+    轮换用户名就能同时绕过 `src:` 与 `acct:` 两条键。应用层分不出"这是 nginx 还是本机
+    进程"，所以不假装能分 —— 另记一条与来源无关的全局键，把收益封在倍数以内。
+
+    fixture 的阈值是 3、倍数 5 ⇒ 第 16 次必然 429。
+    """
+    _FakeCompany.fail_login = "password"
+    statuses = [
+        _login(stack[0], headers={"X-Real-IP": f"198.51.100.{n}"}, username=f"rotating-{n}")[0]
+        for n in range(1, 20)
+    ]
+    assert 429 in statuses, f"轮换两条键就绕过了退避：{statuses}"
+    assert statuses[:15] == [403] * 15, statuses[:15]
+
+
 def test_the_same_account_backs_off_across_sources(stack) -> None:
     """账号这个键仍然跨来源生效：换 IP 不能换来无限次猜同一个账号。"""
     _FakeCompany.fail_login = "password"

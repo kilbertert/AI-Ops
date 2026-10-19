@@ -58,6 +58,11 @@ from aiops_diagnostics.dify_login_service import (
 _LOGGER = logging.getLogger("aiops.dify_login_proxy.server")
 
 MAX_LOGIN_BODY_BYTES = 4096
+
+#: 退避的全局键名与倍数。见 :class:`_Backoff` 的 docstring：来源键可被本机进程伪造，
+#: 这条与来源无关的键把伪造的收益封在 `倍数 × 阈值` 以内。
+GLOBAL_BACKOFF_KEY = "global"
+GLOBAL_BACKOFF_MULTIPLIER = 5
 _RANDOM_STR_RE = re.compile(r"^[A-Za-z0-9]{1,64}$")
 
 
@@ -171,33 +176,51 @@ class _Backoff:
     这个进程只监听回环，所有请求都经宿主 nginx 同源反代进来，因此
     ``self.client_address`` **恒为 127.0.0.1**。按它计数等于把"来源"这个维度
     抹平成常量：一个运营连错五次，**所有运营**在窗口内都被 429（2026-10-19 实测）。
-    nginx 已经在三处设了 ``X-Real-IP``，读它即可。
+    真正的修法在 nginx 那一层（realip 把运营地址写回 ``$remote_addr``），应用这一层
+    读 nginx 覆盖写的 ``X-Real-IP``。
 
-    只认 nginx 设的那一个头，不认 ``X-Forwarded-For``：后者是**调用方可以自带的**，
-    采信它等于给"换一个假 IP 绕过退避"开一道门。而 ``X-Real-IP`` 在 nginx 配置里是
-    ``proxy_set_header`` **覆盖写**，客户端送什么都会被替换掉。
+    只认 nginx 设的那一个头，不认 ``X-Forwarded-For``：后者是**追加**语义，客户端自带
+    的值留在链里，采信它等于给"换一个假 IP 绕过退避"开门。
+
+    ## 全局上限：来源这条键可以被**本机**进程伪造
+
+    能连上 10119 的本机进程同样能自带 ``X-Real-IP``。轮换它 + 轮换用户名可以同时绕过
+    ``src:`` 与 ``acct:`` 两条键（Devin, PR #851）。应用层分不出"是 nginx 还是本机
+    进程"，所以不假装能分出来 —— 另记一条**与来源无关**的全局键，把伪造的收益封在
+    ``GLOBAL_BACKOFF_MULTIPLIER`` 倍阈值以内，而不是无限次。
     """
 
     def __init__(self, threshold: int, window_seconds: int) -> None:
         self.threshold = max(1, threshold)
+        #: 全局键的上限：来源与账号两条键都按 threshold 计，全局键按它的这个倍数计。
+        #: 取 5 是因为正常使用里"同一窗口内所有人加起来连错 5×阈值次"不会发生
+        #: （阈值默认 5 ⇒ 25 次），而拿它去挡伪造是够的；真出现误伤，运维能在 journal
+        #: 里看到 `reason=GLOBAL` 并据此调大。
+        self.global_threshold = self.threshold * GLOBAL_BACKOFF_MULTIPLIER
         self.window = window_seconds
         self._lock = threading.Lock()
         self._hits: dict[str, list[float]] = {}
 
-    def too_many(self, *keys: str) -> bool:
+    def _recent(self, key: str, now: float) -> list[float]:
+        recent = [t for t in self._hits.get(key, []) if now - t < self.window]
+        self._hits[key] = recent
+        return recent
+
+    def too_many(self, *keys: str) -> str | None:
+        """超阈时返回触发的键（供日志用），否则 ``None``。"""
         now = time.monotonic()
         with self._lock:
             for key in keys:
-                recent = [t for t in self._hits.get(key, []) if now - t < self.window]
-                self._hits[key] = recent
-                if len(recent) >= self.threshold:
-                    return True
-        return False
+                if len(self._recent(key, now)) >= self.threshold:
+                    return key
+            if len(self._recent(GLOBAL_BACKOFF_KEY, now)) >= self.global_threshold:
+                return GLOBAL_BACKOFF_KEY
+        return None
 
     def record_failure(self, *keys: str) -> None:
         now = time.monotonic()
         with self._lock:
-            for key in keys:
+            for key in (*keys, GLOBAL_BACKOFF_KEY):
                 self._hits.setdefault(key, []).append(now)
 
     def clear(self, *keys: str) -> None:
@@ -273,7 +296,9 @@ class LoginProxyHandler(BaseHTTPRequestHandler):
             return
         source = self._client_source()
         account_key = f"acct:{username.lower()}"
-        if self.backoff.too_many(f"src:{source}", account_key):
+        blocked = self.backoff.too_many(f"src:{source}", account_key)
+        if blocked:
+            _LOGGER.warning("dify-login: throttled key=%s source=%s", blocked, source)
             self._json(429, {"ok": False, "reason": "尝试过于频繁，请稍后再试"})
             return
         try:
@@ -294,7 +319,7 @@ class LoginProxyHandler(BaseHTTPRequestHandler):
             return
         except Exception:  # noqa: BLE001 - 兜底：绝不把内部栈或敏感值回给浏览器
             self.backoff.record_failure(f"src:{source}", account_key)
-            _LOGGER.exception("dify-login: unexpected failure")
+            _LOGGER.exception("dify-login: unexpected failure source=%s", source)
             self._json(500, {"ok": False, "reason": "登录未完成，请稍后重试或联系管理员"})
             return
         self.backoff.clear(f"src:{source}", account_key)
@@ -388,8 +413,16 @@ class LoginProxyHandler(BaseHTTPRequestHandler):
         """这次登录的**来源**，用于退避计数。
 
         优先 ``X-Real-IP``（宿主 nginx 覆盖写的那一个），缺失才回落到对端地址。
-        回环对端**不是**来源 —— 所有浏览器都从它进来；只在直连（无 nginx）时才用，
-        那时它就是真的来源。
+
+        ## 这个头可被**本机**进程伪造 —— 所以退避另有一条全局上限
+
+        这个进程只监听回环，能连上它的本机进程同样能自带 ``X-Real-IP``。轮换这个头
+        加轮换用户名，就能同时绕过 ``src:`` 与 ``acct:`` 两条键（Devin, PR #851）。
+
+        从应用层分不出"是 nginx 还是本机进程"，所以不假装能分出来：**再记一条与来源
+        无关的全局键**，让伪造的收益被封在 ``GLOBAL_BACKOFF_MULTIPLIER`` 倍阈值以内，
+        而不是无限次。真正的隔离仍由 nginx 那一层的 realip 提供（它把真实地址写回
+        ``$remote_addr``，见 ``dify-console-10008.conf`` 顶部）。
         """
         forwarded = (self.headers.get("X-Real-IP") or "").strip()
         if forwarded:

@@ -22,9 +22,46 @@ source = self.client_address[0] if self.client_address else "unknown"
 `dify-login: user=… permissions=…`，失败只有一行访问日志
 `"POST /__aiops/login" 502`。八种成因在 journal 里无法区分，排查只能靠回放重建。
 
-## 决策：只读 `X-Real-IP`，缺失才回落对端
+## 决策：只读 `X-Real-IP`，缺失才回落对端；且让那一层把值修正对
 
-nginx 的三条代理规则都已经设了 `proxy_set_header X-Real-IP $remote_addr`，读它即可。
+只读一个头还不够 —— 评审时（Devin, PR #851）指出了同一链路上的**第二跳**：
+
+```
+browser ──TLS──> nginx:443  ──> 127.0.0.1:10008 ──> 127.0.0.1:10119
+                 X-Real-IP=运营地址         真实配置在这里又覆盖了一次
+                 X-Forwarded-Proto=https    $remote_addr 现在是 127.0.0.1
+                                            $scheme 现在是 http
+```
+
+`dify-console-10008.conf` 的 `location` 里同样写着
+`proxy_set_header X-Real-IP $remote_addr`。所以只看后端读哪个头，等于把常量从
+`client_address` 换成了另一个常量 —— **https 主入口上「按人隔离」仍然失效**。
+
+修在这一层：用 `realip` 模块在 location 求值**之前**修正 `$remote_addr`，且只对回环
+对端（= 本机 TLS 入口）生效。
+
+```nginx
+set_real_ip_from 127.0.0.1;
+set_real_ip_from ::1;
+real_ip_header X-Real-IP;
+real_ip_recursive off;
+```
+
+于是 snippet 里那行 `$remote_addr` 拿到的是真实运营地址；而**直连明文入口**的客户端
+自带 `X-Real-IP` 不被采信（对端不是回环），拿到的仍是它自己的地址。
+
+协议同理但更绕：nginx 没有"条件地覆盖 `$scheme`"，所以用一个 map：
+
+```nginx
+map $realip_remote_addr $aiops_upstream_proto {
+    default         "";
+    ~^127\.0\.0\.1$ $http_x_forwarded_proto;
+    ~^::1$          $http_x_forwarded_proto;
+}
+```
+
+`$realip_remote_addr` 是 realip 处理**之前**的对端地址 —— 用它判"谁在跟我说话"，
+而不是用已被修正过的 `$remote_addr`（那会让判断自指）。
 
 **不读 `X-Forwarded-For`**，尽管它也在配置里。区别是覆盖方向：
 
@@ -54,11 +91,18 @@ dify-login: rejected code=COMPANY_LOGIN_REJECTED status=403 source=203.0.113.77
   小字典（注释里已写明这不是计费级限流）；为了一个未观测到的规模问题引入哈希，是拿
   正确性换一个不存在的问题。
 - **只在日志里补来源，不改退避键**。那样这次事故仍然会复现，只是下次查得快一点。
+- **只改后端的读头逻辑，不动 nginx**（初版就是这样，评审时被指出）。第二跳会把
+  `$remote_addr` 再覆盖一次，后端读到的仍是 `127.0.0.1` —— 修了个寂寞。
+- **让后端去读 `X-Forwarded-For` 的最后一个值**。那需要后端理解跳数，而跳数由部署
+  拓扑决定：多一层反代就错一位，少一层就越界。nginx 侧的 `realip` 已经把这个判断
+  做对了（只信 `set_real_ip_from` 列出的对端），后端不该重复实现一遍。
 
 ## 后果与代价
 
 - **正向**：一个人输错不再影响别人；同一来源、同一账号的退避都仍然生效（两条各自
   有用例钉住，含"换 IP 不能换来无限次猜同一账号"）。
+- **代价一**：nginx 配置里多了一段 realip 与一个 map。它们只在 `10008` 那一层，
+  而且是**幂等**的：重复修正同一个值不会改变结果。
 - **代价**：信任一个 HTTP 头。这个信任的前提取自**部署拓扑**——它只监听回环，回环上
   只有宿主 nginx。若哪天有人直连 10119（不经 nginx），`X-Real-IP` 就变成调用方可控的
   值，退避可被绕过。这一点写进了 `_Backoff` 的 docstring，是部署约束，不是代码能保证的。
