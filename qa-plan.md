@@ -2091,15 +2091,15 @@ EXECCFG-TOOL-08）。此前"已在 manager 层可拒"的写法与实测相反，
 
 | 编号 | 前提与动作 | 预期可观察结果 | 本轮结果 |
 |---|---|---|---|
-| EXECCFG-NODE-01 | 不配置清单，走同一段真实装配 | 行为与框架默认一致，守卫不介入 | 通过：`enabled=false`，同一夹具下正常完成（反向控制也随之记 `RED-AS-EXPECTED`） |
+| EXECCFG-NODE-01 | 不配置清单，走同一段真实装配 | 行为与框架默认一致，守卫不介入 | 通过：`enabled=false`，同一夹具下正常完成；正对照不记 `RED-AS-EXPECTED` |
 | EXECCFG-NODE-02 | 配置清单但文件缺失/权限过宽/非法 JSON/schema 不支持/`history_policy` 非 `none` | 装配阶段显式失败，不降级 | 通过 6/6：`reject-missing`、`reject-loosened`、`reject-empty`、`reject-schema`、`reject-history`、`reject-not-json` |
 | EXECCFG-NODE-03 | 首个模型请求前分别制造 system、模型、endpoint、选项、工具（含同名描述/schema）、历史/媒体/记忆/MCP 漂移 | 显式失败，上游与业务计数**均为 0** | 通过 10/10：每例 kind 与预期一致，`chatCalls=0`、`claimCalls=0` |
 | EXECCFG-NODE-04 | 工具循环中途制造漂移（order 晚于 `ToolCallingAdvisor` 的 advisor 追加 system 消息） | 显式失败；已发生的调用保留，拦住的是下一次 | 通过：第一轮真实发生（`chatCalls=1`、工具执行 1 次），第二轮被拒（仍 `chatCalls=1`） |
-| EXECCFG-NODE-05 | 受控构造之后由 customizer/advisor 改写（`advisor-appends-system`，以及 R1 新增的 model/temperature/同名工具描述/同名工具 schema，call+stream 各一份） | 拒绝，上游计数 0 | 通过：8 条 `advisor-*` 全部 kind 匹配、`chatCalls=0`、`claimCalls=0`、工具执行 0；**旧实现全放行**（见 R1 节） |
-| EXECCFG-NODE-06 | 两个 run 交错执行（两个不同合法 `run_id` + `CyclicBarrier` 确定性同时进入） | 各按自己的清单判定，无跨 run 状态 | **通过**：A `chatCalls+2`、工具 `+1`、业务 `+1` 且拿到 final；B 在首个上游请求前被拒（`MODEL`）、贡献 0 |
+| EXECCFG-NODE-05 | 受控构造之后由 customizer/advisor 改写（`advisor-appends-system`，以及 R1 新增的 model/temperature/同名工具描述/同名工具 schema，call+stream 各一份） | 拒绝，上游计数 0 | 通过：8 条 `advisor-*` 全部 kind 匹配、`chatCalls=0`、`claimCalls=0`、工具执行 0；**旧实现全放行**（见最终边界回归） |
+| EXECCFG-NODE-06 | 两个 run 交错执行（两个不同合法 `run_id`，A 的第一次上游请求放行 B，claim 路径只允许 runA） | 各按自己的清单判定，无跨 run 状态 | **通过**：A `chatCalls+2`、工具 `+1`、业务 `+1` 且拿到 final；B 在首个上游请求前被拒（`MODEL`）、贡献 0 |
 | EXECCFG-NODE-07 | 流式正例：真实订阅、真实工具循环 | 上游收到受控工具定义与清单模型/选项；受控工具执行 1 次；模型次数按实测 | 通过：`model=synthetic-model`、`tools=1`、`temperature=0.2`、路径 `/v1/chat/completions`、工具执行 1 次、模型 2 次、业务领取 1 次、`streamRequests=2`（工具走框架默认管理器执行，未做任何装配覆盖） |
-| EXECCFG-NODE-08 | 流式路径上的漂移 | 拒绝，上游计数 0 | 通过：所有负例都走同一条流式驱动（`ChatSessionRuntime.execute`） |
-| EXECCFG-NODE-R1 | 每条负例配"守卫关闭"对照 | 同一改动**确实到达**上游，且守卫启用时那条断言在未接守卫时**确实不成立** | 通过：`EVIL-SYSTEM` / `evil-model` / `temperature=0.9` / 多出的用户消息都到达上游，并逐条记 `RED-AS-EXPECTED` |
+| EXECCFG-NODE-08 | 流式路径上的漂移 | 拒绝，上游计数 0 | 通过：派发前漂移走 `ChatSessionRuntime.execute`；构造后八种选项/工具改写另以 call 与 stream 各一份验证 |
+| EXECCFG-NODE-R1 | 可达上游的漂移配"守卫关闭"对照 | 同一改动**确实到达**上游，且守卫启用时那条断言在未接守卫时**确实不成立** | 通过：`EVIL-SYSTEM` / `evil-model` / `temperature=0.9` / 多出的用户消息都到达上游，并逐条记 `RED-AS-EXPECTED` |
 
 ### R1 追加（M3-NODE-GUARD-R1）
 
@@ -2109,9 +2109,9 @@ EXECCFG-TOOL-08）。此前"已在 manager 层可拒"的写法与实测相反，
 | EXECCFG-NODE-10 | 同上改写 `temperature` | 拒绝 `OPTIONS`，上游/业务计数 0 | 通过（call 与 stream 各一）|
 | EXECCFG-NODE-11 | 同上改写同名工具的 description | 拒绝 `TOOLS`，上游/业务计数 0 | 通过（call 与 stream 各一）|
 | EXECCFG-NODE-12 | 同上改写同名工具的 input schema | 拒绝 `TOOLS`，上游/业务计数 0 | 通过（call 与 stream 各一）|
-| EXECCFG-NODE-13 | 旧实现（`b5c21d8`）跑 09–12 | 全部失败 | 通过（红→绿成立）|
+| EXECCFG-NODE-13 | 未接最终复查的实现跑 09–12 | 全部失败 | 通过（红→绿成立）|
 | EXECCFG-NODE-14 | 去掉最终边界的有效选项复查（定向变异） | 09–12 立刻转红 | 通过 |
-| EXECCFG-NODE-15 | `run.sh` 故意失败的类（`M3NODE_SELFTEST=both`） | 顶层非零退出且不打印整体成功 | 通过（guarded 与 reverse 两条路径）|
+| EXECCFG-NODE-15 | `run.sh` 故意失败的类（`M3NODE_SELFTEST=1`） | 两个注入阶段各自打印故意失败标记、Java 退出 17、子脚本非零；外层自检确认后成功 | 通过（guarded 与 reverse 两条路径）|
 
 ### R2 追加（M3-NODE-GUARD-R2）
 
@@ -2121,13 +2121,13 @@ EXECCFG-TOOL-08）。此前"已在 manager 层可拒"的写法与实测相反，
 | EXECCFG-NODE-17 | 构造之后改 `extraBody.messages` 替换消息 | 拒绝 `EXTRA_BODY`，计数 0 | 通过（call 与 stream 各一）|
 | EXECCFG-NODE-18 | 模型改为 `evil/synthetic-model`（仅前缀不同） | 拒绝 `MODEL`，计数 0 | 通过（call 与 stream 各一）|
 | EXECCFG-NODE-19 | `temperature=0.2000001` | 拒绝 `OPTIONS`，计数 0 | 通过（call 与 stream 各一）|
-| EXECCFG-NODE-20 | 旧 `f0817c9` 跑 16–19 | 全部失败且上游收到被改写值 | 通过（红→绿成立）|
+| EXECCFG-NODE-20 | 未修请求覆盖与有损比较的实现跑 16–19 | 全部失败且上游收到被改写值 | 通过（红→绿成立）|
 | EXECCFG-NODE-21 | 流式中途漂移（真实订阅） | 第一轮计数保留、第二轮拒绝 | 通过（模型/工具/业务各 1 保留）|
 | EXECCFG-NODE-22 | 两 run 交错，以 A 的第一次上游请求为放行点 | A 完整成功、B 拒绝且贡献 0 | 通过 |
-| EXECCFG-NODE-23 | 自检注入真实阶段失败（`M3NODE_SELFTEST=1`） | 顶层非零退出且不以成功收尾 | 通过（guarded 与 reverse）|
+| EXECCFG-NODE-23 | 自检注入真实阶段失败（`M3NODE_SELFTEST=1`） | 注入阶段及子脚本非零，不以成功收尾；外层确认标记与 rc=17 后通过 | 通过（guarded 与 reverse）|
 | EXECCFG-NODE-24 | 把 `run_phase` 改成 `return 0` 的变异 | 自检必须转红 | 通过（转红）|
 
-追溯：对应 `acceptance.feature` 的 `EXECCFG-NODE-01..08`。复跑：
+追溯：对应 `acceptance.feature` 的 `EXECCFG-NODE-01..24`。复跑：
 `M3NODE_JDK_IMAGE=… M3NODE_DEPS=… tools/m2_close/m3node/run.sh`（缺依赖即非零退出）。
 
 **未覆盖**：Gateway 签发与持久化、`agent_version` 回执、真实供应商与真实模型、

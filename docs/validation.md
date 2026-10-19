@@ -29,14 +29,15 @@ Spring 上下文按节点方式扫描 `com.trendpower.aiops.node`（`GuardedChat
 
 ### 二、结果
 
-- **启用守卫 194 PASS / 0 FAIL**；**反向控制 108 PASS / 22 RED-AS-EXPECTED / 0 FAIL**。
+- **启用守卫 198 PASS / 0 FAIL**；**反向控制 108 PASS / 22 RED-AS-EXPECTED / 0 FAIL**。
 - 流式工具循环正例：上游收到 `model=synthetic-model`、`tools=1`、`temperature=0.2`、
   路径 `/v1/chat/completions`；受控工具执行 **1 次**、模型 **2 次**（真实工具循环）、
   业务领取 **1 次**、`streamRequests=2`。
-- 被拒的漂移（每条 call 与真实订阅的 stream 各一份，均在首个上游请求前拒绝，双计数为 0）：
+- 被拒的漂移（首个上游请求前拒绝，双计数为 0）：
   消息改写/追加、模型标识（含仅差命名空间前缀）、endpoint、数值选项（含六位小数内的差异）、
   同名工具的 description 与 schema、请求扩展 `extraBody.model` / `extraBody.messages`、
-  历史/媒体/记忆输入、动态 MCP。
+  历史/媒体/记忆输入、动态 MCP。其中构造后的模型、数值、同名工具定义及请求扩展改写，
+  分别覆盖 call 与真实订阅的 stream。
 - **工具循环中途的漂移**（真实流式）：第一轮的模型调用、工具执行与业务领取计数**全部保留**，
   第二轮被拒（`chatCalls` 不再增长、`kind=SYSTEM_PROMPT`），没有 final 文本。
 - **启用即不可降级**：清单缺失/权限过宽/为空/非法 JSON/schema 不受支持/`history_policy`
@@ -55,9 +56,12 @@ Spring 上下文按节点方式扫描 `com.trendpower.aiops.node`（`GuardedChat
 ### 三、复跑
 
 ```bash
-M3NODE_JDK_IMAGE='eclipse-temurin:21-jdk@sha256:<pinned>' \
-M3NODE_DEPS=/path/to/locked-artifacts \
-M3NODE_SELFTEST=1 tools/m2_close/m3node/run.sh    # 缺锁定依赖即非零退出，不跳过后报通过
+export M3NODE_JDK_IMAGE='eclipse-temurin:21-jdk@sha256:<pinned>'
+export M3NODE_DEPS=/path/to/locked-artifacts
+tools/m2_close/m3node/run.sh    # 正常验收；缺锁定依赖即非零退出
+
+# 保留上面的两个依赖环境变量，再运行失败传播自检：
+M3NODE_SELFTEST=1 tools/m2_close/m3node/run.sh
 ```
 
 ### 四、据实（边界）
@@ -68,84 +72,6 @@ M3NODE_SELFTEST=1 tools/m2_close/m3node/run.sh    # 缺锁定依赖即非零退�
 - `spex spec lint` 的 2 条 warning 是继承的既有漂移（`agent_contracts.py`、`agent_engine.py`），
   未在本片顺手修复。
 - Gateway 签发与持久化、`agent_version` 回执**未做**（后续切片）。
-
-## 2026-10-19 · 执行配置守卫接入真实节点（M3-NODE-GUARD-01，本地合成）
-
-**范围**：节点侧守卫 —— 真实节点装配在**调用模型之前**拒绝配置漂移。
-**本片不改 Gateway、不写运行记录、不访问 41、不接真实供应商。** 本片**不宣称 M3 完成**。
-
-### 一、被测方（都是真的，唯一替身是上游）
-
-`--network=none` 容器、非 root、锁定依赖（113 份 jar）、锁定 JDK 镜像。Spring 上下文按节点的
-方式扫描 `com.trendpower.aiops.node` ⇒ `GuardedChatModelFactory` / `GovernedToolRuntime` /
-`GovernedToolCallingManagerFactory` 的 `@Primary` 接管是真的接管；模型经真实
-`OpenAiCompatibleChatModelAdapter` 造出真实 `OpenAiChatModel`；工具经真实
-`DefaultToolCallingManager` + `ToolCallingAdvisor` 执行到 `ControlledChargingStatusTool`；
-驱动入口是 `ChatSessionRuntime.execute`（节点收到一次派发后真正走的那条流式路径）。
-上游是本机 loopback 上自写的合成 HTTP 服务，记录真实收到的 `model`/`tools`/选项/路径/消息。
-
-### 二、结果（`guarded.log` 86 PASS / 0 FAIL；`counter-proof.log` 44 PASS / 0 FAIL）
-
-- **流式工具循环正例**：上游收到 `model=synthetic-model`、`tools=1`、`temperature=0.2`、
-  路径 `/v1/chat/completions`；受控工具执行 **1 次**、模型调用 **2 次**（一次真实工具循环，
-  按实测计数）、业务领取 **1 次**、`streamRequests=2`。
-- **负例 10/10**（system、模型、endpoint、选项、同名工具描述、同名工具 schema、历史、媒体、
-  记忆、动态 MCP）：kind 与预期一致，**上游调用 0、业务调用 0、工具执行 0**。
-- **中途漂移**：第一轮真实发生（`chatCalls=1`、工具执行 1 次），第二轮被拒（仍 `chatCalls=1`）
-  —— 已发生的调用不被抹去，阻止的是下一次。
-- **启用即不可降级 6/6**：清单缺失/权限过宽/为空/非法 JSON/schema 不受支持/`history_policy`
-  非 `none` 一律在装配阶段拒绝。
-- **反向控制**：同一份夹具、同一批漂移，**不指向清单**时改动确实到达上游
-  （`EVIL-SYSTEM`、`evil-model`、`temperature=0.9`、多出的用户消息），并逐条记
-  `RED-AS-EXPECTED`（守卫未接时那条断言确实不成立 ⇒ 红→绿成立，且断言有区分力）。
-
-### 三、实测发现（三条，都改变了实现）
-
-1. **`Prompt` 面上没有模型与工具**：`DefaultChatClientFactory` 只调用
-   `builder.defaultAdvisors/defaultTools/defaultToolContext`，**从不** `defaultOptions`；
-   没有 `PromptFactory` 的路径上 `prompt.getOptions()` 实测为 `null`。
-   ⇒ 模型标识与有效选项只能在**构造出来的模型**上校验，工具定义只能在**解析出来的集合**上校验；
-   最终边界能可靠判定的是**完整 system 集合 + 消息形状**（客户端合并后 Prompt 上确实带上了
-   model 与 toolCallbacks，那里再复查一次）。
-2. **工具确实通过框架默认解析器执行到受控工具**（本片实测澄清）：一度观察到
-   `claimCalls=0`、第二轮 Prompt 里是「工具错误」，据此怀疑框架的默认
-   `ToolCallbackResolver` 解析不到本次交付的工具。**该怀疑是错的**：根因是夹具用了 9 个字符的
-   `run_id`，而工具的契约形状是 `run_[A-Za-z0-9_-]{20,64}` —— 工具按设计拒绝了它。
-   换成合法形状的合成编号后，**不做任何装配改动**，工具即执行 1 次、业务领取 1 次
-   （`toolExecutions=1`、`claimCalls=1`）。因此没有引入 `ToolCallingManagerFactory` 覆盖；
-   本片不声称「交付 ≠ 可执行」这个缺口存在。
-3. **中途漂移只有一条可达通道**：改派发体无效（`Prompt` 一次构建、多轮复用，实测改后
-   `chatCalls=2` 且无拒绝）；`SnailAiInterceptor` 只看到第一轮（`ToolCallingAdvisor` 在自己的
-   位置重新进入链，排在前面的 advisor 不会再次执行）；只有 order **晚于** `ToolCallingAdvisor`
-   的 advisor 才会每轮执行。
-
-### 四、复跑与产物
-
-```bash
-M3NODE_JDK_IMAGE='eclipse-temurin:21-jdk@sha256:f9bf7e9f…' \
-M3NODE_DEPS=/path/to/locked-artifacts \
-tools/m2_close/m3node/run.sh      # 缺依赖即非零退出，不跳过后报通过
-```
-
-产物在 `tools/m2_close/m3node/build/`（已 gitignore）；私有原始日志
-`m3-node-guard-evidence/{guarded.log,counter-proof.log}`。
-
-### 五、据实（边界）
-
-- **本地合成，不是业务验收**：不证明真实供应商、真实模型、真实订单、真实节点身份或生产装配。
-- **`EXECCFG-NODE-06`（两个 run 交错）未单独驱动**：守卫按 run 现造、无共享可变状态，
-  但乱序交错本身没有单独的用例。
-- **全量 Python 套件**：在工作树**自己的** `.venv` 里（按 CI 形状 `uv sync --locked --inexact --dev`
-  + `pytest-xdist`）跑 `pytest -n auto -rs` ⇒ **2921 passed / 9 skipped / 0 failed**（60s）。
-  跳过数与既有的本地基线一致（9），无新增跳过、无失败；CI 的两道量闸（`passed ≥ 2700`、
-  `skipped ≤ 10`）都满足。旧 M2 回归未退化。
-  *运行环境的坑*：在工作树里**不能**直接用 `PYTHONPATH=<worktree>/src` + 别处的 venv 跑 ——
-  `tests/test_parallel_setup.py` 有两条断言要求解释器/purelib 属于**本工作树**的 `.venv`。
-  先 `uv sync` 建本地 `.venv` 再跑才是与 CI 一致的形状（这也顺带避开了 editable install
-  指向 canonical 的老坑）。
-- 静态检查：`ruff check` / `ruff format --check` 通过。`spex spec lint` 0 error / 2 warning，
-  两条都是**继承的既有漂移**（`agent_contracts.py`、`agent_engine.py` 各领先其 spec 1 个提交），
-  本片未触碰这两个文件，**未顺手修复**。
 
 ## 2026-10-19 · 41 端到端：知识库回答产出图片与视频（真实会话）
 

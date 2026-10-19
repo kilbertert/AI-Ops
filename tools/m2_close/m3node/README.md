@@ -31,8 +31,8 @@
 ## 复跑
 
 ```bash
-M3NODE_JDK_IMAGE='eclipse-temurin:21-jdk@sha256:f9bf7e9f…' \
-M3NODE_DEPS=/path/to/artifacts \      # 其中 lib/ 放锁定依赖
+export M3NODE_JDK_IMAGE='eclipse-temurin:21-jdk@sha256:<pinned>'
+export M3NODE_DEPS=/path/to/artifacts  # 其中 lib/ 放锁定依赖
 tools/m2_close/m3node/run.sh
 ```
 
