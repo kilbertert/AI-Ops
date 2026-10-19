@@ -83,6 +83,15 @@ class GatewayServerSettings:
     #: the "high risk AND unsure" form, which real traffic showed never fires.
     routing_risk_always_asks: bool = True
     kb_service_timeout_seconds: float = 10.0
+    #: 每回合向知识库请求的 chunk 数上限 —— **两条检索路径共用的同一个口径**
+    #: （客户问答/宣传卡片的 ``KnowledgeSearchGuard.max_results``，以及 Dify 适配路由
+    #: 对 Dify 所发 ``top_k`` 的封顶值）。
+    #:
+    #: 默认 10 而不是 5，是实测定的：`chunk_method=picture` 的知识库把图片块按相似度
+    #: 排在中段（实测全部 chunk 挤在 0.185~0.201），k=5 时 16 种真实 query 形状里只有
+    #: 5 种能取到媒体块，k=10 是 12 种，k=15 以上不再增加。**取多少个**归这里管；
+    #: **怎么排**（分数分布、rerank）不归它管。
+    kb_search_max_results: int = 10
     media_signing_secret: str = ""
     media_ttl_seconds: int = 600
     #: 面向 Dify 的知识检索适配路由（#581 / PRD #577）。**三键全空 ⇒ 该路由整体 404**，
@@ -101,9 +110,6 @@ class GatewayServerSettings:
     #: 一张**显式登记表**翻译 —— 与知识库那条桥同形。空表 = 不认任何 Dify 工具声明
     #: （声明了就拒，绝不按字面搬运）。
     dify_tool_bindings: str = ""
-    #: 本路由转调知识库服务时的 top_k 上限。Dify 自己也会发 top_k；我们**封顶**而不是直接
-    #: 采信，理由与 ``KnowledgeSearchGuard`` 的 ``max_results`` 相同：检索范围归我们控制。
-    dify_knowledge_max_top_k: int = 5
     #: 调试身份的**专用凭据**（#586）。与生产那把**分离**：运营在 Dify 的调试预览里用它，
     #: 因此它不该是生产凭据（那把能到全部已登记的知识库）。留空 ⇒ 该身份整体不存在，
     #: 配置里的调试子集也随之无效 —— 「没有调试身份」是一个合法状态，不是半配置。
@@ -241,6 +247,7 @@ class GatewayServerSettings:
             kb_service_base_url=_env("AIOPS_GATEWAY_KB_SERVICE_BASE_URL")
             or _file_value(file_values, "AIOPS_GATEWAY_KB_SERVICE_BASE_URL"),
             kb_service_timeout_seconds=_env_float("AIOPS_GATEWAY_KB_SERVICE_TIMEOUT_SECONDS", 10.0),
+            kb_search_max_results=_env_int("AIOPS_GATEWAY_KB_SEARCH_MAX_RESULTS", 10),
             media_signing_secret=_env("AIOPS_GATEWAY_MEDIA_SIGNING_SECRET")
             or _file_value(file_values, "AIOPS_GATEWAY_MEDIA_SIGNING_SECRET"),
             media_ttl_seconds=_env_int("AIOPS_GATEWAY_MEDIA_TTL_SECONDS", 600),
@@ -250,7 +257,6 @@ class GatewayServerSettings:
             or _file_value(file_values, "AIOPS_GATEWAY_DIFY_KNOWLEDGE_BINDINGS"),
             dify_tool_bindings=_env("AIOPS_GATEWAY_DIFY_TOOL_BINDINGS")
             or _file_value(file_values, "AIOPS_GATEWAY_DIFY_TOOL_BINDINGS"),
-            dify_knowledge_max_top_k=_env_int("AIOPS_GATEWAY_DIFY_KNOWLEDGE_MAX_TOP_K", 5),
             dify_debug_api_key=_env("AIOPS_GATEWAY_DIFY_DEBUG_API_KEY")
             or _file_value(file_values, "AIOPS_GATEWAY_DIFY_DEBUG_API_KEY"),
             dify_debug_tenant=_env("AIOPS_GATEWAY_DIFY_DEBUG_TENANT")
@@ -348,8 +354,8 @@ class GatewayServerSettings:
             raise ValueError(
                 "AIOPS_GATEWAY_DIFY_KNOWLEDGE_BINDINGS is required when a Dify knowledge API key is set"
             )
-        if not 1 <= self.dify_knowledge_max_top_k <= 20:
-            raise ValueError("AIOPS_GATEWAY_DIFY_KNOWLEDGE_MAX_TOP_K must be between 1 and 20")
+        if not 1 <= self.kb_search_max_results <= 20:
+            raise ValueError("AIOPS_GATEWAY_KB_SEARCH_MAX_RESULTS must be between 1 and 20")
         # #625：控制台凭据的两半 —— 半配置同样是启动错误。只给地址会让运维以为
         # 「发布动作配好了」，而拉取会在第一次运行时因缺凭据失败 —— 与「没配」不可区分。
         if self.dify_console_base_url and not self.dify_console_api_key:

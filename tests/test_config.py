@@ -330,3 +330,34 @@ def test_dis_settings_rejects_credential_bearing_or_unbounded_values() -> None:
         DisSettings(timeout_seconds=0)
     with pytest.raises(ValueError, match="Dis 超时"):
         DisSettings(timeout_seconds=61)
+
+
+def test_kb_search_depth_defaults_to_ten(monkeypatch) -> None:
+    """The retrieval depth is a deployment knob with a measured default (#838).
+
+    Pictures sit in the middle of the ranking on a `chunk_method=picture`
+    library, so the old fixed 5 lost them. The default is the point of the
+    change, not a coincidence of the field's initializer.
+    """
+    monkeypatch.delenv("AIOPS_GATEWAY_KB_SEARCH_MAX_RESULTS", raising=False)
+
+    settings = GatewayServerSettings.from_env()
+
+    assert settings.kb_search_max_results == 10
+
+
+def test_kb_search_depth_reads_the_environment(monkeypatch) -> None:
+    monkeypatch.setenv("AIOPS_GATEWAY_KB_SEARCH_MAX_RESULTS", "14")
+
+    assert GatewayServerSettings.from_env().kb_search_max_results == 14
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "21"])
+def test_kb_search_depth_out_of_range_is_a_startup_error(monkeypatch, value: str) -> None:
+    """An unreadable depth must fail at startup, not silently fall back to a
+    default — a knob that quietly does the opposite of what it says is how
+    "the depth was raised" becomes a false statement."""
+    monkeypatch.setenv("AIOPS_GATEWAY_KB_SEARCH_MAX_RESULTS", value)
+
+    with pytest.raises(ValueError, match="KB_SEARCH_MAX_RESULTS"):
+        GatewayServerSettings.from_env().validate()

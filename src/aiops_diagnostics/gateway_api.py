@@ -1184,9 +1184,7 @@ def create_gateway_app(
         """
         bindings = parse_dify_knowledge_bindings(context.settings.dify_knowledge_bindings)
         try:
-            request = parse_dify_retrieval_request(
-                payload, max_top_k=context.settings.dify_knowledge_max_top_k
-            )
+            request = parse_dify_retrieval_request(payload, max_top_k=context.settings.kb_search_max_results)
         except DifyRequestError as exc:
             raise StandardAPIError(status.HTTP_400_BAD_REQUEST, exc.code, exc.message) from exc
 
@@ -1221,7 +1219,7 @@ def create_gateway_app(
                 "knowledge retrieval is temporarily unavailable",
                 retryable=True,
             )
-        top_k = request.top_k or context.settings.dify_knowledge_max_top_k
+        top_k = request.top_k or context.settings.kb_search_max_results
         # Rebind to the REGISTERED tenant (#612). The process-level client is
         # deliberately bound to the neutral "aiops" tenant (see
         # GatewayRuntime.from_settings), and every other consumer rebinds before
@@ -1241,7 +1239,7 @@ def create_gateway_app(
                 session_id=None,
                 knowledge_base_ids=binding.knowledge_base_ids,
                 media_signer=signer,
-                max_results=context.settings.dify_knowledge_max_top_k,
+                max_results=context.settings.kb_search_max_results,
             )
         except KnowledgeSearchUnavailable as exc:
             raise StandardAPIError(

@@ -280,7 +280,7 @@ UPMS 的 `ROLE_AGENT_PUBLISHER`（尚未建）。
 | kb-service 不可用 / 媒体面未配 | 502 `DIFY_KNOWLEDGE_UNAVAILABLE`（retryable）—— **绝不**用 200 空 `records` 表示故障 |
 
 两个键全空 ⇒ 路由整体 404；只配一个是**启动失败**（半配置不静默禁用，与本仓其余开关同一条）。
-`AIOPS_GATEWAY_DIFY_KNOWLEDGE_MAX_TOP_K` 是对 Dify 所发 `top_k` 的封顶值（1..20）。
+本路由对 Dify 所发 `top_k` 的封顶值取自 `AIOPS_GATEWAY_KB_SEARCH_MAX_RESULTS`（1..20，**与客户问答/宣传卡片路径共用同一个口径**，默认 10）—— Dify 自己也会发 `top_k`，我们封顶而不采信。
 Dify 侧 `ssrf_proxy` 默认会拦私有网段地址，须显式处置（PRD #577 已记为「必须记录的一次
 显式选择」）。
 

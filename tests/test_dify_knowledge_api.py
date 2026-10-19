@@ -223,7 +223,7 @@ def test_top_k_is_capped_by_our_limit(tmp_path: Path) -> None:
     client = _client(
         tmp_path,
         _Runtime(signer=MediaResourceSigner("s", ttl_seconds=600), search=lambda *_a: []),
-        dify_knowledge_max_top_k=4,
+        kb_search_max_results=4,
     )
 
     resp = _post(client, _body(top_k=500))
