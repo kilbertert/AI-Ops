@@ -37,6 +37,106 @@
 - `agent_version_observed` 是审计字段；`exec_config_state` 目前只有 `expected`/`matched`
   两个取值，漂移时不写（记录已被 `refuse` 钉成终态）。
 
+## 2026-10-19 · 登录代理三联修：36 上线后的真实复验（#847 / #848 / #849）
+
+**部署身份**：`b93635e`（#852 squash）+ `a91e1e1`（#850）+ `a663400`（#851），三票按依赖顺序合并。
+36 上 `/opt/aiops-login-proxy/` 的制品 sha 与 `origin/main` **逐字一致**：
+
+```
+dify_login_server.py   38259951e99f97f3b5e8eecdecb6a63c3f94e31e907b918bb0e47e94f83e7348
+dify_login_company.py  532a3307615b97bae2e160bcb383a340ce9cce1d35308bbb4bef0b7a068d9f33
+```
+
+nginx 两处配置与仓库 diff 为零（`dify-console-10008.conf`、`snippets/dify-login-proxy.conf`）。
+备份：`/opt/aiops-login-proxy.bak-20261019182443`、
+`*.conf.bak-20261019182623`。
+
+**部署中踩到的两件事（都非预期，已处理）**：
+
+1. **tar 解包把属主与权限一起带歪了。** 用 `tar -xzf` 覆盖到 `/opt/aiops-login-proxy/`
+   之后，`aiops_diagnostics/` 整个变成 `www:www 0750`、文件 `0640` —— 而服务身份是
+   `aiopslogin`，读不到 ⇒ `No module named aiops_diagnostics.dify_login_server`。
+   **报错信息指向"模块不存在"，实际是权限**。修法：`chown -R root:root` +
+   `chmod -R a+rX`。这是部署纪律该记住的一条：**解包后必须核对属主**，不能只看文件在不在。
+2. **`systemctl is-active nginx` 是 `failed`，但这不是本次造成的。** 该单元从
+   2026-09-11 起就是 failed（报"already running"，由别的方式管理），`ss` 显示 80/443/
+   10008 全部在听，`nginx -s reload` 成功。**判断入口是否生效要看端口与 `nginx -T`，
+   不看那个老单元的状态。**
+
+## 四条真实判据
+
+**口径**：A/B/D 是**在 36 本机**对 `127.0.0.1:10008` / `127.0.0.1:10119` 发的；只有 C/C'
+是经 `https://dify.ranlei.work` 公网域名发的。第一版把 A/B 也写成「经公网入口」，不准确。
+
+后来补了一条**从公网外部**发的（本机 → `http://36.156.159.175:10008`，不带任何代理头）：
+
+```
+external plaintext POST -> 400
+{"ok": false, "reason": "此入口是明文 HTTP，不能提交公司口令。请使用 https://dify.ranlei.work 登录"}
+```
+
+这条补上了「公网可达的明文入口会不会被拒」这个缺口。
+
+B（验证码 GET）也补了一次公网外部的：
+
+```
+external captcha GET -> 200  size=1887  ctype=image/jpeg
+file: JPEG image data, 120x50, components 3
+```
+
+于是 A/B 都有本机与公网外部两份证据；C 本来就走的公网域名。
+
+
+| # | 动作 | 期望 | 实测 |
+|---|---|---|---|
+| A | `POST http://36.156.159.175:10008/__aiops/login` 带明文口令 | 拒收 | **400**「此入口是明文 HTTP，不能提交公司口令。请使用 https://dify.ranlei.work 登录」 |
+| B | `GET` 同入口的验证码 | 仍放行（页面要先出图） | **200**，`image/jpeg`，2047 B |
+| C | `https://dify.ranlei.work` 取图 + **故意填错验证码** | 分类为验证码拒绝 | **403**「验证码不正确或已失效，请重新获取」 |
+| C' | 同上但验证码正确、密码错 | 走到公司认证 | **403**「公司账号或密码不正确」 |
+| D | 同一来源 6 个**不同**用户名连续失败 | 退避按来源生效 | 前 4 次 403，第 5、6 次 **429** |
+
+**C 才是 #847 的生产证据，C' 不是。** 这一点我第一版记错了，评审时被指出：
+
+公司的过滤器**先验验证码、再验密码**。所以「正确验证码 + 错误密码」这条路上，528 那个分支
+根本不会被走到 —— 它修复前后都返回 403「密码不正确」，证明不了任何分类改动。
+**只有错码才会触发 428**。
+
+C 的实测结果就是修复的目标形态：`403` + 「验证码不正确或已失效」。修复前它是
+`502` + 「公司登录服务暂时不可用」。
+
+对照构（同一份真实报文，两种映射）：
+
+```
+428 {"code":1,"msg":"验证码错误"}
+  new(login=True)  -> CompanyLoginRejected  COMPANY_LOGIN_REJECTED  验证码不正确或已失效，请重新获取
+  old(no 428)      -> CompanyUnreachable    COMPANY_UNAVAILABLE     公司侧不可用：…
+```
+
+## 关键一行日志
+
+```
+WARNING dify-login: rejected code=COMPANY_LOGIN_REJECTED status=403 source=36.156.159.175
+```
+
+`source` 是**真实对端地址**，不是 `127.0.0.1`。这一行同时证明两件事：
+
+- #848 的 realip 修正生效了 —— 经 TLS 入口第二跳之后，代理仍拿到运营的真实地址；
+- 失败留因生效了 —— 结果码、状态、来源在同一行里，不再只有 `"POST …" 403`。
+
+对照：明文入口那几条日志记的是 `refused a plaintext login from 127.0.0.1`（对端是回环，
+因为我在 36 上直接 curl 它）。这也符合设计：闸门在**收口令之前**就拒了。
+
+## 仍未验（据实）
+
+- **不同真实出口 IP 的隔离**：需要两个外部出口，我没有。上面 D 证的是「同一来源会退避」，
+  不是「不同来源互不影响」—— 后者在单测里有（`test_one_operator_failing_does_not_lock_out_everyone_else`），
+  但**没有生产证据**。
+- **真实浏览器**：C 走的是 curl，不是浏览器。运营在页面上输错验证码看到什么文案，
+  仍是 #783 里那条「人在页面上点得动」的同类欠账。
+- **退避窗口自愈**：等 90 秒后再试仍是 429（窗口是 300 秒，本就没到）；没有等到窗口过去
+  再验一次。
+- **nginx 单元的那条 failed** 不是本次引入，但也没修 —— 它是既有的运维债。
+
 ## 2026-10-19 · 执行配置守卫：最终契约与本地合成验收（节点侧）
 
 **范围**：节点侧守卫 —— 真实节点装配在**调用模型之前**拒绝配置漂移。不改 Gateway、
