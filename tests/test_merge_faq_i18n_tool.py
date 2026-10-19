@@ -24,6 +24,7 @@ scratch space.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -47,6 +48,14 @@ _TREE = (
 )
 
 
+#: What each fixture commit spawned, keyed by the tree it built. `GIT_TRACE`
+#: names every child process, which is how the background `maintenance run
+#: --auto` below becomes observable at all — see `_populate`. Kept on the module
+#: so the regression test asserts on the commit `_populate` actually ran, rather
+#: than re-running one of its own and proving nothing about this function.
+_SPAWNED: dict[Path, str] = {}
+
+
 def _populate(destination: Path) -> None:
     for relative in _TREE:
         source = ROOT / relative
@@ -62,6 +71,26 @@ def _populate(destination: Path) -> None:
     # `core.hooksPath` is cleared for the copy: this host's managed hooks reject
     # commits on a default branch and require Conventional Commits, neither of
     # which says anything about a throwaway fixture.
+    #
+    # 🔴 `maintenance.auto=false` is REQUIRED, and its absence is a CI-only
+    # flake. `git commit` finishes by forking `git maintenance run --auto` as a
+    # background child that holds `.git/objects/maintenance.lock`; the child
+    # outlives the commit. The next fixture to run copies this template
+    # (`_template` is session-scoped and copied per test), and if the copy
+    # reaches `.git/objects/maintenance.lock` in the window where the child has
+    # it mid-create-or-delete, `shutil.copytree` raises on a file that vanished
+    # underneath it:
+    #
+    #   shutil.Error: [('.git/objects/maintenance.lock', …,
+    #                   "[Errno 2] No such file or directory")]
+    #
+    # Measured on this host 2026-10-19: the commit spawns the child every time
+    # (GIT_TRACE, regardless of `gc.auto`), and `-c maintenance.auto=false`
+    # removes the spawn entirely — `gc.auto=0` does NOT, which is why the
+    # setting that looks like the obvious knob is the wrong one. The window is
+    # milliseconds, so it fails a suite run at random and passes on re-run: a
+    # docs-only PR hit it (PR #843), which is what makes it worth naming here
+    # rather than leaving as "known flaky".
     for command in (
         ["git", "init", "-q"],
         ["git", "config", "core.hooksPath", ""],
@@ -72,13 +101,29 @@ def _populate(destination: Path) -> None:
             "user.name=fixture",
             "-c",
             "user.email=fixture@invalid",
+            "-c",
+            "maintenance.auto=false",
             "commit",
             "-q",
             "-m",
             "fixture baseline",
         ],
     ):
-        subprocess.run(command, cwd=destination, check=True, capture_output=True)
+        # `GIT_TRACE` goes to a FILE, not to stderr: a trace on stderr would be
+        # swallowed here by `capture_output=True`, and — more importantly — the
+        # child this catches is forked by `commit` and outlives it, so a
+        # pipe-based trace could be truncated when `communicate()` returns.
+        # A file is complete whenever the child eventually finishes, which is
+        # what lets the assertion below be a fact rather than a race.
+        trace = destination.parent / "git-trace.log"
+        subprocess.run(
+            command,
+            cwd=destination,
+            check=True,
+            capture_output=True,
+            env={**os.environ, "GIT_TRACE": str(trace)},
+        )
+        _SPAWNED[destination] = trace.read_text(errors="replace") if trace.exists() else ""
 
 
 class _Tree:
@@ -316,3 +361,31 @@ def test_merge_reads_questions_from_the_questions_dir(tree: _Tree, tmp_path: Pat
     # The run must get PAST question resolution; whether it then complains about
     # the version bump is fine — the point is that it did not refuse the source.
     assert "题面没有来源" not in result.stderr, result.stderr
+
+
+def test_the_fixture_commit_does_not_spawn_background_maintenance(tmp_path: Path) -> None:
+    """The fixture's OWN commit must not leave a `git maintenance run --auto` child.
+
+    That child holds `.git/objects/maintenance.lock` in the background, and the
+    next test copies this tree — so the child turns a routine commit into a race
+    that reddens an unrelated PR at random (measured 2026-10-19; a docs-only PR
+    hit it).
+
+    The assertion reads the trace `_populate` recorded for the commit IT ran,
+    which is the whole point: an earlier version of this test re-ran its own
+    commit with the flag hardcoded, so deleting the flag from `_populate` would
+    not have failed it and the regression could have returned silently.
+
+    `GIT_TRACE` naming the child is the direct evidence, and it needs no timing
+    luck — unlike reproducing the race itself, whose window is milliseconds.
+    """
+    destination = tmp_path / "tree"
+    destination.mkdir()
+    _populate(destination)
+
+    spawned = _SPAWNED[destination]
+    assert spawned, "fixture commit produced no trace — GIT_TRACE did not reach it"
+    assert "maintenance run --auto" not in spawned, (
+        "the fixture commit spawned `git maintenance run --auto`; it holds "
+        "objects/maintenance.lock in the background and races the next copytree"
+    )

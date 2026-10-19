@@ -1,3 +1,49 @@
+## 2026-10-19 · CI 竞态：fixture 的 `git commit` 会留一个后台 maintenance 子进程
+
+**现象**：纯文档 PR #843 的 `verify` 第一次红，报
+`2938 passed, 1 error`，错在 setup 阶段：
+
+```
+shutil.Error: [('.git/objects/maintenance.lock', …,
+                "[Errno 2] No such file or directory")]
+tests/test_merge_faq_i18n_tool.py:125  shutil.copytree(_template, copy)
+```
+
+re-run 即过 —— 典型的**毫秒级竞态**，会随机打红任何 PR。
+
+**根因（`GIT_TRACE` 实测，本机 2026-10-19）**：fixture 用
+`git init` + `commit` 造一棵带提交的私有树，而 **`git commit` 结束时会把
+`git maintenance run --auto` 作为后台子进程 fork 出去**，该子进程持有
+`.git/objects/maintenance.lock` 且**比 commit 活得久**。下一个用例复制这棵树
+（`_template` 是 session 级、每个用例再拷一份），只要复制的 `copytree` 正好走到那个
+lock 文件被后台子进程创建或删除的窗口，就抛「文件在复制途中消失」。
+
+两条**实测**结论，第二条是这条修复的落点：
+
+| 假设 | 实测 |
+|---|---|
+| `gc.auto=0` 能关掉它 | ❌ 仍然 fork（`GIT_TRACE` 显示 `maintenance run --auto` 照旧） |
+| `maintenance.auto=false` 能关掉它 | ✅ **子进程完全不出现**（0 次 spawn） |
+
+即**看起来最像那个旋钮的键（`gc.auto`）是错的**，而 `maintenance run --auto` 的开关在
+`maintenance.auto`。只有 `git commit` 会 fork 它；`git show` / `git add` 都不会 ——
+所以修复只需给 fixture 那一条 commit 加 `-c maintenance.auto=false`。
+
+**修法**：`tests/test_merge_faq_i18n_tool.py` 的 fixture commit 加
+`-c maintenance.auto=false`（一个 flag，无新增依赖、无重试、无 sleep）。
+
+**判据**：新增
+`test_the_fixture_commit_does_not_spawn_background_maintenance` —— 用 `GIT_TRACE`
+断言**子进程不存在**（直接证据，不需要撞上那个毫秒窗口），并断言 lock 文件不在。
+去掉那个 flag 后该用例**失败**（复跑确认，报错逐字给出 `maintenance run --auto`）。
+全量 **2941 passed / 0 failed / 9 skipped**；该文件 `-n auto` 连跑 5 次全绿。
+
+**为什么不选别的修法**：竞态的另一半是「复制一个活着的 git 仓库」。可以改成
+`copytree(..., ignore=shutil.ignore_patterns('.git'))` 或复制后再 `git init` ——
+但那要重做「copy 需要一次提交」这条既有设计（工具用 `git show HEAD:<path>` 取基线），
+改动面比一个 flag 大得多，且换不掉真正的成因（仓库里仍会有一个会 fork 子进程的
+commit）。**修触发点，不是修受害者。**
+
 ## 2026-10-19 · #837 + #838 合并后 41 复验（真实会话，经公网入口）
 
 **范围**：41 生产（`/health` = `0.1.0+33b7c86e847b`，即 #840 `b3e0258` + #841 `33b7c86`
