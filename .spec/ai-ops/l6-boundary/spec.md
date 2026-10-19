@@ -18,6 +18,7 @@ related:
   - src/aiops_diagnostics/tdengine_proxy.py
   - src/aiops_diagnostics/responses_adapter.py
   - src/aiops_diagnostics/codex_launcher.py
+  - src/aiops_diagnostics/execution_manifest.py
 ---
 # l6-boundary
 
@@ -44,10 +45,15 @@ related:
   这条区别本身就是「试运行实例不能写生产库」的机制，而不是一段文档承诺。
 - **执行配置身份在签发时固定、领取时对照，且未启用时逐字不变**。配置了
   `AIOPS_GATEWAY_EXECUTION_MANIFEST_FILE` 的网关把清单的**原始字节 sha256** 写进 run 记录；
-  节点领取时必须回传同一身份，不等或缺失即 `refuse("exec_config_drift")` 且**不返回快照**
-  （三条放行路径共用同一段判定）。未配置时行为与今天逐字一致 —— 这由 GW-04 钉住，
-  而不是一句承诺。列变更走幂等真迁移，旧记录保持 `null`/`not_wired`，不回填。
-  见 [[l6-boundary]] 的 ADR-0052 与 `execution_manifest`。
+  节点领取时必须回传同一身份，不等或缺失 ⇒ 记录**落终态**（`failed` + `reason=exec_config_drift`）
+  且**不返回快照**（三条放行路径共用同一段判定，含首次领取、成功快照重试、竞争后放行）。
+  未配置时行为与今天逐字一致 —— 这由 GW-04 钉住，而不是一句承诺。
+  列变更走幂等真迁移，旧记录保持 `null`，不回填。
+  **身份比较、记录写入与据以放行的状态必须同处一个写事务**：写不进去就是不放行，
+  返回给调用方的必须是写入之后读到的记录，否则另一请求的拒绝提交后仍会放出快照。
+  **「已固定期望」不等于「已核对成功」**：回执的 `agent_version` 只在核对一致后给出，
+  未核实时为 `null` 且显式标缺口。见 ADR-0052 与 `execution_manifest`。
+  **默认关闭不等于库无变化**：初始化即 `ALTER TABLE` 补列，部署影响需单独评估。
 - 适配器对客户端**完全透明**：它修复上游的两个兼容缺口，不引入新语义。
 - **日志配置必须显式**：在这一层出现之前，网关根本没配过 logging——uvicorn 只给自身挂 handler，
   root 停在 WARNING 且无 handler，于是 `aiops.*` 的 INFO 一行都没出去过（实测 0 行）。

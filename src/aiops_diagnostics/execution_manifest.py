@@ -87,6 +87,14 @@ def _parse(payload: object, identity: str) -> ExecutionManifest:
     model = payload.get("model")
     if not isinstance(model, dict):
         raise ExecutionManifestError("execution manifest model is missing")
+    # 与节点侧**同一组必填字段**：节点的 `ExecManifest.parse` 要求 `model_options`
+    # 存在（选项可比量只从它取），并要求每个工具同时声明 description 与 input_schema。
+    # 少要求一项的后果是可测的：一份缺 `model_options` 的清单 Gateway 收下、节点拒绝装配，
+    # 两端对「合格清单」的定义不一致 —— 身份算得再准，那份配置也跑不起来。
+    # 这条一致性由 `tools/m2_close/m3node/manifest_parity.py` 用同一组样本逐条比对。
+    options = payload.get("model_options")
+    if not isinstance(options, dict):
+        raise ExecutionManifestError("execution manifest model options are missing")
     system_messages = payload.get("system_messages")
     if not isinstance(system_messages, list) or not system_messages:
         raise ExecutionManifestError("execution manifest system messages are missing")
@@ -100,10 +108,16 @@ def _parse(payload: object, identity: str) -> ExecutionManifest:
     for item in tools:
         if not isinstance(item, dict) or not isinstance(item.get("name"), str) or not item["name"]:
             raise ExecutionManifestError("execution manifest tool is invalid")
+        # description / input_schema 与 name 同为必填：节点侧用 `text(t, field)` 读，
+        # 缺失或空白即拒绝清单。这里对齐，不留「Gateway 收、节点拒」的缝。
+        for field in ("description", "input_schema"):
+            value = item.get(field)
+            if not isinstance(value, str) or not value.strip():
+                raise ExecutionManifestError(f"execution manifest tool {field} is missing")
         names.append(item["name"])
     return ExecutionManifest(
         identity=identity,
-        name=str(payload.get("name") or ""),
+        name=_required_text(payload, "name"),
         model_key=_required(model, "model_key"),
         provider_key=_required(model, "provider_key"),
         adapter_key=_required(model, "adapter_key"),
@@ -112,6 +126,14 @@ def _parse(payload: object, identity: str) -> ExecutionManifest:
         tool_names=tuple(names),
         history_policy=FIXED_HISTORY_POLICY,
     )
+
+
+def _required_text(parent: dict[str, object], key: str) -> str:
+    """节点侧 `text(parent, field)` 的同一条判据：缺失、非字符串、空白都拒绝。"""
+    value = parent.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise ExecutionManifestError(f"execution manifest {key} is missing")
+    return value
 
 
 def _required(model: dict[str, object], key: str) -> str:

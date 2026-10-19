@@ -2673,8 +2673,16 @@ def create_gateway_app(
             ):
                 context.agent_run_store.refuse(run_id_, "binding_changed")
                 raise StandardAPIError(status.HTTP_403_FORBIDDEN, "AGENT_RUN_WRONG_NODE", "agent run refused")
-            _require_matching_exec_config(context, latest, exec_config)
-            return latest
+            released = _require_matching_exec_config(
+                context, latest, exec_config, actual_node_id=current_node.node_id
+            )
+            # 身份比较、记录写入、以及用于放行的状态必须来自**同一次**事务读到的对象；
+            # 早先返回的是授权前的 ``latest``，核对期间别人把它钉成终态就会被漏掉。
+            if released.state != SUCCEEDED:
+                raise StandardAPIError(
+                    status.HTTP_403_FORBIDDEN, "AGENT_RUN_NOT_ACTIVE", "agent run is not active"
+                )
+            return released
 
         config = load_config()
         node = config.authenticate_node(token)
@@ -2696,7 +2704,12 @@ def create_gateway_app(
             raise StandardAPIError(
                 status.HTTP_403_FORBIDDEN, "AGENT_RUN_NOT_ACTIVE", "agent run is not active"
             )
-        _require_matching_exec_config(context, run, exec_config)
+        # 核对并落库；用**核对之后**读到的记录继续走后面的判定（它可能已经是终态）。
+        run = _require_matching_exec_config(context, run, exec_config, actual_node_id=node.node_id)
+        if run.state in {EXPIRED, REVOKED, FAILED}:
+            raise StandardAPIError(
+                status.HTTP_403_FORBIDDEN, "AGENT_RUN_NOT_ACTIVE", "agent run is not active"
+            )
 
         # 用记录里冻结的身份**再授权一次**。授权在这期间变化（订单不可见 / 授权源故障）
         # 时不放行 —— 包括「已有成功快照」的那条路：不释放旧记录的结果（IC-09）。
@@ -4386,13 +4399,21 @@ def _no_store_headers(request: Request) -> dict[str, str]:
     return {}
 
 
-def _require_matching_exec_config(context: Any, run: AgentRun, observed: str | None) -> None:
+def _require_matching_exec_config(
+    context: Any, run: AgentRun, observed: str | None, *, actual_node_id: str | None = None
+) -> AgentRun:
     """领取时对照执行配置身份。**签发时固定、领取时对照、并把实际值落库。**
 
     三件事刻意分开：
     - 记录里**没有**期望（清单未启用）⇒ 什么都不做，行为与今天逐字一致；
-    - 有期望而节点回传缺失或不等 ⇒ ``refuse("exec_config_drift")``，**不返回快照**；
-    - 相等 ⇒ 把实际值写进记录供审计，再放行。
+    - 有期望而节点回传缺失或不等 ⇒ 记录落终态（``failed`` + ``reason=exec_config_drift``），
+      **不返回快照**；
+    - 相等 ⇒ 把实际值写进记录，再放行。
+
+    关键点：**比较用什么、写什么、放行依据什么，是同一个写事务里的同一份记录**。
+    早先这里是「读一次记录 → 无条件 UPDATE → 返回早先读到的成功对象」，于是另一个
+    请求的拒绝提交进来之后，本请求仍会返回快照，并且把 ``matched`` 写在一条终态记录上。
+    现在交给 :meth:`AgentRunStore.confirm_exec_config`，它返回的是写入之后读到的记录。
 
     调用点在 ``claim_charging_status`` 里共有两处（首次领取、以及 ``release_candidate``
     的最后一次放行），重试路径与它共用同一段 —— R1-1 的教训是放行路径各有一次机会，
@@ -4400,11 +4421,13 @@ def _require_matching_exec_config(context: Any, run: AgentRun, observed: str | N
     """
     expected = run.expected_agent_version
     if expected is None:
-        return
-    if not observed or observed != expected:
-        context.agent_run_store.refuse(run.run_id, "exec_config_drift")
+        return run
+    confirmed = context.agent_run_store.confirm_exec_config(
+        run.run_id, observed, actual_node_id=actual_node_id
+    )
+    if confirmed is None:
         raise StandardAPIError(status.HTTP_403_FORBIDDEN, "AGENT_RUN_EXEC_CONFIG_DRIFT", "agent run refused")
-    context.agent_run_store.record_observed_config(run.run_id, observed)
+    return confirmed
 
 
 def _require_consumer_self_order(caller: ScopeContext, business_entry: str | None, order_no: str) -> None:

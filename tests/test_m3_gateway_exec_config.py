@@ -232,17 +232,77 @@ def test_receipt_reports_not_wired_when_no_expectation_was_fixed():
 
 
 def test_receipt_reports_the_recorded_identity_not_model_text():
-    receipt = _run(expected_agent_version="abc123", observed_agent_version="abc123").receipt()
+    receipt = _run(
+        expected_agent_version="abc123",
+        observed_agent_version="abc123",
+        exec_config_state="matched",
+    ).receipt()
     assert receipt["agent_version"] == "abc123"
     assert receipt["agent_version_observed"] == "abc123"
     assert receipt["agent_version_gap"] is None
 
 
-# --------------------------------------------------------------------------
-# 端到端：签发 → 领取 → 回执（走真实的 delegated / claims 路由）
-# --------------------------------------------------------------------------
+def test_fixed_expectation_without_confirmation_is_a_gap_not_a_version():
+    """**已固定期望 ≠ 已核对成功**。存在 expected 就把版本缺口清空，是把未核实写成已核实。
 
-HEADERS = {"Authorization": "Bearer verified-token", "X-Business-Entry": "consumer"}
+    这条对应 Codex 复现的 failed receipt：一条被 `refuse` 的记录仍有 expected，
+    回执却报出该摘要且 `gap=None`，读起来像「跑在这个版本上」。
+    """
+    for state in (None, "expected", "mismatched"):
+        receipt = _run(
+            state="failed",
+            reason="exec_config_drift",
+            snapshot=None,
+            expected_agent_version="a" * 64,
+            observed_agent_version=None,
+            exec_config_state=state,
+        ).receipt()
+        assert receipt["agent_version"] is None, state
+        assert receipt["agent_version_gap"] == "not_confirmed", state
+
+
+def test_mismatched_observation_never_reports_a_version_even_if_a_value_is_stored():
+    receipt = _run(
+        state="failed",
+        reason="exec_config_drift",
+        snapshot=None,
+        expected_agent_version="a" * 64,
+        observed_agent_version="b" * 64,
+        exec_config_state="mismatched",
+    ).receipt()
+    assert receipt["agent_version"] is None
+    assert receipt["agent_version_gap"] == "not_confirmed"
+    assert receipt["agent_version_observed"] == "b" * 64
+
+
+def test_disabled_receipt_keeps_exactly_the_legacy_key_set():
+    """未启用清单：回执字段集合与今天**逐字相同** —— 一个键都不多。
+
+    比的是键集合相等，不是「看起来没变」。上一版在这里多出了
+    `agent_version_observed`，于是「行为与今天逐字一致」是句没有判据的话。
+    """
+    legacy = {
+        "run_id",
+        "state",
+        "reason",
+        "operation",
+        "scope_fingerprint",
+        "expected_environment",
+        "expected_app_id",
+        "expected_agent_id",
+        "expected_node_id",
+        "actual_node_id",
+        "node_build",
+        "gateway_version",
+        "agent_version",
+        "agent_version_gap",
+        "result_sha256",
+        "created_at",
+        "expires_at",
+        "claimed_at",
+        "completed_at",
+    }
+    assert set(_run().receipt()) == legacy
 
 
 def _fixture(tmp_path, monkeypatch, *, manifest: Path | None):
@@ -320,7 +380,12 @@ def test_matching_identity_is_recorded_and_reported(tmp_path, monkeypatch):
 
 
 def test_drifted_identity_is_refused_before_any_snapshot(tmp_path, monkeypatch):
-    """GW-02：不一致 ⇒ 拒绝，且不返回快照。"""
+    """GW-02：不一致 ⇒ 拒绝、不返回快照，且记录**真正落终态**。
+
+    `observed_agent_version` 在这里**要**落库：漂移时留下实际收到的摘要，是审计要求的
+    「漂移时实际值怎么留证」。早先这里断言 `None`，等于要求「拒绝之后什么都不留」，
+    与「按契约留证」相反。
+    """
     manifest = _write_manifest(tmp_path)
     fixture = _fixture(tmp_path, monkeypatch, manifest=manifest)
     assert _delegate(fixture).status_code == 502
@@ -330,9 +395,13 @@ def test_drifted_identity_is_refused_before_any_snapshot(tmp_path, monkeypatch):
 
     assert claimed.status_code == 403
     assert claimed.json()["error"]["code"] == "AGENT_RUN_EXEC_CONFIG_DRIFT"
+    assert "order_no" not in claimed.json()
     row = _rows(fixture["store"])[0]
     assert row["expected_agent_version"] == _identity(manifest)
-    assert row["observed_agent_version"] is None
+    assert row["observed_agent_version"] == "0" * 64
+    assert row["exec_config_state"] == "mismatched"
+    assert row["state"] == "failed"
+    assert row["reason"] == "exec_config_drift"
     assert not row["snapshot_json"]
 
 
@@ -445,3 +514,155 @@ def test_wrong_credential_and_sibling_node_are_unaffected(tmp_path, monkeypatch)
     row = _rows(fixture["store"])[0]
     assert row["state"] == "issued"
     assert row["observed_agent_version"] is None
+
+
+# --------------------------------------------------------------------------
+# GW-11：漂移必须落终态（三个非终态起点都要覆盖）
+# --------------------------------------------------------------------------
+
+
+def _claim_with(fixture, run_id: str, observed: str | None):
+    headers = {} if observed is None else {"X-AI-Ops-Exec-Config": observed}
+    return _claim(fixture, run_id, **headers)
+
+
+@pytest.mark.parametrize("start_state", ["issued", "running", "succeeded"])
+def test_drift_is_terminal_from_every_live_state(tmp_path, monkeypatch, start_state):
+    """**发的三种状态**漂移都必须钉成 ``failed``，而不是只有已验证成功的那种。
+
+    早先这里只调 ``refuse()``，而它只认 ``succeeded``：于是 ``issued``/``running``
+    的记录在拒绝之后仍然活着，换正确摘要再来一次就 200 —— 复现材料里的
+    ``DRIFT_THEN_RETRY 403 after_drift=issued reason=None retry=200 final=succeeded``。
+
+    同时证明**终态不可复活**：错摘要被拒后，再拿正确摘要重试仍 403，
+    库里的 state/reason 不被覆盖，业务调用计数不变。
+    """
+    manifest = _write_manifest(tmp_path)
+    identity = _identity(manifest)
+    fixture = _fixture(tmp_path, monkeypatch, manifest=manifest)
+    assert _delegate(fixture).status_code == 502
+    run_id = _run_id(fixture)
+
+    if start_state in {"running", "succeeded"}:
+        assert fixture["store"].claim(run_id) is True
+    if start_state == "succeeded":
+        assert (
+            fixture["store"].complete(
+                run_id, snapshot={"order_no": "ORDER-A"}, actual_node_id="node-a1", node_build="b"
+            )
+            is True
+        )
+    calls_before = len(fixture["orders"].calls)
+
+    drifted = _claim_with(fixture, run_id, "0" * 64)
+    assert drifted.status_code == 403
+    assert drifted.json()["error"]["code"] == "AGENT_RUN_EXEC_CONFIG_DRIFT"
+    assert "order_no" not in drifted.json()
+
+    row = _rows(fixture["store"])[0]
+    assert row["state"] == "failed", start_state
+    assert row["reason"] == "exec_config_drift", start_state
+    assert row["exec_config_state"] == "mismatched", start_state
+    assert row["observed_agent_version"] == "0" * 64, start_state
+
+    # 换正确摘要仍拒绝：终态不复活。
+    retried = _claim_with(fixture, run_id, identity)
+    assert retried.status_code == 403, start_state
+    assert retried.json()["error"]["code"] == "AGENT_RUN_NOT_ACTIVE", start_state
+    after = _rows(fixture["store"])[0]
+    assert after == row, start_state
+    assert len(fixture["orders"].calls) == calls_before, start_state
+
+
+def test_drift_does_not_resurrect_an_already_terminal_record(tmp_path, monkeypatch):
+    """已有 failed/revoked 不被漂移路径改写原因，也不复活。"""
+    manifest = _write_manifest(tmp_path)
+    identity = _identity(manifest)
+    for terminal, reason in (("failed", "upstream_failed"), ("revoked", "revoked_by_caller")):
+        case_dir = tmp_path / terminal
+        case_dir.mkdir()
+        fixture = _fixture(case_dir, monkeypatch, manifest=manifest)
+        assert _delegate(fixture).status_code == 502
+        run_id = _run_id(fixture)
+        assert fixture["store"].claim(run_id) is True
+        if terminal == "failed":
+            assert fixture["store"].fail(run_id, reason) is True
+        else:
+            assert fixture["store"].revoke(run_id, reason) is True
+        before = _rows(fixture["store"])[0]
+
+        drifted = _claim_with(fixture, run_id, "0" * 64)
+        assert drifted.status_code == 403
+        # 正确摘要也不行 —— 终态就是终态。
+        assert _claim_with(fixture, run_id, identity).status_code == 403
+        assert _rows(fixture["store"])[0] == before, terminal
+
+
+def _prepare_succeeded(fixture):
+    """已成功、待重试放行的一条记录。"""
+    run_id = _run_id(fixture)
+    assert fixture["store"].claim(run_id) is True
+    assert (
+        fixture["store"].complete(
+            run_id, snapshot={"order_no": "ORDER-A"}, actual_node_id="node-a1", node_build="b"
+        )
+        is True
+    )
+    return run_id
+
+
+@pytest.mark.parametrize("release_path", ["first_claim", "retry_release", "race_release"])
+def test_terminal_refusal_committed_before_final_check_blocks_the_snapshot(
+    tmp_path, monkeypatch, release_path
+):
+    """**本请求的最终检查/写入之前，另一个请求的拒绝已提交** ⇒ 不得返回快照。
+
+    复现材料里这条返回 200 + 业务正文，而库里已是 ``failed``/``exec_config_drift``、
+    还被写成 ``exec_config_state=matched`` —— 因为核对与放行依据的是两次独立读，
+    且写入是无条件 UPDATE。现在三者同处一个写事务，且返回的是写入之后读到的记录。
+
+    三条放行路径各测一次：首次领取、成功快照重试、领取竞争失败后读到的那条成功结果。
+    """
+    manifest = _write_manifest(tmp_path)
+    identity = _identity(manifest)
+    fixture = _fixture(tmp_path, monkeypatch, manifest=manifest)
+    assert _delegate(fixture).status_code == 502
+    run_id = _run_id(fixture)
+
+    if release_path == "first_claim":
+        # 仍在 issued：走首次领取那一跳。
+        target = run_id
+    elif release_path == "retry_release":
+        # 已成功：重试走 success snapshot 的重试放行。
+        target = _prepare_succeeded(fixture)
+    else:
+        # 领取竞争：记录已成功，本请求的 claim() 失败，走竞争后的放行。
+        target = _prepare_succeeded(fixture)
+
+    store = fixture["app"].state.gateway.agent_run_store
+    original = store.confirm_exec_config
+    seen: list[str] = []
+
+    def refuse_then_confirm(run_id_, observed, **kwargs):
+        seen.append(run_id_)
+        # 在**本请求写入之前**让另一个已认证请求把记录拒绝成终态。
+        # `fail()` 管 issued/running、`refuse()` 管 succeeded —— 与路由里的 `deny()`
+        # 同一条分流：只调其中一个会让对应状态的那条用例测不到交错。
+        if not fixture["store"].fail(run_id_, "exec_config_drift"):
+            fixture["store"].refuse(run_id_, "exec_config_drift")
+        return original(run_id_, observed, **kwargs)
+
+    monkeypatch.setattr(store, "confirm_exec_config", refuse_then_confirm)
+    if release_path == "race_release":
+        monkeypatch.setattr(store, "claim", lambda _run_id: False)
+
+    response = _claim_with(fixture, target, identity)
+
+    assert seen, "本请求必须真的走到执行配置核对这一关"
+    assert response.status_code == 403, response.text
+    assert "order_no" not in response.json()
+    row = _rows(fixture["store"])[0]
+    assert row["state"] == "failed"
+    assert row["reason"] == "exec_config_drift"
+    # 终态之后不得写成 matched。
+    assert row["exec_config_state"] != "matched"

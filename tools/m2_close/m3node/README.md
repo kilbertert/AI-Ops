@@ -1,4 +1,26 @@
-# M3-NODE-GUARD-01 合成验收（节点侧）
+# M3 执行配置守卫验收（节点侧 + Gateway 侧）
+
+本目录是这一片的验收工具。节点侧证明的是**真实节点装配**在模型调用前拒绝配置漂移 ——
+不是某个测试专用工厂，也不是只校验早期 DTO。Gateway 侧证明签发的期望、领取的对照
+与记录终态，契约见 `docs/agents/m3-gateway-exec-config.md`。
+
+## Gateway 侧（`verify_gateway_exec_config.py` / `verify_migration_rollback.py` / `manifest_parity.py`）
+
+```bash
+# 真实 HTTP：一致性/缺失/错摘要/兄弟节点，四种组合各一个一次性数据根
+uv run python tools/m2_close/m3node/verify_gateway_exec_config.py --out /tmp/exec-config-http.json
+
+# 迁移与回滚：旧库副本、重复启动、用升级前的代码读升级后的库
+uv run python tools/m2_close/m3node/verify_migration_rollback.py --out /tmp/migration.json
+
+# 跨语言清单对照：同一组样本喂给 Python 与 Java 的真实加载器
+M3NODE_DEPS=… M3NODE_JDK_IMAGE=… uv run python tools/m2_close/m3node/manifest_parity.py
+```
+
+三者互不替代：单测证判据、真实 HTTP 证进程与路由、迁移脚本证部署影响。
+`manifest-samples/` 是两端**共用**的样本；加样本要同时跑 Java 一侧，否则对照会遮住新分歧。
+
+## 节点侧重跑
 
 本目录是这一片的验收工具。它证明的是**真实节点装配**在模型调用前拒绝配置漂移 ——
 不是某个测试专用工厂，也不是只校验早期 DTO。

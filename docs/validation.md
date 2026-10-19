@@ -1,4 +1,4 @@
-## 2026-10-19 · Gateway 签发时固定执行配置身份，领取时对照并持久化（M3-GATEWAY-01）
+## 2026-10-19 · Gateway 签发时固定执行配置身份，领取时对照并持久化（M3-GATEWAY-01 / R1）
 
 **范围**：Gateway 侧。节点片已合并（#842）；本片不改节点守卫逻辑，不进通用版本平台。
 **不访问 41、不调真实供应商、不发真实订单。**
@@ -10,32 +10,64 @@
 
 | 时机 | 判定 | 失败表现 |
 |---|---|---|
-| 启动 | 清单可读性/普通文件/非符号链接/权限不宽于 0600/JSON/schema/`history_policy`/工具非空 | **启动即拒**（`ValueError`），不降级 |
+| 启动 | 清单可读性/普通文件/非符号链接/权限不宽于 0600/JSON/schema/`history_policy`/模型必填字段/**`model_options`**/工具三项（name+description+input_schema） | **启动即拒**（`ValueError`），不降级 |
 | 签发 | 每次**重读**清单并写入 `expected_agent_version` | 读不到 ⇒ 503 `EXEC_CONFIG_UNAVAILABLE` |
-| 领取 | 节点回传 `X-AI-Ops-Exec-Config` 与期望逐字相等 | 不等/缺失 ⇒ `refuse("exec_config_drift")` 403，**不返回快照** |
+| 领取 | 节点回传 `X-AI-Ops-Exec-Config` 与期望逐字相等 | 不等/缺失 ⇒ **记录落终态**（`failed` + `reason=exec_config_drift`）403，**不返回快照** |
 
 列变更做**真迁移**：`PRAGMA table_info` + `ALTER TABLE` 幂等补三列；旧行保持 `NULL`，不回填。
-回执 `agent_version` 取自记录；未启用时 `null` + `not_wired`。
+
+**R1 修掉的两项阻断**（Codex 复现材料 `codex-m3-gateway-review/`）：
+
+1. **漂移拒绝没落终态**：原来只调 `refuse()`，而它只认 `succeeded`。`issued`/`running`
+   的记录被拒后仍然活着 —— `DRIFT_THEN_RETRY 403 after_drift=issued reason=None retry=200
+   final=succeeded`。现在身份核对、终态写入、以及用于放行的状态都在
+   `AgentRunStore.confirm_exec_config()` 的**同一个写事务**里；`issued`/`running`/`succeeded`
+   三种起点都落终态，已有终态不被改写、不复活。
+2. **最终放行拿陈旧对象**：原来「读记录 → 无条件 UPDATE → 返回之前读到的成功对象」，
+   于是另一个请求的拒绝提交进来之后仍返回 200 + 业务正文，还把 `matched` 写在一条
+   `failed` 记录上（`RACE_RESULT 200 state=failed config_state=matched`）。现在写不进去
+   就是不放行，返回的是**同事务写入之后**读到的记录。
+
+另外三处对齐：
+
+- **回执**：`agent_version` 只在**核对一致**之后给出。存在 `expected` 不等于已核实，
+  未核实时 `agent_version=null` + `gap="not_confirmed"`；未启用时回执字段集合与升级前
+  **逐字相同**（`agent_version_observed` 不再无条件出现）。
+- **清单判据**：与节点侧同一组必填字段（`model_options`、工具 description/schema）。
+  此前 Gateway 收、节点拒 —— 同一份清单两端结论不同。
+- **漂移留证**：实际收到的摘要写进 `observed_agent_version`、状态写 `mismatched`，
+  原因继续落在既有的 `reason`，不新增原因列、不扩展统计设施。
 
 ### 二、结果
 
-- 本片用例 **21 passed**；既有委托执行 55 未回归；全量 **2958 passed / 9 skipped / 0 failed**。
-- 覆盖 GW-01..GW-10：一致身份落库并回执、不一致/缺失拒绝且不释放快照、未启用行为不变、
-  启动拒绝（坏 schema、只配清单不配委派）、**重试放行同样复核**、错凭据拿到既有
-  `NODE_TOKEN_REQUIRED` 401 且记录不变、旧库幂等迁移不破坏历史字段、回执不取自模型文本。
-- **定向变异**：把领取对照改成恒真 ⇒ GW-02 转红（`assert 200 == 403`）。
-- **真进程证据**（`verify-aiops-gateway` skill，临时数据根）：
-  - 基线脚本全项通过（`/health` 200、未认证 401、注册 201、认证 200）；
-  - **坏清单**：`aiops-gateway serve` **rc=1**，报
-    `execution manifest is invalid: unsupported execution manifest schema`，端口**未监听**；
-  - **合法清单**：服务正常起来，`/health` 返回 `{"ok":true,...}`。
+- 本片用例 **32 passed**（原 21 + 新增 11）；委托执行 55、记录存储全部未回归；
+  全量 **2986 passed / 9 skipped / 0 failed**。
+- **红→绿**：新增的 9 条断言在**修复前的实现**上全部失败（`drift_is_terminal` 3 条、
+  `terminal_refusal_committed` 3 条、回执 3 条），修复后全绿。
+- **跨语言清单对照**：`tools/m2_close/m3node/manifest_parity.py` 用 11 份样本同时喂给
+  Python 与 Java 的**真实加载器**，11/11 结论一致、接受样例的身份逐字相同。把 Python 侧
+  的必填判据退回修复前的写法，对照立刻报出 4 处不一致（`FAIL`）—— 判据本身是被钉住的。
+- **真实 HTTP**（`tools/m2_close/m3node/verify_gateway_exec_config.py`，一次性数据根，
+  真 `create_gateway_app` + 回环 CPMS/平台替身，平台替身扮演节点回呼领取入口）：
+  一致 ⇒ 领取 200 且记录 `matched`、回执 `agent_version` 等于清单身份；
+  缺失 ⇒ 403 `AGENT_RUN_EXEC_CONFIG_DRIFT`、`failed`/`exec_config_drift`、无快照；
+  错摘要 ⇒ 同上且 `observed` 落库、`mismatched`；
+  兄弟节点 ⇒ 403 `AGENT_RUN_WRONG_NODE`、记录仍是 `issued` 未被改写。**11/11 PASS**。
+- **迁移与回滚**（`tools/m2_close/m3node/verify_migration_rollback.py`）：旧库副本迁移后
+  历史行逐字不变、三列 `NULL`；重复启动结构与文件摘要都不再变；**用升级前的
+  `agent_runs.py` 读升级后的库**能读到原有状态（保留列的代码回滚可行）；清空开关后
+  再启动不改动任何行。**9/9 PASS**。
 
 ### 三、边界
 
-- 本地合成与一次性数据根：**不**证明真实供应商、真实订单、生产装配。
-- 本片改 `src/**`，**命中生产 CD 触发路径** —— 与节点片不同，合并前需单独评估。
-- `agent_version_observed` 是审计字段；`exec_config_state` 目前只有 `expected`/`matched`
-  两个取值，漂移时不写（记录已被 `refuse` 钉成终态）。
+- 本地合成与一次性数据根：**不**证明真实供应商、真实模型、真实订单、生产装配。
+  上面的真实 HTTP 证据证明的是 API 契约、鉴权与领取判据，**不**证明模型驱动路径。
+- **默认关闭不等于生产库无变化**：无论清单是否启用，`AgentRunStore` 初始化都会
+  `ALTER TABLE` 加三列。合并即触发该迁移，需与 CD 一起评估（证据见上）。
+- `exec_config_state` 取值为 `expected`（已固定期望）/`matched`（已核对一致）/
+  `mismatched`（已核对但不一致）。漂移拒绝同时写 `reason=exec_config_drift`。
+- **节点发送端尚未接线**：本片没有任何代码让真实节点回传该头；测试里的头是测试自己发的，
+  不冒充真实节点。第一次 claim 成功也不等于整轮模型执行成功 —— 那部分留给下一片。
 
 ## 2026-10-19 · 登录代理三联修：36 上线后的真实复验（#847 / #848 / #849）
 
