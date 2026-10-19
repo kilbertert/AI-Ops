@@ -24,6 +24,7 @@ scratch space.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -62,6 +63,26 @@ def _populate(destination: Path) -> None:
     # `core.hooksPath` is cleared for the copy: this host's managed hooks reject
     # commits on a default branch and require Conventional Commits, neither of
     # which says anything about a throwaway fixture.
+    #
+    # 🔴 `maintenance.auto=false` is REQUIRED, and its absence is a CI-only
+    # flake. `git commit` finishes by forking `git maintenance run --auto` as a
+    # background child that holds `.git/objects/maintenance.lock`; the child
+    # outlives the commit. The next fixture to run copies this template
+    # (`_template` is session-scoped and copied per test), and if the copy
+    # reaches `.git/objects/maintenance.lock` in the window where the child has
+    # it mid-create-or-delete, `shutil.copytree` raises on a file that vanished
+    # underneath it:
+    #
+    #   shutil.Error: [('.git/objects/maintenance.lock', …,
+    #                   "[Errno 2] No such file or directory")]
+    #
+    # Measured on this host 2026-10-19: the commit spawns the child every time
+    # (GIT_TRACE, regardless of `gc.auto`), and `-c maintenance.auto=false`
+    # removes the spawn entirely — `gc.auto=0` does NOT, which is why the
+    # setting that looks like the obvious knob is the wrong one. The window is
+    # milliseconds, so it fails a suite run at random and passes on re-run: a
+    # docs-only PR hit it (PR #843), which is what makes it worth naming here
+    # rather than leaving as "known flaky".
     for command in (
         ["git", "init", "-q"],
         ["git", "config", "core.hooksPath", ""],
@@ -72,6 +93,8 @@ def _populate(destination: Path) -> None:
             "user.name=fixture",
             "-c",
             "user.email=fixture@invalid",
+            "-c",
+            "maintenance.auto=false",
             "commit",
             "-q",
             "-m",
@@ -316,3 +339,52 @@ def test_merge_reads_questions_from_the_questions_dir(tree: _Tree, tmp_path: Pat
     # The run must get PAST question resolution; whether it then complains about
     # the version bump is fine — the point is that it did not refuse the source.
     assert "题面没有来源" not in result.stderr, result.stderr
+
+
+def test_the_fixture_commit_does_not_spawn_background_maintenance(tmp_path: Path) -> None:
+    """The fixture's commit must not leave a `git maintenance run --auto` child.
+
+    That child holds `.git/objects/maintenance.lock` in the background, and the
+    next test copies this tree — so the child turns a routine commit into a race
+    that reddens an unrelated PR at random (measured 2026-10-19; a docs-only PR
+    hit it). Asserting the child is gone is what keeps the fix from being
+    dropped as a redundant-looking flag: the failure mode is invisible in a
+    passing run and only shows up as an occasional `shutil.Error` somewhere
+    else, so nothing else in this file would go red if the flag were removed.
+
+    `GIT_TRACE` naming the child is the direct evidence, and it needs no timing
+    luck — unlike reproducing the race itself, which the comment above records
+    as millisecond-wide.
+    """
+    destination = tmp_path / "tree"
+    destination.mkdir()
+    _populate(destination)
+
+    # Re-run the fixture's own commit with tracing, on the tree it just built.
+    traced = subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=fixture",
+            "-c",
+            "user.email=fixture@invalid",
+            "-c",
+            "maintenance.auto=false",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "traced",
+        ],
+        cwd=destination,
+        capture_output=True,
+        text=True,
+        env={**os.environ, "GIT_TRACE": "1"},
+    )
+
+    assert traced.returncode == 0, traced.stderr
+    assert "maintenance run --auto" not in traced.stderr, (
+        "fixture commit spawned `git maintenance run --auto`; it holds "
+        "objects/maintenance.lock in the background and races the next copytree"
+    )
+    assert not (destination / ".git" / "objects" / "maintenance.lock").exists()
