@@ -1756,3 +1756,37 @@ def test_the_correction_does_not_steal_the_final_answer_turn(tmp_path: Path) -> 
     # Two real searches ran; the third request was refused by the guard's
     # two-call cap and still counts as an attempt (pre-existing accounting).
     assert result["searches"] == 3
+
+
+def test_the_configured_depth_reaches_the_knowledge_base(tmp_path: Path) -> None:
+    """The harness forwards the deployment's depth instead of the guard default
+    (#838). Media on a `chunk_method=picture` library ranks mid-list, so the
+    depth is what decides whether a card can carry a picture at all.
+    """
+    client = _SearchClient([[dict(_IMAGE_CHUNK)]])
+    session = _FakeSession([_tool_request("拔枪步骤"), _answer([_text_block("先按卡扣再拔枪。")], "found")])
+
+    run_customer_qa_answer(
+        "怎么拔枪",
+        _selection(),
+        _settings(tmp_path),
+        search_client=client,
+        media_signer=_signer(),
+        tenant_id="tenant-a",
+        project_root=_PROJECT_ROOT,
+        session_factory=lambda *_args, **_kw: session,
+        max_results=10,
+    )
+
+    assert [call[2] for call in client.calls] == [10]
+
+
+def test_an_omitted_depth_keeps_the_guard_default(tmp_path: Path) -> None:
+    """`max_results=None` must stay a real "unspecified" — the harness is called
+    from tests and tools that have no deployment settings to read."""
+    client = _SearchClient([[dict(_IMAGE_CHUNK)]])
+    session = _FakeSession([_tool_request("拔枪步骤"), _answer([_text_block("先按卡扣再拔枪。")], "found")])
+
+    _run(tmp_path, session, client)
+
+    assert [call[2] for call in client.calls] == [5]

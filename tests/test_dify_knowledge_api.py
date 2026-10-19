@@ -223,7 +223,7 @@ def test_top_k_is_capped_by_our_limit(tmp_path: Path) -> None:
     client = _client(
         tmp_path,
         _Runtime(signer=MediaResourceSigner("s", ttl_seconds=600), search=lambda *_a: []),
-        dify_knowledge_max_top_k=4,
+        kb_search_max_results=4,
     )
 
     resp = _post(client, _body(top_k=500))
@@ -593,3 +593,44 @@ def test_config_round_trips_the_debug_keys_from_the_config_file(tmp_path: Path) 
     )
     built.validate()
     assert built.dify_debug_tenant == "T-TEST"
+
+
+def test_a_multi_kb_binding_does_not_exceed_the_requested_top_k(tmp_path: Path) -> None:
+    """Each registered base is searched with `top_k` and the results are merged,
+    so a two-base binding returns up to 2 × top_k chunks. Dify asked for 3 and
+    must receive 3 (#838 review), not the deployment cap of 10.
+    """
+    client = _client(
+        tmp_path,
+        _Runtime(
+            signer=MediaResourceSigner("s", ttl_seconds=600),
+            search=lambda _kbs, _q, _n: (
+                [_chunk(kb_id="KB-A", doc_id=f"a{i}", score=0.9 - i / 100) for i in range(3)]
+                + [_chunk(kb_id="KB-B", doc_id=f"b{i}", score=0.8 - i / 100) for i in range(3)]
+            ),
+        ),
+        dify_knowledge_bindings="kb-customer:T-1:KB-A|KB-B",
+        kb_search_max_results=10,
+    )
+
+    records = _post(client, _body(top_k=3)).json()["records"]
+
+    assert len(records) == 3
+
+
+def test_the_cap_still_applies_to_what_dify_asks_for(tmp_path: Path) -> None:
+    """Truncating to the request must not become "trust whatever Dify sends":
+    `parse_dify_retrieval_request` caps `top_k` at the deployment limit first.
+    """
+    client = _client(
+        tmp_path,
+        _Runtime(
+            signer=MediaResourceSigner("s", ttl_seconds=600),
+            search=lambda *_a: [_chunk(doc_id=f"d{i}", score=0.9 - i / 100) for i in range(20)],
+        ),
+        kb_search_max_results=10,
+    )
+
+    records = _post(client, _body(top_k=500)).json()["records"]
+
+    assert len(records) == 10

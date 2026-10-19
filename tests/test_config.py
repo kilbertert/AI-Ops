@@ -330,3 +330,65 @@ def test_dis_settings_rejects_credential_bearing_or_unbounded_values() -> None:
         DisSettings(timeout_seconds=0)
     with pytest.raises(ValueError, match="Dis 超时"):
         DisSettings(timeout_seconds=61)
+
+
+def test_kb_search_depth_defaults_to_ten(monkeypatch) -> None:
+    """The retrieval depth is a deployment knob with a measured default (#838).
+
+    Pictures sit in the middle of the ranking on a `chunk_method=picture`
+    library, so the old fixed 5 lost them. The default is the point of the
+    change, not a coincidence of the field's initializer.
+    """
+    monkeypatch.delenv("AIOPS_GATEWAY_KB_SEARCH_MAX_RESULTS", raising=False)
+
+    settings = GatewayServerSettings.from_env()
+
+    assert settings.kb_search_max_results == 10
+
+
+def test_kb_search_depth_reads_the_environment(monkeypatch) -> None:
+    monkeypatch.setenv("AIOPS_GATEWAY_KB_SEARCH_MAX_RESULTS", "14")
+
+    assert GatewayServerSettings.from_env().kb_search_max_results == 14
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "21"])
+def test_kb_search_depth_out_of_range_is_a_startup_error(monkeypatch, value: str) -> None:
+    """An unreadable depth must fail at startup, not silently fall back to a
+    default — a knob that quietly does the opposite of what it says is how
+    "the depth was raised" becomes a false statement."""
+    monkeypatch.setenv("AIOPS_GATEWAY_KB_SEARCH_MAX_RESULTS", value)
+
+    with pytest.raises(ValueError, match="KB_SEARCH_MAX_RESULTS"):
+        GatewayServerSettings.from_env().validate()
+
+
+def test_kb_search_depth_reads_the_private_server_config(tmp_path: Path, monkeypatch) -> None:
+    """Beside the KB URL it governs (#838 review). An operator who writes it in
+    the private file must not get a startup that succeeds and a setting that
+    silently does nothing — `kb_service_base_url` already accepts either source.
+    """
+    config = tmp_path / "gateway.env"
+    write_private_text(config, "AIOPS_GATEWAY_KB_SEARCH_MAX_RESULTS=15\n")
+    monkeypatch.setenv("AIOPS_GATEWAY_SERVER_CONFIG_FILE", str(config))
+    monkeypatch.delenv("AIOPS_GATEWAY_KB_SEARCH_MAX_RESULTS", raising=False)
+
+    assert GatewayServerSettings.from_env().kb_search_max_results == 15
+
+
+def test_process_env_wins_over_the_private_server_config(tmp_path: Path, monkeypatch) -> None:
+    config = tmp_path / "gateway.env"
+    write_private_text(config, "AIOPS_GATEWAY_KB_SEARCH_MAX_RESULTS=15\n")
+    monkeypatch.setenv("AIOPS_GATEWAY_SERVER_CONFIG_FILE", str(config))
+    monkeypatch.setenv("AIOPS_GATEWAY_KB_SEARCH_MAX_RESULTS", "12")
+
+    assert GatewayServerSettings.from_env().kb_search_max_results == 12
+
+
+def test_an_unparseable_depth_fails_loudly(tmp_path: Path, monkeypatch) -> None:
+    """Not a silent fallback to the default: a value the config cannot parse is
+    exactly the case where "the depth was raised" would otherwise be false."""
+    monkeypatch.setenv("AIOPS_GATEWAY_KB_SEARCH_MAX_RESULTS", "ten")
+
+    with pytest.raises(ValueError):
+        GatewayServerSettings.from_env()

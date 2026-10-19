@@ -176,6 +176,7 @@ def run_customer_qa_answer(
     initial_prompt: str | None = None,
     turn_registrar: Callable[[Any], None] | None = None,
     history: str = "",
+    max_results: int | None = None,
 ) -> dict[str, Any]:
     """Answer one customer question via the published agent + bounded retrieval.
 
@@ -206,6 +207,9 @@ def run_customer_qa_answer(
         knowledge_base_ids=selection.knowledge_base_ids,
         media_signer=media_signer,
         session_id=workspace.run_id,
+        # One deployment-wide depth for every retrieval path (#838). `None`
+        # keeps the guard's own default, which is what the tests drive.
+        **({} if max_results is None else {"max_results": max_results}),
     )
     retrieval = _TurnRetrieval()
     session: SDKCodexSession | None = None

@@ -204,6 +204,7 @@ def run_agent_debug_answer(
     project_root: Path | None = None,
     session_factory: Any | None = None,
     language: str = DEFAULT_LANGUAGE,
+    max_results: int | None = None,
 ) -> dict[str, Any]:
     """Run one isolated preview turn of a draft customer agent config.
 
@@ -236,6 +237,7 @@ def run_agent_debug_answer(
         project_root=project_root,
         session_factory=session_factory,
         language=language,
+        max_results=max_results,
     )
     result["agent_version"] = f"{agent_id}#draft-r{revision}"
     result["debug"] = True

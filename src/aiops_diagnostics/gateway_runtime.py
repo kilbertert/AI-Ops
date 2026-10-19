@@ -2333,6 +2333,7 @@ class GatewayRuntime:
                 key_slot=key_slot,
                 project_root=reference_root(),
                 language=language,
+                max_results=self.gateway_settings.kb_search_max_results,
             )
         except KnowledgeSearchUnavailable as exc:
             self._record_metric(
@@ -2627,6 +2628,7 @@ class GatewayRuntime:
                 initial_prompt=promo_prompt_text,
                 turn_registrar=turn_registrar,
                 history=history,
+                max_results=self.gateway_settings.kb_search_max_results,
             )
         except KnowledgeSearchUnavailable:
             if promo_intent:
