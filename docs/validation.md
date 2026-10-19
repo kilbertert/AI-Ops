@@ -165,6 +165,61 @@ Devin 指出那会把**网关层面**的拒绝（我们配的 Basic 凭据、来
   后者要等改动部署到 36 之后，与 #783 里仍未验的「人在页面上点得动」同一类欠账。
 - 同批发现的另外两条（退避按 nginx 回环地址计数、明文入口不拒绝口令）**本票不修**，
   分在 #848 / #849。
+## 2026-10-19 · 登录代理：明文入口不再收下公司口令（#849）
+
+**现象**：向 `http://36.156.159.175:10008/__aiops/login` POST 一个明文 `password`
+（2026-10-19 实测），代理**照常把它 AES 加密后发往公司**，没有任何拒绝。
+
+**根因**：模块 docstring 的第一条硬前置是「公司密码不得经明文 HTTP 传输」，但它由
+`assert_public_origin_is_https` 实现 —— 判据是**配置字符串**是否以 `https://` 开头。
+那证明的是"我们有一个 TLS 入口"，不是"这一次请求从它进来"。而 10008 是 `listen 10008`
+的明文入口，与 TLS 入口**共用同一份 nginx 配置**（#776/#778 的有意设计）。
+
+**这条路还注定登不成功**：会话 cookie 恒定 `Secure` + `__Host-`，浏览器在 http 源上把
+两者静默丢弃 ⇒ 200 → 跳转 `/` → 立刻弹回 `/signin`。**收下口令换不来任何东西，只换来
+一次明文传输。**
+
+**改动**：`_login` 第一步（早于读请求体）判 `X-Forwarded-Proto == https`，缺失即拒
+（fail-closed）。`ops/dify-login-proxy/dify-login-proxy.conf` 在 `location = /__aiops/login`
+自己补一行 `proxy_set_header X-Forwarded-Proto $scheme` —— `proxy_set_header` 不跨
+location 继承，外层 `location /` 那行管不到精确匹配块。验证码路由不受影响。
+
+**判据**：`uv run pytest tests/test_dify_login_proxy.py` → 48 passed（新增 3 条）。
+关键的一条钉的是 **`_FakeCompany.calls == []`**：只看状态码不够，代理完全可以在拒掉之前
+先把口令发出去（那就是真正的泄漏）。
+
+**突变复验**：把 `_arrived_over_tls()` 的调用改成 `if False:` ⇒ 两条明文用例变红
+（`200 == 400`，且 `_FakeCompany.calls` 非空），还原即绿。
+
+**评审纠正（同批，与 #848 联动）**：初版在登录 snippet 里加过一行
+`proxy_set_header X-Forwarded-Proto $scheme`，**已回退** —— 这一层是 `listen 10008`
+的明文服务，`$scheme` 恒为 `http`，会把 TLS 入口写进来的 `https` 覆盖掉，于是被自己的
+闸门挡住，**正常登录也会失败**。现在 snippet 里转发的是
+`$aiops_upstream_proto`（由 #848 在 `dify-console-10008.conf` 顶部用
+`map $realip_remote_addr` 算出）。**两票必须一起部署。**
+
+**伪造协议头能绕过吗（Devin 提的 🟥，实测否定）**：不能。判据不是"头在不在"，而是
+"对端是不是回环" —— 那个 map 只在 `$realip_remote_addr` 是 `127.0.0.1`/`::1` 时才采信
+上游声明的协议，否则输出空串。在本机用合并后的真实配置实测四条（一次性前缀，替代端口
+18010，echo 上游读回最终头）：
+
+```
+S1 公网对端 127.0.0.2 + 伪造 X-Forwarded-Proto: https
+   → 只有 x-real-ip: 127.0.0.2，**没有 x-forwarded-proto** ⇒ 代理判为明文、拒收口令
+S2 同上再伪造 X-Real-IP: 1.2.3.4
+   → 仍是 x-real-ip: 127.0.0.2（realip 只信回环，伪造被丢弃）
+S3 回环对端（= TLS 入口）声明 https
+   → x-real-ip: 203.0.113.9, x-forwarded-proto: https   （放行，符合预期）
+S4 回环对端未声明协议
+   → 无 x-forwarded-proto                              （fail-closed）
+```
+
+判据落在 **S1**：伪造者拿不到那个头，因为 `map` 的输出与客户端送的头无关。
+
+**边界**：本票不让 10008 变成"安全的入口"——它仍公网可达、仍能拿到登录页、仍能取验证码。
+改变的是**它不再接收口令**。真实浏览器在明文入口上的表现（应看到那句中文说明）要等部署。
+
+
 
 
 ## 2026-10-19 · CI 竞态：fixture 的 `git commit` 会留一个后台 maintenance 子进程
