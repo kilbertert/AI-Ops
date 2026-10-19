@@ -35,6 +35,19 @@
 
 1. **控制台入口已是 TLS**（#776）。`AIOPS_LOGIN_PROXY_PUBLIC_ORIGIN` 非 https 时代理
    **拒绝启动** —— 公司密码不得经明文传输。
+
+   这一条还**不够**，它是启动时的配置断言，证明不了"这一次请求"从哪进来（#849）。
+   请求层另有一道闸：登录 POST 带 `X-Forwarded-Proto: https` 才收口令，缺失即拒
+   （fail-closed ⇒ 漏配的后果是登录不可用，不是明文放行）。
+
+   > **部署时必须核对**：那两个头由 `ops/dify-console-bridge/dify-console-10008.conf`
+   > 提供 —— 顶部用 `realip`（`set_real_ip_from` 只列回环）把真实来源写回
+   > `$remote_addr`，并用 `map $realip_remote_addr $aiops_upstream_proto` 算出该上报的
+   > 协议；登录 snippet 转发的就是这两个已修正的值。**两处缺一不可**：snippet 里
+   > 直接写 `$scheme` 是错的（这一层明文监听，`$scheme` 恒为 http，会把 TLS 入口写的
+   > https 覆盖掉）。上线判据：`https://dify.ranlei.work` 能登录、`http://...:10008`
+   > 提交口令得到「请使用 https 登录」，两者都成立才算装对。
+
 2. **公司侧权限码已存在**（#777），且 `AIOPS_LOGIN_PROXY_COMPANY_CLIENT_TYPE` 与那两个
    权限码所挂的 `client_type` **一致**；否则公司侧取到空角色集，表现为"你没有权限"。
 3. **公网已封掉 Dify 原生账号入口**（#783）：`/console/api/login`、找回密码、邮箱验证码、
