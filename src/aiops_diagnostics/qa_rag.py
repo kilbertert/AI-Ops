@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -48,8 +49,15 @@ from aiops_diagnostics.knowledge_retrieval import (
 )
 from aiops_diagnostics.turn_recovery import parse_turn
 
-_MAX_RUNS = 5  # initial turn + ≤2 search rounds + forced re-search + final
+#: initial turn + ≤2 search rounds + forced re-search + final answer, plus one
+#: turn for the missing-`query` correction (#837). The correction gets its OWN
+#: budget rather than borrowing from the answer's: a query-less batch once cost
+#: the run its final turn, and the loop then reported a localized fallback
+#: claiming `searches: 0` after two searches had actually completed.
+_MAX_RUNS = 6
 _JSON_FENCE = re.compile(r"```(?:json)?\s*\n?(.*?)```", re.DOTALL)
+
+_LOGGER = logging.getLogger("aiops.qa_rag")
 
 
 @dataclass(frozen=True, slots=True)
@@ -213,6 +221,7 @@ def run_customer_qa_answer(
             )
         prompt = initial_prompt or _initial_prompt(selection, question, language, history=history)
         searched = False
+        asked_for_query = False
         for _ in range(_MAX_RUNS):
             output = session.run(prompt, output_schema=qa_rag_turn_schema())
             turn = _parse_rag_turn(output.final_response)
@@ -237,6 +246,39 @@ def run_customer_qa_answer(
                             "query": question,
                             "reason": "model emitted an empty tool request",
                         }
+                    ]
+                # ANY request without a keyword triggers the re-ask, not "all of
+                # them": a batch mixes a valid query with a query-less sibling,
+                # and checking the batch as a whole would let the sibling reach
+                # `_execute_searches` and come back as a dropped search.
+                missing_query = any(
+                    _search_query(item) is None for item in requests if isinstance(item, dict)
+                )
+                if missing_query and not asked_for_query:
+                    # The model named the tool but wrote no keyword. Ask it for
+                    # one rather than searching with its purpose sentence. Asked
+                    # exactly once: a second query-less request means asking did
+                    # not help, so the user's question takes over below.
+                    asked_for_query = True
+                    _LOGGER.warning(
+                        "knowledge_search request carried no query; asking for one",
+                        extra={"event": "qa_search_query_missing"},
+                    )
+                    prompt = _missing_query_prompt(question, language)
+                    continue
+                if missing_query:
+                    _LOGGER.warning(
+                        "knowledge_search still carried no query; searching the user's question",
+                        extra={"event": "qa_search_query_fallback_question"},
+                    )
+                    # Fill in only the requests that still lack a keyword: a
+                    # sibling that supplied a real query keeps it, so the
+                    # fallback does not overwrite the better input.
+                    requests = [
+                        {**item, "query": question}
+                        if isinstance(item, dict) and _search_query(item) is None
+                        else item
+                        for item in requests
                     ]
                 results = _execute_searches(guard, retrieval, requests)
                 searched = True
@@ -267,6 +309,20 @@ def run_customer_qa_answer(
                 session.close()
 
 
+def _search_query(request: dict[str, Any]) -> str | None:
+    """The keyword phrase to search with, or ``None`` when the model named none.
+
+    Only ``query`` counts. ``reason`` is deliberately NOT a fallback: it is the
+    model's stated purpose for searching, written as prose, and the two are not
+    interchangeable inputs to retrieval — see ``_execute_searches``.
+    """
+    query = request.get("query")
+    if not isinstance(query, str):
+        return None
+    query = query.strip()
+    return query or None
+
+
 def _execute_searches(
     guard: KnowledgeSearchGuard,
     retrieval: _TurnRetrieval,
@@ -277,7 +333,26 @@ def _execute_searches(
         if str(request.get("tool")) != KNOWLEDGE_SEARCH_TOOL:
             payloads.append({"tool": str(request.get("tool")), "error": "unsupported tool"})
             continue
-        query = str(request.get("query") or request.get("reason") or "")
+        query = _search_query(request)
+        if query is None:
+            # The model named the tool but not the keyword it wants searched.
+            # Substituting `reason` here — which this used to do — sends a
+            # PURPOSE SENTENCE to the knowledge base, and a sentence retrieves a
+            # different chunk set than the keywords naming the same subject.
+            # Measured on 41 (2026-10-19) against the promotional library: the
+            # sentence form returned a set with no media at all, while the
+            # keyword form returned the image chunk whose id the run's rollout
+            # shows was actually served. The whole answer still said
+            # `retrieval_status: found`, so nothing downstream could tell the
+            # two apart. Refusing the request lets the caller ask again for a
+            # query instead of silently answering from the wrong evidence.
+            payloads.append(
+                {
+                    "tool": KNOWLEDGE_SEARCH_TOOL,
+                    "error": "knowledge_search requires a `query` keyword phrase",
+                }
+            )
+            continue
         try:
             result = guard.search(query)
         except ValueError as exc:
@@ -551,6 +626,28 @@ The final `answer` turn must be written in {language_name(language)}.
 """
 
 
+def _missing_query_prompt(question: str, language: str) -> str:
+    """Ask again for the one field the previous request left out.
+
+    Says what went wrong and what to send instead, because the model cannot
+    infer it: the turn it sent is shape-valid (``query`` is optional on the
+    wire — `text.format` is dropped whenever tools are declared), so nothing
+    else in the conversation tells it a keyword is missing.
+    """
+    return f"""Your knowledge_search request named no `query`, so no search ran.
+`query` is REQUIRED and is the text the knowledge base actually searches:
+a SHORT keyword phrase (3-8 words), never a sentence, never your reason for
+searching. Request the search again now with that keyword phrase filled in.
+
+The customer question it must serve:
+
+\"\"\"{question}\"\"\"
+
+After the search comes back, the final `answer` turn must be written in
+{language_name(language)}.
+"""
+
+
 def _fallback_result(
     status: RetrievalStatus | None = None,
     *,
@@ -584,7 +681,9 @@ published customer service agent defined below. You have ONE bounded tool:
 `knowledge_search` — request it when the question needs business knowledge
 (policies, operations, product usage). `query` is REQUIRED and must be a
 SHORT keyword phrase (3-8 words) from the user's question, never a full
-sentence; `reason` stays to one brief sentence. Simple greetings or
+sentence; `reason` stays to one brief sentence. A request without `query`
+cannot be searched at all — `reason` is never searched — so leaving it out
+just costs a round trip. Simple greetings or
 chit-chat need no retrieval.
 
 Agent business behavior instructions (authoritative for tone and scope):
