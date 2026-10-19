@@ -18,11 +18,13 @@
 从一个**已合并的 main 提交**打包，不要从工作区打：
 
 ```bash
-cd <repo>
-git rev-parse origin/main                       # 记下这个 sha，验收要用
+cd /home/claude/Projects/AI-Ops                  # 本仓的规范检出
+git fetch origin --quiet
+git rev-parse origin/main                        # 记下这个 sha，验收要用
+rm -rf /tmp/stage && mkdir -p /tmp/stage         # ← 少了这行，下一步立即失败
 git archive origin/main src/aiops_diagnostics | tar -x -C /tmp/stage
 tar -czf /tmp/aiops-login-sync.tgz -C /tmp/stage/src aiops_diagnostics
-sha256sum /tmp/aiops-login-sync.tgz             # 传完在远端再核一次
+sha256sum /tmp/aiops-login-sync.tgz              # 传完在远端再核一次
 ```
 
 ## 2. 备份（必须先做）
@@ -68,10 +70,49 @@ ssh yidong-36 'cd /opt/aiops-login-proxy && tar -xzf /tmp/aiops-login-sync.tgz
 **只装 snippet 不装 10008** ⇒ `$aiops_upstream_proto` 未定义 ⇒ 登录代理拿不到
 `X-Forwarded-Proto` ⇒ **所有登录被自己的闸门拒掉**。
 
+### 4.1 传上去
+
 ```bash
-nginx -t                                              # 必须 ok 才继续
-nginx -s reload
+cd /home/claude/Projects/AI-Ops
+git show origin/main:ops/dify-console-bridge/dify-console-10008.conf > /tmp/new-10008.conf
+git show origin/main:ops/dify-login-proxy/dify-login-proxy.conf   > /tmp/new-snippet.conf
+
+scp /tmp/new-10008.conf yidong-36:/tmp/ngx-new-10008.conf
+scp /tmp/new-snippet.conf yidong-36:/tmp/ngx-new-snippet.conf
 ```
+
+### 4.2 先看 diff，再装
+
+**必须先 diff** —— 线上可能有人改过，直接覆盖会抹掉别人的改动：
+
+```bash
+ssh yidong-36 'diff -u /www/server/panel/vhost/nginx/dify-console-10008.conf /tmp/ngx-new-10008.conf'
+ssh yidong-36 'diff -u /www/server/panel/vhost/nginx/snippets/dify-login-proxy.conf /tmp/ngx-new-snippet.conf'
+```
+
+确认差异就是你要的那一处，然后装（备份在 §2 已做）：
+
+```bash
+ssh yidong-36 'cp /tmp/ngx-new-10008.conf /www/server/panel/vhost/nginx/dify-console-10008.conf
+  cp /tmp/ngx-new-snippet.conf /www/server/panel/vhost/nginx/snippets/dify-login-proxy.conf'
+```
+
+### 4.3 在 **36 上**校验并 reload
+
+```bash
+ssh yidong-36 'nginx -t'            # 必须 ok 才继续；失败就按 §7 回滚
+ssh yidong-36 'nginx -s reload'
+```
+
+⚠️ **这两条必须在 36 上跑**（注意 `ssh yidong-36`）。在开发机上执行只会动本机的 nginx。
+reload 之后可以确认新配置真的进了内存：
+
+```bash
+ssh yidong-36 'nginx -T 2>/dev/null | grep -c aiops_upstream_proto'   # 应 ≥ 1
+```
+
+（`systemctl is-active nginx` 在 36 上是 `failed` —— 那是 2026-09-11 起的既有债，
+进程由别的方式管理；判据是上面那条 `nginx -T` 与端口，不是那个单元。）
 
 ## 5. 重启与版本核对
 
@@ -98,12 +139,44 @@ D 的日志应出现 `source=<真实地址>`，**不是 `127.0.0.1`**（那是 r
 
 ## 7. 回滚
 
+**三处备份是两个时间戳** —— §2 里代码与 nginx 是在两条命令里分别备份的，时间戳不同
+（2026-10-19 那次：代码 `20261019182443`、nginx `20261019182623`）。先看清楚：
+
 ```bash
-ssh yidong-36 'systemctl stop aiops-dify-login-proxy
-  cp -a /opt/aiops-login-proxy.bak-<ts>/. /opt/aiops-login-proxy/
-  cp <conf>.bak-<ts> <conf>; nginx -t && nginx -s reload
-  systemctl start aiops-dify-login-proxy'
+ssh yidong-36 'ls -d /opt/aiops-login-proxy.bak-*
+  ls /www/server/panel/vhost/nginx/dify-console-10008.conf.bak-*
+  ls /www/server/panel/vhost/nginx/snippets/dify-login-proxy.conf.bak-*'
 ```
+
+然后填**两个**变量：
+
+```bash
+CODE_TS=20261019182443    # ← 代码包那个
+NGX_TS=20261019182623     # ← nginx 那个
+ssh yidong-36 "set -e
+  test -d /opt/aiops-login-proxy.bak-$CODE_TS            # 存在性先验，缺了就停
+  test -f /www/server/panel/vhost/nginx/dify-console-10008.conf.bak-$NGX_TS
+  test -f /www/server/panel/vhost/nginx/snippets/dify-login-proxy.conf.bak-$NGX_TS
+  systemctl stop aiops-dify-login-proxy
+  cp -a /opt/aiops-login-proxy.bak-$CODE_TS/. /opt/aiops-login-proxy/
+  cp /www/server/panel/vhost/nginx/dify-console-10008.conf.bak-$NGX_TS \
+     /www/server/panel/vhost/nginx/dify-console-10008.conf
+  cp /www/server/panel/vhost/nginx/snippets/dify-login-proxy.conf.bak-$NGX_TS \
+     /www/server/panel/vhost/nginx/snippets/dify-login-proxy.conf
+  nginx -t
+  nginx -s reload
+  systemctl start aiops-dify-login-proxy"
+```
+
+四处要点：
+
+1. **两份 nginx 配置都要恢复**，不能只恢复一份 —— snippet 引用 10008 那一层定义的
+   `$aiops_upstream_proto`，只回一半会比回滚前更坏（所有登录被拒）。
+2. `set -e`：任何一步失败就停，不会出现"配置没恢复但服务已启动"。
+3. **`nginx -t` 在 `nginx -s reload` 之前**；`-t` 失败就不要 reload（旧配置还在跑，
+   服务停止中，此时人工介入比 reload 坏配置安全）。
+4. 代理**在停服务与恢复文件之间**处于停止状态。若中途失败，先别急着 `start` ——
+   先把文件恢复完，再起服务；起之前用 §6 的 A/B/C 三条确认。
 
 nginx 两处要**一起**回滚（snippet 引用了 10008 那一层定义的变量）。
 
