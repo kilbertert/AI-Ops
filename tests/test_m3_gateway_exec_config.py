@@ -90,6 +90,7 @@ def test_unset_path_means_not_enabled(tmp_path):
         lambda p: p.update({"history_policy": "full"}),
         lambda p: p.update({"system_messages": []}),
         lambda p: p.update({"tools": []}),
+        lambda p: p["tools"][0].update({"name": " \t "}),
         lambda p: p.update({"model": {"provider_key": "x", "adapter_key": "y", "endpoint": "http://e"}}),
     ],
 )

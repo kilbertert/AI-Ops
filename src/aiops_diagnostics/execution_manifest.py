@@ -106,7 +106,7 @@ def _parse(payload: object, identity: str) -> ExecutionManifest:
         raise ExecutionManifestError("execution manifest declares no controlled tools")
     names: list[str] = []
     for item in tools:
-        if not isinstance(item, dict) or not isinstance(item.get("name"), str) or not item["name"]:
+        if not isinstance(item, dict) or not isinstance(item.get("name"), str) or not item["name"].strip():
             raise ExecutionManifestError("execution manifest tool is invalid")
         # description / input_schema 与 name 同为必填：节点侧用 `text(t, field)` 读，
         # 缺失或空白即拒绝清单。这里对齐，不留「Gateway 收、节点拒」的缝。

@@ -15,7 +15,6 @@
 权限负例（0644 / 符号链接）另行构造，不依赖检出权限。
 
     uv run python tools/m2_close/m3node/manifest_parity.py             # 需要 JDK + 锁定依赖
-    uv run python tools/m2_close/m3node/manifest_parity.py --python-only  # 只跑 Python 一侧
 
 JDK 与依赖由参数/环境给出（仓库里不写私有绝对路径），缺任一即非零退出 —— 不跳过报通过。
 """
@@ -149,7 +148,6 @@ def java_verdicts(samples: list[Path], staged: Path, deps: Path, jdk_image: str 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--python-only", action="store_true")
     parser.add_argument("--out", default="")
     args = parser.parse_args()
 
@@ -191,16 +189,12 @@ def main() -> int:
             for name, verdict in python_side.items()
         }
 
-        java_side: dict[str, str] = {}
-        if not args.python_only:
-            deps = Path(os.environ["M3NODE_DEPS"]) if os.environ.get("M3NODE_DEPS") else None
-            if deps is None or not (deps / "lib").is_dir():
-                print("missing M3NODE_DEPS with lib/ (locked jars)", file=sys.stderr)
-                return 2
-            java_side = java_verdicts(samples, staged, deps, os.environ.get("M3NODE_JDK_IMAGE") or None)
-            report["java_available"] = True
-        else:
-            report["java_available"] = False
+        deps = Path(os.environ["M3NODE_DEPS"]) if os.environ.get("M3NODE_DEPS") else None
+        if deps is None or not (deps / "lib").is_dir():
+            print("missing M3NODE_DEPS with lib/ (locked jars)", file=sys.stderr)
+            return 2
+        java_side = java_verdicts(samples, staged, deps, os.environ.get("M3NODE_JDK_IMAGE") or None)
+        report["java_available"] = True
 
         failures: list[str] = report["failures"]  # type: ignore[assignment]
         positives = 0
