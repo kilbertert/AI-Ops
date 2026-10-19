@@ -1,18 +1,10 @@
-"""管家端入口的快捷动作与「订单检测」成功路径（#427，PRD #423）。
+"""管家端入口的两个快捷动作与「订单检测」成功路径（#427，PRD #423）。
 
-断言的只有对外可观察行为：`X-Business-Entry: operator` 下列出哪些动作、点击
-「订单检测」得到的是订单选择器澄清还是诊断响应、宣传面在知识库未就绪时给出的是
-明确的不可用而不是空的「未检索到」，以及消费者侧的既有行为零回归。
+断言的只有对外可观察行为：`X-Business-Entry: operator` 下列出哪两个动作、点击
+「订单检测」得到的是订单选择器澄清还是诊断响应、点击「客户案例」在知识库未就绪时
+拿到的是明确的不可用而不是空的「未检索到」，以及消费者侧的既有行为零回归。
 
-**2026-10-16 变更**：`case_exploration`（「客户案例」）从 `operator` 种子里移除
-（用户决定：管家端用户不要看到客户案例卡片）。理由不是「素材没配」而是**该入口
-结构上产不出这张卡**：平台行不允许携带 `target_agent_version`，而 `operator` 侧
-只有平台行 ⇒ `_promo_route` 恒解析不出宣传智能体 ⇒ 每次点击都是空卡（10-15 生产
-实测 8 次全部 `unavailable` + 9–13ms）。本入口的宣传面因此只剩**自由文本**一条路，
-那条路按用户选择保持不动。详见 `test_operator_entry_holds_the_two_actions` 与
-`test_operator_entry_reaches_the_promo_surface_only_by_free_text`。
-
-交付形状沿用 PRD 的决定：动作复用既有 code、不新建执行路径；「按租户 + 入口
+交付形状沿用 PRD 的决定：两个动作复用既有 code、不新建执行路径；「按租户 + 入口
 发布」是运营动作（数据操作），因此用例先用发布动作的同一条生命周期把种子行发布掉，
 再断入口行为——发布这一步就是运营的那个动作，不是新代码。
 
@@ -69,11 +61,6 @@ from aiops_diagnostics.shortcut_lifecycle import (
 #: 因此只有入口侧的动作行能把这次点击判成案例探索——若意图改由文案推导，本条会红。
 CASE_QUESTION = "推荐一些内容给我看看"
 
-#: 同一意图的**自由文本**问句：自带「客户案例」这条确定性线索，所以它会经
-#: `promo_intent_from_text` 进宣传面，不依赖任何已发布动作行、也不依赖分类器。
-#: 管家端摘掉的是按钮，不是这条自由文本的路（2026-10-16 用户选择）。
-CASE_QUESTION_WITH_CUE = "有哪些客户案例"
-
 
 def _app(
     tmp_path: Path,
@@ -115,67 +102,59 @@ def test_the_two_entries_share_one_definition_of_the_execution_fields() -> None:
     这些字段来自 `shortcut_lifecycle._SHARED_ACTION_FIELDS` 这一个常量，两侧各写
     一份会各自漂移，而漂移是 invisible 的——只有按钮文案不同。这一条就是那个
     共享常量的回归：一旦某侧开始自带一份，这里转红。
-
-    判据只在**两侧都有**的 code 上成立：`case_exploration` 已于 2026-10-16 从
-    `operator` 入口移除（见 `test_operator_entry_holds_the_two_actions`），
-    所以这里只剩 `smart_diagnosis` 一条共享 code。`consumer` 侧仍在用自己的那一份。
     """
     consumer = dict(_BUNDLED_SHORTCUTS)["consumer"]
     operator = dict(_BUNDLED_SHORTCUTS)["operator"]
     shared = ("intent", "requires_order", "sort_order", "question_templates")
 
-    # 两侧都有的 code 才谈得上「共享一份定义」；这一句让新增/移除 code 时
-    # 本用例自己会提示该往哪边看。
-    assert set(consumer) & set(operator) == {"smart_diagnosis"}
-
-    code = "smart_diagnosis"
-    for field in shared:
-        assert consumer[code][field] == operator[code][field], f"{code}.{field}"
-    # 展示字段各自定义（不共享）：两个入口的按钮叫法不同。
-    assert (
-        set(consumer[code]["labels"]) == set(operator[code]["labels"]) == set(consumer[code]["descriptions"])
-    )
+    for code in ("case_exploration", "smart_diagnosis"):
+        for field in shared:
+            assert consumer[code][field] == operator[code][field], f"{code}.{field}"
+        # 展示字段各自定义（不共享）：两个入口的按钮叫法不同。
+        assert (
+            set(consumer[code]["labels"])
+            == set(operator[code]["labels"])
+            == set(consumer[code]["descriptions"])
+        )
     # 「订单检测」与「智能检测」是同一个 code 在不同入口的两种叫法。
     assert consumer["smart_diagnosis"]["labels"]["zh"] == "智能检测"
     assert operator["smart_diagnosis"]["labels"]["zh"] == "订单检测"
 
 
-def test_operator_entry_holds_the_two_actions() -> None:
-    """operator 内容域只此两个动作：订单检测（#427）+ 运维巡检（#721）。
+def test_operator_entry_holds_the_three_actions_and_nothing_else() -> None:
+    """operator 内容域的动作复用既有 code，且只此三个（#427 的两个 + #721 的运维巡检）。
 
     「订单检测」是 `smart_diagnosis`：`requires_order` 为真（靠订单守卫弹澄清），
     **不能**绑智能体版本——生命周期校验只允许宣传类意图绑定，绑了连草稿都存不进去。
-    跳转动作不进助手入口。
+    「客户案例」是 `case_exploration`。跳转动作不进助手入口。
 
     「运维巡检」是 #721 新加的那一个：`requires_order` 为假（它问的是站点集合 + 时间窗，
     不是某一张单），`intent` 用 `knowledge` 而**不是**新意图——意图是分类器也能从自由文本
     产出的东西，给它一个自己的意图等于让一句话也能路由进来。
-
-    **`case_exploration` 于 2026-10-16 移除**（用户决定：管家端用户不要看到客户案例卡片）。
-    它不是被停用，是**不该在这个入口存在**：平台行不允许携带 `target_agent_version`，
-    而 `operator` 侧只有平台行 ⇒ 该入口**结构上不可能**解析出宣传智能体 ⇒ 每次点击都是
-    「客户案例服务暂时不可用」。10-15 生产实测 8 次全部 `unavailable` + 9–13ms。
-    这条断言就是那个决定的回归——把种子加回去，本用例转红。
     """
     specs = dict(_BUNDLED_SHORTCUTS)["operator"]
 
-    assert set(specs) == {"smart_diagnosis", "operations_review"}
-    assert "case_exploration" not in specs
-
+    assert set(specs) == {"smart_diagnosis", "case_exploration", "operations_review"}
     order = specs["smart_diagnosis"]
     assert order["intent"] == "order_issue"
     assert order["requires_order"] is True
     assert order.get("target_agent_version") is None
     assert order.get("jump_path") is None
 
+    case = specs["case_exploration"]
+    assert case["intent"] == "case_exploration"
+    assert case["requires_order"] is False
+    assert case.get("target_agent_version") is None
+    assert case.get("jump_path") is None
 
-def test_operator_entry_lists_both_actions_after_the_publish(
+
+def test_operator_entry_lists_all_three_actions_after_the_publish(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """发布后，`operator` 入口列出「订单检测」「运维巡检」——**没有**「客户案例」。
+    """发布后，`operator` 入口列出「客户案例」「订单检测」「运维巡检」。
 
-    排序按 `sort_order`：订单检测 20 → 运维巡检 30（案例那条 10 已随种子移除）。
-    巡检排最后是刻意的 —— 它是**周期性**动作，不像订单检测是围绕当前这一单。
+    排序按 `sort_order`：案例 10 → 订单检测 20 → 运维巡检 30。第三条是 #721 加的，
+    它排最后是刻意的 —— 巡检是**周期性**动作，不像前两条是围绕当前这一单/这一次对话。
     """
     client, _ = _app(tmp_path, monkeypatch)
 
@@ -185,6 +164,7 @@ def test_operator_entry_lists_both_actions_after_the_publish(
     body = listed.json()
     assert body["type"] == "shortcut_list"
     assert [item["code"] for item in body["shortcuts"]] == [
+        "case_exploration",
         "smart_diagnosis",
         "operations_review",
     ]
@@ -194,6 +174,7 @@ def test_operator_entry_lists_both_actions_after_the_publish(
 
     # 按钮文案是产品内容：管家端叫「订单检测」，与消费者侧「智能检测」不同名。
     assert {item["code"]: item["label"] for item in body["shortcuts"]} == {
+        "case_exploration": "客户案例",
         "smart_diagnosis": "订单检测",
         "operations_review": "运维巡检",
     }
@@ -201,6 +182,7 @@ def test_operator_entry_lists_both_actions_after_the_publish(
     # 的语言缺口就是这样 invisible 的：请求照旧 200，只是按钮变成了中文）。
     english = client.get("/v1/shortcuts", headers={**_OPERATOR_HEADERS, "Accept-Language": "en"}).json()
     assert {item["code"]: item["label"] for item in english["shortcuts"]} == {
+        "case_exploration": "Customer Cases",
         "smart_diagnosis": "Order Diagnosis",
         "operations_review": "Operations Review",
     }
@@ -378,51 +360,16 @@ def test_the_entry_header_reaches_the_runtime_on_the_active_order_path_too(
     assert runtime.entries == ["operator"], runtime.entries
 
 
-# --- 3. 管家端的宣传面只剩自由文本一条路，且它仍然诚实 ------------------------
+# --- 3. 「客户案例」在知识库未就绪时返回明确的不可用 --------------------------
 
 
-def test_the_operator_button_cannot_reach_the_promo_surface(
+def test_clicked_customer_cases_report_the_missing_library_not_an_empty_one(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`case_exploration` 这个 **code** 在 `operator` 入口解析不出宣传意图。
+    """案例库未就绪 → 明确的不可用卡片，而不是空的「未检索到」。
 
-    断的是路由判定本身，不是 HTTP 响应：`_promo_route` 是本入口决定「这一次请求
-    要不要走宣传面」的唯一一处，所以它就是这条路的判据。走完整 HTTP 会先绕到
-    分类器（本仓测试环境没有模型），那时失败的原因与本次改动无关，反而把这条
-    断言的真实含义冲淡。
-
-    `forced_intent` 传 None 是刻意的 —— 它模拟「客户端自己发来这个 code」这条
-    最坏路径：意图只能来自入口侧的动作行，而那一行已经不存在了。
-    """
-    from types import SimpleNamespace
-
-    from aiops_diagnostics.gateway_api import _promo_route
-
-    settings = gateway_settings(tmp_path)
-    shortcuts = ShortcutManager(ShortcutStore(settings.database_file))
-    publish(shortcuts, ("operator",))
-    context = SimpleNamespace(shortcut_manager=shortcuts)
-    caller = SimpleNamespace(effective_tenant_id="T-1")
-    decision = SimpleNamespace(platform="operator")
-
-    target, intent = _promo_route(
-        context, caller, decision, SimpleNamespace(question=CASE_QUESTION, shortcut_code="case_exploration")
-    )
-
-    assert (target, intent) == (None, None), "管家端不得再经按钮进入宣传面"
-
-
-def test_operator_entry_free_text_still_reaches_the_promo_surface_honestly(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """自由文本问句仍走宣传面，知识库未就绪时给的仍是**明确的不可用**。
-
-    这条用例在 2026-10-16 之前用「点击『客户案例』」驱动；那个按钮已从本入口移除
-    （`test_operator_entry_holds_the_two_actions` 是那个决定的回归）。按用户选择，
-    **只摘按钮、不动自由文本**——本用例就是那条自由文本路的回归。
-
-    跑真实运行时（那张卡片是在它里面生成的）。问句用**确定性线索**
-    （`promo_intent_from_text`，不经分类器），因此没有「模型恰好这么答」的抖动。
+    「未检索到」是对一个从没读过的库下的结论。这条用例跑真实运行时（那张卡片是
+    在它里面生成的），问题文案也不含宣传线索，因此意图只能来自入口侧的动作行。
     """
     from aiops_diagnostics.config import Settings
     from aiops_diagnostics.gateway_runtime import GatewayRuntime
@@ -448,7 +395,7 @@ def test_operator_entry_free_text_still_reaches_the_promo_surface_honestly(
         with TestClient(app) as client:
             accepted = client.post(
                 "/v1/assistant/questions",
-                json={"question": CASE_QUESTION_WITH_CUE},
+                json={"question": CASE_QUESTION, "shortcut_code": "case_exploration"},
                 headers=_OPERATOR_HEADERS,
             )
             assert accepted.status_code == 202, accepted.text
@@ -464,6 +411,88 @@ def test_operator_entry_free_text_still_reaches_the_promo_surface_honestly(
     text = result["blocks"][0]["text"]
     assert "未检索到匹配的宣传资料" not in text
     assert "不可用" in text
+
+
+def test_the_operator_button_resolves_a_target_from_the_tenant_row(tmp_path: Path) -> None:
+    """管家端的按钮能出卡：**平台行给可见性 + 租户行给绑定**（2026-10-19 恢复）。
+
+    这条是 #803 与本次恢复之间那个真正的判据。#803 的机制观察是对的 ——
+    **平台行**不允许携带 `target_agent_version`（`_validated_fields` 对
+    `PLATFORM_SCOPE` 抛 `platform shortcuts cannot bind a tenant agent version`），
+    所以只挂平台行时 `_promo_route` 恒得 `(None, "case_exploration")`。
+    但它把「平台行绑不了」读成了「这个入口不该有这张卡」；正确形状一直是两层：
+    `list_effective` 里**已发布的租户行覆盖同 code 的平台行**。
+
+    断的是路由判定本身而不是 HTTP 响应：`_promo_route` 是「这一次请求要不要走宣传面、
+    钉到哪个版本」的唯一一处。走完整 HTTP 还要过分类器与模型，而本仓测试环境没有模型，
+    那时失败的原因与这条判据无关。
+
+    **反向**（这条用例的价值所在）：删掉下面的租户覆盖行，断言转红 —— 这正是
+    「只恢复种子、不建租户行」的实际后果，也是 41 上必须补那一步数据的原因。
+    """
+    from types import SimpleNamespace
+
+    from aiops_diagnostics.gateway_api import _promo_route
+    from aiops_diagnostics.shortcut_lifecycle import PLATFORM_SCOPE, PLATFORM_TENANT_ID
+
+    settings = gateway_settings(tmp_path)
+    store = ShortcutStore(settings.database_file)
+    shortcuts = ShortcutManager(store)
+
+    # 平台行：按钮可见，但**绑不了** target（`create` 对 PLATFORM_SCOPE 会抛）。
+    platform_context = type(
+        "Ctx",
+        (),
+        {"effective_tenant_id": PLATFORM_TENANT_ID, "roles": {"ROLE_PLATFORM_ADMIN"}, "caller": None},
+    )()
+    platform = store.create(
+        PLATFORM_TENANT_ID,
+        "operator",
+        "case_exploration",
+        intent="case_exploration",
+        requires_order=False,
+        sort_order=10,
+        labels={"zh": "客户案例"},
+        descriptions={},
+        question_templates={},
+        target_agent_version=None,
+        created_by="platform-admin",
+    )
+    shortcuts.publish(
+        platform_context, platform.shortcut_id, expected_revision=platform.revision, scope=PLATFORM_SCOPE
+    )
+
+    context = SimpleNamespace(shortcut_manager=shortcuts)
+    caller = SimpleNamespace(effective_tenant_id="T-1")
+    decision = SimpleNamespace(platform="operator")
+    payload = SimpleNamespace(question=CASE_QUESTION, shortcut_code="case_exploration")
+
+    # 只有平台行时：意图解析得出（按钮在），但**没有**可钉的版本 ⇒ 空卡。
+    assert _promo_route(context, caller, decision, payload) == (None, "case_exploration")
+
+    # 租户覆盖行：把目标钉在该租户自己的已发布宣传智能体上（运营动作）。
+    tenant_context = type(
+        "Ctx", (), {"effective_tenant_id": "T-1", "roles": {"ROLE_AGENT_ADMIN"}, "caller": None}
+    )()
+    override = store.create(
+        "T-1",
+        "operator",
+        "case_exploration",
+        intent="case_exploration",
+        requires_order=False,
+        sort_order=10,
+        labels={"zh": "客户案例"},
+        descriptions={},
+        question_templates={},
+        target_agent_version=AGENT_VERSION_KEY,
+        created_by="operator-admin",
+    )
+    shortcuts.publish(tenant_context, override.shortcut_id, expected_revision=override.revision)
+
+    target, intent = _promo_route(context, caller, decision, payload)
+
+    assert intent == "case_exploration"
+    assert target == AGENT_VERSION_KEY, "租户行给绑定——只恢复种子不建这行，管家端仍是空卡"
 
 
 # --- 3. 「运维巡检」：点击 → 一张跨订单的运维卡（#721） -------------------------

@@ -72,7 +72,7 @@ tools/m2_close/m3node/run.sh
 守卫不介入，改动**确实到达上游**（`EVIL-SYSTEM`、`evil-model`、`temperature=0.9`、
 多出来的用户消息）。没有这一段，上面的「拒绝」可能只是夹具没跑起来造成的假绿。
 
-## 三条实测结论（都改变了实现，见 ADR 0050）
+## 三条实测结论（都改变了实现，见 ADR 0051）
 
 1. **`Prompt` 面上有没有模型与工具，取决于路径**：框架只调用 `builder.defaultAdvisors/
    defaultTools/defaultToolContext`，**从不** `defaultOptions`，所以**没有 `PromptFactory`**

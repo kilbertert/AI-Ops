@@ -387,23 +387,49 @@ _BUNDLED_SHORTCUTS: tuple[tuple[str, dict[str, dict[str, Any]]], ...] = (
     (
         "operator",
         {
-            # ⚠️ **`operator` 入口刻意没有 `case_exploration`**（2026-10-16 用户决定：
-            # 「管家端用户不要看到客户案例卡片」）。它此前在本入口被种子化，并在 41 上
-            # 发布过（#427），但那个入口**结构上不可能**产出这张卡：平台行不允许携带
-            # `target_agent_version`（见 `_validated_fields` 与
-            # `ShortcutManager.create` 的 PLATFORM_SCOPE 守卫），而 `operator` 侧只有
-            # 平台行 ⇒ `_promo_route` 恒解析不出宣传智能体 ⇒ 每次点击都是一张
-            # 「客户案例服务暂时不可用」的空卡。10-15 生产上实测过 8 次，全部
-            # `unavailable` + 9–13ms（真人跑一次要几十秒，这个耗时等于根本没启动）。
+            "case_exploration": {
+                **_SHARED_ACTION_FIELDS["case_exploration"],
+                "labels": {
+                    "zh": "客户案例",
+                    "zh-Hant": "客戶案例",
+                    "vi": "Trường hợp khách hàng",
+                    "mn": "Хэрэглэгчийн жишээ",
+                    "th": "กรณีตัวอย่างลูกค้า",
+                    "km": "ករណីអតិថិជន",
+                    "en": "Customer Cases",
+                    "de": "Kundenfälle",
+                    "fr": "Cas clients",
+                    "es": "Casos de cliente",
+                    "pt": "Casos de cliente",
+                },
+                "descriptions": {
+                    "zh": "查看与充电运营相关的标杆案例",
+                    "zh-Hant": "檢視與充電運營相關的標杆案例",
+                    "vi": "Xem các trường hợp điển hình liên quan đến vận hành sạc",
+                    "mn": "Цэнэглэлтийн үйл ажиллагаатай холбоотой жишиг жишээг үзэх",
+                    "th": "ดูกรณีตัวอย่างที่เกี่ยวข้องกับการดำเนินงานชาร์จ",
+                    "km": "មើលករណីគំរូពាក់ព័ន្ធនឹងប្រតិបត្តិការសាក",
+                    "en": "Browse benchmark cases from charging operations",
+                    "de": "Benchmark-Fälle aus dem Ladebetrieb ansehen",
+                    "fr": "Consultez des cas de référence liés à l'exploitation de la recharge",
+                    "es": "Consulte casos de referencia relacionados con la operación de carga",
+                    "pt": "Consulte casos de referência relacionados à operação de recarga",
+                },
+            },
+            # `case_exploration`（「客户案例」）**已恢复**（2026-10-19，反转 ADR-0031）。
+            # 它于 2026-10-16 被从本入口移除（#803），理由是「该入口结构上产不出这张卡」。
+            # 那个**机制**判断仍然成立，反转的是由它推出的**结论**：
             #
-            # 所以这不是「素材没配」，是**这个入口不该有这张卡**：运维人员要的是他
-            # 名下站点的运行情况（`operations_review`）与单张订单的根因
-            # （`smart_diagnosis`），客户案例是给终端车主的销售叙事。
+            # - 机制没变：平台行不允许携带 `target_agent_version`（见 `_validated_fields`
+            #   与 `ShortcutManager.create` 的 PLATFORM_SCOPE 守卫），所以**平台行**永远
+            #   解析不出宣传智能体 ⇒ 每次点击都是「客户案例服务暂时不可用」的空卡；
+            # - 但正确形状一直是**平台行给可见性 + 租户行给绑定**（`list_effective` 里
+            #   已发布的租户行覆盖同 code 的平台行，与 `consumer` 侧今天跑着的那条路
+            #   逐字同构）。#803 把「平台行绑不了」读成了「这个入口不该有这张卡」。
             #
-            # 移除它是**删数据行的种子**，不是改行为：真正的可见性由已发布行决定，
-            # 41 上那行要靠 disable 停用（见 `env-41-runbook.md` §3.1-ter 的撤回一节）。
-            # 本入口的自由文本问「客户案例」仍会走宣传面并拿到那张空卡 ——
-            # 用户明确选择不动那条路（本刀只摘按钮）。
+            # ⇒ **种子给按钮，租户行给卡片，两件事都要做。** 只恢复种子、不建租户行，
+            # 用户看到的仍是一张诚实的空卡（不是故障，但也不是卡片）。绑定步骤见
+            # `docs/adr/0031-*` 的「反转」一节与 `env-41-runbook.md` §3.1-ter。
             #
             # 运维巡检（#721）：点一下拿一张跨订单的运维卡（当前是失败率）。
             # `requires_order=False` —— 它问的是「这一组站点这一段区间整体如何」，

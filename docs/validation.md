@@ -72,6 +72,223 @@ M3NODE_SELFTEST=1 tools/m2_close/m3node/run.sh
 - `spex spec lint` 的 2 条 warning 是继承的既有漂移（`agent_contracts.py`、`agent_engine.py`），
   未在本片顺手修复。
 - Gateway 签发与持久化、`agent_version` 回执**未做**（后续切片）。
+## 2026-10-19 · CI 竞态：fixture 的 `git commit` 会留一个后台 maintenance 子进程
+
+**现象**：纯文档 PR #843 的 `verify` 第一次红，报
+`2938 passed, 1 error`，错在 setup 阶段：
+
+```
+shutil.Error: [('.git/objects/maintenance.lock', …,
+                "[Errno 2] No such file or directory")]
+tests/test_merge_faq_i18n_tool.py:125  shutil.copytree(_template, copy)
+```
+
+re-run 即过 —— 典型的**毫秒级竞态**，会随机打红任何 PR。
+
+**根因（`GIT_TRACE` 实测，本机 2026-10-19）**：fixture 用
+`git init` + `commit` 造一棵带提交的私有树，而 **`git commit` 结束时会把
+`git maintenance run --auto` 作为后台子进程 fork 出去**，该子进程持有
+`.git/objects/maintenance.lock` 且**比 commit 活得久**。下一个用例复制这棵树
+（`_template` 是 session 级、每个用例再拷一份），只要复制的 `copytree` 正好走到那个
+lock 文件被后台子进程创建或删除的窗口，就抛「文件在复制途中消失」。
+
+两条**实测**结论，第二条是这条修复的落点：
+
+| 假设 | 实测 |
+|---|---|
+| `gc.auto=0` 能关掉它 | ❌ 仍然 fork（`GIT_TRACE` 显示 `maintenance run --auto` 照旧） |
+| `maintenance.auto=false` 能关掉它 | ✅ **子进程完全不出现**（0 次 spawn） |
+
+即**看起来最像那个旋钮的键（`gc.auto`）是错的**，而 `maintenance run --auto` 的开关在
+`maintenance.auto`。只有 `git commit` 会 fork 它；`git show` / `git add` 都不会 ——
+所以修复只需给 fixture 那一条 commit 加 `-c maintenance.auto=false`。
+
+**修法**：`tests/test_merge_faq_i18n_tool.py` 的 fixture commit 加
+`-c maintenance.auto=false`（一个 flag，无新增依赖、无重试、无 sleep）。
+
+**判据**：新增
+`test_the_fixture_commit_does_not_spawn_background_maintenance` —— 用 `GIT_TRACE`
+断言**子进程不存在**（直接证据，不需要撞上那个毫秒窗口），并断言 lock 文件不在。
+去掉那个 flag 后该用例**失败**（复跑确认，报错逐字给出 `maintenance run --auto`）。
+全量 **2941 passed / 0 failed / 9 skipped**；该文件 `-n auto` 连跑 5 次全绿。
+
+**为什么不选别的修法**：竞态的另一半是「复制一个活着的 git 仓库」。可以改成
+`copytree(..., ignore=shutil.ignore_patterns('.git'))` 或复制后再 `git init` ——
+但那要重做「copy 需要一次提交」这条既有设计（工具用 `git show HEAD:<path>` 取基线），
+改动面比一个 flag 大得多，且换不掉真正的成因（仓库里仍会有一个会 fork 子进程的
+commit）。**修触发点，不是修受害者。**
+
+## 2026-10-19 · #837 + #838 合并后 41 复验（真实会话，经公网入口）
+
+**范围**：41 生产（`/health` = `0.1.0+33b7c86e847b`，即 #840 `b3e0258` + #841 `33b7c86`
+两个 squash 合并后的部署），经**公网入口** `https://api.mall.qushiyun.com` 以真实会话
+驱动 ask/answer 面。租户 `1942105476598821824`（ulink，宣传素材所属租户）。
+本节是**修复后的线上行为**，与上面两节的「成因与判据」是两件事。
+
+### 一、结果
+
+| 问题 | status | retrieval | blocks | media 取字节 |
+|---|---|---|---|---|
+| `有客户案例嘛` | completed | found / searches=1 | 4×text + **image** + 3×reference | **200，41,646 B**（`ffd8ffe0` = JPEG） |
+| `新加坡无人电动巴士有视频吗` | completed | found / searches=1 | 5×text + **video** + reference | **200，82,348,365 B**（`ftyp` = MP4） |
+
+后者正是修复前那份「回答了但没有媒体」的报告问句的同类问题；本次两条都带媒体块。
+
+### 二、决定性证据：修复真的在这条路径上生效（rollout 逐轮）
+
+`/var/lib/aiops-41/codex-home/sessions/2026/10/19/rollout-2026-10-19T15-45-11-*.jsonl`
+（该 run 为 `run-20261019T074510Z-qa-46da`）：
+
+```
+[17] MODEL tool_request: {"tool":"knowledge_search","reason":"未指定行业，先检索一个…"}   ← 没有 query
+[24] ★★ HARNESS RE-ASK FIRED                                                      ← #837 的修复
+[32] MODEL tool_request: {"tool":"knowledge_search","query":"充电 客户案例 标杆项目", …} ← 补上了关键词
+[39] search back; media descriptors=17
+[42] MODEL final answer (resource_id cites=8)
+```
+
+即：**模型漏 `query` → harness 重问 → 模型补关键词 → 检索带回媒体 → 答案引用资源 id**。
+修复前这条路径会把 `reason` 整句当检索词、返回 0 个媒体块，而答案仍是
+`retrieval_status: found` —— 表面完全正常。
+
+### 三、深度（#838）在 41 上的生效状态
+
+- 进程 env 未设 `AIOPS_GATEWAY_KB_SEARCH_MAX_RESULTS`，走**代码默认 10**；
+  `GatewayServerSettings.from_env().kb_search_max_results == 10`（41 实测）。
+- 部署源码 `gateway_runtime.py` 两处调用点均传
+  `max_results=self.gateway_settings.kb_search_max_results`（2336 / 2631 行）。
+- **边界（据实）**：k 值对**线上媒体块出现率**的统计影响未做对照实验 —— 本节只证明
+  生效值确为 10，以及两条真实问句都产出了媒体块。「k=5 → k=10 使覆盖从 5/16 升到
+  12/16」那条判据来自上面的只读回放，不是线上流量统计。
+
+### 四、边界与纪律
+
+- **会写**：本复验向 `assistant_questions` 写入了两条真实问答行
+  （`qa_8504414d0c3d47c4ab09f8e4f8071c15`、`qa_0e18ea4e64294fa4bd32f87e8cac45a2`）——
+  这正是「用户问一个问题」的正常可见效果，不是绕过产品面。未改任何配置、未部署、
+  未触碰订单数据。
+- **前端渲染不在本仓**：证明的是网关交付了正确的 blocks 且签名 URL 可取字节，
+  不证明 APK 的渲染结果。
+- 会话与凭据**未打印**；两处 rollout 引用只给文件名与行号，不给会话值。
+
+## 2026-10-19 · 管家端「客户案例」恢复：41 数据侧补绑定 + 构造身份经真实 HTTP 出卡
+
+**范围**：PR #844（`948ba7ff`）部署到 41 之后的**真实端到端**。本节取代本节下面那份
+"代码侧判据与 41 只读复核"的**结论部分**（那份写的是"数据侧尚未执行、点击仍是空卡"，
+现在数据侧已执行）。代码侧判据与只读复核仍然有效，见下。
+
+⚠️ **本节标题里的「出卡」指的是「网关经真实 HTTP 交付了正确的卡片」，
+不是「管家端 App 已验收」** —— 点击由一个**构造的身份**发起（见 §三），
+不经过 App。不要把本节读成 App 端到端已通过。
+
+### 一、41 数据侧变更（**写生产库**，2026-10-19）
+
+先说清楚**为什么需要写**：平台行给可见性、租户行给绑定。平台行被代码明确禁止携带
+`target_agent_version`，所以在建租户覆盖行之前，`_promo_route` 在 `operator` 入口恒得
+`(None, "case_exploration")` ⇒ 点击是一张诚实但空的卡（`retrieval_status=unavailable`）。
+
+- **备份**（§3.1-bis 的 WAL 安全流程，停服务 + 校验 + trap 恢复）：
+  `/var/backups/aiops-41/shortcuts-20261019-161407/gateway.db`，表数 18，副本内 `operator`
+  平台三行齐全。
+- **写入**（走生产代码路径 `ShortcutStore.create` + `ShortcutManager.publish`，非直接插库）：
+  租户 `1942105476598861824` / `operator` / `case_exploration`，`sort_order=10`，11 语，
+  `target_agent_version=agt_ed443cae10ac4ba78c81b9d1b43fd91d#v3`。
+  行 id `sct_c6189f730ecc425ba313fc2c9a13f368`，`draft` rev1 → `published` rev2。
+- **写前预演**（无 `--apply`）与**写前解析校验**都跑过：`#v2`/`#v3` 均经
+  `select_promo_agent` 解析成功（版本号与 KB `8701c742…` 一致）。选 **v3** 而非 `consumer`
+  侧钉的 `#v2`：两版唯一差异是 v3 要求四个段落标题用请求语言书写（见 ADR-0050）。
+- **`consumer` 侧未动**：`list_effective` 复核，其 `case_exploration` 仍是 `#v2`。
+
+### 二、判据（逐条实测，非推断）
+
+| 判据 | 期望 | 实测 |
+|---|---|---|
+| 部署版本 | 含 `948ba7f` | `/health` = `0.1.0+948ba7ff5de2` ✅ |
+| `operator` 入口列出三条 | `case_exploration` 在列、`sort_order=10` | `['case_exploration','smart_diagnosis','operations_review']` ✅ |
+| `list_effective` 租户合并 | 租户行覆盖平台行、带 target | `operator`: `#v3`；`consumer`: `#v2`（未变） ✅ |
+| `_promo_route`（线上代码 + 线上库） | operator 解析出目标 | `('agt_ed443cae…#v3', 'case_exploration')` ✅ |
+| **点击路径真出卡** | `202` → `completed` → **`found`** + 内容块 | `retrieval_status=found`，14 块 = 4×text + **3×image** + 7×reference ✅ |
+| 无凭据 | 401 | 见下"边界" |
+
+点击路径是**真实 HTTP**：带 `X-Business-Entry: operator` 调 `172.18.0.1:8788`
+（网关宿主侧地址），`POST /v1/assistant/questions`
+`{"question":"我想看看客户案例","shortcut_code":"case_exploration"}` → `202 type=qa`
+→ 轮询 `/v1/assistant/questions/<qa_id>` 至终态。
+
+### 三、据实（边界）
+
+- **身份是构造的，不是真人**：自签 HS256 令牌走 company-jwt-key 本地通道
+  （41 是 company-parity 模式，`TRUST_PAYLOAD` 未设 ⇒ 不验签，判据是来源密钥那一跳），
+  声明用了一个**明确带"演示"字样**的 `type='1'` 测试账号
+  （`username=ceshi演示`，租户内 UPMS 真实存在）。与 runbook §5.7 是同一条已披露形状。
+  **这不证明真人的登录链路**（那条仍卡在 App 侧不发 `third_session`，见 §6 既有边界）。
+- **上一次尝试用了一个虚构的 B 端 id**，得到 `503 PLATFORM_UNAVAILABLE operator identity
+  is unavailable` —— 这正是"身份必须在 UPMS 里真实存在"的判据；记下来是因为它证明
+  该面不是"编个 id 就能进"。
+- **`case_exploration` 点击路径写了 1 条 `assistant_questions` 行**（`completed`）。
+  这是验收的固有写入，与 §5.6/§5.7 同类，量级可接受。
+- **内容质量不在本节判据内**：卡片出了图，但素材是重卡流量平台的销售物料，
+  是否适合运维语境是**产品问题**（ADR-0050 §后果已记）。
+- **只覆盖了一个租户，另一个 operator 入口租户仍会拿到空卡**：41 的日志里有**两个**租户
+  走过 `operator` 入口 —— `1942105476598861824`（本次绑定，575 次）与
+  `1961353704485687296`（27 次）。后者在 `agents` 表里**一条智能体都没有**，
+  所以它看到按钮、点下去仍是 `unavailable` 空卡。这是**该租户没有宣传素材**，
+  不是本次改动漏绑；本节不声称"所有 operator 租户都能出卡"。
+- **前端硬编码按钮**这条既有偏差未变：本节证明网关交付了正确的卡片，不证明 APK 渲染。
+
+## 2026-10-19 · 恢复管家端「客户案例」：代码侧判据与 41 只读复核
+
+**范围**：`shortcut_lifecycle._BUNDLED_SHORTCUTS["operator"]` 加回 `case_exploration`
+（反转 ADR-0031 / #803）。**本节记录写于数据侧变更之前**，其中"数据侧尚未执行、
+点击仍是空卡"的结论已被上一节取代；代码侧判据与只读复核仍然有效。
+
+### 一、自动化判据
+
+| 判据 | 结果 |
+|---|---|
+| pytest 全量 | **2939 passed / 10 skipped / 0 failed** |
+| `ruff check` / `ruff format --check` | 干净 |
+| `adr.check.mjs --all` | 通过（50 条记录） |
+| 突变复验：回退种子、保留测试 | **4 条转红**（`test_the_two_entries_share_one_definition_of_the_execution_fields`、`test_operator_entry_holds_the_three_actions_and_nothing_else`、`test_operator_entry_lists_all_three_actions_after_the_publish`、`test_clicked_customer_cases_report_the_missing_library_not_an_empty_one`），还原后全绿 |
+
+新增用例 `test_the_operator_button_resolves_a_target_from_the_tenant_row` 断两半：
+**只有平台行**时 `_promo_route` 得 `(None, "case_exploration")`；补上**租户覆盖行**后钉到
+`agt_…#v1`。旧版（#803 之前）只有"点击得明确不可用"那半边，没有覆盖租户行这一半 ——
+而后者正是本次恢复能出卡的全部依据。
+
+### 二、41 只读复核（未写库，2026-10-19）
+
+`sqlite3` 只读打开 `/var/lib/aiops-41/gateway/gateway.db`，`operator` 入口三行：
+
+```
+__platform__ / operator / smart_diagnosis    published  sort=20  rev=5
+__platform__ / operator / case_exploration   published  sort=10  rev=5  v2  target=NULL
+__platform__ / operator / operations_review  published  sort=30  rev=2  v1
+```
+
+`ShortcutStore.list_effective("1942105476598861824", "operator")` 返回三条
+（`case_exploration` 在列，`sort_order=10` 排最前）。
+
+**两条结论**：
+
+1. **ADR-0031 的 `disable` 从未执行** —— 平台行一直是 `published`。所以数据侧
+   没有需要"翻回来"的东西，恢复时按钮随部署即可见。
+2. **该租户的 `operator` 覆盖行不存在** ⇒ 平台行 `target=NULL` ⇒ `_promo_route` 仍得
+   `(None, intent)` ⇒ **点击仍是 `unavailable` 空卡**。
+
+对照（同一租户的 `consumer` 入口）：`case_exploration` 有租户行且
+`target=agt_ed443cae10ac4ba78c81b9d1b43fd91d#v2` —— 这条对照就是"两层数据"形状的证据，
+也是 `_promo_route` 在 `consumer` 侧能解析出目标的原因。
+
+### 三、据实（边界）
+
+- ~~**未做真实点击验收**~~ **已于 2026-10-19 补做**：见本节上方「41 数据侧补绑定 +
+  真机点击出卡」，`retrieval_status=found` + 3 个 image 块。
+- **不覆盖内容质量**：即便补上绑定，卡片文案来自重卡流量平台的销售物料，
+  是否适合运维语境是**产品问题**，自动化判据无法回答，本节不作评价。
+- **前端渲染不在本仓**：管家端前端硬编码按钮这条既有偏差未变（见
+  `agents/frontend-operator-handoff.md` §6 末条）。
+
 ## 2026-10-19 · #838 深度判据：16 种 query 形状 × 深度的覆盖表（只读回放）
 
 **范围**：41 生产知识库（`8701c742b28111f18637d95f7710e3a3`，`chunk_method=picture`）
@@ -218,6 +435,107 @@ rollout-2026-10-19T11-56-18-*.jsonl`）里，模型的 tool_request 逐字为：
 - **媒体 403 不是成因**：41 部署版本已含 #834 的媒体活性修复，且本次 run
   根本没产出媒体块 —— 排除这一支。
 - 回放使用生产凭据环境读取（`/etc/aiops-41/production.env`），**未打印任何凭据**。
+
+## 2026-10-19 · 测试接口清单的逐条验收（真实会话，41 生产）
+
+**对象**：`docs/agents/testing-api-reference.md` 里写给产品测试的每一条断言。
+**方法**：在 41 上以**生产配置**构造生产应用（`create_gateway_app(settings)`），用**真实会话**
+（生产 `RedisThirdSessionResolver` 选中的那个）驱动**真实 ASGI 面**。不是 TestClient 冒烟，
+不是读代码推断。脚本 `/tmp/verify_doc.py`（退役后不留存，方法已记录在 §方法）。
+
+**判据**：HTTP 状态 **且** 错误码 **且** 文档声称的形状，三者一致才算通过。
+
+### 一、结果：22 条中 21 条通过，1 条**未取证**（不是失败）
+
+| 组 | 条数 | 结果 |
+|---|---:|---|
+| 只读面（health / faq×3 / shortcuts / banner / starters） | 7 | ✅ 全通过 |
+| 负向断言（401 / 403 / 404 / 422 / 订单越权 404） | 5 | ✅ 全通过 |
+| 助手入口（type=faq / qa / clarification ×2） | 5 | ✅ 全通过 |
+| 管家端拦截（consumer 打 analyses ⇒ 403） | 1 | ✅ 通过 |
+| 诊断线（他人订单 ⇒ 404） | 1 | ✅ 通过 |
+| charging-status 未配置 ⇒ 404 | 1 | ✅ 通过 |
+| conversations | 1 | ✅ 通过 |
+| **operator 会话** | 1 | ⚠️ **未取证** —— 见 §二 |
+
+关键实测值：`/health` = `0.1.0+baaac3903809`；`faq/catalog` **28 条**；
+`shortcuts` consumer **3 条**（`case_exploration` / `smart_diagnosis` / `report_fault`）；
+`banner` **`count=0`**（印证"空态是 200 不是 404"）；`assistant/questions` 的
+`type=qa` 轮询 **completed**（1.7s / 3.0s 两次）；
+`smart_diagnosis` 不带单号 ⇒ `clarification` + `missing_fields=["order_no"]`；
+文本内嵌他人订单 ⇒ `clarification` + `CLARIFY_ORDER_NOT_YOURS`（**不报错、不 404**）。
+
+### 一之补：管家端「客户案例」恢复后的复验（2026-10-19 追加）
+
+另一个会话恢复了该动作（PR #844，反转 ADR-0031；数据侧 #846）。本条记录**我方独立复验**：
+
+**三层证据，逐层可复跑：**
+
+| 层 | 判据 | 结果 |
+|---|---|---|
+| 数据侧 | 41 上 `operator` 的 `list_effective` | `case_exploration`(sort=10, `#v3`) / `smart_diagnosis`(20) / `operations_review`(30) |
+| 路由侧 | 线上代码跑 `_promo_route(platform="operator")` | 解析出 `agt_ed443cae…#v3`；`select_promo_agent` 亦成功 |
+| 端到端 | 真实会话 + 生产配置跑同机制宣传作业 | **`completed` / `retrieval_status=found` / 12 块（2 image + 6 reference）/ 51s** |
+
+**两个入口绑定不同版本是设计，不是漂移**：管家端 `#v3`、客户端 `#v2` —— 各自冻结自己的版本。
+
+**同时照出一条必须写进文档的测试前置**：第一次复验用错了会话（`self` 形状），
+`GET /v1/shortcuts`(operator) 返回 **503**、宣传作业 `unavailable`。
+根因不是动作没恢复，而是**算子端需要 operator 形状的会话**（站点范围）。
+已在 `testing-api-reference.md` §3.3 写明：看到 503/`unavailable` 先查会话形状。
+
+**仍未取证的部分不变**：生产 Redis 8103 条会话中**没有一条是 operator 形状**
+（`data_scope` 全为 `self`），所以 operator 的 HTTP 面（`/v1/shortcuts`、`/v1/standard/analyses`）
+**仍无法在真实会话下验收**。上表第三行验的是**同机制的 consumer 路径**——
+它证明宣传卡片这条执行链是通的，不证明 operator 入口的鉴权门与范围解析。
+
+### 二、唯一未取证项：管家端（operator）
+
+扫描生产 Redis **8092 条会话**，用生产 resolver 逐条试三种入口：
+
+```
+(None,     'self') 357      ← 全部可用会话的 data_scope 都是 self
+('consumer','self') 357
+('operator','self') 357     ← 没有任何一条是 operator 形状（站点范围）
+```
+
+⇒ **生产上今天没有 operator 形状的会话**，所以：
+
+- `GET /v1/shortcuts`（operator）、`POST /v1/standard/analyses`（202）**无法在真实会话下验收**；
+- 现有证据只有**代码层断言**：`operator_diagnosis_identity` 之后显式检查
+  `platform != operator ⇒ 403 OPERATOR_ENTRY_REQUIRED`，而「consumer 入口打 analyses ⇒ 403」
+  已实测通过（上表）。
+- **不得把这条记成通过**。给产品的文档里已写明：管家端需要运维额外准备公司用户 JWT 与
+  确认那条链可用；若未打通，先只测客户端。
+
+### 三、这次验收照出的两处文档修正（已改）
+
+1. **「公网自动注入 Authorization，测试方不要带」只对 consumer 成立。**
+   41 的 nginx `map` 对 `operator` 是 `$http_authorization`（透传调用方 JWT），
+   并从公司网关注入 `X-AIOps-Source-Key`。初稿把两者写混，会让测试方以为管家端也能直接打。
+2. **头名的两个名字在不同场景下都"对"**：公网必须 `third-session`
+   （`proxy_set_header X-Third-Session $http_third_session` 按小写+下划线取头）；
+   直连网关时 FastAPI 归一 `X-Third-Session` → `x_third_session`，反而认后者。
+   验收脚本走直连，所以用 `X-Third-Session`；**测试方走公网，必须用 `third-session`**。
+
+### 四、方法（可复跑）
+
+```bash
+# 0. 先确认没有在飞作业（构造 app 会 recover_interrupted_jobs，把在飞作业标 failed）
+ssh aiops-41 'runuser -u aiops41 -- /opt/aiops-41/.venv/bin/python -c "
+import sqlite3; c=sqlite3.connect(\"file:/var/lib/aiops-41/gateway/gateway.db?mode=ro\",uri=True)
+for t in (\"standard_diagnoses\",\"assistant_questions\",\"health_report_jobs\"):
+    print(t, dict(c.execute(\"select status,count(*) from \"+t+\" group by status\")))"'
+
+# 1. 用服务自己的 env + 服务账号跑（配置 0600 aiops41，root 读不到）
+ssh aiops-41 'cd /opt/aiops-41 && runuser -u aiops41 -- env \
+  $(tr "\0" "\n" < /proc/$(systemctl show -p MainPID --value aiops-gateway-41)/environ \
+    | grep -E "^AIOPS_" | xargs -d"\n") PYTHONPATH=/tmp \
+  /opt/aiops-41/.venv/bin/python /tmp/verify_doc.py --accept-live-app'
+```
+
+**2026-10-19 这次运行的前置条件**：三张作业表在飞数为 0（`standard_diagnoses` 2 completed /
+159 expired；`assistant_questions` 2 completed / 447 expired；`health_report_jobs` 6 completed）。
 
 ## 2026-10-19 · 41 端到端：知识库回答产出图片与视频（真实会话）
 

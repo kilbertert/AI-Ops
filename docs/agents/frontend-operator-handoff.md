@@ -37,8 +37,9 @@ Content-Type: application/json
 > ⇒ `200 clarification` + `missing_fields=["order_no"]`。**前端现在可以按这份文档联调。**
 > 仍缺一项（不由前端负责但会影响你看到的终态）：验收账号**无店铺绑定** ⇒ 带单号仍 `404`。
 >
-> ⚠️ **2026-10-16 起管家端是「订单检测 + 运维巡检」两条**，「客户案例」已移除（§3.2）。
-> 任何写死 `case_exploration` 的旧联调代码都会对这版失效。
+> ⚠️ **2026-10-19 起管家端回到「客户案例 + 订单检测 + 运维巡检」三条** ——
+> `case_exploration` 已在代码侧恢复（反转 ADR-0031，见 ADR-0050 与 §3.2）。
+> 2026-10-16 到 10-19 之间那版「两条」的文档已作废。
 >
 > ⚠️ **2026-09-29 状态更正：上面这段是「客户端那条链路」的形状，不是管家端的目标形状。**
 > 管家端最终走的是**用户 JWT**（不是服务令牌 + 会话），由 41 的 nginx 按入口分流
@@ -74,14 +75,25 @@ GET  https://api.mall.qushiyun.com/v1/shortcuts
 
 ## 2. 动作列表（直接照这个联调）
 
-`GET /v1/shortcuts`，`X-Business-Entry: operator` 下**两个**动作（下方第二个 `abridged`）：
+`GET /v1/shortcuts`，`X-Business-Entry: operator` 下**三个**动作（下方后两个 `abridged`）：
 
 ```json
 {
   "type": "shortcut_list",
   "language": "zh",
-  "count": 2,
+  "count": 3,
   "shortcuts": [
+    {
+      "code": "case_exploration",
+      "intent": "case_exploration",
+      "requires_order": false,
+      "sort_order": 10,
+      "label": "客户案例",
+      "description": "查看与充电运营相关的标杆案例",
+      "question_template": "我想看看客户案例",
+      "target_agent_version": null,
+      "jump_path": null
+    },
     {
       "code": "smart_diagnosis",
       "intent": "order_issue",
@@ -108,17 +120,19 @@ GET  https://api.mall.qushiyun.com/v1/shortcuts
 }
 ```
 
-> ⚠️ **「客户案例」(`case_exploration`) 已于 2026-10-16 从管家端移除**，不要照旧文档
-> 硬编码它 —— 见 §3.2。列表以服务端返回为准，前端**不要**写死 `code` 清单。
+> ⚠️ 上面 `case_exploration` 那行的 `target_agent_version: null` 是**平台默认行**的形状
+> —— 那一层**不允许**携带它。真正出卡靠该租户自己的**租户覆盖行**（`list_effective`
+> 里已发布的租户行覆盖同 code 的平台行），见 §3.2。列表以服务端返回为准，前端
+> **不要**写死 `code` 清单。
 
 **怎么渲染**（与客户端同样的规则）：
 
 | 字段 | 前端行为 |
 |---|---|
-| `jump_path` 有值 | **本地跳转**，不发请求（管家端两个动作都是 `null`，所以都属下面的"提示动作"） |
+| `jump_path` 有值 | **本地跳转**，不发请求（管家端三个动作都是 `null`，所以都属下面的"提示动作"） |
 | `jump_path` 为 `null` | **提示动作**：点击后带着 `code` 调助手入口（见 §3） |
 | `requires_order: true` | 点击后**先弹订单选择器**（见下方"主流程与兜底"） |
-| `target_agent_version` | 管家端两个动作都是 `null`，**不要**据此做任何绑定假设 |
+| `target_agent_version` | 管家端三个动作的平台行都是 `null`，**不要**据此做任何绑定假设 |
 
 > `question_template` 可直接预填输入框；`label`/`description` 已按 `Accept-Language` 本地化
 > （当前支持 zh/en/de/fr/es/pt，缺失语言回退 zh）。
@@ -165,44 +179,47 @@ POST /v1/assistant/questions
   （用例 `tests/test_assistant_api.py::test_assistant_text_embedded_unowned_order_falls_through`）。
 - **会话里已确认的活跃订单**、追问时无权限：同样静默回落，并清掉该绑定。
 
-### 3.2 客户案例：**管家端没有这个动作**（2026-10-16 起）
+### 3.2 客户案例（`case_exploration`，`requires_order: false`）—— 2026-10-19 恢复
 
-**管家端不要再渲染「客户案例」按钮，也不要向它发 `shortcut_code=case_exploration`。**
+**管家端恢复渲染「客户案例」按钮，点击照常发 `shortcut_code=case_exploration`。**
 
 ```http
 POST /v1/assistant/questions
-{"question": "...", "shortcut_code": "case_exploration"}   # ← operator 入口：不要发
+{"question": "我想看看客户案例", "shortcut_code": "case_exploration"}
 ```
 
-**为什么移除**：不是素材没配，是**这个入口结构上产不出这张卡**。
-`target_agent_version` 只允许落在**租户行**，而平台行明确禁止携带它
-（`platform shortcuts cannot bind a tenant agent version`）；`operator` 侧只有平台行
-⇒ 运行时**永远解析不出宣传智能体** ⇒ 每次点击都是一张「客户案例服务暂时不可用」。
-10-15 生产实测 8 次，全部 `unavailable` + **9–13ms**（真人跑一次要几十秒，
-这个耗时等于根本没启动）。用户决定：**管家端用户不要看到客户案例卡片**。
+→ `202` `type=qa` → 轮询至 `completed`。
 
-**本入口的宣传面只剩自由文本一条路**（用户选择：只摘按钮）：问句里自带「客户案例 /
-行业方案」这类线索时，仍会走宣传面并拿到「客户案例服务暂时不可用」。
-那条路的知识库素材同样尚未配置 —— 前端若收到，按下面这条渲染即可。
+**2026-10-16 到 10-19 之间它是被移除的**（#803 / ADR-0031），理由是「该入口结构上
+产不出这张卡」。那个**机制**观察是对的：`target_agent_version` 只允许落在**租户行**，
+平台行明确禁止携带它（`platform shortcuts cannot bind a tenant agent version`）。
+但由它推出的**结论**错了 —— 正确形状一直是**两层**：**平台行给可见性 + 租户行给绑定**
+（`list_effective` 里已发布的租户行覆盖同 code 的平台行）。`consumer` 侧从来就是这么跑的。
+反转记录见 ADR-0050。
 
-**若将来产品改主意、要让管家端也出卡片**，步骤见 §3.2-bis（三步，缺一不可）。
-**在那之前不要向前端承诺"素材到位即可用"。**
+**前端要看的两件事**：
 
-### 3.2-bis 若日后要在管家端恢复这张卡（三步，缺一不可）
+1. **平台默认行上的 `target_agent_version: null` 是正常的**，不代表不可用 —— 见 §2 那段注。
+   出卡与否取决于**该租户**有没有覆盖行，前端不参与也不该据此判断。
+2. **若该租户没有绑定**，点击得到的是 `retrieval_status: "unavailable"` +
+   「客户案例服务暂时不可用」。这是**诚实的空卡**，不是故障 ——
+   渲染成"暂不可用"，**不要**写成"没有找到案例"（`unavailable` 与 `not_found`
+   后端刻意区分：前者是"没检索"，后者是"检索了但没命中"）。
 
-⚠️ **光有知识库不会 `found`**：运行时在解析不出动作绑定的宣传智能体时**直接返回
-`unavailable`**（`gateway_runtime.py` 的 `promo is None` 分支）。完整步骤是：
+### 3.2-bis 运营侧：让这张卡真的出内容（两步，缺一不可）
+
+⚠️ **光有种子不会 `found`**：运行时在解析不出动作绑定的宣传智能体时**直接返回
+`unavailable`**（`gateway_runtime.py` 的 `promo is None` 分支）。完整步骤：
 
 1. 建并**发布**一个宣传类智能体（绑定目标知识库）；
-2. 把它的 `agt_…#vN` 绑到该动作上 —— ⚠️ **绑定只能落在「租户行」，不能落在平台默认行**
-   （`ShortcutManager` 禁平台行携带 `target_agent_version`，且 `select_promo_agent`
-   **只在请求所属租户内**解析该版本）。正确形状是 **平台行给可见性 + 租户行给绑定**
-   （`list_effective` 里租户已发布行会覆盖同 code 的平台行）。
-3. **把 `case_exploration` 加回 `_BUNDLED_SHORTCUTS["operator"]` 并发布**（种子是代码里的
-   常量，不是数据行 —— 见 runbook §3.1-ter）。这一步在 2026-10-16 被删掉了。
+2. 把它的 `agt_…#vN` 绑到**该租户自己**的 `operator` 覆盖行上 ——
+   ⚠️ **不能落在平台默认行**（`ShortcutManager` 禁平台行携带 `target_agent_version`，
+   且 `select_promo_agent` **只在请求所属租户内**解析该版本）。操作步骤见
+   `env-41-runbook.md` §3.1-ter。
 
-⚠️ **还欠一步**：内容侧 —— 现在那个宣传智能体绑的库是重卡流量平台的**销售物料**，
-文案是面向客户的措辞，直接给运维人员看是错的语境。恢复前要先有面向运营商的素材。
+⚠️ **内容语境仍是一个欠账**：现成可绑的那个宣传智能体绑的库是重卡流量平台的
+**销售物料**，文案面向终端客户，给运维人员看未必是合适的语境。
+"入口恢复"与"文案合适"是两件事 —— 后者**尚未完成产品复核**。
 
 ## 4. 与客户端共用的部分（不要重复实现）
 
@@ -224,9 +241,10 @@ POST /v1/assistant/questions
 - [ ] 订单检测：`requires_order: true` 时**点击即弹选择器**（主流程）；同时**处理**后端
       返回的 `clarification` + `missing_fields`（兜底）—— 两者共用同一个选择器组件。
 - [ ] 显式带 `order_no` 得到 `404` 时，提示"订单不存在或无权查看"，**不重试**。
-- [ ] 客户案例：**管家端没有这个动作**（§3.2，2026-10-16 移除），不要硬编码它。
-      ⚠️ 若用户自由文本问到「客户案例」，仍可能收到 `retrieval_status=unavailable`
-      的宣传卡 —— 渲染成"暂不可用"，**不要**写成"没有案例"（两者后端刻意区分）。
+- [ ] 客户案例：**管家端有这个动作**（2026-10-19 恢复，§3.2），但**不要硬编码 `code`**
+      —— 照 §2「动作列表按服务端返回为准」那条走。
+      ⚠️ `retrieval_status=unavailable` 渲染成"暂不可用"，**不要**写成"没有案例"
+      （与 `not_found` 后端刻意区分）。
 - [ ] 不要保存、打印或打包 AI-Ops 服务令牌（它只在 BFF 与 Nginx 之间）。
 - [ ] 不要试图用 `client-type` 切换入口（见[另一篇](client-type-vs-business-entry.md)）。
 - [ ] **先把「AI-Ops 收谁的身份」定下来**：见
@@ -281,8 +299,9 @@ GET /charging-pile/chOrderInfo/getOrderUserPage?current=1&size=10&status=1
 
 ## 6. 已知边界（后端如实告知）
 
-- **管家端**「客户案例」动作**已移除**（2026-10-16，§3.2）—— 不是素材缺口，是该入口
-  结构上产不出这张卡。若产品日后要恢复，先看 §3.2-bis 的三步与内容侧前置。
+- **管家端**「客户案例」动作**已恢复**（2026-10-19，ADR-0050 反转 ADR-0031），
+  且 41 上已补该租户的 `operator` 覆盖行并**实测点击出卡**（`retrieval_status=found`）。
+  换租户/换素材的运营步骤见 §3.2-bis；材料语境仍待产品复核。
 - **入口头是调用方自报的**：41 的 Nginx 只做"没带就当 `consumer`"的兜底，
   不校验自报值。真实前端按入口发它即可；这不放大到"无范围"（管家端范围仍受运营商站点集合约束）。
 - **管家端登录链路：不通，已定位**。管家端 App 走 `/upms/token/login` 的 OAuth2 令牌，

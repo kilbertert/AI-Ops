@@ -366,8 +366,9 @@ nginx 在**同一个 location 内**对同名头**不做覆盖**，而是**两条
 - `gateway.env`：`AIOPS_GATEWAY_COMPANY_JWT_KEY` + `AIOPS_GATEWAY_COMPANY_SOURCE_KEY` 已配，
   `CHECK_TOKEN_URL` 留空。
 - 实测：客户端 200（不变）/ 管家端 `operator` 200 `count=2` / 非法入口 401 / 订单检测 `platform=operator`。
-- **仍开放**：验收账号无店铺绑定 ⇒ 站点范围 Ø；客户案例 `target_agent_version: null`；
-  密钥仍是公司源码默认值（启动日志每次告警）。
+- **仍开放**：验收账号无店铺绑定 ⇒ 站点范围 Ø；密钥仍是公司源码默认值（启动日志每次告警）。
+  （原列在此的「客户案例 `target_agent_version: null`」已于 2026-10-19 解除：
+  该租户的 `operator` 覆盖行已建并绑定 `#v3`，点击实测 `found` —— 见 §3.1-septies。）
 
 ### 里程碑记录
 
@@ -991,6 +992,9 @@ manager.disable(ctx, cur.shortcut_id, expected_revision=cur.revision, scope=PLAT
 
 ### 3.1-sexies 从入口**移除**一个已发布动作：改种子 + `disable` 数据行（2026-10-16 新增）
 
+> ⚠️ **本节只作方法保留**：它记的那次实例（管家端移除「客户案例」）已于 **2026-10-19 反转**
+> —— 见下方 §3.1-septies。删动作的方法本身仍然可用，但**别再照它去动 `case_exploration`**。
+
 **用途**：产品决定某个动作不该再出现在某个入口时。**2026-10-16 的实例**：管家端移除
 「客户案例」（`case_exploration`）—— 见 `frontend-operator-handoff.md` §3.2 与该日
 `validation.md`。
@@ -1049,6 +1053,145 @@ ssh aiops-41 'curl -sS -H "Authorization: Bearer <服务令牌>" -H "X-Business-
 - **只改种子不停用数据行** ⇒ 入口照旧返回（本手册反复出现的那条：合并部署 ≠ 入口变化）。
 - **`disable` 之后不要删行**：保留它才有「这个动作曾经存在过」的审计痕迹，
   且 `list_effective` 里 disabled 行**抑制**同 code 的平台行，正是我们要的语义。
+
+### 3.1-septies 从入口**恢复**一个动作：种子已在代码里，**数据侧要补的是租户绑定**（2026-10-19 新增）
+
+**用途**：反转 §3.1-sexies 那次移除。**2026-10-19 的实例**：管家端恢复「客户案例」
+（`case_exploration`）—— 见 ADR-0050 与 `frontend-operator-handoff.md` §3.2。
+
+✅ **本节已于 2026-10-19 在 41 实做过一次**（租户 `1942105476598861824`，绑定
+`agt_ed443cae…#v3`），备份 `/var/backups/aiops-41/shortcuts-20261019-161407`，
+点击路径实测 `retrieval_status=found`。证据见 `../validation.md` 同名节。
+
+**关键区别：恢复比移除少一步，多另一条完全不同的步骤。**
+
+| | 种子（代码） | 数据行 |
+|---|---|---|
+| 移除 | 删掉那个 `code` | `disable` 该行 |
+| 恢复 | 加回去（随合并/部署生效） | **补一条租户覆盖行并绑定 target** |
+
+**41 上的实际形状（2026-10-19 只读复核）—— 读这张表就不会搞错该做什么**：
+
+```
+__platform__        / operator / case_exploration   published  target=NULL   ← 平台行给可见性
+1942105476598861824 / operator / case_exploration   （不存在）                ← 缺的就是这行
+1942105476598861824 / consumer / case_exploration   published  target=agt_ed443cae…#v2  ← 对照
+```
+
+> ⚠️ **上表是 2026-10-19 写库「之前」的快照，不是现在。** 那次执行之后
+> `1942105476598861824 / operator / case_exploration` 已存在且 `published`
+> （`target=…`、`sort_order=10`）。**再执行本例时先按同样方式只读查一遍当前形状**，
+> 不要拿这张表当现状去判断"还缺什么"；若那一行已在且绑定一致，脚本会直接跳过。
+
+🔴 **`__platform__` 那行本来就是 `published`，所以按钮早就在入口里返回了 —— 不要再去动它。**
+移除那次从没执行过 `disable`，所以库里没有东西需要"翻回来"。恢复出卡缺的**只有租户覆盖行**。
+
+🔴 **平台行不能携带 `target_agent_version`**（`_validated_fields` 对 `PLATFORM_SCOPE` 抛
+`platform shortcuts cannot bind a tenant agent version`）。别试图去改那条平台行 —— 那是
+**安全边界**不是缺陷：平台行跨全部租户可见，让它钉某个租户的智能体版本等于让一个租户的
+智能体去服务别人的入口。绑定只能落在**该租户自己**的行上。
+
+**步骤**（先按 §3.1-bis 做 WAL 安全的库备份；下列脚本在服务运行下写库）：
+
+```python
+# install -m 644 到 /tmp，cd /opt/aiops-41，runuser -u aiops41 -- …/python /tmp/restore-promo.py
+from pathlib import Path
+from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
+from aiops_diagnostics.shortcut_lifecycle import ShortcutManager, ShortcutStore
+
+ENTRY, CODE = "operator", "case_exploration"
+TENANT = "<该运营商的租户 id>"  # 绑定必须落在这个租户上
+TARGET = "agt_<...>#v<N>"  # 该租户内已发布的宣传智能体版本
+
+store = ShortcutStore(Path("/var/lib/aiops-41/gateway/gateway.db"))
+manager = ShortcutManager(store)
+subject = SubjectRecord(b_user_id="B-onbox-admin", tenant_id=TENANT)
+ctx = ScopeContext.build(
+    caller=subject,
+    subject=subject,
+    delegated=False,
+    effective_tenant_id=TENANT,
+    data_scope=DataScope(type="self"),
+    roles=frozenset({"ROLE_AGENT_ADMIN"}),  # 租户行要的是租户管理员角色
+    permissions=frozenset({"aiops:shortcuts:manage"}),
+)
+
+# ① 先确认平台行在（它决定"按钮可不可见"）；不在就按 §3.1-ter **定点**建那一条，别 seed_bundled。
+platform_row = store.find_by_code("__platform__", ENTRY, CODE)
+assert platform_row is not None and platform_row.status == "published", "平台行缺失/未发布"
+
+# ② 文案从代码里的种子规格取，**不手抄** —— 与代码不可能漂移。
+from aiops_diagnostics.shortcut_lifecycle import _BUNDLED_SHORTCUTS  # noqa: PLC2701
+
+# 🔴 **这一步依赖"41 上跑的源码已经含恢复后的种子"** —— 也就是**本改动已合并并 CD 部署**。
+# 在部署之前（含刚合并、CD 还没跑完的窗口）执行，这里会 StopIteration：
+# 线上那份 `_BUNDLED_SHORTCUTS["operator"]` 还在 #803 的形态里，没有 `case_exploration`。
+# 断言是为了把这件事说清楚，而不是让人对着一句裸 StopIteration 猜。
+assert any(CODE in fields for entry, fields in _BUNDLED_SHORTCUTS if entry == ENTRY), (
+    f"线上源码的 {ENTRY} 种子里没有 {CODE} —— 先确认本改动已部署（/health 的版本号）"
+)
+spec = next(fields[CODE] for entry, fields in _BUNDLED_SHORTCUTS if entry == ENTRY)
+
+row = store.find_by_code(TENANT, ENTRY, CODE)
+if row is None:
+    row = store.create(
+        TENANT,
+        ENTRY,
+        CODE,
+        intent=spec["intent"],
+        requires_order=spec["requires_order"],
+        sort_order=spec["sort_order"],
+        labels=spec["labels"],
+        descriptions=spec.get("descriptions") or {},
+        question_templates=spec.get("question_templates") or {},
+        target_agent_version=TARGET,  # ← 恢复与移除的**唯一分野**
+        jump_path=spec.get("jump_path"),
+        kind=spec.get("kind", "button"),
+        created_by="B-onbox-admin",
+    )
+    print(f"已创建(草稿): {CODE} rev={row.revision}")
+elif row.target_agent_version != TARGET:
+    raise SystemExit(f"已存在但绑定不同：{row.target_agent_version} ≠ {TARGET}，先人工确认")
+
+# ③ 发布。三态处理，可重跑。
+if row.status == "published":
+    print(f"已发布，跳过: {CODE} rev={row.revision}")
+else:
+    manager.publish(ctx, row.shortcut_id, expected_revision=row.revision)
+    after = store.find_by_code(TENANT, ENTRY, CODE)
+    print(f"已发布: status={after.status} rev={after.revision}")
+```
+
+**验收（判据是「入口 + 真出卡」，不是「库里有行」）**：
+
+```bash
+# ① 入口列出三条，含 case_exploration
+ssh aiops-41 'curl -sS -H "Authorization: Bearer <服务令牌>" -H "X-Business-Entry: operator" \
+  https://api.mall.qushiyun.com/v1/shortcuts' \
+  | python3 -c 'import json,sys; c=[s["code"] for s in json.load(sys.stdin)["shortcuts"]]; print(c); assert "case_exploration" in c'
+```
+
+② **点击路径**：带该租户的真实会话 `POST /v1/assistant/questions`
+（`{"question": "我想看看客户案例", "shortcut_code": "case_exploration"}`）→ 轮询至 `completed`
+→ **`retrieval_status` 必须是 `found` 且带内容块**。
+
+🔴 **判据是 `found`，不是"返回了 202"。** `unavailable` 也返回 202、也 `completed`
+—— 那正是"按钮回来了但卡片还是空的"，即本次要修掉的状态。判据与 §3.1-ter 同一条：
+**看入口与结果，不看脚本输出。**
+
+**常见坑**：
+
+- **只恢复种子不建租户行** ⇒ 按钮可见、点击仍是那句「客户案例服务暂时不可用」
+  （平台行 `target=NULL` ⇒ `_promo_route` 得 `(None, intent)`）。
+- **别用 `rollback` 恢复**：`rollback` 恢复的是**这一行**的某个旧版内容，
+  而缺的是**另一行**（租户行）。语义不同，用错了会静默改掉平台行的文案。
+- **别把 target 绑到平台行**：那是安全边界，代码会直接拒（见上）。
+- **`select_promo_agent` 只在请求所属租户内解析** ⇒ 绑 `TENANT` 以外的智能体版本，
+  运行时解析失败、仍然出空卡，且不报错。绑定前先确认那个 `agt_…#vN`
+  在 `agents` 表里属于 `TENANT` 且 `status='published'`。
+- **内容语境是产品问题，不是运维问题**：这一步只保证"能出卡"。
+  素材是否适合给运维看（ADR-0031 提过：那是面向终端客户的销售物料）**另行复核**，
+  别把它当成"恢复完成"的一部分。
 
 
 （本手册 §5.5 的恢复一节已经写过这一条；这里再点一次，是因为新建动作这条路**没有**可用的按版本回滚）。

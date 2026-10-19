@@ -1,7 +1,7 @@
 # 管家端没有「客户案例」动作：入口面由**能力**决定，不由数据补齐决定
 
 日期：2026-10-16
-状态：已采纳
+状态：**已反转（2026-10-19，见 ADR-0050）** —— 本记录保持原文不改写，作为那次收窄的历史；
 影响版本：`shortcut_lifecycle._BUNDLED_SHORTCUTS["operator"]`、`docs/agents/frontend-operator-handoff.md`、
 `docs/agents/env-41-runbook.md` §3.1-sexies；收窄 #427 的交付面
 
