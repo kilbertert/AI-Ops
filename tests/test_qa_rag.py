@@ -22,6 +22,7 @@ from aiops_diagnostics.codex_runtime import AgentRuntimeError, CodexTurnOutput
 from aiops_diagnostics.config import AgentSettings
 from aiops_diagnostics.i18n import QA_FALLBACK_MESSAGES
 from aiops_diagnostics.knowledge_retrieval import (
+    KnowledgeSearchGuard,
     KnowledgeSearchUnavailable,
     MediaResource,
     MediaResourceSigner,
@@ -1571,3 +1572,187 @@ def test_the_same_master_prompt_serves_every_language(tmp_path: Path) -> None:
     for language, prompt in prompts.items():
         assert _selection().prompt in prompt, f"{language} 的提示词里没有那份中文母版"
     assert "English" in prompts["en"] and "Vietnamese" in prompts["vi"]
+
+
+# ---------------------------------------------------------------------------
+# The search query is the model's keyword, never its reason (#837, 41 live)
+# ---------------------------------------------------------------------------
+
+
+def _queryless_tool_request(reason: str = "检索宣传库中一个代表性客户案例，用于生成客户案例卡片。") -> str:
+    """The exact shape 41's model emitted: a tool with a reason and no query."""
+    return json.dumps(
+        {
+            "kind": "tool_requests",
+            "tool_requests": [{"tool": "knowledge_search", "reason": reason}],
+            "answer": None,
+        },
+        ensure_ascii=False,
+    )
+
+
+def test_reason_is_never_sent_to_the_knowledge_base(tmp_path: Path) -> None:
+    """41 live (2026-10-19): the model omitted `query`, and the harness searched
+    with `reason` — a purpose SENTENCE — which retrieved a different chunk set
+    than the keywords naming the same subject, and the media block was lost.
+
+    The reason text must never reach the search client. Here the model supplies
+    the keyword on the re-ask, so the search that runs is the keyword one.
+    """
+    reason = "检索宣传库中一个代表性客户案例，用于生成客户案例卡片。"
+    client = _SearchClient([[dict(_IMAGE_CHUNK)]])
+    session = _FakeSession(
+        [
+            _queryless_tool_request(reason),
+            _tool_request("客户案例 标杆"),
+            _answer([_text_block("案例卡片正文。")], "found"),
+        ]
+    )
+
+    result = _run(tmp_path, session, client, question="有客户案例嘛")
+
+    assert result["retrieval_status"] == "found"
+    searched = [call[1] for call in client.calls]
+    assert searched == ["客户案例 标杆"], searched
+    assert reason not in searched
+    # The re-ask happened, and it named the missing field.
+    assert "`query`" in session.prompts[1]
+
+
+def test_a_second_queryless_request_falls_back_to_the_user_question(tmp_path: Path) -> None:
+    """Asking once. If the model still sends no keyword, the user's question is
+    the last resort — never the reason sentence."""
+    reason = "检索一份有代表性的充电/新能源客户案例或行业方案资料。"
+    client = _SearchClient([[dict(_IMAGE_CHUNK)]])
+    session = _FakeSession(
+        [
+            _queryless_tool_request(reason),
+            _queryless_tool_request(reason),
+            _answer([_text_block("案例卡片正文。")], "found"),
+        ]
+    )
+
+    result = _run(tmp_path, session, client, question="有客户案例嘛")
+
+    assert result["retrieval_status"] == "found"
+    assert [call[1] for call in client.calls] == ["有客户案例嘛"]
+
+
+def test_the_queryless_run_is_recorded_not_silent(tmp_path: Path, caplog) -> None:
+    """The whole reason this defect survived is that it was silent: a found
+    answer with no media looks exactly like a library with no media. Both the
+    re-ask and the fallback leave a warning naming the event."""
+    import logging
+
+    client = _SearchClient([[dict(_IMAGE_CHUNK)]])
+    session = _FakeSession(
+        [
+            _queryless_tool_request(),
+            _queryless_tool_request(),
+            _answer([_text_block("案例卡片正文。")], "found"),
+        ]
+    )
+    with caplog.at_level(logging.WARNING, logger="aiops.qa_rag"):
+        _run(tmp_path, session, client, question="有客户案例嘛")
+
+    events = [record.__dict__.get("event") for record in caplog.records]
+    assert "qa_search_query_missing" in events
+    assert "qa_search_query_fallback_question" in events
+
+
+def test_a_reason_only_request_never_searches(tmp_path: Path) -> None:
+    """`_execute_searches` refuses a request with no keyword rather than
+    substituting prose — driven directly, so the rule holds wherever it is
+    called from (the diagnosis path calls it too)."""
+    from aiops_diagnostics.qa_rag import _execute_searches
+
+    client = _SearchClient([[dict(_IMAGE_CHUNK)]])
+    guard = KnowledgeSearchGuard(
+        client,
+        tenant_id="tenant-a",
+        agent_version="agent-v1",
+        knowledge_base_ids=["kb-a"],
+        media_signer=_signer(),
+    )
+    retrieval = _TurnRetrieval()
+
+    payloads = _execute_searches(
+        guard,
+        retrieval,
+        [{"tool": "knowledge_search", "reason": "用户想看客户案例"}],
+    )
+
+    assert client.calls == []
+    assert payloads[0]["error"]
+    assert retrieval.searches_used == 0
+
+
+def _mixed_tool_request() -> str:
+    """A batch that mixes a keyword with a query-less sibling (Devin #840)."""
+    return json.dumps(
+        {
+            "kind": "tool_requests",
+            "tool_requests": [
+                {"tool": "knowledge_search", "reason": "查案例", "query": "客户案例 标杆"},
+                {"tool": "knowledge_search", "reason": "再查一份宣传资料"},
+            ],
+            "answer": None,
+        },
+        ensure_ascii=False,
+    )
+
+
+def test_a_mixed_batch_keeps_both_searches(tmp_path: Path) -> None:
+    """One request with a query, one without: the batch must not be treated as
+    satisfied. Checking it as a whole let the query-less sibling through to
+    `_execute_searches`, which returned an error and silently lost that search.
+    """
+    client = _SearchClient([[dict(_IMAGE_CHUNK)], [dict(_VIDEO_CHUNK)]])
+    session = _FakeSession(
+        [
+            _mixed_tool_request(),
+            _mixed_tool_request(),
+            _answer([_text_block("案例卡片正文。")], "found"),
+        ]
+    )
+
+    _run(tmp_path, session, client, question="有客户案例嘛")
+
+    searched = [call[1] for call in client.calls]
+    # The sibling that had a real keyword keeps it; the other falls back to the
+    # question. Neither is dropped.
+    assert searched == ["客户案例 标杆", "有客户案例嘛"], searched
+
+
+def test_the_correction_does_not_steal_the_final_answer_turn(tmp_path: Path) -> None:
+    """The retry has its own budget. Charging it against `_MAX_RUNS` made a run
+    with a skipped search + two searches + the supported `limited` third request
+    exhaust the loop, so the final answer never ran and the fallback claimed
+    `searches: 0` after two searches had completed.
+    """
+    client = _SearchClient([[dict(_IMAGE_CHUNK)], [dict(_VIDEO_CHUNK)], []])
+    session = _FakeSession(
+        [
+            # Answer first without searching -> forces a supplementary search.
+            _answer([_text_block("先给一个不查库的回答。")], "not_found"),
+            # Query-less request -> the correction turn.
+            _queryless_tool_request(),
+            # Search 1, then search 2 (the guard's cap is two real searches).
+            _tool_request("客户案例 标杆"),
+            _tool_request("重卡 充电"),
+            # Third request: the guard answers `limited`, which the harness
+            # deliberately supports rather than failing the run.
+            _tool_request("新加坡 巴士"),
+            _answer([_text_block("最终卡片正文。")], "found"),
+        ]
+    )
+
+    result = _run(tmp_path, session, client, question="有客户案例嘛")
+
+    # The observable claim: the run reached the model's FINAL answer rather than
+    # being cut off by the loop bound and replaced with the localized fallback.
+    assert result["blocks"][0]["text"] == "最终卡片正文。"
+    assert result["retrieval_status"] == "found"
+    # Two real searches ran; the third request was refused by the guard's
+    # two-call cap and still counts as an attempt (pre-existing accounting).
+    assert result["searches"] == 3
