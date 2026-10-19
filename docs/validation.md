@@ -72,6 +72,88 @@ M3NODE_SELFTEST=1 tools/m2_close/m3node/run.sh
 - `spex spec lint` 的 2 条 warning 是继承的既有漂移（`agent_contracts.py`、`agent_engine.py`），
   未在本片顺手修复。
 - Gateway 签发与持久化、`agent_version` 回执**未做**（后续切片）。
+## 2026-10-19 · #837 成因取证：reason 句子被当检索词，图片块因此消失（只读回放）
+
+**范围**：41 生产知识库只读回放 + 生产库/rollout 读取。**未部署、未改生产配置、未发新请求。**
+本节的结论是**成因与判据**，不是「修复已在 41 生效」—— 那一项待部署后补记。
+
+### 一、症状（生产数据）
+
+`assistant_questions.qa_1acb8ff0be424b79ae7d70c74c2fd11d`，2026-10-19 11:56:18，
+tenant `1942105476598861824`，问句「有客户案例嘛」：
+
+| 字段 | 值 |
+|---|---|
+| status | `completed` |
+| retrieval_status | `found` |
+| searches | 1 |
+| blocks | 4×text + 4×reference + **0×image/video** |
+
+即回答正常交付、检索确实跑过，但**没有任何媒体块** —— 前端因此无图可渲染。
+同租户当日 02:39 与 02:47 两次「我想看客户案例」同为 0 媒体块。
+
+（02:39 那次曾在 k=5 取到过图片块 —— 见 `qa_9f69edf194ee486ab1b2f31f6677356c`
+的 `media_UBsS2d0xot6N7pZwW_Jok5fYuG1brd57`。同一问句时有时无，正是本条要解释的。）
+
+### 二、根因：送进知识库的是 reason 句子
+
+该 run 的 rollout（`/var/lib/aiops-41/codex-home/sessions/2026/10/19/
+rollout-2026-10-19T11-56-18-*.jsonl`）里，模型的 tool_request 逐字为：
+
+```json
+{"tool":"knowledge_search","reason":"检索宣传库中一个代表性客户案例，用于生成客户案例卡片。"}
+```
+
+**没有 `query`**。而 `qa_rag._execute_searches` 当时写的是
+`query = str(request.get("query") or request.get("reason") or "")` —— 于是那句
+**用途说明**被当成检索词发了出去。
+
+### 三、判据：只读回放，reference_id 逐字对齐
+
+在 41 上对同一知识库（`8701c742b28111f18637d95f7710e3a3`，`chunk_method=picture`）
+只读 `POST /kb/knowledge-bases/{id}/search`，只换 `question` 字符串：
+
+| 送出的字符串 | k=5 返回 | 与哪次 run 的 rollout 一致 |
+|---|---|---|
+| `新能源 充电站 客户案例`（10:39 成功那次） | 5ch/**1img** | 逐字一致 |
+| `检索宣传库中一个代表性客户案例，用于生成客户案例卡片。`（11:56 失败那次） | 5ch/**0img** | 逐字一致 |
+
+两组 chunk 的 `reference_id` 集合与各自 run 的 rollout **逐字相同**，且只有关键词那组
+带回 `doc_type_kwd=['image']` 的图片块（相似度 0.20058，排第 4）。
+
+**「拿用户原问句当 query」这条既有兜底同样无效**（另一条独立证据）：`客户案例`、
+`有客户案例嘛`、`我想看客户案例` 在 k=5 与 k=10 都是 0 img。所以修复必须让模型
+**补一个关键词**，而不是换一个句子。
+
+### 四、本轮新增的自动化检查
+
+| 检查 | 结果 |
+|---|---|
+| 全量套件 | **2927 passed / 0 failed / 9 skipped**（基线 `baaac390` 为 2921，新增 6 条） |
+| `ruff check src tests` | 通过 |
+| `ruff format --check src tests` | 254 文件已格式化 |
+| `repo-map.check.mjs` | 通过（154 行） |
+| `adr.check.mjs --base baaac390` | 通过（48 条记录） |
+
+四条新用例（`tests/test_qa_rag.py`）与它们在旧行为下的表现：
+
+| 用例 | 钉住的行为 | 改回 `query or reason` 后 |
+|---|---|---|
+| `test_reason_is_never_sent_to_the_knowledge_base` | reason 文本永不进检索；重问后用的是关键词 | 失败 |
+| `test_a_second_queryless_request_falls_back_to_the_user_question` | 重问一次后兜底用户原问句 | 失败 |
+| `test_the_queryless_run_is_recorded_not_silent` | 两次降级各留结构化 warning | 失败 |
+| `test_a_reason_only_request_never_searches` | `_execute_searches` 直接拒绝无 query 请求 | 失败 |
+
+**未完成业务验收**：本节的回放证明的是**成因与判据**，不是修复后的线上行为。
+41 复验（部署后重跑「有客户案例嘛」并核对 `result.blocks[]` 含 media 块）**尚未执行**。
+
+### 五、边界（据实）
+
+- **未部署**：41 当时仍是 `0.1.0+baaac3903809`，本次取证全部只读。
+- **不覆盖前端渲染**：本节只证明「网关会把什么字符串送去检索、因此拿到什么 chunk」。
+- **媒体 403 不是成因**：41 部署版本已含 #834 的媒体活性修复，且本次 run
+  根本没产出媒体块 —— 排除这一支。
+- 回放使用生产凭据环境读取（`/etc/aiops-41/production.env`），**未打印任何凭据**。
 
 ## 2026-10-19 · 41 端到端：知识库回答产出图片与视频（真实会话）
 
