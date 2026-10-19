@@ -247,7 +247,12 @@ class GatewayServerSettings:
             kb_service_base_url=_env("AIOPS_GATEWAY_KB_SERVICE_BASE_URL")
             or _file_value(file_values, "AIOPS_GATEWAY_KB_SERVICE_BASE_URL"),
             kb_service_timeout_seconds=_env_float("AIOPS_GATEWAY_KB_SERVICE_TIMEOUT_SECONDS", 10.0),
-            kb_search_max_results=_env_int("AIOPS_GATEWAY_KB_SEARCH_MAX_RESULTS", 10),
+            # Reads the private server config too, not just the process env: the
+            # depth lives beside the KB URL it governs, and `kb_service_base_url`
+            # two lines up already accepts either source. An operator who put it
+            # in the file beside that URL would otherwise get a startup that
+            # succeeds and a setting that silently does nothing.
+            kb_search_max_results=_int_value(file_values, "AIOPS_GATEWAY_KB_SEARCH_MAX_RESULTS", 10),
             media_signing_secret=_env("AIOPS_GATEWAY_MEDIA_SIGNING_SECRET")
             or _file_value(file_values, "AIOPS_GATEWAY_MEDIA_SIGNING_SECRET"),
             media_ttl_seconds=_env_int("AIOPS_GATEWAY_MEDIA_TTL_SECONDS", 600),
@@ -584,6 +589,18 @@ def _env(name: str, default: str = "") -> str:
 
 def _env_int(name: str, default: int) -> int:
     raw = _env(name)
+    return int(raw) if raw else default
+
+
+def _int_value(values: dict[str, str | None], name: str, default: int) -> int:
+    """An int setting that may come from the process env or the private config.
+
+    Same two-source rule as ``_file_value``, but parsed: the env wins when set,
+    the private file is the fallback, and a value that is not an integer fails
+    loudly at construction rather than being dropped back to the default —
+    "the depth was raised" must not be a statement the config cannot support.
+    """
+    raw = _env(name) or _file_value(values, name)
     return int(raw) if raw else default
 
 

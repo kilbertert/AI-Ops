@@ -426,3 +426,30 @@ def test_debug_run_endpoint_cross_tenant_is_404(tmp_path: Path) -> None:
             json={"question": "怎么拔枪"},
         )
         assert response.status_code == 404
+
+
+def test_debug_preview_forwards_the_configured_depth(tmp_path: Path) -> None:
+    """The draft preview is a retrieval path like any other (#838): it must read
+    the deployment's depth rather than the guard default. A draft published with
+    a picture library would otherwise preview without its pictures, and the
+    operator would judge the draft on a library that looked empty.
+    """
+    client = _FakeSearchClient([[dict(_IMAGE_CHUNK)]])
+    session = _FakeSession([_tool_request(), _answer([_text_block("先停止充电，再拔枪。")], "found")])
+
+    run_agent_debug_answer(
+        "怎么拔枪",
+        agent_id="agt_test",
+        revision=3,
+        prompt="用简体中文回答充电业务问题。",
+        knowledge_base_ids=("kb-a",),
+        agent_settings=AgentSettings(codex_bin="/bin/true", run_root=str(tmp_path / "runs")),
+        search_client=client,
+        media_signer=MediaResourceSigner("test-secret", ttl_seconds=60),
+        tenant_id="tenant-a",
+        project_root=_PROJECT_ROOT,
+        session_factory=lambda *_args, **_kw: session,
+        max_results=10,
+    )
+
+    assert [call[2] for call in client.calls] == [10]

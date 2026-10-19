@@ -525,5 +525,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 受控模型出口移除 Connection 指定的全部逐跳字段，保留端到端响应字段
 - 检索词改为只用模型给的 `query` 关键词，不再回退到它的 `reason` 说明句——41 上
   图片/视频块因此消失（#837）
-- 检索深度收敛为一个口径（`AIOPS_GATEWAY_KB_SEARCH_MAX_RESULTS`），默认 5 → 10，
-  客户问答/宣传卡片与 Dify 路由共用（#838）
+- 检索深度收敛为一个口径（`AIOPS_GATEWAY_KB_SEARCH_MAX_RESULTS`，进程 env 或私有配置
+  文件皆可设），默认 5 → 10，客户问答/宣传卡片/调试预览/Dify 路由共用（#838）

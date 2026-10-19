@@ -1239,7 +1239,13 @@ def create_gateway_app(
                 session_id=None,
                 knowledge_base_ids=binding.knowledge_base_ids,
                 media_signer=signer,
-                max_results=context.settings.kb_search_max_results,
+                # Truncate to what THIS caller asked for, not to the deployment
+                # cap. Every registered base is searched with `top_k` and the
+                # results are merged, so a binding with several bases returns
+                # top_k × bases chunks — more records than Dify requested. The
+                # cap belongs in `parse_dify_retrieval_request`, which already
+                # applied it to `top_k`.
+                max_results=top_k,
             )
         except KnowledgeSearchUnavailable as exc:
             raise StandardAPIError(
