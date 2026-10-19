@@ -2024,7 +2024,8 @@ TLS 出口发请求并读取到 EOF；夹具关闭服务与连接，临时目录
 | MODEL-FRAME-01 | 定长 JSON、合法 chunked、带 JSON 的 4xx | 状态码与 body 完整，帧自洽，TLS 干净关闭，正常 curl 退出 0 | 通过 |
 | MODEL-FRAME-02 | TE+CL、冲突的重复 CL；同值重复 CL 作正对照 | 歧义响应 502 且错误码明确；同值长度接受且 body 完整 | 通过 |
 | MODEL-FRAME-03 | 定长只发半份、chunked 缺终止块 | 客户端判定不完整，不收到补出的终止块 | 通过 |
+| MODEL-FRAME-04 | 多行且大小写混合的 Connection、自定义逐跳字段与端到端正对照 | 只移除逐跳字段，保留端到端字段与完整响应 | 通过 |
 
-追溯：上述编号对应 `acceptance.feature` 与出口专项的同类回归；专项共 20 项通过。
+追溯：上述编号对应 `acceptance.feature` 与出口专项的同类回归；专项共 21 项通过。
 旧实现的 curl 56 与旧候选的单字符截断均已复现，详见 `docs/validation.md` 的 M2-LIVE-06。
 本地结果不证明真实供应商、App、公网启用、模型质量或版本冻结已验收。

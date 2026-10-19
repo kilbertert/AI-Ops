@@ -1,3 +1,19 @@
+## 2026-10-19 · M2-LIVE-06 合并后审查：逐跳字段
+
+基于 #827 合并提交 `eaf7215`，修复上游 `Connection` 指定的额外字段仍被转发的问题。
+按 RFC 9110 §7.6.1 解析所有 Connection 行与逗号选项，大小写无关地移除这些字段及
+已知逐跳字段；端到端字段、状态码、body 和 TLS 收尾保留。固定上游、凭据与网络约束未扩展。
+
+真实回环 TLS 回归在旧实现上 **1 failed**（五个逐跳字段全部漏出），修复后出口专项
+**21 passed**（12.31s）；项目 `.venv` 全量 **2884 passed / 9 skipped**（50.53s）。
+首次用 `uv run --with` 跑全量，被两条环境守卫拒绝；按 CI 配方在项目 venv 安装
+`pytest-xdist==3.8.0` 后重跑通过，没有修改依赖锁或守卫。Ruff/format、compileall、
+`uv pip check`、ADR/policy/repo-map 通过；spec lint 0 error / 1 个继承主干的漂移 warning。
+构建成功，内容锁更新为 `4195e1ca…`。
+追溯：`MODEL-FRAME-04` → `test_upstream_connection_options_are_removed_before_forwarding`。
+同值逗号 CL 的拒绝由 RFC 9110 §8.6 允许；低延迟 SSE 继续作为既有限制记录。
+未访问 41、未调用真实供应商、未完成业务验收。
+
 ## 2026-10-19 · M2-LIVE-05 真实只读链路（唯一一条成功记录）
 
 **范围**：从合并制品（PR #824 的合并提交 `aa30a094`）在 41 上起受控试运行栈，跑**一次**

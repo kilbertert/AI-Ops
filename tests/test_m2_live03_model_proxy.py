@@ -35,6 +35,7 @@ PAYLOAD = json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode()
 class _Upstream(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
     seen: list[dict] = []
+    extra_headers: list[tuple[str, str]] = []
     # 供应商实际出现过的形状，外加两种「帧说一套、连接做另一套」的坏形状：
     # 定长 JSON / chunked / TE+CL 同时出现 / 定长提前截断 / chunked 缺终止块。
     mode = "content-length"
@@ -56,6 +57,8 @@ class _Upstream(BaseHTTPRequestHandler):
         mode = type(self).mode
         self.send_response(type(self).status)
         self.send_header("Content-Type", "application/json")
+        for name, value in type(self).extra_headers:
+            self.send_header(name, value)
         if mode == "chunked":
             self.send_header("Transfer-Encoding", "chunked")
             self.end_headers()
@@ -96,6 +99,7 @@ class _Upstream(BaseHTTPRequestHandler):
 @pytest.fixture
 def upstream_port():
     _Upstream.seen = []
+    _Upstream.extra_headers = []
     _Upstream.mode = "content-length"
     _Upstream.status = 200
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Upstream)
@@ -330,6 +334,26 @@ def _raw_post(port: int, path: str = "/v1/chat/completions") -> tuple[int, dict[
         except OSError:
             clean_eof = False
         return status, headers, payload, complete, clean_eof
+
+
+def test_upstream_connection_options_are_removed_before_forwarding(tmp_path, upstream_port):
+    """RFC 9110 §7.6.1：重复 Connection 的选项均只属于当前一跳。"""
+    _Upstream.extra_headers = [
+        ("Connection", "keep-alive, X-First-Hop"),
+        ("Connection", " x-SeCoNd-HoP "),
+        ("X-First-Hop", "hop-only"),
+        ("X-Second-Hop", "hop-only"),
+        ("Keep-Alive", "timeout=5"),
+        ("TE", "trailers"),
+        ("Upgrade", "h2c"),
+        ("X-End-To-End", "preserved"),
+    ]
+    port = _start(tmp_path, f"http://127.0.0.1:{upstream_port}")
+    status, headers, payload, complete, clean_eof = _raw_post(port)
+    assert not ({"x-first-hop", "x-second-hop", "keep-alive", "te", "upgrade"} & headers.keys())
+    assert headers["x-end-to-end"] == "preserved"
+    assert headers["connection"] == "close"
+    assert status == 200 and payload == PAYLOAD and complete and clean_eof
 
 
 def test_a_content_length_response_ends_with_a_clean_tls_close(tmp_path, upstream_port):

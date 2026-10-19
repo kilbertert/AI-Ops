@@ -522,4 +522,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   严格客户端（含 curl）不再把完整的 200 读成 unexpected eof
 - 上游同时声明 Transfer-Encoding 与 Content-Length 时拒绝转发（502
   `proxy.upstream_response_ambiguous`），不再按矛盾的 Content-Length 把完整响应截断
-
+- 受控模型出口移除 Connection 指定的全部逐跳字段，保留端到端响应字段
