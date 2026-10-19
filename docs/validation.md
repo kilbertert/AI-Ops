@@ -51,6 +51,59 @@
   不证明 APK 的渲染结果。
 - 会话与凭据**未打印**；两处 rollout 引用只给文件名与行号，不给会话值。
 
+## 2026-10-19 · 恢复管家端「客户案例」：代码侧判据与 41 只读复核
+
+**范围**：`shortcut_lifecycle._BUNDLED_SHORTCUTS["operator"]` 加回 `case_exploration`
+（反转 ADR-0031 / #803）。本记录只覆盖**代码侧**与**只读复核**；41 的数据侧变更
+（补租户覆盖行）**尚未执行**，本节不声称管家端客户案例已可用。
+
+### 一、自动化判据
+
+| 判据 | 结果 |
+|---|---|
+| pytest 全量 | **2939 passed / 10 skipped / 0 failed** |
+| `ruff check` / `ruff format --check` | 干净 |
+| `adr.check.mjs --all` | 通过（50 条记录） |
+| 突变复验：回退种子、保留测试 | **4 条转红**（`test_the_two_entries_share_one_definition_of_the_execution_fields`、`test_operator_entry_holds_the_three_actions_and_nothing_else`、`test_operator_entry_lists_all_three_actions_after_the_publish`、`test_clicked_customer_cases_report_the_missing_library_not_an_empty_one`），还原后全绿 |
+
+新增用例 `test_the_operator_button_resolves_a_target_from_the_tenant_row` 断两半：
+**只有平台行**时 `_promo_route` 得 `(None, "case_exploration")`；补上**租户覆盖行**后钉到
+`agt_…#v1`。旧版（#803 之前）只有"点击得明确不可用"那半边，没有覆盖租户行这一半 ——
+而后者正是本次恢复能出卡的全部依据。
+
+### 二、41 只读复核（未写库，2026-10-19）
+
+`sqlite3` 只读打开 `/var/lib/aiops-41/gateway/gateway.db`，`operator` 入口三行：
+
+```
+__platform__ / operator / smart_diagnosis    published  sort=20  rev=5
+__platform__ / operator / case_exploration   published  sort=10  rev=5  v2  target=NULL
+__platform__ / operator / operations_review  published  sort=30  rev=2  v1
+```
+
+`ShortcutStore.list_effective("1942105476598861824", "operator")` 返回三条
+（`case_exploration` 在列，`sort_order=10` 排最前）。
+
+**两条结论**：
+
+1. **ADR-0031 的 `disable` 从未执行** —— 平台行一直是 `published`。所以数据侧
+   没有需要"翻回来"的东西，恢复时按钮随部署即可见。
+2. **该租户的 `operator` 覆盖行不存在** ⇒ 平台行 `target=NULL` ⇒ `_promo_route` 仍得
+   `(None, intent)` ⇒ **点击仍是 `unavailable` 空卡**。
+
+对照（同一租户的 `consumer` 入口）：`case_exploration` 有租户行且
+`target=agt_ed443cae10ac4ba78c81b9d1b43fd91d#v2` —— 这条对照就是"两层数据"形状的证据，
+也是 `_promo_route` 在 `consumer` 侧能解析出目标的原因。
+
+### 三、据实（边界）
+
+- **未做真实点击验收**：本节没有在 41 上发起过 `POST /v1/assistant/questions`。
+  出卡与否的判据（`retrieval_status=found` + 内容块）**待数据侧补完后另记**。
+- **不覆盖内容质量**：即便补上绑定，卡片文案来自重卡流量平台的销售物料，
+  是否适合运维语境是**产品问题**，自动化判据无法回答，本节不作评价。
+- **前端渲染不在本仓**：管家端前端硬编码按钮这条既有偏差未变（见
+  `agents/frontend-operator-handoff.md` §6 末条）。
+
 ## 2026-10-19 · #838 深度判据：16 种 query 形状 × 深度的覆盖表（只读回放）
 
 **范围**：41 生产知识库（`8701c742b28111f18637d95f7710e3a3`，`chunk_method=picture`）
