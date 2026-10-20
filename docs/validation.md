@@ -23,6 +23,73 @@
 复跑入口在 `deploy/m2-live-03/README.md`，供应商恢复可用后仍需核对同 run 的完整模型循环、
 Gateway 成功确认、快照关键字段及停栈归零；已有失败路径证据不能代替成功链路验收。
 
+## 2026-10-20 · 「这个订单不属于当前账号」有一半是归属谓词少了一列
+
+**范围**：订单归属判定的 `self` 范围。**只读复现 + 一处代码修复；41 的生产进程未因
+本轮而改动。** 本记录不含会话明文或凭据。
+
+用户报：前端发订单 `2110180538479685633`，回「这个订单不属于当前账号」，但产品确认
+这单就是登录账号的。逐层实测后是**两条互相独立的成因**，一条在本仓，一条在前端。
+
+### 一、本仓成因：工单订单的主人不在 `user_id` 里
+
+`ch_order_info.user_id='-1'` 的是**工单订单**（`ChargingServiceImpl` 建单时写哨兵值），
+真人在 `consumer_id`（列注释「充电用户的id,工单场景」）。公司自己判「这单是谁的」用的
+就是这两列 —— `ChSendOrderMsgServiceImpl.getUserId`：
+`userId.equals("-1") ? consumerId : userId`。
+
+AI-Ops 的 `self` 范围只下推了 `user_id`，于是这类订单对**它的主人自己**也不可见。
+41 实测：`ch_order_info` 31,319 行里 `user_id='-1'` 有 **771 行**，其中 **347 行带
+`consumer_id`** —— 这 347 张单在修前**谁都查不到**（`consumer_id` 的 21 个不同取值
+全部能在 `qumall_mall.user_info` 里找到，与 `user_id` 同一 id 空间，是同一个人的
+另一种记法，不是另一个主体）。
+
+### 二、本次那一单不在这 347 行里 —— 前端成因（不在本仓）
+
+`2110180538479685633` 是**普通单**（`user_id=1955624354196754434`，无 `consumer_id`）。
+用真实会话直连网关：
+
+```
+GET /v1/orders/2110180538479685633/access   会话=061025a5…（该单主人）  → 200 accessible
+GET /v1/orders/2110180538479685633/access   会话=a1096e86…（另一账号）  → 404
+GET /v1/orders/2110544580381650945/access   会话=a1096e86…（它自己的单）→ 200
+```
+
+⇒ 服务端对这张单的回答是**对的**：主人的会话能通过。用户看到「不属于」，是因为
+**选择器把别人的单摆到了他面前**。前端 `aiPackage-pages-chat-chat` bundle 的
+`openDiagnosisPopup` 调的是 `/chOrderInfo/getOrderUserPage`（「用户端订单分页」），
+实测两个不同账号拿到的都是 `total=180`（整租户）—— 与 `frontend-api-brief` §11 记的
+是同一件事，本仓不改。
+
+### 三、修了什么
+
+| 位置 | 改动 | 判据 |
+|---|---|---|
+| `MySQLSource._scope_where` | 新增 `claim_column` 开关；订单表渲染 `(CASE WHEN user_id=%s THEN consumer_id ELSE user_id END=%s)` | `test_self_scope_also_recognises_the_work_order_consumer` |
+| `get_orders` / `get_fee_template_record` | 两处存在性检查都打开该开关，避免「订单查得到、计费快照查不到」 | `test_scoped_fee_template_checks_order_existence_within_scope` + 授权片 |
+| 占位单 / 设备表 | 不开该开关（这两张表没有 `consumer_id`） | `test_self_scope_on_sources_without_a_claim_column_stays_single_column` |
+
+**刻意不做**：不并 `enterprise_user_id`（车队钱包是另一条口径，272 行，需产品裁定）；
+不把空白/NULL 的 `user_id` 当本人（822 行渠道/OCPI 单据，没有人认领）；不放宽成租户级。
+
+### 四、生产只读 A/B（41，同一驱动脚本，只换「线上那份 / 修后副本」）
+
+| 用例 | 线上 | 修后 |
+|---|---|---|
+| 工单订单 `2064315298158161921` 的 `consumer_id` | **False** | **True** |
+| 同一工单订单，非消费者 | False | False |
+| 本次问题订单（普通单）主人 | True | True |
+| 本次问题订单，同租户他人 | False | False |
+| 无人认领的 `user_id='-1'` 行（对 `-1`） | False | False |
+
+`EXPLAIN` 对照：改动前后都是 `type=ALL` / `possible_keys=None` —— 不是本票引入的退化，
+`ch_order_info` 只有 `PRIMARY(id)` 与 `device_id` 两个索引，`order_no` 本来就不走索引。
+
+### 五、边界
+
+- 本票只改 SQL 谓词，**不改任何路由形状**；它不能证明前端选择器已同源（那是 §11 的 A/B/C 三条修法）。
+- 前端如果继续从整租户列表里选单，站外订单仍会 404 —— 唯一判据仍是「选得到的必须提交得上」。
+
 ## 2026-10-20 · Dify 与运行时的三处断点：两处修在代码，一处是欠费
 
 **范围**：41 的试运行链路、桥（36）的错误文案、Dify 侧知识检索。**只读复现 +
