@@ -6,7 +6,7 @@
 - 六组真实路由用例：旧实现 **2 failed / 4 passed**，修复后全绿；相关回归 **116 passed**。
 - 真进程 Gateway（一次性数据根、合成外部依赖）：原有 11 项加成功原因三项，**14/14 PASS**。
 - `verify-aiops-gateway`：启动、鉴权、注册与查询全部通过；不证明真实模型或订单链路。
-- 全量：**3069 passed / 9 skipped / 0 failed**；ruff check/format、policy、repo-map 通过。
+- 全量：**3133 passed / 9 skipped / 0 failed**；ruff check/format、policy、repo-map 通过。
 - 一行比较变更；没有新增列。`src/**` 命中生产 CD，合并部署仍保持四个 M3 开关关闭。
 
 ## 2026-10-20 · M3 复跑工具收口（本地，无真实请求）
