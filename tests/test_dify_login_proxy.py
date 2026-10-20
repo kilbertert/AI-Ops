@@ -553,6 +553,30 @@ def test_the_same_company_user_in_two_environments_is_two_dify_accounts() -> Non
     assert a.endswith("@aiops-login.invalid") and b.endswith("@aiops-login.invalid")
 
 
+def test_two_environment_labels_cannot_normalize_into_the_same_prefix() -> None:
+    """#864 评审：环境**不归一化**，所以两个不同的字符串不可能折成同一个前缀。
+
+    第一版把环境也用"把不安全字符换成 `-`"处理 —— 于是 `prod.41` 与 `prod/41` 都成了
+    `prod-41`，两个部署可以配出两个不同的字符串、却仍然落到同一个 Dify 账号，
+    正好把这条缺陷放回来。
+
+    判据：任何含非规范字符的环境**直接报错**，不替换、不猜。
+    """
+    from aiops_diagnostics.dify_login_provision import DifyProvisionError
+
+    for bad in ("prod.41", "prod/41", "prod 41", "Prod-41", "-41", "41-", "a" * 40):
+        with pytest.raises(DifyProvisionError):
+            account_email_for(COMPANY_USER_ID, environment=bad)
+
+    # 规范形式照常工作，且**互为不同**
+    assert account_email_for(COMPANY_USER_ID, environment="prod-41") != account_email_for(
+        COMPANY_USER_ID, environment="prod_41"
+    )
+    assert account_email_for(COMPANY_USER_ID, environment="prod-41") == account_email_for(
+        COMPANY_USER_ID, environment="prod-41"
+    )
+
+
 def test_an_empty_environment_is_a_configuration_error_not_a_silent_fallback() -> None:
     """环境为空必须**报错**，不能回落成"只按 id"——那正好把缺陷放回来。
 

@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -93,10 +94,34 @@ def account_email_for(company_user_id: str, *, environment: str) -> str:
 
     ``environment`` 是**部署身份**（每台机器一个值），不是请求参数：它由调用方从自己的
     配置里取，永不从浏览器来的任何字段推导。
+
+    ## 环境标识**不归一化**，只校验（#864 评审）
+
+    第一版对环境做了与 id 相同的"把不安全字符换成 ``-``"。那会造出一个新的撞号方式：
+    ``prod.41`` 与 ``prod/41`` 归一化后都成了 ``prod-41`` —— 两个部署可以配置出两个
+    不同的字符串，却仍然落到同一个 Dify 账号，正好把这条缺陷放回来。
+
+    所以环境走**白名单校验**而不是归一化：必须已经是规范形式（小写字母/数字/``-``/``_``，
+    以字母或数字开头结尾）。不合规就**报错**，让部署者改配置，而不是替他猜。
     """
-    prefix = _safe_fragment(environment, "ENVIRONMENT_INVALID", "环境标识不含可用字符")
+    prefix = _canonical_environment(environment)
     safe = _safe_fragment(company_user_id, "COMPANY_USER_ID_INVALID", "公司用户 id 不含可用字符")
     return f"{prefix}-{safe}@{ACCOUNT_EMAIL_DOMAIN}"
+
+
+#: 环境标识的规范形式。**归一化不在选项里** —— 见 `account_email_for` 的 docstring。
+_ENVIRONMENT_RE = re.compile(r"^[a-z0-9](?:[a-z0-9_-]{0,30}[a-z0-9])?$")
+
+
+def _canonical_environment(value: str) -> str:
+    """环境标识必须**已经是**规范形式；不做任何字符替换。"""
+    normalized = (value or "").strip()
+    if not _ENVIRONMENT_RE.match(normalized):
+        raise DifyProvisionError(
+            "ENVIRONMENT_INVALID",
+            "环境标识必须是规范形式（小写字母/数字/`-`/`_`，以字母或数字开头结尾，≤32）",
+        )
+    return normalized
 
 
 def _safe_text(value: str) -> str:
