@@ -48,10 +48,10 @@ tenant_account_joins
 ```python
 provision_editor(
     settings,
-    owner_session=self.owner_session(),   # ← 持 SECRET_KEY 自签的 owner 会话
+    owner_session=self.owner_session(),  # ← 持 SECRET_KEY 自签的 owner 会话
     company_user_id=identity.user_id,
     username=identity.username,
-)                                          # ← 没有 tenant 参数
+)  # ← 没有 tenant 参数
 ```
 
 `INVITE_PATH = "/console/api/workspaces/current/members/invite-email"` ——
