@@ -260,8 +260,8 @@ weaviate 空闲 52.7 MiB。
 
 | 补丁 | 上游行为 | 本实例要的 |
 |---|---|---|
-| `01`/`02` | `POST /v1/datasets/{id}/retrieve` 只走 vector 路径；`HitTestingService.retrieve` 收了 `external_retrieval_model` 却从不使用 | `provider=external` 的数据集改走 `HitTestingService.external_retrieve`，返回 `content/title/score/metadata` 形状 |
-| `03`/`04` | `external_knowledge_apis.settings` 里的 `api_key` 按 JSON 明文存 | 用 Dify 自己的 tenant 密钥提供者加密（`enc:v1:` 前缀），读出时解密；旧明文行仍可读 |
+| `01`/`02` | `POST /v1/datasets/{id}/retrieve` 只走 vector 路径；`HitTestingService.retrieve` 收了 `external_retrieval_model` 却从不使用 | `provider=external` 的数据集改走 `HitTestingService.external_retrieve`，返回 `content/title/score/metadata` 形状；请求里的 `metadata_filtering_conditions` 一并透传给供应商 |
+| `03`/`04` | `external_knowledge_apis.settings` 里的 `api_key` 按 JSON 明文存 | 用 Dify 自己的 tenant 密钥提供者加密（`enc:v1:` 前缀），读出时解密；旧明文行仍可读。**列表端点返回 `[__HIDDEN__]`**，只有单模板 GET 回填明文 —— 列表没有编辑权限检查 |
 | `05` | 删除 dataset 不清理 `external_knowledge_bindings`（没有外键） | 删库时一并删绑定 |
 
 **为什么是补丁而不是整文件挂载**：补丁带上下文，升级时 `apply.sh` 的 sha256 核对会直接
