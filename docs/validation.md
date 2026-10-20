@@ -2,7 +2,10 @@
 
 **部署身份**：`origin/main` @ `1ae4d86`，制品由 `git archive origin/main deploy/dify-36` 打包
 （tar sha256 `fabe9958e0003da9d073ad26fc7fe8c2d5edc6540f105f427ca0c032f5d7a81c`），2026-10-20 16:49 CST 落到 36 `/opt/dify/deploy`。
-备份：`/opt/dify/deploy.bak-20261020164947/` 与 `.env.bak-20261020164947`（未删除，回滚路径）。
+备份：`/opt/dify/deploy.bak-20261020164947/` 与 `.env.bak-20261020164947`（未删除）。
+**但它是代码/配置的回滚路径，不是数据库备份**：`cp -a` 是在 postgres 还活着的时候做的，
+`volumes/db/data` 的副本可能跨越不同提交状态，不能当物理备份用。要真正回滚数据库，
+需要停机复制或 `pg_dump` —— 本轮没做，如实记下。
 
 ### 一、做到了什么（都有当场输出）
 
@@ -40,12 +43,17 @@
 - **SEC-02 通过**：库里是密文（`enc:v1:`），控制台列表是掩码、单取是明文。
 - **BIND-02 通过**：`external_knowledge_bindings` 8→2，剩下的两条都 join 得到 dataset。
 - **未做**：密钥轮换（两把共享凭据仍是原值）；`qa-plan.md` 的 RET-02/RET-03 未跑；
-  迁移后的 DB 快照未单独做（备份是整个 `/opt/dify/deploy`，含 `volumes/`）。
+  **数据库没有做过一致快照**（`cp -a` 的 `volumes/db/data` 不算），需要回滚 DB 时要先停机复制。
 
 ### 三、清理
 
 临时 dataset API key（`191a0bd9…`，仅绑 `df0f1d4a…`）已删除（204）；宿主与容器里的
-临时脚本/会话文件已清；`/root/dify-pre868-*.csv` 保留作为迁移前证据，取证完成后应删除。
+临时脚本/会话文件已清。
+
+`/root/dify-pre868-{bindings,apis}.csv`（600 root）是迁移前证据。**`apis` 那份里的
+`api_key` 值已替换成 `<redacted-in-evidence>`** —— 两把共享凭据还没轮换，把完整值留在
+第二个明文位置，等于把加密落库那一半的收益退回去。行结构、id、endpoint、时间戳都保留，
+取证需要的信息不丢。轮换完成、或这份证据不再需要时直接删除。
 
 ## 2026-10-20 · Dify 栈：向量库、external 检索端点、库卫生
 
