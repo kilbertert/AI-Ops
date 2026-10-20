@@ -115,6 +115,44 @@ POST /v1/dify/retrieval  (kb-canary-2)  → 502 DIFY_KNOWLEDGE_UNAVAILABLE
 ⇒ 用户报的第一个症状（点试运行返回"未登记"）在本轮修复并用真入口复验；
 第二个症状（检索 502）的成因仍是 embedding 欠费，充值后重试即可。
 
+## 2026-10-20 · `ops-methodology-700` 线上提示词从 v12 恢复（现役 v14）
+
+**范围**：41 的 `ops-methodology-700` 与 36 上对应的 `aiops-41-ops-methodology-agent`。
+**这是一次内容修复，不是新功能。** 本记录不含口令、令牌或会话明文。
+
+### 一、为什么要恢复
+
+10-20 09:25 UTC 有人经发布桥把该 app 的提示词从 218 字的方法论正文改成了 18 字的
+「你是充电桩设别查询助手,帮助查询设备」，并发布成了 **v13**。管家端诊断从此实际在跑
+那句 18 字，而它的输出契约仍是 `diagnosis-v1` —— 提示词与契约不再匹配。
+
+v12 与 v13 的差异**只有两处**（实测逐字段 diff）：`prompt` 与 `revision`。
+工具白名单、输出契约、知识库、模型全部未变，所以恢复只需还原正文。
+
+### 二、做了什么
+
+| 步 | 动作 | 判据 |
+|---|---|---|
+| ① | 从 41 库的 `agent_versions` v12 导出正文 | 218 字、md5 `9966453b2e72dc497785f80b0cbdbadf` |
+| ② | 把 Dify app 的 `pre_prompt` 写回这段正文（`POST /console/api/apps/<id>/model-config`） | `200 {"result":"success"}` |
+| ③ | **回读导出核对** | `export` 的 `pre_prompt` 218 字、md5 与①相同；工具仍是 7 个 |
+| ④ | 经**发布门**发布（`POST /v1/dify/publish`） | `200 action=synced` → **version_no 14** |
+| ⑤ | 再发一次 | `200 action=unchanged`、仍是 v14 ⇒ 幂等 |
+| ⑥ | 读线上快照 | v14 的 `prompt` 218 字、md5 相同；`allowed_tools` 7 个；`output_contract=diagnosis-v1` |
+
+**一个必须写下来的细节**：第 ② 步的请求体**带了现有的 7 个工具**（先读回 `agent_mode`
+再原样写回）。Dify 的 `model-config` 是整体替换语义 —— 只发正文不发 `agent_mode`，
+这次恢复会顺手把工具白名单清空，而那一项是运营在控制台里配的。
+
+### 三、边界
+
+- **版本号前进了（14），内容才是 v12**。`AgentManager` 没有 published→旧版本的路径，
+  恢复只能是"把旧内容重新发布一次"。这与 2026-10-13 那次"v3→v5 内容逐字相同"同形。
+- **Dify 侧的正文也一起改回了**：app 与库中版本是两个存储点，只改库下一次 `pull`/
+  `sync` 会把 18 字再拉回来。两处都改，回读核对是唯一的判据。
+- **没有**验证管家端一次真实诊断的输出质量：模型余额仍不足（`insufficient_user_quota`），
+  本轮只证明了"线上服务的那一版正文是 v12 的内容"。
+
 ## 2026-10-20 · 知识库自服务：本地判据与 41 上的实测事实
 
 ### 一、本地判据
