@@ -319,6 +319,76 @@ https://dify.ranlei.work/signin          -> 200
 - 第一次 curl 无 key 时出现一次 6 秒超时（容器刚起），重试即 401 —— 把它记在这里，
   不当作"偶发不稳定"的证据，也不掩盖。
 
+## 2026-10-20 · Dify 只保留 41 的两个入口 app：绑定收敛到真实存在的 id
+
+**范围**：`ops/environments/env-41.toml` 的 `[[dify_apps]]`，36 上的 Dify 应用集合，
+41 上的 `dify_app_registry`。**41 已生效；Dify 侧已收敛为两个 app。** 本记录不含任何
+口令、令牌或 Cookie 明文。
+
+### 一、起因（实测）
+
+36 的 `apps` 表当时只有 `aiops-41-kefu-agent`（`8e36f0a6…`）与
+`aiops-41-ops-methodology-agent`（`e35f8fda…`），而注册表三行里**两行指向已被删除的
+app id**：
+
+| 行 | 原 app_id | 36 上的状态 |
+|---|---|---|
+| `1942…/consumer → canary-客服` | `98441c5b…` | `apps` 表无此 id |
+| `1783…/consumer → canary-dify-acceptance-1011` | `a975c8e5…` | `apps` 表无此 id |
+| `1942…/operator → ops-methodology-700` | `25c20f09…`（清单）/ `e35f8fda…`（库） | 清单与库不一致 |
+
+后果：对前两个 id 打 `POST /v1/dify/publish` 一律 `502 DIFY_DSL_MALFORMED`（Dify 拉不到
+app），控制台那颗按钮同样失败。第三行库里能跑（`unchanged` v12），但**照清单 `reconcile`
+会把管家端诊断改指到不存在的 app**。
+
+### 二、最终形态（用户要求：Dify 上只留这两个 app）
+
+| 入口 | Dify app | 我方 agent | 版本 |
+|---|---|---|---|
+| 客户端（consumer） | `aiops-41-kefu-agent` `8e36f0a6…` | `canary-客服` | v14 |
+| 管家端（operator） | `aiops-41-ops-methodology-agent` `e35f8fda…` | `ops-methodology-700` | v12 |
+
+- **客户端那一行换 id 不换内容**：该 app 的 `pre_prompt` 759 字、md5
+  `e52d5de005bfd7e5ad5402b0921b0ec1`，与 `canary-客服` v14 已发布快照**逐字节相同**。
+- **验收租户（`1783…`）不再占一个 app**：它绑过的两个 id 都已删除；一次临时新建的
+  `405fb698…` 也按要求删除。正文回到清单承载（逐字等于库中 v2 的 129 字，md5
+  `1496386c6b225355fa33d7347085a2e2`）。依据是该租户**没有生产流量**
+  （`agent_run_metrics` 最后一次是 2026-10-10）。
+- 删除后 `apps` 表恰好两行，注册表恰好两行 —— 一一对应。
+
+### 三、落地形态：只收敛注册表，不跑整份 `reconcile`
+
+整份 `admin reconcile` 会把 `1942…/canary-客服` 判成 `updated`（清单里的
+`opening_questions` / `quick_commands` 与库中现值不同，是 #739 之前就有的漂移），也就是
+**顺手发布一版与本次无关的改动**。因此注册表单独收敛（`reconcile_dify_registry`，只写
+`dify_app_registry` 一张表）。步骤写入 `docs/agents/env-41-runbook.md` §3.1-bis。
+
+**一处必须同时做的顺序**：把 `1783…/consumer` 从注册表删掉**之后**再跑清单校验，否则
+`_require_no_source_switch` 会拒 —— 它看到的正是"库里还绑着、清单却改由正文承载"这个
+中间态（实测报错并零写入，符合设计）。
+
+### 四、判据（41 / 36 实测）
+
+| # | 动作 | 结果 |
+|---|---|---|
+| ① | 备份 | `gateway.db.bak-bindings-20261020160259`、`gateway.db.bak-2apps-…` |
+| ② | 注册表收敛 | 两次运行：第一次两行 `registered`/`unchanged`，第二次**全部 `unchanged`** |
+| ③ | `POST /v1/dify/publish` × 两个 app | 全部 `200 unchanged`（v14 / v12） |
+| ④ | 控制台桥 `/__aiops/publish`（公司身份 + `__Host-` 会话 + 同源 Referer） | 「线上已是最新」；用的是真实桥进程 |
+| ⑤ | `admin sync-from-dify --dry-run` | 两行 `unchanged` |
+| ⑥ | `agent_versions` 行数 | **42 → 42**（没有产生任何智能体版本） |
+| ⑦ | 36 的 `apps` 表 | **恰好 2 行**，与注册表一致 |
+
+### 五、边界与未完成
+
+- **试运行只到订单授权为止**：映射账号的公司租户是 `-1`（平台哨兵），对真实订单一律
+  `404 ORDER_NOT_FOUND`。它证明草稿确实从 app 拉到（拉不到会是 `DIFY_DSL_MALFORMED`），
+  但看不到 `diagnosed`。
+- **模型余额**：一次无发起人的试运行在作业体里失败于供应商预扣费（余额约 ¥0.002）。
+- **没有用真实浏览器**点那两颗注入按钮；桥那一跳是服务端同源请求复现的。
+- 删除的 `405fb698…` 是本轮临时创建的 app，删除前已确认它只服务验收租户、无流量。
+
+
 ## 2026-10-20 · 节点 jar 可复现构建（PR #863）
 
 **范围**：`tools/m2_close/node/pom.xml` 的构建时间戳与 `deploy/m2-live-03/` 的制品锁。

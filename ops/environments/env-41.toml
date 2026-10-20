@@ -127,19 +127,30 @@ output_contract = "blocks-v1"
 # 线上租户的客服正文：独立 app，正文与库中 `canary-客服` 的 759 字**逐字相同**。
 # 它此前没有自己的 app（绑定指向验收那个），所以「用 Dify 编辑线上客服」这件事
 # 从来没有过可编辑的对象。
+#
+# ⚠️ **2026-10-20 改正一处失效绑定**：这一行此前指向 `98441c5b-…`，而那个 app 在 36
+# 的 Dify 上**已经不存在**（`apps` 表里没有该 id，`admin pull-dify` 与点发布都只会得到
+# `DIFY_DSL_MALFORMED` / 404）。真正的正文权威一直活着，只是换了 id：`aiops-41-kefu-agent`
+# （`8e36f0a6-…`），其 `pre_prompt` 与该 agent 已发布版本的正文**逐字节相同**
+# （759 字，md5 `e52d5de005bfd7e5ad5402b0921b0ec1`）。绑定改到它，内容零变化。
 [[dify_apps]]
 tenant_id = "1942105476598861824"
 business_entry = "consumer"
-app_id = "98441c5b-1f82-4dc4-a6c0-795dc169ee54"
+app_id = "8e36f0a6-324c-4003-b573-7444cc649411"
 agent_name = "canary-客服"
 
-# 验收租户那一行今天**指向一份从 Dify 拉回并已发布的 customer 版本**（#696 的验收项）。
-# 它此前指向 `canary-客服`；2026-10-11 阶段 1 验收把它改成了这一版，本清单现在如实
-# 收敛成库里那行。`a975c8e5-…` 的正文与它的库中值（129 字）逐字相同 ⇒ **这行是真的**。
+# 验收租户那一行**指向一份从 Dify 拉回并已发布的 customer 版本**（#696 的验收项）。
+#
+# ⚠️ **2026-10-20 改绑到一个新建的 app**：此前的 `a975c8e5-…`（`dify-dsl-fixture`）在
+# Dify 上已被删除。按「每个租户的正文必须有一个真实可编辑的对象」这条要求，在 36 的
+# 同一工作区里新建了 `aiops-41-acceptance-1011-agent`（`405fb698-…`，chat 模式），
+# 把库中 v2 的 129 字正文逐字写进去并回读核对（md5 `1496386c6b225355fa33d7347085a2e2`）。
+# 它**不挂 dataset**：知识库权威在 `knowledge_base_ids`（`4f4bc674…`），Dify 侧挂 dataset
+# 只会引入两套 id 空间混用。
 [[dify_apps]]
 tenant_id = "1783022023241633792"
 business_entry = "consumer"
-app_id = "a975c8e5-ad9e-425c-84c9-77581a0a2bed"
+app_id = "405fb698-2949-4cc4-a1fc-a84668481e9c"
 agent_name = "canary-dify-acceptance-1011"
 
 # 管家端诊断的方法论配方（#700）：从 Dify `operator-methodology-700` 拉回并经发布门冻结。
@@ -160,8 +171,14 @@ output_contract = "diagnosis-v1"
 
 # 注册表为真实租户**新增 operator 一行**（consumer 那行不动）。
 # 未登记的 `(租户, 入口)` 仍然 fail closed；本次只把这一对从「没登记」变成「点名一份」。
+#
+# ⚠️ **2026-10-20 改正失效绑定**：这一行此前写的是 `25c20f09-…`（`operator-methodology-700`），
+# 而 2026-10-14 把生产迁到 `agent-chat` 模式时新建了 `aiops-41-ops-methodology-agent`
+# （`e35f8fda-…`），旧的 chat app 已不在 Dify 上。41 库里的注册行**早已**是 `e35f8fda-…`
+# （实测 `unchanged`、版本 12 可发布），只有这份清单没跟上 —— 照它跑 `reconcile` 会把
+# 注册行改指到不存在的 app，等于把管家端诊断断掉。本行改为与库一致。
 [[dify_apps]]
 tenant_id = "1942105476598861824"
 business_entry = "operator"
-app_id = "25c20f09-5871-4d8b-8eb6-1bb3d400d46c"
+app_id = "e35f8fda-dd4e-4317-b05c-d29f23b4f395"
 agent_name = "ops-methodology-700"
