@@ -8,7 +8,7 @@
  from core.rag.entities import MetadataFilteringCondition
  from extensions.ext_database import db  # noqa: F401
  from graphon.nodes.http_request.exc import InvalidHttpMethodError
-@@ -29,6 +30,38 @@
+@@ -29,6 +30,48 @@
  from services.errors.knowledge_retrieval import ExternalKnowledgeRetrievalError
  
  
@@ -25,7 +25,17 @@
 +def _decrypt_api_key(tenant_id: str, value: str) -> str:
 +    if not value.startswith(_ENCRYPTED_PREFIX):
 +        return value
-+    return decrypt_token(tenant_id, value[len(_ENCRYPTED_PREFIX) :])
++    try:
++        return decrypt_token(tenant_id, value[len(_ENCRYPTED_PREFIX) :])
++    except Exception as exc:
++        # Fail loudly rather than fall back to the raw value: sending ciphertext as
++        # a Bearer token looks exactly like "the provider rejected our key", which
++        # is the wrong trail to leave. The known cause is a legacy row whose
++        # plaintext happens to start with the prefix; the migration encrypts those.
++        raise ValueError(
++            f"cannot decrypt stored api_key for tenant {tenant_id}; "
++            "run the 20261020 migration or re-enter the key in the console"
++        ) from exc
 +
 +
 +def external_api_settings(external_knowledge_api: ExternalKnowledgeApis) -> dict[str, Any]:
@@ -47,7 +57,7 @@
  class ExternalDatasetService:
      @staticmethod
      def get_external_knowledge_apis(
-@@ -59,6 +92,29 @@
+@@ -59,6 +102,36 @@
              raise ValueError("api_key is required")
  
      @staticmethod
@@ -59,10 +69,17 @@
 +        the tenant's own key provider keeps database dumps from handing it out,
 +        at the cost that every read path must go through
 +        :func:`external_api_settings`.
++
++        ``settings`` here is always **plaintext** — what the operator typed, or
++        what a decrypted read produced. Do not sniff for the prefix to skip
++        encryption: a provider is free to issue a key that literally starts with
++        ``enc:v1:``, and treating it as already-encrypted would store it verbatim
++        and then fail to decrypt it on every later read. Callers that hold a
++        stored value must decrypt first (see :func:`external_api_settings`).
 +        """
 +        stored = dict(settings)
 +        api_key = stored.get("api_key")
-+        if isinstance(api_key, str) and api_key and not api_key.startswith(_ENCRYPTED_PREFIX):
++        if isinstance(api_key, str) and api_key:
 +            stored["api_key"] = _encrypt_api_key(tenant_id, api_key)
 +        return stored
 +
@@ -77,7 +94,7 @@
      def create_external_knowledge_api(
          tenant_id: str, user_id: str, args: dict[str, Any], *, session: Session
      ) -> ExternalKnowledgeApis:
-@@ -72,7 +128,7 @@
+@@ -72,7 +145,7 @@
              updated_by=user_id,
              name=str(args.get("name")),
              description=args.get("description", ""),
@@ -86,7 +103,7 @@
          )
  
          session.add(external_knowledge_api)
-@@ -148,12 +204,16 @@
+@@ -148,12 +221,16 @@
          if external_knowledge_api is None:
              raise ValueError("api template not found")
          settings = args.get("settings")
@@ -106,7 +123,7 @@
          external_knowledge_api.updated_by = user_id
          external_knowledge_api.updated_at = naive_utc_now()
          session.flush()
-@@ -377,7 +437,7 @@
+@@ -377,7 +454,7 @@
          if external_knowledge_api is None or external_knowledge_api.settings is None:
              raise ExternalKnowledgeRetrievalError("external api template not found")
  

@@ -36,7 +36,25 @@
  
  
  @service_api_ns.route(
-@@ -69,4 +88,13 @@
+@@ -49,9 +68,16 @@
+     @service_api_ns.doc("dataset_hit_testing")
+     @service_api_ns.doc(description="Perform hit testing on a dataset")
+     @service_api_ns.doc(params={"dataset_id": "Knowledge base ID."})
++    # The declared 200 schema stays the vendor shape: this document is Swagger 2.0,
++    # which has no union, so a single schema cannot describe both. The alternative
++    # shape is stated in the description below (and `ExternalHitTestingResponse` is
++    # registered, so it appears in `definitions`), rather than silently omitted —
++    # a client generated from this contract would otherwise only know `segment`.
+     @service_api_ns.response(
+         200,
+-        "Hit testing results",
++        "Hit testing results. Records carry `segment` for a `vendor` dataset; for a "
++        "`provider=external` dataset the records instead carry "
++        "`content`/`title`/`score`/`metadata` (see `ExternalHitTestingResponse`).",
+         model=service_api_ns.models[HitTestingResponse.__name__],
+     )
+     @service_api_ns.response(401, "Unauthorized - invalid API token")
+@@ -69,4 +95,13 @@
          args = self.parse_args(service_api_ns.payload)
          self.hit_testing_args_check(args)
  

@@ -30,6 +30,26 @@ sys.path.insert(0, "/app/api")
 ENCRYPTED_PREFIX = "enc:v1:"
 
 
+def _is_encrypted(tenant_id: str, value: str) -> bool:
+    """Whether a stored ``api_key`` is one of ours, decided by *decrypting* it.
+
+    Not by the prefix. A provider is free to issue a key that starts with
+    ``enc:v1:``; judging by the prefix alone would leave that row in the
+    "already encrypted" bucket and the retrieval path would later hand the
+    literal key — as ciphertext — to the provider. Trying the decrypt is the
+    only test that answers the question actually being asked.
+    """
+    from core.helper.encrypter import decrypt_token
+
+    if not value.startswith(ENCRYPTED_PREFIX):
+        return False
+    try:
+        decrypt_token(tenant_id, value[len(ENCRYPTED_PREFIX) :])
+    except Exception:
+        return False
+    return True
+
+
 def main(apply: bool) -> int:
     import app_factory
     from extensions.ext_database import db
@@ -50,7 +70,9 @@ def main(apply: bool) -> int:
         for api in session.scalars(select(ExternalKnowledgeApis)).all():
             settings = json.loads(api.settings or "{}")
             key = settings.get("api_key")
-            if isinstance(key, str) and key and not key.startswith(ENCRYPTED_PREFIX):
+            # 判断依据是"能不能解回来"，不是前缀 —— 供应商完全可以发一把以 enc:v1:
+            # 开头的 key（见 `_is_encrypted`）。
+            if isinstance(key, str) and key and not _is_encrypted(api.tenant_id, key):
                 plaintext.append((api, settings))
 
         print(f"孤儿绑定 {len(orphans)} 条：")
