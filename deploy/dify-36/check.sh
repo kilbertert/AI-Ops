@@ -312,5 +312,26 @@ fi
 rm -f "$tmp_env2"
 ok "会话寿命显式且成对（access=60min / refresh=1day），反例被拒"
 
+# ---------------------------------------------------------------------------
+# inner_api 的开关必须写进模板（2026-10-20 打开）
+# ---------------------------------------------------------------------------
+# 它是建 workspace / 加成员的唯一 HTTP 入口。只写在宿主的 .env 里而模板没有，
+# 从模板重建实例时会**静默退回默认关闭**，开户随之停摆 —— 而那时没有任何报错。
+grep -q '^INNER_API=true$' env.example \
+  || fail "env.example 缺 INNER_API=true（多 workspace 的开户前置）"
+grep -q '^INNER_API_KEY=$' env.example \
+  || fail "env.example 缺 INNER_API_KEY=（空占位；真值只进宿主 .env）"
+# 反例：把它改回 false，判据必须报错 —— 钉住"检查真的会拒"。
+tmp_env3="$(mktemp)"
+sed 's/^INNER_API=true$/INNER_API=false/' env.example > "$tmp_env3"
+! grep -q '^INNER_API=true$' "$tmp_env3" \
+  || { rm -f "$tmp_env3"; fail "反例构造失败：sed 没改到 INNER_API 那一行"; }
+if grep -q '^INNER_API=true$' "$tmp_env3"; then
+  rm -f "$tmp_env3"
+  fail "inner_api 判据没有拒掉 false"
+fi
+rm -f "$tmp_env3"
+ok "inner_api 开关写进模板（true + 空 key 占位），反例被拒"
+
 echo
 echo "全部通过。"

@@ -175,6 +175,51 @@ Docker Hub 在 36 **不可达**（`registry-1.docker.io` 连接被重置）。�
 
 暴露变更仍须根据实际访问记录决定。发布桥验收应核对宿主反代、容器入口与真实浏览器流量，不凭端口监听推断使用方。切换入口与退役旧入口分开，保留回滚路径。
 
+### `INNER_API`（2026-10-20 打开，多 workspace 的前置）
+
+Dify 的 `inner_api` 是**建 workspace / 加成员**的唯一 HTTP 入口（console 没有
+`POST /workspaces`），默认关闭。2026-10-20 打开：
+
+```bash
+# 1. 生成 key（只写进宿主 .env，不进仓库）
+KEY=$(openssl rand -hex 32)
+
+# 2. 追加到 .env（先备份）
+cd /opt/dify/deploy
+cp .env .env.bak-innerapi-$(date +%Y%m%d%H%M%S)
+printf '\nINNER_API=true\nINNER_API_KEY=%s\n' "$KEY" >> .env
+
+# 3. 重启 api 与 worker 让配置生效
+docker compose up -d api worker
+```
+
+⚠️ 必须写成 `KEY=$(openssl rand -hex 32)` 再拼进文件；直接写
+`INNER_API_KEY=<openssl rand -hex 32>` 会被 shell 当成重定向，报语法错误且不生成 key。
+
+**暴露面没有扩大**，三条都实测过（详见 `docs/validation.md` 同日节）：
+
+| 路径 | 结果 |
+|---|---|
+| api 容器内网 IP `:5001/inner/api/...`（带正确 key） | 走得通（404 = 走到"查 owner"） |
+| 经 Dify 自己的 nginx `127.0.0.1:10018/inner/api/...` | **404**（default.conf 只转 `/console/api`、`/api`） |
+| 经公网 TLS `https://dify.ranlei.work/inner/api/...` | **404** |
+
+api 容器的 `5001/tcp` **未 publish 到宿主**，所以只有 36 本机的进程能经 docker 内网
+（`172.21.0.x`）访问它。
+
+⚠️ **这条路径在 36 本机之外不可达**。41 与 95 的网关/代理在各自环境，够不到这个容器内网。
+
+**开户怎么跑**：CLI 在**目标环境**的机器上跑（41 或 95），它经一条**只绑回环**的
+SSH 隧道（`127.0.0.1:15001` → 36 的 `127.0.0.1:15001` → api 容器）调 inner_api，
+建完**就地写本机库**。隧道的 SSH 账号用 `restrict,permitopen="127.0.0.1:15001"`，
+外加 `X-Inner-Api-Key` 两层。
+
+完整形态（含 `setup_state` 分支、租约对账、容器名解析的坑）见
+`docs/agents/dify-multitenant-design.md` 的 §8「−0」。
+
+**回滚**：恢复 `.env.bak-innerapi-<ts>` → `docker compose up -d api worker`。
+只重启 api/worker，不动数据库与 nginx。
+
 ## 服务身份与隔离
 
 - **身份**：本实例自己的 `dify` 系统账号（`nologin`、无口令、无 sudo、不加入任何共享组），
