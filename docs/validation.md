@@ -1,3 +1,72 @@
+## 2026-10-20 · Dify 栈：向量库、external 检索端点、库卫生
+
+**范围**：`deploy/dify-36/`（compose、env 模板、自检、上游补丁、迁移脚本）与
+`tests/test_dify36_deploy_assets.py`。**未部署**。
+
+### 一、三处缺陷的实测证据（部署前状态，只读）
+
+```
+datasets:  云快充平台协议V1.6.pdf…  provider=vendor  indexing_technique=high_quality
+documents: indexing_status=waiting
+           error = "Vector store must be specified."
+document_segments: 1564 行，status 全是 indexing，enabled=f
+embeddings: 0 行
+worker 日志（2026-10-15）：
+  retry_document_indexing_task      → ValueError("Vector store must be specified.")
+  duplicate_document_indexing_task  → 同上
+```
+
+`external_knowledge_bindings` 与 `datasets` 的 left join：8 行里 **6 行 dataset 为空**。
+`external_knowledge_apis.settings` 两行都是明文 JSON，`api_key` 直读可得。
+
+上游 1.17.1 的 `HitTestingService.retrieve` 收 `external_retrieval_model` 但从不使用；
+`controllers/service_api/dataset/hit_testing.py` 无条件走 vector 路径。`origin/main`
+（2026-10-20 fetch）仍是同一形状 —— 所以这里不是"等上游修"，只能自己补。
+
+### 二、改动与各自的判据
+
+1. **weaviate 容器 + 两个变量**。`check.sh` 断言服务集含 `weaviate`、它不发布宿主端口、
+   api/worker 等它 `service_healthy`，且 `env.example` 里 `VECTOR_STORE=weaviate`、
+   `WEAVIATE_ENDPOINT=http://weaviate:8080`、`WEAVIATE_API_KEY` 留空由现场生成。
+   反例已验：把 `WEAVIATE_API_KEY` 从环境里去掉，compose 直接拒绝解析。
+2. **上游补丁 5 个**。`patches/apply.sh` 先按固定 sha256 核对外文件、再 `patch --fuzz=0`、
+   最后产出 0444 挂载树。`check.sh` 与 `tests/test_dify36_deploy_assets.py` 都断言
+   "api/worker 的只读挂载集合 == 补丁覆盖的文件集合"。
+3. **删除数据集清理外部绑定**：`dataset_service.delete_dataset` 增加一条 delete。
+4. **api_key 加密**：`ExternalDatasetService.settings_for_storage` /
+   `external_api_settings` / `settings_for_display`；控制台响应仍返回明文供回填，
+   掩码 `[__HIDDEN__]` 往返语义不变。
+5. **迁移脚本**：默认 dry-run，按"目标 dataset 是否存在"判定孤儿，不按手写清单。
+
+### 三、执行过的验证（含真实镜像）
+
+| 检查 | 环境 | 结果 |
+|---|---|---|
+| `deploy/dify-36/check.sh` | 开发机 | 全部通过（含新增的向量库与补丁挂载断言） |
+| `pytest tests/test_dify36_deploy_assets.py` | 开发机 | **5 passed** |
+| 变异：删掉一条补丁挂载 | 开发机 | 对应测试转红（判据不是永远绿的） |
+| `patches/apply.sh` 全流程 | **36，真实镜像** | 5 个文件 sha 核对通过，5 个补丁 `--fuzz=0` 应用成功 |
+| 5 个补丁文件在镜像内 `py_compile` | **36，真实镜像** | 全部通过 |
+| 加密语义（落库密文/读出明文/旧明文兼容/掩码位） | **36，真实镜像** | `BEHAVIOUR_OK` |
+| 路由模块导入 + 响应形状 pydantic 校验 | **36，真实镜像** | 通过 |
+| weaviate 就绪探针（`wget`，镜像内无 curl） | **36，真实容器** | `READY_OK`；静置内存 52.7 MiB |
+| 新 compose 用**真实 `.env`** 解析 | **36** | 10 个服务、api 挂载 6 项、weaviate 无端口 |
+| 迁移脚本 dry-run | **36，真实库** | 孤儿绑定 6 条、明文 api_key 2 条 |
+
+### 四、未完成的业务验收（明确记账）
+
+- **VEC-02 未跑**：没有重跑索引，`embeddings` 仍是 0 行。证据只有"部署件已备齐"。
+- **RET-01 未跑**：补丁还没有挂进运行中的容器（未部署），`/v1/datasets/{id}/retrieve`
+  对 external 数据集的 200 响应**没有**生产证据。
+- **SEC-02 / BIND-02 未落库**：迁移只做过 dry-run。
+- **密钥轮换未做**：两把共享凭据仍然是原来的值；历史上已明文落盘，应视为已泄露。
+
+### 五、一个容易写错的地方（留给下一位）
+
+`docs/dify-console-bridge/README.md` 里记的 cookie 前缀规则同样适用于手工复验：控制台
+读 external API 模板时，`X-CSRF-Token` 必须与 `__Host-csrf_token` cookie **同值**，
+只带 `Authorization` 一律 401。用登录代理自签的 owner 会话复验时，这一点最容易漏。
+
 ## 2026-10-20 · M3 真实链路前置：构造身份与清单写入（PR #862）
 
 **范围**：41 隔离栈的部署件。**未打开任何开关、未发起真实请求**。

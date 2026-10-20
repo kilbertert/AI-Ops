@@ -1,0 +1,17 @@
+--- a/controllers/console/datasets/external.py
++++ b/controllers/console/datasets/external.py
+@@ -90,6 +90,14 @@
+     session: Session
+ 
+     @property
++    def settings_dict(self) -> dict[str, Any] | None:
++        # The stored ``settings`` blob carries an encrypted ``api_key`` (see
++        # ``ExternalDatasetService.settings_for_storage``). The console pre-fills
++        # its edit form from this response and echoes ``[__HIDDEN__]`` back when
++        # the operator leaves the key untouched, so it must see the plaintext.
++        return ExternalDatasetService.settings_for_display(self.external_knowledge_api)
++
++    @property
+     def dataset_bindings(self) -> Any:
+         return self.external_knowledge_api.get_dataset_bindings(session=self.session)
+ 

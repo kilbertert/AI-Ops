@@ -12,7 +12,7 @@ app"；把配置拉回我们侧是 #580 的事。
 
 本票有三处"必须显式选一次"的地方。都记录在这里，不留默认。
 
-### 1. 容器集：8 + nginx = 9，向量库 0
+### 1. 容器集：8 + nginx = 9，向量库 0 —— **2026-10-20 修订为 10（+ weaviate）**
 
 `init_permissions`、`api`、`worker`、`web`、`db_postgres`、`redis`、`plugin_daemon`、
 `ssrf_proxy`，加 `nginx` 作单一入口。
@@ -23,8 +23,32 @@ app"；把配置拉回我们侧是 #580 的事。
 nginx 是上游自带的，不是自造组件（对应 PRD 里"`nginx` 仅作为单一入口加"）。代价是多一个
 容器，换来"只有一个对外面"。
 
-**zero 向量库**成立，因为向量初始化是惰性的：只有**内部数据集**操作才构造 `Vector`，
-而本实例的知识面全走 External Knowledge API（#581）。这是 PRD 已核实的事实，不是猜的。
+~~**zero 向量库**成立，因为向量初始化是惰性的：只有**内部数据集**操作才构造 `Vector`，
+而本实例的知识面全走 External Knowledge API（#581）。这是 PRD 已核实的事实，不是猜的。~~
+
+**上面这条已被实测推翻，保留原文是为了记住错在哪。** 「惰性」只说明**不建内部数据集就
+不会碰向量库**，它并没有说**碰不到** —— 而运营在控制台里建内部数据集是产品允许的动作。
+2026-10-15 的真实状态：
+
+```
+datasets: 云快充平台协议V1.6.pdf…  provider=vendor  indexing_technique=high_quality
+documents: f642ab5c…  indexing_status=waiting
+           error = "Vector store must be specified."
+document_segments: 1564 行，status 全是 indexing，enabled=f
+embeddings: 0 行
+worker 日志：retry/duplicate 两条任务同样以 ValueError("Vector store must be specified.") 结束
+```
+
+失败的形状很隐蔽：**分段都建出来了**（1564 行），所以界面上看着"有内容"；真正失败的是
+向量落点，而它只体现在 `documents.error` 一行和 worker 日志里。
+
+**决定：加 weaviate 一个容器**（上游 1.17.1 的默认，版本跟上游 compose 钉在 `1.39.2`）。
+不发布宿主端口，只用 compose 内网名 `weaviate:8080` 访问；数据卷 `./volumes/weaviate`。
+`VECTOR_STORE=weaviate` 与 `WEAVIATE_ENDPOINT` 写在 `env.example` 里 ——
+**只起容器不改这个变量等于白起**，那正是本次事故的第二种形状，`check.sh` 两条都钉住。
+
+容量代价：weaviate 起后静置实测 **52.7 MiB**（`docker stats --no-stream`），远小于本栈其余部分；
+`WEAVIATE_DISABLE_TELEMETRY=true`，与"关市场、不外呼"的既有取向一致。
 
 **被删掉的服务**，连同理由：
 
@@ -33,7 +57,7 @@ nginx 是上游自带的，不是自造组件（对应 PRD 里"`nginx` 仅作为
 | `worker_beat` | 只跑定时清理与插件升级检查。**唯一一次外呼是 marketplace**（见下）。本实例不装市场插件，删 |
 | `sandbox` | Code 节点才用；本实例不需要 |
 | `local_sandbox` / `agent_backend` / `agent_ssrf_proxy` | Dify 自带的 Agent runtime。我们的智能体定义在**我们侧**，运行也在我们侧（PRD 的核心边界）。留着它等于把可执行的智能体面开在 36 上，与"只有登记端点可达"的判据直接冲突 |
-| 全部向量库 profile | 同上，惰性 |
+| 其余向量库 profile（qdrant/milvus/…） | 只用 weaviate 一个；多一个 profile 就是多一个可配错的落点 |
 | `api_websocket` | 协作编辑才用。`ENABLE_COLLABORATION_MODE=false` ⇒ 不需要它 |
 | `db_mysql` / `oceanbase` / `seekdb` / `certbot` | 不用 |
 
@@ -160,6 +184,8 @@ Docker Hub 在 36 **不可达**（`registry-1.docker.io` 连接被重置）。�
 - **compose 的调用者是 root**：单元 `dify.service` 以 root 跑 `docker compose up -d`。
   这是"docker 守护进程归 root 管"的直接后果 —— `dify` 用户没有 docker socket 权限，
   而给他加权限是提权。**容器内的进程仍是各镜像自己的用户**，与宿主身份无关。
+- **向量库同样是本栈自己的**：`weaviate` 容器与 `./volumes/weaviate` 只服务本实例，
+  不发布宿主端口，与 36 上既有栈（含 RAGFlow 自带的 infinity）没有共享。
 - **数据库与缓存完全分离**：本栈的 postgres / redis 是**独立的容器**、独立的卷
   （`deploy/dify-36/volumes/`），与 36 上既有的 aiops-gateway、kb-service、RAGFlow
   （`ragflow-kb-*` 容器，自带 mysql8 + valkey）、healthcare **毫无共享**。没有任何
@@ -169,6 +195,10 @@ Docker Hub 在 36 **不可达**（`registry-1.docker.io` 连接被重置）。�
 
 ## 容量决定
 
+**2026-10-20 复测**：30 GB 总内存 / 可用约 9.9 GB（无 swap）、`/` 余 35 GB，
+weaviate 空闲 52.7 MiB。
+
+原测量（2026-10-08，保留）：
 36 实测：30 GB 总内存 / **约 12 GB 可用**（无 swap）、`/` 余 46 GB。
 本栈常驻估计 **2.5–4.5 GB**，故压了两处上游默认值（写进 `env.example`）：
 `POSTGRES_MAX_CONNECTIONS=100`、`POSTGRES_EFFECTIVE_CACHE_SIZE=1024MB`、
@@ -177,13 +207,38 @@ Docker Hub 在 36 **不可达**（`registry-1.docker.io` 连接被重置）。�
 **决定**：**不缩**容器集来省内存（9 个已是最小可用集），而是接受与既有栈并存。
 验收时记录实际占用（`docker stats --no-stream`），作为后续收口/扩容的基线。
 
+## 上游补丁（2026-10-20）
+
+本实例跑的是**未改动的上游镜像**。有三处上游 1.17.1 还没有的行为，以补丁形式打上去：
+
+| 补丁 | 上游行为 | 本实例要的 |
+|---|---|---|
+| `01`/`02` | `POST /v1/datasets/{id}/retrieve` 只走 vector 路径；`HitTestingService.retrieve` 收了 `external_retrieval_model` 却从不使用 | `provider=external` 的数据集改走 `HitTestingService.external_retrieve`，返回 `content/title/score/metadata` 形状 |
+| `03`/`04` | `external_knowledge_apis.settings` 里的 `api_key` 按 JSON 明文存 | 用 Dify 自己的 tenant 密钥提供者加密（`enc:v1:` 前缀），读出时解密；旧明文行仍可读 |
+| `05` | 删除 dataset 不清理 `external_knowledge_bindings`（没有外键） | 删库时一并删绑定 |
+
+**为什么是补丁而不是整文件挂载**：补丁带上下文，升级时 `apply.sh` 的 sha256 核对会直接
+失败，逼着重做；整文件副本则会让"上游改了什么"隐身在两份长文件之间。核对是前置条件，
+不是提示 —— 摘要不匹配就非零退出，绝不把陈旧补丁挂上去跑。
+
+**为什么不是重做镜像**：36 上的镜像来自 `docker.1panel.live`，自建镜像要把整条构建链
+（`uv sync`、插件包、2.9 GB 上下文）搬上生产主机，爆炸半径从"5 个文件"变成"一整条链"。
+
+`patches/apply.sh` 的用法与判据写在脚本头注释里；产物是
+`volumes/app/patched-api/`（0444），compose 把**每一个文件**单独 `:ro` 挂进 api/worker
+（挂目录会把整个 `/app/api` 遮住）。`check.sh` 断言"挂载集合 == 补丁集"，
+`tests/test_dify36_deploy_assets.py` 在 CI 里再断言一次。
+
 ## 文件
 
 ```
 deploy/dify-36/
 ├── docker-compose.yaml     上游 1.17.1 裁剪版（改动处都带注释）
 ├── env.example             实例级变量的模板；复制成 deploy/.env 再填
-├── check.sh                零网络自检：端口集合 + squid 白名单顺序
+├── check.sh                零网络自检：端口集合 + 向量库 + 补丁挂载 + squid 白名单顺序
+├── patches/                上游补丁集与重放脚本（见「上游补丁」）
+├── acceptance.feature      本栈知识面与库卫生的验收约定
+├── qa-plan.md              对应的系统验收计划（含部署与回滚）
 ├── nginx/                  上游 nginx 资产原样拷贝（只加 :ro）
 └── ssrf_proxy/             上游 squid 资产原样拷贝（只加 :ro）
 ```

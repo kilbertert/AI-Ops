@@ -1,0 +1,47 @@
+--- a/controllers/console/datasets/hit_testing_base.py
++++ b/controllers/console/datasets/hit_testing_base.py
+@@ -103,6 +103,44 @@
+         return dataset
+ 
+     @staticmethod
++    def perform_external_hit_testing(
++        session: Session,
++        dataset: Dataset,
++        args: dict[str, Any],
++        current_user: Account | None = None,
++        current_tenant_id: str | None = None,
++    ) -> dict[str, Any]:
++        """Hit-test an ``external`` dataset through its bound External Knowledge API.
++
++        ``HitTestingService.retrieve`` only knows the vector-stored (vendor) path:
++        an external dataset has no segments and no embedding model, so routing it
++        there answers with an empty record list while looking successful — the
++        caller cannot tell "no hit" from "the provider was never asked".
++
++        The two record shapes stay apart on purpose: vendor records carry a
++        ``segment``, external records carry ``content``/``title``/``score``.
++        """
++        query = cast(str | None, args.get("query"))
++        if not query:
++            raise ValueError("Query is required for an external knowledge base")
++
++        current_user, _ = resolve_account_fallback(current_user, current_tenant_id)
++        external_retrieval_model: dict[str, Any] = (
++            cast(dict[str, Any] | None, args.get("external_retrieval_model"))
++            or cast(dict[str, Any] | None, dataset.retrieval_model)
++            or {}
++        )
++        return dict(
++            HitTestingService.external_retrieve(
++                session=session,
++                dataset=dataset,
++                query=query,
++                account=current_user,
++                external_retrieval_model=external_retrieval_model,
++            )
++        )
++
++    @staticmethod
+     def hit_testing_args_check(args: dict[str, Any]) -> None:
+         HitTestingService.hit_testing_args_check(args)
+ 

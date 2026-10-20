@@ -39,6 +39,7 @@ tmp_env="$tmp_dir/.env"
   echo "PLUGIN_DAEMON_KEY=$(printf 'x%.0s' {1..43})"
   echo "PLUGIN_DIFY_INNER_API_KEY=$(printf 'x%.0s' {1..43})"
   echo "CELERY_BROKER_URL=redis://:x@redis:6379/1"
+  echo "WEAVIATE_API_KEY=$(printf 'y%.0s' {1..48})"
 } >"$tmp_env"
 
 resolve() { # $1=compose file $2=env file $3=out json
@@ -99,21 +100,56 @@ d = json.load(open(sys.argv[1]))
 svcs = set(d["services"])
 
 want = {"init_permissions", "api", "worker", "web", "db_postgres", "redis",
-        "plugin_daemon", "ssrf_proxy", "nginx"}
+        "plugin_daemon", "ssrf_proxy", "nginx", "weaviate"}
 if svcs != want:
     raise SystemExit(f"FAIL: 服务集不符\n  多: {sorted(svcs - want)}\n  少: {sorted(want - svcs)}")
-print(f"ok: 服务集 = {len(svcs)} 个（PRD #577 的 8 个 + nginx 单一入口）")
+print(f"ok: 服务集 = {len(svcs)} 个（PRD #577 的 8 个 + nginx 单一入口 + 向量库 weaviate）")
 
-# 本实例不接向量库、不接 Dify 自带 agent runtime / sandbox。
+# 本实例只接 weaviate 一个向量库；不接 Dify 自带 agent runtime / sandbox。
+# weaviate 在 2026-10-20 从"禁止出现"改为"必须出现"：没有它，vendor 数据集的索引
+# 停在 `Vector store must be specified.`（README「向量库」）。
 for forbidden in ("sandbox", "local_sandbox", "agent_backend", "agent_ssrf_proxy",
-                  "worker_beat", "api_websocket", "weaviate", "qdrant", "milvus", "db_mysql"):
+                  "worker_beat", "api_websocket", "qdrant", "milvus", "db_mysql"):
     if forbidden in svcs:
         raise SystemExit(f"FAIL: 不该出现的服务在：{forbidden}")
+
+# 只起 weaviate 容器、不改 VECTOR_STORE，等于白起一个容器：Dify 仍然没有向量库
+# 可用（这正是本次事故的原始形状）。两个变量都在 env.example 里，值必须是内网名 ——
+# 写宿主机地址或 localhost 都会在容器里指向空处。
+import os
+env_example = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "env.example")).read()
+want_env = {"VECTOR_STORE": "weaviate", "WEAVIATE_ENDPOINT": "http://weaviate:8080"}
+for k, v in want_env.items():
+    if f"\n{k}={v}\n" not in "\n" + env_example:
+        raise SystemExit(f"FAIL: env.example 的 {k} 必须是 {v!r}（容器内用内网名）")
+if not env_example.count("\nWEAVIATE_API_KEY=\n"):
+    raise SystemExit("FAIL: env.example 的 WEAVIATE_API_KEY 必须留空，由现场生成")
+print("ok: env.example 的 VECTOR_STORE/WEAVIATE_ENDPOINT 指向 compose 内网名，API key 现场生成")
+
+# 上游补丁的挂载集合必须与 patches/1.17.1/*.patch 覆盖的文件一致，且逐个 :ro。
+# 这三处是上游 1.17.1 还没有的行为（README「上游补丁」）；漏挂一处就是静默回到旧行为。
+import re
+patched = set(re.findall(r"^\+\+\+ b/(.+)$",
+                         "\n".join(open(f).read() for f in sorted(__import__("glob").glob("patches/1.17.1/*.patch"))),
+                         re.M))
+if not patched:
+    raise SystemExit("FAIL: patches/1.17.1 下没有补丁文件")
+mounted = set()
+for svc_name in ("api", "worker"):
+    for vol in d["services"][svc_name].get("volumes") or []:
+        target = vol.get("target") or ""
+        if target.startswith("/app/api/") and "patched-api" in (vol.get("source") or ""):
+            if not vol.get("read_only"):
+                raise SystemExit(f"FAIL: {svc_name} 的补丁挂载不是只读：{target}")
+            mounted.add(target[len("/app/api/"):])
+if mounted != patched:
+    raise SystemExit(f"FAIL: 补丁挂载与补丁集不符\n  漏挂: {sorted(patched - mounted)}\n  多挂: {sorted(mounted - patched)}")
+print(f"ok: api/worker 只读挂载了全部 {len(patched)} 个补丁文件")
 
 # 发布端口集合由下面的 check_ports 单独判（第 1 / 1b 项共用同一个判据）。
 
 # 数据库与缓存不得对外发布。
-for name in ("db_postgres", "redis", "plugin_daemon", "ssrf_proxy", "api", "worker", "web"):
+for name in ("db_postgres", "redis", "plugin_daemon", "ssrf_proxy", "api", "worker", "web", "weaviate"):
     if d["services"][name].get("ports"):
         raise SystemExit(f"FAIL: {name} 发布了端口；内部服务不得有 host 发布")
 print("ok: 其余服务无 host 端口发布")
