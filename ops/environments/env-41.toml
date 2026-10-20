@@ -93,9 +93,15 @@ name = "canary-dify-acceptance-1011"
 description = ""
 agent_type = "customer"
 
-# 提示词**不在这里**：这个 agent 绑定了 Dify app（见下方 [[dify_apps]]），
-# 正文由 Dify 编辑、经 `aiops admin pull-dify` 过发布门拉回（#577）。
-# 清单里再写一份就是两个权威 —— load_manifest 会直接拒（#739）。
+# 提示词**写在清单里**（2026-10-20 改）：这个 agent 原先绑定 Dify app，而它绑的 app
+# （`a975c8e5-…`，之后临时新建的 `405fb698-…`）都已从 Dify 删除。Dify 现在只保留
+# **两个 app** —— 41 的客户端与管家端。验收租户没有生产流量（`agent_run_metrics`
+# 最后一次是 10-10），不值得为它单独占一个 app，因此正文回到清单承载。
+# 以下三个字段逐字等于库中 v2 快照（129 字，md5 `1496386c6b225355fa33d7347085a2e2`）。
+prompt = """你是「小趋」，充电服务与新能源车领域的官方智能客服。知识库内容是唯一事实来源：
+不得添加、推断或篡改知识库没有的政策、数字与承诺；知识库未命中时使用拒答话术。
+【运营在控制台里加的标记 2026-10-10】
+【验收标记 2026-10-11 16:28Z】"""
 knowledge_base_ids = ["4f4bc674ad8911f1ae704bfc8c544ea6"]
 model = "deepseek-v4-flash"
 output_contract = "blocks-v1"
@@ -139,19 +145,14 @@ business_entry = "consumer"
 app_id = "8e36f0a6-324c-4003-b573-7444cc649411"
 agent_name = "canary-客服"
 
-# 验收租户那一行**指向一份从 Dify 拉回并已发布的 customer 版本**（#696 的验收项）。
+# 验收租户（`1783…`）**不再有 Dify 绑定**：它绑过的 app 全部已从 Dify 删除，正文改由
+# 上面的 `[[agents]]` 承载。Dify 里只保留 41 的两个入口 app —— 客户端（consumer）与
+# 管家端（operator）—— 这是「Dify 上只存在这两个 app」这条要求的落点。
 #
-# ⚠️ **2026-10-20 改绑到一个新建的 app**：此前的 `a975c8e5-…`（`dify-dsl-fixture`）在
-# Dify 上已被删除。按「每个租户的正文必须有一个真实可编辑的对象」这条要求，在 36 的
-# 同一工作区里新建了 `aiops-41-acceptance-1011-agent`（`405fb698-…`，chat 模式），
-# 把库中 v2 的 129 字正文逐字写进去并回读核对（md5 `1496386c6b225355fa33d7347085a2e2`）。
-# 它**不挂 dataset**：知识库权威在 `knowledge_base_ids`（`4f4bc674…`），Dify 侧挂 dataset
-# 只会引入两套 id 空间混用。
-[[dify_apps]]
-tenant_id = "1783022023241633792"
-business_entry = "consumer"
-app_id = "405fb698-2949-4cc4-a1fc-a84668481e9c"
-agent_name = "canary-dify-acceptance-1011"
+# 注意这一节的 fail-closed 语义：表里仍有行 ⇒ 未登记的 `(租户, 入口)` 一律什么都不选。
+# `1783…/consumer` 因此是**未登记**状态，它会得到 `retrieval_status="unavailable"`，
+# 而不是回退到"最新已发布的 agent"。这是有意的：该租户没有生产流量（`agent_run_metrics`
+# 最后一次记录是 2026-10-10），且它的正文与新 app 的对应关系已经不存在。
 
 # 管家端诊断的方法论配方（#700）：从 Dify `operator-methodology-700` 拉回并经发布门冻结。
 # 运行时注册表把它绑给 `(1942105476598861824, operator)`，诊断因此在**该入口**上跑这份
