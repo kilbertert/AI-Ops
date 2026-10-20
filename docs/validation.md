@@ -199,9 +199,17 @@ E 才是那条有区分性的协议检查。`$aiops_upstream_proto` 是另一个
 **部署身份**：`origin/main` @ `1ae4d86`，制品由 `git archive origin/main deploy/dify-36` 打包
 （tar sha256 `fabe9958e0003da9d073ad26fc7fe8c2d5edc6540f105f427ca0c032f5d7a81c`），2026-10-20 16:49 CST 落到 36 `/opt/dify/deploy`。
 备份：`/opt/dify/deploy.bak-20261020164947/` 与 `.env.bak-20261020164947`（未删除）。
-**但它是代码/配置的回滚路径，不是数据库备份**：`cp -a` 是在 postgres 还活着的时候做的，
-`volumes/db/data` 的副本可能跨越不同提交状态，不能当物理备份用。要真正回滚数据库，
-需要停机复制或 `pg_dump` —— 本轮没做，如实记下。
+**它是代码/配置的回滚路径，不是数据库备份**：`cp -a` 是在 postgres 还活着的时候做的，
+`volumes/db/data` 的副本可能跨不同提交状态，不能当物理备份用。
+
+**数据库的一致快照另做了一份**（2026-10-20 20:20 CST，`/var/backups/dify/20261020T202038/`）：
+`pg_dump -Fc` 导出 `dify` 与 `dify_plugin`，加 `volumes/app/storage` 的 tar，附
+`SHA256SUMS` 与 `pg_restore -l` 目录；README 写了恢复步骤。**验证方式不是"文件存在"**：
+把 `dify.dump` 真正恢复进临时库 `dify_restore_check`，逐表行数与线上一致
+（`datasets=4 documents=1 apis=2 bindings=3 embeddings=0 accounts=2 apps=2`），随后删库。
+`dify_plugin` 未做恢复演练（插件元数据可由重装插件重建）。
+**不含 weaviate**：它是运行中的库，活拷贝同样跨状态；当前 collection 为空，向量由重新索引
+重建 —— 这也正好是 VEC-02 待做的事。
 
 ### 一、做到了什么（都有当场输出）
 
