@@ -201,5 +201,5 @@ close 只删自己那一格（条件删除），不会误删新格；登记表�
 M3NODE_DEPS=… M3NODE_JDK_IMAGE=… uv run python tools/m2_close/m3node/verify_node_link.py --out /tmp/node-link.json
 ```
 
-真 Gateway 进程 + 真 Java 节点 + 合成模型/CPMS，26 条判据（LINK-01..10）。
+真 Gateway 进程 + 真 Java 节点 + 合成模型/CPMS，39 条判据（LINK-01..10，含三种坏回执）。
 平台派发入口是替身，但**领取与完成通知都由节点自己的代码发出**。

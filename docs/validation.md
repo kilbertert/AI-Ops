@@ -25,18 +25,22 @@
 
 ### 三、自动化判据
 
-- `tests/test_m3_node_link_state.py`（10）+ `tests/test_m3_node_link_completion.py`（16）⇒ **26 passed**。
+- `tests/test_m3_node_link_state.py`（10）+ `tests/test_m3_node_link_completion.py`（20）⇒ **30 passed**，
+  加上独立复核脚本 `test_node_link_review.py`（3）共 **33 passed**。
 - **定向变异（先红后绿，均已恢复）**：
   ① `complete()` 改回无条件 `succeeded` ⇒ 8 条转红（含「重试只读一次」）；
   ② `complete_loop()` 去掉身份再证明 ⇒ 3 条转红（错摘要 / 缺头 / 不同身份）。
 - 定向变异（节点侧，真跑端到端）：
   ③ 去掉 finish reason 守卫 ⇒ 只有 LINK-03 截断转红；
-  ④ 把 claim 失败降级成 `ERROR:` 文本 ⇒ LINK-04「整轮不再往下跑（模型只调 1 次）」转红（实测 2 次）。
+  ④ 把 claim 失败降级成 `ERROR:` 文本 ⇒ LINK-04「整轮不再往下跑（模型只调 1 次）」转红（实测 2 次）；
+  ⑤ 完成回执只认 2xx ⇒ 三种坏回执（`{}` / 错 run / `state=failed`）同时转红。
+- **复核反例已固化**（`test_node_link_review.py` 曾 3 failed）：未启用清单的旧记录收到完成通知
+  不改任何列；已 succeeded 的记录收到错身份通知不改审计列；同状态不同原因的失败通知是冲突。
 
 ### 四、真实端到端（`tools/m2_close/m3node/verify_node_link.py`）
 
 真 Gateway 进程 + 真 Java 节点 + 合成模型/CPMS；平台派发入口是替身，但**领取与完成通知
-都由节点自己的类发出**。**26/26 PASS**：正常两轮、第二轮 500、末轮截断、受控 claim 被拒
+都由节点自己的类发出**。**39/39 PASS**：正常两轮、第二轮 500、末轮截断、受控 claim 被拒
 （身份不一致与「已领取未写快照」两种）、取消、重试、撤销边界、两 run 归属、未启用兼容。
 
 ### 五、边界
