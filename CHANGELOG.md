@@ -11,6 +11,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 整轮成功通知的省略/null 原因不再匹配已记录的非空原因；冲突返回 409，既有无原因重试仍返回 200。
 
 ### Added
+- 隔离栈的**预检**不再按 `basename` 判「两侧同一份清单」。判据改为按渲染后的 compose
+  把两侧的容器内路径解析成宿主路径，再要求指向同一个真实普通文件；文件缺失、符号链接、
+  目录、组/他人可读都各自拒绝，0400 与 0600 都在契约之内。此前「节点开关缺失」与
+  「节点路径没有挂载」两种坏态都会印 PASS（实测反例见
+  `tests/test_m2_live03_manifest_preflight.py` 的两条回归）。
+- 隔离栈的**复跑材料**入仓：`deploy/m2-live-03/compose.identity.yaml`（只换 Gateway 入口
+  进程的覆盖层）、`identity.env.template`（身份三件套键名）、
+  `tools/m2_close/m3live/live_replay.py`（一次派发 / 按 run 采证 / down 后清理与生产面对照）。
+  握手令牌只从宿主的 0600 文件读，不接受命令行参数；失败不重试，同一输出目录只允许发一次。
 - 95 环境（`api.qumall.qushiyun.com`，主机侧键 `qy-gw-120`）有了事实页 `docs/agents/env-95-facts.md`，并在 `.dev-host.toml` 声明为可只读访问的目标。
   记录内容包含：代号与 41/36 的判别、它的数据面为空这一观测、以及**没有** `env-95.toml`
   这一事实——此前 agent 只能从散落三处的半句拼出这些。
