@@ -131,6 +131,12 @@ credit pool、一条 `current=false` 的 owner membership —— 没有 app / da
 - **已有账号的迁移走 inner_api 的 member 端点**（`join_enterprise_workspace_member`），
   **不是**邀请：`RBAC_ENABLED=False` 时邀请已激活账号会静默失败，而移出旧 workspace 不让它变
   pending —— 结果是两头都进不去。这是评审抓到的、原设计里会**锁死存量用户**的缺陷。
+- **`account_email_for` 要加环境前缀**。这是评审从既有代码里挖出来的真实缺陷：
+  它只按公司用户 id 生成邮箱，而两套 UPMS 的 `user_id` 各自生成；
+  一旦撞号，两个人共用一个 Dify 账号（账号是全局的，不属于 workspace），
+  第二个环境的代理就能为它签会话、进第一个环境的 workspace。这是**迁移**而非加字段。
+- **workspace 查询端点不接受 `environment` 参数**，环境由网关的部署身份补上 ——
+  否则"跨环境查同一个 `tenant_id`"就成了一条真实越权路径。
 - **凭据轮换是运行手册，不是代码**：`SECRET_KEY` 要 Dify 与代理一起重启（ADR-0023 不变）；
   provider 凭据按 `dify_workspaces` 枚举逐个重写。
 

@@ -46,7 +46,7 @@ UPMS 里"决定 —— 41 的租户换不到 95 去登录，因为 95 的 UPMS �
 
 | 词 | 定义 |
 |---|---|
-| **环境（environment）** | 一套独立部署的 Dify + 网关 + 数据库。**是部署身份**。41 与 95 是两台机器、两套库、两个域名。 |
+| **环境（environment）** | 一套独立部署的 **UPMS + aiops-gateway + 登录代理 + 业务库**。**是部署身份**，**不含 Dify**。41 与 95 是两台机器、两套库、两个域名。 |
 | **租户工作区** | 一个公司租户在**某个环境**里独占的 Dify workspace。标识是 Dify 的 `tenants.id`（UUID）。 |
 | **平台工作区** | 平台账号（`type=-1`）自己的 workspace；**不**含别人的编辑面。 |
 
@@ -90,6 +90,9 @@ cloud-upms:release  TokenController.issueLoginToken 的完整 payload：
 | 9 | 映射存在 **新表 `dify_workspaces(tenant_id, environment, workspace_id, setup_state, created_at)`**，落在**网关的 `gateway.db`**；代理与桥经网关的只读端点查。`dify_app_registry` 不动 |
 | 9b | `dify_workspaces.environment` 的作用是**防止两套环境的 `tenant_id` 撞号**，不是「给每个环境各建一套 workspace」。**保留** —— 撞号时会静默串租户，fail-closed 值得一列 |
 | 9c | workspace 的 **owner 是服务身份**（`dify-admin@aiops.local`），不是每个租户一个人；以它的身份在某 workspace 做事走 `ADMIN_API_KEY + X-WORKSPACE-ID` |
+| 9d | **`account_email_for` 加环境前缀**（`{environment}-{user_id}@…`）。这是既有代码里的真实缺陷：两套 UPMS 撞 `user_id` 会让两个人映射到同一个 Dify 账号。属**迁移**，要在多 workspace 之前或同批完成 |
+| 9e | workspace 查询端点**不接受 `environment` 参数**，环境由网关自己的部署身份补上；`tenant_id` 可传，但只返回一个 UUID |
+| 9f | 开户用**先占位再建**（`UNIQUE(tenant_id, environment)` + `setup_state='creating'`）串行化并发；`CREATING` 与 `UNRESOLVED` 是两个不同的错误码 |
 | 10 | 知识库**继续用 RAGFlow 外接**（用户明确否决"改用 Dify 自带库"） |
 | 11 | 工具白名单**仍走我们的 harness** |
 | 12 | 一人一租户：**接受**，并写进文档（Dify 的 `current` 只有一个，跨 workspace 会互相踩） |
@@ -161,10 +164,27 @@ resolve_workspace(tenant_id, environment) -> workspace_id | DIFY_WORKSPACE_UNRES
   5. 把这个人 join 进 workspace（member 端点，不是邀请）
 ```
 
-**幂等（评审指出）**：原设计把写表放在第 5 步，于是"建成功但第 3/4 步失败"会让下一次登录
-又建一个 workspace，前一个成为孤儿。改为：**拿到 `tenant.id` 就立刻写表**，
-后续步骤可重试（它们本身都是幂等的：装插件幂等、写凭据按 `provider_name` 覆盖、导模板按
-`app_name` 判重）。失败状态单独记在一列 `setup_state`，不靠"表里没有行"来表达。
+**幂等与并发（评审指出两件事）**：
+
+原设计把写表放在第 5 步，于是"建成功但第 3/4 步失败"会让下一次登录又建一个 workspace，
+前一个成为孤儿。改为**先占位、再建**：
+
+```
+1. INSERT INTO dify_workspaces(tenant_id, environment, workspace_id, setup_state)
+   VALUES (?, ?, '', 'creating')          -- UNIQUE(tenant_id, environment)
+   ↑ 并发时第二个 INSERT 撞唯一键 ⇒ 读回第一行，等它变成 ready 或直接报 creating
+2. 用 inner_api 建 workspace → 拿到 tenant.id
+3. UPDATE ... SET workspace_id = ?, setup_state = 'created'
+4. 装插件 / 写凭据 / 导模板（可重试）→ 全部成功后 setup_state = 'ready'
+```
+
+**为什么先占位**：代理是 `ThreadingHTTPServer`，同一租户的两次首次登录可以同时越过
+"表里没有行"这个检查。只有**唯一键 + 先插入**才能把它们串行化；反过来（先建后写）
+两个请求各建一个 workspace，后写的赢，前一个成为**永久孤儿**（Dify 没有删 tenant 的 API）。
+
+`workspace_id` 为空是 `setup_state = 'creating'` 的合法状态 —— 解析函数见到它不是"没有行"，
+而是"有人在建"，返回一个**可重试**的 `DIFY_WORKSPACE_CREATING`，不是 `UNRESOLVED`。
+这两个错误码必须分开：前者让调用方稍后再试，后者让人去建。
 
 **"解析不到就拒绝"与"缺行就建"不冲突**（评审指出）——两者是不同的调用方：
 
@@ -201,27 +221,48 @@ POST /inner/api/enterprise/workspace/member
 （前提：目标 workspace 已有 owner，否则 owner 冲突检查会拦；我们的新 workspace 有服务身份 owner。）
 
 `remove_member_from_tenant` 会把该成员的 app/dataset 转给 owner 且**没有反向操作**
-（ADR-0023 已记）。所以**不能**用"移除再邀请"来迁移。顺序固定为：
+（ADR-0023 已记）。所以**不能**用"移除再邀请"来迁移。
 
-1. **按租户分派副本**：对旧 workspace 里每个 app，判定它属于哪个租户
-   （依据 `dify_app_registry` 的 `(tenant_id, business_entry) → agent_name` + 该 app 的 DSL 内容），
-   在目标 workspace 里用 `POST /console/api/apps/imports` 导入一份副本。
-   源 app **原样保留**，一行都不动。
-2. **逐个租户切换绑定**：`dify_app_registry` 不动（它只认 `(tenant, entry) → agent_name`），
-   但 `dify_workspaces` 开始对那个租户生效 —— 之后它的发布与试运行都读新 workspace。
-3. **撤旧访问权**：等所有租户都切换完成、且新 workspace 上跑过一轮真实发布与试运行之后，
-   才把映射账号从旧 workspace 移除。**这一步最后做，且单独一次变更。**
-4. **旧 workspace 不删**：Dify 没有删 tenant 的 API；它留作审计与回滚参照，
-   但不再有活跃成员。
+#### 顺序（六步，前四步都是"只加不减"）
 
-**为什么副本而不是搬运**：Dify 的 app 不能跨 workspace 移动。`/apps/<id>/export` +
-`/apps/imports` 是唯一的路，而它天然产生**新 app_id** —— 所以 `dify_app_registry` 里的
-`app_id` 必须跟着改（运行时只读 `agent_name`，所以运行不受影响；受影响的是拉取与发布路径）。
+```
+1. 建目标 workspace（§5.1 的 resolve + create 流程）
+2. 把该租户的人 join 进目标 workspace（member 端点，不是邀请）
+3. 在目标 workspace 里建**它自己要用的 dataset**，拿到新 dataset UUID
+4. 导出旧 app 的 DSL → 把 DSL 里的 dataset UUID 换成第 3 步的新 UUID → import 到目标 workspace
+5. 更新 dify_app_registry 的 app_id（新 UUID）+ 更新清单文件 ops/environments/*.toml
+6. 全租户切换完成、且新 workspace 跑过一轮真实发布与试运行之后，才撤旧 workspace 的成员
+```
 
-**第 3 步的顺序不能倒**：新 workspace 的成员必须先加进去（用上面的 member 端点），
-再把 app 副本导进去 —— `/apps/imports` 要一个在该 workspace 里能建 app 的会话。
-用 owner 服务身份（`ADMIN_API_KEY + X-WORKSPACE-ID`）可以绕过，但那会把"谁建的"记成 owner；
-更干净的是先 join 成员、再用成员自己的会话导入。
+#### 四处评审指出的坑，各自的原因与修法
+
+**（a）`dify_app_registry` 的 `app_id` 必须跟着换，而且清单文件也要改。**
+import 产生**新 app UUID**；`DifyDslClient` 是按 `binding.app_id` 向指定 workspace 导出的。
+更麻烦的是 `app_id` 也写在 `ops/environments/env-41.toml` 的 `[[dify_apps]]` 里，
+而 `aiops admin reconcile` 会用它**覆盖**库里的值 —— 只改库不改清单，下次 reconcile 就把旧
+`app_id` 写回去了。⇒ **第 5 步必须是"清单 + 库"一起改**，且顺序是"先改清单、再 reconcile"。
+
+**（b）dataset 也要在新 workspace 里重建，不能只复制 app。**
+`DifyDslClient.dataset_knowledge_id` 会在**目标 workspace** 里查 DSL 引用的 dataset UUID；
+跨 workspace 查不到 ⇒ 带知识库的 app 同步失败。
+但这里有个**我们已经有的出口**：那两个生产 dataset 是 `provider=external`，
+`external_knowledge_id` 指向我们网关的 `/v1/dify/retrieval`（`kb-canary` / `kb-canary-2`）。
+⇒ 新 workspace 里只需**重建两个 external dataset 记录**（同样的 `external_knowledge_id` +
+同样的 endpoint + 同样的 api_key），**不需要搬任何文档** —— 真正的内容在 RAGFlow。
+这是本设计里最省事的一处，但**必须显式做**：external dataset 的 UUID 也是新建的，
+DSL 里要换。
+
+**（c）"先加成员"与"后撤权限"是两步，不冲突 —— 但原文写得像一步。**
+第 2 步加的是**新** workspace 的成员；第 6 步撤的是**旧** workspace 的成员。
+中间那几步（3-5）里这个人**同时在两个 workspace 里**，这是**故意**的：
+在切换完成前，他还是旧 workspace 的成员，旧链路照常工作 —— 那是回滚路径。
+**这一步的代价写清楚**：切换窗口内，这个人在旧 workspace 里仍能看到旧的 app（包括别人的）。
+所以窗口要短，且按租户逐个做，不要一次铺开。
+
+**（d）为什么第 4 步用成员自己的会话而不是 owner 服务身份**：
+`/apps/imports` 要一个在该 workspace 里能建 app 的会话。用 `ADMIN_API_KEY + X-WORKSPACE-ID`
+也能建，但那会把"谁建的"记成 owner 服务身份，审计上不好看；用成员自己的会话，
+Dify 的 `created_by` 就是那个人。两者都可行，**选后者**。
 
 ### 5.2 发布桥
 
@@ -351,6 +392,28 @@ if is_admin_api_key_request(request):
 ⇒ `dify-admin@aiops.local` 作为每个 workspace 的 owner 是对的：它是**服务身份**，不是人；
 它不需要在浏览器里切 workspace，所以"current 只有一个"这条限制对它不适用。
 
+**−1. `account_email_for` 必须带环境，否则两套 UPMS 撞 `user_id` 时会串账号。**
+
+评审给的这条是**真的安全缺陷**，而且它在**今天的代码里就已经存在**：
+
+```python
+# dify_login_provision.py:65-74
+def account_email_for(company_user_id: str) -> str:
+    safe = "".join(ch if (ch.isalnum() or ch in "-_") else "-" for ch in company_user_id).strip("-")
+    return f"{safe}@{ACCOUNT_EMAIL_DOMAIN}"  # ← 只有公司用户 id，没有环境
+```
+
+两套 UPMS 是两套独立数据库，`sys_user.id` 各自生成。一旦 41 与 95 出现同一个 `user_id`，
+两个人就会映射到**同一个 Dify 账号**（同一个邮箱），而 Dify 账号是全局的（不属于任何 workspace）：
+第二个环境的代理能为它签会话，访问第一个环境那个人的 workspace。
+
+**修法**：邮箱里带环境标识 —— `f"{environment}-{safe}@{DOMAIN}"`（或反过来）。
+代价：**已存在的映射账号邮箱会变**，所以这是一次**迁移**，不是纯加字段：
+`dify_login_mappings` 里那一列 `dify_email` 要一起改，Dify 侧的账号也要改邮箱
+（`PUT /console/api/workspaces/current/members/<id>` 之类，需核实是否有此端点；
+没有就走"新建账号 + 迁移映射"）。
+**这条必须在多 workspace 实施之前或同批完成**，否则两个环境一旦真的有同号 id，越权立刻成立。
+
 **0. 映射表放哪：`dify_workspaces` 放**网关的 `gateway.db`**，但三个进程都要能读它。**
 
 评审指出一个真实拓扑问题：代理的映射表在 36 的
@@ -365,9 +428,26 @@ if is_admin_api_key_request(request):
 | 放代理的 `mappings.db` | 桥能读（同机），但**网关读不到** —— 而试运行要读 |
 | 新建一个共享 SQLite | 多一个要备份、要迁移、要防护的存储 |
 
-具体形态：网关加 `GET /v1/dify/workspace?tenant_id=…&environment=…`（内部令牌鉴权，
-与既有 `/v1/*` 同一把门），代理与桥调它。**代理不再自己存一份** —— 它本来就只该读，
-写（建 workspace）由网关侧或开户流程做。
+具体形态：网关加 `GET /v1/dify/workspace`，**但参数不是任意的 `tenant_id`**。
+评审指出：只校验内部令牌、让它按查询参数返回任意租户的 workspace，等于把"哪个租户用哪个
+workspace"变成调用方可选 —— 而这正是隔离本身。
+
+**两个入参分开**：
+
+| 入参 | 来源 | 谁能给 |
+|---|---|---|
+| `environment` | **服务端配置**（网关自己的 `AIOPS_GATEWAY_ENVIRONMENT`） | 不接受请求参数。请求里带了就 400 |
+| `tenant_id` | 调用方要查的那个租户 | 只要令牌有效就允许 —— 但**返回的是 `workspace_id` 一个 UUID**，不是任何内容或凭据 |
+
+为什么可以只校验令牌：这个端点的输出是"某个租户的 workspace 标识"，而**拿着它什么也做不了** ——
+要用它还得有 `ADMIN_API_KEY`（只有网关与代理有）。真正的隔离在 Dify 那边：
+workspace 之外的会话读不到里面的 app。**但这不等于可以放开**：环境必须服务端定，
+因为"跨环境查同一个 tenant_id"才是真的越权路径。
+
+⇒ 形状：`GET /v1/dify/workspace?tenant_id=…`（**没有 environment 参数**），
+网关用它自己的部署身份补上 environment。
+
+**代理不再自己存一份** —— 它本来就只该读，写（建 workspace）由网关侧或开户流程做。
 
 代价：代理多一次回环调用。收益：一处存储、一份真值，且 `environment` 的校验只写一遍。
 
