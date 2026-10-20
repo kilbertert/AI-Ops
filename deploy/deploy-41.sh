@@ -124,10 +124,61 @@ if not isinstance(entry, dict):
     sys.exit('canonical registry has no [hosts.aiops-41] entry')
 view = dict(entry)
 view['ssh_alias'] = alias
+
+
+def render(value):
+    """按 TOML 类型写值 —— 不能一律 `str()`。
+
+    这里曾经把每个值都写成 `"%s"`，于是数组类型（`aka = ["41"]`）被写成字符串
+    `"['41']"`：再读回来是 str 而不是 list，派生视图与主清单永远不相等，
+    dry-run 与真实部署都会在一致性检查那里停住。**非字符串类型不是异常输入**，
+    清单本来就允许数组（aliases）、布尔与整数。
+
+    转义要按 TOML 规则做全，不只是反斜杠与引号：控制字符（换行、回车、退格……）
+    在单行字符串里是**非法**的，直接写进去会让生成的文件根本解析不了。清单里出现
+    `"first\\nsecond"` 是合法的 TOML（解析成一个带换行的字符串），所以渲染必须
+    把它写成同样的转义序列，而不是一个物理换行。
+    """
+    if isinstance(value, bool):
+        return 'true' if value else 'false'
+    if isinstance(value, str):
+        return quote(value)
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return repr(value)
+    if isinstance(value, list):
+        return '[' + ', '.join(render(item) for item in value) + ']'
+    if isinstance(value, dict):
+        # 行内表的**键也要加引号**：`"contact.name"` 是**一个**键，而不加引号的
+        # `contact.name` 在 TOML 里是嵌套表，读回来结构与主清单不同。
+        return '{ ' + ', '.join('%s = %s' % (quote(k), render(v)) for k, v in value.items()) + ' }'
+    raise SystemExit('unsupported registry value type: %r' % (type(value).__name__,))
+
+
+#: TOML 基本字符串里必须转义的字符。`\n` / `\r` 之类写成转义序列，不能写成物理字符。
+_ESCAPES = {
+    '\\': '\\\\', '"': '\\"', '\b': '\\b', '\t': '\\t',
+    '\n': '\\n', '\f': '\\f', '\r': '\\r',
+}
+
+
+def quote(text):
+    out = []
+    for ch in text:
+        if ch in _ESCAPES:
+            out.append(_ESCAPES[ch])
+        elif ord(ch) < 0x20 or ord(ch) == 0x7F:
+            out.append('\\u%04X' % ord(ch))
+        else:
+            out.append(ch)
+    return '"' + ''.join(out) + '"'
+
+
 with open(dst, 'w') as f:
     f.write('[hosts.aiops-41]\n')
     for k, v in view.items():
-        f.write('%s = "%s"\n' % (k, str(v).replace('\\', '\\\\').replace('"', '\\"')))
+        f.write('%s = %s\n' % (quote(k), render(v)))
 PY
 
 # 断言派生视图与主清单除 ssh_alias 外完全一致 —— 这样「唯一真值在主清单」不是

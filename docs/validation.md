@@ -1,3 +1,53 @@
+## 2026-10-20 · CD 派生 registry 的类型失真与修复（#857）
+
+**范围**：`deploy/deploy-41.sh` 的派生 registry 视图与它的确定性检查。**未部署**。
+
+### 一、缺陷
+
+`deploy-41.sh` 从主清单（`~/.config/dev-host/hosts.toml`）派生一份只换 `ssh_alias` 的
+视图，再断言「除别名外逐字相同」。旧派生把每个值都写成 `"%s"`：
+
+| 主清单 | 派生（旧） | 读回来 |
+|---|---|---|
+| `aka = ["41"]` | `aka = "['41']"` | `str`（不是 `list`） |
+| `note = "first\nsecond"` | `note = "first` + 物理换行 + `second"` | **解析失败**（TOML 单行字符串不允许换行） |
+| `meta = { "contact.name" = "ops" }` | `meta = { contact.name = "ops" }` | `{"contact": {"name": "ops"}}`（嵌套表） |
+
+三种都会让那条一致性检查失败，`--dry-run` 与真实部署**都跑不起来**。
+现场报错：`CD registry view diverged from the canonical registry: aka`。
+
+**为什么此前没被发现**：唯一会渲染真实清单的用例 `test_remote_block_renders_and_parses`
+需要 `dev-host`，在 GitHub-hosted CI 上是 **skip** —— 缺陷在 CI 里不可见，
+只在开发机和真实部署路径上现形。
+
+### 二、修复与判据
+
+- 按 TOML 类型序列化；字符串按 TOML 规则转义（`\b \t \n \f \r " \`，其余控制字符
+  `\uXXXX`）；行内表的键与顶层键都加引号。
+- 新增三条回归，**直接取 `deploy-41.sh` 里那段 heredoc 的真实源码**执行：
+  `test_registry_view_round_trips_non_string_types`、
+  `test_registry_view_escapes_control_characters`、
+  `test_registry_view_quotes_dotted_inline_table_keys`。
+  它们不依赖 `dev-host`，CI 会执行。
+
+### 三、结果
+
+- `tests/test_cd_deploy_scripts.py`：**17 passed**（含 `test_remote_block_renders_and_parses`）。
+- 全量：**3002 passed / 9 skipped / 0 failed**。
+- 红→绿：只保留「类型」修复时，转义与带点键两条仍红；补全转义与引号后转绿。
+
+### 四、部署影响（合并前须知）
+
+`deploy/deploy-41.sh` **在 CD 的触发路径里**，合并本 PR 会触发一次对 41 的生产部署。
+`src/**` 未变，产物内容应与上一次成功部署（`39583ca`）一致；合并后需核对
+`/health` 版本、服务 active、四个 M3 开关仍缺席、`agent_runs` 行数不变。
+回滚只需还原 `deploy/deploy-41.sh` 一处。
+
+### 五、边界
+
+没有在 41 上执行过本脚本的新版本（本轮不部署）。因此「修复后能真实部署成功」
+在合并触发 CD 之前**未经生产验证** —— 已有证据只到 dry-run 与脚本级判据。
+
 ## 2026-10-20 · Dify 租户对接现状核实（单工作区）
 
 **范围**：只读核实，不改任何配置与数据。目的是把"租户在 Dify 侧到底怎么体现"这件事

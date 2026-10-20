@@ -12,6 +12,7 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -342,3 +343,94 @@ def test_cd_paths_guard_reads_the_real_block(tmp_path: Path) -> None:
     missing.write_text(real.replace("    paths:", "    pathsXYZ:"), encoding="utf-8")
     with pytest.raises(AssertionError, match="找不到"):
         _cd_push_paths(missing)
+
+
+# --------------------------------------------------------------------------
+# CD registry 派生：类型必须原样往返
+# --------------------------------------------------------------------------
+
+
+def _registry_renderer() -> str:
+    """取出 deploy-41.sh 里那段派生脚本的**真实源码**。
+
+    不复制一份 Python 到测试里 —— 那样测的是副本，脚本改了测试不会红。
+    """
+    script = (DEPLOY_DIR / "deploy-41.sh").read_text(encoding="utf-8")
+    match = re.search(
+        r"python3 - \"\$CANONICAL_REGISTRY\" \"\$CD_REGISTRY\" \"\$CD_ALIAS\" <<'PY'\n(.*?)\nPY\n",
+        script,
+        re.DOTALL,
+    )
+    assert match is not None, "deploy-41.sh 里找不到派生 registry 的那段 heredoc"
+    return match.group(1)
+
+
+def _render_registry(tmp_path: Path, canonical_text: str) -> dict[str, object]:
+    """把一段主清单喂给 `deploy-41.sh` 里**真实**的派生脚本，读回派生视图。"""
+    source = tmp_path / "canonical.toml"
+    source.write_text(canonical_text, encoding="utf-8")
+    derived = tmp_path / "derived.toml"
+
+    namespace: dict[str, object] = {"__name__": "registry_renderer"}
+    saved = sys.argv
+    sys.argv = ["renderer", str(source), str(derived), "aiops-41-cd"]
+    try:
+        exec(compile(_registry_renderer(), "<deploy-41.sh>", "exec"), namespace)  # noqa: S102
+    finally:
+        sys.argv = saved
+
+    import tomllib
+
+    with derived.open("rb") as handle:
+        return tomllib.load(handle)["hosts"]["aiops-41"]
+
+
+def test_registry_view_round_trips_non_string_types(tmp_path: Path) -> None:
+    """派生视图必须**类型无损**：数组还是数组，布尔还是布尔。
+
+    这里曾经把每个值都写成 `"%s"`，于是清单里的 `aka = ["41"]`（数组）被写成
+    字符串 `"['41']"`，读回来是 str —— 派生视图与主清单永远不相等，dry-run 与
+    真实部署都会停在一致性检查。它不是 M3 的问题，但它阻断每一次部署。
+    """
+    view = _render_registry(
+        tmp_path,
+        "[hosts.aiops-41]\n"
+        'aka = ["41", "gateway-41"]\n'
+        'ssh_alias = "manual-41"\n'
+        'role = "service-host"\n'
+        "write_gate = true\n"
+        "retries = 3\n"
+        "timeout = 2.5\n",
+    )
+    assert view["aka"] == ["41", "gateway-41"], "数组被写成了字符串"
+    assert isinstance(view["aka"], list)
+    assert view["write_gate"] is True
+    assert view["retries"] == 3
+    assert view["timeout"] == 2.5
+    assert view["ssh_alias"] == "aiops-41-cd"
+
+
+def test_registry_view_escapes_control_characters(tmp_path: Path) -> None:
+    """控制字符必须写成转义序列，不能写成物理字符。
+
+    主清单里的 `"first\\nsecond"` 是**合法 TOML**：解析出来是一个带换行的字符串。
+    旧渲染把这个换行原样写进单行字符串 —— TOML 不允许，派生文件根本解析不了，
+    于是部署与回滚都停在那条一致性检查上。
+    """
+    view = _render_registry(
+        tmp_path,
+        "[hosts.aiops-41]\n"
+        'aka = ["first\\nsecond", "tab\\there", "back\\bspace", "cr\\rhere"]\n'
+        'note = "quote \\" and backslash \\\\"\n',
+    )
+    assert view["aka"] == ["first\nsecond", "tab\there", "back\bspace", "cr\rhere"]
+    assert view["note"] == 'quote " and backslash \\'
+
+
+def test_registry_view_quotes_dotted_inline_table_keys(tmp_path: Path) -> None:
+    """行内表的键要加引号：`"contact.name"` 是**一个**键，不是嵌套表。"""
+    view = _render_registry(
+        tmp_path,
+        '[hosts.aiops-41]\nmeta = { "contact.name" = "ops", "with space" = "x" }\n',
+    )
+    assert view["meta"] == {"contact.name": "ops", "with space": "x"}
