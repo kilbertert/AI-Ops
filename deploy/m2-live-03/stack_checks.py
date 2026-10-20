@@ -113,10 +113,9 @@ def _private_regular_problems(service: str, path: str) -> list[str]:
     if info.st_size == 0:
         problems.append(f"{service}: 清单为空 {path}")
     mode = stat.S_IMODE(info.st_mode)
-    # 两个加载器（Python `execution_manifest` / Java `ExecManifest`）共同拒绝的正是
-    # 「组或他人有任何权限」；0400/0600 都在契约之内，不额外要求 0600。
-    if mode & 0o077:
-        problems.append(f"{service}: 清单权限 {mode:04o} 过宽（只接受 0400/0600）")
+    # 部署文件只需要 owner-read，可选 owner-write；不接受仅写或执行位。
+    if mode not in {0o400, 0o600}:
+        problems.append(f"{service}: 清单权限 {mode:04o} 不合规（只接受 0400/0600）")
     return problems
 
 

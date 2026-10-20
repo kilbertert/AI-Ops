@@ -643,3 +643,16 @@ def test_identity_env_must_be_private_before_starting(deployment):
     result = _run_preflight(ctx)
     assert result.returncode != 0
     assert "构造身份文件必须是私有普通文件" in result.stdout
+
+
+@pytest.mark.parametrize("mode", [0o200, 0o500, 0o700])
+def test_manifest_refuses_write_only_or_executable_modes(tmp_path, mode):
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("mode_review", DEPLOY / "stack_checks.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    path = tmp_path / "manifest.json"
+    path.write_text("{}")
+    path.chmod(mode)
+    assert module._private_regular_problems("node", str(path))
