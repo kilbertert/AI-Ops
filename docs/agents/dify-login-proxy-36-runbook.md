@@ -34,6 +34,18 @@ sha256sum /tmp/aiops-login-sync.tgz              # 传完在远端再核一次
 ssh yidong-36 'cp -a /opt/aiops-login-proxy /opt/aiops-login-proxy.bak-$(date +%Y%m%d%H%M%S)'
 ```
 
+**环境文件也要备份，并且确认 `AIOPS_LOGIN_PROXY_ENVIRONMENT` 在不在**（#864 / ADR-0061）：
+
+```bash
+ssh yidong-36 'sudo cp -a /etc/aiops-login-proxy/login-proxy.env \
+                 /etc/aiops-login-proxy/login-proxy.env.bak-$(date +%Y%m%d%H%M%S)
+  sudo grep -n ^AIOPS_LOGIN_PROXY_ENVIRONMENT= /etc/aiops-login-proxy/login-proxy.env'
+```
+
+没有这一行，新代码**起不来**（`ValueError: AIOPS_LOGIN_PROXY_ENVIRONMENT is required`）——
+这是刻意的，见 §3.5。补值时取**这台代理服务的公司环境**（41 → `41`，95 → `95`），
+**不能照抄另一台**：两台填同一个值，两套 UPMS 的同名 `sys_user.id` 又会落回同一个 Dify 账号。
+
 nginx 两个文件也备份，**文件名带时间戳**：
 
 ```bash
@@ -58,6 +70,35 @@ ssh yidong-36 'cd /opt/aiops-login-proxy && tar -xzf /tmp/aiops-login-sync.tgz
 
 **判据**：解包后 `ls -ld /opt/aiops-login-proxy/aiops_diagnostics` 必须是
 `root root` 且 `a+rX`（`aiopslogin` 要能读）。不是就先修再重启。
+
+## 3.5 环境标识（#864）
+
+代码会读 `AIOPS_LOGIN_PROXY_ENVIRONMENT`，它参与 Dify 账号邮箱的派生
+（`{environment}-{公司用户id}@aiops-login.invalid`）。**部署完先确认它在**：
+
+```bash
+ssh yidong-36 'sudo grep -n ^AIOPS_LOGIN_PROXY_ENVIRONMENT= /etc/aiops-login-proxy/login-proxy.env'
+```
+
+判据不是"文件里有这一行"，而是**部署出来的那份代码**真的会拦下坏值。以服务身份跑：
+
+```bash
+ssh yidong-36 'cat > /tmp/env_gate.py <<PY
+import sys
+sys.path.insert(0, "/opt/aiops-login-proxy")
+from aiops_diagnostics.dify_login_provision import DifyConsoleSettings
+for v in ("", "prod.41"):
+    try:
+        DifyConsoleSettings(base_url="http://x", secret_key="x", environment=v)
+        print(repr(v), "-> STARTED (bad)")
+    except Exception as e:
+        print(repr(v), "->", type(e).__name__)
+PY
+sudo -n -u aiopslogin /usr/bin/python3 /tmp/env_gate.py'
+# 期望："" 与 "prod.41" 都抛 DifyProvisionError（空值先被 required() 挡在 server 层）
+```
+
+⚠️ 这个探针**只构造 settings**，不读环境文件、不连任何东西 —— 它不碰生产映射表。
 
 ## 4. nginx 两处配置（缺一不可）
 
