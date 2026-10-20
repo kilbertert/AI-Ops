@@ -81,9 +81,9 @@ deploy/
     checks.sh
     compose.synthetic.yaml
     compose.yaml
+    context_digest.py
     gateway-requirements.txt
-    gateway.Dockerfile
-    ... (9 more)
+    ... (10 more)
   check-41-editable.sh
   classify-remote-result.sh
   company-gitlab-api.sh
