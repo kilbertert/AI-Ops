@@ -63,7 +63,7 @@ worker 日志（2026-10-15）：
 
 ### 五、一个容易写错的地方（留给下一位）
 
-`docs/dify-console-bridge/README.md` 里记的 cookie 前缀规则同样适用于手工复验：控制台
+`ops/dify-console-bridge/README.md` 里记的 cookie 前缀规则同样适用于手工复验：控制台
 读 external API 模板时，`X-CSRF-Token` 必须与 `__Host-csrf_token` cookie **同值**，
 只带 `Authorization` 一律 401。用登录代理自签的 owner 会话复验时，这一点最容易漏。
 

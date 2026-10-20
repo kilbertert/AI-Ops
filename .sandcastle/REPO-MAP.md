@@ -45,7 +45,7 @@ no project argument. Both answer *where* something is; neither replaces reading 
 
 ## Tests
 
-- tests/ — 171 test file(s, recursive)
+- tests/ — 172 test file(s, recursive)
 - script "cd:watch:test": node .sandcastle/cd-watch.test.mjs
 - pytest (pyproject.toml / pytest.ini present)
 
@@ -55,9 +55,9 @@ no project argument. Both answer *where* something is; neither replaces reading 
 - AGENTS.md
 - CLAUDE.md
 - README.md
-- docs/ — 117 markdown file(s)
-- docs/adr/ — 59 markdown file(s)
-- docs/agents/ — 35 markdown file(s)
+- docs/ — 119 markdown file(s)
+- docs/adr/ — 60 markdown file(s)
+- docs/agents/ — 36 markdown file(s)
 
 ## Tree (depth 2, first 80 lines; dependencies, build
 output and run residue omitted)
@@ -67,10 +67,14 @@ output and run residue omitted)
 deploy/
   dify-36/
     nginx/
+    patches/
     ssrf_proxy/
+    acceptance.feature
     check.sh
     docker-compose.yaml
     env.example
+    migrate_20261020.py
+    qa-plan.md
     README.md
   m2-live-03/
     schema/
@@ -105,7 +109,7 @@ docs/
     0008-adr-0003-deviation-session-direct-read.md
     0009-operator-identity-via-company-oauth2-token.md
     0010-reversal-of-prd-200-language-boundary.md
-    ... (49 more)
+    ... (50 more)
   afk-cutover/
     decisions.md
     pr-a-spec.md
@@ -123,7 +127,7 @@ docs/
     company-platform-integration-baseline.md
     company-repo-index.md
     company-upms-admin-operations.md
-    ... (25 more)
+    ... (26 more)
   architecture/
     ai-ops-architecture.html
     ai-ops-architecture.json
