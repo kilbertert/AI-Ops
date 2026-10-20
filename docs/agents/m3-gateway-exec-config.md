@@ -119,3 +119,75 @@ uv run python tools/m2_close/m3node/verify_gateway_exec_config.py --out /tmp/exe
 它在一个一次性数据根上起真 `create_gateway_app`，用回环 CPMS 与平台替身，
 覆盖一致 / 缺失 / 错摘要 / 兄弟节点四种组合，并直接读数据库核对终态。
 `/health` 200 不能代替这些判据。
+
+---
+
+## 8. 整轮终局：把「工具领取成功」与「整轮完成」分开（M3-NODE-LINK-01）
+
+上一节的三层判定只回答「这次领取是不是跑在我方受控配置上」。它**不**回答
+「这一轮模型工具循环走完了没有」—— 领取成功只说明业务数据已经取回。
+
+### 8.1 状态：复用主状态，不新增列
+
+| `state` | 快照 | 启用清单的新 run | 未启用 / 旧记录 |
+|---|---|---|---|
+| `running` | 无 | 已领取、正在取数 | 已领取（瞬间即逝） |
+| `running` | **有** | 已取数、交回节点，**等待整轮确认** | 不出现 |
+| `succeeded` | 有 | **整轮已确认** | 领取时直接落（既有语义） |
+
+`complete()`（保存快照）按 `expected_agent_version` 是否为空分流：为空 ⇒ `succeeded`；
+非空 ⇒ 写快照但**保持 `running`**、`completed_at` 留空。转 `succeeded` 只能由
+`complete_loop()` 完成，它的条件全部在同一个写事务里：
+
+- 记录有期望身份，且**本次回传的身份与之逐字相等**（领取时的 `matched` **不**授权
+  另一份配置提交完成 —— 每个通知都要自己证明自己）；
+- 仍是 `running` **且已有快照**（没取数就不存在「整轮完成」）；
+- 此刻未过期（`expires_at > now`，与 `claim`/`complete` 互补）。
+
+取消与进程退出没有回调 ⇒ 记录停在 `running`，由既有 TTL 收敛为 `expired`。
+**`running` + 快照永远不会被读成成功。**
+
+### 8.2 完成通知端点
+
+`POST /v1/internal/charging-status/completions/{run_id}`
+体：`{"status":"completed"}` 或 `{"status":"failed","reason":"<短码>"}`（严格模型，多一个字段 422）。
+
+- 凭证与领取同一份节点令牌；绑定核对（节点 / 环境 / app / agent）与领取同一段代码，
+  在任何写之前完成。响应**不含业务快照**：`{"run_id","state"}`。
+- 幂等：同状态重复通知 200、不改 `completed_at`/`reason`；已完成后再报失败 409；
+  终态（`revoked`/`expired`/`failed`）403；未启用清单 409 `AGENT_RUN_COMPLETION_NOT_TRACKED`；
+  `issued` 或无快照 409 `AGENT_RUN_COMPLETION_CONFLICT`。
+- `failed` 可以从 `issued` **或** `running`（含已取数）落终态 —— 首次领取就失败的那条路也算。
+
+### 8.3 节点侧：整轮结束的判定必须 fail closed
+
+节点接管 `ChatSessionRuntime`（自动配置里它是普通 `@Bean`，所以用 `@Primary` 子类；
+实测 gRPC handler 持有的确实是子类实例），把 `completionConsumer` / `errorConsumer` 包一层：
+
+1. 一个 order 晚于 `ToolCallingAdvisor` 的 `BaseAdvisor` 逐轮记录 **finish reason**；
+2. 完成回调到达时，**最后一次 finish reason 必须是 `STOP`**，否则按失败处理；
+3. 然后向 Gateway 发完成通知，**只有 2xx 才算确认**；未确认 ⇒ 走 `errorConsumer`。
+
+为什么必须有第 2 步：实测末轮被截断（SSE 无 `[DONE]`、无 `finish_reason`）时，
+框架照样触发完成回调、completion 文本是半截，finish reason 是 `_UNKNOWN`。
+「有完成回调」不能证明上游把最后一轮发完了。
+
+为什么受控领取失败要抛异常：`ToolExecutionException` 会被框架默认的
+`DefaultToolExecutionExceptionProcessor(alwaysThrow=false)` 转成文本继续跑，
+于是 `ERROR: …` 会让整轮"成功"结束。启用清单时工具抛 `RuntimeException` 中止整轮；
+未启用时保留 M2 的文本行为。
+
+### 8.4 部署顺序与回滚
+
+1. **Gateway 先**：本片不新增列（复用主状态），只有新端点与新判定。
+2. **节点后**：启用清单后才发身份头与完成通知。
+3. **回滚**：清空两侧清单 ⇒ 回到未启用分支；旧节点不发通知，新节点在未启用时也原样透传。
+
+### 8.5 验收
+
+```bash
+M3NODE_DEPS=… M3NODE_JDK_IMAGE=… uv run python tools/m2_close/m3node/verify_node_link.py --out /tmp/node-link.json
+```
+
+真 Gateway 进程 + 真 Java 节点 + 合成模型/CPMS，26 条判据（LINK-01..10）。
+平台派发入口是替身，但**领取与完成通知都由节点自己的代码发出**。

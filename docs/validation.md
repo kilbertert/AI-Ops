@@ -1,90 +1,50 @@
-## 2026-10-20 · Dify 租户对接现状核实（单工作区）
+## 2026-10-20 · 整轮完成与工具领取的分界（M3-NODE-LINK-01）
 
-**范围**：只读核实，不改任何配置与数据。目的是把"租户在 Dify 侧到底怎么体现"这件事
-从推断变成有据可查。
+**范围**：Gateway 状态机新增「整轮确认」，节点侧新增身份回传与整轮守卫。
+**未完成业务验收。不访问 41、不调真实供应商、不发真实订单。**
 
-**核实到的线上事实（36，2026-10-20）**：
+### 一、契约变化
 
-```
-Dify tenants 表                          1 行
-  AI-Ops Admin's Workspace               2db44904-f981-42ca-b7e2-6f35cb2afffd
+`complete()`（保存快照）按 `expected_agent_version` 是否为空分流：为空 ⇒ `succeeded`
+（M2 既有语义）；非空 ⇒ **写快照但保持 `running`**、`completed_at` 留空。
+新增 `complete_loop()`：同一写事务内要求「回传身份逐字相等 + 仍 running + 已有快照 +
+未过期」才转 `succeeded`。取消与进程退出没有回调 ⇒ 停在 `running`，由既有 TTL 收敛为
+`expired`。**`running` + 快照永远不会被读成成功；不新增状态列。**
+新端点 `POST /v1/internal/charging-status/completions/{run_id}` 只回 `{"run_id","state"}`。
 
-tenant_account_joins
-  dify-admin@aiops.local                  owner   current=t
-  1454348737375174658@aiops-login.invalid editor  current=t
+### 二、接缝实测（先量后写）
 
-代理映射表
-  company_user_id=1454348737375174658 | tenant_id=-1 | user_type=-1 | active
-```
+| 问题 | 实测 |
+|---|---|
+| 整轮结束信号 | 只有 `ChatSessionRequest.completionConsumer`；失败走 `errorConsumer`；**取消没有回调** |
+| 末轮完整性 | 正常 `finishReason=STOP`；截断（无 `[DONE]`）为 `_UNKNOWN` 且**完成回调照样到达**；上游 500 时该轮 after 不出现 |
+| 工具失败 | `ToolExecutionException` 被默认处理器转成文本继续跑 ⇒ `ERROR:` 会让整轮"成功"；raw `RuntimeException` 才中止 |
+| 接管方式 | 自动配置的 `chatSessionRuntime` 是普通 `@Bean`；`@Primary` 子类实测被 gRPC handler 持有（`sameInstance=true`） |
 
-**代码侧的对应事实**（读源码，不是推断）：
+探针与输出在私有目录，不入仓。
 
-- `provision_editor(settings, *, owner_session, company_user_id, username)` —— **没有
-  tenant 入参**；`INVITE_PATH` 写死 `/console/api/workspaces/current/members/invite-email`。
-- Dify `ext_login.py` 的 console 分支只按 `user_id` 取账号；当前 workspace 由
-  `load_user` 读 `TenantAccountJoin.current` 决定，会话里**不含** workspace 身份。
-- `login-proxy.env` 无任何 workspace 配置项。
-- 桥的 `AIOPS_CONSOLE_BRIDGE_WORKSPACE_ID` 是单一常量。
-- 租户唯一下游消费点：`X-AIOps-Initiator-Tenant` → `build_trial_scope()`。
+### 三、自动化判据
 
-**结论**：Dify 侧**没有**租户隔离，这是 PRD #772 §C 的 V1 暂定，不是遗漏。
-但该暂定要求的 ADR 此前缺失，本次补记（ADR-0056）。
+- `tests/test_m3_node_link_state.py`（10）+ `tests/test_m3_node_link_completion.py`（16）⇒ **26 passed**。
+- **定向变异（先红后绿，均已恢复）**：
+  ① `complete()` 改回无条件 `succeeded` ⇒ 8 条转红（含「重试只读一次」）；
+  ② `complete_loop()` 去掉身份再证明 ⇒ 3 条转红（错摘要 / 缺头 / 不同身份）。
+- 定向变异（节点侧，真跑端到端）：
+  ③ 去掉 finish reason 守卫 ⇒ 只有 LINK-03 截断转红；
+  ④ 把 claim 失败降级成 `ERROR:` 文本 ⇒ LINK-04「整轮不再往下跑（模型只调 1 次）」转红（实测 2 次）。
 
-**补做的实证（同日，已从推断变成实测）**：
+### 四、真实端到端（`tools/m2_close/m3node/verify_node_link.py`）
 
-用代理自己的 `provision_editor` 真的开了一个探针账号（`zz-tenantb-probe-*`），
-再以它的身份打 Dify 的真实 API：
+真 Gateway 进程 + 真 Java 节点 + 合成模型/CPMS；平台派发入口是替身，但**领取与完成通知
+都由节点自己的类发出**。**26/26 PASS**：正常两轮、第二轮 500、末轮截断、受控 claim 被拒
+（身份不一致与「已领取未写快照」两种）、取消、重试、撤销边界、两 run 归属、未启用兼容。
 
-```
-开户后立刻可见 app 数：3        ← 与既有账号完全相同
-  aiops-41-ops-methodology-agent / charge_charging_A_kbqa / aiops-41-kefu-agent
+### 五、边界
 
-GET /console/api/apps/<id>
-  tenant-A(既有) -> 200
-  tenant-B(新建) -> 200
-
-GET /console/api/apps/<id>/export?include_secret=false
-  tenant-B -> 200，4975 字节完整 DSL
-```
-
-**结论**：新开的账号**一上来就能拿到别人智能体的完整可编辑配置**。
-「跨租户可见」不再是推断；`editor` 在单一 workspace 内是平权的。
-
-**探针清理（据实）**：
-1. `DELETE /console/api/workspaces/current/members/<id>` → 200（移出 workspace）
-2. 但账号行还在 —— 移除成员不删账号，这是 Dify 的语义
-3. 再删 `tenant_account_joins` 与 `accounts` 行
-4. 最终状态核对：`accounts` 只剩原来两个；`tenant_account_joins` 2 条
-5. 三个生产 app 的 `updated_at` 仍是 10-14 / 10-15 —— **未被探针改动**
-   （全程只有读与一次 export，没有任何写 app 的调用）
-
-**业务验收状态：未完成业务验收。** 本次是**只读核实 + 一次可回滚的探针**，
-不是业务验收 —— 没有真实运营用真实账号走完整条链路，也没有验证多工作区（尚不存在）。
-下列各节列的是核实到的**事实**，不是"功能已验收"。
-
-**仍未做的**：
-- 没有用**真实浏览器**走一遍（全部是服务端 API 调用）。
-- 没有验证"改完之后发布是否真的生效" —— 那属于多工作区设计之后的事。
-- **95（`prod-bugtrack-120`）未能连上**：`120.55.45.59:2134` 超时。它的身份来自
-  用户提供的 host declaration，**未在主机上核实**。
-
-## 2026-10-19 · M3 Gateway 合并与部署核验（#854）
-
-**身份**：合并提交 `39583ca208b190be303cb6e643e298c0823709cc`；CD run `39341254239` 成功。
-PR 的 verify / Workflow policy / spec-tree lint 均通过，CI 为 **2998 passed / 10 skipped**；
-Devin 初审意见已处置、复审结束、未解决线程为 0。
-
-部署前后均通过既有主机访问入口只读取证：服务 active；部署后健康版本为
-`0.1.0+39583ca208b1`；`agent_runs.py`、`execution_manifest.py`、`gateway_api.py`、
-`gateway_config.py` 的 SHA-256 与合并代码一致。`agent_runs` 原本无记录，部署后仍无记录，
-新增 `expected_agent_version` / `observed_agent_version` / `exec_config_state` 三列。
-
-`AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL`、`AIOPS_GATEWAY_EXECUTION_ENVIRONMENT`、
-`AIOPS_GATEWAY_AGENT_RUN_CONFIG_FILE`、`AIOPS_GATEWAY_EXECUTION_MANIFEST_FILE` 均保持未配置。
-CD 按既有流程备份、部署及核验；私有备份位置与完整取证记录保存在运维记录中。
-
-**未完成业务验收**：本次证明部署身份、健康与加列迁移，未启用消费/委派入口，
-未发真实订单或模型请求。节点发送端与完整工具循环完成语义仍留在下一片。
+- 合成上游与替身：**不**证明真实供应商、真实订单、生产装配。
+- 平台替身按**同步**语义起节点（真实平台也是同步接口）；它不证明真实 gRPC 派发时序。
+- `--network=host` 只为让节点打到宿主 loopback 上的真 Gateway（本机验收的已知取舍）。
+- 取消后的 `running → expired` 由既有 TTL 语义覆盖（单测钉住），端到端只证「取消不会被报成成功」。
 
 ## 2026-10-19 · Gateway 签发时固定执行配置身份，领取时对照并持久化（M3-GATEWAY-01 / R1）
 

@@ -3185,3 +3185,72 @@ Feature: 执行配置守卫在真实节点装配前生效（M3-NODE-GUARD-01）
       When 在流式路径上触发配置漂移
       Then 显式失败且上游调用计数为 0
       And 不以「返回空工具集合」或「返回替身」冒充拒绝
+
+Feature: 整轮完成与工具领取的分界（M3-NODE-LINK-01）
+  受控领取只证明「业务数据已按已核对的配置取回」。它不证明「整轮模型工具循环
+  走完了」。启用清单的 run 在取数之后保持 running，只有节点显式确认、且最后一轮
+  模型以合法终止结束时才转 succeeded。未启用清单时行为与今天逐字一致。
+
+  Rule: 快照不是成功
+
+    Scenario: LINK-01 正常两轮：一次业务、两次模型、整轮确认后成功
+      Given 已启用清单，且节点与 Gateway 使用同一份受控清单
+      When 一次已授权的委派在真实节点上完成一轮工具循环
+      Then 业务读取恰好一次，模型调用恰好两次
+      And 记录在取数之后仍是 running，直到节点确认整轮完成
+      And 回执的 agent_version 等于清单原始字节的 sha256，且 gap 为空
+
+    Scenario: LINK-02 第二轮模型失败
+      Given 第一轮工具调用已真实发生
+      When 第二轮上游返回错误
+      Then 记录落 failed，派发入口不返回成功回执
+      And 不产生任何「整轮完成」的成功通知
+
+    Scenario: LINK-03 末轮被截断不算完成
+      Given 上游在最后一轮只发送部分正文就关闭，且没有合法终止标记
+      When 该次委派执行
+      Then 框架的完成回调即使到达，也不得转成 succeeded
+      And 记录落失败（或保留 running 待 TTL 收敛），绝无 succeeded
+
+    Scenario: LINK-04 受控领取被拒必须让整轮失败
+      Given 领取被 Gateway 拒绝（身份不一致，或另一执行者已领取但尚未写快照）
+      When 节点把这次失败交给模型
+      Then 整轮中止，不再发生第二轮模型调用
+      And 记录不落在 succeeded，派发入口不返回成功回执
+
+  Rule: 完成通知自身要重新证明身份
+
+    Scenario: LINK-05 取消与进程退出没有完成信号
+      Given 节点已取到业务快照
+      When 订阅方在模型输出中途取消
+      Then 不发任何完成通知，记录停在 running（已取数）
+      And 到期后按既有 TTL 语义收敛为 expired，绝不伪造成功
+
+    Scenario: LINK-06 两个 run 各自归属
+      Given 两次委派各自持有自己的 run_id
+      When 两者先后完成
+      Then 每条通知只作用于自己的记录，快照与身份互不串
+
+    Scenario: LINK-07 领取重试不读第二次业务
+      Given 记录已有快照但尚未确认整轮完成
+      When 节点再次领取同一个 run
+      Then 交回同一份快照，业务读取计数不增加
+      And 重试路径同样核对身份、终态与有效期
+
+    Scenario: LINK-08 重复与冲突的完成通知
+      Given 一条已确认完成的记录
+      When 再次发送同状态的完成通知
+      Then 幂等返回成功，首次完成时间与原因不被覆盖
+      And 之后发送相反状态的成功通知被拒，终态不被改写
+
+    Scenario: LINK-09 撤销与到期边界
+      Given 记录已取数但尚未确认整轮
+      When 在此期间被撤销，或恰好到期
+      Then 完成通知被拒，记录保持撤销/过期，不复活
+      And 快照不再被交出
+
+    Scenario: LINK-10 未启用清单时行为逐字不变
+      Given 节点与 Gateway 都没有配置执行配置清单
+      When 一次委派完成
+      Then 领取即可成功（既有语义），回执字段集合与升级前逐字相同
+      And 节点不发身份头，也不发完成通知

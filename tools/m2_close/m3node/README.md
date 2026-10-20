@@ -25,6 +25,23 @@ M3NODE_DEPS=… M3NODE_JDK_IMAGE=… uv run python tools/m2_close/m3node/manifes
 三者互不替代：单测证判据、真实 HTTP 证进程与路由、迁移脚本证部署影响。
 `manifest-samples/` 是两端**共用**的样本；加样本要同时跑 Java 一侧，否则对照会遮住新分歧。
 
+## 端到端：整轮完成与工具领取的分界（`verify_node_link.py`）
+
+```bash
+M3NODE_DEPS=… M3NODE_JDK_IMAGE=… \
+  uv run python tools/m2_close/m3node/verify_node_link.py --out /tmp/node-link.json
+```
+
+真 Gateway 进程（`create_gateway_app`，一次性数据根）+ **真 Java 节点**（编译自
+`tools/m2_close/node/src`）+ 合成模型/CPMS。平台派发入口是替身，但**领取与完成通知
+都由节点自己的类发出**；平台替身按**同步**语义起节点（真实平台也是同步接口），
+否则「派发返回时记录已 succeeded」这条既有语义会被替身自己的异步性破坏。
+
+26 条判据（LINK-01..10）：正常两轮、第二轮 500、末轮截断、受控 claim 被拒（身份不一致
+与「已领取未写快照」两种）、取消、领取重试、撤销边界、两 run 归属、未启用兼容。
+节点容器用 `--network=host` 才能打到宿主 loopback 上的真 Gateway —— 这是本机验收的
+已知取舍，不是隔离证明。
+
 ## 节点侧重跑
 
 本目录是这一片的验收工具。它证明的是**真实节点装配**在模型调用前拒绝配置漂移 ——
