@@ -1,3 +1,73 @@
+## 2026-10-20 · Dify 租户对接现状核实（单工作区）
+
+**范围**：只读核实，不改任何配置与数据。目的是把"租户在 Dify 侧到底怎么体现"这件事
+从推断变成有据可查。
+
+**核实到的线上事实（36，2026-10-20）**：
+
+```
+Dify tenants 表                          1 行
+  AI-Ops Admin's Workspace               2db44904-f981-42ca-b7e2-6f35cb2afffd
+
+tenant_account_joins
+  dify-admin@aiops.local                  owner   current=t
+  1454348737375174658@aiops-login.invalid editor  current=t
+
+代理映射表
+  company_user_id=1454348737375174658 | tenant_id=-1 | user_type=-1 | active
+```
+
+**代码侧的对应事实**（读源码，不是推断）：
+
+- `provision_editor(settings, *, owner_session, company_user_id, username)` —— **没有
+  tenant 入参**；`INVITE_PATH` 写死 `/console/api/workspaces/current/members/invite-email`。
+- Dify `ext_login.py` 的 console 分支只按 `user_id` 取账号；当前 workspace 由
+  `load_user` 读 `TenantAccountJoin.current` 决定，会话里**不含** workspace 身份。
+- `login-proxy.env` 无任何 workspace 配置项。
+- 桥的 `AIOPS_CONSOLE_BRIDGE_WORKSPACE_ID` 是单一常量。
+- 租户唯一下游消费点：`X-AIOps-Initiator-Tenant` → `build_trial_scope()`。
+
+**结论**：Dify 侧**没有**租户隔离，这是 PRD #772 §C 的 V1 暂定，不是遗漏。
+但该暂定要求的 ADR 此前缺失，本次补记（ADR-0056）。
+
+**补做的实证（同日，已从推断变成实测）**：
+
+用代理自己的 `provision_editor` 真的开了一个探针账号（`zz-tenantb-probe-*`），
+再以它的身份打 Dify 的真实 API：
+
+```
+开户后立刻可见 app 数：3        ← 与既有账号完全相同
+  aiops-41-ops-methodology-agent / charge_charging_A_kbqa / aiops-41-kefu-agent
+
+GET /console/api/apps/<id>
+  tenant-A(既有) -> 200
+  tenant-B(新建) -> 200
+
+GET /console/api/apps/<id>/export?include_secret=false
+  tenant-B -> 200，4975 字节完整 DSL
+```
+
+**结论**：新开的账号**一上来就能拿到别人智能体的完整可编辑配置**。
+「跨租户可见」不再是推断；`editor` 在单一 workspace 内是平权的。
+
+**探针清理（据实）**：
+1. `DELETE /console/api/workspaces/current/members/<id>` → 200（移出 workspace）
+2. 但账号行还在 —— 移除成员不删账号，这是 Dify 的语义
+3. 再删 `tenant_account_joins` 与 `accounts` 行
+4. 最终状态核对：`accounts` 只剩原来两个；`tenant_account_joins` 2 条
+5. 三个生产 app 的 `updated_at` 仍是 10-14 / 10-15 —— **未被探针改动**
+   （全程只有读与一次 export，没有任何写 app 的调用）
+
+**业务验收状态：未完成业务验收。** 本次是**只读核实 + 一次可回滚的探针**，
+不是业务验收 —— 没有真实运营用真实账号走完整条链路，也没有验证多工作区（尚不存在）。
+下列各节列的是核实到的**事实**，不是"功能已验收"。
+
+**仍未做的**：
+- 没有用**真实浏览器**走一遍（全部是服务端 API 调用）。
+- 没有验证"改完之后发布是否真的生效" —— 那属于多工作区设计之后的事。
+- **95（`prod-bugtrack-120`）未能连上**：`120.55.45.59:2134` 超时。它的身份来自
+  用户提供的 host declaration，**未在主机上核实**。
+
 ## 2026-10-19 · M3 Gateway 合并与部署核验（#854）
 
 **身份**：合并提交 `39583ca208b190be303cb6e643e298c0823709cc`；CD run `39341254239` 成功。
