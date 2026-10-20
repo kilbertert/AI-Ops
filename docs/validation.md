@@ -1,3 +1,21 @@
+## 2026-10-19 · M3 Gateway 合并与部署核验（#854）
+
+**身份**：合并提交 `39583ca208b190be303cb6e643e298c0823709cc`；CD run `39341254239` 成功。
+PR 的 verify / Workflow policy / spec-tree lint 均通过，CI 为 **2998 passed / 10 skipped**；
+Devin 初审意见已处置、复审结束、未解决线程为 0。
+
+部署前后均通过既有主机访问入口只读取证：服务 active；部署后健康版本为
+`0.1.0+39583ca208b1`；`agent_runs.py`、`execution_manifest.py`、`gateway_api.py`、
+`gateway_config.py` 的 SHA-256 与合并代码一致。`agent_runs` 原本无记录，部署后仍无记录，
+新增 `expected_agent_version` / `observed_agent_version` / `exec_config_state` 三列。
+
+`AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL`、`AIOPS_GATEWAY_EXECUTION_ENVIRONMENT`、
+`AIOPS_GATEWAY_AGENT_RUN_CONFIG_FILE`、`AIOPS_GATEWAY_EXECUTION_MANIFEST_FILE` 均保持未配置。
+CD 按既有流程备份、部署及核验；私有备份位置与完整取证记录保存在运维记录中。
+
+**未完成业务验收**：本次证明部署身份、健康与加列迁移，未启用消费/委派入口，
+未发真实订单或模型请求。节点发送端与完整工具循环完成语义仍留在下一片。
+
 ## 2026-10-19 · Gateway 签发时固定执行配置身份，领取时对照并持久化（M3-GATEWAY-01 / R1）
 
 **范围**：Gateway 侧。节点片已合并（#842）；本片不改节点守卫逻辑，不进通用版本平台。
