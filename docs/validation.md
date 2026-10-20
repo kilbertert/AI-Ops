@@ -57,6 +57,80 @@ com.openai.errors.PermissionDeniedException: 403: 预扣费额度失败,
 
 整轮成功、快照内容正确性、真实供应商与模型质量、App 客户端、公网启用。
 **不能把本轮读成「M3 已验收」。**
+## 2026-10-20 · 36 上打开 Dify 的 INNER_API（多 workspace 的前置）
+
+**范围**：一次**生产配置变更**（`/opt/dify/deploy/.env` + `docker compose up -d api worker`），
+外加三条门判据与两条暴露面判据。目的是让"建 workspace"那条路可用。
+
+**业务验收状态：未完成业务验收。** 这不是业务功能，是**基础设施前置**。它证明的是
+"门开了、暴露面没扩大"，**不是**"开户能跑通"（开户还没实现，且没有任何真实运营走过这条链路）。
+
+### 一、改动
+
+```
+/opt/dify/deploy/.env 追加：
+  INNER_API=true
+  INNER_API_KEY=<32 字节 hex，只写进该文件>
+备份：/opt/dify/deploy/.env.bak-innerapi-20261020160425
+重启：cd /opt/dify/deploy && docker compose up -d api worker
+```
+
+重启后运行期确认（容器内读 `dify_config`）：
+
+```
+INNER_API: True
+INNER_API_KEY set: True
+```
+
+### 二、门开了（三条，对 api 容器的内网 IP:5001 直连）
+
+| 请求 | 结果 |
+|---|---|
+| 不带 key | **401** `{"code":"inner_api_unauthorized","message":"Unauthorized.","status":401}` |
+| 错 key | **401** 同上 |
+| 正确 key + 不存在的 owner | **404** `{"message":"owner account not found."}` ← **门开了**：走到了"查 owner" |
+
+第三条才有判据价值：401 只证明过滤器在，404 证明**请求穿过了过滤器**。
+
+### 三、暴露面没有扩大（两条）
+
+| 路径 | 结果 |
+|---|---|
+| Dify 自己的 nginx：`http://127.0.0.1:10018/inner/api/enterprise/workspace` | **404** |
+| 公网 TLS 入口：`https://dify.ranlei.work/inner/api/enterprise/workspace` | **404** |
+
+api 容器只 publish `5001/tcp` 且**未映射到宿主**（`docker ps` 确认），宿主只能经 docker
+内网 IP（`172.21.0.x`）访问。⇒ 调用路径只能是"36 本机的进程经容器内网"，
+不经过任何公网入口或宿主 nginx。
+
+### 四、回归
+
+```
+http://127.0.0.1:10008/signin            -> 200
+https://dify.ranlei.work/signin          -> 200
+```
+
+### 五、回滚
+
+恢复 `.env.bak-innerapi-20261020160425` → `docker compose up -d api worker`。
+两次都只是重启 api/worker，**没有动数据库、没有动 nginx、没有动登录代理**。
+
+**开户拓扑（评审后收敛）**：CLI 在目标环境的机器上跑，经一条只绑回环的 SSH 隧道
+（`127.0.0.1:15001`）调 36 的 inner_api，建完就地写本机库。这条**改变部署方式与安全边界**，
+所以同时写进了部署文档（`deploy/dify-36/README.md`）与设计文档。
+**但它尚未实施、也未实测** —— 本记录只记录决定。
+
+**模板已同步（评审指出）**：`deploy/dify-36/env.example` 加了 `INNER_API=true` 与
+`INNER_API_KEY=`（空占位）+ 一段说明；`deploy/dify-36/check.sh` 加了两条断言 + 一个反例
+（把它改回 `false` 必须报错）。否则从模板重建实例会**静默退回默认关闭**，开户随之停摆
+而没有任何报错。`check.sh` 实跑通过。
+
+### 六、据实
+
+- **没有**用这条门真的建过一个 workspace（要等到开户实现里做，且那时会用
+  `owner_email` 指向平台服务身份）。
+- 第一次 curl 无 key 时出现一次 6 秒超时（容器刚起），重试即 401 —— 把它记在这里，
+  不当作"偶发不稳定"的证据，也不掩盖。
 
 ## 2026-10-20 · 节点 jar 可复现构建（PR #863）
 
