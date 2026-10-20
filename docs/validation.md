@@ -94,6 +94,72 @@ Codex 复核算出的正是后者。锁文件里那个值于是只代表**某台
 - **开关尚未打开**，本轮没有任何真实请求；构造身份是这条链路的已知合成点。
 - `model_options` 取平台默认值（`temperature=1.0` / `max_tokens=4096`）：若与平台实际下发
   不一致，节点会以 `OPTIONS` 拒绝 —— 这是**期望的失败模式**，不是静默放行。
+## 2026-10-20 · Dify 多租户：grilling 期间的只读核实
+
+**范围**：全部是**只读查询与源码阅读**，外加一次已回滚的探针（见下）。
+目的是把"租户在 Dify 侧怎么表达"从推断变成有据可查。
+
+**业务验收状态：未完成业务验收。** 这是设计阶段，没有实施，也没有真实运营走这条链路。
+本节列的是**核实到的环境事实**，不是"功能已验收"。
+
+### 一、36 上的 Dify（1.17.1）
+
+```
+tenants                     1 行（AI-Ops Admin's Workspace）
+tenant_account_joins        2 条（owner + 一个 editor）
+apps                        3 个，全部属于那一个 tenant
+datasets                    3 行：2 个 external（回指 41 网关）+ 1 个 vendor
+provider_credentials        2 条（openai / deepseek），tenant_id 非空、无共享表
+VECTOR_STORE                None  ← vendor dataset 的 1564 chunk 全停在 indexing
+/console/api/apps?page=1    需要 Bearer + X-CSRF-Token + 两枚 cookie，缺一个 401
+```
+
+**越权实证**（grilling 需要，已完成回滚）：用代理的 `provision_editor` 新开账号
+`zz-tenantb-probe-*`，它一开局就能列出并导出全部 3 个 app 的完整 DSL（`/export` 200，4975 字节）。
+清理：先 DELETE members、再删 `tenant_account_joins` 与 `accounts` 行；
+最终回到 2 个账号 / 2 条 join；三个 app 的 `updated_at` 未变。
+
+### 二、41 与 95 是两个环境（不是两套 Dify）
+
+| | 41 | 95 |
+|---|---|---|
+| 网关 UPMS | `192.168.1.44:30899` | `127.0.0.1:5999` |
+| 业务库 | `192.168.1.45/cloud_charging_pile` | `192.168.0.39/cloud_charging_pile` |
+| 网关 | `127.0.0.1:8788` | `127.0.0.1:8788` |
+| `dify_app_registry` | 3 行（2 个 tenant） | **表不存在** |
+| Dify | 指向 36 | **无 Dify、无 DIFY_* 配置** |
+
+95 经 HK 跳板连上（`prod-bugtrack-120`，`120.55.45.59:2134`），
+`/root/dify/docker` 只有三个空目录，容器列表里没有 Dify。
+
+### 三、公司代码侧核实（`git.qushiyun.com:801`，9 个 Java 仓全分支）
+
+**JWT 没有 `domain`**：`cloud-upms:release` 的 `issueLoginToken` 写出的 claim 是
+`id, user_id, username, organ_id, type, tenant_id, system_id, shop_id, role_ids,
+tenant_ids(＜10 时), shop_ids(＜10 时)`。`cloud-auth`(8 分支)/`cloud-gateway`(11)/
+`qumall-common`(18) 同一集合。全仓 `grep domain` 三个命中都与环境无关。
+
+**`sys_user` 一行只属于一个租户**：`SysUserMapper.getByUserName` 是
+`su.tenant_id = sr.id` 的内连接；一个自然人跨租户时公司侧是**多个账号**。
+这构成"一人一租户"这条约束的判据。
+
+### 四、Dify 源码侧核实（容器内 `/app/api`）
+
+- **建 workspace**：console 没有 `POST /workspaces`；唯一可用的写入口是
+  `POST /inner/api/enterprise/workspace`（`is_from_dashboard=True` 绕 `ALLOW_CREATE_WORKSPACE`），
+  需 `INNER_API=True` + key。本机 `INNER_API=False`。
+- **加成员**：`POST /inner/api/enterprise/workspace/member` →
+  `join_enterprise_workspace_member` → `create_tenant_member`，**无 `RBAC_ENABLED` 门槛**。
+  而 `invite_new_member` 在 `RBAC_ENABLED=False` 时对**已激活**账号**静默不建 join** ——
+  这是原迁移方案会锁死存量用户的原因。
+- **选 workspace**：`ADMIN_API_KEY + X-WORKSPACE-ID` 只在请求上下文注入 `current_tenant`，
+  不写库；`POST /workspaces/switch` 会写库且对并发请求可见。
+- **provider 凭据**：`tenant_id NOT NULL`、每租户一把 RSA 密钥、跨租户同步只在 ENTERPRISE。
+
+**本次没有做的**：
+- 没有用真实浏览器/真实运营账号走完整条链路（服务端 API 与只读查询为主）。
+- 没有实施任何多 workspace 的代码或迁移。
+- `INNER_API` 没有开，所以"建 workspace"这条**只核到了代码路径，没有实跑**。
 
 ## 2026-10-20 · 整轮完成与工具领取的分界（M3-NODE-LINK-01）
 

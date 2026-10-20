@@ -81,12 +81,13 @@ cloud-upms:release  TokenController.issueLoginToken 的完整 payload：
 | 1 | 智能体是**租户资产**，不是平台资产 |
 | 2 | 需要自行编辑智能体的租户**各有一个 workspace**；不需要的走平台工作区 |
 | 3 | 隔离深度：**app + dataset 跟租户走**；provider credentials **跟 workspace 走**（Dify 数据模型决定的，见 §3） |
+| 3b | 改造面是**四条**：开户 / 发布桥 / 试运行 / **运维 CLI（pull-dify、sync-from-dify）**，共用同一个解析函数 |
 | 4 | 已有映射账号：迁移进各自租户的 workspace；**不保留**旧的共享 workspace 访问权 |
 | 5 | 建 workspace 走 **`POST /inner/api/enterprise/workspace`**（`is_from_dashboard=True` 绕过 `ALLOW_CREATE_WORKSPACE`） |
 | 6 | 模板 app：**模板 DSL 进仓库**，开户时导入。模板**只含结构与工具白名单**，`model_config` 留空（避免绑死模型） |
 | 7 | 发布权：`aiops:agent:publish` 仍然按公司权限码裁定；**平台租户（`type=-1`）视为可见全部** —— 但见 §4 的边界 |
 | 8 | 试运行草稿来源：租户没有 editor 环境就**明确拒绝**（"你的租户没有编辑环境"），不回落 |
-| 9 | 映射存在 **新表 `dify_workspaces(tenant_id, environment, workspace_id, created_at)`**；`dify_app_registry` 不动 |
+| 9 | 映射存在 **新表 `dify_workspaces(tenant_id, environment, workspace_id, setup_state, created_at)`**，落在**网关的 `gateway.db`**；代理与桥经网关的只读端点查。`dify_app_registry` 不动 |
 | 9b | `dify_workspaces.environment` 的作用是**防止两套环境的 `tenant_id` 撞号**，不是「给每个环境各建一套 workspace」。**保留** —— 撞号时会静默串租户，fail-closed 值得一列 |
 | 9c | workspace 的 **owner 是服务身份**（`dify-admin@aiops.local`），不是每个租户一个人；以它的身份在某 workspace 做事走 `ADMIN_API_KEY + X-WORKSPACE-ID` |
 | 10 | 知识库**继续用 RAGFlow 外接**（用户明确否决"改用 Dify 自带库"） |
@@ -143,7 +144,7 @@ grilling 里 Q7 与 Q19 的答案看起来冲突，实际是两个层：
 
 ---
 
-## 5. 三条路径怎么改
+## 5. 四条路径怎么改
 
 ### 5.1 开户（`provision_editor`）
 
@@ -153,17 +154,51 @@ grilling 里 Q7 与 Q19 的答案看起来冲突，实际是两个层：
 ```
 resolve_workspace(tenant_id, environment) -> workspace_id | DIFY_WORKSPACE_UNRESOLVED
   1. 查 dify_workspaces
-  2. 没有 → 用 inner_api 建 workspace（owner_email = 平台 owner）
+  2. 没有 → 建 workspace（inner_api，owner_email = 平台服务身份）
+     ★ 建成后**立刻**写 dify_workspaces 一行（见下「幂等」）
   3. 装插件 + 写 provider 凭据（admin key + X-WORKSPACE-ID）
-  4. 导入模板 DSL（失败只记状态）
-  5. 写 dify_workspaces 一行
-邀请：admin key + X-WORKSPACE-ID 定向邀请
+  4. 导入模板 DSL（失败只记状态，不删 workspace）
+  5. 把这个人 join 进 workspace（member 端点，不是邀请）
 ```
+
+**幂等（评审指出）**：原设计把写表放在第 5 步，于是"建成功但第 3/4 步失败"会让下一次登录
+又建一个 workspace，前一个成为孤儿。改为：**拿到 `tenant.id` 就立刻写表**，
+后续步骤可重试（它们本身都是幂等的：装插件幂等、写凭据按 `provider_name` 覆盖、导模板按
+`app_name` 判重）。失败状态单独记在一列 `setup_state`，不靠"表里没有行"来表达。
+
+**"解析不到就拒绝"与"缺行就建"不冲突**（评审指出）——两者是不同的调用方：
+
+| 调用方 | 缺行时 |
+|---|---|
+| **开户**（`provision_editor`） | **建**（这是唯一该建的时机） |
+| **发布桥 / 试运行 / 运维命令** | **拒绝**（`DIFY_WORKSPACE_UNRESOLVED`），绝不隐式建 |
+
+所以解析函数本身**只查不建**；建是开户那一步的显式动作。这样"拒绝"与"创建"就不是同一个
+函数的两种行为，而是两个调用方各自的策略。
 
 **注意**：`RBAC_ENABLED=False` 时，邀请一个**已激活**的账号会失败（`AccountAlreadyInTenantError`）。
 新 workspace 里的人是全新的 Dify 账号（我们按公司用户 id 确定性生成邮箱），所以不受影响。
 
 ### 5.1b 旧的共享 workspace 怎么退（已决：先复制、后撤权、不删）
+
+**⚠️ 评审时发现这条路的原版走不通**：我写的是"移除成员 + 在新 workspace 重新邀请"，
+但 `RBAC_ENABLED=False` 时邀请一个**已激活**的账号会静默失败（`invite_new_member` 只在
+`status == PENDING or RBAC_ENABLED` 时建 join，否则抛 `AccountAlreadyInTenantError`）。
+移出旧 workspace 不会把 Dify 账号变回 pending —— 它是全局账号，状态与 workspace 无关。
+**结果是这个人既进不了旧的，也进不了新的。**
+
+**正确的迁移入口是 inner_api 的 member 端点，不是邀请**：
+
+```
+POST /inner/api/enterprise/workspace/member
+  {workspace_id, account_id, email, role}
+  → TenantService.join_enterprise_workspace_member
+  → TenantService.create_tenant_member   ← 直接建 join，不经过 invite/activate
+```
+
+`create_tenant_member`（`account_service.py:1122-1149`）**没有** `RBAC_ENABLED` 门槛：
+已有 join 就改角色，没有就新建一行。它才是"把一个已存在账号加进另一个 workspace"的正路。
+（前提：目标 workspace 已有 owner，否则 owner 冲突检查会拦；我们的新 workspace 有服务身份 owner。）
 
 `remove_member_from_tenant` 会把该成员的 app/dataset 转给 owner 且**没有反向操作**
 （ADR-0023 已记）。所以**不能**用"移除再邀请"来迁移。顺序固定为：
@@ -183,6 +218,11 @@ resolve_workspace(tenant_id, environment) -> workspace_id | DIFY_WORKSPACE_UNRES
 `/apps/imports` 是唯一的路，而它天然产生**新 app_id** —— 所以 `dify_app_registry` 里的
 `app_id` 必须跟着改（运行时只读 `agent_name`，所以运行不受影响；受影响的是拉取与发布路径）。
 
+**第 3 步的顺序不能倒**：新 workspace 的成员必须先加进去（用上面的 member 端点），
+再把 app 副本导进去 —— `/apps/imports` 要一个在该 workspace 里能建 app 的会话。
+用 owner 服务身份（`ADMIN_API_KEY + X-WORKSPACE-ID`）可以绕过，但那会把"谁建的"记成 owner；
+更干净的是先 join 成员、再用成员自己的会话导入。
+
 ### 5.2 发布桥
 
 `AIOPS_CONSOLE_BRIDGE_WORKSPACE_ID` 从单一常量改为按发起人解析：
@@ -190,6 +230,23 @@ resolve_workspace(tenant_id, environment) -> workspace_id | DIFY_WORKSPACE_UNRES
 - 桥拿浏览器会话 → 调代理 `/__aiops/publish/check` → 拿到 `company_tenant_id`
 - 用 `(tenant_id, environment)` 查 `dify_workspaces`
 - **钉住的判据要改成"角色来自发起人所在的那个 workspace"** —— 这是最容易被漏掉的越权口
+
+### 5.2b 两个运维入口也要改（评审补充）
+
+`admin pull-dify` 与 `admin sync-from-dify` 各自构造 `DifyDslSource(workspace_id=...)`，
+用的是同一个单一配置：
+
+```
+admin_cli.py:234-239   pull-dify      source = DifyDslSource(..., workspace_id=console.dify_console_workspace_id)
+admin_cli.py:492-497   sync-from-dify 对每个 binding 各建一个 source，但 workspace_id 仍是同一个
+```
+
+`sync-from-dify` **会遍历多个租户的绑定**，所以它是"一个 workspace_id 被套用到 N 个租户"
+的最明显例子 —— 多 workspace 之后它必须按 `binding.tenant_id` 解析。
+
+⇒ 改造面从三条变**四条**（开户 / 发布 / 试运行 / 运维 CLI），
+四处**共用同一个 `resolve_workspace`**。CLI 在解析失败时**拒绝并退非零**，
+不能"跳过这个租户继续跑"，否则一次 sync 会静默漏掉半个租户。
 
 ### 5.3 试运行
 
@@ -293,6 +350,26 @@ if is_admin_api_key_request(request):
 这条分支**按 workspace 找 owner 行**，与 `current` 无关、不写库。
 ⇒ `dify-admin@aiops.local` 作为每个 workspace 的 owner 是对的：它是**服务身份**，不是人；
 它不需要在浏览器里切 workspace，所以"current 只有一个"这条限制对它不适用。
+
+**0. 映射表放哪：`dify_workspaces` 放**网关的 `gateway.db`**，但三个进程都要能读它。**
+
+评审指出一个真实拓扑问题：代理的映射表在 36 的
+`/var/lib/aiops-login-proxy/mappings.db`，网关的在 41 的 `gateway.db`，桥也在 36。
+一份表放不进三个进程各自的私有库。
+
+三条路（都不需要新服务）：
+
+| 方案 | 判断 |
+|---|---|
+| **落在网关 `gateway.db`**，代理/桥经网关的一个只读端点查 | **选它**。网关已经是这三者共同的依赖（桥调 `/v1/dify/publish`、代理调 `/upms`），且 `dify_app_registry` 本来就在那 |
+| 放代理的 `mappings.db` | 桥能读（同机），但**网关读不到** —— 而试运行要读 |
+| 新建一个共享 SQLite | 多一个要备份、要迁移、要防护的存储 |
+
+具体形态：网关加 `GET /v1/dify/workspace?tenant_id=…&environment=…`（内部令牌鉴权，
+与既有 `/v1/*` 同一把门），代理与桥调它。**代理不再自己存一份** —— 它本来就只该读，
+写（建 workspace）由网关侧或开户流程做。
+
+代价：代理多一次回环调用。收益：一处存储、一份真值，且 `environment` 的校验只写一遍。
 
 **2. `dify_workspaces.environment` 保留，且解析函数必须带上它。**
 

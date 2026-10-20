@@ -126,6 +126,11 @@ credit pool、一条 `current=false` 的 owner membership —— 没有 app / da
   做事"走的是 `ADMIN_API_KEY + X-WORKSPACE-ID`（按 workspace 找 owner 行，不碰 `current`）。
 - **`environment` 列保留**，尽管今天只有一个值：它防的是"两套独立 UPMS 的 `tenant_id` 撞号"，
   而撞号时解析函数会静默串到另一个租户的 workspace。本仓已有"同名不同物"的前车之鉴。
+- **映射表落在网关的 `gateway.db`**，代理与桥经网关的只读端点查 —— 三个进程各自的私有库
+  装不下一份共享真值。代价是代理多一次回环调用。
+- **已有账号的迁移走 inner_api 的 member 端点**（`join_enterprise_workspace_member`），
+  **不是**邀请：`RBAC_ENABLED=False` 时邀请已激活账号会静默失败，而移出旧 workspace 不让它变
+  pending —— 结果是两头都进不去。这是评审抓到的、原设计里会**锁死存量用户**的缺陷。
 - **凭据轮换是运行手册，不是代码**：`SECRET_KEY` 要 Dify 与代理一起重启（ADR-0023 不变）；
   provider 凭据按 `dify_workspaces` 枚举逐个重写。
 
