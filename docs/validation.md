@@ -27,6 +27,7 @@
 
 - `tests/test_m3_node_link_state.py`（10）+ `tests/test_m3_node_link_completion.py`（20）⇒ **30 passed**，
   加上独立复核脚本 `test_node_link_review.py`（3）共 **33 passed**。
+- 全量：**3028 passed / 10 skipped**（本机口径）。
 - **定向变异（先红后绿，均已恢复）**：
   ① `complete()` 改回无条件 `succeeded` ⇒ 8 条转红（含「重试只读一次」）；
   ② `complete_loop()` 去掉身份再证明 ⇒ 3 条转红（错摘要 / 缺头 / 不同身份）。
