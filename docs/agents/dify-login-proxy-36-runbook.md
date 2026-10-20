@@ -83,29 +83,44 @@ ssh yidong-36 'sudo grep -n ^AIOPS_LOGIN_PROXY_ENVIRONMENT= /etc/aiops-login-pro
 判据不是"文件里有这一行"，而是**两道闸门各自都会拦**，而且用的是**部署出来的那份代码**：
 
 **闸门一：`LoginProxySettings.from_env` 的必填检查**（漏配 ⇒ 服务起不来）。
-用**真实的环境文件**起一个只构造 settings 的进程，再对比"拿掉这一项"：
+用**真实的环境文件**，但把它当**数据**读、按 `KEY=VALUE` 拆开 —— 不要用
+`. 环境文件` 去 source 它：那会让 shell 以执行者身份运行文件里的任意命令，而服务本身
+（systemd `EnvironmentFile=`）只做变量解析、从不执行。以 `aiopslogin` 跑（它对该文件有
+组读权限），**不需要 root**：
 
 ```bash
-ssh yidong-36 'sudo -n bash -s' <<'SH'
-set -a; . /etc/aiops-login-proxy/login-proxy.env; set +a
-python3 - <<'PY'
+ssh yidong-36 "sudo -n -u aiopslogin /usr/bin/python3 - <<'PY'
 import os, sys
-sys.path.insert(0, "/opt/aiops-login-proxy")
+sys.path.insert(0, '/opt/aiops-login-proxy')
 from aiops_diagnostics.dify_login_server import LoginProxySettings
+
+env = {}
+for line in open('/etc/aiops-login-proxy/login-proxy.env', encoding='utf-8'):
+    line = line.strip()
+    if not line or line.startswith('#') or '=' not in line:
+        continue
+    k, v = line.split('=', 1)
+    env[k.strip()] = v.strip()
+
+os.environ.clear(); os.environ.update(env)
 try:
-    print("present -> STARTED environment=", LoginProxySettings.from_env().dify.environment)
-except Exception as exc:
-    print("present ->", type(exc).__name__, exc)
-os.environ.pop("AIOPS_LOGIN_PROXY_ENVIRONMENT", None)
+    print('present -> STARTED environment=', LoginProxySettings.from_env().dify.environment)
+except Exception as e:
+    print('present ->', type(e).__name__, e)
+os.environ.pop('AIOPS_LOGIN_PROXY_ENVIRONMENT', None)
 try:
-    LoginProxySettings.from_env(); print("missing -> STARTED (bad)")
-except Exception as exc:
-    print("missing ->", type(exc).__name__, exc)
-PY
-SH
-# 期望：present -> STARTED environment= 41   （实际配置值真的被读到了）
+    LoginProxySettings.from_env(); print('missing -> STARTED (bad)')
+except Exception as e:
+    print('missing ->', type(e).__name__, e)
+PY"
+# 期望：present -> STARTED environment= 41   （实际配置值真的被读到）
 #       missing -> ValueError AIOPS_LOGIN_PROXY_ENVIRONMENT is required
 ```
+
+⚠️ **不要 `sudo bash -c 'set -a; . 环境文件; …'`**（评审指出）：那是把生产配置文件
+当 shell 脚本、以 **root** 身份执行。文件今天是干净的，但这条手顺会教下一个人把
+"以 root 执行一个可被编辑的文件"当成常规操作 —— 一旦有人往里放一行命令，就是 root 执行。
+服务自己从不这么做，判据也不该这么做。
 
 **闸门二：`DifyConsoleSettings` 的格式校验**（配了但写法不合法 ⇒ 同样起不来）。
 这一道**必须直接构造 settings** —— 它要证明的是派生那条判据与构造那条是同一条：
@@ -135,7 +150,7 @@ PY'
 也不会留下一个可被替换的文件。
 
 ⚠️ 两个探针都**只构造 settings**（闸门一会读环境文件，那是它的判据本身）：
-不连公司 UPMS、不连 Dify、不碰生产映射表。
+不连公司 UPMS、不连 Dify、不碰生产映射表，也不写任何文件。
 
 ## 4. nginx 两处配置（缺一不可）
 

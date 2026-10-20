@@ -131,8 +131,11 @@ AIOPS_LOGIN_PROXY_ENVIRONMENT=41
 
 | 闸门 | 怎么验 | 结果 |
 |---|---|---|
-| `LoginProxySettings.from_env` 的必填检查 | 加载**真实环境文件**，再 `pop` 掉这一项 | 有值 ⇒ `STARTED environment= 41`（实际配置真的被读到）；拿掉 ⇒ `ValueError: AIOPS_LOGIN_PROXY_ENVIRONMENT is required` |
+| `LoginProxySettings.from_env` 的必填检查 | 加载**真实环境文件**（当数据解析，`source` 都不做），再 `pop` 掉这一项 | 有值 ⇒ `STARTED environment= 41`（实际配置真的被读到）；拿掉 ⇒ `ValueError: AIOPS_LOGIN_PROXY_ENVIRONMENT is required` |
 | `DifyConsoleSettings` 的格式校验 | 直接构造 settings，传 `""` 与 `prod.41` | 两行都是 `DifyProvisionError` |
+
+探针以 **`aiopslogin`** 身份跑（组读该文件），不是 root；文件按 `KEY=VALUE` 当**数据**拆，
+不做 `source`。服务自己只做变量解析，判据也不该让 shell 去执行一个可编辑的生产配置文件。
 
 **为什么不能只验一道**：只验格式那道，等于假设服务入口一定会调用 `required(...)` ——
 入口哪天漏了这一行，格式探针照样通过，而漏配会以"环境为空"的形式走到派生处。
