@@ -1,0 +1,66 @@
+--- a/controllers/console/datasets/external.py
++++ b/controllers/console/datasets/external.py
+@@ -31,6 +31,7 @@
+     with_current_tenant_id,
+     with_current_user,
+ )
++from constants import HIDDEN_VALUE
+ from fields.base import ResponseModel
+ from fields.dataset_fields import DatasetDetailResponse, dataset_detail_response_source
+ from libs.helper import dump_response
+@@ -88,6 +89,26 @@
+ class ExternalKnowledgeApiResponseSource:
+     external_knowledge_api: ExternalKnowledgeApis
+     session: Session
++    #: Whether this particular response may carry the decrypted key. The list
++    #: endpoint has no edit-permission check, so it passes ``False``: every member
++    #: of the workspace can read that response, and the third-party key is not
++    #: theirs to see. The single-template GET is what the edit form pre-fills
++    #: from, and that one passes ``True``.
++    reveal_api_key: bool = True
++
++    @property
++    def settings_dict(self) -> dict[str, Any] | None:
++        # The stored ``settings`` blob carries an encrypted ``api_key`` (see
++        # ``ExternalDatasetService.settings_for_storage``). The console pre-fills
++        # its edit form from this response and echoes ``[__HIDDEN__]`` back when
++        # the operator leaves the key untouched, so it must see the plaintext —
++        # but only on the endpoint that is allowed to show it.
++        settings = ExternalDatasetService.settings_for_display(self.external_knowledge_api)
++        if settings is None:
++            return None
++        if not self.reveal_api_key and settings.get("api_key"):
++            settings["api_key"] = HIDDEN_VALUE
++        return settings
+ 
+     @property
+     def dataset_bindings(self) -> Any:
+@@ -98,10 +119,12 @@
+ 
+ 
+ def external_knowledge_api_response(
+-    external_knowledge_api: ExternalKnowledgeApis, *, session: Session
++    external_knowledge_api: ExternalKnowledgeApis, *, session: Session, reveal_api_key: bool = True
+ ) -> ExternalKnowledgeApiResponse:
+     return ExternalKnowledgeApiResponse.model_validate(
+-        ExternalKnowledgeApiResponseSource(external_knowledge_api=external_knowledge_api, session=session),
++        ExternalKnowledgeApiResponseSource(
++            external_knowledge_api=external_knowledge_api, session=session, reveal_api_key=reveal_api_key
++        ),
+         from_attributes=True,
+     )
+ 
+@@ -172,7 +195,12 @@
+             req_data.page, req_data.limit, current_tenant_id, req_data.keyword, session=session
+         )
+         return ExternalKnowledgeApiListResponse(
+-            data=[external_knowledge_api_response(item, session=session) for item in external_knowledge_apis],
++            # reveal_api_key=False: this list has no edit-permission gate, so it must
++            # not be a way for any member to read the third-party credential.
++            data=[
++                external_knowledge_api_response(item, session=session, reveal_api_key=False)
++                for item in external_knowledge_apis
++            ],
+             has_more=len(external_knowledge_apis) == req_data.limit,
+             limit=req_data.limit,
+             total=total,

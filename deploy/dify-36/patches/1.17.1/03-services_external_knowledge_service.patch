@@ -1,0 +1,134 @@
+--- a/services/external_knowledge_service.py
++++ b/services/external_knowledge_service.py
+@@ -9,6 +9,7 @@
+ 
+ from constants import HIDDEN_VALUE
+ from core.helper import ssrf_proxy
++from core.helper.encrypter import decrypt_token, encrypt_token
+ from core.rag.entities import MetadataFilteringCondition
+ from extensions.ext_database import db  # noqa: F401
+ from graphon.nodes.http_request.exc import InvalidHttpMethodError
+@@ -29,6 +30,48 @@
+ from services.errors.knowledge_retrieval import ExternalKnowledgeRetrievalError
+ 
+ 
++#: Marks a value that was encrypted at rest by :func:`_encrypt_api_key`.
++#: A settings blob without it is legacy plaintext and stays readable, so the
++#: migration can be done row by row instead of as one breaking sweep.
++_ENCRYPTED_PREFIX = "enc:v1:"
++
++
++def _encrypt_api_key(tenant_id: str, api_key: str) -> str:
++    return f"{_ENCRYPTED_PREFIX}{encrypt_token(tenant_id, api_key)}"
++
++
++def _decrypt_api_key(tenant_id: str, value: str) -> str:
++    if not value.startswith(_ENCRYPTED_PREFIX):
++        return value
++    try:
++        return decrypt_token(tenant_id, value[len(_ENCRYPTED_PREFIX) :])
++    except Exception as exc:
++        # Fail loudly rather than fall back to the raw value: sending ciphertext as
++        # a Bearer token looks exactly like "the provider rejected our key", which
++        # is the wrong trail to leave. The known cause is a legacy row whose
++        # plaintext happens to start with the prefix; the migration encrypts those.
++        raise ValueError(
++            f"cannot decrypt stored api_key for tenant {tenant_id}; "
++            "run the 20261020 migration or re-enter the key in the console"
++        ) from exc
++
++
++def external_api_settings(external_knowledge_api: ExternalKnowledgeApis) -> dict[str, Any]:
++    """Return an API template's settings with ``api_key`` decrypted.
++
++    Why centralise this: ``settings`` is a plain JSON text column, and its
++    ``api_key`` is a real credential for a third-party endpoint. Leaving it in
++    cleartext means every database dump exposes it, so it is stored via Dify's
++    own tenant-scoped key provider. Every read path must therefore decrypt —
++    reading the raw column would silently send the ciphertext as a Bearer token.
++    """
++    settings: dict[str, Any] = json.loads(external_knowledge_api.settings or "{}")
++    api_key = settings.get("api_key")
++    if isinstance(api_key, str) and api_key:
++        settings["api_key"] = _decrypt_api_key(external_knowledge_api.tenant_id, api_key)
++    return settings
++
++
+ class ExternalDatasetService:
+     @staticmethod
+     def get_external_knowledge_apis(
+@@ -59,6 +102,36 @@
+             raise ValueError("api_key is required")
+ 
+     @staticmethod
++    def settings_for_storage(tenant_id: str, settings: dict[str, Any]) -> dict[str, Any]:
++        """Copy of ``settings`` with ``api_key`` encrypted for the database.
++
++        The API template's key is a live credential for a third-party endpoint;
++        Dify stores it in a plain JSON text column upstream. Encrypting it with
++        the tenant's own key provider keeps database dumps from handing it out,
++        at the cost that every read path must go through
++        :func:`external_api_settings`.
++
++        ``settings`` here is always **plaintext** — what the operator typed, or
++        what a decrypted read produced. Do not sniff for the prefix to skip
++        encryption: a provider is free to issue a key that literally starts with
++        ``enc:v1:``, and treating it as already-encrypted would store it verbatim
++        and then fail to decrypt it on every later read. Callers that hold a
++        stored value must decrypt first (see :func:`external_api_settings`).
++        """
++        stored = dict(settings)
++        api_key = stored.get("api_key")
++        if isinstance(api_key, str) and api_key:
++            stored["api_key"] = _encrypt_api_key(tenant_id, api_key)
++        return stored
++
++    @staticmethod
++    def settings_for_display(external_knowledge_api: ExternalKnowledgeApis) -> dict[str, Any] | None:
++        """Settings as the console sees them: ``api_key`` decrypted, everything else verbatim."""
++        if not external_knowledge_api.settings:
++            return None
++        return external_api_settings(external_knowledge_api)
++
++    @staticmethod
+     def create_external_knowledge_api(
+         tenant_id: str, user_id: str, args: dict[str, Any], *, session: Session
+     ) -> ExternalKnowledgeApis:
+@@ -72,7 +145,7 @@
+             updated_by=user_id,
+             name=str(args.get("name")),
+             description=args.get("description", ""),
+-            settings=json.dumps(args.get("settings"), ensure_ascii=False),
++            settings=json.dumps(ExternalDatasetService.settings_for_storage(tenant_id, settings), ensure_ascii=False),
+         )
+ 
+         session.add(external_knowledge_api)
+@@ -148,12 +221,16 @@
+         if external_knowledge_api is None:
+             raise ValueError("api template not found")
+         settings = args.get("settings")
+-        if settings and settings.get("api_key") == HIDDEN_VALUE and external_knowledge_api.settings_dict:
+-            settings["api_key"] = external_knowledge_api.settings_dict.get("api_key")
++        if settings and settings.get("api_key") == HIDDEN_VALUE:
++            # The console echoes the mask back when the operator did not touch the
++            # key; take the stored plaintext, not the stored ciphertext.
++            settings["api_key"] = external_api_settings(external_knowledge_api).get("api_key")
+ 
+         external_knowledge_api.name = str(args.get("name"))
+         external_knowledge_api.description = str(args.get("description", ""))
+-        external_knowledge_api.settings = json.dumps(settings, ensure_ascii=False)
++        external_knowledge_api.settings = json.dumps(
++            ExternalDatasetService.settings_for_storage(tenant_id, settings or {}), ensure_ascii=False
++        )
+         external_knowledge_api.updated_by = user_id
+         external_knowledge_api.updated_at = naive_utc_now()
+         session.flush()
+@@ -377,7 +454,7 @@
+         if external_knowledge_api is None or external_knowledge_api.settings is None:
+             raise ExternalKnowledgeRetrievalError("external api template not found")
+ 
+-        settings = json.loads(external_knowledge_api.settings)
++        settings = external_api_settings(external_knowledge_api)
+         headers = {"Content-Type": "application/json"}
+         if settings.get("api_key"):
+             headers["Authorization"] = f"Bearer {settings.get('api_key')}"
