@@ -65,13 +65,22 @@ def test_missing_inputs_are_refused_rather_than_guessed(tmp_path, monkeypatch):
     assert not out.exists()
 
 
-def test_model_options_are_declared_explicitly():
-    """`model_options` 不是空字典：空字典会让「没验」看起来像「验过」。"""
+def test_model_options_are_the_measured_platform_defaults():
+    """`model_options` 必须写**平台实测下发的值**，不是猜的。
+
+    第一次真实请求就把它证伪了：早先猜 `{"temperature": 1.0, "max_tokens": 4096}`，
+    而平台不传 `configJson` 时下发的**全为空**，节点在最终边界以 `OPTIONS` 拒绝
+    （`实际 temperature=null,max_tokens=null,…`）。
+
+    所以这里断言的是「空」，而**不是**「非空就行」：一个非空的猜测值会让每一次真实
+    请求都被拒，而且看起来像守卫坏了。这条测试的名字写的就是这件事 —— 是实测值，
+    不是「声明过」。
+    """
     module = _load()
     payload = module.build(model_id="m", endpoint="https://e", system_message="S")
-    assert payload["model_options"], "必须显式声明期望的选项"
-    # 序列化后仍在（不是被 json 丢掉的 None 字段）。
-    assert json.loads(json.dumps(payload))["model_options"] == module.MODEL_OPTIONS
+    assert payload["model_options"] == {}, "平台当前不设任何旋钮；写成非空值会被节点按 OPTIONS 拒绝"
+    # 序列化后仍在（不是被 json 丢掉的字段）。
+    assert json.loads(json.dumps(payload))["model_options"] == {}
 
 
 @pytest.mark.parametrize("field", ["schema", "history_policy", "system_messages", "tools"])

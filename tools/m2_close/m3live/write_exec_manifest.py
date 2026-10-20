@@ -44,9 +44,12 @@ TOOL_SOURCE = (
 PROVIDER_KEY = "openai"
 ADAPTER_KEY = "openai-compatible"
 
-#: 平台**不传 `configJson`** 时下发给节点的选项。写成显式常量而不是省略，
-#: 因为清单必须声明期望值；值不对时节点会以 `OPTIONS` 拒绝，而不是静默放行。
-MODEL_OPTIONS = {"temperature": 1.0, "max_tokens": 4096}
+#: 平台**不传 `configJson`** 时下发给节点的选项 —— 实测是**全部为空**。
+#: 早先这里猜了 `{"temperature": 1.0, "max_tokens": 4096}`，第一次真实请求就被节点以
+#: `OPTIONS` 拒绝（`实际 temperature=null,max_tokens=null,...`）—— 那正是守卫该做的事，
+#: 也说明「猜一个值」在这里是不允许的。空字典是**准确的期望**：当前没有设置任何旋钮，
+#: 将来谁设了就会构成漂移。
+MODEL_OPTIONS: dict[str, object] = {}
 
 
 def _java_string_literals(raw: str) -> str:

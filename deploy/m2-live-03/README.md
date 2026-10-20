@@ -160,7 +160,7 @@ bash deploy/m2-live-03/checks.sh up
 | `model.provider_key` / `adapter_key` | `bootstrap_platform.py` 建平台模型配置时写的那两个值 |
 | `model.model_key` | `M2LIVE_MODEL_ID` |
 | `model.endpoint` | `M2LIVE_MODEL_ENDPOINT`（节点经受控出口的那个地址） |
-| `model_options` | 平台下发给节点的选项（本栈不传 `configJson`，值是默认的 `temperature=1.0`、`max_tokens=4096`） |
+| `model_options` | 平台下发给节点的选项。本栈不传 `configJson` ⇒ **实测全为空**（`{}`）。写成非空值会被节点以 `OPTIONS` 拒绝 —— 2026-10-20 的真实请求就是这样发现的 |
 | `system_messages` | 平台智能体的 `instruction`（`SystemPromptHandler` 直接把它当 system 消息） |
 | `tools[0]` | 节点源码里 `ControlledChargingStatusTool` 的三个常量 |
 
