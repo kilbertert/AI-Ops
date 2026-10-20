@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -60,18 +61,81 @@ class DifyConsoleSettings:
     timeout: float = 15.0
     #: 邀请时带上，让激活页语言一致；可选。
     language: str = "zh-Hans"
+    #: **本部署的环境标识**（#864）。它参与 Dify 账号邮箱的派生，所以两套 UPMS
+    #: 的同名 ``sys_user.id`` 不会撞到同一个 Dify 账号。由部署身份给（见
+    #: `AIOPS_LOGIN_PROXY_ENVIRONMENT`），**永不从请求读**。
+    environment: str = ""
+
+    def __post_init__(self) -> None:
+        # 构造时就用**与派生时完全相同**的那条判据校验（#864）。只查"非空"是不够的：
+        # 那样 `prod.41` 能让代理正常启动，然后在**每一个已授权用户**登录时抛
+        # DifyProvisionError —— 表现成"登录服务坏了"，而不是"配置写错了"。
+        # 一个配置错误必须在启动时报，不能在请求路径上报。
+        _canonical_environment(self.environment)
 
 
-def account_email_for(company_user_id: str) -> str:
-    """公司用户 id → **确定性** Dify 账号邮箱（用户故事 14）。
+def account_email_for(company_user_id: str, *, environment: str) -> str:
+    """(环境, 公司用户 id) → **确定性** Dify 账号邮箱（用户故事 14；#864 加环境）。
 
-    只保留 id 里 URL/邮箱安全的字符；确定性是硬要求，所以不做任何随机化或哈希 ——
+    ## 为什么必须带环境（#864）
+
+    Dify 账号是**全局**的（不属于任何 workspace），身份由邮箱唯一确定。而 41 与 95 是
+    两套独立 UPMS、两套独立数据库，``sys_user.id`` 各自生成。**撞号是可能的**，而撞号的
+    后果不是"登录失败"，是**越权**：第二个环境的代理会为同一个 Dify 账号签会话，
+    于是 B 环境的那个人能进 A 环境那个人的 workspace。
+
+    环境前缀把两个 id 空间隔开。**这是唯一能隔开它的地方** —— Dify 侧没有 workspace
+    维度的账号身份，账号就是账号。
+
+    ## 确定性
+
+    同样的 ``(environment, company_user_id)`` 永远得到同一个邮箱 —— 这是硬要求：
     同一用户二次登录必须落到同一个账号，否则历史编辑与发布记录会断。
+    所以不做任何随机化或哈希。
+
+    ``environment`` 是**部署身份**（每台机器一个值），不是请求参数：它由调用方从自己的
+    配置里取，永不从浏览器来的任何字段推导。
+
+    ## 环境标识**不归一化**，只校验（#864 评审）
+
+    第一版对环境做了与 id 相同的"把不安全字符换成 ``-``"。那会造出一个新的撞号方式：
+    ``prod.41`` 与 ``prod/41`` 归一化后都成了 ``prod-41`` —— 两个部署可以配置出两个
+    不同的字符串，却仍然落到同一个 Dify 账号，正好把这条缺陷放回来。
+
+    所以环境走**白名单校验**而不是归一化：必须已经是规范形式（小写字母/数字/``-``/``_``，
+    以字母或数字开头结尾）。不合规就**报错**，让部署者改配置，而不是替他猜。
     """
-    safe = "".join(ch if (ch.isalnum() or ch in "-_") else "-" for ch in company_user_id).strip("-")
+    prefix = _canonical_environment(environment)
+    safe = _safe_fragment(company_user_id, "COMPANY_USER_ID_INVALID", "公司用户 id 不含可用字符")
+    return f"{prefix}-{safe}@{ACCOUNT_EMAIL_DOMAIN}"
+
+
+#: 环境标识的规范形式。**归一化不在选项里** —— 见 `account_email_for` 的 docstring。
+_ENVIRONMENT_RE = re.compile(r"^[a-z0-9](?:[a-z0-9_-]{0,30}[a-z0-9])?$")
+
+
+def _canonical_environment(value: str) -> str:
+    """环境标识必须**已经是**规范形式；不做任何字符替换。"""
+    normalized = (value or "").strip()
+    if not _ENVIRONMENT_RE.match(normalized):
+        raise DifyProvisionError(
+            "ENVIRONMENT_INVALID",
+            "环境标识必须是规范形式（小写字母/数字/`-`/`_`，以字母或数字开头结尾，≤32）",
+        )
+    return normalized
+
+
+def _safe_text(value: str) -> str:
+    """收窄成邮箱局部部分可用的字符；空了返回空串（调用方决定怎么处理）。"""
+    return "".join(ch if (ch.isalnum() or ch in "-_") else "-" for ch in (value or "")).strip("-")
+
+
+def _safe_fragment(value: str, code: str, message: str) -> str:
+    """收窄成邮箱局部部分可用的字符；空了就是配置错，不是"随便凑一个"。"""
+    safe = _safe_text(value)
     if not safe:
-        raise DifyProvisionError("COMPANY_USER_ID_INVALID", "公司用户 id 不含可用字符")
-    return f"{safe}@{ACCOUNT_EMAIL_DOMAIN}"
+        raise DifyProvisionError(code, message)
+    return safe
 
 
 def account_name_for(company_user_id: str, username: str) -> str:
@@ -260,7 +324,7 @@ def provision_editor(
     幂等：账号已存在（`already_member`）时跳过邀请，直接查回 id。这样"二次登录"与
     "首次登录"走同一条代码路径，不会给同一个人开出第二个账号。
     """
-    email = account_email_for(company_user_id)
+    email = account_email_for(company_user_id, environment=settings.environment)
     invited = _post(
         settings,
         owner_session,
