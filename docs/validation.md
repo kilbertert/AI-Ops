@@ -1,3 +1,59 @@
+## 2026-10-20 · 95 环境连通性核实（只读）
+
+**范围**：只读核实 95（`prod-bugtrack-120` / `api.qumall.qushiyun.com`）的网络可达性、
+机上布局与数据面状态。**未做任何写入、未重启服务、未改 95 的任何配置。**
+
+**更正**：`2026-10-19` 那节写的「95 未能连上 …… 未在主机上核实」是**当时**的观测，
+不是 95 的属性。本轮在主机上完成了只读核实，结论记入
+`docs/agents/env-95-facts.md`。
+
+### 一、网络可达性（观测，不含推断）
+
+| 发起方 | 目标 | 结果 |
+|---|---|---|
+| `dev-us-01` | `120.55.45.59:2134` / `:443` / `:80` | **超时**（SYN 无响应） |
+| `dev-us-01` | `47.97.160.153:22`（41） | **超时** |
+| `dev-us-01` | `36.156.159.175:22` / `124.243.178.156:22` | 可达 |
+| `36` / `124` / 开发机 | `120.55.45.59:2134` | 可达 |
+| `95` | `38.246.237.24:22` | 可达（**反方向通**） |
+| `dev-us-01` | `8.163.69.117:22`（同厂商另一地域） | 可达 |
+
+**抓包判据**：在 95 上 `tcpdump -i any` 过滤 `host 38.246.237.24`，于 `dev-us-01`
+发起连接的同一 25 秒窗口内 —— **0 packets captured**（`193 packets received by filter`，
+即抓包本身在正常工作）。41 上同一实验同样为 0。⇒ 证据指向**网络侧（路径/安全组）在
+SYN 到达主机前丢弃**，不是 95 的 `ufw`/`iptables`（实测 `iptables -S INPUT` 仅
+`-P INPUT ACCEPT`，`ufw` 未启用）。
+
+### 二、补的跳板与它的边界
+
+`dev-us-01` 的 `~/.ssh/config` 为 `prod-bugtrack-120` 增加 `ProxyCommand`，经 HK 开发机
+转发。开发机 `authorized_keys` 中该 key 绑定 `command="nc <95>:2134"` +
+`restrict` + `no-pty`/`no-agent-forwarding`/`no-X11-forwarding`/`no-user-rc`。
+
+**边界实测**：拿该 key 直接要 shell（`ssh … "id; uname -a"`），返回的是 **95 的 SSH
+banner**（`SSH-2.0-OpenSSH_8.0`），不是开发机的 shell 输出 ⇒ 强制命令确实吞掉了请求。
+
+**工具层**：`dev-host show 95` / `read` / `ls` 均通过，主机公钥仍按 `hosts.toml` 比对
+（指纹 `SHA256:fx7up9Z5mvfTJJp3+Q7+kMxumJcElJd4ni7DXLNLSec`）。
+
+### 三、机上状态（只读）
+
+| 项 | 观测 |
+|---|---|
+| `aiops-gateway.service` | enabled / active，`User=aiops`，自 2026-09-14 常驻 |
+| 监听 | `127.0.0.1:8788`；`GET /health` = 200，`version=0.1.0` |
+| 运行目录 | `/home/aiops/AI-Ops`（**无 `.git`**，不是 checkout） |
+| Gateway DB | `/home/aiops/.local/share/aiops-diagnostics/gateway/gateway.db` |
+| `agents` / `agent_versions` / `conversations` / `conversation_turns` / `runs` / `devices` | **各 0 行** |
+| `ops/environments/` | **不存在**；仓库历史里也从未有过 `env-95.toml` |
+
+**业务验收状态：不适用** —— 本轮只核实环境事实，没有业务动作，也没有真实用户链路。
+不得把本节读成"95 已验收"或"95 已可联调"。
+
+**仍未做的**：
+- 95 的业务归属（现在还被谁用）未定；在拿到业务方结论前按「在用」处理。
+- 跳板仍依赖开发机，属「多一跳」，与 41 同一条债。
+
 ## 2026-10-20 · CD 派生 registry 的类型失真与修复（#857）
 
 **范围**：`deploy/deploy-41.sh` 的派生 registry 视图与它的确定性检查。**未部署**。
