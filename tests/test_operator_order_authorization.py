@@ -31,6 +31,9 @@ from operator_support import (
     ORDER_MISSING,
     ORDER_OUTSIDE,
     ORDER_OWN_IN,
+    ORDER_WORK_OTHER,
+    ORDER_WORK_OWN,
+    ORDER_WORK_UNCLAIMED,
     ORDERS,
     SITE_IN,
     SITE_OUT,
@@ -235,6 +238,47 @@ def test_consumer_scope_still_filters_by_the_callers_own_user_id(
 
     assert authorizer.can_access(context, ORDER_OWN_IN) is True
     assert authorizer.can_access(context, ORDER_INSIDE) is False
+
+
+def test_consumer_can_reach_the_work_order_whose_consumer_is_them(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """工单订单（``user_id='-1'``）由 ``consumer_id`` 认领（41 实测形态）。
+
+    只认 ``user_id`` 时，本人作为消费者的工单订单会被判成「不属于当前账号」——
+    这条用例钉住的是「本人的第二种认领方式」，不是把别人的单放开：``C-OTHER``
+    的工单订单仍然拒绝。
+    """
+    orders = (
+        {
+            "order_no": ORDER_WORK_OWN,
+            "tenant_id": TENANT,
+            "site_id": SITE_IN,
+            "user_id": "-1",
+            "consumer_id": C_USER_ID,
+        },
+        {
+            "order_no": ORDER_WORK_OTHER,
+            "tenant_id": TENANT,
+            "site_id": SITE_IN,
+            "user_id": "-1",
+            "consumer_id": "C-OTHER",
+        },
+        # 哨兵值但 ``consumer_id`` 为空：没有人认领的行（渠道/OCPI 单据），不属本人。
+        {
+            "order_no": ORDER_WORK_UNCLAIMED,
+            "tenant_id": TENANT,
+            "site_id": SITE_IN,
+            "user_id": "-1",
+            "consumer_id": "",
+        },
+    )
+    authorizer = build_authorizer(monkeypatch, Connection(orders=orders))
+    context = consumer_context()
+
+    assert authorizer.can_access(context, ORDER_WORK_OWN) is True
+    assert authorizer.can_access(context, ORDER_WORK_OTHER) is False
+    assert authorizer.can_access(context, ORDER_WORK_UNCLAIMED) is False
 
 
 def test_operator_session_reaches_an_order_placed_by_another_caller(

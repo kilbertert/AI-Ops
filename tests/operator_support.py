@@ -66,6 +66,11 @@ ORDER_INSIDE = "2096164064667852801"
 ORDER_OUTSIDE = "2096164064667852802"
 ORDER_OWN_IN = "2096164064667852803"
 ORDER_MISSING = "9999999999999999999"
+#: 工单订单（``user_id='-1'``）：认领者是 ``consumer_id``。41 生产库实测 771 行
+#: 工单订单，其中 347 行带 ``consumer_id``。
+ORDER_WORK_OWN = "2096164064667852804"
+ORDER_WORK_OTHER = "2096164064667852805"
+ORDER_WORK_UNCLAIMED = "2096164064667852806"
 
 ORDERS = (
     {"order_no": ORDER_INSIDE, "tenant_id": TENANT, "site_id": SITE_IN, "user_id": "C-OTHER"},
@@ -289,6 +294,23 @@ class Connection:
             if fragment.startswith("site_id IN ("):
                 sites = {str(remaining.pop(0)) for _ in range(fragment.count("%s"))}
                 rows = [row for row in rows if str(row.get("site_id")) in sites]
+                continue
+            if fragment.startswith("(CASE WHEN user_id=%s THEN consumer_id"):
+                # 订单表 self 谓词的镜像：工单订单（``user_id`` 是哨兵值）按
+                # ``consumer_id`` 认领，其余按 ``user_id``。与 ``_scope_where`` 的
+                # 渲染同形，改一处就要改这里（片段形状本身就是契约）。
+                sentinel = str(remaining.pop(0))
+                wanted = str(remaining.pop(0))
+                rows = [
+                    row
+                    for row in rows
+                    if (
+                        str(row.get("consumer_id"))
+                        if str(row.get("user_id")) == sentinel
+                        else str(row.get("user_id"))
+                    )
+                    == wanted
+                ]
                 continue
             value = str(remaining.pop(0))
             if fragment == "order_no=%s":

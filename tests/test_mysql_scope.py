@@ -210,6 +210,40 @@ def test_scoped_order_query_applies_user_filter_for_self_scope() -> None:
     assert USER in params
 
 
+def test_self_scope_also_recognises_the_work_order_consumer() -> None:
+    """``user_id='-1'`` 的工单订单，消费者那一列也是「本人」。
+
+    公司口径：``ChSendOrderMsgServiceImpl`` 用 ``userId == "-1" ? consumerId : userId``
+    判「这单是谁的」。只认 ``user_id`` 时，工单订单的主人会拿到「这个订单不属于
+    当前账号」——本仓实测过的真实形态（41，2026-10-20）。
+    """
+    connection = _ScopedConnection(orders=[])
+    source, conn = _source(connection, QueryScope(tenant_id=TENANT, site_ids=None, user_id=USER))
+
+    source.get_orders("O-1")
+
+    sql, params = conn.executed[-1]
+    assert "(CASE WHEN user_id=%s THEN consumer_id ELSE user_id END=%s)" in sql, (
+        "订单表的 self 谓词必须把工单哨兵值翻到 consumer_id 那一列"
+    )
+    assert params[-2:] == ["-1", USER]
+
+
+def test_self_scope_on_sources_without_a_claim_column_stays_single_column() -> None:
+    """占位单没有 consumer_id 列：同一条规则在它上面只渲染 ``user_id``。
+
+    这条用例防的是「把订单表的开关推广到所有表」——那会让占位单查询在真库上
+    直接报 Unknown column，而不是缩小范围。
+    """
+    connection = _ScopedConnection(orders=[], occupy=[])
+    source, conn = _source(connection, QueryScope(tenant_id=TENANT, site_ids=None, user_id=USER))
+
+    source.get_occupy_orders(order_no="O-1")
+
+    occupy_sql = next(sql for sql, _ in conn.executed if "ch_occupy_order_info" in sql and "SELECT" in sql)
+    assert "consumer_id" not in occupy_sql
+
+
 def test_scoped_order_query_short_circuits_on_empty_site_scope() -> None:
     # 空站点范围是"什么都不可见"的另一种输入：直连面短路（不发 SQL），与共享
     # 规则的空范围渲染同一结论。

@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- 工单订单（`ch_order_info.user_id='-1'`）的主人写在 `consumer_id`，`self` 范围此前只认
+  `user_id`，于是这类订单对**它的主人自己**也回「这个订单不属于当前账号」。判据改为
+  `(CASE WHEN user_id='-1' THEN consumer_id ELSE user_id END) = <会话 C 端 id>`，
+  计费模板的存在性检查同步收口。空白/NULL 的 `user_id`（渠道/OCPI 单据）仍不算本人。
 - 整轮成功通知的省略/null 原因不再匹配已记录的非空原因；冲突返回 409，既有无原因重试仍返回 200。
 
 ### Added
