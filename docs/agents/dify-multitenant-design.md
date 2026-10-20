@@ -549,16 +549,26 @@ api 容器只 publish 了 `5001/tcp`（未映射到宿主），宿主只能经 d
 
 按同一形状接：
 
+**不要用 nginx 做这一跳**（评审两轮都指出，成立）：宿主 nginx 解析不到 compose 的
+容器名（那是容器内的 `127.0.0.11`），而**静态 `proxy_pass` 的主机名只在加载配置时解析一次**
+—— 容器重建换了 IP 之后，写 `/etc/hosts` 也救不了正在跑的 nginx，它会一直转发到旧 IP。
+
+**用一个每次连接都现查地址的转发**。36 上没有 `socat`，所以用一段 systemd socket：
+
 ```bash
-# 36：只绑回环的转发。⚠️ **不能用容器名** —— 宿主上的 nginx 解析不到 compose 的
-# docker DNS（那是容器内的 127.0.0.11），容器 IP 又随重启变化。
-# 用一个 host 别名，由一条 systemd 单元在每次 compose 起停后刷新：
-#   ExecStart=/usr/local/bin/aiops-refresh-api-alias   （docker inspect → 写 /etc/hosts 的 aiops-dify-api）
-# 或用 socat 的 systemd socket 单元，每次连接现查 IP。两种都不写死 172.21.0.5。
-server {
-    listen 127.0.0.1:15001;
-    location /inner/api/ { proxy_pass http://aiops-dify-api:5001; }
-}
+# /etc/systemd/system/aiops-inner-api-forward.service
+# 监听只绑回环；每个连接现查容器 IP，查不到就拒（fail-closed）
+[Service]
+ExecStart=/usr/local/bin/aiops-inner-api-forward --listen 127.0.0.1:15001 \
+          --container deploy-api-1 --port 5001
+```
+
+`aiops-inner-api-forward` 是一个 ~40 行的 Python（标准库 `socket` + `select`），
+每次 accept 时 `docker inspect` 取当前 IP 再连 —— 没有缓存、没有要重载的配置。
+（也可以直接 `docker exec` 一步到位，但那要进容器；走内网 IP 更轻。）
+
+**为什么不用 `docker compose ports: 5001:5001`**：那会把一个管理接口 publish 到宿主，
+正是要避免的事。
 
 # 36：给 41/95 各一个受限账号，permitopen 只放 127.0.0.1:15001
 restrict,port-forwarding,permitopen="127.0.0.1:15001",command="/bin/false" ssh-ed25519 …
