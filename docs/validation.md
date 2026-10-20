@@ -67,6 +67,66 @@ worker 日志（2026-10-15）：
 读 external API 模板时，`X-CSRF-Token` 必须与 `__Host-csrf_token` cookie **同值**，
 只带 `Authorization` 一律 401。用登录代理自签的 owner 会话复验时，这一点最容易漏。
 
+## 2026-10-20 · M3 真实链路：在 41 隔离栈打开四个开关（实跑）
+
+**范围**：41 隔离栈。生产 Gateway **未改、未重启**。制品 = `main` @ `0ae1216`。
+
+### 一、四个开关真的打开了
+
+| 开关 | 值 |
+|---|---|
+| `AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL` | 真实 CPMS（HTTPS） |
+| `AIOPS_GATEWAY_EXECUTION_ENVIRONMENT` | `live-trial-41` |
+| `AIOPS_GATEWAY_AGENT_RUN_CONFIG_FILE` | `/etc/m2live/agent-runs.json` |
+| `AIOPS_GATEWAY_EXECUTION_MANIFEST_FILE` | `/etc/m2live/exec-manifest.json` |
+| 节点 `AIOPS_EXEC_MANIFEST` | 同一个文件（两侧 `sha256sum` 逐字节相同） |
+
+调用者身份是**构造的**（ADR-0058）；订单授权与 CPMS 都是真的。
+
+### 二、两个 run 的结果（`agent_runs` 直读）
+
+| # | state | reason | expected | observed | exec_config_state | 快照 |
+|---|---|---|---|---|---|---|
+| 1 | `failed` | `model_failed` | `1007ac06…` | （空） | `expected` | 无 |
+| 2 | `failed` | `model_failed` | `2760c072…` | `2760c072…` | **`matched`** | **有** |
+
+- **#1 证明漂移拒绝生效**：清单里 `model_options` 写错（猜了 `temperature=1.0`），
+  节点在最终边界以 `OPTIONS` 拒绝，**没有回传身份、没有快照**。
+- **#2 证明身份回传与对照走通**：回传与本 run 清单同一个 sha256，
+  `exec_config_state=matched`，业务快照已取到。
+
+### 三、卡在模型那一跳：上游欠费
+
+```
+com.openai.errors.PermissionDeniedException: 403: 预扣费额度失败,
+  用户剩余额度: ¥0.000285, 需要预扣费额度: ¥0.001495
+```
+
+节点日志出现 20 次。既有余额问题，不是本轮引入。**因此 `complete_loop` 的成功路径
+在真实栈上仍未跑到**；失败路径（`model_failed`）跑到了，「工具领取成功 ≠ 整轮完成」
+这一条生产宿主上第一次被真实观察到。
+
+### 四、本轮修正的一处部署件缺陷
+
+`write_exec_manifest.py` 的 `MODEL_OPTIONS` 原来是猜的。**第一次真实请求就把它证伪**。
+现在写成实测的空字典，回归也改成断言「必须是空」而不是「非空就行」——后者会让一个
+非空猜测值每次都拒绝，还看起来像守卫坏了。
+
+### 五、启动与清理
+
+`preflight` 全绿（含清单判据）→ `up` → `ready` 四项 → `verify` 六条 → `deps` 三条 →
+`down` 后容器 0、8794 释放、状态保留在 `/var/lib/aiops-m2-live-m3`。
+
+### 六、生产面
+
+`aiops-gateway-41.service` = active，启动时刻仍是 `2026-10-20 14:32:09 CST`；
+`/etc/aiops-41/*.env` 无 `EXEC_MANIFEST` 键；生产 `agent_runs` 行数 0。
+
+### 七、仍未证明
+
+整轮成功、快照内容正确性、真实供应商与模型质量、App 客户端、公网启用。
+**不能把本轮读成「M3 已验收」。**
+
 ## 2026-10-20 · 节点 jar 可复现构建（PR #863）
 
 **范围**：`tools/m2_close/node/pom.xml` 的构建时间戳与 `deploy/m2-live-03/` 的制品锁。
