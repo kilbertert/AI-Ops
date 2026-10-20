@@ -188,3 +188,13 @@ _Avoid_: 把发起人字段当成授权判据、只在成功时记账（被拒�
 
 **试运行的可见范围**：一次试运行能查哪些订单，由**发起人的公司身份**按管家端（``operator``）口径决定 —— 顶层账号（``sys_user.type ∈ {-1,1}``）看整个租户，代理商看名下店铺对应的站点集合。范围**不来自请求**：浏览器提交的租户/站点/用户字段一律拒绝（400）。解析失败一律 fail-closed 成空集合（看不到任何订单）。**没有映射时退回固定调试租户**（#781 的行为）。
 _Avoid_: 把站点集合当成请求参数、把"查不到范围"回落成租户级放行、把操作员范围与消费者 ``self`` 范围混为一谈（前者按站点、后者按本人）
+
+**环境（environment）**：一套**独立部署**的 Dify + 网关 + 数据库所在的那个世界。它是一个**部署身份**，不是公司令牌里的字段——2026-10-20 核过 `cloud-upms` / `cloud-auth` / `cloud-gateway` 的 `release` 与主干：JWT 的 claim 只有 `id, user_id, username, organ_id, type, tenant_id, system_id, shop_id, role_ids, tenant_ids, shop_ids`，**没有 `domain`**，也没有任何按区域选路的代码。41 与 95 的区别是两台机器、两套库、两个域名。
+_Avoid_: 把 `domain` 当环境（公司 JWT 里不存在这个 claim）、把 `platform_code` 当环境（默认值全局为 `QUSHIYUN`，无区分度）、以为"同一个租户可以跨环境"
+
+**租户工作区（tenant workspace）**：一个公司租户在某个环境里**独占**的 Dify workspace。租户自己的智能体、数据集、成员都在这里；另一个租户的成员进不来、看不到。它的标识是 Dify 的 `tenants.id`（一个 UUID），由 `(tenant_id, environment)` 决定。
+_Avoid_: 与「公司租户」混称（租户是公司体系里的实体，工作区是 Dify 里的容器）、与「Dify 租户」混称（Dify 文档里 tenant 即 workspace，但两个词在讨论里指不同层）
+
+**平台工作区**：平台账号（`sys_user.type = -1`）自己的那个 workspace。平台账号**不**获得别的租户的工作区访问权——它的"看全部"体现在试运行的订单范围与发布审计上，不体现在能进别人的编辑面。
+_Avoid_: 把「平台能看全部订单」推成「平台能改所有租户的智能体」
+
