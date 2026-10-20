@@ -1324,6 +1324,36 @@ def test_the_trial_route_reports_an_unbound_app_as_404(trial_bridge: Any, upstre
     status, body = _trial_post(trial_bridge)
     assert status == 404
     assert body["submitted"] is False
+    assert "没有登记" in body["reason"]
+
+
+def test_the_trial_route_does_not_call_an_order_scope_404_an_unbound_app(
+    trial_bridge: Any, upstream: _Upstream
+) -> None:
+    """**同一个 404，两种含义，话必须不同**（2026-10-20 实测踩到的那一条）。
+
+    网关对 ``ORDER_NOT_FOUND``（越权与不存在同形）也回 404。此前桥一律按
+    "这个 app 没登记"回话，于是运营被指向绑定表，而真实原因是订单范围。判据是
+    **两句话互不包含**：一条 404 只能落到其中一边。
+    """
+    upstream.trial_status = 404
+    upstream.trial_body = {"error": {"code": "ORDER_NOT_FOUND", "message": "order not found"}}
+    status, body = _trial_post(trial_bridge)
+    assert status == 404
+    assert body["submitted"] is False
+    assert "没有登记" not in body["reason"]
+    assert "可见范围" in body["reason"]
+
+
+def test_a_404_without_a_recognisable_code_is_unconfirmed_rather_than_guessed(
+    trial_bridge: Any, upstream: _Upstream
+) -> None:
+    """上游 404 但没带我们能读的码 ⇒ **未确认**，不猜成"没登记"。"""
+    upstream.trial_status = 404
+    upstream.trial_body = {"something": "else"}
+    status, body = _trial_post(trial_bridge)
+    assert status == 502
+    assert body["submitted"] is False
 
 
 def test_the_trial_route_treats_a_shapeless_answer_as_unconfirmed(

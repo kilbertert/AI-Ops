@@ -376,7 +376,19 @@ def _request(
         if not failures or failures[0].status is None:
             # 传输/解码故障**没有状态码** —— "这一步没做成"，让上层的 502 分支接住。
             raise
-        return failures[0].status, None
+        failure = failures[0]
+        # **把上游自己的错误码带回去。** 没有它，桥只能按 HTTP 状态猜意思，而同一个
+        # 404 在网关上有两种完全不同的含义：``DIFY_APP_NOT_BOUND``（这个 app 没登记）
+        # 与 ``ORDER_NOT_FOUND``（这张订单看不到）。实测（2026-10-20）：试运行时前者被
+        # 误报成"没有登记成绑定来源"，而真实原因是后者，运营照着那句话查了半天绑定表。
+        #
+        # 形状保持与网关一致（``{"error": {...}}``），所以下游读 ``error.code`` 的代码
+        # 不必知道这条 body 是桥重建的。
+        return failure.status, (
+            {"error": {"code": failure.code, "message": failure.detail}}
+            if failure.code or failure.detail
+            else None
+        )
     return 200, payload
 
 
@@ -643,8 +655,25 @@ def submit_trial(
     # 裸名 ``status`` 会让 ``tests/test_order_status.py`` 的结构判据把它当成**订单状态**
     # 的内联数字判据 —— 那条判据是 PRD #732 用来拦住"订单状态又多一份拼写"的，不该为了
     # 一个 HTTP 状态码去放宽它。
+    #
+    # **404 有两种含义，必须按网关自己的错误码分开**（实测 2026-10-20）：
+    # ``DIFY_APP_NOT_BOUND`` 是这个 app 没登记；``ORDER_NOT_FOUND`` 是那张订单看不到
+    # （越权与不存在同形）。此前一律按前者回话，于是运营看到"没有登记成绑定来源"，
+    # 去查绑定表，而真正的原因是订单范围 —— 一句话把人指向了错误的地方。
+    error = answer.get("error") if isinstance(answer, dict) else None
+    error_code = (_str_field(error, "code") or "").strip()
     if http_status == 404:
-        return ConsolePublishResult(False, "这个智能体没有登记成 AI-Ops 的绑定来源，无法试运行", status=404)
+        if error_code == "DIFY_APP_NOT_BOUND":
+            return ConsolePublishResult(
+                False, "这个智能体没有登记成 AI-Ops 的绑定来源，无法试运行", status=404
+            )
+        if error_code == "ORDER_NOT_FOUND":
+            return ConsolePublishResult(
+                False,
+                "这张订单不在你的可见范围内（或不存在）。试运行只对你自己能看到的订单生效",
+                status=404,
+            )
+        return ConsolePublishResult(False, _UNCONFIRMED, status=502)
     if http_status == 429:
         return ConsolePublishResult(False, "已经有一次试运行在跑，请等它结束再试", status=429)
     if not 200 <= http_status < 300 or not isinstance(answer, dict):
