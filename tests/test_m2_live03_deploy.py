@@ -195,6 +195,29 @@ def test_node_build_is_reproducible():
     同一份源码两次构建得到不同摘要（实测两个干净树：`22e400f0…` / `08d9c4c7…`）。
     于是 `images.lock.json` 里钉的摘要别人永远复现不出来，preflight 会在别人的构建上
     永远失败。固定之后两次构建逐字节相同（实测 `ba1b0abf…` 两次一致）。
+
+    这条不只查标签在不在：时间戳必须是**可解析的 UTC 时刻**（写成 `now` 或空串就红），
+    且锁里的节点摘要必须与变更单里记的那个一致 —— 两份记录各说各话时这里就会红。
     """
+    import re
+    from datetime import UTC, datetime
+
     pom = (DEPLOY.parents[1] / "tools/m2_close/node/pom.xml").read_text(encoding="utf-8")
-    assert "<project.build.outputTimestamp>" in pom, "缺可复现构建时间戳，节点 jar 无法按摘要复现"
+    match = re.search(r"<project.build.outputTimestamp>([^<]+)</project.build.outputTimestamp>", pom)
+    assert match is not None, "缺可复现构建时间戳，节点 jar 无法按摘要复现"
+    stamp = match.group(1).strip()
+    parsed = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+    assert parsed.tzinfo is not None and parsed.utcoffset() == UTC.utcoffset(None), (
+        f"构建时间戳必须是带时区的 UTC 时刻，实际 {stamp!r}"
+    )
+
+    lock = json.loads((DEPLOY / "images.lock.json").read_text(encoding="utf-8"))
+    recorded = re.search(
+        r"\| `aiops-execution-node\.jar` \| `([0-9a-f]{64})`",
+        (DEPLOY / "HOST-CHANGE.md").read_text(encoding="utf-8"),
+    )
+    assert recorded is not None, "变更单里没有节点 jar 的摘要行"
+    assert lock["node"]["sha256"] == recorded.group(1), (
+        "锁文件与变更单对节点制品各说各话："
+        f"lock={lock['node']['sha256'][:16]}… host-change={recorded.group(1)[:16]}…"
+    )

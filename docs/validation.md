@@ -1,3 +1,42 @@
+## 2026-10-20 · 节点 jar 可复现构建（PR #863）
+
+**范围**：`tools/m2_close/node/pom.xml` 的构建时间戳与 `deploy/m2-live-03/` 的制品锁。
+**未部署**。
+
+### 一、缺陷（实测）
+
+Spring Boot 的 `repackage` 把构建时间写进 `META-INF/MANIFEST.MF`，于是**同一份源码**
+两次构建得到不同摘要：
+
+```
+干净树 A  mvn package → 22e400f009fc36879c54f869…
+干净树 B  mvn package → 08d9c4c7e57278063f4cee01…
+```
+
+后果不是"摘要不美观"：`images.lock.json` 里钉的那个值只代表**某一次的产物**，preflight
+在任何别人的构建上都会永远失败，而失败看起来像「制品被篡改」。
+
+### 二、修复与判据
+
+`<project.build.outputTimestamp>2026-10-20T00:00:00Z</project.build.outputTimestamp>`。
+固定之后两次干净构建**逐字节相同**：`ba1b0abf3e52e207…`（实测两次）。
+
+`test_node_build_is_reproducible` 有三条判据，各自可单独失败（都已变异验证）：
+
+1. 时间戳标签存在；
+2. 时间戳是**带 UTC 时区的可解析时刻**（写成 `now` 或空串即红）；
+3. 锁文件与 `HOST-CHANGE.md` 对节点制品说的是**同一个**摘要（各说各话即红）。
+
+### 三、结果
+
+- `tests/test_m2_live03_deploy.py` **16 passed**；全量 **3052 passed / 9 skipped / 0 failed**。
+- `images.lock.json` 的 node 摘要更新为 `ba1b0abf…`；gateway 内容摘要 `7e6dc9ca…`（本轮重建）。
+- `HOST-CHANGE.md` 的节点制品摘要同步更新 —— 否则按变更单准备制品会与 preflight 冲突。
+
+### 四、边界
+
+可复现只在**同一 JDK 与同一依赖**下成立。换 JDK 或换依赖版本仍会变，本 PR 不声称解决那件事。
+
 ## 2026-10-20 · M3 真实链路前置：构造身份与清单写入（PR #862）
 
 **范围**：41 隔离栈的部署件。**未打开任何开关、未发起真实请求**。
