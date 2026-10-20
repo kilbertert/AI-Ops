@@ -118,6 +118,32 @@ PRD #772 §C 的应对是**限制发放范围**（只给公司内部运营/平�
 而不是做隔离。那是一个"先不做"的取舍 —— 而**这个取舍的记录（ADR）此前是缺的**，
 本次补上（ADR-0056）。
 
+### 上表第一行已实测（2026-10-20）
+
+用代理的 `provision_editor` 真的开了一个"租户 B"账号（`zz-tenantb-probe-*`），
+再看它能做什么：
+
+```
+开户后立刻可见 app 数：3        ← 与既有账号完全相同
+  aiops-41-ops-methodology-agent | agent-chat
+  charge_charging_A_kbqa         | advanced-chat
+  aiops-41-kefu-agent            | agent-chat
+
+读 app 详情（两个账号都成功）
+  tenant-A(既有) -> 200  aiops-41-ops-methodology-agent
+  tenant-B(新建) -> 200  aiops-41-ops-methodology-agent
+
+拿完整可编辑 DSL（= 能改它）
+  tenant-B GET /console/api/apps/<id>/export -> 200，4975 字节
+```
+
+**结论**：不是"看得到"，是**新开的账号一上来就能拿到别人智能体的完整可编辑配置**。
+`editor` 在单一 workspace 内是平权的。
+
+探针已清理：先从 workspace 移除成员，再删 `tenant_account_joins` 与 `accounts` 行；
+最终回到原来的两个账号、两条 join。三个生产 app 的 `updated_at` 仍是 10-14/10-15，
+**未被本次探针改动**（全程只读 + 一次 export，没有任何写 app 的调用）。
+
 ---
 
 ## 5. 触发条件已满足
@@ -129,9 +155,23 @@ PRD #772 §C 原文：
 2026-10-20 用户确认：**该条件已满足**，并指定用 41 与另一个客户环境（用户称 "95"）
 作为多租户的开发与测试环境。
 
-> ⚠️ **关于 "95"**：本仓库现有记录里只有 41 / 36 / 120 三台。写本文时未能在
-> 任何文档或 inventory 中找到 "95" 的地址、角色或访问路径。**这一项标为待补**，
-> 不在架构里臆造。
+### 关于"95"
+
+**「95」= `prod-bugtrack-120`**（2026-10-20 由用户在 host declaration 中确认）：
+
+| 字段 | 值 |
+|---|---|
+| ssh_alias | `prod-bugtrack-120` |
+| role | service-host（公司环境，未纳入本编队编队管理） |
+| owner | qushiyun |
+| 判别 | 41 = `api.mall.qushiyun.com`；**95 = `api.qumall.qushiyun.com`**；36 = 移动云 KB 栈 |
+| 其它 | qumall dev 网关兼 healthcare 主实例；SSH 端口 2134 |
+
+`api.qumall.qushiyun.com` 解析到 `120.55.45.59`，本机 nginx 把该域名反代到
+`127.0.0.1:8788` 的 aiops-gateway。
+
+> 本次从开发机 `ssh prod-bugtrack-120` **连接超时**（`120.55.45.59:2134`），
+> 因此本页关于 95 的信息**全部来自用户提供的声明，未在主机上核实**。
 
 这意味着 PRD §C 的暂定前提消失，**多工作区从"推迟"变成"待做"**。设计未在本页展开 ——
 那是一次真实的范围与拓扑变更，需要单独的决定记录。

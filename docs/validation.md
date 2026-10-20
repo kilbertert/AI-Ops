@@ -30,11 +30,39 @@ tenant_account_joins
 **结论**：Dify 侧**没有**租户隔离，这是 PRD #772 §C 的 V1 暂定，不是遗漏。
 但该暂定要求的 ADR 此前缺失，本次补记（ADR-0056）。
 
-**本次没有做的事（据实）**：
-- **没有做任何真实浏览器/凭据验证** —— 全部是只读查询与源码阅读。
-- **没有验证"两个租户的运营会互相看到并编辑对方 app"** —— 线上目前只有一个映射账号，
-  这条按 Dify 的 `editor` 语义与单一 workspace 推断得出，未用第二个账号实测。
-- **"95" 无法核实**：本仓库文档与 inventory 中只有 41 / 36 / 120。
+**补做的实证（同日，已从推断变成实测）**：
+
+用代理自己的 `provision_editor` 真的开了一个探针账号（`zz-tenantb-probe-*`），
+再以它的身份打 Dify 的真实 API：
+
+```
+开户后立刻可见 app 数：3        ← 与既有账号完全相同
+  aiops-41-ops-methodology-agent / charge_charging_A_kbqa / aiops-41-kefu-agent
+
+GET /console/api/apps/<id>
+  tenant-A(既有) -> 200
+  tenant-B(新建) -> 200
+
+GET /console/api/apps/<id>/export?include_secret=false
+  tenant-B -> 200，4975 字节完整 DSL
+```
+
+**结论**：新开的账号**一上来就能拿到别人智能体的完整可编辑配置**。
+「跨租户可见」不再是推断；`editor` 在单一 workspace 内是平权的。
+
+**探针清理（据实）**：
+1. `DELETE /console/api/workspaces/current/members/<id>` → 200（移出 workspace）
+2. 但账号行还在 —— 移除成员不删账号，这是 Dify 的语义
+3. 再删 `tenant_account_joins` 与 `accounts` 行
+4. 最终状态核对：`accounts` 只剩原来两个；`tenant_account_joins` 2 条
+5. 三个生产 app 的 `updated_at` 仍是 10-14 / 10-15 —— **未被探针改动**
+   （全程只有读与一次 export，没有任何写 app 的调用）
+
+**仍未做的**：
+- 没有用**真实浏览器**走一遍（全部是服务端 API 调用）。
+- 没有验证"改完之后发布是否真的生效" —— 那属于多工作区设计之后的事。
+- **95（`prod-bugtrack-120`）未能连上**：`120.55.45.59:2134` 超时。它的身份来自
+  用户提供的 host declaration，**未在主机上核实**。
 
 ## 2026-10-19 · M3 Gateway 合并与部署核验（#854）
 
