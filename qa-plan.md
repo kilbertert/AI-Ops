@@ -2172,6 +2172,46 @@ uv run python tools/m2_close/m3node/verify_migration_rollback.py --out /tmp/migr
 | EXECCFG-GW-17 | 三条放行路径的正对照（不注入任何事件） | 200 + 快照，`matched` | 通过 3/3 |
 
 **未覆盖**：真实供应商、真实模型、真实订单、生产装配；真实 HTTP 证据证明 API 契约、
-鉴权与领取判据，**不**证明模型驱动路径。**节点发送端尚未接线** —— 领取请求里的
-`X-AI-Ops-Exec-Config` 在以上所有证据里都由测试或替身发出，不冒充真实节点；
-「第一次 claim 成功」也不等于整轮模型执行成功，那部分留到节点与 Gateway 接线之后。
+鉴权与领取判据，**不**证明模型驱动路径。
+
+节点发送端已在本片接线（M3-NODE-LINK-01），因此「领取成功 = 整轮完成」这条旧口径作废，
+改由下一节判定。
+
+## EXECCFG-LINK 整轮完成与工具领取的分界（节点 + Gateway，M3-NODE-LINK-01 / R1）
+
+环境与数据：Linux 开发机；模型上游与 CPMS 是本机回环合成，编排平台是替身，但**领取与完成
+通知都由节点自己的类发出**；节点容器用 `--network=host` 才能打到宿主 loopback 上的真
+Gateway（本机验收的取舍，不是隔离证明）。不接真实供应商、不访问 41。
+
+复跑（三条互不替代）：
+
+```bash
+# 1) 真 Gateway 进程 + 真 Java 节点 + 合成模型/CPMS（39 条判据）
+M3NODE_DEPS=… M3NODE_JDK_IMAGE=… uv run python tools/m2_close/m3node/verify_node_link.py --out /tmp/node-link.json
+
+# 2) 同 JVM 并发（自带替身 Gateway；distinct / early / late / first-error）
+M3NODE_DEPS=… M3NODE_JDK_IMAGE=… bash tools/m2_close/m3node/m3link/run.sh
+
+# 3) 判据单测（状态机 + 端点 + 复核反例）
+uv run pytest tests/test_m3_node_link_state.py tests/test_m3_node_link_completion.py \
+  /home/claude/.cache/m3-autonomous/test_node_link_review.py
+```
+
+| 编号 | 前提与动作 | 预期可观察结果 | 本机结果 |
+|---|---|---|---|
+| EXECCFG-LINK-01 | 正常两轮工具循环 | 业务读 1 次、模型 2 次；记录先 `running`+快照，确认后 `succeeded`；回执 `agent_version` 等于清单身份 | 通过（真实 HTTP + 真节点） |
+| EXECCFG-LINK-02 | 第二轮上游 500 | 记录 `failed`；派发入口不返回成功 | 通过 |
+| EXECCFG-LINK-03 | 末轮截断（无 `[DONE]`/无 finish reason） | **绝不** `succeeded`（完成回调到达也不算） | 通过；变异「去掉 finish reason 守卫」使其转红 |
+| EXECCFG-LINK-04 | 受控 claim 被拒（身份不一致 / 另一执行者已领取未写快照） | 整轮中止、不再发生第二轮模型调用；记录不 `succeeded` | 通过；变异「降级成 ERROR 文本」使「模型只调 1 次」转红 |
+| EXECCFG-LINK-05 | 进程被 `Runtime.halt(9)` 真中止 | 无 completion/error 回调、无完成通知；记录停在 `running` | 通过（exit 9 + 日志断言） |
+| EXECCFG-LINK-06 | 两个 run 并发派发 | 两条记录都 `succeeded`；业务各读一次；sid 一一对应 | 通过 |
+| EXECCFG-LINK-07 | 领取重试 | 交回同一份快照，业务不重读；最终仍要整轮确认 | 通过 |
+| EXECCFG-LINK-08 | 重复/冲突/坏回执 | 同状态同原因幂等；不同原因 409；`200 {}`/错 run/`state=failed` 不被节点当成功 | 通过 3/3；变异「只认 2xx」使三条同时转红 |
+| EXECCFG-LINK-09 | 撤销 / 恰好到期 | 完成通知被拒、记录保持撤销/过期、不复活、不改写审计列 | 通过 |
+| EXECCFG-LINK-10 | 未启用清单 | 领取即 `succeeded`（旧语义）；完成端点回 `NOT_TRACKED` 且不改任何列；回执键集合不变 | 通过 |
+| EXECCFG-LINK-11 | **同 JVM** 相同 run 重入（early / late 两个窗口） | 重复请求在**本地**被拒（`DuplicateRunRefused`），不发任何通知；原 run 正常完成；model=2、claims=1、一条 completed | 通过；旧实现下 early 会把 A 报成 `LoopIncomplete` |
+| EXECCFG-LINK-12 | **同 JVM** 两个不同 run 并发 | 两者都完成；各领一次、各一条通知 | 通过 |
+| EXECCFG-LINK-13 | 首轮失败 | 无业务领取、只发一次 `failed` 终局（记录不留在 `issued`） | 通过 |
+
+**未覆盖**：真实供应商/订单/生产装配；真实 gRPC 派发的时序（平台替身是同步接口）；
+被取消的 run 在 15 分钟内仍占一个本机登记名额（写明边界，不是保证）。

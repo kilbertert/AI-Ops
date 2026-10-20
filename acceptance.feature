@@ -3251,6 +3251,24 @@ Feature: 整轮完成与工具领取的分界（M3-NODE-LINK-01）
       And 快照不再被交出
       And 未启用清单的旧记录收到任何完成通知都不改写任何列
 
+    Scenario: LINK-11 同一进程里相同 run 的重入在本地被拒
+      Given 一个 run 正在本进程内执行（无论它是否已经领到业务）
+      When 相同 run_id 的第二个请求进入
+      Then 第二个请求在**本地**被拒绝，且不向 Gateway 发送任何完成或失败通知
+      And 原 run 按自己的守卫正常完成，模型调用与业务领取都不增加
+      And 两个窗口都要覆盖：A 尚未构建 ChatClient 时、以及 A 已领取且末轮请求仍在上游时
+
+    Scenario: LINK-12 同一进程里两个不同 run 并发
+      Given 两个不同的 run_id 在同一 Spring 上下文里同时执行
+      When 两者各自领取业务并完成
+      Then 两者都完成，各领取一次、各发一条完成通知，互不覆盖对方的守卫
+
+    Scenario: LINK-13 首轮失败不留 issued
+      Given 首轮上游即失败
+      When 该次派发结束
+      Then 没有发生业务领取，且只发送一次 failed 终局
+      And 记录不会停在 issued
+
     Scenario: LINK-10 未启用清单时行为逐字不变
       Given 节点与 Gateway 都没有配置执行配置清单
       When 一次委派完成

@@ -42,6 +42,26 @@ M3NODE_DEPS=… M3NODE_JDK_IMAGE=… \
 节点容器用 `--network=host` 才能打到宿主 loopback 上的真 Gateway —— 这是本机验收的
 已知取舍，不是隔离证明。
 
+## 同 JVM 并发（`m3link/run.sh`）
+
+```bash
+M3NODE_DEPS=… M3NODE_JDK_IMAGE=… bash tools/m2_close/m3node/m3link/run.sh
+```
+
+`verify_node_link.py` 每次派发只起一个节点进程，覆盖不到「同一个 JVM 里两个 run」。
+这一层用 `ConcurrentRunAcceptance`（自带只回答领取/完成的**替身** Gateway，故意对任何 run
+都回 200 —— 这正是「能领到 ≠ 拥有这条 run」的最坏情形）跑四个模式：
+
+| 模式 | 判据 |
+|---|---|
+| `distinct` | 两个不同 run 都完成；model=4、claims=2、各一条 completed |
+| `early` | 相同 run 在 A 构建 ChatClient 之前重入 ⇒ B 本地被拒；model=2、claims=1 |
+| `late` | 相同 run 在 A 已领取、末轮请求仍挂在上游时重入 ⇒ B 本地被拒；model=2、claims=1 |
+| `first-error` | 首轮失败：claims=0，只发一次 failed |
+
+协调全部用可观察事件（customizer 到达 / 末轮请求到达上游），**没有 sleep**。
+它不替代端到端：真 Gateway 的 39 条判据仍在 `verify_node_link.py`。
+
 ## 节点侧重跑
 
 本目录是这一片的验收工具。它证明的是**真实节点装配**在模型调用前拒绝配置漂移 ——
