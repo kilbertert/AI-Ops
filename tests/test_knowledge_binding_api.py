@@ -207,3 +207,19 @@ def test_invalid_knowledge_id_is_rejected_by_the_schema(tmp_path: Path, bad: str
         json={"knowledge_id": bad, "tenant_id": TENANT, "knowledge_base_ids": [KB_A]},
     )
     assert response.status_code == 422
+
+
+def test_the_page_is_reachable_under_v1(tmp_path: Path) -> None:
+    """The page must live under `/v1/`, which is all the public nginx proxies.
+
+    A top-level `/knowledge` is a 404 from outside (measured) — the page would
+    exist and be unreachable, which is worse than not existing.
+    """
+    client, _store, _kb = _client(tmp_path, {TENANT: []})
+    response = client.get("/v1/knowledge")
+    assert response.status_code == 200
+    assert "Knowledge ID" in response.text
+    # It must call the same-origin API with the operator entry header, because
+    # only that branch of the public nginx map preserves the caller's token.
+    assert '"/v1/knowledge/available"' in response.text
+    assert '"X-Business-Entry": "operator"' in response.text
