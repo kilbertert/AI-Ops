@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- 整轮成功通知的省略/null 原因不再匹配已记录的非空原因；冲突返回 409，既有无原因重试仍返回 200。
+
 ### Added
 - 95 环境（`api.qumall.qushiyun.com`，主机侧键 `qy-gw-120`）有了事实页 `docs/agents/env-95-facts.md`，并在 `.dev-host.toml` 声明为可只读访问的目标。
   记录内容包含：代号与 41/36 的判别、它的数据面为空这一观测、以及**没有** `env-95.toml`

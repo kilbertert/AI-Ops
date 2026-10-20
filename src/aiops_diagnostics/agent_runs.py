@@ -782,7 +782,7 @@ class AgentRunStore:
                 # 早先这里无条件回 already_completed，于是 `completed+first` 与
                 # `completed+second` 都返回 200 —— 「不同原因不是同一次幂等重试」这条
                 # 规则在失败路径上成立、在成功路径上被静默丢掉了。
-                if success_reason is None or run.reason == success_reason:
+                if run.reason == success_reason:
                     return "already_completed", run
                 return "conflict", run
             if run.state == EXPIRED:

@@ -134,13 +134,28 @@ class SnailHandler(BaseHTTPRequestHandler):
                 f"{SnailHandler.gateway}/v1/internal/charging-status/completions/{run_id}",
                 method="POST",
                 token=SnailHandler.state["claim_token"],
-                body={"status": "completed"},
+                body={"status": "completed", "reason": "model_stop"},
                 headers=headers,
             )
             SnailHandler.state["completion_result"] = {
                 "status": completion,
                 "body": completion_body,
             }
+            retries = {}
+            for label, body in (
+                ("same", {"status": "completed", "reason": "model_stop"}),
+                ("missing", {"status": "completed"}),
+                ("null", {"status": "completed", "reason": None}),
+            ):
+                code, _ = http(
+                    f"{SnailHandler.gateway}/v1/internal/charging-status/completions/{run_id}",
+                    method="POST",
+                    token=SnailHandler.state["claim_token"],
+                    body=body,
+                    headers=headers,
+                )
+                retries[label] = code
+            SnailHandler.state["completion_retries"] = retries
         body = json.dumps({"status": 1, "data": {"content": "已查询"}}).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -298,6 +313,7 @@ def _case(root: Path, *, label: str, claim_token: str, header_mode: str, want: s
             "delegated": result,
             "claim_status": claim.get("status"),
             "claim_body": json.loads(claim.get("body") or "{}"),
+            "completion_retries": SnailHandler.state.get("completion_retries", {}),
             "row": {
                 "state": row.get("state"),
                 "reason": row.get("reason"),
@@ -400,6 +416,9 @@ def main() -> int:
             str(row),
         )
         body = (matched.get("delegated") or {}).get("body") or {}
+        for label, expected in (("same", 200), ("missing", 409), ("null", 409)):
+            actual = matched["completion_retries"].get(label)
+            check(f"成功原因重试 {label}", actual == expected, f"HTTP {actual}, expected {expected}")
         check(
             "一致身份：回执 agent_version 取自已核对记录",
             body.get("agent_version") == matched.get("identity") and body.get("agent_version_gap") is None,

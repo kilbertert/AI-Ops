@@ -438,6 +438,42 @@ def test_untracked_expired_record_is_not_rewritten_by_a_completion_notice(tmp_pa
         fixture["_upstream_ctx"].__exit__(None, None, None)
 
 
+@pytest.mark.parametrize(
+    ("first_reason", "second_body", "expected_status"),
+    [
+        (None, {"status": "completed"}, 200),
+        (None, {"status": "completed", "reason": None}, 200),
+        (None, {"status": "completed", "reason": "model_stop"}, 409),
+        ("model_stop", {"status": "completed"}, 409),
+        ("model_stop", {"status": "completed", "reason": None}, 409),
+        ("model_stop", {"status": "completed", "reason": "model_stop"}, 200),
+    ],
+)
+def test_success_retry_compares_missing_and_null_reasons(
+    tmp_path, monkeypatch, first_reason, second_body, expected_status
+):
+    """省略和 JSON null 都表示无原因；它们不能匹配已经记录的非空原因。"""
+    manifest = _write_manifest(tmp_path)
+    fixture, run_id, identity = _claimed_with_snapshot(tmp_path, monkeypatch, manifest)
+    try:
+        assert _complete(fixture, run_id, reason=first_reason, identity=identity).status_code == 200
+        before = _rows(fixture)[0]
+        response = fixture["client"].post(
+            f"/v1/internal/charging-status/completions/{run_id}",
+            headers={"Authorization": f"Bearer {NODE_TOKEN}", "X-AI-Ops-Exec-Config": identity},
+            json=second_body,
+        )
+        assert response.status_code == expected_status, response.text
+        if expected_status == 409:
+            assert response.json()["error"]["code"] == "AGENT_RUN_COMPLETION_CONFLICT"
+        else:
+            assert response.json() == {"run_id": run_id, "state": "succeeded"}
+        assert _rows(fixture)[0] == before
+    finally:
+        fixture["client"].close()
+        fixture["_upstream_ctx"].__exit__(None, None, None)
+
+
 def test_conflicting_success_reasons_are_not_idempotent(tmp_path, monkeypatch):
     """成功通知带不同 `reason` ⇒ 409；同 `reason` ⇒ 200。
 
