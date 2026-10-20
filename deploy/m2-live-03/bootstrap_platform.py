@@ -290,6 +290,12 @@ def ensure_model(token: str, endpoint: str, api_key: str, model_id: str) -> int:
     return body["data"]
 
 
+#: 平台派发时下发的 system prompt 就来自这个 instruction（`SystemPromptHandler` 的字节码
+#: 实测：`context.setSystemPrompt(agent.getInstruction())`，空则用一句默认）。
+#: 因此**清单里的 system_messages 必须与它逐字相同** —— 这不是巧合，而是同一份值。
+AGENT_INSTRUCTION = "用 charging_status_snapshot 工具取一次快照，并原样作答。"
+
+
 def ensure_agent(token: str, app_id: str, model_id: int) -> int:
     status, body = call("/agent/page?page=1&size=50", None, {"Snail-Ai-Auth": token}, "GET")
     for agent in (body or {}).get("data", []) or []:
@@ -300,7 +306,7 @@ def ensure_agent(token: str, app_id: str, model_id: int) -> int:
         {
             "name": SERVICE,
             "description": "M2-LIVE-03 trial agent",
-            "instruction": "用 charging_status_snapshot 工具取一次快照，并原样作答。",
+            "instruction": AGENT_INSTRUCTION,
             "chatModelId": model_id,
             "appId": app_id,
             "mcpEnabled": False,

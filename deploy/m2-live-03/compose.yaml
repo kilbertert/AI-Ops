@@ -183,6 +183,9 @@ services:
       - ${M2LIVE_STATE:-/var/lib/aiops-m2-live}/node:/home/node
       # 只有公开证书与 truststore：节点不持有任何私钥。
       - ${M2LIVE_CONFIG:-/etc/aiops-m2-live}/tls/public:/etc/m2live-tls:ro
+      # M3：与 Gateway **同一份**执行配置清单（身份 = 原始字节 sha256）。
+      # 单文件只读挂载：节点因此看不到 gateway 目录里的凭据。
+      - ${M2LIVE_CONFIG:-/etc/aiops-m2-live}/gateway/exec-manifest.json:/etc/m2live/exec-manifest.json:ro
     mem_limit: 500m
     cpus: 0.22
     restart: unless-stopped

@@ -8,9 +8,9 @@
   },
   "node": {
     "artifact": "aiops-execution-node.jar",
-    "sha256": "b27da717743d7534b6103f5a4339bd1a630ae5b631c1d60bce3388429da9372a",
-    "bytes": 106227786,
-    "build": "由本仓 tools/m2_close/node 构建；构建命令见 README"
+    "sha256": "67bf6acedbee8ea88bae44206258b6e0500773436a9e47e056edf27d182c5b9b",
+    "bytes": 106267858,
+    "build": "由本仓 tools/m2_close/node 构建（M3-NODE-LINK-01 之后：整轮完成语义 + 身份回传）；构建命令见 tools/README.md"
   },
   "base_images": {
     "_comment": "按 ref 记录每个宿主实跑/实拉到的镜像身份。41 上 docker.io 直连不可达，ref 带宿主加速前缀；开发机用不带前缀的 ref。preflight 只认锁里的 ref 和它的 image ID，不认 tag 名，也不接受镜像覆盖参数绕开。",
@@ -48,10 +48,10 @@
     "_comment": "由 deploy/m2-live-03/build-image.sh 在开发机/runner 构建。这里记录**可复现**的内容身份：source_sha256（src+tools+requirements+Dockerfile 的归档摘要）与 uv_lock_sha256。image_id 每次构建都不同（构建时间戳进镜像元数据），所以它不写进仓库：它在宿主加载制品后由 build-image.sh 的 identity.json 记录，preflight 优先比对内容标签，identity.json 存在时再核对 image ID。",
     "image": "aiops-m2-live-03-gateway",
     "image_id": "",
-    "source_sha256": "4195e1ca675397ff8d0d491f8875684b1b0fa7227d63c52058532b239979b963",
+    "source_sha256": "53f2ca6d0d02286c3150950cf65e76ffb33dad71b553b9c72f48856060c2ca2b",
     "uv_lock_sha256": "994a8a12fa58ab833985b1e864427679dca6c0ed95b74c759941f94302aa3e13",
     "base_image": "python:3.13-slim",
     "base_digest": "python@sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f",
-    "built_at": "2026-10-18T14:12:29Z"
+    "built_at": "2026-10-20T07:11:13Z"
   }
 }
