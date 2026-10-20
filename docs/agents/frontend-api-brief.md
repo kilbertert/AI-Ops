@@ -1135,7 +1135,7 @@ DELETE /v1/conversations/{id}                    → 删除
   `ChSendOrderMsgServiceImpl.getUserId` = `userId.equals("-1") ? consumerId : userId`）。
 - 此前 `self` 范围只下推 `user_id`，于是这类订单对**它的主人自己**也回
   「这个订单不属于当前账号」。41 实测 771 行工单订单，其中 **347 行带 `consumer_id`**
-  —— 这 347 张单在修前**谁都查不到**。
+  —— 这 347 张单在修前**主人自己查不到**（有对应站点的运营商按站点仍查得到）。
 - 修后判据：`(CASE WHEN user_id='-1' THEN consumer_id ELSE user_id END) = <会话 C 端 id>`。
   空白/NULL 的 `user_id` **不**算本人（那是渠道/OCPI 单据，没有人认领）。
 - **对选择器判据的影响**：如果前端将来把「工单订单」放进列表，它们现在提交得上；
