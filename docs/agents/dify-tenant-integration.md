@@ -191,7 +191,13 @@ PRD #772 §C 原文：
    workspace 切到目标。**这一步要确认 Dify 的会话/租约语义**，不能假设。
 4. **发布桥**：`AIOPS_CONSOLE_BRIDGE_WORKSPACE_ID` 从单一常量改为按发起人租户解析。
    钉住 workspace 的那条安全判据要保留，只是钉的对象变成"发起人的 workspace"。
-5. **试运行**：不变 —— 它已经按公司租户算范围，与 Dify workspace 无关。
+5. **试运行**：**范围计算不变，但草稿来源要改。** 这条我第一版写成"不变"，是错的：
+   范围确实按公司租户算（与 workspace 无关），但试运行**读的那份草稿**来自网关的
+   `DifyDslSource`，而它的 `workspace_id` 取自单一配置
+   `AIOPS_GATEWAY_DIFY_CONSOLE_WORKSPACE_ID`（`gateway_api.py:703`）。
+   多工作区之后，这个 id 也必须按发起人租户解析 —— 否则 A 租户的人点试运行，
+   读到的是配置里那一个 workspace 的草稿，而**不是他自己那个**。
+   这与第 4 条是同一类错误，只是入口不同（发布 vs 试运行），必须一起改。
 6. **发布权**：需要决定 `aiops:agent:publish` 是否还要加 workspace 维度。
 
 **一处必须同时改的**：桥现在用 `AIOPS_CONSOLE_BRIDGE_WORKSPACE_ID` 做"角色来自哪个
