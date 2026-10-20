@@ -654,6 +654,7 @@ runbook §5/§6 明确禁止 CI 自证。所以 CD 通过最多报告 `merged_wa
 | 某个术语到底指什么？ | [GLOSSARY.md](GLOSSARY.md)（词汇表，不含规格） |
 | 对外接口契约？ | 固定问答 [docs/faq-api.md](docs/faq-api.md)；健康报告与单问诊断 [docs/standard-api-contract.md](docs/standard-api-contract.md)（**冲突时以这两份为准**） |
 | 怎么跑起来？ | [docs/快速上手.md](docs/快速上手.md) |
+| 95 是哪台机、怎么连、里面有什么？ | [docs/agents/env-95-facts.md](docs/agents/env-95-facts.md)（另一套 AI-Ops 环境；与 41 数据面独立，当前只做只读核实） |
 | 系统架构简述？ | [docs/architecture.md](docs/architecture.md) |
 | agent 运行时细节？ | [docs/thin-harness.md](docs/thin-harness.md) |
 | 多端部署？ | [docs/gateway.md](docs/gateway.md) |
