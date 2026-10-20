@@ -49,7 +49,10 @@ cp "$HERE/gateway-requirements.txt" "$work/gateway-requirements.txt"
 (cd "$REPO" && tar -cf - --exclude '__pycache__' --exclude 'node/target' tools/m2_live tools/m2_close) \
   | (cd "$work" && tar -xf -)
 
-context_sha=$(cd "$work" && find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}')
+# `LC_ALL=C` 不是风格问题：`sort` 默认按**本机 locale** 排序，同 141 个文件在
+# `en_US.UTF-8` 与 `C` 下顺序不同，摘要因此不同（实测 7e6dc9ca… vs e7c9af0c…）。
+# 锁文件里那个值必须与运行环境无关，否则每个 reviewer 算出自己的一个。
+context_sha=$(cd "$work" && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum | awk '{print $1}')
 lock_sha=$(sha256sum "$REPO/uv.lock" | awk '{print $1}')
 base_digest=$(docker image inspect -f '{{index .RepoDigests 0}}' "$BASE" 2>/dev/null || true)
 [ -n "$base_digest" ] || { echo "基础镜像 $BASE 没有 RepoDigest：先拉取，别用本地构建的替身" >&2; exit 2; }

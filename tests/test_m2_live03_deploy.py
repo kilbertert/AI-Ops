@@ -221,3 +221,29 @@ def test_node_build_is_reproducible():
         "锁文件与变更单对节点制品各说各话："
         f"lock={lock['node']['sha256'][:16]}… host-change={recorded.group(1)[:16]}…"
     )
+
+
+def test_gateway_context_digest_is_reproducible_and_matches_the_lock():
+    """构造上下文摘要必须**与环境无关**，且与锁文件一致。
+
+    这条曾经真的错过：`build-image.sh` 里的 `sort -z` 按本机 locale 排序，
+    同一批 141 个文件在 `en_US.UTF-8` 与 `C` 下得到不同摘要（`7e6dc9ca…` / `e7c9af0c…`）。
+    锁文件里那个值于是只代表**某台机器上**的构建，reviewer 复核永远对不上 ——
+    而且看起来像「制品被换过」。
+    """
+    script = (DEPLOY / "build-image.sh").read_text(encoding="utf-8")
+    assert "LC_ALL=C sort" in script, "构造上下文摘要的排序没有固定 locale，换台机器就变"
+
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("context_digest_under_test", DEPLOY / "context_digest.py")
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+
+    value, count = module.digest()
+    lock = json.loads((DEPLOY / "images.lock.json").read_text(encoding="utf-8"))
+    assert count > 0
+    assert value == lock["gateway_image"]["source_sha256"], (
+        f"上下文摘要与锁文件不一致：实际 {value[:16]}… 锁 {lock['gateway_image']['source_sha256'][:16]}…"
+    )

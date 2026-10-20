@@ -33,7 +33,27 @@ Spring Boot 的 `repackage` 把构建时间写进 `META-INF/MANIFEST.MF`，于�
 - `images.lock.json` 的 node 摘要更新为 `ba1b0abf…`；gateway 内容摘要 `7e6dc9ca…`（本轮重建）。
 - `HOST-CHANGE.md` 的节点制品摘要同步更新 —— 否则按变更单准备制品会与 preflight 冲突。
 
-### 四、边界
+### 五、构造上下文摘要也曾经不可复现（同轮发现）
+
+`build-image.sh` 的 `m2live.source` 标签来自
+`find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum`。`sort` 默认按
+**本机 locale** 排序，而同一批 141 个文件在 locale 下的顺序不同：
+
+```
+en_US.UTF-8 → 7e6dc9ca4219568a…
+C           → e7c9af0c36a355a2…
+```
+
+Codex 复核算出的正是后者。锁文件里那个值于是只代表**某台机器上**的构建，reviewer
+永远对不上，而且看起来像「制品被换过」。修法：`LC_ALL=C sort -z`，并把摘要计算抽成
+`deploy/m2-live-03/context_digest.py` —— 它按同一组排除规则**逐文件挑选**再算，
+与工作树是否干净、从哪里运行都无关。
+
+两个回归：`test_gateway_context_digest_is_reproducible_and_matches_the_lock`
+（断言脚本里固定了 locale + 抽出的摘要与锁一致），以及上一条的三判据。
+各自变异验证过，都能单独转红。
+
+### 六、边界
 
 可复现只在**同一 JDK 与同一依赖**下成立。换 JDK 或换依赖版本仍会变，本 PR 不声称解决那件事。
 
