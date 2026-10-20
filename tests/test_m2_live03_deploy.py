@@ -186,3 +186,15 @@ def test_readme_and_host_change_do_not_claim_authorization():
     assert "不是授权" in host_change
     readme = (DEPLOY / "README.md").read_text(encoding="utf-8")
     assert "HOST-CHANGE.md" in readme
+
+
+def test_node_build_is_reproducible():
+    """节点 jar 必须是**可复现构建**，否则锁文件里那个摘要只能是「某一次的产物」。
+
+    Spring Boot 的 repackage 会把构建时间写进 MANIFEST：不固定 `outputTimestamp` 时，
+    同一份源码两次构建得到不同摘要（实测两个干净树：`22e400f0…` / `08d9c4c7…`）。
+    于是 `images.lock.json` 里钉的摘要别人永远复现不出来，preflight 会在别人的构建上
+    永远失败。固定之后两次构建逐字节相同（实测 `ba1b0abf…` 两次一致）。
+    """
+    pom = (DEPLOY.parents[1] / "tools/m2_close/node/pom.xml").read_text(encoding="utf-8")
+    assert "<project.build.outputTimestamp>" in pom, "缺可复现构建时间戳，节点 jar 无法按摘要复现"
