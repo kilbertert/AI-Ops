@@ -52,7 +52,8 @@
   <h1>知识库挂接</h1>
   <p class="sub">
     勾选本租户的 RAGFlow 知识库，起一个名字，保存即可生效 —— 不需要改配置、不需要重启。
-    这里的名字就是你在 Dify「外部知识库 API」里要填的 <code>Knowledge ID</code>。
+    这里的名字就是你在 Dify「外部知识库 API」里要填的 <code>Knowledge ID</code>。<br>
+    本页需要管理端身份（<code>aiops:agents:manage</code>）。
   </p>
 
   <section>
@@ -106,6 +107,9 @@
       headers: {
         "Content-Type": "application/json",
         "Authorization": "Bearer " + token(),
+        // 管家端入口：公网 nginx 上只有这条分支**保留**调用者的 Authorization；
+        // consumer 分支会用服务令牌把它换掉，于是这里的令牌根本到不了门。
+        "X-Business-Entry": "operator",
         ...(options.headers || {}),
       },
     });

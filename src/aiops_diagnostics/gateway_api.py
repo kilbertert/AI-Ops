@@ -3535,7 +3535,13 @@ def create_gateway_app(
     #: 管理页本身不带凭据：它是一个静态文档，页面自己向下面的 API 出示令牌。
     #: 放在网关里而不是另一个静态站，是因为它必须与它调用的 API **同域**
     #: —— 否则浏览器会先撞 CORS，再撞"把令牌发给另一个源"。
-    @app.get("/knowledge", include_in_schema=False)
+    #:
+    #: 路径必须在 `/v1/` **下面**：公网 nginx 只代理 `/v1/` 与 `/v1/dify/`，
+    #: 一个顶层 `/knowledge` 从外面是 404（实测）。而页面要能带自己的
+    #: Authorization 到下面的接口，所以它的 fetch 走 operator 入口
+    #: （`X-Business-Entry: operator` 那条 map 会**保留**调用者的 Authorization，
+    #: consumer 那条会换成服务令牌）。
+    @app.get("/v1/knowledge", include_in_schema=False)
     def knowledge_page() -> HTMLResponse:
         from importlib.resources import files
 

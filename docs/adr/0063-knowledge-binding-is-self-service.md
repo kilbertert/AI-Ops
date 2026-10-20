@@ -47,11 +47,23 @@ Dify 侧只会看到 404。
 
 ## 决策三：页面与 API 同域，页面本身不带凭据
 
-`GET /knowledge` 是一张静态页（包内 `static/knowledge.html`），它**自己**向
+`GET /v1/knowledge` 是一张静态页（包内 `static/knowledge.html`），它**自己**向
 `/v1/knowledge/*` 出示令牌。放在网关里的原因只有一个：同域。
 
 换一个静态站会先撞 CORS，再撞"把令牌发给另一个源" —— 后者本身就是个坏主意。
 页面不落盘保存令牌以外的东西，且令牌只存在运营自己的浏览器里。
+
+**路径必须在 `/v1/` 之下，且 fetch 必须带 `X-Business-Entry: operator`。**
+两点都不是风格问题，第一版两条都错，部署后从公网实测是 404：
+
+- 公网 nginx 只代理 `/v1/` 与 `/v1/dify/`，顶层 `/knowledge` 从外面根本到不了
+  —— 页面"存在但够不到"，比不存在更糟。
+- 而 `/v1/` 那条 location 会把 `Authorization` **换成我们的服务令牌**，唯独
+  operator 分支（`0.aiops-entry-map.conf` 的 map）**保留调用者的**。所以页面上的
+  令牌要能到门，请求必须走 operator 入口。
+
+一条用例（`test_the_page_is_reachable_under_v1`）同时钉住路径与这个头：两者各自都能
+造成"页面在、点了没反应"。
 
 ## 被否掉的替代形态
 
