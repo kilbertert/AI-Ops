@@ -34,6 +34,18 @@ sha256sum /tmp/aiops-login-sync.tgz              # 传完在远端再核一次
 ssh yidong-36 'cp -a /opt/aiops-login-proxy /opt/aiops-login-proxy.bak-$(date +%Y%m%d%H%M%S)'
 ```
 
+**环境文件也要备份，并且确认 `AIOPS_LOGIN_PROXY_ENVIRONMENT` 在不在**（#864 / ADR-0061）：
+
+```bash
+ssh yidong-36 'sudo cp -a /etc/aiops-login-proxy/login-proxy.env \
+                 /etc/aiops-login-proxy/login-proxy.env.bak-$(date +%Y%m%d%H%M%S)
+  sudo grep -n ^AIOPS_LOGIN_PROXY_ENVIRONMENT= /etc/aiops-login-proxy/login-proxy.env'
+```
+
+没有这一行，新代码**起不来**（`ValueError: AIOPS_LOGIN_PROXY_ENVIRONMENT is required`）——
+这是刻意的，见 §3.5。补值时取**这台代理服务的公司环境**（41 → `41`，95 → `95`），
+**不能照抄另一台**：两台填同一个值，两套 UPMS 的同名 `sys_user.id` 又会落回同一个 Dify 账号。
+
 nginx 两个文件也备份，**文件名带时间戳**：
 
 ```bash
@@ -58,6 +70,87 @@ ssh yidong-36 'cd /opt/aiops-login-proxy && tar -xzf /tmp/aiops-login-sync.tgz
 
 **判据**：解包后 `ls -ld /opt/aiops-login-proxy/aiops_diagnostics` 必须是
 `root root` 且 `a+rX`（`aiopslogin` 要能读）。不是就先修再重启。
+
+## 3.5 环境标识（#864）
+
+代码会读 `AIOPS_LOGIN_PROXY_ENVIRONMENT`，它参与 Dify 账号邮箱的派生
+（`{environment}-{公司用户id}@aiops-login.invalid`）。**部署完先确认它在**：
+
+```bash
+ssh yidong-36 'sudo grep -n ^AIOPS_LOGIN_PROXY_ENVIRONMENT= /etc/aiops-login-proxy/login-proxy.env'
+```
+
+判据不是"文件里有这一行"，而是**两道闸门各自都会拦**，而且用的是**部署出来的那份代码**：
+
+**闸门一：`LoginProxySettings.from_env` 的必填检查**（漏配 ⇒ 服务起不来）。
+用**真实的环境文件**，但把它当**数据**读、按 `KEY=VALUE` 拆开 —— 不要用
+`. 环境文件` 去 source 它：那会让 shell 以执行者身份运行文件里的任意命令，而服务本身
+（systemd `EnvironmentFile=`）只做变量解析、从不执行。以 `aiopslogin` 跑（它对该文件有
+组读权限），**不需要 root**：
+
+```bash
+ssh yidong-36 "sudo -n -u aiopslogin /usr/bin/python3 - <<'PY'
+import os, sys
+sys.path.insert(0, '/opt/aiops-login-proxy')
+from aiops_diagnostics.dify_login_server import LoginProxySettings
+
+env = {}
+for line in open('/etc/aiops-login-proxy/login-proxy.env', encoding='utf-8'):
+    line = line.strip()
+    if not line or line.startswith('#') or '=' not in line:
+        continue
+    k, v = line.split('=', 1)
+    env[k.strip()] = v.strip()
+
+os.environ.clear(); os.environ.update(env)
+try:
+    print('present -> STARTED environment=', LoginProxySettings.from_env().dify.environment)
+except Exception as e:
+    print('present ->', type(e).__name__, e)
+os.environ.pop('AIOPS_LOGIN_PROXY_ENVIRONMENT', None)
+try:
+    LoginProxySettings.from_env(); print('missing -> STARTED (bad)')
+except Exception as e:
+    print('missing ->', type(e).__name__, e)
+PY"
+# 期望：present -> STARTED environment= 41   （实际配置值真的被读到）
+#       missing -> ValueError AIOPS_LOGIN_PROXY_ENVIRONMENT is required
+```
+
+⚠️ **不要 `sudo bash -c 'set -a; . 环境文件; …'`**（评审指出）：那是把生产配置文件
+当 shell 脚本、以 **root** 身份执行。文件今天是干净的，但这条手顺会教下一个人把
+"以 root 执行一个可被编辑的文件"当成常规操作 —— 一旦有人往里放一行命令，就是 root 执行。
+服务自己从不这么做，判据也不该这么做。
+
+**闸门二：`DifyConsoleSettings` 的格式校验**（配了但写法不合法 ⇒ 同样起不来）。
+这一道**必须直接构造 settings** —— 它要证明的是派生那条判据与构造那条是同一条：
+
+```bash
+ssh yidong-36 'sudo -n -u aiopslogin /usr/bin/python3 - <<PY
+import sys
+sys.path.insert(0, "/opt/aiops-login-proxy")
+from aiops_diagnostics.dify_login_provision import DifyConsoleSettings
+for v in ("", "prod.41"):
+    try:
+        DifyConsoleSettings(base_url="http://x", secret_key="x", environment=v)
+        print(repr(v), "-> STARTED (bad)")
+    except Exception as e:
+        print(repr(v), "->", type(e).__name__)
+PY'
+# 期望：两行都是 DifyProvisionError
+```
+
+⚠️ **两道闸门不能互相代替**（评审指出）：闸门二直接传空串，测的是 `DifyConsoleSettings`
+自己那条判据；如果服务入口哪天不再调用 `required(...)`，闸门二照样通过、而漏配会
+以"环境为空"的形式走到派生处。反过来，闸门一不校验格式。所以两条都要跑。
+
+⚠️ **脚本从 stdin 走，不要先 `cat > /tmp/xxx.py` 再 sudo 执行**：`/tmp` 是共享目录，
+别人可以先把那个路径占住、写成自己的内容，而 `sudo -u aiopslogin` 会以**代理身份**
+执行它 —— 那个身份读得到 `login-proxy.env`（含 `SECRET_KEY`）。stdin 没有这个窗口，
+也不会留下一个可被替换的文件。
+
+⚠️ 两个探针都**只构造 settings**（闸门一会读环境文件，那是它的判据本身）：
+不连公司 UPMS、不连 Dify、不碰生产映射表，也不写任何文件。
 
 ## 4. nginx 两处配置（缺一不可）
 
@@ -165,7 +258,7 @@ ssh yidong-36 'sha256sum /opt/aiops-login-proxy/aiops_diagnostics/dify_login_ser
 git show origin/main:src/aiops_diagnostics/dify_login_server.py | sha256sum   # 两个必须相等
 ```
 
-## 6. 验收（四条，都是真入口）
+## 6. 验收（五条，都是真入口）
 
 | # | 动作 | 期望 |
 |---|---|---|
@@ -179,36 +272,58 @@ git show origin/main:src/aiops_diagnostics/dify_login_server.py | sha256sum   # 
 
 D 的日志应出现 `source=<真实地址>`，**不是 `127.0.0.1`**（那是 realip 修正生效的判据）。
 
+E. `POST http://36.156.159.175:10008/__aiops/login` 带伪造头 `X-Forwarded-Proto: https`
+   且**从非回环对端发**（换一台机器或 `curl --interface 127.0.0.2`）⇒ 期望 **400**
+   「此入口是明文 HTTP…」。
+
+**D 与 E 不是一回事，不能互相替代**：D 只证明 `realip` 把 `$remote_addr` 改写对了；
+`$aiops_upstream_proto` 是另一个 `map` 算的、只喂 `X-Forwarded-Proto`。一个 realip 正常
+但协议 `map` 没加载的部署，D 照样通过。E 才有区分性：新配置只在真实对端是回环时采信
+上游声明的协议，所以伪造的 `https` 被抹空 ⇒ 判明文 ⇒ 400；旧配置原样透传 ⇒ 以为是 TLS
+⇒ 403。**400 只可能是新配置。**
+
 ## 7. 回滚
 
-**三处备份是两个时间戳** —— §2 里代码与 nginx 是在两条命令里分别备份的，时间戳不同
-（2026-10-19 那次：代码 `20261019182443`、nginx `20261019182623`）。先看清楚：
+**四处备份、三个时间戳** —— 代码、两个 nginx 文件、环境文件是在不同命令里分别备份的。
+两个 nginx 文件通常共用一条命令、一个时间戳，另外两处各自不同（2026-10-19 那次：
+代码 `20261019182443`、nginx `20261019182623`）。先看清楚：
 
 ```bash
 ssh yidong-36 'ls -d /opt/aiops-login-proxy.bak-*
   ls /www/server/panel/vhost/nginx/dify-console-10008.conf.bak-*
-  ls /www/server/panel/vhost/nginx/snippets/dify-login-proxy.conf.bak-*'
+  ls /www/server/panel/vhost/nginx/snippets/dify-login-proxy.conf.bak-*
+  sudo ls /etc/aiops-login-proxy/login-proxy.env.bak-*'
 ```
 
-然后填**两个**变量：
+然后填**三个**变量（环境文件那份只有在你改过它时才有；没改过就不要恢复它，
+否则会把别人后加的键退回去）：
 
 ```bash
 CODE_TS=20261019182443    # ← 代码包那个
 NGX_TS=20261019182623     # ← nginx 那个
+ENV_TS=20261020180542     # ← 环境文件那个；没改过环境文件就留空
 ssh yidong-36 "set -e
   test -d /opt/aiops-login-proxy.bak-$CODE_TS            # 存在性先验，缺了就停
   test -f /www/server/panel/vhost/nginx/dify-console-10008.conf.bak-$NGX_TS
   test -f /www/server/panel/vhost/nginx/snippets/dify-login-proxy.conf.bak-$NGX_TS
+  if [ -n \"$ENV_TS\" ]; then test -f /etc/aiops-login-proxy/login-proxy.env.bak-$ENV_TS; fi
   systemctl stop aiops-dify-login-proxy
   cp -a /opt/aiops-login-proxy.bak-$CODE_TS/. /opt/aiops-login-proxy/
   cp /www/server/panel/vhost/nginx/dify-console-10008.conf.bak-$NGX_TS \
      /www/server/panel/vhost/nginx/dify-console-10008.conf
   cp /www/server/panel/vhost/nginx/snippets/dify-login-proxy.conf.bak-$NGX_TS \
      /www/server/panel/vhost/nginx/snippets/dify-login-proxy.conf
+  if [ -n \"$ENV_TS\" ]; then cp /etc/aiops-login-proxy/login-proxy.env.bak-$ENV_TS \
+     /etc/aiops-login-proxy/login-proxy.env; fi
   nginx -t
   nginx -s reload
   systemctl start aiops-dify-login-proxy"
 ```
+
+**为什么环境文件也在回滚范围里**（#864）：`AIOPS_LOGIN_PROXY_ENVIRONMENT` 决定账号邮箱
+的前缀。回滚代码却留下一个改错的环境值，下一次部署会**在错误的环境前缀下派生账号** ——
+那是静默的、只有在两个环境撞号时才显形的错。`ENV_TS` 留空是给"这次没动环境文件"
+的情形，不是省略它的理由。
 
 四处要点：
 
@@ -218,7 +333,8 @@ ssh yidong-36 "set -e
 3. **`nginx -t` 在 `nginx -s reload` 之前**；`-t` 失败就不要 reload（旧配置还在跑，
    服务停止中，此时人工介入比 reload 坏配置安全）。
 4. 代理**在停服务与恢复文件之间**处于停止状态。若中途失败，先别急着 `start` ——
-   先把文件恢复完，再起服务；起之前用 §6 的 A/B/C 三条确认。
+   先把文件恢复完，再起服务；起之前用 §6 的 A/B/C 三条确认，并重跑 §3.5 的探针
+   （回滚后的代码可能还不认识 `AIOPS_LOGIN_PROXY_ENVIRONMENT`，那也正是要回滚的情形之一）。
 
 nginx 两处要**一起**回滚（snippet 引用了 10008 那一层定义的变量）。
 

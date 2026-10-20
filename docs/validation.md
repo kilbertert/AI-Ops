@@ -87,6 +87,113 @@ rm -f /etc/systemd/system/aiops-gateway-95.service && systemctl daemon-reload
 
 8788 那个服务与它的库**全程未被触碰**（本轮的每一步都在 8790 / `/var/lib/aiops-95`）。
 
+## 2026-10-20 · #864 落库到 36：环境前缀上线，登录代理重启并跑完五条真入口
+
+**部署身份**：`origin/main` @ `39453b46`（PR #869 合并提交）。制品 = `git archive origin/main src/aiops_diagnostics`
+→ `tar sha256 f33e656461a11680d8928b7d9d6335e7381e0020f1e7d4876ae310ffa98829e1`（远端 `sha256sum` 逐字相同）。
+
+备份（未删除）：`/opt/aiops-login-proxy.bak-20261020180542/`、`/etc/aiops-login-proxy/login-proxy.env.bak-20261020180542`。
+
+### 一、解包与身份
+
+`tar -xzf` 会把归档属主带过来，服务身份是 `aiopslogin` —— 按 runbook 修了属主/权限，
+`ls -ld /opt/aiops-login-proxy/aiops_diagnostics` = `root root` `drwxr-xr-x`。
+**未修的表现是 `No module named aiops_diagnostics.dify_login_server`（不是文件缺失）。**
+
+部署后逐文件核对（`main` 的 blob vs 远端）：
+
+| 模块 | 结果 |
+|---|---|
+| `dify_login_provision.py` | `b892afbe…` **MATCH** |
+| `dify_login_server.py` | `b7d3c586…` **MATCH** |
+| `dify_login_service.py` | `ba992c1f…` **MATCH** |
+
+文件集变化：+`execution_manifest.py`（本票无关，随 `main` 一起来）；内容变化 6 个
+（`dify_login_*` 三个 + `gateway_api` / `gateway_config` / `agent_runs`，后三个登录代理不 import）。
+
+### 二、配置：只有一处新增
+
+`/etc/aiops-login-proxy/login-proxy.env` 追加：
+
+```
+AIOPS_LOGIN_PROXY_ENVIRONMENT=41
+```
+
+（该文件 0600 `root:aiopslogin`，其余键未动。）`systemctl restart` 后 `is-active=active`，
+日志 `dify login proxy listening on 127.0.0.1:10119`。
+
+**41 是这台代理服务的公司环境**（`COMPANY_URL=https://api.mall.qushiyun.com`）。
+95 将来配 `95` —— 两个值不同，两套 UPMS 的同名 `sys_user.id` 才不会落到同一个 Dify 账号。
+
+### 三、fail-closed 在**部署出来的那份代码**上复验（不是本地）
+
+两道闸门**分开验、都要验**（评审指出它们的覆盖面不同）：
+
+| 闸门 | 怎么验 | 结果 |
+|---|---|---|
+| `LoginProxySettings.from_env` 的必填检查 | 加载**真实环境文件**（当数据解析，`source` 都不做），再 `pop` 掉这一项 | 有值 ⇒ `STARTED environment= 41`（实际配置真的被读到）；拿掉 ⇒ `ValueError: AIOPS_LOGIN_PROXY_ENVIRONMENT is required` |
+| `DifyConsoleSettings` 的格式校验 | 直接构造 settings，传 `""` 与 `prod.41` | 两行都是 `DifyProvisionError` |
+
+探针以 **`aiopslogin`** 身份跑（组读该文件），不是 root；文件按 `KEY=VALUE` 当**数据**拆，
+不做 `source`。服务自己只做变量解析，判据也不该让 shell 去执行一个可编辑的生产配置文件。
+
+**为什么不能只验一道**：只验格式那道，等于假设服务入口一定会调用 `required(...)` ——
+入口哪天漏了这一行，格式探针照样通过，而漏配会以"环境为空"的形式走到派生处。
+只验必填那道，则放过 `prod.41` 这类非法写法（非空但不是规范形式）。
+
+两道都发生在**构造 settings 时**，即服务起不来。这正是评审要求的"报错位置"。
+
+### 四、已有映射的重标（**一次性库**上跑，不碰生产表）
+
+另：生产映射表以**只读方式**（`file:…?mode=ro`）被看过一眼，用来确认"旧格式的行长什么样"：
+此刻只有一行，`dify_email` 是无前缀的 `1454348737375174658@aiops-login.invalid`。
+**没有对它做任何写操作。**
+
+在 `/tmp` 下新建一个空库、用**部署出来的那份代码**走完一次登录
+（公司登录与权限读取用替身，不连公司 UPMS）：
+
+```
+environment  = 41
+derived      = 41-1454348737375174658@aiops-login.invalid
+before_email = 1454348737375174658@aiops-login.invalid
+after_email  = 41-1454348737375174658@aiops-login.invalid
+account_same = True
+audit        = ['email_retagged']
+```
+
+下一次该用户真实登录时，同一条分支会就地重标。
+
+### 五、五条真入口（36 的本机入口 + `dify.ranlei.work`）
+
+| # | 动作 | 结果 |
+|---|---|---|
+| A | `POST http://36.156.159.175:10008/__aiops/login` 带明文口令 | **400**「此入口是明文 HTTP…请使用 https://dify.ranlei.work 登录」 |
+| B | `GET …/__aiops/login/captcha?randomStr=<32 hex>` | **200** `image/jpeg`，1975 字节，120×50 |
+| C | `https://dify.ranlei.work` 取图 + **故意填错验证码** | **403**「验证码不正确或已失效，请重新获取」 |
+| D | 同一来源连续失败到阈值（`THRESHOLD=5`） | 第 1–5 次 **403**，第 6–7 次 **429**「尝试过于频繁，请稍后再试」 |
+| E | 从外部伪造 `X-Forwarded-Proto: https` 打 10008（非回环对端） | **400**「此入口是明文 HTTP…」 |
+
+C 用**错码**才走 428 分支（正码 + 错密码是"密码不正确"，修复前后都是 403，证明不了分类）。
+
+D 的每一次拒绝在日志里都带 `source=<真实对端>`（**不是** `127.0.0.1`）——
+这是 `realip` 修正生效的旁证，但它**只是旁证**：`source` 只说明 `$remote_addr` 被改写对了。
+
+E 才是那条有区分性的协议检查。`$aiops_upstream_proto` 是另一个 `map` 算的、只喂
+`X-Forwarded-Proto`，一个 realip 正常而协议 `map` 没加载的部署照样能通过 A–D。
+新配置只在**真实对端是回环**时采信上游声明的协议，所以从外部伪造 `https` 会被抹成空
+⇒ 代理判明文 ⇒ 400；旧配置原样透传 ⇒ 代理以为是 TLS ⇒ 403。**400 只可能是新配置。**
+
+注意 D 与 `source` 日志的分工：**429 是判据**（限流真的触发了），`source` 是旁证
+（`realip` 把地址改写对了）。两者都写在这里，但只有前者能说"这条入口验收通过"。
+
+### 六、边界（据实）
+
+- **没有**让真实运营用真实密码完整登录一次 —— 那需要用户本人的凭据，本轮不做。
+  因此"Dify 侧为新格式邮箱**新建**账号"这一跳**没有**在真实 Dify 上发生；
+  已有的那一行账号走的是重标路径（上面已验证）。
+- 95 尚不存在登录代理，"两个环境各登录一次"今天做不到。
+- Dify 侧旧账号的邮箱仍是旧值（1.17.1 没有改邮箱端点），但它不会再被任何派生值命中。
+
 ## 2026-10-20 · #868 落地到 36：向量库起了、补丁挂上了、迁移落库；索引仍被供应商余额挡住
 
 **部署身份**：`origin/main` @ `1ae4d86`，制品由 `git archive origin/main deploy/dify-36` 打包
@@ -214,10 +321,10 @@ worker 日志（2026-10-15）：
 只带 `Authorization` 一律 401。用登录代理自签的 owner 会话复验时，这一点最容易漏。
 ## 2026-10-20 · Dify 账号邮箱带环境前缀（#864）
 
-**范围**：单元测试 + 突变复验。**没有真实环境验证** —— 95 还没有登录代理，
-所以"两个环境各登录一次"这件事今天做不到。
+**范围**：单元测试 + 突变复验 + **36 上的部署与五条真入口**（见本文最前那节）。
+**仍未完成**的是"两个环境各登录一次" —— 95 还没有登录代理，那件事今天做不到。
 
-**业务验收状态：未完成业务验收。**
+**业务验收状态：未完成业务验收**（缺真实运营在两个环境各登录一次）。
 
 ### 一、判据（三条，各自钉一件不同的事）
 
