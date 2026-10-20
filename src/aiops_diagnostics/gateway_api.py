@@ -15,8 +15,8 @@ from typing import Annotated, Any, Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from aiops_diagnostics import __version__, execution_manifest
 from aiops_diagnostics.agent_content import AGENT_STARTERS
@@ -110,6 +110,7 @@ from aiops_diagnostics.faq import (
     PlatformIdentityResolver,
 )
 from aiops_diagnostics.gateway_config import (
+    DifyKnowledgeBinding,
     GatewayServerSettings,
     parse_dify_knowledge_bindings,
     parse_dify_tool_bindings,
@@ -141,7 +142,7 @@ from aiops_diagnostics.knowledge_retrieval import (
     normalize_search_response,
 )
 from aiops_diagnostics.metrics_store import MetricsValidationError
-from aiops_diagnostics.order_visibility import DeviceTenantError
+from aiops_diagnostics.order_visibility import DeviceTenantError, tenant_matches
 from aiops_diagnostics.query_scope import (
     ShopDirectory,
     UpmsShopDirectory,
@@ -442,6 +443,39 @@ class AgentDebugRunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     question: str = Field(min_length=1, max_length=4000)
+
+
+class KnowledgeSourceRequest(BaseModel):
+    """One Dify knowledge source, as an operator fills it in.
+
+    The field names are Dify's own (`knowledge_id`) because the operator is
+    typing them into Dify's dialog — an internal name here would force a
+    translation step at exactly the place people make mistakes.
+
+    `knowledge_base_ids` is a LIST, not one id: our adapter already merges
+    several RAGFlow datasets per knowledge_id, and a picker that can only tick
+    one box would push operators to register one source per dataset and then
+    wonder why each needs a separate Dify entry.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    knowledge_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+    tenant_id: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9._:-]+$")
+    knowledge_base_ids: list[str] = Field(min_length=1, max_length=20)
+    display_name: str = Field(default="", max_length=200)
+
+    @field_validator("knowledge_base_ids")
+    @classmethod
+    def _valid_ids(cls, value: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        for item in value:
+            candidate = item.strip()
+            if not candidate or not re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", candidate):
+                raise ValueError("knowledge_base_ids contains an invalid id")
+            if candidate not in cleaned:
+                cleaned.append(candidate)
+        return cleaned
 
 
 class ConversationCreateRequest(BaseModel):
@@ -1197,6 +1231,22 @@ def create_gateway_app(
         the knowledge ids its tool plan names are reachable through it.
         """
         bindings = parse_dify_knowledge_bindings(context.settings.dify_knowledge_bindings)
+        # Operator-configured bindings come from the database (ADR 0048) and are
+        # merged over the env registry, keyed by the same `knowledge_id`. The
+        # env rows stay meaningful: they are the ones written before this UI
+        # existed, and a deployment that has not adopted the table must keep
+        # working exactly as it did.
+        #
+        # A database row wins on collision because it was written by a human
+        # clicking in the console, which is the newer decision. Nothing here
+        # lets a REQUEST widen scope: the merged map is still ours, and an
+        # unknown `knowledge_id` is still a 404.
+        for row in context.store.list_knowledge_id_bindings():
+            bindings[row["knowledge_id"]] = DifyKnowledgeBinding(
+                knowledge_id=row["knowledge_id"],
+                tenant_id=row["tenant_id"],
+                knowledge_base_ids=tuple(row["knowledge_base_ids"]),
+            )
         try:
             request = parse_dify_retrieval_request(payload, max_top_k=context.settings.kb_search_max_results)
         except DifyRequestError as exc:
@@ -3458,6 +3508,176 @@ def create_gateway_app(
             "count": len(shortcuts),
             "shortcuts": [item.public(language) for item in shortcuts],
         }
+
+    # ------------------------------------------------------------------
+    # Knowledge-source self-service (ADR 0048).
+    #
+    # These three routes exist because "登记表 + 租户映射" required an engineer:
+    # the operator had to know a `knowledge_id:tenant:kb1|kb2` syntax, know the
+    # tenant id their RAGFlow account maps to, and hand it to someone who could
+    # edit env. None of that is a business decision — it is data entry.
+    #
+    # What stays a decision is WHICH libraries a tenant may reach, and that is
+    # what these routes put in front of a human: a picker of the tenant's own
+    # datasets, a name, and a save button.
+    # ------------------------------------------------------------------
+
+    def _require_knowledge_admin(caller: ScopeContext) -> None:
+        from aiops_diagnostics.agent_lifecycle import EDIT_ROLES
+
+        if not frozenset(getattr(caller, "roles", ())).intersection(EDIT_ROLES):
+            raise StandardAPIError(
+                status.HTTP_403_FORBIDDEN,
+                "KNOWLEDGE_FORBIDDEN",
+                "knowledge-source configuration is not permitted",
+            )
+
+    #: 管理页本身不带凭据：它是一个静态文档，页面自己向下面的 API 出示令牌。
+    #: 放在网关里而不是另一个静态站，是因为它必须与它调用的 API **同域**
+    #: —— 否则浏览器会先撞 CORS，再撞"把令牌发给另一个源"。
+    @app.get("/knowledge", include_in_schema=False)
+    def knowledge_page() -> HTMLResponse:
+        from importlib.resources import files
+
+        html = files("aiops_diagnostics").joinpath("static/knowledge.html").read_text(encoding="utf-8")
+        return HTMLResponse(content=html)
+
+    @app.get("/v1/knowledge/available")
+    def list_available_knowledge(
+        caller: ScopeContext = Depends(authenticated_agent_caller),  # noqa: B008
+    ) -> dict[str, Any]:
+        """The RAGFlow datasets THIS caller's tenant owns — the picker's source.
+
+        Scoped by the caller's own tenant on purpose (ADR 0048): showing another
+        tenant's libraries would make "which one do I tick" ambiguous at best
+        and a cross-tenant grant at worst. A library nobody's tenant owns (the
+        `admin@ragflow.io` datasets, e.g. one built straight from the RAGFlow
+        console) is therefore invisible here by design — it has to be rebuilt
+        under the tenant that should serve it, or bound by an engineer as an
+        explicit exception.
+
+        Checked rows come back with `bound=True`, which is what lets the page
+        render "already attached" without a second request.
+        """
+        _require_knowledge_admin(caller)
+        client = context.runtime.kb_search_client
+        if client is None:
+            raise StandardAPIError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "KB_UNAVAILABLE",
+                "knowledge base service is not configured",
+                retryable=True,
+            )
+        tenant_id = caller.effective_tenant_id
+        try:
+            available = client.for_tenant(tenant_id).list_knowledge_bases()
+        except Exception as exc:  # noqa: BLE001 - the surface reports, not crashes
+            raise StandardAPIError(
+                status.HTTP_502_BAD_GATEWAY,
+                "KB_UNAVAILABLE",
+                "knowledge base service is temporarily unavailable",
+                retryable=True,
+            ) from exc
+        bound_ids = {
+            kb_id
+            for row in context.store.list_knowledge_id_bindings(tenant_id)
+            for kb_id in row["knowledge_base_ids"]
+        }
+        return {
+            "type": "knowledge_available",
+            "tenant_id": tenant_id,
+            "knowledge_bases": [
+                {**item, "bound": item["knowledge_base_id"] in bound_ids} for item in available
+            ],
+        }
+
+    @app.get("/v1/knowledge/sources")
+    def list_knowledge_sources(
+        caller: ScopeContext = Depends(authenticated_agent_caller),  # noqa: B008
+    ) -> dict[str, Any]:
+        """The knowledge sources this tenant has registered — one per Dify entry."""
+        _require_knowledge_admin(caller)
+        rows = context.store.list_knowledge_id_bindings(caller.effective_tenant_id)
+        return {
+            "type": "knowledge_source_list",
+            "count": len(rows),
+            "sources": [
+                {
+                    "knowledge_id": row["knowledge_id"],
+                    "tenant_id": row["tenant_id"],
+                    "knowledge_base_ids": list(row["knowledge_base_ids"]),
+                    "display_name": row["display_name"],
+                    "created_by": row["created_by"],
+                    "created_at": row["created_at"],
+                }
+                for row in rows
+            ],
+        }
+
+    @app.put("/v1/knowledge/sources/{knowledge_id}")
+    def put_knowledge_source(
+        knowledge_id: str,
+        payload: KnowledgeSourceRequest,
+        caller: ScopeContext = Depends(authenticated_agent_caller),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Create or replace one knowledge source, then make it live.
+
+        Replacing rather than merging is what makes "untick a library" work at
+        all: the submitted list is the intended state, not an increment.
+
+        `tenant_id` in the body must equal the caller's own tenant. It is in the
+        body because Dify's dialog asks the operator to label the source, and a
+        silent rewrite would leave the page showing one thing and the database
+        another — but a mismatch is refused rather than corrected, so nobody can
+        bind their datasets to a tenant they are not acting as.
+        """
+        _require_knowledge_admin(caller)
+        if not tenant_matches(payload.tenant_id, caller.effective_tenant_id):
+            raise StandardAPIError(
+                status.HTTP_403_FORBIDDEN,
+                "KNOWLEDGE_TENANT_MISMATCH",
+                "a knowledge source can only be registered for your own tenant",
+            )
+        if payload.knowledge_id != knowledge_id:
+            raise StandardAPIError(
+                status.HTTP_400_BAD_REQUEST,
+                "KNOWLEDGE_ID_MISMATCH",
+                "path knowledge_id and body knowledge_id disagree",
+            )
+        row = context.store.set_knowledge_id_binding(
+            knowledge_id,
+            payload.tenant_id,
+            tuple(payload.knowledge_base_ids),
+            display_name=payload.display_name,
+            created_by=str(getattr(caller, "subject_id", "") or ""),
+        )
+        # No cache to invalidate: the retrieval route re-reads the table on every
+        # call, which is what makes this response mean "it is live now".
+        return {
+            "type": "knowledge_source",
+            "knowledge_id": row["knowledge_id"],
+            "tenant_id": row["tenant_id"],
+            "knowledge_base_ids": list(row["knowledge_base_ids"]),
+            "display_name": row["display_name"],
+        }
+
+    @app.delete("/v1/knowledge/sources/{knowledge_id}")
+    def delete_knowledge_source(
+        knowledge_id: str,
+        caller: ScopeContext = Depends(authenticated_agent_caller),  # noqa: B008
+    ) -> dict[str, Any]:
+        """Remove a source. Dify then gets 404 for it, which is the honest answer."""
+        _require_knowledge_admin(caller)
+        existing = context.store.get_knowledge_id_binding(knowledge_id)
+        if existing is None or not tenant_matches(existing["tenant_id"], caller.effective_tenant_id):
+            # Same shape for "never existed" and "someone else's": a 403 here
+            # would confirm the id exists, which is a disclosure about other
+            # tenants' configuration.
+            raise StandardAPIError(
+                status.HTTP_404_NOT_FOUND, "KNOWLEDGE_SOURCE_NOT_FOUND", "knowledge source not found"
+            )
+        context.store.remove_knowledge_id_binding(knowledge_id)
+        return {"type": "knowledge_source_deleted", "knowledge_id": knowledge_id}
 
     @app.get("/v1/banner")
     def list_banners(

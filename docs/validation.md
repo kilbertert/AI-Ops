@@ -1,3 +1,42 @@
+## 2026-10-20 · 知识库自服务：本地判据与 41 上的实测事实
+
+### 一、本地判据
+
+`tests/test_knowledge_binding_api.py` 8 条：
+
+| 用例 | 钉住的规则 |
+|---|---|
+| `test_available_lists_only_this_tenants_datasets` | 列表按**调用者**租户取，别人的库不出现 |
+| `test_put_then_list_then_delete_round_trips` | 保存落到检索读的那张表，删除后消失 |
+| `test_put_replaces_rather_than_merges` | 取消勾选可表达（提交的列表就是目标状态） |
+| `test_a_tenant_mismatch_is_refused_not_corrected` | body 的 tenant 与调用者不符 → 403，不改写 |
+| `test_another_tenants_source_is_indistinguishable_from_absent` | 别人的源与不存在同为 404 |
+| `test_available_marks_already_bound_datasets` | 一次请求就能画出勾选状态 |
+| `test_invalid_knowledge_id_is_rejected_by_the_schema` ×2 | 非法 id 422 |
+
+突变复验：把 `ON CONFLICT` 的更新从「整条替换」改回「只更新 tenant」，
+`test_put_replaces_rather_than_merges` 变红。
+
+全量 **3136 passed / 0 failed / 9 skipped**。
+
+### 二、41 上的实测事实（这些决定了用户看到什么）
+
+| 观察 | 值 | 含义 |
+|---|---|---|
+| kb-service 按租户列库 | `1942105476598861824` → 1 个库；`1783022023241633792` → 1 个库 | 租户口径就是 kb-service 的 tenant 头 |
+| 未知租户调列表 | `200 []` | 不自动开通，如实回空 |
+| RAGFlow 里 `fdcb2570…`（"41"）的 owner | `admin@ragflow.io`，**不在**任何 biz 租户映射里 | 它在体系里没有主人，无论填什么 tenant 都检索不到 |
+| 适配器收到未登记的 `knowledge_id` | `404 DIFY_KNOWLEDGE_NOT_FOUND` | 符合设计，不泄露存在性 |
+| RAGFlow embedding 调用 | `403 insufficient_user_quota`（余额 ¥0.000285） | **检索整体 502 的直接原因**，与接线无关 |
+
+### 三、据实（边界）
+
+- **充值前，本页面的效果不可见**：配置能保存、能读回，但检索会因 embedding 403 而 502。
+  这不是本次改动的缺陷，也不是可以用代码绕过的。
+- `knowledge_id` **不是** RAGFlow 的 dataset id（前者是 Dify 侧的名字，后者是 32 位 id）。
+  实测把 dataset id 当 `knowledge_id` 调用得到 404。
+- 跨租户 / 无主库仍需工程师介入（ADR 0063 的显式边界）。
+
 ## 2026-10-20 · M3 复跑工具收口（本地，无真实请求）
 
 预检改读 compose 最终环境与挂载：原来的单侧开关/错误目录/同名副本均拒绝，

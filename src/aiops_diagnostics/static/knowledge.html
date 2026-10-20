@@ -1,0 +1,250 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>知识库挂接</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --line: #2a2f3a; --text: #e6e9ef;
+    --muted: #9aa4b2; --accent: #4c8dff; --ok: #3fb950; --warn: #d29922; --err: #f85149;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg:#f6f7f9; --panel:#fff; --line:#dfe3ea; --text:#1b1f27;
+            --muted:#5b6472; --accent:#1f6feb; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+         font: 15px/1.6 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+  main { max-width: 880px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 24px; font-size: 13px; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+            padding: 18px; margin-bottom: 16px; }
+  h2 { font-size: 15px; margin: 0 0 12px; }
+  label { display:block; font-size: 13px; color: var(--muted); margin: 12px 0 4px; }
+  input[type=text] { width:100%; padding:9px 11px; border-radius:8px;
+    border:1px solid var(--line); background:var(--bg); color:var(--text); font-size:14px; }
+  .kb { display:flex; gap:10px; align-items:flex-start; padding:9px 0;
+        border-bottom:1px solid var(--line); }
+  .kb:last-child { border-bottom:0; }
+  .kb .meta { flex:1; min-width:0; }
+  .kb .name { font-weight:600; }
+  .kb .id { color:var(--muted); font-size:12px; word-break:break-all; font-family:ui-monospace, monospace; }
+  button { background:var(--accent); color:#fff; border:0; border-radius:8px;
+           padding:9px 16px; font-size:14px; cursor:pointer; }
+  button.ghost { background:transparent; color:var(--text); border:1px solid var(--line); }
+  button:disabled { opacity:.5; cursor:default; }
+  .row { display:flex; gap:10px; align-items:center; margin-top:14px; flex-wrap:wrap; }
+  .hint { color:var(--muted); font-size:12.5px; }
+  .toast { margin-top:12px; padding:10px 12px; border-radius:8px; font-size:13.5px; display:none; }
+  .toast.ok { display:block; background:rgba(63,185,80,.12); color:var(--ok); }
+  .toast.err { display:block; background:rgba(248,81,73,.12); color:var(--err); }
+  .src { display:flex; justify-content:space-between; gap:12px; padding:10px 0;
+         border-bottom:1px solid var(--line); }
+  .src:last-child { border-bottom:0; }
+  code { font-family: ui-monospace, monospace; font-size: 12.5px; }
+  .empty { color: var(--muted); font-size: 13.5px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>知识库挂接</h1>
+  <p class="sub">
+    勾选本租户的 RAGFlow 知识库，起一个名字，保存即可生效 —— 不需要改配置、不需要重启。
+    这里的名字就是你在 Dify「外部知识库 API」里要填的 <code>Knowledge ID</code>。
+  </p>
+
+  <section>
+    <h2>1. 选择知识库</h2>
+    <div id="available" class="empty">读取中…</div>
+    <div class="row">
+      <button id="reload" class="ghost">重新读取</button>
+      <span class="hint">只列出本租户名下的库。看不到某个库，通常是它建在别的账号下。</span>
+    </div>
+  </section>
+
+  <section>
+    <h2>2. 起名并保存</h2>
+    <label for="knowledge_id">Knowledge ID（填进 Dify 的那个名字）</label>
+    <input id="knowledge_id" type="text" placeholder="例如 kb-ulink-客服" autocomplete="off">
+    <label for="display_name">显示名称（可选，仅自己看）</label>
+    <input id="display_name" type="text" placeholder="例如 Ulink 客服知识库">
+    <div class="row">
+      <button id="save">保存并生效</button>
+      <span class="hint">已存在的同名会整条替换成这次勾选的结果。</span>
+    </div>
+    <div id="toast" class="toast"></div>
+  </section>
+
+  <section>
+    <h2>3. 已挂接</h2>
+    <div id="sources" class="empty">读取中…</div>
+  </section>
+</main>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const TOKEN_KEY = "aiops.knowledge.token";
+  const selected = new Map();   // knowledge_base_id -> name
+
+  function token() {
+    // The page never stores the token itself: it reads whatever the operator's
+    // console already keeps, and falls back to a prompt. Persisting it here
+    // would put a credential in a second place for no benefit.
+    const fromStorage = localStorage.getItem(TOKEN_KEY);
+    if (fromStorage) return fromStorage;
+    const typed = prompt("请粘贴管理令牌（aiops:agents:manage）");
+    if (typed) localStorage.setItem(TOKEN_KEY, typed.trim());
+    return (typed || "").trim();
+  }
+
+  async function api(path, options = {}) {
+    const response = await fetch(path, {
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": "Bearer " + token(),
+        ...(options.headers || {}),
+      },
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const message = (body.error && body.error.message) || body.detail || ("HTTP " + response.status);
+      throw new Error(message);
+    }
+    return body;
+  }
+
+  function toast(text, ok) {
+    const el = $("toast");
+    el.textContent = text;
+    el.className = "toast " + (ok ? "ok" : "err");
+    if (ok) setTimeout(() => { el.className = "toast"; }, 4000);
+  }
+
+  function renderAvailable(items) {
+    const box = $("available");
+    box.className = "";
+    if (!items.length) {
+      box.className = "empty";
+      box.textContent = "本租户名下没有知识库。先在 RAGFlow 里用这个租户建一个，再回来刷新。";
+      return;
+    }
+    box.innerHTML = "";
+    items.forEach((item) => {
+      const row = document.createElement("label");
+      row.className = "kb";
+      const check = document.createElement("input");
+      check.type = "checkbox";
+      check.checked = selected.has(item.knowledge_base_id);
+      check.addEventListener("change", () => {
+        if (check.checked) selected.set(item.knowledge_base_id, item.name);
+        else selected.delete(item.knowledge_base_id);
+      });
+      const meta = document.createElement("div");
+      meta.className = "meta";
+      const name = document.createElement("div");
+      name.className = "name";
+      name.textContent = item.name || "(未命名)";
+      const id = document.createElement("div");
+      id.className = "id";
+      id.textContent = item.knowledge_base_id + " · " + item.document_count +
+        " 文档 / " + item.chunk_count + " 段";
+      meta.append(name, id);
+      if (item.bound) {
+        const tag = document.createElement("span");
+        tag.className = "hint";
+        tag.textContent = "已挂接";
+        meta.append(tag);
+      }
+      row.append(check, meta);
+    });
+  }
+
+  function renderSources(rows) {
+    const box = $("sources");
+    box.className = "";
+    if (!rows.length) {
+      box.className = "empty";
+      box.textContent = "还没有挂接任何知识库。";
+      return;
+    }
+    box.innerHTML = "";
+    rows.forEach((row) => {
+      const wrap = document.createElement("div");
+      wrap.className = "src";
+      const left = document.createElement("div");
+      const id = document.createElement("div");
+      id.innerHTML = "<strong></strong>";
+      id.firstChild.textContent = row.knowledge_id;
+      const sub = document.createElement("div");
+      sub.className = "id";
+      sub.textContent = (row.display_name ? row.display_name + " · " : "") +
+        row.knowledge_base_ids.length + " 个库： " + row.knowledge_base_ids.join("， ");
+      left.append(id, sub);
+      const del = document.createElement("button");
+      del.className = "ghost";
+      del.textContent = "删除";
+      del.addEventListener("click", async () => {
+        if (!confirm("删除后 Dify 用这个名字会直接 404，确定？")) return;
+        try {
+          await api("/v1/knowledge/sources/" + encodeURIComponent(row.knowledge_id), { method: "DELETE" });
+          await load();
+          toast("已删除：" + row.knowledge_id, true);
+        } catch (error) { toast(error.message, false); }
+      });
+      wrap.append(left, del);
+      box.append(wrap);
+    });
+  }
+
+  async function load() {
+    try {
+      const [available, sources] = await Promise.all([
+        api("/v1/knowledge/available"),
+        api("/v1/knowledge/sources"),
+      ]);
+      renderAvailable(available.knowledge_bases || []);
+      renderSources(sources.sources || []);
+    } catch (error) {
+      $("available").className = "empty";
+      $("available").textContent = "读取失败：" + error.message;
+      $("sources").className = "empty";
+      $("sources").textContent = "读取失败：" + error.message;
+    }
+  }
+
+  $("reload").addEventListener("click", load);
+
+  $("save").addEventListener("click", async () => {
+    const knowledgeId = $("knowledge_id").value.trim();
+    if (!knowledgeId) return toast("先填 Knowledge ID", false);
+    if (!selected.size) return toast("至少勾选一个知识库", false);
+    if (!/^[A-Za-z0-9._:-]+$/.test(knowledgeId)) {
+      return toast("Knowledge ID 只能用字母、数字和 . _ : -", false);
+    }
+    try {
+      // tenant_id 由服务端按调用者身份校验；这里传当前页面已知的那个，
+      // 不一致会被服务端以 403 拒绝，而不是被静默改写。
+      const body = {
+        knowledge_id: knowledgeId,
+        tenant_id: window.__aiopsTenant || (await api("/v1/knowledge/available")).tenant_id,
+        knowledge_base_ids: [...selected.keys()],
+        display_name: $("display_name").value.trim(),
+      };
+      await api("/v1/knowledge/sources/" + encodeURIComponent(knowledgeId), {
+        method: "PUT",
+        body: JSON.stringify(body),
+      });
+      toast("已保存并生效：" + knowledgeId, true);
+      await load();
+    } catch (error) { toast(error.message, false); }
+  });
+
+  load();
+})();
+</script>
+</body>
+</html>

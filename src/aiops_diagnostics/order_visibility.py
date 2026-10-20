@@ -129,6 +129,24 @@ def resolve_device_tenant(enrolled: str | None, requested: str | None) -> str | 
     return enrolled_tenant
 
 
+def tenant_matches(subject: object, expected: object) -> bool:
+    """Do these two values name the same tenant?
+
+    The comparison itself lives here for the same reason :func:`normalize_tenant`
+    does: it is the tenant dimension, and a source that writes its own
+    ``a != b`` re-derives the rule (stripping, decoding, absent-vs-blank) and
+    eventually disagrees with the rest of the system. Both sides go through
+    :func:`normalize_tenant`, so an absent tenant never equals a blank one and
+    a ``bytes`` tenant equals its decoded twin.
+
+    This is a *comparison* helper, not a visibility decision: an authorization
+    guard still asks :func:`caller_visibility`, and an order gate still asks
+    :func:`visible_orders`. What it removes is the third, ad-hoc copy of "are
+    these the same tenant" that a configuration surface would otherwise grow.
+    """
+    return normalize_tenant(subject) == normalize_tenant(expected) is not None
+
+
 @dataclass(frozen=True, slots=True)
 class TenantVisibility:
     """A frozen scope decision input.
