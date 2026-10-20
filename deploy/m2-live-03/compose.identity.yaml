@@ -1,0 +1,36 @@
+# 复跑用的**构造身份**覆盖层（与 compose.yaml 一起用，不单独起栈）。
+#
+# 它只改一件事：Gateway 的入口进程从镜像里的 `gateway_server serve` 换成
+# `tools/m2_close/m3live/identity_launcher.py`。订单授权、CPMS、平台、节点、
+# 模型出口、完成通知全部仍是真实代码（ADR-0058）。
+#
+# 这是模板，不含任何凭据。身份三件套放在宿主上的 0600 文件
+# `$M2LIVE_CONFIG/gateway/identity.env`（由运营现场创建，不入库、不进命令行）：
+#
+#   AIOPS_M2_LOCAL_TOKEN=<握手令牌，openssl rand -hex 32>
+#   AIOPS_M2_TENANT=<租户>
+#   AIOPS_M2_C_USER=<C 端用户>
+#
+# 用法（宿主上，M2LIVE_CONFIG 指向本次复跑的配置根）：
+#
+#   M2LIVE_COMPOSE_EXTRA=deploy/m2-live-03/compose.identity.yaml \
+#     bash deploy/m2-live-03/checks.sh up
+#
+# down 与清理与正式栈**完全相同**（`checks.sh down` / `down --purge`）：覆盖层只影响
+# 起栈时的渲染，不改变停栈路径，也不改变状态根的归属判定。
+
+services:
+  gateway:
+    # 两个文件都列出：无论 compose 对 `env_file` 是「覆盖」还是「追加」，渲染结果都
+    # 恰好是「本栈配置 + 身份三件套」，不依赖某一种合并语义。
+    env_file:
+      - ${M2LIVE_CONFIG:-/etc/aiops-m2-live}/gateway/gateway.env
+      - ${M2LIVE_CONFIG:-/etc/aiops-m2-live}/gateway/identity.env
+    command:
+      - sh
+      - -c
+      - |
+        set -e
+        # 与正式 compose 逐字相同：系统 bundle + 本栈 CA（SSL_CERT_FILE 是替换）。
+        cat /etc/ssl/certs/ca-certificates.crt /etc/m2live-tls/ca.crt > /data/ca-bundle.crt
+        exec python /opt/aiops-src/tools/m2_close/m3live/identity_launcher.py

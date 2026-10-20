@@ -91,6 +91,8 @@ Gateway 与业务依赖已在 41；同宿主先避免跨主机 gRPC、隧道与�
 | `build-image.sh` | 构建镜像并记录精确身份（镜像 ID + 内容摘要标签）；`--update-lock` 写回锁文件 |
 | `bootstrap.sh` / `bootstrap_platform.py` | 平台初始化：换默认管理员口令、禁用 demo 应用、注册应用/模型/智能体、回填绑定表（幂等） |
 | `compose.synthetic.yaml` | **只给开发机**：模型/CPMS/调用者身份替身，用于部署件本身的验收 |
+| `compose.identity.yaml` | 复跑用的覆盖层：只把 Gateway 的入口进程换成构造身份启动器（ADR-0058） |
+| `identity.env.template` | 构造身份三件套的**键名**；值只写在宿主上的 0600 文件里 |
 | `images.lock.json` | 平台与节点制品摘要、基础镜像身份（按 ref）、Gateway 构建身份 |
 | `.env.template` | 非敏感参数与**键名**；真实值来自宿主上的 0600 文件 |
 | `make-certs.sh` | 生成本地 CA 与 platform 的服务端证书（幂等） |
@@ -149,7 +151,8 @@ install -m 600 /tmp/exec-manifest.json "$M2LIVE_CONFIG/gateway/exec-manifest.jso
 #    gateway.env: AIOPS_GATEWAY_EXECUTION_MANIFEST_FILE=/etc/m2live/exec-manifest.json
 #    node.env:    AIOPS_EXEC_MANIFEST=/etc/m2live/exec-manifest.json
 
-# 4) 起栈（preflight 会核对：文件存在、权限 0600、两侧指向同一个文件）
+# 4) 起栈（preflight 会核对：按渲染后的 compose 解析出的宿主路径是同一个文件，
+#    且该文件是普通文件、不是符号链接、不是组/他人可读 —— 0400 与 0600 都接受）
 bash deploy/m2-live-03/checks.sh up
 ```
 
@@ -167,6 +170,52 @@ bash deploy/m2-live-03/checks.sh up
 ⚠️ **`bootstrap.sh` 会重写 `node.env`**：它只覆盖三行凭据，其余键（含
 `AIOPS_EXEC_MANIFEST`）原样保留 —— 这条有回归钉住，因为整份覆盖会让守卫在 bootstrap
 之后静默消失。
+
+## 复跑一次真实只读链路（构造身份）
+
+上一节把**开关**打开；这一节是**真的发一次**。两件事分开：预检证明「这份配置是对的」，
+复跑工具负责「只发一次、按 run 采证、down 后归零」。调用者身份是构造的（ADR-0058），
+订单授权与业务读取仍是真实判定。
+
+```bash
+export M2LIVE_CONFIG=/etc/aiops-m2-live-m3   # 本次复跑用的配置根
+EVID=$(pwd)/m3-live-evidence                 # 证据目录（工具会建 0700 并写 0600）
+
+# 0) 身份三件套：从模板复制，人工填值，0600。握手令牌用 openssl rand -hex 32 生成。
+install -m 600 deploy/m2-live-03/identity.env.template "$M2LIVE_CONFIG/gateway/identity.env"
+
+# 1) 生产面基线（只读）。没有它就只能写「看起来没变」，所以缺它不往下走。
+python3 tools/m2_close/m3live/live_replay.py baseline --out "$EVID/prod-before.json"
+
+# 2) 起栈：覆盖层只把 Gateway 的入口进程换成构造身份启动器
+M2LIVE_COMPOSE_EXTRA=deploy/m2-live-03/compose.identity.yaml \
+  bash deploy/m2-live-03/checks.sh up
+
+# 3) 一次派发。失败**不重试**；同一输出目录只允许发一次。
+python3 tools/m2_close/m3live/live_replay.py send --order-no <订单号> --out "$EVID"
+
+# 4) 按 run 收集证据（记录 + 与该 run 有关的日志行 + 身份替换声明）
+python3 tools/m2_close/m3live/live_replay.py collect --run-id <run_id> --out "$EVID"
+
+# 5) 停栈，并核对容器/端口归零、生产面与基线逐项相同
+bash deploy/m2-live-03/checks.sh down
+python3 tools/m2_close/m3live/live_replay.py cleanup --out "$EVID" \
+  --prod-baseline "$EVID/prod-before.json"
+```
+
+**判据与边界**（同样写在 `qa-plan.md` 的 REPLAY 一节）：
+
+| 项 | 怎么判 | 做不到时怎么写 |
+|---|---|---|
+| 一次派发只发一次 | 失败时 `send` 非零退出；同一输出目录再次 `send` 退出 3，且桩/网关只收到一次 | —— |
+| 敏感输出不外泄 | 证据写盘前抹掉 `Bearer`/`sk-` 形状，并断言握手令牌不在正文里 | —— |
+| 模型请求次数 | **没有观测依据**：出口只记录异常，节点没有每轮日志 | 证据里写 `observed=false`、`value=null`，不用错误日志条数冒充 |
+| 整轮成功 | 记录 `succeeded` 且回执 `agent_version` 等于清单身份 | 上游余额/供应商不可用 ⇒ 如实记 `model_failed`，不算验收 |
+| down 后归零 | 容器 0、8794 不监听 | —— |
+| 生产面未变 | 服务启动时刻、配置 mtime、`agent_runs` 行数逐项与基线相同 | 读不到就报「未比对」，不写「未变化」 |
+
+⚠️ **`cleanup` 不负责停栈**：停栈是 `checks.sh down` 的事。`cleanup` 只回答
+「真的清掉了吗、生产面动没动」。
 
 ## 合成验收（开发机）
 

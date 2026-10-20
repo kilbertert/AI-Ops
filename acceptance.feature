@@ -3274,3 +3274,65 @@ Feature: 整轮完成与工具领取的分界（M3-NODE-LINK-01）
       When 一次委派完成
       Then 领取即可成功（既有语义），回执字段集合与升级前逐字相同
       And 节点不发身份头，也不发完成通知
+
+Feature: 隔离栈的预检与复跑（M3-LIVE-REPLAY-R1）
+  预检的职责是「拒绝一个会跑错的栈」，而不是「打印看起来正常的一行」。
+  复跑的职责是「别人照文档能重来一次」，而不是「上次那个人记得怎么点」。
+  这一片不访问生产、不发真实业务或模型请求。
+
+  Rule: 两侧清单必须是同一个真实文件
+
+    Scenario: REPLAY-01 合法基线通过
+      Given Gateway 与节点都配置了清单，且渲染后的 compose 把它们解析到同一个普通文件
+      And 该文件是 0400 或 0600
+      When 执行 preflight
+      Then 清单那一节没有任何失败行，且明确写出「同一个文件」与内容摘要
+      And preflight 顶层返回 0（宿主余量不足时，余量是唯一允许的失败项并如实报出）
+
+    Scenario: REPLAY-02 单侧开启被拒
+      Given 只有 Gateway 配置了清单，节点开关缺失
+      When 执行 preflight
+      Then 该项明确失败（「两侧必须同时启用」），顶层非零
+      And checks.sh up 不启动任何容器
+
+    Scenario: REPLAY-03 节点路径没有挂载被拒
+      Given 节点声明的容器内路径在渲染后的 compose 里没有对应的 bind 挂载
+      When 执行 preflight
+      Then 该项明确失败（「没有对应的 bind 挂载」），顶层非零
+
+    Scenario: REPLAY-04 同名不同物被拒
+      Given 两侧各自指向一个名为 exec-manifest.json 的不同文件
+      When 执行 preflight
+      Then 该项明确失败（「不是同一个文件」），顶层非零
+
+    Scenario: REPLAY-05 缺失、符号链接、过宽权限被拒
+      Given 清单不存在，或是指向别处的符号链接，或是组/他人可读，或是一个目录
+      When 执行 preflight
+      Then 每一项各自明确失败，顶层非零
+      And 0400 与 0600 都通过（契约允许这两个值，不接受只认 0600）
+
+  Rule: 复跑只发一次、按 run 采证、不泄漏
+
+    Scenario: REPLAY-06 一次真实派发
+      Given 构造身份三件套在宿主的 0600 文件里，且该撤销时是最后一次
+      When 用 live_replay.py send 发起一次委派读取
+      Then 只发出一次请求；同一输出目录再次 send 直接拒绝（退出 3），不发第二个请求
+      And 失败响应非零退出，但仍留下证据，不重试
+
+    Scenario: REPLAY-07 证据按 run 绑定且不含凭据
+      Given 一次派发已经产生 run_id
+      When 用 live_replay.py collect 取证据
+      Then 记录、两份日志里与该 run 有关的行、身份替换声明在同一份证据里
+      And 快照正文不写进证据，只留摘要与键集合
+      And 握手令牌与 sk- 形状的供应商 key 在写盘前被抹掉；命中则不写
+
+    Scenario: REPLAY-08 观测不到的东西写未证明
+      Given 模型出口只记录异常、节点没有每轮日志
+      When 证据里写「模型请求次数」
+      Then 该字段标记为未观测、值为空，而不是用错误日志条数当请求数
+
+    Scenario: REPLAY-09 down 之后归零且生产面不变
+      Given down 之前记下了生产面的服务启动时刻、配置 mtime 与 agent_runs 行数
+      When checks.sh down 之后执行 live_replay.py cleanup
+      Then 本栈容器为 0、8794 不再监听
+      And 生产面四项与基线逐项相同；任何一项变化都非零并写进证据

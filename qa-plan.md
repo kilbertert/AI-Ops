@@ -2214,3 +2214,44 @@ uv run pytest tests/test_m3_node_link_state.py tests/test_m3_node_link_completio
 
 **未覆盖**：真实供应商/订单/生产装配；真实 gRPC 派发的时序（平台替身是同步接口）；
 被取消的 run 在 15 分钟内仍占一个本机登记名额（写明边界，不是保证）。
+
+## REPLAY 隔离栈预检与复跑（M3-LIVE-REPLAY-R1）
+
+环境与数据：Linux；**不访问 41、不发真实业务或模型请求**。预检判据用假 docker
+（返回渲染后的 compose JSON）驱动**真实的** `checks.sh preflight`；复跑工具用回环
+HTTP 桩与临时状态根。
+
+复跑（三条互不替代）：
+
+```bash
+# 1) 预检判据：合法基线 + 逐项破坏（含两条原始反例）
+uv run pytest tests/test_m2_live03_manifest_preflight.py tests/test_m2_live03_checks.py -o addopts= -q
+
+# 2) 复跑工具：不重试、不泄漏、证据按 run 绑定
+uv run pytest tests/test_m3_live_replay_tool.py -o addopts= -q
+
+# 3) 真实栈上的一次派发（宿主上；只发一次，失败不重试）
+python tools/m2_close/m3live/live_replay.py baseline --out <证据目录>/prod-before.json
+M2LIVE_COMPOSE_EXTRA=deploy/m2-live-03/compose.identity.yaml bash deploy/m2-live-03/checks.sh up
+python tools/m2_close/m3live/live_replay.py send --order-no <订单号> --out <证据目录>
+python tools/m2_close/m3live/live_replay.py collect --run-id <run_id> --out <证据目录>
+bash deploy/m2-live-03/checks.sh down
+python tools/m2_close/m3live/live_replay.py cleanup --out <证据目录> \
+  --prod-baseline <证据目录>/prod-before.json
+```
+
+| 编号 | 前提与动作 | 预期可观察结果 | 本机结果 |
+|---|---|---|---|
+| REPLAY-01 | 两侧同一真实文件，0400/0600 | 清单节无失败行、写明摘要；顶层 0 | 通过 |
+| REPLAY-02 | 节点开关缺失（**原始反例 1**） | 「两侧必须同时启用」+ 顶层非零；`up` 不调 `compose up` | 通过；旧写法下转红（见 REPLAY-10） |
+| REPLAY-03 | 节点路径无挂载（**原始反例 2**） | 「没有对应的 bind 挂载」+ 顶层非零 | 通过；旧写法下转红 |
+| REPLAY-04 | 两份同名副本 | 「不是同一个文件」+ 顶层非零 | 通过 |
+| REPLAY-05 | 缺失 / 符号链接 / 组可读 / 目录 | 各自明确失败；0400 与 0600 都通过 | 通过 |
+| REPLAY-06 | 同一输出目录第二次 `send` | 退出 3；桩只收到一次请求 | 通过 |
+| REPLAY-07 | `collect` | 记录 + 该 run 的日志行 + 身份替换声明；快照只留摘要/键集合 | 通过 |
+| REPLAY-08 | 模型请求次数 | `observed=false`、`value=null`（出口只记异常） | 通过 |
+| REPLAY-09 | down 后 cleanup | 容器 0、端口释放；生产面四项与基线逐项相同 | 通过（生产面对照用替身驱动） |
+| REPLAY-10 | 把清单判据退回旧写法 | 两条原始反例转红；恢复后全绿 | 通过（12 failed → 13 passed） |
+
+**未覆盖**：真实 41 上的这一次派发（需要已批准的供应商与订单，本片明确不做）；
+「模型请求几次」在真实栈上仍无观测依据；生产面基线只有在 41 上跑 `baseline` 才有值。
