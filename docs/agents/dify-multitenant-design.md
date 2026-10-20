@@ -83,7 +83,7 @@ cloud-upms:release  TokenController.issueLoginToken 的完整 payload：
 | 3 | 隔离深度：**app + dataset 跟租户走**；provider credentials **跟 workspace 走**（Dify 数据模型决定的，见 §3） |
 | 3b | 改造面是**四条**：开户 / 发布桥 / 试运行 / **运维 CLI（pull-dify、sync-from-dify）**，共用同一个解析函数 |
 | 4 | 已有映射账号：迁移进各自租户的 workspace；**不保留**旧的共享 workspace 访问权 |
-| 5 | 建 workspace 走 **`POST /inner/api/enterprise/workspace`**（`is_from_dashboard=True` 绕过 `ALLOW_CREATE_WORKSPACE`） |
+| 5 | 建 workspace 走 **`POST /inner/api/enterprise/workspace`**（`is_from_dashboard=True` 绕过 `ALLOW_CREATE_WORKSPACE`）。**`INNER_API` 已于 2026-10-20 在 36 上打开** —— 见 §8 的「−0」 |
 | 6 | 模板 app：**模板 DSL 进仓库**，开户时导入。模板**只含结构与工具白名单**，`model_config` 留空（避免绑死模型） |
 | 7 | 发布权：`aiops:agent:publish` 仍然按公司权限码裁定；**平台租户（`type=-1`）视为可见全部** —— 但见 §4 的边界 |
 | 8 | 试运行草稿来源：租户没有 editor 环境就**明确拒绝**（"你的租户没有编辑环境"），不回落 |
@@ -467,12 +467,56 @@ def account_email_for(company_user_id: str) -> str:
 两个人就会映射到**同一个 Dify 账号**（同一个邮箱），而 Dify 账号是全局的（不属于任何 workspace）：
 第二个环境的代理能为它签会话，访问第一个环境那个人的 workspace。
 
-**修法**：邮箱里带环境标识 —— `f"{environment}-{safe}@{DOMAIN}"`（或反过来）。
-代价：**已存在的映射账号邮箱会变**，所以这是一次**迁移**，不是纯加字段：
-`dify_login_mappings` 里那一列 `dify_email` 要一起改，Dify 侧的账号也要改邮箱
-（`PUT /console/api/workspaces/current/members/<id>` 之类，需核实是否有此端点；
-没有就走"新建账号 + 迁移映射"）。
-**这条必须在多 workspace 实施之前或同批完成**，否则两个环境一旦真的有同号 id，越权立刻成立。
+**修法**：邮箱里带环境标识 —— `f"{environment}-{safe}@{DOMAIN}"`。
+
+**Dify 1.17.1 没有改账号邮箱的端点**（2026-10-20 由用户确认）。所以这不是"改一个字段"，
+而是一次**账号迁移**：
+
+```
+1. 用新邮箱走开户流程（invite + activate）建一个新 Dify 账号
+2. 把 dify_login_mappings 那一行的 dify_account_id / dify_email 指到新账号
+3. 旧账号从 workspace 移除（注意：移除会把它的 app 转给 owner，不可逆 —— 见 ADR-0023）
+4. 旧账号不再被任何映射引用，停用即可（Dify 没有删账号的端点）
+```
+
+**不变量要保持**：同一公司用户二次登录落到同一个 Dify 账号 —— 迁移前后都必须成立，
+否则历史编辑与发布记录会断。所以第 2 步是一次**原子替换**（一个事务里改两列），
+不能在"新账号已建、映射还没切"的窗口里让登录成功。
+
+**分票了**：这条缺陷与多 workspace 无关（它今天就成立），单独立了 **#864**，
+并且它**阻塞多工作区实施**（账号是全局的，多 workspace 不会让撞号问题消失）。
+**顺序**：它**阻塞多 workspace 实施**（已开票 **#864**）。理由不是"顺手做"，
+而是：多 workspace 保证的是"每个租户一个 workspace"，而**账号仍是全局的** ——
+账号层的撞号不会因为多 workspace 而消失，反而因为多了第二个环境而更容易发生。
+
+**−0. `INNER_API` 已在 36 上打开（2026-10-20 实测）**
+
+建 workspace 的唯一 HTTP 入口在 `inner_api`，而它默认关闭。已打开并验证：
+
+```
+改动：/opt/dify/deploy/.env 追加 INNER_API=true + INNER_API_KEY=<32 字节 hex>
+      备份 /opt/dify/deploy/.env.bak-innerapi-20261020160425
+重启：docker compose up -d api worker（api 重启后 INNER_API=True, INNER_API_KEY set=True）
+
+三条判据（对 api 容器的内网 IP:5001 直连）：
+  无 key            -> 401 {"code":"inner_api_unauthorized"}
+  错 key            -> 401 同上
+  正确 key + 不存在的 owner -> 404 {"message":"owner account not found."}
+                              ↑ 门开了：它走到了"查 owner"那一步
+```
+
+**暴露面没有扩大**，两条都实测过：
+
+```
+经 Dify 自己的 nginx（127.0.0.1:10018/inner/api/...）      -> 404   （default.conf 只转 /console/api、/api）
+经公网 TLS 入口（https://dify.ranlei.work/inner/api/...）  -> 404
+```
+
+api 容器只 publish 了 `5001/tcp`（未映射到宿主），宿主只能经 docker 内网 IP
+（`172.21.0.x`）访问 —— 这是本设计的调用路径：**网关 / 登录代理在 36 本机，
+经容器内网 IP 调 inner_api**，不经过任何公网或宿主 nginx。
+
+控制台回归：`10008/signin` 200、`https://dify.ranlei.work/signin` 200。
 
 **0. 映射表放哪：`dify_workspaces` 放**网关的 `gateway.db`**，但三个进程都要能读它。**
 
