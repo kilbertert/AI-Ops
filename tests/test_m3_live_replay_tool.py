@@ -190,7 +190,7 @@ def _init_database(state: Path, run_id: str, *, snapshot: dict | None = None) ->
 
 
 # ---------------------------------------------------------------- 发送：独占与不重试
-def test_the_claim_is_taken_before_the_request_and_a_second_send_is_refused(gateway, tree):
+def test_the_claim_is_taken_before_the_request_and_a_second_send_is_refused(gateway, tree, monkeypatch):
     """先占位再发。
 
     变异「把 `_claim_send_slot` 挪到请求之后」会让两个并发调用都发出请求；这里用
@@ -200,6 +200,7 @@ def test_the_claim_is_taken_before_the_request_and_a_second_send_is_refused(gate
     _init_database(tree["state"], RUN_ID, snapshot={"status": "0"})
     with sqlite3.connect(tree["state"] / "gateway/gateway.db") as connection:
         connection.execute("UPDATE agent_runs SET state = 'succeeded', reason = NULL")
+    monkeypatch.setattr(module, "docker_logs", lambda _: ("", 0))
     assert module.main(_send_argv(tree, gateway)) == 0
     assert len(_Gateway.requests) == 1
     assert (tree["out"] / ".send.claim").exists(), "标记必须保留（不重发）"
@@ -369,8 +370,39 @@ def test_the_model_request_count_is_declared_unobserved(tree):
 
 def test_a_missing_run_is_reported_rather_than_invented(tree):
     module = _load()
+    _init_database(tree["state"], RUN_ID)
     payload = module.collect(tree["state"], "run_" + "c" * 43, gateway_container="g", node_container="n")
     assert payload["record"] is None
+    assert payload["database_error"] is None
+
+
+def test_corrupt_database_is_an_observation_failure(tree):
+    module = _load()
+    (tree["state"] / "gateway/gateway.db").write_text("corrupt")
+    payload = module.collect(tree["state"], RUN_ID, gateway_container="g", node_container="n")
+    assert payload["record"] is None
+    assert payload["database_error"]
+
+
+def test_missing_logs_make_a_successful_run_incomplete(gateway, tree, monkeypatch):
+    module = _load()
+    _init_database(tree["state"], RUN_ID, snapshot={"status": "0"})
+    with sqlite3.connect(tree["state"] / "gateway/gateway.db") as connection:
+        connection.execute("UPDATE agent_runs SET state = 'succeeded'")
+    monkeypatch.setattr(module, "docker_logs", lambda _: ("unavailable", 1))
+    assert module.main(_send_argv(tree, gateway)) == 1
+
+
+def test_hardlinked_evidence_target_is_not_truncated(tmp_path):
+    module = _load()
+    out = tmp_path / "out"
+    out.mkdir(mode=0o700)
+    original = tmp_path / "original"
+    original.write_text("keep")
+    os.link(original, out / "evidence.json")
+    with pytest.raises(module.Refused):
+        module._write_evidence(out, "evidence.json", {"new": True}, token="")
+    assert original.read_text() == "keep"
 
 
 @pytest.mark.parametrize("run_id", ["../etc", "run_/../../x", "run_short", "run_" + "a" * 200])

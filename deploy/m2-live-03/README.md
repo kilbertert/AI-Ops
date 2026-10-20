@@ -179,6 +179,9 @@ bash deploy/m2-live-03/checks.sh up
 订单授权与业务读取仍是真实判定。
 
 ```bash
+# 在 Bash 子 shell 中整体执行；基线/up 失败即停止，up 部分成功也会执行 down。
+(
+set -euo pipefail
 # 本栈的三个根必须一起给出：配置根、状态根、项目名。只给配置根会让工具去读
 # /var/lib/aiops-m2-live（另一个根）的库，`send` 失败时连 run 都取不到。
 export M2LIVE_CONFIG=/etc/aiops-m2-live-m3
@@ -199,6 +202,7 @@ unset M3_ORDER
 python3 tools/m2_close/m3live/live_replay.py baseline --out "$EVID/prod-before.json"
 
 # 2) 起栈：覆盖层只把 Gateway 的入口进程换成构造身份启动器
+trap 'bash deploy/m2-live-03/checks.sh down' EXIT
 bash deploy/m2-live-03/checks.sh up
 
 # 3) 一次派发。失败**不重试**；标记 `.send.claim` 在**发送之前**原子创建，
@@ -215,12 +219,15 @@ python3 tools/m2_close/m3live/live_replay.py collect --run-id <run_id> --out "$E
 bash deploy/m2-live-03/checks.sh down
 python3 tools/m2_close/m3live/live_replay.py cleanup --out "$EVID" \
   --prod-baseline "$EVID/prod-before.json"
+trap - EXIT
+exit "$send_rc"
+)
 ```
 
 **`send` 失败时怎么拿到 run_id**（只读、不伪造）：
 
-- `sent.json` 里有 `http_status` 与 `failure`；HTTP 200 但 `state=failed` 时回执里
-  **有** `run_id`，直接对它 `collect`。
+- `sent.json` 里有 `http_status` 与 `failure`。真实 Gateway 只在成功时返回 200 和
+  `run_id`；失败通常返回 502，响应不携带 run_id，不能从失败回执假定取得它。
 - HTTP 层就失败（超时、502、连接被拒）时**没有** run_id：这一步只能去隔离栈自己的库里
   **只读**取出 `.send.claim` 中 `claimed_at` 之后的候选行，再按已批准订单及身份在本机核对；
   仅唯一归属能确定时交给 `collect`。若存在并发候选，不能取“最新一条”冒充本次 run。

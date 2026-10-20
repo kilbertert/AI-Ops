@@ -606,3 +606,40 @@ def test_a_path_with_internal_whitespace_is_taken_literally(deployment):
     section = _manifest_section(result.stdout)
     assert result.returncode != 0, "内部空白的路径被静默清理后通过"
     assert any("FAIL" in line and "没有对应的 bind 挂载" in line for line in section), section
+
+
+def test_manifest_refuses_owner_different_from_container_uid(tmp_path, monkeypatch, capsys):
+    import importlib.util
+    import io
+
+    spec = importlib.util.spec_from_file_location("mount_review", DEPLOY / "stack_checks.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text("{}")
+    manifest.chmod(0o400)
+    services = {}
+    for service, key in (("gateway", module.GATEWAY_MANIFEST_ENV), ("node", module.NODE_MANIFEST_ENV)):
+        services[service] = {
+            "user": f"{os.getuid() + 1}:{os.getgid()}",
+            "environment": {key: "/manifest.json"},
+            "volumes": [{"type": "bind", "source": str(manifest), "target": "/manifest.json"}],
+        }
+    monkeypatch.setattr(module.sys, "stdin", io.StringIO(json.dumps({"services": services})))
+    assert module.manifest([]) == 1
+    assert "UID" in capsys.readouterr().out
+    for service in services.values():
+        service["user"] = f"{os.getuid()}:{os.getgid()}"
+    monkeypatch.setattr(module.sys, "stdin", io.StringIO(json.dumps({"services": services})))
+    assert module.manifest([]) == 0
+
+
+def test_identity_env_must_be_private_before_starting(deployment):
+    ctx = deployment
+    _write_env_files(ctx["config"], gateway_manifest=None, node_manifest=None)
+    identity = ctx["config"] / "gateway/identity.env"
+    identity.write_text("AIOPS_M2_LOCAL_TOKEN=synthetic\n")
+    identity.chmod(0o644)
+    result = _run_preflight(ctx)
+    assert result.returncode != 0
+    assert "构造身份文件必须是私有普通文件" in result.stdout

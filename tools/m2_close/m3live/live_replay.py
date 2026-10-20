@@ -175,11 +175,14 @@ def _write_evidence(out: Path, name: str, payload: dict[str, Any], *, token: str
         raise Refused(f"证据路径是符号链接：{path}")
     descriptor = os.open(
         path,
-        os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0),
+        os.O_WRONLY | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
         0o600,
     )
     with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        if os.fstat(descriptor).st_nlink != 1:
+            raise Refused("证据目标存在硬链接：拒绝截断共享文件")
         os.fchmod(descriptor, 0o600)
+        os.ftruncate(descriptor, 0)
         handle.write(body)
     return path
 
@@ -293,15 +296,17 @@ def read_run(state: Path, run_id: str) -> dict[str, Any] | None:
         raise Refused(f"run_id 形状不对（拒绝用于路径）：{run_id!r}")
     database = state / "gateway/gateway.db"
     if not database.is_file():
-        return None
-    connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True, timeout=5)
-    connection.row_factory = sqlite3.Row
+        raise Incomplete("隔离库不存在，不能判断 run 是否存在")
+    connection = None
     try:
+        connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True, timeout=5)
+        connection.row_factory = sqlite3.Row
         row = connection.execute("SELECT * FROM agent_runs WHERE run_id = ?", (run_id,)).fetchone()
-    except sqlite3.DatabaseError:
-        return None
+    except sqlite3.Error as exc:
+        raise Incomplete(f"隔离库查询失败：{type(exc).__name__}") from exc
     finally:
-        connection.close()
+        if connection is not None:
+            connection.close()
     if row is None:
         return None
     raw = dict(row)
@@ -369,10 +374,17 @@ def collect(state: Path, run_id: str, *, gateway_container: str, node_container:
     node_log, node_rc = docker_logs(node_container)
     gateway_log, gateway_rc = docker_logs(gateway_container)
     banner = [line for line in gateway_log.splitlines() if '"substituted"' in line]
+    try:
+        record = read_run(state, run_id)
+        database_error = None
+    except Incomplete as exc:
+        record = None
+        database_error = str(exc)
     return {
         "run_id": run_id,
         "collected_at": _now(),
-        "record": read_run(state, run_id),
+        "record": record,
+        "database_error": database_error,
         "node_log": summarise_run_log(node_log, run_id),
         "gateway_log": summarise_run_log(gateway_log, run_id),
         "log_observations_ok": node_rc == 0 and gateway_rc == 0,
@@ -564,7 +576,8 @@ def cmd_send(args: argparse.Namespace) -> int:
     _write_evidence(out, f"{run_id}.collect.json", payload, token=token)
     record = payload["record"] or {}
     confirmed = (
-        body.get("state") == record.get("state") == "succeeded"
+        payload["log_observations_ok"]
+        and body.get("state") == record.get("state") == "succeeded"
         and record.get("has_snapshot") is True
         and record.get("exec_config_state") == "matched"
         and bool(record.get("expected_agent_version"))
@@ -572,7 +585,7 @@ def cmd_send(args: argparse.Namespace) -> int:
         == record.get("observed_agent_version")
         == body.get("agent_version")
     )
-    print(json.dumps({"run_id": run_id, "state": body.get("state"), "confirmed": confirmed}))
+    print(json.dumps({"run_id": run_id, "confirmed": confirmed}))
     return 0 if confirmed else 1
 
 
@@ -613,8 +626,12 @@ def cmd_collect(args: argparse.Namespace) -> int:
     )
     path = _write_evidence(Path(args.out), f"{run_id}.collect.json", payload, token=token)
     record = payload["record"] or {}
-    print(json.dumps({"path": str(path), "state": record.get("state"), "reason": record.get("reason")}))
-    return 0 if record else 1
+    print(
+        json.dumps(
+            {"path": str(path), "record_found": bool(record), "logs_ok": payload["log_observations_ok"]}
+        )
+    )
+    return 0 if record and payload["log_observations_ok"] else 1
 
 
 def cmd_baseline(args: argparse.Namespace) -> int:

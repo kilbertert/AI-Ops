@@ -183,6 +183,35 @@ def manifest(argv: list[str]) -> int:
     problems: list[str] = []
     for service, host in hosts.items():
         problems.extend(_private_regular_problems(service, host))
+        if not problems:
+            user = str(services[service].get("user", "")).split(":", 1)
+            uid, gid = user[0], user[-1]
+            info = os.stat(host)
+            if not uid.isdigit() or int(uid) != info.st_uid or not info.st_mode & stat.S_IRUSR:
+                problems.append(f"{service}: 清单属主/读取权限与容器 UID 不匹配")
+            # bind 源路径之外的宿主父目录不会出现在容器；仅核对挂载内部的目录。
+            for volume in services[service].get("volumes", []):
+                if volume.get("type") != "bind":
+                    continue
+                target = str(volume.get("target", "")).rstrip("/")
+                container_path = {"gateway": gateway_path, "node": node_path}[service]
+                if not container_path.startswith(target + "/"):
+                    continue
+                directory = Path(host).parent
+                mount = Path(volume["source"])
+                while directory == mount or mount in directory.parents:
+                    metadata = directory.stat()
+                    bit = stat.S_IXOTH
+                    if uid.isdigit() and int(uid) == metadata.st_uid:
+                        bit = stat.S_IXUSR
+                    elif gid.isdigit() and int(gid) == metadata.st_gid:
+                        bit = stat.S_IXGRP
+                    searchable = metadata.st_mode & bit
+                    if not searchable:
+                        problems.append(f"{service}: 挂载内父目录不可遍历")
+                    if directory == mount:
+                        break
+                    directory = directory.parent
     if problems:
         print("; ".join(problems))
         return 1

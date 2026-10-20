@@ -225,6 +225,12 @@ PY
   done
 
   say "== M3 执行配置清单（两侧同一份字节） =="
+  if [ -f "$CONFIG/gateway/identity.env" ] || [ -L "$CONFIG/gateway/identity.env" ]; then
+    mode=$(stat -c '%a' "$CONFIG/gateway/identity.env")
+    if [ -L "$CONFIG/gateway/identity.env" ] || { [ "$mode" != 600 ] && [ "$mode" != 400 ]; }; then
+      bad "构造身份文件必须是私有普通文件（0400/0600）"
+    fi
+  fi
   # 配了 `AIOPS_GATEWAY_EXECUTION_MANIFEST_FILE` 却读不到 ⇒ Gateway **启动即拒**。
   # 判据不是「两个路径的 basename 相同」：那对「节点开关缺失」和「路径指向不存在的
   # 文件」都印 PASS（旧实现的实测反例）。
