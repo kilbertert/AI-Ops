@@ -124,36 +124,10 @@ if not isinstance(entry, dict):
     sys.exit('canonical registry has no [hosts.aiops-41] entry')
 view = dict(entry)
 view['ssh_alias'] = alias
-
-
-def render(value):
-    """按 TOML 类型写值 —— 不能一律 `str()`。
-
-    这里曾经把每个值都写成 `"%s"`，于是数组类型（`aka = ["41"]`）被写成字符串
-    `"['41']"`：再读回来是 str 而不是 list，派生视图与主清单永远不相等，
-    dry-run 与真实部署都会在一致性检查那里停住。**非字符串类型不是异常输入**，
-    清单本来就允许数组（aliases）、布尔与整数。
-    """
-    if isinstance(value, bool):
-        return 'true' if value else 'false'
-    if isinstance(value, str):
-        return '"%s"' % value.replace('\\', '\\\\').replace('"', '\\"')
-    if isinstance(value, int):
-        return str(value)
-    if isinstance(value, float):
-        return repr(value)
-    if isinstance(value, list):
-        return '[' + ', '.join(render(item) for item in value) + ']'
-    if isinstance(value, dict):
-        # 行内表：清单里目前没有嵌套结构，出现了也要写对而不是写成一个 repr。
-        return '{ ' + ', '.join('%s = %s' % (k, render(v)) for k, v in value.items()) + ' }'
-    raise SystemExit('unsupported registry value type: %r' % (type(value).__name__,))
-
-
 with open(dst, 'w') as f:
     f.write('[hosts.aiops-41]\n')
     for k, v in view.items():
-        f.write('%s = %s\n' % (k, render(v)))
+        f.write('%s = "%s"\n' % (k, str(v).replace('\\', '\\\\').replace('"', '\\"')))
 PY
 
 # 断言派生视图与主清单除 ssh_alias 外完全一致 —— 这样「唯一真值在主清单」不是
