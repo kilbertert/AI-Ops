@@ -1,3 +1,42 @@
+## 2026-10-20 · 知识库自服务：本地判据与 41 上的实测事实
+
+### 一、本地判据
+
+`tests/test_knowledge_binding_api.py` 8 条：
+
+| 用例 | 钉住的规则 |
+|---|---|
+| `test_available_lists_only_this_tenants_datasets` | 列表按**调用者**租户取，别人的库不出现 |
+| `test_put_then_list_then_delete_round_trips` | 保存落到检索读的那张表，删除后消失 |
+| `test_put_replaces_rather_than_merges` | 取消勾选可表达（提交的列表就是目标状态） |
+| `test_a_tenant_mismatch_is_refused_not_corrected` | body 的 tenant 与调用者不符 → 403，不改写 |
+| `test_another_tenants_source_is_indistinguishable_from_absent` | 别人的源与不存在同为 404 |
+| `test_available_marks_already_bound_datasets` | 一次请求就能画出勾选状态 |
+| `test_invalid_knowledge_id_is_rejected_by_the_schema` ×2 | 非法 id 422 |
+
+突变复验：把 `ON CONFLICT` 的更新从「整条替换」改回「只更新 tenant」，
+`test_put_replaces_rather_than_merges` 变红。
+
+全量 **3136 passed / 0 failed / 9 skipped**。
+
+### 二、41 上的实测事实（这些决定了用户看到什么）
+
+| 观察 | 值 | 含义 |
+|---|---|---|
+| kb-service 按租户列库 | `1942105476598861824` → 1 个库；`1783022023241633792` → 1 个库 | 租户口径就是 kb-service 的 tenant 头 |
+| 未知租户调列表 | `200 []` | 不自动开通，如实回空 |
+| RAGFlow 里 `fdcb2570…`（"41"）的 owner | `admin@ragflow.io`，**不在**任何 biz 租户映射里 | 它在体系里没有主人，无论填什么 tenant 都检索不到 |
+| 适配器收到未登记的 `knowledge_id` | `404 DIFY_KNOWLEDGE_NOT_FOUND` | 符合设计，不泄露存在性 |
+| RAGFlow embedding 调用 | `403 insufficient_user_quota`（余额 ¥0.000285） | **检索整体 502 的直接原因**，与接线无关 |
+
+### 三、据实（边界）
+
+- **充值前，本页面的效果不可见**：配置能保存、能读回，但检索会因 embedding 403 而 502。
+  这不是本次改动的缺陷，也不是可以用代码绕过的。
+- `knowledge_id` **不是** RAGFlow 的 dataset id（前者是 Dify 侧的名字，后者是 32 位 id）。
+  实测把 dataset id 当 `knowledge_id` 调用得到 404。
+- 跨租户 / 无主库仍需工程师介入（ADR 0063 的显式边界）。
+
 ## 2026-10-20 · 完成通知的空原因按值比较
 
 **范围**：成功通知已记录非空 `reason` 后，省略或 JSON `null` 的重试返回 409；
@@ -210,9 +249,17 @@ E 才是那条有区分性的协议检查。`$aiops_upstream_proto` 是另一个
 **部署身份**：`origin/main` @ `1ae4d86`，制品由 `git archive origin/main deploy/dify-36` 打包
 （tar sha256 `fabe9958e0003da9d073ad26fc7fe8c2d5edc6540f105f427ca0c032f5d7a81c`），2026-10-20 16:49 CST 落到 36 `/opt/dify/deploy`。
 备份：`/opt/dify/deploy.bak-20261020164947/` 与 `.env.bak-20261020164947`（未删除）。
-**但它是代码/配置的回滚路径，不是数据库备份**：`cp -a` 是在 postgres 还活着的时候做的，
-`volumes/db/data` 的副本可能跨越不同提交状态，不能当物理备份用。要真正回滚数据库，
-需要停机复制或 `pg_dump` —— 本轮没做，如实记下。
+**它是代码/配置的回滚路径，不是数据库备份**：`cp -a` 是在 postgres 还活着的时候做的，
+`volumes/db/data` 的副本可能跨不同提交状态，不能当物理备份用。
+
+**数据库的一致快照另做了一份**（2026-10-20 20:20 CST，`/var/backups/dify/20261020T202038/`）：
+`pg_dump -Fc` 导出 `dify` 与 `dify_plugin`，加 `volumes/app/storage` 的 tar，附
+`SHA256SUMS` 与 `pg_restore -l` 目录；README 写了恢复步骤。**验证方式不是"文件存在"**：
+把 `dify.dump` 真正恢复进临时库 `dify_restore_check`，逐表行数与线上一致
+（`datasets=4 documents=1 apis=2 bindings=3 embeddings=0 accounts=2 apps=2`），随后删库。
+`dify_plugin` 未做恢复演练（插件元数据可由重装插件重建）。
+**不含 weaviate**：它是运行中的库，活拷贝同样跨状态；当前 collection 为空，向量由重新索引
+重建 —— 这也正好是 VEC-02 待做的事。
 
 ### 一、做到了什么（都有当场输出）
 

@@ -32,11 +32,39 @@ sha256sum /tmp/dify36-sync.tgz
 
 ## 2. 备份（必须先做）
 
+两份，用途不同 —— **不要用第一份冒充第二份**。`cp -a` 一个**活着的** PGDATA 目录，
+副本会跨不同提交状态；它能回滚代码与配置，不能当数据库备份用。
+
 ```bash
+# 2a. 代码与配置（回滚部署用）
 ssh yidong-36 'ts=$(date +%Y%m%d%H%M%S)
   cp -a /opt/dify/deploy /opt/dify/deploy.bak-$ts
   cp /opt/dify/deploy/.env /opt/dify/deploy/.env.bak-$ts
   echo backup=$ts'
+
+# 2b. 数据库的一致快照（回滚数据用）：用 pg_dump，不停机
+ssh yidong-36 'set -e
+  ts=$(date +%Y%m%dT%H%M%S); out=/var/backups/dify/$ts
+  mkdir -p "$out"; chmod 700 /var/backups/dify "$out"
+  PW=$(grep -o "^DB_PASSWORD=.*" /opt/dify/deploy/.env | cut -d= -f2-)
+  for db in dify dify_plugin; do
+    docker exec -e PGPASSWORD="$PW" deploy-db_postgres-1 pg_dump -U dify -Fc -d $db > "$out/$db.dump"
+  done
+  docker exec -i deploy-db_postgres-1 pg_restore -l > "$out/dify.toc" < "$out/dify.dump"
+  tar -C /opt/dify/deploy/volumes -czf "$out/storage.tar.gz" app/storage   # 不含 weaviate：重跑索引即可
+  chmod 600 "$out"/*; sha256sum "$out"/*.dump "$out"/storage.tar.gz > "$out/SHA256SUMS"'
+```
+
+**判据不是"文件在"**，是"能恢复"：把 dump 恢复进一个临时库，逐表行数与线上一致后再删。
+
+```bash
+ssh yidong-36 'set -e
+  out=/var/backups/dify/<ts>; PW=$(grep -o "^DB_PASSWORD=.*" /opt/dify/deploy/.env | cut -d= -f2-)
+  docker exec -e PGPASSWORD="$PW" deploy-db_postgres-1 psql -U dify -d postgres -c "create database dify_restore_check;"
+  docker exec -i -e PGPASSWORD="$PW" deploy-db_postgres-1 pg_restore -U dify -d dify_restore_check --no-owner --exit-on-error < "$out/dify.dump"
+  docker exec -e PGPASSWORD="$PW" deploy-db_postgres-1 psql -U dify -d dify_restore_check -A -F"|" -t -c \
+    "select (select count(*) from datasets),(select count(*) from documents),(select count(*) from external_knowledge_apis),(select count(*) from external_knowledge_bindings),(select count(*) from embeddings);"
+  docker exec -e PGPASSWORD="$PW" deploy-db_postgres-1 psql -U dify -d postgres -c "drop database dify_restore_check;"'
 ```
 
 `.env` 单独备份一次：它在 `deploy/` 里，但下一步会把 `deploy/dify-36` 的**模板**覆盖过去，
@@ -173,7 +201,7 @@ ssh yidong-36 'T=<dataset key>
 | 补丁导致 api/worker 起不来 | 注释掉 compose 里 5 条 `*pm_*` 挂载 → `up -d api worker`。容器回到未打补丁的上游行为（external 检索会退化为空结果） |
 | 向量库配置有问题 | `VECTOR_STORE` 留空 + `docker compose stop weaviate`。vendor 索引退回不可用，其余不受影响 |
 | 整栈回退 | 把 `deploy.bak-<ts>` 覆盖回 `/opt/dify/deploy`，用备份的 `.env` 起。**若迁移已跑过**，还要按下一行处理库里的密文 |
-| 迁移写错 | 迁移在单事务里；用 §2 备份的 DB 卷快照恢复（没做快照时，孤儿绑定可重建、加密值可解回明文，**不会丢数据**） |
+| 迁移写错 | 迁移在单事务里；用 §2b 的 `pg_dump` 快照恢复。**不要**用 §2a 的 `cp -a` 目录当数据库备份 —— 那是活拷贝 |
 | **迁移后回退到未打补丁的代码** | **不能直接回退**：库里 `api_key` 已经是 `enc:v1:`，旧代码会把它当明文发出去 → 供应商侧 401，且看起来像"凭据被拒"。要么连带把这两行解回明文（`external_api_settings` 解密后按旧格式写回），要么保持补丁在位。这是"加密"与"回滚"之间必须显式选一次的耦合 |
 
 **回滚不改事实**：加密是可逆的（密钥在租户里），删除的孤儿绑定本来就不指向任何数据集。

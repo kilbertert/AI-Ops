@@ -604,6 +604,49 @@ class KbServiceClient:
             timeout=self.timeout,
         )
 
+    def list_knowledge_bases(self) -> list[dict[str, Any]]:
+        """The datasets this client's tenant owns, for an operator to pick from.
+
+        Reads kb-service's own tenant-scoped listing
+        (``GET /kb/knowledge-bases``) rather than RAGFlow directly: the tenant
+        header is what makes the answer "yours" instead of "everybody's", and
+        the same header already scopes search and media. An unknown tenant gets
+        an empty list (kb-service auto-provisions nothing on a read), which is
+        the honest answer — not an error the UI would have to explain.
+
+        Shape is normalized to just what a picker needs. The upstream row is
+        large (parser config, embedding model, timestamps) and none of it helps
+        someone decide whether to tick a box.
+        """
+        url = join_url(self.base_url, "/kb/knowledge-bases")
+        headers = {**tenant_id_header(self.tenant_id)}
+        if self.service_token:
+            headers["Authorization"] = bearer_auth_header(self.service_token)
+        payload = request_json(
+            RequestSpec(url=url, method="GET", headers=headers, timeout=self.timeout),
+            mapping=self._error_mapping(),
+            envelope=parse_data_key_envelope,
+        )
+        rows = payload if isinstance(payload, list) else (payload or {}).get("data", [])
+        if not isinstance(rows, list):
+            raise KnowledgeSearchUnavailable("kb-service returned invalid knowledge bases")
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            if not isinstance(row, Mapping):
+                continue
+            kb_id = str(row.get("id") or "")
+            if not kb_id:
+                continue
+            result.append(
+                {
+                    "knowledge_base_id": kb_id,
+                    "name": str(row.get("name") or ""),
+                    "document_count": int(row.get("document_count") or 0),
+                    "chunk_count": int(row.get("chunk_count") or 0),
+                }
+            )
+        return result
+
     def search(self, knowledge_base_ids: tuple[str, ...], question: str, top_k: int) -> list[dict[str, Any]]:
         if not knowledge_base_ids:
             return []
