@@ -83,7 +83,7 @@ cloud-upms:release  TokenController.issueLoginToken 的完整 payload：
 | 3 | 隔离深度：**app + dataset 跟租户走**；provider credentials **跟 workspace 走**（Dify 数据模型决定的，见 §3） |
 | 3b | 改造面是**四条**：开户 / 发布桥 / 试运行 / **运维 CLI（pull-dify、sync-from-dify）**，共用同一个解析函数 |
 | 4 | 已有映射账号：迁移进各自租户的 workspace；**不保留**旧的共享 workspace 访问权 |
-| 5 | 建 workspace 走 **`POST /inner/api/enterprise/workspace`**（`is_from_dashboard=True` 绕过 `ALLOW_CREATE_WORKSPACE`） |
+| 5 | 建 workspace 走 **`POST /inner/api/enterprise/workspace`**（`is_from_dashboard=True` 绕过 `ALLOW_CREATE_WORKSPACE`）。**`INNER_API` 已于 2026-10-20 在 36 上打开** —— 见 §8 的「−0」 |
 | 6 | 模板 app：**模板 DSL 进仓库**，开户时导入。模板**只含结构与工具白名单**，`model_config` 留空（避免绑死模型） |
 | 7 | 发布权：`aiops:agent:publish` 仍然按公司权限码裁定；**平台租户（`type=-1`）视为可见全部** —— 但见 §4 的边界 |
 | 8 | 试运行草稿来源：租户没有 editor 环境就**明确拒绝**（"你的租户没有编辑环境"），不回落 |
@@ -467,12 +467,141 @@ def account_email_for(company_user_id: str) -> str:
 两个人就会映射到**同一个 Dify 账号**（同一个邮箱），而 Dify 账号是全局的（不属于任何 workspace）：
 第二个环境的代理能为它签会话，访问第一个环境那个人的 workspace。
 
-**修法**：邮箱里带环境标识 —— `f"{environment}-{safe}@{DOMAIN}"`（或反过来）。
-代价：**已存在的映射账号邮箱会变**，所以这是一次**迁移**，不是纯加字段：
-`dify_login_mappings` 里那一列 `dify_email` 要一起改，Dify 侧的账号也要改邮箱
-（`PUT /console/api/workspaces/current/members/<id>` 之类，需核实是否有此端点；
-没有就走"新建账号 + 迁移映射"）。
-**这条必须在多 workspace 实施之前或同批完成**，否则两个环境一旦真的有同号 id，越权立刻成立。
+**修法**：邮箱里带环境标识 —— `f"{environment}-{safe}@{DOMAIN}"`。
+
+**已实施**（#864，ADR-0061）。`AIOPS_LOGIN_PROXY_ENVIRONMENT` **必填、无默认值**：
+漏配时代理**拒绝启动**——给默认值会让漏配静默退化回"只按 id"，而启动/登录/审计全都正常。
+
+**已有映射怎么迁**（这是原设计写错、实施时改掉的一处）：
+
+原设计写的是"新建 Dify 账号 + 原子迁移映射"，理由是"Dify 没有改邮箱的端点"。
+但那个前提被误用了：**没有任何一条身份路径经过邮箱** ——
+
+- 会话是 `mint_console_session(account_id)` 按**账号 id** 签的；
+- `by_dify_account` 按 id 反查；
+- `provision_editor` 只在 `account_id` 为空时才走邀请/激活。
+
+所以迁移只需**改映射表的 `dify_email` 一列**，`dify_account_id` 不动：
+
+```
+不换账号 ⇒ apps.created_by / app_model_configs / 审计行的归属一毫不受影响
+Dify 侧那个账号保留旧的无前缀邮箱 —— 而新派生值一律带前缀，两者永不相等
+```
+
+重标发生在**登录时**（发现 `dify_email` 与派生值不同就改并记 `email_retagged` 审计），
+不需要运维记得跑迁移命令。
+
+代价明写：**Dify 侧旧账号的邮箱仍是旧值**。这不影响任何身份路径，只影响"在 Dify 成员列表里
+按邮箱找我方的人"这一点可读性。
+
+**分票了**：这条缺陷与多 workspace 无关（它今天就成立），单独立了 **#864**，
+并且它**阻塞多工作区实施**。理由不是"顺手做"：多 workspace 保证的是"每个租户一个
+workspace"，而**账号仍是全局的** —— 账号层的撞号不会因为多 workspace 而消失，
+反而因为多了第二个环境而更容易发生。
+
+**−0. `INNER_API` 已在 36 上打开（2026-10-20 实测）**
+
+建 workspace 的唯一 HTTP 入口在 `inner_api`，而它默认关闭。已打开并验证：
+
+```
+改动：/opt/dify/deploy/.env 追加 INNER_API=true + INNER_API_KEY=<32 字节 hex>
+      备份 /opt/dify/deploy/.env.bak-innerapi-20261020160425
+重启：docker compose up -d api worker（api 重启后 INNER_API=True, INNER_API_KEY set=True）
+
+三条判据（对 api 容器的内网 IP:5001 直连）：
+  无 key            -> 401 {"code":"inner_api_unauthorized"}
+  错 key            -> 401 同上
+  正确 key + 不存在的 owner -> 404 {"message":"owner account not found."}
+                              ↑ 门开了：它走到了"查 owner"那一步
+```
+
+**暴露面没有扩大**，两条都实测过：
+
+```
+经 Dify 自己的 nginx（127.0.0.1:10018/inner/api/...）      -> 404   （default.conf 只转 /console/api、/api）
+经公网 TLS 入口（https://dify.ranlei.work/inner/api/...）  -> 404
+```
+
+api 容器只 publish 了 `5001/tcp`（未映射到宿主），宿主只能经 docker 内网 IP
+（`172.21.0.x`）访问。⇒ **41 与 95 的网关/代理够不到它。这一条决定了开户流程的执行位置。**
+
+#### 开户的最终形态（执行位置只有一处）
+
+**CLI 在目标环境的机器上跑；它经一条受限 SSH 隧道调 36 的 inner_api；建完就地写自己的库。**
+
+```
+在 41（或 95）上：
+  aiops admin ensure-workspace --tenant <id>        # 环境取**本机部署身份**，不是参数
+    1. 查本机 gateway.db 的 dify_workspaces，**按 setup_state 分支**（不是"有行就退"）：
+         ready   → 退出（幂等）
+         failed  → 重建（清 lease，重走 3-5）
+         creating 且租约未过期 → 退出并提示"有人在建"
+         creating 且租约已过期 → 先对账（按名字查 all-workspaces）再决定接管或补 UUID
+         unknown → 先对账，再决定
+    2. 占位（setup_state='creating' + 租约），写**本机**库
+    3. 经隧道 http://127.0.0.1:15001/inner/api/enterprise/workspace 建 workspace
+    4. 同一次运行里把 workspace_id 写回**本机**库，再装插件/写凭据/导模板
+    5. setup_state='ready'
+```
+
+**为什么不是"在 36 上跑"**：`dify_workspaces` 在每个环境自己的 `gateway.db`，
+36 写不到 41/95 的库。让库的属主写自己的库，就没有跨主机写、也不需要为"写失败"设计对账。
+硬约束：**建 workspace 与写映射必须在同一次运行、同一台机器上**，中间失败就没有人知道该补哪一半。
+
+#### 那条隧道怎么接（复用已有的形状，不新开暴露面）
+
+36 上**已经**有同类做法：41 经回环隧道 `127.0.0.1:29380` 访问 36 的 kb-service，
+用的是「restricted authorized_keys + `permitopen` 白名单」+ 只绑回环的监听。
+
+按同一形状接：
+
+**不要用 nginx 做这一跳**（评审两轮都指出，成立）：宿主 nginx 解析不到 compose 的
+容器名（那是容器内的 `127.0.0.11`），而**静态 `proxy_pass` 的主机名只在加载配置时解析一次**
+—— 容器重建换了 IP 之后，写 `/etc/hosts` 也救不了正在跑的 nginx，它会一直转发到旧 IP。
+
+**用一个每次连接都现查地址的转发**。36 上没有 `socat`，所以用一段 systemd socket：
+
+```bash
+# /etc/systemd/system/aiops-inner-api-forward.service
+# 监听只绑回环；每个连接现查容器 IP，查不到就拒（fail-closed）
+[Service]
+ExecStart=/usr/local/bin/aiops-inner-api-forward --listen 127.0.0.1:15001 \
+          --container deploy-api-1 --port 5001
+```
+
+`aiops-inner-api-forward` 是一个 ~40 行的 Python（标准库 `socket` + `select`），
+每次 accept 时 `docker inspect` 取当前 IP 再连 —— 没有缓存、没有要重载的配置。
+（也可以直接 `docker exec` 一步到位，但那要进容器；走内网 IP 更轻。）
+
+⚠️ **这个转发器目前只有设计，仓库里还没有可执行程序**（评审指出，成立）。
+它与服务单元会跟开户实现放在同一批交付里 —— 本票只把它作为**设计的一部分**记下来，
+部署它需要等那份代码。在那之前「41/95 经隧道开户」这条路走不通，
+而**36 本机直接调 inner_api 仍然可用**（那是今天唯一验证过的路径）。
+
+**为什么不用 `docker compose ports: 5001:5001`**：那会把一个管理接口 publish 到宿主，
+正是要避免的事。
+
+# 36：给 41/95 各一个受限账号，permitopen 只放 127.0.0.1:15001
+restrict,port-forwarding,permitopen="127.0.0.1:15001",command="/bin/false" ssh-ed25519 …
+
+# 41/95：隧道单元（与既有的 aiops-36-kb-tunnel 同形）
+ssh -N -L 127.0.0.1:15001:127.0.0.1:15001 aiops-inner-api-tunnel@36
+```
+
+**访问边界（评审指出必须写明）**：
+
+| 边界 | 值 |
+|---|---|
+| 5001 端口 | **永不 publish 到宿主**（现状已如此）；不得因为这条需求去改 compose 的 ports |
+| 36 上的监听 | 只 `127.0.0.1:15001`，**不绑 0.0.0.0、不开公网** |
+| 谁能连 | 只有 `permitopen` 白名单里的那两把 key |
+| 隧道建立后谁能用 | 41/95 **本机的任何进程**都能连 `127.0.0.1:15001` —— `permitopen` 只限制 SSH 的**远端**目标，不限制本地。所以这一层不能当授权，`X-Inner-Api-Key` 才是 |
+| 认证 | 隧道之外仍有 `X-Inner-Api-Key`；两层都要过 |
+
+**为什么不用 VPN / 公网 ACL**：这是每月不到一次的动作。为它加一条长期存在的跨环境
+可路由路径，比"用时才建一条受限隧道"贵得多，也更容易忘记收口。
+
+控制台回归：`10008/signin` 200、`https://dify.ranlei.work/signin` 200。
 
 **0. 映射表放哪：`dify_workspaces` 放**网关的 `gateway.db`**，但三个进程都要能读它。**
 

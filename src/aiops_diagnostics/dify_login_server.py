@@ -155,6 +155,9 @@ class LoginProxySettings:
                 secret_key=required("AIOPS_LOGIN_PROXY_DIFY_SECRET_KEY"),
                 deployment_edition=os.environ.get("AIOPS_LOGIN_PROXY_DIFY_EDITION", "COMMUNITY"),
                 access_expire_minutes=int(os.environ.get("AIOPS_LOGIN_PROXY_ACCESS_MINUTES", "60")),
+                # 必填而不是默认值（#864）：它是 Dify 账号邮箱的一部分，漏配的后果是
+                # **两个环境撞到同一个账号**（越权），而不是启动失败。所以宁可起不来。
+                environment=required("AIOPS_LOGIN_PROXY_ENVIRONMENT"),
             ),
             data_dir=os.environ.get("AIOPS_LOGIN_PROXY_DATA_DIR", "/var/lib/aiops-login-proxy"),
             edit_permission=required("AIOPS_LOGIN_PROXY_EDIT_PERMISSION"),

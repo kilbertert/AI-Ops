@@ -19,6 +19,16 @@
 #     db_mysql / oceanbase / seekdb / certbot —— 不用
 #   nginx 的 `/socket.io/` 因此改指 api（见 README，`NGINX_SOCKET_IO_UPSTREAM`）。
 #
+# 2026-10-20 修订：**新增 weaviate（向量库 1 个）**。原判断「向量库 0 个，因为知识面
+# 全走 External Knowledge API」在"运营在控制台里自建 vendor 数据集"这条路上不成立 ——
+# 实际发生过一次：文档 1564 个分段全部停在 indexing，`documents.error` 是
+# `Vector store must be specified.`，`embeddings` 表 0 行。没有向量库时，vendor 数据集
+# 的索引根本没有落点，而失败只体现在一行 error 上。见 README「向量库」。
+#
+# 2026-10-20 修订：**api/worker 挂载上游补丁树**。三处上游 1.17.1 还不支持的行为
+# （external 数据集的 /v1/.../retrieve、API 模板 api_key 落库加密、删库清理外部绑定）
+# 以 `patches/1.17.1/*.patch` 打在镜像原文件上，见 `patches/apply.sh` 与 README「上游补丁」。
+#
 # 镜像来源：Docker Hub 在 36 不可达（registry-1.docker.io 连接被重置）。这里**不**
 # 改 docker daemon（那要重启 dockerd，会把 36 上的生产栈一起抖），而是在 compose
 # 里直接写镜像源前缀 —— 换一行就能回退，爆炸半径只有本栈。见 README「镜像来源」。
@@ -26,6 +36,19 @@
 # 容器入口：只有 nginx 发布端口，固定回环 127.0.0.1:10018。
 # 既有浏览器入口由宿主 nginx 的 10008 承担；其余服务只在 compose 内网。
 # 公网控制台 TLS 与访问收口仍是独立待办，内部回环不代表公网已收口。
+
+# 上游补丁树：`patches/apply.sh` 从**同一镜像**取原文件、核对 sha256、打补丁后输出到
+# ./volumes/app/patched-api/。**逐个文件挂**（挂目录会把整个 /app/api 遮住）。
+# 文件由 apply.sh 置成 0444（api 以 uid 1001 跑，只需可读）；`:ro` 再加一道。
+# 镜像一换，apply.sh 的 sha 核对就会失败，不会静默挂上一份陈旧补丁。
+# 写成 x- 键下的逐项锚点，是因为 api 与 worker 各自的 `volumes:` 会覆盖共享锚点里的
+# 同名键（YAML 合并键按整键覆盖）—— 整段复制成两份比现在更糟。
+x-patched-api-mounts:
+  - &pm_hit_testing_base ./volumes/app/patched-api/controllers/console/datasets/hit_testing_base.py:/app/api/controllers/console/datasets/hit_testing_base.py:ro
+  - &pm_external ./volumes/app/patched-api/controllers/console/datasets/external.py:/app/api/controllers/console/datasets/external.py:ro
+  - &pm_service_hit_testing ./volumes/app/patched-api/controllers/service_api/dataset/hit_testing.py:/app/api/controllers/service_api/dataset/hit_testing.py:ro
+  - &pm_external_knowledge ./volumes/app/patched-api/services/external_knowledge_service.py:/app/api/services/external_knowledge_service.py:ro
+  - &pm_dataset_service ./volumes/app/patched-api/services/dataset_service.py:/app/api/services/dataset_service.py:ro
 
 x-shared-api-worker: &shared-api-worker
   image: ${DIFY_REGISTRY:-docker.1panel.live}/langgenius/dify-api:1.17.1
@@ -91,8 +114,15 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
+      weaviate:
+        condition: service_healthy
     volumes:
       - ./volumes/app/storage:/app/api/storage
+      - *pm_hit_testing_base
+      - *pm_external
+      - *pm_service_hit_testing
+      - *pm_external_knowledge
+      - *pm_dataset_service
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
       interval: 30s
@@ -116,8 +146,15 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
+      weaviate:
+        condition: service_healthy
     volumes:
       - ./volumes/app/storage:/app/api/storage
+      - *pm_hit_testing_base
+      - *pm_external
+      - *pm_service_hit_testing
+      - *pm_external_knowledge
+      - *pm_dataset_service
     healthcheck:
       test: ["CMD-SHELL", "celery -A celery_healthcheck.celery inspect ping"]
       interval: ${COMPOSE_WORKER_HEALTHCHECK_INTERVAL:-30s}
@@ -221,6 +258,38 @@ services:
     networks:
       - ssrf_proxy_network
       - default
+
+  # 向量库。本实例唯一的知识面落点；没有它，vendor 数据集的索引会停在
+  # `Vector store must be specified.`（README「向量库」记了这次实测）。
+  #
+  # **不发布任何宿主端口**：只有 api/worker 经 compose 内网名 `weaviate:8080` 访问。
+  # 版本跟上游 1.17.1 的 compose 钉在同一个小版本（1.39.2），镜像源同其余服务。
+  weaviate:
+    image: ${DIFY_REGISTRY:-docker.1panel.live}/semitechnologies/weaviate:1.39.2
+    restart: always
+    volumes:
+      - ./volumes/weaviate:/var/lib/weaviate
+    environment:
+      PERSISTENCE_DATA_PATH: ${WEAVIATE_PERSISTENCE_DATA_PATH:-/var/lib/weaviate}
+      QUERY_DEFAULTS_LIMIT: ${WEAVIATE_QUERY_DEFAULTS_LIMIT:-25}
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: ${WEAVIATE_AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED:-false}
+      DEFAULT_VECTORIZER_MODULE: ${WEAVIATE_DEFAULT_VECTORIZER_MODULE:-none}
+      CLUSTER_HOSTNAME: ${WEAVIATE_CLUSTER_HOSTNAME:-node1}
+      AUTHENTICATION_APIKEY_ENABLED: ${WEAVIATE_AUTHENTICATION_APIKEY_ENABLED:-true}
+      AUTHENTICATION_APIKEY_ALLOWED_KEYS: ${WEAVIATE_API_KEY:?WEAVIATE_API_KEY 未设置}
+      AUTHENTICATION_APIKEY_USERS: ${WEAVIATE_AUTHENTICATION_APIKEY_USERS:-hello@dify.ai}
+      AUTHORIZATION_ADMINLIST_ENABLED: ${WEAVIATE_AUTHORIZATION_ADMINLIST_ENABLED:-true}
+      AUTHORIZATION_ADMINLIST_USERS: ${WEAVIATE_AUTHORIZATION_ADMINLIST_USERS:-hello@dify.ai}
+      DISABLE_TELEMETRY: ${WEAVIATE_DISABLE_TELEMETRY:-true}
+    networks:
+      - default
+    healthcheck:
+      # 该镜像里没有 curl（实测只有 busybox 的 wget），用 wget 探就绪端点。
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://localhost:8080/v1/.well-known/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
 
   # 转发出站请求的 squid。发行版默认只放行 .marketplace.dify.ai 与本地网段，
   # 并以 `http_access deny all` 兜底 —— 直接打私有网段地址会被拦（PRD #577 记的坑）。

@@ -1,0 +1,14 @@
+--- a/services/dataset_service.py
++++ b/services/dataset_service.py
+@@ -1365,6 +1365,11 @@
+         # silently degrade to unrestricted (access-all) once its last binding is gone.
+         dataset_api_key_service.delete_keys_scoped_only_to(session, str(dataset.id))
+ 
++        # An external dataset's provider binding has no foreign key, so deleting the
++        # dataset used to leave the row behind: the API template then lists a binding
++        # that resolves to nothing, and the usage count keeps counting a dead dataset.
++        session.execute(delete(ExternalKnowledgeBindings).where(ExternalKnowledgeBindings.dataset_id == dataset.id))
++
+         session.delete(dataset)
+         session.commit()
+         return True

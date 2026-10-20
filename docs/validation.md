@@ -1,3 +1,265 @@
+## 2026-10-20 · 95 演练第一段：新环境起一套网关并收敛出一个智能体
+
+**范围**：95（`prod-bugtrack-120`，`api.qumall.qushiyun.com`）。**新增一套独立网关，未切换
+前端入口，未接 Dify。** 制品来自合并修订 `8bbe208`。本记录不含口令、令牌或会话明文。
+
+**这一步要回答的问题**：把一个智能体从零部署到一个新环境，需要哪几步、每步的判据是什么。
+结论先写：**代码、依赖、清单三段能走通；Dify 与前端两段这次刻意没做**（理由在 §四）。
+
+### 一、做了什么
+
+| 项 | 值 |
+|---|---|
+| 代码 | `/opt/aiops-95`（87 个 `.py`，`gateway_config.py` 摘要与 `8bbe208` 逐字节一致） |
+| 制品 | `git archive` 自 `8bbe208`，tar sha256 `d524ce8b…`，上传后远端复核相等 |
+| 依赖 | 独立 venv（Python 3.13.5）；`uv export` 出锁文件的固定版本，再按该清单安装 |
+| 服务 | `aiops-gateway-95.service`（`User=aiops`），`127.0.0.1:8790` |
+| 配置 | `/etc/aiops-95/{gateway.env,server.env,keys/}`（600 / 600 / 0700） |
+| 数据 | **新库** `/var/lib/aiops-95/gateway/gateway.db`（241 KB，18 张表，全空） |
+| 清单 | `ops/environments/env-95.toml`（**新增文件**，只声明一个 agent，无 `[[dify_apps]]`） |
+
+**与 8788 的关系**：95 原有的 `aiops-gateway.service`（8788）**没有动**，仍服务
+`/v1/`。新服务用另一个端口、另一个库，两者互不可见。选择新端口而非替换旧服务，是因为
+替换会立刻改变线上 `api.qumall.qushiyun.com/v1/*` 的行为，而这一轮的目的是**先证明新环境
+能装配出智能体**，不是切换入口。
+
+### 二、判据（95 实测）
+
+| # | 动作 | 结果 |
+|---|---|---|
+| ① | `/health` | `{"ok":true,"version":"0.1.0","business_mutations":"disabled"}` |
+| ② | 无凭据 `/v1/faq/catalog` | **401**（认证面在，与 41 同一形状） |
+| ③ | 库初始化 | 18 张表，含 `agents` / `agent_versions` / `dify_app_registry` / `publish_audit_ledger` |
+| ④ | `admin reconcile --dry-run` | `created`（零写入） |
+| ⑤ | `admin reconcile` 实跑 | **`created`，version 1** |
+| ⑥ | 紧接着再跑一次 | **`unchanged`**（幂等） |
+| ⑦ | 库内核对 | `agents` 1 行、`status=published`、`published_version=1`；`agent_versions` 1 行（574 字节快照） |
+
+### 三、两处必须记下的实操差异（不是环境噪音）
+
+1. **`uv sync --frozen` 在 95 上挂死，不是缺网**：`pypi.org` 从 95 **超时**（`mirrors.aliyun.com`
+   200、同一 wheel 137 MB/s）。锁文件里的 `url` 指向 `files.pythonhosted.org`，`uv sync`
+   照锁取源 ⇒ 卡在 `openai-codex-cli-bin`（123 MB）。
+   **走通的方式**：`uv export --frozen --no-dev --format requirements-txt --no-hashes` 得到
+   **同一批固定版本**，再用 `uv pip install -r` 从一个可达的索引安装。版本仍由锁决定，
+   变的只是下载源。
+2. **`uv venv` 默认去下载 CPython 3.14**：95 上有 3.13.5，但 `uv` 的自动下载会先下解释器。
+   显式 `--python /usr/local/bin/python3.13` 才是"用本机那个"。
+3. **制品清单要带全**：`pyproject.toml` 的 `tool.hatch.build.targets.wheel.force-include`
+   要求 `README.md` 与 `examples/fixtures` 在树上，否则 `-e .` 构建失败（`Readme file does
+   not exist`、`Forced include not found`）。这与 41 的 `deploy-41.sh` 只带 `src/` 不同，
+   因为那边装的是预构建制品，这边是带构建钩子的 editable 安装。
+
+### 四、刻意没做的两段（以及为什么）
+
+| 段 | 为什么这次不做 |
+|---|---|
+| **接 Dify** | 95 没有自己的登录代理与 workspace。按 ADR-0059，Dify 是平台级、只有 36 一套；95 缺的是**它自己的控制台入口**（登录代理 + `(tenant, environment)` 映射）。那是一次多段变更，需要它自己的验收，不能顺手做。`env-95.toml` 因此**没有** `[[dify_apps]]` 段。 |
+| **切前端入口** | 95 的 `/v1/` 仍指 8788（旧网关）。把 nginx 改指 8790 会立刻改变真实用户可达的行为，而新网关还没有任何业务验收（没有会话、没有租户流量、没有 Dify 绑定）。按迁移纪律，切换与"新实例通过验收"是两步，不能合并。 |
+
+**一处必须同时说清的现状**：95 的 8788 与 8790 **都**返回 `401 INVALID_ACCESS_TOKEN`，
+即使带上 nginx 里注入的那枚服务令牌也一样。原因是 `AIOPS_GATEWAY_THIRD_SESSION_SERVICE_TOKEN`
+在这台机器上校验的是 Redis 会话，而 95 的 Redis 里 `app:3rd_session:*` **扫不到任何键**
+（绑定 ACL 用户对该模式无权限，`SCAN` 直接被拒；用另一个用户也扫不到）。⇒ **95 目前没有
+可用的调用者身份世界**，这与 `env-95-facts.md` 记的"数据面为空"是同一条事实，本轮没有改变它。
+
+### 五、回滚
+
+```bash
+systemctl disable --now aiops-gateway-95.service
+rm -rf /opt/aiops-95 /etc/aiops-95 /var/lib/aiops-95
+rm -f /etc/systemd/system/aiops-gateway-95.service && systemctl daemon-reload
+```
+
+8788 那个服务与它的库**全程未被触碰**（本轮的每一步都在 8790 / `/var/lib/aiops-95`）。
+
+## 2026-10-20 · #868 落地到 36：向量库起了、补丁挂上了、迁移落库；索引仍被供应商余额挡住
+
+**部署身份**：`origin/main` @ `1ae4d86`，制品由 `git archive origin/main deploy/dify-36` 打包
+（tar sha256 `fabe9958e0003da9d073ad26fc7fe8c2d5edc6540f105f427ca0c032f5d7a81c`），2026-10-20 16:49 CST 落到 36 `/opt/dify/deploy`。
+备份：`/opt/dify/deploy.bak-20261020164947/` 与 `.env.bak-20261020164947`（未删除）。
+**但它是代码/配置的回滚路径，不是数据库备份**：`cp -a` 是在 postgres 还活着的时候做的，
+`volumes/db/data` 的副本可能跨越不同提交状态，不能当物理备份用。要真正回滚数据库，
+需要停机复制或 `pg_dump` —— 本轮没做，如实记下。
+
+### 一、做到了什么（都有当场输出）
+
+| 项 | 判据 | 结果 |
+|---|---|---|
+| 形状自检 | `./check.sh --env-file .env` | 全部通过，含「现场 .env 的向量库三项与模板一致」 |
+| 补丁 | `./patches/apply.sh` | 5 个文件 sha256 核对通过，5 个补丁 `--fuzz=0` 应用成功 |
+| 栈 | `docker compose up -d` | 10 个服务；`deploy-weaviate-1` healthy；api 的 env 里 `VECTOR_STORE=weaviate` |
+| 补丁真的生效 | 容器内文件 sha256 == 挂载树 | `a143cc4a…` 两侧一致（`external_knowledge_service.py`） |
+| 迁移 | `migrate_20261020.py --apply` | 删除 **6** 条孤儿绑定（8→2），**2** 条 `api_key` 变为 `enc:v1:SFlCU…` |
+| 列表不再泄露 | `GET /console/api/datasets/external-knowledge-api` | 两条都是 `[__HIDDEN__]` |
+| 编辑框仍能回填 | 同端点 + 单模板 GET | 明文，43 字符（`dify-…`） |
+
+迁移前把两张表导成证据（`/root/dify-pre868-{bindings,apis}.csv`，600 root，含旧明文 key，
+用完应删）。
+
+### 二、没做到的，以及卡在哪（逐条写清）
+
+- **VEC-02 未通过**：点了重试，文档状态从 `waiting` 走到 `error`，错误变成
+  `[OpenAI] Incorrect model credentials provided`。**这不是向量库的问题** ——
+  `datasets.index_struct` 已写上 `{"type": "weaviate", "vector_store": {...}}`，说明
+  向量类型解析成功、走到了建 collection 那一步；失败在 `embeddings` 调用本身。
+  插件日志里的真实原因：
+  `403 insufficient_user_quota … 用户剩余额度: ¥0.000285, 需要预扣费额度: ¥0.000456`
+  （key 前缀 `sk-x4CF…`，即 baoyun 那把）。`embeddings` 表仍 0 行。
+  ⇒ **配额恢复后只需再点一次重试**，不需要改任何配置。
+- **RET-01 未取得 200**：`POST /v1/datasets/df0f1d4a…/retrieve`（external 数据集 + 临时
+  dataset key）返回 400 `Reached maximum retries (3) for URL …/v1/dify/retrieval`，api 日志显示
+  它确实调到了 `RetrievalService.external_retrieve`（**这正是补丁生效的证据**：补丁前这条
+  路径不存在，会直接返回 `records: []` 的 200）。上游 41 的 `dify_retrieval` 回
+  `502 DIFY_KNOWLEDGE_UNAVAILABLE`，再往下一跳：kb-service `502 upstream_error`，
+  RAGFlow `code=102 Internal server error`；RAGFlow 日志是同一条
+  `insufficient_user_quota`（同一个 `sk-x4CF…`）。
+  ⇒ **两处验收被同一个供应商余额卡住**，与本次改动无关。
+- **SEC-02 通过**：库里是密文（`enc:v1:`），控制台列表是掩码、单取是明文。
+- **BIND-02 通过**：`external_knowledge_bindings` 8→2，剩下的两条都 join 得到 dataset。
+- **未做**：密钥轮换（两把共享凭据仍是原值）；`qa-plan.md` 的 RET-02/RET-03 未跑；
+  **数据库没有做过一致快照**（`cp -a` 的 `volumes/db/data` 不算），需要回滚 DB 时要先停机复制。
+
+### 三、清理
+
+临时 dataset API key（`191a0bd9…`，仅绑 `df0f1d4a…`）已删除（204）；宿主与容器里的
+临时脚本/会话文件已清。
+
+`/root/dify-pre868-{bindings,apis}.csv`（600 root）是迁移前证据。**`apis` 那份里的
+`api_key` 值已替换成 `<redacted-in-evidence>`** —— 两把共享凭据还没轮换，把完整值留在
+第二个明文位置，等于把加密落库那一半的收益退回去。行结构、id、endpoint、时间戳都保留，
+取证需要的信息不丢。轮换完成、或这份证据不再需要时直接删除。
+
+## 2026-10-20 · Dify 栈：向量库、external 检索端点、库卫生
+
+**范围**：`deploy/dify-36/`（compose、env 模板、自检、上游补丁、迁移脚本）与
+`tests/test_dify36_deploy_assets.py`。**未部署**。
+
+### 一、三处缺陷的实测证据（部署前状态，只读）
+
+```
+datasets:  云快充平台协议V1.6.pdf…  provider=vendor  indexing_technique=high_quality
+documents: indexing_status=waiting
+           error = "Vector store must be specified."
+document_segments: 1564 行，status 全是 indexing，enabled=f
+embeddings: 0 行
+worker 日志（2026-10-15）：
+  retry_document_indexing_task      → ValueError("Vector store must be specified.")
+  duplicate_document_indexing_task  → 同上
+```
+
+`external_knowledge_bindings` 与 `datasets` 的 left join：8 行里 **6 行 dataset 为空**。
+`external_knowledge_apis.settings` 两行都是明文 JSON，`api_key` 直读可得。
+
+上游 1.17.1 的 `HitTestingService.retrieve` 收 `external_retrieval_model` 但从不使用；
+`controllers/service_api/dataset/hit_testing.py` 无条件走 vector 路径。`origin/main`
+（2026-10-20 fetch）仍是同一形状 —— 所以这里不是"等上游修"，只能自己补。
+
+### 二、改动与各自的判据
+
+1. **weaviate 容器 + 两个变量**。`check.sh` 断言服务集含 `weaviate`、它不发布宿主端口、
+   api/worker 等它 `service_healthy`，且 `env.example` 里 `VECTOR_STORE=weaviate`、
+   `WEAVIATE_ENDPOINT=http://weaviate:8080`、`WEAVIATE_API_KEY` 留空由现场生成。
+   反例已验：把 `WEAVIATE_API_KEY` 从环境里去掉，compose 直接拒绝解析。
+2. **上游补丁 5 个**。`patches/apply.sh` 先按固定 sha256 核对外文件、再 `patch --fuzz=0`、
+   最后产出 0444 挂载树。`check.sh` 与 `tests/test_dify36_deploy_assets.py` 都断言
+   "api/worker 的只读挂载集合 == 补丁覆盖的文件集合"。
+3. **删除数据集清理外部绑定**：`dataset_service.delete_dataset` 增加一条 delete。
+4. **api_key 加密**：`ExternalDatasetService.settings_for_storage` /
+   `external_api_settings` / `settings_for_display`；控制台响应仍返回明文供回填，
+   掩码 `[__HIDDEN__]` 往返语义不变。
+5. **迁移脚本**：默认 dry-run，按"目标 dataset 是否存在"判定孤儿，不按手写清单。
+
+### 三、执行过的验证（含真实镜像）
+
+| 检查 | 环境 | 结果 |
+|---|---|---|
+| `deploy/dify-36/check.sh` | 开发机 | 全部通过（含新增的向量库与补丁挂载断言） |
+| `pytest tests/test_dify36_deploy_assets.py` | 开发机 | **5 passed** |
+| 变异：删掉一条补丁挂载 | 开发机 | 对应测试转红（判据不是永远绿的） |
+| `patches/apply.sh` 全流程 | **36，真实镜像** | 5 个文件 sha 核对通过，5 个补丁 `--fuzz=0` 应用成功 |
+| 5 个补丁文件在镜像内 `py_compile` | **36，真实镜像** | 全部通过 |
+| 加密语义（落库密文/读出明文/旧明文兼容/掩码位） | **36，真实镜像** | `BEHAVIOUR_OK` |
+| 路由模块导入 + 响应形状 pydantic 校验 | **36，真实镜像** | 通过 |
+| weaviate 就绪探针（`wget`，镜像内无 curl） | **36，真实容器** | `READY_OK`；静置内存 52.7 MiB |
+| 新 compose 用**真实 `.env`** 解析 | **36** | 10 个服务、api 挂载 6 项、weaviate 无端口 |
+| 迁移脚本 dry-run | **36，真实库** | 孤儿绑定 6 条、明文 api_key 2 条 |
+
+### 四、未完成的业务验收（明确记账）
+
+- **VEC-02 未跑**：没有重跑索引，`embeddings` 仍是 0 行。证据只有"部署件已备齐"。
+- **RET-01 未跑**：补丁还没有挂进运行中的容器（未部署），`/v1/datasets/{id}/retrieve`
+  对 external 数据集的 200 响应**没有**生产证据。
+- **SEC-02 / BIND-02 未落库**：迁移只做过 dry-run。
+- **密钥轮换未做**：两把共享凭据仍然是原来的值；历史上已明文落盘，应视为已泄露。
+
+### 五、一个容易写错的地方（留给下一位）
+
+`ops/dify-console-bridge/README.md` 里记的 cookie 前缀规则同样适用于手工复验：控制台
+读 external API 模板时，`X-CSRF-Token` 必须与 `__Host-csrf_token` cookie **同值**，
+只带 `Authorization` 一律 401。用登录代理自签的 owner 会话复验时，这一点最容易漏。
+## 2026-10-20 · Dify 账号邮箱带环境前缀（#864）
+
+**范围**：单元测试 + 突变复验。**没有真实环境验证** —— 95 还没有登录代理，
+所以"两个环境各登录一次"这件事今天做不到。
+
+**业务验收状态：未完成业务验收。**
+
+### 一、判据（三条，各自钉一件不同的事）
+
+| 判据 | 用例 | 钉住什么 |
+|---|---|---|
+| 同一 `user_id`、两个 `environment` ⇒ 两个邮箱 | `test_the_same_company_user_in_two_environments_is_two_dify_accounts` | **隔离**：撞号时不会串到同一个 Dify 账号 |
+| 空环境在两个入口都报错 | `test_an_empty_environment_is_a_configuration_error_not_a_silent_fallback` | **fail-closed**：漏配不能静默退化回"只按 id" |
+| 非法环境在**构造 settings 时**就报错 | `test_settings_reject_a_non_canonical_environment_at_construction` | **配置错在启动时报**：`prod.41` 不能启动成功、然后让每个用户登录失败 |
+| 旧映射登录后只重标邮箱列 | `test_a_pre_environment_mapping_is_retagged_in_place_keeping_the_account` | **不换账号**：`dify_account_id` 不变、未再邀请、留了 `email_retagged` 审计 |
+
+第二条比"格式对不对"重要：`AIOPS_LOGIN_PROXY_ENVIRONMENT` 若给默认值，
+漏配的部署会静默退化成旧行为，而启动、登录、审计全都正常。
+
+第三条钉的是**报错的位置**，不是报不报错：`__post_init__` 只查"非空"时，`prod.41`
+能让代理正常启动，然后在每一个已授权用户登录时抛 `DifyProvisionError` ——
+现场看到的是"登录服务坏了"，不是"配置写错了"。所以构造时必须用**与派生完全相同**
+的那条判据（`_canonical_environment`），不能另写一条更宽松的。
+
+### 二、突变复验（三次，各自还原即绿）
+
+| 突变 | 结果 |
+|---|---|
+| 邮箱退回只按 id 派生 | 隔离用例红：`两个环境给了同一个邮箱 —— 撞号时会串到同一个 Dify 账号：1454348737375174658@aiops-login.invalid` |
+| 去掉 `DifyConsoleSettings.__post_init__` 与 `_safe_fragment` 的空值检查 | 空环境用例红：`DID NOT RAISE <class 'DifyProvisionError'>` |
+| 去掉登录时的重标分支 | 迁移用例红：`没有留下迁移审计：['provisioned']` |
+| `__post_init__` 退回只查"非空"（不调 `_canonical_environment`） | 构造用例红：`DID NOT RAISE <class 'DifyProvisionError'>`（`prod.41` 照样构造成功） |
+
+### 三、全量
+
+```
+uv run pytest -n auto   ->  3063 passed, 9 skipped
+ruff check .            ->  All checks passed
+ruff format --check .   ->  491 files already formatted
+```
+
+### 四、一处顺带修掉的连带影响
+
+`deploy/m2-live-03/images.lock.json` 的 gateway **构造上下文摘要**覆盖 `src/`，
+改任何 `src/` 文件都会让它变 —— 本地 `/tmp` 上先复现了
+`test_gateway_context_digest_is_reproducible_and_matches_the_lock` 变红，
+用 `deploy/m2-live-03/context_digest.py` 重算并写回锁文件（`300f0bfd…` → `195f70fa…`）。
+
+这个值在评审期间**随每一轮 `src/` 修改都变**（中间经过 `ccd1bbae…`、`eea83da0…`、
+`53c8155c…`），所以验收记录只认**最后一次**：`195f70fa15a34fb0…`，与当前
+`images.lock.json` 逐字相同（`python3 deploy/m2-live-03/context_digest.py --check` → `match: true`）。
+每改一次 `src/` 都要重算一次，直到提交前不再改。
+这不是本票的改动，但它是 `src/` 变更的**必要条件**，不补 CI 会红。
+
+### 五、据实
+
+- **没有**在 41 或 95 上真的登录过 —— 95 还没有登录代理。
+- **没有**验证 Dify 侧旧账号在重标后的可读性（成员列表里仍是旧邮箱）。这是已知代价，
+  写进了 ADR-0061。
+- 这条缺陷是**评审从既有代码里挖出来的**，不是本轮引入的；它今天就已经成立，
+  只是因为目前只有一个环境、撞号还没发生过。
+
 ## 2026-10-20 · M3 真实链路：在 41 隔离栈打开四个开关（实跑）
 
 **范围**：41 隔离栈。生产 Gateway **未改、未重启**。制品 = `main` @ `0ae1216`。
@@ -68,6 +330,150 @@ com.openai.errors.PermissionDeniedException: 403: 预扣费额度失败,
 
 整轮成功、快照内容正确性、真实供应商与模型质量、App 客户端、公网启用。
 **不能把本轮读成「M3 已验收」。**
+## 2026-10-20 · 36 上打开 Dify 的 INNER_API（多 workspace 的前置）
+
+**范围**：一次**生产配置变更**（`/opt/dify/deploy/.env` + `docker compose up -d api worker`），
+外加三条门判据与两条暴露面判据。目的是让"建 workspace"那条路可用。
+
+**业务验收状态：未完成业务验收。** 这不是业务功能，是**基础设施前置**。它证明的是
+"门开了、暴露面没扩大"，**不是**"开户能跑通"（开户还没实现，且没有任何真实运营走过这条链路）。
+
+### 一、改动
+
+```
+/opt/dify/deploy/.env 追加：
+  INNER_API=true
+  INNER_API_KEY=<32 字节 hex，只写进该文件>
+备份：/opt/dify/deploy/.env.bak-innerapi-20261020160425
+重启：cd /opt/dify/deploy && docker compose up -d api worker
+```
+
+重启后运行期确认（容器内读 `dify_config`）：
+
+```
+INNER_API: True
+INNER_API_KEY set: True
+```
+
+### 二、门开了（三条，对 api 容器的内网 IP:5001 直连）
+
+| 请求 | 结果 |
+|---|---|
+| 不带 key | **401** `{"code":"inner_api_unauthorized","message":"Unauthorized.","status":401}` |
+| 错 key | **401** 同上 |
+| 正确 key + 不存在的 owner | **404** `{"message":"owner account not found."}` ← **门开了**：走到了"查 owner" |
+
+第三条才有判据价值：401 只证明过滤器在，404 证明**请求穿过了过滤器**。
+
+### 三、暴露面没有扩大（两条）
+
+| 路径 | 结果 |
+|---|---|
+| Dify 自己的 nginx：`http://127.0.0.1:10018/inner/api/enterprise/workspace` | **404** |
+| 公网 TLS 入口：`https://dify.ranlei.work/inner/api/enterprise/workspace` | **404** |
+
+api 容器只 publish `5001/tcp` 且**未映射到宿主**（`docker ps` 确认），宿主只能经 docker
+内网 IP（`172.21.0.x`）访问。⇒ 调用路径只能是"36 本机的进程经容器内网"，
+不经过任何公网入口或宿主 nginx。
+
+### 四、回归
+
+```
+http://127.0.0.1:10008/signin            -> 200
+https://dify.ranlei.work/signin          -> 200
+```
+
+### 五、回滚
+
+恢复 `.env.bak-innerapi-20261020160425` → `docker compose up -d api worker`。
+两次都只是重启 api/worker，**没有动数据库、没有动 nginx、没有动登录代理**。
+
+**开户拓扑（评审后收敛）**：CLI 在目标环境的机器上跑，经一条只绑回环的 SSH 隧道
+（`127.0.0.1:15001`）调 36 的 inner_api，建完就地写本机库。这条**改变部署方式与安全边界**，
+所以同时写进了部署文档（`deploy/dify-36/README.md`）与设计文档。
+**但它尚未实施、也未实测** —— 本记录只记录决定。
+
+**模板已同步（评审指出）**：`deploy/dify-36/env.example` 加了 `INNER_API=true` 与
+`INNER_API_KEY=`（空占位）+ 一段说明；`deploy/dify-36/check.sh` 加了两条断言 + 一个反例
+（把它改回 `false` 必须报错）。否则从模板重建实例会**静默退回默认关闭**，开户随之停摆
+而没有任何报错。`check.sh` 实跑通过。
+
+### 六、据实
+
+- **没有**用这条门真的建过一个 workspace（要等到开户实现里做，且那时会用
+  `owner_email` 指向平台服务身份）。
+- 第一次 curl 无 key 时出现一次 6 秒超时（容器刚起），重试即 401 —— 把它记在这里，
+  不当作"偶发不稳定"的证据，也不掩盖。
+
+## 2026-10-20 · Dify 只保留 41 的两个入口 app：绑定收敛到真实存在的 id
+
+**范围**：`ops/environments/env-41.toml` 的 `[[dify_apps]]`，36 上的 Dify 应用集合，
+41 上的 `dify_app_registry`。**41 已生效；Dify 侧已收敛为两个 app。** 本记录不含任何
+口令、令牌或 Cookie 明文。
+
+### 一、起因（实测）
+
+36 的 `apps` 表当时只有 `aiops-41-kefu-agent`（`8e36f0a6…`）与
+`aiops-41-ops-methodology-agent`（`e35f8fda…`），而注册表三行里**两行指向已被删除的
+app id**：
+
+| 行 | 原 app_id | 36 上的状态 |
+|---|---|---|
+| `1942…/consumer → canary-客服` | `98441c5b…` | `apps` 表无此 id |
+| `1783…/consumer → canary-dify-acceptance-1011` | `a975c8e5…` | `apps` 表无此 id |
+| `1942…/operator → ops-methodology-700` | `25c20f09…`（清单）/ `e35f8fda…`（库） | 清单与库不一致 |
+
+后果：对前两个 id 打 `POST /v1/dify/publish` 一律 `502 DIFY_DSL_MALFORMED`（Dify 拉不到
+app），控制台那颗按钮同样失败。第三行库里能跑（`unchanged` v12），但**照清单 `reconcile`
+会把管家端诊断改指到不存在的 app**。
+
+### 二、最终形态（用户要求：Dify 上只留这两个 app）
+
+| 入口 | Dify app | 我方 agent | 版本 |
+|---|---|---|---|
+| 客户端（consumer） | `aiops-41-kefu-agent` `8e36f0a6…` | `canary-客服` | v14 |
+| 管家端（operator） | `aiops-41-ops-methodology-agent` `e35f8fda…` | `ops-methodology-700` | v12 |
+
+- **客户端那一行换 id 不换内容**：该 app 的 `pre_prompt` 759 字、md5
+  `e52d5de005bfd7e5ad5402b0921b0ec1`，与 `canary-客服` v14 已发布快照**逐字节相同**。
+- **验收租户（`1783…`）不再占一个 app**：它绑过的两个 id 都已删除；一次临时新建的
+  `405fb698…` 也按要求删除。正文回到清单承载（逐字等于库中 v2 的 129 字，md5
+  `1496386c6b225355fa33d7347085a2e2`）。依据是该租户**没有生产流量**
+  （`agent_run_metrics` 最后一次是 2026-10-10）。
+- 删除后 `apps` 表恰好两行，注册表恰好两行 —— 一一对应。
+
+### 三、落地形态：只收敛注册表，不跑整份 `reconcile`
+
+整份 `admin reconcile` 会把 `1942…/canary-客服` 判成 `updated`（清单里的
+`opening_questions` / `quick_commands` 与库中现值不同，是 #739 之前就有的漂移），也就是
+**顺手发布一版与本次无关的改动**。因此注册表单独收敛（`reconcile_dify_registry`，只写
+`dify_app_registry` 一张表）。步骤写入 `docs/agents/env-41-runbook.md` §3.1-bis。
+
+**一处必须同时做的顺序**：把 `1783…/consumer` 从注册表删掉**之后**再跑清单校验，否则
+`_require_no_source_switch` 会拒 —— 它看到的正是"库里还绑着、清单却改由正文承载"这个
+中间态（实测报错并零写入，符合设计）。
+
+### 四、判据（41 / 36 实测）
+
+| # | 动作 | 结果 |
+|---|---|---|
+| ① | 备份 | `gateway.db.bak-bindings-20261020160259`、`gateway.db.bak-2apps-…` |
+| ② | 注册表收敛 | 两次运行：第一次两行 `registered`/`unchanged`，第二次**全部 `unchanged`** |
+| ③ | `POST /v1/dify/publish` × 两个 app | 全部 `200 unchanged`（v14 / v12） |
+| ④ | 控制台桥 `/__aiops/publish`（公司身份 + `__Host-` 会话 + 同源 Referer） | 「线上已是最新」；用的是真实桥进程 |
+| ⑤ | `admin sync-from-dify --dry-run` | 两行 `unchanged` |
+| ⑥ | `agent_versions` 行数 | **42 → 42**（没有产生任何智能体版本） |
+| ⑦ | 36 的 `apps` 表 | **恰好 2 行**，与注册表一致 |
+
+### 五、边界与未完成
+
+- **试运行只到订单授权为止**：映射账号的公司租户是 `-1`（平台哨兵），对真实订单一律
+  `404 ORDER_NOT_FOUND`。它证明草稿确实从 app 拉到（拉不到会是 `DIFY_DSL_MALFORMED`），
+  但看不到 `diagnosed`。
+- **模型余额**：一次无发起人的试运行在作业体里失败于供应商预扣费（余额约 ¥0.002）。
+- **没有用真实浏览器**点那两颗注入按钮；桥那一跳是服务端同源请求复现的。
+- 删除的 `405fb698…` 是本轮临时创建的 app，删除前已确认它只服务验收租户、无流量。
+
 
 ## 2026-10-20 · 节点 jar 可复现构建（PR #863）
 
@@ -165,6 +571,7 @@ Codex 复核算出的正是后者。锁文件里那个值于是只代表**某台
 - **开关尚未打开**，本轮没有任何真实请求；构造身份是这条链路的已知合成点。
 - `model_options` 取平台默认值（`temperature=1.0` / `max_tokens=4096`）：若与平台实际下发
   不一致，节点会以 `OPTIONS` 拒绝 —— 这是**期望的失败模式**，不是静默放行。
+
 ## 2026-10-20 · Dify 多租户：grilling 期间的只读核实
 
 **范围**：全部是**只读查询与源码阅读**，外加一次已回滚的探针（见下）。

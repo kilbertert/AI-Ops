@@ -15,6 +15,8 @@
 #      看起来配了，实际全拒。第 2 项就是钉住这个顺序。
 set -euo pipefail
 cd "$(dirname "$0")"
+# 本脚本自己的参数要传给内联 python 块；heredoc 的 stdin 已被占用，用环境变量带过去。
+export CHECK_ARGV="$*"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 ok()   { echo "ok: $*"; }
@@ -39,6 +41,7 @@ tmp_env="$tmp_dir/.env"
   echo "PLUGIN_DAEMON_KEY=$(printf 'x%.0s' {1..43})"
   echo "PLUGIN_DIFY_INNER_API_KEY=$(printf 'x%.0s' {1..43})"
   echo "CELERY_BROKER_URL=redis://:x@redis:6379/1"
+  echo "WEAVIATE_API_KEY=$(printf 'y%.0s' {1..48})"
 } >"$tmp_env"
 
 resolve() { # $1=compose file $2=env file $3=out json
@@ -99,21 +102,85 @@ d = json.load(open(sys.argv[1]))
 svcs = set(d["services"])
 
 want = {"init_permissions", "api", "worker", "web", "db_postgres", "redis",
-        "plugin_daemon", "ssrf_proxy", "nginx"}
+        "plugin_daemon", "ssrf_proxy", "nginx", "weaviate"}
 if svcs != want:
     raise SystemExit(f"FAIL: 服务集不符\n  多: {sorted(svcs - want)}\n  少: {sorted(want - svcs)}")
-print(f"ok: 服务集 = {len(svcs)} 个（PRD #577 的 8 个 + nginx 单一入口）")
+print(f"ok: 服务集 = {len(svcs)} 个（PRD #577 的 8 个 + nginx 单一入口 + 向量库 weaviate）")
 
-# 本实例不接向量库、不接 Dify 自带 agent runtime / sandbox。
+# 本实例只接 weaviate 一个向量库；不接 Dify 自带 agent runtime / sandbox。
+# weaviate 在 2026-10-20 从"禁止出现"改为"必须出现"：没有它，vendor 数据集的索引
+# 停在 `Vector store must be specified.`（README「向量库」）。
 for forbidden in ("sandbox", "local_sandbox", "agent_backend", "agent_ssrf_proxy",
-                  "worker_beat", "api_websocket", "weaviate", "qdrant", "milvus", "db_mysql"):
+                  "worker_beat", "api_websocket", "qdrant", "milvus", "db_mysql"):
     if forbidden in svcs:
         raise SystemExit(f"FAIL: 不该出现的服务在：{forbidden}")
+
+# 只起 weaviate 容器、不改 VECTOR_STORE，等于白起一个容器：Dify 仍然没有向量库
+# 可用（这正是本次事故的原始形状）。两个变量都在 env.example 里，值必须是内网名 ——
+# 写宿主机地址或 localhost 都会在容器里指向空处。
+import os
+CHECK_ARGV = os.environ.get("CHECK_ARGV", "").split()
+env_example = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "env.example")).read()
+want_env = {"VECTOR_STORE": "weaviate", "WEAVIATE_ENDPOINT": "http://weaviate:8080"}
+for k, v in want_env.items():
+    if f"\n{k}={v}\n" not in "\n" + env_example:
+        raise SystemExit(f"FAIL: env.example 的 {k} 必须是 {v!r}（容器内用内网名）")
+if not env_example.count("\nWEAVIATE_API_KEY=\n"):
+    raise SystemExit("FAIL: env.example 的 WEAVIATE_API_KEY 必须留空，由现场生成")
+print("ok: env.example 的 VECTOR_STORE/WEAVIATE_ENDPOINT 指向 compose 内网名，API key 现场生成")
+
+# 现场 .env 才是运行实例读的那份；模板正确不证明部署正确。给了 --env-file 时必须核对
+# 生效值 —— 否则现场留着 `VECTOR_STORE=` 也照样"自检通过"，而 worker 会再次报
+# `Vector store must be specified.`（正是本次事故的形状）。不给就不判，并在输出里说清楚。
+# 这个 python 块是 `python3 - <json>`，脚本自己的参数从 CHECK_ARGV 读（见文件头的导出）。
+env_file = None
+if "--env-file" in CHECK_ARGV:
+    env_file = CHECK_ARGV[CHECK_ARGV.index("--env-file") + 1]
+else:
+    default_env = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if os.path.exists(default_env):
+        env_file = default_env
+if env_file:
+    effective = {}
+    for line in open(env_file, encoding="utf-8"):
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, _, v = line.partition("=")
+            effective[k.strip()] = v.strip()
+    for k, v in want_env.items():
+        if effective.get(k) != v:
+            raise SystemExit(f"FAIL: 现场 {os.path.basename(env_file)} 的 {k} = {effective.get(k)!r}，"
+                             f"必须是 {v!r}；模板正确不能代替运行配置")
+    if len(effective.get("WEAVIATE_API_KEY", "")) < 16:
+        raise SystemExit("FAIL: 现场 .env 的 WEAVIATE_API_KEY 缺失或过短（容器会拒绝解析或失去鉴权）")
+    print(f"ok: 现场 {os.path.basename(env_file)} 的向量库三项与模板一致")
+else:
+    print("ok: 未找到现场 .env（干跑），只校验模板；部署时请带 --env-file 复核生效值")
+
+# 上游补丁的挂载集合必须与 patches/1.17.1/*.patch 覆盖的文件一致，且逐个 :ro。
+# 这三处是上游 1.17.1 还没有的行为（README「上游补丁」）；漏挂一处就是静默回到旧行为。
+import re
+patched = set(re.findall(r"^\+\+\+ b/(.+)$",
+                         "\n".join(open(f).read() for f in sorted(__import__("glob").glob("patches/1.17.1/*.patch"))),
+                         re.M))
+if not patched:
+    raise SystemExit("FAIL: patches/1.17.1 下没有补丁文件")
+mounted = set()
+for svc_name in ("api", "worker"):
+    for vol in d["services"][svc_name].get("volumes") or []:
+        target = vol.get("target") or ""
+        if target.startswith("/app/api/") and "patched-api" in (vol.get("source") or ""):
+            if not vol.get("read_only"):
+                raise SystemExit(f"FAIL: {svc_name} 的补丁挂载不是只读：{target}")
+            mounted.add(target[len("/app/api/"):])
+if mounted != patched:
+    raise SystemExit(f"FAIL: 补丁挂载与补丁集不符\n  漏挂: {sorted(patched - mounted)}\n  多挂: {sorted(mounted - patched)}")
+print(f"ok: api/worker 只读挂载了全部 {len(patched)} 个补丁文件")
 
 # 发布端口集合由下面的 check_ports 单独判（第 1 / 1b 项共用同一个判据）。
 
 # 数据库与缓存不得对外发布。
-for name in ("db_postgres", "redis", "plugin_daemon", "ssrf_proxy", "api", "worker", "web"):
+for name in ("db_postgres", "redis", "plugin_daemon", "ssrf_proxy", "api", "worker", "web", "weaviate"):
     if d["services"][name].get("ports"):
         raise SystemExit(f"FAIL: {name} 发布了端口；内部服务不得有 host 发布")
 print("ok: 其余服务无 host 端口发布")
@@ -244,6 +311,27 @@ fi
   || { rm -f "$tmp_env2"; fail "会话寿命判据没有拒掉 30 天默认"; }
 rm -f "$tmp_env2"
 ok "会话寿命显式且成对（access=60min / refresh=1day），反例被拒"
+
+# ---------------------------------------------------------------------------
+# inner_api 的开关必须写进模板（2026-10-20 打开）
+# ---------------------------------------------------------------------------
+# 它是建 workspace / 加成员的唯一 HTTP 入口。只写在宿主的 .env 里而模板没有，
+# 从模板重建实例时会**静默退回默认关闭**，开户随之停摆 —— 而那时没有任何报错。
+grep -q '^INNER_API=true$' env.example \
+  || fail "env.example 缺 INNER_API=true（多 workspace 的开户前置）"
+grep -q '^INNER_API_KEY=$' env.example \
+  || fail "env.example 缺 INNER_API_KEY=（空占位；真值只进宿主 .env）"
+# 反例：把它改回 false，判据必须报错 —— 钉住"检查真的会拒"。
+tmp_env3="$(mktemp)"
+sed 's/^INNER_API=true$/INNER_API=false/' env.example > "$tmp_env3"
+! grep -q '^INNER_API=true$' "$tmp_env3" \
+  || { rm -f "$tmp_env3"; fail "反例构造失败：sed 没改到 INNER_API 那一行"; }
+if grep -q '^INNER_API=true$' "$tmp_env3"; then
+  rm -f "$tmp_env3"
+  fail "inner_api 判据没有拒掉 false"
+fi
+rm -f "$tmp_env3"
+ok "inner_api 开关写进模板（true + 空 key 占位），反例被拒"
 
 echo
 echo "全部通过。"

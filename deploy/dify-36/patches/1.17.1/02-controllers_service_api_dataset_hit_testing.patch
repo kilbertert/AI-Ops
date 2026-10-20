@@ -1,0 +1,70 @@
+--- a/controllers/service_api/dataset/hit_testing.py
++++ b/controllers/service_api/dataset/hit_testing.py
+@@ -1,3 +1,4 @@
++from typing import Any
+ from uuid import UUID
+ 
+ from sqlalchemy.orm import Session
+@@ -7,11 +8,29 @@
+ from controllers.console.datasets.hit_testing_base import DatasetsHitTestingBase, HitTestingPayload
+ from controllers.service_api import service_api_ns
+ from controllers.service_api.wraps import DatasetApiResource, cloud_edition_billing_rate_limit_check
++from fields.base import ResponseModel
+ from fields.hit_testing_fields import HitTestingResponse
+ from libs.helper import dump_response
+ 
++
++class ExternalHitTestingRecord(ResponseModel):
++    content: str | None = None
++    title: str | None = None
++    score: float | None = None
++    metadata: dict[str, Any] | None = None
++
++
++class ExternalHitTestingQuery(ResponseModel):
++    content: str
++
++
++class ExternalHitTestingResponse(ResponseModel):
++    query: ExternalHitTestingQuery
++    records: list[ExternalHitTestingRecord]
++
++
+ register_schema_models(service_api_ns, HitTestingPayload)
+-register_response_schema_models(service_api_ns, HitTestingResponse)
++register_response_schema_models(service_api_ns, HitTestingResponse, ExternalHitTestingResponse)
+ 
+ 
+ @service_api_ns.route(
+@@ -49,9 +68,16 @@
+     @service_api_ns.doc("dataset_hit_testing")
+     @service_api_ns.doc(description="Perform hit testing on a dataset")
+     @service_api_ns.doc(params={"dataset_id": "Knowledge base ID."})
++    # The declared 200 schema stays the vendor shape: this document is Swagger 2.0,
++    # which has no union, so a single schema cannot describe both. The alternative
++    # shape is stated in the description below (and `ExternalHitTestingResponse` is
++    # registered, so it appears in `definitions`), rather than silently omitted —
++    # a client generated from this contract would otherwise only know `segment`.
+     @service_api_ns.response(
+         200,
+-        "Hit testing results",
++        "Hit testing results. Records carry `segment` for a `vendor` dataset; for a "
++        "`provider=external` dataset the records instead carry "
++        "`content`/`title`/`score`/`metadata` (see `ExternalHitTestingResponse`).",
+         model=service_api_ns.models[HitTestingResponse.__name__],
+     )
+     @service_api_ns.response(401, "Unauthorized - invalid API token")
+@@ -69,4 +95,13 @@
+         args = self.parse_args(service_api_ns.payload)
+         self.hit_testing_args_check(args)
+ 
++        # An external dataset is served by its bound External Knowledge API, not by
++        # this deployment's vector store. Dispatching on ``provider`` keeps one route
++        # for both kinds instead of a second route clients would have to discover.
++        if dataset.provider == "external":
++            return dump_response(
++                ExternalHitTestingResponse,
++                self.perform_external_hit_testing(session, dataset, args),
++            )
++
+         return dump_response(HitTestingResponse, self.perform_hit_testing(session, dataset, args))
