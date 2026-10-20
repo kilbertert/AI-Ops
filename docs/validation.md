@@ -57,6 +57,25 @@
   两个窗口里相同 run 的重入都在**本地**被拒（`DuplicateRunRefused`），且 model=2、claims=1、
   只有一条 completed；`first-error` 首轮失败 claims=0 且只发一次 failed。
 
+## 2026-10-20 · M3-NODE-LINK 合并与部署核验（#858 / `da8c544`）
+
+**范围**：把 #858 合入受保护主线并部署到 41，核对部署事实。**功能开关关闭**。
+
+| 项 | 值 |
+|---|---|
+| PR | #858，squash，merge commit `da8c5449293147fdd4fdff397ef0cd84acf20402` |
+| CD run | `39380862197`，conclusion=success |
+| 版本 | `0.1.0+6c57b05d04d9` → **`0.1.0+da8c54492931`** |
+| 备份 | `/var/backups/aiops-41/backup-20261020-143209` |
+| 部署后判据 | 服务 active ✓、`/health ok` ✓、`/health version` 含 `da8c54492931` ✓、逐文件 sha 一致 ✓ |
+| 合并前检查 | PR `mergeStateStatus=CLEAN`；verify / Workflow policy / spec-tree lint / Devin Review 全 pass；未解决线程 0 |
+| 本地 | canonical fast-forward 到 `da8c544`；28 条改动路径均在 `main` 上 |
+
+**这次合并没有改变运行时行为**：四个 M3 开关（`CHARGING_STATUS_BASE_URL` /
+`EXECUTION_ENVIRONMENT` / `AGENT_RUN_CONFIG_FILE` / `EXECUTION_MANIFEST_FILE`）在 41 上
+仍然缺席，委派入口整体 404。因此「整轮完成语义」**尚未在生产上真实跑过**——
+本次部署证明的是「新代码能起、健康、制品一致」，不是业务验收。
+
 ## 2026-10-20 · M3-NODE-LINK 复核修订（PR #858）
 
 **范围**：Devin 复核提了五条，逐条在本地复现后修掉三处代码问题、一处文档问题；
