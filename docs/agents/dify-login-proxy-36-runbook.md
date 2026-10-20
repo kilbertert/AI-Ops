@@ -83,7 +83,7 @@ ssh yidong-36 'sudo grep -n ^AIOPS_LOGIN_PROXY_ENVIRONMENT= /etc/aiops-login-pro
 判据不是"文件里有这一行"，而是**部署出来的那份代码**真的会拦下坏值。以服务身份跑：
 
 ```bash
-ssh yidong-36 'cat > /tmp/env_gate.py <<PY
+ssh yidong-36 'sudo -n -u aiopslogin /usr/bin/python3 - <<PY
 import sys
 sys.path.insert(0, "/opt/aiops-login-proxy")
 from aiops_diagnostics.dify_login_provision import DifyConsoleSettings
@@ -93,10 +93,14 @@ for v in ("", "prod.41"):
         print(repr(v), "-> STARTED (bad)")
     except Exception as e:
         print(repr(v), "->", type(e).__name__)
-PY
-sudo -n -u aiopslogin /usr/bin/python3 /tmp/env_gate.py'
-# 期望："" 与 "prod.41" 都抛 DifyProvisionError（空值先被 required() 挡在 server 层）
+PY'
+# 期望：两行都是 DifyProvisionError
 ```
+
+⚠️ **脚本从 stdin 走，不要先 `cat > /tmp/xxx.py` 再 sudo 执行**：`/tmp` 是共享目录，
+别人可以先把那个路径占住、写成自己的内容，而 `sudo -u aiopslogin` 会以**代理身份**
+执行它 —— 那个身份读得到 `login-proxy.env`（含 `SECRET_KEY`）。stdin 没有这个窗口，
+也不会留下一个可被替换的文件。
 
 ⚠️ 这个探针**只构造 settings**，不读环境文件、不连任何东西 —— 它不碰生产映射表。
 
@@ -206,7 +210,7 @@ ssh yidong-36 'sha256sum /opt/aiops-login-proxy/aiops_diagnostics/dify_login_ser
 git show origin/main:src/aiops_diagnostics/dify_login_server.py | sha256sum   # 两个必须相等
 ```
 
-## 6. 验收（四条，都是真入口）
+## 6. 验收（五条，都是真入口）
 
 | # | 动作 | 期望 |
 |---|---|---|
@@ -220,36 +224,58 @@ git show origin/main:src/aiops_diagnostics/dify_login_server.py | sha256sum   # 
 
 D 的日志应出现 `source=<真实地址>`，**不是 `127.0.0.1`**（那是 realip 修正生效的判据）。
 
+E. `POST http://36.156.159.175:10008/__aiops/login` 带伪造头 `X-Forwarded-Proto: https`
+   且**从非回环对端发**（换一台机器或 `curl --interface 127.0.0.2`）⇒ 期望 **400**
+   「此入口是明文 HTTP…」。
+
+**D 与 E 不是一回事，不能互相替代**：D 只证明 `realip` 把 `$remote_addr` 改写对了；
+`$aiops_upstream_proto` 是另一个 `map` 算的、只喂 `X-Forwarded-Proto`。一个 realip 正常
+但协议 `map` 没加载的部署，D 照样通过。E 才有区分性：新配置只在真实对端是回环时采信
+上游声明的协议，所以伪造的 `https` 被抹空 ⇒ 判明文 ⇒ 400；旧配置原样透传 ⇒ 以为是 TLS
+⇒ 403。**400 只可能是新配置。**
+
 ## 7. 回滚
 
-**三处备份是两个时间戳** —— §2 里代码与 nginx 是在两条命令里分别备份的，时间戳不同
-（2026-10-19 那次：代码 `20261019182443`、nginx `20261019182623`）。先看清楚：
+**四处备份、三个时间戳** —— 代码、两个 nginx 文件、环境文件是在不同命令里分别备份的。
+两个 nginx 文件通常共用一条命令、一个时间戳，另外两处各自不同（2026-10-19 那次：
+代码 `20261019182443`、nginx `20261019182623`）。先看清楚：
 
 ```bash
 ssh yidong-36 'ls -d /opt/aiops-login-proxy.bak-*
   ls /www/server/panel/vhost/nginx/dify-console-10008.conf.bak-*
-  ls /www/server/panel/vhost/nginx/snippets/dify-login-proxy.conf.bak-*'
+  ls /www/server/panel/vhost/nginx/snippets/dify-login-proxy.conf.bak-*
+  sudo ls /etc/aiops-login-proxy/login-proxy.env.bak-*'
 ```
 
-然后填**两个**变量：
+然后填**三个**变量（环境文件那份只有在你改过它时才有；没改过就不要恢复它，
+否则会把别人后加的键退回去）：
 
 ```bash
 CODE_TS=20261019182443    # ← 代码包那个
 NGX_TS=20261019182623     # ← nginx 那个
+ENV_TS=20261020180542     # ← 环境文件那个；没改过环境文件就留空
 ssh yidong-36 "set -e
   test -d /opt/aiops-login-proxy.bak-$CODE_TS            # 存在性先验，缺了就停
   test -f /www/server/panel/vhost/nginx/dify-console-10008.conf.bak-$NGX_TS
   test -f /www/server/panel/vhost/nginx/snippets/dify-login-proxy.conf.bak-$NGX_TS
+  if [ -n \"$ENV_TS\" ]; then test -f /etc/aiops-login-proxy/login-proxy.env.bak-$ENV_TS; fi
   systemctl stop aiops-dify-login-proxy
   cp -a /opt/aiops-login-proxy.bak-$CODE_TS/. /opt/aiops-login-proxy/
   cp /www/server/panel/vhost/nginx/dify-console-10008.conf.bak-$NGX_TS \
      /www/server/panel/vhost/nginx/dify-console-10008.conf
   cp /www/server/panel/vhost/nginx/snippets/dify-login-proxy.conf.bak-$NGX_TS \
      /www/server/panel/vhost/nginx/snippets/dify-login-proxy.conf
+  if [ -n \"$ENV_TS\" ]; then cp /etc/aiops-login-proxy/login-proxy.env.bak-$ENV_TS \
+     /etc/aiops-login-proxy/login-proxy.env; fi
   nginx -t
   nginx -s reload
   systemctl start aiops-dify-login-proxy"
 ```
+
+**为什么环境文件也在回滚范围里**（#864）：`AIOPS_LOGIN_PROXY_ENVIRONMENT` 决定账号邮箱
+的前缀。回滚代码却留下一个改错的环境值，下一次部署会**在错误的环境前缀下派生账号** ——
+那是静默的、只有在两个环境撞号时才显形的错。`ENV_TS` 留空是给"这次没动环境文件"
+的情形，不是省略它的理由。
 
 四处要点：
 
@@ -259,7 +285,8 @@ ssh yidong-36 "set -e
 3. **`nginx -t` 在 `nginx -s reload` 之前**；`-t` 失败就不要 reload（旧配置还在跑，
    服务停止中，此时人工介入比 reload 坏配置安全）。
 4. 代理**在停服务与恢复文件之间**处于停止状态。若中途失败，先别急着 `start` ——
-   先把文件恢复完，再起服务；起之前用 §6 的 A/B/C 三条确认。
+   先把文件恢复完，再起服务；起之前用 §6 的 A/B/C 三条确认，并重跑 §3.5 的探针
+   （回滚后的代码可能还不认识 `AIOPS_LOGIN_PROXY_ENVIRONMENT`，那也正是要回滚的情形之一）。
 
 nginx 两处要**一起**回滚（snippet 引用了 10008 那一层定义的变量）。
 
