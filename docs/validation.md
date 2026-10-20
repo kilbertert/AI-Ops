@@ -46,6 +46,24 @@
 - `--network=host` 只为让节点打到宿主 loopback 上的真 Gateway（本机验收的已知取舍）。
 - 取消后的 `running → expired` 由既有 TTL 语义覆盖（单测钉住），端到端只证「取消不会被报成成功」。
 
+## 2026-10-19 · M3 Gateway 合并与部署核验（#854）
+
+**身份**：合并提交 `39583ca208b190be303cb6e643e298c0823709cc`；CD run `39341254239` 成功。
+PR 的 verify / Workflow policy / spec-tree lint 均通过，CI 为 **2998 passed / 10 skipped**；
+Devin 初审意见已处置、复审结束、未解决线程为 0。
+
+部署前后均通过既有主机访问入口只读取证：服务 active；部署后健康版本为
+`0.1.0+39583ca208b1`；`agent_runs.py`、`execution_manifest.py`、`gateway_api.py`、
+`gateway_config.py` 的 SHA-256 与合并代码一致。`agent_runs` 原本无记录，部署后仍无记录，
+新增 `expected_agent_version` / `observed_agent_version` / `exec_config_state` 三列。
+
+`AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL`、`AIOPS_GATEWAY_EXECUTION_ENVIRONMENT`、
+`AIOPS_GATEWAY_AGENT_RUN_CONFIG_FILE`、`AIOPS_GATEWAY_EXECUTION_MANIFEST_FILE` 均保持未配置。
+CD 按既有流程备份、部署及核验；私有备份位置与完整取证记录保存在运维记录中。
+
+**未完成业务验收**：本次证明部署身份、健康与加列迁移，未启用消费/委派入口，
+未发真实订单或模型请求。节点发送端与完整工具循环完成语义仍留在下一片。
+
 ## 2026-10-19 · Gateway 签发时固定执行配置身份，领取时对照并持久化（M3-GATEWAY-01 / R1）
 
 **范围**：Gateway 侧。节点片已合并（#842）；本片不改节点守卫逻辑，不进通用版本平台。
@@ -445,8 +463,6 @@ S4 回环对端未声明协议
 
 **边界**：本票不让 10008 变成"安全的入口"——它仍公网可达、仍能拿到登录页、仍能取验证码。
 改变的是**它不再接收口令**。真实浏览器在明文入口上的表现（应看到那句中文说明）要等部署。
-
-
 
 
 ## 2026-10-19 · CI 竞态：fixture 的 `git commit` 会留一个后台 maintenance 子进程
@@ -1293,7 +1309,6 @@ codex rollout 日志里模型那一回合的实际输出：
   `UNVERIFIED`**（`_collect_text` 对 `qa` 只走 `blocks[]`，旧的 `{text}` 形状取不到正文）——
   该输出当时如实记录了「取不到正文」，但它其实是这条形状错配的**症状**，不是语言问题。
   本改动之后同一个脚本对零阶回答会取到正文。
-
 
 
 ## 2026-10-19 · 冻结制品独立复核
