@@ -87,7 +87,8 @@ cloud-upms:release  TokenController.issueLoginToken 的完整 payload：
 | 7 | 发布权：`aiops:agent:publish` 仍然按公司权限码裁定；**平台租户（`type=-1`）视为可见全部** —— 但见 §4 的边界 |
 | 8 | 试运行草稿来源：租户没有 editor 环境就**明确拒绝**（"你的租户没有编辑环境"），不回落 |
 | 9 | 映射存在 **新表 `dify_workspaces(tenant_id, environment, workspace_id, created_at)`**；`dify_app_registry` 不动 |
-| 9b | `dify_workspaces.environment` 的作用是**防止两套环境的 `tenant_id` 撞号**，不是「给每个环境各建一套 workspace」 |
+| 9b | `dify_workspaces.environment` 的作用是**防止两套环境的 `tenant_id` 撞号**，不是「给每个环境各建一套 workspace」。**保留** —— 撞号时会静默串租户，fail-closed 值得一列 |
+| 9c | workspace 的 **owner 是服务身份**（`dify-admin@aiops.local`），不是每个租户一个人；以它的身份在某 workspace 做事走 `ADMIN_API_KEY + X-WORKSPACE-ID` |
 | 10 | 知识库**继续用 RAGFlow 外接**（用户明确否决"改用 Dify 自带库"） |
 | 11 | 工具白名单**仍走我们的 harness** |
 | 12 | 一人一租户：**接受**，并写进文档（Dify 的 `current` 只有一个，跨 workspace 会互相踩） |
@@ -258,9 +259,10 @@ systemd：aiops-gateway.service（active，/home/aiops/AI-Ops，0.1.0）
 
 ---
 
-## 8. 仍未决的项
+## 8. 原「未决项」全部关闭
 
-前三个原列的未决项已经定掉（见 §2 的 19/20/21 与 §5.1b），第四个**根本不是未决项**：
+grilling 结束时列了四条。前三条在 §2 的 19/20/21 与 §5.1b 已定；第四条**根本不是未决项**
+（Dify 只有一套，95 不需要自己的）。剩下三条在这一节按第一性原理定掉。
 
 | 原「未决项」 | 结论 |
 |---|---|
@@ -269,14 +271,48 @@ systemd：aiops-gateway.service（active，/home/aiops/AI-Ops，0.1.0）
 | 一人一租户怎么检查 | **定了**：`sys_user.tenant_id` 非空且单值就是判据 —— `sys_user` 一行只属于一个 `sys_organ`（`SysUserMapper.getByUserName` 是 `su.tenant_id = sr.id` 的内连接）。同一个自然人跨租户时，公司侧本来就是**多个 `sys_user` 行（多个账号）**，不是一个账号挂多个租户 |
 | 95 的 Dify 何时上 | **不是问题**。Dify 只有一套（36），95 不需要自己的 Dify。这也是本轮被纠正的最后一处误解 |
 
-**确实仍未决的**：
+### 三条也已定掉（2026-10-20，第一性原理）
 
-- **Dify 侧的 workspace 命名与 owner 策略**：`AI-Ops Admin` 作为每个新 workspace 的 owner 吗？
-  还是每个租户建一个自己的 owner 账号？（前者简单，但它跨 N 个 workspace，`current` 会飘；
-  后者多一批账号要管。）
-- **`dify_workspaces` 与环境的关系**：一个租户只在**一个**环境里存在（41 的租户换不到 95 去登录），
-  那 `environment` 列在真实数据里会不会永远是同一个值？如果永远不会有两个环境出现同名 `tenant_id`，
-  这一列就是**没有区分度的**。需要在实施前用真实数据确认一次 —— 如果确实不需要，
-  应该去掉这一列而不是留一个"防撞号"的假设。
-- **Dify 的凭据轮换**：`SECRET_KEY` 与 provider 凭据现在是"一份/一 workspace"，
-  轮换流程要同时覆盖 N 个 workspace 与代理持有的那把 key（ADR-0023 已记代价）。
+**1. workspace 的 owner 用同一个平台账号，不用每个租户一个 owner。**
+
+`POST /inner/api/enterprise/workspace` 的契约是 `{name, owner_email}`，且**要求该账号已存在**
+（`select(Account).where(email == owner_email)`，查不到 404）。所以 owner 必须是现成账号。
+
+一个账号在 N 个 workspace 里都是 owner 是允许的（`create_owner_tenant` 不检查已有 membership），
+而它唯一会出问题的地方是"以该账号身份在某个 workspace 里做事"——
+而那条路我们**本来就不用账号会话**，用的是 `ADMIN_API_KEY + X-WORKSPACE-ID`：
+
+```python
+# ext_login.py:74-90
+if is_admin_api_key_request(request):
+    workspace_id = request.headers.get("X-WORKSPACE-ID")
+    ... 找该 tenant 里 role == "owner" 的那个 join → 取它的 account_id
+    account.set_current_tenant_with_session(...)   # 只在请求上下文
+```
+
+这条分支**按 workspace 找 owner 行**，与 `current` 无关、不写库。
+⇒ `dify-admin@aiops.local` 作为每个 workspace 的 owner 是对的：它是**服务身份**，不是人；
+它不需要在浏览器里切 workspace，所以"current 只有一个"这条限制对它不适用。
+
+**2. `dify_workspaces.environment` 保留，且解析函数必须带上它。**
+
+今天它只有一个值（实测：41 的 `dify_app_registry` 3 行只涉及 2 个 tenant_id；
+95 的 gateway.db 里**连 `dify_app_registry` 表都没有**，也没有任何 tenant 列）。
+所以现在加它是"没有区分度的"——**但这个判断的前提是"两套 UPMS 的 id 不会撞"，
+而那个前提无法保证**：41 与 95 是两套独立数据库，`sys_user` / `sys_organ` 的 id 各自生成。
+
+本仓已经因为"同名不同物"栽过（ADR-0008、`mem-20261019-ranlei-002`：平台的 `sai_agent.id`
+与网关的 `agt_…#vN` 凭同名绑定，制造出比 null 更糟的语义错误）。一个**在撞号时会静默
+解析到另一个租户的 workspace** 的解析函数，比多一列贵得多。
+
+⇒ 保留，并让 `resolve_workspace(tenant_id, environment)` **同时要求两者**。
+代价是一列 + 一个谓词；收益是撞号时 fail-closed 而不是静默串租户。
+
+**3. 凭据轮换：范围是"1 把代理 key + N 个 workspace 的 provider 凭据"，靠表枚举。**
+
+- `SECRET_KEY`（代理自签会话用）：轮换必须 **Dify 与代理一起重启**（ADR-0023），这条不变。
+- provider 凭据（每个 workspace 一份）：轮换时按 `select workspace_id from dify_workspaces`
+  枚举，逐个用 `ADMIN_API_KEY + X-WORKSPACE-ID` 重写。**不做自动化脚本** ——
+  这是个季度级的动作，一个能枚举的 SQL 加一段手顺就够；写脚本反而多一处要维护的代码。
+
+⇒ 结论：轮换是**运行手册**，不是代码。设计只需保证 `dify_workspaces` 能被枚举。

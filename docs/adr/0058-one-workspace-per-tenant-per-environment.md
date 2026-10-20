@@ -119,7 +119,14 @@ credit pool、一条 `current=false` 的 owner membership —— 没有 app / da
 - **迁移不可逆的那一半**：把一个已有账号从旧 workspace 移除会把它的 app/dataset 转给 owner，
   且 Dify 1.17.1 没有反向操作（ADR-0023 已记）。所以旧共享 workspace 的处理必须**先冻结、再逐个搬**，
   不能"删了重建"。
-- **`AIOPS_GATEWAY_DIFY_CONSOLE_*` 这一组配置的形状还没定** —— 今天是一套 `base_url + key + workspace_id`，
-  多 workspace 之后它要么变成"一个 base_url + 一张表"，要么每个租户一组。这是实施前必须补的决定。
+- **`AIOPS_GATEWAY_DIFY_CONSOLE_*` 的形状**：`BASE_URL` 与 `API_KEY` 保持单份（Dify 是平台级的），
+  只有 `WORKSPACE_ID` 改为查 `dify_workspaces`。配置项数量不变，语义变了。
+- **workspace 的 owner 是一个服务身份**（`dify-admin@aiops.local`），不是每个租户一个人。
+  `create_owner_tenant` 允许同一账号在 N 个 workspace 里都是 owner，而"以它的身份在某 workspace
+  做事"走的是 `ADMIN_API_KEY + X-WORKSPACE-ID`（按 workspace 找 owner 行，不碰 `current`）。
+- **`environment` 列保留**，尽管今天只有一个值：它防的是"两套独立 UPMS 的 `tenant_id` 撞号"，
+  而撞号时解析函数会静默串到另一个租户的 workspace。本仓已有"同名不同物"的前车之鉴。
+- **凭据轮换是运行手册，不是代码**：`SECRET_KEY` 要 Dify 与代理一起重启（ADR-0023 不变）；
+  provider 凭据按 `dify_workspaces` 枚举逐个重写。
 
 设计全貌与三条路径的改法见 `docs/agents/dify-multitenant-design.md`。
