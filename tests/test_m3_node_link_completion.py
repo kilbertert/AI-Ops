@@ -399,3 +399,65 @@ def test_failure_notice_after_expiry_does_not_overwrite_ttl_semantics(tmp_path, 
     row = _rows(fixture)[0]
     assert row["state"] == "expired"
     assert row["reason"] == "ttl_elapsed"
+
+
+# --------------------------------------------------------------------------
+# 复核反例（Codex 与 Devin 两轮都指到的边界）
+# --------------------------------------------------------------------------
+
+
+def test_untracked_expired_record_is_not_rewritten_by_a_completion_notice(tmp_path, monkeypatch):
+    """**未追踪**的历史行收到完成通知时，一个列都不该变 —— 包括不被顺带收敛成 expired。
+
+    完成端点要先读一次做绑定判定。那次读若用 `get()`，它会顺手把过期的非终态收敛成
+    `expired`（一次写）；于是「未追踪不写任何列」的契约被一次读破掉。
+    实测旧实现：`issued` → `expired`/`ttl_elapsed`，而响应仍是 409。
+    """
+    import sqlite3
+
+    fixture = _fixture(tmp_path, monkeypatch, manifest=None)
+    try:
+        assert _delegate(fixture).status_code == 502
+        run_id = _run_id(fixture)
+        connection = sqlite3.connect(fixture["store"].path)
+        connection.execute(
+            "UPDATE agent_runs SET expires_at = ? WHERE run_id = ?",
+            ("2020-01-01T00:00:00+00:00", run_id),
+        )
+        connection.commit()
+        connection.close()
+        before = _rows(fixture)[0]
+
+        response = _complete(fixture, run_id, status="failed", reason="model_failed")
+
+        assert response.status_code == 409
+        assert response.json()["error"]["code"] == "AGENT_RUN_COMPLETION_NOT_TRACKED"
+        assert _rows(fixture)[0] == before, "未追踪的历史行被改写了"
+    finally:
+        fixture["client"].close()
+        fixture["_upstream_ctx"].__exit__(None, None, None)
+
+
+def test_conflicting_success_reasons_are_not_idempotent(tmp_path, monkeypatch):
+    """成功通知带不同 `reason` ⇒ 409；同 `reason` ⇒ 200。
+
+    早先 `completed` 的 `reason` 被丢掉，于是两条不同原因的成功通知都返回 200 ——
+    「不同原因不是同一次幂等重试」这条规则在失败路径上成立、在成功路径上失效。
+    """
+    manifest = _write_manifest(tmp_path)
+    fixture, run_id, identity = _claimed_with_snapshot(tmp_path, monkeypatch, manifest)
+    try:
+        first = _complete(fixture, run_id, status="completed", reason="model_stop", identity=identity)
+        assert first.status_code == 200, first.text
+        before = _rows(fixture)[0]
+
+        same = _complete(fixture, run_id, status="completed", reason="model_stop", identity=identity)
+        assert same.status_code == 200, same.text
+
+        conflicting = _complete(fixture, run_id, status="completed", reason="model_length", identity=identity)
+        assert conflicting.status_code == 409
+        assert conflicting.json()["error"]["code"] == "AGENT_RUN_COMPLETION_CONFLICT"
+        assert _rows(fixture)[0] == before
+    finally:
+        fixture["client"].close()
+        fixture["_upstream_ctx"].__exit__(None, None, None)

@@ -2193,8 +2193,7 @@ M3NODE_DEPS=… M3NODE_JDK_IMAGE=… uv run python tools/m2_close/m3node/verify_
 M3NODE_DEPS=… M3NODE_JDK_IMAGE=… bash tools/m2_close/m3node/m3link/run.sh
 
 # 3) 判据单测（状态机 + 端点 + 复核反例）
-uv run pytest tests/test_m3_node_link_state.py tests/test_m3_node_link_completion.py \
-  /home/claude/.cache/m3-autonomous/test_node_link_review.py
+uv run pytest tests/test_m3_node_link_state.py tests/test_m3_node_link_completion.py
 ```
 
 | 编号 | 前提与动作 | 预期可观察结果 | 本机结果 |
@@ -2206,9 +2205,9 @@ uv run pytest tests/test_m3_node_link_state.py tests/test_m3_node_link_completio
 | EXECCFG-LINK-05 | 进程被 `Runtime.halt(9)` 真中止 | 无 completion/error 回调、无完成通知；记录停在 `running` | 通过（exit 9 + 日志断言） |
 | EXECCFG-LINK-06 | 两个 run 并发派发 | 两条记录都 `succeeded`；业务各读一次；sid 一一对应 | 通过 |
 | EXECCFG-LINK-07 | 领取重试 | 交回同一份快照，业务不重读；最终仍要整轮确认 | 通过 |
-| EXECCFG-LINK-08 | 重复/冲突/坏回执 | 同状态同原因幂等；不同原因 409；`200 {}`/错 run/`state=failed` 不被节点当成功 | 通过 3/3；变异「只认 2xx」使三条同时转红 |
+| EXECCFG-LINK-08 | 重复/冲突/坏回执 | 同状态同原因幂等；不同原因 409（**成功通知同理**）；`200 {}`/错 run/`state=failed` 不被节点当成功 | 通过 3/3 + 成功原因冲突 1 条；变异「只认 2xx」使三条同时转红；旧实现下 `completed` 的 `reason` 被丢弃、两条不同原因都 200 |
 | EXECCFG-LINK-09 | 撤销 / 恰好到期 | 完成通知被拒、记录保持撤销/过期、不复活、不改写审计列 | 通过 |
-| EXECCFG-LINK-10 | 未启用清单 | 领取即 `succeeded`（旧语义）；完成端点回 `NOT_TRACKED` 且不改任何列；回执键集合不变 | 通过 |
+| EXECCFG-LINK-10 | 未启用清单 | 领取即 `succeeded`（旧语义）；完成端点回 `NOT_TRACKED` 且**不改任何列**（含不被读路径顺带收敛成 `expired`）；回执键集合不变 | 通过；旧实现下已过期的未追踪行会被改成 `expired`（复核反例已入库） |
 | EXECCFG-LINK-11 | **同 JVM** 相同 run 重入（early / late 两个窗口） | 重复请求在**本地**被拒（`DuplicateRunRefused`），不发任何通知；原 run 正常完成；model=2、claims=1、一条 completed | 通过；旧实现下 early 会把 A 报成 `LoopIncomplete` |
 | EXECCFG-LINK-12 | **同 JVM** 两个不同 run 并发 | 两者都完成；各领一次、各一条通知 | 通过 |
 | EXECCFG-LINK-13 | 首轮失败 | 无业务领取、只发一次 `failed` 终局（记录不留在 `issued`） | 通过 |

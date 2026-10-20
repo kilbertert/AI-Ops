@@ -2866,7 +2866,9 @@ def create_gateway_app(
             raise StandardAPIError(
                 status.HTTP_401_UNAUTHORIZED, "NODE_TOKEN_REQUIRED", "node credential required"
             )
-        run = context.agent_run_store.get(run_id)
+        # **只读**读一次做绑定判定：不能用 get()，它会顺手收敛过期（一次写），
+        # 会把未追踪的历史行改掉。
+        run = context.agent_run_store.peek(run_id)
         if run is None:
             raise StandardAPIError(status.HTTP_404_NOT_FOUND, "AGENT_RUN_NOT_FOUND", "agent run not found")
         # 绑定：同环境、同一个**预期节点**、同一 app/agent。错节点不伤他人记录（只读判定，
@@ -2887,6 +2889,8 @@ def create_gateway_app(
             observed_agent_version=observed,
             actual_node_id=node.node_id,
             failure_reason=(payload.reason or "model_failed") if payload.status == "failed" else None,
+            # 成功也可以带原因码（同原因幂等、不同原因冲突）；不带就是 None。
+            success_reason=payload.reason if payload.status == "completed" else None,
         )
         if verdict in {"completed", "already_completed", "failed", "already_failed"}:
             assert settled is not None

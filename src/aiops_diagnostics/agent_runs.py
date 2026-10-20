@@ -476,6 +476,17 @@ class AgentRunStore:
             row = connection.execute("SELECT * FROM agent_runs WHERE run_id = ?", (run_id,)).fetchone()
         return _run_from_row(row) if row else None
 
+    def peek(self, run_id: str) -> AgentRun | None:
+        """**只读**一条记录，不做任何过期收敛 —— 判据是「这条通知该不该落库」时用它。
+
+        ``get()`` 会顺手把过期的非终态收敛成 ``expired``，那对读路径是对的（调用方要看到
+        真实状态），但它是一次写。完成端点先用 ``get()`` 做绑定判定时，那次收敛会把一条
+        **未追踪**的历史行从 ``issued`` 改成 ``expired`` —— 与「未追踪记录一个列都不写」相反。
+        """
+        with self._connection() as connection:
+            row = connection.execute("SELECT * FROM agent_runs WHERE run_id = ?", (run_id,)).fetchone()
+        return _run_from_row(row) if row else None
+
     def _expire(self, run_id: str) -> None:
         with self._connection(write=True) as connection:
             _expire_in(connection, run_id)
@@ -659,6 +670,7 @@ class AgentRunStore:
         observed_agent_version: str | None,
         actual_node_id: str | None = None,
         failure_reason: str | None = None,
+        success_reason: str | None = None,
     ) -> tuple[str, AgentRun | None]:
         """整轮终局：成功则 ``running``（已有快照）→ ``succeeded``，失败则落 ``failed``。
 
@@ -683,14 +695,22 @@ class AgentRunStore:
         """
         observed = observed_agent_version
         with self._connection(write=True) as connection:
+            row = connection.execute("SELECT * FROM agent_runs WHERE run_id = ?", (run_id,)).fetchone()
+            if row is None:
+                return "missing", None
+            untracked = _run_from_row(row)
+            if untracked.expected_agent_version is None:
+                # 未启用清单：没有「整轮身份」这回事，**一个列都不写**（旧记录不受影响）。
+                # 判定必须在 `_expire_in` **之前**：那条收敛本身就是一次写（issued → expired），
+                # 放在前面会把一条未追踪的历史行改掉，与「不写任何列」的契约相反。
+                # 实测：未追踪的已过期记录收到完成通知时，状态从 issued 变成 expired/ttl_elapsed。
+                return "not_tracked", untracked
+            # 到这里才允许写：过期收敛对**启用清单**的记录是既有语义（与 get() 同一条语句）。
             _expire_in(connection, run_id)
             row = connection.execute("SELECT * FROM agent_runs WHERE run_id = ?", (run_id,)).fetchone()
             if row is None:
                 return "missing", None
             run = _run_from_row(row)
-            if run.expected_agent_version is None:
-                # 未启用清单：没有「整轮身份」这回事，不写任何列（旧记录不受影响）。
-                return "not_tracked", run
             if observed != run.expected_agent_version:
                 # 每个通知都要自己证明身份；已确认的记录**不改写**（不覆盖审计列）。
                 if run.state == SUCCEEDED:
@@ -758,7 +778,13 @@ class AgentRunStore:
                 return "failed", _read_run(connection, run_id)
 
             if run.state == SUCCEEDED:
-                return "already_completed", run
+                # 成功记录上也带原因码：同原因 ⇒ 幂等，不同原因 ⇒ 冲突。
+                # 早先这里无条件回 already_completed，于是 `completed+first` 与
+                # `completed+second` 都返回 200 —— 「不同原因不是同一次幂等重试」这条
+                # 规则在失败路径上成立、在成功路径上被静默丢掉了。
+                if success_reason is None or run.reason == success_reason:
+                    return "already_completed", run
+                return "conflict", run
             if run.state == EXPIRED:
                 # `_expire_in` 已按既有语义把它收敛过；这里只是把原因如实说出来。
                 return "expired", run
@@ -774,7 +800,8 @@ class AgentRunStore:
                 """
                 UPDATE agent_runs
                    SET state = ?, completed_at = ?,
-                       observed_agent_version = ?, exec_config_state = ?
+                       observed_agent_version = ?, exec_config_state = ?,
+                       reason = COALESCE(?, reason)
                  WHERE run_id = ? AND state = ? AND expires_at > ?
                 """,
                 (
@@ -782,6 +809,7 @@ class AgentRunStore:
                     now.isoformat(),
                     observed,
                     EXEC_CONFIG_MATCHED,
+                    success_reason,
                     run_id,
                     RUNNING,
                     now.isoformat(),

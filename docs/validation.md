@@ -57,6 +57,28 @@
   两个窗口里相同 run 的重入都在**本地**被拒（`DuplicateRunRefused`），且 model=2、claims=1、
   只有一条 completed；`first-error` 首轮失败 claims=0 且只发一次 failed。
 
+## 2026-10-20 · M3-NODE-LINK 复核修订（PR #858）
+
+**范围**：Devin 复核提了五条，逐条在本地复现后修掉三处代码问题、一处文档问题；
+第五条（完成通知是受信声明）作为边界写进 ADR，不当缺陷修。
+
+| 发现 | 复现 | 处理 |
+|---|---|---|
+| 未追踪的历史行被完成通知改写 | 已过期 + 未启用清单 ⇒ 收到通知后 `issued` → `expired`/`ttl_elapsed`，响应仍是 409 | 完成端点先用**只读** `peek()` 做绑定判定；`complete_loop` 在 `_expire_in` **之前**判定「无期望身份」并直接返回 |
+| 成功通知的 `reason` 被丢弃 | `completed+first` 与 `completed+second` 都 200 | `complete_loop` 新增 `success_reason`；同原因幂等、不同原因 409，并落库 |
+| 放行闸门的用例不再覆盖 `succeeded` | `_prepare_succeeded` 在启用清单时只到 `running`+快照 | 拆成 `_prepare_claimed_with_snapshot`（running+快照）与 `_prepare_succeeded`（真 succeeded，经 `complete_loop`） |
+| qa-plan 的复跑命令引用私有路径 | `/home/claude/.cache/...` | 删掉；复核反例已入库，命令可原样跑 |
+| 「节点凭据可伪造整轮成功」 | 成立，但**不是可修缺陷** | 写进 ADR：完成通知是**受信声明**，Gateway 看不到模型循环；能做的只有如实记录 + 节点侧两道判据 |
+
+**红→绿**：两条新回归在修复前的实现上均为红（未追踪行被改写、成功原因冲突仍 200），
+修复后转绿。
+
+**结果**：`test_m3_node_link_*` + `test_m3_gateway_exec_config` + `test_agent_run_records`
+共 **110 passed**；真实端到端 **39/39 PASS**（修复后重跑）；全量
+**3034 passed / 9 skipped / 0 failed**。
+
+**边界（没有变化）**：真实供应商/模型/订单/生产装配未验；整轮完成语义尚未在 41 上跑过。
+
 ## 2026-10-20 · CD 派生 registry 的类型失真与修复（#857）
 
 **范围**：`deploy/deploy-41.sh` 的派生 registry 视图与它的确定性检查。**未部署**。
