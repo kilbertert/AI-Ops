@@ -33,7 +33,7 @@
 ### 三、结果
 
 - `tests/test_cd_deploy_scripts.py`：**17 passed**（含 `test_remote_block_renders_and_parses`）。
-- 全量：**3000 passed / 9 skipped / 0 failed**。
+- 全量：**3002 passed / 9 skipped / 0 failed**。
 - 红→绿：只保留「类型」修复时，转义与带点键两条仍红；补全转义与引号后转绿。
 
 ### 四、部署影响（合并前须知）
