@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- 95 环境（`api.qumall.qushiyun.com`，主机侧键 `qy-gw-120`）有了事实页 `docs/agents/env-95-facts.md`，并在 `.dev-host.toml` 声明为可只读访问的目标。
+  记录内容包含：代号与 41/36 的判别、它的数据面为空这一观测、以及**没有** `env-95.toml`
+  这一事实——此前 agent 只能从散落三处的半句拼出这些。
 - Gateway 可在签发时固定执行配置身份，并在领取及最终放行事务内核对身份、终态与有效期。
   配置默认关闭；启用后缺失或不匹配的身份被拒绝，已拒绝记录不能通过重试恢复。
   数据库幂等新增三列，历史行保持 NULL；未启用时保留原回执字段。
