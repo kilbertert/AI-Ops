@@ -519,15 +519,16 @@ Dify 侧的 `apps.created_by` / `app_model_configs` / 审计行记的都是旧�
 api 容器只 publish 了 `5001/tcp`（未映射到宿主），宿主只能经 docker 内网 IP
 （`172.21.0.x`）访问。
 
-⚠️ **这意味着建 workspace 只能从 36 本机发起**（评审指出，成立）。而 95 的登录代理在 95 ——
-它**够不到**这个内网 IP。所以建 workspace 不是代理的动作，而是**网关/一个在 36 上的
-服务端进程**的动作：
+⚠️ **这意味着建 workspace 只能从 36 本机发起**（评审指出，成立）。而 41 的网关在 41、
+95 的网关在 95、登录代理也在各自环境 —— 它们**都够不到**这个内网 IP。所以建 workspace
+不是代理或网关的动作，而是**一个在 36 上的服务端进程**的动作：
 
 ```
-41 或 95 的代理登录 → 它只读 dify_workspaces（经网关的只读端点）
-                     ↓ 需要建 workspace 时
-                     → 请求落到 36 上的开户进程（或网关转发给它）
+41 或 95 的代理登录 → 它只读 dify_workspaces（经各自网关的只读端点）
+                     ↓ 缺行时**不建**，返回 DIFY_WORKSPACE_UNRESOLVED
+                     → 运维在 36 上执行 `aiops admin ensure-workspace --tenant …`
                      → 该进程经容器内网调 inner_api 建，再写回 dify_workspaces
+                     → 下一次登录读到行，正常开户
 ```
 
 设计上要明确的是：**"建 workspace"是一个集中式的动作，只发生在 36**，不是每个环境的
