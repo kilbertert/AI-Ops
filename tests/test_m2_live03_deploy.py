@@ -186,3 +186,64 @@ def test_readme_and_host_change_do_not_claim_authorization():
     assert "不是授权" in host_change
     readme = (DEPLOY / "README.md").read_text(encoding="utf-8")
     assert "HOST-CHANGE.md" in readme
+
+
+def test_node_build_is_reproducible():
+    """节点 jar 必须是**可复现构建**，否则锁文件里那个摘要只能是「某一次的产物」。
+
+    Spring Boot 的 repackage 会把构建时间写进 MANIFEST：不固定 `outputTimestamp` 时，
+    同一份源码两次构建得到不同摘要（实测两个干净树：`22e400f0…` / `08d9c4c7…`）。
+    于是 `images.lock.json` 里钉的摘要别人永远复现不出来，preflight 会在别人的构建上
+    永远失败。固定之后两次构建逐字节相同（实测 `ba1b0abf…` 两次一致）。
+
+    这条不只查标签在不在：时间戳必须是**可解析的 UTC 时刻**（写成 `now` 或空串就红），
+    且锁里的节点摘要必须与变更单里记的那个一致 —— 两份记录各说各话时这里就会红。
+    """
+    import re
+    from datetime import UTC, datetime
+
+    pom = (DEPLOY.parents[1] / "tools/m2_close/node/pom.xml").read_text(encoding="utf-8")
+    match = re.search(r"<project.build.outputTimestamp>([^<]+)</project.build.outputTimestamp>", pom)
+    assert match is not None, "缺可复现构建时间戳，节点 jar 无法按摘要复现"
+    stamp = match.group(1).strip()
+    parsed = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+    assert parsed.tzinfo is not None and parsed.utcoffset() == UTC.utcoffset(None), (
+        f"构建时间戳必须是带时区的 UTC 时刻，实际 {stamp!r}"
+    )
+
+    lock = json.loads((DEPLOY / "images.lock.json").read_text(encoding="utf-8"))
+    recorded = re.search(
+        r"\| `aiops-execution-node\.jar` \| `([0-9a-f]{64})`",
+        (DEPLOY / "HOST-CHANGE.md").read_text(encoding="utf-8"),
+    )
+    assert recorded is not None, "变更单里没有节点 jar 的摘要行"
+    assert lock["node"]["sha256"] == recorded.group(1), (
+        "锁文件与变更单对节点制品各说各话："
+        f"lock={lock['node']['sha256'][:16]}… host-change={recorded.group(1)[:16]}…"
+    )
+
+
+def test_gateway_context_digest_is_reproducible_and_matches_the_lock():
+    """构造上下文摘要必须**与环境无关**，且与锁文件一致。
+
+    这条曾经真的错过：`build-image.sh` 里的 `sort -z` 按本机 locale 排序，
+    同一批 141 个文件在 `en_US.UTF-8` 与 `C` 下得到不同摘要（`7e6dc9ca…` / `e7c9af0c…`）。
+    锁文件里那个值于是只代表**某台机器上**的构建，reviewer 复核永远对不上 ——
+    而且看起来像「制品被换过」。
+    """
+    script = (DEPLOY / "build-image.sh").read_text(encoding="utf-8")
+    assert "LC_ALL=C sort" in script, "构造上下文摘要的排序没有固定 locale，换台机器就变"
+
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("context_digest_under_test", DEPLOY / "context_digest.py")
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+
+    value, count = module.digest()
+    lock = json.loads((DEPLOY / "images.lock.json").read_text(encoding="utf-8"))
+    assert count > 0
+    assert value == lock["gateway_image"]["source_sha256"], (
+        f"上下文摘要与锁文件不一致：实际 {value[:16]}… 锁 {lock['gateway_image']['source_sha256'][:16]}…"
+    )

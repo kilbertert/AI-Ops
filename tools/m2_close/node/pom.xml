@@ -21,6 +21,10 @@
     <properties>
         <java.version>21</java.version>
         <snail-ai.version>1.1.1</snail-ai.version>
+        <!-- 可复现构建：Spring Boot 的 repackage 会把构建时间写进 MANIFEST，固定它之后
+             同一份源码两次构建得到**同一个** jar。没有它，`images.lock.json` 里钉的
+             节点 jar 摘要就只能是「某一次构建的产物」，别人重建永远对不上。 -->
+        <project.build.outputTimestamp>2026-10-20T00:00:00Z</project.build.outputTimestamp>
     </properties>
 
     <dependencies>

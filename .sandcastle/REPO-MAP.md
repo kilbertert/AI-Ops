@@ -55,9 +55,9 @@ no project argument. Both answer *where* something is; neither replaces reading 
 - AGENTS.md
 - CLAUDE.md
 - README.md
-- docs/ — 115 markdown file(s)
-- docs/adr/ — 58 markdown file(s)
-- docs/agents/ — 34 markdown file(s)
+- docs/ — 117 markdown file(s)
+- docs/adr/ — 59 markdown file(s)
+- docs/agents/ — 35 markdown file(s)
 
 ## Tree (depth 2, first 80 lines; dependencies, build
 output and run residue omitted)
@@ -81,9 +81,9 @@ deploy/
     checks.sh
     compose.synthetic.yaml
     compose.yaml
+    context_digest.py
     gateway-requirements.txt
-    gateway.Dockerfile
-    ... (9 more)
+    ... (10 more)
   check-41-editable.sh
   classify-remote-result.sh
   company-gitlab-api.sh
@@ -105,7 +105,7 @@ docs/
     0008-adr-0003-deviation-session-direct-read.md
     0009-operator-identity-via-company-oauth2-token.md
     0010-reversal-of-prd-200-language-boundary.md
-    ... (48 more)
+    ... (49 more)
   afk-cutover/
     decisions.md
     pr-a-spec.md
@@ -123,7 +123,7 @@ docs/
     company-platform-integration-baseline.md
     company-repo-index.md
     company-upms-admin-operations.md
-    ... (24 more)
+    ... (25 more)
   architecture/
     ai-ops-architecture.html
     ai-ops-architecture.json
