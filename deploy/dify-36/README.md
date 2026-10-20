@@ -157,11 +157,20 @@ Dify 的 `inner_api` 是**建 workspace / 加成员**的唯一 HTTP 入口（con
 `POST /workspaces`），默认关闭。2026-10-20 打开：
 
 ```bash
-# /opt/dify/deploy/.env 追加（key 只写进该文件，不进仓库）
-INNER_API=true
-INNER_API_KEY=<openssl rand -hex 32>
-cd /opt/dify/deploy && docker compose up -d api worker
+# 1. 生成 key（只写进宿主 .env，不进仓库）
+KEY=$(openssl rand -hex 32)
+
+# 2. 追加到 .env（先备份）
+cd /opt/dify/deploy
+cp .env .env.bak-innerapi-$(date +%Y%m%d%H%M%S)
+printf '\nINNER_API=true\nINNER_API_KEY=%s\n' "$KEY" >> .env
+
+# 3. 重启 api 与 worker 让配置生效
+docker compose up -d api worker
 ```
+
+⚠️ 必须写成 `KEY=$(openssl rand -hex 32)` 再拼进文件；直接写
+`INNER_API_KEY=<openssl rand -hex 32>` 会被 shell 当成重定向，报语法错误且不生成 key。
 
 **暴露面没有扩大**，三条都实测过（详见 `docs/validation.md` 同日节）：
 
