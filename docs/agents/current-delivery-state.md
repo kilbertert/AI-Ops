@@ -13,6 +13,16 @@
 > `403 insufficient_user_quota`（`sk-x4CF…`，剩 ¥0.000285），`embeddings` 仍 0 行；
 > external 检索链路 `41 dify_retrieval → kb-service → RAGFlow` 也回 102 同一原因。
 > 配额恢复后各重跑一次即可，不需要改配置。密钥轮换未做。
+> **2026-10-20 · Dify 只保留 41 的两个入口 app（分支 `fix/dify-bindings-to-live-apps`，41 已生效，待合并）**：
+> 36 的 `apps` 表当时只剩两个 app，而注册表三行里有两行指向**已被删除**的 id ⇒ 那两个入口的
+> 「点发布 / 试运行」都在第二跳之前断（`502 DIFY_DSL_MALFORMED`）。收敛结果：客户端
+> `1942…/consumer` 改指活着的 `aiops-41-kefu-agent`（正文 759 字逐字节相同），管家端
+> `1942…/operator` 的清单补齐库里早已在用的 `e35f8fda…`，**验收租户（`1783…`）不再占 app**
+> ——正文回到清单承载，它临时用过的 app 已删除。**Dify 上现在恰好两个 app**，注册表恰好两行。
+> 41 上只对注册表做了幂等收敛（跑两次，第二次全 `unchanged`）；两条发布探测全 `200 unchanged`
+> （v14 / v12），`agent_versions` **42 → 42**。**未跑整份 `reconcile`**：它会顺带发布
+> `1942…/canary-客服` 的既有字段漂移。95 已完成第一段演练（独立网关 + 清单驱动智能体），
+> 见 `current-delivery-state` 下方的 95 节与 `validation.md`。
 >
 > **2026-10-20 · 整轮完成与工具领取的分界（#858 / `da8c544`，已合并并部署，功能开关关闭）**：
 > 启用清单的 run 在领取并缓存快照后**保持 `running`**，只有节点显式确认、且**最后一轮模型
