@@ -1,3 +1,60 @@
+## 2026-10-20 · #868 落地到 36：向量库起了、补丁挂上了、迁移落库；索引仍被供应商余额挡住
+
+**部署身份**：`origin/main` @ `1ae4d86`，制品由 `git archive origin/main deploy/dify-36` 打包
+（tar sha256 `fabe9958e0003da9d073ad26fc7fe8c2d5edc6540f105f427ca0c032f5d7a81c`），2026-10-20 16:49 CST 落到 36 `/opt/dify/deploy`。
+备份：`/opt/dify/deploy.bak-20261020164947/` 与 `.env.bak-20261020164947`（未删除）。
+**但它是代码/配置的回滚路径，不是数据库备份**：`cp -a` 是在 postgres 还活着的时候做的，
+`volumes/db/data` 的副本可能跨越不同提交状态，不能当物理备份用。要真正回滚数据库，
+需要停机复制或 `pg_dump` —— 本轮没做，如实记下。
+
+### 一、做到了什么（都有当场输出）
+
+| 项 | 判据 | 结果 |
+|---|---|---|
+| 形状自检 | `./check.sh --env-file .env` | 全部通过，含「现场 .env 的向量库三项与模板一致」 |
+| 补丁 | `./patches/apply.sh` | 5 个文件 sha256 核对通过，5 个补丁 `--fuzz=0` 应用成功 |
+| 栈 | `docker compose up -d` | 10 个服务；`deploy-weaviate-1` healthy；api 的 env 里 `VECTOR_STORE=weaviate` |
+| 补丁真的生效 | 容器内文件 sha256 == 挂载树 | `a143cc4a…` 两侧一致（`external_knowledge_service.py`） |
+| 迁移 | `migrate_20261020.py --apply` | 删除 **6** 条孤儿绑定（8→2），**2** 条 `api_key` 变为 `enc:v1:SFlCU…` |
+| 列表不再泄露 | `GET /console/api/datasets/external-knowledge-api` | 两条都是 `[__HIDDEN__]` |
+| 编辑框仍能回填 | 同端点 + 单模板 GET | 明文，43 字符（`dify-…`） |
+
+迁移前把两张表导成证据（`/root/dify-pre868-{bindings,apis}.csv`，600 root，含旧明文 key，
+用完应删）。
+
+### 二、没做到的，以及卡在哪（逐条写清）
+
+- **VEC-02 未通过**：点了重试，文档状态从 `waiting` 走到 `error`，错误变成
+  `[OpenAI] Incorrect model credentials provided`。**这不是向量库的问题** ——
+  `datasets.index_struct` 已写上 `{"type": "weaviate", "vector_store": {...}}`，说明
+  向量类型解析成功、走到了建 collection 那一步；失败在 `embeddings` 调用本身。
+  插件日志里的真实原因：
+  `403 insufficient_user_quota … 用户剩余额度: ¥0.000285, 需要预扣费额度: ¥0.000456`
+  （key 前缀 `sk-x4CF…`，即 baoyun 那把）。`embeddings` 表仍 0 行。
+  ⇒ **配额恢复后只需再点一次重试**，不需要改任何配置。
+- **RET-01 未取得 200**：`POST /v1/datasets/df0f1d4a…/retrieve`（external 数据集 + 临时
+  dataset key）返回 400 `Reached maximum retries (3) for URL …/v1/dify/retrieval`，api 日志显示
+  它确实调到了 `RetrievalService.external_retrieve`（**这正是补丁生效的证据**：补丁前这条
+  路径不存在，会直接返回 `records: []` 的 200）。上游 41 的 `dify_retrieval` 回
+  `502 DIFY_KNOWLEDGE_UNAVAILABLE`，再往下一跳：kb-service `502 upstream_error`，
+  RAGFlow `code=102 Internal server error`；RAGFlow 日志是同一条
+  `insufficient_user_quota`（同一个 `sk-x4CF…`）。
+  ⇒ **两处验收被同一个供应商余额卡住**，与本次改动无关。
+- **SEC-02 通过**：库里是密文（`enc:v1:`），控制台列表是掩码、单取是明文。
+- **BIND-02 通过**：`external_knowledge_bindings` 8→2，剩下的两条都 join 得到 dataset。
+- **未做**：密钥轮换（两把共享凭据仍是原值）；`qa-plan.md` 的 RET-02/RET-03 未跑；
+  **数据库没有做过一致快照**（`cp -a` 的 `volumes/db/data` 不算），需要回滚 DB 时要先停机复制。
+
+### 三、清理
+
+临时 dataset API key（`191a0bd9…`，仅绑 `df0f1d4a…`）已删除（204）；宿主与容器里的
+临时脚本/会话文件已清。
+
+`/root/dify-pre868-{bindings,apis}.csv`（600 root）是迁移前证据。**`apis` 那份里的
+`api_key` 值已替换成 `<redacted-in-evidence>`** —— 两把共享凭据还没轮换，把完整值留在
+第二个明文位置，等于把加密落库那一半的收益退回去。行结构、id、endpoint、时间戳都保留，
+取证需要的信息不丢。轮换完成、或这份证据不再需要时直接删除。
+
 ## 2026-10-20 · Dify 栈：向量库、external 检索端点、库卫生
 
 **范围**：`deploy/dify-36/`（compose、env 模板、自检、上游补丁、迁移脚本）与

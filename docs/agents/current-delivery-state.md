@@ -6,16 +6,13 @@
 >
 > **最后核验**：2026-10-20（Asia/Shanghai）。
 >
-> **2026-10-20 · Dify 36 的三处数据面缺陷已修，制品备齐，未部署（`fix/dify-vector-store-external-retrieval-hygiene`）**：
-> ① 36 上没有向量库，vendor 数据集的 1564 个分段全停在 indexing（`Vector store must be
-> specified.`，`embeddings` 0 行）⇒ 新增 weaviate 容器并配 `VECTOR_STORE`；
-> ② `/v1/datasets/{id}/retrieve` 对 external 数据集返回空结果（`HitTestingService` 收
-> `external_retrieval_model` 却不用，上游 `main` 同样）⇒ 以 5 个补丁打在镜像原文件上，
-> external 走 `external_retrieve`；
-> ③ 6 条孤儿 `external_knowledge_bindings` + 2 条明文 `api_key` ⇒ 删库清理绑定、key 加密
-> 落库（`enc:v1:`），迁移脚本默认 dry-run。
-> **未完成业务验收**：未部署，索引未重跑，external 检索的 200 响应没有生产证据，迁移只做过
-> dry-run，两把共享凭据未轮换。落地与回滚见 `dify-36-data-plane-runbook.md`。
+> **2026-10-20 · Dify 36 的三处数据面缺陷已修并已部署到 36（#868 / `1ae4d86`）**：
+> 向量库起着（`deploy-weaviate-1` healthy）、5 个补丁挂进 api/worker、迁移已落库
+> （6 条孤儿绑定删除、2 把 key 变 `enc:v1:`，控制台列表改返回 `[__HIDDEN__]`）。
+> **但两条验收仍红，卡在同一个供应商余额**：重跑索引到的错误是
+> `403 insufficient_user_quota`（`sk-x4CF…`，剩 ¥0.000285），`embeddings` 仍 0 行；
+> external 检索链路 `41 dify_retrieval → kb-service → RAGFlow` 也回 102 同一原因。
+> 配额恢复后各重跑一次即可，不需要改配置。密钥轮换未做。
 >
 > **2026-10-20 · 整轮完成与工具领取的分界（#858 / `da8c544`，已合并并部署，功能开关关闭）**：
 > 启用清单的 run 在领取并缓存快照后**保持 `running`**，只有节点显式确认、且**最后一轮模型

@@ -130,6 +130,27 @@ ssh yidong-36 'docker exec deploy-db_postgres-1 psql -U dify -d dify -c \
 **判据**：`completed`、`error` 为空、`embeddings` 计数大于 0。1564 个分段的向量化要打
 embedding 供应商，耗时以分钟计；先看 worker 日志再判断卡住。
 
+## 8·补、如果重跑索引失败在 embedding 供应商（2026-10-20 实测）
+
+`documents.error` = `[OpenAI] Incorrect model credentials provided` 时**先别怀疑向量库**：
+看一眼 `datasets.index_struct` —— 它已经是 `{"type": "weaviate", ...}` 就说明向量类型解析
+成功、走到了创建 collection。真正的错误在插件日志里：
+
+```bash
+# 插件在自己的容器里跑，原始 403 在 plugin_daemon；worker 只是把它概括成
+# "Incorrect model credentials"。两边都看：先看插件拿到什么，再看 worker 怎么转述。
+ssh yidong-36 'docker logs deploy-plugin_daemon-1 --since 10m 2>&1 | grep -E "insufficient_user_quota" | tail -3'
+ssh yidong-36 'docker logs deploy-worker-1        --since 10m 2>&1 | grep -E "InvokeAuthorization|vector.create" | tail -3'
+```
+
+（2026-10-20 实测：同一次失败在 plugin_daemon 与 worker 里各有 11 / 10 行匹配，但
+**只有 plugin_daemon 那侧带原始 403 与余额数字**；worker 那侧是转述后的
+`Incorrect model credentials`。只看 worker 会把它当成配错的 key。）
+
+2026-10-20 的实际原因是 `403 insufficient_user_quota`（剩 ¥0.000285，需 ¥0.000456），
+**配额恢复后再点一次重试即可**，不需要改任何配置。同一个余额也会让 external 检索链路
+（41 → kb-service → RAGFlow）以 `code=102` 失败 —— 两条验收共用一个供应商，别分别排查。
+
 ## 9. 验收外部检索（RET-01）
 
 服务 API 要一把 **dataset 类型**的 key（`api_tokens.type='dataset'`），不是 app 的 key：
