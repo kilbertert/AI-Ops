@@ -11,7 +11,9 @@
 | 节点装配、工具、整轮守卫与通知 | **真的 Java 节点**（编译自 `tools/m2_close/node/src`） |
 | 模型上游 | 本机合成 OpenAI-compatible 服务（允许） |
 | CPMS | 本机合成（允许） |
-| 编排平台 | 本机替身，只负责「发起一次 HTTP 派发」；领取与完成由**节点自己**发出 |
+| 编排平台 | 本机替身，只负责「发起一次 HTTP 派发」并同步等待；领取与完成由**节点自己**发出 |
+| 节点到 Gateway 的 HTTP | 真实（容器 `--network=host` 打宿主 loopback；本机验收的取舍，不是隔离证明） |
+| 完成回执的坏正例 | 一台透明代理改写回执正文（`{}` / 错 run / `state=failed`），节点必须不认 |
 | 调用者身份 / 订单授权 | 既有 `gateway_launcher.py` 的固定身份与 synthetic_orders |
 
     M3NODE_DEPS=… M3NODE_JDK_IMAGE=… uv run python tools/m2_close/m3node/verify_node_link.py --out report.json
