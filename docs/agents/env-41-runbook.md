@@ -882,6 +882,37 @@ runuser -u aiops41 -- .venv/bin/aiops --config /etc/aiops-41/production.env admi
 - 发布前 KB 活性校验会真实调用 kb-service；供应商欠费时（embedding 502）会误报
   "知识库不存在"，**这是误报**，充值后重试即恢复，不要据此删绑定。
 
+### 3.1-bis 只收敛 `[[dify_apps]]`（2026-10-20 新增）
+
+**什么时候用它而不是整份 `admin reconcile`**：要改的只是「哪个 app 服务哪个
+`(租户, 入口)`」，而 `[[agents]]` 那一半**本来就有已知漂移**。实测（2026-10-20）：
+拿仓库那份跑整份 `reconcile --dry-run`，`1942…/canary-客服` 报 `updated` —— 差异来自
+清单里写了 `opening_questions` / `quick_commands` 而库中现值是空。**整份收敛会 fork 并
+发布一个新版本**，那不是绑定修复该做的事。
+
+注册表收敛是 `reconcile_dify_registry`（`agent_manifest`），同一个 `dry_run` 语义、
+`symlink` 无、只写 `dify_app_registry` 一张表：
+
+```bash
+cd /opt/aiops-41
+runuser -u aiops41 -- env HOME=/var/lib/aiops-41 .venv/bin/python - <<'PY'
+from pathlib import Path
+from aiops_diagnostics.agent_manifest import load_manifest, reconcile_dify_registry
+from aiops_diagnostics.dify_app_registry import DifyAppRegistry
+env = load_manifest(Path("/opt/aiops-41/ops/env-41.toml.new"))
+reg = DifyAppRegistry(Path("/var/lib/aiops-41/gateway/gateway.db"))
+for r in reconcile_dify_registry(reg, env, dry_run=False):
+    print(r)
+PY
+```
+
+- **先备份库**：`cp -a /var/lib/aiops-41/gateway/gateway.db …bak-bindings-$(date +%Y%m%d%H%M%S)`。
+- 判据：第一次两行 `registered` 一行 `unchanged`；**紧接着再跑一次应三行全 `unchanged`**。
+- 收尾核对：三条 `/v1/dify/publish` 都应 `200 unchanged`；`agent_versions` 行数**不变**。
+- 它**不会**改 `agents` / `agent_versions` —— 这一点是它与整份 `reconcile` 的分界，
+  也是用它时要写进记录的理由。
+
+
 ### 3.1-ter 新增一条代码里的**种子动作**要先播种再发布（2026-10-12 新增）
 
 **用途**：代码里新加了一个 `_BUNDLED_SHORTCUTS` 种子动作（例：`#721` 的

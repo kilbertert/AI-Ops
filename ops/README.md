@@ -169,7 +169,7 @@ POST https://api.mall.qushiyun.com/v1/dify/publish
 Authorization: Bearer <AIOPS_GATEWAY_DIFY_PUBLISH_API_KEY>
 Content-Type: application/json
 
-{"app_id": "98441c5b-1f82-4dc4-a6c0-795dc169ee54"}
+{"app_id": "8e36f0a6-324c-4003-b573-7444cc649411"}
 ```
 
 **请求体只有一个 `app_id`**，而且必须是 `[[dify_apps]]` 里已经声明过的那个。
