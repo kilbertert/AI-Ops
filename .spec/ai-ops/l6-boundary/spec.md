@@ -1,6 +1,6 @@
 ---
 title: l6-boundary
-desc: 进程边界与入口——四条独立的进程、65 条路由
+desc: 进程边界与入口——四条独立的进程、66 条路由
 hue: 0
 code:
   - src/aiops_diagnostics/gateway_api.py
@@ -58,6 +58,14 @@ related:
   拿记录的那一刻有效不等于放行这一瞬间有效，只查状态不查有效期会让过期记录照样交出正文。
   **「已固定期望」不等于「已核对成功」**：回执的 `agent_version` 只在核对一致后给出，
   未核实时为 `null` 且显式标缺口。见 ADR-0052 与 `execution_manifest`。
+- **领取成功不等于整轮完成**（M3-NODE-LINK-01）。启用清单的 run 在领取并缓存快照后
+  **仍是 `running`**；只有节点用
+  `POST /v1/internal/charging-status/completions/{run_id}` 显式确认、且回传的身份与本
+  run 签发时固定的期望逐字相等、记录仍在 `running` 且已有快照、此刻未过期，才转
+  `succeeded`。取消与进程退出没有回调 ⇒ 停在 `running` 由既有 TTL 收敛为 `expired`，
+  **`running` + 快照永远不会被读成成功**。未启用清单时该端点回
+  `409 AGENT_RUN_COMPLETION_NOT_TRACKED` 且**一个列都不改**；已完成的记录不被迟到通知
+  改写；同状态不同原因的通知是冲突而不是幂等。
   **默认关闭不等于库无变化**：初始化即 `ALTER TABLE` 补列，部署影响需单独评估。
 - 适配器对客户端**完全透明**：它修复上游的两个兼容缺口，不引入新语义。
 - **日志配置必须显式**：在这一层出现之前，网关根本没配过 logging——uvicorn 只给自身挂 handler，

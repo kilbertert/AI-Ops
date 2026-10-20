@@ -49,7 +49,13 @@
 - 合成上游与替身：**不**证明真实供应商、真实订单、生产装配。
 - 平台替身按**同步**语义起节点（真实平台也是同步接口）；它不证明真实 gRPC 派发时序。
 - `--network=host` 只为让节点打到宿主 loopback 上的真 Gateway（本机验收的已知取舍）。
-- 取消后的 `running → expired` 由既有 TTL 语义覆盖（单测钉住），端到端只证「取消不会被报成成功」。
+- **进程中止（不是「取消」）**：端到端用 `Runtime.halt(9)` 真的杀掉节点进程（不是订阅方 dispose），
+  断言 exit 9、此后没有任何 completion/error 回调、记录停在 `running`。`running → expired`
+  由既有 TTL 语义覆盖（单测钉住）。
+- 同 JVM 并发（`tools/m2_close/m3node/m3link/ConcurrentRunAcceptance.java`，自带替身 Gateway）：
+  `distinct` 两个 run 各自完成（model=4、claims=2、各一次 completed）；`early` 与 `late`
+  两个窗口里相同 run 的重入都在**本地**被拒（`DuplicateRunRefused`），且 model=2、claims=1、
+  只有一条 completed；`first-error` 首轮失败 claims=0 且只发一次 failed。
 
 ## 2026-10-19 · M3 Gateway 合并与部署核验（#854）
 

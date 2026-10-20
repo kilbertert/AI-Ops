@@ -35,7 +35,10 @@ def _issued(store: AgentRunStore, config, identity: str | None):
     from test_agent_run_records import _scope
 
     return store.issue(
-        scope=_scope(), order_no="ORDER-A", config=config, gateway_version="t",
+        scope=_scope(),
+        order_no="ORDER-A",
+        config=config,
+        gateway_version="t",
         expected_agent_version=identity,
     )
 
@@ -67,9 +70,10 @@ def test_complete_keeps_running_when_an_identity_was_fixed(tmp_path):
     run = _issued(store, _config(tmp_path), IDENTITY)
     assert store.claim(run.run_id) is True
 
-    assert store.complete(
-        run.run_id, snapshot={"order_no": "ORDER-A"}, actual_node_id="node-a1", node_build="b"
-    ) is True
+    assert (
+        store.complete(run.run_id, snapshot={"order_no": "ORDER-A"}, actual_node_id="node-a1", node_build="b")
+        is True
+    )
 
     row = _row(store)
     assert row["state"] == agent_runs.RUNNING
@@ -84,9 +88,10 @@ def test_complete_still_succeeds_without_an_identity(tmp_path):
     run = _issued(store, _config(tmp_path), None)
     assert store.claim(run.run_id) is True
 
-    assert store.complete(
-        run.run_id, snapshot={"order_no": "ORDER-A"}, actual_node_id="node-a1", node_build="b"
-    ) is True
+    assert (
+        store.complete(run.run_id, snapshot={"order_no": "ORDER-A"}, actual_node_id="node-a1", node_build="b")
+        is True
+    )
 
     row = _row(store)
     assert row["state"] == agent_runs.SUCCEEDED
@@ -97,9 +102,7 @@ def test_complete_loop_promotes_a_running_record_with_a_snapshot(tmp_path):
     store = _store(tmp_path)
     run = _issued(store, _config(tmp_path), IDENTITY)
     store.claim(run.run_id)
-    store.complete(
-        run.run_id, snapshot={"order_no": "ORDER-A"}, actual_node_id="node-a1", node_build="b"
-    )
+    store.complete(run.run_id, snapshot={"order_no": "ORDER-A"}, actual_node_id="node-a1", node_build="b")
 
     verdict, settled = store.complete_loop(run.run_id, observed_agent_version=IDENTITY)
 
@@ -113,9 +116,7 @@ def test_complete_loop_is_idempotent_and_keeps_the_first_timestamp(tmp_path):
     store = _store(tmp_path)
     run = _issued(store, _config(tmp_path), IDENTITY)
     store.claim(run.run_id)
-    store.complete(
-        run.run_id, snapshot={"order_no": "ORDER-A"}, actual_node_id="node-a1", node_build="b"
-    )
+    store.complete(run.run_id, snapshot={"order_no": "ORDER-A"}, actual_node_id="node-a1", node_build="b")
     store.complete_loop(run.run_id, observed_agent_version=IDENTITY)
     first = _row(store)["completed_at"]
 
@@ -131,9 +132,7 @@ def test_complete_loop_rejects_a_different_identity(tmp_path):
     store = _store(tmp_path)
     run = _issued(store, _config(tmp_path), IDENTITY)
     store.claim(run.run_id)
-    store.complete(
-        run.run_id, snapshot={"order_no": "ORDER-A"}, actual_node_id="node-a1", node_build="b"
-    )
+    store.complete(run.run_id, snapshot={"order_no": "ORDER-A"}, actual_node_id="node-a1", node_build="b")
 
     verdict, settled = store.complete_loop(run.run_id, observed_agent_version="b" * 64)
 
@@ -158,9 +157,7 @@ def test_complete_loop_refuses_after_revoke_and_does_not_resurrect(tmp_path):
     store = _store(tmp_path)
     run = _issued(store, _config(tmp_path), IDENTITY)
     store.claim(run.run_id)
-    store.complete(
-        run.run_id, snapshot={"order_no": "ORDER-A"}, actual_node_id="node-a1", node_build="b"
-    )
+    store.complete(run.run_id, snapshot={"order_no": "ORDER-A"}, actual_node_id="node-a1", node_build="b")
     assert store.revoke(run.run_id) is True
 
     verdict, settled = store.complete_loop(run.run_id, observed_agent_version=IDENTITY)
@@ -173,9 +170,7 @@ def test_complete_loop_refuses_after_expiry(tmp_path):
     store = _store(tmp_path)
     run = _issued(store, _config(tmp_path), IDENTITY)
     store.claim(run.run_id)
-    store.complete(
-        run.run_id, snapshot={"order_no": "ORDER-A"}, actual_node_id="node-a1", node_build="b"
-    )
+    store.complete(run.run_id, snapshot={"order_no": "ORDER-A"}, actual_node_id="node-a1", node_build="b")
     with store._connection(write=True) as connection:  # noqa: SLF001 - 直接拨时钟
         connection.execute(
             "UPDATE agent_runs SET expires_at = '2000-01-01T00:00:00+00:00' WHERE run_id = ?",
@@ -193,9 +188,7 @@ def test_complete_loop_is_not_tracked_without_an_identity(tmp_path):
     store = _store(tmp_path)
     run = _issued(store, _config(tmp_path), None)
     store.claim(run.run_id)
-    store.complete(
-        run.run_id, snapshot={"order_no": "ORDER-A"}, actual_node_id="node-a1", node_build="b"
-    )
+    store.complete(run.run_id, snapshot={"order_no": "ORDER-A"}, actual_node_id="node-a1", node_build="b")
 
     verdict, settled = store.complete_loop(run.run_id, observed_agent_version=None)
 
@@ -212,9 +205,7 @@ def test_fail_settles_a_running_record_with_a_snapshot(tmp_path):
     store = _store(tmp_path)
     run = _issued(store, _config(tmp_path), IDENTITY)
     store.claim(run.run_id)
-    store.complete(
-        run.run_id, snapshot={"order_no": "ORDER-A"}, actual_node_id="node-a1", node_build="b"
-    )
+    store.complete(run.run_id, snapshot={"order_no": "ORDER-A"}, actual_node_id="node-a1", node_build="b")
 
     assert store.fail(run.run_id, "model_failed") is True
 

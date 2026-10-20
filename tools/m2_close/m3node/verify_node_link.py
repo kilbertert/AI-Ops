@@ -57,9 +57,14 @@ def _free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def http(url: str, method: str = "GET", token: str | None = None,
-         body: dict[str, Any] | None = None, headers: dict[str, str] | None = None,
-         timeout: float = 30.0) -> tuple[int, str]:
+def http(
+    url: str,
+    method: str = "GET",
+    token: str | None = None,
+    body: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
+    timeout: float = 30.0,
+) -> tuple[int, str]:
     data = json.dumps(body).encode() if body is not None else None
     request = urllib_request.Request(url, data=data, method=method)
     if data is not None:
@@ -81,6 +86,7 @@ def http(url: str, method: str = "GET", token: str | None = None,
 # 合成模型上游：按场景决定每轮返回什么
 # --------------------------------------------------------------------------
 
+
 class ModelHandler(BaseHTTPRequestHandler):
     state: dict[str, Any] = {}
 
@@ -95,9 +101,7 @@ class ModelHandler(BaseHTTPRequestHandler):
         mode = self.state["mode"]
         # 轮次按**请求内容**判，不按全局序号：两个 run 并发时，全局序号会把
         # 第二个 run 的第一轮当成「第二轮」，于是它拿不到工具调用。
-        has_tool_result = any(
-            message.get("role") == "tool" for message in body.get("messages") or []
-        )
+        has_tool_result = any(message.get("role") == "tool" for message in body.get("messages") or [])
         call = 2 if has_tool_result else 1
         streaming = bool(body.get("stream"))
         if call >= 2 and mode == "round2-500":
@@ -107,9 +111,17 @@ class ModelHandler(BaseHTTPRequestHandler):
             return
         if not streaming:
             payload = {
-                "id": "chatcmpl-x", "object": "chat.completion", "created": 0, "model": "synthetic",
-                "choices": [{"index": 0, "message": {"role": "assistant", "content": "final"},
-                             "finish_reason": "stop"}],
+                "id": "chatcmpl-x",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "synthetic",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "final"},
+                        "finish_reason": "stop",
+                    }
+                ],
             }
             data = json.dumps(payload).encode()
             self.send_response(200)
@@ -145,22 +157,45 @@ class ModelHandler(BaseHTTPRequestHandler):
         self.wfile.flush()
 
     def _tool_chunk(self) -> str:
-        return json.dumps({
-            "id": "c", "object": "chat.completion.chunk", "created": 0, "model": "synthetic",
-            "choices": [{"index": 0, "delta": {
-                "role": "assistant",
-                "tool_calls": [{"index": 0, "id": "call_1", "type": "function",
-                                "function": {"name": "charging_status_snapshot", "arguments": "{}"}}]},
-                "finish_reason": "tool_calls"}],
-        })
+        return json.dumps(
+            {
+                "id": "c",
+                "object": "chat.completion.chunk",
+                "created": 0,
+                "model": "synthetic",
+                "choices": [
+                    {
+                        "index": 0,
+                        "delta": {
+                            "role": "assistant",
+                            "tool_calls": [
+                                {
+                                    "index": 0,
+                                    "id": "call_1",
+                                    "type": "function",
+                                    "function": {"name": "charging_status_snapshot", "arguments": "{}"},
+                                }
+                            ],
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ],
+            }
+        )
 
     @staticmethod
     def _text_chunk(text: str, finish: str | None) -> str:
-        return json.dumps({
-            "id": "c", "object": "chat.completion.chunk", "created": 0, "model": "synthetic",
-            "choices": [{"index": 0, "delta": {"role": "assistant", "content": text},
-                         "finish_reason": finish}],
-        })
+        return json.dumps(
+            {
+                "id": "c",
+                "object": "chat.completion.chunk",
+                "created": 0,
+                "model": "synthetic",
+                "choices": [
+                    {"index": 0, "delta": {"role": "assistant", "content": text}, "finish_reason": finish}
+                ],
+            }
+        )
 
 
 class CompletionProxyHandler(BaseHTTPRequestHandler):
@@ -182,7 +217,9 @@ class CompletionProxyHandler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length") or 0)
         raw = self.rfile.read(length)
         request = urllib_request.Request(
-            f"{self.upstream}{self.path}", data=raw, method="POST",
+            f"{self.upstream}{self.path}",
+            data=raw,
+            method="POST",
             headers={k: v for k, v in self.headers.items() if k.lower() != "host"},
         )
         try:
@@ -220,12 +257,18 @@ class CpmsHandler(BaseHTTPRequestHandler):
         # 字段名用真实 CPMS 的那一套（`status` 而不是 `statusCode`）——
         # 否则 Gateway 会按上游失败处理，验收就测不到本片的东西。
         order_no = self.path.rsplit("/", 1)[-1]
-        body = json.dumps({
-            "code": 0,
-            "msg": "success",
-            "data": {"orderNo": order_no, "status": "0", "plateNo": "DO-NOT-LEAK",
-                     "userId": "DO-NOT-LEAK"},
-        }).encode()
+        body = json.dumps(
+            {
+                "code": 0,
+                "msg": "success",
+                "data": {
+                    "orderNo": order_no,
+                    "status": "0",
+                    "plateNo": "DO-NOT-LEAK",
+                    "userId": "DO-NOT-LEAK",
+                },
+            }
+        ).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
@@ -286,12 +329,24 @@ class PlatformHandler(BaseHTTPRequestHandler):
             # bridge 容器到不了宿主 127.0.0.1；这是本机合成验收的已知取舍，
             # 写进报告，不当作隔离通过。
             cmd = [
-                "docker", "run", "--rm", "--pull=never", "--network=host", "--cap-drop=ALL",
-                "--user", f"{os.getuid()}:{os.getgid()}",
-                "-v", f"{state['classes']}:/classes:ro",
-                "-v", f"{state['deps']}:/deps:ro",
-                "-v", f"{state['case_dir']}:/case:ro",
-                state["jdk"], "bash", "-c", inner,
+                "docker",
+                "run",
+                "--rm",
+                "--pull=never",
+                "--network=host",
+                "--cap-drop=ALL",
+                "--user",
+                f"{os.getuid()}:{os.getgid()}",
+                "-v",
+                f"{state['classes']}:/classes:ro",
+                "-v",
+                f"{state['deps']}:/deps:ro",
+                "-v",
+                f"{state['case_dir']}:/case:ro",
+                state["jdk"],
+                "bash",
+                "-c",
+                inner,
             ]
             try:
                 completed = subprocess.run(
@@ -349,11 +404,29 @@ def _compile(classes: Path, deps: Path, jdk: str) -> tuple[int, str]:
         f"/repo/tools/m2_close/m3node/NodeLinkAcceptance.java"
     )
     completed = subprocess.run(
-        ["docker", "run", "--rm", "--pull=never", "--network=none", "--cap-drop=ALL",
-         "--user", f"{os.getuid()}:{os.getgid()}",
-         "-v", f"{REPO}:/repo:ro", "-v", f"{deps}:/deps:ro", "-v", f"{classes}:/out",
-         jdk, "bash", "-c", command],
-        capture_output=True, text=True, timeout=600,
+        [
+            "docker",
+            "run",
+            "--rm",
+            "--pull=never",
+            "--network=none",
+            "--cap-drop=ALL",
+            "--user",
+            f"{os.getuid()}:{os.getgid()}",
+            "-v",
+            f"{REPO}:/repo:ro",
+            "-v",
+            f"{deps}:/deps:ro",
+            "-v",
+            f"{classes}:/out",
+            jdk,
+            "bash",
+            "-c",
+            command,
+        ],
+        capture_output=True,
+        text=True,
+        timeout=600,
     )
     return completed.returncode, completed.stdout + completed.stderr
 
@@ -371,12 +444,23 @@ def _stop(process: subprocess.Popen) -> None:
 PROXIES: list[ThreadingHTTPServer] = []
 
 
-def _scenario(root: Path, label: str, *, mode: str, scenario: str, manifest: bool,
-              platform: ThreadingHTTPServer, model: ThreadingHTTPServer,
-              cpms: ThreadingHTTPServer, manifest_mutation: str | None = None,
-              probe: Any = None, pre_claim_without_snapshot: bool = False,
-              concurrent: bool = False, second_run_id: str | None = None,
-              completion_mutation: str | None = None) -> dict[str, Any]:
+def _scenario(
+    root: Path,
+    label: str,
+    *,
+    mode: str,
+    scenario: str,
+    manifest: bool,
+    platform: ThreadingHTTPServer,
+    model: ThreadingHTTPServer,
+    cpms: ThreadingHTTPServer,
+    manifest_mutation: str | None = None,
+    probe: Any = None,
+    pre_claim_without_snapshot: bool = False,
+    concurrent: bool = False,
+    second_run_id: str | None = None,
+    completion_mutation: str | None = None,
+) -> dict[str, Any]:
     case_root = root / label
     (case_root / "config").mkdir(parents=True)
     (case_root / "data").mkdir(parents=True)
@@ -392,13 +476,30 @@ def _scenario(root: Path, label: str, *, mode: str, scenario: str, manifest: boo
     manifest_path = case_root / "exec-manifest.json"
     if manifest:
         completed = subprocess.run(
-            ["docker", "run", "--rm", "--pull=never", "--network=none", "--cap-drop=ALL",
-             "--user", f"{os.getuid()}:{os.getgid()}", "-v", f"{case_root}:/case",
-             "-v", f"{MANIFEST_CLASSES}:/classes:ro", "-v", f"{MANIFEST_DEPS}:/deps:ro",
-             MANIFEST_JDK, "bash", "-c",
-             f"java -cp '/classes:/deps/lib/*' m3node.NodeLinkAcceptance "
-             f"--write-manifest=/case/node-manifest.json --model={model_url}"],
-            capture_output=True, text=True, timeout=120,
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--pull=never",
+                "--network=none",
+                "--cap-drop=ALL",
+                "--user",
+                f"{os.getuid()}:{os.getgid()}",
+                "-v",
+                f"{case_root}:/case",
+                "-v",
+                f"{MANIFEST_CLASSES}:/classes:ro",
+                "-v",
+                f"{MANIFEST_DEPS}:/deps:ro",
+                MANIFEST_JDK,
+                "bash",
+                "-c",
+                f"java -cp '/classes:/deps/lib/*' m3node.NodeLinkAcceptance "
+                f"--write-manifest=/case/node-manifest.json --model={model_url}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
         )
         if completed.returncode != 0:
             return {
@@ -419,25 +520,35 @@ def _scenario(root: Path, label: str, *, mode: str, scenario: str, manifest: boo
         manifest_path.chmod(0o600)
 
     agent_runs = case_root / "config/agent-runs.json"
-    agent_runs.write_text(json.dumps({
-        "environment": "env-local",
-        "snail_base_url": f"http://127.0.0.1:{platform.server_port}",
-        "snail_app_id": "node-link-check",
-        "snail_app_token": "unused",
-        "snail_agent_id": 1,
-        "snail_open_id": "open-id",
-        "expected_node_id": "node-local",
-        "nodes": [{"node_id": "node-local", "environment": "env-local",
-                   "token_sha256": hashlib.sha256(NODE_TOKEN.encode()).hexdigest()}],
-    }))
+    agent_runs.write_text(
+        json.dumps(
+            {
+                "environment": "env-local",
+                "snail_base_url": f"http://127.0.0.1:{platform.server_port}",
+                "snail_app_id": "node-link-check",
+                "snail_app_token": "unused",
+                "snail_agent_id": 1,
+                "snail_open_id": "open-id",
+                "expected_node_id": "node-local",
+                "nodes": [
+                    {
+                        "node_id": "node-local",
+                        "environment": "env-local",
+                        "token_sha256": hashlib.sha256(NODE_TOKEN.encode()).hexdigest(),
+                    }
+                ],
+            }
+        )
+    )
     agent_runs.chmod(0o600)
 
     orders = case_root / "data/orders.db"
     connection = sqlite3.connect(orders)
-    connection.execute("CREATE TABLE IF NOT EXISTS synthetic_orders "
-                       "(order_no TEXT PRIMARY KEY, user_id TEXT NOT NULL, tenant_id TEXT NOT NULL)")
-    connection.execute("INSERT OR REPLACE INTO synthetic_orders VALUES ('ORDER-A', ?, ?)",
-                       (C_USER, TENANT))
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS synthetic_orders "
+        "(order_no TEXT PRIMARY KEY, user_id TEXT NOT NULL, tenant_id TEXT NOT NULL)"
+    )
+    connection.execute("INSERT OR REPLACE INTO synthetic_orders VALUES ('ORDER-A', ?, ?)", (C_USER, TENANT))
     connection.commit()
     connection.close()
 
@@ -475,10 +586,17 @@ def _scenario(root: Path, label: str, *, mode: str, scenario: str, manifest: boo
         proxy_port = proxy.server_port
         node_gateway = f"http://127.0.0.1:{proxy_port}"
     PlatformHandler.state = {
-        "gateway": node_gateway, "model": model_url, "scenario": scenario,
+        "gateway": node_gateway,
+        "model": model_url,
+        "scenario": scenario,
         "manifest": str(node_manifest) if manifest else None,
-        "dispatched": [], "node_results": [], "threads": [], "timeout": 180,
-        "classes": str(CLASSES), "deps": str(MANIFEST_DEPS), "jdk": MANIFEST_JDK,
+        "dispatched": [],
+        "node_results": [],
+        "threads": [],
+        "timeout": 180,
+        "classes": str(CLASSES),
+        "deps": str(MANIFEST_DEPS),
+        "jdk": MANIFEST_JDK,
         "case_dir": str(case_root),
         "database": case_root / "data/gateway.db",
         "pre_claim_without_snapshot": pre_claim_without_snapshot,
@@ -489,13 +607,20 @@ def _scenario(root: Path, label: str, *, mode: str, scenario: str, manifest: boo
         probe["database"] = case_root / "data/gateway.db"
         probe["gateway"] = base
         PlatformHandler.state["probe"] = probe
-    ModelHandler.state = {"calls": 0, "mode": mode}
+    ModelHandler.state = {
+        "calls": 0,
+        "mode": mode,
+    }
     CpmsHandler.calls = 0
 
     process = subprocess.Popen(
         [sys.executable, str(REPO / "tools/m2_close/gateway_launcher.py")],
-        cwd=REPO, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        text=True, start_new_session=True,
+        cwd=REPO,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        start_new_session=True,
     )
     try:
         deadline = time.monotonic() + 60
@@ -512,8 +637,11 @@ def _scenario(root: Path, label: str, *, mode: str, scenario: str, manifest: boo
             # 两次独立派发**同时**发出：每条都签发自己的 run，两个节点进程真正并发。
             def fire() -> None:
                 status, text = http(
-                    f"{base}/v1/orders/ORDER-A/charging-status/delegated", method="POST",
-                    token=TOKEN, body={}, headers={"X-Business-Entry": "consumer"},
+                    f"{base}/v1/orders/ORDER-A/charging-status/delegated",
+                    method="POST",
+                    token=TOKEN,
+                    body={},
+                    headers={"X-Business-Entry": "consumer"},
                     timeout=300.0,
                 )
                 delegated[0] = (status, text)
@@ -526,8 +654,12 @@ def _scenario(root: Path, label: str, *, mode: str, scenario: str, manifest: boo
                 thread.join(timeout=320)
         else:
             delegated[0] = http(
-                f"{base}/v1/orders/ORDER-A/charging-status/delegated", method="POST",
-                token=TOKEN, body={}, headers={"X-Business-Entry": "consumer"})
+                f"{base}/v1/orders/ORDER-A/charging-status/delegated",
+                method="POST",
+                token=TOKEN,
+                body={},
+                headers={"X-Business-Entry": "consumer"},
+            )
         for thread in list(PlatformHandler.state["threads"]):
             thread.join(timeout=200)
         rows = _rows(case_root / "data/gateway.db")
@@ -548,17 +680,29 @@ def _scenario(root: Path, label: str, *, mode: str, scenario: str, manifest: boo
                 }
                 for item in PlatformHandler.state.get("node_results", [])
             ],
-            "rows": [{k: row.get(k) for k in (
-                "run_id", "state", "reason", "expected_agent_version", "observed_agent_version",
-                "exec_config_state", "snapshot_json", "completed_at")} for row in rows],
+            "rows": [
+                {
+                    k: row.get(k)
+                    for k in (
+                        "run_id",
+                        "state",
+                        "reason",
+                        "expected_agent_version",
+                        "observed_agent_version",
+                        "exec_config_state",
+                        "snapshot_json",
+                        "completed_at",
+                    )
+                }
+                for row in rows
+            ],
         }
     finally:
         _apply_probe_events(label, manifest_path, case_root, probe)
         _stop(process)
 
 
-def _apply_probe_events(label: str, manifest_path: Path, case_root: Path,
-                        probe: Any) -> None:
+def _apply_probe_events(label: str, manifest_path: Path, case_root: Path, probe: Any) -> None:
     """在节点跑完之后、进程停掉之前不支持的操作，一律放到这里（目前只有边界用例）。
 
     `revoked` / `expired` 需要「节点已取数、尚未确认」这个瞬间，而那一段在节点进程里。
@@ -593,7 +737,8 @@ def _apply_probe_events(label: str, manifest_path: Path, case_root: Path,
             identity = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
             status, text = http(
                 f"{probe['gateway']}/v1/internal/charging-status/completions/{run_id}",
-                method="POST", token=NODE_TOKEN,
+                method="POST",
+                token=NODE_TOKEN,
                 body={"status": "completed"},
                 headers={"X-AI-Ops-Exec-Config": identity},
             )
@@ -657,8 +802,7 @@ def main() -> int:
         "real": [
             "delegated / claim / completion routes (real Gateway process)",
             "AgentRunStore lifecycle, manifest load, identity comparison",
-            "node assembly, ControlledChargingStatusTool, LoopTerminationGuard, "
-            "ReportingChatSessionRuntime",
+            "node assembly, ControlledChargingStatusTool, LoopTerminationGuard, ReportingChatSessionRuntime",
         ],
         "checks": [],
         "scenarios": {},
@@ -672,33 +816,65 @@ def main() -> int:
     platform = _serve(PlatformHandler)
     try:
         # LINK-01 正常两轮
-        normal = _scenario(root, "normal", mode="normal", scenario="normal", manifest=True,
-                           platform=platform, model=model, cpms=cpms)
+        normal = _scenario(
+            root,
+            "normal",
+            mode="normal",
+            scenario="normal",
+            manifest=True,
+            platform=platform,
+            model=model,
+            cpms=cpms,
+        )
         report["scenarios"]["normal"] = normal
         row = (normal.get("rows") or [{}])[0]
         check("LINK-01 正常两轮：一次业务", normal.get("cpms_calls") == 1, normal.get("cpms_calls"))
         check("LINK-01 正常两轮：两次模型", normal.get("model_calls") == 2, normal.get("model_calls"))
         check("LINK-01 正常两轮：succeeded", row.get("state") == "succeeded", row.get("state"))
-        check("LINK-01 正常两轮：回执带 agent_version 且 gap 为空",
-              ((normal.get("delegated_body") or {}) if isinstance(normal.get("delegated_body"), dict) else {})
-              .get("agent_version") == row.get("expected_agent_version")
-              and ((normal.get("delegated_body") or {}).get("agent_version_gap") is None),
-              normal.get("delegated_body"))
-        check("LINK-01 正常两轮：节点报告完成",
-              "STATUS=PASS" in str((normal.get("node") or {}).get("log")), normal.get("node"))
+        check(
+            "LINK-01 正常两轮：回执带 agent_version 且 gap 为空",
+            (
+                (normal.get("delegated_body") or {}) if isinstance(normal.get("delegated_body"), dict) else {}
+            ).get("agent_version")
+            == row.get("expected_agent_version")
+            and ((normal.get("delegated_body") or {}).get("agent_version_gap") is None),
+            normal.get("delegated_body"),
+        )
+        check(
+            "LINK-01 正常两轮：节点报告完成",
+            "STATUS=PASS" in str((normal.get("node") or {}).get("log")),
+            normal.get("node"),
+        )
 
         # LINK-02 第二轮 500
-        bad = _scenario(root, "round2-500", mode="round2-500", scenario="round2-500",
-                        manifest=True, platform=platform, model=model, cpms=cpms)
+        bad = _scenario(
+            root,
+            "round2-500",
+            mode="round2-500",
+            scenario="round2-500",
+            manifest=True,
+            platform=platform,
+            model=model,
+            cpms=cpms,
+        )
         report["scenarios"]["round2-500"] = bad
         row = (bad.get("rows") or [{}])[0]
         check("LINK-02 第二轮失败：记录 failed", row.get("state") == "failed", row.get("state"))
-        check("LINK-02 第二轮失败：无成功回执",
-              bad.get("delegated_status") != 200, bad.get("delegated_status"))
+        check(
+            "LINK-02 第二轮失败：无成功回执", bad.get("delegated_status") != 200, bad.get("delegated_status")
+        )
 
         # LINK-03 末轮截断
-        cut = _scenario(root, "truncated", mode="truncated", scenario="truncated",
-                        manifest=True, platform=platform, model=model, cpms=cpms)
+        cut = _scenario(
+            root,
+            "truncated",
+            mode="truncated",
+            scenario="truncated",
+            manifest=True,
+            platform=platform,
+            model=model,
+            cpms=cpms,
+        )
         report["scenarios"]["truncated"] = cut
         row = (cut.get("rows") or [{}])[0]
         check("LINK-03 截断：绝无 succeeded", row.get("state") != "succeeded", row.get("state"))
@@ -707,116 +883,206 @@ def main() -> int:
         # LINK-04 受控 claim 被拒：另一个执行者已 claim（running）但没写快照 ⇒ 422/409，
         # 记录仍非终态。这是唯一能区分「抛异常中止整轮」与「ERROR 文本继续跑」的形态。
         busy_probe: dict[str, Any] = {}
-        busy = _scenario(root, "claim-busy", mode="normal", scenario="normal", manifest=True,
-                         platform=platform, model=model, cpms=cpms, probe=busy_probe,
-                         pre_claim_without_snapshot=True)
+        busy = _scenario(
+            root,
+            "claim-busy",
+            mode="normal",
+            scenario="normal",
+            manifest=True,
+            platform=platform,
+            model=model,
+            cpms=cpms,
+            probe=busy_probe,
+            pre_claim_without_snapshot=True,
+        )
         report["scenarios"]["claim-busy"] = busy
         row = (busy.get("rows") or [{}])[0]
-        check("LINK-04 受控 claim 被拒：记录绝不 succeeded",
-              row.get("state") != "succeeded", row.get("state"))
-        check("LINK-04 受控 claim 被拒：整轮不再往下跑（模型只调 1 次）",
-              busy.get("model_calls") == 1, busy.get("model_calls"))
-        check("LINK-04 受控 claim 被拒：派发侧不返回成功",
-              busy.get("delegated_status") != 200, busy.get("delegated_status"))
+        check(
+            "LINK-04 受控 claim 被拒：记录绝不 succeeded", row.get("state") != "succeeded", row.get("state")
+        )
+        check(
+            "LINK-04 受控 claim 被拒：整轮不再往下跑（模型只调 1 次）",
+            busy.get("model_calls") == 1,
+            busy.get("model_calls"),
+        )
+        check(
+            "LINK-04 受控 claim 被拒：派发侧不返回成功",
+            busy.get("delegated_status") != 200,
+            busy.get("delegated_status"),
+        )
 
         # 身份不一致（Gateway 侧清单与节点侧不同）——另一条独立的拒绝路径。
-        refused = _scenario(root, "claim-refused", mode="normal", scenario="normal",
-                            manifest=True, platform=platform, model=model, cpms=cpms,
-                            manifest_mutation="gateway-side-different-manifest")
+        refused = _scenario(
+            root,
+            "claim-refused",
+            mode="normal",
+            scenario="normal",
+            manifest=True,
+            platform=platform,
+            model=model,
+            cpms=cpms,
+            manifest_mutation="gateway-side-different-manifest",
+        )
         report["scenarios"]["claim-refused"] = refused
         row = (refused.get("rows") or [{}])[0]
-        check("LINK-04 身份不一致（受控领取被拒）：记录落终态且非 succeeded",
-              row.get("state") == "failed" and row.get("reason") == "exec_config_drift",
-              {"state": row.get("state"), "reason": row.get("reason")})
-        check("LINK-04 领取被拒：节点让整轮失败（不回成功）",
-              "completion=false" in str((refused.get("node") or {}).get("log")),
-              (refused.get("node") or {}).get("rc"))
-        check("LINK-04 领取被拒：派发侧不返回成功",
-              refused.get("delegated_status") != 200, refused.get("delegated_status"))
+        check(
+            "LINK-04 身份不一致（受控领取被拒）：记录落终态且非 succeeded",
+            row.get("state") == "failed" and row.get("reason") == "exec_config_drift",
+            {"state": row.get("state"), "reason": row.get("reason")},
+        )
+        check(
+            "LINK-04 领取被拒：节点让整轮失败（不回成功）",
+            "completion=false" in str((refused.get("node") or {}).get("log")),
+            (refused.get("node") or {}).get("rc"),
+        )
+        check(
+            "LINK-04 领取被拒：派发侧不返回成功",
+            refused.get("delegated_status") != 200,
+            refused.get("delegated_status"),
+        )
 
         # LINK-05 进程中断：节点在第二段文本到达后自己 Runtime.halt（真的被杀，不是
         # 手工返回一个 Outcome）。没有 completion/error 回调 ⇒ 没有完成通知 ⇒
         # 记录停在 running（已取数），由既有 TTL 收敛为 expired。
-        cancel = _scenario(root, "cancel", mode="slow", scenario="cancel", manifest=True,
-                           platform=platform, model=model, cpms=cpms)
+        cancel = _scenario(
+            root,
+            "cancel",
+            mode="slow",
+            scenario="cancel",
+            manifest=True,
+            platform=platform,
+            model=model,
+            cpms=cpms,
+        )
         report["scenarios"]["cancel"] = cancel
         row = (cancel.get("rows") or [{}])[0]
         node = cancel.get("node") or {}
         log = str(node.get("log", ""))
-        check("LINK-05 进程中断：进程确实被自己杀掉（exit 9）",
-              node.get("rc") == 9, {"rc": node.get("rc"), "tail": log[-200:]})
-        check("LINK-05 进程中断：中断前第一段文本已经到达",
-              "INTERRUPTING_NODE_PROCESS" in log, log[-300:])
-        check("LINK-05 进程中断：没有完成也没有错误回调",
-              "UNEXPECTED_COMPLETION" not in log and "UNEXPECTED_ERROR" not in log,
-              log[-300:])
-        check("LINK-05 进程中断：业务已读、记录不 succeeded",
-              row.get("state") == "running" and bool(row.get("snapshot_json")),
-              {"state": row.get("state"), "snapshot": bool(row.get("snapshot_json"))})
-        check("LINK-05 进程中断：派发侧不返回成功",
-              cancel.get("delegated_status") != 200, cancel.get("delegated_status"))
+        check(
+            "LINK-05 进程中断：进程确实被自己杀掉（exit 9）",
+            node.get("rc") == 9,
+            {"rc": node.get("rc"), "tail": log[-200:]},
+        )
+        check("LINK-05 进程中断：中断前第一段文本已经到达", "INTERRUPTING_NODE_PROCESS" in log, log[-300:])
+        check(
+            "LINK-05 进程中断：没有完成也没有错误回调",
+            "UNEXPECTED_COMPLETION" not in log and "UNEXPECTED_ERROR" not in log,
+            log[-300:],
+        )
+        check(
+            "LINK-05 进程中断：业务已读、记录不 succeeded",
+            row.get("state") == "running" and bool(row.get("snapshot_json")),
+            {"state": row.get("state"), "snapshot": bool(row.get("snapshot_json"))},
+        )
+        check(
+            "LINK-05 进程中断：派发侧不返回成功",
+            cancel.get("delegated_status") != 200,
+            cancel.get("delegated_status"),
+        )
 
         # LINK-07 领取重试：业务仍只读一次
-        retry = _scenario(root, "retry", mode="normal", scenario="retry", manifest=True,
-                          platform=platform, model=model, cpms=cpms)
+        retry = _scenario(
+            root,
+            "retry",
+            mode="normal",
+            scenario="retry",
+            manifest=True,
+            platform=platform,
+            model=model,
+            cpms=cpms,
+        )
         report["scenarios"]["retry"] = retry
         row = (retry.get("rows") or [{}])[0]
         check("LINK-07 重试：业务只读一次", retry.get("cpms_calls") == 1, retry.get("cpms_calls"))
         check("LINK-07 重试：最终 succeeded", row.get("state") == "succeeded", row.get("state"))
-        check("LINK-07 重试：节点两次都拿到结果",
-              "PASS retry:second-completed" in str((retry.get("node") or {}).get("log")),
-              (retry.get("node") or {}).get("rc"))
+        check(
+            "LINK-07 重试：节点两次都拿到结果",
+            "PASS retry:second-completed" in str((retry.get("node") or {}).get("log")),
+            (retry.get("node") or {}).get("rc"),
+        )
 
         # LINK-09 撤销边界：节点跑完后撤销，再发完成通知必须被拒、不复活。
         revoke_probe: dict[str, Any] = {"after": "revoke"}
-        revoked = _scenario(root, "revoked", mode="normal", scenario="normal", manifest=True,
-                            platform=platform, model=model, cpms=cpms, probe=revoke_probe)
+        revoked = _scenario(
+            root,
+            "revoked",
+            mode="normal",
+            scenario="normal",
+            manifest=True,
+            platform=platform,
+            model=model,
+            cpms=cpms,
+            probe=revoke_probe,
+        )
         report["scenarios"]["revoked"] = revoked
         after = revoke_probe.get("completion_after") or {}
         check("LINK-09 撤销后完成通知被拒", after.get("status") == 403, after)
-        check("LINK-09 撤销后记录仍是 revoked", revoke_probe.get("state_after") == "revoked",
-              revoke_probe.get("state_after"))
+        check(
+            "LINK-09 撤销后记录仍是 revoked",
+            revoke_probe.get("state_after") == "revoked",
+            revoke_probe.get("state_after"),
+        )
 
         # LINK-06 两个 run **同时**在跑（两次派发并发起两个真实节点进程），
         # 各自领取自己的业务、各自发自己的完成通知。
         # 每个派发各起一个节点进程、各跑一次普通 run —— 交错发生在**平台与 Gateway**
         # 这一层（两次派发同时在飞），不需要在一个进程里塞两个 run。
-        interleaved = _scenario(root, "two-runs", mode="normal", scenario="normal",
-                                manifest=True, platform=platform, model=model, cpms=cpms,
-                                concurrent=True)
+        interleaved = _scenario(
+            root,
+            "two-runs",
+            mode="normal",
+            scenario="normal",
+            manifest=True,
+            platform=platform,
+            model=model,
+            cpms=cpms,
+            concurrent=True,
+        )
         report["scenarios"]["two-runs"] = interleaved
         rows = interleaved.get("rows") or []
         states = sorted(row.get("state") for row in rows)
         run_ids = sorted(row.get("run_id") for row in rows)
-        check("LINK-06 两个 run 交错：两条记录都 succeeded", states == ["succeeded", "succeeded"],
-              states)
-        check("LINK-06 两个 run 交错：各自的快照与身份独立",
-              len(rows) == 2 and all(row.get("snapshot_json") for row in rows)
-              and len(set(run_ids)) == 2,
-              run_ids)
+        check("LINK-06 两个 run 交错：两条记录都 succeeded", states == ["succeeded", "succeeded"], states)
+        check(
+            "LINK-06 两个 run 交错：各自的快照与身份独立",
+            len(rows) == 2 and all(row.get("snapshot_json") for row in rows) and len(set(run_ids)) == 2,
+            run_ids,
+        )
         node_rows = [
-            {"state": row.get("state"), "expected": row.get("expected_agent_version"),
-             "observed": row.get("observed_agent_version")}
+            {
+                "state": row.get("state"),
+                "expected": row.get("expected_agent_version"),
+                "observed": row.get("observed_agent_version"),
+            }
             for row in rows
         ]
-        check("LINK-06 两个 run 交错：身份各自核对一致",
-              all(item["expected"] == item["observed"] and item["expected"] for item in node_rows),
-              node_rows)
+        check(
+            "LINK-06 两个 run 交错：身份各自核对一致",
+            all(item["expected"] == item["observed"] and item["expected"] for item in node_rows),
+            node_rows,
+        )
         # 归属的直接证据：两次**并发**派发各带自己的 sid，各自成功；业务总共读两次
         # （两条记录各一次），而不是一次或四次。
         dispatches = list(interleaved.get("dispatches") or [])
-        check("LINK-06 两个 run 交错：两次派发各带自己的 sid 且都成功",
-              len(dispatches) == 2
-              and sorted(d.get("sid") for d in dispatches) == run_ids
-              and all(d.get("rc") == 0 and d.get("reported_pass") for d in dispatches),
-              dispatches)
-        check("LINK-06 两个 run 交错：业务读取恰好两次（每 run 一次）",
-              interleaved.get("cpms_calls") == 2, interleaved.get("cpms_calls"))
-        check("LINK-06 两个 run 交错：两次派发都返回 200（平台是同步接口）",
-              [d for d in interleaved.get("delegated_statuses", [])] == [200, 200]
-              if interleaved.get("delegated_statuses")
-              else interleaved.get("delegated_status") == 200,
-              interleaved.get("delegated_statuses") or interleaved.get("delegated_status"))
+        check(
+            "LINK-06 两个 run 交错：两次派发各带自己的 sid 且都成功",
+            len(dispatches) == 2
+            and sorted(d.get("sid") for d in dispatches) == run_ids
+            and all(d.get("rc") == 0 and d.get("reported_pass") for d in dispatches),
+            dispatches,
+        )
+        check(
+            "LINK-06 两个 run 交错：业务读取恰好两次（每 run 一次）",
+            interleaved.get("cpms_calls") == 2,
+            interleaved.get("cpms_calls"),
+        )
+        check(
+            "LINK-06 两个 run 交错：两次派发都返回 200（平台是同步接口）",
+            [d for d in interleaved.get("delegated_statuses", [])] == [200, 200]
+            if interleaved.get("delegated_statuses")
+            else interleaved.get("delegated_status") == 200,
+            interleaved.get("delegated_statuses") or interleaved.get("delegated_status"),
+        )
         report["notes"] = {
             "ttl_convergence": (
                 "进程中断后的 running→expired 由 Gateway 侧既有 TTL 语义覆盖"
@@ -828,39 +1094,80 @@ def main() -> int:
 
         # LINK-08 节点必须校验完成回执：200 但坏回执不能被记成成功。
         for mutation in ("empty", "wrong-run", "failed-state"):
-            bad_ack = _scenario(root, f"bad-ack-{mutation}", mode="normal", scenario="normal",
-                                manifest=True, platform=platform, model=model, cpms=cpms,
-                                completion_mutation=mutation)
+            bad_ack = _scenario(
+                root,
+                f"bad-ack-{mutation}",
+                mode="normal",
+                scenario="normal",
+                manifest=True,
+                platform=platform,
+                model=model,
+                cpms=cpms,
+                completion_mutation=mutation,
+            )
             report["scenarios"][f"bad-ack-{mutation}"] = bad_ack
             row = (bad_ack.get("rows") or [{}])[0]
             log = str((bad_ack.get("node") or {}).get("log", ""))
             # 记录本身由**真 Gateway** 落定（它是权威），代理只改写回执正文。
             # 本判据要证的是节点侧：一份它无法校验的 2xx 回执**不能**被它当作成功上报。
-            check(f"LINK-08 坏回执[{mutation}]：节点不向平台报成功",
-                  "STATUS=PASS" not in log
-                  and "CompletionNotConfirmed" in log
-                  and (bad_ack.get("node") or {}).get("rc") != 0,
-                  {"state": row.get("state"), "rc": (bad_ack.get("node") or {}).get("rc")})
-            check(f"LINK-08 回执[{mutation}]：确实到达了节点（代理计数 > 0）",
-                  CompletionProxyHandler.completions >= 1, CompletionProxyHandler.completions)
+            check(
+                f"LINK-08 坏回执[{mutation}]：节点不向平台报成功",
+                "STATUS=PASS" not in log
+                and "CompletionNotConfirmed" in log
+                and (bad_ack.get("node") or {}).get("rc") != 0,
+                {"state": row.get("state"), "rc": (bad_ack.get("node") or {}).get("rc")},
+            )
+            check(
+                f"LINK-08 回执[{mutation}]：确实到达了节点（代理计数 > 0）",
+                CompletionProxyHandler.completions >= 1,
+                CompletionProxyHandler.completions,
+            )
 
         # LINK-10 未启用清单：行为与今天逐字一致
-        legacy = _scenario(root, "legacy", mode="normal", scenario="normal", manifest=False,
-                           platform=platform, model=model, cpms=cpms)
+        legacy = _scenario(
+            root,
+            "legacy",
+            mode="normal",
+            scenario="normal",
+            manifest=False,
+            platform=platform,
+            model=model,
+            cpms=cpms,
+        )
         report["scenarios"]["legacy"] = legacy
         row = (legacy.get("rows") or [{}])[0]
-        check("LINK-10 未启用：领取即 succeeded（旧语义）", row.get("state") == "succeeded",
-              row.get("state"))
-        check("LINK-10 未启用：无期望身份", row.get("expected_agent_version") is None,
-              row.get("expected_agent_version"))
-        check("LINK-10 未启用：回执键集合不变",
-              set((legacy.get("delegated_body") or {}).keys())
-              == {"run_id", "state", "reason", "operation", "scope_fingerprint",
-                  "expected_environment", "expected_app_id", "expected_agent_id",
-                  "expected_node_id", "actual_node_id", "node_build", "gateway_version",
-                  "agent_version", "agent_version_gap", "result_sha256", "created_at",
-                  "expires_at", "claimed_at", "completed_at"},
-              sorted((legacy.get("delegated_body") or {}).keys()))
+        check("LINK-10 未启用：领取即 succeeded（旧语义）", row.get("state") == "succeeded", row.get("state"))
+        check(
+            "LINK-10 未启用：无期望身份",
+            row.get("expected_agent_version") is None,
+            row.get("expected_agent_version"),
+        )
+        check(
+            "LINK-10 未启用：回执键集合不变",
+            set((legacy.get("delegated_body") or {}).keys())
+            == {
+                "run_id",
+                "state",
+                "reason",
+                "operation",
+                "scope_fingerprint",
+                "expected_environment",
+                "expected_app_id",
+                "expected_agent_id",
+                "expected_node_id",
+                "actual_node_id",
+                "node_build",
+                "gateway_version",
+                "agent_version",
+                "agent_version_gap",
+                "result_sha256",
+                "created_at",
+                "expires_at",
+                "claimed_at",
+                "completed_at",
+            },
+            sorted((legacy.get("delegated_body") or {}).keys()),
+        )
     finally:
         for server in (cpms, model, platform, *PROXIES):
             server.shutdown()

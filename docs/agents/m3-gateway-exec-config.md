@@ -180,9 +180,21 @@ uv run python tools/m2_close/m3node/verify_gateway_exec_config.py --out /tmp/exe
 框架照样触发完成回调、completion 文本是半截，finish reason 是 `_UNKNOWN`。
 「有完成回调」不能证明上游把最后一轮发完了。
 
-登记表（`RunScope`）的三条边界：取消时 completion/error **两个回调都不到**，所以
-`execute` 结束（正常返回或抛出）时无条件 close；同一 run 重入时 open 先关旧格、
-close 只删自己那一格（条件删除），不会误删新格；登记表有上限并按需清扫已关闭的格子。
+**本机 active-run 登记**（`RunExecution.ActiveRuns`）。同 run 重入在**本机**拒绝：
+`begin()` 用 `putIfAbsent` 判定，重复者只回本地 `DuplicateRunRefused`，**不发任何通知**
+（Gateway 对 `running` + 已有快照的重试会回 200 并重放快照，所以「领到了」不能证明拥有这条 run；
+让第二个执行发终局会把正在跑的原 run 杀掉）。登记在**真实终局回调**（completion/error）里移除，
+**不在 `execute` 返回时移除** —— 实测 `executeStream` 在 `Flux.subscribe(...)` 之后直接 return，
+流仍在跑，把返回当结束会把并发的第二个请求放进来。
+
+守卫本身在**调用线程**上交接（框架在 subscribe 之前同步构建 ChatClient），所以同一 run 的两次执行
+各持自己的守卫，不存在「后者的 attach 落到前者的槽里」。
+
+取消（订阅方 dispose）在框架里**没有回调**，这类登记不会被主动移除。收口是两条**实际执行**的规则：
+超过 15 分钟（大于 Gateway 的 180 秒 TTL）的登记在每次进入时清扫；清扫后仍达 256 条时
+**拒绝新的执行**并回本地 `AT_CAP` 错误。上限判定与 `putIfAbsent` 在同一个 `synchronized` 临界区内，
+并发的不同 run 不会一起越过上限。这个边界同时意味着：被取消的 run 在 15 分钟内仍占一个名额 ——
+这是已知的、而不是被隐藏的边界。
 
 为什么受控领取失败要抛异常：`ToolExecutionException` 会被框架默认的
 `DefaultToolExecutionExceptionProcessor(alwaysThrow=false)` 转成文本继续跑，

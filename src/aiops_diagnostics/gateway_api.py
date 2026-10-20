@@ -2789,9 +2789,7 @@ def create_gateway_app(
             )
 
         if run.state == SUCCEEDED or (
-            run.state == RUNNING
-            and run.snapshot is not None
-            and run.expected_agent_version is not None
+            run.state == RUNNING and run.snapshot is not None and run.expected_agent_version is not None
         ):
             # 有效期内重试：交回**同一份**快照，不再读一次业务（IC-05）。
             # 新模式（启用清单）下「已取数、等待整轮确认」同样是 running + 快照，
@@ -2870,9 +2868,7 @@ def create_gateway_app(
             )
         run = context.agent_run_store.get(run_id)
         if run is None:
-            raise StandardAPIError(
-                status.HTTP_404_NOT_FOUND, "AGENT_RUN_NOT_FOUND", "agent run not found"
-            )
+            raise StandardAPIError(status.HTTP_404_NOT_FOUND, "AGENT_RUN_NOT_FOUND", "agent run not found")
         # 绑定：同环境、同一个**预期节点**、同一 app/agent。错节点不伤他人记录（只读判定，
         # 不写任何列）。
         if (
@@ -2883,9 +2879,7 @@ def create_gateway_app(
             or config.snail_app_id != run.app_id
             or str(config.snail_agent_id) != run.agent_id
         ):
-            raise StandardAPIError(
-                status.HTTP_403_FORBIDDEN, "AGENT_RUN_WRONG_NODE", "agent run refused"
-            )
+            raise StandardAPIError(status.HTTP_403_FORBIDDEN, "AGENT_RUN_WRONG_NODE", "agent run refused")
 
         observed = exec_config
         verdict, settled = context.agent_run_store.complete_loop(
@@ -2914,16 +2908,12 @@ def create_gateway_app(
                 "agent run does not track a loop completion",
             )
         if verdict == "missing":
-            raise StandardAPIError(
-                status.HTTP_404_NOT_FOUND, "AGENT_RUN_NOT_FOUND", "agent run not found"
-            )
+            raise StandardAPIError(status.HTTP_404_NOT_FOUND, "AGENT_RUN_NOT_FOUND", "agent run not found")
         if verdict == "expired":
             raise StandardAPIError(
                 status.HTTP_403_FORBIDDEN, "AGENT_RUN_NOT_ACTIVE", "agent run is not active"
             )
-        raise StandardAPIError(
-            status.HTTP_403_FORBIDDEN, "AGENT_RUN_NOT_ACTIVE", "agent run is not active"
-        )
+        raise StandardAPIError(status.HTTP_403_FORBIDDEN, "AGENT_RUN_NOT_ACTIVE", "agent run is not active")
 
     @app.post("/v1/health-report-jobs", status_code=status.HTTP_202_ACCEPTED)
     def create_health_report_job(

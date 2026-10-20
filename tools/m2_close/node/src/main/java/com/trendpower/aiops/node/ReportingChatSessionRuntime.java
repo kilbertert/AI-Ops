@@ -13,9 +13,6 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
 
-import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
-
 /**
  * 把「整轮模型工具循环结束」如实报给 Gateway —— **并只在 Gateway 确认之后**才让本次
  * run 被算作成功。
@@ -42,7 +39,7 @@ class ReportingChatSessionRuntime extends ChatSessionRuntime {
 
     private final GatewayClient gateway;
     private final GuardedChatModelFactory modelFactory;
-    private final RunScope scope;
+    private final RunExecution.ActiveRuns activeRuns;
 
     @Autowired
     ReportingChatSessionRuntime(ClientChatExecutor executor,
@@ -50,62 +47,96 @@ class ReportingChatSessionRuntime extends ChatSessionRuntime {
                                 ToolRuntime toolRuntime,
                                 GatewayClient gateway,
                                 GuardedChatModelFactory modelFactory,
-                                RunScope scope) {
+                                RunExecution.ActiveRuns activeRuns) {
         super(executor, counter, toolRuntime);
         this.gateway = gateway;
         this.modelFactory = modelFactory;
-        this.scope = scope;
+        this.activeRuns = activeRuns;
     }
 
     @Override
     public void execute(ChatSessionRequest request) {
-        String runId = runIdOf(request);
+        String runId = RunExecution.runIdOf(request);
         if (!modelFactory.enabled() || runId == null) {
             super.execute(request);
             return;
         }
-        // 先登记本次 run：ChatClient（以及挂守卫的 customizer）是在这之后才构造的。
-        RunScope.Slot slot = scope.open(runId);
-        ChatSessionRequest wrapped = ChatSessionRequest.builder()
+        RunExecution execution = RunExecution.create(runId);
+        RunExecution.ActiveRuns.Refusal refusal = activeRuns.begin(execution);
+        if (refusal != RunExecution.ActiveRuns.Refusal.NONE) {
+            // **本地拒绝，且不发任何通知**：这条 run 正在本机执行（或登记表已满）。
+            // Gateway 对 running+快照的重试会回 200 并重放快照，所以「能领到」并不能
+            // 证明这次执行拥有这条 run；让第二个执行发终局会把原 run 杀掉。
+            forwardError(request, new DuplicateRunRefused(
+                    refusal == RunExecution.ActiveRuns.Refusal.DUPLICATE
+                            ? "this run is already executing in this process"
+                            : "too many active runs in this process"));
+            return;
+        }
+        // 守卫在**调用线程**上交接：框架在 subscribe 之前同步构建 ChatClient，
+        // 所以这一次调用期间的线程局部作用域正好覆盖 customizer 的可见范围。
+        // 原样保存前值：嵌套执行的可能是**另一个** run 的作用域，不能按本 run 过滤。
+        RunExecution previous = RunExecution.peek();
+        RunExecution.enter(execution);
+        try {
+            super.execute(wrap(request, execution));
+        } catch (RuntimeException | Error failure) {
+            // 构造期/派发期失败（含清单/工具漂移）：这是**本次执行**的终局失败，
+            // 必须从 issued/running 落 failed，而不是留在 issued。
+            finishOnce(execution, request, () -> {
+                reportFailed(runId, "node_failed");
+                forwardError(request, failure);
+            });
+            throw failure;
+        } finally {
+            // 只恢复线程上下文：super.execute 在订阅后立即返回，流还在跑。
+            RunExecution.exit(previous);
+        }
+    }
+
+    private ChatSessionRequest wrap(ChatSessionRequest request, RunExecution execution) {
+        String runId = execution.runId();
+        return ChatSessionRequest.builder()
                 .dispatchRequest(request.getDispatchRequest())
                 .textConsumer(request.getTextConsumer())
                 .thinkingConsumer(request.getThinkingConsumer())
-                .completionConsumer(result -> {
-                    try {
-                        LoopTerminationGuard guard = slot.takeGuard();
-                        if (guard == null || !guard.finishedCleanly()) {
-                            // 循环"结束"了，但最后一轮没有正常说完整（截断/长度/内容过滤/缺失）。
-                            reportFailed(runId, "model_stream_incomplete");
-                            forwardError(request, new LoopIncomplete(
-                                    "model stream did not finish cleanly"));
-                            return;
-                        }
-                        if (!reportCompleted(runId)) {
-                            // Gateway 未确认：**不能**把这次 run 报成成功。
-                            forwardError(request, new CompletionNotConfirmed(
-                                    "gateway did not confirm loop completion"));
-                            return;
-                        }
-                        request.acceptCompletion(result);
-                    } finally {
-                        scope.close(runId, slot);
+                .completionConsumer(result -> finishOnce(execution, request, () -> {
+                    if (!execution.guard().finishedCleanly()) {
+                        // 循环"结束"了，但最后一轮没有正常说完整（截断/长度/内容过滤/缺失）。
+                        reportFailed(runId, "model_stream_incomplete");
+                        forwardError(request, new LoopIncomplete(
+                                "model stream did not finish cleanly"));
+                        return;
                     }
-                })
-                .errorConsumer(error -> {
-                    try {
-                        reportFailed(runId, "model_failed");
-                        forwardError(request, error);
-                    } finally {
-                        scope.close(runId, slot);
+                    if (!reportCompleted(runId)) {
+                        // Gateway 未确认：**不能**把这次 run 报成成功。
+                        forwardError(request, new CompletionNotConfirmed(
+                                "gateway did not confirm loop completion"));
+                        return;
                     }
-                })
+                    request.acceptCompletion(result);
+                }))
+                .errorConsumer(error -> finishOnce(execution, request, () -> {
+                    reportFailed(runId, "model_failed");
+                    forwardError(request, error);
+                }))
                 .build();
-        // 取消（订阅方 dispose）与进程内的任何意外都不会触发上面两个回调（实测），
-        // 所以这里必须无条件收口：不依赖回调，也就不会留下泄漏的格子。
+    }
+
+    /**
+     * 只结算一次，并在**同一次**结算里把这条 run 从本机登记表移除。
+     *
+     * <p>移除点就是真实终局：completion 或 error 回调。取消没有回调，这类登记由
+     * {@link RunExecution.ActiveRuns} 的超时清扫与硬上限收口（见那里的注释）。
+     */
+    private void finishOnce(RunExecution execution, ChatSessionRequest request, Runnable settle) {
+        if (!execution.settled.compareAndSet(false, true)) {
+            return;
+        }
         try {
-            super.execute(wrapped);
+            settle.run();
         } finally {
-            scope.close(runId, slot);
+            activeRuns.finish(execution);
         }
     }
 
@@ -168,92 +199,20 @@ class ReportingChatSessionRuntime extends ChatSessionRuntime {
         }
     }
 
-    /** Gateway 未确认整轮完成。平台据此判本次 run 失败（而不是成功）。 */
-    public static final class CompletionNotConfirmed extends RuntimeException {
-        public CompletionNotConfirmed(String message) {
+    /**
+     * 同一 run 的重复请求：本次执行没有领到业务，原 run 仍在跑。
+     * 这是**本次请求**的失败，不是那条 run 的终局 —— 因此不发任何完成/失败通知。
+     */
+    public static final class DuplicateRunRefused extends RuntimeException {
+        public DuplicateRunRefused(String message) {
             super(message);
         }
     }
 
-    /**
-     * 每次 run 的登记表：execute 先开一格，customizer 把守卫填进去。
-     *
-     * <p>三条必须收口的边界（复核笔记 #2）：
-     * <ul>
-     *   <li><b>取消会泄漏</b>：取消时 completion/error 两个回调都不到（实测），
-     *       所以不能只靠它们 close。这里用**有界**登记表 + 每次 open 的机会性清扫，
-     *       并且 {@code execute} 结束（正常返回或抛出）时无条件 close。</li>
-     *   <li><b>同 run 重入</b>：{@code put} 会覆盖前一格，前一次的 close 又会删掉新格。
-     *       现在 open 先关掉旧格（旧格已被取代，不能再用），close 只在**自己那一格**
-     *       仍是当前格时才删（条件删除），不会误删别人的。</li>
-     *   <li><b>未启用不介入</b>：customizer 只在能取到合法 run_id 且启用清单时登记 ——
-     *       由调用方保证；这里不做清单判断，避免两个地方各判一次。</li>
-     * </ul>
-     */
-    @Component
-    static class RunScope {
-        /** 上限只为「取消留下的格子」兜底：正常路径都会 close。 */
-        private static final int MAX_SLOTS = 512;
-
-        private final Map<String, Slot> slots = new ConcurrentHashMap<>();
-
-        Slot open(String runId) {
-            sweepIfCrowded();
-            Slot slot = new Slot();
-            Slot previous = slots.put(runId, slot);
-            if (previous != null) {
-                previous.close();
-            }
-            return slot;
-        }
-
-        /** 条件删除：只删**自己那一格**。调用方可重复调用（幂等）。 */
-        void close(String runId, Slot slot) {
-            slot.close();
-            slots.remove(runId, slot);
-        }
-
-        void attach(String runId, LoopTerminationGuard guard) {
-            Slot slot = slots.get(runId);
-            if (slot != null) {
-                slot.attach(guard);
-            }
-        }
-
-        private void sweepIfCrowded() {
-            if (slots.size() < MAX_SLOTS) {
-                return;
-            }
-            // 已关闭的格子没有意义（守卫已被 take 走或已结束），直接清掉。
-            slots.entrySet().removeIf(entry -> entry.getValue().isClosed());
-        }
-
-        static final class Slot {
-            private volatile LoopTerminationGuard guard;
-            private volatile boolean closed;
-            private final java.util.concurrent.atomic.AtomicBoolean settled =
-                    new java.util.concurrent.atomic.AtomicBoolean();
-
-            void attach(LoopTerminationGuard value) {
-                this.guard = value;
-            }
-
-            /** 取走守卫：只允许取到一次，避免重入的两次 run 共用同一个计数器。 */
-            LoopTerminationGuard takeGuard() {
-                if (!settled.compareAndSet(false, true)) {
-                    return null;
-                }
-                LoopTerminationGuard current = guard;
-                return current;
-            }
-
-            void close() {
-                closed = true;
-            }
-
-            boolean isClosed() {
-                return closed;
-            }
+    /** Gateway 未确认整轮完成。平台据此判本次 run 失败（而不是成功）。 */
+    public static final class CompletionNotConfirmed extends RuntimeException {
+        public CompletionNotConfirmed(String message) {
+            super(message);
         }
     }
 
@@ -265,12 +224,6 @@ class ReportingChatSessionRuntime extends ChatSessionRuntime {
      */
     @Component
     static class LoopGuardCustomizer implements ChatClientCustomizer {
-
-        private final RunScope scope;
-
-        LoopGuardCustomizer(RunScope scope) {
-            this.scope = scope;
-        }
 
         @Override
         public int order() {
@@ -284,9 +237,13 @@ class ReportingChatSessionRuntime extends ChatSessionRuntime {
             if (runId == null || !runId.matches("run_[A-Za-z0-9_-]{20,64}")) {
                 return;
             }
-            LoopTerminationGuard guard = new LoopTerminationGuard();
-            scope.attach(runId, guard);
-            context.getBuilder().defaultAdvisors(guard);
+            // 只挂到**本次执行**的守卫上；拿不到（run_id 不匹配或未启用）就不挂，
+            // 绝不猜一个别人的守卫。
+            RunExecution execution = RunExecution.current(runId);
+            if (execution == null) {
+                return;
+            }
+            context.getBuilder().defaultAdvisors(execution.guard());
         }
     }
 }

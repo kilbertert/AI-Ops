@@ -311,9 +311,7 @@ def test_gateway_refuses_to_release_after_revoke_between_claim_and_completion(tm
 
 
 @pytest.mark.parametrize("offset_seconds", [-1, 0, 1])
-def test_completion_expiry_boundary_matches_the_claim_semantics(
-    tmp_path, monkeypatch, offset_seconds
-):
+def test_completion_expiry_boundary_matches_the_claim_semantics(tmp_path, monkeypatch, offset_seconds):
     """到期判据仍是 ``expires_at <= now``：到期前放行、**恰好到期**拒绝、明显过期拒绝。"""
     from datetime import timedelta
 
@@ -322,9 +320,7 @@ def test_completion_expiry_boundary_matches_the_claim_semantics(
     manifest = _write_manifest(tmp_path)
     fixture, run_id, identity = _claimed_with_snapshot(tmp_path, monkeypatch, manifest)
     expires = fixture["store"].get(run_id).expires_at
-    monkeypatch.setattr(
-        agent_runs, "_now", lambda e=expires, o=offset_seconds: e + timedelta(seconds=o)
-    )
+    monkeypatch.setattr(agent_runs, "_now", lambda e=expires, o=offset_seconds: e + timedelta(seconds=o))
 
     response = _complete(fixture, run_id, identity=identity)
 
@@ -380,9 +376,7 @@ def test_conflicting_failure_reason_is_rejected_not_idempotent(tmp_path, monkeyp
     assert first.status_code == 200
     before = dict(_rows(fixture)[0])
 
-    second = _complete(
-        fixture, run_id, status="failed", reason="model_stream_incomplete", identity=identity
-    )
+    second = _complete(fixture, run_id, status="failed", reason="model_stream_incomplete", identity=identity)
 
     assert second.status_code == 409
     assert _rows(fixture)[0] == before

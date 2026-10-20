@@ -720,8 +720,7 @@ class AgentRunStore:
             if failure_reason is not None:
                 if run.state == FAILED:
                     # 同原因 ⇒ 幂等；不同原因 ⇒ 冲突（不能把一次新的失败读成成功）。
-                    return ("already_failed" if run.reason == failure_reason
-                            else "conflict"), run
+                    return ("already_failed" if run.reason == failure_reason else "conflict"), run
                 if run.state == EXPIRED:
                     return "expired", run
                 if run.state in TERMINAL_STATES:
@@ -751,8 +750,11 @@ class AgentRunStore:
                 )
                 if cursor.rowcount != 1:
                     latest = _read_run(connection, run_id)
-                    return ("not_active" if latest is not None and latest.state in TERMINAL_STATES
-                            else "incomplete"), latest
+                    return (
+                        "not_active"
+                        if latest is not None and latest.state in TERMINAL_STATES
+                        else "incomplete"
+                    ), latest
                 return "failed", _read_run(connection, run_id)
 
             if run.state == SUCCEEDED:
@@ -788,8 +790,9 @@ class AgentRunStore:
             if cursor.rowcount != 1:
                 # 读到写之间被撤销/过期：不复活，按既有终态语义返回。
                 latest = _read_run(connection, run_id)
-                return ("not_active" if latest is not None and latest.state in TERMINAL_STATES
-                        else "incomplete"), latest
+                return (
+                    "not_active" if latest is not None and latest.state in TERMINAL_STATES else "incomplete"
+                ), latest
             return "completed", _read_run(connection, run_id)
 
     def fail(self, run_id: str, reason: str, *, actual_node_id: str | None = None) -> bool:
