@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- 整轮成功通知的省略/null 原因不再匹配已记录的非空原因；冲突返回 409，既有无原因重试仍返回 200。
+
 ### Added
 - 隔离栈的**预检**不再按 `basename` 判「两侧同一份清单」。判据改为按渲染后的 compose
   把两侧的容器内路径解析成宿主路径，再要求指向同一个真实普通文件；文件缺失、符号链接、

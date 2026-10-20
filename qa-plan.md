@@ -2207,6 +2207,7 @@ uv run pytest tests/test_m3_node_link_state.py tests/test_m3_node_link_completio
 | EXECCFG-LINK-07 | 领取重试 | 交回同一份快照，业务不重读；最终仍要整轮确认 | 通过 |
 | EXECCFG-LINK-08 | 重复/冲突/坏回执 | 同状态同原因幂等；不同原因 409（**成功通知同理**）；`200 {}`/错 run/`state=failed` 不被节点当成功 | 通过 3/3 + 成功原因冲突 1 条；变异「只认 2xx」使三条同时转红；旧实现下 `completed` 的 `reason` 被丢弃、两条不同原因都 200 |
 | EXECCFG-LINK-09 | 撤销 / 恰好到期 | 完成通知被拒、记录保持撤销/过期、不复活、不改写审计列 | 通过 |
+| EXECCFG-LINK-08-NULL | 成功通知的省略/null/非空原因组合 | 同原因 200；无原因与非空原因互换 409；原记录逐列不变 | 运行 `uv run pytest tests/test_m3_node_link_completion.py -k success_retry_compares_missing`；六组通过；旧实现两条转红 |
 | EXECCFG-LINK-10 | 未启用清单 | 领取即 `succeeded`（旧语义）；完成端点回 `NOT_TRACKED` 且**不改任何列**（含不被读路径顺带收敛成 `expired`）；回执键集合不变 | 通过；旧实现下已过期的未追踪行会被改成 `expired`（复核反例已入库） |
 | EXECCFG-LINK-11 | **同 JVM** 相同 run 重入（early / late 两个窗口） | 重复请求在**本地**被拒（`DuplicateRunRefused`），不发任何通知；原 run 正常完成；model=2、claims=1、一条 completed | 通过；旧实现下 early 会把 A 报成 `LoopIncomplete` |
 | EXECCFG-LINK-12 | **同 JVM** 两个不同 run 并发 | 两者都完成；各领一次、各一条通知 | 通过 |

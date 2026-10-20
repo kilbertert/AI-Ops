@@ -158,6 +158,8 @@ uv run python tools/m2_close/m3node/verify_gateway_exec_config.py --out /tmp/exe
   冲突（不是「所有 failed 都幂等」）；已完成后再报失败 409；终态（`revoked`/`expired`/`failed`）403；
   未启用清单 409 `AGENT_RUN_COMPLETION_NOT_TRACKED`（旧记录**一个列都不改**）；
   `issued` 或无快照 409 `AGENT_RUN_COMPLETION_CONFLICT`。
+- 成功通知省略 `reason` 或显式传 JSON `null` 均表示无原因，只匹配已记录的 `null`。
+  与非空原因互换同样返回 409；Java 节点始终省略原因的正常重试仍返回 200。
 - `failed` 可以从 `issued` **或** `running`（含已取数）落终态 —— 首次领取就失败的那条路也算。
   成功与失败走**同一个写事务、同一条过期原语**，所以到期之后来的失败通知不会把
   `expired`/`ttl_elapsed` 覆盖成 `model_failed`。
