@@ -525,8 +525,13 @@ api 容器只 publish 了 `5001/tcp`（未映射到宿主），宿主只能经 d
 
 ```
 在 41（或 95）上：
-  aiops admin ensure-workspace --tenant <id> --environment 41
-    1. 查本机 gateway.db 的 dify_workspaces —— 有行就直接退出（幂等）
+  aiops admin ensure-workspace --tenant <id>        # 环境取**本机部署身份**，不是参数
+    1. 查本机 gateway.db 的 dify_workspaces，**按 setup_state 分支**（不是"有行就退"）：
+         ready   → 退出（幂等）
+         failed  → 重建（清 lease，重走 3-5）
+         creating 且租约未过期 → 退出并提示"有人在建"
+         creating 且租约已过期 → 先对账（按名字查 all-workspaces）再决定接管或补 UUID
+         unknown → 先对账，再决定
     2. 占位（setup_state='creating' + 租约），写**本机**库
     3. 经隧道 http://127.0.0.1:15001/inner/api/enterprise/workspace 建 workspace
     4. 同一次运行里把 workspace_id 写回**本机**库，再装插件/写凭据/导模板
@@ -545,11 +550,14 @@ api 容器只 publish 了 `5001/tcp`（未映射到宿主），宿主只能经 d
 按同一形状接：
 
 ```bash
-# 36：加一个只绑回环的转发（nginx server 或 socat），把 /inner/api 转到 api 容器
-#     容器 IP 会随重启变化 ⇒ 用容器名解析或一条 systemd 单元刷新，不写死 172.21.0.5
+# 36：只绑回环的转发。⚠️ **不能用容器名** —— 宿主上的 nginx 解析不到 compose 的
+# docker DNS（那是容器内的 127.0.0.11），容器 IP 又随重启变化。
+# 用一个 host 别名，由一条 systemd 单元在每次 compose 起停后刷新：
+#   ExecStart=/usr/local/bin/aiops-refresh-api-alias   （docker inspect → 写 /etc/hosts 的 aiops-dify-api）
+# 或用 socat 的 systemd socket 单元，每次连接现查 IP。两种都不写死 172.21.0.5。
 server {
     listen 127.0.0.1:15001;
-    location /inner/api/ { proxy_pass http://<api 容器>:5001; }
+    location /inner/api/ { proxy_pass http://aiops-dify-api:5001; }
 }
 
 # 36：给 41/95 各一个受限账号，permitopen 只放 127.0.0.1:15001
@@ -566,7 +574,7 @@ ssh -N -L 127.0.0.1:15001:127.0.0.1:15001 aiops-inner-api-tunnel@36
 | 5001 端口 | **永不 publish 到宿主**（现状已如此）；不得因为这条需求去改 compose 的 ports |
 | 36 上的监听 | 只 `127.0.0.1:15001`，**不绑 0.0.0.0、不开公网** |
 | 谁能连 | 只有 `permitopen` 白名单里的那两把 key |
-| 隧道建立后谁能用 | 只有 41/95 本机的进程（隧道另一端落在 `127.0.0.1`） |
+| 隧道建立后谁能用 | 41/95 **本机的任何进程**都能连 `127.0.0.1:15001` —— `permitopen` 只限制 SSH 的**远端**目标，不限制本地。所以这一层不能当授权，`X-Inner-Api-Key` 才是 |
 | 认证 | 隧道之外仍有 `X-Inner-Api-Key`；两层都要过 |
 
 **为什么不用 VPN / 公网 ACL**：这是每月不到一次的动作。为它加一条长期存在的跨环境

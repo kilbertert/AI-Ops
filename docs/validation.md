@@ -115,6 +115,11 @@ https://dify.ranlei.work/signin          -> 200
 恢复 `.env.bak-innerapi-20261020160425` → `docker compose up -d api worker`。
 两次都只是重启 api/worker，**没有动数据库、没有动 nginx、没有动登录代理**。
 
+**开户拓扑（评审后收敛）**：CLI 在目标环境的机器上跑，经一条只绑回环的 SSH 隧道
+（`127.0.0.1:15001`）调 36 的 inner_api，建完就地写本机库。这条**改变部署方式与安全边界**，
+所以同时写进了部署文档（`deploy/dify-36/README.md`）与设计文档。
+**但它尚未实施、也未实测** —— 本记录只记录决定。
+
 **模板已同步（评审指出）**：`deploy/dify-36/env.example` 加了 `INNER_API=true` 与
 `INNER_API_KEY=`（空占位）+ 一段说明；`deploy/dify-36/check.sh` 加了两条断言 + 一个反例
 （把它改回 `false` 必须报错）。否则从模板重建实例会**静默退回默认关闭**，开户随之停摆

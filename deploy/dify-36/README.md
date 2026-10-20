@@ -183,9 +183,15 @@ docker compose up -d api worker
 api 容器的 `5001/tcp` **未 publish 到宿主**，所以只有 36 本机的进程能经 docker 内网
 （`172.21.0.x`）访问它。
 
-⚠️ **这条路径只在 36 上可用**。95 的登录代理在 95，够不到 36 的容器内网 —— 所以
-"建 workspace"必须是**在 36 上发生的一次集中动作**，不是每个环境的代理各建各的。
-承载者与顺序见 `docs/agents/dify-multitenant-design.md` 的 §8「−0」。
+⚠️ **这条路径在 36 本机之外不可达**。41 与 95 的网关/代理在各自环境，够不到这个容器内网。
+
+**开户怎么跑**：CLI 在**目标环境**的机器上跑（41 或 95），它经一条**只绑回环**的
+SSH 隧道（`127.0.0.1:15001` → 36 的 `127.0.0.1:15001` → api 容器）调 inner_api，
+建完**就地写本机库**。隧道的 SSH 账号用 `restrict,permitopen="127.0.0.1:15001"`，
+外加 `X-Inner-Api-Key` 两层。
+
+完整形态（含 `setup_state` 分支、租约对账、容器名解析的坑）见
+`docs/agents/dify-multitenant-design.md` 的 §8「−0」。
 
 **回滚**：恢复 `.env.bak-innerapi-<ts>` → `docker compose up -d api worker`。
 只重启 api/worker，不动数据库与 nginx。
