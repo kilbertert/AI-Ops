@@ -135,6 +135,10 @@ class TrialInitiator:
     user_type: str
     username: str = ""
 
+    #: 公司体系的**平台哨兵值**。`sys_user.tenant_id` / `type` 都可能是它，
+    #: 而它不是一个租户 —— 两个独立事实共用同一个字面量。
+    PLATFORM_TENANT_SENTINEL = "-1"
+
     @classmethod
     def from_headers(
         cls,
@@ -145,6 +149,20 @@ class TrialInitiator:
     ) -> TrialInitiator | None:
         b, t = (b_user_id or "").strip(), (tenant_id or "").strip()
         if not b or not t:
+            return None
+        if t == cls.PLATFORM_TENANT_SENTINEL:
+            # 平台账号（`type=-1`）的 `tenant_id` 也是 `-1`，但 `-1` **不是租户**：
+            # 充电库里没有任何一行 `tenant_id='-1'`。把它当租户下推，得到的不是
+            # "看整个平台"，而是一条**范围为空**的查询 —— 每张订单都 404。
+            #
+            # 实测（2026-10-20，41）：同一请求体、同一把钥匙、同一个已绑定 app，
+            # 只把 `X-AIOps-Initiator-Tenant` 从 `-1` 换成 `1942…` 就从
+            # `404 ORDER_NOT_FOUND` 变成 `202`。
+            #
+            # 判成"没有可用身份"而不是"平台看全部"：本路由的可见范围由身份给出，
+            # 而"平台"在公司体系里的诚实含义是**跨租户**，这个服务没有任何一个
+            # 跨租户可用的数据源去支撑它。回落成调试租户是既有的、被验收过的行为
+            # （ADR-0028 §3），而不是新的越权。
             return None
         return cls(
             b_user_id=b[:128],

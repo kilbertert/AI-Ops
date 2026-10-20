@@ -100,6 +100,21 @@ def test_the_initiator_is_built_only_from_complete_headers() -> None:
     assert TrialInitiator.from_headers(None, None, None) is None
 
 
+def test_the_platform_tenant_sentinel_is_not_a_tenant() -> None:
+    """``tenant_id == "-1"`` ⇒ 没有可用身份（退回调试租户），**不是**一个叫 -1 的租户。
+
+    平台账号（``sys_user.type = -1``）的 ``tenant_id`` 也是 ``-1``。把它当租户下推，
+    得到的不是"看整个平台"，而是一条**范围为空**的查询 —— 每张订单都 404。
+
+    实测（2026-10-20，41）：同一请求体、同一把钥匙、同一个已绑定 app，只把
+    ``X-AIOps-Initiator-Tenant`` 从 ``-1`` 换成 ``1942…``，就从 ``404 ORDER_NOT_FOUND``
+    变成 ``202``。反证：去掉这条判定，下面的 ``None`` 断言会红（会变成一个 tenant=-1 的身份）。
+    """
+    assert TrialInitiator.from_headers("U-1", "-1", "-1", "system") is None
+    # 对照：同一个账号在真实租户下仍然成立，这条判定只挡哨兵值本身。
+    assert TrialInitiator.from_headers("U-1", "T-1", "-1", "system") is not None
+
+
 def test_a_missing_user_type_is_not_treated_as_tenant_level() -> None:
     """``type`` 缺失 ⇒ 空串 ⇒ **不是**顶层账号 ⇒ 走 fail-closed 的店铺解析。"""
     directory = _OperatorScope({})

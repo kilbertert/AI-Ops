@@ -473,6 +473,23 @@ def test_http_error_detail_reaches_the_domain_message(monkeypatch: pytest.Monkey
     )
 
 
+def test_the_upstream_error_code_survives_classification() -> None:
+    """``{"error": {"code": …}}`` 的码要留下来 —— HTTP 状态不是语义。
+
+    反证价值：同一个 404 在网关上有 ``DIFY_APP_NOT_BOUND`` 与 ``ORDER_NOT_FOUND``
+    两种含义，只按状态码的调用方只能猜，而 2026-10-20 实测就猜错了（把订单范围说成
+    没登记）。错误码与 detail 必须来自**同一次**读取，否则第二个字段永远是空串。
+    """
+    error = _http_error(404, b'{"error": {"code": "ORDER_NOT_FOUND", "message": "order not found"}}')
+    failure = classify_http_error(error, mapping=_mapping())
+    assert (failure.status, failure.code) == (404, "ORDER_NOT_FOUND")
+    assert failure.detail == "order not found"
+
+    plain = classify_http_error(_http_error(500, b'{"msg": "boom"}'), mapping=_mapping())
+    assert plain.code == ""
+    assert plain.detail == "boom"
+
+
 def test_classify_transport_error_names_the_failing_layer() -> None:
     failure = classify_transport_error(http.client.IncompleteRead(b"partial"))
     assert failure.kind == UNAVAILABLE

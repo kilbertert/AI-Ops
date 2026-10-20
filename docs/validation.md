@@ -1,3 +1,79 @@
+## 2026-10-20 · Dify 与运行时的三处断点：两处修在代码，一处是欠费
+
+**范围**：41 的试运行链路、桥（36）的错误文案、Dify 侧知识检索。**只读复现 +
+两处代码修复；41 与 36 的生产进程未因本轮而改动。** 本记录不含口令、令牌或会话明文。
+
+用户报告两件事：「Dify 运行与 AI-Ops 运行时没打通」和「在
+`aiops-41-ops-methodology-agent` 点试运行返回未登记注册」。逐层实测后它们是**三条
+独立缺陷**，其中两条都伪装成了别的原因。
+
+### 一、试运行的 404 不是"未登记"，是订单范围
+
+同一请求体、同一把钥匙、**同一个已绑定 app**，经真实桥（`127.0.0.1:10118`，公司身份 +
+`__Host-` 会话 + 同源 Referer）：
+
+```
+bridge 404 {"submitted": false, "reason": "这个智能体没有登记成 AI-Ops 的绑定来源，无法试运行"}
+```
+
+绕过桥直接打网关，同一条请求：
+
+```
+tenant=-1                  404 {"error":{"code":"ORDER_NOT_FOUND"}}
+tenant=1942…               202 {"trial_id":"tr_3ac3466…","status":"queued"}
+```
+
+⇒ 绑定是好的，`app_id` 也被网关接受了；网关回的是 `ORDER_NOT_FOUND`。
+**桥把"所有 404"都当成 `DIFY_APP_NOT_BOUND`**（`dify_console_publish.py` 的
+`if http_status == 404:`），于是把一条订单范围的事实说成了绑定表的事实。
+
+### 二、平台账号的 `tenant_id` 是哨兵 `-1`，而它不是租户
+
+映射表里唯一的公司账号是 `system`（`1454348737375174658`，`sys_user.tenant_id=-1`、
+`type=-1`）。`build_trial_scope` 对顶层账号给 `DataScope(type="all")`，而
+`resolve_query_scope` 仍把 `effective_tenant_id` 原样下推 ⇒ `tenant_id='-1'`。
+充电库里没有任何一行 `tenant_id='-1'`（实测：`ch_order_info` 按该值计数为 0），
+所以每条订单都 `404 ORDER_NOT_FOUND` —— 不是"看整个平台"，是**空范围**。
+
+对照组把它钉死：把发起人租户换成 `1942105476598861824`（真实租户、名下 179 单），
+同一请求立刻 `202`，随后作业跑到模型那一跳才失败。
+
+### 三、Dify 侧知识检索 502：上游 embedding 欠费
+
+```
+POST /v1/dify/retrieval  (kb-canary-2)  → 502 DIFY_KNOWLEDGE_UNAVAILABLE
+  ↳ kb-service  POST /kb/knowledge-bases/8701…/search
+      → 502 {"error":"upstream_error","message":"… code=102 msg=Internal server error"}
+        ↳ RAGFlow: openai.PermissionDeniedError 403 insufficient_user_quota
+                    用户剩余额度 ¥0.000285，需要预扣费额度 ¥0.000456
+```
+
+三层各说各的，**网关那一层拿不到真正的成因**（它只看到 `502 upstream_error`）。
+这是外部条件，本轮不改代码；如实记下"充值后重试即可"。
+
+### 四、修了什么
+
+| 位置 | 改动 | 判据 |
+|---|---|---|
+| `bounded_http.HttpFailure` | 新增 `code`，从 `{"error":{"code","message"}}` 取；**与 detail 同一次读取** | 新用例 `test_the_upstream_error_code_survives_classification` |
+| `dify_console_publish._request` | 上游非 2xx 时**重建** `{"error":{...}}` body 而不是返回 `None` | 桥的两条 404 文案用例 |
+| 试运行的 404 | 按码分流：`DIFY_APP_NOT_BOUND` / `ORDER_NOT_FOUND`；认不出的码 ⇒ 502「未确认」 | 三条新用例（含一条反例：无码不得猜） |
+| `TrialInitiator.from_headers` | `tenant_id == "-1"` ⇒ 无可用身份 ⇒ 退回调试租户 | `test_the_platform_tenant_sentinel_is_not_a_tenant` |
+
+**突变复验**（各去掉一处修复，对应用例转红，均已实测）：
+- 去掉桥的错误码分流 ⇒ 两条 404 文案用例红（`404 != 502`，且"没有登记"出现在订单范围的场景里）。
+- 去掉哨兵判定 ⇒ `TrialInitiator(tenant_id='-1')` 被构造出来，断言红。
+
+### 五、边界
+
+- **平台账号的试运行范围仍是调试租户**，不是"全部租户"。本服务没有任何跨租户可用的
+  数据源，"平台看全部"在这条链上无法诚实实现。
+- 桥现在**依赖上游给码**；上游不给码时显示"未确认"，而不是一个可能错的断言。这是
+  有意的降级方向。
+- 第三件（embedding 欠费）没有代码改动。资金到位后 `POST /v1/dify/retrieval` 与
+  Dify 侧的检索应各自恢复，无需改配置。
+- 本轮**没有**在 41 上重启服务；两处修复要生效需按 CD 部署（`src/**` 变更即触发）。
+
 ## 2026-10-20 · 知识库自服务：本地判据与 41 上的实测事实
 
 ### 一、本地判据
