@@ -151,8 +151,9 @@ install -m 600 /tmp/exec-manifest.json "$M2LIVE_CONFIG/gateway/exec-manifest.jso
 #    gateway.env: AIOPS_GATEWAY_EXECUTION_MANIFEST_FILE=/etc/m2live/exec-manifest.json
 #    node.env:    AIOPS_EXEC_MANIFEST=/etc/m2live/exec-manifest.json
 
-# 4) 起栈（preflight 会核对：按渲染后的 compose 解析出的宿主路径是同一个文件，
-#    且该文件是普通文件、不是符号链接、不是组/他人可读 —— 0400 与 0600 都接受）
+# 4) 起栈（preflight 读的是**渲染后的 environment**，不是这两个文件：
+#    覆盖层让实际那个容器单侧开启时，这里必须失败。判据：两侧解析到同一个普通文件、
+#    不是符号链接、不是组/他人可读 —— 0400 与 0600 都接受）
 bash deploy/m2-live-03/checks.sh up
 ```
 
@@ -178,44 +179,70 @@ bash deploy/m2-live-03/checks.sh up
 订单授权与业务读取仍是真实判定。
 
 ```bash
-export M2LIVE_CONFIG=/etc/aiops-m2-live-m3   # 本次复跑用的配置根
-EVID=$(pwd)/m3-live-evidence                 # 证据目录（工具会建 0700 并写 0600）
+# 本栈的三个根必须一起给出：配置根、状态根、项目名。只给配置根会让工具去读
+# /var/lib/aiops-m2-live（另一个根）的库，`send` 失败时连 run 都取不到。
+export M2LIVE_CONFIG=/etc/aiops-m2-live-m3
+export M2LIVE_STATE=/var/lib/aiops-m2-live-m3
+export M2LIVE_PROJECT=m2-live-03
+export M2LIVE_COMPOSE_EXTRA=deploy/m2-live-03/compose.identity.yaml
+EVID=$(pwd)/m3-live-evidence                 # 证据目录（工具建 0700 并写 0600）
 
-# 0) 身份三件套：从模板复制，人工填值，0600。握手令牌用 openssl rand -hex 32 生成。
+# 0) 身份三件套 + 订单号：都从模板/文件读，0600，不进命令行。
+#    握手令牌用 `openssl rand -hex 32` 生成；订单号用一行写进 $HOME/m3-order。
 install -m 600 deploy/m2-live-03/identity.env.template "$M2LIVE_CONFIG/gateway/identity.env"
+umask 077
+read -r -s -p "输入已批准的订单号: " M3_ORDER
+printf '%s\n' "$M3_ORDER" > "$HOME/m3-order"
+unset M3_ORDER
 
 # 1) 生产面基线（只读）。没有它就只能写「看起来没变」，所以缺它不往下走。
 python3 tools/m2_close/m3live/live_replay.py baseline --out "$EVID/prod-before.json"
 
 # 2) 起栈：覆盖层只把 Gateway 的入口进程换成构造身份启动器
-M2LIVE_COMPOSE_EXTRA=deploy/m2-live-03/compose.identity.yaml \
-  bash deploy/m2-live-03/checks.sh up
+bash deploy/m2-live-03/checks.sh up
 
-# 3) 一次派发。失败**不重试**；同一输出目录只允许发一次。
-python3 tools/m2_close/m3live/live_replay.py send --order-no <订单号> --out "$EVID"
+# 3) 一次派发。失败**不重试**；标记 `.send.claim` 在**发送之前**原子创建，
+#    一旦存在就再也不放行 —— 超时/被杀之后这次到底发没发是**不确定**的，只能换目录。
+send_rc=0
+python3 tools/m2_close/m3live/live_replay.py send --order-file "$HOME/m3-order" --out "$EVID" || send_rc=$?
+# send_rc 保留到最终报告；非零绝不重发，仍继续采证和停栈。
 
-# 4) 按 run 收集证据（记录 + 与该 run 有关的日志行 + 身份替换声明）
+# 4) 按 run 收集证据（记录摘要 + 日志计数 + 身份替换声明；不含业务正文）
 python3 tools/m2_close/m3live/live_replay.py collect --run-id <run_id> --out "$EVID"
 
-# 5) 停栈，并核对容器/端口归零、生产面与基线逐项相同
+# 5) 停栈（**同一组变量**：down 也走同一个 COMPOSE 数组，覆盖层因此不会被漏掉），
+#    再核对容器/端口归零、生产面与基线逐项相同。
 bash deploy/m2-live-03/checks.sh down
 python3 tools/m2_close/m3live/live_replay.py cleanup --out "$EVID" \
   --prod-baseline "$EVID/prod-before.json"
 ```
 
+**`send` 失败时怎么拿到 run_id**（只读、不伪造）：
+
+- `sent.json` 里有 `http_status` 与 `failure`；HTTP 200 但 `state=failed` 时回执里
+  **有** `run_id`，直接对它 `collect`。
+- HTTP 层就失败（超时、502、连接被拒）时**没有** run_id：这一步只能去隔离栈自己的库里
+  **只读**取出 `.send.claim` 中 `claimed_at` 之后的候选行，再按已批准订单及身份在本机核对；
+  仅唯一归属能确定时交给 `collect`。若存在并发候选，不能取“最新一条”冒充本次 run。
+  找不到就写「未观测」，不要凭时间猜一条、也不要把 `agent_runs` 的任何一行删掉重来。
+- `.send.claim` 永远不自动删除：要再发一次真实请求，就**换一个输出目录**，并在下一轮
+  的记录里写明这是第二次。
+
 **判据与边界**（同样写在 `qa-plan.md` 的 REPLAY 一节）：
 
 | 项 | 怎么判 | 做不到时怎么写 |
 |---|---|---|
-| 一次派发只发一次 | 失败时 `send` 非零退出；同一输出目录再次 `send` 退出 3，且桩/网关只收到一次 | —— |
-| 敏感输出不外泄 | 证据写盘前抹掉 `Bearer`/`sk-` 形状，并断言握手令牌不在正文里 | —— |
+| 一次派发只发一次 | `.send.claim` 在请求**之前**用 `O_CREAT\|O_EXCL` 创建；已存在即退出 3。失败也保留 | —— |
+| 令牌不出回环 | base URL 只接受 http(s)+回环，拒 userinfo/路径；安装**拒绝重定向**的 opener（`urllib` 默认会跟随并保留 `Authorization`） | —— |
+| 敏感输出不外泄 | 证据写盘前抹掉 `Bearer`/`sk-` 并断言令牌不在正文里；`O_NOFOLLOW` 写入，目标为符号链接即拒绝 | —— |
+| 证据只留摘要 | 记录走字段**白名单**（订单号、`scope_json`、快照正文永不出现）；日志只留匹配行数与标记计数 | —— |
 | 模型请求次数 | **没有观测依据**：出口只记录异常，节点没有每轮日志 | 证据里写 `observed=false`、`value=null`，不用错误日志条数冒充 |
 | 整轮成功 | 记录 `succeeded` 且回执 `agent_version` 等于清单身份 | 上游余额/供应商不可用 ⇒ 如实记 `model_failed`，不算验收 |
-| down 后归零 | 容器 0、8794 不监听 | —— |
-| 生产面未变 | 服务启动时刻、配置 mtime、`agent_runs` 行数逐项与基线相同 | 读不到就报「未比对」，不写「未变化」 |
+| down 后归零 | 容器 0、8794 不监听；`docker ps` / `ss` 非零算**观测失败**，不是「空」 | —— |
+| 生产面未变 | 启动时刻、配置**内容 sha256**、`agent_runs` 行数逐项与基线相同 | 任一项读不到 ⇒ 非零退出并写「未比对」，不写「未变化」 |
 
 ⚠️ **`cleanup` 不负责停栈**：停栈是 `checks.sh down` 的事。`cleanup` 只回答
-「真的清掉了吗、生产面动没动」。
+「真的清掉了吗、生产面动没动」。`--prod-baseline` 是**必需**参数：没有基线就没有出处。
 
 ## 合成验收（开发机）
 
@@ -236,7 +263,7 @@ sid 到节点、领取端点按凭据拒绝。正例（真实身份 → 本人�
 ## 不在这份部署件里的
 
 真实业务验收、模型回答质量、App 客户端、发布版本冻结、公网全量启用。
-`agent_version` 仍是 `null` + `not_wired`。
+未配置清单的旧模式仍回 `null` + `not_wired`；M3 模式必须核对两端身份与整轮终态。
 
 ## 初始化文件传输
 
