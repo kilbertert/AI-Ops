@@ -32,6 +32,7 @@ from aiops_diagnostics.dify_login_company import (
 )
 from aiops_diagnostics.dify_login_provision import (
     DifyConsoleSettings,
+    account_email_for,
     provision_editor,
 )
 from aiops_diagnostics.dify_login_proxy import (
@@ -267,6 +268,24 @@ class MappingStore:
                 (status, _utc_now(), company_user_id),
             )
 
+    def retag_email(self, company_user_id: str, dify_email: str) -> None:
+        """把一行的 ``dify_email`` 改写成环境化的派生值（#864 的迁移）。
+
+        **只改这一列**，不动 ``dify_account_id``：Dify 里的账号 id 与它的邮箱是两件
+        独立的事，而会话是**按 id** 签的（`mint_console_session(account_id)`），
+        `by_dify_account` 也是按 id 反查。所以这条迁移不碰 Dify、不换账号、
+        历史编辑与发布记录的归属一毫不受影响。
+
+        Dify 侧那个账号的邮箱仍旧是旧的（无前缀）—— 这**不会**造成撞号：新派生出的
+        邮箱一律带环境前缀，永远不可能等于无前缀的旧值。详见 ADR-0060。
+        """
+        with self._lock, self._connect() as connection:
+            connection.execute(
+                "UPDATE dify_login_mappings SET dify_email = ?, last_reconciled_at = ?"
+                " WHERE company_user_id = ?",
+                (dify_email, _utc_now(), company_user_id),
+            )
+
 
 def _utc_now() -> str:
     from datetime import UTC, datetime
@@ -356,6 +375,28 @@ class LoginService:
             )
 
         account_id = existing["dify_account_id"] if existing is not None else ""
+        email = account_email_for(identity.user_id, environment=self.dify.environment)
+        if existing is not None and str(existing["dify_email"] or "") not in ("", email):
+            # 这条映射是**加环境前缀之前**建的（#864）。它的 `dify_account_id` 指向一个用
+            # 旧邮箱开出来的账号，而新派生出的邮箱是另一个。
+            #
+            # **不换账号，只改这一列**：会话是按 `account_id` 签的，`by_dify_account`
+            # 也按 id 反查 —— 换掉邮箱列不影响任何一条身份路径，而 Dify 侧那个账号
+            # 的历史编辑与发布记录一毫不受影响。旧邮箱在 Dify 里保持原样，但它已不再
+            # 被任何派生值命中（新派生一律带环境前缀），因此不会与新账号撞号。
+            #
+            # 详见 ADR-0060 §「已有映射怎么迁」。
+            self.store.retag_email(identity.user_id, email)
+            self.store.record_audit(
+                company_user_id=identity.user_id,
+                dify_account_id=account_id,
+                action="email_retagged",
+                reason_code="ENVIRONMENT_PREFIX",
+            )
+            _LOGGER.info(
+                "dify-login: retagged mapping email for company_user=%s (environment prefix)",
+                identity.user_id,
+            )
         if not account_id:
             account_id = provision_editor(
                 self.dify,
@@ -363,7 +404,6 @@ class LoginService:
                 company_user_id=identity.user_id,
                 username=identity.username,
             )
-        from aiops_diagnostics.dify_login_provision import account_email_for
 
         # 解封：此前 disabled 而现在又有编辑权限码 ⇒ 改回 active（#779 的"重新获得权限后
         # 再登录，解除封禁"）。**这是与封禁可逆的那一半**，所以必须在 upsert 之前判出方向
@@ -374,7 +414,7 @@ class LoginService:
             username=identity.username,
             tenant_id=identity.tenant_id,
             dify_account_id=account_id,
-            dify_email=account_email_for(identity.user_id),
+            dify_email=email,
             permissions=permissions,
             status=STATUS_ACTIVE,
             user_type=user_type,

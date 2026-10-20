@@ -45,6 +45,8 @@ from aiops_diagnostics.dify_login_server import (
 SECRET_KEY = "test-dify-secret-key-0123456789"
 AES_KEY = "0123456789abcdef"
 COMPANY_USER_ID = "a53ad893-6139-4566-a38a-0b77ed697631"
+#: 本部署的环境标识（#864）。它参与邮箱派生，所以测试必须显式给一个。
+ENVIRONMENT = "env-test"
 DIFY_ACCOUNT_ID = "b647e9c0-1111-4222-8333-444455556666"
 OWNER_ACCOUNT_ID = "c758f0d1-2222-4333-8444-555566667777"
 EDIT_PERMISSION = "aiops:agent:edit"
@@ -200,7 +202,7 @@ class _FakeDify(BaseHTTPRequestHandler):
         type(self).calls.append("POST " + self.path)
         self._read()
         if self.path.endswith("/members/invite-email"):
-            email = account_email_for(COMPANY_USER_ID)
+            email = account_email_for(COMPANY_USER_ID, environment=ENVIRONMENT)
             if type(self).invite_returns_url:
                 # ⚠️ 键名照 Dify 1.17.1 实际回的 ``invitation_results``（2026-10-16 实测）——
                 # 替身早期回的是 ``results``，于是解析器只认 ``results`` 也一直绿着，
@@ -242,7 +244,11 @@ class _FakeDify(BaseHTTPRequestHandler):
             self._reply(
                 {
                     "accounts": [
-                        {"id": DIFY_ACCOUNT_ID, "email": account_email_for(COMPANY_USER_ID), "role": "editor"}
+                        {
+                            "id": DIFY_ACCOUNT_ID,
+                            "email": account_email_for(COMPANY_USER_ID, environment=ENVIRONMENT),
+                            "role": "editor",
+                        }
                     ]
                 }
             )
@@ -279,7 +285,7 @@ def stack(tmp_path: Path):
         listen_port=0,
         public_origin="https://console.example",
         company=CompanyAuthSettings(base_url=company_url, encode_key=AES_KEY, client_type="admin"),
-        dify=DifyConsoleSettings(base_url=dify_url, secret_key=SECRET_KEY),
+        dify=DifyConsoleSettings(base_url=dify_url, secret_key=SECRET_KEY, environment=ENVIRONMENT),
         data_dir=str(tmp_path / "data"),
         edit_permission=EDIT_PERMISSION,
         publish_permission=PUBLISH_PERMISSION,
@@ -472,9 +478,96 @@ def test_the_first_login_provisions_an_editor_and_the_second_reuses_it(stack) ->
     assert second == first == 1, "二次登录又邀请了一次 —— 会给同一个人开出第二个账号"
 
 
+def test_a_pre_environment_mapping_is_retagged_in_place_keeping_the_account(stack) -> None:
+    """#864 的迁移判据：**旧映射换邮箱列，但不换 Dify 账号**。
+
+    加环境前缀之前建的映射，其 `dify_email` 是没有前缀的旧值。修法有两种：
+
+    - 按新邮箱**再开一个** Dify 账号 ⇒ 旧账号上的历史编辑与发布记录失去归属；
+    - **只改 `dify_email` 这一列** ⇒ 会话按 `account_id` 签、`by_dify_account` 按 id
+      反查，身份路径一条都不经过邮箱，所以什么都不动。
+
+    选后者。这条用例钉住：一次登录之后，`dify_account_id` 没变、`dify_email` 变了、
+    而且**没有再邀请一次**（那会开出第二个账号）。
+    """
+    base, data_dir = stack
+    assert _login(base)[0] == 200
+    row = _proxy_mapping(data_dir)
+    account_before = row["dify_account_id"]
+    invities_before = _FakeDify.calls.count("POST /console/api/workspaces/current/members/invite-email")
+
+    # 把它改回"加环境前缀之前"的形状：邮箱没有前缀
+    import sqlite3
+
+    with sqlite3.connect(data_dir / "mappings.db") as connection:
+        connection.execute(
+            "UPDATE dify_login_mappings SET dify_email = ? WHERE company_user_id = ?",
+            (f"{COMPANY_USER_ID}@aiops-login.invalid", COMPANY_USER_ID),
+        )
+
+    assert _login(base)[0] == 200
+    after = _proxy_mapping(data_dir)
+
+    assert after["dify_account_id"] == account_before, "迁移换了 Dify 账号 —— 历史归属会断"
+    assert after["dify_email"] == account_email_for(COMPANY_USER_ID, environment=ENVIRONMENT), "邮箱没有重标"
+    assert (
+        _FakeDify.calls.count("POST /console/api/workspaces/current/members/invite-email") == invities_before
+    ), "迁移期间又邀请了一次 —— 会开出第二个账号"
+
+    actions = [entry["action"] for entry in _audit_entries(data_dir)]
+    assert "email_retagged" in actions, f"没有留下迁移审计：{actions}"
+
+
+def _audit_entries(data_dir: Path) -> list[dict[str, Any]]:
+    import sqlite3
+
+    with sqlite3.connect(data_dir / "mappings.db") as connection:
+        connection.row_factory = sqlite3.Row
+        return [dict(row) for row in connection.execute("SELECT * FROM dify_login_audit")]
+
+
 def test_the_account_email_is_deterministic_and_undeliverable() -> None:
-    assert account_email_for(COMPANY_USER_ID) == account_email_for(COMPANY_USER_ID)
-    assert account_email_for(COMPANY_USER_ID).endswith("@aiops-login.invalid")
+    assert account_email_for(COMPANY_USER_ID, environment=ENVIRONMENT) == account_email_for(
+        COMPANY_USER_ID, environment=ENVIRONMENT
+    )
+    assert account_email_for(COMPANY_USER_ID, environment=ENVIRONMENT).endswith("@aiops-login.invalid")
+
+
+def test_the_same_company_user_in_two_environments_is_two_dify_accounts() -> None:
+    """#864 的回归判据：**同一个公司用户 id、两个环境 ⇒ 两个邮箱**。
+
+    两套 UPMS 是两套独立数据库，`sys_user.id` 各自生成；撞号时如果邮箱只按 id 派生，
+    两个不同的人会映射到**同一个 Dify 账号**（账号是全局的，不属于任何 workspace），
+    于是 B 环境的代理能为它签会话、进 A 环境那个人的 workspace。这是越权，不是登录失败。
+
+    判据钉两件事，缺一不可：
+    - 两个环境给出**不同的**邮箱（隔离）；
+    - 同一环境内仍然**确定性**（同一用户二次登录不能换账号，否则历史编辑与发布记录会断）。
+    """
+    a = account_email_for("1454348737375174658", environment="41")
+    b = account_email_for("1454348737375174658", environment="95")
+
+    assert a != b, f"两个环境给了同一个邮箱 —— 撞号时会串到同一个 Dify 账号：{a}"
+    assert a == account_email_for("1454348737375174658", environment="41"), "同一环境内不确定"
+    assert a.startswith("41-") and b.startswith("95-")
+    assert a.endswith("@aiops-login.invalid") and b.endswith("@aiops-login.invalid")
+
+
+def test_an_empty_environment_is_a_configuration_error_not_a_silent_fallback() -> None:
+    """环境为空必须**报错**，不能回落成"只按 id"——那正好把缺陷放回来。
+
+    这条比"格式对不对"重要：`AIOPS_LOGIN_PROXY_ENVIRONMENT` 的默认值如果是空串，
+    漏配的部署会静默退化成旧行为（撞号共享账号），而启动一切正常。
+
+    两个入口都要拒：派生函数本身，以及构造 settings 的时候（后者更早、更容易被发现）。
+    """
+    from aiops_diagnostics.dify_login_provision import DifyProvisionError
+
+    for empty in ("", "   ", "-"):
+        with pytest.raises(DifyProvisionError):
+            account_email_for(COMPANY_USER_ID, environment=empty)
+        with pytest.raises(DifyProvisionError):
+            DifyConsoleSettings(base_url="http://dify.invalid", secret_key=SECRET_KEY, environment=empty)
 
 
 def test_the_captcha_is_relayed_as_an_image(stack) -> None:
@@ -806,7 +899,9 @@ def test_login_proxy_settings_refuse_to_build_without_https(tmp_path: Path) -> N
             listen_port=10119,
             public_origin="http://console.example",
             company=CompanyAuthSettings(base_url="http://company.invalid", encode_key=AES_KEY),
-            dify=DifyConsoleSettings(base_url="http://dify.invalid", secret_key=SECRET_KEY),
+            dify=DifyConsoleSettings(
+                base_url="http://dify.invalid", secret_key=SECRET_KEY, environment=ENVIRONMENT
+            ),
             data_dir=str(tmp_path),
             edit_permission=EDIT_PERMISSION,
         )

@@ -31,6 +31,27 @@
 `location = /signin` 必须挂在**被两个入口共用**的那一层（10008），否则明文入口
 `http://36.156.159.175:10008/signin` 会绕过它。见 `dify-console-10008.conf` 的注释与 ADR-0028。
 
+## 环境标识是必填的（#864 / ADR-0060）
+
+`AIOPS_LOGIN_PROXY_ENVIRONMENT` 参与 Dify 账号邮箱的派生：
+
+```
+{environment}-{公司用户id}@aiops-login.invalid
+```
+
+**为什么要它**：Dify 账号是**实例级**的（不属于任何 workspace），身份由邮箱定。
+41 与 95 是两套独立 UPMS，`sys_user.id` 各自生成 —— 不带环境前缀时，两套环境里
+id 相同的**两个不同的人**会映射到**同一个 Dify 账号**，于是第二个环境的代理能为它签会话、
+进第一个环境的 workspace。那时是越权，不是登录失败。
+
+**必须填，没有默认值。** 漏配时代理**拒绝启动**（`AIOPS_LOGIN_PROXY_ENVIRONMENT is required`）。
+这是故意的：给默认值会让漏配静默退化回旧行为，而启动、登录、审计全都正常。
+
+**已有映射的迁移**：登录时代理发现映射里的 `dify_email` 与派生值不一致，就**只改这一列**
+并记一条 `email_retagged` 审计 —— **不换 Dify 账号**。会话按账号 id 签、反查也按 id，
+身份路径一条都不经过邮箱，所以历史编辑与发布记录的归属不受影响。Dify 侧那个旧账号的
+邮箱仍是旧值（Dify 1.17.1 没有改邮箱的端点），但它不会再被任何派生值命中。
+
 ## 三条硬前置（不满足就别装）
 
 1. **控制台入口已是 TLS**（#776）。`AIOPS_LOGIN_PROXY_PUBLIC_ORIGIN` 非 https 时代理
