@@ -223,9 +223,9 @@ def test_self_scope_also_recognises_the_work_order_consumer() -> None:
     source.get_orders("O-1")
 
     sql, params = conn.executed[-1]
-    assert (
-        "(CASE WHEN user_id=%s THEN consumer_id ELSE user_id END=%s)" in sql
-    ), "订单表的 self 谓词必须把工单哨兵值翻到 consumer_id 那一列"
+    assert "(CASE WHEN user_id=%s THEN consumer_id ELSE user_id END=%s)" in sql, (
+        "订单表的 self 谓词必须把工单哨兵值翻到 consumer_id 那一列"
+    )
     assert params[-2:] == ["-1", USER]
 
 
