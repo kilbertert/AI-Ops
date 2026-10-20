@@ -829,6 +829,107 @@ class GatewayStore:
             ).fetchone()
         return _assistant_question_from_row(row) if row is not None else None
 
+    # ------------------------------------------------------------------
+    # Dify knowledge sources: which RAGFlow datasets one `knowledge_id` reaches.
+    #
+    # Read live on every retrieval, never cached in the process: an operator who
+    # unticks a box expects the next question to stop reaching that library, not
+    # the next deploy to.
+    # ------------------------------------------------------------------
+
+    def list_knowledge_id_bindings(self, tenant_id: str | None = None) -> list[dict[str, Any]]:
+        """Every registered knowledge source, newest first.
+
+        ``knowledge_base_ids`` comes back as a tuple so callers cannot
+        accidentally treat the `|`-joined storage form as the value.
+        """
+        with self._connection() as connection:
+            if tenant_id is None:
+                rows = connection.execute(
+                    """
+                    SELECT knowledge_id, tenant_id, knowledge_base_ids, display_name,
+                           created_by, created_at
+                    FROM dify_knowledge_bindings ORDER BY created_at DESC
+                    """
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    """
+                    SELECT knowledge_id, tenant_id, knowledge_base_ids, display_name,
+                           created_by, created_at
+                    FROM dify_knowledge_bindings WHERE tenant_id = ? ORDER BY created_at DESC
+                    """,
+                    (tenant_id,),
+                ).fetchall()
+        result: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["knowledge_base_ids"] = tuple(
+                part for part in str(item["knowledge_base_ids"]).split("|") if part
+            )
+            result.append(item)
+        return result
+
+    def get_knowledge_id_binding(self, knowledge_id: str) -> dict[str, Any] | None:
+        for row in self.list_knowledge_id_bindings():
+            if row["knowledge_id"] == knowledge_id:
+                return row
+        return None
+
+    def set_knowledge_id_binding(
+        self,
+        knowledge_id: str,
+        tenant_id: str,
+        knowledge_base_ids: tuple[str, ...],
+        *,
+        display_name: str = "",
+        created_by: str = "",
+    ) -> dict[str, Any]:
+        """Create or replace one knowledge source.
+
+        Replace, not merge: the operator's form shows the complete set of
+        ticked boxes, so the submitted list IS the intended state. Merging
+        would make "untick a library" impossible through this path.
+        """
+        if not knowledge_base_ids:
+            raise ValueError("a knowledge source needs at least one knowledge base")
+        now = _utc_now()
+        with self._connection(write=True) as connection:
+            connection.execute(
+                """
+                INSERT INTO dify_knowledge_bindings
+                    (knowledge_id, tenant_id, knowledge_base_ids, display_name, created_by, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(knowledge_id) DO UPDATE SET
+                    tenant_id = excluded.tenant_id,
+                    knowledge_base_ids = excluded.knowledge_base_ids,
+                    display_name = excluded.display_name,
+                    created_by = excluded.created_by,
+                    created_at = excluded.created_at
+                """,
+                (
+                    knowledge_id,
+                    tenant_id,
+                    "|".join(knowledge_base_ids),
+                    display_name,
+                    created_by,
+                    _iso(now),
+                ),
+            )
+        return {
+            "knowledge_id": knowledge_id,
+            "tenant_id": tenant_id,
+            "knowledge_base_ids": tuple(knowledge_base_ids),
+            "display_name": display_name,
+        }
+
+    def remove_knowledge_id_binding(self, knowledge_id: str) -> bool:
+        with self._connection(write=True) as connection:
+            removed = connection.execute(
+                "DELETE FROM dify_knowledge_bindings WHERE knowledge_id = ?", (knowledge_id,)
+            )
+        return removed.rowcount > 0
+
     def list_assistant_questions(
         self,
         scope_fingerprint: str,
@@ -1319,6 +1420,29 @@ class GatewayStore:
                     ON publish_audit_ledger(at DESC);
                 CREATE INDEX IF NOT EXISTS idx_publish_audit_app
                     ON publish_audit_ledger(app_id, at DESC);
+
+                -- 运营在界面上点的「知识源」：一条 = Dify 里一个外部知识库。
+                --
+                -- 为什么不是 env 里的 DIFY_KNOWLEDGE_BINDINGS：那是一行必须手写的
+                -- `knowledge_id:tenant:kb1|kb2`，只有工程师能填，填错静默失效；运营
+                -- 需要在界面上点选，点击必须落在一个可写、可读回的地方。
+                --
+                -- 形状与 env 登记表**逐字段对应**（knowledge_id / tenant_id /
+                -- 一个或多个 dataset id），所以两者可以合并成同一张映射表，
+                -- 迁移也只是把已有的 env 行抄进来。
+                --
+                -- knowledge_base_ids 存成 `|` 分隔：与 env 语法一致，读的人不需要
+                -- 再学一种编码；这里没有查询需求，JSON 的额外表达力用不上。
+                CREATE TABLE IF NOT EXISTS dify_knowledge_bindings (
+                    knowledge_id TEXT PRIMARY KEY,
+                    tenant_id TEXT NOT NULL,
+                    knowledge_base_ids TEXT NOT NULL,
+                    display_name TEXT NOT NULL DEFAULT '',
+                    created_by TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_dify_knowledge_tenant
+                    ON dify_knowledge_bindings(tenant_id, created_at DESC);
                 """
             )
             columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(runs)").fetchall()}
