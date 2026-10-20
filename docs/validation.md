@@ -1,7 +1,7 @@
 ## 2026-10-20 · #868 落地到 36：向量库起了、补丁挂上了、迁移落库；索引仍被供应商余额挡住
 
 **部署身份**：`origin/main` @ `1ae4d86`，制品由 `git archive origin/main deploy/dify-36` 打包
-（tar sha256 `fabe9958e0003da9…`），2026-10-20 16:49 CST 落到 36 `/opt/dify/deploy`。
+（tar sha256 `fabe9958e0003da9d073ad26fc7fe8c2d5edc6540f105f427ca0c032f5d7a81c`），2026-10-20 16:49 CST 落到 36 `/opt/dify/deploy`。
 备份：`/opt/dify/deploy.bak-20261020164947/` 与 `.env.bak-20261020164947`（未删除，回滚路径）。
 
 ### 一、做到了什么（都有当场输出）

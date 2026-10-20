@@ -137,8 +137,15 @@ embedding 供应商，耗时以分钟计；先看 worker 日志再判断卡住�
 成功、走到了创建 collection。真正的错误在插件日志里：
 
 ```bash
-ssh yidong-36 'docker logs deploy-worker-1 --since 10m 2>&1 | grep -E "insufficient_user_quota|InvokeAuthorization" | tail -3'
+# 插件在自己的容器里跑，原始 403 在 plugin_daemon；worker 只是把它概括成
+# "Incorrect model credentials"。两边都看：先看插件拿到什么，再看 worker 怎么转述。
+ssh yidong-36 'docker logs deploy-plugin_daemon-1 --since 10m 2>&1 | grep -E "insufficient_user_quota" | tail -3'
+ssh yidong-36 'docker logs deploy-worker-1        --since 10m 2>&1 | grep -E "InvokeAuthorization|vector.create" | tail -3'
 ```
+
+（2026-10-20 实测：同一次失败在 plugin_daemon 与 worker 里各有 11 / 10 行匹配，但
+**只有 plugin_daemon 那侧带原始 403 与余额数字**；worker 那侧是转述后的
+`Incorrect model credentials`。只看 worker 会把它当成配错的 key。）
 
 2026-10-20 的实际原因是 `403 insufficient_user_quota`（剩 ¥0.000285，需 ¥0.000456），
 **配额恢复后再点一次重试即可**，不需要改任何配置。同一个余额也会让 external 检索链路
