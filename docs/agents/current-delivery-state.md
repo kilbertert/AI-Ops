@@ -6,7 +6,15 @@
 >
 > **最后核验**：2026-10-20（Asia/Shanghai）。
 >
-> **2026-10-20 · Dify 36 的三处数据面缺陷已修，制品备齐，未部署（`fix/dify-vector-store-external-retrieval-hygiene`）**：
+> **2026-10-20 · Dify 36 的三处数据面缺陷已修并已部署到 36（#868 / `1ae4d86`）**：
+> 向量库起着（`deploy-weaviate-1` healthy）、5 个补丁挂进 api/worker、迁移已落库
+> （6 条孤儿绑定删除、2 把 key 变 `enc:v1:`，控制台列表改返回 `[__HIDDEN__]`）。
+> **但两条验收仍红，卡在同一个供应商余额**：重跑索引到的错误是
+> `403 insufficient_user_quota`（`sk-x4CF…`，剩 ¥0.000285），`embeddings` 仍 0 行；
+> external 检索链路 `41 dify_retrieval → kb-service → RAGFlow` 也回 102 同一原因。
+> 配额恢复后各重跑一次即可，不需要改配置。密钥轮换未做。
+> 原设计说明保留如下 ——
+
 > ① 36 上没有向量库，vendor 数据集的 1564 个分段全停在 indexing（`Vector store must be
 > specified.`，`embeddings` 0 行）⇒ 新增 weaviate 容器并配 `VECTOR_STORE`；
 > ② `/v1/datasets/{id}/retrieve` 对 external 数据集返回空结果（`HitTestingService` 收
