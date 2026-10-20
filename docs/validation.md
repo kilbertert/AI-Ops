@@ -1,3 +1,41 @@
+## 2026-10-20 · Dify 租户对接现状核实（单工作区）
+
+**范围**：只读核实，不改任何配置与数据。目的是把"租户在 Dify 侧到底怎么体现"这件事
+从推断变成有据可查。
+
+**核实到的线上事实（36，2026-10-20）**：
+
+```
+Dify tenants 表                          1 行
+  AI-Ops Admin's Workspace               2db44904-f981-42ca-b7e2-6f35cb2afffd
+
+tenant_account_joins
+  dify-admin@aiops.local                  owner   current=t
+  1454348737375174658@aiops-login.invalid editor  current=t
+
+代理映射表
+  company_user_id=1454348737375174658 | tenant_id=-1 | user_type=-1 | active
+```
+
+**代码侧的对应事实**（读源码，不是推断）：
+
+- `provision_editor(settings, *, owner_session, company_user_id, username)` —— **没有
+  tenant 入参**；`INVITE_PATH` 写死 `/console/api/workspaces/current/members/invite-email`。
+- Dify `ext_login.py` 的 console 分支只按 `user_id` 取账号；当前 workspace 由
+  `load_user` 读 `TenantAccountJoin.current` 决定，会话里**不含** workspace 身份。
+- `login-proxy.env` 无任何 workspace 配置项。
+- 桥的 `AIOPS_CONSOLE_BRIDGE_WORKSPACE_ID` 是单一常量。
+- 租户唯一下游消费点：`X-AIOps-Initiator-Tenant` → `build_trial_scope()`。
+
+**结论**：Dify 侧**没有**租户隔离，这是 PRD #772 §C 的 V1 暂定，不是遗漏。
+但该暂定要求的 ADR 此前缺失，本次补记（ADR-0056）。
+
+**本次没有做的事（据实）**：
+- **没有做任何真实浏览器/凭据验证** —— 全部是只读查询与源码阅读。
+- **没有验证"两个租户的运营会互相看到并编辑对方 app"** —— 线上目前只有一个映射账号，
+  这条按 Dify 的 `editor` 语义与单一 workspace 推断得出，未用第二个账号实测。
+- **"95" 无法核实**：本仓库文档与 inventory 中只有 41 / 36 / 120。
+
 ## 2026-10-19 · M3 Gateway 合并与部署核验（#854）
 
 **身份**：合并提交 `39583ca208b190be303cb6e643e298c0823709cc`；CD run `39341254239` 成功。
