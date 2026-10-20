@@ -1,3 +1,78 @@
+## 2026-10-20 · 95 演练第一段：新环境起一套网关并收敛出一个智能体
+
+**范围**：95（`prod-bugtrack-120`，`api.qumall.qushiyun.com`）。**新增一套独立网关，未切换
+前端入口，未接 Dify。** 制品来自合并修订 `8bbe208`。本记录不含口令、令牌或会话明文。
+
+**这一步要回答的问题**：把一个智能体从零部署到一个新环境，需要哪几步、每步的判据是什么。
+结论先写：**代码、依赖、清单三段能走通；Dify 与前端两段这次刻意没做**（理由在 §四）。
+
+### 一、做了什么
+
+| 项 | 值 |
+|---|---|
+| 代码 | `/opt/aiops-95`（87 个 `.py`，`gateway_config.py` 摘要与 `8bbe208` 逐字节一致） |
+| 制品 | `git archive` 自 `8bbe208`，tar sha256 `d524ce8b…`，上传后远端复核相等 |
+| 依赖 | 独立 venv（Python 3.13.5）；`uv export` 出锁文件的固定版本，再按该清单安装 |
+| 服务 | `aiops-gateway-95.service`（`User=aiops`），`127.0.0.1:8790` |
+| 配置 | `/etc/aiops-95/{gateway.env,server.env,keys/}`（600 / 600 / 0700） |
+| 数据 | **新库** `/var/lib/aiops-95/gateway/gateway.db`（241 KB，18 张表，全空） |
+| 清单 | `ops/environments/env-95.toml`（**新增文件**，只声明一个 agent，无 `[[dify_apps]]`） |
+
+**与 8788 的关系**：95 原有的 `aiops-gateway.service`（8788）**没有动**，仍服务
+`/v1/`。新服务用另一个端口、另一个库，两者互不可见。选择新端口而非替换旧服务，是因为
+替换会立刻改变线上 `api.qumall.qushiyun.com/v1/*` 的行为，而这一轮的目的是**先证明新环境
+能装配出智能体**，不是切换入口。
+
+### 二、判据（95 实测）
+
+| # | 动作 | 结果 |
+|---|---|---|
+| ① | `/health` | `{"ok":true,"version":"0.1.0","business_mutations":"disabled"}` |
+| ② | 无凭据 `/v1/faq/catalog` | **401**（认证面在，与 41 同一形状） |
+| ③ | 库初始化 | 18 张表，含 `agents` / `agent_versions` / `dify_app_registry` / `publish_audit_ledger` |
+| ④ | `admin reconcile --dry-run` | `created`（零写入） |
+| ⑤ | `admin reconcile` 实跑 | **`created`，version 1** |
+| ⑥ | 紧接着再跑一次 | **`unchanged`**（幂等） |
+| ⑦ | 库内核对 | `agents` 1 行、`status=published`、`published_version=1`；`agent_versions` 1 行（574 字节快照） |
+
+### 三、两处必须记下的实操差异（不是环境噪音）
+
+1. **`uv sync --frozen` 在 95 上挂死，不是缺网**：`pypi.org` 从 95 **超时**（`mirrors.aliyun.com`
+   200、同一 wheel 137 MB/s）。锁文件里的 `url` 指向 `files.pythonhosted.org`，`uv sync`
+   照锁取源 ⇒ 卡在 `openai-codex-cli-bin`（123 MB）。
+   **走通的方式**：`uv export --frozen --no-dev --format requirements-txt --no-hashes` 得到
+   **同一批固定版本**，再用 `uv pip install -r` 从一个可达的索引安装。版本仍由锁决定，
+   变的只是下载源。
+2. **`uv venv` 默认去下载 CPython 3.14**：95 上有 3.13.5，但 `uv` 的自动下载会先下解释器。
+   显式 `--python /usr/local/bin/python3.13` 才是"用本机那个"。
+3. **制品清单要带全**：`pyproject.toml` 的 `tool.hatch.build.targets.wheel.force-include`
+   要求 `README.md` 与 `examples/fixtures` 在树上，否则 `-e .` 构建失败（`Readme file does
+   not exist`、`Forced include not found`）。这与 41 的 `deploy-41.sh` 只带 `src/` 不同，
+   因为那边装的是预构建制品，这边是带构建钩子的 editable 安装。
+
+### 四、刻意没做的两段（以及为什么）
+
+| 段 | 为什么这次不做 |
+|---|---|
+| **接 Dify** | 95 没有自己的登录代理与 workspace。按 ADR-0059，Dify 是平台级、只有 36 一套；95 缺的是**它自己的控制台入口**（登录代理 + `(tenant, environment)` 映射）。那是一次多段变更，需要它自己的验收，不能顺手做。`env-95.toml` 因此**没有** `[[dify_apps]]` 段。 |
+| **切前端入口** | 95 的 `/v1/` 仍指 8788（旧网关）。把 nginx 改指 8790 会立刻改变真实用户可达的行为，而新网关还没有任何业务验收（没有会话、没有租户流量、没有 Dify 绑定）。按迁移纪律，切换与"新实例通过验收"是两步，不能合并。 |
+
+**一处必须同时说清的现状**：95 的 8788 与 8790 **都**返回 `401 INVALID_ACCESS_TOKEN`，
+即使带上 nginx 里注入的那枚服务令牌也一样。原因是 `AIOPS_GATEWAY_THIRD_SESSION_SERVICE_TOKEN`
+在这台机器上校验的是 Redis 会话，而 95 的 Redis 里 `app:3rd_session:*` **扫不到任何键**
+（绑定 ACL 用户对该模式无权限，`SCAN` 直接被拒；用另一个用户也扫不到）。⇒ **95 目前没有
+可用的调用者身份世界**，这与 `env-95-facts.md` 记的"数据面为空"是同一条事实，本轮没有改变它。
+
+### 五、回滚
+
+```bash
+systemctl disable --now aiops-gateway-95.service
+rm -rf /opt/aiops-95 /etc/aiops-95 /var/lib/aiops-95
+rm -f /etc/systemd/system/aiops-gateway-95.service && systemctl daemon-reload
+```
+
+8788 那个服务与它的库**全程未被触碰**（本轮的每一步都在 8790 / `/var/lib/aiops-95`）。
+
 ## 2026-10-20 · #868 落地到 36：向量库起了、补丁挂上了、迁移落库；索引仍被供应商余额挡住
 
 **部署身份**：`origin/main` @ `1ae4d86`，制品由 `git archive origin/main deploy/dify-36` 打包
@@ -318,6 +393,76 @@ https://dify.ranlei.work/signin          -> 200
   `owner_email` 指向平台服务身份）。
 - 第一次 curl 无 key 时出现一次 6 秒超时（容器刚起），重试即 401 —— 把它记在这里，
   不当作"偶发不稳定"的证据，也不掩盖。
+
+## 2026-10-20 · Dify 只保留 41 的两个入口 app：绑定收敛到真实存在的 id
+
+**范围**：`ops/environments/env-41.toml` 的 `[[dify_apps]]`，36 上的 Dify 应用集合，
+41 上的 `dify_app_registry`。**41 已生效；Dify 侧已收敛为两个 app。** 本记录不含任何
+口令、令牌或 Cookie 明文。
+
+### 一、起因（实测）
+
+36 的 `apps` 表当时只有 `aiops-41-kefu-agent`（`8e36f0a6…`）与
+`aiops-41-ops-methodology-agent`（`e35f8fda…`），而注册表三行里**两行指向已被删除的
+app id**：
+
+| 行 | 原 app_id | 36 上的状态 |
+|---|---|---|
+| `1942…/consumer → canary-客服` | `98441c5b…` | `apps` 表无此 id |
+| `1783…/consumer → canary-dify-acceptance-1011` | `a975c8e5…` | `apps` 表无此 id |
+| `1942…/operator → ops-methodology-700` | `25c20f09…`（清单）/ `e35f8fda…`（库） | 清单与库不一致 |
+
+后果：对前两个 id 打 `POST /v1/dify/publish` 一律 `502 DIFY_DSL_MALFORMED`（Dify 拉不到
+app），控制台那颗按钮同样失败。第三行库里能跑（`unchanged` v12），但**照清单 `reconcile`
+会把管家端诊断改指到不存在的 app**。
+
+### 二、最终形态（用户要求：Dify 上只留这两个 app）
+
+| 入口 | Dify app | 我方 agent | 版本 |
+|---|---|---|---|
+| 客户端（consumer） | `aiops-41-kefu-agent` `8e36f0a6…` | `canary-客服` | v14 |
+| 管家端（operator） | `aiops-41-ops-methodology-agent` `e35f8fda…` | `ops-methodology-700` | v12 |
+
+- **客户端那一行换 id 不换内容**：该 app 的 `pre_prompt` 759 字、md5
+  `e52d5de005bfd7e5ad5402b0921b0ec1`，与 `canary-客服` v14 已发布快照**逐字节相同**。
+- **验收租户（`1783…`）不再占一个 app**：它绑过的两个 id 都已删除；一次临时新建的
+  `405fb698…` 也按要求删除。正文回到清单承载（逐字等于库中 v2 的 129 字，md5
+  `1496386c6b225355fa33d7347085a2e2`）。依据是该租户**没有生产流量**
+  （`agent_run_metrics` 最后一次是 2026-10-10）。
+- 删除后 `apps` 表恰好两行，注册表恰好两行 —— 一一对应。
+
+### 三、落地形态：只收敛注册表，不跑整份 `reconcile`
+
+整份 `admin reconcile` 会把 `1942…/canary-客服` 判成 `updated`（清单里的
+`opening_questions` / `quick_commands` 与库中现值不同，是 #739 之前就有的漂移），也就是
+**顺手发布一版与本次无关的改动**。因此注册表单独收敛（`reconcile_dify_registry`，只写
+`dify_app_registry` 一张表）。步骤写入 `docs/agents/env-41-runbook.md` §3.1-bis。
+
+**一处必须同时做的顺序**：把 `1783…/consumer` 从注册表删掉**之后**再跑清单校验，否则
+`_require_no_source_switch` 会拒 —— 它看到的正是"库里还绑着、清单却改由正文承载"这个
+中间态（实测报错并零写入，符合设计）。
+
+### 四、判据（41 / 36 实测）
+
+| # | 动作 | 结果 |
+|---|---|---|
+| ① | 备份 | `gateway.db.bak-bindings-20261020160259`、`gateway.db.bak-2apps-…` |
+| ② | 注册表收敛 | 两次运行：第一次两行 `registered`/`unchanged`，第二次**全部 `unchanged`** |
+| ③ | `POST /v1/dify/publish` × 两个 app | 全部 `200 unchanged`（v14 / v12） |
+| ④ | 控制台桥 `/__aiops/publish`（公司身份 + `__Host-` 会话 + 同源 Referer） | 「线上已是最新」；用的是真实桥进程 |
+| ⑤ | `admin sync-from-dify --dry-run` | 两行 `unchanged` |
+| ⑥ | `agent_versions` 行数 | **42 → 42**（没有产生任何智能体版本） |
+| ⑦ | 36 的 `apps` 表 | **恰好 2 行**，与注册表一致 |
+
+### 五、边界与未完成
+
+- **试运行只到订单授权为止**：映射账号的公司租户是 `-1`（平台哨兵），对真实订单一律
+  `404 ORDER_NOT_FOUND`。它证明草稿确实从 app 拉到（拉不到会是 `DIFY_DSL_MALFORMED`），
+  但看不到 `diagnosed`。
+- **模型余额**：一次无发起人的试运行在作业体里失败于供应商预扣费（余额约 ¥0.002）。
+- **没有用真实浏览器**点那两颗注入按钮；桥那一跳是服务端同源请求复现的。
+- 删除的 `405fb698…` 是本轮临时创建的 app，删除前已确认它只服务验收租户、无流量。
+
 
 ## 2026-10-20 · 节点 jar 可复现构建（PR #863）
 

@@ -1,0 +1,29 @@
+# 95 环境（`api.qumall.qushiyun.com`，主机 `prod-bugtrack-120`）的智能体清单。
+#
+# **这是演练用的第一份声明态，不是生产配置。** 95 先前只有「入口与进程在跑、数据面为空」：
+# `agents`/`agent_versions` 各 0 行，`src/` 里没有任何 `dify_*.py`，配置里也没有任何
+# `AIOPS_GATEWAY_DIFY_*`。本文件配合同一份合并制品的网关，用来回答一个问题：
+# **把一个智能体从零部署到一个新环境，需要哪几步，每步的判据是什么。**
+#
+# 收敛命令（95 on-box）：
+#   aiops --config /etc/aiops-95/server.env admin reconcile \
+#     /opt/aiops-95/env-95.toml --db /var/lib/aiops-95/gateway/gateway.db
+#
+# ⚠️ **没有 `[[dify_apps]]` 段**：95 还没有自己的登录代理与 workspace，绑定无处可指。
+# 按 ADR-0059，Dify 只有一套（在 36），95 缺的是它自己的控制台入口；那一段要做时
+# 在这里加绑定行，并给 95 的登录代理一份 `(tenant, environment)` 映射。
+#
+# `model` 取 95 已配置的 provider 模型名（`AIOPS_PROVIDER_ALIBABA_MAAS_MODEL`），
+# 因为它要过发布门的模型白名单，而白名单来自**这台机器**的 provider 配置。
+
+[[agents]]
+tenant_id = "1783022023241633792"
+name = "aiops-95-kefu-canary"
+description = "95 环境演练用客服智能体（正文来自清单，不接知识库）"
+agent_type = "customer"
+prompt = """你是「小趋」，充电服务与新能源车领域的官方智能客服。当前是 95 环境的部署演练实例。
+【回答边界】你没有任何知识库可检索，也不接触订单数据。用户询问具体订单、扣费、账户问题时，
+礼貌说明需要人工客服协助；其余问题用通用充电常识回答，并说明这不是平台官方政策。"""
+knowledge_base_ids = []
+model = "qwen3.8-max"
+output_contract = "blocks-v1"
