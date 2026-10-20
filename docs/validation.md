@@ -127,14 +127,18 @@ AIOPS_LOGIN_PROXY_ENVIRONMENT=41
 
 ### 三、fail-closed 在**部署出来的那份代码**上复验（不是本地）
 
-用 `/opt/aiops-login-proxy` 里的模块、以服务身份 `aiopslogin` 跑：
+两道闸门**分开验、都要验**（评审指出它们的覆盖面不同）：
 
-| `AIOPS_LOGIN_PROXY_ENVIRONMENT` | 结果 |
-|---|---|
-| `""`（漏配） | `ValueError: AIOPS_LOGIN_PROXY_ENVIRONMENT is required` |
-| `prod.41`（非法） | `DifyProvisionError: 环境标识必须是规范形式…` |
+| 闸门 | 怎么验 | 结果 |
+|---|---|---|
+| `LoginProxySettings.from_env` 的必填检查 | 加载**真实环境文件**，再 `pop` 掉这一项 | 有值 ⇒ `STARTED environment= 41`（实际配置真的被读到）；拿掉 ⇒ `ValueError: AIOPS_LOGIN_PROXY_ENVIRONMENT is required` |
+| `DifyConsoleSettings` 的格式校验 | 直接构造 settings，传 `""` 与 `prod.41` | 两行都是 `DifyProvisionError` |
 
-两条都发生在**构造 `LoginProxySettings` 时**，即服务起不来。这正是评审要求的"报错位置"。
+**为什么不能只验一道**：只验格式那道，等于假设服务入口一定会调用 `required(...)` ——
+入口哪天漏了这一行，格式探针照样通过，而漏配会以"环境为空"的形式走到派生处。
+只验必填那道，则放过 `prod.41` 这类非法写法（非空但不是规范形式）。
+
+两道都发生在**构造 settings 时**，即服务起不来。这正是评审要求的"报错位置"。
 
 ### 四、已有映射的重标（**一次性库**上跑，不碰生产表）
 
@@ -163,18 +167,21 @@ audit        = ['email_retagged']
 | A | `POST http://36.156.159.175:10008/__aiops/login` 带明文口令 | **400**「此入口是明文 HTTP…请使用 https://dify.ranlei.work 登录」 |
 | B | `GET …/__aiops/login/captcha?randomStr=<32 hex>` | **200** `image/jpeg`，1975 字节，120×50 |
 | C | `https://dify.ranlei.work` 取图 + **故意填错验证码** | **403**「验证码不正确或已失效，请重新获取」 |
-| D | 日志里的来源地址 | `source=<真实对端>`，**不是** `127.0.0.1` |
+| D | 同一来源连续失败到阈值（`THRESHOLD=5`） | 第 1–5 次 **403**，第 6–7 次 **429**「尝试过于频繁，请稍后再试」 |
 | E | 从外部伪造 `X-Forwarded-Proto: https` 打 10008（非回环对端） | **400**「此入口是明文 HTTP…」 |
 
 C 用**错码**才走 428 分支（正码 + 错密码是"密码不正确"，修复前后都是 403，证明不了分类）。
 
-D 与 E 回答的是**两件不同的事**，不能互相替代：D 只证明 `realip` 那一段生效
-（`$remote_addr` 被改写成真实对端），而 `$aiops_upstream_proto` 是另一个 `map` 算的、
-只用于 `X-Forwarded-Proto`。一个 realip 正常但协议 `map` 没加载的部署，D 照样通过。
+D 的每一次拒绝在日志里都带 `source=<真实对端>`（**不是** `127.0.0.1`）——
+这是 `realip` 修正生效的旁证，但它**只是旁证**：`source` 只说明 `$remote_addr` 被改写对了。
 
-E 才是那条有区分性的：新配置只在**真实对端是回环**时采信上游声明的协议，
-所以从外部伪造 `https` 会被抹成空 ⇒ 代理判明文 ⇒ 400。旧配置原样透传 ⇒ 代理以为是
-TLS ⇒ 放行（403）。**400 只可能是新配置**。
+E 才是那条有区分性的协议检查。`$aiops_upstream_proto` 是另一个 `map` 算的、只喂
+`X-Forwarded-Proto`，一个 realip 正常而协议 `map` 没加载的部署照样能通过 A–D。
+新配置只在**真实对端是回环**时采信上游声明的协议，所以从外部伪造 `https` 会被抹成空
+⇒ 代理判明文 ⇒ 400；旧配置原样透传 ⇒ 代理以为是 TLS ⇒ 403。**400 只可能是新配置。**
+
+注意 D 与 `source` 日志的分工：**429 是判据**（限流真的触发了），`source` 是旁证
+（`realip` 把地址改写对了）。两者都写在这里，但只有前者能说"这条入口验收通过"。
 
 ### 六、边界（据实）
 

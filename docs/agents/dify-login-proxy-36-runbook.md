@@ -80,7 +80,35 @@ ssh yidong-36 'cd /opt/aiops-login-proxy && tar -xzf /tmp/aiops-login-sync.tgz
 ssh yidong-36 'sudo grep -n ^AIOPS_LOGIN_PROXY_ENVIRONMENT= /etc/aiops-login-proxy/login-proxy.env'
 ```
 
-判据不是"文件里有这一行"，而是**部署出来的那份代码**真的会拦下坏值。以服务身份跑：
+判据不是"文件里有这一行"，而是**两道闸门各自都会拦**，而且用的是**部署出来的那份代码**：
+
+**闸门一：`LoginProxySettings.from_env` 的必填检查**（漏配 ⇒ 服务起不来）。
+用**真实的环境文件**起一个只构造 settings 的进程，再对比"拿掉这一项"：
+
+```bash
+ssh yidong-36 'sudo -n bash -s' <<'SH'
+set -a; . /etc/aiops-login-proxy/login-proxy.env; set +a
+python3 - <<'PY'
+import os, sys
+sys.path.insert(0, "/opt/aiops-login-proxy")
+from aiops_diagnostics.dify_login_server import LoginProxySettings
+try:
+    print("present -> STARTED environment=", LoginProxySettings.from_env().dify.environment)
+except Exception as exc:
+    print("present ->", type(exc).__name__, exc)
+os.environ.pop("AIOPS_LOGIN_PROXY_ENVIRONMENT", None)
+try:
+    LoginProxySettings.from_env(); print("missing -> STARTED (bad)")
+except Exception as exc:
+    print("missing ->", type(exc).__name__, exc)
+PY
+SH
+# 期望：present -> STARTED environment= 41   （实际配置值真的被读到了）
+#       missing -> ValueError AIOPS_LOGIN_PROXY_ENVIRONMENT is required
+```
+
+**闸门二：`DifyConsoleSettings` 的格式校验**（配了但写法不合法 ⇒ 同样起不来）。
+这一道**必须直接构造 settings** —— 它要证明的是派生那条判据与构造那条是同一条：
 
 ```bash
 ssh yidong-36 'sudo -n -u aiopslogin /usr/bin/python3 - <<PY
@@ -97,12 +125,17 @@ PY'
 # 期望：两行都是 DifyProvisionError
 ```
 
+⚠️ **两道闸门不能互相代替**（评审指出）：闸门二直接传空串，测的是 `DifyConsoleSettings`
+自己那条判据；如果服务入口哪天不再调用 `required(...)`，闸门二照样通过、而漏配会
+以"环境为空"的形式走到派生处。反过来，闸门一不校验格式。所以两条都要跑。
+
 ⚠️ **脚本从 stdin 走，不要先 `cat > /tmp/xxx.py` 再 sudo 执行**：`/tmp` 是共享目录，
 别人可以先把那个路径占住、写成自己的内容，而 `sudo -u aiopslogin` 会以**代理身份**
 执行它 —— 那个身份读得到 `login-proxy.env`（含 `SECRET_KEY`）。stdin 没有这个窗口，
 也不会留下一个可被替换的文件。
 
-⚠️ 这个探针**只构造 settings**，不读环境文件、不连任何东西 —— 它不碰生产映射表。
+⚠️ 两个探针都**只构造 settings**（闸门一会读环境文件，那是它的判据本身）：
+不连公司 UPMS、不连 Dify、不碰生产映射表。
 
 ## 4. nginx 两处配置（缺一不可）
 
