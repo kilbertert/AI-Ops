@@ -1,6 +1,6 @@
 --- a/controllers/console/datasets/hit_testing_base.py
 +++ b/controllers/console/datasets/hit_testing_base.py
-@@ -103,6 +103,44 @@
+@@ -103,6 +103,51 @@
          return dataset
  
      @staticmethod
@@ -26,11 +26,15 @@
 +            raise ValueError("Query is required for an external knowledge base")
 +
 +        current_user, _ = resolve_account_fallback(current_user, current_tenant_id)
++        retrieval_model = cast(dict[str, Any] | None, args.get("retrieval_model")) or {}
 +        external_retrieval_model: dict[str, Any] = (
 +            cast(dict[str, Any] | None, args.get("external_retrieval_model"))
 +            or cast(dict[str, Any] | None, dataset.retrieval_model)
 +            or {}
 +        )
++        # A caller that asked for a metadata filter must not silently get unfiltered
++        # records: the provider applies it, so dropping it here would answer "here is
++        # everything, ranked" while looking like the filter had been applied.
 +        return dict(
 +            HitTestingService.external_retrieve(
 +                session=session,
@@ -38,6 +42,9 @@
 +                query=query,
 +                account=current_user,
 +                external_retrieval_model=external_retrieval_model,
++                metadata_filtering_conditions=cast(
++                    dict[str, Any] | None, retrieval_model.get("metadata_filtering_conditions")
++                ),
 +            )
 +        )
 +

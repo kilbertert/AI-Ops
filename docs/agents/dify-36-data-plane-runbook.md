@@ -50,12 +50,18 @@ ssh yidong-36 'sha256sum /tmp/dify36-sync.tgz'          # 与本地比
 ssh yidong-36 'cd /tmp && rm -rf /tmp/dify36 && mkdir /tmp/dify36
   tar -xzf /tmp/dify36-sync.tgz -C /tmp/dify36
   rsync -a --checksum /tmp/dify36/deploy/dify-36/ /opt/dify/deploy/
-  chown -R root:root /opt/dify/deploy
+  # 只把**本次传上去的文件**交给 root。不要 `chown -R /opt/dify/deploy` ——
+  # volumes/ 下是 postgres 的数据目录（按 uid 70 建过）、weaviate 的库、api 的
+  # privkeys，递归改属主会让服务端起来但读不到自己的文件（README 第 3/4 点就是这形状）。
+  chown root:root /opt/dify/deploy/docker-compose.yaml /opt/dify/deploy/env.example \
+    /opt/dify/deploy/check.sh /opt/dify/deploy/README.md
+  chown -R root:root /opt/dify/deploy/patches
   chmod 600 /opt/dify/deploy/.env'
 ```
 
 `rsync` 不带 `--delete`：`.env`、`volumes/`、`dsl-fixtures/`、`ARTIFACT.sha256` 是现场的，
-模板里没有，不能被删。
+模板里没有，不能被删。**同理也不要对 `volumes/` 做任何属主/权限调整** —— 那里的属主是
+容器自己建的，不是这次部署该碰的东西。
 
 ## 4. 三个变量进 `.env`
 
@@ -145,8 +151,9 @@ ssh yidong-36 'T=<dataset key>
 |---|---|
 | 补丁导致 api/worker 起不来 | 注释掉 compose 里 5 条 `*pm_*` 挂载 → `up -d api worker`。容器回到未打补丁的上游行为（external 检索会退化为空结果） |
 | 向量库配置有问题 | `VECTOR_STORE` 留空 + `docker compose stop weaviate`。vendor 索引退回不可用，其余不受影响 |
-| 整栈回退 | 把 `deploy.bak-<ts>` 覆盖回 `/opt/dify/deploy`，用备份的 `.env` 起 |
+| 整栈回退 | 把 `deploy.bak-<ts>` 覆盖回 `/opt/dify/deploy`，用备份的 `.env` 起。**若迁移已跑过**，还要按下一行处理库里的密文 |
 | 迁移写错 | 迁移在单事务里；用 §2 备份的 DB 卷快照恢复（没做快照时，孤儿绑定可重建、加密值可解回明文，**不会丢数据**） |
+| **迁移后回退到未打补丁的代码** | **不能直接回退**：库里 `api_key` 已经是 `enc:v1:`，旧代码会把它当明文发出去 → 供应商侧 401，且看起来像"凭据被拒"。要么连带把这两行解回明文（`external_api_settings` 解密后按旧格式写回），要么保持补丁在位。这是"加密"与"回滚"之间必须显式选一次的耦合 |
 
 **回滚不改事实**：加密是可逆的（密钥在租户里），删除的孤儿绑定本来就不指向任何数据集。
 唯一不可逆的是**密钥轮换** —— 那一步不做回滚，只做"换新的"。

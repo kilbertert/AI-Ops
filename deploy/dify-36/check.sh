@@ -15,6 +15,8 @@
 #      看起来配了，实际全拒。第 2 项就是钉住这个顺序。
 set -euo pipefail
 cd "$(dirname "$0")"
+# 本脚本自己的参数要传给内联 python 块；heredoc 的 stdin 已被占用，用环境变量带过去。
+export CHECK_ARGV="$*"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
 ok()   { echo "ok: $*"; }
@@ -117,6 +119,7 @@ for forbidden in ("sandbox", "local_sandbox", "agent_backend", "agent_ssrf_proxy
 # 可用（这正是本次事故的原始形状）。两个变量都在 env.example 里，值必须是内网名 ——
 # 写宿主机地址或 localhost 都会在容器里指向空处。
 import os
+CHECK_ARGV = os.environ.get("CHECK_ARGV", "").split()
 env_example = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "env.example")).read()
 want_env = {"VECTOR_STORE": "weaviate", "WEAVIATE_ENDPOINT": "http://weaviate:8080"}
 for k, v in want_env.items():
@@ -125,6 +128,34 @@ for k, v in want_env.items():
 if not env_example.count("\nWEAVIATE_API_KEY=\n"):
     raise SystemExit("FAIL: env.example 的 WEAVIATE_API_KEY 必须留空，由现场生成")
 print("ok: env.example 的 VECTOR_STORE/WEAVIATE_ENDPOINT 指向 compose 内网名，API key 现场生成")
+
+# 现场 .env 才是运行实例读的那份；模板正确不证明部署正确。给了 --env-file 时必须核对
+# 生效值 —— 否则现场留着 `VECTOR_STORE=` 也照样"自检通过"，而 worker 会再次报
+# `Vector store must be specified.`（正是本次事故的形状）。不给就不判，并在输出里说清楚。
+# 这个 python 块是 `python3 - <json>`，脚本自己的参数从 CHECK_ARGV 读（见文件头的导出）。
+env_file = None
+if "--env-file" in CHECK_ARGV:
+    env_file = CHECK_ARGV[CHECK_ARGV.index("--env-file") + 1]
+else:
+    default_env = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if os.path.exists(default_env):
+        env_file = default_env
+if env_file:
+    effective = {}
+    for line in open(env_file, encoding="utf-8"):
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, _, v = line.partition("=")
+            effective[k.strip()] = v.strip()
+    for k, v in want_env.items():
+        if effective.get(k) != v:
+            raise SystemExit(f"FAIL: 现场 {os.path.basename(env_file)} 的 {k} = {effective.get(k)!r}，"
+                             f"必须是 {v!r}；模板正确不能代替运行配置")
+    if len(effective.get("WEAVIATE_API_KEY", "")) < 16:
+        raise SystemExit("FAIL: 现场 .env 的 WEAVIATE_API_KEY 缺失或过短（容器会拒绝解析或失去鉴权）")
+    print(f"ok: 现场 {os.path.basename(env_file)} 的向量库三项与模板一致")
+else:
+    print("ok: 未找到现场 .env（干跑），只校验模板；部署时请带 --env-file 复核生效值")
 
 # 上游补丁的挂载集合必须与 patches/1.17.1/*.patch 覆盖的文件一致，且逐个 :ro。
 # 这三处是上游 1.17.1 还没有的行为（README「上游补丁」）；漏挂一处就是静默回到旧行为。
