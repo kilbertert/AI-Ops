@@ -67,10 +67,11 @@ class DifyConsoleSettings:
     environment: str = ""
 
     def __post_init__(self) -> None:
-        # 构造时就拒，而不是等第一次开户才炸（#864）。空环境会让邮箱退回"只按 id"
-        # —— 那正好把撞号缺陷放回来，而启动、登录观测全都正常。
-        if not _safe_text(self.environment):
-            raise DifyProvisionError("ENVIRONMENT_MISSING", "DifyConsoleSettings.environment 不能为空")
+        # 构造时就用**与派生时完全相同**的那条判据校验（#864）。只查"非空"是不够的：
+        # 那样 `prod.41` 能让代理正常启动，然后在**每一个已授权用户**登录时抛
+        # DifyProvisionError —— 表现成"登录服务坏了"，而不是"配置写错了"。
+        # 一个配置错误必须在启动时报，不能在请求路径上报。
+        _canonical_environment(self.environment)
 
 
 def account_email_for(company_user_id: str, *, environment: str) -> str:

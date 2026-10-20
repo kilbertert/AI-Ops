@@ -136,10 +136,16 @@ worker 日志（2026-10-15）：
 |---|---|---|
 | 同一 `user_id`、两个 `environment` ⇒ 两个邮箱 | `test_the_same_company_user_in_two_environments_is_two_dify_accounts` | **隔离**：撞号时不会串到同一个 Dify 账号 |
 | 空环境在两个入口都报错 | `test_an_empty_environment_is_a_configuration_error_not_a_silent_fallback` | **fail-closed**：漏配不能静默退化回"只按 id" |
+| 非法环境在**构造 settings 时**就报错 | `test_settings_reject_a_non_canonical_environment_at_construction` | **配置错在启动时报**：`prod.41` 不能启动成功、然后让每个用户登录失败 |
 | 旧映射登录后只重标邮箱列 | `test_a_pre_environment_mapping_is_retagged_in_place_keeping_the_account` | **不换账号**：`dify_account_id` 不变、未再邀请、留了 `email_retagged` 审计 |
 
 第二条比"格式对不对"重要：`AIOPS_LOGIN_PROXY_ENVIRONMENT` 若给默认值，
 漏配的部署会静默退化成旧行为，而启动、登录、审计全都正常。
+
+第三条钉的是**报错的位置**，不是报不报错：`__post_init__` 只查"非空"时，`prod.41`
+能让代理正常启动，然后在每一个已授权用户登录时抛 `DifyProvisionError` ——
+现场看到的是"登录服务坏了"，不是"配置写错了"。所以构造时必须用**与派生完全相同**
+的那条判据（`_canonical_environment`），不能另写一条更宽松的。
 
 ### 二、突变复验（三次，各自还原即绿）
 
@@ -148,11 +154,12 @@ worker 日志（2026-10-15）：
 | 邮箱退回只按 id 派生 | 隔离用例红：`两个环境给了同一个邮箱 —— 撞号时会串到同一个 Dify 账号：1454348737375174658@aiops-login.invalid` |
 | 去掉 `DifyConsoleSettings.__post_init__` 与 `_safe_fragment` 的空值检查 | 空环境用例红：`DID NOT RAISE <class 'DifyProvisionError'>` |
 | 去掉登录时的重标分支 | 迁移用例红：`没有留下迁移审计：['provisioned']` |
+| `__post_init__` 退回只查"非空"（不调 `_canonical_environment`） | 构造用例红：`DID NOT RAISE <class 'DifyProvisionError'>`（`prod.41` 照样构造成功） |
 
 ### 三、全量
 
 ```
-uv run pytest -n auto   ->  3056 passed, 9 skipped
+uv run pytest -n auto   ->  3063 passed, 9 skipped
 ruff check .            ->  All checks passed
 ruff format --check .   ->  491 files already formatted
 ```
@@ -162,7 +169,12 @@ ruff format --check .   ->  491 files already formatted
 `deploy/m2-live-03/images.lock.json` 的 gateway **构造上下文摘要**覆盖 `src/`，
 改任何 `src/` 文件都会让它变 —— 本地 `/tmp` 上先复现了
 `test_gateway_context_digest_is_reproducible_and_matches_the_lock` 变红，
-用 `deploy/m2-live-03/context_digest.py` 重算并写回锁文件（`300f0bfd…` → `ccd1bbae…`）。
+用 `deploy/m2-live-03/context_digest.py` 重算并写回锁文件（`300f0bfd…` → `195f70fa…`）。
+
+这个值在评审期间**随每一轮 `src/` 修改都变**（中间经过 `ccd1bbae…`、`eea83da0…`、
+`53c8155c…`），所以验收记录只认**最后一次**：`195f70fa15a34fb0…`，与当前
+`images.lock.json` 逐字相同（`python3 deploy/m2-live-03/context_digest.py --check` → `match: true`）。
+每改一次 `src/` 都要重算一次，直到提交前不再改。
 这不是本票的改动，但它是 `src/` 变更的**必要条件**，不补 CI 会红。
 
 ### 五、据实

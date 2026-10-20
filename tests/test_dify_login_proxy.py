@@ -594,6 +594,25 @@ def test_an_empty_environment_is_a_configuration_error_not_a_silent_fallback() -
             DifyConsoleSettings(base_url="http://dify.invalid", secret_key=SECRET_KEY, environment=empty)
 
 
+def test_settings_reject_a_non_canonical_environment_at_construction() -> None:
+    """构造 settings 时必须用**与派生同一条**判据，不能只查"非空"。
+
+    否则 `prod.41` 能让代理**正常启动**，然后在每一个已授权用户登录时抛
+    `DifyProvisionError` —— 那表现成"登录服务坏了"，不是"配置写错了"。
+    一个配置错误必须在启动时报。
+    """
+    from aiops_diagnostics.dify_login_provision import DifyProvisionError
+
+    with pytest.raises(DifyProvisionError):
+        DifyConsoleSettings(base_url="http://dify.invalid", secret_key=SECRET_KEY, environment="prod.41")
+
+    # 规范形式照常构造
+    settings = DifyConsoleSettings(
+        base_url="http://dify.invalid", secret_key=SECRET_KEY, environment="prod-41"
+    )
+    assert settings.environment == "prod-41"
+
+
 def test_the_captcha_is_relayed_as_an_image(stack) -> None:
     connection = http.client.HTTPConnection(stack[0].removeprefix("http://"))
     connection.request("GET", f"{CAPTCHA_ROUTE}?randomStr=abc123")
