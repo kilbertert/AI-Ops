@@ -90,8 +90,13 @@ class ModelHandler(BaseHTTPRequestHandler):
         raw = self.rfile.read(length)
         body = json.loads(raw or b"{}")
         self.state["calls"] += 1
-        call = self.state["calls"]
         mode = self.state["mode"]
+        # 轮次按**请求内容**判，不按全局序号：两个 run 并发时，全局序号会把
+        # 第二个 run 的第一轮当成「第二轮」，于是它拿不到工具调用。
+        has_tool_result = any(
+            message.get("role") == "tool" for message in body.get("messages") or []
+        )
+        call = 2 if has_tool_result else 1
         streaming = bool(body.get("stream"))
         if call >= 2 and mode == "round2-500":
             self.send_response(500)
@@ -154,6 +159,51 @@ class ModelHandler(BaseHTTPRequestHandler):
             "choices": [{"index": 0, "delta": {"role": "assistant", "content": text},
                          "finish_reason": finish}],
         })
+
+
+class CompletionProxyHandler(BaseHTTPRequestHandler):
+    """透明代理到真 Gateway，但把**完成通知**的应答改写成一份坏回执。
+
+    这是节点侧 corroboration 的真实反例：真 Gateway 的回执是
+    ``{"run_id": <本run>, "state": "succeeded"}``；这里换成
+    ``{}`` / 错 run / ``state=failed``。节点若只看 2xx 就会把失败记成成功。
+    """
+
+    upstream: str = ""
+    mutation: str = "empty"
+    completions: int = 0
+
+    def log_message(self, *args: Any) -> None:  # noqa: D102
+        pass
+
+    def do_POST(self) -> None:  # noqa: N802
+        length = int(self.headers.get("Content-Length") or 0)
+        raw = self.rfile.read(length)
+        request = urllib_request.Request(
+            f"{self.upstream}{self.path}", data=raw, method="POST",
+            headers={k: v for k, v in self.headers.items() if k.lower() != "host"},
+        )
+        try:
+            with urllib_request.urlopen(request, timeout=60) as response:
+                status = response.status
+                body = response.read()
+        except urllib_error.HTTPError as exc:
+            status, body = exc.code, exc.read()
+        is_completion = self.path.startswith("/v1/internal/charging-status/completions/")
+        if is_completion and status == 200:
+            type(self).completions += 1
+            run_id = self.path.rsplit("/", 1)[-1]
+            if self.mutation == "empty":
+                body = b"{}"
+            elif self.mutation == "wrong-run":
+                body = json.dumps({"run_id": "run_" + "x" * 40, "state": "succeeded"}).encode()
+            elif self.mutation == "failed-state":
+                body = json.dumps({"run_id": run_id, "state": "failed"}).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
 
 class CpmsHandler(BaseHTTPRequestHandler):
@@ -250,6 +300,7 @@ class PlatformHandler(BaseHTTPRequestHandler):
             except subprocess.TimeoutExpired as exc:
                 result["rc"] = "timeout"
                 result["log"] = str(exc)
+            result["sid"] = sid
             state["node_results"].append(result)
 
         thread = threading.Thread(target=run_node, daemon=True)
@@ -258,6 +309,9 @@ class PlatformHandler(BaseHTTPRequestHandler):
         # 真实的平台派发是**同步**的：它要等节点的 gRPC 流结束才回包，而节点的
         # completionConsumer 只在 Gateway 确认整轮之后才触发。替身必须保持这个顺序，
         # 否则「派发返回时记录已 succeeded」这条既有语义会被替身自己的异步性破坏。
+        # 总是同步等待：ThreadingHTTPServer 每个请求一个线程，所以两次并发派发
+        # 各自等自己的节点，交错仍然发生 —— 不需要为交错场景开一个「不等」的特例
+        # （那会让替身返回 502，而真实平台是同步接口）。
         thread.join(timeout=state.get("timeout", 180) + 20)
         body = json.dumps({"status": 1, "data": {"content": "已派发"}}).encode()
         self.send_response(200)
@@ -312,10 +366,15 @@ def _stop(process: subprocess.Popen) -> None:
         os.killpg(os.getpgid(process.pid), signal.SIGKILL)
 
 
+PROXIES: list[ThreadingHTTPServer] = []
+
+
 def _scenario(root: Path, label: str, *, mode: str, scenario: str, manifest: bool,
               platform: ThreadingHTTPServer, model: ThreadingHTTPServer,
               cpms: ThreadingHTTPServer, manifest_mutation: str | None = None,
-              probe: Any = None, pre_claim_without_snapshot: bool = False) -> dict[str, Any]:
+              probe: Any = None, pre_claim_without_snapshot: bool = False,
+              concurrent: bool = False, second_run_id: str | None = None,
+              completion_mutation: str | None = None) -> dict[str, Any]:
     case_root = root / label
     (case_root / "config").mkdir(parents=True)
     (case_root / "data").mkdir(parents=True)
@@ -401,14 +460,28 @@ def _scenario(root: Path, label: str, *, mode: str, scenario: str, manifest: boo
         "PYTHONPATH": f"{REPO / 'src'}{os.pathsep}{os.environ.get('PYTHONPATH', '')}".rstrip(os.pathsep),
     }
     base = f"http://127.0.0.1:{port}"
+    node_gateway = base
+    proxy_port = 0
+    if completion_mutation is not None:
+        # 节点打代理，代理打真 Gateway —— 只改完成通知的应答，领取与业务照常。
+        CompletionProxyHandler.upstream = base
+        CompletionProxyHandler.mutation = completion_mutation
+        CompletionProxyHandler.completions = 0
+        proxy = ThreadingHTTPServer(("127.0.0.1", 0), CompletionProxyHandler)
+        threading.Thread(target=proxy.serve_forever, daemon=True).start()
+        PROXIES.append(proxy)
+        proxy_port = proxy.server_port
+        node_gateway = f"http://127.0.0.1:{proxy_port}"
     PlatformHandler.state = {
-        "gateway": base, "model": model_url, "scenario": scenario,
+        "gateway": node_gateway, "model": model_url, "scenario": scenario,
         "manifest": str(node_manifest) if manifest else None,
         "dispatched": [], "node_results": [], "threads": [], "timeout": 180,
         "classes": str(CLASSES), "deps": str(MANIFEST_DEPS), "jdk": MANIFEST_JDK,
         "case_dir": str(case_root),
         "database": case_root / "data/gateway.db",
         "pre_claim_without_snapshot": pre_claim_without_snapshot,
+        "concurrent": concurrent,
+        "second_run_id": second_run_id,
     }
     if probe is not None:
         probe["database"] = case_root / "data/gateway.db"
@@ -431,18 +504,48 @@ def _scenario(root: Path, label: str, *, mode: str, scenario: str, manifest: boo
         else:
             return {"label": label, "error": "gateway did not become ready"}
 
-        delegated = http(f"{base}/v1/orders/ORDER-A/charging-status/delegated", method="POST",
-                         token=TOKEN, body={}, headers={"X-Business-Entry": "consumer"})
+        delegated = [None]
+        delegated_statuses: list[int] = []
+        if concurrent:
+            # 两次独立派发**同时**发出：每条都签发自己的 run，两个节点进程真正并发。
+            def fire() -> None:
+                status, text = http(
+                    f"{base}/v1/orders/ORDER-A/charging-status/delegated", method="POST",
+                    token=TOKEN, body={}, headers={"X-Business-Entry": "consumer"},
+                    timeout=300.0,
+                )
+                delegated[0] = (status, text)
+                delegated_statuses.append(status)
+
+            dispatchers = [threading.Thread(target=fire) for _ in range(2)]
+            for thread in dispatchers:
+                thread.start()
+            for thread in dispatchers:
+                thread.join(timeout=320)
+        else:
+            delegated[0] = http(
+                f"{base}/v1/orders/ORDER-A/charging-status/delegated", method="POST",
+                token=TOKEN, body={}, headers={"X-Business-Entry": "consumer"})
         for thread in list(PlatformHandler.state["threads"]):
             thread.join(timeout=200)
         rows = _rows(case_root / "data/gateway.db")
         return {
             "label": label,
-            "delegated_status": delegated[0],
-            "delegated_body": _json(delegated[1]),
+            "delegated_status": (delegated[0] or (0, ""))[0],
+            "delegated_statuses": sorted(delegated_statuses),
+            "delegated_body": _json((delegated[0] or (0, ""))[1]),
             "model_calls": ModelHandler.state["calls"],
             "cpms_calls": CpmsHandler.calls,
             "node": (PlatformHandler.state["node_results"] or [{}])[-1],
+            "nodes": list(PlatformHandler.state["node_results"]),
+            "dispatches": [
+                {
+                    "sid": item.get("sid"),
+                    "rc": item.get("rc"),
+                    "reported_pass": "STATUS=PASS" in str(item.get("log", "")),
+                }
+                for item in PlatformHandler.state.get("node_results", [])
+            ],
             "rows": [{k: row.get(k) for k in (
                 "run_id", "state", "reason", "expected_agent_version", "observed_agent_version",
                 "exec_config_state", "snapshot_json", "completed_at")} for row in rows],
@@ -629,16 +732,26 @@ def main() -> int:
         check("LINK-04 领取被拒：派发侧不返回成功",
               refused.get("delegated_status") != 200, refused.get("delegated_status"))
 
-        # LINK-05 取消：框架不给 cancel 回调 ⇒ 记录停在 running（已取数），由 TTL 收敛。
-        cancel_probe: dict[str, Any] = {}
+        # LINK-05 进程中断：节点在第二段文本到达后自己 Runtime.halt（真的被杀，不是
+        # 手工返回一个 Outcome）。没有 completion/error 回调 ⇒ 没有完成通知 ⇒
+        # 记录停在 running（已取数），由既有 TTL 收敛为 expired。
         cancel = _scenario(root, "cancel", mode="slow", scenario="cancel", manifest=True,
-                           platform=platform, model=model, cpms=cpms, probe=cancel_probe)
+                           platform=platform, model=model, cpms=cpms)
         report["scenarios"]["cancel"] = cancel
         row = (cancel.get("rows") or [{}])[0]
-        check("LINK-05 取消：业务已读但记录不 succeeded",
+        node = cancel.get("node") or {}
+        log = str(node.get("log", ""))
+        check("LINK-05 进程中断：进程确实被自己杀掉（exit 9）",
+              node.get("rc") == 9, {"rc": node.get("rc"), "tail": log[-200:]})
+        check("LINK-05 进程中断：中断前第一段文本已经到达",
+              "INTERRUPTING_NODE_PROCESS" in log, log[-300:])
+        check("LINK-05 进程中断：没有完成也没有错误回调",
+              "UNEXPECTED_COMPLETION" not in log and "UNEXPECTED_ERROR" not in log,
+              log[-300:])
+        check("LINK-05 进程中断：业务已读、记录不 succeeded",
               row.get("state") == "running" and bool(row.get("snapshot_json")),
               {"state": row.get("state"), "snapshot": bool(row.get("snapshot_json"))})
-        check("LINK-05 取消：派发侧不返回成功",
+        check("LINK-05 进程中断：派发侧不返回成功",
               cancel.get("delegated_status") != 200, cancel.get("delegated_status"))
 
         # LINK-07 领取重试：业务仍只读一次
@@ -662,33 +775,72 @@ def main() -> int:
         check("LINK-09 撤销后记录仍是 revoked", revoke_probe.get("state_after") == "revoked",
               revoke_probe.get("state_after"))
 
-        # LINK-06 两个 run 各自归属：分两次派发，各自的快照与身份互不串。
-        first = _scenario(root, "two-runs-a", mode="normal", scenario="normal", manifest=True,
-                          platform=platform, model=model, cpms=cpms)
-        second = _scenario(root, "two-runs-b", mode="normal", scenario="normal", manifest=True,
-                           platform=platform, model=model, cpms=cpms)
-        report["scenarios"]["two-runs"] = {"a": first, "b": second}
-        rows_a = first.get("rows") or [{}]
-        rows_b = second.get("rows") or [{}]
-        check("LINK-06 两个 run：都 succeeded",
-              rows_a[0].get("state") == "succeeded" and rows_b[0].get("state") == "succeeded",
-              [rows_a[0].get("state"), rows_b[0].get("state")])
-        check("LINK-06 两个 run：run_id 不同且各自快照独立",
-              rows_a[0].get("run_id") != rows_b[0].get("run_id")
-              and rows_a[0].get("snapshot_json") and rows_b[0].get("snapshot_json"),
-              [rows_a[0].get("run_id"), rows_b[0].get("run_id")])
+        # LINK-06 两个 run **同时**在跑（两次派发并发起两个真实节点进程），
+        # 各自领取自己的业务、各自发自己的完成通知。
+        # 每个派发各起一个节点进程、各跑一次普通 run —— 交错发生在**平台与 Gateway**
+        # 这一层（两次派发同时在飞），不需要在一个进程里塞两个 run。
+        interleaved = _scenario(root, "two-runs", mode="normal", scenario="normal",
+                                manifest=True, platform=platform, model=model, cpms=cpms,
+                                concurrent=True)
+        report["scenarios"]["two-runs"] = interleaved
+        rows = interleaved.get("rows") or []
+        states = sorted(row.get("state") for row in rows)
+        run_ids = sorted(row.get("run_id") for row in rows)
+        check("LINK-06 两个 run 交错：两条记录都 succeeded", states == ["succeeded", "succeeded"],
+              states)
+        check("LINK-06 两个 run 交错：各自的快照与身份独立",
+              len(rows) == 2 and all(row.get("snapshot_json") for row in rows)
+              and len(set(run_ids)) == 2,
+              run_ids)
+        node_rows = [
+            {"state": row.get("state"), "expected": row.get("expected_agent_version"),
+             "observed": row.get("observed_agent_version")}
+            for row in rows
+        ]
+        check("LINK-06 两个 run 交错：身份各自核对一致",
+              all(item["expected"] == item["observed"] and item["expected"] for item in node_rows),
+              node_rows)
+        # 归属的直接证据：两次**并发**派发各带自己的 sid，各自成功；业务总共读两次
+        # （两条记录各一次），而不是一次或四次。
+        dispatches = list(interleaved.get("dispatches") or [])
+        check("LINK-06 两个 run 交错：两次派发各带自己的 sid 且都成功",
+              len(dispatches) == 2
+              and sorted(d.get("sid") for d in dispatches) == run_ids
+              and all(d.get("rc") == 0 and d.get("reported_pass") for d in dispatches),
+              dispatches)
+        check("LINK-06 两个 run 交错：业务读取恰好两次（每 run 一次）",
+              interleaved.get("cpms_calls") == 2, interleaved.get("cpms_calls"))
+        check("LINK-06 两个 run 交错：两次派发都返回 200（平台是同步接口）",
+              [d for d in interleaved.get("delegated_statuses", [])] == [200, 200]
+              if interleaved.get("delegated_statuses")
+              else interleaved.get("delegated_status") == 200,
+              interleaved.get("delegated_statuses") or interleaved.get("delegated_status"))
         report["notes"] = {
-            "two_run_interleaving": (
-                "真正的**交错**归属由节点侧既有 cross-run 场景证明"
-                "（tools/m2_close/m3node/NodeGuardAcceptance 的 cross-run，run.sh 覆盖）；"
-                "本层证明的是每个 run 各自的通知只作用于自己的记录。"
-            ),
             "ttl_convergence": (
-                "取消后的 running→expired 由 Gateway 侧既有 TTL 语义覆盖"
+                "进程中断后的 running→expired 由 Gateway 侧既有 TTL 语义覆盖"
                 "（tests/test_m3_node_link_state.py::test_complete_loop_refuses_after_expiry "
-                "与 completion 的到期边界用例）；本层只证「取消不会被报成成功」。"
+                "与 completion 的到期边界用例）。端到端这边的判据是：节点进程被真的杀掉"
+                "（Runtime.halt），此后**没有**任何完成通知，记录停在 running 而不是 succeeded。"
             ),
         }
+
+        # LINK-08 节点必须校验完成回执：200 但坏回执不能被记成成功。
+        for mutation in ("empty", "wrong-run", "failed-state"):
+            bad_ack = _scenario(root, f"bad-ack-{mutation}", mode="normal", scenario="normal",
+                                manifest=True, platform=platform, model=model, cpms=cpms,
+                                completion_mutation=mutation)
+            report["scenarios"][f"bad-ack-{mutation}"] = bad_ack
+            row = (bad_ack.get("rows") or [{}])[0]
+            log = str((bad_ack.get("node") or {}).get("log", ""))
+            # 记录本身由**真 Gateway** 落定（它是权威），代理只改写回执正文。
+            # 本判据要证的是节点侧：一份它无法校验的 2xx 回执**不能**被它当作成功上报。
+            check(f"LINK-08 坏回执[{mutation}]：节点不向平台报成功",
+                  "STATUS=PASS" not in log
+                  and "CompletionNotConfirmed" in log
+                  and (bad_ack.get("node") or {}).get("rc") != 0,
+                  {"state": row.get("state"), "rc": (bad_ack.get("node") or {}).get("rc")})
+            check(f"LINK-08 回执[{mutation}]：确实到达了节点（代理计数 > 0）",
+                  CompletionProxyHandler.completions >= 1, CompletionProxyHandler.completions)
 
         # LINK-10 未启用清单：行为与今天逐字一致
         legacy = _scenario(root, "legacy", mode="normal", scenario="normal", manifest=False,
@@ -708,7 +860,7 @@ def main() -> int:
                   "expires_at", "claimed_at", "completed_at"},
               sorted((legacy.get("delegated_body") or {}).keys()))
     finally:
-        for server in (cpms, model, platform):
+        for server in (cpms, model, platform, *PROXIES):
             server.shutdown()
         shutil.rmtree(root, ignore_errors=True)
 

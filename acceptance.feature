@@ -3220,11 +3220,11 @@ Feature: 整轮完成与工具领取的分界（M3-NODE-LINK-01）
 
   Rule: 完成通知自身要重新证明身份
 
-    Scenario: LINK-05 取消与进程退出没有完成信号
-      Given 节点已取到业务快照
-      When 订阅方在模型输出中途取消
-      Then 不发任何完成通知，记录停在 running（已取数）
-      And 到期后按既有 TTL 语义收敛为 expired，绝不伪造成功
+    Scenario: LINK-05 进程中断没有完成信号
+      Given 节点已取到业务快照，且第二轮模型已经开始输出
+      When 节点进程被真实终止（不是订阅方假装取消）
+      Then 进程退出前没有触发任何完成或错误回调，不发完成通知
+      And 记录停在 running（已取数），到期后按既有 TTL 语义收敛为 expired，绝不伪造成功
 
     Scenario: LINK-06 两个 run 各自归属
       Given 两次委派各自持有自己的 run_id
@@ -3237,17 +3237,19 @@ Feature: 整轮完成与工具领取的分界（M3-NODE-LINK-01）
       Then 交回同一份快照，业务读取计数不增加
       And 重试路径同样核对身份、终态与有效期
 
-    Scenario: LINK-08 重复与冲突的完成通知
+    Scenario: LINK-08 重复、冲突与坏回执
       Given 一条已确认完成的记录
-      When 再次发送同状态的完成通知
+      When 再次发送同状态同原因的完成通知
       Then 幂等返回成功，首次完成时间与原因不被覆盖
-      And 之后发送相反状态的成功通知被拒，终态不被改写
+      And 同状态不同原因的通知是冲突而非幂等；相反状态的通知被拒，终态不被改写
+      And 节点收到 200 但回执不含本 run 或 state 不是 succeeded 时，不向平台报成功
 
-    Scenario: LINK-09 撤销与到期边界
+    Scenario: LINK-09 撤销、到期与未启用兼容
       Given 记录已取数但尚未确认整轮
       When 在此期间被撤销，或恰好到期
-      Then 完成通知被拒，记录保持撤销/过期，不复活
+      Then 完成通知被拒，记录保持撤销/过期，不复活，迟到通知不改写审计列
       And 快照不再被交出
+      And 未启用清单的旧记录收到任何完成通知都不改写任何列
 
     Scenario: LINK-10 未启用清单时行为逐字不变
       Given 节点与 Gateway 都没有配置执行配置清单

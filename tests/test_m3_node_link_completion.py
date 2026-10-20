@@ -334,3 +334,74 @@ def test_completion_expiry_boundary_matches_the_claim_semantics(
     else:
         assert response.status_code == 403
         assert _rows(fixture)[0]["state"] == "expired"
+
+
+# --------------------------------------------------------------------------
+# 复核反例（独立复现脚本 test_node_link_review.py 的三条，固化进仓库）
+# --------------------------------------------------------------------------
+
+
+def test_untracked_run_failure_notice_does_not_change_legacy_record(tmp_path, monkeypatch):
+    """未启用清单的旧记录收到「失败通知」时什么都不该发生。
+
+    反例：当时 `observed is None == expected is None`，于是把一条 M2 记录写成了 failed。
+    """
+    fixture = _fixture(tmp_path, monkeypatch, manifest=None)
+    assert _delegate(fixture).status_code == 502
+    run_id = _run_id(fixture)
+    before = dict(_rows(fixture)[0])
+
+    response = _complete(fixture, run_id, status="failed", reason="model_failed")
+
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "AGENT_RUN_COMPLETION_NOT_TRACKED"
+    assert _rows(fixture)[0] == before
+
+
+def test_wrong_identity_completion_keeps_terminal_record_untouched(tmp_path, monkeypatch):
+    """已确认完成的记录收到错摘要通知：拒绝，且审计列保持原样。"""
+    manifest = _write_manifest(tmp_path)
+    fixture, run_id, identity = _claimed_with_snapshot(tmp_path, monkeypatch, manifest)
+    assert _complete(fixture, run_id, identity=identity).status_code == 200
+    before = dict(_rows(fixture)[0])
+
+    response = _complete(fixture, run_id, identity="0" * 64)
+
+    assert response.status_code == 403
+    assert _rows(fixture)[0] == before
+    assert before["exec_config_state"] == "matched"
+
+
+def test_conflicting_failure_reason_is_rejected_not_idempotent(tmp_path, monkeypatch):
+    """同状态、不同原因的通知是**冲突**，不是幂等成功。"""
+    manifest = _write_manifest(tmp_path)
+    fixture, run_id, identity = _claimed_with_snapshot(tmp_path, monkeypatch, manifest)
+    first = _complete(fixture, run_id, status="failed", reason="model_failed", identity=identity)
+    assert first.status_code == 200
+    before = dict(_rows(fixture)[0])
+
+    second = _complete(
+        fixture, run_id, status="failed", reason="model_stream_incomplete", identity=identity
+    )
+
+    assert second.status_code == 409
+    assert _rows(fixture)[0] == before
+
+
+def test_failure_notice_after_expiry_does_not_overwrite_ttl_semantics(tmp_path, monkeypatch):
+    """到期之后再来的失败通知不能把 expired 改写成 model_failed。"""
+    from datetime import timedelta
+
+    from aiops_diagnostics import agent_runs
+
+    manifest = _write_manifest(tmp_path)
+    fixture, run_id, identity = _claimed_with_snapshot(tmp_path, monkeypatch, manifest)
+    expires = fixture["store"].get(run_id).expires_at
+    monkeypatch.setattr(agent_runs, "_now", lambda e=expires: e + timedelta(seconds=1))
+
+    response = _complete(fixture, run_id, status="failed", reason="model_failed", identity=identity)
+
+    assert response.status_code == 403
+    row = _rows(fixture)[0]
+    assert row["state"] == "expired"
+    assert row["reason"] == "ttl_elapsed"

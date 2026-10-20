@@ -8,6 +8,7 @@ import com.aizuda.snail.ai.agent.core.runtime.ChatSessionRequest;
 import com.aizuda.snail.ai.agent.core.runtime.ChatSessionRuntime;
 import com.aizuda.snail.ai.agent.core.runtime.tool.ToolRuntime;
 import com.trendpower.aiops.node.exec.GuardedChatModelFactory;
+import com.fasterxml.jackson.databind.JsonNode;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Primary;
 import org.springframework.stereotype.Component;
@@ -71,7 +72,7 @@ class ReportingChatSessionRuntime extends ChatSessionRuntime {
                 .thinkingConsumer(request.getThinkingConsumer())
                 .completionConsumer(result -> {
                     try {
-                        LoopTerminationGuard guard = slot.guard();
+                        LoopTerminationGuard guard = slot.takeGuard();
                         if (guard == null || !guard.finishedCleanly()) {
                             // 循环"结束"了，但最后一轮没有正常说完整（截断/长度/内容过滤/缺失）。
                             reportFailed(runId, "model_stream_incomplete");
@@ -87,7 +88,7 @@ class ReportingChatSessionRuntime extends ChatSessionRuntime {
                         }
                         request.acceptCompletion(result);
                     } finally {
-                        scope.close(runId);
+                        scope.close(runId, slot);
                     }
                 })
                 .errorConsumer(error -> {
@@ -95,24 +96,39 @@ class ReportingChatSessionRuntime extends ChatSessionRuntime {
                         reportFailed(runId, "model_failed");
                         forwardError(request, error);
                     } finally {
-                        scope.close(runId);
+                        scope.close(runId, slot);
                     }
                 })
                 .build();
-        super.execute(wrapped);
+        // 取消（订阅方 dispose）与进程内的任何意外都不会触发上面两个回调（实测），
+        // 所以这里必须无条件收口：不依赖回调，也就不会留下泄漏的格子。
+        try {
+            super.execute(wrapped);
+        } finally {
+            scope.close(runId, slot);
+        }
     }
 
-    /** 完成通知：只在 2xx 时算确认。**不重试**（宁可少报成功，不伪造）。 */
+    /**
+     * 完成通知：必须**校验回执**才算确认，2xx 本身不算。
+     *
+     * <p>复核反例：`200 {}`、`200 {"run_id":"别的run","state":"succeeded"}`、
+     * `200 {"run_id":本run,"state":"failed"}` 都不能被记成成功 —— 一个认错记录的应答
+     * 和一次拒绝在 HTTP 状态上无法区分。**不重试**（宁可少报成功，不伪造）。
+     */
     private boolean reportCompleted(String runId) {
+        JsonNode ack;
         try {
-            gateway.post(
+            ack = gateway.post(
                     "/v1/internal/charging-status/completions/" + runId,
                     "{\"status\":\"completed\"}",
                     manifestId());
-            return true;
         } catch (RuntimeException e) {
             return false;
         }
+        return ack != null
+                && runId.equals(ack.path("run_id").asText(null))
+                && "succeeded".equals(ack.path("state").asText(null));
     }
 
     /** 失败通知：尽力而为，绝不因为通知失败而改变本地错误路径。 */
@@ -159,19 +175,42 @@ class ReportingChatSessionRuntime extends ChatSessionRuntime {
         }
     }
 
-    /** 每次 run 的登记表：execute 先开一格，customizer 把守卫填进去。 */
+    /**
+     * 每次 run 的登记表：execute 先开一格，customizer 把守卫填进去。
+     *
+     * <p>三条必须收口的边界（复核笔记 #2）：
+     * <ul>
+     *   <li><b>取消会泄漏</b>：取消时 completion/error 两个回调都不到（实测），
+     *       所以不能只靠它们 close。这里用**有界**登记表 + 每次 open 的机会性清扫，
+     *       并且 {@code execute} 结束（正常返回或抛出）时无条件 close。</li>
+     *   <li><b>同 run 重入</b>：{@code put} 会覆盖前一格，前一次的 close 又会删掉新格。
+     *       现在 open 先关掉旧格（旧格已被取代，不能再用），close 只在**自己那一格**
+     *       仍是当前格时才删（条件删除），不会误删别人的。</li>
+     *   <li><b>未启用不介入</b>：customizer 只在能取到合法 run_id 且启用清单时登记 ——
+     *       由调用方保证；这里不做清单判断，避免两个地方各判一次。</li>
+     * </ul>
+     */
     @Component
     static class RunScope {
+        /** 上限只为「取消留下的格子」兜底：正常路径都会 close。 */
+        private static final int MAX_SLOTS = 512;
+
         private final Map<String, Slot> slots = new ConcurrentHashMap<>();
 
         Slot open(String runId) {
+            sweepIfCrowded();
             Slot slot = new Slot();
-            slots.put(runId, slot);
+            Slot previous = slots.put(runId, slot);
+            if (previous != null) {
+                previous.close();
+            }
             return slot;
         }
 
-        void close(String runId) {
-            slots.remove(runId);
+        /** 条件删除：只删**自己那一格**。调用方可重复调用（幂等）。 */
+        void close(String runId, Slot slot) {
+            slot.close();
+            slots.remove(runId, slot);
         }
 
         void attach(String runId, LoopTerminationGuard guard) {
@@ -181,15 +220,39 @@ class ReportingChatSessionRuntime extends ChatSessionRuntime {
             }
         }
 
+        private void sweepIfCrowded() {
+            if (slots.size() < MAX_SLOTS) {
+                return;
+            }
+            // 已关闭的格子没有意义（守卫已被 take 走或已结束），直接清掉。
+            slots.entrySet().removeIf(entry -> entry.getValue().isClosed());
+        }
+
         static final class Slot {
             private volatile LoopTerminationGuard guard;
+            private volatile boolean closed;
+            private final java.util.concurrent.atomic.AtomicBoolean settled =
+                    new java.util.concurrent.atomic.AtomicBoolean();
 
             void attach(LoopTerminationGuard value) {
                 this.guard = value;
             }
 
-            LoopTerminationGuard guard() {
-                return guard;
+            /** 取走守卫：只允许取到一次，避免重入的两次 run 共用同一个计数器。 */
+            LoopTerminationGuard takeGuard() {
+                if (!settled.compareAndSet(false, true)) {
+                    return null;
+                }
+                LoopTerminationGuard current = guard;
+                return current;
+            }
+
+            void close() {
+                closed = true;
+            }
+
+            boolean isClosed() {
+                return closed;
             }
         }
     }

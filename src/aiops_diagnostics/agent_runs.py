@@ -658,21 +658,28 @@ class AgentRunStore:
         *,
         observed_agent_version: str | None,
         actual_node_id: str | None = None,
+        failure_reason: str | None = None,
     ) -> tuple[str, AgentRun | None]:
-        """整轮确认：``running``（已有快照）→ ``succeeded``。
+        """整轮终局：成功则 ``running``（已有快照）→ ``succeeded``，失败则落 ``failed``。
+
+        成功与失败**走同一个写事务、同一条过期原语**（``_expire_in`` + 事务内
+        ``expires_at <= now``），所以失败通知不会在到期之后把 ``expired`` 覆盖成
+        ``model_failed``，也不会出现「先读后写」的窗口。
 
         返回值是 ``(verdict, run)``，verdict 取：
-        ``completed`` / ``already_completed`` / ``not_tracked`` / ``drift`` /
-        ``not_active`` / ``missing`` / ``incomplete`` / ``expired``。
+        ``completed`` / ``already_completed`` / ``failed`` / ``already_failed`` /
+        ``not_tracked`` / ``drift`` / ``not_active`` / ``missing`` / ``incomplete`` /
+        ``expired`` / ``conflict``。
 
-        三条不可放宽的条件，全部在**同一个写事务**里成立才算数：
+        三条不可放宽的条件（成功与失败共同）：
         - 记录有期望身份，且**本次回传的身份与之逐字相等**（领取时的 ``matched``
-          不授权另一份配置来提交完成 —— 每个通知都要自己证明自己）；
-        - 记录仍是 ``running`` **且已有快照**（没取数就不存在「整轮完成」）；
-        - 此刻未过期（与 ``claim``/``complete`` 的 ``expires_at > now`` 互补）。
+          不授权另一份配置来提交终局 —— 每个通知都要自己证明自己）；
+        - 记录仍是 ``running``（失败还接受 ``issued``：首次领取就失败的那条路）；
+        - 此刻未过期。
 
-        重复通知幂等：已 ``succeeded`` 且身份仍相等 ⇒ ``already_completed``，不改时间戳。
-        冲突（已 ``succeeded`` 但身份不等）⇒ ``drift``，写入审计但不改状态。
+        重复通知幂等：同状态、同原因 ⇒ ``already_*``，不改时间戳与原因；
+        同状态不同原因 ⇒ ``conflict``（不是「所有 failed 都算幂等成功」）。
+        **终态记录一律不改写**：已确认的记录收到错身份只是 ``drift``，审计列保持原样。
         """
         observed = observed_agent_version
         with self._connection(write=True) as connection:
@@ -682,20 +689,12 @@ class AgentRunStore:
                 return "missing", None
             run = _run_from_row(row)
             if run.expected_agent_version is None:
-                # 未启用清单：没有「整轮身份」这回事，不写任何列。
+                # 未启用清单：没有「整轮身份」这回事，不写任何列（旧记录不受影响）。
                 return "not_tracked", run
             if observed != run.expected_agent_version:
-                # 每个通知都要自己证明身份：领取时的 matched 不能代替这一次。
+                # 每个通知都要自己证明身份；已确认的记录**不改写**（不覆盖审计列）。
                 if run.state == SUCCEEDED:
-                    connection.execute(
-                        """
-                        UPDATE agent_runs
-                           SET observed_agent_version = ?, exec_config_state = ?
-                         WHERE run_id = ? AND state = ?
-                        """,
-                        (observed, EXEC_CONFIG_MISMATCHED, run_id, SUCCEEDED),
-                    )
-                    return "drift", _read_run(connection, run_id)
+                    return "drift", run
                 connection.execute(
                     """
                     UPDATE agent_runs
@@ -717,6 +716,45 @@ class AgentRunStore:
                     ),
                 )
                 return "drift", _read_run(connection, run_id)
+
+            if failure_reason is not None:
+                if run.state == FAILED:
+                    # 同原因 ⇒ 幂等；不同原因 ⇒ 冲突（不能把一次新的失败读成成功）。
+                    return ("already_failed" if run.reason == failure_reason
+                            else "conflict"), run
+                if run.state == EXPIRED:
+                    return "expired", run
+                if run.state in TERMINAL_STATES:
+                    return "not_active", run
+                if run.state not in {ISSUED, RUNNING}:
+                    return "incomplete", run
+                now = _now()
+                if run.expires_at <= now:
+                    return "expired", _read_run(connection, run_id)
+                cursor = connection.execute(
+                    """
+                    UPDATE agent_runs
+                       SET state = ?, reason = ?, actual_node_id = COALESCE(actual_node_id, ?),
+                           completed_at = ?
+                     WHERE run_id = ? AND state IN (?, ?) AND expires_at > ?
+                    """,
+                    (
+                        FAILED,
+                        failure_reason,
+                        actual_node_id,
+                        now.isoformat(),
+                        run_id,
+                        ISSUED,
+                        RUNNING,
+                        now.isoformat(),
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    latest = _read_run(connection, run_id)
+                    return ("not_active" if latest is not None and latest.state in TERMINAL_STATES
+                            else "incomplete"), latest
+                return "failed", _read_run(connection, run_id)
+
             if run.state == SUCCEEDED:
                 return "already_completed", run
             if run.state == EXPIRED:

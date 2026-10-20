@@ -100,8 +100,11 @@ public class NodeLinkAcceptance {
         props.put("server.port", "0");
         props.put("snail-ai.enabled", "true");
         props.put("snail-ai.server.host", "127.0.0.1");
-        props.put("snail-ai.server.port", "18896");
-        props.put("snail-ai.port", "18897");
+        // gRPC 端口必须每个进程不同：两 run 交错场景会同时起两个节点，
+        // 固定端口会让第二个绑定失败（实测 "Address already in use"）。
+        int base = 20000 + (int) (ProcessHandle.current().pid() % 20000);
+        props.put("snail-ai.server.port", String.valueOf(base));
+        props.put("snail-ai.port", String.valueOf(base + 1));
         props.put("snail-ai.host", "127.0.0.1");
         props.put("snail-ai.app-id", "node-link-acceptance");
         props.put("snail-ai.token", "synthetic");
@@ -127,10 +130,40 @@ public class NodeLinkAcceptance {
                 "completion=" + (outcome.completion != null) + " error=" + describe(outcome.error));
     }
 
+    /**
+     * 进程中断：**不是**手工返回一个假的 Outcome。
+     *
+     * <p>这里如实做三件事：发起一次真实派发、等到上游已经吐出第一段文本（说明整轮已经
+     * 进了第二段）、然后由本进程自己 `Runtime.halt` 终止 —— 模拟部署重启/OOM kill。
+     * 进程退出后没有任何 completion/error 回调（实测），记录停在 running，
+     * 由 Python 侧核对「没有完成通知」与「TTL 收敛为 expired」。
+     *
+     * <p>因为 `halt` 会杀掉 JVM，这个场景**不打印 STATUS**：它返回的退出码本身就是信号，
+     * 判据全部落在 Python 侧读库里。
+     */
     private static void cancel(ChatSessionRuntime runtime, ChatDispatchRequest dispatch) throws Exception {
-        Outcome outcome = run(runtime, dispatch, true);
-        check("cancel:no-completion", outcome.completion == null,
-                "completion=" + outcome.completion);
+        CountDownLatch firstChunk = new CountDownLatch(1);
+        ChatSessionRequest request = ChatSessionRequest.builder()
+                .dispatchRequest(dispatch)
+                .textConsumer(chunk -> firstChunk.countDown())
+                .thinkingConsumer(chunk -> { })
+                .completionConsumer(result -> {
+                    System.out.println("UNEXPECTED_COMPLETION " + result.fullText());
+                })
+                .errorConsumer(failure -> {
+                    System.out.println("UNEXPECTED_ERROR " + failure.getClass().getSimpleName());
+                })
+                .build();
+        runtime.execute(request);
+        if (!firstChunk.await(60, TimeUnit.SECONDS)) {
+            System.out.println("STATUS=FAIL no first chunk before interruption");
+            System.out.flush();
+            Runtime.getRuntime().halt(3);
+        }
+        System.out.println("INTERRUPTING_NODE_PROCESS");
+        System.out.flush();
+        // 模拟进程被杀：不执行任何关闭逻辑，也就不可能有完成通知。
+        Runtime.getRuntime().halt(9);
     }
 
     private static void twoRuns(ChatSessionRuntime runtime, String model, String runA, String runB)
@@ -170,11 +203,7 @@ public class NodeLinkAcceptance {
         }
     }
 
-    private static Outcome run(ChatSessionRuntime runtime, ChatDispatchRequest dispatch) throws Exception {
-        return run(runtime, dispatch, false);
-    }
-
-    private static Outcome run(ChatSessionRuntime runtime, ChatDispatchRequest dispatch, boolean dispose)
+    private static Outcome run(ChatSessionRuntime runtime, ChatDispatchRequest dispatch)
             throws Exception {
         CountDownLatch done = new CountDownLatch(1);
         AtomicReference<String> text = new AtomicReference<>("");
@@ -194,11 +223,6 @@ public class NodeLinkAcceptance {
                 })
                 .build();
         runtime.execute(request);
-        if (dispose) {
-            // 取消场景：给节点时间去取数、等上游吐第一段，然后在没有「结束」信号的情况下退出。
-            Thread.sleep(1500);
-            return new Outcome(null, new IllegalStateException("consumer disposed"));
-        }
         if (!done.await(120, TimeUnit.SECONDS)) {
             return new Outcome(null, new IllegalStateException("timeout"));
         }

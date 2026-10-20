@@ -2888,30 +2888,21 @@ def create_gateway_app(
             )
 
         observed = exec_config
-        if payload.status == "failed":
-            reason = payload.reason or "model_failed"
-            if observed != run.expected_agent_version:
-                raise StandardAPIError(
-                    status.HTTP_403_FORBIDDEN, "AGENT_RUN_EXEC_CONFIG_DRIFT", "agent run refused"
-                )
-            landed = context.agent_run_store.fail(run_id, reason, actual_node_id=node.node_id)
-            settled = context.agent_run_store.get(run_id)
-            if settled is None:
-                raise StandardAPIError(
-                    status.HTTP_404_NOT_FOUND, "AGENT_RUN_NOT_FOUND", "agent run not found"
-                )
-            if landed or settled.state == FAILED:
-                return {"run_id": run_id, "state": settled.state}
-            raise StandardAPIError(
-                status.HTTP_409_CONFLICT, "AGENT_RUN_COMPLETION_CONFLICT", "agent run already settled"
-            )
-
         verdict, settled = context.agent_run_store.complete_loop(
-            run_id, observed_agent_version=observed, actual_node_id=node.node_id
+            run_id,
+            observed_agent_version=observed,
+            actual_node_id=node.node_id,
+            failure_reason=(payload.reason or "model_failed") if payload.status == "failed" else None,
         )
-        if verdict in {"completed", "already_completed"}:
+        if verdict in {"completed", "already_completed", "failed", "already_failed"}:
             assert settled is not None
             return {"run_id": run_id, "state": settled.state}
+        if verdict in {"conflict", "incomplete"}:
+            raise StandardAPIError(
+                status.HTTP_409_CONFLICT,
+                "AGENT_RUN_COMPLETION_CONFLICT",
+                "agent run is already settled or not in progress",
+            )
         if verdict == "drift":
             raise StandardAPIError(
                 status.HTTP_403_FORBIDDEN, "AGENT_RUN_EXEC_CONFIG_DRIFT", "agent run refused"
@@ -2929,13 +2920,6 @@ def create_gateway_app(
         if verdict == "expired":
             raise StandardAPIError(
                 status.HTTP_403_FORBIDDEN, "AGENT_RUN_NOT_ACTIVE", "agent run is not active"
-            )
-        if verdict == "incomplete":
-            # 还没取到数（issued / running 无快照）：不存在「整轮完成」。
-            raise StandardAPIError(
-                status.HTTP_409_CONFLICT,
-                "AGENT_RUN_COMPLETION_CONFLICT",
-                "agent run is not running with a snapshot",
             )
         raise StandardAPIError(
             status.HTTP_403_FORBIDDEN, "AGENT_RUN_NOT_ACTIVE", "agent run is not active"

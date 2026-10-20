@@ -154,10 +154,16 @@ uv run python tools/m2_close/m3node/verify_gateway_exec_config.py --out /tmp/exe
 
 - 凭证与领取同一份节点令牌；绑定核对（节点 / 环境 / app / agent）与领取同一段代码，
   在任何写之前完成。响应**不含业务快照**：`{"run_id","state"}`。
-- 幂等：同状态重复通知 200、不改 `completed_at`/`reason`；已完成后再报失败 409；
-  终态（`revoked`/`expired`/`failed`）403；未启用清单 409 `AGENT_RUN_COMPLETION_NOT_TRACKED`；
+- 幂等：**同状态且同原因**重复通知 200、不改 `completed_at`/`reason`；同状态不同原因 ⇒ 409
+  冲突（不是「所有 failed 都幂等」）；已完成后再报失败 409；终态（`revoked`/`expired`/`failed`）403；
+  未启用清单 409 `AGENT_RUN_COMPLETION_NOT_TRACKED`（旧记录**一个列都不改**）；
   `issued` 或无快照 409 `AGENT_RUN_COMPLETION_CONFLICT`。
 - `failed` 可以从 `issued` **或** `running`（含已取数）落终态 —— 首次领取就失败的那条路也算。
+  成功与失败走**同一个写事务、同一条过期原语**，所以到期之后来的失败通知不会把
+  `expired`/`ttl_elapsed` 覆盖成 `model_failed`。
+- **终态记录不改写**：一条已 `succeeded` 的记录收到错身份通知，只回 403，审计列
+  （`observed_agent_version`/`exec_config_state`）保持原样 —— 迟到的错摘要不能把已核对的
+  记录改成 `mismatched`。
 
 ### 8.3 节点侧：整轮结束的判定必须 fail closed
 
@@ -166,11 +172,17 @@ uv run python tools/m2_close/m3node/verify_gateway_exec_config.py --out /tmp/exe
 
 1. 一个 order 晚于 `ToolCallingAdvisor` 的 `BaseAdvisor` 逐轮记录 **finish reason**；
 2. 完成回调到达时，**最后一次 finish reason 必须是 `STOP`**，否则按失败处理；
-3. 然后向 Gateway 发完成通知，**只有 2xx 才算确认**；未确认 ⇒ 走 `errorConsumer`。
+3. 然后向 Gateway 发完成通知，**必须校验回执**：`run_id` 必须是本 run、`state` 必须是
+   `succeeded`；`2xx` 本身不算确认（`200 {}`、错 run、`state=failed` 都不能被记成成功）。
+   未确认 ⇒ 走 `errorConsumer`，不让本次 run 被算作成功。
 
 为什么必须有第 2 步：实测末轮被截断（SSE 无 `[DONE]`、无 `finish_reason`）时，
 框架照样触发完成回调、completion 文本是半截，finish reason 是 `_UNKNOWN`。
 「有完成回调」不能证明上游把最后一轮发完了。
+
+登记表（`RunScope`）的三条边界：取消时 completion/error **两个回调都不到**，所以
+`execute` 结束（正常返回或抛出）时无条件 close；同一 run 重入时 open 先关旧格、
+close 只删自己那一格（条件删除），不会误删新格；登记表有上限并按需清扫已关闭的格子。
 
 为什么受控领取失败要抛异常：`ToolExecutionException` 会被框架默认的
 `DefaultToolExecutionExceptionProcessor(alwaysThrow=false)` 转成文本继续跑，
