@@ -227,26 +227,18 @@ PY
   say "== M3 执行配置清单（两侧同一份字节） =="
   # 配了 `AIOPS_GATEWAY_EXECUTION_MANIFEST_FILE` 却读不到 ⇒ Gateway **启动即拒**。
   # 判据不是「两个路径的 basename 相同」：那对「节点开关缺失」和「路径指向不存在的
-  # 文件」都印 PASS（旧实现的实测反例）。这里交给 stack_checks.py 按**渲染后的
-  # compose** 把两侧的容器内路径解析成宿主路径，再核对是同一个真实普通文件。
-  local gw_env="${M2LIVE_CONFIG:-/etc/aiops-m2-live}/gateway/gateway.env"
-  local node_env="${M2LIVE_CONFIG:-/etc/aiops-m2-live}/node/node.env"
-  local gw_manifest node_manifest manifest_report manifest_rc
-  gw_manifest=$(sed -n 's/^AIOPS_GATEWAY_EXECUTION_MANIFEST_FILE=//p' "$gw_env" 2>/dev/null | tail -1)
-  node_manifest=$(sed -n 's/^AIOPS_EXEC_MANIFEST=//p' "$node_env" 2>/dev/null | tail -1)
-  # 值两侧的空白不是配置的一部分（两个加载器都会 strip）。
-  gw_manifest=${gw_manifest//[[:space:]]/}
-  node_manifest=${node_manifest//[[:space:]]/}
-  if [ -z "$gw_manifest" ] && [ -z "$node_manifest" ]; then
-    ok "两侧清单都未配置（M3 守卫不启用）"
+  # 文件」都印 PASS（旧实现的实测反例）。
+  #
+  # 值取自**渲染后的 environment**，不是配置文件原文：覆盖层（`M2LIVE_COMPOSE_EXTRA`）
+  # 可以在不改任何文件的情况下让实际那个容器单侧开启，而读原文会看到「两侧都开着」。
+  # 解析与同 inode 判定在 stack_checks.py：容器内路径 → 渲染后的挂载 → 宿主路径。
+  local manifest_report manifest_rc
+  manifest_report=$(printf '%s' "$rendered_json" | python3 "$HERE/stack_checks.py" manifest) \
+    && manifest_rc=0 || manifest_rc=$?
+  if [ $manifest_rc -eq 0 ]; then
+    ok "$manifest_report"
   else
-    manifest_report=$(printf '%s' "$rendered_json" | python3 "$HERE/stack_checks.py" manifest \
-      "$gw_manifest" "$node_manifest") && manifest_rc=0 || manifest_rc=$?
-    if [ $manifest_rc -eq 0 ]; then
-      ok "$manifest_report"
-    else
-      bad "$manifest_report"
-    fi
+    bad "$manifest_report"
   fi
 
   say "== Gateway 镜像身份（内容摘要为主，加载身份为辅） =="

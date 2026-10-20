@@ -4,7 +4,7 @@
 
     stack_checks.py mounts   <state> <config-dir>
     stack_checks.py users    <uid>:<gid>
-    stack_checks.py manifest <gateway-容器内路径> <node-容器内路径>
+    stack_checks.py manifest
 
 退出码 0 通过；1 不通过（原因写 stdout，一行）。
 """
@@ -78,7 +78,7 @@ def _mounted_host_path(services: dict, service: str, container_path: str) -> str
     与容器解析路径的方式一致（`/etc/m2live` 与 `/etc/m2live/exec-manifest.json` 同时
     存在时，后者生效）。
     """
-    if not container_path.startswith("/"):
+    if not container_path.startswith("/") or os.path.normpath(container_path) != container_path:
         return None
     best: tuple[str, str] | None = None
     for volume in (services.get(service) or {}).get("volumes") or []:
@@ -120,20 +120,47 @@ def _private_regular_problems(service: str, path: str) -> list[str]:
     return problems
 
 
-def manifest(argv: list[str]) -> int:
-    """`manifest <gateway 容器内路径> <node 容器内路径>`（空串 = 该侧未配置）
+GATEWAY_MANIFEST_ENV = "AIOPS_GATEWAY_EXECUTION_MANIFEST_FILE"
+NODE_MANIFEST_ENV = "AIOPS_EXEC_MANIFEST"
 
-    两侧要么都未配置（M3 守卫关闭，与启用前逐字一致），要么都配置且由渲染后的
-    compose 解析到**同一个真实普通文件**。单侧配置不是合法状态：一侧开着一侧关着，
-    开的那侧会按漂移拒绝或按未启用放行，两种都不是这次要验的链路。
+
+def _rendered_env(services: dict, service: str, key: str) -> str | None:
+    """渲染后的 environment 里的键值（`None` = 该键没有出现在渲染结果里）。
+
+    读**渲染结果**而不是配置文件原文：`M2LIVE_COMPOSE_EXTRA` 覆盖层可以在不改任何文件
+    的情况下改掉一个服务的 environment，而预检要判的是「实际会起起来的那个容器」。
+    只去两侧空白；**路径内部的空白保留** —— 运行时拿到的是同一个字符串，内部空白就是我
+    要判的那个路径的一部分，替它清理只会让判据与运行时不一致。
     """
-    gateway_path = argv[0] if len(argv) > 0 else ""
-    node_path = argv[1] if len(argv) > 1 else ""
+    environment = (services.get(service) or {}).get("environment") or {}
+    if key not in environment:
+        return None
+    value = environment.get(key)
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def manifest(argv: list[str]) -> int:
+    """`manifest`（无参数；输入是渲染后的 compose JSON）
+
+    两侧的清单路径都取自**渲染后的 environment**，而不是配置文件原文。判据：
+    两侧要么都未配置（M3 守卫关闭，与启用前逐字一致），要么都配置且解析到**同一个
+    真实普通文件**（同一 inode）。单侧配置不是合法状态：开着的那侧会按漂移拒绝或按
+    未启用放行，两种都不是这次要验的链路 —— 覆盖层恰好能造出这个形状。
+    """
+    del argv
     data = json.load(sys.stdin) or {}
     services = data.get("services") or {}
     if not services:
         print("compose 没有渲染出任何服务：无法核对清单挂载")
         return 1
+    for service in ("gateway", "node"):
+        if service not in services:
+            print(f"渲染结果里没有 {service} 服务：无法核对清单")
+            return 1
+    gateway_path = _rendered_env(services, "gateway", GATEWAY_MANIFEST_ENV)
+    node_path = _rendered_env(services, "node", NODE_MANIFEST_ENV)
     if not gateway_path and not node_path:
         print("两侧清单都未配置（M3 守卫不启用）")
         return 0

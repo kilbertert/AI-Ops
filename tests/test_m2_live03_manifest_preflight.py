@@ -84,11 +84,22 @@ def _fake_bin(tmp_path: Path) -> Path:
     return bin_dir
 
 
-def _compose_json(config: Path, state: Path, *, node_source: Path, gateway_source: Path) -> dict:
-    """渲染后的 compose 投影：只保留本判据读的字段（volumes / user）。
+def _compose_json(
+    config: Path,
+    state: Path,
+    *,
+    node_source: Path,
+    gateway_source: Path,
+    gateway_env: dict[str, str] | None = None,
+    node_env: dict[str, str] | None = None,
+) -> dict:
+    """渲染后的 compose 投影：只保留本判据读的字段（volumes / user / environment）。
 
     gateway 挂**目录**（`/etc/m2live`），node 挂**单个文件** —— 这与真实 compose.yaml
     的形状一致；判据因此必须经过「容器路径 → 挂载 → 宿主文件」这一步，而不是比文件名。
+
+    `environment` 是**渲染结果**，不是配置文件原文：覆盖层可以在不改任何文件的情况下
+    改掉一个服务的 environment，判据要判的是实际会起起来的那个容器。
     """
     uid, gid = os.getuid(), os.getgid()
     users = {
@@ -96,11 +107,12 @@ def _compose_json(config: Path, state: Path, *, node_source: Path, gateway_sourc
     }
     services: dict[str, dict] = {}
     for name, user in users.items():
-        services[name] = {"user": user, "volumes": []}
+        services[name] = {"user": user, "volumes": [], "environment": {}}
     services["gateway"]["volumes"] = [
         {"type": "bind", "source": str(gateway_source), "target": "/etc/m2live", "read_only": True},
         {"type": "bind", "source": str(state / "gateway"), "target": "/data", "read_only": False},
     ]
+    services["gateway"]["environment"] = dict(gateway_env or {})
     services["node"]["volumes"] = [
         {
             "type": "bind",
@@ -109,10 +121,11 @@ def _compose_json(config: Path, state: Path, *, node_source: Path, gateway_sourc
             "read_only": True,
         },
     ]
+    services["node"]["environment"] = dict(node_env or {})
     services["platform"]["volumes"] = [
         {"type": "bind", "source": str(state / "platform"), "target": "/var/lib/snail-ai", "read_only": False}
     ]
-    services["store"] = {"user": "root", "volumes": []}
+    services["store"] = {"user": "root", "volumes": [], "environment": {}}
     return {"services": services}
 
 
@@ -201,12 +214,52 @@ def deployment(tmp_path):
     }
 
 
-def _run_preflight(ctx, *, node_source=None, gateway_source=None, extra_env=None):
+def _render_env(path: Path) -> dict[str, str]:
+    """把一份 env 文件读成「渲染后的 environment」。
+
+    这模拟的是 compose 的实际行为：`env_file` 里的键最终出现在容器的 environment 里。
+    覆盖层（`M2LIVE_COMPOSE_EXTRA`）能改的是**这个结果**，而不是那些文件。
+    """
+    values: dict[str, str] = {}
+    if not path.is_file():
+        return values
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        values[key.strip()] = value
+    return values
+
+
+def _run_preflight(ctx, *, node_source=None, gateway_source=None, extra_env=None, overlay=None):
+    """跑一次真实 `checks.sh preflight`。
+
+    `overlay` 模拟 compose 覆盖层：它在**渲染结果**上改键，配置文件一个字都不动。
+    """
     config, state = ctx["config"], ctx["state"]
     gateway_source = gateway_source or (config / "gateway")
     node_source = node_source or (config / "gateway/exec-manifest.json")
+    gateway_env = _render_env(config / "gateway/gateway.env")
+    node_env = _render_env(config / "node/node.env")
+    for service, changes in (overlay or {}).items():
+        target = gateway_env if service == "gateway" else node_env
+        for key, value in changes.items():
+            if value is None:
+                target.pop(key, None)
+            else:
+                target[key] = value
     ctx["compose_json"].write_text(
-        json.dumps(_compose_json(config, state, node_source=node_source, gateway_source=gateway_source))
+        json.dumps(
+            _compose_json(
+                config,
+                state,
+                node_source=node_source,
+                gateway_source=gateway_source,
+                gateway_env=gateway_env,
+                node_env=node_env,
+            )
+        )
     )
     uid = str(os.getuid())
     env = {
@@ -432,14 +485,19 @@ def test_up_refuses_to_start_any_container_when_the_manifest_is_broken(deploymen
     )
     (ctx["config"] / "gateway/exec-manifest.json").write_text("{}\n")
     (ctx["config"] / "gateway/exec-manifest.json").chmod(0o600)
-    compose_json = ctx["compose_json"]
-    compose_json.write_text(
+    # 渲染结果与配置文件一致（两侧都开着），坏的是节点那一侧在渲染结果里没有这个键 ——
+    # 这里直接沿用 preflight 的渲染投影，保证 `up` 看到的是同一份输入。
+    gateway_env = _render_env(ctx["config"] / "gateway/gateway.env")
+    node_env = _render_env(ctx["config"] / "node/node.env")
+    ctx["compose_json"].write_text(
         json.dumps(
             _compose_json(
                 ctx["config"],
                 ctx["state"],
                 node_source=ctx["config"] / "gateway/exec-manifest.json",
                 gateway_source=ctx["config"] / "gateway",
+                gateway_env=gateway_env,
+                node_env=node_env,
             )
         )
     )
@@ -457,7 +515,7 @@ def test_up_refuses_to_start_any_container_when_the_manifest_is_broken(deploymen
         "M2LIVE_MODEL_ID": "vendor-model",
         "M2LIVE_SYNTH_MODE": "1",
         "M2_TEST_DOCKER_LOG": str(log),
-        "M2_TEST_COMPOSE_JSON": str(compose_json),
+        "M2_TEST_COMPOSE_JSON": str(ctx["compose_json"]),
         "M2_TEST_IMAGES": "\n".join((GATEWAY_IMAGE, *BASE_REFS)),
         "M2_TEST_IMAGE_ID": IMAGE_ID,
         "M2_TEST_SOURCE": "b" * 64,
@@ -485,3 +543,66 @@ def test_checks_script_no_longer_compares_basenames():
     script = (DEPLOY / "checks.sh").read_text(encoding="utf-8")
     assert 'stack_checks.py" manifest' in script, "preflight 没有调用清单判据"
     assert 'basename "$node_manifest"' not in script and 'basename "$manifest"' not in script
+    # 判据读的是**渲染后的 environment**，不是配置文件原文。
+    assert "gateway/gateway.env" not in _manifest_section_body(), "判据又回去读配置文件原文了"
+    assert "node/node.env" not in _manifest_section_body()
+
+
+def _manifest_section_body() -> str:
+    script = (DEPLOY / "checks.sh").read_text(encoding="utf-8")
+    start = script.index('say "== M3 执行配置清单')
+    end = script.index('say "== Gateway 镜像身份')
+    return script[start:end]
+
+
+def test_an_overlay_that_disables_one_side_is_rejected(deployment):
+    """覆盖层反例：配置文件两侧都开着，渲染结果里节点那一侧被关掉。
+
+    旧判据读配置文件原文，于是看到「两侧都开」而印 PASS —— 而实际起起来的那个节点
+    根本没在读清单。判据必须读渲染结果。
+    """
+    ctx = deployment
+    _write_env_files(
+        ctx["config"],
+        gateway_manifest="/etc/m2live/exec-manifest.json",
+        node_manifest="/etc/m2live/exec-manifest.json",
+    )
+    (ctx["config"] / "gateway/exec-manifest.json").write_text("{}\n")
+    (ctx["config"] / "gateway/exec-manifest.json").chmod(0o600)
+
+    result = _run_preflight(ctx, overlay={"node": {"AIOPS_EXEC_MANIFEST": None}})
+    section = _manifest_section(result.stdout)
+    assert result.returncode != 0, "覆盖层单侧关闭却通过"
+    assert any("FAIL" in line and "两侧必须同时启用" in line for line in section), section
+
+
+def test_an_overlay_that_enables_only_one_side_is_rejected(deployment):
+    """反向：配置文件里两侧都**没**配，覆盖层只给 gateway 配上。"""
+    ctx = deployment
+    _write_env_files(ctx["config"], gateway_manifest=None, node_manifest=None)
+    (ctx["config"] / "gateway/exec-manifest.json").write_text("{}\n")
+    (ctx["config"] / "gateway/exec-manifest.json").chmod(0o600)
+
+    result = _run_preflight(
+        ctx, overlay={"gateway": {"AIOPS_GATEWAY_EXECUTION_MANIFEST_FILE": "/etc/m2live/exec-manifest.json"}}
+    )
+    section = _manifest_section(result.stdout)
+    assert result.returncode != 0, "覆盖层单侧开启却通过"
+    assert any("FAIL" in line and "两侧必须同时启用" in line for line in section), section
+
+
+def test_a_path_with_internal_whitespace_is_taken_literally(deployment):
+    """路径内部空白**不清理**：运行时拿到的是同一个字符串，替它清理只会让判据与运行时不一致。"""
+    ctx = deployment
+    _write_env_files(
+        ctx["config"],
+        gateway_manifest="/etc/m2live/exec-manifest.json",
+        node_manifest="/etc/m2live/exec-manifest.json",
+    )
+    (ctx["config"] / "gateway/exec-manifest.json").write_text("{}\n")
+    (ctx["config"] / "gateway/exec-manifest.json").chmod(0o600)
+
+    result = _run_preflight(ctx, overlay={"node": {"AIOPS_EXEC_MANIFEST": "/etc/m2live/exec manifest.json"}})
+    section = _manifest_section(result.stdout)
+    assert result.returncode != 0, "内部空白的路径被静默清理后通过"
+    assert any("FAIL" in line and "没有对应的 bind 挂载" in line for line in section), section
