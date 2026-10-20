@@ -11,7 +11,7 @@ import secrets
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
 from fastapi.exceptions import RequestValidationError
@@ -35,6 +35,7 @@ from aiops_diagnostics.agent_runs import (
     EXPIRED,
     FAILED,
     REVOKED,
+    RUNNING,
     SUCCEEDED,
     AgentRun,
     AgentRunConfig,
@@ -225,6 +226,19 @@ class NodeClaimRequest(BaseModel):
     """节点领取端点的请求体：同样为空，用于拒绝任何覆盖身份或业务范围的尝试。"""
 
     model_config = ConfigDict(extra="forbid")
+
+
+class NodeLoopCompletionRequest(BaseModel):
+    """整轮终局通知的请求体。只有状态与一个短原因码，**没有业务数据、没有身份字段**。
+
+    身份来自凭据与 ``X-AI-Ops-Exec-Config`` 头（与领取同一套判据），
+    因此这里 ``extra="forbid"``：多一个字段就是 422，而不是被忽略。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["completed", "failed"]
+    reason: str | None = Field(default=None, max_length=64, pattern=r"^[a-z0-9_]*$")
 
 
 class HealthReportJobRequest(BaseModel):
@@ -2604,6 +2618,32 @@ def create_gateway_app(
                     retryable=True,
                 ) from exc
 
+        def is_releasable(record: AgentRun | None) -> bool:
+            """此刻能不能把快照交出去。
+
+            ``succeeded`` 是旧模式与「整轮已确认」的成功态；启用清单的新模式下，
+            **``running`` + 已有快照**同样可以放行 —— 那是节点刚领到的业务正文，
+            整轮是否走完由后续的完成通知决定，不在这里抢答。
+            """
+            if record is None:
+                return False
+            if record.state == SUCCEEDED:
+                return True
+            return (
+                record.state == RUNNING
+                and record.snapshot is not None
+                and record.expected_agent_version is not None
+            )
+
+        def deny_release(run_id_: str, reason: str) -> None:
+            """放行复核失败：把记录钉成终态。**只能钉自己这条记录**（凭据已认证之后才调用）。
+
+            ``fail()`` 覆盖 issued/running（含新模式「已有快照但尚未确认整轮」那条），
+            ``refuse()`` 覆盖 succeeded。两者都是真实终态：整轮不可能再被确认成功。
+            """
+            if not context.agent_run_store.fail(run_id_, reason):
+                context.agent_run_store.refuse(run_id_, reason)
+
         def release_candidate(run_id_: str) -> AgentRun:
             """最后的放行判定。**只在把业务正文交出去之前调用。**
 
@@ -2622,13 +2662,13 @@ def create_gateway_app(
                 raise StandardAPIError(
                     status.HTTP_404_NOT_FOUND, "AGENT_RUN_NOT_FOUND", "agent run not found"
                 )
-            if before.state != SUCCEEDED:
+            if not is_releasable(before):
                 raise StandardAPIError(
                     status.HTTP_403_FORBIDDEN, "AGENT_RUN_NOT_ACTIVE", "agent run is not active"
                 )
             verdict = _order_authorization(context, scope_from_json(before.scope_json), before.order_no)
             if verdict == UNAVAILABLE:
-                context.agent_run_store.refuse(run_id_, "authorization_unavailable")
+                deny_release(run_id_, "authorization_unavailable")
                 raise StandardAPIError(
                     status.HTTP_503_SERVICE_UNAVAILABLE,
                     "ORDER_AUTHORIZATION_UNAVAILABLE",
@@ -2636,7 +2676,7 @@ def create_gateway_app(
                     retryable=True,
                 )
             if verdict == NOT_OWNED:
-                context.agent_run_store.refuse(run_id_, "order_not_visible")
+                deny_release(run_id_, "order_not_visible")
                 raise StandardAPIError(
                     status.HTTP_403_FORBIDDEN, "AGENT_RUN_ORDER_NOT_VISIBLE", "agent run refused"
                 )
@@ -2645,7 +2685,7 @@ def create_gateway_app(
             current = load_config()
             current_node = current.authenticate_node(token)
             if current_node is None:
-                context.agent_run_store.refuse(run_id_, "node_deactivated")
+                deny_release(run_id_, "node_deactivated")
                 raise StandardAPIError(
                     status.HTTP_403_FORBIDDEN, "AGENT_RUN_NODE_INACTIVE", "agent run refused"
                 )
@@ -2655,7 +2695,7 @@ def create_gateway_app(
                     status.HTTP_404_NOT_FOUND, "AGENT_RUN_NOT_FOUND", "agent run not found"
                 )
             # 读记录时已把过期的非终态收敛为 expired，所以这里涵盖「授权期间到期」。
-            if latest.state != SUCCEEDED:
+            if not is_releasable(latest):
                 raise StandardAPIError(
                     status.HTTP_403_FORBIDDEN, "AGENT_RUN_NOT_ACTIVE", "agent run is not active"
                 )
@@ -2670,14 +2710,14 @@ def create_gateway_app(
                 or current.snail_app_id != latest.app_id
                 or str(current.snail_agent_id) != latest.agent_id
             ):
-                context.agent_run_store.refuse(run_id_, "binding_changed")
+                deny_release(run_id_, "binding_changed")
                 raise StandardAPIError(status.HTTP_403_FORBIDDEN, "AGENT_RUN_WRONG_NODE", "agent run refused")
             released = _require_matching_exec_config(
                 context, latest, exec_config, actual_node_id=current_node.node_id
             )
             # 身份比较、记录写入、以及用于放行的状态必须来自**同一次**事务读到的对象；
             # 早先返回的是授权前的 ``latest``，核对期间别人把它钉成终态就会被漏掉。
-            if released.state != SUCCEEDED:
+            if not is_releasable(released):
                 raise StandardAPIError(
                     status.HTTP_403_FORBIDDEN, "AGENT_RUN_NOT_ACTIVE", "agent run is not active"
                 )
@@ -2748,14 +2788,19 @@ def create_gateway_app(
                 status.HTTP_403_FORBIDDEN, "AGENT_RUN_ORDER_NOT_VISIBLE", "agent run refused"
             )
 
-        if run.state == SUCCEEDED:
+        if run.state == SUCCEEDED or (
+            run.state == RUNNING and run.snapshot is not None and run.expected_agent_version is not None
+        ):
             # 有效期内重试：交回**同一份**快照，不再读一次业务（IC-05）。
+            # 新模式（启用清单）下「已取数、等待整轮确认」同样是 running + 快照，
+            # 重试必须拿到同一份，否则等于第二次读业务。
             # 但必须先过放行判定 —— 快照存在不等于此刻仍可交出。
             return _claim_payload(release_candidate(run_id))
         if not context.agent_run_store.claim(run_id):
             latest = context.agent_run_store.get(run_id)
-            if latest is not None and latest.state == SUCCEEDED:
-                # 并发者已经成功：走同一条放行判定，而不是直接返回它。
+            if is_releasable(latest):
+                # 并发者已经取到数（旧模式 succeeded / 新模式 running+快照）：
+                # 走同一条放行判定，而不是直接返回它。
                 return _claim_payload(release_candidate(run_id))
             raise StandardAPIError(
                 status.HTTP_409_CONFLICT,
@@ -2782,6 +2827,97 @@ def create_gateway_app(
             )
         # 落库之后、交出去之前再判一次：撤销/停用可能就发生在这一次读取期间。
         return _claim_payload(release_candidate(run_id))
+
+    @app.post("/v1/internal/charging-status/completions/{run_id}")
+    def complete_charging_status_loop(
+        run_id: str,
+        payload: NodeLoopCompletionRequest,
+        response: Response,
+        authorization: Annotated[str | None, Header()] = None,
+        exec_config: Annotated[str | None, Header(alias="X-AI-Ops-Exec-Config")] = None,
+    ) -> dict[str, Any]:
+        """整轮终局通知：把「工具领取成功」和「整个模型工具循环完成」分开。
+
+        **不返回任何业务数据**（不是领取端点的别名）。响应只有
+        ``{"run_id", "state"}``。
+
+        判据与领取同一套、同一段代码顺序（认节点 → 绑定 → 身份逐字相等），
+        差别只在于这里的身份是**每个通知都要重新证明一次**：领取时的 ``matched``
+        不授权另一份配置来替这个 run 宣告完成。
+
+        幂等与冲突：同状态重复通知 200（不改时间戳/原因）；已完成后再报失败 409；
+        终态（撤销/过期/已失败）403；未启用清单 409。
+        """
+        response.headers["Cache-Control"] = "no-store"
+        if not selected_settings.agent_run_config_file:
+            raise StandardAPIError(404, "AGENT_RUN_DISABLED", "route not found")
+        token = (authorization or "").removeprefix("Bearer ").strip()
+        try:
+            config = AgentRunConfig.load(Path(selected_settings.agent_run_config_file))
+        except AgentRunConfigError as exc:
+            raise StandardAPIError(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "AGENT_RUN_CONFIG_UNAVAILABLE",
+                "agent run unavailable",
+                retryable=True,
+            ) from exc
+        node = config.authenticate_node(token)
+        if node is None:
+            raise StandardAPIError(
+                status.HTTP_401_UNAUTHORIZED, "NODE_TOKEN_REQUIRED", "node credential required"
+            )
+        # **只读**读一次做绑定判定：不能用 get()，它会顺手收敛过期（一次写），
+        # 会把未追踪的历史行改掉。
+        run = context.agent_run_store.peek(run_id)
+        if run is None:
+            raise StandardAPIError(status.HTTP_404_NOT_FOUND, "AGENT_RUN_NOT_FOUND", "agent run not found")
+        # 绑定：同环境、同一个**预期节点**、同一 app/agent。错节点不伤他人记录（只读判定，
+        # 不写任何列）。
+        if (
+            node.environment != run.environment
+            or node.node_id != run.expected_node_id
+            or config.environment != run.environment
+            or config.expected_node_id != run.expected_node_id
+            or config.snail_app_id != run.app_id
+            or str(config.snail_agent_id) != run.agent_id
+        ):
+            raise StandardAPIError(status.HTTP_403_FORBIDDEN, "AGENT_RUN_WRONG_NODE", "agent run refused")
+
+        observed = exec_config
+        verdict, settled = context.agent_run_store.complete_loop(
+            run_id,
+            observed_agent_version=observed,
+            actual_node_id=node.node_id,
+            failure_reason=(payload.reason or "model_failed") if payload.status == "failed" else None,
+            # 成功也可以带原因码（同原因幂等、不同原因冲突）；不带就是 None。
+            success_reason=payload.reason if payload.status == "completed" else None,
+        )
+        if verdict in {"completed", "already_completed", "failed", "already_failed"}:
+            assert settled is not None
+            return {"run_id": run_id, "state": settled.state}
+        if verdict in {"conflict", "incomplete"}:
+            raise StandardAPIError(
+                status.HTTP_409_CONFLICT,
+                "AGENT_RUN_COMPLETION_CONFLICT",
+                "agent run is already settled or not in progress",
+            )
+        if verdict == "drift":
+            raise StandardAPIError(
+                status.HTTP_403_FORBIDDEN, "AGENT_RUN_EXEC_CONFIG_DRIFT", "agent run refused"
+            )
+        if verdict == "not_tracked":
+            raise StandardAPIError(
+                status.HTTP_409_CONFLICT,
+                "AGENT_RUN_COMPLETION_NOT_TRACKED",
+                "agent run does not track a loop completion",
+            )
+        if verdict == "missing":
+            raise StandardAPIError(status.HTTP_404_NOT_FOUND, "AGENT_RUN_NOT_FOUND", "agent run not found")
+        if verdict == "expired":
+            raise StandardAPIError(
+                status.HTTP_403_FORBIDDEN, "AGENT_RUN_NOT_ACTIVE", "agent run is not active"
+            )
+        raise StandardAPIError(status.HTTP_403_FORBIDDEN, "AGENT_RUN_NOT_ACTIVE", "agent run is not active")
 
     @app.post("/v1/health-report-jobs", status_code=status.HTTP_202_ACCEPTED)
     def create_health_report_job(

@@ -3185,3 +3185,92 @@ Feature: 执行配置守卫在真实节点装配前生效（M3-NODE-GUARD-01）
       When 在流式路径上触发配置漂移
       Then 显式失败且上游调用计数为 0
       And 不以「返回空工具集合」或「返回替身」冒充拒绝
+
+Feature: 整轮完成与工具领取的分界（M3-NODE-LINK-01）
+  受控领取只证明「业务数据已按已核对的配置取回」。它不证明「整轮模型工具循环
+  走完了」。启用清单的 run 在取数之后保持 running，只有节点显式确认、且最后一轮
+  模型以合法终止结束时才转 succeeded。未启用清单时行为与今天逐字一致。
+
+  Rule: 快照不是成功
+
+    Scenario: LINK-01 正常两轮：一次业务、两次模型、整轮确认后成功
+      Given 已启用清单，且节点与 Gateway 使用同一份受控清单
+      When 一次已授权的委派在真实节点上完成一轮工具循环
+      Then 业务读取恰好一次，模型调用恰好两次
+      And 记录在取数之后仍是 running，直到节点确认整轮完成
+      And 回执的 agent_version 等于清单原始字节的 sha256，且 gap 为空
+
+    Scenario: LINK-02 第二轮模型失败
+      Given 第一轮工具调用已真实发生
+      When 第二轮上游返回错误
+      Then 记录落 failed，派发入口不返回成功回执
+      And 不产生任何「整轮完成」的成功通知
+
+    Scenario: LINK-03 末轮被截断不算完成
+      Given 上游在最后一轮只发送部分正文就关闭，且没有合法终止标记
+      When 该次委派执行
+      Then 框架的完成回调即使到达，也不得转成 succeeded
+      And 记录落失败（或保留 running 待 TTL 收敛），绝无 succeeded
+
+    Scenario: LINK-04 受控领取被拒必须让整轮失败
+      Given 领取被 Gateway 拒绝（身份不一致，或另一执行者已领取但尚未写快照）
+      When 节点把这次失败交给模型
+      Then 整轮中止，不再发生第二轮模型调用
+      And 记录不落在 succeeded，派发入口不返回成功回执
+
+  Rule: 完成通知自身要重新证明身份
+
+    Scenario: LINK-05 进程中断没有完成信号
+      Given 节点已取到业务快照，且第二轮模型已经开始输出
+      When 节点进程被真实终止（不是订阅方假装取消）
+      Then 进程退出前没有触发任何完成或错误回调，不发完成通知
+      And 记录停在 running（已取数），到期后按既有 TTL 语义收敛为 expired，绝不伪造成功
+
+    Scenario: LINK-06 两个 run 各自归属
+      Given 两次委派各自持有自己的 run_id
+      When 两者先后完成
+      Then 每条通知只作用于自己的记录，快照与身份互不串
+
+    Scenario: LINK-07 领取重试不读第二次业务
+      Given 记录已有快照但尚未确认整轮完成
+      When 节点再次领取同一个 run
+      Then 交回同一份快照，业务读取计数不增加
+      And 重试路径同样核对身份、终态与有效期
+
+    Scenario: LINK-08 重复、冲突与坏回执
+      Given 一条已确认完成的记录
+      When 再次发送同状态同原因的完成通知
+      Then 幂等返回成功，首次完成时间与原因不被覆盖
+      And 同状态不同原因的通知是冲突而非幂等；相反状态的通知被拒，终态不被改写
+      And 节点收到 200 但回执不含本 run 或 state 不是 succeeded 时，不向平台报成功
+
+    Scenario: LINK-09 撤销、到期与未启用兼容
+      Given 记录已取数但尚未确认整轮
+      When 在此期间被撤销，或恰好到期
+      Then 完成通知被拒，记录保持撤销/过期，不复活，迟到通知不改写审计列
+      And 快照不再被交出
+      And 未启用清单的旧记录收到任何完成通知都不改写任何列
+
+    Scenario: LINK-11 同一进程里相同 run 的重入在本地被拒
+      Given 一个 run 正在本进程内执行（无论它是否已经领到业务）
+      When 相同 run_id 的第二个请求进入
+      Then 第二个请求在**本地**被拒绝，且不向 Gateway 发送任何完成或失败通知
+      And 原 run 按自己的守卫正常完成，模型调用与业务领取都不增加
+      And 两个窗口都要覆盖：A 尚未构建 ChatClient 时、以及 A 已领取且末轮请求仍在上游时
+
+    Scenario: LINK-12 同一进程里两个不同 run 并发
+      Given 两个不同的 run_id 在同一 Spring 上下文里同时执行
+      When 两者各自领取业务并完成
+      Then 两者都完成，各领取一次、各发一条完成通知，互不覆盖对方的守卫
+
+    Scenario: LINK-13 首轮失败不留 issued
+      Given 首轮上游即失败
+      When 该次派发结束
+      Then 没有发生业务领取，且只发送一次 failed 终局
+      And 记录不会停在 issued
+
+    Scenario: LINK-10 未启用清单时行为逐字不变
+      Given 节点与 Gateway 都没有配置执行配置清单
+      When 一次委派完成
+      Then 领取即可成功（既有语义），回执字段集合与升级前逐字相同
+      And 节点不发身份头，也不发完成通知

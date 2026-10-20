@@ -476,6 +476,17 @@ class AgentRunStore:
             row = connection.execute("SELECT * FROM agent_runs WHERE run_id = ?", (run_id,)).fetchone()
         return _run_from_row(row) if row else None
 
+    def peek(self, run_id: str) -> AgentRun | None:
+        """**只读**一条记录，不做任何过期收敛 —— 判据是「这条通知该不该落库」时用它。
+
+        ``get()`` 会顺手把过期的非终态收敛成 ``expired``，那对读路径是对的（调用方要看到
+        真实状态），但它是一次写。完成端点先用 ``get()`` 做绑定判定时，那次收敛会把一条
+        **未追踪**的历史行从 ``issued`` 改成 ``expired`` —— 与「未追踪记录一个列都不写」相反。
+        """
+        with self._connection() as connection:
+            row = connection.execute("SELECT * FROM agent_runs WHERE run_id = ?", (run_id,)).fetchone()
+        return _run_from_row(row) if row else None
+
     def _expire(self, run_id: str) -> None:
         with self._connection(write=True) as connection:
             _expire_in(connection, run_id)
@@ -618,12 +629,25 @@ class AgentRunStore:
         actual_node_id: str,
         node_build: str | None,
     ) -> bool:
-        """``running → succeeded``。期间被撤销或已过期则返回 False，结果不落库。"""
+        """``running`` + 快照。**是否同时转 ``succeeded`` 取决于这条记录有没有期望身份。**
+
+        启用执行配置清单的 run（``expected_agent_version`` 非空）在这里**只保存快照、
+        保持 ``running``**：快照存在＝节点已经取到业务数据，但「工具领取成功」不等于
+        「整轮模型工具循环完成」。后者要等节点用 ``complete_loop()`` 显式确认 ——
+        否则一次中途崩溃/截断/取消都会留下一条假 ``succeeded``。
+
+        未启用清单的 run（以及迁移前的历史行）走既有语义：``running → succeeded``，
+        与今天逐字一致（M2 契约）。
+
+        期间被撤销或已过期则返回 False，结果不落库。
+        """
         with self._connection(write=True) as connection:
             cursor = connection.execute(
                 """
                 UPDATE agent_runs
-                   SET state = ?, snapshot_json = ?, actual_node_id = ?, node_build = ?, completed_at = ?
+                   SET state = CASE WHEN expected_agent_version IS NULL THEN ? ELSE state END,
+                       snapshot_json = ?, actual_node_id = ?, node_build = ?,
+                       completed_at = CASE WHEN expected_agent_version IS NULL THEN ? ELSE NULL END
                  WHERE run_id = ? AND state = ? AND expires_at > ?
                 """,
                 (
@@ -638,6 +662,166 @@ class AgentRunStore:
                 ),
             )
             return cursor.rowcount == 1
+
+    def complete_loop(
+        self,
+        run_id: str,
+        *,
+        observed_agent_version: str | None,
+        actual_node_id: str | None = None,
+        failure_reason: str | None = None,
+        success_reason: str | None = None,
+    ) -> tuple[str, AgentRun | None]:
+        """整轮终局：成功则 ``running``（已有快照）→ ``succeeded``，失败则落 ``failed``。
+
+        成功与失败**走同一个写事务、同一条过期原语**（``_expire_in`` + 事务内
+        ``expires_at <= now``），所以失败通知不会在到期之后把 ``expired`` 覆盖成
+        ``model_failed``，也不会出现「先读后写」的窗口。
+
+        返回值是 ``(verdict, run)``，verdict 取：
+        ``completed`` / ``already_completed`` / ``failed`` / ``already_failed`` /
+        ``not_tracked`` / ``drift`` / ``not_active`` / ``missing`` / ``incomplete`` /
+        ``expired`` / ``conflict``。
+
+        三条不可放宽的条件（成功与失败共同）：
+        - 记录有期望身份，且**本次回传的身份与之逐字相等**（领取时的 ``matched``
+          不授权另一份配置来提交终局 —— 每个通知都要自己证明自己）；
+        - 记录仍是 ``running``（失败还接受 ``issued``：首次领取就失败的那条路）；
+        - 此刻未过期。
+
+        重复通知幂等：同状态、同原因 ⇒ ``already_*``，不改时间戳与原因；
+        同状态不同原因 ⇒ ``conflict``（不是「所有 failed 都算幂等成功」）。
+        **终态记录一律不改写**：已确认的记录收到错身份只是 ``drift``，审计列保持原样。
+        """
+        observed = observed_agent_version
+        with self._connection(write=True) as connection:
+            row = connection.execute("SELECT * FROM agent_runs WHERE run_id = ?", (run_id,)).fetchone()
+            if row is None:
+                return "missing", None
+            untracked = _run_from_row(row)
+            if untracked.expected_agent_version is None:
+                # 未启用清单：没有「整轮身份」这回事，**一个列都不写**（旧记录不受影响）。
+                # 判定必须在 `_expire_in` **之前**：那条收敛本身就是一次写（issued → expired），
+                # 放在前面会把一条未追踪的历史行改掉，与「不写任何列」的契约相反。
+                # 实测：未追踪的已过期记录收到完成通知时，状态从 issued 变成 expired/ttl_elapsed。
+                return "not_tracked", untracked
+            # 到这里才允许写：过期收敛对**启用清单**的记录是既有语义（与 get() 同一条语句）。
+            _expire_in(connection, run_id)
+            row = connection.execute("SELECT * FROM agent_runs WHERE run_id = ?", (run_id,)).fetchone()
+            if row is None:
+                return "missing", None
+            run = _run_from_row(row)
+            if observed != run.expected_agent_version:
+                # 每个通知都要自己证明身份；已确认的记录**不改写**（不覆盖审计列）。
+                if run.state == SUCCEEDED:
+                    return "drift", run
+                connection.execute(
+                    """
+                    UPDATE agent_runs
+                       SET state = ?, reason = ?, observed_agent_version = ?,
+                           exec_config_state = ?, completed_at = ?,
+                           actual_node_id = COALESCE(actual_node_id, ?)
+                     WHERE run_id = ? AND state IN (?, ?)
+                    """,
+                    (
+                        FAILED,
+                        EXEC_CONFIG_DRIFT,
+                        observed,
+                        EXEC_CONFIG_MISMATCHED,
+                        _now().isoformat(),
+                        actual_node_id,
+                        run_id,
+                        ISSUED,
+                        RUNNING,
+                    ),
+                )
+                return "drift", _read_run(connection, run_id)
+
+            if failure_reason is not None:
+                if run.state == FAILED:
+                    # 同原因 ⇒ 幂等；不同原因 ⇒ 冲突（不能把一次新的失败读成成功）。
+                    return ("already_failed" if run.reason == failure_reason else "conflict"), run
+                if run.state == EXPIRED:
+                    return "expired", run
+                if run.state in TERMINAL_STATES:
+                    return "not_active", run
+                if run.state not in {ISSUED, RUNNING}:
+                    return "incomplete", run
+                now = _now()
+                if run.expires_at <= now:
+                    return "expired", _read_run(connection, run_id)
+                cursor = connection.execute(
+                    """
+                    UPDATE agent_runs
+                       SET state = ?, reason = ?, actual_node_id = COALESCE(actual_node_id, ?),
+                           completed_at = ?
+                     WHERE run_id = ? AND state IN (?, ?) AND expires_at > ?
+                    """,
+                    (
+                        FAILED,
+                        failure_reason,
+                        actual_node_id,
+                        now.isoformat(),
+                        run_id,
+                        ISSUED,
+                        RUNNING,
+                        now.isoformat(),
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    latest = _read_run(connection, run_id)
+                    return (
+                        "not_active"
+                        if latest is not None and latest.state in TERMINAL_STATES
+                        else "incomplete"
+                    ), latest
+                return "failed", _read_run(connection, run_id)
+
+            if run.state == SUCCEEDED:
+                # 成功记录上也带原因码：同原因 ⇒ 幂等，不同原因 ⇒ 冲突。
+                # 早先这里无条件回 already_completed，于是 `completed+first` 与
+                # `completed+second` 都返回 200 —— 「不同原因不是同一次幂等重试」这条
+                # 规则在失败路径上成立、在成功路径上被静默丢掉了。
+                if success_reason is None or run.reason == success_reason:
+                    return "already_completed", run
+                return "conflict", run
+            if run.state == EXPIRED:
+                # `_expire_in` 已按既有语义把它收敛过；这里只是把原因如实说出来。
+                return "expired", run
+            if run.state in TERMINAL_STATES:
+                return "not_active", run
+            if run.state != RUNNING or run.snapshot is None:
+                # 没落到 running+快照就不存在「整轮完成」；issued/无快照都算未开始。
+                return "incomplete", run
+            now = _now()
+            if run.expires_at <= now:
+                return "expired", _read_run(connection, run_id)
+            cursor = connection.execute(
+                """
+                UPDATE agent_runs
+                   SET state = ?, completed_at = ?,
+                       observed_agent_version = ?, exec_config_state = ?,
+                       reason = COALESCE(?, reason)
+                 WHERE run_id = ? AND state = ? AND expires_at > ?
+                """,
+                (
+                    SUCCEEDED,
+                    now.isoformat(),
+                    observed,
+                    EXEC_CONFIG_MATCHED,
+                    success_reason,
+                    run_id,
+                    RUNNING,
+                    now.isoformat(),
+                ),
+            )
+            if cursor.rowcount != 1:
+                # 读到写之间被撤销/过期：不复活，按既有终态语义返回。
+                latest = _read_run(connection, run_id)
+                return (
+                    "not_active" if latest is not None and latest.state in TERMINAL_STATES else "incomplete"
+                ), latest
+            return "completed", _read_run(connection, run_id)
 
     def fail(self, run_id: str, reason: str, *, actual_node_id: str | None = None) -> bool:
         with self._connection(write=True) as connection:
@@ -677,6 +861,11 @@ class AgentRunStore:
                 (REVOKED, reason, _now().isoformat(), run_id, ISSUED, RUNNING, SUCCEEDED),
             )
             return cursor.rowcount == 1
+
+
+def _read_run(connection: sqlite3.Connection, run_id: str) -> AgentRun | None:
+    row = connection.execute("SELECT * FROM agent_runs WHERE run_id = ?", (run_id,)).fetchone()
+    return _run_from_row(row) if row else None
 
 
 def _run_from_row(row: sqlite3.Row) -> AgentRun:

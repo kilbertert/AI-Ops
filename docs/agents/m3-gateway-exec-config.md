@@ -119,3 +119,99 @@ uv run python tools/m2_close/m3node/verify_gateway_exec_config.py --out /tmp/exe
 它在一个一次性数据根上起真 `create_gateway_app`，用回环 CPMS 与平台替身，
 覆盖一致 / 缺失 / 错摘要 / 兄弟节点四种组合，并直接读数据库核对终态。
 `/health` 200 不能代替这些判据。
+
+---
+
+## 8. 整轮终局：把「工具领取成功」与「整轮完成」分开（M3-NODE-LINK-01）
+
+上一节的三层判定只回答「这次领取是不是跑在我方受控配置上」。它**不**回答
+「这一轮模型工具循环走完了没有」—— 领取成功只说明业务数据已经取回。
+
+### 8.1 状态：复用主状态，不新增列
+
+| `state` | 快照 | 启用清单的新 run | 未启用 / 旧记录 |
+|---|---|---|---|
+| `running` | 无 | 已领取、正在取数 | 已领取（瞬间即逝） |
+| `running` | **有** | 已取数、交回节点，**等待整轮确认** | 不出现 |
+| `succeeded` | 有 | **整轮已确认** | 领取时直接落（既有语义） |
+
+`complete()`（保存快照）按 `expected_agent_version` 是否为空分流：为空 ⇒ `succeeded`；
+非空 ⇒ 写快照但**保持 `running`**、`completed_at` 留空。转 `succeeded` 只能由
+`complete_loop()` 完成，它的条件全部在同一个写事务里：
+
+- 记录有期望身份，且**本次回传的身份与之逐字相等**（领取时的 `matched` **不**授权
+  另一份配置提交完成 —— 每个通知都要自己证明自己）；
+- 仍是 `running` **且已有快照**（没取数就不存在「整轮完成」）；
+- 此刻未过期（`expires_at > now`，与 `claim`/`complete` 互补）。
+
+取消与进程退出没有回调 ⇒ 记录停在 `running`，由既有 TTL 收敛为 `expired`。
+**`running` + 快照永远不会被读成成功。**
+
+### 8.2 完成通知端点
+
+`POST /v1/internal/charging-status/completions/{run_id}`
+体：`{"status":"completed"}` 或 `{"status":"failed","reason":"<短码>"}`（严格模型，多一个字段 422）。
+
+- 凭证与领取同一份节点令牌；绑定核对（节点 / 环境 / app / agent）与领取同一段代码，
+  在任何写之前完成。响应**不含业务快照**：`{"run_id","state"}`。
+- 幂等：**同状态且同原因**重复通知 200、不改 `completed_at`/`reason`；同状态不同原因 ⇒ 409
+  冲突（不是「所有 failed 都幂等」）；已完成后再报失败 409；终态（`revoked`/`expired`/`failed`）403；
+  未启用清单 409 `AGENT_RUN_COMPLETION_NOT_TRACKED`（旧记录**一个列都不改**）；
+  `issued` 或无快照 409 `AGENT_RUN_COMPLETION_CONFLICT`。
+- `failed` 可以从 `issued` **或** `running`（含已取数）落终态 —— 首次领取就失败的那条路也算。
+  成功与失败走**同一个写事务、同一条过期原语**，所以到期之后来的失败通知不会把
+  `expired`/`ttl_elapsed` 覆盖成 `model_failed`。
+- **终态记录不改写**：一条已 `succeeded` 的记录收到错身份通知，只回 403，审计列
+  （`observed_agent_version`/`exec_config_state`）保持原样 —— 迟到的错摘要不能把已核对的
+  记录改成 `mismatched`。
+
+### 8.3 节点侧：整轮结束的判定必须 fail closed
+
+节点接管 `ChatSessionRuntime`（自动配置里它是普通 `@Bean`，所以用 `@Primary` 子类；
+实测 gRPC handler 持有的确实是子类实例），把 `completionConsumer` / `errorConsumer` 包一层：
+
+1. 一个 order 晚于 `ToolCallingAdvisor` 的 `BaseAdvisor` 逐轮记录 **finish reason**；
+2. 完成回调到达时，**最后一次 finish reason 必须是 `STOP`**，否则按失败处理；
+3. 然后向 Gateway 发完成通知，**必须校验回执**：`run_id` 必须是本 run、`state` 必须是
+   `succeeded`；`2xx` 本身不算确认（`200 {}`、错 run、`state=failed` 都不能被记成成功）。
+   未确认 ⇒ 走 `errorConsumer`，不让本次 run 被算作成功。
+
+为什么必须有第 2 步：实测末轮被截断（SSE 无 `[DONE]`、无 `finish_reason`）时，
+框架照样触发完成回调、completion 文本是半截，finish reason 是 `_UNKNOWN`。
+「有完成回调」不能证明上游把最后一轮发完了。
+
+**本机 active-run 登记**（`RunExecution.ActiveRuns`）。同 run 重入在**本机**拒绝：
+`begin()` 用 `putIfAbsent` 判定，重复者只回本地 `DuplicateRunRefused`，**不发任何通知**
+（Gateway 对 `running` + 已有快照的重试会回 200 并重放快照，所以「领到了」不能证明拥有这条 run；
+让第二个执行发终局会把正在跑的原 run 杀掉）。登记在**真实终局回调**（completion/error）里移除，
+**不在 `execute` 返回时移除** —— 实测 `executeStream` 在 `Flux.subscribe(...)` 之后直接 return，
+流仍在跑，把返回当结束会把并发的第二个请求放进来。
+
+守卫本身在**调用线程**上交接（框架在 subscribe 之前同步构建 ChatClient），所以同一 run 的两次执行
+各持自己的守卫，不存在「后者的 attach 落到前者的槽里」。
+
+取消（订阅方 dispose）在框架里**没有回调**，这类登记不会被主动移除。收口是两条**实际执行**的规则：
+超过 15 分钟（大于 Gateway 的 180 秒 TTL）的登记在每次进入时清扫；清扫后仍达 256 条时
+**拒绝新的执行**并回本地 `AT_CAP` 错误。上限判定与 `putIfAbsent` 在同一个 `synchronized` 临界区内，
+并发的不同 run 不会一起越过上限。这个边界同时意味着：被取消的 run 在 15 分钟内仍占一个名额 ——
+这是已知的、而不是被隐藏的边界。
+
+为什么受控领取失败要抛异常：`ToolExecutionException` 会被框架默认的
+`DefaultToolExecutionExceptionProcessor(alwaysThrow=false)` 转成文本继续跑，
+于是 `ERROR: …` 会让整轮"成功"结束。启用清单时工具抛 `RuntimeException` 中止整轮；
+未启用时保留 M2 的文本行为。
+
+### 8.4 部署顺序与回滚
+
+1. **Gateway 先**：本片不新增列（复用主状态），只有新端点与新判定。
+2. **节点后**：启用清单后才发身份头与完成通知。
+3. **回滚**：清空两侧清单 ⇒ 回到未启用分支；旧节点不发通知，新节点在未启用时也原样透传。
+
+### 8.5 验收
+
+```bash
+M3NODE_DEPS=… M3NODE_JDK_IMAGE=… uv run python tools/m2_close/m3node/verify_node_link.py --out /tmp/node-link.json
+```
+
+真 Gateway 进程 + 真 Java 节点 + 合成模型/CPMS，39 条判据（LINK-01..10，含三种坏回执）。
+平台派发入口是替身，但**领取与完成通知都由节点自己的代码发出**。

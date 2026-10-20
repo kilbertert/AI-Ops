@@ -44,6 +44,9 @@ final class SyntheticUpstream implements AutoCloseable {
     volatile java.util.function.IntConsumer chatObserver = n -> { };
     final AtomicInteger claimCalls = new AtomicInteger();
     final List<String> claimPaths = new CopyOnWriteArrayList<>();
+    /** 整轮终局通知：与业务领取分开计数（两件事，两个数）。 */
+    final AtomicInteger completionCalls = new AtomicInteger();
+    final List<String> completionPaths = new CopyOnWriteArrayList<>();
 
     private final HttpServer chatServer;
     private final HttpServer claimServer;
@@ -74,6 +77,8 @@ final class SyntheticUpstream implements AutoCloseable {
         chatCalls.set(0);
         claimCalls.set(0);
         claimPaths.clear();
+        completionCalls.set(0);
+        completionPaths.clear();
         streamRequests.set(0);
     }
 
@@ -233,7 +238,11 @@ final class SyntheticUpstream implements AutoCloseable {
         } else {
             delta.put("content", "final-answer");
         }
-        sse.append("data: ").append(mapper.writeValueAsString(withDelta(first, delta))).append("\n\n");
+        // 合法终止：每一轮都带真实的 finish_reason（第一轮 tool_calls，之后 stop）。
+        // 节点侧现在按它判定「最后一轮是否说完整」（M3-NODE-LINK-01）；本替身若继续
+        // 发 null，正常场景会被正确地判成不完整 —— 那是夹具的问题，不是被测方的问题。
+        sse.append("data: ").append(mapper.writeValueAsString(
+                withDelta(first, delta, call == 1 ? "tool_calls" : "stop"))).append("\n\n");
         sse.append("data: [DONE]\n\n");
         try (OutputStream out = exchange.getResponseBody()) {
             out.write(sse.toString().getBytes(StandardCharsets.UTF_8));
@@ -250,10 +259,18 @@ final class SyntheticUpstream implements AutoCloseable {
     }
 
     private ObjectNode withDelta(ObjectNode skeleton, ObjectNode delta) {
+        return withDelta(skeleton, delta, null);
+    }
+
+    private ObjectNode withDelta(ObjectNode skeleton, ObjectNode delta, String finishReason) {
         ObjectNode choice = mapper.createObjectNode();
         choice.put("index", 0);
         choice.set("delta", delta);
-        choice.putNull("finish_reason");
+        if (finishReason == null) {
+            choice.putNull("finish_reason");
+        } else {
+            choice.put("finish_reason", finishReason);
+        }
         ArrayNode choices = mapper.createArrayNode().add(choice);
         skeleton.set("choices", choices);
         return skeleton;
@@ -270,9 +287,21 @@ final class SyntheticUpstream implements AutoCloseable {
     // ------------------------------------------------------------------ claim
 
     private void handleClaim(HttpExchange exchange) throws IOException {
-        claimCalls.incrementAndGet();
-        claimPaths.add(exchange.getRequestURI().getPath());
+        String path = exchange.getRequestURI().getPath();
         exchange.getRequestBody().readAllBytes();
+        if (path.startsWith("/v1/internal/charging-status/completions/")) {
+            // 整轮终局通知：**不是**一次业务领取，不进入 claim 计数
+            // （否则「业务调用计数」会随通知变化，把两件事混成一个数）。
+            completionCalls.incrementAndGet();
+            completionPaths.add(path);
+            ObjectNode ack = mapper.createObjectNode();
+            ack.put("run_id", path.substring(path.lastIndexOf('/') + 1));
+            ack.put("state", "succeeded");
+            send(exchange, 200, "application/json", mapper.writeValueAsBytes(ack));
+            return;
+        }
+        claimCalls.incrementAndGet();
+        claimPaths.add(path);
         ObjectNode body = mapper.createObjectNode();
         body.put("order_no", "SYNTHETIC-ORDER-0001");
         body.put("status_code", "CHARGING");

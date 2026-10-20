@@ -600,8 +600,13 @@ def test_drift_does_not_resurrect_an_already_terminal_record(tmp_path, monkeypat
         assert _rows(fixture["store"])[0] == before, terminal
 
 
-def _prepare_succeeded(fixture):
-    """已成功、待重试放行的一条记录。"""
+def _prepare_claimed_with_snapshot(fixture):
+    """**启用清单**下「已取数、未完成」的一条记录：``running`` + 快照。
+
+    名字如实反映状态。早先它叫 `_prepare_succeeded`，但在本片之后，
+    启用清单时 `complete()` 只写快照、**保持 running** —— 叫 succeeded 会让读者以为
+    这条路径覆盖的是「成功记录的重试」，而实际覆盖的是「running+快照的放行」。
+    """
     run_id = _run_id(fixture)
     assert fixture["store"].claim(run_id) is True
     assert (
@@ -610,6 +615,21 @@ def _prepare_succeeded(fixture):
         )
         is True
     )
+    return run_id
+
+
+def _prepare_succeeded(fixture):
+    """**真正的** succeeded 记录：领取 → 快照 → 整轮确认。
+
+    用于覆盖「成功记录的重试放行」这条路径本身。未启用清单时 `complete()` 即 succeeded，
+    启用清单时必须再走一次 `complete_loop()`。
+    """
+    run_id = _prepare_claimed_with_snapshot(fixture)
+    identity = _rows(fixture["store"])[0]["expected_agent_version"]
+    if identity is not None:
+        verdict, settled = fixture["store"].complete_loop(run_id, observed_agent_version=identity)
+        assert verdict == "completed", verdict
+    assert _rows(fixture["store"])[0]["state"] == "succeeded"
     return run_id
 
 
@@ -625,6 +645,7 @@ def _drive_to_release_path(fixture, release_path: str) -> str:
     if release_path == "first_claim":
         return run_id
     if release_path == "retry_release":
+        # 这条路径的名字说的是「成功快照的重试」，所以起点必须是**真的** succeeded。
         return _prepare_succeeded(fixture)
     # race_release：记录**必须仍是 issued**。竞争发生在 claim() 那一瞬间（见下面的
     # `lose_claim_to_other_request`）：本请求读到的还是 issued，要 claim 时另一个领取者

@@ -1,3 +1,84 @@
+## 2026-10-20 · 整轮完成与工具领取的分界（M3-NODE-LINK-01）
+
+**范围**：Gateway 状态机新增「整轮确认」，节点侧新增身份回传与整轮守卫。
+**未完成业务验收。不访问 41、不调真实供应商、不发真实订单。**
+
+### 一、契约变化
+
+`complete()`（保存快照）按 `expected_agent_version` 是否为空分流：为空 ⇒ `succeeded`
+（M2 既有语义）；非空 ⇒ **写快照但保持 `running`**、`completed_at` 留空。
+新增 `complete_loop()`：同一写事务内要求「回传身份逐字相等 + 仍 running + 已有快照 +
+未过期」才转 `succeeded`。取消与进程退出没有回调 ⇒ 停在 `running`，由既有 TTL 收敛为
+`expired`。**`running` + 快照永远不会被读成成功；不新增状态列。**
+新端点 `POST /v1/internal/charging-status/completions/{run_id}` 只回 `{"run_id","state"}`。
+
+### 二、接缝实测（先量后写）
+
+| 问题 | 实测 |
+|---|---|
+| 整轮结束信号 | 只有 `ChatSessionRequest.completionConsumer`；失败走 `errorConsumer`；**取消没有回调** |
+| 末轮完整性 | 正常 `finishReason=STOP`；截断（无 `[DONE]`）为 `_UNKNOWN` 且**完成回调照样到达**；上游 500 时该轮 after 不出现 |
+| 工具失败 | `ToolExecutionException` 被默认处理器转成文本继续跑 ⇒ `ERROR:` 会让整轮"成功"；raw `RuntimeException` 才中止 |
+| 接管方式 | 自动配置的 `chatSessionRuntime` 是普通 `@Bean`；`@Primary` 子类实测被 gRPC handler 持有（`sameInstance=true`） |
+
+探针与输出在私有目录，不入仓。
+
+### 三、自动化判据
+
+- `tests/test_m3_node_link_state.py`（10）+ `tests/test_m3_node_link_completion.py`（20）⇒ **30 passed**，
+  加上独立复核脚本 `test_node_link_review.py`（3）共 **33 passed**。
+- 全量：**3028 passed / 10 skipped**（本机口径）。
+- **定向变异（先红后绿，均已恢复）**：
+  ① `complete()` 改回无条件 `succeeded` ⇒ 8 条转红（含「重试只读一次」）；
+  ② `complete_loop()` 去掉身份再证明 ⇒ 3 条转红（错摘要 / 缺头 / 不同身份）。
+- 定向变异（节点侧，真跑端到端）：
+  ③ 去掉 finish reason 守卫 ⇒ 只有 LINK-03 截断转红；
+  ④ 把 claim 失败降级成 `ERROR:` 文本 ⇒ LINK-04「整轮不再往下跑（模型只调 1 次）」转红（实测 2 次）；
+  ⑤ 完成回执只认 2xx ⇒ 三种坏回执（`{}` / 错 run / `state=failed`）同时转红。
+- **复核反例已固化**（`test_node_link_review.py` 曾 3 failed）：未启用清单的旧记录收到完成通知
+  不改任何列；已 succeeded 的记录收到错身份通知不改审计列；同状态不同原因的失败通知是冲突。
+
+### 四、真实端到端（`tools/m2_close/m3node/verify_node_link.py`）
+
+真 Gateway 进程 + 真 Java 节点 + 合成模型/CPMS；平台派发入口是替身，但**领取与完成通知
+都由节点自己的类发出**。**39/39 PASS**：正常两轮、第二轮 500、末轮截断、受控 claim 被拒
+（身份不一致与「已领取未写快照」两种）、取消、重试、撤销边界、两 run 归属、未启用兼容。
+
+### 五、边界
+
+- 合成上游与替身：**不**证明真实供应商、真实订单、生产装配。
+- 平台替身按**同步**语义起节点（真实平台也是同步接口）；它不证明真实 gRPC 派发时序。
+- `--network=host` 只为让节点打到宿主 loopback 上的真 Gateway（本机验收的已知取舍）。
+- **进程中止（不是「取消」）**：端到端用 `Runtime.halt(9)` 真的杀掉节点进程（不是订阅方 dispose），
+  断言 exit 9、此后没有任何 completion/error 回调、记录停在 `running`。`running → expired`
+  由既有 TTL 语义覆盖（单测钉住）。
+- 同 JVM 并发（`tools/m2_close/m3node/m3link/ConcurrentRunAcceptance.java`，自带替身 Gateway）：
+  `distinct` 两个 run 各自完成（model=4、claims=2、各一次 completed）；`early` 与 `late`
+  两个窗口里相同 run 的重入都在**本地**被拒（`DuplicateRunRefused`），且 model=2、claims=1、
+  只有一条 completed；`first-error` 首轮失败 claims=0 且只发一次 failed。
+
+## 2026-10-20 · M3-NODE-LINK 复核修订（PR #858）
+
+**范围**：Devin 复核提了五条，逐条在本地复现后修掉三处代码问题、一处文档问题；
+第五条（完成通知是受信声明）作为边界写进 ADR，不当缺陷修。
+
+| 发现 | 复现 | 处理 |
+|---|---|---|
+| 未追踪的历史行被完成通知改写 | 已过期 + 未启用清单 ⇒ 收到通知后 `issued` → `expired`/`ttl_elapsed`，响应仍是 409 | 完成端点先用**只读** `peek()` 做绑定判定；`complete_loop` 在 `_expire_in` **之前**判定「无期望身份」并直接返回 |
+| 成功通知的 `reason` 被丢弃 | `completed+first` 与 `completed+second` 都 200 | `complete_loop` 新增 `success_reason`；同原因幂等、不同原因 409，并落库 |
+| 放行闸门的用例不再覆盖 `succeeded` | `_prepare_succeeded` 在启用清单时只到 `running`+快照 | 拆成 `_prepare_claimed_with_snapshot`（running+快照）与 `_prepare_succeeded`（真 succeeded，经 `complete_loop`） |
+| qa-plan 的复跑命令引用私有路径 | `/home/claude/.cache/...` | 删掉；复核反例已入库，命令可原样跑 |
+| 「节点凭据可伪造整轮成功」 | 成立，但**不是可修缺陷** | 写进 ADR：完成通知是**受信声明**，Gateway 看不到模型循环；能做的只有如实记录 + 节点侧两道判据 |
+
+**红→绿**：两条新回归在修复前的实现上均为红（未追踪行被改写、成功原因冲突仍 200），
+修复后转绿。
+
+**结果**：`test_m3_node_link_*` + `test_m3_gateway_exec_config` + `test_agent_run_records`
+共 **110 passed**；真实端到端 **39/39 PASS**（修复后重跑）；全量
+**3034 passed / 9 skipped / 0 failed**。
+
+**边界（没有变化）**：真实供应商/模型/订单/生产装配未验；整轮完成语义尚未在 41 上跑过。
+
 ## 2026-10-20 · 95 环境连通性核实（只读）
 
 **范围**：只读核实 95（`prod-bugtrack-120` / `api.qumall.qushiyun.com`）的网络可达性、
@@ -591,8 +672,6 @@ S4 回环对端未声明协议
 
 **边界**：本票不让 10008 变成"安全的入口"——它仍公网可达、仍能拿到登录页、仍能取验证码。
 改变的是**它不再接收口令**。真实浏览器在明文入口上的表现（应看到那句中文说明）要等部署。
-
-
 
 
 ## 2026-10-19 · CI 竞态：fixture 的 `git commit` 会留一个后台 maintenance 子进程
@@ -1439,7 +1518,6 @@ codex rollout 日志里模型那一回合的实际输出：
   `UNVERIFIED`**（`_collect_text` 对 `qa` 只走 `blocks[]`，旧的 `{text}` 形状取不到正文）——
   该输出当时如实记录了「取不到正文」，但它其实是这条形状错配的**症状**，不是语言问题。
   本改动之后同一个脚本对零阶回答会取到正文。
-
 
 
 ## 2026-10-19 · 冻结制品独立复核

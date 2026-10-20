@@ -21,6 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   最终 `Prompt` 的完整 system 集合与消息形状（固定无历史模式）。
   清单缺失/权限过宽/非法 JSON/schema 不受支持/`history_policy` 非 `none` 在装配阶段拒绝，
   不降级；未启用时行为与今天逐字一致。
+- Gateway 新增整轮终局端点 `POST /v1/internal/charging-status/completions/{run_id}`：
+  启用执行配置清单的 run 在领取并缓存快照后保持 `running`，只有节点显式确认（身份逐字相等、
+  仍在运行、已有快照、未过期）才转 `succeeded`；失败与成功同一事务、同一 TTL 原语；
+  未启用清单时该端点不改任何列。路由总数 65 → 66。
+- 执行节点回传本 run 实际验证过的 `X-AI-Ops-Exec-Config`，并在整轮结束时按
+  「末轮 `finishReason=STOP` + Gateway 回执校验」确认成功；同 JVM 内相同 run 的重入在本地拒绝。
 - 节点侧合成验收工具 `tools/m2_close/m3node/`（`run.sh` 单命令复跑；缺锁定依赖即非零退出），
   用真实适配器 + 真实工具管理器 + 本机合成上游驱动真实装配的**流式**工具循环。
 

@@ -126,6 +126,21 @@ class SnailHandler(BaseHTTPRequestHandler):
             headers=headers,
         )
         SnailHandler.state["claim_result"] = {"status": status, "body": text}
+        if status == 200:
+            # 真实节点在整轮结束时还会发一次完成通知（M3-NODE-LINK-01）。本替身扮演的是
+            # 节点，所以它也要发 —— 否则启用清单的 run 会正确地停在 running，回执
+            # `agent_version` 就永远是 null，这里测的就不再是「已核对」。
+            completion, completion_body = http(
+                f"{SnailHandler.gateway}/v1/internal/charging-status/completions/{run_id}",
+                method="POST",
+                token=SnailHandler.state["claim_token"],
+                body={"status": "completed"},
+                headers=headers,
+            )
+            SnailHandler.state["completion_result"] = {
+                "status": completion,
+                "body": completion_body,
+            }
         body = json.dumps({"status": 1, "data": {"content": "已查询"}}).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")

@@ -42,7 +42,7 @@
 治理面产出的 PR 改的是产品面代码。本文档以产品面为主，治理面见
 [第八节](#八验证与交付纪律) 与 [docs/afk-workflow.md](docs/afk-workflow.md)。
 
-产品面的对外能力（Gateway 共 65 条路由）分四组：
+产品面的对外能力（Gateway 共 66 条路由）分四组：
 
 - **诊断**：设备运行路径 `/v1/runs`（workspace 设备令牌）、标准 API
   `/v1/standard/diagnoses`（调用者身份委托）。
@@ -338,7 +338,7 @@ flowchart TB
 
 | 模块 | 职责 |
 |---|---|
-| `gateway_api.py` | FastAPI 应用工厂 + **全部 65 条路由** + 请求/响应 schema。**最大单文件（5026 行）** |
+| `gateway_api.py` | FastAPI 应用工厂 + **全部 66 条路由** + 请求/响应 schema。**最大单文件（5226 行）** |
 | `gateway_runtime.py` | Gateway 的服务端编排核心：持有数据库凭据、Codex session、线程池，执行 run / QA / 健康报告 / 标准诊断 |
 | `cli.py` | Typer 根应用 `aiops`：`init`/`key-install`/`paths`/`diagnose`/`doctor`/`shell`/`agent-resume`/`agent-doctor`，并挂载 `admin` 与 `remote` 子应用 |
 | `gateway_server.py` | `aiops-gateway`：`serve`、一次性注册码签发、设备管理 |
@@ -442,7 +442,7 @@ flowchart TB
 | 命令 | 入口 | 起什么 |
 |---|---|---|
 | `aiops` | `cli.py:app`（Typer） | 工程师本地诊断：`diagnose` / `doctor` / `shell` / `agent-resume` / `agent-doctor` / `init` / `key-install` / `paths`，并挂 `admin` 与 `remote` 子应用 |
-| `aiops-gateway` | `gateway_server.py:main` | 多端服务：`serve` 起 uvicorn 承载 65 条路由；`issue-enrollment` / `devices` / `revoke-device` 管设备 |
+| `aiops-gateway` | `gateway_server.py:main` | 多端服务：`serve` 起 uvicorn 承载 66 条路由；`issue-enrollment` / `devices` / `revoke-device` 管设备 |
 | `aiops-tdengine-proxy` | `tdengine_proxy.py:main` | loopback-only 的 TDengine 严格只读代理 |
 | `aiops-responses-adapter` | `responses_adapter.py:main` | Responses API 兼容反向代理 |
 
