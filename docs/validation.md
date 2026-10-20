@@ -1,3 +1,41 @@
+## 2026-10-20 · M3 真实链路前置：构造身份与清单写入（PR #862）
+
+**范围**：41 隔离栈的部署件。**未打开任何开关、未发起真实请求**。
+
+### 一、为什么是构造身份
+
+真实链路要一次调用者身份。本部署只启用 `thirdSession` 链，Redis 里是**真实客户会话** ——
+借用任何一条都是冒充，既有纪律明确不做。构造身份不影响 M3 要验的命题（签发固定 /
+领取对照 / 整轮完成才算成功），但必须写清楚。
+
+与 `gateway_launcher.py` 的区别是**不传 `order_authorizer`**：订单授权仍走真实
+`ScopedOrderAuthorizer`，CPMS 也是真实地址。构造的范围写错时真实授权器给 404，
+链路根本不会往下走 —— 放宽的只有「谁来发起」。
+
+### 二、复核轮修掉的三处（都会阻断或放宽）
+
+| 发现 | 后果 | 修法 |
+|---|---|---|
+| 清单挂载不在 `stack_checks.mounts` 白名单 | `checks.sh up` 的 preflight **拒绝起栈** | 白名单加该文件；回归直接驱动 `mounts()` |
+| `bootstrap_platform.py` 整份重写 `node.env` | `AIOPS_EXEC_MANIFEST` 在 bootstrap 后**静默消失** | 只覆盖三行凭据、保留其余键；回归断言保留 |
+| `ConstructedIdentity` 照给任意 `required_scope` | 握手令牌能进管理路由（`aiops:agents:manage` 等） | scope 白名单只给 `aiops:orders:read`；三条负例 |
+
+另两处：里程碑记录缺失、README 未写清单步骤（已补）；`checks.sh` 的 preflight 增加
+清单判据（文件存在 / 权限 0600 / 两侧指向同一文件）。
+
+### 三、结果
+
+- 全量 **3051 passed / 9 skipped / 0 failed**。
+- 三条新回归在修复前都是红的（挂载白名单、`node.env` 保留、scope 白名单），已变异验证。
+- `write_exec_manifest.py` 的工具三元组解析有过一次真实缺陷：描述里的 `;` 把解析截断成
+  半句，回归钉住整句。
+
+### 四、边界
+
+- **开关尚未打开**，本轮没有任何真实请求；构造身份是这条链路的已知合成点。
+- `model_options` 取平台默认值（`temperature=1.0` / `max_tokens=4096`）：若与平台实际下发
+  不一致，节点会以 `OPTIONS` 拒绝 —— 这是**期望的失败模式**，不是静默放行。
+
 ## 2026-10-20 · 整轮完成与工具领取的分界（M3-NODE-LINK-01）
 
 **范围**：Gateway 状态机新增「整轮确认」，节点侧新增身份回传与整轮守卫。

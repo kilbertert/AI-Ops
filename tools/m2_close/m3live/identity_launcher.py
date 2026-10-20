@@ -46,6 +46,12 @@ TOKEN = os.environ["AIOPS_M2_LOCAL_TOKEN"]
 TENANT = os.environ["AIOPS_M2_TENANT"]
 C_USER = os.environ["AIOPS_M2_C_USER"]
 
+#: 构造身份**只**授予这一个 scope：这次试运行要用的读取入口需要的那个。
+#: 早先的实现把路由要什么就授予什么（`permissions={required_scope}`），于是拿着握手令牌
+#: 就能进管理路由（`aiops:agents:manage` / `aiops:shortcuts:manage`）—— 一把「只读验证」
+#: 的钥匙开到了管理面。**白名单**而不是「照给」：不在集合里的 scope 一律拒绝。
+ALLOWED_SCOPES = frozenset({"aiops:orders:read"})
+
 
 @dataclass
 class ConstructedIdentity:
@@ -58,6 +64,9 @@ class ConstructedIdentity:
     def resolve(self, token: str, *, required_scope: str, **kwargs: Any) -> ScopeContext:
         if token != TOKEN:
             raise CallerAuthError("invalid access token", code="caller_auth.invalid")
+        if required_scope not in ALLOWED_SCOPES:
+            # 只读验证不需要管理 scope；照给等于让握手令牌开管理面。
+            raise CallerAuthError("scope not granted to the constructed identity", code="caller_auth.invalid")
         subject = SubjectRecord(b_user_id="", c_user_id=C_USER, tenant_id=TENANT)
         return ScopeContext.build(
             caller=subject,
@@ -66,7 +75,7 @@ class ConstructedIdentity:
             effective_tenant_id=TENANT,
             data_scope=DataScope(type="self"),
             roles=frozenset(),
-            permissions=frozenset({required_scope}),
+            permissions=ALLOWED_SCOPES,
             resolved_at=datetime.now(UTC),
         )
 

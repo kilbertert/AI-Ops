@@ -33,7 +33,7 @@ cleanup() {
   local rc=$?
   if ! docker exec m2live03-gateway rm -f \
     /tmp/bootstrap_platform.py /tmp/agent-runs.in.json /tmp/agent-runs.out.json \
-    /tmp/node.env.out /tmp/platform_admin /tmp/node_token /tmp/model_api_key >/dev/null 2>&1; then
+    /tmp/node.env.out /tmp/node.env.in /tmp/platform_admin /tmp/node_token /tmp/model_api_key >/dev/null 2>&1; then
     echo "bootstrap: 容器临时凭据清理失败" >&2
     [ "$rc" -ne 0 ] || rc=1
   fi
@@ -66,6 +66,15 @@ publish() {  # 同一配置根内原子替换；跨文件系统时拒绝退化�
 
 copy_in "$HERE/bootstrap_platform.py" /tmp/bootstrap_platform.py
 copy_in "$CONFIG/gateway/agent-runs.json" /tmp/agent-runs.in.json
+# 节点现有的 env：bootstrap 只重写三行凭据，其余开关（含 AIOPS_EXEC_MANIFEST）要保留。
+# 不存在时传一个空文件 —— 那正是首次冷启动的形状，脚本自己会处理。
+if [ -f "$CONFIG/node/node.env" ]; then
+  copy_in "$CONFIG/node/node.env" /tmp/node.env.in
+else
+  : > "$work/node.env.in"
+  chmod 600 "$work/node.env.in"
+  copy_in "$work/node.env.in" /tmp/node.env.in
+fi
 
 TOKEN_FILE="$CONFIG/secrets/platform_admin"
 if [ "$MODE" = "apply" ] && [ ! -s "$TOKEN_FILE" ]; then

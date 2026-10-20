@@ -296,6 +296,45 @@ def ensure_model(token: str, endpoint: str, api_key: str, model_id: str) -> int:
 AGENT_INSTRUCTION = "用 charging_status_snapshot 工具取一次快照，并原样作答。"
 
 
+#: 节点的非凭据开关：bootstrap 只重写凭据那三行，这些行必须原样保留。
+NODE_ENV_PATH = "/tmp/node.env.in"
+#: 输出到容器的临时文件；bootstrap.sh 之后把它发布到宿主。
+NODE_ENV_OUT = "/tmp/node.env.out"
+
+
+def _node_env_path() -> str:
+    return NODE_ENV_PATH
+
+
+def _node_env_out() -> str:
+    return NODE_ENV_OUT
+
+
+def _write_node_env(credentials: dict[str, str]) -> None:
+    """把凭据写进 node.env，同时保留既有的非凭据键。
+
+    读现有的 `$M2LIVE_CONFIG/node/node.env`（容器里是 `/etc/m2live/node.env`），
+    覆盖同名键、追加新键；**已存在但不在凭据集合里的行逐字保留**。输出仍是 0600。
+    """
+    preserved: list[str] = []
+    try:
+        with open(_node_env_path(), encoding="utf-8") as handle:
+            for line in handle:
+                stripped = line.strip()
+                if not stripped or stripped.startswith("#") or "=" not in stripped:
+                    preserved.append(line.rstrip("\n"))
+                    continue
+                key = stripped.split("=", 1)[0].strip()
+                if key not in credentials:
+                    preserved.append(line.rstrip("\n"))
+    except FileNotFoundError:
+        pass
+    lines = preserved + [f"{key}={value}" for key, value in credentials.items()]
+    with open(_node_env_out(), "w", encoding="utf-8") as handle:
+        handle.write("\n".join(lines) + "\n")
+    os.chmod(_node_env_out(), 0o600)
+
+
 def ensure_agent(token: str, app_id: str, model_id: int) -> int:
     status, body = call("/agent/page?page=1&size=50", None, {"Snail-Ai-Auth": token}, "GET")
     for agent in (body or {}).get("data", []) or []:
@@ -414,11 +453,13 @@ def main() -> int:
         json.dump(bindings, handle, indent=2)
     os.chmod(BINDINGS_OUT, 0o600)
     # 节点的平台应用凭据与绑定表必须同时更新；只改一边会让心跳在下一次重启时失效。
-    with open("/tmp/node.env.out", "w") as handle:
-        handle.write(
-            f"SNAIL_AI_APP_ID={app['appId']}\nSNAIL_AI_TOKEN={app_token}\nAIOPS_NODE_TOKEN={token_for_node}\n"
-        )
-    os.chmod("/tmp/node.env.out", 0o600)
+    #
+    # **只重写三个凭据键，其余键原样保留**：这个文件同时承载非凭据开关（例如 M3 的
+    # `AIOPS_EXEC_MANIFEST`）。早先整份覆盖会让那些开关在 bootstrap 之后静默消失 ——
+    # 守卫看起来配了、实际已关。
+    _write_node_env(
+        {"SNAIL_AI_APP_ID": app["appId"], "SNAIL_AI_TOKEN": app_token, "AIOPS_NODE_TOKEN": token_for_node}
+    )
     print(
         json.dumps(
             {

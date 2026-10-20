@@ -12,11 +12,16 @@
 
 from __future__ import annotations
 
+import importlib.util
+import io
+import json
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 CHECKS = Path(__file__).resolve().parents[1] / "deploy/m2-live-03/checks.sh"
+DEPLOY_DIR = CHECKS.parent
 
 
 def _fake_docker(tmp_path: Path, down_exit: int = 0) -> Path:
@@ -272,3 +277,35 @@ def test_a_successful_preflight_claims_the_root_atomically(tmp_path, monkeypatch
     assert result.returncode == 0, result.stderr
     assert (state / ".owner").read_text().strip() == "m2-live-03"
     assert not list(state.glob(".owner.tmp.*")), "原子写入留下了临时文件"
+
+
+def test_manifest_mount_is_whitelisted():
+    """节点只读挂载**单个**清单文件，它必须在 mounts 白名单里。
+
+    否则 `checks.sh up` 的 preflight 会拒绝起栈 —— 整栈都起不来，不只是守卫不生效。
+    """
+    spec = importlib.util.spec_from_file_location("stack_checks_under_test", DEPLOY_DIR / "stack_checks.py")
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+
+    config = "/tmp/m2live-config"
+    payload = {
+        "services": {
+            "node": {
+                "volumes": [
+                    {
+                        "type": "bind",
+                        "read_only": True,
+                        "source": f"{config}/gateway/exec-manifest.json",
+                    }
+                ]
+            }
+        }
+    }
+    original = sys.stdin
+    sys.stdin = io.StringIO(json.dumps(payload))
+    try:
+        assert module.mounts(["/tmp/m2live-state", config]) == 0
+    finally:
+        sys.stdin = original

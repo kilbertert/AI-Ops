@@ -29,6 +29,9 @@ def mounts(argv: list[str]) -> int:
         os.path.realpath(os.path.join(config, "tls", "platform")),
         os.path.realpath(os.path.join(config, "tls", "proxy")),
         os.path.realpath(os.path.join(config, "gateway", "runtime.env")),
+        # M3：执行配置清单。节点只读挂载**这一个文件**（不是整个 gateway 目录），
+        # 所以它必须在白名单里；否则 preflight 直接拒绝起栈。
+        os.path.realpath(os.path.join(config, "gateway", "exec-manifest.json")),
         # 模型出口只挂自己的目录（供应商 key 与代理令牌），看不到业务配置。
         os.path.realpath(os.path.join(config, "model-proxy")),
     }

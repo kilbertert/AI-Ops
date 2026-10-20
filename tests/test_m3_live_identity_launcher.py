@@ -45,7 +45,22 @@ def test_constructed_scope_is_self_and_carries_the_declared_user(monkeypatch):
     assert scope.effective_tenant_id == "TENANT-A"
     assert scope.subject.c_user_id == "USER-A"
     assert scope.delegated is False
-    assert "aiops:orders:read" in scope.permissions
+    assert scope.permissions == {"aiops:orders:read"}, "只该有读取 scope，不该照给"
+
+
+@pytest.mark.parametrize("scope", ["aiops:agents:manage", "aiops:shortcuts:manage", "aiops:diag:read"])
+def test_management_scopes_are_refused(monkeypatch, scope):
+    """握手令牌**不得**开管理面。
+
+    早先按 `required_scope` 原样授予，于是「只读验证」的令牌能进 `/v1/agents` 与
+    `/v1/shortcuts` 的管理路由。现在用白名单：不在集合里的 scope 直接拒绝，
+    而且是拒绝**整个身份**，不是少给一个权限（那会变成 403 而不是 401，语义不同）。
+    """
+    module = _load(monkeypatch)
+    from aiops_diagnostics.caller_auth import CallerAuthError
+
+    with pytest.raises(CallerAuthError):
+        module.ConstructedIdentity().resolve("t0ken", required_scope=scope)
 
 
 def test_launcher_never_installs_a_synthetic_authorizer():
