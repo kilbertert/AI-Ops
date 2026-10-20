@@ -225,32 +225,26 @@ PY
   done
 
   say "== M3 执行配置清单（两侧同一份字节） =="
-  # 配了 `AIOPS_GATEWAY_EXECUTION_MANIFEST_FILE` 却读不到 ⇒ Gateway **启动即拒**。
-  # 所以这里先判：文件在不在、权限是否私有、两侧声明的是不是同一个路径。
-  local gw_env="${M2LIVE_CONFIG:-/etc/aiops-m2-live}/gateway/gateway.env"
-  local node_env="${M2LIVE_CONFIG:-/etc/aiops-m2-live}/node/node.env"
-  local manifest
-  manifest=$(sed -n 's/^AIOPS_GATEWAY_EXECUTION_MANIFEST_FILE=//p' "$gw_env" 2>/dev/null || true)
-  if [ -n "$manifest" ]; then
-    # 容器内路径 → 宿主路径：两者都挂在 $CONFIG/gateway 下，且用的是同一个文件名。
-    local host_manifest="${M2LIVE_CONFIG:-/etc/aiops-m2-live}/gateway/$(basename "$manifest")"
-    if [ ! -f "$host_manifest" ]; then
-      bad "清单已配置但文件不存在：$host_manifest（先跑 tools/m2_close/m3live/write_exec_manifest.py）"
-    else
-      local mode
-      mode=$(stat -c '%a' "$host_manifest" 2>/dev/null || echo '?')
-      [ "$mode" = "600" ] && ok "清单权限 0600" || bad "清单权限是 $mode，要求 0600"
-      local node_manifest
-      node_manifest=$(sed -n 's/^AIOPS_EXEC_MANIFEST=//p' "$node_env" 2>/dev/null || true)
-      if [ -n "$node_manifest" ] && [ "$(basename "$node_manifest")" != "$(basename "$manifest")" ]; then
-        # 两侧读**不同文件**时身份必然不同，领取会按漂移拒绝 —— 那不是能靠重试解决的问题。
-        bad "两侧清单不是同一个文件：gateway=$manifest node=$node_manifest"
-      else
-        ok "两侧清单指向同一份（$(sha256sum "$host_manifest" | awk '{print substr($1,1,16)}')…）"
-      fi
+  if [ -f "$CONFIG/gateway/identity.env" ] || [ -L "$CONFIG/gateway/identity.env" ]; then
+    mode=$(stat -c '%a' "$CONFIG/gateway/identity.env")
+    if [ -L "$CONFIG/gateway/identity.env" ] || { [ "$mode" != 600 ] && [ "$mode" != 400 ]; }; then
+      bad "构造身份文件必须是私有普通文件（0400/0600）"
     fi
+  fi
+  # 配了 `AIOPS_GATEWAY_EXECUTION_MANIFEST_FILE` 却读不到 ⇒ Gateway **启动即拒**。
+  # 判据不是「两个路径的 basename 相同」：那对「节点开关缺失」和「路径指向不存在的
+  # 文件」都印 PASS（旧实现的实测反例）。
+  #
+  # 值取自**渲染后的 environment**，不是配置文件原文：覆盖层（`M2LIVE_COMPOSE_EXTRA`）
+  # 可以在不改任何文件的情况下让实际那个容器单侧开启，而读原文会看到「两侧都开着」。
+  # 解析与同 inode 判定在 stack_checks.py：容器内路径 → 渲染后的挂载 → 宿主路径。
+  local manifest_report manifest_rc
+  manifest_report=$(printf '%s' "$rendered_json" | python3 "$HERE/stack_checks.py" manifest) \
+    && manifest_rc=0 || manifest_rc=$?
+  if [ $manifest_rc -eq 0 ]; then
+    ok "$manifest_report"
   else
-    ok "清单未配置（M3 守卫不启用）"
+    bad "$manifest_report"
   fi
 
   say "== Gateway 镜像身份（内容摘要为主，加载身份为辅） =="

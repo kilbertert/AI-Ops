@@ -150,3 +150,39 @@ printf '%s' "$round"
     result = subprocess.run(["bash", "-c", ready + fixture], capture_output=True, text=True, timeout=5)
     assert result.returncode == 0, result.stderr
     assert result.stdout == "3", "第二轮 Gateway 和节点失败，不能复用第一轮的成功"
+
+
+# ---------------------------------------------------------------- 复跑覆盖层
+def test_identity_overlay_only_replaces_the_gateway_entrypoint():
+    """复跑用的覆盖层**只**换入口进程，不动授权器、不动挂载、不带凭据。
+
+    判据不是「看起来像模板」，而是：(1) 只声明 `gateway` 一个服务；(2) 只改
+    `env_file` 与 `command`；(3) 入口是 `identity_launcher.py`（它不传
+    order_authorizer，ADR-0058）；(4) 文件里没有任何身份值。
+    """
+    overlay = yaml.safe_load((DEPLOY / "compose.identity.yaml").read_text(encoding="utf-8"))
+    assert list(overlay["services"]) == ["gateway"], "覆盖层不得改其它服务"
+    gateway = overlay["services"]["gateway"]
+    assert set(gateway) <= {"env_file", "command"}, f"覆盖层改了不该改的键: {sorted(gateway)}"
+    entrypoint = "\n".join(gateway["command"])
+    assert "tools/m2_close/m3live/identity_launcher.py" in entrypoint
+    # 反面对照：合成验收的启动器会替换授权器，复跑用的这个不行。
+    assert "gateway_launcher.py" not in entrypoint
+    text = (DEPLOY / "compose.identity.yaml").read_text(encoding="utf-8")
+    # 注释里可以**提到**键名（说明这份文件怎么用），但任何一行真的赋值都不行 ——
+    # 判据是「有值」，不是「出现过这个词」。
+    assignments = [line for line in text.splitlines() if re.match(r"^\s*AIOPS_M2_[A-Z_]+=\S+", line)]
+    assert not assignments, f"覆盖层里写了身份值：{assignments}"
+    assert (DEPLOY / "identity.env.template").is_file(), "身份三件套缺模板"
+
+
+def test_checks_accepts_the_identity_overlay_without_touching_down():
+    """`M2LIVE_COMPOSE_EXTRA` 已接到 `COMPOSE` 数组上，`down` 也走同一个数组。
+
+    覆盖层因此既能参与起栈，也会在停栈时被记得 —— 「down 需要手动再加一次参数」
+    会让清理漏掉覆盖层定义的东西。
+    """
+    script = (DEPLOY / "checks.sh").read_text(encoding="utf-8")
+    assert 'COMPOSE+=(-f "$M2LIVE_COMPOSE_EXTRA")' in script
+    down = script[script.index("\ndown() {") : script.index("\nclaim_state_root() {")]
+    assert '"${COMPOSE[@]}" down' in down, "down 没有走同一份 COMPOSE 数组"
