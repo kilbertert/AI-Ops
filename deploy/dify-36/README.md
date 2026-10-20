@@ -151,6 +151,36 @@ Docker Hub 在 36 **不可达**（`registry-1.docker.io` 连接被重置）。�
 
 暴露变更仍须根据实际访问记录决定。发布桥验收应核对宿主反代、容器入口与真实浏览器流量，不凭端口监听推断使用方。切换入口与退役旧入口分开，保留回滚路径。
 
+### `INNER_API`（2026-10-20 打开，多 workspace 的前置）
+
+Dify 的 `inner_api` 是**建 workspace / 加成员**的唯一 HTTP 入口（console 没有
+`POST /workspaces`），默认关闭。2026-10-20 打开：
+
+```bash
+# /opt/dify/deploy/.env 追加（key 只写进该文件，不进仓库）
+INNER_API=true
+INNER_API_KEY=<openssl rand -hex 32>
+cd /opt/dify/deploy && docker compose up -d api worker
+```
+
+**暴露面没有扩大**，三条都实测过（详见 `docs/validation.md` 同日节）：
+
+| 路径 | 结果 |
+|---|---|
+| api 容器内网 IP `:5001/inner/api/...`（带正确 key） | 走得通（404 = 走到"查 owner"） |
+| 经 Dify 自己的 nginx `127.0.0.1:10018/inner/api/...` | **404**（default.conf 只转 `/console/api`、`/api`） |
+| 经公网 TLS `https://dify.ranlei.work/inner/api/...` | **404** |
+
+api 容器的 `5001/tcp` **未 publish 到宿主**，所以只有 36 本机的进程能经 docker 内网
+（`172.21.0.x`）访问它。
+
+⚠️ **这条路径只在 36 上可用**。95 的登录代理在 95，够不到 36 的容器内网 —— 所以
+"建 workspace"必须是**在 36 上发生的一次集中动作**，不是每个环境的代理各建各的。
+承载者与顺序见 `docs/agents/dify-multitenant-design.md` 的 §8「−0」。
+
+**回滚**：恢复 `.env.bak-innerapi-<ts>` → `docker compose up -d api worker`。
+只重启 api/worker，不动数据库与 nginx。
+
 ## 服务身份与隔离
 
 - **身份**：本实例自己的 `dify` 系统账号（`nologin`、无口令、无 sudo、不加入任何共享组），
