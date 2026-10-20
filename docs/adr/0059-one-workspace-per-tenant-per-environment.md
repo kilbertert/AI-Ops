@@ -62,7 +62,7 @@ ADR-0056 记录了 V1 的单工作区暂定，并写明触发条件是「出现�
 | 项 | 决定 |
 |---|---|
 | 环境的权威来源 | `AIOPS_GATEWAY_ENVIRONMENT`（每台机器一个值）+ 登录代理侧同名的部署身份；落进 `dify_workspaces.environment` |
-| 映射 | 新表 `dify_workspaces(tenant_id, environment, workspace_id, created_at)`；`dify_app_registry` **不动** |
+| 映射 | 新表 `dify_workspaces(tenant_id, environment, workspace_id, setup_state, lease_owner, lease_expires_at, last_error, created_at)`，`UNIQUE(tenant_id, environment)`；`dify_app_registry` **不动** |
 | 建 workspace | `POST /inner/api/enterprise/workspace`（`is_from_dashboard=True` 绕过 `ALLOW_CREATE_WORKSPACE`），需开 `INNER_API` + 一把只绑回环的 key |
 | 模型凭据 | **每个 workspace 各配一份**。Dify 数据模型里没有共享层（见下），用 `ADMIN_API_KEY + X-WORKSPACE-ID` 写 |
 | 模板 app | 模板 DSL 进仓库；**只含结构与工具白名单，`model_config` 留空**。导入失败只记状态，不阻塞登录 |

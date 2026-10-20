@@ -87,7 +87,7 @@ cloud-upms:release  TokenController.issueLoginToken 的完整 payload：
 | 6 | 模板 app：**模板 DSL 进仓库**，开户时导入。模板**只含结构与工具白名单**，`model_config` 留空（避免绑死模型） |
 | 7 | 发布权：`aiops:agent:publish` 仍然按公司权限码裁定；**平台租户（`type=-1`）视为可见全部** —— 但见 §4 的边界 |
 | 8 | 试运行草稿来源：租户没有 editor 环境就**明确拒绝**（"你的租户没有编辑环境"），不回落 |
-| 9 | 映射存在 **新表 `dify_workspaces(tenant_id, environment, workspace_id, setup_state, created_at)`**，落在**网关的 `gateway.db`**；代理与桥经网关的只读端点查。`dify_app_registry` 不动 |
+| 9 | 映射存在 **新表 `dify_workspaces(tenant_id, environment, workspace_id, setup_state, lease_owner, lease_expires_at, last_error, created_at)`**，落在**网关的 `gateway.db`**；代理与桥经网关的只读端点查。`dify_app_registry` 不动 |
 | 9b | `dify_workspaces.environment` 的作用是**防止两套环境的 `tenant_id` 撞号**，不是「给每个环境各建一套 workspace」。**保留** —— 撞号时会静默串租户，fail-closed 值得一列 |
 | 9c | workspace 的 **owner 是服务身份**（`dify-admin@aiops.local`），不是每个租户一个人；以它的身份在某 workspace 做事走 `ADMIN_API_KEY + X-WORKSPACE-ID` |
 | 9d | **`account_email_for` 加环境前缀**（`{environment}-{user_id}@…`）。这是既有代码里的真实缺陷：两套 UPMS 撞 `user_id` 会让两个人映射到同一个 Dify 账号。属**迁移**，要在多 workspace 之前或同批完成 |
@@ -185,6 +185,37 @@ resolve_workspace(tenant_id, environment) -> workspace_id | DIFY_WORKSPACE_UNRES
 `workspace_id` 为空是 `setup_state = 'creating'` 的合法状态 —— 解析函数见到它不是"没有行"，
 而是"有人在建"，返回一个**可重试**的 `DIFY_WORKSPACE_CREATING`，不是 `UNRESOLVED`。
 这两个错误码必须分开：前者让调用方稍后再试，后者让人去建。
+
+#### `creating` 不能是死胡同（评审指出）
+
+原设计有一个真缺陷：Dify 建 workspace 失败后，那行 `creating` 会**永久挡住**下一次开户 ——
+每次登录都读到它、都等不到 `ready`，这个租户再也自动建不出 workspace。
+
+所以 `creating` 必须带**租约与三种结局**：
+
+```
+dify_workspaces(
+  tenant_id, environment, workspace_id, setup_state,
+  lease_owner,      -- 谁在创建（进程 + 请求 id）
+  lease_expires_at, -- 租约到期时刻
+  last_error,       -- 最近一次失败的分类
+  UNIQUE(tenant_id, environment)
+)
+```
+
+| 结局 | 判据 | 动作 |
+|---|---|---|
+| **明确失败** | 收到错误响应体 / 连接被拒 | `setup_state='failed'`，`workspace_id` 保持空 ⇒ 下一次开户**可以重建** |
+| **结果未知** | 超时 / 连接中断 / 建成了但响应没回来 | `setup_state='unknown'` ⇒ **不重建**，先核实：用 `GET /console/api/all-workspaces`（admin key）按名字查有没有这个租户的 workspace；有就补写 UUID，没有才重建 |
+| **建成但写回失败** | 建成功、UPDATE 失败 | 同"结果未知" |
+
+**租约**：`lease_expires_at` 到期后别的请求可以**抢占**（换 `lease_owner`、`setup_state` 置回
+`creating`）。没有租约的话，一个创建进程崩在中间会让这行永远卡住。
+
+**为什么"结果未知"要核实而不是重建**：重建会造出孤儿，而孤儿**不可清理**
+（Dify 没有删 tenant 的 API）。核实一次 `all-workspaces` 比留一个永久孤儿便宜得多。
+
+**测试**：两类都要有 ——「明确失败后重试能建成」与「建成但写回失败时能核实并补 UUID」。
 
 **"解析不到就拒绝"与"缺行就建"不冲突**（评审指出）——两者是不同的调用方：
 
