@@ -33,3 +33,14 @@ description = "移动云 36 服务宿主:Dify 编排实例(/opt/dify,入口 :100
 [targets.paths]
 app  = "/opt/dify"           # compose、env、镜像内数据卷的根
 assets = "/opt/dify/deploy"  # 部署产物落点(compose + nginx/ssrf 资产)
+
+[[targets]]
+name        = "95"
+host        = "qy-gw-120"
+description = "另一套 AI-Ops 环境:公网入口 api.qumall.qushiyun.com。公司环境、未纳入本编队;事实与已知空白见 docs/agents/env-95-facts.md"
+
+[targets.paths]
+app  = "/home/aiops/AI-Ops"
+venv = "/home/aiops/AI-Ops/.venv"
+db   = "/home/aiops/.local/share/aiops-diagnostics/gateway/gateway.db"
+config = "/home/aiops/.config/aiops-diagnostics"
