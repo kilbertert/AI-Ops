@@ -224,6 +224,35 @@ PY
     [ "$got" = "$want" ] && ok "$name ${got:0:16}…" || bad "$name 摘要不符（期望 ${want:0:16}…，实际 ${got:0:16}…）"
   done
 
+  say "== M3 执行配置清单（两侧同一份字节） =="
+  # 配了 `AIOPS_GATEWAY_EXECUTION_MANIFEST_FILE` 却读不到 ⇒ Gateway **启动即拒**。
+  # 所以这里先判：文件在不在、权限是否私有、两侧声明的是不是同一个路径。
+  local gw_env="${M2LIVE_CONFIG:-/etc/aiops-m2-live}/gateway/gateway.env"
+  local node_env="${M2LIVE_CONFIG:-/etc/aiops-m2-live}/node/node.env"
+  local manifest
+  manifest=$(sed -n 's/^AIOPS_GATEWAY_EXECUTION_MANIFEST_FILE=//p' "$gw_env" 2>/dev/null || true)
+  if [ -n "$manifest" ]; then
+    # 容器内路径 → 宿主路径：两者都挂在 $CONFIG/gateway 下，且用的是同一个文件名。
+    local host_manifest="${M2LIVE_CONFIG:-/etc/aiops-m2-live}/gateway/$(basename "$manifest")"
+    if [ ! -f "$host_manifest" ]; then
+      bad "清单已配置但文件不存在：$host_manifest（先跑 tools/m2_close/m3live/write_exec_manifest.py）"
+    else
+      local mode
+      mode=$(stat -c '%a' "$host_manifest" 2>/dev/null || echo '?')
+      [ "$mode" = "600" ] && ok "清单权限 0600" || bad "清单权限是 $mode，要求 0600"
+      local node_manifest
+      node_manifest=$(sed -n 's/^AIOPS_EXEC_MANIFEST=//p' "$node_env" 2>/dev/null || true)
+      if [ -n "$node_manifest" ] && [ "$(basename "$node_manifest")" != "$(basename "$manifest")" ]; then
+        # 两侧读**不同文件**时身份必然不同，领取会按漂移拒绝 —— 那不是能靠重试解决的问题。
+        bad "两侧清单不是同一个文件：gateway=$manifest node=$node_manifest"
+      else
+        ok "两侧清单指向同一份（$(sha256sum "$host_manifest" | awk '{print substr($1,1,16)}')…）"
+      fi
+    fi
+  else
+    ok "清单未配置（M3 守卫不启用）"
+  fi
+
   say "== Gateway 镜像身份（内容摘要为主，加载身份为辅） =="
   # 镜像 ID 含构建时间戳，每次重建都不同，所以它不在仓库里；**内容摘要**（与 uv.lock
   # 绑定）才是可复现的身份。宿主上若有 build-image.sh 写出的 identity.json，再核对

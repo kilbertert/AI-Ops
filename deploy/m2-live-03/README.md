@@ -129,6 +129,45 @@ Gateway 与业务依赖已在 41；同宿主先避免跨主机 gRPC、隧道与�
 `store` 是唯一例外：官方 mysql 镜像的入口点先以 root 做一次 initdb，随后长期以
 `mysql(999)` 运行；这一条短暂初始化不泛化到其它服务。
 
+## M3：打开执行配置守卫的开关（真实链路前必做）
+
+四个开关里最后一个是**执行配置清单**。它两侧读同一份字节，身份就是该文件的 sha256。
+顺序不能颠倒 —— 配了却读不到时，Gateway **启动即拒**（`validate()` 直接失败）。
+
+```bash
+# 1) 写清单（在开发机/runner 上跑；身份 = 原始字节 sha256）
+uv run python tools/m2_close/m3live/write_exec_manifest.py \
+  --out /tmp/exec-manifest.json \
+  --model-id "$M2LIVE_MODEL_ID" \
+  --endpoint "$M2LIVE_MODEL_ENDPOINT" \
+  --system-message "<平台智能体的 instruction，逐字>"
+
+# 2) 落到宿主的 gateway 配置目录（0600），节点容器只读挂载**这一个文件**
+install -m 600 /tmp/exec-manifest.json "$M2LIVE_CONFIG/gateway/exec-manifest.json"
+
+# 3) 两个开关（模板里已声明）
+#    gateway.env: AIOPS_GATEWAY_EXECUTION_MANIFEST_FILE=/etc/m2live/exec-manifest.json
+#    node.env:    AIOPS_EXEC_MANIFEST=/etc/m2live/exec-manifest.json
+
+# 4) 起栈（preflight 会核对：文件存在、权限 0600、两侧指向同一个文件）
+bash deploy/m2-live-03/checks.sh up
+```
+
+**清单里每一个值的来源**（`write_exec_manifest.py` 逐条核对，缺一项就拒绝写）：
+
+| 字段 | 来源 |
+|---|---|
+| `model.provider_key` / `adapter_key` | `bootstrap_platform.py` 建平台模型配置时写的那两个值 |
+| `model.model_key` | `M2LIVE_MODEL_ID` |
+| `model.endpoint` | `M2LIVE_MODEL_ENDPOINT`（节点经受控出口的那个地址） |
+| `model_options` | 平台下发给节点的选项（本栈不传 `configJson`，值是默认的 `temperature=1.0`、`max_tokens=4096`） |
+| `system_messages` | 平台智能体的 `instruction`（`SystemPromptHandler` 直接把它当 system 消息） |
+| `tools[0]` | 节点源码里 `ControlledChargingStatusTool` 的三个常量 |
+
+⚠️ **`bootstrap.sh` 会重写 `node.env`**：它只覆盖三行凭据，其余键（含
+`AIOPS_EXEC_MANIFEST`）原样保留 —— 这条有回归钉住，因为整份覆盖会让守卫在 bootstrap
+之后静默消失。
+
 ## 合成验收（开发机）
 
 ```bash

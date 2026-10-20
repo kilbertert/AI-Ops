@@ -54,3 +54,34 @@ def test_the_saved_binding_matches_what_the_node_will_use(bootstrap):
     token = "c" * 32
     bindings = bootstrap.bind_expected_node({"nodes": []}, token)
     assert bindings["nodes"][0]["token_sha256"] == hashlib.sha256(token.encode()).hexdigest()
+
+
+def test_node_env_regeneration_keeps_non_credential_keys(tmp_path, bootstrap, monkeypatch):
+    """bootstrap 只重写三行凭据，其余开关必须原样保留。
+
+    早先整份覆盖：`AIOPS_EXEC_MANIFEST` 在 bootstrap 之后**静默消失** ——
+    看起来配了守卫、实际已关，而链路仍然跑通。这条直接驱动真实的重写函数。
+    """
+    existing = tmp_path / "node.env.in"
+    existing.write_text(
+        "SNAIL_AI_APP_ID=old-app\n"
+        "SNAIL_AI_TOKEN=old-token\n"
+        "AIOPS_NODE_TOKEN=old-node\n"
+        "AIOPS_EXEC_MANIFEST=/etc/m2live/exec-manifest.json\n",
+        encoding="utf-8",
+    )
+    out = tmp_path / "node.env.out"
+    # `NODE_ENV_PATH` / `NODE_ENV_OUT` 是模块级常量（容器里的固定路径），
+    # 用 `reload` 换成 tmp 路径 —— 直接 patch 常量不会影响已编译进函数体的引用。
+    monkeypatch.setattr(bootstrap, "NODE_ENV_PATH", str(existing))
+    monkeypatch.setattr(bootstrap, "NODE_ENV_OUT", str(out))
+
+    bootstrap._write_node_env(
+        {"SNAIL_AI_APP_ID": "new-app", "SNAIL_AI_TOKEN": "new-token", "AIOPS_NODE_TOKEN": "new-node"}
+    )
+
+    text = out.read_text(encoding="utf-8")
+    assert "AIOPS_EXEC_MANIFEST=/etc/m2live/exec-manifest.json" in text, "非凭据开关被抹掉了"
+    assert "SNAIL_AI_APP_ID=new-app" in text
+    assert "old-app" not in text
+    assert out.stat().st_mode & 0o777 == 0o600
