@@ -169,6 +169,17 @@ FAULT_CODE_RANK_LIMIT = 7
 #: pymysql 的参数占位符（paramstyle=format）；共享规则按此渲染租户谓词。
 _SQL_PARAM = "%s"
 
+#: ``ch_order_info.user_id`` 取这个值时，订单的**消费者**是 ``consumer_id`` 那一列
+#: （工单场景）。公司侧同一口径：``ChSendOrderMsgServiceImpl.getUserId``
+#: ``userId == "-1" ? consumerId : userId``，``ChargingServiceImpl`` 建工单订单时
+#: 写的就是 ``-1``。41 生产库实测 771 行，其中 347 行带 ``consumer_id``。
+#: 只认 ``-1``：空白或 NULL 是**没有人**认领的行（渠道/OCPI 单据），不是本人。
+WORK_ORDER_USER = "-1"
+
+#: 订单表上「认领者」的第二列。只有 ``ch_order_info`` 有它；占位单、设备表没有，
+#: 所以它是 ``_scope_where`` 的开关而不是全局行为（见 ``_scope_where``）。
+ORDER_CLAIM_COLUMN = "consumer_id"
+
 
 def _placeholders(count: int) -> str:
     return ", ".join(_SQL_PARAM for _ in range(count))
@@ -224,12 +235,17 @@ class MySQLSource:
         *,
         site_column: str | None = "site_id",
         user_column: str | None = "user_id",
+        claim_column: str | None = None,
     ) -> tuple[str, list[Any]]:
         """构造 scope 下推的 WHERE 片段（不含前导 AND，调用方自行拼接）。
 
         租户谓词由共享租户可见性规则渲染（参数绑定），与行级过滤是同一处定义
         的两种渲染；站点/用户列名来自固定表结构常量，不是客户端输入，值一律
         参数绑定。
+
+        ``claim_column`` 是「这张表的认领者还有第二列」的渲染开关，只有订单表
+        打开它（见 :data:`ORDER_CLAIM_COLUMN`）：自带该列的表按同一规则多认一个
+        认领者，没有该列的表（占位单、设备）保持单列语义不变。
         """
         scope = self.scope
         if scope is None:
@@ -240,8 +256,19 @@ class MySQLSource:
             fragments.append(f"{site_column} IN ({_placeholders(len(scope.site_ids))})")
             params.extend(scope.site_ids)
         if scope.user_id and user_column:
-            fragments.append(f"{user_column}={_SQL_PARAM}")
-            params.append(scope.user_id)
+            if claim_column:
+                # 认领者 = `user_id`，但工单订单把它写成哨兵值、真人在 `consumer_id`。
+                # 写成一个片段（而不是 `a OR (b AND c)`）：片段以 ` AND ` 连接、调用方
+                # 自行拼接，带 ` AND ` 的片段会让每一个 SQL 镜像与解析器都要重新学一遍
+                # 括号；`CASE` 版本仍是「一个片段、两个参数」。
+                fragments.append(
+                    f"(CASE WHEN {user_column}={_SQL_PARAM} THEN {claim_column} ELSE {user_column} END"
+                    f"={_SQL_PARAM})"
+                )
+                params.extend([WORK_ORDER_USER, scope.user_id])
+            else:
+                fragments.append(f"{user_column}={_SQL_PARAM}")
+                params.append(scope.user_id)
         return " AND ".join(fragments), params
 
     def _scope_blocked(self) -> bool:
@@ -292,7 +319,9 @@ class MySQLSource:
             return []
         where = "order_no=%s"
         params: list[Any] = [order_no]
-        scope_where, scope_params = self._scope_where()
+        # 订单表打开第二列认领者：``self`` 范围下「本人下的单」与「本人是工单消费者的单」
+        # 是同一件事，只认 ``user_id`` 会让后者的主人自己被判成「这个订单不属于当前账号」。
+        scope_where, scope_params = self._scope_where(claim_column=ORDER_CLAIM_COLUMN)
         if scope_where:
             where += f" AND {scope_where}"
             params.extend(scope_params)
@@ -645,7 +674,10 @@ class MySQLSource:
     def get_fee_template_record(self, order_no: str, tenant_id: str | None = None) -> dict[str, Any] | None:
         if self._scope_blocked():
             return None
-        scope_where, scope_params = self._scope_where()
+        # 模板表自己没有认领者列：这里的谓词是拿去查 ``ch_order_info`` 的存在性，
+        # 因此必须与 ``get_orders`` 用同一个开关，否则「订单查得到、模板查不到」，
+        # 而计费快照正是诊断要用的一半证据。
+        scope_where, scope_params = self._scope_where(claim_column=ORDER_CLAIM_COLUMN)
         sql = (
             f"SELECT order_no, tenant_id, fee_template, occupy_fee_template, period_fee_detail "
             f"FROM `{self.database}`.`ch_fee_template_record` WHERE order_no=%s "
