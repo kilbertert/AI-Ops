@@ -469,7 +469,7 @@ def account_email_for(company_user_id: str) -> str:
 
 **修法**：邮箱里带环境标识 —— `f"{environment}-{safe}@{DOMAIN}"`。
 
-**已实施**（#864，ADR-0060）。`AIOPS_LOGIN_PROXY_ENVIRONMENT` **必填、无默认值**：
+**已实施**（#864，ADR-0061）。`AIOPS_LOGIN_PROXY_ENVIRONMENT` **必填、无默认值**：
 漏配时代理**拒绝启动**——给默认值会让漏配静默退化回"只按 id"，而启动/登录/审计全都正常。
 
 **已有映射怎么迁**（这是原设计写错、实施时改掉的一处）：

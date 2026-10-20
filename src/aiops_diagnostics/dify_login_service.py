@@ -277,7 +277,7 @@ class MappingStore:
         历史编辑与发布记录的归属一毫不受影响。
 
         Dify 侧那个账号的邮箱仍旧是旧的（无前缀）—— 这**不会**造成撞号：新派生出的
-        邮箱一律带环境前缀，永远不可能等于无前缀的旧值。详见 ADR-0060。
+        邮箱一律带环境前缀，永远不可能等于无前缀的旧值。详见 ADR-0061。
         """
         with self._lock, self._connect() as connection:
             connection.execute(
@@ -385,7 +385,7 @@ class LoginService:
             # 的历史编辑与发布记录一毫不受影响。旧邮箱在 Dify 里保持原样，但它已不再
             # 被任何派生值命中（新派生一律带环境前缀），因此不会与新账号撞号。
             #
-            # 详见 ADR-0060 §「已有映射怎么迁」。
+            # 详见 ADR-0061 §「已有映射怎么迁」。
             self.store.retag_email(identity.user_id, email)
             self.store.record_audit(
                 company_user_id=identity.user_id,

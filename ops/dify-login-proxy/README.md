@@ -31,7 +31,7 @@
 `location = /signin` 必须挂在**被两个入口共用**的那一层（10008），否则明文入口
 `http://36.156.159.175:10008/signin` 会绕过它。见 `dify-console-10008.conf` 的注释与 ADR-0028。
 
-## 环境标识是必填的（#864 / ADR-0060）
+## 环境标识是必填的（#864 / ADR-0061）
 
 `AIOPS_LOGIN_PROXY_ENVIRONMENT` 参与 Dify 账号邮箱的派生：
 
