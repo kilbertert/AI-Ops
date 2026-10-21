@@ -250,6 +250,75 @@ Codex turn … failed: 403 Forbidden [sk-x4CF…] 预扣费额度失败，
 PUT 更新后的状态，避免夹具保留旧 instruction 却仍被当成成功。全量初跑 3215 passed / 9 skipped / 1 failed：唯一失败为并行部署前进后，dry-run
 拒绝旧基线。同步主线后复跑该检查，最终结果见本 PR。
 
+## 2026-10-21 · 两个入口 app 迁进 41 租户 workspace：发布与试运行全部恢复
+
+**范围**：#912（管家端 operator）、#916（客服端 consumer）。上一节记录的 502 从这里收口。
+
+### 一、症状与共同根因
+
+41 上点「发布」与控制台「试运行」都 502。共同根因是 #884/#885 之后两条路都按
+`(租户, 环境)` 解析 workspace（ADR-0059），而 41 的租户 workspace
+`c3f871e1-…`（`aiops-41-1942105476598861824`）里**一个 app 都没有** —— 两个 app
+都在**平台 workspace** `2db44904-…`（`AI-Ops Admin's Workspace`）里。
+所以不是凭据问题，也不是 app 不存在：**app 存在，但在另一个工作区**。
+
+### 二、迁了什么（逐个对象）
+
+租户 workspace `c3f871e1-…` 里依次重建：
+
+| 对象 | 平台 workspace（旧） | 租户 workspace（新） |
+|---|---|---|
+| `aiops` 工具提供方 | `86392bb8-…` | `35cc12c9-…` |
+| 模型提供方凭据 | deepseek / openai 各一行 | 逐列原样复制 |
+| operator app | `e35f8fda-…` | `137cc417-…` |
+| 客服 external knowledge API | `d63dd586-…` | `af41a28b-…` |
+| 客服 dataset（`kb-canary-2`） | `a7a8aad3-…` | `ebd103c0-…` |
+| 客服 app | `8e36f0a6-…` | `88fc20bd-…` |
+
+旧对象**全部保留不删**，作为回滚点。
+
+三处不能照抄、必须重建的地方：
+
+1. **模型凭据**：`provider_credentials.encrypted_config` 在**这一版 Dify 里存的是插件
+   格式的明文 JSON**，不是 `encrypt_token` 的密文（`decrypt_token` 会抛
+   `Incorrect padding`）。复制因此是逐列原样搬。
+2. **工具提供方的 UUID**：DSL 的工具条目只带 `provider_id`，导入后仍指向源 workspace 的
+   UUID；`partition_aiops_tools` 用目标 workspace 现查的 UUID 去比，匹配不上就整份拒绝。
+   operator 副本的 7 个条目改指 `35cc12c9-…`，回读 `provider_ids=['35cc12c9-…']`。
+   客服 app **没有**自定义工具条目，这一步不适用。
+3. **外接 API 的密钥**：`_decrypt_api_key` 按 `tenant_id` 派生密钥，**密文不能跨 workspace
+   搬**（搬过去只会得到 "cannot decrypt stored api_key for tenant"）。用源 tenant 解密 →
+   目标 tenant 重新加密，再走 `POST /datasets/external-knowledge-api` 让 Dify 自己存。
+
+### 三、判据（不是"看起来对了"）
+
+- **正文逐字节**：operator `pre_prompt` md5 `9966453b2e72dc497785f80b0cbdbadf`，
+  客服 759 字 md5 `e52d5de005bfd7e5ad5402b0921b0ec1`，与原件相同。
+- **工具链真打通**：新 workspace 里 `tool-provider/api/test/pre` 返回网关那张固定说明
+  （文档解析 → 凭据存储 → 前缀组装 → 出站 → 网关鉴权，7/7）。
+- **知识库真能检索**：新 dataset 的 `external-hit-testing` 200 且 records 非空。
+- **41 实测**：
+  - operator：`POST /v1/dify/publish` → `200 unchanged v14`；`POST /v1/dify/trial` → `202`，
+    作业 `tr_5f82447444794dbbbee201e7a78fd0a4` 落 **`completed`**（不是欠费时的 `failed`）。
+  - consumer：`publish` → `200 synced v16`（v16 快照的 `prompt` 哈希与 v14/v15 相同，
+    内容零变化），`trial` → `202`，作业 `tr_275afbcd548c47c09c78c302df85ceaf` 落
+    **`completed`**，journal 一行：
+    `dify-trial: order=2112375326328061953 status=diagnosed evidence=5 blocked=0 duration_ms=185343`。
+- **收敛只动该动的那行**：`reconcile --dry-run` 显示 consumer（或 operator）那一行
+  `registered`，其余 agent 与另一入口全部 `unchanged`。出现别的 drift 说明清单转写有误。
+
+### 四、据实（边界）
+
+- **试运行必须带 `X-AIOps-Initiator-Type`**。不带它时 `TrialInitiator.from_headers` 得到
+  `user_type=""`，`is_tenant_level_account("")` 为假 ⇒ 走运营商「店铺 → 站点」解析 ⇒
+  空站点集合 ⇒ **`404 ORDER_NOT_FOUND`**，而不是 403 或 500。它的形状与"订单不存在"
+  完全一样，只有加上 `Type: 1`（顶层账号看整个租户）才 202。桥那条路会带，手工复验容易漏。
+  （`Type: -1` 是平台哨兵，`from_headers` 判成"没有可用身份"，回落调试租户 —— 状态上
+  能跑通，但那是 ADR-0028 §3 的调试行为，不是平台跨租户。）
+- **41 的网关只监听 `172.18.0.1:8788`**，`127.0.0.1:8788` 连不上（curl 报 `000`）。
+- **未做**：旧 workspace 里的 5 个对象没有删除，也未改 Dify 上的 app 名字/描述；
+  多租户的 env/config 侧（`deploy/m2-live-03/images.lock.json` 等）不在本轮范围内。
+
 ## 2026-10-21 · 平台租户落到自己的平台 workspace（#882）
 
 **范围**：`dify_workspaces.py`（`PLATFORM_TENANT_ID`）、`dify_login_service.py`（平台分支）。
