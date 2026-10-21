@@ -164,7 +164,10 @@ services:
       disable: ${COMPOSE_WORKER_HEALTHCHECK_DISABLED:-true}
 
   web:
-    image: ${DIFY_REGISTRY:-docker.1panel.live}/langgenius/dify-web:1.17.1
+    # 默认仍是上游镜像；打过补丁的镜像由 DIFY_WEB_IMAGE 覆盖（见
+    # web-patches/build-web-image.sh）。做成显式变量而不是直接换 image：
+    # 没构建过补丁镜像的部署必须能原样跑起来，否则升级时 compose 会先坏掉。
+    image: ${DIFY_WEB_IMAGE:-${DIFY_REGISTRY:-docker.1panel.live}/langgenius/dify-web:1.17.1}
     restart: always
     env_file:
       - ./.env
