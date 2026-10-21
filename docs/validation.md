@@ -1,3 +1,64 @@
+## 2026-10-21 · M3 真实登录身份：**未验收**，支线按构造身份收口
+
+**结论先行**：M3 的正向验收以**构造身份**（ADR-0058）为准。真实登录身份这一条
+**没有验收，也不会用构造身份的成功去替代它**。下面记录为什么放弃，以及公司侧可复用的三条事实。
+
+### 一、三条登录入口各自的状态（41 实测，2026-10-21 下午）
+
+| 入口 | 结果 | 说明 |
+|---|---|---|
+| `code=8888` 万能码 + `/mallapi/userinfo/phone/login` | **500 `SQL错误！`** | 见下面第二条：依赖云端已有会话 |
+| 口令 `/mallapi/userinfo/login`（`phone`+`password`） | `60002 session不能为空` | **产品侧已关闭口令登录**，不产出 thirdSession |
+| 真实短信验证码 | 发码 `/mallapi/phone/code` 回 `系统错误！` | 拿不到码 |
+
+对照：真实用户在**同一时段**登录正常 —— `api.mall.qushiyun.com` 当天 9 次 200
+（07:51 / 08:52 / 09:00 / 09:05 / 11:36 / 12:23 / 13:32 / 14:33 / 15:12）。
+所以后端与数据库是好的，坏的是**自动化入口**。
+
+### 二、`8888` 依赖「云端已有该用户的会话记录」
+
+`8888` 是唯一能通过验证码校验的值（`7777`/`9999`/`123456`/`000000`/不带码
+一律 `70009 验证码错误`）。过检之后：
+
+- 不带 `tenant-id` ⇒ `Column 'tenant_id' cannot be null`；
+- 带 `tenant-id` ⇒ `NullPointerException: …ThirdSession.setUserId(String) because "thirdSession" is null`。
+
+即它需要 Redis 里已存在该手机号的会话。实测 `cloud-redis` 里 8037 条会话全是
+`app:3rd_session:wx:*` 的小程序会话，**H5 的 `app:3rd_session:<userId>` 不存在**。
+往生产 Redis 里伪造一条会话就是**伪造身份凭证**，不做。
+
+### 三、`GlobalExceptionHandlerResolver` 把 4xx 放大成 500
+
+```
+java.lang.IllegalStateException: Could not resolve parameter [1] in
+public …R<String> GlobalExceptionHandlerResolver.violation(
+    HttpServletRequest, java.sql.SQLIntegrityConstraintViolationException): No suitable resolver
+```
+
+异常处理器自己的参数解析失败，于是「缺 tenant_id」这种输入问题变成 500 `SQL错误！`，
+把排查引向数据库。**这是公司侧值得修的一条**：错误处理器不应再制造新错误。
+
+### 四、本轮在业务库上做的唯一写操作（已复原）
+
+为验证口令登录，临时把测试账号 `134****1122`（id `1955624354196754434`）的 bcrypt
+口令换成已知值；确认**口令登录不产出会话**后立即用备份还原，读回哈希与备份逐字相同
+（sha256 `c5e09e93404fd0be…`）。未伪造会话、未插订单、未改订单归属。
+本轮另有一次误读：`192.168.1.44` 曾被当成"外部后端"，实际是 **41 本机内网 IP**。
+
+### 五、构造身份验收的实际范围（可以作为什么、不能作为什么）
+
+已用构造身份跑通：`succeeded` + `exec_config_state=matched` + 快照存在 +
+两轮真实模型调用。这证明 **Gateway → 平台 → 节点 → CPMS → 模型** 整条链路正确。
+
+**不证明**：真实 thirdSession 解析 → consumer/self → 订单授权 → 同一条链路。
+真实登录身份仍标记为**未验收**；App/BFF 页面接线、生产 M3 启用同样未验收。
+
+### 六、恢复条件（供后续接续）
+
+任一条件成立即可重开这条支线：测试账号存在有效的 H5 会话记录、
+`8888` 旁路恢复、或拿到一次真实短信验证码。届时按
+[手册](agents/m3-user-entry-acceptance.md) 第 4 节跑一次即可。
+
 ## 2026-10-21 · M3 正常登录入口：准备完成，正向待本人订单
 
 **范围**：PR #907，`test/m3-user-entry-acceptance`，基线 `a1b0403`；接手中断的用户入口任务。
