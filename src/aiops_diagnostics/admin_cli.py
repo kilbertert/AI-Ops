@@ -642,6 +642,174 @@ def _deployment_environment_or_exit() -> str:
     return environment
 
 
+def _onboarding_settings_or_exit(ctx: typer.Context, *, needs_embedding: bool) -> GatewayServerSettings:
+    """Read the settings onboarding needs, or exit naming what is missing (#924).
+
+    Same shape as ``ensure-workspace``'s guards: a missing knob is a **usage**
+    error (exit 2), not a failed onboarding — the caller can fix it and rerun
+    without any state having changed.
+    """
+    settings = GatewayServerSettings.from_env()
+    config_file = ctx.obj.get("config_file") if ctx.obj else None
+    if config_file is not None:
+        from aiops_diagnostics.gateway_config import _private_config_values
+
+        values = _private_config_values(Path(config_file).expanduser().resolve())
+        for name, attribute in _SETTING_FOR.items():
+            if not getattr(settings, attribute, ""):
+                setattr(settings, attribute, values.get(name) or "")
+
+    required = ["AIOPS_GATEWAY_ENVIRONMENT", "AIOPS_GATEWAY_RAGFLOW_CREDENTIAL_KEY"]
+    if needs_embedding:
+        required += ["AIOPS_GATEWAY_RAGFLOW_EMBEDDING_BASE_URL", "AIOPS_GATEWAY_RAGFLOW_EMBEDDING_API_KEY"]
+    missing = [name for name in required if not getattr(settings, _SETTING_FOR[name], "")]
+    if missing:
+        typer.secho(
+            "缺少 " + " / ".join(missing) + "：开户要有部署身份、凭据加密密钥与可校验的 embedding 端点",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    return settings
+
+
+@admin_app.command("onboard-tenant")
+def onboard_tenant_command(
+    ctx: typer.Context,
+    tenant: Annotated[str, typer.Option("--tenant", help="公司租户 id（sys_organ.id）")],
+    db: Annotated[
+        Path | None,
+        typer.Option("--db", help="gateway 数据库文件（缺省会回退 XDG 默认并新建空库）"),
+    ] = None,
+    skip_workspace: Annotated[
+        bool,
+        typer.Option("--skip-workspace", help="只建 RAGFlow 那一半（workspace 已由 ensure-workspace 建好）"),
+    ] = False,
+) -> None:
+    """把一个租户的 **1:1:1 三个对象**建齐（#924 / PRD #923）。
+
+    workspace → RAGFlow 租户 → 模型实例，任一步失败整条非零退出并指出是哪一步。幂等：
+    已校验过的租户一条写都不发；**半成品会被补齐**（有行但没校验过 = 上次模型校验失败）。
+
+    它**不建**任何知识库、不改任何智能体、不动 Dify 的 app。
+    """
+    from aiops_diagnostics.dify_ensure_workspace import (
+        PLATFORM_OWNER_EMAIL,
+        EnsureError,
+    )
+    from aiops_diagnostics.dify_ensure_workspace import (
+        ensure_workspace as _ensure_workspace,
+    )
+    from aiops_diagnostics.dify_inner_api import DifyInnerApi, InnerApiSettings
+    from aiops_diagnostics.dify_workspaces import DifyWorkspaces
+    from aiops_diagnostics.gateway_store import GatewayStore
+    from aiops_diagnostics.kb_onboarding import KbAdminClient, OnboardError, onboard_tenant
+
+    settings = _onboarding_settings_or_exit(ctx, needs_embedding=True)
+    database = db or settings.database_file
+    if db is None and not os.environ.get("AIOPS_GATEWAY_DATABASE_FILE"):
+        typer.secho(
+            "缺少 --db：缺省会静默回退 XDG 默认并新建空库。请显式给出 --db <gateway.db>，"
+            "或 export AIOPS_GATEWAY_DATABASE_FILE=<gateway.db>。",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    if not settings.kb_service_base_url:
+        typer.secho(
+            "缺少 AIOPS_GATEWAY_KB_SERVICE_BASE_URL：开户要打 kb-service 的 /kb/tenants",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
+    workspace_step = None
+    if not skip_workspace:
+        inner = DifyInnerApi(
+            InnerApiSettings(
+                base_url=settings.dify_inner_api_base_url,
+                api_key=settings.dify_inner_api_key,
+            )
+        )
+        if not inner.settings.configured:
+            typer.secho(
+                "缺少 AIOPS_GATEWAY_DIFY_INNER_API_BASE_URL / _KEY："
+                "建 workspace 的唯一入口是 inner_api（或用 --skip-workspace 只建 RAGFlow 那一半）",
+                fg=typer.colors.RED,
+                err=True,
+            )
+            raise typer.Exit(code=2)
+        workspaces = DifyWorkspaces(database)
+
+        def workspace_step() -> object:
+            return _ensure_workspace(
+                tenant_id=tenant,
+                environment=settings.environment,
+                workspaces=workspaces,
+                inner=inner,
+                console_base_url=settings.dify_console_base_url,
+                console_api_key=settings.dify_console_api_key,
+                log=lambda line: typer.secho(line, err=True),
+            )
+
+    try:
+        outcome = onboard_tenant(
+            tenant_id=tenant,
+            environment=settings.environment,
+            store=GatewayStore(database),
+            kb=KbAdminClient(settings.kb_service_base_url),
+            credential_key=settings.ragflow_credential_key,
+            embedding_base_url=settings.ragflow_embedding_base_url,
+            embedding_api_key=settings.ragflow_embedding_api_key,
+            embedding_model=settings.ragflow_embedding_model,
+            tenant_domain=settings.ragflow_tenant_domain,
+            ensure_workspace=workspace_step,
+            log=lambda line: typer.secho(line, err=True),
+        )
+    except (OnboardError, EnsureError) as exc:
+        payload = {"error": exc.code, "message": exc.message}
+        if isinstance(exc, OnboardError):
+            payload["step"] = exc.step
+        typer.secho(json.dumps(payload, ensure_ascii=False), err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps(outcome.as_dict(), ensure_ascii=False))
+    typer.secho(f"platform owner: {PLATFORM_OWNER_EMAIL}", err=True)
+
+
+@admin_app.command("rotate-ragflow-credential")
+def rotate_ragflow_credential_command(
+    ctx: typer.Context,
+    tenant: Annotated[str, typer.Option("--tenant", help="公司租户 id（sys_organ.id）")],
+    db: Annotated[Path | None, typer.Option("--db", help="gateway 数据库文件")] = None,
+) -> None:
+    """换掉一个租户的 RAGFlow 密码（#924）。旧密码立即失效。
+
+    独立命令而不是开户的一个开关：开户必须保持"再跑一次什么都不变"，轮换不能是它的副作用。
+    """
+    from aiops_diagnostics.dify_inner_api import InnerApiError  # noqa: F401 - 保持帮助一致的导入形状
+    from aiops_diagnostics.gateway_store import GatewayStore
+    from aiops_diagnostics.kb_onboarding import KbAdminClient, OnboardError, rotate_credential
+
+    settings = _onboarding_settings_or_exit(ctx, needs_embedding=False)
+    database = db or settings.database_file
+    try:
+        result = rotate_credential(
+            tenant_id=tenant,
+            environment=settings.environment,
+            store=GatewayStore(database),
+            kb=KbAdminClient(settings.kb_service_base_url),
+            credential_key=settings.ragflow_credential_key,
+            log=lambda line: typer.secho(line, err=True),
+        )
+    except OnboardError as exc:
+        typer.secho(
+            json.dumps({"error": exc.code, "message": exc.message, "step": exc.step}, ensure_ascii=False),
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps(result, ensure_ascii=False))
+
+
 @admin_app.command("ensure-workspace")
 def ensure_workspace_command(
     ctx: typer.Context,
@@ -748,4 +916,7 @@ _SETTING_FOR = {
     "AIOPS_GATEWAY_DIFY_INNER_API_KEY": "dify_inner_api_key",
     "AIOPS_GATEWAY_DIFY_CONSOLE_BASE_URL": "dify_console_base_url",
     "AIOPS_GATEWAY_DIFY_CONSOLE_API_KEY": "dify_console_api_key",
+    "AIOPS_GATEWAY_RAGFLOW_CREDENTIAL_KEY": "ragflow_credential_key",
+    "AIOPS_GATEWAY_RAGFLOW_EMBEDDING_BASE_URL": "ragflow_embedding_base_url",
+    "AIOPS_GATEWAY_RAGFLOW_EMBEDDING_API_KEY": "ragflow_embedding_api_key",
 }
