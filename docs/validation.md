@@ -150,6 +150,43 @@ Codex turn … failed: 403 Forbidden [sk-x4CF…] 预扣费额度失败，
 PUT 更新后的状态，避免夹具保留旧 instruction 却仍被当成成功。全量初跑 3215 passed / 9 skipped / 1 failed：唯一失败为并行部署前进后，dry-run
 拒绝旧基线。同步主线后复跑该检查，最终结果见本 PR。
 
+## 2026-10-21 · 发布钉住发起人所在的 workspace（#884）
+
+**范围**：`dify_console_publish.py`（桥的两步判定 + 内部令牌键）、
+`gateway_api.py`（`_publish_bound_app` 按 `binding.tenant_id` 解析）。
+
+### 一、判据
+
+`tests/test_dify_console_publish.py`（桥侧，3 例）：
+
+| 用例 | 钉住的规则 |
+|---|---|
+| 按发起人解析 | 桥问的是 `/v1/dify/workspace?tenant_id=<发起人的租户>`，且钉住值来自它，**不来自常量**（用例故意给一个不同的常量） |
+| 解析失败拒绝 | 拒绝且**没打网关的发布端点** —— 那一步是把正文发出去的地方 |
+| 迁移期 | 没配内部令牌 ⇒ 仍按 `workspace_id` 常量判，且一次都不问 `/v1/dify/workspace` |
+
+`tests/test_dify_publish_api.py`（网关侧，3 例）：
+
+| 用例 | 钉住的规则 |
+|---|---|
+| 按绑定租户导出 | 导出 DSL 用的 `workspace_id` 是**绑定的那个租户**的（`ws-tenant-884`），不是常量 `ws-CONSTANT` |
+| 未开户拒绝 | 404 `DIFY_WORKSPACE_UNRESOLVED`，不回落常量 |
+| `creating` | 409、`retryable=true`，且**被拒的尝试进审计账本**（`reason_code` 可查） |
+
+**突变复验**（三处，均复跑确认变红）：
+1. 桥不看内部令牌（`if False`）⇒ 前两条桥用例红；
+2. 桥在解析失败时不拒绝 ⇒ 拒绝用例红（仍然打了发布端点）；
+3. 网关改用常量导出 ⇒ 按绑定租户导出那条红；
+4. 网关解析失败时回落常量 ⇒ 未开户与 `creating` 两条红。
+
+### 二、**没有**做到的（据实）
+
+- **没有真机验收**：41 的 `dify_workspaces` 仍为空，"两个租户各自发布只影响自己的工作区"
+  要等第一行映射 + 一次真实发布。
+- **`AIOPS_CONSOLE_BRIDGE_WORKSPACE_ID` 仍必填**（迁移期行为），把内部令牌配全之后
+  才能降级为可选 —— 那是一次独立清理。
+- **试运行那条路仍是固定草稿来源**（#885）。
+
 ## 2026-10-21 · 登录代理按租户开户（#883）
 
 **范围**：`dify_workspace_directory.py`（新）、`dify_login_service.py`（解析 + join +
