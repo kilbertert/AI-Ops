@@ -79,6 +79,27 @@ SSHPASS='<现场从受控来源取得>' sshpass -e ssh -o StrictHostKeyChecking=
 
 两文件均为 `0600 aiops41`；改后保持属主与权限。
 
+### 1.4.1 部署身份：`AIOPS_GATEWAY_ENVIRONMENT`（#879 起必填）
+
+网关**起监听前**读它，漏配或写成 `prod.41` 这类非规范形式时进程**直接退出**（`code 2`，
+`AIOPS_GATEWAY_ENVIRONMENT is required`）。规范形式：小写字母/数字/`-`/`_`，以字母或数字
+开头结尾，≤32；判据与登录代理的 `AIOPS_LOGIN_PROXY_ENVIRONMENT` **是同一份实现**。
+
+```bash
+# 放 gateway.env（进程环境），不是 production.env
+ssh aiops-41 'sudo sh -c "echo AIOPS_GATEWAY_ENVIRONMENT=41 >> /etc/aiops-41/gateway.env"'
+ssh aiops-41 'sudo systemctl restart aiops-gateway-41 && sleep 5 && systemctl is-active aiops-gateway-41'
+# 核对真的进了进程（只看文件不够，见本节开头的教训）
+ssh aiops-41 'tr "\0" "\n" < /proc/$(systemctl show -p MainPID --value aiops-gateway-41)/environ | grep ^AIOPS_GATEWAY_ENVIRONMENT='
+```
+
+36 上的生产网关用同一个变量名，文件是 `/home/aiops/gateway.env`（`EnvironmentFile`），
+服务单元 `aiops-gateway.service`。这台机器的值同样是 `41`（它与 41 是**同一个客户环境**
+的两半：网关在 36、UPMS 与业务库在 41）。
+
+**两个值必须与登录代理的 `AIOPS_LOGIN_PROXY_ENVIRONMENT` 相同**，否则同一台机器上两个
+组件对"我在哪个环境"给出不同答案，而 `dify_workspaces` 恰好按这个值分区。
+
 ## 1.5 判别 `AIOPS_UPMS_BASE_URL` 指向的是哪个服务（只读，2026-09-28 新增）
 
 **用途**：管家端授权链（`/user/inside/*`、`/shopuser/getShops`）依赖该地址指向

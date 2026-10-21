@@ -6,6 +6,13 @@
 >
 > **最后核验**：2026-10-21（Asia/Shanghai，仅 M3 交付收尾；其他条目以各自核验日期为准）。
 >
+> **2026-10-21 · 多租户 workspace 的第一块接线落地（#879，分支 `feat/dify-workspace-identity`，待合并）**：
+> 网关新增部署身份 `AIOPS_GATEWAY_ENVIRONMENT`（**必填、无默认值**，判据与登录代理共用一份）、
+> `dify_workspaces` 表与只查不建的 `resolve`（四个可区分的失败码），以及内部令牌保护的
+> `GET /v1/dify/workspace`。**部署前置已先落好**：41 的 `gateway.env` 与 36 的
+> `/home/aiops/gateway.env` 都已写入 `AIOPS_GATEWAY_ENVIRONMENT=41`（旧代码忽略它，先加零风险）。
+> 合并后 CD 自动部署，需复核这一行真的进了进程。尚无真实租户的 workspace 行（#880 才建）。
+>
 > **2026-10-20 · Dify 登录代理的账号邮箱带上环境前缀，36 已上线（#864 / PR #869 `39453b46`）**：
 > 账号邮箱从 `{公司用户id}@…` 改为 `{environment}-{公司用户id}@…`，挡住"两套 UPMS 的
 > `sys_user.id` 撞号 ⇒ 两个不同的人共用一个 Dify 账号"（那是越权，不是登录失败）。

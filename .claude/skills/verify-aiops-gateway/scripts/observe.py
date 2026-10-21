@@ -80,6 +80,11 @@ def main() -> int:
         "AIOPS_HOME": str(root),
         "AIOPS_CONFIG_HOME": str(root / "config"),
         "AIOPS_DATA_HOME": str(root / "data"),
+        # The deployment identity (#879). `serve` refuses to start without one, by
+        # design — a gateway that does not know which environment it is cannot answer
+        # "which workspace does this tenant use". A verification root IS its own
+        # deployment, so it gets its own identity; it is never the production value.
+        "AIOPS_GATEWAY_ENVIRONMENT": "verify",
         "PYTHONPATH": f"{repo / 'src'}{os.pathsep}{os.environ.get('PYTHONPATH', '')}".rstrip(os.pathsep),
     }
     base = f"http://127.0.0.1:{args.port}"

@@ -37,6 +37,7 @@ from typing import Any
 import uvicorn
 
 from aiops_diagnostics.caller_auth import CallerAuthError
+from aiops_diagnostics.deployment_environment import require_deployment_identity
 from aiops_diagnostics.gateway_api import create_gateway_app
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_store import GatewayStore
@@ -93,6 +94,12 @@ def main() -> int:
         return 2
 
     settings = GatewayServerSettings.from_env()
+    # 部署身份必填（#879）：本启动器同样绕过 `gateway_server serve`。判据只有一处实现。
+    try:
+        require_deployment_identity(settings.environment)
+    except ValueError as exc:
+        print(json.dumps({"refused": str(exc)}), file=sys.stderr, flush=True)
+        return 2
     store = GatewayStore(settings.database_file)
     # **不传 order_authorizer**：工厂会用真实的 `ScopedOrderAuthorizer`（读业务库）。
     # 这条是本节与 `gateway_launcher.py` 的关键区别，改动它会悄悄退化成合成验收。

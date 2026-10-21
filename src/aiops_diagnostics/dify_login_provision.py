@@ -17,7 +17,6 @@
 from __future__ import annotations
 
 import logging
-import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -28,6 +27,7 @@ from aiops_diagnostics.bounded_http import (
     json_body,
     request_json,
 )
+from aiops_diagnostics.deployment_environment import canonical_environment
 from aiops_diagnostics.dify_login_proxy import (
     _MAX_NAME_CHARS,
     ACCOUNT_EMAIL_DOMAIN,
@@ -71,7 +71,10 @@ class DifyConsoleSettings:
         # 那样 `prod.41` 能让代理正常启动，然后在**每一个已授权用户**登录时抛
         # DifyProvisionError —— 表现成"登录服务坏了"，而不是"配置写错了"。
         # 一个配置错误必须在启动时报，不能在请求路径上报。
-        _canonical_environment(self.environment)
+        try:
+            canonical_environment(self.environment)
+        except ValueError as exc:
+            raise DifyProvisionError("ENVIRONMENT_INVALID", str(exc)) from exc
 
 
 def account_email_for(company_user_id: str, *, environment: str) -> str:
@@ -105,24 +108,15 @@ def account_email_for(company_user_id: str, *, environment: str) -> str:
     所以环境走**白名单校验**而不是归一化：必须已经是规范形式（小写字母/数字/``-``/``_``，
     以字母或数字开头结尾）。不合规就**报错**，让部署者改配置，而不是替他猜。
     """
-    prefix = _canonical_environment(environment)
+    try:
+        prefix = canonical_environment(environment)
+    except ValueError as exc:
+        # 判据本身只有一处（`deployment_environment`）：这里只把它换成代理自己的错误类型。
+        # 写第二份"非空"检查会让两处漂开 —— 一处拒绝的值另一处照收，而两个组件对
+        # "我在哪个环境"的答案必须逐字相同（ADR-0059）。
+        raise DifyProvisionError("ENVIRONMENT_INVALID", str(exc)) from exc
     safe = _safe_fragment(company_user_id, "COMPANY_USER_ID_INVALID", "公司用户 id 不含可用字符")
     return f"{prefix}-{safe}@{ACCOUNT_EMAIL_DOMAIN}"
-
-
-#: 环境标识的规范形式。**归一化不在选项里** —— 见 `account_email_for` 的 docstring。
-_ENVIRONMENT_RE = re.compile(r"^[a-z0-9](?:[a-z0-9_-]{0,30}[a-z0-9])?$")
-
-
-def _canonical_environment(value: str) -> str:
-    """环境标识必须**已经是**规范形式；不做任何字符替换。"""
-    normalized = (value or "").strip()
-    if not _ENVIRONMENT_RE.match(normalized):
-        raise DifyProvisionError(
-            "ENVIRONMENT_INVALID",
-            "环境标识必须是规范形式（小写字母/数字/`-`/`_`，以字母或数字开头结尾，≤32）",
-        )
-    return normalized
 
 
 def _safe_text(value: str) -> str:

@@ -97,6 +97,7 @@ from aiops_diagnostics.dify_knowledge_api import (
 )
 from aiops_diagnostics.dify_tools_catalog import AI_OPS_TOOL_NAMES, CATALOG_NOTE
 from aiops_diagnostics.dify_trial import TrialDraft, TrialInitiator, TrialRefused
+from aiops_diagnostics.dify_workspaces import DifyWorkspaceError, DifyWorkspaces
 from aiops_diagnostics.faq import (
     FAQ_NOT_FOUND,
     PLATFORM_AMBIGUOUS,
@@ -128,6 +129,7 @@ from aiops_diagnostics.gateway_store import (
     GatewayStore,
     RunNotFoundError,
 )
+from aiops_diagnostics.http_auth import INTERNAL_TOKEN_HEADER, TIMESTAMP_HEADER, validate_internal_token
 from aiops_diagnostics.i18n import (
     DEFAULT_LANGUAGE,
     QA_FALLBACK_MESSAGES,
@@ -593,6 +595,11 @@ class GatewayAPI:
         # M2-CLOSE-01：节点委派的请求级授权记录。同样是共用数据库文件的独立表，
         # 惰性构造，既有嵌入方不需要新增参数。
         self.agent_run_store = AgentRunStore(store.path)
+        # `dify_workspaces`（#879 / ADR-0059）：一个租户在一个环境里的 workspace。同一个
+        # 库文件、自己的表，惰性构造 —— 既有嵌入方不需要新增参数。放在这里而不是
+        # ``GatewayRuntime``，因为写它的（开户，下一张票）与读它的（发布桥、试运行、
+        # 运维 CLI）都以网关的库为唯一真值，而 ``GatewayRuntime`` 在测试里常是替身。
+        self.dify_workspaces = DifyWorkspaces(store.path)
 
 
 class StandardAPIError(RuntimeError):
@@ -1554,6 +1561,72 @@ def create_gateway_app(
         if tool not in AI_OPS_TOOL_NAMES:
             raise StandardAPIError(status.HTTP_404_NOT_FOUND, "DIFY_TOOL_UNKNOWN", "tool not found")
         return {"tool": tool, "note": CATALOG_NOTE}
+
+    def dify_workspace_credential(
+        token: Annotated[str | None, Header(alias=INTERNAL_TOKEN_HEADER)] = None,
+        timestamp: Annotated[str | None, Header(alias=TIMESTAMP_HEADER)] = None,
+    ) -> None:
+        """`GET /v1/dify/workspace` 的门：网关自己的**内部令牌**（#879）。
+
+        为什么不是第七把 Dify 钥匙：这条端点的调用方是**我们自己的另外两个进程**
+        （登录代理、发布桥），不是 Dify。Dify 侧的钥匙都是"泄露了也要拿不到东西"的
+        设计，而那几把照这里的语义就不成立了 —— 这里回的是**某一个租户**的
+        workspace id。所以用进程间凭据（HMAC + 时间窗，与平台 ``InternalTokenManager``
+        同一消息格式），且它不进任何面向 Dify 的配置。
+
+        未配置密钥 ⇒ 整条路由 404（与其余 Dify 路由同一条「未配置即不启用」）。
+        """
+        configured = context.settings.internal_token_secret
+        if not configured or not context.settings.environment:
+            raise StandardAPIError(
+                status.HTTP_404_NOT_FOUND, "DIFY_WORKSPACE_API_UNAVAILABLE", "route not found"
+            )
+        if not validate_internal_token(
+            token,
+            timestamp,
+            configured,
+            expire_seconds=context.settings.internal_token_expire_seconds,
+        ):
+            raise StandardAPIError(
+                status.HTTP_401_UNAUTHORIZED, "INTERNAL_TOKEN_REQUIRED", "internal token required"
+            )
+
+    @app.get("/v1/dify/workspace")
+    def dify_workspace(
+        request: Request,
+        tenant_id: str,
+        _: None = Depends(dify_workspace_credential),  # noqa: B008
+    ) -> dict[str, Any]:
+        """``(租户, 本机部署身份)`` → 那个 workspace 的 id（#879 / ADR-0059 §5）。
+
+        三件事在这条端点上各自是一次安全决定：
+
+        * **环境来自部署身份，永不来自请求。** 请求里带了 ``environment`` 就是 400，
+          且**不**回退到部署身份 —— 允许跨环境查同一个 ``tenant_id`` 才是真的越权路径，
+          而"带了但被忽略"会让调用方以为自己拿到了另一个环境的答案。
+        * **只查不建。** 缺行是 404 ``DIFY_WORKSPACE_UNRESOLVED``，不是顺手建一个：
+          建只属于开户那一步（#880）。
+        * **输出只有一个 UUID。** 拿到它还得有 ``ADMIN_API_KEY`` 才能做事，而
+          ``ADMIN_API_KEY`` 只在网关与代理手里（Dify 侧的隔离由 workspace 自己保证）。
+
+        失败是**可区分的码**而不是空串：``CREATING`` 可重试、``FAILED`` 要重建、
+        ``UNKNOWN`` 先对账。状态映射只有一份（在 ``DifyWorkspaceError.http_status``）。
+        """
+        if "environment" in request.query_params:
+            raise StandardAPIError(
+                status.HTTP_400_BAD_REQUEST,
+                "DIFY_WORKSPACE_ENVIRONMENT_NOT_ACCEPTED",
+                "environment comes from this deployment's identity, not from the request",
+            )
+        try:
+            workspace_id = context.dify_workspaces.resolve(tenant_id, context.settings.environment)
+        except DifyWorkspaceError as exc:
+            raise StandardAPIError(exc.http_status, exc.code, exc.message, retryable=exc.retryable) from exc
+        except ValueError as exc:
+            raise StandardAPIError(
+                status.HTTP_400_BAD_REQUEST, "DIFY_WORKSPACE_TENANT_INVALID", str(exc)
+            ) from exc
+        return {"workspace_id": workspace_id, "environment": context.settings.environment}
 
     def dify_trial_credential(
         authorization: Annotated[str | None, Header()] = None,
