@@ -1,3 +1,81 @@
+## 2026-10-21 · 工单订单归属修复已上 41，并做了线上验收
+
+**范围**：`f1c8a454`（#891）随 CD 部署到 41。**只读验收 + 一条真实诊断作业
+（该作业因供应商欠费 failed，见下）。** 本记录不含会话明文或凭据。
+
+### 一、部署是怎么发生的、部署了什么
+
+没有手工执行 `deploy-41.sh`：`cd.yml` 在 `main` 上按 `src/**` 触发，本次合并命中，
+CD run `39518059374` 成功。核对的是**制品**而不是"我部署过"这句话：
+
+```
+git show f1c8a454:src/aiops_diagnostics/sources.py | sha256sum
+  → 8f1843db3e4eba6a2c640ea0fd617a300a332693574fd6cdeee2842103acef1d
+ssh aiops-41 sha256sum /opt/aiops-41/src/aiops_diagnostics/sources.py
+  → 8f1843db3e4eba6a2c640ea0fd617a300a332693574fd6cdeee2842103acef1d
+```
+
+运行中的进程启动于文件落盘之后（`ActiveEnterTimestamp 09:28:14` > 文件 mtime
+`09:27:25`），且 `f1c8a454` 是当前运行版本 `044746c` 的祖先 —— 修正在线上。
+
+### 二、验收的方法学：第一轮是**假失败**，记下来免得重蹈
+
+第一轮用 `X-Third-Session` 打公网，一律 401。当时差一点写成"入口坏了"。抓包
+（`tcpdump -i any -A -s 0 -n tcp port 8788`）看到网关收到的头里**只有
+`Authorization` 与 `X-Business-Entry`，没有会话头**：
+
+```
+GET /v1/faq/catalog HTTP/1.1
+Authorization: Bearer bd66d796…
+X-Business-Entry: consumer
+```
+
+根因是**我的测试请求写错了头名**：41 的 vhost 传的是 `$http_third_session`
+（即 `third-session`，前端一直这么发），而 `X-Third-Session` 在 nginx 那一跳就没了。
+换成 `third-session:` 后同一请求 200。**教训：入口类判断以抓包为准，不以自己写的
+curl 为准。**
+
+### 三、线上验收（公网 `https://api.mall.qushiyun.com`，`third-session` 真实会话）
+
+| 用例 | 结果 |
+|---|---|
+| 问题单 `2110180538479685633`，主人 13412341122 | **200 accessible** |
+| 同单，无关账号 15269608869 | 404 |
+| 同单，13333102001 | 404 |
+| 主人问自己的另一张单 `2110199767941656577` | 200 |
+| 主人问他人单 `2112375326328061953` | 404 |
+| 主人问不存在的 `9999999999999999999` | 404（不泄露存在性） |
+| 主人问无人认领的 `user_id='-1'` 单 `2106647836312875009` | 404 |
+
+工单订单（第二轮修的那一类，经网关直连 + 自签公司令牌，租户
+`1982782469027663872`）：
+
+| 用例 | 结果 |
+|---|---|
+| `2064315298158161921` 的 `consumer_id` | **200 accessible** |
+| `2064314862642606081` 的 `consumer_id` | **200 accessible** |
+| 同一账号问别人的工单单 `1989516888971923457` | 404 |
+
+### 四、端到端（真实作业）
+
+主人用问题单发起 `POST /v1/assistant/questions` → **202**，`dx_86c82a85ff754757bc909026eaf048d0`；
+轮询到终态 **failed**，原因是**供应商欠费**，不是归属或代码：
+
+```
+Codex turn … failed: 403 Forbidden [sk-x4CF…] 预扣费额度失败，
+用户剩余额度: ¥0.000285，需要预扣费额度: ¥0.035173
+```
+
+同一时刻的试运行作业（`tr_f9414b7c…`）也是同一句。**因此"诊断结果是否正确"本轮
+无法验收**，能验收的边界是：请求进得来、归属判得对、作业被创建并如实进入终态。
+
+### 五、边界
+
+- 本次验收不覆盖模型输出质量，也不覆盖前端选择器（那一半仍未修）。
+- 41 上 `AIOPS_GATEWAY_COMPANY_SOURCE_KEY` 与 nginx `$aiops_source_key_injected`
+  同值；nginx 的 `$aiops_srckey` map 对 `consumer` 注入空串，因此消费者路径取不到
+  来源密钥 —— 这是「公司令牌 + consumer 入口」走不通的原因，不是本票引入的。
+
 ## 2026-10-21 · 试运行结果面板：按钮把一次试用跟到终态
 
 **范围**：`ops/dify-console-bridge/dify-publish-button.js`（注入脚本）、桥的
