@@ -67,6 +67,7 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, ClassVar
 
+from aiops_diagnostics.async_job_lifecycle import DIAGNOSIS as DIAGNOSIS_PROFILE
 from aiops_diagnostics.bounded_http import (
     ErrorMapping,
     HttpFailure,
@@ -126,6 +127,18 @@ MAX_TRIAL_BODY_BYTES = 32 * 1024
 #: 试运行请求体**只允许**这几个键。``app_id`` 由 Referer 决定，不从 body 读。
 _TRIAL_PAYLOAD_KEYS = frozenset({"order_no"})
 
+#: 读试运行结果（本票新增）。与提交共用同一套浏览器三门，所以同样是 POST ——
+#: 浏览器的同源 GET **不发** ``Origin``，把这条做成 GET 就得为它单开一套更弱的门。
+_TRIAL_RESULT_ROUTE = "/__aiops/trial/result"
+
+#: 结果请求体**只允许**这一个键。``trial_id`` 是提交时网关给的，客户端原样带回。
+_TRIAL_RESULT_PAYLOAD_KEYS = frozenset({"trial_id"})
+
+#: 试运行终态词表**只有一处**（``async_job_lifecycle.DIAGNOSIS.terminal``）。
+#: 这里不另写一份：多一份词表就多一次"一边改了另一边没改"，而它的表现是
+#: 面板永远转圈或永远不刷新 —— 两种都看不出成因。
+TRIAL_TERMINAL_STATUSES: frozenset[str] = DIAGNOSIS_PROFILE.terminal
+
 #: 发布权查询（#780）：登录代理上的只读端点。**未配置它 = 维持过渡行为**
 #: （按 Dify 的 owner/admin 判），所以身份闭环上线前行为逐字不变。
 _PUBLISH_CHECK_PATH = "/__aiops/publish/check"
@@ -146,6 +159,11 @@ class ConsolePublishResult:
     action: str = ""
     #: 桥回给浏览器的 HTTP 状态：200 成功、403 拒绝、409 发布门拒绝、502 结果未确认。
     status: int = 403
+    #: 试运行提交成功时网关给的作业 id，按钮拿它去轮询结果面板。
+    #: **不是新的授权**：读回那条路由仍要同一个发起人与同一把钥匙。
+    #: 它不进 :meth:`public` —— 发布那条路的回答形状是两个不同的契约，混在一起会让
+    #: 「发布」的响应多出一个它永远不会有的字段。
+    trial_id: str = ""
 
     def public(self) -> dict[str, Any]:
         return {"published": self.published, "reason": self.reason, "action": self.action}
@@ -626,18 +644,9 @@ def submit_trial(
     代价明确、可单独收紧：把下面那个 ``return`` 换成拒绝即可（一行），或把这条路
     改成 fail-closed。**先让功能可用，再谈收紧**，而两者的切换点只有这一处。
     """
-    initiator_headers: dict[str, str] = {}
-    if login_proxy_url:
-        if console_session is None:  # pragma: no cover - 调用方保证成对给
-            return ConsolePublishResult(False, "会话缺失，无法核对身份", status=403)
-        verdict = _identity_and_publish_verdict(
-            login_proxy_url, console_session=console_session, timeout=timeout
-        )
-        if verdict is None:
-            # 代理不可达 / 会话不是我们签的 / 没有可用映射 ⇒ 不给身份 ⇒ 网关退回调试租户。
-            _LOGGER.info("console trial: identity unavailable, falling back to the debug tenant")
-        else:
-            initiator_headers, _allowed = verdict
+    initiator_headers = _initiator_headers_for(
+        login_proxy_url, console_session=console_session, timeout=timeout
+    )
     http_status, answer = _request(
         gateway_base_url.rstrip("/") + TRIAL_PATH,
         method="POST",
@@ -684,7 +693,151 @@ def submit_trial(
     if not trial_id or not trial_status:
         _LOGGER.warning("console trial: gateway answer has an unexpected shape")
         return ConsolePublishResult(False, _UNCONFIRMED, status=502)
-    return ConsolePublishResult(True, f"已提交试运行（{trial_id}），状态：{trial_status}", status=202)
+    # ``action`` 里带回 trial_id：按钮靠它去轮询结果面板。它不是新授权 —— 读回那条
+    # 路由仍然要求同一个发起人和同一把钥匙（见 :func:`read_trial`）。
+    return ConsolePublishResult(
+        True,
+        f"已提交试运行（{trial_id}），状态：{trial_status}",
+        trial_id=trial_id,
+        status=202,
+    )
+
+
+#: 结果面板一次读回的字段上限。诊断报告本身 ≤ 8KB（契约里的字段长度上限之和远小于它），
+#: 这里给足余量，同时不给一个异常上游把桥的内存撑开的机会。
+MAX_TRIAL_RESULT_TEXT = 4000
+
+
+def read_trial(
+    *,
+    gateway_base_url: str,
+    trial_key: str,
+    trial_id: str,
+    login_proxy_url: str = "",
+    console_session: ConsoleSession | None = None,
+    timeout: float = 15.0,
+) -> TrialReport:
+    """把一次试运行的状态与结果读回来（结果面板那一条）。
+
+    **它与 :func:`submit_trial` 共用同一个发起人身份**：网关那条 GET 按
+    ``scope_fingerprint`` 隔离作业行，而那个指纹由发起人的公司身份算出。不带同样的
+    ``X-AIOps-Initiator*`` 头去读，回来的一定是 404 —— 而且与"这个 id 不存在"
+    完全同形。所以取身份那段抽成 :func:`_initiator_headers_for`，两条路都调它。
+
+    这里**不接 app_id**：网关那条 GET 只按 ``trial_id`` + 范围找行，请求里没有 app
+    这一维；桥侧的门（同源 + CSRF + Referer 必须落在某个智能体页）已经在调用方过完了。
+
+    返回的 ``status`` 由调用方用 :data:`TRIAL_TERMINAL_STATUSES` 判终态；
+    本函数**不**自己判"完成了没有"，那份词表只在一处。
+    """
+    if login_proxy_url and console_session is None:
+        return TrialReport(False, "会话缺失，无法核对身份", status=403)
+    initiator_headers = _initiator_headers_for(
+        login_proxy_url, console_session=console_session, timeout=timeout
+    )
+    http_status, answer = _request(
+        gateway_base_url.rstrip("/") + f"{TRIAL_PATH}/{urllib.parse.quote(trial_id, safe='')}",
+        method="GET",
+        headers={
+            "Authorization": f"Bearer {trial_key}",
+            "Accept": "application/json",
+            **initiator_headers,
+        },
+        timeout=timeout,
+    )
+    if http_status == 404:
+        return TrialReport(False, "读不到这次试运行（可能已过期，或不属于你的可见范围）", status=404)
+    if not 200 <= http_status < 300 or not isinstance(answer, dict):
+        _LOGGER.warning("console trial result: gateway answered status=%s", http_status)
+        return TrialReport(False, _UNCONFIRMED, status=502)
+    status_text = _str_field(answer, "status")
+    if not status_text:
+        _LOGGER.warning("console trial result: gateway answer has no status")
+        return TrialReport(False, _UNCONFIRMED, status=502)
+    return TrialReport(
+        True,
+        _trial_report_text(answer, status_text),
+        status=200,
+        job_status=status_text,
+        terminal=status_text in TRIAL_TERMINAL_STATUSES,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class TrialReport:
+    """一次结果读取的回答：可读的一句话 + 原始状态。"""
+
+    ok: bool
+    reason: str
+    status: int = 200
+    #: 网关给的作业状态（``queued``/``running``/终态之一）。读失败时是空串。
+    job_status: str = ""
+    #: 终态了吗 —— 用**唯一那份**词表判（``TRIAL_TERMINAL_STATUSES``）。
+    terminal: bool = False
+
+    def public(self) -> dict[str, Any]:
+        return {
+            "read": self.ok,
+            "reason": self.reason,
+            "status": self.job_status,
+            "terminal": self.terminal,
+        }
+
+
+def _trial_report_text(answer: Mapping[str, Any], status_text: str) -> str:
+    """把网关的结果压成一段**运营能读**的文字。
+
+    三种终态各有各的说法，这里不合并：
+    * ``completed`` —— 报告里的 ``summary`` 与 ``root_cause``；
+    * 其余终态（``failed`` / ``expired`` / ``cancelled`` / ``inconclusive``）——
+      直说它是哪一种，不冒充"完成"；
+    * 还在跑 —— 报当前状态，让面板继续轮询。
+
+    证据 id 与失败来源**照实列出**：它们是"这个结论有据"与"哪几个源没取到"的唯一
+    可见面，压在报告里就等于没有。
+    """
+    if status_text not in TRIAL_TERMINAL_STATUSES:
+        return f"试运行进行中（{status_text}）"
+    if status_text != "completed":
+        return f"试运行结束，状态：{status_text}"
+    result = answer.get("result")
+    report = result.get("report") if isinstance(result, Mapping) else None
+    if not isinstance(report, Mapping):
+        return "试运行完成，但结果里没有可读的报告"
+    summary = str(report.get("summary") or "").strip()
+    root_cause = str(report.get("root_cause") or "").strip()
+    parts = [part for part in (summary, root_cause) if part]
+    text = " ／ ".join(parts) or "试运行完成，报告为空"
+    evidence = report.get("evidence_ids")
+    if isinstance(evidence, list) and evidence:
+        text += f"（证据 {len(evidence)} 条：{', '.join(str(item) for item in evidence[:5])}）"
+    failed = report.get("failed_sources")
+    if isinstance(failed, list) and failed:
+        text += f"（未取到的数据源：{', '.join(str(item) for item in failed[:5])}）"
+    return text[:MAX_TRIAL_RESULT_TEXT]
+
+
+def _initiator_headers_for(
+    login_proxy_url: str,
+    *,
+    console_session: ConsoleSession | None,
+    timeout: float,
+) -> dict[str, str]:
+    """发起人身份的头，**提交与读结果共用这一处**。
+
+    两处各写一份就会漂：一边带了 ``-Tenant`` 一边没带，读回来的就永远是 404，
+    而表现与"这个 id 不存在"完全同形（这是 #782 留下过的那个形态）。
+    """
+    if not login_proxy_url:
+        return {}
+    if console_session is None:  # pragma: no cover - 调用方保证成对给
+        return {}
+    verdict = _identity_and_publish_verdict(login_proxy_url, console_session=console_session, timeout=timeout)
+    if verdict is None:
+        _LOGGER.info("console trial: identity unavailable, falling back to the debug tenant")
+        return {}
+    identity_headers, _allowed = verdict
+    return identity_headers
 
 
 # ── HTTP 面：注入的按钮打的那一跳 ────────────────────────────────────────────
@@ -784,6 +937,9 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
             if path == _TRIAL_ROUTE:
                 self._post_trial()
                 return
+            if path == _TRIAL_RESULT_ROUTE:
+                self._post_trial_result()
+                return
             if path != _PUBLISH_ROUTE:
                 raise _Rejected(404, "not found")
             session, referer = self._check_browser_request()
@@ -847,8 +1003,48 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
             return
         self._json(
             result.status,
-            {"submitted": result.published, "reason": result.reason, "action": result.action},
+            {
+                "submitted": result.published,
+                "reason": result.reason,
+                "action": result.action,
+                # 只有提交成功才有它；按钮拿它去轮询结果面板。
+                **({"trial_id": result.trial_id} if result.trial_id else {}),
+            },
         )
+
+    def _post_trial_result(self) -> None:
+        """读一次试运行的结果（结果面板那一条）。
+
+        **与提交同一套浏览器三门**，也同样是 POST：浏览器的同源 GET 不发 ``Origin``，
+        把这条做成 GET 就得为它单开一套更弱的门 —— 而它读的是真订单上的诊断结果。
+
+        ``app_id`` 仍取自 Referer：读的虽然是 ``trial_id``，但让一个未登记的 app
+        借这条路去读别人的作业，就等于绕开了提交侧那道绑定门。
+        """
+        if not self.settings.trial_key:
+            raise _Rejected(404, "not found")
+        session, referer = self._check_browser_request()
+        app_id = app_id_from_referer(referer, console_origin=self.settings.console_origin)
+        if app_id is None:  # pragma: no cover - _check_browser_request 已保证
+            raise _Rejected(403, "无法确定当前是哪个智能体（请从编排页点这个按钮）")
+        payload = self._read_bounded_json(MAX_TRIAL_BODY_BYTES, _TRIAL_RESULT_PAYLOAD_KEYS)
+        trial_id = payload.get("trial_id")
+        if not isinstance(trial_id, str) or not trial_id.strip():
+            raise _Rejected(400, "缺少 trial_id")
+        try:
+            report = read_trial(
+                gateway_base_url=self.settings.gateway_base_url,
+                trial_key=self.settings.trial_key,
+                trial_id=trial_id.strip(),
+                login_proxy_url=self.settings.login_proxy_url,
+                console_session=session,
+                timeout=self.settings.timeout,
+            )
+        except ConsolePublishError as exc:
+            self.log_message("console trial result bridge failed: %s", exc)
+            self._json(502, {"read": False, "reason": "试运行结果暂时读不到，请稍后再试"})
+            return
+        self._json(report.status, report.public())
 
     def _single_header(self, name: str) -> str | None:
         """安全敏感头必须恰好一次；重复时拒绝，免得桥与代理对"取哪一个"理解不同。"""

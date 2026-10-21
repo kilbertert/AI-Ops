@@ -112,9 +112,106 @@
       .then(function (r) { return r.json().catch(function () { return {}; }); })
       .then(function (d) {
         aiopsToast(d.reason || (d.submitted ? '已提交试运行' : '试运行没能开始'), !!d.submitted);
+        // 只报"已提交"等于让运营自己去找结果 —— 而结果在网关的库里。有 trial_id
+        // 就开一块面板轮询到终态；没有就不开（提交失败时没有可轮询的东西）。
+        if (d.submitted && d.trial_id) { aiopsWatchTrial(d.trial_id, orderNo); }
       })
       .catch(function () { aiopsToast('试运行请求没能送达，请稍后再试', false); })
       .finally(function () { btn.disabled = false; btn.textContent = original; });
+  }
+
+  /*
+   * 结果面板：把一次试运行从「已提交」跟到终态。
+   *
+   * 三个约束，都不是可选的：
+   *   1. **终态由服务端说了算**（`terminal` 字段），前端不自己拼状态词表 —— 那会是
+   *      第二份词表，而两份的表现是"面板永远转圈"或"跑到一半就停"。
+   *   2. **有上限**：超过 `AIOPS_TRIAL_MAX_POLLS` 次就停，并说明"还在跑"。一个不设
+   *      上限的轮询会在页面开着的时候永远发请求。
+   *   3. **关掉面板就停**：`aiopsTrialTimer` 只有一处取消点，避免关掉之后仍在轮询。
+   */
+  var AIOPS_TRIAL_PANEL_ID = 'aiops-trial-panel';
+  var AIOPS_TRIAL_POLL_MS = 2000;
+  var AIOPS_TRIAL_MAX_POLLS = 150; // 150 × 2s = 5 分钟，够一次真实诊断跑完
+  var aiopsTrialTimer = null;
+
+  function aiopsTrialPanel() {
+    var panel = document.getElementById(AIOPS_TRIAL_PANEL_ID);
+    if (panel) { return panel; }
+    panel = document.createElement('div');
+    panel.id = AIOPS_TRIAL_PANEL_ID;
+    panel.style.cssText =
+      'position:fixed;z-index:99998;right:24px;bottom:80px;width:420px;max-width:calc(100vw - 48px);' +
+      'background:#fff;color:#101828;border:1px solid #d0d5dd;border-radius:10px;' +
+      'box-shadow:0 8px 28px rgba(16,24,40,.18);font-size:13px;line-height:1.6;overflow:hidden;';
+    panel.innerHTML =
+      '<div style="display:flex;align-items:center;justify-content:space-between;' +
+      'padding:10px 14px;background:#f9fafb;border-bottom:1px solid #eaecf0;">' +
+      '<strong style="font-size:13px;">AI-Ops 试运行</strong>' +
+      '<button type="button" data-aiops-close="1" style="border:0;background:transparent;' +
+      'cursor:pointer;font-size:16px;line-height:1;color:#667085;">×</button></div>' +
+      '<div data-aiops-body="1" style="padding:12px 14px;max-height:280px;overflow:auto;' +
+      'white-space:pre-wrap;word-break:break-word;"></div>';
+    panel.querySelector('[data-aiops-close]').addEventListener('click', function () {
+      aiopsTrialStop();
+      panel.remove();
+    });
+    document.body.appendChild(panel);
+    return panel;
+  }
+
+  function aiopsTrialStop() {
+    if (aiopsTrialTimer !== null) { clearTimeout(aiopsTrialTimer); aiopsTrialTimer = null; }
+  }
+
+  function aiopsTrialRender(lines) {
+    var panel = aiopsTrialPanel();
+    panel.querySelector('[data-aiops-body]').textContent = lines.join('\n');
+  }
+
+  function aiopsWatchTrial(trialId, orderNo) {
+    aiopsTrialStop();
+    var polls = 0;
+    aiopsTrialRender(['订单 ' + orderNo, '已提交，等待结果…', '', '作业 ' + trialId]);
+
+    function once() {
+      fetch('/__aiops/trial/result', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-CSRF-Token': aiopsReadCsrfCookie(),
+        },
+        body: JSON.stringify({ trial_id: trialId }),
+      })
+        .then(function (r) { return r.json().catch(function () { return {}; }); })
+        .then(function (d) {
+          polls += 1;
+          var head = ['订单 ' + orderNo, '', d.reason || '（无结果）'];
+          if (!d.read) {
+            // 读失败不是终态：可能是作业还没落库/网关瞬时不可用。继续轮，但有上限。
+            head.push('', '（第 ' + polls + ' 次读取未成功）');
+          }
+          aiopsTrialRender(head.concat(['', '作业 ' + trialId]));
+          if (d.read && d.terminal) { aiopsTrialStop(); return; }
+          if (polls >= AIOPS_TRIAL_MAX_POLLS) {
+            aiopsTrialRender(
+              head.concat(['', '已停止自动刷新（超过 5 分钟）。作业 ' + trialId])
+            );
+            aiopsTrialStop();
+            return;
+          }
+          aiopsTrialTimer = setTimeout(once, AIOPS_TRIAL_POLL_MS);
+        })
+        .catch(function () {
+          // 网络抖动：继续按节拍重试，直到上限。面板上不堆错误，避免刷屏。
+          polls += 1;
+          if (polls >= AIOPS_TRIAL_MAX_POLLS) { aiopsTrialStop(); return; }
+          aiopsTrialTimer = setTimeout(once, AIOPS_TRIAL_POLL_MS);
+        });
+    }
+
+    once();
   }
 
   function aiopsMakeButton(id, label, bg) {

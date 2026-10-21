@@ -78,6 +78,9 @@ class _Upstream:
         #: ``POST /v1/dify/trial`` 的回答（与网关试运行路由同形：202 + trial_id/status）。
         self.trial_status = 202
         self.trial_body: Any = {"trial_id": "tr_abc123", "status": "queued"}
+        #: ``GET /v1/dify/trial/<id>`` 的回答（结果面板那一条）。
+        self.trial_result_status = 200
+        self.trial_result_body: Any = {"trial_id": "tr_abc123", "status": "queued"}
 
 
 def _serve(upstream: _Upstream) -> ThreadingHTTPServer:
@@ -111,6 +114,8 @@ def _serve(upstream: _Upstream) -> ThreadingHTTPServer:
                 self._reply(upstream.publish_status, upstream.publish_body)
             elif self.path == TRIAL_GATEWAY_PATH and method == "POST":
                 self._reply(upstream.trial_status, upstream.trial_body)
+            elif self.path.startswith(TRIAL_GATEWAY_PATH + "/") and method == "GET":
+                self._reply(upstream.trial_result_status, upstream.trial_result_body)
             else:
                 self._reply(404, {"code": "not_found"})
 
@@ -1125,6 +1130,125 @@ def _trial_post(
 ) -> tuple[int, dict[str, Any]]:
     raw = json.dumps(body if body is not None else {"order_no": "O-1"}).encode()
     return _post(address, path=path, headers=headers, body=raw)
+
+
+def _trial_result_post(
+    address: tuple[str, int],
+    *,
+    body: Any = None,
+    headers: list[tuple[str, str]] | None = None,
+) -> tuple[int, dict[str, Any]]:
+    raw = json.dumps(body if body is not None else {"trial_id": "tr_abc123"}).encode()
+    return _post(address, path="/__aiops/trial/result", headers=headers, body=raw)
+
+
+def test_the_trial_submit_answer_carries_the_job_id(trial_bridge: Any) -> None:
+    """提交成功时把 ``trial_id`` 交给浏览器 —— 没有它，结果面板无从轮询。
+
+    只报"已提交"是不够的：结果在网关的库里，运营手里必须有一个能指名它的东西。
+    """
+    status, body = _trial_post(trial_bridge)
+    assert status == 202, body
+    assert body["trial_id"] == "tr_abc123"
+
+
+def test_a_rejected_submission_carries_no_job_id(trial_bridge: Any, upstream: _Upstream) -> None:
+    """反例：没提交成功就不该给一个 job id（给了会让面板去轮询一个不存在的东西）。"""
+    upstream.trial_status = 404
+    upstream.trial_body = {"error": {"code": "ORDER_NOT_FOUND"}}
+    status, body = _trial_post(trial_bridge)
+    assert status == 404
+    assert "trial_id" not in body
+
+
+def test_the_trial_result_route_reads_the_job_back(trial_bridge: Any, upstream: _Upstream) -> None:
+    """结果面板那一跳：POST ``{"trial_id"}`` ⇒ 网关的 ``GET /v1/dify/trial/<id>``。
+
+    与提交**同一套浏览器三门**、**同一把试运行钥匙** —— 它读的是真订单上的诊断结果。
+    """
+    upstream.trial_result_status = 200
+    upstream.trial_result_body = {
+        "trial_id": "tr_abc123",
+        "status": "completed",
+        "order_no": "O-1",
+        "result": {
+            "status": "diagnosed",
+            "report": {
+                "summary": "枪锁未释放导致无法拔枪",
+                "root_cause": "车端未发出解锁信号",
+                "evidence_ids": ["ev-001", "ev-002"],
+                "failed_sources": ["tdengine"],
+            },
+        },
+    }
+    status, body = _trial_result_post(trial_bridge)
+    assert status == 200, body
+    assert body["read"] is True
+    assert body["terminal"] is True
+    assert "枪锁未释放" in body["reason"] and "车端未发出解锁信号" in body["reason"]
+    assert "ev-001" in body["reason"]
+    assert "tdengine" in body["reason"]
+
+    reads = [
+        c for c in upstream.calls if c["method"] == "GET" and c["path"] == f"{TRIAL_GATEWAY_PATH}/tr_abc123"
+    ]
+    assert len(reads) == 1
+    assert reads[0]["headers"]["authorization"] == f"Bearer {TRIAL_KEY}"
+    # 服务端的钥匙**不**回给浏览器
+    assert TRIAL_KEY not in json.dumps(body, ensure_ascii=False)
+
+
+def test_a_running_trial_is_reported_as_not_terminal(trial_bridge: Any, upstream: _Upstream) -> None:
+    """还在跑 ⇒ ``terminal=false``，面板据此继续轮询。**终态由服务端判**。"""
+    upstream.trial_result_body = {"trial_id": "tr_abc123", "status": "running"}
+    status, body = _trial_result_post(trial_bridge)
+    assert status == 200
+    assert body["terminal"] is False
+    assert body["status"] == "running"
+
+
+def test_a_failed_trial_is_readable_and_named_as_failed(trial_bridge: Any, upstream: _Upstream) -> None:
+    """失败也是**可读的终态**：不能因为"不是 completed"就当成读不到。"""
+    upstream.trial_result_body = {"trial_id": "tr_abc123", "status": "failed", "error_code": "TRIAL_FAILED"}
+    status, body = _trial_result_post(trial_bridge)
+    assert status == 200
+    assert body["terminal"] is True
+    assert body["status"] == "failed"
+    assert "failed" in body["reason"]
+
+
+def test_the_trial_result_route_needs_the_trial_key(bridge: Any) -> None:
+    """未配试运行钥匙 ⇒ 404（与提交同一条机制）。"""
+    status, _ = _trial_result_post(bridge)
+    assert status == 404
+
+
+def test_the_trial_result_route_requires_the_same_browser_gates(trial_bridge: Any) -> None:
+    """三门一条都不能少：缺 Origin / CSRF / Referer ⇒ 4xx，而且**不打上游**。"""
+    for headers in (
+        _browser_headers(Origin=None),
+        _browser_headers(**{"X-CSRF-Token": None}),
+        _browser_headers(Referer=None),
+    ):
+        status, _ = _trial_result_post(trial_bridge, headers=headers)
+        assert status in (401, 403)
+
+
+def test_the_trial_result_body_is_exactly_one_key(trial_bridge: Any) -> None:
+    """多带一个键 ⇒ 400（``extra="forbid"`` 的同一条主张）。"""
+    status, _ = _trial_result_post(trial_bridge, body={"trial_id": "tr_abc123", "tenant_id": "T-9"})
+    assert status == 400
+
+
+def test_the_trial_result_route_reports_a_transient_read_failure_as_unconfirmed(
+    trial_bridge: Any, upstream: _Upstream
+) -> None:
+    """网关 5xx ⇒ ``read=false`` 且 502，**不**编一个终态。"""
+    upstream.trial_result_status = 500
+    upstream.trial_result_body = {"error": {"code": "TRIAL_UNAVAILABLE"}}
+    status, body = _trial_result_post(trial_bridge)
+    assert status == 502
+    assert body["read"] is False
 
 
 def test_the_trial_route_is_absent_when_its_key_is_unconfigured(bridge: Any) -> None:
