@@ -702,10 +702,10 @@ def _record_publish_audit(
         )
 
 
-def _workspace_for_publish(
+def _workspace_for_tenant(
     context: Any, tenant_id: str, *, initiator: tuple[str, str, str] = ("", "", "")
 ) -> str:
-    """拿到**这个租户**的 workspace，或拒绝（#884）。
+    """拿到**这个租户**的 workspace，或拒绝（#884 发布 / #885 试运行）。
 
     失败时把 ``resolve`` 的四个码原样转成 HTTP：``UNRESOLVED``(404) / ``CREATING``(409,
     可重试) / ``FAILED``(409) / ``UNKNOWN``(409)。合成一句话就把"去开户 / 稍后重试 /
@@ -799,7 +799,7 @@ def _publish_bound_app(
     #
     # 解析失败 ⇒ **拒绝，不回落任何默认 workspace**：回落等于把"这个租户还没开户"悄悄
     # 变成"发布进别人的工作区"，而后者看起来是成功的。
-    workspace_id = _workspace_for_publish(context, binding.tenant_id, initiator=initiator)
+    workspace_id = _workspace_for_tenant(context, binding.tenant_id, initiator=initiator)
     source = DifyDslSource(
         base_url=console.dify_console_base_url,
         app_id=binding.app_id,
@@ -907,6 +907,15 @@ def _trial_draft_from_console(context: Any, app_id: str) -> tuple[str, tuple[str
     from aiops_diagnostics.agent_manifest import admin_context
     from aiops_diagnostics.dify_dsl_pull import _find_by_name
 
+    # **按绑定的租户解析草稿来源**（#885 / ADR-0059 §5.3）。与发布同一类越权口，但判据
+    # 相反：那边是"写进哪个 workspace"，这里是"从哪个 workspace 读草稿"。
+    #
+    # 它放在**查 agent 之前**：workspace 是**绑定**的属性，不是 agent 的属性。放后面的话，
+    # 一个没开户的租户会先在"这个 agent 没登记"上被拒，而真正的原因是他的租户还没有工作区。
+    #
+    # 租户没有 workspace ⇒ **明确拒绝，不回落平台工作区**：设计对这条是明确的 ——
+    # 宁可拒绝，也不给一个看起来能用的空壳（运营会把别人的方法论当自己的跑一遍）。
+    workspace_id = _workspace_for_tenant(context, binding.tenant_id)
     agent_context = admin_context(binding.tenant_id)
     # ``agent_type`` 与 ``output_contract`` 取自**库里那个 agent**，不取自绑定行、也不取自
     # DSL —— 与发布路径（``sync_binding_from_dify``）同一处来源。绑定行的
@@ -924,7 +933,7 @@ def _trial_draft_from_console(context: Any, app_id: str) -> tuple[str, tuple[str
         base_url=console.dify_console_base_url,
         app_id=binding.app_id,
         api_key=console.dify_console_api_key,
-        workspace_id=console.dify_console_workspace_id,
+        workspace_id=workspace_id,
     )
     try:
         config = resolve_pulled_config(

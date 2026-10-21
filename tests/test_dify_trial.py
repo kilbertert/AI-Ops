@@ -148,6 +148,24 @@ class _Orders:
         return order_no == ORDER
 
 
+#: 本文件里绑定行的默认租户（`_Runtime` 注册表里那一条）。
+_DEFAULT_TENANT = "T-1"
+
+
+def _seed_default_workspace(db: Path) -> None:
+    """给默认租户种一行 `ready`（#885）。既有用例只关心"试运行能不能跑"，不该全红。"""
+    from aiops_diagnostics.dify_workspaces import DifyWorkspaces
+
+    workspaces = DifyWorkspaces(db)
+    with workspaces._connection(write=True) as connection:  # noqa: SLF001 — 测试造的是行
+        connection.execute(
+            "INSERT OR REPLACE INTO dify_workspaces (tenant_id, environment, workspace_id,"
+            " setup_state, created_at, updated_at) VALUES (?, ?, ?, 'ready',"
+            " '2026-10-21T00:00:00+00:00', '2026-10-21T00:00:00+00:00')",
+            (_DEFAULT_TENANT, "41", "ws-default"),
+        )
+
+
 def _client(tmp_path: Path, **overrides: Any) -> tuple[TestClient, _Runtime]:
     settings = GatewayServerSettings(
         data_home=tmp_path,
@@ -155,10 +173,13 @@ def _client(tmp_path: Path, **overrides: Any) -> tuple[TestClient, _Runtime]:
         server_config_file=tmp_path / "production.env",
         dify_trial_api_key=overrides.pop("dify_trial_api_key", TRIAL_KEY),
         dify_trial_debug_tenant=overrides.pop("dify_trial_debug_tenant", DEBUG_TENANT),
+        # 部署身份（#885）：试运行的草稿按 (绑定租户, 环境) 解析。
+        environment=overrides.pop("environment", "41"),
         **overrides,
     )
     settings.server_config_file.write_text("# test\n", encoding="utf-8")
     store = GatewayStore(settings.database_file)
+    _seed_default_workspace(settings.database_file)
     runtime = _Runtime(store)
     app = create_gateway_app(
         settings=settings,
@@ -616,3 +637,140 @@ def test_the_draft_reaches_the_same_run_entry_the_cli_uses(tmp_path: Path, monke
     # 范围来自配置的调试租户，不是请求。
     assert call["scope"].tenant_id == DEBUG_TENANT
     runtime.shutdown()
+
+
+# --- #885：草稿来源按**绑定租户**解析，租户没有 workspace 就明确拒绝 ------------------
+
+
+def _bound_runtime(app_id: str, tenant: str) -> _Runtime:
+    """给运行时装一张点名了 `app_id` 的绑定表（#885 的三条用例要它走到拉草稿那一步）。"""
+    from aiops_diagnostics.dify_app_registry import DifyAppBinding
+
+    runtime = _Runtime.__new__(_Runtime)
+
+    class _Bound:
+        def all(self) -> list[Any]:
+            return [
+                DifyAppBinding(
+                    tenant_id=tenant, business_entry="consumer", app_id=app_id, agent_name="小趋-客服"
+                )
+            ]
+
+    runtime.store = None  # type: ignore[assignment]
+    runtime.started = []
+    runtime.busy = False
+    runtime.dify_app_registry = _Bound()  # type: ignore[assignment]
+
+    def trial_run_context() -> Any:
+        from aiops_diagnostics.query_scope import DataScope
+        from aiops_diagnostics.scope_context import ScopeContext, SubjectRecord
+
+        subject = SubjectRecord(b_user_id="aiops-admin", tenant_id=DEBUG_TENANT)
+        return ScopeContext.build(
+            caller=subject,
+            subject=subject,
+            delegated=False,
+            effective_tenant_id=DEBUG_TENANT,
+            data_scope=DataScope(type="all"),
+            roles=frozenset(),
+            permissions=frozenset(),
+            resolved_at=__import__("datetime").datetime.now(__import__("datetime").UTC),
+        )
+
+    runtime.trial_run_context = trial_run_context  # type: ignore[method-assign]
+    runtime.start_trial = lambda **kw: None  # type: ignore[method-assign]
+    return runtime
+
+
+def _client_with_runtime(tmp_path: Path, runtime: Any, **overrides: Any) -> TestClient:
+    settings = GatewayServerSettings(
+        data_home=tmp_path,
+        database_file=tmp_path / "gateway.db",
+        server_config_file=tmp_path / "production.env",
+        dify_trial_api_key=TRIAL_KEY,
+        dify_trial_debug_tenant=DEBUG_TENANT,
+        dify_console_base_url="http://dify.invalid:10008",
+        dify_console_api_key=CONSOLE_KEY,
+        environment="41",
+        **overrides,
+    )
+    settings.server_config_file.write_text("# test\n", encoding="utf-8")
+    return TestClient(
+        create_gateway_app(
+            settings=settings,
+            store=GatewayStore(settings.database_file),
+            runtime=runtime,
+            caller_resolver=None,  # type: ignore[arg-type]
+            order_authorizer=_Orders(),
+            platform_resolver=PlatformIdentityResolver(_Directory()),
+            faq_catalog=FAQCatalog.bundled(),
+        )
+    )
+
+
+def test_the_draft_source_is_the_bound_tenants_workspace(tmp_path: Path, monkeypatch) -> None:
+    """`DifyDslSource` 用的是**绑定租户**的 workspace，不是 `AIOPS_GATEWAY_DIFY_CONSOLE_WORKSPACE_ID`。
+
+    变异对照：把 `_workspace_for_tenant` 换回那个常量，本条变红 —— 而线上表现是
+    租户 A 的人在试运行时看到的是 B 工作区里的草稿。
+    """
+    from aiops_diagnostics.dify_workspaces import DifyWorkspaces
+
+    seen: dict[str, Any] = {}
+    _seed_default_workspace(tmp_path / "gateway.db")
+    db = DifyWorkspaces(tmp_path / "gateway.db")
+    with db._connection(write=True) as connection:  # noqa: SLF001
+        connection.execute(
+            "INSERT OR REPLACE INTO dify_workspaces (tenant_id, environment, workspace_id,"
+            " setup_state, created_at, updated_at) VALUES ('T-885', '41', 'ws-tenant-885',"
+            " 'ready', '2026-10-21T00:00:00+00:00', '2026-10-21T00:00:00+00:00')"
+        )
+
+    from aiops_diagnostics.dify_dsl_pull import DifyDslSource
+
+    original = DifyDslSource.__init__
+
+    def recording(self: Any, **kwargs: Any) -> None:
+        seen["workspace_id"] = kwargs.get("workspace_id")
+        original(self, **kwargs)
+
+    monkeypatch.setattr(DifyDslSource, "__init__", recording)
+
+    class _Live:
+        class config:
+            agent_type = "customer"
+            output_contract = "diagnosis-v1"
+
+    # 库里那个 agent 存在与否不是本条的问题；给一个最小替身，好走到"建 source"那一步。
+    monkeypatch.setattr("aiops_diagnostics.dify_dsl_pull._find_by_name", lambda *a, **k: _Live())
+    # 拉草稿本身失败没关系 —— 本条只问"它拿的是哪一个 workspace"。用路由**已经捕获**的
+    # 那个错误类型（`DifyDslError` → 502），这样请求正常结束、`seen` 已经记下。
+    from aiops_diagnostics.dify_dsl_pull import DifyDslError
+
+    monkeypatch.setattr(
+        "aiops_diagnostics.dify_dsl_pull.resolve_pulled_config",
+        lambda *a, **k: (_ for _ in ()).throw(DifyDslError("STOP", "stop after source")),
+    )
+
+    client = _client_with_runtime(tmp_path, _bound_runtime("11111111-2222-4333-8444-555566667777", "T-885"))
+    client.post(
+        "/v1/dify/trial",
+        json={"order_no": ORDER, "app_id": "11111111-2222-4333-8444-555566667777"},
+        headers={"Authorization": f"Bearer {TRIAL_KEY}"},
+    )
+
+    assert seen.get("workspace_id") == "ws-tenant-885", seen
+
+
+def test_a_tenant_without_a_workspace_is_refused_not_silently_fallback(tmp_path: Path) -> None:
+    """租户没有 workspace ⇒ **明确拒绝**，理由可读，不回落到平台工作区（#885 验收）。"""
+    client = _client_with_runtime(tmp_path, _bound_runtime("11111111-2222-4333-8444-555566667777", "T-NO-WS"))
+
+    response = client.post(
+        "/v1/dify/trial",
+        json={"order_no": ORDER, "app_id": "11111111-2222-4333-8444-555566667777"},
+        headers={"Authorization": f"Bearer {TRIAL_KEY}"},
+    )
+
+    assert response.status_code == 404, response.text
+    assert response.json()["error"]["code"] == "DIFY_WORKSPACE_UNRESOLVED"
