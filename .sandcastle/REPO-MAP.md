@@ -128,7 +128,7 @@ docs/
     company-platform-integration-baseline.md
     company-repo-index.md
     company-upms-admin-operations.md
-    ... (29 more)
+    ... (28 more)
   architecture/
     ai-ops-architecture.html
     ai-ops-architecture.json
