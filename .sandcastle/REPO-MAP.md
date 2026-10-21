@@ -55,8 +55,8 @@ no project argument. Both answer *where* something is; neither replaces reading 
 - AGENTS.md
 - CLAUDE.md
 - README.md
-- docs/ — 134 markdown file(s)
-- docs/adr/ — 73 markdown file(s)
+- docs/ — 136 markdown file(s)
+- docs/adr/ — 75 markdown file(s)
 - docs/agents/ — 38 markdown file(s)
 
 ## Tree (depth 2, first 80 lines; dependencies, build
@@ -110,7 +110,7 @@ docs/
     0008-adr-0003-deviation-session-direct-read.md
     0009-operator-identity-via-company-oauth2-token.md
     0010-reversal-of-prd-200-language-boundary.md
-    ... (63 more)
+    ... (65 more)
   afk-cutover/
     decisions.md
     pr-a-spec.md
