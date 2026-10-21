@@ -714,3 +714,34 @@ def test_console_rows_and_env_rows_form_one_list(tmp_path: Path) -> None:
     by_id = {item["knowledge_id"]: item for item in body["knowledge_items"]}
     assert by_id["kb-new"]["name"] == "新库"
     assert by_id["kb-customer"]["name"] == "kb-customer"  # env rows fall back to the id
+
+
+def test_media_urls_are_absolute_when_a_public_base_is_configured(tmp_path: Path) -> None:
+    """Dify hands this string to a console it does not serve.
+
+    A relative ``/v1/media/...`` is resolved by whoever holds it, and here that
+    is Dify's host — where ``/v1`` is Dify's own API and answers 404. So the
+    adapter must mint absolute URLs, or every image/video in a record is
+    undisplayable while the record itself looks complete (41, 2026-10-21).
+    Empty base keeps the old relative form: the APP is same-origin and never
+    needed one.
+    """
+    client = _client(
+        tmp_path,
+        _Runtime(
+            signer=MediaResourceSigner("secret", ttl_seconds=600),
+            search=lambda _kbs, _q, _n: [
+                {
+                    **_chunk(),
+                    "image_id": "ragflow-image-42",
+                    "mime_type": "image/png",
+                    "doc_type_kwd": "image",
+                }
+            ],
+        ),
+        public_base_url="https://api.mall.qushiyun.com",
+    )
+
+    url = _post(client, _body()).json()["records"][0]["metadata"]["media"][0]["url"]
+
+    assert url.startswith("https://api.mall.qushiyun.com/v1/media/media_"), url

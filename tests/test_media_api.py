@@ -989,3 +989,58 @@ def test_republish_that_removes_the_knowledge_base_revokes_media(tmp_path: Path)
     assert response.status_code == 403, (
         f"a KB removed by republish must revoke its media, got {response.status_code}"
     )
+
+
+def test_dify_signed_media_serves_despite_having_no_agent(tmp_path: Path) -> None:
+    """Media issued by the Dify knowledge adapter must actually be displayable.
+
+    /v1/dify/retrieval signs its grants with ``agent_version="dify:<knowledge_id>"`
+    — there is no agent behind that path, only a registry row. The liveness
+    check parsed that value as ``<agent_id>#v<n>``, failed, and answered 403, so
+    every image and video in a Dify record was undisplayable while retrieval
+    itself looked fine (found on 41, 2026-10-21). Media with no agent has no
+    agent liveness to check; an agent's own media must still be checked, which
+    is what the tests above pin.
+    """
+    from aiops_diagnostics.agent_lifecycle import AgentStore
+    from aiops_diagnostics.config import Settings
+    from aiops_diagnostics.gateway_runtime import GatewayRuntime
+
+    settings = GatewayServerSettings(
+        data_home=tmp_path,
+        database_file=tmp_path / "gateway.db",
+        server_config_file=tmp_path / "production.env",
+    )
+    settings.server_config_file.write_text("# test\n", encoding="utf-8")
+    signer = MediaResourceSigner("secret", ttl_seconds=600)
+    runtime = GatewayRuntime(
+        GatewayStore(settings.database_file),
+        settings,
+        Settings(agent=Settings().agent),  # type: ignore[arg-type]
+        kb_search_client=_FakeKbClient(lambda _grant: b"PNGDATA"),
+        media_signer=signer,
+        agent_store=AgentStore(settings.database_file),
+    )
+
+    resource = signer.issue(
+        tenant_id="T-1",
+        agent_version="dify:kb-canary",
+        session_id=None,
+        knowledge_base_id="KB-A",
+        document_id="doc-1",
+        chunk_id="chunk-1",
+        backend_id="backend-1",
+        kind="image",
+        mime_type="image/png",
+        title="方案亮点.png",
+        reference_id="doc-1-c1",
+    )
+
+    response = runtime.serve_media(resource.url.rsplit("/", 1)[-1])
+
+    assert response is not None
+    assert response.status_code == 200, (
+        f"Dify-issued media must serve, got {response.status_code} — the URL it hands "
+        "Dify is unusable otherwise"
+    )
+    assert response.body == b"PNGDATA"
