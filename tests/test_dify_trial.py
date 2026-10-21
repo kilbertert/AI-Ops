@@ -372,6 +372,37 @@ def test_an_unknown_trial_id_is_not_found(tmp_path: Path) -> None:
     )
 
 
+def test_a_failed_trial_reads_back_with_a_human_reason(tmp_path: Path) -> None:
+    """失败的作业读回来时带**一句给人看的原因**，与诊断面同一张多语言表。
+
+    只给 ``error_code`` 不够：控制台面板背后是运营，``TRIAL_FAILED`` 不告诉他该做什么。
+    反证：去掉那一行映射，``error_message`` 会落到 ``generic``（"稍后重试"）—— 欠费这种
+    需要人去充值的失败会被说成"过一会儿再试"，而它与代码缺陷长得一模一样。
+    """
+    from aiops_diagnostics.i18n import diagnosis_error_message
+
+    client, runtime = _client(tmp_path)
+    # 直接建一条**失败**的作业行：真 worker 的失败路径由 `gateway_runtime` 覆盖，
+    # 这里只验"读回面把原因给出来"这一件事。不经提交路径是因为终态行不可改写
+    # （completed → failed 会落进 claim-guard 的拒绝分支，那正是它该做的）。
+    context = runtime.trial_run_context()
+    row = runtime.store.create_trial_job(
+        context.scope_fingerprint, order_no=ORDER, draft_fingerprint="d", initiator="t"
+    )
+    trial_id = str(row["diagnosis_id"])
+    runtime.store.update_standard_diagnosis(
+        trial_id, status="failed", error_code="TRIAL_FAILED", error_message="ProviderOutage: quota"
+    )
+    read = client.get(f"/v1/dify/trial/{trial_id}", headers={"Authorization": f"Bearer {TRIAL_KEY}"})
+    assert read.status_code == 200
+    body = read.json()
+    assert body["status"] == "failed"
+    assert body["error_code"] == "TRIAL_FAILED"
+    assert body["error_message"] == diagnosis_error_message("zh", "TRIAL_FAILED")
+    # 这句必须**不是**兜底那句：兜底是"稍后重试"，对欠费是误导。
+    assert body["error_message"] != diagnosis_error_message("zh", "SOMETHING_UNMAPPED")
+
+
 # --------------------------------------------------------------------------- #
 # 作业行：审计与"不产生版本"                                                   #
 # --------------------------------------------------------------------------- #

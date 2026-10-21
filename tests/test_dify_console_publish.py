@@ -1226,6 +1226,25 @@ def test_a_failed_trial_is_readable_and_named_as_failed(trial_bridge: Any, upstr
     assert "failed" in body["reason"]
 
 
+def test_a_failed_trial_carries_the_gateway_reason(trial_bridge: Any, upstream: _Upstream) -> None:
+    """失败的**原因**必须出现在面板文字里，不能只给一个状态词。
+
+    实测 2026-10-21：欠费导致的失败在面板上只显示「状态：failed」，与代码缺陷长得
+    一模一样，运营无法判断该做什么。网关现在同时回 `error_message`（按请求语言渲染）
+    与 `error_code`，桥把它们原样带进那句可读文字。
+    """
+    upstream.trial_result_body = {
+        "trial_id": "tr_abc123",
+        "status": "failed",
+        "error_code": "TRIAL_FAILED",
+        "error_message": "诊断执行失败，请稍后重试",
+    }
+    status, body = _trial_result_post(trial_bridge)
+    assert status == 200
+    assert "诊断执行失败" in body["reason"]
+    assert "TRIAL_FAILED" in body["reason"]
+
+
 def test_the_trial_result_route_needs_the_trial_key(bridge: Any) -> None:
     """未配试运行钥匙 ⇒ 404（与提交同一条机制）。"""
     status, _ = _trial_result_post(bridge)
