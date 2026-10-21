@@ -82,6 +82,7 @@ class CpmsHandler(BaseHTTPRequestHandler):
         pass
 
     def do_GET(self) -> None:  # noqa: N802
+        CpmsHandler.calls += 1
         order_no = self.path.rsplit("/", 1)[-1]
         payload = {
             "code": 0,
@@ -156,6 +157,9 @@ class SnailHandler(BaseHTTPRequestHandler):
                 )
                 retries[label] = code
             SnailHandler.state["completion_retries"] = retries
+            if SnailHandler.state.get("after_completion") == "transfer":
+                with sqlite3.connect(SnailHandler.state["orders_db"]) as connection:
+                    connection.execute("UPDATE synthetic_orders SET user_id='USER-B'")
         body = json.dumps({"status": 1, "data": {"content": "已查询"}}).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
@@ -179,7 +183,9 @@ def _rows(database: Path) -> list[dict[str, Any]]:
         connection.close()
 
 
-def _case(root: Path, *, label: str, claim_token: str, header_mode: str, want: str):
+def _case(
+    root: Path, *, label: str, claim_token: str, header_mode: str, want: str, after_completion: str = ""
+):
     """在一个全新的数据根上跑一次完整的委派 → 平台 → 节点领取 → 回执。
 
     ``header_mode``：``identity`` 回传清单真实身份、``wrong`` 回传另一个摘要、
@@ -246,6 +252,7 @@ def _case(root: Path, *, label: str, claim_token: str, header_mode: str, want: s
         "AIOPS_GATEWAY_DATABASE_FILE": str(case_root / "data/gateway.db"),
         "AIOPS_GATEWAY_BIND": "127.0.0.1",
         "AIOPS_GATEWAY_PORT": str(port),
+        "AIOPS_GATEWAY_ENVIRONMENT": "verify",
         "AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL": f"http://127.0.0.1:{CpmsHandler.server_port}/charging-pile",
         "AIOPS_GATEWAY_EXECUTION_ENVIRONMENT": "env-local",
         "AIOPS_GATEWAY_AGENT_RUN_CONFIG_FILE": str(agent_runs),
@@ -266,7 +273,10 @@ def _case(root: Path, *, label: str, claim_token: str, header_mode: str, want: s
         "claim_token": claim_token,
         "claim_headers": claim_headers,
         "identity": identity,
+        "after_completion": after_completion,
+        "orders_db": str(orders),
     }
+    CpmsHandler.calls = 0
     process = subprocess.Popen(
         [sys.executable, str(REPO / "tools/m2_close/gateway_launcher.py")],
         cwd=REPO,
@@ -314,6 +324,8 @@ def _case(root: Path, *, label: str, claim_token: str, header_mode: str, want: s
             "claim_status": claim.get("status"),
             "claim_body": json.loads(claim.get("body") or "{}"),
             "completion_retries": SnailHandler.state.get("completion_retries", {}),
+            "cpms_calls": CpmsHandler.calls,
+            "snapshot": json.loads(row["snapshot_json"]) if row.get("snapshot_json") else None,
             "row": {
                 "state": row.get("state"),
                 "reason": row.get("reason"),
@@ -416,14 +428,46 @@ def main() -> int:
             str(row),
         )
         body = (matched.get("delegated") or {}).get("body") or {}
+        snapshot = body.get("charging_status")
+        check(
+            "消费者同 run 快照",
+            snapshot == matched.get("snapshot") and isinstance(snapshot, dict),
+            str(snapshot),
+        )
+        check(
+            "消费者快照摘要",
+            isinstance(snapshot, dict)
+            and hashlib.sha256(json.dumps(snapshot, sort_keys=True).encode()).hexdigest()
+            == body.get("result_sha256"),
+            str(body.get("result_sha256")),
+        )
+        check("消费者不二次读取业务", matched.get("cpms_calls") == 1, str(matched.get("cpms_calls")))
         for label, expected in (("same", 200), ("missing", 409), ("null", 409)):
-            actual = matched["completion_retries"].get(label)
+            actual = matched.get("completion_retries", {}).get(label)
             check(f"成功原因重试 {label}", actual == expected, f"HTTP {actual}, expected {expected}")
         check(
             "一致身份：回执 agent_version 取自已核对记录",
             body.get("agent_version") == matched.get("identity") and body.get("agent_version_gap") is None,
             str({k: body.get(k) for k in ("agent_version", "agent_version_gap")}),
         )
+
+        transferred = _case(
+            root,
+            label="transferred",
+            claim_token=NODE_TOKEN,
+            header_mode="identity",
+            want="refused",
+            after_completion="transfer",
+        )
+        transferred_result = transferred.get("delegated") or {}
+        check(
+            "领取后转移订单拒绝消费者快照",
+            transferred_result.get("status") == 404
+            and (transferred_result.get("body") or {}).get("error", {}).get("code") == "ORDER_NOT_FOUND"
+            and "charging_status" not in (transferred_result.get("body") or {}),
+            str(transferred_result),
+        )
+        check("拒绝后不多读业务", transferred.get("cpms_calls") == 1, str(transferred.get("cpms_calls")))
 
         missing = _case(root, label="missing", claim_token=NODE_TOKEN, header_mode="none", want="missing")
         row = missing.get("row") or {}

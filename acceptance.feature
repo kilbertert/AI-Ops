@@ -3396,3 +3396,28 @@ Feature: M3 使用明确授权会话验收用户入口
       When 记录缺失、配置身份不同、日志不可读或发现构造身份启动器
       Then 工具非零退出且不报告 confirmed
       And 即使核对通过也不声称 App 已接入或登录来源已证明
+
+Feature: 消费者取得同一次委派的充电快照
+  Rule: 结果与本次运行绑定且在最后授权后释放
+    Scenario: SNAPSHOT-01 成功返回同 run 的五字段快照
+      Given 消费者本人订单已被节点读取并确认整轮完成
+      When 委派请求返回
+      Then charging_status 等于该 run 的持久化快照且摘要一致
+      And CPMS 只读取一次，未知状态仍为 unknown
+
+    Scenario: SNAPSHOT-02 领取后的权限变化阻止向消费者交付
+      Given 节点已取回订单快照
+      When 平台返回前订单换主人或最终授权源不可用
+      Then 消费者收到 404 或 503 且不含快照
+
+    Scenario: SNAPSHOT-03 最终授权期间的状态或绑定变化不能漏掉
+      Given 本次运行已有成功快照
+      When 最终授权期间撤销、到期、停用节点或修改执行绑定
+      Then 最终放行拒绝且没有业务正文
+      And 原因不被覆盖，记录不会复活
+
+    Scenario: SNAPSHOT-04 失真快照和未完成循环不能冒充成功
+      Given 运行未完成或快照缺失、结构错误、订单不符
+      When 消费者请求返回
+      Then 非 200 且不含业务快照
+      And 未启用路由及共用 receipt 字段保持原样
