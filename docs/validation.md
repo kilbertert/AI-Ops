@@ -20,7 +20,7 @@
   两项定向突变（移除发送占位、强制 confirmed=true）分别由断言转红；不是导入/语法错误。
 - 覆盖率：新工具语句 **115/123（93.5%）**，分支 **24/28（85.7%）**。
   未做复杂度评分：仓库未安装兼容分析器；聚焦覆盖与反证不能替代真实业务验收。
-- 全量 **3301 passed / 9 skipped / 0 failed**（Linux、Python 3.13）；ruff、compileall、
+- 全量 **3303 passed / 9 skipped / 0 failed**（Linux、Python 3.13；合并 `main`@`4f84737` 后重跑）；ruff、compileall、
   依赖检查、ADR/repo-map/policy 检查通过。镜像真构建并以无网络容器运行工具 `--help`；
   内容摘要 `1a67fa17…`（149 文件）与锁一致。完整构建身份留在私有证据，不部署。
 - 运维方法自检：本次实际执行的 dev-host、服务账号解析、只读订单谓词、HTTPS 回环核对
