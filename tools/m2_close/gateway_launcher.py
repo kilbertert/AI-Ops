@@ -33,6 +33,7 @@ from typing import Any
 
 import uvicorn
 
+from aiops_diagnostics.deployment_environment import require_deployment_identity
 from aiops_diagnostics.gateway_api import create_gateway_app
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_store import GatewayStore
@@ -112,6 +113,13 @@ def SQLiteConversationStore(database_file: Path):  # noqa: N802 - 构造器语�
 
 def main() -> int:
     settings = GatewayServerSettings.from_env()
+    # 部署身份必填（#879）：本启动器绕过 `gateway_server serve`，所以那道启动前置要自己过。
+    # 判据与它同一份实现；少了这一行，「隔离栈」就成了唯一一个不知道自己在哪个环境的部署。
+    try:
+        require_deployment_identity(settings.environment)
+    except ValueError as exc:
+        print(json.dumps({"refused": str(exc)}), file=sys.stderr, flush=True)
+        return 2
     store = GatewayStore(settings.database_file)
     app = create_gateway_app(
         settings=settings,

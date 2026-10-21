@@ -1,3 +1,79 @@
+## 2026-10-21 · 环境身份 / `dify_workspaces` / `GET /v1/dify/workspace`（#879）
+
+**范围**：`deployment_environment.py`（新）、`dify_workspaces.py`（新）、
+`gateway_config.py`（`AIOPS_GATEWAY_ENVIRONMENT` + 内部令牌）、
+`gateway_api.py`（`GET /v1/dify/workspace`）、`gateway_server.py`（serve 的启动前置）、
+`dify_login_provision.py`（环境判据改为共用一份）。
+
+### 一、自动化判据（`tests/test_dify_workspaces.py`，44 例）
+
+| 用例组 | 钉住的规则 |
+|---|---|
+| `ready` / `created` 解析 | 两者都回 id（"是哪一个"的答案相同） |
+| 三种不可用状态 | `creating` / `failed` / `unknown` **各自**一个码，`creating` 标可重试 |
+| 缺行 | 404 `DIFY_WORKSPACE_UNRESOLVED`，且 `retryable=False`（不让人等一件不会发生的事） |
+| `resolve` 不建行 | 解析后表里仍是 0 行 |
+| 两环境撞号 | 同一 `tenant_id` 在 41/95 各一行，互不可见 |
+| 唯一键 | 第二次插同一对 ⇒ `IntegrityError` |
+| 环境标识 | 规范形式接受、非规范**拒绝而不归一化**（`prod.41` / `prod/41` 都不收） |
+| 判据只有一处 | 同一值喂网关判据与登录代理 settings，结论必须一致 |
+| 端点 | 200 / 404 / 409×3 / 400（带 `environment`）/ 401（无令牌）/ 404（未配置密钥）/ 400（坏 tenant_id） |
+
+**突变复验**：把 `DifyWorkspaces.resolve` 改成"缺行返回空串"，`test_resolve_never_creates_a_row`
+与 `test_no_row_is_unresolved_and_the_message_says_so` 同时变红；把 `resolve` 改成只按
+`tenant_id` 查，`test_the_same_tenant_in_two_environments_does_not_cross` 变红。
+
+### 二、真实网关上的 HTTP 取证（`verify-aiops-gateway` 的同一边界）
+
+`uv run aiops-gateway serve` 在一次性数据根上真跑（`AIOPS_GATEWAY_ENVIRONMENT=verify`，
+**从未指向真实 `AIOPS_DATA_HOME`**），逐条驱动：
+
+```
+no row                 -> 404 DIFY_WORKSPACE_UNRESOLVED
+ready row              -> 200 {"workspace_id":"ws-verify-ready","environment":"verify"}
+?environment=other     -> 400 DIFY_WORKSPACE_ENVIRONMENT_NOT_ACCEPTED
+two environments       -> 200（仍是本环境的 ws-verify-ready，没有串到 other）
+no internal token      -> 401
+creating               -> 409 DIFY_WORKSPACE_CREATING
+failed                 -> 409 DIFY_WORKSPACE_FAILED
+unknown                -> 409 DIFY_WORKSPACE_UNKNOWN
+```
+
+证据：`var/verify-evidence/dify-workspace-endpoint.json`（进程内生成，**不含任何令牌明文**；
+内部令牌每次运行现生成）。同时跑了仓库自带的 `observe.py`（`/health` 200、
+未认证 `/v1/runs` 401、注册码 → 设备令牌 201），确认这条改动没有动到既有入口。
+
+### 三、部署前置已在两台主机落好（2026-10-21，先加不依赖新代码）
+
+新代码读这一行，**旧代码忽略它** —— 所以先写进去是零风险的，而且避开了"合并即部署
+（CD 无人工批准门）时网关因缺变量起不来"的窗口。
+
+| 主机 | 文件 | 值 | 备份 |
+|---|---|---|---|
+| 41 | `/etc/aiops-41/gateway.env`（`EnvironmentFile`） | `AIOPS_GATEWAY_ENVIRONMENT=41` | `gateway.env.bak-879-<时间戳>` |
+| 36 | `/home/aiops/gateway.env`（`EnvironmentFile`） | `AIOPS_GATEWAY_ENVIRONMENT=41` | `gateway.env.bak-879-<时间戳>` |
+
+两处权限仍是 `0600`、属主不变（`aiops41:aiops41` / `aiops:aiops`）。36 与 41 是**同一个
+客户环境**的两半（网关在 36、UPMS 与业务库在 41），所以两者同为 `41`，也与 36 上登录代理
+的 `AIOPS_LOGIN_PROXY_ENVIRONMENT=41` 一致。
+
+**部署后要复核的**是"这一行真的进了进程"（只看文件不够，见 `env-41-runbook.md` §1.4）：
+
+```bash
+ssh aiops-41 'tr "\0" "\n" < /proc/$(systemctl show -p MainPID --value aiops-gateway-41)/environ | grep ^AIOPS_GATEWAY_ENVIRONMENT='
+ssh yidong-36 'tr "\0" "\n" < /proc/$(systemctl show -p MainPID --value aiops-gateway)/environ | grep ^AIOPS_GATEWAY_ENVIRONMENT='
+```
+
+### 四、这一轮**没有**证明的
+
+- **两台主机上正在跑的仍是旧代码**：本票的 `dify_workspaces` / `GET /v1/dify/workspace`
+  要等合并后的 CD 部署才在 41/36 上生效，本节只完成了"新代码不会因缺配置而起不来"那一半。
+- **`resolve` 之外的三条消费路径**（发布桥、试运行、运维 CLI）仍是单一 workspace：
+  它们按各自票（#884 / #885 / #886）改造，本票只提供接缝。
+- **`ready` 与 `created` 的区分**尚未有消费方（#881 让 `ready` 成为真正的终态）。
+- **业务验收未完成**：没有真实运营用真实租户查过一次 workspace（41 上还没有任何
+  `dify_workspaces` 行）。
+
 ## 2026-10-21 · Dify 原生知识库选择器：路由判据与构建实测
 
 **范围**：`GET /v1/dify/knowledge`（网关）、`patches/1.17.1/06–07`（Dify api）、

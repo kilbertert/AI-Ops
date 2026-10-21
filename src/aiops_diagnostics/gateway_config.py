@@ -11,6 +11,7 @@ from dotenv import dotenv_values
 
 from aiops_diagnostics.config import selected_config_file, validate_key_slot_name
 from aiops_diagnostics.conversation_store import CONTEXT_MAX_TOKENS, CONTEXT_MAX_TURNS
+from aiops_diagnostics.deployment_environment import canonical_environment
 from aiops_diagnostics.gateway_logging import DEFAULT_LOG_LEVEL, parse_log_level
 from aiops_diagnostics.platform_paths import config_root, data_root
 from aiops_diagnostics.private_files import PrivatePathError, validate_private_file
@@ -165,6 +166,27 @@ class GatewayServerSettings:
     #: 用法相同（登记表里的每一对都各有理由）而**权限最小**，这正是 3A 端点除了说明
     #: 文本什么都不返回的原因：泄露这把钥匙拿不到任何业务数据。
     dify_tools_api_key: str = field(repr=False, default="")
+    #: **本部署的环境标识**（ADR-0059 / #879）。每台机器一个值，落进
+    #: ``dify_workspaces.environment``，并决定"这个租户的工作区是哪一个"。
+    #:
+    #: **必填、无默认值。** 给默认值会让漏配的部署静默退化成一个所有机器共用的环境 ——
+    #: 那正好把 ``environment`` 列挡的东西（两套 UPMS 的 ``tenant_id`` 撞号）放回来，
+    #: 而且不报错。所以漏配或写成 ``prod.41`` 这类非规范形式都是**启动失败**。
+    #:
+    #: 判据只有一处实现（``deployment_environment.canonical_environment``），登录代理
+    #: 的 ``AIOPS_LOGIN_PROXY_ENVIRONMENT`` 用的是同一份 —— 两处各写一份会漂开，
+    #: 一处拒绝的值另一处照收。
+    environment: str = ""
+    #: 网关自己的**内部令牌密钥**（HMAC-SHA256，与平台 ``InternalTokenManager`` 同一
+    #: 消息格式）。目前唯一的消费者是 ``GET /v1/dify/workspace`` —— 登录代理与发布桥
+    #: 都不在网关进程里，它们要问"这个租户的工作区是哪一个"就必须有一把**进程间**凭据。
+    #:
+    #: 留空 ⇒ 该端点整体 404（与其余 Dify 路由同一条「未配置即不启用」的机制）。
+    #: 它**不复用**任何 Dify 侧钥匙：那几把是 Dify 调我们时用的，这把是我们自己的
+    #: 进程之间用的，且不暴露给 Dify。
+    internal_token_secret: str = field(repr=False, default="")
+    #: 内部令牌的有效窗口（秒），与平台 ``InternalTokenManager`` 缺省一致（300）。
+    internal_token_expire_seconds: int = 300
     #: Conversation context window (#482). The defaults ARE the contract's
     #: numbers (8 turns / 8k tokens, ``conversation_store`` owns the constants);
     #: they are configurable because a RAG or promotional turn also spends the
@@ -287,6 +309,16 @@ class GatewayServerSettings:
             or _file_value(file_values, "AIOPS_GATEWAY_DIFY_PUBLISH_API_KEY"),
             dify_tools_api_key=_env("AIOPS_GATEWAY_DIFY_TOOLS_API_KEY")
             or _file_value(file_values, "AIOPS_GATEWAY_DIFY_TOOLS_API_KEY"),
+            environment=_env("AIOPS_GATEWAY_ENVIRONMENT")
+            or _file_value(file_values, "AIOPS_GATEWAY_ENVIRONMENT"),
+            internal_token_secret=_env("AIOPS_GATEWAY_INTERNAL_TOKEN_SECRET")
+            or _file_value(file_values, "AIOPS_GATEWAY_INTERNAL_TOKEN_SECRET"),
+            # 与 `kb_search_max_results` 同一条规则：密钥在私有配置里，窗口也该能在它旁边调。
+            # 只读进程 env 时，运维改了 `production.env` 里的这一行会**静默不生效** ——
+            # 而它旁边那把密钥是从文件里读到的，读者有充分理由认为两者同源。
+            internal_token_expire_seconds=_int_value(
+                file_values, "AIOPS_GATEWAY_INTERNAL_TOKEN_EXPIRE_SECONDS", 300
+            ),
             jev_base_url=_env("AIOPS_GATEWAY_JEV_BASE_URL")
             or _file_value(file_values, "AIOPS_GATEWAY_JEV_BASE_URL"),
             jev_api_key=_env("AIOPS_GATEWAY_JEV_API_KEY")
@@ -300,6 +332,17 @@ class GatewayServerSettings:
         )
 
     def validate(self) -> None:
+        # 部署身份在**启动时**校验（#879）：一个格式不对的环境标识如果活到请求路径上，
+        # 它的表现是"某个租户的工作区有时找得到、有时找不到"，而不是"配置写错了"。
+        #
+        # 判据本身只有一处（`canonical_environment`），登录代理用的是同一份。
+        # **必备性**不在这里判：`from_env()` 是读部署身份的那一处，缺值在那里就是启动
+        # 失败；而一个直接构造出来的 settings 不是一次部署（测试就是这么构造的）。
+        # 空值在这里只意味着"这个进程没有部署身份"，用到它的那个端点因此不启用。
+        if self.environment:
+            self.environment = canonical_environment(self.environment)
+        if not 1 <= self.internal_token_expire_seconds <= 3600:
+            raise ValueError("AIOPS_GATEWAY_INTERNAL_TOKEN_EXPIRE_SECONDS must be between 1 and 3600")
         if self.charging_status_base_url:
             canonical_gateway_url(self.charging_status_base_url)
             if not SAFE_PROFILE_NAME.fullmatch(self.execution_environment):
