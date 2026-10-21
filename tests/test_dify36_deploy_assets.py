@@ -146,7 +146,7 @@ def test_web_image_override_defaults_to_upstream(tmp_path):
 
 def test_web_image_override_points_at_the_patched_build(tmp_path):
     """`DIFY_WEB_IMAGE` 是 web 侧唯一的上线开关（api 侧的对应物是只读挂载）。"""
-    web = _resolved_compose(
-        tmp_path, "DIFY_WEB_IMAGE=aiops/dify-web-patched:1.17.1\n"
-    )["services"]["web"]["image"]
+    web = _resolved_compose(tmp_path, "DIFY_WEB_IMAGE=aiops/dify-web-patched:1.17.1\n")["services"]["web"][
+        "image"
+    ]
     assert web == "aiops/dify-web-patched:1.17.1"
