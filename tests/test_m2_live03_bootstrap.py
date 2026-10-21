@@ -85,3 +85,98 @@ def test_node_env_regeneration_keeps_non_credential_keys(tmp_path, bootstrap, mo
     assert "SNAIL_AI_APP_ID=new-app" in text
     assert "old-app" not in text
     assert out.stat().st_mode & 0o777 == 0o600
+
+
+def _agent_page(agent: dict) -> dict:
+    return {"status": 1, "data": [agent]}
+
+
+_AGENT = {
+    "id": 5,
+    "name": "aiops-m2live03",
+    "instruction": "旧指令",
+    "chatModelId": 7,
+    "appId": "app-1",
+    "mcpEnabled": False,
+}
+
+
+def test_an_agent_on_another_model_config_is_rebound(bootstrap, monkeypatch):
+    """换了供应商会新建一条模型配置；智能体不改绑就仍跑旧模型。
+
+    这正是「配置改了、跑的没变」的形态：`ensure_model` 按 modelKey 找行，
+    换标识新建行，而 `ensure_agent` 早先只按名字找到就返回，从不改 `chatModelId`。
+    """
+    calls: list[tuple[str, str, dict | None]] = []
+
+    def fake_call(path, body=None, headers=None, method=None):
+        verb = method or ("GET" if body is None else "POST")
+        calls.append((verb, path, body))
+        if path.startswith("/agent/page"):
+            return 200, _agent_page(dict(_AGENT))
+        if verb == "GET":
+            return 200, {"status": 1, "data": dict(_AGENT, chatModelId=42)}
+        return 200, {"status": 1}
+
+    monkeypatch.setattr(bootstrap, "call", fake_call)
+
+    assert bootstrap.ensure_agent("tok", "app-1", 42) == 5
+
+    writes = [c for c in calls if c[0] == "PUT"]
+    assert writes, "指向别的模型配置时必须改绑，而不是按名字直接返回"
+    assert writes[0][1] == "/agent/5"
+    assert writes[0][2]["chatModelId"] == 42
+    # 读回核对：写入后必须再读一次，不能凭写入的返回码认为成功。
+    assert [c[0] for c in calls][-1] == "GET"
+
+
+def test_an_agent_already_on_this_model_config_is_left_alone(bootstrap, monkeypatch):
+    calls: list[str] = []
+    current = dict(_AGENT, chatModelId=42, instruction=bootstrap.AGENT_INSTRUCTION)
+
+    def fake_call(path, body=None, headers=None, method=None):
+        calls.append(method or ("GET" if body is None else "POST"))
+        return 200, _agent_page(current)
+
+    monkeypatch.setattr(bootstrap, "call", fake_call)
+
+    assert bootstrap.ensure_agent("tok", "app-1", 42) == 5
+    assert "PUT" not in calls
+
+
+def test_a_rebind_that_does_not_take_is_refused(bootstrap, monkeypatch):
+    """写成功但读回仍是旧模型 ⇒ 拒绝，而不是报成功。
+
+    `fail()` 是 SystemExit：这条断言的是「拒绝」，不是「恰好没抛」。
+    """
+    state = {"model": 7}
+
+    def fake_call(path, body=None, headers=None, method=None):
+        verb = method or ("GET" if body is None else "POST")
+        if path.startswith("/agent/page"):
+            return 200, _agent_page(dict(_AGENT))
+        if verb == "PUT":
+            return 200, {"status": 1}  # 平台回 200，但不生效
+        return 200, {"status": 1, "data": dict(_AGENT, chatModelId=state["model"])}
+
+    monkeypatch.setattr(bootstrap, "call", fake_call)
+
+    with pytest.raises(SystemExit):
+        bootstrap.ensure_agent("tok", "app-1", 42)
+
+
+def test_rebind_refuses_an_agent_with_another_name(bootstrap, monkeypatch):
+    """按名字找到才改：名字对不上时绝不改写别人的智能体。"""
+
+    def fake_call(path, body=None, headers=None, method=None):
+        verb = method or ("GET" if body is None else "POST")
+        if path.startswith("/agent/page"):
+            return 200, _agent_page(dict(_AGENT, name="someone-else"))
+        if verb == "GET":
+            return 200, {"status": 1, "data": dict(_AGENT, name="someone-else")}
+        return 200, {"status": 1}
+
+    monkeypatch.setattr(bootstrap, "call", fake_call)
+
+    with pytest.raises(SystemExit):
+        bootstrap.rebind_agent("tok", dict(_AGENT, name="aiops-m2live03"), "app-1", 42)

@@ -335,11 +335,66 @@ def _write_node_env(credentials: dict[str, str]) -> None:
     os.chmod(_node_env_out(), 0o600)
 
 
+def rebind_agent(token: str, agent: dict, app_id: str, model_id: int) -> None:
+    """按本次的模型配置与 instruction 改绑，并读回核对。
+
+    `AgentRequestVO` 是可整份替换的字段集，不是 patch：少给的字段会被写成空，
+    所以先读当前值，再只覆盖本次要改的两项，其余原样回填。
+    """
+    status, current = call(f"/agent/{agent['id']}", None, {"Snail-Ai-Auth": token}, "GET")
+    if status != 200 or not current or current.get("status") != 1:
+        fail(f"读不到智能体 {agent['id']}，无法改绑（HTTP {status}）")
+    source = current.get("data") or {}
+    payload = {
+        key: source.get(key)
+        for key in (
+            "name",
+            "description",
+            "avatar",
+            "greeting",
+            "presetQuestions",
+            "mcpEnabled",
+            "skillEnabled",
+            "webSearchEnabled",
+            "ragEnabled",
+            "memoryEnabled",
+            "memoryConfigId",
+            "ragIds",
+            "ragCallMode",
+            "shortTermMemorySize",
+            "isFeatured",
+        )
+        if key in source
+    }
+    payload.update({"instruction": AGENT_INSTRUCTION, "chatModelId": model_id, "appId": app_id})
+    if payload.get("name") != SERVICE:
+        fail(f"智能体 {agent['id']} 的名字不是 {SERVICE}，拒绝改写")
+    status, body = call(f"/agent/{agent['id']}", payload, {"Snail-Ai-Auth": token}, "PUT")
+    if not (status == 200 and body and body.get("status") == 1):
+        fail(f"改绑智能体失败（HTTP {status}）")
+    status, after = call(f"/agent/{agent['id']}", None, {"Snail-Ai-Auth": token}, "GET")
+    data = (after or {}).get("data") or {}
+    if status != 200 or data.get("chatModelId") != model_id:
+        # 写成功但读回不对，与写失败一样不能算成功：平台照旧会用旧模型。
+        fail(f"改绑后读回的 chatModelId 不是 {model_id}（HTTP {status}）")
+
+
 def ensure_agent(token: str, app_id: str, model_id: int) -> int:
+    """建或**改绑**智能体；已存在但指向别的模型配置时改绑。
+
+    只建不改的写法在换供应商时是错的：`ensure_model` 按 `modelKey` 找配置，
+    换了模型标识就会新建一行，而旧智能体仍指向旧行 —— 平台照旧把请求发到
+    旧模型，症状是「配置改了、跑的没变」。所以 `chatModelId` 与 instruction
+    与本次不一致时必须 PUT 改绑，并用读回核对。
+    """
     status, body = call("/agent/page?page=1&size=50", None, {"Snail-Ai-Auth": token}, "GET")
     for agent in (body or {}).get("data", []) or []:
-        if agent.get("name") == SERVICE:
+        if agent.get("name") != SERVICE:
+            continue
+        if agent.get("chatModelId") == model_id and agent.get("instruction") == AGENT_INSTRUCTION:
             return agent["id"]
+        rebind_agent(token, agent, app_id, model_id)
+        return agent["id"]
     status, body = call(
         "/agent",
         {
