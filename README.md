@@ -184,7 +184,7 @@ AI-Ops 用独立服务身份回查——见 [ADR-0003](docs/adr/0003-bff-delegat
 flowchart TB
     L6["L6 服务边界与入口<br/>gateway_api · gateway_runtime · cli · gateway_server · gateway_cli<br/>gateway_client · admin_cli · gateway_config · gateway_tokens · gateway_logging<br/>tdengine_proxy · responses_adapter · codex_launcher"]
     L5["L5 持久化<br/>gateway_store · conversation_store · metrics_store<br/>agent_lifecycle · shortcut_lifecycle · dify_app_registry · dify_workspaces"]
-    L4["L4 推理与产品能力<br/>agent_engine · codex_runtime · agent_runner · agent_validator · qa_rag<br/>turn_recovery · routing · faq · promo_agents · answer_language · agent_manifest · agent_debug<br/>dify_dsl_pull · dify_tools_catalog · dify_trial · dify_login_proxy · dify_login_company · dify_login_provision · dify_login_service · dify_login_server · dify_knowledge_api · dify_debug_identity · agent_content · clarification"]
+    L4["L4 推理与产品能力<br/>agent_engine · codex_runtime · agent_runner · agent_validator · qa_rag<br/>turn_recovery · routing · faq · promo_agents · answer_language · agent_manifest · agent_debug<br/>dify_dsl_pull · dify_tools_catalog · dify_trial · dify_login_proxy · dify_login_company · dify_login_provision · dify_login_service · dify_login_server · dify_knowledge_api · dify_debug_identity · dify_ensure_workspace · dify_inner_api · agent_content · clarification"]
     L3["L3 证据与诊断内核<br/>sources · diagnostic_tools · engine · journal<br/>agent_workspace · health_report · knowledge_retrieval"]
     L2["L2 身份与范围<br/>scope_context · query_scope · caller_auth · third_session_auth<br/>company_token_auth"]
     L1["L1 领域规则（纯函数）<br/>rules · order_visibility · health_metrics · health_curves · parsing"]
@@ -334,6 +334,8 @@ flowchart TB
 | `shortcut_lifecycle.py` | 产品快捷动作草稿与不可变版本（平台默认 + 租户覆盖） |
 | `dify_app_registry.py` | 运行时注册表（#584 / PRD #577）：`(租户, 业务入口) → Dify app` 的显式映射，同一 SQLite 文件一张表。Dify **没有租户概念**，租户判定只能在我们的运行时完成，所以这张表是那条边界的落点。查表**只返回绑定或空**，绝不推断；一旦有任何一行，未登记的组合**什么都不选**（fail closed），而表为空时保持注册表出现之前的选法不变（可安全地以惰性状态上线）|
 | `dify_workspaces.py` | `(租户, 环境) → Dify workspace` 的映射与**只查不建**的解析（#879 / ADR-0059）：`UNIQUE(tenant_id, environment)`，因为两套 UPMS 的 `tenant_id` 各自生成，撞号时只有环境列能分辨。解析失败是**四个可区分的码**（`UNRESOLVED` / `CREATING` 可重试 / `FAILED` 要重建 / `UNKNOWN` 先对账），**不是空串** —— 空串在 Dify 一侧的含义是"平台根"，那会把动作打到别人的工作区。`created` 与 `ready` 都返回 id，区别只在后续步骤是否跑完（#881）|
+| `dify_ensure_workspace.py` | 开户（#880 / ADR-0068）：**先占位、再建**，并让 ``creating`` 不是死胡同。`claim` 是唯一能串行化的动作（唯一键 + 先插入）；超时/读中断归 ``unknown``（先按派生名对账）而不是 ``failed``（可重建）——两者的后果相反，而 Dify **没有删 workspace 的 API**。对账命中 1 个补 UUID、0 个才重建、>1 个拒绝并要人工 |
+| `dify_inner_api.py` | Dify ``inner_api`` 的客户端（#880）：``POST /inner/api/enterprise/workspace`` 建 workspace、member 端点把已有账号 join 进去（``create_tenant_member`` —— 邀请对已激活账号在 ``RBAC_ENABLED=False`` 下静默不生效）。地址是配置项：容器内网 ``IP:5001`` → 转发器上线后 ``127.0.0.1:15001``，代码不改 |
 | `deployment_environment.py` | 部署身份里**环境标识**的唯一判据（ADR-0059 / ADR-0061）：网关的 `AIOPS_GATEWAY_ENVIRONMENT` 与登录代理的 `AIOPS_LOGIN_PROXY_ENVIRONMENT` 共用它。只校验、**不归一化** —— `prod.41` 与 `prod/41` 化成同一个值就会把两个部署并成一个 |
 
 #### L6 服务边界与入口

@@ -1545,6 +1545,35 @@ Dify **没有草稿区** —— 41 上实测：保存 config 之后，`GET …/e
 | 模型 | ⚠️ 改成白名单外（非 `deepseek-v4-flash`）会让**拉取失败** |
 | 开场白 / 预设问题 / 知识库 / 工具 / 编排 | ❌ 运行时**不读**（权威在我们侧，#585；Dify 的 dataset id 也不是我们的知识库 id） |
 
+### 3.1-sexies 开户：`admin ensure-workspace`（#880，2026-10-21 新增）
+
+**用途**：给一个公司租户在 Dify 里建出它**自己的** workspace（`aiops-{env}-{tenant}`）。
+
+```bash
+# 在**该环境自己的机器**上跑（库在本机，36 写不到 41 的库）
+runuser -u aiops41 -- /opt/aiops-41/.venv/bin/aiops --config /etc/aiops-41/production.env \
+  admin ensure-workspace --tenant <租户 id> --db /var/lib/aiops-41/gateway/gateway.db
+```
+
+**三条会踩到的**：
+
+1. **环境取本机部署身份**（`AIOPS_GATEWAY_ENVIRONMENT`），不是 `--env` 参数 —— 允许跨环境
+   建同一个 `tenant_id` 的 workspace 就是把隔离交给调用方选。
+2. **建 workspace 的唯一入口是 `inner_api`**：`AIOPS_GATEWAY_DIFY_INNER_API_BASE_URL`
+   + `_KEY`。今天那是 api 容器的内网 `IP:5001`，**只有 36 本机能到**；41 要等 #889 的
+   转发器（`127.0.0.1:15001`），换的是配置值不是代码。
+3. **对账用 `AIOPS_GATEWAY_DIFY_CONSOLE_API_KEY`，它必须是 Dify 的 `ADMIN_API_KEY`**
+   （`GET /console/api/all-workspaces` 要 admin 角色）。41 上那一把 2026-10-21 实测可用。
+
+**Dify 没有删 workspace 的 API —— 建了就是永久的。** 所以命令的三种结局要分清：
+
+| 输出 `state` | 含义 | 下一步 |
+|---|---|---|
+| `created` | 建成了（`note` 会说"新建"还是"对账补 UUID"） | 无 |
+| `creating` | 别人正在建（租约未过期） | 等，别重跑 |
+| `failed`（非零退出） | Dify **明确**没建（4xx/5xx 或连接被拒） | 直接重跑即可 |
+| `unknown`（非零退出） | 超时/读中断，**可能已经建了** | 重跑会先按名字对账，不要手工建第二个 |
+
 ## 4. 真实会话与数据（验收前置）
 
 ### 4.1 取有效 thirdSession

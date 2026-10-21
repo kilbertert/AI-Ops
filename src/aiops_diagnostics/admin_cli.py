@@ -534,3 +534,112 @@ def sync_from_dify(
     typer.echo(json.dumps({"dry_run": dry_run, "outcomes": outcomes}, ensure_ascii=False, indent=2))
     if worst:
         raise typer.Exit(code=1)
+
+
+@admin_app.command("ensure-workspace")
+def ensure_workspace_command(
+    ctx: typer.Context,
+    tenant: Annotated[str, typer.Option("--tenant", help="公司租户 id（sys_organ.id）")],
+    db: Annotated[
+        Path | None,
+        typer.Option("--db", help="gateway 数据库文件（缺省会回退 XDG 默认并新建空库）"),
+    ] = None,
+) -> None:
+    """把一个租户的 Dify workspace **真的建出来**（#880）。
+
+    **环境取本机部署身份，不是参数** —— 与 `resolve_workspace` 同一条规则：允许跨环境
+    建同一个 `tenant_id` 的 workspace，等于把隔离交给调用方选。
+
+    幂等：已 `created`/`ready` 的租户一条写都不发；`creating` 且租约未过期的报"有人在建"；
+    `failed` 重走一次；`unknown` 或租约过期的 `creating` **先按名字对账**，命中 1 个就补
+    UUID（不重建）、命中 0 个才重建、命中 >1 个拒绝并要人工。
+    """
+    from aiops_diagnostics.dify_ensure_workspace import (
+        PLATFORM_OWNER_EMAIL,
+        EnsureError,
+        ensure_workspace,
+        render,
+    )
+    from aiops_diagnostics.dify_inner_api import DifyInnerApi, InnerApiSettings
+    from aiops_diagnostics.dify_workspaces import DifyWorkspaces
+
+    settings = GatewayServerSettings.from_env()
+    config_file = ctx.obj.get("config_file") if ctx.obj else None
+    if config_file is not None:
+        from aiops_diagnostics.gateway_config import _private_config_values
+
+        values = _private_config_values(Path(config_file).expanduser().resolve())
+        for name in (
+            "AIOPS_GATEWAY_ENVIRONMENT",
+            "AIOPS_GATEWAY_DIFY_INNER_API_BASE_URL",
+            "AIOPS_GATEWAY_DIFY_INNER_API_KEY",
+            "AIOPS_GATEWAY_DIFY_CONSOLE_BASE_URL",
+            "AIOPS_GATEWAY_DIFY_CONSOLE_API_KEY",
+        ):
+            if not getattr(settings, _SETTING_FOR[name], ""):
+                setattr(settings, _SETTING_FOR[name], values.get(name) or "")
+
+    if not settings.environment:
+        typer.secho(
+            "缺少 AIOPS_GATEWAY_ENVIRONMENT：环境取本机部署身份，不是参数",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    inner = DifyInnerApi(
+        InnerApiSettings(
+            base_url=settings.dify_inner_api_base_url,
+            api_key=settings.dify_inner_api_key,
+        )
+    )
+    if not inner.settings.configured:
+        typer.secho(
+            "缺少 AIOPS_GATEWAY_DIFY_INNER_API_BASE_URL / _KEY：建 workspace 的唯一入口是 inner_api",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    if not (settings.dify_console_base_url and settings.dify_console_api_key):
+        typer.secho(
+            "缺少 AIOPS_GATEWAY_DIFY_CONSOLE_BASE_URL / _API_KEY：对账（all-workspaces）要用它",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
+    database = db or settings.database_file
+    if db is None and not os.environ.get("AIOPS_GATEWAY_DATABASE_FILE"):
+        typer.secho(
+            "缺少 --db：缺省会静默回退 XDG 默认并新建空库。请显式给出 --db <gateway.db>，"
+            "或 export AIOPS_GATEWAY_DATABASE_FILE=<gateway.db>。",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
+    try:
+        outcome = ensure_workspace(
+            tenant_id=tenant,
+            environment=settings.environment,
+            workspaces=DifyWorkspaces(database),
+            inner=inner,
+            console_base_url=settings.dify_console_base_url,
+            console_api_key=settings.dify_console_api_key,
+            log=lambda line: typer.secho(line, err=True),
+        )
+    except EnsureError as exc:
+        typer.secho(json.dumps({"error": exc.code, "message": exc.message}, ensure_ascii=False), err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(render(outcome))
+    typer.echo(f"platform owner: {PLATFORM_OWNER_EMAIL}", err=True)
+
+
+#: CLI 参数名 → `GatewayServerSettings` 字段。放在函数外，字典只写一次 —— 上面那个循环
+#: 复制五份 `setattr` 字符串是"同一规则两份实现"的经典起点。
+_SETTING_FOR = {
+    "AIOPS_GATEWAY_ENVIRONMENT": "environment",
+    "AIOPS_GATEWAY_DIFY_INNER_API_BASE_URL": "dify_inner_api_base_url",
+    "AIOPS_GATEWAY_DIFY_INNER_API_KEY": "dify_inner_api_key",
+    "AIOPS_GATEWAY_DIFY_CONSOLE_BASE_URL": "dify_console_base_url",
+    "AIOPS_GATEWAY_DIFY_CONSOLE_API_KEY": "dify_console_api_key",
+}
