@@ -139,10 +139,19 @@ output_contract = "blocks-v1"
 # `DIFY_DSL_MALFORMED` / 404）。真正的正文权威一直活着，只是换了 id：`aiops-41-kefu-agent`
 # （`8e36f0a6-…`），其 `pre_prompt` 与该 agent 已发布版本的正文**逐字节相同**
 # （759 字，md5 `e52d5de005bfd7e5ad5402b0921b0ec1`）。绑定改到它，内容零变化。
+#
+# ⚠️ **2026-10-21 迁到租户自己的 workspace**（与 operator 同一轮）。#884/#885 之后发布与
+# 试运行都按 `(租户, 环境)` 解析 workspace，`8e36f0a6-…` 在**平台 workspace**（`2db44904-…`）
+# 里，管家端从租户 workspace 发就 502。副本 `88fc20bd-…` 落在 `c3f871e1-…`：
+#   - 正文 759 字，md5 `e52d5de005bfd7e5`，与原件逐字节相同；
+#   - 它引用的 dataset 也随 workspace 重建（`ebd103c0-…`，句柄 `kb-canary-2`，
+#     外接 API 的密钥按目标租户重新加密 —— 密文不能跨 workspace 搬）；
+#   - 该 app **没有**自定义工具条目，所以不需要改写 `provider_id`。
+# 旧 workspace 里的 `8e36f0a6-…` **保留不删**，作为回滚点。
 [[dify_apps]]
 tenant_id = "1942105476598861824"
 business_entry = "consumer"
-app_id = "8e36f0a6-324c-4003-b573-7444cc649411"
+app_id = "88fc20bd-7502-4932-91ee-5f632181cac3"
 agent_name = "canary-客服"
 
 # 验收租户（`1783…`）**不再有 Dify 绑定**：它绑过的 app 全部已从 Dify 删除，正文改由
@@ -178,8 +187,21 @@ output_contract = "diagnosis-v1"
 # （`e35f8fda-…`），旧的 chat app 已不在 Dify 上。41 库里的注册行**早已**是 `e35f8fda-…`
 # （实测 `unchanged`、版本 12 可发布），只有这份清单没跟上 —— 照它跑 `reconcile` 会把
 # 注册行改指到不存在的 app，等于把管家端诊断断掉。本行改为与库一致。
+# 注册表为真实租户**新增 operator 一行**（consumer 那行不动）。
+# 未登记的 `(租户, 入口)` 仍然 fail closed；本次只把这一对从「没登记」变成「点名一份」。
+#
+# ⚠️ **2026-10-21 迁到租户自己的 workspace**（#887 六步的第 6 步）。#884/#885 之后，
+# 发布与试运行都按 `(租户, 环境)` 解析 workspace（ADR-0059），而 41 的租户 workspace
+# 里原本**没有 app** ⇒ 两条路都是 `502 DIFY_DSL_MALFORMED`。
+# 已把 app 复制到 `aiops-41-1942105476598861824`（`c3f871e1-…`）：
+#   - 新副本 `137cc417-…`，正文 md5 `9966453b…` 与原件逐字节相同；
+#   - `aiops` 工具提供方在新 workspace 里重建（`35cc12c9-…`），副本的 7 个工具条目
+#     已从旧 UUID `86392bb8-…` 改指它（`tool_provider_ids()` 每次拉取现查，不落库）；
+#   - 模型提供方凭据按 workspace 复制了一份（`provider_credentials` 行原样搬，
+#     这一版 Dify 存的是插件格式的明文 JSON，不是 `encrypt_token` 的密文）。
+# 旧 workspace 里的 `e35f8fda-…` **保留不删**，作为回滚点。
 [[dify_apps]]
 tenant_id = "1942105476598861824"
 business_entry = "operator"
-app_id = "e35f8fda-dd4e-4317-b05c-d29f23b4f395"
+app_id = "137cc417-f068-43c2-9d4a-43ebd254ea01"
 agent_name = "ops-methodology-700"
