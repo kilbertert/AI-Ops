@@ -189,6 +189,29 @@ Codex turn … failed: 403 Forbidden [sk-x4CF…] 预扣费额度失败，
 PUT 更新后的状态，避免夹具保留旧 instruction 却仍被当成成功。全量初跑 3215 passed / 9 skipped / 1 failed：唯一失败为并行部署前进后，dry-run
 拒绝旧基线。同步主线后复跑该检查，最终结果见本 PR。
 
+## 2026-10-21 · 平台租户落到自己的平台 workspace（#882）
+
+**范围**：`dify_workspaces.py`（`PLATFORM_TENANT_ID`）、`dify_login_service.py`（平台分支）。
+
+### 一、判据（`tests/test_dify_login_workspace.py`，新增 3 例）
+
+| 用例 | 钉住的规则 |
+|---|---|
+| 平台账号落点 | `type=-1` 解析的是哨兵租户 `platform`，join 的也是那个 workspace |
+| 租户主账号**不**算平台 | `type=1` 仍解析它自己的 `tenant_id`（混用会让它看不到本租户的智能体） |
+| 平台 workspace 未建 | 拒绝，且文案里的命令是 `--tenant platform`（运维不会去给不存在的租户开户） |
+
+**突变复验**：把 `workspace_tenant` 改回 `identity.tenant_id` ⇒ 第一、第三条红（解析用了
+真实租户、文案也指错了对象）。
+
+### 二、**没有**做到的（据实）
+
+- **41 上还没有 `platform` 那一行**：本票交付的是"平台账号有地方可去"，那一行要跑一次
+  `aiops admin ensure-workspace --tenant platform`（属主机器上）。
+- **平台 workspace 仍是空壳**（无插件/凭据/app）—— 那是 #881。
+- **试运行的订单范围**不受本票影响：它按公司身份算（`type ∈ {-1,1}` → 整租户），
+  与 workspace 无关。
+
 ## 2026-10-21 · 试运行的草稿来源按发起人解析（#885）
 
 **范围**：`gateway_api.py`（`_trial_draft_from_console` 按 `binding.tenant_id` 解析；

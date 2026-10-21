@@ -41,6 +41,7 @@ from aiops_diagnostics.dify_login_proxy import (
     PermissionDenied,
     mint_console_session,
 )
+from aiops_diagnostics.dify_workspaces import PLATFORM_TENANT_ID
 
 _LOGGER = logging.getLogger("aiops.dify_login_proxy.service")
 
@@ -56,6 +57,14 @@ _LOGGER = logging.getLogger("aiops.dify_login_proxy.service")
 #:    成员且悄悄改掉归属。
 #: ⇒ 封禁落在**我们自己的映射**上，而"活着的会话随之失效"由令牌寿命界定（见
 #:    :data:`SESSION_MAX_MINUTES_NOTE`）—— 代理不在请求路径上时，这是能诚实给出的边界。
+#: 公司 `sys_user.type` 里**平台账号**的取值（`-1`）。与 `scope_context.py` 的
+#: `TENANT_LEVEL_USER_TYPES` 不是同一件事：那个集合是"可见范围是整租户"（`-1` 与 `1`），
+#: 而这里只认 `-1` —— **平台**账号不属于任何租户，租户主账号（`1`）属于。
+#:
+#: 为什么在代理这一层还要单独判一次：这里回答的是"它该进哪个 workspace"，不是"它能看多大
+#: 范围"。后者在网关注册表里判，两处判据各自只有一个问题要答。
+PLATFORM_USER_TYPE = "-1"
+
 STATUS_ACTIVE = "active"
 STATUS_DISABLED = "disabled"
 
@@ -429,8 +438,15 @@ class LoginService:
         if self.workspace_directory is not None:
             from aiops_diagnostics.dify_workspace_directory import WorkspaceUnavailable
 
+            # **平台账号落到它自己的平台 workspace**（#882）。`type=-1` 的账号不属于任何
+            # `sys_organ`，所以它没有可解析的租户 —— 不单独处理的话，多 workspace 一上线，
+            # 平台账号会发现"自己没有工作区"，登录直接变砖（而它正是应急入口）。
+            #
+            # 它的"可见全部"**不**通过进别人的 workspace 体现（ADR-0059 §4）：编辑面只在
+            # 自己的平台 workspace；跨租户可见性只体现在试运行的订单范围与发布审计上。
+            workspace_tenant = PLATFORM_TENANT_ID if user_type == PLATFORM_USER_TYPE else identity.tenant_id
             try:
-                workspace_id = self.workspace_directory.resolve(identity.tenant_id)
+                workspace_id = self.workspace_directory.resolve(workspace_tenant)
             except WorkspaceUnavailable as exc:
                 self.store.record_audit(
                     company_user_id=identity.user_id,
@@ -440,7 +456,7 @@ class LoginService:
                 )
                 raise PermissionDenied(
                     exc.code,
-                    _workspace_refusal(identity.tenant_id, exc),
+                    _workspace_refusal(workspace_tenant, exc),
                 ) from exc
 
         if not account_id:

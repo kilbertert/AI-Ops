@@ -165,13 +165,18 @@ def _service(tmp_path: Path, directory: Any, inner: Any) -> LoginService:
     )
 
 
-def _patch_company(monkeypatch, *, permissions: tuple[str, ...] = ("aiops:agent:edit",)) -> None:
+def _patch_company(
+    monkeypatch,
+    *,
+    permissions: tuple[str, ...] = ("aiops:agent:edit",),
+    user_type: str = "tenant",
+) -> None:
     from aiops_diagnostics import dify_login_service as module
 
     identity = CompanyIdentity(user_id="u-1", username="zhang", tenant_id=TENANT, token="t")
     monkeypatch.setattr(module, "company_login", lambda *a, **k: identity)
     monkeypatch.setattr(module, "read_permissions", lambda *a, **k: permissions)
-    monkeypatch.setattr(module, "read_user_type", lambda *a, **k: "tenant")
+    monkeypatch.setattr(module, "read_user_type", lambda *a, **k: user_type)
     monkeypatch.setattr(
         module,
         "provision_editor",
@@ -289,3 +294,66 @@ def test_half_a_configuration_is_a_startup_error() -> None:
         inner_api_base_url="http://inner.invalid",
         inner_api_key="i" * 16,
     )
+
+
+# --- #882：平台租户（type=-1）落到它自己的平台 workspace ---------------------------
+
+
+def test_a_platform_account_lands_in_the_platform_workspace(tmp_path: Path, monkeypatch) -> None:
+    """`type=-1` 的账号解析的是**平台租户**的 workspace，不是它自带的 `tenant_id`。
+
+    多 workspace 一上线，平台账号不属于任何 `sys_organ` —— 不单独处理的话它会发现
+    "自己没有工作区"，登录直接变砖，而它正是应急入口。
+
+    变异对照：把 `workspace_tenant` 改回 `identity.tenant_id`，本条变红（解析用的是
+    真实的 `T-…`，而表里只有 `platform` 那一行）。
+    """
+    _patch_company(monkeypatch, user_type="-1")
+    directory, inner = _Directory("ws-platform"), _Inner()
+    service = _service(tmp_path, directory, inner)
+
+    service.login(username="ops", password="pw", random_str="r", code="c")
+
+    from aiops_diagnostics.dify_workspaces import PLATFORM_TENANT_ID
+
+    assert directory.asked == [PLATFORM_TENANT_ID], f"解析的是 {directory.asked}"
+    assert inner.joins[0]["workspace_id"] == "ws-platform"
+
+
+def test_a_tenant_level_account_is_not_treated_as_platform(tmp_path: Path, monkeypatch) -> None:
+    """`type=1`（租户主账号）**属于**它的租户，不该被当成平台账号。
+
+    两者在可见范围上同为"整租户"，但在"该进哪个 workspace"上相反 —— 混用会把租户主账号
+    塞进平台工作区，于是它看不到自己租户的智能体。
+    """
+    _patch_company(monkeypatch, user_type="1")
+    directory, inner = _Directory("ws-tenant"), _Inner()
+    service = _service(tmp_path, directory, inner)
+
+    service.login(username="boss", password="pw", random_str="r", code="c")
+
+    assert directory.asked == [TENANT]
+
+
+def test_a_platform_account_without_its_workspace_gets_an_actionable_refusal(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """平台 workspace 还没建 ⇒ 拒绝，且**文案指向 platform**，不是用户自己的租户。
+
+    这一步是 #882 的验收之一：错误要说清"该给谁开户"，否则运维会去给一个不存在的租户
+    执行 `ensure-workspace`。
+    """
+    from aiops_diagnostics.dify_login_proxy import PermissionDenied
+    from aiops_diagnostics.dify_workspaces import PLATFORM_TENANT_ID
+
+    _patch_company(monkeypatch, user_type="-1")
+    service = _service(
+        tmp_path,
+        _Directory(WorkspaceUnavailable("DIFY_WORKSPACE_UNRESOLVED", "no row", http_status=404)),
+        _Inner(),
+    )
+
+    with pytest.raises(PermissionDenied) as caught:
+        service.login(username="ops", password="pw", random_str="r", code="c")
+
+    assert f"--tenant {PLATFORM_TENANT_ID}" in str(caught.value)
