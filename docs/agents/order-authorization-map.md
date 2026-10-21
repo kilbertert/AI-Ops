@@ -92,7 +92,7 @@ WHERE tenant_id=%s
 
 ```python
 def can_access(self, context, order_no):
-    scope = resolve_query_scope(context)          # 第 4 步
+    scope = resolve_query_scope(context)  # 第 4 步
     with scoped_live_sources(self.settings, scope=scope) as sources:
         return bool(sources.get_orders(order_no))  # 第 5 步的 SQL，返回非空 = 有权限
 ```
