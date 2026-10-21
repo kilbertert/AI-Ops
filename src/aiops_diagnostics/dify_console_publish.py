@@ -868,7 +868,17 @@ def _trial_report_text(answer: Mapping[str, Any], status_text: str) -> str:
     if status_text not in TRIAL_TERMINAL_STATUSES:
         return f"试运行进行中（{status_text}）"
     if status_text != "completed":
-        return f"试运行结束，状态：{status_text}"
+        # 失败/过期/取消/未决：网关给一句**按请求语言渲染**的原因（`error_message`，
+        # 与诊断面同一张表）。没有它就只剩一个状态词 —— 而"failed"不告诉运营
+        # 该做什么（实测 2026-10-21：欠费导致的失败与代码缺陷长得一模一样）。
+        reason = str(answer.get("error_message") or "").strip()
+        code = str(answer.get("error_code") or "").strip()
+        text = f"试运行结束，状态：{status_text}"
+        if reason:
+            text += f"：{reason}"
+        if code:
+            text += f"（{code}）"
+        return text[:MAX_TRIAL_RESULT_TEXT]
     result = answer.get("result")
     report = result.get("report") if isinstance(result, Mapping) else None
     if not isinstance(report, Mapping):

@@ -879,6 +879,14 @@ _DIAGNOSIS_ERROR_KEYS: dict[str, str] = {
     # operator cannot act on the distinction from the client, and the code
     # itself (not the prose) is what tells an engineer which failure it was.
     "DIAGNOSIS_AGENT_UNREGISTERED": "failed",
+    # 试运行的作业体失败（模型 / 供应商 / 输入源）。**与 DIAGNOSIS_FAILED 同一条文案**，
+    # 理由与上面那条一样：调用方在这一层能做的处置完全相同，"是哪一种失败"由
+    # `error_code` 与网关侧的日志回答，不由这句给人看的话回答。
+    #
+    # 没有这一行时它会落到 `generic`（"稍后重试"）—— 而欠费这种**需要人去充值**的失败
+    # 会被说成"过一会儿再试"，与代码缺陷长得一模一样（实测 2026-10-21：结果面板上
+    # 只显示"状态 failed"，运营无从判断该做什么）。
+    "TRIAL_FAILED": "failed",
 }
 
 

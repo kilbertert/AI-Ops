@@ -1800,6 +1800,13 @@ def create_gateway_app(
             body["result"] = result
         if trial.get("error_code"):
             body["error_code"] = trial["error_code"]
+            # **一句给人看的失败原因**，与诊断面共用同一张多语言表
+            # （`diagnosis_error_message`）。只给 `error_code` 不够：控制台面板背后
+            # 的运营看不懂 `TRIAL_FAILED`，而这条路由的结果面板正是给运营看的。
+            #
+            # 这里是**按请求语言渲染**的那一类文案（与诊断面同一条规则：请求语言只渲染
+            # 服务端此刻写的话，不改结果本身的 `language`）。
+            body["error_message"] = diagnosis_error_message(language, trial["error_code"])
         return body
 
     @app.get("/health")
