@@ -89,6 +89,7 @@ from aiops_diagnostics.dify_debug_identity import (
     debug_dify_identity,
 )
 from aiops_diagnostics.dify_knowledge_api import (
+    DIFY_KNOWLEDGE_LIST_PATH,
     DIFY_RETRIEVAL_PATH,
     DifyRequestError,
     dify_records,
@@ -1246,6 +1247,7 @@ def create_gateway_app(
                 knowledge_id=row["knowledge_id"],
                 tenant_id=row["tenant_id"],
                 knowledge_base_ids=tuple(row["knowledge_base_ids"]),
+                display_name=str(row.get("display_name") or ""),
             )
         try:
             request = parse_dify_retrieval_request(payload, max_top_k=context.settings.kb_search_max_results)
@@ -1319,6 +1321,54 @@ def create_gateway_app(
                 retryable=True,
             ) from exc
         return {"records": dify_records(chunks, score_threshold=request.score_threshold)}
+
+    @app.get(DIFY_KNOWLEDGE_LIST_PATH)
+    def dify_knowledge_list(
+        identity: DifyIdentity = Depends(dify_shared_credential),  # noqa: B008
+    ) -> dict[str, Any]:
+        """What this endpoint can serve, for Dify's console to render as a picker.
+
+        Dify's "connect external knowledge base" dialog asks for a free-text
+        ``knowledge_id``, which means the operator must already know an opaque
+        string — the exact step that made "configure a knowledge base" an
+        engineer's job. This route is the missing half: same credential, same
+        registry, so the console can offer what retrieval will accept.
+
+        **It lists the registry, not RAGFlow.** A ``knowledge_id`` is OURS (the
+        key Dify sends back), and only registered ones can retrieve. Listing
+        RAGFlow dataset ids instead would offer values retrieval answers 404 to:
+        a picker that looks richer and works worse.
+
+        The debug identity sees only its own subset — whatever a picker shows,
+        the same credential must be able to retrieve, or the preview UI would
+        suggest choices the preview cannot honour.
+        """
+        bindings = parse_dify_knowledge_bindings(context.settings.dify_knowledge_bindings)
+        # Same merge as the retrieval route (ADR 0048): console rows win over env
+        # rows, and one list serves both so the patched Dify dialog and our own
+        # page can never disagree about what exists.
+        for row in context.store.list_knowledge_id_bindings():
+            bindings[row["knowledge_id"]] = DifyKnowledgeBinding(
+                knowledge_id=row["knowledge_id"],
+                tenant_id=row["tenant_id"],
+                knowledge_base_ids=tuple(row["knowledge_base_ids"]),
+                display_name=str(row.get("display_name") or ""),
+            )
+        items: list[dict[str, Any]] = []
+        for knowledge_id in sorted(bindings):
+            binding = bindings[knowledge_id]
+            if not identity.allows(knowledge_id, binding.tenant_id):
+                continue
+            items.append(
+                {
+                    "knowledge_id": knowledge_id,
+                    # The operator's own label, and the ids it maps to — the ids
+                    # stay visible because they are what retrieval matches on.
+                    "name": binding.display_name or knowledge_id,
+                    "knowledge_base_ids": list(binding.knowledge_base_ids),
+                }
+            )
+        return {"knowledge_items": items, "total": len(items)}
 
     def dify_publish_credential(
         authorization: Annotated[str | None, Header()] = None,

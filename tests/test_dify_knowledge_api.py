@@ -634,3 +634,83 @@ def test_the_cap_still_applies_to_what_dify_asks_for(tmp_path: Path) -> None:
     records = _post(client, _body(top_k=500)).json()["records"]
 
     assert len(records) == 10
+
+
+# ---------------------------------------------------------------------------
+# The picker's source: what this endpoint can serve.
+#
+# Dify's dialog asks for a free-text `knowledge_id`, which is why "configure a
+# knowledge base" needed an engineer. This route is the other half of that
+# dialog: same credential, same registry, so the console can offer exactly what
+# retrieval will accept.
+# ---------------------------------------------------------------------------
+
+
+def test_knowledge_list_returns_the_registry_not_ragflow(tmp_path: Path) -> None:
+    """It lists OUR keys — the values Dify sends back — never RAGFlow dataset ids.
+
+    Listing datasets would offer ids retrieval answers 404 to: a picker that
+    looks richer and works worse.
+    """
+    client = _client(tmp_path, _Runtime())
+    response = client.get("/v1/dify/knowledge", headers={"Authorization": f"Bearer {DIFY_KEY}"})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert [item["knowledge_id"] for item in body["knowledge_items"]] == ["kb-customer", "kb-other"]
+    assert body["knowledge_items"][0]["knowledge_base_ids"] == ["KB-A"]
+    assert body["total"] == 2
+
+
+def test_knowledge_list_needs_the_same_credential_as_retrieval(tmp_path: Path) -> None:
+    """No credential and a wrong one both stay closed."""
+    client = _client(tmp_path, _Runtime())
+    assert client.get("/v1/dify/knowledge").status_code == 401
+    wrong = client.get("/v1/dify/knowledge", headers={"Authorization": "Bearer wrong-key-wrong-key"})
+    assert wrong.status_code == 403
+
+
+def test_knowledge_list_is_unconfigured_when_retrieval_is(tmp_path: Path) -> None:
+    """Same "unconfigured means absent" rule as every other Dify route."""
+    client = _client(tmp_path, _Runtime(), dify_knowledge_api_key="", dify_knowledge_bindings="")
+    response = client.get("/v1/dify/knowledge", headers={"Authorization": f"Bearer {DIFY_KEY}"})
+    assert response.status_code == 404
+
+
+def test_debug_identity_lists_only_what_it_can_retrieve(tmp_path: Path) -> None:
+    """A preview picker must not suggest choices the preview cannot honour."""
+    client = _client_with_debug(tmp_path, _Runtime())
+    response = client.get("/v1/dify/knowledge", headers={"Authorization": f"Bearer {DEBUG_KEY}"})
+    assert response.status_code == 200
+    ids = [item["knowledge_id"] for item in response.json()["knowledge_items"]]
+    assert ids == sorted(DEBUG_IDS.split(",")), ids
+
+
+def test_console_rows_and_env_rows_form_one_list(tmp_path: Path) -> None:
+    """The two registries merge, and a console row carries the operator's label.
+
+    This is what makes the patched Dify dialog useful: a source saved in OUR
+    console shows up there, under the name the operator typed.
+    """
+    settings = GatewayServerSettings(
+        data_home=tmp_path,
+        database_file=tmp_path / "gateway.db",
+        server_config_file=tmp_path / "production.env",
+        dify_knowledge_api_key=DIFY_KEY,
+        dify_knowledge_bindings=BINDINGS,
+    )
+    settings.server_config_file.write_text("# test\n", encoding="utf-8")
+    store = GatewayStore(settings.database_file)
+    store.set_knowledge_id_binding("kb-new", "T-9", ("KB-NEW",), display_name="新库")
+    app = create_gateway_app(
+        settings=settings,
+        store=store,
+        runtime=_Runtime(),  # type: ignore[arg-type]
+        caller_resolver=None,  # type: ignore[arg-type]
+        order_authorizer=None,  # type: ignore[arg-type]
+        platform_resolver=PlatformIdentityResolver(_Directory()),
+        faq_catalog=FAQCatalog.bundled(),
+    )
+    body = TestClient(app).get("/v1/dify/knowledge", headers={"Authorization": f"Bearer {DIFY_KEY}"}).json()
+    by_id = {item["knowledge_id"]: item for item in body["knowledge_items"]}
+    assert by_id["kb-new"]["name"] == "新库"
+    assert by_id["kb-customer"]["name"] == "kb-customer"  # env rows fall back to the id

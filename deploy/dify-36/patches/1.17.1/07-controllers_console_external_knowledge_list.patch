@@ -1,0 +1,57 @@
+--- a/controllers/console/datasets/external.py
++++ b/controllers/console/datasets/external.py
+@@ -364,6 +364,54 @@
+         return UsageCountResponse(is_using=external_knowledge_api_is_using, count=count).model_dump(mode="json"), 200
+ 
+ 
++class ExternalKnowledgeListResponse(ResponseModel):
++    knowledge_items: list[dict[str, Any]]
++    total: int
++
++
++@console_ns.route("/datasets/external-knowledge-api/<uuid:external_knowledge_api_id>/knowledge")
++class ExternalKnowledgeListApi(Resource):
++    """What this API template's endpoint can serve — the picker's source.
++
++    Upstream's dialog asks for a free-text ``knowledge_id``, which means the
++    operator must already know an opaque string; that is the step that made
++    "connect a knowledge base" an engineer's job. Our endpoint offers
++    ``GET /knowledge`` next to ``/retrieval``, and this route relays it.
++
++    Same tenant scope and same credential as retrieval: whoever may read this
++    list may also retrieve, and the list only contains what retrieval accepts.
++
++    An empty list is a **success**, not an error: a stock external provider has
++    no such route, and the console has to keep working with a typed id there.
++    """
++
++    @console_ns.doc("list_external_knowledge_items")
++    @console_ns.doc(description="List the knowledge sources an external API endpoint offers")
++    @console_ns.doc(params={"external_knowledge_api_id": "External knowledge API ID"})
++    @console_ns.response(200, "Knowledge sources retrieved successfully")
++    @console_ns.response(404, "Template not found")
++    @setup_required
++    @login_required
++    @account_initialization_required
++    @with_current_tenant_id
++    @with_session
++    def get(self, session: Session, current_tenant_id: str, external_knowledge_api_id: UUID):
++        external_knowledge_api = ExternalDatasetService.get_external_knowledge_api(
++            external_knowledge_api_id=str(external_knowledge_api_id),
++            tenant_id=current_tenant_id,
++            session=session,
++        )
++        if external_knowledge_api is None:
++            raise NotFound("API template not found.")
++        items = ExternalDatasetService.fetch_external_knowledge_items(
++            external_knowledge_api, session=session
++        )
++        return (
++            ExternalKnowledgeListResponse(knowledge_items=items, total=len(items)).model_dump(mode="json"),
++            200,
++        )
++
++
+ @console_ns.route("/datasets/external")
+ class ExternalDatasetCreateApi(Resource):
+     @console_ns.doc("create_external_dataset")

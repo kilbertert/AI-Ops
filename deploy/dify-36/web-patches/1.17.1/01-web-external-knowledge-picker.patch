@@ -1,0 +1,93 @@
+--- a/web/app/components/datasets/external-knowledge-base/create/ExternalApiSelection.tsx
++++ b/web/app/components/datasets/external-knowledge-base/create/ExternalApiSelection.tsx
+@@ -1,7 +1,6 @@
+ 'use client'
+ 
+ import { Button } from '@langgenius/dify-ui/button'
+-import { Input } from '@langgenius/dify-ui/input'
+ import { RiAddLine } from '@remixicon/react'
+ import { useQuery, useQueryClient } from '@tanstack/react-query'
+ import * as React from 'react'
+@@ -11,6 +10,7 @@
+ import { useRouter } from '@/next/navigation'
+ import { consoleQuery } from '@/service/console'
+ import ExternalApiSelect from './ExternalApiSelect'
++import ExternalKnowledgeIdPicker from './ExternalKnowledgeIdPicker'
+ 
+ type ExternalApiSelectionProps = {
+   external_knowledge_api_id: string
+@@ -104,13 +104,15 @@
+             {t(($) => $.externalKnowledgeId, { ns: 'dataset' })}
+           </label>
+         </div>
+-        <Input
+-          id={externalKnowledgeIdInputId}
++        {/* A picker when the endpoint can describe itself, a text field
++            otherwise — upstream's own Input is what the fallback renders. */}
++        <ExternalKnowledgeIdPicker
++          externalKnowledgeApiId={selectedApiId}
+           value={external_knowledge_id}
+-          onValueChange={(value) =>
++          onChange={(value) =>
+             onChange({ external_knowledge_id: value, external_knowledge_api_id })
+           }
+-          placeholder={t(($) => $.externalKnowledgeIdPlaceholder, { ns: 'dataset' }) ?? ''}
++          inputId={externalKnowledgeIdInputId}
+         />
+       </div>
+     </form>
+--- a/web/models/datasets.ts
++++ b/web/models/datasets.ts
+@@ -120,6 +120,19 @@
+   created_at: string
+ }
+ 
++/**
++ * One knowledge source an external endpoint offers (`GET /knowledge`).
++ *
++ * Distinct from `ExternalKnowledgeItem`: that one is a Dify *dataset* row. This
++ * is what the provider itself says it can serve, which is what the picker in
++ * "connect external knowledge base" lists.
++ */
++export type ExternalKnowledgeSourceItem = {
++  knowledge_id: string
++  name: string
++  knowledge_base_ids: string[]
++}
++
+ export type ExternalKnowledgeItem = {
+   id: string
+   name: string
+--- a/web/service/datasets.ts
++++ b/web/service/datasets.ts
+@@ -10,6 +10,7 @@
+   ExternalAPIItem,
+   ExternalAPIUsage,
+   ExternalKnowledgeItem,
++  ExternalKnowledgeSourceItem,
+   FetchDatasetsParams,
+   FileIndexingEstimateResponse,
+   IndexingEstimateParams,
+@@ -138,6 +139,22 @@
+   return post<ExternalAPIItem>('/datasets/external-knowledge-api', { body })
+ }
+ 
++/**
++ * The knowledge sources an endpoint offers — the picker's source.
++ *
++ * This calls OUR console route, which relays the endpoint's own
++ * `GET /knowledge`. It is an extension we added beside `/retrieval`: a stock
++ * external provider has no such route, and the caller treats an empty answer as
++ * "offer the free-text field", which is upstream's behaviour.
++ */
++export const fetchExternalKnowledgeList = ({
++  externalKnowledgeApiId,
++}: {
++  externalKnowledgeApiId: string
++}): Promise<{ knowledge_items: ExternalKnowledgeSourceItem[]; total: number }> => {
++  return get(`/datasets/external-knowledge-api/${externalKnowledgeApiId}/knowledge`)
++}
++
+ export const createExternalKnowledgeBase = ({
+   body,
+ }: {

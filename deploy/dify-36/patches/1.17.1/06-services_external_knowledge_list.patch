@@ -1,0 +1,68 @@
+--- a/services/external_knowledge_service.py
++++ b/services/external_knowledge_service.py
+@@ -192,6 +192,65 @@
+             raise ValueError("Forbidden: Authorization failed with the provided api_key")
+ 
+     @staticmethod
++    def fetch_external_knowledge_items(
++        external_knowledge_api: "ExternalKnowledgeApis", *, session: Session
++    ) -> list[dict[str, Any]]:
++        """The knowledge sources an endpoint offers, for the console's picker.
++
++        Reads ``{endpoint}/knowledge`` with the template's own credential. That
++        route is an **extension** we added on our side of the External Knowledge
++        API; a stock provider does not have it, and that is a normal answer, not
++        an error: the caller falls back to a free-text field.
++
++        Returns an empty list for every non-200 or unparsable answer rather than
++        raising. The picker is an affordance — when the provider cannot describe
++        itself the operator must still be able to type an id, which is exactly
++        what upstream Dify does. Failing the dialog here would be a regression
++        against a provider that never claimed to support listing.
++
++        The credential goes through ``external_api_settings`` so an encrypted
++        ``api_key`` is decrypted first; sending ciphertext would look like "the
++        provider rejected our key".
++        """
++        settings = external_api_settings(external_knowledge_api)
++        endpoint = settings.get("endpoint")
++        if not isinstance(endpoint, str) or not endpoint:
++            return []
++        headers = {"Content-Type": "application/json"}
++        api_key = settings.get("api_key")
++        if isinstance(api_key, str) and api_key:
++            headers["Authorization"] = f"Bearer {api_key}"
++        try:
++            response = ssrf_proxy.get(f"{endpoint}/knowledge", headers=headers)
++        except Exception:
++            return []
++        if response.status_code != 200:
++            return []
++        try:
++            payload = response.json()
++        except Exception:
++            return []
++        items = payload.get("knowledge_items") if isinstance(payload, dict) else None
++        if not isinstance(items, list):
++            return []
++        cleaned: list[dict[str, Any]] = []
++        for item in items:
++            if not isinstance(item, dict):
++                continue
++            knowledge_id = item.get("knowledge_id")
++            if not isinstance(knowledge_id, str) or not knowledge_id:
++                continue
++            base_ids = item.get("knowledge_base_ids")
++            cleaned.append(
++                {
++                    "knowledge_id": knowledge_id,
++                    "name": str(item.get("name") or knowledge_id),
++                    "knowledge_base_ids": [str(x) for x in base_ids] if isinstance(base_ids, list) else [],
++                }
++            )
++        return cleaned
++
++    @staticmethod
+     def get_external_knowledge_api(
+         external_knowledge_api_id: str, tenant_id: str, *, session: Session
+     ) -> ExternalKnowledgeApis:
