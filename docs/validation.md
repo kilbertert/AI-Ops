@@ -27,6 +27,34 @@
 PUT 更新后的状态，避免夹具保留旧 instruction 却仍被当成成功。全量初跑 3215 passed / 9 skipped / 1 failed：唯一失败为并行部署前进后，dry-run
 拒绝旧基线。同步主线后复跑该检查，最终结果见本 PR。
 
+## 2026-10-21 · 运维 CLI 两入口按租户解析 workspace（#886）
+
+**范围**：`admin_cli.py`（`pull-dify` / `sync-from-dify` / `_workspace_for` /
+`_console_settings_from`）。
+
+### 一、判据（`tests/test_cli.py`，新增 3 例）
+
+| 用例 | 钉住的规则 |
+|---|---|
+| `test_pull_dify_uses_the_tenants_own_workspace` | 导出请求头 `X-Workspace-ID` 是**这个租户**的（`ws-t-pull`），不是配置常量（`ws-1`） |
+| `test_sync_uses_each_tenants_own_workspace` | 一次 sync 覆盖两个租户，两次构造的 source 各带自己的 workspace |
+| `test_sync_refuses_the_whole_command_when_one_tenant_cannot_resolve` | 任一租户解析失败 ⇒ 退 1、`outcomes` 为空（**什么都没写**）、点名租户与码 |
+
+**突变复验**（三条，均复跑确认变红）：
+1. `sync-from-dify` 的 `workspace_id=` 改回固定常量 ⇒ 多租户用例红（两次都是 `ws-1`）；
+2. `pull-dify` 的 `workspace_id=` 改回固定常量 ⇒ 那条用例红（实得 `ws-1`）；
+3. 把"任一失败就拒绝"改成"跳过继续" ⇒ 拒绝用例红（`outcomes` 非空、JSON 里没有
+   `unresolved`）。
+
+### 二、这一轮**没有**做到的
+
+- **没有对真实的多租户 Dify 跑过**：41 的 `dify_workspaces` 目前仍为空（#880 只交付了
+  建的工具，没有指定租户去建）。所以"两个租户各自看得到自己的 app"这条验收要等第一行
+  映射存在之后。
+- **网关运行时的两处仍是常量**（`gateway_api.py` 的发布/试运行）：那是 #884 / #885。
+- **`pull-dify` 的 `--tenant` 仍必须由调用方给**：它本来就是显式参数，本票只改变
+  "拿这个租户去解析 workspace"，不改变"谁来指定租户"。
+
 ## 2026-10-21 · `aiops admin ensure-workspace`（#880）
 
 **范围**：`dify_inner_api.py`（新）、`dify_ensure_workspace.py`（新）、
