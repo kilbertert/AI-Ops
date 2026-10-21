@@ -1,0 +1,40 @@
+[Unit]
+Description=AI-Ops 41 to Dify inner_api tunnel (127.0.0.1:15001 -> 36)
+After=network-online.target
+Wants=network-online.target
+
+# 与 `aiops-36-kb-tunnel.service` 同形：受限账号 + 只绑回环的 -L。
+#
+# **本地不设口令、不交互**（BatchMode）：隧道起不来时服务直接失败，而不是挂在那里等密码。
+# `ExitOnForwardFailure=yes` 让"15001 被占用"表现为单元失败，而不是一个看起来活着、
+# 实际没转发的进程。
+#
+# 访问边界（见 ops/dify-inner-api/README.md）：
+#   - 远端只 permitopen 127.0.0.1:15001（36 的转发器）；
+#   - 隧道建立后本机任何进程都能连 15001 —— **这一层不是授权**，
+#     `X-Inner-Api-Key` 才是。
+[Service]
+Type=simple
+User=aiops41
+Group=aiops41
+ExecStart=/usr/bin/ssh -NT \
+    -o BatchMode=yes \
+    -o ExitOnForwardFailure=yes \
+    -o IdentitiesOnly=yes \
+    -o StrictHostKeyChecking=yes \
+    -o UserKnownHostsFile=/etc/aiops-41/ssh/known_hosts \
+    -o ServerAliveInterval=30 \
+    -o ServerAliveCountMax=3 \
+    -i /etc/aiops-41/keys/inner-api-tunnel_ed25519 \
+    -L 127.0.0.1:15001:127.0.0.1:15001 \
+    aiops-inner-api-tunnel@36.156.159.175
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/etc/aiops-41/keys /etc/aiops-41/ssh
+
+[Install]
+WantedBy=multi-user.target

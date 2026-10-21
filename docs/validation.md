@@ -27,6 +27,36 @@
 PUT 更新后的状态，避免夹具保留旧 instruction 却仍被当成成功。全量初跑 3215 passed / 9 skipped / 1 failed：唯一失败为并行部署前进后，dry-run
 拒绝旧基线。同步主线后复跑该检查，最终结果见本 PR。
 
+## 2026-10-21 · inner_api 转发器 + 受限隧道（#889）
+
+**范围**：`ops/dify-inner-api/`（转发器、两个 systemd 单元、README）、
+`tests/test_inner_api_forwarder.py`。
+
+### 一、判据（`tests/test_inner_api_forwarder.py`，6 例）
+
+| 用例 | 钉住的规则 |
+|---|---|
+| 非回环 `--listen` | `0.0.0.0:15001` / `:15001` 被 `argparse` 拒绝；`127.0.0.1:15001` 接受 |
+| **现查地址** | 上游换端口（最接近"容器重建换 IP"的模拟）后，**下一次连接**转到新地址 |
+| 查不到容器 | 连接被**关闭**，且 `create_connection` **一次都没被调用**（不挂起、不转到别处） |
+| 容器端口没起 | 同样是关闭连接（明确失败，不是超时） |
+| 字节一致 | 200 KB 双向原样转发 |
+| 单元与边界 | 转发器只绑回环、隧道带 `BatchMode` + `ExitOnForwardFailure`、README 写明"这一层不是授权" |
+
+**突变复验**：把 `container_address` 的结果缓存到模块级变量 ⇒ 现查用例红（第二次连接
+仍发往旧地址）；把"查不到"改成"转到 127.0.0.1:5001" ⇒ fail-closed 用例红（断言
+`create_connection` 未被调用）。
+
+### 二、**没有**做的（据实）
+
+- **两个单元都还没有在任何主机上部署**。本票交付可执行件与单元文件；安装步骤写在
+  `ops/dify-inner-api/README.md`（36 装转发器 + 受限账号，41 装隧道）。
+- **41 经隧道跑通一次 `ensure-workspace`** 需要：36 上装转发器、给 41 一把受限 key、
+  41 上装隧道 —— 三步都是主机操作，且**最后一步必须选一个真实租户**（Dify 没有删
+  workspace 的 API）。所以 #889 的验收是**部署之后**才可能拿到的证据，这一轮没有。
+- **没有在 36 上实际运行转发器**（本机能到 36 的 docker 内网吗？不能——脚本运行在 36，
+  而它读的是本机 `docker inspect`）。本轮的证据限于单元测试与只读的接口探测。
+
 ## 2026-10-21 · 运维 CLI 两入口按租户解析 workspace（#886）
 
 **范围**：`admin_cli.py`（`pull-dify` / `sync-from-dify` / `_workspace_for` /

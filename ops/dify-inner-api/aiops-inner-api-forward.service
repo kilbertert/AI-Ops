@@ -1,0 +1,23 @@
+[Unit]
+Description=AI-Ops inner_api forwarder (127.0.0.1:15001 -> Dify api container 5001)
+Documentation=file:///opt/aiops-inner-api/README.md
+After=network-online.target docker.service
+Wants=network-online.target
+
+# 只在 36 上跑。它把一个**没有 publish 到宿主**的管理端口搬到回环上，所以它自己
+# 也必须只绑回环 —— 脚本会拒绝非回环的 --listen，这里再写一次是给人看的。
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/bin/aiops-inner-api-forward --listen 127.0.0.1:15001 --container deploy-api-1 --container-port 5001
+Restart=always
+RestartSec=3
+# 只需要 docker CLI（`docker inspect`）与 socket；不要别的能力。
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadOnlyPaths=/var/run/docker.sock
+
+[Install]
+WantedBy=multi-user.target
