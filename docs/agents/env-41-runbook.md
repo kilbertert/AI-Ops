@@ -1598,6 +1598,8 @@ AIOPS_GATEWAY_DIFY_WORKSPACE_MODEL_API_KEY=<deepseek 的真实 key>
    `Credentials validation failed` ⇒ 我们报 `DIFY_CREDENTIAL_INVALID`。那是"换 key"，
    不是"重启服务"。
 2. **重跑是安全的**：插件按 `/plugin/list` 跳过已装、凭据按名字跳过、模板 app 按名字跳过。
+   装插件是异步的，命令会轮询安装任务到 `success` 才往下走（默认最多 180s）；
+   `DIFY_PLUGIN_INSTALL_TIMEOUT` 只是"没等到"，重跑会跳过已装的。
 3. **模板失败只记状态**（`state` 仍是 `created`，`last_error` 说原因）。workspace 与凭据
    都还在，人进得去、能改；**重跑本命令补齐这一步**。不要为它重建 workspace ——
    Dify 没有删 workspace 的 API。

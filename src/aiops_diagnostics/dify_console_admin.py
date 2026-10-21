@@ -26,6 +26,7 @@ admin key 可以为任意 workspace 做管理动作 —— 这正是"每个 work
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -40,6 +41,7 @@ from aiops_diagnostics.bounded_http import (
 
 PLUGIN_INSTALL_PKG_PATH = "/console/api/workspaces/current/plugin/install/pkg"
 PLUGIN_LIST_PATH = "/console/api/workspaces/current/plugin/list"
+PLUGIN_TASK_PATH = "/console/api/workspaces/current/plugin/tasks"
 MODEL_PROVIDERS_PATH = "/console/api/workspaces/current/model-providers"
 APP_IMPORT_PATH = "/console/api/apps/imports"
 
@@ -69,6 +71,9 @@ class ConsoleApiSettings:
     base_url: str
     api_key: str = field(repr=False, default="")
     timeout: float = 30.0
+    #: 等一次插件安装任务落地的最长时间。安装是异步的，紧接着的写凭据要插件已在位。
+    install_timeout: float = 180.0
+    install_poll_interval: float = 1.0
 
     @property
     def configured(self) -> bool:
@@ -151,18 +156,64 @@ class DifyConsoleAdmin:
         return found
 
     def install_plugins(self, workspace_id: str, identifiers: list[str]) -> list[str]:
-        """装一组插件；返回**这次真的发了**的那些（已装的跳过）。"""
+        """装一组插件；返回**这次真的发了**的那些（已装的跳过）。
+
+        **安装是异步的。** ``/plugin/install/pkg`` 立刻返回一个 ``task_id``，插件真正出现
+        在 ``/plugin/list`` 里是几秒之后的事（成功时 ``all_installed`` 为真且无 task）。
+        所以这里**等它落地**再返回 —— 不等的话，紧随其后的写凭据会因为插件还没装好而报
+        "provider 不存在"，而那个报错会被读成"配置错了"。
+        """
         have = self.installed_plugin_ids(workspace_id)
         missing = [item for item in identifiers if item not in have]
         if not missing:
             return []
-        self._call(
+        started = self._call(
             workspace_id,
             PLUGIN_INSTALL_PKG_PATH,
             method="POST",
             body={"plugin_unique_identifiers": missing},
         )
+        task_id = str((started or {}).get("task_id") or "") if isinstance(started, dict) else ""
+        if task_id and not (started or {}).get("all_installed"):
+            self._await_install_task(workspace_id, task_id, expected=missing)
         return missing
+
+    def _await_install_task(self, workspace_id: str, task_id: str, *, expected: list[str]) -> None:
+        """轮询安装任务直到 ``success``；失败/超时都抛 ``ConsoleApiError``。
+
+        超时**不算成功**：返回之后那一步（写凭据）会因此失败，而失败原因会指错地方。
+        """
+        deadline = time.monotonic() + self.settings.install_timeout
+        while True:
+            payload = self._call(workspace_id, f"{PLUGIN_TASK_PATH}/{task_id}")
+            task = payload.get("task") if isinstance(payload, dict) else None
+            status = str((task or {}).get("status") or "")
+            if status == "success":
+                installed = self.installed_plugin_ids(workspace_id)
+                left = [item for item in expected if item not in installed]
+                if left:
+                    raise ConsoleApiError(
+                        "DIFY_PLUGIN_INSTALL_INCOMPLETE",
+                        f"安装任务 {task_id} 报成功但这些插件仍未出现：{', '.join(left)}",
+                    )
+                return
+            if status == "failed":
+                reasons = [
+                    f"{item.get('plugin_unique_identifier')}: {item.get('message')}"
+                    for item in (task or {}).get("plugins") or []
+                    if isinstance(item, dict)
+                ]
+                raise ConsoleApiError(
+                    "DIFY_PLUGIN_INSTALL_FAILED",
+                    f"安装任务 {task_id} 失败：" + ("；".join(reasons) or "上游没给原因"),
+                )
+            if time.monotonic() >= deadline:
+                raise ConsoleApiError(
+                    "DIFY_PLUGIN_INSTALL_TIMEOUT",
+                    f"安装任务 {task_id} 在 {self.settings.install_timeout:.0f}s 内没有结束"
+                    f"（当前 {status or '未知'}）。插件可能稍后自己装好 —— 重跑本命令会跳过已装的",
+                )
+            time.sleep(self.settings.install_poll_interval)
 
     # ── provider 凭据 ─────────────────────────────────────────────────
 

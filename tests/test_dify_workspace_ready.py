@@ -46,6 +46,7 @@ _PLUGIN_INSTALL = "/console/api/workspaces/current/plugin/install/pkg"
 _CREDENTIALS = "/console/api/workspaces/current/model-providers/langgenius/deepseek/deepseek/credentials"
 _APPS = "/console/api/apps"
 _IMPORT = "/console/api/apps/imports"
+_PLUGIN_TASKS = "/console/api/workspaces/current/plugin/tasks"
 
 
 class _Console:
@@ -60,6 +61,12 @@ class _Console:
         self.credential_body: Any = None
         self.import_status = 200
         self.import_body: Any = None
+        #: 异步安装的模拟：>0 时安装请求回一个 ``task_id``，任务在**第 N 次轮询**才成功。
+        self.task_polls_until_success = 0
+        #: 任务终态改成 failed（验证失败不会被当成成功）。
+        self.task_fails = False
+        self._task_polls = 0
+        self._pending_plugins: list[str] = []
         self.base = ""
 
     def handler(self) -> type[BaseHTTPRequestHandler]:
@@ -84,6 +91,32 @@ class _Console:
                         200,
                         {"credentials": [{"credential_name": name} for name in upstream.credentials]},
                     )
+                elif self.path.startswith(_PLUGIN_TASKS):
+                    upstream._task_polls += 1
+                    done = upstream._task_polls >= upstream.task_polls_until_success
+                    if done and not upstream.task_fails:
+                        for item in upstream._pending_plugins:
+                            if item not in upstream.plugins:
+                                upstream.plugins.append(item)
+                    status = "failed" if upstream.task_fails else ("success" if done else "running")
+                    upstream._reply(
+                        self,
+                        200,
+                        {
+                            "task": {
+                                "status": status,
+                                "total_plugins": len(upstream._pending_plugins),
+                                "completed_plugins": len(upstream.plugins) if done else 0,
+                                "plugins": [
+                                    {
+                                        "plugin_unique_identifier": item,
+                                        "message": "boom" if upstream.task_fails else "",
+                                    }
+                                    for item in (upstream._pending_plugins if upstream.task_fails else [])
+                                ],
+                            }
+                        },
+                    )
                 elif self.path.startswith(_APPS):
                     upstream._reply(
                         self, 200, {"data": [{"name": name} for name in upstream.apps], "total": 1}
@@ -97,6 +130,12 @@ class _Console:
                 body = json.loads(raw) if raw else None
                 upstream.calls.append({"method": "POST", "path": self.path, "body": body})
                 if self.path == _PLUGIN_INSTALL:
+                    if upstream.task_polls_until_success or upstream.task_fails:
+                        # 异步形态：立刻回 task_id，插件在轮询到 success 之后才出现。
+                        upstream._pending_plugins = list(body["plugin_unique_identifiers"])
+                        upstream._task_polls = 0
+                        upstream._reply(self, 200, {"all_installed": False, "task_id": "task-1"})
+                        return
                     upstream.plugins.extend(body["plugin_unique_identifiers"])
                     upstream._reply(self, 200, {"all_installed": True})
                 elif self.path == _CREDENTIALS:
@@ -159,7 +198,14 @@ def _run(tmp_path: Path, console: _Console, workspaces: DifyWorkspaces | None = 
         "tenant_id": TENANT,
         "environment": ENVIRONMENT,
         "workspaces": workspaces or _workspaces(tmp_path),
-        "console": DifyConsoleAdmin(ConsoleApiSettings(base_url=console.base, api_key="admin-key")),
+        "console": DifyConsoleAdmin(
+            ConsoleApiSettings(
+                base_url=console.base,
+                api_key="admin-key",
+                install_timeout=5.0,
+                install_poll_interval=0.01,
+            )
+        ),
         "settings": ReadySettings(
             console_base_url=console.base,
             console_api_key="admin-key",
@@ -299,3 +345,44 @@ def test_an_unresolved_tenant_surfaces_its_own_code(tmp_path: Path, console: _Co
 
     assert caught.value.code == "DIFY_WORKSPACE_UNRESOLVED"
     assert console.calls == []
+
+
+# ── 6. 安装是**异步**的：不等它落地，下一步就会读错 ─────────────────────
+
+
+def test_it_waits_for_the_install_task_before_writing_the_credential(
+    tmp_path: Path, console: _Console
+) -> None:
+    """`/plugin/install/pkg` 只回一个 task_id —— 插件真正出现在 list 里是几秒之后。
+
+    变异对照：`install_plugins` 发完 POST 就返回（不等任务）⇒ 本用例红：凭据请求发出时
+    `/plugin/list` 里根本没有那个 provider 插件，而 Dify 会因此报"provider 不存在"，
+    那个报错会被读成"配置错了"。
+    """
+    console.task_polls_until_success = 3
+
+    outcome = _run(tmp_path, console)
+
+    assert outcome.state == "ready"
+    assert set(DEFAULT_PLUGIN_IDENTIFIERS) <= set(console.plugins)
+    # 写凭据**之前**，安装任务已经被轮询到 success。
+    before_credential = [
+        call["path"]
+        for call in console.calls
+        if not (call["method"] == "POST" and call["path"] == _CREDENTIALS)
+    ]
+    polls = [path for path in before_credential if path == f"{_PLUGIN_TASKS}/task-1"]
+    assert len(polls) >= 3
+
+
+def test_a_failed_install_task_stops_before_the_credential(tmp_path: Path, console: _Console) -> None:
+    """任务 failed ⇒ 报 ``DIFY_PLUGIN_INSTALL_FAILED`` 并带上上游给的原因，不往下走。"""
+    console.task_fails = True
+    workspaces = _workspaces(tmp_path)
+
+    with pytest.raises(EnsureError) as caught:
+        _run(tmp_path, console, workspaces)
+
+    assert caught.value.code == "DIFY_PLUGIN_INSTALL_FAILED"
+    assert "boom" in caught.value.message
+    assert console.post_paths() == [_PLUGIN_INSTALL]

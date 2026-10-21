@@ -55,9 +55,16 @@ ADR-0068 把 workspace 建出来就停了，状态是 `created`，并明确写�
 
 **五、三条动作全部幂等，判据都是"先看有没有"。**
 
+安装是**异步**的：`/plugin/install/pkg` 立刻回一个 `task_id`，插件真正出现在
+`/plugin/list` 里是几秒之后。所以发完请求要轮询 `/plugin/tasks/<id>` 到 `success` 再往下
+走 —— 不等的话，紧接着的写凭据会因为插件还不在位而报"provider 不存在"，而那个报错会被
+读成"配置错了"。任务 `failed` 与超时**都算失败**，且各自一个码
+（`DIFY_PLUGIN_INSTALL_FAILED` / `DIFY_PLUGIN_INSTALL_TIMEOUT`）：前者要人看原因，后者
+重跑一次通常就好（已装的会被跳过）。
+
 | 动作 | 幂等判据 |
 |---|---|
-| 装插件 | `/plugin/list` 里已有的不再发安装请求（安装是异步任务型的，重复触发只多一次任务） |
+| 装插件 | `/plugin/list` 里已有的不再发安装请求；**发出后等任务落地**（见下） |
 | 写凭据 | 同名凭据已存在就跳过（`aiops-workspace` 是固定名，让"已存在"可判定） |
 | 导 DSL | app 名字已在 `/console/api/apps` 里就跳过 |
 

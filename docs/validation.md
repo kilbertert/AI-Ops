@@ -195,7 +195,7 @@ PUT 更新后的状态，避免夹具保留旧 instruction 却仍被当成成功
 `dify_workspaces.py`（`mark_ready` / `mark_template_failed`）、`admin_cli.py`（`ensure-ready` +
 `_settings_with_config_file`）、`gateway_config.py`（两键）、`src/aiops_diagnostics/dify_workspace_template.dsl.yml`（新）。
 
-### 一、判据（`tests/test_dify_workspace_ready.py`，8 例，假 Dify 控制台）
+### 一、判据（`tests/test_dify_workspace_ready.py`，10 例，假 Dify 控制台）
 
 | 用例 | 钉住的规则 |
 |---|---|
@@ -207,9 +207,12 @@ PUT 更新后的状态，避免夹具保留旧 instruction 却仍被当成成功
 | 模板失败 | 状态停在 `created`、`last_error` 有原因、`resolve()` 仍返回 id；重跑后转 `ready` |
 | 缺模型 key | `WORKSPACE_READY_CONFIG_MISSING`，文案点名变量，**零请求** |
 | 没有映射行 | `DIFY_WORKSPACE_UNRESOLVED` 原样上抛，零请求 |
+| 异步安装 | 发完 `/plugin/install/pkg` 后**轮询任务到 `success` 才写凭据** |
+| 安装任务失败 | `DIFY_PLUGIN_INSTALL_FAILED` 带上游原因；凭据**没写** |
 
-**突变复验（两处，均复跑确认变红）**：去掉插件"已装就跳过" ⇒ 重跑与"只装缺的"两例红；
-把 `mark_template_failed` 改成写 `failed` ⇒ 模板失败用例红。
+**突变复验（三处，均复跑确认变红）**：去掉插件"已装就跳过" ⇒ 重跑与"只装缺的"两例红；
+把 `mark_template_failed` 改成写 `failed` ⇒ 模板失败用例红；`install_plugins` 发完 POST
+就返回（不等任务）⇒ 两条异步用例红。
 
 ### 二、据实（没有做到的）
 
