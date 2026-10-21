@@ -702,6 +702,44 @@ def _record_publish_audit(
         )
 
 
+def _workspace_for_publish(
+    context: Any, tenant_id: str, *, initiator: tuple[str, str, str] = ("", "", "")
+) -> str:
+    """拿到**这个租户**的 workspace，或拒绝（#884）。
+
+    失败时把 ``resolve`` 的四个码原样转成 HTTP：``UNRESOLVED``(404) / ``CREATING``(409,
+    可重试) / ``FAILED``(409) / ``UNKNOWN``(409)。合成一句话就把"去开户 / 稍后重试 /
+    先对账"这三种下一步抹平了 —— 而发布这条路**必须**让人知道该做哪一件。
+
+    审计账本也记一笔：被拒的发布尝试要能回答"谁试图把哪一版发进哪个租户"。
+    """
+    from aiops_diagnostics.dify_workspaces import DifyWorkspaceError
+
+    try:
+        return context.dify_workspaces.resolve(tenant_id, context.settings.environment)
+    except DifyWorkspaceError as exc:
+        _record_publish_audit(
+            context,
+            app_id="",
+            action="refused",
+            reason_code=exc.code,
+            initiator=initiator,
+            binding=_TenantOnly(tenant_id),
+        )
+        raise StandardAPIError(exc.http_status, exc.code, exc.message, retryable=exc.retryable) from exc
+
+
+class _TenantOnly:
+    """只带租户的审计条目：解析失败时绑定还没查到，但"哪个租户"已经知道。"""
+
+    tenant_id: str
+    business_entry = ""
+    agent_name = ""
+
+    def __init__(self, tenant_id: str) -> None:
+        self.tenant_id = tenant_id
+
+
 def _publish_bound_app(
     context: Any,
     app_id: str,
@@ -752,11 +790,21 @@ def _publish_bound_app(
             "DIFY_CONSOLE_UNAVAILABLE",
             "the Dify console credential is not configured on this server",
         )
+    # **按绑定的租户解析 workspace**（#884 / ADR-0059 §5.2）。`_publish_bound_app` 是两条
+    # 路共用的唯一实现，所以这一处一改，共享密钥路由与 operator 会话路由同时生效。
+    #
+    # 为什么不能再用 `dify_console_workspace_id` 那个常量：多 workspace 之后它是"某一个人
+    # 的工作区"，而这里要的是**这个 app 所属租户**的工作区。用常量意味着 A 租户的发布
+    # 会跑在 B 的工作区上 —— 设计里点名这是最容易漏掉的越权口。
+    #
+    # 解析失败 ⇒ **拒绝，不回落任何默认 workspace**：回落等于把"这个租户还没开户"悄悄
+    # 变成"发布进别人的工作区"，而后者看起来是成功的。
+    workspace_id = _workspace_for_publish(context, binding.tenant_id, initiator=initiator)
     source = DifyDslSource(
         base_url=console.dify_console_base_url,
         app_id=binding.app_id,
         api_key=console.dify_console_api_key,
-        workspace_id=console.dify_console_workspace_id,
+        workspace_id=workspace_id,
     )
     try:
         outcome = sync_binding_from_dify(

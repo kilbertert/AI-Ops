@@ -75,6 +75,11 @@ class _Upstream:
         #: 非空时，对应路径前缀改为回 ``(status, location)`` 的重定向。
         self.redirects: dict[str, tuple[int, str]] = {}
         self.base = ""
+        #: ``GET /v1/dify/workspace`` 的回答（#884）。默认 404 ⇒ 未开户。
+        self.workspace_lookup_status = 404
+        self.workspace_lookup_body: Any = {"error": {"code": "DIFY_WORKSPACE_UNRESOLVED", "message": "x"}}
+        #: ``POST /__aiops/publish/check``（代理）的回答。默认给一个"有编辑权、无租户"的映射。
+        self.verdict_body: Any = {"allowed": False, "reason": "MISSING_PUBLISH_PERMISSION"}
         #: ``POST /v1/dify/trial`` 的回答（与网关试运行路由同形：202 + trial_id/status）。
         self.trial_status = 202
         self.trial_body: Any = {"trial_id": "tr_abc123", "status": "queued"}
@@ -116,6 +121,10 @@ def _serve(upstream: _Upstream) -> ThreadingHTTPServer:
                 self._reply(upstream.trial_status, upstream.trial_body)
             elif self.path.startswith(TRIAL_GATEWAY_PATH + "/") and method == "GET":
                 self._reply(upstream.trial_result_status, upstream.trial_result_body)
+            elif self.path.startswith("/v1/dify/workspace"):
+                self._reply(upstream.workspace_lookup_status, upstream.workspace_lookup_body)
+            elif self.path == "/__aiops/publish/check":
+                self._reply(200, upstream.verdict_body)
             else:
                 self._reply(404, {"code": "not_found"})
 
@@ -1488,3 +1497,98 @@ def test_the_trial_route_treats_a_shapeless_answer_as_unconfirmed(
     status, body = _trial_post(trial_bridge)
     assert status == 502
     assert body["submitted"] is False
+
+
+# --- #884：发布钉住**发起人所在**的 workspace，而不是一个配置常量 -------------------
+
+
+def _identity_with_tenant(tenant_id: str = "T-884") -> dict[str, Any]:
+    return {
+        "allowed": True,
+        "reason": "",
+        "company_user_id": "u-884",
+        "company_username": "zhang",
+        "dify_account_id": "acc-884",
+        "company_tenant_id": tenant_id,
+        "company_user_type": "tenant",
+    }
+
+
+def _serve_workspace_lookup(upstream: _Upstream, *, workspace_id: str | None, status: int = 200) -> None:
+    """让假上游同时回答网关的只读端点（`GET /v1/dify/workspace?tenant_id=…`）。"""
+    upstream.summary_status = 200
+    if workspace_id is None:
+        upstream.workspace_lookup_body = {"error": {"code": "DIFY_WORKSPACE_UNRESOLVED", "message": "x"}}
+        upstream.workspace_lookup_status = 404
+    else:
+        upstream.workspace_lookup_body = {"workspace_id": workspace_id, "environment": "41"}
+        upstream.workspace_lookup_status = status
+
+
+def test_publish_is_pinned_to_the_initiators_workspace(upstream) -> None:
+    """钉住的值来自**发起人**（经网关解析），不是 `workspace_id` 常量（#884）。"""
+    upstream.verdict_body = _identity_with_tenant("T-884")
+    _serve_workspace_lookup(upstream, workspace_id=TENANT_ID)  # 与 summary 的 id 相同
+    upstream.summary_body = {**upstream.summary_body, "id": TENANT_ID}
+
+    result = publish_current_app(
+        dify_base_url=upstream.base,
+        gateway_base_url=upstream.base,
+        publish_key=PUBLISH_KEY,
+        console_session=ConsoleSession(access_token=SESSION, csrf_token=CSRF),
+        console_origin=ORIGIN,
+        workspace_id="ws-CONSTANT-NOT-THIS",  # 故意给一个不同的常量
+        referer=REFERER,
+        login_proxy_url=upstream.base,
+        gateway_internal_token="internal-token-0123456789",
+    )
+
+    assert result.published is True, result.reason
+    paths = [call["path"] for call in upstream.calls]
+    assert any(path.startswith("/v1/dify/workspace?tenant_id=") for path in paths), "没有问网关要 workspace"
+    assert any("tenant_id=T-884" in path for path in paths), "问的不是发起人的租户"
+
+
+def test_publish_refuses_when_the_initiators_tenant_has_no_workspace(upstream) -> None:
+    """解析不到 ⇒ 拒绝，且**不回落**任何默认 workspace（#884 的核心判据）。"""
+    upstream.verdict_body = _identity_with_tenant("T-NO-WS")
+    _serve_workspace_lookup(upstream, workspace_id=None)
+
+    result = publish_current_app(
+        dify_base_url=upstream.base,
+        gateway_base_url=upstream.base,
+        publish_key=PUBLISH_KEY,
+        console_session=ConsoleSession(access_token=SESSION, csrf_token=CSRF),
+        console_origin=ORIGIN,
+        workspace_id=TENANT_ID,  # 常量"看起来是对的"也不能用
+        referer=REFERER,
+        login_proxy_url=upstream.base,
+        gateway_internal_token="internal-token-0123456789",
+    )
+
+    assert result.published is False
+    assert "工作区" in result.reason
+    assert not any(call["path"] == GATEWAY_PATH for call in upstream.calls), (
+        "解析失败后仍然打了网关的发布端点 —— 那会把正文发进别的工作区"
+    )
+
+
+def test_without_the_internal_token_the_constant_still_pins(upstream) -> None:
+    """迁移期行为：没配内部令牌 ⇒ 仍按 `workspace_id` 常量判（逐字不变）。"""
+    upstream.verdict_body = _identity_with_tenant("T-884")
+    upstream.summary_body = {**upstream.summary_body, "id": TENANT_ID}
+
+    result = publish_current_app(
+        dify_base_url=upstream.base,
+        gateway_base_url=upstream.base,
+        publish_key=PUBLISH_KEY,
+        console_session=ConsoleSession(access_token=SESSION, csrf_token=CSRF),
+        console_origin=ORIGIN,
+        workspace_id=TENANT_ID,
+        referer=REFERER,
+        login_proxy_url=upstream.base,
+        gateway_internal_token="",
+    )
+
+    assert result.published is True, result.reason
+    assert not any("/v1/dify/workspace" in call["path"] for call in upstream.calls)

@@ -71,7 +71,10 @@ AIOPS_CONSOLE_BRIDGE_GATEWAY_URL=https://api.mall.qushiyun.com
 AIOPS_CONSOLE_BRIDGE_HOST=127.0.0.1
 AIOPS_CONSOLE_BRIDGE_PORT=10118
 AIOPS_CONSOLE_BRIDGE_CONSOLE_ORIGIN=<浏览器实际访问的控制台 origin>
-AIOPS_CONSOLE_BRIDGE_WORKSPACE_ID=<网关导出配置使用的同一个 Dify 工作区 ID>
+AIOPS_CONSOLE_BRIDGE_WORKSPACE_ID=<**迁移期**的钉住工作区 ID>
+# 配了这一行 ⇒ 桥按**发起人所在租户**解析 workspace（#884），上面那个常量不再参与判定。
+# 留空 ⇒ 迁移期行为：仍按 `WORKSPACE_ID` 判，逐字不变。
+AIOPS_CONSOLE_BRIDGE_GATEWAY_INTERNAL_TOKEN=
 AIOPS_CONSOLE_BRIDGE_ALLOWED_ROLES=owner,admin
 # 留空 ⇒ **过渡行为**（按 Dify 的 owner/admin 判）。填了 ⇒ 放行判据改为
 # 「登录代理说这个会话对应的公司用户持有发布权限码」（#780）。

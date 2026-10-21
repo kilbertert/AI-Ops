@@ -55,6 +55,24 @@ class _Directory:
         return ()
 
 
+#: 既有用例的默认绑定租户（`_binding()` 的缺省值）。
+_DEFAULT_TENANT = "T-1"
+
+
+def _seed_default_workspace(db: Path) -> None:
+    """给默认租户种一行 `ready`（#884）。放在这里是因为每个用例都要它。"""
+    from aiops_diagnostics.dify_workspaces import DifyWorkspaces
+
+    workspaces = DifyWorkspaces(db)
+    with workspaces._connection(write=True) as connection:  # noqa: SLF001 — 测试造的是行
+        connection.execute(
+            "INSERT OR REPLACE INTO dify_workspaces (tenant_id, environment, workspace_id,"
+            " setup_state, created_at, updated_at) VALUES (?, ?, ?, 'ready',"
+            " '2026-10-21T00:00:00+00:00', '2026-10-21T00:00:00+00:00')",
+            (_DEFAULT_TENANT, "41", "ws-default"),
+        )
+
+
 def _client(tmp_path: Path, runtime: _Runtime, **overrides: Any) -> TestClient:
     settings = GatewayServerSettings(
         data_home=tmp_path,
@@ -62,9 +80,14 @@ def _client(tmp_path: Path, runtime: _Runtime, **overrides: Any) -> TestClient:
         server_config_file=tmp_path / "production.env",
         dify_console_base_url=overrides.pop("dify_console_base_url", "http://dify.invalid:10008"),
         dify_console_api_key=overrides.pop("dify_console_api_key", CONSOLE_KEY),
+        # 部署身份（#884）：发布按 (绑定租户, 环境) 解析 workspace。
+        environment=overrides.pop("environment", "41"),
         **overrides,
     )
     settings.server_config_file.write_text("# test\n", encoding="utf-8")
+    # 默认租户在映射表里有一行 `ready`：绝大多数的既有用例只关心"发布能不能过"，
+    # 不该因为 #884 多了一张表而全红。需要别的状态（缺失 / creating）的用例自己种。
+    _seed_default_workspace(settings.database_file)
     app = create_gateway_app(
         settings=settings,
         store=GatewayStore(settings.database_file),
@@ -295,9 +318,11 @@ def _operator_client(tmp_path: Path, runtime: _Runtime, **overrides: Any) -> Tes
         server_config_file=tmp_path / "production.env",
         dify_console_base_url="http://dify.invalid:10008",
         dify_console_api_key=CONSOLE_KEY,
+        environment=overrides.pop("environment", "41"),
         **overrides,
     )
     settings.server_config_file.write_text("# test\n", encoding="utf-8")
+    _seed_default_workspace(settings.database_file)
     app = create_gateway_app(
         settings=settings,
         store=GatewayStore(settings.database_file),
@@ -567,3 +592,114 @@ def test_the_ledger_is_append_only_across_publishes(tmp_path, monkeypatch) -> No
         headers={"Authorization": f"Bearer {PUBLISH_KEY}"},
     )
     assert len(_ledger(tmp_path).publish_audit_entries()) == 2
+
+
+# --- #884：发布按**绑定租户**解析 workspace，不回落任何默认值 -----------------------
+
+
+def _seed_workspace(db: Path, tenant: str, workspace_id: str, *, state: str = "ready") -> None:
+    from aiops_diagnostics.dify_workspaces import DifyWorkspaces
+
+    workspaces = DifyWorkspaces(db)
+    with workspaces._connection(write=True) as connection:  # noqa: SLF001 — 测试造的是行
+        connection.execute(
+            "INSERT OR REPLACE INTO dify_workspaces (tenant_id, environment, workspace_id,"
+            " setup_state, created_at, updated_at) VALUES (?, ?, ?, ?,"
+            " '2026-10-21T00:00:00+00:00', '2026-10-21T00:00:00+00:00')",
+            (tenant, "41", workspace_id, state),
+        )
+
+
+def test_publish_exports_from_the_bound_tenants_workspace(tmp_path, monkeypatch) -> None:
+    """导出 DSL 用的 workspace 是**绑定的那个租户**的，不是 `AIOPS_GATEWAY_DIFY_CONSOLE_WORKSPACE_ID`。
+
+    变异对照：把 `_workspace_for_publish` 换成那个常量，本条变红 —— 而线上表现是
+    A 租户的发布跑在 B 的工作区上（成功，但发错了地方）。
+    """
+    seen: dict[str, Any] = {}
+
+    class _Source:
+        def __init__(self, **kwargs: Any) -> None:
+            seen.update(kwargs)
+            # 真 `DifyDslSource` 把参数放成属性；替身也必须，否则假 sync 读不到。
+            for name, value in kwargs.items():
+                setattr(self, name, value)
+
+    def fake_sync(manager, context, binding, source, **kwargs):
+        from aiops_diagnostics.dify_dsl_pull import SyncOutcome
+
+        seen["workspace_id"] = source.workspace_id
+        return SyncOutcome(
+            tenant_id=binding.tenant_id,
+            business_entry=binding.business_entry,
+            app_id=binding.app_id,
+            agent_name=binding.agent_name,
+            action="synced",
+            version_no=1,
+            note="",
+        )
+
+    monkeypatch.setattr("aiops_diagnostics.dify_dsl_pull.DifyDslSource", _Source)
+    monkeypatch.setattr("aiops_diagnostics.dify_dsl_pull.sync_binding_from_dify", fake_sync)
+
+    runtime = _Runtime()
+    _patch_registry(monkeypatch, runtime, [_binding(tenant="T-884")])
+    client = _client(
+        tmp_path,
+        runtime,
+        dify_publish_api_key=PUBLISH_KEY,
+        dify_console_workspace_id="ws-CONSTANT",
+        environment="41",
+    )
+    _seed_workspace(tmp_path / "gateway.db", "T-884", "ws-tenant-884")
+
+    response = client.post(
+        "/v1/dify/publish", json={"app_id": APP_ID}, headers={"Authorization": f"Bearer {PUBLISH_KEY}"}
+    )
+
+    assert response.status_code == 200, response.text
+    assert seen["workspace_id"] == "ws-tenant-884"
+
+
+def test_publish_refuses_when_the_binding_tenant_has_no_workspace(tmp_path, monkeypatch) -> None:
+    """解析不到 ⇒ 404 `DIFY_WORKSPACE_UNRESOLVED`，**不回落**常量。"""
+    runtime = _Runtime()
+    _patch_registry(monkeypatch, runtime, [_binding(tenant="T-NO-WS")])
+    client = _client(
+        tmp_path,
+        runtime,
+        dify_publish_api_key=PUBLISH_KEY,
+        dify_console_workspace_id="ws-CONSTANT",
+        environment="41",
+    )
+
+    response = client.post(
+        "/v1/dify/publish", json={"app_id": APP_ID}, headers={"Authorization": f"Bearer {PUBLISH_KEY}"}
+    )
+
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "DIFY_WORKSPACE_UNRESOLVED"
+
+
+def test_publish_refuses_a_workspace_that_is_still_being_created(tmp_path, monkeypatch) -> None:
+    """`creating` ⇒ 409 且**可重试**：与"没开户"是两件事，下一步也不同。"""
+    runtime = _Runtime()
+    _patch_registry(monkeypatch, runtime, [_binding(tenant="T-884")])
+    client = _client(
+        tmp_path,
+        runtime,
+        dify_publish_api_key=PUBLISH_KEY,
+        dify_console_workspace_id="ws-CONSTANT",
+        environment="41",
+    )
+    _seed_workspace(tmp_path / "gateway.db", "T-884", "", state="creating")
+
+    response = client.post(
+        "/v1/dify/publish", json={"app_id": APP_ID}, headers={"Authorization": f"Bearer {PUBLISH_KEY}"}
+    )
+
+    assert response.status_code == 409
+    error = response.json()["error"]
+    assert error["code"] == "DIFY_WORKSPACE_CREATING" and error["retryable"] is True
+    entries = GatewayStore(tmp_path / "gateway.db").publish_audit_entries(app_id="")
+    assert entries and entries[0]["reason_code"] == "DIFY_WORKSPACE_CREATING", "被拒的尝试也要入账"

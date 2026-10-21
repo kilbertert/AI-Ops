@@ -149,6 +149,54 @@ class ConsolePublishError(RuntimeError):
     """桥自己的一步失败了（不是"运营无权"，而是"这一步没做成"）。"""
 
 
+_REFUSED_NO_WORKSPACE = "你所在的租户还没有可用的 Dify 工作区，不能发布。请联系管理员为该租户开户后再试"
+
+
+def _workspace_for(
+    gateway_base_url: str, internal_token: str, *, tenant_id: str, timeout: float
+) -> str | None:
+    """问网关切"这个租户的 workspace 是哪一个"（#884 / ADR-0067 的只读端点）。
+
+    返回 ``None`` = 解析不到（没开户 / 创建中 / 失败 / 未知）**或**查询本身失败。
+    两种都**拒绝发布**：一个是"他不该发"，一个是"我们不知道他该发到哪" ——
+    在任何一种下继续发布都可能把 A 的正文发进 B 的工作区。
+
+    真正的区分在网关那一侧（四个可区分的码）；到了桥这里，"能不能发"是同一个答案。
+    运营看到的文案因此只说一件事：**去找管理员开户**，而不是猜是哪种状态。
+    """
+    import time
+
+    from aiops_diagnostics.bounded_http import ErrorMapping, RequestSpec, join_url, request_json
+    from aiops_diagnostics.http_auth import build_internal_token_headers
+
+    def refused(failure: HttpFailure) -> Exception:
+        return _WorkspaceLookupFailed(f"{failure.status or failure.detail}")
+
+    try:
+        payload = request_json(
+            RequestSpec(
+                url=join_url(gateway_base_url, "/v1/dify/workspace", query={"tenant_id": tenant_id}),
+                headers=build_internal_token_headers(internal_token, 300, int(time.time())),
+                timeout=timeout,
+            ),
+            mapping=ErrorMapping(
+                auth_rejected=refused,
+                http_error=refused,
+                unavailable=refused,
+                invalid_body=refused,
+                invalid_envelope=refused,
+            ),
+        )
+    except Exception:  # noqa: BLE001 - 查不通一律按"不能确认"处置
+        return None
+    workspace = str(payload.get("workspace_id") or "") if isinstance(payload, dict) else ""
+    return workspace or None
+
+
+class _WorkspaceLookupFailed(Exception):
+    """内部信号：查询失败（真正的处置在上面的 ``except`` 里）。"""
+
+
 @dataclass(frozen=True, slots=True)
 class ConsolePublishResult:
     """一次按钮点击的结果 —— 面向前端，刻意只有三个字段（``status`` 只给 HTTP 面用）。"""
@@ -436,6 +484,7 @@ def publish_current_app(
     referer: str | None,
     allowed_roles: frozenset[str] = DEFAULT_ALLOWED_ROLES,
     login_proxy_url: str = "",
+    gateway_internal_token: str = "",
     timeout: float = 15.0,
 ) -> ConsolePublishResult:
     """运营点了按钮之后，这一层做的全部事情。顺序不能换：
@@ -469,13 +518,14 @@ def publish_current_app(
     if role is None or current_workspace is None:
         _LOGGER.info("console publish refused: workspace summary has no role/id")
         return ConsolePublishResult(False, _REFUSED_SESSION)
-    if not hmac.compare_digest(current_workspace.encode("utf-8"), workspace_id.encode("utf-8")):
-        # 不记录对方的工作空间 id：日志只需知道"不是钉住的那个"。
-        _LOGGER.info("console publish refused: current workspace is not the pinned one")
-        return ConsolePublishResult(False, _REFUSED_WORKSPACE)
-    # 放行判据（#780）。**配了映射来源 ⇒ 公司权限码裁定**；没配 ⇒ 维持 owner/admin
-    # 过渡行为（身份闭环上线前不切换，PRD #772 D 的明确要求）。
+    # 放行判据（#780）与**钉住的 workspace**（#884）。两者共用同一次身份查询：
+    # 钉住的值现在是"**发起人所在的那个** workspace"，而不是一个配置常量。
+    #
+    # 顺序是刻意的：先拿到身份（因此拿到发起人的公司租户），再解析 workspace，
+    # 最后才比对 summary 的当前工作空间。反过来的话，一个还没开户的租户会在
+    # "工作空间不符"上被拒，而真正的原因是"他没有工作区"—— 两种下一步完全不同。
     initiator_headers: dict[str, str] = {}
+    pinned_workspace = workspace_id
     if login_proxy_url:
         verdict = _identity_and_publish_verdict(
             login_proxy_url,
@@ -491,9 +541,28 @@ def publish_current_app(
         if not allowed:
             _LOGGER.info("console publish refused: no company publish permission")
             return ConsolePublishResult(False, _REFUSED_PUBLISH_PERMISSION)
+        if gateway_internal_token:
+            tenant_id = initiator_headers.get("X-AIOps-Initiator-Tenant", "")
+            resolved = _workspace_for(
+                gateway_base_url,
+                gateway_internal_token,
+                tenant_id=tenant_id,
+                timeout=timeout,
+            )
+            if resolved is None:
+                # **不回落任何默认 workspace**：回落等于把"这个租户还没开户"悄悄变成
+                # "发布进别人的工作区"，而后者看起来是成功的。
+                _LOGGER.info("console publish refused: the initiator's tenant has no workspace")
+                return ConsolePublishResult(False, _REFUSED_NO_WORKSPACE)
+            pinned_workspace = resolved
     elif role not in allowed_roles:
         _LOGGER.info("console publish refused: role %r not allowed", role[:32])
         return ConsolePublishResult(False, _REFUSED_ROLE)
+
+    if not hmac.compare_digest(current_workspace.encode("utf-8"), pinned_workspace.encode("utf-8")):
+        # 不记录对方的工作空间 id：日志只需知道"不是钉住的那个"。
+        _LOGGER.info("console publish refused: current workspace is not the pinned one")
+        return ConsolePublishResult(False, _REFUSED_WORKSPACE)
 
     app_url = dify_base + DIFY_APP_PATH.format(app_id=urllib.parse.quote(app_id, safe=""))
     http_status, app = _request(app_url, headers=dify_headers, timeout=timeout)
@@ -858,9 +927,17 @@ class BridgeSettings:
     #: 浏览器地址栏里的**控制台公开源**（如 ``http://36.156.159.175:10008``）。
     #: ``Origin`` / ``Referer`` 只按它判；**不是** ``dify_base_url``（那是内网地址）。
     console_origin: str
-    #: 钉住的 Dify 工作空间（tenant）id。summary 回答的当前工作空间必须就是它。
-    #: 网关导出 DSL 所用的工作空间必须与之相同 —— 部署侧约束，桥无法自证。
+    #: **迁移期**的钉住工作空间 id（#884）。配了 ``gateway_internal_token`` 之后
+    #: **不再参与判定** —— 钉住的值改为"发起人所在的那个 workspace"。
+    #: 保留它只为一种情况：还没部署网关内部令牌的环境，行为逐字不变。
     workspace_id: str
+    #: 网关自己的**内部令牌**（与网关的 `AIOPS_GATEWAY_INTERNAL_TOKEN_SECRET` 同一把）。
+    #: 配了 ⇒ 桥按**发起人的公司租户**问网关"这个租户的 workspace 是哪一个"
+    #: （`GET /v1/dify/workspace`），并用它作为钉住判据（#884）。留空 ⇒ 回落到静态
+    #: `workspace_id`（迁移期行为）。
+    #:
+    #: 它**不是** Dify 的钥匙：调用方是我们自己的进程，输出只有一个 workspace UUID。
+    gateway_internal_token: str = field(repr=False, default="")
     allowed_roles: frozenset[str] = DEFAULT_ALLOWED_ROLES
     #: 服务端持有的**试运行**密钥。与 ``AIOPS_GATEWAY_DIFY_TRIAL_API_KEY`` 同一把。
     #: 它必须与发布密钥**不同**（网关在启动期就强制两者互不相同）：能发布不等于能在
@@ -908,6 +985,7 @@ class BridgeSettings:
             trial_key=os.environ.get("AIOPS_GATEWAY_DIFY_TRIAL_API_KEY", "").strip(),
             console_origin=origin,
             workspace_id=required("AIOPS_CONSOLE_BRIDGE_WORKSPACE_ID"),
+            gateway_internal_token=os.environ.get("AIOPS_CONSOLE_BRIDGE_GATEWAY_INTERNAL_TOKEN", "").strip(),
             allowed_roles=parse_allowed_roles(os.environ.get("AIOPS_CONSOLE_BRIDGE_ALLOWED_ROLES")),
             login_proxy_url=os.environ.get("AIOPS_CONSOLE_BRIDGE_LOGIN_PROXY_URL", "").strip().rstrip("/"),
         )
@@ -954,6 +1032,7 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
                 referer=referer,
                 allowed_roles=self.settings.allowed_roles,
                 login_proxy_url=self.settings.login_proxy_url,
+                gateway_internal_token=self.settings.gateway_internal_token,
                 timeout=self.settings.timeout,
             )
         except _Rejected as exc:
