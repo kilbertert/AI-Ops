@@ -500,6 +500,11 @@ class DifyKnowledgeBinding:
     knowledge_id: str
     tenant_id: str
     knowledge_base_ids: tuple[str, ...]
+    #: The operator's own label, when the row came from the console (ADR 0048).
+    #: The env registry has no such field — there the id doubles as the label —
+    #: so this defaults to empty instead of growing the env syntax a fourth
+    #: segment.
+    display_name: str = ""
 
 
 def parse_dify_knowledge_bindings(value: str) -> dict[str, DifyKnowledgeBinding]:

@@ -18,6 +18,7 @@
 | 面 | 路径 | 方法 | 鉴权 | 为什么它在集合里 |
 |---|---|---|---|---|
 | 知识检索适配 | `/v1/dify/retrieval` | POST | 共享凭据（Bearer，`AIOPS_GATEWAY_DIFY_KNOWLEDGE_API_KEY`） | Dify 的 External Knowledge API 目标。Dify 控制台里挂"外接知识库"时，运营填的 endpoint 加 `/retrieval` 就打到这里（#581）。租户与知识库集合由**我们的** `AIOPS_GATEWAY_DIFY_KNOWLEDGE_BINDINGS` 决定，请求体里两者都没有 |
+| **知识源清单（只读）** | `/v1/dify/knowledge` | GET | 共享凭据（Bearer，`AIOPS_GATEWAY_DIFY_KNOWLEDGE_API_KEY`，与检索同一把） | 让 Dify 控制台的「连接外部知识库」对话框能把 `knowledge_id` 渲染成**下拉选择**而不是空白输入框（PRD「前端点击完成知识库配置」）。返回的正是**检索会接受的那组** `knowledge_id`：同一凭据、同一登记表，所以选项里出现的每一个都检索得到；不读取任何数据源、不执行检索、不写任何状态。调试身份只看到它自己的子集 —— 预览界面不得展示预览用不了的选项 |
 | **工具目录（仅说明）** | `/v1/dify/tools/{tool}` | POST | **独立**共享凭据（Bearer，`AIOPS_GATEWAY_DIFY_TOOLS_API_KEY`） | 让运营在 Dify 的工具列表里**选得到** AI-Ops 的七个真实诊断工具（#772 E / 3A）。它是 Dify 里 `aiops` 这个 API 工具提供方的目标端点，返回**一段固定说明文本**（「本工具只在 AI-Ops 运行时执行，请使用试运行」）——**不读取任何数据源、不创建运行**。这把钥匙是 Dify 侧**工作区共享**的（任何能编辑该提供方的管理员都看得见），所以它的设计前提就是"泄露了也拿不到东西"：端点除了说明文本什么都不返回。`{tool}` 不在七个之内 → 404 |
 | **试运行（提交）** | `/v1/dify/trial` | POST | **独立**共享凭据（Bearer，`AIOPS_GATEWAY_DIFY_TRIAL_API_KEY`） | 拿一份**草稿**（方法论提示词 + 工具白名单）在一张订单上跑一次真实 harness（#772 F / #781）。范围**不来自请求**：订单可见性由服务端配置的 `dify_trial_debug_tenant` 决定，与 `/v1/standard/diagnoses` 同一条判据。**不产生智能体版本、不写注册表、不改任何生产路由**；超出预算时结果标为未完成。它触发一次真实模型执行，所以钥匙必须与其余每一把都不同 |
 | **试运行（读结果）** | `/v1/dify/trial/{trial_id}` | GET | **独立**共享凭据（Bearer，`AIOPS_GATEWAY_DIFY_TRIAL_API_KEY`） | 读一次试运行的状态与结果：诊断报告、证据编号、被白名单挡掉的工具、数据源失败。只读；`trial_id` 不认识即 404 |

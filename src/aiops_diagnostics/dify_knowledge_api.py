@@ -30,6 +30,16 @@ from aiops_diagnostics.knowledge_retrieval import RetrievedChunk
 #: base path and this is the route it reaches.
 DIFY_RETRIEVAL_PATH = "/v1/dify/retrieval"
 
+#: Our extension to the External Knowledge API: the knowledge sources this
+#: endpoint can serve, so Dify's console can offer them as a picker instead of an
+#: empty text box. Dify itself never calls this route — the console UI we patch
+#: does, and a stock Dify simply never asks.
+#:
+#: Deliberately under the same credential and the same registry as retrieval: the
+#: list IS the set of things retrieval will accept, so a picker built on it
+#: cannot offer something that then 404s.
+DIFY_KNOWLEDGE_LIST_PATH = "/v1/dify/knowledge"
+
 DIFY_INVALID_REQUEST = "DIFY_INVALID_REQUEST"
 #: A capability we deliberately do not implement. 400 rather than a silent
 #: ignore: quietly dropping the operator's metadata filter would answer with

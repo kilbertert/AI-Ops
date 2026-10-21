@@ -55,8 +55,8 @@ no project argument. Both answer *where* something is; neither replaces reading 
 - AGENTS.md
 - CLAUDE.md
 - README.md
-- docs/ — 124 markdown file(s)
-- docs/adr/ — 65 markdown file(s)
+- docs/ — 125 markdown file(s)
+- docs/adr/ — 66 markdown file(s)
 - docs/agents/ — 36 markdown file(s)
 
 ## Tree (depth 2, first 80 lines; dependencies, build
@@ -69,13 +69,14 @@ deploy/
     nginx/
     patches/
     ssrf_proxy/
+    web-patches/
     acceptance.feature
     check.sh
     docker-compose.yaml
     env.example
     migrate_20261020.py
     qa-plan.md
-    README.md
+    ... (1 more)
   m2-live-03/
     schema/
     bootstrap_platform.py
@@ -109,7 +110,7 @@ docs/
     0008-adr-0003-deviation-session-direct-read.md
     0009-operator-identity-via-company-oauth2-token.md
     0010-reversal-of-prd-200-language-boundary.md
-    ... (55 more)
+    ... (56 more)
   afk-cutover/
     decisions.md
     pr-a-spec.md

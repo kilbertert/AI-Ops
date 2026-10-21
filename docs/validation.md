@@ -1,3 +1,50 @@
+## 2026-10-21 · Dify 原生知识库选择器：路由判据与构建实测
+
+**范围**：`GET /v1/dify/knowledge`（网关）、`patches/1.17.1/06–07`（Dify api）、
+`web-patches/1.17.1/*`（Dify web）。
+
+### 一、网关侧判据（本地）
+
+`tests/test_dify_knowledge_api.py` 新增 5 条：
+
+| 用例 | 钉住的规则 |
+|---|---|
+| `test_knowledge_list_returns_the_registry_not_ragflow` | 列的是**我们的键**，不是 dataset id |
+| `test_knowledge_list_needs_the_same_credential_as_retrieval` | 无凭据 401、错凭据 403 |
+| `test_knowledge_list_is_unconfigured_when_retrieval_is` | 未配置即 404（与其他 Dify 路由同一条机制） |
+| `test_debug_identity_lists_only_what_it_can_retrieve` | 预览只能看到能检索的子集 |
+| `test_console_rows_and_env_rows_form_one_list` | 两个登记表合并，控制台行带运营起的名字 |
+
+突变复验：删掉身份收窄后最后那条 debug 用例变红。
+
+### 二、Dify web 构建实测（这是本轮最贵的一条事实）
+
+| 尝试 | 命令 | 结果 |
+|---|---|---|
+| 1 | `pnpm build`（Turbopack，默认堆） | **137**（OOM） |
+| 2 | `pnpm build`，6 GiB 堆 | **124**（90 分钟超时，`.next` 始终 1.1 MB） |
+| 3 | `pnpm build`，上游 Dockerfile 的 4 GiB | 无 EXIT，同样零产物 |
+| 4 | `pnpm build` + 8 GiB swap | **124** |
+| 5 | 固定 `turbopack.root` 到 monorepo 根 | **124** |
+| 6 | `next build --webpack`，12 GiB 堆 | **成功：3.8 分钟，40/40 静态页** |
+
+所以构建脚本把上游 `RUN pnpm build && pnpm build:vinext` 换成 `RUN pnpm build --webpack`
+（`build:vinext` 本实例用不到，且会再跑一遍构建）；找不到那一行就**直接失败**，不猜。
+
+### 三、补丁的可应用性（已在本机验证）
+
+- api 侧：在"已打完 01–05 的本地上游树"上依次应用 `06`、`07`，`--fuzz=0` 成功，两个文件
+  都能 `ast.parse`。
+- web 侧：在 pristine 上游文件上应用 `01-web-external-knowledge-picker.patch`，`--fuzz=0`
+  成功；三个输入文件已用 sha256 钉进构建脚本。
+
+### 四、据实（边界）
+
+- **36 上还没有构建/部署新 web 镜像**：本轮交付代码、补丁与脚本，真机点选验收在部署之后。
+- 类型检查：`tsc --noEmit` 对本轮改动文件无报错（唯一报错是既有的
+  `dev-proxy.config.ts` 找不到 `@langgenius/dev-proxy`，与本轮无关）。
+- 选择器在**清单为空**时渲染的正是上游原本的输入框 —— 对没有该路由的 provider 行为不变。
+
 ## 2026-10-21 · M3 交付收尾：#876 随后继制品上线
 
 **范围**：GitHub 交付记录与生产只读复核。本轮未起隔离栈、未发模型或订单请求。
