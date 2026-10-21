@@ -310,6 +310,31 @@ v12 与 v13 的差异**只有两处**（实测逐字段 diff）：`prompt` 与 `
   实测把 dataset id 当 `knowledge_id` 调用得到 404。
 - 跨租户 / 无主库仍需工程师介入（ADR 0063 的显式边界）。
 
+## 2026-10-21 · 换上游到 Cline 后的**整轮成功**（41 隔离栈）
+
+**范围**：`bootstrap_platform.ensure_agent` 改为跟随本次模型配置（换供应商时改绑并读回
+核对），以及一次真实链路复跑。调用者身份仍是构造的（ADR-0058），订单授权与业务读取是真判定。
+
+**为什么之前「供应商不可用」**：三条上游都在，但**不在同一层**。baoyun 欠费
+（`403 预扣费额度失败，剩余 ¥0.000285`）、commandcode 周额度用尽
+（`429 … resets at 2026-10-24T03:37:15Z`，同一把 key 的 `/models` 还被 Cloudflare 1010 拦）、
+Cline 可用。而 c-line/commandcode 是**开发机中继**里的池，隔离栈只有一条固定出口
+（ADR-0041），其上游来自 `stack.env` —— 两条配置面互不相通。
+
+**修的缺陷**：`ensure_model` 换了 `modelKey` 会新建一行，而 `ensure_agent` 早先只按名字
+找到就返回，智能体仍指向旧行 ⇒ 平台照旧把请求发给旧模型，bootstrap 却报 ok。
+现改为比对 `chatModelId`/`instruction`，不一致则整份回填后 PUT 并**读回核对**。
+四条新回归（旧实现下 2 条转红）。
+
+**实测**（`run_7eNr9r7rsMa-…`）：`succeeded`、`exec_config_state=matched`、
+`expected=observed=e82bb0a3…`、快照 164 B、`node-41`；节点日志两轮真实模型调用
+（344 / 460 prompt tokens，`durationMs=30605`）；出口日志无异常且 `upstream host=api.cline.bot`。
+`down` 后容器 0、8794 释放；`cleanup` 报 `production: true`，生产 `agent_runs` 仍是 0 行、
+配置 sha256 未变、服务启动时刻未变。
+
+**未证明**：快照内容的业务正确性、真实用户身份、App 客户端、Cline 的长期可用性
+（订阅额度同样会尽）。`model_request_count.observed=false`：出口只记异常。
+
 ## 2026-10-20 · 完成通知的空原因按值比较
 
 **范围**：成功通知已记录非空 `reason` 后，省略或 JSON `null` 的重试返回 409；
