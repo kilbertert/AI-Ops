@@ -470,11 +470,10 @@ class AgentRunStore:
         return run
 
     def get(self, run_id: str) -> AgentRun | None:
-        """读一条记录；读的同时把已过期的非终态收敛为 ``expired``。"""
-        self._expire(run_id)
-        with self._connection() as connection:
-            row = connection.execute("SELECT * FROM agent_runs WHERE run_id = ?", (run_id,)).fetchone()
-        return _run_from_row(row) if row else None
+        """同一事务内收敛到期并读取，调用方以该次读取为最终放行时点。"""
+        with self._connection(write=True) as connection:
+            _expire_in(connection, run_id)
+            return _read_run(connection, run_id)
 
     def peek(self, run_id: str) -> AgentRun | None:
         """**只读**一条记录，不做任何过期收敛 —— 判据是「这条通知该不该落库」时用它。
@@ -486,10 +485,6 @@ class AgentRunStore:
         with self._connection() as connection:
             row = connection.execute("SELECT * FROM agent_runs WHERE run_id = ?", (run_id,)).fetchone()
         return _run_from_row(row) if row else None
-
-    def _expire(self, run_id: str) -> None:
-        with self._connection(write=True) as connection:
-            _expire_in(connection, run_id)
 
     def claim(self, run_id: str) -> bool:
         """``issued → running``。返回 True 的那一个调用者是唯一被允许读业务的人。"""

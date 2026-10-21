@@ -2289,3 +2289,23 @@ RedisThirdSessionResolver，Redis/订单授权/CPMS/平台回呼为替身，不�
 复跑：`uv run pytest tests/test_m3_user_entry_tool.py tests/test_m3_live_replay_tool.py`。
 真实步骤与各参与方缺口见 [用户入口验收手册](docs/agents/m3-user-entry-acceptance.md)。
 真实正向当前待本人订单样本，不能把本地正例或登录 API 200 当成业务验收。
+
+## M3-CONSUMER-SNAPSHOT-01
+
+环境：Linux、一次性 SQLite 与动态回环 HTTP；身份/订单授权/CPMS/平台为替身。
+不使用生产 AIOPS_DATA_HOME。测试数据仅 ORDER-A/USER-A 等合成值。
+
+| 编号 | 前提与动作 | 预期可观察结果 | 清理 |
+|---|---|---|---|
+| SNAPSHOT-01 | 正常委派、M3 完成通知、未知状态、两用户交错 | 同 run 五字段及摘要一致，一次 CPMS，unknown 不改写 | 临时数据根和回环服务 |
+| SNAPSHOT-02 | 领取后改授权或让授权源失败 | 404/503，无 charging_status；不多读业务 | 同上 |
+| SNAPSHOT-03 | 最终授权回调内撤销/到期/停节点/改绑定 | 确認钩子触发，拒正文；失败原因和终态保留 | 同上 |
+| SNAPSHOT-04 | 篡改/缺失快照、未完成循环、禁用入口 | 失败无正文；共用回执与默认关闭保持原样 | 同上 |
+
+执行 `uv run pytest tests/test_m3_consumer_snapshot.py`，并运行既有真进程
+`tools/m2_close/m3node/verify_gateway_exec_config.py`。真实模型/用户/App 仍另验。
+
+节点顺序复验：执行 `AIOPS_GATEWAY_ENVIRONMENT=verify M3NODE_DEPS=<锁定依赖目录>
+M3NODE_JDK_IMAGE=<已安装JDK镜像> uv run python tools/m2_close/m3node/verify_node_link.py --out <私有报告>`。
+Gateway 技能 helper 的 `--port` 仅改变探测地址，运行时同步设置 `AIOPS_GATEWAY_PORT`，
+`--out` 使用仓内 gitignored 的 `.pytest_cache/`；临时根由 helper 创建并清理。

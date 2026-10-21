@@ -1123,7 +1123,7 @@ def main() -> int:
                 CompletionProxyHandler.completions,
             )
 
-        # LINK-10 未启用清单：行为与今天逐字一致
+        # LINK-10 未启用清单：执行语义不变，消费者响应按新契约添加同 run 快照。
         legacy = _scenario(
             root,
             "legacy",
@@ -1143,7 +1143,7 @@ def main() -> int:
             row.get("expected_agent_version"),
         )
         check(
-            "LINK-10 未启用：回执键集合不变",
+            "LINK-10 未启用：消费者响应仅新增 charging_status",
             set((legacy.get("delegated_body") or {}).keys())
             == {
                 "run_id",
@@ -1165,6 +1165,7 @@ def main() -> int:
                 "expires_at",
                 "claimed_at",
                 "completed_at",
+                "charging_status",
             },
             sorted((legacy.get("delegated_body") or {}).keys()),
         )
