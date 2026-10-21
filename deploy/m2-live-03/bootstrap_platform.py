@@ -374,9 +374,15 @@ def rebind_agent(token: str, agent: dict, app_id: str, model_id: int) -> None:
         fail(f"改绑智能体失败（HTTP {status}）")
     status, after = call(f"/agent/{agent['id']}", None, {"Snail-Ai-Auth": token}, "GET")
     data = (after or {}).get("data") or {}
-    if status != 200 or data.get("chatModelId") != model_id:
-        # 写成功但读回不对，与写失败一样不能算成功：平台照旧会用旧模型。
-        fail(f"改绑后读回的 chatModelId 不是 {model_id}（HTTP {status}）")
+    if (
+        status != 200
+        or (after or {}).get("status") != 1
+        or data.get("chatModelId") != model_id
+        or data.get("instruction") != AGENT_INSTRUCTION
+        or data.get("appId") != app_id
+    ):
+        # PUT 的三个目标字段都必须读回一致；仅模型一致会漏掉指令未生效。
+        fail(f"改绑后读回的模型、指令或应用不一致（HTTP {status}）")
 
 
 def ensure_agent(token: str, app_id: str, model_id: int) -> int:
@@ -391,7 +397,11 @@ def ensure_agent(token: str, app_id: str, model_id: int) -> int:
     for agent in (body or {}).get("data", []) or []:
         if agent.get("name") != SERVICE:
             continue
-        if agent.get("chatModelId") == model_id and agent.get("instruction") == AGENT_INSTRUCTION:
+        if (
+            agent.get("chatModelId") == model_id
+            and agent.get("instruction") == AGENT_INSTRUCTION
+            and agent.get("appId") == app_id
+        ):
             return agent["id"]
         rebind_agent(token, agent, app_id, model_id)
         return agent["id"]

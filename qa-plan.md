@@ -2261,3 +2261,14 @@ python3 tools/m2_close/m3live/live_replay.py cleanup --out <证据目录> \
 
 **未覆盖**：真实 41 上的这一次派发（需要已批准的供应商与订单，本片明确不做）；
 「模型请求几次」在真实栈上仍无观测依据；生产面基线只有在 41 上跑 `baseline` 才有值。
+
+## M3-CLINE-ACCEPTANCE-01
+
+- 环境：隔离栈保留的成功 run；本轮不再派发模型。调用者是构造身份。
+- 本地回归：`uv run pytest tests/test_m2_live03_bootstrap.py`；改绑的模型、指令、应用及信封
+  都读回一致才通过，三个新负例在旧实现全红；临时平台替身无残留。
+- 只读样本核对：从 run 行取订单及 scope，用私有 runtime.env 的业务只读连接参数，
+  在 READ ONLY 事务中按 order_no/tenant_id/本人筛选最多两行，要求唯一；同一身份发一次
+  CPMS GET，核对 orderNo/status 与快照，不输出订单或凭据。关闭 SQL/HTTP 连接。
+- 已取证：10/10；只证明当前单样本一致。用户登录、App、出口请求计数及准确率未验。
+- 后续若复跑：必须使用合并制品；baseline 在 up/send 前采，send 一次后总是 down/cleanup。

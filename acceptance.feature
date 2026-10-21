@@ -2964,6 +2964,12 @@ Feature: 隔离栈的凭据挂载与初始化传输
       Then 初始化代码与输入文件按字节传入
       And 输出配置以服务 UID 和 0600 权限原子落位
 
+    Scenario: LIVE-DEPLOY-02-REBIND 改绑后的指令或应用没有生效
+      Given 同名智能体需要切换到本次的模型配置与指令
+      When 平台 PUT 报成功但读回的模型、指令、应用或业务信封不符合期望
+      Then bootstrap 非零退出而不报告改绑成功
+      And 全部读回一致时才继续初始化
+
     Scenario: LIVE-DEPLOY-03 任一初始化输出传输失败或为空
       Given 宿主已有管理员口令、绑定表和节点配置
       When 绑定或节点输出中的任意一份传输失败或为空

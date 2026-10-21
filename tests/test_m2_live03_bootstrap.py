@@ -108,14 +108,17 @@ def test_an_agent_on_another_model_config_is_rebound(bootstrap, monkeypatch):
     换标识新建行，而 `ensure_agent` 早先只按名字找到就返回，从不改 `chatModelId`。
     """
     calls: list[tuple[str, str, dict | None]] = []
+    current = dict(_AGENT)
 
     def fake_call(path, body=None, headers=None, method=None):
         verb = method or ("GET" if body is None else "POST")
         calls.append((verb, path, body))
         if path.startswith("/agent/page"):
-            return 200, _agent_page(dict(_AGENT))
+            return 200, _agent_page(dict(current))
         if verb == "GET":
-            return 200, {"status": 1, "data": dict(_AGENT, chatModelId=42)}
+            return 200, {"status": 1, "data": dict(current)}
+        if verb == "PUT":
+            current.update(body)
         return 200, {"status": 1}
 
     monkeypatch.setattr(bootstrap, "call", fake_call)
@@ -126,6 +129,8 @@ def test_an_agent_on_another_model_config_is_rebound(bootstrap, monkeypatch):
     assert writes, "指向别的模型配置时必须改绑，而不是按名字直接返回"
     assert writes[0][1] == "/agent/5"
     assert writes[0][2]["chatModelId"] == 42
+    assert current["instruction"] == bootstrap.AGENT_INSTRUCTION
+    assert current["appId"] == "app-1"
     # 读回核对：写入后必须再读一次，不能凭写入的返回码认为成功。
     assert [c[0] for c in calls][-1] == "GET"
 
@@ -180,3 +185,23 @@ def test_rebind_refuses_an_agent_with_another_name(bootstrap, monkeypatch):
 
     with pytest.raises(SystemExit):
         bootstrap.rebind_agent("tok", dict(_AGENT, name="aiops-m2live03"), "app-1", 42)
+
+
+@pytest.mark.parametrize("drift", ["instruction", "appId", "envelope"])
+def test_rebind_requires_all_written_fields_to_read_back(bootstrap, monkeypatch, drift):
+    current = dict(_AGENT)
+
+    def fake_call(path, body=None, headers=None, method=None):
+        if method == "PUT":
+            current.update(body)
+            if drift == "instruction":
+                current["instruction"] = "旧指令"
+            if drift == "appId":
+                current["appId"] = "another-app"
+            return 200, {"status": 1}
+        envelope = 0 if drift == "envelope" and current["chatModelId"] == 42 else 1
+        return 200, {"status": envelope, "data": dict(current)}
+
+    monkeypatch.setattr(bootstrap, "call", fake_call)
+    with pytest.raises(SystemExit):
+        bootstrap.rebind_agent("tok", dict(_AGENT), "app-1", 42)
