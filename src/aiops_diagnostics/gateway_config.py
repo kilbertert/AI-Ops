@@ -98,6 +98,12 @@ class GatewayServerSettings:
     kb_search_max_results: int = 10
     media_signing_secret: str = ""
     media_ttl_seconds: int = 600
+    #: 本网关**对外**的基地址（``https://host``，无路径）。媒体 URL 默认是相对的
+    #: ``/v1/media/...``，因为 APP 与网关同源；但 Dify 的记录会离开本网关 —— Dify 自己的
+    #: 控制台、以及它转交给模型的上下文，都会拿到这个字符串。相对路径在那里会解析到
+    #: **Dify 的主机**上（36 的 nginx 把 ``/v1`` 转给 ``api:5001``），结果是每张图都 404，
+    #: 而且看起来像"我们的媒体面坏了"。留空 = 保持相对路径（同源调用方的原有行为）。
+    public_base_url: str = ""
     #: 面向 Dify 的知识检索适配路由（#581 / PRD #577）。**三键全空 ⇒ 该路由整体 404**，
     #: 与 ``kb_service_base_url`` 同一条「未配置即不启用」的机制保证；半配置是启动错误
     #: （登记表有值说明运维确实想暴露这个面，此时凭据缺失若只落回「不构造」，结果是一个
@@ -299,6 +305,8 @@ class GatewayServerSettings:
             media_signing_secret=_env("AIOPS_GATEWAY_MEDIA_SIGNING_SECRET")
             or _file_value(file_values, "AIOPS_GATEWAY_MEDIA_SIGNING_SECRET"),
             media_ttl_seconds=_env_int("AIOPS_GATEWAY_MEDIA_TTL_SECONDS", 600),
+            public_base_url=_env("AIOPS_GATEWAY_PUBLIC_BASE_URL")
+            or _file_value(file_values, "AIOPS_GATEWAY_PUBLIC_BASE_URL"),
             dify_knowledge_api_key=_env("AIOPS_GATEWAY_DIFY_KNOWLEDGE_API_KEY")
             or _file_value(file_values, "AIOPS_GATEWAY_DIFY_KNOWLEDGE_API_KEY"),
             dify_knowledge_bindings=_env("AIOPS_GATEWAY_DIFY_KNOWLEDGE_BINDINGS")
