@@ -29,7 +29,7 @@ def compose(tmp_path_factory) -> dict:
     return _resolved_compose(tmp_path_factory.mktemp("dify36"))
 
 
-def _resolved_compose(tmp_path: Path) -> dict:
+def _resolved_compose(tmp_path: Path, extra_env: str = "") -> dict:
     """用一份假 .env 解析 compose —— 只做插值，不读任何真实凭据。"""
     import shutil
     import subprocess
@@ -51,7 +51,8 @@ def _resolved_compose(tmp_path: Path) -> dict:
                 f"WEAVIATE_API_KEY={'y' * 48}",
             ]
         )
-        + "\n",
+        + "\n"
+        + extra_env,
         encoding="utf-8",
     )
     out = subprocess.run(
@@ -135,3 +136,17 @@ def test_patch_files_are_unified_diffs_with_fuzz_zero_context():
             if line.startswith("@@"):
                 # hunk 头必须写成 “-a,b +c,d” —— 缺了长度字段，patch 会按 1 行处理。
                 assert re.fullmatch(r"@@ -\d+(,\d+)? \+\d+(,\d+)? @@.*", line), (patch.name, line)
+
+
+def test_web_image_override_defaults_to_upstream(tmp_path):
+    """不打补丁的部署必须能原样跑起来 —— 否则升级时是 compose 先坏，而不是界面没变。"""
+    web = _resolved_compose(tmp_path)["services"]["web"]["image"]
+    assert web == "docker.1panel.live/langgenius/dify-web:1.17.1"
+
+
+def test_web_image_override_points_at_the_patched_build(tmp_path):
+    """`DIFY_WEB_IMAGE` 是 web 侧唯一的上线开关（api 侧的对应物是只读挂载）。"""
+    web = _resolved_compose(tmp_path, "DIFY_WEB_IMAGE=aiops/dify-web-patched:1.17.1\n")["services"]["web"][
+        "image"
+    ]
+    assert web == "aiops/dify-web-patched:1.17.1"

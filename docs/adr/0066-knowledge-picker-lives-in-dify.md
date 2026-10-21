@@ -58,6 +58,22 @@ Dify 的 web 镜像是**预构建产物**（`/app/targets/next/` 里只有编译
 `pnpm-workspace.yaml`，报"outside the current Git repository"并继续扫描 —— 这正是那 90 分钟
 零产物的直接原因之一。
 
+## 决策四：镜像在 36 上"组装"，构建仍在开发机
+
+`build-web-image.sh` 跑的是上游那棵完整源码树（`pnpm install` + `next build`），这条路
+**只能走开发机**：`docker.1panel.live` 对开发机回 403，`FROM` 拉不到 base；反过来在 36 上
+跑整条构建链，等于把 2 GB 源码、pnpm store 和一条 12 GiB 的 Node 构建搬进生产主机。
+
+所以分成两半：开发机负责**编译**（`build-web-image.sh` → `.next/standalone`、
+`.next/static`、`public`），36 负责**组装**（三条 `COPY` 盖在上游镜像上）。stage 2 的
+三条 `COPY` 与上游 Dockerfile 的三行一一对应，目标路径不能改 —— `entrypoint.sh` 写死了
+`node /app/targets/next/web/server.js`。
+
+上线开关是 `DIFY_WEB_IMAGE`（compose 里嵌套默认，留空即上游镜像），**不是**直接改
+`image:`：没构建过补丁镜像的机器必须能原样 `up` 起来，否则以后升级是 compose 先坏。
+且 `up -d` 不会重读镜像 —— 换镜像必须 `--force-recreate`，这条已经踩过一次（容器保持
+17 小时前的旧镜像而 `up` 报成功）。
+
 ## 被否掉的替代形态
 
 - **继续用我们自己的页面（ADR 0063）。** 它已经能用，但运营仍要在两个系统之间搬运一个
