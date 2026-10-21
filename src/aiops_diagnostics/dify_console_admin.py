@@ -68,10 +68,12 @@ class ConsoleApiError(RuntimeError):
     重跑一次是安全的，而"已经存在"也算成功。
     """
 
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(self, code: str, message: str, *, status: int | None = None) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
+        #: 上游的 HTTP 状态（有的分支要按状态分流，例如安装任务被清理时 daemon 回的 4xx）。
+        self.status = status
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,7 +104,17 @@ def _error(failure: HttpFailure) -> Exception:
     # 凭据校验失败是**最常见**的一种，且它要人换 key 而不是重启服务 —— 单独一个码。
     if "Credentials validation failed" in detail:
         code = "DIFY_CREDENTIAL_INVALID"
-    return ConsoleApiError(code, f"{failure.status or ''} {detail}".strip())
+    # ``install/pkg`` 与 ``upload/pkg`` 的区别就在这里：装包要求 daemon 的**包桶里已经有**
+    # 那个包（``GetPackage`` → ``plugin package not found, please upload it firstly``）。
+    # 这个失败要单独一个码并点名下一步 —— 否则它看起来像"插件标识写错了"。
+    if "package not found" in detail.lower():
+        code = "DIFY_PLUGIN_PACKAGE_MISSING"
+        detail = (
+            detail + " —— 这是**主机级**前置：daemon 的包桶里没有这个包（装包不等于取包）。"
+            "先 `POST /console/api/workspaces/current/plugin/upload/pkg` 把 .difypkg 送上去，"
+            "或者让 Dify 的出口能取包；然后再跑本命令。它与租户无关，整个 Dify 做一次即可"
+        )
+    return ConsoleApiError(code, f"{failure.status or ''} {detail}".strip(), status=failure.status)
 
 
 def _mapping() -> ErrorMapping:
@@ -214,7 +226,11 @@ class DifyConsoleAdmin:
             except ConsoleApiError as exc:
                 # 任务记录被清理时 daemon 回 404。那不是"稍后再来"，重试只会把 180s 计时
                 # 走完再报一个"超时，重跑即可"——把人送去重跑，而不是送去看真正的原因。
-                if exc.code == "DIFY_CONSOLE_REJECTED" and exc.message.startswith("404"):
+                # Dify 1.17.1 的 ``PluginFetchInstallTaskApi`` 把 daemon 侧"任务不存在"
+                # 折成 **400** ``{"code":"plugin_error"}``（不是 404）。两种都按"任务没了"处理，
+                # 因为它们的下一步相同：别再轮询，回去读 ``/plugin/list`` 判真实状态。
+                gone = exc.status == 404 or (exc.status == 400 and "not found" in exc.message.lower())
+                if gone:
                     raise ConsoleApiError(
                         "DIFY_PLUGIN_INSTALL_UNKNOWN",
                         f"安装任务 {task_id} 在 daemon 里已不存在（404），无法确认结果。"
@@ -295,9 +311,24 @@ class DifyConsoleAdmin:
                 body={"credentials": credentials, "name": name},
             )
         except ConsoleApiError as exc:
-            if "already exists" in exc.message:
+            if "already exists" not in exc.message:
+                raise
+            # 被拒 ≠ 已达成。Dify 的重名判据是 ``tenant_id + provider_name.in_(…) +
+            # credential_name``，所以**另一个 provider** 上的同名凭据也会回这句，而
+            # 错误消息里带的名字正是我们要写的那个 —— 靠字符串区分不了 provider
+            # （评审指出这一点；第一版修法只是多比了一个子串，仍会错判）。
+            #
+            # 判据改成**回读**：这个 provider 下现在能看到这个名字，才算已达成；
+            # 看不到就说明被拒的是别的 provider 上的同名行，我们要的那份仍然没写进去。
+            if name in self.provider_credential_names(workspace_id, provider):
                 return False
-            raise
+            raise ConsoleApiError(
+                "DIFY_CREDENTIAL_NAME_TAKEN",
+                f"写入被拒：{exc.message}。但该 provider 下没有名为 {name!r} 的凭据 —— "
+                "这个名字被同一个 workspace 里的**另一个 provider** 占用了。"
+                "换一个名字（或先处理那条同名凭据）后重跑",
+                status=exc.status,
+            ) from exc
         return True
 
     # ── 模板 DSL ──────────────────────────────────────────────────────

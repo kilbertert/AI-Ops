@@ -74,8 +74,15 @@ ADR-0068 把 workspace 建出来就停了，状态是 `created`，并明确写�
 - **模板失败就 `mark_failed` 重来。** 重来 = 重建 workspace = 永久孤儿（见上）。
 - **把 provider 凭据复制到新 workspace。** Dify 用每租户 RSA 解密，复制过去的行解不开。
 - **走 `/plugin/install/marketplace`。** 36 上 `MARKETPLACE_ENABLED=false`，回 400
-  `marketplace is not enabled`；可用的是 `/plugin/install/pkg`（body 带
-  `plugin_unique_identifiers`），回 `{"all_installed": true}`。
+  `marketplace is not enabled`。用的是 `/plugin/install/pkg`（body 带
+  `plugin_unique_identifiers`）。
+
+  **但 `install/pkg` 有一个主机级前置**：daemon 的**包桶**里必须已经有那个 `.difypkg`
+  （`GetPackage` → `plugin package not found, please upload it firstly`）。放包进去的是
+  `POST /plugin/upload/pkg`，取包的是 `fetch-manifest`（走 `ssrf_proxy` 白名单）。
+  所以"这台 Dify 能不能装插件"是一个**运维决定**，不是每个租户开户时能自动完成的步骤。
+  本命令把它说清楚（`DIFY_PLUGIN_PACKAGE_MISSING` 单独一个码、文案点名 upload），
+  但**不替运维决定出口**。2026-10-21 核对：36 的包桶里已有 deepseek/openai 两个包。
 - **用 `/console/api/workspaces/switch` 切工作区。** 它把该账号其它 join 的 `current`
   全置假并提交，对并发请求可见；后台动作走 `ADMIN_API_KEY + X-WORKSPACE-ID`。
 - **模板里钉死模型名。** 模型由该 workspace 自己的 provider 凭据决定；钉死会让"换模型"
@@ -89,6 +96,9 @@ ADR-0068 把 workspace 建出来就停了，状态是 `created`，并明确写�
 - **模板的 `dataset_configs` 不带 `datasets` 键**（不是 `datasets: []`）：Dify 1.17.1 的读取端期望
   路由对象 `{strategy, datasets: []}`，给列表会在 `.get()` 上抛 `AttributeError` —— 那个 app
   第一次跑就 500。省略是真实导出里"没挂知识库"的形状。
+- **模板 app 不能被 `pull-dify` / `sync-from-dify` 消费**：`dify_dsl_pull._required_model`
+  对空的 `model_config.model.name` 显式失败关闭，而本模板刻意留空。它是"结构占位"，
+  不是运营要编辑的那个智能体 —— 运营在新 workspace 里选一次模型之后才谈得上拉取。
 - **模板 app 是一个空壳 app**：`model_config.model` 与 `dataset_configs.datasets` 刻意留空
   （模板文件的头注释记了理由）。它与"workspace 可用"不冲突 ——
   插件与凭据到位之后，运营在控制台里选一次模型就能跑。

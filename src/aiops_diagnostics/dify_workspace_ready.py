@@ -105,6 +105,9 @@ class ReadyOutcome:
     credential_written: bool = False
     app_id: str = ""
     note: str = ""
+    #: 模板导入时 Dify 给的告警（``completed-with-warnings``）。**不是失败**，但要说出来 ——
+    #: 它意味着"Dify 丢掉了 DSL 里它还原不了的部分"，而 ``ready`` 会被静默推上去。
+    template_warnings: tuple[str, ...] = ()
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -116,6 +119,7 @@ class ReadyOutcome:
             "credential_written": self.credential_written,
             "app_id": self.app_id,
             "note": self.note,
+            "template_warnings": list(self.template_warnings),
         }
 
 
@@ -170,9 +174,11 @@ def ensure_ready(
 
     # 模板：失败**只记状态**（ADR-0059 §5.1）—— 不回滚、不删 workspace，重跑可补齐。
     app_id = ""
+    warnings: tuple[str, ...] = ()
     try:
         if app_name not in console.app_names(workspace_id):
             app_id = console.import_app_dsl(workspace_id, yaml_content=template_yaml, name=app_name)
+            warnings = tuple(getattr(console, "last_import_warnings", ()))
     except ConsoleApiError as exc:
         workspaces.mark_template_failed(tenant_id, environment, error=f"{exc.code}: {exc.message}")
         raise EnsureError(
@@ -190,7 +196,16 @@ def ensure_ready(
         plugins_installed=installed,
         credential_written=wrote_credential,
         app_id=app_id,
-        note="ready" if app_id else "ready（模板已存在，未重复导入）",
+        note=(
+            "ready（模板已存在，未重复导入）"
+            if not app_id
+            else (
+                "ready，但 Dify 导入时报了告警（模板有它还原不了的部分）：" + "；".join(warnings)
+                if warnings
+                else "ready"
+            )
+        ),
+        template_warnings=warnings,
     )
 
 

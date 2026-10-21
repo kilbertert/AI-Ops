@@ -332,7 +332,7 @@ PUT 更新后的状态，避免夹具保留旧 instruction 却仍被当成成功
 `dify_workspaces.py`（`mark_ready` / `mark_template_failed`）、`admin_cli.py`（`ensure-ready` +
 `_settings_with_config_file`）、`gateway_config.py`（两键）、`src/aiops_diagnostics/dify_workspace_template.dsl.yml`（新）。
 
-### 一、判据（`tests/test_dify_workspace_ready.py`，17 例，假 Dify 控制台）
+### 一、判据（`tests/test_dify_workspace_ready.py`，20 例，假 Dify 控制台）
 
 | 用例 | 钉住的规则 |
 |---|---|
@@ -365,7 +365,7 @@ PUT 更新后的状态，避免夹具保留旧 instruction 却仍被当成成功
 | `import_app_dsl` 只看 `app_id`：202/pending 被报成"响应体不可读"，400 的 `error` 原因被丢掉 | 按 `status` 分流三个码 | 是 |
 | `AIOPS_GATEWAY_DIFY_WORKSPACE_MODEL_ENDPOINT` 有非空默认值 ⇒ `--config` 里那一行**静默不生效**（#625 形态） | 合并判据改成"进程 env 有没有这个键" | 是 |
 | `mark_template_failed` 会把已 `ready` 的行降级回 `created` | `CASE WHEN setup_state='ready' THEN 'ready'` | 是 |
-| `app_names` 只读第 1 页 ⇒ 模板 app 在第 2 页时重复导入 | 按 `has_more` 翻页 | 是（形状用例） |
+| `app_names` 只读第 1 页 ⇒ 模板 app 在第 2 页时重复导入 | 按 `has_more` 翻页 | 是（`test_app_names_walks_every_page`，多页假件） |
 
 **评审有一条不成立**：它说 `/plugin/list?page_size=200` 会被拒（上限 100）。2026-10-21 在 36 上用
 真实 admin key 实测该请求回 **200 + 完整列表**。仍改成了 100 —— 那是契约上限，不是靠实测运气。
@@ -19566,3 +19566,44 @@ ops-methodology-700  v5   prompt_sha=3eeb31dc4ce2  allowed_tools 键不存在 �
 - **一个仍未归因的观测**：10-14 那次成功的是 consumer 入口，而 10-15 02:04:18 那次
   **也是 consumer 入口**却仍是 `unavailable` + 10ms。按当前线上代码重跑，consumer 入口
   能解析出 `…v2`，所以这一条**没有可复现的成因**。不编原因，如实记为未归因。
+
+### 三、第二轮评审的结论与处置（run `39612439462`）
+
+评审这次抓到两条真问题，都已修并复验：
+
+**1. P1 · 唯一安装路径依赖"包已上传"，而本命令没有上传步骤。**
+`/plugin/install/pkg` 要求 daemon 的**包桶**里先有那个 `.difypkg`（`GetPackage` →
+`plugin package not found, please upload it firstly`），取包（`upload/pkg`）才把包放进去。
+仓库自己的记录（本文件 #587 收尾取数）也写着"三条路都指向同一个前置：**先有插件包**"，
+且 36 上 `ssrf_proxy` 白名单只放 `marketplace.dify.ai`，取包是一个**运维决定**。
+
+**处置（据实，不是"已解决"）**：
+- 这个问题**不在本票能修的范围内** —— 它是主机级前置（整个 Dify 上传一次即可），
+  与租户、与 workspace 都无关。改代码只会把运维决定藏起来。
+- 代码侧做的是**把它说清楚**：`plugin package not found` 单独一个码
+  `DIFY_PLUGIN_PACKAGE_MISSING`，文案点名下一步（先 `upload/pkg` 或给 Dify 开出口），
+  不再让它看起来像"插件标识写错了"。另加一条用例钉住这个码。
+- **我先前那句"36 上实测回 `{"all_installed": true}`"是真的但不足以支撑结论**：
+  那次打的是 **admin workspace**，它本来就装好了；空白 workspace 会走另一条分支。
+  ADR-0076 已按这条改口径。
+- 41 上"第一次跑 `ensure-ready`"因此**仍需运维先确认包桶里有这两个包**（36 上已核实存在）。
+
+**2. P1 · 用例断言强度被高估（含一条我写进文档却并不存在的用例）。**
+- `test_it_waits_for_the_install_task...` 原来排除的只有凭据 POST，模板导入仍算在"之前"
+  ⇒ 把轮询挪到写凭据之后也照样绿。已改成**按键位断言次序**（最后一次轮询 < 第一次写凭据
+  < 第一次导模板）。
+- 文档声称有 `app_names` 翻页用例，实际**不存在**（`grep` 为 0）。已补
+  `test_app_names_walks_every_page`（多页假件，模板在第 2 页），并做了突变复验。
+- 我据此把那张表里每一条都重新对过一遍；`test_a_second_run_sends_no_mutating_request`
+  的假件原先对重复导入不判重（使该用例无判别力），已一并让假件在重名时拒绝。
+
+**其余 P2/P3 的处置**：
+- `completed-with-warnings` 的告警原来采集后没有消费者 ⇒ 现在进 `ReadyOutcome.template_warnings`
+  与 `note`，运营看得到"成功但有损"。
+- `already exists` 原来只看子串 ⇒ 会把**别的 provider** 上的同名凭据误判成已达成
+  （后果：workspace 标 ready 而模型没有凭据）。改成**回读该 provider 确认**，见不到就报
+  `DIFY_CREDENTIAL_NAME_TAKEN` 并说明换名。
+- 安装任务的"任务已不存在"原来按 `message.startswith("404")` 判，而 Dify 1.17.1 实际回
+  **400** ⇒ 该分支是死代码。改成按 `status` 判（404 或 400+not found）。
+- 模板 `model_config.model` 为空与我方 `_required_model` 冲突：**设计如此**，但后果写进
+  ADR-0076：模板 app 不可被 `pull-dify`/`sync-from-dify` 消费，运营必须先选模型。

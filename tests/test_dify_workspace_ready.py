@@ -57,8 +57,9 @@ class _Console:
         self.calls: list[dict[str, Any]] = []
         self.plugins: list[str] = []
         self.credentials: list[str] = []
-        #: 列表里"看不见"的凭据（模拟列表与写入之间的竞态窗口）。
-        self.hidden_credentials: set[str] = set()
+        #: 前 N 次读 provider 列表时"看不见"名为 CREDENTIAL_NAME 的凭据
+        #: （模拟"检查时还没有、写入时已被别人加上"的竞态窗口）。
+        self.hidden_credential_reads = 0
         self.apps: list[str] = []
         self.credential_status = 200
         self.credential_body: Any = None
@@ -66,12 +67,17 @@ class _Console:
         self.import_body: Any = None
         self.apps_status = 200
         self.apps_body: Any = None
+        #: 每页条数（>0 时按真实分页回答 ``/console/api/apps``）。
+        self.page_size = 0
+        #: 另一个 provider 上的同名凭据（验证 ``already exists`` 的 provider 维度）。
+        self.other_provider_credential = ""
         #: 异步安装的模拟：>0 时安装请求回一个 ``task_id``，任务在**第 N 次轮询**才成功。
         self.task_polls_until_success = 0
         #: 任务终态改成 failed（验证失败不会被当成成功）。
         self.task_fails = False
         self._task_polls = 0
         self._pending_plugins: list[str] = []
+        self._list_reads = 0
         #: ``top-level`` 时按真实形状回答 ``/plugin/list``（标识在顶层，meta 是任意 map）。
         self.plugin_list_shape = "nested"
         self.base = ""
@@ -100,6 +106,7 @@ class _Console:
                         },
                     )
                 elif self.path.rstrip("/") == _PROVIDERS:
+                    upstream._list_reads += 1
                     # 真实形状（36 上只读核对过）：列表里每个 provider 带
                     # custom_configuration.available_credentials[{credential_id, credential_name}]。
                     upstream._reply(
@@ -114,7 +121,10 @@ class _Console:
                                         "available_credentials": [
                                             {"credential_id": f"cid-{i}", "credential_name": name}
                                             for i, name in enumerate(upstream.credentials)
-                                            if name not in upstream.hidden_credentials
+                                            if not (
+                                                name == CREDENTIAL_NAME
+                                                and upstream._list_reads <= upstream.hidden_credential_reads
+                                            )
                                         ],
                                     },
                                 }
@@ -148,6 +158,20 @@ class _Console:
                         },
                     )
                 elif self.path.startswith(_APPS):
+                    if upstream.page_size:
+                        page = int(self.path.split("page=")[1].split("&")[0]) if "page=" in self.path else 1
+                        start = (page - 1) * upstream.page_size
+                        chunk = upstream.apps[start : start + upstream.page_size]
+                        upstream._reply(
+                            self,
+                            200,
+                            {
+                                "data": [{"name": name} for name in chunk],
+                                "total": len(upstream.apps),
+                                "has_more": start + upstream.page_size < len(upstream.apps),
+                            },
+                        )
+                        return
                     if upstream.apps_body is not None:
                         upstream._reply(self, upstream.apps_status, upstream.apps_body)
                         return
@@ -176,6 +200,15 @@ class _Console:
                 elif self.path == _CREDENTIALS:
                     if upstream.credential_body is not None:
                         upstream._reply(self, upstream.credential_status, upstream.credential_body)
+                        return
+                    if body["name"] == upstream.other_provider_credential:
+                        # 另一个 provider 上已有同名凭据：Dify 按
+                        # ``tenant_id + provider_name + credential_name`` 判重。
+                        upstream._reply(
+                            self,
+                            400,
+                            {"message": f"Credential with name '{body['name']}' already exists."},
+                        )
                         return
                     if body["name"] in upstream.credentials:
                         # Dify 的真实行为：同名第二次写入回 400。
@@ -408,14 +441,15 @@ def test_it_waits_for_the_install_task_before_writing_the_credential(
 
     assert outcome.state == "ready"
     assert set(DEFAULT_PLUGIN_IDENTIFIERS) <= set(console.plugins)
-    # 写凭据**之前**，安装任务已经被轮询到 success。
-    before_credential = [
-        call["path"]
-        for call in console.calls
-        if not (call["method"] == "POST" and call["path"] == _CREDENTIALS)
-    ]
-    polls = [path for path in before_credential if path == f"{_PLUGIN_TASKS}/task-1"]
-    assert len(polls) >= 3
+    # 断言的是**次序**，不是计数：第一次写凭据、第一次导模板都必须排在最后一次轮询之后。
+    # 原来的写法只排除凭据那一条，模板导入的 POST 仍被算进"之前"，所以即便把轮询挪到
+    # 写凭据之后也照样绿 —— 评审指出它证明不了自己声称的规则，这里改成按键位断言。
+    paths = [call["path"] for call in console.calls]
+    last_poll = max(i for i, path in enumerate(paths) if path == f"{_PLUGIN_TASKS}/task-1")
+    first_credential = paths.index(_CREDENTIALS)
+    first_import = paths.index(_IMPORT)
+    assert last_poll < first_credential, "写凭据发生在安装任务落地之前"
+    assert last_poll < first_import, "导模板发生在安装任务落地之前"
 
 
 def test_a_failed_install_task_stops_before_the_credential(tmp_path: Path, console: _Console) -> None:
@@ -439,8 +473,8 @@ def test_a_credential_that_already_exists_is_success_not_a_failure(tmp_path: Pat
     `DIFY_CONSOLE_REJECTED`，一个已经就绪的 workspace 被报成失败）。
     """
     console.credentials.append(CREDENTIAL_NAME)
-    # 让列表"看不到"它，模拟那一小段竞态窗口。
-    console.hidden_credentials = {CREDENTIAL_NAME}
+    # 模拟竞态窗口：**第一次**读列表时还看不到它（那时确实没有），之后能看到。
+    console.hidden_credential_reads = 1
 
     outcome = _run(tmp_path, console)
 
@@ -565,3 +599,52 @@ class _Ctx:
 
     def __init__(self, config: Path) -> None:
         self.obj = {"config_file": str(config)}
+
+
+def test_app_names_walks_every_page(tmp_path: Path, console: _Console) -> None:
+    """模板 app 落在第 2 页时不能重复导入 —— 翻页判据是 ``has_more``。
+
+    变异对照：把 ``app_names`` 改回只读第 1 页 ⇒ 本用例红（第二次跑会再导一份同名 app）。
+    """
+    console.page_size = 2
+    console.apps = ["a1", "a2", APP_NAME]  # 模板在第 2 页
+    workspaces = _workspaces(tmp_path)
+
+    _run(tmp_path, console, workspaces)
+    console.calls.clear()
+    outcome = _run(tmp_path, console, workspaces)
+
+    assert outcome.app_id == "", "模板已在第 2 页，不该再导一次"
+    assert console.post_paths() == []
+
+
+def test_a_credential_name_taken_on_another_provider_is_not_treated_as_done(
+    tmp_path: Path, console: _Console
+) -> None:
+    """``already exists`` 的重名判据含 provider：别的 provider 上有同名凭据不代表我们要的
+    provider 上也有。错判的后果是 workspace 被标 ready 而模型根本没有凭据。
+
+    变异对照：只看 ``"already exists" in message`` ⇒ 本用例红（凭据没写却报成功）。
+    """
+    console.other_provider_credential = CREDENTIAL_NAME
+
+    with pytest.raises(EnsureError) as caught:
+        _run(tmp_path, console)
+
+    assert caught.value.code == "DIFY_CREDENTIAL_NAME_TAKEN"
+    assert "另一个 provider" in caught.value.message
+
+
+def test_import_warnings_reach_the_operator(tmp_path: Path, console: _Console) -> None:
+    """``completed-with-warnings`` 是成功但有损；采集了就必须说出来。"""
+    console.import_status = 200
+    console.import_body = {
+        "app_id": "app-1",
+        "status": "completed-with-warnings",
+        "warnings": [{"code": "tool_not_found", "message": "tool provider unresolved"}],
+    }
+
+    outcome = _run(tmp_path, console)
+
+    assert outcome.template_warnings == ("tool provider unresolved",)
+    assert "tool provider unresolved" in outcome.note

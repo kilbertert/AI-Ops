@@ -1603,6 +1603,10 @@ AIOPS_GATEWAY_DIFY_WORKSPACE_MODEL_API_KEY=<deepseek 的真实 key>
 3. **模板失败只记状态**（`state` 仍是 `created`，`last_error` 说原因）。workspace 与凭据
    都还在，人进得去、能改；**重跑本命令补齐这一步**。不要为它重建 workspace ——
    Dify 没有删 workspace 的 API。
+3b. **先确认包桶里有那两个插件包**（主机级，一次即可）：`install/pkg` 要求
+   daemon 的包桶里已有 `.difypkg`，否则回 `DIFY_PLUGIN_PACKAGE_MISSING`。缺就先
+   `POST /console/api/workspaces/current/plugin/upload/pkg` 把包送上去，或给 Dify 开取包出口。
+   2026-10-21 核对：36 的包桶里已有 deepseek 与 openai 两个包。
 4. **`ready` 不等于模型已选**：模板 app 的 `model_config.model` 刻意留空（模型由该
    workspace 自己的凭据决定）。运营在控制台里选一次模型就能跑。
 5. **模板随包发布**（`src/aiops_diagnostics/dify_workspace_template.dsl.yml`），41 上无需
