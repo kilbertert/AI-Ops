@@ -129,6 +129,7 @@ def dify_records(
     chunks: Sequence[RetrievedChunk],
     *,
     score_threshold: float = 0.0,
+    public_base_url: str = "",
 ) -> list[dict[str, Any]]:
     """Render normalized chunks as Dify ``records``.
 
@@ -139,7 +140,14 @@ def dify_records(
     Media never travels as a bare signed path: the record carries the URL our
     own runtime already mints, so Dify's chat UI can render it, and no RAGFlow
     identifier or kb-service port is exposed.
+
+    ``public_base_url`` makes that URL absolute. It has to be, for this route
+    specifically: a relative ``/v1/media/...`` is resolved by whoever holds the
+    string, and here that is Dify — on its own host, where ``/v1`` goes to its
+    own API and answers 404. The APP never needed it because it talks to us
+    same-origin; Dify is the first consumer that does not.
     """
+    prefix = public_base_url.rstrip("/")
     records: list[dict[str, Any]] = []
     for chunk in chunks:
         if score_threshold > 0.0 and (chunk.score is None or chunk.score < score_threshold):
@@ -153,7 +161,7 @@ def dify_records(
                     "reference_id": chunk.reference_id,
                     "media": [
                         {
-                            "url": item.resource.url,
+                            "url": f"{prefix}{item.resource.url}" if prefix else item.resource.url,
                             "kind": item.resource.kind,
                             "mime_type": item.resource.mime_type,
                         }

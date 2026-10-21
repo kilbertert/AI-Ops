@@ -279,6 +279,17 @@ UPMS 的 `ROLE_AGENT_PUBLISHER`（尚未建）。
 | 缺凭据 / 凭据错 | 401 / 403 |
 | kb-service 不可用 / 媒体面未配 | 502 `DIFY_KNOWLEDGE_UNAVAILABLE`（retryable）—— **绝不**用 200 空 `records` 表示故障 |
 
+**记录里的媒体 URL 是绝对的，且不挂在智能体名下**（ADR-0077）。两点都是实测踩出来的：
+
+- `metadata.media[].url` 在配了 `AIOPS_GATEWAY_PUBLIC_BASE_URL` 之后是
+  `https://<host>/v1/media/<id>.<sig>`。相对路径在这里不成立：这串字符是交给 Dify 的，
+  它会用**自己的**主机解析（36 的 nginx 把 `/v1` 转给 `api:5001`），每张图 404。
+  APP 与网关同源，所以 APP 那条路一直不需要它 —— 留空即保持相对路径。
+- 这些 URL 用 `agent_version="dify:<knowledge_id>"` 签发，因此 `/v1/media` 的
+  liveness 检查**不做**智能体版本核对（没有版本可核对）。有效性由签发它的登记行决定：
+  代理不可达 → 检索 502、行删了 → 检索 404，而已经签出去的 URL 在 TTL（默认 600s）内
+  仍可取。智能体签发的 URL 仍按原规则检查版本与知识库绑定。
+
 两个键全空 ⇒ 路由整体 404；只配一个是**启动失败**（半配置不静默禁用，与本仓其余开关同一条）。
 本路由对 Dify 所发 `top_k` 的封顶值取自 `AIOPS_GATEWAY_KB_SEARCH_MAX_RESULTS`（1..20，**与客户问答/宣传卡片路径共用同一个口径**，默认 10）—— Dify 自己也会发 `top_k`，我们封顶而不采信。
 Dify 侧 `ssrf_proxy` 默认会拦私有网段地址，须显式处置（PRD #577 已记为「必须记录的一次

@@ -2788,12 +2788,21 @@ class GatewayRuntime:
             may still serve this library" true at the moment of the fetch, while
             still allowing a plain prompt/keyword republish (which is what broke
             on 41) because that leaves the binding intact.
+
+            A grant signed by an **agent-less** caller (``agent_version`` that is
+            not ``<agent_id>#v<n>``, which is what the Dify knowledge adapter
+            issues) has no agent to be live or dead. Its liveness is the
+            registry row it was signed from, which the retrieval route already
+            resolved and which is re-read on every retrieval — treating "no
+            agent" as "not live" made /v1/dify/retrieval hand Dify a signed URL
+            that 403'd on the very next request, so every image and video in a
+            Dify record was undisplayable (found on 41, 2026-10-21).
             """
             if self.agent_store is None:
                 return False
             agent_id, _, version_part = str(grant.agent_version).partition("#v")
             if not agent_id or not version_part.isdigit():
-                return False
+                return str(grant.agent_version).startswith("dify:")
             try:
                 published = self.agent_store.get(agent_id, grant.tenant_id)
                 version = self.agent_store.version(agent_id, grant.tenant_id, int(version_part))

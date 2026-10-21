@@ -1384,7 +1384,13 @@ def create_gateway_app(
                 "knowledge retrieval is temporarily unavailable",
                 retryable=True,
             ) from exc
-        return {"records": dify_records(chunks, score_threshold=request.score_threshold)}
+        return {
+            "records": dify_records(
+                chunks,
+                score_threshold=request.score_threshold,
+                public_base_url=context.settings.public_base_url,
+            )
+        }
 
     @app.get(DIFY_KNOWLEDGE_LIST_PATH)
     def dify_knowledge_list(
