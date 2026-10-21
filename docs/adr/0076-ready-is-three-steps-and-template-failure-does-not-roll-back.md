@@ -40,7 +40,7 @@ ADR-0068 把 workspace 建出来就停了，状态是 `created`，并明确写�
 |---|---|---|
 | 插件 | `created` 不动（抛错即止） | 重跑一次是安全的；插件安装是幂等的 |
 | 凭据 | `created` 不动 | 同上；失败一定是"这把 key 不能用"（`DIFY_CREDENTIAL_INVALID`） |
-| 模板 | `mark_template_failed`：状态**仍是 `created`**，`last_error` 记原因 | workspace 与凭据都在，人进得去、能改；重跑补齐这一步 |
+| 模板 | `mark_template_failed`：状态**仍是 `created`**（已是 `ready` 的保持不变），`last_error` 记原因 | workspace 与凭据都在，人进得去、能改；重跑补齐这一步 |
 
 第三行是这一票里唯一不能靠"重试"擦掉的判断。写成 `failed` 会让 `resolve()` 把它当成
 "没建出来"，而下一次 `ensure-workspace` 的 `claim` 会**重建** —— Dify 没有删 workspace
@@ -86,6 +86,9 @@ ADR-0068 把 workspace 建出来就停了，状态是 `created`，并明确写�
 - **模板随包发布，不在 `ops/`**：41 的部署产物只含 `src/`，放 `ops/` 会让"41 上跑
   `ensure-ready`"报文件不存在 —— 而 41 正是这个命令要跑的地方。读法与 `faq_catalog.json`
   相同（`importlib.resources`）。
+- **模板的 `dataset_configs` 不带 `datasets` 键**（不是 `datasets: []`）：Dify 1.17.1 的读取端期望
+  路由对象 `{strategy, datasets: []}`，给列表会在 `.get()` 上抛 `AttributeError` —— 那个 app
+  第一次跑就 500。省略是真实导出里"没挂知识库"的形状。
 - **模板 app 是一个空壳 app**：`model_config.model` 与 `dataset_configs.datasets` 刻意留空
   （模板文件的头注释记了理由）。它与"workspace 可用"不冲突 ——
   插件与凭据到位之后，运营在控制台里选一次模型就能跑。

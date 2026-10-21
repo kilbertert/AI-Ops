@@ -31,8 +31,13 @@ model_config:
   completion_prompt_config: {}
   dataset_configs:
     # 知识库是每个租户自己的（external dataset 的 UUID 因 workspace 而异），
-    # 导入时还没有那些 UUID ⇒ 刻意留空。
-    datasets: []
+    # 导入时还没有那些 UUID ⇒ 刻意不带 datasets 键。
+    #
+    # **不要写成 `datasets: []`**：Dify 1.17.1 的读取端
+    # （`app_config/.../dataset/manager.py::convert`、`dify_dsl_pull._declared_dataset_ids`）
+    # 期望的是一个**路由对象** `{strategy, datasets: []}`，给列表会在 `.get()` 上抛
+    # `AttributeError: 'list' object has no attribute 'get'` —— 那个 app 第一次跑就 500。
+    # 省略整个键是真实导出里"没挂知识库"的形状（tests/fixtures/dify-app-chat.dsl.yml）。
     retrieval_model: multiple
   dataset_query_variable: null
   external_data_tools: []
@@ -72,4 +77,4 @@ model_config:
     enabled: false
   user_input_form: []
 kind: app
-version: 0.1.5
+version: 0.7.0

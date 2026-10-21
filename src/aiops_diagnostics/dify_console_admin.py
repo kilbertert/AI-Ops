@@ -56,6 +56,9 @@ APP_IMPORT_PATH = "/console/api/apps/imports"
 #: 而模板在仓库里，没有理由为了它再起一个 HTTP 服务。
 IMPORT_MODE_YAML_CONTENT = "yaml-content"
 
+#: 翻页上限。一个租户 workspace 的 app 数量是几十的量级；这个数只是防无界请求的护栏。
+MAX_APP_PAGES = 50
+
 
 class ConsoleApiError(RuntimeError):
     """控制台 API 拒绝了这次动作。
@@ -109,6 +112,10 @@ def _mapping() -> ErrorMapping:
         unavailable=_error,
         invalid_body=_error,
         invalid_envelope=_error,
+        # Dify 的失败体用 ``{"message": …}``（大多数）或 ``{"error": …}``
+        # （``/console/api/apps/imports`` 用后者）。默认表里没有 ``error``，
+        # 少了它导入失败会被报成一句没有信息量的 "400"。
+        detail_keys=("message", "error", "detail", "msg"),
     )
 
 
@@ -117,6 +124,8 @@ class DifyConsoleAdmin:
 
     def __init__(self, settings: ConsoleApiSettings) -> None:
         self.settings = settings
+        #: 最近一次导入的告警（``completed-with-warnings`` 才会非空）。
+        self.last_import_warnings: tuple[str, ...] = ()
 
     def _headers(self, workspace_id: str) -> dict[str, str]:
         return {
@@ -152,12 +161,20 @@ class DifyConsoleAdmin:
         用它做**幂等**判定：装过的就不再发一次安装请求 —— 安装是异步任务型的，
         重复触发只会多出一次任务，而我们要的是"跑两次结果一样"。
         """
-        payload = self._call(workspace_id, f"{PLUGIN_LIST_PATH}?page=1&page_size=200")
+        payload = self._call(workspace_id, f"{PLUGIN_LIST_PATH}?page=1&page_size=100")
         plugins = payload.get("plugins") if isinstance(payload, dict) else None
         found: set[str] = set()
         for item in plugins or []:
-            meta = item.get("meta") if isinstance(item, dict) else None
-            identifier = str((meta or {}).get("plugin_unique_identifier") or "")
+            if not isinstance(item, dict):
+                continue
+            # 真实形状（Dify 1.17.1 `PluginListApi` → daemon `ListPlugins`）：
+            # ``plugin_unique_identifier`` 在**顶层**，``meta`` 是任意 map。嵌套那份是
+            # 早期探测时看到的另一种排布，留着做兜底 —— 两个都认不会误判，只认一个会。
+            identifier = str(
+                item.get("plugin_unique_identifier")
+                or (item.get("meta") or {}).get("plugin_unique_identifier")
+                or ""
+            )
             if identifier:
                 found.add(identifier)
         return found
@@ -192,7 +209,18 @@ class DifyConsoleAdmin:
         """
         deadline = time.monotonic() + self.settings.install_timeout
         while True:
-            payload = self._call(workspace_id, f"{PLUGIN_TASK_PATH}/{task_id}")
+            try:
+                payload = self._call(workspace_id, f"{PLUGIN_TASK_PATH}/{task_id}")
+            except ConsoleApiError as exc:
+                # 任务记录被清理时 daemon 回 404。那不是"稍后再来"，重试只会把 180s 计时
+                # 走完再报一个"超时，重跑即可"——把人送去重跑，而不是送去看真正的原因。
+                if exc.code == "DIFY_CONSOLE_REJECTED" and exc.message.startswith("404"):
+                    raise ConsoleApiError(
+                        "DIFY_PLUGIN_INSTALL_UNKNOWN",
+                        f"安装任务 {task_id} 在 daemon 里已不存在（404），无法确认结果。"
+                        "重跑本命令会先读 /plugin/list 判定是否已装好",
+                    ) from exc
+                raise
             task = payload.get("task") if isinstance(payload, dict) else None
             status = str((task or {}).get("status") or "")
             if status == "success":
@@ -275,23 +303,70 @@ class DifyConsoleAdmin:
     # ── 模板 DSL ──────────────────────────────────────────────────────
 
     def import_app_dsl(self, workspace_id: str, *, yaml_content: str, name: str) -> str:
-        """把模板 DSL 导进这个 workspace；返回新 app 的 id。"""
+        """把模板 DSL 导进这个 workspace；返回新 app 的 id。
+
+        导入接口有三种成功/半成功形态，只看 ``app_id`` 会把后两种说错：
+
+        | HTTP | ``status`` | 含义 | 这里怎么报 |
+        |---|---|---|---|
+        | 200 | ``completed`` | 真导进去了 | 返回 app_id |
+        | 200 | ``completed-with-warnings`` | 导进去了，但版本降级 | 返回 app_id，并记一条 warning |
+        | 202 | ``pending`` | **等人确认**（跨大版本），app 还没建 | ``DIFY_IMPORT_PENDING`` |
+        | 400 | ``failed`` | 拒绝，原因在 ``error`` | 把 ``error`` 带出来（否则只剩一个状态码） |
+
+        最后一行是实测出来的：Dify 的失败体里原因键叫 ``error``，而 ``bounded_http`` 只读
+        ``detail/msg/message`` ⇒ 400 会变成一句没有信息量的“400”。
+        """
         payload = self._call(
             workspace_id,
             APP_IMPORT_PATH,
             method="POST",
             body={"mode": IMPORT_MODE_YAML_CONTENT, "yaml_content": yaml_content, "name": name},
         )
-        app_id = str((payload or {}).get("app_id") or "") if isinstance(payload, dict) else ""
+        body = payload if isinstance(payload, dict) else {}
+        status = str(body.get("status") or "")
+        app_id = str(body.get("app_id") or "")
+        if status == "pending":
+            raise ConsoleApiError(
+                "DIFY_IMPORT_PENDING",
+                f"导入停在 pending（{body.get('imported_dsl_version') or '?'}），需要确认后才会建 app："
+                f"import_id={body.get('id') or '?'}。这是版本跨大版本时的正常形态，不是失败",
+            )
         if not app_id:
-            raise ConsoleApiError("DIFY_IMPORT_UNREADABLE", "导入接口回了成功但没有 app_id，无法确认结果")
+            reason = str(body.get("error") or "")
+            raise ConsoleApiError(
+                "DIFY_IMPORT_UNREADABLE",
+                "导入接口回了成功但没有 app_id" + (f"：{reason}" if reason else "，无法确认结果"),
+            )
+        if status == "completed-with-warnings":
+            warnings = [str((w or {}).get("message") or w) for w in body.get("warnings") or []]
+            self.last_import_warnings = tuple(warnings)
         return app_id
 
     def app_names(self, workspace_id: str) -> set[str]:
-        """这个 workspace 里现有的 app 名字（导入是幂等的判据）。"""
-        payload = self._call(workspace_id, "/console/api/apps?page=1&limit=100")
-        apps = payload.get("data") if isinstance(payload, dict) else None
-        return {str((item or {}).get("name") or "") for item in apps or []}
+        """这个 workspace 里**全部** app 的名字（导入是幂等的判据）。
+
+        必须翻页：``limit`` 上限 100，而"读第 1 页就断言不存在"会让第 2 页上的模板 app
+        被判成"没导过" ⇒ 重跑再导一份同名 app。翻页判据用响应的 ``has_more``，不是
+        "这一页是不是满的" —— 满页恰好在最后一页时会多问一次，那无害；反过来漏页有害。
+        """
+        names: set[str] = set()
+        page = 1
+        while True:
+            payload = self._call(workspace_id, f"/console/api/apps?page={page}&limit=100")
+            body = payload if isinstance(payload, dict) else {}
+            for item in body.get("data") or []:
+                name = str((item or {}).get("name") or "")
+                if name:
+                    names.add(name)
+            if not body.get("has_more"):
+                return names
+            page += 1
+            if page > MAX_APP_PAGES:
+                raise ConsoleApiError(
+                    "DIFY_APPS_UNREADABLE",
+                    f"app 列表超过 {MAX_APP_PAGES} 页仍未结束；停止翻页，避免无界请求",
+                )
 
 
 __all__ = [

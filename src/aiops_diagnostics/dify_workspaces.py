@@ -324,9 +324,17 @@ class DifyWorkspaces:
         tenant_id = _identifier(tenant_id, "tenant_id")
         environment = _identifier(environment, "environment")
         with self._connection(write=True) as connection:
+            # ``AND setup_state <> 'ready'``：``created → ready`` 是单向的（见
+            # :meth:`mark_ready`）。少了这个条件，一次**重跑**里的读取抖动会把一个已经
+            # 就绪的 workspace 降级回 ``created``，而 ``ensure-workspace`` 对 ``ready``
+            # 行是短路返回的 —— 没有人会再把它推回去。错误照样记在 ``last_error`` 里。
+            # 状态**只降不升**：已经是 ``ready`` 的行保持 ``ready``，但原因照样记下来
+            # （用 CASE 而不是整条 WHERE —— 少写 last_error 会让"为什么这次重跑失败"
+            # 在库里一点痕迹都没有）。
             connection.execute(
-                "UPDATE dify_workspaces SET setup_state = 'created', last_error = ?, updated_at = ?"
-                " WHERE tenant_id = ? AND environment = ?",
+                "UPDATE dify_workspaces SET setup_state ="
+                " CASE WHEN setup_state = 'ready' THEN 'ready' ELSE 'created' END,"
+                " last_error = ?, updated_at = ? WHERE tenant_id = ? AND environment = ?",
                 (error[:500], _iso(now_utc()), tenant_id, environment),
             )
 

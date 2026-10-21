@@ -64,12 +64,16 @@ class _Console:
         self.credential_body: Any = None
         self.import_status = 200
         self.import_body: Any = None
+        self.apps_status = 200
+        self.apps_body: Any = None
         #: 异步安装的模拟：>0 时安装请求回一个 ``task_id``，任务在**第 N 次轮询**才成功。
         self.task_polls_until_success = 0
         #: 任务终态改成 failed（验证失败不会被当成成功）。
         self.task_fails = False
         self._task_polls = 0
         self._pending_plugins: list[str] = []
+        #: ``top-level`` 时按真实形状回答 ``/plugin/list``（标识在顶层，meta 是任意 map）。
+        self.plugin_list_shape = "nested"
         self.base = ""
 
     def handler(self) -> type[BaseHTTPRequestHandler]:
@@ -83,9 +87,16 @@ class _Console:
                         self,
                         200,
                         {
-                            "plugins": [
-                                {"meta": {"plugin_unique_identifier": item}} for item in upstream.plugins
-                            ]
+                            "plugins": (
+                                [
+                                    {"plugin_unique_identifier": item, "meta": {"position": i}}
+                                    for i, item in enumerate(upstream.plugins)
+                                ]
+                                if upstream.plugin_list_shape == "top-level"
+                                else [
+                                    {"meta": {"plugin_unique_identifier": item}} for item in upstream.plugins
+                                ]
+                            )
                         },
                     )
                 elif self.path.rstrip("/") == _PROVIDERS:
@@ -137,8 +148,13 @@ class _Console:
                         },
                     )
                 elif self.path.startswith(_APPS):
+                    if upstream.apps_body is not None:
+                        upstream._reply(self, upstream.apps_status, upstream.apps_body)
+                        return
                     upstream._reply(
-                        self, 200, {"data": [{"name": name} for name in upstream.apps], "total": 1}
+                        self,
+                        200,
+                        {"data": [{"name": name} for name in upstream.apps], "total": 1, "has_more": False},
                     )
                 else:
                     upstream._reply(self, 404, {"code": "not_found"})
@@ -430,3 +446,122 @@ def test_a_credential_that_already_exists_is_success_not_a_failure(tmp_path: Pat
 
     assert outcome.credential_written is False
     assert outcome.state == "ready"
+
+
+# ── 7. 真实响应形状（评审在 run 39577679698 上逐条复现出来的） ───────────
+
+
+def test_the_bundled_template_passes_the_repos_own_dsl_validators() -> None:
+    """模板必须过**我们自己**的 DSL 校验器，否则 41 上第一次导入就失败。
+
+    三个被复现的形状缺陷都钉在这里：``version`` 必须是 0.7.x（我们支持的那个）、
+    ``model.name`` 非空（本模板刻意留空 ⇒ 这里只校验版本与 datasets 形状）、
+    ``dataset_configs.datasets`` **不能是列表**（Dify 读的是路由对象，给列表会在
+    ``.get()`` 上抛 ``AttributeError``）。
+    """
+    import yaml
+
+    from aiops_diagnostics.dify_dsl_pull import _require_supported_version
+    from aiops_diagnostics.dify_workspace_ready import bundled_template
+
+    parsed = yaml.safe_load(bundled_template())
+
+    _require_supported_version(parsed["version"])
+    datasets = (parsed["model_config"].get("dataset_configs") or {}).get("datasets")
+    assert datasets is None, "dataset_configs.datasets 必须是路由对象或缺席，绝不能是列表"
+
+
+def test_plugin_ids_are_read_from_the_top_level_field(tmp_path: Path, console: _Console) -> None:
+    """真实 ``/plugin/list`` 把标识放在**顶层**，``meta`` 是任意 map。
+
+    变异对照：只读 ``meta.plugin_unique_identifier`` ⇒ 本用例红（每次都重发安装请求）。
+    """
+    console.plugin_list_shape = "top-level"
+    workspaces = _workspaces(tmp_path)
+
+    first = _run(tmp_path, console, workspaces)
+    second = _run(tmp_path, console, workspaces)
+
+    assert first.plugins_installed == DEFAULT_PLUGIN_IDENTIFIERS
+    # 第二次必须"已经装好了"⇒ 一条安装请求都不发。读错字段时这里是 2。
+    assert console.post_paths().count(_PLUGIN_INSTALL) == 1
+    assert second.plugins_installed == ()
+
+
+def test_a_failed_re_run_never_demotes_a_ready_workspace(tmp_path: Path, console: _Console) -> None:
+    """``created → ready`` 单向。重跑里的一次读取抖动不能把它降级，否则没人再推得回去。
+
+    变异对照：去掉 ``mark_template_failed`` 里的 ``AND setup_state <> 'ready'`` ⇒ 本用例红。
+    """
+    workspaces = _workspaces(tmp_path)
+    _run(tmp_path, console, workspaces)
+    assert workspaces.row(TENANT, ENVIRONMENT)["setup_state"] == "ready"
+
+    # 模拟**读取**失败（不是导入）：模板 app 已在，`app_names` 这一步 503。
+    console.apps_status = 503
+    console.apps_body = {"message": "upstream down"}
+    with pytest.raises(EnsureError):
+        _run(tmp_path, console, workspaces)
+
+    row = workspaces.row(TENANT, ENVIRONMENT)
+    assert row["setup_state"] == "ready", "已 ready 的行不能被一次失败的重跑降级"
+    assert "upstream down" in row["last_error"], "但原因要留下"
+
+
+def test_a_pending_import_is_reported_as_pending_not_unreadable(tmp_path: Path, console: _Console) -> None:
+    """202/pending 是"等人确认"，不是"回了个看不懂的响应" —— 下一步完全不同。"""
+    console.import_status = 202
+    console.import_body = {"id": "imp-1", "status": "pending", "app_id": None}
+    workspaces = _workspaces(tmp_path)
+
+    with pytest.raises(EnsureError) as caught:
+        _run(tmp_path, console, workspaces)
+
+    assert caught.value.code == "DIFY_IMPORT_PENDING"
+    assert "imp-1" in caught.value.message
+
+
+def test_an_import_failure_carries_difys_own_reason(tmp_path: Path, console: _Console) -> None:
+    """Dify 的导入失败体把原因放在 ``error`` 键；``bounded_http`` 默认不读它。"""
+    console.import_status = 400
+    console.import_body = {"id": "imp-2", "status": "failed", "error": "Missing app data in YAML content"}
+    workspaces = _workspaces(tmp_path)
+
+    with pytest.raises(EnsureError) as caught:
+        _run(tmp_path, console, workspaces)
+
+    assert "Missing app data" in caught.value.message
+
+
+def test_the_endpoint_from_the_config_file_is_not_silently_replaced(tmp_path: Path) -> None:
+    """``AIOPS_GATEWAY_DIFY_WORKSPACE_MODEL_ENDPOINT`` 有非空默认值，所以
+    "属性为空才补"的合并对它是死代码 —— 运维照着 runbook 写进 ``--config`` 也不生效。
+
+    变异对照：把 ``_settings_with_config_file`` 的判据换回 ``not getattr(...)`` ⇒ 本用例红。
+    """
+    import os
+
+    from aiops_diagnostics.admin_cli import _settings_with_config_file
+
+    config = tmp_path / "production.env"
+    config.write_text(
+        "AIOPS_GATEWAY_ENVIRONMENT=41\n"
+        "AIOPS_GATEWAY_DIFY_WORKSPACE_MODEL_ENDPOINT=https://relay.example/v1\n",
+        encoding="utf-8",
+    )
+    os.chmod(config, 0o600)
+    saved = os.environ.pop("AIOPS_GATEWAY_DIFY_WORKSPACE_MODEL_ENDPOINT", None)
+    try:
+        settings = _settings_with_config_file(_Ctx(config))
+    finally:
+        if saved is not None:
+            os.environ["AIOPS_GATEWAY_DIFY_WORKSPACE_MODEL_ENDPOINT"] = saved
+
+    assert settings.dify_workspace_model_endpoint == "https://relay.example/v1"
+
+
+class _Ctx:
+    """``typer.Context`` 的最小替身：`_settings_with_config_file` 只读 ``obj['config_file']``。"""
+
+    def __init__(self, config: Path) -> None:
+        self.obj = {"config_file": str(config)}

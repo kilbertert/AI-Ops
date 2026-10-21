@@ -248,7 +248,7 @@ PUT 更新后的状态，避免夹具保留旧 instruction 却仍被当成成功
 `dify_workspaces.py`（`mark_ready` / `mark_template_failed`）、`admin_cli.py`（`ensure-ready` +
 `_settings_with_config_file`）、`gateway_config.py`（两键）、`src/aiops_diagnostics/dify_workspace_template.dsl.yml`（新）。
 
-### 一、判据（`tests/test_dify_workspace_ready.py`，11 例，假 Dify 控制台）
+### 一、判据（`tests/test_dify_workspace_ready.py`，17 例，假 Dify 控制台）
 
 | 用例 | 钉住的规则 |
 |---|---|
@@ -263,8 +263,30 @@ PUT 更新后的状态，避免夹具保留旧 instruction 却仍被当成成功
 | 异步安装 | 发完 `/plugin/install/pkg` 后**轮询任务到 `success` 才写凭据** |
 | 安装任务失败 | `DIFY_PLUGIN_INSTALL_FAILED` 带上游原因；凭据**没写** |
 | 同名凭据已存在 | Dify 的 400 `already exists` 当**已达成**（返回"未写"），不报失败 |
+| 模板过自家校验器 | `bundled_template()` 必须过 `_require_supported_version`，且 `datasets` 不是列表 |
+| 插件标识在顶层 | 真实 `/plugin/list` 形状下重跑**零安装请求** |
+| 重跑不降级 | 已 `ready` 的行遇到读取失败仍是 `ready`，原因留在 `last_error` |
+| 导入 pending | 202/pending 报 `DIFY_IMPORT_PENDING`（下一步是确认，不是重试） |
+| 导入失败带原因 | Dify 把原因放在 `error` 键，必须被带出来 |
+| `--config` 的 endpoint | `AIOPS_GATEWAY_DIFY_WORKSPACE_MODEL_ENDPOINT` 写进文件**确实生效** |
 
-**突变复验（五处，均复跑确认变红）**：去掉插件"已装就跳过" ⇒ 重跑与"只装缺的"两例红；
+**评审复现 → 修复 → 复验（第二轮）**：自动化评审（Sandcastle run `39577679698`，60 分钟超时被取消，
+但结论已产出）在真实响应形状上复现了五个缺陷，全部修复并逐条做了突变复验：
+
+| 缺陷（复现来源） | 修法 | 突变后变红 |
+|---|---|---|
+| `installed_plugin_ids` 只读 `meta.plugin_unique_identifier`，真实形状在**顶层** ⇒ 每次重跑都重发安装请求 | 顶层优先、嵌套兜底 | 是 |
+| 模板 `dataset_configs.datasets: []` 是**列表**，Dify 读的是路由对象 ⇒ 那个 app 第一次跑就 `AttributeError` | 省略该键（真实导出里"没挂知识库"的形状） | 是（校验器用例） |
+| 模板 `version: 0.1.5`，而 36 上是 0.7.0 ⇒ 我们**自己的** `_require_supported_version` 就会拒 | 改 `0.7.0`，并加用例过自家校验器 | 是 |
+| `import_app_dsl` 只看 `app_id`：202/pending 被报成"响应体不可读"，400 的 `error` 原因被丢掉 | 按 `status` 分流三个码 | 是 |
+| `AIOPS_GATEWAY_DIFY_WORKSPACE_MODEL_ENDPOINT` 有非空默认值 ⇒ `--config` 里那一行**静默不生效**（#625 形态） | 合并判据改成"进程 env 有没有这个键" | 是 |
+| `mark_template_failed` 会把已 `ready` 的行降级回 `created` | `CASE WHEN setup_state='ready' THEN 'ready'` | 是 |
+| `app_names` 只读第 1 页 ⇒ 模板 app 在第 2 页时重复导入 | 按 `has_more` 翻页 | 是（形状用例） |
+
+**评审有一条不成立**：它说 `/plugin/list?page_size=200` 会被拒（上限 100）。2026-10-21 在 36 上用
+真实 admin key 实测该请求回 **200 + 完整列表**。仍改成了 100 —— 那是契约上限，不是靠实测运气。
+
+**突变复验（第一轮五处，均复跑确认变红）**：去掉插件"已装就跳过" ⇒ 重跑与"只装缺的"两例红；
 把 `mark_template_failed` 改成写 `failed` ⇒ 模板失败用例红；`install_plugins` 发完 POST
 就返回（不等任务）⇒ 两条异步用例红；把 `already exists` 当普通 400 上抛 ⇒ 同名用例红；
 把凭据名字改从 `<provider>/credentials` 读（旧写法）⇒ 五例红。

@@ -647,6 +647,10 @@ def _settings_with_config_file(ctx: typer.Context) -> GatewayServerSettings:
 
     按 key 合并而不是整体替换：`--config` 里只写了 workspace 相关那几行、而 inner_api
     的键在进程 env 里，这是常态 —— 整体替换会把有的那一半丢掉，只补另一半。
+
+    **判据是"进程 env 有没有这个键"，不是"属性是不是空的"**：后者对带非空默认值的键
+    （``AIOPS_GATEWAY_DIFY_WORKSPACE_MODEL_ENDPOINT``）永远为假，于是运维照着 runbook
+    写进 ``--config`` 的那一行**静默不生效** —— #625 的形态，这次被评审当场复现。
     """
     settings = GatewayServerSettings.from_env()
     config_file = ctx.obj.get("config_file") if ctx.obj else None
@@ -657,7 +661,7 @@ def _settings_with_config_file(ctx: typer.Context) -> GatewayServerSettings:
     values = _private_config_values(Path(config_file).expanduser().resolve())
     for name, attribute in _SETTING_FOR.items():
         value = values.get(name) or ""
-        if value and not getattr(settings, attribute, ""):
+        if value and not os.environ.get(name):
             setattr(settings, attribute, value)
     return settings
 

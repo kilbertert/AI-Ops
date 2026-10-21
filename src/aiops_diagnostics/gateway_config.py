@@ -349,8 +349,12 @@ class GatewayServerSettings:
             or _file_value(file_values, "AIOPS_GATEWAY_DIFY_INNER_API_KEY"),
             dify_workspace_model_api_key=_env("AIOPS_GATEWAY_DIFY_WORKSPACE_MODEL_API_KEY")
             or _file_value(file_values, "AIOPS_GATEWAY_DIFY_WORKSPACE_MODEL_API_KEY"),
-            dify_workspace_model_endpoint=_env(
-                "AIOPS_GATEWAY_DIFY_WORKSPACE_MODEL_ENDPOINT", "https://api.deepseek.com/v1"
+            # 与上面那把 key 同源：**进程 env 优先，其次服务端配置文件**。这里少了
+            # ``_file_value`` 会让「运维照着 runbook 写进 production.env」变成静默不生效
+            # —— 它有非空默认值，``_settings_with_config_file`` 的"只在为空时才补"补不上。
+            dify_workspace_model_endpoint=_env("AIOPS_GATEWAY_DIFY_WORKSPACE_MODEL_ENDPOINT")
+            or _file_value(
+                file_values, "AIOPS_GATEWAY_DIFY_WORKSPACE_MODEL_ENDPOINT", "https://api.deepseek.com/v1"
             ),
             jev_base_url=_env("AIOPS_GATEWAY_JEV_BASE_URL")
             or _file_value(file_values, "AIOPS_GATEWAY_JEV_BASE_URL"),
