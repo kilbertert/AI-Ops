@@ -12,16 +12,23 @@
 admin key 可以为任意 workspace 做管理动作 —— 这正是"每个 workspace 自己的凭据"能写进去
 的原因。
 
-## 三条实测事实（2026-10-21，36 上，不是推断）
+## 五条实测事实（2026-10-21，36 上只读核对过源码与接口，不是推断）
 
 1. **`/plugin/install/marketplace` 走不通**：本机 ``MARKETPLACE_ENABLED=false``，它回
    400 ``marketplace is not enabled``。可用的是 ``/plugin/install/pkg``，body 是
-   ``{"plugin_unique_identifiers": [...]}``，回 ``{"all_installed": true}``。**幂等**。
-2. **provider 凭据必须每个 workspace 各写一份**：Dify 的数据模型里没有共享层
+   ``{"plugin_unique_identifiers": [...]}``，回 ``{"all_installed": bool, "task_id": str}``。
+2. **安装是异步的**：``task_id`` 对应的任务要轮询 ``/plugin/tasks/<id>`` 到 ``success``，
+   插件才真的出现在 ``/plugin/list`` 里。不等就去写凭据，会得到"provider 不存在"。
+3. **provider 凭据必须每个 workspace 各写一份**：Dify 的数据模型里没有共享层
    （``providers.tenant_id`` 非空、凭据用**每租户一把 RSA 密钥**加解密），所以复制行到
    别的 workspace 也解不开。
-3. **写凭据会拿它去真实校验**：假 key 回 400 ``Credentials validation failed ... 401``。
+4. **写凭据会拿它去真实校验**：假 key 回 400 ``Credentials validation failed ... 401``。
    所以这一步必须用**真** key，且失败形态是"凭据无效"而不是"服务坏了"——两者要分开报。
+   同名再写一次回 400 ``Credential with name '…' already exists``：**那是已达成，不是失败**。
+5. **凭据名字只能从 provider 列表读**：``GET …/model-providers`` 的每一项带
+   ``custom_configuration.available_credentials[{credential_id, credential_name}]``；
+   而 ``GET …/<provider>/credentials`` 回的是**当前生效那一份的字段字典**（``api_key``
+   已打码），里面没有名字列表 —— 拿它做幂等判据会永远"没找到"。
 """
 
 from __future__ import annotations
@@ -218,14 +225,24 @@ class DifyConsoleAdmin:
     # ── provider 凭据 ─────────────────────────────────────────────────
 
     def provider_credential_names(self, workspace_id: str, provider: str) -> set[str]:
-        """该 provider 在这个 workspace 里已有凭据的名字（**不含明文**）。"""
-        payload = self._call(workspace_id, f"{MODEL_PROVIDERS_PATH}/{provider}/credentials", method="GET")
-        entries = payload.get("credentials") if isinstance(payload, dict) else None
+        """该 provider 在这个 workspace 里已有凭据的名字（**不含明文**）。
+
+        走的是 provider **列表**端点，不是 ``<provider>/credentials``：后者（实测，
+        2026-10-21 只读）回的是**当前生效那一份的字段字典**（``api_key`` 已被打码），
+        里面**没有名字列表** —— 拿它做幂等判据会永远"没找到"，于是每次都重发一次
+        POST，而 Dify 第二次会回 400 ``Credential with name '…' already exists``。
+        """
+        payload = self._call(workspace_id, MODEL_PROVIDERS_PATH)
+        rows = payload.get("data") if isinstance(payload, dict) else None
         names: set[str] = set()
-        for item in entries or []:
-            name = str((item or {}).get("credential_name") or "")
-            if name:
-                names.add(name)
+        for item in rows or []:
+            if not isinstance(item, dict) or item.get("provider") != provider:
+                continue
+            available = (item.get("custom_configuration") or {}).get("available_credentials") or []
+            for credential in available:
+                name = str((credential or {}).get("credential_name") or "")
+                if name:
+                    names.add(name)
         return names
 
     def write_provider_credential(
@@ -236,15 +253,23 @@ class DifyConsoleAdmin:
         Dify 会拿这份凭据去**真实校验**（实测：假 key 回 400 ``Credentials validation
         failed``），所以这里的失败一定是"这把 key 不能用"，而不是"服务坏了" ——
         错误码因此分开（``DIFY_CREDENTIAL_INVALID``）。
+
+        "同名已存在"是**另一个**信号，而且它在重跑时才出现（列表与写入之间可能有人手工
+        加过）：把它当作"已经达成"而不是失败 —— 我们要的结果是"这个名字的凭据在位"。
         """
         if name in self.provider_credential_names(workspace_id, provider):
             return False
-        self._call(
-            workspace_id,
-            f"{MODEL_PROVIDERS_PATH}/{provider}/credentials",
-            method="POST",
-            body={"credentials": credentials, "name": name},
-        )
+        try:
+            self._call(
+                workspace_id,
+                f"{MODEL_PROVIDERS_PATH}/{provider}/credentials",
+                method="POST",
+                body={"credentials": credentials, "name": name},
+            )
+        except ConsoleApiError as exc:
+            if "already exists" in exc.message:
+                return False
+            raise
         return True
 
     # ── 模板 DSL ──────────────────────────────────────────────────────

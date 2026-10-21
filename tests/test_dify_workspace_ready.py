@@ -44,6 +44,7 @@ APP_NAME = "aiops-workspace-template"
 _PLUGIN_LIST = "/console/api/workspaces/current/plugin/list"
 _PLUGIN_INSTALL = "/console/api/workspaces/current/plugin/install/pkg"
 _CREDENTIALS = "/console/api/workspaces/current/model-providers/langgenius/deepseek/deepseek/credentials"
+_PROVIDERS = "/console/api/workspaces/current/model-providers"
 _APPS = "/console/api/apps"
 _IMPORT = "/console/api/apps/imports"
 _PLUGIN_TASKS = "/console/api/workspaces/current/plugin/tasks"
@@ -56,6 +57,8 @@ class _Console:
         self.calls: list[dict[str, Any]] = []
         self.plugins: list[str] = []
         self.credentials: list[str] = []
+        #: 列表里"看不见"的凭据（模拟列表与写入之间的竞态窗口）。
+        self.hidden_credentials: set[str] = set()
         self.apps: list[str] = []
         self.credential_status = 200
         self.credential_body: Any = None
@@ -85,11 +88,27 @@ class _Console:
                             ]
                         },
                     )
-                elif self.path.startswith(_CREDENTIALS):
+                elif self.path.rstrip("/") == _PROVIDERS:
+                    # 真实形状（36 上只读核对过）：列表里每个 provider 带
+                    # custom_configuration.available_credentials[{credential_id, credential_name}]。
                     upstream._reply(
                         self,
                         200,
-                        {"credentials": [{"credential_name": name} for name in upstream.credentials]},
+                        {
+                            "data": [
+                                {
+                                    "provider": "langgenius/deepseek/deepseek",
+                                    "custom_configuration": {
+                                        "status": "active" if upstream.credentials else "no-configure",
+                                        "available_credentials": [
+                                            {"credential_id": f"cid-{i}", "credential_name": name}
+                                            for i, name in enumerate(upstream.credentials)
+                                            if name not in upstream.hidden_credentials
+                                        ],
+                                    },
+                                }
+                            ]
+                        },
                     )
                 elif self.path.startswith(_PLUGIN_TASKS):
                     upstream._task_polls += 1
@@ -141,6 +160,14 @@ class _Console:
                 elif self.path == _CREDENTIALS:
                     if upstream.credential_body is not None:
                         upstream._reply(self, upstream.credential_status, upstream.credential_body)
+                        return
+                    if body["name"] in upstream.credentials:
+                        # Dify 的真实行为：同名第二次写入回 400。
+                        upstream._reply(
+                            self,
+                            400,
+                            {"message": f"Credential with name '{body['name']}' already exists."},
+                        )
                         return
                     upstream.credentials.append(body["name"])
                     upstream._reply(self, 200, {"result": "success"})
@@ -386,3 +413,20 @@ def test_a_failed_install_task_stops_before_the_credential(tmp_path: Path, conso
     assert caught.value.code == "DIFY_PLUGIN_INSTALL_FAILED"
     assert "boom" in caught.value.message
     assert console.post_paths() == [_PLUGIN_INSTALL]
+
+
+def test_a_credential_that_already_exists_is_success_not_a_failure(tmp_path: Path, console: _Console) -> None:
+    """列表与写入之间可能有人手工加过同名凭据。Dify 回 400 ``already exists`` —— 那是
+    "已经达成"，不是失败：结果就是要这个名字的凭据在位。
+
+    变异对照：把 ``already exists`` 当作普通 400 上抛 ⇒ 本用例红（`ensure_ready` 抛
+    `DIFY_CONSOLE_REJECTED`，一个已经就绪的 workspace 被报成失败）。
+    """
+    console.credentials.append(CREDENTIAL_NAME)
+    # 让列表"看不到"它，模拟那一小段竞态窗口。
+    console.hidden_credentials = {CREDENTIAL_NAME}
+
+    outcome = _run(tmp_path, console)
+
+    assert outcome.credential_written is False
+    assert outcome.state == "ready"

@@ -65,7 +65,7 @@ ADR-0068 把 workspace 建出来就停了，状态是 `created`，并明确写�
 | 动作 | 幂等判据 |
 |---|---|
 | 装插件 | `/plugin/list` 里已有的不再发安装请求；**发出后等任务落地**（见下） |
-| 写凭据 | 同名凭据已存在就跳过（`aiops-workspace` 是固定名，让"已存在"可判定） |
+| 写凭据 | 同名凭据已存在就跳过（`aiops-workspace` 是固定名）。判据读 `GET …/model-providers` 的 `custom_configuration.available_credentials` —— **不是** `<provider>/credentials`，后者回的是当前生效那一份的字段字典、没有名字列表；同名再写 Dify 回 400 `already exists`，那是**已达成**而非失败 |
 | 导 DSL | app 名字已在 `/console/api/apps` 里就跳过 |
 
 ## 被否掉的替代形态

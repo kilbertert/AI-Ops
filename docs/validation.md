@@ -195,7 +195,7 @@ PUT 更新后的状态，避免夹具保留旧 instruction 却仍被当成成功
 `dify_workspaces.py`（`mark_ready` / `mark_template_failed`）、`admin_cli.py`（`ensure-ready` +
 `_settings_with_config_file`）、`gateway_config.py`（两键）、`src/aiops_diagnostics/dify_workspace_template.dsl.yml`（新）。
 
-### 一、判据（`tests/test_dify_workspace_ready.py`，10 例，假 Dify 控制台）
+### 一、判据（`tests/test_dify_workspace_ready.py`，11 例，假 Dify 控制台）
 
 | 用例 | 钉住的规则 |
 |---|---|
@@ -209,10 +209,18 @@ PUT 更新后的状态，避免夹具保留旧 instruction 却仍被当成成功
 | 没有映射行 | `DIFY_WORKSPACE_UNRESOLVED` 原样上抛，零请求 |
 | 异步安装 | 发完 `/plugin/install/pkg` 后**轮询任务到 `success` 才写凭据** |
 | 安装任务失败 | `DIFY_PLUGIN_INSTALL_FAILED` 带上游原因；凭据**没写** |
+| 同名凭据已存在 | Dify 的 400 `already exists` 当**已达成**（返回"未写"），不报失败 |
 
-**突变复验（三处，均复跑确认变红）**：去掉插件"已装就跳过" ⇒ 重跑与"只装缺的"两例红；
+**突变复验（五处，均复跑确认变红）**：去掉插件"已装就跳过" ⇒ 重跑与"只装缺的"两例红；
 把 `mark_template_failed` 改成写 `failed` ⇒ 模板失败用例红；`install_plugins` 发完 POST
-就返回（不等任务）⇒ 两条异步用例红。
+就返回（不等任务）⇒ 两条异步用例红；把 `already exists` 当普通 400 上抛 ⇒ 同名用例红；
+把凭据名字改从 `<provider>/credentials` 读（旧写法）⇒ 五例红。
+
+**一条被实测推翻的写法（记下来免得重蹈）**：最初用 `GET …/<provider>/credentials` 判断
+"这个名字的凭据在不在"。36 上只读核对源码后确认它回的是**当前生效那一份的字段字典**
+（`api_key` 已打码），**没有名字列表** —— 幂等判据会永远返回"没找到"，于是每次都重发一次
+POST，而 Dify 第二次回 400 `Credential with name '…' already exists`。正确的来源是
+`GET …/model-providers` 里每项的 `custom_configuration.available_credentials`。
 
 ### 二、据实（没有做到的）
 
