@@ -43,6 +43,12 @@ def serve(
     if port:
         settings.port = port
     settings.validate()
+    # 部署身份**必填、无默认值**（#879 / ADR-0059）。`validate()` 只判格式，因为一个直接
+    # 构造出来的 settings 不是一次部署；**起监听**才是一次部署，所以必备性在这里判。
+    # 漏配时进程根本不该起来：让它起来的表现是"某个租户的工作区有时找得到、有时找不到"。
+    if not settings.environment:
+        console.print("[red]AIOPS_GATEWAY_ENVIRONMENT is required[/red]")
+        raise typer.Exit(code=2)
     # After validate(): a bad log level is a startup error like any other bad
     # setting, and it must fail before the port is taken rather than after.
     configure_gateway_logging(settings.log_level)
