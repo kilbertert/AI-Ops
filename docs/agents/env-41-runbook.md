@@ -1574,6 +1574,38 @@ runuser -u aiops41 -- /opt/aiops-41/.venv/bin/aiops --config /etc/aiops-41/produ
 | `failed`（非零退出） | Dify **明确**没建（4xx/5xx 或连接被拒） | 直接重跑即可 |
 | `unknown`（非零退出） | 超时/读中断，**可能已经建了** | 重跑会先按名字对账，不要手工建第二个 |
 
+### 3.1-septies 让它能用：`admin ensure-ready`（#881，2026-10-21 新增）
+
+**用途**：`ensure-workspace` 建出来的是**空壳**（没有模型插件、没有 provider 凭据、没有
+app）。这一步把它推到 `ready`：装插件 → 写这个 workspace 自己的 provider 凭据 → 导模板 DSL。
+
+```bash
+runuser -u aiops41 -- /opt/aiops-41/.venv/bin/aiops --config /etc/aiops-41/production.env \
+  admin ensure-ready --tenant <租户 id> --db /var/lib/aiops-41/gateway/gateway.db
+# 平台账号用 --tenant platform
+```
+
+**先补一行配置**（`/etc/aiops-41/production.env`，0600）：
+
+```
+AIOPS_GATEWAY_DIFY_WORKSPACE_MODEL_API_KEY=<deepseek 的真实 key>
+# 可选：AIOPS_GATEWAY_DIFY_WORKSPACE_MODEL_ENDPOINT（默认 https://api.deepseek.com/v1）
+```
+
+**四件要知道的事**：
+
+1. **这一步会拿 key 去做真实校验。** Dify 写 provider 凭据时当场打上游；假 key 回 400
+   `Credentials validation failed` ⇒ 我们报 `DIFY_CREDENTIAL_INVALID`。那是"换 key"，
+   不是"重启服务"。
+2. **重跑是安全的**：插件按 `/plugin/list` 跳过已装、凭据按名字跳过、模板 app 按名字跳过。
+3. **模板失败只记状态**（`state` 仍是 `created`，`last_error` 说原因）。workspace 与凭据
+   都还在，人进得去、能改；**重跑本命令补齐这一步**。不要为它重建 workspace ——
+   Dify 没有删 workspace 的 API。
+4. **`ready` 不等于模型已选**：模板 app 的 `model_config.model` 刻意留空（模型由该
+   workspace 自己的凭据决定）。运营在控制台里选一次模型就能跑。
+5. **模板随包发布**（`src/aiops_diagnostics/dify_workspace_template.dsl.yml`），41 上无需
+   额外的 `ops/` 文件 —— 部署产物只含 `src/`。要换模板用 `--template <path>` 显式指。
+
 ## 4. 真实会话与数据（验收前置）
 
 ### 4.1 取有效 thirdSession

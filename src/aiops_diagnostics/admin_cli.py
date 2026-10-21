@@ -642,6 +642,26 @@ def _deployment_environment_or_exit() -> str:
     return environment
 
 
+def _settings_with_config_file(ctx: typer.Context) -> GatewayServerSettings:
+    """进程 env 优先、`--config` 按**单个键**补齐。
+
+    按 key 合并而不是整体替换：`--config` 里只写了 workspace 相关那几行、而 inner_api
+    的键在进程 env 里，这是常态 —— 整体替换会把有的那一半丢掉，只补另一半。
+    """
+    settings = GatewayServerSettings.from_env()
+    config_file = ctx.obj.get("config_file") if ctx.obj else None
+    if config_file is None:
+        return settings
+    from aiops_diagnostics.gateway_config import _private_config_values
+
+    values = _private_config_values(Path(config_file).expanduser().resolve())
+    for name, attribute in _SETTING_FOR.items():
+        value = values.get(name) or ""
+        if value and not getattr(settings, attribute, ""):
+            setattr(settings, attribute, value)
+    return settings
+
+
 @admin_app.command("ensure-workspace")
 def ensure_workspace_command(
     ctx: typer.Context,
@@ -669,21 +689,7 @@ def ensure_workspace_command(
     from aiops_diagnostics.dify_inner_api import DifyInnerApi, InnerApiSettings
     from aiops_diagnostics.dify_workspaces import DifyWorkspaces
 
-    settings = GatewayServerSettings.from_env()
-    config_file = ctx.obj.get("config_file") if ctx.obj else None
-    if config_file is not None:
-        from aiops_diagnostics.gateway_config import _private_config_values
-
-        values = _private_config_values(Path(config_file).expanduser().resolve())
-        for name in (
-            "AIOPS_GATEWAY_ENVIRONMENT",
-            "AIOPS_GATEWAY_DIFY_INNER_API_BASE_URL",
-            "AIOPS_GATEWAY_DIFY_INNER_API_KEY",
-            "AIOPS_GATEWAY_DIFY_CONSOLE_BASE_URL",
-            "AIOPS_GATEWAY_DIFY_CONSOLE_API_KEY",
-        ):
-            if not getattr(settings, _SETTING_FOR[name], ""):
-                setattr(settings, _SETTING_FOR[name], values.get(name) or "")
+    settings = _settings_with_config_file(ctx)
 
     if not settings.environment:
         typer.secho(
@@ -740,6 +746,99 @@ def ensure_workspace_command(
     typer.echo(f"platform owner: {PLATFORM_OWNER_EMAIL}", err=True)
 
 
+@admin_app.command("ensure-ready")
+def ensure_ready_command(
+    ctx: typer.Context,
+    tenant: Annotated[str, typer.Option("--tenant", help="公司租户 id（sys_organ.id），或 platform")],
+    db: Annotated[
+        Path | None,
+        typer.Option("--db", help="gateway 数据库文件（缺省会回退 XDG 默认并新建空库）"),
+    ] = None,
+    template: Annotated[
+        Path | None,
+        typer.Option("--template", help="模板 DSL 文件（缺省：随包发布的那份）", exists=True, dir_okay=False),
+    ] = None,
+    app_name: Annotated[
+        str | None, typer.Option("--app-name", help="模板导进去之后那个 app 的名字（幂等判据）")
+    ] = None,
+) -> None:
+    """把 `ensure-workspace` 建出来的空壳推到 **ready**（#881）。
+
+    三步：装模型插件 → 写这个 workspace 自己的 provider 凭据 → 导模板 DSL。前两步失败
+    就停；第三步失败**只记状态**（workspace 与凭据都还在，人进得去），重跑补齐。
+
+    模型凭据来自 ``AIOPS_GATEWAY_DIFY_WORKSPACE_MODEL_API_KEY`` —— **代码里没有默认值**，
+    缺了就退非零并说去哪填。Dify 会拿它做真校验，假 key 回 ``DIFY_CREDENTIAL_INVALID``。
+    """
+    from aiops_diagnostics.dify_console_admin import ConsoleApiSettings, DifyConsoleAdmin
+    from aiops_diagnostics.dify_ensure_workspace import EnsureError
+    from aiops_diagnostics.dify_workspace_ready import (
+        DEFAULT_APP_NAME,
+        ReadySettings,
+        bundled_template,
+        ensure_ready,
+    )
+    from aiops_diagnostics.dify_workspaces import DifyWorkspaces
+
+    settings = _settings_with_config_file(ctx)
+    if not settings.environment:
+        typer.secho(
+            "缺少 AIOPS_GATEWAY_ENVIRONMENT：环境取本机部署身份，不是参数",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
+    ready_settings = ReadySettings(
+        console_base_url=settings.dify_console_base_url,
+        console_api_key=settings.dify_console_api_key,
+        model_api_key=settings.dify_workspace_model_api_key,
+        model_endpoint=settings.dify_workspace_model_endpoint,
+    )
+    gaps = ready_settings.missing()
+    if gaps:
+        typer.secho(
+            "缺少：" + "、".join(gaps) + "。放在服务端配置文件或进程环境里；"
+            "AIOPS_GATEWAY_DIFY_WORKSPACE_MODEL_API_KEY 是写进每个 workspace 的模型凭据。",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
+    database = db or settings.database_file
+    if db is None and not os.environ.get("AIOPS_GATEWAY_DATABASE_FILE"):
+        typer.secho(
+            "缺少 --db：缺省会静默回退 XDG 默认并新建空库。请显式给出 --db <gateway.db>，"
+            "或 export AIOPS_GATEWAY_DATABASE_FILE=<gateway.db>。",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
+    try:
+        outcome = ensure_ready(
+            tenant_id=tenant,
+            environment=settings.environment,
+            workspaces=DifyWorkspaces(database),
+            console=DifyConsoleAdmin(
+                ConsoleApiSettings(
+                    base_url=ready_settings.console_base_url,
+                    api_key=ready_settings.console_api_key,
+                )
+            ),
+            settings=ready_settings,
+            template_yaml=(
+                template.read_text(encoding="utf-8") if template is not None else bundled_template()
+            ),
+            app_name=app_name or DEFAULT_APP_NAME,
+            log=lambda line: typer.secho(line, err=True),
+        )
+    except EnsureError as exc:
+        typer.secho(json.dumps({"error": exc.code, "message": exc.message}, ensure_ascii=False), err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps(outcome.as_dict(), ensure_ascii=False, indent=2))
+
+
 #: CLI 参数名 → `GatewayServerSettings` 字段。放在函数外，字典只写一次 —— 上面那个循环
 #: 复制五份 `setattr` 字符串是"同一规则两份实现"的经典起点。
 _SETTING_FOR = {
@@ -748,4 +847,6 @@ _SETTING_FOR = {
     "AIOPS_GATEWAY_DIFY_INNER_API_KEY": "dify_inner_api_key",
     "AIOPS_GATEWAY_DIFY_CONSOLE_BASE_URL": "dify_console_base_url",
     "AIOPS_GATEWAY_DIFY_CONSOLE_API_KEY": "dify_console_api_key",
+    "AIOPS_GATEWAY_DIFY_WORKSPACE_MODEL_API_KEY": "dify_workspace_model_api_key",
+    "AIOPS_GATEWAY_DIFY_WORKSPACE_MODEL_ENDPOINT": "dify_workspace_model_endpoint",
 }

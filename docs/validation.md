@@ -189,7 +189,42 @@ Codex turn … failed: 403 Forbidden [sk-x4CF…] 预扣费额度失败，
 PUT 更新后的状态，避免夹具保留旧 instruction 却仍被当成成功。全量初跑 3215 passed / 9 skipped / 1 failed：唯一失败为并行部署前进后，dry-run
 拒绝旧基线。同步主线后复跑该检查，最终结果见本 PR。
 
+## 2026-10-21 · `aiops admin ensure-ready`：把空壳推到 `ready`（#881）
+
+**范围**：`dify_console_admin.py`（新）、`dify_workspace_ready.py`（新）、
+`dify_workspaces.py`（`mark_ready` / `mark_template_failed`）、`admin_cli.py`（`ensure-ready` +
+`_settings_with_config_file`）、`gateway_config.py`（两键）、`src/aiops_diagnostics/dify_workspace_template.dsl.yml`（新）。
+
+### 一、判据（`tests/test_dify_workspace_ready.py`，8 例，假 Dify 控制台）
+
+| 用例 | 钉住的规则 |
+|---|---|
+| 三步顺序 | POST 次序 == 插件 → 凭据 → 模板；状态推到 `ready` |
+| 凭据内容 | `api_key` 来自 `AIOPS_GATEWAY_DIFY_WORKSPACE_MODEL_API_KEY`，名字固定 `aiops-workspace` |
+| 重跑零写 | 第二次一条 POST 都不发，`state` 仍是 `ready` |
+| 只装缺的 | 已装的插件不再出现在安装 body 里 |
+| 凭据被拒 | `DIFY_CREDENTIAL_INVALID`；**模板没导**；状态与 `workspace_id` 都没退 |
+| 模板失败 | 状态停在 `created`、`last_error` 有原因、`resolve()` 仍返回 id；重跑后转 `ready` |
+| 缺模型 key | `WORKSPACE_READY_CONFIG_MISSING`，文案点名变量，**零请求** |
+| 没有映射行 | `DIFY_WORKSPACE_UNRESOLVED` 原样上抛，零请求 |
+
+**突变复验（两处，均复跑确认变红）**：去掉插件"已装就跳过" ⇒ 重跑与"只装缺的"两例红；
+把 `mark_template_failed` 改成写 `failed` ⇒ 模板失败用例红。
+
+### 二、据实（没有做到的）
+
+- **没有真机跑完三整步**：41 上还没填 `AIOPS_GATEWAY_DIFY_WORKSPACE_MODEL_API_KEY`
+  （本机也没有那把 key，且它不该进仓库）。所以"在 41 上把一个租户推到 `ready`"这条
+  端到端结论要等运维填 key 之后再取。
+- **接口形状来自只读探测，不是本轮实跑**：`/plugin/install/pkg` 幂等（回
+  `{"all_installed": true}`）、`MARKETPLACE_ENABLED=false`、假 key 回
+  `Credentials validation failed`、新 workspace 0 插件 0 凭据 0 app —— 均为 2026-10-21
+  在 36 上的只读实测。
+- **模板 app 的 `model` 与 `datasets` 是空的**（刻意的，模板文件头注释记了理由）：
+  不代表"可用 app 已交付"，只代表"结构已就位"。
+
 ## 2026-10-21 · 平台租户落到自己的平台 workspace（#882）
+
 
 **范围**：`dify_workspaces.py`（`PLATFORM_TENANT_ID`）、`dify_login_service.py`（平台分支）。
 

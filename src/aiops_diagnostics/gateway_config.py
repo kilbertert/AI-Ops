@@ -195,6 +195,14 @@ class GatewayServerSettings:
     #: 网关运行时要用的东西：只有开户那一条 CLI 路径读它。
     dify_inner_api_base_url: str = ""
     dify_inner_api_key: str = field(repr=False, default="")
+    #: 写进**每个新 workspace** 的模型凭据（#881）。由运维在主机上填：它是将来那个
+    #: workspace 里 provider 的 API key，Dify 会拿它做**真实校验**（假 key 回 400）。
+    #:
+    #: **代码里没有默认值、也不该有**：这不是"示例值"，是一把真钱买的钥匙。缺它 ⇒
+    #: `aiops admin ensure-ready` 拒绝运行并说出缺的是哪一行，而不是猜一个。
+    dify_workspace_model_api_key: str = field(repr=False, default="")
+    #: 上面那把钥匙的 endpoint。deepseek 官方端点是默认值；换供应商时改这一行。
+    dify_workspace_model_endpoint: str = "https://api.deepseek.com/v1"
     #: Conversation context window (#482). The defaults ARE the contract's
     #: numbers (8 turns / 8k tokens, ``conversation_store`` owns the constants);
     #: they are configurable because a RAG or promotional turn also spends the
@@ -331,6 +339,11 @@ class GatewayServerSettings:
             or _file_value(file_values, "AIOPS_GATEWAY_DIFY_INNER_API_BASE_URL"),
             dify_inner_api_key=_env("AIOPS_GATEWAY_DIFY_INNER_API_KEY")
             or _file_value(file_values, "AIOPS_GATEWAY_DIFY_INNER_API_KEY"),
+            dify_workspace_model_api_key=_env("AIOPS_GATEWAY_DIFY_WORKSPACE_MODEL_API_KEY")
+            or _file_value(file_values, "AIOPS_GATEWAY_DIFY_WORKSPACE_MODEL_API_KEY"),
+            dify_workspace_model_endpoint=_env(
+                "AIOPS_GATEWAY_DIFY_WORKSPACE_MODEL_ENDPOINT", "https://api.deepseek.com/v1"
+            ),
             jev_base_url=_env("AIOPS_GATEWAY_JEV_BASE_URL")
             or _file_value(file_values, "AIOPS_GATEWAY_JEV_BASE_URL"),
             jev_api_key=_env("AIOPS_GATEWAY_JEV_API_KEY")
