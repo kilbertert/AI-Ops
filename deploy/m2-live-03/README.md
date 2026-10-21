@@ -172,6 +172,13 @@ bash deploy/m2-live-03/checks.sh up
 `AIOPS_EXEC_MANIFEST`）原样保留 —— 这条有回归钉住，因为整份覆盖会让守卫在 bootstrap
 之后静默消失。
 
+## 使用正常登录会话验收
+
+已有明确授权的测试账号和本人订单时，按
+[用户入口验收手册](../../docs/agents/m3-user-entry-acceptance.md) 执行
+`user_entry.py preflight/run`。正式身份路径使用原始 compose，不加载构造身份覆盖层；
+生产开关、App 接线与业务验收仍分别决定。
+
 ## 复跑一次真实只读链路（构造身份）
 
 上一节把**开关**打开；这一节是**真的发一次**。两件事分开：预检证明「这份配置是对的」，

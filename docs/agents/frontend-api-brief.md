@@ -48,7 +48,11 @@ AI-Ops（41 本机 127.0.0.1:8788）
 
 ### 2.1 BFF 调 AI-Ops 的请求头
 
-**⚠️ 头名大小写有坑（2026-09-07 实测修正）**：会话头**必须用 `third-session`（全小写连字符）**，不能写成 `X-Third-Session`。公司 120 的 nginx 默认丢弃带下划线的自定义请求头（`underscores_in_headers off`），`X-Third-Session` 会被静默丢掉 → 网关收不到会话 → **401 `INVALID_ACCESS_TOKEN`**。`Authorization` 头不受此限制（无下划线）。
+**会话头取决于请求经过哪一层（2026-10-21 核对）**：41 公网入口接收
+`third-session`，Nginx 将它转成内部 `X-Third-Session` 并注入服务身份；直达 Gateway
+应使用后者。两者都没有下划线，[RFC 9110 §5.1](https://www.rfc-editor.org/rfc/rfc9110.html#section-5.1) 规定字段名不区分大小写；原先归因于
+`underscores_in_headers` 的说法不成立。95 继续以自身入口实测为准。
+M3 的正常登录验收和待接线范围见 [用户入口验收手册](m3-user-entry-acceptance.md)。
 
 ```http
 # 前端/客户端 → BFF（或直连 BFF 域名）的最小正确载荷（实测 200）：
@@ -59,14 +63,14 @@ tenant-id: <租户ID>                               # 例如 2019588094906601472
 ```http
 # BFF → AI-Ops（BFF 层注入服务身份，不下发给前端）：
 Authorization: Bearer <aiops-service-token>     # BFF 的服务身份，不给前端
-third-session: <当前用户的有效 thirdSession>     # BFF 验证后原样转发（同样全小写）
+X-Third-Session: <当前用户的有效 thirdSession>   # 直达 Gateway 的内部头
 X-Business-Entry: consumer                       # consumer | operator，按访问入口设置
 Content-Type: application/json                   # POST 时
 ```
 
 - **`X-Business-Entry` 由 BFF 根据用户从哪个入口进来设置**，不是前端传的选项。只允许 `consumer` / `operator`。
 - 身份只有一个可用平台时可省略；联调阶段建议 BFF 始终显式设置，避免双平台用户得到 `409 PLATFORM_AMBIGUOUS`。
-- **`Authorization` 与 `third-session` 二者缺一即 `401 INVALID_ACCESS_TOKEN`**——仅带服务令牌、漏传用户会话时，网关按"访问令牌校验失败"整体拒绝（实测确认），不是降级为匿名或仅服务身份调用。
+- **Gateway 处 `Authorization` 与 `X-Third-Session` 二者缺一即 `401 INVALID_ACCESS_TOKEN`**——仅带服务令牌、漏传用户会话时，网关按"访问令牌校验失败"整体拒绝（实测确认），不是降级为匿名或仅服务身份调用。
 - 前端实际调用的 URL、鉴权方式由 BFF 决定；建议 BFF 保留 `/v1/*` 路径与响应体结构原样透传，前端零转换。
 - 实测对照（2026-09-07，公网 `api.qumall.qushiyun.com`，同一有效 thirdSession）：`third-session` → 200；`X-Third-Session` → 401。网关错误码一律下划线格式（`INVALID_ACCESS_TOKEN`），**不会出现带空格的 `INVALID ACCESS TOKEN`**——若收到那个，是中间 BFF/网关自己返的，不是 AI-Ops。
 

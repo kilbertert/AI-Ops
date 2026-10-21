@@ -6,6 +6,12 @@
 >
 > **最后核验**：2026-10-21（Asia/Shanghai，仅 M3 交付收尾；其他条目以各自核验日期为准）。
 >
+> **2026-10-21 · M3 正常登录入口准备（待 PR）**：已接手中断的用户入口片，新增私有会话
+> 驱动与[复跑手册](m3-user-entry-acceptance.md)。指定测试账号登录与正式 consumer/self
+> 解析已证实；12:51 Asia/Shanghai 按含工单认领列的本人规则查询仍无订单。用户选择先交付、
+> 稍后补样本。关联 82 passed，全量 3301 passed / 9 skipped；新工具没有发真实模型请求。
+> **真实用户 M3 整轮、App 页面和生产启用仍未验收**，不得复用构造身份成功来填这三个格。
+>
 > **2026-10-21 · 多租户 workspace 的第一块接线落地（#879，分支 `feat/dify-workspace-identity`，待合并）**：
 > 网关新增部署身份 `AIOPS_GATEWAY_ENVIRONMENT`（**必填、无默认值**，判据与登录代理共用一份）、
 > `dify_workspaces` 表与只查不建的 `resolve`（四个可区分的失败码），以及内部令牌保护的

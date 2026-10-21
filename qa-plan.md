@@ -2272,3 +2272,20 @@ python3 tools/m2_close/m3live/live_replay.py cleanup --out <证据目录> \
   CPMS GET，核对 orderNo/status 与快照，不输出订单或凭据。关闭 SQL/HTTP 连接。
 - 已取证：10/10；只证明当前单样本一致。用户登录、App、出口请求计数及准确率未验。
 - 后续若复跑：必须使用合并制品；baseline 在 up/send 前采，send 一次后总是 down/cleanup。
+
+## M3-USER-ENTRY-01：正常登录身份与入口交接
+
+本地环境：Linux、一次性数据根、动态回环端口。用例数据全部合成；真实 Gateway 工厂与
+RedisThirdSessionResolver，Redis/订单授权/CPMS/平台回呼为替身，不调用模型。
+
+| 编号 | 前提与动作 | 可观察判据 | 清理 |
+|---|---|---|---|
+| USER-ENTRY-01 | 私有输入执行 preflight；再以宽权限/缺令牌/坏头字符执行 | 零 HTTP；合法通过、非法非零；报告无凭据且 login_provenance_verified=false | pytest 临时目录 |
+| USER-ENTRY-02 | 正常解析会话，依次请求本人/他人/外租户订单；缺会话、失效会话、错令牌 | 正例同 run succeeded/matched；拒绝为 401/403/404，平台派发与 run 均为零 | 关闭 HTTP/Redis 替身 |
+| USER-ENTRY-03 | 并发同目录；连接断开后重跑；302 与外部目标 | 最多一次 POST；标记保留；无重定向目标访问 | 关闭回环服务 |
+| USER-ENTRY-04 | 破坏运行记录、身份和日志观测 | 非零、confirmed=false；正常对照通过 | 临时目录 |
+| USER-ENTRY-LIVE | 正常登录的明确授权账号及其本人订单，正式隔离栈 | 登录来源→正式解析→本人订单→同 run succeeded/matched→快照对照；App 页面另验 | baseline 在 up 前；始终 down，再 cleanup |
+
+复跑：`uv run pytest tests/test_m3_user_entry_tool.py tests/test_m3_live_replay_tool.py`。
+真实步骤与各参与方缺口见 [用户入口验收手册](docs/agents/m3-user-entry-acceptance.md)。
+真实正向当前待本人订单样本，不能把本地正例或登录 API 200 当成业务验收。

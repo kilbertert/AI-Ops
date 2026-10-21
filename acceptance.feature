@@ -3369,3 +3369,30 @@ Feature: 隔离栈的预检与复跑（M3-LIVE-REPLAY-R1）
       When 执行 live_replay.py cleanup
       Then 该项记成观测失败并让退出码非零
       And 不把「读不到」写成「没有容器」「端口已释放」或「生产面未变化」
+
+Feature: M3 使用明确授权会话验收用户入口
+  Rule: 文件预检与真实登录证明分别记录
+    Scenario: USER-ENTRY-01 默认预检不发送请求
+      Given 会话和订单由明确授权的私有文件提供且服务令牌来自隔离栈配置
+      When 执行 user_entry.py preflight
+      Then HTTP 请求数为零且证据不含会话、令牌或订单号
+      And 文件合法不能被报告为已证明正常登录来源
+
+    Scenario: USER-ENTRY-02 正式会话解析与本人授权
+      Given 一次性 Gateway 使用真实 RedisThirdSessionResolver 和合成外部依赖
+      When 有效 consumer 会话请求本人订单
+      Then 一次派发产生同 run 的 succeeded 快照和 matched 配置身份
+      And 缺失或失效会话、错误服务令牌、他人或外租户订单均拒绝且零派发
+
+  Rule: 一次运行只派发一次且证据不足不报通过
+    Scenario: USER-ENTRY-03 并发与断线保留发送标记
+      Given 输出目录只能独占创建发送标记
+      When 并发运行或首次请求后连接断开
+      Then 最多发送一次且第二次运行拒绝发送
+      And 非回环目标被拒绝且重定向不携带凭据跟随
+
+    Scenario: USER-ENTRY-04 成功须核对记录和观测
+      Given HTTP 回执声称 succeeded
+      When 记录缺失、配置身份不同、日志不可读或发现构造身份启动器
+      Then 工具非零退出且不报告 confirmed
+      And 即使核对通过也不声称 App 已接入或登录来源已证明
