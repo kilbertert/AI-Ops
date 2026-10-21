@@ -94,4 +94,5 @@ docker build \
 
 echo
 echo "ok: $OUT_IMAGE"
-echo "下一步：在 docker-compose.yaml 里把 web.image 指向它，或设置 DIFY_REGISTRY/镜像覆盖变量。"
+echo "下一步：在 deploy/.env 里写 DIFY_WEB_IMAGE=$OUT_IMAGE，然后"
+echo "  docker compose up -d --force-recreate web   # 只 up 不会重读镜像，必须 force-recreate"

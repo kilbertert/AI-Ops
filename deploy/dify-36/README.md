@@ -256,20 +256,51 @@ weaviate 空闲 52.7 MiB。
 
 决定与取舍记在 **ADR-0060**（含被否掉的四个替代形态）；本节只讲怎么做。
 
-本实例跑的是**未改动的上游镜像**。有三处上游 1.17.1 还没有的行为，以补丁形式打上去：
+本实例跑的 api 是**未改动的上游镜像 + 只读文件挂载**。上游 1.17.1 还没有的行为，以补丁形式打上去：
 
 | 补丁 | 上游行为 | 本实例要的 |
 |---|---|---|
 | `01`/`02` | `POST /v1/datasets/{id}/retrieve` 只走 vector 路径；`HitTestingService.retrieve` 收了 `external_retrieval_model` 却从不使用 | `provider=external` 的数据集改走 `HitTestingService.external_retrieve`，返回 `content/title/score/metadata` 形状；请求里的 `metadata_filtering_conditions` 一并透传给供应商 |
 | `03`/`04` | `external_knowledge_apis.settings` 里的 `api_key` 按 JSON 明文存 | 用 Dify 自己的 tenant 密钥提供者加密（`enc:v1:` 前缀），读出时解密；旧明文行仍可读。**列表端点返回 `[__HIDDEN__]`**，只有单模板 GET 回填明文 —— 列表没有编辑权限检查 |
 | `05` | 删除 dataset 不清理 `external_knowledge_bindings`（没有外键） | 删库时一并删绑定 |
+| `06`/`07` | 控制台建外部知识库时，`Knowledge ID` 只是一个空白输入框 | 加 `GET /datasets/external-knowledge-api/{id}/knowledge`，把网关能服务的 `knowledge_id` 列出来，给下面的 web 选择器用 |
 
 **为什么是补丁而不是整文件挂载**：补丁带上下文，升级时 `apply.sh` 的 sha256 核对会直接
 失败，逼着重做；整文件副本则会让"上游改了什么"隐身在两份长文件之间。核对是前置条件，
 不是提示 —— 摘要不匹配就非零退出，绝不把陈旧补丁挂上去跑。
 
-**为什么不是重做镜像**：36 上的镜像来自 `docker.1panel.live`，自建镜像要把整条构建链
+**api 为什么不重做镜像**：36 上的镜像来自 `docker.1panel.live`，自建 api 镜像要把整条构建链
 （`uv sync`、插件包、2.9 GB 上下文）搬上生产主机，爆炸半径从"5 个文件"变成"一整条链"。
+
+### web 侧：只能重做镜像（2026-10-21）
+
+上一条的"不重做镜像"只对 api 成立。`dify-web` 镜像里只有编译后的 `.next`，**没有源码**，
+所以控制台界面的改动无法用文件挂载实现：必须按 tag 取源码 → 打补丁 → 重建。
+
+`web-patches/` 是这条链，纪律与 `patches/apply.sh` 相同（版本钉死 + 上游文件 sha256 核对）：
+
+- `build-web-image.sh` 在**开发机**上跑完整构建，产出 `aiops/dify-web-patched:1.17.1`；
+- 但 `docker.1panel.live` 对开发机回 403，`FROM` 拿不到上游镜像。所以 36 上实际的组装是
+  **在 36 本地**用上游镜像做 base，把开发机产出的构建产物 COPY 进去：
+  ```dockerfile
+  FROM docker.1panel.live/langgenius/dify-web:1.17.1
+  COPY --chown=dify:dify .next/standalone/ /app/targets/next/
+  COPY --chown=dify:dify .next/static/ /app/targets/next/web/.next/static/
+  COPY --chown=dify:dify public/ /app/targets/next/web/public/
+  ```
+  （与上游 Dockerfile 的 COPY 三行一一对应，目标路径不能改：`entrypoint.sh` 写死了
+  `node /app/targets/next/web/server.js`。）
+- 上线：`deploy/.env` 里写 `DIFY_WEB_IMAGE=aiops/dify-web-patched:1.17.1`，然后
+  `docker compose up -d --force-recreate web`。**`up -d` 不会重读镜像**，必须 force-recreate。
+- 回滚：把 `DIFY_WEB_IMAGE` 清空再 force-recreate 一次，回到上游镜像。
+
+**构建必须用 webpack。** 上游的 `pnpm build` 走 Turbopack，在这两台机器上都产不出东西
+（OOM 137 / 超时 124，`.next` 始终 1.1 MB）；`next build --webpack` 3.8 分钟成功。
+`build-web-image.sh` 已经把 Dockerfile 里那一行换掉，别改回去。
+
+**没有清单就退回上游组件**：选择器只在端点能列出知识源时替换那个输入框；列不出来
+（stock provider、网关不可达）就渲染上游原本的 `Input`，对别的 provider 行为一字不变。
+
 
 `patches/apply.sh` 的用法与判据写在脚本头注释里；产物是
 `volumes/app/patched-api/`（0444），compose 把**每一个文件**单独 `:ro` 挂进 api/worker
@@ -283,7 +314,8 @@ deploy/dify-36/
 ├── docker-compose.yaml     上游 1.17.1 裁剪版（改动处都带注释）
 ├── env.example             实例级变量的模板；复制成 deploy/.env 再填
 ├── check.sh                零网络自检：端口集合 + 向量库 + 补丁挂载 + squid 白名单顺序
-├── patches/                上游补丁集与重放脚本（见「上游补丁」）
+├── patches/                上游 api 补丁集与重放脚本（见「上游补丁」）
+├── web-patches/            上游 web 补丁与构建脚本；产物是重做的 web 镜像
 ├── acceptance.feature      本栈知识面与库卫生的验收约定
 ├── qa-plan.md              对应的系统验收计划（含部署与回滚）
 ├── nginx/                  上游 nginx 资产原样拷贝（只加 :ro）
