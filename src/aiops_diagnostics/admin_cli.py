@@ -231,11 +231,15 @@ def pull_dify(
         allowed_models=allowed_models_from_settings(settings),
     )
     context = admin_context(tenant)
+    from aiops_diagnostics.dify_workspaces import DifyWorkspaces
+
+    workspaces = DifyWorkspaces(database)
+    resolved_workspace = _workspace_for(workspaces, tenant, console.environment)
     source = DifyDslSource(
         base_url=console.dify_console_base_url,
         app_id=app_id,
         api_key=console.dify_console_api_key,
-        workspace_id=console.dify_console_workspace_id,
+        workspace_id=resolved_workspace,
     )
     try:
         if dry_run:
@@ -354,6 +358,10 @@ def _console_settings_from(path: Path) -> dict[str, str]:
         "AIOPS_GATEWAY_DIFY_CONSOLE_WORKSPACE_ID",
         "AIOPS_GATEWAY_DIFY_KNOWLEDGE_BINDINGS",
         "AIOPS_GATEWAY_DIFY_TOOL_BINDINGS",
+        # 部署身份（#886）**也在这里**：workspace 按 (租户, 环境) 解析，而 41 上的
+        # `--config` 就是 `/etc/aiops-41/production.env`。只从进程 env 读它会让
+        # 「文件里写好了、命令却说没配」重演一次 #625 的形态。
+        "AIOPS_GATEWAY_ENVIRONMENT",
     )
     return {name.lower().removeprefix("aiops_gateway_"): (values.get(name) or "") for name in keys}
 
@@ -379,6 +387,16 @@ def _dify_console_and_db(ctx: typer.Context, db: Path | None) -> tuple[Any, Path
             console,
             **{name: value for name, value in from_file.items() if value and not getattr(console, name, "")},
         )
+    # 部署身份与两条命令的**其他**密钥同源（同一个 `--config` 文件），因为它就是
+    # `AIOPS_GATEWAY_ENVIRONMENT` —— 41 上那份 `/etc/aiops-41/production.env` 里的一行。
+    if not console.environment:
+        typer.secho(
+            "缺少 AIOPS_GATEWAY_ENVIRONMENT：workspace 按 (租户, 环境) 解析，环境取本机部署身份"
+            "（放在服务端配置文件或进程环境里）。",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=2)
     if not console.dify_console_base_url or not console.dify_console_api_key:
         typer.secho(
             "缺少 Dify 控制台配置：需要 AIOPS_GATEWAY_DIFY_CONSOLE_BASE_URL 与 "
@@ -451,6 +469,7 @@ def sync_from_dify(
         DifyDslSource,
         sync_binding_from_dify,
     )
+    from aiops_diagnostics.dify_workspaces import DifyWorkspaceError, DifyWorkspaces
 
     console, database = _dify_console_and_db(ctx, db)
     settings = _reconcile_settings(ctx.obj.get("config_file") if ctx.obj else None)
@@ -485,12 +504,40 @@ def sync_from_dify(
 
     outcomes: list[dict[str, Any]] = []
     worst = 0
+    workspaces = DifyWorkspaces(database)
+    environment = console.environment
+    # **先全部解析，再开始同步**（评审要点，也是本票的核心判据）：一个租户解析不出来，
+    # 整条命令在做任何一次写之前就拒绝。逐个"边解析边同步"会让前半段已经写进生产，
+    # 而退出码仍是非零 —— 那时"部分成功"已经发生了，回滚无从谈起。
+    resolved: dict[str, str] = {}
+    unresolved: list[dict[str, str]] = []
+    for binding in bindings:
+        try:
+            resolved[binding.tenant_id] = _workspace_for(workspaces, binding.tenant_id, environment)
+        except DifyWorkspaceError as exc:
+            unresolved.append({"tenant_id": binding.tenant_id, "code": exc.code, "message": exc.message})
+    if unresolved:
+        typer.echo(
+            json.dumps(
+                {
+                    "dry_run": dry_run,
+                    "refused": "有租户解析不到 workspace，整条命令不做任何写",
+                    "environment": environment,
+                    "unresolved": unresolved,
+                    "outcomes": [],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        )
+        raise typer.Exit(code=1)
+
     for binding in bindings:
         source = DifyDslSource(
             base_url=console.dify_console_base_url,
             app_id=binding.app_id,
             api_key=console.dify_console_api_key,
-            workspace_id=console.dify_console_workspace_id,
+            workspace_id=resolved[binding.tenant_id],
         )
         try:
             outcome = sync_binding_from_dify(
@@ -534,6 +581,65 @@ def sync_from_dify(
     typer.echo(json.dumps({"dry_run": dry_run, "outcomes": outcomes}, ensure_ascii=False, indent=2))
     if worst:
         raise typer.Exit(code=1)
+
+
+def _workspace_for(workspaces: Any, tenant_id: str, environment: str) -> str:
+    """这个租户的 workspace —— 解析失败就**抛**，调用方不许跳过（#886）。
+
+    与 ``admin sync-from-dify`` 的旧行为相反：旧代码把一个固定常量套到 N 个租户上，
+    多 workspace 之后那等于"把 A 的正文发进 B 的 workspace"。而跳过也不行 ——
+    一次 sync 漏掉半个租户却退 0，是最难发现的一种。
+
+    解析函数的四个码（``UNRESOLVED`` / ``CREATING`` / ``FAILED`` / ``UNKNOWN``）在这里
+    全部原样上抛：它们各自对应不同的下一步，合成一句话就把那个区别丢了。
+    """
+    from aiops_diagnostics.dify_workspaces import DifyWorkspaceError
+
+    try:
+        return workspaces.resolve(tenant_id, environment)
+    except DifyWorkspaceError as exc:
+        raise DifyWorkspaceError(
+            exc.code,
+            f"[租户 {tenant_id}] {exc.message}",
+            http_status=exc.http_status,
+            retryable=exc.retryable,
+        ) from exc
+
+
+def _workspace_for(workspaces: Any, tenant_id: str, environment: str) -> str:
+    """这个租户的 workspace —— 解析失败就**抛**，调用方不许跳过（#886）。
+
+    与 ``admin sync-from-dify`` 的旧行为相反：旧代码把一个固定常量套到 N 个租户上，
+    多 workspace 之后那等于"把 A 的正文发进 B 的 workspace"。而跳过也不行 ——
+    一次 sync 漏掉半个租户却退 0，是最难发现的一种。
+
+    解析函数的四个码（``UNRESOLVED`` / ``CREATING`` / ``FAILED`` / ``UNKNOWN``）在这里
+    全部原样上抛：它们各自对应不同的下一步，合成一句话就把那个区别丢了。
+    """
+    from aiops_diagnostics.dify_workspaces import DifyWorkspaceError
+
+    try:
+        return workspaces.resolve(tenant_id, environment)
+    except DifyWorkspaceError as exc:
+        raise DifyWorkspaceError(
+            exc.code,
+            f"[租户 {tenant_id}] {exc.message}",
+            http_status=exc.http_status,
+            retryable=exc.retryable,
+        ) from exc
+
+
+def _deployment_environment_or_exit() -> str:
+    """CLI 的部署身份 —— 与 `ensure-workspace` 同一条守卫，缺了就退非零。"""
+    environment = GatewayServerSettings.from_env().environment
+    if not environment:
+        typer.secho(
+            "缺少 AIOPS_GATEWAY_ENVIRONMENT：workspace 按 (租户, 环境) 解析，环境取本机部署身份",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    return environment
 
 
 @admin_app.command("ensure-workspace")

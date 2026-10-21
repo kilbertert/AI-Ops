@@ -313,6 +313,9 @@ def _pull_env(tmp_path: Path, *, body: str | None = None) -> dict:
             "AIOPS_GATEWAY_DIFY_CONSOLE_BASE_URL=http://dify.invalid:10008\n"
             "AIOPS_GATEWAY_DIFY_CONSOLE_API_KEY=console-key-not-a-real-value\n"
             "AIOPS_GATEWAY_DIFY_CONSOLE_WORKSPACE_ID=ws-1\n"
+            # 部署身份（#886）：两条运维命令都按 (租户, 环境) 解析 workspace，
+            # 环境取本机部署身份。它是**部署**属性，所以和上面三把控制台钥匙同一文件。
+            "AIOPS_GATEWAY_ENVIRONMENT=41\n"
         ),
         encoding="utf-8",
     )
@@ -320,10 +323,37 @@ def _pull_env(tmp_path: Path, *, body: str | None = None) -> dict:
         import stat as _stat
 
         config.chmod(_stat.S_IRUSR | _stat.S_IWUSR)
+    # 测试租户在映射表里各有一行 `ready`，workspace id 与租户一一对应 —— 这样
+    # "每个租户用自己的 workspace"是可断言的，而不是所有租户都拿到同一个常量。
+    # **无论调用方是否自带配置文件都种**：一条自定义 `body` 的用例同样要能解析。
+    from aiops_diagnostics.dify_workspaces import DifyWorkspaces
+
+    workspaces = DifyWorkspaces(tmp_path / "gateway.db")
+    for tenant_id in _SEEDED_TENANTS:
+        _seed_workspace(workspaces, tenant_id)
     return {
         "AIOPS_HOME": str(tmp_path),
         "AIOPS_GATEWAY_DATABASE_FILE": str(tmp_path / "gateway.db"),
+        # 自定义 `body` 时文件里没有部署身份，用进程 env 补上；自定义 body 的用例
+        # 测的是别的东西，不该因为这一条而失败。
+        **({} if body is None else {"AIOPS_GATEWAY_ENVIRONMENT": "41"}),
     }
+
+
+#: `tests/test_cli.py` 里出现过的租户 id。每个都在映射表里有一行 `ready`。
+_SEEDED_TENANTS = ("T-PULL", "T-SYNC")
+
+
+def _seed_workspace(workspaces, tenant_id: str, environment: str = "41") -> str:
+    workspace_id = f"ws-{tenant_id.lower()}"
+    with_sql = (
+        "INSERT OR REPLACE INTO dify_workspaces (tenant_id, environment, workspace_id,"
+        " setup_state, created_at, updated_at)"
+        " VALUES (?, ?, ?, 'ready', '2026-10-21T00:00:00+00:00', '2026-10-21T00:00:00+00:00')"
+    )
+    with workspaces._connection(write=True) as connection:  # noqa: SLF001 — 测试造的是行
+        connection.execute(with_sql, (tenant_id, environment, workspace_id))
+    return workspace_id
 
 
 def _pull_args(tmp_path: Path) -> list[str]:
@@ -441,7 +471,10 @@ def test_pull_dify_reads_the_console_keys_from_the_config_flag(tmp_path: Path, m
     config.write_text(
         "AIOPS_AGENT_MODEL=deepseek-v4-flash\n"
         "AIOPS_GATEWAY_DIFY_CONSOLE_BASE_URL=http://dify.invalid:10008\n"
-        "AIOPS_GATEWAY_DIFY_CONSOLE_API_KEY=console-key-not-a-real-value\n",
+        "AIOPS_GATEWAY_DIFY_CONSOLE_API_KEY=console-key-not-a-real-value\n"
+        # 部署身份也在这份文件里（#886）：41 上它是 `/etc/aiops-41/production.env` 的一行，
+        # 而这条用例正是"文件里配好了、命令就该读到"那条判据。
+        "AIOPS_GATEWAY_ENVIRONMENT=41\n",
         encoding="utf-8",
     )
     if os.name != "nt":
@@ -455,6 +488,10 @@ def test_pull_dify_reads_the_console_keys_from_the_config_flag(tmp_path: Path, m
         "AIOPS_GATEWAY_DATABASE_FILE": str(tmp_path / "gateway.db"),
     }
     (tmp_path / "empty-home").mkdir()
+    # 这条用例自己搭环境（不经过 `_pull_env`），所以映射行也要自己种。
+    from aiops_diagnostics.dify_workspaces import DifyWorkspaces
+
+    _seed_workspace(DifyWorkspaces(tmp_path / "gateway.db"), "T-PULL")
 
     result = CliRunner().invoke(app, ["--config", str(config), *_pull_args(tmp_path)], env=env)
     assert result.exit_code == 0, result.output
@@ -1017,3 +1054,136 @@ def test_sync_refuses_a_dataset_registered_to_another_tenant(tmp_path: Path, mon
     assert "另一个租户" in result.stdout or "租户" in result.stdout
     live = manager.list(context)[0]
     assert live.published_version == 1, "被拒的同步不该发布任何版本"
+
+
+# --- #886：两条运维命令按租户解析 workspace，且解析失败整条拒绝 --------------------
+
+
+def test_pull_dify_uses_the_tenants_own_workspace(tmp_path: Path, monkeypatch) -> None:
+    """`pull-dify` 用**这个租户**的 workspace，不是配置里的那个常量。
+
+    变异对照：把 `workspace_id=` 改回 `console.dify_console_workspace_id`，本条变红 ——
+    配置里那个值是 `ws-1`，而这个租户映射到 `ws-t-pull`。
+    """
+    seen = _serve_dify_export(monkeypatch)
+
+    result = CliRunner().invoke(app, _pull_args(tmp_path), env=_pull_env(tmp_path))
+
+    assert result.exit_code == 0, result.output
+    assert seen["headers"]["x-workspace-id"] == "ws-t-pull"
+
+
+def _seed_second_registry_tenant(tmp_path: Path, tenant: str) -> None:
+    """给第二个租户也种一条已发布 agent + 注册表绑定（与 41 上的多租户形状一致）。"""
+    from dataclasses import replace as _replace
+
+    from aiops_diagnostics.agent_lifecycle import AgentManager, AgentStore
+    from aiops_diagnostics.agent_manifest import admin_context
+    from aiops_diagnostics.dify_app_registry import DifyAppBinding, DifyAppRegistry
+    from aiops_diagnostics.dify_dsl_pull import map_dsl_to_config
+
+    manager = AgentManager(
+        AgentStore(tmp_path / "gateway.db"),
+        knowledge_resolver=_AllowAll(),
+        allowed_models=("deepseek-v4-flash",),
+    )
+    context = admin_context(tenant)
+    agent = manager.create(
+        context,
+        name="小趋-客服",
+        description="同步用",
+        config=map_dsl_to_config(
+            DSL_FIXTURE.read_text(encoding="utf-8"), agent_type="customer", knowledge_base_ids=("kb-live",)
+        ),
+    )
+    agent = manager.update(
+        context,
+        agent.agent_id,
+        expected_revision=agent.revision,
+        name="小趋-客服",
+        description="同步用",
+        config=_replace(agent.config, prompt="旧正文"),
+    )
+    manager.publish(context, agent.agent_id, expected_revision=agent.revision)
+    DifyAppRegistry(tmp_path / "gateway.db").put(
+        DifyAppBinding(
+            tenant_id=tenant,
+            business_entry="consumer",
+            app_id="a975c8e5-ad9e-425c-84c9-77581a0a2bed",
+            agent_name="小趋-客服",
+        )
+    )
+
+
+def test_sync_uses_each_tenants_own_workspace(tmp_path: Path, monkeypatch) -> None:
+    """一次 sync 覆盖多个租户时，**每个请求带的是它自己租户的 workspace**（#886）。
+
+    这是"一个 workspace_id 套到 N 个租户"最明显的例子：错的表现是 A 的正文被发进
+    B 的 workspace，而两条命令都退 0。
+
+    变异对照：把 `workspace_id=` 改回固定常量，两个租户的请求头会完全相同 ⇒ 本条变红。
+    """
+    monkeypatch.setattr(
+        "aiops_diagnostics.agent_debug.KbBindingResolver.validate",
+        lambda self, tenant_id, knowledge_base_ids: None,
+    )
+    _seed_registry_and_agent(tmp_path, prompt="旧正文", tenant="T-SYNC")
+    _seed_second_registry_tenant(tmp_path, "T-OTHER")
+
+    # 记录**每个 source 用的 workspace**：`DifyDslSource` 是唯一把 workspace 带进
+    # 导出请求的地方，所以在这里看比看请求头更直接（一次 sync 有 N 个请求）。
+    requested: list[str] = []
+    _serve_dify_export(monkeypatch)
+    from aiops_diagnostics.dify_dsl_pull import DifyDslSource
+
+    original_init = DifyDslSource.__init__
+
+    def recording_init(self, **kwargs):
+        requested.append(kwargs["workspace_id"])
+        original_init(self, **kwargs)
+
+    monkeypatch.setattr(DifyDslSource, "__init__", recording_init)
+
+    env = _pull_env(tmp_path)
+    from aiops_diagnostics.dify_workspaces import DifyWorkspaces
+
+    _seed_workspace(DifyWorkspaces(tmp_path / "gateway.db"), "T-OTHER")
+    result = CliRunner().invoke(app, [*_sync_args(tmp_path), "--kb-url", "http://kb.invalid"], env=env)
+
+    assert result.exit_code == 0, result.output
+    assert sorted(requested) == ["ws-t-other", "ws-t-sync"], "每个租户必须用自己那一个 workspace"
+
+
+def test_sync_refuses_the_whole_command_when_one_tenant_cannot_resolve(tmp_path: Path, monkeypatch) -> None:
+    """任一租户解析失败 ⇒ **整条命令拒绝、退非零、报告是哪个租户**（#886）。
+
+    "跳过继续"是最难发现的一种：一次 sync 漏掉半个租户却退 0，而运营会以为都同步了。
+    这里同时钉住"**什么都不写**"：拒绝必须发生在任何一次发布之前。
+    """
+    monkeypatch.setattr(
+        "aiops_diagnostics.agent_debug.KbBindingResolver.validate",
+        lambda self, tenant_id, knowledge_base_ids: None,
+    )
+    manager, context = _seed_registry_and_agent(tmp_path, prompt="旧正文", tenant="T-SYNC")
+    _seed_second_registry_tenant(tmp_path, "T-OTHER")
+    _serve_dify_export(monkeypatch)
+
+    env = _pull_env(tmp_path)
+    from aiops_diagnostics.dify_workspaces import DifyWorkspaces
+
+    # T-OTHER 的行先种上，再改成"创建失败" —— 它因此解析不出来（"有行但不可用"，
+    # 与"没有行"是两种不同的码，这里要的是前者）。
+    _seed_workspace(DifyWorkspaces(tmp_path / "gateway.db"), "T-OTHER")
+    with DifyWorkspaces(tmp_path / "gateway.db")._connection(write=True) as connection:  # noqa: SLF001
+        connection.execute("UPDATE dify_workspaces SET setup_state = 'failed' WHERE tenant_id = 'T-OTHER'")
+    before = manager.get(context, manager.list(context)[0].agent_id).published_version
+
+    result = CliRunner().invoke(app, [*_sync_args(tmp_path), "--kb-url", "http://kb.invalid"], env=env)
+
+    assert result.exit_code == 1
+    body = json.loads(result.stdout)
+    assert body["outcomes"] == [], "拒绝之后不该有任何一次同步发生了"
+    assert [item["tenant_id"] for item in body["unresolved"]] == ["T-OTHER"]
+    assert body["unresolved"][0]["code"] == "DIFY_WORKSPACE_FAILED"
+    after = manager.get(context, manager.list(context)[0].agent_id).published_version
+    assert after == before, "拒绝时 T-SYNC 那一侧也一行都不该写"
