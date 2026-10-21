@@ -1,8 +1,9 @@
 # M3 本人充电状态：App / BFF 接线契约
 
-> **状态：2026-10-21 Codex 已审查，选择修订 B；尚未实施。**
-> 当前主线接口仍只返回执行回执；消费者快照分支正在实现以下新增的 `charging_status` 及消费者最终放行判据是下一片
-> 的实施要求，不能当成线上能力。生产 M3 关闭，真实登录支线按用户决定停止重试。
+> **状态：Gateway 修订 B 已由 #920 合并并部署；App 候选未合入/未发布。**
+> 消费者成功响应的 charging_status 与最终授权代码已具备，生产 M3 四开关仍关闭。
+> H5 同源转发缺口已实测；候选与下一步见 [App 入口交接](m3-app-entry-handoff.md)。
+> 正常登录用户整轮仍未验收，登录支线按用户决定停止重试。
 >
 > 核对基线：`2032ef8c`。原始外部仓库资料、部署路径和日志留私有记录；本页只保留交接契约。
 > 相关：[用户入口验收手册](m3-user-entry-acceptance.md)、[前端联调总览](frontend-api-brief.md)、
@@ -20,7 +21,7 @@
 | 本人订单详情页 | 采样源码无 AI-Ops 入口 | 不代表所有分支或所有 App 版本 |
 | 实时充电页 | 已轮询公司 `chargingInfo`，不经 M3 | 源码事实 |
 | H5 请求源 | 生产 H5 的 `AIOPS_BASE_URL` 为空，走同源；开发 H5 用 `/aiops`；非 H5 用环境 APIURL | 不能从 env.js 单独推定 H5 的完整入口 |
-| 服务端转发 | 已核对的 API 入口注入 Bearer，外部 `third-session` 转内部 `X-Third-Session`，缺入口头补 consumer | H5 同源 `/v1/` 到这段配置的完整入口链仍须在其 vhost/网络记录核对 |
+| 服务端转发 | 已核对的 API 入口注入 Bearer，外部 `third-session` 转内部 `X-Third-Session`，缺入口头补 consumer | H5 同源无该转发，已实测落到首页 HTML；候选未部署 |
 | 部署产物与访问窗口 | 全部 689 个 JS 块未命中 `charging-status`；最近 40 万行日志无 delegated | 有限窗口，不宣称从未调用或精确来源提交已知 |
 | 生产开关 | 已核对的四个 M3 键未配置 | 正常认证与请求校验后返回 AGENT_RUN_DISABLED |
 
@@ -29,7 +30,7 @@
 HTTP/code/网络错误分类，并核对同步请求的端到端超时。公司侧发版分支、制品来源提交与
 责任人仍待确认，不从提交作者推定负责人，不接管外部仓库。
 
-## 2. 当前请求与错误契约
+## 2. 请求与错误契约
 
 ```http
 POST /v1/orders/{order_no}/charging-status/delegated
@@ -47,7 +48,7 @@ Content-Type: application/json
 
 | HTTP | 形状/代码 | 页面行为要求 |
 |---:|---|---|
-| 200 | 执行回执；目前无业务状态字段 | 修订 B 实施前不显示“充电中/已结束” |
+| 200 | 原回执 + 同 run charging_status 五字段 | 展示状态角色与观察时间，不把执行成功当业务正常 |
 | 400 / 422 | INVALID_ORDER_NO / INVALID_REQUEST | 参数错误，不自动重试 |
 | 401 | ACCESS_TOKEN_REQUIRED / INVALID_ACCESS_TOKEN | 引导重新登录 |
 | 403 | CONSUMER_SCOPE_REQUIRED / INSUFFICIENT_SCOPE | 当前身份或入口不可用，不换身份重试 |
