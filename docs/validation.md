@@ -189,6 +189,32 @@ Codex turn … failed: 403 Forbidden [sk-x4CF…] 预扣费额度失败，
 PUT 更新后的状态，避免夹具保留旧 instruction 却仍被当成成功。全量初跑 3215 passed / 9 skipped / 1 failed：唯一失败为并行部署前进后，dry-run
 拒绝旧基线。同步主线后复跑该检查，最终结果见本 PR。
 
+## 2026-10-21 · 试运行的草稿来源按发起人解析（#885）
+
+**范围**：`gateway_api.py`（`_trial_draft_from_console` 按 `binding.tenant_id` 解析；
+`_workspace_for_publish` 改名为 `_workspace_for_tenant`，发布与试运行共用一份）。
+
+### 一、判据（`tests/test_dify_trial.py`，新增 2 例）
+
+| 用例 | 钉住的规则 |
+|---|---|
+| 草稿来源按绑定租户 | `DifyDslSource.workspace_id` 是 `ws-tenant-885`，**不是**配置常量 |
+| 未开户明确拒绝 | 404 `DIFY_WORKSPACE_UNRESOLVED`，理由可读，**不回落平台工作区** |
+
+**顺序是判据的一部分**：解析被放在**查 agent 之前**。放后面的话，一个没开户的租户会先在
+`AGENT_NOT_REGISTERED` 上被拒 —— 而真正的原因是他的租户还没有工作区（这条是先把代码写
+在后面时实测到的，不是推演）。
+
+**突变复验**（两处，均复跑确认变红）：把 source 的 workspace 换回常量 ⇒ 第一条红；
+把解析换回常量 ⇒ 第二条例红（回落到平台工作区后请求继续走了下去）。
+
+### 二、**没有**做到的（据实）
+
+- **没有真机验收**：41 的 `dify_workspaces` 仍为空，"租户 A 的人只看得到 A 的草稿"
+  要等第一行映射 + 一次真实试运行。
+- **本次只改了草稿来源**：试运行的**订单范围**（按发起人公司身份的可见站点）是 #782 已
+  交付的部分，本票不碰；平台租户落在自己的平台 workspace 是 #882。
+
 ## 2026-10-21 · 发布钉住发起人所在的 workspace（#884）
 
 **范围**：`dify_console_publish.py`（桥的两步判定 + 内部令牌键）、
