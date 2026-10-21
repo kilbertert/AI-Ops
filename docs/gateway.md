@@ -347,3 +347,14 @@ aiops remote evidence RUN_ID
 6. 需要跨节点 durable worker 时再引入 Temporal；第一版不把 Temporal 作为便携包运行时依赖。
 
 这些硬化完成前，Gateway 仅适合内网、测试和受控工程师验收，不宣称已经完成生产多租户认证。
+
+
+### M3 委派响应的本人充电快照
+
+`POST /v1/orders/{order_no}/charging-status/delegated` 在已确认成功的回执旁返回
+`charging_status`：`order_no/status_code/status_role/observed_at/source`，来自同 run
+已持久化快照；`result_sha256` 仍按该快照计算，不再次读取 CPMS。
+返回前重新检查本人订单授权和现行执行绑定、记录状态/有效期、配置身份；
+订单已不可见为 404，授权源失败为 503，其余无有效结果时不返回业务正文。
+成功及业务错误均 no-store。App 应显示本次观察时间，未知状态不猜测，超时后不自动重发。
+该变更不新增轮询或幂等键，不启用生产开关，真实用户与 App 验收另行执行。

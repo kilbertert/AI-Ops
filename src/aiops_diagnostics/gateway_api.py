@@ -145,6 +145,7 @@ from aiops_diagnostics.knowledge_retrieval import (
     normalize_search_response,
 )
 from aiops_diagnostics.metrics_store import MetricsValidationError
+from aiops_diagnostics.order_status import KNOWN_STATUS_CODES, StatusRole, role_of
 from aiops_diagnostics.order_visibility import DeviceTenantError, tenant_matches
 from aiops_diagnostics.query_scope import (
     ShopDirectory,
@@ -2807,7 +2808,10 @@ def create_gateway_app(
             raise StandardAPIError(
                 status.HTTP_502_BAD_GATEWAY, "AGENT_RUN_UNAVAILABLE", "agent run unavailable"
             ) from exc
-        settled = context.agent_run_store.get(run.run_id)
+        try:
+            settled = context.agent_run_store.get(run.run_id)
+        except (ValueError, TypeError) as exc:
+            raise StandardAPIError(502, "AGENT_RUN_NO_RESULT", "agent run produced no result") from exc
         if settled is None:
             raise StandardAPIError(
                 status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -2821,7 +2825,7 @@ def create_gateway_app(
             raise StandardAPIError(
                 status.HTTP_502_BAD_GATEWAY, "AGENT_RUN_NO_RESULT", "agent run produced no result"
             )
-        return settled.receipt()
+        return _consumer_charging_result(selected_settings, context, caller, run)
 
     @app.post("/v1/internal/charging-status/claims/{run_id}")
     def claim_charging_status(
@@ -5047,6 +5051,89 @@ def _charged_snapshot_response(
         "environment": settings.execution_environment,
         "gateway_version": __version__,
     }
+
+
+def _consumer_charging_result(
+    settings: GatewayServerSettings, context: Any, caller: ScopeContext, issued: AgentRun
+) -> dict[str, Any]:
+    # 节点领取与交付消费者是两次放行；阻塞的外部授权必须在最后一次本地读取之前完成。
+    try:
+        _require_visible_order(context, caller, issued.order_no)
+    except StandardAPIError as exc:
+        context.agent_run_store.refuse(
+            issued.run_id, "order_not_visible" if exc.status_code == 404 else "authorization_unavailable"
+        )
+        raise
+    try:
+        current = AgentRunConfig.load(Path(settings.agent_run_config_file))
+    except AgentRunConfigError as exc:
+        context.agent_run_store.refuse(issued.run_id, "binding_unavailable")
+        raise StandardAPIError(
+            503, "AGENT_RUN_CONFIG_UNAVAILABLE", "agent run unavailable", retryable=True
+        ) from exc
+    try:
+        latest = context.agent_run_store.get(issued.run_id)
+    except (ValueError, TypeError) as exc:
+        raise StandardAPIError(502, "AGENT_RUN_NO_RESULT", "agent run produced no result") from exc
+    if latest is None or latest.state != SUCCEEDED:
+        raise StandardAPIError(502, "AGENT_RUN_NO_RESULT", "agent run produced no result")
+    if (
+        latest.scope_fingerprint != caller.scope_fingerprint
+        or latest.scope_fingerprint != issued.scope_fingerprint
+        or latest.order_no != issued.order_no
+        or latest.operation != issued.operation
+        or latest.environment != issued.environment
+        or latest.environment != settings.execution_environment
+        or current.environment != latest.environment
+        or latest.app_id != issued.app_id
+        or current.snail_app_id != latest.app_id
+        or latest.agent_id != issued.agent_id
+        or str(current.snail_agent_id) != latest.agent_id
+        or latest.expected_node_id != issued.expected_node_id
+        or current.expected_node_id != latest.expected_node_id
+        or latest.actual_node_id != latest.expected_node_id
+        or not any(
+            node.active and node.node_id == latest.actual_node_id and node.environment == latest.environment
+            for node in current.node_token_hashes.values()
+        )
+        or latest.expected_agent_version != issued.expected_agent_version
+        or (latest.expected_agent_version is not None and not latest.exec_config_confirmed)
+    ):
+        context.agent_run_store.refuse(issued.run_id, "consumer_release_mismatch")
+        raise StandardAPIError(403, "AGENT_RUN_NOT_ACTIVE", "agent run refused")
+    snapshot = latest.snapshot
+    try:
+        if not isinstance(snapshot, dict) or set(snapshot) != {
+            "order_no",
+            "status_code",
+            "status_role",
+            "observed_at",
+            "source",
+        }:
+            raise ValueError("invalid snapshot fields")
+        code = snapshot["status_code"]
+        if isinstance(code, bool) or not isinstance(code, (str, int)) or len(str(code)) > 32:
+            raise ValueError("invalid status code")
+        expected_role = (
+            role_of(code).value
+            if str(code) in {str(value) for value in KNOWN_STATUS_CODES}
+            else StatusRole.UNKNOWN.value
+        )
+        observed = datetime.fromisoformat(snapshot["observed_at"])
+        if (
+            snapshot["order_no"] != latest.order_no
+            or snapshot["status_role"] != expected_role
+            or snapshot["source"] != "cpms.chargingInfo"
+            or observed.utcoffset() != timedelta(0)
+            or latest.claimed_at is None
+            or latest.completed_at is None
+            or not latest.claimed_at <= observed <= latest.completed_at
+        ):
+            raise ValueError("inconsistent snapshot")
+    except (ValueError, TypeError, KeyError) as exc:
+        context.agent_run_store.refuse(issued.run_id, "snapshot_invalid")
+        raise StandardAPIError(502, "AGENT_RUN_NO_RESULT", "agent run produced no result") from exc
+    return {**latest.receipt(), "charging_status": snapshot}
 
 
 def _claim_payload(run: AgentRun) -> dict[str, Any]:
