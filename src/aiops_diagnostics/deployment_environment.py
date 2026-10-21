@@ -45,3 +45,17 @@ def canonical_environment(value: str) -> str:
     if not ENVIRONMENT_PATTERN.match(normalized):
         raise ValueError(ENVIRONMENT_FORMAT_MESSAGE)
     return normalized
+
+
+def require_deployment_identity(environment: str) -> str:
+    """起监听之前必须回答"我在哪个环境"；没有答案就**不起**。
+
+    必备性单独一个函数，是因为**"起监听"与"构造一个 settings"是两件事**：测试会构造
+    几十个 settings（它们不是部署），而每个真正的启动入口 —— `aiops-gateway serve`、
+    M2 隔离栈的两个 launcher —— 都必须过这一道。把必备性写进 `validate()` 会让前者
+    全部失败，把必备性只写在 `serve` 里会让后者绕过它（评审指出：两个 launcher 正是
+    这样绕过去的）。
+    """
+    if not environment:
+        raise ValueError("AIOPS_GATEWAY_ENVIRONMENT is required")
+    return canonical_environment(environment)

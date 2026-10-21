@@ -5,7 +5,7 @@
 `gateway_api.py`（`GET /v1/dify/workspace`）、`gateway_server.py`（serve 的启动前置）、
 `dify_login_provision.py`（环境判据改为共用一份）。
 
-### 一、自动化判据（`tests/test_dify_workspaces.py`，39 例）
+### 一、自动化判据（`tests/test_dify_workspaces.py`，44 例）
 
 | 用例组 | 钉住的规则 |
 |---|---|

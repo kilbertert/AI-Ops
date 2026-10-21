@@ -49,8 +49,15 @@ ADR-0059 决定「一租户一 workspace，按 `(tenant_id, environment)` 解析
 `canonical_environment` 放进 `from_env()` 会让 24 处测试调用（`test_config.py`、
 `test_routing.py`、`test_company_token_auth.py` 等）在没有部署身份的情况下全部失败，
 而它们测的是别的东西。区分点很清楚 —— **一个直接构造出来的 settings 不是一次部署，
-`serve` 才是**。所以 `validate()` 只判格式（空值合法且意味着"这个进程没有部署身份"，
-用到它的端点因此不启用），`gateway_server.serve` 在起监听前判非空。
+起监听才是**。所以 `validate()` 只判格式（空值合法且意味着"这个进程没有部署身份"，
+用到它的端点因此不启用），三个**启动入口**在起监听前判非空。
+
+**"三个启动入口"是评审逼出来的，不是设计时想到的。** `gateway_server serve` 不是唯一的
+起监听路径：M2 隔离栈的入口是 `tools/m2_close/gateway_launcher.py` 与
+`tools/m2_close/m3live/identity_launcher.py`，它们自己构造 app 再调 `uvicorn.run`。
+第一版只把门写在 `serve` 里，于是那台**连真实业务库**的网关成了唯一一个不知道自己
+在哪个环境的部署。修法是把判据抽成 `require_deployment_identity` 并让三个入口都过它 ——
+不是把检查复制三份（那是三份会漂的判据），而是让"必备性"本身也只有一个实现。
 
 ## 被否掉的替代形态
 

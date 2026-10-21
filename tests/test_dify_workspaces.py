@@ -264,6 +264,63 @@ def test_serving_without_an_environment_refuses_to_start(tmp_path: Path, monkeyp
     assert "AIOPS_GATEWAY_ENVIRONMENT is required" in result.output
 
 
+def test_the_m2_launchers_also_require_the_deployment_identity() -> None:
+    """`gateway_server serve` 不是唯一的启动路径（评审指出，成立）。
+
+    M2 隔离栈的入口是两个 launcher，它们构造 app 后自己调 `uvicorn.run` —— 只把必备性
+    写在 `serve` 里，等于让这台"不知道自己在哪个环境"的网关照常起监听，而这条路径正是
+    连真实业务库的那一条。判据必须只有一处实现，且三个入口都要过它。
+    """
+    root = Path(__file__).resolve().parents[1]
+    for launcher in (
+        root / "tools/m2_close/gateway_launcher.py",
+        root / "tools/m2_close/m3live/identity_launcher.py",
+    ):
+        text = launcher.read_text(encoding="utf-8")
+        assert "require_deployment_identity(" in text, f"{launcher.name} 没有过部署身份这道门"
+        # 顺序也要紧：门必须在建库与建 app **之前**，否则进程已经动了状态才拒绝。
+        assert text.index("require_deployment_identity(") < text.index("GatewayStore("), (
+            f"{launcher.name} 在建库之后才判部署身份"
+        )
+
+
+def test_require_deployment_identity_refuses_an_empty_value() -> None:
+    from aiops_diagnostics.deployment_environment import require_deployment_identity
+
+    with pytest.raises(ValueError, match="AIOPS_GATEWAY_ENVIRONMENT is required"):
+        require_deployment_identity("")
+
+
+def test_the_m2_template_declares_the_deployment_identity() -> None:
+    """`compose.yaml` 用这份模板作 `env_file`；缺这一行时**栈起不来**。"""
+    template = (Path(__file__).resolve().parents[1] / "deploy/m2-live-03/gateway.env.template").read_text(
+        encoding="utf-8"
+    )
+    assert "AIOPS_GATEWAY_ENVIRONMENT=41" in template
+
+
+def test_the_token_expiry_is_read_from_the_private_config_beside_its_secret(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """密钥从私有配置读，窗口也必须能在那儿调（评审指出，成立）。
+
+    只看进程 env 时，运维改了 `production.env` 里紧挨着密钥的那一行会**静默不生效** ——
+    而读者有充分理由认为两者同源。
+    """
+    from aiops_diagnostics.private_files import write_private_text
+
+    config = tmp_path / "gateway.env"
+    write_private_text(
+        config,
+        "AIOPS_GATEWAY_INTERNAL_TOKEN_SECRET=secret-0123456789abcdef\n"
+        "AIOPS_GATEWAY_INTERNAL_TOKEN_EXPIRE_SECONDS=120\n",
+    )
+    monkeypatch.setenv("AIOPS_GATEWAY_SERVER_CONFIG_FILE", str(config))
+    monkeypatch.delenv("AIOPS_GATEWAY_INTERNAL_TOKEN_EXPIRE_SECONDS", raising=False)
+
+    assert GatewayServerSettings.from_env().internal_token_expire_seconds == 120
+
+
 # ── 4. 只读端点：环境来自部署身份，不是请求 ───────────────────────────────
 
 

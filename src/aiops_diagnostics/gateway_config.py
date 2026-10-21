@@ -313,7 +313,12 @@ class GatewayServerSettings:
             or _file_value(file_values, "AIOPS_GATEWAY_ENVIRONMENT"),
             internal_token_secret=_env("AIOPS_GATEWAY_INTERNAL_TOKEN_SECRET")
             or _file_value(file_values, "AIOPS_GATEWAY_INTERNAL_TOKEN_SECRET"),
-            internal_token_expire_seconds=_env_int("AIOPS_GATEWAY_INTERNAL_TOKEN_EXPIRE_SECONDS", 300),
+            # 与 `kb_search_max_results` 同一条规则：密钥在私有配置里，窗口也该能在它旁边调。
+            # 只读进程 env 时，运维改了 `production.env` 里的这一行会**静默不生效** ——
+            # 而它旁边那把密钥是从文件里读到的，读者有充分理由认为两者同源。
+            internal_token_expire_seconds=_int_value(
+                file_values, "AIOPS_GATEWAY_INTERNAL_TOKEN_EXPIRE_SECONDS", 300
+            ),
             jev_base_url=_env("AIOPS_GATEWAY_JEV_BASE_URL")
             or _file_value(file_values, "AIOPS_GATEWAY_JEV_BASE_URL"),
             jev_api_key=_env("AIOPS_GATEWAY_JEV_API_KEY")
