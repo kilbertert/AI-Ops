@@ -36,8 +36,9 @@ import re
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from aiops_diagnostics.private_files import ensure_private_directory, protect_private_file
 
@@ -195,6 +196,130 @@ class DifyWorkspaces:
             ).fetchone()
         return row is not None
 
+    def row(self, tenant_id: str, environment: str) -> dict[str, Any] | None:
+        """整行，给开户那一步按状态分支（``resolve`` 只回答"能不能用"）。"""
+        tenant_id = _identifier(tenant_id, "tenant_id")
+        environment = _identifier(environment, "environment")
+        with self._connection() as connection:
+            found = connection.execute(
+                "SELECT * FROM dify_workspaces WHERE tenant_id = ? AND environment = ?",
+                (tenant_id, environment),
+            ).fetchone()
+        return dict(found) if found is not None else None
+
+    # ── writes（开户那一步用，#880） ──────────────────────────────────
+
+    def claim(
+        self,
+        tenant_id: str,
+        environment: str,
+        *,
+        owner: str,
+        lease_seconds: float,
+        allow_unknown: bool = False,
+    ) -> bool:
+        """**先占位**：原子地拿到"由我来建"的权利，成功返回 True。
+
+        顺序是这张表存在的全部理由（ADR-0059 §5.1）：同一个租户的两次首次登录可以同时
+        越过"表里没有行"这个检查，只有 ``UNIQUE(tenant_id, environment)`` + 先插入能把它们
+        串行化。反过来（先建后写）两个请求各建一个，后写的赢，前一个成为**永久孤儿** ——
+        Dify 没有删 tenant 的 API。
+
+        三种"本来就该我接着做"的情形返回 True（并接管租约）：
+
+        * 没有行 ⇒ 插入 ``creating``；
+        * ``failed`` ⇒ 重建（上一轮明确失败，``workspace_id`` 保持空）；
+        * ``creating`` 且**租约已过期** ⇒ 接管 —— 创建进程崩在中间，没有租约这条会永远卡住。
+
+        三种"别人正在做或已经做好"返回 False：``created`` / ``ready`` / 租约未过期的
+        ``creating``。``unknown`` **默认也返回 False**：它要先按名字对账，只有对账发现
+        "Dify 里确实没有"之后（``allow_unknown=True``）才可以接管 —— 直接抢会把一个已经
+        建成的 workspace 再建一遍。
+        """
+        tenant_id = _identifier(tenant_id, "tenant_id")
+        environment = _identifier(environment, "environment")
+        now = now_utc()
+        expires = now + timedelta(seconds=max(1.0, lease_seconds))
+        with self._connection(write=True) as connection:
+            existing = connection.execute(
+                "SELECT setup_state, lease_expires_at FROM dify_workspaces"
+                " WHERE tenant_id = ? AND environment = ?",
+                (tenant_id, environment),
+            ).fetchone()
+            if existing is None:
+                try:
+                    connection.execute(
+                        "INSERT INTO dify_workspaces (tenant_id, environment, workspace_id, setup_state,"
+                        " lease_owner, lease_expires_at, last_error, created_at, updated_at)"
+                        " VALUES (?, ?, '', 'creating', ?, ?, '', ?, ?)",
+                        (tenant_id, environment, owner, _iso(expires), _iso(now), _iso(now)),
+                    )
+                except sqlite3.IntegrityError:
+                    # 另一个进程在同一瞬间插入了 —— 它就是"正在建"，不是我。
+                    return False
+                return True
+            state = str(existing["setup_state"])
+            lease = existing["lease_expires_at"]
+            if state in {"created", "ready"}:
+                return False
+            if state == "unknown" and not allow_unknown:
+                return False
+            if state == "creating" and lease and _parse_time(str(lease)) > now:
+                return False
+            # failed，或租约已过期的 creating：接管。workspace_id 保持原值 ——
+            # 已过期的 creating 可能已经建成了，对账（调用方）来决定要不要补 UUID。
+            connection.execute(
+                "UPDATE dify_workspaces SET setup_state = 'creating', lease_owner = ?,"
+                " lease_expires_at = ?, updated_at = ? WHERE tenant_id = ? AND environment = ?",
+                (owner, _iso(expires), _iso(now), tenant_id, environment),
+            )
+        return True
+
+    def mark_created(self, tenant_id: str, environment: str, workspace_id: str) -> None:
+        """建成之后**立刻**写回 id —— 这一行与 Dify 的现状之间不留空窗。"""
+        tenant_id = _identifier(tenant_id, "tenant_id")
+        environment = _identifier(environment, "environment")
+        with self._connection(write=True) as connection:
+            connection.execute(
+                "UPDATE dify_workspaces SET workspace_id = ?, setup_state = 'created',"
+                " last_error = '', lease_expires_at = NULL, updated_at = ?"
+                " WHERE tenant_id = ? AND environment = ?",
+                (_identifier(workspace_id, "workspace_id"), _iso(now_utc()), tenant_id, environment),
+            )
+
+    def mark_failed(self, tenant_id: str, environment: str, *, error: str) -> None:
+        """**明确失败**：Dify 没有建出来。``workspace_id`` 保持空 ⇒ 下一次开户可以重建。"""
+        tenant_id = _identifier(tenant_id, "tenant_id")
+        environment = _identifier(environment, "environment")
+        with self._connection(write=True) as connection:
+            connection.execute(
+                "UPDATE dify_workspaces SET setup_state = 'failed', last_error = ?,"
+                " lease_expires_at = NULL, updated_at = ? WHERE tenant_id = ? AND environment = ?",
+                (error[:500], _iso(now_utc()), tenant_id, environment),
+            )
+
+    def mark_unknown(self, tenant_id: str, environment: str, *, error: str) -> None:
+        """**结果未知**：``workspace_id`` 原样保留（可能已经建成），下一次先对账。"""
+        tenant_id = _identifier(tenant_id, "tenant_id")
+        environment = _identifier(environment, "environment")
+        with self._connection(write=True) as connection:
+            connection.execute(
+                "UPDATE dify_workspaces SET setup_state = 'unknown', last_error = ?,"
+                " lease_expires_at = NULL, updated_at = ? WHERE tenant_id = ? AND environment = ?",
+                (error[:500], _iso(now_utc()), tenant_id, environment),
+            )
+
+
+def workspace_name(environment: str, tenant_id: str) -> str:
+    """workspace 的**派生名**：``aiops-{environment}-{tenant_id}``。
+
+    ``tenants.name`` 在 Dify 里**没有唯一约束**（只有 ``tenant_pkey``），所以唯一性来自
+    这条命名约定，不是 Dify 保证的。因此：每次创建都用派生名，绝不人工起名；对账也按它
+    精确匹配。Dify 允许改名 —— 改名之后就对不上，那会退化成"命中 0 ⇒ 重建 ⇒ 孤儿"，
+    缓解是不给运营改名的入口（ADR-0059 已记）。
+    """
+    return f"aiops-{_identifier(environment, 'environment')}-{_identifier(tenant_id, 'tenant_id')}"
+
 
 def _identifier(value: str, name: str) -> str:
     candidate = (value or "").strip()
@@ -203,6 +328,14 @@ def _identifier(value: str, name: str) -> str:
     return candidate
 
 
-def now() -> datetime:
+def now_utc() -> datetime:
     """The module's clock, named so a lease test can reason about it."""
     return datetime.now(UTC)
+
+
+def _iso(value: datetime) -> str:
+    return value.astimezone(UTC).isoformat()
+
+
+def _parse_time(value: str) -> datetime:
+    return datetime.fromisoformat(value)

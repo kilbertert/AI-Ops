@@ -187,6 +187,14 @@ class GatewayServerSettings:
     internal_token_secret: str = field(repr=False, default="")
     #: 内部令牌的有效窗口（秒），与平台 ``InternalTokenManager`` 缺省一致（300）。
     internal_token_expire_seconds: int = 300
+    #: **建 workspace 的唯一 HTTP 入口**（``inner_api``，#880）。地址**必须是配置项**：
+    #: 今天是 api 容器的内网 ``IP:5001``（36 本机可用），转发器上线后换成
+    #: ``http://127.0.0.1:15001`` —— 代码一行不改，只改这一行值。
+    #:
+    #: 留空 ⇒ ``aiops admin ensure-workspace`` 拒绝运行（它没有别的建法）。它**不是**
+    #: 网关运行时要用的东西：只有开户那一条 CLI 路径读它。
+    dify_inner_api_base_url: str = ""
+    dify_inner_api_key: str = field(repr=False, default="")
     #: Conversation context window (#482). The defaults ARE the contract's
     #: numbers (8 turns / 8k tokens, ``conversation_store`` owns the constants);
     #: they are configurable because a RAG or promotional turn also spends the
@@ -319,6 +327,10 @@ class GatewayServerSettings:
             internal_token_expire_seconds=_int_value(
                 file_values, "AIOPS_GATEWAY_INTERNAL_TOKEN_EXPIRE_SECONDS", 300
             ),
+            dify_inner_api_base_url=_env("AIOPS_GATEWAY_DIFY_INNER_API_BASE_URL")
+            or _file_value(file_values, "AIOPS_GATEWAY_DIFY_INNER_API_BASE_URL"),
+            dify_inner_api_key=_env("AIOPS_GATEWAY_DIFY_INNER_API_KEY")
+            or _file_value(file_values, "AIOPS_GATEWAY_DIFY_INNER_API_KEY"),
             jev_base_url=_env("AIOPS_GATEWAY_JEV_BASE_URL")
             or _file_value(file_values, "AIOPS_GATEWAY_JEV_BASE_URL"),
             jev_api_key=_env("AIOPS_GATEWAY_JEV_API_KEY")

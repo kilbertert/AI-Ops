@@ -1,3 +1,53 @@
+## 2026-10-21 · `aiops admin ensure-workspace`（#880）
+
+**范围**：`dify_inner_api.py`（新）、`dify_ensure_workspace.py`（新）、
+`dify_workspaces.py`（`claim` / `mark_created` / `mark_failed` / `mark_unknown` / `workspace_name`）、
+`admin_cli.py`（`ensure-workspace`）、`gateway_config.py`（inner_api 两键）。
+
+### 一、自动化判据（`tests/test_dify_ensure_workspace.py`，13 例）
+
+| 用例 | 钉住的规则 |
+|---|---|
+| 派生名 + 平台 owner | 名字只能是 `aiops-{env}-{tenant}`，owner 只能是服务身份 |
+| 重跑零写 | `created` 的租户再跑：**一条 POST 都不发** |
+| 租约未过期 | 报 `creating`，不发 POST |
+| 并发两次 | 唯一键 + 先插入 ⇒ 只发 1 次 POST，另一个拿到 `creating` |
+| 错误响应 | 落 `failed` 且 `workspace_id` 保持空；重跑能建成 |
+| 超时 | 落 `unknown`（**不是** `failed`） |
+| `unknown` + 对账命中 1 | 补 UUID，**零 POST** |
+| `unknown` + 命中 0 | 才重建（1 次 POST） |
+| `unknown` + 命中 2 | 拒绝（`DIFY_WORKSPACE_AMBIGUOUS`），零 POST |
+| 连接被拒 | `outcome="failed"`（与超时相反） |
+| 200 但没有 tenant.id | 落 `unknown` |
+| 对账匹配 | 按派生名**精确**匹配，`-old` 后缀不算命中 |
+
+**突变复验**（三次，均复跑确认变红）：
+1. `claim` 改成"没有行就直接返回 True、不插入"（先查后建）⇒ 6 例红，含并发那条；
+2. 去掉 `unknown`/过期 `creating` 的对账分支 ⇒ 2 例红（命中 1 补 UUID、命中 2 拒绝）；
+3. 把超时也归成 `failed` ⇒ `test_a_timeout_is_unknown_never_failed` 红。
+
+### 二、36 上的 inner_api 真入口（只读探测，2026-10-21）
+
+| 请求 | 结果 |
+|---|---|
+| 无 `X-Inner-Api-Key` | `401 {"code":"inner_api_unauthorized"}` |
+| 错 key | 同上 |
+| 正确 key + 不存在的 owner | `404 {"message":"owner account not found."}` ⇒ 门开了，走到了"查 owner" |
+
+`POST /console/api/all-workspaces`（对账用）：41 的
+`AIOPS_GATEWAY_DIFY_CONSOLE_API_KEY` **就是** Dify 的 `ADMIN_API_KEY` —— 实测 200，
+返回 1 个 workspace（`AI-Ops Admin's Workspace` / `2db44904-…`）。⇒ 对账路径在 41 侧成立。
+
+### 三、这一轮**没有**做到的（据实）
+
+- **没有在 Dify 里建任何 workspace**。本票验收要求的"在 41 的一个真实租户上建"需要先决定
+  建哪个租户（Dify 没有删 workspace 的 API，**建了就是永久的**），这一步是运营选择，
+  不是代码能替它做的。代码与判据已就绪，`--tenant` 一旦给出即可执行。
+- **41 本机还调不到 inner_api**：api 容器的 `5001` 只在内网，转发器是 #889。#880 的验收
+  因此只能先在 36 上跑；41 上跑要等 #889，这不是本票的缺口，是票与票的边界。
+- 平台 owner 账号 `dify-admin@aiops.local` 在 Dify 里**已存在**（实测 accounts 表），
+  所以 `create_workspace` 不会因为 owner 404 而失败。
+
 ## 2026-10-21 · 环境身份 / `dify_workspaces` / `GET /v1/dify/workspace`（#879）
 
 **范围**：`deployment_environment.py`（新）、`dify_workspaces.py`（新）、
