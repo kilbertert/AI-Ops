@@ -72,6 +72,38 @@
 PUT 更新后的状态，避免夹具保留旧 instruction 却仍被当成成功。全量初跑 3215 passed / 9 skipped / 1 failed：唯一失败为并行部署前进后，dry-run
 拒绝旧基线。同步主线后复跑该检查，最终结果见本 PR。
 
+## 2026-10-21 · 登录代理按租户开户（#883）
+
+**范围**：`dify_workspace_directory.py`（新）、`dify_login_service.py`（解析 + join +
+映射两列）、`dify_login_server.py`（四个新键，成对校验）、`login-proxy.env.example`。
+
+### 一、判据（`tests/test_dify_login_workspace.py`，12 例）
+
+| 用例组 | 钉住的规则 |
+|---|---|
+| 解析走网关 | 请求打到 `/v1/dify/workspace?tenant_id=…`，带内部令牌，**不带 `environment`** |
+| 四个码穿过这一跳 | `UNRESOLVED` / `CREATING`（可重试）/ `FAILED` / `UNKNOWN` 原样保留 |
+| 网关不可达 | `DIFY_WORKSPACE_LOOKUP_FAILED` —— **不是**"没有 workspace"（下一步不同） |
+| 登录成功路径 | 解析用的是这个人的公司租户 id；join 的 role 是 editor；映射记 `workspace_id`/`workspace_joined` |
+| 缺行拒绝 | 抛 `PermissionDenied`，文案里**有那条 `ensure-workspace` 命令**；零 join、映射不落半条 |
+| `CREATING` | 文案是"一两分钟后重新登录"，不是"找管理员" |
+| join 失败 | **登录照样成功**；`workspace_joined` 保持 0（下次再试） |
+| 二次登录 | **不再发 member 请求** |
+| 四键成对 | 只配网关一半 ⇒ 启动 `ValueError`；全空合法；全配合法 |
+
+**突变复验**（两处，均复跑确认变红）：去掉登录流程里的解析 ⇒ 缺行/`CREATING` 两例红；
+把"已 join 过就跳过"改成每次必 join ⇒ 二次登录用例红（join 被调 2 次）。
+
+### 二、**没有**做到的（据实）
+
+- **没有真机验收**：41 的 `dify_workspaces` 仍为空（还没指定租户开户），所以
+  "租户 A 的人与租户 B 的人各自落到不同 workspace、互相看不到对方的 app"这条端到端结论
+  拿不到。验收里那一条需要先做一次 #880 的开户。
+- **36 上仍是单一固定工作区**：`login-proxy.env` 里没有那四个键 ⇒ 行为逐字不变，
+  这是设计里"全空合法"的那一半。
+- **没有验证 Dify 的 member 端点对已激活账号真的可重复调用**（幂等）—— 本地没有真 Dify；
+  代码对此的依赖只有"失败不阻断"，所以幂等性不是必要条件。
+
 ## 2026-10-21 · inner_api 转发器 + 受限隧道（#889）
 
 **范围**：`ops/dify-inner-api/`（转发器、两个 systemd 单元、README）、

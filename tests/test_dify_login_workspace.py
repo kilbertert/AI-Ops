@@ -1,0 +1,291 @@
+"""按租户开户（#883）：解析走网关、join 走 inner_api、缺行给可执行的错。
+
+四条判据：
+
+1. **解析走网关**，代理**不存第二份** —— 这张票的验收明写"查不到第二张表/第二个文件"；
+   所以断言的是"代理进程里除 `mappings.db` 外没有别的 workspace 存储"，以及解析请求
+   真的打到了网关的只读端点（带内部令牌）。
+2. **缺行不建**：解析失败时抛**带命令**的错，而不是给一个空工作区。
+3. **join 不阻断登录**：workspace 已在、join 失败 ⇒ 登录照样成功。
+4. **二次登录不重复 join**：已记录 `workspace_joined` 的那个人不再发 member 请求。
+"""
+
+from __future__ import annotations
+
+import json
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from aiops_diagnostics.dify_login_company import CompanyAuthSettings, CompanyIdentity
+from aiops_diagnostics.dify_login_provision import DifyConsoleSettings
+from aiops_diagnostics.dify_login_server import LoginProxySettings
+from aiops_diagnostics.dify_login_service import (
+    LoginPolicy,
+    LoginService,
+    MappingStore,
+)
+from aiops_diagnostics.dify_workspace_directory import (
+    GatewayWorkspaceClient,
+    WorkspaceUnavailable,
+)
+
+TENANT = "1783000000000000001"
+WORKSPACE = "ws-tenant-1"
+ACCOUNT = "b647e9c0-1111-4222-8333-444455556666"
+INTERNAL_SECRET = "internal-secret-0123456789"
+ENVIRONMENT = "env-test"
+
+
+class _Gateway(BaseHTTPRequestHandler):
+    """假网关：`GET /v1/dify/workspace?tenant_id=…`。"""
+
+    rows: dict[str, tuple[int, dict[str, Any]]] = {}
+    calls: list[dict[str, str]] = []
+
+    def log_message(self, *args: Any) -> None:  # silence
+        pass
+
+    def do_GET(self) -> None:  # noqa: N802
+        type(self).calls.append({"path": self.path, "token": self.headers.get("X-Internal-Token") or ""})
+        from urllib.parse import parse_qs, urlsplit
+
+        tenant = parse_qs(urlsplit(self.path).query).get("tenant_id", [""])[0]
+        status, payload = type(self).rows.get(
+            tenant,
+            (404, {"error": {"code": "DIFY_WORKSPACE_UNRESOLVED", "message": "no row"}}),
+        )
+        body = json.dumps(payload).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+@pytest.fixture()
+def gateway():
+    _Gateway.rows = {}
+    _Gateway.calls = []
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Gateway)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    host, port = server.server_address[:2]
+    try:
+        yield f"http://{host}:{port}"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+# ── 1. 解析走网关、带内部令牌 ────────────────────────────────────────────
+
+
+def test_the_directory_asks_the_gateway_with_an_internal_token(gateway) -> None:
+    _Gateway.rows[TENANT] = (200, {"workspace_id": WORKSPACE, "environment": ENVIRONMENT})
+    client = GatewayWorkspaceClient(base_url=gateway, secret=INTERNAL_SECRET, expire_seconds=300)
+
+    assert client.resolve(TENANT) == WORKSPACE
+    call = _Gateway.calls[-1]
+    assert call["path"].startswith("/v1/dify/workspace?tenant_id=")
+    assert call["token"], "请求必须带内部令牌"
+    assert "environment=" not in call["path"], "环境来自部署身份，不能出现在请求里"
+
+
+@pytest.mark.parametrize(
+    ("status", "code", "retryable"),
+    [
+        (404, "DIFY_WORKSPACE_UNRESOLVED", False),
+        (409, "DIFY_WORKSPACE_CREATING", True),
+        (409, "DIFY_WORKSPACE_FAILED", False),
+        (409, "DIFY_WORKSPACE_UNKNOWN", False),
+    ],
+)
+def test_each_gateway_code_survives_the_hop(gateway, status: int, code: str, retryable: bool) -> None:
+    """四个码**原样**穿过这一跳：它们各自对应不同的下一步，合成一个就丢了区别。"""
+    _Gateway.rows[TENANT] = (status, {"error": {"code": code, "message": "x"}})
+    client = GatewayWorkspaceClient(base_url=gateway, secret=INTERNAL_SECRET)
+
+    with pytest.raises(WorkspaceUnavailable) as caught:
+        client.resolve(TENANT)
+    assert caught.value.code == code
+    assert caught.value.retryable is retryable
+
+
+def test_an_unreachable_gateway_is_not_reported_as_a_missing_workspace(tmp_path: Path) -> None:
+    """网关不可达 ≠ 没有 workspace：前者要人看网关，后者要人建 workspace。"""
+    client = GatewayWorkspaceClient(base_url="http://127.0.0.1:9", secret=INTERNAL_SECRET, timeout=1)
+
+    with pytest.raises(WorkspaceUnavailable) as caught:
+        client.resolve(TENANT)
+    assert caught.value.code == "DIFY_WORKSPACE_LOOKUP_FAILED"
+
+
+# ── 2. 登录流程：解析 → join → 不建 ──────────────────────────────────────
+
+
+class _Directory:
+    def __init__(self, outcome: str | Exception) -> None:
+        self.outcome = outcome
+        self.asked: list[str] = []
+
+    def resolve(self, tenant_id: str) -> str:
+        self.asked.append(tenant_id)
+        if isinstance(self.outcome, Exception):
+            raise self.outcome
+        return self.outcome
+
+
+class _Inner:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.fail = fail
+        self.joins: list[dict[str, str]] = []
+
+    def join_member(self, **kwargs: Any) -> None:
+        self.joins.append(kwargs)
+        if self.fail:
+            from aiops_diagnostics.dify_inner_api import InnerApiError
+
+            raise InnerApiError("INNER_API_UNREACHABLE", "down", outcome="failed")
+
+
+def _service(tmp_path: Path, directory: Any, inner: Any) -> LoginService:
+    return LoginService(
+        company=CompanyAuthSettings(base_url="http://company.invalid", encode_key="0123456789abcdef"),
+        dify=DifyConsoleSettings(
+            base_url="http://dify.invalid", secret_key="k" * 16, environment=ENVIRONMENT
+        ),
+        store=MappingStore(tmp_path / "mappings.db"),
+        policy=LoginPolicy(edit_permission="aiops:agent:edit"),
+        owner_user_id=ACCOUNT,
+        workspace_directory=directory,
+        inner_api=inner,
+    )
+
+
+def _patch_company(monkeypatch, *, permissions: tuple[str, ...] = ("aiops:agent:edit",)) -> None:
+    from aiops_diagnostics import dify_login_service as module
+
+    identity = CompanyIdentity(user_id="u-1", username="zhang", tenant_id=TENANT, token="t")
+    monkeypatch.setattr(module, "company_login", lambda *a, **k: identity)
+    monkeypatch.setattr(module, "read_permissions", lambda *a, **k: permissions)
+    monkeypatch.setattr(module, "read_user_type", lambda *a, **k: "tenant")
+    monkeypatch.setattr(
+        module,
+        "provision_editor",
+        lambda *a, **k: ACCOUNT,
+    )
+
+
+def _row(tmp_path: Path) -> dict[str, Any]:
+    row = MappingStore(tmp_path / "mappings.db").get("u-1") or {}
+    return row
+
+
+def test_login_resolves_the_tenants_workspace_and_joins(tmp_path: Path, monkeypatch) -> None:
+    _patch_company(monkeypatch)
+    directory, inner = _Directory(WORKSPACE), _Inner()
+    service = _service(tmp_path, directory, inner)
+
+    service.login(username="zhang", password="pw", random_str="r", code="c")
+
+    assert directory.asked == [TENANT], "解析用的是**这个人的公司租户 id**"
+    assert inner.joins and inner.joins[0]["workspace_id"] == WORKSPACE
+    assert inner.joins[0]["role"] == "editor"
+    row = _row(tmp_path)
+    assert row["workspace_id"] == WORKSPACE and row["workspace_joined"] == 1
+
+
+def test_login_refuses_with_an_actionable_reason_when_there_is_no_workspace(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """缺行 ⇒ 拒绝，且文案里**有那条命令**。空工作区会让运营以为"进去了、只是没内容"。"""
+    from aiops_diagnostics.dify_login_proxy import PermissionDenied
+
+    _patch_company(monkeypatch)
+    refusal = WorkspaceUnavailable("DIFY_WORKSPACE_UNRESOLVED", "租户没有 workspace", http_status=404)
+    inner = _Inner()
+    service = _service(tmp_path, _Directory(refusal), inner)
+
+    with pytest.raises(PermissionDenied) as caught:
+        service.login(username="zhang", password="pw", random_str="r", code="c")
+
+    assert caught.value.code == "DIFY_WORKSPACE_UNRESOLVED"
+    assert f"aiops admin ensure-workspace --tenant {TENANT}" in str(caught.value)
+    assert inner.joins == [], "解析失败时不该 join 任何 workspace"
+    assert _row(tmp_path) == {}, "拒绝发生在 upsert 之前：不留下半条映射"
+
+
+def test_creating_is_reported_as_retry_later(tmp_path: Path, monkeypatch) -> None:
+    from aiops_diagnostics.dify_login_proxy import PermissionDenied
+
+    _patch_company(monkeypatch)
+    service = _service(
+        tmp_path,
+        _Directory(WorkspaceUnavailable("DIFY_WORKSPACE_CREATING", "x", http_status=409, retryable=True)),
+        _Inner(),
+    )
+
+    with pytest.raises(PermissionDenied) as caught:
+        service.login(username="zhang", password="pw", random_str="r", code="c")
+    assert "一两分钟后" in str(caught.value)
+
+
+def test_a_failed_join_does_not_block_login(tmp_path: Path, monkeypatch) -> None:
+    """workspace 已经在，join 失败只意味着他看到空列表 —— 那比登录失败轻。"""
+    _patch_company(monkeypatch)
+    service = _service(tmp_path, _Directory(WORKSPACE), _Inner(fail=True))
+
+    session, summary = service.login(username="zhang", password="pw", random_str="r", code="c")
+
+    assert session.access_token
+    assert summary["company_user_id"] == "u-1"
+    row = _row(tmp_path)
+    assert row["workspace_joined"] == 0, "join 没成功就不能记成成功（下一次登录要再试）"
+
+
+def test_a_second_login_does_not_join_again(tmp_path: Path, monkeypatch) -> None:
+    """验收明写"同一个人二次登录不重复 join"。"""
+    _patch_company(monkeypatch)
+    inner = _Inner()
+    service = _service(tmp_path, _Directory(WORKSPACE), inner)
+
+    service.login(username="zhang", password="pw", random_str="r", code="c")
+    service.login(username="zhang", password="pw", random_str="r", code="c")
+
+    assert len(inner.joins) == 1, f"join 被调了 {len(inner.joins)} 次"
+
+
+# ── 3. 四键成对：半配置是启动错误 ────────────────────────────────────────
+
+
+def _settings(**overrides: Any) -> LoginProxySettings:
+    values: dict[str, Any] = {
+        "listen_host": "127.0.0.1",
+        "listen_port": 0,
+        "public_origin": "https://console.example",
+        "company": CompanyAuthSettings(base_url="http://company.invalid", encode_key="0123456789abcdef"),
+        "dify": DifyConsoleSettings(
+            base_url="http://dify.invalid", secret_key="k" * 16, environment=ENVIRONMENT
+        ),
+        "data_dir": "/tmp/does-not-matter",
+        "edit_permission": "aiops:agent:edit",
+    }
+    values.update(overrides)
+    return LoginProxySettings(**values)
+
+
+def test_half_a_configuration_is_a_startup_error() -> None:
+    """只配网关、不配 inner_api 的表现是"解析得到、join 不了" —— 看起来像登录成功。"""
+    with pytest.raises(ValueError, match="四键成对"):
+        _settings(gateway_url="http://gw.invalid", gateway_internal_token="t" * 16)
+
+    _settings()  # 全空 ⇒ 单一固定工作区，合法
+    _settings(
+        gateway_url="http://gw.invalid",
+        gateway_internal_token="t" * 16,
+        inner_api_base_url="http://inner.invalid",
+        inner_api_key="i" * 16,
+    )

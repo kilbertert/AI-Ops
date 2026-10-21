@@ -126,6 +126,15 @@ class MappingStore:
                 connection.execute(
                     "ALTER TABLE dify_login_mappings ADD COLUMN user_type TEXT NOT NULL DEFAULT ''"
                 )
+            # #883：这个人**已经**在哪个 workspace 里。它不是一个 ws 映射表（那是网关的
+            # `dify_workspaces`），而是"上次 join 成功过"的本地事实 —— 用它避免每次登录
+            # 都重复调 member 端点（验收明写"同一个人二次登录不重复 join"）。
+            for name, definition in (
+                ("workspace_id", "TEXT NOT NULL DEFAULT ''"),
+                ("workspace_joined", "INTEGER NOT NULL DEFAULT 0"),
+            ):
+                if name not in mapping_columns:
+                    connection.execute(f"ALTER TABLE dify_login_mappings ADD COLUMN {name} {definition}")
             connection.execute(
                 "CREATE INDEX IF NOT EXISTS idx_dify_login_audit_user"
                 " ON dify_login_audit(company_user_id, at DESC)"
@@ -188,6 +197,8 @@ class MappingStore:
         permissions: tuple[str, ...],
         status: str = STATUS_ACTIVE,
         user_type: str = "",
+        workspace_id: str = "",
+        workspace_joined: bool = False,
     ) -> None:
         import json
 
@@ -197,8 +208,9 @@ class MappingStore:
                 """
                 INSERT INTO dify_login_mappings (
                     company_user_id, company_username, tenant_id, user_type, dify_account_id, dify_email,
-                    permissions_json, status, created_at, last_login_at, last_reconciled_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    permissions_json, status, created_at, last_login_at, last_reconciled_at,
+                    workspace_id, workspace_joined
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(company_user_id) DO UPDATE SET
                     company_username = excluded.company_username,
                     tenant_id = excluded.tenant_id,
@@ -208,7 +220,9 @@ class MappingStore:
                     permissions_json = excluded.permissions_json,
                     status = excluded.status,
                     last_login_at = excluded.last_login_at,
-                    last_reconciled_at = excluded.last_reconciled_at
+                    last_reconciled_at = excluded.last_reconciled_at,
+                    workspace_id = excluded.workspace_id,
+                    workspace_joined = excluded.workspace_joined
                 """,
                 (
                     company_user_id,
@@ -222,6 +236,8 @@ class MappingStore:
                     now,
                     now,
                     now,
+                    workspace_id,
+                    1 if workspace_joined else 0,
                 ),
             )
 
@@ -304,6 +320,11 @@ class LoginService:
         store: MappingStore,
         policy: LoginPolicy,
         owner_user_id: str,
+        #: **按租户**解析 workspace 与 join 成员（#883）。留空 ⇒ 维持"单一固定工作区"
+        #: 的旧行为（V1 暂定，ADR-0056）—— 一个还没部署多 workspace 的环境因此照常工作，
+        #: 而不是在第一次登录时全部失败。
+        workspace_directory: Any = None,
+        inner_api: Any = None,
     ) -> None:
         self.company = company
         self.dify = dify
@@ -312,6 +333,8 @@ class LoginService:
         #: 应急 owner 的公司**映射账号 id**（不是公司账号）。开户需要 owner 会话，
         #: 而 owner 会话由它自己的 Dify 账号 id 自签得到 —— 于是这张票也不需要密码。
         self.owner_user_id = owner_user_id
+        self.workspace_directory = workspace_directory
+        self.inner_api = inner_api
 
     def owner_session(self) -> ConsoleSession:
         return mint_console_session(
@@ -397,6 +420,29 @@ class LoginService:
                 "dify-login: retagged mapping email for company_user=%s (environment prefix)",
                 identity.user_id,
             )
+        # #883：**解析这个租户自己的 workspace，并把人 join 进去**。
+        #
+        # 解析走网关（一份真值），**不在这里建** —— 建与写映射必须在同一台机器、同一次
+        # 运行里（`aiops admin ensure-workspace` 在 41 本机跑）。缺行时抛的是**带命令的
+        # 错**，不是一个空 workspace：空工作区会让运营以为自己"进去了、只是没内容"。
+        workspace_id = ""
+        if self.workspace_directory is not None:
+            from aiops_diagnostics.dify_workspace_directory import WorkspaceUnavailable
+
+            try:
+                workspace_id = self.workspace_directory.resolve(identity.tenant_id)
+            except WorkspaceUnavailable as exc:
+                self.store.record_audit(
+                    company_user_id=identity.user_id,
+                    dify_account_id=account_id,
+                    action="workspace_unavailable",
+                    reason_code=exc.code,
+                )
+                raise PermissionDenied(
+                    exc.code,
+                    _workspace_refusal(identity.tenant_id, exc),
+                ) from exc
+
         if not account_id:
             account_id = provision_editor(
                 self.dify,
@@ -404,6 +450,37 @@ class LoginService:
                 company_user_id=identity.user_id,
                 username=identity.username,
             )
+
+        workspace_joined = False
+        if workspace_id and self.inner_api is not None:
+            already = (
+                existing is not None
+                and bool(existing.get("workspace_joined"))
+                and str(existing.get("workspace_id") or "") == workspace_id
+            )
+            if already:
+                # 二次登录**不重复 join**（验收明写）。join 本身是幂等的，但每登录一次就
+                # 调一次 member 端点既慢又多一次可失败的写 —— 而"这个人已经在这个工作区
+                # 里"是我们上一次登录亲眼确认过的事实。
+                workspace_joined = True
+            else:
+                # join 不阻断登录（设计明写）：workspace 已经在，失败只是这个人打开控制台
+                # 看到空列表。失败写日志 + 审计，下一次登录会再试一次。
+                from aiops_diagnostics.dify_workspace_directory import join_account
+
+                outcome = join_account(
+                    inner=self.inner_api,
+                    workspace_id=workspace_id,
+                    account_id=account_id,
+                    email=email,
+                )
+                workspace_joined = outcome == "joined"
+                self.store.record_audit(
+                    company_user_id=identity.user_id,
+                    dify_account_id=account_id,
+                    action=outcome,
+                    reason_code=workspace_id,
+                )
 
         # 解封：此前 disabled 而现在又有编辑权限码 ⇒ 改回 active（#779 的"重新获得权限后
         # 再登录，解除封禁"）。**这是与封禁可逆的那一半**，所以必须在 upsert 之前判出方向
@@ -418,6 +495,8 @@ class LoginService:
             permissions=permissions,
             status=STATUS_ACTIVE,
             user_type=user_type,
+            workspace_id=workspace_id,
+            workspace_joined=workspace_joined,
         )
         if reactivated:
             self.store.record_audit(
@@ -454,6 +533,24 @@ class LoginService:
             len(permissions),
         )
         return session, summary
+
+
+def _workspace_refusal(tenant_id: str, exc: Any) -> str:
+    """把"解析不到 workspace"翻成**运营能做的那一件事**（#883）。
+
+    三种结局三种下一步，合成一句就把区别丢了：
+
+    * ``CREATING`` —— 别人正在建，**稍后重试**；
+    * ``FAILED`` / ``UNKNOWN`` —— 在 41 上重跑一次 ``ensure-workspace``（它会先对账）；
+    * ``UNRESOLVED`` —— 从来没有建过，同样那条命令，但这是第一次。
+    """
+    command = f"aiops admin ensure-workspace --tenant {tenant_id}"
+    if getattr(exc, "code", "") == "DIFY_WORKSPACE_CREATING":
+        return "你的工作区正在创建，请一两分钟后重新登录。"
+    return (
+        f"你的工作区还没有准备好（{getattr(exc, 'code', 'DIFY_WORKSPACE_UNRESOLVED')}）。"
+        f"请联系管理员在网关所在主机执行：{command}"
+    )
 
 
 def utc_iso() -> str:

@@ -29,7 +29,7 @@ import re
 import threading
 import time
 import urllib.parse
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -125,11 +125,32 @@ class LoginProxySettings:
     #: 失败退避：同一来源在窗口内的失败次数达到阈值即拒绝，直到窗口过去。
     backoff_threshold: int = 5
     backoff_window_seconds: int = 300
+    #: **按租户开户**（#883）。三个键成对：
+    #: - ``gateway_url`` + ``gateway_internal_token``：问网关"这个租户的 workspace 是哪一个"
+    #:   （ADR-0067 的只读端点；凭据是**内部令牌**，不是 Dify 的钥匙）；
+    #: - ``inner_api_base_url`` + ``inner_api_key``：把已有账号 join 进那个 workspace。
+    #:
+    #: **全空 ⇒ 维持单一固定工作区的旧行为**（V1 暂定，ADR-0056），一个还没采纳多 workspace
+    #: 的环境因此照常工作。**只配一半是启动错误**：半配置的表现是"解析得到、join 不了"或
+    #: 反过来，而两种都看起来像"登录成功了、只是看不到东西"。
+    gateway_url: str = ""
+    gateway_internal_token: str = field(repr=False, default="")
+    inner_api_base_url: str = ""
+    inner_api_key: str = field(repr=False, default="")
 
     def __post_init__(self) -> None:
         assert_public_origin_is_https(self.public_origin)
         if not self.edit_permission:
             raise ValueError("AIOPS_LOGIN_PROXY_EDIT_PERMISSION is required")
+        # 四个键成对（#883）：全配 ⇒ 按租户开户；全空 ⇒ 单一固定工作区。只配一半是
+        # 启动错误 —— 半配置在运行时的表现是"登进去了但看不到任何东西"。
+        gateway = bool(self.gateway_url) and bool(self.gateway_internal_token)
+        inner = bool(self.inner_api_base_url) and bool(self.inner_api_key)
+        if gateway != inner:
+            raise ValueError(
+                "按租户开户需要四键成对：AIOPS_LOGIN_PROXY_GATEWAY_URL/_INTERNAL_TOKEN "
+                "与 AIOPS_LOGIN_PROXY_INNER_API_BASE_URL/_KEY 要么全配、要么全空"
+            )
 
     @classmethod
     def from_env(cls) -> LoginProxySettings:
@@ -165,6 +186,10 @@ class LoginProxySettings:
             owner_user_id=os.environ.get("AIOPS_LOGIN_PROXY_DIFY_OWNER_ACCOUNT_ID", ""),
             backoff_threshold=int(os.environ.get("AIOPS_LOGIN_PROXY_BACKOFF_THRESHOLD", "5")),
             backoff_window_seconds=int(os.environ.get("AIOPS_LOGIN_PROXY_BACKOFF_WINDOW", "300")),
+            gateway_url=os.environ.get("AIOPS_LOGIN_PROXY_GATEWAY_URL", "").strip().rstrip("/"),
+            gateway_internal_token=os.environ.get("AIOPS_LOGIN_PROXY_GATEWAY_INTERNAL_TOKEN", "").strip(),
+            inner_api_base_url=os.environ.get("AIOPS_LOGIN_PROXY_INNER_API_BASE_URL", "").strip().rstrip("/"),
+            inner_api_key=os.environ.get("AIOPS_LOGIN_PROXY_INNER_API_KEY", "").strip(),
         )
 
 
@@ -516,6 +541,21 @@ def _public_reason(exc: Exception) -> str:
 
 def build_service(settings: LoginProxySettings) -> LoginService:
     store = MappingStore(Path(settings.data_dir) / "mappings.db")
+    # 四键全配 ⇒ 按租户解析 + join；全空 ⇒ 保持单一固定工作区（ADR-0056 的 V1 暂定）。
+    # 两半都由 `__post_init__` 保证成对，所以这里只需要判一次。
+    directory = None
+    inner = None
+    if settings.gateway_url and settings.inner_api_base_url:
+        from aiops_diagnostics.dify_inner_api import DifyInnerApi, InnerApiSettings
+        from aiops_diagnostics.dify_workspace_directory import GatewayWorkspaceClient
+
+        directory = GatewayWorkspaceClient(
+            base_url=settings.gateway_url,
+            secret=settings.gateway_internal_token,
+        )
+        inner = DifyInnerApi(
+            InnerApiSettings(base_url=settings.inner_api_base_url, api_key=settings.inner_api_key)
+        )
     return LoginService(
         company=settings.company,
         dify=settings.dify,
@@ -525,6 +565,8 @@ def build_service(settings: LoginProxySettings) -> LoginService:
             publish_permission=settings.publish_permission,
         ),
         owner_user_id=settings.owner_user_id,
+        workspace_directory=directory,
+        inner_api=inner,
     )
 
 
