@@ -281,3 +281,18 @@ sid 到节点、领取端点按凭据拒绝。正例（真实身份 → 本人�
 
 管理员轮换目标在改变平台前先保存到宿主 0600 文件；后续传输失败并重建 Gateway
 仍可重跑恢复。绑定/节点两份输出齐全后才逐文件发布；bootstrap 退出时清理容器临时凭据。
+
+## 已批准供应商切换与样本复核
+
+开发中继的供应商池与本栈无关联。本栈从受控 `stack.env` 读取固定上游源、基路径和完整
+模型标识；订阅前缀是模型标识的一部分。供应商 key 从私有文件交给 `prepare-secrets.sh`，
+不下发给节点。改动只在开发机/runner 按 PR 合并制品部署，不能在服务主机临时改源码。
+
+1. 保留旧 stack.env/密钥位置与制品身份；在 up/send 前采生产 baseline。
+2. 按批准目标配置 `M2LIVE_MODEL_UPSTREAM`、`M2LIVE_MODEL_UPSTREAM_BASE_PATH`、
+   `M2LIVE_MODEL_ID`、私有 key 文件；运行既有 secrets/bootstrap 流程。
+3. bootstrap 改绑后读回模型、instruction、appId 与成功信封，缺一项即停止。
+4. 用同一模型和 instruction 生成两侧共享清单，再按现有手顺重建相应容器并只发一次。
+5. 核对回执/记录；样本快照按 QA 的只读 SQL/CPMS 对照。无论是否成功都 down/cleanup。
+
+2026-10-21 的 Cline 样本已经成功，仍是构造身份；不是用户登录验收或订阅长期可用性保证。
