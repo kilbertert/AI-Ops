@@ -45,7 +45,7 @@ no project argument. Both answer *where* something is; neither replaces reading 
 
 ## Tests
 
-- tests/ — 180 test file(s, recursive)
+- tests/ — 181 test file(s, recursive)
 - script "cd:watch:test": node .sandcastle/cd-watch.test.mjs
 - pytest (pyproject.toml / pytest.ini present)
 
@@ -55,9 +55,9 @@ no project argument. Both answer *where* something is; neither replaces reading 
 - AGENTS.md
 - CLAUDE.md
 - README.md
-- docs/ — 132 markdown file(s)
+- docs/ — 133 markdown file(s)
 - docs/adr/ — 73 markdown file(s)
-- docs/agents/ — 36 markdown file(s)
+- docs/agents/ — 37 markdown file(s)
 
 ## Tree (depth 2, first 80 lines; dependencies, build
 output and run residue omitted)
@@ -128,7 +128,7 @@ docs/
     company-platform-integration-baseline.md
     company-repo-index.md
     company-upms-admin-operations.md
-    ... (26 more)
+    ... (27 more)
   architecture/
     ai-ops-architecture.html
     ai-ops-architecture.json
