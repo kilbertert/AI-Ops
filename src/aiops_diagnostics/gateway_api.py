@@ -3816,6 +3816,7 @@ def create_gateway_app(
     #: consumer 那条会换成服务令牌）。
     @app.get("/v1/knowledge/console", include_in_schema=False)
     def knowledge_console(
+        request: Request,
         caller: ScopeContext = Depends(authenticated_agent_caller),  # noqa: B008
     ) -> Response:
         """Send the operator's browser into RAGFlow **as their own tenant** (#926).
@@ -3831,6 +3832,18 @@ def create_gateway_app(
         shared is a session obtained as the tenant owner — so the proxy represents
         the tenant, and the cost of that (RAGFlow cannot tell the operators apart)
         is paid for in our own access ledger rather than pretended away.
+
+        **两种应答形状，取决于谁在问**（2026-10-22 真浏览器验收后补）：
+
+        - 浏览器的顶层导航（``Accept: text/html``）：把 ``Set-Cookie`` 种在 303 上，由浏览器
+          自己跟随。这就是本路由一开始的形状。
+        - 页面脚本的 ``fetch``：返回 **200 + JSON ``{"target": …}``**，``Set-Cookie`` 种在
+          这一次**同源**应答上。
+
+        为什么脚本那条不能用 303：跨源重定向下的 ``Set-Cookie`` 不会被保存，而且页面也读不到
+        跨源重定向的响体。而**同源**应答上的 ``Set-Cookie`` 一定被保存 —— 只要它有正确的
+        ``Domain``（见 ``ragflow_console_cookie_domain``），页面随后自己 ``location.href``
+        跳过去时浏览器就会带上它。这也是「打开 RAGFlow」按钮唯一可行的形状。
         """
         from aiops_diagnostics.ragflow_console import (
             RAGFlowLoginClient,
@@ -3887,9 +3900,24 @@ def create_gateway_app(
             caller=caller,
             ragflow_email=session.ragflow_email,
         )
-        response = RedirectResponse(target, status_code=status.HTTP_303_SEE_OTHER)
+        wants_html = "text/html" in (request.headers.get("accept") or "")
+        response: Response = (
+            RedirectResponse(target, status_code=status.HTTP_303_SEE_OTHER)
+            if wants_html
+            else JSONResponse(
+                {"target": target, "ragflow_email": session.ragflow_email},
+                status_code=status.HTTP_200_OK,
+            )
+        )
         for name, value in session.cookies.items():
-            response.set_cookie(name, value, httponly=True, samesite="lax")
+            response.set_cookie(
+                name,
+                value,
+                domain=settings.ragflow_console_cookie_domain or None,
+                path="/",
+                httponly=True,
+                samesite="lax",
+            )
         return response
 
     @app.get("/v1/knowledge", include_in_schema=False)
@@ -4517,9 +4545,23 @@ def _company_token_resolver(settings: GatewayServerSettings) -> CompanyTokenCall
             ),
             runtime,
             shop_directory=_shop_directory(runtime),
+            permission_source=_permission_source(runtime),
         )
     except (ValueError, OSError):
         return None
+
+
+def _permission_source(runtime: Settings) -> Any:
+    """公司权限码 → 内部角色（#926）。
+
+    **未配置 UPMS 时不构造**（返回 ``None``），解析器随即保持空角色集 —— 与改动前逐字一致。
+    这样「哪些部署会因此多拿到权限」是一个看配置就能回答的问题。
+    """
+    if not (runtime.upms.base_url or "").strip():
+        return None
+    from aiops_diagnostics.company_permissions import CompanyPermissionSource
+
+    return CompanyPermissionSource(runtime.upms)
 
 
 def _fallback_caller_resolver(settings: GatewayServerSettings) -> CallerContextResolver:

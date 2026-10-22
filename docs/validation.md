@@ -296,6 +296,52 @@ join 成功还不够：该账号的 `current` 仍指向**旧的共享 workspace*
   （`ROLE_AGENT_ADMIN`）没有用真实账号走过。
 - **多租户隔离**：只验了一个租户进得去，没验另一个进不去（单测里有）。
 
+## 2026-10-22 · 真实浏览器验收：上一轮的三条"没验"全部翻车，两个是阻断级
+
+**范围**：41（CD `4916eafc9fd0`）。用 **Chromium + Playwright** 驱动真实浏览器，链路为
+`admin.qumall.qushiyun.com` 真登录（真账号 + ddddocr 解公司验证码）→ 带真令牌进
+`api.mall.qushiyun.com/v1/knowledge` → 点「打开 RAGFlow」。设备侧用 `ssh -D` 经 41 出网
+（开发机到 47.97.160.153 的 80/443 不通，这与应用无关）。
+
+### 一、翻车点
+
+| # | 上一轮的说法 | 真浏览器实测 | 级别 |
+|---|---|---|---|
+| 7 | 「会话被 RAGFlow 接受」= cookie 回放 `/api/v1/users/me` 200 | **cookie 根本到不了 RAGFlow**：浏览器的源是 `api.mall.qushiyun.com`，cookie 不带 domain，按 host-only 落在它自己身上；跳到 `36.156.159.175:10081` 时 Chromium **一条 Cookie 头都不发**（实测 40+ 个请求全为 `Cookie: -`） | **阻断** |
+| 8 | 「运营用公司账号进得去」 | 真账号进 `GET /v1/knowledge/available` 与 `/sources` **403 `KNOWLEDGE_FORBIDDEN`**；`/v1/agents` 同样 403 `AGENT_FORBIDDEN`。页面整块「读取失败」 | **阻断** |
+| 9 | — | 「打开 RAGFlow」按钮在 41 上**不存在**：`/v1/knowledge` 返回 10315 字节，不含 `打开 RAGFlow`。该改动当时还在工作区，从未提交部署 | 高（我的流程错误） |
+
+### 二、8 的根因（比"没角色"更值得记）
+
+`_require_knowledge_admin` 判的是 `caller.roles ∩ {ROLE_AGENT_ADMIN, ROLE_PLATFORM_ADMIN}`，
+而**真实身份路径上 `roles` 恒为空集**：
+
+- `RedisThirdSessionResolver`：`roles=frozenset()`（写死，`third_session_auth.py:213`）；
+- `CompanyTokenCallerResolver`：`roles=frozenset()`（写死，`company_token_auth.py:275`）。
+
+于是这两条路由对**任何真实运营都不可能成功**，只有构造身份（ADR-0058）能过 —— 而构造身份
+正是上一轮验收用的那种。单测也照抄了 `roles={"ROLE_AGENT_ADMIN"}`，所以单元测试全绿。
+公司的资格判据其实一直在**权限码**里：真账号 `system` 的 `/upms/user/info` 里
+`permissions` 含 `aiops:agent:edit` 与 `aiops:agent:publish`（3382 项），但网关从未读它。
+`docs/开发进度.md` 已把「UPMS 未建 `ROLE_AGENT_ADMIN` 角色族」记为已知缺口很久了 ——
+知识库这几条路由违反了这个已记录的事实。
+
+### 三、真浏览器证实的部分（这些是真结论）
+
+- 公司登录链路在真浏览器里可用（真账号 + 验证码 OCR + `Enter` 提交 → `#/wel/index`）。
+- 页面本身可访问，`localStorage['aiops.knowledge.token']` 注入生效。
+- **RAGFlow 界面认的是 cookie**：同一浏览器里带 `session` cookie → `/api/v1/datasets` 200、
+  界面直接进 Dataset 页；不带 → 401、界面显示登录页。`session` cookie 的作用域是对的
+  （它是 RAGFlow 自己种的，落在它自己的源上）。
+- 租户 `9260rotatecheck` 的 RAGFlow 数据集列表为 **0 个**（`n=0`）—— 上一轮"库建好了"
+  是在 `admin@ragflow.io` 名下，不是租户名下。
+
+### 四、结论
+
+上一轮把「网关发出 cookie」当成了「浏览器能进 RAGFlow」，二者之间差一次**跨源**；
+把构造身份能过当成了「运营能过」，二者之间差一整套**角色来源**。这两处都不是代码细节，
+是验收口径。修复方向已明确，但**未实施**。
+
 ## 2026-10-22 · Dify 运维工具真实验收前置（只读，未完成业务验收）
 
 **分支/基线**：`test/dify-ops-live-acceptance` / `3d1e142780fb`；05:40 UTC只读复核。

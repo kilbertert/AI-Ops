@@ -329,7 +329,8 @@ class _Directory:
         return ()
 
 
-def test_the_route_redirects_and_sets_the_session_cookie(tmp_path: Path, ragflow: Any) -> None:
+def test_a_browser_navigation_gets_303_and_the_session_cookie(tmp_path: Path, ragflow: Any) -> None:
+    """顶层导航（``Accept: text/html``）：303 + Set-Cookie，由浏览器自己跟随。"""
     from aiops_diagnostics.kb_onboarding import derive_email
 
     client, _ = _gateway(tmp_path, ragflow)
@@ -342,12 +343,67 @@ def test_the_route_redirects_and_sets_the_session_cookie(tmp_path: Path, ragflow
     )
 
     response = client.get(
-        "/v1/knowledge/console", headers={"Authorization": "Bearer tok"}, follow_redirects=False
+        "/v1/knowledge/console",
+        headers={"Authorization": "Bearer tok", "Accept": "text/html"},
+        follow_redirects=False,
     )
 
     assert response.status_code == 303
     assert response.headers["location"] == "https://rag.example"
     assert response.cookies.get("session") == "s-1"
+
+
+def test_the_page_gets_json_and_a_same_origin_cookie(tmp_path: Path, ragflow: Any) -> None:
+    """页面脚本（fetch）：**200 + target**，cookie 种在这次同源应答上。
+
+    这是「打开 RAGFlow」按钮唯一可行的形状：跨源重定向上的 Set-Cookie 浏览器不会保存
+    （2026-10-22 真浏览器实测），而同源应答上的会 —— 只要 Domain 覆盖目标源。
+    """
+    from aiops_diagnostics.kb_onboarding import derive_email
+
+    client, _ = _gateway(tmp_path, ragflow)
+    client.app.state.gateway.store.record_ragflow_tenant(  # type: ignore[attr-defined]
+        TENANT,
+        ENV,
+        ragflow_email=derive_email(TENANT),
+        credential_ciphertext=encrypt_credential("pw", KEY),
+        model_checked=True,
+    )
+
+    response = client.get(
+        "/v1/knowledge/console",
+        headers={"Authorization": "Bearer tok", "Accept": "application/json"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["target"] == "https://rag.example"
+    assert response.cookies.get("session") == "s-1"
+
+
+def test_the_cookie_carries_the_configured_domain(tmp_path: Path, ragflow: Any) -> None:
+    """没有 Domain 时 cookie 是 host-only，浏览器跳到 RAGFlow 的源时一条都不发。
+
+    这一条钉住的是**真浏览器验收里唯一翻车的那处**：不是"有没有 cookie"，而是
+    "浏览器会不会把它带到另一个源"。
+    """
+    from aiops_diagnostics.kb_onboarding import derive_email
+
+    client, _ = _gateway(tmp_path, ragflow, ragflow_console_cookie_domain="mall.qushiyun.com")
+    client.app.state.gateway.store.record_ragflow_tenant(  # type: ignore[attr-defined]
+        TENANT,
+        ENV,
+        ragflow_email=derive_email(TENANT),
+        credential_ciphertext=encrypt_credential("pw", KEY),
+        model_checked=True,
+    )
+
+    response = client.get(
+        "/v1/knowledge/console",
+        headers={"Authorization": "Bearer tok", "Accept": "application/json"},
+    )
+
+    cookie_header = response.headers.get("set-cookie", "")
+    assert "Domain=mall.qushiyun.com" in cookie_header
 
 
 def test_the_route_records_a_granted_hop(tmp_path: Path, ragflow: Any) -> None:

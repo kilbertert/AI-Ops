@@ -95,7 +95,7 @@ from collections.abc import Callable, Mapping
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Protocol
 from urllib.parse import urlsplit
 
 from aiops_diagnostics.bounded_http import (
@@ -148,6 +148,15 @@ SHORT_SIGNATURE_KEY_WARNING_LENGTH = 16
 #: ``mysql_site_mapper`` 的形状：由 ``Settings`` 构造一个上下文管理器，产出站点归属映射。
 #: 测试注入替身时替换它，生产路径不换。
 ScopeMapperFactory = Callable[[Settings], AbstractContextManager[SiteScopeMapper]]
+
+
+class PermissionSource(Protocol):
+    """令牌 → 内部角色。真实实现是 ``company_permissions.CompanyPermissionSource``。
+
+    抽成协议是为了让本模块的测试不必架一条公司端点；生产构造点只认这一个方法。
+    """
+
+    def roles_for(self, token: str) -> frozenset[str]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -216,6 +225,7 @@ class CompanyTokenCallerResolver:
         *,
         scope_mapper_factory: ScopeMapperFactory | None = None,
         shop_directory: ShopDirectory | None = None,
+        permission_source: PermissionSource | None = None,
     ) -> None:
         settings.validate()
         self.settings = settings
@@ -224,6 +234,14 @@ class CompanyTokenCallerResolver:
         #: 令牌不带 ``shop_ids`` 时的店铺归属来源（公司权威端点，与后端隔离集合同源）。
         #: 为 ``None`` 时该情形一律拒绝 —— 拿不到归属就是拿不到范围，不放宽。
         self._shop_directory = shop_directory
+        #: 角色来源（公司权限码）。**为 ``None`` 时保持空角色集** —— 那是本票之前的行为，
+        #: 因此「没配 UPMS」的部署不会因为本改动而多给任何权限。
+        self._permission_source = permission_source
+
+    def _roles(self, token: str) -> frozenset[str]:
+        if self._permission_source is None:
+            return frozenset()
+        return self._permission_source.roles_for(token)
 
     def resolve(
         self,
@@ -272,7 +290,11 @@ class CompanyTokenCallerResolver:
             delegated=False,
             effective_tenant_id=subject.tenant_id or "",
             data_scope=self._data_scope(subject, shop_ids, platform_entry),
-            roles=frozenset(),
+            # 角色**不是**空的：公司权限码一直在回答「这个人能不能编辑智能体」，而本解析器
+            # 原先写死空集，于是管理面路由对任何真实公司账号都是 403（#926 真浏览器验收
+            # 暴露）。读不到就保持空集 —— fail closed 的方向不变，只是不再把「上游没答」
+            # 当成「这个人没有权限」的**唯一**可能。
+            roles=self._roles(token),
             # 与会话解析器一致：令牌已由公司校验，能力面不在这里裁；``required_scope`` 照常
             # 通过，因此本路径不产出 403。
             permissions=frozenset({required_scope}),

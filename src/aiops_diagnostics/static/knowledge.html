@@ -57,6 +57,15 @@
   </p>
 
   <section>
+    <h2>0. 去 RAGFlow 建库</h2>
+    <div class="row">
+      <button id="open-console" class="ghost">打开 RAGFlow</button>
+      <span class="hint">以<strong>本租户</strong>身份进入。这里新建的库，回来刷新就能勾选 —— 不需要登记。</span>
+    </div>
+    <div class="empty" id="console-note"></div>
+  </section>
+
+  <section>
     <h2>1. 选择知识库</h2>
     <div id="available" class="empty">读取中…</div>
     <div class="row">
@@ -221,6 +230,33 @@
   }
 
   $("reload").addEventListener("click", load);
+
+  $("open-console").addEventListener("click", async () => {
+    // 先 fetch 拿会话 cookie，再由页面自己导航。为什么不是直接导航过去：
+    // 顶层导航带不了 Authorization 头，而这条路由必须先证明"你是谁"。
+    // 为什么不是 fetch 跟随 303：跨源重定向上的 Set-Cookie 不会被浏览器保存
+    // （2026-10-22 真浏览器实测：跳到 36:10081 时 40+ 个请求全无 Cookie 头）。
+    // 所以网关对 fetch 回 **200 + target**，cookie 种在这次**同源**应答上 —— 那一定被保存。
+    try {
+      const response = await fetch("/v1/knowledge/console", {
+        headers: {
+          "Authorization": "Bearer " + token(),
+          "X-Business-Entry": "operator",
+          "Accept": "application/json",
+        },
+      });
+      const body = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        $("console-note").textContent = (body.error && body.error.message) || ("HTTP " + response.status);
+        return;
+      }
+      if (!body.target) {
+        $("console-note").textContent = "网关没有给出目标地址";
+        return;
+      }
+      location.href = body.target;
+    } catch (error) { $("console-note").textContent = error.message; }
+  });
 
   $("save").addEventListener("click", async () => {
     const knowledgeId = $("knowledge_id").value.trim();
