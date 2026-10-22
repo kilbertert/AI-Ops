@@ -33,6 +33,35 @@ EXECUTED_MUTATION = re.compile(
 )
 
 
+#: 标识符内部允许的字符。源码是标识符，它后面紧跟这些字符说明声明的是**另一个**
+#: 源码（``tdengine:charging-gun_property_extra``），而不是同一源码加了解释。
+_IDENTIFIER_TAIL = re.compile(r"[A-Za-z0-9_:./-]")
+
+
+def _declares(failed_sources: set[str], declared: str) -> str | None:
+    """模型声明的一条 failed_source 指向哪个**已知源码**；指向不了任何一个是 ``None``。
+
+    ``"tdengine:charging-gun_property（查询被拒：…）"`` → ``"tdengine:charging-gun_property"``。
+
+    判据是「已知源码 + 非标识符字符」：源码后要么结束，要么接一段解释。不能反过来
+    从声明里切出源码 —— 解释本身带冒号（``Invalid column name: batteryMinTemperature``），
+    切出来会把解释混进源码。以已知集合为准，两边都不含糊。
+
+    41 上的真实写法是两种并存：``source：解释`` 与 ``source（解释）``，所以不能只认冒号。
+    """
+    text = declared.strip()
+    if text in failed_sources:
+        return text
+    for source in failed_sources:
+        if not text.startswith(source):
+            continue
+        tail = text[len(source) :]
+        # 必须有解释（纯前缀不算声明），且解释的第一个字符不能是标识符字符。
+        if tail and not _IDENTIFIER_TAIL.match(tail):
+            return source
+    return None
+
+
 class AgentResultValidator:
     def __init__(
         self,
@@ -73,20 +102,53 @@ class AgentResultValidator:
             for entry in entries.values()
             if entry.status == "success" and entry.tool != ToolName.KNOWN_RUNBOOK.value
         }
+        # 假设可以落在**任何**真实观测上，包括失败的观测。
+        #
+        # 旧规则要求每个假设都引用一条「非 runbook 的**成功**证据」，于是一类
+        # 合法的假设永远过不了：陈述「这个通道不可用」的假设，能引用的证据只可能是
+        # 那条失败/阻塞的条目本身。41 上实测两轮（run-20261022T092735Z、
+        # run-20261022T104113Z）都卡在
+        # 「假设“环境数据面缺口导致遥测核对不可用”没有引用非 known_runbook 的直接成功证据」。
+        #
+        # 约束的本意写在 diagnosed 分支那句「至少需要引用一条非 known_runbook 的
+        # 直接成功证据」上：结论不能只挂在 runbook 上。失败条目（查询被拒、表不存在）
+        # 同样是真实观测，恰恰是「通道不可用」这类结论的直接依据。所以这里保留
+        # 「不能只引 runbook」这一条，去掉「必须成功」那一半 —— 后者没有对应的
+        # 风险，只是把一个必然发生的写法判成错误。
+        direct_evidence = {
+            entry.evidence_id
+            for entry in entries.values()
+            if entry.tool != ToolName.KNOWN_RUNBOOK.value
+        }
         if result.status == DiagnosisStatus.DIAGNOSED:
             if not result.root_cause.strip():
                 errors.append("diagnosed 结果必须给出 root_cause")
             if not direct_successful.intersection(referenced):
                 errors.append("diagnosed 结果至少需要引用一条非 known_runbook 的直接成功证据")
             for hypothesis in result.hypotheses:
-                if not direct_successful.intersection(hypothesis.evidence_ids):
-                    errors.append(f"假设“{hypothesis.title}”没有引用非 known_runbook 的直接成功证据")
+                if not direct_evidence.intersection(hypothesis.evidence_ids):
+                    errors.append(f"假设“{hypothesis.title}”没有引用非 known_runbook 的真实证据")
 
         failed_sources = set(self.journal.failed_sources())
-        if not failed_sources.issubset(result.failed_sources):
-            missing_failures = sorted(failed_sources.difference(result.failed_sources))
+        # 模型据实解释失败原因时，不能用「整串相等」判。
+        #
+        # 2026-10-22 在 41 上量到的确定性死锁（44/63 个 run 卡在重试上限 2）：
+        # journal 的失败源是 ``tdengine:charging-gun_property``，模型写成
+        # ``tdengine:charging-gun_property（查询被拒：Invalid column name ...）``。
+        # 整串比较下，**同一次响应**同时得到两条互相否定的报错 —— 不写解释判
+        # 「遗漏」，写了解释判「不存在」。两条规则合起来是一个没有解的约束，
+        # 而模型每次都必然踩到它（环境预检已知的列缺失/表缺失每轮都触发）。
+        #
+        # 判据回到它本来的意思：源码是标识符，按**源码 + 非标识符字符**认；后面那段
+        # 是给人读的解释，不参与比对。所以 ``tdengine:charging-gun`` 与
+        # ``tdengine:charging-gun_property_x`` 仍然是「不存在」—— 放宽的是
+        # 「可以带解释」，不是「可以只写个开头」。
+        declared_sources = {item: _declares(failed_sources, item) for item in result.failed_sources}
+        covered = {source for source in declared_sources.values() if source is not None}
+        if not failed_sources.issubset(covered):
+            missing_failures = sorted(failed_sources.difference(covered))
             errors.append("结果遗漏失败数据源: " + ", ".join(missing_failures))
-        invented_failures = sorted(set(result.failed_sources).difference(failed_sources))
+        invented_failures = sorted(item for item, source in declared_sources.items() if source is None)
         if invented_failures:
             errors.append("结果声明了日志中不存在的失败数据源: " + ", ".join(invented_failures))
         if failed_sources and not result.limitations:

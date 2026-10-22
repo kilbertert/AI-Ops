@@ -117,6 +117,74 @@ def test_validator_allows_recommending_a_human_review_without_execution_claim(tm
     assert AgentResultValidator(manifest, journal).validate(result) == []
 
 
+def test_validator_accepts_a_failed_source_that_carries_its_reason(tmp_path: Path) -> None:
+    """模型解释失败原因时，不得被同时判成「遗漏」和「不存在」。
+
+    2026-10-22 在 41 上实测的确定性死锁（44/63 个 run 卡在重试上限 2）：
+    journal 里的失败源是 ``tdengine:charging-gun_property``，模型据实写成
+    ``tdengine:charging-gun_property（查询被拒：Invalid column name ...）``。
+    旧实现按**整串相等**比较，于是同一次响应得到两条互相否定的报错：
+
+        结果遗漏失败数据源: tdengine:charging-gun_property
+        结果声明了日志中不存在的失败数据源: tdengine:charging-gun_property（...）
+
+    模型无论怎么写都过不了 —— 不写解释判「遗漏」，写了解释判「不存在」。
+    这里钉住的是**判据**：源码是标识符，按前缀认；冒号之后是给人读的解释。
+    """
+    manifest, journal, entry = _context(tmp_path)
+    journal.record(
+        tool=ToolName.GUN_TIMESERIES,
+        source="tdengine:charging-gun_property",
+        status="failed",
+        request={},
+        payload={},
+        error="Invalid column name: batteryMinTemperature",
+    )
+    result = _diagnosis(manifest, entry.evidence_id).model_copy(
+        update={
+            "failed_sources": [
+                "tdengine:charging-gun_property（查询被拒：Invalid column name: batteryMinTemperature）"
+            ],
+            "limitations": ["gun telemetry unavailable in this environment"],
+        }
+    )
+
+    errors = AgentResultValidator(manifest, journal).validate(result)
+
+    assert not any("遗漏失败数据源" in error for error in errors), errors
+    assert not any("不存在的失败数据源" in error for error in errors), errors
+
+
+def test_validator_still_rejects_a_source_that_only_shares_a_prefix(tmp_path: Path) -> None:
+    """前缀放宽不得变成「随便写个开头都算」：边界是**非标识符字符**。
+
+    ``tdengine:charging-gun`` 不是 ``tdengine:charging-gun_property`` 的别名，
+    ``tdengine:charging-gun_property_extra`` 也不是 —— 它们声明的是另一个源码。
+    放宽只接受一种形状：已知源码之后接一个不能出现在标识符里的字符，再跟解释。
+    """
+    manifest, journal, entry = _context(tmp_path)
+    journal.record(
+        tool=ToolName.GUN_TIMESERIES,
+        source="tdengine:charging-gun_property",
+        status="failed",
+        request={},
+        payload={},
+        error="timeout",
+    )
+    for declared in (
+        "tdengine:charging-gun",
+        "tdengine:charging-gun_property_extra",
+        "tdengine:charging-gun_propertyX",
+    ):
+        result = _diagnosis(manifest, entry.evidence_id).model_copy(
+            update={"failed_sources": [declared], "limitations": ["down"]}
+        )
+
+        errors = AgentResultValidator(manifest, journal).validate(result)
+
+        assert any("不存在的失败数据源" in error for error in errors), declared
+
+
 def test_validator_caps_confidence_when_a_source_failed(tmp_path: Path) -> None:
     manifest, journal, entry = _context(tmp_path)
     journal.record(
@@ -138,6 +206,53 @@ def test_validator_caps_confidence_when_a_source_failed(tmp_path: Path) -> None:
     errors = AgentResultValidator(manifest, journal).validate(result)
 
     assert any("不得为 high" in error for error in errors)
+
+
+def test_validator_accepts_a_hypothesis_grounded_in_a_failed_channel(tmp_path: Path) -> None:
+    """「通道不可用」这一类假设只能引用失败证据 —— 规则不得要求它引用成功证据。
+
+    41 上实测（2026-10-22，run-20261022T092735Z 与 …T104113Z 两轮都卡在这里）：
+    模型据实给出假设「环境数据面缺口导致遥测核对不可用」，引用的是 ev-004/ev-007
+    （分别是 blocked 与 failed 的 TDengine 条目）。旧规则要求**每个**假设都引用
+    一条非 known_runbook 的**成功**证据，于是这条假设永远无法通过 —— 它陈述的
+    正是「这个通道失败了」，能引用的证据只可能是失败的那一条。修一次、再修一次，
+    第三轮撞上重试上限。
+
+    约束的本意是「假设必须落在真实观测上，不能只挂在 runbook 上」。失败/阻塞的
+    证据同样是真实观测（查询被拒、表不存在），因此判据改为「至少引用一条非
+    runbook 的真实证据」，而不是「至少引用一条成功证据」。
+    """
+    manifest, journal, entry = _context(tmp_path)
+    blocked = journal.record(
+        tool=ToolName.GUN_TIMESERIES,
+        source="tdengine:charging-gun_property",
+        status="failed",
+        request={},
+        payload={},
+        error="Invalid column name: batteryMinTemperature",
+    )
+    result = _diagnosis(manifest, entry.evidence_id).model_copy(
+        update={
+            "failed_sources": ["tdengine:charging-gun_property"],
+            "limitations": ["gun telemetry unavailable"],
+            "hypotheses": [
+                Hypothesis(
+                    title="订单主数据存在",
+                    explanation="订单行可读取",
+                    evidence_ids=[entry.evidence_id],
+                ),
+                Hypothesis(
+                    title="枪端遥测在本环境不可用",
+                    explanation="查询被拒，无法用于计量交叉核对",
+                    evidence_ids=[blocked.evidence_id],
+                ),
+            ],
+        }
+    )
+
+    errors = AgentResultValidator(manifest, journal).validate(result)
+
+    assert not any("枪端遥测在本环境不可用" in error for error in errors), errors
 
 
 def test_validator_rejects_known_runbook_as_the_only_causal_evidence(tmp_path: Path) -> None:

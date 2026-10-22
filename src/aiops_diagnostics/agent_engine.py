@@ -14,7 +14,7 @@ from aiops_diagnostics.agent_contracts import (
     IncidentManifest,
     RunState,
 )
-from aiops_diagnostics.agent_validator import AgentResultValidator
+from aiops_diagnostics.agent_validator import AgentResultValidator, _declares
 from aiops_diagnostics.agent_workspace import AgentWorkspace
 from aiops_diagnostics.codex_runtime import (
     AgentRuntimeError,
@@ -347,6 +347,15 @@ class AgentCoordinator:
         return updated
 
     def _finish_success(self, state: RunState, result: AgentDiagnosis) -> AgentDiagnosis:
+        # 校验时允许 ``source（解释）`` 这种写法（见 agent_validator._declares），但
+        # **落库与对外返回的必须是源码本身**：``result`` 会 overall 存进诊断行并原样
+        # 出现在 ``/v1/standard/diagnoses/{id}`` 的 ``result`` 里。把模型给人读的解释
+        # 混进这个标识符字段，等于让下游拿一个不能用来 join 日志的字符串 —— 而解释
+        # 本身没有丢：存在失败源时校验器强制要求 ``limitations``，模型已经把原因写
+        # 在那里了。
+        known = set(self.journal.failed_sources())
+        resolved = [source for item in result.failed_sources if (source := _declares(known, item))]
+        result = result.model_copy(update={"failed_sources": list(dict.fromkeys(resolved))})
         self.workspace.save_result(result)
         self.workspace.save_state(state.model_copy(update={"phase": "completed", "next_prompt": ""}))
         self._record_event({"type": "diagnosis_completed", "status": result.status.value})

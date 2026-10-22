@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from aiops_diagnostics.agent_contracts import IncidentManifest
+from aiops_diagnostics.agent_contracts import IncidentManifest, ToolName
 from aiops_diagnostics.agent_engine import AgentCoordinator
 from aiops_diagnostics.agent_workspace import AgentWorkspace
 from aiops_diagnostics.codex_runtime import AgentRuntimeError, AgentTurnTimeout, CodexTurnOutput
@@ -123,6 +123,44 @@ def _diagnosis(
         },
         ensure_ascii=False,
     )
+
+
+def test_a_failed_source_is_stored_as_the_bare_identifier(tmp_path: Path) -> None:
+    """校验放宽「源码（解释）」，但**落库/对外返回的必须只是源码**。
+
+    ``result`` 会被整体存进诊断行，并原样出现在 ``/v1/standard/diagnoses/{id}``
+    的 ``result`` 字段里（``gateway_runtime`` 的 ``result.model_dump``）。若把模型
+    给人读的解释留在这个标识符字段，下游就拿不到能去 join 日志的字符串。解释本身
+    不会丢：存在失败源时校验器强制要求 ``limitations``，模型已经把原因写在那里。
+
+    这条用例同时钉住另一半：收口的映射用的是**已验证过**的同一套判据，所以只要
+    诊断能通过校验，映射就不会丢条目、也不会凭空多出条目。
+    """
+    request, manifest, workspace, journal, tools, settings = _context(tmp_path)
+    # 让 journal 真的带一条失败源，否则 failed_sources 只能是空。这条先写，
+    # 所以它拿到 ev-001；脚本里要引用的是随后由工具批次写下的**成功**条目。
+    journal.record(
+        tool=ToolName.GUN_TIMESERIES,
+        source="tdengine:charging-gun_property",
+        status="failed",
+        request={"order_no": manifest.order_no},
+        payload={},
+        error="Invalid column name: batteryMinTemperature",
+    )
+    answer = json.loads(_diagnosis(manifest, evidence_id="ev-002"))
+    answer["diagnosis"]["failed_sources"] = [
+        "tdengine:charging-gun_property（查询被拒：Invalid column name: batteryMinTemperature）"
+    ]
+    answer["diagnosis"]["limitations"] = ["gun telemetry unavailable in this environment"]
+    session = _FakeSession([_tool_request(), json.dumps(answer, ensure_ascii=False)])
+    coordinator = AgentCoordinator(
+        workspace, manifest, journal, tools, settings, session_factory=lambda *_: session
+    )
+
+    result = coordinator.run()
+
+    assert result.status.value == "diagnosed"
+    assert result.failed_sources == ["tdengine:charging-gun_property"]
 
 
 def test_coordinator_keeps_codex_in_control_of_tool_selection(tmp_path: Path) -> None:
