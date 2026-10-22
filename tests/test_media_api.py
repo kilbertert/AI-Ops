@@ -347,12 +347,32 @@ def test_kb_client_maps_http_200_business_error_body_to_not_found(monkeypatch) -
         "aiops_diagnostics.bounded_http.urllib.request.urlopen",
         lambda request, timeout=None: _Response(),
     )
+    # The retry BACKOFF is not what this test is about — the mapping is. Left real,
+    # the `video` policy naps 0.25+0.5+1+2+4 = 7.75 s here, which is the entire cost
+    # of this test (measured 2026-10-22; the test's own duration matched the sleep
+    # total exactly). Stopping the clock is the difference between testing the
+    # mapping and testing arithmetic on the backoff table.
+    #
+    # The retry itself is still exercised: `sleep` is replaced, not the loop, so the
+    # five attempts still happen and the final `MediaNotFound` still comes from the
+    # `attempt + 1 == attempts` branch. Recorded so the assertion below is about the
+    # code path, not about a loop that was short-circuited.
+    naps: list[float] = []
+    monkeypatch.setattr(
+        "aiops_diagnostics.knowledge_retrieval.time.sleep",
+        lambda seconds, _record=naps.append: _record(seconds),
+    )
     try:
         client.fetch_media(grant)
     except MediaNotFound:
         pass
     else:
         raise AssertionError("HTTP 200 business error must map to MediaNotFound")
+    # Naps then a final raise: the policy naps 5 times and the 6th failure re-raises.
+    # The numbers are the declared schedule (base 0.25, doubling, no jitter), so this
+    # pins the retry SHAPE while the clock is stopped — a changed attempt count or
+    # backoff curve still fails here.
+    assert naps == [0.25, 0.5, 1.0, 2.0, 4.0], f"retry shape changed: {naps}"
 
 
 def test_kb_client_retries_transient_video_not_found(monkeypatch) -> None:
