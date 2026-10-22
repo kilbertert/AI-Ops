@@ -30,7 +30,9 @@
   另有公司登录代理账号的独立会话审计，不算这次复测重试，也不推断为真人点击或公司 App 通过。
 - **本地验证**：新增 10 项离线回归，覆盖拼接重复、冲突结果、坏尾部、错归属决策、失败不泄露、
   缺终态、错单、错答案、额外审计和混合任务；连同既有 ops_tools/README 共 **44 passed**。
-  ruff 检查/格式、compileall、依赖、repo-map、policy、ADR、新增链接及敏感数据扫描通过，CI 待验证。
+  ruff 检查/格式、compileall、依赖、repo-map、policy、ADR、新增链接及敏感数据扫描通过。
+  PR #966 首轮 `b000d50` CI **3484 passed / 9 skipped**，Workflow policy/spec-tree 均通过、无未解决线程；
+  后续合入主线 `98a7b50` 测试优化，最终检查以 [PR #966](https://github.com/kilbertert/AI-Ops/pull/966) 回执为准。
   本片只改证据工具/文档，不改 Gateway 契约、
   配置或 Java 节点；不重跑 Gateway 技能、镜像和 Java 构建，授权守卫突变沿用 #938/#951 的独立证据。
 
