@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import hashlib
+import logging
 import secrets
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
+from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, Protocol
@@ -19,8 +22,15 @@ from aiops_diagnostics.bounded_http import (
     request_json,
 )
 from aiops_diagnostics.config import Settings
-from aiops_diagnostics.query_scope import resolve_query_scope
+from aiops_diagnostics.query_scope import (
+    QueryScope,
+    ShopDirectory,
+    SiteScopeMapper,
+    operator_site_scope_from_shops,
+    resolve_query_scope,
+)
 from aiops_diagnostics.scope_context import (
+    SCOPE_TYPE_ORGAN,
     DataScope,
     ScopeContext,
     ScopeError,
@@ -29,7 +39,9 @@ from aiops_diagnostics.scope_context import (
     SubjectRecord,
     UpmsDirectory,
 )
-from aiops_diagnostics.sources import scoped_live_sources
+from aiops_diagnostics.sources import SourceError, mysql_site_mapper, scoped_live_sources
+
+_LOGGER = logging.getLogger(__name__)
 
 CALLER_AUTH_INVALID = "caller_auth.invalid"
 CALLER_AUTH_FORBIDDEN = "caller_auth.forbidden"
@@ -340,15 +352,81 @@ class ScopedOrderAuthorizer:
     （#426：会话身份带上该 B 端主体的运营商站点集合）与平台 Bearer 调用者的数据
     范围走同一个判定。判定只回答「能查 / 被拒绝」，订单不存在与无权查看得到同一个
     ``False``——订单号不能用来探测他人业务。
+
+    **判定为不可见时的第二意见（2026-10-22）**：公司令牌里的 ``shop_ids`` 是
+    **登录那一刻**的快照，而公司列表接口 ``/chOrderInfo/page`` 每次请求都实时查
+    ``/shopuser/getShops``（``@ShopDataScope(realTime = true)``）。登录后店铺绑定若被
+    修改，列表里会出现新店铺的订单，而这里按旧快照判成「不属于」——用户看到的正是
+    「这个订单不属于当前账户」。
+
+    ADR-0009 决定 2 要求**正常路径**不要为用不上的答案打公司内部端点，所以不能在
+    解析时一律实时查（那会让每个管家端请求多一跳，并把该端点的故障引进所有请求）。
+    这里改成：**快照说「能看」就直接返回**（正常路径零成本）；**快照说「不能看」时
+    才向公司权威端点确认一次**，确认能看就放行并记一行可区分日志。
+
+    为什么这个方向是安全的：回退只可能把 ``False`` 变成 ``True``，而那次查询问的
+    正是「公司此刻认为这个账号拥有哪些店铺」——与列表接口同一个来源。判定用的仍是
+    同一套 ``QueryScope`` 机制，没有放宽租户边界，也没有绕过站点映射。
     """
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        *,
+        shop_directory: ShopDirectory | None = None,
+        scope_mapper: Callable[[Settings], AbstractContextManager[SiteScopeMapper]] | None = None,
+    ) -> None:
         self.settings = settings
+        self.shop_directory = shop_directory
+        self.scope_mapper = scope_mapper or mysql_site_mapper
 
     def can_access(self, context: ScopeContext, order_no: str) -> bool:
         query_scope = resolve_query_scope(context)
         with scoped_live_sources(self.settings, scope=query_scope) as sources:
-            return bool(sources.get_orders(order_no))
+            if sources.get_orders(order_no):
+                return True
+        refreshed = self._refresh_operator_sites(context)
+        if refreshed is None:
+            return False
+        with scoped_live_sources(self.settings, scope=refreshed) as sources:
+            allowed = bool(sources.get_orders(order_no))
+        if allowed:
+            _LOGGER.info(
+                "order_authorization_stale_shop_snapshot tenant_hash=%s",
+                hashlib.sha256(context.effective_tenant_id.encode("utf-8")).hexdigest()[:16],
+            )
+        return allowed
+
+    def _refresh_operator_sites(self, context: ScopeContext) -> QueryScope | None:
+        """按**公司实时店铺集合**重算一次运营商站点范围；不适用时返回 ``None``。
+
+        只对「管家端入口 + 运营商站点口径」生效。以下情况一律返回 ``None``（不回退）：
+
+        - 范围不是 ``organ``（``self`` / ``all`` 与店铺绑定无关，快照差异不存在）；
+        - 令牌里没有 B 端主体（消费者路径，本就没有店铺概念）；
+        - 公司权威端点未配置或不可用 —— **失败关闭，不把故障变成放行**。
+        """
+        scope = context.data_scope
+        if scope.type != SCOPE_TYPE_ORGAN:
+            return None
+        b_user_id = context.subject.b_user_id or ""
+        if not b_user_id:
+            return None
+        directory = self.shop_directory
+        mapper_factory = self.scope_mapper
+        if directory is None or mapper_factory is None:
+            return None
+        try:
+            shop_ids = directory.shop_ids_by_b_user_id(b_user_id)
+            with mapper_factory(self.settings) as mapper:
+                refreshed = operator_site_scope_from_shops(
+                    shop_ids, context.effective_tenant_id, mapper=mapper
+                )
+        except (ScopeError, SourceError, ValueError):
+            # 公司端点或充电库不可用：保持原判定（拒绝），不把一次上游故障变成放行。
+            _LOGGER.warning("order_authorization_refresh_failed")
+            return None
+        return refreshed
 
 
 def _data_scope(value: object) -> DataScope:

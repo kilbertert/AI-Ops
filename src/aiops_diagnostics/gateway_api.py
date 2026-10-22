@@ -1001,7 +1001,17 @@ def create_gateway_app(
     selected_resolver = caller_resolver or _caller_resolver(selected_settings)
     diagnostic_settings = getattr(selected_runtime, "diagnostic_settings", None)
     selected_authorizer = order_authorizer or (
-        ScopedOrderAuthorizer(diagnostic_settings)
+        # ``shop_directory`` 让「快照说不可见」时能向公司权威端点确认一次
+        # （见 ``ScopedOrderAuthorizer`` 的 docstring）。未配置时为 ``None``，
+        # 此时行为与之前逐字一致：只有快照，判不可见即拒绝。
+        ScopedOrderAuthorizer(
+            diagnostic_settings,
+            shop_directory=(
+                _shop_directory(Settings.from_config(selected_settings.server_config_file))
+                if diagnostic_settings is not None and selected_settings.server_config_file
+                else None
+            ),
+        )
         if diagnostic_settings is not None
         else DisabledOrderAuthorizer()
     )

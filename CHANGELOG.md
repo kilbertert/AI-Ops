@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- 管家端订单被拒时向公司实时店铺确认一次：令牌里的 `shop_ids` 是登录快照，而公司列表
+  接口每次实时查；登录后店铺绑定被改会出现「列表有、判定无」。现在快照命中直接放行，
+  仅在判不可见时确认一次（ADR-0088）。
 - 隔离栈改绑智能体后同时核对模型、指令、应用与成功信封，避免只改了模型就误报整次改绑成功。
 - 工单订单（`ch_order_info.user_id='-1'`）的主人写在 `consumer_id`，`self` 范围此前只认
   `user_id`，于是这类订单对**它的主人自己**也回「这个订单不属于当前账号」。判据改为
