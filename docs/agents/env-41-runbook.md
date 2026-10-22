@@ -1106,6 +1106,28 @@ ssh aiops-41 'curl -sS -H "Authorization: Bearer <服务令牌>" -H "X-Business-
 - **`disable` 之后不要删行**：保留它才有「这个动作曾经存在过」的审计痕迹，
   且 `list_effective` 里 disabled 行**抑制**同 code 的平台行，正是我们要的语义。
 
+### 3.1-octies 租户 workspace 里的**两个**同名 dataset 是**有意的**（#887，2026-10-22 取证）
+
+租户 `1942105476598861824` 的 workspace `c3f871e1-…` 下有两个同名外接知识库
+`aiops-41-kb-prod-kefu`，句柄都是 `kb-canary-2`：
+
+| dataset | 建于 | 谁在用 |
+|---|---|---|
+| `ebd103c0-…` | 2026-10-21 16:07 | **生产 app** `88fc20bd-…`（kefu） |
+| `a7a8aad3-…` | 2026-10-14 08:21 | **旧 workspace 的归档 app** `8e36f0a6-…`（回滚点） |
+
+**不要删任何一个。** 它们是一对回滚路径的两端：撤旧访问权（#888）之前，旧 app 必须仍然
+可运行。三条会被误读的信号，都核对过：
+
+1. `app_count` 显示 **0** 对两者都成立 —— Dify 的 `app_count` **不统计 external dataset
+   的引用**，它不是孤儿判据。
+2. `a7a8aad3` 的 `updated_at` 会变（2026-10-22 00:41）—— 那是我们自己的
+   `external-hit-testing` 打出来的（Dify 日志里有对应的 200），不是"有人在用"。
+3. 两个都**真的能检索**（各 200 + 1 条记录）—— "能查"不等于"该留它当生产件"。
+
+判断某个 dataset 是否还被引用，只有一条可靠办法：**遍历各 workspace 的 app，导出 DSL，
+看 `dataset_configs.datasets` 里有没有它的 id**。runbook 的这一节就是那次遍历的结论。
+
 ### 3.1-septies 从入口**恢复**一个动作：种子已在代码里，**数据侧要补的是租户绑定**（2026-10-19 新增）
 
 **用途**：反转 §3.1-sexies 那次移除。**2026-10-19 的实例**：管家端恢复「客户案例」
