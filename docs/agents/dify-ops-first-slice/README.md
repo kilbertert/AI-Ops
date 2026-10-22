@@ -26,9 +26,12 @@
 配置只授予已登记的 operator 绑定，不按同名智能体猜测。禁用或删除该凭据行下一次调用即拒绝。
 禁用行保留时，发布仍理解新工具的空名单语义。文件丢失/不可读不回落。
 
-`AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL` 新格式为逗号分隔 `tenant:https://business/base`，
+`AIOPS_GATEWAY_OPS_CHARGING_STATUS_BASE_URL` 为逗号分隔 `tenant:https://business/base`，
 同地址的多个租户分别登记。无对应行的新工具返回 `TENANT_ENDPOINT_UNRESOLVED`。
-历史单一 URL 对旧充电状态调用仍有效，但不为新工具提供兜底。修改配置经正常部署生效。
+此键只供运维工具使用，不启用 consumer 状态入口，也不要求 M3 的逻辑执行环境。
+专用键为空时兼容首片的 `AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL` 租户映射；
+专用键非空但缺目标租户时拒绝，不回退旧地址。旧键的历史单一 URL 仍不为新工具兜底。
+旧键同时控制 consumer 状态入口，首次只启用运维工具时使用专用键。修改配置经正常部署生效。
 数据库来自同一网关的既有 MySQL 配置，地址表不能让数据库自动跨客户切换。
 
 ## 登记、发布与调用

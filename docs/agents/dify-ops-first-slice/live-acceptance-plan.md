@@ -18,6 +18,8 @@ Dify `agent-chat` 使用 `langgenius/deepseek/deepseek` / `deepseek-v4-flash`。
 ## 需要裁定的变更范围
 
 1. 41：为现有 operator 目标准备独立随机服务 key、0600 绑定文件，登记本租户 CPMS 地址。
+   使用 `AIOPS_GATEWAY_OPS_CHARGING_STATUS_BASE_URL`，保持共享的
+   `AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL` 与 M3 配置关闭，避免同时启用 consumer 直读入口。
    配置制品必须经受控部署，标明合并 revision、制品摘要及原配置摘要；不手改运行源码。
    配置需要重载时明确列出仅 AI-Ops Gateway 的受控重启，不能顺带重启公司业务服务。
 2. Dify：在该 workspace 登记 `aiops-ops`，暂给**现有** operator app 加上两个工具，

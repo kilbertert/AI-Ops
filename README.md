@@ -231,6 +231,10 @@ flowchart TB
 **为什么 `agent_contracts.py` 在 L0 而 `agent_engine.py` 在 L4？**
 契约被所有人导入（入度 12），编排只被 runner 导入。契约是共享词汇，编排是流程。
 
+首次只启用 Dify 运维只读工具时，CPMS 地址使用
+`AIOPS_GATEWAY_OPS_CHARGING_STATUS_BASE_URL`，不会同时打开 consumer 充电状态入口；
+接入及兼容规则见[首片手册](docs/agents/dify-ops-first-slice/README.md)。
+
 **为什么 `engine.py` 和 `agent_workspace.py` 在 L3？**
 判据是**入度**而非直觉：`engine` 被 `diagnostic_tools` 与 `cli` 引用（作为 `known_runbook`
 参考证据），`agent_workspace` 被 `journal` 与 `codex_runtime` 引用。把它们放低一层会让
