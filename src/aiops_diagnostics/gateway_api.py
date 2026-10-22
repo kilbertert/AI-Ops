@@ -3841,7 +3841,11 @@ def create_gateway_app(
 
         settings = context.settings
         tenant_id = str(caller.effective_tenant_id)
-        if not settings.ragflow_console_base_url or not settings.ragflow_credential_key:
+        if (
+            not settings.ragflow_console_base_url
+            or not settings.ragflow_credential_key
+            or not settings.ragflow_console_public_pem
+        ):
             raise StandardAPIError(
                 status.HTTP_404_NOT_FOUND, "KNOWLEDGE_CONSOLE_DISABLED", "console access is not enabled"
             )
@@ -3854,6 +3858,7 @@ def create_gateway_app(
                 credential_key=settings.ragflow_credential_key,
                 client=client,
                 public_base_url=settings.ragflow_console_public_url or settings.ragflow_console_base_url,
+                public_pem_path=settings.ragflow_console_public_pem,
             )
         except RAGFlowLoginError as exc:
             # Refusals are recorded too: with one shared owner, "who tried" is the

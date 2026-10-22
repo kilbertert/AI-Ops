@@ -238,6 +238,9 @@ class GatewayServerSettings:
     #: 浏览器最终要去的地方（RAGFlow 的 web 入口，含端口）。留空则回落到 base URL ——
     #: 只在"API 与 web 同源"的部署里成立，所以默认值与 base 一致而不是自己编一个。
     ragflow_console_public_url: str = ""
+    #: RAGFlow 的**公钥**路径（#926）。登录时密码要先 base64 再 RSA 加密，密钥就在这里。
+    #: 只有公钥 —— 它不敏感，但仍然由部署给定而不是猜一个默认路径。
+    ragflow_console_public_pem: str = ""
     #: Conversation context window (#482). The defaults ARE the contract's
     #: numbers (8 turns / 8k tokens, ``conversation_store`` owns the constants);
     #: they are configurable because a RAG or promotional turn also spends the
@@ -403,6 +406,8 @@ class GatewayServerSettings:
             or _file_value(file_values, "AIOPS_GATEWAY_RAGFLOW_CONSOLE_BASE_URL"),
             ragflow_console_public_url=_env("AIOPS_GATEWAY_RAGFLOW_CONSOLE_PUBLIC_URL")
             or _file_value(file_values, "AIOPS_GATEWAY_RAGFLOW_CONSOLE_PUBLIC_URL"),
+            ragflow_console_public_pem=_env("AIOPS_GATEWAY_RAGFLOW_CONSOLE_PUBLIC_PEM")
+            or _file_value(file_values, "AIOPS_GATEWAY_RAGFLOW_CONSOLE_PUBLIC_PEM"),
             jev_base_url=_env("AIOPS_GATEWAY_JEV_BASE_URL")
             or _file_value(file_values, "AIOPS_GATEWAY_JEV_BASE_URL"),
             jev_api_key=_env("AIOPS_GATEWAY_JEV_API_KEY")
