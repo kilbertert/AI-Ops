@@ -1,3 +1,51 @@
+## 2026-10-22 · 知识库 1:1:1 在 41 上的真机验收：六个真缺陷，全部由真机暴露
+
+**范围**：41（CD 部署 `4916eafc9fd0`，`aiops-gateway-41.service` active）。调用者身份是
+**构造的**（ADR-0058：真实库 + 声明租户），不借用任何真实用户会话。
+
+### 一、通过的部分
+
+| 环节 | 证据 |
+|---|---|
+| `onboard-tenant` | 新租户建好，embedding 校验 `dim=3072` |
+| 幂等重跑 | `already verified, no writes` |
+| `check-knowledge-triple` | 完整租户 `OK`；不完整的报 `missing-ragflow-tenant`；退出码 1 |
+| `/v1/knowledge/console` | **303** + `Location: http://36.156.159.175:10081` + `Set-Cookie: session` |
+| 账本 | `granted` 一行，带公司用户 id |
+| **会话被 RAGFlow 接受** | 把 cookie 回放给 `/api/v1/users/me` → **200**，`email=a2c5edebe7852aa0@kb.internal` |
+| 轮换 | `CHANGED True`；旧密码 `109 Email and password do not match`；新密码登录成功 |
+
+最后一行是这条链路唯一无法用单测替代的判据：不是"网关发出了 cookie"，而是"RAGFlow 认它"。
+
+### 二、六轮真机暴露的六个缺陷（单测全绿、CI 全绿）
+
+| 轮 | 缺陷 | 单测为什么没抓住 |
+|---|---|---|
+| 1 | 两个设置声明了但 `from_env()` 没读 | 所有用例直接构造 settings |
+| 2 | 密码没做 base64+RSA | 假上游只检查"有 password 字段" |
+| 3 | 已有上游账号的密码没改（`create_tenant` 直接返回旧行） | 假上游的"注册"是幂等的 |
+| 4 | 会话在 `Set-Cookie` 头里而不是 `data.cookies` | **假上游发明了 `data.cookies`** |
+| 5 | 改密成功、重建 token 失败 ⇒ 报 500 ⇒ 不回写 | 假上游的 code 表比真上游少一个 103 |
+| 6 | 轮换后"我们记的"与"上游实际的"可能不一致 | ——（这是第 5 轮的直接后果，靠探测修复） |
+
+第 4 轮最值得记：假上游不是在简化，是在**发明**一个上游从不产生的东西。测试失去的不是
+精度，是诚实。
+
+### 三、41 上留下的状态
+
+- 环境变量：`AIOPS_GATEWAY_RAGFLOW_{CREDENTIAL_KEY,EMBEDDING_BASE_URL,EMBEDDING_API_KEY,CONSOLE_BASE_URL,CONSOLE_PUBLIC_URL,CONSOLE_PUBLIC_PEM}`；备份在 `/root/gateway.env.bak-*`。
+- 公钥 `/etc/aiops-41/ragflow-public.pem`（从 36 的 kb-service 原样拷）。
+- kb-service（36）新增 `POST /kb/tenants/rotate` 与 `/kb/tenants/verify-password`，已部署并重启；备份 `/root/kb-bak/`。
+- 两个验收租户：`9260acceptancefresh`（密码已永久不一致，**留作反面证据**，不要再用于验收）、`9260rotatecheck`（干净）。
+
+### 四、没验什么
+
+- **真实浏览器**：全程用 `TestClient` + 真实 HTTP，没有在浏览器里点过。cookie 的
+  `domain/path` 在跨到 `36:10081` 时的实际行为没看过 —— 这是最容易在真浏览器里翻车的一处。
+- **运营用公司账号**：验收用的是构造身份。真实 thirdSession 链路上这条路由的权限判据
+  （`ROLE_AGENT_ADMIN`）没有用真实账号走过。
+- **多租户隔离**：只验了一个租户进得去，没验另一个进不去（单测里有）。
+
 ## 2026-10-22 · Dify 运维工具真实验收前置（只读，未完成业务验收）
 
 **分支/基线**：`test/dify-ops-live-acceptance` / `3d1e142780fb`；05:40 UTC只读复核。
