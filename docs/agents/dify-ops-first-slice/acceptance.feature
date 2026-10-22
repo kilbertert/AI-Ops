@@ -26,6 +26,12 @@ Feature: 租户运维的受控只读工具
       When 业务读取期间绑定或发布权限改变
       Then Gateway 在释放结果前拒绝正文
   Rule: 失败可见且存量兼容
+    Scenario: 运维地址不启用消费者状态入口
+      Given 仅配置运维专用租户地址且两个工具已发布
+      When 服务凭据查询订单列表
+      Then 工具返回只读结果
+      When 消费者请求充电状态入口
+      Then 返回 CHARGING_STATUS_DISABLED 且不读取业务
     Scenario: 证据写入失败
       Given 一个原本可以完成的请求
       When 证据不能写入

@@ -192,6 +192,77 @@ def test_endpoints_are_exact_and_old_scalar_is_not_ops_fallback():
             parse_charging_endpoints(value)
 
 
+def test_ops_endpoint_can_be_enabled_without_consumer_status(provision, monkeypatch):
+    from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
+
+    p = provision
+    p.settings.charging_status_base_url = ""
+    p.settings.execution_environment = ""
+    p.settings.ops_charging_status_base_url = "tenant-a:http://127.0.0.1:9"
+    p.settings.validate()
+    reads = []
+
+    def read(binding, tool, inputs, base):
+        reads.append(base)
+        return {"orders": [], "source": "fixture"}
+
+    monkeypatch.setattr(p.service, "_read", read)
+    assert p.service.execute(KEY, "tenant-a", "order_list", OrderListInput())["result"]["orders"] == []
+    assert reads == ["http://127.0.0.1:9"]
+
+    subject = SubjectRecord(b_user_id="B-1", c_user_id="C-1", tenant_id="tenant-a")
+    caller = ScopeContext.build(
+        caller=subject,
+        subject=subject,
+        delegated=False,
+        effective_tenant_id="tenant-a",
+        data_scope=DataScope(type="self"),
+        roles=frozenset(),
+        permissions=frozenset(),
+    )
+    app = create_gateway_app(
+        settings=p.settings,
+        agent_manager=p.manager,
+        runtime=SimpleNamespace(kb_search_client=None),
+        caller_resolver=SimpleNamespace(resolve=lambda *args, **kwargs: caller),
+    )
+    with TestClient(app) as client:
+        response = client.get(
+            "/v1/orders/O-1/charging-status",
+            headers={"Authorization": "Bearer consumer-fixture", "X-Business-Entry": "consumer"},
+        )
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "CHARGING_STATUS_DISABLED"
+
+
+def test_ops_endpoint_settings_read_private_config_and_prefer_environment(provision, monkeypatch):
+    p = provision
+    p.settings.server_config_file.write_text(
+        "AIOPS_GATEWAY_OPS_CHARGING_STATUS_BASE_URL=tenant-a:https://cpms.invalid/charging-pile\n"
+    )
+    monkeypatch.setenv("AIOPS_GATEWAY_SERVER_CONFIG_FILE", str(p.settings.server_config_file))
+    monkeypatch.setenv("AIOPS_GATEWAY_ENVIRONMENT", "test")
+    monkeypatch.delenv("AIOPS_GATEWAY_OPS_CHARGING_STATUS_BASE_URL", raising=False)
+    assert (
+        GatewayServerSettings.from_env().ops_charging_status_base_url
+        == "tenant-a:https://cpms.invalid/charging-pile"
+    )
+    monkeypatch.setenv("AIOPS_GATEWAY_OPS_CHARGING_STATUS_BASE_URL", "tenant-a:https://override.invalid")
+    settings = GatewayServerSettings.from_env()
+    assert settings.ops_charging_status_base_url == "tenant-a:https://override.invalid"
+    settings.ops_charging_status_base_url = "tenant-a:http://remote.invalid"
+    with pytest.raises(ValueError):
+        settings.validate()
+
+
+def test_ops_endpoint_missing_tenant_does_not_fall_back_to_legacy(provision, monkeypatch):
+    p = provision
+    p.settings.ops_charging_status_base_url = "tenant-b:https://cpms.invalid"
+    monkeypatch.setattr(p.service, "_read", lambda *args: pytest.fail("unregistered endpoint read"))
+    with pytest.raises(OpsToolError, match="TENANT_ENDPOINT_UNRESOLVED"):
+        p.service.execute(KEY, "tenant-a", "order_list", OrderListInput())
+
+
 def test_private_binding_validation(provision):
     p = provision
     p.path.chmod(0o644)

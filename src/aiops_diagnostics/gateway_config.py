@@ -48,6 +48,7 @@ class GatewayServerSettings:
     third_session_key_prefix: str = "app:3rd_session:"
     charging_status_base_url: str = ""
     ops_bindings_file: str = ""
+    ops_charging_status_base_url: str = ""
     execution_environment: str = ""
     #: M2-CLOSE-01：执行环境 → 编排平台应用/智能体/节点的**可信绑定**（契约 §3.1）。
     #: 缺省为空 ⇒ 委派入口整体不启用（fail closed，与 ``third_session_service_token``
@@ -298,6 +299,8 @@ class GatewayServerSettings:
             or _file_value(file_values, "AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL"),
             ops_bindings_file=_env("AIOPS_GATEWAY_OPS_BINDINGS_FILE")
             or _file_value(file_values, "AIOPS_GATEWAY_OPS_BINDINGS_FILE"),
+            ops_charging_status_base_url=_env("AIOPS_GATEWAY_OPS_CHARGING_STATUS_BASE_URL")
+            or _file_value(file_values, "AIOPS_GATEWAY_OPS_CHARGING_STATUS_BASE_URL"),
             execution_environment=_env("AIOPS_GATEWAY_EXECUTION_ENVIRONMENT")
             or _file_value(file_values, "AIOPS_GATEWAY_EXECUTION_ENVIRONMENT"),
             agent_run_config_file=_env("AIOPS_GATEWAY_AGENT_RUN_CONFIG_FILE")
@@ -436,6 +439,8 @@ class GatewayServerSettings:
             parse_charging_endpoints(self.charging_status_base_url)
             if not SAFE_PROFILE_NAME.fullmatch(self.execution_environment):
                 raise ValueError("charging status requires a logical execution environment")
+        if self.ops_charging_status_base_url:
+            parse_charging_endpoints(self.ops_charging_status_base_url)
         if self.ops_bindings_file:
             from aiops_diagnostics.ops_bindings import load_ops_bindings
 

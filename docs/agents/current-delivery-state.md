@@ -5,6 +5,8 @@
 > 最终候选 `0381fe8` CI全量3436 passed/10 skipped，10项真实HTTP和三项守卫突变通过。
 > 2026-10-22 05:40 UTC重新核对：线上 `3d1e142780fb` 健康、八文件摘要一致，新工具与M3配置仍关闭；
 > 目标workspace ready、operator v14仅旧七工具，尚无aiops-ops provider。现有app并非隔离环境，
+> 固定输入联调已获授权；安装前发现共享CPMS键会同时启用consumer直读，当前修复运维专用地址配置，
+> 运行配置尚未替换，真实业务/模型调用0。修复合并部署后继续联调，不调用模型。
 > 真实Dify与业务验收尚未完成。下一步先确认[验收变更单](dify-ops-first-slice/live-acceptance-plan.md)，
 > 固定输入工具联调与模型循环分别取证。接入与限制见
 > [首片手册](dify-ops-first-slice/README.md)，以 validation 最新条目的实际结果为准。

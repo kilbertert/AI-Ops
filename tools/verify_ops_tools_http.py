@@ -27,6 +27,7 @@ from aiops_diagnostics.gateway_api import create_gateway_app
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.ops_bindings import token_digest
 from aiops_diagnostics.ops_tools import OpsToolService
+from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
 
 
 def main() -> int:
@@ -77,10 +78,10 @@ def main() -> int:
             database_file=database,
             server_config_file=config,
             environment="verify",
-            execution_environment="verify",
             ops_bindings_file=str(binding_file),
-            charging_status_base_url="tenant-a:http://127.0.0.1:9",
+            ops_charging_status_base_url="tenant-a:http://127.0.0.1:9",
         )
+        settings.validate()
         service = OpsToolService(settings, manager)
         service.workspaces.claim("tenant-a", "verify", owner="fixture", lease_seconds=30)
         service.workspaces.mark_created("tenant-a", "verify", "ws-a")
@@ -100,8 +101,21 @@ def main() -> int:
             return {"orders": [{"order_no": "O-1"}], "source": "fixture.mysql"}
 
         with patch.object(OpsToolService, "_read", synthetic_read):
+            subject = SubjectRecord(b_user_id="fixture", c_user_id="fixture", tenant_id="tenant-a")
+            caller = ScopeContext.build(
+                caller=subject,
+                subject=subject,
+                delegated=False,
+                effective_tenant_id="tenant-a",
+                data_scope=DataScope(type="self"),
+                roles=frozenset(),
+                permissions=frozenset(),
+            )
             app = create_gateway_app(
-                settings=settings, agent_manager=manager, runtime=SimpleNamespace(kb_search_client=None)
+                settings=settings,
+                agent_manager=manager,
+                runtime=SimpleNamespace(kb_search_client=None),
+                caller_resolver=SimpleNamespace(resolve=lambda *args, **kwargs: caller),
             )
             sock = socket.socket()
             sock.bind(("127.0.0.1", 0))
@@ -147,6 +161,21 @@ def main() -> int:
                 check("list", 200)
                 body = check("status", 200, tool="charging_info", payload={"order_no": "O-1"})
                 assert body["result"]["order_no"] == "O-1"
+                req = urllib.request.Request(
+                    f"http://127.0.0.1:{port}/v1/orders/O-1/charging-status",
+                    headers={"Authorization": "Bearer consumer-fixture", "X-Business-Entry": "consumer"},
+                )
+                before = len(calls)
+                try:
+                    urllib.request.urlopen(req, timeout=5)
+                    raise AssertionError("consumer status was enabled by ops settings")
+                except urllib.error.HTTPError as error:
+                    assert error.code == 404
+                    assert json.load(error)["error"]["code"] == "CHARGING_STATUS_DISABLED"
+                assert len(calls) == before
+                checks.append(
+                    {"case": "ops endpoint keeps consumer disabled", "status": 404, "business_calls": 0}
+                )
                 a = manager.get(context, agent.agent_id)
                 draft = manager.fork_draft(context, a.agent_id, expected_revision=a.revision)
                 draft = manager.update(

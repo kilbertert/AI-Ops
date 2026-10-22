@@ -150,7 +150,9 @@ class OpsToolService:
             evidence.update(self._identity(binding, version))
             try:
                 base = charging_endpoint(
-                    self.settings.charging_status_base_url, binding.tenant_id, require_registration=True
+                    self.settings.ops_charging_status_base_url or self.settings.charging_status_base_url,
+                    binding.tenant_id,
+                    require_registration=True,
                 )
             except ValueError as exc:
                 raise OpsToolError(404, "TENANT_ENDPOINT_UNRESOLVED") from exc
