@@ -1,0 +1,80 @@
+# 新租户工作区的模板 app（#881 / ADR-0059 §5.1 第 3 步）。
+#
+# 两处**刻意**留空，不是"还没来得及填"：
+#   model_config.model            —— 模型由该 workspace 自己的 provider 凭据决定；
+#                                    钉死会让"换模型"变成"改模板 + 重导一遍"。
+#   dataset_configs.datasets      —— 知识库是每个租户自己的（external dataset 的 UUID
+#                                    因 workspace 而异），导入时还没有那些值，硬写就是
+#                                    跨 workspace 的错值。
+# 两者在导入时都没有正确答案，只有在该 workspace 里建好之后才有。
+app:
+  description: 'AI-Ops 新租户工作区的模板 app（#881）。只含结构与工具白名单。'
+  icon: 🧭
+  icon_background: '#EFF1F4'
+  icon_type: emoji
+  mode: chat
+  name: aiops-workspace-template
+  use_icon_as_answer_icon: false
+dependencies: []
+kind: app
+model_config:
+  agent_mode:
+    enabled: false
+    prompt: null
+    strategy: null
+    # 工具白名单：七个诊断工具。它们在 Dify 侧只返回固定说明文本，真执行在 AI-Ops
+    # 运行时（ADR-0019）。这里留空数组 —— 运营在控制台里勾选后才写进这一版。
+    tools: []
+  annotation_reply:
+    enabled: false
+  chat_prompt_config: {}
+  completion_prompt_config: {}
+  dataset_configs:
+    # 知识库是每个租户自己的（external dataset 的 UUID 因 workspace 而异），
+    # 导入时还没有那些 UUID ⇒ 刻意不带 datasets 键。
+    #
+    # **不要写成 `datasets: []`**：Dify 1.17.1 的读取端
+    # （`app_config/.../dataset/manager.py::convert`、`dify_dsl_pull._declared_dataset_ids`）
+    # 期望的是一个**路由对象** `{strategy, datasets: []}`，给列表会在 `.get()` 上抛
+    # `AttributeError: 'list' object has no attribute 'get'` —— 那个 app 第一次跑就 500。
+    # 省略整个键是真实导出里"没挂知识库"的形状（tests/fixtures/dify-app-chat.dsl.yml）。
+    retrieval_model: multiple
+  dataset_query_variable: null
+  external_data_tools: []
+  file_upload:
+    image:
+      detail: high
+      enabled: false
+      number_limits: 3
+      transfer_methods:
+      - remote_url
+      - local_file
+  model:
+    # 刻意留空：模型由该 workspace 自己的 provider 凭据决定。钉一个模型名会让
+    # "换模型"变成"改模板 + 重导一遍"。
+    completion_params: {}
+    mode: chat
+    name: ''
+    provider: ''
+  more_like_this:
+    enabled: false
+  opening_statement: 你好，我是运维智能体。请描述你要排查的订单与现象。
+  pre_prompt: '你是 AI-Ops 的运维智能体。这个工作区属于一个公司租户，你只处理该租户范围内的订单与设备。
+    证据来自 AI-Ops 的只读诊断工具；不得推断知识库或证据里没有的结论。'
+  prompt_type: simple
+  retriever_resource:
+    enabled: true
+  sensitive_word_avoidance:
+    config: {}
+    enabled: false
+    type: ''
+  speech_to_text:
+    enabled: false
+  suggested_questions: []
+  suggested_questions_after_answer:
+    enabled: false
+  text_to_speech:
+    enabled: false
+  user_input_form: []
+kind: app
+version: 0.7.0

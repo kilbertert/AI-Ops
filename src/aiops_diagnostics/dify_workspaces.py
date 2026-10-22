@@ -313,6 +313,46 @@ class DifyWorkspaces:
                 (error[:500], _iso(now_utc()), tenant_id, environment),
             )
 
+    def mark_ready(self, tenant_id: str, environment: str) -> None:
+        """三步都跑完（#881）。``created`` → ``ready`` 是**单行推进**，不可回退。
+
+        为什么需要这个区别：``created`` 是"workspace 建出来了"，``ready`` 是"它能真的
+        跑一次对话"。用户撞上 ``created`` 时该看到"正在配置"，撞上 ``ready`` 才该看到
+        正常工作。
+        """
+        tenant_id = _identifier(tenant_id, "tenant_id")
+        environment = _identifier(environment, "environment")
+        with self._connection(write=True) as connection:
+            connection.execute(
+                "UPDATE dify_workspaces SET setup_state = 'ready', last_error = '', updated_at = ?"
+                " WHERE tenant_id = ? AND environment = ?",
+                (_iso(now_utc()), tenant_id, environment),
+            )
+
+    def mark_template_failed(self, tenant_id: str, environment: str, *, error: str) -> None:
+        """**模板那一步**失败了，但 workspace 与凭据都还在（#881 / ADR-0059 §5.1）。
+
+        与 :meth:`mark_failed` 的区别是**状态停在 ``created``**：这个 workspace 是能用的
+        （人进得去、能改），只是模板没导进来。写成 ``failed`` 会让解析函数把它当成
+        "没建出来"，而下一次 ``ensure-workspace`` 就会**重建**一个永久孤儿。
+        """
+        tenant_id = _identifier(tenant_id, "tenant_id")
+        environment = _identifier(environment, "environment")
+        with self._connection(write=True) as connection:
+            # ``AND setup_state <> 'ready'``：``created → ready`` 是单向的（见
+            # :meth:`mark_ready`）。少了这个条件，一次**重跑**里的读取抖动会把一个已经
+            # 就绪的 workspace 降级回 ``created``，而 ``ensure-workspace`` 对 ``ready``
+            # 行是短路返回的 —— 没有人会再把它推回去。错误照样记在 ``last_error`` 里。
+            # 状态**只降不升**：已经是 ``ready`` 的行保持 ``ready``，但原因照样记下来
+            # （用 CASE 而不是整条 WHERE —— 少写 last_error 会让"为什么这次重跑失败"
+            # 在库里一点痕迹都没有）。
+            connection.execute(
+                "UPDATE dify_workspaces SET setup_state ="
+                " CASE WHEN setup_state = 'ready' THEN 'ready' ELSE 'created' END,"
+                " last_error = ?, updated_at = ? WHERE tenant_id = ? AND environment = ?",
+                (error[:500], _iso(now_utc()), tenant_id, environment),
+            )
+
     def mark_unknown(self, tenant_id: str, environment: str, *, error: str) -> None:
         """**结果未知**：``workspace_id`` 原样保留（可能已经建成），下一次先对账。"""
         tenant_id = _identifier(tenant_id, "tenant_id")

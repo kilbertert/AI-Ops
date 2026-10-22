@@ -447,6 +447,72 @@ Codex turn … failed: 403 Forbidden [sk-x4CF…] 预扣费额度失败，
 PUT 更新后的状态，避免夹具保留旧 instruction 却仍被当成成功。全量初跑 3215 passed / 9 skipped / 1 failed：唯一失败为并行部署前进后，dry-run
 拒绝旧基线。同步主线后复跑该检查，最终结果见本 PR。
 
+## 2026-10-21 · `aiops admin ensure-ready`：把空壳推到 `ready`（#881）
+
+**范围**：`dify_console_admin.py`（新）、`dify_workspace_ready.py`（新）、
+`dify_workspaces.py`（`mark_ready` / `mark_template_failed`）、`admin_cli.py`（`ensure-ready` +
+`_settings_with_config_file`）、`gateway_config.py`（两键）、`src/aiops_diagnostics/dify_workspace_template.dsl.yml`（新）。
+
+### 一、判据（`tests/test_dify_workspace_ready.py`，20 例，假 Dify 控制台）
+
+| 用例 | 钉住的规则 |
+|---|---|
+| 三步顺序 | POST 次序 == 插件 → 凭据 → 模板；状态推到 `ready` |
+| 凭据内容 | `api_key` 来自 `AIOPS_GATEWAY_DIFY_WORKSPACE_MODEL_API_KEY`，名字固定 `aiops-workspace` |
+| 重跑零写 | 第二次一条 POST 都不发，`state` 仍是 `ready` |
+| 只装缺的 | 已装的插件不再出现在安装 body 里 |
+| 凭据被拒 | `DIFY_CREDENTIAL_INVALID`；**模板没导**；状态与 `workspace_id` 都没退 |
+| 模板失败 | 状态停在 `created`、`last_error` 有原因、`resolve()` 仍返回 id；重跑后转 `ready` |
+| 缺模型 key | `WORKSPACE_READY_CONFIG_MISSING`，文案点名变量，**零请求** |
+| 没有映射行 | `DIFY_WORKSPACE_UNRESOLVED` 原样上抛，零请求 |
+| 异步安装 | 发完 `/plugin/install/pkg` 后**轮询任务到 `success` 才写凭据** |
+| 安装任务失败 | `DIFY_PLUGIN_INSTALL_FAILED` 带上游原因；凭据**没写** |
+| 同名凭据已存在 | Dify 的 400 `already exists` 当**已达成**（返回"未写"），不报失败 |
+| 模板过自家校验器 | `bundled_template()` 必须过 `_require_supported_version`，且 `datasets` 不是列表 |
+| 插件标识在顶层 | 真实 `/plugin/list` 形状下重跑**零安装请求** |
+| 重跑不降级 | 已 `ready` 的行遇到读取失败仍是 `ready`，原因留在 `last_error` |
+| 导入 pending | 202/pending 报 `DIFY_IMPORT_PENDING`（下一步是确认，不是重试） |
+| 导入失败带原因 | Dify 把原因放在 `error` 键，必须被带出来 |
+| `--config` 的 endpoint | `AIOPS_GATEWAY_DIFY_WORKSPACE_MODEL_ENDPOINT` 写进文件**确实生效** |
+
+**评审复现 → 修复 → 复验（第二轮）**：自动化评审（Sandcastle run `39577679698`，60 分钟超时被取消，
+但结论已产出）在真实响应形状上复现了五个缺陷，全部修复并逐条做了突变复验：
+
+| 缺陷（复现来源） | 修法 | 突变后变红 |
+|---|---|---|
+| `installed_plugin_ids` 只读 `meta.plugin_unique_identifier`，真实形状在**顶层** ⇒ 每次重跑都重发安装请求 | 顶层优先、嵌套兜底 | 是 |
+| 模板 `dataset_configs.datasets: []` 是**列表**，Dify 读的是路由对象 ⇒ 那个 app 第一次跑就 `AttributeError` | 省略该键（真实导出里"没挂知识库"的形状） | 是（校验器用例） |
+| 模板 `version: 0.1.5`，而 36 上是 0.7.0 ⇒ 我们**自己的** `_require_supported_version` 就会拒 | 改 `0.7.0`，并加用例过自家校验器 | 是 |
+| `import_app_dsl` 只看 `app_id`：202/pending 被报成"响应体不可读"，400 的 `error` 原因被丢掉 | 按 `status` 分流三个码 | 是 |
+| `AIOPS_GATEWAY_DIFY_WORKSPACE_MODEL_ENDPOINT` 有非空默认值 ⇒ `--config` 里那一行**静默不生效**（#625 形态） | 合并判据改成"进程 env 有没有这个键" | 是 |
+| `mark_template_failed` 会把已 `ready` 的行降级回 `created` | `CASE WHEN setup_state='ready' THEN 'ready'` | 是 |
+| `app_names` 只读第 1 页 ⇒ 模板 app 在第 2 页时重复导入 | 按 `has_more` 翻页 | 是（`test_app_names_walks_every_page`，多页假件） |
+
+**评审有一条不成立**：它说 `/plugin/list?page_size=200` 会被拒（上限 100）。2026-10-21 在 36 上用
+真实 admin key 实测该请求回 **200 + 完整列表**。仍改成了 100 —— 那是契约上限，不是靠实测运气。
+
+**突变复验（第一轮五处，均复跑确认变红）**：去掉插件"已装就跳过" ⇒ 重跑与"只装缺的"两例红；
+把 `mark_template_failed` 改成写 `failed` ⇒ 模板失败用例红；`install_plugins` 发完 POST
+就返回（不等任务）⇒ 两条异步用例红；把 `already exists` 当普通 400 上抛 ⇒ 同名用例红；
+把凭据名字改从 `<provider>/credentials` 读（旧写法）⇒ 五例红。
+
+**一条被实测推翻的写法（记下来免得重蹈）**：最初用 `GET …/<provider>/credentials` 判断
+"这个名字的凭据在不在"。36 上只读核对源码后确认它回的是**当前生效那一份的字段字典**
+（`api_key` 已打码），**没有名字列表** —— 幂等判据会永远返回"没找到"，于是每次都重发一次
+POST，而 Dify 第二次回 400 `Credential with name '…' already exists`。正确的来源是
+`GET …/model-providers` 里每项的 `custom_configuration.available_credentials`。
+
+### 二、据实（没有做到的）
+
+- **没有真机跑完三整步**：41 上还没填 `AIOPS_GATEWAY_DIFY_WORKSPACE_MODEL_API_KEY`
+  （本机也没有那把 key，且它不该进仓库）。所以"在 41 上把一个租户推到 `ready`"这条
+  端到端结论要等运维填 key 之后再取。
+- **接口形状来自只读探测，不是本轮实跑**：`/plugin/install/pkg` 幂等（回
+  `{"all_installed": true}`）、`MARKETPLACE_ENABLED=false`、假 key 回
+  `Credentials validation failed`、新 workspace 0 插件 0 凭据 0 app —— 均为 2026-10-21
+  在 36 上的只读实测。
+- **模板 app 的 `model` 与 `datasets` 是空的**（刻意的，模板文件头注释记了理由）：
+  不代表"可用 app 已交付"，只代表"结构已就位"。
 ## 2026-10-21 · 两个入口 app 迁进 41 租户 workspace：发布与试运行全部恢复
 
 **范围**：#912（管家端 operator）、#916（客服端 consumer）。上一节记录的 502 从这里收口。
@@ -517,6 +583,7 @@ PUT 更新后的状态，避免夹具保留旧 instruction 却仍被当成成功
   多租户的 env/config 侧（`deploy/m2-live-03/images.lock.json` 等）不在本轮范围内。
 
 ## 2026-10-21 · 平台租户落到自己的平台 workspace（#882）
+
 
 **范围**：`dify_workspaces.py`（`PLATFORM_TENANT_ID`）、`dify_login_service.py`（平台分支）。
 
@@ -19620,3 +19687,44 @@ ops-methodology-700  v5   prompt_sha=3eeb31dc4ce2  allowed_tools 键不存在 �
 - **一个仍未归因的观测**：10-14 那次成功的是 consumer 入口，而 10-15 02:04:18 那次
   **也是 consumer 入口**却仍是 `unavailable` + 10ms。按当前线上代码重跑，consumer 入口
   能解析出 `…v2`，所以这一条**没有可复现的成因**。不编原因，如实记为未归因。
+
+### 三、第二轮评审的结论与处置（run `39612439462`）
+
+评审这次抓到两条真问题，都已修并复验：
+
+**1. P1 · 唯一安装路径依赖"包已上传"，而本命令没有上传步骤。**
+`/plugin/install/pkg` 要求 daemon 的**包桶**里先有那个 `.difypkg`（`GetPackage` →
+`plugin package not found, please upload it firstly`），取包（`upload/pkg`）才把包放进去。
+仓库自己的记录（本文件 #587 收尾取数）也写着"三条路都指向同一个前置：**先有插件包**"，
+且 36 上 `ssrf_proxy` 白名单只放 `marketplace.dify.ai`，取包是一个**运维决定**。
+
+**处置（据实，不是"已解决"）**：
+- 这个问题**不在本票能修的范围内** —— 它是主机级前置（整个 Dify 上传一次即可），
+  与租户、与 workspace 都无关。改代码只会把运维决定藏起来。
+- 代码侧做的是**把它说清楚**：`plugin package not found` 单独一个码
+  `DIFY_PLUGIN_PACKAGE_MISSING`，文案点名下一步（先 `upload/pkg` 或给 Dify 开出口），
+  不再让它看起来像"插件标识写错了"。另加一条用例钉住这个码。
+- **我先前那句"36 上实测回 `{"all_installed": true}`"是真的但不足以支撑结论**：
+  那次打的是 **admin workspace**，它本来就装好了；空白 workspace 会走另一条分支。
+  ADR-0076 已按这条改口径。
+- 41 上"第一次跑 `ensure-ready`"因此**仍需运维先确认包桶里有这两个包**（36 上已核实存在）。
+
+**2. P1 · 用例断言强度被高估（含一条我写进文档却并不存在的用例）。**
+- `test_it_waits_for_the_install_task...` 原来排除的只有凭据 POST，模板导入仍算在"之前"
+  ⇒ 把轮询挪到写凭据之后也照样绿。已改成**按键位断言次序**（最后一次轮询 < 第一次写凭据
+  < 第一次导模板）。
+- 文档声称有 `app_names` 翻页用例，实际**不存在**（`grep` 为 0）。已补
+  `test_app_names_walks_every_page`（多页假件，模板在第 2 页），并做了突变复验。
+- 我据此把那张表里每一条都重新对过一遍；`test_a_second_run_sends_no_mutating_request`
+  的假件原先对重复导入不判重（使该用例无判别力），已一并让假件在重名时拒绝。
+
+**其余 P2/P3 的处置**：
+- `completed-with-warnings` 的告警原来采集后没有消费者 ⇒ 现在进 `ReadyOutcome.template_warnings`
+  与 `note`，运营看得到"成功但有损"。
+- `already exists` 原来只看子串 ⇒ 会把**别的 provider** 上的同名凭据误判成已达成
+  （后果：workspace 标 ready 而模型没有凭据）。改成**回读该 provider 确认**，见不到就报
+  `DIFY_CREDENTIAL_NAME_TAKEN` 并说明换名。
+- 安装任务的"任务已不存在"原来按 `message.startswith("404")` 判，而 Dify 1.17.1 实际回
+  **400** ⇒ 该分支是死代码。改成按 `status` 判（404 或 400+not found）。
+- 模板 `model_config.model` 为空与我方 `_required_model` 冲突：**设计如此**，但后果写进
+  ADR-0076：模板 app 不可被 `pull-dify`/`sync-from-dify` 消费，运营必须先选模型。

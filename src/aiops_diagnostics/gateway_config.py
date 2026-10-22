@@ -208,6 +208,14 @@ class GatewayServerSettings:
     #: 网关运行时要用的东西：只有开户那一条 CLI 路径读它。
     dify_inner_api_base_url: str = ""
     dify_inner_api_key: str = field(repr=False, default="")
+    #: 写进**每个新 workspace** 的模型凭据（#881）。由运维在主机上填：它是将来那个
+    #: workspace 里 provider 的 API key，Dify 会拿它做**真实校验**（假 key 回 400）。
+    #:
+    #: **代码里没有默认值、也不该有**：这不是"示例值"，是一把真钱买的钥匙。缺它 ⇒
+    #: `aiops admin ensure-ready` 拒绝运行并说出缺的是哪一行，而不是猜一个。
+    dify_workspace_model_api_key: str = field(repr=False, default="")
+    #: 上面那把钥匙的 endpoint。deepseek 官方端点是默认值；换供应商时改这一行。
+    dify_workspace_model_endpoint: str = "https://api.deepseek.com/v1"
     #: 一租户一 RAGFlow 租户的凭据加密密钥（#924 / PRD #923）。开户把 RAGFlow 的 owner
     #: 密码写进 `ragflow_tenants` 时用它加密，登录代理（#926）读出来时用它解密。
     #:
@@ -362,6 +370,15 @@ class GatewayServerSettings:
             or _file_value(file_values, "AIOPS_GATEWAY_DIFY_INNER_API_BASE_URL"),
             dify_inner_api_key=_env("AIOPS_GATEWAY_DIFY_INNER_API_KEY")
             or _file_value(file_values, "AIOPS_GATEWAY_DIFY_INNER_API_KEY"),
+            dify_workspace_model_api_key=_env("AIOPS_GATEWAY_DIFY_WORKSPACE_MODEL_API_KEY")
+            or _file_value(file_values, "AIOPS_GATEWAY_DIFY_WORKSPACE_MODEL_API_KEY"),
+            # 与上面那把 key 同源：**进程 env 优先，其次服务端配置文件**。这里少了
+            # ``_file_value`` 会让「运维照着 runbook 写进 production.env」变成静默不生效
+            # —— 它有非空默认值，``_settings_with_config_file`` 的"只在为空时才补"补不上。
+            dify_workspace_model_endpoint=_env("AIOPS_GATEWAY_DIFY_WORKSPACE_MODEL_ENDPOINT")
+            or _file_value(
+                file_values, "AIOPS_GATEWAY_DIFY_WORKSPACE_MODEL_ENDPOINT", "https://api.deepseek.com/v1"
+            ),
             ragflow_credential_key=_env("AIOPS_GATEWAY_RAGFLOW_CREDENTIAL_KEY")
             or _file_value(file_values, "AIOPS_GATEWAY_RAGFLOW_CREDENTIAL_KEY"),
             ragflow_tenant_domain=_env("AIOPS_GATEWAY_RAGFLOW_TENANT_DOMAIN", "kb.internal"),
