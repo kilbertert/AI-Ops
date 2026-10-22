@@ -1,0 +1,84 @@
+#!/bin/sh
+# A test double for `dev-host`, so the deploy dry-run can be rendered without a
+# real host on the other end.
+#
+# Why this exists: `deploy/deploy-41.sh` makes six `dev-host` round trips before
+# it prints the remote block — a health probe, reference-file presence checks, and
+# two dependency hashes. Against the real host those cost ~4.4 s each, measured
+# 2026-10-22, and they dominated the slowest test in the suite (28 s of a 76 s
+# parallel run; it was the floor the whole run could not go below).
+#
+# The test that uses this one renders the remote block and parses it. It needs the
+# block to be the same block; it does not need to know what version production is
+# currently serving. Those six reads are the cost of asking, not the thing under
+# test.
+#
+# ⚠️ Fidelity matters here more than speed, because a double that answers
+# differently from the real thing makes the test pass for the wrong reason (this
+# repository's ADR 0030, and the review criterion delivered in 1.7.27). Verified
+# 2026-10-22: the block rendered through this double is byte-identical to the one
+# rendered against the real host — 152 lines, `cmp` clean.
+#
+# Each answer is copied from a real `dev-host` response:
+#   - `show` prints the field layout of `dev-host show 41` verbatim, with the
+#     fingerprint and owner still real (they are not secrets and the format is the
+#     point). `role service-host` and `status active` are what the script gates on.
+#   - `sha256sum /opt/aiops-41/<spec>` answers with the hash of that file **in the
+#     commit under test**, which is the state "41 already matches the target
+#     commit". Sourcing it from the checkout is what keeps the double from drifting
+#     from the tree it is standing in for — a hardcoded hash would go stale and
+#     start failing for a reason unrelated to the code.
+#   - anything else in `exec` answers `yes`, which is the reference-file presence
+#     probe's shape.
+#
+# When `deploy-41.sh` asks a question this double does not model, it exits 90
+# rather than guessing. A silent wrong answer would make the test green while the
+# bytes it checks were never real.
+
+if [ "$1" = "show" ]; then
+  cat <<'SHOW'
+target      41
+host        aiops-41
+ssh alias   aiops-41
+role        service-host
+plane       service
+owner       qushiyun
+access      ssh
+status      active
+writable    no (需产物身份)
+fingerprint SHA256:stub-not-a-real-key
+SHOW
+  exit 0
+fi
+
+if [ "$1" = "cp" ]; then
+  exit 0
+fi
+
+if [ "$1" = "exec" ]; then
+  case "$*" in
+    *curl*)
+      printf '{"version":"0.0.0-stub"}\n'
+      ;;
+    *sha256sum*)
+      spec=""
+      for word in "$@"; do
+        case "$word" in
+          */aiops-41/pyproject.toml*) spec="pyproject.toml" ;;
+          */aiops-41/uv.lock*)        spec="uv.lock" ;;
+        esac
+      done
+      if [ -z "$spec" ]; then
+        echo "dev-host stub: no known spec path in argv: $*" >&2
+        exit 90
+      fi
+      git show "HEAD:$spec" | sha256sum | cut -d' ' -f1
+      ;;
+    *)
+      printf 'yes\n'
+      ;;
+  esac
+  exit 0
+fi
+
+exit 0
