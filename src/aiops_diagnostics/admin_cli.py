@@ -1002,6 +1002,63 @@ def ensure_workspace_command(
     typer.echo(f"platform owner: {PLATFORM_OWNER_EMAIL}", err=True)
 
 
+@admin_app.command("grant-tenant-access")
+def grant_tenant_access_command(
+    ctx: typer.Context,
+    tenant: Annotated[str, typer.Option("--tenant", help="公司租户 id（sys_organ.id），或 platform")],
+    account_id: Annotated[str, typer.Option("--account-id", help="该人**在 Dify 里**的账号 id")],
+    email: Annotated[str, typer.Option("--email", help="该账号在 Dify 里的 email（必须逐字一致）")],
+    role: Annotated[str, typer.Option("--role", help="editor（默认）/ admin / normal")] = "editor",
+) -> None:
+    """把一个**运维账号**加进某个租户的 workspace（Dify 控制台里切租户的前提）。
+
+    为什么需要它：Dify 的 workspace 切换器只在一个条件下隐藏 —— 这个账号的 workspace
+    列表为空。成员关系一到，切换器就在导航栏的 workspace 卡片里出现，点一下调
+    `/workspaces/switch`。**不需要改 Dify、不需要重建 web 镜像。**
+
+    **不碰 `current`**：切哪个是人在 Dify 里点的。替人改会让别的标签页看到状态跳动。
+
+    **按需跑，不要批量**：25 个 `ROLE_ADMIN` 里 18 个半年以上没登录过，全量 join 等于
+    给休眠账号开每一个租户的 workspace 访问权。
+    """
+    from aiops_diagnostics.dify_inner_api import DifyInnerApi, InnerApiSettings
+    from aiops_diagnostics.dify_tenant_access import GrantError, grant_tenant_access
+    from aiops_diagnostics.dify_workspaces import DifyWorkspaces
+
+    settings = _settings_with_config_file(ctx)
+    if not settings.environment:
+        typer.secho("缺少 AIOPS_GATEWAY_ENVIRONMENT：环境取本机部署身份", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=2)
+    inner = DifyInnerApi(
+        InnerApiSettings(base_url=settings.dify_inner_api_base_url, api_key=settings.dify_inner_api_key)
+    )
+    if not inner.settings.configured:
+        typer.secho(
+            "缺少 AIOPS_GATEWAY_DIFY_INNER_API_BASE_URL / _KEY：join 的唯一入口是 inner_api",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    if not settings.database_file:
+        typer.secho("缺少数据库路径：需要它查 (租户, 环境) → workspace", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=2)
+
+    try:
+        outcome = grant_tenant_access(
+            tenant_id=tenant,
+            environment=settings.environment,
+            workspaces=DifyWorkspaces(settings.database_file),
+            inner=inner,
+            account_id=account_id,
+            email=email,
+            role=role,
+        )
+    except GrantError as exc:
+        typer.secho(json.dumps({"error": exc.code, "message": exc.message}, ensure_ascii=False), err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps(outcome.as_dict(), ensure_ascii=False, indent=2))
+
+
 @admin_app.command("ensure-ready")
 def ensure_ready_command(
     ctx: typer.Context,

@@ -1,3 +1,62 @@
+## 2026-10-22 · Dify 控制台里切租户：**不需要改 Dify**，只要补成员关系（真机验证）
+
+**需求**：公司运维要在 Dify 控制台里切到某个租户的 workspace，编辑与运维它的智能体。
+
+### 一、我先前的两个错误判断（都推翻）
+
+1. **"Dify 没有 workspace 切换器，必须 fork 前端重建镜像"** —— 错的。
+   `app/components/main-nav/components/workspace-switcher.tsx` 一直存在，唯一的隐藏条件是
+   `if (!isPending && !workspaces) return null`（成员列表为空）。
+   **怎么错的**：我在**编译后的 chunk** 里搜组件名；Next.js 把名字缩略掉了，所以没搜到。
+   拿到上游源码（tag `1.17.1`）一搜就命中。
+2. **"`aiops:agent:edit` 持有者全是平台账号"** —— 也是只看第一页数据得出的。精确查询后：
+   持有 `aiops_edit` 角色的只有 **1 人**（`13333102001`，`type=5`，**已删除**，是历史残留）；
+   真正持有该权限码的是 **`ROLE_ADMIN`（25 人）** 的成员。
+
+### 二、真实机制
+
+```
+成员关系（tenant_account_joins）→ 切换器出现 → 点一下 → POST /workspaces/switch
+                                                          ↓
+                                    服务端按 join 校验，改 current + 返回新 tenant
+```
+
+`WorkspaceSwitcher` 的数据源是这个账号的 workspace 列表；空则整个组件返回 `null`。
+
+### 三、做了什么
+
+新增 `aiops admin grant-tenant-access --tenant <id> --account-id <dify id> --email <dify email>`
+（`src/aiops_diagnostics/dify_tenant_access.py`，5 例判据 + 两处突变复验）：
+
+| 用例 | 钉住的规则 |
+|---|---|
+| 逐字送达 | workspace / account / email 三个参数原样给到 inner_api |
+| 角色默认 editor | `admin` 能管成员、`owner` 每个 workspace 已有 —— 运维不需要 |
+| 缺行保留自己的码 | `DIFY_WORKSPACE_UNRESOLVED` 上抛，下一步是**开户**不是重试 |
+| inner_api 拒绝不报成功 | `INNER_API_REJECTED` 透出 |
+| 不碰 current | 参数集合恰好四个；多一个就说明越界了 |
+
+**突变复验**：`resolve` 换成常量 ⇒ 第 1、3 条红；把错码合成一句"开通失败" ⇒ 第 3 条红。
+
+### 四、真机验证（41）
+
+```
+system(8b218530-…) join → 200 ×3（platform 已在）
+tenant_account_joins：4 行（platform current=t，其余 f）
+```
+
+用户刷新 Dify 后确认：**左上角 workspace 卡片出现切换器，能切换**。
+
+### 五、据实
+
+- **没有改 Dify，也没有重建 web 镜像。** 上游开关 `DIFY_WEB_IMAGE` 保持空（上游镜像）。
+- **没有做"一键给所有 ROLE_ADMIN 开通"**：25 人里 18 人半年以上没登录过（`login_count`
+  与 `update_time` 实测），全量 join 等于给休眠账号开每一个租户的 workspace 访问权。
+  命令是**按需**的。
+- **`current` 没被这条命令改过**：切哪个是人在 Dify 里点的。
+- 租户用户仍然进不了 Dify（`aiops:agent:edit` 是 `ROLE_ADMIN` 那条线）—— 这是**另一件事**，
+  见 #887 的同名记录。
+
 ## 2026-10-22 · 知识库控制台真浏览器验收：两个阻断级缺陷已修，真机闭环
 
 **范围**：41（合并 `9983123` 之后的 CD 部署）。Chromium + Playwright，真实公司账号
