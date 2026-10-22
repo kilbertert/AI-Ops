@@ -486,3 +486,70 @@ def test_a_bad_credential_key_fails_before_any_upstream_write(tmp_path: Path, kb
 
     assert caught.value.code == "CREDENTIAL_KEY_INVALID"
     assert kb_service.calls == [], "no upstream write may happen before the key is known good"
+
+
+def test_an_existing_upstream_account_is_rotated_not_registered(
+    tmp_path: Path, kb_service: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """kb-service 的 `create_tenant` 见到已有行就 `return dict(row)`，**不改密码**。
+
+    所以"注册成功"是假的：我们记下一把上游不认的密码，直到第一次登录才炸
+    （41 真机第三轮 `Email and password do not match!`）。已有账号的正确动作是
+    **带上旧密码改密码** —— 只有这样才能保证"我们记的那把 = 上游那把"。
+    """
+    store = _store(tmp_path)
+    store.record_ragflow_tenant(
+        TENANT,
+        ENVIRONMENT,
+        ragflow_email=derive_email(TENANT),
+        credential_ciphertext=encrypt_credential("old-password", CREDENTIAL_KEY),
+        model_checked=False,
+    )
+    monkeypatch.setattr("aiops_diagnostics.kb_onboarding.verify_embedding", lambda **_k: 3072)
+
+    onboard_tenant(
+        tenant_id=TENANT,
+        environment=ENVIRONMENT,
+        store=store,
+        kb=KbAdminClient(kb_service.base),
+        credential_key=CREDENTIAL_KEY,
+        embedding_base_url="https://embed.example/v1",
+        embedding_api_key="sk-test",
+        ensure_workspace=lambda: _workspace(),
+    )
+
+    assert "/kb/tenants" not in kb_service.paths(), "已有账号不能再走注册（它不会改密码）"
+    assert "/kb/tenants/rotate" in kb_service.paths()
+    rotate = next(c for c in kb_service.calls if c["path"] == "/kb/tenants/rotate")
+    assert rotate["body"]["old_password"] == "old-password", "必须用我们记的那把旧密码去改"
+    row = store.get_ragflow_tenant(TENANT, ENVIRONMENT)
+    assert decrypt_credential(row["credential_ciphertext"], CREDENTIAL_KEY) == rotate["body"]["new_password"]
+
+
+def test_an_existing_account_whose_password_we_cannot_read_is_refused(
+    tmp_path: Path, kb_service: Any
+) -> None:
+    """解不开旧密码就接管不了 —— 明确拒绝，不猜、不重注册。"""
+    store = _store(tmp_path)
+    store.record_ragflow_tenant(
+        TENANT,
+        ENVIRONMENT,
+        ragflow_email=derive_email(TENANT),
+        credential_ciphertext=encrypt_credential("old", "ffffffffffffffff"),
+        model_checked=False,
+    )
+
+    with pytest.raises(OnboardError) as caught:
+        onboard_tenant(
+            tenant_id=TENANT,
+            environment=ENVIRONMENT,
+            store=store,
+            kb=KbAdminClient(kb_service.base),
+            credential_key=CREDENTIAL_KEY,
+            embedding_base_url="https://embed.example/v1",
+            embedding_api_key="sk-test",
+            ensure_workspace=lambda: _workspace(),
+        )
+
+    assert caught.value.code == "RAGFLOW_CREDENTIAL_UNREADABLE"
+    assert kb_service.calls == [], "接管不了就不要碰上游"
