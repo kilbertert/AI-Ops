@@ -207,6 +207,21 @@ class DifyWorkspaces:
             ).fetchone()
         return dict(found) if found is not None else None
 
+    def list_for_environment(self, environment: str) -> list[dict[str, Any]]:
+        """Every workspace row in one environment, for the triple check (#927).
+
+        Read-only and unopinionated: what counts as "usable" is the caller's
+        judgement (``setup_state``), because that judgement differs by caller —
+        onboarding repairs ``failed`` rows, the triple check reports them.
+        """
+        environment = _identifier(environment, "environment")
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT * FROM dify_workspaces WHERE environment = ? ORDER BY tenant_id",
+                (environment,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     # ── writes（开户那一步用，#880） ──────────────────────────────────
 
     def claim(
