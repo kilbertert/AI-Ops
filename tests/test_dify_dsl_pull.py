@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 from pathlib import Path
 from typing import Any
@@ -816,3 +817,65 @@ def test_a_disabled_entry_does_not_have_to_be_translatable() -> None:
         aiops_provider_id="3f1b0c8e-6a1d-4f0e-9c2b-7d5a1e6f8b03",
         registry={},
     ) == ("order_snapshot",)
+
+
+# --- 跨 workspace 的旧 UUID（#887）-------------------------------------------
+#
+# 迁移把一个租户的 app 从旧 workspace 复制到新 workspace 时，数据集也要跟着重建：
+# Dify 的 dataset UUID 是**按 workspace 分配**的，旧 UUID 在新 workspace 里不存在。
+# 这一节钉的是**失败路径**：拿着旧 UUID 在错误的 workspace 里查，必须是一句说得清的
+# 拒绝，而不是"这个 app 没有知识库"——后者会让人把知识库绑定悄悄丢掉。
+
+
+def test_a_dataset_from_another_workspace_is_refused_not_read_as_no_knowledge(monkeypatch) -> None:
+    """旧 workspace 的 dataset UUID 拿到新 workspace 里查 → 明确拒绝。
+
+    这是 #887 的核心判据：迁移后 app 的 DSL 里必须是**新** UUID。若有人把旧 UUID 留在
+    DSL 里（或复制 app 时只换了 app 而没换 dataset），Dify 在新 workspace 里查不到它，
+    回 404；那必须变成一条可读的拒绝，而不是"没有外接知识库"。
+
+    变异对照：把 ``http_error`` 映射改成返回空串（当作"没有知识库"）⇒ 本用例红。
+    """
+    import urllib.error
+
+    from aiops_diagnostics.dify_dsl_pull import DIFY_DATASET_PATH
+
+    OLD_UUID = "a7a8aad3-d7bf-4765-babd-f9984dcd1d7b"  # 旧 workspace 里那个
+    seen: dict[str, str] = {}
+
+    def fake_urlopen(request, timeout):
+        seen["url"] = request.full_url
+        seen["workspace"] = request.headers.get("X-workspace-id") or ""
+        raise urllib.error.HTTPError(
+            request.full_url, 404, "Not Found", {}, io.BytesIO(b'{"message":"Dataset not found."}')
+        )
+
+    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", fake_urlopen)
+
+    client = DifyDslClient(_source(workspace_id="new-workspace"))
+
+    with pytest.raises(DifyDslMalformed):
+        client.dataset_knowledge_id(OLD_UUID)
+
+    assert DIFY_DATASET_PATH.format(dataset_id=OLD_UUID) in seen["url"]
+    assert seen["workspace"] == "new-workspace", "必须带目标 workspace 的头，否则查的是会话的 current"
+
+
+def test_the_workspace_header_is_sent_on_the_dataset_read(monkeypatch) -> None:
+    """正向对照：同一个 UUID 在**带着 workspace 头**时能读出句柄。
+
+    有了这条，"上面那条用例拒绝的是 404"才站得住 —— 否则它可能只是把任何一个请求都
+    拒了（评审在 #881 上正是这样抓出过一条空转断言）。
+    """
+    seen: dict[str, str] = {}
+
+    def fake_urlopen(request, timeout):
+        seen["workspace"] = request.headers.get("X-workspace-id") or ""
+        return _fake_response({"external_knowledge_info": {"external_knowledge_id": "kb-canary-2"}})
+
+    monkeypatch.setattr("aiops_diagnostics.bounded_http.urllib.request.urlopen", fake_urlopen)
+
+    client = DifyDslClient(_source(workspace_id="tenant-workspace"))
+
+    assert client.dataset_knowledge_id("ebd103c0-fbd3-426b-a501-1b2a48f0ddb1") == "kb-canary-2"
+    assert seen["workspace"] == "tenant-workspace"

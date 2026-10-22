@@ -1,3 +1,57 @@
+## 2026-10-22 · #887 取证：迁移已完成，重复 dataset 是回滚点不是垃圾
+
+**范围**：#887 的票面说"把第一个租户迁到自己的 workspace"，而 41 上**迁移已在
+2026-10-21 由 #916 做完**。本轮做的是取证、补失败判据、以及把一处会毁掉回滚点的误判挡住。
+
+### 一、现状（41 只读实测）
+
+| 项 | 实测 |
+|---|---|
+| 目标 workspace | `c3f871e1-…`（`aiops-41-1942105476598861824`） |
+| 租户自己的 app | 2 个：`aiops-41-kefu-agent` `88fc20bd-…`、`aiops-41-ops-methodology-agent` `137cc417-…` |
+| 旧 workspace | `2db44904-…` 里两个 `[归档]` app **仍在**（回滚路径在） |
+| 注册表 vs 清单 | `dify_app_registry` 与 `ops/environments/env-41.toml` **一致** |
+| 新 dataset 出现在 DSL 里 | 是：kefu 的 DSL `dataset_configs.datasets` → `ebd103c0-…` |
+
+### 二、被推翻的一个判断（记下来，因为它是"看起来对"的那类）
+
+租户 workspace 里有**两个**同名 `aiops-41-kb-prod-kefu`，句柄都是 `kb-canary-2`：
+
+```
+ebd103c0-…  2026-10-21 16:07  ← 生产 app 88fc20bd 在用
+a7a8aad3-…  2026-10-14 08:21  ← 旧 workspace 的归档 app 8e36f0a6 在用
+```
+
+三条信号都指向"重复、可删"，**三条都是假信号**：
+
+1. `app_count=0` —— Dify 的 `app_count` **不统计 external dataset 引用**；
+2. `a7a8aad3.updated_at` 在 2026-10-22 00:41 变过 —— Dify 日志显示那是我们自己的
+   `external-hit-testing`（200），不是业务写入；
+3. 两个都返回 200 + 1 条记录 —— "能检索"不能区分"该留"。
+
+**可靠的判据只有一个**：遍历各 workspace 的 app、导出 DSL、看
+`dataset_configs.datasets` 里有没有它的 id。按这条查，`a7a8aad3` 被**旧归档 app**
+引用 —— 删它就是把 #887 要求保留的回滚点拆掉。
+
+⇒ 结论：**不删**。两者的关系写进 `docs/agents/env-41-runbook.md` §3.1-octies。
+
+### 三、补上的失败判据（`tests/test_dify_dsl_pull.py`，2 例）
+
+| 用例 | 钉住的规则 |
+|---|---|
+| 跨 workspace 的旧 UUID | 在新 workspace 里查旧 dataset id ⇒ 明确拒绝（不是"没有知识库"） |
+| workspace 头 | 读 dataset 时必须带 `X-WORKSPACE-ID`，否则查的是会话的 `current` |
+
+**突变复验（两处，均复跑确认变红）**：去掉 workspace 头 ⇒ 两条都红；把 404 映射成
+"没有知识库"⇒ 第一条红。
+
+### 四、据实（尚未做到的）
+
+- **41 上还没部署 #881 的合并**：`dify_workspaces` 里租户 `1942` 仍是 `setup_state='created'`，
+  不是 `ready`。把它推到 `ready` 需要先部署，再跑 `ensure-ready`。
+- **`platform` 那一行仍不存在**：`ensure-workspace --tenant platform` 还没跑。
+- **旧 UUID 的拒绝只在单测里验过**，没有在 41 上造一次真实 404。
+
 ## 2026-10-22 · 三元组核对与迁移计划（#927）：15 条单测通过，未在真机跑
 
 **范围**：`feat/knowledge-triple-check`，基线 `cf1d02f`。**未完成真机验收**。
