@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import pathlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,32 @@ from aiops_diagnostics.ragflow_console import (
 )
 
 TENANT = "1942105476598861824"
+_PEM_CACHE: dict[str, str] = {}
+
+
+def _pem(tmp_path) -> str:
+    """生成一把**真实**的 RSA 公钥，让加密这条路径真的跑一遍。
+
+    用假 PEM 会让"加密"变成"随便编一个字符串"，而真机上它是会 500 的那一步
+    （RAGFlow 回 `Fail to crypt password`）。测试要覆盖的正是这个编码。
+    """
+    key = _PEM_CACHE.get("path")
+    if key:
+        return key
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    path = pathlib.Path(tmp_path) / "public.pem"
+    path.write_bytes(
+        key.public_key().public_bytes(
+            serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo
+        )
+    )
+    _PEM_CACHE["path"] = str(path)
+    return str(path)
+
+
 ENV = "41"
 KEY = "0123456789abcdef"
 OTHER_TENANT = "1783022023241633792"
@@ -103,11 +130,15 @@ def test_the_proxy_logs_in_as_the_callers_own_tenant(tmp_path: Path, ragflow: An
         credential_key=KEY,
         client=RAGFlowLoginClient(ragflow.base),
         public_base_url="https://rag.example",
+        public_pem_path=_pem(tmp_path),
     )
 
     assert target == "https://rag.example"
     assert ragflow.calls[0]["path"] == "/api/v1/auth/login"
     assert ragflow.calls[0]["body"]["email"] == derive_email(TENANT)
+    sent = ragflow.calls[0]["body"]["password"]
+    assert sent != "pw-1", "密码必须以密文发出，明文会被 RAGFlow 当成解不开"
+    assert len(sent) > 100, "RSA 密文的 base64 远长于明文"
     assert session.cookies == {"session": "s-1"}
 
 
@@ -126,6 +157,7 @@ def test_a_tenant_that_was_never_onboarded_is_its_own_refusal(tmp_path: Path, ra
             credential_key=KEY,
             client=RAGFlowLoginClient(ragflow.base),
             public_base_url="https://rag.example",
+            public_pem_path=_pem(tmp_path),
         )
 
     assert caught.value.code == NOT_ONBOARDED
@@ -149,6 +181,7 @@ def test_a_rejected_login_is_a_refusal_not_an_empty_session(tmp_path: Path, ragf
             credential_key=KEY,
             client=RAGFlowLoginClient(ragflow.base),
             public_base_url="https://rag.example",
+            public_pem_path=_pem(tmp_path),
         )
 
     assert caught.value.code == LOGIN_REFUSED
@@ -166,6 +199,7 @@ def test_a_200_without_cookies_is_also_a_refusal(tmp_path: Path, ragflow: Any) -
             credential_key=KEY,
             client=RAGFlowLoginClient(ragflow.base),
             public_base_url="https://rag.example",
+            public_pem_path=_pem(tmp_path),
         )
 
     assert caught.value.code == LOGIN_REFUSED
@@ -187,6 +221,7 @@ def test_one_tenants_onboarding_does_not_open_another(tmp_path: Path, ragflow: A
             credential_key=KEY,
             client=RAGFlowLoginClient(ragflow.base),
             public_base_url="https://rag.example",
+            public_pem_path=_pem(tmp_path),
         )
 
     assert caught.value.code == NOT_ONBOARDED
@@ -203,6 +238,7 @@ def test_a_credential_encrypted_with_another_key_is_unreadable(tmp_path: Path, r
             credential_key="ffffffffffffffff",
             client=RAGFlowLoginClient(ragflow.base),
             public_base_url="https://rag.example",
+            public_pem_path=_pem(tmp_path),
         )
 
     assert isinstance(caught.value, RAGFlowLoginError)
@@ -245,6 +281,7 @@ def _gateway(tmp_path: Path, ragflow: Any, **overrides: Any):
         ragflow_credential_key=KEY,
         ragflow_console_base_url=ragflow.base if ragflow else "",
         ragflow_console_public_url="https://rag.example",
+        ragflow_console_public_pem=_pem(tmp_path) if ragflow else "",
         **overrides,
     )
     settings.server_config_file.write_text("# test\n", encoding="utf-8")

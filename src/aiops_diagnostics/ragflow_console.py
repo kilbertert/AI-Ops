@@ -28,6 +28,7 @@ RAGFlow 租户"在这个产品里不存在 —— 能共享的只有**以 owner 
 
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass
 from typing import Any
 
@@ -67,6 +68,29 @@ class LoginSession:
         return {"Cookie": "; ".join(f"{k}={v}" for k, v in self.cookies.items())}
 
 
+def encrypt_password(password: str, *, public_pem_path: str) -> str:
+    """RAGFlow 的密码传输编码：**base64 后再 RSA PKCS#1 v1.5**。
+
+    RAGFlow 的 `api/utils/crypt.py::decrypt` 先 `base64.b64decode` 再
+    `PKCS1_v1_5.decrypt`。所以发过去的必须是「密文的 base64」，而不是裸密文 ——
+    少了这一层，RAGFlow 回 `Fail to crypt password`（41 真机实测）。
+
+    用 `cryptography`（本仓已有的依赖）而不是 kb-service 用的 `Cryptodome`：
+    编码相同，依赖不重复引入。这一点有测试钉住 —— 测试会真的生成一对密钥、
+    真的加密、再用私钥解回来，因为"加密"这条路径在真机上正是会 500 的那一步。
+    """
+    from pathlib import Path as _Path
+
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import padding
+
+    pem = _Path(public_pem_path).read_bytes()
+    key = serialization.load_pem_public_key(pem)
+    inner = base64.b64encode(password.encode()).decode()
+    ciphertext = key.encrypt(inner.encode(), padding.PKCS1v15())
+    return base64.b64encode(ciphertext).decode()
+
+
 class RAGFlowLoginClient:
     """换会话的那一次 HTTP 调用。只有一个方法，因为它只该做一件事。"""
 
@@ -76,7 +100,7 @@ class RAGFlowLoginClient:
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
 
-    def login(self, *, email: str, password_ciphertext: str) -> dict[str, str]:
+    def login(self, *, email: str, password: str, public_pem_path: str) -> dict[str, str]:
         """POST /auth/login, return the session cookies.
 
         ``code != 0`` is a **refusal**, not an empty session: RAGFlow answers 200
@@ -96,7 +120,9 @@ class RAGFlowLoginClient:
                 url=join_url(self.base_url, "/api/v1/auth/login"),
                 method="POST",
                 headers={"Content-Type": "application/json"},
-                body=json_body({"email": email, "password": password_ciphertext}),
+                body=json_body(
+                    {"email": email, "password": encrypt_password(password, public_pem_path=public_pem_path)}
+                ),
                 timeout=self.timeout,
                 follow_redirects=False,
             ),
@@ -139,6 +165,7 @@ def open_console(
     credential_key: str,
     client: RAGFlowLoginClient,
     public_base_url: str,
+    public_pem_path: str,
 ) -> tuple[str, LoginSession]:
     """Resolve the caller's own tenant → its RAGFlow session → where to send the browser.
 
@@ -164,7 +191,7 @@ def open_console(
             UNREADABLE, "the stored RAGFlow credential cannot be decrypted with the current key"
         ) from exc
     email = str(row["ragflow_email"])
-    cookies = client.login(email=email, password_ciphertext=password)
+    cookies = client.login(email=email, password=password, public_pem_path=public_pem_path)
     return public_base_url, LoginSession(tenant_id=tenant_id, ragflow_email=email, cookies=cookies)
 
 
