@@ -39,7 +39,7 @@ from aiops_diagnostics.scope_context import (
     SubjectRecord,
     UpmsDirectory,
 )
-from aiops_diagnostics.sources import SourceError, mysql_site_mapper, scoped_live_sources
+from aiops_diagnostics.sources import mysql_site_mapper, scoped_live_sources
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -422,9 +422,17 @@ class ScopedOrderAuthorizer:
                 refreshed = operator_site_scope_from_shops(
                     shop_ids, context.effective_tenant_id, mapper=mapper
                 )
-        except (ScopeError, SourceError, ValueError):
+        except Exception as exc:  # noqa: BLE001 - 回退是**可选**步骤，不能让它把请求炸掉
             # 公司端点或充电库不可用：保持原判定（拒绝），不把一次上游故障变成放行。
-            _LOGGER.warning("order_authorization_refresh_failed")
+            #
+            # ``except Exception`` 是有意的（2026-10-22 部署验收发现）：这里此前只列了
+            # ``(ScopeError, SourceError, ValueError)``，于是一个**编程错误**（例如装配时
+            # 传进来的目录类型不对，抛 ``AttributeError``）会逃出 ``can_access``，把一个
+            # 本该「拒绝」的判定变成 500。回退是锦上添花，它的任何失败都不该改变
+            # 「拒绝」这个结论 —— 真正的判定已经在上面那次查询里做完了。
+            #
+            # 只记异常**类型名**，不记消息：与其它授权日志同一口径（消息可能带上游细节）。
+            _LOGGER.warning("order_authorization_refresh_failed error=%s", type(exc).__name__)
             return None
         return refreshed
 

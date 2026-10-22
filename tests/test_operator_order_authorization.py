@@ -428,6 +428,30 @@ def test_the_refresh_stays_off_for_the_self_scope(
     assert directory.calls == 0
 
 
+def test_a_broken_refresh_never_escapes_as_an_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """回退里的**任何**异常都不许逃出 ``can_access``。
+
+    部署验收时实测到过：装配传进来的目录类型不对会抛 ``AttributeError``，而当时
+    捕获列表只列了 ``(ScopeError, SourceError, ValueError)`` —— 于是一个本该返回
+    ``False`` 的判定变成 500。回退是可选步骤，它的失败不能改变「拒绝」这个结论。
+    """
+
+    class _WrongType:
+        def shop_ids_by_b_user_id(self, b_user_id: str) -> tuple[str, ...]:
+            raise AttributeError("'UpmsOperatorSiteScope' object has no attribute ...")
+
+    settings = Settings.from_env()
+    settings.mysql.user = "readonly"
+    settings.mysql.password = "secret"
+    settings.ssh.enabled = False
+    monkeypatch.setattr("aiops_diagnostics.sources.pymysql.connect", lambda **_: Connection())
+    authorizer = ScopedOrderAuthorizer(settings, shop_directory=_WrongType())  # type: ignore[arg-type]
+
+    assert authorizer.can_access(operator_context((SITE_OUT,)), ORDER_OWN_IN) is False
+
+
 def test_a_refresh_failure_keeps_the_original_refusal(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
