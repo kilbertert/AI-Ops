@@ -1,3 +1,65 @@
+## 2026-10-22 · 登录时代的 join 链路：四个真问题与一次误操作（#883 真机回收）
+
+**背景**：#883（登录时把人 join 进 workspace）合并很久了，但 41/36 上**一次都没真的跑过**。
+这一轮把链路真正接起来，逐个暴露四个问题。**全部在真机上发现，没有一个是单测能抓到的。**
+
+### 一、四个问题
+
+| # | 问题 | 为什么会一直没被发现 |
+|---|---|---|
+| 1 | `GET /v1/dify/workspace` 在 41 上**从未配置** `AIOPS_GATEWAY_INTERNAL_TOKEN_SECRET`，整条路由 302→**404** | #879 建端点、#883 调端点，两个 PR 各自绿；而 join 失败按设计**不阻断登录** ⇒ 零报警 |
+| 2 | 代理的 `GATEWAY_URL` 填了 `172.18.0.1:8788` | 那是**41 本机**的 docker 网桥；代理在 36，36 的 `172.18.0.1` 是它自己的网桥 |
+| 3 | Dify 里账号的 `email` **没有**环境前缀，与映射表的 `dify_email` 不一致 | #864 的「就地重标」只改了**映射表一列**，没改 Dify 的账号行；登录不看 email 所以从不暴露，join 第一次跑就 `account not found` |
+| 4 | 该账号的 `current` 指向**旧的共享 workspace** | 迁移的"对象"搬完了，"人"没搬 —— 见 #887 |
+
+### 二、逐条判据
+
+**1. 端点 404 → 200**。补 `AIOPS_GATEWAY_INTERNAL_TOKEN_SECRET` 到 `/etc/aiops-41/gateway.env`（服务读的是这个文件，不是 `production.env` —— 第一次写错文件，进程里看不到），重启后三个租户全部 200：
+
+```
+1942105476598861824 -> 200 {"workspace_id":"c3f871e1-…","environment":"41"}
+platform            -> 200 {"workspace_id":"d7d788cf-…","environment":"41"}
+1783022023241633792 -> 200 {"workspace_id":"1f3bda25-…","environment":"41"}
+```
+
+**2. 走公网，不走隧道。** 同机已有的发布桥用的就是 `AIOPS_CONSOLE_BRIDGE_GATEWAY_URL=https://api.mall.qushiyun.com`。
+从 36 实测公网 + 内部令牌 → 200。隧道只在公网**根本不可达**时成立（41→36 的 inner_api 是那种情形）。
+
+**3. email 对齐**（`accounts` 表，先 `pg_dump -t accounts` 备份）：
+- `email` / `normalized_email` **都没有唯一约束**（普通索引），目标值当时 **0 行**；
+- `oauth_access_tokens` 按 `account_id` 关联，**不涉及 email**；会话按 id 签发 ⇒ 改 email 不断登录。
+
+```
+8b218530-… 1454348737375174658@aiops-login.invalid
+        →  41-1454348737375174658@aiops-login.invalid
+```
+
+**成因在 Dify 侧**：`TenantService.join_enterprise_workspace_member` 的查询是
+`Account.id == account_id AND Account.email == email` —— **两个条件都要匹配**。
+
+**4. join 200，成员到位**：
+
+```
+platform members: dify-admin@aiops.local(owner), 41-1454348737375174658@aiops-login.invalid(editor)
+```
+
+### 三、我在这一轮造成的两处后果（据实）
+
+1. **建了一个永久 workspace `zz-probe-ik`**。我为验证 inner_api 的 key 可用，用了
+   `POST /inner/api/enterprise/workspace` —— 那是**创建**接口，不是只读探针。
+   **Dify 没有删除 workspace 的 API，这条是永久的。** 正确做法是用只读端点（如
+   `GET /console/api/all-workspaces`）验鉴权。
+2. **先把 `GATEWAY_URL` 配错，让登录短暂变坏**（`DIFY_WORKSPACE_LOOKUP_FAILED`）。
+   在改动之前登录是成功的（只是不 join）；改动中一度变成登不进去。
+
+### 四、据实（未完成）
+
+- **`current` 未切换**：该账号登录后看到的仍是 `AI-Ops Admin's Workspace`（旧共享工作区）。
+  按用户决定并入 #888 那批处理。
+- **没有以真实租户成员身份验过 #887 的隔离 AC**：本轮验的是**平台账号**（`tenant_id=-1`）落进
+  `platform` workspace；租户 1942 的真实成员仍未 join。
+- **95 未验**。
+
 ## 2026-10-22 · Dify 运维工具首片（#934 / #935）
 
 **分支/基线**：`feat/dify-ops-first-slice` / `d6c02067`。**未完成业务验收**。
