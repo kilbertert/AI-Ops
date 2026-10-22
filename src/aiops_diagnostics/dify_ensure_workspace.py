@@ -148,6 +148,7 @@ def ensure_workspace(
     console_api_key: str,
     lease_seconds: float = DEFAULT_LEASE_SECONDS,
     owner: str | None = None,
+    company: str = "",
     log: Any = None,
 ) -> EnsureOutcome:
     """幂等、可恢复地建出 ``(tenant_id, environment)`` 的 workspace。
@@ -156,7 +157,9 @@ def ensure_workspace(
     不会从 ``failed`` 里静默返回成功 —— 明确失败会被抛成异常，因为它需要人看见。
     """
     environment = canonical_environment(environment)
-    name = workspace_name(environment, tenant_id)
+    # 公司名只影响**建的那一刻**取什么名字。取到之后写进表，以后对账按那一列 ——
+    # 公司改名不会让对账失效（见 workspace_name 的 docstring）。
+    name = workspace_name(environment, tenant_id, company=company or "")
     lease_owner = owner or _lease_owner()
 
     row = workspaces.row(tenant_id, environment)
@@ -172,8 +175,13 @@ def ensure_workspace(
             )
         if state in {"unknown", "creating"}:
             # 租约过期的 creating 与 unknown 都**先对账再决定** —— 它们可能已经建成了。
+            # **按建的时候那个名字对账**，不按当前派生值：公司改名之后派生值变了，
+            # 而 Dify 里那个 workspace 还叫旧名 —— 按派生值会命中 0 ⇒ 重建 ⇒ 孤儿。
+            stored_name = str(row.get("workspace_name") or "") or name
             matches = reconcile_by_name(
-                console_base_url=console_base_url, console_api_key=console_api_key, name=name
+                console_base_url=console_base_url,
+                console_api_key=console_api_key,
+                name=stored_name,
             )
             if len(matches) > 1:
                 raise EnsureError(
@@ -183,7 +191,8 @@ def ensure_workspace(
                 )
             if len(matches) == 1:
                 found = str(matches[0].get("id") or "")
-                workspaces.mark_created(tenant_id, environment, found)
+                # 对账补 UUID 时把**当时那个名字**一并落表 —— 它是这次对账的依据。
+                workspaces.mark_created(tenant_id, environment, found, name=stored_name)
                 return EnsureOutcome(
                     tenant_id, environment, "created", found, "对账命中 1 个：补写 UUID，未重建"
                 )
@@ -217,7 +226,7 @@ def ensure_workspace(
         workspaces.mark_failed(tenant_id, environment, error=f"{exc.code}: {exc.message}")
         raise EnsureError(exc.code, exc.message) from exc
 
-    workspaces.mark_created(tenant_id, environment, created.workspace_id)
+    workspaces.mark_created(tenant_id, environment, created.workspace_id, name=name)
     if log is not None:
         log(f"workspace created: {created.name} -> {created.workspace_id}")
     return EnsureOutcome(tenant_id, environment, "created", created.workspace_id, "新建")

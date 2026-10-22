@@ -978,6 +978,10 @@ def rotate_ragflow_credential_command(
 def ensure_workspace_command(
     ctx: typer.Context,
     tenant: Annotated[str, typer.Option("--tenant", help="公司租户 id（sys_organ.id）")],
+    company: Annotated[
+        str,
+        typer.Option("--company", help="公司名（只影响建的那一刻取的名字，写进表后不再重算）"),
+    ] = "",
     db: Annotated[
         Path | None,
         typer.Option("--db", help="gateway 数据库文件（缺省会回退 XDG 默认并新建空库）"),
@@ -1049,6 +1053,7 @@ def ensure_workspace_command(
             inner=inner,
             console_base_url=settings.dify_console_base_url,
             console_api_key=settings.dify_console_api_key,
+            company=company,
             log=lambda line: typer.secho(line, err=True),
         )
     except EnsureError as exc:

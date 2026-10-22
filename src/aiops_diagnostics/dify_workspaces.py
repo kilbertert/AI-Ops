@@ -96,6 +96,10 @@ class DifyWorkspaces:
                     tenant_id TEXT NOT NULL,
                     environment TEXT NOT NULL,
                     workspace_id TEXT NOT NULL DEFAULT '',
+                    -- 建的时候用的**派生名**。对账按这一列，不按当前派生值 ——
+                    -- 名字里带公司名之后，公司改名会让"当前派生值"变化，而对账必须按
+                    -- 建的时候那个名字去 Dify 里找，否则会命中 0 ⇒ 重建 ⇒ 永久孤儿。
+                    workspace_name TEXT NOT NULL DEFAULT '',
                     setup_state TEXT NOT NULL,
                     lease_owner TEXT NOT NULL DEFAULT '',
                     lease_expires_at TEXT,
@@ -106,6 +110,12 @@ class DifyWorkspaces:
                 );
                 """
             )
+            # 老库补列：`CREATE TABLE IF NOT EXISTS` 不会给已存在的表加列。
+            columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(dify_workspaces)")}
+            if "workspace_name" not in columns:
+                connection.execute(
+                    "ALTER TABLE dify_workspaces ADD COLUMN workspace_name TEXT NOT NULL DEFAULT ''"
+                )
         protect_private_file(self.path)
 
     @contextmanager
@@ -290,16 +300,26 @@ class DifyWorkspaces:
             )
         return True
 
-    def mark_created(self, tenant_id: str, environment: str, workspace_id: str) -> None:
-        """建成之后**立刻**写回 id —— 这一行与 Dify 的现状之间不留空窗。"""
+    def mark_created(self, tenant_id: str, environment: str, workspace_id: str, *, name: str = "") -> None:
+        """建成之后**立刻**写回 id —— 这一行与 Dify 的现状之间不留空窗。
+
+        ``name`` 是**这次建的时候用的派生名**。写进表里，以后对账按它查：公司改名之后
+        派生值会变，而 Dify 里那个 workspace 还叫旧名。
+        """
         tenant_id = _identifier(tenant_id, "tenant_id")
         environment = _identifier(environment, "environment")
         with self._connection(write=True) as connection:
             connection.execute(
-                "UPDATE dify_workspaces SET workspace_id = ?, setup_state = 'created',"
-                " last_error = '', lease_expires_at = NULL, updated_at = ?"
+                "UPDATE dify_workspaces SET workspace_id = ?, workspace_name = ?,"
+                " setup_state = 'created', last_error = '', lease_expires_at = NULL, updated_at = ?"
                 " WHERE tenant_id = ? AND environment = ?",
-                (_identifier(workspace_id, "workspace_id"), _iso(now_utc()), tenant_id, environment),
+                (
+                    _identifier(workspace_id, "workspace_id"),
+                    name.strip(),
+                    _iso(now_utc()),
+                    tenant_id,
+                    environment,
+                ),
             )
 
     def mark_failed(self, tenant_id: str, environment: str, *, error: str) -> None:
@@ -374,15 +394,44 @@ class DifyWorkspaces:
 PLATFORM_TENANT_ID = "platform"
 
 
-def workspace_name(environment: str, tenant_id: str) -> str:
-    """workspace 的**派生名**：``aiops-{environment}-{tenant_id}``。
+def workspace_name(environment: str, tenant_id: str, *, company: str = "") -> str:
+    """workspace 的**派生名**：``aiops-{environment}-{tenant_id}``，可带公司名。
 
     ``tenants.name`` 在 Dify 里**没有唯一约束**（只有 ``tenant_pkey``），所以唯一性来自
-    这条命名约定，不是 Dify 保证的。因此：每次创建都用派生名，绝不人工起名；对账也按它
-    精确匹配。Dify 允许改名 —— 改名之后就对不上，那会退化成"命中 0 ⇒ 重建 ⇒ 孤儿"，
-    缓解是不给运营改名的入口（ADR-0059 已记）。
+    这条命名约定，不是 Dify 保证的。
+
+    ``company`` 只影响**建的那一刻**取什么名字。取到之后写进
+    ``dify_workspaces.workspace_name``，**以后对账一律按那一列** —— 不按当前派生值。
+    理由是公司会改名：`Ulink` 改成别的之后派生值变了，而 Dify 里那个 workspace 还叫旧名；
+    按当前派生值对账会命中 0 ⇒ 当"没建过"⇒ 重建 ⇒ 永久孤儿（Dify 没有删 workspace 的 API）。
+
+    Dify 侧的名字用 ``{id 后 8 位}`` 而不是全 id：全 id 有 19 位，在切换器里会被截断成
+    ``aiops-41-194210547659886...``（实测），人看不出是谁。
     """
-    return f"aiops-{_identifier(environment, 'environment')}-{_identifier(tenant_id, 'tenant_id')}"
+    environment_part = _identifier(environment, "environment")
+    tenant_part = _identifier(tenant_id, "tenant_id")
+    readable = _readable_company(company)
+    tail = tenant_part[-8:]
+    if readable:
+        return f"aiops-{environment_part}-{readable}-{tail}"
+    return f"aiops-{environment_part}-{tenant_part}"
+
+
+#: Dify 的 ``tenants.name`` 是普通字符串列，但控制台与切换器都按单行短文本渲染。
+#: 这里把公司名压成一段可读的 slug：只留字母数字与 `-`，其余折成 `-`，长度封顶。
+_MAX_COMPANY_SLUG = 24
+
+
+def _readable_company(company: str) -> str:
+    """公司名 → 可读 slug。空 ⇒ 空串（退回纯 id 命名）。"""
+    import re
+    import unicodedata
+
+    text = unicodedata.normalize("NFKC", (company or "").strip())
+    if not text:
+        return ""
+    slug = re.sub(r"[^0-9A-Za-z\u4e00-\u9fff]+", "-", text).strip("-")
+    return slug[:_MAX_COMPANY_SLUG].strip("-")
 
 
 def _identifier(value: str, name: str) -> str:

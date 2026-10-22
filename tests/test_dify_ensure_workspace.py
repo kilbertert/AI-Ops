@@ -137,8 +137,9 @@ def _run(tmp_path: Path, upstream: _Upstream, **overrides: Any):
         "console_api_key": CONSOLE_KEY,
         "owner": "test:1",
     }
+    # 显式传 workspaces，否则 overrides 里那个会被构造出来的新库盖掉
     kwargs.update(overrides)
-    return ensure_workspace(**kwargs), workspaces
+    return ensure_workspace(**kwargs), kwargs["workspaces"]
 
 
 # ── 1. 建成 + 幂等 ───────────────────────────────────────────────────────
@@ -345,3 +346,39 @@ def test_reconcile_sends_the_console_key_and_matches_exactly(tmp_path: Path, ups
     matches = reconcile_by_name(console_base_url=upstream.base, console_api_key=CONSOLE_KEY, name=name)
 
     assert [row["id"] for row in matches] == ["ws-exact"]
+
+
+# ── 公司名进 workspace 名，对账按**建的时候那个名字**（ADR-0086）─────────────
+
+
+def test_the_workspace_name_carries_the_company_and_a_short_id(tmp_path: Path, upstream: _Upstream) -> None:
+    """名字要能让人看出是谁；纯 19 位 id 在切换器里被截断成 `…9886...`，没人认得出。"""
+    from aiops_diagnostics.dify_workspaces import workspace_name
+
+    outcome, _ = _run(tmp_path, upstream, company="Ulink")
+
+    assert upstream.posts()[0]["body"]["name"] == workspace_name(ENVIRONMENT, TENANT, company="Ulink")
+    assert "Ulink" in upstream.posts()[0]["body"]["name"]
+    assert outcome.workspace_id == "ws-1"
+
+
+def test_the_company_name_is_not_recomputed_on_reconcile(tmp_path: Path, upstream: _Upstream) -> None:
+    """**公司改名之后**对账仍按建的时候那个名字 —— 否则命中 0 ⇒ 重建 ⇒ 永久孤儿。
+
+    变异对照：把 `stored_name` 换回 `name`（当前派生值）⇒ 本用例红。
+    """
+    from aiops_diagnostics.dify_workspaces import workspace_name
+
+    workspaces = DifyWorkspaces(tmp_path / "gateway.db")
+    old_name = workspace_name(ENVIRONMENT, TENANT, company="Ulink")
+    workspaces.claim(TENANT, ENVIRONMENT, owner="t:1", lease_seconds=300)
+    workspaces.mark_created(TENANT, ENVIRONMENT, "ws-1", name=old_name)
+    # 模拟"结果未知，需要按名字对账"的那一天
+    workspaces.mark_unknown(TENANT, ENVIRONMENT, error="timeout")
+    upstream.workspaces.append({"id": "ws-1", "name": old_name})
+
+    # 公司已改名：当前派生值会变，但对账必须用存下来的旧名
+    outcome, _ = _run(tmp_path, upstream, workspaces=workspaces, company="Ulink Renamed")
+
+    assert outcome.workspace_id == "ws-1", "按当前派生值对账会命中 0 并重建"
+    assert len(upstream.workspaces) == 1, "重建会造出第二个 workspace —— 而 Dify 删不掉"
