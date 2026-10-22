@@ -68,7 +68,11 @@ jobs:
     # again; `self-hosted` alone would match any self-hosted runner in the
     # account, so the label set is explicit.
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    # 10，不是 5。每个 `npx --yes tsx …` 步在冷启动时都要现装 tsx（实测 5 分 01 秒，
+    # 2026-10-22 run 39711959529），而 5 分钟的上限让**已经通过**的检查在收尾时被取消 ——
+    # 表现为 "Workflow policy 失败"，日志里却是 `profile-network check ok` 加一句
+    # `The operation was canceled`。取消一条已通过的必需检查，比它慢更糟。
+    timeout-minutes: 10
     steps:
       - name: Check out repository
         uses: actions/checkout@v4

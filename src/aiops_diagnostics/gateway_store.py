@@ -536,6 +536,57 @@ class GatewayStore:
         except sqlite3.Error:  # pragma: no cover - 磁盘问题不该挡发布
             _LOGGER.warning("publish audit write failed for app=%s action=%s", app_id, action)
 
+    def record_knowledge_access(
+        self,
+        *,
+        tenant_id: str,
+        environment: str,
+        outcome: str,
+        company_user_id: str = "",
+        ragflow_email: str = "",
+        reason_code: str = "",
+    ) -> None:
+        """Append one console hop to the knowledge access ledger (#926).
+
+        ``outcome`` is ``granted`` or a stable refusal code. Refusals are recorded
+        too: "who tried" and "what happened" are two different questions, and the
+        first one is exactly what the shared-owner design otherwise loses.
+
+        Never raises — same rule as the publish ledger, and the reason is the same:
+        an audit write must not be able to turn a permitted action into a failure.
+        """
+        try:
+            with self._connection(write=True) as connection:
+                connection.execute(
+                    """
+                    INSERT INTO knowledge_access_ledger (
+                        at, tenant_id, environment, company_user_id, ragflow_email, outcome, reason_code
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        _iso(_utc_now()),
+                        tenant_id,
+                        environment,
+                        company_user_id,
+                        ragflow_email,
+                        outcome,
+                        reason_code,
+                    ),
+                )
+        except sqlite3.Error:  # pragma: no cover - 磁盘问题不该挡一次跳转
+            _LOGGER.warning("knowledge access audit write failed tenant=%s outcome=%s", tenant_id, outcome)
+
+    def knowledge_access_entries(self, *, tenant_id: str | None = None) -> list[dict[str, Any]]:
+        with self._connection() as connection:
+            if tenant_id is None:
+                rows = connection.execute("SELECT * FROM knowledge_access_ledger ORDER BY id DESC").fetchall()
+            else:
+                rows = connection.execute(
+                    "SELECT * FROM knowledge_access_ledger WHERE tenant_id = ? ORDER BY id DESC",
+                    (tenant_id,),
+                ).fetchall()
+        return [dict(row) for row in rows]
+
     def publish_audit_entries(self, *, app_id: str | None = None) -> list[dict[str, Any]]:
         """Read the ledger, newest first (for tests and operator queries)."""
         with self._connection() as connection:
@@ -1504,6 +1555,27 @@ class GatewayStore:
                     ON publish_audit_ledger(at DESC);
                 CREATE INDEX IF NOT EXISTS idx_publish_audit_app
                     ON publish_audit_ledger(app_id, at DESC);
+                -- 知识库控制台的访问账本（#926 / PRD #923）。
+                --
+                -- **为什么需要它**：登录代理用「租户 owner」身份进 RAGFlow，所以 RAGFlow
+                -- 那一侧看到的所有操作者都是同一个 owner，分不出是谁建的库。这个决定是
+                -- 有意的（每租户一个 RAGFlow 租户），代价就用这张表补：谁在什么时候、
+                -- 以哪个租户的身份进去过，记在我们这一侧 —— 与发布审计同一条思路。
+                --
+                -- 追加写、不更新、不删除。它是可观测性，不是授权输入：写失败只告警，
+                -- 绝不把一次合法跳转变成失败（否则观测把自己变成了故障源）。
+                CREATE TABLE IF NOT EXISTS knowledge_access_ledger (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    at TEXT NOT NULL,
+                    tenant_id TEXT NOT NULL,
+                    environment TEXT NOT NULL,
+                    company_user_id TEXT NOT NULL DEFAULT '',
+                    ragflow_email TEXT NOT NULL DEFAULT '',
+                    outcome TEXT NOT NULL,
+                    reason_code TEXT NOT NULL DEFAULT ''
+                );
+                CREATE INDEX IF NOT EXISTS idx_knowledge_access_tenant
+                    ON knowledge_access_ledger(tenant_id, at DESC);
 
                 -- 运营在界面上点的「知识源」：一条 = Dify 里一个外部知识库。
                 --
