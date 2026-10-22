@@ -21,6 +21,12 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DEPLOY_DIR = REPO_ROOT / "deploy"
 CD_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "cd.yml"
 
+#: A directory holding a stand-in **named `dev-host`**, so it can shadow the real
+#: tool on PATH. The name is load-bearing: `deploy-41.sh` resolves it with
+#: `command -v dev-host`, so a file called `dev-host-stub.sh` would never be found —
+#: measured, and it made the test silently keep talking to the real host.
+DEV_HOST_STUB_DIR = REPO_ROOT / "tests" / "fixtures" / "dev-host-stub"
+
 
 def _run_bounded(
     argv: list[str], *, cwd: Path, env: dict[str, str], timeout: int
@@ -88,8 +94,8 @@ def test_deploy_scripts_parse() -> None:
 
 
 @pytest.mark.skipif(
-    shutil.which("dev-host") is None,
-    reason="dry-run 需要 dev-host（只在开发机上）—— CI 是 GitHub-hosted，没有它",
+    not (DEV_HOST_STUB_DIR / "dev-host").is_file(),
+    reason="dev-host 替身缺失（tests/fixtures/dev-host-stub.sh）",
 )
 def test_remote_block_renders_and_parses() -> None:
     """远端块是**生成**出来的（heredoc 展开），所以静态 `bash -n` 看不到它。
@@ -98,23 +104,46 @@ def test_remote_block_renders_and_parses() -> None:
     渲染后才出现的错误：heredoc 里写的函数用 `$1` 而没有转义，bash 在**本机**展开它，
     于是 `set -u` 下报 unbound variable。静态检查看不到，因为它那时还只是一段字符串。
 
-    ⚠️ `timeout` 是必需的，不是保险。这条是本仓**唯一**把外部工具（`bash deploy-41.sh`，
-    它再拉起 `dev-host` → `ssh`）拉起来却没有时限的 subprocess 调用 —— AST 扫描
-    `tests/`：46 处 subprocess，33 处无 timeout，其中只有这一条拉起外部工具，
-    其余是 `git`/本机 python 之类本机快命令。而它是全量里最慢的一条（25s），
-    所以它一旦挂住，CI 只能等 job 的 `timeout-minutes: 20` 才失败 —— 20 分钟里
-    没有任何输出告诉人卡在哪。
+    **跑在 `dev-host` 替身上，不是真主机上。** 脚本在渲染远端块之前要做六次
+    `dev-host` 往返（健康探针、参考资料存在性、两份依赖哈希）。对着真 41 每次约
+    4.4 秒（2026-10-22 实测），合计 28 秒 —— 而这一条要验的是「块渲染出来能不能解析」，
+    不需要知道生产此刻在跑哪个版本。那六次读是**提问的成本**，不是被测物。
+
+    替身保真度是可核对的，不是自称的：经它渲染出的块与对着真主机渲染出的块
+    **逐字节相同**（152 行，`cmp` 通过；复核方式见 `tests/fixtures/dev-host-stub.sh`）。
+    这也正是本仓 ADR 0030 与 1.7.27 下发的那条判据 —— 替身必须比现实更苛刻或同样苛刻，
+    否则测试绿得没有意义。
+
+    于是这条在 CI 上也跑得起来了：原先它 `skipif` 依赖本机有 `dev-host`，
+    在 GitHub-hosted runner 上永远跳过 —— 一个**只在开发机上执行**的形状检查。
+
+    ⚠️ `timeout` 是必需的，不是保险。这条是本仓**唯一**把外部工具（`bash deploy-41.sh`）
+    拉起来却没有时限的 subprocess 调用 —— AST 扫描 `tests/`：46 处 subprocess，
+    33 处无 timeout，其中只有这一条拉起外部工具，其余是 `git`/本机 python 之类本机快命令。
+    它一旦挂住，CI 只能等 job 的 `timeout-minutes: 20` 才失败 —— 20 分钟里没有任何输出
+    告诉人卡在哪。
 
     ⚠️ 用的是 `_run_bounded` 而不是 `subprocess.run(..., timeout=…)`：后者只杀它
-    直接起的那个子进程，而卡住的往往是更深一层的 `dev-host`；且 SIGKILL 会跳过
-    bash 的 EXIT trap，于是 `mktemp -d` 的暂存目录也留在盘上。拒绝要拒绝得干净。
+    直接起的那个子进程；且 SIGKILL 会跳过 bash 的 EXIT trap，于是 `mktemp -d` 的暂存
+    目录也留在盘上。拒绝要拒绝得干净。
     """
     repo = DEPLOY_DIR.parent
+    # The stub shadows the real `dev-host` by sitting earlier on PATH. Everything
+    # else on PATH is untouched, so the script still finds git/python3/curl.
+    stub_dir = DEV_HOST_STUB_DIR
     result = _run_bounded(  # noqa: S603 - fixed argv, no shell
         ["bash", str(DEPLOY_DIR / "deploy-41.sh"), "--commit", "HEAD", "--dry-run"],
         cwd=repo,
         timeout=300,
-        env={**os.environ, "PATH": f"/home/claude/miniconda3/bin:{os.environ.get('PATH', '')}"},
+        env={
+            **os.environ,
+            "PATH": f"{stub_dir}:/home/claude/miniconda3/bin:{os.environ.get('PATH', '')}",
+            # The script also reads a host registry before it renders anything, and
+            # a GitHub-hosted runner has none — that was the second reason this test
+            # never ran in CI. The fixture carries the shape of the real `[hosts.aiops-41]`
+            # entry (see its header); only the fields the script parses are present.
+            "DEV_HOST_REGISTRY": str(stub_dir / "hosts.toml"),
+        },
     )
     # 部署脚本里有中文；`cut -c` 之类会从多字节字符中间截断。用 errors="replace"
     # 避免因为输出层的一个坏字节让整条检查失败 —— 我们要查的是结构，不是编码。
