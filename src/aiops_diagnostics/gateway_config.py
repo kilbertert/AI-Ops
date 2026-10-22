@@ -396,6 +396,13 @@ class GatewayServerSettings:
             ragflow_embedding_api_key=_env("AIOPS_GATEWAY_RAGFLOW_EMBEDDING_API_KEY")
             or _file_value(file_values, "AIOPS_GATEWAY_RAGFLOW_EMBEDDING_API_KEY"),
             ragflow_embedding_model=_env("AIOPS_GATEWAY_RAGFLOW_EMBEDDING_MODEL", "text-embedding-3-large"),
+            # #926 控制台入口。**这一行漏过一次**：字段声明了、路由读了，但 `from_env()`
+            # 从没给它们赋值 —— 所有单测都是直接构造 settings，于是谁也没发现。真机上的
+            # 表现是路由报 `KNOWLEDGE_CONSOLE_DISABLED`，而环境变量明明都在进程里。
+            ragflow_console_base_url=_env("AIOPS_GATEWAY_RAGFLOW_CONSOLE_BASE_URL")
+            or _file_value(file_values, "AIOPS_GATEWAY_RAGFLOW_CONSOLE_BASE_URL"),
+            ragflow_console_public_url=_env("AIOPS_GATEWAY_RAGFLOW_CONSOLE_PUBLIC_URL")
+            or _file_value(file_values, "AIOPS_GATEWAY_RAGFLOW_CONSOLE_PUBLIC_URL"),
             jev_base_url=_env("AIOPS_GATEWAY_JEV_BASE_URL")
             or _file_value(file_values, "AIOPS_GATEWAY_JEV_BASE_URL"),
             jev_api_key=_env("AIOPS_GATEWAY_JEV_API_KEY")

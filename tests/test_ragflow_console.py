@@ -344,3 +344,50 @@ def test_the_route_is_absent_when_the_console_is_not_configured(tmp_path: Path) 
     response = client.get("/v1/knowledge/console", headers={"Authorization": "Bearer tok"})
 
     assert response.status_code == 404
+
+
+def test_from_env_actually_reads_the_console_settings(monkeypatch, tmp_path) -> None:
+    """声明、路由、环境变量都在，但 `from_env()` 没赋值——真机上表现为"未启用"。
+
+    这个缺口被所有单测漏掉，因为**它们都直接构造 settings**，绕过了唯一会读环境变量的
+    那条路径。回归因此必须走 `from_env()`，而不能自己拼一个 `GatewayServerSettings`。
+    """
+    from aiops_diagnostics.gateway_config import GatewayServerSettings
+
+    monkeypatch.setenv("AIOPS_GATEWAY_RAGFLOW_CONSOLE_BASE_URL", "http://rag:10081")
+    monkeypatch.setenv("AIOPS_GATEWAY_RAGFLOW_CONSOLE_PUBLIC_URL", "http://rag:10081")
+    monkeypatch.setenv("AIOPS_GATEWAY_ENVIRONMENT", "41")
+    monkeypatch.setenv("AIOPS_GATEWAY_DATABASE_FILE", str(tmp_path / "gateway.db"))
+
+    settings = GatewayServerSettings.from_env()
+
+    assert settings.ragflow_console_base_url == "http://rag:10081"
+    assert settings.ragflow_console_public_url == "http://rag:10081"
+
+
+def test_every_ragflow_setting_is_wired_from_the_environment(monkeypatch, tmp_path) -> None:
+    """A guard for the whole family, not just the pair that broke.
+
+    "Declared but never read" is invisible to any test that builds the settings
+    object itself, so it gets one test that builds it the way a deployment does.
+    """
+    from aiops_diagnostics.gateway_config import GatewayServerSettings
+
+    expected = {
+        "AIOPS_GATEWAY_RAGFLOW_CREDENTIAL_KEY": "ragflow_credential_key",
+        "AIOPS_GATEWAY_RAGFLOW_EMBEDDING_BASE_URL": "ragflow_embedding_base_url",
+        "AIOPS_GATEWAY_RAGFLOW_EMBEDDING_API_KEY": "ragflow_embedding_api_key",
+        "AIOPS_GATEWAY_RAGFLOW_EMBEDDING_MODEL": "ragflow_embedding_model",
+        "AIOPS_GATEWAY_RAGFLOW_CONSOLE_BASE_URL": "ragflow_console_base_url",
+        "AIOPS_GATEWAY_RAGFLOW_CONSOLE_PUBLIC_URL": "ragflow_console_public_url",
+        "AIOPS_GATEWAY_RAGFLOW_TENANT_DOMAIN": "ragflow_tenant_domain",
+    }
+    for name in expected:
+        monkeypatch.setenv(name, f"value-{name.lower()}")
+    monkeypatch.setenv("AIOPS_GATEWAY_ENVIRONMENT", "41")
+    monkeypatch.setenv("AIOPS_GATEWAY_DATABASE_FILE", str(tmp_path / "gateway.db"))
+
+    settings = GatewayServerSettings.from_env()
+
+    missing = [name for name, attr in expected.items() if getattr(settings, attr) != f"value-{name.lower()}"]
+    assert not missing, f"这些 RAGFlow 设置声明了但 from_env() 没有读：{missing}"
