@@ -1580,10 +1580,17 @@ runuser -u aiops41 -- /opt/aiops-41/.venv/bin/aiops --config /etc/aiops-41/produ
 app）。这一步把它推到 `ready`：装插件 → 写这个 workspace 自己的 provider 凭据 → 导模板 DSL。
 
 ```bash
-runuser -u aiops41 -- /opt/aiops-41/.venv/bin/aiops --config /etc/aiops-41/production.env \
-  admin ensure-ready --tenant <租户 id> --db /var/lib/aiops-41/gateway/gateway.db
+# ⚠️ 部署身份（AIOPS_GATEWAY_ENVIRONMENT）在 gateway.env，不在 production.env。
+# 只给 --config production.env 会让命令报"缺少 AIOPS_GATEWAY_ENVIRONMENT"并退出 ——
+# 2026-10-22 在 41 上实测过。两个文件都要进环境变量（后者里的键由 --config 读）。
+runuser -u aiops41 -- bash -c '
+  set -a; . /etc/aiops-41/gateway.env; set +a
+  exec /opt/aiops-41/.venv/bin/aiops --config /etc/aiops-41/production.env \
+    admin ensure-ready --tenant <租户 id> --db /var/lib/aiops-41/gateway/gateway.db'
 # 平台账号用 --tenant platform
 ```
+
+`ensure-workspace`（§3.1-sexies）**同理**：那条命令现在也读 `AIOPS_GATEWAY_ENVIRONMENT`。
 
 **先补一行配置**（`/etc/aiops-41/production.env`，0600）：
 
