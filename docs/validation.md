@@ -1,3 +1,43 @@
+## 2026-10-22 · #881 在 41 上**第一次真机跑完三步**，两个 workspace 到 ready
+
+**范围**：41（部署 `cb896a3` 由 CD 自动完成，`aiops-gateway-41.service` active）。
+这是 #881 的 P1 异议（"三步只在假控制台上验过"）的正式回收。
+
+### 一、结果（命令输出 + 独立复核，两处一致）
+
+```
+ensure-workspace --tenant platform        → state created, workspace d7d788cf-91da-4c7a-8845-e1166cf8b69f（新建，永久）
+ensure-ready     --tenant platform        → state ready, 插件 2、凭据 1、模板 app 70ce4286-…
+ensure-ready     --tenant platform（重跑） → plugins_installed []、credential_written false、app_id ""（**零写**）
+ensure-ready     --tenant 1942105476598861824 → state ready, 插件 1、凭据 1、模板 app 21cb96be-…
+```
+
+独立复核（不经命令自己的输出，直接打 Dify）：
+
+| 对象 | 复核结果 |
+|---|---|
+| 插件 | `langgenius/openai:1.0.7@f3…`、`langgenius/deepseek:0.0.24@9e…` 都在 `plugin/list` 里 |
+| provider 凭据 | `langgenius/deepseek/deepseek` status=active，`available_credentials=[aiops-workspace]` |
+| 模板 app | `aiops-workspace-template` = `70ce4286-…` |
+| 库 | `dify_workspaces`: `platform`/`1942…` 均 `ready`，`last_error` 空 |
+
+### 二、两处与预期不同的实测（记下来）
+
+1. **`platform` 装了两个插件，租户 1942 只装了 `openai`。** 不是漏装：1942 的 workspace
+   早就装过 deepseek（迁移时随 dataset/app 一起建的），`install_plugins` 只发缺的那一个
+   —— 这正是"只装缺的"那条判据在真机上第一次被看到。
+2. **两次 `credential_written` 都是 true。** 这两个 workspace 此前都没有 `aiops-workspace`
+   这个名字的凭据（迁移复制的是 `deepseek-official`），所以是**新增**而不是覆盖；重跑时
+   才是 false。名字固定 + 幂等这条在真机成立。
+
+### 三、据实（本轮**没有**做到的）
+
+- **没有跑一次真实对话**：#881 的 AC 第一条是"能跑起来一次真实对话"。模板 app 的
+  `model.name` 是刻意留空的（由该 workspace 自己的凭据决定），运营要先在控制台选一次
+  模型；在那之前它跑不起来。**这一条仍未验收。**
+- **没有在租户 1942 上跑真实发布/试运行**（#887 的 AC）——那是 #888 撤权之前必须做的。
+- **`98` 上没有验过**；本轮只碰 41。
+
 ## 2026-10-22 · #887 取证：迁移已完成，重复 dataset 是回滚点不是垃圾
 
 **范围**：#887 的票面说"把第一个租户迁到自己的 workspace"，而 41 上**迁移已在
