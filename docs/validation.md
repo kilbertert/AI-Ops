@@ -29,6 +29,44 @@
 - 运维方法自检：本次实际远端读取由既有部署dry-run触发，方法已在部署脚本/手册；新登记方法已写入首片手册，
   私有令牌、会话或主机原始日志未进入文档。
 
+## 2026-10-22 · 租户 1942 的真实发布 + 试运行在 41 上跑通（#887 AC）
+
+**前置**：#881 的三步在 41 真机跑通（PR #933），两个 workspace 的模板 app 已选
+`deepseek-v4-flash`，真实对话两个都 200。本记录补的是 #887 剩下的那两条 AC。
+
+### 一、结果
+
+```
+POST /v1/dify/publish {"app_id":"88fc20bd-…"}  → 200
+     {"agent_name":"canary-客服","action":"unchanged","version_no":16}
+POST /v1/dify/trial   {"order_no":"2112375326328061953","app_id":"88fc20bd-…"} → 202
+POST(→GET) /v1/dify/trial/tr_6f001b4d5fbb4a69b56ed224bb0bd83b → 200
+     {"status":"completed","result":{"status":"inconclusive","report":{…}}}
+```
+
+试运行产出了一份**真实诊断报告**（11987 字节）：订单已正常结束、计费自洽
+（0.76 kWh × 6.0 元 = 4.56 元），`status=inconclusive` 是结论本身，不是失败。
+
+### 二、三个会把人卡住的调用细节（都是本轮现场踩到的）
+
+1. **网关绑在 `172.18.0.1:8788`，不是回环**。打 `127.0.0.1:8788` 直接
+   `Connection refused` —— 看 `ss -ltnp` 才知道。
+2. **`/v1/dify/trial` 用的是第六把独立钥匙** `AIOPS_GATEWAY_DIFY_TRIAL_API_KEY`，
+   不是 publish 那把。用错 ⇒ `403 DIFY_CREDENTIAL_REJECTED`（"能发布"不等于"能在真数据上跑"）。
+3. **读结果必须带与提交**逐字相同**的四个发起人头**。漏掉 `-Type`/`-Name` ⇒
+   `404 TRIAL_NOT_FOUND` —— 作业行按 `scope_fingerprint` 隔离，而那个哈希含数据范围与
+   主体类型；两个路由共用 `_trial_run_context`，所以**提交时缺一个头，读的时候也缺同一个**，
+   否则读不回来。这不是缺陷，是隔离按人算的必然结果。
+
+### 三、据实
+
+- **`unchanged v16`** 表示 Dify 里的正文与已发布版本逐字相同（我改的只是模型选择，
+   不是正文），所以发布是 no-op —— 这条**不能**当作"发布链路改了东西"的证据。
+- **`inconclusive` 是这次诊断的真实结论**，不是验收失败；它证明的是"试运行这条路能跑完整
+  轮并产出报告"。
+- **旧 workspace 仍可用**：两个 `[归档]` app 未动，`a7a8aad3-…` 数据集未删（回滚路径在）。
+- **还没做**：#888 撤旧访问权。
+
 ## 2026-10-22 · `ensure-ready` 的凭据必须**切到生效位**（41 实测出的缺陷）
 
 **症状**：租户 1942 的 workspace 被 `ensure-ready` 推到 `ready`、凭据 `credential_written=true`，
