@@ -1,0 +1,26 @@
+# A minimal host registry for the deploy dry-run test.
+#
+# `deploy/deploy-41.sh` reads a host registry (`DEV_HOST_REGISTRY`, default
+# `~/.config/dev-host/hosts.toml`) and derives a CD-scoped copy from it before it
+# will render anything. On a GitHub-hosted runner that file does not exist, so the
+# script dies at "读不到主机清单" — which is why the only test that exercised this
+# rendering was `skipif`-ing itself out of CI entirely.
+#
+# This file is that missing input, not a mock of it: the script parses the real
+# TOML with `tomllib` and looks for `[hosts.aiops-41]`. The shape below is copied
+# from the real registry on the development host (2026-10-22) with the host key and
+# the public hostname removed — neither is read by the script, and neither belongs
+# in a public repository.
+#
+# The fields that ARE read: `aka` (how `41` resolves), `ssh_alias`, `role` (must be
+# `service-host`), `plane`, `owner`, `access`. Keep those exact or the script will
+# refuse for a reason unrelated to what the test is checking.
+
+[hosts.aiops-41]
+aka = ["41"]
+ssh_alias = "aiops-41"
+role = "service-host"
+plane = "service"
+owner = "qushiyun"
+access = "ssh"
+description = "test fixture: shape of the real 41 entry, host key and public hostname omitted"

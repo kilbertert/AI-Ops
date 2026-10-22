@@ -138,6 +138,11 @@ def test_remote_block_renders_and_parses() -> None:
         env={
             **os.environ,
             "PATH": f"{stub_dir}:/home/claude/miniconda3/bin:{os.environ.get('PATH', '')}",
+            # The script also reads a host registry before it renders anything, and
+            # a GitHub-hosted runner has none — that was the second reason this test
+            # never ran in CI. The fixture carries the shape of the real `[hosts.aiops-41]`
+            # entry (see its header); only the fields the script parses are present.
+            "DEV_HOST_REGISTRY": str(stub_dir / "hosts.toml"),
         },
     )
     # 部署脚本里有中文；`cut -c` 之类会从多字节字符中间截断。用 errors="replace"
