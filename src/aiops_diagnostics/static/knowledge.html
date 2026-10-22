@@ -173,6 +173,10 @@
         meta.append(tag);
       }
       row.append(check, meta);
+      // **这一行是必需的**：上面只是把 checkbox 与文字装进 label，label 本身
+      // 从没进过容器。少了它，接口有数据、页面却永远是空白列表 —— 而接口返回
+      // 200 时没有任何报错可看，所以这个缺陷只在"第一次真的拿到库"时暴露。
+      box.append(row);
     });
   }
 
