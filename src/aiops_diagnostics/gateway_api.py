@@ -112,7 +112,6 @@ from aiops_diagnostics.faq import (
     PlatformIdentityResolver,
 )
 from aiops_diagnostics.gateway_config import (
-    DifyKnowledgeBinding,
     GatewayServerSettings,
     parse_dify_knowledge_bindings,
     parse_dify_tool_bindings,
@@ -144,6 +143,7 @@ from aiops_diagnostics.knowledge_retrieval import (
     KnowledgeSearchUnavailable,
     normalize_search_response,
 )
+from aiops_diagnostics.knowledge_sources import KnowledgeSourceResolver
 from aiops_diagnostics.metrics_store import MetricsValidationError
 from aiops_diagnostics.order_status import KNOWN_STATUS_CODES, StatusRole, role_of
 from aiops_diagnostics.order_visibility import DeviceTenantError, tenant_matches
@@ -1281,6 +1281,60 @@ def create_gateway_app(
             return PRODUCTION_IDENTITY
         raise StandardAPIError(status.HTTP_403_FORBIDDEN, "DIFY_CREDENTIAL_REJECTED", "credential rejected")
 
+    def _libraries_for_tenant(settings: GatewayServerSettings, runtime: GatewayRuntime) -> Any:
+        """A per-tenant library fetcher, or a no-op when auto-registration is off.
+
+        Returns ``None`` for "no auto sources" rather than raising: an upstream
+        that is down must degrade to the manual registry (which is why the manual
+        registry exists), not turn a working request into a 502.
+        """
+
+        def fetch(tenant_id: str) -> tuple[str, ...] | None:
+            client = runtime.kb_search_client
+            if client is None:
+                return None
+            try:
+                owned = client.for_tenant(tenant_id).list_knowledge_bases()
+            except Exception:  # noqa: BLE001 - upstream down: no auto source this request
+                return None
+            return tuple(str(item["knowledge_base_id"]) for item in owned if item.get("knowledge_base_id"))
+
+        return fetch
+
+    def _knowledge_sources(settings: GatewayServerSettings, store: GatewayStore) -> KnowledgeSourceResolver:
+        """One resolver for retrieval and listing (#925).
+
+        Auto-registration is built from what onboarding recorded: which tenants
+        were onboarded, and which libraries each of them owns right now. Both
+        read fresh on every request — a library created a second ago must be
+        selectable without any cache to invalidate, and a tenant that has not been
+        onboarded must not acquire a source merely because RAGFlow holds rows
+        under a name that looks like one.
+
+        Any failure to read the upstream listing degrades to "no auto sources",
+        never to an error: the manual registry must keep working when kb-service
+        is unreachable, which is exactly the manual registry's purpose.
+        """
+        client = context.runtime.kb_search_client
+        auto_tenants: list[str] = []
+        if settings.dify_knowledge_autoregister and client is not None:
+            try:
+                auto_tenants = [
+                    str(row["tenant_id"]) for row in store.list_ragflow_tenants(settings.environment)
+                ]
+            except Exception:  # noqa: BLE001 - an unreadable table is "none onboarded"
+                auto_tenants = []
+        # **No upstream call here.** Libraries are fetched per tenant, at the point
+        # a caller actually names that tenant: retrieval asks for one, the picker
+        # asks for all. Doing it eagerly would put every onboarded tenant's HTTP
+        # timeout in front of every retrieval — one tenant's slow upstream would
+        # delay another tenant's unrelated request.
+        return KnowledgeSourceResolver.from_parts(
+            env_bindings=settings.dify_knowledge_bindings,
+            rows=store.list_knowledge_id_bindings(),
+            auto_tenants=auto_tenants,
+        )
+
     @app.post(DIFY_RETRIEVAL_PATH)
     def dify_retrieval(
         payload: dict[str, Any],
@@ -1296,30 +1350,15 @@ def create_gateway_app(
         rather than a proxy. The debug identity narrows one step further: only
         the knowledge ids its tool plan names are reachable through it.
         """
-        bindings = parse_dify_knowledge_bindings(context.settings.dify_knowledge_bindings)
-        # Operator-configured bindings come from the database (ADR 0048) and are
-        # merged over the env registry, keyed by the same `knowledge_id`. The
-        # env rows stay meaningful: they are the ones written before this UI
-        # existed, and a deployment that has not adopted the table must keep
-        # working exactly as it did.
-        #
-        # A database row wins on collision because it was written by a human
-        # clicking in the console, which is the newer decision. Nothing here
-        # lets a REQUEST widen scope: the merged map is still ours, and an
-        # unknown `knowledge_id` is still a 404.
-        for row in context.store.list_knowledge_id_bindings():
-            bindings[row["knowledge_id"]] = DifyKnowledgeBinding(
-                knowledge_id=row["knowledge_id"],
-                tenant_id=row["tenant_id"],
-                knowledge_base_ids=tuple(row["knowledge_base_ids"]),
-                display_name=str(row.get("display_name") or ""),
-            )
+        sources = _knowledge_sources(context.settings, context.store)
         try:
             request = parse_dify_retrieval_request(payload, max_top_k=context.settings.kb_search_max_results)
         except DifyRequestError as exc:
             raise StandardAPIError(status.HTTP_400_BAD_REQUEST, exc.code, exc.message) from exc
 
-        binding = bindings.get(request.knowledge_id)
+        binding = sources.resolve(
+            request.knowledge_id, fetch_libraries=_libraries_for_tenant(settings, context.runtime)
+        )
         if binding is None:
             # A knowledge_id we never registered. 404 says "not here" and
             # reveals nothing about which ids exist, or about our data plane.
@@ -1414,28 +1453,20 @@ def create_gateway_app(
         the same credential must be able to retrieve, or the preview UI would
         suggest choices the preview cannot honour.
         """
-        bindings = parse_dify_knowledge_bindings(context.settings.dify_knowledge_bindings)
-        # Same merge as the retrieval route (ADR 0048): console rows win over env
-        # rows, and one list serves both so the patched Dify dialog and our own
-        # page can never disagree about what exists.
-        for row in context.store.list_knowledge_id_bindings():
-            bindings[row["knowledge_id"]] = DifyKnowledgeBinding(
-                knowledge_id=row["knowledge_id"],
-                tenant_id=row["tenant_id"],
-                knowledge_base_ids=tuple(row["knowledge_base_ids"]),
-                display_name=str(row.get("display_name") or ""),
-            )
+        # ONE resolver for both routes (#925). Before this, retrieval and listing
+        # each merged the same two tables themselves — two implementations of one
+        # rule, which is the shape that drifts.
+        sources = _knowledge_sources(context.settings, context.store)
         items: list[dict[str, Any]] = []
-        for knowledge_id in sorted(bindings):
-            binding = bindings[knowledge_id]
-            if not identity.allows(knowledge_id, binding.tenant_id):
-                continue
+        for binding in sources.visible(
+            identity, fetch_libraries=_libraries_for_tenant(settings, context.runtime)
+        ):
             items.append(
                 {
-                    "knowledge_id": knowledge_id,
+                    "knowledge_id": binding.knowledge_id,
                     # The operator's own label, and the ids it maps to — the ids
                     # stay visible because they are what retrieval matches on.
-                    "name": binding.display_name or knowledge_id,
+                    "name": binding.display_name or binding.knowledge_id,
                     "knowledge_base_ids": list(binding.knowledge_base_ids),
                 }
             )

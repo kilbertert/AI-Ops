@@ -114,6 +114,13 @@ class GatewayServerSettings:
     #: ``knowledge_id``（一个不透明串），**没有租户概念**，所以「哪个租户、哪些知识库」
     #: 必须由我们的登记表决定 —— 这正是「不能成为 Dify 要什么就给什么的后门」的落点。
     dify_knowledge_bindings: str = ""
+    #: 自动登记（#925 / PRD #923）：让一个**已开户**租户在 RAGFlow 名下的全部库，以
+    #: `tenant-<tenant_id>` 这个名字直接可检索，中间不需要人工登记。
+    #:
+    #: **默认开**：1:1:1 全部就位时它就是想要的行为，而它只在"这个租户开户过"且"此刻
+    #: 确实有库"时才生效；两个条件缺一个都解析不到，与"未登记"同一个答案（404），不会
+    #: 把一次故障说成"没有命中"。人工登记表**永远优先**，所以置 false 就是回滚。
+    dify_knowledge_autoregister: bool = True
     #: Dify 工具身份 → 我们的 ``ToolName`` 的登记表（``provider_id/tool_name:our_tool``，
     #: 多行/分号分隔）。Dify 的工具名与我们的 ``ToolName`` **不是同一个命名空间**
     #: （实测：``provider_id=time`` / ``tool_name=timezone_conversion``），所以只能靠
@@ -209,6 +216,21 @@ class GatewayServerSettings:
     dify_workspace_model_api_key: str = field(repr=False, default="")
     #: 上面那把钥匙的 endpoint。deepseek 官方端点是默认值；换供应商时改这一行。
     dify_workspace_model_endpoint: str = "https://api.deepseek.com/v1"
+    #: 一租户一 RAGFlow 租户的凭据加密密钥（#924 / PRD #923）。开户把 RAGFlow 的 owner
+    #: 密码写进 `ragflow_tenants` 时用它加密，登录代理（#926）读出来时用它解密。
+    #:
+    #: 16/24/32 字节。**留空 ⇒ 开户与轮换拒绝运行**，而不是"存个明文凑合" —— 一个
+    #: 没有密钥的凭据保管就是明文保管。它不是网关运行时读的东西：只有那两条 CLI 路径读它。
+    ragflow_credential_key: str = field(repr=False, default="")
+    #: RAGFlow 账号的邮箱域（派生 `sha1(tenant_id)[:16]@domain`）。与 kb-service 懒注册
+    #: 用的是同一个形状，所以一个在此命令之前懒注册过的租户不会因为域名不同被当成两个人。
+    ragflow_tenant_domain: str = "kb.internal"
+    #: 开户时做**一次真实 embedding 调用**要用的端点与密钥（#924）。校验存在的理由很直白：
+    #: 41 上出现过一个配置齐全但密钥被供应商禁用的租户，每一份文档都解析失败，而界面上
+    #: 只写"解析失败"。只读配置的检查会把那种租户判成健康。
+    ragflow_embedding_base_url: str = ""
+    ragflow_embedding_api_key: str = field(repr=False, default="")
+    ragflow_embedding_model: str = "text-embedding-3-large"
     #: Conversation context window (#482). The defaults ARE the contract's
     #: numbers (8 turns / 8k tokens, ``conversation_store`` owns the constants);
     #: they are configurable because a RAG or promotional turn also spends the
@@ -311,6 +333,7 @@ class GatewayServerSettings:
             or _file_value(file_values, "AIOPS_GATEWAY_DIFY_KNOWLEDGE_API_KEY"),
             dify_knowledge_bindings=_env("AIOPS_GATEWAY_DIFY_KNOWLEDGE_BINDINGS")
             or _file_value(file_values, "AIOPS_GATEWAY_DIFY_KNOWLEDGE_BINDINGS"),
+            dify_knowledge_autoregister=_env_bool("AIOPS_GATEWAY_DIFY_KNOWLEDGE_AUTOREGISTER", True),
             dify_tool_bindings=_env("AIOPS_GATEWAY_DIFY_TOOL_BINDINGS")
             or _file_value(file_values, "AIOPS_GATEWAY_DIFY_TOOL_BINDINGS"),
             dify_debug_api_key=_env("AIOPS_GATEWAY_DIFY_DEBUG_API_KEY")
@@ -356,6 +379,14 @@ class GatewayServerSettings:
             or _file_value(
                 file_values, "AIOPS_GATEWAY_DIFY_WORKSPACE_MODEL_ENDPOINT", "https://api.deepseek.com/v1"
             ),
+            ragflow_credential_key=_env("AIOPS_GATEWAY_RAGFLOW_CREDENTIAL_KEY")
+            or _file_value(file_values, "AIOPS_GATEWAY_RAGFLOW_CREDENTIAL_KEY"),
+            ragflow_tenant_domain=_env("AIOPS_GATEWAY_RAGFLOW_TENANT_DOMAIN", "kb.internal"),
+            ragflow_embedding_base_url=_env("AIOPS_GATEWAY_RAGFLOW_EMBEDDING_BASE_URL")
+            or _file_value(file_values, "AIOPS_GATEWAY_RAGFLOW_EMBEDDING_BASE_URL"),
+            ragflow_embedding_api_key=_env("AIOPS_GATEWAY_RAGFLOW_EMBEDDING_API_KEY")
+            or _file_value(file_values, "AIOPS_GATEWAY_RAGFLOW_EMBEDDING_API_KEY"),
+            ragflow_embedding_model=_env("AIOPS_GATEWAY_RAGFLOW_EMBEDDING_MODEL", "text-embedding-3-large"),
             jev_base_url=_env("AIOPS_GATEWAY_JEV_BASE_URL")
             or _file_value(file_values, "AIOPS_GATEWAY_JEV_BASE_URL"),
             jev_api_key=_env("AIOPS_GATEWAY_JEV_API_KEY")

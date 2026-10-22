@@ -930,6 +930,90 @@ class GatewayStore:
             )
         return removed.rowcount > 0
 
+    # ---- 一租户一 RAGFlow 租户（#924） ------------------------------------
+
+    def get_ragflow_tenant(self, tenant_id: str, environment: str) -> dict[str, Any] | None:
+        """This tenant's RAGFlow side, or None when it was never onboarded.
+
+        ``credential_ciphertext`` comes back as stored — callers decrypt, and the
+        plaintext never leaves that one call. ``model_checked_at`` empty means
+        onboarding recorded a row but never proved the model works: a half-built
+        tenant, which the onboarding command repairs rather than skipping.
+        """
+        with self._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT tenant_id, environment, ragflow_email, credential_ciphertext,
+                       model_checked_at, created_at, updated_at
+                FROM ragflow_tenants WHERE tenant_id = ? AND environment = ?
+                """,
+                (tenant_id, environment),
+            ).fetchone()
+        return dict(row) if row else None
+
+    def record_ragflow_tenant(
+        self,
+        tenant_id: str,
+        environment: str,
+        *,
+        ragflow_email: str,
+        credential_ciphertext: str,
+        model_checked: bool,
+    ) -> dict[str, Any]:
+        """Upsert one tenant's RAGFlow side. Idempotent by design (#924).
+
+        ``model_checked`` is a separate fact from "the row exists": a run that
+        registered the account but failed the model check must leave the row
+        without a check timestamp, so the next run knows to repair instead of
+        concluding "already onboarded" and walking away.
+        """
+        now = _iso(_utc_now())
+        with self._connection(write=True) as connection:
+            existing = connection.execute(
+                "SELECT created_at, model_checked_at FROM ragflow_tenants"
+                " WHERE tenant_id = ? AND environment = ?",
+                (tenant_id, environment),
+            ).fetchone()
+            created_at = str(existing["created_at"]) if existing else now
+            checked_at = now if model_checked else (str(existing["model_checked_at"]) if existing else "")
+            connection.execute(
+                """
+                INSERT INTO ragflow_tenants
+                    (tenant_id, environment, ragflow_email, credential_ciphertext,
+                     model_checked_at, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(tenant_id, environment) DO UPDATE SET
+                    ragflow_email = excluded.ragflow_email,
+                    credential_ciphertext = excluded.credential_ciphertext,
+                    model_checked_at = excluded.model_checked_at,
+                    updated_at = excluded.updated_at
+                """,
+                (tenant_id, environment, ragflow_email, credential_ciphertext, checked_at, created_at, now),
+            )
+        return {
+            "tenant_id": tenant_id,
+            "environment": environment,
+            "ragflow_email": ragflow_email,
+            "model_checked_at": checked_at,
+        }
+
+    def list_ragflow_tenants(self, environment: str) -> list[dict[str, Any]]:
+        """Every onboarded tenant in one environment, for the triple check (#927).
+
+        Deliberately returns the ciphertext column name but never its value: a
+        listing that carries secrets is a listing that ends up in a log.
+        """
+        with self._connection() as connection:
+            rows = connection.execute(
+                """
+                SELECT tenant_id, environment, ragflow_email, model_checked_at,
+                       created_at, updated_at
+                FROM ragflow_tenants WHERE environment = ? ORDER BY created_at
+                """,
+                (environment,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def list_assistant_questions(
         self,
         scope_fingerprint: str,
@@ -1443,6 +1527,29 @@ class GatewayStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_dify_knowledge_tenant
                     ON dify_knowledge_bindings(tenant_id, created_at DESC);
+
+                -- 一租户一 RAGFlow 租户（#924，PRD #923 的 1:1:1）。
+                --
+                -- 这里只存**我们这一侧**记的东西：RAGFlow 的登录邮箱、凭据（密文）、
+                -- 以及最近一次校验模型可用性的结果。映射的权威仍然在 kb-service 的
+                -- `tenancy.db` —— 那张表才是 kb-service 读的；这张表存在的理由是
+                -- 「开户要有幂等位」与「凭据要有可轮换的落点」，两者 kb-service 都不管。
+                --
+                -- 凭据以密文存储（`enc:v1:` 前缀，密钥来自部署环境，不入库）；明文
+                -- **任何时候**都不写这一列，也不进日志。
+                --
+                -- `model_checked_at` 为空 = 从没校验成功过。开户时校验失败**不写这一列**，
+                -- 所以「有行但没校验过」就是半成品，重跑开户会去补。
+                CREATE TABLE IF NOT EXISTS ragflow_tenants (
+                    tenant_id TEXT NOT NULL,
+                    environment TEXT NOT NULL,
+                    ragflow_email TEXT NOT NULL,
+                    credential_ciphertext TEXT NOT NULL DEFAULT '',
+                    model_checked_at TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (tenant_id, environment)
+                );
                 """
             )
             columns = {str(row[1]) for row in connection.execute("PRAGMA table_info(runs)").fetchall()}

@@ -32,8 +32,10 @@ BINDINGS = "kb-customer:T-1:KB-A;kb-other:T-2:KB-B"
 class _Runtime:
     """Minimal runtime stub: only the two surfaces the adapter reads."""
 
-    def __init__(self, *, search: Any = None, signer: Any = None) -> None:
-        self.kb_search_client = _FakeKbClient(search) if search is not None else None
+    def __init__(
+        self, *, search: Any = None, signer: Any = None, owned: dict[str, list[str]] | None = None
+    ) -> None:
+        self.kb_search_client = _FakeKbClient(search, owned=owned) if search is not None else None
         self.media_signer = signer
 
     def shutdown(self) -> None:
@@ -49,18 +51,34 @@ class _FakeKbClient:
     original version of this file was, and the bug shipped.
     """
 
-    def __init__(self, search, tenant_id: str = "aiops") -> None:
+    def __init__(self, search, tenant_id: str = "aiops", owned: dict[str, list[str]] | None = None) -> None:
         self._search = search
         self.tenant_id = tenant_id
+        #: tenant → the library ids it owns, for the auto-registration path.
+        self._owned = owned or {}
         #: Every search, with the tenant header it actually went out under.
         self.calls: list[tuple[tuple[str, ...], str, int]] = []
         self.tenant_calls: list[str] = []
+        #: Every listing, with the tenant it was asked for.
+        self.listing_calls: list[str] = []
 
     def for_tenant(self, tenant_id: str) -> _FakeKbClient:
-        bound = _FakeKbClient(self._search, tenant_id=tenant_id)
+        # ``type(self)``: a subclass modelling one specific upstream failure must
+        # survive the rebind, otherwise the failure it models disappears exactly
+        # where the code under test rebinds — the test would pass for the wrong
+        # reason.
+        bound = type(self)(self._search, tenant_id=tenant_id, owned=self._owned)
         bound.calls = self.calls
         bound.tenant_calls = self.tenant_calls
+        bound.listing_calls = self.listing_calls
         return bound
+
+    def list_knowledge_bases(self) -> list[dict[str, Any]]:
+        self.listing_calls.append(self.tenant_id)
+        return [
+            {"knowledge_base_id": kb, "name": kb, "document_count": 1, "chunk_count": 1}
+            for kb in self._owned.get(self.tenant_id, [])
+        ]
 
     def search(self, knowledge_base_ids: tuple[str, ...], question: str, top_k: int) -> Any:
         self.calls.append((tuple(knowledge_base_ids), question, top_k))
@@ -745,3 +763,189 @@ def test_media_urls_are_absolute_when_a_public_base_is_configured(tmp_path: Path
     url = _post(client, _body()).json()["records"][0]["metadata"]["media"][0]["url"]
 
     assert url.startswith("https://api.mall.qushiyun.com/v1/media/media_"), url
+
+
+# ---- 自动登记（#925）：建完库 Dify 立刻可选 ----------------------------------
+
+
+def _onboard(store: GatewayStore, tenant_id: str, environment: str = "") -> None:
+    """Pretend onboarding ran for this tenant (the 1:1:1 marker the resolver reads).
+
+    Defaults to the environment the test settings carry — onboarding rows are
+    keyed by ``(tenant, environment)`` precisely so two UPMS instances cannot
+    collide, so seeding the wrong one would be testing the key away.
+    """
+    store.record_ragflow_tenant(
+        tenant_id,
+        environment,
+        ragflow_email=f"{tenant_id}@kb.internal",
+        credential_ciphertext="enc:v1:unused",
+        model_checked=True,
+    )
+
+
+def test_an_onboarded_tenants_library_is_retrievable_without_being_registered(
+    tmp_path: Path,
+) -> None:
+    """The whole point of #925: creating a library upstream is enough.
+
+    ``tenant-<id>`` resolves to whatever that tenant owns **right now** — no
+    operator step, no cache. Before this, an unregistered ``knowledge_id`` was a
+    404 and the console offered only names somebody had typed in by hand.
+    """
+    client = _client(
+        tmp_path,
+        _Runtime(
+            signer=MediaResourceSigner("secret", ttl_seconds=600),
+            search=lambda kbs, _q, _n: [_chunk(kb_id=kbs[0])],
+            owned={"T-9": ["KB-NEW"]},
+        ),
+    )
+    _onboard(client.app.state.gateway.store, "T-9")  # type: ignore[attr-defined]
+
+    resp = _post(client, _body(knowledge_id="tenant-T-9"))
+
+    assert resp.status_code == 200, resp.text
+    assert len(resp.json()["records"]) == 1
+    calls = client.app.state.gateway.runtime.kb_search_client.calls  # type: ignore[attr-defined]
+    assert calls == [(("KB-NEW",), "怎么处理充电桩故障", 3)]
+
+
+def test_automatic_sources_appear_in_the_picker(tmp_path: Path) -> None:
+    client = _client(
+        tmp_path,
+        _Runtime(
+            signer=MediaResourceSigner("s", ttl_seconds=600), search=lambda *_a: [], owned={"T-9": ["KB-NEW"]}
+        ),
+    )
+    _onboard(client.app.state.gateway.store, "T-9")  # type: ignore[attr-defined]
+
+    resp = client.get("/v1/dify/knowledge", headers={"Authorization": f"Bearer {DIFY_KEY}"})
+
+    ids = [item["knowledge_id"] for item in resp.json()["knowledge_items"]]
+    assert "tenant-T-9" in ids
+
+
+def test_a_tenant_that_was_never_onboarded_gets_no_automatic_source(tmp_path: Path) -> None:
+    """Owning libraries upstream is not enough — the 1:1:1 half must exist.
+
+    Otherwise any RAGFlow tenant id that looks like ours would become reachable,
+    and "onboarded" would stop meaning anything.
+    """
+    client = _client(
+        tmp_path,
+        _Runtime(
+            signer=MediaResourceSigner("s", ttl_seconds=600), search=lambda *_a: [], owned={"T-9": ["KB-NEW"]}
+        ),
+    )
+
+    resp = _post(client, _body(knowledge_id="tenant-T-9"))
+
+    assert resp.status_code == 404
+    assert resp.json()["error"]["code"] == "DIFY_KNOWLEDGE_NOT_FOUND"
+
+
+def test_an_onboarded_tenant_with_no_libraries_is_not_a_servable_source(tmp_path: Path) -> None:
+    """An empty library list must 404, not answer 200 with zero records.
+
+    A 200 would tell Dify "nothing matched" — a claim about a library that does
+    not exist. The whole route is built to keep that distinction.
+    """
+    client = _client(
+        tmp_path,
+        _Runtime(signer=MediaResourceSigner("s", ttl_seconds=600), search=lambda *_a: [], owned={"T-9": []}),
+    )
+    _onboard(client.app.state.gateway.store, "T-9")  # type: ignore[attr-defined]
+
+    resp = _post(client, _body(knowledge_id="tenant-T-9"))
+
+    assert resp.status_code == 404
+
+
+def test_manual_registration_wins_over_the_derived_name(tmp_path: Path) -> None:
+    """A human's row is the newer decision and must not be shadowed (#925).
+
+    This is also what makes rollback free: turn auto-registration off and the
+    manual registry is exactly what was there before.
+    """
+    client = _client(
+        tmp_path,
+        _Runtime(
+            signer=MediaResourceSigner("s", ttl_seconds=600),
+            search=lambda kbs, _q, _n: [_chunk(kb_id=kbs[0])],
+            owned={"T-9": ["KB-AUTO"]},
+        ),
+    )
+    gateway = client.app.state.gateway  # type: ignore[attr-defined]
+    _onboard(gateway.store, "T-9")
+    gateway.store.set_knowledge_id_binding("tenant-T-9", "T-9", ("KB-MANUAL",))
+
+    resp = _post(client, _body(knowledge_id="tenant-T-9"))
+
+    assert resp.status_code == 200
+    calls = client.app.state.gateway.runtime.kb_search_client.calls  # type: ignore[attr-defined]
+    assert calls == [(("KB-MANUAL",), "怎么处理充电桩故障", 3)]
+
+
+def test_unreachable_upstream_degrades_to_manual_and_never_errors(tmp_path: Path) -> None:
+    """kb-service down must not break the manual registry — that is its purpose."""
+
+    class _Broken(_FakeKbClient):
+        def list_knowledge_bases(self) -> list[dict[str, Any]]:
+            raise KnowledgeSearchUnavailable("down")
+
+    runtime = _Runtime(
+        signer=MediaResourceSigner("s", ttl_seconds=600), search=lambda kbs, _q, _n: [_chunk(kb_id=kbs[0])]
+    )
+    runtime.kb_search_client = _Broken(runtime.kb_search_client._search, owned={"T-9": ["KB-AUTO"]})  # type: ignore[union-attr]
+    client = _client(tmp_path, runtime)
+    _onboard(client.app.state.gateway.store, "T-9")  # type: ignore[attr-defined]
+
+    # The manual binding still works exactly as before.
+    assert _post(client, _body(knowledge_id="kb-customer")).status_code == 200
+    # And the automatic one is simply absent, not an error.
+    assert _post(client, _body(knowledge_id="tenant-T-9")).status_code == 404
+
+
+def test_auto_registration_can_be_turned_off_for_rollback(tmp_path: Path) -> None:
+    client = _client(
+        tmp_path,
+        _Runtime(
+            signer=MediaResourceSigner("s", ttl_seconds=600), search=lambda *_a: [], owned={"T-9": ["KB-NEW"]}
+        ),
+        dify_knowledge_autoregister=False,
+    )
+    _onboard(client.app.state.gateway.store, "T-9")  # type: ignore[attr-defined]
+
+    assert _post(client, _body(knowledge_id="tenant-T-9")).status_code == 404
+    # Manual sources are untouched by the switch.
+    assert _post(client, _body(knowledge_id="kb-customer")).status_code == 200
+
+
+def test_manual_retrieval_does_not_enumerate_every_onboarded_tenant(tmp_path: Path) -> None:
+    """One tenant's slow upstream must not delay another tenant's request.
+
+    Auto-registration is on by default, so an eager implementation would list
+    libraries for **every** onboarded tenant before resolving even a manual
+    binding — and with a 10s per-call timeout, N slow tenants add N×10s to a
+    request that has nothing to do with them. Retrieval resolves one id, so it
+    may only ask about the tenant that id names.
+    """
+    client = _client(
+        tmp_path,
+        _Runtime(
+            signer=MediaResourceSigner("s", ttl_seconds=600),
+            search=lambda kbs, _q, _n: [_chunk(kb_id=kbs[0])],
+            owned={"T-8": ["KB-8"], "T-9": ["KB-9"]},
+        ),
+    )
+    gateway = client.app.state.gateway  # type: ignore[attr-defined]
+    _onboard(gateway.store, "T-8")
+    _onboard(gateway.store, "T-9")
+    kb = gateway.runtime.kb_search_client  # type: ignore[attr-defined]
+
+    assert _post(client, _body(knowledge_id="kb-customer")).status_code == 200
+    assert kb.listing_calls == [], "resolving a manual binding must not touch the upstream listing"
+
+    assert _post(client, _body(knowledge_id="tenant-T-8")).status_code == 200
+    assert kb.listing_calls == ["T-8"], "only the tenant the id names may be listed"
