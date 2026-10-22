@@ -38,7 +38,7 @@ from aiops_diagnostics.bounded_http import (
     RequestSpec,
     join_url,
     json_body,
-    request_json,
+    request_json_with_headers,
 )
 from aiops_diagnostics.gateway_store import GatewayStore
 from aiops_diagnostics.kb_onboarding import decrypt_credential
@@ -115,7 +115,7 @@ class RAGFlowLoginClient:
         def _down(failure: HttpFailure) -> Exception:
             return RAGFlowLoginError(UPSTREAM_DOWN, f"RAGFlow is unreachable: {failure}")
 
-        payload = request_json(
+        payload, headers = request_json_with_headers(
             RequestSpec(
                 url=join_url(self.base_url, "/api/v1/auth/login"),
                 method="POST",
@@ -136,25 +136,39 @@ class RAGFlowLoginClient:
         )
         if not isinstance(payload, dict) or payload.get("code") not in (0, None):
             raise RAGFlowLoginError(LOGIN_REFUSED, f"RAGFlow rejected the login: {payload!r}"[:300])
-        cookies = _session_cookies(payload)
+        cookies = _session_cookies(headers)
         if not cookies:
             # 200 + code 0 但没有会话 cookie：把浏览器送过去只会看到登录页。
             raise RAGFlowLoginError(LOGIN_REFUSED, "RAGFlow answered 200 without a session")
         return cookies
 
 
-def _session_cookies(payload: dict[str, Any]) -> dict[str, str]:
-    """Pull session cookies out of the login response.
+def _session_cookies(headers: dict[str, list[str]] | dict[str, str]) -> dict[str, str]:
+    """Pull `session=<value>` out of the response's ``Set-Cookie`` header(s).
 
-    RAGFlow 有两种形状：老版本把 cookie 放在响应体里，新版本靠 `Set-Cookie`。这里只认
-    两者中**明确出现**的那个，取不到就返回空 —— 让调用方报"没有会话"，而不是伪造一个。
+    **这是唯一正确的来源**：41 真机实测（2026-10-22），RAGFlow 登录成功时
+    `data` 里只有用户资料，cookie 在 `Set-Cookie: session=...; HttpOnly; Path=/`。
+    第一版去 `data.cookies` 里找，于是把一次成功的登录判成了"没有会话" —— 形状与
+    "登录失败"一模一样，只是原因完全不同。
+
+    只取 `session`：那是 RAGFlow 认的会话 cookie 名。别的 Set-Cookie（将来可能加的
+    个性化项）不该被我们转手塞给浏览器。
     """
-    raw = payload.get("data")
-    if isinstance(raw, dict):
-        cookies = raw.get("cookies")
-        if isinstance(cookies, dict):
-            return {str(k): str(v) for k, v in cookies.items()}
-    return {}
+    raw: list[str] = []
+    for name, value in headers.items():
+        if str(name).lower() != "set-cookie":
+            continue
+        if isinstance(value, str):
+            raw.append(value)
+        else:
+            raw.extend(value)
+    cookies: dict[str, str] = {}
+    for header in raw:
+        pair = header.split(";", 1)[0]
+        name, _, value = pair.partition("=")
+        if name.strip() == "session" and value:
+            cookies["session"] = value
+    return cookies
 
 
 def open_console(

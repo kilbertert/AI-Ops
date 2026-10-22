@@ -461,3 +461,29 @@ def request_json(
                 raise_transport_failure(exc, mapping=mapping)
             time.sleep(retry_delay(attempt, policy=retry))
             attempt += 1
+
+
+def request_json_with_headers(
+    spec: RequestSpec,
+    *,
+    mapping: ErrorMapping,
+    envelope: EnvelopeParser = parse_raw_envelope,
+) -> tuple[Any, dict[str, list[str]]]:
+    """``request_json`` plus the response headers (#926).
+
+    Exists for exactly one caller: RAGFlow's login answers with a ``Set-Cookie``
+    header and no cookie in the body. A client that hand-rolled its own urllib
+    request to reach those headers would be the unconstrained client this module
+    exists to prevent — so the skeleton grows one narrow door instead.
+
+    Deliberately **no retry**: the only caller logs in, which is not safe to
+    replay blindly, and `request_json`'s retry policy is opt-in anyway.
+    """
+    try:
+        with open_response(spec) as response:
+            body = read_body(response, max_read_bytes=spec.max_read_bytes)
+            headers = dict(response.headers.items()) if response.headers else {}
+    except TRANSPORT_EXCEPTIONS as exc:
+        raise_transport_failure(exc, mapping=mapping)
+        raise  # unreachable; keeps the type checker satisfied
+    return envelope(decode_json(body, mapping=mapping), mapping=mapping), headers
