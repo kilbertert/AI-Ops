@@ -1,3 +1,36 @@
+## 2026-10-22 · `ensure-ready` 的凭据必须**切到生效位**（41 实测出的缺陷）
+
+**症状**：租户 1942 的 workspace 被 `ensure-ready` 推到 `ready`、凭据 `credential_written=true`，
+但真机对话回：
+
+```
+400 PluginInvokeError: API request failed with status code 401:
+    Authentication Fails, Your api key: ****eiKb is invalid
+```
+
+**成因**（不是"key 写错了"）：这个 workspace 里有两份 deepseek 凭据 ——
+`aiops-workspace`（本次写的，key 有效）与 `deepseek-official`（迁移时从旧 workspace 复制来的，
+key 已失效）。Dify 按 `created_at DESC` 选**当前**凭据，所以旧的仍在前；写成功只保证
+"这个名字的凭据存在"，**不保证它生效**。切换后立刻恢复（对话 200 + 正文）。
+
+**修法**：`ensure_ready` 写完凭据后调 `activate_provider_credential`，回读
+`current_credential_name`，不是 `aiops-workspace` 就切（用 **provider 级**
+`…/credentials/switch`，不是 `…/models/credentials/switch` —— runbook 2026-10-13 记过后者会回
+`Credential record not found`）。已经是它就零写。`ReadyOutcome` 新增 `credential_activated`。
+
+**判据**（2 例）：
+| 用例 | 钉住的规则 |
+|---|---|
+| 旧凭据仍是 current | 写完必须切到 `aiops-workspace`（`credential_activated=true`） |
+| 重跑 | 已经是我们那份 ⇒ 不发 switch、零 POST |
+
+**突变复验**：把激活那一步拿掉 ⇒ 第一条红；还原 ⇒ 全绿。
+
+**顺带**：两个 workspace 的模板 app 都已选好模型（`deepseek-v4-flash`，与 `env-41.toml`
+里四个生产 agent 一致），**真实对话都跑通**：
+`platform` 与租户 1942 各返回一段正文。模板里的 `model.name` 仍是空（模板本身不动，
+模型是每个 workspace 自己的事）。
+
 ## 2026-10-22 · #881 在 41 上**第一次真机跑完三步**，两个 workspace 到 ready
 
 **范围**：41（部署 `cb896a3` 由 CD 自动完成，`aiops-gateway-41.service` active）。

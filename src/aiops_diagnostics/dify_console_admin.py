@@ -289,6 +289,51 @@ class DifyConsoleAdmin:
                     names.add(name)
         return names
 
+    def active_credential_name(self, workspace_id: str, provider: str) -> str:
+        """这个 provider 当前**生效**的凭据名（Dify 回空串表示没有可用的）。
+
+        与"凭据存在"是两件事：Dify 按 ``created_at DESC`` 选默认，所以一个**迁移过的**
+        workspace 里，刚写进去的新凭据不一定生效 —— 旧的那份仍排在前面。
+        2026-10-22 在 41 的租户 1942 上实测：`ensure-ready` 写成功后对话仍 401，因为生效的
+        是迁移时复制过来、key 已失效的 `deepseek-official`。
+        """
+        payload = self._call(workspace_id, MODEL_PROVIDERS_PATH)
+        for item in (payload.get("data") if isinstance(payload, dict) else None) or []:
+            if isinstance(item, dict) and item.get("provider") == provider:
+                custom = item.get("custom_configuration") or {}
+                return str(custom.get("current_credential_name") or "")
+        return ""
+
+    def activate_provider_credential(self, workspace_id: str, provider: str, name: str) -> bool:
+        """把名为 ``name`` 的凭据切成本 provider 的**当前**凭据；返回是否切了。
+
+        已经是它就不发请求（幂等）。``switch`` 用的是 **provider 级**端点
+        ``…/credentials/switch``；``…/models/credentials/switch`` 是 model 级的，对
+        provider 级凭据会回 ``Credential record not found``（runbook 2026-10-13 记过）。
+        """
+        if self.active_credential_name(workspace_id, provider) == name:
+            return False
+        credential_id = ""
+        payload = self._call(workspace_id, MODEL_PROVIDERS_PATH)
+        for item in (payload.get("data") if isinstance(payload, dict) else None) or []:
+            if not (isinstance(item, dict) and item.get("provider") == provider):
+                continue
+            for credential in (item.get("custom_configuration") or {}).get("available_credentials") or []:
+                if (credential or {}).get("credential_name") == name:
+                    credential_id = str(credential.get("credential_id") or "")
+        if not credential_id:
+            raise ConsoleApiError(
+                "DIFY_CREDENTIAL_NOT_FOUND",
+                f"{provider} 下没有名为 {name!r} 的凭据，无法切换当前凭据",
+            )
+        self._call(
+            workspace_id,
+            f"{MODEL_PROVIDERS_PATH}/{provider}/credentials/switch",
+            method="POST",
+            body={"credential_id": credential_id},
+        )
+        return True
+
     def write_provider_credential(
         self, workspace_id: str, provider: str, *, credentials: dict[str, str], name: str
     ) -> bool:

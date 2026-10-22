@@ -45,6 +45,7 @@ _PLUGIN_LIST = "/console/api/workspaces/current/plugin/list"
 _PLUGIN_INSTALL = "/console/api/workspaces/current/plugin/install/pkg"
 _CREDENTIALS = "/console/api/workspaces/current/model-providers/langgenius/deepseek/deepseek/credentials"
 _PROVIDERS = "/console/api/workspaces/current/model-providers"
+_SWITCH = "/console/api/workspaces/current/model-providers/langgenius/deepseek/deepseek/credentials/switch"
 _APPS = "/console/api/apps"
 _IMPORT = "/console/api/apps/imports"
 _PLUGIN_TASKS = "/console/api/workspaces/current/plugin/tasks"
@@ -78,6 +79,11 @@ class _Console:
         self._task_polls = 0
         self._pending_plugins: list[str] = []
         self._list_reads = 0
+        #: 被 switch 到的 credential_id（None 表示从未切换）。
+        self.switched_to: str | None = None
+        #: 让 provider 列表报告的 current 名字"卡住"不变 —— 模拟 Dify 按 created_at 选默认，
+        #: 刚写的新凭据排在旧凭据后面。
+        self.pinned_current: str | None = None
         #: ``top-level`` 时按真实形状回答 ``/plugin/list``（标识在顶层，meta 是任意 map）。
         self.plugin_list_shape = "nested"
         self.base = ""
@@ -118,6 +124,11 @@ class _Console:
                                     "provider": "langgenius/deepseek/deepseek",
                                     "custom_configuration": {
                                         "status": "active" if upstream.credentials else "no-configure",
+                                        "current_credential_name": (
+                                            upstream.pinned_current
+                                            if upstream.pinned_current is not None
+                                            else (upstream.credentials[-1] if upstream.credentials else None)
+                                        ),
                                         "available_credentials": [
                                             {"credential_id": f"cid-{i}", "credential_name": name}
                                             for i, name in enumerate(upstream.credentials)
@@ -197,6 +208,9 @@ class _Console:
                         return
                     upstream.plugins.extend(body["plugin_unique_identifiers"])
                     upstream._reply(self, 200, {"all_installed": True})
+                elif self.path == _SWITCH:
+                    upstream.switched_to = body["credential_id"]
+                    upstream._reply(self, 200, {"result": "success"})
                 elif self.path == _CREDENTIALS:
                     if upstream.credential_body is not None:
                         upstream._reply(self, upstream.credential_status, upstream.credential_body)
@@ -648,3 +662,38 @@ def test_import_warnings_reach_the_operator(tmp_path: Path, console: _Console) -
 
     assert outcome.template_warnings == ("tool provider unresolved",)
     assert "tool provider unresolved" in outcome.note
+
+
+def test_an_existing_but_stale_credential_is_switched_to_ours(tmp_path: Path, console: _Console) -> None:
+    """迁移过的 workspace 里，旧凭据仍被 Dify 当作"当前" —— 写完必须切过去。
+
+    2026-10-22 在 41 的租户 1942 上实测到这个：`ensure-ready` 把 `aiops-workspace` 写进去
+    并推到 `ready`，真实对话却 401，因为生效的是迁移时复制过来、key 已失效的
+    `deepseek-official`。Dify 按 `created_at DESC` 选默认，不按"最新写入"。
+
+    变异对照：去掉 `activate_provider_credential` 那一步 ⇒ 本用例红（`switched_to` 为 None，
+    而 current 仍是旧名字）。
+    """
+    console.credentials.append("deepseek-official")  # 迁移带来的旧凭据
+    console.pinned_current = "deepseek-official"  # Dify 把它当作当前
+
+    outcome = _run(tmp_path, console)
+
+    assert outcome.credential_written is True
+    assert outcome.credential_activated is True, "写了新凭据但没切过去 —— 这正是 41 上的 401"
+    assert console.switched_to is not None
+    assert outcome.state == "ready"
+
+
+def test_a_rerun_does_not_switch_again(tmp_path: Path, console: _Console) -> None:
+    """幂等：已经是我们那份就不发 switch。"""
+    workspaces = _workspaces(tmp_path)
+    _run(tmp_path, console, workspaces)
+    console.switched_to = None
+    console.calls.clear()
+
+    outcome = _run(tmp_path, console, workspaces)
+
+    assert outcome.credential_activated is False
+    assert console.switched_to is None
+    assert console.post_paths() == []
