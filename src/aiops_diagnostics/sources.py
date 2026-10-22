@@ -337,6 +337,23 @@ class MySQLSource:
             cursor.execute(sql, params)
             return [_normalize_row(row) for row in cursor.fetchall()]
 
+    def list_orders(self, *, page: int, page_size: int) -> list[dict[str, Any]]:
+        """只输出选单需要的字段；无冻结范围时不开放列表。"""
+        if self.scope is None:
+            raise SourceError("order list requires a query scope")
+        if not 1 <= page <= 1000 or not 1 <= page_size <= 50:
+            raise SourceError("order list pagination is out of bounds")
+        if self._scope_blocked():
+            return []
+        where, params = self._scope_where(claim_column=ORDER_CLAIM_COLUMN)
+        sql = (
+            f"SELECT order_no, status, site_id, created_time FROM `{self.database}`.`ch_order_info` "
+            f"WHERE {where} ORDER BY created_time DESC, id DESC LIMIT %s OFFSET %s"
+        )
+        with self._cursor() as cursor:
+            cursor.execute(sql, [*params, page_size + 1, (page - 1) * page_size])
+            return [_normalize_row(row) for row in cursor.fetchall()]
+
     def aggregate_order_statuses(
         self,
         site_ids: tuple[str, ...] | None,
@@ -1707,6 +1724,12 @@ def scoped_live_sources(
             ),
             device_gate=device_gate,
         )
+
+
+@contextlib.contextmanager
+def scoped_mysql_source(settings: Settings, scope: QueryScope) -> Iterator[MySQLSource]:
+    with _ssh_tunnel(settings, forwards=("mysql",)) as effective:
+        yield MySQLSource(effective, scope=scope)
 
 
 @contextlib.contextmanager

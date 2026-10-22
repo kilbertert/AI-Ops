@@ -47,6 +47,7 @@ class GatewayServerSettings:
     third_session_service_token: str = ""
     third_session_key_prefix: str = "app:3rd_session:"
     charging_status_base_url: str = ""
+    ops_bindings_file: str = ""
     execution_environment: str = ""
     #: M2-CLOSE-01：执行环境 → 编排平台应用/智能体/节点的**可信绑定**（契约 §3.1）。
     #: 缺省为空 ⇒ 委派入口整体不启用（fail closed，与 ``third_session_service_token``
@@ -292,6 +293,8 @@ class GatewayServerSettings:
             or _file_value(file_values, "AIOPS_GATEWAY_THIRD_SESSION_KEY_PREFIX", "app:3rd_session:"),
             charging_status_base_url=_env("AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL")
             or _file_value(file_values, "AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL"),
+            ops_bindings_file=_env("AIOPS_GATEWAY_OPS_BINDINGS_FILE")
+            or _file_value(file_values, "AIOPS_GATEWAY_OPS_BINDINGS_FILE"),
             execution_environment=_env("AIOPS_GATEWAY_EXECUTION_ENVIRONMENT")
             or _file_value(file_values, "AIOPS_GATEWAY_EXECUTION_ENVIRONMENT"),
             agent_run_config_file=_env("AIOPS_GATEWAY_AGENT_RUN_CONFIG_FILE")
@@ -418,9 +421,15 @@ class GatewayServerSettings:
         if not 1 <= self.internal_token_expire_seconds <= 3600:
             raise ValueError("AIOPS_GATEWAY_INTERNAL_TOKEN_EXPIRE_SECONDS must be between 1 and 3600")
         if self.charging_status_base_url:
-            canonical_gateway_url(self.charging_status_base_url)
+            parse_charging_endpoints(self.charging_status_base_url)
             if not SAFE_PROFILE_NAME.fullmatch(self.execution_environment):
                 raise ValueError("charging status requires a logical execution environment")
+        if self.ops_bindings_file:
+            from aiops_diagnostics.ops_bindings import load_ops_bindings
+
+            load_ops_bindings(self.ops_bindings_file)
+            if not self.environment:
+                raise ValueError("ops tools require a deployment environment")
         # 委派入口要求业务接口与逻辑环境都已配置：这两项是领取时「再用记录里的身份
         # 做一次授权读取」的前提，缺一项就不是 fail closed 而是「配了一半就开门」。
         if self.agent_run_config_file and not (self.charging_status_base_url and self.execution_environment):
@@ -707,6 +716,32 @@ def validate_profile_name(profile_name: str) -> str:
     if not SAFE_PROFILE_NAME.fullmatch(candidate):
         raise ValueError("profile name contains unsupported characters")
     return candidate
+
+
+def parse_charging_endpoints(value: str) -> tuple[str, dict[str, str]]:
+    """旧标量地址仅供旧调用者；新工具必须精确命中 tenant:url。"""
+    value = value.strip()
+    if not value:
+        return "", {}
+    if value.startswith(("http://", "https://")):
+        return canonical_gateway_url(value), {}
+    endpoints: dict[str, str] = {}
+    for entry in value.split(","):
+        tenant, separator, url = entry.strip().partition(":")
+        if not separator or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", tenant):
+            raise ValueError("invalid tenant charging endpoint")
+        if tenant in endpoints:
+            raise ValueError("duplicate tenant charging endpoint")
+        endpoints[tenant] = canonical_gateway_url(url)
+    return "", endpoints
+
+
+def charging_endpoint(value: str, tenant_id: str, *, require_registration: bool = False) -> str:
+    legacy, endpoints = parse_charging_endpoints(value)
+    endpoint = endpoints.get(tenant_id, "") if require_registration or endpoints else legacy
+    if not endpoint:
+        raise ValueError("TENANT_ENDPOINT_UNRESOLVED")
+    return endpoint
 
 
 def canonical_gateway_url(value: str) -> str:

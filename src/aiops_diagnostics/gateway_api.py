@@ -145,6 +145,8 @@ from aiops_diagnostics.knowledge_retrieval import (
 )
 from aiops_diagnostics.knowledge_sources import KnowledgeSourceResolver
 from aiops_diagnostics.metrics_store import MetricsValidationError
+from aiops_diagnostics.ops_bindings import ops_app_registered
+from aiops_diagnostics.ops_tools import ChargingInfoInput, OpsToolError, OpsToolService, OrderListInput
 from aiops_diagnostics.order_status import KNOWN_STATUS_CODES, StatusRole, role_of
 from aiops_diagnostics.order_visibility import DeviceTenantError, tenant_matches
 from aiops_diagnostics.query_scope import (
@@ -806,6 +808,9 @@ def _publish_bound_app(
         app_id=binding.app_id,
         api_key=console.dify_console_api_key,
         workspace_id=workspace_id,
+        ops_tools_enabled=ops_app_registered(
+            console.ops_bindings_file, console.environment, binding.tenant_id, app_id
+        ),
     )
     try:
         outcome = sync_binding_from_dify(
@@ -935,6 +940,9 @@ def _trial_draft_from_console(context: Any, app_id: str) -> tuple[str, tuple[str
         app_id=binding.app_id,
         api_key=console.dify_console_api_key,
         workspace_id=workspace_id,
+        ops_tools_enabled=ops_app_registered(
+            console.ops_bindings_file, console.environment, binding.tenant_id, app_id
+        ),
     )
     try:
         config = resolve_pulled_config(
@@ -1602,6 +1610,43 @@ def create_gateway_app(
             payload.app_id,
             initiator=(str(getattr(caller, "subject", None) and caller.subject.b_user_id or ""), "", ""),
         )
+
+    ops_service = (
+        OpsToolService(selected_settings, selected_agent_manager)
+        if selected_settings.ops_bindings_file
+        else None
+    )
+
+    def run_ops_tool(
+        tenant_id: str, tool: str, payload: ChargingInfoInput | OrderListInput, authorization: str | None
+    ) -> dict[str, Any]:
+        if ops_service is None:
+            raise StandardAPIError(404, "OPS_TOOLS_DISABLED", "ops tools are not configured")
+        prefix, _, token = (authorization or "").partition(" ")
+        try:
+            return ops_service.execute(token if prefix.lower() == "bearer" else "", tenant_id, tool, payload)
+        except OpsToolError as exc:
+            raise StandardAPIError(exc.status, exc.code, "ops tool request refused") from exc
+
+    @app.post("/v1/dify/ops/{tenant_id}/charging_info")
+    def ops_charging_info(
+        tenant_id: str,
+        payload: ChargingInfoInput,
+        response: Response,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> dict[str, Any]:
+        response.headers["Cache-Control"] = "no-store"
+        return run_ops_tool(tenant_id, "charging_info", payload, authorization)
+
+    @app.post("/v1/dify/ops/{tenant_id}/order_list")
+    def ops_order_list(
+        tenant_id: str,
+        payload: OrderListInput,
+        response: Response,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> dict[str, Any]:
+        response.headers["Cache-Control"] = "no-store"
+        return run_ops_tool(tenant_id, "order_list", payload, authorization)
 
     def dify_tools_credential(authorization: Annotated[str | None, Header()] = None) -> None:
         """The 3A catalog credential — a key that can do exactly one thing (#772 E).
@@ -5044,6 +5089,7 @@ ORDER_AUTHENTICATION_UNAVAILABLE = "ORDER_AUTHORIZATION_UNAVAILABLE"
 
 #: 只有本切片的三个端点拒绝中间层缓存：它们是**按人**的授权结果，不是公共资源。
 NO_STORE_PATH_PREFIXES = (
+    "/v1/dify/ops/",
     "/v1/orders/",
     "/v1/internal/charging-status/",
 )
@@ -5135,8 +5181,16 @@ def _authorized_charging_snapshot(
     直读入口与节点回呼入口都走这里 —— 契约 §3.6 要求两个入口共用同一份授权读取规则，
     不能在内部端点上另造一条更宽松的。身份取自已验证的 ScopeContext，不取请求头。
     """
+    from aiops_diagnostics.gateway_config import charging_endpoint
+
+    try:
+        endpoint = charging_endpoint(settings.charging_status_base_url, caller.effective_tenant_id)
+    except ValueError as exc:
+        raise StandardAPIError(
+            404, "TENANT_ENDPOINT_UNRESOLVED", "business endpoint is not registered"
+        ) from exc
     return read_charging_status(
-        settings.charging_status_base_url,
+        endpoint,
         order_no,
         tenant_id=caller.effective_tenant_id,
         user_id=caller.subject.c_user_id or "",

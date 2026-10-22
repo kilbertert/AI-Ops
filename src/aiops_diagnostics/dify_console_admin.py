@@ -147,7 +147,15 @@ class DifyConsoleAdmin:
             "Content-Type": "application/json",
         }
 
-    def _call(self, workspace_id: str, path: str, *, method: str = "GET", body: Any = None) -> Any:
+    def _call(
+        self,
+        workspace_id: str,
+        path: str,
+        *,
+        method: str = "GET",
+        body: Any = None,
+        follow_redirects: bool = True,
+    ) -> Any:
         try:
             return request_json(
                 RequestSpec(
@@ -156,6 +164,7 @@ class DifyConsoleAdmin:
                     headers=self._headers(workspace_id),
                     body=json_body(body) if body is not None else None,
                     timeout=self.settings.timeout,
+                    follow_redirects=follow_redirects,
                 ),
                 mapping=_mapping(),
             )
