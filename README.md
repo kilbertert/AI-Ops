@@ -234,6 +234,9 @@ flowchart TB
 首次只启用 Dify 运维只读工具时，CPMS 地址使用
 `AIOPS_GATEWAY_OPS_CHARGING_STATUS_BASE_URL`，不会同时打开 consumer 充电状态入口；
 接入及兼容规则见[首片手册](docs/agents/dify-ops-first-slice/README.md)。
+2026-10-22 operator 两工具已常驻启用，另次授权真实预览的模型段通过；
+公司 App 与业务准确率未验收。[离线证据复核](docs/agents/dify-ops-first-slice/model-acceptance.md)
+不追加模型或业务请求。
 
 **为什么 `engine.py` 和 `agent_workspace.py` 在 L3？**
 判据是**入度**而非直觉：`engine` 被 `diagnostic_tools` 与 `cli` 引用（作为 `known_runbook`

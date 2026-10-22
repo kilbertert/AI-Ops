@@ -1,3 +1,45 @@
+## 2026-10-22 · OPS-07 授权复测模型段通过，离线纠正解析假阴性
+
+**分支/基线**：`docs/dify-ops-model-retest`，创建基线 `eea69c603bfd`，交付前同步 `4ed7b4b0c3bd`。
+#960 已合并为 `78cf4999d599`，最终 CI 3467 passed / 10 skipped、CD 成功；
+部署后的零业务/零模型登记验证确认新凭据生效且原配置未变。
+本次接收 Claude 按用户授权执行的另一次复测，未追加模型或业务请求，也未覆盖随后常驻配置。
+首次 08:54 UTC 的旧缓存 403 真实失败保留在下方历史记录，不改写成成功。
+
+- **真实复测**：10:38:16–10:38:21 UTC（北京时间 18:38），制品 `0.1.0+eea69c603bfd`；
+  一次全新 Dify 预览，`deepseek-v4-flash`，`max_iteration=2`、每轮 `max_tokens=1024`。
+  三轮模型决策依次为 `order_list(page=1,page_size=1)`、该列表唯一订单的 `charging_info`、最终回答。
+  恰好两条成功审计、权限 v19，call_id 为 `f1a053eb33f34cc79f9466f0d6133f47` /
+  `e9adfa6ddacc4e50b4e41dedd13b1ae4`；状态 `1/finished`、来源 `cpms.chargingInfo`。
+  最终业务 JSON 的状态、订单、来源、观察时间和 call_id 与工具逐字相等，摘要与 Gateway 审计一致。
+  `message_end` 唯一、任务身份一致，usage 为 3657 prompt + 242 completion = **3899 tokens**。
+- **独立对照**：Claude 10:39:52 UTC 发起只读 SQL 和 CPMS GET，10:40:10 结果与复测选单状态一致。
+  本轮接收原记录，没有重复业务读取。这只证明一单在观察时刻的数据一致性。
+- **失败与修正**：原 canary 报 `missing model tool observations`，原因是 observation 内层含两份
+  完全相同、首尾相接的 JSON，`json.loads` 报 Extra data。新增离线工具顺序解码并完整消费字符串，
+  同 call_id 同内容去重，冲突拒绝；真实证据复核为三决策/两调用/两重复、最终回答与审计均通过。
+  events+audit 的规范 JSON SHA-256 为 `f1d9e128e817289c9faca9e8d644e7bac76cd94477579f6a750e28c68c4d26d0`。
+  原始失败报告保留，纠正后的脱敏报告另存；不删除 Dify 会话或审计。
+- **复测恢复**：原 app 导出逐字一致、七工具 v20，provider 删除、绑定禁用；
+  两份 Gateway 配置与该轮基线一致，路由 404。**该轮撤权后 403 步骤未执行**，
+  原解析断言已提前退出；撤权能力引用 #953 的独立固定输入证据，不能说这一轮重新证明。
+- **随后常驻状态**：Claude 按用户继续跑通两工具的指示常驻启用；11:36:18 UTC 独立只读回读确认
+  operator v21、九工具、`aiops-ops` provider 存在、服务绑定 active、workspace ready，health 为上述制品。
+  进程运维两配置非空，consumer 共享地址、逻辑执行环境和 M3 三配置为空；服务端配置文件对应项为空。
+  常驻 app 使用 `max_iteration=10`，与复测覆盖配置分开；此回读没有模型或业务请求。
+  另有公司登录代理账号的独立会话审计，不算这次复测重试，也不推断为真人点击或公司 App 通过。
+- **本地验证**：新增 10 项离线回归，覆盖拼接重复、冲突结果、坏尾部、错归属决策、失败不泄露、
+  缺终态、错单、错答案、额外审计和混合任务；连同既有 ops_tools/README 共 **44 passed**。
+  ruff 检查/格式、compileall、依赖、repo-map、policy、ADR、新增链接及敏感数据扫描通过，CI 待验证。
+  本片只改证据工具/文档，不改 Gateway 契约、
+  配置或 Java 节点；不重跑 Gateway 技能、镜像和 Java 构建，授权守卫突变沿用 #938/#951 的独立证据。
+
+**未完成业务验收**：模型段通过不证明故障准确率、真人操作、公司 App、consumer/self 或 M 系列整线。
+SSE 有推理前缀，只核对最终业务 JSON，纯 JSON 展示未证明；原始推理不公开。
+Dify usage 不证明供应商内部调用/重试总数或真实费用。整租户服务 key 不得接给 consumer。
+私有原件在 `/var/lib/aiops-41/ops-model-rerun-20261022/`，离线报告在开发侧受控缓存目录；
+方法见[模型验收](agents/dify-ops-first-slice/model-acceptance.md)与[首片手册](agents/dify-ops-first-slice/README.md)。
+
 ## 2026-10-22 · 三元组补齐：1942 租户从 `missing-ragflow-tenant` 到 `OK`
 
 紧接上一条（「41」重建）。上一条留下的未做项之一是：`ragflow_tenants` 里没有

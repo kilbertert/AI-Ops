@@ -4,6 +4,10 @@
 新路由 `POST /v1/dify/ops/{tenant_id}/order_list`、`charging_info` 不接受个人登录会话，
 只认独立服务 key；它可读登记租户数据，不能直接供 consumer/self 使用。
 
+2026-10-22 当前状态：首次旧凭据失败保留，#960 修复后的另次授权预览模型段已通过；
+随后 operator 两工具常驻启用，回读发布 v21（原七工具加两新工具），consumer/M3 配置仍关闭。
+真实模型段通过不等于公司 App 或故障准确率验收；具体证据与离线重验见[模型验收](model-acceptance.md)。
+
 ## 私有绑定与地址
 
 网关配置 `AIOPS_GATEWAY_OPS_BINDINGS_FILE` 指向当前服务身份所有、0600 的 JSON 数组文件。
@@ -113,6 +117,11 @@ M3的 `AIOPS_GATEWAY_AGENT_RUN_CONFIG_FILE`、`AIOPS_GATEWAY_EXECUTION_MANIFEST_
 与合并提交的同文件字节独立比较；`__init__.py` 含部署版本戳，应按部署脚本生成的制品比较。
 仅健康与摘要一致证明部署身份，不证明provider登记、Dify模型循环或真实业务结果。
 
+常驻启用时同时检查 `AIOPS_GATEWAY_OPS_CHARGING_STATUS_BASE_URL`，并回读绑定是否 active、
+Dify 两工具 enabled 与本地已发布 `allowed_tools`；文件值为空而进程值非空仍是启用。
+2026-10-22 的配置/key 位于服务身份私有 `/var/lib/aiops-41/ops-tools/`，权限与摘要在现场核对，
+不要打印 key，也不要用 `ops-model-*` 临时窗口的旧备份覆盖它。
+
 ### 从既有 Gateway 路径只读核对 Dify
 
 按环境手册使用该服务的 Python，脚本经 stdin 交给
@@ -122,6 +131,10 @@ M3的 `AIOPS_GATEWAY_AGENT_RUN_CONFIG_FILE`、`AIOPS_GATEWAY_EXECUTION_MANIFEST_
 数据库以 `sqlite3.connect('file:<gateway.db>?mode=ro', uri=True)` 打开：
 只查询 `dify_workspaces` 的当前环境/租户、`dify_app_registry` 的 operator 行及对应 agent 的已发布版本。
 不要实例化会建表、修改文件权限的 manager/registry 类来完成只读检查。
+
+具体字段：workspace 是 `tenant_id/environment/workspace_id/setup_state`；注册表按
+`tenant_id/business_entry='operator'` 读 `app_id/agent_name`，没有 `agent_id/entrance` 列。
+agent_id 取受控服务绑定，再对照发布快照的 name 与注册表 agent_name，避免按名称猜身份。
 
 将现场读出的 console 地址、key、workspace 与 app 传给既有 `DifyDslClient(DifyDslSource(...))`；
 仅调用 `tool_provider_ids()` 和 `export_dsl()`。只输出 workspace 状态、模型标识、工具启用项、
