@@ -1,3 +1,21 @@
+## 2026-10-22 · Dify 运维工具真实验收前置（只读，未完成业务验收）
+
+**分支/基线**：`test/dify-ops-live-acceptance` / `3d1e142780fb`；05:40 UTC只读复核。
+- 41 服务 active、健康版本 `0.1.0+3d1e142780fb`；八个首片关键文件与合并制品一致。
+  首次健康仍为 `c57e35c` 而两文件已更新，随后的健康和八摘要与 `3d1e142` 对齐；
+  初次比对不计通过，不推断长期源码漂移。
+- 正确按 NUL 切分进程环境、用 `dotenv_values(..., interpolate=False)` 读取服务配置：
+  新绑定与租户 CPMS 地址均未配置；M3三项为空。console 地址/key仅在配置文件中存在。
+  首次字面 `\\0` 切分给出的“console未配置”已作废，不作为结论。
+- `mode=ro` 查询注册和发布；通过既有 console client 的两种 GET 核对 Dify：
+  目标 workspace ready、operator v14、两侧均保留旧七工具，未登记 `aiops-ops`；
+  `agent-chat` 选择 `deepseek-v4-flash`，模型可调用/费用未验；M2栈运行容器数0。
+- 新增[验收变更单](agents/dify-ops-first-slice/live-acceptance-plan.md)：现有 app 不属于隔离环境；
+  固定输入工具联调和模型循环分开记录，凭据整租户授权不冒充一单/两次的硬限制。
+  真实业务请求0、模型请求0、远端变更0；没有登记provider、启用开关或修改app。
+  本条没有新增业务自动化通过数量；ruff/格式/policy/ADR/diff及重新生成后的repo-map检查通过。
+  未重跑全量业务测试或镜像构建（仅文档），原始取证仅存私有任务目录。
+
 ## 2026-10-22 · Dify 运维工具首片（#934 / #935）
 
 **分支/基线**：`feat/dify-ops-first-slice` / `d6c02067`。**未完成业务验收**。
