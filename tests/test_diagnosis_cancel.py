@@ -396,9 +396,23 @@ def test_a_cancelled_diagnosis_is_not_also_counted_as_failed(tmp_path: Path, mon
 
         # Let the interrupted worker finish its failed branch.
         gates["release"].set()
+        # Wait for the row this test PROVES should exist (`cancelled`), then give
+        # the worker a short settling window so a wrong `failed` write has its
+        # chance to land before the assertion looks. The first version looped
+        # until a `failed` row appeared and asserted it never would — those two
+        # cannot both be satisfied, so it burned the full 10 s deadline every run
+        # (measured: 10.33 s, the slowest single test left in the suite).
         deadline = time.monotonic() + 10
-        while time.monotonic() < deadline and not any(row.get("outcome") == "failed" for row in recorded):
-            time.sleep(0.05)
+        while time.monotonic() < deadline and not any(
+            row.get("outcome") == "cancelled" and row.get("route_type") == "diagnosis" for row in recorded
+        ):
+            time.sleep(0.02)
+        # The worker records `cancelled` from the same branch that would have
+        # written `failed`; a brief settle is enough to catch a regression that
+        # writes both, without making the happy path pay the full budget.
+        settle_until = time.monotonic() + 0.5
+        while time.monotonic() < settle_until:
+            time.sleep(0.02)
 
         outcomes = [row.get("outcome") for row in recorded if row.get("route_type") == "diagnosis"]
         assert "failed" not in outcomes, f"a cancelled diagnosis was also counted as failed: {outcomes}"
