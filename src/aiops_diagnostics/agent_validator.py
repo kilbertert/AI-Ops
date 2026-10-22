@@ -38,7 +38,7 @@ EXECUTED_MUTATION = re.compile(
 _IDENTIFIER_TAIL = re.compile(r"[A-Za-z0-9_:./-]")
 
 
-def _declares(failed_sources: set[str], declared: str) -> str | None:
+def declared_source(failed_sources: set[str], declared: str) -> str | None:
     """模型声明的一条 failed_source 指向哪个**已知源码**；指向不了任何一个是 ``None``。
 
     ``"tdengine:charging-gun_property（查询被拒：…）"`` → ``"tdengine:charging-gun_property"``。
@@ -143,7 +143,7 @@ class AgentResultValidator:
         # 是给人读的解释，不参与比对。所以 ``tdengine:charging-gun`` 与
         # ``tdengine:charging-gun_property_x`` 仍然是「不存在」—— 放宽的是
         # 「可以带解释」，不是「可以只写个开头」。
-        declared_sources = {item: _declares(failed_sources, item) for item in result.failed_sources}
+        declared_sources = {item: declared_source(failed_sources, item) for item in result.failed_sources}
         covered = {source for source in declared_sources.values() if source is not None}
         if not failed_sources.issubset(covered):
             missing_failures = sorted(failed_sources.difference(covered))
