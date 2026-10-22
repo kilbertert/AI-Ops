@@ -1449,3 +1449,104 @@ def test_a_tenant_level_token_does_not_read_the_shop_directory(
     assert context.data_scope.type == SCOPE_TYPE_ALL
     # 只应发 check_token 那一次；不该有 /shopuser/getShops 的第二跳。
     assert len(transport_sent) == 1
+
+
+# --- 角色来源：公司权限码 → 内部角色（#926 真浏览器验收暴露） -------------------
+#
+# 这几条钉住的是一个**验收口径**问题：真实身份路径上原本 roles 恒为空集，于是管理面
+# 对任何真实公司账号都是 403，而构造身份（直接给了 ROLE_AGENT_ADMIN）能过 —— 单测照抄了
+# 那个角色，所以全绿。下面全部从「令牌 + 公司权限码」出发，不给任何角色。
+
+
+class _PermissionSource:
+    def __init__(self, roles: frozenset[str]) -> None:
+        self._roles = roles
+        self.calls: list[str] = []
+
+    def roles_for(self, token: str) -> frozenset[str]:
+        self.calls.append(token)
+        return self._roles
+
+
+def _resolve_with_roles(monkeypatch: pytest.MonkeyPatch, roles: frozenset[str]):
+    # 令牌本身仍要走 check_token 的替身 —— 本组关心的是**角色来源**，不是校验通道。
+    monkeypatch.setattr(
+        "aiops_diagnostics.bounded_http.urllib.request.urlopen",
+        lambda _request, **_kwargs: _Response(CLAIMS),
+    )
+    resolver = CompanyTokenCallerResolver(
+        _settings(),
+        mysql_settings(),
+        scope_mapper_factory=_Mapper(),
+        permission_source=_PermissionSource(roles),
+    )
+    return resolver.resolve(TOKEN, required_scope="aiops:orders:read", platform_entry="operator")
+
+
+def test_permission_codes_are_carried_into_the_scope_context(monkeypatch) -> None:
+    """公司给了 ``aiops:agent:edit`` ⇒ 上下文里出现 ``ROLE_AGENT_ADMIN``。
+
+    不给这个映射，知识库四条路由与 ``/v1/agents`` 对真实运营永远是 403。
+    """
+    from aiops_diagnostics.company_permissions import roles_from_permissions
+
+    roles = roles_from_permissions(["aiops:agent:edit"])
+    context = _resolve_with_roles(monkeypatch, roles)
+    assert "ROLE_AGENT_ADMIN" in context.roles
+
+
+def test_no_permission_source_keeps_the_empty_role_set(monkeypatch) -> None:
+    """没有配公司边界 ⇒ 与改动前逐字一致（空角色集），不会因为本改动多给权限。"""
+    context = _resolve(monkeypatch)
+    assert context.roles == frozenset()
+
+
+def test_publish_is_not_implied_by_edit(monkeypatch) -> None:
+    """编辑权不蕴含发布权：两个码在公司里是分开建的两行菜单（ADR-0029）。"""
+    from aiops_diagnostics.company_permissions import roles_from_permissions
+
+    roles = roles_from_permissions(["aiops:agent:edit"])
+    assert "ROLE_AGENT_PUBLISHER" not in roles
+    assert "ROLE_AGENT_PUBLISHER" in roles_from_permissions(["aiops:agent:publish"])
+
+
+def test_an_upstream_failure_yields_no_roles_rather_than_an_exception() -> None:
+    """公司端点不可达 ⇒ 空角色集（fail closed），不是 500，也不是放行。"""
+    from aiops_diagnostics.company_permissions import CompanyPermissionSource
+    from aiops_diagnostics.config import UpmsSettings
+
+    def boom(_settings, _token):
+        raise OSError("upstream down")
+
+    source = CompanyPermissionSource(UpmsSettings(base_url="http://upms.invalid"), fetcher=boom)
+    assert source.roles_for(TOKEN) == frozenset()
+
+
+def test_the_permission_lookup_is_memoised_per_token() -> None:
+    """按**令牌**缓存：撤权最多拖到该令牌过期，而不是拖到用户缓存过期。"""
+    from aiops_diagnostics.company_permissions import CompanyPermissionSource
+    from aiops_diagnostics.config import UpmsSettings
+
+    calls: list[str] = []
+
+    def fetcher(_settings, token):
+        calls.append(token)
+        return ("aiops:agent:edit",)
+
+    source = CompanyPermissionSource(UpmsSettings(base_url="http://upms.invalid"), fetcher=fetcher)
+    first = source.roles_for("token-a")
+    second = source.roles_for("token-a")
+    source.roles_for("token-b")
+    assert first == second
+    assert calls == ["token-a", "token-b"]
+
+
+def test_an_unconfigured_upms_never_calls_the_upstream() -> None:
+    from aiops_diagnostics.company_permissions import CompanyPermissionSource
+    from aiops_diagnostics.config import UpmsSettings
+
+    def fetcher(_settings, _token):  # pragma: no cover - 不应被调用
+        raise AssertionError("must not call upstream without a base URL")
+
+    source = CompanyPermissionSource(UpmsSettings(base_url=None), fetcher=fetcher)
+    assert source.roles_for(TOKEN) == frozenset()

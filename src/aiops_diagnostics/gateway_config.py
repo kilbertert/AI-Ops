@@ -242,6 +242,17 @@ class GatewayServerSettings:
     #: RAGFlow 的**公钥**路径（#926）。登录时密码要先 base64 再 RSA 加密，密钥就在这里。
     #: 只有公钥 —— 它不敏感，但仍然由部署给定而不是猜一个默认路径。
     ragflow_console_public_pem: str = ""
+    #: 会话 cookie 的 ``Domain``（#926，2026-10-22 真浏览器验收后新增）。
+    #:
+    #: **为什么需要一个域，而不是留空。** 留空时 cookie 是 host-only，落在**网关自己的源**
+    #: （``api.mall.qushiyun.com``）上；浏览器随后跳到 RAGFlow 的源（``37.x:10081``）时
+    #: 一条 Cookie 头都不会带 —— 实测 40+ 个请求全为 ``Cookie: -``。于是"我们发出了 cookie"
+    #: 与"运营进得去"是两件事，而 TestClient 看不见这个差别。
+    #:
+    #: 取值必须是**网关与 RAGFlow 共同的父域**（例如把控制台反代到
+    #: ``ragflow.mall.qushiyun.com`` 后填 ``.mall.qushiyun.com``）。留空 ⇒ 行为与改动前一致
+    #: （cookie 只对网关自己有效），因此没有反代同站的部署不会因为本项而改变。
+    ragflow_console_cookie_domain: str = ""
     #: Conversation context window (#482). The defaults ARE the contract's
     #: numbers (8 turns / 8k tokens, ``conversation_store`` owns the constants);
     #: they are configurable because a RAG or promotional turn also spends the
@@ -411,6 +422,8 @@ class GatewayServerSettings:
             or _file_value(file_values, "AIOPS_GATEWAY_RAGFLOW_CONSOLE_PUBLIC_URL"),
             ragflow_console_public_pem=_env("AIOPS_GATEWAY_RAGFLOW_CONSOLE_PUBLIC_PEM")
             or _file_value(file_values, "AIOPS_GATEWAY_RAGFLOW_CONSOLE_PUBLIC_PEM"),
+            ragflow_console_cookie_domain=_env("AIOPS_GATEWAY_RAGFLOW_CONSOLE_COOKIE_DOMAIN")
+            or _file_value(file_values, "AIOPS_GATEWAY_RAGFLOW_CONSOLE_COOKIE_DOMAIN"),
             jev_base_url=_env("AIOPS_GATEWAY_JEV_BASE_URL")
             or _file_value(file_values, "AIOPS_GATEWAY_JEV_BASE_URL"),
             jev_api_key=_env("AIOPS_GATEWAY_JEV_API_KEY")
