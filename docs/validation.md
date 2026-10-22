@@ -1,3 +1,56 @@
+## 2026-10-22 · workspace 清理与命名：41 从 4 个降到 3 个，名字带公司
+
+### 一、清了两个（含我自己造的那个）
+
+| workspace | 内容 | 处置 |
+|---|---|---|
+| `zz-probe-ik` | 建 workspace 的默认行（join/credit_pool/插件策略），0 app 0 dataset | **删**（我为验 inner_api key 误用创建接口造的） |
+| `aiops-41-1783022023241633792` | 1 个 external dataset（`aiops-41-kb-canary-debug` → `kb-canary`） | **删**：`sys_organ` 里查不到这个 id、`sys_user` 下 0 个用户 ⇒ 不是真租户；dataset id 在网关库与 41 配置里**零引用** |
+| `AI-Ops Admin's Workspace` | **20 张表**：2 个 `[归档]` app、1564 个文档切片、6 个终端用户 | **保留**（是 #887 的回滚点）；只改名为 `aiops-admin-legacy` |
+
+删之前：`pg_dump` 备了 `tenants` / `tenant_account_joins` / `tenant_credit_pools` /
+`tenant_plugin_auto_upgrade_strategies`（`/tmp/tenants-bak-20261022092957.sql`），且**先按
+每张有 `tenant_id` 的表数过行**——「AI-Ops Admin's Workspace」那一列数出 20 张表，直接删会丢
+1564 个切片。
+
+网关库 `dify_workspaces` 里 `1783` 那一行是**死映射**（Dify 侧已删），一并清掉。
+
+### 二、命名改成带公司（ADR-0086）
+
+```
+改前  aiops-41-1942105476598861824          ← 切换器里被截断成 aiops-41-194210547659886...
+改后  aiops-41-Ulink-598861824
+```
+
+`Ulink` 是 `sys_organ` 里那个租户的公司名（2025-07-07 创建，`parent_id=0`）。
+
+**对账依据同时改**：名字在建的那一刻取一次、写进 `dify_workspaces.workspace_name`，
+以后对账按**那一列**。理由：公司会改名，按当前派生值对账会命中 0 ⇒ 重建 ⇒ 永久孤儿
+（Dify 没有删 workspace 的 API）。
+
+判据 2 例（`tests/test_dify_ensure_workspace.py`）：
+- 名字带公司名 + id 后 8 位；
+- **公司改名后对账仍按旧名命中**。突变复验：把 `stored_name` 换回当前派生值 ⇒ 第二条红。
+
+### 三、41 上的实测
+
+```
+dify_workspaces（41）:
+  1942105476598861824  c3f871e1-…  aiops-41-Ulink-598861824  ready
+  platform             d7d788cf-…  aiops-41-platform         ready
+
+Dify tenants:
+  aiops-admin-legacy / aiops-41-Ulink-598861824 / aiops-41-platform
+```
+
+### 四、据实
+
+- **`aiops-admin-legacy` 没有清**：它仍是 #887 的回滚点（两个 `[归档]` app + 1564 个切片）。
+  要清的话得先把那两个 app 导出备份。
+- **名字只改了这一轮存在的两个**；`ensure-workspace` 之后新建的会按新规则自动带公司名。
+- **`1783` 删除前没有独立的第三方确认它「不是租户」**：依据是 `sys_organ` 无此 id 与
+  `sys_user` 无此 tenant —— 两条都是直接查询，不是推断。
+
 ## 2026-10-22 · Dify 控制台里切租户：**不需要改 Dify**，只要补成员关系（真机验证）
 
 **需求**：公司运维要在 Dify 控制台里切到某个租户的 workspace，编辑与运维它的智能体。
