@@ -14,6 +14,8 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 
 from aiops_diagnostics.dify_trial import TrialInitiator, build_trial_scope
@@ -162,6 +164,7 @@ def test_create_gateway_app_injects_the_operator_scope_into_a_real_runtime(tmp_p
         server_config_file=tmp_path / "production.env",
     )
     settings.server_config_file.write_text("# test\n", encoding="utf-8")
+    os.chmod(settings.server_config_file, 0o600)  # 私有配置文件：不得有组/其他位
     store = GatewayStore(settings.database_file)
     runtime = GatewayRuntime(
         store, settings, __import__("aiops_diagnostics.config", fromlist=["Settings"]).Settings()
@@ -188,6 +191,7 @@ def test_the_trial_scope_is_empty_when_no_operator_scope_was_injected() -> None:
         server_config_file=tmp / "production.env",
     )
     settings.server_config_file.write_text("# test\n", encoding="utf-8")
+    os.chmod(settings.server_config_file, 0o600)  # 私有配置文件：不得有组/其他位
     runtime = GatewayRuntime(
         GatewayStore(settings.database_file),
         settings,
