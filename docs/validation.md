@@ -19,6 +19,8 @@
   内容摘要锁 `043c18e5…` 与复验一致。不新增 runtime 依赖。
 - 没有真实模型/公司账号/业务读取或部署。CLI 已有provider只能回读掩码密钥，`credentials_verified=false`，
   schema相同不证明凭据有效；真实调用另验。旧AI-Ops试运行不冒充Dify预览通过。
+- PR #938 首轮 `verify` 与 `spec-tree lint` 通过；`Workflow policy` 因五份新增 ADR 缺少状态与备选方案失败，
+  本轮补齐。Devin 的成功状态实际为额度耗尽而跳过；Codex 审查也受额度限制，没有获得 AI 审查结论。
 - 运维方法自检：本次实际远端读取由既有部署dry-run触发，方法已在部署脚本/手册；新登记方法已写入首片手册，
   私有令牌、会话或主机原始日志未进入文档。
 
