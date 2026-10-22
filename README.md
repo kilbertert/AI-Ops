@@ -310,6 +310,7 @@ flowchart TB
 | `answer_language.py` | 回答面输出语言校验的**共享应用点**（挂到各回答面的定稿点） |
 | `agent_manifest.py` / `agent_debug.py` | 声明式环境清单收敛 / 草稿调试与真实知识绑定校验 |
 | `dify_knowledge_api.py` | 面向 Dify External Knowledge API 的知识检索适配（#581 / PRD #577）：请求/响应形状与 `records` 渲染。租户与知识库白名单由我们的登记表定，**不来自请求** |
+| `ops_bindings.py` / `ops_tools.py` / `ops_provider.py` | 默认关闭的 Dify 运维服务工具：私有凭据绑定、有界订单列表、当前状态、发布撤权及自动登记。独立租户服务权限不替代个人范围；[接入与验收](docs/agents/dify-ops-first-slice/README.md) |
 | `agent_content.py` | 开场白与预设问题的**版本化内容制品** + 按语言派生（#585 经 [ADR-0020](docs/adr/0020-dify-owns-the-zh-master-of-starters.md) **部分反转**）：`zh` 取运营在 Dify 写的母版、其余语言取这里手写的文案；**新增一门语言只改这里，不改 Dify 里的任何配置**。覆盖是判据（`starter_gaps()` 空元组才算完整） |
 | `admin_cli.py` 的 `pull-dify` | 把运营在 Dify 里改好的配置拉回来、经**我方发布门**冻结成一个已发布版本（#625 / PRD #577）。发布走 `AgentManager.publish` —— 与 `/v1/agents`、`admin reconcile` **同一条**生产路径；控制台凭据来自服务端配置而非命令行参数；**不写运行时登记表**（那是 `[[dify_apps]]` + `reconcile` 的事，混在一起会让一次拉取顺手改掉线上路由）|
 | `dify_debug_identity.py` | 面向 Dify 的**调试身份**（#586 / PRD #577）：**凭据决定身份**，请求里的任何字段都不参与判定。生产凭据 = 登记表全量；调试凭据 = 固定测试租户 + 显式列出的知识库子集。身份只**收窄**，从不扩张；子集为空即**什么都取不到**（不是『不收窄』）；越权与未登记同为 404 |

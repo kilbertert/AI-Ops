@@ -18,7 +18,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
-from aiops_diagnostics.agent_contracts import ALL_TOOL_NAMES
+from aiops_diagnostics.agent_contracts import ALL_TOOL_NAMES, REGISTERED_TOOL_NAMES
 from aiops_diagnostics.private_files import ensure_private_directory, protect_private_file
 
 AGENT_MANAGE_SCOPE = "aiops:agents:manage"
@@ -573,7 +573,7 @@ class AgentManager:
                 not isinstance(item, str) or not item.strip() or len(item) > 500 for item in collection
             ):
                 raise AgentValidationError(f"{label} is invalid")
-        unknown_tools = sorted(set(config.allowed_tools) - set(ALL_TOOL_NAMES))
+        unknown_tools = sorted(set(config.allowed_tools) - set(REGISTERED_TOOL_NAMES))
         if unknown_tools:
             raise AgentValidationError(f"allowed_tools contains unknown tool(s): {', '.join(unknown_tools)}")
 

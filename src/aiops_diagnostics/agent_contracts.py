@@ -44,6 +44,10 @@ class ToolName(StrEnum):
 #: ``diagnostic_tools.DiagnosticToolExecutor.execute``).
 ALL_TOOL_NAMES: tuple[str, ...] = tuple(tool.value for tool in ToolName)
 
+# 新执行面的合法目录不扩大历史默认授权。
+OPS_TOOL_NAMES: tuple[str, ...] = ("charging_info", "order_list")
+REGISTERED_TOOL_NAMES: tuple[str, ...] = (*ALL_TOOL_NAMES, *OPS_TOOL_NAMES)
+
 
 class IncidentManifest(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")

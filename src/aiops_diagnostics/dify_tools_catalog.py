@@ -39,7 +39,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from aiops_diagnostics.agent_contracts import ALL_TOOL_NAMES
+from aiops_diagnostics.agent_contracts import ALL_TOOL_NAMES, OPS_TOOL_NAMES
 
 #: The API tool provider's name in Dify — fixed by #772 E so an operator cannot
 #: rename the surface the pull keys on. It is a *name*, and the pull resolves it
@@ -155,6 +155,7 @@ def partition_aiops_tools(
     *,
     aiops_provider_id: str,
     bindings: Mapping[str, str],
+    ops_provider_id: str = "",
 ) -> tuple[tuple[str, ...], tuple[DeclaredTool, ...]]:
     """Split Dify's declared tools into **our allow-list** and **what we cannot map**.
 
@@ -188,6 +189,9 @@ def partition_aiops_tools(
         mapped: str | None = None
         if entry.provider_type == "api" and aiops_provider_id and entry.provider_id == aiops_provider_id:
             if entry.tool_name in AI_OPS_TOOL_NAMES:
+                mapped = entry.tool_name
+        elif entry.provider_type == "api" and ops_provider_id and entry.provider_id == ops_provider_id:
+            if entry.tool_name in OPS_TOOL_NAMES:
                 mapped = entry.tool_name
         else:
             mapped = bindings.get(entry.identity)

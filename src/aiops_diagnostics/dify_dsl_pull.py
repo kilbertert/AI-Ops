@@ -54,7 +54,7 @@ from urllib.parse import urlsplit
 
 import yaml
 
-from aiops_diagnostics.agent_contracts import ALL_TOOL_NAMES
+from aiops_diagnostics.agent_contracts import ALL_TOOL_NAMES, OPS_TOOL_NAMES
 from aiops_diagnostics.agent_lifecycle import Agent, AgentConfig, AgentManager, config_from_snapshot
 from aiops_diagnostics.bounded_http import (
     ErrorMapping,
@@ -145,6 +145,7 @@ class DifyDslSource:
     api_key: str = field(repr=False, default="")
     workspace_id: str = ""
     timeout: float = 10.0
+    ops_tools_enabled: bool = False
 
 
 class DifyDslClient:
@@ -349,6 +350,7 @@ def map_dsl_to_config(
     knowledge_base_ids: tuple[str, ...] | None = None,
     dataset_resolver: Callable[[tuple[str, ...]], tuple[str, ...]] | None = None,
     tool_resolver: Callable[[tuple[Any, ...]], tuple[str, ...]] | None = None,
+    ops_tools_enabled: bool = False,
 ) -> AgentConfig:
     """Map exported DSL text onto the ``AgentConfig`` fields we run on.
 
@@ -410,7 +412,11 @@ def map_dsl_to_config(
     #: —— 否则 resolver 会（正确地）返回空元组，而那读作「一个工具都不许跑」，
     #: 线上的诊断会突然全被白名单挡掉，报告却只说这次拉取成功。
     effective = tuple(entry for entry in declared_tools if entry.enabled)
-    if effective and tool_resolver is not None:
+    if ops_tools_enabled:
+        if tool_resolver is None:
+            raise DifyDslMalformed("ops tools require a provider resolver")
+        allowed_tools = tool_resolver(declared_tools)
+    elif effective and tool_resolver is not None:
         allowed_tools: tuple[str, ...] | None = tool_resolver(effective)
     elif effective:
         raise DifyDslMalformed(
@@ -447,6 +453,7 @@ def _resolve_tools(
     *,
     aiops_provider_id: str,
     registry: Mapping[str, str],
+    ops_provider_id: str = "",
 ) -> tuple[str, ...]:
     """把 Dify 声明的工具翻译成我们的 ``ToolName``，翻不出就**拒**（#774 / #772 E）。
 
@@ -462,7 +469,7 @@ def _resolve_tools(
     from aiops_diagnostics.dify_tools_catalog import partition_aiops_tools
 
     allowed, unmapped = partition_aiops_tools(
-        declared, aiops_provider_id=aiops_provider_id, bindings=registry
+        declared, aiops_provider_id=aiops_provider_id, bindings=registry, ops_provider_id=ops_provider_id
     )
     if unmapped:
         hint = (
@@ -590,22 +597,42 @@ def resolve_pulled_config(
     #: never from config (module docstring). Looked up lazily on first use so a
     #: DSL with no declared tools costs no extra console call; the console read
     #: happens only when the file actually names one.
-    aiops_ids: list[str] = []
+    aiops_ids: dict[str, str] = {}
+    exported = client.export_dsl()
+    existing = _find_by_name(manager, context, name)
 
     def tool_resolver(names: tuple[Any, ...]) -> tuple[str, ...]:
         if not aiops_ids:
-            aiops_ids.append(client.tool_provider_ids().get(AI_OPS_PROVIDER_NAME, ""))
-        return _resolve_tools(names, aiops_provider_id=aiops_ids[0], registry=tool_registry or {})
+            aiops_ids.update(client.tool_provider_ids())
+        allowed = _resolve_tools(
+            names,
+            aiops_provider_id=aiops_ids.get(AI_OPS_PROVIDER_NAME, ""),
+            registry=tool_registry or {},
+            ops_provider_id=aiops_ids.get("aiops-ops", "") if source.ops_tools_enabled else "",
+        )
+        if source.ops_tools_enabled and existing is not None:
+            # 新 provider 不声明旧能力不等于主动撤销存量诊断权限。
+            legacy_declared = any(n.provider_id == aiops_ids.get(AI_OPS_PROVIDER_NAME) for n in names)
+            if not legacy_declared:
+                old = existing.config.allowed_tools
+                if existing.published_version is not None:
+                    old = config_from_snapshot(
+                        manager.store.version(
+                            existing.agent_id, existing.tenant_id, existing.published_version
+                        ).snapshot
+                    ).allowed_tools
+                allowed = tuple(dict.fromkeys((*[n for n in old if n not in OPS_TOOL_NAMES], *allowed)))
+        return allowed
 
     config = map_dsl_to_config(
-        client.export_dsl(),
+        exported,
         agent_type=agent_type,
         output_contract=output_contract,
         knowledge_base_ids=knowledge_base_ids,
         dataset_resolver=resolver if knowledge_registry else None,
         tool_resolver=tool_resolver if tool_registry is not None else None,
+        ops_tools_enabled=source.ops_tools_enabled,
     )
-    existing = _find_by_name(manager, context, name)
     if knowledge_base_ids is None and not declared and existing is not None:
         # Only "Dify said nothing" keeps the live binding. When Dify *does*
         # declare a dataset, the resolved ids already won; keeping the live

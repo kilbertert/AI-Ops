@@ -240,6 +240,7 @@ def pull_dify(
         app_id=app_id,
         api_key=console.dify_console_api_key,
         workspace_id=resolved_workspace,
+        ops_tools_enabled=_ops_app_registered(console, tenant, app_id),
     )
     try:
         if dry_run:
@@ -327,6 +328,14 @@ def _dify_knowledge_registry(console: Any) -> Any:
     return parse_dify_knowledge_bindings(getattr(console, "dify_knowledge_bindings", "") or "")
 
 
+def _ops_app_registered(console: Any, tenant_id: str, app_id: str) -> bool:
+    from aiops_diagnostics.ops_bindings import ops_app_registered
+
+    return ops_app_registered(
+        getattr(console, "ops_bindings_file", ""), console.environment, tenant_id, app_id
+    )
+
+
 def _dify_tool_registry(console: Any) -> Any:
     """Dify 工具身份 → ``ToolName`` 的登记表，与知识库那张同一条解析纪律。"""
     from aiops_diagnostics.gateway_config import parse_dify_tool_bindings
@@ -358,6 +367,7 @@ def _console_settings_from(path: Path) -> dict[str, str]:
         "AIOPS_GATEWAY_DIFY_CONSOLE_WORKSPACE_ID",
         "AIOPS_GATEWAY_DIFY_KNOWLEDGE_BINDINGS",
         "AIOPS_GATEWAY_DIFY_TOOL_BINDINGS",
+        "AIOPS_GATEWAY_OPS_BINDINGS_FILE",
         # 部署身份（#886）**也在这里**：workspace 按 (租户, 环境) 解析，而 41 上的
         # `--config` 就是 `/etc/aiops-41/production.env`。只从进程 env 读它会让
         # 「文件里写好了、命令却说没配」重演一次 #625 的形态。
@@ -538,6 +548,7 @@ def sync_from_dify(
             app_id=binding.app_id,
             api_key=console.dify_console_api_key,
             workspace_id=resolved[binding.tenant_id],
+            ops_tools_enabled=_ops_app_registered(console, binding.tenant_id, binding.app_id),
         )
         try:
             outcome = sync_binding_from_dify(
@@ -1082,6 +1093,59 @@ def ensure_ready_command(
         typer.secho(json.dumps({"error": exc.code, "message": exc.message}, ensure_ascii=False), err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(json.dumps(outcome.as_dict(), ensure_ascii=False, indent=2))
+
+
+@admin_app.command("ensure-ops-provider")
+def ensure_ops_provider_command(
+    ctx: typer.Context,
+    tenant: Annotated[str, typer.Option("--tenant", help="本环境已登记租户")],
+    token_file: Annotated[
+        Path, typer.Option("--token-file", exists=True, dir_okay=False, help="仅当前用户可读的工具密钥文件")
+    ],
+    gateway_url: Annotated[str, typer.Option("--gateway-url", help="工具回呼的 Gateway HTTPS 基地址")],
+    db: Annotated[Path, typer.Option("--db", exists=True, dir_okay=False)],
+) -> None:
+    """在精确绑定的 workspace 幂等登记 aiops-ops，不打印密钥。"""
+    from aiops_diagnostics.agent_lifecycle import AgentManager, AgentStore
+    from aiops_diagnostics.dify_console_admin import ConsoleApiSettings, DifyConsoleAdmin
+    from aiops_diagnostics.ops_bindings import load_ops_bindings, token_digest
+    from aiops_diagnostics.ops_provider import ensure_ops_provider
+    from aiops_diagnostics.ops_tools import OpsToolService
+    from aiops_diagnostics.private_files import validate_private_file
+
+    console, database = _dify_console_and_db(ctx, db)
+    try:
+        validate_private_file(token_file)
+        if token_file.stat().st_size > 4096:
+            raise ValueError("工具凭据文件过大")
+        token = token_file.read_text().strip()
+        binding = next(
+            (
+                row
+                for row in load_ops_bindings(console.ops_bindings_file)
+                if row.tenant_id == tenant
+                and row.environment == console.environment
+                and row.active
+                and row.key_sha256 == token_digest(token)
+            ),
+            None,
+        )
+        if binding is None:
+            raise ValueError("没有与密钥一致的启用绑定")
+        # 注册前核对 workspace/app/agent，但尚未发布工具是合法的首次配置。
+        manager = AgentManager(AgentStore(database))
+        service = OpsToolService(dataclasses.replace(console, database_file=database), manager)
+        service.resolve_binding(token, tenant)
+        result = ensure_ops_provider(
+            DifyConsoleAdmin(ConsoleApiSettings(console.dify_console_base_url, console.dify_console_api_key)),
+            binding,
+            token,
+            gateway_url,
+        )
+    except (ValueError, OSError, RuntimeError) as exc:
+        typer.secho("运维工具登记失败，请核对私有绑定与控制台配置", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(json.dumps(result, ensure_ascii=False))
 
 
 #: CLI 参数名 → `GatewayServerSettings` 字段。放在函数外，字典只写一次 —— 上面那个循环

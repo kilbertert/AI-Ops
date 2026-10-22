@@ -42,7 +42,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from aiops_diagnostics.agent_contracts import ALL_TOOL_NAMES, IncidentManifest
+from aiops_diagnostics.agent_contracts import ALL_TOOL_NAMES, REGISTERED_TOOL_NAMES, IncidentManifest
 from aiops_diagnostics.agent_runner import run_agent_diagnosis
 from aiops_diagnostics.agent_workspace import AgentWorkspace
 from aiops_diagnostics.config import Settings
@@ -57,7 +57,7 @@ _LOGGER = logging.getLogger("aiops.dify_trial")
 #: 草稿提示词的字符上限。它是**运营输入**，进了 run 的初始提示词，所以要有个头。
 MAX_DRAFT_PROMPT_CHARS = 20000
 #: 草稿可声明的工具数量上限 —— 枚举只有七个，多出来的直接是坏数据。
-MAX_DRAFT_TOOLS = len(ALL_TOOL_NAMES)
+MAX_DRAFT_TOOLS = len(REGISTERED_TOOL_NAMES)
 
 
 class TrialRefused(RuntimeError):
@@ -99,7 +99,7 @@ class TrialDraft:
         if len(raw_tools) > MAX_DRAFT_TOOLS:
             raise TrialRefused(f"allowed_tools 最多 {MAX_DRAFT_TOOLS} 项")
         names = tuple(str(item) for item in raw_tools)
-        bad = sorted({name for name in names if name not in ALL_TOOL_NAMES})
+        bad = sorted({name for name in names if name not in REGISTERED_TOOL_NAMES})
         if bad:
             raise TrialRefused(
                 "草稿的工具白名单里出现了未登记的工具："
@@ -260,6 +260,8 @@ def run_trial(
     """
     if not order_no.strip():
         raise TrialRefused("试运行必须带订单号")
+    if set(draft.allowed_tools) - set(ALL_TOOL_NAMES):
+        raise TrialRefused("此入口验证旧诊断执行器；aiops-ops 工具请在 Dify 预览中验证")
 
     # 订单可见性：与 /v1/standard/diagnoses 用**同一条**判据（scope 对订单的可见性），
     # 不是另写一份比较。这里落在签名下面，因为它是唯一能在**进入模型之前**拦住越权的点。
