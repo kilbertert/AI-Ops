@@ -231,6 +231,12 @@ class GatewayServerSettings:
     ragflow_embedding_base_url: str = ""
     ragflow_embedding_api_key: str = field(repr=False, default="")
     ragflow_embedding_model: str = "text-embedding-3-large"
+    #: 登录代理要打的那台 RAGFlow API（#926）。**留空 ⇒ 控制台入口整体 404**，与知识检索
+    #: 那条「未配置即不启用」同一条规则：没有 base URL 的代理只能伪造一次跳转。
+    ragflow_console_base_url: str = ""
+    #: 浏览器最终要去的地方（RAGFlow 的 web 入口，含端口）。留空则回落到 base URL ——
+    #: 只在"API 与 web 同源"的部署里成立，所以默认值与 base 一致而不是自己编一个。
+    ragflow_console_public_url: str = ""
     #: Conversation context window (#482). The defaults ARE the contract's
     #: numbers (8 turns / 8k tokens, ``conversation_store`` owns the constants);
     #: they are configurable because a RAG or promotional turn also spends the
