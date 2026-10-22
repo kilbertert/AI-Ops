@@ -1162,6 +1162,40 @@ list / all-workspaces / summary / switch / custom-config / info / permission —
 排除它并注名**，不是删 —— 删不掉。**验鉴权请用只读端点**（`GET /console/api/all-workspaces`），
 不要用任何 POST 去"试一下能不能通"。
 
+### 3.1-decies 给运维账号开通某租户的 Dify 访问权（2026-10-22 真机验证）
+
+**用途**：公司运维要在 **Dify 控制台里切租户**编辑/运维智能体。Dify 的 workspace
+切换器只在一个条件下隐藏 —— 这个账号的 workspace 列表为空。**成员关系一到，切换器就出现**，
+点一下调 `/workspaces/switch`。
+
+**不需要改 Dify，也不需要重建 web 镜像。** 2026-10-22 之前一直以为要 fork 前端，那个判断
+是错的（在编译后的 chunk 里搜组件名，缩略名把名字改掉了）。
+
+```bash
+runuser -u aiops41 -- env AIOPS_GATEWAY_ENVIRONMENT=41 \
+  /opt/aiops-41/.venv/bin/aiops --config /etc/aiops-41/production.env \
+  admin grant-tenant-access \
+    --tenant <租户 id> \
+    --account-id <该人在 Dify 里的账号 id> \
+    --email <该账号在 Dify 里的 email，必须逐字一致>
+```
+
+**三条会踩到的**：
+
+1. **`account-id` 是 Dify 的账号 id，不是公司 `user_id`。** 前者在 `accounts` 表里；
+   后者在 UPMS。两者不同空间。
+2. **`email` 必须与 Dify 账号行**逐字**一致。** `create_tenant_member` 的查询是
+   `Account.id == account_id AND Account.email == email` —— 两个都要匹配。
+   2026-10-22 就因为映射表带环境前缀、Dify 账号没带而失败（`account not found`）。
+3. **不碰 `current`。** 这条命令只加成员；切哪个 workspace 是人在 Dify 里点的。
+   替人改会让别的标签页/别的请求看到状态跳动。
+
+**按需跑，不要批量。** 25 个 `ROLE_ADMIN` 里 18 个半年以上没登录过（2026-10-22 查），
+全量 join 等于给休眠账号开每一个租户的 workspace 访问权。
+
+**真机证据**（2026-10-22）：`system` 账号 join 进 4 个 workspace 后，Dify 左上角的
+workspace 卡片出现切换器，能切到 `aiops-41-1942105476598861824` 并看到该租户的 3 个 app。
+
 ### 3.1-octies 租户 workspace 里的**两个**同名 dataset 是**有意的**（#887，2026-10-22 取证）
 
 租户 `1942105476598861824` 的 workspace `c3f871e1-…` 下有两个同名外接知识库
