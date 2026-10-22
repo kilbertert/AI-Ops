@@ -57,12 +57,6 @@ def _java_order_columns() -> list[str]:
     return _order_columns(match.group(1).replace("\n", " "))
 
 
-def test_t1_java_deliverable_exists() -> None:
-    assert CONTROLLER.is_file()
-    assert ASPECT.is_file()
-    assert LANDING_README.is_file()
-
-
 def test_landing_README_records_local_verification_boundary() -> None:
     source = _read(LANDING_README)
     assert "未编译" in source

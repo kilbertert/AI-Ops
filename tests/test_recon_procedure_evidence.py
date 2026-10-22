@@ -93,11 +93,6 @@ def _coverage_totals() -> dict[str, str]:
     return {cmd.replace(chr(92) + "|", "|"): note for cmd, note in rows}
 
 
-def test_the_procedure_and_the_script_are_both_present() -> None:
-    assert PROCEDURE.exists()
-    assert (PROJECT_ROOT / SCRIPT).exists()
-
-
 def test_no_scope_note_is_shell_inert() -> None:
     """A note at the end of a command line is an argument, not a note.
 

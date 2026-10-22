@@ -7,7 +7,8 @@
     "afk:policy": "node .sandcastle/policy-check.mjs all",
     "cd:watch": "node .sandcastle/cd-watch.mjs",
     "cd:state": "node .sandcastle/deploy-state.mjs",
-    "cd:watch:test": "node .sandcastle/cd-watch.test.mjs"
+    "cd:watch:test": "node .sandcastle/cd-watch.test.mjs",
+    "test": "./tools/test.sh"
   },
   "dependencies": {
     "tsx": "^4.20.0",

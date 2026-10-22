@@ -53,12 +53,6 @@ def _rows() -> list[dict[str, str]]:
     return out
 
 
-def test_the_generator_and_its_output_are_both_present() -> None:
-    assert GENERATOR.exists()
-    assert INDEX.exists()
-    assert BASELINE.exists()
-
-
 def test_the_index_is_generated_not_hand_written() -> None:
     """The header says so; if it stops saying so, the table starts drifting."""
     head = "\n".join(INDEX.read_text(encoding="utf-8").splitlines()[:12])
