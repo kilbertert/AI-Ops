@@ -301,3 +301,37 @@ def test_one_tenant_cannot_bind_against_another(tmp_path: Path) -> None:
 
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "KNOWLEDGE_TENANT_MISMATCH"
+
+
+def test_one_tenant_cannot_overwrite_another_tenants_source(tmp_path: Path) -> None:
+    """B 不能改 A 已经登记的知识源（2026-10-22 负向真机暴露的洞）。
+
+    旧判据只比较「请求体的 tenant 与调用者」，从不问这个 `knowledge_id` 现在归谁 ⇒
+    B 把 body 的 tenant 填成自己，就能覆盖 A 的行。危害是**破坏**：A 的知识源指向
+    B 的库、或名字被改，A 的运营下次进 Dify 会 404。
+
+    与 DELETE 同形拒绝（404，不区分"不存在"与"是别人的"）。
+    """
+    client, store, _kb = _client(
+        tmp_path,
+        {TENANT: [{"knowledge_base_id": "kb-1", "name": "kb"}]},
+    )
+    store.set_knowledge_id_binding("kb-shared", OTHER, ("kb-other",), display_name="别人的")
+
+    response = client.put(
+        "/v1/knowledge/sources/kb-shared",
+        headers={"Authorization": "Bearer t"},
+        json={
+            "knowledge_id": "kb-shared",
+            "tenant_id": TENANT,  # 调用者自己的租户 —— 旧判据会放行
+            "knowledge_base_ids": ["kb-1"],
+            "display_name": "hijack",
+        },
+    )
+
+    assert response.status_code == 404, response.text
+    assert response.json()["error"]["code"] == "KNOWLEDGE_SOURCE_NOT_FOUND"
+    # 原行一个字节都没变
+    row = store.get_knowledge_id_binding("kb-shared")
+    assert row["tenant_id"] == OTHER
+    assert row["display_name"] == "别人的"
