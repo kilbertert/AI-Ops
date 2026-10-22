@@ -79,29 +79,43 @@ def ensure_ops_provider(
             raise ValueError("已有 aiops-ops schema 不同，拒绝覆盖")
         # Dify 返回掩码凭据；schema 相同不能证明密钥相同，真实调用单独验收。
         return {"action": "unchanged", "provider": PROVIDER, "credentials_verified": False}
+    payload = {
+        "provider": PROVIDER,
+        "schema_type": "openapi",
+        "schema": json.dumps(schema, ensure_ascii=False),
+        "icon": {"type": "emoji", "content": "🔎", "background": "#E0F2FE"},
+        "credentials": {
+            "auth_type": "api_key_header",
+            "api_key_header": "Authorization",
+            "api_key_value": token,
+            "api_key_header_prefix": "bearer",
+        },
+        "privacy_policy": "",
+        "custom_disclaimer": "按登记租户服务权限只读查询，不代表操作人本人范围。",
+    }
     try:
         result = console._call(
             binding.workspace_id,
             f"{PROVIDER_PATH}/add",
             method="POST",
             follow_redirects=False,
-            body={
-                "provider": PROVIDER,
-                "schema_type": "openapi",
-                "schema": json.dumps(schema, ensure_ascii=False),
-                "icon": {"type": "emoji", "content": "🔎", "background": "#E0F2FE"},
-                "credentials": {
-                    "auth_type": "api_key_header",
-                    "api_key_header": "Authorization",
-                    "api_key_value": token,
-                    "api_key_header_prefix": "bearer",
-                },
-                "privacy_policy": "",
-                "custom_disclaimer": "按登记租户服务权限只读查询，不代表操作人本人范围。",
-            },
+            body=payload,
         )
     except ConsoleApiError:
         raise ValueError("Dify 提供方创建失败或结果未知；重新读取确认，未覆盖既有配置") from None
     if not isinstance(result, dict) or result.get("result") != "success":
         raise ValueError("Dify 未确认提供方创建成功")
+    # Dify 1.17.1 同名重建不清旧凭据缓存；官方update会失效该缓存。
+    try:
+        refreshed = console._call(
+            binding.workspace_id,
+            f"{PROVIDER_PATH}/update",
+            method="POST",
+            follow_redirects=False,
+            body={**payload, "original_provider": PROVIDER},
+        )
+    except ConsoleApiError:
+        raise ValueError("Dify 提供方已创建，但凭据缓存刷新未确认；请核对提供方后再调用") from None
+    if not isinstance(refreshed, dict) or refreshed.get("result") != "success":
+        raise ValueError("Dify 提供方已创建，但凭据缓存刷新未确认")
     return {"action": "created", "provider": PROVIDER, "credentials_verified": False}

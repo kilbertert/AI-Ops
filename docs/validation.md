@@ -1,3 +1,28 @@
+## 2026-10-22 · OPS-07首次模型预览失败：同名provider凭据缓存
+
+**分支/基线**：`fix/dify-ops-model-cache` / `91379e4c`；真实运行制品`9983123f449a`。
+**未完成业务验收**，OPS-07未通过；用户只批准一次预览，未追加第二次请求。
+- 08:54:25–08:54:29 UTC：新会话、仅两新工具、max_iteration=2、max_tokens=1024；
+  模型选了`order_list`，Dify调用被Gateway `403 OPS_BINDING_REJECTED`拒绝，随后message_end结束。
+  SSE有两轮model decision对应的agent_thought，usage报告1175 prompt + 198 completion = **1373 tokens**；
+  total_price=0是Dify元数据，不作为供应商零费用结论；插件内部请求/重试总数未观测。
+- 审计仅本轮一条拒绝、成功业务取数0；未调用charging_info或独立SQL/CPMS对照。
+  原app导出逐字恢复、七工具权限v18、provider删除、binding禁用；
+  两份Gateway配置摘要与最新基线一致，进程/文件中新工具及consumer/M3配置关闭、health正常。
+- 本地key摘要和绑定注册匹配。官方Dify 1.17.1源码显示：credentials缓存按workspace/provider名字索引，
+  TTL86400秒；decrypt优先返回缓存；创建/删除不失效，update提交后才删除缓存。
+  现场无模型/业务重现：同名重建后GET掩码仍匹配上一轮已撤销key，不匹配新key；
+  通过官方api/update写回新凭据后GET匹配新key。临时provider随即删除，app与运行配置未改。
+- 修复新建登记：add成功后同payload走官方update失效旧缓存，已有provider仍零写；
+  更新失败不能报created成功，不输出上游可能含key的错误体。该修复不修改Dify源码或Redis。
+- 29项工具专项、76项相关检查通过，ops_provider分支覆盖81%；
+  移除update的副本使同名缓存回归失败，原源码未改。wheel/sdist和镜像构建通过，摘要`b6eaafd4…`；
+  本地全量 **3465 passed / 10 skipped / 0 failed**（343.17秒）；首轮#960三项CI通过。
+  同步workspace主线后43项相关通过、镜像重建摘要`0ef60491…`；最终CI待验证。
+  仅provider登记路径改变，Gateway HTTP契约未变，不重复已通过的Gateway HTTP技能。
+  [模型验收方法](agents/dify-ops-first-slice/model-acceptance.md)与缓存恢复方法入仓；
+  原始SSE/工具事件/key/完整配置仅留私有0600记录。修复后的完整模型循环必须另次授权实跑，
+  不把无模型缓存验证或本地fixture当作OPS-07成功。
 ## 2026-10-22 · workspace 清理与命名：41 从 4 个降到 3 个，名字带公司
 
 ### 一、清了两个（含我自己造的那个）

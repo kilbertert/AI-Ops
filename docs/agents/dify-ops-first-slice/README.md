@@ -50,6 +50,25 @@ aiops --config <网关配置文件> admin ensure-ops-provider \
 因此输出 `credentials_verified=false`，**不能把 unchanged 当成凭据已验证**。凭据轮换需单独验证，
 命令不会静默覆盖旧 provider。网络失败可能已创建，重跑先查现状。
 
+新建成功后用同一payload再走官方`/tool-provider/api/update`：Dify 1.17.1删除/同名重建
+不会清除按workspace/provider名字保存24小时的凭据缓存，update会清除；
+已有provider的`unchanged`分支仍然零写，不把重跑当轮换。缓存刷新失败明确报“已创建但未确认”，
+不能记录`created`成功；后续`unchanged`也不证明恢复成功，须按下述方法处理并真实验证。
+
+### 同名provider重建后凭据缓存的恢复方法
+
+实际症状：本轮key与绑定摘要一致，模型工具请求仍`403 OPS_BINDING_REJECTED`，provider回读掩码仍对应旧key。
+只在确认是本轮新建、已授权的provider后，用服务身份读取key，构造完整`api/update` payload：
+`original_provider`与`provider`均`aiops-ops`，schema/icon/privacy_policy/custom_disclaimer取该provider回读值，
+credentials为独立key及Bearer四字段；经目标workspace的console client写回，再回读掩码与本轮key掩码比较。
+不要直接删Redis、重启Dify或复用旧key；接口原样重写仅用于新建provider的缓存恢复，不覆盖别人的配置。
+该管理路径不调用模型或业务；掩码匹配只证明回读变更，下一轮真实工具/模型调用仍需验收。
+
+行为依据为Dify 1.17.1
+[`ProviderConfigEncrypter.decrypt`](https://github.com/langgenius/dify/blob/1.17.1/api/core/helper/provider_encryption.py)
+优先读缓存、[`SingletonProviderCredentialsCache`](https://github.com/langgenius/dify/blob/1.17.1/api/core/helper/provider_cache.py)
+以名字索引并保存86400秒，官方`api/update`提交后调用`cache.delete()`。
+
 在 Dify 编辑对应 app，勾选 `aiops-ops` 工具并通过既有 AI-Ops 发布入口发布。
 合法目录与历史默认权限分开；新工具不因升级默认获权。新 provider 全关闭/删掉后发布，
 新权限清空；未声明旧 provider 时保留旧已发布七工具权限，避免迁移顺带关掉旧业务。
