@@ -103,6 +103,8 @@ class ReadyOutcome:
     state: str
     plugins_installed: tuple[str, ...] = ()
     credential_written: bool = False
+    #: 当前生效凭据是否**被我们切到了** `aiops-workspace`（已经是它则为 False）。
+    credential_activated: bool = False
     app_id: str = ""
     note: str = ""
     #: 模板导入时 Dify 给的告警（``completed-with-warnings``）。**不是失败**，但要说出来 ——
@@ -117,6 +119,7 @@ class ReadyOutcome:
             "state": self.state,
             "plugins_installed": list(self.plugins_installed),
             "credential_written": self.credential_written,
+            "credential_activated": self.credential_activated,
             "app_id": self.app_id,
             "note": self.note,
             "template_warnings": list(self.template_warnings),
@@ -169,6 +172,10 @@ def ensure_ready(
             credentials={"api_key": settings.model_api_key, "endpoint_url": settings.model_endpoint},
             name=CREDENTIAL_NAME,
         )
+        # **写完还要让它生效。** Dify 按 ``created_at DESC`` 选当前凭据，所以在**迁移过的**
+        # workspace 里，复制过来的旧凭据仍排在前面 —— 2026-10-22 在 41 上实测：凭据写成功、
+        # 状态推到 ready，对话却 401（生效的是 key 已失效的 ``deepseek-official``）。
+        activated = console.activate_provider_credential(workspace_id, TEMPLATE_PROVIDER, CREDENTIAL_NAME)
     except ConsoleApiError as exc:
         raise EnsureError(exc.code, f"写 provider 凭据失败：{exc.message}") from exc
 
@@ -195,6 +202,7 @@ def ensure_ready(
         state="ready",
         plugins_installed=installed,
         credential_written=wrote_credential,
+        credential_activated=activated,
         app_id=app_id,
         note=(
             "ready（模板已存在，未重复导入）"
