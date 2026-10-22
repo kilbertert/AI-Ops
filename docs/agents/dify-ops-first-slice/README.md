@@ -110,3 +110,49 @@ M3的 `AIOPS_GATEWAY_AGENT_RUN_CONFIG_FILE`、`AIOPS_GATEWAY_EXECUTION_MANIFEST_
 不需要另开主机访问或修改网络。模型已选择不证明额度可用或模型循环成功。
 
 真实验收前的变更范围和恢复条件见[验收变更单](live-acceptance-plan.md)。
+
+### 固定输入真实联调与恢复（2026-10-22 已实跑）
+
+按变更单取得本轮目标/数据/窗口授权后执行，不默认重复上一轮样本。固定输入联调不调用模型，
+验的是 Dify 的真实凭据存储、出站、Gateway 发布权限、业务读取与恢复；不是自主模型循环。
+
+1. 基线：服务 Python 读取两份配置、目标 app 完整 `model_config` 与 export DSL、已发布快照，
+   0600保存在私有目录；只输出摘要。配置备份取**执行前最新值**，不能恢复几小时前的文件覆盖其他工作。
+   操作应用接口的脚本以服务身份运行；主机配置安装/重启只由本轮授权的管理身份执行。
+2. 制品：原/候选配置、绑定和独立key各自计算SHA-256，经
+   `dev-host cp <目标> <本地制品> --dest <私有暂存路径> --artifact-sha256 <摘要>` 传输。
+   暂存目录0700、文件0600且属于服务身份；在服务venv中用 `GatewayServerSettings.from_env().validate()`
+   预检完整候选，断言运维地址非空、consumer共享地址/逻辑执行环境/M3项为空。
+   安装前比较原件摘要；以同目录候选原子替换，按授权重启Gateway并检查health。失败恢复原配置。
+3. Dify保存：先在本次一次性app演练完整body的 `POST /console/api/apps/<id>/model-config`，
+   export回读业务配置相等；现役app只添加新provider的两个条目，旧字段逐项核对未变。
+   `DELETE /console/api/apps/<id>` 成功是**204空正文**，用HTTP状态判断并GET404回读，
+   不交给必须JSON正文的客户端，也不因解析错误再次删除其他对象。
+4. 发布：登记provider后经既有 `POST /v1/dify/publish` 发布当前绑定app，
+   服务发布key现场读取，回读 `allowed_tools` 及有效版本。
+5. 存储凭据验证：`GET /console/api/workspaces/current/tool-provider/api/get?provider=aiops-ops`
+   回读schema与掩码credentials，原样交给Dify自己的测试入口：
+
+   ```json
+   {"provider_name":"aiops-ops","tool_name":"order_list",
+    "credentials":{"auth_type":"api_key_header","api_key_header":"Authorization",
+                   "api_key_header_prefix":"bearer","api_key_value":"<回读掩码>"},
+    "parameters":{"page":1,"page_size":1},"schema_type":"openapi","schema":"<回读schema字符串>"}
+   ```
+
+   credentials必须使用provider回读的字段字典。`test/pre`按已登记provider
+   恢复匹配的掩码值再组装Bearer，结果的`result`是JSON字符串，解析出`result/evidence`并重算摘要。
+   一次列表选择其唯一订单，再一次 `charging_info`，不用手填其他订单；SQL/CPMS各一次独立对照。
+   不自动重试。HTTP200内有`error`或坏正文均失败，不能以200概括成功。
+6. 撤权/恢复：保留新provider条目并关闭新两工具，发布、回读权限并分别验证403；
+   然后禁用key绑定（保留行以支持空名单发布），恢复完整原app配置并经同一发布门恢复七工具。
+   `POST /console/api/workspaces/current/tool-provider/api/delete` body为 `{"provider":"aiops-ops"}`，
+   仅删除本次创建且不再被app使用的provider，回读目录确认不存在。
+7. 最后恢复原Gateway配置、授权重启并核对**两份配置**摘要与基线一致，进程/文件开关关闭、health正常、
+   新路由返回404 `OPS_TOOLS_DISABLED`。发布版本与审计保留；若撤权时内容已等于原版本，
+   恢复发布为`unchanged`，不要求生成额外版本。
+
+Dify 1.17.1 上述存储凭据行为的源码依据：
+[`test_api_tool_preview`](https://github.com/langgenius/dify/blob/1.17.1/api/services/tools/api_tools_manage_service.py)
+及[工具控制器](https://github.com/langgenius/dify/blob/1.17.1/api/controllers/console/workspace/tool_providers.py)。
+版本变化时重新核对，不能从这条证据推断真人身份、模型回答或全环境零调用。
