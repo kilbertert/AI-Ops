@@ -62,7 +62,10 @@ class _FakeRAGFlow:
 
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
-        self.response: Any = {"code": 0, "data": {"cookies": {"session": "s-1"}}}
+        # Shaped like the real one (41, 2026-10-22): the session lives in a
+        # `Set-Cookie` header; `data` carries only the user profile.
+        self.response: Any = {"code": 0, "data": {"email": "x@kb.internal"}}
+        self.set_cookie = "session=s-1; HttpOnly; Path=/"
         self.status = 200
         self.base = ""
 
@@ -76,6 +79,8 @@ class _FakeRAGFlow:
                 upstream.calls.append({"path": self.path, "body": body})
                 raw = json.dumps(upstream.response).encode()
                 self.send_response(upstream.status)
+                if upstream.set_cookie:
+                    self.send_header("Set-Cookie", upstream.set_cookie)
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(raw)))
                 self.end_headers()
@@ -189,7 +194,7 @@ def test_a_rejected_login_is_a_refusal_not_an_empty_session(tmp_path: Path, ragf
 
 def test_a_200_without_cookies_is_also_a_refusal(tmp_path: Path, ragflow: Any) -> None:
     store = _store(tmp_path)
-    ragflow.response = {"code": 0, "data": {}}
+    ragflow.set_cookie = ""
 
     with pytest.raises(RAGFlowLoginError) as caught:
         open_console(
