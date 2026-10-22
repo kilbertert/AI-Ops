@@ -673,6 +673,84 @@ def _onboarding_settings_or_exit(ctx: typer.Context, *, needs_embedding: bool) -
     return settings
 
 
+@admin_app.command("check-knowledge-triple")
+def check_knowledge_triple_command(
+    ctx: typer.Context,
+    db: Annotated[Path | None, typer.Option("--db", help="gateway 数据库文件")] = None,
+    workspace_names: Annotated[
+        str,
+        typer.Option(
+            "--workspace-names",
+            help="Dify 的 workspace 列表（`id=name,id=name`）；不给则不判断 workspace 是否真的在 Dify 里",
+        ),
+    ] = "",
+) -> None:
+    """一个租户"真的能用知识库"要的三样东西齐不齐（#927）。
+
+    三项**分开报**：缺 workspace / 缺 RAGFlow 租户 / 模型没校验过。三种半成品的修法不同，
+    压成一个"不完整"会让人回头再查三张表。
+
+    退出码：0 全部完整 / 1 有不完整的租户 / 2 缺配置。
+    """
+    from aiops_diagnostics.gateway_store import GatewayStore
+    from aiops_diagnostics.knowledge_triple import check, render
+
+    settings = GatewayServerSettings.from_env()
+    database = (db or settings.database_file).expanduser()
+    # **Refuse a database that is not there.** `GatewayStore` creates one on open,
+    # so a typo would hand back an empty store whose "no tenants" reads as a clean
+    # bill of health — an inspection of the wrong file presented as a pass.
+    if not database.is_file():
+        typer.secho(
+            f"数据库不存在：{database}。核对要读真实库，不能新建一个空的（那样每个租户都是 0 个）。",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    names: dict[str, str] = {}
+    for pair in filter(None, (part.strip() for part in workspace_names.split(","))):
+        key, _, value = pair.partition("=")
+        if not key.strip():
+            typer.secho(f"--workspace-names 里有一项没有 id：{pair!r}", fg=typer.colors.RED, err=True)
+            raise typer.Exit(code=2)
+        names[key.strip()] = value.strip()
+
+    results = check(
+        store=GatewayStore(database), environment=settings.environment, dify_workspace_names=names
+    )
+    typer.echo(render(results))
+    raise typer.Exit(code=0 if all(item.ok for item in results) else 1)
+
+
+@admin_app.command("plan-knowledge-migration")
+def plan_knowledge_migration_command(
+    ctx: typer.Context,
+    workspace: Annotated[str, typer.Option("--workspace", help="目标租户 workspace 的 Dify tenant id")],
+    datasets: Annotated[
+        str, typer.Option("--datasets", help="JSON：数据集行（id/name/tenant_id/external_knowledge_api_id）")
+    ],
+    apis: Annotated[str, typer.Option("--apis", help="JSON：外部知识库模板行（id/name/tenant_id）")],
+) -> None:
+    """只算不改：把外部知识库配置搬进租户 workspace 会发生什么（#927）。
+
+    输入是两棵快照（由调用方从 Dify 的 Postgres 导出），所以这条命令不连数据库、
+    不写任何东西 —— 三个已知坑都在"决定"里，把它们做成一个可以反复推演的纯函数。
+    """
+    import json as _json
+
+    from aiops_diagnostics.dify_knowledge_migration import plan
+
+    try:
+        dataset_rows = _json.loads(datasets)
+        api_rows = _json.loads(apis)
+    except _json.JSONDecodeError as exc:
+        typer.secho(f"输入不是合法 JSON：{exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=2) from exc
+    result = plan(dataset_rows, api_rows, workspace_id=workspace)
+    typer.echo(_json.dumps(result, ensure_ascii=False, indent=2))
+    typer.secho("以上是计划，没有写任何东西。搬完之后用同一份输入跑 verify。", err=True)
+
+
 @admin_app.command("onboard-tenant")
 def onboard_tenant_command(
     ctx: typer.Context,
