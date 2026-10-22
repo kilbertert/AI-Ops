@@ -16,6 +16,151 @@
   排练删除接口空正文触发JSON客户端错误，删除是否完成另行回读，不能把报错当作未删除。
   后续以合并部署制品继续既有授权：固定列表一条→状态→对照→撤权→恢复；不调用模型。
 
+## 2026-10-22 · #887 的隔离 AC：用平台身份验，而不是让租户用户进 Dify
+
+**结论先行**：#887 那条 AC 的措辞（「**该租户的人**在新 workspace 里能看到自己的 app」）
+与仓库里的权限设计不一致。**不是验收失败，是 AC 问错了对象。**
+
+### 一、为什么租户用户进不去 Dify：那是设计
+
+```
+角色 1                    系统管理员            tenant_id=-1
+角色 2110974759717707777  AI-Ops 智能体编辑    tenant_id=-1
+角色 2110974760334270465  AI-Ops 智能体发布    tenant_id=-1
+```
+
+`aiops:agent:edit` / `aiops:agent:publish` 两个权限码**挂在平台级角色上**（`tenant_id=-1`），
+持有者全是平台账号（`system` / `huqq` / `zhouzx` / `dev` / `chenj` / `adminDev` …）。
+
+ADR-0029 定的是「权限码建在 UPMS」；ADR-0056 明写「`aiops:agent:edit` 是**全局权限码**，
+**无法按租户授予编辑范围**」——而"无法按租户授予"正是后来引入多 workspace 的触发条件。
+
+⇒ 租户 `1942` 的主账号 `ulink` 有 2 个角色、430 条权限码，`aiops:*` **0 条**，
+登录代理按设计拒绝它：`MISSING_EDIT_PERMISSION`。**这个拒绝是对的。**
+
+### 二、验证时我刻意没做的一件事
+
+给 `ulink` 补上这个权限码可以让它登进去，但那是**给真实客户账号一条平台级权限**，
+而且验出来的就不再是"租户用户能否看到自己的 app"，而是"平台用户能否看到"。
+**没做**，也不建议做。
+
+### 三、替代证据：跨 workspace 隔离（只读，2026-10-22）
+
+以平台 admin key + `X-WORKSPACE-ID` 分别读三个 workspace 的 app 列表：
+
+| workspace | app 数 | 内容 |
+|---|---|---|
+| `d7d788cf`（platform） | 1 | `aiops-workspace-template` |
+| `c3f871e1`（租户 1942） | 3 | 模板 + `aiops-41-kefu-agent` + `aiops-41-ops-methodology-agent` |
+| `1f3bda25`（租户 1783） | 0 | — |
+
+两两交集 **0**：`ISOLATED: True`。也就是说**同一个平台身份在三个 workspace 里看到的是三份
+互不相交的对象集** —— 租户 1942 的两个生产 app 不在 platform、也不在 1783。
+
+### 四、这条证据**不能**证明什么（据实）
+
+- **不能证明"租户用户自己登录后只看到自己的"**：Dify 没有面向租户用户的入口设计，
+  这条路径不存在，所以无法用它取证。
+- **能证明的是**：workspace 之间的对象集合是隔离的，且解析/发布/试运行三条路径都按
+  `(租户, 环境)` 解析（#884/#885 的单测 + #940 的真机发布/试运行）。
+- **租户用户对智能体的接触面是 App / 小程序**，不是 Dify 控制台。那条链路的验收在
+  M3 那边，不在本票。
+
+### 五、如果产品确实想让租户自己编辑智能体
+
+那是一次**权限模型变更**（把 `aiops:agent:edit` 从全局改成按租户授予），需要 ADR 与
+安全评审，不是本票能顺手做的。已按此口径在 #887 记明。
+
+## 2026-10-22 · 登录时代的 join 链路：四个真问题与一次误操作（#883 真机回收）
+
+**背景**：#883（登录时把人 join 进 workspace）合并很久了，但 41/36 上**一次都没真的跑过**。
+这一轮把链路真正接起来，逐个暴露四个问题。**全部在真机上发现，没有一个是单测能抓到的。**
+
+### 一、四个问题
+
+| # | 问题 | 为什么会一直没被发现 |
+|---|---|---|
+| 1 | `GET /v1/dify/workspace` 在 41 上**从未配置** `AIOPS_GATEWAY_INTERNAL_TOKEN_SECRET`，整条路由 302→**404** | #879 建端点、#883 调端点，两个 PR 各自绿；而 join 失败按设计**不阻断登录** ⇒ 零报警 |
+| 2 | 代理的 `GATEWAY_URL` 填了 `172.18.0.1:8788` | 那是**41 本机**的 docker 网桥；代理在 36，36 的 `172.18.0.1` 是它自己的网桥 |
+| 3 | Dify 里账号的 `email` **没有**环境前缀，与映射表的 `dify_email` 不一致 | #864 的「就地重标」只改了**映射表一列**，没改 Dify 的账号行；登录不看 email 所以从不暴露，join 第一次跑就 `account not found` |
+| 4 | 该账号的 `current` 指向**旧的共享 workspace** | 迁移的"对象"搬完了，"人"没搬 —— 见 #887 |
+
+### 二、逐条判据
+
+**1. 端点 404 → 200**。补 `AIOPS_GATEWAY_INTERNAL_TOKEN_SECRET` 到 `/etc/aiops-41/gateway.env`（服务读的是这个文件，不是 `production.env` —— 第一次写错文件，进程里看不到），重启后三个租户全部 200：
+
+```
+1942105476598861824 -> 200 {"workspace_id":"c3f871e1-…","environment":"41"}
+platform            -> 200 {"workspace_id":"d7d788cf-…","environment":"41"}
+1783022023241633792 -> 200 {"workspace_id":"1f3bda25-…","environment":"41"}
+```
+
+**2. 走公网，不走隧道。** 同机已有的发布桥用的就是 `AIOPS_CONSOLE_BRIDGE_GATEWAY_URL=https://api.mall.qushiyun.com`。
+从 36 实测公网 + 内部令牌 → 200。隧道只在公网**根本不可达**时成立（41→36 的 inner_api 是那种情形）。
+
+**3. email 对齐**（`accounts` 表，先 `pg_dump -t accounts` 备份）：
+- `email` / `normalized_email` **都没有唯一约束**（普通索引），目标值当时 **0 行**；
+- `oauth_access_tokens` 按 `account_id` 关联，**不涉及 email**；会话按 id 签发 ⇒ 改 email 不断登录。
+
+```
+8b218530-… 1454348737375174658@aiops-login.invalid
+        →  41-1454348737375174658@aiops-login.invalid
+```
+
+**成因在 Dify 侧**：`TenantService.join_enterprise_workspace_member` 的查询是
+`Account.id == account_id AND Account.email == email` —— **两个条件都要匹配**。
+
+**4. join 200，成员到位**：
+
+```
+platform members: dify-admin@aiops.local(owner), 41-1454348737375174658@aiops-login.invalid(editor)
+```
+
+### 三、我在这一轮造成的两处后果（据实）
+
+1. **建了一个永久 workspace `zz-probe-ik`**。我为验证 inner_api 的 key 可用，用了
+   `POST /inner/api/enterprise/workspace` —— 那是**创建**接口，不是只读探针。
+   **Dify 没有删除 workspace 的 API，这条是永久的。** 正确做法是用只读端点（如
+   `GET /console/api/all-workspaces`）验鉴权。
+2. **先把 `GATEWAY_URL` 配错，让登录短暂变坏**（`DIFY_WORKSPACE_LOOKUP_FAILED`）。
+   在改动之前登录是成功的（只是不 join）；改动中一度变成登不进去。
+
+### 四、`current` 切换（平台账号的迁移，2026-10-22 执行）
+
+join 成功还不够：该账号的 `current` 仍指向**旧的共享 workspace**，登录后看到的还是它。
+所以这一步单独执行了一次。
+
+**先确认"哪一列才是真值"**（这一步决定了改哪里）：
+
+- `Account.set_tenant_id_with_session` 只设**内存属性**（`self._current_tenant`），**不写库**；
+- 持久状态只有 `tenant_account_joins.current`，代码里唯一一处读取：
+  `where(TenantAccountJoin.account_id == account.id, TenantAccountJoin.current == True)`。
+
+⇒ 改 `tenant_account_joins` 就是改对了地方，不存在第二个需要同步写的字段。（若只改了别的列，
+登录后会落回旧 workspace，而"看起来改过了"。）
+
+**切换**（单事务；`tenant_account_joins` 已先 `pg_dump` 备份）：
+
+```
+切换前  AI-Ops Admin's Workspace(2db44904…)  current=t
+        aiops-41-platform(d7d788cf…)        current=f
+
+切换后  AI-Ops Admin's Workspace(2db44904…)  current=f
+        aiops-41-platform(d7d788cf…)        current=t
+```
+
+`switch_tenant` 的语义是把该账号**其它所有 join 的 current 全置假**再置目标为真，**同一个事务**；
+本处按同样的语义手写，因为它不是后台自动化路径（runbook 明确写过不要用 `/workspaces/switch`
+做后台动作 —— 那对并发请求可见）。这是**一次性迁移**，不是每次登录都做的事。
+
+用户登录验证通过。
+
+### 五、据实（未完成）
+
+- **租户 1942 的真实成员仍未 join**：本轮验的是平台账号（`tenant_id=-1`）落进 `platform`。
+- **没有以真实租户成员身份验过 #887 的隔离 AC**：本轮验的是**平台账号**（`tenant_id=-1`）落进
+  `platform` workspace；租户 1942 的真实成员仍未 join。
+- **95 未验**。
 ## 2026-10-22 · 知识库 1:1:1 在 41 上的真机验收：六个真缺陷，全部由真机暴露
 
 **范围**：41（CD 部署 `4916eafc9fd0`，`aiops-gateway-41.service` active）。调用者身份是

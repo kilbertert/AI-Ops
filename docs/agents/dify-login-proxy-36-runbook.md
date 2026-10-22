@@ -152,6 +152,23 @@ PY'
 ⚠️ 两个探针都**只构造 settings**（闸门一会读环境文件，那是它的判据本身）：
 不连公司 UPMS、不连 Dify、不碰生产映射表，也不写任何文件。
 
+## 3.6 四键（#883）与 `GATEWAY_URL` 填什么（2026-10-22 踩过）
+
+按 #883，代理要在登录时把这个人 join 进他租户的 workspace。四键**成对**，全空 = 维持单一固定工作区。
+
+| 键 | 填什么 | 不要填 |
+|---|---|---|
+| `GATEWAY_URL` | 那个环境的**公网入口**，如 `https://api.mall.qushiyun.com` | ❌ 网关主机的本机地址（`172.18.0.1:8788`） |
+| `GATEWAY_INTERNAL_TOKEN` | 41 `gateway.env` 里 `AIOPS_GATEWAY_INTERNAL_TOKEN_SECRET` 的**同一个值** | — |
+| `INNER_API_BASE_URL` | 36 本机转发器 `http://127.0.0.1:15001` | — |
+| `INNER_API_KEY` | 与 41 `production.env` 的 `AIOPS_GATEWAY_DIFY_INNER_API_KEY` **同一把** | — |
+
+**为什么 `GATEWAY_URL` 必须是公网**：代理在 36，网关在 41。`172.18.0.1` 在**两台机器上都是各自的 docker 网桥** —— 在 36 上填它，请求打到 36 自己的网桥然后超时，登录被拒，错误码 `DIFY_WORKSPACE_LOOKUP_FAILED`（措辞把人引向"workspace 没建"，而实际是网络）。
+
+**为什么不用 SSH 隧道**：同一台 36 上已有的发布桥（`AIOPS_CONSOLE_BRIDGE_GATEWAY_URL`）走的就是同一个公网入口。隧道只在公网**根本不可达**时才成立 —— 41→36 的 inner_api 是那种情形（Dify 的 5001 不对外发布）。给这个跳转拉隧道，会让"加一个环境"变成一次主机运维动作，而多租户本就按环境线性增长。
+
+**41 侧的前置**（这一轮才发现一直缺）：`GET /v1/dify/workspace` 在 `AIOPS_GATEWAY_INTERNAL_TOKEN_SECRET` 未配置时**整条路由 404**。两个 PR 各自都绿，合起来是死链；而 join 失败按设计**不阻断登录** ⇒ 没有任何报警。
+
 ## 4. nginx 两处配置（缺一不可）
 
 `ops/dify-console-bridge/dify-console-10008.conf` 与 `ops/dify-login-proxy/dify-login-proxy.conf`
