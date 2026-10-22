@@ -35,6 +35,55 @@
 - 运维方法自检：本次实际远端读取由既有部署dry-run触发，方法已在部署脚本/手册；新登记方法已写入首片手册，
   部署后按服务PID只查配置是否存在及源码摘要的方法补入首片手册；私有令牌、会话或主机原始日志未进入文档。
 
+## 2026-10-22 · reconcile dry-run 复核：注册表仍保留新 app id（#887 AC）
+
+**目的**：#887 的 AC 要求"改完之后再查仍是新值"—— 只对当前值不算，必须证明**收敛不会
+把它写回旧值**。用 `reconcile_dify_registry(dry_run=True)`（runbook §3.1-bis 的
+registry-only 路径，不走整份 `admin reconcile`，后者会 fork 新版本）。
+
+先备份：`/var/lib/aiops-41/gateway/gateway.db.bak-registry-dryrun-20261022050822`。
+
+### 一、结果
+
+```
+DifyRegistryReport(tenant_id='1942105476598861824', business_entry='consumer',
+                   app_id='88fc20bd-7502-4932-91ee-5f632181cac3', action='unchanged')
+DifyRegistryReport(tenant_id='1942105476598861824', business_entry='operator',
+                   app_id='137cc417-f068-43c2-9d4a-43ebd254ea01', action='unchanged')
+```
+
+两行 **`unchanged`** ⇒ 清单与注册表一致，收敛不会写回旧值。dry-run 之后直接读库，
+`dify_app_registry` 仍是上面两个新 id（`88fc20bd…` / `137cc417…`）。
+
+### 二、这次 dry-run 先被拒了一次（值得记）
+
+第一次用的是 **41 上那份** `ops/environments/env-41.toml`，被 `_require_no_source_switch` 拒：
+
+```
+这些 agent 库里仍绑着 Dify app，本轮却改由清单提供正文（旧绑定不会被自动清除，
+线上会出现两个来源）…  1942105476598861824/canary-客服
+```
+
+真因：**CD 只推 `src/`，41 上的 `ops/` 是旧副本且无任何信号**——
+
+```
+仓库  148afad5f8bdb41cd2c8432616f1e6557439819ccb3dcbe13de92c66b108ce4a
+41 上 c81f783f73d044f7e52cacd01aafba256670a72c9463129703cff256420f0d1f
+```
+
+旧清单里 `canary-客服` 那一行**没有** `[[dify_apps]]` 绑定，而库里绑着 —— 按它收敛会让
+线上出现两个正文来源。**拒绝是对的**。换成仓库那份（先 `scp` 到 `/tmp`、核对 sha）后
+两行 `unchanged`。
+
+⇒ 已写进 `docs/agents/env-41-runbook.md` §3.1-bis-0：**收敛前必须先从仓库取清单并核对 sha**。
+
+### 三、据实
+
+- 这次验的是**注册表这一半**；`[[agents]]` 那一半的漂移（`opening_questions` / `quick_commands`）
+  仍在，整份 `admin reconcile` 仍会 fork 新版本 —— 本记录不涉及。
+- 41 上的 `ops/` 旧副本**没有修**（不在本次范围）；它会在下次有人照 runbook 收敛时再次出现，
+  所以危险写在 runbook 里，而不是"已经解决"。
+
 ## 2026-10-22 · 租户 1942 的真实发布 + 试运行在 41 上跑通（#887 AC）
 
 **前置**：#881 的三步在 41 真机跑通（PR #933），两个 workspace 的模板 app 已选

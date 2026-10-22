@@ -903,6 +903,40 @@ runuser -u aiops41 -- .venv/bin/aiops --config /etc/aiops-41/production.env admi
 - 发布前 KB 活性校验会真实调用 kb-service；供应商欠费时（embedding 502）会误报
   "知识库不存在"，**这是误报**，充值后重试即恢复，不要据此删绑定。
 
+### 3.1-bis-0 ⚠️ **41 上的 `ops/` 是旧副本**，收敛前必须先从仓库取清单（2026-10-22 实测）
+
+CD 只推 `src/`（`deploy-41.sh` 用 `git archive … src/aiops_diagnostics`），**不碰 `ops/`**。
+所以 `/opt/aiops-41/ops/environments/env-41.toml` 会随仓库漂移，而且**没有任何信号**。
+
+2026-10-22 实测：
+
+```
+仓库   ops/environments/env-41.toml   148afad5f8bdb41cd2c8432616f1e655…
+41 上  /opt/aiops-41/ops/environments/env-41.toml   c81f783f73d044f7e52cacd01aafba25…
+```
+
+拿 41 上那份跑 `reconcile_dify_registry(dry_run=True)`，被
+`_require_no_source_switch` **拒绝**：
+
+```
+这些 agent 库里仍绑着 Dify app，本轮却改由清单提供正文（旧绑定不会被自动清除，
+线上会出现两个来源）…  1942105476598861824/canary-客服
+```
+
+**拒绝是对的**：旧清单里 `canary-客服` 那一行没有 `[[dify_apps]]` 绑定，而库里绑着；
+真按它收敛会让线上出现两个正文来源。换成仓库那份（有绑定）后两行都 `unchanged`。
+
+**所以每次收敛前先做这两步**：
+
+```bash
+# 1) 从仓库取，别用 41 上那份
+scp <worktree>/ops/environments/env-41.toml aiops-41:/tmp/env-41-repo.toml
+# 2) 核对它确实是你以为的那一版（把 sha 写进验收记录）
+sha256sum ops/environments/env-41.toml
+```
+
+**整份 `admin reconcile` 也同理**：它读的就是同一个路径，用旧清单等于按旧声明收敛。
+
 ### 3.1-bis 只收敛 `[[dify_apps]]`（2026-10-20 新增）
 
 **什么时候用它而不是整份 `admin reconcile`**：要改的只是「哪个 app 服务哪个
