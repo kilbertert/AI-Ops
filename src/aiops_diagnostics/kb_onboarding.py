@@ -564,6 +564,73 @@ def rotate_credential(
     return {"tenant_id": tenant_id, "environment": environment, "ragflow_email": email}
 
 
+def adopt_existing_account(
+    *,
+    tenant_id: str,
+    environment: str,
+    store: GatewayStore,
+    kb: KbAdminClient,
+    credential_key: str,
+    password: str,
+    log: Any = None,
+) -> dict[str, Any]:
+    """接管一个**上游早已存在、但本地没有凭据**的租户（#923 第 2 项）。
+
+    为什么需要它。kb-service 的懒注册用 ``secrets.token_urlsafe(18)`` 生成密码，而
+    ``tenancy.db`` 只存 token、**不留密码**。于是「上游有账号、我们不知道那把密码」是一种
+    真实状态，且 ``onboard_tenant`` 对它是无能为力的：
+
+    * 走「注册」分支 ⇒ ``create_tenant`` 见到已有行就 ``return dict(row)``，不改密码，
+      我们记下一把上游不认的密码（41 真机第三轮正是这个形状）；
+    * 走「轮换」分支 ⇒ 需要旧密码，而我们没有。
+
+    所以这条路径的输入是**刚刚在带外设好的那把密码**，且它**不碰上游**：只回答一个问题
+    ——这一把现在真的能登录吗？能才写进本地，不能就拒绝并保持本地原样。不验证就记下来，
+    等于把"我们以为的"当成"上游实际的"，而那正是要消灭的形状。
+
+    口令**从 stdin 进**，不接受命令行参数：``ps`` 与 shell 历史都会留下 argv。
+    """
+    say = log or (lambda _line: None)
+    if len(credential_key.encode("utf-8")) not in (16, 24, 32):
+        raise OnboardError(
+            "CREDENTIAL_KEY_INVALID",
+            "AIOPS_GATEWAY_RAGFLOW_CREDENTIAL_KEY must be 16/24/32 bytes",
+            step="credential-key",
+        )
+    if not password:
+        raise OnboardError("CREDENTIAL_EMPTY", "no password was provided on stdin", step="adopt")
+    if store.get_ragflow_tenant(tenant_id, environment) is not None:
+        raise OnboardError(
+            "RAGFLOW_TENANT_ALREADY_ONBOARDED",
+            f"tenant {tenant_id} already has a stored RAGFlow credential in {environment}; "
+            "use rotate-ragflow-credential instead of adopt",
+            step="adopt",
+        )
+    # **先证明、再落盘。** 反过来会留下"我们记着一把上游不认的密码"，而那要到运营点进
+    # 控制台才暴露，届时错误信息只会说"登录被拒"。
+    if not _already_rotated(kb, tenant_id=tenant_id, password=password):
+        raise OnboardError(
+            "RAGFLOW_ADOPT_VERIFY_FAILED",
+            "RAGFlow does not accept this password for the tenant; fix it upstream before adopting",
+            step="adopt",
+        )
+    email = derive_email(tenant_id, domain=DEFAULT_TENANT_DOMAIN)
+    store.record_ragflow_tenant(
+        tenant_id,
+        environment,
+        ragflow_email=email,
+        credential_ciphertext=encrypt_credential(password, credential_key),
+        model_checked=False,
+    )
+    say(f"adopted existing RAGFlow account for tenant {tenant_id}")
+    return {
+        "tenant_id": tenant_id,
+        "environment": environment,
+        "ragflow_email": email,
+        "adopted": True,
+    }
+
+
 def _already_rotated(kb: KbAdminClient, *, tenant_id: str, password: str) -> bool:
     """Did the upstream actually accept the new password?
 
