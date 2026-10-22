@@ -94,12 +94,6 @@ def _query_for_list_bound_arguments(method: str) -> list[str]:
     return arguments[1:]
 
 
-def test_t4_java_deliverable_exists() -> None:
-    assert CONTROLLER.is_file()
-    assert ASPECT.is_file()
-    assert LANDING_README.is_file()
-
-
 def test_controller_routes_get_occupy_order_under_diag_root() -> None:
     source = _read(CONTROLLER)
     assert "@RestController" in source

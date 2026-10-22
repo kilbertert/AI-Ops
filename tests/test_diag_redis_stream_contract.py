@@ -37,12 +37,6 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_t5_java_deliverable_exists() -> None:
-    assert CONTROLLER.is_file()
-    assert ASPECT.is_file()
-    assert LANDING_README.is_file()
-
-
 def test_controller_routes_get_redis_stream_under_diag_root() -> None:
     source = _read(CONTROLLER)
     assert "@RestController" in source

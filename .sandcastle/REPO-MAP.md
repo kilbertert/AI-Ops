@@ -38,6 +38,7 @@ no project argument. Both answer *where* something is; neither replaces reading 
 - script "cd:watch": node .sandcastle/cd-watch.mjs (package.json)
 - script "cd:state": node .sandcastle/deploy-state.mjs (package.json)
 - script "cd:watch:test": node .sandcastle/cd-watch.test.mjs (package.json)
+- script "test": ./tools/test.sh (package.json)
 - console script "aiops": aiops_diagnostics.cli:app (pyproject.toml)
 - console script "aiops-tdengine-proxy": aiops_diagnostics.tdengine_proxy:main (pyproject.toml)
 - console script "aiops-gateway": aiops_diagnostics.gateway_server:main (pyproject.toml)
@@ -47,6 +48,7 @@ no project argument. Both answer *where* something is; neither replaces reading 
 
 - tests/ — 191 test file(s, recursive)
 - script "cd:watch:test": node .sandcastle/cd-watch.test.mjs
+- script "test": ./tools/test.sh
 - pytest (pyproject.toml / pytest.ini present)
 
 ## Docs
