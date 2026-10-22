@@ -84,9 +84,26 @@ HTTP 脚本在一次性数据库启动真实 Gateway，真实绑定与发布，�
 `bool(env.get("AIOPS_GATEWAY_OPS_BINDINGS_FILE", "").strip())`；
 再用 `dotenv_values` 读该进程 `AIOPS_GATEWAY_SERVER_CONFIG_FILE` 所指文件，同样只输出该键是否非空。
 **两处都为空才可记录新工具尚未启用**；不要打印整个环境或配置。
-M3的 `AIOPS_GATEWAY_AGENT_RUN_CONFIG_FILE`、`AIOPS_GATEWAY_EXEC_MANIFEST_FILE`、
+M3的 `AIOPS_GATEWAY_AGENT_RUN_CONFIG_FILE`、`AIOPS_GATEWAY_EXECUTION_MANIFEST_FILE`、
 `AIOPS_GATEWAY_EXEC_CONFIG_REQUIRED` 也只核对是否配置。
 
 源码用 `hashlib.sha256(Path(<部署目录>/src/aiops_diagnostics/<文件>).read_bytes()).hexdigest()`，
 与合并提交的同文件字节独立比较；`__init__.py` 含部署版本戳，应按部署脚本生成的制品比较。
 仅健康与摘要一致证明部署身份，不证明provider登记、Dify模型循环或真实业务结果。
+
+### 从既有 Gateway 路径只读核对 Dify
+
+按环境手册使用该服务的 Python，脚本经 stdin 交给
+`dev-host exec <目标> --allow-service-exec --timeout 40 -- '<服务Python> -'`；
+先读 `/proc/<PID>/environ`，以 `bytes([0])` 切分并断言含 `PATH`，避免把字面的 `\\0` 当成 NUL。
+配置用 `dotenv_values(..., interpolate=False)` 读取，进程值优先于文件值。
+数据库以 `sqlite3.connect('file:<gateway.db>?mode=ro', uri=True)` 打开：
+只查询 `dify_workspaces` 的当前环境/租户、`dify_app_registry` 的 operator 行及对应 agent 的已发布版本。
+不要实例化会建表、修改文件权限的 manager/registry 类来完成只读检查。
+
+将现场读出的 console 地址、key、workspace 与 app 传给既有 `DifyDslClient(DifyDslSource(...))`；
+仅调用 `tool_provider_ids()` 和 `export_dsl()`。只输出 workspace 状态、模型标识、工具启用项、
+发布权限和导出 SHA-256，不输出完整 DSL、凭据或业务正文。这条路径复用服务已有的 Dify 连接，
+不需要另开主机访问或修改网络。模型已选择不证明额度可用或模型循环成功。
+
+真实验收前的变更范围和恢复条件见[验收变更单](live-acceptance-plan.md)。
