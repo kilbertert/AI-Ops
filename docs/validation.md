@@ -1,3 +1,72 @@
+## 2026-10-22 · 知识库控制台真浏览器验收：两个阻断级缺陷已修，真机闭环
+
+**范围**：41（合并 `9983123` 之后的 CD 部署）。Chromium + Playwright，真实公司账号
+（`system`，真令牌 + ddddocr 解公司验证码），设备侧经 `ssh -D` 从 41 出网。
+
+上一轮（同日早些时候）用 TestClient 得出的两条结论**都是错的**，本记录是修正后的闭环。
+
+### 一、修了什么
+
+| # | 缺陷 | 修法 |
+|---|---|---|
+| 7 | 会话 cookie 跨源不发：cookie 落在 `api.mall.qushiyun.com`（host-only），跳到 `36:10081` 时 Chromium 一条 Cookie 头都不发 | 新增 `kb.mall.qushiyun.com`（41 上 nginx → 36 的 RAGFlow），cookie 带 `Domain=.mall.qushiyun.com`（PR #952） |
+| 8 | 真实身份路径上 `roles` 恒为空集 ⇒ 知识库四条路由与 `/v1/agents` 对真实运营一律 403 | `company_permissions.py` 把公司 `aiops:agent:edit`/`aiops:agent:publish` 翻成内部角色（PR #952，ADR-0084） |
+| 9 | 「打开 RAGFlow」按钮从未部署 | 随 #952 部署；页面走 fetch 拿 target 再自行导航 |
+
+### 二、真机证据
+
+**角色（缺陷 8）**：真实平台账号调三条路由，修复前后对比：
+
+| 路由 | 修复前 | 修复后 |
+|---|---|---|
+| `GET /v1/knowledge/available` | **403** `KNOWLEDGE_FORBIDDEN` | **200** |
+| `GET /v1/knowledge/sources` | **403** | **200** |
+| `GET /v1/knowledge/console` | 未到达 | **409** `KNOWLEDGE_TENANT_NOT_ONBOARDED`（`tenant=-1`，正确拒绝） |
+
+浏览器里同一页面：整块「读取失败：knowledge-source configuration is not permitted」变成
+「本租户名下没有知识库……」，按钮出现且点击后给出可读原因。
+
+**cookie 与跳转（缺陷 7）**：用真实公司令牌、租户声明为已开户的 `9260rotatecheck`
+（构造身份，ADR-0058 —— 平台账号 `tenant=-1` 没有 RAGFlow 租户，走不到会话那一步）：
+
+```
+GET /v1/knowledge/console -> 200
+set-cookie: session=…; Domain=.mall.qushiyun.com; HttpOnly; Path=/; SameSite=lax
+{"target":"https://kb.mall.qushiyun.com","ragflow_email":"1af91041ec749a7c@kb.internal"}
+```
+
+真浏览器点「打开 RAGFlow」后：
+
+```
+LANDED:   https://kb.mall.qushiyun.com/
+JAR:      [('session', '.mall.qushiyun.com', '/')]
+BODY:     Home | Dataset | Chat | … | Welcome to RAGFlow | No dataset created yet
+SIGNED_IN: True
+```
+
+**这就是这条链路唯一无法用单测替代的判据**：不是「网关发出了 cookie」，也不是「cookie
+回放给 API 得 200」，而是**浏览器带着它跨了源、RAGFlow 认它、界面不是登录页**。
+
+### 三、新增的对外暴露（已记录）
+
+| 项 | 值 |
+|---|---|
+| 站点 | `kb.mall.qushiyun.com`（41，`*.mall.qushiyun.com` 已解析到 41） |
+| 证书 | Let's Encrypt，`/etc/aiops-41/tls-kb/{fullchain,privkey}.pem`，有效期至 2027-01-20 |
+| 反代 | `https://kb.mall.qushiyun.com` → `http://36.156.159.175:10081`（RAGFlow web） |
+| 访问控制 | **RAGFlow 自己的登录**，与本层同口径；不做 IP 白名单、不加额外认证 |
+| 回滚 | 删 `/www/server/panel/vhost/nginx/kb.mall.qushiyun.com.conf` + `nginx -s reload`；网关 `gateway.env` 备份在 `/root/gateway.env.bak-kbsite-*` |
+
+### 四、仍然没验的
+
+- **真实运营账号的端到端**：平台账号 `tenant=-1` 没有 RAGFlow 租户，所以 cookie 那一段
+  用的是构造租户。**「真实运营用自己的租户一路点进去」仍缺一次验收**，缺的是那个租户
+  在网关里的开户记录（`ragflow_tenants` 里目前只有验收租户与一个真实租户
+  `1783022023241633792`）。
+- **租户 `9260rotatecheck` 名下 0 个数据集**：上一轮说的「库建好了」是 `admin@ragflow.io`
+  名下的，不是任何租户的。这条链路的业务前提仍在。
+- 多租户隔离只验了「A 进得去」，没验「B 进不去」。
+
 ## 2026-10-22 · 「订单不属于该账户」排查：前端过滤已生效，故障现场仍未定位
 
 **范围**：41 生产只读复现 + 两个 APK 包静态分析。**未改任何生产代码、未写生产库。**
