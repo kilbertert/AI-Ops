@@ -51,6 +51,7 @@ class _KbService:
         self.repair_status = 200
         self.rotate_status = 200
         self.rotate_body: Any = None
+        self.verify_matches = True
         self.base = ""
 
     def handler(self) -> type[BaseHTTPRequestHandler]:
@@ -70,6 +71,9 @@ class _KbService:
                 elif self.path == "/kb/tenants/repair":
                     status = upstream.repair_status
                     payload = {"data": {"instances": ["maas"]}}
+                elif self.path == "/kb/tenants/verify-password":
+                    status = 200 if upstream.verify_matches else 401
+                    payload = {"data": {"matches": upstream.verify_matches}}
                 elif self.path == "/kb/tenants/rotate":
                     if upstream.rotate_body is not None:
                         status, payload = upstream.rotate_status, upstream.rotate_body
@@ -361,6 +365,7 @@ def test_rotation_writes_our_row_only_after_the_upstream_accepted(tmp_path: Path
         model_checked=True,
     )
     kb_service.rotate_status = 500
+    kb_service.verify_matches = False  # 探测也证明不了新密码生效
 
     with pytest.raises(OnboardError) as caught:
         rotate_credential(
@@ -449,6 +454,7 @@ def test_business_error_served_with_http_200_is_not_a_success(
         model_checked=True,
     )
     kb_service.rotate_body = {"code": 102, "message": "password change failed"}
+    kb_service.verify_matches = False
 
     with pytest.raises(OnboardError) as caught:
         rotate_credential(
@@ -553,3 +559,63 @@ def test_an_existing_account_whose_password_we_cannot_read_is_refused(
 
     assert caught.value.code == "RAGFLOW_CREDENTIAL_UNREADABLE"
     assert kb_service.calls == [], "接管不了就不要碰上游"
+
+
+def test_rotation_records_the_new_password_when_the_upstream_changed_despite_an_error(
+    tmp_path: Path, kb_service: Any
+) -> None:
+    """41 真机第五轮：改密成功、重建 token 失败 ⇒ 整条报 500 ⇒ 我们不回写。
+
+    那一刻上游已经是新密码、我们还是旧的，而报错只说"轮换失败"。下次轮换会拿过期的
+    旧密码去改，永远改不动。所以失败之后要**探一次**：新密码能登录吗？能就记下来。
+    """
+    store = _store(tmp_path)
+    store.record_ragflow_tenant(
+        TENANT,
+        ENVIRONMENT,
+        ragflow_email=derive_email(TENANT),
+        credential_ciphertext=encrypt_credential("old", CREDENTIAL_KEY),
+        model_checked=True,
+    )
+    kb_service.rotate_status = 500  # 改密之后的第二步失败
+    kb_service.verify_matches = True  # 但新密码其实已经生效
+
+    result = rotate_credential(
+        tenant_id=TENANT,
+        environment=ENVIRONMENT,
+        store=store,
+        kb=KbAdminClient(kb_service.base),
+        credential_key=CREDENTIAL_KEY,
+    )
+
+    assert result["upstream_changed_despite_error"] is True
+    row = store.get_ragflow_tenant(TENANT, ENVIRONMENT)
+    assert decrypt_credential(row["credential_ciphertext"], CREDENTIAL_KEY) != "old"
+
+
+def test_rotation_keeps_the_old_password_when_the_probe_cannot_prove_anything(
+    tmp_path: Path, kb_service: Any
+) -> None:
+    """证明不了就维持原判 —— 不拿一个可能错的密码覆盖掉手里的那把。"""
+    store = _store(tmp_path)
+    original = encrypt_credential("old", CREDENTIAL_KEY)
+    store.record_ragflow_tenant(
+        TENANT,
+        ENVIRONMENT,
+        ragflow_email=derive_email(TENANT),
+        credential_ciphertext=original,
+        model_checked=True,
+    )
+    kb_service.rotate_status = 500
+    kb_service.verify_matches = False
+
+    with pytest.raises(OnboardError):
+        rotate_credential(
+            tenant_id=TENANT,
+            environment=ENVIRONMENT,
+            store=store,
+            kb=KbAdminClient(kb_service.base),
+            credential_key=CREDENTIAL_KEY,
+        )
+
+    assert store.get_ragflow_tenant(TENANT, ENVIRONMENT)["credential_ciphertext"] == original

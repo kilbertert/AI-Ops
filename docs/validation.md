@@ -1,3 +1,58 @@
+## 2026-10-22 · #887 的隔离 AC：用平台身份验，而不是让租户用户进 Dify
+
+**结论先行**：#887 那条 AC 的措辞（「**该租户的人**在新 workspace 里能看到自己的 app」）
+与仓库里的权限设计不一致。**不是验收失败，是 AC 问错了对象。**
+
+### 一、为什么租户用户进不去 Dify：那是设计
+
+```
+角色 1                    系统管理员            tenant_id=-1
+角色 2110974759717707777  AI-Ops 智能体编辑    tenant_id=-1
+角色 2110974760334270465  AI-Ops 智能体发布    tenant_id=-1
+```
+
+`aiops:agent:edit` / `aiops:agent:publish` 两个权限码**挂在平台级角色上**（`tenant_id=-1`），
+持有者全是平台账号（`system` / `huqq` / `zhouzx` / `dev` / `chenj` / `adminDev` …）。
+
+ADR-0029 定的是「权限码建在 UPMS」；ADR-0056 明写「`aiops:agent:edit` 是**全局权限码**，
+**无法按租户授予编辑范围**」——而"无法按租户授予"正是后来引入多 workspace 的触发条件。
+
+⇒ 租户 `1942` 的主账号 `ulink` 有 2 个角色、430 条权限码，`aiops:*` **0 条**，
+登录代理按设计拒绝它：`MISSING_EDIT_PERMISSION`。**这个拒绝是对的。**
+
+### 二、验证时我刻意没做的一件事
+
+给 `ulink` 补上这个权限码可以让它登进去，但那是**给真实客户账号一条平台级权限**，
+而且验出来的就不再是"租户用户能否看到自己的 app"，而是"平台用户能否看到"。
+**没做**，也不建议做。
+
+### 三、替代证据：跨 workspace 隔离（只读，2026-10-22）
+
+以平台 admin key + `X-WORKSPACE-ID` 分别读三个 workspace 的 app 列表：
+
+| workspace | app 数 | 内容 |
+|---|---|---|
+| `d7d788cf`（platform） | 1 | `aiops-workspace-template` |
+| `c3f871e1`（租户 1942） | 3 | 模板 + `aiops-41-kefu-agent` + `aiops-41-ops-methodology-agent` |
+| `1f3bda25`（租户 1783） | 0 | — |
+
+两两交集 **0**：`ISOLATED: True`。也就是说**同一个平台身份在三个 workspace 里看到的是三份
+互不相交的对象集** —— 租户 1942 的两个生产 app 不在 platform、也不在 1783。
+
+### 四、这条证据**不能**证明什么（据实）
+
+- **不能证明"租户用户自己登录后只看到自己的"**：Dify 没有面向租户用户的入口设计，
+  这条路径不存在，所以无法用它取证。
+- **能证明的是**：workspace 之间的对象集合是隔离的，且解析/发布/试运行三条路径都按
+  `(租户, 环境)` 解析（#884/#885 的单测 + #940 的真机发布/试运行）。
+- **租户用户对智能体的接触面是 App / 小程序**，不是 Dify 控制台。那条链路的验收在
+  M3 那边，不在本票。
+
+### 五、如果产品确实想让租户自己编辑智能体
+
+那是一次**权限模型变更**（把 `aiops:agent:edit` 从全局改成按租户授予），需要 ADR 与
+安全评审，不是本票能顺手做的。已按此口径在 #887 记明。
+
 ## 2026-10-22 · 登录时代的 join 链路：四个真问题与一次误操作（#883 真机回收）
 
 **背景**：#883（登录时把人 join 进 workspace）合并很久了，但 41/36 上**一次都没真的跑过**。
@@ -52,13 +107,107 @@ platform members: dify-admin@aiops.local(owner), 41-1454348737375174658@aiops-lo
 2. **先把 `GATEWAY_URL` 配错，让登录短暂变坏**（`DIFY_WORKSPACE_LOOKUP_FAILED`）。
    在改动之前登录是成功的（只是不 join）；改动中一度变成登不进去。
 
-### 四、据实（未完成）
+### 四、`current` 切换（平台账号的迁移，2026-10-22 执行）
 
-- **`current` 未切换**：该账号登录后看到的仍是 `AI-Ops Admin's Workspace`（旧共享工作区）。
-  按用户决定并入 #888 那批处理。
+join 成功还不够：该账号的 `current` 仍指向**旧的共享 workspace**，登录后看到的还是它。
+所以这一步单独执行了一次。
+
+**先确认"哪一列才是真值"**（这一步决定了改哪里）：
+
+- `Account.set_tenant_id_with_session` 只设**内存属性**（`self._current_tenant`），**不写库**；
+- 持久状态只有 `tenant_account_joins.current`，代码里唯一一处读取：
+  `where(TenantAccountJoin.account_id == account.id, TenantAccountJoin.current == True)`。
+
+⇒ 改 `tenant_account_joins` 就是改对了地方，不存在第二个需要同步写的字段。（若只改了别的列，
+登录后会落回旧 workspace，而"看起来改过了"。）
+
+**切换**（单事务；`tenant_account_joins` 已先 `pg_dump` 备份）：
+
+```
+切换前  AI-Ops Admin's Workspace(2db44904…)  current=t
+        aiops-41-platform(d7d788cf…)        current=f
+
+切换后  AI-Ops Admin's Workspace(2db44904…)  current=f
+        aiops-41-platform(d7d788cf…)        current=t
+```
+
+`switch_tenant` 的语义是把该账号**其它所有 join 的 current 全置假**再置目标为真，**同一个事务**；
+本处按同样的语义手写，因为它不是后台自动化路径（runbook 明确写过不要用 `/workspaces/switch`
+做后台动作 —— 那对并发请求可见）。这是**一次性迁移**，不是每次登录都做的事。
+
+用户登录验证通过。
+
+### 五、据实（未完成）
+
+- **租户 1942 的真实成员仍未 join**：本轮验的是平台账号（`tenant_id=-1`）落进 `platform`。
 - **没有以真实租户成员身份验过 #887 的隔离 AC**：本轮验的是**平台账号**（`tenant_id=-1`）落进
   `platform` workspace；租户 1942 的真实成员仍未 join。
 - **95 未验**。
+## 2026-10-22 · 知识库 1:1:1 在 41 上的真机验收：六个真缺陷，全部由真机暴露
+
+**范围**：41（CD 部署 `4916eafc9fd0`，`aiops-gateway-41.service` active）。调用者身份是
+**构造的**（ADR-0058：真实库 + 声明租户），不借用任何真实用户会话。
+
+### 一、通过的部分
+
+| 环节 | 证据 |
+|---|---|
+| `onboard-tenant` | 新租户建好，embedding 校验 `dim=3072` |
+| 幂等重跑 | `already verified, no writes` |
+| `check-knowledge-triple` | 完整租户 `OK`；不完整的报 `missing-ragflow-tenant`；退出码 1 |
+| `/v1/knowledge/console` | **303** + `Location: http://36.156.159.175:10081` + `Set-Cookie: session` |
+| 账本 | `granted` 一行，带公司用户 id |
+| **会话被 RAGFlow 接受** | 把 cookie 回放给 `/api/v1/users/me` → **200**，`email=a2c5edebe7852aa0@kb.internal` |
+| 轮换 | `CHANGED True`；旧密码 `109 Email and password do not match`；新密码登录成功 |
+
+最后一行是这条链路唯一无法用单测替代的判据：不是"网关发出了 cookie"，而是"RAGFlow 认它"。
+
+### 二、六轮真机暴露的六个缺陷（单测全绿、CI 全绿）
+
+| 轮 | 缺陷 | 单测为什么没抓住 |
+|---|---|---|
+| 1 | 两个设置声明了但 `from_env()` 没读 | 所有用例直接构造 settings |
+| 2 | 密码没做 base64+RSA | 假上游只检查"有 password 字段" |
+| 3 | 已有上游账号的密码没改（`create_tenant` 直接返回旧行） | 假上游的"注册"是幂等的 |
+| 4 | 会话在 `Set-Cookie` 头里而不是 `data.cookies` | **假上游发明了 `data.cookies`** |
+| 5 | 改密成功、重建 token 失败 ⇒ 报 500 ⇒ 不回写 | 假上游的 code 表比真上游少一个 103 |
+| 6 | 轮换后"我们记的"与"上游实际的"可能不一致 | ——（这是第 5 轮的直接后果，靠探测修复） |
+
+第 4 轮最值得记：假上游不是在简化，是在**发明**一个上游从不产生的东西。测试失去的不是
+精度，是诚实。
+
+### 三、41 上留下的状态
+
+- 环境变量：`AIOPS_GATEWAY_RAGFLOW_{CREDENTIAL_KEY,EMBEDDING_BASE_URL,EMBEDDING_API_KEY,CONSOLE_BASE_URL,CONSOLE_PUBLIC_URL,CONSOLE_PUBLIC_PEM}`；备份在 `/root/gateway.env.bak-*`。
+- 公钥 `/etc/aiops-41/ragflow-public.pem`（从 36 的 kb-service 原样拷）。
+- kb-service（36）新增 `POST /kb/tenants/rotate` 与 `/kb/tenants/verify-password`，已部署并重启；备份 `/root/kb-bak/`。
+- 两个验收租户：`9260acceptancefresh`（密码已永久不一致，**留作反面证据**，不要再用于验收）、`9260rotatecheck`（干净）。
+
+### 四、没验什么
+
+- **真实浏览器**：全程用 `TestClient` + 真实 HTTP，没有在浏览器里点过。cookie 的
+  `domain/path` 在跨到 `36:10081` 时的实际行为没看过 —— 这是最容易在真浏览器里翻车的一处。
+- **运营用公司账号**：验收用的是构造身份。真实 thirdSession 链路上这条路由的权限判据
+  （`ROLE_AGENT_ADMIN`）没有用真实账号走过。
+- **多租户隔离**：只验了一个租户进得去，没验另一个进不去（单测里有）。
+
+## 2026-10-22 · Dify 运维工具真实验收前置（只读，未完成业务验收）
+
+**分支/基线**：`test/dify-ops-live-acceptance` / `3d1e142780fb`；05:40 UTC只读复核。
+- 41 服务 active、健康版本 `0.1.0+3d1e142780fb`；八个首片关键文件与合并制品一致。
+  首次健康仍为 `c57e35c` 而两文件已更新，随后的健康和八摘要与 `3d1e142` 对齐；
+  初次比对不计通过，不推断长期源码漂移。
+- 正确按 NUL 切分进程环境、用 `dotenv_values(..., interpolate=False)` 读取服务配置：
+  新绑定与租户 CPMS 地址均未配置；M3三项为空。console 地址/key仅在配置文件中存在。
+  首次字面 `\\0` 切分给出的“console未配置”已作废，不作为结论。
+- `mode=ro` 查询注册和发布；通过既有 console client 的两种 GET 核对 Dify：
+  目标 workspace ready、operator v14、两侧均保留旧七工具，未登记 `aiops-ops`；
+  `agent-chat` 选择 `deepseek-v4-flash`，模型可调用/费用未验；M2栈运行容器数0。
+- 新增[验收变更单](agents/dify-ops-first-slice/live-acceptance-plan.md)：现有 app 不属于隔离环境；
+  固定输入工具联调和模型循环分开记录，凭据整租户授权不冒充一单/两次的硬限制。
+  真实业务请求0、模型请求0、远端变更0；没有登记provider、启用开关或修改app。
+  本条没有新增业务自动化通过数量；ruff/格式/policy/ADR/diff及重新生成后的repo-map检查通过。
+  未重跑全量业务测试或镜像构建（仅文档），原始取证仅存私有任务目录。
 
 ## 2026-10-22 · Dify 运维工具首片（#934 / #935）
 

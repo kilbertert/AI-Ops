@@ -1140,6 +1140,28 @@ ssh aiops-41 'curl -sS -H "Authorization: Bearer <服务令牌>" -H "X-Business-
 - **`disable` 之后不要删行**：保留它才有「这个动作曾经存在过」的审计痕迹，
   且 `list_effective` 里 disabled 行**抑制**同 code 的平台行，正是我们要的语义。
 
+### 3.1-nonies ⚠️ 已知的**永久空 workspace**：`zz-probe-ik`（2026-10-22 我造的）
+
+```
+id    00229bd3-d968-49dd-b134-da9cccb533b0
+name  zz-probe-ik
+状态  空：app 0 / dataset 0 / 成员只有 dify-admin（owner）/ 无外部引用
+```
+
+**来源**：我为验证 inner_api 的 key 是否可用，调了
+`POST /inner/api/enterprise/workspace` —— 那是**创建**接口，不是只读探针。**这是一次操作失误。**
+
+**它删不掉，而且这不是当时的失误，是 Dify 的事实**：1.17.1 的 `/workspaces` 下只有
+list / all-workspaces / summary / switch / custom-config / info / permission ——
+**没有任何删除路由**。所以"建之前先想清楚"是这里唯一的防线。
+
+**为什么留着不管**：它是空的，没有数据、没有成员、没有外部引用；它不参与任何解析
+（`dify_workspaces` 里没有它的行，`workspace_name()` 也永远派生出不这个名字）。
+
+**如果将来它造成困扰**（例如有人按名字遍历 workspace 做运维统计），正确处理是**在报告里
+排除它并注名**，不是删 —— 删不掉。**验鉴权请用只读端点**（`GET /console/api/all-workspaces`），
+不要用任何 POST 去"试一下能不能通"。
+
 ### 3.1-octies 租户 workspace 里的**两个**同名 dataset 是**有意的**（#887，2026-10-22 取证）
 
 租户 `1942105476598861824` 的 workspace `c3f871e1-…` 下有两个同名外接知识库
