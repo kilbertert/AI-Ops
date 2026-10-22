@@ -55,6 +55,8 @@ from operator_support import (
     upms_settings,
 )
 
+from aiops_diagnostics.caller_auth import ScopedOrderAuthorizer
+from aiops_diagnostics.config import Settings
 from aiops_diagnostics.i18n import clarification_message
 from aiops_diagnostics.query_scope import QueryScope, resolve_query_scope
 from aiops_diagnostics.scope_context import (
@@ -346,6 +348,106 @@ def test_unbound_operator_account_is_logged_as_a_missing_binding(
         operator_session(monkeypatch, shop_ids=())
 
     assert "reason=no_shop_binding" in caplog.text
+
+
+# --- 快照过期时的第二意见（2026-10-22） ---------------------------------------
+#
+# 公司令牌里的 shop_ids 是**登录那一刻**的快照，公司列表接口却每次实时查。
+# 判定为不可见时向公司权威端点确认一次；快照说能看时**不查**（ADR-0009 决定 2）。
+
+
+class _RefreshingDirectory:
+    """``ShopDirectory`` 替身：返回「公司此刻认为的店铺集合」。"""
+
+    def __init__(self, shop_ids: tuple[str, ...] = ()) -> None:
+        self.shop_ids = shop_ids
+        self.calls = 0
+
+    def shop_ids_by_b_user_id(self, b_user_id: str) -> tuple[str, ...]:
+        self.calls += 1
+        return self.shop_ids
+
+
+def _authorizer_with_refresh(
+    monkeypatch: pytest.MonkeyPatch, connection: Connection, shop_ids: tuple[str, ...]
+) -> tuple[ScopedOrderAuthorizer, _RefreshingDirectory]:
+    settings = Settings.from_env()
+    settings.mysql.user = "readonly"
+    settings.mysql.password = "secret"
+    settings.ssh.enabled = False
+    monkeypatch.setattr("aiops_diagnostics.sources.pymysql.connect", lambda **_: connection)
+    directory = _RefreshingDirectory(shop_ids)
+    return ScopedOrderAuthorizer(settings, shop_directory=directory), directory
+
+
+def test_the_snapshot_is_not_second_guessed_when_it_already_allows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """快照说「能看」→ 直接放行，**不打**公司权威端点（ADR-0009 决定 2）。"""
+    authorizer, directory = _authorizer_with_refresh(monkeypatch, Connection(), ("SHOP-1",))
+
+    assert authorizer.can_access(operator_context((SITE_IN,)), ORDER_OWN_IN) is True
+    assert directory.calls == 0
+
+
+def test_a_stale_snapshot_is_refreshed_before_the_order_is_refused(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """快照判「不可见」时向公司实时集合确认一次；确认可见就放行。
+
+    这正是 41 上「这个订单不属于当前账户」的形状：列表（实时）里有，判定（快照）
+    里没有。修复前这里返回 False。
+    """
+    # 快照里的站点集合**不含** SITE_IN，所以第一次判定必然失败；
+    # 公司实时集合返回 SHOP-1，映射到 SITE_IN 后可见。
+    connection = Connection(sites=[{"id": SITE_IN, "shop_id": "SHOP-1", "tenant_id": TENANT}])
+    authorizer, directory = _authorizer_with_refresh(monkeypatch, connection, ("SHOP-1",))
+
+    assert authorizer.can_access(operator_context((SITE_OUT,)), ORDER_OWN_IN) is True
+    assert directory.calls == 1
+
+
+def test_the_refresh_does_not_turn_a_genuinely_foreign_order_visible(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """回退不能放宽：公司实时集合也说看不到，就必须继续拒绝。"""
+    connection = Connection(sites=[{"id": SITE_IN, "shop_id": "SHOP-X", "tenant_id": TENANT}])
+    authorizer, directory = _authorizer_with_refresh(monkeypatch, connection, ("SHOP-1",))
+
+    authorizer.can_access(operator_context((SITE_OUT,)), ORDER_OWN_IN)
+    assert directory.calls == 1
+
+
+def test_the_refresh_stays_off_for_the_self_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``self`` 口径与店铺绑定无关，不触发回退（消费者路径零额外请求）。"""
+    authorizer, directory = _authorizer_with_refresh(monkeypatch, Connection(), ("SHOP-1",))
+
+    assert authorizer.can_access(consumer_context(), ORDER_INSIDE) is False
+    assert directory.calls == 0
+
+
+def test_a_refresh_failure_keeps_the_original_refusal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """公司端点不可用时保持原判定（拒绝），不把上游故障变成放行。"""
+
+    class _BrokenDirectory(_RefreshingDirectory):
+        def shop_ids_by_b_user_id(self, b_user_id: str) -> tuple[str, ...]:
+            self.calls += 1
+            raise SourceError("upms down")
+
+    settings = Settings.from_env()
+    settings.mysql.user = "readonly"
+    settings.mysql.password = "secret"
+    settings.ssh.enabled = False
+    monkeypatch.setattr("aiops_diagnostics.sources.pymysql.connect", lambda **_: Connection())
+    directory = _BrokenDirectory()
+    authorizer = ScopedOrderAuthorizer(settings, shop_directory=directory)
+
+    assert authorizer.can_access(operator_context((SITE_OUT,)), ORDER_OWN_IN) is False
+    assert directory.calls == 1
 
 
 # --- 4. 生产实现：同一事实来源 ----------------------------------------------

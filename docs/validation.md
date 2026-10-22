@@ -197,6 +197,46 @@ tenant_account_joins：4 行（platform current=t，其余 f）
 - 租户用户仍然进不了 Dify（`aiops:agent:edit` 是 `ROLE_ADMIN` 那条线）—— 这是**另一件事**，
   见 #887 的同名记录。
 
+## 2026-10-22 · 订单判定被拒时的实时确认（方案 D）
+
+**分支**：`fix/operator-scope-live-shops`。**只读验证 + 一处授权路径改动；未部署。**
+
+### 问题
+
+公司令牌 `shop_ids` 是登录时快照，公司列表接口 `@ShopDataScope(realTime=true)` 每次实时查。
+登录后店铺绑定被改 → 列表有、判定无 → 「订单不属于当前账户」。41 上 182 个有店铺绑定的
+账号里 88 个落在「令牌带快照」这一支。
+
+### 改法
+
+`ScopedOrderAuthorizer`：快照命中直接放行；快照判不可见时**才**向
+`/shopuser/getShops` 确认一次（仅 `organ` 口径 + 有 B 端主体）。确认可见 → 放行并记
+`order_authorization_stale_shop_snapshot`；上游失败 → 维持拒绝。
+
+### 为什么不是「一律实时查」
+
+先按那个方案改过，被既有用例
+`test_the_operator_entry_does_not_query_when_the_token_carries_shop_ids` 与一批
+`shop_directory=None` 用例拦下——它会为每个管家端请求多打一次公司端点，并把该端点的
+故障引进所有请求，与 ADR-0009 决定 2 的动机直接冲突。已回退，改走方案 D（ADR-0088）。
+
+### 验证
+
+- 新增五条用例：快照命中不查 / 过期快照回退后放行 / 回退不放宽 / `self` 口径不触发 /
+  上游失败维持拒绝。
+- **变异复验**：去掉回退分支，后三条转红（实测）。
+- 41 只读对照：74 个有订单的代理商账号，公司口径 vs AI-Ops 判定**逐单 0 差异** ——
+  说明回退是兜底，不是日常路径。
+- 全量 pytest 通过（`test_cd_deploy_scripts` 在 main 上本来就红，与本改动无关）。
+  `images.lock.json` 上下文摘要已同步。
+
+### 边界
+
+- **用户报告的问题在 2026-10-22 已不再复现**（管家端查订单正常）。本改动是消除
+  该成因的兜底，不是对已消失现象的追认。
+- 不覆盖「订单站点在 `ch_site` 中不存在」（41 实测 210 单）。
+- 未部署。
+
 ## 2026-10-22 · 知识库控制台真浏览器验收：两个阻断级缺陷已修，真机闭环
 
 **范围**：41（合并 `9983123` 之后的 CD 部署）。Chromium + Playwright，真实公司账号
