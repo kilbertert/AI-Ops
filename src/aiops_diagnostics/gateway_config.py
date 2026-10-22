@@ -114,6 +114,13 @@ class GatewayServerSettings:
     #: ``knowledge_id``（一个不透明串），**没有租户概念**，所以「哪个租户、哪些知识库」
     #: 必须由我们的登记表决定 —— 这正是「不能成为 Dify 要什么就给什么的后门」的落点。
     dify_knowledge_bindings: str = ""
+    #: 自动登记（#925 / PRD #923）：让一个**已开户**租户在 RAGFlow 名下的全部库，以
+    #: `tenant-<tenant_id>` 这个名字直接可检索，中间不需要人工登记。
+    #:
+    #: **默认开**：1:1:1 全部就位时它就是想要的行为，而它只在"这个租户开户过"且"此刻
+    #: 确实有库"时才生效；两个条件缺一个都解析不到，与"未登记"同一个答案（404），不会
+    #: 把一次故障说成"没有命中"。人工登记表**永远优先**，所以置 false 就是回滚。
+    dify_knowledge_autoregister: bool = True
     #: Dify 工具身份 → 我们的 ``ToolName`` 的登记表（``provider_id/tool_name:our_tool``，
     #: 多行/分号分隔）。Dify 的工具名与我们的 ``ToolName`` **不是同一个命名空间**
     #: （实测：``provider_id=time`` / ``tool_name=timezone_conversion``），所以只能靠
@@ -318,6 +325,7 @@ class GatewayServerSettings:
             or _file_value(file_values, "AIOPS_GATEWAY_DIFY_KNOWLEDGE_API_KEY"),
             dify_knowledge_bindings=_env("AIOPS_GATEWAY_DIFY_KNOWLEDGE_BINDINGS")
             or _file_value(file_values, "AIOPS_GATEWAY_DIFY_KNOWLEDGE_BINDINGS"),
+            dify_knowledge_autoregister=_env_bool("AIOPS_GATEWAY_DIFY_KNOWLEDGE_AUTOREGISTER", True),
             dify_tool_bindings=_env("AIOPS_GATEWAY_DIFY_TOOL_BINDINGS")
             or _file_value(file_values, "AIOPS_GATEWAY_DIFY_TOOL_BINDINGS"),
             dify_debug_api_key=_env("AIOPS_GATEWAY_DIFY_DEBUG_API_KEY")
