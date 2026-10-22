@@ -5,10 +5,12 @@
 > 最终候选 `0381fe8` CI全量3436 passed/10 skipped，10项真实HTTP和三项守卫突变通过。
 > 2026-10-22 07:15 UTC：专用CPMS配置修复PR #951已合并/CD为`6581095ec7cc`；
 > **真实Dify固定输入联调通过**：已存provider凭据、列表一条→该单状态、SQL/CPMS对照、证据摘要及发布撤权。
-> app导出逐字恢复、七工具权限恢复v16，临时provider已删除，绑定禁用；两份Gateway配置与基线一致，
-> 新工具/consumer状态/M3配置均关闭，服务健康。实际列表1次、状态1次、独立SQL/CPMS各1次，模型0次。
-> **OPS-07模型循环、真人与业务验收仍未完成**；本次为授权现役app的固定输入联调，不能称隔离验收。
-> 下一步按[验收变更单](dify-ops-first-slice/live-acceptance-plan.md)第二段确定模型数据范围和调用预算。
+> 固定输入当轮列表/状态各1次、SQL/CPMS各1次、模型0次。08:54 UTC另次授权的一次模型预览已执行：
+> 模型选择order_list但Dify旧缓存key被403拒绝，业务取数0；两轮决策终止，usage1373 tokens。
+> **OPS-07未通过**。旧凭据缓存原因已零取数重现并确认官方update可失效，正交付新建登记修复。
+> 原app导出逐字恢复、七工具权限v18，provider删除、binding禁用；两份Gateway配置恢复，
+> 新工具/consumer/M3配置关闭、服务健康。真人/App/业务验收仍未完成。
+> 下一步修复合并部署后另次授权模型预览，按[模型验收方法](dify-ops-first-slice/model-acceptance.md)执行。
 > 接入与限制见
 > [首片手册](dify-ops-first-slice/README.md)，以 validation 最新条目的实际结果为准。
 

@@ -355,7 +355,9 @@ def test_provider_create_repeat_and_conflict(provision):
                 return [{"name": "aiops-ops"}] if self.schema else []
             if "/get?" in path:
                 return {"schema": self.schema}
-            assert path.endswith("/add")
+            assert path.endswith(("/add", "/update"))
+            if path.endswith("/update"):
+                assert kwargs["body"]["original_provider"] == "aiops-ops"
             self.writes += 1
             self.schema = kwargs["body"]["schema"]
             assert kwargs["body"]["credentials"]["api_key_value"] == KEY
@@ -364,13 +366,70 @@ def test_provider_create_repeat_and_conflict(provision):
     console = Console()
     assert ensure_ops_provider(console, binding, KEY, "https://gateway.invalid")["action"] == "created"
     assert ensure_ops_provider(console, binding, KEY, "https://gateway.invalid")["action"] == "unchanged"
-    assert console.writes == 1
+    assert console.writes == 2
     with pytest.raises(ValueError, match="schema"):
         ensure_ops_provider(console, binding, KEY, "https://other.invalid")
     assert set(ops_openapi("https://gateway.invalid", "tenant-a")["paths"]) == {
         "/v1/dify/ops/tenant-a/charging_info",
         "/v1/dify/ops/tenant-a/order_list",
     }
+
+
+def test_provider_recreation_invalidates_old_named_credentials_cache(provision):
+    """Dify 1.17.1 缓存按名字而非provider UUID；只有update会清缓存。"""
+    binding = load_ops_bindings(str(provision.path))[0]
+
+    class Console:
+        def __init__(self):
+            self.exists = False
+            self.cached_key = "revoked-old-service-key"
+            self.stored_key = None
+            self.writes = []
+
+        def _call(self, workspace, path, **kwargs):
+            assert workspace == binding.workspace_id
+            if "tool-providers?" in path:
+                return [{"name": "aiops-ops"}] if self.exists else []
+            if "/get?" in path:
+                return {"schema": json.dumps(ops_openapi("https://gateway.invalid", binding.tenant_id))}
+            payload = kwargs["body"]
+            self.writes.append(path)
+            self.stored_key = payload["credentials"]["api_key_value"]
+            if path.endswith("/add"):
+                self.exists = True
+            elif path.endswith("/update"):
+                assert payload["original_provider"] == "aiops-ops"
+                self.cached_key = None
+            return {"result": "success"}
+
+    console = Console()
+    result = ensure_ops_provider(console, binding, KEY, "https://gateway.invalid")
+    assert result["action"] == "created" and result["credentials_verified"] is False
+    assert (console.cached_key or console.stored_key) == KEY
+    assert [path.rsplit("/", 1)[-1] for path in console.writes] == ["add", "update"]
+    ensure_ops_provider(console, binding, KEY, "https://gateway.invalid")
+    assert len(console.writes) == 2
+
+
+@pytest.mark.parametrize("refresh_response", [{"result": "failed"}, "exception"])
+def test_provider_cache_refresh_failure_is_not_success_and_hides_credentials(provision, refresh_response):
+    from aiops_diagnostics.dify_console_admin import ConsoleApiError
+
+    binding = load_ops_bindings(str(provision.path))[0]
+
+    class Console:
+        def _call(self, workspace, path, **kwargs):
+            if "tool-providers?" in path:
+                return []
+            if path.endswith("/add"):
+                return {"result": "success"}
+            if refresh_response == "exception":
+                raise ConsoleApiError("DIFY_CONSOLE_REJECTED", KEY)
+            return refresh_response
+
+    with pytest.raises(ValueError, match="已创建.*缓存刷新未确认") as error:
+        ensure_ops_provider(Console(), binding, KEY, "https://gateway.invalid")
+    assert KEY not in str(error.value)
 
 
 def test_provider_http_and_cli_use_target_workspace(provision, monkeypatch):
@@ -404,7 +463,7 @@ def test_provider_http_and_cli_use_target_workspace(provision, monkeypatch):
                 self.reply({"schema": payloads[0]["schema"]})
 
         def do_POST(self):
-            assert self.path.endswith("/api/add")
+            assert self.path.endswith(("/api/add", "/api/update"))
             payloads.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
             self.reply({"result": "success"})
 
@@ -443,7 +502,7 @@ def test_provider_http_and_cli_use_target_workspace(provision, monkeypatch):
         )
         assert answer.exit_code == 0, answer.output
         assert json.loads(answer.output)["action"] == "unchanged"
-        assert len(payloads) == 1 and KEY not in answer.output
+        assert len(payloads) == 2 and KEY not in answer.output
     finally:
         server.shutdown()
         server.server_close()
