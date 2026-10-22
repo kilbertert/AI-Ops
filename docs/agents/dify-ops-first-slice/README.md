@@ -72,3 +72,21 @@ uv run python tools/verify_ops_tools_http.py --out /tmp/ops-http-report.json
 HTTP 脚本在一次性数据库启动真实 Gateway，真实绑定与发布，只有业务读取替身。
 它不证明真实 Dify、公司接口或用户业务正确性；真实验收按 [QA](qa-plan.md) OPS-07 单独记录。
 证据摘要按结果 JSON 的 UTF-8、sort_keys、无空白分隔计算；传输格式无需逐字相同。
+
+## 部署后的只读复核
+
+正常合并由既有CD部署，查看该合并提交对应的CD回执，再按环境手册复核服务 active、健康版本及源码摘要。
+主机访问统一用 `dev-host exec <已登记目标> --allow-service-exec --timeout 30 -- '<只读命令>'`，
+主机身份、服务名、部署目录与配置位置取该环境手册；不从监听端口猜目标。
+
+开关要查正在运行的进程：用 `systemctl show -p MainPID --value <服务名>` 取PID，
+由具备读取权限的身份在远端Python内读取 `/proc/<PID>/environ`，只输出
+`bool(env.get("AIOPS_GATEWAY_OPS_BINDINGS_FILE", "").strip())`；
+再用 `dotenv_values` 读该进程 `AIOPS_GATEWAY_SERVER_CONFIG_FILE` 所指文件，同样只输出该键是否非空。
+**两处都为空才可记录新工具尚未启用**；不要打印整个环境或配置。
+M3的 `AIOPS_GATEWAY_AGENT_RUN_CONFIG_FILE`、`AIOPS_GATEWAY_EXEC_MANIFEST_FILE`、
+`AIOPS_GATEWAY_EXEC_CONFIG_REQUIRED` 也只核对是否配置。
+
+源码用 `hashlib.sha256(Path(<部署目录>/src/aiops_diagnostics/<文件>).read_bytes()).hexdigest()`，
+与合并提交的同文件字节独立比较；`__init__.py` 含部署版本戳，应按部署脚本生成的制品比较。
+仅健康与摘要一致证明部署身份，不证明provider登记、Dify模型循环或真实业务结果。
