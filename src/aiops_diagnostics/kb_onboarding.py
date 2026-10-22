@@ -255,6 +255,19 @@ class KbAdminClient:
         result = self._post("/kb/tenants/repair", tenant_id, {}, step="model-instance")
         return result if isinstance(result, dict) else {"data": result}
 
+    def verify_login(self, *, tenant_id: str, password: str) -> None:
+        """用给定密码试着登录一次，只用来回答"上游现在认哪把"。
+
+        走 kb-service 的 rotate 端点会改密码，所以这里需要一个**只读**的验证入口。
+        没有就明说：把它当成"证明不了"，而不是当成"成功"。
+        """
+        self._post(
+            "/kb/tenants/verify-password",
+            tenant_id,
+            {"password": password},
+            step="credential-verify",
+        )
+
     def rotate_credential(self, *, tenant_id: str, old_password: str, new_password: str) -> None:
         """Change the upstream password. **Must** succeed before we store the new one."""
         self._post(
@@ -514,7 +527,32 @@ def rotate_credential(
             step="rotate",
         ) from exc
     new_password = generate_password()
-    kb.rotate_credential(tenant_id=tenant_id, old_password=old_password, new_password=new_password)
+    try:
+        kb.rotate_credential(tenant_id=tenant_id, old_password=old_password, new_password=new_password)
+    except OnboardError:
+        # **上游可能已经改了密码，只是后面那一步失败**（41 真机第五轮实测：
+        # 改密成功、重建 API token 因 `code=103` 失败 → 整条报 500 → 我们不回写）。
+        # 那一刻我们手里的旧密码就不再是上游那把了，而失败信息只说"轮换失败"。
+        #
+        # 所以失败之后**试探一次**：新密码能不能登录？能 ⇒ 改密其实成功了，把它记下来。
+        # 这不是"忽略错误"，是把"上游到底处于哪个状态"问清楚再决定 —— 否则下一次轮换
+        # 会拿着过期的旧密码去改，永远改不动。
+        if _already_rotated(kb, tenant_id=tenant_id, password=new_password):
+            say(f"rotation reported failure but the new credential works; recording it for {email}")
+            store.record_ragflow_tenant(
+                tenant_id,
+                environment,
+                ragflow_email=email,
+                credential_ciphertext=encrypt_credential(new_password, credential_key),
+                model_checked=bool(str(row.get("model_checked_at") or "")),
+            )
+            return {
+                "tenant_id": tenant_id,
+                "environment": environment,
+                "ragflow_email": email,
+                "upstream_changed_despite_error": True,
+            }
+        raise
     store.record_ragflow_tenant(
         tenant_id,
         environment,
@@ -524,6 +562,21 @@ def rotate_credential(
     )
     say(f"rotated credential for {email}")
     return {"tenant_id": tenant_id, "environment": environment, "ragflow_email": email}
+
+
+def _already_rotated(kb: KbAdminClient, *, tenant_id: str, password: str) -> bool:
+    """Did the upstream actually accept the new password?
+
+    Asks kb-service to log in with it. Only a clean success counts — any other
+    answer (including "kb-service unreachable") means we cannot prove the new
+    password works, so we keep the original failure rather than overwrite our row
+    with something that might be wrong.
+    """
+    try:
+        kb.verify_login(tenant_id=tenant_id, password=password)
+    except Exception:  # noqa: BLE001 - 证明不了就维持原判
+        return False
+    return True
 
 
 def _lease_owner() -> str:
