@@ -76,6 +76,7 @@ from aiops_diagnostics.codex_runtime import AgentRuntimeError
 from aiops_diagnostics.company_token_auth import (
     CompanyTokenCallerResolver,
     CompanyTokenSettings,
+    PermissionSource,
 )
 from aiops_diagnostics.config import Settings
 from aiops_diagnostics.conversation_store import (
@@ -4551,7 +4552,7 @@ def _company_token_resolver(settings: GatewayServerSettings) -> CompanyTokenCall
         return None
 
 
-def _permission_source(runtime: Settings) -> Any:
+def _permission_source(runtime: Settings) -> PermissionSource | None:
     """公司权限码 → 内部角色（#926）。
 
     **未配置 UPMS 时不构造**（返回 ``None``），解析器随即保持空角色集 —— 与改动前逐字一致。
