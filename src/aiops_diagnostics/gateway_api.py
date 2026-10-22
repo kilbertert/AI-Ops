@@ -15,7 +15,7 @@ from typing import Annotated, Any, Literal
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response, status
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from aiops_diagnostics import __version__, execution_manifest
@@ -3769,6 +3769,79 @@ def create_gateway_app(
     #: Authorization 到下面的接口，所以它的 fetch 走 operator 入口
     #: （`X-Business-Entry: operator` 那条 map 会**保留**调用者的 Authorization，
     #: consumer 那条会换成服务令牌）。
+    @app.get("/v1/knowledge/console", include_in_schema=False)
+    def knowledge_console(
+        caller: ScopeContext = Depends(authenticated_agent_caller),  # noqa: B008
+    ) -> Response:
+        """Send the operator's browser into RAGFlow **as their own tenant** (#926).
+
+        Three things this route deliberately does not accept: a tenant id, a
+        RAGFlow account, and a password. The tenant comes from the company session
+        the browser already holds, the account and password come from what
+        onboarding recorded (#924), and the browser receives only a session hop.
+
+        Why the console is reached this way at all: RAGFlow's authorisation binds
+        a request's tenant to the *logged-in user's own id*, so "several operators
+        sharing one RAGFlow tenant" does not exist in that product. What can be
+        shared is a session obtained as the tenant owner — so the proxy represents
+        the tenant, and the cost of that (RAGFlow cannot tell the operators apart)
+        is paid for in our own access ledger rather than pretended away.
+        """
+        from aiops_diagnostics.ragflow_console import (
+            RAGFlowLoginClient,
+            RAGFlowLoginError,
+            open_console,
+            record,
+        )
+
+        settings = context.settings
+        tenant_id = str(caller.effective_tenant_id)
+        if not settings.ragflow_console_base_url or not settings.ragflow_credential_key:
+            raise StandardAPIError(
+                status.HTTP_404_NOT_FOUND, "KNOWLEDGE_CONSOLE_DISABLED", "console access is not enabled"
+            )
+        client = RAGFlowLoginClient(settings.ragflow_console_base_url)
+        try:
+            target, session = open_console(
+                store=context.store,
+                environment=settings.environment,
+                caller=caller,
+                credential_key=settings.ragflow_credential_key,
+                client=client,
+                public_base_url=settings.ragflow_console_public_url or settings.ragflow_console_base_url,
+            )
+        except RAGFlowLoginError as exc:
+            # Refusals are recorded too: with one shared owner, "who tried" is the
+            # only operator-level fact we have, and it is worth keeping.
+            record(
+                context.store,
+                tenant_id=tenant_id,
+                environment=settings.environment,
+                outcome="refused",
+                caller=caller,
+                reason_code=exc.code,
+            )
+            http_status = (
+                status.HTTP_403_FORBIDDEN
+                if exc.code in {"KNOWLEDGE_FORBIDDEN"}
+                else status.HTTP_424_FAILED_DEPENDENCY
+                if exc.code != "KNOWLEDGE_TENANT_NOT_ONBOARDED"
+                else status.HTTP_409_CONFLICT
+            )
+            raise StandardAPIError(http_status, exc.code, exc.message) from exc
+        record(
+            context.store,
+            tenant_id=tenant_id,
+            environment=settings.environment,
+            outcome="granted",
+            caller=caller,
+            ragflow_email=session.ragflow_email,
+        )
+        response = RedirectResponse(target, status_code=status.HTTP_303_SEE_OTHER)
+        for name, value in session.cookies.items():
+            response.set_cookie(name, value, httponly=True, samesite="lax")
+        return response
+
     @app.get("/v1/knowledge", include_in_schema=False)
     def knowledge_page() -> HTMLResponse:
         from importlib.resources import files
