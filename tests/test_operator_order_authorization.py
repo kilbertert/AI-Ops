@@ -59,7 +59,6 @@ from aiops_diagnostics.caller_auth import ScopedOrderAuthorizer
 from aiops_diagnostics.config import Settings
 from aiops_diagnostics.i18n import clarification_message
 from aiops_diagnostics.query_scope import QueryScope, resolve_query_scope
-from aiops_diagnostics.sources import SourceError
 from aiops_diagnostics.scope_context import (
     SCOPE_ERROR_UPMS_UNAVAILABLE,
     SCOPE_TYPE_ALL,
