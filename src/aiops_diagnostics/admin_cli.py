@@ -884,6 +884,62 @@ def onboard_tenant_command(
     typer.secho(f"platform owner: {PLATFORM_OWNER_EMAIL}", err=True)
 
 
+@admin_app.command("adopt-ragflow-tenant")
+def adopt_ragflow_tenant_command(
+    ctx: typer.Context,
+    tenant: Annotated[str, typer.Option("--tenant", help="公司租户 id（sys_organ.id）")],
+    db: Annotated[Path | None, typer.Option("--db", help="gateway 数据库文件")] = None,
+) -> None:
+    """接管一个**上游早已有账号、本地却没有凭据**的租户（#923）。
+
+    口令**从 stdin 读一行**，不接受命令行参数 —— ``ps``、shell 历史与作业日志都会留下 argv。
+
+        printf '%s' "$PASSWORD" | aiops admin adopt-ragflow-tenant --tenant 1942... --db ...
+
+    这条命令**不改上游**：它验证「这一把现在能不能登录」，能才登记。改密码那一步在带外
+    完成（历史账号由 kb-service 懒注册生成随机密码且不留，只能这样接管）。
+    """
+    import sys
+
+    from aiops_diagnostics.gateway_store import GatewayStore
+    from aiops_diagnostics.kb_onboarding import (
+        KbAdminClient,
+        OnboardError,
+        adopt_existing_account,
+    )
+
+    settings = _onboarding_settings_or_exit(ctx, needs_embedding=False)
+    database = db or settings.database_file
+    if db is None and not os.environ.get("AIOPS_GATEWAY_DATABASE_FILE"):
+        typer.secho(
+            "缺少 --db：缺省会静默回退 XDG 默认并新建空库。请显式给出 --db <gateway.db>。",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    if not settings.kb_service_base_url:
+        typer.secho("缺少 AIOPS_GATEWAY_KB_SERVICE_BASE_URL", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=2)
+    password = sys.stdin.readline().rstrip("\n")
+    try:
+        outcome = adopt_existing_account(
+            tenant_id=tenant,
+            environment=settings.environment,
+            store=GatewayStore(database),
+            kb=KbAdminClient(settings.kb_service_base_url),
+            credential_key=settings.ragflow_credential_key,
+            password=password,
+            log=lambda line: typer.secho(line, err=True),
+        )
+    except OnboardError as exc:
+        typer.secho(
+            json.dumps({"error": exc.code, "message": exc.message, "step": exc.step}, ensure_ascii=False),
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps(outcome, ensure_ascii=False))
+
+
 @admin_app.command("rotate-ragflow-credential")
 def rotate_ragflow_credential_command(
     ctx: typer.Context,

@@ -619,3 +619,79 @@ def test_rotation_keeps_the_old_password_when_the_probe_cannot_prove_anything(
         )
 
     assert store.get_ragflow_tenant(TENANT, ENVIRONMENT)["credential_ciphertext"] == original
+
+
+# ── 接管已有上游账号（#923 第 2 项） ──────────────────────────────────────
+#
+# 背景：kb-service 懒注册的密码是随机的且**不留**，所以「上游有账号、我们不知道那把密码」
+# 是一种真实状态。onboard 对它无能为力（注册分支不改密码、轮换分支要旧密码）。这条路径的
+# 唯一职责是：**先证明这把能登录，再记下来**。
+
+
+def _adopt(kb_service: Any, store: Any, password: str = "fresh-from-out-of-band"):
+    from aiops_diagnostics.kb_onboarding import KbAdminClient, adopt_existing_account
+
+    return adopt_existing_account(
+        tenant_id=TENANT,
+        environment=ENVIRONMENT,
+        store=store,
+        kb=KbAdminClient(kb_service.base),
+        credential_key=CREDENTIAL_KEY,
+        password=password,
+    )
+
+
+def test_adopt_records_the_credential_only_after_the_upstream_accepts_it(tmp_path, kb_service):
+    """验证在落盘之前：不接受就不写任何一行。"""
+    from aiops_diagnostics.kb_onboarding import decrypt_credential
+
+    store = _store(tmp_path)
+    _adopt(kb_service, store)
+
+    row = store.get_ragflow_tenant(TENANT, ENVIRONMENT)
+    assert row is not None
+    assert decrypt_credential(row["credential_ciphertext"], CREDENTIAL_KEY) == "fresh-from-out-of-band"
+    assert row["ragflow_email"] == derive_email(TENANT)
+    # 还没有做过模型校验 —— 那是 onboarding 的后半段，不是接管这一步的职责。
+    assert not row["model_checked_at"]
+    # 只发了验证那一次，没有注册、没有改密。
+    assert kb_service.paths() == ["/kb/tenants/verify-password"]
+
+
+def test_adopt_refuses_and_writes_nothing_when_the_password_does_not_work(tmp_path, kb_service):
+    kb_service.verify_matches = False
+    store = _store(tmp_path)
+
+    with pytest.raises(OnboardError) as caught:
+        _adopt(kb_service, store)
+
+    assert caught.value.code == "RAGFLOW_ADOPT_VERIFY_FAILED"
+    assert store.get_ragflow_tenant(TENANT, ENVIRONMENT) is None
+
+
+def test_adopt_refuses_a_tenant_that_already_has_a_stored_credential(tmp_path, kb_service):
+    """已有凭据 ⇒ 走轮换，不要用接管覆盖（那会绕过"旧密码必须正确"这条判据）。"""
+    from aiops_diagnostics.kb_onboarding import encrypt_credential
+
+    store = _store(tmp_path)
+    store.record_ragflow_tenant(
+        TENANT,
+        ENVIRONMENT,
+        ragflow_email=derive_email(TENANT),
+        credential_ciphertext=encrypt_credential("old", CREDENTIAL_KEY),
+        model_checked=False,
+    )
+
+    with pytest.raises(OnboardError) as caught:
+        _adopt(kb_service, store)
+
+    assert caught.value.code == "RAGFLOW_TENANT_ALREADY_ONBOARDED"
+    assert kb_service.paths() == []
+
+
+def test_adopt_rejects_an_empty_password_before_calling_upstream(tmp_path, kb_service):
+    with pytest.raises(OnboardError) as caught:
+        _adopt(kb_service, _store(tmp_path), password="")
+
+    assert caught.value.code == "CREDENTIAL_EMPTY"
+    assert kb_service.paths() == []
