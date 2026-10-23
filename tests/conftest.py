@@ -102,9 +102,14 @@ SLOT_ENV = "AIOPS_PYTEST_SLOTS"
 
 
 def _host_lock_path(index: int) -> pathlib.Path:
-    # Not keyed on the checkout: separate worktrees and separate clones of this repo
-    # on one machine draw from the same cores.
-    return pathlib.Path(tempfile.gettempdir()) / f"aiops-pytest-host-{index}.lock"
+    # ⚠️ The name carries NO repository: separate worktrees, separate clones and
+    # SIBLING REPOSITORIES all draw from the same cores. Measured 2026-10-23: the
+    # same incident shape was reproduced by sessions working in three different
+    # projects, so a per-repository slot file would hand each one its own pair and
+    # the host would hold six runs, not two. `host-test-slot-N.lock` is the name
+    # the other two repositories use (health-flow #260, genesis-evidence #340);
+    # all three must spell it the same way or the cap silently stops adding up.
+    return pathlib.Path(tempfile.gettempdir()) / f"host-test-slot-{index}.lock"
 
 
 def _acquire(path: pathlib.Path, fcntl, time, what: str) -> object:
@@ -165,13 +170,28 @@ def pytest_configure(config: pytest.Config) -> None:
     # distinguishes them; it is set by xdist before the worker's config is built.
     if os.environ.get("PYTEST_XDIST_WORKER"):
         return
-    # ⚠️ `int(...)`, not `== "0"`. xdist registers `-n` with a string default and
-    # converts it, so the attribute is an `int` once pytest has parsed the args —
-    # verified: `-n 0` yields `numprocesses == 0`. The first version compared against
-    # the string and therefore never took the branch: measured, two `-n 0` runs were
-    # serialised 5 s / 10 s by a lock they were documented not to take.
-    if (config.option.numprocesses or 0) == 0:
-        return
+    # ⚠️ `-n 0` is detected properly here — `int`, not the string "0", because xdist
+    # converts the option: verified, `-n 0` yields `numprocesses == 0`. Getting this
+    # wrong made the documented fast path take the lock: measured, two `-n 0` runs
+    # were serialised 5 s / 10 s.
+    #
+    # ⚠️ But `-n 0` still takes the HOST SLOT, and that is a change from the first
+    # version, which returned here and took neither. The reasoning it was written
+    # with — "a single-worker run is cheap, do not make it queue" — looked at the
+    # wrong cost. The incident was CPU-seconds, and a serial run burns a core just
+    # as surely as a parallel one: seven serial sessions would have driven the same
+    # load, they just divide their work differently. When the other two repositories
+    # got this gate (health-flow #260, genesis-evidence #340) they had no xdist at
+    # all, so EVERY run there is serial — keying on `-n` would have made the gate
+    # inert, verified by positive control: slots occupied externally, pytest still
+    # finished in 4 s. Keeping the two behaviours different across three copies of
+    # one rule is the kind of drift this file's header warns about.
+    #
+    # What `-n 0` still skips is the CHECKOUT lock, which is what the fast path
+    # actually needs: two runs in one checkout would otherwise serialise a 3 s file
+    # run behind a 76 s full run. The host slot costs a file lock and only waits
+    # when two runs are genuinely in flight.
+    single_worker = (config.option.numprocesses or 0) == 0
 
     checkout = pathlib.Path(__file__).resolve().parents[1]
     key = hashlib.sha256(str(checkout).encode()).hexdigest()[:16]
@@ -182,14 +202,16 @@ def pytest_configure(config: pytest.Config) -> None:
     # holding a slot it was not using, so a third checkout was throttled while only
     # one run was actually working. Deadlock is not a risk either way (a checkout
     # lock has exactly one holder and every path takes them in this order).
-    held = [
-        _acquire(
-            pathlib.Path(tempfile.gettempdir()) / f"aiops-pytest-{key}.lock",
-            fcntl,
-            time,
-            "another run in this checkout",
+    held = []
+    if not single_worker:
+        held.append(
+            _acquire(
+                pathlib.Path(tempfile.gettempdir()) / f"aiops-pytest-{key}.lock",
+                fcntl,
+                time,
+                "another run in this checkout",
+            )
         )
-    ]
     held.append(_acquire_host_slot(fcntl, time, int(os.environ.get(SLOT_ENV) or MAX_CONCURRENT_RUNS)))
 
     # Keep the handles alive on the config so they are not garbage-collected (which
