@@ -20,11 +20,20 @@
 
 ## 命令链
 
-全部在 **41 主机上以服务账号**运行（`PrivateTmp` 让 `/tmp` 落盘的文件
-`runuser -u aiops41` 读不到，所以会话走环境变量）：
+**三个脚本的运行位置不同，别混写：**
+
+| 脚本 | 跑在哪 | 为什么 | 凭据来源 |
+|---|---|---|---|
+| `check_identity.py` | **41**，服务账号 `aiops41` | 要读 Redis 会话与业务库，凭据只在那个账号下 | 环境的 `AIOPS_*` + `AIOPS_CHECK_SESSION` |
+| `independent_cpms.py` | **41**，服务账号 `aiops41` | 同上（SQL + CPMS） | 同上 |
+| `status_probe.py` | **开发机** | 它驱动真实浏览器，且用 `dev-host` 校验主机身份 | `--state-dir` 里的登录态；隧道经 `dev-host` 校验后再开 |
+
+`PrivateTmp` 让 `/tmp` 落盘的文件 `runuser -u aiops41` 读不到，所以**会话走环境变量**
+而不是文件。
 
 ```bash
-# 0) 把脚本送上去（产物身份，不是手工 scp）
+# 0) 把**前两个**脚本送上去（产物身份，不是手工 scp）。
+#    status_probe.py 留在开发机跑 —— 它要驱动浏览器。
 dev-host write 41 /tmp/consumer-status/check_identity.py \
   --artifact-sha256 "$(sha256sum tools/consumer-status/check_identity.py | cut -d' ' -f1)" \
   < tools/consumer-status/check_identity.py
@@ -39,7 +48,8 @@ ssh aiops-41 'cd /opt/aiops-41 && runuser -u aiops41 -- env \
 # 2) 固定预期：最新本人订单 + 它当前的 CPMS 状态（这一步不比对）
 #    ……开受控窗口（只改三项个人查询配置）……
 
-# 3) 两条真实页面正例（各自从干净上下文发起）
+# 3) 两条真实页面正例（**在开发机上**执行；各自从干净上下文发起）
+#    主机身份由 dev-host 校验（脚本内部先跑一次 `dev-host exec … hostname`）
 python tools/consumer-status/status_probe.py <订单号> latest    --state-dir <库外私有目录>
 python tools/consumer-status/status_probe.py <另一订单号> specified --state-dir <库外私有目录>
 
@@ -99,8 +109,35 @@ python tools/consumer-status/independent_cpms.py \
 隧道：别名取自 `dev-host show <target>` 的 `ssh alias` 字段（主机身份的唯一来源），
 端口先探空、起来后再确认**是本进程在听**，结束时只清理自己启动的那个。
 
-### 一处仍未做到的
+### 助手区域选择器（已对着现役产物校准）
 
-`status_probe.py` 的助手区域选择器（`ASSISTANT_SELECTORS`）是**按类名猜的**，
-没有对着已部署产物逐一核过；取不到就判失败（不退回整页）。真实复跑前应先用
-`--state-dir` 跑一次并看 `page_excerpt_tail`，确认选择器命中。
+上一版的 `ASSISTANT_SELECTORS` 是猜的（`.msg-list .msg-item` 之类），在现役产物里
+**一个都不存在**。现在按 41 上 `static/js/aiPackage-pages-chat-chat.d86b6f8a.js` 的
+真实渲染分支写成：
+
+```
+"user" === e.role
+  ? <view class="user-bubble"><text class="bubble-text">…
+  : <view class="ai-row"><view class="ai-msg"><text class="bubble-text">…
+```
+
+助手在 `.ai-msg`、用户在 `.user-bubble`，两者不重叠。本地回放验证（**不经生产**，
+API 全部 route 拦截并返回合成数据）：
+
+| 选择器 | 命中数 | 含订单号 |
+|---|---|---|
+| `.ai-msg .bubble-text`（现用） | 1 | 是 |
+| `.ai-msg`（现用） | 1 | 是 |
+| `.msg-list .msg-item`（旧猜测） | **0** | — |
+
+区域若落在 `.user-bubble` 里，`region_is_not_user_bubble` 直接判失败；
+选择器命不中时整段视为缺失，**不退回整页**。
+
+⚠️ 回放用的是**与现役产物同构的合成 DOM**，不是公司构建产物的真实运行。
+它证明选择器对得上类名结构，**不构成**新的真实业务验收。
+
+### 仍未做到的
+
+- 真实存在的**他人订单被拒**仍未验证（见验收记录）。
+- `status_probe.py` 的完整链路（dev-host 校验 → 隧道 → 浏览器 → 判据）本片
+  只跑到了选择器与判据这一段，端到端未重跑（那会需要开生产窗口）。

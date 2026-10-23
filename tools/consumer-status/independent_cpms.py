@@ -58,15 +58,49 @@ def _resolve_caller(settings, runtime, session: str):
     )
 
 
-def _sort_key(row: dict) -> tuple[str, str]:
-    """(created_time, id 部分)。同一秒时用主键区分，与 SQL 的 ORDER BY 同序。"""
-    return (str(row.get("created_time", "")), str(row.get("order_no", "")))
+def _sort_key(row: dict) -> tuple[str, int]:
+    """(created_time, **id**)。
+
+    生产 SQL 是 ``ORDER BY created_time DESC, id DESC``，第二排序键是**主键 id**。
+    上一版用了 ``order_no`` 当第二键 —— 那是错的：同一秒里 `id=2/order_no=A` 排在
+    `id=1/order_no=Z` 前面是**正确**的（id 更大），旧判据却按订单号字符串把它判反。
+    `order_no` 是业务号（46 亿级数字串），与自增主键没有大小关系。
+    """
+    raw_id = row.get("id")
+    try:
+        return (str(row.get("created_time", "")), int(raw_id))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        raise ValueError("row has no usable id") from None
 
 
-def strict_descending(rows: list[dict]) -> bool:
-    """独立判据：相邻两行必须**严格**递减。相等说明排序没生效或主键不唯一。"""
-    keys = [_sort_key(r) for r in rows]
-    return all(keys[i] > keys[i + 1] for i in range(len(keys) - 1))
+def sort_verdict(rows: list[dict]) -> dict:
+    """排序判据的**结论**，不是布尔。空/单行/缺 id 都不能声称"多行排序已验证"。"""
+    if len(rows) < 2:
+        return {
+            "verdict": "unverified",
+            "reason": "insufficient_rows",
+            "rows_compared": len(rows),
+        }
+    try:
+        keys = [_sort_key(r) for r in rows]
+    except ValueError:
+        return {
+            "verdict": "unverified",
+            "reason": "missing_id",
+            "rows_compared": len(rows),
+        }
+    if all(keys[i] > keys[i + 1] for i in range(len(keys) - 1)):
+        return {
+            "verdict": "pass",
+            "rows_compared": len(rows),
+            "criterion": "(created_time, id) 严格递减",
+        }
+    return {
+        "verdict": "fail",
+        "reason": "not_strictly_descending",
+        "rows_compared": len(rows),
+        "keys": [[k[0], k[1]] for k in keys],
+    }
 
 
 def compare_with_cpms(*, page: dict, cpms: dict, expect_status_code: object = None) -> dict:
@@ -84,16 +118,72 @@ def compare_with_cpms(*, page: dict, cpms: dict, expect_status_code: object = No
     return {"consistent": not reasons, "reasons": reasons}
 
 
-def main() -> int:
+class Deps:
+    """外部依赖的注入口：解析器、SQL、CPMS 读取、端点解析。
+
+    测试把它们换成替身并统计调用次数 —— 「CPMS 异常分支被改成 EXIT_PASS」
+    这种改法，上一版测试完全看不见（它只读常量）。
+    """
+
+    def __init__(self, *, resolve_caller, list_orders, get_orders, read_status, endpoint):
+        self.resolve_caller = resolve_caller
+        self.list_orders = list_orders
+        self.get_orders = get_orders
+        self.read_status = read_status
+        self.endpoint = endpoint
+        self.cpms_calls = 0
+
+
+def default_deps(*, config_file: str, session: str) -> Deps:
+    from aiops_diagnostics.charging_status import read_charging_status
+    from aiops_diagnostics.config import Settings
+    from aiops_diagnostics.gateway_config import GatewayServerSettings, charging_endpoint
+    from aiops_diagnostics.query_scope import resolve_query_scope
+    from aiops_diagnostics.sources import scoped_mysql_source
+
+    settings = GatewayServerSettings.from_env()
+    runtime = Settings.from_config(pathlib.Path(config_file))
+
+    def resolve_caller():
+        return _resolve_caller(settings, runtime, session)
+
+    def _source(caller):
+        return scoped_mysql_source(runtime, resolve_query_scope(caller))
+
+    def list_orders(caller, *, page_size: int):
+        with _source(caller) as source:
+            return source.list_orders(page=1, page_size=page_size)
+
+    def get_orders(caller, order_no: str):
+        with _source(caller) as source:
+            return source.get_orders(order_no)
+
+    def read_status(endpoint, order_no, *, tenant_id, user_id):
+        return read_charging_status(endpoint, order_no, tenant_id=tenant_id, user_id=user_id)
+
+    def endpoint(tenant_id: str) -> str:
+        return charging_endpoint(settings.charging_status_base_url, tenant_id)
+
+    return Deps(
+        resolve_caller=resolve_caller,
+        list_orders=list_orders,
+        get_orders=get_orders,
+        read_status=read_status,
+        endpoint=endpoint,
+    )
+
+
+def main(argv: list[str] | None = None, *, deps: Deps | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config-file", default="/etc/aiops-41/production.env")
     parser.add_argument("--session-file", default=None)
     parser.add_argument("--out", default="")
+    parser.add_argument("--page-size", type=int, default=5)
     # 独立核对：拿到页面/QA 的结果后，把它交进来比对。
     parser.add_argument("--expect-order", default=None)
     parser.add_argument("--expect-source", default=None)
     parser.add_argument("--expect-status-code", default=None)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     session = (os.environ.get("AIOPS_CHECK_SESSION") or "").strip()
     if not session and args.session_file:
@@ -102,16 +192,9 @@ def main() -> int:
         print("缺少 AIOPS_CHECK_SESSION", file=sys.stderr)
         return EXIT_UNVERIFIED
 
-    from aiops_diagnostics.charging_status import read_charging_status
-    from aiops_diagnostics.config import Settings
-    from aiops_diagnostics.gateway_config import GatewayServerSettings, charging_endpoint
-    from aiops_diagnostics.query_scope import resolve_query_scope
-    from aiops_diagnostics.sources import scoped_mysql_source
-
-    settings = GatewayServerSettings.from_env()
-    runtime = Settings.from_config(pathlib.Path(args.config_file))
+    deps = deps or default_deps(config_file=args.config_file, session=session)
     try:
-        caller = _resolve_caller(settings, runtime, session)
+        caller = deps.resolve_caller()
     except Exception as exc:  # noqa: BLE001
         print(f"会话解析失败：{type(exc).__name__}", file=sys.stderr)
         return EXIT_UNVERIFIED
@@ -120,23 +203,31 @@ def main() -> int:
     if not c_user_id or bool(getattr(caller, "delegated", False)):
         print("主体不是本人（缺 C 端身份或为代查），不建立对照", file=sys.stderr)
         return EXIT_UNVERIFIED
+    tenant_id = caller.effective_tenant_id
 
-    with scoped_mysql_source(runtime, resolve_query_scope(caller)) as source:
-        rows = source.list_orders(page=1, page_size=3)
+    rows = deps.list_orders(caller, page_size=args.page_size)
     if not rows:
         print("该主体没有本人订单", file=sys.stderr)
         return EXIT_UNVERIFIED
 
     order_no = args.expect_order or str(rows[0]["order_no"])
-    chosen = next((r for r in rows if str(r["order_no"]) == order_no), None)
-    if chosen is None:
-        # 指定的单不在本人可见范围内 —— 这是**拒绝**，不是"未验证"。
-        print(f"订单 {order_no[:6]}… 不在该主体可见范围内", file=sys.stderr)
-        return EXIT_FAIL
 
-    # ---- 端点：必须按租户解析，缺映射就是未验证，绝不回退 OPS ------------
+    # 指定单**不在第一页**不等于不属于本人：按号单独核归属（范围下推同样生效）。
+    chosen = next((r for r in rows if str(r["order_no"]) == order_no), None)
+    ownership = {"checked_by": "list_page"}
+    if chosen is None:
+        owned = [r for r in deps.get_orders(caller, order_no) if str(r["order_no"]) == order_no]
+        if not owned:
+            print("订单不在该主体可见范围内 ⇒ 拒绝", file=sys.stderr)
+            return EXIT_FAIL
+        chosen = owned[0]
+        ownership = {"checked_by": "by_order_no"}
+
+    ordering = sort_verdict(rows)
+
+    # ---- 端点：按租户解析；缺映射 ⇒ 未验证，绝不回退 OPS ------------------
     try:
-        endpoint = charging_endpoint(settings.charging_status_base_url, caller.effective_tenant_id)
+        endpoint = deps.endpoint(tenant_id)
     except ValueError:
         print(
             "个人状态地址缺失或该租户未注册（TENANT_ENDPOINT_UNRESOLVED）；不回退运维 OPS 端点 ⇒ 未验证",
@@ -145,50 +236,47 @@ def main() -> int:
         return EXIT_UNVERIFIED
 
     try:
-        cpms = read_charging_status(
-            endpoint,
-            order_no,
-            tenant_id=caller.effective_tenant_id,
-            user_id=c_user_id,
-        )
+        deps.cpms_calls += 1
+        cpms = deps.read_status(endpoint, order_no, tenant_id=tenant_id, user_id=c_user_id)
     except Exception as exc:  # noqa: BLE001
-        # 读不到就是**没验**；旧版在这里 return 0，等于把"没验"报成"通过"。
         print(f"CPMS 读取失败：{type(exc).__name__} ⇒ 未验证", file=sys.stderr)
         return EXIT_UNVERIFIED
 
-    ordering_ok = strict_descending(rows)
-    out: dict[str, object] = {
-        "checked_at_utc": __import__("datetime").datetime.now(__import__("datetime").UTC).isoformat(),
-        "tenant": caller.effective_tenant_id,
-        "order_no_prefix": order_no[:6] + "…",
-        "ordering": {
-            "rows_compared": len(rows),
-            "created_time": [str(r.get("created_time", "")) for r in rows],
-            "strictly_descending": ordering_ok,
-            "criterion": "对本人可见行比较 (created_time, order_no)，必须严格递减",
-        },
-        "cpms": cpms,
-        "model_requests_sent": 0,
-    }
-
+    # ---- 固定预期 vs 一致性通过：两件事分别记 ---------------------------
+    comparison = {"state": "not_compared", "note": "只固定了预期值，未做比对"}
     verdict = EXIT_PASS
-    if not ordering_ok:
-        out["ordering_failure"] = "可见行不是严格递减 —— 排序判据不成立"
-        verdict = EXIT_FAIL
-
-    # ---- 独立核对：只有给了预期值才比对 ---------------------------------
-    if args.expect_order or args.expect_source or args.expect_status_code is not None:
-        page = {
-            "order_no": args.expect_order or order_no,
-            "source": args.expect_source or "",
-        }
-        diff = compare_with_cpms(page=page, cpms=cpms, expect_status_code=args.expect_status_code)
-        out["comparison"] = diff
+    if args.expect_source or args.expect_status_code is not None:
+        diff = compare_with_cpms(
+            page={"order_no": order_no, "source": args.expect_source or ""},
+            cpms=cpms,
+            expect_status_code=args.expect_status_code,
+        )
+        comparison = {"state": "compared", **diff}
         if not diff["consistent"]:
             verdict = EXIT_FAIL
-    else:
-        out["comparison"] = {"consistent": None, "note": "只固定了预期值，未做比对"}
 
+    if ordering["verdict"] == "fail":
+        verdict = EXIT_FAIL
+    elif ordering["verdict"] == "unverified" and verdict == EXIT_PASS:
+        # 行数不够：**不声称**多行排序已验证。
+        verdict = EXIT_UNVERIFIED
+
+    out: dict[str, object] = {
+        "checked_at_utc": __import__("datetime").datetime.now(__import__("datetime").UTC).isoformat(),
+        "tenant": tenant_id,
+        "order_no_prefix": order_no[:6] + "…",
+        "expected_fixed": {
+            "order_no": order_no,
+            "observed_at": cpms.get("observed_at"),
+            "status_code": cpms.get("status_code"),
+            "source": cpms.get("source"),
+        },
+        "ordering": ordering,
+        "ownership": ownership,
+        "comparison": comparison,
+        "cpms_calls": deps.cpms_calls,
+        "model_requests_sent": 0,
+    }
     payload = json.dumps(out, ensure_ascii=False, indent=1)
     print(payload)
     if args.out:
