@@ -30,6 +30,7 @@ import re
 import subprocess
 import sys
 import time
+from pathlib import Path
 
 EXIT_PASS, EXIT_FAIL, EXIT_UNVERIFIED = 0, 1, 2
 
@@ -157,11 +158,20 @@ def judge(
         "answer_has_observed_at": bool(_OBSERVED_AT.search(block_text)),
         "assistant_region_has_answer": _region_has_answer(assistant_region_text, order_no),
         "not_model_refusal": not any(r in block_text.lower() for r in _REFUSALS),
+        # 区域里必须**真的包含**这段回答。空区域 ⇒ 不通过。
+        # 比之前先归一化空白：浏览器 `inner_text()` 会把换行/连续空格折叠，
+        # 直接子串比较会把"渲染对了"判成不一致。
         "answer_matches_qa_blocks": bool(answer_text.strip())
-        and answer_text.strip() in (assistant_region_text or ""),
+        and bool((assistant_region_text or "").strip())
+        and _normalized(answer_text) in _normalized(assistant_region_text or ""),
         # 区域落在用户气泡里 ⇒ 取到的是提问，不是回答。
         "region_is_not_user_bubble": not region_in_user_bubble,
     }
+
+
+def _normalized(text: str) -> str:
+    """把空白折叠成单个空格 —— 浏览器渲染出的文本与 API 文本只差空白。"""
+    return " ".join(text.split())
 
 
 def _region_has_answer(region: str, order_no: str) -> bool:
@@ -178,6 +188,13 @@ def _region_has_answer(region: str, order_no: str) -> bool:
         and "cpms.chargingInfo" in region
         and bool(_OBSERVED_AT.search(region))
     )
+
+
+def _write_private(path: Path, payload: dict) -> None:
+    """私有证据：显式路径、0600。目录本身由调用方保证是库外私有目录。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=1) + "\n")
+    path.chmod(0o600)
 
 
 def _wait_port(port: int, *, timeout: float = 10.0) -> bool:
@@ -330,23 +347,30 @@ def main() -> int:
         region_in_user_bubble=region_in_user_bubble,
     )
 
-    out = {
+    # **终端只打摘要**：问题原文、回答正文、页面文本都不上屏。
+    summary = {
         "label": args.label,
-        "question": question,
         "order_no_prefix": args.order_no[:6] + "…",
         "checks": checks,
         "all_pass": all(checks.values()),
-        "answer_excerpt": answer_text[:400],
-        "page_excerpt_tail": page_text[-300:],
+        "answer_chars": len(answer_text),
+        "page_chars": len(page_text),
         "network": [
             {"m": e["method"], "p": e["path"], "http": e["http"], "cc": e["cache_control"]} for e in events
         ],
     }
-    payload = json.dumps(out, ensure_ascii=False, indent=1)
-    print(payload)
+    # 私有报告：完整问题/回答/页面文本 **只写显式指定的库外目录**。
+    report = {
+        **summary,
+        "question": question,
+        "order_no": args.order_no,
+        "answer_excerpt": answer_text[:400],
+        "page_excerpt_tail": page_text[-300:],
+    }
+    print(json.dumps(summary, ensure_ascii=False, indent=1))
     if state_dir:
-        (state_dir / f"result.{args.label}.private.json").write_text(payload + "\n")
-    return EXIT_PASS if out["all_pass"] else EXIT_FAIL
+        _write_private(state_dir / f"result.{args.label}.private.json", report)
+    return EXIT_PASS if summary["all_pass"] else EXIT_FAIL
 
 
 #: 助手回答区域的选择器 —— **对着现役产物核过**，不是猜的。
@@ -371,7 +395,33 @@ ASSISTANT_SELECTORS = (
 USER_MESSAGE_SELECTORS = (".user-bubble",)
 
 
-def _drive(*, port: int, login: dict, question: str, timeout: float):
+#: 真实站点的导航与交互。**回放时换成离线版本**，走的是同一条驱动路径
+#: （同一个 `_drive`、同一套请求/响应捕获、同一个轮询与区域读取）。
+def _live_steps(page, *, host: str, login: dict, question: str) -> None:
+    page.goto(f"https://{host}/", wait_until="domcontentloaded", timeout=25000)
+    page.evaluate(
+        "(d)=>{uni.setStorageSync('third_session',d.thirdSession);uni.setStorageSync('user_info',d)}",
+        login,
+    )
+    # 干净聊天上下文：重新进 chat 页，不带上一轮的任何状态。
+    page.goto(
+        f"https://{host}/pages/user/user-center/dragindex",
+        wait_until="domcontentloaded",
+    )
+    page.get_by_text("AI客服1", exact=True).click(timeout=20000)
+    page.locator(".mode-btn").click(timeout=20000)
+    page.locator("input").fill(question)
+    page.locator(".send-btn").click()
+
+
+def _drive(*, port: int, login: dict, question: str, timeout: float, steps=None):
+    """驱动浏览器。
+
+    `steps` 是**注入点**：真实运行用 `_live_steps`（连真实站点），离线回放用
+    一个本地页面 + 合成 API。除此之外的代码路径完全一样 —— 请求/响应捕获、
+    按 `qa_id` 轮询到 `completed`、助手区域读取、用户气泡判定。
+    """
+    steps = steps or _live_steps
     from playwright.sync_api import sync_playwright
 
     events: list[dict] = []
@@ -397,9 +447,9 @@ def _drive(*, port: int, login: dict, question: str, timeout: float):
                     payloads.append({"url": req.url, "body": None})
 
         def on_response(resp):
-            if "/v1/" in resp.url and HOST in resp.url:
+            if "/v1/" in resp.url:
                 rec = {
-                    "path": resp.url.split(HOST, 1)[-1],
+                    "path": "/v1/" + resp.url.split("/v1/", 1)[-1],
                     "method": resp.request.method,
                     "http": resp.status,
                     "content_type": resp.headers.get("content-type"),
@@ -414,20 +464,7 @@ def _drive(*, port: int, login: dict, question: str, timeout: float):
         page.on("request", on_request)
         page.on("response", on_response)
 
-        page.goto(f"https://{HOST}/", wait_until="domcontentloaded", timeout=25000)
-        page.evaluate(
-            "(d)=>{uni.setStorageSync('third_session',d.thirdSession);uni.setStorageSync('user_info',d)}",
-            login,
-        )
-        # 干净聊天上下文：重新进 chat 页，不带上一轮的任何状态。
-        page.goto(
-            f"https://{HOST}/pages/user/user-center/dragindex",
-            wait_until="domcontentloaded",
-        )
-        page.get_by_text("AI客服1", exact=True).click(timeout=20000)
-        page.locator(".mode-btn").click(timeout=20000)
-        page.locator("input").fill(question)
-        page.locator(".send-btn").click()
+        steps(page, host=HOST, login=login, question=question)
 
         # 用条件等待而不是固定 sleep：等到本次 qa_id 的 GET 变成 completed。
         deadline = time.monotonic() + timeout

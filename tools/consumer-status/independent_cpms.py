@@ -29,6 +29,7 @@ import json
 import os
 import pathlib
 import sys
+from pathlib import Path
 
 EXIT_PASS, EXIT_FAIL, EXIT_UNVERIFIED = 0, 1, 2
 
@@ -103,6 +104,17 @@ def sort_verdict(rows: list[dict]) -> dict:
     }
 
 
+def _write_private(path: Path, body: str) -> None:
+    """私有证据：显式路径、只给自己读写。
+
+    **不默认写任何地方** —— 调用方必须给 `--out`，且不能在代码目录里。
+    这里不替调用方猜位置：那份文件的完整内容属于业务数据。
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body + "\n")
+    path.chmod(0o600)
+
+
 def compare_with_cpms(*, page: dict, cpms: dict, expect_status_code: object = None) -> dict:
     """页面/QA 与 CPMS 的一致性判据。返回 {"consistent": bool, "reasons": [...]}。"""
     reasons: list[str] = []
@@ -151,8 +163,30 @@ def default_deps(*, config_file: str, session: str) -> Deps:
         return scoped_mysql_source(runtime, resolve_query_scope(caller))
 
     def list_orders(caller, *, page_size: int):
+        """补上 `id`：`list_orders` 的公开返回**只有四个字段**，没有主键。
+
+        排序判据要用 `(created_time, id)`，而生产契约 `list_orders` 不返回 `id`
+        （那是"选单只输出需要的字段"的刻意收缩）。这里**不改公开契约**，改用
+        同一 scope 的 `get_orders(order_no)` 取回该行的完整列（`ORDER_COLUMNS`
+        首列就是 `id`，且同样按租户/本人/工单归属下推）。
+
+        补不上就**让它缺着** —— `sort_verdict` 会判 `missing_id`/`unverified`，
+        不会伪造 id，也不会拿 `order_no` 顶替。
+        """
+        merged: list[dict] = []
         with _source(caller) as source:
-            return source.list_orders(page=1, page_size=page_size)
+            rows = source.list_orders(page=1, page_size=page_size)
+            for row in rows:
+                enriched = dict(row)
+                full = source.get_orders(str(row["order_no"]))
+                match = next(
+                    (r for r in full if str(r.get("order_no")) == str(row["order_no"])),
+                    None,
+                )
+                if match is not None and match.get("id") is not None:
+                    enriched["id"] = match["id"]
+                merged.append(enriched)
+        return merged
 
     def get_orders(caller, order_no: str):
         with _source(caller) as source:
@@ -261,26 +295,33 @@ def main(argv: list[str] | None = None, *, deps: Deps | None = None) -> int:
         # 行数不够：**不声称**多行排序已验证。
         verdict = EXIT_UNVERIFIED
 
-    out: dict[str, object] = {
+    # **终端只打摘要**：完整订单号属于业务数据，只在私有报告里出现。
+    summary: dict[str, object] = {
         "checked_at_utc": __import__("datetime").datetime.now(__import__("datetime").UTC).isoformat(),
         "tenant": tenant_id,
         "order_no_prefix": order_no[:6] + "…",
         "expected_fixed": {
-            "order_no": order_no,
+            "order_no_set": bool(order_no),
             "observed_at": cpms.get("observed_at"),
             "status_code": cpms.get("status_code"),
             "source": cpms.get("source"),
         },
         "ordering": ordering,
         "ownership": ownership,
-        "comparison": comparison,
+        "comparison": {k: v for k, v in comparison.items() if k != "keys"},
         "cpms_calls": deps.cpms_calls,
         "model_requests_sent": 0,
     }
-    payload = json.dumps(out, ensure_ascii=False, indent=1)
-    print(payload)
+    # 私有报告：完整证据（含完整订单号与排序键）**只写这里**。
+    report: dict[str, object] = {
+        **summary,
+        "expected_fixed": {**summary["expected_fixed"], "order_no": order_no},
+        "comparison": comparison,
+        "ordering": ordering,
+    }
+    print(json.dumps(summary, ensure_ascii=False, indent=1))
     if args.out:
-        pathlib.Path(args.out).write_text(payload + "\n")
+        _write_private(Path(args.out), json.dumps(report, ensure_ascii=False, indent=1))
     return verdict
 
 
