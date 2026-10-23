@@ -1,7 +1,10 @@
 # 本人订单状态验收工具（只读）
 
-三个脚本 + 一条命令链。**它们只做取证，不改任何业务状态**：零模型调用、
-零诊断作业、不写订单。
+三个脚本 + 一条命令链。**它们只做取证，不改任何业务状态**：不开诊断作业、不写订单。
+
+⚠️ `status_probe.py` **会向网关提交一个真实问题**。它保证的是"走确定性路径、不触发
+模型循环"，而不是"零网络影响"——真实运行前必须先满足启用与路由前提（见第五节）。
+另外两个脚本是纯只读。
 
 > 本目录的第一版有四个**误报**（判据比事实宽，证据不足时仍退出 0）。
 > `tests/test_consumer_status_tools.py` 逐条钉住它们，并做过变异复验
@@ -88,9 +91,23 @@ python tools/consumer-status/independent_cpms.py \
 缺映射是 `TENANT_ENDPOINT_UNRESOLVED` ⇒ 退出 2，**绝不回退运维 OPS 地址**。
 用户身份取 `caller.subject.c_user_id`（不是不存在的 `caller.user_id`）。
 
-排序判据是独立的：对本人可见行比较 `(created_time, order_no)` 是否**严格递减**。
+排序判据是 `(created_time, **id**)` 严格递减，**与生产 `ORDER BY created_time DESC, id DESC` 一致**。
+不能用 `order_no` 当第二键：同一秒里 `id=2/order_no=A` 排在 `id=1/order_no=Z` 前面是对的，
+按订单号字符串比较会判反。空集合 / 单行 / 缺 `id` ⇒ `unverified`（退 2），
+**不声称**多行排序已验证。
+
+`id` 从哪来：`list_orders()` 的公开契约只返回 `order_no/status/site_id/created_time`
+（**没有** `id`）。工具侧用同一 scope 的 `get_orders(order_no)` 取回该行的完整列补上，
+**不改公开契约**；补不上就让它缺着，走 `unverified`，不伪造。
+
 "同一个 `list_orders` 换个 `page_size` 首行相同"**不算**排序证明 —— 那两次调用走的是
 同一个 `ORDER BY`，只能证明选择器是确定的。
+
+### 输出脱敏（默认）
+
+终端**只打摘要**：结论、计数、时间、订单号前缀。完整订单号、问题原文、回答正文、
+页面文本**只写 `--out` / `--state-dir` 显式指定的库外私有目录**，文件权限 0600。
+**没有默认输出目录** —— 不给参数就不落盘。
 
 ### `status_probe.py`
 
@@ -147,3 +164,75 @@ python3 tools/consumer-status/replay_selector.py   # 0 = 选择器符合预期
 - 真实存在的**他人订单被拒**仍未验证（见验收记录）。
 - `status_probe.py` 的完整链路（dev-host 校验 → 隧道 → 浏览器 → 判据）本片
   只跑到了选择器与判据这一段，端到端未重跑（那会需要开生产窗口）。
+
+## 五、运行前提与位置（别混写）
+
+| 脚本 | 跑在哪 | 需要什么 |
+|---|---|---|
+| `check_identity.py` | **41**，`aiops41` 服务账号 | Redis 会话 + 业务库凭据（只在那个账号下） |
+| `independent_cpms.py` | **41**，`aiops41` 服务账号 | 同上 + 个人 CPMS 地址已按租户登记 |
+| `status_probe.py` | **开发机** | 真实浏览器；主机身份经 `dev-host` 校验后开隧道 |
+| `replay_drive.py` | **开发机**（离线） | 只要 playwright；**不连任何生产** |
+
+`status_probe.py` 的真实运行**必须先满足**：
+1. `AIOPS_GATEWAY_CONSUMER_ORDER_CHAT_ENABLED=true` 且进程里生效；
+2. `AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL` 已按租户登记（映射形式）；
+3. `AIOPS_GATEWAY_EXECUTION_ENVIRONMENT` 已设；
+4. H5 站点的 `/v1/` 转发在位（#992）。
+
+缺任一条件，它会跑但判据不过（`queued`/`running` 或模型拒绝话术）——**那不是工具坏了**。
+
+## 六、浏览器驱动回放（不需要生产窗口）
+
+`replay_drive.py` 用**同一个 `_drive()`**（同一套请求/响应捕获、按 `qa_id` 轮询、
+助手区域读取、用户气泡判定），只把 `steps` 换成离线版本：
+
+- 页面由本地 HTTP 服务器托管（合成 DOM，与现役产物同构）；
+- 所有 `/v1/` 在路由层拦截并返回合成数据；**未声明的业务接口直接 abort**；
+- 因此 `production_business_requests` 恒为 **0**。
+
+三个场景：`normal` / `progressive`（**异步**分两段渲染）/ `failed`（错误 QA）。
+前两个判据必须全过，第三个**必须至少一项不过**。
+
+`progressive` 的时序是刻意设计的：第二段在 1200ms 到，而回放把区域等待压到
+2.0s —— 二者**真实重叠**。`_drive()` 必须等到**完整**回答；"第一次出现非空文本
+就收工"的实现会拿到半截、判据当场不过（这条已做变异复验）。
+
+助手消息在回放里是**同一个节点**、文本就地增长（真实流式渲染就是这样）。
+若每段新插一条，`locator.last` 永远读到最新的那条，时序缺陷就测不出来了。
+
+```bash
+python3 tools/consumer-status/replay_drive.py    # 0 = 三场景都符合预期
+```
+
+## 七、已知的存量文档敏感信息（待处理）
+
+下列文件里有**既有**的账号/订单明文，不是本片引入，**未擅自改动**：
+
+- `docs/adr/0090-diagnosis-contract-has-no-unsatisfiable-constraints.md`
+- `docs/validation.md`（两处历史条目）
+
+它们已在 Git 历史里。**清掉工作树不等于历史里没有** —— 需要单独决定是否处理，
+本片不重写历史。
+
+## 八、复跑步骤（按实际运行结果整理）
+
+见文末「复跑记录」一节，那里记了构建身份、命令、退出码与证据位置。
+
+## 九、复跑记录（2026-10-23，实际运行结果）
+
+基线 `2a2fe4e`（`main`）。以下数字是本片在开发机上**实际跑出来**的，不是估计。
+
+| 步骤 | 命令 | 退出码 | 结果 |
+|---|---|---|---|
+| 默认适配路径 | `PYTHONPATH=$PWD/src uv run pytest tests/test_consumer_status_default_path.py -q` | 0 | 4 passed |
+| 全部自检 | `PYTHONPATH=$PWD/src uv run pytest tests/test_consumer_status_tools.py tests/test_consumer_status_default_path.py` | 0 | **37 passed** |
+| 浏览器驱动回放 | `python3 tools/consumer-status/replay_drive.py` | **0** | `verdict=pass`，`production_business_requests=0`，三场景：normal/progressive `all_checks=true`、failed `all_checks=false`（预期不过） |
+| 选择器回放 | `python3 tools/consumer-status/replay_selector.py` | 0 | `.ai-msg` 命中 1、旧猜测命中 0、用户气泡不含订单号 |
+
+证据位置：回放的 JSON 打到 stdout（合成数据，无生产内容）；
+真实运行的完整证据只写 `--out` / `--state-dir` 指定的库外私有目录（0600）。
+
+**这一片没有开生产窗口**，所以上表**没有**任何真实查询作业或模型调用。
+`status_probe.py` 的真实端到端仍未重跑（缺的是"受控窗口 + 真实会话"，
+不是"离线无法验证"——离线驱动回放已经证明了）。

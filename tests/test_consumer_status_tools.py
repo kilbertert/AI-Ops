@@ -525,3 +525,62 @@ def test_replay_selector_script_exists_and_is_explicit_about_limits() -> None:
     text = script.read_text("utf-8")
     assert "不碰生产" in text or "不发任何网络请求到生产" in text
     assert "SYNTH-ORDER-0001" in text
+
+
+# ---------------------------------------------------------------- 默认输出脱敏
+
+#: 合成敏感标记：出现在终端输出里就是泄露。
+SECRET_ORDER = "SYNTH-SECRET-ORDER-9Z"
+SECRET_ANSWER = "SYNTH-SECRET-ANSWER-QX"
+
+
+class _RedactDeps:
+    """CPMS 替身：返回带合成敏感标记的完整订单号。"""
+
+    def __init__(self) -> None:
+        self.cpms_calls = 0
+
+    def resolve_caller(self):
+        return Caller()
+
+    def list_orders(self, _caller, *, page_size: int):
+        return [
+            {"order_no": SECRET_ORDER, "id": 2, "created_time": "t2"},
+            {"order_no": "SYNTH-OTHER", "id": 1, "created_time": "t1"},
+        ]
+
+    def get_orders(self, _caller, order_no: str):
+        return []
+
+    def read_status(self, endpoint, order_no, *, tenant_id, user_id):
+        return {
+            "order_no": order_no,
+            "status_code": "1",
+            "status_role": "finished",
+            "observed_at": "2026-10-23T00:00:00+00:00",
+            "source": "cpms.chargingInfo",
+        }
+
+    def endpoint(self, tenant_id: str) -> str:
+        return "https://cpms.example/charging-pile"
+
+
+def test_terminal_output_has_no_full_order_number(capsys: pytest.CaptureFixture[str]) -> None:
+    """终端只打摘要：完整订单号只进私有报告。"""
+    deps = _RedactDeps()
+    cpms.main(["--expect-order", SECRET_ORDER], deps=deps)
+    captured = capsys.readouterr()
+    wrote = captured.out + captured.err
+    assert SECRET_ORDER not in wrote, "完整订单号出现在终端输出里"
+    assert SECRET_ORDER[:6] in wrote, "连脱敏前缀都没有，说明摘要没打出来"
+
+
+def test_private_report_keeps_the_full_evidence(tmp_path, capsys: pytest.CaptureFixture[str]) -> None:
+    """私有报告保留完整证据，且权限是 0600。"""
+    out = tmp_path / "report.json"
+    cpms.main(["--expect-order", SECRET_ORDER, "--out", str(out)], deps=_RedactDeps())
+    capsys.readouterr()
+    assert out.exists()
+    assert oct(out.stat().st_mode)[-3:] == "600"
+    body = json.loads(out.read_text())
+    assert body["expected_fixed"]["order_no"] == SECRET_ORDER
