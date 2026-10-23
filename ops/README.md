@@ -193,3 +193,21 @@ Content-Type: application/json
 
 **运维侧的等价命令**仍是 `aiops admin sync-from-dify`（零参数，跑**全部**绑定）。
 两者调用**同一个函数**，所以不会漂。
+
+# 消费者 H5 的助手面转发（`ops/nginx/`）
+
+`ulink.h5.mall.qushiyun.com` 是个只有静态回退的站点：`/v1/` 下的请求不到网关，
+`GET` 拿到的是 SPA 回退的 `index.html`（gzip 780 B），`POST` 直接 405。
+于是聊天页唯一的症状是 "Failed to ask"，而访问日志里那几条 `200` 看着像成功。
+
+`ops/nginx/ulink-h5-assistant.conf` 是装到该 vhost `extension/<host>/` 的 server 级
+include，**只转发 H5 聊天页实际调用的 12 条路径**。清单的唯一声明处是
+`ops/nginx/h5-assistant-routes.txt`；`tests/test_h5_assistant_routes.py` 用**真的 nginx**
+断言「声明的都转发」+「网关其余 76 条一条不转发」。
+
+**按方法拆 location，不写一条路径正则**：`location ~` 只匹配 URI、不看方法，
+一条正则会顺带放开 `POST /v1/shortcuts`（创建快捷键，管理面）。
+`limit_except` 也不够 —— 它在静态回退之后才生效，实测 `POST` 照样进代理。
+
+宿主安装属于**产物部署**（CD 只管 `src/` 到 `/opt/aiops-41`），
+按 `deploy/manual-deploys.md` 留痕。回滚 = 删两个文件 + `nginx -t` + reload。
