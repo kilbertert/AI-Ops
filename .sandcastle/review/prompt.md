@@ -58,7 +58,7 @@ their separation in the final summary under `## Standards` and `## Spec`.
    the double recording what it reproduces and where that came from (measured
    date, document, or captured response); a strict double with no provenance is
    one the next reader deletes as noise.
-4. Run `uv sync --extra dev && uv run pytest -n auto && uv run ruff check` and `node .sandcastle/policy-check.mjs commit` before
+4. Run `uv sync --extra dev && uv run pytest && uv run ruff check` and `node .sandcastle/policy-check.mjs commit` before
    committing. If files changed, commit with a Conventional Commit message.
 5. Keep Standards and Spec findings in separate sections. Mention accepted or
    false-positive findings briefly for human triage.

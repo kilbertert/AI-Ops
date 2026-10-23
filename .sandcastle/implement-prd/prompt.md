@@ -58,7 +58,7 @@ did — the test files touching your change, the typecheck, the linter. The full
 gate below runs everything; run it once, when the change is complete, not after
 every edit.
 
-Before committing, run `uv sync --extra dev`, `uv run pytest -n auto`, and
+Before committing, run `uv sync --extra dev`, `uv run pytest`, and
 `uv run ruff check`, then `node .sandcastle/policy-check.mjs commit`.
 
 Before you settle on an approach, search what this repository has already
