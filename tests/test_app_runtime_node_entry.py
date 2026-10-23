@@ -459,9 +459,7 @@ def test_real_tcp_post_then_poll_reaches_the_node(tmp_path, monkeypatch):
 
             with httpx.Client(base_url=f"http://127.0.0.1:{port}", timeout=10.0) as client:
                 started = time.monotonic()
-                response = client.post(
-                    "/v1/assistant/questions", headers=HEADERS, json={"question": LATEST}
-                )
+                response = client.post("/v1/assistant/questions", headers=HEADERS, json={"question": LATEST})
                 elapsed = time.monotonic() - started
                 assert response.status_code == 202, response.text
                 assert elapsed < 2.0, f"POST waited for the node ({elapsed:.2f}s)"
