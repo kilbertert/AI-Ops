@@ -62,6 +62,63 @@ cleanup: still_listening=[]
 - `status_probe.py` 的真实端到端仍需受控窗口。
 - 本片零生产写入、零业务请求、零模型调用。
 
+## 2026-10-23 · 「跳转到 RAGFlow 的按钮又没了」—— 第一性原理定位（#1012）
+
+**用户报告**：知识库页上的「打开 RAGFlow」卡片消失，"这怎么不稳当的"。
+
+### 一、先排除的三个假设（都不是）
+
+| 假设 | 取证 | 结论 |
+|---|---|---|
+| nginx 没注入脚本 | `curl /datasets` 里 `<script src="/__aiops/dify-knowledge-open.js">` 在 | 否 |
+| 脚本 404 / 内容坏了 | `HTTP 200 size=6930` | 否 |
+| 卡片被"收起"过 | `localStorage['aiops.kbOpenCardHidden'] === null` | 否 |
+
+干净会话里直接打开 `/datasets`：`card: true`。**所以它确实"没了"，但不是每次都没。**
+
+### 二、决定性对照
+
+```
+A. 直接落在 /datasets                          → card: true
+B. 落在 /apps，等 24 秒，再点侧栏「知识库」       → card: false   ← 复现
+C. 落在 /apps，等 24 秒，goto('/datasets')      → card: true     （整页加载会重跑脚本）
+```
+
+只有**真 SPA 软导航**（A 变成 B 那样）才丢，所以问题在"脚本活着、但没在那一刻挂"。
+
+### 三、根因
+
+```js
+var tries = 0;
+var timer = setInterval(function () {
+  tries += 1;
+  try { mount(); } catch (e) {}
+  if (tries > 40) { clearInterval(timer); }   // ← 20 秒后自杀
+}, 500);
+```
+
+注释写的理由是"一直转下去的定时器会白白耗电"。**那个账算错了**：
+
+- 代价：脚本只活在控制台里，500ms 一次 `location.pathname` 比较 + 一次
+  `getElementById`。标签页不可见时浏览器本来就把 `setInterval` 降到 1s 以上。
+- 收益：不停 = 运营任何时候进知识库页都能看到入口。
+
+而"先看工作室/应用，过一会儿再看知识库"是**主路径**，不是边角。所以这不是偶发，
+是"20 秒后必定失效"。
+
+### 四、为什么之前的验收没抓到
+
+#983/#985 的验收是**直接打开 `/datasets`** —— 那是脚本刚加载、轮询还在跑的情形。
+一次真实的操作序列（别处停留 → 侧栏切换）才能暴露它。**验收的入口要按用户的实际路径走，
+不能只按"功能所在那一页"走。**
+
+### 五、修法
+
+去掉次数上限，轮询常驻。新增静态断言：定时器回调体里不许出现 `clearInterval` 或次数上限
+（`tests/test_dify_knowledge_open_script.py::test_the_poller_never_stops`）。
+
+**没验什么**：修复要部署到 36 的桥才生效；部署后必须用 B 那条路径复验一次。
+
 ## 2026-10-23 · 验收工具接通默认路径：适配器、脱敏、浏览器驱动回放
 
 #1006 的自检只在**注入 Deps 替身**时通过。这一片让它按文档真跑。
