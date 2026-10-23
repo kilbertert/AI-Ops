@@ -57,9 +57,9 @@ no project argument. Both answer *where* something is; neither replaces reading 
 - AGENTS.md
 - CLAUDE.md
 - README.md
-- docs/ — 173 markdown file(s)
+- docs/ — 176 markdown file(s)
 - docs/adr/ — 97 markdown file(s)
-- docs/agents/ — 51 markdown file(s)
+- docs/agents/ — 52 markdown file(s)
 
 ## Tree (depth 2, first 80 lines; dependencies, build
 output and run residue omitted)
@@ -142,6 +142,7 @@ docs/
     battery-inspection-metrics.md
   validation/
     2026-10-23-pr-conflict-blocks-ci.md
+    2026-10-23-single-tenant-enable-change-ticket.md
     a-charging-status-http.json
     m2-b2-release-review.json
     m2-b2-release-review.py
@@ -150,10 +151,10 @@ docs/
     m2-live-03-frozen.json
     m2-live-03-r2-synthetic.json
     m2-live-03-synthetic.json
-    m2-live05-recovery-synthetic.json
-    ... (4 more)
+    ... (5 more)
   开发进度/
     2026-10-23-pr-conflict-automation.md
+    2026-10-23-single-tenant-enable-change-ticket.md
   afk-workflow.md
   architecture.md
   ... (20 more)
