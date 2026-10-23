@@ -70,6 +70,8 @@ class _State:
             "id": dataset_id,
             "name": str(body.get("name") or ""),
             "permission": "only_me",
+            # 创建接口**不写** retrieval_model —— 真 Dify 就是这样（落库 SQL NULL）。
+            "external_retrieval_model": None,
             "external_knowledge_info": {
                 "external_knowledge_id": str(body.get("external_knowledge_id") or ""),
                 "external_knowledge_api_id": str(body.get("external_knowledge_api_id") or ""),
@@ -85,6 +87,10 @@ class _State:
             raise ValueError("external knowledge id and api id are required")
         item["name"] = str(body.get("name") or item["name"])
         item["permission"] = str(body.get("permission") or item["permission"])
+        # 与真 Dify 同一条：``external_retrieval_model`` 不给就保持 null，而检索对它
+        # 直接 ``.get`` ⇒ 每次检索 AttributeError。所以"补了没有"必须能被观察到。
+        if body.get("external_retrieval_model") is not None:
+            item["external_retrieval_model"] = body["external_retrieval_model"]
 
 
 STATE = _State()
@@ -279,6 +285,11 @@ def main() -> int:
             "the create body carries no permission (the route has no such field)",
             all("permission" not in w["body"] for w in creates),
             [w["body"] for w in creates],
+        )
+        check(
+            "every dataset ends up with a retrieval model (else Dify's retrieval crashes)",
+            all(d.get("external_retrieval_model") for d in STATE.datasets.values()),
+            {d["id"]: d.get("external_retrieval_model") for d in STATE.datasets.values()},
         )
         check(
             "every patch carries permission plus both external ids",

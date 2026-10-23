@@ -124,6 +124,67 @@
   取不到就判失败（不退回整页）。真实复跑前要先用 `--state-dir` 跑一次确认命中。
 - 本片**没有**开生产窗口、没有提交真实状态问题、没有模型调用、没有新增查询作业。
 
+## 2026-10-23 · #1001 的真机缺口：dataset 建好、能选，但**一检索就崩**（#1002 抓到）
+
+**范围**：`fix/sync-knowledge-retrieval-model`，基线 `62fd75aa`。承接已合并的 #1001。
+
+### 一、真机现象与判据
+
+在 41 的真实 Dify（`dify.ranlei.work`，`system` 账号，Ulink workspace）上按 #1002 走：
+
+| 步骤 | 结果 |
+|---|---|
+| 知识库页出现 `41` / `41(1)` | ✅（两张卡片，EXTERNAL） |
+| 编排页「Select reference Knowledge」里可选 | ✅（两条都在，没有「未找到知识库」） |
+| 选中后库进 LLM 上下文 | ✅（Knowledge 区显示 `41(1)`） |
+| 库里点命中测试 | ✅ 返回 `宣传.docx` / 重卡充电桩表格 |
+| **智能体回答** | ❌ **「抱歉，我这边暂时无法查询到…」** |
+
+前四行全绿、最后一行红 —— 这正是票里那条判据纪律要防的形状。
+
+### 二、真因（Dify api 日志，不是推断）
+
+```
+File "/app/api/services/external_knowledge_service.py", line 520
+    score_threshold_enabled = external_retrieval_parameters.get("score_threshold_enabled") or False
+AttributeError: 'NoneType' object has no attribute 'get'
+```
+
+`fetch_external_knowledge_retrieval` 收到的 `external_retrieval_parameters` 就是
+`dataset.retrieval_model`。`create_external_dataset` **不写**这一列 →
+
+```
+select count(*) filter (where retrieval_model is null), count(*) from datasets where provider='external';
+0|5   -- 但那是 vendor 的统计；Ulink 这 5 条 external **全是** null
+```
+
+**命中测试为什么能过**：它读的是 `dataset.external_retrieval_model` 这个**属性**
+（`self.retrieval_model or {"top_k": 2, ...}`），有默认值兜底；`fetch_external_knowledge_retrieval`
+读的是**裸列**，没有兜底。同一个库，两条路径。
+
+### 三、修了什么
+
+- `update_external_dataset` 每次 PATCH 都带 `external_retrieval_model`，取值与 Dify UI 的
+  `DATASET_DEFAULT` 一致（top_k 4 / 阈值 0.8 / 默认关闭）。
+- `plan()` 新增 `fix_retrieval_model`：已存在、已可见、但 `retrieval_model` 为 null 的条目
+  算待修。**只判「在不在 + 权限对不对」的 plan 会永远认为 #1001 建出来的那批是健康的。**
+
+### 四、我自己的两次判据失误（记下来）
+
+1. **第一次跑端到端，我判了 PASS —— 那是假 PASS。** 判据写的是"回答里出现 `重卡` /
+   `客户案例`"，而页面文本里**回显了我自己提的问题**（问题里就有这两个词）。改成只检查
+   回答正文（问题之后那段）之后，同一份证据立刻变红。**判据要排除回显。**
+2. **同一次，我把「列表里有 41(1)」当成了「端到端命中」的中间证据。** 它们不是同一件事：
+   前者证明 dataset 存在，后者证明检索被调用并返回了内容。日志里 `chat-messages` 请求
+   成功、没有任何 4xx —— 因为 Dify 把那个 AttributeError 吞了。
+
+### 五、没验什么
+
+- 修复**尚未部署到 41**（本分支）。部署后必须重跑一次端到端并看到回答正文里出现
+  `宣传.docx` / 重卡充电桩的内容。
+- editor 账号的 UI 可见性只做了 SQL 层判定（复刻 Dify 的 WHERE 子句），没真的用一个
+  editor 身份登录点一遍 —— 没有第二个可登录账号。
+
 ## 2026-10-23 · RAGFlow 库同步成 Dify dataset（#1001）：真 CLI 13 项通过，真 Dify 未跑
 
 **范围**：`feat/sync-knowledge-datasets`，基线 `1118e272`。**未完成真机验收** —— 命令在

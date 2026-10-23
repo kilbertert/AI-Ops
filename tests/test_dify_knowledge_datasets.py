@@ -89,6 +89,7 @@ class _Console:
         external_knowledge_id: str,
         external_knowledge_api_id: str,
         permission: str = PERMISSION_ALL_TEAM,
+        external_retrieval_model: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         body = {
             "name": name,
@@ -96,12 +97,19 @@ class _Console:
             "external_knowledge_id": external_knowledge_id,
             "external_knowledge_api_id": external_knowledge_api_id,
         }
+        if external_retrieval_model is not None:
+            body["external_retrieval_model"] = external_retrieval_model
         self.calls.append({"op": "update", "dataset_id": dataset_id, "body": body})
         for item in self.datasets:
             if item["id"] == dataset_id:
                 item["name"] = name
                 item["permission"] = permission
+                if external_retrieval_model is not None:
+                    item["external_retrieval_model"] = external_retrieval_model
         return {}
+
+
+_READY_MODEL = {"top_k": 4, "score_threshold": 0.8, "score_threshold_enabled": False}
 
 
 def _lib(dataset_id: str, name: str) -> Library:
@@ -109,7 +117,13 @@ def _lib(dataset_id: str, name: str) -> Library:
 
 
 def _existing(
-    dataset_id: str, name: str, *, permission: str, ragflow: str = "kb-a", kid: str = ""
+    dataset_id: str,
+    name: str,
+    *,
+    permission: str,
+    ragflow: str = "kb-a",
+    kid: str = "",
+    retrieval_model: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """A Dify dataset as the list route returns it.
 
@@ -121,6 +135,7 @@ def _existing(
         "id": dataset_id,
         "name": name,
         "permission": permission,
+        "external_retrieval_model": retrieval_model,
         "external_knowledge_info": {
             "external_knowledge_id": kid or f"tenant-{TENANT}:{ragflow}",
         },
@@ -157,6 +172,9 @@ def test_creating_also_grants_team_visibility(tmp_path: Any = None) -> None:
     assert "permission" not in create["body"], "创建接口不接受 permission，带了会被 422"
     patch = next(c for c in console.calls if c["op"] == "update")
     assert patch["body"]["permission"] == PERMISSION_ALL_TEAM
+    assert patch["body"]["external_retrieval_model"]["top_k"] == 4, (
+        "创建接口不写 retrieval_model；不补它，Dify 每次检索都 AttributeError"
+    )
     assert outcome["applied"][0]["permission"] == PERMISSION_ALL_TEAM
     assert console.datasets[0]["permission"] == PERMISSION_ALL_TEAM
 
@@ -251,8 +269,10 @@ def test_renaming_keeps_the_id_and_never_creates() -> None:
 def test_a_library_gone_upstream_is_reported_and_never_deleted() -> None:
     console = _Console(
         datasets=[
-            _existing("ds-1", "还在", permission=PERMISSION_ALL_TEAM),
-            _existing("ds-2", "已删", permission=PERMISSION_ALL_TEAM, ragflow="kb-2"),
+            _existing("ds-1", "还在", permission=PERMISSION_ALL_TEAM, retrieval_model=_READY_MODEL),
+            _existing(
+                "ds-2", "已删", permission=PERMISSION_ALL_TEAM, ragflow="kb-2", retrieval_model=_READY_MODEL
+            ),
         ]
     )
 
@@ -342,6 +362,36 @@ def test_plan_is_pure_and_reports_a_permission_fix() -> None:
     assert decision.writes[0].dataset_id == "ds-1"
 
 
+def test_a_dataset_with_no_retrieval_model_is_repaired() -> None:
+    """#1001 建出来的那批就是这个形状：可见、能选，但**一检索就崩**。
+
+    所以"看起来已经对"不够 —— ``plan`` 必须把它认成待修，否则重跑同步永远不会修好它。
+    """
+    decision = plan(
+        [_lib("kb-a", "A")],
+        [_existing("ds-1", "A", permission=PERMISSION_ALL_TEAM, retrieval_model=None)],
+    )
+
+    assert [a.kind for a in decision.actions] == ["fix_retrieval_model"]
+
+
+def test_a_fully_correct_dataset_needs_no_write() -> None:
+    decision = plan(
+        [_lib("kb-a", "A")],
+        [
+            _existing(
+                "ds-1",
+                "A",
+                permission=PERMISSION_ALL_TEAM,
+                retrieval_model={"top_k": 4, "score_threshold": 0.8, "score_threshold_enabled": False},
+            )
+        ],
+    )
+
+    assert [a.kind for a in decision.actions] == ["ok"]
+    assert decision.writes == ()
+
+
 # ── 真实客户端的那两个方法（桩 HTTP，断言 body）──────────────────────────
 
 
@@ -394,6 +444,30 @@ def test_client_update_sets_all_team_and_both_external_fields() -> None:
         "permission": PERMISSION_ALL_TEAM,
         "external_knowledge_id": "tenant-T:kb-a",
         "external_knowledge_api_id": API_ID,
+    }
+
+
+def test_client_update_can_carry_the_retrieval_model() -> None:
+    """``external_retrieval_model`` 是**检索能不能跑**的前提（#1002 真机抓到）。
+
+    创建接口不写它 ⇒ 落库 NULL ⇒ Dify 检索时直接 ``.get`` 一个 None ⇒ 每次检索
+    AttributeError，被吞成"没有结果"。所以 PATCH 必须带。
+    """
+    client, seen = _client(None)
+
+    client.update_external_dataset(
+        WORKSPACE,
+        "ds-1",
+        name="A",
+        external_knowledge_id="tenant-T:kb-a",
+        external_knowledge_api_id=API_ID,
+        external_retrieval_model={"top_k": 4, "score_threshold": 0.8, "score_threshold_enabled": False},
+    )
+
+    assert seen[-1]["body"]["external_retrieval_model"] == {
+        "top_k": 4,
+        "score_threshold": 0.8,
+        "score_threshold_enabled": False,
     }
 
 

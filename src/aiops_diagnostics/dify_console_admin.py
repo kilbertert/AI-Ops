@@ -526,6 +526,7 @@ class DifyConsoleAdmin:
         external_knowledge_id: str,
         external_knowledge_api_id: str,
         permission: str = "all_team_members",
+        external_retrieval_model: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """改一条 external dataset。
 
@@ -533,19 +534,32 @@ class DifyConsoleAdmin:
         ``external_knowledge_id`` / ``external_knowledge_api_id`` 缺任一都是
         ``ValueError``（不是"保持不变"），所以"只改权限"也必须回填它们。
 
+        **``external_retrieval_model`` 每次也要带**（#1002 真机抓到）。Dify 检索 external
+        dataset 时把 ``dataset.retrieval_model`` **原样**交给
+        ``fetch_external_knowledge_retrieval``，而那里对它直接 ``.get(...)``：
+        ``retrieval_model`` 是 SQL NULL 时，**每一次检索**都炸
+        ``AttributeError: 'NoneType' object has no attribute 'get'``，Dify 把异常吞成
+        "没有检索结果" —— 表现为智能体回答"暂时无法查询到"，而列表、命中测试、
+        权限全都正常。``create_external_dataset`` **不写**这个字段，所以不补它就永远是
+        NULL。UI 的 Settings 表单也会带这一块（``use-form-state.ts``），
+        所以补上它与"人点过保存"是同一个状态。
+
         ``permission`` 显式给 ``all_team_members``：Dify 的 ``only_me`` 只对 maintainer
         可见，那正是编排页「未找到知识库」的成因。
         """
+        body: dict[str, Any] = {
+            "name": name,
+            "permission": permission,
+            "external_knowledge_id": external_knowledge_id,
+            "external_knowledge_api_id": external_knowledge_api_id,
+        }
+        if external_retrieval_model is not None:
+            body["external_retrieval_model"] = external_retrieval_model
         payload = self._call(
             workspace_id,
             f"/console/api/datasets/{dataset_id}",
             method="PATCH",
-            body={
-                "name": name,
-                "permission": permission,
-                "external_knowledge_id": external_knowledge_id,
-                "external_knowledge_api_id": external_knowledge_api_id,
-            },
+            body=body,
         )
         return payload if isinstance(payload, dict) else {}
 
