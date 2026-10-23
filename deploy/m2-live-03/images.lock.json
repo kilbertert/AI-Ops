@@ -51,7 +51,7 @@
     "uv_lock_sha256": "994a8a12fa58ab833985b1e864427679dca6c0ed95b74c759941f94302aa3e13",
     "base_image": "python:3.13-slim",
     "base_digest": "python@sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f",
-    "source_sha256": "b79a91294a60663d2c21d26feb31b34edf7005e5fe6512745d8c1a67e7e5e5b0",
+    "source_sha256": "2e519656605e1cb9cde558a8f81a9d70b745ebc2b913fb82b9f3d079a2772b38",
     "built_at": "2026-10-23T00:39:29Z"
   }
 }
