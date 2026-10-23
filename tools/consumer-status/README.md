@@ -302,5 +302,5 @@ python3 tools/consumer-status/replay_drive.py    # 0 = 三场景都符合预期
 | 端口归属 | 假定 `ss` 的 PID == `Popen.pid` | 判"属于本次**进程树**"（dev-host 是 shell 包装） |
 | 私有报告 | `mkdir → write_text → chmod`，跟随符号链接、无库外限制 | 落盘前判符号链接 + 库外 + 目录权限 |
 
-对应测试：`tests/test_consumer_status_boundaries.py`（13 条）。
+对应测试：`tests/test_consumer_status_boundaries.py`（15 条；三个文件合计 52 条）。
 变异复验：把写入改回 `mkdir+write_text+chmod` ⇒ 5 条转红；把隧道改回裸 `ssh` ⇒ 2 条转红。
