@@ -30,13 +30,19 @@ BINDINGS = "kb-customer:T-1:KB-A;kb-other:T-2:KB-B"
 
 
 class _Runtime:
-    """Minimal runtime stub: only the two surfaces the adapter reads."""
+    """Minimal runtime stub: only the surfaces the adapter reads."""
 
     def __init__(
-        self, *, search: Any = None, signer: Any = None, owned: dict[str, list[str]] | None = None
+        self,
+        *,
+        search: Any = None,
+        signer: Any = None,
+        owned: dict[str, list[str]] | None = None,
+        workspaces: Any = None,
     ) -> None:
         self.kb_search_client = _FakeKbClient(search, owned=owned) if search is not None else None
         self.media_signer = signer
+        self.dify_workspaces = workspaces
 
     def shutdown(self) -> None:
         pass

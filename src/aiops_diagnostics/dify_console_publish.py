@@ -151,6 +151,9 @@ _PUBLISH_CHECK_PATH = "/__aiops/publish/check"
 #: 用不了，也不该用：这条路由**不改任何东西**，它只回答"往哪跳"。真正改变状态的
 #: 动作在网关那一侧（换会话），而那里的租户来自**登录代理验过的会话**。
 _KNOWLEDGE_OPEN_ROUTE = "/__aiops/knowledge-open"
+#: 编排页「添加知识库」弹窗打开时调一次（ADR-0122）。与上面那条**同一套身份**：
+#: 租户由桥从 Cookie 里的 Dify 会话解析，工作区是桥自己的固定配置，请求体为空。
+_KNOWLEDGE_SYNC_ROUTE = "/__aiops/knowledge-sync"
 _REFUSED_PUBLISH_PERMISSION = "公司账号没有发布到 AI-Ops 的权限，请联系公司管理员"
 
 
@@ -659,6 +662,57 @@ def _identity_and_publish_verdict_for_identity(
     返回值语义沿用上游：``None`` = 查不通 / 会话不是代理签的 / 没有映射。
     """
     return _identity_and_publish_verdict(login_proxy_url, console_session=console_session, timeout=timeout)
+
+
+def _knowledge_sync_payload(
+    gateway_base_url: str, internal_token: str, *, workspace_id: str, timeout: float
+) -> int:
+    """让网关收敛一次，返回它建了几条 dataset（ADR-0122）。
+
+    ``workspace`` 是**桥的固定配置**，不是请求带来的 —— 网关按它反查租户，与
+    ``/v1/internal/knowledge/open`` 同一条判据。返回值只用于"要不要刷新列表"，
+    调用方不该从它推断业务状态。
+    """
+    from aiops_diagnostics.bounded_http import (
+        ErrorMapping,
+        RequestSpec,
+        join_url,
+        request_json,
+    )
+    from aiops_diagnostics.http_auth import build_internal_token_headers
+
+    def failed(failure: HttpFailure) -> Exception:
+        return ConsolePublishError(f"knowledge sync: {failure.status or failure.detail}")
+
+    payload = request_json(
+        RequestSpec(
+            url=join_url(
+                gateway_base_url,
+                "/v1/internal/knowledge/sync",
+                query={"workspace": workspace_id},
+            ),
+            method="POST",
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                **build_internal_token_headers(internal_token, 300, int(_time_module.time())),
+            },
+            body=b"{}",
+            timeout=timeout,
+            follow_redirects=False,
+        ),
+        mapping=ErrorMapping(
+            auth_rejected=failed,
+            http_error=failed,
+            unavailable=failed,
+            invalid_body=failed,
+            invalid_envelope=failed,
+        ),
+    )
+    if not isinstance(payload, dict):
+        raise ConsolePublishError("knowledge sync: gateway returned a non-object")
+    created = payload.get("created")
+    return created if isinstance(created, int) and created >= 0 else 0
 
 
 def _knowledge_open_payload(
@@ -1179,6 +1233,9 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
             if path == _TRIAL_RESULT_ROUTE:
                 self._post_trial_result()
                 return
+            if path == _KNOWLEDGE_SYNC_ROUTE:
+                self._post_knowledge_sync()
+                return
             if path != _PUBLISH_ROUTE:
                 raise _Rejected(404, "not found")
             session, referer = self._check_browser_request()
@@ -1205,6 +1262,64 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
             self._json(502, {"published": False, "reason": "发布链路暂时不可用，请稍后再试", "action": ""})
             return
         self._json(result.status, result.public())
+
+    def _post_knowledge_sync(self) -> None:
+        """让网关把该租户的 RAGFlow 库收敛成 Dify dataset（ADR-0122 / #1056）。
+
+        **它不改这个控制台的任何东西**：真正的写发生在网关 → Dify Console API，
+        而这里只是把浏览器已经持有的 Dify 会话原样交给登录代理验一次，证明"哪个
+        租户"—— 与 ``/__aiops/knowledge-open`` 同一套判据。
+
+        **工作区由页面带上来，租户绝不能从请求里来。**
+
+        这与 ``/__aiops/knowledge-open?workspace=…`` 同一条规矩，两条都不能省：
+
+        * **workspace 必须来自页面**：桥自己的 ``workspace_id`` 是**迁移期的静态
+          回退值**（见 ``BridgeSettings.workspace_id`` 的注释），不是"当前活跃
+          workspace"。用它会在多 workspace 部署里同步错租户 —— 而运营看到的却是
+          自己那一页，错误不报，只表现为"新库没出现"。
+        * **租户仍然只能来自验过的会话**：网关按 workspace **反查**租户，并且
+          请求里出现任何租户参数都是 400。页面能说的只有"我在哪一页"。
+
+        返回 ``{"created": N}``：调用方只在 N > 0 时刷新列表。**失败一律 200 +
+        ``created: 0``** —— 这是前端弹窗路径上的调用，一次网关抖动不该让运营看到
+        红字，更不该挡住「添加知识库」本身（ADR-0122 约束 1）。
+        """
+        if not self.settings.login_proxy_url or not self.settings.gateway_internal_token:
+            raise _Rejected(404, "not found")
+        session = _console_access_token_from_cookie(self._single_header("Cookie"))
+        if session is None:
+            raise _Rejected(401, "请先在 Dify 中登录")
+        verdict = _identity_and_publish_verdict_for_identity(
+            self.settings.login_proxy_url, console_session=session, timeout=self.settings.timeout
+        )
+        if verdict is None:
+            raise _Rejected(401, "Dify 会话无效或已过期，请重新登录")
+        headers, _allowed = verdict
+        tenant_id = headers.get("X-AIOps-Initiator-Tenant", "").strip()
+        if not tenant_id:
+            raise _Rejected(403, "你的账号还没有绑定公司租户，请联系管理员")
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+        workspace_id = (query.get("workspace") or [""])[0].strip() if query else ""
+        if not workspace_id:
+            # 没有它就没法确定同步哪个 workspace。**回 ``created: 0`` 而不是 4xx**：
+            # 前端拿不到 workspace 是它自己的问题，不该让弹窗报错。
+            self.log_message("knowledge sync: no workspace in request; nothing synced")
+            self._json(200, {"created": 0})
+            return
+        try:
+            created = _knowledge_sync_payload(
+                self.settings.gateway_base_url,
+                self.settings.gateway_internal_token,
+                workspace_id=workspace_id,
+                timeout=self.settings.timeout,
+            )
+        except Exception as exc:  # noqa: BLE001 - see the docstring's last paragraph
+            self.log_message("knowledge sync bridge failed: %s", exc)
+            self._json(200, {"created": 0})
+            return
+        self.log_message("knowledge sync: tenant=%s created=%s", tenant_id, created)
+        self._json(200, {"created": created})
 
     def _post_trial(self) -> None:
         """试运行那条路（#781 / #782 的部署层）。
