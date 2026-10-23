@@ -2028,6 +2028,117 @@ ssh aiops-41 'python3 /dev/stdin /www/wwwlogs/<vhost>.log --since <DD/Mon/YYYY> 
   要连 `status` + `error_code` + `completed_at` 一起看，不能只看错误码。
 - **对照必须调线上代码**：手写 SQL 会与卡的定义漂移（半开区间、`ABNORMAL_STATUS`）。
 
+## 5.8 Dify 里一条 external dataset 检索不了（`retrieval_model` 为空）
+
+**2026-10-23 实做。** 症状是一个**礼貌的谎**：Dify 编排页里能选到库，库里点命中测试也
+返回真实文档，但智能体回答「抱歉，我这边暂时无法查询到」/「超出支持范围」。
+
+### 为什么同步命令修不动它
+
+`aiops admin sync-knowledge-datasets` 只管理 `tenant-<租户>:<库>` 形状的 dataset。
+这三条不归它管，重跑同步**不会**修：
+
+| dataset | `external_knowledge_id` | 谁在用 |
+|---|---|---|
+| `41-Ulink-知识库` | `tenant-1942105476598861824` | 租户级合并形态（ADR-0095 保留） |
+| `aiops-41-kb-prod-kefu` ×2 | `kb-canary-2` | **已发布的 `aiops-41-kefu-agent` 引用其中一条** |
+
+「×2」是真事：同一个 `external_knowledge_id` 有两条同名 dataset。下面按 **dataset id**
+定位，不按名字。
+
+### 定位
+
+```bash
+ssh yidong-36 'bash -s' <<'EOF'
+PW=$(grep -o "^DB_PASSWORD=.*" /opt/dify/deploy/.env | cut -d= -f2-)
+docker exec -e PGPASSWORD="$PW" deploy-db_postgres-1 psql -U dify -d dify -A -F'|' -t -c "
+select d.id, d.name, d.permission, b.external_knowledge_id,
+       coalesce(d.retrieval_model::text,'<NULL>'), count(j.id) as linked_apps
+from datasets d
+left join external_knowledge_bindings b on b.dataset_id = d.id
+left join app_dataset_joins j on j.dataset_id = d.id
+where d.tenant_id='c3f871e1-ffd0-4a10-a84a-b8696f7acd25' and d.provider='external'
+group by d.id, d.name, d.permission, b.external_knowledge_id, d.retrieval_model
+order by d.name;"
+EOF
+```
+
+**判据**：`<NULL>` 的那些就是要修的。`linked_apps > 0` 的那些**一定**要修 —— 它们是真实
+用户在走的路径。
+
+### 为什么必须是 NULL 才能坏
+
+Dify 的 `fetch_external_knowledge_retrieval` 对 `dataset.retrieval_model` 直接 `.get(...)`：
+
+```
+external_knowledge_service.py:520
+AttributeError: 'NoneType' object has no attribute 'get'
+```
+
+异常被吞成"没有检索结果"。核对它在真机上确实发生：
+
+```bash
+ssh yidong-36 'docker logs --since 10m deploy-api-1 2>&1 | grep -c "NoneType.*has no attribute"'
+```
+
+命中测试**不会**暴露它：那条路径读的是 `dataset.external_retrieval_model` 属性，有默认值兜底。
+
+### 修复
+
+只补这一列，**不动名字、权限与绑定**（那些是 dataset 的归属事实）：
+
+```bash
+cat > /tmp/fix_legacy.py <<'PY'
+from aiops_diagnostics import gateway_config as gc
+from aiops_diagnostics.dify_console_admin import ConsoleApiSettings, DifyConsoleAdmin
+
+s = gc.GatewayServerSettings.from_env()
+c = DifyConsoleAdmin(ConsoleApiSettings(s.dify_console_base_url, s.dify_console_api_key))
+WS = "c3f871e1-ffd0-4a10-a84a-b8696f7acd25"
+API_ID = "af41a28b-dd3b-4b7b-8155-0930d526a75a"   # 该 workspace 的外部知识库 API 模板
+MODEL = {"top_k": 4, "score_threshold": 0.8, "score_threshold_enabled": False}
+for dataset_id, name, kid in [
+    ("900d39ce-94be-483f-a17d-09c6752fe978", "41-Ulink-知识库", "tenant-1942105476598861824"),
+    ("ebd103c0-fbd3-426b-a501-1b2a48f0ddb1", "aiops-41-kb-prod-kefu", "kb-canary-2"),
+    ("a7a8aad3-d7bf-4765-babd-f9984dcd1d7b", "aiops-41-kb-prod-kefu", "kb-canary-2"),
+]:
+    c.update_external_dataset(WS, dataset_id, name=name,
+        external_knowledge_id=kid, external_knowledge_api_id=API_ID,
+        external_retrieval_model=MODEL)
+    print("patched", dataset_id, name)
+PY
+scp /tmp/fix_legacy.py aiops-41:/tmp/fix_legacy.py
+ssh aiops-41 'sudo -n install -m 0644 -o aiops41 -g aiops41 /tmp/fix_legacy.py /tmp/fix_legacy2.py'
+ssh aiops-41 'sudo -n -u aiops41 bash -c "
+  set -a; . /etc/aiops-41/gateway.env; . /etc/aiops-41/production.env 2>/dev/null; set +a
+  cd /opt/aiops-41 && PYTHONPATH=/opt/aiops-41/src .venv/bin/python /tmp/fix_legacy2.py"'
+```
+
+`install` 那一步不是多余的：`/tmp/fix_legacy.py` 是 root 的 0644，`aiops41` 读不了它
+（`Errno 13`）。**新文件不能原地 chown**，换一个路径复制。
+
+### 验证（两条都要）
+
+```bash
+# ① 数据库：三行不再为 NULL，名字/权限没变
+ssh yidong-36 '...同上的 select...'      # 期望三行都是 {"top_k": 4, ...}
+
+# ② 已发布入口：回答正文里出现库里的内容（不是"抱歉"）
+#    浏览器 → https://dify.ranlei.work/installed/<kefu app id>
+#    问「重卡充电桩流量平台有什么客户案例」
+#    期望正文出现「峨眉山龙栖电力」「趋势智能」「携程」——这些词不在提问里
+```
+
+**判据取问题之后的正文**：页面会把问题原文也渲染出来，拿整页文本匹配会**假 PASS**
+（2026-10-23 真发生过一次）。
+
+### 不要做
+
+- **不要因为 `sync-knowledge-datasets` 报 `orphans` 就删这些 dataset。** 2026-10-23 之前
+  那个判据会把所有不归它管的来源都报成孤儿，而 `kb-canary-2` 与租户级形态**都返回 200、
+  都有内容**。判据已修（只报 `tenant-<租户>:<库>` 且该库确实消失），但删除本身不可逆，
+  且会静默破坏引用它的 app。
+
 ## 6. 真实验收边界（不得逾越）
 
 - 本地 fixture / 替身模型 / SQLite 直查 / 模型单次调用，**都不是**真实业务验收。

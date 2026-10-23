@@ -266,6 +266,49 @@ def test_renaming_keeps_the_id_and_never_creates() -> None:
 # ── 不删 ────────────────────────────────────────────────────────────────
 
 
+def test_a_manually_registered_dataset_is_not_an_orphan() -> None:
+    """手工登记的 id 不归这条命令管 —— 报成孤儿的后果是有人去删**活的** dataset。
+
+    41 上真发生过：`kb-canary-2` 被报成孤儿，而它既返回 200 有内容、又被已发布的
+    `aiops-41-kefu-agent` 引用着。
+    """
+    decision = plan(
+        [_lib("kb-a", "A")],
+        [
+            _existing("ds-1", "A", permission=PERMISSION_ALL_TEAM, retrieval_model=_READY_MODEL),
+            _existing("ds-2", "老库", permission="only_me", ragflow="kb-canary-2", kid="kb-canary-2"),
+        ],
+    )
+
+    assert decision.orphans == ()
+
+
+def test_the_tenant_level_form_is_not_an_orphan_either() -> None:
+    """`tenant-<id>` 是 ADR-0095 明确保留的合并形态 —— 不是"库没了"。"""
+    decision = plan(
+        [_lib("kb-a", "A")],
+        [
+            _existing("ds-1", "A", permission=PERMISSION_ALL_TEAM, retrieval_model=_READY_MODEL),
+            _existing("ds-2", "老租户级", permission="only_me", kid=f"tenant-{TENANT}"),
+        ],
+    )
+
+    assert decision.orphans == ()
+
+
+def test_a_derived_id_whose_library_is_gone_is_reported() -> None:
+    """**这个**才该报：同一个租户前缀、指名了一个具体的库、而那个库这次没有。"""
+    decision = plan(
+        [_lib("kb-a", "A")],
+        [
+            _existing("ds-1", "A", permission=PERMISSION_ALL_TEAM, retrieval_model=_READY_MODEL),
+            _existing("ds-2", "删掉的库", permission=PERMISSION_ALL_TEAM, ragflow="kb-2"),
+        ],
+    )
+
+    assert decision.orphans == (f"tenant-{TENANT}:kb-2",)
+
+
 def test_a_library_gone_upstream_is_reported_and_never_deleted() -> None:
     console = _Console(
         datasets=[
