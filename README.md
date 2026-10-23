@@ -643,6 +643,27 @@ runbook §5/§6 明确禁止 CI 自证。所以 CD 通过最多报告 `merged_wa
 另一份文件，两者在 2026-10-23 的比对中**零行交集**（决策见
 [docs/adr/0101](docs/adr/0101-changelog-is-generated-at-release-time.md)）。
 
+**版本号由 [`VERSION`](VERSION) 决定，人改它来发布。** CD 只读，从不推导 —— 版本号是
+「这次发布包含什么」的声明；让提交信息的措辞决定它，一次误标的 `feat!` 就会跳大版。
+
+三处声明必须相等，由 `tests/test_release_version.py` 强制：
+
+| 文件 | 角色 |
+|---|---|
+| `VERSION` | **权威**，发布时改这一份 |
+| `pyproject.toml` 的 `project.version` | 副本（打包元数据） |
+| `src/aiops_diagnostics/__init__.py` 的 `__version__` | 副本（`/health` 读它） |
+
+两个 tag，含义不同：
+
+| tag | 何时建 | 会移动吗 |
+|---|---|---|
+| `v<version>`（如 `v0.2.0`） | 该版本**首次**部署 | **不会**。同版本再部署只打印它指向哪个 commit |
+| `release-<sha12>` | **每次**部署 | key 含 sha，各是各的 |
+
+版本 tag 刻意不带 `+<sha>`：实测每次部署打一个带 build metadata 的 tag，会让
+`dev-changelog` 一次部署开一节，changelog 变成按部署切碎的流水。
+
 ### 测试组织
 
 `tests/` 是 77 个平铺文件的集合，按关注点聚类：

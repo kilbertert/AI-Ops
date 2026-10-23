@@ -278,25 +278,60 @@ jobs:
 
           # One release per deployed commit, keyed by the commit itself.
           #
-          # NOT a semantic version, and that is a stated limit rather than an
-          # oversight: `dev-changelog` splits sections on
-          # `v?<major>.<minor>.<patch>` tags, this repository has never cut one,
-          # and inventing versions here would put a number on releases nobody
-          # decided. The notes therefore answer "what has landed", not "what was
-          # in the last deployment" — the limit the policy already names for a
-          # service that creates no tags. Once a tagging practice exists,
-          # `--target` already points at the deployed commit and the same
-          # command starts producing versioned sections with no change here.
+          # The version comes from the repository's `VERSION` file, which a
+          # human edits when cutting a release. CD never invents one.
+          #
+          # That split is the point: a version number is a statement about what
+          # a release contains, and deriving it from commits would let a
+          # mistyped `feat!` bump a major version that nobody decided. `VERSION`
+          # is authoritative; `pyproject.toml` and `__init__.py` are copies kept
+          # honest by `tests/test_release_version.py`.
+          version=$(tr -d '[:space:]' < "$repo_root/VERSION")
+          if [ -z "$version" ]; then
+            echo "::error::VERSION is empty — refusing to publish a release with no version" >&2
+            exit 1
+          fi
+
+          # One release per deployment, keyed by commit; the *tag* carries the
+          # version. Two tags would be worse than one: measured 2026-10-23,
+          # `dev-changelog` splits sections on version tags, so a `v<version>+<sha>`
+          # tag per deploy would produce one section per deployment — the
+          # fragmentation the version was meant to remove.
+          #
+          # `--target` pins the release to the commit that was actually deployed,
+          # and `--verify-tag` is deliberately absent: the tag is created by this
+          # step against that commit, not pushed by a person beforehand.
           tag="release-${TARGET_SHA:0:12}"
+          title="AI-Ops ${version} — deployed ${TARGET_SHA:0:12}"
           if gh release view "$tag" >/dev/null 2>&1; then
             echo "release $tag already exists; updating its notes."
-            gh release edit "$tag" --notes-file "$notes"
+            gh release edit "$tag" --title "$title" --notes-file "$notes"
           else
             gh release create "$tag" \
               --target "$TARGET_SHA" \
-              --title "AI-Ops deployed ${TARGET_SHA:0:12}" \
+              --title "$title" \
               --notes-file "$notes" \
               --prerelease
+          fi
+
+          # The version tag is created once per version, on the deployed commit.
+          # Later deploys of the same version do not move it: a tag that walks
+          # forward is not a version, it is a pointer that keeps changing under
+          # everyone who recorded it.
+          vtag="v${version}"
+          if git rev-parse -q --verify "refs/tags/${vtag}" >/dev/null 2>&1; then
+            tagged_commit=$(git rev-list -n1 "$vtag")
+            if [ "$tagged_commit" != "$TARGET_SHA" ]; then
+              echo "tag $vtag already points at ${tagged_commit:0:12}; leaving it there."
+              echo "(bump VERSION to cut a new release; a version tag never moves)"
+            fi
+          else
+            gh release create "$vtag" \
+              --target "$TARGET_SHA" \
+              --title "AI-Ops ${version}" \
+              --notes-file "$notes" \
+              --prerelease
+            echo "created version tag $vtag at ${TARGET_SHA:0:12}"
           fi
 
       - name: Report failure

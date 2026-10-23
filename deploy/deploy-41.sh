@@ -364,13 +364,19 @@ done
 # 静态 semver —— 部署后无法回答「现在跑的是哪个 commit」。在**暂存副本**上把它
 # 改写成 <semver>+<short-sha>，让 /health 能自证。不动工作树。
 #
-# pyproject.toml 里另有一份独立的 version，与 __init__.py 本就不同步；这里只改
-# 运行时那份（editable 安装实际 import 的那个），不去合并两者。
+# 版本号的权威来源是仓库根的 `VERSION`。`VERSION`、`pyproject.toml` 与
+# `__init__.py` 三处曾经各写各的、从未同步；`tests/test_release_version.py` 现在
+# 让它们保持一致。这里仍从 `__init__.py` 取要改写的那一行（因为要精确替换它），
+# 但先断言它等于 `VERSION` —— 不一致就让部署停下，而不是把一个过期版本打上部署。
 step "注入 commit 标识"
 INIT="$WORK/aiops_diagnostics/__init__.py"
 [ -f "$INIT" ] || die "缺少 $INIT"
 BASE_VERSION=$(sed -n 's/^__version__ *= *"\([^"]*\)".*/\1/p' "$INIT" | head -1)
 [ -n "$BASE_VERSION" ] || die "无法从 __init__.py 读出 __version__"
+FILE_VERSION=$(tr -d '[:space:]' < "$REPO_ROOT/VERSION" 2>/dev/null || true)
+[ -n "$FILE_VERSION" ] || die "缺少仓库根 VERSION 文件"
+[ "$BASE_VERSION" = "$FILE_VERSION" ] \
+  || die "__version__ ($BASE_VERSION) 与 VERSION ($FILE_VERSION) 不一致 —— 先同步，否则 /health 会自报一个过期版本"
 STAMPED="${BASE_VERSION}+${SHORT_SHA}"
 python3 - "$INIT" "$BASE_VERSION" "$STAMPED" <<'PY'
 import re, sys, pathlib
