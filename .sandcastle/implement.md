@@ -16,7 +16,7 @@ Requirements:
    not invent a parallel runtime contract.
 2. Make the smallest coherent change and add or update focused tests for
    behavior you change.
-3. Run `uv sync --extra dev && uv run pytest -n auto && uv run ruff check` before
+3. Run `uv sync --extra dev && uv run pytest && uv run ruff check` before
    committing. Do not weaken or skip checks.
 
 This repo HAS a project verification skill, `.claude/skills/verify-aiops-gateway`.

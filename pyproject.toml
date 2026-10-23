@@ -70,18 +70,27 @@ packages = ["src/aiops_diagnostics"]
 "src/aiops_diagnostics/faq_recommendations.json" = "aiops_diagnostics/faq_recommendations.json"
 
 [tool.pytest.ini_options]
-# `-n auto` lives here now, and the reason it could not before is gone: the
-# scheduler is a declared dev dependency, so `uv sync --dev` — the documented first
-# step in README, CI and the sandbox hook — installs it. Measured 2026-10-23: 279 s
-# serial vs 55 s parallel on this repository, same tests.
+# The scheduler is a declared dev dependency, so `uv sync --dev` — the documented
+# first step in README, CI and the sandbox hook — installs it. Measured 2026-10-23:
+# 279 s serial vs 55 s parallel on this repository, same tests.
 #
 # ⚠️ It was NOT possible while xdist was installed ad hoc. `addopts` is applied
 # unconditionally, so on any venv that lacked the plugin pytest died with
 # `unrecognized arguments: -n` and ran ZERO tests. That failure mode is why this
 # line moved out once and is only moving back now that the dependency does.
 #
+# ⚠️ `-n 4`, not `-n auto`. `auto` is `os.cpu_count()`, and the machine also carries
+# sshd, tailscaled, seven self-hosted runners and long-lived agent sessions — measured
+# on 2026-10-23, seven concurrent `-n auto` runs drove load average 5.28 → 79, starved
+# sshd and dropped the tailnet, i.e. remote management of the host was gone. `-n 4`
+# is half an 8-core box and is also right for a 4-core GitHub-hosted runner.
+#
+# The count is bounded on BOTH axes now: `tests/conftest.py` holds a host-wide slot
+# (MAX_CONCURRENT_RUNS), so this number is per run and something else owns how many
+# runs exist. Changing one without the other reintroduces the incident.
+#
 # Ask for serial with `-n 0`, or `./tools/test.sh -n 0`.
-addopts = "-q -n auto"
+addopts = "-q -n 4"
 testpaths = ["tests"]
 
 [tool.ruff]

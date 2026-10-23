@@ -46,7 +46,7 @@ Not everything in here is necessarily actionable — reviewers may leave context
 1. Read the conversation. For each item, classify it in your head as: code change needed, reply needed (question / disagreement / clarification), or neither.
 2. For a code change, run the Economy ladder and stop at the first option that
    fully addresses the confirmed feedback.
-3. Make the code changes you decided on. Run `uv sync --extra dev && uv run pytest -n auto && uv run ruff check`, then `node .sandcastle/policy-check.mjs commit`, before committing. Use conventional-commit messages (`feat:`, `fix:`, `refactor:`, etc.). Do NOT use a `RALPH:` prefix.
+3. Make the code changes you decided on. Run `uv sync --extra dev && uv run pytest && uv run ruff check`, then `node .sandcastle/policy-check.mjs commit`, before committing. Use conventional-commit messages (`feat:`, `fix:`, `refactor:`, etc.). Do NOT use a `RALPH:` prefix.
 
 Before you settle on an approach, search what this repository has already
 decided: `rg -i "<机制名或关键词>" docs/adr/`, and read the two or three records
