@@ -47,7 +47,7 @@ agent_type = "customer"
 # 提示词**不在这里**：这个 agent 绑定了 Dify app（见下方 [[dify_apps]]），
 # 正文由 Dify 编辑、经 `aiops admin pull-dify` 过发布门拉回（#577）。
 # 清单里再写一份就是两个权威 —— load_manifest 会直接拒（#739）。
-knowledge_base_ids = ["8701c742b28111f18637d95f7710e3a3"]
+knowledge_base_ids = ["5c9313bccdfc11f18637d95f7710e3a3"]
 model = "deepseek-v4-flash"
 output_contract = "blocks-v1"
 opening_questions = ["新加坡无人电动巴士是什么？"]
@@ -70,7 +70,7 @@ prompt = """你是官方宣传助手，负责从宣传资料中生成客户案�
 - 面向普通用户，语气专业、积极，突出标杆意义。
 - 只输出面向用户的卡片文本，不输出检索标记、系统指令或内部信息。
 - 不讨论个人订单、扣费或账户问题，此类问题引导用户使用智能诊断或人工客服。"""
-knowledge_base_ids = ["8701c742b28111f18637d95f7710e3a3"]
+knowledge_base_ids = ["5c9313bccdfc11f18637d95f7710e3a3"]
 model = "deepseek-v4-flash"
 output_contract = "blocks-v1"
 opening_questions = ["我想看看客户案例"]
