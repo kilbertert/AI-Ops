@@ -23,6 +23,6 @@
 | 1. 契约 + QA | ✅ |
 | 2. 观察实现 | ✅ `request_observation.py` + `gateway_api` 接线 |
 | 3. 组件测试 | ✅ 18 条（`tests/test_request_observation.py`） |
-| 4. 真实 HTTP | ✅ `observe_consumer_order_result.py`，10/10 检查通过 |
+| 4. 真实 HTTP | ✅ `observe_consumer_order_result.py`，**20/20** 检查通过（10 条结果行：5 成功 / 3 拒绝 / 2 失败） |
 | 5. 反向验证 | ✅ 删失败记录 → 7 红；计时移到 QA 之后 → 1 红；还原全绿 |
 | 6. 变更单口径 | ✅ |

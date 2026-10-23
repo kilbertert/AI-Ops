@@ -40,7 +40,9 @@ uv run python .claude/skills/verify-aiops-gateway/scripts/observe_consumer_order
 只有订单行、UPMS 平台目录、订单授权源与 CPMS 是回环合成（它们在真环境是 MySQL
 与外部服务，本机不该连）。证据文件里原样写清这一点。
 
-本次运行 **10/10 检查通过**，共 10 条结果行（成功 5 条含 `qa_id`；拒绝 4 条；失败 1 条），
+本次运行 **20/20 检查通过**，共 10 条结果行（成功 5 条含 `qa_id`；拒绝 **3** 条
+（`INSUFFICIENT_SCOPE` ×1、`ORDER_NOT_FOUND` ×2）；失败 **2** 条
+（`CHARGING_STATUS_UNAVAILABLE` 502、`UNHANDLED_EXCEPTION` 500）），
 `duration_ms` 3～79 ms，`request_id` 10 个互不相同，行内不含问题、订单号、令牌或原始租户。
 
 证据：`var/verify-evidence/consumer-order-observation.json` 与同目录
@@ -50,7 +52,7 @@ uv run python .claude/skills/verify-aiops-gateway/scripts/observe_consumer_order
 
 | 变异 | 结果 |
 |---|---|
-| `emit()` 只记成功、不记失败 | **7 条转红**：5 个拒绝场景 + 异常场景 + 真实 HTTP 用例 |
+| `emit()` 只记成功、不记失败 | **7 条转红**：缺读权限 403、订单不可见 404、租户未登记 404、CPMS 502、路由前 404（5 条拒绝）+ 未预期异常 + 真实 HTTP 用例 |
 | 把计时起点移到 QA 落盘之后（`attach_qa` 里重置 `started`） | **1 条转红**：`test_duration_covers_work_that_happens_before_the_qa_row_exists` |
 | 还原 | 74 passed |
 

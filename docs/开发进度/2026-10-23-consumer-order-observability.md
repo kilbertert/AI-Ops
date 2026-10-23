@@ -29,8 +29,8 @@
 | 既有回归 | **56 passed**（未改断言、未加 skip、未降标准） |
 | 新增组件测试 | **18 passed**（`tests/test_request_observation.py`） |
 | 合计 | **74 passed** |
-| 真实 HTTP | `observe_consumer_order_result.py`：**10/10 检查通过**，10 条结果行 |
-| 反向验证 1：不记失败 | **7 条转红**（5 个拒绝场景 + 异常 + 真实 HTTP 用例） |
+| 真实 HTTP | `observe_consumer_order_result.py`：**20/20 检查通过**，10 条结果行（成功 5 / 拒绝 3 / 失败 2） |
+| 反向验证 1：不记失败 | **7 条转红**（5 条拒绝：403 / 订单不可见 404 / 租户未登记 404 / CPMS 502 / 路由前 404，+ 未预期异常 + 真实 HTTP 用例） |
 | 反向验证 2：计时移到 QA 落盘后 | **1 条转红**（`test_duration_covers_work_that_happens_before_the_qa_row_exists`） |
 | 还原后 | 74 passed |
 | `ruff check` / `ruff format --check` | 干净 |
