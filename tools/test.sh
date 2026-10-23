@@ -33,49 +33,21 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 # Default to parallel; an explicit `-n` from the caller wins.
-n_flag=(-n auto)
-for arg in "$@"; do
-  case "$arg" in
-    -n|-n?*|--numprocesses|--numprocesses=*) n_flag=() ;;
-  esac
-done
-
-# Provision the scheduler when pytest would otherwise reject the arguments. Note
-# that `-n 0` counts: `-n` is a flag xdist REGISTERS, so asking for zero workers
-# still fails with `unrecognized arguments: -n` when the plugin is absent (measured).
-# Gating on "would this run use more than one worker" was therefore wrong, and it
-# made the documented serial escape hatch the one path that could not run.
+# `-n auto` is the default now (it lives in pyproject's addopts, and the scheduler
+# is a declared dev dependency, so a plain `uv sync --dev` provides it). This script
+# exists only to make the run self-contained: it ensures the venv matches the
+# lockfile, then runs pytest with anything the caller passed.
 #
-# ⚠️ A failed install is NOT fatal. Review measured the first version: with
-# `uv pip install` failing (offline), `set -e` killed the script before a single
-# test ran. An offline machine still deserves a test run, and serial is the correct
-# degradation — the same rule the pyproject `addopts` idea got wrong, where "no
-# scheduler" became "no tests".
-needs_scheduler=0
-if [ "${#n_flag[@]}" -gt 0 ]; then
-  needs_scheduler=1
-else
-  for arg in "$@"; do
-    case "$arg" in -n|-n?*|--numprocesses|--numprocesses=*) needs_scheduler=1 ;; esac
-  done
-fi
-if [ "$needs_scheduler" = "1" ] && ! .venv/bin/python -c 'import xdist' >/dev/null 2>&1; then
-  if ! uv pip install --quiet "pytest-xdist==3.8.0" "execnet==2.1.2"; then
-    echo "tools/test.sh: could not install pytest-xdist; running serially" >&2
-    # Drop a caller-supplied -n too: without the plugin pytest cannot parse it.
-    cleaned=()
-    skip_next=0
-    for arg in "$@"; do
-      if [ "$skip_next" = "1" ]; then skip_next=0; continue; fi
-      case "$arg" in
-        -n) skip_next=1 ;;
-        -n?*|--numprocesses|--numprocesses=*) ;;
-        *) cleaned+=("$arg") ;;
-      esac
-    done
-    set -- "${cleaned[@]}"
-    n_flag=()
-  fi
+# ⚠️ It no longer installs the scheduler. It used to, because xdist was not declared
+# anywhere — and that was the defect: a fresh worktree venv had no xdist, so
+# `uv run pytest -n auto` died with `unrecognized arguments: -n` and the only way
+# forward was to drop `-n`, silently back to serial (279 s vs 55 s, measured
+# 2026-10-23). Declaring it fixed the cause; installing it here would only hide a
+# future recurrence.
+if ! .venv/bin/python -c 'import xdist' >/dev/null 2>&1; then
+  echo "tools/test.sh: the venv is missing the parallel scheduler." >&2
+  echo "  Run \`uv sync --locked --dev\` first; this script does not install it," >&2
+  echo "  because a missing declared dependency means the venv is out of date." >&2
 fi
 
-exec env PYTHONPATH="$PWD/src" .venv/bin/python -m pytest tests -p no:warnings "${n_flag[@]}" "$@"
+exec env PYTHONPATH="$PWD/src" .venv/bin/python -m pytest tests -p no:warnings "$@"

@@ -43,6 +43,13 @@ dev = [
   "pyinstaller>=6.15,<7",
   "pytest>=8.3,<9",
   "pytest-cov>=6,<7",
+  # The parallel scheduler. Declared HERE rather than installed ad hoc, because
+  # "can the suite run in parallel" must be a property of the environment, not a
+  # consequence of someone remembering. Measured 2026-10-23: a fresh worktree venv
+  # has no xdist, so `uv run pytest -n auto` dies with `unrecognized arguments: -n`
+  # and the only way forward is to drop `-n` — silently back to serial (279 s vs
+  # 55 s on this repository).
+  "pytest-xdist>=3.6,<4",
   "ruff>=0.12,<1",
   "httpx>=0.28,<1",
 ]
@@ -63,7 +70,18 @@ packages = ["src/aiops_diagnostics"]
 "src/aiops_diagnostics/faq_recommendations.json" = "aiops_diagnostics/faq_recommendations.json"
 
 [tool.pytest.ini_options]
-addopts = "-q"
+# `-n auto` lives here now, and the reason it could not before is gone: the
+# scheduler is a declared dev dependency, so `uv sync --dev` — the documented first
+# step in README, CI and the sandbox hook — installs it. Measured 2026-10-23: 279 s
+# serial vs 55 s parallel on this repository, same tests.
+#
+# ⚠️ It was NOT possible while xdist was installed ad hoc. `addopts` is applied
+# unconditionally, so on any venv that lacked the plugin pytest died with
+# `unrecognized arguments: -n` and ran ZERO tests. That failure mode is why this
+# line moved out once and is only moving back now that the dependency does.
+#
+# Ask for serial with `-n 0`, or `./tools/test.sh -n 0`.
+addopts = "-q -n auto"
 testpaths = ["tests"]
 
 [tool.ruff]
