@@ -51,6 +51,59 @@
 
 方法、脚本与偏差记录见
 [验收记录](agents/consumer-order-chat/real-h5-status-acceptance.md)。
+## 2026-10-23 · 41 依赖环境更新（pytest-xdist 进 lockfile）
+
+**为什么**：`pytest-xdist` 从「手工装进各 venv」改为**声明的 dev 依赖**（ADR 0094）。
+理由：一个 agent 在独立 worktree 里跑全量用了 **279s**（并行应为 55s），因为那个 venv
+里没有 xdist，`-n auto` 报 `unrecognized arguments: -n`，唯一出路是把 `-n` 去掉 ——
+静默退回串行。上一轮的验证全在主检出上做，那里手工装过。
+
+**目标 commit**：`691f30a0d28451bd0e3c0ad6fcc7d63d6ff6f4cc`
+
+**两份清单的 sha（更新后两侧一致）**：
+
+| 文件 | 本地 | 41 |
+|---|---|---|
+| `pyproject.toml` | `58f359b1a93c92f9` | `58f359b1a93c92f9` |
+| `uv.lock` | `6f65c60979f230db` | `6f65c60979f230db` |
+
+**备份**：`/var/backups/aiops-41/deps-20261023-113740`（501M，含 `pyproject.toml`、
+`uv.lock`、整份 `.venv`）
+
+**`uv sync` 输出摘要**：
+
+```
+Prepared 3 packages in 4.23s
+Uninstalled 1 package in 1ms
+Installed 3 packages in 1ms
+ ~ aiops-diagnostics==0.1.0 (from file:///opt/aiops-41)
+ + execnet==2.1.2
+ + pytest-xdist==3.8.0
+```
+
+命令按流程第 2 步原样：`uv sync --active --frozen --no-progress`（带 `--frozen`
+不重新解析；**不带** `--no-install-package aiops-diagnostics`，那会让 editable 消失）。
+
+**editable 检查（第 3 步，更新后）**：`deploy/check-41-editable.sh` → **passed**。
+四条观察全 ok —— `import aiops_diagnostics` 解析到 `/opt/aiops-41/src/...`、
+子模块同源、`site-packages` 里没有 `__init__.py`、`files(pkg)` 读的数据来自 src。
+
+**`/health`（第 4 步，重启后）**：
+
+```json
+{"ok":true,"service":"aiops-gateway","version":"0.1.0+42cae3841af7",...}
+```
+
+**第 7 步重跑部署**：`deploy/deploy-41.sh --commit HEAD` → 完成，
+`version 0.1.0+691f30a0d284`，109 个文件逐一 sha 一致，参考资料三份一致。
+备份 `/var/backups/aiops-41/backup-20261023-114016`。
+
+**部署后再跑一次守卫**（第 7 步要求）：**passed** —— 换完代码之后 editable 仍生效，
+是观测到的事实，不是从"部署前是对的"推出来的。
+
+**未完成业务验收**：本次是运行环境变更，无用户可见行为变化；
+`/health ok:true` 只证明进程活着，**不构成任何业务路径的可用性证据**。
+
 ## 2026-10-23 · 知识库入口收进 Dify：真机闭环，途中推翻自己两次
 
 **范围**：36（Dify 控制台 + 桥）、41（网关 + `kb.mall` 站点）。真实浏览器、真实账号
@@ -120,7 +173,7 @@ CSRF，也只有它知道"我此刻停在哪"。
   提示，但租户本身仍需开户。
 - 「41」库 5 个 PNG 内容已丢失（MinIO 损坏、机器上无原件）。
 
-## 2026-10-23 · 同一个问题「有时能回、有时没找到」：保留期在抹掉已交付的答案
+# 2026-10-23 · 同一个问题「有时能回、有时没找到」：保留期在抹掉已交付的答案
 
 用户反馈：同一句话、同一个订单，有时得到回复，有时显示「未找到」，一个字都没换。
 
