@@ -17,7 +17,7 @@
 #960 修复后另次授权预览的 OPS-07 模型段通过：三轮决策、两工具、3899 tokens，独立对照一致。
 当轮恢复已完成，但撤权后 403 未执行，沿用 #953 独立证据；最终 JSON 前的推理前缀仍未消除。
 随后常驻启用的 operator v21 已只读回读确认，consumer/M3 保持关闭。
-详见[validation 首节](../../validation.md)与[离线复核方法](model-acceptance.md)。
+详见[最新的验收记录](../../validation/)与[离线复核方法](model-acceptance.md)。
 新建登记应add→同payload update；测试副本复现旧缓存，移除update回归应失败，已有provider重复登记仍零写。
 
 离线解析回归：相同拼接结果保留两次唯一调用；冲突重复、坏尾部、缺终态、错单、错答案、额外审计、
