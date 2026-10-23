@@ -19,7 +19,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from aiops_diagnostics import __version__, execution_manifest, request_observation
+from aiops_diagnostics import __version__, chat_execution, execution_manifest, request_observation
 from aiops_diagnostics.agent_content import AGENT_STARTERS
 from aiops_diagnostics.agent_lifecycle import (
     AGENT_MANAGE_SCOPE,
@@ -5505,6 +5505,63 @@ def _require_matching_exec_config(
     return confirmed
 
 
+def _consumer_order_chat_via_node(context, caller, decision, payload, conversation, language, order_no):
+    """聊天入口的节点路线：**只做授权与建 QA，然后把等待搬到后台**。
+
+    这里刻意不做三件事：
+
+    * 不读业务（SQL/CPMS）—— 那是节点的活，网关替它读一次就等于「直读+节点」两套答案；
+    * 不等节点 —— App 的 POST 必须快速返回，否则前端超时；
+    * 失败不回落 —— 任何失败都落 QA 终态，绝不改走直读或旧模型分支。
+
+    授权仍然是**网关**做的：最新单要按原本人 SQL 范围选出来，指定单要核可见性。
+    选出来之后才派发，所以「选哪一单」不会变成节点或客户端的决定。
+    """
+    if order_no is None:
+        request_observation.mark_stage(None, request_observation.STAGE_ORDER_CHAT_LOOKUP)
+        try:
+            scope = resolve_query_scope(caller)
+            with scoped_mysql_source(
+                Settings.from_config(context.settings.server_config_file), scope
+            ) as source:
+                rows = source.list_orders(page=1, page_size=1)
+        except (SourceError, ScopeError, ValueError) as exc:
+            raise StandardAPIError(
+                503, "ORDER_AUTHORIZATION_UNAVAILABLE", "order lookup unavailable", retryable=True
+            ) from exc
+        if not rows:
+            raise StandardAPIError(404, "ORDER_NOT_FOUND", "order not found")
+        order_no = str(rows[0]["order_no"])
+    _require_consumer_self_order(caller, str(decision.platform), order_no)
+    _require_visible_order(context, caller, order_no)
+
+    turn_no = _begin_conversation_turn(context, caller, conversation, "qa", payload.question)
+    try:
+        qa = context.runtime.start_chat_order_qa(
+            caller,
+            payload.question,
+            order_no=order_no,
+            language=language,
+            conversation=conversation,
+            conversation_turn_no=turn_no,
+        )
+    except Exception:
+        _release_conversation_turn(context, conversation, turn_no)
+        raise
+    return JSONResponse(
+        status_code=status.HTTP_202_ACCEPTED,
+        headers={"Cache-Control": "no-store"},
+        content={
+            **_assistant_question_response(qa, language),
+            **(
+                {"conversation_id": conversation["conversation_id"], "turn_no": turn_no}
+                if conversation
+                else {}
+            ),
+        },
+    )
+
+
 def _consumer_order_chat(context, caller, decision, payload, conversation, language, request):
     order_no = payload.order_no or _extract_order_no(payload.question)
     authenticated_chat_order_reader(context, caller, request)
@@ -5517,6 +5574,14 @@ def _consumer_order_chat(context, caller, decision, payload, conversation, langu
             question=payload.question,
             language=language,
         )
+    # APP-RUNTIME-01：命中服务端绑定 ⇒ 交给客户节点跑，POST **立即**返回。
+    # 绑定未配置时这一段完全跳过，下面的原分支一字未改。
+    binding = chat_execution.resolve_binding(context.settings)
+    if binding.enabled:
+        return _consumer_order_chat_via_node(
+            context, caller, decision, payload, conversation, language, order_no
+        )
+
     turn_no = _begin_conversation_turn(context, caller, conversation, "qa", payload.question)
     qa = None
     try:
@@ -5634,6 +5699,8 @@ def authenticated_chat_order_reader(context, caller, request):
 
 
 def _require_current_chat_order(context, caller, qa, request):
+    if _is_node_chat_qa(qa):
+        return _require_current_chat_node_order(context, caller, qa, request)
     internal = str(qa.get("internal_run_id") or "")
     if internal.startswith("consumer-order-chat:"):
         authenticated_chat_order_reader(context, caller, request)
@@ -5663,6 +5730,44 @@ def _require_current_chat_order(context, caller, qa, request):
             raise StandardAPIError(
                 503, "CHARGING_STATUS_EVIDENCE_UNAVAILABLE", "evidence unavailable"
             ) from exc
+
+
+def _require_current_chat_node_order(context, caller, qa, request):
+    """节点路线的读取守卫：**按存储关联**找回那条 run，再复用它自己的放行判据。
+
+    与直读路线（上一条）的区别只在「证据从哪来」：直读读私有快照文件，这里读同一条
+    run 的记录。**共同点是不能省的**：入口仍是 consumer、订单仍需此刻可见、
+    绑定仍需有效、快照仍需是该 run 的 succeeded 结果。
+
+    暂停/停用后拒绝正文：绑定被清空即视为停用，历史结果不再交付 —— 这与直读路线
+    停用后回读 `CHARGING_STATUS_DISABLED` 是同一条纪律。
+    """
+    internal = str(qa.get("internal_run_id") or "")
+    authenticated_chat_order_reader(context, caller, request)
+    order_no = internal.removeprefix(chat_execution.CHAT_RUN_PREFIX)
+    if not order_no:
+        raise StandardAPIError(404, "QA_NOT_FOUND", "assistant question not found")
+    _require_consumer_self_order(caller, "consumer", order_no)
+    if not chat_execution.resolve_binding(context.settings).enabled:
+        # 新路线停用：不把已经产生的正文继续交付。
+        raise StandardAPIError(404, "CHARGING_STATUS_DISABLED", "charging status disabled")
+    # 排队/运行/失败/取消：**不**因为"还没有快照"就拒 —— 轮询要能读到真实状态。
+    if qa["status"] in {"queued", "running", "failed", "cancelled", "expired"}:
+        return
+    store = context.agent_run_store
+    run = store.by_qa(qa["qa_id"]) if store is not None else None
+    if run is None:
+        raise StandardAPIError(503, "CHARGING_STATUS_EVIDENCE_UNAVAILABLE", "evidence unavailable")
+    # 同一 run 的 succeeded 快照是**唯一**允许的答案来源；这里不做第二次业务读取。
+    if run.state != SUCCEEDED or run.snapshot is None or run.order_no != order_no:
+        raise StandardAPIError(404, "AGENT_RUN_NO_RESULT", "agent run produced no result")
+    if run.scope_fingerprint != caller.scope_fingerprint:
+        raise StandardAPIError(404, "QA_NOT_FOUND", "assistant question not found")
+    _require_visible_order(context, caller, order_no)
+
+
+def _is_node_chat_qa(qa) -> bool:
+    return str(qa.get("internal_run_id") or "").startswith(chat_execution.CHAT_RUN_PREFIX)
 
 
 def _require_consumer_self_order(caller: ScopeContext, business_entry: str | None, order_no: str) -> None:

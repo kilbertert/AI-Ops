@@ -72,6 +72,19 @@ EXEC_CONFIG_MATCHED = "matched"
 EXEC_CONFIG_MISMATCHED = "mismatched"
 
 
+#: 让「哪个 QA 由哪条 run 承载」是**存储关联**，不是从字符串反推。
+#: 旧行保持 NULL；没有这一列的库由下面的迁移补上。
+LINK_COLUMNS = ("qa_id",)
+
+
+def _migrate_qa_link_column(connection: sqlite3.Connection) -> None:
+    existing = {row["name"] for row in connection.execute("PRAGMA table_info(agent_runs)")}
+    for column in LINK_COLUMNS:
+        if column not in existing:
+            connection.execute(f"ALTER TABLE agent_runs ADD COLUMN {column} TEXT")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_agent_runs_qa ON agent_runs(qa_id)")
+
+
 def _migrate_execution_config_columns(connection: sqlite3.Connection) -> None:
     """给已有的库补 M3 的三列。
 
@@ -278,6 +291,8 @@ class AgentRun:
     expires_at: datetime
     claimed_at: datetime | None
     completed_at: datetime | None
+    #: 承载这条 run 的那条 QA；旧记录为 ``None``（迁移不回填）。
+    qa_id: str | None = None
 
     @property
     def exec_config_confirmed(self) -> bool:
@@ -399,13 +414,15 @@ class AgentRunStore:
                     created_at TEXT NOT NULL,
                     expires_at TEXT NOT NULL,
                     claimed_at TEXT,
-                    completed_at TEXT
+                    completed_at TEXT,
+                    qa_id TEXT
                 );
                 CREATE INDEX IF NOT EXISTS idx_agent_runs_scope
                     ON agent_runs(scope_fingerprint, created_at DESC);
                 """
             )
             _migrate_execution_config_columns(connection)
+            _migrate_qa_link_column(connection)
 
     @contextmanager
     def _connection(self, *, write: bool = False) -> Iterator[sqlite3.Connection]:
@@ -468,6 +485,28 @@ class AgentRunStore:
         run = self.get(run_id)
         assert run is not None
         return run
+
+    def bind_qa(self, run_id: str, qa_id: str) -> bool:
+        """把一条 run 钉到承载它的 QA 上。
+
+        这是**存储关联**：读取路径靠它把 QA 找回到同一条 run，而不是从
+        ``internal_run_id`` 的字符串形状去猜。只写一次（已绑定则不改写）。
+        """
+        with self._connection(write=True) as connection:
+            cursor = connection.execute(
+                "UPDATE agent_runs SET qa_id = ? WHERE run_id = ? AND (qa_id IS NULL OR qa_id = ?)",
+                (qa_id, run_id, qa_id),
+            )
+            return cursor.rowcount == 1
+
+    def by_qa(self, qa_id: str) -> AgentRun | None:
+        """按 QA 反查承载它的 run。**只读**，不做过期收敛（读取路径自己做）。"""
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM agent_runs WHERE qa_id = ? ORDER BY created_at DESC LIMIT 1",
+                (qa_id,),
+            ).fetchone()
+        return _run_from_row(row) if row else None
 
     def get(self, run_id: str) -> AgentRun | None:
         """同一事务内收敛到期并读取，调用方以该次读取为最终放行时点。"""
@@ -888,6 +927,8 @@ def _run_from_row(row: sqlite3.Row) -> AgentRun:
         expires_at=datetime.fromisoformat(row["expires_at"]),
         claimed_at=_ts(row["claimed_at"]),
         completed_at=_ts(row["completed_at"]),
+        # 迁移保证这一列一定存在（新库建表即含，旧库由 _migrate_qa_link_column 补）。
+        qa_id=row["qa_id"],
     )
 
 
