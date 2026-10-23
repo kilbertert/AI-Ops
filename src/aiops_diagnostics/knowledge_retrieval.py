@@ -68,6 +68,41 @@ EXTERNAL_VIDEO_HOSTS: dict[str, str] = {
 #: exactly one playback source.
 _URL_PATTERN = re.compile(r"https?://[^\s<>\"'()\[\]{}，。；、）】」]+", re.IGNORECASE)
 
+#: Which paths on an allow-listed host actually address ONE video (#1035, 真机).
+#:
+#: The host allow-list is not enough. The same document also links
+#: ``https://www.youtube.com/@trendpowercharge`` — the CHANNEL page. Signing
+#: that as a ``video`` block makes the frontend mount a player on a page that
+#: has no single video to play, and the user sees a broken frame instead of a
+#: video. 真机 2026-10-23: a query about "Platform Tutorials" returned two
+#: channel links and they were both signed as video.
+#:
+#: ``youtu.be`` is the only host where a bare path IS the video id, so it needs
+#: no path rule. Everything else must match one of the shapes below.
+_VIDEO_PATH_SHAPES = {
+    "www.youtube-nocookie.com": ("/embed/",),
+    "youtube.com": ("/watch", "/shorts/", "/embed/", "/live/"),
+    "www.youtube.com": ("/watch", "/shorts/", "/embed/", "/live/"),
+    "m.youtube.com": ("/watch", "/shorts/", "/embed/", "/live/"),
+    "youtu.be": ("/",),
+}
+
+
+def _addresses_one_video(host: str, path: str) -> bool:
+    """Whether ``host`` + ``path`` names a single playable video.
+
+    Deliberately NOT a general URL classifier: it only has to separate "this
+    opens one video" from "this opens a channel / playlist / home page" for the
+    hosts we vouch for. A shape we do not recognise is treated as NOT a video —
+    false negatives cost a missing link, false positives cost a broken player
+    that looks like our bug.
+    """
+    shapes = _VIDEO_PATH_SHAPES.get(host.lower())
+    if not shapes:
+        return False
+    return any(path.startswith(shape) for shape in shapes)
+
+
 #: The declared retry policy for a video media fetch. RAGFlow can briefly report
 #: an existing video document as code=102 while its document index settles.
 #: These numbers are the historical hand-rolled ones (``0.25 * 2**attempt``,
@@ -1044,11 +1079,14 @@ def _external_video_link(content: str) -> tuple[str, str]:
     for match in _URL_PATTERN.finditer(content or ""):
         candidate = match.group(0)
         try:
-            host = urllib.parse.urlsplit(candidate).hostname or ""
+            parts = urllib.parse.urlsplit(candidate)
         except ValueError:
             continue
-        embed = EXTERNAL_VIDEO_HOSTS.get(host.lower())
-        if embed:
+        host = (parts.hostname or "").lower()
+        embed = EXTERNAL_VIDEO_HOSTS.get(host)
+        # Host AND path: a channel page on an allow-listed host is still not a
+        # video. See `_addresses_one_video`.
+        if embed and _addresses_one_video(host, parts.path or ""):
             return candidate, embed
     return "", ""
 

@@ -69,6 +69,33 @@ e8e37d7b114d1d6e… → afad662dca13beb0…   （165 个文件，数量未变）
 
 `image_id` 与 `built_at` **未改**：它们由一次真实构建写入，这次没有构建。
 
+## 五之二、真机验收抓到一个缺陷（2026-10-23，41）
+
+CD 部署 `702bc5e` 之后在 41 上用生产代码跑 `normalize_search_response`，正面判据成立：
+
+```
+chunk: TRENDPOWER_EV_Charging_Platform_Video_Modules.md
+   media: {"kind": "video", "external_url": "https://www.youtube.com/shorts/Ld7_TVdVFpk",
+           "embed": "youtube"}
+```
+
+**但同一次运行里 `https://www.youtube.com/@trendpowercharge` 也被签成了 video 块。**
+那是**频道主页**，不是单个视频 —— 前端会把播放器挂在一个没有视频可播的页面上，用户
+看到一个坏掉的框，而且看起来像我们的 bug。
+
+根因：判据只有 **host**，没有 **path**。同一个文档里既有 `watch?v=…` 也有
+`@trendpowercharge`，两者 host 相同。
+
+**修法**：白名单是 host + path 两级（`_addresses_one_video`）。`youtu.be` 的裸路径
+本身就是视频 id 所以不受影响；其余 host 必须匹配 `/watch`、`/shorts/`、`/embed/`、
+`/live/` 之一。**认不出的形态一律当作不是视频** —— 漏判的代价是少一个链接，误判的
+代价是一个看起来像我们 bug 的坏播放器。
+
+同一个扫描里还确认了一条：频道链接出现在**前面**、真视频在后面时，要跳过频道页继续
+找，不能"取第一个白名单域链接"就完事。
+
+新增 3 条用例，去掉 path 判据的变异让其中 2 条转红。
+
 ## 六、环境问题（与本次改动无关）
 
 在 worktree 里用主 checkout 的解释器跑全量时，`test_parallel_setup.py` 两条转红 ——
