@@ -57,8 +57,8 @@ no project argument. Both answer *where* something is; neither replaces reading 
 - AGENTS.md
 - CLAUDE.md
 - README.md
-- docs/ — 170 markdown file(s)
-- docs/adr/ — 96 markdown file(s)
+- docs/ — 173 markdown file(s)
+- docs/adr/ — 97 markdown file(s)
 - docs/agents/ — 51 markdown file(s)
 
 ## Tree (depth 2, first 80 lines; dependencies, build
@@ -112,7 +112,7 @@ docs/
     0008-adr-0003-deviation-session-direct-read.md
     0009-operator-identity-via-company-oauth2-token.md
     0010-reversal-of-prd-200-language-boundary.md
-    ... (86 more)
+    ... (87 more)
   afk-cutover/
     decisions.md
     pr-a-spec.md
@@ -141,6 +141,7 @@ docs/
   specs/
     battery-inspection-metrics.md
   validation/
+    2026-10-23-pr-conflict-blocks-ci.md
     a-charging-status-http.json
     m2-b2-release-review.json
     m2-b2-release-review.py
@@ -150,11 +151,11 @@ docs/
     m2-live-03-r2-synthetic.json
     m2-live-03-synthetic.json
     m2-live05-recovery-synthetic.json
-    m2-live05-synthetic.json
-    ... (3 more)
+    ... (4 more)
+  开发进度/
+    2026-10-23-pr-conflict-automation.md
   afk-workflow.md
   architecture.md
-  diag-query-api-plan.md
-  ... (19 more)
+  ... (20 more)
 ... (truncated — list the rest with `ls`/`find`)
 ```

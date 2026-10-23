@@ -648,8 +648,10 @@ runbook §5/§6 明确禁止 CI 自证。所以 CD 通过最多报告 `merged_wa
 
 ### 文档与证据纪律
 
-1. **每个可交付里程碑**必须同步 `docs/开发进度.md` 与 `docs/validation.md`，
-   变更用户入口/配置/部署/安全边界时还要同步 README 与对应架构部署文档。
+1. **每个可交付里程碑**必须**新增**一个 `docs/开发进度/<日期>-<短名>.md` 与一个
+   `docs/validation/<日期>-<短名>.md`（不要编辑既有的单文件 —— 它们是 2026-10-23 之前的
+   只读归档；一个记录一个文件是为了让并行 PR 不撞同一处），变更用户入口/配置/部署/安全
+   边界时还要同步 README 与对应架构部署文档。
 2. **证据分级不许混用**：自动化测试、生产只读回放、真实 provider 调用、便携包验收、
    工程师确认的真实故障结论是五件不同的事。没有后者时必须明确写「未完成业务验收」，
    **不得**把 fixture 或模型调用写成真实故障结论。
@@ -694,7 +696,7 @@ runbook §5/§6 明确禁止 CI 自证。所以 CD 通过最多报告 `merged_wa
 
 | 你要回答 | 读 |
 |---|---|
-| 现在到哪一步了？ | [docs/agents/current-delivery-state.md](docs/agents/current-delivery-state.md) + [docs/validation.md](docs/validation.md) 首节 |
+| 现在到哪一步了？ | [docs/agents/current-delivery-state.md](docs/agents/current-delivery-state.md) + [docs/validation/](docs/validation/) 下按文件名排序最新的一篇 |
 | 某个历史决定为什么这么做？ | [docs/adr/](docs/adr/) |
 | 某个术语到底指什么？ | [GLOSSARY.md](GLOSSARY.md)（词汇表，不含规格） |
 | 对外接口契约？ | 固定问答 [docs/faq-api.md](docs/faq-api.md)；健康报告与单问诊断 [docs/standard-api-contract.md](docs/standard-api-contract.md)（**冲突时以这两份为准**） |

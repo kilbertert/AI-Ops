@@ -55,11 +55,24 @@ UNKNOWN_JOB_ID = "qa_nonexistent000000000000000000000001"
 #: The documents the PRD names as carrying the broken #173 attribution, plus the
 #: runbook whose merged evidence row was the proof of it. A stop/cancel link here
 #: may only be attributed to the PRD that implements it.
+#:
+#: Since 2026-10-23 each milestone writes a NEW file under ``docs/validation/`` and
+#: ``docs/开发进度/`` instead of prepending to one document — parallel agents that
+#: prepend to the same file always conflict, and GitHub does not dispatch CI at all
+#: for a pull request that conflicts. The two single files stay in the list because
+#: they are the read-only archive, and an attribution that was wrong in the archive
+#: stays wrong until someone corrects it. The directories are scanned whole, so the
+#: check does not weaken as entries accumulate: a new file is checked the moment it
+#: is committed, without anyone remembering to add its name here.
 ATTRIBUTION_DOCS = (
     "qa-plan.md",
     "docs/validation.md",
     "docs/开发进度.md",
     "docs/agents/p0-media-canary.md",
+)
+ATTRIBUTION_DIRS = (
+    PROJECT_ROOT / "docs" / "validation",
+    PROJECT_ROOT / "docs" / "开发进度",
 )
 
 #: Words that mark a line as being about the user-stop chain.
@@ -214,14 +227,38 @@ def _blocks(text: str) -> list[tuple[int, str]]:
     return units
 
 
+def _attribution_documents() -> list[tuple[str, str]]:
+    """``(repository-relative name, text)`` for every document the checks cover.
+
+    The four named files plus every entry file under the two evidence directories.
+    Sorted so a failure names the same document on every run.
+    """
+    documents = [(name, (PROJECT_ROOT / name).read_text(encoding="utf-8")) for name in ATTRIBUTION_DOCS]
+    for directory in ATTRIBUTION_DIRS:
+        for path in sorted(directory.rglob("*.md")):
+            documents.append((path.relative_to(PROJECT_ROOT).as_posix(), path.read_text(encoding="utf-8")))
+    return documents
+
+
+def test_every_evidence_entry_file_is_covered() -> None:
+    """The scan must actually reach the entry files, or the rewrite silently checks nothing.
+
+    A helper that returns only the four archive documents would keep both tests
+    green while every new milestone record — the place the attribution drifted
+    last time — went unread.
+    """
+    names = [name for name, _ in _attribution_documents()]
+    assert any(name.startswith("docs/validation/") for name in names), names
+    assert any(name.startswith("docs/开发进度/") for name in names), names
+
+
 def test_no_document_still_blames_173_for_the_stop_link() -> None:
     """A stop/cancel line that names #173 must also name the PRD that built it.
 
     #173 is closed and never implemented the link, so "it belongs to #173" is the
     sentence that let a reviewer sign the row off against an unrelated case.
     """
-    for name in ATTRIBUTION_DOCS:
-        text = (PROJECT_ROOT / name).read_text(encoding="utf-8")
+    for name, text in _attribution_documents():
         for number, block in _blocks(text):
             if "#173" not in block or not any(word in block for word in _STOP_WORDS):
                 continue
@@ -236,8 +273,7 @@ def test_no_document_claims_the_stop_link_was_already_accepted() -> None:
     The claim is only allowed next to a ticket number (#346) or a real test file,
     which is what an acceptance claim has to rest on.
     """
-    for name in ATTRIBUTION_DOCS:
-        text = (PROJECT_ROOT / name).read_text(encoding="utf-8")
+    for name, text in _attribution_documents():
         for number, block in _blocks(text):
             if not any(word in block for word in _STOP_WORDS):
                 continue
