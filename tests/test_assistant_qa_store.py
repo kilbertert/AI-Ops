@@ -98,6 +98,42 @@ def test_cancelled_question_is_terminal_and_kept_for_the_refresh_window(tmp_path
     assert expires < datetime.now(UTC) + DIAGNOSIS_COMPLETED_RETENTION
 
 
+def test_a_completed_answer_survives_its_retention_window(tmp_path: Path) -> None:
+    """交付了答案的作业，过了保留期**仍然是 completed**，答案可读。
+
+    41 上实测（2026-10-23）：诊断完成后 15 分钟，同一条行被 sweep 成 `expired`，
+    而 `/v1/standard/diagnoses/{id}` 对 `expired` 返回 `result: null` —— 用户看到的
+    是「没找到」，而库里那条答案完好无损。用户的原话是「同一个问题，有时候能回，
+    有时候显示没找到，我一个字都没换」。
+
+    这里钉住的是**保留期不得改写已交付的结果**。保留期原本的用途是「一条行留多久」，
+    而 `sweep` 做的事是把它标成 `expired`；`expired` 在 API 层等于「没有结果」。
+    于是设置保留期的唯一可见后果，是把一个正确答案变成一次失败。
+
+    `expired` 仍然属于终态集合（客户端契约见 `docs/agents/testing-api-reference.md`
+    §2.2），只是不再由「交付后过了保留期」产生 —— 那是 `claim` 的职责，只作用于
+    仍在跑的作业。
+    """
+    store = _store(tmp_path)
+    qa = store.create_assistant_question("scope-1", "订单状态是什么")
+    store.update_assistant_question(
+        qa["qa_id"],
+        status="completed",
+        result={"text": "订单已完成", "reminder": False},
+    )
+    # 让这条行"刚过保留期"：不动 status，只把 expires_at 拨到过去。
+    with store._connection(write=True) as connection:
+        connection.execute(
+            "UPDATE assistant_questions SET expires_at = ? WHERE qa_id = ?",
+            ((datetime.now(UTC) - timedelta(seconds=1)).isoformat(), qa["qa_id"]),
+        )
+
+    got = store.get_assistant_question(qa["qa_id"], "scope-1")
+
+    assert got["status"] == "completed", got["status"]
+    assert got["result"] == {"text": "订单已完成", "reminder": False}
+
+
 def test_cancelled_question_expires_after_its_retention_window(tmp_path: Path) -> None:
     """The retention window is enforced: a cancelled row is swept to `expired`
     once it passes, so `cancelled` is not an unbounded status."""

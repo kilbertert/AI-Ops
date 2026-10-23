@@ -345,6 +345,38 @@ def test_the_out_of_scope_code_reaches_the_metrics_row(tmp_path: Path) -> None:
     assert [row["error_code"] for row in rows] == [DIAGNOSIS_ORDER_OUT_OF_SCOPE]
 
 
+def test_a_finished_diagnosis_keeps_its_result_after_retention(tmp_path: Path) -> None:
+    """诊断交付后过了保留期，`result` 仍然可读 —— 不被 sweep 成 `expired`。
+
+    这是用户看到「同一个问题有时能回、有时显示没找到」的机制之一：`expired` 在
+    `/v1/standard/diagnoses/{id}` 上意味着 `result: null`，而 sweep 会把**已完成**
+    的行改写成它。库里那条答案是完好的，只是读不到了。
+
+    与它相邻的 `test_inconclusive_diagnosis_is_retained_and_late_completion_is_rejected`
+    钉的是另一半：**还在跑**的作业超过 `deadline_at` 仍然收敛为 `expired`（那一次
+    确实没有答案）。两条规则作用在互不相交的行集合上。
+    """
+    store = GatewayStore(tmp_path / "gateway.db")
+    done = store.create_standard_diagnosis("scope-1", "O-1", "问题", None)
+    store.update_standard_diagnosis(done["diagnosis_id"], status="running")
+    assert store.update_standard_diagnosis(
+        done["diagnosis_id"],
+        status="completed",
+        result={"summary": "订单已完成"},
+    )
+    # 只把 expires_at 拨到过去，status 保持 completed
+    with store._connection(write=True) as connection:
+        connection.execute(
+            "UPDATE standard_diagnoses SET expires_at = ? WHERE diagnosis_id = ?",
+            ((datetime.now(UTC) - timedelta(seconds=1)).isoformat(), done["diagnosis_id"]),
+        )
+
+    got = store.get_standard_diagnosis(done["diagnosis_id"], "scope-1")
+
+    assert got["status"] == "completed", got["status"]
+    assert got["result"] == {"summary": "订单已完成"}
+
+
 def test_inconclusive_diagnosis_is_retained_and_late_completion_is_rejected(tmp_path: Path) -> None:
     store = GatewayStore(tmp_path / "gateway.db")
     diagnosis = store.create_standard_diagnosis("scope-1", "O-1", "问题", None)

@@ -17,6 +17,7 @@ written against the properties the four tables must keep:
 from __future__ import annotations
 
 import ast
+import sqlite3
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -335,8 +336,13 @@ def test_one_rendering_covers_every_table() -> None:
 def test_the_health_table_sweeps_a_different_status_set() -> None:
     """A difference between tables is now a difference between profiles.
 
-    The health table has no `cancelled`, so its sweep names three statuses where
-    the other two name four. That is the whole of the difference, and it is
+    The sweep names only the **interrupted** tier (2026-10-23): a row that
+    delivered an answer keeps it. See `expire_statements` for why the completed
+    tier is excluded — re-stamping a delivered answer as `expired` erased it at
+    the API layer.
+
+    The health table has no `cancelled`, so its sweep names two statuses where
+    the other two name three. That is the whole of the difference, and it is
     readable off the profile rather than off a hand-edited SQL string.
     """
     from aiops_diagnostics.async_job_lifecycle import expire_statements
@@ -345,7 +351,41 @@ def test_the_health_table_sweeps_a_different_status_set() -> None:
     diagnosis = expire_statements("standard_diagnoses", DIAGNOSIS, "NOW")
     assert "cancelled" in diagnosis.sweep[1]
     assert "cancelled" not in health.sweep[1]
-    assert health.sweep[1][2:] == ("completed", "failed", "NOW")
+    # 已交付的行不在 sweep 的集合里 —— 这是这次改动的全部意义。
+    assert "completed" not in health.sweep[1]
+    assert "completed" not in diagnosis.sweep[1]
+    assert health.sweep[1][2:] == ("failed", "NOW")
+
+
+def test_a_profile_with_no_interrupted_tier_still_renders_an_executable_sweep() -> None:
+    """空集合必须仍然是一条**能执行**的语句。
+
+    `swept_placeholders` 为空时，曾经的写法是塞一个字面 `NULL` 词进 `IN (...)`，
+    那会渲染出「两个占位符、三个参数」的语句 —— 第一次有表声明空的 interrupted
+    档时才会炸，而且炸在 sweep 里（读路径上），不是装配时。
+
+    这条用例直接拿渲染结果去真 sqlite 上执行一次：能跑通才算数。
+    """
+    from datetime import UTC, datetime, timedelta
+
+    from aiops_diagnostics.async_job_lifecycle import JobProfile, expire_statements
+
+    profile = JobProfile(
+        name="probe",
+        active=frozenset({"queued"}),
+        completed=frozenset({"completed"}),
+        interrupted=frozenset(),
+        expired="expired",
+        deadline=timedelta(minutes=1),
+        completed_retention=timedelta(minutes=1),
+        interrupted_retention=timedelta(minutes=1),
+    )
+    statements = expire_statements("standard_diagnoses", profile, datetime.now(UTC))
+
+    connection = sqlite3.connect(":memory:")
+    connection.execute("CREATE TABLE standard_diagnoses (status TEXT, expires_at TEXT, updated_at TEXT)")
+    connection.execute(*statements.sweep)  # 参数个数与占位符不匹配会在这里抛
+    assert connection.total_changes == 0
 
 
 def test_the_startup_shape_is_the_sweep_without_a_deadline_clause() -> None:
