@@ -949,3 +949,100 @@ def test_manual_retrieval_does_not_enumerate_every_onboarded_tenant(tmp_path: Pa
 
     assert _post(client, _body(knowledge_id="tenant-T-8")).status_code == 200
     assert kb.listing_calls == ["T-8"], "only the tenant the id names may be listed"
+
+
+def test_each_library_gets_its_own_id_and_searches_only_itself(tmp_path: Path) -> None:
+    """#1000: one id per library, so one Dify dataset can point at one library.
+
+    Before this, a tenant was one string, so Dify's orchestrator could only offer
+    "this tenant's knowledge" — the three libraries inside it were invisible as a
+    choice. Each id must now search **only** its own library; the tenant-level id
+    keeps merging all of them (its behaviour is pinned by the tests above).
+    """
+    client = _client(
+        tmp_path,
+        _Runtime(
+            signer=MediaResourceSigner("s", ttl_seconds=600),
+            search=lambda kbs, _q, _n: [_chunk(kb_id=kbs[0])],
+            owned={"T-9": ["KB-A", "KB-B", "KB-C"]},
+        ),
+    )
+    gateway = client.app.state.gateway  # type: ignore[attr-defined]
+    _onboard(gateway.store, "T-9")
+    kb = gateway.runtime.kb_search_client  # type: ignore[attr-defined]
+
+    for kb_id in ("KB-A", "KB-B", "KB-C"):
+        assert _post(client, _body(knowledge_id=f"tenant-T-9:{kb_id}")).status_code == 200, kb_id
+
+    assert [call[0] for call in kb.calls] == [("KB-A",), ("KB-B",), ("KB-C",)]
+
+    # The tenant-level id is unchanged: still every library, still one search.
+    assert _post(client, _body(knowledge_id="tenant-T-9")).status_code == 200
+    assert kb.calls[-1][0] == ("KB-A", "KB-B", "KB-C")
+
+
+def test_picker_offers_one_entry_per_library(tmp_path: Path) -> None:
+    client = _client(
+        tmp_path,
+        _Runtime(
+            signer=MediaResourceSigner("s", ttl_seconds=600),
+            search=lambda *_a: [],
+            owned={"T-9": ["KB-A", "KB-B"]},
+        ),
+    )
+    _onboard(client.app.state.gateway.store, "T-9")  # type: ignore[attr-defined]
+
+    resp = client.get("/v1/dify/knowledge", headers={"Authorization": f"Bearer {DIFY_KEY}"})
+
+    ids = [item["knowledge_id"] for item in resp.json()["knowledge_items"]]
+    assert [i for i in ids if i.startswith("tenant-T-9")] == [
+        "tenant-T-9",
+        "tenant-T-9:KB-A",
+        "tenant-T-9:KB-B",
+    ]
+    # One listing per tenant, not one per id: N libraries must not cost N calls.
+    kb = client.app.state.gateway.runtime.kb_search_client  # type: ignore[attr-defined]
+    assert kb.listing_calls == ["T-9"]
+
+
+def test_a_dataset_id_from_another_tenant_is_not_reachable(tmp_path: Path) -> None:
+    """A guessed dataset id must not borrow this tenant's name.
+
+    Tenant ids are public — they are literally `tenant-<id>` in Dify's own config —
+    so `tenant-T-8:<KB of T-9>` is a cheap guess. The derived id is servable only
+    when the dataset appears in **that** tenant's own listing; otherwise the answer
+    is the same 404 as "never registered", which says nothing about whether the
+    library exists or who owns it.
+    """
+    client = _client(
+        tmp_path,
+        _Runtime(
+            signer=MediaResourceSigner("s", ttl_seconds=600),
+            search=lambda kbs, _q, _n: [_chunk(kb_id=kbs[0])],
+            owned={"T-8": ["KB-8"], "T-9": ["KB-9"]},
+        ),
+    )
+    gateway = client.app.state.gateway  # type: ignore[attr-defined]
+    _onboard(gateway.store, "T-8")
+    _onboard(gateway.store, "T-9")
+
+    resp = _post(client, _body(knowledge_id="tenant-T-8:KB-9"))
+
+    assert resp.status_code == 404
+    assert resp.json()["error"]["code"] == "DIFY_KNOWLEDGE_NOT_FOUND"
+    assert gateway.runtime.kb_search_client.calls == []  # type: ignore[attr-defined]
+
+
+def test_a_empty_dataset_segment_is_not_a_source(tmp_path: Path) -> None:
+    """`tenant-T-9:` is malformed — 404, not "every library of T-9"."""
+    client = _client(
+        tmp_path,
+        _Runtime(
+            signer=MediaResourceSigner("s", ttl_seconds=600),
+            search=lambda kbs, _q, _n: [_chunk(kb_id=kbs[0])],
+            owned={"T-9": ["KB-A"]},
+        ),
+    )
+    _onboard(client.app.state.gateway.store, "T-9")  # type: ignore[attr-defined]
+
+    assert _post(client, _body(knowledge_id="tenant-T-9:")).status_code == 404
