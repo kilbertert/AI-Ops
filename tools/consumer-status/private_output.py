@@ -74,10 +74,14 @@ def assert_outside_repository(path: Path, *, code_root: Path) -> None:
 def _reject_symlink_target(path: Path) -> None:
     """目标本身、以及它的父目录，都不能是符号链接。
 
-    `write_private_text` 用 `replace()` 已经**不跟随**目标链接（链接会被替换成
-    普通文件），但那是"运气好"——它仍然会先 `ensure_private_directory(parent)`
-    对父目录 `mkdir`/`chmod`。父目录若是符号链接，就会对链接**指向的真实目录**
-    动手。所以这里显式拒绝。
+    两层行为要分清（实测，2026-10-23）：
+
+    * **本函数**：拒绝，抛 `PrivateOutputRefused`，什么都不写 —— 链接仍是链接。
+    * **底层 `write_private_text`**：`replace()` **不跟随**目标链接（目标内容不变），
+      但会把**链接本身**换成一个普通文件。这不叫"跟随"，可它也不是"拒绝"。
+
+    另外它仍会先 `ensure_private_directory(parent)` 对父目录 `mkdir`/`chmod`：
+    父目录若是符号链接，就会对链接**指向的真实目录**动手。所以父目录也显式拒绝。
     """
     if path.is_symlink():
         raise PrivateOutputRefused(f"拒绝写入符号链接：{path}")
