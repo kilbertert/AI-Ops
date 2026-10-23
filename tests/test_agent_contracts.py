@@ -55,6 +55,26 @@ def test_agent_turn_schema_is_strict_for_responses_api() -> None:
     _assert_strict_objects(schema)
 
 
+def test_the_two_fields_the_model_kept_failing_are_documented_in_the_schema() -> None:
+    """模型只看得到序列化后的 schema —— 类型注解里的道理它一个字都看不到。
+
+    41 上实测（2026-10-22，44/63 个 run 卡在重试上限 2）最贵的两次合约返工：
+    ``hypotheses[].evidence_ids`` 缺失，和 ``failed_sources`` 里写了「源码 + 解释」。
+    两者都改在了校验器/收口上，但如果 schema 里仍然一个字都没有，模型只能靠撞墙
+    学会它们 —— 而这正是那两轮时间的来源。这条用例钉住「说明确实下发了」，
+    不是钉住措辞：断言的是模型必须知道的那两件事。
+    """
+    definitions = agent_turn_schema()["$defs"]
+
+    hypothesis_evidence = definitions["Hypothesis"]["properties"]["evidence_ids"]["description"]
+    # 必须说明「失败/阻塞的条目也算」，否则模型会以为只有成功证据合法。
+    assert "failed" in hypothesis_evidence and "known_runbook" in hypothesis_evidence
+
+    failed_sources = definitions["AgentDiagnosis"]["properties"]["failed_sources"]["description"]
+    # 必须说明「照抄 source 标识符」，这是那对自相矛盾报错的根源。
+    assert "source" in failed_sources and "invent" in failed_sources
+
+
 def test_free_text_redaction_removes_bearer_and_openai_style_keys() -> None:
     api_key = "sk-" + "abcdefghijklmnopqrstuvwxyz123456"
     rendered = redact_text("Authorization: Bearer abcdefghijklmnopqrstuvwxyz and " + api_key)

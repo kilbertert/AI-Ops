@@ -1,8 +1,4 @@
-<<<<<<<< HEAD:docs/adr/0088-order-refusal-gets-a-live-shop-second-opinion.md
 # 88. 订单判定被拒时向公司实时店铺确认一次，而不是让令牌快照一锤定音
-========
-# 87. 订单判定被拒时向公司实时店铺确认一次，而不是让令牌快照一锤定音
->>>>>>>> 04e278f (fix(ci): ADR 编号避开 main 上已占用的 0085，并去掉重复 import):docs/adr/0087-order-refusal-gets-a-live-shop-second-opinion.md
 
 日期：2026-10-22
 状态：已采纳

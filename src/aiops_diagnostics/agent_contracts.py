@@ -105,7 +105,22 @@ class Hypothesis(BaseModel):
 
     title: str = Field(min_length=1, max_length=200)
     explanation: str = Field(min_length=1, max_length=2000)
-    evidence_ids: list[str] = Field(min_length=1, max_length=20)
+    #: 必填且非空，因为「假设必须落在真实观测上」是交付合同的一条。但**哪个**观测
+    #: 不限成功与否：一条失败/阻塞的条目同样是观测，这正是「这个通道不可用」这类
+    #: 假设唯一的依据（见 agent_validator 里逐条假设那段）。这个说明必须写进 schema
+    #: ——模型只看得到序列化后的定义，模型永远看不到这里的类型注解。41 上实测
+    #: （2026-10-22）最贵的一轮失败就是缺这个字段，模型据实给出了假设却没写
+    #: evidence_ids，然后花一整轮修它。
+    evidence_ids: list[str] = Field(
+        min_length=1,
+        max_length=20,
+        description=(
+            "Evidence ids this hypothesis rests on. Any journal entry qualifies, "
+            "including a failed or blocked one (a hypothesis about a channel being "
+            "unavailable can only cite that channel's own failed entry). "
+            "known_runbook alone is not enough."
+        ),
+    )
 
 
 class AgentDiagnosis(BaseModel):
@@ -122,7 +137,18 @@ class AgentDiagnosis(BaseModel):
     evidence_ids: list[str] = Field(max_length=50)
     hypotheses: list[Hypothesis] = Field(max_length=10)
     limitations: list[str] = Field(max_length=30)
-    failed_sources: list[str] = Field(max_length=20)
+    #: 每条条目必须以 journal 里的 `source` 字符串**开头**。允许在后面接一句解释，
+    #: 但存储和对外返回时只保留源码本身 —— 这个字段是标识符，不是散文。
+    failed_sources: list[str] = Field(
+        max_length=20,
+        description=(
+            "Every evidence source that could not be read, exactly as the harness "
+            "reported it (the `source` value of a failed or blocked tool outcome, "
+            "e.g. `tdengine:charging-gun_property`). You may append a short reason "
+            "after the identifier; do not paraphrase or rename the identifier itself, "
+            "and do not invent a source that does not appear in the journal."
+        ),
+    )
     next_steps: list[str] = Field(max_length=20)
 
 
