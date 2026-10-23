@@ -29,11 +29,19 @@ def _code() -> str:
     return re.sub(r"//[^\n]*", "", text)
 
 
-def test_the_script_carries_no_credential() -> None:
-    """脚本里不得出现任何凭据赋值。租户由桥从 Dify 会话解析，脚本一个字节都不传。"""
+def test_the_script_reads_only_the_csrf_token_it_must_forward() -> None:
+    """脚本**只读 CSRF**（那是 Dify 双提交要求的），不碰访问令牌、不碰任何密钥。
+
+    CSRF 不是凭据：它必须与同域的会话 cookie 一起用才有意义，单独拿到它什么也做不了。
+    而 `access_token` / `Authorization` / `password` / `secret` 一个都不许出现 ——
+    那些才是凭据，脚本没有理由碰它们。
+    """
     text = _script()
-    for forbidden in ("access_token", "csrf", "Authorization", "Bearer", "password", "secret"):
+    for forbidden in ("access_token", "Authorization", "Bearer", "password", "secret"):
         assert forbidden not in text, f"注入脚本里出现了 {forbidden!r} —— 它不该持有任何凭据"
+    # 只读 CSRF，且只从 document.cookie 读（那是页面自己的域）
+    assert "csrf_token" in text
+    assert "document.cookie" in text
 
 
 def test_the_href_carries_no_identity_parameter() -> None:
@@ -65,9 +73,11 @@ def test_the_entry_opens_in_a_new_tab_and_does_not_navigate_the_console() -> Non
     text = _script()
     assert "target = '_blank'" in text or '.target = "_blank"' in text
     assert "rel = 'noopener" in text or 'rel = "noopener' in text
-    # 不得用 location.href / location.assign 把 Dify 自己导航走
-    assert "location.href =" not in text
-    assert "location.assign" not in text
+    # 正常路径必须是 window.open；location.href 只能出现在**弹窗被拦**的兜底分支里。
+    assert "window.open(" in text
+    href_uses = [line for line in text.splitlines() if "location.href" in line]
+    assert len(href_uses) == 1, f"location.href 只该出现在兜底分支：{href_uses}"
+    assert "if (!w)" in text, "兜底必须由弹窗被拦触发"
 
 
 def test_the_script_degrades_silently_when_it_cannot_mount() -> None:

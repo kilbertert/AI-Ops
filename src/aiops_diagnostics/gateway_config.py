@@ -254,6 +254,9 @@ class GatewayServerSettings:
     #: ``ragflow.mall.qushiyun.com`` 后填 ``.mall.qushiyun.com``）。留空 ⇒ 行为与改动前一致
     #: （cookie 只对网关自己有效），因此没有反代同站的部署不会因为本项而改变。
     ragflow_console_cookie_domain: str = ""
+    #: 一次性跳转票的有效秒数（#985）。票只在"两次导航之间"有用，60 秒足够一个
+    #: 正常的点击-跳转，又不至于让一张被记下来的票活很久。
+    knowledge_hop_ttl_seconds: float = 60.0
     #: Conversation context window (#482). The defaults ARE the contract's
     #: numbers (8 turns / 8k tokens, ``conversation_store`` owns the constants);
     #: they are configurable because a RAG or promotional turn also spends the
@@ -430,6 +433,7 @@ class GatewayServerSettings:
             or _file_value(file_values, "AIOPS_GATEWAY_RAGFLOW_CONSOLE_PUBLIC_PEM"),
             ragflow_console_cookie_domain=_env("AIOPS_GATEWAY_RAGFLOW_CONSOLE_COOKIE_DOMAIN")
             or _file_value(file_values, "AIOPS_GATEWAY_RAGFLOW_CONSOLE_COOKIE_DOMAIN"),
+            knowledge_hop_ttl_seconds=_env_float("AIOPS_GATEWAY_KNOWLEDGE_HOP_TTL_SECONDS", 60.0),
             jev_base_url=_env("AIOPS_GATEWAY_JEV_BASE_URL")
             or _file_value(file_values, "AIOPS_GATEWAY_JEV_BASE_URL"),
             jev_api_key=_env("AIOPS_GATEWAY_JEV_API_KEY")

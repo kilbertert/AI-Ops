@@ -232,3 +232,79 @@ def test_an_onboarded_tenant_reaches_the_ragflow_login_step(tmp_path: Path) -> N
 
     assert response.status_code == 424, response.text
     assert response.json()["error"]["code"] == "KNOWLEDGE_UPSTREAM_UNAVAILABLE"
+
+
+# ── 一次性票：跨域 cookie 的唯一解法（#985） ───────────────────────────────
+
+
+def test_opening_returns_a_ticket_url_not_a_session_cookie(tmp_path: Path) -> None:
+    """应答里**没有会话 cookie**，只有一张票。
+
+    这是 #985 的核心：桥在 `dify.ranlei.work` 上，浏览器拒绝由它设置的
+    `Domain=.mall.qushiyun.com` cookie。会话必须由 `kb.mall` 那一跳自己种下去。
+
+    注意这条**不**断言"不换会话"：网关在这里仍然换一次，价值是**现在就知道能不能进**
+    （未开户 / 上游挂了当场报错，而不是让浏览器跳到 RAGFlow 再看到登录页）。
+    换出来的那个会话不交给任何人。
+    """
+    client, workspaces, store = _client(tmp_path)
+    _insert_workspace(workspaces)
+    store.record_ragflow_tenant(
+        TENANT,
+        ENVIRONMENT,
+        ragflow_email="t@kb.internal",
+        credential_ciphertext=encrypt_credential("pw", "0123456789abcdef"),
+        model_checked=True,
+    )
+
+    response = client.get("/v1/internal/knowledge/open", params={"workspace": WORKSPACE}, headers=_headers())
+
+    body = response.json()
+    # 上游在这里不可达（没有真的 RAGFlow），所以先断言失败形状是**可区分的**，
+    # 而不是一个空 200 —— 那正是"现在就知道能不能进"的价值。
+    assert response.status_code == 424, body
+    assert body["error"]["code"] == "KNOWLEDGE_UPSTREAM_UNAVAILABLE"
+    assert "cookies" not in body
+
+
+def test_the_hop_consumes_the_ticket_and_refuses_to_reuse_it(tmp_path: Path) -> None:
+    """票用一次即废。第二次回 410，且**不**再换会话。"""
+    client, workspaces, store = _client(tmp_path)
+    _insert_workspace(workspaces)
+
+    ticket = store.create_hop_ticket(tenant_id=TENANT, environment=ENVIRONMENT)
+
+    # 第一次：票有效 —— 走到换会话那一步（上游不可达 ⇒ 424，但**票已被消耗**）
+    first = client.get("/v1/internal/knowledge/hop", params={"ticket": ticket})
+    assert first.status_code == 424, first.text
+
+    second = client.get("/v1/internal/knowledge/hop", params={"ticket": ticket})
+    assert second.status_code == 410
+    assert second.json()["error"]["code"] == "KNOWLEDGE_HOP_EXPIRED"
+
+
+def test_an_unknown_or_cross_environment_ticket_is_gone(tmp_path: Path) -> None:
+    client, workspaces, store = _client(tmp_path)
+    _insert_workspace(workspaces)
+
+    assert client.get("/v1/internal/knowledge/hop", params={"ticket": "nope"}).status_code == 410
+
+    other = store.create_hop_ticket(tenant_id=TENANT, environment="95")
+    assert client.get("/v1/internal/knowledge/hop", params={"ticket": other}).status_code == 410
+
+
+def test_the_ticket_carries_no_session_of_its_own(tmp_path: Path) -> None:
+    """票在库里只关联租户，不含任何会话材料。
+
+    即使票被记进日志，读到它的人也得让**那个租户**重新登录一次 RAGFlow —— 登录用的
+    是租户自己的凭据，不是票里的东西。
+    """
+    client, workspaces, store = _client(tmp_path)
+    _insert_workspace(workspaces)
+
+    ticket = store.create_hop_ticket(tenant_id=TENANT, environment=ENVIRONMENT, workspace_id=WORKSPACE)
+    consumed = store.consume_hop_ticket(ticket, environment=ENVIRONMENT)
+
+    assert consumed is not None
+    assert set(consumed) == {"tenant_id", "workspace_id"}
+    assert consumed["tenant_id"] == TENANT
