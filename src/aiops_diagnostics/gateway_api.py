@@ -4094,6 +4094,21 @@ def create_gateway_app(
                 "KNOWLEDGE_ID_MISMATCH",
                 "path knowledge_id and body knowledge_id disagree",
             )
+        # **不能覆盖别人的知识源**（2026-10-22 负向真机暴露）。
+        #
+        # 上面那条 ``tenant_matches`` 只比较「请求体的 tenant 与调用者」，从不问
+        # 「这个 knowledge_id 现在归谁」。于是 B 租户可以把 ``tenant_id`` 填成自己、
+        # 路径填 A 的 knowledge_id，**成功改掉 A 的绑定行**（显式 200 + 新 owner）。
+        # 危害不是越权读取，而是**破坏**：A 的知识源从此指向 B 的库、或名字被改，
+        # A 的运营下次进 Dify 会 404 或查到别人的内容。
+        #
+        # ``DELETE`` 一直检查了拥有者，``PUT`` 没有 —— 同一对操作里的不对称就是这条缝。
+        # 与 DELETE 同形：不区分「不存在」与「是别人的」，避免把 id 是否存在泄漏出去。
+        existing = context.store.get_knowledge_id_binding(knowledge_id)
+        if existing is not None and not tenant_matches(existing["tenant_id"], caller.effective_tenant_id):
+            raise StandardAPIError(
+                status.HTTP_404_NOT_FOUND, "KNOWLEDGE_SOURCE_NOT_FOUND", "knowledge source not found"
+            )
         row = context.store.set_knowledge_id_binding(
             knowledge_id,
             payload.tenant_id,
