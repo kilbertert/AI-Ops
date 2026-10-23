@@ -67,6 +67,26 @@ mime）。Dify **只取 `content` 和 `score`**，`metadata` 的其余部分只�
 那会把 28 个 Q/A 打散成图片描述，**问答正文反而检索不到**。两者不可兼得，除非分成
 两个库：文字一份（`naive`）、图一份（`picture`）。
 
+## 一次实证：`youtu.be` 那条 URL 不是我们发的（2026-10-23 追查）
+
+现象：前端贴来一条 `qa` 响应截图，`media.url` 是
+`https://youtu.be/1Lk9eNUuMIV?si=301_61EH…` —— 而我们代码只会拼 `/v1/media/media_….sig`。
+
+查过的地方与结果：
+
+| 查的地方 | 结果 |
+|---|---|
+| 41 生产库**全部 24 张表**扫 `youtu` | 只命中 1 行（2026-09-12，正文里提到 "YouTube channels"，**不是 URL**） |
+| 该 `qa_id` 的 `result_json` | `media.url = /v1/media/media_tgHN3r9….ba0f0d59…` —— **与现行代码逐字一致** |
+| 41 / 36 / 本机 / 全部 worktree / git 全历史 | 没有 `1Lk9eNUuMIV`，也没有任何 `youtu` |
+| RAGFlow 库内容、MinIO、`/tmp`、`/var/backups`、shell history | 没有 |
+
+**结论：截图是前端渲染时替换的，不是服务端返回的。** 同一条记录里存的是我们自己
+签的 `/v1/media/…`，前端把它换成了固定的 YouTube 链接。
+
+这条值得记下来，因为它的风险不在"能不能播"，而在"**替换是无条件的**"：任何标题里
+带那个词的视频都会被换成同一个链接，不区分租户、不区分命中的是哪个库。
+
 ## 判据（下次改这条链时照这个验）
 
 ```bash
