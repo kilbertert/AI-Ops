@@ -503,3 +503,25 @@ def test_empty_region_is_missing_not_fallback() -> None:
     checks = _judge([_post(), _get(QA)], [{"body": {"question": "check my latest order status"}}], region="")
     assert checks["assistant_region_has_answer"] is False
     assert checks["answer_matches_qa_blocks"] is False
+
+
+def test_selector_constants_match_the_live_bundle_structure() -> None:
+    """选择器必须对着**现役产物**的类名，而不是猜的。
+
+    41 上 `aiPackage-pages-chat-chat.d86b6f8a.js` 的分支是
+    `role==="user" ? .user-bubble : .ai-row > .ai-msg`。这里钉住常量本身，
+    避免有人再改回 `.msg-list .msg-item` 这种产物里不存在的类名。
+    """
+    assert any(".ai-msg" in s for s in probe.ASSISTANT_SELECTORS)
+    assert all(".user-bubble" in s for s in probe.USER_MESSAGE_SELECTORS)
+    for legacy in (".msg-list", ".chat-list", ".message-list"):
+        assert all(legacy not in s for s in probe.ASSISTANT_SELECTORS), legacy
+
+
+def test_replay_selector_script_exists_and_is_explicit_about_limits() -> None:
+    """回放脚本要留在仓库里（方法可复跑），且写明它不碰生产。"""
+    script = TOOLS / "replay_selector.py"
+    assert script.exists()
+    text = script.read_text("utf-8")
+    assert "不碰生产" in text or "不发任何网络请求到生产" in text
+    assert "SYNTH-ORDER-0001" in text
