@@ -48,6 +48,20 @@ gitlab_token.txt
 # AFK runner runtime dirs (not source)
 .sandcastle/worktrees/
 
+# The repository map is a pure function of the tracked file set and the
+# manifest. Keeping it in version control gave every branch that touched the
+# file set a second copy of the same write — measured 2026-10-23, it conflicted
+# on 34 of 102 remote branches, more than any file except the two evidence
+# logs. Generating it on demand makes that conflict structurally impossible:
+# there is no committed copy to diverge.
+#
+# The freshness gate is gone with it. It could only ever assert "someone ran
+# the generator after their last edit", which the ignored file cannot check and
+# which bought nothing that a regenerated map does not: an agent that runs the
+# generator before reading gets a map that is correct by construction, and a
+# stale map is exactly what the gate was trying to catch.
+.sandcastle/REPO-MAP.md
+
 # AFK runner (package.json) dependencies
 node_modules/
 
