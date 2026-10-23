@@ -1266,6 +1266,162 @@ def ensure_ops_provider_command(
     typer.echo(json.dumps(result, ensure_ascii=False))
 
 
+@admin_app.command("sync-knowledge-datasets")
+def sync_knowledge_datasets_command(
+    ctx: typer.Context,
+    tenant: Annotated[str, typer.Option("--tenant", help="公司租户 id（sys_organ.id）")],
+    workspace: Annotated[
+        str, typer.Option("--workspace", help="该租户的 Dify workspace id；缺省按 (租户, 环境) 解析")
+    ] = "",
+    api_id: Annotated[
+        str,
+        typer.Option("--api-id", help="该 workspace 的「外部知识库 API」模板 id（开户时建的，不猜）"),
+    ] = "",
+    name_override: Annotated[
+        str,
+        typer.Option(
+            "--name",
+            help="覆盖显示名：`<ragflow 库 id>=<名字>`，逗号分隔。用于库名超过 40 字节或撞名",
+        ),
+    ] = "",
+    dry_run: Annotated[bool, typer.Option("--dry-run", help="只打印将发生的动作，不发任何写请求")] = False,
+    db: Annotated[Path | None, typer.Option("--db", help="gateway 数据库文件")] = None,
+) -> None:
+    """把某租户在 RAGFlow 名下的**每个库**同步成 Dify 里的一条 external dataset（#1001）。
+
+    幂等：按 ``(workspace, external_knowledge_id)`` 查重，跑两次不新建。库名变了只改名，
+    不改 id。RAGFlow 里已删的库**不自动删** Dify 的 dataset —— 只报告（删除不可逆）。
+
+    退出码：0 成功（含全无变化）/ 1 有拒绝或失败 / 2 缺配置。
+    """
+    from aiops_diagnostics.dify_console_admin import ConsoleApiError, ConsoleApiSettings, DifyConsoleAdmin
+    from aiops_diagnostics.dify_knowledge_datasets import (
+        SyncError,
+        libraries_for,
+    )
+    from aiops_diagnostics.dify_knowledge_datasets import (
+        run as sync_run,
+    )
+    from aiops_diagnostics.dify_workspaces import DifyWorkspaces
+    from aiops_diagnostics.gateway_store import GatewayStore
+    from aiops_diagnostics.knowledge_retrieval import KbServiceClient, KnowledgeSearchUnavailable
+
+    settings = _settings_with_config_file(ctx)
+    database = db or settings.database_file
+    if db is None and not os.environ.get("AIOPS_GATEWAY_DATABASE_FILE"):
+        typer.secho(
+            "缺少 --db：缺省会静默回退 XDG 默认并新建空库。请显式给出 --db <gateway.db>，"
+            "或 export AIOPS_GATEWAY_DATABASE_FILE=<gateway.db>。",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=2)
+    missing = [
+        label
+        for label, value in (
+            ("AIOPS_GATEWAY_ENVIRONMENT", settings.environment),
+            ("AIOPS_GATEWAY_DIFY_CONSOLE_BASE_URL", settings.dify_console_base_url),
+            ("AIOPS_GATEWAY_DIFY_CONSOLE_API_KEY", settings.dify_console_api_key),
+            ("AIOPS_GATEWAY_KB_SERVICE_BASE_URL", settings.kb_service_base_url),
+        )
+        if not value
+    ]
+    if missing:
+        typer.secho(
+            "缺少 " + " / ".join(missing) + "：同步要部署身份、控制台凭据与 RAGFlow 清单的来源",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
+    store = GatewayStore(database)
+    # 三件事各自可区分：没开户、workspace 解析不出来、RAGFlow 清单读不到。压成一句
+    # "同步失败"会让人回头查三张表。
+    if store.get_ragflow_tenant(tenant, settings.environment) is None:
+        typer.secho(
+            f"租户 {tenant} 在 {settings.environment} 没有开户（ragflow_tenants 无行）。"
+            "先跑 `aiops admin onboard-tenant`",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=1)
+    tenant_workspace = workspace
+    if not tenant_workspace:
+        try:
+            tenant_workspace = DifyWorkspaces(database).resolve(tenant, settings.environment)
+        except Exception as exc:  # noqa: BLE001 - 四个可区分的码在异常消息里
+            typer.secho(f"workspace 解析失败：{exc}", fg=typer.colors.RED, err=True)
+            raise typer.Exit(code=1) from exc
+    if not api_id:
+        typer.secho(
+            "缺少 --api-id：外部知识库 API 模板是每个 workspace 一份、由开户流程建的。"
+            "不给就不猜 —— 猜一个模板等于把 dataset 绑到别处。",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=2)
+
+    try:
+        rows = KbServiceClient(settings.kb_service_base_url, tenant_id=tenant).list_knowledge_bases()
+    except KnowledgeSearchUnavailable as exc:
+        typer.secho(
+            f"读不到租户 {tenant} 在 RAGFlow 的库清单：{exc}。同步的前提是上游可达；"
+            "没有清单就无从判断该建哪几条 dataset",
+            fg=typer.colors.RED,
+            err=True,
+        )
+        raise typer.Exit(code=1) from exc
+    libraries = libraries_for(tenant, rows)
+    overrides = _name_overrides(name_override)
+    if overrides:
+        libraries = [
+            dataclasses.replace(lib, name=overrides.get(lib.dataset_id, lib.name)) for lib in libraries
+        ]
+
+    console = DifyConsoleAdmin(
+        ConsoleApiSettings(settings.dify_console_base_url, settings.dify_console_api_key)
+    )
+    try:
+        outcome = sync_run(
+            workspace_id=tenant_workspace,
+            libraries=libraries,
+            console=console,
+            external_knowledge_api_id=api_id,
+            dry_run=dry_run,
+            log=lambda line: typer.secho(line, err=True),
+        )
+    except (SyncError, ConsoleApiError) as exc:
+        code = getattr(exc, "code", "SYNC_FAILED")
+        message = getattr(exc, "message", str(exc))
+        typer.secho(json.dumps({"error": code, "message": message}, ensure_ascii=False), err=True)
+        raise typer.Exit(code=1) from exc
+
+    typer.echo(json.dumps(outcome, ensure_ascii=False))
+    if outcome.get("orphans"):
+        typer.secho(
+            f"注意：{len(outcome['orphans'])} 条 dataset 指向的库在 RAGFlow 里已不存在："
+            + "、".join(outcome["orphans"])
+            + "。**没有删除**它们 —— 删 dataset 不可逆，且可能破坏引用它的智能体。请人工决定",
+            fg=typer.colors.YELLOW,
+            err=True,
+        )
+    raise typer.Exit(code=0)
+
+
+def _name_overrides(value: str) -> dict[str, str]:
+    """``<库 id>=<名字>,<库 id>=<名字>`` → 字典。"""
+    out: dict[str, str] = {}
+    for pair in filter(None, (part.strip() for part in value.split(","))):
+        key, separator, name = pair.partition("=")
+        if not separator or not key.strip() or not name.strip():
+            typer.secho(
+                f"--name 里有一项格式不对：{pair!r}（应为 <库 id>=<名字>）", fg=typer.colors.RED, err=True
+            )
+            raise typer.Exit(code=2)
+        out[key.strip()] = name.strip()
+    return out
+
+
 #: CLI 参数名 → `GatewayServerSettings` 字段。放在函数外，字典只写一次 —— 上面那个循环
 #: 复制五份 `setattr` 字符串是"同一规则两份实现"的经典起点。
 _SETTING_FOR = {
