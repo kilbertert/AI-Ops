@@ -1,0 +1,586 @@
+# 发布说明
+
+面向用户的发布说明，由人撰写。格式沿用 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)，
+版本号遵循 [Semantic Versioning](https://semver.org/spec/v2.0.0.html)。
+
+> **这个文件不是 `CHANGELOG.md`，两者不要合并。** 实测 2026-10-23：用
+> `dev-changelog` 从 Conventional Commits 生成的结果是 **435 行 / 416 条纯 commit
+> 标题**，而本文件是 **580 行 / 524 条人工撰写的条目**，两者**零交集**——它们记录的是
+> 不同的事实（前者是「谁提交了什么」，后者是「用户会感知到什么、为什么、有什么代价」）。
+>
+> 因此本文件改名以消除混淆：`CHANGELOG.md` 这个名字留给**生成物**，本文件是**人工的**。
+> 生成物不参与人工编辑，两者的冲突面互不相干。
+
+## [Unreleased]
+
+### Fixed
+- 管家端订单被拒时向公司实时店铺确认一次：令牌里的 `shop_ids` 是登录快照，而公司列表
+  接口每次实时查；登录后店铺绑定被改会出现「列表有、判定无」。现在快照命中直接放行，
+  仅在判不可见时确认一次（ADR-0088）。
+- 隔离栈改绑智能体后同时核对模型、指令、应用与成功信封，避免只改了模型就误报整次改绑成功。
+- 工单订单（`ch_order_info.user_id='-1'`）的主人写在 `consumer_id`，`self` 范围此前只认
+  `user_id`，于是这类订单对**它的主人自己**也回「这个订单不属于当前账号」。判据改为
+  `(CASE WHEN user_id='-1' THEN consumer_id ELSE user_id END) = <会话 C 端 id>`，
+  计费模板的存在性检查同步收口。空白/NULL 的 `user_id`（渠道/OCPI 单据）仍不算本人。
+- 整轮成功通知的省略/null 原因不再匹配已记录的非空原因；冲突返回 409，既有无原因重试仍返回 200。
+
+### Added
+- 消费者委派成功响应包含同 run 充电状态快照，交付前复核本人授权、绑定、状态与期限；不二次读取业务。
+- M3 正常登录入口验收工具：私有会话文件、零网络预检、一次派发、同 run 证据核对；补齐 App 接线与验收手册。
+- 隔离栈的**预检**不再按 `basename` 判「两侧同一份清单」。判据改为按渲染后的 compose
+  把两侧的容器内路径解析成宿主路径，再要求指向同一个真实普通文件；文件缺失、符号链接、
+  目录、组/他人可读都各自拒绝，0400 与 0600 都在契约之内。此前「节点开关缺失」与
+  「节点路径没有挂载」两种坏态都会印 PASS（实测反例见
+  `tests/test_m2_live03_manifest_preflight.py` 的两条回归）。
+- 隔离栈的**复跑材料**入仓：`deploy/m2-live-03/compose.identity.yaml`（只换 Gateway 入口
+  进程的覆盖层）、`identity.env.template`（身份三件套键名）、
+  `tools/m2_close/m3live/live_replay.py`（一次派发 / 按 run 采证 / down 后清理与生产面对照）。
+  握手令牌只从宿主的 0600 文件读，不接受命令行参数；失败不重试，同一输出目录只允许发一次。
+- 95 环境（`api.qumall.qushiyun.com`，主机侧键 `qy-gw-120`）有了事实页 `docs/agents/env-95-facts.md`，并在 `.dev-host.toml` 声明为可只读访问的目标。
+  记录内容包含：代号与 41/36 的判别、它的数据面为空这一观测、以及**没有** `env-95.toml`
+  这一事实——此前 agent 只能从散落三处的半句拼出这些。
+- Gateway 可在签发时固定执行配置身份，并在领取及最终放行事务内核对身份、终态与有效期。
+  配置默认关闭；启用后缺失或不匹配的身份被拒绝，已拒绝记录不能通过重试恢复。
+  数据库幂等新增三列，历史行保持 NULL；未启用时保留原回执字段。
+- 执行节点接入执行配置守卫（M3-NODE-GUARD-01，节点侧）：受控清单
+  （`AIOPS_EXEC_MANIFEST`，默认不配置）为期望值的唯一来源，身份＝清单原始字节 sha256；
+  启用后在**调用模型之前**按面拒绝配置漂移 —— 派发体的 provider/adapter/模型/endpoint、
+  构造出来的模型的标识与有效选项、解析出来的工具集合的 name+description+schema、
+  最终 `Prompt` 的完整 system 集合与消息形状（固定无历史模式）。
+  清单缺失/权限过宽/非法 JSON/schema 不受支持/`history_policy` 非 `none` 在装配阶段拒绝，
+  不降级；未启用时行为与今天逐字一致。
+- Gateway 新增整轮终局端点 `POST /v1/internal/charging-status/completions/{run_id}`：
+  启用执行配置清单的 run 在领取并缓存快照后保持 `running`，只有节点显式确认（身份逐字相等、
+  仍在运行、已有快照、未过期）才转 `succeeded`；失败与成功同一事务、同一 TTL 原语；
+  未启用清单时该端点不改任何列。路由总数 65 → 66。
+- 执行节点回传本 run 实际验证过的 `X-AI-Ops-Exec-Config`，并在整轮结束时按
+  「末轮 `finishReason=STOP` + Gateway 回执校验」确认成功；同 JVM 内相同 run 的重入在本地拒绝。
+- 节点侧合成验收工具 `tools/m2_close/m3node/`（`run.sh` 单命令复跑；缺锁定依赖即非零退出），
+  用真实适配器 + 真实工具管理器 + 本机合成上游驱动真实装配的**流式**工具循环。
+
+### Notes
+- 本条目为节点侧实现，**未接 Gateway**：签发时固定期望、领取时对照并持久化、
+  `agent_version` 回执留到下一片。本地合成结果不证明真实供应商、真实订单或生产装配。
+
+## [0.1.0] - 2026-10-18
+
+### Added
+- Add read-only charging diagnostics runtime (#1)
+- Add Codex-native diagnostic harness (#2)
+- Add portable Windows diagnostic package
+- Expose live diagnostic progress events
+- Add central AI-Ops gateway (#7)
+- Unify diagnose as single entry, default to Codex agent (#9)
+- Tenant discovery, Chinese output, auditable evidence (#13)
+- Multi-provider infrastructure with GLM default (#18)
+- Plan A — no auto-claim on agent:implement label
+- Add Java /diag/order tracer bullet
+- Implement HttpSources with fixture equivalence
+- Add Java /diag/order tracer and HttpSources fixture equivalence
+- Plan A full decouple — implement-prd dispatch-only
+- Close reference gaps — dependency analysis + model guardrails
+- Add HybridSources partial cutover and fixtures
+- Merge HybridSources partial cutover (#50) and D方案 doc/workflow sync (#52)
+- Read internal token secret from config with 300s window
+- Classify doctor sources and annotate env example
+- Merge issue-42 internal token config and issue-51 doctor/env example
+- Add Java /diag/occupy-order lookup endpoint
+- Add Java /diag/occupy-order lookup endpoint (#39)
+- Add Java /diag/redis-stream endpoint
+- Merge /diag/redis-stream endpoint (#40)
+- Add GET /diag/device endpoint
+- Merge Java /diag endpoints (#40, #41)
+- Remove MySQL/Redis direct credentials in Phase 3a
+- Merge Phase 3a MySQL/Redis credential removal (#43)
+- Strip queue labels on issue close
+- Enforce governance contract
+- Add permission ScopeContext and identity mapping (#77)
+- Scope MySQL diagnostic queries by permission context (#74) (#78)
+- Scope TDengine queries by allowed device set (#79)
+- Scope Redis stream inspection by tenant ownership (#80)
+- Integrate scoped runtime, audit, and acceptance artifacts (#81)
+- Add standard caller authentication (#93)
+- Deliver minimum async charging health report jobs (#94)
+- Restore async health report jobs (#99)
+- Deliver standard diagnosis API (#100)
+- Add standard curves and provenance (#101)
+- Add complete deterministic health metrics (#102)
+- Unify standard resource contract (#103)
+- Validate standard tokens through cloud auth (#106)
+- Resolve thirdSession from shared redis (#115)
+- Deliver C/B platform-scoped fixed FAQ APIs (#134)
+- Add zero-order tool boundary for general questions (T1/#151) (#157)
+- Add unified assistant questions endpoint (T2/#152) (#158)
+- Real zero-order general-question job (T3/#153) (#159)
+- Text-embedded order parse + ownership route (T4/#154) (#161)
+- General-question history + frontend examples (T5/#155) (#162)
+- Add bounded retrieval and media protocol
+- Add draft publish lifecycle
+- Customer QA RAG runtime in unified entry (T3/#170) (#179)
+- Session and active-order context (#180)
+- Isolated draft debug-run and real kb publish validation (T5/#171) (#182)
+- Redacted agent run metrics and tenant-scoped query API (T7/#174) (#183)
+- Signed /v1/media route + frontend blocks[] contract (#181)
+- 语言解析横切 — Accept-Language 解析、回退与依赖注入 (#201) (#205)
+- Localize FAQ catalog with the multilingual wide table (#206)
+- Match FAQ short-circuit across multilingual titles (#207)
+- Inject output language into qa and diagnosis prompts (#208)
+- Declarative environment manifest + aiops admin reconcile (#211)
+- Intent-relative confidence ladder + environment preflight (#212)
+- Adopt the customer service prompt contract for env 41 (#215)
+- Clarify high-risk questions without order context (#233)
+- Add structured lightweight intent fallback (#234)
+- Add versioned tenant-entry shortcut resources (#230) (#235)
+- Connect promotional agents to case and solution intents (#236)
+- Add platform-wide shortcut defaults
+- Add tenant shortcut overrides and suppression
+- Migrate tenant actions to platform defaults
+- Add jump path to shortcut resources (#265)
+- Add a Responses status adapter for the unified endpoint (#273)
+- 统一助手入口补齐取消终态、解锁事件并修复两个同源缺陷 (#360)
+- 回答载荷提升为契约类型，资源名豁免直达生产路径 (#372)
+- 合并 main 后受门控地部署 41 (#387)
+- Jev 决策客户端——自有协议接入与类型化决策解析 (#393)
+- 主机侧自检与自动回滚；依赖收敛定为有意边界 (#388)
+- 分类器判定切换到 Jev——阈值映射、失败回退与可观测性 (#398)
+- 方案 A —— 高风险一律追问，并记录与关键词守卫的重叠 (#402)
+- 管家端入口可用与订单运营商级授权 (#431)
+- 接收公司 OAuth2 令牌并解析管家端身份与站点范围（#443） (#446)
+- 入站来源密钥与新链路的启用开关（#444） (#447)
+- 本地验签模式——按 HS256 自校验公司 JWT（A2 / #448） (#451)
+- 管家端入口判据改为公司一致（不验签、不判 exp）—— 按用户裁定 (#460)
+- D-3/D-4/D-5 执行——管家端链路改经公司网关（来源密钥由网关注入） (#473)
+- 会话上下文窗口接上三条生成路径——追问真的看到上一轮 (#496)
+- Route 1 补齐会话语义——可取消、轮次进会话、202 回显 conversation_id (#498)
+- 路由成功侧可观测——#405 的「连续运行」判据今天量不出来 (#509)
+- 诊断线的取消操作（#499） (#525)
+- 生成项目级验证 skill（verify-aiops-gateway） (#545)
+- 健康报告面建立语言维度（摘要/曲线名/停因，六语）（#539） (#555)
+- 系统文案补齐 vi/mn/th/km 四种新语言（#540） (#556)
+- 诊断面支持 vi/mn；把「不可提示」变成代码事实（#541） (#557)
+- 管家端目录补齐越南语/蒙古语；入库宽表并改造合并工具（#529） (#558)
+- 泰语/高棉语目录与「能读不能问」的边界（#530） (#559)
+- 繁体中文独立成键 zh-Hant（语言轴与脚本轴分离） (#560)
+- 固定问答目录补齐到 11 语言（consumer 11/11 · operator 11/11） (#567)
+- Verify-aiops-client-e2e —— 真用户端到端联调（含产线实测通过） (#570)
+- 横幅行进 shortcuts 表 —— 显式判别字段 + 可选 image_url（#588） (#595)
+- 新增只读端点 GET /v1/banner（纯静态配置）（#589） (#596)
+- 36 上 Dify 1.17.1 实例的部署资产与主机声明（#579） (#601)
+- DSL 拉取客户端 + DSL→草稿映射（#580） (#605)
+- Dify 知识检索适配路由（External Knowledge API，PRD #577 / #581） (#597)
+- 运行时注册表 (租户,入口) → Dify app，并降级 reconcile 定位（#584） (#607)
+- 最小端到端竖切 —— 导出 → 拉取 → 发布 → 一条提问被服务（#582） (#608)
+- Dify 暴露面登记表 + 三段判据（#583） (#611)
+- /v1/dify/ 单开 location —— 让 Dify 自己的 key 到达适配路由（#614） (#616)
+- 面向 Dify 的调试身份 —— 凭据决定身份，请求不参与（#586） (#618)
+- 开场白与预设问题的内容制品权威 + 语言派生（#585） (#623)
+- 给「拉取 → 发布」那一跳一个可触发的运营动作（#625） (#626)
+- The sandbox is prepared before the agent starts (#646)
+- 升级脚手架到 1.7.11 —— 知识图谱按仓库命名 (#689)
+- 运维分析面的第一刀——失败率卡（站点 + 时间窗）(#697) (#703)
+- 离线桩与故障码两张卡（同一张运维分析面）(#698) (#704)
+- 支付卡——本期唯一真缺口，交付四分桶而不是一个编的失败率 (#699) (#705)
+- 管家端诊断由已发布的运维配方驱动 (#695) (#707)
+- 「运维巡检」—— 点击起一张跨订单的运维卡 (#721) (#722)
+- 过期作业归得到租户，汇总给 expired —— 看不见"没跑完"的缺口 (#725) (#731)
+- 一个 agent 的正文只能有一个来源 (#577 缺的那道门) (#739)
+- 运营改完 Dify 之后的那一步 —— `admin sync-from-dify`（零参数，幂等） (#747)
+- 运营自助发布 `POST /v1/dify/publish` —— 把触发权交给运营 (#749)
+- 知识库桥 —— 翻译 dataset UUID，让运营换的知识库真正生效 (#753)
+- 工具白名单 —— Dify 声明，执行器强制 (#757)
+- 开场白/预设问题存中文母版 + model 不再从 Dify 拉 (#758)
+- 工具白名单接通 —— 样本到手，映射键定为 provider_id/tool_name (#762)
+- 运营自助发布的最后一跳 —— operator 会话身份那条门 (#764)
+- 控制台一键发布的后端桥 + ADR-0021 (#767)
+- 控制台一键发布的部署层 —— 端到端已跑通（真实点击） (#768)
+- 七工具目录：可勾选的说明端点 + aiops 提供方识别（#774） (#784)
+- 试运行（AI-Ops 侧）：草稿走真实 harness，不产生版本（#781） (#785)
+- 登录代理：公司账号换会话，凭 SECRET_KEY 自签（#778） (#786)
+- 账号生命周期：失权封禁落在映射状态上，可逆（#779） (#788)
+- 发布权改由公司权限码裁定 + 发布审计（#780） (#789)
+- 试运行可见范围跟随发起人（管家端口径）（#782） (#790)
+- 控制台入口收口到 dify.ranlei.work 的 TLS，灰云不经第三方代理（#776） (#794)
+- 试运行的部署层 —— 草稿由网关读，桥加 /__aiops/trial，按钮加第二颗（#795） (#796)
+- 公司身份驱动控制台会话与试运行范围（#783 前半） (#800)
+- 收口 Dify 原生账号入口，公司登录成为唯一入口（#783 阶段 3） (#805)
+- 新增默认关闭的 C 端本人订单充电状态直读 (#809)
+- Add frozen execution authorization records (#810)
+- Add delegated charging-status entry points (#811)
+- Add governed execution node and isolated experiment (#812)
+- Deploy an isolated controlled trial stack (#815)
+
+### Changed
+- Clarify HTTP doctor classification
+- Simplify Java /diag/occupy-order lookup flow
+- Harden redis-stream key and lag edge cases
+- Clarify T6 device lookup guard and expand contract tests
+- 引入租户可见性共享规则并迁移 fixture 数据源 (#328) (#335)
+- 引入有界 HTTP 传输骨架 (#306) (#336)
+- Introspection 客户端迁移到骨架并补齐异常捕获 (#307) (#337)
+- 网关/TDengine 代理/Responses 适配器/Dis 客户端迁移到骨架 (#311) (#338)
+- Kb-service 检索与媒体客户端迁移到有界 HTTP 骨架 (#309) (#339)
+- Diag API 客户端迁移到有界 HTTP 骨架 (#340)
+- UPMS 客户端迁移到有界 HTTP 骨架 (#341)
+- 拆除重复退避与残留构造点，并以守护测试封口 (#312) (#342)
+- 收敛租户可见性规则为单一权威，统一入口守卫与两种渲染 (#344)
+- 合并两处入口租户守卫为单一权威 (#331) (#350)
+- 收敛租户可见性规则为单一权威 (#347)
+- 订单时间窗规则正式化，消除跨模块私有名依赖 (#378)
+- 抽出「店铺集合 → 运营商站点范围」的共享解析 (#442) (#445)
+- 固化联调期形状（B 批：B1 契约 + B2 文档） (#462)
+- 平台身份判定三份合一份——返回类型统一为 PlatformDecision (#501)
+- 202 响应形状收敛到唯一 DTO，状态词汇取自存储层 (#503)
+- 订单授权守卫合一——三种显式结果，判定不可用与「确实无权」可分 (#504)
+- 建作业生命周期模块——状态集/deadline/保留期/claim-guard/崩溃判定一处定义 (#505)
+- 五份同形过期 SQL 收成一种渲染——删掉任何两份都不再悄悄通过 (#506)
+- 涉钱问句的两条守卫合一——一个问句一次澄清、一种信息 (#511)
+- 语言清单成为单一来源（含 D-6 的属性化，行为不变）（#527） (#554)
+- 订单状态角色收敛为单一权威 (#732) (#735)
+- 修 shutdown 轮询等待 —— 全量 299.6s → 218.7s (#817)
+- 测试套件可并行 —— 全量 218.7s → 64s (#818)
+
+### Documentation
+- Chinese governance and milestone evidence
+- Add quick-start guide and surface it in README (#8)
+- Fix quickstart step 3 to use --mode deterministic (#10)
+- Add packaging and CI artifact download guide (#12)
+- Make workspace-level enrollment the default (#14)
+- Rewrite packaging & download guide as step-by-step (#16)
+- 充电业务诊断查询接口方案(AI-Ops 直查库正式化)
+- AFK 工作流脚手架收尾 (M16 milestone sync)
+- Sync issue #36 milestone and validation
+- Align with Plan A — deprecate agent:to-issues auto-spawn
+- D 方案前置工作——拆分 PR-A/B/C 任务清单与决策记录
+- Sync plan and AFK workflow to D方案
+- Clarify D方案 phased scope consistency
+- Sync issue #39 milestone and validation
+- Sync issue #40 milestone and validation
+- Annotate P0 — Java /diag/* 未落地,HTTP 段回退直连
+- Add execution-paths note to handoff brief
+- Retain review workflow boundaries (#69)
+- Record standard API real acceptance blockers (#104)
+- BFF identity + frontend API brief + arch showcase (#108)
+- Publish PNG + SVG preview of architecture showcase (#109)
+- Document thirdSession service boundary (#116)
+- Record fixed faq acceptance (#136)
+- Record faq gateway smoke (#138)
+- Sync frontend integration contract (#139)
+- Expand brief into three-line integration overview (#140)
+- Add FAQ platform identity domain terms (#141)
+- Add per-endpoint input/output field definitions (#142)
+- Record acceptance-verified auth and validation semantics (#143)
+- Record APK joint-debug diagnosis and breakpoints (#144)
+- Update topology after 120 service migration (issue #147) (#148)
+- Fix thirdSession header name — use lowercase third-session (nginx drops underscored headers) (#149)
+- Add 智能问答 and 通用问答 terms (T6/#156) (#163)
+- Frontend trigger guide for the three response types (#166)
+- Kb-service test env facts and protocol samples for #170 (#178)
+- P0 real-media canary runbook for #173/#175 (#184)
+- Sync 36 cutover facts, canary C1-C3 evidence, and stale status sections (#191)
+- Record media canary blockers
+- Record metrics forbidden path
+- Record end-to-end completed diagnosis acceptance (PR #194 follow-up) (#195)
+- Archive revoked 41 decision (#197)
+- Record frontend API real acceptance (#198)
+- Record environment 41 cutover and shared kb
+- Record current 41 provider verification
+- Record 41 multilingual cutover
+- Record shared provider key diagnosis
+- Require explicit --db in admin reconcile examples (#213)
+- Record M53-M55 milestones and on-box acceptance evidence (#214)
+- Record M56 prompt rollout acceptance and supplier blockage (#216)
+- Record live five-language FAQ acceptance for #200 closure (#217)
+- Correct review-found record inaccuracies (test count, empty scenario, language claim) (#222)
+- Close #218 with live backlog acceptance after supplier recovery (#223)
+- Record three-environment sync of the QA error contract fix (#224)
+- Clarify QA failed is terminal — retry means a new POST, not more polling (#225)
+- Full frontend contract for shortcuts and clarification (#239)
+- Index current delivery and shortcut demo state
+- Refresh delivery index baseline
+- Keep delivery baseline resolvable
+- Record 41 shortcut migration evidence
+- Record shortcut acceptance follow-up
+- Refresh shortcut acceptance timestamp
+- Add 41 environment runbook as reusable repo asset (#256)
+- Require operational-knowledge self-check before milestone close (#257)
+- Record embedded-order routing fix with 41 live evidence (#259)
+- Record the 41 jump-path deployment and live acceptance (#267)
+- Record 41 key-based SSH access in the runbook (#268)
+- Add a frontend handoff for jump-path integration (#269)
+- Record the promo empty-library misreport and its 41 fix (#271)
+- Record the unified model endpoint migration (#279)
+- Record the media/image retrieval and display fixes (#281)
+- Record the i18n and media acceptance for this session (#286)
+- 记录后台知识库页与智能体平台统一到 36 (#287)
+- 声明本项目可访问的主机（.dev-host.toml） (#291)
+- 记录 AL-COV-10 的 41 公网验收结果 (#303)
+- 交接文档写明诊断线等待态不可取消 (#370)
+- README 重构为架构导览并加四条形状守护 (#373)
+- 缩短第二节标题并同步目录锚点，补页内锚点守护 (#375)
+- 补 #346 取消链路的端到端真实验收证据 (#379)
+- 记录 #380 部署 41 与公网复验结果 (#382)
+- 说明 __version__ 在 CD 部署时会被注入 commit 标识 (#395)
+- 回填 workflow 层验收结果 —— 四条判据全部通过 (#399)
+- 记录 PRD #383 在 41 的启用与验收——高风险追问规则首次触发 (#400)
+- 记录方案 A 部署 41 与公网验收（含回滚路径实测） (#403)
+- 记录 CD 部署完成与对 CD 构建的重新验收 (#404)
+- 修正状态索引的过期「进行中」，并记录 CD 部署史核查 (#409)
+- 订单授权问题清单——P0 三条改由公司源码回答 (#415)
+- 开发进度.md 补阅读须知，避免历史条目被当作现状 (#418)
+- R-2 结论与方向修正——撤回「调后端接口」，改用 AI-Ops 既有骨架 (#420)
+- R-2 已解——存在受信路径且直接吃 userId，无需后端改动 (#421)
+- 记录便携客户端已无使用、决定退役（退役工作未立票） (#429)
+- 记录 ADR-0003 未实现的偏离（#423 第三项交付） (#433)
+- 管家端端到端验收通过——但发现一处影响消费者侧的回归 (#435)
+- 管家端入口动作已在 41 发布并端到端验收（补上 #427 后半交付） (#437)
+- Client-type 三套取值沉淀 + 管家端前端联调交接文档 (#438)
+- 立项根基 + 管家端身份方案定稿（ADR-0009，分两段实施） (#440)
+- 更正「公司校验入口可达 ⇒ 只差凭据」的读法（实测：服务调用不成立） (#449)
+- 收窄 check_token 的失败定位（观测区分不了「之前」与「之中」） (#450)
+- 管家端入口的 nginx 那一跳（实测定稿，改前必读） (#452)
+- 管家端入口在 41 启用并端到端验收通过（机制可用，非需求可用） (#455)
+- 管家端联调链条说明（交付给前端，可直接照做） (#456)
+- 记档「公司的 JWT 既不验签也不判 exp」——两边判据不同，AI-Ops 选更严 (#457)
+- 更正——默认密钥是启用前的硬前置，不是「启用后跟踪的风险」 (#459)
+- 管家端收尾实施蓝图（B/D/E 三批 + 顺序与判据） (#461)
+- M4 观察期时钟开启 + M2 探查更正「网关会注入身份」这个前提 (#463)
+- 蓝图回填——D-3a 已测定、B/M4/E1/E2 的交付状态与剩余待验 (#469)
+- 蓝图回填 #414 拆票结果 (#481)
+- 蓝图回填 E 批拆票（18 张叶子票 + 依赖图） (#494)
+- #464 部署 41 后第一次取数——窗口内无流量，判据仍不可判 (#510)
+- 蓝图与状态索引回填 E 批收官 (#512)
+- 固化公司源码只读探查规程（#475） (#513)
+- L1 仓库地图（#476） (#514)
+- L2 关键实体图（#477） (#515)
+- L3 鉴权与数据范围（#478） (#516)
+- L4 首个验证用例——订单授权走通基线（#479） (#517)
+- 待答清单重新定级（#480） (#518)
+- 蓝图与状态索引回填 #414 收口 (#519)
+- #405 到期评估——条件不满足，且窗口起点被三个文档 PR 重置 (#521)
+- #413 41 实机复核——不再落 FAQ ✅，卡片卡在模型账户余额 (#522)
+- #497 会话窗口风险声明——选择「维持现状」并把它钉住 (#524)
+- #536 端到端验收——41 生产库真实失败行对照 (#548)
+- #537 判为无效——证伪记录与判据 (#550)
+- 错误信封的 code/message 分工写成契约并钉住（#538） (#553)
+- 记录推翻 #200 的语言边界，沉淀五个术语 (#562)
+- B 端整体国际化完成情况复盘 (#569)
+- 阶段收尾 —— 同步交付状态索引、客户端契约与工具入口 (#571)
+- 验收制品同步到 11 语言（acceptance.feature + qa-plan） (#572)
+- 电池检查指标规格落进仓库（#592） (#594)
+- 前端交接文档 + 契约同步（含已知欠账与边界）（#591） (#598)
+- 交付状态索引同步 #566 的实测结果与 #578 的收口 (#603)
+- #612 部署与部署后复验；公网入口那一跳未打通（#614） (#615)
+- 索引记 JEV 判定面已修复（#617），并写明仍欠的两条 (#621)
+- 阶段 1 第二/四跳在 41 上真跑通的证据（#587） (#630)
+- #628 部署后验收证据（ulink 202，跨租户仍 404） (#631)
+- Embedding 解析按「厂商名 + 实例名」硬路由 —— @maas@Tongyi-Qianwen 会被发到 DashScope（#587 排查所得） (#632)
+- Canary-media-0911 的 embedding/vision 绑定修复与真机验收（#587） (#634)
+- 把「管家端可见范围」的口径写进契约并加用例钉住（#638） (#645)
+- 阶段 1 收口的取数 —— 注册表开关的爆炸半径（#587） (#647)
+- 真实终端用户经生产公网入口被服务 —— 入口那一跳与非中文派生一起取到 (#650)
+- 判据二收口 —— 真实租户经显式注册表映射被正确路由（生产库副本上取证） (#656)
+- 判据二加强 —— Dify 来源的版本经注册表映射给真实租户 (#659)
+- 判据一收口 —— 真实用户经生产入口被 Dify 来源的已发布版本服务 (#662)
+- 阶段 1 判据收口 —— 注册表在生产上开表 + 调试身份配齐 (#665)
+- 41 的 manifest 权威是仓库那份，不是部署目录那两份 (#666)
+- 运营那一半的现状 —— Dify 控制台里外部知识库登记为 0 条 (#667)
+- 运营那一半自己做完了 —— Dify 外部知识库挂通并端到端验通（附一次凭据轮换） (#669)
+- Dify 改挂调试身份凭据 —— 把「建议 A」更正为一处没读到的既有边界 (#671)
+- 交付状态索引补上「Dify 已挂外接知识库、持调试凭据」与两条仍未验的项 (#672)
+- 真浏览器那一跳做到了，卡在一条口令上（三条自救的路都读源码确认关着） (#673)
+- 登录口令自己解决 + 真浏览器把「运营那一跳」走完 (#674)
+- 模型 provider 插件装上 —— 上一轮「包从哪来是出口决定」那句是错的 (#677)
+- 模型 provider 凭据填进 Dify —— provider 已 Configured、44 个模型可选 (#678)
+- 全链跑一遍 —— 第一跳成立，第二跳断在「模型白名单与 Dify 的模型名两套集合」 (#680)
+- New API 插件实测装不上；官方自定义模型也被上游拒（附两条可行路的实测代价） (#682)
+- 全链跑通 —— 装官方 deepseek 插件解开了模型名断点 (#683)
+- 收尾两件 —— Dify 改用官方 DeepSeek key（与网关隔离）+ 关回插件市场 (#684)
+- 端到端验收 —— 九条判据用新标记从零重取，全部通过 (#686)
+- 补验 —— Dify 的调试预览真的打到了我们的知识（附两个静默成因） (#688)
+- 终验 1.7.7 —— 提交按分支数、worktree 隔离与两个 MCP server 取证 (#676) (#687)
+- #700 合并部署后的端到端验收 + 两处更正 (#700)
+- 41 实机复跑结果 —— 九行平台语言值 PASS 9/9 (#712) (#716)
+- 回答面全量端到端 —— 五个面 + faq/answer × 九种平台语言值 (#712) (#717)
+- #700 叙述修复后的复跑证据 (#700)
+- #721 —— 41 真机验收结果与「点击路径仍不可达」的据实边界 (#724)
+- #721 收口 —— 入口已在 41 上线，点击路径端到端验通 (#727)
+- 0017 —— region 不做 + 巡检接缝只写合同，收口 PRD #693 的两条悬空决定 (#728)
+- #735 评审的修复与 41 真实数据上的复现证据 (#736)
+- #448 收口（正文与现状对齐）+ 30899 外部可达在 41 上关闭 (#448, #474) (#737)
+- 订单选择器的取数约束 —— 更正「没有现成端点」这条前提 (#639) (#738)
+- #577 拉回修复部署后在 41 的验收 (#742)
+- A 轮验收 —— 管家端诊断第一次被真实服务（含照出的 #744） (#745)
+- 更正 A 轮读数 —— 三次里两次 completed（我漏查了） (#746)
+- 运营自助发布在 41 的部署后验收（含生产改动与还原） (#750)
+- Gh 劫持事件的更正归因与修复 + 登记生产身份的外接知识库 (#755)
+- 四字段在 41 真机上的终验（含零影响证明与未做的那一步） (#759)
+- 四字段 41 全链路端到端验收（含生产改动与还原） (#760)
+- 知识库与工具的 41 全链路验收（含实测缺陷、一次自我更正与还原） (#763)
+- 运营自助发布 + 生产 app 迁 Agent 模式（含一处据实未验） (#765)
+- 更正迁移对象（管家端非客服）+ 补上「保存 vs 发布」机制实测 (#766)
+- Record deployed bridge browser acceptance and exact restore (#771)
+- 记录 41 依赖环境更新与部署到 a2322d7 (#791)
+- 七工具目录上线 41/36 与浏览器验收，「prefix 默认 basic」坑落档（#775） (#793)
+- 试运行上线与端到端验收（#795） (#798)
+- 公司 UPMS 两个 AI-Ops 权限码已落地，#777 落档 (#801)
+- 发布权已切到公司权限码；审计账本开始按人记账（#783 阶段 4） (#804)
+- 新增「运行形态与鉴权形态」一页看全 (#806)
+- 引入 SpexCode 规格树——17 个节点描述意图与不变量 (#807)
+- 修正 0032 的节点计数——1 根 + 7 层 + 10 规则/子系统 (#808)
+
+### Fixed
+- Deliver evidence payloads to Windows runner
+- Expose gateway errors and document Windows client flow
+- Retry transient gateway connection errors in client (#15)
+- Scope gateway client retries to idempotent GET requests (#17)
+- Tolerate markdown-wrapped structured output from non-OpenAI providers (#19)
+- Normalize unwrapped and flattened diagnosis from non-OpenAI providers (#20)
+- Unescape GH_REPO in manual checkout steps
+- Clean stale agent branches in runner checkout
+- Add zod dependency
+- Update package-lock with zod
+- Remove orphan step stubs from label workflows
+- Use npm cache in setup-node
+- Inject GH_TOKEN into the sandbox env
+- Grant issues permission to PR-label workflows
+- Harden Java /diag/order tracer bullet
+- Harden HttpSources edge cases and DiagApi validation
+- Validate legacy diag-api token expiry setter
+- Harden internal-token validation edge cases
+- Count single-device diag audit rows
+- Expose dev extra for uv sync --extra dev
+- Limit hybrid SSH tunnel to TDengine in Phase 3a
+- Align label lifecycle with reference
+- Align label-Action review with the reference design
+- Use host delivery token for pull requests (#64)
+- Deepen review checkout history (#65)
+- Harden AFK review delivery
+- Fail closed on workflow boundaries
+- Handle pull requests without linked issues (#68)
+- Apply provider-neutral economy contract (#70)
+- Let planner run leaf sub-issues of PRDs (#76)
+- Derive data scope from role dsType when /user/ds is broken (#82)
+- Support caching_sha2_password handshake (#107)
+- Complete real thirdSession compatibility (#117)
+- Keep resolver implementations compatible (#118)
+- Harden identity boundary checks (#135)
+- Load delegated session config securely (#137)
+- Raise diagnosis deadline to cover real agent runs (#146)
+- Poll endpoint must unpack assistant_identity tuple (#160)
+- Surface blocked diagnosis as failed DIAGNOSIS_BLOCKED (#164)
+- Pointed 404 hint when polling diagnosis endpoint with a qa_ id (#165)
+- Map non-ASCII URL ids to the uniform 403, never a 500 (#185)
+- Normalize close-contract answer turns from real providers (#186)
+- Close real RAG canary blockers (#187)
+- Retry transient video document misses (#188)
+- Extend transient video retry budget (#190)
+- Tolerate provider turn deviations and document the delivery contract (#194)
+- Fetch signed media under the grant's tenant (#196)
+- Support 41 environment schema and archive identity (#199)
+- Guard --db, share allowed-models derivation, drop unused kb-repair layer (#219)
+- Single-source gun column list and preflight failure logging (#220)
+- Expose QA failure error on the assistant poll endpoint (#221)
+- Short-circuit greetings and expose diagnosis language (#226)
+- Three real-model contract gaps found by 41 live acceptance (#238)
+- Enforce order context for diagnosis shortcuts
+- Order-bound shortcut guard must honor a text-embedded order (#258)
+- Stop reporting an unsearched promo library as empty (#270)
+- Degrade a promotional click when the model is unreachable (#272)
+- Advertise HTTP/1.1 in the status adapter (#274)
+- Keep a contract violation visible instead of degrading it (#276)
+- Trim answer blocks to their kind before validation (#277)
+- Clean blocks in the wrapped answer shape too (#278)
+- Validate a media grant against the agent that signed it (#280)
+- Localize the clarification replies (#282)
+- Cover all six supported languages in the message tables (#283)
+- Cover all supported languages in the bundled shortcut copy (#284)
+- Translate diagnosis evidence for the reader (#285)
+- 修正 41 runbook 的回滚源路径 (#289)
+- Forbid echoing stored Chinese in another language (#290)
+- Drop guided grammar when the request also declares tools (#292)
+- 收口回答面输出语言契约，消除中文字面泄漏 (#301)
+- 中文专名括注不再判为语言泄漏 (#302)
+- 文本内嵌订单识别不再把英文单词当订单号 (#304)
+- 高风险扣费线索补齐全部六种受支持语言 (#305)
+- PRD 不再被 agent-implement 清掉链式标签 (#325) (#345)
+- 共享 runner 工作区的浅克隆导致推送被安全挡下 (#349)
+- 架构审查不再让沙箱做它做不到的 GitHub 变更 (#353)
+- 修复「PR 永远停在 draft」——用错凭据且失败被吞 (#362)
+- 零产出的运行以真因失败，不再误报成凭据问题 (#369)
+- 媒体块的模型自造标题不再借资源名豁免通过 (#377)
+- 修复流式轮次首部丢失导致的 invalid JSON，并修掉三处同源缺陷 (#380)
+- 41 runbook 的打包方式与 rsync 源路径对齐，并加首层断言 (#384)
+- 41 runbook 解包前清空 sync-check，堵住残留污染生产的路径 (#386)
+- 寒暄答复改走零阶 QA 作业，并同步等待态契约 (#394)
+- 并发配置改为 cancel-in-progress，修掉实测到的死锁 (#397)
+- FAQ 关键词短路对短问句先取路由意图确认 (#408) (#411)
+- FAQ 命中判据改为「是否复述标题原文」，替掉长度判据 (#408) (#412)
+- 运营商站点范围只在管家端入口生效，关闭消费者侧越权 (#436)
+- 非管家端入口不再解析店铺集合（消费者侧的无谓上游依赖） (#453)
+- 签名密钥长度只告警不拒绝——真实钥匙就是 10 个字符，硬门把启用挡死了 (#454)
+- 隔离两个拒绝维度 + 各记一行可区分原因（签名不匹配 / 已过期） (#458)
+- 宣传 cue 补上「结构」判据，`重卡充电案例` 不再落到 FAQ（#413） (#466)
+- 守望要扫所有未完成的 run——只看最新那条会让故障「自愈」 (#467)
+- 诊断线与 QA 线同构——轮次回填问答、生成槽位持有到终态 (#495)
+- 调用者认证错误映射合一——配置缺失不再一半 401 一半 503 (#500)
+- 12 处 503 守卫合一并把异常细节写进脱敏日志 (#502)
+- 构造不再是重启——CLI 列设备不再结束在飞作业 (#507)
+- 诊断与健康报告的 7 处终态写入检查 claim-guard——被拒不落指标 (#508)
+- 收窄 paths 到部署真正执行的两个文件（#520） (#523)
+- 输出语言在提示词与契约里只说一处（#535） (#544)
+- 补回被 gitignore 静默排除的 observe.py，并把 skill 焊进流程 (#547)
+- 诊断线语言契约——失败兜底、重试提示与 error.message（#536） (#546)
+- 诊断 error.message 跟随请求语言，与 QA 面统一（#549） (#552)
+- Map file set comes from git (#575)
+- 健康报告指标 value 拆出上游原值 + 统一 rule_version（#599 / #602 P0） (#604)
+- 41 依赖环境更新 + editable 判据修正（#609） (#610)
+- 适配路由按登记的租户重绑 kb 客户端（#612） (#613)
+- 不是本人的订单不再伪装成通用回答（#620） (#620)
+- Not_yours 五语言粘字 —— 空格放在前一段结尾，并加源码级门（#622） (#622)
+- 凭据被拒与上游不可用在异常、指标码、日志三层上区分开（#617） (#624)
+- Pull-dify 读 --config 指定的文件（#625 在 41 上实跑踩到） (#627)
+- 顶层账号（平台/租户）没有店铺绑定 = 整个租户，不是看不到订单 (#629)
+- Every tool call reaches the run log (#640)
+- 澄清答复的判别位 + 网关自己日志的去处（#636 / #637） (#648)
+- Serena is started with an active project (#651)
+- 入口两种会话头拼写都认（#649） (#652)
+- Hooks go where run() reads them; the code graph gets indexed (#655)
+- The index hook bounds itself, so a hang cannot kill the run (#658)
+- The agent works in its own worktree, not the workflow checkout (#663)
+- The workflows create the task branch without checking it out (#668)
+- The commit count names the branch (#675)
+- The branch policy checks the branch the run names (#679)
+- A retry reclaims the worktree a failed run left (#681)
+- 升级脚手架到 1.7.10 —— 策略检查那一步被明确告知它查的是哪条分支 (#685)
+- 1.7.12 补齐 —— checkout 取全历史，base 解析不到就判零条 (#690)
+- 升级脚手架到 1.7.15 —— 重号被测出来、--all 不再被空 base 阻断 (#692)
+- 升级脚手架到 1.7.16 —— 决策门禁判提交、拒绝空 base，并装上它自己 (#694)
+- 升级脚手架到 1.7.17 —— 决策门禁判提交、拒绝空 base，并按 PR 自己的提交判定 (#701)
+- #700 阶段 1 端到端取证 —— 真实租户上接线 + 失败率卡从零取证，外加它撞出的四处缺陷 (#700)
+- 故障码卡缺参数 + 三张卡的数字没进提示词 + 收尾写兜底 (#700)
+- 认出平台的语言值，并让中文地区决定脚本 (#712) (#713)
+- 工具请求/半份回包都不得被当成叙述 (#700)
+- 失败率聚合补上三值约定 —— 整租户账号不会再变成失败卡 (#721) (#723)
+- 分析作业的终态收敛改为 except Exception —— 第四处同类漏 (#721) (#726)
+- 另外三个 worker 的终态收敛 —— 枚举异常元组收敛不了 (#725) (#730)
+- 让「用 Dify 管理智能体」这一跳真的能用（拉回修复 + 生产登记改指真 app） (#741)
+- 幂等比较收成一处 —— 除正文/模型外的字段变了也必须发布 (#752)
+- Dataset 条目是平铺的，嵌套形状让「挂了知识库的 app」拉回必失败 (#761)
+- Secure console publishing and align reproducible deployment (#770)
+- 试运行拉草稿用库里 agent 的 agent_type/contract，不用绑定行的入口名（#795） (#797)
+- 登录代理上线；修三个「单测全绿但真上游必炸」的缺陷（#783 阶段 2） (#802)
+- 管家端移除「客户案例」动作（#427 收窄） (#803)
+- 并行测试装配加固 —— 换掉 --with，并把「绿」变成有量的绿 (#819)
+- 给唯一的无时限外部调用加上 timeout (#821)
+- Isolate production credentials and stream bootstrap files
+- Persist admin rotation before platform changes
+- Serialize bootstrap apply and credential checks
+- 受控模型出口重新表达响应帧并做 TLS close_notify 收尾——定长响应不再靠断开连接判定结束，
+  严格客户端（含 curl）不再把完整的 200 读成 unexpected eof
+- 上游同时声明 Transfer-Encoding 与 Content-Length 时拒绝转发（502
+  `proxy.upstream_response_ambiguous`），不再按矛盾的 Content-Length 把完整响应截断
+- 受控模型出口移除 Connection 指定的全部逐跳字段，保留端到端响应字段
+- 检索词改为只用模型给的 `query` 关键词，不再回退到它的 `reason` 说明句——41 上
+  图片/视频块因此消失（#837）
+- 检索深度收敛为一个口径（`AIOPS_GATEWAY_KB_SEARCH_MAX_RESULTS`，进程 env 或私有配置
+  文件皆可设），默认 5 → 10，客户问答/宣传卡片/调试预览/Dify 路由共用（#838）

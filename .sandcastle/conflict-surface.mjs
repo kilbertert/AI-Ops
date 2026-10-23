@@ -86,7 +86,6 @@ const EXPLAINED_SHARED = new Map([
     "docs/agents/current-delivery-state.md",
     {
       why: "the one page that answers \"where are we now\"; it is an index by design, so it is the last hand-written top-insertion file left",
-      undecided: true,
     },
   ],
   [
@@ -128,9 +127,21 @@ const EXPLAINED_SHARED = new Map([
   [
     "CHANGELOG.md",
     {
-      why: "generated from Conventional Commits, but still hand-edited and committed — the next candidate for `removed`, and the only file here whose conflicts have no information value at all",
-      undecided: true,
+      // NOT resolved by moving it, and this entry says so rather than implying
+      // otherwise. Its input is the commit range, so it goes stale on every
+      // merge to main and every PR must regenerate it to pass the gate —
+      // measured 2026-10-23, two branches appending at the same place still
+      // conflict. What the gate buys is narrower and real: the file's content
+      // is now a function of history instead of hand-writing, so a conflict in
+      // it is resolved by regenerating, never by choosing between two people's
+      // prose. The structural fix is to move generation to release time, which
+      // is a release-chain decision.
+      why: "generated from Conventional Commits and gated in CI — conflicts remain, but are resolved by regenerating; release-time generation is the open follow-up",
     },
+  ],
+  [
+    "RELEASE-NOTES.md",
+    { why: "the hand-written notes; a milestone that changes user-visible behavior adds an entry" },
   ],
 ]);
 
