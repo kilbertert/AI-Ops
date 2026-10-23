@@ -99,3 +99,23 @@ def test_the_card_can_be_dismissed_without_leaving_a_credential_behind() -> None
     assert "aiops.kbOpenCardHidden" in text
     # 收起状态只记一个布尔，不记任何身份
     assert "setItem(HIDDEN_KEY, '1')" in text
+
+
+def test_the_poller_never_stops() -> None:
+    """轮询**不能有次数上限**（#1012，2026-10-23 真机）。
+
+    原来写的是"40 次（20 秒）之后停"，理由是省电。那个账算错了：脚本只活在控制台里，
+    500ms 一次路径比较的代价是零；而停掉之后，**先看别处、再看知识库**这条主路径上
+    卡片根本不会出现 —— 用户看到的是"按钮又没了，不稳当"。
+
+    真机复现：落 `/apps` 停留 24 秒 → 点侧栏「知识库」→ `card: false`；直接落
+    `/datasets` → `card: true`。所以判据是：定时器里**不许**出现清掉自己的分支。
+    """
+    code = _code()
+    poller = code[code.index("setInterval") :]
+    # 定时器回调体到 `}, 500);` 为止
+    body = poller[: poller.index("}, 500);")] if "}, 500);" in poller else poller
+    assert "clearInterval" not in body, (
+        "轮询里出现了 clearInterval —— 一旦停掉，晚于它再进入知识库页就再也挂不上卡片"
+    )
+    assert "tries" not in body and "> 40" not in body, "轮询里仍然有次数上限"
