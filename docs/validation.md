@@ -124,6 +124,54 @@
   取不到就判失败（不退回整页）。真实复跑前要先用 `--state-dir` 跑一次确认命中。
 - 本片**没有**开生产窗口、没有提交真实状态问题、没有模型调用、没有新增查询作业。
 
+## 2026-10-23 · RAGFlow 库同步成 Dify dataset（#1001）：真 CLI 13 项通过，真 Dify 未跑
+
+**范围**：`feat/sync-knowledge-datasets`，基线 `1118e272`。**未完成真机验收** —— 命令在
+**真** CLI 进程上、对着**真** socket 验过，但对面的 Dify 是桩。
+
+### 一、验了什么
+
+脚本：`.claude/skills/verify-aiops-gateway/scripts/observe_sync_knowledge_datasets.py`。
+两个桩各占一个端口（console 8793 / kb-service 8794），被测的是
+`uv run aiops admin sync-knowledge-datasets` **本身**，不是它的函数。
+
+| 检查 | 结果 |
+|---|---|
+| `--dry-run` 规划两条 create，**零写入** | ok |
+| 每个库 → 一条 dataset，键是派生的 `knowledge_id` | `tenant-T-SYNC:kb-a` / `:kb-b` |
+| 每条 dataset 最终是 **`all_team_members`** | ok |
+| create 的 body **不含** `permission`（那个接口没有这个字段） | ok |
+| 每次 PATCH 带 `permission` + **两个** external 字段 | ok |
+| 第二次跑**零写入**，两条都报 unchanged | ok |
+| RAGFlow 里删掉一个库 ⇒ 进 `orphans`，**没有删** dataset | ok，dataset 仍是 2 条 |
+| 60 字节的库名 ⇒ 在**任何写入之前**拒绝 | `DIFY_DATASET_NAME_TOO_LONG`，new_writes=0 |
+| 未开户租户 ⇒ 自己的答案，且不发请求 | `没有开户`，new_writes=0 |
+
+**桩的关键设计**：`POST /console/api/datasets/external` 在桩里**忽略**任何 permission 并
+一律落 `only_me` —— 这正是真 Dify 的行为（那个 payload 没有 permission 字段）。所以"忘了
+第二次 PATCH"的实现会在这里红。一个照 body 存 permission 的桩会让**所有**实现都通过，
+那是在测桩不是测代码。
+
+### 二、过程中修掉的三个问题
+
+- **测试夹具把两个 id 空间混成一个。** `_existing()` 原来用 Dify 的 `dataset_id` 去拼
+  `knowledge_id`（`tenant-T:ds-1`），于是"还在"和"已删"两条 dataset 在 `plan()` 眼里
+  都不是我们发的 —— 4 条用例同时红。改成一个显式的 `ragflow=` 参数。夹具让不同路径长得
+  一样，是今天第二次。
+- **`dataclasses.replace` 写成了裸 `replace`。** 名字覆盖那一段会 `NameError`，而 lint 不
+  查未定义名字。
+- **名字上限是 40 不是 100。** 这个坑在**设计阶段**就发现了（读 `DatasetUpdatePayload`），
+  所以没有先写错再改：创建允许 100、更新只允许 40，用 100 建完再 PATCH 会 422，留下一条
+  谁都看不见的 dataset。
+
+### 三、没验什么（不要读成已验收）
+
+- **没对真 Dify 跑过。** 这条命令会**写**，在真控制台上跑等于往真实租户里建 dataset ——
+  那不属验收，属操作。真机那一步是 #1002，且要先有一次 dry-run 的人工确认。
+- **没证「编排页里真的能选中」。** 本票证的是 dataset 存在且 `all_team_members`；Dify 的
+  前端是否因此渲染出选项，是 #1002 的判据。
+- 41 上未部署。
+
 ## 2026-10-23 · 真实 H5 本人订单状态查询闭环（#976 + #992）
 
 此前「查询本人订单状态」只有构造身份的证明，缺的是**真实登录用户在页面上真的查到**。
