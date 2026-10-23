@@ -148,7 +148,9 @@ assert charging_endpoint(s.charging_status_base_url, "<target-tenant>", require_
 `hst.h5` 的 `^~ /v1/dify/` 与 api.mall 的 Dify 那一跳同形。
 
 > **注意 `:8789`**：它透传客户端头，不补 `X-Business-Entry`。经由它的请求若不带这个头，
-> 开放后会拿到 `403 CONSUMER_SCOPE_REQUIRED`，而不是普通问答。该入口 30 天内访问日志只有 3 行。
+> 开放后会拿到 `403 CONSUMER_SCOPE_REQUIRED`，而不是普通问答。该入口整份访问日志
+> 共 **11 行**、跨 09-12 → 10-21，其中 `/v1/` 只有 **3 行**（最近一条 10-12，
+> 且源地址是 `127.0.0.1`）。
 
 ### 5.2 哪些租户真的在用
 
