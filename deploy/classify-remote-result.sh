@@ -27,7 +27,7 @@ EOF
   exit 124
 fi
 
-if printf '%s' "$OUT" | grep -q 'rollback=also-failed'; then
+if printf '%s' "$OUT" | grep -c 'rollback=also-failed' >/dev/null; then
   RH=$(printf '%s\n' "$OUT" | sed -n 's/^rollback-health=//p' | head -1)
   RA=$(printf '%s\n' "$OUT" | sed -n 's/^rollback-active=//p' | head -1)
   cat >&2 <<EOF
@@ -40,7 +40,7 @@ EOF
   exit 2
 fi
 
-if printf '%s' "$OUT" | grep -q 'rollback=restored'; then
+if printf '%s' "$OUT" | grep -c 'rollback=restored' >/dev/null; then
   RV=$(printf '%s\n' "$OUT" | sed -n 's/^rollback=restored version=//p' | head -1)
   cat >&2 <<EOF
 部署失败，但**主机已自动回滚**：源码与参考资料都恢复到部署前版本，服务 active 且

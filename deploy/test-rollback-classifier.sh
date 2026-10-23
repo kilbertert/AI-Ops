@@ -17,7 +17,13 @@ check() {
   local name=$1 remote_rc=$2 want_code=$3 want_text=$4 out=$5
   local got code
   got=$(printf '%s' "$out" | REMOTE_RC="$remote_rc" "$CLASSIFY" 41 aiops-gateway-41.service 2>&1) && code=0 || code=$?
-  if [ "$code" = "$want_code" ] && printf '%s' "$got" | grep -q "$want_text"; then
+  # `grep -c >/dev/null`, never `grep -q`, and the reason is load-bearing:
+  # `set -o pipefail` is on above, `-q` makes grep exit at the first match, the
+  # producer then takes SIGPIPE, and the whole pipeline reports 141 — so the
+  # `if` reads a match as a miss. Measured 2026-10-23: with the match in the
+  # first line and 200k lines after it, `grep -q` missed 40 times out of 40.
+  # `-c` drains stdin, so no SIGPIPE is possible.
+  if [ "$code" = "$want_code" ] && printf '%s' "$got" | grep -c "$want_text" >/dev/null; then
     printf '  PASS  %s\n' "$name"; pass=$((pass+1))
   else
     printf '  FAIL  %s\n    期望 code=%s 含 "%s"\n    实际 code=%s\n%s\n' \
@@ -69,6 +75,25 @@ rollback-active=inactive"
 #    ——分类器信任主机的判定，但主机那边现在要求 health 相等；这条验证版本行被转发
 check "回滚成功带版本" 1 1 "0.1.0+bbbb" "selfcheck=failed
 rollback=restored version=0.1.0+bbbb"
+
+# 8. 关键回归（2026-10-23 间歇性 CI 失败）：标记出现在输出**开头**，后面跟着大量
+#    远端日志。此时 `printf | grep -q` 会让 grep 在首行命中后立即退出，printf 收到
+#    SIGPIPE，`set -o pipefail` 于是把整条管道报成 141 —— 分类器于是走到最后那条
+#    「状态未知」兜底分支，把「回滚也失败」误报成「状态未知」。
+#
+#    这台机器上实测：命中在首行、其后 20 万行时，`grep -q` 40 次全部漏判。
+#
+#    这条用真实形状的输入钉住它：标记在前，journal 段在后。输入太小测不出来 ——
+#    管道缓冲能吸收掉，SIGPIPE 根本不发生，所以这里必须够大。
+_swallowed=$(python3 -c "
+print('selfcheck=failed')
+print('rollback-restart-rc=nonzero')
+print('rollback=also-failed')
+print('rollback-active=inactive')
+for i in range(200000):
+    print('journal line %d %s' % (i, 'x' * 60))
+")
+check "大输入下的标记识别（SIGPIPE 回归）" 1 2 "严重" "$_swallowed"
 
 printf '\n回滚分类器：%s 通过，%s 失败\n' "$pass" "$fail"
 [ "$fail" -eq 0 ]
