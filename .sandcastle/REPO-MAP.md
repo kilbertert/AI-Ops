@@ -57,9 +57,9 @@ no project argument. Both answer *where* something is; neither replaces reading 
 - AGENTS.md
 - CLAUDE.md
 - README.md
-- docs/ — 166 markdown file(s)
+- docs/ — 167 markdown file(s)
 - docs/adr/ — 94 markdown file(s)
-- docs/agents/ — 49 markdown file(s)
+- docs/agents/ — 50 markdown file(s)
 
 ## Tree (depth 2, first 80 lines; dependencies, build
 output and run residue omitted)
