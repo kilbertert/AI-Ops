@@ -449,6 +449,20 @@ step "依赖漂移检查"
 #
 # `uv.lock` keeps the byte comparison: it is machine-generated, so a differing
 # byte really does mean a different resolved environment.
+# `uv.lock` 的记录里包含本项目的版本号，所以发版会改写它。判据取「解析出的包与版本
+# 集合」并排除本项目 —— 本项目的版本不是任何东西的依赖。
+lock_packages() {
+  python3 -c '
+import sys, tomllib, json
+d = tomllib.loads(sys.stdin.read())
+print(json.dumps(sorted(
+    [p.get("name"), p.get("version")]
+    for p in d.get("package", [])
+    if p.get("name") and p.get("name") != "aiops-diagnostics"
+), sort_keys=True))
+' 2>/dev/null || true
+}
+
 for spec in "pyproject.toml" "uv.lock"; do
   local_sha=$(git show "$FULL_SHA:$spec" 2>/dev/null | sha256sum | cut -d' ' -f1 || true)
   if [ -z "$local_sha" ]; then
@@ -479,6 +493,22 @@ print(json.dumps({
         2>/dev/null | grep -v Pseudo-terminal | tail -1)
       if [ -n "$local_deps" ] && [ -n "$remote_deps" ] && [ "$local_deps" = "$remote_deps" ]; then
         info "pyproject.toml 字节不同，但依赖声明逐项相同（注释/工具配置变更）—— 不构成依赖漂移"
+        continue
+      fi
+    fi
+    if [ "$spec" = "uv.lock" ]; then
+      # `uv.lock` records the project's own version, so cutting a release rewrites
+      # it — and a byte comparison would call that "dependency drift" and stop the
+      # deploy of the very release that bumped it. Measured 2026-10-23 on 0.1.0 →
+      # 0.2.0: the only changed line was `version = "0.1.0"` → `"0.2.0"`.
+      #
+      # Compare the resolved package set instead. The version of THIS project is
+      # not a dependency of anything here; every other package's version is.
+      local_pkgs=$(git show "$FULL_SHA:$spec" 2>/dev/null | lock_packages)
+      remote_pkgs=$(dev-host exec "$HOST_TARGET" --allow-service-exec -- \
+        "cat /opt/aiops-41/$spec" 2>/dev/null | grep -v Pseudo-terminal | lock_packages)
+      if [ -n "$local_pkgs" ] && [ -n "$remote_pkgs" ] && [ "$local_pkgs" = "$remote_pkgs" ]; then
+        info "uv.lock 字节不同，但依赖的包与版本逐项相同（本项目版本号变更）—— 不构成依赖漂移"
         continue
       fi
     fi
