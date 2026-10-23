@@ -73,11 +73,17 @@ def test_the_entry_opens_in_a_new_tab_and_does_not_navigate_the_console() -> Non
     text = _script()
     assert "target = '_blank'" in text or '.target = "_blank"' in text
     assert "rel = 'noopener" in text or 'rel = "noopener' in text
-    # 正常路径必须是 window.open；location.href 只能出现在**弹窗被拦**的兜底分支里。
+    # 正常路径必须是 window.open；`location.href` 只用于两处：
+    #   ① 把**已经开好的**那个窗口导航到目标（`w.location.href`，不是本页）
+    #   ② 弹窗确实被拦时的兜底（本页跳）
+    # 判据落到"本页被导航"这件事上，而不是"字符串出现几次" —— 后者在加了窗口复用之后
+    # 会误报（#1022）。
     assert "window.open(" in text
-    href_uses = [line for line in text.splitlines() if "location.href" in line]
-    assert len(href_uses) == 1, f"location.href 只该出现在兜底分支：{href_uses}"
-    assert "if (!w)" in text, "兜底必须由弹窗被拦触发"
+    page_navigations = [
+        line for line in text.splitlines() if "location.href" in line and "w.location.href" not in line
+    ]
+    assert len(page_navigations) == 1, f"本页导航只该出现在兜底分支：{page_navigations}"
+    assert "if (w)" in text, "兜底必须由是否拿到窗口决定"
 
 
 def test_the_script_degrades_silently_when_it_cannot_mount() -> None:
@@ -151,3 +157,28 @@ def test_dismissing_the_card_is_scoped_to_one_page_visit() -> None:
     close_start = code.index("aria-label")
     close_body = code[close_start : close_start + 600]
     assert "dismissedThisPage = true" in close_body
+
+
+def test_the_window_is_opened_synchronously_inside_the_click() -> None:
+    """开窗必须在点击的**同一个同步回合**里（#1022，2026-10-23 真机）。
+
+    原来写的是 `currentWorkspace().then(function(){ window.open(...) })` —— 开窗在异步
+    回调里。浏览器的弹窗拦截只看"这次调用是否还在用户手势的有效期内"，而
+    `preventDefault()` 之后紧接着进 `fetch` 就把它用完了。于是等 promise 兑现再开窗，
+    被**静默**拦掉：不报错、不开窗、什么都不发生。
+
+    真机：card=true、`href` 正常、`rect` 正常，点击后 20 秒内没有新标签，当前页也不变。
+    而它**时好时坏**（取决于 fetch 快慢），所以只跑一次验收会偶然通过。
+
+    判据：`window.open` 出现在 `currentWorkspace()` **之前**（源码顺序），且不在任何
+    `.then(` 的回调体里。
+    """
+    code = _code()
+    open_at = code.index("window.open")
+    fetch_at = code.index("currentWorkspace()")
+    assert open_at < fetch_at, "window.open 出现在 currentWorkspace() 之后 —— 它落进了异步回调，会被弹窗拦截"
+    # 从 window.open 往回找最近的箭头/function，它不应处在 `.then(` 之内
+    prefix = code[:open_at]
+    assert prefix.count(".then(") <= prefix.count("currentWorkspace"), "window.open 处在 .then( 回调里"
+    # 必须保住窗口引用，否则"被拦"与"开失败"无法区分
+    assert "w.location.href" in code

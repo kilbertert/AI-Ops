@@ -87,11 +87,29 @@
       // 桥也不该去猜 —— 它拿公司身份推过一次，退回来是 `tenant_id=-1`（平台账号），
       // 换不出任何租户。切在哪，就管哪个。
       ev.preventDefault();
-      currentWorkspace().then(function (ws) {
-        var url = '/__aiops/knowledge-open' + (ws ? '?workspace=' + encodeURIComponent(ws) : '');
-        var w = window.open(url, '_blank', 'noopener');
-        if (!w) { location.href = url; }  // 弹窗被拦：退化成当前页跳转
-      });
+
+      // **窗口必须在点击的同一个同步回合里打开。**
+      //
+      // 这里原来是 `currentWorkspace().then(function(){ window.open(...) })` —— 开窗在
+      // 异步回调里。浏览器的弹窗拦截只看"这次调用是不是还处在用户手势的有效期内"，
+      // 而 `preventDefault()` 之后紧接着进 `fetch` 就把它用完了。于是等 promise 兑现
+      // 再 `window.open`，被**静默**拦掉：既不报错，也不开窗，什么都没有。
+      //
+      // 2026-10-23 真机：card=true、`href` 正常、`rect` 正常，点击后 20 秒内没有新标签，
+      // 当前页 URL 也不变。而它**时好时坏** —— 取决于 fetch 快慢，所以之前验收偶然过。
+      //
+      // 现在先同步开一个空窗（保住手势），拿到 workspace 之后把它的地址改成目标；拿不到
+      // 就直接用兜底地址。`noopener` 会让 `window.open` 返回 null，所以这里**不能**传它 ——
+      // 代价是同一个标签能 `window.opener` 指回来，而那个引用于我们毫无用处，反倒让
+      // "开窗失败"和"窗口被拦"再次无法区分。
+      var w = window.open('about:blank', '_blank');
+      var target = '/__aiops/knowledge-open';
+      var navigate = function (ws) {
+        var url = target + (ws ? '?workspace=' + encodeURIComponent(ws) : '');
+        if (w) { try { w.location.href = url; return; } catch (e) { /* 落到下面 */ } }
+        location.href = url;   // 弹窗确实被拦：退化成当前页跳转
+      };
+      currentWorkspace().then(navigate, function () { navigate(''); });
     });
     open.style.cssText = [
       'display:inline-block',
