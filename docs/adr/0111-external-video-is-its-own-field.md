@@ -1,7 +1,9 @@
 # 111. 外部播放链接是一个独立字段，不是 `url` 的另一种值
 
 日期：2026-10-23
-状态：Accepted
+状态：**已反转（2026-10-23，见 ADR-0120）** —— 本记录保持原文不改写，作为那次
+判断的历史；真实前端早已把 `media.url` 当成"视频地址"并自己分派播放器，独立字段
+是在要求一个做完适配的客户端为没有用户可见收益的改动改代码。
 影响版本：`src/aiops_diagnostics/knowledge_retrieval.py`（`MediaResource` / `issue` /
 `normalize_search_response`）、`src/aiops_diagnostics/qa_rag.py`（检索提示词）、
 `docs/agents/frontend-api-brief.md`（渲染规则）、`deploy/m2-live-03/images.lock.json`

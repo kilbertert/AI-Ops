@@ -351,11 +351,10 @@ def test_a_text_chunk_that_links_a_published_video_becomes_a_video_block() -> No
     assert len(chunks) == 1
     media = chunks[0].media[0].resource
     assert media.kind == "video"
-    assert media.external_url == "https://www.youtube.com/shorts/Ld7_TVdVFpk"
-    assert media.embed == "youtube"
-    # 没有我们自己的字节 ⇒ **不出现 url**。否则前端回落到它就是拿 Markdown 当 mp4 播。
-    assert media.url == ""
-    assert "url" not in media.to_dict()
+    # 外部链接**就写在 url 里**：前端 `parseYoutubeUrl(media.url)` 认得出它，
+    # 不需要第二个字段（ADR-0120）。
+    assert media.url == "https://www.youtube.com/shorts/Ld7_TVdVFpk"
+    assert media.to_dict()["url"] == media.url
 
 
 def test_a_video_document_without_an_external_link_keeps_its_own_url() -> None:
@@ -377,10 +376,7 @@ def test_a_video_document_without_an_external_link_keeps_its_own_url() -> None:
 
     media = chunks[0].media[0].resource
     assert media.url.startswith("/v1/media/media_")
-    assert media.external_url == ""
-    payload = media.to_dict()
-    assert "external_url" not in payload and "embed" not in payload
-    assert payload["url"] == media.url
+    assert media.to_dict()["url"] == media.url
 
 
 def test_a_link_on_a_host_outside_the_allow_list_is_silently_ignored() -> None:
@@ -438,7 +434,7 @@ def test_the_first_allow_listed_link_wins_when_a_chunk_quotes_several() -> None:
     )
 
     assert len(chunks[0].media) == 1
-    assert chunks[0].media[0].resource.external_url == "https://www.youtube.com/watch?v=first"
+    assert chunks[0].media[0].resource.url == "https://www.youtube.com/watch?v=first"
 
 
 def test_a_channel_page_on_an_allow_listed_host_is_not_a_video() -> None:
@@ -487,7 +483,7 @@ def test_a_real_video_url_still_passes_the_path_rule() -> None:
             _signer(),
         )
         assert chunks[0].media, f"{url} 应当被签发"
-        assert chunks[0].media[0].resource.external_url == url
+        assert chunks[0].media[0].resource.url == url
 
 
 def test_a_channel_link_does_not_mask_a_real_video_later_in_the_chunk() -> None:
@@ -513,4 +509,57 @@ def test_a_channel_link_does_not_mask_a_real_video_later_in_the_chunk() -> None:
     )
 
     assert chunks[0].media, "后面的真视频被频道链接挡住了"
-    assert chunks[0].media[0].resource.external_url == "https://www.youtube.com/watch?v=rH2fOOUpohM"
+    assert chunks[0].media[0].resource.url == "https://www.youtube.com/watch?v=rH2fOOUpohM"
+
+
+def test_an_external_video_url_looks_like_what_the_frontend_already_parses() -> None:
+    """签发出来的 url 必须能被前端的 `parseYoutubeUrl` 认出来。
+
+    这条不是"我们觉得前端能认"，而是照 APK `app-service.js` 里那份实现的实际
+    判据复刻的：去掉 `www.` 后必须是 `youtube.com` / `youtu.be` /
+    `youtube-nocookie.com`，且 `watch` 取 `v=`、`shorts|embed|live` 取下一段、
+    `youtu.be` 取第一段。
+
+    **前端零改动**是这个方案成立的唯一前提（ADR-0120）。它一旦不成立，
+    `media.url` 里的外链就会变成一个播不了的原生 `<video>`。
+    """
+    import urllib.parse
+
+    def frontend_parses(url: str) -> str:
+        """复刻 APK 里 parseYoutubeUrl 的 host/path 判据，返回 videoId。"""
+        parts = urllib.parse.urlsplit(url)
+        host = (parts.hostname or "").lower()
+        if host.startswith("www."):
+            host = host[4:]
+        if host not in {"youtu.be", "youtube.com", "youtube-nocookie.com"} and not (
+            host.endswith(".youtube.com") or host.endswith(".youtube-nocookie.com")
+        ):
+            return ""
+        segments = [s for s in (parts.path or "").split("/") if s]
+        if host == "youtu.be":
+            return segments[0] if segments else ""
+        if segments and segments[0] == "watch":
+            return urllib.parse.parse_qs(parts.query).get("v", [""])[0]
+        if segments and segments[0] in {"embed", "shorts", "live", "v", "e"}:
+            return segments[1] if len(segments) > 1 else ""
+        return ""
+
+    for chunk_text, expected in (
+        ("https://www.youtube.com/shorts/Ld7_TVdVFpk", "Ld7_TVdVFpk"),
+        ("https://www.youtube.com/watch?v=6Ww7A5qZgaA", "6Ww7A5qZgaA"),
+        ("https://youtu.be/1Lk9eNUuMIV", "1Lk9eNUuMIV"),
+    ):
+        chunks = _normalize(
+            [
+                {
+                    "dataset_id": "kb-a",
+                    "chunk_id": "chunk-f",
+                    "doc_id": "doc-f",
+                    "docnm_kwd": "video_modules.md",
+                    "content": f"- YouTube 视频链接：{chunk_text}",
+                }
+            ],
+            _signer(),
+        )
+        url = chunks[0].media[0].resource.to_dict()["url"]
+        assert frontend_parses(url) == expected, f"前端认不出 {url}"

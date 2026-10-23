@@ -161,7 +161,15 @@ def dify_records(
                     "reference_id": chunk.reference_id,
                     "media": [
                         {
-                            "url": f"{prefix}{item.resource.url}" if prefix else item.resource.url,
+                            # Only relative paths are ours to prefix. A media
+                            # url can also be an ABSOLUTE external address
+                            # (ADR-0120), and prepending the base to one
+                            # produces `https://gatewayhttps://youtube.com/…`
+                            # — a URL that looks fine to a logger and fails in
+                            # a browser.
+                            "url": f"{prefix}{item.resource.url}"
+                            if prefix and item.resource.url.startswith("/")
+                            else item.resource.url,
                             "kind": item.resource.kind,
                             "mime_type": item.resource.mime_type,
                         }

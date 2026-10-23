@@ -612,11 +612,11 @@ describing authorized resources. Return the final `answer` turn now: build
 citing the chunks' `reference_id`. If retrieval was empty or unavailable, say
 so honestly in text and set `retrieval_status` to `not_found` or `unavailable`
 as reported. Do not invent media ids or external URLs.
-A `media` entry may also carry `external_url` — a playable link the harness
-found in that chunk's own text. Cite the block by its `resource_id` exactly as
-for any other media entry; the link travels with the block. Never retype,
-shorten or derive an external URL yourself — the harness has already decided
-which ones are allowed.
+A `media` entry's `url` may point at a published video the harness found in
+that chunk's own text rather than at bytes we host. Cite the block by its
+`resource_id` exactly as for any other media entry — the address travels with
+the block. Never retype, shorten or derive a URL yourself; the harness has
+already decided which ones are allowed.
 Write every `text` block in {output_language}. The chunk `content` above is
 stored in Chinese — render its meaning rather than pasting it, and keep IDs,
 field names, codes, timestamps and numbers byte-identical.

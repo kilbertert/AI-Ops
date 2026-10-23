@@ -666,37 +666,36 @@ GET https://api.qumall.qushiyun.com/v1/assistant/questions/{qa_id}
 |---|---|---|
 | `text` | `text` | 按顺序渲染段落 |
 | `image` | `media.url` | `<img src={media.url}>`，按 `media.mime_type`（png/jpeg/webp） |
-| `video` | **先看 `media.external_url`**，没有再看 `media.url` | 有 `external_url` ⇒ 用 `media.embed` 指定的播放器（见下节）；没有 ⇒ `<video src={media.url}>` 直接播放（服务端已支持 Range 分段） |
+| `video` | `media.url` | 直接用；地址有两种形态，见下节 |
 | `reference` | `title` | 显示来源文件名（折叠区/角标） |
 
-**视频有两个来源，必须分开渲染（#1035）**：
+**`media.url` 有两种形态，前端按已有逻辑分派即可（ADR-0120）**：
 
 ```jsonc
-// ① 我们托管的 mp4（RAGFlow 里的视频文档）
+// ① 我们托管的 mp4（RAGFlow 里的视频文档）—— 同域相对路径
 "media": {"url": "/v1/media/media_yyy.<签名>", "kind": "video", "mime_type": "video/mp4", …}
 
-// ② 知识库文档里引用的外部视频（YouTube 等）
-"media": {"external_url": "https://www.youtube.com/shorts/…", "embed": "youtube",
-          "kind": "video", "mime_type": "video/mp4", …}
-// 注意：这种块**没有 url 字段** —— 我们手上没有它的字节
+// ② 知识库文档里引用的外部视频 —— 绝对地址
+"media": {"url": "https://www.youtube.com/shorts/…", "kind": "video", "mime_type": "video/mp4", …}
 ```
 
-三条必须遵守的：
+**前端不需要为这个改动做任何事。** 客户端已有的分派逻辑（`parseYoutubeUrl(media.url)`
+→ 认得出就内嵌播放器，认不出就 `<video src>`）**正好就是这件事要的处理**：
 
-1. **`external_url` 优先**。它出现时 `url` 不存在，不要写 `media.url ?? ''` 然后塞进
-   `<video src>` —— 那会拿到 `undefined`，前端表现为一个空播放器。
-2. **`embed` 是枚举，由服务端决定**，不要自己解析 URL 判断该不该用 iframe。
-   当前只有 `"youtube"` 一个值；未知值按"去不支持的播放器"处理（降级成一个外链按钮，
-   不要崩）。
-3. **两个字段都可能缺席**，这是常态不是缺陷：绝大多数视频就是我们托管的 mp4。
-   `external_url` 只在本轮**命中的那段文本里**出现了白名单域的链接时才存在。
+- `youtu.be/<id>`、`watch?v=<id>`、`shorts/<id>`、`embed/<id>`、`live/<id>` → 内嵌播放器
+- 其余（包括本平台的 `/v1/media/...`）→ `<video src>`
 
-`external_url` 的域名由服务端白名单把关（当前只放 YouTube）。不要在客户端放宽 ——
-这个字段的设计前提就是"服务端替用户担保了这个地址"，客户端再放行就等于绕过担保。
+三条要知道的：
+
+1. **不要假设 `media.url` 一定以 `/` 开头**。外部视频是绝对地址。
+2. **`media.url` 的域名由服务端白名单把关**（当前只放 YouTube 且只放真正指向单个视频的
+   路径；频道主页、播放列表、首页一律不签发）。客户端**不要**自己放宽：这个地址意味着
+   服务端替用户担保了它。
+3. **没有外链是常态，不是缺陷**：绝大多数视频就是我们托管的 mp4。
 
 **媒体 URL 规则（重要）**：
 
-- `media.url` 是**同域相对路径**（`/v1/media/...`），直接当 `src` 用，**不需要 Authorization 头**——短时签名就在 URL 里，有效期约 10 分钟。
+- `media.url` 是**同域相对路径**（`/v1/media/...`）或**外部绝对地址**（见上节）——短时签名就在相对路径里，**不需要 Authorization 头**，有效期约 10 分钟；外部地址不过我们的代理。
 - 媒体块失效时 `media: null` 且带 `unavailable: true`：**保留文本与引用**，显示"资源不可用"，不要整条消息报错。
 - `retrieval_status`：`found`（命中知识库）/ `not_found`（无命中，通用回答）/ `unavailable`（检索依赖故障，文本仍可交付）/ `limited`（达检索上限）。
 - **`completed` 只有这一种 `result` 形状（重要）**：无论这次回答走的是知识库、宣传卡还是**零阶通用问答**，`completed` 的 `result` 恒为 `{"blocks": [...], "retrieval_status": ...}`，正文一定在某个 `kind="text"` 块里。前端**只解析 `blocks[]`**，不要去读 `result.text` / `result.reminder`——那个形状是零阶路径在 2026-10-19 前的历史写法（#708 起统一），且在网关里**已彻底移除**；曾按它取正文的客户端会对每一个零阶回答显示"未找到"（UlinkEV 1.2.14 实测，见 `docs/validation.md`）。
