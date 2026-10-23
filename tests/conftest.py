@@ -102,6 +102,8 @@ WAIT_SECONDS = 1800
 #: acquire time, not import time, so the environment is the caller's.
 SLOT_ENV = "AIOPS_PYTEST_SLOTS"
 
+#: Slots are taken per RUN, not per worker (see pytest_configure below).
+
 
 #: Where the slot files live. ⚠️ NOT `tempfile.gettempdir()`.
 #:
