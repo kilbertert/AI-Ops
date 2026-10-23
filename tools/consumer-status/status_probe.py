@@ -311,8 +311,101 @@ def _descendants(pid: int) -> set[int]:
     return seen
 
 
-def _terminate_tree(proc: subprocess.Popen) -> None:
-    """只清理本次进程及其子进程。"""
+def _group_members(pgid: int) -> set[int]:
+    """进程组里当前还有哪些 pid（用于判"清理干净了没有"）。"""
+    try:
+        out = subprocess.run(["ps", "-eo", "pid=,pgid="], capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    members: set[int] = set()
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) != 2:
+            continue
+        try:
+            pid, group = int(parts[0]), int(parts[1])
+        except ValueError:
+            continue
+        if group == pgid:
+            members.add(pid)
+    return members
+
+
+def _pids_for_tunnel_port(port: int) -> set[int]:
+    """当前**为这个端口**开着的 ssh 进程。
+
+    为什么不只靠进程组：`dev-host` 用 `timeout … ssh …` 起隧道，而 `timeout`
+    会 `setpgid` —— 于是 ssh 在**另一个**进程组里，`killpg(我的组)` 打不到它。
+    实测泄漏过一次，`ps` 里 `PGID` 明确不同。
+
+    判据用"命令行里出现这次**唯一**的本地端口"，这既是归属证明（端口是我这次选的、
+    之前确认过没人用），也不会碰到别人的隧道。
+    """
+    try:
+        out = subprocess.run(["ps", "-eo", "pid=,args="], capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    needle = f"127.0.0.1:{port}:"
+    pids: set[int] = set()
+    for line in out.splitlines():
+        parts = line.split(None, 1)
+        if len(parts) != 2:
+            continue
+        try:
+            pid = int(parts[0])
+        except ValueError:
+            continue
+        args = parts[1]
+        if needle in args and "ssh" in args:
+            pids.add(pid)
+    return pids
+
+
+def _terminate_tree(proc: subprocess.Popen, *, pgid: int | None = None, port: int | None = None) -> None:
+    """清理本次启动的**整个进程组**，而不是"Popen 的这棵树"。
+
+    为什么按进程组：`dev-host` 是 shell 包装，它启动的 `ssh` 是**子进程**。
+    如果包装进程先退出（例如隧道建立后 shell 就结束了），`ssh` 会被
+    **reparent 到 init** —— 这时再按 PPID 求子树已经收不到它，于是隧道泄漏。
+    Codex 用一个"wrapper 起了长命子进程然后自己退出"的本地样例复现过。
+
+    所以启动时就 `start_new_session=True`（`setsid`），让整组有独立的 pgid；
+    清理时对**组**发信号，组里还有谁都能收到，与包装进程是否先退出无关。
+
+    `pgid` 省略时退回按进程树清理（老路径，保留兼容）。
+    """
+    # 先按**端口归属**收：`timeout` 会给 ssh 换进程组，组信号打不到它。
+    if port is not None:
+        for pid in _pids_for_tunnel_port(port):
+            with contextlib.suppress(OSError):
+                os.kill(pid, 15)
+        deadline = time.monotonic() + 8
+        while time.monotonic() < deadline and _pids_for_tunnel_port(port):
+            time.sleep(0.2)
+        for pid in _pids_for_tunnel_port(port):
+            with contextlib.suppress(OSError):
+                os.kill(pid, 9)
+
+    if pgid is not None:
+        # 组信号可能失败（组已空），不是错误。
+        with contextlib.suppress(OSError):
+            os.killpg(pgid, 15)
+        if proc.poll() is None:
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                proc.wait(timeout=5)
+        # **等到组真的空了**再返回。SIGTERM 到进程真正退出之间有一段时间；
+        # 立刻返回会让调用方以为清干净了，实际 ssh 还在听 —— 实测就漏过一次。
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and _group_members(pgid):
+            time.sleep(0.2)
+        if _group_members(pgid):
+            with contextlib.suppress(OSError):
+                os.killpg(pgid, 9)
+            deadline = time.monotonic() + 5
+            while time.monotonic() < deadline and _group_members(pgid):
+                time.sleep(0.2)
+        return
+
     if proc.poll() is not None:
         return
     tree = _descendants(proc.pid)
@@ -322,7 +415,6 @@ def _terminate_tree(proc: subprocess.Popen) -> None:
     except subprocess.TimeoutExpired:
         proc.kill()
         proc.wait(timeout=10)
-    # 包装进程可能留下孙进程：再按同一棵树收一次。
     for pid in sorted(tree - {proc.pid}, reverse=True):
         try:
             os.kill(pid, 0)
@@ -379,7 +471,11 @@ def main() -> int:
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
         text=True,
+        # 独立进程组：包装进程先退出时，它的 ssh 子进程仍然在**这一组**里，
+        # 清理才不会漏（见 `_terminate_tree` 的说明）。
+        start_new_session=True,
     )
+    tunnel_pgid = os.getpgid(tunnel.pid)
     try:
         if not _wait_port(port):
             err = ""
@@ -403,7 +499,7 @@ def main() -> int:
             timeout=args.evidence_timeout,
         )
     finally:
-        _terminate_tree(tunnel)
+        _terminate_tree(tunnel, pgid=tunnel_pgid, port=port)
 
     # 答案只来自**本次 qa_id 的那一条** GET（不拼接其他 GET）。
     answer_text = answer_from_events(events, _qa_id_of(events))

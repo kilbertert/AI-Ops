@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+import os
 import pathlib
 import socket
 import ssl
@@ -49,7 +50,9 @@ def main() -> int:
         stdout=subprocess.DEVNULL,
         stderr=subprocess.PIPE,
         text=True,
+        start_new_session=True,
     )
+    tunnel_pgid = os.getpgid(tunnel.pid)
     try:
         if not probe._wait_port(port, timeout=15):
             err = ""
@@ -97,7 +100,7 @@ def main() -> int:
         print(json.dumps(out, ensure_ascii=False, indent=1))
         return 0 if ok else 1
     finally:
-        probe._terminate_tree(tunnel)
+        probe._terminate_tree(tunnel, pgid=tunnel_pgid, port=port)
         time.sleep(0.5)
         leftover = probe._listening_pids(port)
         print(

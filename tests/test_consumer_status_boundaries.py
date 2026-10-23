@@ -16,7 +16,9 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -181,3 +183,49 @@ def test_status_probe_write_private_happy_path(tmp_path: Path) -> None:
     probe._write_private(target, {"a": 1})
     assert json.loads(target.read_text()) == {"a": 1}
     assert os.stat(target).st_mode & 0o077 == 0
+
+
+def test_terminate_tree_cleans_the_group_even_after_the_wrapper_exits(
+    tmp_path: Path,
+) -> None:
+    """包装进程先退出时，它的子进程被 reparent —— 按树收会漏，按**组**收不会。
+
+    Codex 用一个"wrapper 起长命子进程然后退出"的本地样例复现过这个泄漏。
+    这里复刻同一个形状：shell 起一个 `sleep`，自己在 `sleep` 还活着时退出。
+    """
+    if sys.platform == "win32":
+        pytest.skip("进程组语义只在 POSIX 上成立")
+
+    script = tmp_path / "wrapper.sh"
+    script.write_text("#!/bin/sh\nsleep 60 &\nexit 0\n")
+    script.chmod(0o755)
+
+    proc = subprocess.Popen(
+        [str(script)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    pgid = os.getpgid(proc.pid)
+    proc.wait(timeout=5)  # 包装进程自己退出了
+
+    # 组里应该还有那个 sleep
+    assert probe._group_members(pgid), "测试前提：wrapper 退出后组内仍有子进程"
+
+    probe._terminate_tree(proc, pgid=pgid)
+    time.sleep(0.5)
+    assert probe._group_members(pgid) == set(), "按组清理后不应留下成员"
+
+
+def test_cleanup_uses_port_ownership_because_timeout_switches_groups() -> None:
+    """`dev-host` 用 `timeout … ssh …`，而 `timeout` 会给 ssh **换进程组**。
+
+    于是 `killpg(我的组)` 打不到真正在监听的那个 ssh —— 实测泄漏过一次。
+    清理因此必须按"命令行里出现这次**唯一**的本地端口"来认归属。
+    """
+    # 判据形状：按端口匹配，且只认 ssh
+    import inspect
+
+    source = inspect.getsource(probe._pids_for_tunnel_port)
+    assert "127.0.0.1:{port}:" in source
+    assert '"ssh" in args' in source

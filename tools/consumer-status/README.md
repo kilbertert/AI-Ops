@@ -35,12 +35,17 @@
 而不是文件。
 
 ```bash
-# 0) 把**前两个**脚本送上去（产物身份，不是手工 scp）。
-#    status_probe.py 留在开发机跑 —— 它要驱动浏览器。
-dev-host write 41 /tmp/consumer-status/check_identity.py \
-  --artifact-sha256 "$(sha256sum tools/consumer-status/check_identity.py | cut -d' ' -f1)" \
-  < tools/consumer-status/check_identity.py
-#    …independent_cpms.py / status_probe.py 同法
+# 0) 把**要在 41 上跑的**脚本送上去（产物身份，不是手工 scp）：
+#      check_identity.py / independent_cpms.py / **private_output.py**
+#    `independent_cpms.py --out ...` 会按同目录加载 private_output.py ——
+#    漏拷它会在写证据时 FileNotFoundError（Codex 复现过）。
+#    status_probe.py 留在开发机跑（要驱动浏览器），它也从同目录加载 private_output.py。
+for f in check_identity.py independent_cpms.py private_output.py; do
+  dev-host write 41 "/tmp/consumer-status/$f" \
+    --artifact-sha256 "$(sha256sum "tools/consumer-status/$f" | cut -d' ' -f1)" \
+    < "tools/consumer-status/$f"
+done
+#    status_probe.py / verify_tunnel.py / replay_*.py 都在开发机上跑，不用送。
 
 # 1) 前提：身份、范围指纹、本人订单（退出码 0 才继续）
 ssh aiops-41 'cd /opt/aiops-41 && runuser -u aiops41 -- env \
@@ -150,8 +155,13 @@ dev-host exec 41 --allow-service-exec --timeout 60 -- -N -L 127.0.0.1:<port>:127
 端口：显式绑定 `127.0.0.1`、动态分配（先探空）。
 
 **监听者不一定等于 `Popen.pid`**：dev-host 是 shell 包装，真正监听的是它的子进程。
-所以判据是"监听 PID **属于本次进程树**"（`_descendants`），不是"等于 Popen PID"。
-清理只收这一棵子树（终止、必要时 kill、再兜一次孙进程）。
+判据是"监听 PID **属于本次进程树**"（`_descendants`），不是"等于 Popen PID"。
+
+**清理不能只靠进程组。** `dev-host` 内部用 `timeout … ssh …`，而 `timeout` 会给
+`ssh` **换进程组** —— `killpg(我的组)` 打不到它，实测泄漏过一次（`ps` 里两个
+`PGID` 明确不同）。所以清理按**端口归属**认：本次端口是唯一选出来的（启动前确认过
+没人用），命令行里出现 `127.0.0.1:<port>:` 的 ssh 就是本次的。先 SIGTERM、轮询等
+端口真的释放、再 SIGKILL 兜底。**不会碰到别人的隧道。**
 
 真实隧道验证（只读静态资源，不碰业务 API）：
 
@@ -162,6 +172,16 @@ python3 tools/consumer-status/verify_tunnel.py   # 0 = 隧道通且清理干净
 2026-10-23 实测：`dev_host_pid=3561921`、监听 `3561939`（**确实不同 PID**）、
 `HTTP/1.1 200 OK`、1815 字节 HTML、`business_requests_sent=0`、
 清理后端口 `still_listening=[]`。
+
+（第一次跑这条时 `still_listening` 非空 —— 就是上面那个 `timeout` 换组的坑。）
+
+## 部署清单（含新增的同目录依赖）
+
+要在 41 上跑的：`check_identity.py`、`independent_cpms.py`、**`private_output.py`**。
+三者缺一不可：`independent_cpms.py --out …` 会按同目录加载 `private_output.py`，
+漏拷会在写证据时 `FileNotFoundError`（Codex 复现过）。
+
+留在开发机的：`status_probe.py`、`verify_tunnel.py`、`replay_*.py`（要驱动浏览器/隧道）。
 
 ### 助手区域选择器（已对着现役产物校准）
 
