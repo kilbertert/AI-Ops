@@ -8,6 +8,7 @@ import logging
 import platform
 import re
 import secrets
+import sqlite3
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -79,6 +80,7 @@ from aiops_diagnostics.company_token_auth import (
     PermissionSource,
 )
 from aiops_diagnostics.config import Settings
+from aiops_diagnostics.consumer_order_chat import asks_latest_order, is_order_status_question, status_answer
 from aiops_diagnostics.conversation_store import (
     ConversationBusy,
     ConversationError,
@@ -150,9 +152,11 @@ from aiops_diagnostics.ops_bindings import ops_app_registered
 from aiops_diagnostics.ops_tools import ChargingInfoInput, OpsToolError, OpsToolService, OrderListInput
 from aiops_diagnostics.order_status import KNOWN_STATUS_CODES, StatusRole, role_of
 from aiops_diagnostics.order_visibility import DeviceTenantError, tenant_matches
+from aiops_diagnostics.private_files import PrivatePathError, validate_private_file, write_private_text
 from aiops_diagnostics.query_scope import (
     ShopDirectory,
     UpmsShopDirectory,
+    resolve_query_scope,
 )
 from aiops_diagnostics.routing import MISSING_ORDER_NO, money_question_context
 from aiops_diagnostics.scope_context import (
@@ -175,7 +179,7 @@ from aiops_diagnostics.shortcut_lifecycle import (
     ShortcutNotFound,
     ShortcutStore,
 )
-from aiops_diagnostics.sources import SourceError
+from aiops_diagnostics.sources import SourceError, scoped_mysql_source
 from aiops_diagnostics.third_session_auth import (
     BSubjectDirectory,
     OperatorSiteScope,
@@ -1981,6 +1985,8 @@ def create_gateway_app(
     @app.post("/v1/assistant/questions")
     def assistant_questions(
         payload: AssistantQuestionRequest,
+        response: Response,
+        request: Request,
         identity: tuple[ScopeContext, Any] = Depends(assistant_identity),  # noqa: B008
         language: str = Depends(request_language),  # noqa: B008
     ) -> dict[str, Any]:
@@ -1995,6 +2001,8 @@ def create_gateway_app(
             with a real zero-order Agent job.
         """
         caller, decision = identity
+        if selected_settings.consumer_order_chat_enabled:
+            response.headers["Cache-Control"] = "no-store"
 
         # Conversation binding (T4/#172): resolve BEFORE routing so every
         # branch can consult the confirmed active_order. A conversation that
@@ -2137,6 +2145,15 @@ def create_gateway_app(
             )
 
         # Route 1: explicit order → diagnosis semantics.
+        if (
+            selected_settings.consumer_order_chat_enabled
+            and str(decision.platform) == "consumer"
+            and language in {"zh", "zh-Hant", "en"}
+            and not payload.shortcut_code
+            and is_order_status_question(payload.question)
+        ):
+            return _consumer_order_chat(context, caller, decision, payload, conversation, language, request)
+
         if payload.order_no:
             # The conversation is resolved before routing so EVERY branch can
             # consult it; this one used to read none of its fields. Without the
@@ -2554,6 +2571,8 @@ def create_gateway_app(
     @app.get("/v1/assistant/questions/{qa_id}")
     def get_assistant_question(
         qa_id: str,
+        response: Response,
+        request: Request,
         identity: tuple[ScopeContext, Any] = Depends(assistant_identity),  # noqa: B008
         language: str = Depends(request_language),  # noqa: B008
     ) -> dict[str, Any]:
@@ -2568,11 +2587,15 @@ def create_gateway_app(
                 "QA_NOT_FOUND",
                 "assistant question not found",
             )
+        _require_current_chat_order(context, caller, qa, request)
+        response.headers["Cache-Control"] = "no-store"
         return _assistant_question_response(qa, language)
 
     @app.post("/v1/assistant/questions/{qa_id}/cancel")
     def cancel_assistant_question(
         qa_id: str,
+        response: Response,
+        request: Request,
         identity: tuple[ScopeContext, Any] = Depends(assistant_identity),  # noqa: B008
         language: str = Depends(request_language),  # noqa: B008
     ) -> dict[str, Any]:
@@ -2598,10 +2621,13 @@ def create_gateway_app(
                 "QA_NOT_FOUND",
                 "assistant question not found",
             )
+        _require_current_chat_order(context, caller, qa, request)
+        response.headers["Cache-Control"] = "no-store"
         return _assistant_question_response(qa, language)
 
     @app.get("/v1/assistant/questions")
     def list_assistant_questions(
+        response: Response,
         identity: tuple[ScopeContext, Any] = Depends(assistant_identity),  # noqa: B008
         language: str = Depends(request_language),  # noqa: B008
         limit: Annotated[int, Query(ge=1, le=200)] = 50,
@@ -2616,6 +2642,7 @@ def create_gateway_app(
             questions = context.runtime.list_assistant_qa(caller, limit=limit)
         except (ValueError, RuntimeError) as exc:
             raise _runtime_unavailable("QA_UNAVAILABLE", "general answer unavailable", exc) from exc
+        response.headers["Cache-Control"] = "no-store"
         return {
             "type": "qa_list",
             "language": language,
@@ -2687,6 +2714,8 @@ def create_gateway_app(
     @app.get("/v1/conversations/{conversation_id}")
     def get_conversation(
         conversation_id: str,
+        response: Response,
+        request: Request,
         identity: tuple[ScopeContext, Any] = Depends(assistant_identity),  # noqa: B008
     ) -> dict[str, Any]:
         """Conversation detail including the full turn history (answers
@@ -2703,6 +2732,15 @@ def create_gateway_app(
                 "conversation not found",
             )
         history = context.conversation_store.turns(conversation["conversation_id"], caller.scope_fingerprint)
+        for item in history:
+            if item.get("status_qa_id"):
+                qa = context.store.get_assistant_question(item["status_qa_id"], caller.scope_fingerprint)
+                if qa is None:
+                    raise StandardAPIError(404, "QA_NOT_FOUND", "assistant question not found")
+                _require_current_chat_order(context, caller, qa, request)
+                if item["answer"] != qa["result"]:
+                    raise StandardAPIError(503, "CHARGING_STATUS_EVIDENCE_UNAVAILABLE", "evidence differs")
+        response.headers["Cache-Control"] = "no-store"
         return {
             **_conversation_response(conversation),
             "turns": [
@@ -5163,6 +5201,8 @@ ORDER_AUTHENTICATION_UNAVAILABLE = "ORDER_AUTHORIZATION_UNAVAILABLE"
 
 #: 只有本切片的三个端点拒绝中间层缓存：它们是**按人**的授权结果，不是公共资源。
 NO_STORE_PATH_PREFIXES = (
+    "/v1/conversations",
+    "/v1/assistant/questions",
     "/v1/dify/ops/",
     "/v1/orders/",
     "/v1/internal/charging-status/",
@@ -5213,6 +5253,158 @@ def _require_matching_exec_config(
         # 身份不一致（记录已被钉成 failed + exec_config_drift）或记录不存在。
         raise StandardAPIError(status.HTTP_403_FORBIDDEN, "AGENT_RUN_EXEC_CONFIG_DRIFT", "agent run refused")
     return confirmed
+
+
+def _consumer_order_chat(context, caller, decision, payload, conversation, language, request):
+    order_no = payload.order_no or _extract_order_no(payload.question)
+    authenticated_chat_order_reader(context, caller, request)
+    if order_no is None and not asks_latest_order(payload.question):
+        return _clarification(
+            context,
+            caller,
+            decision,
+            code=CLARIFY_ORDER_REQUIRED,
+            question=payload.question,
+            language=language,
+        )
+    turn_no = _begin_conversation_turn(context, caller, conversation, "qa", payload.question)
+    qa = None
+    try:
+        if order_no is None:
+            try:
+                scope = resolve_query_scope(caller)
+                with scoped_mysql_source(
+                    Settings.from_config(context.settings.server_config_file), scope
+                ) as source:
+                    rows = source.list_orders(page=1, page_size=1)
+            except (SourceError, ScopeError, ValueError) as exc:
+                raise StandardAPIError(
+                    503, "ORDER_AUTHORIZATION_UNAVAILABLE", "order lookup unavailable", retryable=True
+                ) from exc
+            if not rows:
+                raise StandardAPIError(404, "ORDER_NOT_FOUND", "order not found")
+            order_no = str(rows[0]["order_no"])
+        _require_consumer_self_order(caller, str(decision.platform), order_no)
+        _require_visible_order(context, caller, order_no)
+        try:
+            snapshot = _authorized_charging_snapshot(context.settings, caller, order_no)
+        except ChargingStatusError as exc:
+            raise StandardAPIError(
+                502, "CHARGING_STATUS_UNAVAILABLE", "charging status unavailable", retryable=True
+            ) from exc
+        _require_visible_order(context, caller, order_no)
+        answer = status_answer(snapshot, language)
+        qa = context.store.create_assistant_question(
+            caller.scope_fingerprint,
+            payload.question,
+            tenant_id=caller.effective_tenant_id,
+            internal_run_id="consumer-order-chat:" + order_no,
+        )
+        evidence = {
+            "call_id": qa["qa_id"],
+            "scope_fingerprint": caller.scope_fingerprint,
+            "source": snapshot["source"],
+            "answer_sha256": hashlib.sha256(json.dumps(answer, sort_keys=True).encode()).hexdigest(),
+            "snapshot": snapshot,
+            "result_sha256": hashlib.sha256(json.dumps(snapshot, sort_keys=True).encode()).hexdigest(),
+        }
+        try:
+            write_private_text(
+                Path(context.settings.data_home) / "consumer-order-chat" / (qa["qa_id"] + ".json"),
+                json.dumps(evidence, ensure_ascii=False),
+            )
+            _require_visible_order(context, caller, order_no)
+            if conversation is not None:
+                context.conversation_store.complete_turn(
+                    conversation["conversation_id"],
+                    caller.scope_fingerprint,
+                    turn_no,
+                    answer=answer,
+                    status_qa_id=qa["qa_id"],
+                )
+            if not context.store.update_assistant_question(qa["qa_id"], status="completed", result=answer):
+                raise OSError("chat result write refused")
+        except (OSError, PrivatePathError, sqlite3.Error, ConversationError) as exc:
+            raise StandardAPIError(
+                503, "CHARGING_STATUS_EVIDENCE_UNAVAILABLE", "evidence unavailable", retryable=True
+            ) from exc
+        _record_route_metric(
+            context,
+            caller,
+            route_type="qa",
+            outcome="completed",
+            conversation_id=conversation.get("conversation_id") if conversation else None,
+        )
+        qa.update(status="completed", result=answer)
+        return JSONResponse(
+            status_code=202,
+            headers={"Cache-Control": "no-store"},
+            content={
+                **_assistant_question_response(qa, language),
+                **(
+                    {"conversation_id": conversation["conversation_id"], "turn_no": turn_no}
+                    if conversation
+                    else {}
+                ),
+            },
+        )
+    except Exception as exc:
+        if qa is not None:
+            with contextlib.suppress(Exception):
+                context.store.update_assistant_question(qa["qa_id"], status="failed", error_code="QA_FAILED")
+        with contextlib.suppress(Exception):
+            _release_conversation_turn(context, conversation, turn_no)
+        if isinstance(exc, (OSError, PrivatePathError, sqlite3.Error, ConversationError)):
+            raise StandardAPIError(
+                503, "CHARGING_STATUS_EVIDENCE_UNAVAILABLE", "evidence unavailable", retryable=True
+            ) from exc
+        raise
+
+
+def authenticated_chat_order_reader(context, caller, request):
+    _require_consumer_self_order(caller, request.headers.get("X-Business-Entry"), "pending")
+    reader = _authenticate_caller(
+        context.caller_resolver,
+        request.headers.get("Authorization"),
+        request.headers.get("X-Third-Session"),
+        platform_entry="consumer",
+        source_key=request.headers.get(SOURCE_KEY_HEADER),
+        required_scope=STANDARD_ORDER_READ_SCOPE,
+    )
+    if reader.scope_fingerprint != caller.scope_fingerprint:
+        raise StandardAPIError(403, "CONSUMER_SCOPE_REQUIRED", "order read identity changed")
+
+
+def _require_current_chat_order(context, caller, qa, request):
+    internal = str(qa.get("internal_run_id") or "")
+    if internal.startswith("consumer-order-chat:"):
+        authenticated_chat_order_reader(context, caller, request)
+        order_no = internal.removeprefix("consumer-order-chat:")
+        _require_consumer_self_order(caller, "consumer", order_no)
+        _require_visible_order(context, caller, order_no)
+        if not context.settings.consumer_order_chat_enabled:
+            raise StandardAPIError(404, "CHARGING_STATUS_DISABLED", "charging status disabled")
+        try:
+            path = Path(context.settings.data_home) / "consumer-order-chat" / (qa["qa_id"] + ".json")
+            validate_private_file(path)
+            evidence = json.loads(path.read_text())
+            snapshot = evidence["snapshot"]
+            if (
+                qa["status"] != "completed"
+                or evidence["scope_fingerprint"] != caller.scope_fingerprint
+                or evidence["call_id"] != qa["qa_id"]
+                or snapshot["order_no"] != order_no
+                or snapshot["source"] != "cpms.chargingInfo"
+                or evidence["result_sha256"]
+                != hashlib.sha256(json.dumps(snapshot, sort_keys=True).encode()).hexdigest()
+                or evidence["answer_sha256"]
+                != hashlib.sha256(json.dumps(qa["result"], sort_keys=True).encode()).hexdigest()
+            ):
+                raise ValueError("evidence differs")
+        except (OSError, PrivatePathError, ValueError, KeyError, TypeError) as exc:
+            raise StandardAPIError(
+                503, "CHARGING_STATUS_EVIDENCE_UNAVAILABLE", "evidence unavailable"
+            ) from exc
 
 
 def _require_consumer_self_order(caller: ScopeContext, business_entry: str | None, order_no: str) -> None:

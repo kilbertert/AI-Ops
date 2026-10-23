@@ -85,7 +85,8 @@ class ConversationStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_conversations_scope_created
                     ON conversations(scope_fingerprint, created_at DESC);
-                -- 这里**没有 order_no**，是有意为之且带一处已知代价（#497）。
+                -- 旧诊断轮次没有订单绑定，仍保留 #497 的已知代价；
+                -- 本人状态查询新增 status_qa_id，回读重授权且不进入模型上下文。
                 -- 缺这条边 ⇒ 一行轮次说不出自己属于哪一单 ⇒ context_turns() 无法在
                 -- 「该单已离开调用者可见集合」时把这一轮排除掉，它只能按「最近 N 轮」取。
                 -- 于是：绑定失效（Route 1c 每轮重校验）与窗口排除是**两件事**，
@@ -121,6 +122,11 @@ class ConversationStore:
                 connection.execute(
                     "ALTER TABLE conversations ADD COLUMN last_turn_no INTEGER NOT NULL DEFAULT 0"
                 )
+            turn_columns = {
+                str(row[1]) for row in connection.execute("PRAGMA table_info(conversation_turns)")
+            }
+            if "status_qa_id" not in turn_columns:
+                connection.execute("ALTER TABLE conversation_turns ADD COLUMN status_qa_id TEXT")
         protect_private_file(self.path)
 
     @contextmanager
@@ -370,6 +376,7 @@ class ConversationStore:
         answer: dict[str, Any] | None,
         token_count: int = 0,
         cancelled: bool = False,
+        status_qa_id: str | None = None,
     ) -> None:
         """Persist a finished turn and release the generation slot.
 
@@ -384,6 +391,8 @@ class ConversationStore:
         """
         self._validate_conversation_id(conversation_id)
         scope = self._validate_scope(scope_fingerprint)
+        if status_qa_id is not None and not re.fullmatch(r"qa_[a-f0-9]{32}", status_qa_id):
+            raise ConversationError("status question id is invalid")
         now = _utc_now()
         with self._connection(write=True) as connection:
             self._expire_conversations(connection, now)
@@ -400,12 +409,14 @@ class ConversationStore:
                 )
             else:
                 connection.execute(
-                    "UPDATE conversation_turns SET answer_json = ?, token_count = ?, created_at = ?"
+                    "UPDATE conversation_turns SET answer_json = ?, token_count = ?, created_at = ?,"
+                    " status_qa_id = ?"
                     " WHERE conversation_id = ? AND turn_no = ?",
                     (
                         json.dumps(answer, ensure_ascii=False) if answer else None,
                         max(0, int(token_count)),
                         _iso(now),
+                        status_qa_id,
                         conversation_id,
                         turn_no,
                     ),
@@ -521,6 +532,8 @@ class ConversationStore:
 
         Returns oldest-first for prompt assembly. Turns without a stored
         answer (interrupted/failed generations) never enter the window.
+        Status-query turns are also excluded: their snapshots require a fresh
+        authorization check and must not become current facts in a later answer.
 
         **"Recent" is a fact about the conversation, not a permission check**
         (#497). This selects by ``turn_no`` alone: it does not consult whether
@@ -543,7 +556,7 @@ class ConversationStore:
             rows = connection.execute(
                 """
                 SELECT * FROM conversation_turns
-                WHERE conversation_id = ? AND answer_json IS NOT NULL
+                WHERE conversation_id = ? AND answer_json IS NOT NULL AND status_qa_id IS NULL
                 ORDER BY turn_no DESC LIMIT ?
                 """,
                 (conversation_id, max_turns),

@@ -46,7 +46,7 @@ no project argument. Both answer *where* something is; neither replaces reading 
 
 ## Tests
 
-- tests/ — 191 test file(s, recursive)
+- tests/ — 192 test file(s, recursive)
 - script "cd:watch:test": node .sandcastle/cd-watch.test.mjs
 - script "test": ./tools/test.sh
 - pytest (pyproject.toml / pytest.ini present)
@@ -57,9 +57,9 @@ no project argument. Both answer *where* something is; neither replaces reading 
 - AGENTS.md
 - CLAUDE.md
 - README.md
-- docs/ — 155 markdown file(s)
-- docs/adr/ — 88 markdown file(s)
-- docs/agents/ — 44 markdown file(s)
+- docs/ — 158 markdown file(s)
+- docs/adr/ — 89 markdown file(s)
+- docs/agents/ — 46 markdown file(s)
 
 ## Tree (depth 2, first 80 lines; dependencies, build
 output and run residue omitted)
@@ -112,7 +112,7 @@ docs/
     0008-adr-0003-deviation-session-direct-read.md
     0009-operator-identity-via-company-oauth2-token.md
     0010-reversal-of-prd-200-language-boundary.md
-    ... (78 more)
+    ... (79 more)
   afk-cutover/
     decisions.md
     pr-a-spec.md
@@ -120,6 +120,7 @@ docs/
     pr-c-spec.md
     pr-d-spec.md
   agents/
+    consumer-order-chat/
     dify-ops-first-slice/
     architecture-decisions.md
     assistant-cancel-handoff.md
@@ -129,8 +130,7 @@ docs/
     company-code-baseline.md
     company-code-recon-procedure.md
     company-platform-integration-baseline.md
-    company-repo-index.md
-    ... (31 more)
+    ... (32 more)
   architecture/
     ai-ops-architecture.html
     ai-ops-architecture.json

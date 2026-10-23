@@ -2,6 +2,10 @@
 
 ## 目标
 
+现有客户端聊天入口的本人订单状态查询可由 `AIOPS_GATEWAY_CONSUMER_ORDER_CHAT_ENABLED`
+显式启用，默认关闭；必须同时具备个人状态地址与逻辑执行环境。
+身份、部署/回退、证据留存与验收边界见[手册](agents/consumer-order-chat/README.md)。
+
 便携包只负责客户端交互和进度显示。固定服务器上的 Gateway 才负责 `/diag/*` HTTP 查询、TDengine 直连代理、SSH 隧道、Codex provider、运行状态和事件存储。
 
 ```mermaid

@@ -234,6 +234,8 @@ flowchart TB
 首次只启用 Dify 运维只读工具时，CPMS 地址使用
 `AIOPS_GATEWAY_OPS_CHARGING_STATUS_BASE_URL`，不会同时打开 consumer 充电状态入口；
 接入及兼容规则见[首片手册](docs/agents/dify-ops-first-slice/README.md)。
+客户端聊天另有默认关闭的[本人状态查询](docs/agents/consumer-order-chat/README.md)：
+支持指定订单与本人最新一单，复用现有 App 请求/回答格式；不使用运维服务身份，不调用模型。
 2026-10-22 operator 两工具已常驻启用，另次授权真实预览的模型段通过；
 公司 App 与业务准确率未验收。[离线证据复核](docs/agents/dify-ops-first-slice/model-acceptance.md)
 不追加模型或业务请求。
@@ -308,6 +310,7 @@ flowchart TB
 | `agent_validator.py` | `AgentResultValidator`：输出侧合同校验 |
 | `agent_runner.py` | CLI 与 Gateway 共用的入口：`run_agent_diagnosis` / `run_zero_order_answer` / `classify_lightweight` |
 | `qa_rag.py` | 客服 QA 的 RAG 运行：在 Codex harness 里跑已发布智能体 + `knowledge_search`，产出 blocks-v1 合同 |
+| `consumer_order_chat.py` | 本人订单状态查询的保守措辞匹配与 blocks 回答；范围、CPMS 读取及证据放行由 Gateway 统一处理，不调用模型 |
 | `turn_recovery.py` | 传输层模型轮次的宽容解析：围栏 / 最外层 `{}` / **首部丢失修复**（providers 的 SSE 首个 delta 会被上游丢弃，2026-09-22 实测 5/6） |
 | `routing.py` | 路由判定（PRD #383）：把 Jev 的**类型化判定**翻成 `intent`/`risk`/`confidence`，六个 `intent` 字符串与旧模型逐字相同。取不到判定时**返回 None 而非失败**（路由只是优化），失败带错误码、可计数、日志可见（该组件曾静默失效过一次）|
 | `faq.py` | 平台隔离的固定问答目录与平台身份判定（`consumer` / `operator`） |
