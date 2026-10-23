@@ -244,10 +244,37 @@ jobs:
             exit 1
           fi
 
+          # Absolute paths, not `.` and not a bare filename: the first version
+          # did `dev-changelog . >/dev/null && cp CHANGELOG.md`, and on the
+          # runner the file was simply not there afterwards. Redirecting stdout
+          # to /dev/null is what made that invisible — `dev-changelog` announces
+          # which path it wrote, and that line was the only evidence. Leave the
+          # output in the log and resolve the repo root explicitly.
+          repo_root=$(git rev-parse --show-toplevel)
+
+          # `dev-changelog` renders only for a repository that DECLARES it
+          # publishes versions, and that declaration is a local git config —
+          # `serverPolicy.publishesVersions`, never committed. Measured
+          # 2026-10-23: on the runner's fresh checkout the tool printed
+          # `skip … not declared`, wrote nothing, and **exited 0**, so the step
+          # failed one line later at `cp` with nothing in the log to say why.
+          # Declare it here, where the release is actually produced.
+          git config --local serverPolicy.publishesVersions true
+          git config --local serverPolicy.changelogAtRelease true
+
           notes=$(mktemp)
           trap 'rm -f "$notes"' EXIT
-          dev-changelog . >/dev/null
-          cp CHANGELOG.md "$notes"
+          dev-changelog "$repo_root"
+          if [ ! -s "$repo_root/CHANGELOG.md" ]; then
+            # This is the check that turns the silent skip into a named failure.
+            # `dev-changelog` exits 0 both when it writes the file and when it
+            # decides this repository does not owe one; only the file tells the
+            # two apart, and the error has to say which question was answered.
+            echo "::error::dev-changelog exited 0 but produced no $repo_root/CHANGELOG.md" >&2
+            echo "::error::usual cause: serverPolicy.publishesVersions is not declared in this checkout (it is local git config, never committed)" >&2
+            exit 1
+          fi
+          cp "$repo_root/CHANGELOG.md" "$notes"
 
           # One release per deployed commit, keyed by the commit itself.
           #
