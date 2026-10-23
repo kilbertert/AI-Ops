@@ -154,6 +154,15 @@ _KNOWLEDGE_OPEN_ROUTE = "/__aiops/knowledge-open"
 _REFUSED_PUBLISH_PERMISSION = "公司账号没有发布到 AI-Ops 的权限，请联系公司管理员"
 
 
+class _KnowledgeRefused(Exception):
+    """网关给出一个运营**能行动**的拒绝（未开户 / 链接过期）。"""
+
+    def __init__(self, status: int, message: str) -> None:
+        super().__init__(message)
+        self.status = status
+        self.message = message
+
+
 class ConsolePublishError(RuntimeError):
     """桥自己的一步失败了（不是"运营无权"，而是"这一步没做成"）。"""
 
@@ -667,8 +676,19 @@ def _knowledge_open_payload(
     from aiops_diagnostics.bounded_http import ErrorMapping, RequestSpec, join_url, request_json
     from aiops_diagnostics.http_auth import build_internal_token_headers
 
+    # 网关的 409 是"这个租户还没开 RAGFlow"—— 那是运营**能行动**的信息（去找管理员
+    # 开户），不该被压成"暂时不可用"。其余状态码保持"这一步没做成"。
+    _REFUSALS = {
+        409: "这个租户还没有开通 RAGFlow 知识库，请联系管理员开户后再试",
+        410: "入口链接已过期，请回到 Dify 重新点击",
+    }
+
     def failed(failure: HttpFailure) -> Exception:
-        return ConsolePublishError(f"knowledge open: {failure.status or failure.detail}")
+        status = failure.status or 0
+        message = _REFUSALS.get(status)
+        if message:
+            return _KnowledgeRefused(status, message)
+        return ConsolePublishError(f"knowledge open: {status or failure.detail}")
 
     try:
         payload = request_json(
@@ -694,6 +714,10 @@ def _knowledge_open_payload(
                 invalid_envelope=failed,
             ),
         )
+    except _KnowledgeRefused:
+        # 运营能行动的拒绝（未开户 / 链接过期）原样上抛 —— 它已经有对的文案与状态码，
+        # 再包一层就退回成"暂时不可用"。
+        raise
     except Exception as exc:  # noqa: BLE001 - 一步失败，交给调用点说人话
         raise ConsolePublishError(f"knowledge open: {exc}") from exc
     if not isinstance(payload, dict) or not payload.get("target"):
@@ -1140,6 +1164,8 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
             self._get_knowledge_open()
         except _Rejected as exc:
             self._html(exc.status, exc.reason)
+        except _KnowledgeRefused as exc:
+            self._html(exc.status, exc.message)
         except ConsolePublishError as exc:
             self.log_message("knowledge open bridge failed: %s", exc)
             self._html(502, "知识库入口暂时不可用，请稍后再试")

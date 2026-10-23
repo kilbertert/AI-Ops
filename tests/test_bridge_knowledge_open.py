@@ -398,3 +398,36 @@ def test_the_page_supplied_workspace_is_still_gated_by_a_dify_session(
 
     assert status == 401
     assert _gateway_calls(upstream) == []
+
+
+def test_an_unonboarded_tenant_is_a_readable_refusal_not_a_blank_502(upstream: _Upstream) -> None:
+    """网关的 409 是"这个租户还没开 RAGFlow" —— 运营**能行动**的信息。
+
+    压成"暂时不可用"会让运营以为等等就好，而实际上要去找管理员开户。
+    """
+    upstream.gateway_status = 409
+    upstream.gateway_body = {"error": {"code": "KNOWLEDGE_TENANT_NOT_ONBOARDED"}}
+    server = _bridge(upstream)
+    try:
+        status, _headers, body = _get(server, "/__aiops/knowledge-open?workspace=" + WORKSPACE_ID)
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert status == 409
+    assert "开通 RAGFlow" in body
+    assert "暂时不可用" not in body
+
+
+def test_an_expired_ticket_is_explained(upstream: _Upstream) -> None:
+    upstream.gateway_status = 410
+    upstream.gateway_body = {"error": {"code": "KNOWLEDGE_HOP_EXPIRED"}}
+    server = _bridge(upstream)
+    try:
+        status, _headers, body = _get(server, "/__aiops/knowledge-open?workspace=" + WORKSPACE_ID)
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert status == 410
+    assert "过期" in body
