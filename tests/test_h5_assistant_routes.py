@@ -145,18 +145,11 @@ def forwarded(tmp_path_factory: pytest.TempPathFactory) -> dict[str, bool]:
     # 上游换成一个本地 stub：命中 location 就会拿到 marker，没命中走静态根。
     inc = inc.replace("http://172.18.0.1:8788", "http://127.0.0.1:18099")
     (root / "proxy.inc").write_text(inc, encoding="utf-8")
-    site = SNIPPET.read_text("utf-8").replace(
-        "/etc/aiops-41/h5-assistant-proxy.inc", str(root / "proxy.inc")
-    )
+    site = SNIPPET.read_text("utf-8").replace("/etc/aiops-41/h5-assistant-proxy.inc", str(root / "proxy.inc"))
     (root / "root").mkdir()
     (root / "root" / "index.html").write_text("STATIC-FALLBACK", encoding="utf-8")
     (root / "site.conf").write_text(
-        f"server {{\n"
-        f"  listen 127.0.0.1:18098;\n"
-        f"  root {root / 'root'};\n"
-        "  index index.html;\n"
-        f"{site}\n"
-        "}\n",
+        f"server {{\n  listen 127.0.0.1:18098;\n  root {root / 'root'};\n  index index.html;\n{site}\n}}\n",
         encoding="utf-8",
     )
     # 前台跑：nginx 默认 daemonize，Popen 的 pid 是启动器而不是 master，
@@ -260,9 +253,7 @@ def forwarded(tmp_path_factory: pytest.TempPathFactory) -> dict[str, bool]:
 
 def test_every_declared_path_is_forwarded(forwarded: dict[tuple[str, str], bool]) -> None:
     declared = {(m, p) for m, p in _declared()}
-    missing = sorted(
-        f"{m} {p}" for (m, p), ok in forwarded.items() if (m, p) in declared and not ok
-    )
+    missing = sorted(f"{m} {p}" for (m, p), ok in forwarded.items() if (m, p) in declared and not ok)
     assert not missing, f"声明了但没转发到网关：{missing}"
 
 
@@ -275,9 +266,7 @@ def test_nothing_outside_the_declaration_is_forwarded(
     敞到消费者站点上 —— 而那不会让任何现有测试变红。这里会。
     """
     declared = {(m, p) for m, p in _declared()}
-    leaked = sorted(
-        f"{m} {p}" for (m, p), ok in forwarded.items() if (m, p) not in declared and ok
-    )
+    leaked = sorted(f"{m} {p}" for (m, p), ok in forwarded.items() if (m, p) not in declared and ok)
     assert not leaked, (
         f"这些 /v1/ 路由不在声明里，却被转发到了网关：{leaked}\n"
         "要么把它加进 ops/nginx/h5-assistant-routes.txt 并说明理由，"
