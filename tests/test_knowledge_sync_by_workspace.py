@@ -193,3 +193,32 @@ def test_an_unknown_workspace_is_a_404(tmp_path: Path) -> None:
 
     assert response.status_code == 404, response.text
     assert response.json()["error"]["code"] == "DIFY_WORKSPACE_UNRESOLVED"
+
+
+def test_two_workspaces_sync_their_own_tenants(tmp_path: Path) -> None:
+    """**不同的 workspace 同步不同的租户** —— review 指出的那条（P1）。
+
+    桥的 `AIOPS_CONSOLE_BRIDGE_WORKSPACE_ID` 是**迁移期的静态回退值**，用它会在多
+    workspace 部署里同步错租户，而运营看到的是自己那一页 —— 错误不报，只表现为
+    "新库没出现"。所以判据是：换一个 workspace，kb-service 就要被按**另一个租户**
+    问一次。
+    """
+    other_tenant = "1783000000000000002"
+    other_workspace = "11111111-2222-3333-4444-555555555555"
+    kb = _KBClient([])
+    client, workspaces = _client(tmp_path, kb=kb)
+    _insert_workspace(workspaces)
+    with workspaces._connection(write=True) as connection:  # noqa: SLF001 — the row is the fixture
+        now = "2026-10-23T00:00:00+00:00"
+        connection.execute(
+            "INSERT INTO dify_workspaces"
+            " (tenant_id, environment, workspace_id, setup_state, last_error, created_at, updated_at)"
+            " VALUES (?, ?, ?, 'ready', '', ?, ?)",
+            (other_tenant, ENVIRONMENT, other_workspace, now, now),
+        )
+
+    for ws in (WORKSPACE, other_workspace):
+        with pytest.raises(ConsoleApiError):
+            client.post("/v1/internal/knowledge/sync", params={"workspace": ws}, headers=_headers())
+
+    assert kb.listings == [TENANT, other_tenant], "两个 workspace 必须落到各自的租户"
