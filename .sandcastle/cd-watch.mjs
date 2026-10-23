@@ -24,6 +24,7 @@ import {
   DEFAULT_STRAIGHT_FAILURES,
   DEFAULT_STUCK_MINUTES,
   assess,
+  recoveryOutcome,
 } from "./deploy-state.mjs";
 
 export const ALARM_LABEL = "cd:needs-attention";
@@ -206,6 +207,23 @@ export function fetchUnfinished({ repo, workflow = "cd.yml", limit = 100 } = {})
   return { runs: attachApprovedAt(enrich(collected), { repo, workflow, limit }), fetchedOk: true };
 }
 
+/** The bodies of every open ticket on this label, used by the healthy path. */
+function openAlarmNumbers(label) {
+  return JSON.parse(
+    gh(["issue", "list", "--state", "open", "--label", label, "--json", "number", "--limit", "10"]),
+  ).map((issue) => issue.number);
+}
+
+function closeAlarms(numbers, body) {
+  for (const number of numbers) {
+    // Comment first: closing alone leaves a reader guessing what fixed it, and
+    // the comment is what a person searching the tracker will find.
+    gh(["issue", "comment", String(number), "--body", body]);
+    gh(["issue", "close", String(number), "--reason", "completed"]);
+  }
+  return { kind: "closed", numbers };
+}
+
 function announce(title, body, label) {
   try {
     gh(["label", "create", label, "--color", "d93f0b", "--description", "CD 未按预期发生"]);
@@ -252,7 +270,47 @@ function main() {
   });
 
   if (result.ok) {
-    console.log("CD 状态正常");
+    // Healthy — but `ok` on its own leaves no trace. Close whatever alarm is
+    // open, so "recovered" stops looking identical to "still broken". The
+    // decision is a pure function so it can be tested without the API.
+    // Query even in `--dry-run`: the whole point of a dry run here is to see
+    // *whether a ticket would be closed*. Skipping the query made the preview
+    // print "CD 状态正常" for a repository that had an open alarm — measured
+    // 2026-10-23, when issue #792 was open while `--dry-run` reported nothing.
+    const openNumbers = openAlarmNumbers(ALARM_LABEL);
+    const outcome = recoveryOutcome({
+      fetchedOk,
+      alarms: result.alarms,
+      openNumbers,
+    });
+    if (outcome.kind === "close") {
+      // Say what `result.ok` actually establishes, not what it suggests.
+      // `assess()` only requires "fewer than N consecutive failures" and "no
+      // overdue unfinished run" — a window of `[failure, success, failure, …]`
+      // is `ok: true` while most runs failed. Writing "all N succeeded" would
+      // put a claim in the issue timeline that this run never checked
+      // (review, 2026-10-23).
+      const lines = [
+        "## CD 告警条件不再成立",
+        "",
+        `最近 ${limit} 次 CD 中，开头连续未成功 ${result.straight} 次（阈值 ${DEFAULT_STRAIGHT_FAILURES}），`,
+        "且没有超时未完成的 run。告警判据不再成立，因此自动关闭本票。",
+        "",
+        "**这不是「最近 N 次全部成功」** —— 判据只看连续失败次数与卡住的 run；",
+        "若要确认每一次的结果，看 `gh run list --workflow=cd.yml`。",
+        "",
+        "自动关闭：本票由 `cd-watch` 在告警条件不再成立时关闭。",
+      ];
+      if (dryRun) {
+        console.log(lines.join("\n"));
+        return;
+      }
+      console.log(JSON.stringify(closeAlarms(outcome.numbers, lines.join("\n"))));
+      return;
+    }
+    console.log(
+      outcome.kind === "nothing-to-close" ? "CD 状态正常" : `CD 状态正常（${outcome.kind}）`,
+    );
     return;
   }
   // 取数失败也算异常，但**不冒充**成上面两种 —— 报「未知」比报「正常」诚实。

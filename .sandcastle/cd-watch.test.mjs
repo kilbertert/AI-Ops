@@ -1,5 +1,12 @@
 /** cd-watch 的判定分支自检（不联网）：用第 407 号票记录的真实形态驱动。 */
-import { assess, classifyRun, overdueUnfinished, straightFailures } from "./deploy-state.mjs";
+import { readFileSync } from "node:fs";
+import {
+  assess,
+  classifyRun,
+  overdueUnfinished,
+  recoveryOutcome,
+  straightFailures,
+} from "./deploy-state.mjs";
 
 const now = new Date("2026-09-30T15:30:00Z");
 const cases = [];
@@ -263,6 +270,41 @@ for (const [label, run, want] of [
   ["jobs=0 超阈值", { status: "waiting", totalCount: 0, pendingCount: 0, createdAt: "2026-09-30T06:33:29Z" }, 1],
 ]) {
   cases.push([`overdueUnfinished · ${label}`, overdueUnfinished([run], { now }).length, want]);
+}
+
+// 恢复时必须关闭告警票 —— 否则「已恢复」与「还在坏」在 issue 列表上长得一样。
+// 实测 2026-10-23：CD 自 12:17 起连续 7 次 success，而 10-14 开的告警票仍开着，
+// 8 天没有任何收尾记录。
+for (const [label, input, want] of [
+  ["健康且有开着的票 → 关闭", { fetchedOk: true, alarms: [], openNumbers: [792] }, "close"],
+  ["健康但没有票 → 无事可做", { fetchedOk: true, alarms: [], openNumbers: [] }, "nothing-to-close"],
+  ["仍在告警 → 不关", { fetchedOk: true, alarms: [{ kind: "straight-failures" }], openNumbers: [792] }, "still-alarmed"],
+  ["取数失败 → 不关", { fetchedOk: false, alarms: [], openNumbers: [792] }, "unknown-keep-open"],
+]) {
+  cases.push([`recoveryOutcome · ${label}`, recoveryOutcome(input).kind, want]);
+}
+
+// 关闭评论必须陈述**实际成立的判据**。
+//
+// `assess()` 的 ok 只要求「连续失败 < N」且「无超时未完成」——`[failure, success,
+// failure, …]` 这种窗口也是 ok。第一版把它写成「最近 N 次全部 success」，等于在
+// issue 时间线上留下一条这次运行从未检查过的断言（评审指出，2026-10-23）。
+{
+  const source = readFileSync(new URL("./cd-watch.mjs", import.meta.url), "utf8");
+  const block = source.slice(
+    source.indexOf("const lines = ["),
+    source.indexOf("if (dryRun)"),
+  );
+  cases.push([
+    "关闭评论不说「全部 success」",
+    /全部\s*success/.test(block) && !/这不是「最近 N 次全部成功」/.test(block) ? "claims" : "honest",
+    "honest",
+  ]);
+  cases.push([
+    "关闭评论说明真实判据",
+    block.includes("告警判据不再成立") ? "states" : "missing",
+    "states",
+  ]);
 }
 
 let failed = 0;

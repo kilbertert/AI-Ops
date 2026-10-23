@@ -363,3 +363,25 @@ function check(condition, message, value) {
 }
 
 if (process.argv[1] && process.argv[1].endsWith("deploy-state.mjs")) demo();
+
+/**
+ * What to do with an open alarm ticket when CD is healthy again.
+ *
+ * Why this exists: without it, a recovery leaves no trace. Measured 2026-10-23 —
+ * CD had been green seven runs in a row since 12:17, while the alarm ticket
+ * opened on 2026-10-14 sat open with no closing comment. On the issue list,
+ * "recovered eight days ago" and "still broken" look exactly the same, and the
+ * next person to read it has no way to tell.
+ *
+ * Returns the decision rather than performing it, so the rule is testable
+ * without a GitHub API: the side effect is one line at the call site, the
+ * decision is a value.
+ */
+export function recoveryOutcome({ fetchedOk, alarms, openNumbers }) {
+  // A failed fetch is not a recovery. Leaving the ticket open is correct when we
+  // could not read the runs — we know nothing about CD in that state.
+  if (!fetchedOk) return { kind: "unknown-keep-open" };
+  if (alarms.length > 0) return { kind: "still-alarmed" };
+  if (openNumbers.length === 0) return { kind: "nothing-to-close" };
+  return { kind: "close", numbers: openNumbers };
+}
