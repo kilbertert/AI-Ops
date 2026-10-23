@@ -116,9 +116,7 @@ class AgentResultValidator:
         # 「不能只引 runbook」这一条，去掉「必须成功」那一半 —— 后者没有对应的
         # 风险，只是把一个必然发生的写法判成错误。
         direct_evidence = {
-            entry.evidence_id
-            for entry in entries.values()
-            if entry.tool != ToolName.KNOWN_RUNBOOK.value
+            entry.evidence_id for entry in entries.values() if entry.tool != ToolName.KNOWN_RUNBOOK.value
         }
         if result.status == DiagnosisStatus.DIAGNOSED:
             if not result.root_cause.strip():
