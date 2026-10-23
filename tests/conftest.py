@@ -165,7 +165,12 @@ def pytest_configure(config: pytest.Config) -> None:
     # distinguishes them; it is set by xdist before the worker's config is built.
     if os.environ.get("PYTEST_XDIST_WORKER"):
         return
-    if config.option.numprocesses == "0":
+    # ⚠️ `int(...)`, not `== "0"`. xdist registers `-n` with a string default and
+    # converts it, so the attribute is an `int` once pytest has parsed the args —
+    # verified: `-n 0` yields `numprocesses == 0`. The first version compared against
+    # the string and therefore never took the branch: measured, two `-n 0` runs were
+    # serialised 5 s / 10 s by a lock they were documented not to take.
+    if (config.option.numprocesses or 0) == 0:
         return
 
     checkout = pathlib.Path(__file__).resolve().parents[1]
