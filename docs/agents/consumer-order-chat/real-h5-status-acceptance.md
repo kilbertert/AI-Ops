@@ -123,7 +123,16 @@ python status_probe.py <another_owned_order_no> specified
 脚本在私有目录。`AIOPS_CHECK_SESSION` 用环境变量传：41 的 Gateway 单元开了
 `PrivateTmp`，`/tmp` 落盘的文件 `runuser -u aiops41` 读不到。
 
-## 九、操作偏差（如实记录）
+## 九、顺带发现的生产缺口
+
+`conversation_turns` **整张表是空的（0 行）**。不是"本轮没写"，而是线上流量里
+**没有任何调用带 `conversation_id`**。
+
+影响：`status_qa_id` 那条"会话绑定作业、回读重验权限与摘要"的守卫**在生产从未被执行过**，
+只有测试覆盖。它在代码里是对的，但没有任何真实流量走到它。要不要让页面传
+`conversation_id`，是一个产品决定，不在本片范围。
+
+## 十、操作偏差（如实记录）
 
 验证"停用后回读拒绝"时，我**多发了一次状态提问**，违反本文档自己定的
 「停用后不再提交状态问题」。它走零阶检索路径（`turn_count=0`、`tool_call_count=0`、
