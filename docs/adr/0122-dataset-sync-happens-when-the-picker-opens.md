@@ -1,10 +1,31 @@
-# 122. 建库同步挂在选择器打开那一刻，不靠定时器也不靠人
+# 122. 建库同步挂在「添加知识库」弹窗打开那一刻，不靠定时器也不靠人
 
-日期：2026-10-23
+日期：2026-10-23（2026-10-24 **修订**：触发点从「我们自己的清单路由」改为「Dify
+前端补丁」—— 见下「一次被推翻的判断」）
 状态：Accepted
 影响版本：`src/aiops_diagnostics/knowledge_dataset_autosync.py`（新）、
-`gateway_api.py`（`_maybe_sync_dify_datasets` + 清单路由）、`gateway_runtime.py`、
-`gateway_config.py`（`dify_external_knowledge_api_id`）、`tests/`
+`gateway_api.py`（`/v1/internal/knowledge/sync`）、`gateway_runtime.py`、
+`gateway_config.py`（`dify_external_knowledge_api_id`）、
+`dify_console_publish.py`（`/__aiops/knowledge-sync`）、
+`ops/dify-console-bridge/dify-console-publish.conf`、
+`deploy/dify-36/web-patches/1.17.1/02-web-sync-on-knowledge-picker.patch`（新）、`tests/`
+
+## 一次被推翻的判断（2026-10-24）
+
+第一版把触发点放在 `GET /v1/dify/knowledge`（我们自己的清单路由），理由是"选择器
+会调它"。**那是错的**：那条路由只有「创建外部知识库」表单会调
+（`ExternalApiSelection.tsx` → `ExternalKnowledgeIdPicker`），而运营要的是编排页的
+**「添加知识库」** —— 它走 Dify 自己的 dataset 列表，**根本不经过我们的清单路由**。
+
+同一次 review 还抓到一个 P1：`libraries_for` 只认 `knowledge_base_id`/`id`，而我在
+接线时把它改成了 `dataset_id` ⇒ 每一行被**静默跳过**，同步报成功、零写入。
+
+所以现在改成**打 Dify 前端补丁**：`select-dataset/index.tsx`（「添加知识库」弹窗）
+打开时 `POST /__aiops/knowledge-sync`。代价是每次升级 Dify 都要跟一次补丁 ——
+用户已明确接受。
+
+**教训**：两次都是"我以为它会怎么用"，而不是"去读它实际怎么用"。设计跨系统触发点时，
+触发方的源码必须读，不能从路由名字推测。
 
 ## 背景
 

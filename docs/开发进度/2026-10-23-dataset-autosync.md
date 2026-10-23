@@ -28,4 +28,4 @@
 **代价**：新增 `AIOPS_GATEWAY_DIFY_EXTERNAL_KNOWLEDGE_API_ID`（留空即不启用）；
 清单路由从此有写副作用 —— 这条写进 ADR-0122，免得下一个人把它当纯读接口加重试。
 
-**交付**：本分支。
+**交付**：本分支 + 前端补丁（见 `docs/开发进度/2026-10-24-knowledge-sync-on-picker.md`）。

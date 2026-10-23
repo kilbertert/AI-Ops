@@ -38,12 +38,10 @@ class _Runtime:
         search: Any = None,
         signer: Any = None,
         owned: dict[str, list[str]] | None = None,
-        autosync: Any = None,
         workspaces: Any = None,
     ) -> None:
         self.kb_search_client = _FakeKbClient(search, owned=owned) if search is not None else None
         self.media_signer = signer
-        self.knowledge_dataset_autosync = autosync
         self.dify_workspaces = workspaces
 
     def shutdown(self) -> None:
@@ -1081,94 +1079,3 @@ def test_a_empty_dataset_segment_is_not_a_source(tmp_path: Path) -> None:
     _onboard(client.app.state.gateway.store, "T-9")  # type: ignore[attr-defined]
 
     assert _post(client, _body(knowledge_id="tenant-T-9:")).status_code == 404
-
-
-# ---------------------------------------------------------------------------
-# 选择器打开时的自动同步（#1056）
-#
-# 三条约束各一条用例。最要紧的是第一条：**同步失败不能影响清单** —— 否则一次上游
-# 抖动会让运营连已有的库都选不到。
-# ---------------------------------------------------------------------------
-
-
-class _RecordingAutosync:
-    def __init__(self, *, raises: Exception | None = None) -> None:
-        self.tenants: list[str] = []
-        self._raises = raises
-
-    def maybe_sync(self, *, tenant_id: str, workspace_id: str, run):
-        self.tenants.append(tenant_id)
-        if self._raises is not None:
-            raise self._raises
-        return "ok (stub)"
-
-
-class _StubWorkspaces:
-    def resolve(self, tenant_id: str, environment: str) -> str:
-        return f"ws-{tenant_id}"
-
-
-def test_opening_the_picker_attempts_a_sync_for_each_listed_tenant(tmp_path: Path) -> None:
-    """选择器一打开就该收敛一次 —— 这是"建完库不用跑命令"的落点。"""
-    autosync = _RecordingAutosync()
-    client = _client(
-        tmp_path,
-        _Runtime(
-            search=lambda _k, _q, _n: [],
-            autosync=autosync,
-            workspaces=_StubWorkspaces(),
-            owned={"T-1": ["KB-A"], "T-2": ["KB-B"]},
-        ),
-        dify_console_base_url="http://dify.example",
-        dify_console_api_key="console-key-0123456789",
-        dify_external_knowledge_api_id="api-template-1",
-    )
-    # The two bindings name different tenants; both are candidates.
-    response = client.get("/v1/dify/knowledge", headers={"Authorization": f"Bearer {DIFY_KEY}"})
-    assert response.status_code == 200, response.text
-    assert sorted(autosync.tenants) == ["T-1", "T-2"]
-
-
-def test_a_failing_sync_never_breaks_the_picker(tmp_path: Path) -> None:
-    """上游挂了也必须照常列出已有的库。
-
-    这是这一片最重要的一条：同步是"让它更方便"，不是"它能不能用"。一次 Dify
-    抖动让运营连**已经有的**库都选不到，是比"新库没出现"严重得多的故障。
-    """
-    autosync = _RecordingAutosync(raises=RuntimeError("dify is on fire"))
-    client = _client(
-        tmp_path,
-        _Runtime(
-            search=lambda _k, _q, _n: [],
-            autosync=autosync,
-            workspaces=_StubWorkspaces(),
-            owned={"T-1": ["KB-A"], "T-2": ["KB-B"]},
-        ),
-        dify_console_base_url="http://dify.example",
-        dify_console_api_key="console-key-0123456789",
-        dify_external_knowledge_api_id="api-template-1",
-    )
-    response = client.get("/v1/dify/knowledge", headers={"Authorization": f"Bearer {DIFY_KEY}"})
-    assert response.status_code == 200, response.text
-    assert response.json()["total"] == 2
-
-
-def test_without_a_configured_api_template_nothing_is_attempted(tmp_path: Path) -> None:
-    """没有模板 id 就整个不启用 —— 猜一个模板等于把凭据绑到别处（ADR-0096）。"""
-    autosync = _RecordingAutosync()
-    client = _client(
-        tmp_path,
-        _Runtime(
-            search=lambda _k, _q, _n: [],
-            autosync=autosync,
-            workspaces=_StubWorkspaces(),
-            owned={"T-1": ["KB-A"], "T-2": ["KB-B"]},
-        ),
-        dify_console_base_url="http://dify.example",
-        dify_console_api_key="console-key-0123456789",
-        # dify_external_knowledge_api_id deliberately omitted
-    )
-    assert (
-        client.get("/v1/dify/knowledge", headers={"Authorization": f"Bearer {DIFY_KEY}"}).status_code == 200
-    )
-    assert autosync.tenants == []
