@@ -39,7 +39,7 @@ every edit.
 
 # FEEDBACK LOOPS
 
-Before committing, run `uv sync --extra dev && uv run pytest && uv run ruff check` (typecheck + tests + build) and
+Before committing, run `uv sync --extra dev && uv run pytest -n auto && uv run ruff check` (typecheck + tests + build) and
 `git diff --check` to ensure everything passes. Then run
 `node .sandcastle/policy-check.mjs commit`. Do not weaken or skip checks.
 

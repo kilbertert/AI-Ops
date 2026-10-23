@@ -41,20 +41,29 @@ class _FakeKbClient:
 
 
 class _Caller:
-    """A caller resolver that accepts one bearer token per role."""
+    """调用者解析器。
+
+    **默认刻意不给任何平台角色**（``roles`` 为空）：判据已改成"本租户内的调用者"，
+    而真实公司账号（Ulink 运营：``ROLE_ADMIN`` + ``CPO``）确实一个 AI-Ops 角色都没有。
+    若这里继续照抄 ``ROLE_AGENT_ADMIN``，测试就会在一条真实身份永远走不到的分支上全绿 ——
+    而那正是 2026-10-22 真机 403 之前的形状。
+    """
+
+    def __init__(self, tenant: str = TENANT) -> None:
+        self.tenant = tenant
 
     def resolve(self, authorization, **_kwargs):
         del authorization
         from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
 
-        subject = SubjectRecord(b_user_id="B-1", tenant_id=TENANT)
+        subject = SubjectRecord(b_user_id="B-1", tenant_id=self.tenant)
         return ScopeContext.build(
             caller=subject,
             subject=subject,
             delegated=False,
-            effective_tenant_id=TENANT,
+            effective_tenant_id=self.tenant,
             data_scope=DataScope(type="self"),
-            roles=frozenset({"ROLE_AGENT_ADMIN"}),
+            roles=frozenset(),
             permissions=frozenset({"aiops:agents:manage"}),
         )
 
@@ -70,7 +79,7 @@ class _Runtime:
         pass
 
 
-def _client(tmp_path: Path, per_tenant: dict[str, list[dict]]):
+def _client(tmp_path: Path, per_tenant: dict[str, list[dict]], *, caller=None):
     from fastapi.testclient import TestClient
 
     from aiops_diagnostics.gateway_api import create_gateway_app
@@ -94,7 +103,7 @@ def _client(tmp_path: Path, per_tenant: dict[str, list[dict]]):
         settings=settings,
         store=store,
         runtime=runtime,  # type: ignore[arg-type]
-        caller_resolver=_Caller(),  # type: ignore[arg-type]
+        caller_resolver=caller or _Caller(),  # type: ignore[arg-type]
     )
     return TestClient(app), store, kb
 
@@ -223,3 +232,72 @@ def test_the_page_is_reachable_under_v1(tmp_path: Path) -> None:
     # only that branch of the public nginx map preserves the caller's token.
     assert '"/v1/knowledge/available"' in response.text
     assert '"X-Business-Entry": "operator"' in response.text
+
+
+# ── 判据：本租户内的调用者，不要求平台级全局码（2026-10-22） ───────────────
+#
+# 真机事实：Ulink 运营（ROLE_ADMIN + CPO，两个角色都是租户级）调
+# /v1/knowledge/available 得 403，因为判据要的是 aiops:agent:edit。那个码建于
+# ADR-0029 的「平台级单工作区」时代，1:1:1 之后跨租户越权结构上已不存在。
+
+
+def test_a_tenant_admin_without_any_platform_role_can_read_the_picker(tmp_path: Path) -> None:
+    """没有 AI-Ops 角色、只有本租户身份 ⇒ 放行。
+
+    这正是 Ulink 运营的形状。若这条红，说明判据又退回成"必须有平台全局码"。
+    """
+    client, _store, _kb = _client(tmp_path, {TENANT: []})
+
+    response = client.get("/v1/knowledge/available", headers={"Authorization": "Bearer t"})
+
+    assert response.status_code == 200, response.text
+    assert response.json()["tenant_id"] == TENANT
+
+
+def test_a_tenant_admin_without_any_platform_role_can_bind(tmp_path: Path) -> None:
+    client, _store, _kb = _client(tmp_path, {TENANT: [{"knowledge_base_id": "kb-1", "name": "kb"}]})
+
+    response = client.put(
+        "/v1/knowledge/sources/kb-mine",
+        headers={"Authorization": "Bearer t"},
+        json={
+            "knowledge_id": "kb-mine",
+            "tenant_id": TENANT,
+            "knowledge_base_ids": ["kb-1"],
+            "display_name": "",
+        },
+    )
+
+    assert response.status_code == 200, response.text
+
+
+def test_a_caller_without_a_tenant_is_still_refused(tmp_path: Path) -> None:
+    """门没有消失：没有租户身份的调用者仍然进不来。
+
+    放宽的是"要不要平台全局码"，不是"要不要身份"。
+    """
+    client, _store, _kb = _client(tmp_path, {TENANT: []}, caller=_Caller(tenant=""))
+
+    response = client.get("/v1/knowledge/available", headers={"Authorization": "Bearer t"})
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "KNOWLEDGE_FORBIDDEN"
+
+
+def test_one_tenant_cannot_bind_against_another(tmp_path: Path) -> None:
+    """判据改成租户级之后，跨租户这条边界必须仍由 tenant_matches 挡住。"""
+    client, _store, _kb = _client(tmp_path, {TENANT: [{"knowledge_base_id": "kb-1", "name": "kb"}]})
+
+    response = client.put(
+        "/v1/knowledge/sources/kb-theirs",
+        headers={"Authorization": "Bearer t"},
+        json={
+            "knowledge_id": "kb-theirs",
+            "tenant_id": "9999999999999999999",
+            "knowledge_base_ids": ["kb-1"],
+            "display_name": "",
+        },
+    )
+
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "KNOWLEDGE_TENANT_MISMATCH"

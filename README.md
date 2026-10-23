@@ -565,10 +565,23 @@ uv run pytest -n auto -rs
 uv run python -m compileall -q src tests && uv pip check
 ```
 
+**本地跑全量用 `./tools/test.sh`**（等价 `npm test`）：
+
+```bash
+./tools/test.sh          # 并行，约 44 s
+./tools/test.sh -n 0     # 显式串行，约 244 s
+./tools/test.sh -k faq   # 转发给 pytest 的任意参数
+```
+
+> 脚本会自己确保调度器在位（`uv sync` 会删掉它），再把 `-n auto` 补上。
+> **默认放在命令里而不是 `pyproject.toml` 的 `addopts` 里**：`addopts` 无条件生效，
+> 没装调度器时会以 `unrecognized arguments: -n` 崩掉、**一个测试都不跑**——
+> 比没有默认值更糟。实测 `PYTEST_ADDOPTS` 同样无条件，conftest 钩子也救不了
+> （conftest 在 ini 解析**之后**才加载）。理由见 `tools/test.sh` 的头部注释。
+
 > 并行用的 `pytest-xdist` **故意不进 `pyproject.toml`**：加一个 dev 依赖会改 `uv.lock`，
 > 而 CD 的依赖漂移门拿 `uv.lock` 的 sha256 与 41 上的比，会拦住整条部署。
 > 装进项目 venv（不是 `uv run --with`，那会把 `sys.executable` 改道到临时覆盖环境）。
-> ⚠️ 本地跑测试前若执行过 `uv sync`，需要重跑那句 `uv pip install`。
 > 理由与实测见 `docs/adr/0038`。
 
 ### 持续部署（[:cd.yml](.github/workflows/cd.yml) + [:deploy/deploy-41.sh](deploy/deploy-41.sh)）

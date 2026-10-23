@@ -29,6 +29,89 @@ App→Dify/节点执行与 M3/M4 另验；故障原因仍走原诊断。现有 A
 不修改公司仓库因此不能承诺设备无数据留存。操作方法与判据见[手册](agents/consumer-order-chat/README.md)。
 私有本地检查日志/覆盖率/突变回执在 `/home/claude/.cache/m3-autonomous/consumer-order-chat/`。
 
+## 2026-10-22 · 第 1 项闭环：真实 Ulink 运营真浏览器走完知识库全流程
+
+**范围**：41（CD `761f702a`）+ 36（RAGFlow）。调用者身份**真实**：Ulink 租户
+`1942105476598861824` 的运营商账号 `ulink`，在 `ulinkmanage.h5.mall.qushiyun.com`
+用账号密码登录取得真实令牌。不构造任何身份。
+
+### 一、之前几轮为什么没做成
+
+| 我说过的 | 实际 |
+|---|---|
+| 「`1942…` 在 UPMS 里不存在」 | **查错了库**：查的是 36 的 `qumall_upms`，而 41 用 `192.168.1.44:30899`（326 个租户）。该租户名为 **Ulink**，2025-07-07 建 |
+| 「卡在密码/登录路径」 | 我把两把不同密码当成同一把比较（`newpw.txt` vs `np.txt`），两个结论各自成立却被我对照成矛盾 |
+| 「需要真实运营账号」 | 账号一直存在；我不知道 41 的 UPMS 地址 |
+
+### 二、真机暴露的两个新缺陷（真浏览器，真实账号）
+
+| # | 缺陷 | 证据 | 修复 |
+|---|---|---|---|
+| 10 | **判据用错层**：知识库四条路由要 `aiops:agent:edit`（平台级全局码），而 Ulink 运营的两个角色（`CPO`/`tenant-app`、`ROLE_ADMIN`/`admin`）**都是租户级**、都没有它 ⇒ 403 | 页面整块「读取失败：knowledge-source configuration is not permitted」 | 判据改成本租户身份（#970，ADR-0087） |
+| 11 | **选择器永远空白**：`renderAvailable` 造好了行却没 `append` 进容器 | 接口 200、数据齐全，页面 0 个复选框 | 补 `box.append(row)`（#971）+ 静态回归 |
+
+第 11 个只在「第一次真的拿到库」时暴露：此前要么 403、要么空数组，两段都走不到构造行的分支，而接口 200 时页面不报任何错。
+
+### 三、修复后的完整闭环（真浏览器）
+
+```
+checkboxes: 2
+AVAILABLE: 41(1) · 7 文档 / 26 段（已挂接） | 41 · 12 文档 / 22 段
+勾选「41」→ Knowledge ID = ulink-accept-test → 保存
+TOAST: 已保存并生效：ulink-accept-test
+SOURCES: ulink-accept-test · Ulink 验收 · 1 个库：8701c742…
+```
+
+点「打开 RAGFlow」后：
+
+```
+LANDED:    https://kb.mall.qushiyun.com/
+JAR:       [('session', '.mall.qushiyun.com')]
+BODY:      Welcome to RAGFlow | Dataset | 41(1) 7 files | 41 12 files
+SIGNED_IN: True
+```
+
+验收用的绑定 `ulink-accept-test` 在完成后已删除（`knowledge_source_deleted`）。
+
+### 四、判据改动的依据与代价（ADR-0087）
+
+`aiops:agent:edit` 建于 ADR-0029，当时 Dify 是**平台级单工作区**（ADR-0056），所有人
+共享 workspace。1:1:1 之后那个前提消失：四条路由全部按 `effective_tenant_id` 取数，
+跨租户越权结构上做不到。此时再要求全局码，唯一效果是把有业务角色的运营挡在自己租户
+的库外面。
+
+代价：同租户内任何已登录调用者都能改本租户绑定。Ulink 当前只有一个管理员
+（用户 2026-10-22 确认暂无其他员工），这是正确粒度。租户出现普通员工时，应换成该租户
+自己的管理角色（公司原生表达 `ROLE_ADMIN`，但尚未证明跨租户通用），**而不是退回全局码**。
+
+### 五、仍未做
+
+- 「41」库 5 个 PNG 的**内容**已丢失（MinIO 损坏且机器上无原件），需原始素材。
+- 多租户隔离的负向验收（另一个租户进不去 Ulink 的 RAGFlow）未在真机做，单测里有。
+
+## 2026-10-22 · 全量测试的默认入口：本地验证摘要
+
+**范围**：`tools/test.sh`（新增）、`package.json`（`scripts.test`）、`README.md`。
+**不改源码、不改测试断言。**
+
+| 项 | 结果 |
+|---|---|
+| `./tools/test.sh`（默认并行） | 3491 passed / 9 skipped / **49.1 s** |
+| `./tools/test.sh -n 0`（显式串行） | 3491 passed / 9 skipped / **245.3 s** |
+| 参数转发 `-k` | 36 passed / 5.8 s |
+| **离线对照**：`uv pip install` 失败 + 默认 | 降级串行，14 passed，**不中止** |
+| **离线对照**：`uv pip install` 失败 + `-n 0` | 降级串行，14 passed |
+
+**判据不是「跑得快了」**：两种跑法的 **passed/skipped 数完全相同**（3491/9），
+只有耗时差 5 倍 —— 这才是「同一个测试集合换了一种调度」。
+
+**两条被 review 抓出并修正的**：
+1. 第一版在安装失败时被 `set -e` 中止，**一个测试都不跑**（实测复现）；
+2. `-n 0` 同样需要 xdist —— `-n` 是插件注册的参数，「串行所以不需要」是错的。
+
+**未完成业务验收**：本次无用户可见行为变化；上表是执行层面的度量，
+**不构成任何业务路径的可用性证据**。
+
 ## 2026-10-22 · OPS-07 授权复测模型段通过，离线纠正解析假阴性
 
 **分支/基线**：`docs/dify-ops-model-retest`，创建基线 `eea69c603bfd`，交付前同步 `4ed7b4b0c3bd`。

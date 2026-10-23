@@ -3845,13 +3845,29 @@ def create_gateway_app(
     # ------------------------------------------------------------------
 
     def _require_knowledge_admin(caller: ScopeContext) -> None:
-        from aiops_diagnostics.agent_lifecycle import EDIT_ROLES
+        """知识库这几条路由的判据：**本租户内的调用者**，不要求平台级全局码。
 
-        if not frozenset(getattr(caller, "roles", ())).intersection(EDIT_ROLES):
+        为什么不是 ``aiops:agent:edit``。那个码建于 ADR-0029，当时的 Dify 是**平台级
+        单工作区**（ADR-0056），所有人共享一个 workspace、能看全部 app，所以必须有
+        一道全局门。1:1:1 落地后那个前提消失了：下面四条路由全部用
+        ``caller.effective_tenant_id`` 限死，调用者只能列出/绑定**自己租户**的库 ——
+        跨租户越权在结构上做不到。此时再要求一个全局码，唯一的效果是把有业务角色的
+        运营挡在自己租户的库外面（2026-10-22 真机：Ulink 运营持 ``ROLE_ADMIN`` +
+        ``CPO``，两个角色都是**租户级**，都没有 ``aiops:agent:edit`` ⇒ 403）。
+
+        代价明写：放开后，**同一租户内**任何已登录调用者都能改本租户的绑定。这在一个
+        租户只有一个管理员时是正确的粒度；租户里出现普通员工账号时，应当把判据换成
+        该租户自己的管理角色（公司原生表达是 ``ROLE_ADMIN``），而不是退回全局码 ——
+        后者会重新引入"平台管理员才能配自己租户"的错位。
+
+        仍然要求**有一个身份**：没有 tenant 的调用者在这里被拒，与下游按租户取数
+        失败关闭的方向一致。
+        """
+        if not str(getattr(caller, "effective_tenant_id", "") or "").strip():
             raise StandardAPIError(
                 status.HTTP_403_FORBIDDEN,
                 "KNOWLEDGE_FORBIDDEN",
-                "knowledge-source configuration is not permitted",
+                "knowledge-source configuration requires a tenant identity",
             )
 
     #: 管理页本身不带凭据：它是一个静态文档，页面自己向下面的 API 出示令牌。
