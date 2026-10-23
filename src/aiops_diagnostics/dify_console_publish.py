@@ -1270,9 +1270,16 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
         而这里只是把浏览器已经持有的 Dify 会话原样交给登录代理验一次，证明"哪个
         租户"—— 与 ``/__aiops/knowledge-open`` 同一套判据。
 
-        **请求体为空，也不读任何参数。** 工作区是桥自己的固定配置
-        （``AIOPS_CONSOLE_BRIDGE_WORKSPACE_ID``）；租户来自验过的会话。让任何一项
-        从请求里来，就等于让调用方决定同步哪个租户。
+        **工作区由页面带上来，租户绝不能从请求里来。**
+
+        这与 ``/__aiops/knowledge-open?workspace=…`` 同一条规矩，两条都不能省：
+
+        * **workspace 必须来自页面**：桥自己的 ``workspace_id`` 是**迁移期的静态
+          回退值**（见 ``BridgeSettings.workspace_id`` 的注释），不是"当前活跃
+          workspace"。用它会在多 workspace 部署里同步错租户 —— 而运营看到的却是
+          自己那一页，错误不报，只表现为"新库没出现"。
+        * **租户仍然只能来自验过的会话**：网关按 workspace **反查**租户，并且
+          请求里出现任何租户参数都是 400。页面能说的只有"我在哪一页"。
 
         返回 ``{"created": N}``：调用方只在 N > 0 时刷新列表。**失败一律 200 +
         ``created: 0``** —— 这是前端弹窗路径上的调用，一次网关抖动不该让运营看到
@@ -1292,11 +1299,19 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
         tenant_id = headers.get("X-AIOps-Initiator-Tenant", "").strip()
         if not tenant_id:
             raise _Rejected(403, "你的账号还没有绑定公司租户，请联系管理员")
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+        workspace_id = (query.get("workspace") or [""])[0].strip() if query else ""
+        if not workspace_id:
+            # 没有它就没法确定同步哪个 workspace。**回 ``created: 0`` 而不是 4xx**：
+            # 前端拿不到 workspace 是它自己的问题，不该让弹窗报错。
+            self.log_message("knowledge sync: no workspace in request; nothing synced")
+            self._json(200, {"created": 0})
+            return
         try:
             created = _knowledge_sync_payload(
                 self.settings.gateway_base_url,
                 self.settings.gateway_internal_token,
-                workspace_id=self.settings.workspace_id,
+                workspace_id=workspace_id,
                 timeout=self.settings.timeout,
             )
         except Exception as exc:  # noqa: BLE001 - see the docstring's last paragraph

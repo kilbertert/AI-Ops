@@ -4084,23 +4084,49 @@ def create_gateway_app(
         console = DifyConsoleAdmin(
             ConsoleApiSettings(settings.dify_console_base_url, settings.dify_console_api_key)
         )
-        outcome = run(
-            workspace_id=workspace.strip(),
-            libraries=libraries,
-            console=console,
-            external_knowledge_api_id=api_id,
-            dry_run=False,
-        )
-        created = sum(1 for item in outcome.get("applied") or [] if item.get("kind") == "create")
+
+        def converge() -> Any:
+            return run(
+                workspace_id=workspace.strip(),
+                libraries=libraries,
+                console=console,
+                external_knowledge_api_id=api_id,
+                dry_run=False,
+            )
+
+        # **并发闸**：两个运营（或同一个人的两个标签页）同时打开弹窗，就是两个并发
+        # pass，各自读一遍列表、各自决定建同一个 —— 而 Dify 对 `(tenant, name)` 没有
+        # 唯一约束，输的一方留下重复。闸在 `knowledge_dataset_sync_guard`。
+        #
+        # 闸的 `run()` 返回的是**它自己的**结论，不返回 work 的产物，所以这里用一个
+        # 单元素列表把产物带出来 —— 比让闸去理解 `run()` 的返回类型更省事，也不会
+        # 让闸与同步实现耦合。
+        guard = getattr(context.runtime, "knowledge_dataset_sync_guard", None)
+        outcome: list[dict[str, Any]] = []
+        if guard is None:
+            guard_outcome = "unguarded"
+            outcome.append(converge())
+        else:
+            guard_outcome = guard.run(
+                tenant_id=tenant_id,
+                work=lambda: (outcome.append(converge()), None)[1],
+            )
+        if not outcome:
+            # 被闸挡下（或闸自己失败）：没有产出可报，但**不是错误** —— 另一次 pass
+            # 正在做同一件事，或刚做完。
+            _LOGGER.info("knowledge sync workspace=%s tenant=%s %s", workspace, tenant_id, guard_outcome)
+            return {"created": 0, "tenant_id": tenant_id, "skipped": True}
+        applied = outcome[0]
+        created = sum(1 for item in applied.get("applied") or [] if item.get("kind") == "create")
         _LOGGER.info(
             "knowledge sync workspace=%s tenant=%s applied=%d created=%d orphans=%d",
             workspace,
             tenant_id,
-            len(outcome.get("applied") or []),
+            len(applied.get("applied") or []),
             created,
-            len(outcome.get("orphans") or []),
+            len(applied.get("orphans") or []),
         )
-        return {"created": created, "tenant_id": tenant_id, "outcome": outcome}
+        return {"created": created, "tenant_id": tenant_id, "outcome": applied}
 
     @app.get("/v1/internal/knowledge/open", include_in_schema=False)
     def knowledge_open_by_workspace(
