@@ -520,3 +520,77 @@ def test_deploy_compares_pyproject_by_declarations_not_bytes() -> None:
     assert "tomllib" in source, "语义比较没被写进脚本"
     # uv.lock 仍在同一循环里按 sha256 比，不能被顺手一起放宽。
     assert 'for spec in "pyproject.toml" "uv.lock"; do' in source
+
+
+def test_deploy_compares_uv_lock_by_resolved_packages() -> None:
+    """`uv.lock` 里的本项目版本号变更不是依赖漂移。
+
+    `uv.lock` 的记录含 `name = "aiops-diagnostics"` + `version`，所以发版会改写它。
+    按字节比会把「发布 0.2.0」判成依赖漂移，**拦住这次发布的部署**——实测 2026-10-23：
+    0.1.0 → 0.2.0 时 `uv.lock` 唯一的改动就是那行 version。
+
+    判据仍是严格的：除本项目外，每个包的 name+version 都必须相同。
+    """
+    import json
+    import tomllib
+
+    def packages(text: str) -> str:
+        data = tomllib.loads(text)
+        return json.dumps(
+            sorted(
+                [p.get("name"), p.get("version")]
+                for p in data.get("package", [])
+                if p.get("name") and p.get("name") != "aiops-diagnostics"
+            ),
+            sort_keys=True,
+        )
+
+    lock = (REPO_ROOT / "uv.lock").read_text(encoding="utf-8")
+    bumped = lock.replace(
+        'name = "aiops-diagnostics"\nversion = "', 'name = "aiops-diagnostics"\nversion = "9.9.9"  # was 0'
+    )
+    assert bumped != lock
+    assert packages(bumped) == packages(lock), "本项目版本号变更不应改变包集合"
+
+    # 对照组：真依赖的版本变了必须被看出来，否则上面那半条只是「函数恒返回同值」。
+    assert '"redis"' in lock or "name = 'redis'" in lock or 'name = "redis"' in lock
+    changed = lock.replace('name = "redis"\nversion = "', 'name = "redis"\nversion = "9.9.9"  # was 0')
+    assert changed != lock, "fixture drifted: uv.lock no longer pins redis in the expected shape"
+    assert packages(changed) != packages(lock)
+
+
+def test_deploy_compares_uv_lock_semantically() -> None:
+    """`deploy-41.sh` 里 uv.lock 必须**真的**走语义比较，而不是只在注释里说。
+
+    第一版这条只查 `"lock_packages()" in source` —— 把调用处改成 `if false` 仍然
+    全绿，因为定义还在。**查字符串存在是假绿**：它看不见「这段代码会不会被执行」。
+    所以这里跑脚本里**实际的** `lock_packages`，用两份锁喂它。
+    """
+    import json
+    import re
+    import subprocess
+
+    source = (DEPLOY_DIR / "deploy-41.sh").read_text(encoding="utf-8")
+    match = re.search(r"^lock_packages\(\) \{\n(.*?)^\}$", source, re.M | re.S)
+    assert match, "deploy-41.sh 里找不到 lock_packages 函数"
+
+    lock = (REPO_ROOT / "uv.lock").read_text(encoding="utf-8")
+    own = 'name = "aiops-diagnostics"\nversion = "'
+    dep = 'name = "redis"\nversion = "'
+    bumped = lock.replace(own, own + "9.9.9")
+    changed = lock.replace(dep, dep + "9.9.9")
+
+    def run(text: str) -> str:
+        script = "\n".join(
+            line[2:] if line.startswith("  ") else line for line in match.group(1).splitlines()
+        )
+        result = subprocess.run(  # noqa: S603 - fixed argv, no shell
+            ["bash", "-c", script], input=text, capture_output=True, text=True, check=False
+        )
+        assert result.returncode == 0, result.stderr
+        return result.stdout.strip()
+
+    same = run(lock)
+    assert same, "lock_packages 对真实 uv.lock 没有输出"
+    assert json.loads(same) == json.loads(run(bumped)), "本项目版本号变更被判成了包集合变化"
+    assert json.loads(same) != json.loads(run(changed)), "真依赖版本变更没有被看出来"
