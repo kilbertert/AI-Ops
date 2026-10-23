@@ -22,6 +22,7 @@ import hashlib
 import json
 import threading
 import time
+from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -112,6 +113,7 @@ def node_chat(
     matter: bool = True,
     gate_before_dispatch: threading.Event | None = None,
     dispatch_events: list[str] | None = None,
+    after_completion: Callable[[dict], None] | None = None,
 ):
     """真实 Gateway 应用 + 真实节点端点 + 按租户登记的绑定表。
 
@@ -188,6 +190,7 @@ def node_chat(
         )
         client = TestClient(app)
         live = app.state.gateway.settings
+        _runtime_state = {"client": client, "settings": live, "orders": orders}
         manifest_identity = _identity(manifest) if matter else ""
 
         def dispatch(_config, run_id: str) -> None:
@@ -214,6 +217,10 @@ def node_chat(
                 headers=headers_,
                 json={"status": "completed"},
             )
+            # 节点已经交回结果、worker 还没写 QA 的那个瞬间。用来制造「这里之后归属变了」
+            # 与「这里之后被撤销/到期」两类并发 —— 不用 sleep 赌时序。
+            if after_completion is not None:
+                after_completion(_runtime_state)
 
         # 派发发生在 `chat_execution`（共享操作）里，所以打的是**那里**的名字。
         monkeypatch.setattr(
@@ -992,3 +999,152 @@ def test_conversation_turn_keeps_the_status_qa_link(tmp_path, monkeypatch):
         assert row is not None, "conversation turn row is missing"
         assert row[0] == qa_id, f"status_qa_id not persisted: {row[0]!r}"
         assert row[1], "answer was not stored"
+
+
+# ---------------------------------------------------------------- 续办：三个运行缺陷
+
+
+def test_revocation_during_config_read_never_delivers_the_body(tmp_path, monkeypatch):
+    """复核必修 1：配置读完之后必须**重读** run。
+
+    `final_release` 原先先 `get` 拿到 `succeeded`，再去读绑定/配置，然后就用那份早先的
+    对象做判定并返回。配置读取期间发生的撤销被完全漏掉 —— 复核实测 GET 仍 200 + 正文，
+    而库里已经是 `revoked`。这里的撤销发生在**完全相同的窗口**里（配置读取内部）。
+    """
+    with node_chat(tmp_path, monkeypatch) as f:
+        qa_id = ask(f["client"]).json()["qa_id"]
+        assert wait_terminal(f["client"], qa_id)["status"] == "completed"
+
+        store = AgentRunStore(f["settings"].database_file)
+        run = store.by_qa(qa_id)
+        assert run is not None
+
+        real_callback_config = chat_execution.callback_config
+        seen: list[str] = []
+
+        def callback_config_then_revoke(store_, run_id_, settings_):
+            config = real_callback_config(store_, run_id_, settings_)
+            if not seen:
+                seen.append(run_id_)
+                # 就在配置读完、判定之前把记录撤销：这是「读配置期间」这个窗口。
+                AgentRunStore(f["settings"].database_file).revoke(run_id_, "revoked_during_config")
+            return config
+
+        monkeypatch.setattr("aiops_diagnostics.chat_execution.callback_config", callback_config_then_revoke)
+        refused = f["client"].get(f"/v1/assistant/questions/{qa_id}", headers=HEADERS)
+        assert refused.status_code in {403, 404}, refused.text
+        assert "blocks" not in refused.text
+        assert AgentRunStore(f["settings"].database_file).peek(run.run_id).state == "revoked"
+
+
+def test_expiry_during_config_read_never_delivers_the_body(tmp_path, monkeypatch):
+    """同上，但到期发生在配置读取期间（另一种终态，另一条判据）。"""
+    with node_chat(tmp_path, monkeypatch) as f:
+        qa_id = ask(f["client"]).json()["qa_id"]
+        assert wait_terminal(f["client"], qa_id)["status"] == "completed"
+
+        store = AgentRunStore(f["settings"].database_file)
+        run = store.by_qa(qa_id)
+        assert run is not None
+
+        import sqlite3
+        from datetime import UTC, datetime, timedelta
+
+        real_callback_config = chat_execution.callback_config
+        seen: list[str] = []
+
+        def callback_config_then_expire(store_, run_id_, settings_):
+            config = real_callback_config(store_, run_id_, settings_)
+            if not seen:
+                seen.append(run_id_)
+                past = (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
+                with sqlite3.connect(f["settings"].database_file) as conn:
+                    conn.execute("UPDATE agent_runs SET expires_at = ? WHERE run_id = ?", (past, run_id_))
+            return config
+
+        monkeypatch.setattr("aiops_diagnostics.chat_execution.callback_config", callback_config_then_expire)
+        refused = f["client"].get(f"/v1/assistant/questions/{qa_id}", headers=HEADERS)
+        assert refused.status_code in {403, 404}, refused.text
+        assert "blocks" not in refused.text
+
+
+def test_credential_rotation_with_an_inactive_sibling_entry_still_delivers(tmp_path, monkeypatch):
+    """复核必修 2：同一 `node_id` 允许多条登记（旧 token 停用、新 token 生效）。
+
+    原实现 `next(...)` 取**第一条**同 node_id 的登记；合法轮换时旧项在前且 `active: false`，
+    于是生效中的新凭据被忽略 —— 复核实测 GET 403，且一条成功 run 被改写成 `failed`。
+    记录多于一条是轮换的正常形态，不是要禁止的配置。
+    """
+    with node_chat(tmp_path, monkeypatch) as f:
+        qa_id = ask(f["client"]).json()["qa_id"]
+        assert wait_terminal(f["client"], qa_id)["status"] == "completed"
+
+        entry = json.loads(f["bindings"].read_text())["bindings"][0]
+        config_path = Path(entry["config_file"])
+        raw = json.loads(config_path.read_text())
+        active = raw["nodes"][0]
+        # 旧凭据**排在前面**且已停用；生效中的那条留在后面。
+        raw["nodes"] = [
+            {
+                "node_id": active["node_id"],
+                "environment": active["environment"],
+                "token_sha256": hashlib.sha256(b"rotated-out-token").hexdigest(),
+                "active": False,
+            },
+            active,
+        ]
+        config_path.write_text(json.dumps(raw))
+        config_path.chmod(0o600)
+
+        response = f["client"].get(f"/v1/assistant/questions/{qa_id}", headers=HEADERS)
+        assert response.status_code == 200, response.text
+        assert "blocks" in response.json()["result"]
+        # 成功记录**不能**因为一次合法轮换被改写成失败。
+        assert AgentRunStore(f["settings"].database_file).by_qa(qa_id).state == "succeeded"
+
+
+def test_worker_reauthorizes_the_order_before_writing_the_answer(tmp_path, monkeypatch):
+    """复核必修 3：worker 在写结果之前要再判一次本人订单归属。
+
+    复核实测：节点结束后把订单改属他人，worker 仍写 `completed` 并存下会话答案，
+    授权计数在节点结束时与写完之后相同（它根本没问过）。GET 后来拒绝不能算 worker 做对了 ——
+    那已经是一条虚假完成。
+    """
+    transferred: list[str] = []
+
+    def revoke_ownership(state: dict) -> None:
+        # 节点已经交回结果、worker 还没写 QA 的瞬间：订单转归他人。
+        state["orders"].ownership[ORDER_A] = "USER-ELSEWHERE"
+        transferred.append(ORDER_A)
+
+    with node_chat(tmp_path, monkeypatch, after_completion=revoke_ownership) as f:
+        qa_id = ask(f["client"]).json()["qa_id"]
+        final = wait_terminal(f["client"], qa_id)
+
+        assert transferred == [ORDER_A], "the hook never ran — the race window was not created"
+        assert final["status"] == "failed", final
+        assert final.get("result") in (None, {})
+
+        import sqlite3
+
+        with sqlite3.connect(f["settings"].database_file) as conn:
+            answer = conn.execute(
+                "SELECT answer_json FROM conversation_turns WHERE status_qa_id = ?", (qa_id,)
+            ).fetchone()
+        assert answer is None or not answer[0], "the worker wrote a conversation answer it must not have"
+
+
+def test_worker_treats_authorization_outage_as_a_failure(tmp_path, monkeypatch):
+    """授权源不可用同样不能写 `completed`：判不出来 ≠ 可以交付。"""
+    outages: list[str] = []
+
+    def outage(state: dict) -> None:
+        state["orders"].unavailable = True
+        outages.append(ORDER_A)
+
+    with node_chat(tmp_path, monkeypatch, after_completion=outage) as f:
+        qa_id = ask(f["client"]).json()["qa_id"]
+        final = wait_terminal(f["client"], qa_id)
+        assert outages == [ORDER_A]
+        assert final["status"] == "failed", final
+        assert final.get("result") in (None, {})

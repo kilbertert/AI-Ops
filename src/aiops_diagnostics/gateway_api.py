@@ -1018,6 +1018,12 @@ def create_gateway_app(
         if diagnostic_settings is not None
         else DisabledOrderAuthorizer()
     )
+    # 聊天 worker 在写结果之前要用**同一个**授权器再判一次本人归属（APP-RUNTIME-01 续办
+    # 必修 3）。注入而不是反向 import：`gateway_api` 已经 import 运行时，反向会成环。
+    # 不支持注入的替身（测试里那些）就不设 —— worker 因此 fail closed 落 failed，
+    # 而不是拿"没授权过"当"可以交付"。
+    if hasattr(selected_runtime, "set_order_authorizer"):
+        selected_runtime.set_order_authorizer(selected_authorizer)
     if platform_resolver is not None:
         selected_platform_resolver = platform_resolver
     else:

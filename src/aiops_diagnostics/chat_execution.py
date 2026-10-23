@@ -387,9 +387,14 @@ def final_release(
     * 快照自洽：五字段齐全、状态码与角色相符、观察时间落在领取与完成之间。
 
     失败时把记录钉成 ``failed``（``refuse``）：这一笔授权不会再被交出去。
+
+    读取顺序是**三次**，不是两次（Codex 复核必修 1）：``get`` → 读绑定/配置 → **再 ``get``**。
+    少了最后一次，配置读取期间发生的撤销/到期会被漏掉 —— 复核实测 GET 仍 ``200`` + 正文，
+    而库里已经是 ``revoked`` / ``expired``。``get`` 本身就是读事务并且顺手收敛过期，
+    所以这里不加锁、不加分布式协议，只是**不要把早先读到的那一份当最终依据**。
     """
-    latest = store.get(run_id)  # 这次读取顺带把过期收敛成 expired
-    if latest is None or latest.state != SUCCEEDED:
+    seen = store.get(run_id)  # 第一次：确认它曾经是 succeeded（否则连读配置都不必）
+    if seen is None or seen.state != SUCCEEDED:
         raise ChatRunUnavailable("AGENT_RUN_NO_RESULT", "agent run produced no result", http_status=404)
     try:
         config = callback_config(store, run_id, settings)
@@ -400,6 +405,11 @@ def final_release(
     if config is None:
         store.refuse(run_id, "binding_unavailable")
         raise ChatRunUnavailable("AGENT_RUN_CONFIG_UNAVAILABLE", "agent run unavailable", retryable=True)
+    # 第二次：配置读完之后重读。这是唯一被允许据以放行的对象；上面那份只用来决定
+    # "值不值得继续读配置"。撤销/到期/别人钉的终态都在这里变成拒绝。
+    latest = store.get(run_id)
+    if latest is None or latest.state != SUCCEEDED:
+        raise ChatRunUnavailable("AGENT_RUN_NO_RESULT", "agent run produced no result", http_status=404)
     _refuse_unless_consistent(store, latest, settings, caller, config)
     _refuse_unless_snapshot_valid(store, latest)
     return latest
@@ -412,8 +422,13 @@ def _refuse_unless_consistent(
     caller: ScopeContext,
     config: AgentRunConfig,
 ) -> None:
-    node = next(
-        (item for item in config.node_token_hashes.values() if item.node_id == run.actual_node_id), None
+    # 凭据**轮换**是合法的：同一个 ``node_id`` 可以有多条登记（旧 token 停用、新 token 生效）。
+    # 所以"这个节点此刻有效"必须问「**存在**一条 active、同环境、同实际节点的登记吗」，
+    # 而不是"取第一条看看"。取第一条会让一次正常轮换把成功结果判成失败
+    # （Codex 复核必修 2 实测：GET 403，且 succeeded 被改成 failed）。
+    node_valid = any(
+        item.node_id == run.actual_node_id and item.active and item.environment == run.environment
+        for item in config.node_token_hashes.values()
     )
     if (
         run.scope_fingerprint != caller.scope_fingerprint
@@ -422,10 +437,10 @@ def _refuse_unless_consistent(
         or config.snail_app_id != run.app_id
         or str(config.snail_agent_id) != run.agent_id
         or config.expected_node_id != run.expected_node_id
+        # 归属是独立的一条：上面的 node_valid 只回答"这台节点此刻有效"，
+        # 不回答"这条结果确实是它交回来的"。
         or run.actual_node_id != run.expected_node_id
-        or node is None
-        or not node.active
-        or node.environment != run.environment
+        or not node_valid
         or (run.expected_agent_version is not None and not run.exec_config_confirmed)
     ):
         store.refuse(run.run_id, "consumer_release_mismatch")
