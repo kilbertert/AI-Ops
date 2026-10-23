@@ -310,6 +310,7 @@ flowchart TB
 | `agent_validator.py` | `AgentResultValidator`：输出侧合同校验 |
 | `agent_runner.py` | CLI 与 Gateway 共用的入口：`run_agent_diagnosis` / `run_zero_order_answer` / `classify_lightweight` |
 | `qa_rag.py` | 客服 QA 的 RAG 运行：在 Codex harness 里跑已发布智能体 + `knowledge_search`，产出 blocks-v1 合同 |
+| `consumer_order_chat.py` | 本人订单状态查询的保守措辞匹配与 blocks 回答；范围、CPMS 读取及证据放行由 Gateway 统一处理，不调用模型 |
 | `turn_recovery.py` | 传输层模型轮次的宽容解析：围栏 / 最外层 `{}` / **首部丢失修复**（providers 的 SSE 首个 delta 会被上游丢弃，2026-09-22 实测 5/6） |
 | `routing.py` | 路由判定（PRD #383）：把 Jev 的**类型化判定**翻成 `intent`/`risk`/`confidence`，六个 `intent` 字符串与旧模型逐字相同。取不到判定时**返回 None 而非失败**（路由只是优化），失败带错误码、可计数、日志可见（该组件曾静默失效过一次）|
 | `faq.py` | 平台隔离的固定问答目录与平台身份判定（`consumer` / `operator`） |

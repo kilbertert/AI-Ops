@@ -5257,7 +5257,7 @@ def _require_matching_exec_config(
 
 def _consumer_order_chat(context, caller, decision, payload, conversation, language, request):
     order_no = payload.order_no or _extract_order_no(payload.question)
-    _chat_read_identity(context, caller, request)
+    authenticated_chat_order_reader(context, caller, request)
     if order_no is None and not asks_latest_order(payload.question):
         return _clarification(
             context,
@@ -5361,7 +5361,7 @@ def _consumer_order_chat(context, caller, decision, payload, conversation, langu
         raise
 
 
-def _chat_read_identity(context, caller, request):
+def authenticated_chat_order_reader(context, caller, request):
     _require_consumer_self_order(caller, request.headers.get("X-Business-Entry"), "pending")
     reader = _authenticate_caller(
         context.caller_resolver,
@@ -5378,7 +5378,7 @@ def _chat_read_identity(context, caller, request):
 def _require_current_chat_order(context, caller, qa, request):
     internal = str(qa.get("internal_run_id") or "")
     if internal.startswith("consumer-order-chat:"):
-        _chat_read_identity(context, caller, request)
+        authenticated_chat_order_reader(context, caller, request)
         order_no = internal.removeprefix("consumer-order-chat:")
         _require_consumer_self_order(caller, "consumer", order_no)
         _require_visible_order(context, caller, order_no)
