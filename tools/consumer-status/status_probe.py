@@ -41,6 +41,57 @@ _OBSERVED_AT = re.compile(r"\d{4}-\d{2}-\d{2}T[\d:.]+\+00:00")
 _REFUSALS = ("can't look up", "cannot look up", "无法在对话中直接查询", "無法在對話中直接查詢")
 
 
+#: 状态语义的词表：回答里必须出现其中一个，否则「只有订单号+来源+时间」也算过。
+#: **不能用 `charging` 这种裸词** —— 它会命中来源标记 `cpms.chargingInfo`，
+#: 于是"没有状态"的回答也能过（本仓自己踩过：判据的空转就是这么来的）。
+#: 要匹配充电中，用带上下文的形式 `status … charging` 或中文「充电中」。
+_STATUS_WORDS = (
+    "finished",
+    "stopped",
+    "unknown",
+    "status code",
+    "status_role",
+    "状态码",
+    "狀態碼",
+    "结束",
+    "充電中",
+    "充电中",
+    "停止",
+    "未知",
+)
+
+
+def _qa_id_of(events: list[dict]) -> str | None:
+    for event in events:
+        if event["method"] == "POST" and event["path"] == POST_PATH:
+            return (event.get("body") or {}).get("qa_id")
+    return None
+
+
+def answer_from_events(events: list[dict], qa_id: str | None) -> str:
+    """**只**取「路径与响应体都属于本次 qa_id」的那条 GET 的 blocks。
+
+    重复轮询同一个 QA 时，**最后一条**匹配的即可 —— 不把前几轮的 blocks 拼起来，
+    否则同一段答案会出现多次，`answer == region` 之类的判据会误判失败。
+    """
+    if not qa_id:
+        return ""
+    chosen = None
+    for event in events:
+        if event["method"] != "GET":
+            continue
+        match = _QA_PATH.match(event["path"])
+        if not match or match.group(1) != qa_id:
+            continue
+        if (event.get("body") or {}).get("qa_id") != qa_id:
+            continue
+        chosen = event
+    if chosen is None:
+        return ""
+    blocks = ((chosen.get("body") or {}).get("result") or {}).get("blocks") or []
+    return "\n".join(str(b.get("text") or "") for b in blocks if isinstance(b, dict))
+
+
 def judge(
     *,
     events: list[dict],
@@ -49,27 +100,28 @@ def judge(
     order_no: str,
     label: str,
     assistant_region_text: str,
+    region_in_user_bubble: bool = False,
 ) -> dict[str, bool]:
-    """纯判据：给定抓到的网络事件与两段文本，返回逐条布尔。
-
-    抽成纯函数是为了能被合成反例直接驱动 —— 真实的 H5 页面不适合近距离
-    反复重放，但这些判据的形状必须逐条钉住。
-    """
+    """纯判据：给定抓到的网络事件与两段文本，返回逐条布尔。"""
     posts = [e for e in events if e["method"] == "POST" and e["path"] == POST_PATH]
     post = posts[-1] if posts else None
     body = (post or {}).get("body") or {}
     qa_id = body.get("qa_id")
 
-    # 只认**本次 POST 的 qa_id**：匹配不到就是没证据，不回退到别的 GET。
+    # 本次 qa_id 的 GET：**路径与响应体都要对上**，否则读到别人的结果也算过。
     final = None
     if qa_id:
         for event in events:
             if event["method"] != "GET":
                 continue
             match = _QA_PATH.match(event["path"])
-            if match and match.group(1) == qa_id:
-                final = event
+            if not match or match.group(1) != qa_id:
+                continue
+            if (event.get("body") or {}).get("qa_id") != qa_id:
+                continue  # 路径对、body 是另一条 —— 不接受
+            final = event
     final_body = (final or {}).get("body") or {}
+    final_status = str(final_body.get("status") or "")
     blocks = ((final_body.get("result") or {}).get("blocks")) or []
     block_text = "\n".join(str(b.get("text") or "") for b in blocks if isinstance(b, dict))
 
@@ -78,6 +130,8 @@ def judge(
 
     return {
         "exactly_one_post": len(posts) == 1,
+        # 没有请求体就等于不知道这次问的什么 —— 不能通过。
+        "request_captured": isinstance(req_body, dict) and bool(question),
         "request_has_no_order_no": (
             not (isinstance(req_body, dict) and req_body.get("order_no"))
             if label == "latest"
@@ -88,6 +142,8 @@ def judge(
         "post_completed": body.get("status") == "completed",
         "get_matches_own_qa_id": final is not None,
         "get_200_json": (final or {}).get("http") == 200 and not (final or {}).get("not_json"),
+        # 响应体的完成状态也要对：`failed` 但带旧 blocks 不是成功。
+        "get_completed": final_status == "completed",
         "no_store": "no-store" in str((final or {}).get("cache_control") or ""),
         "all_v1_json": all(
             str(e.get("content_type") or "").startswith("application/json")
@@ -96,15 +152,32 @@ def judge(
         ),
         # ---- 回答必须来自回答块与助手区域，不是整页、更不是用户提问 ----
         "answer_has_order": order_no in block_text if order_no else False,
+        "answer_has_status": any(w in block_text.lower() for w in _STATUS_WORDS),
         "answer_has_source": "cpms.chargingInfo" in block_text,
         "answer_has_observed_at": bool(_OBSERVED_AT.search(block_text)),
-        "assistant_region_has_answer": bool(assistant_region_text.strip())
-        and (order_no in assistant_region_text if order_no else False)
-        and "cpms.chargingInfo" in assistant_region_text,
+        "assistant_region_has_answer": _region_has_answer(assistant_region_text, order_no),
         "not_model_refusal": not any(r in block_text.lower() for r in _REFUSALS),
         "answer_matches_qa_blocks": bool(answer_text.strip())
         and answer_text.strip() in (assistant_region_text or ""),
+        # 区域落在用户气泡里 ⇒ 取到的是提问，不是回答。
+        "region_is_not_user_bubble": not region_in_user_bubble,
     }
+
+
+def _region_has_answer(region: str, order_no: str) -> bool:
+    """助手区域必须同时展示：订单号、状态、来源、观察时间。
+
+    「只有订单号+来源+时间」不算 —— 那正是判据要拦的不完整回答。
+    """
+    if not region.strip():
+        return False
+    lowered = region.lower()
+    return (
+        (order_no in region if order_no else False)
+        and any(w in lowered for w in _STATUS_WORDS)
+        and "cpms.chargingInfo" in region
+        and bool(_OBSERVED_AT.search(region))
+    )
 
 
 def _wait_port(port: int, *, timeout: float = 10.0) -> bool:
@@ -134,15 +207,41 @@ def _port_owned_by(port: int, pid: int) -> bool:
     return f"pid={pid}" in out
 
 
-def _host_alias(target: str) -> str:
-    """从 `dev-host show` 取 ssh 别名 —— 主机身份的唯一来源，不在这里另写一份。"""
-    out = subprocess.run(["dev-host", "show", target], capture_output=True, text=True, timeout=10)
-    if out.returncode != 0:
-        raise SystemExit(f"dev-host show {target} 失败：{out.stderr.strip()[:200]}")
-    for line in out.stdout.splitlines():
-        if line.startswith("ssh alias"):
-            return line.split(None, 2)[-1].strip()
-    raise SystemExit(f"dev-host show {target} 没有给出 ssh alias")
+def _tunnel_target(target: str) -> dict[str, str]:
+    """取隧道目标，并**让 dev-host 先做一次主机身份校验**。
+
+    `dev-host` 没有隧道子命令，但 `dev-host exec` 会校验主机身份（记录里的
+    指纹/角色/访问方式）。所以顺序是：先用 `dev-host exec` 确认这台机器就是
+    记录里那台（跑一个只读的 `hostname`），再拿它给出的 ssh 别名开隧道。
+    这样"目标是谁"和"能不能连"都由 dev-host 判定，脚本不自己造 ssh 参数。
+    """
+    show = subprocess.run(["dev-host", "show", target], capture_output=True, text=True, timeout=15)
+    if show.returncode != 0:
+        raise RuntimeError(f"dev-host show {target} 失败：{show.stderr.strip()[:200]}")
+    fields: dict[str, str] = {}
+    for line in show.stdout.splitlines():
+        parts = line.split(None, 2)
+        if len(parts) >= 2:
+            fields[" ".join(parts[:-1]).strip()] = parts[-1].strip()
+    alias = ""
+    for key, value in fields.items():
+        if key.startswith("ssh alias"):
+            alias = value
+    if not alias:
+        raise RuntimeError(f"dev-host show {target} 没有给出 ssh alias")
+
+    # 身份校验：dev-host exec 自己会拒绝指纹不符/未登记的主机。
+    probe = subprocess.run(
+        ["dev-host", "exec", target, "--allow-service-exec", "--timeout", "20", "--", "hostname"],
+        capture_output=True,
+        text=True,
+        timeout=40,
+    )
+    if probe.returncode != 0:
+        raise RuntimeError(
+            f"dev-host exec {target} 拒绝或失败（退出码 {probe.returncode}）：{probe.stderr.strip()[:200]}"
+        )
+    return {"alias": alias, "hostname": probe.stdout.strip()}
 
 
 def main() -> int:
@@ -182,10 +281,11 @@ def main() -> int:
     )
 
     try:
-        alias = _host_alias(args.dev_host_target)
-    except SystemExit as exc:
-        print(str(exc), file=sys.stderr)
+        tunnel_target = _tunnel_target(args.dev_host_target)
+    except (RuntimeError, subprocess.SubprocessError) as exc:
+        print(f"主机身份校验失败：{exc}", file=sys.stderr)
         return EXIT_UNVERIFIED
+    alias = tunnel_target["alias"]
 
     # 启动前先确认端口没人用；起来后确认**是这条 ssh 在听**。
     if _wait_port(port, timeout=0.2):
@@ -204,7 +304,7 @@ def main() -> int:
         if not _port_owned_by(port, tunnel.pid):
             print(f"端口 {port} 不是本进程（{tunnel.pid}）在听，拒绝使用", file=sys.stderr)
             return EXIT_UNVERIFIED
-        events, payloads, page_text, region_text = _drive(
+        events, payloads, page_text, region_text, region_in_user_bubble = _drive(
             port=port,
             login=login,
             question=question,
@@ -218,12 +318,8 @@ def main() -> int:
         except subprocess.TimeoutExpired:
             tunnel.kill()
 
-    answer_text = "\n".join(
-        str(b.get("text") or "")
-        for e in events
-        for b in ((((e.get("body") or {}).get("result") or {}).get("blocks")) or [])
-        if isinstance(b, dict) and e["method"] == "GET"
-    )
+    # 答案只来自**本次 qa_id 的那一条** GET（不拼接其他 GET）。
+    answer_text = answer_from_events(events, _qa_id_of(events))
     checks = judge(
         events=events,
         payloads=payloads,
@@ -231,6 +327,7 @@ def main() -> int:
         order_no=args.order_no,
         label=args.label,
         assistant_region_text=region_text,
+        region_in_user_bubble=region_in_user_bubble,
     )
 
     out = {
@@ -252,13 +349,26 @@ def main() -> int:
     return EXIT_PASS if out["all_pass"] else EXIT_FAIL
 
 
-#: 助手回答区域的选择器。回答块与用户提问在 DOM 里是不同容器；
-#: 优先用列表节点里的**最后一条非用户消息**，取不到就整段视为缺失（不退回整页）。
+#: 助手回答区域的选择器 —— **对着现役产物核过**，不是猜的。
+#:
+#: 依据：41 上 `static/js/aiPackage-pages-chat-chat.<hash>.js`（当前
+#: `d86b6f8a`）的渲染分支：
+#:
+#:     "user" === e.role
+#:        ? <view class="user-bubble"><text class="bubble-text">{e.shown}</text></view>
+#:        : <view class="ai-row"><view class="ai-msg">
+#:              <text class="bubble-text">{e.shown}</text> …
+#:
+#: 即：**用户消息在 `.user-bubble`，助手消息在 `.ai-msg`**，两者不重叠。
+#: 上一版写的 `.msg-list .msg-item` / `.chat-list .chat-item` 在这份产物里
+#: **一个都不存在** —— 选择器命不中时整段视为缺失（不退回整页），所以不会
+#: 误报通过，但也从来没真正命中过。
 ASSISTANT_SELECTORS = (
-    ".msg-list .msg-item:not(.self) .content",
-    ".chat-list .chat-item:not(.user) .content",
-    ".message-list .message:not(.user) .content",
+    ".ai-msg .bubble-text",
+    ".ai-msg",
 )
+#: 用户消息容器。区域若落在它里面，说明取到的是提问而不是回答 —— 直接判失败。
+USER_MESSAGE_SELECTORS = (".user-bubble",)
 
 
 def _drive(*, port: int, login: dict, question: str, timeout: float):
@@ -335,18 +445,34 @@ def _drive(*, port: int, login: dict, question: str, timeout: float):
                 break
             page.wait_for_timeout(500)
 
+        # 助手区域：等到它真的渲染出内容，而不是网络一完成就取。
         region_text = ""
-        for selector in ASSISTANT_SELECTORS:
-            node = page.locator(selector).last
+        region_in_user_bubble = False
+        region_deadline = time.monotonic() + 10
+        while time.monotonic() < region_deadline:
+            for selector in ASSISTANT_SELECTORS:
+                node = page.locator(selector).last
+                try:
+                    if node.count() and node.inner_text(timeout=800).strip():
+                        region_text = node.inner_text(timeout=1500)
+                        break
+                except Exception:  # noqa: BLE001
+                    continue
+            if region_text:
+                break
+            page.wait_for_timeout(300)
+
+        # 命中的节点若在 `.user-bubble` 里面，说明取到的是用户提问 —— 判失败。
+        for user_selector in USER_MESSAGE_SELECTORS:
             try:
-                if node.count() and node.inner_text(timeout=1000).strip():
-                    region_text = node.inner_text(timeout=2000)
-                    break
+                if page.locator(user_selector).filter(has_text=region_text).count() and region_text:
+                    region_in_user_bubble = True
             except Exception:  # noqa: BLE001
                 continue
-        page_text = page.locator("body").inner_text()
+
+        page_text = page.locator("body").inner_text()  # 仅供私有摘录，不参与判据
         browser.close()
-    return events, payloads, page_text, region_text
+    return events, payloads, page_text, region_text, region_in_user_bubble
 
 
 if __name__ == "__main__":

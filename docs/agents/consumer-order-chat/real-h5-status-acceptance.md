@@ -160,3 +160,59 @@ SQL/CPMS 独立对照与私有快照，那些证据是本片重新取的。工�
 
 常驻开放的决策材料见
 [permanent-enable-decision.md](permanent-enable-decision.md)。
+
+## 十二、工具返修（第二轮，#1004 之后的复核）
+
+上一轮的工具有**判据对但没被执行**的缺陷：Codex 把「无本人订单」分支和
+「CPMS 异常」分支**分别改成 `EXIT_PASS`**，27 条测试照样全绿 —— 它们只读常量和
+自造变量，没驱动实际分支。
+
+### 修了什么
+
+| 项 | 上一轮 | 这一轮 |
+|---|---|---|
+| 测试驱动 | 只测抽出的纯函数与常量 | **调用真实 `main(...)`**，身份/SQL/CPMS 用隔离替身，断言退出码、报告结论、**业务调用次数** |
+| 排序判据 | `(created_time, order_no)` | `(created_time, **id**)`，与生产 `ORDER BY created_time DESC, id DESC` 一致 |
+| 空/单行/缺 id | 判"通过" | `unverified`，退出码 2 |
+| 指定单不在第一页 | 判"不属于本人" | 按号 `get_orders` 核对归属 |
+| 固定预期 vs 一致性 | 混在一起 | `comparison.state` 明确是 `not_compared` 还是 `compared` |
+| GET 匹配 | 只看路径 | 路径**与响应体 qa_id** 都要对上 |
+| 完成态 | 只看 POST | 另加 `get_completed`（`failed` 带旧 blocks 不算成功） |
+| 回答完整性 | 有订单号+来源+时间 | 另加**状态**判据 |
+| 请求体 | 缺失也通过 | `request_captured` 必须为真 |
+| 助手区域 | 猜的 `.msg-list .msg-item` | 按现役产物改成 `.ai-msg`，并判 `region_is_not_user_bubble` |
+
+### 变异复验（Codex 复现的三个）
+
+| 变异 | 结果 |
+|---|---|
+| 无本人订单 → `EXIT_PASS` | `test_no_owned_order_is_unverified_and_does_not_pass` **转红** |
+| CPMS 异常 → `EXIT_PASS` | `test_cpms_failure_is_unverified_not_pass` **转红** |
+| 两者同时 | 两条**同时转红** |
+
+还原后 29 全绿。上一轮这三处"同时变异仍全绿"。
+
+### 一个被自己的测试抓住的真缺陷
+
+状态词表原本含裸词 `charging`，它命中了来源标记 `cpms.chargingInfo` —— 于是
+"只有订单号+来源+时间、没有状态"的回答也能过。改成 `status code` / `状态码` /
+「充电中」等带上下文的形式。**判据词表里的裸词会空转，这又一次是本仓自己的坑。**
+
+### 浏览器验证范围
+
+选择器用**与现役产物同构的合成 DOM**在本地回放（API 全量 route 拦截，零生产提交）：
+
+- `.ai-msg .bubble-text` → 命中 1，含订单号
+- `.msg-list .msg-item`（旧猜测）→ **命中 0**
+- 用户 `.user-bubble` 不冒充回答
+
+**这不是**公司构建产物的真实运行，**不构成**新的真实业务验收。
+
+### 本片生产影响
+
+零：未开窗口、未提交真实状态问题、未调用模型、未新增查询作业、未改 `src/`/Nginx/生产配置。
+
+### 顺带清掉的一处自己的问题
+
+`h5-route-fix-evidence.md` 里我上一片写了测试账号明文，已改为"授权测试账号"。
+**注意：工作树里清掉不等于 Git 历史里没有** —— 历史未重写，本片不擅自改写。
