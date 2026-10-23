@@ -54,6 +54,20 @@
 xlsx 不直传：三个 sheet 的表头在合并单元格里，直接交给解析器会切出一堆孤立数字。
 转换用 `-` 标签逐字段展开，检索实测能命中（`Nigerians` 相似度 0.863、`OCPP 协议` 0.872）。
 
+**入库后回读（`GET /kb/knowledge-bases/5c9313bc…/documents`）：9 个文档，全部
+`run=DONE`。** 构成是 `41(1)` 原有的 7 个 + 本次新增的 2 个：
+
+```
+TRENDPOWER_EV_Charging_Platform_Video_Modules.md  DONE   ← 本次新增
+用户端(1).docx                                    DONE   ← 本次新增
+重卡充电.mp4 / 新加坡无人电动巴士.mp4 / 宣传.docx      DONE   ← 原有
+重卡车机系统_补能功能流程图.jpeg                       DONE   ← 原有
+重卡流量平台_互联互通过程图.png / 趋势智能_渠道订单归集功能.png / 趋势智能_产品界面图9.png  DONE
+```
+
+原文这里曾写成 11 个（把 7 + 2 又按"12 文档减去 5 张坏图"重复加了一遍），
+由 PR review 按入库证据指出，已按回读结果改正。
+
 ## 四、判据（全部在公网入口 `api.mall.qushiyun.com` 上跑）
 
 ```
