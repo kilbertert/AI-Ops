@@ -444,42 +444,41 @@ def test_real_tcp_post_then_poll_reaches_the_node(tmp_path, monkeypatch):
     import httpx
     import uvicorn
 
-    with node_chat(tmp_path, monkeypatch) as f:
-        with socket.socket() as listener:
-            listener.bind(("127.0.0.1", 0))
-            listener.listen()
-            port = listener.getsockname()[1]
-            server = uvicorn.Server(uvicorn.Config(f["app"], log_level="error"))
-            thread = threading.Thread(target=server.run, kwargs={"sockets": [listener]}, daemon=True)
-            thread.start()
-            try:
-                deadline = time.monotonic() + 5
-                while not server.started and time.monotonic() < deadline:
-                    time.sleep(0.02)
-                assert server.started, "uvicorn did not start"
+    with node_chat(tmp_path, monkeypatch) as f, socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen()
+        port = listener.getsockname()[1]
+        server = uvicorn.Server(uvicorn.Config(f["app"], log_level="error"))
+        thread = threading.Thread(target=server.run, kwargs={"sockets": [listener]}, daemon=True)
+        thread.start()
+        try:
+            deadline = time.monotonic() + 5
+            while not server.started and time.monotonic() < deadline:
+                time.sleep(0.02)
+            assert server.started, "uvicorn did not start"
 
-                with httpx.Client(base_url=f"http://127.0.0.1:{port}", timeout=10.0) as client:
-                    started = time.monotonic()
-                    response = client.post(
-                        "/v1/assistant/questions", headers=HEADERS, json={"question": LATEST}
-                    )
-                    elapsed = time.monotonic() - started
-                    assert response.status_code == 202, response.text
-                    assert elapsed < 2.0, f"POST waited for the node ({elapsed:.2f}s)"
-                    qa_id = response.json()["qa_id"]
+            with httpx.Client(base_url=f"http://127.0.0.1:{port}", timeout=10.0) as client:
+                started = time.monotonic()
+                response = client.post(
+                    "/v1/assistant/questions", headers=HEADERS, json={"question": LATEST}
+                )
+                elapsed = time.monotonic() - started
+                assert response.status_code == 202, response.text
+                assert elapsed < 2.0, f"POST waited for the node ({elapsed:.2f}s)"
+                qa_id = response.json()["qa_id"]
 
-                    final: dict = {}
-                    deadline = time.monotonic() + 10
-                    while time.monotonic() < deadline:
-                        got = client.get(f"/v1/assistant/questions/{qa_id}", headers=HEADERS)
-                        assert got.status_code == 200, got.text
-                        final = got.json()
-                        if final.get("status") in {"completed", "failed", "cancelled"}:
-                            break
-                        time.sleep(0.05)
-                    assert final.get("status") == "completed", final
-                    assert ORDER_A in final["result"]["blocks"][0]["text"]
-            finally:
-                server.should_exit = True
-                thread.join(timeout=10)
-                assert not thread.is_alive()
+                final: dict = {}
+                deadline = time.monotonic() + 10
+                while time.monotonic() < deadline:
+                    got = client.get(f"/v1/assistant/questions/{qa_id}", headers=HEADERS)
+                    assert got.status_code == 200, got.text
+                    final = got.json()
+                    if final.get("status") in {"completed", "failed", "cancelled"}:
+                        break
+                    time.sleep(0.05)
+                assert final.get("status") == "completed", final
+                assert ORDER_A in final["result"]["blocks"][0]["text"]
+        finally:
+            server.should_exit = True
+            thread.join(timeout=10)
+            assert not thread.is_alive()
