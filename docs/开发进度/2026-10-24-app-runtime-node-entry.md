@@ -25,16 +25,19 @@
 
 ### 2. 配置
 
-新增两个键，**默认空 = 关闭**：
+新增一键，**默认空 = 关闭**：
 
 ```dotenv
-AIOPS_GATEWAY_CHAT_EXECUTION_CONFIG_FILE=
-AIOPS_GATEWAY_CHAT_EXECUTION_MANIFEST_FILE=
+AIOPS_GATEWAY_CHAT_EXECUTION_BINDINGS_FILE=
 ```
 
-不复用 `AIOPS_GATEWAY_AGENT_RUN_*`：委派入口与聊天入口是两条独立的启用路径，
-共用一个键会让「只开委派」顺带把聊天也接到节点。半配（只配清单、或缺少个人查询地址/
-逻辑执行环境）是**启动失败**，不是静默降级。
+指向一张 0600 的登记表（`schema=aiops-chat-execution/1`），每条绑定钉住
+（环境，租户，consumer 入口，本场景）与它自己的执行配置/清单。不复用
+`AIOPS_GATEWAY_AGENT_RUN_*`：委派入口与聊天入口是两条独立的启用路径。
+
+> **续办修订（2026-10-24）**：原实现只有 `..._CONFIG_FILE` / `..._MANIFEST_FILE` 两个全局键，
+> 复核证明那样等于「任何能通过本人授权的租户都派到同一个节点」。改为按租户登记后，
+> 未登记租户走原直读、一次派发都不发生（`test_unregistered_tenant_keeps_...`）。
 
 ## 当前分支 / 提交
 

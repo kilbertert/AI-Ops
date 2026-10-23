@@ -11,26 +11,32 @@
 
 本模块把两件事接起来，同时**不复制第二套逻辑**：
 
-* `resolve_binding` / `issue_run` / `dispatch_run` / `settled_run` 是**从既有委派入口抽出来
-  的共享操作**。两个入口都调它，授权、TTL、执行配置守卫、完成判据只有一份实现。
+* `select_binding` / `issue_for_store` / `dispatch_run` / `settled_run` / `final_release`
+  是**从既有委派入口抽出来的共享操作**。两个入口都调它，授权、TTL、执行配置守卫、
+  完成判据、最终放行只有一份实现。
 * 聊天入口只多做一件事：**先建 QA、立刻返回**，把「等节点」搬到既有 QA worker 里。
 
 ## 不变量（本模块存在的理由）
 
-1. **默认关闭**。没有绑定文件、或绑定里没有这一场景时，聊天入口走**原分支**，
-   行为与接线前逐字一致。
-2. **命中绑定后失败就是失败**。节点失败、超时、平台不可用、配置漂移、执行配置未被核对 ——
-   全部落到 QA 的 `failed` 终态。**不回落直读、不回落旧模型、不换别的节点。**
+1. **按租户显式绑定，默认关闭**。没有绑定文件、或调用者的租户没有登记在这一条
+   （环境/入口/场景）上时，聊天入口走**原分支**，行为与接线前逐字一致。
+   「全局配了一个文件」**不是**绑定：那等于任何能通过本人授权的租户都派到同一个节点。
+2. **命中绑定后失败就是失败**。节点失败、超时、平台不可用、配置漂移、执行配置未被核对、
+   清单缺失 —— 全部落到 QA 的 `failed` 终态。**不回落直读、不回落旧模型、不换别的节点。**
    回落到任何一条都在把「另一次读取」冒充成本次结果。
-3. **答案只来自同一条 run 的 succeeded 快照**。读取路径按 QA 反查 run（存储关联），
-   再复用既有的返回前放行判据；不另读 CPMS 去「补」一个快照。
+3. **答案只来自同一条 run 的 succeeded 快照**，并且必须过与委派入口**同一份**
+   `final_release`：同主体、同订单、同环境、同 app/节点、节点此刻仍有效、
+   执行配置核对一致、未过期、快照自洽。不另读 CPMS 去「补」一个快照。
 4. **过期、撤权、停用、取消都拒绝正文**。TTL 由 `agent_runs` 自己管，不因为轮询而延长；
-   取消先落终态并撤销已关联的 run。
+   取消先落终态并撤销已关联的 run。停用之后**无正文**的终态仍可按原协议读到 ——
+   用户至少要知道自己那条是取消成功还是失败。
 """
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -43,68 +49,225 @@ from aiops_diagnostics.agent_runs import (
     SnailDispatcher,
 )
 from aiops_diagnostics.gateway_config import GatewayServerSettings
+from aiops_diagnostics.order_status import KNOWN_STATUS_CODES, StatusRole, role_of
+from aiops_diagnostics.private_files import PrivatePathError, validate_private_file
 from aiops_diagnostics.scope_context import ScopeContext
 
 #: QA 的 ``internal_run_id`` 前缀。它**只是**给人看的标签；
 #: 「哪条 run 承载哪个 QA」由 `agent_runs.qa_id` 这一列决定，不从字符串反推。
 CHAT_RUN_PREFIX = "consumer-order-chat-node:"
 
+#: 绑定表的 schema。不匹配就拒绝整份文件，不做兼容读取。
+BINDINGS_SCHEMA = "aiops-chat-execution/1"
+
+#: 本片唯一实现的场景。别的取值在**加载时**拒绝，而不是静默当成本场景：
+#: 一份写错场景名的绑定若被当成本场景，就是「配了一个不生效的开关」。
+SCENARIO_OWN_ORDER_STATUS = "consumer_own_order_status"
+
+#: 唯一允许的入口。operator/代查不走这条路线（它们的授权判据完全不同）。
+ENTRY_CONSUMER = "consumer"
+
+#: 答案渲染支持的语言。回读一致性校验按这一组重算（见 `answer_matches_snapshot`）。
+ANSWER_LANGUAGES = ("zh", "zh-Hant", "en")
+
+#: 快照必须**恰好**是这五个字段：多一个字段意味着有人往里塞了别的来源。
+SNAPSHOT_FIELDS = frozenset({"order_no", "status_code", "status_role", "observed_at", "source"})
+
+#: 绑定文件的上限。它是运维手写的登记表，不是数据集。
+MAX_BINDINGS_BYTES = 262144
+
+
+class ChatBindingError(ValueError):
+    """绑定表缺失、不可读、权限不对或不自洽。调用方把它变成**启动失败**。"""
+
 
 class ChatRunUnavailable(RuntimeError):
-    """本场景不能走节点。``code`` 是回给调用方的稳定错误码。
+    """本场景不能走节点，或节点的结果此刻不能交付。
 
+    ``code`` 是回给调用方的稳定错误码，``http_status`` 是它在 HTTP 面的形状。
     与 `AgentRunDispatchError` 的区别：后者是「平台那一跳失败」，这个是「这一条请求
-    不该/不能交给节点」。两者在聊天入口都**落到失败终态**，不回落。
+    不该/不能交给节点」或「这条结果不能再交出去」。两者在聊天入口都**落到失败终态**，
+    不回落。
     """
 
-    def __init__(self, code: str, message: str, *, retryable: bool = False) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        http_status: int = 503,
+        retryable: bool = False,
+    ) -> None:
         super().__init__(message)
         self.code = code
+        self.http_status = http_status
         self.retryable = retryable
 
 
 @dataclass(frozen=True, slots=True)
 class ChatBinding:
-    """可信服务端的绑定：这个场景允许走节点，且用的是哪个配置/清单。
+    """一条可信服务端登记：这个（环境，租户，入口，场景）交给这个节点跑。
 
-    只由服务端配置决定。客户端、模型、请求体都不能影响其中任何一项。
+    只由服务端配置决定。客户端、模型、请求体都不能影响其中任何一项 ——
+    它们连「有没有这条绑定」都看不见。
     """
 
+    environment: str
+    tenant_id: str
+    entry: str
+    scenario: str
     config_file: str
     manifest_file: str
 
     @property
-    def enabled(self) -> bool:
-        return bool(self.config_file)
+    def key(self) -> str:
+        """写进 run 记录的那把钥匙。回读与回调都按它找回**签发时那一条**绑定。"""
+        return f"{self.scenario}:{self.environment}:{self.tenant_id}"
 
 
-def resolve_binding(settings: GatewayServerSettings) -> ChatBinding:
-    """读出本场景的绑定。**未配置就是未启用**，不猜、不从别的开关推导。"""
-    return ChatBinding(
-        config_file=str(getattr(settings, "chat_execution_config_file", "") or ""),
-        manifest_file=str(getattr(settings, "chat_execution_manifest_file", "") or ""),
-    )
+# --------------------------------------------------------------------------
+# 绑定表：按租户登记，启动时整表校验
+# --------------------------------------------------------------------------
+
+
+def load_bindings(path: str | Path | None) -> tuple[ChatBinding, ...]:
+    """读整张绑定表并**逐条**校验。任何一条不合格 ⇒ 整份拒绝（不降级、不跳过）。"""
+    if not path:
+        return ()
+    declared = Path(str(path)).expanduser().absolute()
+    try:
+        validate_private_file(declared)
+        if declared.stat().st_size > MAX_BINDINGS_BYTES:
+            raise ChatBindingError("chat execution bindings are too large")
+        raw = json.loads(declared.read_text(encoding="utf-8"))
+    except (OSError, ValueError, PrivatePathError) as exc:
+        raise ChatBindingError("chat execution bindings are unavailable") from exc
+    if not isinstance(raw, dict) or raw.get("schema") != BINDINGS_SCHEMA:
+        raise ChatBindingError("unsupported chat execution bindings schema")
+    rows = raw.get("bindings")
+    if not isinstance(rows, list) or not rows:
+        raise ChatBindingError("chat execution bindings declare no entries")
+    bindings: list[ChatBinding] = []
+    seen: set[str] = set()
+    for row in rows:
+        binding = _parse_binding(row)
+        if binding.key in seen:
+            raise ChatBindingError("duplicate chat execution binding")
+        seen.add(binding.key)
+        _validate_binding_files(binding)
+        bindings.append(binding)
+    return tuple(bindings)
+
+
+def _parse_binding(row: object) -> ChatBinding:
+    if not isinstance(row, dict):
+        raise ChatBindingError("chat execution binding is not an object")
+    values: dict[str, str] = {}
+    for field in ("environment", "tenant_id", "entry", "scenario", "config_file", "manifest_file"):
+        value = row.get(field)
+        if not isinstance(value, str) or not value.strip():
+            raise ChatBindingError(f"chat execution binding {field} is missing")
+        values[field] = value.strip()
+    if row.get("active") is False:
+        # 停用一条绑定就是把它从这里拿掉；留一条 active:false 会让人以为它还在生效。
+        raise ChatBindingError("inactive chat execution bindings must be removed")
+    if values["entry"] != ENTRY_CONSUMER:
+        raise ChatBindingError("chat execution binding entry must be consumer")
+    if values["scenario"] != SCENARIO_OWN_ORDER_STATUS:
+        raise ChatBindingError("unsupported chat execution binding scenario")
+    return ChatBinding(**values)  # type: ignore[arg-type]
+
+
+def _validate_binding_files(binding: ChatBinding) -> None:
+    """这条绑定**此刻**是否真的可执行：两个文件都要能读，且指向同一个环境。
+
+    启动时校验一次，运行时每次选中再读一次 —— 撤销就是改这个文件，下一次请求立刻生效。
+    """
+    from aiops_diagnostics import execution_manifest
+
+    try:
+        config = AgentRunConfig.load(Path(binding.config_file))
+    except AgentRunConfigError as exc:
+        raise ChatBindingError("chat execution binding config is unusable") from exc
+    if config.environment != binding.environment:
+        raise ChatBindingError("chat execution binding config environment differs")
+    try:
+        manifest = execution_manifest.load(binding.manifest_file)
+    except execution_manifest.ExecutionManifestError as exc:
+        raise ChatBindingError("chat execution binding manifest is unusable") from exc
+    # 聊天路线**必须**有清单：没有清单的 run 走旧协议（领取即 succeeded），
+    # 于是「节点只领了业务、整轮没跑完」会被记成成功。这正是复核必修 2。
+    if manifest is None:
+        raise ChatBindingError("chat execution binding requires an execution manifest")
+
+
+def _bindings(settings: GatewayServerSettings) -> tuple[ChatBinding, ...]:
+    raw = str(getattr(settings, "chat_execution_bindings_file", "") or "")
+    if not raw:
+        return ()
+    return load_bindings(raw)
+
+
+def select_binding(settings: GatewayServerSettings, caller: ScopeContext) -> ChatBinding | None:
+    """这一条请求该用哪条绑定。**没有登记就是没有绑定**，不猜、不从别的开关推导。
+
+    绑定表读不出来是**拒绝**而不是"当作没配"：后者会让一条本该走节点的请求悄悄
+    回落到直读 —— 用户拿到的仍是答案，只是它不是这次派发的结果。
+    """
+    environment = str(getattr(settings, "execution_environment", "") or "")
+    tenant_id = caller.effective_tenant_id
+    try:
+        bindings = _bindings(settings)
+    except ChatBindingError as exc:
+        raise ChatRunUnavailable("EXEC_CONFIG_UNAVAILABLE", "agent run unavailable", retryable=True) from exc
+    for binding in bindings:
+        if (
+            binding.environment == environment
+            and binding.tenant_id == tenant_id
+            and binding.entry == ENTRY_CONSUMER
+            and binding.scenario == SCENARIO_OWN_ORDER_STATUS
+        ):
+            return binding
+    return None
+
+
+def binding_for_key(settings: GatewayServerSettings, key: str | None) -> ChatBinding | None:
+    """按 run 上冻结的那把钥匙找回**签发时**那一条绑定。
+
+    找不到 ⇒ ``None``：那条 run 的绑定已经被拿掉（停用），结果不能再交付。
+    这不是「回落到当前配置」—— 回落等于用另一份配置给旧结果背书。
+    """
+    if not key:
+        return None
+    try:
+        bindings = _bindings(settings)
+    except ChatBindingError as exc:
+        raise ChatRunUnavailable("EXEC_CONFIG_UNAVAILABLE", "agent run unavailable", retryable=True) from exc
+    for binding in bindings:
+        if binding.key == key:
+            return binding
+    return None
 
 
 def callback_config(store: Any, run_id: str, settings: GatewayServerSettings) -> AgentRunConfig | None:
     """这条 run 的回调（领取/完成）该用**哪份配置**。
 
-    APP-RUNTIME-01 的 Codex P1：回调端点原来只认 ``agent_run_config_file``（委派入口的键），
-    于是「只开聊天绑定」时节点永远领不到 —— 它被 `AGENT_RUN_DISABLED` 拒掉；
-    而如果两份配置指向不同的 app/节点，它还会拿**别人的绑定**去认证。
+    判据落在**这条 run 自己**身上，而不是「哪个键非空」：
 
-    判据必须落在**这条 run 自己**身上，而不是「哪个键非空」：
-
-    * run 的 ``qa_id`` 非空 ⇒ 它是聊天入口签发的 ⇒ 用聊天绑定；
+    * run 上冻着绑定钥匙 ⇒ 它是聊天入口签发的 ⇒ 用**那条**绑定；
     * 否则用委派绑定。
 
     返回 ``None`` 表示「这条 run 对应的绑定当前没配置」—— 调用方按不可用处理，
     **不**悄悄换另一份配置去认证。
     """
     record = store.peek(run_id)
-    from_chat = record is not None and getattr(record, "qa_id", None)
-    binding = resolve_binding(settings) if from_chat else _delegation_binding(settings)
-    if not binding.enabled:
+    if record is None:
+        return None
+    if getattr(record, "qa_id", None):
+        binding = binding_for_key(settings, getattr(record, "chat_binding", None))
+    else:
+        binding = _delegation_binding(settings)
+    if binding is None:
         return None
     try:
         return AgentRunConfig.load(Path(binding.config_file))
@@ -114,41 +277,57 @@ def callback_config(store: Any, run_id: str, settings: GatewayServerSettings) ->
 
 def _delegation_binding(settings: GatewayServerSettings) -> ChatBinding:
     return ChatBinding(
+        environment=str(getattr(settings, "execution_environment", "") or ""),
+        tenant_id="",
+        entry=ENTRY_CONSUMER,
+        scenario=SCENARIO_OWN_ORDER_STATUS,
         config_file=str(getattr(settings, "agent_run_config_file", "") or ""),
         manifest_file=str(getattr(settings, "execution_manifest_file", "") or ""),
     )
+
+
+# --------------------------------------------------------------------------
+# 签发与派发（两个入口共用）
+# --------------------------------------------------------------------------
 
 
 def issue_for_store(
     *,
     store: Any,
     settings: GatewayServerSettings,
+    binding: ChatBinding,
     caller: ScopeContext,
     order_no: str,
     gateway_version: str,
 ) -> tuple[AgentRun, AgentRunConfig]:
-    """签发 + 返回本次使用的配置（派发需要它）。"""
+    """签发一条**绑定在案**的 run，并返回本次使用的配置（派发需要它）。"""
     from aiops_diagnostics import execution_manifest
 
-    binding = resolve_binding(settings)
+    if binding.environment != str(getattr(settings, "execution_environment", "") or ""):
+        raise ChatRunUnavailable("AGENT_RUN_ENVIRONMENT_MISMATCH", "agent run unavailable", retryable=True)
     try:
         config = AgentRunConfig.load(Path(binding.config_file))
     except AgentRunConfigError as exc:
         raise ChatRunUnavailable(
             "AGENT_RUN_CONFIG_UNAVAILABLE", "agent run unavailable", retryable=True
         ) from exc
-    if config.environment != settings.execution_environment:
+    if config.environment != binding.environment:
         raise ChatRunUnavailable("AGENT_RUN_ENVIRONMENT_MISMATCH", "agent run unavailable", retryable=True)
     try:
         manifest = execution_manifest.load(binding.manifest_file)
     except execution_manifest.ExecutionManifestError as exc:
         raise ChatRunUnavailable("EXEC_CONFIG_UNAVAILABLE", "agent run unavailable", retryable=True) from exc
+    if manifest is None:
+        # 签发时也做非空防御：`AgentRunStore.complete` 对没有期望身份的记录会按旧协议
+        # 直接转 succeeded，「节点只领了业务」于是变成成功。聊天路线不接受这份旧语义。
+        raise ChatRunUnavailable("EXEC_CONFIG_UNAVAILABLE", "agent run unavailable", retryable=True)
     run = store.issue(
         scope=caller,
         order_no=order_no,
         config=config,
         gateway_version=gateway_version,
-        expected_agent_version=(manifest.identity if manifest is not None else None),
+        expected_agent_version=manifest.identity,
+        chat_binding=binding.key,
     )
     return run, config
 
@@ -178,6 +357,117 @@ def settled_run(*, store: Any, run_id: str) -> AgentRun:
     return settled
 
 
+# --------------------------------------------------------------------------
+# 最终放行：**一份**判据，三个调用方
+# --------------------------------------------------------------------------
+
+
+def final_release(
+    *,
+    store: Any,
+    settings: GatewayServerSettings,
+    caller: ScopeContext,
+    run_id: str,
+) -> AgentRun:
+    """交出去之前的最后一道判定。委派入口、聊天 worker、聊天回读**共用这一份**。
+
+    顺序是刻意的（R2-1）：**先**完成可能阻塞的外部授权，**再**读记录做本地判定 ——
+    所以这里不碰授权，只做本地判定，调用方必须已经授权完（并在这之后调用）。
+
+    绑定在这一刻**重新解析**（`callback_config` 按 run 上冻着的钥匙找回签发时那一条）：
+    节点被停用、配置被换掉、绑定被拿掉，都在这里变成拒绝，而不是拿签发时那一份
+    内存里的对象继续背书。
+
+    判据（一条都不能少，少一条就是给某种失效开了后门）：
+
+    * 记录仍是 ``succeeded``、未过期、且属于**这个**调用者；
+    * 记录里的执行位置与**此刻**的配置逐项相等（环境/app/agent/预期节点）；
+    * 实际领取的节点就是预期节点，且此刻**仍然有效**；
+    * 清单期望的身份**已核对一致**（``matched``），不是"签发时说好了要一致"；
+    * 快照自洽：五字段齐全、状态码与角色相符、观察时间落在领取与完成之间。
+
+    失败时把记录钉成 ``failed``（``refuse``）：这一笔授权不会再被交出去。
+    """
+    latest = store.get(run_id)  # 这次读取顺带把过期收敛成 expired
+    if latest is None or latest.state != SUCCEEDED:
+        raise ChatRunUnavailable("AGENT_RUN_NO_RESULT", "agent run produced no result", http_status=404)
+    try:
+        config = callback_config(store, run_id, settings)
+    except ChatBindingError as exc:
+        raise ChatRunUnavailable(
+            "AGENT_RUN_CONFIG_UNAVAILABLE", "agent run unavailable", retryable=True
+        ) from exc
+    if config is None:
+        store.refuse(run_id, "binding_unavailable")
+        raise ChatRunUnavailable("AGENT_RUN_CONFIG_UNAVAILABLE", "agent run unavailable", retryable=True)
+    _refuse_unless_consistent(store, latest, settings, caller, config)
+    _refuse_unless_snapshot_valid(store, latest)
+    return latest
+
+
+def _refuse_unless_consistent(
+    store: Any,
+    run: AgentRun,
+    settings: GatewayServerSettings,
+    caller: ScopeContext,
+    config: AgentRunConfig,
+) -> None:
+    node = next(
+        (item for item in config.node_token_hashes.values() if item.node_id == run.actual_node_id), None
+    )
+    if (
+        run.scope_fingerprint != caller.scope_fingerprint
+        or run.environment != settings.execution_environment
+        or config.environment != run.environment
+        or config.snail_app_id != run.app_id
+        or str(config.snail_agent_id) != run.agent_id
+        or config.expected_node_id != run.expected_node_id
+        or run.actual_node_id != run.expected_node_id
+        or node is None
+        or not node.active
+        or node.environment != run.environment
+        or (run.expected_agent_version is not None and not run.exec_config_confirmed)
+    ):
+        store.refuse(run.run_id, "consumer_release_mismatch")
+        raise ChatRunUnavailable("AGENT_RUN_NOT_ACTIVE", "agent run refused", http_status=403)
+
+
+def _refuse_unless_snapshot_valid(store: Any, run: AgentRun) -> None:
+    snapshot = run.snapshot
+    try:
+        if not isinstance(snapshot, dict) or set(snapshot) != SNAPSHOT_FIELDS:
+            raise ValueError("invalid snapshot fields")
+        code = snapshot["status_code"]
+        if isinstance(code, bool) or not isinstance(code, (str, int)) or len(str(code)) > 32:
+            raise ValueError("invalid status code")
+        expected_role = (
+            role_of(code).value
+            if str(code) in {str(value) for value in KNOWN_STATUS_CODES}
+            else StatusRole.UNKNOWN.value
+        )
+        observed = datetime.fromisoformat(snapshot["observed_at"])
+        if (
+            snapshot["order_no"] != run.order_no
+            or snapshot["status_role"] != expected_role
+            or snapshot["source"] != "cpms.chargingInfo"
+            or observed.utcoffset() != timedelta(0)
+            or run.claimed_at is None
+            or run.completed_at is None
+            or not run.claimed_at <= observed <= run.completed_at
+        ):
+            raise ValueError("inconsistent snapshot")
+    except (ValueError, TypeError, KeyError) as exc:
+        store.refuse(run.run_id, "snapshot_invalid")
+        raise ChatRunUnavailable(
+            "AGENT_RUN_NO_RESULT", "agent run produced no result", http_status=502
+        ) from exc
+
+
+# --------------------------------------------------------------------------
+# 结果适配与回读一致性
+# --------------------------------------------------------------------------
+
+
 def answer_from_run(run: AgentRun, *, language: str) -> dict[str, Any]:
     """把该 run 的**成功快照**适配成原回答格式。不读第二个来源。
 
@@ -191,14 +481,33 @@ def answer_from_run(run: AgentRun, *, language: str) -> dict[str, Any]:
     return status_answer(run.snapshot, language)
 
 
+def answer_matches_snapshot(result: Any, snapshot: dict[str, Any]) -> bool:
+    """缓存下来的 QA 正文是不是**这条快照**的渲染。
+
+    回读时重算一次，不一致就拒绝：一份被改过（或被写错 run）的正文不能被当成
+    同一条 run 的结果交出去。语言按受支持的那几种都试一遍 —— 缓存正文的渲染语言
+    与本次请求头无关，用请求头去比对会把一次正常的换语言回读判成篡改。
+    """
+    from aiops_diagnostics.consumer_order_chat import status_answer
+
+    return any(result == status_answer(snapshot, language) for language in ANSWER_LANGUAGES)
+
+
 __all__ = [
+    "ANSWER_LANGUAGES",
+    "BINDINGS_SCHEMA",
     "CHAT_RUN_PREFIX",
     "ChatBinding",
+    "ChatBindingError",
     "ChatRunUnavailable",
-    "callback_config",
     "answer_from_run",
+    "answer_matches_snapshot",
+    "binding_for_key",
+    "callback_config",
     "dispatch_run",
+    "final_release",
     "issue_for_store",
-    "resolve_binding",
+    "load_bindings",
+    "select_binding",
     "settled_run",
 ]

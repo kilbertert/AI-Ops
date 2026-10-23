@@ -1466,6 +1466,7 @@ class GatewayRuntime:
         question: str,
         *,
         order_no: str,
+        binding: Any,
         language: str = DEFAULT_LANGUAGE,
         conversation: dict[str, Any] | None = None,
         conversation_turn_no: int | None = None,
@@ -1477,6 +1478,9 @@ class GatewayRuntime:
 
         顺序是刻意的：先建 QA（`queued`）并立刻返回（App 的 POST 不能等节点整轮），
         后台线程才去签发/派发/等结果；失败一律落 `failed`，**不回落直读**。
+
+        `binding` 由调用方（路由层）按**可信的**环境/租户/入口/场景选出并冻结进 run，
+        后台不再"再选一次"：重选就可能换到另一条，而用户看到的仍是同一个 qa_id。
 
         取消复用既有守卫：`cancel_assistant_qa` 把 QA 写成 `cancelled` 后，worker 的
         终态写会被 claim-guard 拒掉；这里额外在写之前确认自己没被取消。
@@ -1508,6 +1512,7 @@ class GatewayRuntime:
             language,
             registration,
             question,
+            binding,
         )
         self._futures[qa["qa_id"]] = future
         future.add_done_callback(lambda _: self._futures.pop(qa["qa_id"], None))
@@ -1522,10 +1527,15 @@ class GatewayRuntime:
         language: str,
         registration: JobRegistration,
         question: str,
+        binding: Any,
     ) -> None:
-        """后台：签发 → 绑定 QA↔run → 派发 → 等结果 → 写终态。
+        """后台：签发 → 绑定 QA↔run → 派发 → 等结果 → 放行 → 写终态。
 
         **任何**失败都落 `failed`；没有一条分支会去调直读、旧模型或别的节点。
+
+        交付前必须过 `chat_execution.final_release` —— 与委派入口、聊天回读共用同一份
+        判据。少了它，「节点交回了快照」就等于「可以交付」，而那两者之间还差着
+        撤销、过期、停用、执行配置是否真的核对过。
         """
         from aiops_diagnostics import chat_execution
 
@@ -1542,6 +1552,7 @@ class GatewayRuntime:
             run, config = chat_execution.issue_for_store(
                 store=store,
                 settings=self.gateway_settings,
+                binding=binding,
                 caller=context,
                 order_no=order_no,
                 gateway_version=package_version(),
@@ -1552,8 +1563,14 @@ class GatewayRuntime:
                 store.revoke(run.run_id, "cancelled_before_dispatch")
                 return
             chat_execution.dispatch_run(store=store, config=config, run=run)
-            settled = chat_execution.settled_run(store=store, run_id=run.run_id)
-            answer = chat_execution.answer_from_run(settled, language=language)
+            chat_execution.settled_run(store=store, run_id=run.run_id)
+            released = chat_execution.final_release(
+                store=store,
+                settings=self.gateway_settings,
+                caller=context,
+                run_id=run.run_id,
+            )
+            answer = chat_execution.answer_from_run(released, language=language)
         except chat_execution.ChatRunUnavailable as exc:
             if run_id is not None:
                 store.fail(run_id, exc.code.lower())

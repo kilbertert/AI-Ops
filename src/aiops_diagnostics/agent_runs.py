@@ -74,7 +74,11 @@ EXEC_CONFIG_MISMATCHED = "mismatched"
 
 #: 让「哪个 QA 由哪条 run 承载」是**存储关联**，不是从字符串反推。
 #: 旧行保持 NULL；没有这一列的库由下面的迁移补上。
-LINK_COLUMNS = ("qa_id",)
+#:
+#: ``chat_binding`` 是同一条纪律的另一半：一条 run 签发时用的**是哪一个**（环境，租户，
+#: 入口，场景）绑定，也冻在记录里。回调与回读都按它找回签发时那一条，而不是拿当前
+#: 第一条看起来像的配置。文本拼接没有出现在任何判据里 —— 它是键，不是解析对象。
+LINK_COLUMNS = ("qa_id", "chat_binding")
 
 
 def _migrate_qa_link_column(connection: sqlite3.Connection) -> None:
@@ -82,7 +86,7 @@ def _migrate_qa_link_column(connection: sqlite3.Connection) -> None:
     for column in LINK_COLUMNS:
         if column not in existing:
             connection.execute(f"ALTER TABLE agent_runs ADD COLUMN {column} TEXT")
-            connection.execute("CREATE INDEX IF NOT EXISTS idx_agent_runs_qa ON agent_runs(qa_id)")
+    connection.execute("CREATE INDEX IF NOT EXISTS idx_agent_runs_qa ON agent_runs(qa_id)")
 
 
 def _migrate_execution_config_columns(connection: sqlite3.Connection) -> None:
@@ -293,6 +297,9 @@ class AgentRun:
     completed_at: datetime | None
     #: 承载这条 run 的那条 QA；旧记录为 ``None``（迁移不回填）。
     qa_id: str | None = None
+    #: 聊天入口签发时选中的**那条**绑定的钥匙（``场景:环境:租户``）。委派入口签发的为
+    #: ``None``。回读与回调按它找回签发时的配置，不拿"当前第一个像的"顶替。
+    chat_binding: str | None = None
 
     @property
     def exec_config_confirmed(self) -> bool:
@@ -415,7 +422,8 @@ class AgentRunStore:
                     expires_at TEXT NOT NULL,
                     claimed_at TEXT,
                     completed_at TEXT,
-                    qa_id TEXT
+                    qa_id TEXT,
+                    chat_binding TEXT
                 );
                 CREATE INDEX IF NOT EXISTS idx_agent_runs_scope
                     ON agent_runs(scope_fingerprint, created_at DESC);
@@ -450,6 +458,7 @@ class AgentRunStore:
         config: AgentRunConfig,
         gateway_version: str,
         expected_agent_version: str | None = None,
+        chat_binding: str | None = None,
     ) -> AgentRun:
         # 32 字节随机；只作关联编号，不承载任何身份或范围。
         run_id = "run_" + secrets.token_urlsafe(32)
@@ -461,8 +470,8 @@ class AgentRunStore:
                     run_id, scope_fingerprint, scope_json, order_no, operation,
                     environment, app_id, agent_id, expected_node_id, state,
                     gateway_version, created_at, expires_at,
-                    expected_agent_version, exec_config_state
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    expected_agent_version, exec_config_state, chat_binding
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -480,6 +489,7 @@ class AgentRunStore:
                     (now + timedelta(seconds=RUN_TTL_SECONDS)).isoformat(),
                     expected_agent_version,
                     (None if expected_agent_version is None else EXEC_CONFIG_EXPECTED),
+                    chat_binding,
                 ),
             )
         run = self.get(run_id)
@@ -929,6 +939,7 @@ def _run_from_row(row: sqlite3.Row) -> AgentRun:
         completed_at=_ts(row["completed_at"]),
         # 迁移保证这一列一定存在（新库建表即含，旧库由 _migrate_qa_link_column 补）。
         qa_id=row["qa_id"],
+        chat_binding=row["chat_binding"],
     )
 
 

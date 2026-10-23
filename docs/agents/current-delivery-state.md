@@ -831,9 +831,16 @@ fixture、数据库检查或模型单次调用写成真实业务验收。
 > 并沿用原 blocks 形状。未命中绑定走原直读，一字未改。**App 无字段/接口/域名变更，公司仓零改动。**
 > 授权、TTL、执行配置守卫与最终放行从既有委派入口抽出共用；QA↔run 用 `agent_runs.qa_id`
 > **存储关联**（幂等迁移，旧行 NULL）。失败不回落直读/旧模型/别的节点；取消先落终态并撤销关联 run。
-> 新增两键 `AIOPS_GATEWAY_CHAT_EXECUTION_{CONFIG,MANIFEST}_FILE`，**默认空 = 关闭**，半配启动即拒。
+> 新增一键 `AIOPS_GATEWAY_CHAT_EXECUTION_BINDINGS_FILE`（**按租户登记**的绑定表，默认空 = 关闭；
+> 每条登记的 config/manifest 必须读得动且 environment 与登记一致，否则启动即拒）。
 > 验证：既有 **98 passed** 未减；新增 **12** 条（含真 uvicorn/TCP）；全量 **3713 passed / 9 skipped / 0 failed**；
 > 两处反向验证分别转红 **4** 条与 **1** 条。过程中修掉一个真缺陷：worker 与读取守卫的
 > 前缀字面量不一致（会让回读悄悄走错分支），已改为共用常量。
-> **未完成**：真实 Java 节点整链、真实平台/供应商、登录 App 验收、SOP 发布绑定（留待 M3）。
-> 生产未启用。详见[验收记录](../validation/2026-10-24-app-runtime-node-entry.md)。
+> **续办（2026-10-24）**：独立复核用五个反例证明原实现未达要求，本片逐条修复：
+> 绑定改为**按租户登记**（未登记即原直读）、聊天路线**必须有执行清单**、
+> 最终放行抽成**一份**由委派入口/worker/回读共用（原实现漏了四项）、停用后**只**拒绝正文。
+> **真 Java 节点整链已跑通**（`tools/m2_close/m3node/verify_chat_node_entry.py`，18/18）：
+> POST 202 早于节点完成 → 真节点自己领取与完成 → 同 run 快照 → 原 GET 拿到 blocks。
+> **未完成**：真实外部平台/供应商、真实公司 UPMS 目录、登录 App 验收、SOP 发布绑定（留待 M3）。
+> 生产未启用。详见[原验收记录](../validation/2026-10-24-app-runtime-node-entry.md)与
+> [续办验收记录](../validation/2026-10-24-app-runtime-node-completion.md)。
