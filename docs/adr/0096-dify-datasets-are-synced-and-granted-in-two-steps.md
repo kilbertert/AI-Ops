@@ -82,9 +82,22 @@ AttributeError: 'NoneType' object has no attribute 'get'
 ``DATASET_DEFAULT`` 一致（top_k 4、阈值 0.8、默认关闭阈值）。这样"我们同步出来的"
 与"人点过 Settings 保存的"是同一个状态 —— UI 的表单每次也都会带这一块。
 
-**并且 ``plan()`` 会把它当成待修项**（``fix_retrieval_model``）：已存在、已可见、但
-``retrieval_model`` 为 null 的条目，重跑同步就修好。只判「在不在 + 权限对不对」的
-``plan()`` 会永远认为#1001 建出来的那批是健康的 —— 而它们每一条都检索不了。
+**并且 ``plan()`` 会把它当成待修项**（``fix_retrieval_model``）。只判「在不在 + 权限
+对不对」的 ``plan()`` 会永远认为#1001 建出来的那批是健康的 —— 而它们每一条都检索不了。
+
+**这个待修判据不能写成 ``not item.get("external_retrieval_model")``。** 第一版就是这么写的，
+在 41 上**一次都没触发**：列表接口回的 ``external_retrieval_model`` 是
+``dataset.external_retrieval_model`` 这个**属性**的投影，而那个属性是
+``self.retrieval_model or {"top_k": 2, "score_threshold": 0.0}`` —— 列是 SQL NULL 时它
+照样回一个"看起来正常"的对象。41 上真实看到的是：
+
+```
+{"top_k": 2, "score_threshold": 0.0, "score_threshold_enabled": null}
+```
+
+所以判据落在 ``score_threshold_enabled is None``：兜底字典里**没有**这个键，只有真被写过
+才会有值。这是"用响应里的兜底值伪造了一个健康状态"—— 一个判据看起来在工作、实际永不触发，
+比没写更糟，因为它会让人以为重跑同步就能修。
 
 ## 决策四：RAGFlow 里已删的库，**报告，不删**
 

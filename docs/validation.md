@@ -178,10 +178,34 @@ select count(*) filter (where retrieval_model is null), count(*) from datasets w
    前者证明 dataset 存在，后者证明检索被调用并返回了内容。日志里 `chat-messages` 请求
    成功、没有任何 4xx —— 因为 Dify 把那个 AttributeError 吞了。
 
-### 五、没验什么
+### 五、修复的修复：检测器第一版是**死代码**
 
-- 修复**尚未部署到 41**（本分支）。部署后必须重跑一次端到端并看到回答正文里出现
-  `宣传.docx` / 重卡充电桩的内容。
+#1007 合并且 CD 部署到 41 之后，我在 41 上跑 dry-run，期望看到两条 `fix_retrieval_model`：
+
+```
+"planned": [], "unchanged": [{"kind":"ok","name":"41(1)"}, {"kind":"ok","name":"41"}]
+```
+
+而数据库里那两行 `retrieval_model` **仍然是 NULL**。原因：
+
+列表接口回的 `external_retrieval_model` 是 `dataset.external_retrieval_model` 这个
+**属性**的投影，而该属性是 `self.retrieval_model or {"top_k": 2, "score_threshold": 0.0}`。
+列是 SQL NULL 时，列表**照样回一个看起来正常的对象**：
+
+```
+41    | all_team_members | {"top_k": 2, "score_threshold": 0.0, "score_threshold_enabled": null}
+```
+
+于是 `not item.get("external_retrieval_model")` **永远为假** —— 那条修复一次都不会触发。
+判据改到 `score_threshold_enabled is None`（兜底字典里没有这个键）。
+
+**这是本轮第三个同形的坑**：拿一个"有兜底值的接口"当证据。前两个是夹具把两个 id 空间混成
+一个、以及端到端判据匹配到回显的问题。共同点：**判据在错误的数据上求值，而它看起来在工作。**
+
+### 六、没验什么
+
+- 检测器修复**尚未部署到 41**；部署后必须重跑同步并确认那两条变成 PATCH 而不是 `ok`，
+  然后跑端到端、看到回答正文里出现该库内容。
 - editor 账号的 UI 可见性只做了 SQL 层判定（复刻 Dify 的 WHERE 子句），没真的用一个
   editor 身份登录点一遍 —— 没有第二个可登录账号。
 
