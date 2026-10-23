@@ -824,3 +824,16 @@ fixture、数据库检查或模型单次调用写成真实业务验收。
 > 没有东西会在出问题时关掉开关）。建议 ≤4 小时、人工值守、固定截止、到期必恢复。
 > 详见[证据收口](../validation/2026-10-23-observation-evidence-close.md)与
 > [变更单第十二节](consumer-order-chat/single-tenant-enable-change-ticket.md)。
+
+> **2026-10-24 · APP-RUNTIME-01：App 聊天接入客户执行节点（已接线，默认关闭）**：
+> 现有 `POST /v1/assistant/questions` 在命中**服务端绑定**时把本人状态查询交给客户节点：
+> POST 立即 202 + `qa_id`，后台派发，App 用原 GET 轮询，答案来自**同一 run** 的 succeeded 快照
+> 并沿用原 blocks 形状。未命中绑定走原直读，一字未改。**App 无字段/接口/域名变更，公司仓零改动。**
+> 授权、TTL、执行配置守卫与最终放行从既有委派入口抽出共用；QA↔run 用 `agent_runs.qa_id`
+> **存储关联**（幂等迁移，旧行 NULL）。失败不回落直读/旧模型/别的节点；取消先落终态并撤销关联 run。
+> 新增两键 `AIOPS_GATEWAY_CHAT_EXECUTION_{CONFIG,MANIFEST}_FILE`，**默认空 = 关闭**，半配启动即拒。
+> 验证：既有 **98 passed** 未减；新增 **12** 条（含真 uvicorn/TCP）；全量 **3713 passed / 9 skipped / 0 failed**；
+> 两处反向验证分别转红 **4** 条与 **1** 条。过程中修掉一个真缺陷：worker 与读取守卫的
+> 前缀字面量不一致（会让回读悄悄走错分支），已改为共用常量。
+> **未完成**：真实 Java 节点整链、真实平台/供应商、登录 App 验收、SOP 发布绑定（留待 M3）。
+> 生产未启用。详见[验收记录](../validation/2026-10-24-app-runtime-node-entry.md)。

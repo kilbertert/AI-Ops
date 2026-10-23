@@ -38,7 +38,13 @@ CLAIM_DEFINER = API_FILE
 RELEASING = "_release_conversation_turn"
 #: The runtime entry points that accept a claimed turn. A branch that claims a
 #: turn must pass it to exactly one of these, or release it.
-HANDOFFS = {"start_assistant_qa": "conversation_turn_no", "start_standard_diagnosis": "conversation_turn"}
+HANDOFFS = {
+    "start_assistant_qa": "conversation_turn_no",
+    "start_standard_diagnosis": "conversation_turn",
+    # APP-RUNTIME-01：聊天入口的节点路线也领取会话轮次，必须同样**交给 worker** ——
+    # 它是异步的（POST 立即返回），所以答案只能由后台写在终态。
+    "start_chat_order_qa": "conversation_turn_no",
+}
 
 
 def _called_name(func: ast.expr) -> str:

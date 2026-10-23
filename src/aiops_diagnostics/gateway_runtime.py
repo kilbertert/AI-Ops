@@ -13,6 +13,7 @@ from typing import Any
 
 from aiops_diagnostics.agent_contracts import IncidentManifest
 from aiops_diagnostics.agent_runner import classify_lightweight, run_agent_diagnosis, run_zero_order_answer
+from aiops_diagnostics.agent_runs import AgentRunStore
 from aiops_diagnostics.agent_workspace import AgentWorkspace
 from aiops_diagnostics.answer_language import (
     answer_chinese_leak,
@@ -79,6 +80,14 @@ from aiops_diagnostics.sources import SourceError, scoped_live_sources
 FIXTURE_NAMES = frozenset({"ocpp_consistent.json", "ykc_amount_mismatch.json", "missing_tx_data.json"})
 
 _LOGGER = logging.getLogger("aiops.gateway_runtime")
+
+
+def package_version() -> str:
+    """部署版本串。延迟导入：`__init__` 在部署时注入，模块级导入会把它冻住。"""
+    from aiops_diagnostics import __version__
+
+    return __version__
+
 
 #: A blocked run whose order turned out to be outside the caller's tenant. It is
 #: NOT ``DIAGNOSIS_BLOCKED``: that code means the supplier did not honor
@@ -216,6 +225,7 @@ class GatewayRuntime:
         kb_search_client: KnowledgeSearchClient | None = None,
         media_signer: MediaResourceSigner | None = None,
         agent_store: Any = None,
+        agent_run_store: Any = None,
         jev_client: JevDecisionClient | None = None,
         routing_thresholds: RoutingThresholds | None = None,
     ) -> None:
@@ -231,6 +241,9 @@ class GatewayRuntime:
         self.kb_search_client = kb_search_client
         self.media_signer = media_signer
         self.agent_store = agent_store
+        # APP-RUNTIME-01：聊天入口把「等节点」搬进后台，worker 需要同一份 run 存储。
+        # 缺省为 None ⇒ 聊天节点路线不可用（与未配置绑定等价，fail closed）。
+        self.agent_run_store = agent_run_store
         # Routing decisions from typed answers (#392). Absent configuration
         # leaves this None, and every question simply routes as it did before —
         # the dependency is optional by design, not by accident.
@@ -326,6 +339,7 @@ class GatewayRuntime:
             kb_search_client=kb_client,
             media_signer=media_signer,
             agent_store=AgentStore(store.path),
+            agent_run_store=AgentRunStore(store.path),
             jev_client=jev_client,
             routing_thresholds=RoutingThresholds(
                 risk_at_least=gateway_settings.routing_risk_at_least,
@@ -1446,6 +1460,122 @@ class GatewayRuntime:
         future.add_done_callback(lambda _: self._qa_registrations.pop(qa["qa_id"], None))
         return qa
 
+    def start_chat_order_qa(
+        self,
+        context: ScopeContext,
+        question: str,
+        *,
+        order_no: str,
+        language: str = DEFAULT_LANGUAGE,
+        conversation: dict[str, Any] | None = None,
+        conversation_turn_no: int | None = None,
+    ) -> dict[str, Any]:
+        """APP-RUNTIME-01：把「本人订单状态」交给客户节点，**立即返回**。
+
+        与 `start_assistant_qa` 的分工：那一支是零阶知识问答，会起模型循环；这一支
+        **不起第二个模型循环** —— 网关只派发 run 并等结果，答案来自节点交回的快照。
+
+        顺序是刻意的：先建 QA（`queued`）并立刻返回（App 的 POST 不能等节点整轮），
+        后台线程才去签发/派发/等结果；失败一律落 `failed`，**不回落直读**。
+
+        取消复用既有守卫：`cancel_assistant_qa` 把 QA 写成 `cancelled` 后，worker 的
+        终态写会被 claim-guard 拒掉；这里额外在写之前确认自己没被取消。
+        """
+        from aiops_diagnostics import chat_execution
+
+        qa = self.store.create_assistant_question(
+            context.scope_fingerprint,
+            question,
+            # **必须**用同一个常量：读取守卫按这个前缀认出「这条 QA 走的是节点路线」。
+            # 这里写一个近似的字面量，GET 就会退回到直读的判据上。
+            internal_run_id=chat_execution.CHAT_RUN_PREFIX + order_no,
+            tenant_id=context.effective_tenant_id,
+        )
+        registration = JobRegistration(
+            conversation_turn=(
+                (conversation["conversation_id"], conversation["scope_fingerprint"], conversation_turn_no)
+                if conversation is not None and conversation_turn_no is not None
+                else None
+            ),
+            route_type="qa",
+        )
+        self._qa_registrations[qa["qa_id"]] = registration
+        future = self._executor.submit(
+            self._execute_chat_order_qa,
+            qa["qa_id"],
+            order_no,
+            context,
+            language,
+            registration,
+            question,
+        )
+        self._futures[qa["qa_id"]] = future
+        future.add_done_callback(lambda _: self._futures.pop(qa["qa_id"], None))
+        future.add_done_callback(lambda _: self._qa_registrations.pop(qa["qa_id"], None))
+        return qa
+
+    def _execute_chat_order_qa(
+        self,
+        qa_id: str,
+        order_no: str,
+        context: ScopeContext,
+        language: str,
+        registration: JobRegistration,
+        question: str,
+    ) -> None:
+        """后台：签发 → 绑定 QA↔run → 派发 → 等结果 → 写终态。
+
+        **任何**失败都落 `failed`；没有一条分支会去调直读、旧模型或别的节点。
+        """
+        from aiops_diagnostics import chat_execution
+
+        store = self.agent_run_store
+        if store is None:
+            self.store.update_assistant_question(qa_id, status="failed", error_code="AGENT_RUN_DISABLED")
+            return
+        if registration.cancelled:
+            return
+        if not self.store.update_assistant_question(qa_id, status="running"):
+            return  # 已被取消或已终态：不再派发
+        run_id: str | None = None
+        try:
+            run, config = chat_execution.issue_for_store(
+                store=store,
+                settings=self.gateway_settings,
+                caller=context,
+                order_no=order_no,
+                gateway_version=package_version(),
+            )
+            run_id = run.run_id
+            store.bind_qa(run.run_id, qa_id)
+            if registration.cancelled:
+                store.revoke(run.run_id, "cancelled_before_dispatch")
+                return
+            chat_execution.dispatch_run(store=store, config=config, run=run)
+            settled = chat_execution.settled_run(store=store, run_id=run.run_id)
+            answer = chat_execution.answer_from_run(settled, language=language)
+        except chat_execution.ChatRunUnavailable as exc:
+            if run_id is not None:
+                store.fail(run_id, exc.code.lower())
+            _LOGGER.warning("chat node route rejected: %s: %s", exc.code, exc)
+            self.store.update_assistant_question(qa_id, status="failed", error_code=exc.code)
+            self._release_conversation_turn(registration.conversation_turn)
+            return
+        except Exception as exc:  # noqa: BLE001 — 未预期失败也必须是失败，不是"再试直读"
+            if run_id is not None:
+                store.fail(run_id, "unexpected_error")
+            self.store.update_assistant_question(qa_id, status="failed", error_code="QA_FAILED")
+            self._release_conversation_turn(registration.conversation_turn)
+            _LOGGER.warning("chat node route failed: %s: %s", type(exc).__name__, exc)
+            return
+        # 迟到结果不能覆盖取消：claim-guard 会拒绝这次写，这里只是不假装写成功。
+        if not self.store.update_assistant_question(qa_id, status="completed", result=answer):
+            return
+        with contextlib.suppress(Exception):
+            self._complete_conversation_turn(
+                registration.conversation_turn, question, answer, status_qa_id=qa_id
+            )
+
     def classify_lightweight(
         self,
         question: str,
@@ -1538,6 +1668,13 @@ class GatewayRuntime:
             return None
         if qa["status"] in ACTIVE_DIAGNOSIS_STATUSES:
             accepted = self.store.update_assistant_question(qa_id, status="cancelled")
+            # APP-RUNTIME-01：节点路线把等待放在后台，取消必须**同时**撤销已关联的 run，
+            # 否则节点会继续跑完并把结果交回来。撤销是幂等的。
+            if accepted and self.agent_run_store is not None:
+                linked = self.agent_run_store.by_qa(qa_id)
+                if linked is not None:
+                    with contextlib.suppress(Exception):
+                        self.agent_run_store.revoke(linked.run_id, "cancelled_by_caller")
             registration = self._qa_registrations.pop(qa_id, None)
             if registration is not None:
                 # Marked before anything else: a worker that has not started its
@@ -1725,8 +1862,14 @@ class GatewayRuntime:
         cancelled: bool = False,
         guarded: bool = False,
         stop_renewer: threading.Event | None = None,
+        status_qa_id: str | None = None,
     ) -> None:
         """Write a finished answer into the conversation turn (if any).
+
+        ``status_qa_id`` 是**个人订单状态**那条分支的关联。直读路线一直带着它，
+        节点路线起初漏了 —— 后果不是显示问题：会话详情按这个链接重新授权，
+        下一轮模型上下文也按它排除状态答案。少了它，清空绑定或撤权挡住了 QA 端点，
+        同一个答案仍能从会话详情读到，还会被当模型上下文复用。
 
         The ONE implementation of "a job finished, so its turn can be closed":
         both the qa/promo line and the diagnosis line call it, so the two can
@@ -1760,6 +1903,7 @@ class GatewayRuntime:
                 answer=answer,
                 token_count=_estimate_turn_tokens(question, answer),
                 cancelled=cancelled or answer is None,
+                status_qa_id=status_qa_id,
             )
 
     def list_evidence(self, run_id: str) -> list[dict[str, Any]]:

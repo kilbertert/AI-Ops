@@ -182,7 +182,7 @@ AI-Ops 用独立服务身份回查——见 [ADR-0003](docs/adr/0003-bff-delegat
 
 ```mermaid
 flowchart TB
-    L6["L6 服务边界与入口<br/>gateway_api · gateway_runtime · cli · gateway_server · gateway_cli<br/>gateway_client · admin_cli · gateway_config · gateway_tokens · gateway_logging<br/>request_observation · tdengine_proxy · responses_adapter · codex_launcher"]
+    L6["L6 服务边界与入口<br/>gateway_api · gateway_runtime · cli · gateway_server · gateway_cli<br/>gateway_client · admin_cli · gateway_config · gateway_tokens · gateway_logging<br/>request_observation · chat_execution · tdengine_proxy · responses_adapter · codex_launcher"]
     L5["L5 持久化<br/>gateway_store · conversation_store · metrics_store<br/>agent_lifecycle · shortcut_lifecycle · dify_app_registry · dify_workspaces"]
     L4["L4 推理与产品能力<br/>agent_engine · codex_runtime · agent_runner · agent_validator · qa_rag<br/>turn_recovery · routing · faq · promo_agents · answer_language · agent_manifest · agent_debug<br/>dify_dsl_pull · dify_tools_catalog · dify_trial · dify_login_proxy · dify_login_company · dify_login_provision · dify_login_service · dify_login_server · dify_knowledge_api · dify_debug_identity · dify_ensure_workspace · dify_inner_api · kb_onboarding · knowledge_sources · knowledge_triple · dify_knowledge_migration · dify_console_admin · dify_tenant_access · ragflow_console · dify_workspace_directory · agent_content · clarification"]
     L3["L3 证据与诊断内核<br/>sources · diagnostic_tools · engine · journal<br/>agent_workspace · health_report · knowledge_retrieval"]
@@ -371,6 +371,7 @@ flowchart TB
 | `gateway_cli.py` / `gateway_client.py` | `aiops remote …` 客户端子应用与它的 stdlib HTTP 客户端 |
 | `gateway_config.py` / `gateway_tokens.py` | Gateway 服务端设置与客户端 profile/令牌的磁盘持久化 |
 | `gateway_logging.py` | 网关自身日志的去处（#636）：**在这一模块之前，网关根本没配过 logging** —— uvicorn 只给 `uvicorn*` 挂 handler，root 停在 WARNING 且无 handler，于是 `aiops.*` 的 INFO 行一行都没出去过（41 实测 0 行），能出去的 WARNING 走 `lastResort`、形态是不带级别前缀的一行。本模块给 **root** 挂 handler、给我们的两个命名空间设级别（第三方不被带着一起变啰嗦），级别由 `AIOPS_GATEWAY_LOG_LEVEL` 定、写错是启动失败 |
+| `chat_execution.py` | **App 聊天 → 客户执行节点**的接线（APP-RUNTIME-01）：把「本人订单状态」交给节点跑，POST 立即返回 202 + `qa_id`，答案由同一条 run 的成功快照适配成原 blocks 形状。授权、TTL、执行配置守卫与最终放行**与委派入口共用同一份实现**；命中绑定后任何失败都落 QA `failed`，**不回落直读、旧模型或别的节点**。默认不启用。 |
 | `request_observation.py` | 个人状态查询的**请求级结果观察**：ASGI 中间件给每个请求生成服务端 `request_id`，每次**候选**请求写恰好一行 `assistant_question_result`（`stage`/`outcome`/`http_status`/`error_code`/`tenant_hash`/`qa_id`/`duration_ms`）。**是日志不是第二张指标表** —— `agent_run_metrics` 的保留期与形状是承重的，再开一张同义表会出现两个分母。身份未建立时不写，拒绝不伪造 QA。见 `docs/agents/consumer-order-chat/observability.md` |
 | `admin_cli.py` | `aiops admin …`：声明式环境清单收敛（`reconcile`）、快捷动作迁移 |
 | `tdengine_proxy.py` | `aiops-tdengine-proxy`：TDengine 前的严格只读 SQL 白名单代理 |
