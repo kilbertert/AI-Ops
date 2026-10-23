@@ -84,9 +84,40 @@ INVALID_REQUEST = "INVALID_REQUEST"
 _SAFE_CODE = re.compile(r"^[A-Z][A-Z0-9_]{0,63}$")
 _QA_ID = re.compile(r"^qa_[0-9a-f]{32}$")
 
-#: Which HTTP statuses count as a refusal rather than a failure. 4xx is "we said
-#: no"; 5xx and an escaped exception are "it went wrong".
-_REFUSAL_STATUSES = frozenset({400, 403, 404, 409, 422})
+
+#: Which HTTP statuses count as a refusal rather than a failure.
+#:
+#: The rule is **"4xx = we said no, 5xx = it went wrong"**, not a hand-picked
+#: list. The first version enumerated `{400, 403, 404, 409, 422}` and left out
+#: **401**, which is reachable on this very path: the first identity resolution
+#: (`aiops:diagnoses:write`) succeeds, then the re-authentication for
+#: `aiops:orders:read` inside `authenticated_chat_order_reader` gets an
+#: `INVALID_ACCESS_TOKEN` ⇒ the caller sees 401. Counted as a failure, a
+#: credential problem inflated the service's 5xx rate — the one number an
+#: operator watches for "the gateway is broken".
+#:
+#: Enumerating is what caused that, so the rule is now **any 4xx**, and the
+#: tests pin the boundary (401 and 429 included, 500 excluded) rather than the
+#: membership of a set that somebody has to remember to extend.
+def _is_refusal_status(http_status: int) -> bool:
+    return 400 <= http_status < 500
+
+
+def _outcome(http_status: int | None, error_code: str) -> str:
+    if error_code == UNHANDLED_EXCEPTION:
+        return OUTCOME_FAILED
+    if http_status is None:
+        # No response was produced at all; the exception escaped the app.
+        return OUTCOME_FAILED
+    if http_status >= 500:
+        return OUTCOME_FAILED
+    if _is_refusal_status(http_status):
+        return OUTCOME_REFUSED
+    if 200 <= http_status < 300:
+        return OUTCOME_COMPLETED
+    # Anything outside 2xx/4xx/5xx (e.g. 3xx) reached a candidate request, which
+    # this path never legally answers; treat as a failure so it cannot hide.
+    return OUTCOME_FAILED
 
 
 def new_request_id() -> str:
@@ -215,16 +246,6 @@ def observation_of(request: Any) -> Observation | None:
         return None
     current = (scope.get("state") or {}).get("assistant_question_observation")
     return current if isinstance(current, Observation) else None
-
-
-def _outcome(http_status: int | None, error_code: str) -> str:
-    if error_code == UNHANDLED_EXCEPTION or (http_status or 0) >= 500:
-        return OUTCOME_FAILED
-    if http_status is not None and http_status in _REFUSAL_STATUSES:
-        return OUTCOME_REFUSED
-    if http_status is not None and 200 <= http_status < 300:
-        return OUTCOME_COMPLETED
-    return OUTCOME_FAILED
 
 
 def format_line(record: Observation, *, http_status: int | None) -> str:

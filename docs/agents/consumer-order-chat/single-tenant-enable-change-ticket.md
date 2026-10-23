@@ -217,7 +217,7 @@ assert charging_endpoint(s.charging_status_base_url, "<target-tenant>", require_
 | 依赖段理论上限 | 4×3 s + 10 s ≈ 22 s（无重试）—— **只是依赖段之和**，不含身份解析与连接建立 | **不是**整请求硬上限；不要拿它当超时预算 |
 | 实测（旧口径，已作废） | ~~139 ms / 148 ms~~ —— 那是 `assistant_questions.created_at → completed_at`，即 **SQL 与 CPMS 之后**的一段 | 旧数字**不是整请求耗时**，本行保留仅为说明作废原因 |
 | **实测（新口径）** | 由 `assistant_question_result` 行的 `duration_ms` 给出，范围见[观察契约](observability.md)第三节 | 起点在进入请求时，覆盖身份解析、路由前授权闸、SQL、CPMS、证据落盘；不含 nginx 与网络 |
-| QA 截止 | 15 min（但本路径同步完成，从不排队） | 观察期出现 `queued`/`running` = 落回了模型路径 |
+| QA 截止 | 15 min（但本路径同步完成，从不排队） | 出现 `queued`/`running` 说明该请求**没走本路径**；但不能据此断定是哪条请求走了模型（见下方「关联能力」） |
 | 共享 CPMS 端点 | 目标租户与 OPS 运维工具**用同一个地址**（sha256 前 12 同为 `51cf3382c693`） | 状态查询与运维工具共享该上游的容量 |
 
 ### 5.5 证据存在哪、怎么留
@@ -296,9 +296,20 @@ ssh aiops-41 'tr "\0" "\n" < /proc/$(systemctl show -p MainPID --value aiops-gat
 | 5xx 占比 | `outcome=failed` 行 / 全部行 | > 5%，或连续 3 条 `outcome=failed` |
 | 有别的租户在用 | `error_code=TENANT_ENDPOINT_UNRESOLVED` 的行 | 出现即停 |
 | 本应成功的请求被拒 | `outcome=refused` 且 `error_code` ∈ {`INSUFFICIENT_SCOPE`, `CONSUMER_SCOPE_REQUIRED`} | 出现即停 |
-| 落回了模型路径 | 同一条 `qa_id` 在 `assistant_questions` 里是 `consumer-order-chat:`，却在同租户同秒出现 `routing` 指标或新建 `run-` 目录 | 出现即停 |
+| 落回了模型路径 | **只有拿到真实关联证据才能归因**：同一条 `qa_id` 既在 `assistant_questions` 里是 `consumer-order-chat:`，又在 `agent_run_metrics` 里有一条**带该 `qa_id` 关联**的 `routing`/`qa` 行（或 `runs/<该 run id>/` 目录与它一一对应） | 有证据出现即停；**关联不上写「待核实」**，不当作已发生 |
 | CPMS 异常 | `error_code=CHARGING_STATUS_UNAVAILABLE` 的行 | 连续 3 条，或占比 > 5% |
 | 单请求耗时 | `duration_ms` 的 p95 | > 5 s，**且样本 ≥ 20 条**；不足 20 条只看最大值，不下 p95 结论 |
+
+**关联能力（这一条决定了「落回模型」能不能判）**：
+
+`agent_run_metrics` 的行**没有 `qa_id`**，`gateway/runs/` 的目录名里也没有。所以
+「同租户同秒出现了 `routing` 行」**不能**证明是**这一条**状态查询调用了模型 ——
+共享网关上的普通问答本来就会在同一秒写 `routing` 行。按那个口径设停止条件，
+会把别人的正常问答当成本片的事故，进而误停用。
+
+- **有真实关联键**（某个 `qa_id` 同时出现在两侧）⇒ 可以归因，按上表停用；
+- **没有关联键** ⇒ 写「**待核实**」，并附上当时窗口内的候选行数与 `routing` 行数，
+  由人决定是否加查。**不新增全链路追踪**（那是另一片的范围）。
 
 **本片之后仍然不能判的**（不要写成"已具备"）：
 
@@ -391,13 +402,25 @@ SELECT qa_id,
 FROM assistant_questions
 WHERE internal_run_id LIKE 'consumer-order-chat:%' AND created_at >= :window_start;
 
--- ③ 对应请求是否发生模型/诊断调用：三条一起看，缺一条都不能下结论
---    (a) token_count 必须为 0
-SELECT count(*) FROM agent_run_metrics
-WHERE route_type='qa' AND created_at >= :window_start AND token_count > 0;
---    (b) 同租户在 [created_at-1s, completed_at+120s] 内有没有 routing 行
---    (c) gateway/runs 下有没有该时间段新建的 run- 目录
+-- ③ 对应请求是否发生模型/诊断调用
+--    先看这一次查询**自己的证据**：本路径是同步确定性读取，成功即零模型。
+--    `consumer-order-chat:` 的 QA 若带 tokens 或 run- 前缀，本身就说明出问题了：
+SELECT qa_id, internal_run_id
+FROM assistant_questions
+WHERE internal_run_id LIKE 'consumer-order-chat:%'
+  AND created_at >= :window_start
+  AND internal_run_id NOT LIKE 'consumer-order-chat:%';   -- 恒空，仅示范形状
 ```
+
+**不要**用「同租户同秒出现了 `routing` 指标 / 新建了 `run-` 目录」判定本片请求走了模型。
+`agent_run_metrics` 与 `runs/` 都**没有 `qa_id` 字段**，共享网关上的普通问答会在同一秒
+写出同样的行。那个口径会把别人的正常问答记成本片事故。
+
+| 手上有什么 | 怎么写 |
+|---|---|
+| 某个 `qa_id` 在 `assistant_questions` 与 `agent_run_metrics`/`runs` 两侧都能对上 | **可归因**：这确实走了模型，按停止条件处理 |
+| 只有同租户同秒的 `routing` 行，对不上任何 `qa_id` | 写「**待核实**」，附窗口内候选行数与 `routing` 行数；不当作已发生 |
+| 本路径的 QA 行带 `run-` 前缀或 `token_count > 0` | **可归因**（这是它自己的行），按停止条件处理 |
 
 **禁止**把"整台 Gateway 的 `runs` 新增为零"当通过条件：共享网关的其他请求
 （FAQ、Promo、诊断、operator 工具）本来就会正常调用模型。

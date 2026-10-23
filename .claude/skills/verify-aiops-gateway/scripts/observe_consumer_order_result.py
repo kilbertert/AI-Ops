@@ -50,6 +50,9 @@ CLIENT_ID = "verify-client"
 CLIENT_SECRET = "verify-secret-0123456789abcdef"
 TOKEN_OK = "verify-consumer-token"
 TOKEN_NO_READ = "verify-no-orders-read-token"
+# 首次解析（aiops:diagnoses:write）成功，分支内再次解析（aiops:orders:read）时凭据已失效。
+# 这是生产可达的形状，不是构造边界；401 必须算拒绝，不能算服务故障。
+TOKEN_EXPIRES_ON_RECHECK = "verify-expires-on-recheck-token"
 TENANT = "tenant-verify"
 ORDER = "2096164064667852801"
 STRANGER = "2096164064667852802"
@@ -59,7 +62,7 @@ RESULT_PREFIX = "assistant_question_result "
 
 #: Six scenarios produce a line; the concurrent four produce four more; the
 #: ordinary question and the unauthenticated request produce none.
-EXPECTED_LINES = 10
+EXPECTED_LINES = 11
 
 
 def repo_root() -> Path:
@@ -68,6 +71,9 @@ def repo_root() -> Path:
 
 class _Introspection(BaseHTTPRequestHandler):
     """OAuth2 introspection stub — the exact shape `IntrospectionCallerResolver` reads."""
+
+    seen: dict[str, int] = {}
+    lock = threading.Lock()
 
     def log_message(self, *_args: object) -> None:
         return
@@ -83,8 +89,17 @@ class _Introspection(BaseHTTPRequestHandler):
         scopes = ["aiops:diagnoses:write"]
         if token != TOKEN_NO_READ:
             scopes.append("aiops:orders:read")
+        # 那个"再次解析时失效"的令牌：第一次 POST 有效，之后的都无效。
+        # 计数放在**这个进程**里，而不是写在令牌字符串上，因为真实世界里变的是
+        # 会话状态，不是令牌字面量。
+        active = token in {TOKEN_OK, TOKEN_NO_READ}
+        if token == TOKEN_EXPIRES_ON_RECHECK:
+            with _Introspection.lock:
+                seen = _Introspection.seen.get(token, 0)
+                _Introspection.seen[token] = seen + 1
+            active = seen == 0
         payload = {
-            "active": token in {TOKEN_OK, TOKEN_NO_READ},
+            "active": active,
             "sub": "b-user-1",
             "c_user_id": "c-user-1",
             "tenant_id": TENANT,
@@ -409,6 +424,10 @@ def main() -> int:
         status, body = ask(token=TOKEN_NO_READ)
         check("missing orders:read is 403", status == 403, _brief(body))
 
+        # 首次解析成功、分支内再次解析时凭据失效 ⇒ 401。必须是拒绝，不能进 5xx 分母。
+        status, body = ask(token=TOKEN_EXPIRES_ON_RECHECK)
+        check("credential revoked on re-authentication is 401", status == 401, _brief(body))
+
         status, body = ask(question="普通问题：怎么绑定手机号")
         check("feature-on ordinary question still answers", status in {200, 202}, _brief(body))
 
@@ -482,8 +501,19 @@ def main() -> int:
     )
     check(
         "each refusal carries its own code",
-        {"INSUFFICIENT_SCOPE", "ORDER_NOT_FOUND"} <= {r["error_code"] for r in good},
+        {"INSUFFICIENT_SCOPE", "ORDER_NOT_FOUND", "INVALID_ACCESS_TOKEN"} <= {r["error_code"] for r in good},
         sorted({r["error_code"] for r in good}),
+    )
+    # 这条是本片修的缺陷：401 曾经被算成 failed，于是凭据问题会抬高服务 5xx 率。
+    check(
+        "a 401 is counted as refused, never as a 5xx failure",
+        all(r["outcome"] == "refused" for r in good if r["http_status"] == "401"),
+        [r["outcome"] for r in good if r["http_status"] == "401"],
+    )
+    check(
+        "every failed row is a real 5xx (no 4xx leaked into the failure denominator)",
+        all(int(r["http_status"]) >= 500 for r in good if r["outcome"] == "failed"),
+        {r["http_status"]: r["outcome"] for r in good if r["outcome"] == "failed"},
     )
     check(
         "request ids are unique across concurrent requests",

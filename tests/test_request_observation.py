@@ -98,10 +98,12 @@ def provision(tmp_path, monkeypatch):
         status="1",
         wrong_order=False,
         refused_scopes=set(),
+        expired_on_recheck=False,
         auth_down=False,
         list_orders_sleep=0.0,
         cpms_sleep=0.0,
         unexpected=None,
+        fail_evidence_write=False,
     )
 
     class Handler(BaseHTTPRequestHandler):
@@ -138,6 +140,11 @@ def provision(tmp_path, monkeypatch):
             state.auth_calls.append(required_scope)
             if required_scope in state.refused_scopes:
                 raise CallerAuthError("scope refused", code="caller_auth.forbidden")
+            if state.expired_on_recheck and required_scope == "aiops:orders:read":
+                # The real production shape: the first resolution
+                # (aiops:diagnoses:write) succeeds and only the second one,
+                # inside authenticated_chat_order_reader, is rejected.
+                raise CallerAuthError("token no longer valid", code="caller_auth.invalid")
             subject = SubjectRecord(b_user_id="b-1", c_user_id="C-1", tenant_id="tenant-a")
             return ScopeContext.build(
                 caller=subject,
@@ -208,6 +215,15 @@ def provision(tmp_path, monkeypatch):
         yield SimpleNamespace(list_orders=lambda **_kwargs: [{"order_no": ORDER}])
 
     monkeypatch.setattr(gateway_api, "scoped_mysql_source", mysql)
+    # Read at call time: the test body flips the switch after the fixture ran.
+    real_write = gateway_api.write_private_text
+
+    def maybe_failing_write(*args, **kwargs):
+        if state.fail_evidence_write:
+            raise OSError("synthetic evidence write failure")
+        return real_write(*args, **kwargs)
+
+    monkeypatch.setattr(gateway_api, "write_private_text", maybe_failing_write)
 
     config = tmp_path / "production.env"
     config.write_text("# synthetic only\n")
@@ -329,6 +345,79 @@ def test_unregistered_tenant_is_distinguishable_from_an_unowned_order(provision,
     record = only(lines)
     assert record["code"] == "TENANT_ENDPOINT_UNRESOLVED"
     assert record["stage"] == ro.STAGE_ORDER_CHAT_CPMS
+
+
+def test_revoked_credential_on_re_authentication_is_a_refusal_not_a_failure(provision, lines):
+    """首次身份的解析成功，`orders:read` 再次解析时凭据无效 ⇒ 401，必须算拒绝。
+
+    这是生产可达的形状（`authenticated_chat_order_reader` 里的第二次解析），
+    不是构造出来的边界。它一度被记成 `failed`，于是"凭据过期"会抬高服务 5xx 率 ——
+    而那是运维用来判断"网关坏了"的那个数。
+    """
+    provision.expired_on_recheck = True
+    with TestClient(provision.app) as client:
+        response = post(client)
+
+    assert response.status_code == 401
+    record = only(lines)
+    assert record["outcome"] == "refused", record
+    assert record["status"] == "401"
+    assert record["code"] == "INVALID_ACCESS_TOKEN"
+    # 不在 5xx 分子里：那正是这条 bug 的危害
+    assert int(record["status"]) < 500
+    assert provision.auth_calls[:2] == ["aiops:diagnoses:write", "aiops:orders:read"]
+
+
+def test_every_4xx_is_a_refusal_and_every_5xx_is_a_failure(provision, lines):
+    """契约是整个 4xx/5xx 区间，不是一张要人记住去补的清单。
+
+    第一版把拒绝写成了枚举 `{400,403,404,409,422}` 并漏掉 401；枚举正是错因，
+    所以这里钉边界（4xx 含 401/429；5xx 不是拒绝），而不是钉某个集合的成员。
+    """
+    for status in (400, 401, 403, 404, 409, 422, 429, 499):
+        assert ro._outcome(status, "") == ro.OUTCOME_REFUSED, status
+    for status in (500, 502, 503):
+        assert ro._outcome(status, "") == ro.OUTCOME_FAILED, status
+
+
+def test_outcome_is_exactly_one_of_three_values(provision, lines):
+    """只有三类结果。手册上一版写了四类，多的那类是我想象出来的。"""
+    assert {ro.OUTCOME_COMPLETED, ro.OUTCOME_REFUSED, ro.OUTCOME_FAILED} == {
+        ro._outcome(202, ""),
+        ro._outcome(403, ""),
+        ro._outcome(500, ""),
+    }
+
+
+def test_evidence_failure_keeps_the_real_qa_id(provision, lines):
+    """证据落盘失败 503 时 QA 行已经建出来 —— 保留那个关联，别为了旧文案删掉它。
+
+    Codex 复核指出原手册写"qa_id 只在成功时有值"，与实现不符：实现早就把
+    `mark_qa` 放在建行之后、写盘之前。这里把那条事实钉住。
+    """
+    provision.fail_evidence_write = True
+    with TestClient(provision.app) as client:
+        response = post(client)
+
+    assert response.status_code == 503
+    record = only(lines)
+    assert record["outcome"] == "failed"
+    assert record["code"] == "CHARGING_STATUS_EVIDENCE_UNAVAILABLE"
+    assert record["qa_id"].startswith("qa_"), "503 时已有真实 QA，关联必须保留"
+    assert record["stage"] == ro.STAGE_ORDER_CHAT_EVIDENCE
+
+
+def test_a_clarification_is_a_200_without_an_order(provision, lines):
+    """候选也可能以 200 clarification 结束且 qa_id=-：HTTP 成功 ≠ 查到了订单。"""
+    provision.rebuild(enabled=True)
+    with TestClient(provision.app) as client:
+        # 命中状态问法但没有"最新"，也没有订单号 ⇒ 分支内要求补订单号
+        response = post(client, "查询这个订单的状态")
+
+    assert response.status_code == 200
+    record = only(lines)
+    assert record["outcome"] == "completed"
+    assert record["qa_id"] == "-", "clarification 没有 QA，不能记成已查到订单"
 
 
 def test_cpms_failure_is_a_failure_not_a_refusal(provision, lines):
