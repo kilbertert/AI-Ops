@@ -1,3 +1,67 @@
+## 2026-10-23 · 验收工具的两个运行边界（收口）
+
+#1010 的默认适配器、脱敏、驱动回放已被接受。这一片只收口 Codex 指出的两个**仍未完成**
+的运行边界。
+
+### 一、实际隧道由 dev-host 建立（不是"校验后另起 ssh"）
+
+上一版：先 `dev-host exec hostname` 校验，再另起普通 `ssh -N -L`。那次校验说明不了
+**实际连接**连的是谁。
+
+现在隧道命令本身就是 `dev-host exec <target> -- -N -L 127.0.0.1:<port>:127.0.0.1:443` ——
+`dev-host exec` 把 `--` 之后原样交给它自己的 `ssh`（同一套 `StrictHostKeyChecking` +
+项目 known_hosts + 主机指纹校验）。**校验与连接是同一条命令。**
+
+两个细节：
+
+- **监听者不等于 `Popen.pid`**：dev-host 是 shell 包装，真正监听的是子进程。判据是
+  "监听 PID 属于本次**进程树**"（`_descendants`），清理也只收这一棵子树。
+- 端口显式绑 `127.0.0.1`、动态分配。
+
+**实测**（`verify_tunnel.py`，只读静态资源、不碰业务 API）：
+
+```
+dev_host_pid=3561921, listening_pids=[3561939]   ← 确实不同的 PID
+listener_in_this_process_tree=true
+status_line "HTTP/1.1 200 OK", 1815 bytes HTML
+business_requests_sent=0
+cleanup: still_listening=[]
+```
+
+### 二、私有报告在写入前校验
+
+上一版两处 `_write_private` 都是 `mkdir → write_text → chmod`：会**跟随符号链接**
+覆盖目标文件、没有库外限制、权限也不是创建即私有。
+
+现在统一走 `private_output.write_private_report()`，落盘**之前**判三件：
+
+| 判据 | 依据 |
+|---|---|
+| 目标及**父目录**不是符号链接 | `write_text` 会打开链接指向的文件 |
+| 目标不在**任何**仓库/工作树内 | `repository_roots()` 同时看工具代码与**目标自身**的祖先链 |
+| 目录属当前用户 + 0700，文件创建即 0600 | 复用 `private_files.write_private_text`（tempfile + `replace`） |
+
+第一版只看 `code_root` 的祖先链，漏了"目标在**另一个**仓库里"——那个仓库跟工具代码
+没有共同祖先。测试当场报出来，判据补成两边都看。
+
+**符号链接实测**：目标内容保持 `ORIGINAL` 不变、链接未被跟随、拒绝而非覆盖。
+
+### 三、检查结果
+
+| 步骤 | 退出码 | 结果 |
+|---|---|---|
+| 全部工具自检 | 0 | **50 passed**（原 37 + 新 13） |
+| 真实隧道验证 | 0 | `verdict=pass`，业务请求 0，清理无残留 |
+
+**变异复验**：写入改回 `mkdir+write_text+chmod` ⇒ 5 条转红；隧道改回裸 `ssh` ⇒ 2 条转红；
+还原后全绿。
+
+### 四、没有证明什么
+
+- **真实存在的他人订单被拒**（业务事项，另列）。
+- `status_probe.py` 的真实端到端仍需受控窗口。
+- 本片零生产写入、零业务请求、零模型调用。
+
 ## 2026-10-23 · 验收工具接通默认路径：适配器、脱敏、浏览器驱动回放
 
 #1006 的自检只在**注入 Deps 替身**时通过。这一片让它按文档真跑。

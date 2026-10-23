@@ -23,6 +23,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import pathlib
@@ -33,6 +34,22 @@ import time
 from pathlib import Path
 
 EXIT_PASS, EXIT_FAIL, EXIT_UNVERIFIED = 0, 1, 2
+
+
+def _private_output():
+    """同目录的 `private_output.py` 按文件加载 —— 这些脚本不是包。"""
+    import importlib.util
+
+    module = sys.modules.get("consumer_status_private_output")
+    if module is not None:
+        return module
+    path = pathlib.Path(__file__).with_name("private_output.py")
+    spec = importlib.util.spec_from_file_location("consumer_status_private_output", path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
 
 HOST = "ulink.h5.mall.qushiyun.com"
 POST_PATH = "/v1/assistant/questions"
@@ -191,10 +208,17 @@ def _region_has_answer(region: str, order_no: str) -> bool:
 
 
 def _write_private(path: Path, payload: dict) -> None:
-    """私有证据：显式路径、0600。目录本身由调用方保证是库外私有目录。"""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=1) + "\n")
-    path.chmod(0o600)
+    """私有证据：显式路径、0600、**必须在库外**。
+
+    旧版只 chmod，不校验库外、且会跟随符号链接。现在走共享模块。
+    """
+    write_private_report = _private_output().write_private_report
+
+    write_private_report(
+        path,
+        json.dumps(payload, ensure_ascii=False, indent=1) + "\n",
+        code_root=Path(__file__).parent,
+    )
 
 
 def _wait_port(port: int, *, timeout: float = 10.0) -> bool:
@@ -224,41 +248,87 @@ def _port_owned_by(port: int, pid: int) -> bool:
     return f"pid={pid}" in out
 
 
-def _tunnel_target(target: str) -> dict[str, str]:
-    """取隧道目标，并**让 dev-host 先做一次主机身份校验**。
+def tunnel_argv(*, target: str, port: int) -> list[str]:
+    """**实际连接**也走 dev-host —— 不是"先校验、再自己 ssh"。
 
-    `dev-host` 没有隧道子命令，但 `dev-host exec` 会校验主机身份（记录里的
-    指纹/角色/访问方式）。所以顺序是：先用 `dev-host exec` 确认这台机器就是
-    记录里那台（跑一个只读的 `hostname`），再拿它给出的 ssh 别名开隧道。
-    这样"目标是谁"和"能不能连"都由 dev-host 判定，脚本不自己造 ssh 参数。
+    `dev-host exec` 把 `--` 之后的参数原样交给它的 `ssh`（同一个 `do_remote`，
+    同一套 `StrictHostKeyChecking` + 项目侧 known_hosts + 主机指纹校验）。
+    所以在 `--` 后面传 `-N -L ...` 就得到一条**由 dev-host 建立并校验**的隧道。
+
+    上一版是"先 `dev-host exec hostname` 校验，再另起普通 ssh" —— 那次校验
+    说明不了**实际连接**连的是谁。现在两者是同一个连接。
     """
-    show = subprocess.run(["dev-host", "show", target], capture_output=True, text=True, timeout=15)
-    if show.returncode != 0:
-        raise RuntimeError(f"dev-host show {target} 失败：{show.stderr.strip()[:200]}")
-    fields: dict[str, str] = {}
-    for line in show.stdout.splitlines():
-        parts = line.split(None, 2)
-        if len(parts) >= 2:
-            fields[" ".join(parts[:-1]).strip()] = parts[-1].strip()
-    alias = ""
-    for key, value in fields.items():
-        if key.startswith("ssh alias"):
-            alias = value
-    if not alias:
-        raise RuntimeError(f"dev-host show {target} 没有给出 ssh alias")
+    return [
+        "dev-host",
+        "exec",
+        target,
+        "--allow-service-exec",
+        "--timeout",
+        "60",
+        "--",
+        # 显式绑定开发机回环；端口动态分配由调用方选好。
+        "-N",
+        "-L",
+        f"127.0.0.1:{port}:127.0.0.1:443",
+    ]
 
-    # 身份校验：dev-host exec 自己会拒绝指纹不符/未登记的主机。
-    probe = subprocess.run(
-        ["dev-host", "exec", target, "--allow-service-exec", "--timeout", "20", "--", "hostname"],
-        capture_output=True,
-        text=True,
-        timeout=40,
-    )
-    if probe.returncode != 0:
-        raise RuntimeError(
-            f"dev-host exec {target} 拒绝或失败（退出码 {probe.returncode}）：{probe.stderr.strip()[:200]}"
-        )
-    return {"alias": alias, "hostname": probe.stdout.strip()}
+
+def _listening_pids(port: int) -> set[int]:
+    """端口上有哪些 PID 在听。dev-host 包了一层 shell，**监听者不一定是 Popen 的 pid**。"""
+    try:
+        out = subprocess.run(
+            ["ss", "-ltnpH", f"sport = :{port}"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    return {int(m) for m in re.findall(r"pid=(\d+)", out)}
+
+
+def _descendants(pid: int) -> set[int]:
+    """本进程及其所有子进程 —— 清理时只碰这一棵子树。"""
+    try:
+        out = subprocess.run(["ps", "-eo", "pid=,ppid="], capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return {pid}
+    children: dict[int, list[int]] = {}
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) != 2:
+            continue
+        child, parent = int(parts[0]), int(parts[1])
+        children.setdefault(parent, []).append(child)
+    seen = {pid}
+    stack = [pid]
+    while stack:
+        for child in children.get(stack.pop(), []):
+            if child not in seen:
+                seen.add(child)
+                stack.append(child)
+    return seen
+
+
+def _terminate_tree(proc: subprocess.Popen) -> None:
+    """只清理本次进程及其子进程。"""
+    if proc.poll() is not None:
+        return
+    tree = _descendants(proc.pid)
+    proc.terminate()
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=10)
+    # 包装进程可能留下孙进程：再按同一棵树收一次。
+    for pid in sorted(tree - {proc.pid}, reverse=True):
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            continue
+        with contextlib.suppress(OSError):
+            os.kill(pid, 15)
 
 
 def main() -> int:
@@ -297,29 +367,33 @@ def main() -> int:
         "check my latest order status" if args.label == "latest" else f"check order {args.order_no} status"
     )
 
-    try:
-        tunnel_target = _tunnel_target(args.dev_host_target)
-    except (RuntimeError, subprocess.SubprocessError) as exc:
-        print(f"主机身份校验失败：{exc}", file=sys.stderr)
-        return EXIT_UNVERIFIED
-    alias = tunnel_target["alias"]
-
-    # 启动前先确认端口没人用；起来后确认**是这条 ssh 在听**。
+    # 启动前先确认端口没人用。
     if _wait_port(port, timeout=0.2):
         print(f"本地端口 {port} 已被占用，拒绝复用（可能是别人的隧道）", file=sys.stderr)
         return EXIT_UNVERIFIED
 
+    # **实际连接也走 dev-host**：同一条命令既建隧道又做主机身份校验。
     tunnel = subprocess.Popen(
-        ["ssh", "-N", "-L", f"{port}:127.0.0.1:443", alias],
+        tunnel_argv(target=args.dev_host_target, port=port),
         stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
     )
     try:
         if not _wait_port(port):
-            print("隧道没有起来", file=sys.stderr)
+            err = ""
+            if tunnel.poll() is not None and tunnel.stderr is not None:
+                err = (tunnel.stderr.read() or "").strip()[:300]
+            print(f"隧道没有起来（退出码 {tunnel.poll()}）：{err}", file=sys.stderr)
             return EXIT_UNVERIFIED
-        if not _port_owned_by(port, tunnel.pid):
-            print(f"端口 {port} 不是本进程（{tunnel.pid}）在听，拒绝使用", file=sys.stderr)
+        # dev-host 是 shell 包装，监听者可能是它的子进程 —— 判"属于这棵树"，
+        # 不能假定 `ss` 里的 pid 等于 `Popen.pid`。
+        listening = _listening_pids(port)
+        if not listening or not (listening & _descendants(tunnel.pid)):
+            print(
+                f"端口 {port} 不是本次 dev-host 进程树在听（监听者 {sorted(listening)}）",
+                file=sys.stderr,
+            )
             return EXIT_UNVERIFIED
         events, payloads, page_text, region_text, region_in_user_bubble = _drive(
             port=port,
@@ -328,12 +402,7 @@ def main() -> int:
             timeout=args.evidence_timeout,
         )
     finally:
-        # 只清理自己启动的那个进程。
-        tunnel.terminate()
-        try:
-            tunnel.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            tunnel.kill()
+        _terminate_tree(tunnel)
 
     # 答案只来自**本次 qa_id 的那一条** GET（不拼接其他 GET）。
     answer_text = answer_from_events(events, _qa_id_of(events))

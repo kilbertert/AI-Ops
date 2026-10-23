@@ -103,11 +103,24 @@ python tools/consumer-status/independent_cpms.py \
 "同一个 `list_orders` 换个 `page_size` 首行相同"**不算**排序证明 —— 那两次调用走的是
 同一个 `ORDER BY`，只能证明选择器是确定的。
 
-### 输出脱敏（默认）
+### 输出脱敏与私有报告（默认）
 
 终端**只打摘要**：结论、计数、时间、订单号前缀。完整订单号、问题原文、回答正文、
 页面文本**只写 `--out` / `--state-dir` 显式指定的库外私有目录**，文件权限 0600。
 **没有默认输出目录** —— 不给参数就不落盘。
+
+写盘走 `private_output.write_private_report()`，三件事在**落盘之前**判：
+
+| 判据 | 为什么 |
+|---|---|
+| 目标**及父目录**不是符号链接 | 旧实现 `write_text` 会打开链接指向的文件，覆盖别人放的内容 |
+| 目标不在**任何**仓库/工作树内 | `--out .` 能把完整订单号写进会被提交的地方 |
+| 目录属于当前用户、权限 0700，文件创建即 0600 | 先用 umask 创建再 chmod 有一段窗口 |
+
+底层复用 `aiops_diagnostics.private_files.write_private_text`（tempfile + `replace`，
+**不跟随**目标链接）；工具侧只补"库外"这一条，不改业务模块。
+
+拒绝与失败都是非零退出；stdout/stderr 保持脱敏。
 
 ### `status_probe.py`
 
@@ -123,8 +136,32 @@ python tools/consumer-status/independent_cpms.py \
 | 助手区域文本与回答块一致 | 整页文本会命中**用户自己刚发的提问** |
 | 无"无法查询"类话术 | 那是回落到普通模型路径的形状 |
 
-隧道：别名取自 `dev-host show <target>` 的 `ssh alias` 字段（主机身份的唯一来源），
-端口先探空、起来后再确认**是本进程在听**，结束时只清理自己启动的那个。
+隧道：**实际连接也由 `dev-host exec` 建立**。
+
+```
+dev-host exec 41 --allow-service-exec --timeout 60 -- -N -L 127.0.0.1:<port>:127.0.0.1:443
+```
+
+`dev-host exec` 把 `--` 之后的参数原样交给它自己的 `ssh`（同一套
+`StrictHostKeyChecking` + 项目 known_hosts + 主机指纹校验）。所以**校验与连接是
+同一条命令**，不是"先 `dev-host exec hostname` 校验、再另起普通 ssh"——后者那次
+校验说明不了实际连接连的是谁。
+
+端口：显式绑定 `127.0.0.1`、动态分配（先探空）。
+
+**监听者不一定等于 `Popen.pid`**：dev-host 是 shell 包装，真正监听的是它的子进程。
+所以判据是"监听 PID **属于本次进程树**"（`_descendants`），不是"等于 Popen PID"。
+清理只收这一棵子树（终止、必要时 kill、再兜一次孙进程）。
+
+真实隧道验证（只读静态资源，不碰业务 API）：
+
+```bash
+python3 tools/consumer-status/verify_tunnel.py   # 0 = 隧道通且清理干净
+```
+
+2026-10-23 实测：`dev_host_pid=3561921`、监听 `3561939`（**确实不同 PID**）、
+`HTTP/1.1 200 OK`、1815 字节 HTML、`business_requests_sent=0`、
+清理后端口 `still_listening=[]`。
 
 ### 助手区域选择器（已对着现役产物校准）
 
@@ -236,3 +273,14 @@ python3 tools/consumer-status/replay_drive.py    # 0 = 三场景都符合预期
 **这一片没有开生产窗口**，所以上表**没有**任何真实查询作业或模型调用。
 `status_probe.py` 的真实端到端仍未重跑（缺的是"受控窗口 + 真实会话"，
 不是"离线无法验证"——离线驱动回放已经证明了）。
+
+## 十、本片（两个运行边界）
+
+| 边界 | 之前 | 现在 |
+|---|---|---|
+| 实际隧道 | 先 `dev-host exec hostname` 校验，再另起普通 `ssh` | **实际连接就是 `dev-host exec`**，`-N -L` 在 `--` 之后 |
+| 端口归属 | 假定 `ss` 的 PID == `Popen.pid` | 判"属于本次**进程树**"（dev-host 是 shell 包装） |
+| 私有报告 | `mkdir → write_text → chmod`，跟随符号链接、无库外限制 | 落盘前判符号链接 + 库外 + 目录权限 |
+
+对应测试：`tests/test_consumer_status_boundaries.py`（13 条）。
+变异复验：把写入改回 `mkdir+write_text+chmod` ⇒ 5 条转红；把隧道改回裸 `ssh` ⇒ 2 条转红。
