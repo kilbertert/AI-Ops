@@ -76,7 +76,14 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  # `write` is for the release-notes step at the end of this file, which creates
+  # a GitHub Release. It is deliberately NOT used to push commits: `main`'s
+  # ruleset requires a pull request for every update and lists no bypass actor,
+  # so a bot push would be rejected — and punching a bypass into that gate to
+  # save a changelog commit would trade the review boundary for cosmetics.
+  #
+  # The deploy itself reaches 41 over SSH with its own key, not this token.
+  contents: write
 
 # 并发控制放在 **job** 上，不放在 workflow 上 —— 这个区别是全部要点，两个错误版本
 # 都栽在这里（详见 job 的 concurrency 注释）：
@@ -208,6 +215,62 @@ jobs:
           CD_SSH_ALIAS: aiops-41-cd
           TARGET_SHA: ${{ steps.target.outputs.sha }}
         run: deploy/deploy-41.sh --commit "$TARGET_SHA"
+
+      # The changelog is produced here and published as a GitHub Release — it is
+      # NOT committed back to `main`.
+      #
+      # Measured 2026-10-23 before writing this: `main`'s ruleset requires a pull
+      # request for every update and lists no bypass actor, so a bot push would
+      # be rejected. Bypassing it would mean punching a hole in the gate that
+      # keeps unreviewed code out of production, to save one commit.
+      #
+      # Publishing also removes the last reason a pull request ever touched the
+      # file: it is gitignored, so no branch can conflict on it.
+      #
+      # Placed after Deploy on purpose: notes describing a release the deploy did
+      # not make are worse than no notes. A failed deploy skips this entirely.
+      - name: Publish release notes
+        env:
+          # Same interpreter and tool path as Deploy: `dev-changelog` and its
+          # `git-cliff` dependency come from the server release unit, which a
+          # hosted runner does not have.
+          PATH: /home/claude/miniconda3/bin:/home/claude/.local/bin:/usr/local/bin:/usr/bin:/bin
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          set -eu
+          if ! command -v dev-changelog >/dev/null 2>&1; then
+            echo "::error::dev-changelog is not on the self-hosted runner's PATH; it ships with the server release unit" >&2
+            exit 1
+          fi
+
+          notes=$(mktemp)
+          trap 'rm -f "$notes"' EXIT
+          dev-changelog . >/dev/null
+          cp CHANGELOG.md "$notes"
+
+          # One release per deployed commit, keyed by the commit itself.
+          #
+          # NOT a semantic version, and that is a stated limit rather than an
+          # oversight: `dev-changelog` splits sections on
+          # `v?<major>.<minor>.<patch>` tags, this repository has never cut one,
+          # and inventing versions here would put a number on releases nobody
+          # decided. The notes therefore answer "what has landed", not "what was
+          # in the last deployment" — the limit the policy already names for a
+          # service that creates no tags. Once a tagging practice exists,
+          # `--target` already points at the deployed commit and the same
+          # command starts producing versioned sections with no change here.
+          tag="release-${TARGET_SHA:0:12}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "release $tag already exists; updating its notes."
+            gh release edit "$tag" --notes-file "$notes"
+          else
+            gh release create "$tag" \
+              --target "$TARGET_SHA" \
+              --title "AI-Ops deployed ${TARGET_SHA:0:12}" \
+              --notes-file "$notes" \
+              --prerelease
+          fi
 
       - name: Report failure
         if: failure()

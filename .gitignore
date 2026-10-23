@@ -48,6 +48,18 @@ gitlab_token.txt
 # AFK runner runtime dirs (not source)
 .sandcastle/worktrees/
 
+# `CHANGELOG.md` is generated at release time, not per pull request.
+#
+# Its input is the commit range, so it goes stale on every merge to main. While
+# it was committed, every pull request had to regenerate it to pass the gate —
+# moving the conflict from "two people hand-editing" to "two branches
+# regenerating", at nearly the same rate. Measured 2026-10-23: two branches
+# appending at the same place still conflict.
+#
+# Now `cd.yml` regenerates it as part of the deploy that follows the merge, so
+# no pull request writes it and no branch can conflict on it.
+CHANGELOG.md
+
 # AFK runner (package.json) dependencies
 node_modules/
 

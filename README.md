@@ -628,6 +628,20 @@ push main (src/** | deploy 的两个部署脚本 | 依赖清单 | 参考资料) 
 runbook §5/§6 明确禁止 CI 自证。所以 CD 通过最多报告 `merged_waiting_deploy`；
 `live` 仍须人按 §5 执行。
 
+**部署之后还有一步：发布版本备注。** `cd.yml` 的最后一个步骤运行 `dev-changelog`，
+把本次部署的 commit 范围渲染成 GitHub Release（tag `release-<sha12>`）。它**不是**部署
+的一部分，失败含义也不同：
+
+| 现象 | 含义 | 处置 |
+|---|---|---|
+| Deploy 步骤失败 | 生产**没有**更新 | 按本节回滚，或修因重跑 |
+| Deploy 成功、`Publish release notes` 失败 | 生产**已经**更新，只是没有备注 | **不要回滚**。到 runner 上确认 `dev-changelog` 与 `git-cliff` 在 PATH，然后 `gh workflow run cd.yml` 重跑，或用 `gh release create` 手工补 |
+
+`CHANGELOG.md` 因此**不在仓库里**（已 gitignore）：它是发布产物，由上述步骤生成，
+任何 PR 都不该写它。人工撰写的发布说明在 [`RELEASE-NOTES.md`](RELEASE-NOTES.md)——那是
+另一份文件，两者在 2026-10-23 的比对中**零行交集**（决策见
+[docs/adr/0101](docs/adr/0101-changelog-is-generated-at-release-time.md)）。
+
 ### 测试组织
 
 `tests/` 是 77 个平铺文件的集合，按关注点聚类：
