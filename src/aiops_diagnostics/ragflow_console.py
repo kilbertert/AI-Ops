@@ -209,6 +209,20 @@ def open_console(
     return public_base_url, LoginSession(tenant_id=tenant_id, ragflow_email=email, cookies=cookies)
 
 
+@dataclass(frozen=True, slots=True)
+class DeclaredTenant:
+    """`open_console` 需要的那一个属性。
+
+    ``open_console`` 刻意只接受一个 ``caller``，且只读 ``effective_tenant_id`` ——
+    这样"能进哪个租户"永远由身份决定，不由参数决定。workspace 入口（#982）的租户是从
+    **workspace 反查**出来的，不是请求参数；给它的仍然只是一个"已声明的租户"，形状与
+    浏览器那条链路完全相同，因此 ``open_console`` 不必为它加一个 tenant 参数
+    —— 那会让"传租户进来"重新变成一件可能的事。
+    """
+
+    effective_tenant_id: str
+
+
 def record(
     store: GatewayStore,
     *,
