@@ -4077,30 +4077,117 @@ def create_gateway_app(
             outcome="granted",
             ragflow_email=session.ragflow_email,
         )
-        # **对桥回 JSON，不回 303**（#984）。桥是服务端进程：它会收到 303，但不会保存
-        # 那个带 Domain 的 cookie —— 浏览器才做那件事。所以这条内部入口把「往哪跳」与
-        # 「哪些 cookie」一起交出去，由桥原样转给浏览器。
+        # **只发票，不交会话**（#985）。
         #
-        # 与 `/v1/knowledge/console` 的区别正是这一点：那条是**浏览器**自己调的，
-        # 303 + Set-Cookie 就会生效；这条是**桥**调的。
+        # 上一版（#984）把 target 与 cookie 一起交给桥，让桥转给浏览器。真机证明那样
+        # **不可能成功**：桥在 `dify.ranlei.work` 上，而浏览器拒绝由非本域页面设置的
+        # `Domain=.mall.qushiyun.com` cookie。这是 cookie 规范，不是配置问题。
+        #
+        # 所以会话必须由 `kb.mall.qushiyun.com` 那一跳自己种下去。两跳之间传一张
+        # 一次性票：不透明、60 秒、用一次即废，且**不含会话** —— 兑换时才去换。
+        #
+        # 会话在这里已经换过一次，看起来是白换；但那一次的价值是**现在就知道能不能进**
+        # （未开户 / 上游挂了在这里就报错），而不是等到浏览器跳到 RAGFlow 再看到登录页。
+        # 兑换那一步会再换一次，用一个**新的** RAGFlow 会话 —— RAGFlow 允许同一账号
+        # 多会话并存，两次换出来的 cookie 互不影响。
+        ticket = context.store.create_hop_ticket(
+            tenant_id=tenant_id,
+            environment=settings.environment,
+            workspace_id=workspace,
+            ttl_seconds=settings.knowledge_hop_ttl_seconds,
+        )
         return JSONResponse(
             {
-                "target": target,
+                "target": (settings.ragflow_console_public_url or "").rstrip("/")
+                + "/__aiops/knowledge/hop?ticket="
+                + ticket,
                 "tenant_id": tenant_id,
-                "cookies": [
-                    {
-                        "name": name,
-                        "value": value,
-                        "domain": settings.ragflow_console_cookie_domain,
-                        "path": "/",
-                        "httponly": True,
-                        "samesite": "lax",
-                    }
-                    for name, value in session.cookies.items()
-                ],
+                "expires_in": int(settings.knowledge_hop_ttl_seconds),
             },
             status_code=status.HTTP_200_OK,
         )
+
+    @app.get("/v1/internal/knowledge/hop", include_in_schema=False)
+    def knowledge_hop(ticket: str = "") -> Response:
+        """兑换一次性票：**在 kb.mall 这个域上**种会话 cookie，再 303 到 RAGFlow（#985）。
+
+        这条由**浏览器**在 `kb.mall.qushiyun.com` 上调用（41 的 nginx 反代过来），
+        所以它带不了内部令牌 —— 那它凭什么安全？
+
+        * 票是 32 字节随机、60 秒、一次性，且**只在库里**与租户关联；
+        * 票里没有会话：兑换时才用**那个租户自己的**凭据去换；
+        * 票由内部令牌那条路由发出，所以"谁在什么时候拿过票"仍然有据可查。
+
+        一个能拿到票的人，最多在 60 秒内让**自己**得到一个该租户的会话 —— 而他本来
+        就已经通过了桥的身份校验（票是他自己那一跳换来的）。
+        """
+        from aiops_diagnostics.ragflow_console import (
+            DeclaredTenant,
+            RAGFlowLoginClient,
+            RAGFlowLoginError,
+            open_console,
+            record,
+        )
+
+        settings = context.settings
+        if (
+            not settings.ragflow_console_base_url
+            or not settings.ragflow_credential_key
+            or not settings.ragflow_console_public_pem
+        ):
+            raise StandardAPIError(
+                status.HTTP_404_NOT_FOUND, "KNOWLEDGE_CONSOLE_DISABLED", "console access is not enabled"
+            )
+        consumed = context.store.consume_hop_ticket(ticket, environment=settings.environment)
+        if consumed is None:
+            # 不存在 / 过期 / 用过 / 环境不符 —— 四种同一个答案。区分它们等于给枚举票的
+            # 人一个"这张存在过"的信号，而那与"这张还能用"只差几秒。
+            raise StandardAPIError(
+                status.HTTP_410_GONE,
+                "KNOWLEDGE_HOP_EXPIRED",
+                "this link has expired; go back to Dify and click the button again",
+            )
+        tenant_id = consumed["tenant_id"]
+        client = RAGFlowLoginClient(settings.ragflow_console_base_url)
+        try:
+            target, session = open_console(
+                store=context.store,
+                environment=settings.environment,
+                caller=DeclaredTenant(effective_tenant_id=tenant_id),
+                credential_key=settings.ragflow_credential_key,
+                client=client,
+                public_base_url=settings.ragflow_console_public_url or settings.ragflow_console_base_url,
+                public_pem_path=settings.ragflow_console_public_pem,
+            )
+        except RAGFlowLoginError as exc:
+            record(
+                context.store,
+                tenant_id=tenant_id,
+                environment=settings.environment,
+                outcome="refused",
+                reason_code=exc.code,
+            )
+            raise StandardAPIError(status.HTTP_424_FAILED_DEPENDENCY, exc.code, exc.message) from exc
+        record(
+            context.store,
+            tenant_id=tenant_id,
+            environment=settings.environment,
+            outcome="granted",
+            ragflow_email=session.ragflow_email,
+        )
+        # **这一次的 Set-Cookie 由 `kb.mall.qushiyun.com` 发出** —— 浏览器会保存它。
+        response = RedirectResponse(target, status_code=status.HTTP_303_SEE_OTHER)
+        for name, value in session.cookies.items():
+            response.set_cookie(
+                name,
+                value,
+                domain=settings.ragflow_console_cookie_domain or None,
+                path="/",
+                httponly=True,
+                samesite="lax",
+            )
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
     @app.get("/v1/knowledge", include_in_schema=False)
     def knowledge_page() -> HTMLResponse:

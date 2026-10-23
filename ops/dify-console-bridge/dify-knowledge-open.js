@@ -69,9 +69,25 @@
 
     var open = document.createElement('a');
     open.textContent = '打开 RAGFlow';
+    // 真正要去的地址在点击时才算（见 onClick）—— 因为要知道"我此刻在哪个 workspace"，
+    // 而那需要先问 Dify。href 留一个可访问的兜底，右键复制也不会是死链。
     open.href = '/__aiops/knowledge-open';
     open.target = '_blank';
     open.rel = 'noopener noreferrer';
+    open.addEventListener('click', function (ev) {
+      // **页面自己问 Dify"我在哪个 workspace"，再把答案带上。**
+      //
+      // 只有页面能问：Dify 的 `/console/api/workspaces/current/summary` 要 CSRF
+      // 双提交，而 CSRF 头只能由页面脚本从 cookie 里读出来发出去；桥那边收不到。
+      // 桥也不该去猜 —— 它拿公司身份推过一次，退回来是 `tenant_id=-1`（平台账号），
+      // 换不出任何租户。切在哪，就管哪个。
+      ev.preventDefault();
+      currentWorkspace().then(function (ws) {
+        var url = '/__aiops/knowledge-open' + (ws ? '?workspace=' + encodeURIComponent(ws) : '');
+        var w = window.open(url, '_blank', 'noopener');
+        if (!w) { location.href = url; }  // 弹窗被拦：退化成当前页跳转
+      });
+    });
     open.style.cssText = [
       'display:inline-block',
       'background:#2f6feb',
@@ -107,6 +123,27 @@
     card.style.position = 'fixed';
     card.appendChild(close);
     return card;
+  }
+
+  /* 问 Dify：当前 workspace 是哪个。
+   *
+   * 用它自己的接口 + 它自己的双提交规则（CSRF 头取自 cookie）。**拿不到就返回空串**，
+   * 让桥回一句可读的话 —— 而不是带一个错的 workspace 过去。
+   */
+  function currentWorkspace() {
+    var csrf = '';
+    var m = document.cookie.match(/(?:^|;\s*)(?:__Host-)?csrf_token=([^;]+)/);
+    if (m) { csrf = decodeURIComponent(m[1]); }
+    return fetch('/console/api/workspaces/current/summary', {
+      credentials: 'include',
+      headers: csrf ? { 'X-CSRF-Token': csrf } : {},
+    }).then(function (r) {
+      return r.ok ? r.json() : null;
+    }).then(function (data) {
+      return (data && data.id) || '';
+    }).catch(function () {
+      return '';
+    });
   }
 
   function mount() {

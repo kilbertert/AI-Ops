@@ -229,9 +229,14 @@ def _workspace_for(
                 invalid_envelope=refused,
             ),
         )
-    except Exception:  # noqa: BLE001 - 查不通一律按"不能确认"处置
+    except Exception as exc:  # noqa: BLE001 - 查不通一律按"不能确认"处置
+        # 记一行可区分的原因：这条路径上的"查不到"与"查不通"在运营看到的那句话里
+        # 是同一个，但在日志里必须分开 —— 否则排查只能靠猜。
+        _LOGGER.info("workspace lookup failed: %s: %s", type(exc).__name__, exc)
         return None
     workspace = str(payload.get("workspace_id") or "") if isinstance(payload, dict) else ""
+    if not workspace:
+        _LOGGER.info("workspace lookup returned no workspace_id: %r", payload)
     return workspace or None
 
 
@@ -648,7 +653,7 @@ def _identity_and_publish_verdict_for_identity(
 
 
 def _knowledge_open_payload(
-    gateway_base_url: str, internal_token: str, *, tenant_id: str, timeout: float
+    gateway_base_url: str, internal_token: str, *, workspace_id: str, timeout: float
 ) -> dict[str, Any]:
     """问网关"这个租户的 RAGFlow 入口在哪"，拿到后就跳过去（#982 的端点）。
 
@@ -668,7 +673,11 @@ def _knowledge_open_payload(
     try:
         payload = request_json(
             RequestSpec(
-                url=join_url(gateway_base_url, "/v1/internal/knowledge/open"),
+                url=join_url(
+                    gateway_base_url,
+                    "/v1/internal/knowledge/open",
+                    query={"workspace": workspace_id},
+                ),
                 method="GET",
                 headers={
                     "Accept": "application/json",
@@ -1276,6 +1285,7 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
         """
         if not self.settings.login_proxy_url or not self.settings.gateway_internal_token:
             raise _Rejected(404, "not found")
+        query = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
         session = _console_access_token_from_cookie(self._single_header("Cookie"))
         if session is None:
             raise _Rejected(401, "请先在 Dify 中登录")
@@ -1288,11 +1298,32 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
         tenant_id = headers.get("X-AIOps-Initiator-Tenant", "").strip()
         if not tenant_id:
             raise _Rejected(403, "你的账号还没有绑定公司租户，请联系管理员")
+        # 桥手上是**租户**，网关那条路由要的是 **workspace**。先换成 workspace
+        # （与发布链路同一个只读端点），再调入口 —— 这样网关侧"租户只来自 workspace
+        # 反查"那条判据一个字都不用动。
+        # **workspace 由前端带上来，因为只有页面自己知道"我此刻在哪个 workspace"。**
+        #
+        # 真机（2026-10-23）连着纠正了两次：
+        #   1. 桥拿公司身份推 workspace —— 用 Dify 的是平台账号 `tenant_id=-1`，推不出来；
+        #   2. 桥自己去问 Dify —— 顶层 GET 不带 CSRF，Dify 回 401。
+        #
+        # 所以由注入脚本在**页面内**问 Dify（它有会话也有 CSRF），把 `current_tenant.id`
+        # 带过来。**这不是把判据交给前端**：桥仍然要求一个有效 Dify 会话，而网关那条路由
+        # 仍然只认内部令牌 + workspace 反查（#982）。前端能做的只是"我这页看着是哪个
+        # workspace"，而它换出来的会话仍然属于那个 workspace 对应的租户。
+        workspace_id = (query.get("workspace") or [""])[0].strip() if query else ""
+        if not workspace_id:
+            raise _Rejected(400, "缺少当前工作区，请刷新 Dify 页面后重试")
         opened = _knowledge_open_payload(
             self.settings.gateway_base_url,
             self.settings.gateway_internal_token,
-            tenant_id=tenant_id,
+            workspace_id=workspace_id,
             timeout=self.settings.timeout,
+        )
+        self.log_message(
+            "knowledge open: target=%s cookies=%d",
+            opened.get("target"),
+            len(opened.get("cookies") or []),
         )
         self.send_response(303)
         self.send_header("Location", str(opened["target"]))
@@ -1303,6 +1334,54 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
         for cookie in opened.get("cookies") or []:
             self._relay_cookie(cookie)
         self.end_headers()
+
+    def _current_dify_workspace(self, session: ConsoleSession) -> str:
+        """问 Dify"当前这个会话停在哪个 workspace"。
+
+        走 Dify 自己的 ``/console/api/workspaces/current/summary``，**用浏览器带来的
+        会话**（cookie 原样转发）与它自己的 CSRF 双提交 —— 桥不持有任何 Dify 密码或密钥，
+        它只是替这个浏览器问一句。
+
+        **为什么不能从公司身份推**：用 Dify 的是平台账号（`tenant_id = -1`），租户是在
+        Dify 里**切**出来的。真机上这条推错了两次：先拿 `-1` 去换 workspace（401），
+        再退回"公司租户"（同样换不出）。切在哪，就管哪个 —— 这是 `current_tenant` 的
+        唯一含义。
+        """
+        from urllib.parse import urlsplit
+
+        from aiops_diagnostics.bounded_http import ErrorMapping, RequestSpec, join_url, request_json
+
+        origin = urlsplit(self.settings.dify_base_url)
+        if not origin.scheme or not origin.netloc:
+            return ""
+        cookie = f"{session.cookie_prefix}{CONSOLE_ACCESS_TOKEN_COOKIE}={session.access_token}"
+        if session.csrf_token:
+            cookie += f"; {session.cookie_prefix}{CONSOLE_CSRF_COOKIE}={session.csrf_token}"
+
+        def failed(failure: HttpFailure) -> Exception:
+            return ConsolePublishError(f"dify workspace: {failure.status or failure.detail}")
+
+        payload = request_json(
+            RequestSpec(
+                url=join_url(self.settings.dify_base_url, "/console/api/workspaces/current/summary"),
+                headers={
+                    "Accept": "application/json",
+                    "Cookie": cookie,
+                    CONSOLE_CSRF_HEADER: session.csrf_token,
+                },
+                timeout=self.settings.timeout,
+            ),
+            mapping=ErrorMapping(
+                auth_rejected=failed,
+                http_error=failed,
+                unavailable=failed,
+                invalid_body=failed,
+                invalid_envelope=failed,
+            ),
+        )
+        if not isinstance(payload, dict):
+            return ""
+        return str(payload.get("id") or "").strip()
 
     def _relay_cookie(self, cookie: Any) -> None:
         """把网关给的 cookie 属性逐字转成 ``Set-Cookie``。

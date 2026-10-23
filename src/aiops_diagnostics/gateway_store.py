@@ -536,6 +536,83 @@ class GatewayStore:
         except sqlite3.Error:  # pragma: no cover - 磁盘问题不该挡发布
             _LOGGER.warning("publish audit write failed for app=%s action=%s", app_id, action)
 
+    # ── 一次性跳转票（#985） ──────────────────────────────────────────────
+
+    def create_hop_ticket(
+        self,
+        *,
+        tenant_id: str,
+        environment: str,
+        workspace_id: str = "",
+        ttl_seconds: float = 60.0,
+    ) -> str:
+        """发一张一次性票，返回它的值。
+
+        票本身是不透明随机串（``token_urlsafe``），**不含租户、不含会话** —— 它在库里
+        才与租户关联。这样即使票出现在日志或 Referer 里，读它的人也换不出别人的东西：
+        兑换那一步仍然要求一次有效的 RAGFlow 登录，而登录用的是租户自己的凭据。
+        """
+        ticket = secrets.token_urlsafe(32)
+        now = _utc_now()
+        with self._connection(write=True) as connection:
+            connection.execute(
+                "INSERT INTO knowledge_hop_tickets"
+                " (ticket, tenant_id, environment, workspace_id, created_at, expires_at)"
+                " VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    ticket,
+                    tenant_id,
+                    environment,
+                    workspace_id,
+                    _iso(now),
+                    _iso(now + timedelta(seconds=ttl_seconds)),
+                ),
+            )
+        return ticket
+
+    def consume_hop_ticket(self, ticket: str, *, environment: str) -> dict[str, Any] | None:
+        """兑换一张票：**成功或失败都算消耗**。
+
+        * 不存在 / 已过期 / 已用过 ⇒ ``None``。三种都不区分 —— 区分会给枚举票的
+          人一个"这张存在但过期了"的信号，而那与"这张能用"只差几秒。
+        * 环境不符 ⇒ ``None``。同一个票值在另一个环境里是另一个问题。
+        * 兑换成功后立即把它标记为已用（同一条 UPDATE 里带 ``used_at IS NULL``），
+          所以并发两次只有一次成功。
+
+        过期的行不在这里删；``prune_hop_tickets`` 由调用方按需调用。删除不是正确性
+        的一部分（查询已经按过期判断），放在这里只会让一次失败把"能不能进"变成 500。
+        """
+        if not ticket:
+            return None
+        now = _utc_now()
+        with self._connection(write=True) as connection:
+            row = connection.execute(
+                "SELECT tenant_id, environment, workspace_id, expires_at, used_at"
+                " FROM knowledge_hop_tickets WHERE ticket = ?",
+                (ticket,),
+            ).fetchone()
+            if row is None or str(row["environment"]) != environment:
+                return None
+            if str(row["used_at"] or "") or datetime.fromisoformat(str(row["expires_at"])) <= now:
+                return None
+            updated = connection.execute(
+                "UPDATE knowledge_hop_tickets SET used_at = ? WHERE ticket = ? AND used_at IS NULL",
+                (_iso(now), ticket),
+            )
+            if updated.rowcount != 1:
+                return None
+        return {
+            "tenant_id": str(row["tenant_id"]),
+            "workspace_id": str(row["workspace_id"] or ""),
+        }
+
+    def prune_hop_tickets(self, *, older_than_seconds: float = 600.0) -> int:
+        """删掉很久以前的行。票只在秒级有用，留一天的行只是垃圾。"""
+        cutoff = _iso(_utc_now() - timedelta(seconds=older_than_seconds))
+        with self._connection(write=True) as connection:
+            deleted = connection.execute("DELETE FROM knowledge_hop_tickets WHERE expires_at < ?", (cutoff,))
+        return int(deleted.rowcount or 0)
+
     def record_knowledge_access(
         self,
         *,
@@ -1576,6 +1653,31 @@ class GatewayStore:
                 );
                 CREATE INDEX IF NOT EXISTS idx_knowledge_access_tenant
                     ON knowledge_access_ledger(tenant_id, at DESC);
+
+                -- 一次性跳转票（#985）。
+                --
+                -- **为什么需要它**：cookie 只能由它所属的域设置。桥在
+                -- `dify.ranlei.work` 上发 `Set-Cookie: Domain=.mall.qushiyun.com` 会被
+                -- 浏览器**拒绝**（设置方不在那个域下）。所以会话必须由 `kb.mall` 那一跳
+                -- 自己种下去 —— 两次导航之间要传的东西就是这张票。
+                --
+                -- 存库不存内存：网关是多进程的，内存票会随机失效，而那表现为"有时能进、
+                -- 有时不能"，是最难排查的一种失败。
+                --
+                -- 票里**不含会话**：会话在兑换那一刻才去换，票只是一个"这个浏览器刚刚
+                -- 通过了身份"的一次性凭据。这样即使票被读到，也换不出别人的东西 ——
+                -- 兑换仍然要求一次有效的 RAGFlow 登录。
+                CREATE TABLE IF NOT EXISTS knowledge_hop_tickets (
+                    ticket TEXT PRIMARY KEY,
+                    tenant_id TEXT NOT NULL,
+                    environment TEXT NOT NULL,
+                    workspace_id TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    used_at TEXT
+                );
+                CREATE INDEX IF NOT EXISTS idx_knowledge_hop_expiry
+                    ON knowledge_hop_tickets(expires_at);
 
                 -- 运营在界面上点的「知识源」：一条 = Dify 里一个外部知识库。
                 --

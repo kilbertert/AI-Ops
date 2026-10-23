@@ -28,6 +28,7 @@ PUBLISH_KEY = "p" * 40
 INTERNAL_TOKEN = "i" * 40
 ORIGIN = "https://dify.example"
 TENANT = "1942105476598861824"
+WORKSPACE_ID = "c3f871e1-ffd0-4a10-a84a-b8696f7acd25"
 
 
 class _Upstream:
@@ -51,6 +52,10 @@ class _Upstream:
         ]
         self.gateway_status = 200
         self.gateway_body: Any = None
+        #: workspace 反查（桥用它把租户换成 workspace）。
+        self.workspace_status = 200
+        self.workspace_body: Any = None
+        self.workspace_id = WORKSPACE_ID
         self.base = ""
 
     def start(self) -> None:
@@ -104,6 +109,12 @@ class _Upstream:
                         "headers": {k.lower(): v for k, v in self.headers.items()},
                     }
                 )
+                if self.path.startswith("/console/api/workspaces/current/summary"):
+                    if src.workspace_body is not None:
+                        self._reply(src.workspace_status, src.workspace_body)
+                    else:
+                        self._reply(200, {"id": src.workspace_id, "name": "aiops-41-Ulink"})
+                    return
                 if not self.path.startswith("/v1/internal/knowledge/open"):
                     self._reply(404, {})
                     return
@@ -171,7 +182,7 @@ def _gateway_calls(upstream: _Upstream) -> list[dict[str, Any]]:
 def test_a_valid_session_gets_a_303_with_its_tenants_workspace(upstream: _Upstream) -> None:
     server = _bridge(upstream)
     try:
-        status, headers, _body = _get(server, "/__aiops/knowledge-open")
+        status, headers, _body = _get(server, "/__aiops/knowledge-open?workspace=" + WORKSPACE_ID)
     finally:
         server.shutdown()
         server.server_close()
@@ -189,7 +200,7 @@ def test_the_gateway_session_cookie_is_relayed_to_the_browser(upstream: _Upstrea
     """网关给的 cookie 必须原样到浏览器 —— 桥是服务端，它自己不存 cookie。"""
     server = _bridge(upstream)
     try:
-        _status, headers, _body = _get(server, "/__aiops/knowledge-open")
+        _status, headers, _body = _get(server, "/__aiops/knowledge-open?workspace=" + WORKSPACE_ID)
     finally:
         server.shutdown()
         server.server_close()
@@ -212,8 +223,8 @@ def test_url_parameters_cannot_change_the_tenant(upstream: _Upstream, param: str
     """
     server = _bridge(upstream)
     try:
-        bare = _get(server, "/__aiops/knowledge-open")
-        with_param = _get(server, f"/__aiops/knowledge-open?{param}")
+        bare = _get(server, "/__aiops/knowledge-open?workspace=" + WORKSPACE_ID)
+        with_param = _get(server, f"/__aiops/knowledge-open?workspace={WORKSPACE_ID}&{param}")
     finally:
         server.shutdown()
         server.server_close()
@@ -228,7 +239,7 @@ def test_url_parameters_cannot_change_the_tenant(upstream: _Upstream, param: str
 def test_no_dify_cookie_is_401_and_never_asks_the_proxy(upstream: _Upstream) -> None:
     server = _bridge(upstream)
     try:
-        status, _headers, body = _get(server, "/__aiops/knowledge-open", cookie="")
+        status, _headers, body = _get(server, "/__aiops/knowledge-open?workspace=" + WORKSPACE_ID, cookie="")
     finally:
         server.shutdown()
         server.server_close()
@@ -242,7 +253,7 @@ def test_a_session_the_proxy_does_not_know_is_401(upstream: _Upstream) -> None:
     upstream.company_tenant = None  # 代理解不出身份
     server = _bridge(upstream)
     try:
-        status, _headers, _body = _get(server, "/__aiops/knowledge-open")
+        status, _headers, _body = _get(server, "/__aiops/knowledge-open?workspace=" + WORKSPACE_ID)
     finally:
         server.shutdown()
         server.server_close()
@@ -259,7 +270,7 @@ def test_no_publish_permission_still_opens_the_knowledge_base(upstream: _Upstrea
     """
     server = _bridge(upstream)
     try:
-        status, _headers, _body = _get(server, "/__aiops/knowledge-open")
+        status, _headers, _body = _get(server, "/__aiops/knowledge-open?workspace=" + WORKSPACE_ID)
     finally:
         server.shutdown()
         server.server_close()
@@ -274,7 +285,7 @@ def test_no_publish_permission_still_opens_the_knowledge_base(upstream: _Upstrea
 def test_the_route_is_absent_without_its_configuration(upstream: _Upstream, missing: str) -> None:
     server = _bridge(upstream, **{missing: ""})
     try:
-        status, _headers, _body = _get(server, "/__aiops/knowledge-open")
+        status, _headers, _body = _get(server, "/__aiops/knowledge-open?workspace=" + WORKSPACE_ID)
     finally:
         server.shutdown()
         server.server_close()
@@ -291,7 +302,7 @@ def test_a_gateway_refusal_is_a_readable_page_not_a_json_dump(upstream: _Upstrea
     upstream.gateway_body = {"error": {"code": "KNOWLEDGE_UPSTREAM_UNAVAILABLE"}}
     server = _bridge(upstream)
     try:
-        status, headers, body = _get(server, "/__aiops/knowledge-open")
+        status, headers, body = _get(server, "/__aiops/knowledge-open?workspace=" + WORKSPACE_ID)
     finally:
         server.shutdown()
         server.server_close()
@@ -307,7 +318,7 @@ def test_a_gateway_answer_without_a_target_is_a_failure(upstream: _Upstream) -> 
     upstream.gateway_body = {"target": "", "cookies": []}
     server = _bridge(upstream)
     try:
-        status, _headers, _body = _get(server, "/__aiops/knowledge-open")
+        status, _headers, _body = _get(server, "/__aiops/knowledge-open?workspace=" + WORKSPACE_ID)
     finally:
         server.shutdown()
         server.server_close()
@@ -320,10 +331,70 @@ def test_a_malformed_cookie_is_dropped_rather_than_widened(upstream: _Upstream) 
     upstream.cookies = [{"name": "session", "value": "", "domain": ".mall.qushiyun.com"}]
     server = _bridge(upstream)
     try:
-        status, headers, _body = _get(server, "/__aiops/knowledge-open")
+        status, headers, _body = _get(server, "/__aiops/knowledge-open?workspace=" + WORKSPACE_ID)
     finally:
         server.shutdown()
         server.server_close()
 
     assert status == 303  # 跳转本身仍成立
     assert "set-cookie" not in headers
+
+
+# ── workspace 由页面带上来 ───────────────────────────────────────────────
+
+
+def test_the_workspace_comes_from_the_page_and_reaches_the_gateway(upstream: _Upstream) -> None:
+    """页面把它当前的 workspace 带上来，桥原样转给网关。
+
+    真机（2026-10-23）连着纠正了两次才定到这里：
+
+    1. 桥拿**公司身份**推 workspace —— 用 Dify 的是平台账号（`tenant_id=-1`），
+       推不出来，真机上就是 409「还没有可用的工作区」；
+    2. 桥**自己**去问 Dify —— 顶层 GET 不带 CSRF，Dify 回 401。
+
+    只有页面知道"我此刻停在哪"：它有会话，也能从 cookie 里读 CSRF 发出去。
+    """
+    server = _bridge(upstream)
+    try:
+        status, _headers, _body = _get(server, "/__aiops/knowledge-open?workspace=" + WORKSPACE_ID)
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert status == 303
+    opens = _gateway_calls(upstream)
+    assert len(opens) == 1
+    assert f"workspace={WORKSPACE_ID}" in opens[0]["path"]
+
+
+def test_a_missing_workspace_is_a_400_not_a_guess(upstream: _Upstream) -> None:
+    """没有 workspace 就不猜 —— 猜一个等于把 A 的会话发给 B。"""
+    server = _bridge(upstream)
+    try:
+        status, _headers, body = _get(server, "/__aiops/knowledge-open")
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert status == 400
+    assert "工作区" in body
+    assert _gateway_calls(upstream) == []
+
+
+def test_the_page_supplied_workspace_is_still_gated_by_a_dify_session(
+    upstream: _Upstream,
+) -> None:
+    """带了 workspace **不等于**有身份：没有 Dify 会话照样 401。
+
+    这是"参数来自前端"这条设计能成立的前提 —— 前端能决定的只是"我这页看着是哪个
+    workspace"，而桥仍然要求一个**属于这个浏览器**的 Dify 会话，网关仍然只认内部令牌。
+    """
+    server = _bridge(upstream)
+    try:
+        status, _headers, _body = _get(server, "/__aiops/knowledge-open?workspace=" + WORKSPACE_ID, cookie="")
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    assert status == 401
+    assert _gateway_calls(upstream) == []
