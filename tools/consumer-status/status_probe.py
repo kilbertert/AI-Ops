@@ -414,7 +414,15 @@ def _live_steps(page, *, host: str, login: dict, question: str) -> None:
     page.locator(".send-btn").click()
 
 
-def _drive(*, port: int, login: dict, question: str, timeout: float, steps=None):
+def _drive(
+    *,
+    port: int,
+    login: dict,
+    question: str,
+    timeout: float,
+    steps=None,
+    region_timeout: float = 10.0,
+):
     """驱动浏览器。
 
     `steps` 是**注入点**：真实运行用 `_live_steps`（连真实站点），离线回放用
@@ -482,20 +490,31 @@ def _drive(*, port: int, login: dict, question: str, timeout: float, steps=None)
                 break
             page.wait_for_timeout(500)
 
-        # 助手区域：等到它真的渲染出内容，而不是网络一完成就取。
+        # 助手区域：等**完整**回答，而不是"第一次出现非空文本"。
+        # 逐步渲染时第一段是不完整的；读到它就收工会把半截当答案
+        # （Codex 在 #1010 的 P2 指出的正是这个时序）。
+        expected = answer_from_events(events, _qa_id_of(events))
         region_text = ""
         region_in_user_bubble = False
-        region_deadline = time.monotonic() + 10
+        region_deadline = time.monotonic() + region_timeout
         while time.monotonic() < region_deadline:
             for selector in ASSISTANT_SELECTORS:
                 node = page.locator(selector).last
                 try:
-                    if node.count() and node.inner_text(timeout=800).strip():
-                        region_text = node.inner_text(timeout=1500)
-                        break
+                    if not (node.count() and node.inner_text(timeout=800).strip()):
+                        continue
+                    candidate = node.inner_text(timeout=1500)
                 except Exception:  # noqa: BLE001
                     continue
-            if region_text:
+                # 有完整答案可比对时，必须**包含**它；否则继续等。
+                if expected.strip() and _normalized(expected) not in _normalized(candidate):
+                    region_text = candidate  # 记住当前进度，但不算完成
+                    continue
+                region_text = candidate
+                break
+            if region_text and not expected.strip():
+                break
+            if expected.strip() and _normalized(expected) in _normalized(region_text):
                 break
             page.wait_for_timeout(300)
 

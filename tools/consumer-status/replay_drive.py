@@ -53,18 +53,22 @@ CHAT_PAGE = """<!doctype html><html><body>
   <button class="send-btn" onclick="send()">send</button>
 </div>
 <script>
-function addAnswer(text) {
-  var row = document.createElement('div');
-  row.className = 'ai-row';
-  var msg = document.createElement('div');
-  msg.className = 'ai-msg';
-  var bubble = document.createElement('div');
-  bubble.className = 'ai-bubble';
-  var span = document.createElement('span');
-  span.className = 'bubble-text';
-  span.textContent = text;
+// 助手消息**只有一个节点**，文本就地增长 —— 真实流式渲染就是这样，
+// 不是每来一段就新插一条。后者会让"读到第一条非空就收工"永远读到最新那条，
+// 于是测不出时序缺陷。
+function assistantNode() {
+  var span = document.querySelector('.ai-row .ai-msg .bubble-text');
+  if (span) return span;
+  var row = document.createElement('div'); row.className = 'ai-row';
+  var msg = document.createElement('div'); msg.className = 'ai-msg';
+  var bubble = document.createElement('div'); bubble.className = 'ai-bubble';
+  span = document.createElement('span'); span.className = 'bubble-text';
   bubble.appendChild(span); msg.appendChild(bubble); row.appendChild(msg);
   document.getElementById('list').appendChild(row);
+  return span;
+}
+function addAnswer(text) {
+  assistantNode().textContent = text;
 }
 function send() {
   var q = document.getElementById('input').value;
@@ -134,9 +138,20 @@ class Replay:
         if self.scenario == "normal":
             page.evaluate("(t) => addAnswer(t)", ANSWER)
         elif self.scenario == "progressive":
-            page.evaluate("(t) => addAnswer(t.slice(0, 20))", ANSWER)
-            page.wait_for_timeout(300)
-            page.evaluate("(t) => addAnswer(t)", ANSWER)
+            # **异步**补全：先插一段不完整的，然后**立刻返回**，让 `_drive()` 的
+            # 轮询与区域读取真的和渲染**重叠**。
+            # 上一版两段都在 steps 返回前插完，`_drive()` 开始等的时候答案早已完整，
+            # 于是这个场景根本没测到"逐步渲染" —— Codex 的 P2 指的就是这里。
+            # 第二段要落到 **_drive 的轮询之后**才有意义：轮询 500ms 一轮，
+            # 先到 completed 才去读区域。所以把补全推迟到 2500ms —— 那时
+            # `_drive` 已经在读区域，读到的是不完整的第一段。
+            page.evaluate(
+                """(t) => {
+                    addAnswer(t.slice(0, 20));
+                    setTimeout(() => addAnswer(t), 1200);
+                }""",
+                ANSWER,
+            )
         elif self.scenario == "failed":
             # 失败场景：助手区域始终没有回答，只有用户提问
             page.evaluate("(t) => addAnswer(t)", "")
@@ -200,6 +215,10 @@ def main() -> int:
                 question="check my latest order status",
                 timeout=8,
                 steps=replay.steps,
+                # 回放把区域等待压到 2.0s，第二段在 1200ms 到 ——
+                # 二者真实重叠：**正确实现**会等到第二段，**读到第一段就收工**的
+                # 实现会拿到半截，判据当场不过。
+                region_timeout=2.0,
             )
         finally:
             server.shutdown()

@@ -191,8 +191,15 @@ python3 tools/consumer-status/replay_selector.py   # 0 = 选择器符合预期
 - 所有 `/v1/` 在路由层拦截并返回合成数据；**未声明的业务接口直接 abort**；
 - 因此 `production_business_requests` 恒为 **0**。
 
-三个场景：`normal` / `progressive`（分两段渲染）/ `failed`（错误 QA）。
+三个场景：`normal` / `progressive`（**异步**分两段渲染）/ `failed`（错误 QA）。
 前两个判据必须全过，第三个**必须至少一项不过**。
+
+`progressive` 的时序是刻意设计的：第二段在 1200ms 到，而回放把区域等待压到
+2.0s —— 二者**真实重叠**。`_drive()` 必须等到**完整**回答；"第一次出现非空文本
+就收工"的实现会拿到半截、判据当场不过（这条已做变异复验）。
+
+助手消息在回放里是**同一个节点**、文本就地增长（真实流式渲染就是这样）。
+若每段新插一条，`locator.last` 永远读到最新的那条，时序缺陷就测不出来了。
 
 ```bash
 python3 tools/consumer-status/replay_drive.py    # 0 = 三场景都符合预期
