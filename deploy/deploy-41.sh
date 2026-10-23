@@ -431,6 +431,18 @@ step "依赖漂移检查"
 # 若拿当前 checkout 去比，只能证明「操作者的工作区与主机一致」，证明不了「要部署的那个
 # commit 与主机环境兼容」—— 于是旧源码会被放进新依赖环境里跑。
 # 从 git 取目标 commit 的这两份文件，与 41 上的比。
+# `pyproject.toml` is compared by its **dependency declarations**, not its bytes.
+#
+# Measured 2026-10-23: a commit that only edited comments and `addopts` in the
+# dev group produced a different sha256 and stopped the deploy — while every
+# dependency list was byte-for-byte identical, on both pyproject and uv.lock.
+# The byte comparison answers "is this the same file", but the question that
+# matters is "will the restart fail to import something", and a comment cannot
+# cause that. Left as it was, every comment edit would wedge CD until someone
+# hand-ran the dependency-update procedure on a production host.
+#
+# `uv.lock` keeps the byte comparison: it is machine-generated, so a differing
+# byte really does mean a different resolved environment.
 for spec in "pyproject.toml" "uv.lock"; do
   local_sha=$(git show "$FULL_SHA:$spec" 2>/dev/null | sha256sum | cut -d' ' -f1 || true)
   if [ -z "$local_sha" ]; then
@@ -444,6 +456,26 @@ for spec in "pyproject.toml" "uv.lock"; do
     continue
   fi
   if [ "$local_sha" != "$remote_sha" ]; then
+    if [ "$spec" = "pyproject.toml" ]; then
+      # Same question, answered on the declarations instead of the bytes.
+      local_deps=$(git show "$FULL_SHA:$spec" 2>/dev/null | python3 -c '
+import sys, tomllib, json
+d = tomllib.loads(sys.stdin.read())
+print(json.dumps({
+    "dependencies": d.get("project", {}).get("dependencies", []),
+    "optional": d.get("project", {}).get("optional-dependencies", {}),
+    "groups": d.get("dependency-groups", {}),
+    "requires_python": d.get("project", {}).get("requires-python"),
+}, sort_keys=True))
+' 2>/dev/null || true)
+      remote_deps=$(dev-host exec "$HOST_TARGET" --allow-service-exec -- \
+        "python3 -c 'import sys,tomllib,json;d=tomllib.load(open(\"/opt/aiops-41/pyproject.toml\",\"rb\"));print(json.dumps({\"dependencies\":d.get(\"project\",{}).get(\"dependencies\",[]),\"optional\":d.get(\"project\",{}).get(\"optional-dependencies\",{}),\"groups\":d.get(\"dependency-groups\",{}),\"requires_python\":d.get(\"project\",{}).get(\"requires-python\")},sort_keys=True))'" \
+        2>/dev/null | grep -v Pseudo-terminal | tail -1)
+      if [ -n "$local_deps" ] && [ -n "$remote_deps" ] && [ "$local_deps" = "$remote_deps" ]; then
+        info "pyproject.toml 字节不同，但依赖声明逐项相同（注释/工具配置变更）—— 不构成依赖漂移"
+        continue
+      fi
+    fi
     cat >&2 <<EOF
 依赖漂移：目标 commit 的 $spec 与 41 上的不一致
   目标 commit ($SHORT_SHA) $local_sha

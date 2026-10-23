@@ -72,3 +72,24 @@ main」这条边界上打洞。不该由这一片决定。
 - `cd.yml` 的 `permissions` 从 `contents: read` 变为 `contents: write`，只为创建
   Release；部署本身仍走 SSH 自己的密钥，不经这个 token。
 - 发布步骤放在 Deploy **之后**：备注描述一个实际没发生的发布，比没有备注更糟。
+
+## 补记（2026-10-23 首次真实执行后）
+
+这条链第一次跑通到 Deploy 之后，暴露了一个在设计和本地测试里都看不见的缺陷：
+
+`dev-changelog` 只为**声明了** `serverPolicy.publishesVersions` 的仓库渲染，而那是
+**local git config，从不入库**。runner 的 checkout 是全新 clone，没有这条声明 ——
+工具打印 `skip … not declared`、**exit 0**、不写文件。步骤于是在下一行 `cp` 才失败，
+而当时 `dev-changelog` 的 stdout 被 `>/dev/null` 吞掉，日志里没有任何线索。
+
+两个结论改写了这条 ADR 的「后果」：
+
+- **`exit 0` 不等于「产出了文件」。** 对任何「为声明型仓库才做事」的工具，成功退出只
+  说明它做出了判断，不说明判断的结果是要做事。调用方必须自己验证产物。
+  这与「检查全绿可能是它看不见」是同型的：**退出码回答的是「有没有出错」，不是
+  「做没做」。**
+- **吞掉工具的输出会让失败无法分诊。** 那一行 `>/dev/null` 是实现者为了「让日志干净」
+  加的，代价是唯一的证据（`wrote <path>`）消失了。本地复现不了的问题，输出就是全部。
+
+修正：发布步骤显式声明两条 local config、用 `git rev-parse --show-toplevel` 取绝对根、
+保留输出、并断言产物存在（错误信息直接写出最可能的原因）。

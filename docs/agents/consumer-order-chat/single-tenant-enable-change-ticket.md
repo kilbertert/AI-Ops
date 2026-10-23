@@ -16,6 +16,7 @@
 | 可逆性 | 只改三项进程环境变量 + 一次重启；恢复即逐字回到当前 sha256 |
 | 主要代价 | 命中问法不再走模型（这是目的），未登记租户的同类问法变成 404（这是副作用） |
 | 建议 | **执行**，但只登记目标租户，并接受第九节的观察局限 |
+| 观察能力 | **2026-10-23 已补齐**：每次候选请求一行 `assistant_question_result`，覆盖成功/拒绝/异常并测整请求耗时。契约见[observability.md](observability.md) |
 
 不建议"直接常驻开放全租户"：没有账号级灰度，开关是进程级的。
 
@@ -33,6 +34,10 @@
 
 **上线前必须重取一次**：本片之后 `main` 若再有 `src/**` 合并，CD 会自动部署并重启，
 制品身份要按那时的 `/health` 重新记录，不能用本文的值。
+
+**观察能力随制品走**：`assistant_question_result` 行只有部署了含 `request_observation.py`
+的制品之后才会出现。上线前先用本文第九节的观察命令在 41 上确认能看到该行，
+看不到就说明制品还是旧的 —— 那种情况下窗口里的一切判断都退回到改动前。
 
 ---
 
@@ -209,9 +214,10 @@ assert charging_endpoint(s.charging_status_base_url, "<target-tenant>", require_
 | 单请求外部调用 | 4 次 SQL（`list_orders` 1 次 + 可见性 3 次）+ 1 次 CPMS HTTP | 线程被占满这段时间 |
 | SQL 上限 | `SET SESSION MAX_EXECUTION_TIME=3000` + 只读事务 | 单条 ≤ 3 s |
 | CPMS 超时 | `read_charging_status` 硬编码 10 s | 单次 ≤ 10 s |
-| 最坏单请求 | 4×3 s + 10 s ≈ 22 s（无重试） | nginx `proxy_read_timeout 120s`，不会被掐 |
-| **实测单请求** | **139 ms / 148 ms**（#1015 两次真实页面查询，`created_at → completed_at`） | 最坏值是理论上限，与实测差两个数量级；观察期以实测分布为准 |
-| QA 截止 | 15 min（但本路径同步完成，从不排队） | 观察期出现 `queued`/`running` = 落回了模型路径 |
+| 依赖段理论上限 | 4×3 s + 10 s ≈ 22 s（无重试）—— **只是依赖段之和**，不含身份解析与连接建立 | **不是**整请求硬上限；不要拿它当超时预算 |
+| 实测（旧口径，已作废） | ~~139 ms / 148 ms~~ —— 那是 `assistant_questions.created_at → completed_at`，即 **SQL 与 CPMS 之后**的一段 | 旧数字**不是整请求耗时**，本行保留仅为说明作废原因 |
+| **实测（新口径）** | 由 `assistant_question_result` 行的 `duration_ms` 给出，范围见[观察契约](observability.md)第三节 | 起点在进入请求时，覆盖身份解析、路由前授权闸、SQL、CPMS、证据落盘；不含 nginx 与网络 |
+| QA 截止 | 15 min（但本路径同步完成，从不排队） | 出现 `queued`/`running` 说明该请求**没走本路径**；但不能据此断定是哪条请求走了模型（见下方「关联能力」） |
 | 共享 CPMS 端点 | 目标租户与 OPS 运维工具**用同一个地址**（sha256 前 12 同为 `51cf3382c693`） | 状态查询与运维工具共享该上游的容量 |
 
 ### 5.5 证据存在哪、怎么留
@@ -280,17 +286,40 @@ ssh aiops-41 'tr "\0" "\n" < /proc/$(systemctl show -p MainPID --value aiops-gat
 **观察期**：以"至少 1 条**真实用户**（非本片测试账号）命中新路径"为达成条件，最长 **7 天**。
 到期未命中 ⇒ 记录"未观测到真实使用"，**不延长，也不宣称已验证**。
 
-**停止条件（任一触发即停用，按第七节恢复）**：
+**停止条件（任一触发即停用，按第七节恢复）**。
 
-| 观察项 | 触发值 |
-|---|---|
-| `POST /v1/assistant/questions` 5xx 占比 | 窗口内 > 5%，或连续 3 次 |
-| 未登记租户的 404 `TENANT_ENDPOINT_UNRESOLVED` | 出现即停（说明有别的租户在用） |
-| 本应成功的请求出现 401/403 | 出现即停 |
-| `consumer-order-chat:` 的 QA 出现 `queued`/`running`/`failed` | 任何一条即停 |
-| CPMS 502/503 | 连续 3 次，或占比 > 5% |
-| 单请求耗时 | p95 > 5 s |
-| 同一 `qa_id` 同时有 `consumer-order-chat:` 标记与 `routing` 指标 | 出现即停（说明走了模型） |
+分母是 `assistant_question_result` 行的总数（候选请求），**不是**全站问答，
+**也不是** `agent_run_metrics` 的行数。观察命令见[观察契约](observability.md)第六节。
+
+| 观察项 | 判定方式 | 触发值 |
+|---|---|---|
+| 5xx 占比 | `outcome=failed` 行 / 全部行 | > 5%，或连续 3 条 `outcome=failed` |
+| 有别的租户在用 | `error_code=TENANT_ENDPOINT_UNRESOLVED` 的行 | 出现即停 |
+| 本应成功的请求被拒 | `outcome=refused` 且 `error_code` ∈ {`INSUFFICIENT_SCOPE`, `CONSUMER_SCOPE_REQUIRED`} | 出现即停 |
+| 落回了模型路径 | **只有拿到真实关联证据才能归因**：同一条 `qa_id` 既在 `assistant_questions` 里是 `consumer-order-chat:`，又在 `agent_run_metrics` 里有一条**带该 `qa_id` 关联**的 `routing`/`qa` 行（或 `runs/<该 run id>/` 目录与它一一对应） | 有证据出现即停；**关联不上写「待核实」**，不当作已发生 |
+| CPMS 异常 | `error_code=CHARGING_STATUS_UNAVAILABLE` 的行 | 连续 3 条，或占比 > 5% |
+| 单请求耗时 | `duration_ms` 的 p95 | > 5 s，**且样本 ≥ 20 条**；不足 20 条只看最大值，不下 p95 结论 |
+
+**关联能力（这一条决定了「落回模型」能不能判）**：
+
+`agent_run_metrics` 的行**没有 `qa_id`**，`gateway/runs/` 的目录名里也没有。所以
+「同租户同秒出现了 `routing` 行」**不能**证明是**这一条**状态查询调用了模型 ——
+共享网关上的普通问答本来就会在同一秒写 `routing` 行。按那个口径设停止条件，
+会把别人的正常问答当成本片的事故，进而误停用。
+
+- **有真实关联键**（某个 `qa_id` 同时出现在两侧）⇒ 可以归因，按上表停用；
+- **没有关联键** ⇒ 写「**待核实**」，并附上当时窗口内的候选行数与 `routing` 行数，
+  由人决定是否加查。**不新增全链路追踪**（那是另一片的范围）。
+
+**本片之后仍然不能判的**（不要写成"已具备"）：
+
+- **端到端时延**：`duration_ms` 不含 nginx 与网络。要判"用户等太久"需要 nginx 侧的耗时字段，
+  本片没有做；
+- **按请求跨层串联**：`request_id` 只存在于网关这一行，nginx 日志没有对应字段，
+  跨层只能按秒对齐；
+- **未登记租户"本来会问"**：只能看到"确实出现了 404"这一侧，看不到"本来会问但被挡在别处"。
+
+若开放决策依赖以上任一项，那一条**必须**先补齐，或在决策里明确接受盲区。
 
 ---
 
@@ -373,39 +402,67 @@ SELECT qa_id,
 FROM assistant_questions
 WHERE internal_run_id LIKE 'consumer-order-chat:%' AND created_at >= :window_start;
 
--- ③ 对应请求是否发生模型/诊断调用：三条一起看，缺一条都不能下结论
---    (a) token_count 必须为 0
-SELECT count(*) FROM agent_run_metrics
-WHERE route_type='qa' AND created_at >= :window_start AND token_count > 0;
---    (b) 同租户在 [created_at-1s, completed_at+120s] 内有没有 routing 行
---    (c) gateway/runs 下有没有该时间段新建的 run- 目录
+-- ③ 这一次查询有没有走模型：先看它**自己的行**
+--    本路径是同步确定性读取，成功即零模型。判据是这一行的内部标记与形状：
+--      · internal_run_id 必须以 'consumer-order-chat:' 开头
+--      · result_json 里不该有模型才有的东西（token 计数、turn）
+SELECT qa_id,
+       internal_run_id,
+       CASE WHEN internal_run_id LIKE 'consumer-order-chat:%' THEN 0 ELSE 1 END AS odd_prefix,
+       CASE WHEN json_extract(result_json, '$.token_count') IS NOT NULL
+             OR json_extract(result_json, '$.turn_count') IS NOT NULL THEN 1 ELSE 0 END AS has_model_fields
+FROM assistant_questions
+WHERE qa_id IN (:candidate_qa_ids)          -- 来自观察日志里本片那些成功行的 qa_id
+  AND created_at >= :window_start;
+-- 任何一行 odd_prefix=1 或 has_model_fields=1 ⇒ 可归因：这一条确实走了模型。
+-- 不使用该查询时，写「该检查不可用」，**不要**用恒空条件冒充"没问题"。
 ```
+
+`qa_id` 清单从观察日志来（第 6.2 节的成功行）：
+
+```bash
+journalctl -u aiops-gateway-41 --since "$SINCE" --until "$UNTIL" --no-pager -o cat \
+  | grep -F 'assistant_question_result ' \
+  | grep -F "tenant_hash=$TENANT_HASH" \
+  | grep -o 'qa_id=qa_[0-9a-f]\{32\}' | cut -d= -f2 | sort -u
+```
+
+把结果拼成 `IN (...)` 的字面列表（它们都是 `qa_` + 32 位十六进制，可直接内联）。
+
+**不要**用「同租户同秒出现了 `routing` 指标 / 新建了 `run-` 目录」判定本片请求走了模型。
+`agent_run_metrics` 与 `runs/` 都**没有 `qa_id` 字段**，共享网关上的普通问答会在同一秒
+写出同样的行。那个口径会把别人的正常问答记成本片事故。
+
+| 手上有什么 | 怎么写 |
+|---|---|
+| 某个 `qa_id` 在 `assistant_questions` 与 `agent_run_metrics`/`runs` 两侧都能对上 | **可归因**：这确实走了模型，按停止条件处理 |
+| 只有同租户同秒的 `routing` 行，对不上任何 `qa_id` | 写「**待核实**」，附窗口内候选行数与 `routing` 行数；不当作已发生 |
+| 候选 `qa_id` 在 `assistant_questions` 里的 `internal_run_id` 不是 `consumer-order-chat:` 开头，或 `result_json` 带模型字段 | **可归因**（这是它自己的行），按停止条件处理；查询见 ③ |
 
 **禁止**把"整台 Gateway 的 `runs` 新增为零"当通过条件：共享网关的其他请求
 （FAQ、Promo、诊断、operator 工具）本来就会正常调用模型。
 
-### 9.3 已知的观察盲区（必须写进回执，不能补写成"已观测"）
+### 9.3 观察盲区——**已在下一片补齐**（2026-10-23）
 
-| 盲区 | 原因 | 后果 |
-|---|---|---|
-| **拒绝的错误码** | `_consumer_order_chat` 的失败分支**不写任何指标行**；`StandardAPIError` 处理器只回响应体 | 只能从 nginx 日志看到 404/502 的**状态**，看不到是 `ORDER_NOT_FOUND` 还是 `TENANT_ENDPOINT_UNRESOLVED` |
-| **网关自身访问日志** | 近 7 天 journal 里 `"GET /v1/…"` 行数为 **0**（uvicorn access log 未启用） | 只能靠 nginx 那一层 |
-| **上游耗时** | api.mall 用默认 combined 格式 | 看不到 `upstream_response_time` |
-| **请求 id** | 全链路没有 | 跨层只能按秒对齐 |
+本节原先列出的四个盲区，其中三项现在有了直接证据；写在这里是为了让读者知道
+**哪些判断依据变了**，而不是把旧的"判不了"留在文档里：
 
-### 9.4 最小修复建议（本片不实施）
+| 原盲区 | 现在 |
+|---|---|
+| 拒绝的错误码看不到 | **已消除**：每次候选请求写一行 `assistant_question_result`，带 `outcome`/`http_status`/`error_code`/`stage`。见[观察契约](observability.md) |
+| 请求 id 全链路没有 | **部分消除**：该行有服务端生成的 `request_id`，并带成功请求的 `qa_id`。nginx 侧仍无对应字段（见第八节缺口） |
+| 网关自身访问日志 0 行 | **未改**（本片不加 uvicorn access log，避免把全站请求都打出来） |
+| 上游耗时看不到 | **未改**，但 `duration_ms` 覆盖到了 CPMS 读取这一段 |
 
-让拒绝可归因，最小改动是**复用已有的 `_record_route_metric`**：在
-`_consumer_order_chat` 的 `except StandardAPIError` 分支里补一行
+**仍然判不了的**：端到端时延（不含 nginx 与网络）、按 `request_id` 跨 nginx 与网关串联。
+凡依赖这两项的停止条件，本片**不写成"可判定"**。
 
-```python
-_record_route_metric(context, caller, route_type="qa", outcome="failed", error_code=exc.code)
-```
+### 9.4 原来的"约 3 行最小修复"已被取代
 
-约 3 行，不加新表、不加新系统，拒绝就会出现在 `agent_run_metrics` 里（带租户、带错误码、
-带时间），与 QA 行按"同租户 + 同一两秒"对齐。**这不是限流，也不是灰度平台**。
-
-是否在开放前做这一条，是下一轮的判断；不做的话，第九节 9.3 的盲区要在回执里明写。
+上一版建议在 `_consumer_order_chat` 里补一条 `_record_route_metric`。实施时发现那个建议
+**不成立**：鉴权发生在函数的 `try` 之前，显式 `payload.order_no` 还可能在路由前就被拒，
+**补在函数里覆盖不到这些路径**。现在的实现放在 ASGI 中间件 + 两个异常处理器上，
+原因与取舍见[观察契约](observability.md)第一、四节。
 
 ---
 
