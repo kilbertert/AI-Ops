@@ -234,6 +234,8 @@ flowchart TB
 首次只启用 Dify 运维只读工具时，CPMS 地址使用
 `AIOPS_GATEWAY_OPS_CHARGING_STATUS_BASE_URL`，不会同时打开 consumer 充电状态入口；
 接入及兼容规则见[首片手册](docs/agents/dify-ops-first-slice/README.md)。
+客户端聊天另有默认关闭的[本人状态查询](docs/agents/consumer-order-chat/README.md)：
+支持指定订单与本人最新一单，复用现有 App 请求/回答格式；不使用运维服务身份，不调用模型。
 2026-10-22 operator 两工具已常驻启用，另次授权真实预览的模型段通过；
 公司 App 与业务准确率未验收。[离线证据复核](docs/agents/dify-ops-first-slice/model-acceptance.md)
 不追加模型或业务请求。

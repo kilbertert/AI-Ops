@@ -47,6 +47,7 @@ class GatewayServerSettings:
     third_session_service_token: str = ""
     third_session_key_prefix: str = "app:3rd_session:"
     charging_status_base_url: str = ""
+    consumer_order_chat_enabled: bool = False
     ops_bindings_file: str = ""
     ops_charging_status_base_url: str = ""
     execution_environment: str = ""
@@ -308,6 +309,11 @@ class GatewayServerSettings:
             or _file_value(file_values, "AIOPS_GATEWAY_THIRD_SESSION_KEY_PREFIX", "app:3rd_session:"),
             charging_status_base_url=_env("AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL")
             or _file_value(file_values, "AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL"),
+            consumer_order_chat_enabled=(
+                _env("AIOPS_GATEWAY_CONSUMER_ORDER_CHAT_ENABLED")
+                or _file_value(file_values, "AIOPS_GATEWAY_CONSUMER_ORDER_CHAT_ENABLED")
+            ).lower()
+            in {"1", "true", "yes", "on"},
             ops_bindings_file=_env("AIOPS_GATEWAY_OPS_BINDINGS_FILE")
             or _file_value(file_values, "AIOPS_GATEWAY_OPS_BINDINGS_FILE"),
             ops_charging_status_base_url=_env("AIOPS_GATEWAY_OPS_CHARGING_STATUS_BASE_URL")
@@ -452,6 +458,8 @@ class GatewayServerSettings:
             parse_charging_endpoints(self.charging_status_base_url)
             if not SAFE_PROFILE_NAME.fullmatch(self.execution_environment):
                 raise ValueError("charging status requires a logical execution environment")
+        if self.consumer_order_chat_enabled and not self.charging_status_base_url:
+            raise ValueError("consumer order chat requires its charging status endpoint")
         if self.ops_charging_status_base_url:
             parse_charging_endpoints(self.ops_charging_status_base_url)
         if self.ops_bindings_file:

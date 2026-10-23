@@ -150,8 +150,8 @@ def test_the_helper_that_persisted_a_turn_without_an_answer_is_gone() -> None:
     assert offenders == [], f"a claimed turn is being persisted without an answer again: {offenders}"
 
 
-def test_every_claim_site_hands_its_turn_to_a_worker() -> None:
-    """Each branch that claims the slot must give the turn to a job worker.
+def test_every_claim_site_hands_its_turn_to_a_worker_or_completes_status() -> None:
+    """Each claim reaches a worker or the synchronous status-result write.
 
     The claim exists so the worker can fill it in at the terminal state. A
     branch that claims and hands the turn nowhere holds the conversation busy
@@ -161,7 +161,13 @@ def test_every_claim_site_hands_its_turn_to_a_worker() -> None:
     offenders = []
     for call in _claim_sites(tree):
         statement, block = _scope_of(tree, call)
-        if not _handoffs(_calls_in(block)):
+        calls = _calls_in(block)
+        synchronous_status_write = any(
+            _called_name(node.func) == "complete_turn"
+            and {kw.arg for kw in node.keywords} >= {"answer", "status_qa_id"}
+            for node in calls
+        )
+        if not _handoffs(calls) and not synchronous_status_write:
             offenders.append(
                 f"{API_FILE}:{statement.lineno} the block claiming a turn at line {call.lineno}"
                 f" hands it nowhere (block is {len(block)} statements)"

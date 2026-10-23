@@ -626,6 +626,10 @@ Content-Type: application/json
 
 ### 场景 B：自由提问（任意问题）—— 异步 job，轮询，返回 blocks[]
 
+部署显式启用本人状态查询后，明确的指定单/最新单状态问题可直接完成业务读取，仍返回
+`202 type=qa`，首次响应即可为 `status=completed`；沿用既有 GET 回读与 blocks 渲染。
+该路径无模型调用，身份和历史回读仍按本人范围验证；[范围与启用方法](consumer-order-chat/README.md)。
+
 ```http
 POST https://api.qumall.qushiyun.com/v1/assistant/questions
 {"question": "充电桩怎么拔枪？有没有演示视频"}
