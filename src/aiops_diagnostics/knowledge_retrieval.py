@@ -49,7 +49,7 @@ ALLOWED_IMAGE_TYPES = frozenset({"image/png", "image/jpeg", "image/webp"})
 ALLOWED_VIDEO_TYPES = frozenset({"video/mp4", "video/webm"})
 ALLOWED_MEDIA_TYPES = ALLOWED_IMAGE_TYPES | ALLOWED_VIDEO_TYPES
 
-#: Hosts whose video links may travel as ``external_url`` (#1035).
+#: Hosts whose video links we are willing to put in ``media.url`` (#1035).
 #:
 #: A URL found in a knowledge-base chunk is NOT automatically safe to hand to a
 #: browser: the frontend renders it in a player, so anyone who can write a
@@ -201,43 +201,34 @@ class MediaGrant:
 @dataclass(frozen=True, slots=True)
 class MediaResource:
     resource_id: str
+    #: Where the player should load this from. Two shapes, by design (ADR-0120):
+    #:
+    #: * a signed **same-origin path** — ``/v1/media/media_….sig`` — when we
+    #:   hold the bytes;
+    #: * an **absolute external URL** — ``https://youtu.be/…`` — when the chunk
+    #:   quoted a link to a published video we do not host.
+    #:
+    #: The frontend already treats this field as "the video address": it runs
+    #: ``parseYoutubeUrl(media.url)`` and picks an embedded player when that
+    #: parses, a plain ``<video src>`` otherwise (APK ``app-service.js``,
+    #: 2026-10-23). An earlier version of this change put the external link in
+    #: a separate ``external_url`` field; that asked a finished frontend to
+    #: change for no user-visible gain.
     url: str
     kind: str
     mime_type: str
     title: str | None
     reference_id: str
-    #: A playable link found in the chunk this resource came from (#1035).
-    #: Empty by default: most media is our own bytes, and "no external link"
-    #: is the normal case, not a defect. Only a host in
-    #: :data:`EXTERNAL_VIDEO_HOSTS` ever lands here.
-    external_url: str = ""
-    #: Which player the frontend should use for ``external_url``. Decided by
-    #: US from the host, never inferred by the frontend from the URL shape —
-    #: an embedder has to handle a closed set of players, not parse URLs.
-    embed: str = ""
 
     def to_dict(self) -> dict[str, Any]:
-        payload: dict[str, Any] = {
+        return {
             "resource_id": self.resource_id,
+            "url": self.url,
             "kind": self.kind,
             "mime_type": self.mime_type,
             "title": self.title,
             "reference_id": self.reference_id,
         }
-        # `url` means "our media proxy serves these bytes". It is ABSENT when
-        # that is not true — an external-only resource (a link found in a text
-        # chunk) has no bytes of ours behind it, and handing out a signed path
-        # to the Markdown file that quoted the link would make a player fetch
-        # text labelled `video/mp4`. A frontend must therefore branch on
-        # `external_url` first, and `url` is exactly as reliable as before.
-        if self.url:
-            payload["url"] = self.url
-        # Absent, not empty-string: a frontend that always reads the field
-        # would otherwise see "" and have to treat it as "no link" anyway.
-        if self.external_url:
-            payload["external_url"] = self.external_url
-            payload["embed"] = self.embed
-        return payload
 
 
 class MediaResourceSigner:
@@ -279,7 +270,6 @@ class MediaResourceSigner:
         reference_id: str,
         title: str | None = None,
         external_url: str = "",
-        embed: str = "",
         now: datetime | None = None,
     ) -> MediaResource:
         if kind not in {"image", "video"}:
@@ -318,9 +308,11 @@ class MediaResourceSigner:
             **fields,
         )
         signature = hmac.new(self._secret, resource_id.encode("ascii"), hashlib.sha256).hexdigest()[:24]
-        # `url` stays empty for an external-only resource: see
-        # `MediaResource.to_dict`.
-        url = "" if (external_url and not backend_id) else f"{self._base_path}/{resource_id}.{signature}"
+        # An external link IS the address; the signed path only exists when we
+        # hold the bytes. `backend_id` is empty for external-only resources,
+        # which is what keeps a signed path from pointing at a document that
+        # merely quoted the link (ADR-0120).
+        url = external_url or f"{self._base_path}/{resource_id}.{signature}"
         return MediaResource(
             resource_id=resource_id,
             url=url,
@@ -328,8 +320,6 @@ class MediaResourceSigner:
             mime_type=mime_type,
             title=title,
             reference_id=reference_id,
-            external_url=external_url,
-            embed=embed,
         )
 
     def invalidate(self, resource_id: str) -> None:
@@ -932,7 +922,7 @@ def normalize_search_response(
                 # A chunk that names a video AND links to one: the document is
                 # our bytes, and the link is where the same material is
                 # published. Both belong on the one block.
-                external_url, embed = _external_video_link(content)
+                external_url, _ = _external_video_link(content)
                 resource = media_signer.issue(
                     tenant_id=tenant_id,
                     agent_version=agent_version,
@@ -946,7 +936,6 @@ def normalize_search_response(
                     title=title,
                     reference_id=reference_id,
                     external_url=external_url,
-                    embed=embed,
                 )
                 media.append(RetrievedMedia(resource))
         elif doc_type not in {"image", "table"}:
@@ -958,12 +947,10 @@ def normalize_search_response(
             # before this branch they got no media at all, which is why the
             # links could never reach the frontend.
             #
-            # `backend_id` is the document id and the grant is `kind="video"`
-            # so the block is renderable, but the BYTES behind `url` are the
-            # Markdown file; a frontend that ignores `external_url` would try
-            # to play text and fail. That is why `external_url` is not optional
-            # here — without it this branch issues nothing.
-            external_url, embed = _external_video_link(content)
+            # `backend_id` is empty on purpose: we hold no bytes for this one,
+            # so `issue` puts the external URL in `url` instead of minting a
+            # signed path to the Markdown file that merely quoted the link.
+            external_url, _ = _external_video_link(content)
             if external_url:
                 resource = media_signer.issue(
                     tenant_id=tenant_id,
@@ -972,15 +959,12 @@ def normalize_search_response(
                     knowledge_base_id=kb_id,
                     document_id=document_id,
                     chunk_id=chunk_id,
-                    # Empty backend_id = "there are no bytes of ours for this
-                    # one"; it is what makes `url` absent in the public shape.
                     backend_id="",
                     kind="video",
                     mime_type="video/mp4",
                     title=title,
                     reference_id=reference_id,
                     external_url=external_url,
-                    embed=embed,
                 )
                 media.append(RetrievedMedia(resource))
         result.append(

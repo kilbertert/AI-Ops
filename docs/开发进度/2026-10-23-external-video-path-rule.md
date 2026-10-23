@@ -1,6 +1,6 @@
 ## 2026-10-23 · 外链白名单补上 path 判据（真机抓到的）
 
-**症状**：`external_url` 上线后在 41 上跑生产代码，`https://www.youtube.com/@trendpowercharge`
+**症状**：外部链接字段上线后在 41 上跑生产代码，`https://www.youtube.com/@trendpowercharge`
 被签成了 **video 块**。那是频道主页，不是单个视频 —— 前端会把播放器挂在一个没有视频
 可播的页面上，用户看到坏掉的框，而且看起来像我们的 bug。
 
