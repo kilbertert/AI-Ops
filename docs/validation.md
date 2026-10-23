@@ -1,5 +1,17 @@
 ## 2026-10-23 · 客户端聊天查询本人状态（本地验收，未启用生产）
 
+**交付回执（北京时间 08:53）**：[PR #976](https://github.com/kilbertert/AI-Ops/pull/976)
+已合并为 `e518527328bf02e7460a39e4823d55ac057af743`。
+PR CI **3525 passed / 9 skipped**（60.11 秒），Workflow policy/spec-tree 通过；
+无未解决审查线程，自动 AI 审查因额度不足未完成，不记作审查通过。
+[CD 39880444171](https://github.com/kilbertert/AI-Ops/actions/runs/39880444171) 成功。
+通过 `dev-host` 以服务身份只读核对：health `0.1.0+e518527328bf`；
+gateway_api/gateway_config/consumer_order_chat/conversation_store 四模块 SHA-256 与合并字节一致，
+会话表 `status_qa_id` 已迁移，带新标记的 QA 作业/会话轮次均为 0。
+进程与私有文件的个人查询、个人 CPMS 地址、逻辑执行环境及 M3 三项配置均关闭，
+原 OPS 两项进程配置仍非空。**代码已部署，业务功能未启用、未完成业务验收。**
+只读证据存于本节所列私有目录的 `deployed.json`；无业务取数、登录、模型或配置修改。
+
 **授权/分支**：用户选择同时支持本人最新一单与指定号；不修改公司仓库。
 `feat/consumer-order-chat`，创建基线 `1c1c65d7d817`。本轮未登录、未读取真实订单、未发模型请求。
 
@@ -14,9 +26,9 @@
   它不覆盖真实业务，专项 HTTP 使用独立构造身份与业务替身。
 - 四项隔离源码突变分别移除 self 判据、最终释放授权、快照摘要、历史上下文排除，均被对应反例检出；
   未改提交源码。最终相关集合 **217 passed**（59.08 秒）；新查询三个 Gateway 函数与
-  `consumer_order_chat` 模块分支覆盖均 100%，圈复杂度最高 16（含错误收敛）。全量 CI 待验证。
+  `consumer_order_chat` 模块分支覆盖均 100%，圈复杂度最高 16（含错误收敛）。
   ruff/格式、编译/依赖、repo-map/policy/ADR、新增链接/脱敏扫描通过。
-  同步 `4405a03` 主线后全量 **3525 passed / 9 skipped**（53.25 秒），CI 待验证；
+  同步 `4405a03` 主线后本地全量 **3525 passed / 9 skipped**（53.25 秒）；最终 CI 见本节交付回执。
   wheel/sdist 与最终镜像通过，镜像 ID `968874f01c0c`、源码摘要 `0d5da15aaab8`，已同步内容锁。
   新认证辅助函数按现有 `authenticated_*` 命名约定接入，README 模块表补齐，51 项复核通过。
 - 修正过程：最初“最新一单”漏匹配、测试配置未设 0600、会话版本 fixture 不合法均被实测检出；
