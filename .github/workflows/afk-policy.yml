@@ -130,6 +130,20 @@ jobs:
         env:
           AFK_ADR_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
         run: node .sandcastle/adr.check.mjs --base "$AFK_ADR_BASE"
+      # `CHANGELOG.md` is generated from Conventional Commits, and the check is
+      # deliberately NOT here. Measured 2026-10-23: this job runs on
+      # `ubuntu-latest`, which has neither `dev-changelog` (installed by the
+      # server release unit) nor `git-cliff` (its one dependency). Installing
+      # both here would make the gate assert against a second generator rather
+      # than the one that produced the file.
+      #
+      # The check runs where the generator lives — `dev-policy-audit` on the
+      # development host, which is also where a hand-edit is made. This step
+      # exists only so the absence is recorded rather than rediscovered.
+      - name: Note where the changelog check runs
+        run: |
+          echo "CHANGELOG.md is verified by dev-policy-audit on the development host;"
+          echo "this job has neither dev-changelog nor git-cliff, so it cannot check it."
       # The generator's own parser, not the map it produced: a regex that matches
       # nothing yields a map that looks complete and omits the answer, and a fresh
       # scaffold cannot catch that because a fresh scaffold has no console scripts
