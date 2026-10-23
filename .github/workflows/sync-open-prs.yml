@@ -99,6 +99,38 @@ jobs:
           echo "behind: $(tr '\n' ' ' <<<"$behind" | sed 's/^ *$/<none>/')"
           echo "dirty:  $(tr '\n' ' ' <<<"$dirty"  | sed 's/^ *$/<none>/')"
 
+          # Both mutation paths rewrite the branch or hand it to an agent, so both
+          # need the same guards. Putting them only in the DIRTY path was a real
+          # defect: a BEHIND PR that someone is assigned to, or that the implement
+          # agent is mid-flight on, would be rebased out from under its holder.
+          #
+          # Returns 0 when the PR may be touched, 1 when it must be left alone.
+          may_touch() {
+            local number=$1 labels assignees
+
+            # An agent is already on it: `agent-update-branch.yml` removes the
+            # trigger label when it starts, so re-adding it here would suggest a
+            # queue that does not exist. `agent:blocked` means the agent already
+            # tried and gave up — retrying it unchanged would loop.
+            labels=$(gh pr view "$number" --json labels --jq '[.labels[].name] | join(",")')
+            case ",${labels}," in
+              *,agent:in-progress,*|*,agent:update-branch,*|*,agent:blocked,*)
+                echo "::notice::#${number} already has an agent state (${labels}); leaving it alone" >&2
+                return 1
+                ;;
+            esac
+
+            # A PR with an assignee is someone's active work. Rewriting it would
+            # move a branch another person is holding, and the repository rule is
+            # not to rewrite a published task branch merely to resolve drift.
+            assignees=$(gh pr view "$number" --json assignees --jq '.assignees | length')
+            if [ "$assignees" != "0" ]; then
+              echo "::notice::#${number} is assigned; not touching it" >&2
+              return 1
+            fi
+            return 0
+          }
+
           while read -r number; do
             [ -n "$number" ] || continue
             # A PR can be simultaneously BEHIND and DIRTY; DIRTY wins, because
@@ -106,6 +138,7 @@ jobs:
             if grep -qx "$number" <<<"$dirty"; then
               continue
             fi
+            may_touch "$number" || continue
             echo "::notice::#${number} is behind — updating branch"
             if ! gh pr update-branch "$number" --rebase; then
               # Not fatal: the PR may have become DIRTY between the listing and
@@ -117,27 +150,7 @@ jobs:
 
           while read -r number; do
             [ -n "$number" ] || continue
-            labels=$(gh pr view "$number" --json labels --jq '[.labels[].name] | join(",")')
-
-            # An agent is already on it: `agent-update-branch.yml` removes the
-            # trigger label when it starts, so re-adding it here would suggest a
-            # queue that does not exist. `agent:blocked` means the agent already
-            # tried and gave up — retrying it unchanged would loop.
-            case ",${labels}," in
-              *,agent:in-progress,*|*,agent:update-branch,*|*,agent:blocked,*)
-                echo "::notice::#${number} already has an agent state (${labels}); leaving it alone"
-                continue
-                ;;
-            esac
-
-            # A PR with an assignee is someone's active work. Rebasing it would
-            # rewrite a branch another person is holding, and the repository rule
-            # is not to rewrite a published task branch merely to resolve drift.
-            assignees=$(gh pr view "$number" --json assignees --jq '.assignees | length')
-            if [ "$assignees" != "0" ]; then
-              echo "::notice::#${number} is assigned; not touching it"
-              continue
-            fi
+            may_touch "$number" || continue
 
             echo "::notice::#${number} conflicts — handing it to agent-update-branch"
             gh pr edit "$number" --add-label "agent:update-branch"
