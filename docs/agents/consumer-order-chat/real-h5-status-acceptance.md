@@ -16,7 +16,7 @@
 | SQL 独立对照（第一条确为最新） | **PASS** |
 | CPMS 独立对照（状态码/语义一致） | **PASS** |
 | 关联模型调用为零 | **PASS**（窗口日志 0、run 目录 0） |
-| 缺会话 / 不存在订单 / 非本人号码 | **PASS**（401 / 404 / 404，均不泄露正文） |
+| 缺会话 / 不存在订单 | **PASS**（401 / 404，均不泄露正文） |
 | 停用后历史快照回读拒绝 | **PASS**（`CHARGING_STATUS_DISABLED`） |
 | 临时配置恢复 | **PASS**（sha256 与窗口前逐字相同） |
 
@@ -87,12 +87,12 @@ AIOPS_GATEWAY_EXECUTION_ENVIRONMENT=41
 |---|---|
 | 无会话 | 401 `INVALID_ACCESS_TOKEN` |
 | 真实会话 + 不存在的订单号 | 404 `ORDER_NOT_FOUND` |
-| 真实会话 + 非本人号码 | 404 `ORDER_NOT_FOUND`（**与"不存在"同一形状，不泄露该单是否存在**） |
+| 真实会话 + 一个**不存在**的订单号 | 404 `ORDER_NOT_FOUND`，不返回正文 |
 | 停用后回读窗口内 QA | 404 `CHARGING_STATUS_DISABLED` |
 
-注：**"他人的单"这一条没有用真实他人订单验证** —— 手上没有该类授权样本，
-用的是一个不属于该主体的号码，它同时也不存在。因此它证明的是"不泄露、不返回正文"，
-不是"真实存在的他人订单被正确拒绝"。后者记为**未验证**。
+注：这一条实际上只是**不存在订单**反例 —— 用的号码既不属于该主体、也不存在。
+它证明的是"不返回正文、不泄露"，**不是**"真实存在的他人订单被正确拒绝"。
+后者没有授权样本，记为**未验证**。这两件事不要合并成一条结论。
 
 ## 七、恢复
 
@@ -125,11 +125,11 @@ python status_probe.py <another_owned_order_no> specified
 
 ## 九、顺带发现的生产缺口
 
-`conversation_turns` **整张表是空的（0 行）**。不是"本轮没写"，而是线上流量里
-**没有任何调用带 `conversation_id`**。
+**2026-10-23 观测**：`conversation_turns` 当时是 0 行，`status_qa_id` 非空行也是 0。
 
-影响：`status_qa_id` 那条"会话绑定作业、回读重验权限与摘要"的守卫**在生产从未被执行过**，
-只有测试覆盖。它在代码里是对的，但没有任何真实流量走到它。要不要让页面传
+影响：`status_qa_id` 那条"会话绑定作业、回读重验权限与摘要"的守卫在本轮**没有被执行到**，
+只有测试覆盖。它在代码里是对的，但这一轮没有流量走到它。
+（这只写当前观测；"历史上从未传过 conversation_id"没有证据，不下这个结论。）要不要让页面传
 `conversation_id`，是一个产品决定，不在本片范围。
 
 ## 十、操作偏差（如实记录）
@@ -138,3 +138,25 @@ python status_probe.py <another_owned_order_no> specified
 「停用后不再提交状态问题」。它走零阶检索路径（`turn_count=0`、`tool_call_count=0`、
 日志模型调用 0），没有消耗模型额度，但仍是多余作业，**不计入任何判据**。
 正确做法是只做回读、不新提问。
+
+## 十一、工具修复（本片）
+
+上面引用的三个脚本在第一版里有**四个误报**，已在
+[`tools/consumer-status/`](../../../tools/consumer-status/README.md) 修掉，
+并由 `tests/test_consumer_status_tools.py` 逐条钉住（做过变异复验）：
+
+1. `check_identity.py` 只看 `scope_type == "self"`，`delegated=true`、`orders:read` 被拒、
+   范围指纹不同、没有本人订单，全都仍退 0；
+2. `independent_cpms.py` 捕获 CPMS 异常后仍退 0，且用了不存在的 `caller.user_id`；
+3. `status_probe.py` 用整页文本判订单号（会命中**用户自己的提问**），
+   GET 匹配不到本次 `qa_id` 时回退到别的 GET；
+4. 复跑环境（隧道、登录态路径、私有产物目录）与文档不一致。
+
+**这四处缺陷不影响本节的业务结论**：本节的结论来自页面实际渲染出的回答、
+SQL/CPMS 独立对照与私有快照，那些证据是本片重新取的。工具修复只改判据的严格程度。
+但有一处**必须说清**：当时"指定本人订单"那条是用正文里的订单号触发的
+（`request_has_no_order_no` 的检查对 `specified` 用例写成了"正文含号"），
+它证明了按号查询 — 因为换号后回答跟着换了 — 但没有证明 `order_no` 字段路径。
+
+常驻开放的决策材料见
+[permanent-enable-decision.md](permanent-enable-decision.md)。
