@@ -4100,6 +4100,10 @@ def create_gateway_app(
                 console=console,
                 external_knowledge_api_id=api_id,
                 dry_run=False,
+                # 运营在 RAGFlow 删了库之后期待 Dify 的卡片消失（2026-10-24 用户反馈）。
+                # **这里开它是安全的**：`libraries` 就是刚刚从 kb-service 读到的行，
+                # 读失败的那条分支在上面就 return 了 —— 不存在"上游不可达时把一切当孤儿"。
+                retire_orphans=True,
             )
 
         # **并发闸**：两个运营（或同一个人的两个标签页）同时打开弹窗，就是两个并发

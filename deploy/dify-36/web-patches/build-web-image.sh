@@ -56,6 +56,16 @@ check_sha web/models/datasets.ts 7da7895349e90cc963c725b12826be71c4f45827d829b23
 check_sha web/service/datasets.ts e5277febabf43ffc3d54b8fa6ff52305e9fd5ef18052c1ee404e78f958425a01
 
 echo "== 2. 打补丁（--fuzz=0：上下文对不上就失败）"
+# **先把工作树恢复干净。** 上一次构建留下的补丁产物会让 `patch` 停下来问
+# "文件已存在，要覆盖吗" —— 非交互环境里它默认答"不"，于是那一条补丁被**静默跳过**
+# （"1 out of 1 hunk ignored"），构建继续、产出却没有那个改动。
+#
+# 2026-10-24 实测：第二次构建时 `web/service/knowledge-sync.ts` 已存在，补丁被跳过。
+# 恢复 + 删掉补丁新增的文件，两步都要 —— `git checkout --` 不管未跟踪文件。
+git -C "$WORK" checkout -- .
+git -C "$WORK" clean -fdq -- web/service/knowledge-sync.ts 2>/dev/null || true
+rm -f "$WORK/web/service/knowledge-sync.ts"
+
 for p in "$VERSION_DIR"/*.patch; do
   patch -p1 --fuzz=0 -s -d "$WORK" <"$p"
   echo "ok: $(basename "$p")"
@@ -81,8 +91,20 @@ old = "RUN pnpm build && pnpm build:vinext"
 new = "RUN pnpm build --webpack"
 if old not in s:
     raise SystemExit(f"FAIL: Dockerfile 里没有预期的构建行：{old!r}")
-open(p, "w").write(s.replace(old, new, 1))
-print("ok: Dockerfile 构建行 -> webpack")
+s = s.replace(old, new, 1)
+
+# 去掉 vinext 的产物 COPY。`build:vinext` 不再跑 ⇒ `/app/web/dist/standalone`
+# 根本不存在，而 production stage 仍有一条 `COPY … ./targets/vinext` —— 构建会停在
+# "failed to calculate checksum … not found"。本实例 compose 里
+# EXPERIMENTAL_ENABLE_VINEXT=false，这个 target 从来不被用到。
+#
+# 上一版脚本只改了构建命令、没删这条 COPY，2026-10-24 实测构建失败在 Dockerfile:80。
+vinext_copy = "COPY --from=builder --chown=dify:dify /app/web/dist/standalone ./targets/vinext\n"
+if vinext_copy not in s:
+    raise SystemExit(f"FAIL: Dockerfile 里没有预期的 vinext COPY 行：{vinext_copy!r}")
+s = s.replace(vinext_copy, "", 1)
+open(p, "w").write(s)
+print("ok: Dockerfile 构建行 -> webpack，并去掉 vinext 产物 COPY")
 PYEOF
 
 echo "== 4. 构建镜像"

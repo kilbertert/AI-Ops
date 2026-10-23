@@ -97,15 +97,28 @@ class Action:
 @dataclass(frozen=True, slots=True)
 class Plan:
     actions: tuple[Action, ...]
-    #: RAGFlow 里已经不存在的库 —— **只在报告里**，绝不自动删 Dify 的那条 dataset。
+    #: RAGFlow 里已经不存在的库 —— 对应的 Dify dataset 该退休了。
+    #:
+    #: 2026-10-24 之前这里只是报告（"绝不自动删"）。改成自动删是因为运营在 RAGFlow
+    #: 删了库之后，Dify 里那张卡片永远留着，而它指向的东西已经没了 —— 点它得到的是
+    #: 一个 502，而运营以为"库还在"。
+    #:
+    #: **删除是不可逆的**（Dify 没有恢复入口），所以 `run()` 只在四道保护全部成立时
+    #: 才真的删。只算不改的 `plan()` 不受影响。
     orphans: tuple[str, ...]
+    #: orphan 的 knowledge_id → dataset id。删除需要 id，光有 knowledge_id 不够。
+    orphan_datasets: tuple[tuple[str, str], ...] = ()
 
     @property
     def writes(self) -> tuple[Action, ...]:
         return tuple(a for a in self.actions if a.kind != "ok")
 
     def as_dict(self) -> dict[str, Any]:
-        return {"actions": [a.as_dict() for a in self.actions], "orphans": list(self.orphans)}
+        return {
+            "actions": [a.as_dict() for a in self.actions],
+            "orphans": list(self.orphans),
+            "orphan_datasets": [{"knowledge_id": k, "dataset_id": d} for k, d in self.orphan_datasets],
+        }
 
 
 def libraries_for(tenant_id: str, rows: Iterable[Mapping[str, Any]]) -> list[Library]:
@@ -229,14 +242,16 @@ def plan(libraries: Iterable[Library], existing: Iterable[Mapping[str, Any]]) ->
     #: **这是唯一值得报的情况**：同一个租户前缀、却有我们没有的库 ⇒ 库里真的删了东西。
     #: 别的形态（人工登记的 `kb-canary-2`、旧格式的 `tenant-<id>`）不归这条命令管，
     #: 把它们报成孤儿会让运维去删**活的、正被 app 引用**的 dataset —— 41 上真发生过。
-    orphans = tuple(
-        sorted(
-            kid
-            for kid in set(by_knowledge_id) - {lib.knowledge_id for lib in libraries}
-            if _points_at_this_tenants_library(kid)
-        )
+    orphan_ids = sorted(
+        kid
+        for kid in set(by_knowledge_id) - {lib.knowledge_id for lib in libraries}
+        if _points_at_this_tenants_library(kid)
     )
-    return Plan(actions=tuple(actions), orphans=orphans)
+    return Plan(
+        actions=tuple(actions),
+        orphans=tuple(orphan_ids),
+        orphan_datasets=tuple((kid, str(by_knowledge_id[kid].get("id") or "")) for kid in orphan_ids),
+    )
 
 
 def _points_at_this_tenants_library(knowledge_id: str) -> bool:
@@ -258,12 +273,23 @@ def run(
     console: Any,
     external_knowledge_api_id: str,
     dry_run: bool,
+    retire_orphans: bool = False,
     log: Any = lambda _line: None,
 ) -> dict[str, Any]:
     """把 ``plan()`` 的决定落到 Dify。
 
     ``dry_run`` 时**一个写请求都不发**；它返回的 ``planned`` 与真跑的 ``applied`` 形状相同，
     所以"看一遍再跑"读的是同一份东西。
+
+    ``retire_orphans`` 决定"RAGFlow 里删了的库，Dify 那张 dataset 要不要跟着删"。
+    **默认关**，删是单向操作。自动同步那条路（弹窗触发）**显式打开它**，因为运营
+    在 RAGFlow 删完库之后期待卡片消失 —— 而那条路上的上游可达性是刚刚验过的
+    （`libraries_for` 就是用这次读到的行建出来的）。
+
+    ⚠️ 即使 `retire_orphans=True`，`plan()` 算出的 `orphans` 也**必须**是"这次真的
+    读到了上游列表"的产物。`run()` 自己拿不到那个事实，所以**调用方必须在读失败时
+    不要调用 `run()`**（传空 `libraries` 会让它把所有 dataset 都当孤儿）。这是这条
+    参数唯一的危险用法，写在这里。
     """
     check_names(libraries)
     existing = console.list_datasets(workspace_id)
@@ -277,6 +303,16 @@ def run(
             "unchanged": [a.as_dict() for a in decision.actions if a.kind == "ok"],
             "orphans": list(decision.orphans),
         }
+
+    retired: list[dict[str, Any]] = []
+    if retire_orphans and decision.orphan_datasets:
+        for knowledge_id, dataset_id in decision.orphan_datasets:
+            if not dataset_id:
+                continue
+            # 删之前把身份留在日志里 —— 这是唯一能事后追回"删了什么"的东西。
+            log(f"retire {knowledge_id} -> dataset {dataset_id}")
+            console.delete_dataset(workspace_id, dataset_id)
+            retired.append({"kind": "retire", "knowledge_id": knowledge_id, "dataset_id": dataset_id})
 
     applied: list[dict[str, Any]] = []
     for action in decision.writes:
@@ -319,6 +355,7 @@ def run(
         "workspace_id": workspace_id,
         "dry_run": False,
         "applied": applied,
+        "retired": retired,
         "unchanged": [a.as_dict() for a in decision.actions if a.kind == "ok"],
         "orphans": list(decision.orphans),
     }

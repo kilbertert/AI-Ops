@@ -80,6 +80,10 @@ class _Console:
         )
         return dataset_id
 
+    def delete_dataset(self, workspace_id: str, dataset_id: str) -> None:
+        self.calls.append({"op": "delete", "workspace": workspace_id, "dataset_id": dataset_id})
+        self.datasets = [d for d in self.datasets if d.get("id") != dataset_id]
+
     def update_external_dataset(
         self,
         workspace_id: str,
@@ -540,3 +544,108 @@ def test_client_list_asks_for_include_all() -> None:
     client.list_datasets(WORKSPACE)
 
     assert "include_all=true" in seen[-1]["path"]
+
+
+# ---------------------------------------------------------------------------
+# 退休：RAGFlow 里删了的库，Dify 那张 dataset 要不要跟着删（2026-10-24）
+#
+# 删除**不可逆**（Dify 没有恢复入口），所以这里判的不是"能不能删"，而是
+# **什么时候绝不删**。
+# ---------------------------------------------------------------------------
+
+
+def _orphan_dataset(knowledge_id: str, name: str = "gone") -> dict[str, Any]:
+    return {
+        "id": "ds-gone",
+        "name": name,
+        "permission": PERMISSION_ALL_TEAM,
+        "external_knowledge_info": {"external_knowledge_id": knowledge_id},
+    }
+
+
+def test_by_default_an_orphan_is_only_reported_never_deleted() -> None:
+    """**默认不删。** 手工跑这条命令时，上游读失败与"库真的没了"看起来一样。"""
+    console = _Console([_orphan_dataset("tenant-T-1:kb-gone")])
+
+    outcome = run(
+        workspace_id="ws",
+        libraries=[Library("kb-a", "A", "tenant-T-1:kb-a")],
+        console=console,
+        external_knowledge_api_id="api-1",
+        dry_run=False,
+    )
+
+    assert outcome["orphans"] == ["tenant-T-1:kb-gone"]
+    assert outcome["retired"] == []
+    assert not any(c["op"] == "delete" for c in console.calls), "默认路径绝不能发删除"
+
+
+def test_retire_orphans_deletes_the_matching_dataset() -> None:
+    """显式要求时才删，而且删的是**那条** dataset 的 id。"""
+    console = _Console([_orphan_dataset("tenant-T-1:kb-gone")])
+
+    outcome = run(
+        workspace_id="ws",
+        libraries=[Library("kb-a", "A", "tenant-T-1:kb-a")],
+        console=console,
+        external_knowledge_api_id="api-1",
+        dry_run=False,
+        retire_orphans=True,
+    )
+
+    assert [r["knowledge_id"] for r in outcome["retired"]] == ["tenant-T-1:kb-gone"]
+    deletes = [c for c in console.calls if c["op"] == "delete"]
+    assert len(deletes) == 1
+    assert deletes[0]["dataset_id"] == "ds-gone"
+
+
+def test_a_manually_registered_source_is_never_retired() -> None:
+    """`kb-canary-2` 这种人工登记的串**永远不是孤儿** —— 它不由 RAGFlow 派生。
+
+    把它当孤儿删掉，删的是一条正被已发布 app 引用的 dataset（41 上真发生过）。
+    """
+    console = _Console([_orphan_dataset("kb-canary-2", name="prod-kefu")])
+
+    outcome = run(
+        workspace_id="ws",
+        libraries=[Library("kb-a", "A", "tenant-T-1:kb-a")],
+        console=console,
+        external_knowledge_api_id="api-1",
+        dry_run=False,
+        retire_orphans=True,
+    )
+
+    assert outcome["orphans"] == []
+    assert outcome["retired"] == []
+
+
+def test_a_tenant_level_handle_is_never_retired() -> None:
+    """`tenant-<id>`（租户级合并形态，ADR-0095 显式保留）也不是孤儿。"""
+    console = _Console([_orphan_dataset("tenant-T-1", name="merged")])
+
+    outcome = run(
+        workspace_id="ws",
+        libraries=[Library("kb-a", "A", "tenant-T-1:kb-a")],
+        console=console,
+        external_knowledge_api_id="api-1",
+        dry_run=False,
+        retire_orphans=True,
+    )
+
+    assert outcome["retired"] == []
+
+
+def test_dry_run_never_deletes_even_when_retire_is_requested() -> None:
+    """`--dry-run` 的承诺是"一个写请求都不发"，删除也是写。"""
+    console = _Console([_orphan_dataset("tenant-T-1:kb-gone")])
+
+    run(
+        workspace_id="ws",
+        libraries=[Library("kb-a", "A", "tenant-T-1:kb-a")],
+        console=console,
+        external_knowledge_api_id="api-1",
+        dry_run=True,
+        retire_orphans=True,
+    )
+
+    assert not any(c["op"] == "delete" for c in console.calls)

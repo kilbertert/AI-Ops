@@ -34,15 +34,18 @@ admin key 可以为任意 workspace 做管理动作 —— 这正是"每个 work
 from __future__ import annotations
 
 import time
+import urllib.error
 from dataclasses import dataclass, field
 from typing import Any
 
 from aiops_diagnostics.bounded_http import (
+    TRANSPORT_FAILURES,
     ErrorMapping,
     HttpFailure,
     RequestSpec,
     join_url,
     json_body,
+    open_response,
     request_json,
 )
 
@@ -456,6 +459,38 @@ class DifyConsoleAdmin:
                 )
 
     # ── 外部知识库 dataset（#1001）──────────────────────────────────────
+
+    def delete_dataset(self, workspace_id: str, dataset_id: str) -> None:
+        """删一条 dataset（**不可逆**，Dify 没有恢复入口）。
+
+        Dify 的 `DELETE /console/api/datasets/{id}` 回 **204 空 body**，所以这里不用
+        `request_json` —— 那会在 decode 阶段抛 `JSONDecodeError`（2026-10-23 实测）。
+        走骨架的 `open_response`：只看状态码，不读 body。这与
+        `knowledge_retrieval.fetch_media` 处理二进制响应是同一个手法。
+
+        它顺带删掉 `external_knowledge_bindings` 里对应的行（`dataset_service.py:1371`），
+        所以不会留下"指向不存在 dataset 的 binding"。
+
+        **调用方负责判断该不该删。** 这个方法只做"发请求"，不猜"这个库是不是真的没了" ——
+        那个判断需要上游可达性，而那个事实在 `dify_knowledge_datasets.run()` 的调用方手里。
+        """
+        spec = RequestSpec(
+            url=join_url(self.settings.base_url, f"/console/api/datasets/{dataset_id}"),
+            method="DELETE",
+            headers=self._headers(workspace_id),
+            timeout=self.settings.timeout,
+        )
+        try:
+            with open_response(spec) as response:
+                status = response.status
+        except urllib.error.HTTPError as exc:
+            raise ConsoleApiError(
+                "DIFY_DATASET_DELETE_FAILED", f"dataset {dataset_id}: HTTP {exc.code}"
+            ) from exc
+        except TRANSPORT_FAILURES as exc:
+            raise ConsoleApiError("DIFY_DATASET_DELETE_FAILED", f"dataset {dataset_id}: {exc}") from exc
+        if status not in (200, 204):
+            raise ConsoleApiError("DIFY_DATASET_DELETE_FAILED", f"dataset {dataset_id}: HTTP {status}")
 
     def list_datasets(self, workspace_id: str) -> list[dict[str, Any]]:
         """这个 workspace 的**全部** dataset，含 ``only_me``。
