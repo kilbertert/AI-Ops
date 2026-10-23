@@ -775,3 +775,17 @@ fixture、数据库检查或模型单次调用写成真实业务验收。
 > **状态：已合并、尚未部署。** CD 因 `pyproject.toml` 摘要漂移在上传前拒绝（`uv.lock` 两侧逐字相同，
 > 没有依赖需要安装）；生产仍是 `0.1.0+26bc23a34fd4`，本模块与观察行在生产上均不存在，开关仍关闭。
 > 部署处置由 Codex 核验与准备。
+
+> **2026-10-23 12:20 UTC · 观察代码已部署，个人查询仍关闭**：
+> #1031 的观察修复随 #1032 合并制品 `d535c9e0df18` 部署；
+> [首轮 CD](https://github.com/kilbertert/AI-Ops/actions/runs/39949320610) 的 Deploy 成功，发布备注失败。
+> 失败原因是 runner 缺少本地 `serverPolicy.publishesVersions` 声明，生成器跳过但返回 0，
+> 后续复制找不到文件；不是依赖安装失败，也没有证据表明文件写到了别处。
+> 经用户批准，已补发[脱敏 prerelease](https://github.com/kilbertert/AI-Ops/releases/tag/release-d535c9e0df18)。
+> 随后 #1033 修复生成器静默跳过，[后续 CD](https://github.com/kilbertert/AI-Ops/actions/runs/39952235209)
+> 的部署与发布步骤均成功。12:20 UTC 只读回查版本为 `0.1.0+429236d361fa`，
+> 观察源码与该制品一致，版本文件按 CD 注入版本号后比对；个人查询所需配置仍未启用。
+> 独立专项复验 79 passed；本地真实 Gateway/TCP 23/23 检查通过，11 条结果为 5 成功、4 拒绝、2 失败。
+> 身份与业务依赖使用回环替身，**未完成新的业务验收**。本轮未启用功能、提交真实业务问题或调用模型。
+> 详见[部署复核与边界](../validation/2026-10-23-observation-deployment.md)；
+> 下一步按[单租户变更单](consumer-order-chat/single-tenant-enable-change-ticket.md)准备受控观察窗口。
