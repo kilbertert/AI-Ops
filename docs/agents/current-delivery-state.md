@@ -1,5 +1,19 @@
 # 当前交付状态索引
 
+> **2026-10-23 · 个人订单查询可归因观察：已实现，未启用（生产开关仍关闭）**：
+> `POST /v1/assistant/questions` 上每次**候选**个人状态查询写一行
+> `INFO aiops.assistant_question assistant_question_result …`，带服务端 `request_id`、
+> `stage`、`outcome`、`http_status`、`error_code`、`tenant_hash`、`qa_id`（仅成功）
+> 与**整请求** `duration_ms`。成功、拒绝（401/403/404/422）、CPMS 502 与未预期异常**都有行**，
+> 不伪造 QA；普通问答、功能关闭、身份未建立**不写**。
+> **修复了两条既有观察缺口**：成功的 `qa` 指标没有 `duration_ms`；所有拒绝路径一条指标都不写。
+> **更正了变更单里作废的口径**：`139/148 ms` 是 QA 落库**之后**的一段，不是整请求；
+> "22 秒"只是依赖段之和，不是整请求硬上限。
+> 验证：既有回归 **56 passed** 未减少，新增 18 条，合计 **74 passed**；真实 `aiops-gateway serve`
+> 经 TCP 驱动 **10/10 检查通过**；两处反向验证分别转红 7 条与 1 条。
+> **仍不能判**：端到端时延（不含 nginx 与网络）、按请求跨层串联、其他入口的同类观察。
+> 契约见[观察契约](consumer-order-chat/observability.md)。
+
 > **2026-10-23 · 个人订单查询单租户开放：变更单已出，未启用（生产开关仍关闭）**：
 > 基于 #1015 的业务验收，出了一份可直接执行的**变更单**
 > （[single-tenant-enable-change-ticket.md](consumer-order-chat/single-tenant-enable-change-ticket.md)），

@@ -19,6 +19,16 @@
 - 缺身份 401、错误范围/读权限 403、不可见/无本人订单 404、授权源或证据失败 503、CPMS 坏结果 502。
   相关回答和错误带 `Cache-Control: no-store`；读取时刻为 UTC，来源为 `cpms.chargingInfo`，不代表物理枪实时状态。
 
+## 观察
+
+每次**候选**个人状态查询（启用 + consumer + 无快捷动作 + zh/zh-Hant/en + 命中状态问法）
+写一行 `INFO aiops.assistant_question assistant_question_result …`，带服务端生成的
+`request_id`、`stage`、`outcome`、`http_status`、`error_code`、`tenant_hash`、
+`qa_id`（仅成功）与 `duration_ms`。拒绝与未预期异常同样有行，**不伪造 QA**。
+
+这一行是变更单停止条件可判定的前提。字段、计时范围、看不到的部分与观察命令见
+[观察契约](observability.md)。普通问答、功能关闭、身份未建立**不写**这一行。
+
 ## 配置和部署
 
 配置模板见 `.env.example`，进程环境优先于服务端私有配置文件：

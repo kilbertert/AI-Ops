@@ -19,7 +19,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from aiops_diagnostics import __version__, execution_manifest
+from aiops_diagnostics import __version__, execution_manifest, request_observation
 from aiops_diagnostics.agent_content import AGENT_STARTERS
 from aiops_diagnostics.agent_lifecycle import (
     AGENT_MANAGE_SCOPE,
@@ -1079,9 +1079,17 @@ def create_gateway_app(
         lifespan=lifespan,
     )
     app.state.gateway = context
+    # One attributable line per consumer order-status request (#observability).
+    # Installed as a raw ASGI middleware so it sees the status the app actually
+    # sends; see `request_observation` for why this is a log line and not a
+    # second metric table.
+    app.add_middleware(request_observation.AssistantQuestionObservation)
 
     @app.exception_handler(StandardAPIError)
     async def standard_api_error_handler(request: Request, exc: StandardAPIError) -> JSONResponse:
+        # The refusal's stable code only exists here: every branch raises with
+        # its own, and the request-level line has to say which one it was.
+        request_observation.mark_refused(request, exc.code)
         return JSONResponse(
             status_code=exc.status_code,
             content={
@@ -1097,6 +1105,7 @@ def create_gateway_app(
     @app.exception_handler(RequestValidationError)
     async def validation_error_handler(request: Request, exc: RequestValidationError) -> JSONResponse:
         del exc
+        request_observation.mark_refused(request, request_observation.INVALID_REQUEST)
         return JSONResponse(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             content={
@@ -2004,6 +2013,23 @@ def create_gateway_app(
         if selected_settings.consumer_order_chat_enabled:
             response.headers["Cache-Control"] = "no-store"
 
+        # Observation, not routing: this only DECIDES whether the request is a
+        # candidate for the consumer status branch, using the same predicate the
+        # branch below uses. It reads values the handler already computed and
+        # marks nothing when no verified caller exists (a 401 raised by the
+        # identity dependency never reaches this line, so an unauthenticated
+        # request can never be reported as having hit the branch).
+        request_observation.classify_request(
+            request,
+            consumer_order_chat_enabled=selected_settings.consumer_order_chat_enabled,
+            platform=str(decision.platform),
+            shortcut_code=payload.shortcut_code,
+            language=language,
+            question=payload.question,
+            is_status_question=is_order_status_question,
+        )
+        request_observation.mark_tenant(request, caller.effective_tenant_id)
+
         # Conversation binding (T4/#172): resolve BEFORE routing so every
         # branch can consult the confirmed active_order. A conversation that
         # is missing, expired, or belongs to another user/tenant/entry is a
@@ -2098,6 +2124,11 @@ def create_gateway_app(
             _order_authorization(context, caller, payload.order_no) if payload.order_no else ""
         )
         if order_verdict_before_boundary in {UNAVAILABLE, NOT_OWNED}:
+            # A candidate request refused HERE never reaches `_consumer_order_chat`,
+            # so the branch's own instrumentation cannot see it. The stage says
+            # which guard refused it, so a 404 on this line is distinguishable
+            # from the same 404 raised inside the branch.
+            request_observation.mark_stage(request, request_observation.STAGE_PRE_ROUTE_ORDER_AUTH)
             if order_verdict_before_boundary == UNAVAILABLE:
                 raise StandardAPIError(
                     status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -5490,6 +5521,7 @@ def _consumer_order_chat(context, caller, decision, payload, conversation, langu
     qa = None
     try:
         if order_no is None:
+            request_observation.mark_stage(request, request_observation.STAGE_ORDER_CHAT_LOOKUP)
             try:
                 scope = resolve_query_scope(caller)
                 with scoped_mysql_source(
@@ -5504,7 +5536,9 @@ def _consumer_order_chat(context, caller, decision, payload, conversation, langu
                 raise StandardAPIError(404, "ORDER_NOT_FOUND", "order not found")
             order_no = str(rows[0]["order_no"])
         _require_consumer_self_order(caller, str(decision.platform), order_no)
+        request_observation.mark_stage(request, request_observation.STAGE_ORDER_CHAT_AUTH)
         _require_visible_order(context, caller, order_no)
+        request_observation.mark_stage(request, request_observation.STAGE_ORDER_CHAT_CPMS)
         try:
             snapshot = _authorized_charging_snapshot(context.settings, caller, order_no)
         except ChargingStatusError as exc:
@@ -5527,6 +5561,11 @@ def _consumer_order_chat(context, caller, decision, payload, conversation, langu
             "snapshot": snapshot,
             "result_sha256": hashlib.sha256(json.dumps(snapshot, sort_keys=True).encode()).hexdigest(),
         }
+        # The one id that joins this log line to the job and to the private
+        # evidence file. Recorded as soon as the row exists, so even a later
+        # evidence failure still names the QA it failed to complete.
+        request_observation.mark_qa(request, qa["qa_id"])
+        request_observation.mark_stage(request, request_observation.STAGE_ORDER_CHAT_EVIDENCE)
         try:
             write_private_text(
                 Path(context.settings.data_home) / "consumer-order-chat" / (qa["qa_id"] + ".json"),
