@@ -728,11 +728,17 @@ ACTIVE=$(dev-host exec "$HOST_TARGET" --allow-service-exec -- "systemctl is-acti
 info "服务 active ✓"
 
 LIVE_HEALTH=$(dev-host exec "$HOST_TARGET" --allow-service-exec -- "curl -s --max-time 6 $HEALTH" | tail -1)
-printf '%s\n' "$LIVE_HEALTH" | grep -q '"ok":true' || die "/health 未返回 ok:true：$LIVE_HEALTH"
+# `grep -c >/dev/null`, never `grep -q`: this script runs under `set -o pipefail`,
+# and `-q` makes grep exit at the first match — the producer then takes SIGPIPE
+# and the pipeline reports 141, so the check reads a match as a miss. Measured
+# 2026-10-23: with the match on the first line and 100k lines after it, `-q`
+# missed 30 times out of 30. A `/health` body is small today, which is exactly
+# why this would have stayed hidden until the day it grew.
+printf '%s\n' "$LIVE_HEALTH" | grep -c '"ok":true' >/dev/null || die "/health 未返回 ok:true：$LIVE_HEALTH"
 info "/health ok ✓"
 
 # 核心断言：/health 报出的 version 必须含本次 short sha —— 这才叫「证明部署了什么」。
-printf '%s' "$LIVE_HEALTH" | grep -q "$SHORT_SHA" \
+printf '%s' "$LIVE_HEALTH" | grep -c "$SHORT_SHA" >/dev/null \
   || die "/health 的 version 不含本次 commit（$SHORT_SHA）。实际：$LIVE_HEALTH"
 info "/health version 含 $SHORT_SHA ✓"
 
