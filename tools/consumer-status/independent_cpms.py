@@ -34,6 +34,22 @@ from pathlib import Path
 EXIT_PASS, EXIT_FAIL, EXIT_UNVERIFIED = 0, 1, 2
 
 
+def _private_output():
+    """同目录的 `private_output.py` 按文件加载 —— 这些脚本不是包。"""
+    import importlib.util
+
+    module = sys.modules.get("consumer_status_private_output")
+    if module is not None:
+        return module
+    path = pathlib.Path(__file__).with_name("private_output.py")
+    spec = importlib.util.spec_from_file_location("consumer_status_private_output", path)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def _resolve_caller(settings, runtime, session: str):
     from aiops_diagnostics.third_session_auth import (
         RedisThirdSessionResolver,
@@ -105,14 +121,14 @@ def sort_verdict(rows: list[dict]) -> dict:
 
 
 def _write_private(path: Path, body: str) -> None:
-    """私有证据：显式路径、只给自己读写。
+    """私有证据：显式路径、只给自己读写、**必须在库外**。
 
-    **不默认写任何地方** —— 调用方必须给 `--out`，且不能在代码目录里。
-    这里不替调用方猜位置：那份文件的完整内容属于业务数据。
+    旧版是 `mkdir → write_text → chmod`：会跟随符号链接、也没有库外限制。
+    现在走共享模块（创建即 0600、不跟随链接）+ 仓库内路径拒绝。
     """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(body + "\n")
-    path.chmod(0o600)
+    write_private_report = _private_output().write_private_report
+
+    write_private_report(path, body + "\n", code_root=Path(__file__).parent)
 
 
 def compare_with_cpms(*, page: dict, cpms: dict, expect_status_code: object = None) -> dict:
