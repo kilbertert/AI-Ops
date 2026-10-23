@@ -226,6 +226,8 @@ class GatewayRuntime:
         media_signer: MediaResourceSigner | None = None,
         agent_store: Any = None,
         agent_run_store: Any = None,
+        knowledge_dataset_autosync: Any = None,
+        dify_workspaces: Any = None,
         jev_client: JevDecisionClient | None = None,
         routing_thresholds: RoutingThresholds | None = None,
     ) -> None:
@@ -241,6 +243,10 @@ class GatewayRuntime:
         self.kb_search_client = kb_search_client
         self.media_signer = media_signer
         self.agent_store = agent_store
+        # 选择器打开时把 RAGFlow 的新库收敛成 Dify dataset（#1056）。两个都可为 None：
+        # 缺任一个 ⇒ 那条路由只是不同步，清单照常返回。
+        self.knowledge_dataset_autosync = knowledge_dataset_autosync
+        self.dify_workspaces = dify_workspaces
         # APP-RUNTIME-01：聊天入口把「等节点」搬进后台，worker 需要同一份 run 存储。
         # 缺省为 None ⇒ 聊天节点路线不可用（与未配置绑定等价，fail closed）。
         self.agent_run_store = agent_run_store
@@ -303,6 +309,8 @@ class GatewayRuntime:
         gateway_settings: GatewayServerSettings,
     ) -> GatewayRuntime:
         from aiops_diagnostics.agent_lifecycle import AgentStore
+        from aiops_diagnostics.dify_workspaces import DifyWorkspaces
+        from aiops_diagnostics.knowledge_dataset_autosync import KnowledgeDatasetAutoSync
 
         diagnostic_settings = Settings.from_config(gateway_settings.server_config_file)
         diagnostic_settings.agent.validate()
@@ -340,6 +348,16 @@ class GatewayRuntime:
             media_signer=media_signer,
             agent_store=AgentStore(store.path),
             agent_run_store=AgentRunStore(store.path),
+            # 选择器打开时的自动同步（#1056）。三样都要有才启用；缺一样就只是不同步，
+            # 清单照常返回。``DifyWorkspaces`` 只用它固化的表，不发起网络请求。
+            knowledge_dataset_autosync=(
+                KnowledgeDatasetAutoSync()
+                if gateway_settings.dify_console_base_url and gateway_settings.dify_external_knowledge_api_id
+                else None
+            ),
+            dify_workspaces=(
+                DifyWorkspaces(store.path) if gateway_settings.dify_external_knowledge_api_id else None
+            ),
             jev_client=jev_client,
             routing_thresholds=RoutingThresholds(
                 risk_at_least=gateway_settings.routing_risk_at_least,

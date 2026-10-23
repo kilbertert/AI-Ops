@@ -1313,9 +1313,73 @@ def create_gateway_app(
             return PRODUCTION_IDENTITY
         raise StandardAPIError(status.HTTP_403_FORBIDDEN, "DIFY_CREDENTIAL_REJECTED", "credential rejected")
 
+    def _maybe_sync_dify_datasets(settings: GatewayServerSettings, runtime: Any, bindings: Any) -> None:
+        """Converge each listed tenant's RAGFlow libraries into Dify datasets (#1056).
+
+        Runs at most once per tenant per window (see
+        :class:`~aiops_diagnostics.knowledge_dataset_autosync.KnowledgeDatasetAutoSync`)
+        and **never raises**: the caller is about to serve the picker list, and
+        that list does not depend on this having succeeded.
+
+        Tenants come from the bindings the listing already resolved, so nothing
+        new is enumerated here — a tenant whose libraries did not resolve gets
+        no sync attempt either, which is the honest behaviour: there is nothing
+        to sync.
+        """
+        if not settings.dify_console_base_url or not settings.dify_console_api_key:
+            return
+        auto_sync = getattr(runtime, "knowledge_dataset_autosync", None)
+        workspaces = getattr(runtime, "dify_workspaces", None)
+        client = getattr(runtime, "kb_search_client", None)
+        if auto_sync is None or workspaces is None or client is None:
+            return
+        api_id = settings.dify_external_knowledge_api_id
+        if not api_id:
+            return
+
+        from aiops_diagnostics.dify_console_admin import ConsoleApiSettings, DifyConsoleAdmin
+        from aiops_diagnostics.dify_knowledge_datasets import libraries_for, plan, run
+
+        tenants = {binding.tenant_id for binding in bindings if binding.tenant_id}
+        for tenant_id in sorted(tenants):
+
+            def converge(tenant_id: str = tenant_id) -> Any:
+                workspace_id = workspaces.resolve(tenant_id, settings.environment)
+                try:
+                    owned = client.for_tenant(tenant_id).list_knowledge_bases()
+                except Exception:  # noqa: BLE001 - upstream down: nothing to converge
+                    return plan((), ())
+                libraries = libraries_for(
+                    tenant_id,
+                    [{"dataset_id": i.get("knowledge_base_id"), "name": i.get("name")} for i in owned],
+                )
+                console = DifyConsoleAdmin(
+                    ConsoleApiSettings(settings.dify_console_base_url, settings.dify_console_api_key)
+                )
+                return run(
+                    workspace_id=workspace_id,
+                    libraries=libraries,
+                    console=console,
+                    external_knowledge_api_id=api_id,
+                    dry_run=False,
+                )
+
+            try:
+                outcome = auto_sync.maybe_sync(tenant_id=tenant_id, workspace_id="", run=converge)
+            except Exception as exc:  # noqa: BLE001 - see below
+                # The engine already swallows failures from ``run``, but a broken
+                # engine (or a stub in a test) must not take the picker down with
+                # it: constraint 1 is about the list the operator is waiting for,
+                # and it does not depend on this having run.
+                outcome = f"failed: {type(exc).__name__}"
+            _LOGGER.info(
+                "dify dataset autosync tenant=%s %s",
+                tenant_id,
+                outcome,
+            )
+
     def _libraries_for_tenant(settings: GatewayServerSettings, runtime: GatewayRuntime) -> Any:
         """A per-tenant library fetcher, or a no-op when auto-registration is off.
-
         Returns ``None`` for "no auto sources" rather than raising: an upstream
         that is down must degrade to the manual registry (which is why the manual
         registry exists), not turn a working request into a 502.
@@ -1490,9 +1554,11 @@ def create_gateway_app(
         # rule, which is the shape that drifts.
         sources = _knowledge_sources(context.settings, context.store)
         items: list[dict[str, Any]] = []
-        for binding in sources.visible(
-            identity, fetch_libraries=_libraries_for_tenant(settings, context.runtime)
-        ):
+        bindings = sources.visible(identity, fetch_libraries=_libraries_for_tenant(settings, context.runtime))
+        # 运营马上要在 Dify 的选择器里选一个库 —— 这是唯一一个"现在不同步就立刻
+        # 浪费他时间"的时刻。同步失败**不影响**下面的清单（#1056 的第一条约束）。
+        _maybe_sync_dify_datasets(settings, context.runtime, bindings)
+        for binding in bindings:
             items.append(
                 {
                     "knowledge_id": binding.knowledge_id,
