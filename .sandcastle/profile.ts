@@ -133,6 +133,21 @@ export function claudeProfile(
           ? [{ hostPath: settingsPath, sandboxPath: "/home/agent/.afk-profile-settings.json", readonly: true }]
           : []),
         ...mcpConfigMounts(),
+        // The host-wide test-slot directory (`tests/conftest.py`). Without this
+        // mount the gate is inert in exactly the case it was written for: every
+        // sandbox has its own `/tmp`, so N containers each take slot 0 of their
+        // own filesystem and none queues. Measured by review on the first
+        // version, which used `/tmp` and was correct on the host, useless in a
+        // container.
+        //
+        // Mounted read-write (an flock needs a real file on a shared filesystem),
+        // at the SAME path inside and outside: conftest resolves one fixed path,
+        // so nothing has to tell the sandbox where the host put it.
+        {
+          hostPath: "/tmp/aiops-host-test-slots",
+          sandboxPath: "/tmp/aiops-host-test-slots",
+          readonly: false,
+        },
       ],
     }),
   };
