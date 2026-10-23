@@ -91,3 +91,24 @@ uv run pytest -n 0            # 全量
   （幂等 `ALTER TABLE`，旧行 NULL 不回填），并更新了 `images.lock.json` 的上下文摘要 ——
   这两项**确实会**在部署时发生，不是"零改动"。回滚路径：清空绑定键即回到原直读；
   库里的新列不影响旧代码读取。
+
+## 八、续办（Codex 复核 9fffdf7 之后）：三个运行缺陷
+
+复核在 `9fffdf7` 上复现了三个**运行**缺陷；本片逐条修复，并处理与最新 main 的冲突。
+
+| 线程 | 缺陷（复核实测） | 修法 | 回归（变异即转红） |
+|---|---|---|---|
+| P1 `…vv5li` | `final_release` 读配置之后不重读 run；配置读取期间撤销/到期被漏掉，GET 仍 `200 + 正文` | `get → 读绑定/配置 → **再 get**`；只用第二次读到的对象判定与返回。复用既有 `store.get`（读事务，顺带收敛过期），**不加锁、不加分布式协议** | 撤销 / 到期 各 1 条 |
+| P2 `…vv5lm` | 节点有效性 `next(...)` 取**第一条**同 node_id 登记；合法轮换（旧 token inactive + 新 active）被判无效，`succeeded` 被改 `failed`、GET 403 | 「**存在**一条 active、同环境、同实际节点的登记即有效」；`actual == expected` 仍独立检查，**不靠禁止多条登记回避** | 1 条 |
+| P1 `…vv5lr` | worker 未执行 `final_release` 要求的外部授权；节点跑完后订单转归他人，仍写 `completed` 并存会话答案（授权计数 3→3，它没问过） | worker 写结果前用**同一个**授权器再判一次归属（装配层注入，未注入即 fail closed）；归属丢失 / 授权源不可用都落 `failed`，不写正文、不写会话答案，轮次正常释放。**没有新造权限规则** | 归属丢失 / 授权源不可用 各 1 条 |
+
+**真节点复跑**：用原样 `verify_chat_node_entry.py` 在修复后的树上重跑 —— **18/18 PASS**，failures=0。
+
+**主线**：合入 `7d4ccb6`（#1051）。冲突只在 `deploy/m2-live-03/images.lock.json` 的
+`source_sha256`：两边各自改过摘要，合并后两者都不成立，按合并后的树重算并 `--check`；
+三个修复落进 `src/` 之后再重算一次（不重算会让
+`test_gateway_context_digest_is_reproducible_and_matches_the_lock` 变红）。
+
+**不接受为通用的东西**：模型 HTTP 请求数（正常 2、two-orders 4、round2-500 5、truncated 2）
+是**这一个合成上游**的观测值，不是已证明的硬上限；后续真实供应商验收按实际请求计预算。
+本片不开重试优化议题。

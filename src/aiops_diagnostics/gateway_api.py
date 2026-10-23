@@ -1020,9 +1020,12 @@ def create_gateway_app(
     )
     # 聊天 worker 在写结果之前要用**同一个**授权器再判一次本人归属（APP-RUNTIME-01 续办
     # 必修 3）。注入而不是反向 import：`gateway_api` 已经 import 运行时，反向会成环。
-    # 不支持注入的替身（测试里那些）就不设 —— worker 因此 fail closed 落 failed，
-    # 而不是拿"没授权过"当"可以交付"。
-    if hasattr(selected_runtime, "set_order_authorizer"):
+    #
+    # 整块都在 `suppress` 里，而且**不靠 `hasattr` 判断**：一个"任何属性都返回可调用对象"
+    # 的替身（测试里的直白替身就是这样）会让 `hasattr` 恒为 True，随后调用就抛。
+    # 与上面 `set_trial_operator_scope` 同一条理由：这里的语义是"能配就配上"，
+    # 配不上就让 worker fail closed（判不出归属 ⇒ 落 failed），而不是让装配炸掉。
+    with contextlib.suppress(Exception):
         selected_runtime.set_order_authorizer(selected_authorizer)
     if platform_resolver is not None:
         selected_platform_resolver = platform_resolver
