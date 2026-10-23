@@ -1,0 +1,22 @@
+# H5 聊天页实际调用的网关路径 —— 唯一声明处。
+#
+# 每条都是 H5 产物里真实出现过的调用（读法与出处见 ops/h5-assistant-routes.md），
+# nginx 只转这一组。`tests/test_h5_assistant_routes.py` 断言：
+#   1) 这里每一条都被 nginx 的正则命中；
+#   2) 网关 /v1/ 下**其余**路由一条都不命中。
+# 新增一行而不同步 nginx 片段、或把正则该死的路径放进来，CI 都会红。
+#
+# 形状：<方法> <路径模板>；{qa_id}/{job_id}/{diagnosis_id} 是 32 位十六进制。
+
+GET  /v1/faq/recommendations
+GET  /v1/faq/catalog
+POST /v1/faq/answer
+GET  /v1/shortcuts
+POST /v1/assistant/questions
+GET  /v1/assistant/questions/{qa_id}
+POST /v1/assistant/questions/{qa_id}/cancel
+POST /v1/health-report-jobs
+GET  /v1/health-report-jobs/{job_id}
+POST /v1/standard/diagnoses
+GET  /v1/standard/diagnoses/{diagnosis_id}
+POST /v1/standard/diagnoses/{diagnosis_id}/cancel
