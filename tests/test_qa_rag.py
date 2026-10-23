@@ -1790,3 +1790,41 @@ def test_an_omitted_depth_keeps_the_guard_default(tmp_path: Path) -> None:
     _run(tmp_path, session, client)
 
     assert [call[2] for call in client.calls] == [5]
+
+
+def test_an_external_video_link_survives_into_the_public_payload() -> None:
+    """模型只引用 resource_id；`external_url` 由服务端挂载到块上（#1035）。
+
+    这条判据守的是分工：**链接不是模型输出的一部分**，它随资源走。模型既不能
+    发明它，也不需要复述它。
+    """
+    from aiops_diagnostics.agent_contracts import QaAnswer
+
+    answer = QaAnswer.model_validate(
+        {
+            "blocks": [
+                {"kind": "text", "text": "为您找到了相关视频资料。"},
+                {"kind": "video", "resource_id": "media_ext1", "title": "尼日利亚关税"},
+            ],
+            "retrieval_status": "found",
+        }
+    )
+
+    payload = answer.to_public_dict(
+        media_by_id={
+            "media_ext1": {
+                "resource_id": "media_ext1",
+                "kind": "video",
+                "mime_type": "video/mp4",
+                "title": "尼日利亚关税",
+                "reference_id": "chunk-9",
+                "external_url": "https://www.youtube.com/shorts/Ld7_TVdVFpk",
+                "embed": "youtube",
+            }
+        }
+    )
+
+    video = next(b for b in payload["blocks"] if b["kind"] == "video")
+    assert video["media"]["external_url"].endswith("/Ld7_TVdVFpk")
+    assert video["media"]["embed"] == "youtube"
+    assert "url" not in video["media"], "外部视频不该带一个我们签不出来的 url"
