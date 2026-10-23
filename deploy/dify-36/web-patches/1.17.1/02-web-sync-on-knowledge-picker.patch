@@ -1,0 +1,101 @@
+diff --git a/web/app/components/app/configuration/dataset-config/select-dataset/index.tsx b/web/app/components/app/configuration/dataset-config/select-dataset/index.tsx
+index 1e9b0037..a8d0d439 100644
+--- a/web/app/components/app/configuration/dataset-config/select-dataset/index.tsx
++++ b/web/app/components/app/configuration/dataset-config/select-dataset/index.tsx
+@@ -19,6 +19,8 @@ import { workspacePermissionKeysAtom } from '@/context/permission-state'
+ import { useKnowledge } from '@/hooks/use-knowledge'
+ import Link from '@/next/link'
+ import { useInfiniteDatasets } from '@/service/knowledge/use-dataset'
++import { syncKnowledgeDatasets } from '@/service/knowledge-sync'
++import { currentWorkspaceIdAtom } from '@/context/workspace-state'
+ import { hasPermission } from '@/utils/permission'
+ 
+ type ISelectDataSetProps = {
+@@ -41,11 +43,48 @@ const SelectDataSet: FC<ISelectDataSetProps> = ({
+   const canSelectMulti = true
+   const { formatIndexingTechniqueAndMethod } = useKnowledge()
+   const workspacePermissionKeys = useAtomValue(workspacePermissionKeysAtom)
++  const currentWorkspaceId = useAtomValue(currentWorkspaceIdAtom)
+   const canCreateDataset = hasPermission(workspacePermissionKeys, 'dataset.create_and_management')
+-  const { data, isLoading, isFetchingNextPage, fetchNextPage, hasNextPage } = useInfiniteDatasets(
++  const { data, isLoading, isFetchingNextPage, fetchNextPage, refetch, hasNextPage } = useInfiniteDatasets(
+     { page: 1 },
+     { enabled: isShow, staleTime: 0, refetchOnMount: 'always' },
+   )
++
++  /* 打开「添加知识库」时，先让网关把 RAGFlow 的新库收敛成 external dataset（ADR-0122）。
++   *
++   * 为什么挂在这里：运营商在 RAGFlow 建完库，唯一的下一步就是在这个弹窗里选它。
++   * 挂别处都不成立 —— 定时器会替没人在看的租户持续写 Dify；我们自己的清单路由
++   * （`/v1/dify/knowledge`）只有「创建外部知识库」表单会调，根本不经过这条流程。
++   *
++   * 三条纪律，与网关侧那份一模一样：
++   *   1. **失败绝不打扰运营** —— catch 掉，列表照常显示。一次网关抖动不能让他
++   *      连已有的库都选不到。
++   *   2. **每次打开只触发一次** —— `isShow` 由 false 变 true 的那一刻；跟着重渲染
++   *      发请求等于每滚一下都同步一遍。
++   *   3. **同步后若有变化就刷新一页** —— 否则这次打开看到的还是旧列表，运营会以为
++   *      没生效，然后手动刷新，那这次改动就白做了。
++   */
++  const syncedThisOpenRef = React.useRef(false)
++  React.useEffect(() => {
++    if (!isShow) {
++      syncedThisOpenRef.current = false
++      return
++    }
++    if (syncedThisOpenRef.current) return
++    syncedThisOpenRef.current = true
++    let cancelled = false
++    syncKnowledgeDatasets(currentWorkspaceId)
++      .then((created) => {
++        if (!cancelled && created > 0) refetch()
++      })
++      .catch(() => {
++        /* 静默：同步是"让它更方便"，不是"它能不能用" */
++      })
++    return () => {
++      cancelled = true
++    }
++  }, [isShow, refetch, currentWorkspaceId])
++
+   const datasets = useMemo(() => {
+     const pages = data?.pages || []
+     return pages.flatMap((page) =>
+diff --git a/web/service/knowledge-sync.ts b/web/service/knowledge-sync.ts
+new file mode 100644
+index 00000000..9f02b422
+--- /dev/null
++++ b/web/service/knowledge-sync.ts
+@@ -0,0 +1,32 @@
++/* AI-Ops 知识库同步（ADR-0122）。
++ *
++ * 运营在 RAGFlow 建了一个库，它必须**自动**出现在 Dify 的「添加知识库」弹窗里，
++ * 不需要任何人跑命令。这个函数就是那一步：让网关把该租户的 RAGFlow 库收敛成
++ * external dataset。
++ *
++ * **它返回"建了几条"**，不是布尔：调用方只在有变化时刷新列表，否则每次打开弹窗
++ * 都多刷一次，列表会闪一下。
++ *
++ * 端点走 `/__aiops/` 前缀 —— 与知识库入口卡片同一个桥、同一套浏览器身份。
++ *
++ * **`workspace` 由页面带上来，而且它只回答"我这页看着是哪个 workspace"。**
++ * 这不是把判据交给前端：桥仍然要求一个有效的 Dify 会话，网关仍然按 workspace
++ * **反查**租户、并且拒绝请求里出现任何租户参数。前端能做的只有"我在哪一页"，
++ * 而它换出来的同步目标仍然由那个 workspace 对应的租户决定 —— 与
++ * `/__aiops/knowledge-open?workspace=…` 同一条规矩。
++ *
++ * 为什么不能省：桥自己的 `AIOPS_CONSOLE_BRIDGE_WORKSPACE_ID` 是**迁移期的静态
++ * 回退值**，不是"当前活跃 workspace"。用它会在多 workspace 部署里同步错租户，
++ * 而运营看到的却是自己那一页 —— 错误不会报，只会"新库没出现"。
++ */
++export const syncKnowledgeDatasets = async (workspaceId: string): Promise<number> => {
++  const query = workspaceId ? `?workspace=${encodeURIComponent(workspaceId)}` : ''
++  const response = await fetch(`/__aiops/knowledge-sync${query}`, {
++    method: 'POST',
++    credentials: 'include',
++    headers: { 'Content-Type': 'application/json' },
++  })
++  if (!response.ok) throw new Error(`knowledge sync failed: ${response.status}`)
++  const body = await response.json()
++  return typeof body?.created === 'number' ? body.created : 0
++}

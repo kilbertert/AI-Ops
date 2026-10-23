@@ -1314,7 +1314,6 @@ def create_gateway_app(
 
     def _libraries_for_tenant(settings: GatewayServerSettings, runtime: GatewayRuntime) -> Any:
         """A per-tenant library fetcher, or a no-op when auto-registration is off.
-
         Returns ``None`` for "no auto sources" rather than raising: an upstream
         that is down must degrade to the manual registry (which is why the manual
         registry exists), not turn a working request into a 502.
@@ -1489,9 +1488,8 @@ def create_gateway_app(
         # rule, which is the shape that drifts.
         sources = _knowledge_sources(context.settings, context.store)
         items: list[dict[str, Any]] = []
-        for binding in sources.visible(
-            identity, fetch_libraries=_libraries_for_tenant(settings, context.runtime)
-        ):
+        bindings = sources.visible(identity, fetch_libraries=_libraries_for_tenant(settings, context.runtime))
+        for binding in bindings:
             items.append(
                 {
                     "knowledge_id": binding.knowledge_id,
@@ -4014,6 +4012,120 @@ def create_gateway_app(
                 samesite="lax",
             )
         return response
+
+    @app.post("/v1/internal/knowledge/sync", include_in_schema=False)
+    def knowledge_sync_by_workspace(
+        request: Request,
+        workspace: str = "",
+        _: None = Depends(dify_workspace_credential),  # noqa: B008
+    ) -> dict[str, Any]:
+        """workspace → 那个租户的 RAGFlow 库 → Dify dataset（ADR-0122 / #1056）。
+
+        调用方是**桥**，不是浏览器（内部令牌，与 ``/v1/internal/knowledge/open``
+        同一套门）。**租户只来自 workspace 反查**：请求里出现任何租户参数都是 400 ——
+        忽略会让调用方以为自己指定成功了。
+
+        **幂等且只增不减**：只创建 / 改名 / 修权限 / 补 retrieval_model，绝不删。
+        RAGFlow 里已不存在的库只出现在 ``orphans`` 里（Dify 没有恢复入口，自动删是
+        单向操作）。
+
+        失败不抛给调用方看的业务错，而是让它按 ``created: 0`` 处理 —— 桥把这条路径
+        挂在「添加知识库」弹窗上，一次上游抖动不该让那个弹窗报错。
+        """
+        for forbidden in ("tenant_id", "tenant", "environment"):
+            if forbidden in request.query_params:
+                raise StandardAPIError(
+                    status.HTTP_400_BAD_REQUEST,
+                    "KNOWLEDGE_SYNC_PARAM_NOT_ACCEPTED",
+                    f"{forbidden} is resolved from the workspace, never from the request",
+                )
+        if not workspace.strip():
+            raise StandardAPIError(
+                status.HTTP_400_BAD_REQUEST,
+                "KNOWLEDGE_SYNC_WORKSPACE_REQUIRED",
+                "workspace is required",
+            )
+        settings = context.settings
+        if not settings.dify_console_base_url or not settings.dify_console_api_key:
+            raise StandardAPIError(
+                status.HTTP_404_NOT_FOUND, "KNOWLEDGE_SYNC_DISABLED", "console access is not enabled"
+            )
+        api_id = settings.dify_external_knowledge_api_id
+        if not api_id:
+            raise StandardAPIError(
+                status.HTTP_404_NOT_FOUND, "KNOWLEDGE_SYNC_DISABLED", "external knowledge api id is not set"
+            )
+        workspaces = getattr(context.runtime, "dify_workspaces", None)
+        client = getattr(context.runtime, "kb_search_client", None)
+        if workspaces is None or client is None:
+            raise StandardAPIError(
+                status.HTTP_404_NOT_FOUND, "KNOWLEDGE_SYNC_DISABLED", "knowledge sync is not available"
+            )
+
+        from aiops_diagnostics.dify_console_admin import ConsoleApiSettings, DifyConsoleAdmin
+        from aiops_diagnostics.dify_knowledge_datasets import libraries_for, run
+        from aiops_diagnostics.dify_workspaces import DifyWorkspaceError
+
+        try:
+            tenant_id = workspaces.tenant_for_workspace(workspace.strip(), settings.environment)
+        except DifyWorkspaceError as exc:
+            # 未登记 / 状态不可用：**这是调用方能行动的拒绝**，不是"暂时不可用"。
+            # 桥把这条路径挂在弹窗上，所以它会把 4xx 译成"不刷新列表"而不是红字。
+            raise StandardAPIError(exc.http_status, exc.code, exc.message) from exc
+        # kb-service 不可达 ⇒ 没有可收敛的东西。这是**空结果**，不是失败：桥那边的
+        # 调用方只关心"要不要刷新列表"，而答案是"不用"。
+        try:
+            owned = client.for_tenant(tenant_id).list_knowledge_bases()
+        except Exception:  # noqa: BLE001 - see above
+            return {"created": 0, "tenant_id": tenant_id, "unavailable": True}
+
+        libraries = libraries_for(tenant_id, owned)
+        console = DifyConsoleAdmin(
+            ConsoleApiSettings(settings.dify_console_base_url, settings.dify_console_api_key)
+        )
+
+        def converge() -> Any:
+            return run(
+                workspace_id=workspace.strip(),
+                libraries=libraries,
+                console=console,
+                external_knowledge_api_id=api_id,
+                dry_run=False,
+            )
+
+        # **并发闸**：两个运营（或同一个人的两个标签页）同时打开弹窗，就是两个并发
+        # pass，各自读一遍列表、各自决定建同一个 —— 而 Dify 对 `(tenant, name)` 没有
+        # 唯一约束，输的一方留下重复。闸在 `knowledge_dataset_sync_guard`。
+        #
+        # 闸的 `run()` 返回的是**它自己的**结论，不返回 work 的产物，所以这里用一个
+        # 单元素列表把产物带出来 —— 比让闸去理解 `run()` 的返回类型更省事，也不会
+        # 让闸与同步实现耦合。
+        guard = getattr(context.runtime, "knowledge_dataset_sync_guard", None)
+        outcome: list[dict[str, Any]] = []
+        if guard is None:
+            guard_outcome = "unguarded"
+            outcome.append(converge())
+        else:
+            guard_outcome = guard.run(
+                tenant_id=tenant_id,
+                work=lambda: (outcome.append(converge()), None)[1],
+            )
+        if not outcome:
+            # 被闸挡下（或闸自己失败）：没有产出可报，但**不是错误** —— 另一次 pass
+            # 正在做同一件事，或刚做完。
+            _LOGGER.info("knowledge sync workspace=%s tenant=%s %s", workspace, tenant_id, guard_outcome)
+            return {"created": 0, "tenant_id": tenant_id, "skipped": True}
+        applied = outcome[0]
+        created = sum(1 for item in applied.get("applied") or [] if item.get("kind") == "create")
+        _LOGGER.info(
+            "knowledge sync workspace=%s tenant=%s applied=%d created=%d orphans=%d",
+            workspace,
+            tenant_id,
+            len(applied.get("applied") or []),
+            created,
+            len(applied.get("orphans") or []),
+        )
+        return {"created": created, "tenant_id": tenant_id, "outcome": applied}
 
     @app.get("/v1/internal/knowledge/open", include_in_schema=False)
     def knowledge_open_by_workspace(

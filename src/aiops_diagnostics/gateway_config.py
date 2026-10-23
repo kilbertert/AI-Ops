@@ -172,6 +172,12 @@ class GatewayServerSettings:
     dify_console_api_key: str = field(repr=False, default="")
     #: 导出请求要带的 workspace（Dify 的 admin-key 路径从它解析租户 owner）。留空 ⇒ 不带该头。
     dify_console_workspace_id: str = ""
+    #: 该 workspace 的「外部知识库 API 模板」id（#1056）。
+    #:
+    #: 建一条 external dataset 时必须指名它 —— 它决定了 Dify 拿哪套端点与凭据去检索。
+    #: **不猜、不按名字找**：模板由开户流程建、每个 workspace 一份，猜错等于把凭据绑到
+    #: 别处（ADR-0096 决策一）。留空 ⇒ 自动同步整体不启用（清单照常返回）。
+    dify_external_knowledge_api_id: str = ""
     #: **运营自助发布**的共享凭据（`POST /v1/dify/publish`）。留空 ⇒ 该路由整体 404，
     #: 与 ``dify_knowledge_api_key`` 同一条「未配置即不启用」的机制。
     #:
@@ -399,6 +405,8 @@ class GatewayServerSettings:
             or _file_value(file_values, "AIOPS_GATEWAY_DIFY_CONSOLE_API_KEY"),
             dify_console_workspace_id=_env("AIOPS_GATEWAY_DIFY_CONSOLE_WORKSPACE_ID")
             or _file_value(file_values, "AIOPS_GATEWAY_DIFY_CONSOLE_WORKSPACE_ID"),
+            dify_external_knowledge_api_id=_env("AIOPS_GATEWAY_DIFY_EXTERNAL_KNOWLEDGE_API_ID")
+            or _file_value(file_values, "AIOPS_GATEWAY_DIFY_EXTERNAL_KNOWLEDGE_API_ID"),
             dify_publish_api_key=_env("AIOPS_GATEWAY_DIFY_PUBLISH_API_KEY")
             or _file_value(file_values, "AIOPS_GATEWAY_DIFY_PUBLISH_API_KEY"),
             dify_tools_api_key=_env("AIOPS_GATEWAY_DIFY_TOOLS_API_KEY")
