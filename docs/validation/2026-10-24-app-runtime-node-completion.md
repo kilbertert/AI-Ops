@@ -112,3 +112,10 @@ uv run pytest -n 0            # 全量
 **不接受为通用的东西**：模型 HTTP 请求数（正常 2、two-orders 4、round2-500 5、truncated 2）
 是**这一个合成上游**的观测值，不是已证明的硬上限；后续真实供应商验收按实际请求计预算。
 本片不开重试优化议题。
+
+**回归**：定向集合 125 → **130**；全量 **3752 passed / 9 skipped / 0 failed**（317.76s）。
+
+**修复过程中自己踩到并修掉的一个装配缺陷**：授权器注入写成 `hasattr(...)` 判断，
+而直白替身"任何属性都返回可调用对象"，于是 `hasattr` 恒真、随后调用即抛 ——
+4 条既有 order-guard 用例因此在全量里红。改成与 `set_trial_operator_scope` 同一条：
+整块 `suppress`，配不上就让 worker fail closed。
