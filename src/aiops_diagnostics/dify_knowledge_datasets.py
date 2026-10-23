@@ -45,6 +45,17 @@ PERMISSION_ALL_TEAM = "all_team_members"
 #: 名字上限：取**两个接口里更严的那个**（更新 40 / 创建 100）。
 NAME_MAX_LENGTH = 40
 
+#: external dataset 的检索参数。**必须显式写进每一条 PATCH**，理由见
+#: :func:`update_external_dataset` 的文档：Dify 对 ``retrieval_model`` 直接 ``.get``，
+#: 而创建接口不写它 —— 不补就是 SQL NULL，每一次检索都炸，且被吞成"没结果"。
+#: 取值与 Dify UI 的默认一致（``DATASET_DEFAULT``：top_k 4、阈值 0.8），
+#: 让"我们同步的"与"人点过保存的"是同一个状态。
+DEFAULT_EXTERNAL_RETRIEVAL_MODEL = {
+    "top_k": 4,
+    "score_threshold": 0.8,
+    "score_threshold_enabled": False,
+}
+
 
 class SyncError(RuntimeError):
     """一步失败，带一个可区分的码与一句能行动的话。"""
@@ -69,7 +80,7 @@ class Library:
 class Action:
     """一条要发生的事。``kind`` 决定调用方发哪个请求。"""
 
-    kind: str  # create | rename | fix_permission | ok
+    kind: str  # create | rename | fix_permission | fix_retrieval_model | ok
     knowledge_id: str
     name: str
     dataset_id: str = ""
@@ -187,6 +198,11 @@ def plan(libraries: Iterable[Library], existing: Iterable[Mapping[str, Any]]) ->
             actions.append(Action("rename", lib.knowledge_id, lib.name, dataset_id))
         elif str(item.get("permission") or "") != PERMISSION_ALL_TEAM:
             actions.append(Action("fix_permission", lib.knowledge_id, lib.name, dataset_id))
+        elif not item.get("external_retrieval_model"):
+            # 已存在、已可见，但**检索跑不起来**：Dify 的列表把这些条目的
+            # ``external_retrieval_model`` 回成 null，而检索侧对它直接 ``.get``。
+            # 这也是 #1001 建出来的那批的形状，所以修它必须走同一条 PATCH。
+            actions.append(Action("fix_retrieval_model", lib.knowledge_id, lib.name, dataset_id))
         else:
             actions.append(Action("ok", lib.knowledge_id, lib.name, dataset_id))
 
@@ -236,8 +252,16 @@ def run(
                 name=action.name,
                 external_knowledge_id=action.knowledge_id,
                 external_knowledge_api_id=external_knowledge_api_id,
+                external_retrieval_model=DEFAULT_EXTERNAL_RETRIEVAL_MODEL,
             )
-            applied.append({**action.as_dict(), "dataset_id": dataset_id, "permission": PERMISSION_ALL_TEAM})
+            applied.append(
+                {
+                    **action.as_dict(),
+                    "dataset_id": dataset_id,
+                    "permission": PERMISSION_ALL_TEAM,
+                    "external_retrieval_model": DEFAULT_EXTERNAL_RETRIEVAL_MODEL,
+                }
+            )
             log(f"created {action.knowledge_id} → {action.name}")
         else:
             console.update_external_dataset(
@@ -246,6 +270,7 @@ def run(
                 name=action.name,
                 external_knowledge_id=action.knowledge_id,
                 external_knowledge_api_id=external_knowledge_api_id,
+                external_retrieval_model=DEFAULT_EXTERNAL_RETRIEVAL_MODEL,
             )
             applied.append(action.as_dict())
             log(f"{action.kind} {action.knowledge_id}")

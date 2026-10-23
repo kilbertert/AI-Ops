@@ -54,6 +54,38 @@ Dataset.permission:           server_default 'only_me'
 dataset，而错误只说"名字太长"。所以在**创建之前**就按 40 拒绝，并给出可行动的下一步
 （改 RAGFlow 里的名字，或 `--name` 覆盖）。
 
+## 决策五：``external_retrieval_model`` 每次 PATCH 都写 —— 不写就是"每条检索都崩"
+
+这一条是 **#1002 真机抓出来的**，而且它把我上面那四个决定全部证成了「对，但不够」。
+
+真机现象：dataset 建好了、`all_team_members`、编排页里选得到、**命中测试也能出结果** ——
+可是智能体回答「抱歉，我这边暂时无法查询到…」。
+
+Dify 的 api 日志给出真因：
+
+```
+File "/app/api/services/external_knowledge_service.py", line 520
+    score_threshold_enabled = external_retrieval_parameters.get("score_threshold_enabled") or False
+AttributeError: 'NoneType' object has no attribute 'get'
+```
+
+``fetch_external_knowledge_retrieval`` 收到的 ``external_retrieval_parameters`` 就是
+``dataset.retrieval_model``，而 ``create_external_dataset`` **不写**这一列 ⇒ SQL NULL ⇒
+对 None 调 ``.get``。Dify 把这个异常吞成"没有检索结果"，所以症状是**一句礼貌的"查不到"**，
+而不是一个错误。
+
+命中测试为什么能过：它走的是 ``ExternalKnowledgeHitTestingApi``，那条路径读的是
+``dataset.external_retrieval_model`` 这个**属性**（``self.retrieval_model or {top_k:2,…}``），
+有默认值兜底。同一个库，两条路径，一条兜底一条不兜底。
+
+所以：**每次 PATCH 都带 ``external_retrieval_model``**，取值与 Dify UI 的
+``DATASET_DEFAULT`` 一致（top_k 4、阈值 0.8、默认关闭阈值）。这样"我们同步出来的"
+与"人点过 Settings 保存的"是同一个状态 —— UI 的表单每次也都会带这一块。
+
+**并且 ``plan()`` 会把它当成待修项**（``fix_retrieval_model``）：已存在、已可见、但
+``retrieval_model`` 为 null 的条目，重跑同步就修好。只判「在不在 + 权限对不对」的
+``plan()`` 会永远认为#1001 建出来的那批是健康的 —— 而它们每一条都检索不了。
+
 ## 决策四：RAGFlow 里已删的库，**报告，不删**
 
 删 dataset 在 Dify 里不可逆，而且删一条正被智能体引用的库会静默破坏那些 app。命令把它们
@@ -82,4 +114,5 @@ dataset，而错误只说"名字太长"。所以在**创建之前**就按 40 拒
 时回调）是下一个决定，不在本决策里。
 
 上限：命令只建/改 dataset，不碰智能体配置。`orphans` 需要人看。名字超过 40 字节的库需要
-`--name` 或改名。
+`--name` 或改名。``external_retrieval_model`` 用的是 Dify UI 的默认值，不跟随每个库的
+真实需要调 —— 要调就之后在 UI 里改，同步不会再覆盖（``plan`` 只在它是 null 时才动它）。
