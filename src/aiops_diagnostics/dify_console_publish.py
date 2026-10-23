@@ -60,6 +60,7 @@ import json
 import logging
 import os
 import re
+import time as _time_module
 import urllib.parse
 import uuid
 from collections.abc import Mapping
@@ -142,6 +143,14 @@ TRIAL_TERMINAL_STATUSES: frozenset[str] = DIAGNOSIS_PROFILE.terminal
 #: 发布权查询（#780）：登录代理上的只读端点。**未配置它 = 维持过渡行为**
 #: （按 Dify 的 owner/admin 判），所以身份闭环上线前行为逐字不变。
 _PUBLISH_CHECK_PATH = "/__aiops/publish/check"
+
+#: 知识库入口（#984 / PRD #981）：浏览器新标签 GET 到这里，桥解析身份后 303 给网关。
+#:
+#: **为什么是 GET 而不是 POST**：它是浏览器的一次**顶层导航**（`window.open`），
+#: 不是同源 fetch —— 顶层导航不带 `Origin`、也不带 CSRF 头，所以发布那条门在这里
+#: 用不了，也不该用：这条路由**不改任何东西**，它只回答"往哪跳"。真正改变状态的
+#: 动作在网关那一侧（换会话），而那里的租户来自**登录代理验过的会话**。
+_KNOWLEDGE_OPEN_ROUTE = "/__aiops/knowledge-open"
 _REFUSED_PUBLISH_PERMISSION = "公司账号没有发布到 AI-Ops 的权限，请联系公司管理员"
 
 
@@ -150,6 +159,39 @@ class ConsolePublishError(RuntimeError):
 
 
 _REFUSED_NO_WORKSPACE = "你所在的租户还没有可用的 Dify 工作区，不能发布。请联系管理员为该租户开户后再试"
+
+
+def _console_access_token_from_cookie(cookie_header: str | None) -> ConsoleSession | None:
+    """只取 ``access_token``，**不要求 CSRF**（#984）。
+
+    ``console_session_from_headers`` 要求 CSRF 双提交，因为发布那条路是**同源 POST**
+    且会改变状态。知识库入口是浏览器的**顶层 GET 导航**（新标签），它不携带
+    ``X-CSRF-Token``，也没有要防的跨站伪造 —— 这条路只回答"往哪跳"，真正的状态变化
+    在网关，而网关的租户来自登录代理验过的会话。
+
+    CSRF 空串是**显式**的，不是遗漏：它在这里不参与任何判定，也不会被发出去。
+    """
+    if not cookie_header:
+        return None
+    found: dict[str, list[str]] = {prefix + CONSOLE_ACCESS_TOKEN_COOKIE: [] for prefix in ("", "__Host-")}
+    for chunk in cookie_header.split(";"):
+        name, sep, value = chunk.strip().partition("=")
+        if name in found:
+            found[name].append(value if sep else "")
+    plain = bool(found[CONSOLE_ACCESS_TOKEN_COOKIE])
+    prefixed = bool(found["__Host-" + CONSOLE_ACCESS_TOKEN_COOKIE])
+    if plain == prefixed:  # 两种都没有，或两种都有（不知道该用哪一个）
+        return None
+    prefix = "__Host-" if prefixed else ""
+    access = found[prefix + CONSOLE_ACCESS_TOKEN_COOKIE]
+    if len(access) != 1 or not _is_token(access[0]):
+        return None
+    return ConsoleSession(access_token=access[0], csrf_token="", cookie_prefix=prefix)
+
+
+def _escape(text: str) -> str:
+    """最小 HTML 转义：这段文案里可能有来自上游的字符串，别让它变成标记。"""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
 
 def _workspace_for(
@@ -588,6 +630,68 @@ def publish_current_app(
     return _interpret_publish_outcome(outcome, app_id)
 
 
+def _identity_and_publish_verdict_for_identity(
+    login_proxy_url: str,
+    *,
+    console_session: ConsoleSession,
+    timeout: float,
+) -> tuple[dict[str, str], bool] | None:
+    """只要**身份**，不看发布权（#984）。
+
+    与 ``_identity_and_publish_verdict`` 是同一个上游调用、同一套解析 —— 分成两个名字
+    是因为**读法不同**：知识库入口只问"这个会话是谁"，发布权（`allowed`）与它无关。
+    运营能进自己租户的知识库，不该因为他没有"发布智能体"的权限而被挡住。
+
+    返回值语义沿用上游：``None`` = 查不通 / 会话不是代理签的 / 没有映射。
+    """
+    return _identity_and_publish_verdict(login_proxy_url, console_session=console_session, timeout=timeout)
+
+
+def _knowledge_open_payload(
+    gateway_base_url: str, internal_token: str, *, tenant_id: str, timeout: float
+) -> dict[str, Any]:
+    """问网关"这个租户的 RAGFlow 入口在哪"，拿到后就跳过去（#982 的端点）。
+
+    网关那条路由按**内部令牌**鉴权，租户来自它自己按 workspace 反查 —— 桥这里传的是
+    **登录代理验过的** ``company_tenant_id``，而网关按 workspace 反查同一个租户。
+    两边都从"验过的会话"出发，没有一处读 URL。
+
+    失败一律抛 :class:`ConsolePublishError` 交给调用点译成可读的一句话 —— 桥不猜
+    "为什么没成"，那是网关的四个可区分码的职责。
+    """
+    from aiops_diagnostics.bounded_http import ErrorMapping, RequestSpec, join_url, request_json
+    from aiops_diagnostics.http_auth import build_internal_token_headers
+
+    def failed(failure: HttpFailure) -> Exception:
+        return ConsolePublishError(f"knowledge open: {failure.status or failure.detail}")
+
+    try:
+        payload = request_json(
+            RequestSpec(
+                url=join_url(gateway_base_url, "/v1/internal/knowledge/open"),
+                method="GET",
+                headers={
+                    "Accept": "application/json",
+                    **build_internal_token_headers(internal_token, 300, int(_time_module.time())),
+                },
+                timeout=timeout,
+                follow_redirects=False,
+            ),
+            mapping=ErrorMapping(
+                auth_rejected=failed,
+                http_error=failed,
+                unavailable=failed,
+                invalid_body=failed,
+                invalid_envelope=failed,
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001 - 一步失败，交给调用点说人话
+        raise ConsolePublishError(f"knowledge open: {exc}") from exc
+    if not isinstance(payload, dict) or not payload.get("target"):
+        raise ConsolePublishError("knowledge open: gateway returned no target")
+    return payload
+
+
 def _identity_and_publish_verdict(
     login_proxy_url: str,
     *,
@@ -1019,6 +1123,18 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
 
     settings: ClassVar[BridgeSettings]
 
+    def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler 的协议
+        path = urllib.parse.urlsplit(self.path).path
+        try:
+            if path != _KNOWLEDGE_OPEN_ROUTE:
+                raise _Rejected(404, "not found")
+            self._get_knowledge_open()
+        except _Rejected as exc:
+            self._html(exc.status, exc.reason)
+        except ConsolePublishError as exc:
+            self.log_message("knowledge open bridge failed: %s", exc)
+            self._html(502, "知识库入口暂时不可用，请稍后再试")
+
     def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler 的协议
         path = urllib.parse.urlsplit(self.path).path
         try:
@@ -1141,6 +1257,93 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
         if len(values) > 1:
             raise _Rejected(400, "duplicate request header")
         return values[0] if values else None
+
+    def _get_knowledge_open(self) -> None:
+        """知识库入口（#984 / PRD #981）。
+
+        **租户只来自登录代理验过的会话。** 请求里带任何 `workspace` / `tenant_id` 一律
+        不看 —— 这不是"忽略得更宽容"，是"根本没有读它的代码路径"。
+
+        为什么这条门比发布那条弱却不影响安全：
+
+        * 这条路由**不改任何东西**，只回答"往哪跳"；
+        * 它把浏览器的 Dify 会话原样交给登录代理验证，代理回身份才继续；
+        * 真正改变状态的那一步（换 RAGFlow 会话）在网关，而网关的租户来自这里
+          解析出的 `company_tenant_id`，**不是**来自 URL。
+
+        未配 `login_proxy_url` 或 `gateway_internal_token` ⇒ 404（与其余桥路由同一
+        机制："这个部署没开"不是"不需要身份"）。
+        """
+        if not self.settings.login_proxy_url or not self.settings.gateway_internal_token:
+            raise _Rejected(404, "not found")
+        session = _console_access_token_from_cookie(self._single_header("Cookie"))
+        if session is None:
+            raise _Rejected(401, "请先在 Dify 中登录")
+        verdict = _identity_and_publish_verdict_for_identity(
+            self.settings.login_proxy_url, console_session=session, timeout=self.settings.timeout
+        )
+        if verdict is None:
+            raise _Rejected(401, "Dify 会话无效或已过期，请重新登录")
+        headers, _allowed = verdict
+        tenant_id = headers.get("X-AIOps-Initiator-Tenant", "").strip()
+        if not tenant_id:
+            raise _Rejected(403, "你的账号还没有绑定公司租户，请联系管理员")
+        opened = _knowledge_open_payload(
+            self.settings.gateway_base_url,
+            self.settings.gateway_internal_token,
+            tenant_id=tenant_id,
+            timeout=self.settings.timeout,
+        )
+        self.send_response(303)
+        self.send_header("Location", str(opened["target"]))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", "0")
+        # 网关把 cookie 交给我们转给**浏览器**：桥是服务端，它收到 303 也不会存 cookie。
+        # 这里原样转出，属性一个都不改 —— 改一个（尤其 Domain）就等于换了一个作用域。
+        for cookie in opened.get("cookies") or []:
+            self._relay_cookie(cookie)
+        self.end_headers()
+
+    def _relay_cookie(self, cookie: Any) -> None:
+        """把网关给的 cookie 属性逐字转成 ``Set-Cookie``。
+
+        只接受形状正确的项；字段缺失就跳过这个 cookie 并记一行 —— 不"补一个默认
+        Domain"，那会把一个限定在 ``.mall.qushiyun.com`` 的会话放大到更宽的范围。
+        """
+        if not isinstance(cookie, dict):
+            return
+        name, value, domain = cookie.get("name"), cookie.get("value"), cookie.get("domain")
+        if not isinstance(name, str) or not isinstance(value, str) or not name or not value:
+            self.log_message("knowledge open: skipping a malformed cookie")
+            return
+        parts = [f"{name}={value}"]
+        if isinstance(domain, str) and domain:
+            parts.append(f"Domain={domain}")
+        parts.append("Path=/")
+        if cookie.get("httponly"):
+            parts.append("HttpOnly")
+        if cookie.get("samesite"):
+            parts.append(f"SameSite={cookie['samesite']}")
+        self.send_header("Set-Cookie", "; ".join(parts))
+
+    def _html(self, status: int, message: str) -> None:
+        """给**浏览器顶层导航**用的失败回应：一句人能读的话，不是 JSON。
+
+        这一条会被新标签页直接渲染，所以它必须是 HTML。JSON 在标签里是一屏字面量。
+        """
+        body = (
+            "<!doctype html><meta charset=utf-8><title>知识库入口</title>"
+            '<div style="font:16px/1.6 system-ui;max-width:36rem;margin:12vh auto;padding:0 1rem">'
+            f'<h1 style="font-size:1.1rem">无法打开知识库</h1><p>{_escape(message)}</p>'
+            '<p style="color:#888;font-size:.85rem">关闭本页回到 Dify 重试；问题持续请联系管理员。</p>'
+            "</div>"
+        ).encode()
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.end_headers()
+        self.wfile.write(body)
 
     def _check_browser_request(self) -> tuple[ConsoleSession, str]:
         """浏览器侧的门，**一条没过就不问任何上游**。
