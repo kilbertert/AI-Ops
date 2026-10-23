@@ -77,13 +77,18 @@ dev-host write 41 /etc/aiops-41/gateway.env \
 
 ```python
 # 在 41 上、aiops41 账号
-from dotenv import dotenv_values
 import os
+
+from dotenv import dotenv_values
+
 for k, v in dotenv_values("/tmp/candidate.env", interpolate=False).items():
     if k and v is not None:
         os.environ[k] = v
+
 from aiops_diagnostics.gateway_config import GatewayServerSettings, charging_endpoint
-s = GatewayServerSettings.from_env(); s.validate()
+
+s = GatewayServerSettings.from_env()
+s.validate()
 assert s.consumer_order_chat_enabled and s.execution_environment == "41"
 assert charging_endpoint(s.charging_status_base_url, "<target-tenant>", require_registration=True)
 ```
