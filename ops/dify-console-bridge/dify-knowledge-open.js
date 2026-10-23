@@ -18,7 +18,6 @@
 (function () {
   'use strict';
   var CARD_ID = 'aiops-kb-open-card';
-  var HIDDEN_KEY = 'aiops.kbOpenCardHidden';
 
   /* 只在知识库页出现。
    *
@@ -30,13 +29,19 @@
     return pathname === '/datasets' || pathname.indexOf('/datasets/') === 0;
   }
 
-  function hidden() {
-    try { return localStorage.getItem(HIDDEN_KEY) === '1'; } catch (e) { return false; }
-  }
-
-  function hide() {
-    try { localStorage.setItem(HIDDEN_KEY, '1'); } catch (e) { /* 存不了就算了 */ }
-  }
+  /* 「收起」只对**这一次页面**有效。
+   *
+   * 这里原来是 `localStorage['aiops.kbOpenCardHidden'] = '1'`，永久生效，而页面上
+   * **没有任何恢复入口**。于是一次误触（× 就在卡片右上角）等于永久失去入口，现象
+   * 与"卡片又没了"完全一样，而根因和轮询那条毫无关系。
+   *
+   * 2026-10-23 真机复现：点 × → `card:false, flag:'1'`；刷新 → 仍然是 `card:false`；
+   * 全页面找不到任何能把它叫回来的东西。
+   *
+   * 现在标记只活在内存里：刷新/重新进入页面就恢复。收起是"这次先别挡着我"，
+   * 不是"我以后都不要了"。真要不想要，那是产品决定，得有一个能看见的开关。
+   */
+  var dismissedThisPage = false;
 
   function build() {
     var card = document.createElement('div');
@@ -116,7 +121,7 @@
       'padding:2px',
     ].join(';');
     close.addEventListener('click', function () {
-      hide();
+      dismissedThisPage = true;
       card.remove();
     });
     // relative 是给这个绝对定位的关闭键用的；写在最后以免覆盖上面的声明。
@@ -152,7 +157,7 @@
       if (stale) { stale.remove(); }
       return true; // 不在这一页 = 没什么可做，也算"完成"
     }
-    if (hidden() || document.getElementById(CARD_ID) || !document.body) {
+    if (dismissedThisPage || document.getElementById(CARD_ID) || !document.body) {
       return true;
     }
     document.body.appendChild(build());

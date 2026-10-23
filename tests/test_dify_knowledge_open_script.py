@@ -87,18 +87,28 @@ def test_the_script_degrades_silently_when_it_cannot_mount() -> None:
     """
     text = _script()
     assert "document.body" in text
-    # 所有对外部状态的读写都在 try 里（localStorage 在隐私模式下会抛）
-    assert text.count("try {") >= 2
+    # 对外部状态的读写都在 try 里 —— 注入脚本碰别人的产品，任何一处抛错都会连累页面。
+    assert text.count("try {") >= 1
     # 只创建自己的元素、只 remove 自己的 —— 不改 Dify 的节点
     assert "innerHTML =" not in text, "不该用 innerHTML 往 Dify 的容器里写"
     assert "document.querySelector(" not in text, "不该依赖 Dify 的内部 DOM 结构"
 
 
 def test_the_card_can_be_dismissed_without_leaving_a_credential_behind() -> None:
+    """收起状态**不携带任何身份**，也**不落盘**（#1015）。
+
+    原来这里断言的是 `localStorage.setItem(HIDDEN_KEY, '1')` —— 那正是后来的缺陷：
+    标记永久存在，而页面上没有恢复入口，一次误触等于永久失去入口。
+    这条用例当初是为了"收起不携带身份"，而不是为了"收起必须持久"；现在两件事一起守：
+    没有任何身份信息，且没有持久化。
+    """
     text = _script()
-    assert "aiops.kbOpenCardHidden" in text
-    # 收起状态只记一个布尔，不记任何身份
-    assert "setItem(HIDDEN_KEY, '1')" in text
+    code = _code()
+    assert "dismissedThisPage" in text
+    assert "localStorage" not in code and "sessionStorage" not in code
+    # 收起状态只是一个内存布尔；**不写盘、不带身份**。
+    # （`workspace=` 是入口 URL 的一部分，那是"我在哪个工作区"，不是身份，别误伤。）
+    assert "setItem" not in code and "getItem" not in code
 
 
 def test_the_poller_never_stops() -> None:
@@ -119,3 +129,25 @@ def test_the_poller_never_stops() -> None:
         "轮询里出现了 clearInterval —— 一旦停掉，晚于它再进入知识库页就再也挂不上卡片"
     )
     assert "tries" not in body and "> 40" not in body, "轮询里仍然有次数上限"
+
+
+def test_dismissing_the_card_is_scoped_to_one_page_visit() -> None:
+    """「收起」不能永久生效（#1015，2026-10-23 真机）。
+
+    原来点一次 × 就写 `localStorage[...] = '1'`，而页面上**没有任何恢复入口**。
+    一次误触等于永久失去入口 —— 用户看到的现象与"卡片又没了"一模一样，根因却与轮询
+    那条无关。真机复现：点 × → `card:false, flag:'1'`；刷新 → 仍 `card:false`。
+
+    判据：脚本**不写任何持久化标记**（`localStorage` / `sessionStorage` 一律不许出现），
+    收起状态只存在于内存变量里。
+    """
+    code = _code()
+    assert "localStorage" not in code, (
+        "脚本不应写 localStorage —— 收起必须是'这次先别挡着我'，不是'我以后都不要了'"
+    )
+    assert "sessionStorage" not in code
+    assert "dismissedThisPage" in code, "收起状态应是一个内存变量"
+    # 关闭按钮只改内存变量，不调用任何持久化函数
+    close_start = code.index("aria-label")
+    close_body = code[close_start : close_start + 600]
+    assert "dismissedThisPage = true" in close_body
