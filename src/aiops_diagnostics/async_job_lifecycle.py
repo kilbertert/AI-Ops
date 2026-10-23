@@ -227,13 +227,30 @@ def expire_statements(
     The parameters are returned rather than interpolated: a status set has a
     fixed size per profile, and binding it keeps the statement text identical
     across tables so a diff of two renders is a diff of the profiles.
+
+    **`sweep` only touches rows that never delivered an answer** (2026-10-23).
+    It used to re-stamp every finished row past its retention as `expired`,
+    `completed` included — and `expired` means "there is no result" at the API
+    layer, so the setting's only visible effect was turning a delivered answer
+    into a reported failure. Measured on 41: a diagnosis completed at 10:44 was
+    `expired` by 10:59 with its `result_json` still intact in the row, and the
+    caller got `result: null`. The user's words: "同一个问题，有时候能回，有时候显示
+    没找到，我一个字都没换".
+
+    Retention decides **how long a row is kept**, and this schema has no
+    physical delete — `sweep` is not a cleanup pass, it only changes what the
+    reader sees. So it now applies to the interrupted tier alone (a failed or
+    user-stopped row keeps its short tier and is finally marked `expired`).
+    A completed row keeps its status and its result; its `expires_at` simply
+    stops meaning anything, which is the honest state of affairs until a real
+    retention delete exists.
     """
     if table not in _TABLES:
         raise ValueError(f"not a job table: {table}")
     if profile.expired is None:
         raise ValueError(f"{profile.name} has no expiry: it cannot be swept")
     ordered_active = tuple(sorted(profile.active))
-    swept = tuple(sorted(profile.completed | profile.interrupted))
+    swept = tuple(sorted(profile.interrupted))
     active_placeholders = ", ".join("?" for _ in ordered_active)
     swept_placeholders = ", ".join("?" for _ in swept)
     deadline_clause = " AND deadline_at <= ?" if require_deadline else ""
@@ -242,9 +259,12 @@ def expire_statements(
         f" expires_at = COALESCE(expires_at, ?), updated_at = ?"
         f" WHERE status IN ({active_placeholders}){deadline_clause}"
     )
+    # `swept` 为空（某张表没有 interrupted 档）时渲染成 `IN (SELECT NULL ...)`，
+    # 一个占位符都没有 —— 绑定的参数个数必须与占位符严格对应，塞一个字面 `NULL`
+    # 词会把那条语句变成「两个参数一个坑」，执行时直接报错。
+    sweep_in = f"({swept_placeholders})" if swept_placeholders else "(NULL)"
     sweep_sql = (
-        f"UPDATE {table} SET status = ?, updated_at = ?"
-        f" WHERE status IN ({swept_placeholders}) AND expires_at <= ?"
+        f"UPDATE {table} SET status = ?, updated_at = ? WHERE status IN {sweep_in} AND expires_at <= ?"
     )
     claim_params: tuple[object, ...] = (profile.expired, now, now, now, *ordered_active)
     if require_deadline:
