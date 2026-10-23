@@ -31,7 +31,7 @@ INFO aiops.assistant_question assistant_question_result \
 |---|---|---|
 | `request_id` | **服务端生成**的关联标识 | 取客户端头的做法会让调用者自己决定关联、故意撞号；这里不读任何请求头 |
 | `stage` | 请求走到哪一步才结束 | 见下表。用来把同一状态码的两条路径分开 |
-| `outcome` | `completed` / `refused`（4xx 表示"我们说不"）/ `failed`（5xx 或逃逸异常） | 4xx 与 5xx 分开，不合并成"失败" |
+| `outcome` | `completed` / `refused`（**任何 4xx**：我们说不）/ `failed`（5xx 或逃逸异常） | **只有这三类**。判据是整个 4xx/5xx 区间，不是枚举 —— 第一版枚举漏了 401，把凭据失效算成了服务故障 |
 | `http_status` | 该请求最终的 HTTP 状态 | 异常逃逸时为 `500`（见第四节） |
 | `error_code` | 稳定错误码 | 只接受 `^[A-Z][A-Z0-9_]{0,63}$`，其余一律写 `UNKNOWN`，防止异常文本或 URL 混入 |
 | `tenant_hash` | `sha256(租户 id)[:16]` | **只来自已验证身份**；身份没建立就没有这一行，不存在"客户端自报租户" |
@@ -93,42 +93,81 @@ Starlette 的 `ServerErrorMiddleware` 在应用中间件**之外**，所以逃�
 
 ## 六、怎么观察（可执行命令）
 
-以下都在 41 上、只读：
+**先筛选，再统计。** 网关的 journal 里同时有别的结构化日志（知识审计带 `outcome=`、
+Dify 试运行带 `duration_ms=`），任何"直接 grep 字段名"的管道都会把它们算进来 —— 实测
+一条知识审计 + 一条 Dify 记录就能让本片的 1 条结果变成 2 条、10 ms 变成 10/9000 ms。
+所以**每条命令的第一步都是把行筛到 `assistant_question_result`**。
+
+### 6.1 一条通用前置
 
 ```bash
-# 1) 本次窗口内所有候选请求的原始行（按 journal 时间）
-journalctl -u aiops-gateway-41 --since "2026-10-23 15:00:00" --no-pager -o cat \
-  | grep 'assistant_question_result'
-
-# 2) 按 outcome 分组计数（分母是"候选请求"，不是全站问答）
-journalctl -u aiops-gateway-41 --since "-1 day" --no-pager -o cat \
-  | grep -o 'outcome=[a-z]*' | sort | uniq -c
-
-# 3) 拒绝都拒在哪一步
-journalctl -u aiops-gateway-41 --since "-1 day" --no-pager -o cat \
-  | grep 'assistant_question_result' \
-  | grep -o 'stage=[a-z_]* .*error_code=[A-Z_-]*' | sed -E 's/ .* / /' | sort | uniq -c
-
-# 4) 耗时分布（样本不足时不要算 p95，见第七节）
-journalctl -u aiops-gateway-41 --since "-1 day" --no-pager -o cat \
-  | grep -o 'duration_ms=[0-9]*' | cut -d= -f2 | sort -n
-
-# 5) 成功行与 QA 行的关联（请求侧）
-#    行里的 qa_id 直接对上数据库：
-#    SELECT qa_id, status, created_at FROM assistant_questions WHERE qa_id = '<上面那行的 qa_id>';
+# 只留本片的事件。后续所有统计都基于它。
+#   --since/--until 固定观察窗口；窗口外的行一律不计。
+#   -o cat 只取消息体，避免 journal 前缀里混入别的字段。
+J() {
+  journalctl -u aiops-gateway-41 --since "$1" --until "$2" --no-pager -o cat \
+    | grep -F 'assistant_question_result '
+}
 ```
 
-**分母口径**：`outcome` 的四个分类都以 `assistant_question_result` 行数为分母。
-`agent_run_metrics` 里的 `order_auth` 是**子调用**指标（一次请求可能写多行），
-**不能**与这里的请求结果相加或相除。
+### 6.2 汇总（默认只看目标租户）
 
-`qa_id` 只在 `outcome=completed` 时有值；`-` 表示该请求没有、也不应该有 QA。
+```bash
+TENANT_HASH=$(printf '%s' "$TARGET_TENANT_ID" | sha256sum | cut -c1-16)
 
-## 七、样本不足时怎么办
+# outcome 计数 —— 分母是候选请求行数，不是全站问答，也不是 agent_run_metrics 的行数
+J "$SINCE" "$UNTIL" | grep -F "tenant_hash=$TENANT_HASH" \
+  | grep -o 'outcome=[a-z]*' | sort | uniq -c
 
-- 少于 **20** 条：只报计数与最大/最小值，**不报 p95、不报百分比**；
-- 一天内 `outcome=completed` 为 0：写"未观测到成功"，不推断成"功能坏了"；
-- 没有任何一行（例如开关未开）：写"未观测"，**不能**写成"没有拒绝发生"。
+# 拒绝拒在哪一步
+J "$SINCE" "$UNTIL" | grep -F "tenant_hash=$TENANT_HASH" \
+  | grep -o 'stage=[a-z_]* .*error_code=[A-Z_-]*' | sed -E 's/ .* / /' | sort | uniq -c
+
+# 耗时（样本不足时不要算 p95，见第七节）
+J "$SINCE" "$UNTIL" | grep -F "tenant_hash=$TENANT_HASH" \
+  | grep -o 'duration_ms=[0-9]*' | cut -d= -f2 | sort -n
+```
+
+### 6.3 「未登记租户」告警必须单独查
+
+**不能**套用 6.2 的目标租户过滤：那条告警说的是**别的租户**在问，按目标租户筛会把
+它整条吞掉，于是"有别的租户在用"这个停止条件永远不会触发。
+
+```bash
+# 全租户、只看未登记租户这一种错误
+J "$SINCE" "$UNTIL" \
+  | grep -F 'error_code=TENANT_ENDPOINT_UNRESOLVED' \
+  | grep -o 'tenant_hash=[0-9a-f-]*' | sort | uniq -c
+```
+
+### 6.4 成功行与 QA 行的关联（请求侧）
+
+```bash
+# 行里的 qa_id 直接对上数据库；clarification 的 qa_id 是 "-"，不是"查到了订单"
+sqlite3 "file:/var/lib/aiops-41/gateway/gateway.db?mode=ro" \
+  "SELECT qa_id, status, internal_run_id FROM assistant_questions WHERE qa_id = '<上面那行的 qa_id>';"
+```
+
+### 6.5 口径
+
+- **分母**：`outcome` 的分类以 `assistant_question_result` 行数为分母。
+  `agent_run_metrics` 里的 `order_auth` 是**子调用**指标（一次请求可能写多行），
+  **不能**与请求结果相加或相除。
+- **结果只有三类**：`completed` / `refused` / `failed`。
+- **`qa_id` 不等于"成功"**：证据落盘失败（503）时 QA 行已经建出来，`qa_id` 有值但结果是
+  `failed` —— 那个关联要留着；反过来，`outcome=completed` 的 200 clarification 是
+  `qa_id=-`，**它没有查到订单**，只是要求补订单号。
+- **范围外**：**候选形成之前**的初始身份/请求校验失败（例如第一次解析就 401、422）
+  **没有**这一行 —— 那时还没有候选，也没有可信租户。看到"没有行"不等于"没有拒绝发生"。
+  但**候选形成之后**的 4xx（含再次鉴权失效的 401、缺读权限 403、订单不可见 404）**都有行**。
+
+### 6.6 三种状态要分开写
+
+| 情况 | 怎么写 |
+|---|---|
+| 读不到日志（文件不存在 / 命令失败） | 写"**读取失败**"，附上错误；**不能**写成"没有行" |
+| 读到了，但窗口内 0 行 | 写"**零样本**，未观测到候选请求" |
+| 有行 | 写正常统计（计数 + 分布；样本 < 20 时只报极值） |
 
 ## 八、已知缺口（本片没做的部分）
 

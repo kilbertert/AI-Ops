@@ -24,7 +24,9 @@
 每次**候选**个人状态查询（启用 + consumer + 无快捷动作 + zh/zh-Hant/en + 命中状态问法）
 写一行 `INFO aiops.assistant_question assistant_question_result …`，带服务端生成的
 `request_id`、`stage`、`outcome`、`http_status`、`error_code`、`tenant_hash`、
-`qa_id`（仅成功）与 `duration_ms`。拒绝与未预期异常同样有行，**不伪造 QA**。
+`qa_id` 与 `duration_ms`。`qa_id` 成功时有值；**证据落盘失败（503）时也可能有值**（QA 行先建好了），
+拒绝则写 `-`。补充：`outcome=completed` 的 200 clarification 是 `qa_id=-`，
+它**没有查到订单**，只是要求补订单号。
 
 这一行是变更单停止条件可判定的前提。字段、计时范围、看不到的部分与观察命令见
 [观察契约](observability.md)。普通问答、功能关闭、身份未建立**不写**这一行。
