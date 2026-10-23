@@ -51,6 +51,7 @@ def _private_output():
     spec.loader.exec_module(module)
     return module
 
+
 HOST = "ulink.h5.mall.qushiyun.com"
 POST_PATH = "/v1/assistant/questions"
 _QA_PATH = re.compile(r"^/v1/assistant/questions/(qa_[0-9a-f]{32})$")
