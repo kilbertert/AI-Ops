@@ -1,21 +1,24 @@
 diff --git a/web/app/components/app/configuration/dataset-config/select-dataset/index.tsx b/web/app/components/app/configuration/dataset-config/select-dataset/index.tsx
-index 1e9b0037..a8d0d439 100644
+index 1e9b0037..777bd53d 100644
 --- a/web/app/components/app/configuration/dataset-config/select-dataset/index.tsx
 +++ b/web/app/components/app/configuration/dataset-config/select-dataset/index.tsx
-@@ -19,6 +19,8 @@ import { workspacePermissionKeysAtom } from '@/context/permission-state'
+@@ -18,7 +18,9 @@ import FeatureIcon from '@/app/components/header/account-setting/model-provider-
+ import { workspacePermissionKeysAtom } from '@/context/permission-state'
  import { useKnowledge } from '@/hooks/use-knowledge'
  import Link from '@/next/link'
- import { useInfiniteDatasets } from '@/service/knowledge/use-dataset'
+-import { useInfiniteDatasets } from '@/service/knowledge/use-dataset'
++import { useInfiniteDatasets, useInvalidDatasetList } from '@/service/knowledge/use-dataset'
 +import { syncKnowledgeDatasets } from '@/service/knowledge-sync'
 +import { currentWorkspaceIdAtom } from '@/context/workspace-state'
  import { hasPermission } from '@/utils/permission'
  
  type ISelectDataSetProps = {
-@@ -41,11 +43,48 @@ const SelectDataSet: FC<ISelectDataSetProps> = ({
+@@ -41,11 +43,60 @@ const SelectDataSet: FC<ISelectDataSetProps> = ({
    const canSelectMulti = true
    const { formatIndexingTechniqueAndMethod } = useKnowledge()
    const workspacePermissionKeys = useAtomValue(workspacePermissionKeysAtom)
 +  const currentWorkspaceId = useAtomValue(currentWorkspaceIdAtom)
++  const invalidDatasetList = useInvalidDatasetList()
    const canCreateDataset = hasPermission(workspacePermissionKeys, 'dataset.create_and_management')
 -  const { data, isLoading, isFetchingNextPage, fetchNextPage, hasNextPage } = useInfiniteDatasets(
 +  const { data, isLoading, isFetchingNextPage, fetchNextPage, refetch, hasNextPage } = useInfiniteDatasets(
@@ -47,8 +50,19 @@ index 1e9b0037..a8d0d439 100644
 +    syncedThisOpenRef.current = true
 +    let cancelled = false
 +    syncKnowledgeDatasets(currentWorkspaceId)
-+      .then((created) => {
-+        if (!cancelled && created > 0) refetch()
++      .then((changed) => {
++        if (cancelled || changed === 0) return
++        // **两个列表都要失效，不是一个。**
++        //
++        // 这里原来只 `refetch()` 本弹窗。而 Dify 主页的知识库列表用的是全局
++        // `staleTime = 5 分钟`（`app/get-query-client.ts`），本弹窗显式写了
++        // `staleTime: 0` —— 于是同一次同步在编排页立刻可见、在主页要等最多五分钟。
++        // 2026-10-24 用户报的「编排页能看到 22、主页看不到」就是这个。
++        //
++        // `useInvalidDatasetList()` 是 Dify 自己在新库建好后用的同一个机制
++        // （`create/empty-dataset-creation-modal` 用它），所以这是"按上游的方式改"。
++        invalidDatasetList()
++        refetch()
 +      })
 +      .catch(() => {
 +        /* 静默：同步是"让它更方便"，不是"它能不能用" */
@@ -61,6 +75,105 @@ index 1e9b0037..a8d0d439 100644
    const datasets = useMemo(() => {
      const pages = data?.pages || []
      return pages.flatMap((page) =>
+diff --git a/web/app/components/datasets/external-knowledge-base/create/ExternalApiSelection.tsx b/web/app/components/datasets/external-knowledge-base/create/ExternalApiSelection.tsx
+index 43855079..c4f6b839 100644
+--- a/web/app/components/datasets/external-knowledge-base/create/ExternalApiSelection.tsx
++++ b/web/app/components/datasets/external-knowledge-base/create/ExternalApiSelection.tsx
+@@ -1,7 +1,6 @@
+ 'use client'
+ 
+ import { Button } from '@langgenius/dify-ui/button'
+-import { Input } from '@langgenius/dify-ui/input'
+ import { RiAddLine } from '@remixicon/react'
+ import { useQuery, useQueryClient } from '@tanstack/react-query'
+ import * as React from 'react'
+@@ -11,6 +10,7 @@ import { useModalContext } from '@/context/modal-context'
+ import { useRouter } from '@/next/navigation'
+ import { consoleQuery } from '@/service/console'
+ import ExternalApiSelect from './ExternalApiSelect'
++import ExternalKnowledgeIdPicker from './ExternalKnowledgeIdPicker'
+ 
+ type ExternalApiSelectionProps = {
+   external_knowledge_api_id: string
+@@ -104,13 +104,15 @@ const ExternalApiSelection: React.FC<ExternalApiSelectionProps> = ({
+             {t(($) => $.externalKnowledgeId, { ns: 'dataset' })}
+           </label>
+         </div>
+-        <Input
+-          id={externalKnowledgeIdInputId}
++        {/* A picker when the endpoint can describe itself, a text field
++            otherwise — upstream's own Input is what the fallback renders. */}
++        <ExternalKnowledgeIdPicker
++          externalKnowledgeApiId={selectedApiId}
+           value={external_knowledge_id}
+-          onValueChange={(value) =>
++          onChange={(value) =>
+             onChange({ external_knowledge_id: value, external_knowledge_api_id })
+           }
+-          placeholder={t(($) => $.externalKnowledgeIdPlaceholder, { ns: 'dataset' }) ?? ''}
++          inputId={externalKnowledgeIdInputId}
+         />
+       </div>
+     </form>
+diff --git a/web/models/datasets.ts b/web/models/datasets.ts
+index 61181fbd..ba94a306 100644
+--- a/web/models/datasets.ts
++++ b/web/models/datasets.ts
+@@ -120,6 +120,19 @@ export type ExternalAPIItem = {
+   created_at: string
+ }
+ 
++/**
++ * One knowledge source an external endpoint offers (`GET /knowledge`).
++ *
++ * Distinct from `ExternalKnowledgeItem`: that one is a Dify *dataset* row. This
++ * is what the provider itself says it can serve, which is what the picker in
++ * "connect external knowledge base" lists.
++ */
++export type ExternalKnowledgeSourceItem = {
++  knowledge_id: string
++  name: string
++  knowledge_base_ids: string[]
++}
++
+ export type ExternalKnowledgeItem = {
+   id: string
+   name: string
+diff --git a/web/service/datasets.ts b/web/service/datasets.ts
+index 6ac4f328..2f84ff77 100644
+--- a/web/service/datasets.ts
++++ b/web/service/datasets.ts
+@@ -10,6 +10,7 @@ import type {
+   ExternalAPIItem,
+   ExternalAPIUsage,
+   ExternalKnowledgeItem,
++  ExternalKnowledgeSourceItem,
+   FetchDatasetsParams,
+   FileIndexingEstimateResponse,
+   IndexingEstimateParams,
+@@ -138,6 +139,22 @@ export const createExternalAPI = ({
+   return post<ExternalAPIItem>('/datasets/external-knowledge-api', { body })
+ }
+ 
++/**
++ * The knowledge sources an endpoint offers — the picker's source.
++ *
++ * This calls OUR console route, which relays the endpoint's own
++ * `GET /knowledge`. It is an extension we added beside `/retrieval`: a stock
++ * external provider has no such route, and the caller treats an empty answer as
++ * "offer the free-text field", which is upstream's behaviour.
++ */
++export const fetchExternalKnowledgeList = ({
++  externalKnowledgeApiId,
++}: {
++  externalKnowledgeApiId: string
++}): Promise<{ knowledge_items: ExternalKnowledgeSourceItem[]; total: number }> => {
++  return get(`/datasets/external-knowledge-api/${externalKnowledgeApiId}/knowledge`)
++}
++
+ export const createExternalKnowledgeBase = ({
+   body,
+ }: {
 diff --git a/web/service/knowledge-sync.ts b/web/service/knowledge-sync.ts
 new file mode 100644
 index 00000000..9f02b422

@@ -1285,12 +1285,23 @@ def sync_knowledge_datasets_command(
         ),
     ] = "",
     dry_run: Annotated[bool, typer.Option("--dry-run", help="只打印将发生的动作，不发任何写请求")] = False,
+    retire_orphans: Annotated[
+        bool,
+        typer.Option(
+            "--retire",
+            help="RAGFlow 里已删的库，把 Dify 那张 dataset 也删掉（**不可逆**）。默认只报告",
+        ),
+    ] = False,
     db: Annotated[Path | None, typer.Option("--db", help="gateway 数据库文件")] = None,
 ) -> None:
     """把某租户在 RAGFlow 名下的**每个库**同步成 Dify 里的一条 external dataset（#1001）。
 
     幂等：按 ``(workspace, external_knowledge_id)`` 查重，跑两次不新建。库名变了只改名，
-    不改 id。RAGFlow 里已删的库**不自动删** Dify 的 dataset —— 只报告（删除不可逆）。
+    不改 id。
+
+    RAGFlow 里已删的库：**默认只报告**（`orphans`），加 ``--retire`` 才真的删 Dify 那条
+    dataset。默认关是因为手工跑这条命令时，上游读失败与"库真的没了"看起来一样 ——
+    而删是不可逆的。自动同步那条路（弹窗触发）是开的，因为它刚刚读过上游、知道列表是好的。
 
     退出码：0 成功（含全无变化）/ 1 有拒绝或失败 / 2 缺配置。
     """
@@ -1388,6 +1399,7 @@ def sync_knowledge_datasets_command(
             console=console,
             external_knowledge_api_id=api_id,
             dry_run=dry_run,
+            retire_orphans=retire_orphans,
             log=lambda line: typer.secho(line, err=True),
         )
     except (SyncError, ConsoleApiError) as exc:
