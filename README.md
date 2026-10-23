@@ -561,29 +561,29 @@ qa-plan.md                QA 用例（158 个用例 ID，含环境/前置/数据
 ```bash
 uv sync --locked --inexact --dev
 uv run ruff check . && uv run ruff format --check .
-uv pip install "pytest-xdist==3.8.0" "execnet==2.1.2"   # 并行调度器，见下
-uv run pytest -n auto -rs
+uv run pytest -rs          # -n auto 已由 addopts 提供
 uv run python -m compileall -q src tests && uv pip check
 ```
 
-**本地跑全量用 `./tools/test.sh`**（等价 `npm test`）：
+**跑测试不需要记任何 flag —— `-n auto` 是默认**：
 
 ```bash
-./tools/test.sh          # 并行，约 44 s
-./tools/test.sh -n 0     # 显式串行，约 244 s
-./tools/test.sh -k faq   # 转发给 pytest 的任意参数
+uv sync --locked --dev     # 唯一前提：它会装好包括调度器在内的一切
+uv run pytest              # 并行，约 47 s
+uv run pytest -n 0         # 显式串行，约 245 s
+./tools/test.sh            # 同上，外加一次 lockfile 一致性检查
 ```
 
-> 脚本会自己确保调度器在位（`uv sync` 会删掉它），再把 `-n auto` 补上。
-> **默认放在命令里而不是 `pyproject.toml` 的 `addopts` 里**：`addopts` 无条件生效，
-> 没装调度器时会以 `unrecognized arguments: -n` 崩掉、**一个测试都不跑**——
-> 比没有默认值更糟。实测 `PYTEST_ADDOPTS` 同样无条件，conftest 钩子也救不了
-> （conftest 在 ini 解析**之后**才加载）。理由见 `tools/test.sh` 的头部注释。
-
-> 并行用的 `pytest-xdist` **故意不进 `pyproject.toml`**：加一个 dev 依赖会改 `uv.lock`，
-> 而 CD 的依赖漂移门拿 `uv.lock` 的 sha256 与 41 上的比，会拦住整条部署。
-> 装进项目 venv（不是 `uv run --with`，那会把 `sys.executable` 改道到临时覆盖环境）。
-> 理由与实测见 `docs/adr/0038`。
+> **`pytest-xdist` 是声明的 dev 依赖，不是手工装的。** 这一点在 2026-10-23 改过，
+> 原因是实测：一个**新 worktree** 的 venv 里没有它，于是 `-n auto` 直接
+> `unrecognized arguments: -n`，唯一出路是把 `-n` 去掉 —— 静默退回串行
+> （279 s vs 55 s）。只要它不在 lockfile 里，「能不能并行」就取决于**有没有人记得装**，
+> 而不是取决于这份代码需要什么。
+>
+> 代价说清楚：`uv.lock` 变了，所以 **41 的依赖漂移门会拒绝部署**，直到按
+> `docs/agents/env-41-dependency-update.md` 人工更新一次。这是一次性的，且没有改
+> 那条门禁 —— 它保护的是「生产重启后不会 ModuleNotFoundError」，不该为了省一次人工
+> 流程去改它。
 
 ### 持续部署（[:cd.yml](.github/workflows/cd.yml) + [:deploy/deploy-41.sh](deploy/deploy-41.sh)）
 

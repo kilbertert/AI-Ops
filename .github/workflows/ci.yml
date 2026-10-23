@@ -142,22 +142,11 @@ jobs:
           uv run ruff check .
           uv run ruff format --check .
 
-      # 并行调度器**故意不进 pyproject.toml**：加一个 dev 依赖会改 uv.lock，而
-      # deploy-41.sh 的依赖漂移门拿 uv.lock 的 sha256 与 41 上的比，于是"加一个
-      # 测试依赖"会拦住整条 CD，直到人工更新 41 的环境。
-      #
-      # 装进**项目 venv**，不用 `uv run --with` —— 后者会把 `sys.executable` 和
-      # `sysconfig` 的 purelib 整体改道到 uv 的临时覆盖环境
-      # （实测：`--with` 下 `sys.executable` = `.cache/uv/builds-v0/.tmpXXXX/bin/python`）。
-      # 凡是拿 `sys.executable` 起子进程、或按 purelib 找 site-packages 的测试，
-      # 在 `--with` 下会看到**另一个环境**。本仓目前没有这样的测试，所以是潜伏的
-      # bug；health-flow 有一处正好依赖 purelib，在那里 `--with` 当场就红。
-      # 这条不变量（sys.executable 必须是项目 venv）由 tests/test_parallel_setup.py 钉住。
-      #
-      # ⚠️ 代价：`--inexact` 让 venv 可以有 lockfile 之外的内容，所以这个 job 的环境
-      # **不是** lockfile 的精确复现。测试集合仍是确定的（下方断言 passed/skipped）。
-      - name: Install the parallel test scheduler
-        run: uv pip install "pytest-xdist==3.8.0" "execnet==2.1.2"
+      # No scheduler install step. `pytest-xdist` is a declared dev dependency as of
+      # 2026-10-23, so `uv sync --locked --inexact --dev` above provides it, and
+      # `-n auto` lives in `pyproject.toml`'s addopts. It used to be installed here
+      # ad hoc — which meant CI had it and every other venv did not, so a fresh
+      # worktree ran serial (279 s vs 55 s) without saying so.
 
       - name: Run tests
         # 绿之外还要有量。三件事可能让这一步"绿得没有意义"：
@@ -180,7 +169,7 @@ jobs:
           # （这正是本步骤第一版的 bug：grep 汇总行永远匹配不到，于是"跳过数=0"
           # 读成一个通过的空集合。上一次 PR 里 CI 日志没有汇总行、只能靠数进度点
           # 才知道跑了多少测试，根因就是它。）
-          uv run pytest -n auto -rs | tee /tmp/pytest.log
+          uv run pytest -rs | tee /tmp/pytest.log
           # ⚠️ `-rs` 会把逐条跳过原因排在**最后**，所以汇总行在它**上面**。
           # 用 `tail -1` 取会拿到一条 SKIPPED 明细，`[0-9]+ skipped` 便永远匹配不到
           # 而回退成 0（这个 bug 在本步骤的第一版里真实存在，靠跑一遍才发现）。
