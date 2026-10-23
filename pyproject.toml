@@ -81,7 +81,13 @@ packages = ["src/aiops_diagnostics"]
 # line moved out once and is only moving back now that the dependency does.
 #
 # Ask for serial with `-n 0`, or `./tools/test.sh -n 0`.
-addopts = "-q -n auto"
+#
+# 2026-10-23：`-n auto` 改成 `-n 4`。本机是 8 核的开发机 + 7 个自托管 runner +
+# 若干长跑 agent，`-n auto` 会在每次全量测试时占满全部核心，把 sshd / tailscaled
+# 挤到抢不到 CPU（实测 load 79 时 tailnet 直接掉线，远程管理通道不可用）。
+# 4 个 worker 仍有 2 倍并行收益，同时给管理面留出余量。
+# 需要更快的一次性跑法：`./tools/test.sh -n 8`（显式覆盖）。
+addopts = "-q -n 4"
 testpaths = ["tests"]
 
 [tool.ruff]

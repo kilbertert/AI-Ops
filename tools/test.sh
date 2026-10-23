@@ -50,4 +50,19 @@ if ! .venv/bin/python -c 'import xdist' >/dev/null 2>&1; then
   echo "  because a missing declared dependency means the venv is out of date." >&2
 fi
 
-exec env PYTHONPATH="$PWD/src" .venv/bin/python -m pytest tests -p no:warnings "$@"
+# ── One full run at a time, per checkout ────────────────────────────────────
+# Measured 2026-10-23: several concurrent sessions each running the suite took the
+# host down (`load average 5.28` → later 79; sshd and tailscaled starved, the
+# tailnet dropped and remote management was gone). `-n 4` in addopts bounds one
+# run; it does not bound how many runs there are.
+#
+# The lock is per repository, not global: two checkouts are independent and should
+# not queue behind each other. Within one checkout they must, because they share
+# the venv, the SQLite fixtures and `.pytest_cache`.
+#
+# `flock` queues rather than refusing — a second session waits and then runs. That
+# is deliberate: a refusal turns "slow" into "my test never ran", and a test that
+# silently did not run is the failure mode this repository keeps paying for.
+# Measured: two sessions at -n 4 finish together in 93 s, one alone in 84 s.
+LOCK="${TMPDIR:-/tmp}/aiops-pytest-$(printf '%s' "$PWD" | sha256sum | cut -c1-16).lock"
+exec flock "$LOCK" env PYTHONPATH="$PWD/src" .venv/bin/python -m pytest tests -p no:warnings "$@"
