@@ -375,6 +375,25 @@ def test_a_dataset_with_no_retrieval_model_is_repaired() -> None:
     assert [a.kind for a in decision.actions] == ["fix_retrieval_model"]
 
 
+def test_the_real_list_route_shape_of_a_never_written_row_is_repaired() -> None:
+    """**这是 41 上真实看到的形状**，也是本条修复第一版失效的原因。
+
+    ``external_retrieval_model`` 是 ``dataset.external_retrieval_model`` 属性（
+    ``self.retrieval_model or {"top_k": 2, "score_threshold": 0.0}``）的投影：
+    列是 SQL NULL 时，列表照样回一个**看起来正常**的对象。所以 ``not reported`` 永远为假 ——
+    判据必须落在"``score_threshold_enabled`` 是不是 None"，兜底字典里没有这个键。
+    """
+    never_written = {"top_k": 2, "score_threshold": 0.0, "score_threshold_enabled": None}
+    decision = plan(
+        [_lib("kb-a", "A")],
+        [_existing("ds-1", "A", permission=PERMISSION_ALL_TEAM, retrieval_model=never_written)],
+    )
+
+    assert [a.kind for a in decision.actions] == ["fix_retrieval_model"], (
+        "列表总回一个对象，所以 `not item.get(...)` 永远为假 —— 那版修复是死代码"
+    )
+
+
 def test_a_fully_correct_dataset_needs_no_write() -> None:
     decision = plan(
         [_lib("kb-a", "A")],

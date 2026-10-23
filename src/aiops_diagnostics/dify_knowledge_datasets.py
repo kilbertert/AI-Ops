@@ -151,6 +151,25 @@ def check_names(libraries: Iterable[Library]) -> None:
         )
 
 
+def _retrieval_model_never_written(reported: Any) -> bool:
+    """这条 dataset 的 ``retrieval_model`` 是不是"从没被写过"。
+
+    **列表接口的回应不能当证据用。** ``DatasetExternalRetrievalModelResponse`` 是
+    ``dataset.external_retrieval_model`` 这个**属性**的投影，而那个属性是
+    ``self.retrieval_model or {"top_k": 2, "score_threshold": 0.0}`` —— 列是 SQL NULL 时
+    它照样回一个"看起来正常"的对象。所以在 41 上真实看到的形状是：
+
+        {"top_k": 2, "score_threshold": 0.0, "score_threshold_enabled": null}
+
+    这是"从没写过"的指纹：``score_threshold_enabled`` 在兜底字典里**不存在**，只有
+    真被写过才会有值。用 ``not reported`` 判会**永远为假**（它总有个对象），
+    于是这条修复永远不触发 —— 而"看起来写了修复"比没写更糟。
+    """
+    if not isinstance(reported, Mapping):
+        return True
+    return reported.get("score_threshold_enabled") is None
+
+
 def plan(libraries: Iterable[Library], existing: Iterable[Mapping[str, Any]]) -> Plan:
     """只算不改：这一批库对着 Dify 的现状会发生什么。
 
@@ -198,10 +217,10 @@ def plan(libraries: Iterable[Library], existing: Iterable[Mapping[str, Any]]) ->
             actions.append(Action("rename", lib.knowledge_id, lib.name, dataset_id))
         elif str(item.get("permission") or "") != PERMISSION_ALL_TEAM:
             actions.append(Action("fix_permission", lib.knowledge_id, lib.name, dataset_id))
-        elif not item.get("external_retrieval_model"):
-            # 已存在、已可见，但**检索跑不起来**：Dify 的列表把这些条目的
-            # ``external_retrieval_model`` 回成 null，而检索侧对它直接 ``.get``。
-            # 这也是 #1001 建出来的那批的形状，所以修它必须走同一条 PATCH。
+        elif _retrieval_model_never_written(item.get("external_retrieval_model")):
+            # 已存在、已可见，但**检索跑不起来**：Dify 的检索侧对
+            # ``dataset.retrieval_model`` 直接 ``.get``，而创建接口从不写这一列。
+            # 这正是 #1001 建出来的那批的形状，所以修它必须走同一条 PATCH。
             actions.append(Action("fix_retrieval_model", lib.knowledge_id, lib.name, dataset_id))
         else:
             actions.append(Action("ok", lib.knowledge_id, lib.name, dataset_id))

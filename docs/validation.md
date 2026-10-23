@@ -181,6 +181,65 @@
   取不到就判失败（不退回整页）。真实复跑前要先用 `--state-dir` 跑一次确认命中。
 - 本片**没有**开生产窗口、没有提交真实状态问题、没有模型调用、没有新增查询作业。
 
+## 2026-10-23 · #1002 收口：编排页选中 → 回答正文真的引用了该库内容（✅ 真机通过）
+
+**目标 commit**：`6b9be3c`（#1008）已 CD 部署到 41。
+**结论**：**通过。** 但通过的路径上有三次假 PASS，全部记在下面。
+
+### 一、最终证据
+
+在 41 的真实 Dify（`dify.ranlei.work`，`system` 账号，`aiops-41-Ulink-598861824`）上：
+
+1. 知识库页：`41` 与 `41(1)` 两张卡片，`EXTERNAL`，权限 `All team members`。
+2. 编排页 `aiops-41-kefu-agent` → Knowledge 区 `Add` → 「Select reference Knowledge」
+   里两条都在，勾选 `41(1)` → `Add`。
+3. Debug & Preview 问「重卡充电桩流量平台有什么客户案例」，回答正文：
+
+   > 为您查到一个相关案例，供参考：
+   > 客户案例：**龙栖重卡充电桩流量平台**
+   > 合作双方：**峨眉山龙栖电力公司 × 趋势智能**，2026年Q2正式达成合作
+   > …目标：把分散的充电站连接成网，打造"**重卡充电界的携程**"
+
+   `龙栖`、`峨眉山龙栖电力公司`、`趋势智能` 都**不在我的提问里** —— 它们只能来自库里那份
+   文档。判据取的是问题**之后**的正文，排除回显。
+
+### 二、修复前后对照
+
+| | 修复前 | 修复后 |
+|---|---|---|
+| `datasets.retrieval_model` | `null` | `{"top_k": 4, "score_threshold": 0.8, "score_threshold_enabled": false}` |
+| Dify api 日志 | `AttributeError: 'NoneType' object has no attribute 'get'` ×N | 无 |
+| 智能体回答 | 「抱歉，我这边暂时无法查询到…」 | 引用了库里的真实案例 |
+
+### 三、三次假 PASS（这才是这一轮最该记的东西）
+
+1. **判据匹配到页面回显的问题。** 我问「有客户案例吗？重卡充电桩流量平台那个」，判据是
+   "回答里出现 `重卡`/`客户案例`" —— 而页面把问题原文也渲染出来了。**同一份证据**，改成
+   只看问题之后的正文，立刻变红。认识到了真因（`AttributeError`）全靠这一改。
+
+2. **把"列表里有这条 dataset"当作端到端的中间证据。** `chat-messages` 请求全部 200、
+   没有任何 4xx —— 因为 Dify 把那个 `AttributeError` 吞成了"没有检索结果"。**HTTP 成功
+   不证明业务成功**，这条在这个仓库里已经被记过很多次，我又踩了一次。
+
+3. **待修判据建在"有兜底值的接口"上**（#1008）。列表接口回的 `external_retrieval_model`
+   是属性投影（`self.retrieval_model or {"top_k": 2, ...}`），列是 NULL 时照样回一个看起来
+   正常的对象，于是 `not item.get(...)` 永远为假 —— 第一版修复是**死代码**。
+   发现方式是：部署后跑 dry-run，期望两条 `fix_retrieval_model`，实际是两条 `ok`，
+   而直接查库那两行仍是 `null`。**判据必须用能区分"写过"与"没写过"的字段**
+   （`score_threshold_enabled is None`，兜底字典里没有这个键）。
+
+三次的共同点：**判据在错误的数据上求值，而它看起来在工作。**
+
+### 四、没验什么
+
+- **editor 账号的界面可见性**：只用 SQL 复刻了 Dify 的 WHERE 子句（`all_team_members` ⇒
+  可见；`only_me` 且 maintainer≠自己 ⇒ 不可见），没有第二个可登录账号真的点一遍。
+- **`41-Ulink-知识库` / `aiops-41-kb-prod-kefu`（3 条 `only_me`）没动** —— 它们的
+  `knowledge_id` 指向 RAGFlow 里已不存在的库（`kb-canary-2` / 无 dataset 后缀），
+  同步把它们报成 `orphans`。由人决定是否删。
+- 「在 RAGFlow 里新建一个库 → 重跑同步 → Dify 里出现」只做了 `41(1)` 那一次
+  （它当时确实是新建的），没有第二次独立复跑。
+
 ## 2026-10-23 · #1001 的真机缺口：dataset 建好、能选，但**一检索就崩**（#1002 抓到）
 
 **范围**：`fix/sync-knowledge-retrieval-model`，基线 `62fd75aa`。承接已合并的 #1001。
@@ -235,10 +294,34 @@ select count(*) filter (where retrieval_model is null), count(*) from datasets w
    前者证明 dataset 存在，后者证明检索被调用并返回了内容。日志里 `chat-messages` 请求
    成功、没有任何 4xx —— 因为 Dify 把那个 AttributeError 吞了。
 
-### 五、没验什么
+### 五、修复的修复：检测器第一版是**死代码**
 
-- 修复**尚未部署到 41**（本分支）。部署后必须重跑一次端到端并看到回答正文里出现
-  `宣传.docx` / 重卡充电桩的内容。
+#1007 合并且 CD 部署到 41 之后，我在 41 上跑 dry-run，期望看到两条 `fix_retrieval_model`：
+
+```
+"planned": [], "unchanged": [{"kind":"ok","name":"41(1)"}, {"kind":"ok","name":"41"}]
+```
+
+而数据库里那两行 `retrieval_model` **仍然是 NULL**。原因：
+
+列表接口回的 `external_retrieval_model` 是 `dataset.external_retrieval_model` 这个
+**属性**的投影，而该属性是 `self.retrieval_model or {"top_k": 2, "score_threshold": 0.0}`。
+列是 SQL NULL 时，列表**照样回一个看起来正常的对象**：
+
+```
+41    | all_team_members | {"top_k": 2, "score_threshold": 0.0, "score_threshold_enabled": null}
+```
+
+于是 `not item.get("external_retrieval_model")` **永远为假** —— 那条修复一次都不会触发。
+判据改到 `score_threshold_enabled is None`（兜底字典里没有这个键）。
+
+**这是本轮第三个同形的坑**：拿一个"有兜底值的接口"当证据。前两个是夹具把两个 id 空间混成
+一个、以及端到端判据匹配到回显的问题。共同点：**判据在错误的数据上求值，而它看起来在工作。**
+
+### 六、没验什么
+
+- 检测器修复**尚未部署到 41**；部署后必须重跑同步并确认那两条变成 PATCH 而不是 `ok`，
+  然后跑端到端、看到回答正文里出现该库内容。
 - editor 账号的 UI 可见性只做了 SQL 层判定（复刻 Dify 的 WHERE 子句），没真的用一个
   editor 身份登录点一遍 —— 没有第二个可登录账号。
 
