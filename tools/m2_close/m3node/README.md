@@ -42,6 +42,28 @@ M3NODE_DEPS=… M3NODE_JDK_IMAGE=… \
 节点容器用 `--network=host` 才能打到宿主 loopback 上的真 Gateway —— 这是本机验收的
 已知取舍，不是隔离证明。
 
+## 聊天入口整链（`verify_chat_node_entry.py`）
+
+```bash
+M3NODE_DEPS=… M3NODE_JDK_IMAGE=… \
+  uv run python tools/m2_close/m3node/verify_chat_node_entry.py --out /tmp/chat-node.json
+```
+
+与上面那条的区别：入口是**现有 App 的聊天接口**（`POST /v1/assistant/questions` →
+原 `GET`），不是在测委派接口。链路是：真 Gateway → 按租户选绑定 → 选单 → 签发 →
+派发 → **真 Java 节点自己领取、自己跑模型工具循环、自己发完成通知** → 同一 run 快照 →
+原 GET 拿到 blocks。
+
+替身与上一节相同（模型、CPMS、编排平台、调用者身份、订单授权），另有两项在
+`gateway_launcher.py` 里显式声明：选单的**数据源**（范围与排序判据照抄生产）与
+**平台目录**（只认 consumer）。**领取与完成通知绝不由 Python 代发** —— 那会把
+「节点真的跑完了」替换成「我们替它说跑完了」。
+
+判据：POST 202 早于节点完成；GET completed 且正文含该 run 快照的订单号；
+QA↔run 存储关联；业务只读一次、派发一次、模型两轮；run `succeeded` +
+`exec_config_state=matched` + `actual_node_id` 是登记的那个节点；第二轮 500 与末轮截断
+都落 failed 且不回落直读；**未登记租户不产生 run**。
+
 ## 同 JVM 并发（`m3link/run.sh`）
 
 ```bash

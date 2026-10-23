@@ -73,6 +73,61 @@ flowchart LR
   顺序是硬的：认节点 → 核对记录/环境/节点 → **再执行一次订单授权** → 才读业务或返回已有结果。
   同一记录最多启动一次业务读取；成功后重试返回同一份快照。
 
+### App 聊天交给客户执行节点（APP-RUNTIME-01）
+
+`POST /v1/assistant/questions` 的口径不变：本人订单状态问题在命中**服务端绑定**时交给客户
+执行节点，POST 立即返回 `202 + qa_id`，App 用**原 GET** 轮询，答案来自**同一条 run** 的
+succeeded 快照并沿用原 blocks 形状。未命中绑定走原确定性直读，行为与接线前逐字一致。
+
+```env
+AIOPS_GATEWAY_CHAT_EXECUTION_BINDINGS_FILE=
+```
+
+指向一张 0600 的登记表（`schema=aiops-chat-execution/1`）。**绑定是按租户登记的**：
+
+```json
+{
+  "schema": "aiops-chat-execution/1",
+  "bindings": [
+    {
+      "environment": "41",
+      "tenant_id": "<租户>",
+      "entry": "consumer",
+      "scenario": "consumer_own_order_status",
+      "config_file": "<0600 的执行配置，与委派入口同格式>",
+      "manifest_file": "<0600 的执行清单>"
+    }
+  ]
+}
+```
+
+判据与失败形态：
+
+- **没有这个租户的登记 ⇒ 原直读，一次派发都不发生。**「配了一个全局文件」不是绑定 ——
+  那等于任何能通过本人授权的租户都派到同一个节点，而执行位置隔离正是这条路线要的东西。
+- 每条登记的 `config_file` / `manifest_file` 必须在**启动时**可读、权限合规，且
+  config 的 `environment` 与登记一致，否则**启动失败**（不降级）。`manifest_file` **必需**：
+  没有清单的 run 走旧协议（领取即 succeeded），会把「只读了业务、整轮模型循环没跑完」记成成功。
+- 命中绑定后**失败就是失败**：节点失败、超时、配置漂移、撤销、到期、订单转归他人、
+  授权源不可用 —— 一律落 QA `failed`，**不回落直读、不回落旧模型、不换别的节点**。
+- 交付前过一道共用判定（委派入口 / 后台 worker / GET 三处同一份），并且在**读配置之后重读记录**：
+  配置读取期间发生的撤销或到期同样拒绝正文。
+- 节点凭据**轮换**是合法的：同一个 `node_id` 可以同时存在「旧 token 停用 + 新 token 生效」
+  两条登记，有效性按「存在一条 active、同环境、同实际节点的登记」判断，不按条目顺序。
+- **停用只拒绝正文**：拿掉登记后 `completed` 的结果返回 404 `CHARGING_STATUS_DISABLED`，
+  但 `queued/running/failed/cancelled/expired` 仍按原协议可读 —— 否则用户看到「取消失败」
+  而库里其实已经取消。
+
+**从旧变量迁移**：早期草案是 `AIOPS_GATEWAY_CHAT_EXECUTION_CONFIG_FILE` 与
+`..._MANIFEST_FILE` 两个全局键。它们**不是**按租户绑定（未登记租户也会被派到同一个节点），
+已移除。迁移做法：把原来那一对 config/manifest 作为**某一条登记**的 `config_file` /
+`manifest_file`，并为每个要启用的租户各写一条；然后删掉这两个旧键、只留
+`AIOPS_GATEWAY_CHAT_EXECUTION_BINDINGS_FILE`。两个旧键现在没有任何读取路径，
+留着不会生效（也就不会有人以为它还在起作用）。
+
+与 `AIOPS_GATEWAY_AGENT_RUN_CONFIG_FILE` 的关系：**不复用**。委派入口与聊天入口是两条独立的
+启用路径，共用一个键会让「只开委派」顺带把聊天也接到节点。
+
 ### 标准资源 API 认证
 
 标准资源接口与既有 `aops_*` 设备接口并存，二者不能互换。标准接口只接受

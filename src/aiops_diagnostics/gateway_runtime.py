@@ -281,6 +281,11 @@ class GatewayRuntime:
         self._trial_max_concurrent = 1
         #: 运营商站点范围解析器（#782）：由装配层注入；None ⇒ 空范围（fail-closed）。
         self._trial_operator_scope: Any = None
+        #: 订单授权器（APP-RUNTIME-01 续办）：聊天 worker 在**写结果之前**要用它再判一次
+        #: 本人订单归属。与 `_trial_operator_scope` 同一条理由 —— 由装配层注入，
+        #: 不在这里 import（会形成 gateway_api → gateway_runtime → gateway_api 的环）。
+        #: 未注入 ⇒ worker 判不出归属 ⇒ 落 failed（fail closed），不写正文。
+        self._order_authorizer: Any = None
 
         self.dify_app_registry = DifyAppRegistry(store.path)
         # Redacted run metrics (T7/#174): same DB file, lazy-built. Writes are
@@ -1201,6 +1206,18 @@ class GatewayRuntime:
         """
         self._trial_operator_scope = scope
 
+    def set_order_authorizer(self, authorizer: Any) -> None:
+        """注入订单授权器，由 API 装配层负责构造（理由同 `set_trial_operator_scope`）。
+
+        聊天 worker 在节点跑完之后、把结果写进 QA **之前**必须再判一次本人订单归属：
+        `final_release` 是**本地**判定，它按 docstring 的要求假定调用方已经做完可能阻塞的
+        外部授权。worker 原先没有做，于是「节点跑完后订单转归他人」仍会写 `completed`
+        并存下会话答案（Codex 复核必修 3 实测：授权计数在节点结束时与写完之后相同）。
+
+        复用的是**同一个**授权器与同一套判据，没有为这条路新造权限规则。
+        """
+        self._order_authorizer = authorizer
+
     def get_trial(self, context: ScopeContext, trial_id: str) -> dict[str, Any] | None:
         return self.store.get_standard_diagnosis(trial_id, context.scope_fingerprint)
 
@@ -1481,6 +1498,7 @@ class GatewayRuntime:
         question: str,
         *,
         order_no: str,
+        binding: Any,
         language: str = DEFAULT_LANGUAGE,
         conversation: dict[str, Any] | None = None,
         conversation_turn_no: int | None = None,
@@ -1492,6 +1510,9 @@ class GatewayRuntime:
 
         顺序是刻意的：先建 QA（`queued`）并立刻返回（App 的 POST 不能等节点整轮），
         后台线程才去签发/派发/等结果；失败一律落 `failed`，**不回落直读**。
+
+        `binding` 由调用方（路由层）按**可信的**环境/租户/入口/场景选出并冻结进 run，
+        后台不再"再选一次"：重选就可能换到另一条，而用户看到的仍是同一个 qa_id。
 
         取消复用既有守卫：`cancel_assistant_qa` 把 QA 写成 `cancelled` 后，worker 的
         终态写会被 claim-guard 拒掉；这里额外在写之前确认自己没被取消。
@@ -1523,11 +1544,40 @@ class GatewayRuntime:
             language,
             registration,
             question,
+            binding,
         )
         self._futures[qa["qa_id"]] = future
         future.add_done_callback(lambda _: self._futures.pop(qa["qa_id"], None))
         future.add_done_callback(lambda _: self._qa_registrations.pop(qa["qa_id"], None))
         return qa
+
+    def _require_chat_order_visible(self, context: ScopeContext, order_no: str) -> None:
+        """写结果之前再判一次本人订单归属。**判据与 API 层那一条是同一个授权器、同一条规则**。
+
+        三种结局都**不是**"先写着，让 GET 去挡"：
+
+        * 不可见 ⇒ `ORDER_NOT_VISIBLE`，worker 落 failed，不写正文、不写会话答案；
+        * 授权源不可用 ⇒ `AUTHORIZATION_UNAVAILABLE`，同样落 failed —— 判不出来就是不能交付，
+          不能把"故障"当成"默认可见"；
+        * 授权器没注入 ⇒ `AUTHORIZATION_UNAVAILABLE`：fail closed，不猜。
+        """
+        from aiops_diagnostics import chat_execution
+
+        authorizer = self._order_authorizer
+        if authorizer is None:
+            raise chat_execution.ChatRunUnavailable(
+                "ORDER_AUTHORIZATION_UNAVAILABLE", "order authorization unavailable", retryable=True
+            )
+        try:
+            allowed = authorizer.can_access(context, order_no)
+        except Exception as exc:  # noqa: BLE001 — 授权源故障与"不可见"同样是拒绝
+            raise chat_execution.ChatRunUnavailable(
+                "ORDER_AUTHORIZATION_UNAVAILABLE", "order authorization unavailable", retryable=True
+            ) from exc
+        if not allowed:
+            raise chat_execution.ChatRunUnavailable(
+                "ORDER_NOT_VISIBLE", "order not visible to this caller", http_status=404
+            )
 
     def _execute_chat_order_qa(
         self,
@@ -1537,10 +1587,15 @@ class GatewayRuntime:
         language: str,
         registration: JobRegistration,
         question: str,
+        binding: Any,
     ) -> None:
-        """后台：签发 → 绑定 QA↔run → 派发 → 等结果 → 写终态。
+        """后台：签发 → 绑定 QA↔run → 派发 → 等结果 → 放行 → 写终态。
 
         **任何**失败都落 `failed`；没有一条分支会去调直读、旧模型或别的节点。
+
+        交付前必须过 `chat_execution.final_release` —— 与委派入口、聊天回读共用同一份
+        判据。少了它，「节点交回了快照」就等于「可以交付」，而那两者之间还差着
+        撤销、过期、停用、执行配置是否真的核对过。
         """
         from aiops_diagnostics import chat_execution
 
@@ -1557,6 +1612,7 @@ class GatewayRuntime:
             run, config = chat_execution.issue_for_store(
                 store=store,
                 settings=self.gateway_settings,
+                binding=binding,
                 caller=context,
                 order_no=order_no,
                 gateway_version=package_version(),
@@ -1567,8 +1623,18 @@ class GatewayRuntime:
                 store.revoke(run.run_id, "cancelled_before_dispatch")
                 return
             chat_execution.dispatch_run(store=store, config=config, run=run)
-            settled = chat_execution.settled_run(store=store, run_id=run.run_id)
-            answer = chat_execution.answer_from_run(settled, language=language)
+            chat_execution.settled_run(store=store, run_id=run.run_id)
+            # 先做**可能阻塞的**外部授权，再做本地最终放行 —— `final_release` 的 docstring
+            # 明确要求调用方先授权，它自己不做。少了这一步，节点跑完后订单转归他人仍会写
+            # `completed` 并存下会话答案；GET 后来拒绝不能算 worker 处理对了。
+            self._require_chat_order_visible(context, order_no)
+            released = chat_execution.final_release(
+                store=store,
+                settings=self.gateway_settings,
+                caller=context,
+                run_id=run.run_id,
+            )
+            answer = chat_execution.answer_from_run(released, language=language)
         except chat_execution.ChatRunUnavailable as exc:
             if run_id is not None:
                 store.fail(run_id, exc.code.lower())

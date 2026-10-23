@@ -150,7 +150,6 @@ from aiops_diagnostics.knowledge_sources import KnowledgeSourceResolver
 from aiops_diagnostics.metrics_store import MetricsValidationError
 from aiops_diagnostics.ops_bindings import ops_app_registered
 from aiops_diagnostics.ops_tools import ChargingInfoInput, OpsToolError, OpsToolService, OrderListInput
-from aiops_diagnostics.order_status import KNOWN_STATUS_CODES, StatusRole, role_of
 from aiops_diagnostics.order_visibility import DeviceTenantError, tenant_matches
 from aiops_diagnostics.private_files import PrivatePathError, validate_private_file, write_private_text
 from aiops_diagnostics.query_scope import (
@@ -1019,6 +1018,15 @@ def create_gateway_app(
         if diagnostic_settings is not None
         else DisabledOrderAuthorizer()
     )
+    # 聊天 worker 在写结果之前要用**同一个**授权器再判一次本人归属（APP-RUNTIME-01 续办
+    # 必修 3）。注入而不是反向 import：`gateway_api` 已经 import 运行时，反向会成环。
+    #
+    # 整块都在 `suppress` 里，而且**不靠 `hasattr` 判断**：一个"任何属性都返回可调用对象"
+    # 的替身（测试里的直白替身就是这样）会让 `hasattr` 恒为 True，随后调用就抛。
+    # 与上面 `set_trial_operator_scope` 同一条理由：这里的语义是"能配就配上"，
+    # 配不上就让 worker fail closed（判不出归属 ⇒ 落 failed），而不是让装配炸掉。
+    with contextlib.suppress(Exception):
+        selected_runtime.set_order_authorizer(selected_authorizer)
     if platform_resolver is not None:
         selected_platform_resolver = platform_resolver
     else:
@@ -5617,7 +5625,9 @@ def _require_matching_exec_config(
     return confirmed
 
 
-def _consumer_order_chat_via_node(context, caller, decision, payload, conversation, language, order_no):
+def _consumer_order_chat_via_node(
+    context, caller, decision, payload, conversation, language, order_no, binding
+):
     """聊天入口的节点路线：**只做授权与建 QA，然后把等待搬到后台**。
 
     这里刻意不做三件事：
@@ -5628,6 +5638,7 @@ def _consumer_order_chat_via_node(context, caller, decision, payload, conversati
 
     授权仍然是**网关**做的：最新单要按原本人 SQL 范围选出来，指定单要核可见性。
     选出来之后才派发，所以「选哪一单」不会变成节点或客户端的决定。
+    `binding` 是**这一条请求**选中的绑定（按租户登记），随请求冻结进 run。
     """
     if order_no is None:
         request_observation.mark_stage(None, request_observation.STAGE_ORDER_CHAT_LOOKUP)
@@ -5656,6 +5667,7 @@ def _consumer_order_chat_via_node(context, caller, decision, payload, conversati
             language=language,
             conversation=conversation,
             conversation_turn_no=turn_no,
+            binding=binding,
         )
     except Exception:
         _release_conversation_turn(context, conversation, turn_no)
@@ -5687,11 +5699,17 @@ def _consumer_order_chat(context, caller, decision, payload, conversation, langu
             language=language,
         )
     # APP-RUNTIME-01：命中服务端绑定 ⇒ 交给客户节点跑，POST **立即**返回。
-    # 绑定未配置时这一段完全跳过，下面的原分支一字未改。
-    binding = chat_execution.resolve_binding(context.settings)
-    if binding.enabled:
+    # 绑定按（环境，租户，consumer 入口，本场景）**显式登记**：没有这一条就走下面的原分支。
+    # 「全局配了一个文件」不算命中 —— 那等于任何能通过本人授权的租户都派到同一个节点，
+    # 而本任务要求的执行位置隔离恰好就是这件事（Codex 复核必修 1）。
+    try:
+        binding = chat_execution.select_binding(context.settings, caller)
+    except chat_execution.ChatRunUnavailable as exc:
+        # 绑定表在运行期读不出来：拒绝，而不是"当作没配"悄悄回落到直读。
+        raise StandardAPIError(exc.http_status, exc.code, str(exc), retryable=exc.retryable) from exc
+    if binding is not None:
         return _consumer_order_chat_via_node(
-            context, caller, decision, payload, conversation, language, order_no
+            context, caller, decision, payload, conversation, language, order_no, binding
         )
 
     turn_no = _begin_conversation_turn(context, caller, conversation, "qa", payload.question)
@@ -5847,12 +5865,15 @@ def _require_current_chat_order(context, caller, qa, request):
 def _require_current_chat_node_order(context, caller, qa, request):
     """节点路线的读取守卫：**按存储关联**找回那条 run，再复用它自己的放行判据。
 
-    与直读路线（上一条）的区别只在「证据从哪来」：直读读私有快照文件，这里读同一条
-    run 的记录。**共同点是不能省的**：入口仍是 consumer、订单仍需此刻可见、
-    绑定仍需有效、快照仍需是该 run 的 succeeded 结果。
+    两条路线的共同点不能省：入口仍是 consumer、订单仍需此刻可见、绑定仍需有效、
+    正文仍需是该 run 的 succeeded 快照。
 
-    暂停/停用后拒绝正文：绑定被清空即视为停用，历史结果不再交付 —— 这与直读路线
-    停用后回读 `CHARGING_STATUS_DISABLED` 是同一条纪律。
+    判据本身只有一份：`chat_execution.final_release`。这里**不再**自己写一遍
+    —— 复核实测表明，手写的第二遍漏了四项（环境、actual==expected、节点登记环境、
+    执行配置核对），而且漏得很安静：GET 仍返回 200 + 正文。
+
+    停用之后**只**拒绝正文：`queued/running/failed/cancelled/expired` 仍按原协议可读。
+    否则用户看得到「取消返回 404」却看不到「其实已经取消成功」，前端无从显示。
     """
     internal = str(qa.get("internal_run_id") or "")
     authenticated_chat_order_reader(context, caller, request)
@@ -5860,48 +5881,41 @@ def _require_current_chat_node_order(context, caller, qa, request):
     if not order_no:
         raise StandardAPIError(404, "QA_NOT_FOUND", "assistant question not found")
     _require_consumer_self_order(caller, "consumer", order_no)
-    if not chat_execution.resolve_binding(context.settings).enabled:
-        # 新路线停用：不把已经产生的正文继续交付。
-        raise StandardAPIError(404, "CHARGING_STATUS_DISABLED", "charging status disabled")
-    # 排队/运行/失败/取消：**不**因为"还没有快照"就拒 —— 轮询要能读到真实状态。
+    # 无正文的状态：与绑定是否启用无关，本人仍要能读到它自己的作业状态。
     if qa["status"] in {"queued", "running", "failed", "cancelled", "expired"}:
         return
+    if qa["status"] != "completed":
+        raise StandardAPIError(404, "QA_NOT_FOUND", "assistant question not found")
     store = context.agent_run_store
     located = store.by_qa(qa["qa_id"]) if store is not None else None
     if located is None:
         raise StandardAPIError(503, "CHARGING_STATUS_EVIDENCE_UNAVAILABLE", "evidence unavailable")
     if located.scope_fingerprint != caller.scope_fingerprint:
         raise StandardAPIError(404, "QA_NOT_FOUND", "assistant question not found")
+    try:
+        # 绑定必须**此刻**仍成立，而且是**签发时那一条**：配置被换掉、节点被停用、
+        # 登记被拿掉，都不再交付正文。换一份"现在看起来像"的配置来背书同一段是错的。
+        binding = chat_execution.binding_for_key(context.settings, located.chat_binding)
+    except chat_execution.ChatRunUnavailable as exc:
+        raise StandardAPIError(exc.http_status, exc.code, str(exc), retryable=exc.retryable) from exc
+    if binding is None:
+        raise StandardAPIError(404, "CHARGING_STATUS_DISABLED", "charging status disabled")
 
-    # 与委派入口的最终放行同一条纪律：**先用可能阻塞的授权，再重读记录做本地判定**。
-    # `by_qa` 刻意不做过期收敛，所以这里必须自己收敛 —— 否则一个已经过 TTL 的
-    # `succeeded` 行会一直把正文交下去。
+    # 与委派入口同一条纪律：**先用可能阻塞的授权，再读记录做本地判定**。
     _require_visible_order(context, caller, order_no)
-    run = store.get(located.run_id)  # 这次读取会顺带把过期收敛成 expired
-    if run is None:
-        raise StandardAPIError(503, "CHARGING_STATUS_EVIDENCE_UNAVAILABLE", "evidence unavailable")
-    # 同一 run 的 succeeded 快照是**唯一**允许的答案来源；不做第二次业务读取。
-    if run.state != SUCCEEDED or run.snapshot is None or run.order_no != order_no:
-        raise StandardAPIError(404, "AGENT_RUN_NO_RESULT", "agent run produced no result")
-    if run.expires_at <= datetime.now(UTC):
-        raise StandardAPIError(404, "AGENT_RUN_NOT_ACTIVE", "agent run is not active")
-    # 绑定必须**此刻**仍然成立：节点被停用、app/节点映射被改、环境被改，都不再交付。
-    config = chat_execution.callback_config(store, run.run_id, context.settings)
-    if config is None:
-        raise StandardAPIError(503, "AGENT_RUN_CONFIG_UNAVAILABLE", "agent run unavailable")
-    node = next(
-        (n for n in config.node_token_hashes.values() if n.node_id == run.actual_node_id),
-        None,
-    )
-    if (
-        node is None
-        or not node.active
-        or config.expected_node_id != run.expected_node_id
-        or config.environment != run.environment
-        or config.snail_app_id != run.app_id
-        or str(config.snail_agent_id) != run.agent_id
-    ):
-        raise StandardAPIError(403, "AGENT_RUN_WRONG_NODE", "agent run refused")
+    try:
+        released = chat_execution.final_release(
+            store=store,
+            settings=context.settings,
+            caller=caller,
+            run_id=located.run_id,
+        )
+    except chat_execution.ChatRunUnavailable as exc:
+        raise StandardAPIError(exc.http_status, exc.code, str(exc), retryable=exc.retryable) from exc
+    # 缓存的正文必须**就是这条快照的渲染**：被改过、或写着另一条 run 的结果，都不能交出去。
+    if not chat_execution.answer_matches_snapshot(qa.get("result"), released.snapshot or {}):
+        store.refuse(located.run_id, "qa_answer_mismatch")
+        raise StandardAPIError(503, "CHARGING_STATUS_EVIDENCE_UNAVAILABLE", "evidence differs")
 
 
 def _is_node_chat_qa(qa) -> bool:
@@ -5979,9 +5993,18 @@ def _charged_snapshot_response(
 
 
 def _consumer_charging_result(
-    settings: GatewayServerSettings, context: Any, caller: ScopeContext, issued: AgentRun
+    settings: GatewayServerSettings,
+    context: Any,
+    caller: ScopeContext,
+    issued: AgentRun,
 ) -> dict[str, Any]:
-    # 节点领取与交付消费者是两次放行；阻塞的外部授权必须在最后一次本地读取之前完成。
+    """委派入口的回执：**授权 → 复用共享放行判据 → 回执 + 同一快照**。
+
+    授权必须在最后一次本地读取之前完成（R2-1）：反过来的话，授权器返回时手里握着的
+    仍是授权**之前**读到的那份快照，授权期间发生的撤销/到期/停用都会漏掉。
+    放行判据本身只有一份（`chat_execution.final_release`），聊天 worker 与聊天回读
+    走的是同一段 —— 这里不再自带第二套 if。
+    """
     try:
         _require_visible_order(context, caller, issued.order_no)
     except StandardAPIError as exc:
@@ -5990,75 +6013,15 @@ def _consumer_charging_result(
         )
         raise
     try:
-        current = AgentRunConfig.load(Path(settings.agent_run_config_file))
-    except AgentRunConfigError as exc:
-        context.agent_run_store.refuse(issued.run_id, "binding_unavailable")
-        raise StandardAPIError(
-            503, "AGENT_RUN_CONFIG_UNAVAILABLE", "agent run unavailable", retryable=True
-        ) from exc
-    try:
-        latest = context.agent_run_store.get(issued.run_id)
-    except (ValueError, TypeError) as exc:
-        raise StandardAPIError(502, "AGENT_RUN_NO_RESULT", "agent run produced no result") from exc
-    if latest is None or latest.state != SUCCEEDED:
-        raise StandardAPIError(502, "AGENT_RUN_NO_RESULT", "agent run produced no result")
-    if (
-        latest.scope_fingerprint != caller.scope_fingerprint
-        or latest.scope_fingerprint != issued.scope_fingerprint
-        or latest.order_no != issued.order_no
-        or latest.operation != issued.operation
-        or latest.environment != issued.environment
-        or latest.environment != settings.execution_environment
-        or current.environment != latest.environment
-        or latest.app_id != issued.app_id
-        or current.snail_app_id != latest.app_id
-        or latest.agent_id != issued.agent_id
-        or str(current.snail_agent_id) != latest.agent_id
-        or latest.expected_node_id != issued.expected_node_id
-        or current.expected_node_id != latest.expected_node_id
-        or latest.actual_node_id != latest.expected_node_id
-        or not any(
-            node.active and node.node_id == latest.actual_node_id and node.environment == latest.environment
-            for node in current.node_token_hashes.values()
+        released = chat_execution.final_release(
+            store=context.agent_run_store,
+            settings=settings,
+            caller=caller,
+            run_id=issued.run_id,
         )
-        or latest.expected_agent_version != issued.expected_agent_version
-        or (latest.expected_agent_version is not None and not latest.exec_config_confirmed)
-    ):
-        context.agent_run_store.refuse(issued.run_id, "consumer_release_mismatch")
-        raise StandardAPIError(403, "AGENT_RUN_NOT_ACTIVE", "agent run refused")
-    snapshot = latest.snapshot
-    try:
-        if not isinstance(snapshot, dict) or set(snapshot) != {
-            "order_no",
-            "status_code",
-            "status_role",
-            "observed_at",
-            "source",
-        }:
-            raise ValueError("invalid snapshot fields")
-        code = snapshot["status_code"]
-        if isinstance(code, bool) or not isinstance(code, (str, int)) or len(str(code)) > 32:
-            raise ValueError("invalid status code")
-        expected_role = (
-            role_of(code).value
-            if str(code) in {str(value) for value in KNOWN_STATUS_CODES}
-            else StatusRole.UNKNOWN.value
-        )
-        observed = datetime.fromisoformat(snapshot["observed_at"])
-        if (
-            snapshot["order_no"] != latest.order_no
-            or snapshot["status_role"] != expected_role
-            or snapshot["source"] != "cpms.chargingInfo"
-            or observed.utcoffset() != timedelta(0)
-            or latest.claimed_at is None
-            or latest.completed_at is None
-            or not latest.claimed_at <= observed <= latest.completed_at
-        ):
-            raise ValueError("inconsistent snapshot")
-    except (ValueError, TypeError, KeyError) as exc:
-        context.agent_run_store.refuse(issued.run_id, "snapshot_invalid")
-        raise StandardAPIError(502, "AGENT_RUN_NO_RESULT", "agent run produced no result") from exc
-    return {**latest.receipt(), "charging_status": snapshot}
+    except chat_execution.ChatRunUnavailable as exc:
+        raise StandardAPIError(exc.http_status, exc.code, str(exc), retryable=exc.retryable) from exc
+    return {**released.receipt(), "charging_status": released.snapshot}
 
 
 def _claim_payload(run: AgentRun) -> dict[str, Any]:

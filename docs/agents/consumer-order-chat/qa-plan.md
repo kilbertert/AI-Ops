@@ -30,3 +30,8 @@
 
 真实 App/正常登录本人样本/工程师业务结论未到位时写“未完成业务验收”。本地替身不计真实业务通过。
 新的生产配置仍默认关闭，合并部署后只读复核；不借 operator 整租户 key 启用此功能。
+| COC-19 | 真 Gateway（`tools/m2_close/gateway_launcher.py`）+ **真 Java 节点**（`tools/m2_close/node`）+ 合成模型/CPMS/平台 | `POST /v1/assistant/questions` → 绑定选择 → 选单 → 签发 → 派发 → 节点自己领取/两轮模型工具循环/完成通知 → 同 run 快照 → **原 GET** 拿到 blocks。判据：POST 202 早于节点完成；GET completed；QA↔run 存储关联；业务只读一次、派发一次、模型两轮；run `succeeded` + `exec_config_state=matched` + `actual_node_id` 是登记的节点 | 停进程与端口；删一次性根 |
+| COC-20 | 同上 | 最新单与正文指定单选到不同的本人订单，各自一次派发、各自一次业务读取 | 同上 |
+| COC-21 | 同上，两租户两节点 | 已登记租户派到自己的节点；**未登记租户不产生 run**，仍走原直读 | 同上 |
+| COC-22 | 同上，模型第二轮 500 / 末轮截断 | 终态 failed，无正文，**不回落直读**（业务只被读了领取那一次） | 同上 |
+| COC-23 | 单元 + 真 Gateway | 只领取不发完成 ⇒ 绝不 succeeded；停用后正文 404 而无正文终态仍可读；环境/执行配置/缓存正文被改 ⇒ 拒绝 | 删临时根 |

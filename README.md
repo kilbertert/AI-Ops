@@ -236,6 +236,11 @@ flowchart TB
 接入及兼容规则见[首片手册](docs/agents/dify-ops-first-slice/README.md)。
 客户端聊天另有默认关闭的[本人状态查询](docs/agents/consumer-order-chat/README.md)：
 支持指定订单与本人最新一单，复用现有 App 请求/回答格式；不使用运维服务身份，不调用模型。
+自 APP-RUNTIME-01 起，该入口可选择交给**客户执行节点**读：配置项是
+`AIOPS_GATEWAY_CHAT_EXECUTION_BINDINGS_FILE`（**按租户登记**的 0600 登记表，默认空 = 关闭）。
+未登记租户走原直读、一次派发都不发生；命中后任何失败都落 `failed`，不回落直读/旧模型/别的节点。
+登记格式、判据与旧双键变量的迁移见 [Gateway 契约 · App 聊天交给客户执行节点
+（APP-RUNTIME-01）](docs/gateway.md#app-聊天交给客户执行节点app-runtime-01)。
 2026-10-22 operator 两工具已常驻启用，另次授权真实预览的模型段通过；
 公司 App 与业务准确率未验收。[离线证据复核](docs/agents/dify-ops-first-slice/model-acceptance.md)
 不追加模型或业务请求。
@@ -372,7 +377,7 @@ flowchart TB
 | `gateway_cli.py` / `gateway_client.py` | `aiops remote …` 客户端子应用与它的 stdlib HTTP 客户端 |
 | `gateway_config.py` / `gateway_tokens.py` | Gateway 服务端设置与客户端 profile/令牌的磁盘持久化 |
 | `gateway_logging.py` | 网关自身日志的去处（#636）：**在这一模块之前，网关根本没配过 logging** —— uvicorn 只给 `uvicorn*` 挂 handler，root 停在 WARNING 且无 handler，于是 `aiops.*` 的 INFO 行一行都没出去过（41 实测 0 行），能出去的 WARNING 走 `lastResort`、形态是不带级别前缀的一行。本模块给 **root** 挂 handler、给我们的两个命名空间设级别（第三方不被带着一起变啰嗦），级别由 `AIOPS_GATEWAY_LOG_LEVEL` 定、写错是启动失败 |
-| `chat_execution.py` | **App 聊天 → 客户执行节点**的接线（APP-RUNTIME-01）：把「本人订单状态」交给节点跑，POST 立即返回 202 + `qa_id`，答案由同一条 run 的成功快照适配成原 blocks 形状。授权、TTL、执行配置守卫与最终放行**与委派入口共用同一份实现**；命中绑定后任何失败都落 QA `failed`，**不回落直读、旧模型或别的节点**。默认不启用。 |
+| `chat_execution.py` | **App 聊天 → 客户执行节点**的接线（APP-RUNTIME-01）：把「本人订单状态」交给节点跑，POST 立即返回 202 + `qa_id`，答案由同一条 run 的成功快照适配成原 blocks 形状。绑定是**按（环境，租户，入口，场景）登记**的表（`AIOPS_GATEWAY_CHAT_EXECUTION_BINDINGS_FILE`），选中的那一条冻进 run 记录；授权、TTL、执行配置守卫与最终放行**与委派入口共用同一份实现**。命中绑定后任何失败都落 QA `failed`，**不回落直读、旧模型或别的节点**。默认不启用。 |
 | `request_observation.py` | 个人状态查询的**请求级结果观察**：ASGI 中间件给每个请求生成服务端 `request_id`，每次**候选**请求写恰好一行 `assistant_question_result`（`stage`/`outcome`/`http_status`/`error_code`/`tenant_hash`/`qa_id`/`duration_ms`）。**是日志不是第二张指标表** —— `agent_run_metrics` 的保留期与形状是承重的，再开一张同义表会出现两个分母。身份未建立时不写，拒绝不伪造 QA。见 `docs/agents/consumer-order-chat/observability.md` |
 | `admin_cli.py` | `aiops admin …`：声明式环境清单收敛（`reconcile`）、快捷动作迁移 |
 | `tdengine_proxy.py` | `aiops-tdengine-proxy`：TDengine 前的严格只读 SQL 白名单代理 |

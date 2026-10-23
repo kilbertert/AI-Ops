@@ -60,12 +60,15 @@ class GatewayServerSettings:
     #: 逐字一致；配了就必须读得到且权限合规，否则**启动即拒**（不降级）。
     execution_manifest_file: str = ""
     #: APP-RUNTIME-01：**现有 App 聊天**的个人订单状态场景是否交给客户执行节点。
-    #: 缺省为空 ⇒ 走原来的确定性直读，行为与接线前逐字一致；配了就必须同时配执行配置
-    #: 清单（否则启动即拒），因为「谁来读」这件事不能只配一半。
+    #: 缺省为空 ⇒ 走原来的确定性直读，行为与接线前逐字一致。
     #: 两个键**都不复用** ``agent_run_config_file``：委派入口的绑定与聊天入口的绑定是
     #: 两条独立的启用路径，共用一个键会让「只开委派」变成「顺带把聊天也接到节点」。
-    chat_execution_config_file: str = ""
-    chat_execution_manifest_file: str = ""
+    #:
+    #: **绑定是按租户选的**（Codex 复核必修 1）：一个文件里放多条登记，每条钉住
+    #: ``environment/tenant_id/entry/scenario`` 与它自己的执行配置/清单。只配全局文件而
+    #: 不登记租户，等于「任何能通过本人授权的租户都派到同一个节点」—— 那不是绑定，
+    #: 那是默认值。未登记的租户走原直读分支。
+    chat_execution_bindings_file: str = ""
     #: 管家端公司 OAuth2 令牌的校验入口与客户端凭据（#443 / ADR-0009）。三个键**全部缺省为空**，
     #: 全空时该路径整体不构造 ⇒ 行为与启用前逐字一致（这既是「先合不启用」的机制保证，也是
     #: 回滚路径：清空即回退）。只设了其中一部分是启动错误，不是静默禁用 —— 与
@@ -340,10 +343,8 @@ class GatewayServerSettings:
             or _file_value(file_values, "AIOPS_GATEWAY_AGENT_RUN_CONFIG_FILE"),
             execution_manifest_file=_env("AIOPS_GATEWAY_EXECUTION_MANIFEST_FILE")
             or _file_value(file_values, "AIOPS_GATEWAY_EXECUTION_MANIFEST_FILE"),
-            chat_execution_config_file=_env("AIOPS_GATEWAY_CHAT_EXECUTION_CONFIG_FILE")
-            or _file_value(file_values, "AIOPS_GATEWAY_CHAT_EXECUTION_CONFIG_FILE"),
-            chat_execution_manifest_file=_env("AIOPS_GATEWAY_CHAT_EXECUTION_MANIFEST_FILE")
-            or _file_value(file_values, "AIOPS_GATEWAY_CHAT_EXECUTION_MANIFEST_FILE"),
+            chat_execution_bindings_file=_env("AIOPS_GATEWAY_CHAT_EXECUTION_BINDINGS_FILE")
+            or _file_value(file_values, "AIOPS_GATEWAY_CHAT_EXECUTION_BINDINGS_FILE"),
             company_check_token_url=_env("AIOPS_GATEWAY_COMPANY_CHECK_TOKEN_URL")
             or _file_value(file_values, "AIOPS_GATEWAY_COMPANY_CHECK_TOKEN_URL"),
             company_token_client_id=_env("AIOPS_GATEWAY_COMPANY_TOKEN_CLIENT_ID")
@@ -498,23 +499,18 @@ class GatewayServerSettings:
         # 执行配置清单只在**已启用委派**时有意义：没有委派就没有 run 可固定身份。
         if self.execution_manifest_file and not self.agent_run_config_file:
             raise ValueError("execution manifest requires agent run delegation")
-        # APP-RUNTIME-01：聊天入口的节点绑定必须**成对**配置，且与直读所需的两项一致。
-        # 半配就是「配了一半就开门」，宁可启动失败。
-        if self.chat_execution_manifest_file and not self.chat_execution_config_file:
-            raise ValueError("chat execution manifest requires a chat execution config")
-        if self.chat_execution_config_file and not (
-            self.charging_status_base_url and self.execution_environment
-        ):
-            raise ValueError("chat execution requires charging status settings")
-        if self.chat_execution_manifest_file:
-            from aiops_diagnostics.execution_manifest import (  # noqa: PLC0415 - 避免循环导入
-                load as load_chat_manifest,
-            )
+        # APP-RUNTIME-01：聊天入口的节点绑定是**一份按租户登记的表**。
+        # 启动时整表校验一次（坏文件、坏清单、半配都不许活到第一次签发），
+        # 且每条登记必须在**本环境**里成立 —— 跨环境的登记是配置错误，不是默认值。
+        if self.chat_execution_bindings_file:
+            from aiops_diagnostics import chat_execution  # noqa: PLC0415 - 避免循环导入
 
+            if not (self.charging_status_base_url and self.execution_environment):
+                raise ValueError("chat execution requires charging status settings")
             try:
-                load_chat_manifest(self.chat_execution_manifest_file)
-            except Exception as exc:  # noqa: BLE001 - 任何读取失败都是配置错误
-                raise ValueError("chat execution manifest is unusable") from exc
+                chat_execution.load_bindings(self.chat_execution_bindings_file)
+            except chat_execution.ChatBindingError as exc:
+                raise ValueError(f"chat execution bindings are unusable: {exc}") from exc
         if self.execution_manifest_file:
             # 启动时就完整校验一次：坏清单必须在起监听之前失败，而不是等第一次签发
             # 才变成运行期不可用（那就是「配一半就开门」）。
