@@ -774,6 +774,29 @@ EOF
 > ⚠️ **回滚**：在 GitHub 的 `production-41` 环境上重新加回 required reviewer 即可，
 > **不需要动 `cd.yml`**（那里做不出自动批准，所以也不存在"假门"这个风险）。
 >
+> 📝 **部署之后还有一步：发布版本备注（2026-10-23 起）。** `cd.yml` 的最后一个步骤
+> 运行 `dev-changelog`，把本次 commit 范围渲染成 GitHub Release（tag
+> `release-<sha12>`，标注 prerelease）。
+>
+> **它与部署是两件事，失败含义不同 —— 分诊时先看是哪一步红的：**
+>
+> | 失败的步骤 | 生产状态 | 处置 |
+> |---|---|---|
+> | `Deploy` | **没有**更新 | 按本节回滚或修因重跑；`gh run view` 看 `classify-remote-result.sh` 的分类 |
+> | `Publish release notes` | **已经**更新 | **不要回滚。** 生产是好的，缺的只是一份备注 |
+>
+> 发布步骤失败的最常见原因是 runner 的 PATH 里没有 `dev-changelog` 或 `git-cliff`
+> （两者随服务端 release unit 安装）。确认后重跑 `gh workflow run cd.yml`，
+> 或直接 `gh release create release-<sha12> --target <sha> --notes-file <渲染结果> --prerelease` 补上。
+>
+> **`CHANGELOG.md` 不在仓库里**（已 gitignore）。它是上面这个步骤的产物；
+> 任何 PR 都不该写它，遇到「CHANGELOG.md 不见了」不是问题。人工发布说明在
+> `RELEASE-NOTES.md`，那是另一个文件。
+>
+> **已知限制**：本仓从未打过版本 tag（`pyproject` 一直是 `0.1.0`），所以备注只有
+> 一个 `Unreleased` 节 —— 它回答「哪些改动已落地」，不回答「上一次部署里有什么」。
+> 决策与取舍见 `docs/adr/0101`。
+>
 > ⚠️ **仍然不要因为等待就手工部署**：现在根本没有"等待"这个状态了。若 CD 没跑，
 > 那是路径没命中或 workflow 出错，查 `gh run list --workflow=cd.yml`，不要绕过去手敲。
 > 卡住/连续失败会由 `CD Watch` 开 `cd:needs-attention` 票（#407）。
