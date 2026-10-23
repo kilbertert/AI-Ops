@@ -463,3 +463,62 @@ def test_registry_view_quotes_dotted_inline_table_keys(tmp_path: Path) -> None:
         '[hosts.aiops-41]\nmeta = { "contact.name" = "ops", "with space" = "x" }\n',
     )
     assert view["meta"] == {"contact.name": "ops", "with space": "x"}
+
+
+def _dependency_signature(text: str) -> str:
+    """`pyproject.toml` 里**决定 restart 能否 import 成功**的那部分，规范化后成串。
+
+    用真解析器而不是正则：注释、空行、键序、`addopts` 都不该影响它 —— 那正是本条
+    规则要区分的东西。
+    """
+    import json
+    import tomllib
+
+    data = tomllib.loads(text)
+    project = data.get("project", {})
+    return json.dumps(
+        {
+            "dependencies": project.get("dependencies", []),
+            "optional": project.get("optional-dependencies", {}),
+            "groups": data.get("dependency-groups", {}),
+            "requires_python": project.get("requires-python"),
+        },
+        sort_keys=True,
+    )
+
+
+def test_dependency_drift_ignores_comment_only_changes() -> None:
+    """注释与工具配置的改动不是依赖漂移。
+
+    实测 2026-10-23：一次只改注释与 `addopts` 的提交让 `pyproject.toml` 的 sha256
+    变了，`deploy-41.sh` 因此停止部署 —— 而 pyproject 与 uv.lock 里每一条依赖都
+    逐字节相同。判据问的是「restart 会不会缺包」，注释回答不了这个问题；按字节比
+    下去，**每一次改注释都会把 CD 卡到有人去生产机上手工跑依赖更新为止**。
+
+    这条测试钉住两件事：注释不影响签名，而**真的改依赖仍然影响**。只钉前一半会让
+    「签名恒为空」也通过。
+    """
+    base = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    commented = base + "\n# a new comment that changes the bytes but not the deps\n"
+    assert commented != base
+    assert _dependency_signature(commented) == _dependency_signature(base)
+
+    # 对照组：真的加一条运行期依赖必须被看出来，否则上面那半条只是「函数恒返回同值」。
+    changed = base.replace(
+        '  "redis>=5.2,<7",', '  "redis>=5.3,<7",', 1
+    )
+    assert changed != base, "fixture drifted: pyproject no longer contains the redis pin this test edits"
+    assert _dependency_signature(changed) != _dependency_signature(base)
+
+
+def test_deploy_compares_pyproject_by_declarations_not_bytes() -> None:
+    """`deploy-41.sh` 的依赖漂移门对 pyproject 用语义比较，对 uv.lock 仍用字节。
+
+    uv.lock 是机读产物：差一个字节就是不同的解析结果，所以那条比较不该改。
+    pyproject 是人写的：注释与工具配置住在这里，用字节比会把它们误判成依赖变化。
+    """
+    source = (DEPLOY_DIR / "deploy-41.sh").read_text(encoding="utf-8")
+    assert 'if [ "$spec" = "pyproject.toml" ]; then' in source
+    assert "tomllib" in source, "语义比较没被写进脚本"
+    # uv.lock 仍在同一循环里按 sha256 比，不能被顺手一起放宽。
+    assert 'for spec in "pyproject.toml" "uv.lock"; do' in source
