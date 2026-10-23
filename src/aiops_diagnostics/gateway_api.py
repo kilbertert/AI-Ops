@@ -3985,6 +3985,110 @@ def create_gateway_app(
             )
         return response
 
+    @app.get("/v1/internal/knowledge/open", include_in_schema=False)
+    def knowledge_open_by_workspace(
+        request: Request,
+        workspace: str = "",
+        _: None = Depends(dify_workspace_credential),  # noqa: B008
+    ) -> Response:
+        """Dify workspace → 那个租户的 RAGFlow 会话 → 303（#982 / PRD #981）。
+
+        调用方是**桥**，不是浏览器：桥已经握着 Dify 会话并从中解析出 ``current_tenant``
+        （#984）。这条路由因此用网关自己的**内部令牌**，与 ``/v1/dify/workspace`` 同一套
+        机制，浏览器构造不出来。
+
+        **租户只来自 workspace 反查。** 请求里出现任何租户参数都是 400 —— 不是"忽略"。
+        差别很重要：忽略会让调用方以为自己指定成功了，而 400 直接说"这条路径不接受它"。
+        `2026-10-22` 的知识库 ``PUT`` 越权就是"按请求里的字段决定归属"这一类错误。
+
+        ``workspace`` 为空 ⇒ 400。不回落、不猜：一个空参数落到"第一个租户"上，是这条
+        链路上最坏的一种失败。
+        """
+        for forbidden in ("tenant_id", "tenant", "environment"):
+            if forbidden in request.query_params:
+                raise StandardAPIError(
+                    status.HTTP_400_BAD_REQUEST,
+                    "KNOWLEDGE_OPEN_PARAM_NOT_ACCEPTED",
+                    f"{forbidden} is resolved from the workspace, never from the request",
+                )
+        if not workspace.strip():
+            raise StandardAPIError(
+                status.HTTP_400_BAD_REQUEST,
+                "KNOWLEDGE_OPEN_WORKSPACE_REQUIRED",
+                "workspace is required",
+            )
+        from aiops_diagnostics.ragflow_console import (
+            DeclaredTenant,
+            RAGFlowLoginClient,
+            RAGFlowLoginError,
+            open_console,
+            record,
+        )
+
+        settings = context.settings
+        if (
+            not settings.ragflow_console_base_url
+            or not settings.ragflow_credential_key
+            or not settings.ragflow_console_public_pem
+        ):
+            raise StandardAPIError(
+                status.HTTP_404_NOT_FOUND, "KNOWLEDGE_CONSOLE_DISABLED", "console access is not enabled"
+            )
+        try:
+            # 反查只在这里发生一次；下面拿到的是一个**已声明的租户**，与浏览器那条
+            # 链路的形状完全相同。
+            tenant_id = context.dify_workspaces.tenant_for_workspace(workspace, settings.environment)
+        except DifyWorkspaceError as exc:
+            raise StandardAPIError(exc.http_status, exc.code, exc.message, retryable=exc.retryable) from exc
+        except ValueError as exc:
+            raise StandardAPIError(
+                status.HTTP_400_BAD_REQUEST, "KNOWLEDGE_OPEN_WORKSPACE_INVALID", str(exc)
+            ) from exc
+
+        client = RAGFlowLoginClient(settings.ragflow_console_base_url)
+        try:
+            target, session = open_console(
+                store=context.store,
+                environment=settings.environment,
+                caller=DeclaredTenant(effective_tenant_id=tenant_id),
+                credential_key=settings.ragflow_credential_key,
+                client=client,
+                public_base_url=settings.ragflow_console_public_url or settings.ragflow_console_base_url,
+                public_pem_path=settings.ragflow_console_public_pem,
+            )
+        except RAGFlowLoginError as exc:
+            record(
+                context.store,
+                tenant_id=tenant_id,
+                environment=settings.environment,
+                outcome="refused",
+                reason_code=exc.code,
+            )
+            http_status = (
+                status.HTTP_409_CONFLICT
+                if exc.code == "KNOWLEDGE_TENANT_NOT_ONBOARDED"
+                else status.HTTP_424_FAILED_DEPENDENCY
+            )
+            raise StandardAPIError(http_status, exc.code, exc.message) from exc
+        record(
+            context.store,
+            tenant_id=tenant_id,
+            environment=settings.environment,
+            outcome="granted",
+            ragflow_email=session.ragflow_email,
+        )
+        response = RedirectResponse(target, status_code=status.HTTP_303_SEE_OTHER)
+        for name, value in session.cookies.items():
+            response.set_cookie(
+                name,
+                value,
+                domain=settings.ragflow_console_cookie_domain or None,
+                path="/",
+                httponly=True,
+                samesite="lax",
+            )
+        return response
+
     @app.get("/v1/knowledge", include_in_schema=False)
     def knowledge_page() -> HTMLResponse:
         from importlib.resources import files

@@ -53,6 +53,8 @@ DIFY_WORKSPACE_UNRESOLVED = "DIFY_WORKSPACE_UNRESOLVED"
 DIFY_WORKSPACE_CREATING = "DIFY_WORKSPACE_CREATING"
 DIFY_WORKSPACE_FAILED = "DIFY_WORKSPACE_FAILED"
 DIFY_WORKSPACE_UNKNOWN = "DIFY_WORKSPACE_UNKNOWN"
+#: 一个 workspace 对应多行 —— 数据坏了，拒绝而不是任选一行（#982）。
+DIFY_WORKSPACE_AMBIGUOUS = "DIFY_WORKSPACE_AMBIGUOUS"
 
 _SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 
@@ -216,6 +218,58 @@ class DifyWorkspaces:
                 (tenant_id, environment),
             ).fetchone()
         return dict(found) if found is not None else None
+
+    def tenant_for_workspace(self, workspace_id: str, environment: str) -> str:
+        """``(workspace_id, environment)`` → 那个 workspace 的 ``tenant_id``（#982）。
+
+        ``resolve`` 的反方向。Dify 的知识库入口只知道**当前 workspace**（它自己的会话
+        里就是 ``current_tenant``），不知道公司租户；网关是唯一知道这层对应的地方。
+
+        **三条与 ``resolve`` 对齐的判据**，理由相同：
+
+        * **只查不建。** 查不到就是拒绝，不顺手造一行。
+        * **环境来自部署身份。** 同一个 workspace id 在另一个环境里是另一个问题。
+        * **状态必须是可用的。** ``creating`` / ``failed`` / ``unknown`` 的行不能拿来
+          换会话 —— 用它们换出来的会话属于一个"正在建"或"已失败"的租户，而调用方
+          会以为自己拿到的是稳定身份。
+
+        一个 workspace id 在本表里应当唯一（``tenant_id`` 是主键的一部分，而一个租户
+        只有一个 workspace）。若真的查出多行，那是数据坏了：拒绝，不任选一行 ——
+        挑一行等于在两张租户之间随机选一个。
+        """
+        workspace_id = _identifier(workspace_id, "workspace_id")
+        environment = _identifier(environment, "environment")
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT tenant_id, setup_state FROM dify_workspaces"
+                " WHERE workspace_id = ? AND environment = ?",
+                (workspace_id, environment),
+            ).fetchall()
+        if not rows:
+            raise DifyWorkspaceError(
+                DIFY_WORKSPACE_UNRESOLVED,
+                f"环境 {environment} 里没有 workspace {workspace_id}",
+                http_status=404,
+            )
+        if len(rows) > 1:
+            raise DifyWorkspaceError(
+                DIFY_WORKSPACE_AMBIGUOUS,
+                f"workspace {workspace_id} 在环境 {environment} 里对应多个租户，拒绝选择",
+                http_status=409,
+            )
+        state = str(rows[0]["setup_state"])
+        if state not in {"created", "ready"}:
+            code = {
+                "creating": DIFY_WORKSPACE_CREATING,
+                "failed": DIFY_WORKSPACE_FAILED,
+            }.get(state, DIFY_WORKSPACE_UNKNOWN)
+            raise DifyWorkspaceError(
+                code,
+                f"workspace {workspace_id} 的状态是 {state}，还不能用来换会话",
+                http_status=409,
+                retryable=state == "creating",
+            )
+        return _identifier(str(rows[0]["tenant_id"] or ""), "tenant_id")
 
     def list_for_environment(self, environment: str) -> list[dict[str, Any]]:
         """Every workspace row in one environment, for the triple check (#927).
