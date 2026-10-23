@@ -58,6 +58,8 @@ uv run pytest -n 0 tests/test_consumer_order_chat.py tests/test_m3_consumer_snap
 98 passed          # 原基线，一条未减
 uv run pytest -n 0 tests/test_app_runtime_node_entry.py
 27 passed          # 本片（原 16 条中的失真用例已改正，不是删掉）
+uv run pytest -n 0            # 全量
+3733 passed, 9 skipped, 0 failed
 ```
 
 ## 五、过程中抓到的三个真缺陷
