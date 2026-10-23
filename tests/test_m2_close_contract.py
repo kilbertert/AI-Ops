@@ -945,7 +945,13 @@ def test_receipt_reports_the_version_gap_instead_of_pretending(tmp_path, monkeyp
     receipt = response.json()
     assert receipt["agent_version"] is None
     assert receipt["agent_version_gap"] == "not_wired"
-    assert receipt["gateway_version"] == "0.1.0"
+    # Read the version instead of pinning it: what this test asserts is that the
+    # receipt *reports* a gateway version, not that the version is any particular
+    # number. Pinning it made every release turn this red for a reason that has
+    # nothing to do with the receipt — measured 2026-10-23, when bumping
+    # `0.1.0` → `0.2.0` failed here.
+    expected_version = (Path(__file__).resolve().parents[1] / "VERSION").read_text(encoding="utf-8").strip()
+    assert receipt["gateway_version"] == expected_version
     assert receipt["expected_environment"] == "env-a"
     assert receipt["expected_app_id"] == "aiops-alpha"
     assert receipt["actual_node_id"] == "node-a1"
