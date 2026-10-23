@@ -504,9 +504,7 @@ def test_dependency_drift_ignores_comment_only_changes() -> None:
     assert _dependency_signature(commented) == _dependency_signature(base)
 
     # 对照组：真的加一条运行期依赖必须被看出来，否则上面那半条只是「函数恒返回同值」。
-    changed = base.replace(
-        '  "redis>=5.2,<7",', '  "redis>=5.3,<7",', 1
-    )
+    changed = base.replace('  "redis>=5.2,<7",', '  "redis>=5.3,<7",', 1)
     assert changed != base, "fixture drifted: pyproject no longer contains the redis pin this test edits"
     assert _dependency_signature(changed) != _dependency_signature(base)
 
