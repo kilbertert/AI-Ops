@@ -402,15 +402,32 @@ SELECT qa_id,
 FROM assistant_questions
 WHERE internal_run_id LIKE 'consumer-order-chat:%' AND created_at >= :window_start;
 
--- ③ 对应请求是否发生模型/诊断调用
---    先看这一次查询**自己的证据**：本路径是同步确定性读取，成功即零模型。
---    `consumer-order-chat:` 的 QA 若带 tokens 或 run- 前缀，本身就说明出问题了：
-SELECT qa_id, internal_run_id
+-- ③ 这一次查询有没有走模型：先看它**自己的行**
+--    本路径是同步确定性读取，成功即零模型。判据是这一行的内部标记与形状：
+--      · internal_run_id 必须以 'consumer-order-chat:' 开头
+--      · result_json 里不该有模型才有的东西（token 计数、turn）
+SELECT qa_id,
+       internal_run_id,
+       CASE WHEN internal_run_id LIKE 'consumer-order-chat:%' THEN 0 ELSE 1 END AS odd_prefix,
+       CASE WHEN json_extract(result_json, '$.token_count') IS NOT NULL
+             OR json_extract(result_json, '$.turn_count') IS NOT NULL THEN 1 ELSE 0 END AS has_model_fields
 FROM assistant_questions
-WHERE internal_run_id LIKE 'consumer-order-chat:%'
-  AND created_at >= :window_start
-  AND internal_run_id NOT LIKE 'consumer-order-chat:%';   -- 恒空，仅示范形状
+WHERE qa_id IN (:candidate_qa_ids)          -- 来自观察日志里本片那些成功行的 qa_id
+  AND created_at >= :window_start;
+-- 任何一行 odd_prefix=1 或 has_model_fields=1 ⇒ 可归因：这一条确实走了模型。
+-- 不使用该查询时，写「该检查不可用」，**不要**用恒空条件冒充"没问题"。
 ```
+
+`qa_id` 清单从观察日志来（第 6.2 节的成功行）：
+
+```bash
+journalctl -u aiops-gateway-41 --since "$SINCE" --until "$UNTIL" --no-pager -o cat \
+  | grep -F 'assistant_question_result ' \
+  | grep -F "tenant_hash=$TENANT_HASH" \
+  | grep -o 'qa_id=qa_[0-9a-f]\{32\}' | cut -d= -f2 | sort -u
+```
+
+把结果拼成 `IN (...)` 的字面列表（它们都是 `qa_` + 32 位十六进制，可直接内联）。
 
 **不要**用「同租户同秒出现了 `routing` 指标 / 新建了 `run-` 目录」判定本片请求走了模型。
 `agent_run_metrics` 与 `runs/` 都**没有 `qa_id` 字段**，共享网关上的普通问答会在同一秒
@@ -420,7 +437,7 @@ WHERE internal_run_id LIKE 'consumer-order-chat:%'
 |---|---|
 | 某个 `qa_id` 在 `assistant_questions` 与 `agent_run_metrics`/`runs` 两侧都能对上 | **可归因**：这确实走了模型，按停止条件处理 |
 | 只有同租户同秒的 `routing` 行，对不上任何 `qa_id` | 写「**待核实**」，附窗口内候选行数与 `routing` 行数；不当作已发生 |
-| 本路径的 QA 行带 `run-` 前缀或 `token_count > 0` | **可归因**（这是它自己的行），按停止条件处理 |
+| 候选 `qa_id` 在 `assistant_questions` 里的 `internal_run_id` 不是 `consumer-order-chat:` 开头，或 `result_json` 带模型字段 | **可归因**（这是它自己的行），按停止条件处理；查询见 ③ |
 
 **禁止**把"整台 Gateway 的 `runs` 新增为零"当通过条件：共享网关的其他请求
 （FAQ、Promo、诊断、operator 工具）本来就会正常调用模型。
