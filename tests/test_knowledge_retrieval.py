@@ -308,3 +308,134 @@ def test_media_proxy_sniffs_actual_mime_and_slices_ignored_upstream_range() -> N
 
     bad = proxy.serve_signed(signed_id, range_header="bytes=999-", now=now)
     assert bad.status_code == 416
+
+
+# ── 外部播放链接（#1035）────────────────────────────────────────────────
+
+
+def _normalize(items, signer):
+    return normalize_search_response(
+        {"chunks": items},
+        tenant_id="tenant-a",
+        agent_version="agent-v1",
+        session_id="conversation-1",
+        knowledge_base_ids=("kb-a",),
+        media_signer=signer,
+    )
+
+
+def test_a_text_chunk_that_links_a_published_video_becomes_a_video_block() -> None:
+    """本仓素材的真实形状：一张「视频标题 + YouTube 链接」的表，解析出来是**纯文本**。
+
+    这条分支在 #1035 之前不存在 —— 文本 chunk 拿不到任何 media，所以那 19 条链接
+    永远到不了前端。
+    """
+    chunks = _normalize(
+        [
+            {
+                "dataset_id": "kb-a",
+                "chunk_id": "chunk-1",
+                "doc_id": "doc-1",
+                "docnm_kwd": "TRENDPOWER_video_modules.md",
+                "doc_type_kwd": [],
+                "content": (
+                    "- 视频宣传标题：0% Tariff! Why Nigerians Are Rushing to Buy Chinese EVs\n"
+                    "- YouTube 视频链接：https://www.youtube.com/shorts/Ld7_TVdVFpk\n"
+                ),
+                "similarity": 0.86,
+            }
+        ],
+        _signer(),
+    )
+
+    assert len(chunks) == 1
+    media = chunks[0].media[0].resource
+    assert media.kind == "video"
+    assert media.external_url == "https://www.youtube.com/shorts/Ld7_TVdVFpk"
+    assert media.embed == "youtube"
+    # 没有我们自己的字节 ⇒ **不出现 url**。否则前端回落到它就是拿 Markdown 当 mp4 播。
+    assert media.url == ""
+    assert "url" not in media.to_dict()
+
+
+def test_a_video_document_without_an_external_link_keeps_its_own_url() -> None:
+    """「没有外链」是常态，不是缺陷：我们托管的 mp4 一个字段都不变。"""
+    chunks = _normalize(
+        [
+            {
+                "dataset_id": "kb-a",
+                "chunk_id": "chunk-2",
+                "doc_id": "doc-2",
+                "docnm_kwd": "新加坡无人电动巴士.mp4",
+                "doc_type_kwd": "video",
+                "content": "宣传片介绍了新加坡无人电动巴士项目。",
+                "similarity": 0.7,
+            }
+        ],
+        _signer(),
+    )
+
+    media = chunks[0].media[0].resource
+    assert media.url.startswith("/v1/media/media_")
+    assert media.external_url == ""
+    payload = media.to_dict()
+    assert "external_url" not in payload and "embed" not in payload
+    assert payload["url"] == media.url
+
+
+def test_a_link_on_a_host_outside_the_allow_list_is_silently_ignored() -> None:
+    """非白名单域不签发、也不报错 —— 判据是「没有这个字段」。"""
+    chunks = _normalize(
+        [
+            {
+                "dataset_id": "kb-a",
+                "chunk_id": "chunk-3",
+                "doc_id": "doc-3",
+                "docnm_kwd": "notes.md",
+                "content": "参考 https://example.com/video.mp4 和 https://vimeo.com/12345",
+            }
+        ],
+        _signer(),
+    )
+
+    assert chunks[0].media == (), "非白名单域不该签发任何 media"
+
+
+def test_a_lookalike_host_does_not_pass_the_allow_list() -> None:
+    """`youtube.com.evil.example` 必须被拒。
+
+    这是前缀匹配与解析后比 host 的差别，也是这条 guard 存在的理由本身。
+    """
+    chunks = _normalize(
+        [
+            {
+                "dataset_id": "kb-a",
+                "chunk_id": "chunk-4",
+                "doc_id": "doc-4",
+                "docnm_kwd": "notes.md",
+                "content": "https://youtube.com.evil.example/watch?v=abc",
+            }
+        ],
+        _signer(),
+    )
+
+    assert chunks[0].media == (), "形似域名被当成了白名单域"
+
+
+def test_the_first_allow_listed_link_wins_when_a_chunk_quotes_several() -> None:
+    """一个 video 块只对应一个播放源；多条时取第一条，不全都签出去。"""
+    chunks = _normalize(
+        [
+            {
+                "dataset_id": "kb-a",
+                "chunk_id": "chunk-5",
+                "doc_id": "doc-5",
+                "docnm_kwd": "notes.md",
+                "content": ("首个：https://www.youtube.com/watch?v=first\n其次：https://youtu.be/second\n"),
+            }
+        ],
+        _signer(),
+    )
+
+    assert len(chunks[0].media) == 1
+    assert chunks[0].media[0].resource.external_url == "https://www.youtube.com/watch?v=first"

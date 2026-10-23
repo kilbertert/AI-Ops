@@ -13,6 +13,7 @@ import hmac
 import inspect
 import json
 import mimetypes
+import re
 import secrets
 import time
 import urllib.error
@@ -47,6 +48,25 @@ KNOWLEDGE_SEARCH_TOOL = "knowledge_search"
 ALLOWED_IMAGE_TYPES = frozenset({"image/png", "image/jpeg", "image/webp"})
 ALLOWED_VIDEO_TYPES = frozenset({"video/mp4", "video/webm"})
 ALLOWED_MEDIA_TYPES = ALLOWED_IMAGE_TYPES | ALLOWED_VIDEO_TYPES
+
+#: Hosts whose video links may travel as ``external_url`` (#1035).
+#:
+#: A URL found in a knowledge-base chunk is NOT automatically safe to hand to a
+#: browser: the frontend renders it in a player, so anyone who can write a
+#: document could otherwise make the server vouch for an arbitrary destination.
+#: The allow-list is the whole gate; adding a host is a security decision that
+#: names its reason, not a configuration value.
+EXTERNAL_VIDEO_HOSTS: dict[str, str] = {
+    "youtube.com": "youtube",
+    "www.youtube.com": "youtube",
+    "m.youtube.com": "youtube",
+    "youtu.be": "youtube",
+    "www.youtube-nocookie.com": "youtube",
+}
+
+#: First match wins; a chunk may quote several links and a video block carries
+#: exactly one playback source.
+_URL_PATTERN = re.compile(r"https?://[^\s<>\"'()\[\]{}，。；、）】」]+", re.IGNORECASE)
 
 #: The declared retry policy for a video media fetch. RAGFlow can briefly report
 #: an existing video document as code=102 while its document index settles.
@@ -151,16 +171,38 @@ class MediaResource:
     mime_type: str
     title: str | None
     reference_id: str
+    #: A playable link found in the chunk this resource came from (#1035).
+    #: Empty by default: most media is our own bytes, and "no external link"
+    #: is the normal case, not a defect. Only a host in
+    #: :data:`EXTERNAL_VIDEO_HOSTS` ever lands here.
+    external_url: str = ""
+    #: Which player the frontend should use for ``external_url``. Decided by
+    #: US from the host, never inferred by the frontend from the URL shape —
+    #: an embedder has to handle a closed set of players, not parse URLs.
+    embed: str = ""
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        payload: dict[str, Any] = {
             "resource_id": self.resource_id,
-            "url": self.url,
             "kind": self.kind,
             "mime_type": self.mime_type,
             "title": self.title,
             "reference_id": self.reference_id,
         }
+        # `url` means "our media proxy serves these bytes". It is ABSENT when
+        # that is not true — an external-only resource (a link found in a text
+        # chunk) has no bytes of ours behind it, and handing out a signed path
+        # to the Markdown file that quoted the link would make a player fetch
+        # text labelled `video/mp4`. A frontend must therefore branch on
+        # `external_url` first, and `url` is exactly as reliable as before.
+        if self.url:
+            payload["url"] = self.url
+        # Absent, not empty-string: a frontend that always reads the field
+        # would otherwise see "" and have to treat it as "no link" anyway.
+        if self.external_url:
+            payload["external_url"] = self.external_url
+            payload["embed"] = self.embed
+        return payload
 
 
 class MediaResourceSigner:
@@ -201,6 +243,8 @@ class MediaResourceSigner:
         mime_type: str,
         reference_id: str,
         title: str | None = None,
+        external_url: str = "",
+        embed: str = "",
         now: datetime | None = None,
     ) -> MediaResource:
         if kind not in {"image", "video"}:
@@ -227,7 +271,7 @@ class MediaResourceSigner:
         if any(
             not isinstance(value, str) or not value.strip()
             for key, value in fields.items()
-            if key not in {"session_id", "chunk_id", "title"}
+            if key not in {"session_id", "chunk_id", "title", "backend_id"}
         ):
             raise ValueError("media grant identifiers must be non-empty")
         issued_at = _utc(now)
@@ -239,13 +283,18 @@ class MediaResourceSigner:
             **fields,
         )
         signature = hmac.new(self._secret, resource_id.encode("ascii"), hashlib.sha256).hexdigest()[:24]
+        # `url` stays empty for an external-only resource: see
+        # `MediaResource.to_dict`.
+        url = "" if (external_url and not backend_id) else f"{self._base_path}/{resource_id}.{signature}"
         return MediaResource(
             resource_id=resource_id,
-            url=f"{self._base_path}/{resource_id}.{signature}",
+            url=url,
             kind=kind,
             mime_type=mime_type,
             title=title,
             reference_id=reference_id,
+            external_url=external_url,
+            embed=embed,
         )
 
     def invalidate(self, resource_id: str) -> None:
@@ -845,6 +894,10 @@ def normalize_search_response(
         if doc_type == "video" or _is_video_name(title):
             video_mime = _video_mime(item, title)
             if video_mime:
+                # A chunk that names a video AND links to one: the document is
+                # our bytes, and the link is where the same material is
+                # published. Both belong on the one block.
+                external_url, embed = _external_video_link(content)
                 resource = media_signer.issue(
                     tenant_id=tenant_id,
                     agent_version=agent_version,
@@ -857,6 +910,42 @@ def normalize_search_response(
                     mime_type=video_mime,
                     title=title,
                     reference_id=reference_id,
+                    external_url=external_url,
+                    embed=embed,
+                )
+                media.append(RetrievedMedia(resource))
+        elif doc_type not in {"image", "table"}:
+            # A TEXT chunk that carries a link to a published video (#1035).
+            #
+            # This is the shape our own material actually arrives in: the
+            # TRENDPOWER sheet is a Markdown table of "video title + YouTube
+            # link", so its chunks are plain text, not video documents — and
+            # before this branch they got no media at all, which is why the
+            # links could never reach the frontend.
+            #
+            # `backend_id` is the document id and the grant is `kind="video"`
+            # so the block is renderable, but the BYTES behind `url` are the
+            # Markdown file; a frontend that ignores `external_url` would try
+            # to play text and fail. That is why `external_url` is not optional
+            # here — without it this branch issues nothing.
+            external_url, embed = _external_video_link(content)
+            if external_url:
+                resource = media_signer.issue(
+                    tenant_id=tenant_id,
+                    agent_version=agent_version,
+                    session_id=session_id,
+                    knowledge_base_id=kb_id,
+                    document_id=document_id,
+                    chunk_id=chunk_id,
+                    # Empty backend_id = "there are no bytes of ours for this
+                    # one"; it is what makes `url` absent in the public shape.
+                    backend_id="",
+                    kind="video",
+                    mime_type="video/mp4",
+                    title=title,
+                    reference_id=reference_id,
+                    external_url=external_url,
+                    embed=embed,
                 )
                 media.append(RetrievedMedia(resource))
         result.append(
@@ -938,6 +1027,30 @@ def _score(value: Any) -> float | None:
         return float(value) if value is not None else None
     except (TypeError, ValueError):
         return None
+
+
+def _external_video_link(content: str) -> tuple[str, str]:
+    """The first allow-listed video link in ``content``, with its player.
+
+    Returns ``("", "")`` when there is none — the normal case. Never raises: a
+    chunk is arbitrary text from a document someone uploaded, and a bad URL in
+    it must degrade to "no external link", not fail the whole retrieval.
+
+    The host check is on the PARSED hostname, not on a substring of the URL: a
+    ``startswith("https://youtube.com")`` test would accept
+    ``https://youtube.com.evil.example/…``, which is exactly the mistake this
+    guard exists to prevent.
+    """
+    for match in _URL_PATTERN.finditer(content or ""):
+        candidate = match.group(0)
+        try:
+            host = urllib.parse.urlsplit(candidate).hostname or ""
+        except ValueError:
+            continue
+        embed = EXTERNAL_VIDEO_HOSTS.get(host.lower())
+        if embed:
+            return candidate, embed
+    return "", ""
 
 
 def _is_video_name(value: str | None) -> bool:

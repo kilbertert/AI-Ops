@@ -666,8 +666,33 @@ GET https://api.qumall.qushiyun.com/v1/assistant/questions/{qa_id}
 |---|---|---|
 | `text` | `text` | 按顺序渲染段落 |
 | `image` | `media.url` | `<img src={media.url}>`，按 `media.mime_type`（png/jpeg/webp） |
-| `video` | `media.url` | `<video src={media.url}>` 直接播放（服务端已支持 Range 分段） |
+| `video` | **先看 `media.external_url`**，没有再看 `media.url` | 有 `external_url` ⇒ 用 `media.embed` 指定的播放器（见下节）；没有 ⇒ `<video src={media.url}>` 直接播放（服务端已支持 Range 分段） |
 | `reference` | `title` | 显示来源文件名（折叠区/角标） |
+
+**视频有两个来源，必须分开渲染（#1035）**：
+
+```jsonc
+// ① 我们托管的 mp4（RAGFlow 里的视频文档）
+"media": {"url": "/v1/media/media_yyy.<签名>", "kind": "video", "mime_type": "video/mp4", …}
+
+// ② 知识库文档里引用的外部视频（YouTube 等）
+"media": {"external_url": "https://www.youtube.com/shorts/…", "embed": "youtube",
+          "kind": "video", "mime_type": "video/mp4", …}
+// 注意：这种块**没有 url 字段** —— 我们手上没有它的字节
+```
+
+三条必须遵守的：
+
+1. **`external_url` 优先**。它出现时 `url` 不存在，不要写 `media.url ?? ''` 然后塞进
+   `<video src>` —— 那会拿到 `undefined`，前端表现为一个空播放器。
+2. **`embed` 是枚举，由服务端决定**，不要自己解析 URL 判断该不该用 iframe。
+   当前只有 `"youtube"` 一个值；未知值按"去不支持的播放器"处理（降级成一个外链按钮，
+   不要崩）。
+3. **两个字段都可能缺席**，这是常态不是缺陷：绝大多数视频就是我们托管的 mp4。
+   `external_url` 只在本轮**命中的那段文本里**出现了白名单域的链接时才存在。
+
+`external_url` 的域名由服务端白名单把关（当前只放 YouTube）。不要在客户端放宽 ——
+这个字段的设计前提就是"服务端替用户担保了这个地址"，客户端再放行就等于绕过担保。
 
 **媒体 URL 规则（重要）**：
 
