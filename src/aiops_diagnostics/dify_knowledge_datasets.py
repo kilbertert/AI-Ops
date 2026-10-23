@@ -225,8 +225,30 @@ def plan(libraries: Iterable[Library], existing: Iterable[Mapping[str, Any]]) ->
         else:
             actions.append(Action("ok", lib.knowledge_id, lib.name, dataset_id))
 
-    orphans = tuple(sorted(set(by_knowledge_id) - {lib.knowledge_id for lib in libraries}))
+    #: 「这条 dataset 指向的串**也**由 RAGFlow 派生的规则产生，但那个库这次没出现」。
+    #: **这是唯一值得报的情况**：同一个租户前缀、却有我们没有的库 ⇒ 库里真的删了东西。
+    #: 别的形态（人工登记的 `kb-canary-2`、旧格式的 `tenant-<id>`）不归这条命令管，
+    #: 把它们报成孤儿会让运维去删**活的、正被 app 引用**的 dataset —— 41 上真发生过。
+    orphans = tuple(
+        sorted(
+            kid
+            for kid in set(by_knowledge_id) - {lib.knowledge_id for lib in libraries}
+            if _points_at_this_tenants_library(kid)
+        )
+    )
     return Plan(actions=tuple(actions), orphans=orphans)
+
+
+def _points_at_this_tenants_library(knowledge_id: str) -> bool:
+    """``tenant-<id>:<dataset>`` —— 派生规则产生、且指名了一个具体的库。
+
+    不是这个形状的一律不算孤儿：``tenant-<id>``（租户级合并形态，ADR-0095 明确保留）
+    与人工登记的任意串（``kb-canary-2``）都是**合法但不由本命令管理**的来源。
+    """
+    from aiops_diagnostics.knowledge_sources import parse_auto_knowledge_id
+
+    parsed = parse_auto_knowledge_id(knowledge_id)
+    return parsed is not None and bool(parsed[1])
 
 
 def run(
