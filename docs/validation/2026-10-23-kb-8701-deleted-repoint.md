@@ -28,7 +28,7 @@
 
 ## 二、处置（用户当场决策：改指 `41(1)`）
 
-不进 MinIO 重建，理由与代价记录在 [ADR-0102](../../adr/0102-repoint-on-deletion-instead-of-rebuild.md)。
+不进 MinIO 重建，理由与代价记录在 [ADR-0103](../../adr/0103-repoint-on-deletion-instead-of-rebuild.md)。
 
 | 引用 | 改法 | 回读 |
 |---|---|---|
