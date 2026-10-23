@@ -120,6 +120,90 @@ cleanup: still_listening=[]
 > 两项均已于 2026-10-23 完成，见本页顶部「真实跨用户拒绝」一节。
 - 本片零生产写入、零业务请求、零模型调用。
 
+## 2026-10-23 · 「跳转到 RAGFlow 的按钮又没了」—— 第一性原理定位（#1012）
+
+**用户报告**：知识库页上的「打开 RAGFlow」卡片消失，"这怎么不稳当的"。
+
+### 一、先排除的三个假设（都不是）
+
+| 假设 | 取证 | 结论 |
+|---|---|---|
+| nginx 没注入脚本 | `curl /datasets` 里 `<script src="/__aiops/dify-knowledge-open.js">` 在 | 否 |
+| 脚本 404 / 内容坏了 | `HTTP 200 size=6930` | 否 |
+| 卡片被"收起"过 | `localStorage['aiops.kbOpenCardHidden'] === null` | 否 |
+
+干净会话里直接打开 `/datasets`：`card: true`。**所以它确实"没了"，但不是每次都没。**
+
+### 二、决定性对照
+
+```
+A. 直接落在 /datasets                          → card: true
+B. 落在 /apps，等 24 秒，再点侧栏「知识库」       → card: false   ← 复现
+C. 落在 /apps，等 24 秒，goto('/datasets')      → card: true     （整页加载会重跑脚本）
+```
+
+只有**真 SPA 软导航**（A 变成 B 那样）才丢，所以问题在"脚本活着、但没在那一刻挂"。
+
+### 三、根因
+
+```js
+var tries = 0;
+var timer = setInterval(function () {
+  tries += 1;
+  try { mount(); } catch (e) {}
+  if (tries > 40) { clearInterval(timer); }   // ← 20 秒后自杀
+}, 500);
+```
+
+注释写的理由是"一直转下去的定时器会白白耗电"。**那个账算错了**：
+
+- 代价：脚本只活在控制台里，500ms 一次 `location.pathname` 比较 + 一次
+  `getElementById`。标签页不可见时浏览器本来就把 `setInterval` 降到 1s 以上。
+- 收益：不停 = 运营任何时候进知识库页都能看到入口。
+
+而"先看工作室/应用，过一会儿再看知识库"是**主路径**，不是边角。所以这不是偶发，
+是"20 秒后必定失效"。
+
+### 四、为什么之前的验收没抓到
+
+#983/#985 的验收是**直接打开 `/datasets`** —— 那是脚本刚加载、轮询还在跑的情形。
+一次真实的操作序列（别处停留 → 侧栏切换）才能暴露它。**验收的入口要按用户的实际路径走，
+不能只按"功能所在那一页"走。**
+
+### 五、修法
+
+去掉次数上限，轮询常驻。新增静态断言：定时器回调体里不许出现 `clearInterval` 或次数上限
+（`tests/test_dify_knowledge_open_script.py::test_the_poller_never_stops`）。
+
+### 六、部署与复验（2026-10-23 完成）
+
+桥的资源**不在 CD 范围内**（CD 只部署 41 的网关），要手工更新 36 的
+`/srv/aiops-console-assets/`。步骤与判据：
+
+```bash
+# 1. 先备份（这台机器上已有 .bak-YYYYmmdd-HHMMSS 的先例）
+ssh yidong-36 'sudo cp -a /srv/aiops-console-assets/dify-knowledge-open.js \
+  /srv/aiops-console-assets/dify-knowledge-open.js.bak-$(date +%Y%m%d-%H%M%S)'
+# 2. 传输 + 三方 sha256 对齐（本地 / 落地 / 线上）
+scp ops/dify-console-bridge/dify-knowledge-open.js yidong-36:/tmp/dify-knowledge-open.js.new
+ssh yidong-36 'sudo install -m 0644 -o root -g root /tmp/dify-knowledge-open.js.new \
+  /srv/aiops-console-assets/dify-knowledge-open.js'
+curl -s https://dify.ranlei.work/__aiops/dify-knowledge-open.js | sha256sum
+```
+
+三个 sha256 一致：`a712fc4f…a61a826d`，且线上文件里 `tries` / `clearInterval` 均已消失。
+
+**复验走的是用户的实际路径**（先落 `/apps` 停 24 秒 → 点侧栏「知识库」）：
+
+| 判据 | 结果 |
+|---|---|
+| `/apps` 停留 24 秒期间无卡片（那一页不该有） | ok |
+| 点侧栏进知识库后**卡片出现且有链接** | ok（旧版此处必定 `card:false`，已复现） |
+| 回 `/apps` 再回来，卡片仍在 | ok |
+| 点卡片 → 新标签落在 RAGFlow 且已登录 | `https://kb.mall.qushiyun.com/`，`Welcome to RAGFlow`，`41(1) 7 files` / `41 12 files` |
+
+**没验什么**：其它 workspace（`aiops-41-platform` 未开户）；非 Chromium 浏览器。
+
 ## 2026-10-23 · 验收工具接通默认路径：适配器、脱敏、浏览器驱动回放
 
 #1006 的自检只在**注入 Deps 替身**时通过。这一片让它按文档真跑。
