@@ -789,3 +789,20 @@ fixture、数据库检查或模型单次调用写成真实业务验收。
 > 身份与业务依赖使用回环替身，**未完成新的业务验收**。本轮未启用功能、提交真实业务问题或调用模型。
 > 详见[部署复核与边界](../validation/2026-10-23-observation-deployment.md)；
 > 下一步按[单租户变更单](consumer-order-chat/single-tenant-enable-change-ticket.md)准备受控观察窗口。
+
+> **2026-10-23 · 个人订单查询生产观察闭环：已完成（开关已恢复关闭）**：
+> 一次受控窗口 **12:47:31 → 12:50:35 UTC**（3 分 4 秒），制品 `0.1.0+429236d361fa`。
+> 只增三个 `AIOPS_GATEWAY_*` 键（开关 / 目标租户映射端点 / 逻辑执行环境），端点取同环境 OPS 映射的
+> 同租户条目；候选配置只做 `validate()`，未构造生产 app。
+> **三次主动 POST**（上限 3，无重试）：A 真实 H5 查最新单 → 选中 O1、正文指定 → O2（未回落）；
+> B 用自己的会话查 A 的 O2 → **404 `ORDER_NOT_FOUND`**；开关仍开时 B 回读 A 两个 QA →
+> 两条都 **404 `QA_NOT_FOUND`**，对照 A 回读同两个 → **200 `no-store`**。
+> 独立 SQL/CPMS 对照两条正例一致（状态码 1、来源 `cpms.chargingInfo`）。
+> **观察记录 3 行全对得上**：2 条 completed 各带 `qa_id`（**硬键**对上 QA 行与私有快照，
+> 快照摘要自校验通过），1 条 refused 带 `ORDER_NOT_FOUND`（**只有单请求区间关联**，无 `qa_id`）。
+> 全租户查 `TENANT_ENDPOINT_UNRESOLVED` 本窗口 **0 次**。
+> **恢复**：只撤本次三键，`gateway.env` 与窗口前**逐字相同**；三键计数 0、OPS 键仍在、服务 active、
+> 隧道清理干净；停用后只回读 → `CHARGING_STATUS_DISABLED`，未再提交新问题。
+> **未证实**：零模型调用（`agent_run_metrics` 与 `runs/` 都不带 `qa_id`，无法归因；
+> 窗口内也无模型日志与新 run 目录）。**不能**用"同租户同秒 routing 行"推断。
+> 详见[验收记录](../validation/2026-10-23-production-observation-closed-loop.md)。
