@@ -58,6 +58,8 @@ IMPORT_MODE_YAML_CONTENT = "yaml-content"
 
 #: 翻页上限。一个租户 workspace 的 app 数量是几十的量级；这个数只是防无界请求的护栏。
 MAX_APP_PAGES = 50
+#: dataset 翻页上限。一页 100，与 app 同一条护栏；一个 workspace 的库是几十的量级。
+MAX_DATASET_PAGES = 50
 
 
 class ConsoleApiError(RuntimeError):
@@ -452,6 +454,100 @@ class DifyConsoleAdmin:
                     "DIFY_APPS_UNREADABLE",
                     f"app 列表超过 {MAX_APP_PAGES} 页仍未结束；停止翻页，避免无界请求",
                 )
+
+    # ── 外部知识库 dataset（#1001）──────────────────────────────────────
+
+    def list_datasets(self, workspace_id: str) -> list[dict[str, Any]]:
+        """这个 workspace 的**全部** dataset，含 ``only_me``。
+
+        ``include_all=true`` 只在调用者是 owner 时生效（``DatasetService.get_datasets``
+        的分支），而 admin key 正是按 ``X-WORKSPACE-ID`` 取 owner 行（``ext_login.py``），
+        所以这里拿得到 owner 视角 —— 少了它，一条 ``only_me`` 的 dataset 在同步看来
+        "不存在"，于是每次跑都再建一条同 id 的。
+
+        翻页判据用响应的 ``has_more``，与 :meth:`app_names` 同一条理由：读第 1 页就断言
+        "不存在"会让第 2 页上的库被重复创建。
+        """
+        out: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            payload = self._call(
+                workspace_id, f"/console/api/datasets?page={page}&limit=100&include_all=true"
+            )
+            body = payload if isinstance(payload, dict) else {}
+            out.extend(item for item in body.get("data") or [] if isinstance(item, dict))
+            if not body.get("has_more"):
+                return out
+            page += 1
+            if page > MAX_DATASET_PAGES:
+                raise ConsoleApiError(
+                    "DIFY_DATASETS_UNREADABLE",
+                    f"dataset 列表超过 {MAX_DATASET_PAGES} 页仍未结束；停止翻页，避免无界请求",
+                )
+
+    def create_external_dataset(
+        self,
+        workspace_id: str,
+        *,
+        name: str,
+        external_knowledge_id: str,
+        external_knowledge_api_id: str,
+    ) -> str:
+        """建一条 external dataset；返回它的 id。
+
+        **这个接口不接受 ``permission``**（``ExternalDatasetCreatePayload`` 没有这个字段），
+        落库默认 ``only_me`` —— 也就是"只有创建者看得见"。建完必须紧跟一次
+        :meth:`update_external_dataset`，否则编排页里选不到它。
+        """
+        payload = self._call(
+            workspace_id,
+            "/console/api/datasets/external",
+            method="POST",
+            body={
+                "name": name,
+                "external_knowledge_id": external_knowledge_id,
+                "external_knowledge_api_id": external_knowledge_api_id,
+            },
+        )
+        dataset_id = str((payload or {}).get("id") or "") if isinstance(payload, dict) else ""
+        if not dataset_id:
+            raise ConsoleApiError(
+                "DIFY_DATASET_CREATE_UNREADABLE",
+                f"[workspace {workspace_id}] 建 dataset {external_knowledge_id} 回了成功但没有 id",
+            )
+        return dataset_id
+
+    def update_external_dataset(
+        self,
+        workspace_id: str,
+        dataset_id: str,
+        *,
+        name: str,
+        external_knowledge_id: str,
+        external_knowledge_api_id: str,
+        permission: str = "all_team_members",
+    ) -> dict[str, Any]:
+        """改一条 external dataset。
+
+        **两个外部字段每次都带全。** ``_update_external_dataset`` 里
+        ``external_knowledge_id`` / ``external_knowledge_api_id`` 缺任一都是
+        ``ValueError``（不是"保持不变"），所以"只改权限"也必须回填它们。
+
+        ``permission`` 显式给 ``all_team_members``：Dify 的 ``only_me`` 只对 maintainer
+        可见，那正是编排页「未找到知识库」的成因。
+        """
+        payload = self._call(
+            workspace_id,
+            f"/console/api/datasets/{dataset_id}",
+            method="PATCH",
+            body={
+                "name": name,
+                "permission": permission,
+                "external_knowledge_id": external_knowledge_id,
+                "external_knowledge_api_id": external_knowledge_api_id,
+            },
+        )
+        return payload if isinstance(payload, dict) else {}
 
 
 __all__ = [
