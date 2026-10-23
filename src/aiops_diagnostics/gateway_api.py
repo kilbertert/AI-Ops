@@ -3005,14 +3005,21 @@ def create_gateway_app(
         """
         del payload  # 同上：请求体不参与任何决策
         response.headers["Cache-Control"] = "no-store"
-        if not selected_settings.agent_run_config_file:
+        # APP-RUNTIME-01：回调该用哪份配置，由**这条 run 自己**决定（聊天入口签发的用聊天
+        # 绑定，委派入口签发的用委派绑定）。原来只看委派那个键，于是「只开聊天绑定」时
+        # 节点永远领不到；两份配置不同时还会拿别人的绑定去认证。
+        binding_config = chat_execution.callback_config(context.agent_run_store, run_id, selected_settings)
+        if binding_config is None:
             raise StandardAPIError(404, "AGENT_RUN_DISABLED", "route not found")
         token = (authorization or "").removeprefix("Bearer ").strip()
 
         def load_config() -> AgentRunConfig:
             # 每次领取（含最后一次放行）都重读：撤销节点就是改这个文件，下一次判定立刻生效。
             try:
-                return AgentRunConfig.load(Path(selected_settings.agent_run_config_file))
+                resolved = chat_execution.callback_config(context.agent_run_store, run_id, selected_settings)
+                if resolved is None:
+                    raise AgentRunConfigError("binding is not configured")
+                return resolved
             except AgentRunConfigError as exc:
                 raise StandardAPIError(
                     status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -3252,18 +3259,11 @@ def create_gateway_app(
         终态（撤销/过期/已失败）403；未启用清单 409。
         """
         response.headers["Cache-Control"] = "no-store"
-        if not selected_settings.agent_run_config_file:
+        # 与领取端点同一条判据：用**这条 run 自己**的绑定，而不是委派那个键。
+        config = chat_execution.callback_config(context.agent_run_store, run_id, selected_settings)
+        if config is None:
             raise StandardAPIError(404, "AGENT_RUN_DISABLED", "route not found")
         token = (authorization or "").removeprefix("Bearer ").strip()
-        try:
-            config = AgentRunConfig.load(Path(selected_settings.agent_run_config_file))
-        except AgentRunConfigError as exc:
-            raise StandardAPIError(
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-                "AGENT_RUN_CONFIG_UNAVAILABLE",
-                "agent run unavailable",
-                retryable=True,
-            ) from exc
         node = config.authenticate_node(token)
         if node is None:
             raise StandardAPIError(
@@ -5755,15 +5755,41 @@ def _require_current_chat_node_order(context, caller, qa, request):
     if qa["status"] in {"queued", "running", "failed", "cancelled", "expired"}:
         return
     store = context.agent_run_store
-    run = store.by_qa(qa["qa_id"]) if store is not None else None
+    located = store.by_qa(qa["qa_id"]) if store is not None else None
+    if located is None:
+        raise StandardAPIError(503, "CHARGING_STATUS_EVIDENCE_UNAVAILABLE", "evidence unavailable")
+    if located.scope_fingerprint != caller.scope_fingerprint:
+        raise StandardAPIError(404, "QA_NOT_FOUND", "assistant question not found")
+
+    # 与委派入口的最终放行同一条纪律：**先用可能阻塞的授权，再重读记录做本地判定**。
+    # `by_qa` 刻意不做过期收敛，所以这里必须自己收敛 —— 否则一个已经过 TTL 的
+    # `succeeded` 行会一直把正文交下去。
+    _require_visible_order(context, caller, order_no)
+    run = store.get(located.run_id)  # 这次读取会顺带把过期收敛成 expired
     if run is None:
         raise StandardAPIError(503, "CHARGING_STATUS_EVIDENCE_UNAVAILABLE", "evidence unavailable")
-    # 同一 run 的 succeeded 快照是**唯一**允许的答案来源；这里不做第二次业务读取。
+    # 同一 run 的 succeeded 快照是**唯一**允许的答案来源；不做第二次业务读取。
     if run.state != SUCCEEDED or run.snapshot is None or run.order_no != order_no:
         raise StandardAPIError(404, "AGENT_RUN_NO_RESULT", "agent run produced no result")
-    if run.scope_fingerprint != caller.scope_fingerprint:
-        raise StandardAPIError(404, "QA_NOT_FOUND", "assistant question not found")
-    _require_visible_order(context, caller, order_no)
+    if run.expires_at <= datetime.now(UTC):
+        raise StandardAPIError(404, "AGENT_RUN_NOT_ACTIVE", "agent run is not active")
+    # 绑定必须**此刻**仍然成立：节点被停用、app/节点映射被改、环境被改，都不再交付。
+    config = chat_execution.callback_config(store, run.run_id, context.settings)
+    if config is None:
+        raise StandardAPIError(503, "AGENT_RUN_CONFIG_UNAVAILABLE", "agent run unavailable")
+    node = next(
+        (n for n in config.node_token_hashes.values() if n.node_id == run.actual_node_id),
+        None,
+    )
+    if (
+        node is None
+        or not node.active
+        or config.expected_node_id != run.expected_node_id
+        or config.environment != run.environment
+        or config.snail_app_id != run.app_id
+        or str(config.snail_agent_id) != run.agent_id
+    ):
+        raise StandardAPIError(403, "AGENT_RUN_WRONG_NODE", "agent run refused")
 
 
 def _is_node_chat_qa(qa) -> bool:

@@ -1572,7 +1572,9 @@ class GatewayRuntime:
         if not self.store.update_assistant_question(qa_id, status="completed", result=answer):
             return
         with contextlib.suppress(Exception):
-            self._complete_conversation_turn(registration.conversation_turn, question, answer)
+            self._complete_conversation_turn(
+                registration.conversation_turn, question, answer, status_qa_id=qa_id
+            )
 
     def classify_lightweight(
         self,
@@ -1860,8 +1862,14 @@ class GatewayRuntime:
         cancelled: bool = False,
         guarded: bool = False,
         stop_renewer: threading.Event | None = None,
+        status_qa_id: str | None = None,
     ) -> None:
         """Write a finished answer into the conversation turn (if any).
+
+        ``status_qa_id`` 是**个人订单状态**那条分支的关联。直读路线一直带着它，
+        节点路线起初漏了 —— 后果不是显示问题：会话详情按这个链接重新授权，
+        下一轮模型上下文也按它排除状态答案。少了它，清空绑定或撤权挡住了 QA 端点，
+        同一个答案仍能从会话详情读到，还会被当模型上下文复用。
 
         The ONE implementation of "a job finished, so its turn can be closed":
         both the qa/promo line and the diagnosis line call it, so the two can
@@ -1895,6 +1903,7 @@ class GatewayRuntime:
                 answer=answer,
                 token_count=_estimate_turn_tokens(question, answer),
                 cancelled=cancelled or answer is None,
+                status_qa_id=status_qa_id,
             )
 
     def list_evidence(self, run_id: str) -> list[dict[str, Any]]:

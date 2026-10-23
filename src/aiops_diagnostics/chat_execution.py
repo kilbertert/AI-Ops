@@ -86,6 +86,39 @@ def resolve_binding(settings: GatewayServerSettings) -> ChatBinding:
     )
 
 
+def callback_config(store: Any, run_id: str, settings: GatewayServerSettings) -> AgentRunConfig | None:
+    """这条 run 的回调（领取/完成）该用**哪份配置**。
+
+    APP-RUNTIME-01 的 Codex P1：回调端点原来只认 ``agent_run_config_file``（委派入口的键），
+    于是「只开聊天绑定」时节点永远领不到 —— 它被 `AGENT_RUN_DISABLED` 拒掉；
+    而如果两份配置指向不同的 app/节点，它还会拿**别人的绑定**去认证。
+
+    判据必须落在**这条 run 自己**身上，而不是「哪个键非空」：
+
+    * run 的 ``qa_id`` 非空 ⇒ 它是聊天入口签发的 ⇒ 用聊天绑定；
+    * 否则用委派绑定。
+
+    返回 ``None`` 表示「这条 run 对应的绑定当前没配置」—— 调用方按不可用处理，
+    **不**悄悄换另一份配置去认证。
+    """
+    record = store.peek(run_id)
+    from_chat = record is not None and getattr(record, "qa_id", None)
+    binding = resolve_binding(settings) if from_chat else _delegation_binding(settings)
+    if not binding.enabled:
+        return None
+    try:
+        return AgentRunConfig.load(Path(binding.config_file))
+    except AgentRunConfigError:
+        return None
+
+
+def _delegation_binding(settings: GatewayServerSettings) -> ChatBinding:
+    return ChatBinding(
+        config_file=str(getattr(settings, "agent_run_config_file", "") or ""),
+        manifest_file=str(getattr(settings, "execution_manifest_file", "") or ""),
+    )
+
+
 def issue_for_store(
     *,
     store: Any,
@@ -162,6 +195,7 @@ __all__ = [
     "CHAT_RUN_PREFIX",
     "ChatBinding",
     "ChatRunUnavailable",
+    "callback_config",
     "answer_from_run",
     "dispatch_run",
     "issue_for_store",

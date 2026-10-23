@@ -16,9 +16,11 @@
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 from contextlib import contextmanager
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 from test_m2_close_contract import NODE_A_TOKEN, Orders, Resolver, _write_config
@@ -480,3 +482,103 @@ def test_real_tcp_post_then_poll_reaches_the_node(tmp_path, monkeypatch):
             server.should_exit = True
             thread.join(timeout=10)
             assert not thread.is_alive()
+
+
+# ---------------------------------------------------------------- 三条 P1 的回归
+
+
+def test_chat_only_binding_can_still_complete_its_callbacks(tmp_path, monkeypatch):
+    """只开聊天绑定、**不开**委派绑定时，节点仍能领取与完成。
+
+    Codex P1：回调端点原来只认 `agent_run_config_file`（委派那个键），
+    于是"独立的聊天配置"根本跑不完 —— 领取直接 `AGENT_RUN_DISABLED`。
+    """
+    with node_chat(tmp_path, monkeypatch) as f:
+        # 把委派入口的键清掉，只留聊天绑定
+        f["settings"].agent_run_config_file = ""
+        response = ask(f["client"])
+        assert response.status_code == 202
+        final = wait_terminal(f["client"], response.json()["qa_id"])
+        assert final["status"] == "completed", final
+
+
+def test_answer_stops_being_delivered_once_the_run_expires(tmp_path, monkeypatch):
+    """run 过期后不再交付正文。
+
+    Codex P1：`by_qa()` 刻意不做过期收敛，而读取守卫原来既不看 `expires_at`
+    也不看节点绑定 —— 一条 `succeeded` 行会一直把答案交下去。
+    """
+    with node_chat(tmp_path, monkeypatch) as f:
+        qa_id = ask(f["client"]).json()["qa_id"]
+        assert wait_terminal(f["client"], qa_id)["status"] == "completed"
+
+        # 把这条 run 的过期时间推到过去（等价于 TTL 到期）
+        import sqlite3
+        from datetime import UTC, datetime, timedelta
+
+        past = (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
+        with sqlite3.connect(f["settings"].database_file) as conn:
+            conn.execute("UPDATE agent_runs SET expires_at = ? WHERE qa_id = ?", (past, qa_id))
+
+        refused = f["client"].get(f"/v1/assistant/questions/{qa_id}", headers=HEADERS)
+        assert refused.status_code in {403, 404}, refused.text
+        assert "blocks" not in refused.text
+
+
+def test_answer_stops_when_the_node_is_deactivated(tmp_path, monkeypatch):
+    """节点被停用后不再交付正文（绑定必须**此刻**仍成立）。"""
+    with node_chat(tmp_path, monkeypatch) as f:
+        qa_id = ask(f["client"]).json()["qa_id"]
+        assert wait_terminal(f["client"], qa_id)["status"] == "completed"
+
+        config_path = Path(f["settings"].chat_execution_config_file)
+        raw = json.loads(config_path.read_text())
+        for node in raw["nodes"]:
+            node["active"] = False
+        config_path.write_text(json.dumps(raw))
+        config_path.chmod(0o600)
+
+        refused = f["client"].get(f"/v1/assistant/questions/{qa_id}", headers=HEADERS)
+        assert refused.status_code in {403, 404}, refused.text
+
+
+def test_conversation_turn_keeps_the_status_qa_link(tmp_path, monkeypatch):
+    """节点路线的会话轮次必须带 `status_qa_id`。
+
+    Codex P1：少了它，会话详情不会按状态答案重新授权，下一轮模型上下文也不会
+    把它排除 —— 于是清空绑定挡住了 QA 端点，同一个答案仍能从会话详情读到。
+    """
+    from aiops_diagnostics.conversation_store import ConversationStore
+
+    with node_chat(tmp_path, monkeypatch) as f:
+        store = f["app"].state.gateway.store
+        fingerprint = f["app"].state.gateway.runtime  # 仅用于确认 runtime 存在
+        assert fingerprint is not None
+        conversations = ConversationStore(f["settings"].database_file)
+        conversation = conversations.create(
+            scope_fingerprint=Resolver().scope.scope_fingerprint,
+            business_entry="consumer",
+            agent_version_key="agt_0123456789abcdef#v1",
+        )
+        response = f["client"].post(
+            "/v1/assistant/questions",
+            headers=HEADERS,
+            json={"question": LATEST, "conversation_id": conversation["conversation_id"]},
+        )
+        assert response.status_code == 202, response.text
+        qa_id = response.json()["qa_id"]
+        assert wait_terminal(f["client"], qa_id)["status"] == "completed"
+
+        # 直接查这一行：`context_turns()` 会把状态轮次**排除**（那正是这个链接的作用之一），
+        # 所以拿它当判据会反过来证明不了写入。
+        import sqlite3
+
+        with sqlite3.connect(f["settings"].database_file) as conn:
+            row = conn.execute(
+                "SELECT status_qa_id, answer_json FROM conversation_turns WHERE conversation_id = ?",
+                (conversation["conversation_id"],),
+            ).fetchone()
+        assert row is not None, "conversation turn row is missing"
+        assert row[0] == qa_id, f"status_qa_id not persisted: {row[0]!r}"
+        assert row[1], "answer was not stored"
+        assert store is not None

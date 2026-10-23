@@ -32,7 +32,7 @@
 |---|---|---|
 | 把 QA↔run 改成"按订单号猜"（错绑定） | 相关用例转红 | **4 条转红** |
 | 节点失败后强行走直读补答案 | 失败不回落用例转红 | **1 条转红** |
-| 还原 | 全绿 | 3713 passed |
+| 还原 | 全绿 | 3720 passed |
 
 ## 过程中抓到的两个真实缺陷
 
@@ -56,3 +56,13 @@
 
 零：未改公司仓、未开生产、未调用真实模型或业务上游、未重启 41。
 所有原始证据（合成环境）留在测试运行时的一次性目录里，仓库只收结论。
+
+## Codex 复核的三条 P1（已修 + 每条都有能检出的回归）
+
+| # | 问题 | 修法 | 回归（变异即转红） |
+|---|---|---|---|
+| P1-1 | 只开聊天绑定时，节点**永远领不到**：回调端点只认委派那个键（`AGENT_RUN_DISABLED`）；两份配置不同时还会用**别人的绑定**认证 | 回调按**这条 run 自己**的绑定解析（run 有 `qa_id` ⇒ 聊天绑定，否则委派绑定），解析不到就不可用，**不**换另一份去认证 | `test_chat_only_binding_can_still_complete_its_callbacks` |
+| P1-2 | 回读**绕过 TTL 与节点绑定**：`by_qa()` 刻意不做过期收敛，守卫又只看 state，于是 `succeeded` 行会一直交正文 | 读取改成与委派最终放行同一条纪律：先授权 → 再 `get()`（顺带收敛过期）→ 校验 `expires_at` / 节点 active / app·节点·环境绑定 | `test_answer_stops_being_delivered_once_the_run_expires`、`test_answer_stops_when_the_node_is_deactivated` |
+| P1-3 | 节点路线的会话轮次**没带 `status_qa_id`**：会话详情不会按状态答案重新授权，下一轮模型上下文也不会排除它 | 与直读分支一致地持久化 `status_qa_id=qa_id` | `test_conversation_turn_keeps_the_status_qa_link` |
+
+三条变异各自只让对应回归转红，还原后 16 全绿。

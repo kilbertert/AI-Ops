@@ -45,8 +45,8 @@ AIOPS_GATEWAY_CHAT_EXECUTION_MANIFEST_FILE=
 | 项 | 结果 |
 |---|---|
 | 既有回归基线 | **98 passed**，未删测、未 skip、未降判据 |
-| 新增接线与负例测试 | **12 passed**（`tests/test_app_runtime_node_entry.py`） |
-| 全量 | **3713 passed / 9 skipped / 0 failed** |
+| 新增接线与负例测试 | **16 passed**（`tests/test_app_runtime_node_entry.py`） |
+| 全量 | **3720 passed / 9 skipped / 0 failed** |
 | 真实 TCP | 真 uvicorn + 真监听：POST <2s 返回 202，随后原 GET 轮询到答案 |
 | 反向验证 1（错 QA/run 绑定） | **4 条转红** |
 | 反向验证 2（节点失败强行走直读） | **1 条转红** |
