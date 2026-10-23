@@ -36,9 +36,7 @@
 ```python
 # api/core/rag/retrieval/dataset_retrieval.py:518
 for item in external_documents:
-    document_context_list.append(
-        DocumentContext(content=item.page_content, score=item.metadata.get("score"))
-    )
+    document_context_list.append(DocumentContext(content=item.page_content, score=item.metadata.get("score")))
 ```
 
 我们的 `/v1/dify/retrieval` 返回的记录里带着 `metadata.media[]`（含签名 URL、kind、
