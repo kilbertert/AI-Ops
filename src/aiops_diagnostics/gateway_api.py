@@ -4077,17 +4077,30 @@ def create_gateway_app(
             outcome="granted",
             ragflow_email=session.ragflow_email,
         )
-        response = RedirectResponse(target, status_code=status.HTTP_303_SEE_OTHER)
-        for name, value in session.cookies.items():
-            response.set_cookie(
-                name,
-                value,
-                domain=settings.ragflow_console_cookie_domain or None,
-                path="/",
-                httponly=True,
-                samesite="lax",
-            )
-        return response
+        # **对桥回 JSON，不回 303**（#984）。桥是服务端进程：它会收到 303，但不会保存
+        # 那个带 Domain 的 cookie —— 浏览器才做那件事。所以这条内部入口把「往哪跳」与
+        # 「哪些 cookie」一起交出去，由桥原样转给浏览器。
+        #
+        # 与 `/v1/knowledge/console` 的区别正是这一点：那条是**浏览器**自己调的，
+        # 303 + Set-Cookie 就会生效；这条是**桥**调的。
+        return JSONResponse(
+            {
+                "target": target,
+                "tenant_id": tenant_id,
+                "cookies": [
+                    {
+                        "name": name,
+                        "value": value,
+                        "domain": settings.ragflow_console_cookie_domain,
+                        "path": "/",
+                        "httponly": True,
+                        "samesite": "lax",
+                    }
+                    for name, value in session.cookies.items()
+                ],
+            },
+            status_code=status.HTTP_200_OK,
+        )
 
     @app.get("/v1/knowledge", include_in_schema=False)
     def knowledge_page() -> HTMLResponse:
