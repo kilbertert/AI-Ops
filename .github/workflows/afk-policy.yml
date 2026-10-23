@@ -138,3 +138,21 @@ jobs:
       # another.
       - name: Repository-map generator self-check
         run: node .sandcastle/repo-map.mjs --self-check
+      # The conflict report's own tables, before it sweeps 100 branches: a path
+      # classified twice, or a disposition with no stated reason, would make the
+      # report read as complete while double-counting or silently dropping rows.
+      - name: Conflict-surface table self-check
+        run: node .sandcastle/conflict-surface.mjs --self-check
+      # Fails only on a `removed` path conflicting again — a generated file that
+      # came back into the tree. `exclusive` and `serial` entries are reports by
+      # design, so gating on them would keep this check red for reasons nobody
+      # can act on, which is how a check stops being read.
+      #
+      # ⚠️ Asks about THIS tree's index, not about the merge base and not about
+      # live branches. Measured on the PR that introduced this check, both of
+      # those readings made it fail the very change it was written for: the base
+      # still tracks the file, and 34 living branches still carry their own copy.
+      # "Is a removed path still tracked here" is answerable, actionable, and
+      # true exactly when the removal was reverted.
+      - name: Conflict surface has no structural regression
+        run: node .sandcastle/conflict-surface.mjs --check

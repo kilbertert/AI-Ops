@@ -8,7 +8,9 @@ parent PRD, pull that in too.
 
 # CONTEXT
 
-Read `.sandcastle/REPO-MAP.md` first (where things live), then `GLOSSARY.md` and `docs/`, `.sandcastle/CODING_STANDARDS.md`, and any relevant ADRs under
+Generate the repository map, then read it first (where things live):
+`node .sandcastle/repo-map.mjs && cat .sandcastle/REPO-MAP.md`. It is gitignored
+and produced on demand, so generate rather than assume. then `GLOSSARY.md` and `docs/`, `.sandcastle/CODING_STANDARDS.md`, and any relevant ADRs under
 `docs/adr/` before starting. Explore the repo and fill your context with the parts
 relevant to this issue — especially test files that touch the area
 you'll change.

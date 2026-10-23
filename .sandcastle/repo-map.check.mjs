@@ -27,23 +27,20 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 
 const REPO = process.cwd();
-const MAP = path.join(REPO, ".sandcastle", "REPO-MAP.md");
 const GEN = path.join(REPO, ".sandcastle", "repo-map.mjs");
 
-if (!fs.existsSync(MAP)) {
-  console.error("REPO-MAP.md is missing — generate it: node .sandcastle/repo-map.mjs");
-  process.exit(1);
-}
-
-// Regenerate to stdout and compare, so the check never writes the file it is
-// judging — a check that repairs its own subject cannot report it as broken.
+// The map is NOT compared against a committed copy any more, because there is
+// no committed copy: `.sandcastle/REPO-MAP.md` is generated on demand and
+// gitignored (2026-10-23, ADR 0098). Keeping it in version control meant every
+// branch that touched the file set also rewrote this file — it conflicted on 34
+// of 102 remote branches, and the conflicting hunk carried no information
+// ("170 markdown file(s)" vs "172").
+//
+// What is still worth asserting is the thing the freshness gate never could:
+// that the generator produces a map the agent can actually use. It is generated
+// here into memory, so the check never depends on whether someone remembered
+// to run it.
 const fresh = execFileSync(process.execPath, [GEN, "--stdout"], { encoding: "utf8" });
-const current = fs.readFileSync(MAP, "utf8");
-
-if (fresh !== current) {
-  console.error("REPO-MAP.md is stale — regenerate: node .sandcastle/repo-map.mjs");
-  process.exit(1);
-}
 
 // The *generated* text is what the contract is checked against, not the file on
 // disk: the regeneration above guarantees they are identical, and asserting on
@@ -72,4 +69,18 @@ if (!fresh.includes(`"project": "${expected}"`)) {
   process.exit(1);
 }
 
-console.log(`repo-map check ok (${current.split("\n").length} lines, graph project ${expected})`);
+// The map is now produced at read time rather than committed, so the property
+// that replaces "the committed copy matches" is determinism: the same tree must
+// render the same bytes. A generator that varies run to run (timestamps, map
+// iteration order, locale-dependent sorting) would hand each agent a different
+// map for the same repository — the conflict the move was meant to end, moved
+// from git into the agent's head.
+const again = execFileSync(process.execPath, [GEN, "--stdout"], { encoding: "utf8" });
+if (again !== fresh) {
+  console.error(
+    "repo-map generator is not deterministic — two runs over the same tree produced different maps, so no reader can tell which one is current",
+  );
+  process.exit(1);
+}
+
+console.log(`repo-map check ok (${fresh.split("\n").length} lines, graph project ${expected}, deterministic)`);
