@@ -1,5 +1,11 @@
 # 外部视频链接进 `blocks[]`：验收记录（#1035）
 
+> **⚠️ 本记录描述的是第一版契约，已于同日被 ADR-0120 反转。**
+> 现在外部视频地址直接写在 `media.url` 里，没有 `external_url` / `embed` 字段。
+> 反转的证据、判据与代价见
+> [2026-10-23-external-video-into-url.md](./2026-10-23-external-video-into-url.md)。
+> 本文**保持原文不改写**，作为第一版设计与其真机发现的历史。
+
 **范围**：`src/aiops_diagnostics/knowledge_retrieval.py`、`zh` 提示词、前端契约文档。
 **不涉及生产部署**（本片只改代码与契约；41 上线需另走 CD）。
 

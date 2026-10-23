@@ -765,6 +765,33 @@ def test_media_urls_are_absolute_when_a_public_base_is_configured(tmp_path: Path
     assert url.startswith("https://api.mall.qushiyun.com/v1/media/media_"), url
 
 
+def test_an_external_video_url_is_not_prefixed_with_the_public_base(tmp_path: Path) -> None:
+    """外部视频给的是绝对地址，不能再拼 base —— 否则拼出 `https://gatewayhttps://…`。
+
+    这种字符串对日志看起来很"完整"，在浏览器里却永远打不开（ADR-0120）。
+    Codex review 在 PR #1047 上指出的就是这个：`dify_records()` 原来无条件
+    `f"{prefix}{item.resource.url}"`。
+    """
+    client = _client(
+        tmp_path,
+        _Runtime(
+            signer=MediaResourceSigner("secret", ttl_seconds=600),
+            search=lambda _kbs, _q, _n: [
+                {
+                    **_chunk(),
+                    "doc_type_kwd": [],
+                    "content_with_weight": ("- YouTube 视频链接：https://www.youtube.com/shorts/Ld7_TVdVFpk"),
+                }
+            ],
+        ),
+        public_base_url="https://api.mall.qushiyun.com",
+    )
+
+    url = _post(client, _body()).json()["records"][0]["metadata"]["media"][0]["url"]
+
+    assert url == "https://www.youtube.com/shorts/Ld7_TVdVFpk", url
+
+
 # ---- 自动登记（#925）：建完库 Dify 立刻可选 ----------------------------------
 
 
