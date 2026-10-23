@@ -439,3 +439,78 @@ def test_the_first_allow_listed_link_wins_when_a_chunk_quotes_several() -> None:
 
     assert len(chunks[0].media) == 1
     assert chunks[0].media[0].resource.external_url == "https://www.youtube.com/watch?v=first"
+
+
+def test_a_channel_page_on_an_allow_listed_host_is_not_a_video() -> None:
+    """真机抓到的缺陷（2026-10-23，41）：频道主页被签成了 video 块。
+
+    同一个文档里既有 `watch?v=…`（一个视频）也有 `@trendpowercharge`（频道主页）。
+    后者签成 video 会让前端把一个播放器挂在一个**没有单个视频可播**的页面上，
+    用户看到的是一个坏掉的框 —— 而且看起来像我们的 bug。
+
+    判据：白名单是**host + path** 两级，不是只有 host。
+    """
+    chunks = _normalize(
+        [
+            {
+                "dataset_id": "kb-a",
+                "chunk_id": "chunk-ch",
+                "doc_id": "doc-ch",
+                "docnm_kwd": "video_modules.md",
+                "content": "- 官方频道主页 / 检索源：https://www.youtube.com/@trendpowercharge",
+            }
+        ],
+        _signer(),
+    )
+
+    assert chunks[0].media == (), "频道主页被当成了单个视频"
+
+
+def test_a_real_video_url_still_passes_the_path_rule() -> None:
+    """收紧 path 判据不能把真视频一起拒掉 —— 三种常见形态各验一次。"""
+    for url in (
+        "https://www.youtube.com/watch?v=6Ww7A5qZgaA",
+        "https://www.youtube.com/shorts/Ld7_TVdVFpk",
+        "https://youtu.be/1Lk9eNUuMIV",
+        "https://www.youtube.com/live/abc123",
+    ):
+        chunks = _normalize(
+            [
+                {
+                    "dataset_id": "kb-a",
+                    "chunk_id": "chunk-v",
+                    "doc_id": "doc-v",
+                    "docnm_kwd": "video_modules.md",
+                    "content": f"- YouTube 视频链接：{url}",
+                }
+            ],
+            _signer(),
+        )
+        assert chunks[0].media, f"{url} 应当被签发"
+        assert chunks[0].media[0].resource.external_url == url
+
+
+def test_a_channel_link_does_not_mask_a_real_video_later_in_the_chunk() -> None:
+    """频道链接在前、真视频在后时，要跳过频道那条继续找。
+
+    这条防的是"第一个白名单域链接就用"的写法：它会在这种 chunk 上签出频道页，
+    或者干脆什么也不签。
+    """
+    chunks = _normalize(
+        [
+            {
+                "dataset_id": "kb-a",
+                "chunk_id": "chunk-mix",
+                "doc_id": "doc-mix",
+                "docnm_kwd": "video_modules.md",
+                "content": (
+                    "- 官方频道主页：https://www.youtube.com/@trendpowercharge\n"
+                    "- 视频链接：https://www.youtube.com/watch?v=rH2fOOUpohM\n"
+                ),
+            }
+        ],
+        _signer(),
+    )
+
+    assert chunks[0].media, "后面的真视频被频道链接挡住了"
+    assert chunks[0].media[0].resource.external_url == "https://www.youtube.com/watch?v=rH2fOOUpohM"
