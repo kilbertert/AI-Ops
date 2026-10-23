@@ -7,7 +7,9 @@ PRD, pull that in too. Only work on the issue specified.
 
 # CONTEXT
 
-Read `.sandcastle/REPO-MAP.md` first (where things live), then `GLOSSARY.md` (domain language) and the relevant files under `docs/` and any ADRs under `docs/adr/` before
+Generate the repository map, then read it first (where things live):
+`node .sandcastle/repo-map.mjs && cat .sandcastle/REPO-MAP.md`. It is gitignored
+and produced on demand, so generate rather than assume. then `GLOSSARY.md` (domain language) and the relevant files under `docs/` and any ADRs under `docs/adr/` before
 starting. Apply the project's `.sandcastle/CODING_STANDARDS.md`. Explore the
 repo and fill your context window with the parts relevant to this issue —
 especially test files that touch the area you'll change.

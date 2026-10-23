@@ -2,7 +2,10 @@
 
 Implement exactly GitHub issue {{ISSUE_NUMBER}}: {{ISSUE_TITLE}}.
 
-Read `.sandcastle/REPO-MAP.md` first (where things live), then `GLOSSARY.md`, `AGENTS.md`, the issue, `docs/`, `.sandcastle/CODING_STANDARDS.md`, and the smallest set of relevant source
+Generate the repository map, then read it first (where things live):
+`node .sandcastle/repo-map.mjs && cat .sandcastle/REPO-MAP.md`. The file is
+not committed — it is a function of the tracked file set — so generating it is
+what makes it current. then `GLOSSARY.md`, `AGENTS.md`, the issue, `docs/`, `.sandcastle/CODING_STANDARDS.md`, and the smallest set of relevant source
 and tests before editing. Work on one issue only.
 Run the Economy ladder defined in the coding standards before choosing an
 implementation; stop at the first option that fully satisfies the issue.
