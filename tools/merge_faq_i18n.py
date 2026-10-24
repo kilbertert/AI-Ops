@@ -86,9 +86,16 @@ def _shared_strings(zf: zipfile.ZipFile) -> list[str]:
     return strings
 
 
-def _first_sheet_path(zf: zipfile.ZipFile) -> str:
+def _first_sheet_path(zf: zipfile.ZipFile, sheet_name: str | None = None) -> str:
     workbook = ET.fromstring(zf.read("xl/workbook.xml"))
-    sheet = workbook.find(f"{{{_NS_MAIN}}}sheets/{{{_NS_MAIN}}}sheet")
+    sheet = next(
+        (
+            s
+            for s in workbook.findall(f"{{{_NS_MAIN}}}sheets/{{{_NS_MAIN}}}sheet")
+            if sheet_name is None or s.attrib.get("name") == sheet_name
+        ),
+        None,
+    )
     if sheet is None:
         raise ValueError("xlsx workbook has no sheets")
     rid = sheet.attrib[f"{{{_NS_REL_DOC}}}id"]
@@ -98,6 +105,21 @@ def _first_sheet_path(zf: zipfile.ZipFile) -> str:
             target = rel.attrib["Target"].lstrip("/")
             return target if target.startswith("xl/") else f"xl/{target}"
     raise ValueError("xlsx workbook rels are invalid")
+
+
+def read_sheet_table(path: Path, sheet_name: str) -> list[dict[str, str]]:
+    """读取具名工作表，以标题列对齐，复用既有 OOXML 字符串解析。"""
+    with zipfile.ZipFile(path) as zf:
+        shared = _shared_strings(zf)
+        sheet = ET.fromstring(zf.read(_first_sheet_path(zf, sheet_name)))
+    rows = [
+        {_column_index(c.attrib["r"]): _cell_text(c, shared) for c in row.findall(f"{{{_NS_MAIN}}}c")}
+        for row in sheet.iter(f"{{{_NS_MAIN}}}row")
+    ]
+    if not rows or len(set(rows[0].values())) != len(rows[0]) or not all(rows[0].values()):
+        raise ValueError("xlsx table headers must be unique and nonempty")
+    header = rows[0]
+    return [{name: row.get(col, "") for col, name in header.items()} for row in rows[1:] if any(row.values())]
 
 
 def _cell_text(cell: ET.Element, shared: list[str]) -> str:
