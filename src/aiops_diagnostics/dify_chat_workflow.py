@@ -14,10 +14,10 @@ ADR-0079 的判据是**一次请求只有一个模型循环、无故障自动跨
 console 的预览接口认的是**编辑者会话**，跑的是**草稿**。用它意味着"用户看到的那次回答
 来自一份还没发布的图"，而发布与撤回不可核对。这里固定：
 
-* 服务 API（`/v1/workflows/run` + `/v1/workflows/tasks/{task_id}/stop`），凭据是**该 app** 的
+* 服务 API（`/v1/workflows/{workflow_id}/run` + `/v1/workflows/tasks/{task_id}/stop`），凭据是**该 app** 的
   service key，从 0600 文件读取，不进日志、不进 prompt、不进 App 响应；
 * **已发布的 workflow id**，钉在绑定里；执行记录在调用前后各核对一次实际运行身份；
-* 取消按 `task_id` 走 `/v1/workflows/tasks/{task_id}/stop`；blocking 模式下 `task_id` 由外层给出。
+* 取消按 `task_id` 走 `/v1/workflows/tasks/{task_id}/stop`；开始事件到达即持久化 `task_id`，不等最终结果。
 
 ## 凭据（取数授权）的边界
 
@@ -38,14 +38,19 @@ from __future__ import annotations
 
 import json
 import re
+import time
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from aiops_diagnostics.bounded_http import (
+    TRANSPORT_FAILURES,
     ErrorMapping,
     HttpFailure,
     RequestSpec,
+    open_response,
+    quote_segment,
     request_json,
 )
 from aiops_diagnostics.gateway_config import canonical_gateway_url
@@ -134,64 +139,71 @@ class DifyWorkflowClient:
         workflow_id: str,
         inputs: dict[str, Any],
         user: str,
+        on_started: Callable[[str, str], None],
     ) -> WorkflowRun:
-        """跑一次已发布的 workflow，返回它的执行身份。
-
-        `user` 是 Dify 自己的调用者标识（我们用它承载"这一次请求"，**不是**个人授权）：
-        个人授权在数据集那一侧由一次性凭据表达，模型与 Dify 用户字段都不参与授权。
-        """
+        """执行指定发布版；收到开始事件即交出真实身份，最终事件才交出答案。"""
         if WORKFLOW_ID_PATTERN.fullmatch(workflow_id) is None:
-            raise DifyWorkflowError("DIFY_WORKFLOW_INVALID", "dify workflow unavailable")
-        payload = request_json(
-            RequestSpec(
-                url=f"{self.base_url}{WORKFLOWS_PATH}/run",
-                method="POST",
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {workflow_key}",
-                },
-                body=json.dumps(
-                    {
-                        "workflow_id": workflow_id,
-                        "inputs": inputs,
-                        "response_mode": "blocking",
-                        "user": user,
-                    }
-                ).encode("utf-8"),
-                timeout=self.timeout_seconds,
-                max_read_bytes=1048576,
-                follow_redirects=False,
-            ),
-            mapping=_mapping(),
-            envelope=_parse_workflow_envelope,
+            raise _invalid()
+        spec = RequestSpec(
+            url=f"{self.base_url}{WORKFLOWS_PATH}/{workflow_id}/run",
+            method="POST",
+            headers={"Content-Type": "application/json", "Authorization": f"Bearer {workflow_key}"},
+            body=json.dumps({"inputs": inputs, "response_mode": "streaming", "user": user}).encode(),
+            timeout=self.timeout_seconds,
+            follow_redirects=False,
         )
-        if not isinstance(payload, dict):
-            raise DifyWorkflowError("DIFY_WORKFLOW_INVALID", "dify workflow produced no result")
-        # 真 Dify 1.17.1 的 blocking 形状是**两层**：
-        #   {"task_id": ..., "workflow_run_id": ..., "data": {"id":..., "status":..., "outputs":...}}
-        # 运行身份在外层，运行结果在内层。两层的键不通用，必须分开取。
-        data = payload.get("data")
-        if not isinstance(data, dict):
-            raise DifyWorkflowError("DIFY_WORKFLOW_INVALID", "dify workflow produced no result")
-        # 只有真的跑完了才算跑完：`status` 必须是 succeeded，且必须是**这一次**的 id。
-        if data.get("status") != "succeeded":
-            raise DifyWorkflowError("DIFY_WORKFLOW_FAILED", "dify workflow did not succeed")
-        run_id = payload.get("workflow_run_id") or data.get("id")
-        task_id = payload.get("task_id")
-        if not isinstance(run_id, str) or not run_id or not isinstance(task_id, str) or not task_id:
-            raise DifyWorkflowError("DIFY_WORKFLOW_INVALID", "dify workflow produced no run identity")
-        outputs = data.get("outputs")
-        if not isinstance(outputs, dict):
-            raise DifyWorkflowError("DIFY_WORKFLOW_INVALID", "dify workflow produced no outputs")
-        created_at = data.get("created_at")
-        return WorkflowRun(
-            workflow_run_id=run_id,
-            task_id=task_id,
-            workflow_id=str(data.get("workflow_id") or workflow_id),
-            outputs=outputs,
-            status=str(data["status"]),
-            created_at=created_at if isinstance(created_at, int) else None,
-        )
+        identity: tuple[str, str] | None = None
+        deadline = time.monotonic() + self.timeout_seconds
+        try:
+            with open_response(spec) as response:
+                if response.headers.get_content_type() != "text/event-stream":
+                    raise _invalid()
+                for event in _events(response, deadline):
+                    kind = event.get("event")
+                    if kind == "error":
+                        raise DifyWorkflowError("DIFY_WORKFLOW_FAILED", "dify workflow did not succeed")
+                    if kind not in {"workflow_started", "workflow_finished"}:
+                        if identity is not None:
+                            for key, expected in zip(("workflow_run_id", "task_id"), identity, strict=True):
+                                if key in event and event[key] != expected:
+                                    raise _invalid()
+                        continue
+                    data = event.get("data")
+                    if not isinstance(data, dict):
+                        raise _invalid()
+                    actual = (event.get("workflow_run_id"), event.get("task_id"))
+                    if not all(isinstance(value, str) and value.strip() for value in actual):
+                        raise _invalid()
+                    if data.get("id") != actual[0] or not isinstance(data.get("workflow_id"), str):
+                        raise _invalid()
+                    if data["workflow_id"] != workflow_id:
+                        raise DifyWorkflowError("DIFY_WORKFLOW_MISMATCH", "dify ran a different workflow")
+                    if kind == "workflow_started":
+                        if identity is not None:
+                            raise _invalid()
+                        identity = actual
+                        on_started(*identity)
+                        continue
+                    if identity is None or actual != identity:
+                        raise _invalid()
+                    if data.get("status") != "succeeded":
+                        raise DifyWorkflowError("DIFY_WORKFLOW_FAILED", "dify workflow did not succeed")
+                    outputs = data.get("outputs")
+                    if not isinstance(outputs, dict):
+                        raise _invalid()
+                    created_at = data.get("created_at")
+                    return WorkflowRun(
+                        workflow_run_id=identity[0],
+                        task_id=identity[1],
+                        workflow_id=data["workflow_id"],
+                        outputs=outputs,
+                        status="succeeded",
+                        created_at=created_at if isinstance(created_at, int) else None,
+                    )
+        except TRANSPORT_FAILURES as exc:
+            raise _failure(HttpFailure("unavailable")) from exc
+        # EOF、断流或只有开始事件，都不能冒充完成。
+        raise _invalid()
 
     def stop(self, *, workflow_key: str, task_id: str, user: str) -> bool:
         """按 task id 请 Dify 停止。失败**不**影响本地已落的取消终态。"""
@@ -199,7 +211,7 @@ class DifyWorkflowClient:
             request_json(
                 RequestSpec(
                     # 真路由是 `/workflows/tasks/<task_id>/stop`，不是 `/workflows/run/<id>/stop`。
-                    url=f"{self.base_url}{WORKFLOWS_PATH}/tasks/{task_id}/stop",
+                    url=f"{self.base_url}{WORKFLOWS_PATH}/tasks/{quote_segment(task_id)}/stop",
                     method="POST",
                     headers={
                         "Content-Type": "application/json",
@@ -219,13 +231,40 @@ class DifyWorkflowClient:
         return True
 
 
-def _parse_workflow_envelope(payload: Any, mapping: ErrorMapping) -> Any:
-    """Dify Service API 的信封原样返回。
+def _invalid() -> DifyWorkflowError:
+    return DifyWorkflowError("DIFY_WORKFLOW_INVALID", "dify workflow produced invalid execution evidence")
 
-    **不解包 `data`**：真 1.17.1 里运行身份（`task_id` / `workflow_run_id`）在外层，
-    运行结果（`status` / `outputs` / `id`）在内层 `data`。解包一次就把 `task_id` 弄丢了。
-    形状判定放在 `run()` 里做，那里两层的含义都清楚。
-    """
-    if isinstance(payload, dict):
-        return payload
-    raise mapping.invalid_envelope(HttpFailure("invalid_envelope", detail="dify rejected"))
+
+def _events(response: Any, deadline: float) -> Iterator[dict[str, Any]]:
+    """读取 Dify 的 SSE data 帧；累计字节和整个调用时间都有上限，不重连。"""
+    pending = b""
+    data: list[bytes] = []
+    total = 0
+    transport = response.fp.raw._sock
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError
+        # urllib 的 HTTPResponse 保留同一 socket；每次 recv 用剩余预算，防止慢流无限续时。
+        if response.isclosed():
+            return
+        transport.settimeout(remaining)
+        chunk = response.read1(8192)
+        if not chunk:
+            return
+        total += len(chunk)
+        if total > 1048576:
+            raise _invalid()
+        pending += chunk
+        while b"\n" in pending:
+            line, pending = pending.split(b"\n", 1)
+            line = line.removesuffix(b"\r")
+            if not line:
+                if data:
+                    payload = json.loads(b"\n".join(data).decode("utf-8"))
+                    data = []
+                    if not isinstance(payload, dict):
+                        raise _invalid()
+                    yield payload
+            elif line.startswith(b"data:"):
+                data.append(line[5:].removeprefix(b" "))

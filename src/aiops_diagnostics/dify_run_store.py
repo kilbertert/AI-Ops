@@ -207,8 +207,9 @@ class DifyRunStore:
                 """
                 UPDATE chat_dify_runs SET workflow_run_id = ?, task_id = ?
                  WHERE run_id = ? AND (workflow_run_id IS NULL OR workflow_run_id = ?)
+                   AND (task_id IS NULL OR task_id = ?)
                 """,
-                (workflow_run_id, task_id, run_id, workflow_run_id),
+                (workflow_run_id, task_id, run_id, workflow_run_id, task_id),
             )
             return cursor.rowcount == 1
 

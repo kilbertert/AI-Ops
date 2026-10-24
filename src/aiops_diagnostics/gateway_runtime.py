@@ -1638,6 +1638,27 @@ class GatewayRuntime:
                 # 有效期判据挡住，那是一个必然发生的假失败。
                 timeout_seconds=chat_data_grant.GRANT_TTL_SECONDS - 30,
             )
+            stop_lock = threading.Lock()
+            stop_sent = False
+
+            def started(workflow_run_id: str, task_id: str) -> None:
+                if not dify_store.bind_workflow(run_id, workflow_run_id=workflow_run_id, task_id=task_id):
+                    raise chat_execution.ChatRunUnavailable("DIFY_WORKFLOW_INVALID", "dify identity changed")
+
+                def stop() -> None:
+                    nonlocal stop_sent
+                    with stop_lock:
+                        if stop_sent:
+                            return
+                        stop_sent = True
+                    client.stop(workflow_key=workflow_key, task_id=task_id, user=f"aiops:{grant.grant_id}")
+
+                # 先安装再复查，覆盖取消发生在开始事件之前或安装钩子期间的交错。
+                registration.interrupt = stop
+                current = dify_store.get(run_id)
+                if registration.cancelled or current is None or current.state != "running":
+                    stop()
+
             result = client.run(
                 workflow_key=workflow_key,
                 workflow_id=binding.workflow_id,
@@ -1649,17 +1670,13 @@ class GatewayRuntime:
                     "language": language,
                 },
                 user=f"aiops:{grant.grant_id}",
+                on_started=started,
             )
             if result.workflow_id != binding.workflow_id:
                 raise chat_execution.ChatRunUnavailable(
                     "DIFY_WORKFLOW_MISMATCH", "dify ran a different workflow"
                 )
-            dify_store.bind_workflow(run_id, workflow_run_id=result.workflow_run_id, task_id=result.task_id)
             if registration.cancelled:
-                with contextlib.suppress(Exception):
-                    client.stop(
-                        workflow_key=workflow_key, task_id=result.task_id, user=f"aiops:{grant.grant_id}"
-                    )
                 self._settle_dify_cancelled(dify_store, grant_store, run_id, qa_id)
                 return
             # 先做可能阻塞的外部授权，再做本地判定 —— 与节点 worker 同一条顺序。

@@ -1,3 +1,6 @@
+> **2026-10-24 续办**：固定发布版本与运行中 stop 扩展验收 **32/32 PASS**。
+> 见[本轮记录](../../validation/2026-10-24-dify-version-cancel.md)。以下 27 项是此前那轮结果。
+
 # 真实 Dify 整链证据 · APP-RUNTIME-02
 
 **结果：27/27 PASS**（`status: PASS`，`failures: 0`）
@@ -40,6 +43,5 @@ Dify 的结果。凭据由 workflow 输入直接绑在 `Authorization` 头上。
 
 - Docker 可用（拉 `langgenius/dify-api:1.17.1`、postgres、redis、weaviate、
   `dify-plugin-daemon:0.6.10-local`），首次要装一次模型 provider 插件（约 4 分钟等待）。
-- 宿主若对 INPUT 做了默认丢弃（本机 ufw 只放行 22/80/443），脚本会**按端口**临时放行
-  docker 网桥入向，结束时逐条删除；不需要改默认策略，也不留持久规则。
-- 不需要生产库、生产凭据或付费模型；不碰 41 或 36。
+- 验收 driver、Dify、Gateway 与合成上游共用一次性容器网络命名空间，宿主不发布端口、
+  不改防火墙。脚本使用本次私有目录；`--keep` 保留证据和卷，不操作现役实例。
