@@ -1,0 +1,230 @@
+app:
+  description: 'App 聊天的本人订单状态查询（APP-RUNTIME-02）。取数走一次性凭据，模型只看到裁剪后的状态事实。'
+  icon: 💬
+  icon_background: '#E0F2FE'
+  mode: workflow
+  name: consumer-order-status-chat
+  use_icon_as_answer_icon: false
+dependencies: []
+kind: app
+version: 0.3.0
+workflow:
+  conversation_variables: []
+  environment_variables: []
+  features:
+    file_upload:
+      allowed_file_extensions: []
+      allowed_file_types: []
+      allowed_file_upload_methods: []
+      enabled: false
+      number_limits: 3
+    retriever_resource:
+      enabled: false
+    sensitive_word_avoidance:
+      enabled: false
+    speech_to_text:
+      enabled: false
+    text_to_speech:
+      enabled: false
+      language: ''
+      voice: ''
+  graph:
+    edges:
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: start
+        targetType: http-request
+      id: start-to-read
+      source: 'start'
+      sourceHandle: source
+      target: read_status
+      targetHandle: target
+      type: custom
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: http-request
+        targetType: llm
+      id: read-to-answer
+      source: read_status
+      sourceHandle: source
+      target: answer
+      targetHandle: target
+      type: custom
+    - data:
+        isInIteration: false
+        isInLoop: false
+        sourceType: llm
+        targetType: end
+      id: answer-to-end
+      source: answer
+      sourceHandle: source
+      target: 'end'
+      targetHandle: target
+      type: custom
+    nodes:
+    - data:
+        desc: 本次请求的输入。data_grant 是**一次性取数凭据**，只用于下面那一个 HTTP 步骤的 Authorization 头。
+        selected: false
+        title: 开始
+        type: start
+        variables:
+        - label: 取数凭据
+          max_length: 128
+          options: []
+          required: true
+          type: text-input
+          variable: data_grant
+        - label: 订单号
+          max_length: 64
+          options: []
+          required: true
+          type: text-input
+          variable: order_no
+        - label: 问题
+          max_length: 2000
+          options: []
+          required: true
+          type: text-input
+          variable: question
+        - label: 语言
+          max_length: 16
+          options:
+          - zh
+          - zh-Hant
+          - en
+          required: true
+          type: select
+          variable: language
+      height: 160
+      id: 'start'
+      position:
+        x: 80
+        y: 282
+      positionAbsolute:
+        x: 80
+        y: 282
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        authorization:
+          config: null
+          type: no-auth
+        body:
+          data: []
+          type: none
+        desc: '**固定的网关地址、固定的方法、固定的凭据来源**。URL 与 Authorization 都不由模型生成或选择：
+          凭据用 {{#start.data_grant#}} 直接绑定，模型拿不到它。'
+        headers: 'Authorization: Bearer {{#start.data_grant#}}'
+        method: post
+        params: ''
+        # 必须是**对象**，不能是 null：`graphon` 的 `NodeConfigDict` 对 `retry_config`
+        # 要求 `RetryConfig` 实例，null 会让整轮在 `Graph.init` 就 400
+        # （`Input should be a valid dictionary or instance of RetryConfig`）。
+        # 关闭重试是刻意的：一次取数就是一次，靠重试"再取一次"会破坏单次读取的语义。
+        retry_config:
+          retry_enabled: false
+          max_retries: 0
+          retry_interval: 0
+        selected: false
+        ssl_verify: null
+        timeout:
+          connect: 10
+          max_connect_timeout: 0
+          max_read_timeout: 0
+          max_write_timeout: 0
+          read: 60
+          write: 0
+        title: 读取本人订单状态
+        type: http-request
+        url: http://gateway.invalid/v1/internal/charging-status/dify-read
+        variables: []
+      height: 132
+      id: read_status
+      position:
+        x: 400
+        y: 282
+      positionAbsolute:
+        x: 400
+        y: 282
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        context:
+          enabled: false
+          variable_selector: []
+        desc: 模型只看到**裁剪后的状态事实**。它不生成、不改写 URL / 订单 / 主体 / 凭据。
+        model:
+          completion_params:
+            temperature: 0
+          mode: chat
+          name: __MODEL__
+          # 三段式 provider 标识（org/plugin/provider）。导入后被安装脚本按实际安装的
+          # 插件覆盖；占位值取真实形状，避免"看起来像短名"的模板把人带偏。
+          provider: langgenius/openai_api_compatible/openai_api_compatible
+        prompt_template:
+        - role: system
+          text: '你是充电订单状态播报器。你**只会**收到一条已经由后端读取好的订单状态事实。你的任务只有一件：用用户的语言把这条事实复述成一句话。不要推测原因，不要诊断故障，不要补充任何没给出的信息，不要提到凭据、接口或内部字段。'
+        - role: user
+          text: '本轮的订单状态事实（JSON，已由后端裁剪成五个字段）：
+{{#read_status.body#}}
+
+请用一句话播报这个状态。'
+        selected: false
+        title: 播报状态
+        type: llm
+        variables: []
+        vision:
+          enabled: false
+      height: 132
+      id: answer
+      position:
+        x: 720
+        y: 282
+      positionAbsolute:
+        x: 720
+        y: 282
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        desc: 输出只有一段文本与**本轮状态事实**。网关只用后者做放行，前者是给人看的。
+        outputs:
+        - value_selector:
+          - answer
+          - text
+          variable: answer
+        - value_selector:
+          - read_status
+          - body
+          variable: snapshot
+        selected: false
+        title: 结束
+        type: end
+      height: 132
+      id: 'end'
+      position:
+        x: 1040
+        y: 282
+      positionAbsolute:
+        x: 1040
+        y: 282
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    viewport:
+      x: 0
+      y: 0
+      zoom: 0.7
+  rag_pipeline_variables: []
