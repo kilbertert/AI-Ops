@@ -1902,6 +1902,13 @@ class GatewayRuntime:
             current is None
             or current.engine != chat_execution.ENGINE_DIFY
             or current.workflow_id != getattr(binding, "workflow_id", None)
+            # 版本也要对上：导出的图变了但 workflow 身份没变时（Dify 的保存不换
+            # workflow id），光比身份会让旧 worker 把上一版的结果写成成功。
+            or (
+                int(getattr(binding, "agent_version_no", 0) or 0)
+                and int(getattr(binding, "agent_version_no", 0) or 0)
+                != int(getattr(current, "agent_version_no", 0) or 0)
+            )
         ):
             raise chat_execution.ChatRunUnavailable(
                 "CHARGING_STATUS_DISABLED", "dify binding is no longer active"

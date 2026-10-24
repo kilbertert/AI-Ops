@@ -492,3 +492,52 @@ def test_the_retired_row_still_carries_the_credential_reference(tmp_path):
     after = store.get(ENVIRONMENT, TENANT, ENTRY, SCENARIO)
     assert after.state == "retracted"
     assert after.workflow_key_ref == before and after.workflow_key_ref
+
+
+def test_a_version_move_invalidates_the_frozen_run(tmp_path):
+    """绑定换到**另一版**但 workflow 身份没变 ⇒ 旧 run 的结果不再算数。
+
+    Dify 的保存不换 workflow id，所以"导出的图变了、身份没变"是真实存在的组合；
+    只比 workflow_id 会让旧版本的缓存正文继续被交付。
+    """
+    from aiops_diagnostics.gateway_api import _version_moved
+
+    class _Run:
+        agent_version_no = 1
+
+    class _Binding:
+        agent_version_no = 2
+
+    assert _version_moved(_Binding(), _Run()) is True
+    _Binding.agent_version_no = 1
+    assert _version_moved(_Binding(), _Run()) is False
+    # 文件登记没有版本概念（两边都是 0）：不受这条约束。
+    _Run.agent_version_no = 0
+    assert _version_moved(_Binding(), _Run()) is False
+
+
+def test_a_workflow_snapshot_keeps_the_existing_agent_config(tmp_path):
+    """workflow 快照必须**叠加**在既有已发布内容上，不能替换。
+
+    这个 agent 可能同时在给客服问答或运营诊断供配置，它们从已发布快照里读
+    `agent_type` / `prompt` 并先按类型筛选。用只含 workflow 的快照覆盖，
+    那些入口会当场选不到这个 agent。
+    """
+    from aiops_diagnostics.dify_dsl_pull import _merge_workflow_snapshot
+
+    previous = {
+        "name": "小趋-客服",
+        "agent_type": "customer",
+        "prompt": "ACCEPTANCE_VERSION_ONE",
+        "knowledge_base_ids": [],
+        "model": "aiops-api",
+        "output_contract": "blocks-v1",
+    }
+    merged = _merge_workflow_snapshot(
+        previous,
+        {"kind": "dify-workflow", "app_id": APP, "workflow_id": WORKFLOW_V1, "workflow": {}},
+        name="小趋-客服",
+    )
+    assert merged["agent_type"] == "customer"
+    assert merged["prompt"] == "ACCEPTANCE_VERSION_ONE"
+    assert merged["kind"] == "dify-workflow"

@@ -997,6 +997,19 @@ def _dsl_kind(dsl_text: str) -> str:
     return "workflow" if isinstance(document.get("workflow"), dict) else "chat"
 
 
+def _merge_workflow_snapshot(previous: dict, workflow_body: dict, *, name: str) -> dict:
+    """把 workflow 内容**叠加**到既有已发布快照上，而不是用它替换。
+
+    这个 agent 可能同时在给客服问答（`qa_rag.select_customer_agent`）或运营诊断
+    （`ops_agents`）供配置，它们从**已发布快照**里读 `agent_type` / `prompt` /
+    `knowledge_base_ids`，并先按 `agent_type` 筛选。用一份只含 workflow 的快照覆盖，
+    那些入口会当场选不到这个 agent —— 发布一条订单状态路由，顺手停掉了同一个绑定上
+    的其他业务入口。
+    """
+    base = dict(previous) if isinstance(previous, dict) else {}
+    return {**base, **workflow_body, "name": name}
+
+
 def sync_workflow_from_dify(
     manager: AgentManager,
     context: Any,
@@ -1090,6 +1103,12 @@ def sync_workflow_from_dify(
             workflow_id=workflow_id,
         )
     # workflow 应用的内容不落 AgentConfig；用快照直接发布（与 chat 路线同一条发布门）。
+    #
+    # **必须叠加在既有已发布快照之上，不能替换。** 这个 agent 可能同时在给客服问答
+    # （`qa_rag.select_customer_agent`）或运营诊断（`ops_agents`）供配置，它们从
+    # **已发布快照**里读 `agent_type` / `prompt` / `knowledge_base_ids` 并先按
+    # `agent_type` 筛选。用一份只含 workflow 的快照覆盖，那些入口会当场选不到这个
+    # agent —— 发布一条订单状态路由，顺手停掉了同一个绑定上的其他业务入口。
     agent = existing
     if agent.status != "draft":
         agent = manager.fork_draft(context, agent.agent_id, expected_revision=agent.revision)
@@ -1097,7 +1116,7 @@ def sync_workflow_from_dify(
         agent.agent_id,
         binding.tenant_id,
         agent.revision,
-        {**snapshot_body, "name": binding.agent_name},
+        _merge_workflow_snapshot(previous, snapshot_body, name=binding.agent_name),
         published_by="dify-console",
     )
     return SyncOutcome(

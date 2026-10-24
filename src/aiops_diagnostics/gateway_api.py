@@ -1014,6 +1014,15 @@ def _advance_route_binding(
             "DIFY_KEY_DIR_UNSET",
             "the app service key directory is not configured on this server",
         )
+    # 执行地址同理：控制台拉取用的是 `dify_console_base_url`，所以**发布能成功**，
+    # 而之后每个聊天任务都会在空地址上失败；重启还会被"已有活动 Dify 行"的启动校验
+    # 拒掉 —— 等于把自己锁在门外。写第一条活动指针之前就要拒绝。
+    if not str(getattr(context.settings, "dify_chat_base_url", "") or ""):
+        raise StandardAPIError(
+            status.HTTP_409_CONFLICT,
+            "DIFY_CHAT_BASE_URL_UNSET",
+            "the dify chat base url is not configured on this server",
+        )
     if _declared_in_file(context.settings, environment, binding.tenant_id, entry, scenario):
         raise StandardAPIError(
             status.HTTP_409_CONFLICT,
@@ -6289,6 +6298,20 @@ def _require_current_chat_node_order(context, caller, qa, request):
         raise StandardAPIError(503, "CHARGING_STATUS_EVIDENCE_UNAVAILABLE", "evidence differs")
 
 
+def _version_moved(binding: Any, run: Any) -> bool:
+    """这条绑定是不是已经指向**另一版**了。
+
+    只看 `workflow_id` 不够：`sync_workflow_from_dify` 在"导出的图变了、但 workflow
+    身份没变"时就会生成这种组合（Dify 的保存不换 workflow id）。那时旧版本的缓存正文
+    仍然会对得上 workflow，于是被放出去 —— 而它代表的是上一版的内容。
+
+    文件登记没有版本概念（两边都是 0），不受这条约束。
+    """
+    frozen = int(getattr(run, "agent_version_no", 0) or 0)
+    current = int(getattr(binding, "agent_version_no", 0) or 0)
+    return bool(frozen) and frozen != current
+
+
 def _route_binding_state(context: Any, key: str | None) -> str:
     """这条 key 在管理表里的状态（`active` / `retracted`），没有管理行时返回空串。
 
@@ -6423,7 +6446,7 @@ def _require_current_chat_dify_order(context, caller, qa, request):
         binding = chat_execution.binding_for_key(context.settings, located.binding_key)
     except chat_execution.ChatRunUnavailable as exc:
         raise StandardAPIError(exc.http_status, exc.code, str(exc), retryable=exc.retryable) from exc
-    if binding is None or binding.workflow_id != located.workflow_id:
+    if binding is None or binding.workflow_id != located.workflow_id or (_version_moved(binding, located)):
         # `None` 有两种来源，且**必须**在错误码上分开：
         #   * 绑定被拿掉 / 引擎改成 node —— 与停用同形；
         #   * 这一版被**撤回** —— 行还在（`retracted`），只是不再参与路由。
@@ -6443,6 +6466,7 @@ def _require_current_chat_dify_order(context, caller, qa, request):
         binding_after is None
         or binding_after.engine != chat_execution.ENGINE_DIFY
         or binding_after.workflow_id != located.workflow_id
+        or _version_moved(binding_after, located)
     ):
         raise StandardAPIError(404, "CHARGING_STATUS_DISABLED", "charging status disabled")
     latest = runs.get(located.run_id)
