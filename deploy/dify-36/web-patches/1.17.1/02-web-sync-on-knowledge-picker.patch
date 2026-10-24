@@ -77,18 +77,22 @@ index 1e9b0037..777bd53d 100644
      return pages.flatMap((page) =>
 diff --git a/web/service/knowledge-sync.ts b/web/service/knowledge-sync.ts
 new file mode 100644
-index 00000000..9f02b422
+index 00000000..d64ba19b
 --- /dev/null
 +++ b/web/service/knowledge-sync.ts
-@@ -0,0 +1,32 @@
+@@ -0,0 +1,38 @@
 +/* AI-Ops 知识库同步（ADR-0122）。
 + *
 + * 运营在 RAGFlow 建了一个库，它必须**自动**出现在 Dify 的「添加知识库」弹窗里，
 + * 不需要任何人跑命令。这个函数就是那一步：让网关把该租户的 RAGFlow 库收敛成
 + * external dataset。
 + *
-+ * **它返回"建了几条"**，不是布尔：调用方只在有变化时刷新列表，否则每次打开弹窗
-+ * 都多刷一次，列表会闪一下。
++ * **它返回"变了几处"**（`changed`），不是布尔，也不只是"建了几条"：调用方只在有
++ * 变化时刷新列表，否则每次打开弹窗都多刷一次，列表会闪一下。
++ *
++ * 为什么不是只回 `created`：运营**改名**已有的库、或在 RAGFlow **删掉**一个库时，
++ * `created` 都是 0 —— 列表于是不刷新，卡片留在原地，点进去 404（2026-10-24 review
++ * 指出）。网关把「建 + 改 + 退休」三类都算进 `changed`，这里原样透传。
 + *
 + * 端点走 `/__aiops/` 前缀 —— 与知识库入口卡片同一个桥、同一套浏览器身份。
 + *
@@ -111,5 +115,7 @@ index 00000000..9f02b422
 +  })
 +  if (!response.ok) throw new Error(`knowledge sync failed: ${response.status}`)
 +  const body = await response.json()
++  // 老网关只回 `created`；`??` 让页面在它上面仍能工作，而不是永远读到 0。
++  if (typeof body?.changed === 'number') return body.changed
 +  return typeof body?.created === 'number' ? body.created : 0
 +}

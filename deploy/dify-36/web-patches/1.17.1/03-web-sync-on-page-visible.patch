@@ -28,10 +28,10 @@ index 9e838753..75d44277 100644
      select: ({ knowledge_fs_enabled }) => knowledge_fs_enabled,
 diff --git a/web/hooks/use-knowledge-sync.ts b/web/hooks/use-knowledge-sync.ts
 new file mode 100644
-index 00000000..6e43c7ca
+index 00000000..8bbd7059
 --- /dev/null
 +++ b/web/hooks/use-knowledge-sync.ts
-@@ -0,0 +1,94 @@
+@@ -0,0 +1,111 @@
 +/* 让 Dify 的知识库列表与 RAGFlow 保持同步（ADR-0126）。
 + *
 + * ## 它解决的问题
@@ -79,6 +79,8 @@ index 00000000..6e43c7ca
 +  const invalidDatasetList = useInvalidDatasetList()
 +  // 一次只有一个在飞：`visibilitychange` 与定时器可能撞在同一秒。
 +  const inFlightRef = React.useRef(false)
++  // 在飞期间又有触发了 —— **不丢**，跑完再补一次（见 run 里的注释）。
++  const queuedRef = React.useRef(false)
 +
 +  React.useEffect(() => {
 +    if (!enabled || !currentWorkspaceId) return
@@ -86,7 +88,17 @@ index 00000000..6e43c7ca
 +    let cancelled = false
 +
 +    const run = () => {
-+      if (cancelled || inFlightRef.current) return
++      if (cancelled) return
++      if (inFlightRef.current) {
++        // **排队，不丢。** 在飞的那一次可能在运营切走之前就已经读过了 RAGFlow 的
++        // 列表 —— 他随后建的库不在里面。丢掉这次触发，就要等 60 秒轮询才看得到，
++        // 而"切回来"正是他唯一知道自己刚改过的时刻（2026-10-24 review 指出 P2）。
++        //
++        // 这与网关侧同一处修法（ADR-0125：闸排队而不是跳过）是同一个道理：
++        // 后台收敛的并发控制不能用「丢弃」。
++        queuedRef.current = true
++        return
++      }
 +      inFlightRef.current = true
 +      syncKnowledgeDatasets(currentWorkspaceId)
 +        .then((changed) => {
@@ -97,6 +109,10 @@ index 00000000..6e43c7ca
 +        })
 +        .finally(() => {
 +          inFlightRef.current = false
++          if (queuedRef.current && !cancelled) {
++            queuedRef.current = false
++            run()
++          }
 +        })
 +    }
 +
@@ -120,6 +136,7 @@ index 00000000..6e43c7ca
 +
 +    return () => {
 +      cancelled = true
++      queuedRef.current = false
 +      document.removeEventListener('visibilitychange', onVisible)
 +      window.removeEventListener('focus', onVisible)
 +      window.clearInterval(timer)

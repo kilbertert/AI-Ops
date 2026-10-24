@@ -4213,15 +4213,24 @@ def create_gateway_app(
             return {"created": 0, "tenant_id": tenant_id, "skipped": True}
         applied = outcome[0]
         created = sum(1 for item in applied.get("applied") or [] if item.get("kind") == "create")
+        # **「有没有变化」不等于「建了几条」。** 调用方（Dify 页面）靠这个数决定要不要
+        # 失效列表缓存；只回 `created` 的话，运营改名/删库之后列表不会刷新 —— 卡片
+        # 还在，点进去 404。2026-10-24 review 指出（P2）。
+        #
+        # 三类都要算：建（applied 里的 create）、改（applied 里的非 create：改名、
+        # 重指 api id 等）、退休（orphans 里被删掉的 Dify dataset）。`applied` 只含
+        # 真正写下去的行，`skipped`/`ok` 的空跑不在此列。
+        changed = len(applied.get("applied") or []) + len(applied.get("retired") or [])
         _LOGGER.info(
-            "knowledge sync workspace=%s tenant=%s applied=%d created=%d orphans=%d",
+            "knowledge sync workspace=%s tenant=%s applied=%d created=%d orphans=%d changed=%d",
             workspace,
             tenant_id,
             len(applied.get("applied") or []),
             created,
             len(applied.get("orphans") or []),
+            changed,
         )
-        return {"created": created, "tenant_id": tenant_id, "outcome": applied}
+        return {"created": created, "changed": changed, "tenant_id": tenant_id, "outcome": applied}
 
     @app.get("/v1/internal/knowledge/open", include_in_schema=False)
     def knowledge_open_by_workspace(
