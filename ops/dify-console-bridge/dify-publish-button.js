@@ -249,11 +249,19 @@
     }
     btn.disabled = true;
     choose.then(function () {
-      return fetch('/__aiops/' + operation, {
+      // **每条 fetch 的目标都是字面量**，不拼路径、不传变量：
+      // 白名单判据（`test_it_speaks_only_to_our_own_routes`）逐字读 fetch 的第一个
+      // 实参。拼接或变量会让它看见碎片或看不见目标 —— 那样"新加一个外部目标"就
+      // 能悄悄滑过这条安全断言。多写一个分支，换判据仍然读得懂。
+      var options = {
         method: 'POST', credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': aiopsReadCsrfCookie() },
         body: JSON.stringify(body),
-      });
+      };
+      if (operation === 'retract') {
+        return fetch('/__aiops/retract', options);
+      }
+      return fetch('/__aiops/restore', options);
     }).then(function (r) { return r.json(); }).then(function (d) {
       aiopsToast(d.reason || '操作未完成', !!d.published);
     }).catch(function (e) { aiopsToast(e.message || '操作未完成', false); })

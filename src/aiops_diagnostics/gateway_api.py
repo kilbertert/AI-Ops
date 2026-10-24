@@ -1146,12 +1146,31 @@ def _managed_app_route(context: Any, app_id: str):
     return binding, row, workspace
 
 
+def _tenant_in_scope(record_tenant: object, allowed_tenant: object) -> bool:
+    """这一行的租户是否落在给定范围内 —— 用共享规则判，不就地写比较。"""
+    from aiops_diagnostics.order_visibility import (
+        TenantVisibility,
+        VisibilityProfile,
+        normalize_tenant,
+        visible_orders,
+    )
+
+    allowed = normalize_tenant(allowed_tenant)
+    if allowed is None:
+        return False
+    visibility = TenantVisibility(profile=VisibilityProfile.CALLER, allowed=frozenset({allowed}))
+    return bool(visible_orders([{"tenant_id": record_tenant}], visibility).rows)
+
+
 def _workflow_trial_draft(context: Any, app_id: str, run_context: ScopeContext):
     from aiops_diagnostics.dify_dsl_pull import DifyDslClient, DifyDslSource
     from aiops_diagnostics.dify_workflow_trial import WorkflowTrial
 
     binding, row, workspace = _managed_app_route(context, app_id)
-    if not row.active or binding.tenant_id != run_context.effective_tenant_id:
+    # 试用的范围必须落在**绑定所属租户**上。租户那一维走共享规则
+    # （`order_visibility.visible_orders`）："这一行属于哪个租户、在不在范围内"
+    # 在这个仓只有一处定义，不在这里手写比较。
+    if not row.active or not _tenant_in_scope(binding.tenant_id, run_context.effective_tenant_id):
         raise StandardAPIError(403, "TRIAL_SCOPE_MISMATCH", "trial scope does not match the bound app")
     source = DifyDslSource(
         context.settings.dify_console_base_url, app_id, context.settings.dify_console_api_key, workspace

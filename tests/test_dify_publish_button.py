@@ -27,7 +27,12 @@ def script() -> str:
 
 
 def test_it_speaks_only_to_our_own_routes(script: str) -> None:
-    """**不往任何第三方或 Dify 自己的 API 发请求**：只有三条同源路径。"""
+    """**不往任何第三方或 Dify 自己的 API 发请求**：只有这几条同源路径。
+
+    M3-01 加了三个运营动作（撤回 / 恢复历史版 / 版本列表），它们同样是**我们自己的**
+    `/__aiops/*` 路由 —— 白名单逐条列出，是为了让"新加一条外部目标"必须显式修改
+    这个断言，而不是悄悄滑过去。
+    """
     targets = set()
     marker = "fetch("
     index = 0
@@ -41,6 +46,9 @@ def test_it_speaks_only_to_our_own_routes(script: str) -> None:
         index = end
     assert targets == {
         "/__aiops/publish",
+        "/__aiops/retract",
+        "/__aiops/restore",
+        "/__aiops/versions",
         "/__aiops/trial",
         "/__aiops/trial/result",
     }, targets

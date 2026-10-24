@@ -1244,9 +1244,10 @@ class GatewayRuntime:
             return
         started_ms = time.monotonic()
         try:
-            from aiops_diagnostics.dify_workflow_trial import WorkflowTrial
-
-            if isinstance(draft, WorkflowTrial):
+            # **不 import `dify_workflow_trial`**：它会反过来 import 本模块（取
+            # `JobRegistration`），形成包内导入环 —— README 的分层图随之失效。
+            # 判据改成"这份草稿会不会自己执行"：只有真 Dify 试用有 `execute`。
+            if callable(getattr(draft, "execute", None)):
                 result = draft.execute(self, trial_id, run_context, order_no, language)
             else:
                 # 与诊断 worker 同一条规则：``Settings.from_config`` 在 try **里面**，
