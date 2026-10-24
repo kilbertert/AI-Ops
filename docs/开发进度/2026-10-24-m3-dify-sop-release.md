@@ -67,7 +67,7 @@
    其中两处同时暴露了**判据太松**：`bool(key)` 对 `"b"` 也为真；
    只看 `completed` 分不清"执行了"与"掉回直读"。
 
-## 真实整链结果（40/40 PASS）
+## 真实整链结果（43/43 PASS）
 
 `tools/m2_close/m3node/verify_dify_chat_entry.py`，2026-10-24：
 
@@ -81,7 +81,9 @@
 | 撤回后新请求 | **没有执行**（无 completed、无直读正文） |
 | 撤回后历史正文 | **410 `CHAT_ROUTE_RETRACTED`** |
 | retracted 行 | 仍在（不删行） |
-| 显式恢复 | 200，`completed` |
+| 版本列表 | 能看见 `[1, 2]` |
+| 显式恢复**历史 V1** | 实际执行的就是快照 V1 的 `workflow_id`，且 ≠ V2 |
+| 双环境交错 | 另一环境自始至终 `revision=1 / version=9 / active` |
 
 每条判据都额外要求"这一轮真的走了 Dify"（执行记录里有 `workflow_run_id`）——
 直读同样返回 completed，只看 completed 会让"掉回直读"与"确实执行了"无法区分。

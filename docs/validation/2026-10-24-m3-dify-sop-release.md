@@ -7,8 +7,8 @@
 
 | 文件 | 内容 | 结果 |
 |---|---|---|
-| `tests/test_chat_route_bindings.py`（新增，24 条） | 正式指针推进 / 撤回改状态不删行 / 撤回幂等 / 不自动恢复旧版 / 两租户两环境互不影响 / `revision` CAS 冲突 / 管理行与文件行冲突即启动失败 / 未知引擎拒绝 / 三组反向验证 / **撤回拒绝而不是回落直读** / **发布要求凭据文件已就位** | 24 passed |
-| `tests/test_dify_publish_api.py`（+6 条） | 撤回与发布同一道门 / 未配置 404 / 未绑定 404 / 跨 app 撤回 409 / 请求体不能选版本 | 33 passed |
+| `tests/test_chat_route_bindings.py`（新增，33 条） | 正式指针推进 / 撤回改状态不删行 / 撤回幂等 / 不自动恢复旧版 / 两租户两环境互不影响 / `revision` CAS 冲突 / 管理行与文件行冲突即启动失败 / 未知引擎拒绝 / 三组反向验证 / **撤回拒绝而不是回落直读** / **发布要求凭据文件已就位** | 33 passed |
+| `tests/test_dify_publish_api.py`（+12 条，共 29） | 撤回与发布同一道门 / 未配置 404 / 未绑定 404 / 跨 app 撤回 409 / 请求体不能选版本 / 延迟发布不覆盖撤回 / chat 应用不要求 workflow 指针 | 29 passed |
 
 **变异验证**（每条都确认删掉修复会转红、还原转绿）：
 
@@ -19,9 +19,12 @@
 | **撤回后回落直读** | `test_a_retracted_route_is_refused_instead_of_falling_back_to_direct_read` |
 | 回读 TTL、绑定当前性、同轮快照（APP-RUNTIME-02 遗留判据） | 各自对应用例 |
 
-全量：**3824 passed / 9 skipped**。
+| `tests/test_dify_console_publish.py`（+5 条） | 撤回/恢复/版本列表走桥：转发路径与请求体、网关未确认状态**不报成功**、恢复必须带选中版本号、请求体不能夹带租户 | 93 passed |
+| `tests/test_dify_workflow_trial.py`（新增，5 条） | 试用不动正式指针、不产生 `agent_versions`、有真实执行身份、临时应用成功与失败都删、路由变更即拒绝、失败也撤权 | 5 passed |
 
-## 二、真实环境验证（40/40 PASS）
+全量：**3846 passed / 9 skipped**。
+
+## 二、真实环境验证（43/43 PASS）
 
 `tools/m2_close/m3node/verify_dify_chat_entry.py` 扩展了运营闭环五步，从**运营能点到的
 HTTP 入口**驱动（`POST /v1/dify/publish` / `POST /v1/dify/retract`），不手改绑定文件：
