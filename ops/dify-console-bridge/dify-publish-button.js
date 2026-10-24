@@ -13,6 +13,8 @@
   var AIOPS_APP_RE = /^\/app\/([0-9a-fA-F-]{8,64})\//;
   var AIOPS_BTN_ID = 'aiops-publish-btn';
   var AIOPS_TRIAL_BTN_ID = 'aiops-trial-btn';
+  var AIOPS_RETRACT_BTN_ID = 'aiops-retract-btn';
+  var AIOPS_RESTORE_BTN_ID = 'aiops-restore-btn';
 
   function currentAppId() {
     var m = AIOPS_APP_RE.exec(location.pathname);
@@ -225,12 +227,46 @@
     return btn;
   }
 
+  function aiopsManage(btn, operation) {
+    var body = {};
+    var choose = Promise.resolve();
+    if (operation === 'retract') {
+      if (!window.confirm('撤回后将停止交付当前版本，是否继续？')) { return; }
+    }
+    if (operation === 'restore') {
+      choose = fetch('/__aiops/versions', {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': aiopsReadCsrfCookie() },
+        body: '{}',
+      }).then(function (r) { return r.json(); }).then(function (d) {
+        if (!d.published || !d.versions || !d.versions.length) { throw new Error('没有可恢复的版本'); }
+        var choices = d.versions.map(function (v) { return v.version_no; });
+        var selected = window.prompt('选择历史版本：' + choices.join('、'));
+        if (selected === null) { throw new Error('已取消'); }
+        body.version_no = Number(selected);
+        if (choices.indexOf(body.version_no) < 0) { throw new Error('请选择列表中的版本'); }
+      });
+    }
+    btn.disabled = true;
+    choose.then(function () {
+      return fetch('/__aiops/' + operation, {
+        method: 'POST', credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': aiopsReadCsrfCookie() },
+        body: JSON.stringify(body),
+      });
+    }).then(function (r) { return r.json(); }).then(function (d) {
+      aiopsToast(d.reason || '操作未完成', !!d.published);
+    }).catch(function (e) { aiopsToast(e.message || '操作未完成', false); })
+      .finally(function () { btn.disabled = false; });
+  }
+
   function aiopsMount() {
     if (!currentAppId()) { return; }          // 只在编排页
     // 两颗按钮各自去重：只查发布那颗会让试运行那颗在重试中被挂第二遍。
     if (
       document.getElementById(AIOPS_BTN_ID) &&
-      document.getElementById(AIOPS_TRIAL_BTN_ID)
+      document.getElementById(AIOPS_TRIAL_BTN_ID) &&
+      document.getElementById(AIOPS_RETRACT_BTN_ID) && document.getElementById(AIOPS_RESTORE_BTN_ID)
     ) {
       return;
     }
@@ -254,6 +290,13 @@
       trialBtn.addEventListener('click', function () { aiopsTrial(trialBtn); });
       anchor.parentNode.insertBefore(trialBtn, anchor);
     }
+    [['retract', AIOPS_RETRACT_BTN_ID, '撤回正式版本'], ['restore', AIOPS_RESTORE_BTN_ID, '恢复历史版本']]
+      .forEach(function (item) {
+        if (document.getElementById(item[1])) { return; }
+        var actionBtn = aiopsMakeButton(item[1], item[2], '#475467');
+        actionBtn.addEventListener('click', function () { aiopsManage(actionBtn, item[0]); });
+        anchor.parentNode.insertBefore(actionBtn, anchor);
+      });
     if (document.getElementById(AIOPS_BTN_ID)) { return; }
     var btn = aiopsMakeButton(AIOPS_BTN_ID, '发布到 AI-Ops', '#12805c');
     btn.addEventListener('click', function () { aiopsPublish(btn); });
@@ -270,7 +313,8 @@
     try { aiopsMount(); } catch (e) { /* 静默降级 */ }
     // 两颗都挂上才停；只看发布那颗会让试运行那颗在第一颗挂上后就再也不重试。
     var mounted =
-      document.getElementById(AIOPS_BTN_ID) && document.getElementById(AIOPS_TRIAL_BTN_ID);
+      document.getElementById(AIOPS_BTN_ID) && document.getElementById(AIOPS_TRIAL_BTN_ID) &&
+      document.getElementById(AIOPS_RETRACT_BTN_ID) && document.getElementById(AIOPS_RESTORE_BTN_ID);
     if (mounted || tries > 40) { clearInterval(timer); }
   }, 500);
 })();

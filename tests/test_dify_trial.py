@@ -627,7 +627,7 @@ def test_the_draft_reaches_the_same_run_entry_the_cli_uses(tmp_path: Path, monke
         import time as _time
 
         _time.sleep(0.05)
-    assert recorded, read.json()
+    assert recorded, read.json()["error_message"]
     call = recorded[0]
     assert call["methodology"] == "草稿方法论"
     assert tuple(call["allowed_tools"]) == ("order_snapshot", "redis_sync")
@@ -662,8 +662,7 @@ def _bound_runtime(app_id: str, tenant: str) -> _Runtime:
     runtime.dify_app_registry = _Bound()  # type: ignore[assignment]
 
     def trial_run_context() -> Any:
-        from aiops_diagnostics.query_scope import DataScope
-        from aiops_diagnostics.scope_context import ScopeContext, SubjectRecord
+        from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
 
         subject = SubjectRecord(b_user_id="aiops-admin", tenant_id=DEBUG_TENANT)
         return ScopeContext.build(

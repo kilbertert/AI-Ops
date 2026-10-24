@@ -1244,20 +1244,25 @@ class GatewayRuntime:
             return
         started_ms = time.monotonic()
         try:
-            # 与诊断 worker 同一条规则：``Settings.from_config`` 在 try **里面**，
-            # 因为它会因配置文件缺失/非法抛 ValueError，那是受支持的失败而不是不可能的事。
-            settings = Settings.from_config(self.gateway_settings.server_config_file)
-            settings.agent.run_root = self.diagnostic_settings.agent.run_root
-            from aiops_diagnostics.dify_trial import run_trial
+            from aiops_diagnostics.dify_workflow_trial import WorkflowTrial
 
-            result = run_trial(
-                settings,
-                scope_context=run_context,
-                order_no=order_no,
-                question="",
-                draft=draft,
-                language=language,
-            )
+            if isinstance(draft, WorkflowTrial):
+                result = draft.execute(self, trial_id, run_context, order_no, language)
+            else:
+                # 与诊断 worker 同一条规则：``Settings.from_config`` 在 try **里面**，
+                # 因为它会因配置文件缺失/非法抛 ValueError，那是受支持的失败而不是不可能的事。
+                settings = Settings.from_config(self.gateway_settings.server_config_file)
+                settings.agent.run_root = self.diagnostic_settings.agent.run_root
+                from aiops_diagnostics.dify_trial import run_trial
+
+                result = run_trial(
+                    settings,
+                    scope_context=run_context,
+                    order_no=order_no,
+                    question="",
+                    draft=draft,
+                    language=language,
+                )
         except Exception as exc:  # noqa: BLE001 - 逃出去就等于没有终态行
             self.store.update_standard_diagnosis(
                 trial_id,
@@ -1625,7 +1630,7 @@ class GatewayRuntime:
                 order_no=order_no,
                 environment=str(self.gateway_settings.execution_environment or ""),
                 tenant_id=context.effective_tenant_id,
-                app_id=binding.workflow_id,
+                app_id=getattr(binding, "app_id", ""),
                 workflow_id=binding.workflow_id,
                 grant_id=grant.grant_id,
                 # 冻结"签发时对外的那一版"：撤回或重新发布之后，回读靠它判断这条 run

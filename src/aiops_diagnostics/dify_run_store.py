@@ -71,6 +71,8 @@ class DifyRun:
     completed_at: datetime | None
     #: 签发时对外的那一版。0 = 来自文件登记（没有版本概念）。
     agent_version_no: int = 0
+    kind: str = "chat"
+    route_revision: int = 0
 
 
 def _now() -> datetime:
@@ -140,6 +142,12 @@ class DifyRunStore:
                 )
             # 签发时冻结**正式版本号**：撤回/重新发布之后，回读靠它判断"这条 run 跑的那一版
             # 还是不是现在对外的那一版"。默认 0 = 文件登记（没有版本概念），不受影响。
+            for column, declaration in (
+                ("kind", "TEXT NOT NULL DEFAULT 'chat'"),
+                ("route_revision", "INTEGER NOT NULL DEFAULT 0"),
+            ):
+                if column not in existing:
+                    connection.execute(f"ALTER TABLE chat_dify_runs ADD COLUMN {column} {declaration}")
             if "agent_version_no" not in existing:
                 connection.execute(
                     "ALTER TABLE chat_dify_runs ADD COLUMN agent_version_no INTEGER NOT NULL DEFAULT 0"
@@ -178,6 +186,8 @@ class DifyRunStore:
         workflow_id: str,
         grant_id: str,
         agent_version_no: int = 0,
+        kind: str = "chat",
+        route_revision: int = 0,
     ) -> DifyRun:
         now = _now()
         with self._connection(write=True) as connection:
@@ -186,8 +196,8 @@ class DifyRunStore:
                 INSERT INTO chat_dify_runs (
                     run_id, qa_id, scope_fingerprint, scope_json, binding_key, order_no,
                     environment, tenant_id, app_id, workflow_id, workflow_run_id, task_id,
-                    grant_id, state, created_at, expires_at, agent_version_no
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?)
+                    grant_id, state, created_at, expires_at, agent_version_no, kind, route_revision
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -205,6 +215,8 @@ class DifyRunStore:
                     now.isoformat(),
                     (now + timedelta(seconds=DIFY_RUN_TTL_SECONDS)).isoformat(),
                     agent_version_no,
+                    kind,
+                    route_revision,
                 ),
             )
         record = self.get(run_id)
@@ -370,6 +382,8 @@ def _run_from_row(row: sqlite3.Row) -> DifyRun:
         expires_at=datetime.fromisoformat(row["expires_at"]),
         completed_at=_ts(row["completed_at"]),
         agent_version_no=int(row["agent_version_no"] or 0),
+        kind=row["kind"],
+        route_revision=int(row["route_revision"]),
     )
 
 

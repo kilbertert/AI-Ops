@@ -139,6 +139,9 @@ class ChatBinding:
     #: **只有管理行**（`chat_route_bindings`）才有：它由哪一版 AgentVersion 发布而来。
     #: 文件行恒为 0。回读守卫拿它核"这条绑定仍指向签发时那一版"。
     agent_version_no: int = 0
+    agent_id: str = ""
+    app_id: str = ""
+    route_revision: int = 0
 
     @property
     def key(self) -> str:
@@ -302,6 +305,9 @@ def _bindings_from_store(path: str | Path, key_dir: str = "") -> tuple[ChatBindi
             workflow_key_file=row.workflow_key_ref
             or (key_file_for_app(key_dir, row.app_id) if key_dir else ""),
             agent_version_no=row.agent_version_no,
+            agent_id=row.agent_id,
+            app_id=row.app_id,
+            route_revision=row.revision,
         )
         if binding.engine == ENGINE_NODE:
             # 管理表这一版只承载 Dify：节点路线的执行清单（config/manifest）仍由
@@ -390,9 +396,10 @@ def _retracted(settings: GatewayServerSettings, environment: str, tenant_id: str
         row = ChatRouteBindingStore(Path(database).expanduser().absolute()).get(
             environment, tenant_id, ENTRY_CONSUMER, SCENARIO_OWN_ORDER_STATUS
         )
-    except Exception:  # noqa: BLE001 - 读不出来时按"没撤回"处理：那会走直读，
-        # 而直读是既有行为；把一次读失败变成 410 会让运维以为有人撤回了。
-        return False
+    except Exception as exc:  # noqa: BLE001 - 管理状态不可知，不能回落业务读取。
+        raise ChatRunUnavailable(
+            "EXEC_CONFIG_UNAVAILABLE", "route state unavailable", retryable=True
+        ) from exc
     return row is not None and not row.active
 
 

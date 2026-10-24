@@ -368,6 +368,10 @@ class DifyRetractRequest(BaseModel):
     app_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 
 
+class DifyRestoreRequest(DifyPublishRequest):
+    version_no: int = Field(ge=1, strict=True)
+
+
 class DifyTrialRequest(BaseModel):
     """一次试运行：订单号 + **草稿**。范围与发起人**都不在这里**（#772 F / #781）。
 
@@ -738,8 +742,8 @@ def _declared_in_file(settings: Any, environment: str, tenant_id: str, entry: st
         bindings = chat_execution.load_bindings(
             str(getattr(settings, "chat_execution_bindings_file", "") or "")
         )
-    except chat_execution.ChatBindingError:
-        return False
+    except chat_execution.ChatBindingError as exc:
+        raise StandardAPIError(503, "EXEC_CONFIG_UNAVAILABLE", "bindings unavailable") from exc
     key = f"{scenario}:{environment}:{tenant_id}"
     return any(item.key == key for item in bindings)
 
@@ -949,6 +953,8 @@ def _publish_bound_app(
     #
     # 跨系统没有事务：Dify 那边已经发布了，本地这一步仍可能失败。失败时**保留旧正式版**
     # 并如实抛错（不伪称成功），任务书对这条的要求是"报未完成"，不是"补一个异步重试"。
+    if outcome.action not in {"synced", "unchanged"}:
+        raise StandardAPIError(409, "DIFY_PUBLISH_REJECTED", "publish was not completed")
     _advance_route_binding(
         context, outcome, binding, initiator=initiator, expected_revision=expected_revision
     )
@@ -993,8 +999,8 @@ def _current_route_revision(context: Any, binding: Any, environment: str) -> int
         store = ChatRouteBindingStore(Path(database).expanduser().absolute())
         entry = str(getattr(binding, "business_entry", "") or "consumer")
         row = store.get(environment, binding.tenant_id, entry, "consumer_own_order_status")
-    except Exception:  # noqa: BLE001 - 读不出来就退回"按当前值推进"
-        return None
+    except Exception as exc:  # noqa: BLE001 - 没有初始 CAS 证据，发布必须拒绝。
+        raise StandardAPIError(503, "ROUTE_BINDING_UNAVAILABLE", "route state unavailable") from exc
     return row.revision if row is not None else 0
 
 
@@ -1079,6 +1085,19 @@ def _advance_route_binding(
 
     store = ChatRouteBindingStore(Path(database).expanduser().absolute())
     existing = store.get(environment, binding.tenant_id, entry, scenario)
+    if (
+        outcome.action == "unchanged"
+        and existing is not None
+        and existing.active
+        and existing.agent_id == outcome.agent_id
+        and existing.agent_version_no == version_no
+        and existing.workflow_id == outcome.workflow_id
+    ):
+        if expected_revision is not None and existing.revision != expected_revision:
+            raise StandardAPIError(409, "ROUTE_BINDING_CONFLICT", "route binding moved")
+        return
+    if expected_revision is None:
+        raise StandardAPIError(503, "ROUTE_BINDING_UNAVAILABLE", "initial route revision unavailable")
     try:
         store.publish(
             environment=environment,
@@ -1086,7 +1105,7 @@ def _advance_route_binding(
             entry=entry,
             scenario=scenario,
             engine="dify",
-            agent_id=outcome.agent_name,
+            agent_id=outcome.agent_id,
             agent_version_no=version_no,
             app_id=binding.app_id,
             workflow_id=outcome.workflow_id,
@@ -1097,15 +1116,92 @@ def _advance_route_binding(
             # 必然 `DIFY_UNAVAILABLE` —— 而那个症状离发布这一步很远，没人会想到是它。
             # 宁可让发布失败并说清楚，也不要留下一条"看起来发布了"的绑定。
             workflow_key_ref=_key_ref_for(key_dir, binding.app_id),
-            expected_revision=(
-                expected_revision
-                if expected_revision is not None
-                else (existing.revision if existing else None)
-            ),
+            expected_revision=expected_revision,
             updated_by=initiator[0] or initiator[1] or "",
         )
     except RouteBindingError as exc:
         raise StandardAPIError(status.HTTP_409_CONFLICT, exc.code, "route binding was not advanced") from exc
+
+
+def _managed_app_route(context: Any, app_id: str):
+    from pathlib import Path
+
+    from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
+
+    binding = next((item for item in context.runtime.dify_app_registry.all() if item.app_id == app_id), None)
+    if binding is None:
+        raise StandardAPIError(404, "DIFY_APP_NOT_BOUND", "app not bound")
+    if not context.settings.chat_route_bindings_file or not context.settings.execution_environment:
+        raise StandardAPIError(404, "CHAT_ROUTE_BINDINGS_DISABLED", "managed routes disabled")
+    store = ChatRouteBindingStore(Path(context.settings.chat_route_bindings_file))
+    row = store.get(
+        context.settings.execution_environment,
+        binding.tenant_id,
+        binding.business_entry,
+        chat_execution.SCENARIO_OWN_ORDER_STATUS,
+    )
+    if row is None or row.app_id != app_id:
+        raise StandardAPIError(409, "CHAT_ROUTE_BINDING_MISMATCH", "app route not found")
+    workspace = _workspace_for_tenant(context, binding.tenant_id)
+    return binding, row, workspace
+
+
+def _workflow_trial_draft(context: Any, app_id: str, run_context: ScopeContext):
+    from aiops_diagnostics.dify_dsl_pull import DifyDslClient, DifyDslSource
+    from aiops_diagnostics.dify_workflow_trial import WorkflowTrial
+
+    binding, row, workspace = _managed_app_route(context, app_id)
+    if not row.active or binding.tenant_id != run_context.effective_tenant_id:
+        raise StandardAPIError(403, "TRIAL_SCOPE_MISMATCH", "trial scope does not match the bound app")
+    source = DifyDslSource(
+        context.settings.dify_console_base_url, app_id, context.settings.dify_console_api_key, workspace
+    )
+    dsl = DifyDslClient(source).export_dsl()
+    return WorkflowTrial(dsl, source, row)
+
+
+def _restore_bound_app(context: Any, app_id: str, version_no: int, initiator: tuple[str, str, str]):
+    from aiops_diagnostics.dify_dsl_pull import DifyDslClient, DifyDslSource, SyncOutcome, workflow_content
+
+    binding, row, workspace = _managed_app_route(context, app_id)
+    version = context.agent_manager.store.version(row.agent_id, binding.tenant_id, version_no)
+    snapshot = version.snapshot
+    workflow_id = snapshot.get("workflow_id")
+    if (
+        snapshot.get("kind") != "dify-workflow"
+        or snapshot.get("app_id") != app_id
+        or snapshot.get("workspace_id") != workspace
+        or not workflow_id
+    ):
+        raise StandardAPIError(409, "DIFY_VERSION_MISMATCH", "version is not a verified app workflow")
+    source = DifyDslSource(
+        context.settings.dify_console_base_url, app_id, context.settings.dify_console_api_key, workspace
+    )
+    if workflow_content(DifyDslClient(source).export_dsl(workflow_id=workflow_id)) != snapshot.get(
+        "workflow"
+    ):
+        raise StandardAPIError(409, "DIFY_VERSION_MISMATCH", "published workflow differs from its snapshot")
+    outcome = SyncOutcome(
+        binding.tenant_id,
+        binding.business_entry,
+        app_id,
+        binding.agent_name,
+        "synced",
+        version_no,
+        workflow_id=workflow_id,
+        agent_id=row.agent_id,
+    )
+    _advance_route_binding(context, outcome, binding, initiator=initiator, expected_revision=row.revision)
+    _record_publish_audit(
+        context,
+        app_id=app_id,
+        action="restored",
+        reason_code="",
+        binding=binding,
+        initiator=initiator,
+        version_no=version_no,
+    )
+    return {"app_id": app_id, "action": "synced", "version_no": version_no}
 
 
 def _trial_draft_from_console(context: Any, app_id: str) -> tuple[str, tuple[str, ...]]:
@@ -1923,6 +2019,36 @@ def create_gateway_app(
             "settled_runs": settled["settled_runs"],
         }
 
+    @app.post("/v1/dify/restore")
+    def dify_restore(
+        payload: DifyRestoreRequest,
+        _: None = Depends(dify_publish_credential),  # noqa: B008
+        initiator: Annotated[str | None, Header(alias="X-AIOps-Initiator")] = None,
+    ) -> dict[str, Any]:
+        try:
+            return _restore_bound_app(context, payload.app_id, payload.version_no, (initiator or "", "", ""))
+        except StandardAPIError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - 不可验证历史版本必须拒绝。
+            raise StandardAPIError(409, "DIFY_VERSION_UNAVAILABLE", "version not available") from exc
+
+    @app.post("/v1/dify/versions")
+    def dify_versions(
+        payload: DifyPublishRequest, _: None = Depends(dify_publish_credential)
+    ) -> dict[str, Any]:  # noqa: B008
+        binding, row, workspace = _managed_app_route(context, payload.app_id)
+        with context.agent_manager.store._connection() as connection:
+            rows = connection.execute(
+                "SELECT version_no, snapshot_json FROM agent_versions WHERE agent_id=? AND tenant_id=?",
+                (row.agent_id, binding.tenant_id),
+            ).fetchall()
+        versions = []
+        for version in rows:
+            snapshot = json.loads(version["snapshot_json"])
+            if snapshot.get("app_id") == payload.app_id and snapshot.get("workspace_id") == workspace:
+                versions.append({"version_no": version["version_no"]})
+        return {"app_id": payload.app_id, "versions": versions, "state": row.state}
+
     @app.post("/v1/operator/publish")
     def operator_publish(
         payload: OperatorPublishRequest,
@@ -2180,34 +2306,23 @@ def create_gateway_app(
         用户字段一律不被读取（模型 ``extra="forbid"``，多一个就 400）。桥没给身份
         （缺 ``X-AIOps-Initiator`` 或 ``-Tenant``）⇒ 退回 #781 的固定调试租户行为。
         """
-        try:
-            if payload.prompt is not None:
-                draft_payload: dict[str, Any] = {
-                    "prompt": payload.prompt,
-                    "allowed_tools": payload.allowed_tools,
-                }
-            else:
-                # ``app_id`` 那条路：服务端去 Dify 拉**最近一次保存**的配置当草稿。
-                prompt_text, tools = _trial_draft_from_console(context, str(payload.app_id))
-                draft_payload = {"prompt": prompt_text, "allowed_tools": list(tools)}
-            draft = TrialDraft.from_payload(draft_payload)
-        except TrialRefused as exc:
-            raise StandardAPIError(status.HTTP_400_BAD_REQUEST, "TRIAL_DRAFT_REJECTED", str(exc)) from exc
         trial_initiator = TrialInitiator.from_headers(
             initiator, initiator_tenant, initiator_type, initiator_name
         )
         run_context = _trial_run_context(context, trial_initiator)
-        verdict = _order_authorization(context, run_context, payload.order_no)
-        if verdict == UNAVAILABLE:
-            raise StandardAPIError(
-                status.HTTP_503_SERVICE_UNAVAILABLE,
-                "ORDER_AUTHORIZATION_UNAVAILABLE",
-                "order authorization unavailable",
-                retryable=True,
-            )
-        if verdict == NOT_OWNED:
-            # 与生产同一形状：越权与不存在不可区分。
-            raise StandardAPIError(status.HTTP_404_NOT_FOUND, "ORDER_NOT_FOUND", "order not found")
+        _require_visible_order(context, run_context, payload.order_no)
+        try:
+            if payload.app_id and context.settings.chat_route_bindings_file:
+                draft = _workflow_trial_draft(context, payload.app_id, run_context)
+            else:
+                if payload.prompt is not None:
+                    draft_payload = {"prompt": payload.prompt, "allowed_tools": payload.allowed_tools}
+                else:
+                    prompt_text, tools = _trial_draft_from_console(context, str(payload.app_id))
+                    draft_payload = {"prompt": prompt_text, "allowed_tools": list(tools)}
+                draft = TrialDraft.from_payload(draft_payload)
+        except TrialRefused as exc:
+            raise StandardAPIError(400, "TRIAL_DRAFT_REJECTED", str(exc)) from exc
         try:
             trial = context.runtime.start_trial(
                 (initiator or "").strip() or "unknown",

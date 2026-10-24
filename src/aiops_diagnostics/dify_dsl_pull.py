@@ -50,7 +50,7 @@ import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import urlencode, urlsplit
 
 import yaml
 
@@ -173,7 +173,7 @@ class DifyDslClient:
         self.source = source
         self.base_url = f"{parsed.scheme}://{parsed.netloc}{parsed.path.rstrip('/')}"
 
-    def export_dsl(self, app_id: str | None = None) -> str:
+    def export_dsl(self, app_id: str | None = None, *, workflow_id: str | None = None) -> str:
         """Fetch the exported DSL text for one app."""
         target = (app_id or self.source.app_id).strip()
         if not _APP_ID.fullmatch(target):
@@ -186,7 +186,8 @@ class DifyDslClient:
             headers[DIFY_WORKSPACE_HEADER] = self.source.workspace_id
         return request_json(
             RequestSpec(
-                url=join_url(self.base_url, DIFY_EXPORT_PATH.format(app_id=target)),
+                url=join_url(self.base_url, DIFY_EXPORT_PATH.format(app_id=target))
+                + ("?" + urlencode({"workflow_id": workflow_id}) if workflow_id else ""),
                 headers=headers,
                 timeout=self.source.timeout,
             ),
@@ -1012,6 +1013,7 @@ class SyncOutcome:
     #: 发布要把路由指针推到这一版，就必须把"这一版在 Dify 里到底是哪张图"一起记下来。
     #: 取不到时为空串：那是"不知道",调用方必须按未完成处理，不能拿 app_id 顶替。
     workflow_id: str = ""
+    agent_id: str = ""
 
 
 def _dsl_kind(dsl_text: str) -> str:
@@ -1066,75 +1068,26 @@ def sync_workflow_from_dify(
     按构造是 `unchanged`，重复点发布是 no-op。
     """
     client = DifyDslClient(source)
-    # **先把草稿发布成新版本**，再取身份与内容。运营的「发布到 AI-Ops」就是最后
-    # 那一步：只保存不发布时，`workflow.id` 不变、`export` 也还是上一版，于是
-    # 指针会指向 V1 而界面上一切看起来都成功了。
-    if not client.publish_workflow(binding.app_id):
-        raise DifyDslMalformed("Dify did not confirm the workflow publish")
-    workflow_id = client.published_workflow_id(binding.app_id)
-    dsl_text = client.export_dsl()
-    document = yaml.safe_load(dsl_text)
-    if not isinstance(document, dict):
-        raise DifyDslMalformed("DSL root must be an object")
-    workflow = document.get("workflow")
-    if not isinstance(workflow, dict):
-        raise DifyDslMalformed("workflow DSL has no workflow object")
-    graph = workflow.get("graph")
-    if not isinstance(graph, dict):
-        raise DifyDslMalformed("workflow DSL has no graph")
-    # 只保留决定行为的字段：画布位置与选中态不是内容，把它们算进版本会让
-    # "有人点了下鼠标"看起来像一次发布。
-    normalized = {
-        "nodes": [
-            {"id": node.get("id"), "data": node.get("data")}
-            for node in graph.get("nodes", [])
-            if isinstance(node, dict)
-        ],
-        "edges": [
-            {
-                "source": edge.get("source"),
-                "target": edge.get("target"),
-                "sourceHandle": edge.get("sourceHandle"),
-            }
-            for edge in graph.get("edges", [])
-            if isinstance(edge, dict)
-        ],
-    }
-    snapshot_body = {
-        "kind": "dify-workflow",
-        "app_id": binding.app_id,
-        "workflow_id": workflow_id,
-        "workflow": normalized,
-    }
     existing = _find_by_name(manager, context, binding.agent_name)
-    if existing is None:
+    if existing is None or existing.status != "published" or existing.published_version is None:
         return SyncOutcome(
             binding.tenant_id,
             binding.business_entry,
             binding.app_id,
             binding.agent_name,
             "refused",
-            None,
-            f"库里没有这个 agent（{binding.agent_name}）—— 先按清单创建它",
+            note="agent has no published configuration",
         )
-    if existing.status != "published" or existing.published_version is None:
-        return SyncOutcome(
-            binding.tenant_id,
-            binding.business_entry,
-            binding.app_id,
-            binding.agent_name,
-            "refused",
-            existing.published_version,
-            f"agent 状态是 {existing.status}，没有可对比的已发布版本",
-            workflow_id=workflow_id,
-        )
-    published = manager.store.version(existing.agent_id, existing.tenant_id, existing.published_version)
-    previous = published.snapshot if published is not None else {}
+    previous = manager.store.version(
+        existing.agent_id, existing.tenant_id, existing.published_version
+    ).snapshot
+    candidate = workflow_content(client.export_dsl())
+    previous_workflow = previous.get("workflow_id")
+    # Dify 原生 publish 每次新建版本；先确认内容相同且原不可变版本仍有效。
     if (
-        isinstance(previous, dict)
-        and previous.get("kind") == "dify-workflow"
-        and previous.get("workflow") == normalized
-        and previous.get("workflow_id") == workflow_id
+        previous.get("workflow") == candidate
+        and previous_workflow
+        and workflow_content(client.export_dsl(workflow_id=previous_workflow)) == candidate
     ):
         return SyncOutcome(
             binding.tenant_id,
@@ -1143,18 +1096,23 @@ def sync_workflow_from_dify(
             binding.agent_name,
             "unchanged",
             existing.published_version,
-            workflow_id=workflow_id,
+            workflow_id=previous_workflow,
+            agent_id=existing.agent_id,
         )
-    # workflow 应用的内容不落 AgentConfig；用快照直接发布（与 chat 路线同一条发布门）。
-    #
-    # **必须叠加在既有已发布快照之上，不能替换。** 这个 agent 可能同时在给客服问答
-    # （`qa_rag.select_customer_agent`）或运营诊断（`ops_agents`）供配置，它们从
-    # **已发布快照**里读 `agent_type` / `prompt` / `knowledge_base_ids` 并先按
-    # `agent_type` 筛选。用一份只含 workflow 的快照覆盖，那些入口会当场选不到这个
-    # agent —— 发布一条订单状态路由，顺手停掉了同一个绑定上的其他业务入口。
-    agent = existing
-    if agent.status != "draft":
-        agent = manager.fork_draft(context, agent.agent_id, expected_revision=agent.revision)
+    if not client.publish_workflow(binding.app_id):
+        raise DifyDslMalformed("Dify did not confirm the workflow publish")
+    workflow_id = client.published_workflow_id(binding.app_id)
+    frozen = workflow_content(client.export_dsl(workflow_id=workflow_id))
+    if frozen != candidate:
+        raise DifyDslMalformed("workflow changed during publish")
+    snapshot_body = {
+        "kind": "dify-workflow",
+        "app_id": binding.app_id,
+        "workspace_id": source.workspace_id,
+        "workflow_id": workflow_id,
+        "workflow": frozen,
+    }
+    agent = manager.fork_draft(context, existing.agent_id, expected_revision=existing.revision)
     version = manager.store.publish(
         agent.agent_id,
         binding.tenant_id,
@@ -1170,7 +1128,37 @@ def sync_workflow_from_dify(
         "synced",
         version.version_no,
         workflow_id=workflow_id,
+        agent_id=agent.agent_id,
     )
+
+
+def workflow_content(dsl_text: str) -> dict[str, Any]:
+    """保留工作流行为及变量，剔除画布布局与选择状态。"""
+    document = yaml.safe_load(dsl_text)
+    workflow = document.get("workflow") if isinstance(document, dict) else None
+    if not isinstance(workflow, dict) or not isinstance(workflow.get("graph"), dict):
+        raise DifyDslMalformed("workflow DSL has no graph")
+    graph = workflow["graph"]
+    return {
+        **{k: v for k, v in workflow.items() if k != "graph"},
+        "graph": {
+            "nodes": [
+                {
+                    "id": node.get("id"),
+                    "data": {k: v for k, v in node.get("data", {}).items() if k != "selected"},
+                }
+                for node in graph.get("nodes", [])
+            ],
+            "edges": [
+                {
+                    k: v
+                    for k, v in edge.items()
+                    if k in {"source", "target", "sourceHandle", "targetHandle", "data"}
+                }
+                for edge in graph.get("edges", [])
+            ],
+        },
+    }
 
 
 def sync_binding_from_dify(

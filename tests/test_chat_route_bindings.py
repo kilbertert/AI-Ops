@@ -543,37 +543,98 @@ def test_a_workflow_snapshot_keeps_the_existing_agent_config(tmp_path):
     assert merged["kind"] == "dify-workflow"
 
 
-def test_a_workflow_publish_first_publishes_the_dify_draft(tmp_path, monkeypatch):
+def test_a_workflow_publish_first_publishes_the_dify_draft(tmp_path):
     """「发布到 AI-Ops」必须**自己**把 Dify 的草稿发布成新版本。
 
     运营的操作是：在控制台改 → 保存（只写 draft）→ 点「发布到 AI-Ops」。
     最后一步如果不做 Dify 侧的发布，`workflow.id` 不变、`export` 还是上一版，
     于是指针指向 V1 而界面上一切看起来都成功了。
 
-    实测时验收脚本自己先调了原生 publish，把这个缺口从证据里抹掉了 ——
-    这条用例守的正是那次删除。
+    注意它**不是**无条件发布：内容没变时不发布（见幂等那条）。所以这条用例造的是
+    "草稿确实变了"的场景 —— 只断言"变了就必然发布"，不把"每次都发"当成正确行为。
     """
-    from aiops_diagnostics import dify_dsl_pull as pull
-
-    calls: list[str] = []
+    dify = _SyntheticDify()
+    dify.draft = {"nodes": [{"id": "sop", "data": {"type": "llm", "prompt": "V2"}}], "edges": []}
 
     class _Client:
-        def __init__(self, source):  # noqa: ARG002 - 只扮演形状
+        def __init__(self, source):  # noqa: ARG002
             pass
 
+        def export_dsl(self, app_id=None, *, workflow_id=None):
+            import yaml
+
+            return yaml.safe_dump(
+                {"app": {"mode": "workflow"}, "workflow": {"graph": dify.export(workflow_id)}}
+            )
+
         def publish_workflow(self, app_id):
-            calls.append("publish_workflow")
+            dify.publish()
             return True
 
         def published_workflow_id(self, app_id):
-            calls.append("published_workflow_id")
-            return WORKFLOW_V2
+            return dify.published_id
 
-        def export_dsl(self):
-            calls.append("export_dsl")
-            return "app:\n  mode: workflow\nworkflow:\n  graph:\n    nodes: []\n    edges: []\n"
+    from aiops_diagnostics import dify_dsl_pull as pull
 
-    monkeypatch.setattr(pull, "DifyDslClient", _Client)
+    original = pull.DifyDslClient
+    pull.DifyDslClient = _Client
+    try:
+        outcome = _run_workflow_sync(tmp_path)
+    finally:
+        pull.DifyDslClient = original
+    assert outcome.action == "synced"
+    assert dify.publish_calls == 1, "草稿变了就必须真的发布一次"
+
+
+class _SyntheticDify:
+    """按 Dify 1.17.1 官方契约回复的合成对端。
+
+    `export` 不带 `workflow_id` 返回**草稿**、带则返回那个**已发布版本** ——
+    这条区别是"ID 与内容可能来自不同版本"的根源，对端必须照抄它。
+    """
+
+    def __init__(self) -> None:
+        self.draft = {"nodes": [{"id": "sop", "data": {"type": "llm", "prompt": "V1"}}], "edges": []}
+        self.published: dict[str, dict] = {}
+        self.published_id = ""
+        self.publish_calls = 0
+
+    def export(self, workflow_id: str | None) -> dict:
+        return self.published[workflow_id] if workflow_id else self.draft
+
+    def publish(self) -> str:
+        # Dify 原生 publish **每次**新建版本（`workflow_service.py:734`），不去重。
+        self.publish_calls += 1
+        self.published_id = f"00000000-0000-0000-0000-{self.publish_calls:012d}"
+        self.published[self.published_id] = self.draft
+        return self.published_id
+
+
+def _run_workflow_sync(tmp_path):
+    """跑一次 `sync_workflow_from_dify`；agent 按名字**收敛**，不每次新建。"""
+    from aiops_diagnostics import dify_dsl_pull as pull
+    from aiops_diagnostics.agent_lifecycle import AgentConfig, AgentManager, AgentStore
+
+    class _Ctx:
+        effective_tenant_id = TENANT
+        roles = frozenset({"ROLE_PLATFORM_ADMIN"})
+
+    manager = AgentManager(AgentStore(tmp_path / "gateway.db"))
+    existing = next((a for a in manager.list(_Ctx()) if a.name == "小趋-客服"), None)
+    if existing is None:
+        agent = manager.create(
+            _Ctx(),
+            name="小趋-客服",
+            description="acceptance",
+            config=AgentConfig(
+                agent_type="customer",
+                prompt="P1",
+                knowledge_base_ids=(),
+                model="aiops-api",
+                output_contract="blocks-v1",
+            ),
+        )
+        manager.publish(_Ctx(), agent.agent_id, expected_revision=agent.revision)
 
     class _Binding:
         tenant_id = TENANT
@@ -581,17 +642,149 @@ def test_a_workflow_publish_first_publishes_the_dify_draft(tmp_path, monkeypatch
         app_id = APP
         agent_name = "小趋-客服"
 
-    class _Manager:
-        class store:
-            @staticmethod
-            def version(*args, **kwargs):
-                raise AssertionError("should not reach version() when the agent is missing")
+    source = pull.DifyDslSource(
+        base_url="http://dify.invalid:5001", app_id=APP, api_key="k", workspace_id="ws"
+    )
+    return pull.sync_workflow_from_dify(manager, _Ctx(), _Binding(), source)
 
-        @staticmethod
-        def list(context):
-            return []
 
-    outcome = pull.sync_workflow_from_dify(_Manager(), object(), _Binding(), object())
-    # 删掉 publish_workflow 之后，第一个被记录的会是 published_workflow_id —— 顺序即判据。
-    assert calls[:2] == ["publish_workflow", "published_workflow_id"], calls
-    assert outcome.action == "refused"  # 没有这个 agent，走到 refused 是对的
+def test_the_frozen_snapshot_id_and_content_come_from_the_same_version(tmp_path):
+    """反例 1：快照的 workflow_id 与内容必须同源。
+
+    原实现发布后读已发布 id、却用**默认导出（草稿）**取内容，于是并发保存 V3 时会冻成
+    「V2 的 id + V3 的内容」。现在发布后按**确定的已发布 id** 再导出一次并比对候选；
+    内容在发布期间变了就冲突，而不是把两份不同的东西拼进一个快照。
+    """
+    dify = _SyntheticDify()
+    dify.draft = {"nodes": [{"id": "sop", "data": {"type": "llm", "prompt": "V2"}}], "edges": []}
+    published_id = dify.publish()
+
+    class _Client:
+        def __init__(self, source):  # noqa: ARG002
+            pass
+
+        def export_dsl(self, app_id=None, *, workflow_id=None):
+            import yaml
+
+            return yaml.safe_dump(
+                {"app": {"mode": "workflow"}, "workflow": {"graph": dify.export(workflow_id)}}
+            )
+
+        def publish_workflow(self, app_id):
+            # Dify 的 publish 把**当时**的草稿固化成新版本；这里模拟"发布期间有人又存了
+            # 一版"：发布出去的是 V2，而草稿此刻已经是 V3。于是
+            #   candidate（发布前读的草稿） = V2
+            #   frozen（按新 id 读的已发布）  = V2   ← 仍一致
+            # 真正要防的是**反过来**：candidate 是发布前那一刻的草稿，如果发布期间草稿
+            # 又变了，frozen 会与 candidate 不同 —— 下面把 published 里那一版设成 V3。
+            dify.published[published_id] = {
+                "nodes": [{"id": "sop", "data": {"type": "llm", "prompt": "V3"}}],
+                "edges": [],
+            }
+            dify.draft = {"nodes": [{"id": "sop", "data": {"type": "llm", "prompt": "V3"}}], "edges": []}
+            dify.publish_calls = 1
+            dify.published_id = published_id
+            return True
+
+        def published_workflow_id(self, app_id):
+            return published_id
+
+    from aiops_diagnostics import dify_dsl_pull as pull
+
+    monkeypatch_target = pull
+    original = monkeypatch_target.DifyDslClient
+    monkeypatch_target.DifyDslClient = _Client
+    try:
+        # 候选是 V3（草稿），而被发布的是 V2 —— 必须**冲突**，不能混合。
+        with pytest.raises(pull.DifyDslMalformed) as raised:
+            _run_workflow_sync(tmp_path)
+        assert "changed during publish" in str(raised.value)
+    finally:
+        monkeypatch_target.DifyDslClient = original
+
+
+def test_republishing_identical_content_creates_no_new_version(tmp_path):
+    """反例 4：同内容重复发布必须**幂等** —— 不新建 Dify 版本、不推进本地版本。
+
+    Dify 原生 publish 每次新建版本，所以"它会去重"的前提不成立；去重必须发生在
+    **调用它之前**：先比候选与当前正式快照（并用固定 id 复核那份快照仍有效）。
+    """
+    dify = _SyntheticDify()
+    graph = {"nodes": [{"id": "sop", "data": {"type": "llm", "prompt": "V1"}}], "edges": []}
+    dify.draft = graph
+
+    class _Client:
+        def __init__(self, source):  # noqa: ARG002
+            pass
+
+        def export_dsl(self, app_id=None, *, workflow_id=None):
+            import yaml
+
+            return yaml.safe_dump(
+                {"app": {"mode": "workflow"}, "workflow": {"graph": dify.export(workflow_id)}}
+            )
+
+        def publish_workflow(self, app_id):
+            dify.publish()
+            return True
+
+        def published_workflow_id(self, app_id):
+            return dify.published_id
+
+    from aiops_diagnostics import dify_dsl_pull as pull
+
+    original = pull.DifyDslClient
+    pull.DifyDslClient = _Client
+    try:
+        first = _run_workflow_sync(tmp_path)
+        calls_after_first = dify.publish_calls
+        second = _run_workflow_sync(tmp_path)
+    finally:
+        pull.DifyDslClient = original
+
+    assert first.action == "synced", first
+    assert second.action == "unchanged", second
+    assert second.version_no == first.version_no, "同内容不该推进本地版本"
+    assert dify.publish_calls == calls_after_first, "同内容不该再建 Dify 版本"
+
+
+def _run_workflow_sync(tmp_path):
+    """跑一次 `sync_workflow_from_dify`；agent 按名字**收敛**，不每次新建。
+
+    用 `create` 建 agent 会让第二次调用多出一个同名 agent —— 那测的就不是幂等，
+    而是"两个 agent 各自发布了一次"。真实发布路径按名字找既有 agent。
+    """
+    from aiops_diagnostics import dify_dsl_pull as pull
+    from aiops_diagnostics.agent_lifecycle import AgentConfig, AgentManager, AgentStore
+
+    class _Ctx:
+        effective_tenant_id = TENANT
+        roles = frozenset({"ROLE_PLATFORM_ADMIN"})
+
+    manager = AgentManager(AgentStore(tmp_path / "gateway.db"))
+    existing = next((a for a in manager.list(_Ctx()) if a.name == "小趋-客服"), None)
+    if existing is None:
+        agent = manager.create(
+            _Ctx(),
+            name="小趋-客服",
+            description="acceptance",
+            config=AgentConfig(
+                agent_type="customer",
+                prompt="P1",
+                knowledge_base_ids=(),
+                model="aiops-api",
+                output_contract="blocks-v1",
+            ),
+        )
+        manager.publish(_Ctx(), agent.agent_id, expected_revision=agent.revision)
+
+    class _Binding:
+        tenant_id = TENANT
+        business_entry = ENTRY
+        app_id = APP
+        agent_name = "小趋-客服"
+
+    source = pull.DifyDslSource(
+        base_url="http://dify.invalid:5001", app_id=APP, api_key="k", workspace_id="ws"
+    )
+    return pull.sync_workflow_from_dify(manager, _Ctx(), _Binding(), source)
