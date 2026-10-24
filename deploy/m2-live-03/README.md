@@ -94,7 +94,7 @@ Gateway 与业务依赖已在 41；同宿主先避免跨主机 gRPC、隧道与�
 | `compose.identity.yaml` | 复跑用的覆盖层：只把 Gateway 的入口进程换成构造身份启动器（ADR-0058） |
 | `identity.env.template` | 构造身份三件套的**键名**；值只写在宿主上的 0600 文件里 |
 | `images.lock.json` | 平台与节点制品摘要、基础镜像身份（按 ref）、Gateway 构建身份 |
-| `.env.template` | 非敏感参数与**键名**；真实值来自宿主上的 0600 文件 |
+| `gateway.env.template` / `node.env.template` | 两侧环境键名；真实值来自宿主上的 0600 文件 |
 | `make-certs.sh` | 生成本地 CA 与 platform 的服务端证书（幂等） |
 | `build-runtime-config.sh` | 从生产配置抽取**只读依赖白名单**；不完整就拒绝 |
 | `checks.sh` | preflight / up / ready / verify / deps / status / down |
@@ -132,6 +132,16 @@ Gateway 与业务依赖已在 41；同宿主先避免跨主机 gRPC、隧道与�
 `mysql(999)` 运行；这一条短暂初始化不泛化到其它服务。
 
 ## M3：打开执行配置守卫的开关（真实链路前必做）
+
+M3-02 节点制品锁已更新为支持发布版本的 JAR（源码修订在 `images.lock.json` 的
+`node.source_commit`）。Gateway 的 CD 不会替换这个 JAR 或本栈镜像；部署必须一起
+核对节点摘要、Gateway 镜像的内容标签和平台制品摘要，继续用 `checks.sh up`。
+
+正式参数 `M2LIVE_MANAGED_PUBLICATION=true` 通过 Java 命令行启用逐 run 发布清单；
+缺省 `false` 保持文件清单模式。两侧静态清单仍保留为启动模板，并继续通过下述同文件
+预检；正式 run 从 Gateway 获取自己的冻结清单，不能拿模板代替发布版本。
+Gateway 的节点目标表和路由库设置见 [节点发布手册](../../docs/agents/m3-node-publication.md)。
+仅更新 JAR 或设这个参数不会替运营发布，也不会自动启用 App 路线。
 
 四个开关里最后一个是**执行配置清单**。它两侧读同一份字节，身份就是该文件的 sha256。
 顺序不能颠倒 —— 配了却读不到时，Gateway **启动即拒**（`validate()` 直接失败）。

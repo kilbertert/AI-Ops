@@ -47,3 +47,9 @@ Feature: Dify 控制台发布桥的授权与可复现部署
       Given 线上已有已发布版本
       When 运营只保存 Dify 草稿而不点击 AI-Ops 发布按钮
       Then 线上仍使用原已发布版本
+
+    Scenario: 桥部署中途失败
+      Given 原桥、页面脚本和转发配置已完整备份
+      When 新制品安装后 nginx reload 失败
+      Then 原桥代码、页面脚本和转发配置全部恢复
+      And 部署命令报告失败而不是成功

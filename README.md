@@ -404,6 +404,8 @@ flowchart TB
 M3 委派的消费者成功响应交付同 run 五字段快照，并在返回前复核本人授权、绑定与有效期；
 不二次直读、不改变统一助手路由。真实用户与 App 接线仍待验收。
 
+M3 发布闭环还需单独部署[运营发布桥](ops/dify-console-bridge/README.md#m3-部署包与恢复)
+与[节点运行制品](deploy/m2-live-03/README.md)，Gateway CD 不覆盖它们。
 M3 正常登录用户验收与 App 接线边界见[用户入口验收手册](docs/agents/m3-user-entry-acceptance.md)；
 文件预检不发请求，真实正向验收仍需要明确授权账号的本人订单。
 
