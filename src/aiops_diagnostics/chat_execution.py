@@ -57,6 +57,10 @@ from aiops_diagnostics.scope_context import ScopeContext
 #: 「哪条 run 承载哪个 QA」由 `agent_runs.qa_id` 这一列决定，不从字符串反推。
 CHAT_RUN_PREFIX = "consumer-order-chat-node:"
 
+#: Dify 路线（APP-RUNTIME-02）的 QA 前缀。两条路线各有自己的前缀，因为它们的读取判据
+#: 完全不同 —— 一个看 `agent_runs`，一个看 `chat_dify_runs`。
+DIFY_RUN_PREFIX = "consumer-order-chat-dify:"
+
 #: 绑定表的 schema。不匹配就拒绝整份文件，不做兼容读取。
 BINDINGS_SCHEMA = "aiops-chat-execution/1"
 
@@ -75,6 +79,13 @@ SNAPSHOT_FIELDS = frozenset({"order_no", "status_code", "status_role", "observed
 
 #: 绑定文件的上限。它是运维手写的登记表，不是数据集。
 MAX_BINDINGS_BYTES = 262144
+
+#: 这条登记把请求交给**哪个引擎**。`node` 是已交付的客户执行节点路线，`dify` 是
+#: APP-RUNTIME-02 的 Workflow 路线。**一条登记只能指向一个引擎** —— 没有隐式优先级，
+#: 也不存在"节点失败就试 Dify"（ADR-0079：一次请求只有一个模型循环，无故障自动跨路线回落）。
+ENGINE_NODE = "node"
+ENGINE_DIFY = "dify"
+ENGINES = (ENGINE_NODE, ENGINE_DIFY)
 
 
 class ChatBindingError(ValueError):
@@ -116,8 +127,15 @@ class ChatBinding:
     tenant_id: str
     entry: str
     scenario: str
-    config_file: str
-    manifest_file: str
+    #: 节点引擎用；Dify 登记留空。
+    config_file: str = ""
+    manifest_file: str = ""
+    #: `node` 或 `dify`。旧登记没有这个字段 ⇒ 按 `node` 读（兼容既有部署）。
+    engine: str = ENGINE_NODE
+    #: 仅 `dify` 使用：已发布 Workflow 的固定身份与它的服务 API 凭据文件。
+    #: 两者成对出现，缺一即整份绑定表校验失败 —— 半配就是「配了一半就开门」。
+    workflow_id: str = ""
+    workflow_key_file: str = ""
 
     @property
     def key(self) -> str:
@@ -152,9 +170,11 @@ def load_bindings(path: str | Path | None) -> tuple[ChatBinding, ...]:
     for row in rows:
         binding = _parse_binding(row)
         if binding.key in seen:
+            # 同一（环境，租户，入口，场景）出现两次，就是"这个场景该走哪个引擎"没有唯一答案。
+            # 用文件顺序或"后写的赢"来裁决等于让配置的顺序承载语义 —— 拒绝。
             raise ChatBindingError("duplicate chat execution binding")
         seen.add(binding.key)
-        _validate_binding_files(binding)
+        _validate_binding(binding)
         bindings.append(binding)
     return tuple(bindings)
 
@@ -162,12 +182,30 @@ def load_bindings(path: str | Path | None) -> tuple[ChatBinding, ...]:
 def _parse_binding(row: object) -> ChatBinding:
     if not isinstance(row, dict):
         raise ChatBindingError("chat execution binding is not an object")
+    # `engine` 与 Dify 的两项先读：它们决定**哪些字段是必需的**。
+    # 缺 `engine` ⇒ `node`（旧登记原样可读）；写了别的值 ⇒ 拒绝整份表，
+    # 不静默当成本片认识的那两个之一。
+    engine = row.get("engine", ENGINE_NODE)
+    if not isinstance(engine, str) or engine not in ENGINES:
+        raise ChatBindingError("chat execution binding engine is unsupported")
+    required = ["environment", "tenant_id", "entry", "scenario"]
+    if engine == ENGINE_NODE:
+        required += ["config_file", "manifest_file"]
+    else:
+        required += ["workflow_id", "workflow_key_file"]
     values: dict[str, str] = {}
-    for field in ("environment", "tenant_id", "entry", "scenario", "config_file", "manifest_file"):
+    for field in required:
         value = row.get(field)
         if not isinstance(value, str) or not value.strip():
             raise ChatBindingError(f"chat execution binding {field} is missing")
         values[field] = value.strip()
+    if engine == ENGINE_NODE:
+        # Dify 专属键出现在节点登记上，说明有人以为它在起作用 —— 拒绝比忽略诚实。
+        if row.get("workflow_id") or row.get("workflow_key_file"):
+            raise ChatBindingError("node chat execution binding must not declare a workflow")
+    elif row.get("config_file") or row.get("manifest_file"):
+        # 反过来同理：Dify 登记带节点配置，会让读者以为它还在跑节点。
+        raise ChatBindingError("dify chat execution binding must not declare node config")
     if row.get("active") is False:
         # 停用一条绑定就是把它从这里拿掉；留一条 active:false 会让人以为它还在生效。
         raise ChatBindingError("inactive chat execution bindings must be removed")
@@ -175,7 +213,32 @@ def _parse_binding(row: object) -> ChatBinding:
         raise ChatBindingError("chat execution binding entry must be consumer")
     if values["scenario"] != SCENARIO_OWN_ORDER_STATUS:
         raise ChatBindingError("unsupported chat execution binding scenario")
-    return ChatBinding(**values)  # type: ignore[arg-type]
+    return ChatBinding(engine=engine, **values)  # type: ignore[arg-type]
+
+
+def _validate_binding(binding: ChatBinding) -> None:
+    """这条绑定**此刻**是否真的可执行。按引擎分流，两种引擎的判据互不借用。"""
+    if binding.engine == ENGINE_DIFY:
+        _validate_dify_binding(binding)
+        return
+    _validate_binding_files(binding)
+
+
+def _validate_dify_binding(binding: ChatBinding) -> None:
+    """Dify 登记：凭据文件必须私有可读，且 workflow 身份形状正确。
+
+    这里**不**去连 Dify 验证 workflow 是否存在：那是运行期的一次外部调用，放在启动路径上
+    会让一个 Dify 抖动变成网关起不来。真正"是不是那个已发布 workflow"由执行记录在
+    调用前后各核对一次（见 `dify_chat_workflow`）。
+    """
+    from aiops_diagnostics.dify_chat_workflow import WORKFLOW_ID_PATTERN, load_workflow_key
+
+    if WORKFLOW_ID_PATTERN.fullmatch(binding.workflow_id) is None:
+        raise ChatBindingError("chat execution binding workflow id is malformed")
+    try:
+        load_workflow_key(binding.workflow_key_file)
+    except ValueError as exc:
+        raise ChatBindingError("chat execution binding workflow key is unusable") from exc
 
 
 def _validate_binding_files(binding: ChatBinding) -> None:

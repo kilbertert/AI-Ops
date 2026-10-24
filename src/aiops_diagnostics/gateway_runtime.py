@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import contextlib
+import json
 import logging
+import secrets
 import threading
 import time
 from collections.abc import Callable
@@ -13,7 +15,7 @@ from typing import Any
 
 from aiops_diagnostics.agent_contracts import IncidentManifest
 from aiops_diagnostics.agent_runner import classify_lightweight, run_agent_diagnosis, run_zero_order_answer
-from aiops_diagnostics.agent_runs import AgentRunStore
+from aiops_diagnostics.agent_runs import AgentRunStore, scope_to_json
 from aiops_diagnostics.agent_workspace import AgentWorkspace
 from aiops_diagnostics.answer_language import (
     answer_chinese_leak,
@@ -251,6 +253,12 @@ class GatewayRuntime:
         # APP-RUNTIME-01：聊天入口把「等节点」搬进后台，worker 需要同一份 run 存储。
         # 缺省为 None ⇒ 聊天节点路线不可用（与未配置绑定等价，fail closed）。
         self.agent_run_store = agent_run_store
+        # APP-RUNTIME-02：Dify 路线的执行记录与取数凭据。同一个库、独立的表 ——
+        # 不复用 `agent_runs`，因为那张表的 `node_id`/`matched` 语义不适用于 Dify。
+        # 取消要能同时收掉执行记录与凭据，所以这里必须是一个真实的存储而不是就地新建。
+        from aiops_diagnostics.dify_run_store import DifyRunStore
+
+        self.dify_run_store = DifyRunStore(store.path)
         # Routing decisions from typed answers (#392). Absent configuration
         # leaves this None, and every question simply routes as it did before —
         # the dependency is optional by design, not by accident.
@@ -1524,7 +1532,13 @@ class GatewayRuntime:
             question,
             # **必须**用同一个常量：读取守卫按这个前缀认出「这条 QA 走的是节点路线」。
             # 这里写一个近似的字面量，GET 就会退回到直读的判据上。
-            internal_run_id=chat_execution.CHAT_RUN_PREFIX + order_no,
+            # 两条路线各有自己的前缀：读取守卫按前缀分流到**不同**的证据来源。
+            internal_run_id=(
+                chat_execution.DIFY_RUN_PREFIX
+                if getattr(binding, "engine", "node") == "dify"
+                else chat_execution.CHAT_RUN_PREFIX
+            )
+            + order_no,
             tenant_id=context.effective_tenant_id,
         )
         registration = JobRegistration(
@@ -1536,8 +1550,16 @@ class GatewayRuntime:
             route_type="qa",
         )
         self._qa_registrations[qa["qa_id"]] = registration
+        # APP-RUNTIME-02：一条登记只指向一个引擎。这里按 `binding.engine` 分派一次，
+        # **没有**任何"节点失败再试 Dify"的回落 —— ADR-0079 的判据是一次请求只有一个
+        # 模型循环，跨路线自动回落会改变执行边界与证据归属。
+        worker = (
+            self._execute_chat_dify_qa
+            if getattr(binding, "engine", "node") == "dify"
+            else self._execute_chat_order_qa
+        )
         future = self._executor.submit(
-            self._execute_chat_order_qa,
+            worker,
             qa["qa_id"],
             order_no,
             context,
@@ -1550,6 +1572,246 @@ class GatewayRuntime:
         future.add_done_callback(lambda _: self._futures.pop(qa["qa_id"], None))
         future.add_done_callback(lambda _: self._qa_registrations.pop(qa["qa_id"], None))
         return qa
+
+    def _execute_chat_dify_qa(
+        self,
+        qa_id: str,
+        order_no: str,
+        context: ScopeContext,
+        language: str,
+        registration: JobRegistration,
+        question: str,
+        binding: Any,
+    ) -> None:
+        """后台：签发取数凭据 → 建执行记录 → 调 Dify → 核结果 → 放行 → 写终态。
+
+        与节点 worker 的关系是**并列**而不是复用：节点那条要派发、等领取、核对执行配置，
+        这条要调 Dify 并核对「这次运行确实取到了这一单的数据」。两条共用的部分是
+        **规则**（写前再授权、失败落 failed、不回落），不是流程。
+
+        Dify 侧的成功判据有三条，缺一条都算失败：
+
+        1. 实际运行的 workflow 身份与绑定一致（不是别的图、不是草稿）；
+        2. 这一次有**同一轮**的取数记录（没有取数却自称成功 ⇒ 失败）；
+        3. 输出能适配成 blocks，且订单号与本次冻结的订单一致。
+        """
+        from aiops_diagnostics import chat_data_grant, chat_execution, dify_chat_workflow
+        from aiops_diagnostics.dify_run_store import DifyRunStore
+
+        dify_store = DifyRunStore(self.store.path)
+        grant_store = chat_data_grant.DataGrantStore(self.store.path)
+        if registration.cancelled:
+            return
+        if not self.store.update_assistant_question(qa_id, status="running"):
+            return
+        run_id: str | None = None
+        try:
+            workflow_key = dify_chat_workflow.load_workflow_key(binding.workflow_key_file)
+            token, grant = grant_store.issue(
+                scope_fingerprint=context.scope_fingerprint,
+                order_no=order_no,
+                environment=str(self.gateway_settings.execution_environment or ""),
+                tenant_id=context.effective_tenant_id,
+                qa_id=qa_id,
+                workflow_id=binding.workflow_id,
+            )
+            run_id = "dify_" + secrets.token_urlsafe(16)
+            dify_store.issue(
+                run_id=run_id,
+                qa_id=qa_id,
+                scope_fingerprint=context.scope_fingerprint,
+                scope_json=scope_to_json(context),
+                binding_key=binding.key,
+                order_no=order_no,
+                environment=str(self.gateway_settings.execution_environment or ""),
+                tenant_id=context.effective_tenant_id,
+                app_id=binding.workflow_id,
+                workflow_id=binding.workflow_id,
+                grant_id=grant.grant_id,
+            )
+            if registration.cancelled:
+                self._settle_dify_cancelled(dify_store, grant_store, run_id, qa_id)
+                return
+            client = dify_chat_workflow.DifyWorkflowClient(
+                str(self.gateway_settings.dify_chat_base_url),
+                # 必须短于取数凭据的有效期：还在等 Dify 时凭据已经过期，回调会被自己的
+                # 有效期判据挡住，那是一个必然发生的假失败。
+                timeout_seconds=chat_data_grant.GRANT_TTL_SECONDS - 30,
+            )
+            result = client.run(
+                workflow_key=workflow_key,
+                workflow_id=binding.workflow_id,
+                # 只有取数凭据、订单与一次性说明进 inputs。模型与 Dify 用户字段都不是授权。
+                inputs={
+                    "data_grant": token,
+                    "order_no": order_no,
+                    "question": question,
+                    "language": language,
+                },
+                user=f"aiops:{grant.grant_id}",
+            )
+            if result.workflow_id != binding.workflow_id:
+                raise chat_execution.ChatRunUnavailable(
+                    "DIFY_WORKFLOW_MISMATCH", "dify ran a different workflow"
+                )
+            dify_store.bind_workflow(run_id, workflow_run_id=result.workflow_run_id, task_id=result.task_id)
+            if registration.cancelled:
+                with contextlib.suppress(Exception):
+                    client.stop(
+                        workflow_key=workflow_key, task_id=result.task_id, user=f"aiops:{grant.grant_id}"
+                    )
+                self._settle_dify_cancelled(dify_store, grant_store, run_id, qa_id)
+                return
+            # 先做可能阻塞的外部授权，再做本地判定 —— 与节点 worker 同一条顺序。
+            self._require_chat_order_visible(context, order_no)
+            answer = self._release_dify_answer(
+                run_id=run_id,
+                grant_id=grant.grant_id,
+                binding=binding,
+                context=context,
+                order_no=order_no,
+                language=language,
+                outputs=result.outputs,
+            )
+            # 写成功之前再核一次绑定：取数已经完成，但运维可能在这一轮模型执行或上面
+            # 那次外部授权期间删掉登记、切成 node 引擎、换掉 workflow。不核的话这一轮
+            # 会被写成 succeeded/completed 并写入会话答案 —— 而 GET 守卫随后持续拒绝它，
+            # 用户既拿不到正文，也拿不到一个正常的失败终态。
+            self._require_dify_binding_current(binding)
+            if not dify_store.succeed(run_id):
+                raise chat_execution.ChatRunUnavailable("DIFY_RUN_NOT_ACTIVE", "dify run is no longer active")
+        except chat_execution.ChatRunUnavailable as exc:
+            self._settle_dify_failed(dify_store, grant_store, run_id, qa_id, exc.code)
+            _LOGGER.warning("chat dify route rejected: %s: %s", exc.code, exc)
+            return
+        except dify_chat_workflow.DifyWorkflowError as exc:
+            self._settle_dify_failed(dify_store, grant_store, run_id, qa_id, exc.code)
+            _LOGGER.warning("chat dify route failed: %s: %s", exc.code, exc)
+            return
+        except Exception as exc:  # noqa: BLE001 — 未预期失败也是失败，不是"换个引擎再试"
+            self._settle_dify_failed(dify_store, grant_store, run_id, qa_id, "QA_FAILED")
+            _LOGGER.warning("chat dify route failed: %s: %s", type(exc).__name__, exc)
+            return
+        finally:
+            # 完成/失败/取消三条路都撤销取数能力；`revoke_for_qa` 是幂等的。
+            with contextlib.suppress(Exception):
+                grant_store.revoke_for_qa(qa_id)
+        if not self.store.update_assistant_question(qa_id, status="completed", result=answer):
+            return
+        with contextlib.suppress(Exception):
+            self._complete_conversation_turn(
+                registration.conversation_turn, question, answer, status_qa_id=qa_id
+            )
+
+    def _settle_dify_failed(self, dify_store, grant_store, run_id, qa_id: str, code: str) -> None:
+        if run_id is not None:
+            with contextlib.suppress(Exception):
+                dify_store.fail(run_id, code.lower())
+        with contextlib.suppress(Exception):
+            grant_store.revoke_for_qa(qa_id)
+        self.store.update_assistant_question(qa_id, status="failed", error_code=code)
+        registration = self._qa_registrations.get(qa_id)
+        if registration is not None:
+            self._release_conversation_turn(registration.conversation_turn)
+
+    def _settle_dify_cancelled(self, dify_store, grant_store, run_id, qa_id: str) -> None:
+        with contextlib.suppress(Exception):
+            dify_store.cancel(run_id, "cancelled_by_caller")
+        with contextlib.suppress(Exception):
+            grant_store.revoke_for_qa(qa_id)
+        registration = self._qa_registrations.get(qa_id)
+        if registration is not None:
+            self._release_conversation_turn(registration.conversation_turn)
+
+    def _release_dify_answer(
+        self,
+        *,
+        run_id: str,
+        grant_id: str,
+        binding: Any,
+        context: ScopeContext,
+        order_no: str,
+        language: str,
+        outputs: dict[str, Any],
+    ) -> dict[str, Any]:
+        """把 Dify 的输出适配成原 blocks 形状，并对**本轮快照**做完整性校验。
+
+        事实必须来自本轮取数写入的快照 —— Dify 的文本只用来渲染，不用来声称状态。
+        模型写了什么状态码，这里都不采信。
+        """
+        from aiops_diagnostics import chat_data_grant
+        from aiops_diagnostics.consumer_order_chat import status_answer
+
+        grant = chat_data_grant.usable(chat_data_grant.DataGrantStore(self.store.path).by_id(grant_id))
+        if grant.order_no != order_no:
+            raise self._chat_unavailable("DIFY_ORDER_MISMATCH", "dify read a different order")
+        # 必须真的有**同一轮**的取数记录：图没调取数端点、或者把同订单的旧快照
+        # 当成本轮输出，在形状上都可能合法。没有这一条，`succeed()` 会把一次没取过数的
+        # 运行写成 completed，而 GET 要等到回读时才 503 —— 那已经不叫"失败落库"了。
+        from aiops_diagnostics.dify_run_store import DifyRunStore
+
+        stored = DifyRunStore(self.store.path).snapshot(run_id)
+        if stored is None:
+            raise self._chat_unavailable("DIFY_NO_DATA", "dify produced no data")
+        snapshot = outputs.get("snapshot")
+        # Dify 的 HTTP 步骤把响应体当**文本**（`graphon` 的 `HttpResponse.text`），
+        # 所以端节点交回来的是 JSON 字符串而不是对象。这里严格解析：解不出对象、
+        # 或字段不是恰好那五个，一律按"没有数据"拒绝 —— 不采信任何别的东西。
+        if isinstance(snapshot, str):
+            try:
+                snapshot = json.loads(snapshot)
+            except ValueError:
+                snapshot = None
+        if not isinstance(snapshot, dict):
+            # 把 Dify 实际给的 outputs **键名与类型**记下来：只说 "no data" 时，读者无法
+            # 区分"端节点没接变量"、"body 是字符串"、"Dify 把对象序列化了"这三种成因。
+            _LOGGER.warning(
+                "chat dify outputs shape: keys=%s snapshot_type=%s",
+                sorted(outputs),
+                type(outputs.get("snapshot")).__name__,
+            )
+            raise self._chat_unavailable("DIFY_NO_DATA", "dify produced no data")
+        if snapshot.get("order_no") != order_no:
+            raise self._chat_unavailable("DIFY_ORDER_MISMATCH", "dify read a different order")
+        # 快照必须**恰好**是那五个字段：多一个就说明有人往里塞了别的来源。
+        from aiops_diagnostics import chat_execution as _chat
+
+        if set(snapshot) != _chat.SNAPSHOT_FIELDS:
+            raise self._chat_unavailable("DIFY_NO_DATA", "dify data is not a status snapshot")
+        # 输出必须就是**本轮落库的那一份**：不是"形状相近的另一份"。
+        if {key: str(value) for key, value in snapshot.items()} != {
+            key: str(value) for key, value in stored.items()
+        }:
+            raise self._chat_unavailable("DIFY_SNAPSHOT_MISMATCH", "dify answered from a different read")
+        return status_answer(snapshot, language)
+
+    def _require_dify_binding_current(self, binding: Any) -> None:
+        """那条绑定**此刻**仍然成立，且仍是签发时那一条。
+
+        `binding` 是签发时冻结下来的那一条 —— 它能证明"当初选的是它"，不能证明
+        "现在还能走它"。所以要按 `binding_key` 从**当前**绑定表里重新找回一条，
+        并逐字比 workflow。找不到、引擎变了、workflow 换了，一律按不可交付处理。
+        """
+        from aiops_diagnostics import chat_execution
+
+        try:
+            current = chat_execution.binding_for_key(self.gateway_settings, getattr(binding, "key", None))
+        except chat_execution.ChatRunUnavailable as exc:
+            raise chat_execution.ChatRunUnavailable(exc.code, str(exc)) from exc
+        if (
+            current is None
+            or current.engine != chat_execution.ENGINE_DIFY
+            or current.workflow_id != getattr(binding, "workflow_id", None)
+        ):
+            raise chat_execution.ChatRunUnavailable(
+                "CHARGING_STATUS_DISABLED", "dify binding is no longer active"
+            )
+
+    @staticmethod
+    def _chat_unavailable(code: str, message: str):
+        from aiops_diagnostics import chat_execution
+
+        return chat_execution.ChatRunUnavailable(code, message)
 
     def _require_chat_order_visible(self, context: ScopeContext, order_no: str) -> None:
         """写结果之前再判一次本人订单归属。**判据与 API 层那一条是同一个授权器、同一条规则**。
@@ -1756,6 +2018,18 @@ class GatewayRuntime:
                 if linked is not None:
                     with contextlib.suppress(Exception):
                         self.agent_run_store.revoke(linked.run_id, "cancelled_by_caller")
+            # APP-RUNTIME-02：Dify 路线同理，而且要多撤一步 —— 那条链路上的取数凭据
+            # 是**这次 QA 的**，取消之后它必须立刻失效；执行记录也要落 cancelled，
+            # 否则 worker 会在 Dify 回来之后把一条已经取消的回答放出去。
+            if accepted and self.dify_run_store is not None:
+                from aiops_diagnostics import chat_data_grant
+
+                linked_dify = self.dify_run_store.by_qa(qa_id)
+                if linked_dify is not None:
+                    with contextlib.suppress(Exception):
+                        self.dify_run_store.cancel(linked_dify.run_id, "cancelled_by_caller")
+                with contextlib.suppress(Exception):
+                    chat_data_grant.DataGrantStore(self.store.path).revoke_for_qa(qa_id)
             registration = self._qa_registrations.pop(qa_id, None)
             if registration is not None:
                 # Marked before anything else: a worker that has not started its
