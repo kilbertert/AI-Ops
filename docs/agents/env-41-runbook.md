@@ -2171,3 +2171,9 @@ ssh yidong-36 '...同上的 select...'      # 期望三行都是 {"top_k": 4, ..
   的资源创建。
 - 报告状态只能用：`draft_ready` / `pr_open` / `merged_waiting_deploy` / `live` /
   `blocked`；未实测一律写"待验证"。
+
+## 正式节点常驻服务
+
+节点运行根及访问声明见 `.dev-host.toml`，安装、内部回调、Gateway 发布接线、
+验收后退役和恢复步骤见[正式节点手册](../../deploy/node-runtime/README.md)。
+所有主机访问继续使用 `dev-host`；只同步已合并制品，先核对摘要再安装服务。

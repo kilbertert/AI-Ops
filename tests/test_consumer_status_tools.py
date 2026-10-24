@@ -584,3 +584,21 @@ def test_private_report_keeps_the_full_evidence(tmp_path, capsys: pytest.Capture
     assert oct(out.stat().st_mode)[-3:] == "600"
     body = json.loads(out.read_text())
     assert body["expected_fixed"]["order_no"] == SECRET_ORDER
+
+
+@pytest.mark.parametrize("initial", ["queued", "running", "failed"])
+def test_node_page_admission_still_requires_matching_completed_get(initial):
+    events = [_post(status=initial), _get(QA)]
+    values = dict(
+        events=events,
+        payloads=[{"body": {"question": "check my latest order status"}}],
+        answer_text=ANSWER,
+        order_no=ORDER,
+        label="latest",
+        assistant_region_text=ANSWER,
+        execution="node",
+    )
+    checks = probe.judge(**values)
+    assert all(checks.values()) == (initial != "failed")
+    values["events"] = [_post(status=initial), _get(QA, status="failed")]
+    assert not all(probe.judge(**values).values())
