@@ -98,6 +98,7 @@ from aiops_diagnostics.dify_knowledge_api import (
     dify_records,
     parse_dify_retrieval_request,
 )
+from aiops_diagnostics.dify_run_store import DifyRunStore
 from aiops_diagnostics.dify_tools_catalog import AI_OPS_TOOL_NAMES, CATALOG_NOTE
 from aiops_diagnostics.dify_trial import TrialDraft, TrialInitiator, TrialRefused
 from aiops_diagnostics.dify_workspaces import DifyWorkspaceError, DifyWorkspaces
@@ -607,6 +608,9 @@ class GatewayAPI:
         # ``GatewayRuntime``，因为写它的（开户，下一张票）与读它的（发布桥、试运行、
         # 运维 CLI）都以网关的库为唯一真值，而 ``GatewayRuntime`` 在测试里常是替身。
         self.dify_workspaces = DifyWorkspaces(store.path)
+        # APP-RUNTIME-02：Dify 路线的执行记录。同一个库文件、自己的表；
+        # **不**复用 `agent_runs` 的节点列（那会把"这次没有节点"写成"节点核对过了"）。
+        self.dify_run_store = DifyRunStore(store.path)
 
 
 class StandardAPIError(RuntimeError):
@@ -3244,6 +3248,67 @@ def create_gateway_app(
         # 落库之后、交出去之前再判一次：撤销/停用可能就发生在这一次读取期间。
         return _claim_payload(release_candidate(run_id))
 
+    @app.post("/v1/internal/charging-status/dify-read")
+    def dify_chat_read(
+        response: Response,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> dict[str, Any]:
+        """Dify Workflow 的**取数**步骤调这里（APP-RUNTIME-02）。
+
+        判据与节点领取端点是同一条纪律，但凭据不是节点凭据也不是用户会话，而是这次 QA
+        **一次性的取数授权**（`chat_data_grant`）：请求体是空的严格模型，调用者**不能**
+        覆盖主体、租户、订单或环境；凭据绑死这些值，180 秒过期、可撤销、只允许一次业务读取。
+
+        业务事实来自网关这一侧的读取，Dify 拿到的就是这份裁剪后的快照；重复回调只会
+        拿回同一轮已存的快照，撤权之后连缓存也拒绝。
+        """
+        from aiops_diagnostics import chat_data_grant, dify_run_store
+
+        response.headers["Cache-Control"] = "no-store"
+        token = (authorization or "").removeprefix("Bearer ").strip()
+        grants = chat_data_grant.DataGrantStore(context.store.path)
+        try:
+            grant = chat_data_grant.usable(grants.by_token(token))
+        except chat_data_grant.DataGrantError as exc:
+            raise StandardAPIError(401, exc.code, "data grant refused") from exc
+        runs = context.dify_run_store
+        run = runs.by_qa(grant.qa_id)
+        if run is None:
+            raise StandardAPIError(401, "GRANT_UNKNOWN", "data grant refused")
+        if (run.order_no, run.tenant_id, run.environment, run.workflow_id) != (
+            grant.order_no,
+            grant.tenant_id,
+            grant.environment,
+            grant.workflow_id,
+        ):
+            raise StandardAPIError(401, "GRANT_SCOPE_MISMATCH", "data grant refused")
+        # 1) 可能阻塞的外部授权先做：判**此刻**还能不能看这张单。
+        _require_dify_grant_visible(context, run)
+        # 2) 授权之后重读记录：撤销/过期/取消都可能发生在上面那一步期间。
+        latest = runs.get(run.run_id)
+        if latest is None or latest.state not in {dify_run_store.RUNNING, dify_run_store.SUCCEEDED}:
+            raise StandardAPIError(403, "DIFY_RUN_NOT_ACTIVE", "dify run is not active")
+        try:
+            current = chat_data_grant.usable(grants.by_id(grant.grant_id))
+        except chat_data_grant.DataGrantError as exc:
+            raise StandardAPIError(401, exc.code, "data grant refused") from exc
+        # 3) 这一轮已经取过数 ⇒ 只回同一份快照，绝不第二次读业务。
+        existing = runs.snapshot(run.run_id)
+        if existing is not None:
+            return existing
+        if not grants.consume(current.grant_id):
+            raise StandardAPIError(409, "GRANT_ALREADY_CONSUMED", "data grant already used")
+        try:
+            snapshot = _authorized_charging_snapshot(
+                selected_settings, scope_from_json(run.scope_json), grant.order_no
+            )
+        except (ChargingStatusError, StandardAPIError) as exc:
+            raise StandardAPIError(502, "CHARGING_STATUS_UNAVAILABLE", "charging status unavailable") from exc
+        # 读取之后、交出之前再授权一次：撤销可能就发生在这一次读取期间。
+        _require_dify_grant_visible(context, run)
+        runs.store_snapshot(run.run_id, snapshot)
+        return snapshot
+
     @app.post("/v1/internal/charging-status/completions/{run_id}")
     def complete_charging_status_loop(
         run_id: str,
@@ -5836,6 +5901,8 @@ def _require_current_chat_order(context, caller, qa, request):
     if _is_node_chat_qa(qa):
         return _require_current_chat_node_order(context, caller, qa, request)
     internal = str(qa.get("internal_run_id") or "")
+    if internal.startswith(chat_execution.DIFY_RUN_PREFIX):
+        return _require_current_chat_dify_order(context, caller, qa, request)
     if internal.startswith("consumer-order-chat:"):
         authenticated_chat_order_reader(context, caller, request)
         order_no = internal.removeprefix("consumer-order-chat:")
@@ -5919,6 +5986,80 @@ def _require_current_chat_node_order(context, caller, qa, request):
     # 缓存的正文必须**就是这条快照的渲染**：被改过、或写着另一条 run 的结果，都不能交出去。
     if not chat_execution.answer_matches_snapshot(qa.get("result"), released.snapshot or {}):
         store.refuse(located.run_id, "qa_answer_mismatch")
+        raise StandardAPIError(503, "CHARGING_STATUS_EVIDENCE_UNAVAILABLE", "evidence differs")
+
+
+def _require_dify_grant_visible(context: Any, run) -> None:
+    """Dify 取数回调的**当前**本人授权判定。
+
+    与节点回调同一条纪律：用记录里**冻结**的身份去问授权器，而不是问 token 或请求体
+    自称的身份。三种结局都是拒绝，且原因分得开：
+
+    * 看得到 ⇒ 继续；
+    * 看不到 ⇒ 404 `ORDER_NOT_FOUND`（与直读路线同形，不泄露"这单存在但不属于你"）；
+    * 授权源不可用 ⇒ 503 `ORDER_AUTHORIZATION_UNAVAILABLE`（判不出来就是不交付，
+      不能把故障当默认可见）。
+
+    这个函数**只**回答"此刻能不能看这张单"。TTL、取消、绑定一致性由调用方在读记录时判 ——
+    两件事分开，才不会在一处把另一处漏掉。
+    """
+    try:
+        frozen = scope_from_json(run.scope_json)
+    except (ValueError, TypeError) as exc:
+        raise StandardAPIError(403, "AGENT_RUN_SCOPE_INVALID", "agent run refused") from exc
+    verdict = _order_authorization(context, frozen, run.order_no)
+    if verdict == UNAVAILABLE:
+        raise StandardAPIError(
+            503, "ORDER_AUTHORIZATION_UNAVAILABLE", "order authorization unavailable", retryable=True
+        )
+    if verdict == NOT_OWNED:
+        raise StandardAPIError(404, "ORDER_NOT_FOUND", "order not found")
+
+
+def _require_current_chat_dify_order(context, caller, qa, request):
+    """Dify 路线的读取守卫。判据与节点路线同形，证据来源不同。
+
+    无正文的终态（queued/running/failed/cancelled/expired）与绑定是否启用无关，
+    本人始终读得到；**成功正文**必须过：
+
+    * 当前本人授权（与写结果前那一次同一个授权器）；
+    * 绑定此刻仍成立，且是**签发时那一条**（`workflow_id` 逐字相等）；
+    * 执行记录是 succeeded，且**有同一轮取数写下的快照**；
+    * 缓存正文就是该快照的渲染。
+
+    停用之后拒绝正文，与节点路线停用后的纪律一致。
+    """
+    internal = str(qa.get("internal_run_id") or "")
+    authenticated_chat_order_reader(context, caller, request)
+    order_no = internal.removeprefix(chat_execution.DIFY_RUN_PREFIX)
+    if not order_no:
+        raise StandardAPIError(404, "QA_NOT_FOUND", "assistant question not found")
+    _require_consumer_self_order(caller, "consumer", order_no)
+    if qa["status"] in {"queued", "running", "failed", "cancelled", "expired"}:
+        return
+    if qa["status"] != "completed":
+        raise StandardAPIError(404, "QA_NOT_FOUND", "assistant question not found")
+    runs = context.dify_run_store
+    located = runs.by_qa(qa["qa_id"])
+    if located is None:
+        raise StandardAPIError(503, "CHARGING_STATUS_EVIDENCE_UNAVAILABLE", "evidence unavailable")
+    if located.scope_fingerprint != caller.scope_fingerprint or located.order_no != order_no:
+        raise StandardAPIError(404, "QA_NOT_FOUND", "assistant question not found")
+    try:
+        binding = chat_execution.binding_for_key(context.settings, located.binding_key)
+    except chat_execution.ChatRunUnavailable as exc:
+        raise StandardAPIError(exc.http_status, exc.code, str(exc), retryable=exc.retryable) from exc
+    if binding is None or binding.workflow_id != located.workflow_id:
+        raise StandardAPIError(404, "CHARGING_STATUS_DISABLED", "charging status disabled")
+    # 先用可能阻塞的授权，再读记录做本地判定 —— 与另外两条路线同一条顺序。
+    _require_visible_order(context, caller, order_no)
+    latest = runs.get(located.run_id)
+    if latest is None or latest.state != "succeeded":
+        raise StandardAPIError(404, "AGENT_RUN_NO_RESULT", "dify run produced no result")
+    snapshot = runs.snapshot(latest.run_id)
+    if snapshot is None or snapshot.get("order_no") != order_no:
+        raise StandardAPIError(503, "CHARGING_STATUS_EVIDENCE_UNAVAILABLE", "evidence unavailable")
+    if not chat_execution.answer_matches_snapshot(qa.get("result"), snapshot):
         raise StandardAPIError(503, "CHARGING_STATUS_EVIDENCE_UNAVAILABLE", "evidence differs")
 
 

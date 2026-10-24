@@ -1,0 +1,1369 @@
+#!/usr/bin/env python3
+"""APP-RUNTIME-02 的**真实 Dify** 整链验收。
+
+这一层要证的是：原 App 聊天入口 → 真 Gateway → **真 Dify 1.17.1** 的已发布 Workflow
+→ 该 Workflow 的 HTTP 步骤**自己**带着一次性凭据回调网关取数 → 同一轮快照 → 原 GET。
+
+| 环节 | 真 / 替 |
+|---|---|
+| `POST/GET /v1/assistant/questions`、绑定选择、选单、授权、放行 | **真 Gateway 进程**（本仓代码） |
+| 执行记录、取数凭据、回调端点 | **本仓真实代码** |
+| Workflow 编排、HTTP 步骤、模型步骤、发布与运行 | **真 Dify 1.17.1**（本地隔离栈） |
+| 业务取数（CPMS） | 本机合成回环桩 |
+| 模型上游 | 本机合成 OpenAI-compatible 回环桩 |
+| 调用者身份 / 订单授权 / 选单数据 / 平台目录 | 既有 `gateway_launcher.py` 的合成替身 |
+
+**Dify 的 HTTP 步骤自己去调网关** —— 脚本不代发，也不 mock Dify 的结果。
+脚本只做三件事：起栈、导入并发布 DSL、从 App 接口驱动两次请求并核对。
+
+    DIFY_TEST_PY=python3 uv run python tools/m2_close/m3node/verify_dify_chat_entry.py --out report.json
+
+退出码 0=PASS，1=有判据失败，2=未取证（前置缺失，不跳过）。
+"""
+
+from __future__ import annotations
+
+import argparse
+import contextlib
+import json
+import os
+import secrets
+import shutil
+import signal
+import socket
+import sqlite3
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+from datetime import UTC, datetime
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from typing import Any
+from urllib import error as urllib_error
+from urllib import request as urllib_request
+
+REPO = Path(__file__).resolve().parents[3]
+DIFY_DIR = REPO / "deploy/dify-chat"
+DSL = DIFY_DIR / "consumer-order-status.dsl.yml"
+TOKEN = "dify-chat-real-token"
+TENANT = "TENANT-A"
+C_USER = "USER-A"
+#: 模型 provider 插件。1.17.1 不在镜像里内建 provider，缺它整轮 400。
+PLUGIN_ID = "langgenius/openai_api_compatible"
+#: 插件装好后，provider 在 Dify 里的**真实**标识是三段式 `org/plugin/provider`
+#: （实测：`langgenius/openai_api_compatible/openai_api_compatible`）。
+#: 用插件短名去找它永远找不到 —— 那会让"已经装好了"被判成"没装上"，
+#: 然后带着一个错的 provider 名一路走到运行期 400。
+PROVIDER_NAME = "langgenius/openai_api_compatible/openai_api_compatible"
+PLUGIN_VERSION = "0.0.68"
+PLUGIN_SHA = "ba61c5eccb814be7364117c0bec3710a51e09b20f31e37243e747a00f9377969"
+#: 包缓存放一次性目录：不写进仓库，也不依赖机器上预先存在的文件。
+PLUGIN_CACHE = Path(tempfile.gettempdir()) / "dify-chat-plugin-cache"
+
+ORDER_LATEST = "ORDER-3001"
+ORDER_OLDER = "ORDER-3002"
+#: 另一个 C 端用户自己的单。**订单号不同、用户不同**，用来证明选单与授权按本人分流。
+ORDER_OTHER = "ORDER-4001"
+OTHER_TOKEN = "dify-chat-real-token-b"
+OTHER_USER = "USER-B"
+
+
+def _free_port() -> int:
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        return int(sock.getsockname()[1])
+
+
+def http(
+    url: str,
+    method: str = "GET",
+    token: str | None = None,
+    body: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
+    timeout: float = 120.0,
+) -> tuple[int, str]:
+    data = json.dumps(body).encode() if body is not None else None
+    request = urllib_request.Request(url, data=data, method=method)
+    if data is not None:
+        request.add_header("Content-Type", "application/json")
+    if token:
+        request.add_header("Authorization", f"Bearer {token}")
+    for key, value in (headers or {}).items():
+        request.add_header(key, value)
+    try:
+        with urllib_request.urlopen(request, timeout=timeout) as response:
+            return response.status, response.read().decode("utf-8", "replace")
+    except urllib_error.HTTPError as exc:
+        return exc.code, exc.read().decode("utf-8", "replace")
+    except Exception as exc:  # noqa: BLE001 — 连不上也要成为一条可观察结果
+        return 0, f"{type(exc).__name__}: {exc}"
+
+
+def http_json(
+    url: str,
+    method: str = "GET",
+    body: dict[str, Any] | None = None,
+    headers: dict[str, str] | None = None,
+    timeout: float = 120.0,
+) -> tuple[int, Any]:
+    """同 `http`，但把正文解析成 JSON —— 控制台接口的正文本来就是 JSON。"""
+    status, text = http(url, method=method, body=body, headers=headers, timeout=timeout)
+    return status, _json(text)
+
+
+def _json(text: str) -> Any:
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return {"raw": text[:400]}
+
+
+# --------------------------------------------------------------------------
+# 合成模型上游：Dify 的 LLM 步骤打这里
+# --------------------------------------------------------------------------
+
+
+class ModelHandler(BaseHTTPRequestHandler):
+    state: dict[str, Any] = {}
+
+    def log_message(self, *args: Any) -> None:  # noqa: D102
+        pass
+
+    def _send(self, payload: dict[str, Any]) -> None:
+        data = json.dumps(payload).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def do_POST(self) -> None:  # noqa: N802
+        length = int(self.headers.get("Content-Length") or 0)
+        raw = self.rfile.read(length)
+        body = _json(raw.decode("utf-8", "replace")) if raw else {}
+        # **记录模型实际收到的全部文本**：判据要证明 prompt 里没有取数凭据。
+        texts: list[str] = []
+        for message in body.get("messages") or []:
+            if isinstance(message, dict) and isinstance(message.get("content"), str):
+                texts.append(message["content"])
+        prompt = "\n".join(texts)
+        type(self).state.setdefault("prompts", []).append(prompt)
+        # 形状也要留证：有的 provider 会把正文放进 content 数组或别的字段，
+        # 只记拼好的文本时，"模型没收到订单号"和"我没读对字段"看起来一模一样。
+        type(self).state.setdefault("shapes", []).append(
+            {
+                "keys": sorted(body),
+                "roles": [m.get("role") for m in body.get("messages") or [] if isinstance(m, dict)],
+            }
+        )
+        type(self).state["calls"] = type(self).state.get("calls", 0) + 1
+        answer = "订单状态已播报。"
+        if body.get("stream"):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            chunk = json.dumps(
+                {
+                    "id": "c",
+                    "object": "chat.completion.chunk",
+                    "created": 0,
+                    "model": "synthetic",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"role": "assistant", "content": answer},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                }
+            )
+            self.wfile.write(("data: " + chunk + "\n\n").encode())
+            self.wfile.write(b"data: [DONE]\n\n")
+            self.wfile.flush()
+            return
+        self._send(
+            {
+                "id": "chatcmpl-x",
+                "object": "chat.completion",
+                "created": 0,
+                "model": body.get("model") or "synthetic",
+                "choices": [
+                    {"index": 0, "message": {"role": "assistant", "content": answer}, "finish_reason": "stop"}
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            }
+        )
+
+    def do_GET(self) -> None:  # noqa: N802
+        # Dify 的模型校验会先拉一次 /v1/models。
+        self._send({"object": "list", "data": [{"id": "synthetic", "object": "model"}]})
+
+
+class CpmsHandler(BaseHTTPRequestHandler):
+    calls: list[str] = []
+    fail = False
+
+    def log_message(self, *args: Any) -> None:  # noqa: D102
+        pass
+
+    def do_GET(self) -> None:  # noqa: N802
+        order_no = self.path.rsplit("/", 1)[-1]
+        type(self).calls.append(order_no)
+        if type(self).fail:
+            self.send_response(500)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        body = json.dumps(
+            {
+                "code": 0,
+                "msg": "success",
+                "data": {"orderNo": order_no, "status": "0", "plateNo": "DO-NOT-LEAK"},
+            }
+        ).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+def _serve(handler: type[BaseHTTPRequestHandler]) -> ThreadingHTTPServer:
+    # 绑 0.0.0.0：Dify 容器要能打到这个桩。它不是生产面，只在一次性验收里存在。
+    server = ThreadingHTTPServer(("0.0.0.0", 0), handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+# 容器 → 宿主**不是**默认通的：这台机器的 INPUT 策略是 DROP（ufw 只放行 22/80/443），
+# 从 `host.docker.internal`（docker 网桥网关）打过来的包在 INPUT 链就被丢掉。
+# 症状是凭据校验返回 400 `Connection to host.docker.internal timed out`，而 api 容器
+# 里同样能解析这个名字 —— 看起来像模型地址写错。
+#
+# 放行是**精确到接口和端口**的：只加在 docker 网桥接口上，只开本次这两个端口，
+# 结束时逐条 `-D` 删掉。不是 `ufw allow`，不改默认策略，不留持久规则。
+_INGRESS_IFACES = ("docker0", "br-+")
+
+
+def _open_bridge_ingress(ports: list[int], extra_hosts: list[str]) -> dict[str, Any]:
+    opened: list[dict[str, Any]] = []
+    for port in ports:
+        for iface in _INGRESS_IFACES:
+            rule = ["-i", iface, "-p", "tcp", "--dport", str(port), "-j", "ACCEPT"]
+            done = subprocess.run(
+                ["sudo", "-n", "iptables", "-I", "INPUT", "1", *rule], capture_output=True, text=True
+            )
+            opened.append(
+                {"port": port, "iface": iface, "ok": done.returncode == 0, "err": done.stderr[-200:]}
+            )
+    return {"opened": opened, "extra_hosts": extra_hosts}
+
+
+def _close_bridge_ingress(opened: dict[str, Any]) -> dict[str, Any]:
+    closed = []
+    for item in opened.get("opened", []):
+        if not item["ok"]:
+            continue
+        rule = ["-i", item["iface"], "-p", "tcp", "--dport", str(item["port"]), "-j", "ACCEPT"]
+        done = subprocess.run(
+            ["sudo", "-n", "iptables", "-D", "INPUT", *rule], capture_output=True, text=True
+        )
+        closed.append({"port": item["port"], "iface": item["iface"], "ok": done.returncode == 0})
+    return {"closed": closed}
+
+
+# --------------------------------------------------------------------------
+# 隔离 Dify 栈
+# --------------------------------------------------------------------------
+
+
+def _compose(env: dict[str, str], *args: str, timeout: int = 900) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [
+            "docker",
+            "compose",
+            "-f",
+            str(DIFY_DIR / "docker-compose.acceptance.yaml"),
+            "-p",
+            env["DIFY_TEST_PROJECT"],
+            *args,
+        ],
+        cwd=DIFY_DIR,
+        env={**os.environ, **env},
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+
+
+def _dify_env(root: Path, *, model_url: str, port: int, project: str, network: str) -> dict[str, str]:
+    """生成这一栈的 .env。全部取值为随机或本机地址，没有任何生产值。"""
+    env_file = DIFY_DIR / ".env"
+    values = {
+        "DIFY_REGISTRY": "docker.io",
+        "DIFY_TEST_PORT": str(port),
+        "DIFY_TEST_PROJECT": project,
+        "DIFY_TEST_NETWORK": network,
+        "SECRET_KEY": secrets.token_urlsafe(42),
+        "INIT_PASSWORD": "Acceptance-" + secrets.token_hex(8),
+        "MODE": "api",
+        "DEPLOY_ENV": "TESTING",
+        "MIGRATION_ENABLED": "true",
+        "DEPLOYMENT_EDITION": "COMMUNITY",
+        "DB_TYPE": "postgresql",
+        "DB_HOST": "db_postgres",
+        "DB_PORT": "5432",
+        "DB_USERNAME": "dify",
+        "DB_PASSWORD": secrets.token_hex(16),
+        "DB_DATABASE": "dify",
+        "DB_PLUGIN_DATABASE": "dify_plugin",
+        "REDIS_HOST": "redis",
+        "REDIS_PORT": "6379",
+        "REDIS_USERNAME": "",
+        "REDIS_PASSWORD": "",
+        "CELERY_BROKER_URL": "redis://redis:6379/1",
+        "PLUGIN_DAEMON_KEY": secrets.token_hex(16),
+        "PLUGIN_DIFY_INNER_API_KEY": secrets.token_hex(16),
+        "VECTOR_STORE": "weaviate",
+        "WEAVIATE_ENDPOINT": "http://weaviate:8080",
+        "WEAVIATE_API_KEY": secrets.token_hex(24),
+        "STORAGE_TYPE": "opendal",
+        "OPENDAL_SCHEME": "fs",
+        "OPENDAL_FS_ROOT": "storage",
+        # **必须开着**：模型 provider 是插件，装它要走 marketplace。
+        # 现役实例关掉市场是产品决定（PRD #577），但那是"不给终端用户逛市场"；
+        # 隔离验收里要装 provider 插件，关着就装不上（400 marketplace is not enabled）。
+        "MARKETPLACE_ENABLED": "true",
+        "ENABLE_COLLABORATION_MODE": "false",
+        "ALLOW_REGISTER": "false",
+        "ALLOW_CREATE_WORKSPACE": "true",
+        "ACCESS_TOKEN_EXPIRE_MINUTES": "60",
+        "REFRESH_TOKEN_EXPIRE_DAYS": "1",
+        "CONSOLE_API_URL": f"http://127.0.0.1:{port}",
+        "CONSOLE_WEB_URL": f"http://127.0.0.1:{port}",
+        "SERVICE_API_URL": f"http://127.0.0.1:{port}",
+        "APP_WEB_URL": f"http://127.0.0.1:{port}",
+        "FILES_URL": f"http://127.0.0.1:{port}",
+        # Dify 1.17.1 的配置校验要求它是**合法 URL**，空串会直接 pydantic 失败。
+        # 本片不用 code 节点，指向本栈自己的 api 即可（不会被执行到）。
+        "CODE_EXECUTION_ENDPOINT": f"http://127.0.0.1:{port}",
+        "SSRF_PROXY_HTTP_URL": "",
+        "SSRF_PROXY_HTTPS_URL": "",
+        "LOG_LEVEL": "INFO",
+        "DIFY_TEST_MODEL_URL": model_url,
+    }
+    env_file.write_text("\n".join(f"{k}={v}" for k, v in values.items()) + "\n")
+    env_file.chmod(0o600)
+    shutil.copy(env_file, root / "dify.env")
+    return {**values, "DIFY_TEST_ROOT": str(root)}
+
+
+def _wait_ready(base: str, deadline: float) -> bool:
+    while time.monotonic() < deadline:
+        status, _ = http(f"{base}/health", timeout=5.0)
+        if status == 200:
+            return True
+        time.sleep(3)
+    return False
+
+
+def _dsl_for(gateway_base: str) -> bytes:
+    """把 DSL 里固定的取数地址换成**这一次**的网关地址，别的字节不动。
+
+    模板里写的是一个不可路由的占位域名，就是为了让"忘了替换"变成一次明确的失败，
+    而不是悄悄打到某个真实主机上。
+    """
+    text = DSL.read_text(encoding="utf-8")
+    replaced = text.replace("http://gateway.invalid", gateway_base)
+    if "http://gateway.invalid" in replaced:
+        raise SystemExit("dsl still points at the placeholder")
+    return replaced.encode("utf-8")
+
+
+def _wait_model_provider(base: str, deadline: float) -> bool:
+    """从**外部**证明 plugin daemon 就绪。
+
+    plugin_daemon 的镜像里没有 curl/wget/nc/`/dev/tcp`，容器内探活只会把一个正常工作的
+    进程永远报成 unhealthy。所以这里不等"它的 healthcheck"，而是等**网关这一侧的
+    /health 稳定**，把 provider 是否真的可用留给第一次真实 run 去证：没起来就一定
+    400 `Failed to request plugin daemon`，对应判据会红。这样不会因为探活工具缺失而
+    让一次正确的验收失败。
+    """
+    while time.monotonic() < deadline:
+        if http(f"{base}/health", timeout=3.0)[0] == 200:
+            return True
+        time.sleep(2)
+    return False
+
+
+def _saved_shape(graph: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "nodes": [node.get("id") for node in graph.get("nodes", [])],
+        "edges": [f"{edge.get('source')}->{edge.get('target')}" for edge in graph.get("edges", [])],
+    }
+
+
+def _setup_dify(base: str, env: dict[str, str], *, model_url: str, gateway_base: str) -> dict[str, Any]:
+    """建管理员、建 app、导入 DSL、配模型、发布。**全部走真实的 Dify HTTP 接口**。"""
+    result: dict[str, Any] = {"steps": []}
+
+    def step(name: str, ok: bool, detail: Any = None) -> None:
+        result["steps"].append({"name": name, "ok": bool(ok), "detail": detail})
+
+    # 1) 初始化管理员。Dify 1.17.1 要求**先过 init 校验**（POST /console/api/init，
+    #    用 INIT_PASSWORD），否则 /setup 与 /login 一律 401 `not_init_validated`。
+    #    这一步需要一个会话 cookie，所以用一个带 cookie jar 的 opener，而不是裸 urllib。
+    from http.cookiejar import CookieJar
+
+    jar = CookieJar()
+    opener = urllib_request.build_opener(urllib_request.HTTPCookieProcessor(jar))
+    init_request = urllib_request.Request(
+        f"{base}/console/api/init",
+        data=json.dumps({"password": env["INIT_PASSWORD"]}).encode(),
+        method="POST",
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        with opener.open(init_request, timeout=30) as response:
+            init_status = response.status
+    except urllib_error.HTTPError as exc:
+        init_status = exc.code
+    step("init validate", init_status in {200, 201}, {"status": init_status})
+    result["cookies"] = [cookie.name for cookie in jar]
+
+    def console_call(path: str, payload: dict[str, Any]) -> tuple[int, Any]:
+        """走**同一个** opener：init / setup / login 三者串在一条会话上。
+
+        裸 urllib 每次都是新会话，`is_init_validated` 就丢了 —— login 会 401，
+        而错误看起来像"口令不对"。
+        """
+        request = urllib_request.Request(
+            f"{base}{path}",
+            data=json.dumps(payload).encode(),
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with opener.open(request, timeout=60) as response:
+                return response.status, _json(response.read().decode("utf-8", "replace"))
+        except urllib_error.HTTPError as exc:
+            return exc.code, _json(exc.read().decode("utf-8", "replace"))
+
+    status, body = console_call(
+        "/console/api/setup",
+        {"email": "acceptance@example.invalid", "name": "acc", "password": env["INIT_PASSWORD"]},
+    )
+    step(
+        "console setup",
+        status in {200, 201, 400},
+        {"status": status, "body": body if status >= 400 else None},
+    )
+
+    # 登录口令要 **base64**：1.17.1 的 `decrypt_password_field` 装饰器对 `password`
+    # 做 base64 解码，解不出来就是 AuthenticationFailed（401）。setup 走的是另一条
+    # 路径（不吃这个装饰器），所以两处编码方式不同是**接口的真实形状**，不是笔误。
+    import base64
+
+    status, body = console_call(
+        "/console/api/login",
+        {
+            "email": "acceptance@example.invalid",
+            "password": base64.b64encode(env["INIT_PASSWORD"].encode()).decode(),
+            "language": "en-US",
+        },
+    )
+    login = body if status == 200 else {}
+    # 1.17.1 的登录**不把令牌放进响应体**：`_token_response` 只回
+    # `{"result": "success", "data": null}`，令牌通过 Set-Cookie 下发（access/refresh/csrf）。
+    # 所以从 cookie jar 里取，而不是在 body 里找字段 —— 在 body 里找会一直找不到，
+    # 而现象看起来像"登录失败"。
+    cookies = {cookie.name: cookie.value for cookie in jar}
+    access = cookies.get("access_token")
+    step(
+        "console login",
+        bool(access),
+        {"status": status, "cookie_names": sorted(cookies), "body_keys": sorted(login) if login else None},
+    )
+    if not access:
+        return result
+    # 控制台的受保护接口既认 Bearer，也认 cookie 会话；两个都带上，与浏览器登录后同形。
+    cookie_header = "; ".join(f"{name}={value}" for name, value in cookies.items())
+    console = {"Authorization": f"Bearer {access}", "Cookie": cookie_header}
+    # CSRF：Dify 的写操作要求这个头与 cookie 成对出现。
+    if "csrf_token" in cookies:
+        console["X-CSRF-Token"] = cookies["csrf_token"]
+
+    # 2) 导入 DSL。导入即创建一个 workflow app。
+    #
+    # 1.17.1 的这个端点是 **JSON**，不是 multipart：`AppImportPayload` 只有
+    # `mode`（必填，取值 `yaml-content`）+ `yaml_content`。用错形态会得到
+    # 422 `Field required: mode` —— 看起来像少字段，其实是**载体**不对。
+    import_status, imported = http_json(
+        f"{base}/console/api/apps/imports",
+        method="POST",
+        body={"mode": "yaml-content", "yaml_content": _dsl_for(gateway_base).decode("utf-8")},
+        headers=console,
+    )
+    step(
+        "import dsl",
+        import_status == 200,
+        {"status": import_status, "body": imported if import_status != 200 else None},
+    )
+    imported = imported if import_status == 200 and isinstance(imported, dict) else {}
+    app_id = imported.get("app_id") or imported.get("id")
+    result["app_id"] = app_id
+    if not app_id:
+        return result
+
+    # 2b) 装模型 provider **插件**。1.17.1 的 provider 不是内建的：`openai_api_compatible`
+    #     是一个 .difypkg 插件，没装时 `/v1/workflows/run` 会 400
+    #     `Provider openai_api_compatible does not exist.`。这里先把包放进 plugin_daemon
+    #     的本地存储，再按 identifier 安装。
+    #
+    #     取证方式：包从 marketplace 下载到一次性目录，sha256 记进报告；不写进仓库。
+    plugin_id = PLUGIN_ID
+    # 用 **marketplace 安装**，而不是先手工把 .difypkg 塞进 plugin_daemon 的存储：
+    # 后者要求容器内路径与安装器约定一致（`plugin_packages/` 之类），一次写错就是
+    # 一个看起来"装了但没装上"的假成功。marketplace 这条路让 plugin_daemon 自己去拉，
+    # 它自己知道该怎么校验和落盘 —— 我们只提供 identifier。
+    status, body = http_json(
+        f"{base}/console/api/workspaces/current/plugin/install/marketplace",
+        method="POST",
+        body={"plugin_unique_identifiers": [f"{plugin_id}:{PLUGIN_VERSION}@{PLUGIN_SHA}"]},
+        headers=console,
+    )
+    step("install model provider plugin", status in {200, 201}, {"status": status, "body": body})
+    # **装完必须重启 api**：插件在 plugin_daemon 里立刻可用（它的日志会打
+    # `local runtime ready`），但 api 进程把 provider 列表缓存在内存里，
+    # 不重启就一直返回空的 —— 于是"装好了"看起来像"没装上"，
+    # 一路走到运行期 `Provider ... does not exist`。
+    # 实测：重启 api 之后同一个接口立刻返回那条 provider。
+    _compose(env, "restart", "api", timeout=300)
+    if not _wait_ready(base, time.monotonic() + 180):
+        step("api 重启后就绪", False, {"phase": "after-plugin-install"})
+    # 安装是异步任务：等到 provider 真的出现在列表里再往下走。
+    ready = False
+    last_seen: Any = None
+    deadline = time.monotonic() + 240
+    while time.monotonic() < deadline:
+        got_status, listing = http_json(
+            f"{base}/console/api/workspaces/current/model-providers", headers=console
+        )
+        text = json.dumps(listing or {}, ensure_ascii=False)
+        # 把**实际看到的 provider 标识**记下来：判据失败时要能立刻分辨
+        # 「没装上」「装上了但名字不是我以为的那个」这两种完全不同的情况。
+        names = [item.get("provider") for item in (listing or {}).get("data", []) if isinstance(item, dict)]
+        last_seen = {"status": got_status, "providers": names[:20]}
+        if got_status == 200 and PROVIDER_NAME in text:
+            ready = True
+            break
+        time.sleep(5)
+    step("model provider plugin ready", ready, {"waited_s": 240, "last_seen": last_seen})
+
+    # 3) 给这个 provider 建**模型凭据**（自定义模型）。
+    #
+    # 1.17.1 的语义要点（读源码确认的）：
+    #   * `openai_api_compatible` **没有** provider 级凭据（`provider_credential_schema`），
+    #     所以 `/credentials` 会 400；自定义模型走 `/models/credentials`。
+    #   * `POST /models` 只管负载均衡，**不是**注册模型；模型名随凭据一起提交。
+    #   * 请求体是 `{model, model_type, name?, credentials}`。
+    status, body = http_json(
+        f"{base}/console/api/workspaces/current/model-providers/{PROVIDER_NAME}/models/credentials",
+        method="POST",
+        headers=console,
+        body={
+            "model": "synthetic",
+            "model_type": "llm",
+            "name": "synthetic",
+            # 字段名由该 provider 的 **credential schema** 决定，不是我们起的名：
+            # `openai_api_compatible` 要的是 `endpoint_url`（不是 `base_url`）。
+            # 猜字段名的后果是 400 `Variable xxx is required`，看起来像缺配置。
+            "credentials": {
+                "api_key": "synthetic-not-a-real-key",
+                "endpoint_url": model_url,
+                "mode": "chat",
+                # 该 provider 把这些数值型选项声明成 **string**；
+                # 传整数会 500（`Variable context_size should be string`）。
+                "context_size": "8192",
+                "max_tokens_to_sample": "256",
+            },
+        },
+    )
+    step("register custom model credential", status in {200, 201}, {"status": status, "body": body})
+
+    # 4) 把 DSL 里的模型占位换成真实模型，然后发布。
+    status, text = http(f"{base}/console/api/apps/{app_id}", headers=console)
+    app = _json(text) if status == 200 else {}
+    result["app_detail"] = {"status": status, "mode": (app or {}).get("mode")}
+
+    # 导入后**按草稿实际保存的图**核对节点与边：DSL 写的是 YAML，Dify 存的是 JSON，
+    # 两者形状不同。只在 DSL 上看"我写了三条边"是不够的 —— 上一版整张图只进来一个
+    # start 节点，而导入接口回的是 200。
+    draft_status, draft_text = http(f"{base}/console/api/apps/{app_id}/workflows/draft", headers=console)
+    imported_graph = (_json(draft_text) or {}).get("graph") if draft_status == 200 else {}
+    result["draft_graph"] = {"status": draft_status, **_saved_shape(imported_graph or {})}
+
+    status, text = http(
+        f"{base}/console/api/apps/{app_id}/workflows/draft",
+        headers=console,
+    )
+    draft = _json(text) if status == 200 else {}
+    graph = (draft or {}).get("graph") or {}
+    for node in graph.get("nodes", []):
+        if node.get("data", {}).get("type") == "llm":
+            model = node["data"].setdefault("model", {})
+            model["provider"] = PROVIDER_NAME
+            model["name"] = "synthetic"
+            model["mode"] = "chat"
+            model.setdefault("completion_params", {})["temperature"] = 0
+    if graph:
+        status, text = http(
+            f"{base}/console/api/apps/{app_id}/workflows/draft",
+            method="POST",
+            headers=console,
+            body={
+                "graph": graph,
+                "features": (draft or {}).get("features") or {},
+                # `SyncDraftWorkflowPayload` 是 `extra="forbid"`：多一个键就是 400。
+                # 合法键只有 graph / features / hash / _is_collaborative /
+                # environment_variable_patch / conversation_variables。
+                # `hash` 是**乐观锁**：不带或带错就是 409 `draft_workflow_not_sync` ——
+                # 它保证"我改的是我刚读到的那一版"，不是任意覆盖。
+                "hash": (draft or {}).get("hash"),
+                "conversation_variables": [],
+            },
+        )
+        step(
+            "write draft graph",
+            status in {200, 201},
+            {
+                "status": status,
+                "body": _json(text) if status >= 400 else None,
+                # 写回去之后**再读一遍**：POST 回 200 只证明它收下了，不证明存下来的还是
+                # 那张图。上一版整张图只剩 start 一个节点，而到这里一路都是 200。
+                "saved": _saved_shape(graph),
+            },
+        )
+
+    status, text = http(
+        f"{base}/console/api/apps/{app_id}/workflows/publish",
+        method="POST",
+        headers=console,
+        body={},
+    )
+    published = _json(text) if status in {200, 201} else {}
+    # 发布接口只回 `{"result": "success", "created_at": ...}`，**不含** workflow id。
+    # Service API 要的那个 id 要在发布之后重新读 app 详情才拿得到。
+    workflow_id = None
+    if status in {200, 201}:
+        detail_status, detail = http_json(f"{base}/console/api/apps/{app_id}", headers=console)
+        if detail_status == 200 and isinstance(detail, dict):
+            workflow = detail.get("workflow") if isinstance(detail.get("workflow"), dict) else {}
+            workflow_id = workflow.get("id") or detail.get("workflow_id")
+    if workflow_id is None and isinstance(published, dict):
+        workflow_id = published.get("id")
+    result["workflow_id"] = workflow_id
+    result["published"] = {
+        "status": status,
+        "workflow_id": workflow_id,
+        "keys": sorted(published) if isinstance(published, dict) else None,
+    }
+
+    # 5) 造一个该 app 的 Service API key —— 这就是网关侧配置要用的那个。
+    status, text = http(f"{base}/console/api/apps/{app_id}/api-keys", method="POST", headers=console, body={})
+    key = (_json(text) or {}).get("token") if status in {200, 201} else None
+    result["service_key_ok"] = bool(key)
+    result["service_key"] = key
+    # 控制台会话头留一份给失败诊断用（节点执行记录是 console 路由）。
+    # 它含会话令牌，所以 `main()` 打印报告前会把它摘掉，只用来发请求。
+    result["console_headers"] = dict(console)
+    return result
+
+
+def _start_gateway(
+    *,
+    root: Path,
+    model_url: str,
+    cpms_base: str,
+    dify_base: str,
+    workflow_id: str,
+    key: str,
+    port: int,
+) -> tuple[subprocess.Popen, str, dict[str, Any]]:
+    """起真 Gateway（绑定表指向 Dify 路线），等它就绪。"""
+    case = root / "gateway"
+    # 可重入：网关会起两次（先占位让 DSL 有地址可写，拿到 workflow 后再用真实绑定重起）。
+    (case / "config").mkdir(parents=True, exist_ok=True)
+    (case / "data").mkdir(parents=True, exist_ok=True)
+    settings_file = case / "config/production.env"
+    settings_file.write_text("# synthetic\n")
+    settings_file.chmod(0o600)
+
+    orders = case / "data/orders.db"
+    conn = sqlite3.connect(orders)
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS synthetic_orders "
+        "(order_no TEXT PRIMARY KEY, user_id TEXT, tenant_id TEXT, created_time TEXT, id TEXT)"
+    )
+    conn.executemany(
+        "INSERT OR REPLACE INTO synthetic_orders VALUES (?, ?, ?, ?, ?)",
+        [
+            (ORDER_LATEST, C_USER, TENANT, "2026-10-20 10:00:00", "2"),
+            (ORDER_OLDER, C_USER, TENANT, "2026-10-18 10:00:00", "1"),
+            (ORDER_OTHER, OTHER_USER, TENANT, "2026-10-21 10:00:00", "3"),
+        ],
+    )
+    conn.commit()
+    conn.close()
+
+    manifest = case / "exec-manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema": "m3-exec-config/1",
+                "name": "dify-chat",
+                "history_policy": "none",
+                "model": {
+                    "provider_key": "openai-compatible",
+                    "adapter_key": "openai-compatible",
+                    "model_key": "synthetic",
+                    "endpoint": model_url,
+                },
+                "model_options": {"temperature": 0.2, "top_p": 0.9, "max_tokens": 64},
+                "system_messages": ["SYSTEM"],
+                "tools": [{"name": "charging_status_snapshot", "description": "d", "input_schema": "{}"}],
+            }
+        )
+    )
+    manifest.chmod(0o600)
+    node_config = case / "agent-runs.json"
+    node_config.write_text(
+        json.dumps(
+            {
+                "environment": "env-local",
+                "snail_base_url": "http://127.0.0.1:1",
+                "snail_app_id": "unused",
+                "snail_app_token": "unused",
+                "snail_agent_id": 1,
+                "snail_open_id": "unused",
+                "expected_node_id": "node-local",
+                "nodes": [{"node_id": "node-local", "environment": "env-local", "token_sha256": "0" * 64}],
+            }
+        )
+    )
+    node_config.chmod(0o600)
+    key_file = case / "dify-workflow.key"
+    key_file.write_text(key + "\n")
+    key_file.chmod(0o600)
+
+    bindings = case / "chat-bindings.json"
+    bindings.write_text(
+        json.dumps(
+            {
+                "schema": "aiops-chat-execution/1",
+                "bindings": [
+                    {
+                        "engine": "dify",
+                        "environment": "env-local",
+                        "tenant_id": TENANT,
+                        "entry": "consumer",
+                        "scenario": "consumer_own_order_status",
+                        "workflow_id": workflow_id,
+                        "workflow_key_file": str(key_file),
+                    }
+                ],
+            }
+        )
+    )
+    bindings.chmod(0o600)
+
+    env = {
+        **os.environ,
+        "AIOPS_DATA_HOME": str(case / "data"),
+        "AIOPS_CONFIG_HOME": str(case / "config"),
+        "AIOPS_GATEWAY_DATA_HOME": str(case / "data"),
+        "AIOPS_GATEWAY_SERVER_CONFIG_FILE": str(settings_file),
+        "AIOPS_GATEWAY_DATABASE_FILE": str(case / "data/gateway.db"),
+        "AIOPS_GATEWAY_PORT": str(port),
+        "AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL": f"{cpms_base}/charging-pile",
+        "AIOPS_GATEWAY_CONSUMER_ORDER_CHAT_ENABLED": "1",
+        "AIOPS_GATEWAY_ENVIRONMENT": "dify-chat-acceptance",
+        "AIOPS_GATEWAY_EXECUTION_ENVIRONMENT": "env-local",
+        "AIOPS_GATEWAY_CHAT_EXECUTION_BINDINGS_FILE": str(bindings),
+        "AIOPS_GATEWAY_DIFY_CHAT_BASE_URL": dify_base,
+        # 取数步骤是**真 Dify 容器**自己发的 POST，回环上永远到不了。所以这一次的网关
+        # 必须绑 0.0.0.0。它不是生产面：一次性数据根、随机端口、进程随验收结束即停；
+        # 宿主 INPUT 策略是 DROP，除了本次精确放行的那个端口，外部与别的容器都进不来。
+        "AIOPS_GATEWAY_BIND": "0.0.0.0",
+        "AIOPS_M2_LOCAL_TOKEN": TOKEN,
+        "AIOPS_M2_ORDERS_DB": str(orders),
+        "AIOPS_M2_TENANT": TENANT,
+        "AIOPS_M2_C_USER": C_USER,
+        # 第二个身份只为一个判据存在：**两个不同用户各自的单不串**。没有它，
+        # "选单/授权按本人"这条只能在同一身份下测，测不到别人的单会不会漏出来。
+        "AIOPS_M2_SECOND_TOKEN": OTHER_TOKEN,
+        "AIOPS_M2_SECOND_C_USER": OTHER_USER,
+        "AIOPS_M2_PLATFORM_CONSUMER": "1",
+        "PYTHONPATH": f"{REPO / 'src'}{os.pathsep}{os.environ.get('PYTHONPATH', '')}".rstrip(os.pathsep),
+    }
+    base = f"http://127.0.0.1:{port}"
+    process = subprocess.Popen(
+        [sys.executable, str(REPO / "tools/m2_close/gateway_launcher.py")],
+        cwd=REPO,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        start_new_session=True,
+    )
+    # 把网关自己的输出落一份到文件：`_stop()` 之后管道就读不到了，而失败时要看它。
+    gateway_log = open(case / "gateway.log", "w", encoding="utf-8")  # noqa: SIM115
+    threading.Thread(target=_tee, args=(process, gateway_log), daemon=True).start()
+    diag: dict[str, Any] = {"gateway": base, "case_root": str(case)}
+    deadline = time.monotonic() + 60
+    while time.monotonic() < deadline:
+        if http(f"{base}/health", timeout=2.0)[0] == 200:
+            return process, base, diag
+        time.sleep(0.3)
+    _stop(process)
+    diag["error"] = "gateway did not become ready"
+    diag["gateway_output"] = (process.stdout.read() if process.stdout else "")[-4000:]
+    return process, base, diag
+
+
+def _drive(
+    base: str,
+    case: Path,
+    *,
+    question: str = "check my latest order status",
+    token: str = TOKEN,
+    cancel_after: float | None = None,
+    order_no: str | None = None,
+) -> dict[str, Any]:
+    """从 App 接口驱动一次请求，轮询到终态，并读回执行记录。
+
+    `cancel_after` 给定秒数时，在那一秒之后调用原取消接口 —— 取消要经过**真实 HTTP**，
+    不是直接改库：本片要验的是"用户取消之后这次回答不再放出"。
+    """
+    headers = {"X-Business-Entry": "consumer"}
+    started = time.monotonic()
+    status, text = http(
+        f"{base}/v1/assistant/questions",
+        method="POST",
+        token=token,
+        body={"question": question, **({"order_no": order_no} if order_no else {})},
+        headers=headers,
+        timeout=30.0,
+    )
+    first = _json(text) if status else {}
+    result: dict[str, Any] = {
+        "gateway": base,
+        "post_status": status,
+        "post_elapsed_ms": int((time.monotonic() - started) * 1000),
+        "post_body": first,
+    }
+    qa_id = first.get("qa_id") if isinstance(first, dict) else None
+    result["qa_id"] = qa_id
+    final: dict[str, Any] = {}
+    if qa_id:
+        cancel_at = time.monotonic() + cancel_after if cancel_after is not None else None
+        deadline = time.monotonic() + 240
+        while time.monotonic() < deadline:
+            got_status, got_text = http(
+                f"{base}/v1/assistant/questions/{qa_id}", token=token, headers=headers
+            )
+            if got_status == 200:
+                final = _json(got_text)
+                if final.get("status") in {"completed", "failed", "cancelled", "expired"}:
+                    break
+            if cancel_at is not None and time.monotonic() >= cancel_at:
+                cancel_status, cancel_text = http(
+                    f"{base}/v1/assistant/questions/{qa_id}/cancel",
+                    method="POST",
+                    token=token,
+                    body={},
+                    headers=headers,
+                )
+                result["cancel"] = {"status": cancel_status, "body": _json(cancel_text)}
+                cancel_at = None
+            time.sleep(0.2)
+    result["final"] = final
+    result["rows"] = _dify_rows(case / "data/gateway.db")
+    return result
+
+
+def _row_for_qa(rows: list[dict[str, Any]], qa_id: str | None) -> dict[str, Any]:
+    """**按 QA 认行**，不按位置取。
+
+    早先这里写的是 `rows[-1]`：`_drive` 每次返回的是整张表，所以"最后一行"其实是
+    **全表最后一条**，不是这次请求的那条。判据因此对着别人的行做断言 ——
+    一次跑下来，连"指定订单"都被判成了错单。
+    """
+    for row in rows:
+        if qa_id and row.get("qa_id") == qa_id:
+            return row
+    return {}
+
+
+def _dify_rows(database: Path) -> list[dict[str, Any]]:
+    if not database.exists():
+        return []
+    conn = sqlite3.connect(database)
+    conn.row_factory = sqlite3.Row
+    try:
+        return [dict(row) for row in conn.execute("SELECT * FROM chat_dify_runs ORDER BY created_at")]
+    finally:
+        conn.close()
+
+
+def _tee(process: subprocess.Popen, sink) -> None:
+    """把子进程的输出同时写到文件（读不完的管道在 `_stop` 之后就拿不到了）。"""
+    try:
+        assert process.stdout is not None
+        for line in process.stdout:
+            sink.write(line)
+            sink.flush()
+    except Exception:  # noqa: BLE001 - 诊断辅助，不能让它把验收搞崩
+        pass
+    finally:
+        with contextlib.suppress(Exception):
+            sink.close()
+
+
+def _stop(process: subprocess.Popen) -> None:
+    if process.poll() is not None:
+        return
+    os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+    try:
+        process.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--out", default="")
+    parser.add_argument("--keep", action="store_true", help="保留数据根以便事后排查（默认删掉）")
+    parser.add_argument("--keep-stack", action="store_true", help="不拆 Dify 栈（排查用；正常跑一定拆）")
+    args = parser.parse_args()
+
+    if shutil.which("docker") is None:
+        print("docker is not available", file=sys.stderr)
+        return 2
+
+    # 上一次运行的 volumes 由 root 写，普通用户删不掉；用一次性容器清，避免
+    # "口令对不上"这种看着像配置问题的假失败（postgres 只在空 PGDATA 上初始化口令）。
+    subprocess.run(
+        ["docker", "run", "--rm", "-v", f"{DIFY_DIR / 'volumes'}:/v", "alpine", "sh", "-c", "rm -rf /v/*"],
+        capture_output=True,
+        timeout=120,
+    )
+    root = Path(tempfile.mkdtemp(prefix="dify-chat-acceptance-"))
+    project = "difychatacc" + secrets.token_hex(4)
+    port = _free_port()
+    network = f"{project}-net"
+    model = _serve(ModelHandler)
+    cpms = _serve(CpmsHandler)
+    # 两个地址**不同**，这是刻意的：
+    #   * 模型上游是 Dify 容器去调 ⇒ 必须用容器能解析的宿主名；
+    #   * CPMS 是**网关自己**去调 ⇒ 必须是回环（`canonical_gateway_url` 只放行
+    #     回环上的 http，远端一律要求 https）。
+    model_url = f"http://{_host_gateway()}:{model.server_port}/v1"
+    cpms_base = f"http://127.0.0.1:{cpms.server_port}"
+    env = _dify_env(root, model_url=model_url, port=port, project=project, network=network)
+    dify_base = f"http://127.0.0.1:{port}"
+
+    report: dict[str, Any] = {
+        "kind": "dify_chat_entry_e2e",
+        "started_at_utc": datetime.now(UTC).isoformat(),
+        "synthetic_data": True,
+        "real_company_services": False,
+        "real": [
+            "Dify 1.17.1 workflow orchestration, http-request step, llm step, publish and run",
+            "gateway binding selection, order selection, authorization, data grant, callback, release",
+            "POST/GET /v1/assistant/questions",
+        ],
+        "substituted": {
+            "model_upstream": "loopback OpenAI-compatible synthetic server",
+            "cpms": "loopback stub",
+            "caller_identity": "fixed local token (gateway_launcher)",
+            "order_authorization": "synthetic_orders table",
+            "platform_directory": "consumer-only synthetic directory",
+        },
+        "checks": [],
+        "dify": {},
+    }
+
+    def check(name: str, ok: bool, detail: Any = None) -> None:
+        report["checks"].append({"name": name, "ok": bool(ok), "detail": detail})
+
+    gateway_process = None
+    try:
+        # 依赖先起，再起 api/worker（它们有可用的 healthcheck）。plugin_daemon 一起被
+        # `depends_on` 拉起来，但**不参与 `--wait`**：那个镜像里没有任何网络工具，
+        # 容器内探活只会让一个正常工作的进程永远 unhealthy。它是否真的就绪，由后面的
+        # `_wait_model_provider` 从**外部**证明 —— provider 探测成功即说明它在干活。
+        # 先彻底清一次再起：`docker compose up` 会**复用已存在的容器**，
+        # 于是改了 compose 里的 healthcheck 之后，起来的仍是按旧定义创建的那个 ——
+        # 症状是"改了配置但还是同一条错"。验收每次都要从干净状态开始。
+        _compose(env, "down", "-v", "--remove-orphans", timeout=300)
+        up = _compose(env, "up", "-d", "init_permissions", "db_postgres", "redis", "weaviate", timeout=600)
+        if up.returncode != 0:
+            report["compose_up"] = {"rc": up.returncode, "tail": (up.stdout + up.stderr)[-2000:]}
+            return _finish(report, args)
+        up = _compose(env, "up", "-d", "--wait", "--wait-timeout", "600", "api", "worker", timeout=1200)
+        report["compose_up"] = {"rc": up.returncode, "tail": (up.stdout + up.stderr)[-2000:]}
+        logs = _compose(env, "logs", "--no-color", timeout=120)
+        report["compose_logs_tail"] = (logs.stdout + logs.stderr)[-4000:]
+        check("dify 隔离栈起来", up.returncode == 0, up.returncode)
+        if up.returncode != 0:
+            return _finish(report, args)
+        check("dify /health 就绪", _wait_ready(dify_base, time.monotonic() + 180), dify_base)
+        check(
+            "模型 provider 可用（plugin daemon 真的在干活）",
+            _wait_model_provider(dify_base, time.monotonic() + 240),
+            dify_base,
+        )
+
+        # 网关**先**起来：DSL 里那个取数 URL 要指向一个真实存在的地址，
+        # 而它是这次唯一的网关实例。
+        gateway_port = _free_port()
+        # 放行在网关**起来之前**：容器一被 Dify 叫起来就要能打进来。
+        opened = _open_bridge_ingress([gateway_port, model.server_port], ["gateway", "model_upstream"])
+        report["bridge_ingress"] = opened
+        check(
+            "容器到宿主的两个端口已精确放行",
+            all(item["ok"] for item in opened["opened"]),
+            opened,
+        )
+        gateway_process, gateway_base, diag = _start_gateway(
+            root=root,
+            model_url=model_url,
+            cpms_base=cpms_base,
+            dify_base=dify_base,
+            workflow_id="00000000-0000-0000-0000-000000000000",
+            key="placeholder",
+            port=gateway_port,
+        )
+        report["gateway_diag"] = diag
+        check("真 Gateway 就绪", not diag.get("error"), diag.get("error"))
+        if diag.get("error"):
+            return _finish(report, args)
+
+        # DSL 里写的是**容器视角**的网关地址；脚本自己轮询用回环。
+        # 这两个地址必须是同一个进程的两个面，不能混用。
+        gateway_container_base = f"http://{_host_gateway()}:{gateway_port}"
+        setup = _setup_dify(dify_base, env, model_url=model_url, gateway_base=gateway_container_base)
+        # `console_headers` 与 `service_key` 都是凭据：只留在内存里供诊断请求用，
+        # 不进报告。报告会被贴进回执与 PR。
+        report["dify"] = {k: v for k, v in setup.items() if k not in {"service_key", "console_headers"}}
+        for item in setup.get("steps", []):
+            check(f"dify: {item['name']}", item["ok"], item["detail"])
+        workflow_id = setup.get("workflow_id")
+        key = setup.get("service_key")
+        if not workflow_id or not key:
+            check("得到已发布 workflow 与 service key", False, {"workflow_id": workflow_id})
+            return _finish(report, args)
+        check("得到已发布 workflow 与 service key", True, {"workflow_id": workflow_id})
+
+        # 网关的绑定现在才可能写对：它要的是那一份刚发布的 workflow 与那一把 key。
+        _stop(gateway_process)
+        gateway_process, gateway_base, diag = _start_gateway(
+            root=root,
+            model_url=model_url,
+            cpms_base=cpms_base,
+            dify_base=dify_base,
+            workflow_id=workflow_id,
+            key=key,
+            port=gateway_port,
+        )
+        check("绑定 Dify 后 Gateway 再次就绪", not diag.get("error"), diag.get("error"))
+        if diag.get("error"):
+            return _finish(report, args)
+
+        chain = _drive(gateway_base, Path(diag["case_root"]))
+        report["chain"] = chain
+        final = chain.get("final") or {}
+        rows = chain.get("rows") or []
+        row = _row_for_qa(rows, chain.get("qa_id"))
+        check(
+            "App POST 202 且早于 Dify 完成",
+            chain.get("post_status") == 202
+            and (chain.get("post_body") or {}).get("status") in {"queued", "running"},
+            {"status": chain.get("post_status"), "ms": chain.get("post_elapsed_ms")},
+        )
+        check(
+            "原 GET 到 completed，正文含本轮快照的订单号",
+            final.get("status") == "completed"
+            and ORDER_LATEST in json.dumps(final.get("result") or {}, ensure_ascii=False),
+            {"status": final.get("status"), "blocks": (final.get("result") or {}).get("blocks")},
+        )
+        check(
+            "执行记录：真 workflow run 身份落地且状态 succeeded",
+            row.get("state") == "succeeded" and bool(row.get("workflow_run_id")) and bool(row.get("task_id")),
+            {k: row.get(k) for k in ("state", "workflow_run_id", "task_id", "workflow_id")},
+        )
+        check("业务只读一次", CpmsHandler.calls == [ORDER_LATEST], list(CpmsHandler.calls))
+        prompts = ModelHandler.state.get("prompts") or []
+        # 判据看的是**播报步骤自己收到的那一次**，不是全部调用：注册模型凭据时 Dify 会先打
+        # 一次探测（正文是 "ping"），那次既没有订单号也不可能有凭据。只写
+        # `all("cdg_" not in p)` 会被这个探测请求满足 —— 那一版曾因此假 PASS。
+        # 播报步骤收到的是**取数步骤的响应体**（那段 JSON），订单号就在里面。
+        # 用订单号认那一次调用，而不是用问题原文：问题原文只在 start 节点里，
+        # 模型看不到它 —— 早先按问题原文找，找到 0 条，判据空转成 FAIL。
+        broadcast = [text for text in prompts if ORDER_LATEST in text]
+        check(
+            "模型实际输入不含取数凭据",
+            len(broadcast) == 1
+            and "cdg_" not in broadcast[0]
+            and "Bearer" not in broadcast[0]
+            and "Authorization" not in broadcast[0],
+            {
+                "broadcast_prompt": [text[:400] for text in broadcast],
+                "all_prompts": [text[:300] for text in prompts],
+                "request_shapes": ModelHandler.state.get("shapes") or [],
+                "prompt_count": len(prompts),
+            },
+        )
+        check(
+            "取数凭据在完成之后被撤销",
+            _grants_revoked(Path(diag["case_root"]) / "data/gateway.db"),
+            _grant_states(Path(diag["case_root"]) / "data/gateway.db"),
+        )
+
+        # ---- 指定另一张**本人**订单：不是"最新"，而是用户点名的那一单 ----
+        named = _drive(
+            gateway_base,
+            Path(diag["case_root"]),
+            # 措辞要真的命中"状态查询"那一条路由：只说 "check order X" 不含状态词，
+            # 会被路由到**标准诊断**（返回 diagnosis_id 而不是 qa_id）—— 那不是本片的链路。
+            question=f"check the status of order {ORDER_OLDER}",
+            order_no=ORDER_OLDER,
+        )
+        report["chain_named_order"] = named
+        named_final = named.get("final") or {}
+        named_row = _row_for_qa(named.get("rows") or [], named.get("qa_id"))
+        check(
+            "指定本人订单：读的就是那一单，正文是那一单",
+            named_final.get("status") == "completed"
+            and ORDER_OLDER in json.dumps(named_final.get("result") or {}, ensure_ascii=False)
+            and named_row.get("order_no") == ORDER_OLDER,
+            {"status": named_final.get("status"), "row_order": named_row.get("order_no")},
+        )
+
+        # ---- 两个不同用户并发：各自只拿到自己的单 ----
+        CpmsHandler.calls.clear()
+        results: dict[str, dict[str, Any]] = {}
+
+        def run(key: str, token: str) -> None:
+            results[key] = _drive(
+                gateway_base, Path(diag["case_root"]), question="check my latest order status", token=token
+            )
+
+        threads = [
+            threading.Thread(target=run, args=("a", TOKEN)),
+            threading.Thread(target=run, args=("b", OTHER_TOKEN)),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=300)
+        report["chain_concurrent"] = results
+        ok_concurrent = True
+        detail_concurrent: dict[str, Any] = {}
+        for key, expected in (("a", ORDER_LATEST), ("b", ORDER_OTHER)):
+            got = results.get(key) or {}
+            text = json.dumps((got.get("final") or {}).get("result") or {}, ensure_ascii=False)
+            rows_for = _row_for_qa(got.get("rows") or [], got.get("qa_id"))
+            ok_concurrent = ok_concurrent and (got.get("final") or {}).get("status") == "completed"
+            ok_concurrent = ok_concurrent and expected in text
+            ok_concurrent = ok_concurrent and rows_for.get("order_no") == expected
+            detail_concurrent[key] = {
+                "status": (got.get("final") or {}).get("status"),
+                "row_order": rows_for.get("order_no"),
+                "mentions_own": expected in text,
+            }
+        check("两个用户的单不串", ok_concurrent, detail_concurrent)
+
+        # ---- 上游失败：落 failed，**不换引擎**、不产生正文 ----
+        CpmsHandler.calls.clear()
+        CpmsHandler.fail = True
+        try:
+            failing = _drive(gateway_base, Path(diag["case_root"]))
+        finally:
+            CpmsHandler.fail = False
+        report["chain_upstream_failure"] = failing
+        failing_final = failing.get("final") or {}
+        check(
+            "业务上游失败 ⇒ failed 且无正文",
+            failing_final.get("status") == "failed" and failing_final.get("result") in (None, {}),
+            {"status": failing_final.get("status")},
+        )
+
+        # ---- 用户取消：终态 cancelled，且**取消之后不再放出** ----
+        cancelling = _drive(gateway_base, Path(diag["case_root"]), cancel_after=0.0)
+        report["chain_cancel"] = cancelling
+        cancel_final = cancelling.get("final") or {}
+        cancel_row = _row_for_qa(cancelling.get("rows") or [], cancelling.get("qa_id"))
+        # 取消要三件事同时成立：终态不是 completed；执行记录不是 succeeded；
+        # 那张凭据已撤销。少任何一条，"取消"就只是屏幕上的一句话。
+        cancel_grants = _grants_for_qa(Path(diag["case_root"]) / "data/gateway.db", cancelling.get("qa_id"))
+        check(
+            "取消后执行记录不是成功、取数凭据已失效",
+            (cancel_row.get("state") in {None, "cancelled", "failed"})
+            and cancel_row.get("state") != "succeeded"
+            and all(state == "revoked" for state in cancel_grants),
+            {"row_state": cancel_row.get("state"), "grants": cancel_grants},
+        )
+        check(
+            "用户取消 ⇒ cancelled / 终态不是 completed",
+            cancel_final.get("status") in {"cancelled", "failed"},
+            {"status": cancel_final.get("status"), "cancel": cancelling.get("cancel")},
+        )
+
+        # ---- 逆证一：伪造的取数凭据被拒，且一次业务读取都没有 ----
+        CpmsHandler.calls.clear()
+        forged_status, _forged_body = http(
+            f"{gateway_base}/v1/internal/charging-status/dify-read",
+            method="POST",
+            token="cdg_forged_token_value_for_reverse_check",
+            body={},
+        )
+        check(
+            "逆证：伪造凭据被拒且不读业务",
+            forged_status == 401 and CpmsHandler.calls == [],
+            {"status": forged_status, "business_reads": list(CpmsHandler.calls)},
+        )
+
+        # ---- 逆证二：回调不带凭据 / 带别的 QA 的凭据都不放行 ----
+        CpmsHandler.calls.clear()
+        anonymous_status, _ = http(
+            f"{gateway_base}/v1/internal/charging-status/dify-read", method="POST", body={}
+        )
+        check(
+            "逆证：无凭据回调被拒且不读业务",
+            anonymous_status == 401 and CpmsHandler.calls == [],
+            {"status": anonymous_status},
+        )
+        if (chain.get("final") or {}).get("status") != "completed":
+            # 失败时把两侧的原始日志一起收进来：Dify 说"调用失败"而不说为什么，
+            # 那正是要靠它自己的日志回答的问题。
+            # 只取 api：worker 的启动横幅有几百行，取尾会把真正的错误挤掉。
+            # 再按错误行过滤一次 —— 失败时要的是"为什么"，不是全部日志。
+            dify_logs = _compose(env, "logs", "--no-color", "api", timeout=120)
+            raw = dify_logs.stdout + dify_logs.stderr
+            interesting = [
+                line
+                for line in raw.splitlines()
+                if any(
+                    key in line
+                    for key in (
+                        "Error",
+                        "error",
+                        "Exception",
+                        "Traceback",
+                        "raise ",
+                        " 400 ",
+                        " 500 ",
+                        "ValueError",
+                    )
+                )
+            ]
+            report["dify_logs_on_failure"] = "\n".join(interesting[-40:])
+            report["dify_logs_raw_tail"] = raw[-2000:]
+            # 节点级真相：哪个节点跑了、状态、错误。只有 api 日志的话，"workflow succeeded
+            # 但两个节点都没执行"这种形状根本看不出来 —— 日志里全是 200。
+            run_id = (row or {}).get("workflow_run_id")
+            app_id = (setup or {}).get("app_id")
+            console_headers = (setup or {}).get("console_headers") or {}
+            if run_id and app_id and console_headers:
+                got, text = http_json(
+                    f"{dify_base}/console/api/apps/{app_id}/workflow-runs/{run_id}/node-executions",
+                    headers=console_headers,
+                )
+                nodes = (text or {}).get("data") if isinstance(text, dict) else None
+                report["dify_node_executions"] = (
+                    [
+                        {
+                            "node_id": item.get("node_id"),
+                            "type": item.get("node_type"),
+                            "title": item.get("title"),
+                            "status": item.get("status"),
+                            "error": item.get("error"),
+                            "inputs": json.dumps(item.get("inputs"), ensure_ascii=False)[:300],
+                            "outputs": json.dumps(item.get("outputs"), ensure_ascii=False)[:600],
+                        }
+                        for item in (nodes or [])
+                    ]
+                    if got == 200
+                    else {"status": got, "body": str(text)[:400]}
+                )
+            gw_log = Path(diag["case_root"]) / "gateway.log"
+            if gw_log.exists():
+                report["gateway_log_on_failure"] = gw_log.read_text(errors="replace")[-4000:]
+    finally:
+        if gateway_process is not None:
+            _stop(gateway_process)
+        if args.keep_stack:
+            report["compose_down"] = {"rc": None, "skipped": "--keep-stack"}
+        else:
+            teardown = _compose(env, "down", "-v", "--remove-orphans", timeout=300)
+            report["compose_down"] = {"rc": teardown.returncode}
+        for server in (model, cpms):
+            server.shutdown()
+        report["bridge_ingress_closed"] = _close_bridge_ingress(report.get("bridge_ingress") or {})
+        (DIFY_DIR / ".env").unlink(missing_ok=True)
+        if not args.keep:
+            shutil.rmtree(root, ignore_errors=True)
+
+    return _finish(report, args)
+
+
+def _host_gateway() -> str:
+    """容器回到宿主用的名字。compose 里用 `host.docker.internal:host-gateway` 映射，
+    比写死某个网桥地址稳 —— 换网络驱动不改脚本。"""
+    return os.environ.get("DIFY_TEST_HOST_GATEWAY", "host.docker.internal")
+
+
+def _grant_states(database: Path) -> list[str]:
+    if not database.exists():
+        return []
+    conn = sqlite3.connect(database)
+    try:
+        return [row[0] for row in conn.execute("SELECT state FROM chat_data_grants")]
+    finally:
+        conn.close()
+
+
+def _grants_for_qa(database: Path, qa_id: str | None) -> list[str]:
+    if not database.exists() or not qa_id:
+        return []
+    conn = sqlite3.connect(database)
+    try:
+        return [
+            row[0] for row in conn.execute("SELECT state FROM chat_data_grants WHERE qa_id = ?", (qa_id,))
+        ]
+    finally:
+        conn.close()
+
+
+def _grants_revoked(database: Path) -> bool:
+    states = _grant_states(database)
+    return bool(states) and all(state == "revoked" for state in states)
+
+
+def _finish(report: dict[str, Any], args: argparse.Namespace) -> int:
+    failures = [item for item in report["checks"] if not item["ok"]]
+    report["failures"] = len(failures)
+    report["status"] = "PASS" if not failures else "FAIL"
+    text = json.dumps(report, ensure_ascii=False, indent=2)
+    if args.out:
+        Path(args.out).write_text(text)
+    print(text)
+    return 0 if not failures else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

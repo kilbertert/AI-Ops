@@ -69,6 +69,11 @@ class GatewayServerSettings:
     #: 不登记租户，等于「任何能通过本人授权的租户都派到同一个节点」—— 那不是绑定，
     #: 那是默认值。未登记的租户走原直读分支。
     chat_execution_bindings_file: str = ""
+    #: APP-RUNTIME-02：Dify 路线的 Service API 基地址（``https://dify.example``，无路径）。
+    #: 只在**至少一条登记选了 `engine: dify`** 时才必需；配了却没有 Dify 登记是无害的
+    #: （不会凭空开一条路线），但一条 Dify 登记缺它就是启动失败。
+    #: Dify 取数回调的地址不走这里：那个 URL 由 DSL 模板固定指向本网关。
+    dify_chat_base_url: str = ""
     #: 管家端公司 OAuth2 令牌的校验入口与客户端凭据（#443 / ADR-0009）。三个键**全部缺省为空**，
     #: 全空时该路径整体不构造 ⇒ 行为与启用前逐字一致（这既是「先合不启用」的机制保证，也是
     #: 回滚路径：清空即回退）。只设了其中一部分是启动错误，不是静默禁用 —— 与
@@ -345,6 +350,8 @@ class GatewayServerSettings:
             or _file_value(file_values, "AIOPS_GATEWAY_EXECUTION_MANIFEST_FILE"),
             chat_execution_bindings_file=_env("AIOPS_GATEWAY_CHAT_EXECUTION_BINDINGS_FILE")
             or _file_value(file_values, "AIOPS_GATEWAY_CHAT_EXECUTION_BINDINGS_FILE"),
+            dify_chat_base_url=_env("AIOPS_GATEWAY_DIFY_CHAT_BASE_URL")
+            or _file_value(file_values, "AIOPS_GATEWAY_DIFY_CHAT_BASE_URL"),
             company_check_token_url=_env("AIOPS_GATEWAY_COMPANY_CHECK_TOKEN_URL")
             or _file_value(file_values, "AIOPS_GATEWAY_COMPANY_CHECK_TOKEN_URL"),
             company_token_client_id=_env("AIOPS_GATEWAY_COMPANY_TOKEN_CLIENT_ID")
@@ -508,9 +515,15 @@ class GatewayServerSettings:
             if not (self.charging_status_base_url and self.execution_environment):
                 raise ValueError("chat execution requires charging status settings")
             try:
-                chat_execution.load_bindings(self.chat_execution_bindings_file)
+                bindings = chat_execution.load_bindings(self.chat_execution_bindings_file)
             except chat_execution.ChatBindingError as exc:
                 raise ValueError(f"chat execution bindings are unusable: {exc}") from exc
+            # APP-RUNTIME-02：有 Dify 登记就必须有它的服务地址。反过来说，
+            # 只配地址不登记任何 Dify 路线是**无害**的 —— 它不会凭空开一条路线。
+            if any(item.engine == chat_execution.ENGINE_DIFY for item in bindings):
+                if not self.dify_chat_base_url:
+                    raise ValueError("dify chat execution requires a dify base url")
+                canonical_gateway_url(self.dify_chat_base_url)
         if self.execution_manifest_file:
             # 启动时就完整校验一次：坏清单必须在起监听之前失败，而不是等第一次签发
             # 才变成运行期不可用（那就是「配一半就开门」）。
