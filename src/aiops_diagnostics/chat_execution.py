@@ -142,6 +142,7 @@ class ChatBinding:
     agent_id: str = ""
     app_id: str = ""
     route_revision: int = 0
+    manifest_text: str = ""
 
     @property
     def key(self) -> str:
@@ -261,7 +262,11 @@ def _validate_binding_files(binding: ChatBinding) -> None:
     if config.environment != binding.environment:
         raise ChatBindingError("chat execution binding config environment differs")
     try:
-        manifest = execution_manifest.load(binding.manifest_file)
+        manifest = (
+            execution_manifest.from_text(binding.manifest_text)
+            if binding.manifest_text
+            else execution_manifest.load(binding.manifest_file)
+        )
     except execution_manifest.ExecutionManifestError as exc:
         raise ChatBindingError("chat execution binding manifest is unusable") from exc
     # 聊天路线**必须**有清单：没有清单的 run 走旧协议（领取即 succeeded），
@@ -310,9 +315,20 @@ def _bindings_from_store(path: str | Path, key_dir: str = "") -> tuple[ChatBindi
             route_revision=row.revision,
         )
         if binding.engine == ENGINE_NODE:
-            # 管理表这一版只承载 Dify：节点路线的执行清单（config/manifest）仍由
-            # 文件登记提供。写一条 node 管理行 = 声明了一个配不齐的绑定。
-            raise ChatBindingError("a managed route binding cannot declare the node engine")
+            from dataclasses import replace
+
+            from aiops_diagnostics.agent_lifecycle import AgentError, AgentStore
+
+            try:
+                snapshot = (
+                    AgentStore(store.path).version(row.agent_id, row.tenant_id, row.agent_version_no).snapshot
+                )
+            except AgentError as exc:
+                raise ChatBindingError("node publication version is unavailable") from exc
+            text = snapshot.get("node_manifest")
+            if not isinstance(text, str):
+                raise ChatBindingError("node publication has no execution manifest")
+            binding = replace(binding, config_file=row.node_config_file, manifest_text=text)
         _validate_binding(binding)
         bindings.append(binding)
     return tuple(bindings)
@@ -441,6 +457,8 @@ def callback_config(store: Any, run_id: str, settings: GatewayServerSettings) ->
         binding = _delegation_binding(settings)
     if binding is None:
         return None
+    if record.route_revision and record.route_revision != binding.route_revision:
+        return None
     try:
         return AgentRunConfig.load(Path(binding.config_file))
     except AgentRunConfigError:
@@ -486,7 +504,11 @@ def issue_for_store(
     if config.environment != binding.environment:
         raise ChatRunUnavailable("AGENT_RUN_ENVIRONMENT_MISMATCH", "agent run unavailable", retryable=True)
     try:
-        manifest = execution_manifest.load(binding.manifest_file)
+        manifest = (
+            execution_manifest.from_text(binding.manifest_text)
+            if binding.manifest_text
+            else execution_manifest.load(binding.manifest_file)
+        )
     except execution_manifest.ExecutionManifestError as exc:
         raise ChatRunUnavailable("EXEC_CONFIG_UNAVAILABLE", "agent run unavailable", retryable=True) from exc
     if manifest is None:
@@ -500,6 +522,8 @@ def issue_for_store(
         gateway_version=gateway_version,
         expected_agent_version=manifest.identity,
         chat_binding=binding.key,
+        execution_manifest=binding.manifest_text or None,
+        route_revision=binding.route_revision,
     )
     return run, config
 
