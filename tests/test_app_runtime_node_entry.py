@@ -1148,3 +1148,36 @@ def test_worker_treats_authorization_outage_as_a_failure(tmp_path, monkeypatch):
         assert outages == [ORDER_A]
         assert final["status"] == "failed", final
         assert final.get("result") in (None, {})
+
+
+def test_retracted_managed_node_result_reports_gone_without_body(tmp_path, monkeypatch):
+    from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
+
+    with node_chat(tmp_path, monkeypatch) as f:
+        qa_id = ask(f["client"]).json()["qa_id"]
+        assert wait_terminal(f["client"], qa_id)["status"] == "completed"
+        settings = f["settings"]
+        settings.chat_execution_bindings_file = ""
+        settings.chat_route_bindings_file = str(settings.database_file)
+        routes = ChatRouteBindingStore(settings.database_file)
+        row = routes.publish(
+            environment=settings.execution_environment,
+            tenant_id="TENANT-A",
+            entry="consumer",
+            scenario=chat_execution.SCENARIO_OWN_ORDER_STATUS,
+            engine="node",
+            agent_id="agt-test",
+            agent_version_no=1,
+            expected_revision=0,
+        )
+        routes.retract(
+            environment=row.environment,
+            tenant_id=row.tenant_id,
+            entry=row.entry,
+            scenario=row.scenario,
+            expected_revision=row.revision,
+        )
+        response = f["client"].get(f"/v1/assistant/questions/{qa_id}", headers=HEADERS)
+        assert response.status_code == 410, response.text
+        assert response.json()["error"]["code"] == "CHAT_ROUTE_RETRACTED"
+        assert "blocks" not in response.text

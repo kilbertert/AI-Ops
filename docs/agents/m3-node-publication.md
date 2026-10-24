@@ -30,3 +30,18 @@ M3NODE_DEPS=<锁定jar目录> M3NODE_JDK_IMAGE=<JDK镜像digest> \
 真实 Gateway + Java Spring 节点，编辑器/平台/模型/业务和身份均为合成。另运行原
 `verify_chat_node_entry.py` 及 `run.sh` 保证旧节点路线和模型守卫兼容。
 生产启用、真实公司目录/供应商/业务验收另行进行，不把本地合成成功当作真实业务闭环。
+
+## 真实调度平台与打包节点
+
+以下验收使用部署锁中的 Snail 平台与节点 JAR，不由 Python 替身派发节点方法：
+
+```bash
+uv run python tools/m2_close/m3node/verify_platform_publication.py \
+  --platform <平台jar> --node <节点jar> --image <已有Gateway镜像> --out <私有报告.json>
+```
+
+预先核对 JAR 和基础镜像摘要；复用原平台初始化，在 Docker 内部网络启动真实平台、
+gRPC 节点与 Gateway，不发布宿主端口。编辑器、模型、CPMS、调用者身份和目录仍为合成。
+覆盖保存/试用/发布/撤回/恢复及上游失败，留同 run 快照、模型收到的 SOP 和节点摘要。
+与旧 M2 验收共用互斥锁；发现已有实验容器/网络即拒绝，不清理别人实例。
+结束清理自己的容器，保留私有临时根及日志。报告的代码身份前后不一致时判失败。
