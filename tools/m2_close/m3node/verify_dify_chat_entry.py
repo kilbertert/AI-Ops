@@ -1833,6 +1833,49 @@ def main() -> int:
         # 两者都要求"这一轮真的有 workflow_run_id"，并用 Dify 执行库里的身份核对。
         # 删掉空循环而不是留着它：一个永远不执行的判据比没有更糟 —— 它让人以为覆盖了。
 
+        # ---- 双环境交错：另一个逻辑环境的路由不受这次发布/撤回影响 ----
+        #
+        # 同租户、同一张管理表，但 `environment` 不同 —— 它们必须是**两条独立的路由**。
+        # 手工把第二条种进去是刻意的：真正的"交错"是"在一个环境里发布/撤回"，
+        # 而判断只看那条环境自己的行有没有被动过。
+        other_route = ChatRouteBindingStore(database).publish(
+            environment="env-other",
+            tenant_id=TENANT,
+            entry="consumer",
+            scenario="consumer_own_order_status",
+            engine="dify",
+            agent_id="小趋-客服",
+            agent_version_no=9,
+            app_id=app_id,
+            workflow_id=version_two or workflow_id,
+            workflow_key_ref=str(per_app_key),
+            updated_by="acceptance",
+        )
+        # 此刻主环境已经历过发布→撤回→恢复；另一环境自始至终没被碰过。
+        other_now = ChatRouteBindingStore(database).get(
+            "env-other", TENANT, "consumer", "consumer_own_order_status"
+        )
+        main_now = ChatRouteBindingStore(database).get(
+            "env-local", TENANT, "consumer", "consumer_own_order_status"
+        )
+        check(
+            "双环境交错：另一个环境的路由不受发布/撤回影响",
+            other_now is not None
+            and other_now.revision == other_route.revision
+            and other_now.agent_version_no == 9
+            and other_now.state == "active"
+            and main_now is not None
+            and main_now.revision != other_route.revision,
+            {
+                "other": {
+                    "revision": other_now.revision if other_now else None,
+                    "version": other_now.agent_version_no if other_now else None,
+                    "state": other_now.state if other_now else None,
+                },
+                "main_revision": main_now.revision if main_now else None,
+            },
+        )
+
         # 模型已开始且未结束时取消；直接读取真 Dify 的 stop 标志，不能用本地终态代替。
         ModelHandler.hold = True
         ModelHandler.entered.clear()
