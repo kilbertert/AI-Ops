@@ -653,6 +653,47 @@ def test_a_success_without_this_round_snapshot_is_refused(tmp_path, monkeypatch,
         assert f["upstream"]["calls"] == 0
 
 
+def test_the_readback_refuses_when_the_binding_is_removed_after_the_authorization(
+    tmp_path, monkeypatch, dify_stub
+):
+    """回读：外部授权**回来之后**绑定被换掉 ⇒ 不再交付正文。
+
+    上面那次绑定检查在授权之前，挡不住"授权等待期间运维改了登记"这段窗口。
+    用授权替身在 `can_access` 里换掉绑定表来复现那个时序 —— 不靠 sleep 赛跑。
+    """
+    stub, base = dify_stub
+    with dify_chat(tmp_path, monkeypatch, stub_base=base) as f:
+        stub.gateway_base = f["gateway_base"]
+        response = ask(f["client"])
+        final = wait_terminal(f["client"], response.json()["qa_id"])
+        assert final["status"] == "completed", final
+
+        orders = f["orders"]
+        original = orders.can_access
+
+        def swap_then_allow(context, order_no):
+            _bindings_file(
+                f["bindings"],
+                [
+                    {
+                        "engine": "node",
+                        "environment": "env-a",
+                        "tenant_id": "TENANT-A",
+                        "entry": "consumer",
+                        "scenario": chat_execution.SCENARIO_OWN_ORDER_STATUS,
+                        "config_file": str(_write_config(tmp_path)),
+                        "manifest_file": str(_write_manifest(tmp_path)),
+                    }
+                ],
+            )
+            return original(context, order_no)
+
+        monkeypatch.setattr(orders, "can_access", swap_then_allow)
+        again = f["client"].get(f"/v1/assistant/questions/{response.json()['qa_id']}", headers=HEADERS)
+        assert again.status_code == 404, again.text
+        assert not (again.json().get("result") or {}).get("blocks")
+
+
 def _grants(database: Path) -> list[chat_data_grant.DataGrant]:
     import sqlite3
 

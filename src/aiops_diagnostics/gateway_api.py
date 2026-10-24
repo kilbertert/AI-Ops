@@ -6120,6 +6120,18 @@ def _require_current_chat_dify_order(context, caller, qa, request):
         raise StandardAPIError(404, "CHARGING_STATUS_DISABLED", "charging status disabled")
     # 先用可能阻塞的授权，再读记录做本地判定 —— 与另外两条路线同一条顺序。
     _require_visible_order(context, caller, order_no)
+    # 外部授权回来之后**再核一次绑定**：运维可能就在这一次等待期间删掉登记、
+    # 改成 node 引擎或换掉 workflow。上面那次检查在授权之前，挡不住这段窗口。
+    try:
+        binding_after = chat_execution.binding_for_key(context.settings, located.binding_key)
+    except chat_execution.ChatRunUnavailable as exc:
+        raise StandardAPIError(exc.http_status, exc.code, str(exc), retryable=exc.retryable) from exc
+    if (
+        binding_after is None
+        or binding_after.engine != chat_execution.ENGINE_DIFY
+        or binding_after.workflow_id != located.workflow_id
+    ):
+        raise StandardAPIError(404, "CHARGING_STATUS_DISABLED", "charging status disabled")
     latest = runs.get(located.run_id)
     if latest is None or latest.state != "succeeded":
         raise StandardAPIError(404, "AGENT_RUN_NO_RESULT", "dify run produced no result")
