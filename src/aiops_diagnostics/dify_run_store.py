@@ -75,6 +75,17 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
+def still_valid(run: DifyRun, *, now: datetime | None = None) -> bool:
+    """这条记录**此刻**还在有效期里吗。
+
+    必须单独判，不能指望 `get()` 的过期收敛：那个收敛只把 `running` 改成 `expired`，
+    一条 **succeeded** 的记录过了 180 秒仍然是 `succeeded`。结果就是"回读必须看 TTL"
+    这条判据在成功路径上从未生效 —— 一次演示里把 `expires_at` 改成过去时间，
+    `get()` 依旧返回 succeeded。
+    """
+    return run.expires_at > (now or _now())
+
+
 def _ts(value: str | None) -> datetime | None:
     return datetime.fromisoformat(value) if value else None
 

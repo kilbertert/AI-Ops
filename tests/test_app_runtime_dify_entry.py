@@ -71,6 +71,8 @@ class _DifyStub:
         self.snapshot_as_text = False
         self.snapshot_extra: dict = {}
         self.snapshot_raw_text = ""
+        self.skip_callback = False
+        self.fake_snapshot: dict = {}
         self.gateway_base = ""
         self.token_seen: list[str] = []
         self.runs: dict[str, dict] = {}
@@ -106,6 +108,20 @@ class _DifyStub:
                 inputs = raw.get("inputs") or {}
                 token = inputs.get("data_grant") or ""
                 stub.token_seen.append(token)
+                if stub.skip_callback:
+                    # "图没调取数端点"这一种：不回调网关，直接给出一个形状合法的快照。
+                    return self._reply(
+                        {
+                            "task_id": "task-skipped",
+                            "workflow_run_id": "run-skipped",
+                            "data": {
+                                "id": "run-skipped",
+                                "workflow_id": WORKFLOW_ID,
+                                "status": "succeeded",
+                                "outputs": {"answer": "ok", "snapshot": stub.fake_snapshot},
+                            },
+                        }
+                    )
                 # **证据点**：桩要用这个 token 自己去网关取数，成功与否决定 run 的结果。
                 import urllib.error
                 import urllib.request
@@ -528,6 +544,115 @@ def test_a_snapshot_text_that_is_not_json_is_refused(tmp_path, monkeypatch, dify
         final = wait_terminal(f["client"], response.json()["qa_id"])
         assert final["status"] == "failed", final
         assert final.get("result") in (None, {})
+
+
+def test_a_successful_readback_is_refused_after_its_ttl(tmp_path, monkeypatch, dify_stub):
+    """成功记录过了有效期，回读正文必须是 410 —— `get()` 的过期收敛只处理 running。
+
+    这一条照着真实现场写过：把 `expires_at` 改成过去时间之后，`get()` 依旧返回
+    succeeded，于是"回读必须看 TTL"在成功路径上从未生效过。
+    """
+    stub, base = dify_stub
+    with dify_chat(tmp_path, monkeypatch, stub_base=base) as f:
+        stub.gateway_base = f["gateway_base"]
+        response = ask(f["client"])
+        final = wait_terminal(f["client"], response.json()["qa_id"])
+        assert final["status"] == "completed", final
+        import sqlite3
+        from datetime import UTC, datetime, timedelta
+
+        past = (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
+        with sqlite3.connect(f["db"]) as conn:
+            conn.execute("UPDATE chat_dify_runs SET expires_at = ?", (past,))
+        again = f["client"].get(
+            f"/v1/assistant/questions/{response.json()['qa_id']}", headers=HEADERS
+        )
+        assert again.status_code == 410, again.text
+
+
+def test_the_callback_refuses_after_the_binding_is_removed(tmp_path, monkeypatch, dify_stub):
+    """签发之后把绑定换掉 ⇒ 旧凭据连**缓存回放**都不能再交数据。
+
+    只看 run 与 grant 里冻结的值是不够的：那两份都是签发那一刻的快照，彼此一致
+    说明不了"现在还能不能走 Dify"。
+    """
+    stub, base = dify_stub
+    with dify_chat(tmp_path, monkeypatch, stub_base=base) as f:
+        runs = DifyRunStore(f["db"])
+        scope = _Resolver().resolve("token-a", required_scope="x")
+        token, grant = chat_data_grant.DataGrantStore(f["db"]).issue(
+            scope_fingerprint=scope.scope_fingerprint,
+            order_no=ORDER_A,
+            environment="env-a",
+            tenant_id="TENANT-A",
+            qa_id="qa_bind",
+            workflow_id=WORKFLOW_ID,
+        )
+        runs.issue(
+            run_id="dify_bind",
+            qa_id="qa_bind",
+            scope_fingerprint=scope.scope_fingerprint,
+            scope_json=scope_to_json(scope),
+            binding_key="consumer_own_order_status:env-a:TENANT-A",
+            order_no=ORDER_A,
+            environment="env-a",
+            tenant_id="TENANT-A",
+            app_id=WORKFLOW_ID,
+            workflow_id=WORKFLOW_ID,
+            grant_id=grant.grant_id,
+        )
+        # 把登记换成 node 引擎：绑定表还在，但这条路线已经不该再跑了。
+        _bindings_file(
+            f["bindings"],
+            [
+                {
+                    "engine": "node",
+                    "environment": "env-a",
+                    "tenant_id": "TENANT-A",
+                    "entry": "consumer",
+                    "scenario": chat_execution.SCENARIO_OWN_ORDER_STATUS,
+                    "config_file": str(_write_config(tmp_path)),
+                    "manifest_file": str(_write_manifest(tmp_path)),
+                }
+            ],
+        )
+        refused = f["client"].post(
+            "/v1/internal/charging-status/dify-read", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert refused.status_code == 403, refused.text
+        assert f["upstream"]["calls"] == 0
+
+
+def test_a_success_without_this_round_snapshot_is_refused(tmp_path, monkeypatch, dify_stub):
+    """Dify 直接给出一个形状合法的快照、但本轮**没取过数** ⇒ failed，不是 completed。"""
+    stub, base = dify_stub
+    with dify_chat(tmp_path, monkeypatch, stub_base=base) as f:
+        stub.gateway_base = f["gateway_base"]
+        stub.skip_callback = True
+        stub.fake_snapshot = {
+            "order_no": ORDER_A,
+            "status_code": "0",
+            "status_role": "charging",
+            "observed_at": "2026-10-24T00:00:00+00:00",
+            "source": "cpms.chargingInfo",
+        }
+        response = ask(f["client"])
+        final = wait_terminal(f["client"], response.json()["qa_id"])
+        run = DifyRunStore(f["db"]).by_qa(response.json()["qa_id"])
+        # 断言**这一条**理由，不是"反正失败了"：把判据删掉之后，同一轮会被
+        # `succeed()` 拒（它要求已绑上 workflow run）而依旧 failed —— 只写 failed
+        # 的话，这条用例在变异下照样绿，等于没守任何东西。
+        assert run is not None and run.reason == "dify_no_data", {
+            "run_reason": run.reason if run else None,
+            "final": final,
+        }
+        assert final["status"] == "failed", {
+            "final": final,
+            "run_state": run.state if run else None,
+            "run_reason": run.reason if run else None,
+            "calls": list(stub.calls),
+        }
+        assert f["upstream"]["calls"] == 0
 
 
 def _grants(database: Path) -> list[chat_data_grant.DataGrant]:

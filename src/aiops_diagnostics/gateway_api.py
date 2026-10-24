@@ -98,7 +98,7 @@ from aiops_diagnostics.dify_knowledge_api import (
     dify_records,
     parse_dify_retrieval_request,
 )
-from aiops_diagnostics.dify_run_store import DifyRunStore
+from aiops_diagnostics.dify_run_store import DifyRunStore, still_valid as dify_run_still_valid
 from aiops_diagnostics.dify_tools_catalog import AI_OPS_TOOL_NAMES, CATALOG_NOTE
 from aiops_diagnostics.dify_trial import TrialDraft, TrialInitiator, TrialRefused
 from aiops_diagnostics.dify_workspaces import DifyWorkspaceError, DifyWorkspaces
@@ -3294,7 +3294,12 @@ def create_gateway_app(
             current = chat_data_grant.usable(grants.by_id(grant.grant_id))
         except chat_data_grant.DataGrantError as exc:
             raise StandardAPIError(401, exc.code, "data grant refused") from exc
-        # 3) 这一轮已经取过数 ⇒ 只回同一份快照，绝不第二次读业务。
+        # 3) 绑定此刻必须仍然成立，且仍是**签发时那一条**：删掉登记、改成 node 引擎、
+        #    换掉 workflow，这三种情况都会让旧凭据在剩余有效期内继续把数据交出去。
+        #    放在缓存回放**之前** —— 回放同样是"交出数据"。
+        _require_dify_binding_current(context, run)
+
+        # 4) 这一轮已经取过数 ⇒ 只回同一份快照，绝不第二次读业务。
         existing = runs.snapshot(run.run_id)
         if existing is not None:
             return existing
@@ -3306,8 +3311,18 @@ def create_gateway_app(
             )
         except (ChargingStatusError, StandardAPIError) as exc:
             raise StandardAPIError(502, "CHARGING_STATUS_UNAVAILABLE", "charging status unavailable") from exc
-        # 读取之后、交出之前再授权一次：撤销可能就发生在这一次读取期间。
+        # 读取之后、交出之前再判一次：撤销、到期、取消、绑定变更都可能就发生在这一次
+        # 读取期间。只重判"订单归属"是不够的 —— 用户取消之后订单仍属于本人，那一次
+        # 读取的结果照样会被交出去；凭据在读取期间过期也一样。
         _require_dify_grant_visible(context, run)
+        try:
+            chat_data_grant.usable(grants.by_id(grant.grant_id))
+        except chat_data_grant.DataGrantError as exc:
+            raise StandardAPIError(401, exc.code, "data grant refused") from exc
+        latest_now = runs.get(run.run_id)
+        if latest_now is None or latest_now.state != dify_run_store.RUNNING:
+            raise StandardAPIError(403, "DIFY_RUN_NOT_ACTIVE", "dify run is not active")
+        _require_dify_binding_current(context, run)
         runs.store_snapshot(run.run_id, snapshot)
         return snapshot
 
@@ -5991,6 +6006,29 @@ def _require_current_chat_node_order(context, caller, qa, request):
         raise StandardAPIError(503, "CHARGING_STATUS_EVIDENCE_UNAVAILABLE", "evidence differs")
 
 
+def _require_dify_binding_current(context: Any, run) -> None:
+    """那条 Dify 绑定**此刻**仍然成立，且仍是签发时那一条。
+
+    只看 run 与 grant 里冻结的值不够 —— 那两份都是签发那一刻的快照，它们彼此一致
+    完全说明不了"现在还能不能走 Dify"。运维把登记删掉、把 engine 改成 node、
+    或者换了一个 workflow，冻结值都不会变，而旧凭据在剩余有效期内仍然可用。
+
+    判据与回读守卫同一条：「按 `binding_key` 找回签发时那一条，并逐字比 `workflow_id`」。
+    """
+    from aiops_diagnostics import chat_execution
+
+    try:
+        binding = chat_execution.binding_for_key(context.settings, run.binding_key)
+    except chat_execution.ChatRunUnavailable as exc:
+        raise StandardAPIError(exc.http_status, exc.code, str(exc), retryable=exc.retryable) from exc
+    if (
+        binding is None
+        or binding.engine != chat_execution.ENGINE_DIFY
+        or binding.workflow_id != run.workflow_id
+    ):
+        raise StandardAPIError(403, "CHARGING_STATUS_DISABLED", "dify binding is no longer active")
+
+
 def _same_tenant_as_grant(record_tenant: object, grant_tenant: object) -> bool:
     """记录上的租户与凭据上的租户是不是同一个 —— 用共享规则判，不就地写比较。
 
@@ -6084,6 +6122,10 @@ def _require_current_chat_dify_order(context, caller, qa, request):
     latest = runs.get(located.run_id)
     if latest is None or latest.state != "succeeded":
         raise StandardAPIError(404, "AGENT_RUN_NO_RESULT", "dify run produced no result")
+    # 显式判有效期：`get()` 的过期收敛只处理 `running`，一条 succeeded 的记录过了
+    # 180 秒仍然是 succeeded —— 不判这里，"回读必须看 TTL"在成功路径上从未生效。
+    if not dify_run_still_valid(latest):
+        raise StandardAPIError(410, "AGENT_RUN_EXPIRED", "dify run has expired")
     snapshot = runs.snapshot(latest.run_id)
     if snapshot is None or snapshot.get("order_no") != order_no:
         raise StandardAPIError(503, "CHARGING_STATUS_EVIDENCE_UNAVAILABLE", "evidence unavailable")

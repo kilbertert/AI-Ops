@@ -1740,6 +1740,14 @@ class GatewayRuntime:
         grant = chat_data_grant.usable(chat_data_grant.DataGrantStore(self.store.path).by_id(grant_id))
         if grant.order_no != order_no:
             raise self._chat_unavailable("DIFY_ORDER_MISMATCH", "dify read a different order")
+        # 必须真的有**同一轮**的取数记录：图没调取数端点、或者把同订单的旧快照
+        # 当成本轮输出，在形状上都可能合法。没有这一条，`succeed()` 会把一次没取过数的
+        # 运行写成 completed，而 GET 要等到回读时才 503 —— 那已经不叫"失败落库"了。
+        from aiops_diagnostics.dify_run_store import DifyRunStore
+
+        stored = DifyRunStore(self.store.path).snapshot(run_id)
+        if stored is None:
+            raise self._chat_unavailable("DIFY_NO_DATA", "dify produced no data")
         snapshot = outputs.get("snapshot")
         # Dify 的 HTTP 步骤把响应体当**文本**（`graphon` 的 `HttpResponse.text`），
         # 所以端节点交回来的是 JSON 字符串而不是对象。这里严格解析：解不出对象、
@@ -1765,6 +1773,11 @@ class GatewayRuntime:
 
         if set(snapshot) != _chat.SNAPSHOT_FIELDS:
             raise self._chat_unavailable("DIFY_NO_DATA", "dify data is not a status snapshot")
+        # 输出必须就是**本轮落库的那一份**：不是"形状相近的另一份"。
+        if {key: str(value) for key, value in snapshot.items()} != {
+            key: str(value) for key, value in stored.items()
+        }:
+            raise self._chat_unavailable("DIFY_SNAPSHOT_MISMATCH", "dify answered from a different read")
         return status_answer(snapshot, language)
 
     @staticmethod
