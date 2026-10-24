@@ -1628,6 +1628,9 @@ class GatewayRuntime:
                 app_id=binding.workflow_id,
                 workflow_id=binding.workflow_id,
                 grant_id=grant.grant_id,
+                # 冻结"签发时对外的那一版"：撤回或重新发布之后，回读靠它判断这条 run
+                # 跑的那一版还是不是现在对外的那一版。
+                agent_version_no=int(getattr(binding, "agent_version_no", 0) or 0),
             )
             if registration.cancelled:
                 self._settle_dify_cancelled(dify_store, grant_store, run_id, qa_id)
@@ -1730,6 +1733,46 @@ class GatewayRuntime:
         registration = self._qa_registrations.get(qa_id)
         if registration is not None:
             self._release_conversation_turn(registration.conversation_turn)
+
+    def settle_retracted_runs(self, *, environment: str, tenant_id: str) -> dict[str, Any]:
+        """收掉这一版**在飞**的 Dify 运行。撤回的第二件事。
+
+        本地终态 + 撤销取数凭据 + 请求 Dify stop，三件都要，理由与取消逐条相同：
+        只落本地终态而 Dify 还在跑，它会继续消耗模型并回调；只请 Dify 停而不落本地
+        终态，worker 会在 Dify 回来之后把一条已撤回的回答放出去。
+
+        回读侧的拒绝**不在这里做**：回读守卫要求"当前绑定仍指向签发时那一版"，
+        撤回把指针改成 `retracted` 之后，那条判据自然成立，历史正文因此不再交付。
+        """
+        from aiops_diagnostics import chat_data_grant, chat_execution
+        from aiops_diagnostics.dify_run_store import DifyRunStore
+
+        store = DifyRunStore(self.store.path)
+        grants = chat_data_grant.DataGrantStore(self.store.path)
+        settled: list[str] = []
+        for run in store.running_for(tenant_id=tenant_id, environment=environment):
+            with contextlib.suppress(Exception):
+                store.cancel(run.run_id, "retracted_by_operator")
+            with contextlib.suppress(Exception):
+                grants.revoke_for_qa(run.qa_id)
+            registration = self._qa_registrations.get(run.qa_id)
+            if registration is not None:
+                registration.cancelled = True
+            self.store.update_assistant_question(run.qa_id, status="cancelled")
+            # 只有拿到了 task_id 才停得下来；Dify 停不下来**不能**撤回本地取消。
+            if run.task_id:
+                binding = chat_execution.binding_for_key(self.gateway_settings, run.binding_key)
+                if binding is not None and binding.engine == chat_execution.ENGINE_DIFY:
+                    with contextlib.suppress(Exception):
+                        import aiops_diagnostics.dify_chat_workflow as workflows
+
+                        workflows.DifyWorkflowClient(str(self.gateway_settings.dify_chat_base_url)).stop(
+                            workflow_key=workflows.load_workflow_key(binding.workflow_key_file),
+                            task_id=run.task_id,
+                            user=f"aiops:{run.grant_id}",
+                        )
+            settled.append(run.run_id)
+        return {"settled_runs": settled}
 
     def _settle_dify_cancelled(self, dify_store, grant_store, run_id, qa_id: str) -> None:
         with contextlib.suppress(Exception):

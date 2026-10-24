@@ -703,3 +703,113 @@ def test_publish_refuses_a_workspace_that_is_still_being_created(tmp_path, monke
     assert error["code"] == "DIFY_WORKSPACE_CREATING" and error["retryable"] is True
     entries = GatewayStore(tmp_path / "gateway.db").publish_audit_entries(app_id="")
     assert entries and entries[0]["reason_code"] == "DIFY_WORKSPACE_CREATING", "被拒的尝试也要入账"
+
+
+# ---------------------------------------------------------------------------
+# 撤回（M3-01）——与发布同一道门，但语义完全不同
+# ---------------------------------------------------------------------------
+
+RETRACT_HEADERS = {"Authorization": f"Bearer {PUBLISH_KEY}"}
+
+
+def _seed_route(db: Path, *, tenant: str = "T-1", version: int = 3, workflow: str = "wf-v3"):
+    from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
+
+    key = db.parent / f"{APP_ID}.key"
+    key.write_text("service-key\n")
+    key.chmod(0o600)
+    store = ChatRouteBindingStore(db)
+    store.publish(
+        environment="41",
+        tenant_id=tenant,
+        entry="consumer",
+        scenario="consumer_own_order_status",
+        engine="dify",
+        agent_id="小趋-客服",
+        agent_version_no=version,
+        app_id=APP_ID,
+        workflow_id=workflow,
+        workflow_key_ref=str(key),
+        updated_by="ops",
+    )
+    return store
+
+
+def test_retract_asks_for_the_same_key_as_publish(tmp_path, monkeypatch) -> None:
+    """撤回与发布**同一道门**：能发布的人才能撤回，不新造第二套权限。"""
+    runtime = _Runtime()
+    monkeypatch.setattr(runtime.dify_app_registry, "all", lambda: (_binding(),))
+    client = _client(tmp_path, runtime, dify_publish_api_key=PUBLISH_KEY)
+    assert client.post("/v1/dify/retract", json={"app_id": APP_ID}).status_code == 401
+    assert (
+        client.post(
+            "/v1/dify/retract",
+            json={"app_id": APP_ID},
+            headers={"Authorization": f"Bearer {KNOWLEDGE_KEY}"},
+        ).status_code
+        == 403
+    )
+
+
+def test_retract_is_absent_when_the_route_bindings_are_not_managed(tmp_path, monkeypatch) -> None:
+    """没配管理表 ⇒ 404。撤回不能凭空在一个没有正式指针的部署上"成功"。"""
+    runtime = _Runtime()
+    monkeypatch.setattr(runtime.dify_app_registry, "all", lambda: (_binding(),))
+    client = _client(tmp_path, runtime, dify_publish_api_key=PUBLISH_KEY)
+    response = client.post("/v1/dify/retract", json={"app_id": APP_ID}, headers=RETRACT_HEADERS)
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "CHAT_ROUTE_BINDINGS_DISABLED"
+
+
+def test_retract_marks_the_version_retracted_without_deleting_it(tmp_path, monkeypatch) -> None:
+    """撤回把那一版标成 `retracted` —— 行还在，版本号仍可回答。"""
+    runtime = _Runtime()
+    monkeypatch.setattr(runtime.dify_app_registry, "all", lambda: (_binding(),))
+    client = _client(tmp_path, runtime, dify_publish_api_key=PUBLISH_KEY, chat_route_bindings_file="")
+    store = _seed_route(tmp_path / "gateway.db")
+    client.app.state.gateway.settings.chat_route_bindings_file = str(tmp_path / "gateway.db")
+    client.app.state.gateway.settings.execution_environment = "41"
+
+    response = client.post("/v1/dify/retract", json={"app_id": APP_ID}, headers=RETRACT_HEADERS)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["state"] == "retracted"
+    assert body["version_no"] == 3
+    row = store.get("41", "T-1", "consumer", "consumer_own_order_status")
+    assert row is not None and row.state == "retracted"
+
+
+def test_retract_refuses_an_app_that_the_route_does_not_name(tmp_path, monkeypatch) -> None:
+    """同租户入口下另一条路由：拒绝，不越权撤回。"""
+    runtime = _Runtime()
+    other_app = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
+    monkeypatch.setattr(runtime.dify_app_registry, "all", lambda: (_binding(app_id=other_app),))
+    client = _client(tmp_path, runtime, dify_publish_api_key=PUBLISH_KEY)
+    _seed_route(tmp_path / "gateway.db")
+    client.app.state.gateway.settings.chat_route_bindings_file = str(tmp_path / "gateway.db")
+    client.app.state.gateway.settings.execution_environment = "41"
+    response = client.post("/v1/dify/retract", json={"app_id": other_app}, headers=RETRACT_HEADERS)
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "CHAT_ROUTE_BINDING_MISMATCH"
+
+
+def test_retract_of_an_unbound_app_is_the_same_404_as_publish(tmp_path, monkeypatch) -> None:
+    runtime = _Runtime()
+    monkeypatch.setattr(runtime.dify_app_registry, "all", lambda: ())
+    client = _client(tmp_path, runtime, dify_publish_api_key=PUBLISH_KEY)
+    response = client.post("/v1/dify/retract", json={"app_id": APP_ID}, headers=RETRACT_HEADERS)
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "DIFY_APP_NOT_BOUND"
+
+
+def test_retract_carries_no_field_that_could_choose_a_version(tmp_path, monkeypatch) -> None:
+    """请求体 `extra="forbid"`：撤回**不能**指定"恢复到哪一版"。"""
+    runtime = _Runtime()
+    monkeypatch.setattr(runtime.dify_app_registry, "all", lambda: (_binding(),))
+    client = _client(tmp_path, runtime, dify_publish_api_key=PUBLISH_KEY)
+    response = client.post(
+        "/v1/dify/retract",
+        json={"app_id": APP_ID, "version_no": 1},
+        headers=RETRACT_HEADERS,
+    )
+    assert response.status_code == 422

@@ -136,6 +136,9 @@ class ChatBinding:
     #: 两者成对出现，缺一即整份绑定表校验失败 —— 半配就是「配了一半就开门」。
     workflow_id: str = ""
     workflow_key_file: str = ""
+    #: **只有管理行**（`chat_route_bindings`）才有：它由哪一版 AgentVersion 发布而来。
+    #: 文件行恒为 0。回读守卫拿它核"这条绑定仍指向签发时那一版"。
+    agent_version_no: int = 0
 
     @property
     def key(self) -> str:
@@ -264,11 +267,84 @@ def _validate_binding_files(binding: ChatBinding) -> None:
         raise ChatBindingError("chat execution binding requires an execution manifest")
 
 
+def key_file_for_app(key_dir: str | Path, app_id: str) -> str:
+    """一个 Dify app 的 Service API 凭据文件：`<key_dir>/<app_id>.key`。
+
+    发布**不搬运凭据**：那是运维预置的 0600 文件，发布只按 app_id 推出它的路径。
+    这样"发布"这个过程从头到尾不需要读到密钥 —— 也就没有把它写进表的可能。
+    """
+    return str(Path(str(key_dir)).expanduser().absolute() / f"{app_id}.key")
+
+
+def _bindings_from_store(path: str | Path, key_dir: str = "") -> tuple[ChatBinding, ...]:
+    """把管理表里 `active` 的行读成绑定。`retracted` 的**不出现**在这里。
+
+    这一点是撤回语义的全部：撤回之后这条 key 查不到活动绑定，聊天入口因此不派发；
+    但它仍然在表里留着 `retracted` 那一行，回答得了"这一版被撤回了"，而删行会让
+    请求掉回直读。
+    """
+    from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
+
+    store = ChatRouteBindingStore(Path(str(path)).expanduser().absolute())
+    bindings: list[ChatBinding] = []
+    for row in store.all():
+        if not row.active:
+            continue
+        binding = ChatBinding(
+            environment=row.environment,
+            tenant_id=row.tenant_id,
+            entry=row.entry,
+            scenario=row.scenario,
+            config_file="",
+            manifest_file="",
+            engine=row.engine,
+            workflow_id=row.workflow_id,
+            workflow_key_file=row.workflow_key_ref
+            or (key_file_for_app(key_dir, row.app_id) if key_dir else ""),
+            agent_version_no=row.agent_version_no,
+        )
+        if binding.engine == ENGINE_NODE:
+            # 管理表这一版只承载 Dify：节点路线的执行清单（config/manifest）仍由
+            # 文件登记提供。写一条 node 管理行 = 声明了一个配不齐的绑定。
+            raise ChatBindingError("a managed route binding cannot declare the node engine")
+        _validate_binding(binding)
+        bindings.append(binding)
+    return tuple(bindings)
+
+
 def _bindings(settings: GatewayServerSettings) -> tuple[ChatBinding, ...]:
+    """此刻生效的绑定 = 文件登记 + 管理表，**但同一个 key 不许同时出现在两边**。
+
+    管理表（`chat_route_bindings`）是发布/撤回推进的正式指针；文件登记保留给节点
+    路线与既有 Dify 部署（兼容是硬要求）。两边都声明同一个 key 时**不裁决优先级**：
+    那会让"这次到底谁在跑"从一个事实变成一个猜测。
+    """
     raw = str(getattr(settings, "chat_execution_bindings_file", "") or "")
-    if not raw:
-        return ()
-    return load_bindings(raw)
+    from_file = load_bindings(raw) if raw else ()
+    database = str(getattr(settings, "chat_route_bindings_file", "") or "")
+    key_dir = str(getattr(settings, "chat_dify_key_dir", "") or "")
+    from_store = _bindings_from_store(database, key_dir) if database else ()
+    if from_file and from_store:
+        overlap = {item.key for item in from_file} & {item.key for item in from_store}
+        if overlap:
+            raise ChatBindingError("a chat route binding is declared in both places")
+    return tuple(from_file) + tuple(from_store)
+
+
+def assert_no_binding_collision(settings: GatewayServerSettings) -> None:
+    """启动期判据：同一个 key 不许同时被文件与管理表声明。违反 ⇒ 启动失败。
+
+    只比 `active` 行：一条已撤回的管理行不参与路由，与文件行并存不冲突 —— 那正是
+    "撤回之后改回手填登记"的迁移路径。
+    """
+    raw = str(getattr(settings, "chat_execution_bindings_file", "") or "")
+    database = str(getattr(settings, "chat_route_bindings_file", "") or "")
+    if not raw or not database:
+        return
+    from_file = {item.key for item in load_bindings(raw)}
+    from_store = {item.key for item in _bindings_from_store(database)}
+    if from_file & from_store:
+        raise ChatBindingError("a chat route binding is declared in both places")
 
 
 def select_binding(settings: GatewayServerSettings, caller: ScopeContext) -> ChatBinding | None:
@@ -291,7 +367,33 @@ def select_binding(settings: GatewayServerSettings, caller: ScopeContext) -> Cha
             and binding.scenario == SCENARIO_OWN_ORDER_STATUS
         ):
             return binding
+    # 没有**活动**绑定，但这条路由可能**被撤回过**。这两种情况必须分开：
+    #   * 从来没配过 ⇒ `None`，走原直读（兼容与隔离）；
+    #   * 被撤回过 ⇒ **拒绝**，绝不回落直读。
+    # 撤回的目的是"停止交付"，而直读会照样给出一个答案——那是最难发现的一种失败：
+    # 用户拿到了结果，只是它来自另一条路径。
+    if _retracted(settings, environment, tenant_id):
+        raise ChatRunUnavailable("CHAT_ROUTE_RETRACTED", "this version has been retracted", http_status=410)
     return None
+
+
+def _retracted(settings: GatewayServerSettings, environment: str, tenant_id: str) -> bool:
+    """这条（环境，入口，场景）在管理表里是不是 `retracted`。"""
+    database = str(getattr(settings, "chat_route_bindings_file", "") or "")
+    if not database:
+        return False
+    from pathlib import Path
+
+    from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
+
+    try:
+        row = ChatRouteBindingStore(Path(database).expanduser().absolute()).get(
+            environment, tenant_id, ENTRY_CONSUMER, SCENARIO_OWN_ORDER_STATUS
+        )
+    except Exception:  # noqa: BLE001 - 读不出来时按"没撤回"处理：那会走直读，
+        # 而直读是既有行为；把一次读失败变成 410 会让运维以为有人撤回了。
+        return False
+    return row is not None and not row.active
 
 
 def binding_for_key(settings: GatewayServerSettings, key: str | None) -> ChatBinding | None:

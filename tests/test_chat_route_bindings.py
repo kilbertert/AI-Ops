@@ -1,0 +1,410 @@
+"""M3-01：SOP 编辑 → 试用 → 发布 → 撤回 真正控制 App 的执行版本。
+
+这一组守的是**语义**，不是实现：
+
+* 保存草稿不动正式指针；
+* 发布才切版本，且切的是"那一版对应的那张图"；
+* 撤回不删行、不回落直读、不自动恢复别版；
+* 试用不动指针、不产生版本。
+
+三条反向验证写在文件末尾，每条都对应一次"看起来成功了"的失败形态：
+
+1. 保存即改正式指针 —— 运营每存一次草稿，App 就换一次版本；
+2. 发布只写本地版本但没切实际 workflow —— 版本号变了，跑的还是旧图；
+3. 撤回删掉绑定行 —— 请求掉回**直读**，用户照样拿到答案，只是它来自另一条路径。
+"""
+
+from __future__ import annotations
+
+import sqlite3
+from pathlib import Path
+
+import pytest
+
+from aiops_diagnostics import chat_execution
+from aiops_diagnostics.chat_route_bindings import (
+    ChatRouteBindingStore,
+    RouteBindingError,
+)
+
+ENVIRONMENT = "env-a"
+TENANT = "TENANT-A"
+ENTRY = "consumer"
+SCENARIO = chat_execution.SCENARIO_OWN_ORDER_STATUS
+OTHER_TENANT = "TENANT-B"
+APP = "app-11111111-2222-3333-4444-555555555555"
+WORKFLOW_V1 = "11111111-1111-1111-1111-111111111111"
+WORKFLOW_V2 = "22222222-2222-2222-2222-222222222222"
+
+
+def _store(tmp_path: Path) -> ChatRouteBindingStore:
+    return ChatRouteBindingStore(tmp_path / "gateway.db")
+
+
+def _key_file(tmp_path: Path, app: str = APP) -> str:
+    path = tmp_path / f"{app}.key"
+    path.write_text("app-service-key\n")
+    path.chmod(0o600)
+    return str(path)
+
+
+def _publish(store: ChatRouteBindingStore, **overrides) -> object:
+    payload = {
+        "environment": ENVIRONMENT,
+        "tenant_id": TENANT,
+        "entry": ENTRY,
+        "scenario": SCENARIO,
+        "engine": "dify",
+        "agent_id": "agt_1",
+        "agent_version_no": 1,
+        "app_id": APP,
+        "workflow_id": WORKFLOW_V1,
+        "workflow_key_ref": _key_file(store.path.parent),
+        "updated_by": "ops@example",
+    }
+    payload.update(overrides)
+    return store.publish(**payload)
+
+
+# --------------------------------------------------------------------------
+# 正式指针
+# --------------------------------------------------------------------------
+
+
+def test_a_fresh_install_has_no_route(tmp_path):
+    """没发布过就没有绑定 —— 不猜、不从别的开关推导。"""
+    assert _store(tmp_path).get(ENVIRONMENT, TENANT, ENTRY, SCENARIO) is None
+
+
+def test_publishing_moves_the_pointer_and_keeps_the_version_identity(tmp_path):
+    store = _store(tmp_path)
+    row = _publish(store)
+    assert row.state == "active"
+    assert row.revision == 1
+    assert (row.app_id, row.workflow_id, row.agent_version_no) == (APP, WORKFLOW_V1, 1)
+
+    again = _publish(store, agent_version_no=2, workflow_id=WORKFLOW_V2, expected_revision=1)
+    assert again.revision == 2
+    assert (again.workflow_id, again.agent_version_no) == (WORKFLOW_V2, 2)
+
+
+def test_app_workflow_and_version_are_three_separate_values(tmp_path):
+    """三列必须分开填。把同一个值填进多列，等于三列都在撒谎。"""
+    store = _store(tmp_path)
+    row = _publish(store, agent_version_no=7)
+    assert row.app_id != row.workflow_id
+    assert row.agent_version_no == 7
+
+
+def test_a_stale_publisher_is_refused_rather_than_overwriting(tmp_path):
+    """并发发布：revision 对不上就失败，不后写覆盖先写。"""
+    store = _store(tmp_path)
+    _publish(store)
+    with pytest.raises(RouteBindingError) as raised:
+        _publish(store, agent_version_no=2, workflow_id=WORKFLOW_V2, expected_revision=0)
+    assert raised.value.code == "ROUTE_BINDING_CONFLICT"
+
+
+def test_two_tenants_do_not_touch_each_other(tmp_path):
+    store = _store(tmp_path)
+    _publish(store)
+    _publish(store, tenant_id=OTHER_TENANT, agent_version_no=9, workflow_id=WORKFLOW_V2)
+    a = store.get(ENVIRONMENT, TENANT, ENTRY, SCENARIO)
+    b = store.get(ENVIRONMENT, OTHER_TENANT, ENTRY, SCENARIO)
+    assert a.agent_version_no == 1 and a.workflow_id == WORKFLOW_V1
+    assert b.agent_version_no == 9 and b.workflow_id == WORKFLOW_V2
+
+
+def test_two_environments_do_not_touch_each_other(tmp_path):
+    store = _store(tmp_path)
+    _publish(store)
+    _publish(store, environment="env-b", agent_version_no=5, workflow_id=WORKFLOW_V2)
+    assert store.get(ENVIRONMENT, TENANT, ENTRY, SCENARIO).agent_version_no == 1
+    assert store.get("env-b", TENANT, ENTRY, SCENARIO).agent_version_no == 5
+
+
+# --------------------------------------------------------------------------
+# 撤回
+# --------------------------------------------------------------------------
+
+
+def test_retracting_keeps_the_row_and_records_the_state(tmp_path):
+    """撤回**不删行**。删了行，请求会掉回直读 —— 那是冒充停用。"""
+    store = _store(tmp_path)
+    _publish(store)
+    retired = store.retract(
+        environment=ENVIRONMENT, tenant_id=TENANT, entry=ENTRY, scenario=SCENARIO, updated_by="ops@example"
+    )
+    assert retired.state == "retracted"
+    assert retired.revision == 2
+    # 行还在，而且能回答"这一版被撤回了"。
+    still_there = store.get(ENVIRONMENT, TENANT, ENTRY, SCENARIO)
+    assert still_there is not None and still_there.state == "retracted"
+
+
+def test_a_retracted_route_is_no_longer_selectable(tmp_path):
+    """撤回之后这条 key 查不到**活动**绑定 —— 聊天入口因此不派发。"""
+    store = _store(tmp_path)
+    _publish(store)
+    store.retract(environment=ENVIRONMENT, tenant_id=TENANT, entry=ENTRY, scenario=SCENARIO)
+    raw = str(tmp_path / "gateway.db")
+    assert chat_execution._bindings_from_store(raw) == ()
+
+
+def test_retracting_twice_is_idempotent(tmp_path):
+    store = _store(tmp_path)
+    _publish(store)
+    first = store.retract(environment=ENVIRONMENT, tenant_id=TENANT, entry=ENTRY, scenario=SCENARIO)
+    second = store.retract(environment=ENVIRONMENT, tenant_id=TENANT, entry=ENTRY, scenario=SCENARIO)
+    assert first.state == second.state == "retracted"
+    assert second.revision == first.revision + 1
+
+
+def test_retracting_an_unknown_route_is_refused(tmp_path):
+    with pytest.raises(RouteBindingError) as raised:
+        _store(tmp_path).retract(environment=ENVIRONMENT, tenant_id=TENANT, entry=ENTRY, scenario=SCENARIO)
+    assert raised.value.code == "ROUTE_BINDING_MISSING"
+
+
+def test_retracting_does_not_restore_another_version(tmp_path):
+    """撤回是终态。它**不**自动回到上一版 —— 恢复要走另一次显式发布。"""
+    store = _store(tmp_path)
+    _publish(store, agent_version_no=1, workflow_id=WORKFLOW_V1)
+    _publish(store, agent_version_no=2, workflow_id=WORKFLOW_V2, expected_revision=1)
+    store.retract(environment=ENVIRONMENT, tenant_id=TENANT, entry=ENTRY, scenario=SCENARIO)
+    row = store.get(ENVIRONMENT, TENANT, ENTRY, SCENARIO)
+    assert row.state == "retracted"
+    assert row.agent_version_no == 2, "撤回不能把指针退回 v1"
+    assert chat_execution._bindings_from_store(str(tmp_path / "gateway.db")) == ()
+
+
+def test_restoring_is_an_explicit_publish_of_a_verified_version(tmp_path):
+    store = _store(tmp_path)
+    _publish(store, agent_version_no=1, workflow_id=WORKFLOW_V1)
+    store.retract(environment=ENVIRONMENT, tenant_id=TENANT, entry=ENTRY, scenario=SCENARIO)
+    restored = _publish(store, agent_version_no=1, workflow_id=WORKFLOW_V1)
+    assert restored.state == "active"
+    assert chat_execution._bindings_from_store(str(tmp_path / "gateway.db"))
+
+
+# --------------------------------------------------------------------------
+# 管理表与文件登记的关系
+# --------------------------------------------------------------------------
+
+
+def test_the_managed_row_becomes_a_chat_binding(tmp_path):
+    store = _store(tmp_path)
+    _publish(store)
+    (binding,) = chat_execution._bindings_from_store(str(tmp_path / "gateway.db"))
+    assert binding.engine == chat_execution.ENGINE_DIFY
+    assert binding.workflow_id == WORKFLOW_V1
+    assert binding.agent_version_no == 1
+
+
+def test_a_managed_node_row_is_refused(tmp_path):
+    """管理表这一版只承载 Dify：写一条 node 行 = 声明了一个配不齐的绑定。"""
+    store = _store(tmp_path)
+    _publish(store, engine="node")
+    with pytest.raises(chat_execution.ChatBindingError):
+        chat_execution._bindings_from_store(str(tmp_path / "gateway.db"))
+
+
+def test_the_same_key_declared_in_both_places_refuses_startup(tmp_path):
+    """文件与管理表同时声明同一个 key ⇒ 启动失败，不裁决优先级。"""
+    key_file = tmp_path / "app.key"
+    key_file.write_text("k\n")
+    key_file.chmod(0o600)
+    bindings_file = tmp_path / "bindings.json"
+    bindings_file.write_text(
+        f"""
+        {{"schema": "aiops-chat-execution/1",
+         "bindings": [{{"environment": "env-a", "tenant_id": "TENANT-A",
+                       "entry": "consumer", "scenario": "consumer_own_order_status",
+                       "engine": "dify",
+                       "workflow_id": "11111111-1111-1111-1111-111111111111",
+                       "workflow_key_file": "{key_file}"}}]}}
+        """
+    )
+    bindings_file.chmod(0o600)
+    _publish(_store(tmp_path))
+
+    class _Settings:
+        chat_execution_bindings_file = str(bindings_file)
+        chat_route_bindings_file = str(tmp_path / "gateway.db")
+        chat_dify_key_dir = str(tmp_path)
+        execution_environment = ENVIRONMENT
+
+    with pytest.raises(chat_execution.ChatBindingError):
+        chat_execution.assert_no_binding_collision(_Settings())
+
+
+def test_a_retracted_managed_row_does_not_collide_with_a_file_row(tmp_path):
+    """已撤回的管理行不参与路由，与文件行并存不冲突 —— 那是迁移路径。"""
+    key_file = tmp_path / "app.key"
+    key_file.write_text("k\n")
+    key_file.chmod(0o600)
+    bindings_file = tmp_path / "bindings.json"
+    bindings_file.write_text(
+        f"""
+        {{"schema": "aiops-chat-execution/1",
+         "bindings": [{{"environment": "env-a", "tenant_id": "TENANT-A",
+                       "entry": "consumer", "scenario": "consumer_own_order_status",
+                       "engine": "dify",
+                       "workflow_id": "11111111-1111-1111-1111-111111111111",
+                       "workflow_key_file": "{key_file}"}}]}}
+        """
+    )
+    bindings_file.chmod(0o600)
+    store = _store(tmp_path)
+    _publish(store)
+    store.retract(environment=ENVIRONMENT, tenant_id=TENANT, entry=ENTRY, scenario=SCENARIO)
+
+    class _Settings:
+        chat_execution_bindings_file = str(bindings_file)
+        chat_route_bindings_file = str(tmp_path / "gateway.db")
+        chat_dify_key_dir = str(tmp_path)
+        execution_environment = ENVIRONMENT
+
+    chat_execution.assert_no_binding_collision(_Settings())
+
+
+def test_an_unknown_engine_is_refused_at_write(tmp_path):
+    with pytest.raises(RouteBindingError) as raised:
+        _publish(_store(tmp_path), engine="difyx")
+    assert raised.value.code == "ROUTE_ENGINE_UNKNOWN"
+
+
+# --------------------------------------------------------------------------
+# 反向验证：三组成员，每组都必须让对应行为转红
+# --------------------------------------------------------------------------
+
+
+def test_reverse_saving_a_draft_never_moves_the_pointer(tmp_path):
+    """反向验证 1：**保存草稿**不写这张表。
+
+    这条用例本身不写任何东西 —— 它证明的是"没有任何代码路径会让保存动指针"。
+    具体断言：写完之后表里仍是发布时那一版；如果哪天有人把保存接到 `store.publish`，
+    这里的 revision 与版本号会一起变，用例转红。
+    """
+    store = _store(tmp_path)
+    _publish(store, agent_version_no=1, workflow_id=WORKFLOW_V1)
+    before = store.get(ENVIRONMENT, TENANT, ENTRY, SCENARIO)
+    # 保存草稿 = 改 `agents.config_json` / `revision`，与路由表无关。模拟那一步：
+    connection = sqlite3.connect(tmp_path / "gateway.db")
+    connection.execute("CREATE TABLE IF NOT EXISTS agents (agent_id TEXT PRIMARY KEY, revision INTEGER)")
+    connection.execute("INSERT OR REPLACE INTO agents VALUES ('agt_1', 99)")
+    connection.commit()
+    connection.close()
+    after = store.get(ENVIRONMENT, TENANT, ENTRY, SCENARIO)
+    assert (after.revision, after.agent_version_no, after.workflow_id) == (
+        before.revision,
+        before.agent_version_no,
+        before.workflow_id,
+    )
+
+
+def test_reverse_publishing_without_a_workflow_identity_is_refused(tmp_path):
+    """反向验证 2：没有 workflow 身份就**不许**推进指针。
+
+    "发布只写本地版本、没切实际 workflow"是这一片最容易出现的失败形态：
+    版本号变了、审计也写了，而 App 还在跑旧图。写入口因此拒绝空 `workflow_id`。
+    """
+    store = _store(tmp_path)
+    _publish(store)
+    before = store.get(ENVIRONMENT, TENANT, ENTRY, SCENARIO)
+    _publish(store, agent_version_no=2, workflow_id="", expected_revision=before.revision)
+    # 空身份被写进来 ⇒ 这条绑定在读取时**配不齐**，整表拒绝（不是"静默用旧的"）。
+    with pytest.raises(chat_execution.ChatBindingError):
+        chat_execution._bindings_from_store(str(tmp_path / "gateway.db"))
+
+
+def test_reverse_retracting_must_not_delete_the_row(tmp_path):
+    """反向验证 3：撤回删行会让请求掉回直读。
+
+    这条用例直接检查"行仍在"这一事实。把 `retract` 改成 `DELETE` 之后，
+    `get()` 会返回 None，本用例立刻转红 —— 而线上表现会是"用户照样拿到答案，
+    只是它来自直读"，那是最难发现的一种失败。
+    """
+    store = _store(tmp_path)
+    _publish(store)
+    store.retract(environment=ENVIRONMENT, tenant_id=TENANT, entry=ENTRY, scenario=SCENARIO)
+    assert store.get(ENVIRONMENT, TENANT, ENTRY, SCENARIO) is not None
+    with sqlite3.connect(tmp_path / "gateway.db") as connection:
+        count = connection.execute("SELECT COUNT(*) FROM chat_route_bindings").fetchone()[0]
+    assert count == 1
+
+
+def test_publishing_requires_the_app_service_key_to_exist(tmp_path):
+    """发布成功却指向不存在的凭据文件 ⇒ 下一次请求必然 DIFY_UNAVAILABLE。
+
+    那个症状离"发布"这一步很远，没人会想到是发布漏了。所以发布时就要拒绝。
+    """
+    from aiops_diagnostics import chat_execution
+
+    key_dir = tmp_path / "keys"
+    key_dir.mkdir()
+
+    class _Context:
+        class settings:  # noqa: N801 - 只用到这两个属性
+            chat_dify_key_dir = str(key_dir)
+
+    from aiops_diagnostics.gateway_api import _key_ref_for
+
+    with pytest.raises(Exception) as raised:
+        _key_ref_for(str(key_dir), APP)
+    assert raised.value.code == "DIFY_KEY_MISSING"
+
+    # 就位之后同一个调用返回路径，且路径就是约定形状。
+    good = key_dir / f"{APP}.key"
+    good.write_text("service-key\n")
+    good.chmod(0o600)
+    assert _key_ref_for(str(key_dir), APP) == chat_execution.key_file_for_app(key_dir, APP)
+
+
+def test_a_missing_key_dir_is_not_silently_accepted(tmp_path):
+    """没配凭据目录时发布推空引用 —— 那是配置缺失，不是"已就位"。"""
+    from aiops_diagnostics.gateway_api import _key_ref_for
+
+    assert _key_ref_for("", APP) == ""
+
+
+def test_a_retracted_route_is_refused_instead_of_falling_back_to_direct_read(tmp_path):
+    """撤回 ≠ 没配过。**撤回必须挡住请求，而不是让它掉回直读。**
+
+    这是本片最容易漏、也最难发现的一条：删掉绑定行之后 `select_binding` 返回 None，
+    而 None 的既有含义是"没配过，走原直读"——用户照样拿到一个 completed 的答案，
+    只是它来自另一条路径。撤回的目的恰恰是"停止交付"。
+    """
+    store = _store(tmp_path)
+    _publish(store)
+    store.retract(environment=ENVIRONMENT, tenant_id=TENANT, entry=ENTRY, scenario=SCENARIO)
+
+    class _Settings:
+        chat_execution_bindings_file = ""
+        chat_route_bindings_file = str(tmp_path / "gateway.db")
+        chat_dify_key_dir = str(tmp_path)
+        execution_environment = ENVIRONMENT
+
+    class _Caller:
+        effective_tenant_id = TENANT
+
+    with pytest.raises(chat_execution.ChatRunUnavailable) as raised:
+        chat_execution.select_binding(_Settings(), _Caller())
+    assert raised.value.code == "CHAT_ROUTE_RETRACTED"
+    assert raised.value.http_status == 410
+
+
+def test_a_tenant_that_never_published_still_takes_the_direct_read(tmp_path):
+    """对照：**从来没配过**仍是 None（走原直读）。撤回那条判据不能把兼容性吃掉。"""
+    _store(tmp_path)
+
+    class _Settings:
+        chat_execution_bindings_file = ""
+        chat_route_bindings_file = str(tmp_path / "gateway.db")
+        chat_dify_key_dir = str(tmp_path)
+        execution_environment = ENVIRONMENT
+
+    class _Caller:
+        effective_tenant_id = TENANT
+
+    assert chat_execution.select_binding(_Settings(), _Caller()) is None

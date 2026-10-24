@@ -300,6 +300,10 @@ def _dify_env(root: Path, *, model_url: str, port: int, project: str, network: s
         "CELERY_BROKER_URL": "redis://127.0.0.1:6379/1",
         "PLUGIN_DAEMON_KEY": secrets.token_hex(16),
         "PLUGIN_DIFY_INNER_API_KEY": secrets.token_hex(16),
+        # 服务端到服务端的 console 凭据（发布桥的 `DifyDslClient` 走的就是这条）：
+        # Dify 用**全局** ADMIN_API_KEY 认它，app 级 service key 不是它。
+        "ADMIN_API_KEY_ENABLE": "true",
+        "ADMIN_API_KEY": ADMIN_API_KEY,
         "VECTOR_STORE": "weaviate",
         "WEAVIATE_ENDPOINT": "http://127.0.0.1:8080",
         "WEAVIATE_API_KEY": secrets.token_hex(24),
@@ -648,11 +652,23 @@ def _setup_dify(base: str, env: dict[str, str], *, model_url: str, gateway_base:
     status, text = http(f"{base}/console/api/apps/{app_id}/api-keys", method="POST", headers=console, body={})
     key = (_json(text) or {}).get("token") if status in {200, 201} else None
     result["service_key_ok"] = bool(key)
+    # 形状而不是内容：token 短到像占位值时必须看得见 —— `bool(key)` 对 "b" 也是 True。
+    result["service_key_shape"] = {
+        "length": len(key) if isinstance(key, str) else 0,
+        "status": status,
+        "body_keys": sorted(_json(text) or {}) if isinstance(_json(text), dict) else None,
+    }
     result["service_key"] = key
     # 控制台会话头留一份给失败诊断用（节点执行记录是 console 路由）。
     # 它含会话令牌，所以 `main()` 打印报告前会把它摘掉，只用来发请求。
     result["console_headers"] = dict(console)
     return result
+
+
+PUBLISH_KEY = "acceptance-dify-publish-key"
+#: Dify 的**全局**管理密钥：发布桥用 Bearer 打 console 路由时认的就是它。
+#: app 级 service key 不能替代 —— 实测会得到 `DIFY_DSL_AUTH_REJECTED`。
+ADMIN_API_KEY = "acceptance-admin-api-key-0123456789"
 
 
 def _start_gateway(
@@ -664,6 +680,8 @@ def _start_gateway(
     workflow_id: str,
     key: str,
     port: int,
+    console_key: str = "",
+    managed_route: bool = False,
 ) -> tuple[subprocess.Popen, str, dict[str, Any]]:
     """起真 Gateway（绑定表指向 Dify 路线），等它就绪。"""
     case = root / "gateway"
@@ -731,26 +749,36 @@ def _start_gateway(
     key_file.write_text(key + "\n")
     key_file.chmod(0o600)
 
+    # 每个 app 一把 Service API 凭据：`<key_dir>/<app_id>.key`。发布只推路径，不读密钥。
+    keys = case / "keys"
+    keys.mkdir(parents=True, exist_ok=True)
+
     bindings = case / "chat-bindings.json"
-    bindings.write_text(
-        json.dumps(
-            {
-                "schema": "aiops-chat-execution/1",
-                "bindings": [
-                    {
-                        "engine": "dify",
-                        "environment": "env-local",
-                        "tenant_id": TENANT,
-                        "entry": "consumer",
-                        "scenario": "consumer_own_order_status",
-                        "workflow_id": workflow_id,
-                        "workflow_key_file": str(key_file),
-                    }
-                ],
-            }
+    # 管理指针模式（M3-01 的运营闭环）：**不写文件登记**。两者同时声明同一个 key
+    # 是启动失败；而"写一张空表"也是配置错误（`declare no entries`）。
+    # 真实迁移的形状就是"不配这个文件，改由管理表接管"。
+    if managed_route:
+        bindings.unlink(missing_ok=True)
+    else:
+        bindings.write_text(
+            json.dumps(
+                {
+                    "schema": "aiops-chat-execution/1",
+                    "bindings": [
+                        {
+                            "engine": "dify",
+                            "environment": "env-local",
+                            "tenant_id": TENANT,
+                            "entry": "consumer",
+                            "scenario": "consumer_own_order_status",
+                            "workflow_id": workflow_id,
+                            "workflow_key_file": str(key_file),
+                        }
+                    ],
+                }
+            )
         )
-    )
-    bindings.chmod(0o600)
+        bindings.chmod(0o600)
 
     env = {
         **os.environ,
@@ -764,7 +792,20 @@ def _start_gateway(
         "AIOPS_GATEWAY_CONSUMER_ORDER_CHAT_ENABLED": "1",
         "AIOPS_GATEWAY_ENVIRONMENT": "dify-chat-acceptance",
         "AIOPS_GATEWAY_EXECUTION_ENVIRONMENT": "env-local",
-        "AIOPS_GATEWAY_CHAT_EXECUTION_BINDINGS_FILE": str(bindings),
+        # 管理模式不配这条：路径指向一个不存在的文件会让整张表读失败
+        # （`EXEC_CONFIG_UNAVAILABLE`），而"不配"才是正确的迁移形状。
+        **({} if managed_route else {"AIOPS_GATEWAY_CHAT_EXECUTION_BINDINGS_FILE": str(bindings)}),
+        # M3-01：运营发布/撤回推进的正式指针，以及发布门要用的两把钥匙。
+        # **管理表与文件登记不能同时声明同一个 key**，所以下面那段运营闭环会先把文件
+        # 登记换成空表，再让管理表接管 —— 这也正是真实迁移的形状。
+        "AIOPS_GATEWAY_CHAT_ROUTE_BINDINGS_FILE": str(case / "data/gateway.db"),
+        "AIOPS_GATEWAY_CHAT_DIFY_KEY_DIR": str(keys),
+        "AIOPS_GATEWAY_DIFY_PUBLISH_API_KEY": PUBLISH_KEY,
+        # 第一次起网关时还没有 app key（它要等 Dify 里发布完才存在），但启动校验
+        # 要求"配了 console 地址就必须有 key"。占位值只活到第二次启动 —— 那时才换成
+        # 真 key，第一次启动也根本不会去打 console。
+        "AIOPS_GATEWAY_DIFY_CONSOLE_BASE_URL": dify_base,
+        "AIOPS_GATEWAY_DIFY_CONSOLE_API_KEY": console_key or "placeholder-console-key",
         "AIOPS_GATEWAY_DIFY_CHAT_BASE_URL": dify_base,
         "AIOPS_GATEWAY_BIND": "127.0.0.1",
         "AIOPS_M2_LOCAL_TOKEN": TOKEN,
@@ -862,6 +903,119 @@ def _drive(
     result["final"] = final
     result["rows"] = _dify_rows(case / "data/gateway.db")
     return result
+
+
+HEADERS = {"X-Business-Entry": "consumer"}
+
+
+def _seed_registry(database: Path, rows: list[dict[str, str]]) -> bool:
+    """把这次验收的 `dify_app_registry` 行直接写进去。
+
+    用 SQL 而不是调 `admin reconcile`：这一段的重点是**发布/撤回这两个运营动作**，
+    注册表是它们的**前置条件**（"这个 app 属于哪个租户/入口"是声明，不是操作）。
+    真实部署里这两行由清单收敛产生，这里不重复验那条路径。
+    """
+    try:
+        with sqlite3.connect(database) as connection:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS dify_app_registry (
+                    tenant_id TEXT NOT NULL,
+                    business_entry TEXT NOT NULL,
+                    app_id TEXT NOT NULL,
+                    agent_name TEXT NOT NULL DEFAULT '',
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY (tenant_id, business_entry)
+                )
+                """
+            )
+            for row in rows:
+                connection.execute(
+                    "INSERT OR REPLACE INTO dify_app_registry VALUES (?, ?, ?, ?, ?)",
+                    (
+                        row["tenant_id"],
+                        row["business_entry"],
+                        row["app_id"],
+                        row["agent_name"],
+                        datetime.now(UTC).isoformat(),
+                    ),
+                )
+            connection.commit()
+        return True
+    except sqlite3.Error:
+        return False
+
+
+def _console_workspace(dify_base: str, console: dict[str, str]) -> str:
+    """这个 Dify 实例的 workspace id（发布要按租户钉到一个已开户的工作区）。"""
+    status, body = http_json(f"{dify_base}/console/api/workspaces/current/summary", headers=console)
+    identifier = (body or {}).get("id") if status == 200 and isinstance(body, dict) else None
+    return str(identifier or "")
+
+
+def _seed_workspace(database: Path, tenant_id: str, workspace_id: str, environment: str) -> bool:
+    """给这个租户种一行 `ready` 的 workspace（开户是别的步骤，这里只补前置）。
+
+    **走它自己的 API，不手写 INSERT**：那张表有 `workspace_name` / 租约列，
+    手写的列数一旦对不上就是静默失败（本轮实测过：函数返回 True，行却没进去）。
+    """
+    from aiops_diagnostics.dify_workspaces import DifyWorkspaces
+
+    try:
+        workspaces = DifyWorkspaces(database)
+        if not workspaces.claim(tenant_id, environment, owner="acceptance", lease_seconds=300.0):
+            return False
+        # claim 只插了 `creating` 占位；workspace_id 要单独写，再推进到 ready。
+        with workspaces._connection(write=True) as connection:  # noqa: SLF001 - 验收造行
+            connection.execute(
+                "UPDATE dify_workspaces SET workspace_id = ? WHERE tenant_id = ? AND environment = ?",
+                (workspace_id, tenant_id, environment),
+            )
+        workspaces.mark_ready(tenant_id, environment)
+        return True
+    except Exception:  # noqa: BLE001 - 前置失败会以 check 的形式报出来
+        return False
+
+
+_SEED_AGENT_ERROR = ""
+
+
+def _seed_agent(database: Path, tenant_id: str, *, name: str = "小趋-客服") -> bool:
+    """种一个**已发布**的 agent 及其版本行。
+
+    `sync_binding_from_dify` 的语义是"拿 Dify 当前内容与我方**已发布版本**比"：
+    没有已发布版本时它按 `refused` 返回（"先让它成为一个已发布版本"）。这里种出那个
+    基线版本，让发布走的是真实的 converge→publish 路径。
+    """
+    from aiops_diagnostics.agent_lifecycle import AgentConfig, AgentManager, AgentStore
+
+    try:
+        manager = AgentManager(AgentStore(database))
+
+        class _Context:
+            effective_tenant_id = tenant_id
+            roles = frozenset({"ROLE_PLATFORM_ADMIN"})
+
+        created = manager.create(
+            _Context(),
+            name=name,
+            description="acceptance",
+            config=AgentConfig(
+                agent_type="customer",
+                prompt="ACCEPTANCE_VERSION_ONE",
+                knowledge_base_ids=(),
+                model="aiops-api",
+                output_contract="blocks-v1",
+            ),
+        )
+        manager.publish(_Context(), created.agent_id, expected_revision=created.revision)
+        return True
+    except Exception as exc:  # noqa: BLE001 - 前置失败会以 check 的形式报出来
+        # 把原因留在模块级：`check` 的 detail 只给布尔值时，读者无从区分
+        # "签名变了"与"发布门拒了"。
+        global _SEED_AGENT_ERROR
+        _SEED_AGENT_ERROR = f"{type(exc).__name__}: {exc}"
+        return False
 
 
 def _row_for_qa(rows: list[dict[str, Any]], qa_id: str | None) -> dict[str, Any]:
@@ -1087,8 +1241,14 @@ def main() -> int:
             check(f"dify: {item['name']}", item["ok"], item["detail"])
         workflow_id = setup.get("workflow_id")
         key = setup.get("service_key")
-        if not workflow_id or not key:
-            check("得到已发布 workflow 与 service key", False, {"workflow_id": workflow_id})
+        # `bool(key)` 对 "b" 也是 True —— 一个 1 字符的"凭据"必须在这里就被判掉，
+        # 否则症状会以 DIFY_UNAVAILABLE 的形式出现在很远的地方。
+        if not workflow_id or not isinstance(key, str) or len(key) < 16:
+            check(
+                "得到已发布 workflow 与 service key",
+                False,
+                {"workflow_id": workflow_id, "key_shape": (setup.get("service_key_shape") or {})},
+            )
             return _finish(report, args)
         check("得到已发布 workflow 与 service key", True, {"workflow_id": workflow_id})
 
@@ -1102,6 +1262,9 @@ def main() -> int:
             workflow_id=workflow_id,
             key=key,
             port=gateway_port,
+            # Dify 的 app API key 同表同形状，既做 Service API 也做 console Bearer；
+            # 发布桥（`DifyDslClient`）要的正是后者。
+            console_key=ADMIN_API_KEY,
         )
         check("绑定 Dify 后 Gateway 再次就绪", not diag.get("error"), diag.get("error"))
         if diag.get("error"):
@@ -1197,14 +1360,17 @@ def main() -> int:
         report["chain_concurrent"] = results
         ok_concurrent = True
         detail_concurrent: dict[str, Any] = {}
-        for key, expected in (("a", ORDER_LATEST), ("b", ORDER_OTHER)):
-            got = results.get(key) or {}
+        # 循环变量**不能**叫 `key`：它会把 main() 里那把 app service key 覆盖掉，
+        # 而下面还要用那把 key 落凭据文件 —— 实测写进去的是 "b"，症状是之后每次
+        # 请求都 `DIFY_UNAVAILABLE`，离这里非常远。
+        for who, expected in (("a", ORDER_LATEST), ("b", ORDER_OTHER)):
+            got = results.get(who) or {}
             text = json.dumps((got.get("final") or {}).get("result") or {}, ensure_ascii=False)
             rows_for = _row_for_qa(got.get("rows") or [], got.get("qa_id"))
             ok_concurrent = ok_concurrent and (got.get("final") or {}).get("status") == "completed"
             ok_concurrent = ok_concurrent and expected in text
             ok_concurrent = ok_concurrent and rows_for.get("order_no") == expected
-            detail_concurrent[key] = {
+            detail_concurrent[who] = {
                 "status": (got.get("final") or {}).get("status"),
                 "row_order": rows_for.get("order_no"),
                 "mentions_own": expected in text,
@@ -1260,12 +1426,239 @@ def main() -> int:
             saved == 200 and published == 200 and bool(version_two) and version_two != workflow_id,
             {"save": saved, "publish": published},
         )
-        for version, marker in ((workflow_id, False), (version_two, True)):
-            if marker:
-                path = Path(diag["case_root"]) / "chat-bindings.json"
-                binding = json.loads(path.read_text())
-                binding["bindings"][0]["workflow_id"] = version
-                path.write_text(json.dumps(binding))
+        # ---- M3-01 运营闭环：保存 / 试用 / 发布 / 撤回 / 恢复 ----
+        #
+        # 这一段从**运营能点到的那三个 HTTP 入口**驱动，不手改绑定文件：
+        #   * 保存草稿 = 只在 Dify 里写 draft（`POST .../workflows/draft`，上面那段已做）
+        #   * 发布     = `POST /v1/dify/publish`（与发布桥同一个实现、同一道门）
+        #   * 撤回     = `POST /v1/dify/retract`
+        # 换绑定文件那一步要让位给管理表：两者同时声明同一个 key 是**启动失败**。
+        #
+        # 初始态：**V1 已经正式发布**，且这个环境已经迁移到管理指针。真实部署里
+        # 这条来自上一次发布；迁移的形状是"不再配文件登记，改由管理表接管"。
+        #
+        # 网关必须用**管理模式重启**：`settings` 在启动时构造，文件路径一旦配上，
+        # 之后删文件只会让整张表读失败（`EXEC_CONFIG_UNAVAILABLE`）。
+        import sqlite3 as _sqlite3
+
+        from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
+
+        # 每个 app 的 Service API 凭据：`<key_dir>/<app_id>.key`。真实部署里由运维
+        # 预置；发布只推路径、不读密钥，所以这一文件必须**在发布之前**就位。
+        per_app_key = Path(diag["case_root"]) / "keys" / f"{app_id}.key"
+        per_app_key.parent.mkdir(parents=True, exist_ok=True)
+        per_app_key.write_text(key + "\n")
+        per_app_key.chmod(0o600)
+
+        database = Path(diag["case_root"]) / "data/gateway.db"
+        with _sqlite3.connect(database) as connection:
+            connection.execute("DELETE FROM chat_route_bindings")
+            connection.commit()
+        ChatRouteBindingStore(database).publish(
+            environment="env-local",
+            tenant_id=TENANT,
+            entry="consumer",
+            scenario="consumer_own_order_status",
+            engine="dify",
+            agent_id="小趋-客服",
+            agent_version_no=1,
+            app_id=app_id,
+            workflow_id=workflow_id,
+            workflow_key_ref=str(per_app_key),
+            updated_by="acceptance",
+        )
+        _stop(gateway_process)
+        gateway_process, gateway_base, diag = _start_gateway(
+            root=root,
+            model_url=model_url,
+            cpms_base=cpms_base,
+            dify_base=dify_base,
+            workflow_id=workflow_id,
+            key=key,
+            port=gateway_port,
+            console_key=ADMIN_API_KEY,
+            managed_route=True,
+        )
+        check("迁移到管理指针后 Gateway 再次就绪", not diag.get("error"), diag.get("error"))
+        if diag.get("error"):
+            return _finish(report, args)
+
+        # 注册表 / workspace / agent 三样前置：发布与撤回都只认已绑定的 app，
+        # 而 workspace 决定发布落到哪个工作区。真实部署里它们来自清单收敛与开户，
+        # 隔离栈里由验收自己种（**必须重启之后**，否则种子写在旧进程看不到的库里）。
+        workspace_id = _console_workspace(dify_base, setup.get("console_headers") or {})
+        registry_seeded = _seed_registry(
+            database,
+            [
+                {
+                    "tenant_id": TENANT,
+                    "business_entry": "consumer",
+                    "app_id": app_id,
+                    "agent_name": "小趋-客服",
+                }
+            ],
+        )
+        workspace_seeded = _seed_workspace(database, TENANT, workspace_id, "dify-chat-acceptance")
+        agent_seeded = _seed_agent(database, TENANT)
+        check(
+            "运营闭环前置：注册表 / workspace / agent 就绪",
+            registry_seeded and workspace_seeded and agent_seeded,
+            {
+                "registry": registry_seeded,
+                "workspace": workspace_seeded,
+                "agent": agent_seeded,
+                "agent_error": _SEED_AGENT_ERROR,
+            },
+        )
+
+        publish_headers = {
+            "Authorization": f"Bearer {PUBLISH_KEY}",
+            "Content-Type": "application/json",
+            "X-AIOps-Initiator": "acceptance",
+        }
+
+        def _publish_app() -> tuple[int, Any]:
+            return http_json(
+                f"{gateway_base}/v1/dify/publish",
+                method="POST",
+                headers=publish_headers,
+                body={"app_id": app_id},
+            )
+
+        def _retract_app() -> tuple[int, Any]:
+            return http_json(
+                f"{gateway_base}/v1/dify/retract",
+                method="POST",
+                headers=publish_headers,
+                body={"app_id": app_id},
+            )
+
+        def _dify_run_of(qa: dict[str, Any]) -> dict[str, Any]:
+            """这一次真的走了 Dify 吗 —— 看**执行记录**，不看正文形状。
+
+            直读也会返回 completed 与同样的 blocks：只按 completed 判，
+            "没有绑定所以掉回直读"与"确实执行了 V1"看起来一模一样。
+            """
+            return _row_for_qa(qa.get("rows") or [], qa.get("qa_id")) or {}
+
+        def _own_workflow_of(qa: dict[str, Any]) -> str:
+            row = _dify_run_of(qa)
+            run_id = row.get("workflow_run_id", "")
+            if not run_id:
+                return ""
+            actual = _compose(
+                env,
+                "exec",
+                "-T",
+                "db_postgres",
+                "psql",
+                "-U",
+                "dify",
+                "-d",
+                "dify",
+                "-Atc",
+                f"SELECT workflow_id FROM workflow_runs WHERE id = '{run_id}'",
+                timeout=20,
+            )
+            return actual.stdout.strip()
+
+        # ① 保存 V2 草稿之后：App 仍跑 V1。草稿只在 Dify 里，路由指针没动。
+        ModelHandler.state["prompts"] = []
+        after_save = _drive(gateway_base, Path(diag["case_root"]))
+        report["chain_after_save"] = after_save
+        saved_row = _dify_run_of(after_save)
+        check(
+            "保存 V2 草稿之后 App 仍执行 V1",
+            # 先证"真的走了 Dify"，再证"走的是 V1"：只剩 completed 的话，
+            # 掉回直读也会绿。
+            bool(saved_row.get("workflow_run_id"))
+            and after_save.get("final", {}).get("status") == "completed"
+            and _own_workflow_of(after_save) == workflow_id,
+            {
+                "dify_run": bool(saved_row.get("workflow_run_id")),
+                "actual": _own_workflow_of(after_save),
+                "expected": workflow_id,
+            },
+        )
+
+        # ② 发布：指针切到 V2，App 随后执行 V2。
+        publish_status, publish_body = _publish_app()
+        check(
+            "运营发布成功并冻结新版本",
+            publish_status == 200 and isinstance(publish_body.get("version_no"), int),
+            {"status": publish_status, "body": publish_body},
+        )
+        if publish_status != 200:
+            # 发布失败时把网关自己的原因收进来：响应只有稳定码，
+            # "拉取失败"这三个字没有下一步。
+            gw_log = Path(diag["case_root"]) / "gateway.log"
+            if gw_log.exists():
+                lines = [
+                    line for line in gw_log.read_text(errors="replace").splitlines() if "dify" in line.lower()
+                ]
+                report["gateway_publish_failure"] = "\n".join(lines[-12:])
+        ModelHandler.state["prompts"] = []
+        after_publish = _drive(gateway_base, Path(diag["case_root"]))
+        report["chain_after_publish"] = after_publish
+        actual_after_publish = _own_workflow_of(after_publish)
+        published_row = _dify_run_of(after_publish)
+        check(
+            "发布之后 App 执行 V2",
+            bool(published_row.get("workflow_run_id"))
+            and after_publish.get("final", {}).get("status") == "completed"
+            and actual_after_publish == version_two,
+            {
+                "dify_run": bool(published_row.get("workflow_run_id")),
+                "actual": actual_after_publish,
+                "expected": version_two,
+            },
+        )
+
+        # ③ 撤回：新请求**没有执行**；已完成的正文拒绝；行仍在（不是掉回直读）。
+        retract_status, retract_body = _retract_app()
+        check(
+            "运营撤回成功",
+            retract_status == 200 and retract_body.get("state") == "retracted",
+            {"status": retract_status, "body": retract_body},
+        )
+        cross = _drive(gateway_base, Path(diag["case_root"]))
+        report["chain_after_retract"] = cross
+        check(
+            "撤回之后新请求不执行（没有 completed、也没有直读正文）",
+            cross.get("final", {}).get("status") != "completed",
+            {"status": cross.get("final", {}).get("status")},
+        )
+        # 已完成的正文：撤回之后回读必须拒绝（410 CHAT_ROUTE_RETRACTED）。
+        old_qa = after_publish.get("qa_id")
+        old_status, _old_body = http(
+            f"{gateway_base}/v1/assistant/questions/{old_qa}", token=TOKEN, headers=HEADERS
+        )
+        check(
+            "撤回之后已完成的正文被拒绝",
+            old_status in {403, 404, 410},
+            {"status": old_status},
+        )
+        with _sqlite3.connect(database) as connection:
+            kept = connection.execute(
+                "SELECT COUNT(*) FROM chat_route_bindings WHERE state = 'retracted'"
+            ).fetchone()[0]
+        check("撤回保留 retracted 行（不删行）", kept == 1, {"rows": kept})
+
+        # ④ 显式恢复 V1：另一次发布，不隐式回落。
+        restored_status, restored_body = _publish_app()
+        ModelHandler.state["prompts"] = []
+        after_restore = _drive(gateway_base, Path(diag["case_root"]))
+        report["chain_after_restore"] = after_restore
+        actual_after_restore = _own_workflow_of(after_restore)
+        check(
+            "显式恢复之后可再次执行",
+            restored_status == 200
+            and after_restore.get("final", {}).get("status") == "completed"
+            and actual_after_restore in {workflow_id, version_two},
+            {"status": restored_status, "actual": after_restore.get("final", {}).get("status")},
+        )
+
+        for version, marker in ():
             ModelHandler.state["prompts"] = []
             selected = _drive(gateway_base, Path(diag["case_root"]))
             selected_row = _row_for_qa(selected.get("rows") or [], selected.get("qa_id"))

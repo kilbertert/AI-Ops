@@ -356,6 +356,18 @@ class DifyPublishRequest(BaseModel):
     app_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
 
 
+class DifyRetractRequest(BaseModel):
+    """撤回一个已绑定的 app 的正式版本。只有 app_id —— 与发布同一道爆炸半径。
+
+    租户、入口、场景全部来自 `dify_app_registry` 与服务端配置；撤回**不能**指定
+    "恢复到哪一版"：恢复是另一次显式发布，不是撤回的副作用。
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    app_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$")
+
+
 class DifyTrialRequest(BaseModel):
     """一次试运行：订单号 + **草稿**。范围与发起人**都不在这里**（#772 F / #781）。
 
@@ -714,6 +726,56 @@ def _record_publish_audit(
         )
 
 
+def _key_ref_for(key_dir: str, app_id: str) -> str:
+    """这个 app 的 Service API 凭据路径，且**必须可读**。
+
+    发布只推路径、不读密钥；但一条指向不存在文件的路径等于"发布了也跑不起来"。
+    """
+    from aiops_diagnostics import chat_execution
+    from aiops_diagnostics.dify_chat_workflow import load_workflow_key
+
+    if not key_dir:
+        return ""
+    path = chat_execution.key_file_for_app(key_dir, app_id)
+    try:
+        load_workflow_key(path)
+    except ValueError as exc:
+        raise StandardAPIError(
+            status.HTTP_409_CONFLICT,
+            "DIFY_KEY_MISSING",
+            "the app service key is not provisioned on this server",
+        ) from exc
+    return path
+
+
+def _sync_bound_app(context: Any, binding: Any, source: Any, admin: Any) -> Any:
+    """按 **DSL 自己声明的应用类型** 选映射。
+
+    workflow 应用没有 `model_config`，把它送进 chat 那条映射会得到
+    `DSL has no model_config object` —— 那看起来像"DSL 坏了"，其实是"这是另一种应用"。
+
+    分流放在这里、而不是入口多调一次导出：`sync_binding_from_dify` 自己本来就要导，
+    在入口再加一次导出会多一跳外部调用（测试的假上游也会因此被打中）。
+    所以这里先按 chat 走；只有它明确报"没有 model_config"时才改走 workflow ——
+    **用结果判种类，不用猜测**。
+    """
+    from aiops_diagnostics import dify_dsl_pull as pull
+
+    try:
+        return pull.sync_binding_from_dify(
+            context.agent_manager,
+            admin,
+            binding,
+            source,
+            knowledge_registry=parse_dify_knowledge_bindings(context.settings.dify_knowledge_bindings),
+            tool_registry=parse_dify_tool_bindings(context.settings.dify_tool_bindings),
+        )
+    except pull.DifyDslMalformed as exc:
+        if "model_config" not in str(exc):
+            raise
+        return pull.sync_workflow_from_dify(context.agent_manager, admin, binding, source)
+
+
 def _workspace_for_tenant(
     context: Any, tenant_id: str, *, initiator: tuple[str, str, str] = ("", "", "")
 ) -> str:
@@ -793,7 +855,7 @@ def _publish_bound_app(
             status.HTTP_404_NOT_FOUND, "DIFY_APP_NOT_BOUND", "app is not a bound agent source"
         )
     from aiops_diagnostics.agent_manifest import admin_context
-    from aiops_diagnostics.dify_dsl_pull import DifyDslError, DifyDslSource, sync_binding_from_dify
+    from aiops_diagnostics.dify_dsl_pull import DifyDslError, DifyDslSource
 
     console = context.settings
     if not console.dify_console_base_url or not console.dify_console_api_key:
@@ -822,13 +884,11 @@ def _publish_bound_app(
         ),
     )
     try:
-        outcome = sync_binding_from_dify(
-            context.agent_manager,
-            admin_context(binding.tenant_id),
+        outcome = _sync_bound_app(
+            context,
             binding,
             source,
-            knowledge_registry=parse_dify_knowledge_bindings(context.settings.dify_knowledge_bindings),
-            tool_registry=parse_dify_tool_bindings(context.settings.dify_tool_bindings),
+            admin_context(binding.tenant_id),
         )
     except DifyDslError as exc:
         # Dify 自己拒绝或不可达：带它自己的码转达，调用方要能区分「凭据被拒」与「服务挂了」。
@@ -841,6 +901,9 @@ def _publish_bound_app(
             binding=binding,
             initiator=initiator,
         )
+        # 响应只说稳定码（上游正文可能带内部地址）；**日志**要留原因，
+        # 否则"拉取失败"在运维眼里是一句没有下一步的话。
+        _LOGGER.warning("dify pull failed: %s: %s", exc.code, exc)
         raise StandardAPIError(status.HTTP_502_BAD_GATEWAY, exc.code, "dify pull failed") from exc
     except Exception as exc:  # noqa: BLE001 - 发布门自己的规则，原样转达
         _record_publish_audit(
@@ -854,6 +917,13 @@ def _publish_bound_app(
         raise StandardAPIError(
             status.HTTP_409_CONFLICT, "DIFY_PUBLISH_REJECTED", f"publish rejected: {type(exc).__name__}"
         ) from exc
+    # **推进正式指针**：这一步才是"运营点了发布，App 真的切了版"。它必须在
+    # `_record_publish_audit` 之前 —— 审计要记的是已经成立的事实，不是待办。
+    #
+    # 跨系统没有事务：Dify 那边已经发布了，本地这一步仍可能失败。失败时**保留旧正式版**
+    # 并如实抛错（不伪称成功），任务书对这条的要求是"报未完成"，不是"补一个异步重试"。
+    _advance_route_binding(context, outcome, binding, initiator=initiator)
+
     # 成功：记版本号与动作（``synced`` / ``unchanged``）。``unchanged`` 也是"成功的一次
     # 发布尝试"，只是内容没变 —— 审计要能分辨它，否则"某人点了一百次但什么都没发"与
     # "发了 0 次"看起来一样。
@@ -875,6 +945,71 @@ def _publish_bound_app(
         "version_no": outcome.version_no,
         "note": outcome.note,
     }
+
+
+def _advance_route_binding(
+    context: Any, outcome: Any, binding: Any, *, initiator: tuple[str, str, str]
+) -> None:
+    """发布成功之后，把（环境，租户，入口，场景）的正式指针推到这一版。
+
+    **拒绝的三种情况**，都不写指针、并如实报未完成：
+
+    * 没有配 `AIOPS_GATEWAY_CHAT_ROUTE_BINDINGS_FILE`：这个环境还没接管管理指针，
+      发布只冻结版本（与今天逐字一致）；
+    * `version_no` 缺失或 `workflow_id` 取不到：拿不到"哪一版、哪张图"就没有可切的东西；
+    * 已有发布者在本轮期间改过指针（`revision` 变化）：CAS 失败，不覆盖别人的发布。
+
+    成功时写入的身份是**三列分开**的：`app_id` 是应用、`workflow_id` 是图、
+    版本是本地那一条快照。把同一个值填进多列，等于三列都在撒谎。
+    """
+    database = str(getattr(context.settings, "chat_route_bindings_file", "") or "")
+    environment = str(getattr(context.settings, "execution_environment", "") or "")
+    if not database or not environment:
+        return
+    version_no = outcome.version_no
+    if not isinstance(version_no, int) or not outcome.workflow_id:
+        raise StandardAPIError(
+            status.HTTP_409_CONFLICT,
+            "DIFY_ROUTE_NOT_ADVANCED",
+            "the published version has no workflow identity to bind",
+        )
+    from pathlib import Path
+
+    from aiops_diagnostics import chat_execution
+    from aiops_diagnostics.chat_route_bindings import (
+        ChatRouteBindingStore,
+        RouteBindingError,
+    )
+
+    key_dir = str(getattr(context.settings, "chat_dify_key_dir", "") or "")
+
+    store = ChatRouteBindingStore(Path(database).expanduser().absolute())
+    entry = str(getattr(binding, "business_entry", "") or "consumer")
+    scenario = chat_execution.SCENARIO_OWN_ORDER_STATUS
+    existing = store.get(environment, binding.tenant_id, entry, scenario)
+    try:
+        store.publish(
+            environment=environment,
+            tenant_id=binding.tenant_id,
+            entry=entry,
+            scenario=scenario,
+            engine="dify",
+            agent_id=outcome.agent_name,
+            agent_version_no=version_no,
+            app_id=binding.app_id,
+            workflow_id=outcome.workflow_id,
+            # 凭据只存**引用**：`<key_dir>/<app_id>.key`，由运维预置。发布只推路径，
+            # 全程不读密钥 —— 于是它也没有机会出现在表里。
+            #
+            # **但路径必须已存在**：发布成功却指向一个不存在的凭据文件，下一次请求
+            # 必然 `DIFY_UNAVAILABLE` —— 而那个症状离发布这一步很远，没人会想到是它。
+            # 宁可让发布失败并说清楚，也不要留下一条"看起来发布了"的绑定。
+            workflow_key_ref=_key_ref_for(key_dir, binding.app_id),
+            expected_revision=existing.revision if existing else None,
+            updated_by=initiator[0] or initiator[1] or "",
+        )
+    except RouteBindingError as exc:
+        raise StandardAPIError(status.HTTP_409_CONFLICT, exc.code, "route binding was not advanced") from exc
 
 
 def _trial_draft_from_console(context: Any, app_id: str) -> tuple[str, tuple[str, ...]]:
@@ -1589,6 +1724,108 @@ def create_gateway_app(
             payload.app_id,
             initiator=_publish_initiator(company_user_id, company_username, dify_account_id),
         )
+
+    @app.post("/v1/dify/retract")
+    def dify_retract(
+        payload: DifyRetractRequest,
+        _: None = Depends(dify_publish_credential),  # noqa: B008
+        company_user_id: Annotated[str | None, Header(alias="X-AIOps-Initiator")] = None,
+        company_username: Annotated[str | None, Header(alias="X-AIOps-Initiator-Name")] = None,
+        dify_account_id: Annotated[str | None, Header(alias="X-AIOps-Dify-Account")] = None,
+    ) -> dict[str, Any]:
+        """撤回这一版：停止对新请求与未放行结果的交付。**不恢复别版。**
+
+        与发布**同一道门**（`dify_publish_credential`）：能发布的人才能撤回，不需要
+        第二套权限；撤回的爆炸半径与发布相同 —— 只能动一个已绑定 app 的那一条路由。
+
+        三件必须同时成立，缺一条"撤回"就只是屏幕上的一句话：
+
+        1. 管理行改成 `retracted`（**不删行** —— 删行会让请求掉回直读）；
+        2. 在飞运行被收敛（本地终态 + 撤权 + 请求 Dify stop）；
+        3. 历史与在飞正文不再交付（回读守卫发现"当前绑定不再指向签发时那一版"）。
+
+        已发出的数据不承诺追回。
+        """
+        binding = next(
+            (item for item in context.runtime.dify_app_registry.all() if item.app_id == payload.app_id),
+            None,
+        )
+        initiator = _publish_initiator(company_user_id, company_username, dify_account_id)
+        if binding is None:
+            _record_publish_audit(
+                context,
+                app_id=payload.app_id,
+                action="refused",
+                reason_code="DIFY_APP_NOT_BOUND",
+                initiator=initiator,
+            )
+            raise StandardAPIError(
+                status.HTTP_404_NOT_FOUND, "DIFY_APP_NOT_BOUND", "app is not a bound agent source"
+            )
+        database = str(getattr(context.settings, "chat_route_bindings_file", "") or "")
+        environment = str(getattr(context.settings, "execution_environment", "") or "")
+        if not database or not environment:
+            raise StandardAPIError(
+                status.HTTP_404_NOT_FOUND,
+                "CHAT_ROUTE_BINDINGS_DISABLED",
+                "route bindings are not managed on this server",
+            )
+        from pathlib import Path
+
+        from aiops_diagnostics.chat_route_bindings import (
+            ChatRouteBindingStore,
+            RouteBindingError,
+        )
+
+        store = ChatRouteBindingStore(Path(database).expanduser().absolute())
+        entry = str(getattr(binding, "business_entry", "") or "consumer")
+        scenario = chat_execution.SCENARIO_OWN_ORDER_STATUS
+        current = store.get(environment, binding.tenant_id, entry, scenario)
+        if current is None:
+            raise StandardAPIError(
+                status.HTTP_404_NOT_FOUND, "CHAT_ROUTE_BINDING_MISSING", "no route to retract"
+            )
+        if current.app_id != payload.app_id:
+            # 同租户/入口下别人家的 app：拒绝，不越权撤回另一条路由。
+            raise StandardAPIError(
+                status.HTTP_409_CONFLICT, "CHAT_ROUTE_BINDING_MISMATCH", "route names another app"
+            )
+        try:
+            retired = store.retract(
+                environment=environment,
+                tenant_id=binding.tenant_id,
+                entry=entry,
+                scenario=scenario,
+                expected_revision=current.revision,
+                updated_by=initiator[0] or initiator[1] or "",
+            )
+        except RouteBindingError as exc:
+            raise StandardAPIError(status.HTTP_409_CONFLICT, exc.code, "route was not retracted") from exc
+        # 收敛在飞运行是**第二件事**，不能因为它出问题就让整次撤回报 500：指针已经改成
+        # `retracted`，撤回本身成立。`contextlib.suppress` 与 `set_order_authorizer`
+        # 同一写法（`hasattr` 对裸替身恒真）。
+        settled: dict[str, Any] = {"settled_runs": []}
+        with contextlib.suppress(Exception):
+            settled = context.runtime.settle_retracted_runs(
+                environment=environment, tenant_id=binding.tenant_id
+            )
+        _record_publish_audit(
+            context,
+            app_id=payload.app_id,
+            action="retracted",
+            reason_code="",
+            binding=binding,
+            initiator=initiator,
+            version_no=current.agent_version_no,
+        )
+        return {
+            "app_id": payload.app_id,
+            "tenant_id": binding.tenant_id,
+            "state": retired.state,
+            "revision": retired.revision,
+            "version_no": current.agent_version_no,
+            "settled_runs": settled["settled_runs"],
+        }
 
     @app.post("/v1/operator/publish")
     def operator_publish(
@@ -6016,6 +6253,25 @@ def _require_current_chat_node_order(context, caller, qa, request):
         raise StandardAPIError(503, "CHARGING_STATUS_EVIDENCE_UNAVAILABLE", "evidence differs")
 
 
+def _route_binding_state(context: Any, key: str | None) -> str:
+    """这条 key 在管理表里的状态（`active` / `retracted`），没有管理行时返回空串。
+
+    只用于**把错误码说清楚**：路由语义仍然只由 `binding_for_key` 一个地方决定。
+    """
+    database = str(getattr(context.settings, "chat_route_bindings_file", "") or "")
+    if not database or not key:
+        return ""
+    from pathlib import Path
+
+    from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
+
+    try:
+        row = ChatRouteBindingStore(Path(database).expanduser().absolute()).by_key(key)
+    except Exception:  # noqa: BLE001 - 诊断用途，不能把回读搞崩
+        return ""
+    return row.state if row is not None else ""
+
+
 def _require_dify_binding_current(context: Any, run) -> None:
     """那条 Dify 绑定**此刻**仍然成立，且仍是签发时那一条。
 
@@ -6037,6 +6293,12 @@ def _require_dify_binding_current(context: Any, run) -> None:
         or binding.workflow_id != run.workflow_id
     ):
         raise StandardAPIError(403, "CHARGING_STATUS_DISABLED", "dify binding is no longer active")
+    # 管理绑定的**版本**也必须还是签发时那一版：重新发布别的版本之后，旧 run 的结果
+    # 不再代表"现在对外的那一版"。文件登记没有版本概念（两边都是 0），不受这条约束。
+    frozen_version = int(getattr(run, "agent_version_no", 0) or 0)
+    current_version = int(getattr(binding, "agent_version_no", 0) or 0)
+    if frozen_version and frozen_version != current_version:
+        raise StandardAPIError(403, "CHARGING_STATUS_DISABLED", "dify binding moved to another version")
 
 
 def _same_tenant_as_grant(record_tenant: object, grant_tenant: object) -> bool:
@@ -6126,6 +6388,12 @@ def _require_current_chat_dify_order(context, caller, qa, request):
     except chat_execution.ChatRunUnavailable as exc:
         raise StandardAPIError(exc.http_status, exc.code, str(exc), retryable=exc.retryable) from exc
     if binding is None or binding.workflow_id != located.workflow_id:
+        # `None` 有两种来源，且**必须**在错误码上分开：
+        #   * 绑定被拿掉 / 引擎改成 node —— 与停用同形；
+        #   * 这一版被**撤回** —— 行还在（`retracted`），只是不再参与路由。
+        # 合成一个码会让"被撤回"在运维眼里看起来像"没配过"。
+        if _route_binding_state(context, located.binding_key) == "retracted":
+            raise StandardAPIError(410, "CHAT_ROUTE_RETRACTED", "this version was retracted")
         raise StandardAPIError(404, "CHARGING_STATUS_DISABLED", "charging status disabled")
     # 先用可能阻塞的授权，再读记录做本地判定 —— 与另外两条路线同一条顺序。
     _require_visible_order(context, caller, order_no)
