@@ -4108,7 +4108,9 @@ def create_gateway_app(
 
         # **并发闸**：两个运营（或同一个人的两个标签页）同时打开弹窗，就是两个并发
         # pass，各自读一遍列表、各自决定建同一个 —— 而 Dify 对 `(tenant, name)` 没有
-        # 唯一约束，输的一方留下重复。闸在 `knowledge_dataset_sync_guard`。
+        # 唯一约束，输的一方留下重复。闸在 `knowledge_dataset_sync_guard`；它让后来者
+        # **排队**而不是跳过，因为被跳过的恰好是「刚在 RAGFlow 建完库切回来」那一次
+        # （ADR-0125）。
         #
         # 闸的 `run()` 返回的是**它自己的**结论，不返回 work 的产物，所以这里用一个
         # 单元素列表把产物带出来 —— 比让闸去理解 `run()` 的返回类型更省事，也不会
@@ -4119,13 +4121,11 @@ def create_gateway_app(
             guard_outcome = "unguarded"
             outcome.append(converge())
         else:
-            guard_outcome = guard.run(
-                tenant_id=tenant_id,
-                work=lambda: (outcome.append(converge()), None)[1],
-            )
+            guard_outcome = guard.run(work=lambda: (outcome.append(converge()), None)[1])
         if not outcome:
-            # 被闸挡下（或闸自己失败）：没有产出可报，但**不是错误** —— 另一次 pass
-            # 正在做同一件事，或刚做完。
+            # 排队超时或闸自己失败：没有产出可报，但**不是错误** —— 下一次触发
+            # （页面 60 秒轮询）会再来。**这里绝不缓存"刚同步过"**，否则又把下一次
+            # 真需要的同步挡掉。
             _LOGGER.info("knowledge sync workspace=%s tenant=%s %s", workspace, tenant_id, guard_outcome)
             return {"created": 0, "tenant_id": tenant_id, "skipped": True}
         applied = outcome[0]

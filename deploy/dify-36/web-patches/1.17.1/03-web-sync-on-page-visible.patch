@@ -1,0 +1,128 @@
+diff --git a/web/app/components/datasets/list/index.tsx b/web/app/components/datasets/list/index.tsx
+index 9e838753..75d44277 100644
+--- a/web/app/components/datasets/list/index.tsx
++++ b/web/app/components/datasets/list/index.tsx
+@@ -32,6 +32,7 @@ import {
+   useInvalidDatasetList,
+ } from '@/service/knowledge/use-dataset'
+ import { hasPermission } from '@/utils/permission'
++import { useKnowledgeSync } from '@/hooks/use-knowledge-sync'
+ // Components
+ import FilterEmptyState from '../../base/filter-empty-state'
+ import ExternalAPIPanel from '../external-api/external-api-panel'
+@@ -211,6 +212,15 @@ function KnowledgeFsList() {
+ }
+ 
+ function List() {
++  // **挂在 List 上，不是挂在 LegacyList 上。** 这一页有两个实现：
++  //
++  //   List = knowledge_fs_enabled ? KnowledgeFsList : LegacyList
++  //
++  // 第一版把它加进了 LegacyList，而线上实例开着 knowledge_fs，于是渲染的是
++  // KnowledgeFsList —— hook 从来没执行过，页面也就从来没自己同步过。
++  // 2026-10-24 在编译产物里查不到它才发现的。
++  useKnowledgeSync()
++
+   const { data: knowledgeFsEnabled } = useSuspenseQuery({
+     ...systemFeaturesQueryOptions(),
+     select: ({ knowledge_fs_enabled }) => knowledge_fs_enabled,
+diff --git a/web/hooks/use-knowledge-sync.ts b/web/hooks/use-knowledge-sync.ts
+new file mode 100644
+index 00000000..6e43c7ca
+--- /dev/null
++++ b/web/hooks/use-knowledge-sync.ts
+@@ -0,0 +1,94 @@
++/* 让 Dify 的知识库列表与 RAGFlow 保持同步（ADR-0124）。
++ *
++ * ## 它解决的问题
++ *
++ * 运营在 RAGFlow 建/删了库，回到 Dify 时页面**已经挂载了**，不会重新拉列表 ——
++ * 于是必须硬刷新才看得到变化。对用户完全不友好，而同步本身是通的。
++ *
++ * ## 为什么挂在页面上，而不是让 RAGFlow 回调
++ *
++ * 回调那条路要改上游 RAGFlow（`create` / `delete` / `update` 三个写入口），而 RAGFlow
++ * 是官方镜像、只挂三个配置文件。更要紧的是：**回调丢一次，Dify 就永远不同步** ——
++ * 比"慢几十秒"糟得多，而补偿它需要一条有状态的重试链。宁可慢，不要丢。
++ *
++ * ## 两路触发，覆盖两种真实路径
++ *
++ * 1. **`visibilitychange` / `focus`** —— 运营从 RAGFlow 切回来的那一刻。主路径，
++ *    也是他唯一"知道自己刚改过"的时刻。
++ * 2. **每 `POLL_INTERVAL_MS` 一次** —— 覆盖"页面一直开着、在别处改"与"另一个标签页
++ *    改的"。60 秒是权衡：更短会让每个开着的控制台每分钟多打一次网关，更长则让
++ *    "我一直看着这页"的人等太久。
++ *
++ * ## 三条纪律
++ *
++ * 1. **失败静默。** 这是后台一致性维护，不是用户动作 —— 一次抖动不该弹任何东西。
++ * 2. **页面不可见时不轮询。** 后台标签页没必要打网关；切回来时 `visibilitychange`
++ *    会立刻补一次。
++ * 3. **有变化才失效列表。** 没变化时调 invalidate 会让列表无谓地闪。
++ */
++import { useAtomValue } from 'jotai'
++import * as React from 'react'
++import { currentWorkspaceIdAtom } from '@/context/workspace-state'
++import { useInvalidDatasetList } from '@/service/knowledge/use-dataset'
++import { syncKnowledgeDatasets } from '@/service/knowledge-sync'
++
++//: 页面可见时的轮询间隔。见上文"两路触发"的第 2 条。
++export const POLL_INTERVAL_MS = 60 * 1000
++
++/**
++ * Keep this page's dataset list in step with RAGFlow while it stays open.
++ *
++ * `enabled` 让调用方可以无条件挂载、再按需关掉（测试，或某个已经自己同步的表面）。
++ */
++export const useKnowledgeSync = (enabled = true) => {
++  const currentWorkspaceId = useAtomValue(currentWorkspaceIdAtom)
++  const invalidDatasetList = useInvalidDatasetList()
++  // 一次只有一个在飞：`visibilitychange` 与定时器可能撞在同一秒。
++  const inFlightRef = React.useRef(false)
++
++  React.useEffect(() => {
++    if (!enabled || !currentWorkspaceId) return
++
++    let cancelled = false
++
++    const run = () => {
++      if (cancelled || inFlightRef.current) return
++      inFlightRef.current = true
++      syncKnowledgeDatasets(currentWorkspaceId)
++        .then((changed) => {
++          if (!cancelled && changed !== 0) invalidDatasetList()
++        })
++        .catch(() => {
++          /* 静默：后台一致性维护不该打扰运营 */
++        })
++        .finally(() => {
++          inFlightRef.current = false
++        })
++    }
++
++    // ① 切回来就同步 —— 运营从 RAGFlow 回来的主路径。
++    const onVisible = () => {
++      if (document.visibilityState === 'visible') run()
++    }
++    document.addEventListener('visibilitychange', onVisible)
++    window.addEventListener('focus', onVisible)
++
++    // ③ **挂载时立刻跑一次。** 前两路（切回来 / 定时）都假设"页面已经同步过了"，
++    // 而刚打开这一页时它们都还没发生过 —— 于是页面显示的是上次挂载时的数据。
++    // 2026-10-24 真浏览器验收：打开 /datasets 后**一个 knowledge-sync 请求都没有**，
++    // 就是因为漏了这一条。
++    run()
++
++    // ② 页面可见时定时补一次。不可见时不轮询（纪律 2）。
++    const timer = window.setInterval(() => {
++      if (document.visibilityState === 'visible') run()
++    }, POLL_INTERVAL_MS)
++
++    return () => {
++      cancelled = true
++      document.removeEventListener('visibilitychange', onVisible)
++      window.removeEventListener('focus', onVisible)
++      window.clearInterval(timer)
++    }
++  }, [enabled, currentWorkspaceId, invalidDatasetList])
++}

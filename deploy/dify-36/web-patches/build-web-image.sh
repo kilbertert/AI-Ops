@@ -63,16 +63,37 @@ echo "== 2. 打补丁（--fuzz=0：上下文对不上就失败）"
 # 2026-10-24 实测：第二次构建时 `web/service/knowledge-sync.ts` 已存在，补丁被跳过。
 # 恢复 + 删掉补丁新增的文件，两步都要 —— `git checkout --` 不管未跟踪文件。
 git -C "$WORK" checkout -- .
-git -C "$WORK" clean -fdq -- web/service/knowledge-sync.ts 2>/dev/null || true
+# **清掉所有未跟踪文件，不只那一个。** 上一次构建留下的 `.rej`（补丁被拒时写的）
+# 与补丁新增的文件都在这里 —— 只清一个名字不够：2026-10-24 实测，`.rej` 留着时
+# `patch` 会认为"这个补丁已经试过了"，于是又跳过。
+git -C "$WORK" clean -fdq
+# `clean -fdq` 不删被 .gitignore 忽略的东西；补丁产物不在 ignore 里，所以够用。
+# 保险起见再显式删一次那个已知的新增文件。
 rm -f "$WORK/web/service/knowledge-sync.ts"
 
 for p in "$VERSION_DIR"/*.patch; do
-  patch -p1 --fuzz=0 -s -d "$WORK" <"$p"
+  # `--batch` 不是可选的：没有它，`patch` 遇到"文件已存在 / 看起来已应用过"会**停下来
+  # 问**，而非交互环境里默认答"不" —— 于是那个补丁被**静默跳过**，构建继续，产出一个
+  # 缺改动的镜像。2026-10-24 实测：3 个文件、7 个 hunk 全被忽略，脚本仍然退出 0。
+  # `-N` = 不要反向应用。`--batch` 遇到"看起来已应用过"会自动选 `-R`，把补丁
+  # **反向**打回去 —— 比跳过更坏：源看起来"有改动"，实际回到了原始状态。
+  patch -p1 --fuzz=0 --batch -N -s -d "$WORK" <"$p"
   echo "ok: $(basename "$p")"
 done
 # 补丁里不含新文件（diff -u 只覆盖改动），新组件单独拷进去。
 cp "$VERSION_DIR/ExternalKnowledgeIdPicker.tsx" \
    "$WORK/web/app/components/datasets/external-knowledge-base/create/ExternalKnowledgeIdPicker.tsx"
+
+# **打完补丁要验它真的进去了。** 上面所有防护都是"让失败变明显"，但没有一条
+# 证明改动真的落到了源里 —— 而这个脚本一旦产出镜像就会上生产。
+# 判据是每个补丁里 `+++ b/` 指到的文件，都得带着一个只有我们才有的标记。
+for marker in "knowledge-sync" "ExternalKnowledgeIdPicker" "useKnowledgeSync"; do
+  if ! grep -rq "$marker" "$WORK/web/app" "$WORK/web/service" 2>/dev/null; then
+    echo "FAIL: 补丁没打上（找不到 $marker）—— 拒绝构建" >&2
+    exit 1
+  fi
+done
+echo "ok: 补丁已落进源（两个标记都在）"
 
 echo "== 3. 把构建命令换成 webpack"
 # 关键：**用 webpack 而不是 Turbopack**。实测 Turbopack（上游默认）在本机会在
@@ -88,7 +109,7 @@ import sys
 p = sys.argv[1]
 s = open(p).read()
 old = "RUN pnpm build && pnpm build:vinext"
-new = "RUN pnpm build --webpack"
+new = "RUN rm -rf .next/cache && pnpm build --webpack"
 if old not in s:
     raise SystemExit(f"FAIL: Dockerfile 里没有预期的构建行：{old!r}")
 s = s.replace(old, new, 1)
@@ -108,8 +129,16 @@ print("ok: Dockerfile 构建行 -> webpack，并去掉 vinext 产物 COPY")
 PYEOF
 
 echo "== 4. 构建镜像"
+# **`--no-cache-filter builder` 不是优化项，是正确性项。**
+#
+# 2026-10-24 实测：第三次构建时 `RUN pnpm build --webpack` 报 `CACHED` —— Docker 认为
+# 上方 COPY 的层没变，于是**根本没重新编译**。镜像产出了，但里面是上一次的代码。
+# 而源树里补丁确实应用了（`git status` 能看到 5 个文件被改）。
+#
+# 只对 builder 阶段关缓存：production 阶段的三条 COPY 是廉价的，缓存它们没问题。
 docker build \
   --build-arg NODE_VERSION=24.20.0 \
+  --no-cache-filter builder \
   -f "$WORK/web/Dockerfile" \
   -t "$OUT_IMAGE" \
   "$WORK"
