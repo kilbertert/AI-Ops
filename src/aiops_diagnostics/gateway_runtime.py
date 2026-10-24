@@ -1153,6 +1153,7 @@ class GatewayRuntime:
                 language=language,
                 tenant_id=run_context.effective_tenant_id,
                 workflow_trial=callable(getattr(draft, "execute", None)),
+                node_trial=getattr(draft, "engine", "") == "node",
             )
             trial_id = str(trial["diagnosis_id"])
             self._trial_jobs.add(trial_id)
@@ -1778,6 +1779,21 @@ class GatewayRuntime:
                         user=f"aiops:{run.grant_id}",
                     )
             settled.append(run.run_id)
+        if getattr(route, "engine", "dify") == "node" and self.agent_run_store is not None:
+            with self.agent_run_store._connection() as connection:
+                rows = connection.execute(
+                    "SELECT run_id, qa_id FROM agent_runs WHERE chat_binding=? "
+                    "AND route_revision<=? AND state IN ('issued','running')",
+                    (route.key, route.revision),
+                ).fetchall()
+            for row in rows:
+                self.agent_run_store.revoke(row["run_id"], "retracted_by_operator")
+                if row["qa_id"]:
+                    if row["qa_id"].startswith("tr_"):
+                        self.store.update_standard_diagnosis(row["qa_id"], status="cancelled")
+                    else:
+                        self.store.update_assistant_question(row["qa_id"], status="cancelled")
+                settled.append(row["run_id"])
         return {"settled_runs": settled}
 
     def _settle_dify_cancelled(self, dify_store, grant_store, run_id, qa_id: str) -> None:

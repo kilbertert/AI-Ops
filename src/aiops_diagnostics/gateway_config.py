@@ -82,6 +82,7 @@ class GatewayServerSettings:
     #: 发布不搬运凭据（那是运维预置的 0600 文件），管理行只按 app_id 推出这个路径。
     #: 这样"发布"不需要从任何地方读到密钥，也就不会把它写进表里。
     chat_dify_key_dir: str = ""
+    chat_node_targets_file: str = ""
     #: 管家端公司 OAuth2 令牌的校验入口与客户端凭据（#443 / ADR-0009）。三个键**全部缺省为空**，
     #: 全空时该路径整体不构造 ⇒ 行为与启用前逐字一致（这既是「先合不启用」的机制保证，也是
     #: 回滚路径：清空即回退）。只设了其中一部分是启动错误，不是静默禁用 —— 与
@@ -362,6 +363,8 @@ class GatewayServerSettings:
             or _file_value(file_values, "AIOPS_GATEWAY_DIFY_CHAT_BASE_URL"),
             chat_route_bindings_file=_env("AIOPS_GATEWAY_CHAT_ROUTE_BINDINGS_FILE")
             or _file_value(file_values, "AIOPS_GATEWAY_CHAT_ROUTE_BINDINGS_FILE"),
+            chat_node_targets_file=_env("AIOPS_GATEWAY_CHAT_NODE_TARGETS_FILE")
+            or _file_value(file_values, "AIOPS_GATEWAY_CHAT_NODE_TARGETS_FILE"),
             chat_dify_key_dir=_env("AIOPS_GATEWAY_CHAT_DIFY_KEY_DIR")
             or _file_value(file_values, "AIOPS_GATEWAY_CHAT_DIFY_KEY_DIR"),
             company_check_token_url=_env("AIOPS_GATEWAY_COMPANY_CHECK_TOKEN_URL")
