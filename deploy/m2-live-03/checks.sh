@@ -495,6 +495,10 @@ sys.exit(0 if ok else 1)
 PY
   if [ "${M2LIVE_SYNTH_MODE:-0}" = "1" ]; then
     say "  SYNTHETIC 会话依赖未接生产（本机 Redis 只绑宿主回环）—— 本条在 41 上才是真判据"
+    say "  SYNTHETIC 公司身份接口未验证"
+  else
+    say "== 公司身份接口（从隔离 Gateway 发起，不以宿主连通代替） =="
+    docker exec -i m2live03-gateway python /opt/aiops-src/tools/m2_live/upms_probe.py || rc=1
   fi
   return $rc
 }
