@@ -1,0 +1,18 @@
+[Unit]
+Description=AI-Ops published node runtime
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+Wants=aiops-node-callback.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/aiops-node-runtime/current/deploy/node-runtime
+ExecStart=/usr/bin/docker compose --env-file /etc/aiops-node-runtime/runtime.env -f compose.yaml up -d --pull never --wait --wait-timeout 180
+ExecStop=/usr/bin/docker compose --env-file /etc/aiops-node-runtime/runtime.env -f compose.yaml stop
+TimeoutStartSec=240
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target

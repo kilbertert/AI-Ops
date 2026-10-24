@@ -1,0 +1,24 @@
+# 独立非特权 nginx，由项目服务管理；不改共享 nginx 的启动顺序。
+pid ${AIOPS_NODE_STATE}/callback.pid;
+error_log stderr;
+events { worker_connections 128; }
+http {
+access_log off;
+client_body_temp_path ${AIOPS_NODE_STATE}/client-temp;
+proxy_temp_path ${AIOPS_NODE_STATE}/proxy-temp;
+server {
+    listen ${AIOPS_NODE_BRIDGE}:8788;
+    server_name _;
+    client_max_body_size 64k;
+    location ~ ^/v1/internal/charging-status/(execution-config|claims|completions)/run_[A-Za-z0-9_-]+$ {
+        limit_except POST { deny all; }
+        proxy_pass ${AIOPS_PRODUCTION_GATEWAY};
+        proxy_set_header Authorization $http_authorization;
+        proxy_set_header X-AI-Ops-Exec-Config $http_x_ai_ops_exec_config;
+        proxy_set_header Content-Type $http_content_type;
+        proxy_read_timeout 45s;
+        proxy_buffering off;
+    }
+    location / { return 404; }
+}
+}

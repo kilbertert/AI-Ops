@@ -135,7 +135,7 @@ class Replay:
         page.locator(".send-btn").click()
         # 逐步渲染：把回答分两段插入，模拟 SSE/流式
         page.wait_for_function("() => window.__result", timeout=10000)
-        if self.scenario == "normal":
+        if self.scenario in {"normal", "node"}:
             page.evaluate("(t) => addAnswer(t)", ANSWER)
         elif self.scenario == "progressive":
             # **异步**补全：先插一段不完整的，然后**立刻返回**，让 `_drive()` 的
@@ -167,7 +167,8 @@ class Replay:
             route.abort()
             return
         if route.request.method == "POST":
-            body = json.dumps({"type": "qa", "status": "completed", "qa_id": QA})
+            status = "queued" if self.scenario == "node" else "completed"
+            body = json.dumps({"type": "qa", "status": status, "qa_id": QA})
             route.fulfill(status=202, content_type="application/json", body=body)
             return
         status = "failed" if self.scenario == "failed" else "completed"
@@ -185,7 +186,9 @@ class Replay:
         )
 
 
-def _judge(spec, *, events, payloads, region, in_user_bubble, order_no=ORDER, label="latest"):
+def _judge(
+    spec, *, events, payloads, region, in_user_bubble, order_no=ORDER, label="latest", execution="direct"
+):
     return spec.judge(
         events=events,
         payloads=payloads,
@@ -194,6 +197,7 @@ def _judge(spec, *, events, payloads, region, in_user_bubble, order_no=ORDER, la
         label=label,
         assistant_region_text=region,
         region_in_user_bubble=in_user_bubble,
+        execution=execution,
     )
 
 
@@ -205,7 +209,7 @@ def main() -> int:
     total_blocked = 0
     ok = True
 
-    for scenario in ("normal", "progressive", "failed"):
+    for scenario in ("normal", "progressive", "failed", "node"):
         server, base = _serve()
         replay = Replay(base=base, scenario=scenario)
         try:
@@ -229,6 +233,7 @@ def main() -> int:
             payloads=payloads,
             region=region,
             in_user_bubble=in_user_bubble,
+            execution="node" if scenario == "node" else "direct",
         )
         total_business += replay.business_requests
         total_blocked += replay.blocked_requests

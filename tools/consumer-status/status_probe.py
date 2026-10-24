@@ -3,8 +3,9 @@
 
 判据（缺一不可，任一不满足就 FAIL，**不重试凑通过**）：
 
-1. POST `/v1/assistant/questions` → 202、`type=qa`、**`status=completed`**
-   （走 consumer-order-chat 是同步完成的；`queued`/`running` 说明落回了普通模型路径）
+1. POST `/v1/assistant/questions` → 202、`type=qa`；默认直读必须 `completed`。
+   显式 `--execution node` 接受 queued/running/completed，仍须同 QA 的 GET 完成与页面正文。
+   节点归属另外按 qa_id 核对 succeeded/matched 的运行和快照，页面判据不能代替。
 2. 请求体：`latest` 用例**不得**带 `order_no`；`specified` 用例正文必须含该单号
 3. GET 必须命中**本次 POST 返回的那个 `qa_id`** —— 不允许回退到别的 GET
 4. 该 GET → 200 JSON、带 `no-store`
@@ -120,6 +121,7 @@ def judge(
     label: str,
     assistant_region_text: str,
     region_in_user_bubble: bool = False,
+    execution: str = "direct",
 ) -> dict[str, bool]:
     """纯判据：给定抓到的网络事件与两段文本，返回逐条布尔。"""
     posts = [e for e in events if e["method"] == "POST" and e["path"] == POST_PATH]
@@ -147,7 +149,7 @@ def judge(
     req_body = payloads[-1]["body"] if payloads else None
     question = str((req_body or {}).get("question", ""))
 
-    return {
+    checks = {
         "exactly_one_post": len(posts) == 1,
         # 没有请求体就等于不知道这次问的什么 —— 不能通过。
         "request_captured": isinstance(req_body, dict) and bool(question),
@@ -185,6 +187,12 @@ def judge(
         # 区域落在用户气泡里 ⇒ 取到的是提问，不是回答。
         "region_is_not_user_bubble": not region_in_user_bubble,
     }
+    if execution == "node":
+        checks.pop("post_completed")
+        checks["post_admitted"] = body.get("status") in {"queued", "running", "completed"}
+    elif execution != "direct":
+        raise ValueError("unknown execution mode")
+    return checks
 
 
 def _normalized(text: str) -> str:
@@ -265,7 +273,7 @@ def tunnel_argv(*, target: str, port: int) -> list[str]:
         target,
         "--allow-service-exec",
         "--timeout",
-        "60",
+        "300",
         "--",
         # 显式绑定开发机回环；端口动态分配由调用方选好。
         "-N",
@@ -436,6 +444,7 @@ def main() -> int:
     parser.add_argument("--dev-host-target", default="41")
     parser.add_argument("--local-port", type=int, default=0)
     parser.add_argument("--evidence-timeout", type=float, default=30.0)
+    parser.add_argument("--execution", choices=("direct", "node"), default="direct")
     args = parser.parse_args()
 
     state_dir = pathlib.Path(args.state_dir) if args.state_dir else None
@@ -511,6 +520,7 @@ def main() -> int:
         label=args.label,
         assistant_region_text=region_text,
         region_in_user_bubble=region_in_user_bubble,
+        execution=args.execution,
     )
 
     # **终端只打摘要**：问题原文、回答正文、页面文本都不上屏。

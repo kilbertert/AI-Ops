@@ -783,3 +783,6 @@ runbook §5/§6 明确禁止 CI 自证。所以 CD 通过最多报告 `merged_wa
 [SVG](docs/architecture/ai-ops-architecture.svg) ·
 [可交互 HTML](docs/architecture/ai-ops-architecture.html)（含主题切换、平移缩放、视图聚焦、关系追溯）。
 生成规格见 [`docs/architecture/ai-ops-architecture.json`](docs/architecture/ai-ops-architecture.json)。
+
+正式节点常驻运行与旧试验配置退役见[部署手册](deploy/node-runtime/README.md)；
+生产启用须按该手册完成真实页面验收，合并部署件本身不代表已启用。
