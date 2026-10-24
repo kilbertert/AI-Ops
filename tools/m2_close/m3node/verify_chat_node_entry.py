@@ -120,6 +120,7 @@ class ModelHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802 - http.server 接口
         length = int(self.headers.get("Content-Length") or 0)
         body = json.loads(self.rfile.read(length) or b"{}")
+        type(self).state.setdefault("prompts", []).append(body.get("messages", []))
         type(self).state["calls"] = type(self).state.get("calls", 0) + 1
         type(self).state["last_messages"] = [
             str(message.get("role")) for message in body.get("messages") or []
@@ -264,7 +265,9 @@ class PlatformHandler(BaseHTTPRequestHandler):
                 f"--run-id={sid} --gateway={state['gateway']} --model={state['model']} "
                 f"--scenario={state['scenario']} --node-token={NODE_TOKEN}"
             )
-            if state.get("manifest"):
+            if state.get("managed"):
+                inner += " --managed-publication"
+            elif state.get("manifest"):
                 inner += f" --manifest=/case/{Path(state['manifest']).name}"
             cmd = [
                 "docker",
