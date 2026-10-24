@@ -67,7 +67,13 @@ def test_bridge_install_waits_for_new_routes_or_restores_all_files(tmp_path, fai
         script = script.replace(before, str(after))
     result = subprocess.run(
         ["bash", "-c", script, "deploy.sh", str(bundle), str(tmp_path / "backup")],
-        env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}", "FAIL_RELOAD": str(tmp_path / "fail")},
+        env={
+            **os.environ,
+            "PATH": f"{bin_dir}:{os.environ['PATH']}",
+            "FAIL_RELOAD": str(tmp_path / "fail"),
+            "OLD_ROUTE": str(tmp_path / "old-route"),
+            "ROUTE_FAILURE": failure,
+        },
         capture_output=True,
         text=True,
     )
