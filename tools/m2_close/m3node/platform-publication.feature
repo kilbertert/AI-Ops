@@ -1,4 +1,10 @@
 Feature: 已发布 SOP 经过真实调度平台交给打包节点
+  Rule: 真实请求之前检查身份依赖
+    Scenario: 只有公司身份接口不可达
+      Given Redis 和执行平台的健康检查通过
+      And Gateway 容器不能访问其配置的 C 到 B 身份接口
+      When 运行正式 deps 检查
+      Then 检查失败且不得据此开始业务请求
   Rule: 编辑与运行使用同一发布纪律
     Scenario: 保存、试用、发布和恢复
       Given 隔离真实 Snail 平台通过心跳登记了真实 Java 节点

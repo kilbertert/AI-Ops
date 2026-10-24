@@ -67,6 +67,18 @@ Gateway 与业务依赖已在 41；同宿主先避免跨主机 gRPC、隧道与�
 `platform`；CA 带 `keyUsage=keyCertSign,cRLSign`（缺它 OpenSSL 3 会在链校验时拒绝）。
 `checks.sh deps` 从隔离 Gateway 的**同一网络空间**验证这两条通路，是真实请求之前的门。
 
+`deps` 同时用正式 `UpmsBSubjectDirectory` 查询一个合成 ID，核对公司身份接口的连接、
+认证及响应格式。Redis PING 和平台 UP 不能替代它：宿主能访问的地址，容器可能被转发规则拒绝。
+HTTP 200 的 HTML 也不算通过；空用户结果只证明接口可读，不证明真实账号权限。
+合成栈明确跳过公司接口。真实验收还须对选定会话使用**带 C→B 映射的完整解析器**，
+不能只给 `RedisThirdSessionResolver` 传 Redis 设置后就宣称正式链已验证。
+
+若公司内部入口禁止容器访问，在私有部署配置中选择已经核验的 HTTPS 入口，并重新跑
+`deps`；不为验收修改防火墙、跳过 C→B 映射或扩大调用者权限。
+
+验收日志、输入和临时应用回执放在 `$M2LIVE_STATE/gateway/` 内，不能在状态根新增文件；
+`checks.sh up` 认领状态根时只接受四个栈目录。只走原 App API 的窗口不用开启 Dify trial 密钥。
+
 ## 资源预算（整栈，不是每进程）
 
 | 组件 | 内存上限 | CPU |
