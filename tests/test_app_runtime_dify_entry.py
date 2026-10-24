@@ -71,6 +71,8 @@ class _DifyStub:
         self.snapshot_as_text = False
         self.snapshot_extra: dict = {}
         self.snapshot_raw_text = ""
+        # 取数回调完成之后、返回结果之前的一个钩子（模拟"运维在这一轮期间改了登记"）。
+        self.after_callback = None
         self.skip_callback = False
         self.fake_snapshot: dict = {}
         self.gateway_base = ""
@@ -156,6 +158,8 @@ class _DifyStub:
                         }
                     )
                 stub.runs[run_id] = snapshot
+                if stub.after_callback is not None:
+                    stub.after_callback()
                 if stub.snapshot_raw_text:
                     snapshot = stub.snapshot_raw_text
                 elif stub.snapshot_as_text:
@@ -692,6 +696,50 @@ def test_the_readback_refuses_when_the_binding_is_removed_after_the_authorizatio
         again = f["client"].get(f"/v1/assistant/questions/{response.json()['qa_id']}", headers=HEADERS)
         assert again.status_code == 404, again.text
         assert not (again.json().get("result") or {}).get("blocks")
+
+
+def test_the_worker_refuses_to_succeed_when_the_binding_changed(tmp_path, monkeypatch, dify_stub):
+    """worker 写成功之前绑定被换掉 ⇒ 落 failed，且不写会话正文。
+
+    **换绑定的时机很关键**：必须在**取数之后**。在取数时换，回调自己就会 403，
+    桩把整轮判失败 —— 那种用例是"因为别的原因也 failed"，一条变异都锁不住
+    （实测：删掉这条守卫照样绿）。这里用桩的 `after_callback` 钩子在取数完成之后换。
+
+    不核这一条的话，这一轮会被写成 succeeded/completed 并写入会话答案，
+    而 GET 守卫随后持续拒绝它 —— 用户既拿不到正文，也拿不到正常的失败终态。
+    """
+    stub, base = dify_stub
+    with dify_chat(tmp_path, monkeypatch, stub_base=base) as f:
+        stub.gateway_base = f["gateway_base"]
+        swapped = {"done": False}
+
+        def swap_after_callback() -> None:
+            if swapped["done"]:
+                return
+            swapped["done"] = True
+            _bindings_file(
+                f["bindings"],
+                [
+                    {
+                        "engine": "node",
+                        "environment": "env-a",
+                        "tenant_id": "TENANT-A",
+                        "entry": "consumer",
+                        "scenario": chat_execution.SCENARIO_OWN_ORDER_STATUS,
+                        "config_file": str(_write_config(tmp_path)),
+                        "manifest_file": str(_write_manifest(tmp_path)),
+                    }
+                ],
+            )
+
+        stub.after_callback = swap_after_callback
+        response = ask(f["client"])
+        final = wait_terminal(f["client"], response.json()["qa_id"])
+        run = DifyRunStore(f["db"]).by_qa(response.json()["qa_id"])
+        assert swapped["done"] is True, f"取数回调没有被走到：{final}"
+        assert final["status"] == "failed", final
+        assert not (final.get("result") or {}).get("blocks")
+        assert run is not None and run.state == "failed", run.state if run else None
 
 
 def _grants(database: Path) -> list[chat_data_grant.DataGrant]:

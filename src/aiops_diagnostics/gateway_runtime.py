@@ -1673,6 +1673,11 @@ class GatewayRuntime:
                 language=language,
                 outputs=result.outputs,
             )
+            # 写成功之前再核一次绑定：取数已经完成，但运维可能在这一轮模型执行或上面
+            # 那次外部授权期间删掉登记、切成 node 引擎、换掉 workflow。不核的话这一轮
+            # 会被写成 succeeded/completed 并写入会话答案 —— 而 GET 守卫随后持续拒绝它，
+            # 用户既拿不到正文，也拿不到一个正常的失败终态。
+            self._require_dify_binding_current(binding)
             if not dify_store.succeed(run_id):
                 raise chat_execution.ChatRunUnavailable("DIFY_RUN_NOT_ACTIVE", "dify run is no longer active")
         except chat_execution.ChatRunUnavailable as exc:
@@ -1779,6 +1784,28 @@ class GatewayRuntime:
         }:
             raise self._chat_unavailable("DIFY_SNAPSHOT_MISMATCH", "dify answered from a different read")
         return status_answer(snapshot, language)
+
+    def _require_dify_binding_current(self, binding: Any) -> None:
+        """那条绑定**此刻**仍然成立，且仍是签发时那一条。
+
+        `binding` 是签发时冻结下来的那一条 —— 它能证明"当初选的是它"，不能证明
+        "现在还能走它"。所以要按 `binding_key` 从**当前**绑定表里重新找回一条，
+        并逐字比 workflow。找不到、引擎变了、workflow 换了，一律按不可交付处理。
+        """
+        from aiops_diagnostics import chat_execution
+
+        try:
+            current = chat_execution.binding_for_key(self.gateway_settings, getattr(binding, "key", None))
+        except chat_execution.ChatRunUnavailable as exc:
+            raise chat_execution.ChatRunUnavailable(exc.code, str(exc)) from exc
+        if (
+            current is None
+            or current.engine != chat_execution.ENGINE_DIFY
+            or current.workflow_id != getattr(binding, "workflow_id", None)
+        ):
+            raise chat_execution.ChatRunUnavailable(
+                "CHARGING_STATUS_DISABLED", "dify binding is no longer active"
+            )
 
     @staticmethod
     def _chat_unavailable(code: str, message: str):
