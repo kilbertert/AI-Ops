@@ -813,3 +813,45 @@ def test_retract_carries_no_field_that_could_choose_a_version(tmp_path, monkeypa
         headers=RETRACT_HEADERS,
     )
     assert response.status_code == 422
+
+
+def test_a_chat_app_publish_does_not_require_a_workflow_pointer(tmp_path, monkeypatch) -> None:
+    """chat/completion 应用没有已发布 workflow，发布**不能**因此失败。
+
+    同一个网关可以同时挂着 chat 应用（`dify_workspace_template.dsl.yml` 里就有
+    `mode: chat`）与 workflow 应用。无条件要求 workflow 身份会让前者发布失败，
+    而它的版本其实已经冻结 —— 调用方看到失败、库里却已改过，比不发布更糟。
+    """
+    from aiops_diagnostics.dify_dsl_pull import SyncOutcome
+
+    runtime = _Runtime()
+    monkeypatch.setattr(runtime.dify_app_registry, "all", lambda: (_binding(),))
+    client = _client(
+        tmp_path,
+        runtime,
+        dify_publish_api_key=PUBLISH_KEY,
+        chat_route_bindings_file=str(tmp_path / "gateway.db"),
+        chat_dify_key_dir=str(tmp_path),
+    )
+    client.app.state.gateway.settings.execution_environment = "41"
+    captured: dict[str, Any] = {}
+
+    def fake_sync(manager, context, binding, source, **kwargs):
+        # chat 应用：冻结了版本，但没有 workflow 身份。
+        return SyncOutcome(
+            binding.tenant_id,
+            binding.business_entry,
+            binding.app_id,
+            binding.agent_name,
+            "synced",
+            2,
+        )
+
+    monkeypatch.setattr("aiops_diagnostics.dify_dsl_pull.sync_binding_from_dify", fake_sync)
+    response = client.post("/v1/dify/publish", json={"app_id": APP_ID}, headers=RETRACT_HEADERS)
+    assert response.status_code == 200, response.text
+    assert response.json()["version_no"] == 2
+    # 路由指针**没有**被推进：chat 应用不参与 workflow 路由。
+    from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
+
+    assert ChatRouteBindingStore(tmp_path / "gateway.db").all() == ()

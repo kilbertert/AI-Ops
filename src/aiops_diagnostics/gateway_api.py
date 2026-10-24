@@ -984,8 +984,17 @@ def _advance_route_binding(
     environment = str(getattr(context.settings, "execution_environment", "") or "")
     if not database or not environment:
         return
+    # **只有 workflow 应用才走"推进路由指针"这一步。** 同一个网关还可以挂着
+    # chat/completion 应用（`dify_workspace_template.dsl.yml` 里就有 `mode: chat`），
+    # 它们没有已发布 workflow，`sync_binding_from_dify` 本来就能正常冻结 Agent 版本。
+    # 无条件要求 workflow 身份会让那些应用**发布失败**，而它们的版本其实已经变了 ——
+    # 调用方看到的是失败，库里却已经改过，那比不发布更糟。
+    #
+    # 判据落在**这次同步实际冻结了什么**上：workflow 应用才带 `workflow_id`。
+    if not getattr(outcome, "workflow_id", ""):
+        return
     version_no = outcome.version_no
-    if not isinstance(version_no, int) or not outcome.workflow_id:
+    if not isinstance(version_no, int):
         raise StandardAPIError(
             status.HTTP_409_CONFLICT,
             "DIFY_ROUTE_NOT_ADVANCED",
