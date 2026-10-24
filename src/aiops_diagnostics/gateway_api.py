@@ -2045,9 +2045,7 @@ def create_gateway_app(
         # 同一写法（`hasattr` 对裸替身恒真）。
         settled: dict[str, Any] = {"settled_runs": []}
         with contextlib.suppress(Exception):
-            settled = context.runtime.settle_retracted_runs(
-                environment=environment, tenant_id=binding.tenant_id, scenario=scenario
-            )
+            settled = context.runtime.settle_retracted_runs(route=current)
         _record_publish_audit(
             context,
             app_id=payload.app_id,
@@ -2417,7 +2415,8 @@ def create_gateway_app(
         trial_initiator = TrialInitiator.from_headers(
             initiator, initiator_tenant, initiator_type, initiator_name
         )
-        trial = context.runtime.get_trial(_trial_run_context(context, trial_initiator), trial_id)
+        caller = _trial_run_context(context, trial_initiator)
+        trial = context.runtime.get_trial(caller, trial_id)
         if trial is None:
             raise StandardAPIError(status.HTTP_404_NOT_FOUND, "TRIAL_NOT_FOUND", "trial not found")
         body: dict[str, Any] = {
@@ -2427,6 +2426,7 @@ def create_gateway_app(
         }
         result = trial.get("result")
         if isinstance(result, dict):
+            _require_workflow_trial_result(context, caller, trial)
             body["result"] = result
         if trial.get("error_code"):
             body["error_code"] = trial["error_code"]
@@ -6530,7 +6530,10 @@ def _version_moved(binding: Any, run: Any) -> bool:
     """
     frozen = int(getattr(run, "agent_version_no", 0) or 0)
     current = int(getattr(binding, "agent_version_no", 0) or 0)
-    return bool(frozen) and frozen != current
+    revision = int(getattr(run, "route_revision", 0) or 0)
+    return (bool(frozen) and frozen != current) or (
+        bool(revision) and revision != int(getattr(binding, "route_revision", 0) or 0)
+    )
 
 
 def _route_binding_state(context: Any, key: str | None) -> str:
@@ -6584,9 +6587,7 @@ def _require_dify_binding_current(context: Any, run) -> None:
         raise StandardAPIError(403, "CHARGING_STATUS_DISABLED", "dify binding is no longer active")
     # 管理绑定的**版本**也必须还是签发时那一版：重新发布别的版本之后，旧 run 的结果
     # 不再代表"现在对外的那一版"。文件登记没有版本概念（两边都是 0），不受这条约束。
-    frozen_version = int(getattr(run, "agent_version_no", 0) or 0)
-    current_version = int(getattr(binding, "agent_version_no", 0) or 0)
-    if frozen_version and frozen_version != current_version:
+    if _version_moved(binding, run):
         raise StandardAPIError(403, "CHARGING_STATUS_DISABLED", "dify binding moved to another version")
 
 
@@ -6614,6 +6615,39 @@ def _same_tenant_as_grant(record_tenant: object, grant_tenant: object) -> bool:
     # 真值判断而不是 `len(...) == 1`：判据按 AST 认"含 tenant 的比较"，写成比较会让
     # 一次**合法的**共享规则调用被判成第二条规则。
     return bool(visible_orders([{"tenant_id": record_tenant}], visibility).rows)
+
+
+def _require_workflow_trial_result(context: Any, caller: ScopeContext, trial: dict) -> None:
+    """管理 Workflow 试用的缓存正文与执行时采用同一授权/路由/有效期边界。"""
+    result = trial.get("result") or {}
+    report = result.get("report") or {}
+    located = context.dify_run_store.by_qa(trial["diagnosis_id"])
+    if (
+        trial.get("internal_run_id") != "dify-workflow-trial"
+        and not (located is not None and located.kind == "trial")
+        and not report.get("workflow_run_id")
+    ):
+        return  # 旧诊断试用继续按原契约读取。
+    if located is None or located.kind != "trial" or located.scope_fingerprint != caller.scope_fingerprint:
+        raise StandardAPIError(503, "TRIAL_EVIDENCE_UNAVAILABLE", "trial evidence unavailable")
+    if located.order_no != trial.get("order_no"):
+        raise StandardAPIError(503, "TRIAL_EVIDENCE_UNAVAILABLE", "trial order evidence mismatch")
+    _require_visible_order(context, caller, located.order_no)
+    _require_trial_source_route(context, located)
+    latest = context.dify_run_store.get(located.run_id)
+    if latest is None or latest.state != "succeeded" or not dify_run_still_valid(latest):
+        raise StandardAPIError(410, "TRIAL_RESULT_UNAVAILABLE", "trial result unavailable")
+    snapshot = context.dify_run_store.snapshot(latest.run_id)
+    if not snapshot or snapshot.get("order_no") != latest.order_no:
+        raise StandardAPIError(503, "TRIAL_EVIDENCE_UNAVAILABLE", "trial snapshot unavailable")
+    from aiops_diagnostics.consumer_order_chat import status_answer
+
+    expected = status_answer(snapshot, result.get("language", "zh"))["blocks"][0]["text"]
+    if report.get("summary") != expected or any(
+        report.get(field) != getattr(latest, field)
+        for field in ("workflow_run_id", "task_id", "workflow_id", "app_id")
+    ):
+        raise StandardAPIError(503, "TRIAL_EVIDENCE_UNAVAILABLE", "trial result evidence mismatch")
 
 
 def _require_trial_source_route(context: Any, run) -> None:

@@ -686,6 +686,7 @@ class GatewayStore:
         question: str = "",
         language: str = "zh",
         tenant_id: str | None = None,
+        workflow_trial: bool = False,
     ) -> dict[str, Any]:
         """Create a **试运行** job (#772 F / #781). Shares ``standard_diagnoses``.
 
@@ -716,7 +717,7 @@ class GatewayStore:
                     diagnosis_id, scope_fingerprint, order_no, question, indicator_code, language,
                     internal_run_id, status, created_at, updated_at, deadline_at,
                     kind, trial_draft_fingerprint, trial_initiator, tenant_id
-                ) VALUES (?, ?, ?, ?, NULL, ?, NULL, 'queued', ?, ?, ?, 'trial', ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, NULL, ?, ?, 'queued', ?, ?, ?, 'trial', ?, ?, ?)
                 """,
                 (
                     trial_id,
@@ -724,6 +725,7 @@ class GatewayStore:
                     order_no,
                     redact_text(question),
                     language,
+                    "dify-workflow-trial" if workflow_trial else None,
                     _iso(now),
                     _iso(now),
                     _iso(now + DIAGNOSIS_DEADLINE),
