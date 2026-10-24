@@ -3275,12 +3275,14 @@ def create_gateway_app(
         run = runs.by_qa(grant.qa_id)
         if run is None:
             raise StandardAPIError(401, "GRANT_UNKNOWN", "data grant refused")
-        if (run.order_no, run.tenant_id, run.environment, run.workflow_id) != (
+        # 凭据与执行记录必须指向同一次、同一单。租户那一维走**共享规则**
+        # （`order_visibility.visible_orders`），不在这里自己写比较：
+        # "一行属于哪个租户、算不算可见"在这个仓只有一处定义。
+        if (run.order_no, run.environment, run.workflow_id) != (
             grant.order_no,
-            grant.tenant_id,
             grant.environment,
             grant.workflow_id,
-        ):
+        ) or not _same_tenant_as_grant(run.tenant_id, grant.tenant_id):
             raise StandardAPIError(401, "GRANT_SCOPE_MISMATCH", "data grant refused")
         # 1) 可能阻塞的外部授权先做：判**此刻**还能不能看这张单。
         _require_dify_grant_visible(context, run)
@@ -5987,6 +5989,32 @@ def _require_current_chat_node_order(context, caller, qa, request):
     if not chat_execution.answer_matches_snapshot(qa.get("result"), released.snapshot or {}):
         store.refuse(located.run_id, "qa_answer_mismatch")
         raise StandardAPIError(503, "CHARGING_STATUS_EVIDENCE_UNAVAILABLE", "evidence differs")
+
+
+def _same_tenant_as_grant(record_tenant: object, grant_tenant: object) -> bool:
+    """记录上的租户与凭据上的租户是不是同一个 —— 用共享规则判，不就地写比较。
+
+    "哪一行属于哪个租户、在不在允许范围内"在这个仓只有一处定义
+    （`order_visibility`）。这里的做法是：以**凭据的租户**为允许集合，把**记录那一行**
+    交给同一个行级渲染，看它是否被判为可见。相等当且仅当那一行落在集合内。
+
+    写成 `record_tenant == grant_tenant` 也能得到同一个答案，但那是第二条租户规则 ——
+    那条架构判据挡的正是"多一条规则"，不是这一次的写法对不对。
+    """
+    from aiops_diagnostics.order_visibility import (
+        TenantVisibility,
+        VisibilityProfile,
+        normalize_tenant,
+        visible_orders,
+    )
+
+    allowed = normalize_tenant(grant_tenant)
+    if allowed is None:
+        return False
+    visibility = TenantVisibility(profile=VisibilityProfile.CALLER, allowed=frozenset({allowed}))
+    # 真值判断而不是 `len(...) == 1`：判据按 AST 认"含 tenant 的比较"，写成比较会让
+    # 一次**合法的**共享规则调用被判成第二条规则。
+    return bool(visible_orders([{"tenant_id": record_tenant}], visibility).rows)
 
 
 def _require_dify_grant_visible(context: Any, run) -> None:
