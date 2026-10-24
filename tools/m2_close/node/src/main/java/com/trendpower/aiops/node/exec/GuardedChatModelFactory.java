@@ -36,6 +36,15 @@ public class GuardedChatModelFactory implements ChatModelFactory {
     private final ClientChatModelSpecFactory specFactory;
     private final ChatModelRuntime runtime;
     private final ExecManifest manifest;
+    @org.springframework.beans.factory.annotation.Value("${aiops.node.managed-publication:false}")
+    private boolean managedPublication;
+    private final ThreadLocal<ExecManifest> publication = new ThreadLocal<>();
+
+    public ExecManifest usePublication(ExecManifest value) {
+        ExecManifest previous = publication.get();
+        if (value == null) publication.remove(); else publication.set(value);
+        return previous;
+    }
 
     /**
      * 真实 Spring 装配用的构造器。两个构造器并存时必须显式标注 {@link Autowired}，
@@ -60,16 +69,17 @@ public class GuardedChatModelFactory implements ChatModelFactory {
 
     /** 本进程是否启用守卫。未启用时行为与框架默认实现一致。 */
     public boolean enabled() {
-        return manifest != null;
+        return managedPublication || manifest() != null;
     }
 
     public ExecManifest manifest() {
-        return manifest;
+        return publication.get() == null ? manifest : publication.get();
     }
 
     @Override
     public ChatModel build(ChatDispatchRequest.ModelConfig modelConfig) {
-        if (manifest == null) {
+        if (manifest() == null) {
+            if (managedPublication) throw new ExecConfigViolation("MANIFEST", "本次执行缺少发布清单");
             // 与 DefaultChatModelFactory.build 逐字相同：create(spec) → runtime.build(spec)。
             ChatModelSpec spec = specFactory.create(new ClientChatModelInput(modelConfig));
             return runtime.build(spec);
@@ -78,7 +88,7 @@ public class GuardedChatModelFactory implements ChatModelFactory {
         ChatModelSpec spec = specFactory.create(new ClientChatModelInput(modelConfig));
         ChatModel model = runtime.build(spec);
         // 每次 run 一个新守卫：跨 run 不共享可变状态，交错的两个 run 各持自己的期望与计数。
-        GuardedChatModel.ExecGuard guard = new GuardedChatModel.ExecGuard(manifest, true);
+        GuardedChatModel.ExecGuard guard = new GuardedChatModel.ExecGuard(manifest(), true);
         // 模型标识与有效选项只能在**构造出来的模型**上看到（实测：Prompt 上 options 为 null）。
         guard.verifyModelOptions(model.getOptions());
         return new GuardedChatModel(model, guard);
@@ -91,7 +101,8 @@ public class GuardedChatModelFactory implements ChatModelFactory {
      * 「释放工具资源」的机制。
      */
     public void requireRunConfig(ChatDispatchRequest.ModelConfig modelConfig) {
-        if (manifest == null) {
+        if (manifest() == null) {
+            if (managedPublication) throw new ExecConfigViolation("MANIFEST", "本次执行缺少发布清单");
             return;
         }
         verifyModelConfig(modelConfig);
@@ -103,20 +114,21 @@ public class GuardedChatModelFactory implements ChatModelFactory {
      * 校验的是真正交付出去的那个集合，而不是某个早期 DTO。
      */
     public void requireResolvedTools(List<org.springframework.ai.tool.ToolCallback> resolved) {
-        if (manifest == null) {
+        if (manifest() == null) {
+            if (managedPublication) throw new ExecConfigViolation("MANIFEST", "本次执行缺少发布清单");
             return;
         }
-        new GuardedChatModel.ExecGuard(manifest, true).verifyTools(resolved);
+        new GuardedChatModel.ExecGuard(manifest(), true).verifyTools(resolved);
     }
 
     private void verifyModelConfig(ChatDispatchRequest.ModelConfig config) {
         if (config == null) {
             throw new ExecConfigViolation("MODEL", "派发体没有模型配置，无法核对");
         }
-        require("provider", manifest.providerKey(), config.getProviderKey());
-        require("adapter", manifest.adapterKey(), config.getAdapterKey());
-        require("model", manifest.modelKey(), config.getModelKey());
-        require("endpoint", manifest.endpoint(), config.getApiEndpoint());
+        require("provider", manifest().providerKey(), config.getProviderKey());
+        require("adapter", manifest().adapterKey(), config.getAdapterKey());
+        require("model", manifest().modelKey(), config.getModelKey());
+        require("endpoint", manifest().endpoint(), config.getApiEndpoint());
     }
 
     private static void require(String what, String expected, String actual) {

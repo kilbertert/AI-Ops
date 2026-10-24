@@ -55,6 +55,9 @@ public class NodeLinkAcceptance {
             System.out.println("STATUS=PASS");
             return;
         }
+        if (java.util.Arrays.asList(args).contains("--managed-publication")) {
+            System.setProperty("aiops.node.managed-publication", "true");
+        }
         String runId = arg(args, "--run-id=");
         String secondRunId = arg(args, "--second-run-id=");
         String gateway = arg(args, "--gateway=");

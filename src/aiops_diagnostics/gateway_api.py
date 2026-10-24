@@ -914,12 +914,37 @@ def _publish_bound_app(
         binding,
         str(getattr(context.settings, "execution_environment", "") or ""),
     )
+    from aiops_diagnostics import node_publication
+
+    node_target = node_publication.target_for(context.settings, binding)
+    if console.chat_route_bindings_file and not node_target:
+        from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
+
+        managed = ChatRouteBindingStore(Path(console.chat_route_bindings_file)).get(
+            console.execution_environment,
+            binding.tenant_id,
+            binding.business_entry,
+            chat_execution.SCENARIO_OWN_ORDER_STATUS,
+        )
+        if managed and managed.engine == "node":
+            raise StandardAPIError(409, "NODE_TARGET_MISSING", "node target unavailable")
+    if node_target and (not console.chat_route_bindings_file or binding.business_entry != "consumer"):
+        raise StandardAPIError(409, "NODE_ROUTE_UNAVAILABLE", "node route is not configured")
+    if node_target and _declared_in_file(
+        console,
+        node_target.environment,
+        binding.tenant_id,
+        "consumer",
+        chat_execution.SCENARIO_OWN_ORDER_STATUS,
+    ):
+        raise StandardAPIError(409, "NODE_ROUTE_COLLISION", "node route is declared in both places")
     try:
-        outcome = _sync_bound_app(
-            context,
-            binding,
-            source,
-            admin_context(binding.tenant_id),
+        outcome = (
+            node_publication.publish(
+                context.agent_manager, admin_context(binding.tenant_id), binding, source, node_target
+            )
+            if node_target
+            else _sync_bound_app(context, binding, source, admin_context(binding.tenant_id))
         )
     except DifyDslError as exc:
         # Dify 自己拒绝或不可达：带它自己的码转达，调用方要能区分「凭据被拒」与「服务挂了」。
@@ -955,9 +980,15 @@ def _publish_bound_app(
     # 并如实抛错（不伪称成功），任务书对这条的要求是"报未完成"，不是"补一个异步重试"。
     if outcome.action not in {"synced", "unchanged"}:
         raise StandardAPIError(409, "DIFY_PUBLISH_REJECTED", "publish was not completed")
-    _advance_route_binding(
-        context, outcome, binding, initiator=initiator, expected_revision=expected_revision
-    )
+    if node_target:
+        try:
+            node_publication.advance(context, outcome, binding, node_target, expected_revision)
+        except node_publication.NodeRouteConflict as exc:
+            raise StandardAPIError(409, "NODE_ROUTE_NOT_ADVANCED", "node route was not advanced") from exc
+    else:
+        _advance_route_binding(
+            context, outcome, binding, initiator=initiator, expected_revision=expected_revision
+        )
 
     # 成功：记版本号与动作（``synced`` / ``unchanged``）。``unchanged`` 也是"成功的一次
     # 发布尝试"，只是内容没变 —— 审计要能分辨它，否则"某人点了一百次但什么都没发"与
@@ -1185,8 +1216,8 @@ def _is_managed_workflow_app(context: Any, app_id: str) -> bool:
             binding.business_entry,
             chat_execution.SCENARIO_OWN_ORDER_STATUS,
         )
-    except Exception:  # noqa: BLE001 - 读不出来就按"没接管"处理（回到原有试用路径）
-        return False
+    except Exception as exc:  # noqa: BLE001 - 不能将管理读取故障转成旧执行路线。
+        raise StandardAPIError(503, "ROUTE_BINDING_UNAVAILABLE", "route state unavailable") from exc
     return row is not None and row.app_id == app_id
 
 
@@ -1203,6 +1234,13 @@ def _workflow_trial_draft(context: Any, app_id: str, run_context: ScopeContext):
     source = DifyDslSource(
         context.settings.dify_console_base_url, app_id, context.settings.dify_console_api_key, workspace
     )
+    if row.engine == "node":
+        from aiops_diagnostics.node_publication import NodeTrial, candidate, target_for
+
+        target = target_for(context.settings, binding)
+        if target is None:
+            raise StandardAPIError(409, "NODE_TARGET_MISSING", "node target unavailable")
+        return NodeTrial(candidate(source, target), row)
     dsl = DifyDslClient(source).export_dsl()
     return WorkflowTrial(dsl, source, row)
 
@@ -1213,6 +1251,38 @@ def _restore_bound_app(context: Any, app_id: str, version_no: int, initiator: tu
     binding, row, workspace = _managed_app_route(context, app_id)
     version = context.agent_manager.store.version(row.agent_id, binding.tenant_id, version_no)
     snapshot = version.snapshot
+    if row.engine == "node":
+        from aiops_diagnostics import node_publication
+
+        target = node_publication.target_for(context.settings, binding)
+        if (
+            target is None
+            or snapshot.get("kind") != "node-sop"
+            or snapshot.get("app_id") != app_id
+            or snapshot.get("workspace_id") != workspace
+        ):
+            raise StandardAPIError(409, "NODE_VERSION_MISMATCH", "node version unavailable")
+        execution_manifest.from_text(snapshot["node_manifest"])
+        outcome = SyncOutcome(
+            binding.tenant_id,
+            binding.business_entry,
+            app_id,
+            binding.agent_name,
+            "synced",
+            version_no,
+            agent_id=row.agent_id,
+        )
+        node_publication.advance(context, outcome, binding, target, row.revision)
+        _record_publish_audit(
+            context,
+            app_id=app_id,
+            action="restored",
+            reason_code="",
+            binding=binding,
+            initiator=initiator,
+            version_no=version_no,
+        )
+        return {"app_id": app_id, "action": "synced", "version_no": version_no}
     workflow_id = snapshot.get("workflow_id")
     if (
         snapshot.get("kind") != "dify-workflow"
@@ -1359,6 +1429,16 @@ def create_gateway_app(
 ) -> FastAPI:
     selected_settings = settings or GatewayServerSettings.from_env()
     selected_settings.validate()
+    if selected_settings.chat_node_targets_file:
+        from aiops_diagnostics.node_publication import targets
+
+        targets(selected_settings.chat_node_targets_file)
+        if (
+            not selected_settings.chat_route_bindings_file
+            or Path(selected_settings.chat_route_bindings_file).resolve()
+            != Path(selected_settings.database_file).resolve()
+        ):
+            raise ValueError("managed node routes must share the gateway version database")
     selected_store = store or GatewayStore(selected_settings.database_file)
     # Restart recovery, before this app can serve anything: every job the
     # previous process left `queued`/`running` is converged to an honest
@@ -3751,6 +3831,42 @@ def create_gateway_app(
             )
         # 落库之后、交出去之前再判一次：撤销/停用可能就发生在这一次读取期间。
         return _claim_payload(release_candidate(run_id))
+
+    @app.post("/v1/internal/charging-status/execution-config/{run_id}")
+    def node_execution_config(
+        run_id: str, response: Response, authorization: Annotated[str | None, Header()] = None
+    ):
+        """已认证目标节点取得本次冻结清单；不交订单数据或供应商凭据。"""
+        response.headers["Cache-Control"] = "no-store"
+        run = context.agent_run_store.get(run_id)
+        if run is None or not run.execution_manifest:
+            raise StandardAPIError(404, "NODE_PUBLICATION_NOT_FOUND", "node publication unavailable")
+        config = chat_execution.callback_config(context.agent_run_store, run_id, context.settings)
+        token = (authorization or "").removeprefix("Bearer ").strip()
+        node = config.authenticate_node(token) if config else None
+        if node is None or node.node_id != run.expected_node_id or node.environment != run.environment:
+            raise StandardAPIError(403, "NODE_PUBLICATION_REFUSED", "node publication refused")
+        _require_visible_order(context, scope_from_json(run.scope_json), run.order_no)
+        config = chat_execution.callback_config(context.agent_run_store, run_id, context.settings)
+        latest = context.agent_run_store.get(run_id)
+        current_node = config.authenticate_node(token) if config else None
+        if (
+            config is None
+            or current_node is None
+            or latest is None
+            or latest.state not in {"issued", "running"}
+            or current_node.node_id != latest.expected_node_id
+            or current_node.environment != latest.environment
+            or config.expected_node_id != latest.expected_node_id
+            or config.environment != latest.environment
+            or config.snail_app_id != latest.app_id
+            or str(config.snail_agent_id) != latest.agent_id
+        ):
+            raise StandardAPIError(403, "NODE_PUBLICATION_REFUSED", "node publication refused")
+        manifest = execution_manifest.from_text(latest.execution_manifest)
+        if manifest.identity != latest.expected_agent_version:
+            raise StandardAPIError(503, "NODE_PUBLICATION_INVALID", "node publication invalid")
+        return {"run_id": run_id, "manifest": latest.execution_manifest, "sha256": manifest.identity}
 
     @app.post("/v1/internal/charging-status/dify-read")
     def dify_chat_read(
@@ -6621,6 +6737,25 @@ def _require_workflow_trial_result(context: Any, caller: ScopeContext, trial: di
     """管理 Workflow 试用的缓存正文与执行时采用同一授权/路由/有效期边界。"""
     result = trial.get("result") or {}
     report = result.get("report") or {}
+    if trial.get("internal_run_id") == "node-sop-trial":
+        run = context.agent_run_store.by_qa(trial["diagnosis_id"])
+        if run is None or run.order_no != trial["order_no"]:
+            raise StandardAPIError(503, "TRIAL_EVIDENCE_UNAVAILABLE", "node trial evidence unavailable")
+        _require_visible_order(context, caller, run.order_no)
+        try:
+            released = chat_execution.final_release(
+                store=context.agent_run_store, settings=context.settings, caller=caller, run_id=run.run_id
+            )
+        except chat_execution.ChatRunUnavailable as exc:
+            raise StandardAPIError(exc.http_status, exc.code, str(exc)) from exc
+        expected = chat_execution.answer_from_run(released, language=result.get("language", "zh"))
+        if (
+            report.get("summary") != expected["blocks"][0]["text"]
+            or report.get("node_run_id") != released.run_id
+            or report.get("manifest_sha256") != released.observed_agent_version
+        ):
+            raise StandardAPIError(503, "TRIAL_EVIDENCE_UNAVAILABLE", "node trial evidence differs")
+        return
     located = context.dify_run_store.by_qa(trial["diagnosis_id"])
     if (
         trial.get("internal_run_id") != "dify-workflow-trial"

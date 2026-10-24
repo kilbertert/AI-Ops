@@ -687,6 +687,7 @@ class GatewayStore:
         language: str = "zh",
         tenant_id: str | None = None,
         workflow_trial: bool = False,
+        node_trial: bool = False,
     ) -> dict[str, Any]:
         """Create a **试运行** job (#772 F / #781). Shares ``standard_diagnoses``.
 
@@ -725,7 +726,7 @@ class GatewayStore:
                     order_no,
                     redact_text(question),
                     language,
-                    "dify-workflow-trial" if workflow_trial else None,
+                    "node-sop-trial" if node_trial else "dify-workflow-trial" if workflow_trial else None,
                     _iso(now),
                     _iso(now),
                     _iso(now + DIAGNOSIS_DEADLINE),

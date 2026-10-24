@@ -300,6 +300,8 @@ class AgentRun:
     #: 聊天入口签发时选中的**那条**绑定的钥匙（``场景:环境:租户``）。委派入口签发的为
     #: ``None``。回读与回调按它找回签发时的配置，不拿"当前第一个像的"顶替。
     chat_binding: str | None = None
+    execution_manifest: str | None = None
+    route_revision: int = 0
 
     @property
     def exec_config_confirmed(self) -> bool:
@@ -431,6 +433,13 @@ class AgentRunStore:
             )
             _migrate_execution_config_columns(connection)
             _migrate_qa_link_column(connection)
+            columns = {row["name"] for row in connection.execute("PRAGMA table_info(agent_runs)")}
+            for name, kind in (
+                ("execution_manifest", "TEXT"),
+                ("route_revision", "INTEGER NOT NULL DEFAULT 0"),
+            ):
+                if name not in columns:
+                    connection.execute(f"ALTER TABLE agent_runs ADD COLUMN {name} {kind}")
 
     @contextmanager
     def _connection(self, *, write: bool = False) -> Iterator[sqlite3.Connection]:
@@ -459,6 +468,8 @@ class AgentRunStore:
         gateway_version: str,
         expected_agent_version: str | None = None,
         chat_binding: str | None = None,
+        execution_manifest: str | None = None,
+        route_revision: int = 0,
     ) -> AgentRun:
         # 32 字节随机；只作关联编号，不承载任何身份或范围。
         run_id = "run_" + secrets.token_urlsafe(32)
@@ -470,8 +481,9 @@ class AgentRunStore:
                     run_id, scope_fingerprint, scope_json, order_no, operation,
                     environment, app_id, agent_id, expected_node_id, state,
                     gateway_version, created_at, expires_at,
-                    expected_agent_version, exec_config_state, chat_binding
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    expected_agent_version, exec_config_state, chat_binding,
+                    execution_manifest, route_revision
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -490,6 +502,8 @@ class AgentRunStore:
                     expected_agent_version,
                     (None if expected_agent_version is None else EXEC_CONFIG_EXPECTED),
                     chat_binding,
+                    execution_manifest,
+                    route_revision,
                 ),
             )
         run = self.get(run_id)
@@ -940,6 +954,8 @@ def _run_from_row(row: sqlite3.Row) -> AgentRun:
         # 迁移保证这一列一定存在（新库建表即含，旧库由 _migrate_qa_link_column 补）。
         qa_id=row["qa_id"],
         chat_binding=row["chat_binding"],
+        execution_manifest=row["execution_manifest"],
+        route_revision=int(row["route_revision"]),
     )
 
 

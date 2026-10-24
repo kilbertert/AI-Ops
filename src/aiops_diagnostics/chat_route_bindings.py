@@ -84,6 +84,7 @@ class RouteBinding:
     app_id: str = ""
     workflow_id: str = ""
     workflow_key_ref: str = ""
+    node_config_file: str = ""
     state: str = STATE_ACTIVE
     #: 乐观并发：每次改写 +1。发布与撤回都按它做 CAS。
     revision: int = 0
@@ -130,6 +131,13 @@ class ChatRouteBindingStore:
                 )
                 """
             )
+
+        with self._connection(write=True) as connection:
+            columns = {row["name"] for row in connection.execute("PRAGMA table_info(chat_route_bindings)")}
+            if "node_config_file" not in columns:
+                connection.execute(
+                    "ALTER TABLE chat_route_bindings ADD COLUMN node_config_file TEXT NOT NULL DEFAULT ''"
+                )
 
     def _connection(self, *, write: bool) -> sqlite3.Connection:
         connection = sqlite3.connect(self.path, timeout=30)
@@ -179,6 +187,7 @@ class ChatRouteBindingStore:
         app_id: str = "",
         workflow_id: str = "",
         workflow_key_ref: str = "",
+        node_config_file: str = "",
         expected_revision: int | None = None,
         updated_by: str = "",
     ) -> RouteBinding:
@@ -213,8 +222,8 @@ class ChatRouteBindingStore:
                     INSERT INTO chat_route_bindings
                         (environment, tenant_id, entry, scenario, engine, agent_id,
                          agent_version_no, app_id, workflow_id, workflow_key_ref,
-                         state, revision, updated_by, updated_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         state, revision, updated_by, updated_at, node_config_file)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(environment, tenant_id, entry, scenario) DO NOTHING
                     """,
                     (
@@ -232,6 +241,7 @@ class ChatRouteBindingStore:
                         next_revision,
                         updated_by,
                         now,
+                        node_config_file,
                     ),
                 )
             else:
@@ -240,7 +250,7 @@ class ChatRouteBindingStore:
                     UPDATE chat_route_bindings
                        SET engine = ?, agent_id = ?, agent_version_no = ?, app_id = ?,
                            workflow_id = ?, workflow_key_ref = ?, state = ?,
-                           revision = ?, updated_by = ?, updated_at = ?
+                           revision = ?, updated_by = ?, updated_at = ?, node_config_file = ?
                      WHERE environment = ? AND tenant_id = ? AND entry = ? AND scenario = ?
                        AND revision = ?
                     """,
@@ -255,6 +265,7 @@ class ChatRouteBindingStore:
                         next_revision,
                         updated_by,
                         now,
+                        node_config_file,
                         environment,
                         tenant_id,
                         entry,
@@ -339,6 +350,7 @@ def _row(row: Any) -> RouteBinding:
         app_id=row["app_id"],
         workflow_id=row["workflow_id"],
         workflow_key_ref=row["workflow_key_ref"],
+        node_config_file=row["node_config_file"],
         state=row["state"],
         revision=int(row["revision"]),
         updated_by=row["updated_by"],

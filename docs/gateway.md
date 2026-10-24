@@ -456,3 +456,9 @@ aiops remote evidence RUN_ID
 管理 Workflow 试用的成功结果仍需当前订单授权、源路由代次、执行TTL及同轮快照校验。
 取数凭据在试用终态撤销，不作为结果回读凭据；已撤权/撤回/变版的结果不再交付。
 撤回冻结当前路由revision，只停止该代次及之前的任务；之后发布或恢复的新任务不受旧撤回影响。
+
+### 节点 SOP 发布
+
+`AIOPS_GATEWAY_CHAT_NODE_TARGETS_FILE` 将已登记编辑应用映射到节点配置与受控模板。
+正式版本与撤回复用管理路由，原App接口不变；Java节点启用按run加载清单后，发布才改变实际SOP。
+详见[节点发布手册](agents/m3-node-publication.md)与ADR-0128；默认关闭。

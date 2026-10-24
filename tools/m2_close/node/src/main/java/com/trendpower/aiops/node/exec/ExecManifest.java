@@ -150,6 +150,19 @@ public final class ExecManifest {
         return parse(root, sha256(raw), real);
     }
 
+    /** 可信 Gateway 发来的冻结清单；身份仍按原始 UTF-8 字节计算。 */
+    public static ExecManifest fromText(String text, String expected) {
+        byte[] raw = text.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        if (raw.length == 0 || raw.length > 262144 || !sha256(raw).equals(expected)) {
+            throw new ExecConfigViolation("MANIFEST", "发布清单摘要不一致");
+        }
+        try {
+            return parse(JSON.readTree(raw), expected, null);
+        } catch (IOException e) {
+            throw new ExecConfigViolation("MANIFEST", "发布清单不可解析");
+        }
+    }
+
     private static Path realPath(Path declared) {
         try {
             return declared.toRealPath(LinkOption.NOFOLLOW_LINKS);

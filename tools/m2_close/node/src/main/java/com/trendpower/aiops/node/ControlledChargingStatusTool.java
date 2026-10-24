@@ -77,7 +77,7 @@ public class ControlledChargingStatusTool implements ToolCallback {
             body = gateway.post(
                     "/v1/internal/charging-status/claims/" + runId,
                     "{}",
-                    manifestId());
+                    (String) toolContext.getContext().getOrDefault("aiops.manifest_id", manifestId()));
         } catch (GatewayClient.GatewayRefused refused) {
             return refuse("ERROR: " + refused.getMessage(), "claim_refused");
         }

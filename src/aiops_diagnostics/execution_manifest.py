@@ -77,6 +77,16 @@ def load(path: str | Path | None) -> ExecutionManifest | None:
     return _parse(payload, identity)
 
 
+def from_text(text: str) -> ExecutionManifest:
+    """已发布版本持有的原始清单字节，身份规则与文件相同。"""
+    try:
+        if not text or len(text.encode("utf-8")) > 262144:
+            raise ExecutionManifestError("execution manifest size is invalid")
+        return _parse(json.loads(text), hashlib.sha256(text.encode("utf-8")).hexdigest())
+    except (TypeError, json.JSONDecodeError) as exc:
+        raise ExecutionManifestError("execution manifest is not valid JSON") from exc
+
+
 def _parse(payload: object, identity: str) -> ExecutionManifest:
     if not isinstance(payload, dict):
         raise ExecutionManifestError("execution manifest must be a JSON object")
