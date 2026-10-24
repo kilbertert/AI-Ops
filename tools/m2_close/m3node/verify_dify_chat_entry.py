@@ -68,6 +68,14 @@ ORDER_OLDER = "ORDER-3002"
 ORDER_OTHER = "ORDER-4001"
 OTHER_TOKEN = "dify-chat-real-token-b"
 OTHER_USER = "USER-B"
+#: 第二个**租户**（双租户交错）。用它自己的 app / workspace / agent / 路由，
+#: 与主租户在同一条管理表里各占一行。
+TENANT_B = "TENANT-B"
+THIRD_TOKEN = "dify-chat-real-token-c"
+THIRD_USER = "USER-C"
+ORDER_TENANT_B = "ORDER-5001"
+#: 试运行的第六把钥匙（发布/知识库/工具各是另一把，启动校验要求两两不同）。
+TRIAL_KEY = "dify-chat-trial-key"
 
 
 def _free_port() -> int:
@@ -670,6 +678,60 @@ PUBLISH_KEY = "acceptance-dify-publish-key"
 ADMIN_API_KEY = "acceptance-admin-api-key-0123456789"
 
 
+def _import_second_app(dify_base: str, console: dict[str, str], gateway_base: str) -> dict[str, Any]:
+    """**同一实例、另一个租户**的 app：导入 → 换模型 → 发布 → 建自己的 service key。
+
+    与 `_setup_dify` 的区别只在"不重复做实例级的一次性步骤"（init/setup/login/装插件）：
+    provider 插件是**实例**级的，第二个 app 直接用它。其余每一步都走真实 HTTP，
+    少一步都会在运行期才炸（没换模型 ⇒ run 400 provider 不存在）。
+    """
+    import_status, imported = http_json(
+        f"{dify_base}/console/api/apps/imports",
+        method="POST",
+        body={"mode": "yaml-content", "yaml_content": _dsl_for(gateway_base).decode("utf-8")},
+        headers=console,
+    )
+    imported = imported if import_status == 200 and isinstance(imported, dict) else {}
+    app_id = str(imported.get("app_id") or imported.get("id") or "")
+    result: dict[str, Any] = {"import_status": import_status, "app_id": app_id}
+    if not app_id:
+        return result
+    _, draft = http_json(f"{dify_base}/console/api/apps/{app_id}/workflows/draft", headers=console)
+    graph = (draft or {}).get("graph") or {}
+    for node in graph.get("nodes", []):
+        if node.get("data", {}).get("type") == "llm":
+            model = node["data"].setdefault("model", {})
+            model["provider"] = PROVIDER_NAME
+            model["name"] = "synthetic"
+            model["mode"] = "chat"
+            model.setdefault("completion_params", {})["temperature"] = 0
+    if graph:
+        http_json(
+            f"{dify_base}/console/api/apps/{app_id}/workflows/draft",
+            method="POST",
+            headers=console,
+            body={
+                "graph": graph,
+                "features": (draft or {}).get("features") or {},
+                "hash": (draft or {}).get("hash"),
+                "conversation_variables": [],
+            },
+        )
+    http_json(
+        f"{dify_base}/console/api/apps/{app_id}/workflows/publish",
+        method="POST",
+        headers=console,
+        body={},
+    )
+    _, detail = http_json(f"{dify_base}/console/api/apps/{app_id}", headers=console)
+    result["workflow_id"] = ((detail or {}).get("workflow") or {}).get("id")
+    _, key_body = http_json(
+        f"{dify_base}/console/api/apps/{app_id}/api-keys", method="POST", headers=console, body={}
+    )
+    result["service_key"] = (key_body or {}).get("token")
+    return result
+
+
 def _start_gateway(
     *,
     root: Path,
@@ -703,6 +765,8 @@ def _start_gateway(
             (ORDER_LATEST, C_USER, TENANT, "2026-10-20 10:00:00", "2"),
             (ORDER_OLDER, C_USER, TENANT, "2026-10-18 10:00:00", "1"),
             (ORDER_OTHER, OTHER_USER, TENANT, "2026-10-21 10:00:00", "3"),
+            # 另一租户自己的单：跨租户交错用它证明"两个租户各自的单不串"。
+            (ORDER_TENANT_B, THIRD_USER, TENANT_B, "2026-10-22 09:00:00", "4"),
         ],
     )
     conn.commit()
@@ -815,6 +879,15 @@ def _start_gateway(
         # "选单/授权按本人"这条只能在同一身份下测，测不到别人的单会不会漏出来。
         "AIOPS_M2_SECOND_TOKEN": OTHER_TOKEN,
         "AIOPS_M2_SECOND_C_USER": OTHER_USER,
+        # 第三个身份在**另一个租户**：双租户交错要靠它 —— 同租户两个用户只能证明
+        # "单不串"，证明不了"一个租户发布/撤回不碰另一个租户的路由"。
+        "AIOPS_M2_THIRD_TOKEN": THIRD_TOKEN,
+        "AIOPS_M2_THIRD_C_USER": THIRD_USER,
+        "AIOPS_M2_THIRD_TENANT": TENANT_B,
+        # 真 Dify 试用（M3-01 续办 4-1）：与发布/其它 Dify 面**各自一把**钥匙，
+        # 启动校验会拒绝同值。调试租户给主租户 —— 试用跑的就是它的单。
+        "AIOPS_GATEWAY_DIFY_TRIAL_API_KEY": TRIAL_KEY,
+        "AIOPS_GATEWAY_DIFY_TRIAL_DEBUG_TENANT": TENANT,
         "AIOPS_M2_PLATFORM_CONSUMER": "1",
         "PYTHONPATH": f"{REPO / 'src'}{os.pathsep}{os.environ.get('PYTHONPATH', '')}".rstrip(os.pathsep),
     }
@@ -1702,6 +1775,99 @@ def main() -> int:
             },
         )
 
+        # ①b 真试用：**冻结的 V2 草稿在真 Dify 上跑一轮**，App 仍执行 V1。
+        #
+        # 这一步以前根本不存在（脚本里连 `trial` 都没有），而任务书要求它由运营入口
+        # 驱动。判据要两件事同时成立：
+        #   * 试用**真的**在真 Dify 上执行过 —— 证据取**外部世界看到的**：合成模型收到
+        #     含这张单的播报输入、CPMS 被真的按这张单读了一次。只报 completed 分不清
+        #     "执行了"与"没执行"；而"查 Dify 执行库"也不成立（临时应用删了就级联没了）。
+        #   * 正式指针**没动**：App 紧接着仍执行 V1，版本号没变，任务行仍 active。
+        trial_headers = {"Authorization": f"Bearer {TRIAL_KEY}", "Content-Type": "application/json"}
+        ModelHandler.state["prompts"] = []
+        CpmsHandler.calls.clear()
+        trial_status, trial_body = http_json(
+            f"{gateway_base}/v1/dify/trial",
+            method="POST",
+            headers=trial_headers,
+            body={"app_id": app_id, "order_no": ORDER_LATEST},
+        )
+        trial_id = str((trial_body or {}).get("trial_id") or "")
+        trial_final: dict[str, Any] = {}
+        deadline = time.monotonic() + 240
+        while trial_id and time.monotonic() < deadline:
+            got_status, got_body = http_json(
+                f"{gateway_base}/v1/dify/trial/{trial_id}", headers=trial_headers
+            )
+            if got_status == 200 and isinstance(got_body, dict):
+                trial_final = got_body
+                if got_body.get("status") in {"completed", "failed", "cancelled", "expired"}:
+                    break
+            time.sleep(2)
+        report["dify_trial"] = {"post": trial_body, "final": trial_final}
+        # 试用的报告是**两层**：`{"status": ..., "report": {...}}`，而 run/task/draft 身份
+        # 都在内层。从外层读这几个字段永远是空串 —— 判据会红而试用其实成功。
+        trial_result = trial_final.get("result") or {}
+        trial_report = trial_result.get("report") or {}
+        trial_run_id = str(trial_report.get("workflow_run_id") or "")
+        # **不能靠"Dify 执行库里还留着那一行"**：实测按 `workflow_run_id` 去 Dify 执行库
+        # 查，查不到（临时应用在 finally 里被删，那一行随之没了）—— 这条判据曾因此转红，
+        # 而试用本身是成功的。真正的证据是**这次试用期间外部世界看到了什么**：合成模型
+        # 收到了含这张单的播报输入，CPMS 被真的按这张单读了一次。这两者只有真 Dify 把图
+        # 跑完才会发生，比"库里有一行"更难伪造。
+        trial_prompts = ModelHandler.state.get("prompts") or []
+        trial_cpms = list(CpmsHandler.calls)
+        # 试用跑在**临时应用**里，所以它冻结的 workflow 与正式 V1 必然不同 —— 这正是
+        # "试用的是草稿 V2"的证据；而它**不得**接管正式指针。
+        check(
+            "真 Dify 试用：草稿在临时应用里真的执行过",
+            trial_status == 202
+            and trial_final.get("status") == "completed"
+            and bool(trial_run_id)
+            and bool(trial_report.get("task_id"))
+            and str(trial_report.get("draft_sha256") or "") != ""
+            # 临时应用自己的 workflow 身份，不是正式那一版。
+            and str(trial_report.get("workflow_id") or "") not in {"", workflow_id}
+            # 模型真的收到了这张单的播报输入，CPMS 真的被读了一次 —— 图的三个步骤都跑了。
+            and any(ORDER_LATEST in text for text in trial_prompts)
+            and ORDER_LATEST in trial_cpms,
+            {
+                "post": trial_status,
+                "status": trial_final.get("status"),
+                "error": trial_final.get("error_code"),
+                "temp_workflow_differs_from_v1": str(trial_report.get("workflow_id") or "") != workflow_id,
+                "model_saw_order": any(ORDER_LATEST in t for t in trial_prompts),
+                "cpms_reads": trial_cpms,
+            },
+        )
+        with _sqlite3.connect(database) as connection:
+            trial_route = connection.execute(
+                "SELECT app_id, workflow_id, revision, state FROM chat_route_bindings"
+                " WHERE environment = 'env-local' AND tenant_id = ? AND entry = 'consumer'",
+                (TENANT,),
+            ).fetchone()
+            trial_versions = connection.execute(
+                "SELECT COUNT(*) FROM agent_versions WHERE tenant_id = ?", (TENANT,)
+            ).fetchone()[0]
+        ModelHandler.state["prompts"] = []
+        after_trial = _drive(gateway_base, Path(diag["case_root"]))
+        report["chain_after_trial"] = after_trial
+        check(
+            "试用不推进正式指针：App 仍执行 V1、路由与版本都没变",
+            after_trial.get("final", {}).get("status") == "completed"
+            and _own_workflow_of(after_trial) == workflow_id
+            and trial_route is not None
+            and trial_route[1] == workflow_id
+            and trial_route[3] == "active"
+            and trial_versions == 1,
+            {
+                "actual": _own_workflow_of(after_trial),
+                "route_workflow": trial_route[1] if trial_route else None,
+                "route_state": trial_route[3] if trial_route else None,
+                "agent_versions": trial_versions,
+            },
+        )
+
         # ② 发布：指针切到 V2，App 随后执行 V2。
         publish_status, publish_body = _publish_app()
         check(
@@ -1875,6 +2041,161 @@ def main() -> int:
                 "main_revision": main_now.revision if main_now else None,
             },
         )
+
+        # ---- 双租户交错：**另一个租户**经真实操作入口发布/执行，与主租户互不影响 ----
+        #
+        # 双环境那条证明"同一租户的两个逻辑环境是两条路由"；它证明不了租户边界 ——
+        # 同租户的两行本来就是同一批人。这里把第二个租户走一遍**同样三个真实入口**
+        # （导入 → 发布 → App 执行），再回头撤主租户的版本，看两个租户各自停在什么状态。
+        # DSL 里那个取数地址必须是 **Dify 容器**能到达的（`_setup_dify` 用的同一个），
+        # 传宿主的 127.0.0.1 会让第二个 app 在运行期连不上取数端点。
+        second = _import_second_app(dify_base, console, gateway_container_base)
+        app_b = str((second or {}).get("app_id") or "")
+        key_b = str((second or {}).get("service_key") or "")
+        check(
+            "第二租户的应用导入并发布（自己的 app / workflow）",
+            bool(app_b) and bool(key_b) and bool((second or {}).get("workflow_id")),
+            {"status": (second or {}).get("import_status"), "app_id": bool(app_b)},
+        )
+        if app_b and key_b:
+            key_file_b = Path(diag["case_root"]) / "keys" / f"{app_b}.key"
+            key_file_b.parent.mkdir(parents=True, exist_ok=True)
+            key_file_b.write_text(key_b + "\n")
+            key_file_b.chmod(0o600)
+            _seed_registry(
+                database,
+                [
+                    {
+                        "tenant_id": TENANT_B,
+                        "business_entry": "consumer",
+                        "app_id": app_b,
+                        "agent_name": "小趋-客服-B",
+                    }
+                ],
+            )
+            _seed_workspace(database, TENANT_B, workspace_id, "dify-chat-acceptance")
+            _seed_agent(database, TENANT_B, name="小趋-客服-B")
+            v1_b = _export_workflow_content(
+                dify_base, console, app_b, str((second or {}).get("workflow_id") or "")
+            )
+            _make_v1_a_workflow_snapshot(
+                database,
+                TENANT_B,
+                app_id=app_b,
+                workflow_id=str((second or {}).get("workflow_id") or ""),
+                workspace_id=workspace_id,
+                workflow=v1_b,
+            )
+            ChatRouteBindingStore(database).publish(
+                environment="env-local",
+                tenant_id=TENANT_B,
+                entry="consumer",
+                scenario="consumer_own_order_status",
+                engine="dify",
+                agent_id="小趋-客服-B",
+                agent_version_no=1,
+                app_id=app_b,
+                workflow_id=str((second or {}).get("workflow_id") or ""),
+                workflow_key_ref=str(key_file_b),
+                updated_by="acceptance",
+            )
+            # 第二租户在**同一环境**里发布自己的 app：真实入口、真实 Dify 发布。
+            status_b, body_b = http_json(
+                f"{gateway_base}/v1/dify/publish",
+                method="POST",
+                headers=publish_headers,
+                body={"app_id": app_b},
+            )
+            route_b_before = ChatRouteBindingStore(database).get(
+                "env-local", TENANT_B, "consumer", "consumer_own_order_status"
+            )
+            check(
+                "第二租户经同一入口发布，自己那条路由被推进",
+                status_b == 200
+                and isinstance(body_b.get("version_no"), int)
+                and route_b_before is not None
+                and route_b_before.revision >= 2,
+                {"status": status_b, "revision": route_b_before.revision if route_b_before else None},
+            )
+            # 第二租户的消费者**从 App 入口**问自己的单：走的必须是它自己的 app。
+            drive_b = _drive(
+                gateway_base,
+                Path(diag["case_root"]),
+                question="check my latest order status",
+                token=THIRD_TOKEN,
+            )
+            report["chain_tenant_b"] = drive_b
+            row_b = _dify_run_of(drive_b)
+            check(
+                "第二租户执行的是自己的 Dify 应用与本租户的订单",
+                drive_b.get("final", {}).get("status") == "completed"
+                and bool(row_b.get("workflow_run_id"))
+                and row_b.get("app_id") == app_b
+                and row_b.get("order_no") == ORDER_TENANT_B
+                and ORDER_TENANT_B
+                in json.dumps((drive_b.get("final") or {}).get("result") or {}, ensure_ascii=False),
+                {
+                    "status": (drive_b.get("final") or {}).get("status"),
+                    "app_id": row_b.get("app_id"),
+                    "order": row_b.get("order_no"),
+                },
+            )
+            # 交错：现在撤回**主租户**那一版，看第二租户是否被误伤。
+            retract_a_status, retract_a_body = _retract_app()
+            route_a_after = ChatRouteBindingStore(database).get(
+                "env-local", TENANT, "consumer", "consumer_own_order_status"
+            )
+            route_b_after = ChatRouteBindingStore(database).get(
+                "env-local", TENANT_B, "consumer", "consumer_own_order_status"
+            )
+            drive_b_after = _drive(
+                gateway_base,
+                Path(diag["case_root"]),
+                question="check my latest order status",
+                token=THIRD_TOKEN,
+            )
+            report["chain_tenant_b_after_retract_a"] = drive_b_after
+            check(
+                "双租户交错：撤回主租户不碰第二租户（它照常执行）",
+                retract_a_status == 200
+                and retract_a_body.get("state") == "retracted"
+                and route_a_after is not None
+                and route_a_after.state == "retracted"
+                and route_b_after is not None
+                and route_b_after.state == "active"
+                and route_b_after.revision == route_b_before.revision
+                and drive_b_after.get("final", {}).get("status") == "completed"
+                and bool(_dify_run_of(drive_b_after).get("workflow_run_id")),
+                {
+                    "a_state": route_a_after.state if route_a_after else None,
+                    "b_state": route_b_after.state if route_b_after else None,
+                    "b_revision": route_b_after.revision if route_b_after else None,
+                    "b_status": (drive_b_after.get("final") or {}).get("status"),
+                },
+            )
+            # **撤回主租户是有代价的收尾**：它把主路由留在 `retracted`，而后面还有
+            # "取消在飞请求"的判据需要主路由 active —— 第一版在这里没收尾，五条取消判据
+            # 全红，症状离原因很远。所以这里立刻显式恢复主租户那一版，并核它真的回到 active。
+            restore_a_status, restore_a_body = http_json(
+                f"{gateway_base}/v1/dify/restore",
+                method="POST",
+                headers=publish_headers,
+                body={"app_id": app_id, "version_no": route_a_after.agent_version_no},
+            )
+            route_a_restored = ChatRouteBindingStore(database).get(
+                "env-local", TENANT, "consumer", "consumer_own_order_status"
+            )
+            check(
+                "双租户段收尾：显式恢复主租户，后续判据的前提重新成立",
+                restore_a_status == 200
+                and route_a_restored is not None
+                and route_a_restored.state == "active",
+                {
+                    "status": restore_a_status,
+                    "body": restore_a_body,
+                    "a_state": route_a_restored.state if route_a_restored else None,
+                },
+            )
 
         # 模型已开始且未结束时取消；直接读取真 Dify 的 stop 标志，不能用本地终态代替。
         ModelHandler.hold = True

@@ -22,9 +22,9 @@
 | `tests/test_dify_console_publish.py`（+5 条） | 撤回/恢复/版本列表走桥：转发路径与请求体、网关未确认状态**不报成功**、恢复必须带选中版本号、请求体不能夹带租户 | 93 passed |
 | `tests/test_dify_workflow_trial.py`（新增，5 条） | 试用不动正式指针、不产生 `agent_versions`、有真实执行身份、临时应用成功与失败都删、路由变更即拒绝、失败也撤权 | 5 passed |
 
-全量：**3846 passed / 9 skipped**。
+全量：**3850 passed / 9 skipped**（35 条本片 + 复核反例）。
 
-## 二、真实环境验证（43/43 PASS）
+## 二、真实环境验证（45/45 PASS）
 
 `tools/m2_close/m3node/verify_dify_chat_entry.py` 扩展了运营闭环五步，从**运营能点到的
 HTTP 入口**驱动（`POST /v1/dify/publish` / `POST /v1/dify/retract`），不手改绑定文件：
@@ -40,6 +40,8 @@ HTTP 入口**驱动（`POST /v1/dify/publish` / `POST /v1/dify/retract`），不
 | 撤回后历史正文 | **410 `CHAT_ROUTE_RETRACTED`** |
 | retracted 行 | 仍在（`rows: 1`，不删行） |
 | 显式恢复 | 200，`completed` |
+| **真 Dify 试用** | 临时应用里真执行：模型收到含这张单的播报输入、CPMS 被按这张单读一次；正式指针/版本/任务行**都没动** |
+| **双租户交错** | 第二租户的 app 经同一发布入口推进后，撤回主租户不影响它（`active`、revision 不变、照常执行） |
 
 每条判据都额外要求"这一轮真的走了 Dify"（执行记录里有 `workflow_run_id`）——
 直读同样返回 completed，只看 completed 分不清"执行了"与"掉回直读"。
@@ -53,6 +55,8 @@ HTTP 入口**驱动（`POST /v1/dify/publish` / `POST /v1/dify/retract`），不
 | `DSL has no model_config object` | `sync_binding_from_dify` 只支持 chat/completion 应用；M3-01 发布的是 **workflow** 应用（内容在 `workflow.graph`） | 新增 `sync_workflow_from_dify`，冻结 workflow 快照；按**结果**分流，不额外打一次导出 |
 | `EXEC_CONFIG_UNAVAILABLE`（改完文件后） | `settings` 在启动时构造；配上文件路径后删文件只会让整表读失败。而"写一张空表"也是配置错误 | 管理模式**重启**网关且不配文件路径 —— 这才是真实迁移形状 |
 | `DIFY_UNAVAILABLE` 反复出现 | 验收脚本里 `for key, expected in (...)` 把 app service key 覆盖成 `"b"`，写进凭据文件的就是一个字符 | 循环变量改名；并把"拿到 service key"的判据从 `bool(key)` 收紧为长度 ≥16 |
+| 试用显示 `completed` 但判据红 | 判据要求"Dify 执行库里查得到这个 `workflow_run_id`"，而试用跑在**临时应用**里、用完就删，那一行随之没了 | 改用外部世界证据：合成模型收到含这张单的播报输入、CPMS 被按这张单读一次 |
+| 双租户段之后 5 条**取消**判据全红 | 双租户交错**撤回主租户**之后没有收尾，后续判据的前提（主路由 active）被破坏 | 交错段末尾显式恢复主租户那一版，并核它回到 `active` |
 
 同时修掉一批**验收脚手架的假绿**：`with sqlite3.connect()` 不提交、手写 INSERT 与真实表结构
 列数不符、`roles={"admin"}` 而非 `ROLE_*`、`AgentManager(GatewayStore)` 而非 `AgentStore`、

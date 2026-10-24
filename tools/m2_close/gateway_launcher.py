@@ -59,6 +59,11 @@ OTHER_TOKEN = os.environ.get("AIOPS_M2_SECOND_TOKEN", "")
 OTHER_C_USER = os.environ.get("AIOPS_M2_SECOND_C_USER", "USER-B")
 #: 第二个身份所在的租户。缺省与 ``TENANT`` 相同（旧行为）；跨租户的判据必须显式给。
 OTHER_TENANT = os.environ.get("AIOPS_M2_SECOND_TENANT", "") or TENANT
+#: 第三个调用者身份（可选）：**另一个租户**的消费者。双租户交错验证要用它 ——
+#: 两个身份同租户只能证明"单不串"，证明不了"一个租户的发布/撤回不碰另一个租户"。
+THIRD_TOKEN = os.environ.get("AIOPS_M2_THIRD_TOKEN", "")
+THIRD_C_USER = os.environ.get("AIOPS_M2_THIRD_C_USER", "USER-C")
+THIRD_TENANT = os.environ.get("AIOPS_M2_THIRD_TENANT", "")
 
 
 def _synthetic_order_source(_settings, scope):
@@ -121,6 +126,8 @@ class LocalResolver:
             c_user, tenant = C_USER, TENANT
         elif OTHER_TOKEN and token == OTHER_TOKEN:
             c_user, tenant = OTHER_C_USER, OTHER_TENANT
+        elif THIRD_TOKEN and token == THIRD_TOKEN and THIRD_TENANT:
+            c_user, tenant = THIRD_C_USER, THIRD_TENANT
         else:
             raise CallerAuthError("invalid access token", code="caller_auth.invalid")
         subject = SubjectRecord(b_user_id="", c_user_id=c_user, tenant_id=tenant)
@@ -150,8 +157,6 @@ class SyntheticOrderAuthorizer:
 
         if self.unavailable:
             raise CallerAuthError("unavailable", code="caller_auth.unavailable")
-        if context.data_scope.type != "self" or not context.subject.c_user_id:
-            return False
         connection = sqlite3.connect(ORDERS_DB)
         try:
             row = connection.execute(
@@ -159,7 +164,17 @@ class SyntheticOrderAuthorizer:
             ).fetchone()
         finally:
             connection.close()
-        return bool(row and row[0] == context.subject.c_user_id and row[1] == context.effective_tenant_id)
+        if row is None or row[1] != context.effective_tenant_id:
+            return False
+        # 范围语义照抄真授权器（`ScopedOrderAuthorizer` → `resolve_query_scope` 后按本人过滤）：
+        #   * `self`  ⇒ 本人那一单；
+        #   * `all`   ⇒ 整租户（不按用户过滤）；试运行的租户级调试范围就是这一条，
+        #               不认它会让试用在这套隔离栈里永远 404 —— 那不是产品行为；
+        #   * 站点级  ⇒ 本合成表没有站点列，**拒绝**（与真授权器 fail-closed 同形），
+        #               不把"解析不出来"放宽成"整租户可见"。
+        if context.data_scope.type == "self":
+            return bool(context.subject.c_user_id) and row[0] == context.subject.c_user_id
+        return context.data_scope.type == "all"
 
 
 def SQLiteConversationStore(database_file: Path):  # noqa: N802 - 构造器语义
