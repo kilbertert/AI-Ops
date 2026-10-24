@@ -98,7 +98,8 @@ from aiops_diagnostics.dify_knowledge_api import (
     dify_records,
     parse_dify_retrieval_request,
 )
-from aiops_diagnostics.dify_run_store import DifyRunStore, still_valid as dify_run_still_valid
+from aiops_diagnostics.dify_run_store import DifyRunStore
+from aiops_diagnostics.dify_run_store import still_valid as dify_run_still_valid
 from aiops_diagnostics.dify_tools_catalog import AI_OPS_TOOL_NAMES, CATALOG_NOTE
 from aiops_diagnostics.dify_trial import TrialDraft, TrialInitiator, TrialRefused
 from aiops_diagnostics.dify_workspaces import DifyWorkspaceError, DifyWorkspaces

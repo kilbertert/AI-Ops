@@ -564,9 +564,7 @@ def test_a_successful_readback_is_refused_after_its_ttl(tmp_path, monkeypatch, d
         past = (datetime.now(UTC) - timedelta(seconds=1)).isoformat()
         with sqlite3.connect(f["db"]) as conn:
             conn.execute("UPDATE chat_dify_runs SET expires_at = ?", (past,))
-        again = f["client"].get(
-            f"/v1/assistant/questions/{response.json()['qa_id']}", headers=HEADERS
-        )
+        again = f["client"].get(f"/v1/assistant/questions/{response.json()['qa_id']}", headers=HEADERS)
         assert again.status_code == 410, again.text
 
 
