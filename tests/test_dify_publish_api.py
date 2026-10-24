@@ -834,8 +834,6 @@ def test_a_chat_app_publish_does_not_require_a_workflow_pointer(tmp_path, monkey
         chat_dify_key_dir=str(tmp_path),
     )
     client.app.state.gateway.settings.execution_environment = "41"
-    captured: dict[str, Any] = {}
-
     def fake_sync(manager, context, binding, source, **kwargs):
         # chat 应用：冻结了版本，但没有 workflow 身份。
         return SyncOutcome(
