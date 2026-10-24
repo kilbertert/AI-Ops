@@ -1,0 +1,144 @@
+# 正式节点执行栈；生产 Gateway 沿用既有服务。平台仅映射宿主回环。
+name: aiops-node-runtime
+networks:
+  trial:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+      - subnet: ${AIOPS_NODE_SUBNET:?}
+        gateway: ${AIOPS_NODE_BRIDGE:?}
+  modellink:
+    driver: bridge
+    internal: true
+  egress:
+    driver: bridge
+services:
+  model-proxy:
+    image: ${AIOPS_NODE_PROXY_IMAGE:?}
+    container_name: aiops-runtime-model-proxy
+    networks:
+    - modellink
+    - egress
+    user: ${AIOPS_NODE_UID:?}:${AIOPS_NODE_GID:?}
+    entrypoint:
+    - python
+    - /opt/aiops-src/tools/m2_live/model_proxy.py
+    environment:
+      M2LIVE_MODEL_UPSTREAM: ${AIOPS_MODEL_UPSTREAM:?}
+      M2LIVE_MODEL_UPSTREAM_BASE_PATH: ${AIOPS_MODEL_BASE_PATH:-/v1}
+      SSL_CERT_FILE: /etc/ssl/certs/ca-certificates.crt
+    volumes:
+    - ${AIOPS_NODE_CONFIG:?}/model-proxy:/etc/m2live:ro
+    - ${AIOPS_NODE_CONFIG:?}/tls/proxy:/etc/m2live-tls:ro
+    command:
+    - --listen-port
+    - '9101'
+    - --upstream
+    - ${AIOPS_MODEL_UPSTREAM:?}
+    - --upstream-key-file
+    - /etc/m2live/upstream_api_key
+    - --proxy-token-file
+    - /etc/m2live/proxy_token
+    - --upstream-base-path
+    - ${AIOPS_MODEL_BASE_PATH:-/v1}
+    mem_limit: 128m
+    cpus: 0.1
+    restart: unless-stopped
+  store:
+    image: ${AIOPS_NODE_MYSQL_IMAGE:?}
+    container_name: aiops-runtime-store
+    networks:
+    - trial
+    command:
+    - --default-authentication-plugin=mysql_native_password
+    - --character-set-server=utf8mb4
+    - --collation-server=utf8mb4_unicode_ci
+    - --lower_case_table_names=1
+    environment:
+      MYSQL_ROOT_PASSWORD_FILE: /run/secrets/mysql_root
+      MYSQL_DATABASE: snail_ai
+    volumes:
+    - ${AIOPS_NODE_STATE:?}/store:/var/lib/mysql
+    secrets:
+    - mysql_root
+    user: root
+    mem_limit: 700m
+    cpus: 0.5
+    healthcheck:
+      test:
+      - CMD-SHELL
+      - mysqladmin ping -uroot -p"$$(cat /run/secrets/mysql_root)" --silent
+      interval: 10s
+      timeout: 5s
+      retries: 15
+    restart: unless-stopped
+  platform:
+    image: ${AIOPS_NODE_JAVA_IMAGE:?}
+    container_name: aiops-runtime-platform
+    networks:
+    - trial
+    depends_on:
+      store:
+        condition: service_healthy
+    user: ${AIOPS_NODE_UID:?}:${AIOPS_NODE_GID:?}
+    working_dir: /var/lib/snail-ai
+    command:
+    - java
+    - -Xmx900m
+    - -jar
+    - /opt/platform/snail-ai-server-exec.jar
+    - --spring.config.additional-location=file:/etc/m2live/
+    volumes:
+    - ${AIOPS_NODE_DIST:?}/platform:/opt/platform:ro
+    - ${AIOPS_NODE_CONFIG:?}/platform:/etc/m2live:ro
+    - ${AIOPS_NODE_CONFIG:?}/tls/platform:/etc/m2live-tls:ro
+    - ${AIOPS_NODE_STATE:?}/platform:/var/lib/snail-ai
+    mem_limit: 1200m
+    cpus: 0.4
+    expose:
+    - '8900'
+    - '18888'
+    restart: unless-stopped
+    ports:
+    - 127.0.0.1:${AIOPS_NODE_PLATFORM_PORT:-8900}:8900
+  node:
+    image: ${AIOPS_NODE_JAVA_IMAGE:?}
+    container_name: aiops-runtime-node
+    networks:
+    - trial
+    - modellink
+    depends_on:
+      platform:
+        condition: service_started
+    user: ${AIOPS_NODE_UID:?}:${AIOPS_NODE_GID:?}
+    environment:
+      AIOPS_NODE_NAME: node-41
+      AIOPS_NODE_BUILD: ${AIOPS_NODE_BUILD:?}
+      AIOPS_NODE_GRPC_PORT: '18889'
+      AIOPS_NODE_HTTP_PORT: '8081'
+      AIOPS_NODE_HOST: node
+      AIOPS_NODE_HOME: /home/node
+      SNAIL_SERVER_HOST: platform
+      SNAIL_SERVER_PORT: '18888'
+      AIOPS_GATEWAY_BASE_URL: ${AIOPS_NODE_GATEWAY_URL:?}
+      JAVA_TOOL_OPTIONS: -Djavax.net.ssl.trustStore=/etc/m2live-tls/truststore.p12
+        -Djavax.net.ssl.trustStorePassword=m2live-trust -Djavax.net.ssl.trustStoreType=PKCS12
+    env_file:
+    - ${AIOPS_NODE_CONFIG:?}/node/node.env
+    command:
+    - java
+    - -jar
+    - /app/aiops-execution-node.jar
+    - --aiops.node.managed-publication=true
+    volumes:
+    - ${AIOPS_NODE_DIST:?}/node:/app:ro
+    - ${AIOPS_NODE_STATE:?}/node:/home/node
+    - ${AIOPS_NODE_CONFIG:?}/tls/public:/etc/m2live-tls:ro
+    - ${AIOPS_NODE_CONFIG:?}/gateway/exec-manifest.json:/etc/m2live/exec-manifest.json:ro
+    mem_limit: 500m
+    cpus: 0.22
+    restart: unless-stopped
+secrets:
+  mysql_root:
+    file: ${AIOPS_NODE_CONFIG:?}/secrets/mysql_root

@@ -24,6 +24,9 @@ app  = "/opt/aiops-41/src"
 logs = "/var/log/aiops-41"
 ops  = "/opt/aiops-41/ops"
 backups = "/var/backups/aiops-41"
+node_artifacts = "/opt/aiops-node-runtime"
+node_config = "/etc/aiops-node-runtime"
+node_state = "/var/lib/aiops-node-runtime"
 
 [[targets]]
 name        = "36"

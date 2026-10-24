@@ -1,0 +1,17 @@
+[Unit]
+Description=AI-Ops node callbacks to production Gateway
+Requires=aiops-node-runtime.service
+After=aiops-node-runtime.service
+PartOf=aiops-node-runtime.service
+
+[Service]
+Type=simple
+User=aiops41
+Group=aiops41
+ExecStartPre=/usr/bin/nginx -e stderr -t -c /etc/aiops-node-runtime/gateway-callback.conf
+ExecStart=/usr/bin/nginx -e stderr -c /etc/aiops-node-runtime/gateway-callback.conf -g "daemon off;"
+Restart=on-failure
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
