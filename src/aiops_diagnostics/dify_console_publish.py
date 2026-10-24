@@ -711,8 +711,14 @@ def _knowledge_sync_payload(
     )
     if not isinstance(payload, dict):
         raise ConsolePublishError("knowledge sync: gateway returned a non-object")
-    created = payload.get("created")
-    return created if isinstance(created, int) and created >= 0 else 0
+    # **「有没有变化」不等于「建了几条」。** 网关回的是 `changed` = 建 + 改 + 退休
+    # （ADR-0125）；只取 `created` 会让运营改名/删库之后页面不刷新 —— 卡片留在原地，
+    # 点进去 404。旧网关没有 `changed`，回落 `created`。
+    for key in ("changed", "created"):
+        value = payload.get(key)
+        if isinstance(value, int) and value >= 0:
+            return value
+    return 0
 
 
 def _knowledge_open_payload(
@@ -1281,9 +1287,14 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
         * **租户仍然只能来自验过的会话**：网关按 workspace **反查**租户，并且
           请求里出现任何租户参数都是 400。页面能说的只有"我在哪一页"。
 
-        返回 ``{"created": N}``：调用方只在 N > 0 时刷新列表。**失败一律 200 +
-        ``created: 0``** —— 这是前端弹窗路径上的调用，一次网关抖动不该让运营看到
+        返回 ``{"changed": N}``：调用方只在 N > 0 时刷新列表。**失败一律 200 +
+        ``changed: 0``** —— 这是前端弹窗路径上的调用，一次网关抖动不该让运营看到
         红字，更不该挡住「添加知识库」本身（ADR-0122 约束 1）。
+
+        ``changed`` 而不是 ``created``：运营**改名**或**删库**时 created 是 0，而页面
+        正靠这个数决定要不要刷新（ADR-0125）。桥在这里是第三次犯同一个「只看新增」
+        的错误（网关、前端各一次），所以字段名也一并改掉 —— 留着 `created` 这个名字
+        会引诱下一个人接着只数新增。
         """
         if not self.settings.login_proxy_url or not self.settings.gateway_internal_token:
             raise _Rejected(404, "not found")
@@ -1305,10 +1316,10 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
             # 没有它就没法确定同步哪个 workspace。**回 ``created: 0`` 而不是 4xx**：
             # 前端拿不到 workspace 是它自己的问题，不该让弹窗报错。
             self.log_message("knowledge sync: no workspace in request; nothing synced")
-            self._json(200, {"created": 0})
+            self._json(200, {"changed": 0, "created": 0})
             return
         try:
-            created = _knowledge_sync_payload(
+            changed = _knowledge_sync_payload(
                 self.settings.gateway_base_url,
                 self.settings.gateway_internal_token,
                 workspace_id=workspace_id,
@@ -1316,10 +1327,12 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
             )
         except Exception as exc:  # noqa: BLE001 - see the docstring's last paragraph
             self.log_message("knowledge sync bridge failed: %s", exc)
-            self._json(200, {"created": 0})
+            self._json(200, {"changed": 0, "created": 0})
             return
-        self.log_message("knowledge sync: tenant=%s created=%s", tenant_id, created)
-        self._json(200, {"created": created})
+        self.log_message("knowledge sync: tenant=%s changed=%s", tenant_id, changed)
+        # `created` 仍保留为同值：老前端的 `changed ?? created` 回落在它上面，
+        # 而不是回落到 0。两个字段同时在场，新旧前端都不会读错。
+        self._json(200, {"changed": changed, "created": changed})
 
     def _post_trial(self) -> None:
         """试运行那条路（#781 / #782 的部署层）。

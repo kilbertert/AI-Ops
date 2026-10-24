@@ -76,6 +76,8 @@ class _Upstream:
         self.redirects: dict[str, tuple[int, str]] = {}
         self.base = ""
         #: ``GET /v1/dify/workspace`` 的回答（#884）。默认 404 ⇒ 未开户。
+        #: ``POST /v1/internal/knowledge/sync`` 的回答（网关口径，ADR-0125）。
+        self.knowledge_sync_body: Any = {"changed": 0, "created": 0}
         self.workspace_lookup_status = 404
         self.workspace_lookup_body: Any = {"error": {"code": "DIFY_WORKSPACE_UNRESOLVED", "message": "x"}}
         #: ``POST /__aiops/publish/check``（代理）的回答。默认给一个"有编辑权、无租户"的映射。
@@ -121,6 +123,8 @@ def _serve(upstream: _Upstream) -> ThreadingHTTPServer:
                 self._reply(upstream.trial_status, upstream.trial_body)
             elif self.path.startswith(TRIAL_GATEWAY_PATH + "/") and method == "GET":
                 self._reply(upstream.trial_result_status, upstream.trial_result_body)
+            elif self.path.startswith("/v1/internal/knowledge/sync"):
+                self._reply(200, upstream.knowledge_sync_body)
             elif self.path.startswith("/v1/dify/workspace"):
                 self._reply(upstream.workspace_lookup_status, upstream.workspace_lookup_body)
             elif self.path == "/__aiops/publish/check":
@@ -161,6 +165,15 @@ def _fixture(up: _Upstream) -> Any:
 
 @pytest.fixture
 def upstream() -> Any:
+    yield from _fixture(_Upstream())
+
+
+@pytest.fixture
+def _sync_upstream() -> Any:
+    """只为 knowledge-sync 那两条判据起一个上游。
+
+    名字带下划线：它在测试签名里出现，但不该被 pytest 之外的东西当公共夹具。
+    """
     yield from _fixture(_Upstream())
 
 
@@ -1611,3 +1624,30 @@ def test_without_the_internal_token_the_constant_still_pins(upstream) -> None:
 
     assert result.published is True, result.reason
     assert not any("/v1/dify/workspace" in call["path"] for call in upstream.calls)
+
+
+def test_knowledge_sync_prefers_changed_over_created(_sync_upstream: _Upstream) -> None:
+    """**「有没有变化」不等于「建了几条」**（ADR-0125）。
+
+    运营改名或删库时网关的 `created` 是 0、`changed` 非 0。桥若只读 `created`，
+    页面就不刷新 —— 卡片留在原地，点进去 404。这是本轮第三次踩同一个错
+    （网关、前端各一次），所以判据钉在桥这一层。
+    """
+    from aiops_diagnostics.dify_console_publish import _knowledge_sync_payload
+
+    _sync_upstream.knowledge_sync_body = {"changed": 3, "created": 1}
+
+    changed = _knowledge_sync_payload(_sync_upstream.base, "token", workspace_id="ws-1", timeout=5.0)
+
+    assert changed == 3, "改名/退休也要算进变化数"
+
+
+def test_knowledge_sync_falls_back_to_created_for_an_old_gateway(_sync_upstream: _Upstream) -> None:
+    """旧网关只回 `created` —— 桥不能因此读到 0 而永不刷新。"""
+    from aiops_diagnostics.dify_console_publish import _knowledge_sync_payload
+
+    _sync_upstream.knowledge_sync_body = {"created": 2}
+
+    changed = _knowledge_sync_payload(_sync_upstream.base, "token", workspace_id="ws-1", timeout=5.0)
+
+    assert changed == 2
