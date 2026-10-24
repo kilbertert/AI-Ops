@@ -1162,6 +1162,34 @@ def _tenant_in_scope(record_tenant: object, allowed_tenant: object) -> bool:
     return bool(visible_orders([{"tenant_id": record_tenant}], visibility).rows)
 
 
+def _is_managed_workflow_app(context: Any, app_id: str) -> bool:
+    """这个 app 是不是**已接管管理指针的 workflow 应用**。
+
+    判据落在应用自己身上（注册表 + 管理行），不是"这个网关有没有配管理表"：
+    配了管理表不等于每个 app 都被接管了。
+    """
+    from pathlib import Path
+
+    from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
+
+    database = str(getattr(context.settings, "chat_route_bindings_file", "") or "")
+    if not database:
+        return False
+    binding = next((item for item in context.runtime.dify_app_registry.all() if item.app_id == app_id), None)
+    if binding is None:
+        return False
+    try:
+        row = ChatRouteBindingStore(Path(database).expanduser().absolute()).get(
+            str(getattr(context.settings, "execution_environment", "") or ""),
+            binding.tenant_id,
+            binding.business_entry,
+            chat_execution.SCENARIO_OWN_ORDER_STATUS,
+        )
+    except Exception:  # noqa: BLE001 - 读不出来就按"没接管"处理（回到原有试用路径）
+        return False
+    return row is not None and row.app_id == app_id
+
+
 def _workflow_trial_draft(context: Any, app_id: str, run_context: ScopeContext):
     from aiops_diagnostics.dify_dsl_pull import DifyDslClient, DifyDslSource
     from aiops_diagnostics.dify_workflow_trial import WorkflowTrial
@@ -2331,7 +2359,15 @@ def create_gateway_app(
         run_context = _trial_run_context(context, trial_initiator)
         _require_visible_order(context, run_context, payload.order_no)
         try:
-            if payload.app_id and context.settings.chat_route_bindings_file:
+            # **按应用的实际类型分流**，不看"管理表是否启用"：同一个网关可以同时挂着
+            # 已接管管理指针的 workflow 应用与既有 chat/completion 应用。后者没有
+            # 管理行（发布都不推进指针），送进 `_workflow_trial_draft` 会得到
+            # `CHAT_ROUTE_BINDING_MISMATCH` —— 把它们原本可用的试用弄坏。
+            if (
+                payload.app_id
+                and context.settings.chat_route_bindings_file
+                and _is_managed_workflow_app(context, payload.app_id)
+            ):
                 draft = _workflow_trial_draft(context, payload.app_id, run_context)
             else:
                 if payload.prompt is not None:
@@ -6527,6 +6563,15 @@ def _require_dify_binding_current(context: Any, run) -> None:
     """
     from aiops_diagnostics import chat_execution
 
+    # **试用**：它的执行身份是**临时的** workflow，不是正式那一条。要求两者相等会
+    # 让真实取数被拒（`CHARGING_STATUS_DISABLED`），试用永远完不成。
+    # 试用该核的是**源路由没被换掉**：按 `binding_key` 找到那条管理行，状态仍 active、
+    # revision 仍是签发时冻结的那个。临时 workflow 本身另由 `workflow_id` 与
+    # `studio` 快照在试用侧核对。
+    if getattr(run, "kind", "chat") == "trial":
+        _require_trial_source_route(context, run)
+        return
+
     try:
         binding = chat_execution.binding_for_key(context.settings, run.binding_key)
     except chat_execution.ChatRunUnavailable as exc:
@@ -6569,6 +6614,31 @@ def _same_tenant_as_grant(record_tenant: object, grant_tenant: object) -> bool:
     # 真值判断而不是 `len(...) == 1`：判据按 AST 认"含 tenant 的比较"，写成比较会让
     # 一次**合法的**共享规则调用被判成第二条规则。
     return bool(visible_orders([{"tenant_id": record_tenant}], visibility).rows)
+
+
+def _require_trial_source_route(context: Any, run) -> None:
+    """试用的源路由是否仍是签发时那一条。
+
+    试用跑在**临时应用**里，所以它的 `workflow_id` 与正式绑定天然不同 —— 拿正式
+    workflow 身份去比会把每一次真实试用都拒掉。这里只核两件试用真正依赖的事：
+    那条路由仍存在且 active，并且没有被别人重新发布/撤回（revision 未变）。
+    """
+    from pathlib import Path
+
+    from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
+
+    database = str(getattr(context.settings, "chat_route_bindings_file", "") or "")
+    if not database:
+        raise StandardAPIError(503, "ROUTE_BINDING_UNAVAILABLE", "route state unavailable")
+    try:
+        current = ChatRouteBindingStore(Path(database).expanduser().absolute()).by_key(run.binding_key)
+    except Exception as exc:  # noqa: BLE001 - 读不出来就不能放行
+        raise StandardAPIError(503, "ROUTE_BINDING_UNAVAILABLE", "route state unavailable") from exc
+    if current is None or not current.active:
+        raise StandardAPIError(403, "CHARGING_STATUS_DISABLED", "trial source route is gone")
+    frozen = int(getattr(run, "route_revision", 0) or 0)
+    if frozen and current.revision != frozen:
+        raise StandardAPIError(403, "CHARGING_STATUS_DISABLED", "trial source route changed")
 
 
 def _require_dify_grant_visible(context: Any, run) -> None:

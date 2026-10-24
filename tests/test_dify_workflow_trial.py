@@ -266,3 +266,58 @@ def test_a_trial_revokes_its_grant_even_when_the_engine_fails(tmp_path, monkeypa
         grants = chat_data_grant.DataGrantStore(tmp_path / "boom" / "gateway.db")
         states = [g.state for g in grants.all()] if hasattr(grants, "all") else []
         assert all(state == "revoked" for state in states), states
+
+
+def test_the_trial_callback_accepts_its_temporary_workflow(tmp_path, monkeypatch):
+    """试用取数回调必须接受**临时的** workflow 身份。
+
+    试用跑在临时应用里，`workflow_id` 与正式绑定天然不同。若回调守卫仍拿正式
+    workflow 身份去比，真实取数会被拒成 `CHARGING_STATUS_DISABLED`，试用永远完不成
+    —— 而上一条用例替换了引擎与放行方法，看不见这条路径。
+
+    这里直接调守卫本身：判据是"源路由仍在且 revision 未变"，不是"workflow 相同"。
+    """
+    from types import SimpleNamespace
+
+    from aiops_diagnostics.gateway_api import _require_trial_source_route
+
+    with _trial_env(tmp_path, monkeypatch) as (_runtime, route, _admin, _engine):
+        settings = SimpleNamespace(chat_route_bindings_file=str(tmp_path / "gateway.db"))
+        run = SimpleNamespace(
+            kind="trial",
+            binding_key=route.key,
+            route_revision=route.revision,
+            workflow_id="temporary-workflow-id-differs-from-the-formal-one",
+        )
+        # 不抛 = 通过：临时 workflow 身份**不参与**这条判据。
+        _require_trial_source_route(SimpleNamespace(settings=settings), run)
+
+
+def test_the_trial_callback_refuses_a_changed_source_route(tmp_path, monkeypatch):
+    """源路由被重新发布过 ⇒ 试用回调拒绝（revision 变了）。"""
+    from types import SimpleNamespace
+
+    from aiops_diagnostics.gateway_api import _require_trial_source_route
+    from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
+    from aiops_diagnostics.gateway_api import StandardAPIError
+
+    with _trial_env(tmp_path, monkeypatch) as (_runtime, route, _admin, _engine):
+        ChatRouteBindingStore(tmp_path / "gateway.db").publish(
+            environment="env-a",
+            tenant_id="TENANT-A",
+            entry="consumer",
+            scenario=chat_execution.SCENARIO_OWN_ORDER_STATUS,
+            engine="dify",
+            agent_id="agt_real",
+            agent_version_no=3,
+            app_id=route.app_id,
+            workflow_id=route.workflow_id,
+            workflow_key_ref=route.workflow_key_ref,
+            expected_revision=route.revision,
+        )
+        settings = SimpleNamespace(chat_route_bindings_file=str(tmp_path / "gateway.db"))
+        run = SimpleNamespace(
+            kind="trial", binding_key=route.key, route_revision=route.revision, workflow_id="tmp"
+        )
+        with pytest.raises(StandardAPIError):
+            _require_trial_source_route(SimpleNamespace(settings=settings), run)
