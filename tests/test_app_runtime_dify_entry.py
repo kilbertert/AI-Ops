@@ -65,6 +65,13 @@ class _DifyStub:
     def __init__(self) -> None:
         self.calls: list[dict] = []
         self.stops: list[str] = []
+        self.paths: list[str] = []
+        self.before_started = None
+        self.stop_status = 200
+        self.latest_workflow_id = WORKFLOW_ID
+        self.identity_override: dict = {}
+        self.finish_override: dict = {}
+        self.drop_finish = False
         self.fail = False
         # 真 Dify 的 HTTP 步骤把响应体当文本，端节点拿回的是 JSON **字符串**。
         # 这几个开关让桩能复现那一种形状（以及三种应当被拒的形状）。
@@ -90,6 +97,12 @@ class _DifyStub:
                 return
 
             def _reply(self, payload: dict, status: int = 200) -> None:
+                if getattr(self, "streaming", False):
+                    if not stub.drop_finish:
+                        payload["event"] = "workflow_finished"
+                        payload.update(stub.finish_override)
+                        self._event(payload)
+                    return
                 body = json.dumps(payload).encode()
                 self.send_response(status)
                 self.send_header("Content-Type", "application/json")
@@ -97,16 +110,41 @@ class _DifyStub:
                 self.end_headers()
                 self.wfile.write(body)
 
+            def _event(self, payload):
+                self.wfile.write(("data: " + json.dumps(payload) + "\n\n").encode())
+                self.wfile.flush()
+
             def do_POST(self):  # noqa: N802
                 length = int(self.headers.get("Content-Length") or 0)
                 raw = json.loads(self.rfile.read(length) or b"{}")
                 if self.path.endswith("/stop"):
                     task_id = self.path.split("/")[-2]
                     stub.stops.append(task_id)
-                    return self._reply({"result": "success"})
+                    return self._reply({"result": "success"}, status=stub.stop_status)
                 stub.calls.append(raw)
+                stub.paths.append(self.path)
                 if stub.fail:
                     return self._reply({"message": "boom"}, status=500)
+                run_id = "run-" + str(len(stub.calls))
+                selected = (
+                    self.path.split("/")[-2] if self.path != "/v1/workflows/run" else stub.latest_workflow_id
+                )
+                self.selected_workflow = selected
+                if raw.get("response_mode") == "streaming":
+                    self.streaming = True
+                    self.send_response(200)
+                    self.send_header("Content-Type", "text/event-stream")
+                    self.end_headers()
+                    if stub.before_started:
+                        stub.before_started()
+                    event = {
+                        "event": "workflow_started",
+                        "task_id": "task-" + run_id,
+                        "workflow_run_id": run_id,
+                        "data": {"id": run_id, "workflow_id": selected},
+                    }
+                    event.update(stub.identity_override)
+                    self._event(event)
                 inputs = raw.get("inputs") or {}
                 token = inputs.get("data_grant") or ""
                 stub.token_seen.append(token)
@@ -114,11 +152,11 @@ class _DifyStub:
                     # "图没调取数端点"这一种：不回调网关，直接给出一个形状合法的快照。
                     return self._reply(
                         {
-                            "task_id": "task-skipped",
-                            "workflow_run_id": "run-skipped",
+                            "task_id": "task-" + run_id,
+                            "workflow_run_id": run_id,
                             "data": {
-                                "id": "run-skipped",
-                                "workflow_id": WORKFLOW_ID,
+                                "id": run_id,
+                                "workflow_id": self.selected_workflow,
                                 "status": "succeeded",
                                 "outputs": {"answer": "ok", "snapshot": stub.fake_snapshot},
                             },
@@ -143,7 +181,6 @@ class _DifyStub:
                     status = exc.code
                 except Exception as exc:  # noqa: BLE001
                     snapshot, status = {"error": type(exc).__name__}, 0
-                run_id = "run-" + str(len(stub.runs) + 1)
                 if status != 200:
                     return self._reply(
                         {
@@ -151,7 +188,7 @@ class _DifyStub:
                             "workflow_run_id": run_id,
                             "data": {
                                 "id": run_id,
-                                "workflow_id": WORKFLOW_ID,
+                                "workflow_id": self.selected_workflow,
                                 "status": "failed",
                                 "outputs": {},
                             },
@@ -174,7 +211,7 @@ class _DifyStub:
                         "workflow_run_id": run_id,
                         "data": {
                             "id": run_id,
-                            "workflow_id": WORKFLOW_ID,
+                            "workflow_id": self.selected_workflow,
                             "status": "succeeded",
                             "outputs": {"answer": "ok", "snapshot": snapshot},
                             "created_at": int(time.time()),
@@ -831,3 +868,102 @@ def test_an_unregistered_tenant_still_takes_the_direct_read(tmp_path, monkeypatc
         assert response.status_code == 202
         assert response.json()["status"] == "completed"
         assert stub.calls == []
+
+
+def test_pinned_workflow_survives_a_new_publish(tmp_path, monkeypatch, dify_stub):
+    stub, base = dify_stub
+    stub.latest_workflow_id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    with dify_chat(tmp_path, monkeypatch, stub_base=base) as f:
+        stub.gateway_base = f["gateway_base"]
+        response = ask(f["client"])
+        final = wait_terminal(f["client"], response.json()["qa_id"])
+        assert final["status"] == "completed", final
+        assert stub.paths == [f"/v1/workflows/{WORKFLOW_ID}/run"]
+        assert stub.calls[0]["response_mode"] == "streaming"
+        assert f["upstream"]["calls"] == 1
+
+
+@pytest.mark.parametrize("field", ["workflow_id", "id"])
+def test_missing_started_identity_is_not_filled_from_binding(tmp_path, monkeypatch, dify_stub, field):
+    stub, base = dify_stub
+    data = {"id": "run-1", "workflow_id": WORKFLOW_ID}
+    del data[field]
+    stub.identity_override = {"data": data}
+    with dify_chat(tmp_path, monkeypatch, stub_base=base) as f:
+        stub.gateway_base = f["gateway_base"]
+        response = ask(f["client"])
+        final = wait_terminal(f["client"], response.json()["qa_id"])
+        assert final["status"] == "failed"
+        assert final["error"]["code"] == "DIFY_WORKFLOW_INVALID"
+
+
+@pytest.mark.parametrize("field", ["workflow_run_id", "task_id"])
+def test_finished_identity_must_match_started(tmp_path, monkeypatch, dify_stub, field):
+    stub, base = dify_stub
+    stub.finish_override = {field: "another-execution"}
+    with dify_chat(tmp_path, monkeypatch, stub_base=base) as f:
+        stub.gateway_base = f["gateway_base"]
+        response = ask(f["client"])
+        final = wait_terminal(f["client"], response.json()["qa_id"])
+        assert final["status"] == "failed"
+        assert final["error"]["code"] == "DIFY_WORKFLOW_INVALID"
+        assert f["upstream"]["calls"] == 1
+
+
+def test_stream_eof_after_started_is_failure_without_retry(tmp_path, monkeypatch, dify_stub):
+    stub, base = dify_stub
+    stub.drop_finish = True
+    with dify_chat(tmp_path, monkeypatch, stub_base=base) as f:
+        stub.gateway_base = f["gateway_base"]
+        response = ask(f["client"])
+        final = wait_terminal(f["client"], response.json()["qa_id"])
+        assert final["status"] == "failed"
+        assert final["error"]["code"] == "DIFY_WORKFLOW_INVALID"
+        assert len(stub.calls) == 1
+        row = DifyRunStore(f["db"]).by_qa(response.json()["qa_id"])
+        assert row.task_id and row.workflow_run_id
+
+
+@pytest.mark.parametrize("before_id,stop_status", [(False, 200), (True, 200), (False, 500)])
+def test_cancel_stops_running_dify_before_result(tmp_path, monkeypatch, dify_stub, before_id, stop_status):
+    stub, base = dify_stub
+    reached, release = threading.Event(), threading.Event()
+    stub.stop_status = stop_status
+
+    def hold():
+        reached.set()
+        assert release.wait(10)
+
+    if before_id:
+        stub.before_started = hold
+    else:
+        stub.after_callback = hold
+    with dify_chat(tmp_path, monkeypatch, stub_base=base) as f:
+        stub.gateway_base = f["gateway_base"]
+        try:
+            response = ask(f["client"])
+            qa_id = response.json()["qa_id"]
+            assert reached.wait(10), "the requested execution stage was not reached"
+            row = DifyRunStore(f["db"]).by_qa(qa_id)
+            assert row is not None
+            if not before_id:
+                assert row.workflow_run_id and row.task_id
+                assert f["upstream"]["calls"] == 1
+            cancelled = f["client"].post(f"/v1/assistant/questions/{qa_id}/cancel", headers=HEADERS)
+            assert cancelled.status_code == 200
+            assert cancelled.json()["status"] == "cancelled"
+            grants = _grants(f["db"])
+            assert grants and all(g.state == "revoked" for g in grants)
+            if before_id:
+                release.set()
+            deadline = time.monotonic() + 5
+            while not stub.stops and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert stub.stops == ["task-run-1"]
+            release.set()
+            final = wait_terminal(f["client"], qa_id)
+            assert final["status"] == "cancelled" and final.get("result") is None
+            assert DifyRunStore(f["db"]).by_qa(qa_id).state == "cancelled"
+            assert len(stub.calls) == 1
+        finally:
+            release.set()

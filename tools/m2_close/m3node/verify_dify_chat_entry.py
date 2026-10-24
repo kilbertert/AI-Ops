@@ -43,6 +43,7 @@ from pathlib import Path
 from typing import Any
 from urllib import error as urllib_error
 from urllib import request as urllib_request
+from uuid import UUID
 
 REPO = Path(__file__).resolve().parents[3]
 DIFY_DIR = REPO / "deploy/dify-chat"
@@ -127,6 +128,9 @@ def _json(text: str) -> Any:
 
 class ModelHandler(BaseHTTPRequestHandler):
     state: dict[str, Any] = {}
+    hold = False
+    entered = threading.Event()
+    release = threading.Event()
 
     def log_message(self, *args: Any) -> None:  # noqa: D102
         pass
@@ -159,6 +163,11 @@ class ModelHandler(BaseHTTPRequestHandler):
             }
         )
         type(self).state["calls"] = type(self).state.get("calls", 0) + 1
+        if type(self).hold:
+            type(self).entered.set()
+            if not type(self).release.wait(60):
+                self.send_error(504)
+                return
         answer = "订单状态已播报。"
         if body.get("stream"):
             self.send_response(200)
@@ -231,47 +240,9 @@ class CpmsHandler(BaseHTTPRequestHandler):
 
 
 def _serve(handler: type[BaseHTTPRequestHandler]) -> ThreadingHTTPServer:
-    # 绑 0.0.0.0：Dify 容器要能打到这个桩。它不是生产面，只在一次性验收里存在。
-    server = ThreadingHTTPServer(("0.0.0.0", 0), handler)
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server
-
-
-# 容器 → 宿主**不是**默认通的：这台机器的 INPUT 策略是 DROP（ufw 只放行 22/80/443），
-# 从 `host.docker.internal`（docker 网桥网关）打过来的包在 INPUT 链就被丢掉。
-# 症状是凭据校验返回 400 `Connection to host.docker.internal timed out`，而 api 容器
-# 里同样能解析这个名字 —— 看起来像模型地址写错。
-#
-# 放行是**精确到接口和端口**的：只加在 docker 网桥接口上，只开本次这两个端口，
-# 结束时逐条 `-D` 删掉。不是 `ufw allow`，不改默认策略，不留持久规则。
-_INGRESS_IFACES = ("docker0", "br-+")
-
-
-def _open_bridge_ingress(ports: list[int], extra_hosts: list[str]) -> dict[str, Any]:
-    opened: list[dict[str, Any]] = []
-    for port in ports:
-        for iface in _INGRESS_IFACES:
-            rule = ["-i", iface, "-p", "tcp", "--dport", str(port), "-j", "ACCEPT"]
-            done = subprocess.run(
-                ["sudo", "-n", "iptables", "-I", "INPUT", "1", *rule], capture_output=True, text=True
-            )
-            opened.append(
-                {"port": port, "iface": iface, "ok": done.returncode == 0, "err": done.stderr[-200:]}
-            )
-    return {"opened": opened, "extra_hosts": extra_hosts}
-
-
-def _close_bridge_ingress(opened: dict[str, Any]) -> dict[str, Any]:
-    closed = []
-    for item in opened.get("opened", []):
-        if not item["ok"]:
-            continue
-        rule = ["-i", item["iface"], "-p", "tcp", "--dport", str(item["port"]), "-j", "ACCEPT"]
-        done = subprocess.run(
-            ["sudo", "-n", "iptables", "-D", "INPUT", *rule], capture_output=True, text=True
-        )
-        closed.append({"port": item["port"], "iface": item["iface"], "ok": done.returncode == 0})
-    return {"closed": closed}
 
 
 # --------------------------------------------------------------------------
@@ -286,6 +257,8 @@ def _compose(env: dict[str, str], *args: str, timeout: int = 900) -> subprocess.
             "compose",
             "-f",
             str(DIFY_DIR / "docker-compose.acceptance.yaml"),
+            "--env-file",
+            str(Path(env["DIFY_TEST_ROOT"]) / "dify.env"),
             "-p",
             env["DIFY_TEST_PROJECT"],
             *args,
@@ -300,12 +273,13 @@ def _compose(env: dict[str, str], *args: str, timeout: int = 900) -> subprocess.
 
 def _dify_env(root: Path, *, model_url: str, port: int, project: str, network: str) -> dict[str, str]:
     """生成这一栈的 .env。全部取值为随机或本机地址，没有任何生产值。"""
-    env_file = DIFY_DIR / ".env"
+    env_file = root / "dify.env"
     values = {
         "DIFY_REGISTRY": "docker.io",
         "DIFY_TEST_PORT": str(port),
         "DIFY_TEST_PROJECT": project,
         "DIFY_TEST_NETWORK": network,
+        "DIFY_TEST_NAMESPACE": os.environ["DIFY_TEST_NAMESPACE"],
         "SECRET_KEY": secrets.token_urlsafe(42),
         "INIT_PASSWORD": "Acceptance-" + secrets.token_hex(8),
         "MODE": "api",
@@ -313,21 +287,21 @@ def _dify_env(root: Path, *, model_url: str, port: int, project: str, network: s
         "MIGRATION_ENABLED": "true",
         "DEPLOYMENT_EDITION": "COMMUNITY",
         "DB_TYPE": "postgresql",
-        "DB_HOST": "db_postgres",
+        "DB_HOST": "127.0.0.1",
         "DB_PORT": "5432",
         "DB_USERNAME": "dify",
         "DB_PASSWORD": secrets.token_hex(16),
         "DB_DATABASE": "dify",
         "DB_PLUGIN_DATABASE": "dify_plugin",
-        "REDIS_HOST": "redis",
+        "REDIS_HOST": "127.0.0.1",
         "REDIS_PORT": "6379",
         "REDIS_USERNAME": "",
         "REDIS_PASSWORD": "",
-        "CELERY_BROKER_URL": "redis://redis:6379/1",
+        "CELERY_BROKER_URL": "redis://127.0.0.1:6379/1",
         "PLUGIN_DAEMON_KEY": secrets.token_hex(16),
         "PLUGIN_DIFY_INNER_API_KEY": secrets.token_hex(16),
         "VECTOR_STORE": "weaviate",
-        "WEAVIATE_ENDPOINT": "http://weaviate:8080",
+        "WEAVIATE_ENDPOINT": "http://127.0.0.1:8080",
         "WEAVIATE_API_KEY": secrets.token_hex(24),
         "STORAGE_TYPE": "opendal",
         "OPENDAL_SCHEME": "fs",
@@ -356,7 +330,6 @@ def _dify_env(root: Path, *, model_url: str, port: int, project: str, network: s
     }
     env_file.write_text("\n".join(f"{k}={v}" for k, v in values.items()) + "\n")
     env_file.chmod(0o600)
-    shutil.copy(env_file, root / "dify.env")
     return {**values, "DIFY_TEST_ROOT": str(root)}
 
 
@@ -793,10 +766,7 @@ def _start_gateway(
         "AIOPS_GATEWAY_EXECUTION_ENVIRONMENT": "env-local",
         "AIOPS_GATEWAY_CHAT_EXECUTION_BINDINGS_FILE": str(bindings),
         "AIOPS_GATEWAY_DIFY_CHAT_BASE_URL": dify_base,
-        # 取数步骤是**真 Dify 容器**自己发的 POST，回环上永远到不了。所以这一次的网关
-        # 必须绑 0.0.0.0。它不是生产面：一次性数据根、随机端口、进程随验收结束即停；
-        # 宿主 INPUT 策略是 DROP，除了本次精确放行的那个端口，外部与别的容器都进不来。
-        "AIOPS_GATEWAY_BIND": "0.0.0.0",
+        "AIOPS_GATEWAY_BIND": "127.0.0.1",
         "AIOPS_M2_LOCAL_TOKEN": TOKEN,
         "AIOPS_M2_ORDERS_DB": str(orders),
         "AIOPS_M2_TENANT": TENANT,
@@ -942,34 +912,97 @@ def _stop(process: subprocess.Popen) -> None:
         os.killpg(os.getpgid(process.pid), signal.SIGKILL)
 
 
+def _isolated_driver(args: argparse.Namespace) -> int:
+    """本次进程和 Dify 共用临时容器网络，宿主无监听、无防火墙变更。"""
+    root = Path(tempfile.mkdtemp(prefix="dify-chat-acceptance-"))
+    root.chmod(0o700)
+    name = "difychat-driver-" + secrets.token_hex(5)
+    command = [
+        "docker",
+        "run",
+        "--rm",
+        "--name",
+        name,
+        "--user",
+        f"{os.getuid()}:{os.getgid()}",
+        "--group-add",
+        str(Path("/var/run/docker.sock").stat().st_gid),
+        "-e",
+        f"DIFY_TEST_NAMESPACE={name}",
+        "-e",
+        f"DIFY_TEST_ROOT={root}",
+        "-e",
+        f"HOME={root}",
+        "-e",
+        f"PYTHONPATH={REPO / 'src'}",
+        "-v",
+        f"{REPO}:{REPO}:ro",
+        "-v",
+        f"{root}:{root}",
+        "-v",
+        "/home/claude/miniconda3:/home/claude/miniconda3:ro",
+        "-v",
+        "/usr/bin/docker:/usr/bin/docker:ro",
+        "-v",
+        "/usr/libexec/docker/cli-plugins:/usr/libexec/docker/cli-plugins:ro",
+        "-v",
+        "/var/run/docker.sock:/var/run/docker.sock",
+        "-w",
+        str(REPO),
+        "python:3.13-slim",
+        sys.executable,
+        str(Path(__file__).resolve()),
+        "--out",
+        str(root / "report.json"),
+        "--keep",
+    ]
+    try:
+        result = subprocess.run(command, check=False)
+        if args.out and (root / "report.json").exists():
+            shutil.copy(root / "report.json", args.out)
+            Path(args.out).chmod(0o600)
+        return result.returncode
+    finally:
+        # 数据卷属主属于容器；仅清理本次 mkdtemp 的卷，证据保留。
+        if not args.keep and (root / "volumes").exists():
+            subprocess.run(
+                [
+                    "docker",
+                    "run",
+                    "--rm",
+                    "-v",
+                    f"{root / 'volumes'}:/cleanup",
+                    "busybox:latest",
+                    "sh",
+                    "-c",
+                    "rm -rf /cleanup/*",
+                ],
+                check=False,
+            )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", default="")
     parser.add_argument("--keep", action="store_true", help="保留数据根以便事后排查（默认删掉）")
     parser.add_argument("--keep-stack", action="store_true", help="不拆 Dify 栈（排查用；正常跑一定拆）")
     args = parser.parse_args()
+    os.umask(0o077)
+
+    if "DIFY_TEST_NAMESPACE" not in os.environ:
+        return _isolated_driver(args)
 
     if shutil.which("docker") is None:
         print("docker is not available", file=sys.stderr)
         return 2
 
-    # 上一次运行的 volumes 由 root 写，普通用户删不掉；用一次性容器清，避免
-    # "口令对不上"这种看着像配置问题的假失败（postgres 只在空 PGDATA 上初始化口令）。
-    subprocess.run(
-        ["docker", "run", "--rm", "-v", f"{DIFY_DIR / 'volumes'}:/v", "alpine", "sh", "-c", "rm -rf /v/*"],
-        capture_output=True,
-        timeout=120,
-    )
-    root = Path(tempfile.mkdtemp(prefix="dify-chat-acceptance-"))
+    root = Path(os.environ["DIFY_TEST_ROOT"])
     project = "difychatacc" + secrets.token_hex(4)
-    port = _free_port()
+    port = 5001  # 仅在本次容器网络命名空间内部使用。
     network = f"{project}-net"
     model = _serve(ModelHandler)
     cpms = _serve(CpmsHandler)
-    # 两个地址**不同**，这是刻意的：
-    #   * 模型上游是 Dify 容器去调 ⇒ 必须用容器能解析的宿主名；
-    #   * CPMS 是**网关自己**去调 ⇒ 必须是回环（`canonical_gateway_url` 只放行
-    #     回环上的 http，远端一律要求 https）。
+    # Dify、Gateway 和合成上游共用本次容器网络命名空间，只走回环。
     model_url = f"http://{_host_gateway()}:{model.server_port}/v1"
     cpms_base = f"http://127.0.0.1:{cpms.server_port}"
     env = _dify_env(root, model_url=model_url, port=port, project=project, network=network)
@@ -1030,14 +1063,6 @@ def main() -> int:
         # 网关**先**起来：DSL 里那个取数 URL 要指向一个真实存在的地址，
         # 而它是这次唯一的网关实例。
         gateway_port = _free_port()
-        # 放行在网关**起来之前**：容器一被 Dify 叫起来就要能打进来。
-        opened = _open_bridge_ingress([gateway_port, model.server_port], ["gateway", "model_upstream"])
-        report["bridge_ingress"] = opened
-        check(
-            "容器到宿主的两个端口已精确放行",
-            all(item["ok"] for item in opened["opened"]),
-            opened,
-        )
         gateway_process, gateway_base, diag = _start_gateway(
             root=root,
             model_url=model_url,
@@ -1052,8 +1077,7 @@ def main() -> int:
         if diag.get("error"):
             return _finish(report, args)
 
-        # DSL 里写的是**容器视角**的网关地址；脚本自己轮询用回环。
-        # 这两个地址必须是同一个进程的两个面，不能混用。
+        # DSL 与脚本使用同一命名空间内的回环地址。
         gateway_container_base = f"http://{_host_gateway()}:{gateway_port}"
         setup = _setup_dify(dify_base, env, model_url=model_url, gateway_base=gateway_container_base)
         # `console_headers` 与 `service_key` 都是凭据：只留在内存里供诊断请求用，
@@ -1202,25 +1226,147 @@ def main() -> int:
             {"status": failing_final.get("status")},
         )
 
-        # ---- 用户取消：终态 cancelled，且**取消之后不再放出** ----
-        cancelling = _drive(gateway_base, Path(diag["case_root"]), cancel_after=0.0)
-        report["chain_cancel"] = cancelling
-        cancel_final = cancelling.get("final") or {}
-        cancel_row = _row_for_qa(cancelling.get("rows") or [], cancelling.get("qa_id"))
-        # 取消要三件事同时成立：终态不是 completed；执行记录不是 succeeded；
-        # 那张凭据已撤销。少任何一条，"取消"就只是屏幕上的一句话。
-        cancel_grants = _grants_for_qa(Path(diag["case_root"]) / "data/gateway.db", cancelling.get("qa_id"))
+        # 发布 V2 后仍绑定 V1；模型输入标记和 Dify 执行库双重核对实际版本。
+        app_id = setup["app_id"]
+        console = setup["console_headers"]
+        status, draft = http_json(f"{dify_base}/console/api/apps/{app_id}/workflows/draft", headers=console)
+        if status != 200:
+            raise RuntimeError("cannot read isolated draft")
+        graph = draft["graph"]
+        for node in graph["nodes"]:
+            if node["data"].get("type") == "llm":
+                node["data"]["prompt_template"][0]["text"] += "\nACCEPTANCE_VERSION_TWO"
+        saved, _ = http_json(
+            f"{dify_base}/console/api/apps/{app_id}/workflows/draft",
+            method="POST",
+            headers=console,
+            body={
+                "graph": graph,
+                "features": draft["features"],
+                "hash": draft["hash"],
+                "conversation_variables": [],
+            },
+        )
+        published, _ = http_json(
+            f"{dify_base}/console/api/apps/{app_id}/workflows/publish",
+            method="POST",
+            headers=console,
+            body={},
+        )
+        _, detail = http_json(f"{dify_base}/console/api/apps/{app_id}", headers=console)
+        version_two = detail.get("workflow", {}).get("id")
         check(
-            "取消后执行记录不是成功、取数凭据已失效",
-            (cancel_row.get("state") in {None, "cancelled", "failed"})
-            and cancel_row.get("state") != "succeeded"
-            and all(state == "revoked" for state in cancel_grants),
-            {"row_state": cancel_row.get("state"), "grants": cancel_grants},
+            "已发布可区分的 V2",
+            saved == 200 and published == 200 and bool(version_two) and version_two != workflow_id,
+            {"save": saved, "publish": published},
+        )
+        for version, marker in ((workflow_id, False), (version_two, True)):
+            if marker:
+                path = Path(diag["case_root"]) / "chat-bindings.json"
+                binding = json.loads(path.read_text())
+                binding["bindings"][0]["workflow_id"] = version
+                path.write_text(json.dumps(binding))
+            ModelHandler.state["prompts"] = []
+            selected = _drive(gateway_base, Path(diag["case_root"]))
+            selected_row = _row_for_qa(selected.get("rows") or [], selected.get("qa_id"))
+            observed_run_id = selected_row.get("workflow_run_id", "")
+            UUID(observed_run_id)
+            actual = _compose(
+                env,
+                "exec",
+                "-T",
+                "db_postgres",
+                "psql",
+                "-U",
+                "dify",
+                "-d",
+                "dify",
+                "-Atc",
+                f"SELECT workflow_id FROM workflow_runs WHERE id = '{observed_run_id}'",
+                timeout=20,
+            )
+            actual_workflow_id = actual.stdout.strip()
+            prompts = ModelHandler.state.get("prompts", [])
+            check(
+                f"绑定 {'V2' if marker else 'V1'} 实际执行同版",
+                selected.get("final", {}).get("status") == "completed"
+                and actual.returncode == 0
+                and actual_workflow_id == version
+                and bool(prompts)
+                and all(("ACCEPTANCE_VERSION_TWO" in prompt) == marker for prompt in prompts),
+                {"workflow_id": actual_workflow_id, "expected": version, "prompts": len(prompts)},
+            )
+
+        # 模型已开始且未结束时取消；直接读取真 Dify 的 stop 标志，不能用本地终态代替。
+        ModelHandler.hold = True
+        ModelHandler.entered.clear()
+        ModelHandler.release.clear()
+        try:
+            headers = {"X-Business-Entry": "consumer"}
+            status, payload = http_json(
+                f"{gateway_base}/v1/assistant/questions",
+                method="POST",
+                headers={**headers, "Authorization": f"Bearer {TOKEN}"},
+                body={"question": "check my latest order status"},
+            )
+            qa_id = payload.get("qa_id")
+            reached = ModelHandler.entered.wait(30)
+            database = Path(diag["case_root"]) / "data/gateway.db"
+            row = _row_for_qa(_dify_rows(database), qa_id)
+            check(
+                "取消前真模型步骤运行中且身份已存",
+                reached
+                and status == 202
+                and row.get("state") == "running"
+                and bool(row.get("task_id"))
+                and bool(row.get("workflow_run_id")),
+                {"reached_model": reached, "state": row.get("state")},
+            )
+            cancel_status, cancelled = http_json(
+                f"{gateway_base}/v1/assistant/questions/{qa_id}/cancel",
+                method="POST",
+                headers={**headers, "Authorization": f"Bearer {TOKEN}"},
+                body={},
+            )
+            stopped = _compose(
+                env,
+                "exec",
+                "-T",
+                "redis",
+                "redis-cli",
+                "GET",
+                f"generate_task_stopped:{row.get('task_id')}",
+                timeout=20,
+            )
+            grants = _grants_for_qa(database, qa_id)
+            check(
+                "模型完成前 Dify 已收到同 task 的 stop",
+                reached
+                and stopped.returncode == 0
+                and stopped.stdout.strip() == "1"
+                and not ModelHandler.release.is_set(),
+                {"stop_flag": stopped.stdout.strip(), "model_released": ModelHandler.release.is_set()},
+            )
+            check(
+                "取消后本地终态与撤权立即生效",
+                cancel_status == 200
+                and cancelled.get("status") == "cancelled"
+                and bool(grants)
+                and all(state == "revoked" for state in grants),
+                {"status": cancelled.get("status"), "grants": grants},
+            )
+        finally:
+            ModelHandler.hold = False
+            ModelHandler.release.set()
+        time.sleep(1)
+        _, final = http_json(
+            f"{gateway_base}/v1/assistant/questions/{qa_id}",
+            headers={**headers, "Authorization": f"Bearer {TOKEN}"},
         )
         check(
-            "用户取消 ⇒ cancelled / 终态不是 completed",
-            cancel_final.get("status") in {"cancelled", "failed"},
-            {"status": cancel_final.get("status"), "cancel": cancelling.get("cancel")},
+            "迟到结果不复活取消",
+            final.get("status") == "cancelled" and final.get("result") is None,
+            {"status": final.get("status")},
         )
 
         # ---- 逆证一：伪造的取数凭据被拒，且一次业务读取都没有 ----
@@ -1313,18 +1459,12 @@ def main() -> int:
             report["compose_down"] = {"rc": teardown.returncode}
         for server in (model, cpms):
             server.shutdown()
-        report["bridge_ingress_closed"] = _close_bridge_ingress(report.get("bridge_ingress") or {})
-        (DIFY_DIR / ".env").unlink(missing_ok=True)
-        if not args.keep:
-            shutil.rmtree(root, ignore_errors=True)
 
     return _finish(report, args)
 
 
 def _host_gateway() -> str:
-    """容器回到宿主用的名字。compose 里用 `host.docker.internal:host-gateway` 映射，
-    比写死某个网桥地址稳 —— 换网络驱动不改脚本。"""
-    return os.environ.get("DIFY_TEST_HOST_GATEWAY", "host.docker.internal")
+    return "127.0.0.1"
 
 
 def _grant_states(database: Path) -> list[str]:
@@ -1361,6 +1501,7 @@ def _finish(report: dict[str, Any], args: argparse.Namespace) -> int:
     text = json.dumps(report, ensure_ascii=False, indent=2)
     if args.out:
         Path(args.out).write_text(text)
+        Path(args.out).chmod(0o600)
     print(text)
     return 0 if not failures else 1
 

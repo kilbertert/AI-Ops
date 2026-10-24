@@ -110,13 +110,13 @@
 | 形状 | 症状 | 原因 |
 |---|---|---|
 | 边的 `target` 必须写 | 整轮只有 start 节点执行，导入与写草稿都是 200 | `graphon` 的 `_build_edges` 对缺 `target` 的边直接 `continue`，不报错 |
-| blocking 响应是**两层** | 运行身份取不到，`DIFY_WORKFLOW_INVALID` | `task_id` / `workflow_run_id` 在外层，`status` / `outputs` 在内层 `data` |
+| streaming 开始与结束事件 | 运行中无法停止或错认版本 | 版本必须在 URL；开始事件保存 task/run，结束事件核对同一身份 |
 | HTTP 步骤的 `body` 是**字符串** | 端节点交出 `"snapshot": "{...}"`，网关判 `DIFY_NO_DATA` | `graphon` 的 `HttpResponse.text` 不解析 JSON；Jinja2 沙箱也没有 `fromjson` 过滤器 |
 | 模型 provider 是三段式标识 | "已装好"被判成"没装上" | `langgenius/openai_api_compatible/openai_api_compatible`，不是插件短名 |
 | 装完 provider 要**重启 api** | provider 列表一直是空的 | api 进程缓存 provider 列表；plugin_daemon 里已经可用也不够 |
 | 凭据校验由 **plugin_daemon** 发出 | 400 `Failed to resolve 'host.docker.internal'` | 真正连模型上游的是插件宿主，不是 api；它也需要 `extra_hosts` |
 | 数值型 provider 选项是 **string** | 注册凭据 500 `Variable context_size should be string` | 该 provider 的 credential schema 把这些声明为字符串 |
-| 容器回宿主受防火墙约束 | 凭据校验 `Connection timed out` | 宿主 INPUT 策略 DROP；验收脚本按端口精确放行、结束即删 |
+| 验收容器网络 | 无需改宿主防火墙 | driver、Dify 与合成上游共用一次性网络命名空间，宿主不发布端口 |
 | 节点 id **不能含连字符** | 模型收到字面的 `{{#read-status.body#}}`，工作流仍 succeeded | `graphon` 的 `VARIABLE_PATTERN` 把节点段限定为 `[a-zA-Z0-9_]`；不匹配的占位符原样保留 |
 
 因此 Dify 侧的快照是**文本**：网关收到后严格解析成对象，并要求字段恰好是

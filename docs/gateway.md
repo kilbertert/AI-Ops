@@ -248,6 +248,17 @@ Gateway 使用只读 Redis 读取 `app:3rd_session:<thirdSession>`；Java 序列
 或其他端口；41 Gateway 只配置 `AIOPS_GATEWAY_KB_SERVICE_BASE_URL=http://127.0.0.1:29380`。
 这保持单一知识库资产、租户映射和模型配置，同时让 41 的会话/订单/诊断数据源独立。
 
+### App 聊天交给 Dify：固定版本与运行中取消
+
+Dify 聊天绑定中的 `workflow_id` 通过版本专用 Service API
+`POST /v1/workflows/{workflow_id}/run` 执行。另发新版不会改变已有绑定；保存草稿也不影响它。
+开始事件即把真实 `workflow_run_id`、`task_id` 关联到 QA，原 App 仍使用原 POST/GET。
+开始与完成事件的身份必须一致，缺失身份不能用配置值补齐。
+
+取消先落本地终态并撤销取数凭据，再用同 task/user 请求 Dify stop；ID 迟到也补停。
+停止失败不撤回本地取消，不保证外部模型即时停费。断流/超时不会重发启动请求。
+[隔离验收与边界](agents/consumer-order-chat/dify-chat-real-chain-evidence.md)。
+
 ### Dify 知识检索适配路由（#581 / PRD #577）
 
 Dify 控制台里给智能体挂「外接知识库」时，端点填 `https://<host>/v1/dify`、API Key 填
