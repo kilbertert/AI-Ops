@@ -28,3 +28,10 @@ uv run python tools/build_consumer_knowledge.py <私有原包目录> --output <�
 以[业务验收计划](qa-plan.md)执行：实际Chatflow编排，原App连续会话、适用知识、
 API异常/越权、安全优先、真实可播放媒体、实际人工入口逐项留证。导入成功不能代替这些结果。
 私有材料不提交，仓库只收工具、脱敏说明和合成测试。业务问答仍须按租户规则审核。
+
+## Chatflow Service API复跑
+
+`uv run python tools/verify_consumer_chatflow.py --out <私有报告.json>`
+启动一次性Dify1.17.1和官方provider，合成模型驱动真实Chatflow三轮；
+无宿主服务端口、无生产凭据。依赖已有Docker镜像及官方插件可下载。结束清理自己的容器与卷。
+`dify_chatflow.py`同时核对workflow_finished和message_end，固定版本与会话；调用方仍需实现范围授权。
