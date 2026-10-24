@@ -1413,18 +1413,18 @@ def main() -> int:
                 "conversation_variables": [],
             },
         )
-        published, _ = http_json(
-            f"{dify_base}/console/api/apps/{app_id}/workflows/publish",
-            method="POST",
-            headers=console,
-            body={},
-        )
+        # **这里刻意不调 Dify 的原生 publish。** 运营的「发布到 AI-Ops」必须自己
+        # 完成那一步；验收脚本替它做，就等于把这个缺口从证据里抹掉了 —— 实测正是
+        # 这样：脚本先 publish，于是"网关发布后指针切到 V2"永远成立，
+        # 而真实按钮走的那条路上根本没有这次 publish。
+        #
+        # 所以 V2 的身份要在**网关发布之后**才取得到，见下面的 `version_two`。
         _, detail = http_json(f"{dify_base}/console/api/apps/{app_id}", headers=console)
         version_two = detail.get("workflow", {}).get("id")
         check(
-            "已发布可区分的 V2",
-            saved == 200 and published == 200 and bool(version_two) and version_two != workflow_id,
-            {"save": saved, "publish": published},
+            "只保存草稿：Dify 侧仍只有 V1（尚未发布）",
+            saved == 200 and version_two == workflow_id,
+            {"save": saved, "workflow_id": version_two, "expected_v1": workflow_id},
         )
         # ---- M3-01 运营闭环：保存 / 试用 / 发布 / 撤回 / 恢复 ----
         #
@@ -1533,6 +1533,11 @@ def main() -> int:
                 body={"app_id": app_id},
             )
 
+        def _current_bound_workflow(db: Path, env_name: str) -> str:
+            """管理表此刻指向的那一版 workflow —— 恢复之后应当就是它。"""
+            row = ChatRouteBindingStore(db).get(env_name, TENANT, "consumer", "consumer_own_order_status")
+            return row.workflow_id if row is not None else ""
+
         def _dify_run_of(qa: dict[str, Any]) -> dict[str, Any]:
             """这一次真的走了 Dify 吗 —— 看**执行记录**，不看正文形状。
 
@@ -1560,7 +1565,12 @@ def main() -> int:
                 f"SELECT workflow_id FROM workflow_runs WHERE id = '{run_id}'",
                 timeout=20,
             )
-            return actual.stdout.strip()
+            observed = actual.stdout.strip()
+            if observed:
+                return observed
+            # Dify 库里查不到时退回**执行记录里冻结的那一个**：两者都是同一次运行
+            # 的身份，而恢复那一步会把 workflow 再发布一次，旧 run 的行可能已被归档。
+            return str(row.get("workflow_id") or "")
 
         # ① 保存 V2 草稿之后：App 仍跑 V1。草稿只在 Dify 里，路由指针没动。
         ModelHandler.state["prompts"] = []
@@ -1588,6 +1598,16 @@ def main() -> int:
             publish_status == 200 and isinstance(publish_body.get("version_no"), int),
             {"status": publish_status, "body": publish_body},
         )
+        # **发布之后**才取得到新的 workflow 身份：这正是「发布到 AI-Ops」要自己
+        # 完成 Dify 侧发布的原因。取到之后核对它确实变了。
+        _, detail_after = http_json(f"{dify_base}/console/api/apps/{app_id}", headers=console)
+        published_workflow = (detail_after or {}).get("workflow", {}).get("id")
+        check(
+            "运营发布之后 Dify 侧出现了新的已发布 workflow",
+            publish_status == 200 and bool(published_workflow) and published_workflow != workflow_id,
+            {"before": workflow_id, "after": published_workflow},
+        )
+        version_two = published_workflow or version_two
         if publish_status != 200:
             # 发布失败时把网关自己的原因收进来：响应只有稳定码，
             # "拉取失败"这三个字没有下一步。
@@ -1652,10 +1672,19 @@ def main() -> int:
         actual_after_restore = _own_workflow_of(after_restore)
         check(
             "显式恢复之后可再次执行",
+            # 恢复是**又一次发布**，Dify 因此会生成一个新的 workflow id —— 它既不是
+            # 最初的 V1 也不是 V2。判据因此不能写死那两个 id，而是要求：
+            # 真的走了 Dify（有 workflow_run_id）、终态 completed、且执行的就是
+            # 当前绑定指向的那一版。
             restored_status == 200
+            and bool(_dify_run_of(after_restore).get("workflow_run_id"))
             and after_restore.get("final", {}).get("status") == "completed"
-            and actual_after_restore in {workflow_id, version_two},
-            {"status": restored_status, "actual": after_restore.get("final", {}).get("status")},
+            and actual_after_restore == _current_bound_workflow(database, "env-local"),
+            {
+                "status": restored_status,
+                "actual": actual_after_restore,
+                "bound": _current_bound_workflow(database, "env-local"),
+            },
         )
 
         for version, marker in ():

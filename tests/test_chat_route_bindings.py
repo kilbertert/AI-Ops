@@ -541,3 +541,57 @@ def test_a_workflow_snapshot_keeps_the_existing_agent_config(tmp_path):
     assert merged["agent_type"] == "customer"
     assert merged["prompt"] == "ACCEPTANCE_VERSION_ONE"
     assert merged["kind"] == "dify-workflow"
+
+
+def test_a_workflow_publish_first_publishes_the_dify_draft(tmp_path, monkeypatch):
+    """「发布到 AI-Ops」必须**自己**把 Dify 的草稿发布成新版本。
+
+    运营的操作是：在控制台改 → 保存（只写 draft）→ 点「发布到 AI-Ops」。
+    最后一步如果不做 Dify 侧的发布，`workflow.id` 不变、`export` 还是上一版，
+    于是指针指向 V1 而界面上一切看起来都成功了。
+
+    实测时验收脚本自己先调了原生 publish，把这个缺口从证据里抹掉了 ——
+    这条用例守的正是那次删除。
+    """
+    from aiops_diagnostics import dify_dsl_pull as pull
+
+    calls: list[str] = []
+
+    class _Client:
+        def __init__(self, source):  # noqa: ARG002 - 只扮演形状
+            pass
+
+        def publish_workflow(self, app_id):
+            calls.append("publish_workflow")
+            return True
+
+        def published_workflow_id(self, app_id):
+            calls.append("published_workflow_id")
+            return WORKFLOW_V2
+
+        def export_dsl(self):
+            calls.append("export_dsl")
+            return "app:\n  mode: workflow\nworkflow:\n  graph:\n    nodes: []\n    edges: []\n"
+
+    monkeypatch.setattr(pull, "DifyDslClient", _Client)
+
+    class _Binding:
+        tenant_id = TENANT
+        business_entry = ENTRY
+        app_id = APP
+        agent_name = "小趋-客服"
+
+    class _Manager:
+        class store:
+            @staticmethod
+            def version(*args, **kwargs):
+                raise AssertionError("should not reach version() when the agent is missing")
+
+        @staticmethod
+        def list(context):
+            return []
+
+    outcome = pull.sync_workflow_from_dify(_Manager(), object(), _Binding(), object())
+    # 删掉 publish_workflow 之后，第一个被记录的会是 published_workflow_id —— 顺序即判据。
+    assert calls[:2] == ["publish_workflow", "published_workflow_id"], calls
+    assert outcome.action == "refused"  # 没有这个 agent，走到 refused 是对的

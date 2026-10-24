@@ -117,6 +117,10 @@ DIFY_EXPORT_PATH = "/console/api/apps/{app_id}/export"
 #: App 详情：返回里 ``workflow.id`` 才是**已发布 workflow 的身份**。
 #: 它不是 app_id，也不是 export 返回的 DSL 里任何字段 —— 三者必须分开取、分开存。
 DIFY_APP_DETAIL_PATH = "/console/api/apps/{app_id}"
+#: 把**草稿**发布成新的 workflow 版本。运营的「发布到 AI-Ops」必须自己走这一步：
+#: Dify 的保存只写 draft，`export` 读的是 `app_model_config_id` 那个指针，
+#: 而 `workflow.id` 在发布之前不会变 —— 不发布就等于把上一版又冻结了一次。
+DIFY_WORKFLOW_PUBLISH_PATH = "/console/api/apps/{app_id}/workflows/publish"
 DIFY_DATASET_PATH = "/console/api/datasets/{dataset_id}"
 DIFY_WORKSPACE_HEADER = "X-WORKSPACE-ID"
 #: 工作区的 API 工具提供方清单（#774）。返回的是 ``[{id, name, type, tools, …}]``，
@@ -224,6 +228,40 @@ class DifyDslClient:
         if not isinstance(identifier, str) or not identifier.strip():
             raise DifyDslMalformed("Dify app 详情里没有已发布 workflow 的 id")
         return identifier.strip()
+
+    def publish_workflow(self, app_id: str | None = None) -> bool:
+        """把**已保存的草稿**发布成新的 workflow 版本。
+
+        运营的工作流是：在控制台改 → 保存（只写 draft）→ 点「发布到 AI-Ops」。
+        最后那一步必须**自己**完成 Dify 侧的发布，否则冻结的还是上一版，
+        指针也会指向上一版 —— 而界面上一切看起来都成功了。
+
+        Dify 对"草稿与已发布一致"的重复发布是幂等的，所以这里不先比对。
+        """
+        target = (app_id or self.source.app_id).strip()
+        if not _APP_ID.fullmatch(target):
+            raise ValueError("Dify app id is invalid")
+        headers = {
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+            "Authorization": bearer_auth_header(self.source.api_key),
+        }
+        if self.source.workspace_id:
+            headers[DIFY_WORKSPACE_HEADER] = self.source.workspace_id
+        payload = request_json(
+            RequestSpec(
+                url=join_url(self.base_url, DIFY_WORKFLOW_PUBLISH_PATH.format(app_id=target)),
+                method="POST",
+                headers=headers,
+                body=b"{}",
+                timeout=self.source.timeout,
+            ),
+            mapping=_error_mapping(),
+            envelope=lambda value, mapping: value,
+            retry=_EXPORT_RETRY,
+        )
+        # 成功形状是 `{"result": "success", ...}`；没有这个字段就当作没发布成。
+        return isinstance(payload, dict) and payload.get("result") == "success"
 
     def tool_provider_ids(self) -> dict[str, str]:
         """``provider_name → ApiToolProvider.id`` for this workspace's API tools.
@@ -1028,6 +1066,11 @@ def sync_workflow_from_dify(
     按构造是 `unchanged`，重复点发布是 no-op。
     """
     client = DifyDslClient(source)
+    # **先把草稿发布成新版本**，再取身份与内容。运营的「发布到 AI-Ops」就是最后
+    # 那一步：只保存不发布时，`workflow.id` 不变、`export` 也还是上一版，于是
+    # 指针会指向 V1 而界面上一切看起来都成功了。
+    if not client.publish_workflow(binding.app_id):
+        raise DifyDslMalformed("Dify did not confirm the workflow publish")
     workflow_id = client.published_workflow_id(binding.app_id)
     dsl_text = client.export_dsl()
     document = yaml.safe_load(dsl_text)
