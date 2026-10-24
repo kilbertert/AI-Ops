@@ -1,115 +1,78 @@
-"""Dify 数据集同步的并发闸（#1056 / ADR-0122）。
+"""Dify 数据集同步的并发闸（#1056 / ADR-0122 / ADR-0125）。
 
 ## 它守的是什么
 
-`POST /v1/internal/knowledge/sync` 会在运营打开「添加知识库」弹窗时触发一次收敛。
-**两个运营（或同一个人的两个标签页）同时打开，就是两个并发 pass。**
+`POST /v1/internal/knowledge/sync` 在运营打开「添加知识库」弹窗时、以及 Dify 知识库页
+每 `visibilitychange` / 60 秒各触发一次。**两个运营（或同一个人的两个标签页）同时打开，
+就是两个并发 pass。**
 
 两个 pass 各自读一次 Dify 的 dataset 列表、各自发现"这个库还没有"、各自去建 ——
 而 Dify 对 `(tenant, name)` **没有唯一约束**。输的那一方留下的是一条重复的 dataset，
 运营会看到两个同名条目，删一个还得先确认哪个是活的。
 
-## 两件东西
+## 为什么是「排队」而不是「跳过」，也不是「时间下限」
 
-1. **一把非阻塞锁**：同一时刻只跑一个 pass。拿不到锁就跳过 —— 另一个 pass 正在做
-   同一件事，等它做完比排队重做更合理。
-2. **一个租户级下限**：同一个租户在 `RETRY_FLOOR_SECONDS` 内不重复尝试。连续打开
-   弹窗（看一眼就走、再打开）是最常见的操作，没有下限就是每次都全量比对一遍。
+这个模块的前两版都错在**丢**上，而丢掉的那一次恰好是用户最需要它的一次：
 
-**成功与失败都有下限**，但失败的下限短得多（见 `FAILURE_FLOOR_SECONDS`）：
-一次上游抖动之后，运营重新打开弹窗时应该**能重试**，而不是被自己刚才的失败挡住
-半分钟。
+1. **第一版：拿不到锁就跳过。** 并发时输的一方直接返回 `created: 0`，于是它所在
+   的标签页不刷新列表 —— 运营刚建完的库就在眼前，页面却不动。
+2. **第二版：加成功/失败时间下限（15s / 5s）。** 从 RAGFlow 建完库切回 Dify，落进
+   「上一次成功才 9 秒前」的窗口里，pass 被静默挡掉。2026-10-24 真机实测：
+   `08:16:52 created=0`、`08:17:01 created=0`（相隔 9 秒，被下限吞了）、
+   `08:18:14 created=1` 才补上 —— 运营看到的就是"要等一分钟 / 要硬刷新"。
+
+**时间下限是在断言"上游这 15 秒内不会变"，而这恰恰是不成立的**：运营在 RAGFlow 里
+建库、然后切回来，就是在这 15 秒里发生的。
+
+所以现在的语义是：**在飞时排队等它跑完，再跑自己这一次。** 排队后的那一次读到的是
+最新状态，`created` 回来的是真数字，前端照常刷新。扫码式连打（连开两次弹窗）的代价
+是第二次多一次只读比对 —— 幂等，且 `created=0` 时前端不失效列表。
 
 ## 它不做什么
 
-- 不重试。一次失败就是一次失败；下一次打开弹窗自然会再来。
-- 不写日志之外的状态。进程重启后下限重置 —— 那是对的，重启后本来就该重新比对。
-- 不决定同步什么。它只决定"现在要不要跑这一次"，`dify_knowledge_datasets` 决定跑什么。
+- 不重试。一次失败就是一次失败；下一次触发自然会再来。
+- 不记忆任何跨请求状态。它只有一把锁，不存时间戳 —— 重启后没有需要重置的东西。
+- 不决定同步什么。它只决定"现在要不要跑、要不要等"，`dify_knowledge_datasets` 决定跑什么。
 """
 
 from __future__ import annotations
 
 import threading
-import time
 from collections.abc import Callable
-from dataclasses import dataclass
 from typing import Any
 
-#: 成功之后多久内不再重复尝试。选择器可能在几秒内被重开，15 秒足够收掉这种连打，
-#: 又短到"刚建的库"在下次打开时一定可见。
-RETRY_FLOOR_SECONDS = 15.0
-
-#: 失败之后多久内不再重复尝试。比成功的短：一次抖动之后，运营重开弹窗应该能重试，
-#: 而不是被自己刚才的失败挡住。
-FAILURE_FLOOR_SECONDS = 5.0
-
-
-@dataclass
-class _Attempt:
-    at: float
-    ok: bool
-    detail: str = ""
+#: 排队上限。一次 pass 是「读一次 Dify 列表 + 建缺的那几条」，实测秒级；30 秒足够
+#: 收掉任何真实并发，又远短于运营会去硬刷新的耐心。超时说明上游卡住了 —— 那时跳过
+#: 比让请求无限挂着好，下一次触发（60 秒轮询）会再来。
+WAIT_SECONDS = 30.0
 
 
 class KnowledgeDatasetSyncGuard:
-    """One pass at a time, with a short per-tenant floor between attempts."""
+    """One pass at a time; a concurrent caller waits for it, then runs its own."""
 
-    def __init__(
-        self,
-        *,
-        clock: Callable[[], float] = time.monotonic,
-        success_floor: float = RETRY_FLOOR_SECONDS,
-        failure_floor: float = FAILURE_FLOOR_SECONDS,
-    ) -> None:
-        self._clock = clock
-        self._success_floor = success_floor
-        self._failure_floor = failure_floor
-        self._attempts: dict[str, _Attempt] = {}
-        # 非阻塞：拿不到就说明另一 pass 在跑，跳过比排队正确（它做的是同一件事）。
+    def __init__(self, *, wait: float = WAIT_SECONDS) -> None:
+        self._wait = wait
+        # ponytail: 一把全局锁，跨租户串行。触发点是「打开弹窗 / 切回页面」这类低频
+        # 人工动作，串行几十毫秒不是问题；真出现多租户打满再改成按租户分锁。
         self._lock = threading.Lock()
 
-    def run(self, *, tenant_id: str, work: Callable[[], Any]) -> str:
-        """Run ``work()`` unless suppressed. Returns a short outcome; never raises.
+    def run(self, *, work: Callable[[], Any]) -> str:
+        """Run ``work()`` after any in-flight pass. Returns a short outcome; never raises.
 
-        **绝不抛**：调用方是「添加知识库」弹窗路径上的一次后台调用，一次失败不该
-        让弹窗报错（ADR-0122 约束 1）。返回值只用来写日志。
+        **绝不抛**：调用方在弹窗与页面后台路径上，一次失败不该让用户看到报错
+        （ADR-0122 约束 1）。返回值只用来写日志。
         """
-        now = self._clock()
-        previous = self._attempts.get(tenant_id)
-        if previous is not None:
-            floor = self._success_floor if previous.ok else self._failure_floor
-            if now - previous.at < floor:
-                return "skipped (recent)"
-
-        if not self._lock.acquire(blocking=False):
-            # 另一个 pass 正在跑。**不更新本租户的时间戳** —— 那次 pass 可能属于
-            # 别的租户，把这次记成"刚跑过"会让本租户在它结束后被误挡。
-            return "skipped (another sync in flight)"
+        if not self._lock.acquire(timeout=self._wait):
+            return "skipped (another sync still in flight)"
         try:
-            now = self._clock()
-            previous = self._attempts.get(tenant_id)
-            if previous is not None:
-                floor = self._success_floor if previous.ok else self._failure_floor
-                if now - previous.at < floor:
-                    return "skipped (raced)"
             try:
                 result = work()
             except Exception as exc:  # noqa: BLE001 - constraint 1
-                self._attempts[tenant_id] = _Attempt(at=now, ok=False, detail=type(exc).__name__)
                 return f"failed: {type(exc).__name__}"
-            applied = len(getattr(result, "writes", ()) or ())
-            self._attempts[tenant_id] = _Attempt(at=now, ok=True, detail=f"{applied} writes")
-            return f"ok ({applied} write(s))"
         finally:
             self._lock.release()
-
-    def forget(self, tenant_id: str) -> None:
-        """Drop the memo for one tenant — for an explicit operator-triggered resync."""
-        self._attempts.pop(tenant_id, None)
+        applied = len(getattr(result, "writes", ()) or ())
+        return f"ok ({applied} write(s))"
 
 
-__all__ = [
-    "FAILURE_FLOOR_SECONDS",
-    "KnowledgeDatasetSyncGuard",
-    "RETRY_FLOOR_SECONDS",
-]
+__all__ = ["KnowledgeDatasetSyncGuard", "WAIT_SECONDS"]
