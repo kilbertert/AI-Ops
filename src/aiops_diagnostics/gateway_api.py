@@ -6616,6 +6616,8 @@ def _require_current_chat_node_order(context, caller, qa, request):
     except chat_execution.ChatRunUnavailable as exc:
         raise StandardAPIError(exc.http_status, exc.code, str(exc), retryable=exc.retryable) from exc
     if binding is None:
+        if _route_binding_state(context, located.chat_binding) == "retracted":
+            raise StandardAPIError(410, "CHAT_ROUTE_RETRACTED", "this version was retracted")
         raise StandardAPIError(404, "CHARGING_STATUS_DISABLED", "charging status disabled")
 
     # 与委派入口同一条纪律：**先用可能阻塞的授权，再读记录做本地判定**。
