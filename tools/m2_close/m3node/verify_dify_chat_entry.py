@@ -43,7 +43,6 @@ from pathlib import Path
 from typing import Any
 from urllib import error as urllib_error
 from urllib import request as urllib_request
-from uuid import UUID
 
 REPO = Path(__file__).resolve().parents[3]
 DIFY_DIR = REPO / "deploy/dify-chat"
@@ -1018,6 +1017,105 @@ def _seed_agent(database: Path, tenant_id: str, *, name: str = "小趋-客服") 
         return False
 
 
+def _export_workflow_content(
+    dify_base: str, console: dict[str, str], app_id: str, workflow_id: str
+) -> dict[str, Any]:
+    """按**指定的已发布 workflow id** 导出并规范化内容。
+
+    Dify 契约：`export` 带 `workflow_id` 读已发布版，不带读 draft。恢复判据要的是
+    "V1 那一版的图"，所以必须带 id。
+    """
+    import yaml
+
+    from aiops_diagnostics.dify_dsl_pull import workflow_content
+
+    status, text = http(
+        f"{dify_base}/console/api/apps/{app_id}/export?workflow_id={workflow_id}",
+        headers=console,
+    )
+    if status != 200:
+        return {}
+    payload = _json(text) or {}
+    dsl = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(dsl, str) or not dsl.strip():
+        return {}
+    try:
+        yaml.safe_load(dsl)
+        return workflow_content(dsl)
+    except Exception:  # noqa: BLE001 - 导不出来就留空，restore 会以 409 说明
+        return {}
+
+
+def _make_v1_a_workflow_snapshot(
+    database: Path,
+    tenant_id: str,
+    *,
+    app_id: str,
+    workflow_id: str,
+    workspace_id: str,
+    workflow: dict[str, Any] | None = None,
+    version_no: int = 1,
+) -> bool:
+    """把基线版本 v1 改写成**workflow 形态**的快照。
+
+    真实部署里 V1 也是"发布过的 workflow"，快照里带着 `kind`/`app_id`/`workspace_id`/
+    `workflow_id`。只造一条 AgentConfig 基线会让版本列表看不见 V1（它按
+    `kind == dify-workflow` 与 app/workspace 过滤），于是"恢复 V1"根本无从选起 ——
+    而那个症状看起来像"恢复功能坏了"。
+    """
+    try:
+        with sqlite3.connect(database) as connection:
+            connection.row_factory = sqlite3.Row
+            row = connection.execute(
+                "SELECT agent_id, snapshot_json FROM agent_versions WHERE tenant_id = ? AND version_no = ?",
+                (tenant_id, version_no),
+            ).fetchone()
+            if row is None:
+                return False
+            snapshot = json.loads(row["snapshot_json"] or "{}")
+            snapshot.update(
+                {
+                    "kind": "dify-workflow",
+                    "app_id": app_id,
+                    "workspace_id": workspace_id,
+                    "workflow_id": workflow_id,
+                    "workflow": workflow or {"graph": {"nodes": [], "edges": []}},
+                }
+            )
+            connection.execute(
+                "UPDATE agent_versions SET snapshot_json = ? WHERE tenant_id = ? AND version_no = ?",
+                (json.dumps(snapshot), tenant_id, version_no),
+            )
+            connection.commit()
+        return True
+    except sqlite3.Error:
+        return False
+
+
+def _snapshot_workflow_of(database: Path, tenant_id: str, version_no: int | None) -> str:
+    """历史版本快照里冻结的 workflow_id —— 恢复的目标就是它。
+
+    读**不可变快照**而不是"当前绑定"：后者会让"重发当前草稿"也看起来像恢复成功。
+    """
+    if version_no is None or not database.exists():
+        return ""
+    conn = sqlite3.connect(database)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(
+            "SELECT snapshot_json FROM agent_versions WHERE tenant_id = ? AND version_no = ?",
+            (tenant_id, version_no),
+        ).fetchall()
+    finally:
+        conn.close()
+    for row in rows:
+        snapshot = json.loads(row["snapshot_json"] or "{}")
+        identifier = snapshot.get("workflow_id")
+        if isinstance(identifier, str) and identifier:
+            return identifier
+    return ""
+
+
 def _row_for_qa(rows: list[dict[str, Any]], qa_id: str | None) -> dict[str, Any]:
     """**按 QA 认行**，不按位置取。
 
@@ -1500,9 +1598,22 @@ def main() -> int:
         )
         workspace_seeded = _seed_workspace(database, TENANT, workspace_id, "dify-chat-acceptance")
         agent_seeded = _seed_agent(database, TENANT)
+        # V1 必须是**workflow 形态**的已发布快照：版本列表按 kind/app/workspace 过滤，
+        # 只造 AgentConfig 基线会让"恢复 V1"没有可选的来源。
+        # V1 的**真实图**：按它的 workflow_id 从 Dify 导出。空图会让恢复时的
+        # "内容必须与快照逐字一致"判据 409 —— 而那个 409 看起来像恢复功能坏了。
+        v1_content = _export_workflow_content(dify_base, console, app_id, workflow_id)
+        v1_shaped = _make_v1_a_workflow_snapshot(
+            database,
+            TENANT,
+            app_id=app_id,
+            workflow_id=workflow_id,
+            workspace_id=workspace_id,
+            workflow=v1_content,
+        )
         check(
             "运营闭环前置：注册表 / workspace / agent 就绪",
-            registry_seeded and workspace_seeded and agent_seeded,
+            registry_seeded and workspace_seeded and agent_seeded and v1_shaped,
             {
                 "registry": registry_seeded,
                 "workspace": workspace_seeded,
@@ -1664,60 +1775,63 @@ def main() -> int:
             ).fetchone()[0]
         check("撤回保留 retracted 行（不删行）", kept == 1, {"rows": kept})
 
-        # ④ 显式恢复 V1：另一次发布，不隐式回落。
-        restored_status, restored_body = _publish_app()
+        # ④ 显式恢复**历史 V1**：从不可变快照选版本，不是"再发一次当前草稿"。
+        #
+        # 这两种动作在旧脚本里被混为一谈：它调 `_publish_app()`（重发当前草稿）然后
+        # 比较"当前绑定"，于是"恢复 V1"永远成立而什么也没恢复。
+        versions_status, versions_body = http_json(
+            f"{gateway_base}/v1/dify/versions",
+            method="POST",
+            headers=publish_headers,
+            body={"app_id": app_id},
+        )
+        available = [item.get("version_no") for item in (versions_body or {}).get("versions", [])]
+        restore_target = 1 if 1 in available else None
+        check(
+            "版本列表里能看见可恢复的历史版本",
+            versions_status == 200 and restore_target is not None,
+            {"status": versions_status, "versions": available},
+        )
+        restored_status, restored_body = (
+            http_json(
+                f"{gateway_base}/v1/dify/restore",
+                method="POST",
+                headers=publish_headers,
+                body={"app_id": app_id, "version_no": restore_target},
+            )
+            if restore_target is not None
+            else (0, {})
+        )
         ModelHandler.state["prompts"] = []
         after_restore = _drive(gateway_base, Path(diag["case_root"]))
         report["chain_after_restore"] = after_restore
         actual_after_restore = _own_workflow_of(after_restore)
+        restored_workflow = _snapshot_workflow_of(database, TENANT, restore_target)
         check(
-            "显式恢复之后可再次执行",
-            # 恢复是**又一次发布**，Dify 因此会生成一个新的 workflow id —— 它既不是
-            # 最初的 V1 也不是 V2。判据因此不能写死那两个 id，而是要求：
-            # 真的走了 Dify（有 workflow_run_id）、终态 completed、且执行的就是
-            # 当前绑定指向的那一版。
+            "显式恢复之后实际执行的是 V1 那一版",
+            # 恢复不是"再发一次当前草稿"：指针要回到**历史快照里的那个 workflow_id**，
+            # 而且这一轮真的走了 Dify、执行的就是它。只比较"当前绑定"会让
+            # "重发 V2"也通过 —— 那正是旧脚本的错误。
             restored_status == 200
             and bool(_dify_run_of(after_restore).get("workflow_run_id"))
             and after_restore.get("final", {}).get("status") == "completed"
-            and actual_after_restore == _current_bound_workflow(database, "env-local"),
+            and bool(restored_workflow)
+            and actual_after_restore == restored_workflow
+            and restored_workflow != version_two,
             {
                 "status": restored_status,
                 "actual": actual_after_restore,
-                "bound": _current_bound_workflow(database, "env-local"),
+                "snapshot_v1": restored_workflow,
+                "v2": version_two,
             },
         )
 
-        for version, marker in ():
-            ModelHandler.state["prompts"] = []
-            selected = _drive(gateway_base, Path(diag["case_root"]))
-            selected_row = _row_for_qa(selected.get("rows") or [], selected.get("qa_id"))
-            observed_run_id = selected_row.get("workflow_run_id", "")
-            UUID(observed_run_id)
-            actual = _compose(
-                env,
-                "exec",
-                "-T",
-                "db_postgres",
-                "psql",
-                "-U",
-                "dify",
-                "-d",
-                "dify",
-                "-Atc",
-                f"SELECT workflow_id FROM workflow_runs WHERE id = '{observed_run_id}'",
-                timeout=20,
-            )
-            actual_workflow_id = actual.stdout.strip()
-            prompts = ModelHandler.state.get("prompts", [])
-            check(
-                f"绑定 {'V2' if marker else 'V1'} 实际执行同版",
-                selected.get("final", {}).get("status") == "completed"
-                and actual.returncode == 0
-                and actual_workflow_id == version
-                and bool(prompts)
-                and all(("ACCEPTANCE_VERSION_TWO" in prompt) == marker for prompt in prompts),
-                {"workflow_id": actual_workflow_id, "expected": version, "prompts": len(prompts)},
-            )
+        # 旧脚本这里是一个**空循环** `for version, marker in ()` —— 它写着"绑定 V1/V2
+        # 实际执行同版"，但一次都没跑过。那个判据现在由运营闭环的③④两段承担：
+        #   * 发布后执行 V2（`actual_after_publish == version_two`）
+        #   * 恢复后执行 V1（`actual_after_restore == restored_workflow`）
+        # 两者都要求"这一轮真的有 workflow_run_id"，并用 Dify 执行库里的身份核对。
+        # 删掉空循环而不是留着它：一个永远不执行的判据比没有更糟 —— 它让人以为覆盖了。
 
         # 模型已开始且未结束时取消；直接读取真 Dify 的 stop 标志，不能用本地终态代替。
         ModelHandler.hold = True

@@ -22,7 +22,6 @@ import pytest
 
 from aiops_diagnostics import chat_data_grant, chat_execution
 from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
-from aiops_diagnostics.dify_run_store import DifyRunStore
 from aiops_diagnostics.dify_workflow_trial import WorkflowTrial
 from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
 
@@ -228,9 +227,11 @@ def test_the_temporary_app_is_always_deleted(tmp_path, monkeypatch):
         _draft(route).execute(runtime, "tr_ok", _scope(), "ORDER-1", "zh")
     assert admin.deleted == admin.imported
 
-    with _trial_env(tmp_path / "boom", monkeypatch, engine_fail=True) as (runtime, route, admin, _e):
-        with pytest.raises(RuntimeError):
-            _draft(route).execute(runtime, "tr_fail", _scope(), "ORDER-1", "zh")
+    with (
+        _trial_env(tmp_path / "boom", monkeypatch, engine_fail=True) as (runtime, route, admin, _e),
+        pytest.raises(RuntimeError),
+    ):
+        _draft(route).execute(runtime, "tr_fail", _scope(), "ORDER-1", "zh")
     assert admin.deleted == admin.imported, "失败路径也要删"
 
 
