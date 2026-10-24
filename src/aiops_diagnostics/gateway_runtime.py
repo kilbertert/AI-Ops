@@ -1770,6 +1770,19 @@ class GatewayRuntime:
             self.store.update_assistant_question(run.qa_id, status="cancelled")
             # 只有拿到了 task_id 才停得下来；Dify 停不下来**不能**撤回本地取消。
             #
+            # **试用必须走它自己装的 interrupt。** 试用跑在 `WorkflowTrial.execute()`
+            # 导入的**临时应用**里，任务属于那个应用，而这里手上只有源应用的凭据 ——
+            # 用源应用凭据去停临时应用的 task 是停不下来的（Dify 会答"没有这个任务"），
+            # 于是本地已取消、Dify 还在烧模型直到跑完或超时。试用在开始事件里就把
+            # `registration.interrupt` 设成了**用临时应用凭据 + 那个 task_id** 的闭包，
+            # 直接调它即可；它也不会因为"开始事件不再触发"而失效。
+            if run.task_id and registration is not None:
+                interrupt = getattr(registration, "interrupt", None)
+                if callable(interrupt) and getattr(run, "kind", "chat") == "trial":
+                    with contextlib.suppress(Exception):  # 停不下来不影响本地取消
+                        interrupt()
+                    settled.append(run.run_id)
+                    continue
             # 凭据**不能**通过 `binding_for_key` 取：撤回已经把那一行改成 `retracted`，
             # 而 `binding_for_key` 只返回活动行 —— 于是这次 stop 会被静默跳过，Dify
             # 继续消耗模型直到完成或超时。要的是被撤回那一版自己的凭据路径，

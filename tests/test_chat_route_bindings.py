@@ -796,3 +796,59 @@ def test_a_rebound_new_app_publishes_instead_of_reusing_the_old_workflow(tmp_pat
     assert first.action == "synced", first
     assert second.action == "synced", "改绑到新应用后必须正常发布，不能因旧 id 崩掉"
     assert second.workflow_id == own_workflow[new_app], "新应用必须冻结**它自己**的版本"
+
+
+def test_retracting_settles_a_live_trial_with_the_trials_own_credentials(tmp_path):
+    """撤回时，在飞的**试用**必须用它**自己**的 interrupt 停下。
+
+    试用跑在临时应用里，任务属于那个应用；收敛循环手上只有**源应用**的凭据，
+    拿它去停临时应用的 task 停不下来 —— 本地已取消、Dify 仍烧模型直到跑完或超时。
+    试用在开始事件里就装好了"临时应用凭据 + 该 task_id"的闭包，收敛要走它。
+    """
+    import os
+
+    from aiops_diagnostics.config import Settings
+    from aiops_diagnostics.gateway_config import GatewayServerSettings
+    from aiops_diagnostics.gateway_runtime import GatewayRuntime, JobRegistration
+    from aiops_diagnostics.gateway_store import GatewayStore
+
+    os.chmod(tmp_path, 0o750)
+    config = tmp_path / "production.env"
+    config.write_text("# test\n", encoding="utf-8")
+    os.chmod(config, 0o600)
+    settings = GatewayServerSettings(
+        data_home=tmp_path, database_file=tmp_path / "gateway.db", server_config_file=config
+    )
+    runtime = GatewayRuntime(GatewayStore(settings.database_file), settings, Settings())
+
+    route_key = f"{SCENARIO}:{ENVIRONMENT}:{TENANT}"
+    for run_id, kind in (("run_trial", "trial"), ("run_chat", "chat")):
+        runtime.dify_run_store.issue(
+            run_id=run_id,
+            qa_id=f"qa_{run_id}",
+            scope_fingerprint="f" * 64,
+            scope_json=json.dumps({"caller": {}, "subject": {}, "effective_tenant_id": TENANT}),
+            binding_key=route_key,
+            order_no="ORDER-1",
+            environment=ENVIRONMENT,
+            tenant_id=TENANT,
+            app_id=APP,
+            workflow_id=WORKFLOW_V1,
+            grant_id=f"g_{run_id}",
+            kind=kind,
+        )
+        runtime.dify_run_store.bind_workflow(run_id, workflow_run_id="wf-run", task_id=f"task_{run_id}")
+
+    stopped: list[str] = []
+    trial_registration = JobRegistration(route_type="trial")
+    trial_registration.interrupt = lambda: stopped.append("trial")
+    runtime._qa_registrations["qa_run_trial"] = trial_registration
+    # 聊天运行没有登记：它会走"按管理行凭据 stop"那条路（这里没有行，静默跳过）——
+    # 正是这条差别证明了试用**不是**靠源应用凭据被停下的。
+
+    runtime.settle_retracted_runs(environment=ENVIRONMENT, tenant_id=TENANT, scenario=SCENARIO)
+
+    assert stopped == ["trial"], "试用必须走它自己的 interrupt，不能拿源应用凭据去停"
+    assert trial_registration.cancelled is True
+    assert runtime.dify_run_store.get("run_trial").state == "cancelled"
+    assert runtime.dify_run_store.get("run_chat").state == "cancelled"
