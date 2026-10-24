@@ -11,8 +11,9 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 
-@pytest.mark.parametrize("fail_reload", [False, True])
-def test_bridge_install_restores_all_files_if_reload_fails(tmp_path, fail_reload):
+@pytest.mark.parametrize("failure", ["none", "reload", "transient_route", "permanent_route"])
+def test_bridge_install_waits_for_new_routes_or_restores_all_files(tmp_path, failure):
+    fail_reload = failure in {"reload", "permanent_route"}
     bundle = tmp_path / "bundle"
     bundle.mkdir()
     package = bundle / "aiops_diagnostics"
@@ -39,13 +40,18 @@ def test_bridge_install_restores_all_files_if_reload_fails(tmp_path, fail_reload
         '#!/bin/sh\nif [ "$*" = "-s reload" ] && [ -f "$FAIL_RELOAD" ]; then rm "$FAIL_RELOAD"; exit 1; fi\n'
     )
     nginx.chmod(0o700)
-    if fail_reload:
+    if failure == "reload":
         (tmp_path / "fail").touch()
+    if failure == "transient_route":
+        (tmp_path / "old-route").touch()
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     for name, body in {
         "systemctl": "exit 0",
-        "curl": 'while [ "$1" != "-o" ]; do shift; done; '
+        "sleep": "exit 0",
+        "curl": 'if [ "$ROUTE_FAILURE" = permanent_route ] || [ -f "$OLD_ROUTE" ]; then '
+        'rm -f "$OLD_ROUTE"; printf 404; exit 0; fi; '
+        'while [ "$1" != "-o" ]; do shift; done; '
         'printf \'{"published":false,"action":"","reason":"refused"}\' > "$2"; printf 403',
     }.items():
         path = bin_dir / name

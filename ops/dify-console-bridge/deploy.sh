@@ -53,11 +53,21 @@ systemctl start "$service"
 systemctl is-active --quiet "$service"
 # 没有会话的请求必须由桥拒绝；若仍落进 Dify 的 HTML/404，部署不算成功。
 for route in retract restore versions; do
-  status=$(curl --retry 5 --retry-connrefused --retry-delay 1 --max-time 5 \
-    -sS -o "$backup/probe.json" -w '%{http_code}' -X POST "http://127.0.0.1:10008/__aiops/$route" \
-    -H 'Content-Type: application/json' --data '{}')
-  [ "$status" = 403 ] || { echo "$route: HTTP $status" >&2; exit 1; }
-  python3 -c 'import json,sys; b=json.load(open(sys.argv[1])); assert b["published"] is False and b["action"] == "" and b["reason"]' "$backup/probe.json"
+  ready=false
+  # reload 只发送信号：旧 worker 退出前仍可能返回旧路由的 HTML/404。
+  for _attempt in {1..15}; do
+    status=$(curl --max-time 2 -sS -o "$backup/probe.json" -w '%{http_code}' \
+      -X POST "http://127.0.0.1:10008/__aiops/$route" \
+      -H 'Content-Type: application/json' --data '{}') || status=000
+    if [ "$status" = 403 ] && python3 -c \
+      'import json,sys; b=json.load(open(sys.argv[1])); assert b["published"] is False and b["action"] == "" and b["reason"]' \
+      "$backup/probe.json" 2>/dev/null; then
+      ready=true
+      break
+    fi
+    sleep 1
+  done
+  "$ready" || { echo "$route: 未就绪，最后 HTTP $status" >&2; exit 1; }
 done
 trap - EXIT
 printf 'installed revision=%s backup=%s\n' "$(cat "$bundle/REVISION")" "$backup"
