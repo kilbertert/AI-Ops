@@ -854,3 +854,74 @@ def test_a_chat_app_publish_does_not_require_a_workflow_pointer(tmp_path, monkey
     from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
 
     assert ChatRouteBindingStore(tmp_path / "gateway.db").all() == ()
+
+
+def test_a_slow_publish_cannot_undo_a_retraction_that_happened_meanwhile(tmp_path, monkeypatch) -> None:
+    """发布在等 Dify 时被撤回 ⇒ 这次发布必须**冲突**，不能把撤回覆盖掉。
+
+    revision 必须在**外部同步之前**快照。等同步回来再读，读到的是撤回之后的
+    revision，于是这次发布仍会 CAS 通过，把一次已成功的撤回重新置为 active
+    （Codex 复核实测：V1 → 撤回 → 延迟发布推进，最终 active / revision 3 / V2）。
+    """
+    from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
+    from aiops_diagnostics.dify_dsl_pull import SyncOutcome
+
+    runtime = _Runtime()
+    monkeypatch.setattr(runtime.dify_app_registry, "all", lambda: (_binding(),))
+    db = tmp_path / "gateway.db"
+    client = _client(
+        tmp_path,
+        runtime,
+        dify_publish_api_key=PUBLISH_KEY,
+        chat_route_bindings_file=str(db),
+        chat_dify_key_dir=str(tmp_path),
+        # 发布前置要求执行地址已配置：没有它会在写指针**之前**就被拒，
+        # 用例于是"因为别的原因"拿到 409 —— 那种绿什么都守不住。
+        dify_chat_base_url="http://dify.invalid:5001",
+    )
+    client.app.state.gateway.settings.execution_environment = "41"
+    key = tmp_path / f"{APP_ID}.key"
+    key.write_text("service-key\n")
+    key.chmod(0o600)
+    store = ChatRouteBindingStore(db)
+    store.publish(
+        environment="41",
+        tenant_id="T-1",
+        entry="consumer",
+        scenario="consumer_own_order_status",
+        engine="dify",
+        agent_id="小趋-客服",
+        agent_version_no=1,
+        app_id=APP_ID,
+        workflow_id="wf-v1",
+        workflow_key_ref=str(key),
+    )
+
+    def slow_sync(context, binding, source, admin):
+        # 同步期间另一名运营撤回了这条路由。
+        store.retract(
+            environment="41",
+            tenant_id="T-1",
+            entry="consumer",
+            scenario="consumer_own_order_status",
+        )
+        return SyncOutcome(
+            binding.tenant_id,
+            binding.business_entry,
+            binding.app_id,
+            binding.agent_name,
+            "synced",
+            2,
+            workflow_id="wf-v2",
+        )
+
+    # 发布走的是 `_sync_bound_app` → 它会先试 chat 的映射，失败再走 workflow 的。
+    # 这里直接替换**网关里的分派函数**，确保"慢同步"真的发生在这个窗口里。
+    import aiops_diagnostics.gateway_api as gateway_api
+
+    monkeypatch.setattr(gateway_api, "_sync_bound_app", slow_sync)
+    response = client.post("/v1/dify/publish", json={"app_id": APP_ID}, headers=RETRACT_HEADERS)
+    final = store.get("41", "T-1", "consumer", "consumer_own_order_status")
+    assert response.status_code == 409, (response.text, final.state, final.agent_version_no)
+    assert final.state == "retracted", "撤回不能被这次延迟的发布覆盖"
+    assert final.agent_version_no == 1

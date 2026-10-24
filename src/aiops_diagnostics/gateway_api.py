@@ -901,6 +901,15 @@ def _publish_bound_app(
             console.ops_bindings_file, console.environment, binding.tenant_id, app_id
         ),
     )
+    # **revision 必须在外部同步之前快照。** 同步期间可能有人撤回或另发一版；
+    # 等同步回来再读，读到的是**对方之后的** revision，于是这次发布仍会 CAS 通过，
+    # 把一次已经成功的撤回重新置为 active —— 实测复现过（V1 → 撤回 → 延迟发布
+    # 推进，最终 active / revision 3 / V2）。用快照值推进，期间有变动就冲突。
+    expected_revision = _current_route_revision(
+        context,
+        binding,
+        str(getattr(context.settings, "execution_environment", "") or ""),
+    )
     try:
         outcome = _sync_bound_app(
             context,
@@ -940,7 +949,9 @@ def _publish_bound_app(
     #
     # 跨系统没有事务：Dify 那边已经发布了，本地这一步仍可能失败。失败时**保留旧正式版**
     # 并如实抛错（不伪称成功），任务书对这条的要求是"报未完成"，不是"补一个异步重试"。
-    _advance_route_binding(context, outcome, binding, initiator=initiator)
+    _advance_route_binding(
+        context, outcome, binding, initiator=initiator, expected_revision=expected_revision
+    )
 
     # 成功：记版本号与动作（``synced`` / ``unchanged``）。``unchanged`` 也是"成功的一次
     # 发布尝试"，只是内容没变 —— 审计要能分辨它，否则"某人点了一百次但什么都没发"与
@@ -965,8 +976,35 @@ def _publish_bound_app(
     }
 
 
+def _current_route_revision(context: Any, binding: Any, environment: str) -> int | None:
+    """外部同步**之前**这条路由的 revision；没有行时 0。
+
+    同步可能耗时几十秒，期间别人可以撤回或另发一版。推进指针要用这个快照值做 CAS，
+    而不是同步回来之后才读 —— 否则这次发布会把别人的撤回覆盖掉。
+    """
+    database = str(getattr(context.settings, "chat_route_bindings_file", "") or "")
+    if not database:
+        return None
+    from pathlib import Path
+
+    from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
+
+    try:
+        store = ChatRouteBindingStore(Path(database).expanduser().absolute())
+        entry = str(getattr(binding, "business_entry", "") or "consumer")
+        row = store.get(environment, binding.tenant_id, entry, "consumer_own_order_status")
+    except Exception:  # noqa: BLE001 - 读不出来就退回"按当前值推进"
+        return None
+    return row.revision if row is not None else 0
+
+
 def _advance_route_binding(
-    context: Any, outcome: Any, binding: Any, *, initiator: tuple[str, str, str]
+    context: Any,
+    outcome: Any,
+    binding: Any,
+    *,
+    initiator: tuple[str, str, str],
+    expected_revision: int | None = None,
 ) -> None:
     """发布成功之后，把（环境，租户，入口，场景）的正式指针推到这一版。
 
@@ -1059,7 +1097,11 @@ def _advance_route_binding(
             # 必然 `DIFY_UNAVAILABLE` —— 而那个症状离发布这一步很远，没人会想到是它。
             # 宁可让发布失败并说清楚，也不要留下一条"看起来发布了"的绑定。
             workflow_key_ref=_key_ref_for(key_dir, binding.app_id),
-            expected_revision=existing.revision if existing else None,
+            expected_revision=(
+                expected_revision
+                if expected_revision is not None
+                else (existing.revision if existing else None)
+            ),
             updated_by=initiator[0] or initiator[1] or "",
         )
     except RouteBindingError as exc:
