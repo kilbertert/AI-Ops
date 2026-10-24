@@ -32,7 +32,7 @@ index 00000000..6e43c7ca
 --- /dev/null
 +++ b/web/hooks/use-knowledge-sync.ts
 @@ -0,0 +1,94 @@
-+/* 让 Dify 的知识库列表与 RAGFlow 保持同步（ADR-0124）。
++/* 让 Dify 的知识库列表与 RAGFlow 保持同步（ADR-0126）。
 + *
 + * ## 它解决的问题
 + *
