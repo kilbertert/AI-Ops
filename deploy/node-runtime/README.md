@@ -29,6 +29,17 @@
 `AIOPS_NODE_BRIDGE`、`AIOPS_NODE_STATE`、`AIOPS_PRODUCTION_GATEWAY`（共三种名字），
 其中 STATE 出现多次。**不能无参数 envsubst**，否则会抹掉 nginx 的认证头变量。
 渲染到配置根的 `gateway-callback.conf`。创建项目身份可写的临时目录；入口仅监听内部网桥。
+若宿主防火墙默认拒绝 INPUT，须登记并允许**仅节点内部网段 → 回调网桥:8788/TCP**；
+使用现有防火墙管理器持久保存，禁止开放 `0.0.0.0/0`。先从节点网络空间做真实请求，
+无凭据必须被 Gateway 拒绝（不能只有宿主 curl 通）。恢复时删除本次精确规则。
+例如既有管理器是 ufw 时：
+
+```bash
+ufw allow from "$AIOPS_NODE_SUBNET" to "$AIOPS_NODE_BRIDGE" port 8788 proto tcp comment aiops-node-callback
+# 恢复：同一参数前加 delete；不得执行 ufw reset。
+ufw delete allow from "$AIOPS_NODE_SUBNET" to "$AIOPS_NODE_BRIDGE" port 8788 proto tcp
+```
+
 nginx 二进制位置按服务宿主现有安装核对；本 unit 使用 `/usr/bin/nginx`。
 含 Lua 模块的宿主构建须沿用现有 `lua_package_path`（必要时 `lua_package_cpath`）加入渲染配置；
 仅 `nginx -t` 不够，还要确认进程持续运行。普通 nginx 不添加不支持的 Lua 指令。

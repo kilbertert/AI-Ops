@@ -878,3 +878,10 @@ fixture、数据库检查或模型单次调用写成真实业务验收。
 > QA回读404，撤回后本人回读410。两条业务POST无重发，清理完成，生产入口仍关闭。
 > [本次验收](../validation/2026-10-25-m3-baoyun-real-acceptance.md)。**未完成业务验收**：
 > 尚缺公司App页面验收、正式启用和工程师确认的真实故障结论，不把隔离API成功称为常驻上线。
+
+> **2026-10-25 06:29 CST 后 · 正式节点启用及真实 H5 通过**：原 consumer SOP 发布 V18，
+> 路线 active，常驻 Gateway/节点栈/回调 enabled/active。真实 H5 最新本人单 19 项通过，
+> 同 run succeeded/matched、约31.61秒、SQL/CPMS独立一致；跨用户查询与 QA 回读均404。
+> 模型为baoyun，两个业务POST无重发。14个旧试验配置/状态/制品根已归档，恢复材料保留。
+> 见[正式验收](../validation/2026-10-25-production-node-enabled.md)及[运维手册](../../deploy/node-runtime/README.md)。
+> 未完成业务验收：原生手机、故障诊断准确率与长期稳定性仍未验；未登记租户可能404，仍无按人限流。
