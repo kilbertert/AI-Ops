@@ -237,20 +237,35 @@ class DifyRunStore:
             row = connection.execute("SELECT * FROM chat_dify_runs WHERE run_id = ?", (run_id,)).fetchone()
         return _run_from_row(row) if row else None
 
-    def running_for(self, *, tenant_id: str, environment: str) -> list[DifyRun]:
+    def running_for(
+        self, *, tenant_id: str, environment: str, binding_key: str | None = None
+    ) -> list[DifyRun]:
         """该租户/环境下**仍在运行**的执行记录（撤回要收敛的那一批）。
 
         `environment` 是逻辑执行环境，不是主机名：同一份数据里可能同时存在别的环境的
         记录（隔离栈与回归都会写同一个库），撤回只该收自己那一片。
+
+        `binding_key` 把范围再收到**这一条路由**上。同一个租户可以同时有 consumer 与
+        operator 两条路由，撤回其中一条不该把另一条的在飞运行也取消掉 —— 那会把一次
+        正常的发布撤回动作变成另一条路由上的故障。
         """
         with self._connection() as connection:
-            rows = connection.execute(
-                """
-                SELECT * FROM chat_dify_runs
-                 WHERE tenant_id = ? AND environment = ? AND state = ?
-                """,
-                (tenant_id, environment, RUNNING),
-            ).fetchall()
+            if binding_key is None:
+                rows = connection.execute(
+                    """
+                    SELECT * FROM chat_dify_runs
+                     WHERE tenant_id = ? AND environment = ? AND state = ?
+                    """,
+                    (tenant_id, environment, RUNNING),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    """
+                    SELECT * FROM chat_dify_runs
+                     WHERE tenant_id = ? AND environment = ? AND state = ? AND binding_key = ?
+                    """,
+                    (tenant_id, environment, RUNNING, binding_key),
+                ).fetchall()
         return [_run_from_row(row) for row in rows]
 
     def by_qa(self, qa_id: str) -> DifyRun | None:

@@ -1734,7 +1734,7 @@ class GatewayRuntime:
         if registration is not None:
             self._release_conversation_turn(registration.conversation_turn)
 
-    def settle_retracted_runs(self, *, environment: str, tenant_id: str) -> dict[str, Any]:
+    def settle_retracted_runs(self, *, environment: str, tenant_id: str, scenario: str) -> dict[str, Any]:
         """收掉这一版**在飞**的 Dify 运行。撤回的第二件事。
 
         本地终态 + 撤销取数凭据 + 请求 Dify stop，三件都要，理由与取消逐条相同：
@@ -1744,13 +1744,16 @@ class GatewayRuntime:
         回读侧的拒绝**不在这里做**：回读守卫要求"当前绑定仍指向签发时那一版"，
         撤回把指针改成 `retracted` 之后，那条判据自然成立，历史正文因此不再交付。
         """
-        from aiops_diagnostics import chat_data_grant, chat_execution
+        from aiops_diagnostics import chat_data_grant
         from aiops_diagnostics.dify_run_store import DifyRunStore
 
         store = DifyRunStore(self.store.path)
         grants = chat_data_grant.DataGrantStore(self.store.path)
         settled: list[str] = []
-        for run in store.running_for(tenant_id=tenant_id, environment=environment):
+        # 只收**这一条路由**在飞的那批。同租户可以同时有 consumer 与 operator，
+        # 撤回其中一条不该把另一条的运行也取消掉。
+        route_key = f"{scenario}:{environment}:{tenant_id}"
+        for run in store.running_for(tenant_id=tenant_id, environment=environment, binding_key=route_key):
             with contextlib.suppress(Exception):
                 store.cancel(run.run_id, "retracted_by_operator")
             with contextlib.suppress(Exception):
@@ -1760,19 +1763,56 @@ class GatewayRuntime:
                 registration.cancelled = True
             self.store.update_assistant_question(run.qa_id, status="cancelled")
             # 只有拿到了 task_id 才停得下来；Dify 停不下来**不能**撤回本地取消。
+            #
+            # 凭据**不能**通过 `binding_for_key` 取：撤回已经把那一行改成 `retracted`，
+            # 而 `binding_for_key` 只返回活动行 —— 于是这次 stop 会被静默跳过，Dify
+            # 继续消耗模型直到完成或超时。要的是被撤回那一版自己的凭据路径，
+            # 它在管理行上仍然留着（撤回只改状态，不删行）。
             if run.task_id:
-                binding = chat_execution.binding_for_key(self.gateway_settings, run.binding_key)
-                if binding is not None and binding.engine == chat_execution.ENGINE_DIFY:
-                    with contextlib.suppress(Exception):
-                        import aiops_diagnostics.dify_chat_workflow as workflows
+                try:
+                    import aiops_diagnostics.dify_chat_workflow as workflows
 
+                    key_file = self._retired_key_ref(environment, tenant_id, scenario)
+                    if key_file:
                         workflows.DifyWorkflowClient(str(self.gateway_settings.dify_chat_base_url)).stop(
-                            workflow_key=workflows.load_workflow_key(binding.workflow_key_file),
+                            workflow_key=workflows.load_workflow_key(key_file),
                             task_id=run.task_id,
                             user=f"aiops:{run.grant_id}",
                         )
+                except Exception:  # noqa: BLE001 - 停不下来不影响本地取消
+                    pass
             settled.append(run.run_id)
         return {"settled_runs": settled}
+
+    def _retired_key_ref(self, environment: str, tenant_id: str, scenario: str) -> str:
+        """被撤回那一版的凭据路径 —— 从**管理行**读，不经 `binding_for_key`。
+
+        撤回只改状态不删行，所以这一行还在；而 `binding_for_key` 只返回**活动**行，
+        用它会让停止请求被静默跳过，Dify 继续消耗模型。
+        """
+        from pathlib import Path
+
+        from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
+
+        database = str(getattr(self.gateway_settings, "chat_route_bindings_file", "") or "")
+        if not database:
+            return ""
+        try:
+            row = ChatRouteBindingStore(Path(database).expanduser().absolute()).get(
+                environment, tenant_id, "consumer", scenario
+            )
+        except Exception:  # noqa: BLE001 - 读不到就当没有；不影响本地取消
+            return ""
+        if row is None:
+            return ""
+        key_dir = str(getattr(self.gateway_settings, "chat_dify_key_dir", "") or "")
+        if row.workflow_key_ref:
+            return row.workflow_key_ref
+        if key_dir and row.app_id:
+            from aiops_diagnostics import chat_execution
+
+            return chat_execution.key_file_for_app(key_dir, row.app_id)
+        return ""
 
     def _settle_dify_cancelled(self, dify_store, grant_store, run_id, qa_id: str) -> None:
         with contextlib.suppress(Exception):

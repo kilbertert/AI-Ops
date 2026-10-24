@@ -726,6 +726,24 @@ def _record_publish_audit(
         )
 
 
+def _declared_in_file(settings: Any, environment: str, tenant_id: str, entry: str, scenario: str) -> bool:
+    """这条 key 是不是仍由**文件登记**声明。
+
+    启动期查过一次冲突，但那之后文件可能被重新配上；而发布是唯一会把冲突**写进去**
+    的动作，所以它也要查一次 —— 写进去之后再发现，故障是整表加载失败，波及所有租户。
+    """
+    from aiops_diagnostics import chat_execution
+
+    try:
+        bindings = chat_execution.load_bindings(
+            str(getattr(settings, "chat_execution_bindings_file", "") or "")
+        )
+    except chat_execution.ChatBindingError:
+        return False
+    key = f"{scenario}:{environment}:{tenant_id}"
+    return any(item.key == key for item in bindings)
+
+
 def _key_ref_for(key_dir: str, app_id: str) -> str:
     """这个 app 的 Service API 凭据路径，且**必须可读**。
 
@@ -982,10 +1000,28 @@ def _advance_route_binding(
     )
 
     key_dir = str(getattr(context.settings, "chat_dify_key_dir", "") or "")
-
-    store = ChatRouteBindingStore(Path(database).expanduser().absolute())
     entry = str(getattr(binding, "business_entry", "") or "consumer")
     scenario = chat_execution.SCENARIO_OWN_ORDER_STATUS
+    # **两个前置必须在写指针之前拒绝**，理由相同：写进去之后才发现，故障会扩散到
+    # 别人身上 —— 这两条都会让整张管理表加载失败，而 `_bindings` 在读租户之前
+    # 就检查整表，所以一个租户的坏行会让**所有**租户的聊天路线一起不可用。
+    #
+    #   1. 没配凭据目录 ⇒ 写进去一条空引用，下次加载 `load_workflow_key("")` 抛错；
+    #   2. 文件登记里仍有同一个 key ⇒ 判重复声明，同样整表不可用。
+    if not key_dir:
+        raise StandardAPIError(
+            status.HTTP_409_CONFLICT,
+            "DIFY_KEY_DIR_UNSET",
+            "the app service key directory is not configured on this server",
+        )
+    if _declared_in_file(context.settings, environment, binding.tenant_id, entry, scenario):
+        raise StandardAPIError(
+            status.HTTP_409_CONFLICT,
+            "CHAT_ROUTE_BINDING_COLLIDES_WITH_FILE",
+            "this route is still declared in the bindings file",
+        )
+
+    store = ChatRouteBindingStore(Path(database).expanduser().absolute())
     existing = store.get(environment, binding.tenant_id, entry, scenario)
     try:
         store.publish(
@@ -1807,7 +1843,7 @@ def create_gateway_app(
         settled: dict[str, Any] = {"settled_runs": []}
         with contextlib.suppress(Exception):
             settled = context.runtime.settle_retracted_runs(
-                environment=environment, tenant_id=binding.tenant_id
+                environment=environment, tenant_id=binding.tenant_id, scenario=scenario
             )
         _record_publish_audit(
             context,

@@ -199,47 +199,72 @@ class ChatRouteBindingStore:
                 """,
                 (environment, tenant_id, entry, scenario),
             ).fetchone()
-            if expected_revision is not None:
-                actual = int(current["revision"]) if current else 0
-                if actual != expected_revision:
-                    raise RouteBindingError("ROUTE_BINDING_CONFLICT", "route binding moved")
-            next_revision = (int(current["revision"]) if current else 0) + 1
-            connection.execute(
-                """
-                INSERT INTO chat_route_bindings
-                    (environment, tenant_id, entry, scenario, engine, agent_id,
-                     agent_version_no, app_id, workflow_id, workflow_key_ref,
-                     state, revision, updated_by, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(environment, tenant_id, entry, scenario) DO UPDATE SET
-                    engine = excluded.engine,
-                    agent_id = excluded.agent_id,
-                    agent_version_no = excluded.agent_version_no,
-                    app_id = excluded.app_id,
-                    workflow_id = excluded.workflow_id,
-                    workflow_key_ref = excluded.workflow_key_ref,
-                    state = excluded.state,
-                    revision = excluded.revision,
-                    updated_by = excluded.updated_by,
-                    updated_at = excluded.updated_at
-                """,
-                (
-                    environment,
-                    tenant_id,
-                    entry,
-                    scenario,
-                    engine,
-                    agent_id,
-                    agent_version_no,
-                    app_id,
-                    workflow_id,
-                    workflow_key_ref,
-                    STATE_ACTIVE,
-                    next_revision,
-                    updated_by,
-                    now,
-                ),
-            )
+            # **CAS 必须在写语句里完成**，不能"读一次、比一比、再写"：sqlite3 的默认
+            # 事务要等到第一条写语句才开始，所以上面那个 SELECT 并不持有写锁 ——
+            # 两个发布者可以同时读到同一个 revision 再各写一次（实测：都成功、都是 2）。
+            # 下面两种写法各自带 revision 谓词，写不中就是 rowcount 0 ⇒ 冲突。
+            actual = int(current["revision"]) if current else 0
+            if expected_revision is not None and actual != expected_revision:
+                raise RouteBindingError("ROUTE_BINDING_CONFLICT", "route binding moved")
+            next_revision = actual + 1
+            if current is None:
+                cursor = connection.execute(
+                    """
+                    INSERT INTO chat_route_bindings
+                        (environment, tenant_id, entry, scenario, engine, agent_id,
+                         agent_version_no, app_id, workflow_id, workflow_key_ref,
+                         state, revision, updated_by, updated_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(environment, tenant_id, entry, scenario) DO NOTHING
+                    """,
+                    (
+                        environment,
+                        tenant_id,
+                        entry,
+                        scenario,
+                        engine,
+                        agent_id,
+                        agent_version_no,
+                        app_id,
+                        workflow_id,
+                        workflow_key_ref,
+                        STATE_ACTIVE,
+                        next_revision,
+                        updated_by,
+                        now,
+                    ),
+                )
+            else:
+                cursor = connection.execute(
+                    """
+                    UPDATE chat_route_bindings
+                       SET engine = ?, agent_id = ?, agent_version_no = ?, app_id = ?,
+                           workflow_id = ?, workflow_key_ref = ?, state = ?,
+                           revision = ?, updated_by = ?, updated_at = ?
+                     WHERE environment = ? AND tenant_id = ? AND entry = ? AND scenario = ?
+                       AND revision = ?
+                    """,
+                    (
+                        engine,
+                        agent_id,
+                        agent_version_no,
+                        app_id,
+                        workflow_id,
+                        workflow_key_ref,
+                        STATE_ACTIVE,
+                        next_revision,
+                        updated_by,
+                        now,
+                        environment,
+                        tenant_id,
+                        entry,
+                        scenario,
+                        actual,
+                    ),
+                )
+            # 没写中 ⇒ 有人在这期间改过这一行。不覆盖对方。
+            if cursor.rowcount != 1:
+                raise RouteBindingError("ROUTE_BINDING_CONFLICT", "route binding moved")
         record = self.get(environment, tenant_id, entry, scenario)
         if record is None:  # pragma: no cover - 刚写完就读不到只可能是文件被换掉
             raise RouteBindingError("ROUTE_BINDING_MISSING", "route binding vanished")
@@ -274,14 +299,28 @@ class ChatRouteBindingStore:
                 raise RouteBindingError("ROUTE_BINDING_MISSING", "no route binding to retract")
             if expected_revision is not None and int(current["revision"]) != expected_revision:
                 raise RouteBindingError("ROUTE_BINDING_CONFLICT", "route binding moved")
-            connection.execute(
+            # 与 `publish` 同一个理由：CAS 落在写语句里。否则一个过期的撤回者
+            # 可以把别人刚发布的新版撤掉 —— 它读到的是旧 revision，写的却是新行。
+            cursor = connection.execute(
                 """
                 UPDATE chat_route_bindings
                    SET state = ?, revision = revision + 1, updated_by = ?, updated_at = ?
                  WHERE environment = ? AND tenant_id = ? AND entry = ? AND scenario = ?
+                   AND revision = ?
                 """,
-                (STATE_RETRACTED, updated_by, now, environment, tenant_id, entry, scenario),
+                (
+                    STATE_RETRACTED,
+                    updated_by,
+                    now,
+                    environment,
+                    tenant_id,
+                    entry,
+                    scenario,
+                    int(current["revision"]),
+                ),
             )
+            if cursor.rowcount != 1:
+                raise RouteBindingError("ROUTE_BINDING_CONFLICT", "route binding moved")
         record = self.get(environment, tenant_id, entry, scenario)
         if record is None:  # pragma: no cover
             raise RouteBindingError("ROUTE_BINDING_MISSING", "route binding vanished")

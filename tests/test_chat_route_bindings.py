@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
@@ -408,3 +409,86 @@ def test_a_tenant_that_never_published_still_takes_the_direct_read(tmp_path):
         effective_tenant_id = TENANT
 
     assert chat_execution.select_binding(_Settings(), _Caller()) is None
+
+
+def test_two_publishers_with_the_same_expected_revision_cannot_both_win(tmp_path):
+    """两个并发发布者用同一个 `expected_revision` ⇒ **只有一个能赢**。
+
+    这是 Codex 复核实测出来的：原实现"读 revision → 比 → 写"之间没有写事务
+    （sqlite3 的默认事务要等第一条写语句才开始），两个发布者同时读到同一个 revision，
+    然后各写一次，都成功、都是 2。
+    """
+    store = _store(tmp_path)
+    _publish(store)  # revision 1
+
+    first = _store(tmp_path)
+    seen = _publish(store, agent_version_no=2, workflow_id=WORKFLOW_V2, expected_revision=1)
+    assert seen.revision == 2
+
+    # 第二个发布者手里还是旧的 revision=1，必须被拒，而不是覆盖。
+    with pytest.raises(RouteBindingError) as raised:
+        _publish(store, agent_version_no=3, workflow_id=WORKFLOW_V2, expected_revision=1)
+    assert raised.value.code == "ROUTE_BINDING_CONFLICT"
+    final = first.get(ENVIRONMENT, TENANT, ENTRY, SCENARIO)
+    assert final.agent_version_no == 2, "后写的人不能覆盖先写的那一版"
+
+
+def test_a_stale_retraction_cannot_retract_a_newer_publish(tmp_path):
+    """过期的撤回者不能撤掉别人刚发布的新版。"""
+    store = _store(tmp_path)
+    _publish(store)  # revision 1
+    _publish(store, agent_version_no=2, workflow_id=WORKFLOW_V2, expected_revision=1)  # revision 2
+    with pytest.raises(RouteBindingError) as raised:
+        store.retract(
+            environment=ENVIRONMENT,
+            tenant_id=TENANT,
+            entry=ENTRY,
+            scenario=SCENARIO,
+            expected_revision=1,  # 过期
+        )
+    assert raised.value.code == "ROUTE_BINDING_CONFLICT"
+    assert store.get(ENVIRONMENT, TENANT, ENTRY, SCENARIO).state == "active"
+
+
+def test_settling_is_scoped_to_the_retracted_route(tmp_path):
+    """撤回 operator 不能取消 consumer 的在飞运行（同租户、同环境）。"""
+    from aiops_diagnostics.dify_run_store import DifyRunStore
+
+    db = tmp_path / "gateway.db"
+    runs = DifyRunStore(db)
+    # 这一条只关心"按路由收敛"，scope 的内容无关紧要，给一个合法的最小 JSON。
+    scope_json = json.dumps({"caller": {}, "subject": {}, "effective_tenant_id": TENANT})
+    for entry, key in (("consumer", SCENARIO), ("operator", "operator_own_order_status")):
+        runs.issue(
+            run_id=f"run_{entry}",
+            qa_id=f"qa_{entry}",
+            scope_fingerprint="f" * 64,
+            scope_json=scope_json,
+            binding_key=f"{key}:{ENVIRONMENT}:{TENANT}",
+            order_no="ORDER-1",
+            environment=ENVIRONMENT,
+            tenant_id=TENANT,
+            app_id=APP,
+            workflow_id=WORKFLOW_V1,
+            grant_id=f"g_{entry}",
+        )
+    # 只查 consumer 那条路由：operator 的运行必须原样留在 running。
+    only_consumer = runs.running_for(
+        tenant_id=TENANT,
+        environment=ENVIRONMENT,
+        binding_key=f"{SCENARIO}:{ENVIRONMENT}:{TENANT}",
+    )
+    assert [run.run_id for run in only_consumer] == ["run_consumer"]
+    both = runs.running_for(tenant_id=TENANT, environment=ENVIRONMENT)
+    assert len(both) == 2
+
+
+def test_the_retired_row_still_carries_the_credential_reference(tmp_path):
+    """撤回之后凭据路径**仍在行上** —— Dify stop 要靠它，不能因为查不到活动绑定就跳过。"""
+    store = _store(tmp_path)
+    _publish(store)
+    before = store.get(ENVIRONMENT, TENANT, ENTRY, SCENARIO).workflow_key_ref
+    store.retract(environment=ENVIRONMENT, tenant_id=TENANT, entry=ENTRY, scenario=SCENARIO)
+    after = store.get(ENVIRONMENT, TENANT, ENTRY, SCENARIO)
+    assert after.state == "retracted"
+    assert after.workflow_key_ref == before and after.workflow_key_ref
