@@ -2,8 +2,8 @@
 #
 # **这不是现役部署**：现役在 36（`deploy/dify-36/`）。这一份只为验收存在，特征是
 #
-#   * 全部端口绑 127.0.0.1、端口号由验收脚本临时指定（`DIFY_TEST_PORT`）；
-#   * 一次性数据根（`./volumes`，脚本结束时整个删掉）；
+#   * 共用本次 driver 容器网络，全部业务监听仅在该命名空间，宿主不发布端口；
+#   * 一次性数据根（`${DIFY_TEST_ROOT}/volumes`，只清本次创建的目录）；
 #   * 不打任何生产补丁、不挂 36 的配置、不连 36 的任何东西；
 #   * 模型供应商是本机合成的 OpenAI-compatible 服务（验收脚本起的回环桩）。
 #
@@ -22,9 +22,9 @@ services:
         mkdir -p /app/api/storage /app/storage
         chown -R 1001:1001 /app/api/storage /app/storage
     volumes:
-      - ./volumes/app/storage:/app/api/storage
-      - ./volumes/plugin_daemon:/app/storage
-    networks: [default]
+      - ${DIFY_TEST_ROOT}/volumes/app/storage:/app/api/storage
+      - ${DIFY_TEST_ROOT}/volumes/plugin_daemon:/app/storage
+    network_mode: "container:${DIFY_TEST_NAMESPACE}"
 
   db_postgres:
     image: ${DIFY_REGISTRY:-docker.io}/library/postgres:15-alpine
@@ -34,13 +34,13 @@ services:
       POSTGRES_USER: ${DB_USERNAME}
       PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
-      - ./volumes/db:/var/lib/postgresql/data
+      - ${DIFY_TEST_ROOT}/volumes/db:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "${DB_USERNAME}"]
       interval: 5s
       timeout: 3s
       retries: 20
-    networks: [default]
+    network_mode: "container:${DIFY_TEST_NAMESPACE}"
 
   redis:
     image: ${DIFY_REGISTRY:-docker.io}/library/redis:6-alpine
@@ -49,7 +49,7 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
-    networks: [default]
+    network_mode: "container:${DIFY_TEST_NAMESPACE}"
 
   weaviate:
     image: ${DIFY_REGISTRY:-docker.io}/semitechnologies/weaviate:1.39.2
@@ -70,23 +70,19 @@ services:
       interval: 5s
       timeout: 3s
       retries: 20
-    networks: [default]
+    network_mode: "container:${DIFY_TEST_NAMESPACE}"
 
   api:
     image: ${DIFY_REGISTRY:-docker.io}/langgenius/dify-api:1.17.1
-    env_file: [./.env]
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    env_file: ["${DIFY_TEST_ROOT}/dify.env"]
     environment:
       MODE: api
-      PLUGIN_DAEMON_URL: http://plugin_daemon:5002
-      PLUGIN_REMOTE_INSTALL_HOST: plugin_daemon
+      PLUGIN_DAEMON_URL: http://127.0.0.1:5002
+      PLUGIN_REMOTE_INSTALL_HOST: 127.0.0.1
       PLUGIN_REMOTE_INSTALL_PORT: "5003"
       INNER_API_KEY_FOR_PLUGIN: ${PLUGIN_DIFY_INNER_API_KEY}
-    ports:
-      - "127.0.0.1:${DIFY_TEST_PORT}:5001"
     volumes:
-      - ./volumes/app/storage:/app/api/storage
+      - ${DIFY_TEST_ROOT}/volumes/app/storage:/app/api/storage
     depends_on:
       init_permissions: {condition: service_completed_successfully}
       db_postgres: {condition: service_healthy}
@@ -98,40 +94,32 @@ services:
       timeout: 5s
       retries: 30
       start_period: 60s
-    networks: [default]
+    network_mode: "container:${DIFY_TEST_NAMESPACE}"
 
   worker:
     image: ${DIFY_REGISTRY:-docker.io}/langgenius/dify-api:1.17.1
-    env_file: [./.env]
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    env_file: ["${DIFY_TEST_ROOT}/dify.env"]
     environment:
       MODE: worker
-      PLUGIN_DAEMON_URL: http://plugin_daemon:5002
-      PLUGIN_REMOTE_INSTALL_HOST: plugin_daemon
+      PLUGIN_DAEMON_URL: http://127.0.0.1:5002
+      PLUGIN_REMOTE_INSTALL_HOST: 127.0.0.1
       PLUGIN_REMOTE_INSTALL_PORT: "5003"
       INNER_API_KEY_FOR_PLUGIN: ${PLUGIN_DIFY_INNER_API_KEY}
     volumes:
-      - ./volumes/app/storage:/app/api/storage
+      - ${DIFY_TEST_ROOT}/volumes/app/storage:/app/api/storage
     depends_on:
       init_permissions: {condition: service_completed_successfully}
       db_postgres: {condition: service_healthy}
       plugin_daemon: {condition: service_started}
       redis: {condition: service_started}
       weaviate: {condition: service_healthy}
-    networks: [default]
+    network_mode: "container:${DIFY_TEST_NAMESPACE}"
 
   plugin_daemon:
     image: ${DIFY_REGISTRY:-docker.io}/langgenius/dify-plugin-daemon:0.6.10-local
-    env_file: [./.env]
-    # 真正去连模型上游的是**它**，不是 api：1.17.1 的 LLM 步骤把调用交给 plugin daemon
-    # 里的 provider 插件执行。少了这一行，凭据校验会以 400 收场并报
-    # `Failed to resolve 'host.docker.internal'` —— 而 api 容器里明明解析得了，
-    # 看起来像"模型地址写错了"。
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    env_file: ["${DIFY_TEST_ROOT}/dify.env"]
     environment:
-      DB_HOST: db_postgres
+      DB_HOST: 127.0.0.1
       DB_PORT: "5432"
       DB_USERNAME: ${DB_USERNAME}
       DB_PASSWORD: ${DB_PASSWORD}
@@ -141,7 +129,7 @@ services:
       MAX_PLUGIN_PACKAGE_SIZE: "52428800"
       PLUGIN_REMOTE_INSTALLING_HOST: "0.0.0.0"
       PLUGIN_REMOTE_INSTALLING_PORT: "5003"
-      DIFY_INNER_API_URL: http://api:5001
+      DIFY_INNER_API_URL: http://127.0.0.1:5001
       DIFY_INNER_API_KEY: ${PLUGIN_DIFY_INNER_API_KEY}
       PLUGIN_WORKING_PATH: /app/storage/cwd
       GIN_MODE: release
@@ -151,12 +139,13 @@ services:
       db_postgres: {condition: service_healthy}
       redis: {condition: service_started}
     volumes:
-      - ./volumes/plugin_daemon:/app/storage
+      - ${DIFY_TEST_ROOT}/volumes/plugin_daemon:/app/storage
     # **模型 provider 是插件**：1.17.1 里 `openai_api_compatible` 这类 provider 由
     # plugin_daemon 托管，LLM 步骤在运行时会去 `plugin/<id>/management/models` 要模型。
     # 它不健康，整轮会以 `Failed to request plugin daemon` 400 收场 —— 看起来像
     # "Dify 调用失败"，其实是**插件宿主没起来**。所以它必须有 healthcheck 且 etc.
     # 必须等它健康。
+    network_mode: "container:${DIFY_TEST_NAMESPACE}"
     restart: "on-failure"
     # **不设 healthcheck**：这个镜像里没有 curl / wget / nc / ss，连 `/dev/tcp` 都不支持
     # （dash）。任何"容器内探活"在这里都只会让一个正常工作的容器永远报 unhealthy。
