@@ -846,7 +846,18 @@ def test_retracting_settles_a_live_trial_with_the_trials_own_credentials(tmp_pat
     # 聊天运行没有登记：它会走"按管理行凭据 stop"那条路（这里没有行，静默跳过）——
     # 正是这条差别证明了试用**不是**靠源应用凭据被停下的。
 
-    runtime.settle_retracted_runs(environment=ENVIRONMENT, tenant_id=TENANT, scenario=SCENARIO)
+    from types import SimpleNamespace
+
+    runtime.settle_retracted_runs(
+        route=SimpleNamespace(
+            environment=ENVIRONMENT,
+            tenant_id=TENANT,
+            key=route_key,
+            revision=1,
+            app_id=APP,
+            workflow_key_ref="",
+        )
+    )
 
     assert stopped == ["trial"], "试用必须走它自己的 interrupt，不能拿源应用凭据去停"
     assert trial_registration.cancelled is True

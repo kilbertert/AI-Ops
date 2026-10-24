@@ -1935,6 +1935,14 @@ def main() -> int:
             old_status in {403, 404, 410},
             {"status": old_status},
         )
+        trial_read_status, trial_read_body = http_json(
+            f"{gateway_base}/v1/dify/trial/{trial_id}", headers=trial_headers
+        )
+        check(
+            "撤回后已完成试用也拒绝正文",
+            trial_read_status in {403, 404, 410} and "result" not in trial_read_body,
+            {"status": trial_read_status},
+        )
         with _sqlite3.connect(database) as connection:
             kept = connection.execute(
                 "SELECT COUNT(*) FROM chat_route_bindings WHERE state = 'retracted'"
@@ -2044,6 +2052,12 @@ def main() -> int:
 
         # ---- 双租户交错：**另一个租户**经真实操作入口发布/执行，与主租户互不影响 ----
         #
+        restored_run = _dify_run_of(after_restore)
+        check(
+            "恢复后的新聊天冻结新发布代次",
+            int(restored_run.get("route_revision") or 0) > 1,
+            {"route_revision": restored_run.get("route_revision")},
+        )
         # 双环境那条证明"同一租户的两个逻辑环境是两条路由"；它证明不了租户边界 ——
         # 同租户的两行本来就是同一批人。这里把第二个租户走一遍**同样三个真实入口**
         # （导入 → 发布 → App 执行），再回头撤主租户的版本，看两个租户各自停在什么状态。
