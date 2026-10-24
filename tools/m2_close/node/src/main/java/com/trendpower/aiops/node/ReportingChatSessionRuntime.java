@@ -40,6 +40,8 @@ class ReportingChatSessionRuntime extends ChatSessionRuntime {
     private final GatewayClient gateway;
     private final GuardedChatModelFactory modelFactory;
     private final RunExecution.ActiveRuns activeRuns;
+    @org.springframework.beans.factory.annotation.Value("${aiops.node.managed-publication:false}")
+    private boolean managedPublication;
 
     @Autowired
     ReportingChatSessionRuntime(ClientChatExecutor executor,
@@ -57,7 +59,11 @@ class ReportingChatSessionRuntime extends ChatSessionRuntime {
     @Override
     public void execute(ChatSessionRequest request) {
         String runId = RunExecution.runIdOf(request);
-        if (!modelFactory.enabled() || runId == null) {
+        if (managedPublication && runId == null) {
+            forwardError(request, new IllegalArgumentException("managed publication requires an authorized run"));
+            return;
+        }
+        if ((!modelFactory.enabled() && !managedPublication) || runId == null) {
             super.execute(request);
             return;
         }
@@ -78,23 +84,47 @@ class ReportingChatSessionRuntime extends ChatSessionRuntime {
         // 原样保存前值：嵌套执行的可能是**另一个** run 的作用域，不能按本 run 过滤。
         RunExecution previous = RunExecution.peek();
         RunExecution.enter(execution);
+        com.trendpower.aiops.node.exec.ExecManifest previousManifest = null;
+        String manifestId = null;
+        boolean publicationInstalled = false;
         try {
-            super.execute(wrap(request, execution));
+            if (managedPublication) {
+                JsonNode publication = gateway.post(
+                        "/v1/internal/charging-status/execution-config/" + runId, "{}", null);
+                if (!runId.equals(publication.path("run_id").asText())) {
+                    throw new IllegalStateException("publication run identity differs");
+                }
+                var frozen = com.trendpower.aiops.node.exec.ExecManifest.fromText(
+                        publication.path("manifest").asText(), publication.path("sha256").asText());
+                if (frozen.systemMessages().size() != 1) {
+                    throw new IllegalStateException("node SOP requires one system message");
+                }
+                previousManifest = modelFactory.usePublication(frozen);
+                publicationInstalled = true;
+                request.getDispatchRequest().setSystemPrompt(frozen.systemMessages().getFirst());
+                if (request.getDispatchRequest().getAgentConfig() != null) {
+                    request.getDispatchRequest().getAgentConfig().setInstruction("");
+                }
+            }
+            manifestId = manifestId();
+            super.execute(wrap(request, execution, manifestId));
         } catch (RuntimeException | Error failure) {
             // 构造期/派发期失败（含清单/工具漂移）：这是**本次执行**的终局失败，
             // 必须从 issued/running 落 failed，而不是留在 issued。
+            String failedManifest = manifestId;
             finishOnce(execution, request, () -> {
-                reportFailed(runId, "node_failed");
+                reportFailed(runId, "node_failed", failedManifest);
                 forwardError(request, failure);
             });
             throw failure;
         } finally {
             // 只恢复线程上下文：super.execute 在订阅后立即返回，流还在跑。
+            if (publicationInstalled) modelFactory.usePublication(previousManifest);
             RunExecution.exit(previous);
         }
     }
 
-    private ChatSessionRequest wrap(ChatSessionRequest request, RunExecution execution) {
+    private ChatSessionRequest wrap(ChatSessionRequest request, RunExecution execution, String manifestId) {
         String runId = execution.runId();
         return ChatSessionRequest.builder()
                 .dispatchRequest(request.getDispatchRequest())
@@ -103,12 +133,12 @@ class ReportingChatSessionRuntime extends ChatSessionRuntime {
                 .completionConsumer(result -> finishOnce(execution, request, () -> {
                     if (!execution.guard().finishedCleanly()) {
                         // 循环"结束"了，但最后一轮没有正常说完整（截断/长度/内容过滤/缺失）。
-                        reportFailed(runId, "model_stream_incomplete");
+                        reportFailed(runId, "model_stream_incomplete", manifestId);
                         forwardError(request, new LoopIncomplete(
                                 "model stream did not finish cleanly"));
                         return;
                     }
-                    if (!reportCompleted(runId)) {
+                    if (!reportCompleted(runId, manifestId)) {
                         // Gateway 未确认：**不能**把这次 run 报成成功。
                         forwardError(request, new CompletionNotConfirmed(
                                 "gateway did not confirm loop completion"));
@@ -117,7 +147,7 @@ class ReportingChatSessionRuntime extends ChatSessionRuntime {
                     request.acceptCompletion(result);
                 }))
                 .errorConsumer(error -> finishOnce(execution, request, () -> {
-                    reportFailed(runId, "model_failed");
+                    reportFailed(runId, "model_failed", manifestId);
                     forwardError(request, error);
                 }))
                 .build();
@@ -147,13 +177,13 @@ class ReportingChatSessionRuntime extends ChatSessionRuntime {
      * `200 {"run_id":本run,"state":"failed"}` 都不能被记成成功 —— 一个认错记录的应答
      * 和一次拒绝在 HTTP 状态上无法区分。**不重试**（宁可少报成功，不伪造）。
      */
-    private boolean reportCompleted(String runId) {
+    private boolean reportCompleted(String runId, String manifestId) {
         JsonNode ack;
         try {
             ack = gateway.post(
                     "/v1/internal/charging-status/completions/" + runId,
                     "{\"status\":\"completed\"}",
-                    manifestId());
+                    manifestId);
         } catch (RuntimeException e) {
             return false;
         }
@@ -163,12 +193,12 @@ class ReportingChatSessionRuntime extends ChatSessionRuntime {
     }
 
     /** 失败通知：尽力而为，绝不因为通知失败而改变本地错误路径。 */
-    private void reportFailed(String runId, String reason) {
+    private void reportFailed(String runId, String reason, String manifestId) {
         try {
             gateway.post(
                     "/v1/internal/charging-status/completions/" + runId,
                     "{\"status\":\"failed\",\"reason\":\"" + reason + "\"}",
-                    manifestId());
+                    manifestId);
         } catch (RuntimeException ignored) {
             // 通知发不出去时记录停在 running，由 TTL 收敛 —— 不会变成假成功。
         }

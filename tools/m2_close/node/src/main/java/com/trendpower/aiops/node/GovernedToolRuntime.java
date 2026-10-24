@@ -135,6 +135,12 @@ class GovernedToolRuntime extends ToolRuntime {
  */
 @Component
 class RunIdToolContextCustomizer implements ChatClientCustomizer {
+    private final GuardedChatModelFactory factory;
+
+    RunIdToolContextCustomizer(GuardedChatModelFactory factory) {
+        this.factory = factory;
+    }
+
 
     @Override
     public int order() {
@@ -149,6 +155,9 @@ class RunIdToolContextCustomizer implements ChatClientCustomizer {
         Map<String, Object> toolContext = new HashMap<>();
         if (runId != null && !runId.isBlank()) {
             toolContext.put(GovernedToolRuntime.RUN_ID_KEY, runId);
+            if (factory.manifest() != null) {
+                toolContext.put("aiops.manifest_id", factory.manifest().id());
+            }
         }
         context.getBuilder().defaultToolContext(toolContext);
     }
