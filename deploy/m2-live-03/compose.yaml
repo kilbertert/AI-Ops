@@ -177,7 +177,11 @@ services:
         -Djavax.net.ssl.trustStoreType=PKCS12
     env_file:
       - ${M2LIVE_CONFIG:-/etc/aiops-m2-live}/node/node.env
-    command: ["java", "-jar", "/app/aiops-execution-node.jar"]
+    command:
+      - java
+      - -jar
+      - /app/aiops-execution-node.jar
+      - --aiops.node.managed-publication=${M2LIVE_MANAGED_PUBLICATION:-false}
     volumes:
       - ${M2LIVE_DIST:-/opt/aiops-m2-live}/node:/app:ro
       - ${M2LIVE_STATE:-/var/lib/aiops-m2-live}/node:/home/node

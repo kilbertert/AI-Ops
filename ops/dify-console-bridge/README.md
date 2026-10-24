@@ -6,6 +6,39 @@
 决定的论证在 **ADR-0021**；后端桥在 `src/aiops_diagnostics/dify_console_publish.py`。
 本目录只是**部署资产**。
 
+## M3 部署包与恢复
+
+Gateway 的 CD 不更新本桥。撤回、恢复和版本列表要求 **Python 桥、JS、nginx snippet**
+同版；只更新 Gateway 不能交付运营入口。`build-bundle.sh` 从确定 Git 修订取这三部分及
+桥的全部标准库依赖，写入 `REVISION`、`SHA256SUMS`，不携带 env 或凭据。
+
+```bash
+# 开发机：只用已合并修订，输出目录为私有目录
+bash ops/dify-console-bridge/build-bundle.sh origin/main /tmp/bridge.tar.gz
+# 使用 dev-host cp 36 ... --dest <暂存路径> --artifact-sha256 <上述摘要> 上传。
+# 服务宿主：先验证外层 tar 摘要，再解压到新的暂存目录；通过 dev-host exec 执行：
+bash <暂存目录>/deploy.sh <暂存目录> <新的私有备份目录>
+```
+
+脚本更新现有服务目录，保留服务身份、解释器、env、登录代理及 TLS 入口。
+它会短暂停止桥，替换代码及静态文件，`nginx -t` 后启动桥并 reload nginx；
+三个新路由的无会话请求必须得到 403。任何失败自动恢复原包、JS、snippet 并重启桥。
+成功后还须用登录运营账号做发布/试用/撤回/恢复验收；无会话 403 只证明路由和拒绝门。
+
+成功部署后若要人工恢复，使用本次备份（不恢复配置或数据库）：
+
+```bash
+systemctl stop aiops-dify-console-bridge.service
+rm -rf /opt/aiops-console-bridge/aiops_diagnostics
+cp -a <备份>/aiops_diagnostics /opt/aiops-console-bridge/aiops_diagnostics
+cp -a <备份>/dify-publish-button.js /srv/aiops-console-assets/dify-publish-button.js
+cp -a <备份>/dify-console-publish.conf /www/server/panel/vhost/nginx/snippets/dify-console-publish.conf
+/www/server/nginx/sbin/nginx -t && /www/server/nginx/sbin/nginx -s reload
+systemctl start aiops-dify-console-bridge.service
+```
+
+以上是操作方法，不是生产启用授权；部署与运行配置的变更范围需单独写入私有变更单。
+
 ## 四件东西，装在哪
 
 | 文件 | 装到 | 作用 |
