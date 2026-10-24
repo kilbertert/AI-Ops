@@ -1152,6 +1152,7 @@ class GatewayRuntime:
                 initiator=initiator,
                 language=language,
                 tenant_id=run_context.effective_tenant_id,
+                workflow_trial=callable(getattr(draft, "execute", None)),
             )
             trial_id = str(trial["diagnosis_id"])
             self._trial_jobs.add(trial_id)
@@ -1244,20 +1245,26 @@ class GatewayRuntime:
             return
         started_ms = time.monotonic()
         try:
-            # 与诊断 worker 同一条规则：``Settings.from_config`` 在 try **里面**，
-            # 因为它会因配置文件缺失/非法抛 ValueError，那是受支持的失败而不是不可能的事。
-            settings = Settings.from_config(self.gateway_settings.server_config_file)
-            settings.agent.run_root = self.diagnostic_settings.agent.run_root
-            from aiops_diagnostics.dify_trial import run_trial
+            # **不 import `dify_workflow_trial`**：它会反过来 import 本模块（取
+            # `JobRegistration`），形成包内导入环 —— README 的分层图随之失效。
+            # 判据改成"这份草稿会不会自己执行"：只有真 Dify 试用有 `execute`。
+            if callable(getattr(draft, "execute", None)):
+                result = draft.execute(self, trial_id, run_context, order_no, language)
+            else:
+                # 与诊断 worker 同一条规则：``Settings.from_config`` 在 try **里面**，
+                # 因为它会因配置文件缺失/非法抛 ValueError，那是受支持的失败而不是不可能的事。
+                settings = Settings.from_config(self.gateway_settings.server_config_file)
+                settings.agent.run_root = self.diagnostic_settings.agent.run_root
+                from aiops_diagnostics.dify_trial import run_trial
 
-            result = run_trial(
-                settings,
-                scope_context=run_context,
-                order_no=order_no,
-                question="",
-                draft=draft,
-                language=language,
-            )
+                result = run_trial(
+                    settings,
+                    scope_context=run_context,
+                    order_no=order_no,
+                    question="",
+                    draft=draft,
+                    language=language,
+                )
         except Exception as exc:  # noqa: BLE001 - 逃出去就等于没有终态行
             self.store.update_standard_diagnosis(
                 trial_id,
@@ -1625,9 +1632,13 @@ class GatewayRuntime:
                 order_no=order_no,
                 environment=str(self.gateway_settings.execution_environment or ""),
                 tenant_id=context.effective_tenant_id,
-                app_id=binding.workflow_id,
+                app_id=getattr(binding, "app_id", ""),
                 workflow_id=binding.workflow_id,
                 grant_id=grant.grant_id,
+                # 冻结"签发时对外的那一版"：撤回或重新发布之后，回读靠它判断这条 run
+                # 跑的那一版还是不是现在对外的那一版。
+                agent_version_no=int(getattr(binding, "agent_version_no", 0) or 0),
+                route_revision=int(getattr(binding, "route_revision", 0) or 0),
             )
             if registration.cancelled:
                 self._settle_dify_cancelled(dify_store, grant_store, run_id, qa_id)
@@ -1731,6 +1742,44 @@ class GatewayRuntime:
         if registration is not None:
             self._release_conversation_turn(registration.conversation_turn)
 
+    def settle_retracted_runs(self, *, route: Any) -> dict[str, Any]:
+        """收敛撤回时冻结的路由代次；之后发布或恢复的任务不属于本次操作。"""
+        from aiops_diagnostics import chat_data_grant, dify_chat_workflow
+        from aiops_diagnostics.dify_run_store import DifyRunStore
+
+        store = DifyRunStore(self.store.path)
+        grants = chat_data_grant.DataGrantStore(self.store.path)
+        settled: list[str] = []
+        for run in store.running_for(
+            tenant_id=route.tenant_id, environment=route.environment, binding_key=route.key
+        ):
+            if run.route_revision > route.revision:
+                continue
+            if not store.cancel(run.run_id, "retracted_by_operator"):
+                continue
+            grants.revoke_for_qa(run.qa_id)
+            registration = self._qa_registrations.get(run.qa_id)
+            if registration is not None:
+                registration.cancelled = True
+            if run.kind == "trial":
+                self.store.update_standard_diagnosis(run.qa_id, status="cancelled")
+            else:
+                self.store.update_assistant_question(run.qa_id, status="cancelled")
+                if registration is not None:
+                    self._release_conversation_turn(registration.conversation_turn)
+            if registration is not None and registration.interrupt is not None:
+                self._interrupt_registered_turn(registration)
+            elif run.task_id and run.kind == "chat" and run.app_id == route.app_id:
+                # 无进程内钩子时只能使用撤回快照的凭据，不能读后来发布的新路由。
+                with contextlib.suppress(Exception):
+                    dify_chat_workflow.DifyWorkflowClient(self.gateway_settings.dify_chat_base_url).stop(
+                        workflow_key=dify_chat_workflow.load_workflow_key(route.workflow_key_ref),
+                        task_id=run.task_id,
+                        user=f"aiops:{run.grant_id}",
+                    )
+            settled.append(run.run_id)
+        return {"settled_runs": settled}
+
     def _settle_dify_cancelled(self, dify_store, grant_store, run_id, qa_id: str) -> None:
         with contextlib.suppress(Exception):
             dify_store.cancel(run_id, "cancelled_by_caller")
@@ -1819,6 +1868,14 @@ class GatewayRuntime:
             current is None
             or current.engine != chat_execution.ENGINE_DIFY
             or current.workflow_id != getattr(binding, "workflow_id", None)
+            or (getattr(binding, "route_revision", 0) and current.route_revision != binding.route_revision)
+            # 版本也要对上：导出的图变了但 workflow 身份没变时（Dify 的保存不换
+            # workflow id），光比身份会让旧 worker 把上一版的结果写成成功。
+            or (
+                int(getattr(binding, "agent_version_no", 0) or 0)
+                and int(getattr(binding, "agent_version_no", 0) or 0)
+                != int(getattr(current, "agent_version_no", 0) or 0)
+            )
         ):
             raise chat_execution.ChatRunUnavailable(
                 "CHARGING_STATUS_DISABLED", "dify binding is no longer active"

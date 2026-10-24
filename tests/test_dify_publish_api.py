@@ -703,3 +703,225 @@ def test_publish_refuses_a_workspace_that_is_still_being_created(tmp_path, monke
     assert error["code"] == "DIFY_WORKSPACE_CREATING" and error["retryable"] is True
     entries = GatewayStore(tmp_path / "gateway.db").publish_audit_entries(app_id="")
     assert entries and entries[0]["reason_code"] == "DIFY_WORKSPACE_CREATING", "被拒的尝试也要入账"
+
+
+# ---------------------------------------------------------------------------
+# 撤回（M3-01）——与发布同一道门，但语义完全不同
+# ---------------------------------------------------------------------------
+
+RETRACT_HEADERS = {"Authorization": f"Bearer {PUBLISH_KEY}"}
+
+
+def _seed_route(db: Path, *, tenant: str = "T-1", version: int = 3, workflow: str = "wf-v3"):
+    from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
+
+    key = db.parent / f"{APP_ID}.key"
+    key.write_text("service-key\n")
+    key.chmod(0o600)
+    store = ChatRouteBindingStore(db)
+    store.publish(
+        environment="41",
+        tenant_id=tenant,
+        entry="consumer",
+        scenario="consumer_own_order_status",
+        engine="dify",
+        agent_id="小趋-客服",
+        agent_version_no=version,
+        app_id=APP_ID,
+        workflow_id=workflow,
+        workflow_key_ref=str(key),
+        updated_by="ops",
+    )
+    return store
+
+
+def test_retract_asks_for_the_same_key_as_publish(tmp_path, monkeypatch) -> None:
+    """撤回与发布**同一道门**：能发布的人才能撤回，不新造第二套权限。"""
+    runtime = _Runtime()
+    monkeypatch.setattr(runtime.dify_app_registry, "all", lambda: (_binding(),))
+    client = _client(tmp_path, runtime, dify_publish_api_key=PUBLISH_KEY)
+    assert client.post("/v1/dify/retract", json={"app_id": APP_ID}).status_code == 401
+    assert (
+        client.post(
+            "/v1/dify/retract",
+            json={"app_id": APP_ID},
+            headers={"Authorization": f"Bearer {KNOWLEDGE_KEY}"},
+        ).status_code
+        == 403
+    )
+
+
+def test_retract_is_absent_when_the_route_bindings_are_not_managed(tmp_path, monkeypatch) -> None:
+    """没配管理表 ⇒ 404。撤回不能凭空在一个没有正式指针的部署上"成功"。"""
+    runtime = _Runtime()
+    monkeypatch.setattr(runtime.dify_app_registry, "all", lambda: (_binding(),))
+    client = _client(tmp_path, runtime, dify_publish_api_key=PUBLISH_KEY)
+    response = client.post("/v1/dify/retract", json={"app_id": APP_ID}, headers=RETRACT_HEADERS)
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "CHAT_ROUTE_BINDINGS_DISABLED"
+
+
+def test_retract_marks_the_version_retracted_without_deleting_it(tmp_path, monkeypatch) -> None:
+    """撤回把那一版标成 `retracted` —— 行还在，版本号仍可回答。"""
+    runtime = _Runtime()
+    monkeypatch.setattr(runtime.dify_app_registry, "all", lambda: (_binding(),))
+    client = _client(tmp_path, runtime, dify_publish_api_key=PUBLISH_KEY, chat_route_bindings_file="")
+    store = _seed_route(tmp_path / "gateway.db")
+    client.app.state.gateway.settings.chat_route_bindings_file = str(tmp_path / "gateway.db")
+    client.app.state.gateway.settings.execution_environment = "41"
+
+    response = client.post("/v1/dify/retract", json={"app_id": APP_ID}, headers=RETRACT_HEADERS)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["state"] == "retracted"
+    assert body["version_no"] == 3
+    row = store.get("41", "T-1", "consumer", "consumer_own_order_status")
+    assert row is not None and row.state == "retracted"
+
+
+def test_retract_refuses_an_app_that_the_route_does_not_name(tmp_path, monkeypatch) -> None:
+    """同租户入口下另一条路由：拒绝，不越权撤回。"""
+    runtime = _Runtime()
+    other_app = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
+    monkeypatch.setattr(runtime.dify_app_registry, "all", lambda: (_binding(app_id=other_app),))
+    client = _client(tmp_path, runtime, dify_publish_api_key=PUBLISH_KEY)
+    _seed_route(tmp_path / "gateway.db")
+    client.app.state.gateway.settings.chat_route_bindings_file = str(tmp_path / "gateway.db")
+    client.app.state.gateway.settings.execution_environment = "41"
+    response = client.post("/v1/dify/retract", json={"app_id": other_app}, headers=RETRACT_HEADERS)
+    assert response.status_code == 409
+    assert response.json()["error"]["code"] == "CHAT_ROUTE_BINDING_MISMATCH"
+
+
+def test_retract_of_an_unbound_app_is_the_same_404_as_publish(tmp_path, monkeypatch) -> None:
+    runtime = _Runtime()
+    monkeypatch.setattr(runtime.dify_app_registry, "all", lambda: ())
+    client = _client(tmp_path, runtime, dify_publish_api_key=PUBLISH_KEY)
+    response = client.post("/v1/dify/retract", json={"app_id": APP_ID}, headers=RETRACT_HEADERS)
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "DIFY_APP_NOT_BOUND"
+
+
+def test_retract_carries_no_field_that_could_choose_a_version(tmp_path, monkeypatch) -> None:
+    """请求体 `extra="forbid"`：撤回**不能**指定"恢复到哪一版"。"""
+    runtime = _Runtime()
+    monkeypatch.setattr(runtime.dify_app_registry, "all", lambda: (_binding(),))
+    client = _client(tmp_path, runtime, dify_publish_api_key=PUBLISH_KEY)
+    response = client.post(
+        "/v1/dify/retract",
+        json={"app_id": APP_ID, "version_no": 1},
+        headers=RETRACT_HEADERS,
+    )
+    assert response.status_code == 422
+
+
+def test_a_chat_app_publish_does_not_require_a_workflow_pointer(tmp_path, monkeypatch) -> None:
+    """chat/completion 应用没有已发布 workflow，发布**不能**因此失败。
+
+    同一个网关可以同时挂着 chat 应用（`dify_workspace_template.dsl.yml` 里就有
+    `mode: chat`）与 workflow 应用。无条件要求 workflow 身份会让前者发布失败，
+    而它的版本其实已经冻结 —— 调用方看到失败、库里却已改过，比不发布更糟。
+    """
+    from aiops_diagnostics.dify_dsl_pull import SyncOutcome
+
+    runtime = _Runtime()
+    monkeypatch.setattr(runtime.dify_app_registry, "all", lambda: (_binding(),))
+    client = _client(
+        tmp_path,
+        runtime,
+        dify_publish_api_key=PUBLISH_KEY,
+        chat_route_bindings_file=str(tmp_path / "gateway.db"),
+        chat_dify_key_dir=str(tmp_path),
+    )
+    client.app.state.gateway.settings.execution_environment = "41"
+
+    def fake_sync(manager, context, binding, source, **kwargs):
+        # chat 应用：冻结了版本，但没有 workflow 身份。
+        return SyncOutcome(
+            binding.tenant_id,
+            binding.business_entry,
+            binding.app_id,
+            binding.agent_name,
+            "synced",
+            2,
+        )
+
+    monkeypatch.setattr("aiops_diagnostics.dify_dsl_pull.sync_binding_from_dify", fake_sync)
+    response = client.post("/v1/dify/publish", json={"app_id": APP_ID}, headers=RETRACT_HEADERS)
+    assert response.status_code == 200, response.text
+    assert response.json()["version_no"] == 2
+    # 路由指针**没有**被推进：chat 应用不参与 workflow 路由。
+    from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
+
+    assert ChatRouteBindingStore(tmp_path / "gateway.db").all() == ()
+
+
+def test_a_slow_publish_cannot_undo_a_retraction_that_happened_meanwhile(tmp_path, monkeypatch) -> None:
+    """发布在等 Dify 时被撤回 ⇒ 这次发布必须**冲突**，不能把撤回覆盖掉。
+
+    revision 必须在**外部同步之前**快照。等同步回来再读，读到的是撤回之后的
+    revision，于是这次发布仍会 CAS 通过，把一次已成功的撤回重新置为 active
+    （Codex 复核实测：V1 → 撤回 → 延迟发布推进，最终 active / revision 3 / V2）。
+    """
+    from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
+    from aiops_diagnostics.dify_dsl_pull import SyncOutcome
+
+    runtime = _Runtime()
+    monkeypatch.setattr(runtime.dify_app_registry, "all", lambda: (_binding(),))
+    db = tmp_path / "gateway.db"
+    client = _client(
+        tmp_path,
+        runtime,
+        dify_publish_api_key=PUBLISH_KEY,
+        chat_route_bindings_file=str(db),
+        chat_dify_key_dir=str(tmp_path),
+        # 发布前置要求执行地址已配置：没有它会在写指针**之前**就被拒，
+        # 用例于是"因为别的原因"拿到 409 —— 那种绿什么都守不住。
+        dify_chat_base_url="http://dify.invalid:5001",
+    )
+    client.app.state.gateway.settings.execution_environment = "41"
+    key = tmp_path / f"{APP_ID}.key"
+    key.write_text("service-key\n")
+    key.chmod(0o600)
+    store = ChatRouteBindingStore(db)
+    store.publish(
+        environment="41",
+        tenant_id="T-1",
+        entry="consumer",
+        scenario="consumer_own_order_status",
+        engine="dify",
+        agent_id="小趋-客服",
+        agent_version_no=1,
+        app_id=APP_ID,
+        workflow_id="wf-v1",
+        workflow_key_ref=str(key),
+    )
+
+    def slow_sync(context, binding, source, admin):
+        # 同步期间另一名运营撤回了这条路由。
+        store.retract(
+            environment="41",
+            tenant_id="T-1",
+            entry="consumer",
+            scenario="consumer_own_order_status",
+        )
+        return SyncOutcome(
+            binding.tenant_id,
+            binding.business_entry,
+            binding.app_id,
+            binding.agent_name,
+            "synced",
+            2,
+            workflow_id="wf-v2",
+        )
+
+    # 发布走的是 `_sync_bound_app` → 它会先试 chat 的映射，失败再走 workflow 的。
+    # 这里直接替换**网关里的分派函数**，确保"慢同步"真的发生在这个窗口里。
+    import aiops_diagnostics.gateway_api as gateway_api
+
+    monkeypatch.setattr(gateway_api, "_sync_bound_app", slow_sync)
+    response = client.post("/v1/dify/publish", json={"app_id": APP_ID}, headers=RETRACT_HEADERS)
+    final = store.get("41", "T-1", "consumer", "consumer_own_order_status")
+    assert response.status_code == 409, (response.text, final.state, final.agent_version_no)
+    assert final.state == "retracted", "撤回不能被这次延迟的发布覆盖"
+    assert final.agent_version_no == 1

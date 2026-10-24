@@ -271,9 +271,15 @@ class ConsolePublishResult:
     #: 它不进 :meth:`public` —— 发布那条路的回答形状是两个不同的契约，混在一起会让
     #: 「发布」的响应多出一个它永远不会有的字段。
     trial_id: str = ""
+    versions: tuple[dict[str, Any], ...] = ()
 
     def public(self) -> dict[str, Any]:
-        return {"published": self.published, "reason": self.reason, "action": self.action}
+        return {
+            "published": self.published,
+            "reason": self.reason,
+            "action": self.action,
+            **({"versions": list(self.versions)} if self.versions else {}),
+        }
 
 
 @dataclass(frozen=True, slots=True)
@@ -545,6 +551,8 @@ def publish_current_app(
     login_proxy_url: str = "",
     gateway_internal_token: str = "",
     timeout: float = 15.0,
+    operation: str = "publish",
+    version_no: int | None = None,
 ) -> ConsolePublishResult:
     """运营点了按钮之后，这一层做的全部事情。顺序不能换：
 
@@ -629,7 +637,13 @@ def publish_current_app(
         return ConsolePublishResult(False, _REFUSED_SESSION)
 
     http_status, outcome = _request(
-        gateway_base_url.rstrip("/") + PUBLISH_PATH,
+        gateway_base_url.rstrip("/")
+        + {
+            "publish": PUBLISH_PATH,
+            "retract": "/v1/dify/retract",
+            "restore": "/v1/dify/restore",
+            "versions": "/v1/dify/versions",
+        }[operation],
         method="POST",
         headers={
             "Authorization": f"Bearer {publish_key}",
@@ -637,13 +651,32 @@ def publish_current_app(
             "Accept": "application/json",
             **initiator_headers,
         },
-        body={"app_id": app_id},
+        body={"app_id": app_id, **({"version_no": version_no} if operation == "restore" else {})},
         timeout=timeout,
     )
     if not 200 <= http_status < 300:
         # 发布门的错误码不透出去：对点按钮的人，它们是同一件事。
         _LOGGER.info("console publish refused by gateway: HTTP %s", http_status)
         return ConsolePublishResult(False, "发布未通过我们的发布门，请联系工程查看原因")
+    if operation == "retract":
+        ok = (
+            isinstance(outcome, dict)
+            and outcome.get("app_id") == app_id
+            and outcome.get("state") == "retracted"
+        )
+        return ConsolePublishResult(
+            ok,
+            "已撤回正式版本" if ok else _UNCONFIRMED,
+            action="retracted" if ok else "",
+            status=200 if ok else 502,
+        )
+    if operation == "versions":
+        if not isinstance(outcome, dict) or outcome.get("app_id") != app_id:
+            return ConsolePublishResult(False, _UNCONFIRMED, status=502)
+        versions = outcome.get("versions")
+        if not isinstance(versions, list):
+            return ConsolePublishResult(False, _UNCONFIRMED, status=502)
+        return ConsolePublishResult(True, "可恢复的历史版本", status=200, versions=tuple(versions))
     return _interpret_publish_outcome(outcome, app_id)
 
 
@@ -1242,10 +1275,23 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
             if path == _KNOWLEDGE_SYNC_ROUTE:
                 self._post_knowledge_sync()
                 return
-            if path != _PUBLISH_ROUTE:
+            operations = {
+                _PUBLISH_ROUTE: "publish",
+                "/__aiops/retract": "retract",
+                "/__aiops/restore": "restore",
+                "/__aiops/versions": "versions",
+            }
+            if path not in operations:
                 raise _Rejected(404, "not found")
             session, referer = self._check_browser_request()
-            self._read_empty_body()
+            version_no = None
+            if operations[path] == "restore":
+                payload = self._read_bounded_json(MAX_REQUEST_BODY_BYTES, frozenset({"version_no"}))
+                version_no = payload.get("version_no")
+                if type(version_no) is not int or version_no < 1:
+                    raise _Rejected(400, "请选择有效的历史版本")
+            else:
+                self._read_empty_body()
             result = publish_current_app(
                 dify_base_url=self.settings.dify_base_url,
                 gateway_base_url=self.settings.gateway_base_url,
@@ -1258,6 +1304,8 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
                 login_proxy_url=self.settings.login_proxy_url,
                 gateway_internal_token=self.settings.gateway_internal_token,
                 timeout=self.settings.timeout,
+                operation=operations[path],
+                version_no=version_no,
             )
         except _Rejected as exc:
             self._json(exc.status, {"published": False, "reason": exc.reason, "action": ""})

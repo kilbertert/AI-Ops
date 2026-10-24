@@ -433,6 +433,28 @@ class DifyConsoleAdmin:
             self.last_import_warnings = tuple(warnings)
         return app_id
 
+    def app_service_key(self, workspace_id: str, app_id: str) -> str:
+        payload = self._call(workspace_id, f"/console/api/apps/{app_id}/api-keys", method="POST", body={})
+        token = payload.get("token") if isinstance(payload, dict) else None
+        if not isinstance(token, str) or not token.strip():
+            raise ConsoleApiError("DIFY_KEY_UNAVAILABLE", "app service key unavailable")
+        return token
+
+    def delete_app(self, workspace_id: str, app_id: str) -> None:
+        spec = RequestSpec(
+            url=join_url(self.settings.base_url, f"/console/api/apps/{app_id}"),
+            method="DELETE",
+            headers=self._headers(workspace_id),
+            timeout=self.settings.timeout,
+            follow_redirects=False,
+        )
+        try:
+            with open_response(spec) as response:
+                if response.status not in {200, 204}:
+                    raise ConsoleApiError("DIFY_APP_DELETE_FAILED", "temporary app cleanup failed")
+        except TRANSPORT_FAILURES as exc:
+            raise ConsoleApiError("DIFY_APP_DELETE_FAILED", "temporary app cleanup failed") from exc
+
     def app_names(self, workspace_id: str) -> set[str]:
         """这个 workspace 里**全部** app 的名字（导入是幂等的判据）。
 

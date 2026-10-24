@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import secrets
+import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -74,6 +75,13 @@ class GatewayServerSettings:
     #: （不会凭空开一条路线），但一条 Dify 登记缺它就是启动失败。
     #: Dify 取数回调的地址不走这里：那个 URL 由 DSL 模板固定指向本网关。
     dify_chat_base_url: str = ""
+    #: 管理表（`chat_route_bindings`）所在的 SQLite 文件。缺省空 ⇒ 不启用管理绑定，
+    #: 与今天逐字一致。配了它，发布/撤回才有地方落指针。
+    chat_route_bindings_file: str = ""
+    #: Dify app 的 Service API 凭据**目录**：`<dir>/<app_id>.key`，每个 app 一把。
+    #: 发布不搬运凭据（那是运维预置的 0600 文件），管理行只按 app_id 推出这个路径。
+    #: 这样"发布"不需要从任何地方读到密钥，也就不会把它写进表里。
+    chat_dify_key_dir: str = ""
     #: 管家端公司 OAuth2 令牌的校验入口与客户端凭据（#443 / ADR-0009）。三个键**全部缺省为空**，
     #: 全空时该路径整体不构造 ⇒ 行为与启用前逐字一致（这既是「先合不启用」的机制保证，也是
     #: 回滚路径：清空即回退）。只设了其中一部分是启动错误，不是静默禁用 —— 与
@@ -352,6 +360,10 @@ class GatewayServerSettings:
             or _file_value(file_values, "AIOPS_GATEWAY_CHAT_EXECUTION_BINDINGS_FILE"),
             dify_chat_base_url=_env("AIOPS_GATEWAY_DIFY_CHAT_BASE_URL")
             or _file_value(file_values, "AIOPS_GATEWAY_DIFY_CHAT_BASE_URL"),
+            chat_route_bindings_file=_env("AIOPS_GATEWAY_CHAT_ROUTE_BINDINGS_FILE")
+            or _file_value(file_values, "AIOPS_GATEWAY_CHAT_ROUTE_BINDINGS_FILE"),
+            chat_dify_key_dir=_env("AIOPS_GATEWAY_CHAT_DIFY_KEY_DIR")
+            or _file_value(file_values, "AIOPS_GATEWAY_CHAT_DIFY_KEY_DIR"),
             company_check_token_url=_env("AIOPS_GATEWAY_COMPANY_CHECK_TOKEN_URL")
             or _file_value(file_values, "AIOPS_GATEWAY_COMPANY_CHECK_TOKEN_URL"),
             company_token_client_id=_env("AIOPS_GATEWAY_COMPANY_TOKEN_CLIENT_ID")
@@ -524,6 +536,34 @@ class GatewayServerSettings:
                 if not self.dify_chat_base_url:
                     raise ValueError("dify chat execution requires a dify base url")
                 canonical_gateway_url(self.dify_chat_base_url)
+        # 管理绑定表（发布/撤回推进的正式指针）。启动时做两件事：
+        #   1. 整表规约校验（引擎取值、Dify 行必须配齐身份与凭据引用）；
+        #   2. **同一 key 不许同时被文件与表声明** —— 那是"这次到底谁在跑"没有
+        #      唯一答案，与文件内部重复登记同一条纪律。
+        if self.chat_route_bindings_file:
+            from aiops_diagnostics import chat_execution  # noqa: PLC0415 - 避免循环导入
+            from aiops_diagnostics.chat_route_bindings import (  # noqa: PLC0415
+                ChatRouteBindingStore,
+                RouteBindingError,
+            )
+
+            try:
+                chat_execution.assert_no_binding_collision(self)
+                managed = chat_execution._bindings_from_store(self.chat_route_bindings_file)
+            except chat_execution.ChatBindingError as exc:
+                raise ValueError(f"chat route bindings are unusable: {exc}") from exc
+            except RouteBindingError as exc:
+                raise ValueError(f"chat route bindings are unusable: {exc}") from exc
+            if (
+                any(item.engine == chat_execution.ENGINE_DIFY for item in managed)
+                and not self.dify_chat_base_url
+            ):
+                raise ValueError("dify chat execution requires a dify base url")
+            # 表要真的可读可写：路径指向一个不存在目录时，发布那一刻才发现就太晚了。
+            try:
+                ChatRouteBindingStore(Path(self.chat_route_bindings_file).expanduser().absolute())
+            except (OSError, sqlite3.Error) as exc:  # pragma: no cover - 权限/磁盘问题
+                raise ValueError(f"chat route bindings are unusable: {type(exc).__name__}") from exc
         if self.execution_manifest_file:
             # 启动时就完整校验一次：坏清单必须在起监听之前失败，而不是等第一次签发
             # 才变成运行期不可用（那就是「配一半就开门」）。

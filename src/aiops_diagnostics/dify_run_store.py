@@ -69,6 +69,10 @@ class DifyRun:
     created_at: datetime
     expires_at: datetime
     completed_at: datetime | None
+    #: 签发时对外的那一版。0 = 来自文件登记（没有版本概念）。
+    agent_version_no: int = 0
+    kind: str = "chat"
+    route_revision: int = 0
 
 
 def _now() -> datetime:
@@ -117,7 +121,8 @@ class DifyRunStore:
                     created_at TEXT NOT NULL,
                     expires_at TEXT NOT NULL,
                     completed_at TEXT,
-                    snapshot_json TEXT
+                    snapshot_json TEXT,
+                    agent_version_no INTEGER NOT NULL DEFAULT 0
                 );
                 CREATE INDEX IF NOT EXISTS idx_chat_dify_runs_qa
                     ON chat_dify_runs(qa_id);
@@ -134,6 +139,18 @@ class DifyRunStore:
             if "scope_json" not in existing:
                 connection.execute(
                     "ALTER TABLE chat_dify_runs ADD COLUMN scope_json TEXT NOT NULL DEFAULT ''"
+                )
+            # 签发时冻结**正式版本号**：撤回/重新发布之后，回读靠它判断"这条 run 跑的那一版
+            # 还是不是现在对外的那一版"。默认 0 = 文件登记（没有版本概念），不受影响。
+            for column, declaration in (
+                ("kind", "TEXT NOT NULL DEFAULT 'chat'"),
+                ("route_revision", "INTEGER NOT NULL DEFAULT 0"),
+            ):
+                if column not in existing:
+                    connection.execute(f"ALTER TABLE chat_dify_runs ADD COLUMN {column} {declaration}")
+            if "agent_version_no" not in existing:
+                connection.execute(
+                    "ALTER TABLE chat_dify_runs ADD COLUMN agent_version_no INTEGER NOT NULL DEFAULT 0"
                 )
 
     @contextmanager
@@ -168,6 +185,9 @@ class DifyRunStore:
         app_id: str,
         workflow_id: str,
         grant_id: str,
+        agent_version_no: int = 0,
+        kind: str = "chat",
+        route_revision: int = 0,
     ) -> DifyRun:
         now = _now()
         with self._connection(write=True) as connection:
@@ -176,8 +196,8 @@ class DifyRunStore:
                 INSERT INTO chat_dify_runs (
                     run_id, qa_id, scope_fingerprint, scope_json, binding_key, order_no,
                     environment, tenant_id, app_id, workflow_id, workflow_run_id, task_id,
-                    grant_id, state, created_at, expires_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?)
+                    grant_id, state, created_at, expires_at, agent_version_no, kind, route_revision
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -194,6 +214,9 @@ class DifyRunStore:
                     RUNNING,
                     now.isoformat(),
                     (now + timedelta(seconds=DIFY_RUN_TTL_SECONDS)).isoformat(),
+                    agent_version_no,
+                    kind,
+                    route_revision,
                 ),
             )
         record = self.get(run_id)
@@ -225,6 +248,37 @@ class DifyRunStore:
         with self._connection() as connection:
             row = connection.execute("SELECT * FROM chat_dify_runs WHERE run_id = ?", (run_id,)).fetchone()
         return _run_from_row(row) if row else None
+
+    def running_for(
+        self, *, tenant_id: str, environment: str, binding_key: str | None = None
+    ) -> list[DifyRun]:
+        """该租户/环境下**仍在运行**的执行记录（撤回要收敛的那一批）。
+
+        `environment` 是逻辑执行环境，不是主机名：同一份数据里可能同时存在别的环境的
+        记录（隔离栈与回归都会写同一个库），撤回只该收自己那一片。
+
+        `binding_key` 把范围再收到**这一条路由**上。同一个租户可以同时有 consumer 与
+        operator 两条路由，撤回其中一条不该把另一条的在飞运行也取消掉 —— 那会把一次
+        正常的发布撤回动作变成另一条路由上的故障。
+        """
+        with self._connection() as connection:
+            if binding_key is None:
+                rows = connection.execute(
+                    """
+                    SELECT * FROM chat_dify_runs
+                     WHERE tenant_id = ? AND environment = ? AND state = ?
+                    """,
+                    (tenant_id, environment, RUNNING),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    """
+                    SELECT * FROM chat_dify_runs
+                     WHERE tenant_id = ? AND environment = ? AND state = ? AND binding_key = ?
+                    """,
+                    (tenant_id, environment, RUNNING, binding_key),
+                ).fetchall()
+        return [_run_from_row(row) for row in rows]
 
     def by_qa(self, qa_id: str) -> DifyRun | None:
         """按 QA 反查承载它的执行记录。**只读**，不做过期收敛。"""
@@ -327,6 +381,9 @@ def _run_from_row(row: sqlite3.Row) -> DifyRun:
         created_at=datetime.fromisoformat(row["created_at"]),
         expires_at=datetime.fromisoformat(row["expires_at"]),
         completed_at=_ts(row["completed_at"]),
+        agent_version_no=int(row["agent_version_no"] or 0),
+        kind=row["kind"],
+        route_revision=int(row["route_revision"]),
     )
 
 

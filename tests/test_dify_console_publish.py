@@ -88,6 +88,13 @@ class _Upstream:
         #: ``GET /v1/dify/trial/<id>`` 的回答（结果面板那一条）。
         self.trial_result_status = 200
         self.trial_result_body: Any = {"trial_id": "tr_abc123", "status": "queued"}
+        #: M3-01 的三个运营动作（撤回 / 恢复历史版 / 版本列表）的网关回答。
+        self.retract_status = 200
+        self.retract_body: Any = {"app_id": APP_ID, "state": "retracted", "revision": 3}
+        self.restore_status = 200
+        self.restore_body: Any = {"app_id": APP_ID, "action": "synced", "version_no": 1}
+        self.versions_status = 200
+        self.versions_body: Any = {"app_id": APP_ID, "versions": [], "state": "active"}
 
 
 def _serve(upstream: _Upstream) -> ThreadingHTTPServer:
@@ -127,6 +134,12 @@ def _serve(upstream: _Upstream) -> ThreadingHTTPServer:
                 self._reply(200, upstream.knowledge_sync_body)
             elif self.path.startswith("/v1/dify/workspace"):
                 self._reply(upstream.workspace_lookup_status, upstream.workspace_lookup_body)
+            elif self.path == "/v1/dify/retract" and method == "POST":
+                self._reply(upstream.retract_status, upstream.retract_body)
+            elif self.path == "/v1/dify/restore" and method == "POST":
+                self._reply(upstream.restore_status, upstream.restore_body)
+            elif self.path == "/v1/dify/versions" and method == "POST":
+                self._reply(upstream.versions_status, upstream.versions_body)
             elif self.path == "/__aiops/publish/check":
                 self._reply(200, upstream.verdict_body)
             else:
@@ -1651,3 +1664,59 @@ def test_knowledge_sync_falls_back_to_created_for_an_old_gateway(_sync_upstream:
     changed = _knowledge_sync_payload(_sync_upstream.base, "token", workspace_id="ws-1", timeout=5.0)
 
     assert changed == 2
+
+
+# --- M3-01：撤回 / 恢复历史版 / 版本列表走的是**运营入口**，不是机器 key 直连 ---
+
+
+def test_the_retract_button_goes_through_the_gateway_with_the_publish_key(
+    bridge: Any, upstream: _Upstream
+) -> None:
+    """撤回由桥转发到 `/v1/dify/retract`，用的是**发布门那把钥匙**。
+
+    运营能点的动作必须由桥承载：直接持机器 key 打网关不证明"运营能操作"。
+    """
+    upstream.retract_body = {"app_id": APP_ID, "state": "retracted", "revision": 3}
+    status, body = _post(bridge, path="/__aiops/retract")
+    assert status == 200
+    assert body["published"] is True and body["action"] == "retracted"
+    call = next(c for c in upstream.calls if c["path"] == "/v1/dify/retract")
+    assert call["body"] == {"app_id": APP_ID}
+
+
+def test_a_retract_that_the_gateway_did_not_confirm_is_not_reported_as_done(
+    bridge: Any, upstream: _Upstream
+) -> None:
+    """网关回了 200 但状态不是 `retracted` ⇒ 桥**不能**报成功。
+
+    "HTTP 200" 与"撤回真的成立"是两件事；把前者当后者会让运营以为已经停了。
+    """
+    upstream.retract_body = {"app_id": APP_ID, "state": "active", "revision": 2}
+    status, body = _post(bridge, path="/__aiops/retract")
+    assert status == 502
+    assert body["published"] is False
+
+
+def test_restore_carries_the_chosen_version_number(bridge: Any, upstream: _Upstream) -> None:
+    """恢复历史版必须**带上选中的版本号**，不是"再发一次当前草稿"。"""
+    upstream.restore_body = {"app_id": APP_ID, "action": "synced", "version_no": 1}
+    status, body = _post(bridge, path="/__aiops/restore", body=b'{"version_no": 1}')
+    assert status == 200
+    call = next(c for c in upstream.calls if c["path"] == "/v1/dify/restore")
+    assert call["body"] == {"app_id": APP_ID, "version_no": 1}
+
+
+def test_restore_refuses_a_body_that_is_not_just_a_version(bridge: Any, upstream: _Upstream) -> None:
+    """恢复的请求体只允许 `version_no`：多一个字段就是 400，不能夹带租户/workflow。"""
+    status, _body = _post(bridge, path="/__aiops/restore", body=b'{"version_no": 1, "tenant_id": "X"}')
+    assert status == 400
+    assert not any(c["path"] == "/v1/dify/restore" for c in upstream.calls)
+
+
+def test_the_versions_button_lists_what_can_be_restored(bridge: Any, upstream: _Upstream) -> None:
+    """版本列表也走桥：运营要能看见"能恢复到哪几版"。"""
+    upstream.versions_body = {"app_id": APP_ID, "versions": [{"version_no": 1}], "state": "active"}
+    status, body = _post(bridge, path="/__aiops/versions")
+    assert status == 200
+    assert body["versions"] == [{"version_no": 1}]
+    assert any(c["path"] == "/v1/dify/versions" for c in upstream.calls)

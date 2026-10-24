@@ -83,6 +83,28 @@ succeeded 快照并沿用原 blocks 形状。未命中绑定走原确定性直�
 AIOPS_GATEWAY_CHAT_EXECUTION_BINDINGS_FILE=
 ```
 
+## 正式指针：运营发布的版本如何接管路由（M3-01）
+
+```env
+AIOPS_GATEWAY_CHAT_ROUTE_BINDINGS_FILE=   # `chat_route_bindings` 表所在的 SQLite 文件
+AIOPS_GATEWAY_CHAT_DIFY_KEY_DIR=          # `<dir>/<app_id>.key`，每个 Dify app 一把
+```
+
+配了第一项之后，**发布与撤回才真的改变 App 跑哪一版**：
+
+* 运营在 Dify 控制台点「发布到 AI-Ops」→ `POST /v1/dify/publish` → 冻结一个新版本，
+  **同时**把（环境，租户，入口，场景）的正式指针推到这一版；
+* 点撤回 → `POST /v1/dify/retract` → 指针改成 `retracted`（**不删行**），在飞运行被收敛，
+  历史与在飞正文不再交付。**不自动恢复旧版** —— 恢复是另一次显式发布；
+* 保存草稿**不动指针**：Dify 的保存只写它自己的 draft，路由表一个字都不写。
+
+**同一个 key 不许同时被文件登记与这张表声明** ⇒ 启动失败。迁移到管理指针的做法是
+先把文件登记里那几条删掉（或把表里的行撤回），再让发布接管；不存在"谁优先"的规则。
+
+每个 app 的 Service API 凭据由运维预置成 `<key_dir>/<app_id>.key`（0600）：发布只推路径，
+**全程不读密钥**，所以凭据不会出现在这张表里。撤回与发布共用同一把发布门
+（`AIOPS_GATEWAY_DIFY_PUBLISH_API_KEY`），不新造第二套权限。
+
 指向一张 0600 的登记表（`schema=aiops-chat-execution/1`）。**绑定是按租户登记的**：
 
 ```json
@@ -428,3 +450,9 @@ aiops remote evidence RUN_ID
 订单已不可见为 404，授权源失败为 503，其余无有效结果时不返回业务正文。
 成功及业务错误均 no-store。App 应显示本次观察时间，未知状态不猜测，超时后不自动重发。
 该变更不新增轮询或幂等键，不启用生产开关，真实用户与 App 验收另行执行。
+
+### 管理试用结果与撤回代次
+
+管理 Workflow 试用的成功结果仍需当前订单授权、源路由代次、执行TTL及同轮快照校验。
+取数凭据在试用终态撤销，不作为结果回读凭据；已撤权/撤回/变版的结果不再交付。
+撤回冻结当前路由revision，只停止该代次及之前的任务；之后发布或恢复的新任务不受旧撤回影响。
