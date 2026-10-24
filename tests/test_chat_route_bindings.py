@@ -610,44 +610,6 @@ class _SyntheticDify:
         return self.published_id
 
 
-def _run_workflow_sync(tmp_path):
-    """跑一次 `sync_workflow_from_dify`；agent 按名字**收敛**，不每次新建。"""
-    from aiops_diagnostics import dify_dsl_pull as pull
-    from aiops_diagnostics.agent_lifecycle import AgentConfig, AgentManager, AgentStore
-
-    class _Ctx:
-        effective_tenant_id = TENANT
-        roles = frozenset({"ROLE_PLATFORM_ADMIN"})
-
-    manager = AgentManager(AgentStore(tmp_path / "gateway.db"))
-    existing = next((a for a in manager.list(_Ctx()) if a.name == "小趋-客服"), None)
-    if existing is None:
-        agent = manager.create(
-            _Ctx(),
-            name="小趋-客服",
-            description="acceptance",
-            config=AgentConfig(
-                agent_type="customer",
-                prompt="P1",
-                knowledge_base_ids=(),
-                model="aiops-api",
-                output_contract="blocks-v1",
-            ),
-        )
-        manager.publish(_Ctx(), agent.agent_id, expected_revision=agent.revision)
-
-    class _Binding:
-        tenant_id = TENANT
-        business_entry = ENTRY
-        app_id = APP
-        agent_name = "小趋-客服"
-
-    source = pull.DifyDslSource(
-        base_url="http://dify.invalid:5001", app_id=APP, api_key="k", workspace_id="ws"
-    )
-    return pull.sync_workflow_from_dify(manager, _Ctx(), _Binding(), source)
-
-
 def test_the_frozen_snapshot_id_and_content_come_from_the_same_version(tmp_path):
     """反例 1：快照的 workflow_id 与内容必须同源。
 
@@ -748,12 +710,14 @@ def test_republishing_identical_content_creates_no_new_version(tmp_path):
     assert dify.publish_calls == calls_after_first, "同内容不该再建 Dify 版本"
 
 
-def _run_workflow_sync(tmp_path):
+def _run_workflow_sync(tmp_path, app_id=APP):
     """跑一次 `sync_workflow_from_dify`；agent 按名字**收敛**，不每次新建。
 
     用 `create` 建 agent 会让第二次调用多出一个同名 agent —— 那测的就不是幂等，
     而是"两个 agent 各自发布了一次"。真实发布路径按名字找既有 agent。
     """
+    from types import SimpleNamespace
+
     from aiops_diagnostics import dify_dsl_pull as pull
     from aiops_diagnostics.agent_lifecycle import AgentConfig, AgentManager, AgentStore
 
@@ -778,13 +742,57 @@ def _run_workflow_sync(tmp_path):
         )
         manager.publish(_Ctx(), agent.agent_id, expected_revision=agent.revision)
 
-    class _Binding:
-        tenant_id = TENANT
-        business_entry = ENTRY
-        app_id = APP
-        agent_name = "小趋-客服"
-
+    binding = SimpleNamespace(tenant_id=TENANT, business_entry=ENTRY, app_id=app_id, agent_name="小趋-客服")
     source = pull.DifyDslSource(
-        base_url="http://dify.invalid:5001", app_id=APP, api_key="k", workspace_id="ws"
+        base_url="http://dify.invalid:5001", app_id=app_id, api_key="k", workspace_id="ws"
     )
-    return pull.sync_workflow_from_dify(manager, _Ctx(), _Binding(), source)
+    return pull.sync_workflow_from_dify(manager, _Ctx(), binding, source)
+
+
+def test_a_rebound_new_app_publishes_instead_of_reusing_the_old_workflow(tmp_path):
+    """反例：agent 被改绑到复制出来的新应用后，不能拿旧应用的 `workflow_id` 去去重。
+
+    旧 id 属于旧应用；拿它到新应用上导出会失败，"内容没变"的发布直接崩掉 ——
+    看起来像发布坏了，其实是在拿别人的历史当自己的。去重只在**同一应用**内成立。
+    """
+    old_app = APP
+    new_app = "app-99999999-8888-7777-6666-555555555555"
+    dify = _SyntheticDify()
+    dify.draft = {"nodes": [{"id": "sop", "data": {"type": "llm", "prompt": "V1"}}], "edges": []}
+    # 每个应用各有一份自己的已发布版本 —— 真实 Dify 里 workflow id 是**应用内**的。
+    own_workflow = {old_app: "00000000-0000-0000-0000-00000000aaaa"}
+
+    class _Client:
+        def __init__(self, source):
+            self.app = source.app_id
+
+        def export_dsl(self, app_id=None, *, workflow_id=None):
+            import yaml
+
+            if workflow_id and workflow_id != own_workflow.get(self.app):
+                # 别的应用（或旧应用）的 id 在这里不存在 —— 真实 Dify 就这样回答。
+                raise RuntimeError("workflow not found in this app")
+            return yaml.safe_dump(
+                {"app": {"mode": "workflow"}, "workflow": {"graph": dify.export(workflow_id)}}
+            )
+
+        def publish_workflow(self, app_id):
+            own_workflow[app_id] = dify.publish()
+            return True
+
+        def published_workflow_id(self, app_id):
+            return own_workflow[app_id]
+
+    from aiops_diagnostics import dify_dsl_pull as pull
+
+    original = pull.DifyDslClient
+    pull.DifyDslClient = _Client
+    try:
+        first = _run_workflow_sync(tmp_path, app_id=old_app)
+        second = _run_workflow_sync(tmp_path, app_id=new_app)
+    finally:
+        pull.DifyDslClient = original
+
+    assert first.action == "synced", first
+    assert second.action == "synced", "改绑到新应用后必须正常发布，不能因旧 id 崩掉"
+    assert second.workflow_id == own_workflow[new_app], "新应用必须冻结**它自己**的版本"

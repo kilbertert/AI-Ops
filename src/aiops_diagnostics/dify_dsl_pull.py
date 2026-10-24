@@ -1083,9 +1083,16 @@ def sync_workflow_from_dify(
     ).snapshot
     candidate = workflow_content(client.export_dsl())
     previous_workflow = previous.get("workflow_id")
+    # **只有同一应用的历史版本才能参与去重。** 快照里的 `workflow_id` 属于**当时那个
+    # 应用**；注册表把 agent 改绑到复制出来的新 app 之后，拿旧 id 到新 app 上导出会失败，
+    # 于是"内容没变"的发布直接崩掉 —— 看起来像发布坏了，其实是把别人的历史当自己的。
+    same_app = (
+        previous.get("app_id") == binding.app_id and previous.get("workspace_id") == source.workspace_id
+    )
     # Dify 原生 publish 每次新建版本；先确认内容相同且原不可变版本仍有效。
     if (
-        previous.get("workflow") == candidate
+        same_app
+        and previous.get("workflow") == candidate
         and previous_workflow
         and workflow_content(client.export_dsl(workflow_id=previous_workflow)) == candidate
     ):
