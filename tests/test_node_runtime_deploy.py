@@ -23,8 +23,8 @@ def test_runtime_is_internal_and_keeps_credentials_separate():
     assert set(services) == {"store", "platform", "node", "model-proxy"}
     for name in ("node", "platform", "store"):
         assert all(config["networks"][n]["internal"] for n in services[name]["networks"])
-    assert services["platform"]["ports"] == ["127.0.0.1:${AIOPS_NODE_PLATFORM_PORT:-8900}:8900"]
-    assert all(not s.get("ports") for n, s in services.items() if n != "platform")
+    assert services["platform"]["networks"]["trial"]["ipv4_address"] == "${AIOPS_NODE_PLATFORM_ADDRESS:?}"
+    assert all(not s.get("ports") for s in services.values())
     for name in ("node", "platform", "model-proxy"):
         assert services[name]["user"] == "${AIOPS_NODE_UID:?}:${AIOPS_NODE_GID:?}"
     assert "--aiops.node.managed-publication=true" in services["node"]["command"]

@@ -17,7 +17,7 @@
 | `AIOPS_NODE_BUILD` | 节点构建身份 |
 | `AIOPS_NODE_SUBNET` / `AIOPS_NODE_BRIDGE` | 在目标主机路由及 Docker 网络中核对无重叠后登记的内部网段/宿主网桥 |
 | `AIOPS_NODE_GATEWAY_URL` | 上述网桥的回调入口；不能使用节点不可达的其他网桥地址 |
-| `AIOPS_NODE_PLATFORM_PORT` | 已登记的回环平台端口，默认 8900 |
+| `AIOPS_NODE_PLATFORM_ADDRESS` | 内部网段中的固定平台地址；宿主直接用 HTTPS 访问 |
 | `AIOPS_MODEL_UPSTREAM` / `AIOPS_MODEL_BASE_PATH` | 已批准的固定 HTTPS 供应商及 API 前缀 |
 
 最小目录：`platform/application.properties`、`node/node.env`、`gateway/exec-manifest.json`、
@@ -30,6 +30,8 @@
 其中 STATE 出现多次。**不能无参数 envsubst**，否则会抹掉 nginx 的认证头变量。
 渲染到配置根的 `gateway-callback.conf`。创建项目身份可写的临时目录；入口仅监听内部网桥。
 nginx 二进制位置按服务宿主现有安装核对；本 unit 使用 `/usr/bin/nginx`。
+含 Lua 模块的宿主构建须沿用现有 `lua_package_path`（必要时 `lua_package_cpath`）加入渲染配置；
+仅 `nginx -t` 不够，还要确认进程持续运行。普通 nginx 不添加不支持的 Lua 指令。
 
 通过 `dev-host cp ... --artifact-sha256 ...` 同步合并制品，再执行已批准的安装步骤：
 
@@ -48,7 +50,9 @@ Docker 网络通过 `compose stop` 保留，正常停机不删除持久状态。
 ## Gateway 与发布
 
 按[节点发布手册](../../docs/agents/m3-node-publication.md)配置目标表，逻辑环境三方一致。
-宿主 Gateway 的平台地址使用宿主回环 HTTPS；CA 合并系统信任库，不能关闭证书校验。
+宿主 Gateway 直接访问平台固定内部地址的 HTTPS 8900；证书 SAN 必须含该地址。
+用原 CA 签发平台叶子证书并更新 `tls/platform/platform.p12`，CA 合并系统信任库，不能关闭校验。
+Docker internal 网络的端口映射在本环境不生成宿主监听，不能依靠 `ports` 声明判断可达。
 登记个人状态业务端点和路由库，先保持用户查询关闭；通过真实发布 API 从 Dify SOP 生成版本，
 确认路由 active 后再启用 `CONSUMER_ORDER_CHAT_ENABLED`。更改前保存原配置与源 SOP，
 确认没有在飞工作再重启 Gateway。禁止另建生产 app 对象来“检查”状态库。

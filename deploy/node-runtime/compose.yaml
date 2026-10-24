@@ -77,7 +77,8 @@ services:
     image: ${AIOPS_NODE_JAVA_IMAGE:?}
     container_name: aiops-runtime-platform
     networks:
-    - trial
+      trial:
+        ipv4_address: ${AIOPS_NODE_PLATFORM_ADDRESS:?}
     depends_on:
       store:
         condition: service_healthy
@@ -100,8 +101,6 @@ services:
     - '8900'
     - '18888'
     restart: unless-stopped
-    ports:
-    - 127.0.0.1:${AIOPS_NODE_PLATFORM_PORT:-8900}:8900
   node:
     image: ${AIOPS_NODE_JAVA_IMAGE:?}
     container_name: aiops-runtime-node
