@@ -238,6 +238,16 @@ def select_context(runtime, caller, binding, query, language, qa_id):
     return {"status": status, "candidates": list(candidates.values())[:5]}
 
 
+def live_answer(snapshot, language):
+    if snapshot.get("source") == "cpms.orderDetail":
+        from aiops_diagnostics.consumer_billing import billing_answer
+
+        return billing_answer(snapshot, language)
+    from aiops_diagnostics.consumer_order_chat import status_answer
+
+    return status_answer(snapshot, language)
+
+
 def final_answer(raw, context, language, content):
     if (context or {}).get("followup", {}).get("unresolved_count") == 1:
         return fallback("followup", language, content)
@@ -251,9 +261,7 @@ def final_answer(raw, context, language, content):
     if (context or {}).get("live_snapshot"):
         if kind != "realtime" or selected["faq_id"]:
             raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "live answer kind differs")
-        from aiops_diagnostics.consumer_order_chat import status_answer
-
-        return status_answer(context["live_snapshot"], language)
+        return live_answer(context["live_snapshot"], language)
     if kind == "knowledge":
         row = next(
             (r for r in (context or {}).get("candidates", []) if r["faq_id"] == selected["faq_id"]), None
@@ -306,7 +314,8 @@ def callback_context(runtime, token, *, require_result, read_snapshot):
 
     def valid():
         if run.order_no:
-            if not binding.live_order_status:
+            enabled = binding.live_billing_record if run.data_kind == "billing" else binding.live_order_status
+            if not enabled:
                 raise ChatRunUnavailable("CHATFLOW_LIVE_DISABLED", "live status disabled", http_status=403)
             runtime._require_chat_order_visible(caller, run.order_no)
         chat_data_grant.usable(grants.by_id(grant.grant_id))
@@ -345,7 +354,11 @@ def callback_context(runtime, token, *, require_result, read_snapshot):
     if followup["unresolved_count"]:
         query = followup["topic"] + "\n" + query
     result = (
-        {"status": "live", "candidates": [], "live_snapshot": read_snapshot(caller, run.order_no)}
+        {
+            "status": "live",
+            "candidates": [],
+            "live_snapshot": read_snapshot(caller, run.order_no, run.data_kind),
+        }
         if run.order_no
         else select_context(runtime, caller, binding, query, run.language, run.qa_id)
     )
