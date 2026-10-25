@@ -53,10 +53,8 @@ def start(
     from aiops_diagnostics import consumer_knowledge
 
     current(runtime, caller, binding)
-    if binding.content_file:
-        consumer_knowledge.load_content(
-            binding.content_file, tenant=caller.effective_tenant_id, environment=binding.environment
-        )
+    if binding.content_file or binding.content_snapshot is not None:
+        consumer_knowledge.binding_content(binding, caller)
     previous = runtime.dify_run_store.latest_conversation_run(
         conversation["conversation_id"], caller.scope_fingerprint
     )
@@ -94,7 +92,7 @@ def start(
     )
     token = ""
     try:
-        if binding.content_file:
+        if binding.content_file or binding.content_snapshot is not None:
             from aiops_diagnostics.chat_data_grant import DataGrantStore
 
             token, grant = DataGrantStore(runtime.store.path).issue(
@@ -209,12 +207,10 @@ def execute(runtime, caller, qa, question, binding, upstream, registration, lang
                 "cpms.orderDetail" if run.data_kind == "billing" else "cpms.chargingInfo"
             ):
                 raise ValueError("live snapshot missing or belongs to another order")
-        if binding.content_file:
-            from aiops_diagnostics.consumer_knowledge import final_answer, load_content
+        if binding.content_file or binding.content_snapshot is not None:
+            from aiops_diagnostics.consumer_knowledge import binding_content, final_answer
 
-            content = load_content(
-                binding.content_file, tenant=caller.effective_tenant_id, environment=binding.environment
-            )
+            content = binding_content(binding, caller)
             answer = final_answer(reply.answer, store.context(run_id), language, content)
         else:
             answer = {"blocks": [{"kind": "text", "text": reply.answer}], "retrieval_status": "unavailable"}

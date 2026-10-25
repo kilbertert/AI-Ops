@@ -404,6 +404,7 @@ class DifyTrialRequest(BaseModel):
     prompt: str | None = Field(default=None, min_length=1, max_length=20000)
     app_id: str | None = Field(default=None, min_length=1, max_length=64, pattern=r"^[0-9a-fA-F-]{8,64}$")
     allowed_tools: list[str] = Field(default_factory=list, max_length=7)
+    question: str = Field(default="check order status", min_length=1, max_length=4000)
 
     @model_validator(mode="after")
     def _exactly_one_draft_source(self) -> DifyTrialRequest:
@@ -781,8 +782,22 @@ def _sync_bound_app(context: Any, binding: Any, source: Any, admin: Any) -> Any:
     所以这里先按 chat 走；只有它明确报"没有 model_config"时才改走 workflow ——
     **用结果判种类，不用猜测**。
     """
+    from aiops_diagnostics import consumer_publication
     from aiops_diagnostics import dify_dsl_pull as pull
 
+    target = consumer_publication.target_for(context.settings, binding)
+    if not target and consumer_publication.route_scenario(context.settings, binding) == "consumer_service":
+        raise ValueError("consumer publication target removed")
+    if target:
+        if pull._dsl_kind(pull.DifyDslClient(source).export_dsl()) != "advanced-chat":
+            raise ValueError("consumer publication requires Chatflow")
+        return pull.sync_workflow_from_dify(
+            context.agent_manager,
+            admin,
+            binding,
+            source,
+            consumer_settings=consumer_publication.frozen_settings(target),
+        )
     try:
         return pull.sync_binding_from_dify(
             context.agent_manager,
@@ -909,6 +924,20 @@ def _publish_bound_app(
     # 等同步回来再读，读到的是**对方之后的** revision，于是这次发布仍会 CAS 通过，
     # 把一次已经成功的撤回重新置为 active —— 实测复现过（V1 → 撤回 → 延迟发布
     # 推进，最终 active / revision 3 / V2）。用快照值推进，期间有变动就冲突。
+    from aiops_diagnostics import consumer_publication
+
+    consumer_target = consumer_publication.target_for(context.settings, binding)
+    if consumer_target and console.chat_route_bindings_file:
+        from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
+
+        other = ChatRouteBindingStore(console.chat_route_bindings_file).get(
+            console.execution_environment,
+            binding.tenant_id,
+            binding.business_entry,
+            chat_execution.SCENARIO_OWN_ORDER_STATUS,
+        )
+        if other is not None and other.app_id == binding.app_id:
+            raise StandardAPIError(409, "CONSUMER_ROUTE_MIGRATION_REQUIRED", "app already owns another route")
     expected_revision = _current_route_revision(
         context,
         binding,
@@ -917,6 +946,8 @@ def _publish_bound_app(
     from aiops_diagnostics import node_publication
 
     node_target = node_publication.target_for(context.settings, binding)
+    if node_target and consumer_target:
+        raise StandardAPIError(409, "CONSUMER_TARGET_CONFLICT", "app has two execution targets")
     if console.chat_route_bindings_file and not node_target:
         from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
 
@@ -1029,7 +1060,9 @@ def _current_route_revision(context: Any, binding: Any, environment: str) -> int
     try:
         store = ChatRouteBindingStore(Path(database).expanduser().absolute())
         entry = str(getattr(binding, "business_entry", "") or "consumer")
-        row = store.get(environment, binding.tenant_id, entry, "consumer_own_order_status")
+        from aiops_diagnostics.consumer_publication import route_scenario
+
+        row = store.get(environment, binding.tenant_id, entry, route_scenario(context.settings, binding))
     except Exception as exc:  # noqa: BLE001 - 没有初始 CAS 证据，发布必须拒绝。
         raise StandardAPIError(503, "ROUTE_BINDING_UNAVAILABLE", "route state unavailable") from exc
     return row.revision if row is not None else 0
@@ -1077,7 +1110,6 @@ def _advance_route_binding(
         )
     from pathlib import Path
 
-    from aiops_diagnostics import chat_execution
     from aiops_diagnostics.chat_route_bindings import (
         ChatRouteBindingStore,
         RouteBindingError,
@@ -1085,7 +1117,9 @@ def _advance_route_binding(
 
     key_dir = str(getattr(context.settings, "chat_dify_key_dir", "") or "")
     entry = str(getattr(binding, "business_entry", "") or "consumer")
-    scenario = chat_execution.SCENARIO_OWN_ORDER_STATUS
+    from aiops_diagnostics.consumer_publication import route_scenario
+
+    scenario = getattr(outcome, "route_scenario", "") or route_scenario(context.settings, binding)
     # **两个前置必须在写指针之前拒绝**，理由相同：写进去之后才发现，故障会扩散到
     # 别人身上 —— 这两条都会让整张管理表加载失败，而 `_bindings` 在读租户之前
     # 就检查整表，所以一个租户的坏行会让**所有**租户的聊天路线一起不可用。
@@ -1158,6 +1192,7 @@ def _managed_app_route(context: Any, app_id: str):
     from pathlib import Path
 
     from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
+    from aiops_diagnostics.consumer_publication import route_scenario
 
     binding = next((item for item in context.runtime.dify_app_registry.all() if item.app_id == app_id), None)
     if binding is None:
@@ -1169,7 +1204,7 @@ def _managed_app_route(context: Any, app_id: str):
         context.settings.execution_environment,
         binding.tenant_id,
         binding.business_entry,
-        chat_execution.SCENARIO_OWN_ORDER_STATUS,
+        route_scenario(context.settings, binding),
     )
     if row is None or row.app_id != app_id:
         raise StandardAPIError(409, "CHAT_ROUTE_BINDING_MISMATCH", "app route not found")
@@ -1202,6 +1237,7 @@ def _is_managed_workflow_app(context: Any, app_id: str) -> bool:
     from pathlib import Path
 
     from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
+    from aiops_diagnostics.consumer_publication import route_scenario
 
     database = str(getattr(context.settings, "chat_route_bindings_file", "") or "")
     if not database:
@@ -1214,14 +1250,16 @@ def _is_managed_workflow_app(context: Any, app_id: str) -> bool:
             str(getattr(context.settings, "execution_environment", "") or ""),
             binding.tenant_id,
             binding.business_entry,
-            chat_execution.SCENARIO_OWN_ORDER_STATUS,
+            route_scenario(context.settings, binding),
         )
     except Exception as exc:  # noqa: BLE001 - 不能将管理读取故障转成旧执行路线。
         raise StandardAPIError(503, "ROUTE_BINDING_UNAVAILABLE", "route state unavailable") from exc
     return row is not None and row.app_id == app_id
 
 
-def _workflow_trial_draft(context: Any, app_id: str, run_context: ScopeContext):
+def _workflow_trial_draft(
+    context: Any, app_id: str, run_context: ScopeContext, question="check order status"
+):
     from aiops_diagnostics.dify_dsl_pull import DifyDslClient, DifyDslSource
     from aiops_diagnostics.dify_workflow_trial import WorkflowTrial
 
@@ -1242,6 +1280,14 @@ def _workflow_trial_draft(context: Any, app_id: str, run_context: ScopeContext):
             raise StandardAPIError(409, "NODE_TARGET_MISSING", "node target unavailable")
         return NodeTrial(candidate(source, target), row)
     dsl = DifyDslClient(source).export_dsl()
+    if row.scenario == chat_execution.SCENARIO_CONSUMER_SERVICE:
+        from aiops_diagnostics.consumer_publication import frozen_settings, target_for
+        from aiops_diagnostics.consumer_trial import ConsumerTrial
+
+        target = target_for(context.settings, binding)
+        if target is None:
+            raise StandardAPIError(409, "CONSUMER_TARGET_MISSING", "consumer trial target missing")
+        return ConsumerTrial(dsl, source, row, frozen_settings(target), question)
     return WorkflowTrial(dsl, source, row)
 
 
@@ -1307,6 +1353,7 @@ def _restore_bound_app(context: Any, app_id: str, version_no: int, initiator: tu
         version_no,
         workflow_id=workflow_id,
         agent_id=row.agent_id,
+        route_scenario=row.scenario,
     )
     _advance_route_binding(context, outcome, binding, initiator=initiator, expected_revision=row.revision)
     _record_publish_audit(
@@ -2098,7 +2145,9 @@ def create_gateway_app(
 
         store = ChatRouteBindingStore(Path(database).expanduser().absolute())
         entry = str(getattr(binding, "business_entry", "") or "consumer")
-        scenario = chat_execution.SCENARIO_OWN_ORDER_STATUS
+        from aiops_diagnostics.consumer_publication import route_scenario
+
+        scenario = route_scenario(context.settings, binding)
         current = store.get(environment, binding.tenant_id, entry, scenario)
         if current is None:
             raise StandardAPIError(
@@ -2446,7 +2495,7 @@ def create_gateway_app(
                 and context.settings.chat_route_bindings_file
                 and _is_managed_workflow_app(context, payload.app_id)
             ):
-                draft = _workflow_trial_draft(context, payload.app_id, run_context)
+                draft = _workflow_trial_draft(context, payload.app_id, run_context, payload.question)
             else:
                 if payload.prompt is not None:
                     draft_payload = {"prompt": payload.prompt, "allowed_tools": payload.allowed_tools}
@@ -2645,7 +2694,7 @@ def create_gateway_app(
                 )
                 if service_binding is not None:
                     _require_consumer_self_order(caller, "consumer", "pending")
-                    if service_binding.content_file:
+                    if service_binding.content_file or service_binding.content_snapshot is not None:
                         from aiops_diagnostics import consumer_knowledge
 
                         local_kind = (
@@ -2668,11 +2717,7 @@ def create_gateway_app(
                         if local_kind:
                             content = None
                             with contextlib.suppress(ValueError, OSError, PrivatePathError):
-                                content = consumer_knowledge.load_content(
-                                    service_binding.content_file,
-                                    tenant=caller.effective_tenant_id,
-                                    environment=service_binding.environment,
-                                )
+                                content = consumer_knowledge.binding_content(service_binding, caller)
                             served_language = "zh" if language.startswith("zh") else "en"
                             answer = consumer_knowledge.fallback(local_kind, served_language, content)
                             return JSONResponse(
@@ -6939,6 +6984,24 @@ def _require_workflow_trial_result(context: Any, caller: ScopeContext, trial: di
         and not report.get("workflow_run_id")
     ):
         return  # 旧诊断试用继续按原契约读取。
+    if located is not None and located.kind == "service_trial":
+        _require_visible_order(context, caller, trial["order_no"])
+        _require_trial_source_route(context, located)
+        latest = context.dify_run_store.get(located.run_id)
+        snapshot = context.dify_run_store.snapshot(located.run_id)
+        if (
+            located.scope_fingerprint != caller.scope_fingerprint
+            or latest.state != "succeeded"
+            or not dify_run_still_valid(latest)
+            or not snapshot
+            or report.get("summary") != snapshot["blocks"][0]["text"]
+            or any(
+                report.get(k) != getattr(latest, k)
+                for k in ("workflow_run_id", "task_id", "workflow_id", "app_id")
+            )
+        ):
+            raise StandardAPIError(410, "TRIAL_RESULT_UNAVAILABLE", "trial result unavailable")
+        return
     if located is None or located.kind != "trial" or located.scope_fingerprint != caller.scope_fingerprint:
         raise StandardAPIError(503, "TRIAL_EVIDENCE_UNAVAILABLE", "trial evidence unavailable")
     if located.order_no != trial.get("order_no"):

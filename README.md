@@ -381,6 +381,8 @@ flowchart TB
 | `chat_data_grant.py` | **一次性取数凭据**（APP-RUNTIME-02）：Dify 的 HTTP 步骤要用它回调网关取本人那一单。≥256 bit 随机，库里**只存 sha256**；绑死 主体/订单/环境/租户/QA/workflow 与 180 秒有效期；只允许**一次**业务读取，重复回调只回同轮已存的快照；完成/失败/取消三种终态都立即撤销。它不是会话凭据、也不是整租户 key —— 那两个都会把「一个人、一次、一单」的授权放大成可长期复用的能力 |
 | `dify_chat_workflow.py` | **已发布的 Dify Workflow** 的最小调用面：`/v1/workflows/{workflow_id}/run`（streaming）与 `/v1/workflows/tasks/{task_id}/stop`，app service key 从 0600 文件读。开始事件即保存 `workflow_run_id` + `task_id` 并允许取消，最终事件核同一身份且 `succeeded`；运行时**不跑草稿**、不自动追最新版本 |
 | `node_publication.py` | 节点 SOP 发布与试用：从已登记编辑应用冻结提示词和可信执行清单，复用版本、正式路由、撤回与恢复；节点按 run 获取清单并实际核对，不转换任意 Dify Workflow 图 |
+| `consumer_trial.py` | 在临时Chatflow执行WF01草稿，沿用源路由和试用范围，结束清理临时应用 |
+| `consumer_publication.py` | WF01发布目标与路由场景，冻结已审核内容及只读能力 |
 | `consumer_billing.py` | 本人订单账务记录的裁剪与保守展示，不把金额字段或退款记录当支付渠道回执 |
 | `consumer_knowledge.py` | WF01知识回调、本轮检索引用与已审核答案、安全/人工兜底；短期凭据不允许跨用途取数 |
 | `consumer_chat_service.py` | WF01原提问/轮询/取消与用户会话接线，固定发布绑定、同轮结果和回读守卫，默认关闭 |
@@ -794,6 +796,7 @@ runbook §5/§6 明确禁止 CI 自证。所以 CD 通过最多报告 `merged_wa
 2026-10-25 正式节点状态路线已启用，原 H5 本人查询经发布 V18/真实节点/baoyun 完成并与
 SQL/CPMS 独立对照一致；旧试验配置已归档。范围与限制见[真实验收](docs/validation/2026-10-25-production-node-enabled.md)。
 
+WF01发布可冻结审核内容、素材和只读能力，支持临时Chatflow试用及撤回恢复；详见[发布验收](docs/validation/2026-10-25-consumer-publication.md)。
 WF01已审核FAQ可关联图片/视频，素材随QA与绑定失效；详见[媒体验收](docs/validation/2026-10-25-consumer-media.md)。
 WF01可显式启用本人状态单轮读取，复用原授权与CPMS快照；实时轮次不进入后续模型记忆。
 C端明确未解决反馈已接入同会话主题检索与第二次人工渠道提示，详见[验收](docs/validation/2026-10-25-consumer-followup.md)。

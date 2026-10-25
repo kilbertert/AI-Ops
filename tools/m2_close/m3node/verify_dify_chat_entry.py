@@ -755,6 +755,7 @@ def _start_gateway(
     knowledge_base: str = "",
     service_live_order: bool = False,
     service_billing: bool = False,
+    service_publication_target: str = "",
 ) -> tuple[subprocess.Popen, str, dict[str, Any]]:
     """起真 Gateway（绑定表指向 Dify 路线），等它就绪。"""
     case = root / "gateway"
@@ -882,6 +883,7 @@ def _start_gateway(
         "AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL": f"{cpms_base}/charging-pile",
         "AIOPS_GATEWAY_CONSUMER_ORDER_CHAT_ENABLED": "1",
         "AIOPS_GATEWAY_CONSUMER_CHATFLOW_ENABLED": "1" if service_app_id else "0",
+        "AIOPS_GATEWAY_CONSUMER_PUBLICATION_TARGETS_FILE": service_publication_target,
         **(
             {
                 "AIOPS_GATEWAY_KB_SERVICE_BASE_URL": knowledge_base,

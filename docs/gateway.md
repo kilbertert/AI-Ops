@@ -462,3 +462,9 @@ aiops remote evidence RUN_ID
 `AIOPS_GATEWAY_CHAT_NODE_TARGETS_FILE` 将已登记编辑应用映射到节点配置与受控模板。
 正式版本与撤回复用管理路由，原App接口不变；Java节点启用按run加载清单后，发布才改变实际SOP。
 详见[节点发布手册](agents/m3-node-publication.md)与ADR-0128；默认关闭。
+
+## WF01完整发布内容
+
+C端Chatflow的目标、审核内容、只读能力和媒体按同一Agent版本冻结，原运营发布/试用/撤回/恢复
+入口控制consumer_service路线。配置与执行步骤见[WF01发布](agents/consumer-wf01/README.md)。
+修改草稿不影响已发布内容；实时数据仍逐次授权，不随内容快照冻结。功能默认关闭。

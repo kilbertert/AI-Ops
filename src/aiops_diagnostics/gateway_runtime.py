@@ -1795,7 +1795,7 @@ class GatewayRuntime:
             registration = self._qa_registrations.get(run.qa_id)
             if registration is not None:
                 registration.cancelled = True
-            if run.kind == "trial":
+            if run.kind in {"trial", "service_trial"}:
                 self.store.update_standard_diagnosis(run.qa_id, status="cancelled")
             else:
                 self.store.update_assistant_question(run.qa_id, status="cancelled")

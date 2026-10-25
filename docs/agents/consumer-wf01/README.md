@@ -97,3 +97,28 @@ knowledge_base_id/document_id/backend_id/title，以及language=zh/en/any（缺�
 原GET返回既有image/video块，URL走同一媒体端点与短期签名。取图前后核对QA仍成功、未过期且
 内容/发布绑定未变，视频沿用Range。没有素材仍交可靠文字。链接是短期持有凭据，可被转发，
 已下载文件无法追回；只允许通用操作素材，不放个人订单或身份数据。旧手册/示意图须注明适用范围。
+
+## 发布、试用、撤回和恢复
+
+正式WF01使用既有管理路由表及Agent不可变版本；新增
+`AIOPS_GATEWAY_CONSUMER_PUBLICATION_TARGETS_FILE`指向0600目标文件：
+
+```json
+{"schema":"aiops-consumer-targets/1","targets":[{
+  "app_id":"11111111-2222-3333-4444-555555555555",
+  "tenant_id":"TENANT-A","environment":"env-a",
+  "content_file":"/private/reviewed-content.json","knowledge_base_ids":["reviewed-kb"],
+  "live_order_status":true,"live_billing_record":false
+}]}
+```
+
+应用须在既有dify_app_registry登记、工作区ready，已有发布Agent基线，且每应用Service key已准备。
+WF01应用必须是advanced-chat；不能与节点目标或同应用旧个人状态路线并存，也不能同时保留文件执行绑定。
+目标不自动启用App。发布使用原`/v1/dify/publish`及现有运营按钮：冻结Dify图、完整审核内容及能力。
+只改内容或能力也发新版本；相同图和内容不重复发布。运行只读版本里的内容，修改草稿文件不会切版。
+
+原试用接口增加可选question（默认check order status），order_no仍是必须且按试用人范围授权。
+WF01试用导入临时Chatflow、发布并执行，回调仅使用这次冻结内容，结束删除临时应用。
+它不会增加正式版本或切换App；试用期间撤回使本地运行取消并中断上游，不交成功正文。
+原撤回/版本列表/恢复入口按该应用真实场景定位；撤回后新请求与旧正文拒绝，恢复按旧版内容与图执行。
+删除发布目标不自动撤回已发布路线；可继续使用原撤回入口，重新发布/试用则必须有目标。
