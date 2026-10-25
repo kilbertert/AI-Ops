@@ -893,3 +893,9 @@ fixture、数据库检查或模型单次调用写成真实业务验收。
 > #1085的CD曾因新增Pillow依赖被拒；经用户批准更新依赖并由标准脚本部署，现为abefd174ccdf且active。
 > 配置前后相同、WF01仍关闭；两个失败尝试恢复后再成功，累计4次重启，未发业务POST。
 > 详见[整合验收](../validation/2026-10-25-consumer-integrated-acceptance.md)。
+
+> **2026-10-25 · WF01原H5已正式发布启用**：公司MR !275合并后完整构建494文件并部署，
+> WF01 V3/revision2运行；真实页面29/29检查通过，本人状态/账务独立SQL/CPMS一致，B查询与回读拒绝。
+> 知识、连续追问、图片放大、安全及人工导航已验证；官方联系方式仍空，不等于人工接通。
+> 照片关闭，原节点V18保留；原生APK/IPA、完整教程、支付到账及长期稳定性未验。
+> 详见[真实发布验收](../validation/2026-10-25-consumer-wf01-live-release.md)和[恢复手册](consumer-wf01/live-release.md)。
