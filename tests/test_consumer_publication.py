@@ -8,6 +8,8 @@ import yaml
 from test_app_runtime_dify_entry import dify_chat
 from test_consumer_chat_service import done
 from test_consumer_knowledge_flow import ask, setup, wire
+from test_node_publication import publication as publication
+from test_node_publication import publish as publish_node
 
 from aiops_diagnostics.agent_lifecycle import AgentConfig
 from aiops_diagnostics.agent_manifest import admin_context
@@ -224,3 +226,46 @@ def test_chatflow_trial_uses_temporary_app_and_leaves_formal_state_unchanged(
             .status_code
             == 403
         )
+
+
+def test_wf01_publishes_beside_an_existing_node_without_changing_it(publication, monkeypatch, tmp_path):
+    env = publication
+    old = publish_node(env, 0)
+    _, _, _, routes = prepare(env, monkeypatch, tmp_path)
+    row_before = routes.by_key(old.key)
+    response = publish(env)
+    assert response.status_code == 200, response.text
+    assert routes.by_key(old.key) == row_before
+    answer = done(env, ask(env).json()["qa_id"])
+    assert answer.status_code == 200, answer.text
+    assert answer.json()["result"]["blocks"][0]["text"] == "按设备提示启动。"
+    assert routes.by_key(old.key) == row_before
+
+
+def test_old_node_still_needs_its_own_publication_target(publication, monkeypatch):
+    env = publication
+    old = publish_node(env, 0)
+    env["settings"].chat_node_targets_file = ""
+    env["settings"].dify_publish_api_key = "publication-key"
+    env["settings"].dify_console_base_url = "http://dify.invalid"
+    env["settings"].dify_console_api_key = "console-key"
+    monkeypatch.setattr(env["context"].dify_workspaces, "resolve", lambda *args: "workspace-a")
+    response = env["client"].post("/v1/dify/publish", headers=PUBLISH, json={"app_id": old.app_id})
+    assert response.status_code == 409, response.text
+    assert response.json()["error"]["code"] == "NODE_TARGET_MISSING"
+
+
+def test_same_app_cannot_silently_move_its_node_route_to_wf01(publication, monkeypatch, tmp_path):
+    env = publication
+    old = publish_node(env, 0)
+    _, _, _, routes = prepare(env, monkeypatch, tmp_path)
+    target = tmp_path / "consumer-targets.json"
+    body = json.loads(target.read_text())
+    body["targets"][0]["app_id"] = old.app_id
+    target.write_text(json.dumps(body))
+    env["context"].runtime.dify_app_registry.put(DifyAppBinding("TENANT-A", "consumer", old.app_id, "WF01"))
+    before = routes.by_key(old.key)
+    response = env["client"].post("/v1/dify/publish", headers=PUBLISH, json={"app_id": old.app_id})
+    assert response.status_code == 409, response.text
+    assert response.json()["error"]["code"] == "CONSUMER_ROUTE_MIGRATION_REQUIRED"
+    assert routes.by_key(old.key) == before

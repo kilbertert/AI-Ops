@@ -65,6 +65,11 @@ Feature: 原 App 的 C 端只读客服
       When 网关准备交付素材字节
       Then 返回拒绝而非原素材
   Rule: 正式发布一起固定内容与执行图
+    Scenario: WF01与既有节点场景并存
+      Given 同租户已有独立应用发布的本人订单节点路线
+      When 发布新应用的WF01场景
+      Then 原App可获得WF01审核回答且节点路线版本不变
+      And 同应用跨场景迁移仍拒绝
     Scenario: 编辑试用发布撤回恢复
       Given 已发布WF01第一版
       When 编辑内容草稿并试用
