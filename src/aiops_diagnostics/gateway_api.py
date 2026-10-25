@@ -2632,6 +2632,69 @@ def create_gateway_app(
         if payload.conversation_id:
             conversation = _resolve_conversation(context, caller, decision, payload.conversation_id)
 
+        if (
+            selected_settings.consumer_chatflow_enabled
+            and str(decision.platform) == "consumer"
+            and not payload.shortcut_code
+        ):
+            from aiops_diagnostics import consumer_chat_service
+
+            try:
+                service_binding = chat_execution.select_binding(
+                    context.settings, caller, scenario=chat_execution.SCENARIO_CONSUMER_SERVICE
+                )
+                if service_binding is not None:
+                    _require_consumer_self_order(caller, "consumer", "pending")
+                    if payload.order_no:
+                        _require_visible_order(context, caller, payload.order_no)
+                    if not can_prompt_in(language):
+                        return _clarification(
+                            context,
+                            caller,
+                            decision,
+                            code=CLARIFY_LANGUAGE_UNROUTABLE,
+                            question=payload.question,
+                            language=language,
+                        )
+                    if conversation is None:
+                        conversation = context.conversation_store.create(
+                            scope_fingerprint=caller.scope_fingerprint,
+                            business_entry="consumer",
+                            agent_version_key=consumer_chat_service.version_key(service_binding),
+                        )
+                    if conversation["agent_version_key"] != consumer_chat_service.version_key(
+                        service_binding
+                    ):
+                        raise StandardAPIError(
+                            409, "CHATFLOW_NEW_CONVERSATION_REQUIRED", "start a new conversation"
+                        )
+                    turn_no = _begin_conversation_turn(context, caller, conversation, "qa", payload.question)
+                    try:
+                        qa = context.runtime.start_consumer_chatflow(
+                            caller,
+                            payload.question,
+                            binding=service_binding,
+                            conversation=conversation,
+                            conversation_turn_no=turn_no,
+                            language=language,
+                        )
+                    except Exception:
+                        _release_conversation_turn(context, conversation, turn_no)
+                        raise
+                    return JSONResponse(
+                        status_code=202,
+                        headers={"Cache-Control": "no-store"},
+                        content={
+                            **_assistant_question_response(qa, language),
+                            "conversation_id": conversation["conversation_id"],
+                            "turn_no": turn_no,
+                        },
+                    )
+            except chat_execution.ChatRunUnavailable as exc:
+                raise StandardAPIError(exc.http_status, exc.code, str(exc), retryable=exc.retryable) from exc
+            except (ValueError, OSError, sqlite3.Error) as exc:
+                raise _runtime_unavailable("CHATFLOW_UNAVAILABLE", "chatflow unavailable", exc) from exc
+
         # Two server-side guards over the clicked shortcut. The listing
         # metadata is a UI hint; these guards are the boundary that keeps a
         # clicked action on its own path instead of leaking into generic QA.
@@ -6544,6 +6607,13 @@ def authenticated_chat_order_reader(context, caller, request):
 
 
 def _require_current_chat_order(context, caller, qa, request):
+    from aiops_diagnostics import consumer_chat_service
+
+    if str(qa.get("internal_run_id") or "").startswith(consumer_chat_service.PREFIX):
+        try:
+            return consumer_chat_service.require_result(context.runtime, caller, qa)
+        except chat_execution.ChatRunUnavailable as exc:
+            raise StandardAPIError(exc.http_status, exc.code, str(exc), retryable=exc.retryable) from exc
     if _is_node_chat_qa(qa):
         return _require_current_chat_node_order(context, caller, qa, request)
     internal = str(qa.get("internal_run_id") or "")

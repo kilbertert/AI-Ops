@@ -381,6 +381,7 @@ flowchart TB
 | `chat_data_grant.py` | **一次性取数凭据**（APP-RUNTIME-02）：Dify 的 HTTP 步骤要用它回调网关取本人那一单。≥256 bit 随机，库里**只存 sha256**；绑死 主体/订单/环境/租户/QA/workflow 与 180 秒有效期；只允许**一次**业务读取，重复回调只回同轮已存的快照；完成/失败/取消三种终态都立即撤销。它不是会话凭据、也不是整租户 key —— 那两个都会把「一个人、一次、一单」的授权放大成可长期复用的能力 |
 | `dify_chat_workflow.py` | **已发布的 Dify Workflow** 的最小调用面：`/v1/workflows/{workflow_id}/run`（streaming）与 `/v1/workflows/tasks/{task_id}/stop`，app service key 从 0600 文件读。开始事件即保存 `workflow_run_id` + `task_id` 并允许取消，最终事件核同一身份且 `succeeded`；运行时**不跑草稿**、不自动追最新版本 |
 | `node_publication.py` | 节点 SOP 发布与试用：从已登记编辑应用冻结提示词和可信执行清单，复用版本、正式路由、撤回与恢复；节点按 run 获取清单并实际核对，不转换任意 Dify Workflow 图 |
+| `consumer_chat_service.py` | WF01原提问/轮询/取消与用户会话接线，固定发布绑定、同轮结果和回读守卫，默认关闭 |
 | `dify_chatflow.py` | WF01 Chatflow Service API：固定发布版本和会话，核对消息与工作流双完成后返回答案；调用方负责授权和业务放行 |
 | `dify_workflow_trial.py` | **真 Dify 试用**（M3-01）：把这一轮冻结的草稿导入一个**临时 Dify 应用**、发布、跑一次，取真实 `workflow_run_id`/`task_id` 与同轮取数证据，然后删掉临时应用。**不动正式指针**、不产生 `agent_versions` —— 试用不是发布。临时应用的凭据与取数凭据都按 app/这一次隔离 |
 | `chat_route_bindings.py` | **聊天路由的正式绑定**（M3-01）：这个（环境、租户、入口、场景）此刻由**哪一版**执行。发布在这里推进指针，撤回把它改成 `retracted`（**不删行** —— 删行会让请求掉回直读，那是冒充停用）。行上冻结 `agent_id` + `agent_version_no` 指向不可变版本快照，`app_id` / `workflow_id` / 版本号三列分开存。`revision` 是乐观锁；文件登记与管理表**同时声明同一个 key ⇒ 启动失败**，不裁决优先级 |

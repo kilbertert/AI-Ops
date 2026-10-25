@@ -1,0 +1,200 @@
+"""WF01 原聊天作业接线：复用会话锁、Dify记录与最终放行，默认无登记不启用。"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import uuid
+from dataclasses import asdict
+from typing import Any
+
+from aiops_diagnostics import chat_execution
+from aiops_diagnostics.agent_runs import scope_to_json
+from aiops_diagnostics.dify_chat_workflow import DifyWorkflowError, load_workflow_key
+from aiops_diagnostics.dify_chatflow import DifyChatflowClient
+from aiops_diagnostics.dify_run_store import still_valid
+
+PREFIX = "consumer-chatflow:"
+
+
+def version_key(binding: Any) -> str:
+    return f"{binding.agent_id}#v{binding.agent_version_no}"
+
+
+def fingerprint(binding):
+    return hashlib.sha256(json.dumps(asdict(binding), sort_keys=True).encode()).hexdigest()
+
+
+def current(runtime, caller, binding):
+    if not runtime.gateway_settings.consumer_chatflow_enabled:
+        raise chat_execution.ChatRunUnavailable("CHATFLOW_DISABLED", "chatflow disabled", http_status=404)
+    selected = chat_execution.select_binding(
+        runtime.gateway_settings, caller, scenario=chat_execution.SCENARIO_CONSUMER_SERVICE
+    )
+    if selected != binding:
+        raise chat_execution.ChatRunUnavailable(
+            "CHATFLOW_BINDING_CHANGED", "chatflow binding changed", http_status=410
+        )
+    return selected
+
+
+def start(runtime, caller, question, *, binding, conversation, registration, language):
+    current(runtime, caller, binding)
+    previous = runtime.dify_run_store.latest_conversation_run(
+        conversation["conversation_id"], caller.scope_fingerprint
+    )
+    upstream = ""
+    if previous:
+        previous_qa = runtime.store.get_assistant_question(previous.qa_id, caller.scope_fingerprint)
+        if (
+            previous_qa is None
+            or previous_qa["status"] != "completed"
+            or previous.state != "succeeded"
+            or not still_valid(previous)
+            or previous.binding_digest != fingerprint(binding)
+            or previous.workflow_id != binding.workflow_id
+            or previous.route_revision != binding.route_revision
+            or previous.agent_version_no != binding.agent_version_no
+        ):
+            raise chat_execution.ChatRunUnavailable(
+                "CHATFLOW_NEW_CONVERSATION_REQUIRED", "start a new conversation", http_status=409
+            )
+        upstream = previous.upstream_conversation_id
+        if not upstream:
+            raise chat_execution.ChatRunUnavailable(
+                "CHATFLOW_EVIDENCE_UNAVAILABLE", "conversation evidence unavailable"
+            )
+    run_id = "service_" + uuid.uuid4().hex
+    qa = runtime.store.create_assistant_question(
+        caller.scope_fingerprint,
+        question,
+        internal_run_id=PREFIX + run_id,
+        tenant_id=caller.effective_tenant_id,
+    )
+    try:
+        runtime.dify_run_store.issue(
+            run_id=run_id,
+            qa_id=qa["qa_id"],
+            scope_fingerprint=caller.scope_fingerprint,
+            scope_json=scope_to_json(caller),
+            binding_key=binding.key,
+            order_no="",
+            environment=binding.environment,
+            tenant_id=caller.effective_tenant_id,
+            app_id=binding.app_id,
+            workflow_id=binding.workflow_id,
+            grant_id="",
+            agent_version_no=binding.agent_version_no,
+            kind="service",
+            route_revision=binding.route_revision,
+            conversation_id=conversation["conversation_id"],
+            binding_digest=fingerprint(binding),
+        )
+        runtime._qa_registrations[qa["qa_id"]] = registration
+        future = runtime._executor.submit(
+            execute, runtime, caller, qa, question, binding, upstream, registration, language
+        )
+        runtime._futures[qa["qa_id"]] = future
+        future.add_done_callback(lambda _: runtime._futures.pop(qa["qa_id"], None))
+        future.add_done_callback(lambda _: runtime._qa_registrations.pop(qa["qa_id"], None))
+    except Exception:
+        runtime.store.update_assistant_question(
+            qa["qa_id"], status="failed", error_code="CHATFLOW_UNAVAILABLE"
+        )
+        runtime.dify_run_store.fail(run_id, "startup_failed")
+        raise
+    return qa
+
+
+def execute(runtime, caller, qa, question, binding, upstream, registration, language):
+    run_id = qa["internal_run_id"].removeprefix(PREFIX)
+    store = runtime.dify_run_store
+    if not runtime.store.update_assistant_question(qa["qa_id"], status="running"):
+        store.cancel(run_id)
+        runtime._release_conversation_turn(registration.conversation_turn)
+        return
+    try:
+        current(runtime, caller, binding)
+        key = load_workflow_key(binding.workflow_key_file)
+        client = DifyChatflowClient(runtime.gateway_settings.dify_chat_base_url, timeout_seconds=90)
+        # 同用户不同App/发布版本也不共用Dify用户上下文；上游只收到不可逆标识。
+        user = hashlib.sha256(
+            f"{caller.scope_fingerprint}:{binding.key}:{binding.workflow_id}".encode()
+        ).hexdigest()
+
+        def started(workflow_run_id, task_id, upstream_conversation_id, message_id):
+            if not store.bind_workflow(run_id, workflow_run_id=workflow_run_id, task_id=task_id):
+                raise ValueError("workflow identity changed")
+            if not store.bind_message(run_id, upstream_conversation_id, message_id):
+                raise ValueError("message identity changed")
+            registration.interrupt = lambda: client.stop(key=key, task_id=task_id, user=user)
+            if registration.cancelled or store.get(run_id).state != "running":
+                registration.interrupt()
+                raise ValueError("cancelled")
+
+        reply = client.run(
+            key=key,
+            workflow_id=binding.workflow_id,
+            user=user,
+            query=question,
+            inputs={"language": language},
+            conversation_id=upstream,
+            on_started=started,
+        )
+        current(runtime, caller, binding)
+        run = store.get(run_id)
+        if registration.cancelled or run is None or run.state != "running" or not still_valid(run):
+            raise ValueError("run is no longer active")
+        # 这里只交付文本；上游任意URL/文件/媒体不能绕过Gateway媒体授权。
+        answer = {"blocks": [{"kind": "text", "text": reply.answer}], "retrieval_status": "unavailable"}
+        if reply.metadata.get("retriever_resources"):
+            answer["retrieval_status"] = "found"
+        if not store.store_snapshot(run_id, answer) or not store.succeed(run_id):
+            raise ValueError("result could not be committed")
+        current(runtime, caller, binding)
+        stored = runtime.store.update_assistant_question(qa["qa_id"], status="completed", result=answer)
+        runtime._complete_conversation_turn(
+            registration.conversation_turn, question, answer, guarded=not stored, status_qa_id=qa["qa_id"]
+        )
+    except Exception as exc:
+        code = (
+            exc.code
+            if isinstance(exc, (DifyWorkflowError, chat_execution.ChatRunUnavailable))
+            else "CHATFLOW_UNAVAILABLE"
+        )
+        store.fail(run_id, code)
+        runtime.store.update_assistant_question(qa["qa_id"], status="failed", error_code=code)
+        runtime._release_conversation_turn(registration.conversation_turn)
+
+
+def require_result(runtime, caller, qa):
+    if qa["status"] != "completed":
+        return
+    if not runtime.gateway_settings.consumer_chatflow_enabled:
+        raise chat_execution.ChatRunUnavailable("CHATFLOW_DISABLED", "chatflow disabled", http_status=404)
+    run = runtime.dify_run_store.by_qa(qa["qa_id"])
+    if run is None or run.kind != "service" or run.scope_fingerprint != caller.scope_fingerprint:
+        raise chat_execution.ChatRunUnavailable("QA_NOT_FOUND", "answer not found", http_status=404)
+    binding = chat_execution.select_binding(
+        runtime.gateway_settings, caller, scenario=chat_execution.SCENARIO_CONSUMER_SERVICE
+    )
+    if (
+        binding is None
+        or fingerprint(binding) != run.binding_digest
+        or binding.app_id != run.app_id
+        or binding.workflow_id != run.workflow_id
+        or binding.route_revision != run.route_revision
+        or binding.agent_version_no != run.agent_version_no
+        or binding.key != run.binding_key
+    ):
+        raise chat_execution.ChatRunUnavailable(
+            "CHATFLOW_BINDING_CHANGED", "chatflow binding changed", http_status=410
+        )
+    latest = runtime.dify_run_store.get(run.run_id)
+    if latest is None or latest.state != "succeeded" or not still_valid(latest):
+        raise chat_execution.ChatRunUnavailable(
+            "CHATFLOW_RESULT_EXPIRED", "chatflow result expired", http_status=410
+        )
+    current(runtime, caller, binding)
+    if runtime.dify_run_store.snapshot(run.run_id) != qa.get("result"):
+        raise chat_execution.ChatRunUnavailable("CHATFLOW_EVIDENCE_UNAVAILABLE", "answer evidence differs")

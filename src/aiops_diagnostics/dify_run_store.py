@@ -73,6 +73,10 @@ class DifyRun:
     agent_version_no: int = 0
     kind: str = "chat"
     route_revision: int = 0
+    conversation_id: str = ""
+    upstream_conversation_id: str = ""
+    message_id: str = ""
+    binding_digest: str = ""
 
 
 def _now() -> datetime:
@@ -144,6 +148,10 @@ class DifyRunStore:
             # 还是不是现在对外的那一版"。默认 0 = 文件登记（没有版本概念），不受影响。
             for column, declaration in (
                 ("kind", "TEXT NOT NULL DEFAULT 'chat'"),
+                ("conversation_id", "TEXT NOT NULL DEFAULT ''"),
+                ("upstream_conversation_id", "TEXT NOT NULL DEFAULT ''"),
+                ("message_id", "TEXT NOT NULL DEFAULT ''"),
+                ("binding_digest", "TEXT NOT NULL DEFAULT ''"),
                 ("route_revision", "INTEGER NOT NULL DEFAULT 0"),
             ):
                 if column not in existing:
@@ -188,6 +196,8 @@ class DifyRunStore:
         agent_version_no: int = 0,
         kind: str = "chat",
         route_revision: int = 0,
+        conversation_id: str = "",
+        binding_digest: str = "",
     ) -> DifyRun:
         now = _now()
         with self._connection(write=True) as connection:
@@ -196,8 +206,9 @@ class DifyRunStore:
                 INSERT INTO chat_dify_runs (
                     run_id, qa_id, scope_fingerprint, scope_json, binding_key, order_no,
                     environment, tenant_id, app_id, workflow_id, workflow_run_id, task_id,
-                    grant_id, state, created_at, expires_at, agent_version_no, kind, route_revision
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?)
+                    grant_id, state, created_at, expires_at, agent_version_no, kind, route_revision,
+                    conversation_id, binding_digest
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -217,6 +228,8 @@ class DifyRunStore:
                     agent_version_no,
                     kind,
                     route_revision,
+                    conversation_id,
+                    binding_digest,
                 ),
             )
         record = self.get(run_id)
@@ -235,6 +248,26 @@ class DifyRunStore:
                 (workflow_run_id, task_id, run_id, workflow_run_id, task_id),
             )
             return cursor.rowcount == 1
+
+    def bind_message(self, run_id: str, upstream_conversation_id: str, message_id: str) -> bool:
+        with self._connection(write=True) as connection:
+            return (
+                connection.execute(
+                    "UPDATE chat_dify_runs SET upstream_conversation_id=?, message_id=? "
+                    "WHERE run_id=? AND upstream_conversation_id='' AND message_id=''",
+                    (upstream_conversation_id, message_id, run_id),
+                ).rowcount
+                == 1
+            )
+
+    def latest_conversation_run(self, conversation_id: str, scope: str) -> DifyRun | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM chat_dify_runs WHERE conversation_id=? AND scope_fingerprint=? "
+                "AND kind='service' ORDER BY created_at DESC, rowid DESC LIMIT 1",
+                (conversation_id, scope),
+            ).fetchone()
+        return _run_from_row(row) if row else None
 
     def get(self, run_id: str) -> DifyRun | None:
         """同一事务内收敛过期并读取。调用方以该次读取为判定的时点。"""
@@ -384,6 +417,10 @@ def _run_from_row(row: sqlite3.Row) -> DifyRun:
         agent_version_no=int(row["agent_version_no"] or 0),
         kind=row["kind"],
         route_revision=int(row["route_revision"]),
+        conversation_id=row["conversation_id"],
+        upstream_conversation_id=row["upstream_conversation_id"],
+        message_id=row["message_id"],
+        binding_digest=row["binding_digest"],
     )
 
 

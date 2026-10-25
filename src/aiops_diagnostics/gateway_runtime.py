@@ -1508,6 +1508,27 @@ class GatewayRuntime:
         future.add_done_callback(lambda _: self._qa_registrations.pop(qa["qa_id"], None))
         return qa
 
+    def start_consumer_chatflow(
+        self, context, question, *, binding, conversation, conversation_turn_no, language
+    ):
+        from aiops_diagnostics.consumer_chat_service import start
+
+        return start(
+            self,
+            context,
+            question,
+            binding=binding,
+            conversation=conversation,
+            registration=JobRegistration(
+                conversation_turn=(
+                    conversation["conversation_id"],
+                    context.scope_fingerprint,
+                    conversation_turn_no,
+                )
+            ),
+            language=language,
+        )
+
     def start_chat_order_qa(
         self,
         context: ScopeContext,

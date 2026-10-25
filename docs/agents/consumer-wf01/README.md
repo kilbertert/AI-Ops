@@ -35,3 +35,12 @@ API异常/越权、安全优先、真实可播放媒体、实际人工入口逐�
 启动一次性Dify1.17.1和官方provider，合成模型驱动真实Chatflow三轮；
 无宿主服务端口、无生产凭据。依赖已有Docker镜像及官方插件可下载。结束清理自己的容器与卷。
 `dify_chatflow.py`同时核对workflow_finished和message_end，固定版本与会话；调用方仍需实现范围授权。
+
+## 原提问接口的Chatflow接线（默认关闭）
+
+`AIOPS_GATEWAY_CONSUMER_CHATFLOW_ENABLED=1`启用服务端登记的`consumer_service`场景。
+沿用`CHAT_EXECUTION_BINDINGS_FILE`，engine=dify，另需app_id、workflow_id、workflow_key_file、
+agent_id、agent_version_no及environment/tenant_id/entry=consumer；只读工具尚未在此片开放。
+首次POST返回conversation_id，客户端后续原样带回；它是Gateway会话，不是Dify会话ID。
+失败/取消或发布版变化后的会话返回409要求新会话；原QA与会话正文过期/换绑后拒绝交付。
+旧状态查询场景与开关独立，未配置WF01时保持既有路线。本片仅供隔离接线验证，不能当完整客服上线。

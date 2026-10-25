@@ -44,6 +44,7 @@ HANDOFFS = {
     # APP-RUNTIME-01：聊天入口的节点路线也领取会话轮次，必须同样**交给 worker** ——
     # 它是异步的（POST 立即返回），所以答案只能由后台写在终态。
     "start_chat_order_qa": "conversation_turn_no",
+    "start_consumer_chatflow": "conversation_turn_no",
 }
 
 

@@ -35,6 +35,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -67,6 +68,7 @@ BINDINGS_SCHEMA = "aiops-chat-execution/1"
 #: 本片唯一实现的场景。别的取值在**加载时**拒绝，而不是静默当成本场景：
 #: 一份写错场景名的绑定若被当成本场景，就是「配了一个不生效的开关」。
 SCENARIO_OWN_ORDER_STATUS = "consumer_own_order_status"
+SCENARIO_CONSUMER_SERVICE = "consumer_service"
 
 #: 唯一允许的入口。operator/代查不走这条路线（它们的授权判据完全不同）。
 ENTRY_CONSUMER = "consumer"
@@ -218,6 +220,24 @@ def _parse_binding(row: object) -> ChatBinding:
         raise ChatBindingError("inactive chat execution bindings must be removed")
     if values["entry"] != ENTRY_CONSUMER:
         raise ChatBindingError("chat execution binding entry must be consumer")
+    if values["scenario"] == SCENARIO_CONSUMER_SERVICE:
+        if engine != ENGINE_DIFY:
+            raise ChatBindingError("consumer service requires a Dify Chatflow")
+        agent_id, version = row.get("agent_id", ""), row.get("agent_version_no", 0)
+        app_id = row.get("app_id", "")
+        from aiops_diagnostics.dify_chat_workflow import WORKFLOW_ID_PATTERN
+
+        if not isinstance(app_id, str) or not WORKFLOW_ID_PATTERN.fullmatch(app_id):
+            raise ChatBindingError("consumer service requires an app UUID")
+        if (
+            not re.fullmatch(r"agt_[A-Za-z0-9]{8,64}", str(agent_id))
+            or type(version) is not int
+            or version < 1
+        ):
+            raise ChatBindingError("consumer service requires a published agent identity")
+        return ChatBinding(
+            engine=engine, agent_id=agent_id, app_id=app_id, agent_version_no=version, **values
+        )
     if values["scenario"] != SCENARIO_OWN_ORDER_STATUS:
         raise ChatBindingError("unsupported chat execution binding scenario")
     return ChatBinding(engine=engine, **values)  # type: ignore[arg-type]
@@ -369,7 +389,9 @@ def assert_no_binding_collision(settings: GatewayServerSettings) -> None:
         raise ChatBindingError("a chat route binding is declared in both places")
 
 
-def select_binding(settings: GatewayServerSettings, caller: ScopeContext) -> ChatBinding | None:
+def select_binding(
+    settings: GatewayServerSettings, caller: ScopeContext, *, scenario: str = SCENARIO_OWN_ORDER_STATUS
+) -> ChatBinding | None:
     """这一条请求该用哪条绑定。**没有登记就是没有绑定**，不猜、不从别的开关推导。
 
     绑定表读不出来是**拒绝**而不是"当作没配"：后者会让一条本该走节点的请求悄悄
@@ -386,7 +408,7 @@ def select_binding(settings: GatewayServerSettings, caller: ScopeContext) -> Cha
             binding.environment == environment
             and binding.tenant_id == tenant_id
             and binding.entry == ENTRY_CONSUMER
-            and binding.scenario == SCENARIO_OWN_ORDER_STATUS
+            and binding.scenario == scenario
         ):
             return binding
     # 没有**活动**绑定，但这条路由可能**被撤回过**。这两种情况必须分开：
@@ -394,12 +416,18 @@ def select_binding(settings: GatewayServerSettings, caller: ScopeContext) -> Cha
     #   * 被撤回过 ⇒ **拒绝**，绝不回落直读。
     # 撤回的目的是"停止交付"，而直读会照样给出一个答案——那是最难发现的一种失败：
     # 用户拿到了结果，只是它来自另一条路径。
-    if _retracted(settings, environment, tenant_id):
+    if _retracted(settings, environment, tenant_id, scenario=scenario):
         raise ChatRunUnavailable("CHAT_ROUTE_RETRACTED", "this version has been retracted", http_status=410)
     return None
 
 
-def _retracted(settings: GatewayServerSettings, environment: str, tenant_id: str) -> bool:
+def _retracted(
+    settings: GatewayServerSettings,
+    environment: str,
+    tenant_id: str,
+    *,
+    scenario: str = SCENARIO_OWN_ORDER_STATUS,
+) -> bool:
     """这条（环境，入口，场景）在管理表里是不是 `retracted`。"""
     database = str(getattr(settings, "chat_route_bindings_file", "") or "")
     if not database:
@@ -410,7 +438,7 @@ def _retracted(settings: GatewayServerSettings, environment: str, tenant_id: str
 
     try:
         row = ChatRouteBindingStore(Path(database).expanduser().absolute()).get(
-            environment, tenant_id, ENTRY_CONSUMER, SCENARIO_OWN_ORDER_STATUS
+            environment, tenant_id, ENTRY_CONSUMER, scenario
         )
     except Exception as exc:  # noqa: BLE001 - 管理状态不可知，不能回落业务读取。
         raise ChatRunUnavailable(
