@@ -49,6 +49,7 @@ from aiops_diagnostics.dify_login_proxy import (
     verify_console_jwt,
 )
 from aiops_diagnostics.dify_login_service import (
+    PLATFORM_USER_TYPE,
     STATUS_ACTIVE,
     LoginPolicy,
     LoginService,
@@ -426,9 +427,20 @@ class LoginProxyHandler(BaseHTTPRequestHandler):
             self._json(200, {"allowed": False, "reason": "MAPPING_DISABLED"})
             return
         permissions = self.service.store.permissions_of(row)
-        # 白名单里配了发布权限码才判：没配 = 该部署还没切到公司权限码 → 桥维持过渡行为。
-        publish_permission = self.settings.publish_permission
-        allowed = bool(publish_permission) and publish_permission in permissions
+        # 发布权与准入**同一条边界**（ADR-0139）：租户账号在自己的 workspace 里发布 ——
+        # ADR-0073 已把发布钉死在发起人所在的 workspace，跨租户在结构上发不出去。
+        # 平台账号仍在共用的平台 workspace 里，仍然要全局权限码。
+        #
+        # `workspace_joined=1` 是"这个人已经在这个 workspace 里"的本地事实（ADR-0072）。
+        # 它是一次快照，但会话寿命（ADR-0136）给出了同一个窗口：这枚会话最长活多久，
+        # 这条快照就最多旧多久。
+        row_type = str(row.get("user_type") or "")
+        tenant_account = bool(str(row.get("tenant_id") or "")) and row_type != PLATFORM_USER_TYPE
+        allowed = self.service.policy.may_publish(
+            permissions,
+            tenant_account=tenant_account,
+            has_own_workspace=tenant_account and bool(row.get("workspace_joined")),
+        )
         self._json(
             200,
             {

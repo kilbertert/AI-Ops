@@ -1181,3 +1181,46 @@ def test_a_long_lived_session_is_signed_and_its_cookie_has_no_expiry_cap_below_i
     claims = verify_console_jwt(session.access_token, SECRET_KEY)
     assert claims is not None
     assert claims["exp"] - int(_time.time()) > 29 * 24 * 60 * 60
+
+
+def test_a_tenant_account_publishes_in_its_own_workspace_without_the_global_code(stack) -> None:
+    """ADR-0139：租户账号在自己 workspace 里发布，**不要**平台全局发布码。
+
+    隔离在 workspace 那一层（ADR-0073 已把发布钉死在发起人所在的 workspace），所以这道
+    门与准入是同一条边界。这条同时钉住"映射里有 workspace_joined 才算数"—— 它是
+    "这个人已经在他自己的 workspace 里"的本地事实（ADR-0072）。
+    """
+    base, data_dir = stack
+    _FakeCompany.permissions = [EDIT_PERMISSION]  # 只有编辑码，没有平台发布码
+    session = _login_and_get_session(base)
+
+    assert _check_publish(base, session)["allowed"] is False, "登录时还没 join 过 —— 不该放行"
+
+    # 模拟一次成功的 join（`_workspace_joined_once` 不在这里重跑整条链）。
+    import sqlite3
+
+    with sqlite3.connect(data_dir / "mappings.db") as connection:
+        connection.execute(
+            "UPDATE dify_login_mappings SET workspace_id = ?, workspace_joined = 1", ("ws-tenant",)
+        )
+    assert _check_publish(base, session)["allowed"] is True
+
+
+def test_a_platform_account_still_needs_the_global_publish_code(stack) -> None:
+    """平台账号（`type=-1`）**没有**平台发布码 ⇒ 仍然拒。
+
+    反向判据：把那句的 `tenant_account` 判断删掉，`system` 这类账号会因为"有 workspace"
+    直接拿到发布权 —— 而它所在的平台 workspace 是所有人共用的一间。
+    """
+    base, data_dir = stack
+    _FakeCompany.permissions = [EDIT_PERMISSION]
+    session = _login_and_get_session(base)
+    import sqlite3
+
+    with sqlite3.connect(data_dir / "mappings.db") as connection:
+        connection.execute(
+            "UPDATE dify_login_mappings SET tenant_id = ?, user_type = ?, workspace_joined = 1",
+            ("-1", "-1"),
+        )
+    assert _check_publish(base, session)["allowed"] is False
+    assert _check_publish(base, session)["reason"] == "MISSING_PUBLISH_PERMISSION"
