@@ -37,18 +37,17 @@ MESSAGES = {
     },
     "en": {
         "safety": (
-            "Move away from the charger. Do not touch the connector, cable or enclosu"
-            "re, unplug it or attempt repairs. If safe, warn others to keep clear and"
+            "Move away from the charger. Do not touch the connector, cable or enclosure, "
+            "unplug it or attempt repairs. If safe, warn others to keep clear and"
             " contact on-site staff and local emergency services."
         ),
         "human": (
-            "Use the official support option in this app or on the station signage. D"
-            "o not share passwords, one-time codes or full payment card details."
+            "Use the official support option in this app or on the station signage. "
+            "Do not share passwords, one-time codes or full payment card details."
         ),
         "not_found": (
             "I could not find reliable instructions for this situation. Please share "
-            "the charger message or the step you reached, or contact official support"
-            "."
+            "the charger message or the step you reached, or contact official support."
         ),
         "unavailable": (
             "The relevant instructions are temporarily unavailable. Please try later "
@@ -59,8 +58,8 @@ MESSAGES = {
             "not share passwords, one-time codes or full payment details."
         ),
         "realtime": (
-            "This live information is not connected to this support flow yet, so I ca"
-            "nnot verify it. Please check the order or payment history in the app, or"
+            "This live information is not connected to this support flow yet, so I cannot "
+            "verify it. Please check the order or payment history in the app, or"
             " contact official support."
         ),
     },
