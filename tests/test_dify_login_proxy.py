@@ -1133,3 +1133,51 @@ def test_the_publish_check_refuses_an_account_with_no_mapping(stack) -> None:
     verdict = _check_publish(base, orphan.access_token)
     assert verdict["allowed"] is False
     assert verdict["reason"] == "NO_MAPPING"
+
+
+def test_settings_reject_a_session_lifetime_outside_the_allowed_range() -> None:
+    """会话寿命在**构造时**校验，不在登录时（ADR-0136）。
+
+    这枚 cookie 是永久凭据而不是"记住我"的开关：拿到它就拿到该账号。所以上限存在
+    （一年），下界也存在（1 分钟，否则等于每次请求后立刻失效）。一个配置失误必须在
+    启动时报，不能表现成"登录服务坏了"——与上面 environment 那条判据同一形状。
+    """
+    from aiops_diagnostics.dify_login_provision import DifyProvisionError
+
+    for bad in (0, -1, 366 * 24 * 60 + 1):
+        with pytest.raises(DifyProvisionError):
+            DifyConsoleSettings(
+                base_url="http://dify.invalid",
+                secret_key=SECRET_KEY,
+                environment="prod-41",
+                access_expire_minutes=bad,
+            )
+
+
+def test_a_long_lived_session_is_signed_and_its_cookie_has_no_expiry_cap_below_it() -> None:
+    """**30 天的会话真的签得出来，且 cookie 的 Max-Age 跟着它走。**
+
+    这是运营报的那个缺陷的判据：登录状态维持不了很久。`refresh` 与 `access` 同值、
+    代理没有刷新端点，所以 `exp` 与 `Max-Age` **就是**两次登录之间能待多久。
+    """
+    from aiops_diagnostics.dify_login_proxy import mint_console_session
+
+    thirty_days = 30 * 24 * 60
+    session = mint_console_session(
+        OWNER_ACCOUNT_ID,
+        secret_key=SECRET_KEY,
+        deployment_edition="COMMUNITY",
+        access_expire_minutes=thirty_days,
+    )
+
+    cookies = session.cookies(secure=True)
+    assert all(f"Max-Age={thirty_days * 60}" in c for c in cookies), cookies
+
+    # 令牌本身也远未过期：解出来核 exp。
+    import time as _time
+
+    from aiops_diagnostics.dify_login_proxy import verify_console_jwt
+
+    claims = verify_console_jwt(session.access_token, SECRET_KEY)
+    assert claims is not None
+    assert claims["exp"] - int(_time.time()) > 29 * 24 * 60 * 60
