@@ -229,7 +229,7 @@ def _require_bound_agents_declared(
     # 一个只是没写这个字段的合法清单会因此装载失败。
     return tuple(
         replace(agent, config=replace(agent.config, allowed_tools=ALL_TOOL_NAMES))
-        if tools_from_dify(agent)
+        if tools_from_dify(agent) and (agent.tenant_id, agent.name) not in bound
         else agent
         for agent in agents
     )

@@ -501,3 +501,35 @@ def test_reconcile_preserves_the_operators_tool_allowlist(tmp_path: Path) -> Non
     reports = reconcile(manager, manifest)
     assert _actions(reports) == ["unchanged"], "没有漂移就不该发布新版本"
     assert manager.list(context)[0].config.allowed_tools == ("order_snapshot",), "运营设的白名单被改回去了"
+
+
+@pytest.mark.parametrize("tools", [(), ("order_snapshot",)])
+def test_loaded_dify_manifest_preserves_live_tools_and_version(tmp_path: Path, tools) -> None:
+    manager = _manager(tmp_path)
+    existing = _manifest_agent()
+    existing = replace(existing, config=replace(existing.config, allowed_tools=tools))
+    reconcile(manager, _manifest(existing))
+    before = manager.list(_context())[0]
+    manifest = load_manifest(
+        _write(
+            tmp_path,
+            """
+        [[agents]]
+        tenant_id = "tenant-a"
+        name = "客服助手"
+        description = "d"
+        agent_type = "customer"
+        knowledge_base_ids = ["kb-a"]
+        model = "aiops-api"
+        [[dify_apps]]
+        tenant_id = "tenant-a"
+        business_entry = "consumer"
+        app_id = "app-1"
+        agent_name = "客服助手"
+    """,
+        )
+    )
+    assert _actions(reconcile(manager, manifest)) == ["unchanged"]
+    after = manager.list(_context())[0]
+    assert after.config.allowed_tools == tools
+    assert after.published_version == before.published_version
