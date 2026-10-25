@@ -146,6 +146,7 @@ class ChatBinding:
     route_revision: int = 0
     manifest_text: str = ""
     content_file: str = ""
+    content_snapshot: dict | None = None
     knowledge_base_ids: tuple[str, ...] = ()
     live_order_status: bool = False
     live_billing_record: bool = False
@@ -362,6 +363,42 @@ def _bindings_from_store(path: str | Path, key_dir: str = "") -> tuple[ChatBindi
             app_id=row.app_id,
             route_revision=row.revision,
         )
+        if binding.scenario == SCENARIO_CONSUMER_SERVICE:
+            from dataclasses import replace
+
+            from aiops_diagnostics.agent_lifecycle import AgentError, AgentStore
+
+            try:
+                snapshot = (
+                    AgentStore(store.path).version(row.agent_id, row.tenant_id, row.agent_version_no).snapshot
+                )
+            except AgentError as exc:
+                raise ChatBindingError("consumer publication version unavailable") from exc
+            frozen = snapshot.get("consumer_service")
+            if (
+                snapshot.get("app_id") != row.app_id
+                or snapshot.get("workflow_id") != row.workflow_id
+                or not isinstance(frozen, dict)
+                or not isinstance(frozen.get("content"), dict)
+                or not isinstance(frozen.get("knowledge_base_ids"), list)
+                or any(
+                    not isinstance(k, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", k)
+                    for k in frozen.get("knowledge_base_ids", [])
+                )
+                or frozen["content"].get("tenant_id") != row.tenant_id
+                or frozen["content"].get("environment") != row.environment
+                or frozen["content"].get("state") != "published"
+                or type(frozen.get("live_order_status")) is not bool
+                or type(frozen.get("live_billing_record")) is not bool
+            ):
+                raise ChatBindingError("consumer publication has no frozen content")
+            binding = replace(
+                binding,
+                content_snapshot=frozen["content"],
+                knowledge_base_ids=tuple(frozen["knowledge_base_ids"]),
+                live_order_status=frozen["live_order_status"],
+                live_billing_record=frozen["live_billing_record"],
+            )
         if binding.engine == ENGINE_NODE:
             from dataclasses import replace
 

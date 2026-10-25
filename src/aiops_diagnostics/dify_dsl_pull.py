@@ -1014,6 +1014,7 @@ class SyncOutcome:
     #: 取不到时为空串：那是"不知道",调用方必须按未完成处理，不能拿 app_id 顶替。
     workflow_id: str = ""
     agent_id: str = ""
+    route_scenario: str = ""
 
 
 def _dsl_kind(dsl_text: str) -> str:
@@ -1055,6 +1056,8 @@ def sync_workflow_from_dify(
     context: Any,
     binding: Any,
     source: DifyDslSource,
+    *,
+    consumer_settings: dict | None = None,
 ) -> SyncOutcome:
     """把一个**workflow**应用的当前内容冻结成新的已发布版本。
 
@@ -1092,6 +1095,7 @@ def sync_workflow_from_dify(
     # Dify 原生 publish 每次新建版本；先确认内容相同且原不可变版本仍有效。
     if (
         same_app
+        and previous.get("consumer_service") == consumer_settings
         and previous.get("workflow") == candidate
         and previous_workflow
         and workflow_content(client.export_dsl(workflow_id=previous_workflow)) == candidate
@@ -1105,6 +1109,7 @@ def sync_workflow_from_dify(
             existing.published_version,
             workflow_id=previous_workflow,
             agent_id=existing.agent_id,
+            route_scenario="consumer_service" if consumer_settings is not None else "",
         )
     if not client.publish_workflow(binding.app_id):
         raise DifyDslMalformed("Dify did not confirm the workflow publish")
@@ -1119,6 +1124,8 @@ def sync_workflow_from_dify(
         "workflow_id": workflow_id,
         "workflow": frozen,
     }
+    if consumer_settings is not None:
+        snapshot_body["consumer_service"] = consumer_settings
     agent = manager.fork_draft(context, existing.agent_id, expected_revision=existing.revision)
     version = manager.store.publish(
         agent.agent_id,
@@ -1136,6 +1143,7 @@ def sync_workflow_from_dify(
         version.version_no,
         workflow_id=workflow_id,
         agent_id=agent.agent_id,
+        route_scenario="consumer_service" if consumer_settings is not None else "",
     )
 
 
