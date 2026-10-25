@@ -11,3 +11,6 @@
 Gateway skill与最终实链复跑结果在末尾补齐。暂无真实App整包构建、图片输入或真实供应商业务验收。
 
 最终树真Dify/Gateway复跑51/51通过；Gateway skill通过。源码内容锁已重算，生产仍未启用WF01。
+
+CI首轮3966 passed/10 skipped/1failed：取消即先写终态，测试在worker finally清理临时应用前检查了删除。
+改为等待同一future收尾后核对清理；取消立即可读的行为保持不变。

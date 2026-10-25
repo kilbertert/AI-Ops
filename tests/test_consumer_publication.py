@@ -196,12 +196,15 @@ def test_chatflow_trial_uses_temporary_app_and_leaves_formal_state_unchanged(
         )
         assert result.status_code == 202, result.text
         trial_id = result.json()["trial_id"]
+        future = runtime._futures.get(trial_id)
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
             record = runtime.get_trial(caller, trial_id)
             if record["status"] not in {"queued", "running"}:
                 break
             time.sleep(0.01)
+        if future is not None:
+            future.result(timeout=5)
         if retract_during_trial:
             assert record["status"] == "cancelled", record
             assert record.get("result") is None
