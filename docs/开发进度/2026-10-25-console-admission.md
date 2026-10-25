@@ -25,5 +25,13 @@
 改 `src/` 不改它就红）。`test_consumer_status_default_path` 有一条与本改动无关的红，干净树上
 同样红。
 
-**没做**：真机验收。需要 `ulink` 用真实账号走一次登录代理，判据是审计里出现 `joined`
-而不是 `denied`。
+**真机验收已完成（2026-10-25 13:07）**：`ulink` 的真实公司账号走 `https://dify.ranlei.work`
+完整登录，五条判据全 PASS、跑两遍一致：
+
+- 登录被接受（HTTP 200）；会话可用（`profile.name=ulink`）；
+- **只看得见自己那个 workspace** `c3f871e1-…`，平台 workspace `d7d788cf-…` 缺席；
+- 看得见本租户三个 app。
+
+审计从 `denied` 变成 `joined` + `provisioned`。**归因可证**：`ulink` 的 363 条权限码里
+`aiops:*` 为 0，旧判据下必然被拒（部署前确实被拒 5 次），所以这次能进只能由新判据解释。
+详见 `docs/validation/2026-10-25-console-admission.md`。
