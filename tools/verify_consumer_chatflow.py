@@ -46,7 +46,18 @@ class Model(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/event-stream" if body.get("stream") else "application/json")
         self.end_headers()
         if any("本轮知识" in str(m.get("content")) for m in messages):
-            answer = json.dumps({"kind": "knowledge", "faq_id": "KB-C-007"})
+            last = str(
+                next(
+                    m.get("content")
+                    for m in reversed(messages)
+                    if m.get("role") == "user" and "本轮知识" in str(m.get("content"))
+                )
+            )
+            answer = json.dumps(
+                {"kind": "realtime", "faq_id": ""}
+                if "live_snapshot" in last
+                else {"kind": "knowledge", "faq_id": "KB-C-007"}
+            )
         if body.get("stream"):
             chunk = {
                 "id": "chatcmpl-test",
@@ -226,6 +237,7 @@ class Knowledge(BaseHTTPRequestHandler):
 
 
 def verify_knowledge(root, base, env, setup, model, check):
+    cpms = stack._serve(stack.CpmsHandler)
     kb = ThreadingHTTPServer(("127.0.0.1", 0), Knowledge)
     threading.Thread(target=kb.serve_forever, daemon=True).start()
     gateway = None
@@ -264,13 +276,14 @@ def verify_knowledge(root, base, env, setup, model, check):
         gateway, gateway_base, diag = stack._start_gateway(
             root=root / "knowledge-test",
             model_url=f"http://127.0.0.1:{model.server_port}/v1",
-            cpms_base="http://127.0.0.1:1",
+            cpms_base=f"http://127.0.0.1:{cpms.server_port}",
             dify_base=base,
             workflow_id=new["workflow_id"],
             key=new["service_key"],
             port=port,
             service_app_id=new["app_id"],
             service_content=str(content),
+            service_live_order=True,
             knowledge_base=f"http://127.0.0.1:{kb.server_port}",
         )
         check("knowledge Gateway ready", not diag.get("error"))
@@ -342,10 +355,41 @@ def verify_knowledge(root, base, env, setup, model, check):
             and "已转接" not in escalated.get("message", "")
             and calls == (len(Model.requests), len(Knowledge.requests)),
         )
+        knowledge_calls = len(Knowledge.requests)
+        code, live = stack.http_json(
+            gateway_base + "/v1/assistant/questions",
+            "POST",
+            {"question": "check my latest order status", "conversation_id": post["conversation_id"]},
+            headers,
+        )
+        check("live order Chatflow admitted", code == 202)
+        deadline = time.monotonic() + 90
+        while time.monotonic() < deadline:
+            code, final = stack.http_json(
+                gateway_base + "/v1/assistant/questions/" + live["qa_id"], headers=headers
+            )
+            if code != 200 or final.get("status") not in ["queued", "running"]:
+                break
+            time.sleep(0.1)
+        text = (final.get("result") or {}).get("blocks", [{}])[0].get("text", "")
+        check(
+            "live order returns same round CPMS state",
+            code == 200
+            and final.get("status") == "completed"
+            and stack.ORDER_LATEST in text
+            and "cpms.chargingInfo" in text
+            and "DO-NOT-LEAK" not in text,
+        )
+        check(
+            "live order reads once without knowledge",
+            len(stack.CpmsHandler.calls) == 1 and len(Knowledge.requests) == knowledge_calls,
+        )
     finally:
+        (root / "knowledge-model-requests.json").write_text(json.dumps(Model.requests, ensure_ascii=False))
         if gateway:
             stack._stop(gateway)
         kb.shutdown()
+        cpms.shutdown()
 
 
 def main():
