@@ -1509,7 +1509,16 @@ class GatewayRuntime:
         return qa
 
     def start_consumer_chatflow(
-        self, context, question, *, binding, conversation, conversation_turn_no, language, order_no=""
+        self,
+        context,
+        question,
+        *,
+        binding,
+        conversation,
+        conversation_turn_no,
+        language,
+        order_no="",
+        data_kind="status",
     ):
         from aiops_diagnostics.consumer_chat_service import start
 
@@ -1520,6 +1529,7 @@ class GatewayRuntime:
             binding=binding,
             conversation=conversation,
             order_no=order_no,
+            data_kind=data_kind,
             registration=JobRegistration(
                 conversation_turn=(
                     conversation["conversation_id"],

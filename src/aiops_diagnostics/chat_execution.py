@@ -148,6 +148,7 @@ class ChatBinding:
     content_file: str = ""
     knowledge_base_ids: tuple[str, ...] = ()
     live_order_status: bool = False
+    live_billing_record: bool = False
 
     @property
     def key(self) -> str:
@@ -251,7 +252,11 @@ def _parse_binding(row: object) -> ChatBinding:
         live = row.get("live_order_status", False)
         if type(live) is not bool or (live and not content):
             raise ChatBindingError("live order status requires reviewed content")
+        billing = row.get("live_billing_record", False)
+        if type(billing) is not bool or (billing and not content):
+            raise ChatBindingError("billing records require reviewed content")
         return ChatBinding(
+            live_billing_record=billing,
             live_order_status=live,
             engine=engine,
             agent_id=agent_id,
