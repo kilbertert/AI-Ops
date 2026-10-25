@@ -19,6 +19,7 @@ grep -oE 'p\("[^"]*"' aiPackage-pages-chat-chat.<hash>.js | sort -u
 | GET | `/v1/faq/catalog` | `/v1/faq/catalog` | GET |
 | POST | `/v1/faq/answer` | `/v1/faq/answer` | POST |
 | GET | `/v1/shortcuts` | `/v1/shortcuts` | GET |
+| GET | `/v1/media/{signed_id}` | 同左 | GET |
 | POST | `/v1/assistant/questions` | `/v1/assistant/questions` | POST |
 | GET | `/v1/assistant/questions/{qa_id}` | 同左 | GET |
 | POST | `/v1/assistant/questions/{qa_id}/cancel` | 同左 | POST |
@@ -31,6 +32,11 @@ grep -oE 'p\("[^"]*"' aiPackage-pages-chat-chat.<hash>.js | sort -u
 ID 形状取自网关自己的生成处（`gateway_store.py`）：`qa_` + 32 位十六进制、
 `hrj_` + 32 位、`dx_` + 32 位。正则按这个形状限死，不写 `[^/]+` —— 后者会把
 `/v1/assistant/questions/../../admin` 这类路径也放进来。
+
+WF01新增签名素材路径来自`MediaResourceSigner.issue`：`media_`+32个base64url字符+
+`.`+24位十六进制签名。只转GET，签名及当前QA/发布版本仍由网关验证；错误签名不能获得素材。
+原H5回答中的相对图片URL依赖这条同源转发，缺失会落静态首页。真实nginx同时验证
+有效形状可达、截短/加长/非素材ID及POST/DELETE不转发。生产照片输入仍关闭，不增加上传路由。
 
 同目录的 `aiPackage-*` 里还有 `/v1/signin/anonymously` 与 `/v1/user/me`：
 **那不是我们的路由**（网关 `/v1/` 下没有这两条），属于公司业务面，不在本片。

@@ -12,6 +12,7 @@ GET  /v1/faq/recommendations
 GET  /v1/faq/catalog
 POST /v1/faq/answer
 GET  /v1/shortcuts
+GET  /v1/media/{signed_id}
 POST /v1/assistant/questions
 GET  /v1/assistant/questions/{qa_id}
 POST /v1/assistant/questions/{qa_id}/cancel

@@ -42,6 +42,7 @@ _IDS = {
     "{qa_id}": "qa_0123456789abcdef0123456789abcdef",
     "{job_id}": "hrj_0123456789abcdef0123456789abcdef",
     "{diagnosis_id}": "dx_0123456789abcdef0123456789abcdef",
+    "{signed_id}": "media_Abcdefghijklmnopqrstuvwxyz012_-9.0123456789abcdef01234567",
 }
 
 _LINE = re.compile(r"^(?P<method>[A-Z]+)\s+(?P<path>/\S+)$", re.MULTILINE)
@@ -102,6 +103,7 @@ def _concrete(method: str, template: str) -> str:
     path = re.sub(r"\{qa_id\}", _IDS["{qa_id}"], path)
     path = re.sub(r"\{job_id\}", _IDS["{job_id}"], path)
     path = re.sub(r"\{diagnosis_id\}", _IDS["{diagnosis_id}"], path)
+    path = path.replace("{signed_id}", _IDS["{signed_id}"])
     # 其余占位符（{agent_id}、{order_no}、{run_id} …）填一个合法段即可 ——
     # 判的是"这条路径会不会被转发"，不是那个 id 在库里存不存在。
     return re.sub(r"\{[a-z_]+\}", "x0123456789abcdef0123456789abcdef", path)
@@ -239,6 +241,15 @@ def forwarded(tmp_path_factory: pytest.TempPathFactory) -> dict[str, bool]:
             if not concrete.startswith("/v1/") or (method, concrete) in declared:
                 continue
             result[(method, concrete)] = reached(method, concrete)
+        media = "/v1/media/" + _IDS["{signed_id}"]
+        for method, path in [
+            ("POST", media),
+            ("DELETE", media),
+            ("GET", media[:-1]),
+            ("GET", media + "a"),
+            ("GET", "/v1/media/admin"),
+        ]:
+            result[(method, path)] = reached(method, path)
         yield result
     finally:
         for proc in (nginx, stub):
