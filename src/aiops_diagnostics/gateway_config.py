@@ -83,6 +83,7 @@ class GatewayServerSettings:
     #: 这样"发布"不需要从任何地方读到密钥，也就不会把它写进表里。
     chat_dify_key_dir: str = ""
     chat_node_targets_file: str = ""
+    consumer_chatflow_enabled: bool = False
     #: 管家端公司 OAuth2 令牌的校验入口与客户端凭据（#443 / ADR-0009）。三个键**全部缺省为空**，
     #: 全空时该路径整体不构造 ⇒ 行为与启用前逐字一致（这既是「先合不启用」的机制保证，也是
     #: 回滚路径：清空即回退）。只设了其中一部分是启动错误，不是静默禁用 —— 与
@@ -363,6 +364,11 @@ class GatewayServerSettings:
             or _file_value(file_values, "AIOPS_GATEWAY_DIFY_CHAT_BASE_URL"),
             chat_route_bindings_file=_env("AIOPS_GATEWAY_CHAT_ROUTE_BINDINGS_FILE")
             or _file_value(file_values, "AIOPS_GATEWAY_CHAT_ROUTE_BINDINGS_FILE"),
+            consumer_chatflow_enabled=(
+                _env("AIOPS_GATEWAY_CONSUMER_CHATFLOW_ENABLED")
+                or _file_value(file_values, "AIOPS_GATEWAY_CONSUMER_CHATFLOW_ENABLED")
+            ).lower()
+            in {"1", "true", "yes", "on"},
             chat_node_targets_file=_env("AIOPS_GATEWAY_CHAT_NODE_TARGETS_FILE")
             or _file_value(file_values, "AIOPS_GATEWAY_CHAT_NODE_TARGETS_FILE"),
             chat_dify_key_dir=_env("AIOPS_GATEWAY_CHAT_DIFY_KEY_DIR")
@@ -524,6 +530,8 @@ class GatewayServerSettings:
         # APP-RUNTIME-01：聊天入口的节点绑定是**一份按租户登记的表**。
         # 启动时整表校验一次（坏文件、坏清单、半配都不许活到第一次签发），
         # 且每条登记必须在**本环境**里成立 —— 跨环境的登记是配置错误，不是默认值。
+        if self.consumer_chatflow_enabled and not (self.dify_chat_base_url and self.execution_environment):
+            raise ValueError("consumer chatflow requires Dify and execution environment")
         if self.chat_execution_bindings_file:
             from aiops_diagnostics import chat_execution  # noqa: PLC0415 - 避免循环导入
 
