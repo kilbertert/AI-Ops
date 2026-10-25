@@ -71,10 +71,9 @@ from aiops_diagnostics.ops_analysis import (
 from aiops_diagnostics.ops_analysis import (
     RULE_VERSION as OPS_ANALYSIS_RULE_VERSION,
 )
-from aiops_diagnostics.order_visibility import TENANT_SCOPE_SOURCE, resolve_device_tenant
+from aiops_diagnostics.order_visibility import TENANT_SCOPE_SOURCE, resolve_device_tenant, tenant_matches
 from aiops_diagnostics.parsing import parse_request
 from aiops_diagnostics.platform_paths import reference_root
-from aiops_diagnostics.order_visibility import tenant_matches
 from aiops_diagnostics.query_scope import resolve_query_scope
 from aiops_diagnostics.redaction import redact_text
 from aiops_diagnostics.routing import RoutingThresholds, classify_with_jev
