@@ -40,7 +40,7 @@ API异常/越权、安全优先、真实可播放媒体、实际人工入口逐�
 
 `AIOPS_GATEWAY_CONSUMER_CHATFLOW_ENABLED=1`启用服务端登记的`consumer_service`场景。
 沿用`CHAT_EXECUTION_BINDINGS_FILE`，engine=dify，另需app_id、workflow_id、workflow_key_file、
-agent_id、agent_version_no及environment/tenant_id/entry=consumer；本人状态可按下节显式启用；支付/退款等仍待接入。
+agent_id、agent_version_no及environment/tenant_id/entry=consumer；本人状态及账务记录可按下节显式启用；支付渠道到账仍待接入。
 首次POST返回conversation_id，客户端后续原样带回；它是Gateway会话，不是Dify会话ID。
 失败/取消或发布版变化后的会话返回409要求新会话；原QA与会话正文过期/换绑后拒绝交付。
 旧状态查询场景与开关独立，未配置WF01时保持既有路线。本片仅供隔离接线验证，不能当完整客服上线。
@@ -53,13 +53,14 @@ agent_id、agent_version_no及environment/tenant_id/entry=consumer；本人状�
 `state=approved`和`answers.zh/en`；可选support按语言提供label/url。原编译草稿不能直接用。
 真实地址只由受控配置给出，电话/HTTPS渠道不来自模型；没有配置就指向App/站点已有入口。
 
-Dify的HTTP节点自己带data_grant回调`POST /v1/internal/consumer-knowledge`，没有请求体。
+Dify的HTTP节点自己带data_grant回调`POST /v1/internal/consumer-knowledge`；无图兼容空体，
+图片分支以有界纯文本body携带识图JSON，不允许自报租户/订单。
 模型只接收检索结果，不接收凭据；它只返回kind/faq_id，Gateway投影标准答案和来源。
 知识库需单FAQ文件，标题带KB-C-ID；本轮命中且发布内容里存在才允许选择。
 该路径没有启用元数据过滤，不要把不同地区/版本的未审内容混入同一个发布集。
 
 安全关键词先给出保守避险提示，不以订单号/模型响应为前提；人工请求给真实已配置入口。
-实时支付/退款等未接能力明确不可核实，不能用FAQ替代实际状态，也不会提交写操作。
+支付渠道到账等未接能力明确不可核实，不能用FAQ替代实际状态，也不会提交写操作。
 
 ## 连续未解决反馈
 
@@ -139,3 +140,5 @@ WF01试用导入临时Chatflow、发布并执行，回调仅使用这次冻结�
 
 Gateway不保存原图磁盘副本，Dify按平台策略保存上传文件与运行输入；Gateway过期清理不等于
 上游副本删除。现役Dify保留策略及真实App图片验收尚未完成，不能据此开放生产图片能力。
+
+最新真实依赖与App候选结果见[整合验收](../../validation/2026-10-25-consumer-integrated-acceptance.md)。
