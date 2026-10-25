@@ -86,6 +86,25 @@ CONSOLE_CSRF_COOKIE = "csrf_token"
 CONSOLE_CSRF_HEADER = "X-CSRF-Token"
 
 #: 桥只打这三跳，都是相对路径 —— "打到谁"由部署配置决定。
+# 平台账号的两个哨兵值。
+#
+# ⚠️ **不 import 它们的原始出处**：发布桥的部署制品只含
+# `{__init__, dify_console_publish, async_job_lifecycle, bounded_http, http_auth}.py`
+# （`ops/dify-console-bridge/build-bundle.sh:13`）。从 `dify_login_service` 或
+# `dify_workspaces` 导入会让桥在服务宿主上 `ModuleNotFoundError` —— 实测 2026-10-25：
+# 五个部署测试立刻转红，而它们在本地全绿。这是本模块唯一允许"重写一个常量"的地方，
+# 代价由 `tests/test_dify_console_publish.py` 的两条对照用例钉住。
+#
+# 值与出处必须一致：
+#   - `PLATFORM_USER_TYPE = "-1"` ← `dify_login_service.py:66`
+#   - `PLATFORM_TENANT_ID = "platform"` ← `dify_workspaces.py:448`（workspace 目录的
+#     平台键，即 `dify_workspaces` 表里 `tenant_id='platform'` 那一行）
+#
+# 另注：`shortcut_lifecycle.py` 有同名的 `PLATFORM_TENANT_ID = "__platform__"`，那是
+# **快捷动作**命名空间，与 workspace 无关（ADR-0008 记的「同名不同物」）。
+PLATFORM_USER_TYPE = "-1"
+PLATFORM_TENANT_ID = "platform"
+
 DIFY_WORKSPACE_SUMMARY_PATH = "/console/api/workspaces/current/summary"
 DIFY_APP_PATH = "/console/api/apps/{app_id}"
 #: 机器门（共享密钥）。**不是** ``/v1/operator/publish``：那条要运营的网关会话。
@@ -610,6 +629,21 @@ def publish_current_app(
             return ConsolePublishResult(False, _REFUSED_PUBLISH_PERMISSION)
         if gateway_internal_token:
             tenant_id = initiator_headers.get("X-AIOps-Initiator-Tenant", "")
+            # 平台账号（`company_user_type == PLATFORM_USER_TYPE`，即公司体系的 `-1`）
+            # 不属于任何 `sys_organ`，它的 `tenant_id` 是哨兵值 `-1` 而不是实体 id。
+            # 拿 `-1` 去查 workspace 会在网关的参数校验就失败（`_SAFE_ID` 要求首字符是
+            # 字母或数字），网关回 400，而桥把所有非 2xx 都译成「这个租户没有工作区」——
+            # 于是真正的原因（租户 id 非法）被抹成了一句不成立的话。
+            #
+            # 登录侧早就处理了这一层（`dify_login_service.py` 的 #882：平台账号落到
+            # 它自己的 `platform` workspace），发布桥漏了同样的映射。实测 2026-10-25：
+            # `system` 用真实会话点「发布到 AI-Ops」，桥日志 `workspace lookup failed:
+            # _WorkspaceLookupFailed: 400`，用户看到「你所在的租户还没有可用的 Dify 工作区」。
+            #
+            # #882 明写平台账号的「可见全部」不通过进别人的 workspace 体现（ADR-0059 §4）：
+            # 编辑面只在它自己的平台 workspace。这里照同一条口径。
+            if initiator_headers.get("X-AIOps-Initiator-Type", "").strip() == PLATFORM_USER_TYPE:
+                tenant_id = PLATFORM_TENANT_ID
             resolved = _workspace_for(
                 gateway_base_url,
                 gateway_internal_token,
