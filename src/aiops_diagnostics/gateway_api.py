@@ -949,7 +949,7 @@ def _publish_bound_app(
     node_target = node_publication.target_for(context.settings, binding)
     if node_target and consumer_target:
         raise StandardAPIError(409, "CONSUMER_TARGET_CONFLICT", "app has two execution targets")
-    if console.chat_route_bindings_file and not node_target:
+    if console.chat_route_bindings_file and not node_target and not consumer_target:
         from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
 
         managed = ChatRouteBindingStore(Path(console.chat_route_bindings_file)).get(

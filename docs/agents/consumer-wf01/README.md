@@ -115,6 +115,7 @@ knowledge_base_id/document_id/backend_id/title，以及language=zh/en/any（缺�
 
 应用须在既有dify_app_registry登记、工作区ready，已有发布Agent基线，且每应用Service key已准备。
 WF01应用必须是advanced-chat；不能与节点目标或同应用旧个人状态路线并存，也不能同时保留文件执行绑定。
+同租户另一应用的旧节点场景可以保留；发布WF01不会推进或删除它的版本。
 目标不自动启用App。发布使用原`/v1/dify/publish`及现有运营按钮：冻结Dify图、完整审核内容及能力。
 只改内容或能力也发新版本；相同图和内容不重复发布。运行只读版本里的内容，修改草稿文件不会切版。
 
