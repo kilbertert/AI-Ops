@@ -535,6 +535,8 @@ class GatewayServerSettings:
         # 且每条登记必须在**本环境**里成立 —— 跨环境的登记是配置错误，不是默认值。
         if self.consumer_chatflow_enabled and not (self.dify_chat_base_url and self.execution_environment):
             raise ValueError("consumer chatflow requires Dify and execution environment")
+        if self.dify_chat_base_url:
+            canonical_gateway_url(self.dify_chat_base_url)
         if self.chat_execution_bindings_file:
             from aiops_diagnostics import chat_execution  # noqa: PLC0415 - 避免循环导入
 
@@ -546,10 +548,11 @@ class GatewayServerSettings:
                 raise ValueError(f"chat execution bindings are unusable: {exc}") from exc
             # APP-RUNTIME-02：有 Dify 登记就必须有它的服务地址。反过来说，
             # 只配地址不登记任何 Dify 路线是**无害**的 —— 它不会凭空开一条路线。
-            if any(item.engine == chat_execution.ENGINE_DIFY for item in bindings):
-                if not self.dify_chat_base_url:
-                    raise ValueError("dify chat execution requires a dify base url")
-                canonical_gateway_url(self.dify_chat_base_url)
+            if (
+                any(item.engine == chat_execution.ENGINE_DIFY for item in bindings)
+                and not self.dify_chat_base_url
+            ):
+                raise ValueError("dify chat execution requires a dify base url")
         # 管理绑定表（发布/撤回推进的正式指针）。启动时做两件事：
         #   1. 整表规约校验（引擎取值、Dify 行必须配齐身份与凭据引用）；
         #   2. **同一 key 不许同时被文件与表声明** —— 那是"这次到底谁在跑"没有
