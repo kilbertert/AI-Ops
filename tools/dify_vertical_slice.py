@@ -492,6 +492,10 @@ def main(argv: list[str] | None = None) -> int:
             raise AssertionError("网关未就绪")
 
         answer = _ask(base, args.entry, args.question)
+        # QA终态先于worker的指标写入；验收等同一作业收尾后再断言版本归因。
+        future = runtime._futures.get(answer["qa_id"])
+        if future is not None:
+            future.result(timeout=10)
         result = answer.get("result") or {}
         evidence["answer"] = {
             "status": answer.get("status"),
