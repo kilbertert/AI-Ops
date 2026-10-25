@@ -47,6 +47,7 @@ def may_enter(self, permissions, *, tenant_account, has_own_workspace):
         return True
     return self.may_edit(permissions)
 
+
 # 发布（`/__aiops/publish/check`）
 def may_publish(self, permissions, *, tenant_account, has_own_workspace):
     if tenant_account and has_own_workspace:
