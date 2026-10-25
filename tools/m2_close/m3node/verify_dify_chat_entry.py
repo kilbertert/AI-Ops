@@ -743,6 +743,7 @@ def _start_gateway(
     port: int,
     console_key: str = "",
     managed_route: bool = False,
+    service_app_id: str = "",
 ) -> tuple[subprocess.Popen, str, dict[str, Any]]:
     """起真 Gateway（绑定表指向 Dify 路线），等它就绪。"""
     case = root / "gateway"
@@ -833,7 +834,12 @@ def _start_gateway(
                             "environment": "env-local",
                             "tenant_id": TENANT,
                             "entry": "consumer",
-                            "scenario": "consumer_own_order_status",
+                            "scenario": "consumer_service" if service_app_id else "consumer_own_order_status",
+                            **(
+                                {"app_id": service_app_id, "agent_id": "agt_12345678", "agent_version_no": 1}
+                                if service_app_id
+                                else {}
+                            ),
                             "workflow_id": workflow_id,
                             "workflow_key_file": str(key_file),
                         }
@@ -853,6 +859,7 @@ def _start_gateway(
         "AIOPS_GATEWAY_PORT": str(port),
         "AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL": f"{cpms_base}/charging-pile",
         "AIOPS_GATEWAY_CONSUMER_ORDER_CHAT_ENABLED": "1",
+        "AIOPS_GATEWAY_CONSUMER_CHATFLOW_ENABLED": "1" if service_app_id else "0",
         "AIOPS_GATEWAY_ENVIRONMENT": "dify-chat-acceptance",
         "AIOPS_GATEWAY_EXECUTION_ENVIRONMENT": "env-local",
         # 管理模式不配这条：路径指向一个不存在的文件会让整张表读失败

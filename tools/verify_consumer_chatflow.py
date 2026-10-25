@@ -235,6 +235,7 @@ def main():
         if not condition:
             raise AssertionError(name)
 
+    gateway = None
     try:
         up = stack._compose(env, "up", "-d", "--wait", "--wait-timeout", "600", "api", "worker", timeout=900)
         (root / "compose-up.log").write_text(up.stdout + up.stderr)
@@ -293,11 +294,57 @@ def main():
         else:
             check("foreign user cannot reuse upstream conversation", False)
         (root / "model-requests.json").write_text(json.dumps(Model.requests, ensure_ascii=False, indent=2))
+        gateway, gateway_base, diag = stack._start_gateway(
+            root=root,
+            model_url=f"http://127.0.0.1:{model.server_port}/v1",
+            cpms_base="http://127.0.0.1:1",
+            dify_base=base,
+            workflow_id=setup["workflow_id"],
+            key=setup["service_key"],
+            port=stack._free_port(),
+            service_app_id=setup["app_id"],
+        )
+        check("real Gateway ready", not diag.get("error"))
+        headers = {"Authorization": "Bearer " + stack.TOKEN, "X-Business-Entry": "consumer"}
+        conversation = ""
+        qa_ids = []
+        for query in ["我的枪号A7，怎么开始？", "我刚才说的是哪把枪？", "再说一遍枪号"]:
+            body = {"question": query, **({"conversation_id": conversation} if conversation else {})}
+            code, post = stack.http_json(gateway_base + "/v1/assistant/questions", "POST", body, headers)
+            check(f"App turn {len(qa_ids) + 1} admitted", code == 202)
+            conversation = post["conversation_id"]
+            qa = post["qa_id"]
+            qa_ids.append(qa)
+            deadline = time.monotonic() + 90
+            while time.monotonic() < deadline:
+                code, final = stack.http_json(gateway_base + "/v1/assistant/questions/" + qa, headers=headers)
+                if code != 200 or final.get("status") not in ("queued", "running"):
+                    break
+                time.sleep(0.1)
+            check(
+                f"App turn {len(qa_ids)} completed",
+                code == 200
+                and final.get("status") == "completed"
+                and "A7" in json.dumps(final, ensure_ascii=False),
+            )
+        code, denied = stack.http_json(
+            gateway_base + "/v1/assistant/questions",
+            "POST",
+            {"question": "继续", "conversation_id": conversation},
+            {**headers, "Authorization": "Bearer " + stack.OTHER_TOKEN},
+        )
+        check("App foreign conversation refused", code == 404)
+        code, history = stack.http_json(gateway_base + "/v1/conversations/" + conversation, headers=headers)
+        check(
+            "App history contains three verified answers", code == 200 and len(history.get("turns", [])) == 3
+        )
         report["passed"] = True
     except Exception as exc:
         report["error"] = {"type": type(exc).__name__, "message": str(exc)}
         report["passed"] = False
     finally:
+        if gateway is not None:
+            stack._stop(gateway)
         (root / "sse-events.json").write_text(json.dumps(observed_events, ensure_ascii=False, indent=2))
         logs = stack._compose(env, "logs", "--no-color", "api", timeout=60)
         (root / "api.log").write_text(logs.stdout + logs.stderr)
