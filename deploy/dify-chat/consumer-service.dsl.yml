@@ -1,0 +1,209 @@
+app:
+  description: 知识指导、实时查询分流与人工入口；业务写操作关闭。
+  icon: 💬
+  icon_background: '#E0F2FE'
+  mode: advanced-chat
+  name: WF01 C端只读客服
+  use_icon_as_answer_icon: false
+dependencies: []
+kind: app
+version: 0.3.0
+workflow:
+  conversation_variables: []
+  environment_variables: []
+  features:
+    file_upload:
+      allowed_file_extensions: []
+      allowed_file_types: []
+      allowed_file_upload_methods: []
+      enabled: false
+      number_limits: 3
+    retriever_resource:
+      enabled: false
+    sensitive_word_avoidance:
+      enabled: false
+    speech_to_text:
+      enabled: false
+    text_to_speech:
+      enabled: false
+      language: ''
+      voice: ''
+  graph:
+    edges:
+    - id: start-knowledge
+      source: start
+      target: knowledge
+      sourceHandle: source
+      targetHandle: target
+      type: custom
+      data:
+        sourceType: start
+        targetType: http-request
+        isInIteration: false
+        isInLoop: false
+    - id: knowledge-answer
+      source: knowledge
+      target: answer
+      sourceHandle: source
+      targetHandle: target
+      type: custom
+      data:
+        sourceType: http-request
+        targetType: llm
+        isInIteration: false
+        isInLoop: false
+    - id: answer-end
+      source: answer
+      target: end
+      sourceHandle: source
+      targetHandle: target
+      type: custom
+      data:
+        sourceType: llm
+        targetType: answer
+        isInIteration: false
+        isInLoop: false
+    nodes:
+    - data:
+        desc: 本次请求的输入。data_grant 是**一次性取数凭据**，只用于下面那一个 HTTP 步骤的 Authorization 头。
+        selected: false
+        title: 开始
+        type: start
+        variables:
+        - label: 取数凭据
+          max_length: 128
+          options: []
+          required: true
+          type: text-input
+          variable: data_grant
+        - label: 语言
+          max_length: 16
+          options:
+          - zh
+          - zh-Hant
+          - en
+          required: true
+          type: select
+          variable: language
+      height: 160
+      id: start
+      position:
+        x: 80
+        y: 282
+      positionAbsolute:
+        x: 80
+        y: 282
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        authorization:
+          config: null
+          type: no-auth
+        body:
+          data: []
+          type: none
+        desc: 凭据由Gateway注入，仅本轮一次检索；请求不允许改租户、问题或语言。
+        headers: 'Authorization: Bearer {{#start.data_grant#}}'
+        method: post
+        params: ''
+        retry_config:
+          retry_enabled: false
+          max_retries: 0
+          retry_interval: 0
+        selected: false
+        ssl_verify: null
+        timeout:
+          connect: 10
+          max_connect_timeout: 0
+          max_read_timeout: 0
+          max_write_timeout: 0
+          read: 60
+          write: 0
+        title: 检索当前用户适用知识
+        type: http-request
+        url: http://gateway.invalid/v1/internal/consumer-knowledge
+        variables: []
+      height: 132
+      id: knowledge
+      position:
+        x: 400
+        y: 282
+      positionAbsolute:
+        x: 400
+        y: 282
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        context:
+          enabled: false
+          variable_selector: []
+        desc: 模型只看到**裁剪后的状态事实**。它不生成、不改写 URL / 订单 / 主体 / 凭据。
+        model:
+          completion_params:
+            temperature: 0
+          mode: chat
+          name: __MODEL__
+          provider: langgenius/openai_api_compatible/openai_api_compatible
+        prompt_template:
+        - role: system
+          text: 你是C端充电客服。仅输出JSON，恰好两个字段kind和faq_id。知识指导只能选择本轮候选的faq_id。kind可为knowledge、clarify、human、realtime、not_found、unavailable；后五种faq_id为空字符串。用户问当前订单/支付/退款/设备实时状态时选realtime，不能用FAQ回答已发生事实。要求人工时选human。无法定位问题时选clarify。没有候选时按status选择not_found或unavailable。绝不声称执行停止充电、退款、建单或转接；不编造电话、费用、时限或链接。
+        - role: user
+          text: '用户问题：{{#sys.query#}}
+
+            本轮知识：{{#knowledge.body#}}'
+        selected: false
+        title: 判断用户需要的帮助
+        type: llm
+        variables: []
+        vision:
+          enabled: false
+        memory:
+          window:
+            enabled: true
+            size: 6
+          role_prefix:
+            user: User
+            assistant: Assistant
+          query_prompt_template: '{{#sys.query#}}'
+      height: 132
+      id: answer
+      position:
+        x: 720
+        y: 282
+      positionAbsolute:
+        x: 720
+        y: 282
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        type: answer
+        title: 返回结构化选择
+        answer: '{{#answer.text#}}'
+        variables: []
+      height: 132
+      id: end
+      position:
+        x: 1040
+        y: 282
+      positionAbsolute:
+        x: 1040
+        y: 282
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    viewport:
+      x: 0
+      y: 0
+      zoom: 0.7
+  rag_pipeline_variables: []

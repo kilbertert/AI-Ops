@@ -45,6 +45,8 @@ class Model(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream" if body.get("stream") else "application/json")
         self.end_headers()
+        if any("本轮知识" in str(m.get("content")) for m in messages):
+            answer = json.dumps({"kind": "knowledge", "faq_id": "KB-C-007"})
         if body.get("stream"):
             chunk = {
                 "id": "chatcmpl-test",
@@ -194,6 +196,118 @@ def isolated(args):
             )
 
 
+class Knowledge(BaseHTTPRequestHandler):
+    requests = []
+
+    def log_message(self, *_):
+        pass
+
+    def do_POST(self):
+        raw = self.rfile.read(int(self.headers["Content-Length"]))
+        self.requests.append((self.path, self.headers.get("tenant-id"), json.loads(raw)))
+        data = json.dumps(
+            {
+                "data": [
+                    {
+                        "kb_id": "kb-own",
+                        "doc_id": "doc-1",
+                        "chunk_id": "chunk-1",
+                        "docnm_kwd": "KB-C-007.md",
+                        "content_with_weight": "# KB-C-007\n按设备提示启动。",
+                        "score": 0.9,
+                    }
+                ]
+            }
+        ).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(data)
+
+
+def verify_knowledge(root, base, env, setup, model, check):
+    kb = ThreadingHTTPServer(("127.0.0.1", 0), Knowledge)
+    threading.Thread(target=kb.serve_forever, daemon=True).start()
+    gateway = None
+    try:
+        port = stack._free_port()
+        doc = yaml.safe_load((ROOT / "deploy/dify-chat/consumer-service.dsl.yml").read_text())
+        doc["workflow"]["graph"]["nodes"][1]["data"]["url"] = (
+            f"http://127.0.0.1:{port}/v1/internal/consumer-knowledge"
+        )
+        for node in doc["workflow"]["graph"]["nodes"]:
+            if node["data"]["type"] == "llm":
+                node["data"]["model"]["name"] = "synthetic"
+        stack._dsl_for = lambda _: yaml.safe_dump(doc, allow_unicode=True).encode()
+        new = stack._import_second_app(base, setup["console_headers"], f"http://127.0.0.1:{port}")
+        check("knowledge Chatflow published", bool(new.get("workflow_id") and new.get("service_key")))
+        content = root / "reviewed.json"
+        content.write_text(
+            json.dumps(
+                {
+                    "schema": "aiops-consumer-reviewed/1",
+                    "state": "published",
+                    "tenant_id": stack.TENANT,
+                    "environment": "env-local",
+                    "entries": {
+                        "KB-C-007": {
+                            "state": "approved",
+                            "title": "开始充电",
+                            "answers": {"zh": "按设备提示启动。", "en": "Follow the charger instructions."},
+                        }
+                    },
+                    "support": {},
+                }
+            )
+        )
+        content.chmod(0o600)
+        gateway, gateway_base, diag = stack._start_gateway(
+            root=root / "knowledge-test",
+            model_url=f"http://127.0.0.1:{model.server_port}/v1",
+            cpms_base="http://127.0.0.1:1",
+            dify_base=base,
+            workflow_id=new["workflow_id"],
+            key=new["service_key"],
+            port=port,
+            service_app_id=new["app_id"],
+            service_content=str(content),
+            knowledge_base=f"http://127.0.0.1:{kb.server_port}",
+        )
+        check("knowledge Gateway ready", not diag.get("error"))
+        headers = {"Authorization": "Bearer " + stack.TOKEN, "X-Business-Entry": "consumer"}
+        code, post = stack.http_json(
+            gateway_base + "/v1/assistant/questions", "POST", {"question": "怎么开始充电？"}, headers
+        )
+        check("knowledge App admitted", code == 202)
+        deadline = time.monotonic() + 90
+        while time.monotonic() < deadline:
+            code, final = stack.http_json(
+                gateway_base + "/v1/assistant/questions/" + post["qa_id"], headers=headers
+            )
+            if code != 200 or final.get("status") not in ["queued", "running"]:
+                break
+            time.sleep(0.1)
+        check(
+            "knowledge App completed from approved source",
+            code == 200
+            and final.get("status") == "completed"
+            and final.get("result", {}).get("blocks", [{}])[0].get("text") == "按设备提示启动。",
+        )
+        check(
+            "Dify HTTP node made one authorized retrieval",
+            len(Knowledge.requests) == 1 and Knowledge.requests[0][1] == stack.TENANT,
+        )
+        check(
+            "model received knowledge without grant",
+            any("本轮知识" in json.dumps(m, ensure_ascii=False) for m in Model.requests)
+            and all("cdg_" not in json.dumps(m) for m in Model.requests),
+        )
+    finally:
+        if gateway:
+            stack._stop(gateway)
+        kb.shutdown()
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", required=True)
@@ -338,6 +452,7 @@ def main():
         check(
             "App history contains three verified answers", code == 200 and len(history.get("turns", [])) == 3
         )
+        verify_knowledge(root, base, env, setup, model, check)
         report["passed"] = True
     except Exception as exc:
         report["error"] = {"type": type(exc).__name__, "message": str(exc)}
