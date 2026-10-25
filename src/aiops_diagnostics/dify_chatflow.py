@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import secrets
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -56,9 +57,14 @@ class DifyChatflowClient:
         query: str,
         inputs: dict[str, Any],
         conversation_id: str = "",
+        photo_id: str = "",
         on_started: Callable[[str, str, str, str], None],
     ) -> ChatflowReply:
-        for value in [workflow_id, *([conversation_id] if conversation_id else [])]:
+        for value in [
+            workflow_id,
+            *([conversation_id] if conversation_id else []),
+            *([photo_id] if photo_id else []),
+        ]:
             if not WORKFLOW_ID_PATTERN.fullmatch(value):
                 raise ValueError("chatflow requires valid workflow/conversation UUIDs")
         if not user.strip() or not key.strip() or not query.strip() or len(query) > 4000:
@@ -76,6 +82,15 @@ class DifyChatflowClient:
                     "workflow_id": workflow_id,
                     "response_mode": "streaming",
                     "auto_generate_name": False,
+                    **(
+                        {
+                            "files": [
+                                {"type": "image", "transfer_method": "local_file", "upload_file_id": photo_id}
+                            ]
+                        }
+                        if photo_id
+                        else {}
+                    ),
                 }
             ).encode(),
             timeout=self.timeout_seconds,
@@ -177,6 +192,36 @@ class DifyChatflowClient:
             raise _invalid() from exc
         # 已收到部分文字也不能把断流、缺完成事件当成完整回复。
         raise _invalid()
+
+    def upload_photo(self, *, key: str, user: str, image: bytes) -> str:
+        boundary = "----wf01" + secrets.token_hex(16)
+        body = (
+            (
+                f'--{boundary}\r\nContent-Disposition: form-data; name="user"\r\n\r\n{user}\r\n'
+                f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="photo.jpg"\r\n'
+                "Content-Type: image/jpeg\r\n\r\n"
+            ).encode()
+            + image
+            + f"\r\n--{boundary}--\r\n".encode()
+        )
+        result = request_json(
+            RequestSpec(
+                url=self.base_url + "/v1/files/upload",
+                method="POST",
+                headers={
+                    "Authorization": f"Bearer {key}",
+                    "Content-Type": "multipart/form-data; boundary=" + boundary,
+                },
+                body=body,
+                timeout=20,
+                follow_redirects=False,
+            ),
+            mapping=_mapping(),
+            envelope=lambda body, mapping: body,
+        )
+        if not isinstance(result, dict) or not WORKFLOW_ID_PATTERN.fullmatch(str(result.get("id", ""))):
+            raise _invalid()
+        return result["id"]
 
     def stop(self, *, key: str, task_id: str, user: str) -> bool:
         try:

@@ -32,3 +32,8 @@ MEDIA-WF01：一次性Gateway/真Dify/合成RAGFlow；原POST/GET得到图片块
 PUBLICATION：真Dify/Gateway隔离环境，原运营接口发布V1，修改内容并试用；原App接口须仍V1。
 再发V2、撤回、读旧QA、恢复V1，按51项实链报告核对。临时应用删除，源应用/正式指针不被试用修改。
 另验同内容幂等、错误草稿拒绝、试用中撤回、旧路线冲突；模型/业务/目录合成，不算线上业务验收。
+
+PHOTO-WF01：一次性Gateway/真Dify/官方provider，合成模型必须记录收到image_url；
+POST photos→questions photo_id→GET，核对识图线索实际进入KB。组件另验元数据/格式/尺寸/限额、
+跨人/重复/过期/换版拒绝、模糊图不检索、上传中取消不启动模型。清理本次栈与内存。
+真实baoyun只验证无个人信息的错误截图，不替代原App完整业务验收；Dify保留策略单列未完成。

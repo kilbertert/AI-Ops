@@ -579,6 +579,7 @@ def _setup_dify(base: str, env: dict[str, str], *, model_url: str, gateway_base:
                 # 传整数会 500（`Variable context_size should be string`）。
                 "context_size": "8192",
                 "max_tokens_to_sample": "256",
+                "vision_support": "support",
             },
         },
     )
@@ -755,6 +756,7 @@ def _start_gateway(
     knowledge_base: str = "",
     service_live_order: bool = False,
     service_billing: bool = False,
+    service_photo: bool = False,
     service_publication_target: str = "",
 ) -> tuple[subprocess.Popen, str, dict[str, Any]]:
     """起真 Gateway（绑定表指向 Dify 路线），等它就绪。"""
@@ -851,6 +853,7 @@ def _start_gateway(
                                 {
                                     "live_order_status": service_live_order,
                                     "live_billing_record": service_billing,
+                                    "photo_enabled": service_photo,
                                     "app_id": service_app_id,
                                     "agent_id": "agt_12345678",
                                     "agent_version_no": 1,
