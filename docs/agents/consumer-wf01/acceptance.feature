@@ -50,6 +50,11 @@ Feature: 原 App 的 C 端只读客服
       And 明确金额字段不证明扣款且退款记录不证明银行到账
       And 缺币种或金额不补值不填零
   Rule: 素材由已审核FAQ关联且随回答失效
+    Scenario: H5同源取得签名素材
+      Given H5回答包含网关签发的素材路径
+      When 浏览器GET该路径
+      Then 请求到达网关而不是返回静态首页
+      And POST素材路径及未声明管理路径仍不可转发
     Scenario: 用户查看操作图和视频
       Given 本轮召回的FAQ关联已审核同语言素材
       When 原App读取回答并打开素材
