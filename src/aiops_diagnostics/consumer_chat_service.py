@@ -52,6 +52,7 @@ def start(runtime, caller, question, *, binding, conversation, turn_no, language
             previous_qa is None
             or previous_qa["status"] != "completed"
             or previous.state != "succeeded"
+            or not still_valid(previous)
             or previous.binding_digest != fingerprint(binding)
             or previous.workflow_id != binding.workflow_id
             or previous.route_revision != binding.route_revision

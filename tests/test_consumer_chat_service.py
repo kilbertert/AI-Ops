@@ -172,6 +172,8 @@ def test_expired_result_is_not_delivered_from_qa_or_conversation(tmp_path, monke
         with sqlite3.connect(env["db"]) as connection:
             connection.execute("UPDATE chat_dify_runs SET expires_at='2000-01-01T00:00:00+00:00'")
         assert done(env, first["qa_id"]).status_code == 410
+        assert ask(env, conversation=first["conversation_id"]).status_code == 409
+        assert len(Client.calls) == 1
         assert (
             env["client"].get("/v1/conversations/" + first["conversation_id"], headers=HEADERS).status_code
             == 410
@@ -190,3 +192,14 @@ def test_failed_upstream_never_falls_back_or_reuses_failed_conversation(tmp_path
         assert done(env, first["qa_id"]).json()["status"] == "failed"
         assert ask(env, conversation=first["conversation_id"]).status_code == 409
         assert len(Client.calls) == 1 and env["upstream"].calls == 0
+
+
+def test_unsupported_prompt_language_does_not_start_a_chatflow(tmp_path, monkeypatch):
+    with dify_chat(tmp_path, monkeypatch, stub_base="http://127.0.0.1:1") as env:
+        configure(env, monkeypatch)
+        for language in ["th", "km"]:
+            response = ask(env, headers={**HEADERS, "Accept-Language": language})
+            assert response.status_code == 200
+            assert response.json()["type"] == "clarification"
+        assert Client.calls == []
+        assert env["app"].state.gateway.store.count_assistant_questions() == 0

@@ -2647,6 +2647,15 @@ def create_gateway_app(
                     _require_consumer_self_order(caller, "consumer", "pending")
                     if payload.order_no:
                         _require_visible_order(context, caller, payload.order_no)
+                    if not can_prompt_in(language):
+                        return _clarification(
+                            context,
+                            caller,
+                            decision,
+                            code=CLARIFY_LANGUAGE_UNROUTABLE,
+                            question=payload.question,
+                            language=language,
+                        )
                     if conversation is None:
                         conversation = context.conversation_store.create(
                             scope_fingerprint=caller.scope_fingerprint,
