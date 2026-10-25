@@ -18,9 +18,16 @@
 
 清理：本次Dify/Gateway容器停止并删除、绑定数据卷清空、中继停止、队列无残留。生产路线未改。
 交付复核：三文件原件/候选摘要一致，补丁在原件副本上真实应用后逐字相等；组件/API检查再次通过。
-生产只读核验service active、health版本8ad3d319f047，WF01开关及发布目标未配置。
+部署前只读核验service active、health版本8ad3d319f047，WF01开关及发布目标未配置。
 #1085的CD在依赖漂移门停止，未上传/重启；锁定包差异仅新增Pillow12.3.0，生产未安装。
-已准备依赖更新材料，尚未执行；需按[依赖环境流程](../agents/env-41-dependency-update.md)备份、
-更新、验证editable，再部署合并制品。运行环境更新与WF01业务启用分别决策。
+
+经用户批准按[依赖环境流程](../agents/env-41-dependency-update.md)备份再更新：
+首次下载240秒超时恢复；第二次本地路径wheel安装被sync判不同来源，离线同步失败后恢复。
+临时副本先证明按包名离线安装+完整sync可行；旧venv部分包为维护身份所有，按维护身份安装，
+不递归改属主。第三次成功，服务账号导入包/API/FAQ仍为src，Pillow12.3.0。
+随后标准deploy-41.sh部署abefd174，126源码文件及运行资料逐项摘要一致。
+最终health=0.2.0+abefd174ccdf、service active、editable守卫通过，gateway.env前后相同，
+WF01开关/发布目标仍未配置。总重启4次（恢复2、依赖1、部署1），不是原预计的2次。
+本次临时环境及wheel暂存目录已清；备份保留，无业务POST或新增模型请求。原失败CD不改写为成功。
 未完成业务验收：原生/整包/真实登录、完整视频教程、真人客服到达、供应商交易到账与上游照片清理仍未验。
 复跑方法见[integrated-acceptance](../agents/consumer-wf01/integrated-acceptance.md)，业务原件和截图仅私有留存。

@@ -29,3 +29,22 @@
 
 该方法不等于完整uni-app构建、原生文件读取/放大手势、真实登录或公司发版；这些仍由公司发布过程验证。
 不自动修改公司仓，不覆盖现役JS包。
+
+## 图片依赖部署
+
+按[依赖更新流程](../env-41-dependency-update.md)先备份环境，依赖/源码各自校验；
+清单来自批准的合并提交，使用`dev-host cp --artifact-sha256`传入。
+下载失败时可在开发机从uv.lock的原URL取得匹配Python/架构的wheel，逐字校验锁中的SHA-256。
+先在临时环境验证，再用`uv pip install --offline --no-index --find-links <wheel目录> pillow==<锁定版本>`
+按包名安装，随后`uv sync --offline --active --frozen --no-progress`。
+直接把wheel路径作为安装参数会记为本地来源，sync仍会要求锁文件URL；不能假称离线就一定成功。
+
+临时副本须隔离于在用venv；使用明确的工作目录，防止uv向父目录寻找无权读取的pyproject。
+既有venv含维护身份安装的包时，更新依赖属于维护操作，不能递归改属主来让服务账号安装。
+维护操作的缓存显式指向本次临时目录；包安装后以服务账号验证导入与可读性。
+子进程必须有超时并终止整个进程组，确认无残留uv后才能恢复环境，避免恢复后还在写。
+
+依赖成功后按批准合并提交运行`deploy/deploy-41.sh --commit <sha>`；
+再次运行`deploy/check-41-editable.sh`，并核对health版本、清单与配置摘要。
+守卫中的SSH调用经`dev-host`固定目标运输；不绕过主机身份核验。失败原件和备份私有保留，
+只清本次临时目录。部署结果与WF01路由启用分开记录。
