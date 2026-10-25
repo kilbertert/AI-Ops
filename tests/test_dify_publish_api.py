@@ -877,7 +877,7 @@ def test_a_slow_publish_cannot_undo_a_retraction_that_happened_meanwhile(tmp_pat
         chat_dify_key_dir=str(tmp_path),
         # 发布前置要求执行地址已配置：没有它会在写指针**之前**就被拒，
         # 用例于是"因为别的原因"拿到 409 —— 那种绿什么都守不住。
-        dify_chat_base_url="http://dify.invalid:5001",
+        dify_chat_base_url="https://dify.invalid",
     )
     client.app.state.gateway.settings.execution_environment = "41"
     key = tmp_path / f"{APP_ID}.key"
