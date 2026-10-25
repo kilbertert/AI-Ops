@@ -86,6 +86,9 @@ def test_live_order_has_one_snapshot_and_never_carries_it_to_next_model_turn(tmp
         final = done(env, explicit["qa_id"]).json()
         assert final["status"] == "completed" and ORDER_B in final["result"]["blocks"][0]["text"]
         assert env["upstream"].calls == 2
+        from test_app_runtime_node_entry import TOKENS
+
+        monkeypatch.setitem(TOKENS, "token-b", ("USER-B", "TENANT-A"))
         other = {**HEADERS, "Authorization": "Bearer token-b"}
         assert ask(env, f"check order {ORDER_A} status", headers=other).status_code == 404
         env["orders"].ownership[ORDER_A] = "USER-B"
