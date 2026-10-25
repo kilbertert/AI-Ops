@@ -97,7 +97,20 @@ def load_content(path: str, *, tenant: str, environment: str) -> dict:
     validate_private_file(p)
     if p.stat().st_size > 2_000_000:
         raise ValueError("consumer content too large")
-    body = json.loads(p.read_text())
+    return validate_content(json.loads(p.read_text()), tenant=tenant, environment=environment)
+
+
+def binding_content(binding, caller):
+    if binding.content_snapshot is not None:
+        return validate_content(
+            binding.content_snapshot, tenant=caller.effective_tenant_id, environment=binding.environment
+        )
+    return load_content(
+        binding.content_file, tenant=caller.effective_tenant_id, environment=binding.environment
+    )
+
+
+def validate_content(body, *, tenant, environment):
     if not isinstance(body, dict):
         raise ValueError("invalid consumer content")
     if (
@@ -229,9 +242,7 @@ def followup_context(runtime, caller, question, conversation_id, *, require_resu
 
 
 def select_context(runtime, caller, binding, query, language, qa_id):
-    content = load_content(
-        binding.content_file, tenant=caller.effective_tenant_id, environment=binding.environment
-    )
+    content = binding_content(binding, caller)
     if runtime.kb_search_client is None or runtime.media_signer is None or not binding.knowledge_base_ids:
         return {"status": "unavailable", "candidates": []}
     guard = KnowledgeSearchGuard(
@@ -345,7 +356,7 @@ def callback_context(runtime, token, *, require_result, read_snapshot):
     run = runtime.dify_run_store.by_qa(grant.qa_id)
     if (
         run is None
-        or run.kind != "service"
+        or run.kind not in {"service", "service_trial"}
         or run.grant_id != grant.grant_id
         or run.order_no != grant.order_no
         or (run.scope_fingerprint, run.tenant_id, run.environment, run.workflow_id)
@@ -353,12 +364,37 @@ def callback_context(runtime, token, *, require_result, read_snapshot):
     ):
         raise ChatRunUnavailable("GRANT_SCOPE_MISMATCH", "knowledge grant refused", http_status=403)
     caller = scope_from_json(run.scope_json)
-    binding = chat_execution.select_binding(
-        runtime.gateway_settings, caller, scenario=chat_execution.SCENARIO_CONSUMER_SERVICE
-    )
-    if binding is None or not binding.content_file or _binding_identity(binding) != run.binding_digest:
+    trial = None
+    if run.kind == "service_trial":
+        entry = runtime._trial_contexts.get(run.qa_id)
+        if entry is None or getattr(entry[1], "binding", None) is None:
+            raise ChatRunUnavailable("TRIAL_NOT_ACTIVE", "trial not active", http_status=403)
+        trial = entry[1]
+        binding = trial.binding
+    else:
+        binding = chat_execution.select_binding(
+            runtime.gateway_settings, caller, scenario=chat_execution.SCENARIO_CONSUMER_SERVICE
+        )
+    if (
+        binding is None
+        or (not binding.content_file and binding.content_snapshot is None)
+        or _binding_identity(binding) != run.binding_digest
+    ):
         raise ChatRunUnavailable("CHATFLOW_BINDING_CHANGED", "knowledge binding changed", http_status=403)
-    _require_binding(runtime, caller, binding)
+
+    def require_current():
+        if trial:
+            trial.require_current(runtime.gateway_settings)
+        else:
+            _require_binding(runtime, caller, binding)
+
+    def question_record():
+        if trial:
+            qa = runtime.store.get_standard_diagnosis(run.qa_id, caller.scope_fingerprint)
+            return {**qa, "question": trial.question} if qa else None
+        return runtime.store.get_assistant_question(run.qa_id, caller.scope_fingerprint)
+
+    require_current()
 
     def valid():
         if run.order_no:
@@ -368,7 +404,7 @@ def callback_context(runtime, token, *, require_result, read_snapshot):
             runtime._require_chat_order_visible(caller, run.order_no)
         chat_data_grant.usable(grants.by_id(grant.grant_id))
         latest = runtime.dify_run_store.get(run.run_id)
-        qa = runtime.store.get_assistant_question(run.qa_id, caller.scope_fingerprint)
+        qa = question_record()
         if (
             latest is None
             or latest.state != "running"
@@ -377,12 +413,12 @@ def callback_context(runtime, token, *, require_result, read_snapshot):
             or qa["status"] != "running"
         ):
             raise ChatRunUnavailable("CHATFLOW_NOT_ACTIVE", "knowledge request ended", http_status=403)
-        _require_binding(runtime, caller, binding)
+        require_current()
         if _binding_identity(binding) != run.binding_digest:
             raise ChatRunUnavailable("CHATFLOW_BINDING_CHANGED", "knowledge content changed", http_status=403)
 
     valid()
-    qa = runtime.store.get_assistant_question(run.qa_id, caller.scope_fingerprint)
+    qa = question_record()
     followup = followup_context(
         runtime,
         caller,
@@ -396,7 +432,7 @@ def callback_context(runtime, token, *, require_result, read_snapshot):
         return cached
     if not grants.consume(grant.grant_id):
         raise ChatRunUnavailable("GRANT_ALREADY_CONSUMED", "knowledge request already used", http_status=409)
-    qa = runtime.store.get_assistant_question(run.qa_id, caller.scope_fingerprint)
+    qa = question_record()
     # 本次输入来自已鉴权的QA，不接受回调重新指定问题或语言。
     query = qa["question"]
     if followup["unresolved_count"]:
