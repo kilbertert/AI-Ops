@@ -79,6 +79,7 @@ class DifyRun:
     binding_digest: str = ""
     language: str = "zh"
     data_kind: str = "status"
+    has_photo: bool = False
 
 
 def _now() -> datetime:
@@ -154,6 +155,7 @@ class DifyRunStore:
                 ("upstream_conversation_id", "TEXT NOT NULL DEFAULT ''"),
                 ("message_id", "TEXT NOT NULL DEFAULT ''"),
                 ("binding_digest", "TEXT NOT NULL DEFAULT ''"),
+                ("has_photo", "INTEGER NOT NULL DEFAULT 0"),
                 ("data_kind", "TEXT NOT NULL DEFAULT 'status'"),
                 ("context_json", "TEXT"),
                 ("language", "TEXT NOT NULL DEFAULT 'zh'"),
@@ -205,6 +207,7 @@ class DifyRunStore:
         binding_digest: str = "",
         language: str = "zh",
         data_kind: str = "status",
+        has_photo: bool = False,
     ) -> DifyRun:
         if data_kind not in {"status", "billing"}:
             raise ValueError("unsupported consumer data kind")
@@ -216,8 +219,8 @@ class DifyRunStore:
                     run_id, qa_id, scope_fingerprint, scope_json, binding_key, order_no,
                     environment, tenant_id, app_id, workflow_id, workflow_run_id, task_id,
                     grant_id, state, created_at, expires_at, agent_version_no, kind, route_revision,
-                    conversation_id, binding_digest, language, data_kind
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    conversation_id, binding_digest, language, data_kind, has_photo
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -241,6 +244,7 @@ class DifyRunStore:
                     binding_digest,
                     language,
                     data_kind,
+                    int(has_photo),
                 ),
             )
         record = self.get(run_id)
@@ -456,6 +460,7 @@ def _run_from_row(row: sqlite3.Row) -> DifyRun:
         binding_digest=row["binding_digest"],
         language=row["language"],
         data_kind=row["data_kind"],
+        has_photo=bool(row["has_photo"]),
     )
 
 

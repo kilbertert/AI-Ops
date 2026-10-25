@@ -49,6 +49,7 @@ def start(
     language,
     order_no="",
     data_kind="status",
+    photo_id="",
 ):
     from aiops_diagnostics import consumer_knowledge
 
@@ -81,15 +82,24 @@ def start(
                 "CHATFLOW_EVIDENCE_UNAVAILABLE", "conversation evidence unavailable"
             )
     # 单据轮次及其下一轮均不继承上游记忆，旧订单数据不会进入后续模型输入。
-    if order_no or (previous and previous.order_no):
+    if order_no or photo_id or (previous and (previous.order_no or previous.has_photo)):
         upstream = ""
-    run_id = "service_" + uuid.uuid4().hex
-    qa = runtime.store.create_assistant_question(
-        caller.scope_fingerprint,
-        question,
-        internal_run_id=PREFIX + run_id,
-        tenant_id=caller.effective_tenant_id,
+    image = (
+        runtime.consumer_photos.take(photo_id, caller.scope_fingerprint, fingerprint(binding))
+        if photo_id
+        else b""
     )
+    run_id = "service_" + uuid.uuid4().hex
+    try:
+        qa = runtime.store.create_assistant_question(
+            caller.scope_fingerprint,
+            question,
+            internal_run_id=PREFIX + run_id,
+            tenant_id=caller.effective_tenant_id,
+        )
+    except Exception:
+        runtime.consumer_photos.finish(photo_id)
+        raise
     token = ""
     try:
         if binding.content_file or binding.content_snapshot is not None:
@@ -122,15 +132,18 @@ def start(
             binding_digest=fingerprint(binding),
             language=language,
             data_kind=data_kind,
+            has_photo=bool(image),
         )
         runtime._qa_registrations[qa["qa_id"]] = registration
         future = runtime._executor.submit(
-            execute, runtime, caller, qa, question, binding, upstream, registration, language, token
+            execute, runtime, caller, qa, question, binding, upstream, registration, language, token, image
         )
         runtime._futures[qa["qa_id"]] = future
+        future.add_done_callback(lambda _: runtime.consumer_photos.finish(photo_id))
         future.add_done_callback(lambda _: runtime._futures.pop(qa["qa_id"], None))
         future.add_done_callback(lambda _: runtime._qa_registrations.pop(qa["qa_id"], None))
     except Exception:
+        runtime.consumer_photos.finish(photo_id)
         if token:
             DataGrantStore(runtime.store.path).revoke_for_qa(qa["qa_id"])
         runtime.store.update_assistant_question(
@@ -141,7 +154,7 @@ def start(
     return qa
 
 
-def execute(runtime, caller, qa, question, binding, upstream, registration, language, token=""):
+def execute(runtime, caller, qa, question, binding, upstream, registration, language, token="", image=b""):
     run_id = qa["internal_run_id"].removeprefix(PREFIX)
     store = runtime.dify_run_store
     if not runtime.store.update_assistant_question(qa["qa_id"], status="running"):
@@ -171,12 +184,29 @@ def execute(runtime, caller, qa, question, binding, upstream, registration, lang
                 registration.interrupt()
                 raise ValueError("cancelled")
 
+        uploaded = client.upload_photo(key=key, user=user, image=image) if image else ""
+        image = b""
+        current(runtime, caller, binding)
+        latest = store.get(run_id)
+        if (
+            registration.cancelled
+            or latest is None
+            or latest.state != "running"
+            or not still_valid(latest)
+            or latest.binding_digest != fingerprint(binding)
+        ):
+            raise ValueError("run ended during upload")
         reply = client.run(
             key=key,
             workflow_id=binding.workflow_id,
             user=user,
             query=question,
-            inputs={"language": language, **({"data_grant": token} if token else {})},
+            inputs={
+                "language": language,
+                "has_photo": "yes" if uploaded else "no",
+                **({"data_grant": token} if token else {}),
+            },
+            **({"photo_id": uploaded} if uploaded else {}),
             conversation_id=upstream,
             on_started=started,
         )

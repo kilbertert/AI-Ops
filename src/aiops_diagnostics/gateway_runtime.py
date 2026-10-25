@@ -295,6 +295,9 @@ class GatewayRuntime:
         #: 不在这里 import（会形成 gateway_api → gateway_runtime → gateway_api 的环）。
         #: 未注入 ⇒ worker 判不出归属 ⇒ 落 failed（fail closed），不写正文。
         self._order_authorizer: Any = None
+        from aiops_diagnostics.consumer_photo import PhotoStore
+
+        self.consumer_photos = PhotoStore()
 
         self.dify_app_registry = DifyAppRegistry(store.path)
         # Redacted run metrics (T7/#174): same DB file, lazy-built. Writes are
@@ -440,6 +443,7 @@ class GatewayRuntime:
         return run
 
     def shutdown(self) -> None:
+        self.consumer_photos.close()
         self._executor.shutdown(wait=False, cancel_futures=False)
 
     def start_health_report(
@@ -1520,6 +1524,7 @@ class GatewayRuntime:
         language,
         order_no="",
         data_kind="status",
+        photo_id="",
     ):
         from aiops_diagnostics.consumer_chat_service import start
 
@@ -1531,6 +1536,7 @@ class GatewayRuntime:
             conversation=conversation,
             order_no=order_no,
             data_kind=data_kind,
+            photo_id=photo_id,
             registration=JobRegistration(
                 conversation_turn=(
                     conversation["conversation_id"],

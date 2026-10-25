@@ -138,7 +138,7 @@ class ConsumerTrial:
                 workflow_id=workflow_id,
                 user=user,
                 query=self.question,
-                inputs={"language": language, "data_grant": token},
+                inputs={"language": language, "has_photo": "no", "data_grant": token},
                 on_started=started,
             )
             runtime._require_chat_order_visible(scope, order)

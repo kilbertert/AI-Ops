@@ -32,7 +32,7 @@ def target_for(settings, binding):
     found = []
     keys = set()
     for row in body["targets"]:
-        if not isinstance(row, dict) or set(row) != {
+        if not isinstance(row, dict) or set(row) - {"photo_enabled"} != {
             "app_id",
             "tenant_id",
             "environment",
@@ -65,6 +65,7 @@ def target_for(settings, binding):
             )
             or type(row["live_order_status"]) is not bool
             or type(row["live_billing_record"]) is not bool
+            or type(row.get("photo_enabled", False)) is not bool
         ):
             raise ValueError("invalid consumer target capabilities")
         if (
@@ -78,6 +79,7 @@ def target_for(settings, binding):
 
 def frozen_settings(target):
     return {
+        "photo_enabled": target.get("photo_enabled", False),
         "content": load_content(
             target["content_file"], tenant=target["tenant_id"], environment=target["environment"]
         ),

@@ -275,6 +275,7 @@ class AssistantQuestionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     question: str = Field(min_length=1, max_length=4000)
+    photo_id: str | None = Field(default=None, pattern=r"^photo_[a-f0-9]{32}$")
     order_no: str | None = Field(
         default=None,
         min_length=1,
@@ -2634,6 +2635,54 @@ def create_gateway_app(
             "format": answer["format"],
         }
 
+    @app.post("/v1/assistant/photos", status_code=201)
+    async def upload_consumer_photo(request: Request, identity=Depends(assistant_identity)):  # noqa: B008
+        from aiops_diagnostics.consumer_chat_service import fingerprint
+        from aiops_diagnostics.consumer_photo import MAX_UPLOAD, normalize_photo
+
+        caller, decision = identity
+        if not context.settings.consumer_chatflow_enabled or str(decision.platform) != "consumer":
+            raise StandardAPIError(404, "PHOTO_UNAVAILABLE", "photo input unavailable")
+        _require_consumer_self_order(caller, "consumer", "pending")
+        photo = ""
+        completed = False
+        try:
+            binding = chat_execution.select_binding(context.settings, caller, scenario="consumer_service")
+            if binding is None or not binding.photo_enabled:
+                raise StandardAPIError(404, "PHOTO_UNAVAILABLE", "photo input unavailable")
+            photo = context.runtime.consumer_photos.put(caller.scope_fingerprint, fingerprint(binding), b"")
+            body = bytearray()
+            try:
+                async with asyncio.timeout(20):
+                    async for chunk in request.stream():
+                        body.extend(chunk)
+                        if len(body) > MAX_UPLOAD:
+                            raise StandardAPIError(413, "PHOTO_TOO_LARGE", "photo too large")
+            except TimeoutError as exc:
+                raise StandardAPIError(408, "PHOTO_UPLOAD_TIMEOUT", "photo upload timed out") from exc
+            from starlette.concurrency import run_in_threadpool
+
+            image = await run_in_threadpool(
+                normalize_photo, bytes(body), request.headers.get("Content-Type", "").split(";")[0]
+            )
+            from aiops_diagnostics.consumer_chat_service import current
+
+            current(context.runtime, caller, binding)
+            context.runtime.consumer_photos.complete_upload(photo, image)
+            completed = True
+            return JSONResponse(
+                status_code=201,
+                headers={"Cache-Control": "no-store"},
+                content={"photo_id": photo, "expires_in_seconds": 300},
+            )
+        except ValueError as exc:
+            raise StandardAPIError(400, "PHOTO_INVALID", "invalid photo") from exc
+        except chat_execution.ChatRunUnavailable as exc:
+            raise StandardAPIError(exc.http_status, exc.code, str(exc)) from exc
+        finally:
+            if photo and not completed:
+                context.runtime.consumer_photos.discard(photo)
+
     @app.post("/v1/assistant/questions")
     def assistant_questions(
         payload: AssistantQuestionRequest,
@@ -2693,6 +2742,10 @@ def create_gateway_app(
                     context.settings, caller, scenario=chat_execution.SCENARIO_CONSUMER_SERVICE
                 )
                 if service_binding is not None:
+                    if payload.photo_id and (not service_binding.photo_enabled or payload.order_no):
+                        raise StandardAPIError(
+                            400, "PHOTO_NOT_ALLOWED", "photo input is unavailable for this request"
+                        )
                     _require_consumer_self_order(caller, "consumer", "pending")
                     if service_binding.content_file or service_binding.content_snapshot is not None:
                         from aiops_diagnostics import consumer_knowledge
@@ -2715,6 +2768,13 @@ def create_gateway_app(
                             if followup["unresolved_count"] >= 2:
                                 local_kind = "human"
                         if local_kind:
+                            if payload.photo_id:
+                                from aiops_diagnostics.consumer_chat_service import fingerprint
+
+                                context.runtime.consumer_photos.take(
+                                    payload.photo_id, caller.scope_fingerprint, fingerprint(service_binding)
+                                )
+                                context.runtime.consumer_photos.finish(payload.photo_id)
                             content = None
                             with contextlib.suppress(ValueError, OSError, PrivatePathError):
                                 content = consumer_knowledge.binding_content(service_binding, caller)
@@ -2747,8 +2807,11 @@ def create_gateway_app(
                         if (service_binding.live_billing_record and is_billing_question(payload.question))
                         else "status"
                     )
-                    if data_kind == "billing" or (
-                        service_binding.live_order_status and is_order_status_question(payload.question)
+                    if payload.photo_id:
+                        data_kind = "status"
+                    if not payload.photo_id and (
+                        data_kind == "billing"
+                        or (service_binding.live_order_status and is_order_status_question(payload.question))
                     ):
                         authenticated_chat_order_reader(context, caller, request)
                         live_order = payload.order_no or _extract_order_no(payload.question)
@@ -2797,6 +2860,7 @@ def create_gateway_app(
                             language=language,
                             order_no=live_order,
                             data_kind=data_kind,
+                            photo_id=payload.photo_id or "",
                         )
                     except Exception:
                         _release_conversation_turn(context, conversation, turn_no)
@@ -2814,6 +2878,9 @@ def create_gateway_app(
                 raise StandardAPIError(exc.http_status, exc.code, str(exc), retryable=exc.retryable) from exc
             except (ValueError, OSError, sqlite3.Error, SourceError, ScopeError) as exc:
                 raise _runtime_unavailable("CHATFLOW_UNAVAILABLE", "chatflow unavailable", exc) from exc
+
+        if payload.photo_id:
+            raise StandardAPIError(404, "PHOTO_UNAVAILABLE", "photo input unavailable")
 
         # Two server-side guards over the clicked shortcut. The listing
         # metadata is a UI hint; these guards are the boundary that keeps a
@@ -4052,7 +4119,8 @@ def create_gateway_app(
         return {"run_id": run_id, "manifest": latest.execution_manifest, "sha256": manifest.identity}
 
     @app.post("/v1/internal/consumer-knowledge")
-    def consumer_knowledge_context(
+    async def consumer_knowledge_context(
+        request: Request,
         response: Response,
         authorization: Annotated[str | None, Header()] = None,
     ):
@@ -4062,10 +4130,25 @@ def create_gateway_app(
         if not authorization or not authorization.startswith("Bearer "):
             raise StandardAPIError(401, "GRANT_REQUIRED", "knowledge grant required")
         try:
-            return consumer_knowledge.callback_context(
+            raw = bytearray()
+            async for part in request.stream():
+                raw.extend(part)
+                if len(raw) > 6000:
+                    raise StandardAPIError(413, "PHOTO_CONTEXT_INVALID", "image context too large")
+            image_text = raw.decode("utf-8")
+            if request.headers.get("Content-Type", "").startswith("application/json"):
+                body = json.loads(image_text or "{}")
+                if not isinstance(body, dict) or set(body) - {"image_text"}:
+                    raise ValueError("unexpected knowledge input")
+                image_text = body.get("image_text", "")
+            from starlette.concurrency import run_in_threadpool
+
+            return await run_in_threadpool(
+                consumer_knowledge.callback_context,
                 context.runtime,
                 authorization[7:],
                 require_result=consumer_chat_service.require_result,
+                image_text=image_text,
                 read_snapshot=lambda caller, order, kind: _authorized_consumer_snapshot(
                     context.settings, caller, order, kind
                 ),

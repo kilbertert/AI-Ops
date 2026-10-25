@@ -150,6 +150,7 @@ class ChatBinding:
     knowledge_base_ids: tuple[str, ...] = ()
     live_order_status: bool = False
     live_billing_record: bool = False
+    photo_enabled: bool = False
 
     @property
     def key(self) -> str:
@@ -256,7 +257,11 @@ def _parse_binding(row: object) -> ChatBinding:
         billing = row.get("live_billing_record", False)
         if type(billing) is not bool or (billing and not content):
             raise ChatBindingError("billing records require reviewed content")
+        photo = row.get("photo_enabled", False)
+        if type(photo) is not bool or (photo and not content):
+            raise ChatBindingError("photos require reviewed content")
         return ChatBinding(
+            photo_enabled=photo,
             live_billing_record=billing,
             live_order_status=live,
             engine=engine,
@@ -394,6 +399,7 @@ def _bindings_from_store(path: str | Path, key_dir: str = "") -> tuple[ChatBindi
                 raise ChatBindingError("consumer publication has no frozen content")
             binding = replace(
                 binding,
+                photo_enabled=frozen.get("photo_enabled", False),
                 content_snapshot=frozen["content"],
                 knowledge_base_ids=tuple(frozen["knowledge_base_ids"]),
                 live_order_status=frozen["live_order_status"],
