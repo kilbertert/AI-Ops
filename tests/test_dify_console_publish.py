@@ -1720,3 +1720,100 @@ def test_the_versions_button_lists_what_can_be_restored(bridge: Any, upstream: _
     assert status == 200
     assert body["versions"] == [{"version_no": 1}]
     assert any(c["path"] == "/v1/dify/versions" for c in upstream.calls)
+
+
+def test_a_platform_account_resolves_the_platform_workspace_not_its_sentinel_tenant(upstream) -> None:
+    """平台账号（`user_type=-1`）问的是 `platform` workspace，不是哨兵值 `-1`。
+
+    公司体系里平台账号没有 `sys_organ`，它的 `tenant_id` 是 `-1` —— 一个**哨兵值**，
+    不是实体 id。拿它去查 workspace 会在网关的参数校验就失败（`_SAFE_ID` 要求首字符
+    是字母或数字），网关回 400，而桥把所有非 2xx 都译成「这个租户没有工作区」。
+
+    实测 2026-10-25（41 + 36）：`system` 点「发布到 AI-Ops」，桥日志
+    `workspace lookup failed: _WorkspaceLookupFailed: 400`，运营看到
+    「你所在的租户还没有可用的 Dify 工作区」——一句**不成立**的话：这个租户从来
+    不需要开户，它需要的是落到自己的平台 workspace。
+
+    登录侧早已这么处理（`dify_login_service.py` 的 #882），发布桥漏了同一层映射。
+    """
+    upstream.verdict_body = {
+        **_identity_with_tenant("-1"),
+        "company_user_type": "-1",  # 平台账号
+        "company_username": "system",
+    }
+    _serve_workspace_lookup(upstream, workspace_id=TENANT_ID)
+    upstream.summary_body = {**upstream.summary_body, "id": TENANT_ID}
+
+    result = publish_current_app(
+        dify_base_url=upstream.base,
+        gateway_base_url=upstream.base,
+        publish_key=PUBLISH_KEY,
+        console_session=ConsoleSession(access_token=SESSION, csrf_token=CSRF),
+        console_origin=ORIGIN,
+        workspace_id=TENANT_ID,
+        referer=REFERER,
+        login_proxy_url=upstream.base,
+        gateway_internal_token="internal-token-0123456789",
+    )
+
+    assert result.published is True, result.reason
+    lookups = [c["path"] for c in upstream.calls if c["path"].startswith("/v1/dify/workspace")]
+    assert lookups, "没有问网关要 workspace"
+    assert all("tenant_id=platform" in path for path in lookups), (
+        f"平台账号应当查 platform workspace，实际：{lookups}"
+    )
+    assert not any("tenant_id=-1" in path for path in lookups), (
+        f"哨兵值 -1 被当成租户 id 发给了网关：{lookups}"
+    )
+
+
+def test_a_tenant_account_still_resolves_its_own_tenant(upstream) -> None:
+    """对照：租户账号不受上面那条影响，仍然查**自己的** tenant（不能顺手改宽）。"""
+    upstream.verdict_body = _identity_with_tenant("T-884")
+    _serve_workspace_lookup(upstream, workspace_id=TENANT_ID)
+    upstream.summary_body = {**upstream.summary_body, "id": TENANT_ID}
+
+    result = publish_current_app(
+        dify_base_url=upstream.base,
+        gateway_base_url=upstream.base,
+        publish_key=PUBLISH_KEY,
+        console_session=ConsoleSession(access_token=SESSION, csrf_token=CSRF),
+        console_origin=ORIGIN,
+        workspace_id=TENANT_ID,
+        referer=REFERER,
+        login_proxy_url=upstream.base,
+        gateway_internal_token="internal-token-0123456789",
+    )
+
+    assert result.published is True, result.reason
+    lookups = [c["path"] for c in upstream.calls if c["path"].startswith("/v1/dify/workspace")]
+    assert any("tenant_id=T-884" in path for path in lookups), f"租户账号查错了租户：{lookups}"
+    assert not any("tenant_id=platform" in path for path in lookups), f"租户账号被误当成平台账号：{lookups}"
+
+
+def test_the_inlined_platform_constants_match_their_sources() -> None:
+    """桥里重写的两个常量必须与出处一致。
+
+    发布桥的部署制品只含五个模块（`ops/dify-console-bridge/build-bundle.sh:13`），
+    所以 `dify_console_publish.py` **不能** import `dify_login_service` 或
+    `dify_workspaces` —— 实测 2026-10-25：那样写让桥在服务宿主上
+    `ModuleNotFoundError`，五个部署测试转红，而它们在本地全绿。
+
+    代价是这两个值在本模块重写了一份。本用例就是那份代价的守卫：出处改了而这里
+    没跟上，立刻红。
+    """
+    from aiops_diagnostics import dify_login_service, dify_workspaces
+    from aiops_diagnostics.dify_console_publish import PLATFORM_TENANT_ID as BRIDGE_TENANT
+    from aiops_diagnostics.dify_console_publish import PLATFORM_USER_TYPE as BRIDGE_TYPE
+
+    assert BRIDGE_TYPE == dify_login_service.PLATFORM_USER_TYPE, (
+        "桥里的 PLATFORM_USER_TYPE 与 dify_login_service 不一致"
+    )
+    assert BRIDGE_TENANT == dify_workspaces.PLATFORM_TENANT_ID, (
+        "桥里的 PLATFORM_TENANT_ID 与 dify_workspaces 不一致"
+    )
+    # 同名的另一个常量属于不同命名空间，值本就不同；钉住这一点，
+    # 免得有人"统一"它们（ADR-0008 的「同名不同物」）。
+    from aiops_diagnostics import shortcut_lifecycle
+
+    assert shortcut_lifecycle.PLATFORM_TENANT_ID != BRIDGE_TENANT
