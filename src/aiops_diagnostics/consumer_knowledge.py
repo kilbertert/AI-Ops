@@ -248,6 +248,12 @@ def final_answer(raw, context, language, content):
     if not isinstance(selected, dict) or set(selected) != {"kind", "faq_id"}:
         raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "invalid answer fields")
     kind = selected["kind"]
+    if (context or {}).get("live_snapshot"):
+        if kind != "realtime" or selected["faq_id"]:
+            raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "live answer kind differs")
+        from aiops_diagnostics.consumer_order_chat import status_answer
+
+        return status_answer(context["live_snapshot"], language)
     if kind == "knowledge":
         row = next(
             (r for r in (context or {}).get("candidates", []) if r["faq_id"] == selected["faq_id"]), None
@@ -273,7 +279,7 @@ def final_answer(raw, context, language, content):
     return answer
 
 
-def callback_context(runtime, token, *, require_result):
+def callback_context(runtime, token, *, require_result, read_snapshot):
     from aiops_diagnostics import chat_data_grant, chat_execution
     from aiops_diagnostics.agent_runs import scope_from_json
     from aiops_diagnostics.dify_run_store import still_valid
@@ -285,7 +291,7 @@ def callback_context(runtime, token, *, require_result):
         run is None
         or run.kind != "service"
         or run.grant_id != grant.grant_id
-        or run.order_no
+        or run.order_no != grant.order_no
         or (run.scope_fingerprint, run.tenant_id, run.environment, run.workflow_id)
         != (grant.scope_fingerprint, grant.tenant_id, grant.environment, grant.workflow_id)
     ):
@@ -299,6 +305,10 @@ def callback_context(runtime, token, *, require_result):
     _require_binding(runtime, caller, binding)
 
     def valid():
+        if run.order_no:
+            if not binding.live_order_status:
+                raise ChatRunUnavailable("CHATFLOW_LIVE_DISABLED", "live status disabled", http_status=403)
+            runtime._require_chat_order_visible(caller, run.order_no)
         chat_data_grant.usable(grants.by_id(grant.grant_id))
         latest = runtime.dify_run_store.get(run.run_id)
         qa = runtime.store.get_assistant_question(run.qa_id, caller.scope_fingerprint)
@@ -334,7 +344,11 @@ def callback_context(runtime, token, *, require_result):
     query = qa["question"]
     if followup["unresolved_count"]:
         query = followup["topic"] + "\n" + query
-    result = select_context(runtime, caller, binding, query, run.language, run.qa_id)
+    result = (
+        {"status": "live", "candidates": [], "live_snapshot": read_snapshot(caller, run.order_no)}
+        if run.order_no
+        else select_context(runtime, caller, binding, query, run.language, run.qa_id)
+    )
     result["followup"] = followup
     valid()
     # 本轮检索期间前轮也可能到期，不能继续向模型披露失效的前文。

@@ -2685,8 +2685,6 @@ def create_gateway_app(
                                     "language": served_language,
                                 },
                             )
-                    if payload.order_no:
-                        _require_visible_order(context, caller, payload.order_no)
                     if not can_prompt_in(language):
                         return _clarification(
                             context,
@@ -2696,6 +2694,32 @@ def create_gateway_app(
                             question=payload.question,
                             language=language,
                         )
+                    live_order = ""
+                    if service_binding.live_order_status and is_order_status_question(payload.question):
+                        authenticated_chat_order_reader(context, caller, request)
+                        live_order = payload.order_no or _extract_order_no(payload.question)
+                        if live_order is None and asks_latest_order(payload.question):
+                            with scoped_mysql_source(
+                                Settings.from_config(context.settings.server_config_file),
+                                resolve_query_scope(caller),
+                            ) as source:
+                                rows = source.list_orders(page=1, page_size=1)
+                            if not rows:
+                                raise StandardAPIError(404, "ORDER_NOT_FOUND", "order not found")
+                            live_order = str(rows[0]["order_no"])
+                        if not live_order:
+                            return _clarification(
+                                context,
+                                caller,
+                                decision,
+                                code=CLARIFY_ORDER_REQUIRED,
+                                question=payload.question,
+                                language=language,
+                            )
+                        _require_consumer_self_order(caller, "consumer", live_order)
+                        _require_visible_order(context, caller, live_order)
+                    elif payload.order_no:
+                        _require_visible_order(context, caller, payload.order_no)
                     if conversation is None:
                         conversation = context.conversation_store.create(
                             scope_fingerprint=caller.scope_fingerprint,
@@ -2717,6 +2741,7 @@ def create_gateway_app(
                             conversation=conversation,
                             conversation_turn_no=turn_no,
                             language=language,
+                            order_no=live_order,
                         )
                     except Exception:
                         _release_conversation_turn(context, conversation, turn_no)
@@ -2732,7 +2757,7 @@ def create_gateway_app(
                     )
             except chat_execution.ChatRunUnavailable as exc:
                 raise StandardAPIError(exc.http_status, exc.code, str(exc), retryable=exc.retryable) from exc
-            except (ValueError, OSError, sqlite3.Error) as exc:
+            except (ValueError, OSError, sqlite3.Error, SourceError, ScopeError) as exc:
                 raise _runtime_unavailable("CHATFLOW_UNAVAILABLE", "chatflow unavailable", exc) from exc
 
         # Two server-side guards over the clicked shortcut. The listing
@@ -3983,13 +4008,18 @@ def create_gateway_app(
             raise StandardAPIError(401, "GRANT_REQUIRED", "knowledge grant required")
         try:
             return consumer_knowledge.callback_context(
-                context.runtime, authorization[7:], require_result=consumer_chat_service.require_result
+                context.runtime,
+                authorization[7:],
+                require_result=consumer_chat_service.require_result,
+                read_snapshot=lambda caller, order: _authorized_charging_snapshot(
+                    context.settings, caller, order
+                ),
             )
         except chat_data_grant.DataGrantError as exc:
             raise StandardAPIError(401, exc.code, "knowledge grant refused") from exc
         except chat_execution.ChatRunUnavailable as exc:
             raise StandardAPIError(exc.http_status, exc.code, str(exc)) from exc
-        except (ValueError, OSError) as exc:
+        except (ValueError, OSError, ChargingStatusError) as exc:
             raise _runtime_unavailable("KNOWLEDGE_UNAVAILABLE", "knowledge unavailable", exc) from exc
 
     @app.post("/v1/internal/charging-status/dify-read")
@@ -6671,6 +6701,9 @@ def _require_current_chat_order(context, caller, qa, request):
     from aiops_diagnostics import consumer_chat_service
 
     if str(qa.get("internal_run_id") or "").startswith(consumer_chat_service.PREFIX):
+        run = context.dify_run_store.by_qa(qa["qa_id"])
+        if run and run.order_no:
+            authenticated_chat_order_reader(context, caller, request)
         try:
             return consumer_chat_service.require_result(context.runtime, caller, qa)
         except chat_execution.ChatRunUnavailable as exc:

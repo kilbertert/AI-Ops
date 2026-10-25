@@ -40,7 +40,7 @@ API异常/越权、安全优先、真实可播放媒体、实际人工入口逐�
 
 `AIOPS_GATEWAY_CONSUMER_CHATFLOW_ENABLED=1`启用服务端登记的`consumer_service`场景。
 沿用`CHAT_EXECUTION_BINDINGS_FILE`，engine=dify，另需app_id、workflow_id、workflow_key_file、
-agent_id、agent_version_no及environment/tenant_id/entry=consumer；只读工具尚未在此片开放。
+agent_id、agent_version_no及environment/tenant_id/entry=consumer；本人状态可按下节显式启用；支付/退款等仍待接入。
 首次POST返回conversation_id，客户端后续原样带回；它是Gateway会话，不是Dify会话ID。
 失败/取消或发布版变化后的会话返回409要求新会话；原QA与会话正文过期/换绑后拒绝交付。
 旧状态查询场景与开关独立，未配置WF01时保持既有路线。本片仅供隔离接线验证，不能当完整客服上线。
@@ -67,3 +67,14 @@ Dify的HTTP节点自己带data_grant回调`POST /v1/internal/consumer-knowledge`
 回复询问当前步骤和错误提示。第二次及之后显示受控人工渠道，不再请求Dify或知识库。
 新主题/新会话重置；计数落在现有运行上下文中，不依赖App内存。前轮过期或正文不一致时拒绝续用。
 明确表达之外仍由Chatflow处理，尚未证明所有隐含未解决表达；提示渠道不代表已转接。
+
+## WF01本人实时订单状态
+
+在consumer_service登记加入`live_order_status: true`，并提供已审核content_file；缺省false。
+复用既有租户充电端点配置，当前调用方必须能重新通过`aiops:orders:read`。
+明确状态问法指定本人订单或最新单时，由网关选单并冻结进本轮grant；HTTP步骤回调时只读该单CPMS。
+该轮不检索知识、也不派发节点，模型只选realtime类型，原GET返回同轮状态、来源与UTC查询时间。
+缺单号先澄清，其他实时需求仍明确不可用；不从充电状态推断支付/退款结果。
+
+实时轮次及其下一轮不复用Dify上游会话，避免失效业务数据进入后续模型输入；Gateway会话记录保留。
+回调读前读后、worker写前、QA/会话回读都再次判订单归属与TTL/当前绑定。失败不回落其他引擎。

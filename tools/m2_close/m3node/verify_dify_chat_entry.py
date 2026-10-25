@@ -746,6 +746,7 @@ def _start_gateway(
     service_app_id: str = "",
     service_content: str = "",
     knowledge_base: str = "",
+    service_live_order: bool = False,
 ) -> tuple[subprocess.Popen, str, dict[str, Any]]:
     """起真 Gateway（绑定表指向 Dify 路线），等它就绪。"""
     case = root / "gateway"
@@ -839,6 +840,7 @@ def _start_gateway(
                             "scenario": "consumer_service" if service_app_id else "consumer_own_order_status",
                             **(
                                 {
+                                    "live_order_status": service_live_order,
                                     "app_id": service_app_id,
                                     "agent_id": "agt_12345678",
                                     "agent_version_no": 1,
