@@ -357,3 +357,83 @@ def test_a_platform_account_without_its_workspace_gets_an_actionable_refusal(
         service.login(username="ops", password="pw", random_str="r", code="c")
 
     assert f"--tenant {PLATFORM_TENANT_ID}" in str(caught.value)
+
+
+# --------------------------------------------------------------------------- #
+# ADR-0139：准入的粒度是「他进哪个 workspace」，不是「他持有什么码」              #
+# --------------------------------------------------------------------------- #
+
+
+def test_a_tenant_account_enters_its_own_workspace_without_the_global_code(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """租户的人没有 `aiops:agent:edit` ⇒ **照样进得来自己租户的 workspace**。
+
+    这是 ADR-0056 记的那条代价的终点：隔离在 workspace 那一层，所以那个全局码不再是
+    租户账号的门。他在这里只看得见本租户的 app，碰不到别人的。
+    """
+    _patch_company(monkeypatch, permissions=(), user_type="1")
+    directory, inner = _Directory(WORKSPACE), _Inner()
+    service = _service(tmp_path, directory, inner)
+
+    service.login(username="boss", password="pw", random_str="r", code="c")
+
+    assert directory.asked == [TENANT]
+    assert inner.joins and inner.joins[0]["workspace_id"] == WORKSPACE
+    assert _row(tmp_path)["workspace_joined"] == 1
+
+
+def test_a_tenant_account_without_its_workspace_is_still_refused(tmp_path: Path, monkeypatch) -> None:
+    """没有全局码**且**没有自己的 workspace ⇒ 拒，且文案指向 `ensure-workspace`。
+
+    反向判据：如果把 `may_enter` 改成「不校验 workspace 是否真的解析出来」，这条会变成
+    登录成功 —— 而那条路通向"登录成功、进去什么也没有"。
+    """
+    from aiops_diagnostics.dify_login_proxy import PermissionDenied
+
+    _patch_company(monkeypatch, permissions=(), user_type="1")
+    service = _service(
+        tmp_path,
+        _Directory(WorkspaceUnavailable("DIFY_WORKSPACE_UNRESOLVED", "no row", http_status=404)),
+        _Inner(),
+    )
+
+    with pytest.raises(PermissionDenied) as caught:
+        service.login(username="boss", password="pw", random_str="r", code="c")
+
+    assert caught.value.code == "DIFY_WORKSPACE_UNRESOLVED"
+    assert f"aiops admin ensure-workspace --tenant {TENANT}" in str(caught.value)
+
+
+def test_the_platform_workspace_still_requires_the_global_code(tmp_path: Path, monkeypatch) -> None:
+    """平台账号**没有**全局码 ⇒ 仍然拒。
+
+    平台 workspace 是所有平台账号共处一室、互相可见全部 app，所以那道门必须还在；
+    ADR-0139 放开的是"租户自己那个 workspace"，不是这一间。
+    """
+    from aiops_diagnostics.dify_login_proxy import PermissionDenied
+
+    _patch_company(monkeypatch, permissions=(), user_type="-1")
+    service = _service(tmp_path, _Directory("ws-platform"), _Inner())
+
+    with pytest.raises(PermissionDenied) as caught:
+        service.login(username="ops", password="pw", random_str="r", code="c")
+
+    assert caught.value.code == "MISSING_EDIT_PERMISSION"
+
+
+def test_a_single_workspace_deployment_keeps_the_global_gate(tmp_path: Path, monkeypatch) -> None:
+    """没配那四个键的部署（ADR-0072 的单一固定工作区）⇒ 门**逐字不变**。
+
+    那里解析不出 workspace，隔离根本不存在。若判据看的是"他有个租户"，一次配置缺省
+    就把整个门拿掉了 —— 这条就是钉住那个方向的。
+    """
+    from aiops_diagnostics.dify_login_proxy import PermissionDenied
+
+    _patch_company(monkeypatch, permissions=(), user_type="1")
+    service = _service(tmp_path, None, None)  # 没有 workspace_directory
+
+    with pytest.raises(PermissionDenied) as caught:
+        service.login(username="boss", password="pw", random_str="r", code="c")
+
+    assert caught.value.code == "MISSING_EDIT_PERMISSION"

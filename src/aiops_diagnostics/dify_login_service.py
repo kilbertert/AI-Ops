@@ -86,6 +86,45 @@ class LoginPolicy:
     def may_edit(self, permissions: tuple[str, ...]) -> bool:
         return bool(self.edit_permission) and self.edit_permission in permissions
 
+    def may_enter(
+        self,
+        permissions: tuple[str, ...],
+        *,
+        tenant_account: bool,
+        has_own_workspace: bool,
+    ) -> bool:
+        """控制台准入（ADR-0139）。
+
+        两道门，按**进的是哪个 workspace** 分，不是按人分：
+
+        * **租户自己的 workspace** —— 隔离本身就是那道门。他进去只看得见本租户的 app，
+          碰不到别人的，所以不需要再要一个全局权限码。要求他只差"有自己那个 workspace"。
+        * **平台共用 workspace** —— 所有平台账号同处一室、互相可见全部 app，那道门还在，
+          仍然要全局权限码。
+
+        ADR-0056 记的代价是「无法按租户授予编辑范围：`aiops:agent:edit` 是全局权限码」。
+        多 workspace 落地之后这句话不再成立 —— 不是码变成租户级了，而是**它不再是那道门**。
+        ADR-0087 已在知识库那条路上做过同一个判断。
+        """
+        if tenant_account and has_own_workspace:
+            return True
+        return self.may_edit(permissions)
+
+    def may_publish(
+        self, permissions: tuple[str, ...], *, tenant_account: bool, has_own_workspace: bool
+    ) -> bool:
+        """发布权，**与准入同一条边界**（ADR-0139）。
+
+        租户账号在自己的 workspace 里发布：ADR-0073 已经把发布钉死在**发起人所在**的
+        workspace，跨租户在结构上发不出去。平台账号仍在共用 workspace 里，仍需全局码。
+
+        ``publish_permission`` 留空 ⇒ 该部署还没切到公司权限码 ⇒ 维持过渡行为（返回
+        False，由调用方决定），与 :meth:`may_edit` 的空配置语义一致。
+        """
+        if tenant_account and has_own_workspace:
+            return True
+        return bool(self.publish_permission) and self.publish_permission in permissions
+
 
 class MappingStore:
     """公司用户 id ↔ Dify 账号 的映射，以及每次登录的权限码快照。"""
@@ -353,6 +392,26 @@ class LoginService:
             access_expire_minutes=self.dify.access_expire_minutes,
         )
 
+    def _refuse_workspace(
+        self,
+        identity: CompanyIdentity,
+        existing: dict[str, Any] | None,
+        tenant_id: str,
+        exc: Exception,
+    ) -> None:
+        """工作区解析不到时的**唯一**拒绝出口（两处调用，见 :meth:`login`）。
+
+        两处各写一份就会漂：一处记了审计一处没记，一处给带命令的文案一处给泛泛的错。
+        """
+        code = getattr(exc, "code", "") or "DIFY_WORKSPACE_LOOKUP_FAILED"
+        self.store.record_audit(
+            company_user_id=identity.user_id,
+            dify_account_id=str(existing["dify_account_id"]) if existing is not None else "",
+            action="workspace_unavailable",
+            reason_code=code,
+        )
+        raise PermissionDenied(code, _workspace_refusal(tenant_id, exc)) from exc
+
     def login(
         self,
         *,
@@ -379,8 +438,52 @@ class LoginService:
 
         existing = self.store.get(identity.user_id)
 
-        if not self.policy.may_edit(permissions):
-            # 失去编辑权限码 ⇒ **无论此前是什么状态**都拒绝登录。若此前是 active，就地
+        # **准入发生在解析之前**（ADR-0139）。粒度是「他进哪个 workspace」：平台共用
+        # workspace 仍要全局权限码，租户自己的 workspace 由隔离本身保证。
+        #
+        # 先问 workspace 再判权的顺序是有意的：反过来，一个持平台码但没有 workspace 的
+        # 账号会拿到"缺权限"这句错，而真正的原因是他该进的那个工作区没建 —— 两种下一步
+        # 完全不同（一个去找公司管理员，一个去跑 `ensure-workspace`）。
+        is_platform_account = user_type == PLATFORM_USER_TYPE
+        workspace_tenant = PLATFORM_TENANT_ID if is_platform_account else identity.tenant_id
+        workspace_id = ""
+        workspace_lookup_error: Exception | None = None
+        if self.workspace_directory is not None:
+            from aiops_diagnostics.dify_workspace_directory import WorkspaceUnavailable
+
+            # **平台账号落到它自己的平台 workspace**（#882）。`type=-1` 的账号不属于任何
+            # `sys_organ`，所以它没有可解析的租户 —— 不单独处理的话，多 workspace 一上线，
+            # 平台账号会发现"自己没有工作区"，登录直接变砖（而它正是应急入口）。
+            #
+            # 它的"可见全部"**不**通过进别人的 workspace 体现（ADR-0059 §4）：编辑面只在
+            # 自己的平台 workspace；跨租户可见性只体现在试运行的订单范围与发布审计上。
+            try:
+                workspace_id = self.workspace_directory.resolve(workspace_tenant)
+            except WorkspaceUnavailable as exc:
+                # **不在这里抛**：它还可能是一个持全局码的平台账号，那种情况权限门才是
+                # 真正的答案。等门判完再决定报哪一个 —— 见下面的顺序说明。
+                workspace_lookup_error = exc
+                workspace_id = ""
+
+        # 「租户账号」= 有真实租户 id 且不是平台哨兵。空租户 id 的账号（公司数据不完整）
+        # 不当成租户账号：那种账号解析不出 workspace，放行只会让他进不去任何地方。
+        #
+        # **判据是实际解析出来的 workspace，不是"他有个租户"**：没配那四个键的部署
+        # （ADR-0072 的单一固定工作区）解析不出 workspace，隔离根本不存在，那时这道门
+        # 必须还是全局权限码 —— 否则一次配置缺省就把门整个拿掉了。
+        tenant_account = bool(identity.tenant_id) and not is_platform_account
+        has_own_workspace = bool(workspace_id)
+        if tenant_account and workspace_lookup_error is not None:
+            # 租户账号的门**就是**他自己那个 workspace（ADR-0139），所以解析不到时正确答案
+            # 是"你的工作区没准备好"＋那条命令，而不是"你缺权限"—— 后者会把他送到公司
+            # 管理员那里，而实际要动的是网关主机上的 `ensure-workspace`。
+            self._refuse_workspace(identity, existing, workspace_tenant, workspace_lookup_error)
+        if not self.policy.may_enter(
+            permissions,
+            tenant_account=tenant_account,
+            has_own_workspace=has_own_workspace,
+        ):
+            # 失去准入 ⇒ **无论此前是什么状态**都拒绝登录。若此前是 active，就地
             # 置为 disabled 并记审计 —— 这一次登录就是撤权生效点（#779）。此后即使公司又给回
             # 权限码，重登也会重新授权并把状态改回 active（下一段），所以它是**可逆**的。
             if existing is not None and existing["status"] == STATUS_ACTIVE:
@@ -406,6 +509,11 @@ class LoginService:
                 f"公司账号缺少「可编辑智能体」权限（{required}），请联系公司管理员",
             )
 
+        # 权限门过了，但工作区没解析出来：平台账号靠全局码过门，而平台 workspace 还没建。
+        # 租户账号在上面那一句就已经走了（他们的门就是自己的 workspace）。
+        if workspace_lookup_error is not None:
+            self._refuse_workspace(identity, existing, workspace_tenant, workspace_lookup_error)
+
         account_id = existing["dify_account_id"] if existing is not None else ""
         email = account_email_for(identity.user_id, environment=self.dify.environment)
         if existing is not None and str(existing["dify_email"] or "") not in ("", email):
@@ -429,36 +537,7 @@ class LoginService:
                 "dify-login: retagged mapping email for company_user=%s (environment prefix)",
                 identity.user_id,
             )
-        # #883：**解析这个租户自己的 workspace，并把人 join 进去**。
-        #
-        # 解析走网关（一份真值），**不在这里建** —— 建与写映射必须在同一台机器、同一次
-        # 运行里（`aiops admin ensure-workspace` 在 41 本机跑）。缺行时抛的是**带命令的
-        # 错**，不是一个空 workspace：空工作区会让运营以为自己"进去了、只是没内容"。
-        workspace_id = ""
-        if self.workspace_directory is not None:
-            from aiops_diagnostics.dify_workspace_directory import WorkspaceUnavailable
-
-            # **平台账号落到它自己的平台 workspace**（#882）。`type=-1` 的账号不属于任何
-            # `sys_organ`，所以它没有可解析的租户 —— 不单独处理的话，多 workspace 一上线，
-            # 平台账号会发现"自己没有工作区"，登录直接变砖（而它正是应急入口）。
-            #
-            # 它的"可见全部"**不**通过进别人的 workspace 体现（ADR-0059 §4）：编辑面只在
-            # 自己的平台 workspace；跨租户可见性只体现在试运行的订单范围与发布审计上。
-            workspace_tenant = PLATFORM_TENANT_ID if user_type == PLATFORM_USER_TYPE else identity.tenant_id
-            try:
-                workspace_id = self.workspace_directory.resolve(workspace_tenant)
-            except WorkspaceUnavailable as exc:
-                self.store.record_audit(
-                    company_user_id=identity.user_id,
-                    dify_account_id=account_id,
-                    action="workspace_unavailable",
-                    reason_code=exc.code,
-                )
-                raise PermissionDenied(
-                    exc.code,
-                    _workspace_refusal(workspace_tenant, exc),
-                ) from exc
-
+        # #883：workspace 已在上面的准入段解析（`workspace_id`），这里只做 join。
         if not account_id:
             account_id = provision_editor(
                 self.dify,
