@@ -452,6 +452,163 @@ def verify_knowledge(root, base, env, setup, model, check):
             "billing reads once without knowledge",
             len(stack.CpmsHandler.calls) == 2 and len(Knowledge.requests) == knowledge_calls,
         )
+        # 原运营发布接口必须自己冻结内容并发布Dify图，验收不代做该步骤。
+        from aiops_diagnostics.agent_lifecycle import AgentConfig, AgentManager, AgentStore
+        from aiops_diagnostics.agent_manifest import admin_context
+        from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
+
+        stack._stop(gateway)
+        gateway = None
+        case = root / "knowledge-test/gateway"
+        database = case / "data/gateway.db"
+        manager = AgentManager(AgentStore(database))
+        admin = admin_context(stack.TENANT)
+        agent = manager.create(
+            admin,
+            name="WF01 acceptance",
+            description="test",
+            config=AgentConfig(
+                agent_type="customer",
+                prompt="original",
+                knowledge_base_ids=(),
+                model="aiops-api",
+                output_contract="blocks-v1",
+            ),
+        )
+        manager.publish(admin, agent.agent_id, expected_revision=agent.revision)
+        stack._seed_registry(
+            database,
+            [
+                {
+                    "tenant_id": stack.TENANT,
+                    "business_entry": "consumer",
+                    "app_id": new["app_id"],
+                    "agent_name": "WF01 acceptance",
+                }
+            ],
+        )
+        workspace = stack._console_workspace(base, setup["console_headers"])
+        check(
+            "publication workspace seeded",
+            stack._seed_workspace(database, stack.TENANT, workspace, "dify-chat-acceptance"),
+        )
+        key = case / "keys" / (new["app_id"] + ".key")
+        key.write_text(new["service_key"])
+        key.chmod(0o600)
+        target = root / "consumer-targets.json"
+        target.write_text(
+            json.dumps(
+                {
+                    "schema": "aiops-consumer-targets/1",
+                    "targets": [
+                        {
+                            "app_id": new["app_id"],
+                            "tenant_id": stack.TENANT,
+                            "environment": "env-local",
+                            "content_file": str(content),
+                            "knowledge_base_ids": ["kb-own"],
+                            "live_order_status": True,
+                            "live_billing_record": True,
+                        }
+                    ],
+                }
+            )
+        )
+        target.chmod(0o600)
+        gateway, gateway_base, diag = stack._start_gateway(
+            root=root / "knowledge-test",
+            model_url=f"http://127.0.0.1:{model.server_port}/v1",
+            cpms_base=f"http://127.0.0.1:{cpms.server_port}",
+            dify_base=base,
+            workflow_id=new["workflow_id"],
+            key=new["service_key"],
+            port=port,
+            console_key=stack.ADMIN_API_KEY,
+            managed_route=True,
+            service_app_id=new["app_id"],
+            knowledge_base=f"http://127.0.0.1:{kb.server_port}",
+            service_publication_target=str(target),
+        )
+        check("managed consumer Gateway ready", not diag.get("error"))
+        publish_headers = {"Authorization": "Bearer " + stack.PUBLISH_KEY}
+
+        def action(name, **fields):
+            return stack.http_json(
+                gateway_base + "/v1/dify/" + name,
+                "POST",
+                {"app_id": new["app_id"], **fields},
+                publish_headers,
+            )
+
+        def question():
+            status, qa = stack.http_json(
+                gateway_base + "/v1/assistant/questions", "POST", {"question": "怎么开始充电？"}, headers
+            )
+            if status != 202:
+                return status, qa
+            deadline = time.monotonic() + 90
+            while time.monotonic() < deadline:
+                status, result = stack.http_json(
+                    gateway_base + "/v1/assistant/questions/" + qa["qa_id"], headers=headers
+                )
+                if status != 200 or result.get("status") not in {"queued", "running"}:
+                    return status, result
+                time.sleep(0.1)
+            raise RuntimeError("published question timed out")
+
+        def text_of(result):
+            return (result.get("result") or {}).get("blocks", [{}])[0].get("text", "")
+
+        status, first = action("publish")
+        check("operator publishes WF01", status == 200 and first.get("action") == "synced")
+        v1 = first["version_no"]
+        check("published content is executed", text_of(question()[1]) == "按设备提示启动。")
+        draft = json.loads(content.read_text())
+        draft["entries"]["KB-C-007"]["answers"]["zh"] = "第二版已审核操作指引。"
+        content.write_text(json.dumps(draft))
+        check("saving content does not switch App", text_of(question()[1]) == "按设备提示启动。")
+        routes = ChatRouteBindingStore(database)
+        before = routes.get("env-local", stack.TENANT, "consumer", "consumer_service")
+        trial_headers = {"Authorization": "Bearer " + stack.TRIAL_KEY}
+        status, trial = stack.http_json(
+            gateway_base + "/v1/dify/trial",
+            "POST",
+            {"app_id": new["app_id"], "order_no": stack.ORDER_LATEST, "question": "怎么开始充电？"},
+            trial_headers,
+        )
+        check("operator starts real Chatflow trial", status == 202)
+        deadline = time.monotonic() + 90
+        while time.monotonic() < deadline:
+            status, trial_result = stack.http_json(
+                gateway_base + "/v1/dify/trial/" + trial["trial_id"], headers=trial_headers
+            )
+            if status != 200 or trial_result.get("status") not in {"queued", "running"}:
+                break
+            time.sleep(0.1)
+        check(
+            "trial executes draft without changing publication",
+            status == 200
+            and trial_result.get("status") == "completed"
+            and trial_result.get("result", {}).get("report", {}).get("summary") == "第二版已审核操作指引。"
+            and routes.get("env-local", stack.TENANT, "consumer", "consumer_service") == before,
+        )
+        check("App remains V1 after trial", text_of(question()[1]) == "按设备提示启动。")
+        status, second = action("publish")
+        check("operator publishes changed content", status == 200 and second.get("version_no") != v1)
+        status, v2_answer = question()
+        check("App executes V2", text_of(v2_answer) == "第二版已审核操作指引。")
+        status, result = action("retract")
+        check("operator retracts WF01", status == 200)
+        check("retracted App does not execute", question()[0] == 410)
+        check(
+            "old answer is unavailable after retraction",
+            stack.http_json(gateway_base + "/v1/assistant/questions/" + v2_answer["qa_id"], headers=headers)[
+                0
+            ]
+            == 410,
+        )
+        status, restored = action("restore", version_no=v1)
+        check("operator restores V1", status == 200 and text_of(question()[1]) == "按设备提示启动。")
     finally:
         (root / "knowledge-model-requests.json").write_text(json.dumps(Model.requests, ensure_ascii=False))
         if gateway:
