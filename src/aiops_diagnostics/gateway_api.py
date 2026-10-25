@@ -2655,6 +2655,16 @@ def create_gateway_app(
                             if consumer_knowledge.HUMAN.search(payload.question)
                             else ""
                         )
+                        if not local_kind and conversation is not None:
+                            followup = consumer_knowledge.followup_context(
+                                context.runtime,
+                                caller,
+                                payload.question,
+                                conversation["conversation_id"],
+                                require_result=consumer_chat_service.require_result,
+                            )
+                            if followup["unresolved_count"] >= 2:
+                                local_kind = "human"
                         if local_kind:
                             content = None
                             with contextlib.suppress(ValueError, OSError, PrivatePathError):
@@ -3966,13 +3976,15 @@ def create_gateway_app(
         response: Response,
         authorization: Annotated[str | None, Header()] = None,
     ):
-        from aiops_diagnostics import chat_data_grant, consumer_knowledge
+        from aiops_diagnostics import chat_data_grant, consumer_chat_service, consumer_knowledge
 
         response.headers["Cache-Control"] = "no-store"
         if not authorization or not authorization.startswith("Bearer "):
             raise StandardAPIError(401, "GRANT_REQUIRED", "knowledge grant required")
         try:
-            return consumer_knowledge.callback_context(context.runtime, authorization[7:])
+            return consumer_knowledge.callback_context(
+                context.runtime, authorization[7:], require_result=consumer_chat_service.require_result
+            )
         except chat_data_grant.DataGrantError as exc:
             raise StandardAPIError(401, exc.code, "knowledge grant refused") from exc
         except chat_execution.ChatRunUnavailable as exc:

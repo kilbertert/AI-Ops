@@ -265,12 +265,16 @@ class DifyRunStore:
                 == 1
             )
 
-    def latest_conversation_run(self, conversation_id: str, scope: str) -> DifyRun | None:
+    def latest_conversation_run(
+        self, conversation_id: str, scope: str, *, before_run_id: str | None = None
+    ) -> DifyRun | None:
         with self._connection() as connection:
             row = connection.execute(
                 "SELECT * FROM chat_dify_runs WHERE conversation_id=? AND scope_fingerprint=? "
-                "AND kind='service' ORDER BY created_at DESC, rowid DESC LIMIT 1",
-                (conversation_id, scope),
+                "AND kind='service' AND (? IS NULL OR rowid < "
+                "(SELECT rowid FROM chat_dify_runs WHERE run_id=?)) "
+                "ORDER BY created_at DESC, rowid DESC LIMIT 1",
+                (conversation_id, scope, before_run_id, before_run_id),
             ).fetchone()
         return _run_from_row(row) if row else None
 

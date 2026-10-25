@@ -20,11 +20,24 @@ SAFETY = re.compile(
 HUMAN = re.compile(
     r"转人工|人工客服|真人客服|联系人工|human (?:agent|support)|speak to (?:a person|someone)", re.I
 )
+# shortcut: 仅识别明确未解决反馈；扩展隐含表达前须增加业务标注验收。
+UNRESOLVED = re.compile(
+    r"^(?:还是不行|还是没用|仍然不行|仍未解决|还没解决|没有解决|问题依旧|"
+    r"still not working|still doesn't work|still does not work|not resolved|didn't help)"
+    r"(?:[\s，,。.!！?？]|$)",
+    re.I,
+)
+
+
 MESSAGES = {
     "zh": {
         "safety": (
             "请立即远离设备，不触碰充电枪、线缆或外壳，不自行拔枪或维修。"
             "在确保自身安全的情况下提醒周围人员远离，并联系现场工作人员和当地紧急服务。"
+        ),
+        "followup": (
+            "请告诉我您进行到了哪一步，以及App或充电桩显示的错误提示。"
+            "请勿反复启动、强行拔枪，或发送密码、验证码和完整支付信息。"
         ),
         "human": "请使用当前App或站点告示中的官方客服入口。请勿提供密码、验证码或完整银行卡信息。",
         "not_found": "暂时没有找到可靠的适用说明。请补充设备提示或具体遇到的步骤；仍未解决时请联系官方客服。",
@@ -40,6 +53,11 @@ MESSAGES = {
             "Move away from the charger. Do not touch the connector, cable or enclosure, "
             "unplug it or attempt repairs. If safe, warn others to keep clear and"
             " contact on-site staff and local emergency services."
+        ),
+        "followup": (
+            "Which step did you reach, and what message is shown in the app or on the charger? "
+            "Do not repeatedly start charging, force the plug out, or share passwords, "
+            "one-time codes or full payment details."
         ),
         "human": (
             "Use the official support option in this app or on the station signage. "
@@ -162,6 +180,28 @@ def fallback(code, language, content=None):
     return {"blocks": [{"kind": "text", "text": text}], "retrieval_status": "not_found"}
 
 
+def followup_context(runtime, caller, question, conversation_id, *, require_result, before_run_id=None):
+    state = {"topic": question, "unresolved_count": 0}
+    if not conversation_id or not UNRESOLVED.search(question.strip()):
+        return state
+    previous = runtime.dify_run_store.latest_conversation_run(
+        conversation_id, caller.scope_fingerprint, before_run_id=before_run_id
+    )
+    if previous is None:
+        return state
+    qa = runtime.store.get_assistant_question(previous.qa_id, caller.scope_fingerprint)
+    if qa is None or qa["status"] != "completed":
+        raise ChatRunUnavailable(
+            "CHATFLOW_NEW_CONVERSATION_REQUIRED", "start a new conversation", http_status=409
+        )
+    require_result(runtime, caller, qa)
+    prior = (runtime.dify_run_store.context(previous.run_id) or {}).get("followup", {})
+    return {
+        "topic": prior.get("topic", qa["question"]),
+        "unresolved_count": min(prior.get("unresolved_count", 0) + 1, 2),
+    }
+
+
 def select_context(runtime, caller, binding, query, language, qa_id):
     content = load_content(
         binding.content_file, tenant=caller.effective_tenant_id, environment=binding.environment
@@ -199,6 +239,8 @@ def select_context(runtime, caller, binding, query, language, qa_id):
 
 
 def final_answer(raw, context, language, content):
+    if (context or {}).get("followup", {}).get("unresolved_count") == 1:
+        return fallback("followup", language, content)
     try:
         selected = json.loads(raw)
     except (ValueError, TypeError) as exc:
@@ -231,7 +273,7 @@ def final_answer(raw, context, language, content):
     return answer
 
 
-def callback_context(runtime, token):
+def callback_context(runtime, token, *, require_result):
     from aiops_diagnostics import chat_data_grant, chat_execution
     from aiops_diagnostics.agent_runs import scope_from_json
     from aiops_diagnostics.dify_run_store import still_valid
@@ -273,6 +315,15 @@ def callback_context(runtime, token):
             raise ChatRunUnavailable("CHATFLOW_BINDING_CHANGED", "knowledge content changed", http_status=403)
 
     valid()
+    qa = runtime.store.get_assistant_question(run.qa_id, caller.scope_fingerprint)
+    followup = followup_context(
+        runtime,
+        caller,
+        qa["question"],
+        run.conversation_id,
+        require_result=require_result,
+        before_run_id=run.run_id,
+    )
     cached = runtime.dify_run_store.context(run.run_id)
     if cached is not None:
         return cached
@@ -280,8 +331,21 @@ def callback_context(runtime, token):
         raise ChatRunUnavailable("GRANT_ALREADY_CONSUMED", "knowledge request already used", http_status=409)
     qa = runtime.store.get_assistant_question(run.qa_id, caller.scope_fingerprint)
     # 本次输入来自已鉴权的QA，不接受回调重新指定问题或语言。
-    result = select_context(runtime, caller, binding, qa["question"], run.language, run.qa_id)
+    query = qa["question"]
+    if followup["unresolved_count"]:
+        query = followup["topic"] + "\n" + query
+    result = select_context(runtime, caller, binding, query, run.language, run.qa_id)
+    result["followup"] = followup
     valid()
+    # 本轮检索期间前轮也可能到期，不能继续向模型披露失效的前文。
+    followup_context(
+        runtime,
+        caller,
+        qa["question"],
+        run.conversation_id,
+        require_result=require_result,
+        before_run_id=run.run_id,
+    )
     if not runtime.dify_run_store.store_context(run.run_id, result):
         raise ChatRunUnavailable("CHATFLOW_NOT_ACTIVE", "knowledge result not committed", http_status=403)
     return result
