@@ -2661,13 +2661,12 @@ def create_gateway_app(
                         )
                     turn_no = _begin_conversation_turn(context, caller, conversation, "qa", payload.question)
                     try:
-                        qa = consumer_chat_service.start(
-                            context.runtime,
+                        qa = context.runtime.start_consumer_chatflow(
                             caller,
                             payload.question,
                             binding=service_binding,
                             conversation=conversation,
-                            turn_no=turn_no,
+                            conversation_turn_no=turn_no,
                             language=language,
                         )
                     except Exception:

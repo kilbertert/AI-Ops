@@ -7,6 +7,7 @@ Status: Accepted
 WF01在原POST/GET/取消接口增加显式consumer_service路由，默认关闭。
 部署登记固定app/workflow/已发布agent身份；请求不能选择租户、应用或上游会话ID。
 复用ConversationStore的主体与入口隔离、生成锁，以及DifyRunStore的运行终态；
+API通过Runtime的start_consumer_chatflow交接轮次，与其他异步入口的源码守卫一致；
 新增本地会话/上游会话/消息ID/绑定摘要字段，空值兼容旧记录，不伪造节点身份。
 
 首次POST创建当前用户的会话并返回conversation_id。后续每轮核对所有权和发布版本，
