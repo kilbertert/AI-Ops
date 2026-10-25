@@ -137,7 +137,7 @@ def test_workflow_retrieves_once_and_returns_only_the_approved_answer(tmp_path, 
         response = env["client"].post(
             "/v1/internal/consumer-knowledge",
             headers={"Authorization": "Bearer " + Workflow.token},
-            json={"query": "继续"},
+            json={"image_text": ""},
         )
         assert response.status_code == 401
 
