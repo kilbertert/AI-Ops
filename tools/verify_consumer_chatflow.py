@@ -59,6 +59,8 @@ class Model(BaseHTTPRequestHandler):
                 if "live_snapshot" in last
                 else {"kind": "knowledge", "faq_id": "KB-C-007"}
             )
+        if any("仅识别图片" in str(m.get("content")) for m in messages):
+            answer = json.dumps({"readable": True, "text": "Startup failed."})
         if body.get("stream"):
             chunk = {
                 "id": "chatcmpl-test",
@@ -312,6 +314,7 @@ def verify_knowledge(root, base, env, setup, model, check):
             service_content=str(content),
             service_live_order=True,
             service_billing=True,
+            service_photo=True,
             knowledge_base=f"http://127.0.0.1:{kb.server_port}",
         )
         check("knowledge Gateway ready", not diag.get("error"))
@@ -451,6 +454,47 @@ def verify_knowledge(root, base, env, setup, model, check):
         check(
             "billing reads once without knowledge",
             len(stack.CpmsHandler.calls) == 2 and len(Knowledge.requests) == knowledge_calls,
+        )
+        import io
+
+        from PIL import Image
+
+        photo = io.BytesIO()
+        Image.new("RGB", (32, 32), "red").save(photo, format="JPEG")
+        request = urllib.request.Request(
+            gateway_base + "/v1/assistant/photos",
+            data=photo.getvalue(),
+            headers={**headers, "Content-Type": "image/jpeg"},
+        )
+        with urllib.request.urlopen(request, timeout=10) as response:
+            uploaded = json.load(response)
+        check("original App photo upload accepted", bool(uploaded.get("photo_id")))
+        status, photo_qa = stack.http_json(
+            gateway_base + "/v1/assistant/questions",
+            "POST",
+            {"question": "这张图的提示怎么办？", "photo_id": uploaded["photo_id"]},
+            headers,
+        )
+        check("photo question admitted", status == 202)
+        deadline = time.monotonic() + 90
+        while time.monotonic() < deadline:
+            status, photo_result = stack.http_json(
+                gateway_base + "/v1/assistant/questions/" + photo_qa["qa_id"], headers=headers
+            )
+            if status != 200 or photo_result.get("status") not in {"queued", "running"}:
+                break
+            time.sleep(0.1)
+        check(
+            "photo reaches real Dify then grounded answer",
+            status == 200 and photo_result.get("status") == "completed",
+        )
+        check(
+            "Dify vision actually received image content",
+            any("image_url" in json.dumps(m) for m in Model.requests),
+        )
+        check(
+            "visual clue reaches current retrieval",
+            "Startup failed." in Knowledge.requests[-1][2]["question"],
         )
         # 原运营发布接口必须自己冻结内容并发布Dify图，验收不代做该步骤。
         from aiops_diagnostics.agent_lifecycle import AgentConfig, AgentManager, AgentStore
@@ -610,6 +654,35 @@ def verify_knowledge(root, base, env, setup, model, check):
         status, restored = action("restore", version_no=v1)
         check("operator restores V1", status == 200 and text_of(question()[1]) == "按设备提示启动。")
     finally:
+        import sqlite3
+
+        diagnostic = root / "knowledge-test/gateway/data/gateway.db"
+        if diagnostic.exists():
+            with sqlite3.connect(diagnostic) as c:
+                report_rows = c.execute("SELECT qa_id,status,error_code FROM assistant_questions").fetchall()
+            (root / "knowledge-qa-status.json").write_text(json.dumps(report_rows))
+        # 隔离Dify的节点输出用于定位跨系统协议，凭据节点不出报告。
+        diagnostic_sql = (
+            "SELECT node_id, status, inputs, outputs, error FROM workflow_node_executions "
+            "WHERE node_id IN ('photo', 'photo_context', 'knowledge') ORDER BY created_at DESC LIMIT 12"
+        )
+        data = stack._compose(
+            env,
+            "exec",
+            "-T",
+            "db_postgres",
+            "psql",
+            "-U",
+            env["DB_USERNAME"],
+            "-d",
+            env["DB_DATABASE"],
+            "-c",
+            diagnostic_sql,
+            timeout=30,
+        )
+        (root / "knowledge-node-output.private.txt").write_text(data.stdout + data.stderr)
+        logs = stack._compose(env, "logs", "--no-color", "worker", timeout=30)
+        (root / "knowledge-worker.log").write_text(logs.stdout + logs.stderr)
         (root / "knowledge-model-requests.json").write_text(json.dumps(Model.requests, ensure_ascii=False))
         if gateway:
             stack._stop(gateway)
