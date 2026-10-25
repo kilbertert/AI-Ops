@@ -38,20 +38,15 @@ output_contract = "blocks-v1"
 opening_questions = ["新加坡无人电动巴士是什么？"]
 quick_commands = ["充电桩怎么操作"]
 
+# WF01发布内容由独立Chatflow及不可变版本管理；旧节点V18保留在库中作为恢复点。
 [[agents]]
 tenant_id = "1942105476598861824"
-name = "canary-客服"
-description = "P0 媒体闭环 canary"
+name = "wf01-consumer-service"
+description = "原App只读操作指导与本人订单查询"
 agent_type = "customer"
-
-# 提示词**不在这里**：这个 agent 绑定了 Dify app（见下方 [[dify_apps]]），
-# 正文由 Dify 编辑、经 `aiops admin pull-dify` 过发布门拉回（#577）。
-# 清单里再写一份就是两个权威 —— load_manifest 会直接拒（#739）。
-knowledge_base_ids = ["5c9313bccdfc11f18637d95f7710e3a3"]
-model = "deepseek-v4-flash"
+knowledge_base_ids = []
+model = "deepseek-v4-1-flash-261017"
 output_contract = "blocks-v1"
-opening_questions = ["新加坡无人电动巴士是什么？"]
-quick_commands = ["充电桩怎么操作"]
 
 # 宣传案例/方案 agent（#231/#232 真实验收资源）：复用 1942 租户既有 KB
 # （新加坡无人电动巴士演示视频，其内容本身就是客户案例素材）。
@@ -130,38 +125,15 @@ output_contract = "blocks-v1"
 #
 # 顺序（先 --dry-run 再真跑）与验收见 `docs/agents/env-41-runbook.md`。
 
-# 线上租户的客服正文：独立 app，正文与库中 `canary-客服` 的 759 字**逐字相同**。
-# 它此前没有自己的 app（绑定指向验收那个），所以「用 Dify 编辑线上客服」这件事
-# 从来没有过可编辑的对象。
-#
-# ⚠️ **2026-10-20 改正一处失效绑定**：这一行此前指向 `98441c5b-…`，而那个 app 在 36
-# 的 Dify 上**已经不存在**（`apps` 表里没有该 id，`admin pull-dify` 与点发布都只会得到
-# `DIFY_DSL_MALFORMED` / 404）。真正的正文权威一直活着，只是换了 id：`aiops-41-kefu-agent`
-# （`8e36f0a6-…`），其 `pre_prompt` 与该 agent 已发布版本的正文**逐字节相同**
-# （759 字，md5 `e52d5de005bfd7e5ad5402b0921b0ec1`）。绑定改到它，内容零变化。
-#
-# ⚠️ **2026-10-21 迁到租户自己的 workspace**（与 operator 同一轮）。#884/#885 之后发布与
-# 试运行都按 `(租户, 环境)` 解析 workspace，`8e36f0a6-…` 在**平台 workspace**（`2db44904-…`）
-# 里，管家端从租户 workspace 发就 502。副本 `88fc20bd-…` 落在 `c3f871e1-…`：
-#   - 正文 759 字，md5 `e52d5de005bfd7e5`，与原件逐字节相同；
-#   - 它引用的 dataset 也随 workspace 重建（`ebd103c0-…`，句柄 `kb-canary-2`，
-#     外接 API 的密钥按目标租户重新加密 —— 密文不能跨 workspace 搬）；
-#   - 该 app **没有**自定义工具条目，所以不需要改写 `provider_id`。
-# 旧 workspace 里的 `8e36f0a6-…` **保留不删**，作为回滚点。
+# 目标租户的WF01 Chatflow。取数由一次性凭据回调，审核知识/能力冻结在发布版本内。
+# 旧agent/app和本人订单node路由保留；撤回/恢复走既有发布API，不删除历史运行。
 [[dify_apps]]
 tenant_id = "1942105476598861824"
 business_entry = "consumer"
-app_id = "88fc20bd-7502-4932-91ee-5f632181cac3"
-agent_name = "canary-客服"
+app_id = "394b5399-7ad9-428e-b2b0-cc7f05720a81"
+agent_name = "wf01-consumer-service"
 
-# 验收租户（`1783…`）**不再有 Dify 绑定**：它绑过的 app 全部已从 Dify 删除，正文改由
-# 上面的 `[[agents]]` 承载。Dify 里只保留 41 的两个入口 app —— 客户端（consumer）与
-# 管家端（operator）—— 这是「Dify 上只存在这两个 app」这条要求的落点。
-#
-# 注意这一节的 fail-closed 语义：表里仍有行 ⇒ 未登记的 `(租户, 入口)` 一律什么都不选。
-# `1783…/consumer` 因此是**未登记**状态，它会得到 `retrieval_status="unavailable"`，
-# 而不是回退到"最新已发布的 agent"。这是有意的：该租户没有生产流量（`agent_run_metrics`
-# 最后一次记录是 2026-10-10），且它的正文与新 app 的对应关系已经不存在。
+# 其他租户没有新增绑定，原operator绑定在下方保留。
 
 # 管家端诊断的方法论配方（#700）：从 Dify `operator-methodology-700` 拉回并经发布门冻结。
 # 运行时注册表把它绑给 `(1942105476598861824, operator)`，诊断因此在**该入口**上跑这份
