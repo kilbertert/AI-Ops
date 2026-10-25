@@ -44,3 +44,19 @@ agent_id、agent_version_no及environment/tenant_id/entry=consumer；只读工�
 首次POST返回conversation_id，客户端后续原样带回；它是Gateway会话，不是Dify会话ID。
 失败/取消或发布版变化后的会话返回409要求新会话；原QA与会话正文过期/换绑后拒绝交付。
 旧状态查询场景与开关独立，未配置WF01时保持既有路线。本片仅供隔离接线验证，不能当完整客服上线。
+
+## 知识、人工与安全
+
+`consumer_service`登记可增加`content_file`和`knowledge_base_ids`，模板为
+`deploy/dify-chat/consumer-service.dsl.yml`。content_file必须是该租户/环境的私有发布内容：
+`schema=aiops-consumer-reviewed/1`、`state=published`、entries按FAQ_ID索引，条目含
+`state=approved`和`answers.zh/en`；可选support按语言提供label/url。原编译草稿不能直接用。
+真实地址只由受控配置给出，电话/HTTPS渠道不来自模型；没有配置就指向App/站点已有入口。
+
+Dify的HTTP节点自己带data_grant回调`POST /v1/internal/consumer-knowledge`，没有请求体。
+模型只接收检索结果，不接收凭据；它只返回kind/faq_id，Gateway投影标准答案和来源。
+知识库需单FAQ文件，标题带KB-C-ID；本轮命中且发布内容里存在才允许选择。
+该路径没有启用元数据过滤，不要把不同地区/版本的未审内容混入同一个发布集。
+
+安全关键词先给出保守避险提示，不以订单号/模型响应为前提；人工请求给真实已配置入口。
+实时支付/退款等未接能力明确不可核实，不能用FAQ替代实际状态，也不会提交写操作。

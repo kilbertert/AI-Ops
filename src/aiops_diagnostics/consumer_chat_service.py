@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-import json
 import uuid
-from dataclasses import asdict
 from typing import Any
 
 from aiops_diagnostics import chat_execution
@@ -22,7 +20,9 @@ def version_key(binding: Any) -> str:
 
 
 def fingerprint(binding):
-    return hashlib.sha256(json.dumps(asdict(binding), sort_keys=True).encode()).hexdigest()
+    from aiops_diagnostics.consumer_knowledge import _binding_identity
+
+    return _binding_identity(binding)
 
 
 def current(runtime, caller, binding):
@@ -39,7 +39,13 @@ def current(runtime, caller, binding):
 
 
 def start(runtime, caller, question, *, binding, conversation, registration, language):
+    from aiops_diagnostics import consumer_knowledge
+
     current(runtime, caller, binding)
+    if binding.content_file:
+        consumer_knowledge.load_content(
+            binding.content_file, tenant=caller.effective_tenant_id, environment=binding.environment
+        )
     previous = runtime.dify_run_store.latest_conversation_run(
         conversation["conversation_id"], caller.scope_fingerprint
     )
@@ -71,7 +77,19 @@ def start(runtime, caller, question, *, binding, conversation, registration, lan
         internal_run_id=PREFIX + run_id,
         tenant_id=caller.effective_tenant_id,
     )
+    token = ""
     try:
+        if binding.content_file:
+            from aiops_diagnostics.chat_data_grant import DataGrantStore
+
+            token, grant = DataGrantStore(runtime.store.path).issue(
+                scope_fingerprint=caller.scope_fingerprint,
+                order_no="",
+                environment=binding.environment,
+                tenant_id=caller.effective_tenant_id,
+                qa_id=qa["qa_id"],
+                workflow_id=binding.workflow_id,
+            )
         runtime.dify_run_store.issue(
             run_id=run_id,
             qa_id=qa["qa_id"],
@@ -83,21 +101,24 @@ def start(runtime, caller, question, *, binding, conversation, registration, lan
             tenant_id=caller.effective_tenant_id,
             app_id=binding.app_id,
             workflow_id=binding.workflow_id,
-            grant_id="",
+            grant_id=grant.grant_id if token else "",
             agent_version_no=binding.agent_version_no,
             kind="service",
             route_revision=binding.route_revision,
             conversation_id=conversation["conversation_id"],
             binding_digest=fingerprint(binding),
+            language=language,
         )
         runtime._qa_registrations[qa["qa_id"]] = registration
         future = runtime._executor.submit(
-            execute, runtime, caller, qa, question, binding, upstream, registration, language
+            execute, runtime, caller, qa, question, binding, upstream, registration, language, token
         )
         runtime._futures[qa["qa_id"]] = future
         future.add_done_callback(lambda _: runtime._futures.pop(qa["qa_id"], None))
         future.add_done_callback(lambda _: runtime._qa_registrations.pop(qa["qa_id"], None))
     except Exception:
+        if token:
+            DataGrantStore(runtime.store.path).revoke_for_qa(qa["qa_id"])
         runtime.store.update_assistant_question(
             qa["qa_id"], status="failed", error_code="CHATFLOW_UNAVAILABLE"
         )
@@ -106,11 +127,15 @@ def start(runtime, caller, question, *, binding, conversation, registration, lan
     return qa
 
 
-def execute(runtime, caller, qa, question, binding, upstream, registration, language):
+def execute(runtime, caller, qa, question, binding, upstream, registration, language, token=""):
     run_id = qa["internal_run_id"].removeprefix(PREFIX)
     store = runtime.dify_run_store
     if not runtime.store.update_assistant_question(qa["qa_id"], status="running"):
         store.cancel(run_id)
+        if token:
+            from aiops_diagnostics.chat_data_grant import DataGrantStore
+
+            DataGrantStore(runtime.store.path).revoke_for_qa(qa["qa_id"])
         runtime._release_conversation_turn(registration.conversation_turn)
         return
     try:
@@ -137,18 +162,29 @@ def execute(runtime, caller, qa, question, binding, upstream, registration, lang
             workflow_id=binding.workflow_id,
             user=user,
             query=question,
-            inputs={"language": language},
+            inputs={"language": language, **({"data_grant": token} if token else {})},
             conversation_id=upstream,
             on_started=started,
         )
         current(runtime, caller, binding)
         run = store.get(run_id)
-        if registration.cancelled or run is None or run.state != "running" or not still_valid(run):
+        if (
+            registration.cancelled
+            or run is None
+            or run.state != "running"
+            or not still_valid(run)
+            or run.binding_digest != fingerprint(binding)
+        ):
             raise ValueError("run is no longer active")
-        # 这里只交付文本；上游任意URL/文件/媒体不能绕过Gateway媒体授权。
-        answer = {"blocks": [{"kind": "text", "text": reply.answer}], "retrieval_status": "unavailable"}
-        if reply.metadata.get("retriever_resources"):
-            answer["retrieval_status"] = "found"
+        if binding.content_file:
+            from aiops_diagnostics.consumer_knowledge import final_answer, load_content
+
+            content = load_content(
+                binding.content_file, tenant=caller.effective_tenant_id, environment=binding.environment
+            )
+            answer = final_answer(reply.answer, store.context(run_id), language, content)
+        else:
+            answer = {"blocks": [{"kind": "text", "text": reply.answer}], "retrieval_status": "unavailable"}
         if not store.store_snapshot(run_id, answer) or not store.succeed(run_id):
             raise ValueError("result could not be committed")
         current(runtime, caller, binding)
@@ -165,6 +201,11 @@ def execute(runtime, caller, qa, question, binding, upstream, registration, lang
         store.fail(run_id, code)
         runtime.store.update_assistant_question(qa["qa_id"], status="failed", error_code=code)
         runtime._release_conversation_turn(registration.conversation_turn)
+    finally:
+        if token:
+            from aiops_diagnostics.chat_data_grant import DataGrantStore
+
+            DataGrantStore(runtime.store.path).revoke_for_qa(qa["qa_id"])
 
 
 def require_result(runtime, caller, qa):

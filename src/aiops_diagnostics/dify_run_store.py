@@ -77,6 +77,7 @@ class DifyRun:
     upstream_conversation_id: str = ""
     message_id: str = ""
     binding_digest: str = ""
+    language: str = "zh"
 
 
 def _now() -> datetime:
@@ -152,6 +153,8 @@ class DifyRunStore:
                 ("upstream_conversation_id", "TEXT NOT NULL DEFAULT ''"),
                 ("message_id", "TEXT NOT NULL DEFAULT ''"),
                 ("binding_digest", "TEXT NOT NULL DEFAULT ''"),
+                ("context_json", "TEXT"),
+                ("language", "TEXT NOT NULL DEFAULT 'zh'"),
                 ("route_revision", "INTEGER NOT NULL DEFAULT 0"),
             ):
                 if column not in existing:
@@ -198,6 +201,7 @@ class DifyRunStore:
         route_revision: int = 0,
         conversation_id: str = "",
         binding_digest: str = "",
+        language: str = "zh",
     ) -> DifyRun:
         now = _now()
         with self._connection(write=True) as connection:
@@ -207,8 +211,8 @@ class DifyRunStore:
                     run_id, qa_id, scope_fingerprint, scope_json, binding_key, order_no,
                     environment, tenant_id, app_id, workflow_id, workflow_run_id, task_id,
                     grant_id, state, created_at, expires_at, agent_version_no, kind, route_revision,
-                    conversation_id, binding_digest
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    conversation_id, binding_digest, language
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -230,6 +234,7 @@ class DifyRunStore:
                     route_revision,
                     conversation_id,
                     binding_digest,
+                    language,
                 ),
             )
         record = self.get(run_id)
@@ -321,6 +326,24 @@ class DifyRunStore:
                 (qa_id,),
             ).fetchone()
         return _run_from_row(row) if row else None
+
+    def store_context(self, run_id: str, context: dict[str, Any]) -> bool:
+        with self._connection(write=True) as connection:
+            return (
+                connection.execute(
+                    "UPDATE chat_dify_runs SET context_json=? WHERE run_id=? AND state='running' "
+                    "AND expires_at>? AND context_json IS NULL",
+                    (json.dumps(context, ensure_ascii=False), run_id, _now().isoformat()),
+                ).rowcount
+                == 1
+            )
+
+    def context(self, run_id: str) -> dict[str, Any] | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT context_json FROM chat_dify_runs WHERE run_id=?", (run_id,)
+            ).fetchone()
+        return json.loads(row[0]) if row and row[0] else None
 
     def store_snapshot(self, run_id: str, snapshot: dict[str, Any]) -> bool:
         """把**这一轮**的业务快照落库。只写一次：第二次读业务会得到另一份。
@@ -421,6 +444,7 @@ def _run_from_row(row: sqlite3.Row) -> DifyRun:
         upstream_conversation_id=row["upstream_conversation_id"],
         message_id=row["message_id"],
         binding_digest=row["binding_digest"],
+        language=row["language"],
     )
 
 

@@ -145,6 +145,8 @@ class ChatBinding:
     app_id: str = ""
     route_revision: int = 0
     manifest_text: str = ""
+    content_file: str = ""
+    knowledge_base_ids: tuple[str, ...] = ()
 
     @property
     def key(self) -> str:
@@ -235,8 +237,24 @@ def _parse_binding(row: object) -> ChatBinding:
             or version < 1
         ):
             raise ChatBindingError("consumer service requires a published agent identity")
+        content = row.get("content_file", "")
+        libraries = row.get("knowledge_base_ids", [])
+        if (
+            not isinstance(content, str)
+            or not isinstance(libraries, list)
+            or any(
+                not isinstance(k, str) or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", k) for k in libraries
+            )
+        ):
+            raise ChatBindingError("invalid consumer knowledge configuration")
         return ChatBinding(
-            engine=engine, agent_id=agent_id, app_id=app_id, agent_version_no=version, **values
+            engine=engine,
+            agent_id=agent_id,
+            app_id=app_id,
+            agent_version_no=version,
+            content_file=content,
+            knowledge_base_ids=tuple(libraries),
+            **values,
         )
     if values["scenario"] != SCENARIO_OWN_ORDER_STATUS:
         raise ChatBindingError("unsupported chat execution binding scenario")
