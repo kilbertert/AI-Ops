@@ -987,7 +987,11 @@ def test_conversation_turn_keeps_the_status_qa_link(tmp_path, monkeypatch):
         )
         assert response.status_code == 202, response.text
         qa_id = response.json()["qa_id"]
+        future = f["app"].state.gateway.runtime._futures.get(qa_id)
         assert wait_terminal(f["client"], qa_id)["status"] == "completed"
+
+        if future is not None:
+            future.result(timeout=5)
 
         import sqlite3
 
