@@ -45,6 +45,12 @@ MEMBERS_PATH = "/console/api/workspaces/current/members"
 #: 管不了成员、也不能借工具测试接口让服务端访问任意地址。
 MEMBER_ROLE = "editor"
 
+#: 控制台会话寿命的允许范围（分钟）：1 分钟 ~ 一年。
+#: 上界存在是因为这枚 cookie 是**永久凭据**而不是"记住我"的便利 —— 拿到它就拿到该账号。
+#: 详见 :class:`DifyConsoleSettings.access_expire_minutes` 与 ADR-0135。
+_MIN_SESSION_MINUTES = 1
+_MAX_SESSION_MINUTES = 366 * 24 * 60
+
 
 class DifyProvisionError(DifyLoginError):
     """开户/查账号这一步没做成。"""
@@ -57,6 +63,9 @@ class DifyConsoleSettings:
     base_url: str
     secret_key: str = field(repr=False, default="")
     deployment_edition: str = "COMMUNITY"
+    #: 控制台会话寿命。默认 1 小时是**历史值**，不是推荐值：`refresh` 与 `access`
+    #: 同值，而代理没有刷新端点，所以这个数**就是**运营两次登录之间能待多久。
+    #: 生产配 43200（30 天），见 ADR-0135。
     access_expire_minutes: int = 60
     timeout: float = 15.0
     #: 邀请时带上，让激活页语言一致；可选。
@@ -75,6 +84,16 @@ class DifyConsoleSettings:
             canonical_environment(self.environment)
         except ValueError as exc:
             raise DifyProvisionError("ENVIRONMENT_INVALID", str(exc)) from exc
+        # **会话寿命必须在启动时校验，不能在请求路径上。** 一枚 10 年有效的控制台会话
+        # 等同于"这台服务器上谁拿到 cookie 谁就永久拥有该账号"，而运营实际要的是
+        # "别一天让我登好几次"。上限取一年：够覆盖任何真实工作节奏，又不至于让一个
+        # 配置失误变成永不过期。
+        if not _MIN_SESSION_MINUTES <= self.access_expire_minutes <= _MAX_SESSION_MINUTES:
+            raise DifyProvisionError(
+                "ACCESS_EXPIRE_OUT_OF_RANGE",
+                f"access_expire_minutes={self.access_expire_minutes} 不在"
+                f" {_MIN_SESSION_MINUTES}..{_MAX_SESSION_MINUTES} 分钟之间",
+            )
 
 
 def account_email_for(company_user_id: str, *, environment: str) -> str:

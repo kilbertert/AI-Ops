@@ -1,0 +1,61 @@
+# 135. 控制台会话寿命是一个部署参数，默认一小时是个历史值
+
+日期：2026-10-25
+状态：Accepted
+影响版本：`dify_login_provision.py`（新增范围校验）、
+`/etc/aiops-login-proxy/login-proxy.env`（生产改 43200）
+
+## 背景
+
+运营反馈：「每次登录了 Dify 之后登录状态维持不了很久就需要重新登录。」
+
+查下来不是 cookie 没续期、也不是 Dify 前端有空闲超时 —— 是**一行配置**：
+
+```
+AIOPS_LOGIN_PROXY_ACCESS_MINUTES=60
+```
+
+它进 `mint_console_session()` 后被用作两处：JWT 的 `exp`，和 cookie 的 `Max-Age`。
+两者一致，一小时到点就失效。**没有任何刷新路径能把它续上**。
+
+## 为什么没有刷新路径
+
+Dify 前端在 access token 过期时拿 `refresh_token` 去换新的。本部署下
+`refresh_token` 与 `access_token` **同值**（自签模型里"刷新"就是再签一枚），而
+**登录代理没有刷新端点** —— 那条请求会打到上游 Dify，而 Dify 自己签的令牌与我们
+自签的不是一回事。
+
+所以 `access_expire_minutes` **就是**运营两次登录之间能待多久，没有别的因素。
+改它就是改这个缺陷。
+
+## 决策：生产配 30 天，并在构造时校验范围
+
+```python
+if not _MIN_SESSION_MINUTES <= self.access_expire_minutes <= _MAX_SESSION_MINUTES:
+    raise DifyProvisionError("ACCESS_EXPIRE_OUT_OF_RANGE", ...)
+```
+
+上界一年、下界一分钟。**上界存在是因为这枚 cookie 是永久凭据而不是"记住我"的开关：**
+拿到它就拿到该账号（`editor` 角色、能编辑和发布智能体）。所以它可以长，但不能没有尽头。
+一年覆盖任何真实工作节奏，又让配置失误不至于变成"永不过期"。
+
+校验放在 `__post_init__`，与 `environment` 那条判据同一位置、同一理由：**一个配置错误
+必须在启动时报，不能表现成"登录服务坏了"**。写在请求路径上，第一次登录就会抛，而那
+看起来像服务端故障。
+
+## 被否掉的替代
+
+- **加一个真正的 refresh 端点。** 那需要代理签发双令牌、维护轮换与吊销状态，而收益
+  只是"访问期间静默续期"。运营的诉求是"别一天登好几次"，不是"永远不登"。
+- **加「记住这台设备」。** 需要一张设备表、一个持久标识和一条绕过公司登录的判据 ——
+  那是**放宽认证**，不是延长会话。真正发生的是"会话到期"，不是"这台机器不被认识"。
+  用设备白名单解决到期间题会把一个配置值换成一个永久的信任边界。
+- **改 Dify 侧的 `CONSOLE_ACCESS_TOKEN_EXPIRE_MINUTES`。** 我们不走 Dify 的登录端点，
+  它签的令牌我们不发；改它不影响这条链路，只是让配置看起来被改过。
+
+## 代价
+
+- **拿到 cookie 的攻击者能用 30 天。** 补偿：cookie 是 `__Host-` + `HttpOnly` + `Secure`，
+  退出登录会清三枚；吊销 = 换 `AIOPS_LOGIN_PROXY_DIFY_SECRET_KEY`（所有自签会话立刻
+  失效，所有人都要重登）。
+- 30 天不是"永不过期" —— 运营仍会每月重登一次。这是有意的。
