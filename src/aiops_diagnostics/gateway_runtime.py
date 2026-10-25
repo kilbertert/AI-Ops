@@ -1519,7 +1519,13 @@ class GatewayRuntime:
             question,
             binding=binding,
             conversation=conversation,
-            turn_no=conversation_turn_no,
+            registration=JobRegistration(
+                conversation_turn=(
+                    conversation["conversation_id"],
+                    context.scope_fingerprint,
+                    conversation_turn_no,
+                )
+            ),
             language=language,
         )
 

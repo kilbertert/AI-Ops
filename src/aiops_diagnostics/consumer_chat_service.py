@@ -38,9 +38,7 @@ def current(runtime, caller, binding):
     return selected
 
 
-def start(runtime, caller, question, *, binding, conversation, turn_no, language):
-    from aiops_diagnostics.gateway_runtime import JobRegistration
-
+def start(runtime, caller, question, *, binding, conversation, registration, language):
     current(runtime, caller, binding)
     previous = runtime.dify_run_store.latest_conversation_run(
         conversation["conversation_id"], caller.scope_fingerprint
@@ -72,9 +70,6 @@ def start(runtime, caller, question, *, binding, conversation, turn_no, language
         question,
         internal_run_id=PREFIX + run_id,
         tenant_id=caller.effective_tenant_id,
-    )
-    registration = JobRegistration(
-        conversation_turn=(conversation["conversation_id"], caller.scope_fingerprint, turn_no)
     )
     try:
         runtime.dify_run_store.issue(
