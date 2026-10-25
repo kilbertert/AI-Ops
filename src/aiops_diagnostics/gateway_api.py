@@ -2645,6 +2645,36 @@ def create_gateway_app(
                 )
                 if service_binding is not None:
                     _require_consumer_self_order(caller, "consumer", "pending")
+                    if service_binding.content_file:
+                        from aiops_diagnostics import consumer_knowledge
+
+                        local_kind = (
+                            "safety"
+                            if consumer_knowledge.SAFETY.search(payload.question)
+                            else "human"
+                            if consumer_knowledge.HUMAN.search(payload.question)
+                            else ""
+                        )
+                        if local_kind:
+                            content = None
+                            with contextlib.suppress(ValueError, OSError, PrivatePathError):
+                                content = consumer_knowledge.load_content(
+                                    service_binding.content_file,
+                                    tenant=caller.effective_tenant_id,
+                                    environment=service_binding.environment,
+                                )
+                            served_language = "zh" if language.startswith("zh") else "en"
+                            answer = consumer_knowledge.fallback(local_kind, served_language, content)
+                            return JSONResponse(
+                                status_code=200,
+                                headers={"Cache-Control": "no-store"},
+                                content={
+                                    "type": "clarification",
+                                    "missing_fields": [],
+                                    "message": answer["blocks"][0]["text"],
+                                    "language": served_language,
+                                },
+                            )
                     if payload.order_no:
                         _require_visible_order(context, caller, payload.order_no)
                     if not can_prompt_in(language):
@@ -3930,6 +3960,25 @@ def create_gateway_app(
         if manifest.identity != latest.expected_agent_version:
             raise StandardAPIError(503, "NODE_PUBLICATION_INVALID", "node publication invalid")
         return {"run_id": run_id, "manifest": latest.execution_manifest, "sha256": manifest.identity}
+
+    @app.post("/v1/internal/consumer-knowledge")
+    def consumer_knowledge_context(
+        response: Response,
+        authorization: Annotated[str | None, Header()] = None,
+    ):
+        from aiops_diagnostics import chat_data_grant, consumer_knowledge
+
+        response.headers["Cache-Control"] = "no-store"
+        if not authorization or not authorization.startswith("Bearer "):
+            raise StandardAPIError(401, "GRANT_REQUIRED", "knowledge grant required")
+        try:
+            return consumer_knowledge.callback_context(context.runtime, authorization[7:])
+        except chat_data_grant.DataGrantError as exc:
+            raise StandardAPIError(401, exc.code, "knowledge grant refused") from exc
+        except chat_execution.ChatRunUnavailable as exc:
+            raise StandardAPIError(exc.http_status, exc.code, str(exc)) from exc
+        except (ValueError, OSError) as exc:
+            raise _runtime_unavailable("KNOWLEDGE_UNAVAILABLE", "knowledge unavailable", exc) from exc
 
     @app.post("/v1/internal/charging-status/dify-read")
     def dify_chat_read(

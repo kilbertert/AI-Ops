@@ -744,6 +744,8 @@ def _start_gateway(
     console_key: str = "",
     managed_route: bool = False,
     service_app_id: str = "",
+    service_content: str = "",
+    knowledge_base: str = "",
 ) -> tuple[subprocess.Popen, str, dict[str, Any]]:
     """起真 Gateway（绑定表指向 Dify 路线），等它就绪。"""
     case = root / "gateway"
@@ -836,7 +838,16 @@ def _start_gateway(
                             "entry": "consumer",
                             "scenario": "consumer_service" if service_app_id else "consumer_own_order_status",
                             **(
-                                {"app_id": service_app_id, "agent_id": "agt_12345678", "agent_version_no": 1}
+                                {
+                                    "app_id": service_app_id,
+                                    "agent_id": "agt_12345678",
+                                    "agent_version_no": 1,
+                                    **(
+                                        {"content_file": service_content, "knowledge_base_ids": ["kb-own"]}
+                                        if service_content
+                                        else {}
+                                    ),
+                                }
                                 if service_app_id
                                 else {}
                             ),
@@ -860,6 +871,14 @@ def _start_gateway(
         "AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL": f"{cpms_base}/charging-pile",
         "AIOPS_GATEWAY_CONSUMER_ORDER_CHAT_ENABLED": "1",
         "AIOPS_GATEWAY_CONSUMER_CHATFLOW_ENABLED": "1" if service_app_id else "0",
+        **(
+            {
+                "AIOPS_GATEWAY_KB_SERVICE_BASE_URL": knowledge_base,
+                "AIOPS_GATEWAY_MEDIA_SIGNING_SECRET": "s" * 32,
+            }
+            if knowledge_base
+            else {}
+        ),
         "AIOPS_GATEWAY_ENVIRONMENT": "dify-chat-acceptance",
         "AIOPS_GATEWAY_EXECUTION_ENVIRONMENT": "env-local",
         # 管理模式不配这条：路径指向一个不存在的文件会让整张表读失败
