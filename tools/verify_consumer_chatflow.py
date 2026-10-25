@@ -256,7 +256,7 @@ def verify_knowledge(root, base, env, setup, model, check):
                             "answers": {"zh": "按设备提示启动。", "en": "Follow the charger instructions."},
                         }
                     },
-                    "support": {},
+                    "support": {"zh": {"label": "官方客服", "url": "https://support.example.test/"}},
                 }
             )
         )
@@ -301,6 +301,46 @@ def verify_knowledge(root, base, env, setup, model, check):
             "model received knowledge without grant",
             any("本轮知识" in json.dumps(m, ensure_ascii=False) for m in Model.requests)
             and all("cdg_" not in json.dumps(m) for m in Model.requests),
+        )
+        code, followup = stack.http_json(
+            gateway_base + "/v1/assistant/questions",
+            "POST",
+            {"question": "还是不行", "conversation_id": post["conversation_id"]},
+            headers,
+        )
+        check("first unresolved feedback admitted", code == 202)
+        deadline = time.monotonic() + 90
+        while time.monotonic() < deadline:
+            code, final = stack.http_json(
+                gateway_base + "/v1/assistant/questions/" + followup["qa_id"], headers=headers
+            )
+            if code != 200 or final.get("status") not in ["queued", "running"]:
+                break
+            time.sleep(0.1)
+        check(
+            "first feedback asks for step and error",
+            code == 200
+            and final.get("status") == "completed"
+            and "哪一步" in final.get("result", {}).get("blocks", [{}])[0].get("text", ""),
+        )
+        check(
+            "followup retrieval retained original topic",
+            len(Knowledge.requests) == 2
+            and Knowledge.requests[-1][2]["question"] == "怎么开始充电？\n还是不行",
+        )
+        calls = len(Model.requests), len(Knowledge.requests)
+        code, escalated = stack.http_json(
+            gateway_base + "/v1/assistant/questions",
+            "POST",
+            {"question": "还是不行", "conversation_id": post["conversation_id"]},
+            headers,
+        )
+        check(
+            "second feedback offers support without more upstream calls",
+            code == 200
+            and "https://support.example.test/" in escalated.get("message", "")
+            and "已转接" not in escalated.get("message", "")
+            and calls == (len(Model.requests), len(Knowledge.requests)),
         )
     finally:
         if gateway:
