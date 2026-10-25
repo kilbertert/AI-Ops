@@ -9,7 +9,11 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from aiops_diagnostics.chat_execution import ChatRunUnavailable
-from aiops_diagnostics.knowledge_retrieval import KnowledgeSearchGuard
+from aiops_diagnostics.knowledge_retrieval import (
+    ALLOWED_IMAGE_TYPES,
+    ALLOWED_VIDEO_TYPES,
+    KnowledgeSearchGuard,
+)
 from aiops_diagnostics.private_files import validate_private_file
 
 SAFETY = re.compile(
@@ -119,6 +123,28 @@ def load_content(path: str, *, tenant: str, environment: str) -> dict:
             answer = row["answers"].get(language)
             if not isinstance(answer, str) or not answer.strip() or len(answer) > 8000:
                 raise ValueError("invalid consumer answer")
+    media = body.get("media", {})
+    if not isinstance(media, dict) or len(media) > 100:
+        raise ValueError("invalid consumer media registry")
+    for key, item in media.items():
+        if not isinstance(item, dict) or item.get("state") != "approved":
+            raise ValueError("consumer media is not approved")
+        for field in ("knowledge_base_id", "document_id", "backend_id", "title"):
+            if not isinstance(item.get(field), str) or not item[field].strip() or len(item[field]) > 256:
+                raise ValueError("invalid consumer media identity")
+        if item.get("language", "any") not in {"any", "zh", "en"}:
+            raise ValueError("invalid consumer media language")
+        allowed = {"image": ALLOWED_IMAGE_TYPES, "video": ALLOWED_VIDEO_TYPES}.get(item.get("kind"), ())
+        if item.get("mime_type") not in allowed or not re.fullmatch(r"[A-Z]+-\d{3}", key):
+            raise ValueError("invalid consumer media type")
+    for row in entries.values():
+        ids = row.get("media_ids", [])
+        if (
+            not isinstance(ids, list)
+            or len(ids) > 4
+            or any(not isinstance(i, str) or i not in media for i in ids)
+        ):
+            raise ValueError("invalid FAQ media references")
     if not isinstance(body.get("support", {}), dict):
         raise ValueError("invalid support configuration")
     for support in body.get("support", {}).values():
@@ -232,7 +258,25 @@ def select_context(runtime, caller, binding, query, language, qa_id):
                 "title": row.get("title", ""),
                 "answer": row["answers"]["zh" if language.startswith("zh") else "en"],
                 "reference_id": chunk.reference_id,
-                "media": [],
+                "media": [
+                    runtime.media_signer.issue(
+                        tenant_id=caller.effective_tenant_id,
+                        agent_version=f"consumer:{binding.agent_id}#v{binding.agent_version_no}",
+                        session_id=qa_id,
+                        knowledge_base_id=item["knowledge_base_id"],
+                        document_id=item["document_id"],
+                        backend_id=item["backend_id"],
+                        chunk_id=None,
+                        kind=item["kind"],
+                        mime_type=item["mime_type"],
+                        title=item["title"],
+                        reference_id=chunk.reference_id,
+                    ).to_dict()
+                    for media_id in row.get("media_ids", [])
+                    if (item := content.get("media", {})[media_id])["knowledge_base_id"]
+                    in binding.knowledge_base_ids
+                    and item.get("language", "any") in {"any", "zh" if language.startswith("zh") else "en"}
+                ],
             }
     status = "found" if candidates else "not_found" if result.status.value == "found" else result.status.value
     return {"status": status, "candidates": list(candidates.values())[:5]}
@@ -272,6 +316,10 @@ def final_answer(raw, context, language, content):
             "blocks": [
                 {"kind": "text", "text": row["answer"]},
                 {"kind": "reference", "reference_id": row["reference_id"], "title": row["title"]},
+                *[
+                    {"kind": media["kind"], "media": media, "title": media["title"]}
+                    for media in row.get("media", [])
+                ],
             ],
             "retrieval_status": "found",
         }

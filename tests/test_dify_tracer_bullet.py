@@ -84,3 +84,22 @@ def test_the_evidence_states_what_it_did_not_prove(tmp_path: Path) -> None:
     unproven = " ".join(evidence["not_proven"])
     assert "model" in unproven and "36" in unproven and "#587" in unproven
     assert "SDKCodexSession" in evidence["model_substitution"]
+
+
+def test_completed_answer_can_precede_metric_write(tmp_path: Path, monkeypatch) -> None:
+    import time
+
+    from aiops_diagnostics.metrics_store import MetricsStore
+
+    original = MetricsStore.record
+
+    def delayed(self, **kwargs):
+        if kwargs.get("agent_version_key"):
+            time.sleep(0.4)
+        return original(self, **kwargs)
+
+    monkeypatch.setattr(MetricsStore, "record", delayed)
+    evidence = _run(tmp_path)
+    assert evidence["published_version"]["agent_version"] in [
+        row["agent_version_key"] for row in evidence["metrics_runs"]
+    ]

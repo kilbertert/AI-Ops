@@ -86,3 +86,14 @@ Dify的HTTP节点自己带data_grant回调`POST /v1/internal/consumer-knowledge`
 返回订单金额、支付金额字段、退款状态及金额，不补币种、不把缺失当零、不进行结算计算。
 显示记录来源与查询时间；金额字段不证明扣款、退款记录不证明银行到账。操作咨询仍走知识。
 支付渠道交易状态、银行到账和退款审批进度尚未接入；不调用付款或退款申请接口。
+
+## 已审核素材交付
+
+content_file可选`media`按素材ID登记：state=approved、kind=image/video、mime_type、
+knowledge_base_id/document_id/backend_id/title，以及language=zh/en/any（缺省any）。
+每条FAQ的`media_ids`最多4项；只能引用同登记知识库的素材，媒体语言必须匹配本轮语言。
+素材ID与真实文件的对应、来源授权、画面准确性由内容审核确认，不从模型生成URL。
+
+原GET返回既有image/video块，URL走同一媒体端点与短期签名。取图前后核对QA仍成功、未过期且
+内容/发布绑定未变，视频沿用Range。没有素材仍交可靠文字。链接是短期持有凭据，可被转发，
+已下载文件无法追回；只允许通用操作素材，不放个人订单或身份数据。旧手册/示意图须注明适用范围。

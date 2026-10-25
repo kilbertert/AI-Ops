@@ -794,6 +794,7 @@ runbook §5/§6 明确禁止 CI 自证。所以 CD 通过最多报告 `merged_wa
 2026-10-25 正式节点状态路线已启用，原 H5 本人查询经发布 V18/真实节点/baoyun 完成并与
 SQL/CPMS 独立对照一致；旧试验配置已归档。范围与限制见[真实验收](docs/validation/2026-10-25-production-node-enabled.md)。
 
+WF01已审核FAQ可关联图片/视频，素材随QA与绑定失效；详见[媒体验收](docs/validation/2026-10-25-consumer-media.md)。
 WF01可显式启用本人状态单轮读取，复用原授权与CPMS快照；实时轮次不进入后续模型记忆。
 C端明确未解决反馈已接入同会话主题检索与第二次人工渠道提示，详见[验收](docs/validation/2026-10-25-consumer-followup.md)。
 C端业务完善正在按[WF01](docs/agents/consumer-wf01/README.md)推进：原知识包先校验为

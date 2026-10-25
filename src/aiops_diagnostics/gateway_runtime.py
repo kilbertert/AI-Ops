@@ -15,7 +15,7 @@ from typing import Any
 
 from aiops_diagnostics.agent_contracts import IncidentManifest
 from aiops_diagnostics.agent_runner import classify_lightweight, run_agent_diagnosis, run_zero_order_answer
-from aiops_diagnostics.agent_runs import AgentRunStore, scope_to_json
+from aiops_diagnostics.agent_runs import AgentRunStore, scope_from_json, scope_to_json
 from aiops_diagnostics.agent_workspace import AgentWorkspace
 from aiops_diagnostics.answer_language import (
     answer_chinese_leak,
@@ -44,6 +44,7 @@ from aiops_diagnostics.knowledge_retrieval import (
     KbServiceClient,
     KnowledgeSearchClient,
     KnowledgeSearchUnavailable,
+    MediaAccessDenied,
     MediaGrant,
     MediaProxy,
     MediaResourceSigner,
@@ -70,7 +71,7 @@ from aiops_diagnostics.ops_analysis import (
 from aiops_diagnostics.ops_analysis import (
     RULE_VERSION as OPS_ANALYSIS_RULE_VERSION,
 )
-from aiops_diagnostics.order_visibility import TENANT_SCOPE_SOURCE, resolve_device_tenant
+from aiops_diagnostics.order_visibility import TENANT_SCOPE_SOURCE, resolve_device_tenant, tenant_matches
 from aiops_diagnostics.parsing import parse_request
 from aiops_diagnostics.platform_paths import reference_root
 from aiops_diagnostics.query_scope import resolve_query_scope
@@ -3359,9 +3360,15 @@ class GatewayRuntime:
             # the #175 C4 video canary on 2026-09-12).
             client = self.kb_search_client
             bound = client.for_tenant(grant.tenant_id) if hasattr(client, "for_tenant") else client
-            if range_header is None:
-                return bound.fetch_media(grant)
-            return bound.fetch_media(grant, range_header=range_header)
+            body = (
+                bound.fetch_media(grant)
+                if range_header is None
+                else bound.fetch_media(grant, range_header=range_header)
+            )
+            # WF01素材取回期间可能撤回或过期，读取前的检查不能覆盖这段等待。
+            if grant.agent_version.startswith("consumer:") and not _is_active(grant):
+                raise MediaAccessDenied("consumer media is no longer active")
+            return body
 
         if self._media_proxy is None:
             self._media_proxy = MediaProxy(self.media_signer, _fetch_for_tenant)
@@ -3419,6 +3426,30 @@ class GatewayRuntime:
             that 403'd on the very next request, so every image and video in a
             Dify record was undisplayable (found on 41, 2026-10-21).
             """
+            if grant.agent_version.startswith("consumer:"):
+                run = self.dify_run_store.by_qa(grant.session_id or "")
+                if run is None or run.kind != "service":
+                    return False
+                from aiops_diagnostics.consumer_chat_service import require_result
+
+                try:
+                    caller = scope_from_json(run.scope_json)
+                    qa = self.store.get_assistant_question(run.qa_id, run.scope_fingerprint)
+                    if (
+                        qa is None
+                        or qa["status"] != "completed"
+                        or run.order_no
+                        or not tenant_matches(grant.tenant_id, run.tenant_id)
+                    ):
+                        return False
+                    require_result(self, caller, qa)
+                    snapshot = self.dify_run_store.snapshot(run.run_id) or {}
+                    return any(
+                        block.get("media", {}).get("resource_id") == grant.resource_id
+                        for block in snapshot.get("blocks", [])
+                    )
+                except Exception:
+                    return False
             if self.agent_store is None:
                 return False
             agent_id, _, version_part = str(grant.agent_version).partition("#v")

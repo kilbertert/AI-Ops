@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import os
 import secrets
@@ -209,6 +210,20 @@ def isolated(args):
 
 class Knowledge(BaseHTTPRequestHandler):
     requests = []
+    image_bytes = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="
+    )
+
+    def do_GET(self):
+        if self.path != "/kb/documents/images/accepted-image":
+            self.send_response(404)
+            self.end_headers()
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "image/png")
+        self.send_header("Content-Length", str(len(self.image_bytes)))
+        self.end_headers()
+        self.wfile.write(self.image_bytes)
 
     def log_message(self, *_):
         pass
@@ -265,7 +280,19 @@ def verify_knowledge(root, base, env, setup, model, check):
                         "KB-C-007": {
                             "state": "approved",
                             "title": "开始充电",
+                            "media_ids": ["IMG-001"],
                             "answers": {"zh": "按设备提示启动。", "en": "Follow the charger instructions."},
+                        }
+                    },
+                    "media": {
+                        "IMG-001": {
+                            "state": "approved",
+                            "kind": "image",
+                            "mime_type": "image/png",
+                            "knowledge_base_id": "kb-own",
+                            "document_id": "image-document",
+                            "backend_id": "accepted-image",
+                            "title": "合成验收图",
                         }
                     },
                     "support": {"zh": {"label": "官方客服", "url": "https://support.example.test/"}},
@@ -307,6 +334,16 @@ def verify_knowledge(root, base, env, setup, model, check):
             and final.get("status") == "completed"
             and final.get("result", {}).get("blocks", [{}])[0].get("text") == "按设备提示启动。",
         )
+        media = [b["media"] for b in (final.get("result") or {}).get("blocks", []) if b["kind"] == "image"]
+        check("approved image block returned", len(media) == 1)
+        import urllib.request
+
+        with urllib.request.urlopen(gateway_base + media[0]["url"], timeout=10) as response:
+            check(
+                "signed image endpoint returns original bytes",
+                response.status == 200 and response.read() == Knowledge.image_bytes,
+            )
+        (root / "knowledge-answer.json").write_text(json.dumps(final, ensure_ascii=False))
         check(
             "Dify HTTP node made one authorized retrieval",
             len(Knowledge.requests) == 1 and Knowledge.requests[0][1] == stack.TENANT,
