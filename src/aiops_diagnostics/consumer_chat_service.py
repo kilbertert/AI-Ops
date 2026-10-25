@@ -38,7 +38,18 @@ def current(runtime, caller, binding):
     return selected
 
 
-def start(runtime, caller, question, *, binding, conversation, registration, language, order_no=""):
+def start(
+    runtime,
+    caller,
+    question,
+    *,
+    binding,
+    conversation,
+    registration,
+    language,
+    order_no="",
+    data_kind="status",
+):
     from aiops_diagnostics import consumer_knowledge
 
     current(runtime, caller, binding)
@@ -112,6 +123,7 @@ def start(runtime, caller, question, *, binding, conversation, registration, lan
             conversation_id=conversation["conversation_id"],
             binding_digest=fingerprint(binding),
             language=language,
+            data_kind=data_kind,
         )
         runtime._qa_registrations[qa["qa_id"]] = registration
         future = runtime._executor.submit(
@@ -193,7 +205,9 @@ def execute(runtime, caller, qa, question, binding, upstream, registration, lang
             ):
                 raise ValueError("run ended during authorization")
             live = (store.context(run_id) or {}).get("live_snapshot", {})
-            if live.get("order_no") != run.order_no:
+            if live.get("order_no") != run.order_no or live.get("source") != (
+                "cpms.orderDetail" if run.data_kind == "billing" else "cpms.chargingInfo"
+            ):
                 raise ValueError("live snapshot missing or belongs to another order")
         if binding.content_file:
             from aiops_diagnostics.consumer_knowledge import final_answer, load_content
@@ -259,10 +273,15 @@ def require_result(runtime, caller, qa):
         )
     current(runtime, caller, binding)
     if run.order_no:
-        from aiops_diagnostics.consumer_order_chat import status_answer
+        from aiops_diagnostics.consumer_knowledge import live_answer
 
         live = (runtime.dify_run_store.context(run.run_id) or {}).get("live_snapshot", {})
-        if live.get("order_no") != run.order_no or status_answer(live, run.language) != qa.get("result"):
+        if (
+            live.get("order_no") != run.order_no
+            or live.get("source")
+            != ("cpms.orderDetail" if run.data_kind == "billing" else "cpms.chargingInfo")
+            or live_answer(live, run.language) != qa.get("result")
+        ):
             raise chat_execution.ChatRunUnavailable("CHATFLOW_EVIDENCE_UNAVAILABLE", "live evidence differs")
     if runtime.dify_run_store.snapshot(run.run_id) != qa.get("result"):
         raise chat_execution.ChatRunUnavailable("CHATFLOW_EVIDENCE_UNAVAILABLE", "answer evidence differs")

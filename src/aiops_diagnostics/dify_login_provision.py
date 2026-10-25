@@ -47,7 +47,7 @@ MEMBER_ROLE = "editor"
 
 #: 控制台会话寿命的允许范围（分钟）：1 分钟 ~ 一年。
 #: 上界存在是因为这枚 cookie 是**永久凭据**而不是"记住我"的便利 —— 拿到它就拿到该账号。
-#: 详见 :class:`DifyConsoleSettings.access_expire_minutes` 与 ADR-0135。
+#: 详见 :class:`DifyConsoleSettings.access_expire_minutes` 与 ADR-0136。
 _MIN_SESSION_MINUTES = 1
 _MAX_SESSION_MINUTES = 366 * 24 * 60
 
@@ -65,7 +65,7 @@ class DifyConsoleSettings:
     deployment_edition: str = "COMMUNITY"
     #: 控制台会话寿命。默认 1 小时是**历史值**，不是推荐值：`refresh` 与 `access`
     #: 同值，而代理没有刷新端点，所以这个数**就是**运营两次登录之间能待多久。
-    #: 生产配 43200（30 天），见 ADR-0135。
+    #: 生产配 43200（30 天），见 ADR-0136。
     access_expire_minutes: int = 60
     timeout: float = 15.0
     #: 邀请时带上，让激活页语言一致；可选。

@@ -1136,7 +1136,7 @@ def test_the_publish_check_refuses_an_account_with_no_mapping(stack) -> None:
 
 
 def test_settings_reject_a_session_lifetime_outside_the_allowed_range() -> None:
-    """会话寿命在**构造时**校验，不在登录时（ADR-0135）。
+    """会话寿命在**构造时**校验，不在登录时（ADR-0136）。
 
     这枚 cookie 是永久凭据而不是"记住我"的开关：拿到它就拿到该账号。所以上限存在
     （一年），下界也存在（1 分钟，否则等于每次请求后立刻失效）。一个配置失误必须在

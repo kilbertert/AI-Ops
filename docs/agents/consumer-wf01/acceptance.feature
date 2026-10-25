@@ -42,3 +42,10 @@ Feature: 原 App 的 C 端只读客服
       Given 已完成一次实时单据查询
       When 同一Gateway会话再次提问
       Then 不复用包含该单据的上游Dify会话
+  Rule: 账务记录不冒充银行凭证
+    Scenario: 查询本人退款记录
+      Given 本人订单存在业务退款记录
+      When 查询该单账务
+      Then 显示同轮业务记录与来源时间
+      And 明确金额字段不证明扣款且退款记录不证明银行到账
+      And 缺币种或金额不补值不填零

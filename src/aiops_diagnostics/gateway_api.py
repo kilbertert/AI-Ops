@@ -2694,8 +2694,17 @@ def create_gateway_app(
                             question=payload.question,
                             language=language,
                         )
+                    from aiops_diagnostics.consumer_billing import is_billing_question
+
                     live_order = ""
-                    if service_binding.live_order_status and is_order_status_question(payload.question):
+                    data_kind = (
+                        "billing"
+                        if (service_binding.live_billing_record and is_billing_question(payload.question))
+                        else "status"
+                    )
+                    if data_kind == "billing" or (
+                        service_binding.live_order_status and is_order_status_question(payload.question)
+                    ):
                         authenticated_chat_order_reader(context, caller, request)
                         live_order = payload.order_no or _extract_order_no(payload.question)
                         if live_order is None and asks_latest_order(payload.question):
@@ -2742,6 +2751,7 @@ def create_gateway_app(
                             conversation_turn_no=turn_no,
                             language=language,
                             order_no=live_order,
+                            data_kind=data_kind,
                         )
                     except Exception:
                         _release_conversation_turn(context, conversation, turn_no)
@@ -4011,8 +4021,8 @@ def create_gateway_app(
                 context.runtime,
                 authorization[7:],
                 require_result=consumer_chat_service.require_result,
-                read_snapshot=lambda caller, order: _authorized_charging_snapshot(
-                    context.settings, caller, order
+                read_snapshot=lambda caller, order, kind: _authorized_consumer_snapshot(
+                    context.settings, caller, order, kind
                 ),
             )
         except chat_data_grant.DataGrantError as exc:
@@ -7107,6 +7117,22 @@ def _require_visible_order(context: Any, caller: ScopeContext, order_no: str) ->
         )
     if verdict == NOT_OWNED:
         raise StandardAPIError(404, "ORDER_NOT_FOUND", "order not found")
+
+
+def _authorized_consumer_snapshot(settings, caller, order_no, data_kind):
+    if data_kind == "status":
+        return _authorized_charging_snapshot(settings, caller, order_no)
+    from aiops_diagnostics.consumer_billing import read_billing_record
+    from aiops_diagnostics.gateway_config import charging_endpoint
+
+    if data_kind != "billing":
+        raise ValueError("unsupported consumer data kind")
+    return read_billing_record(
+        charging_endpoint(settings.charging_status_base_url, caller.effective_tenant_id),
+        order_no,
+        tenant_id=caller.effective_tenant_id,
+        user_id=caller.subject.c_user_id or "",
+    )
 
 
 def _authorized_charging_snapshot(

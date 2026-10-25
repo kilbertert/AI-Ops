@@ -232,13 +232,20 @@ class CpmsHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
-        body = json.dumps(
-            {
-                "code": 0,
-                "msg": "success",
-                "data": {"orderNo": order_no, "status": "0", "plateNo": "DO-NOT-LEAK"},
+        data = {"orderNo": order_no, "status": "0", "plateNo": "DO-NOT-LEAK"}
+        if "/getOrderInfoDetail/" in self.path:
+            data = {
+                "orderNo": order_no,
+                "chOrderInfoModel": {
+                    "orderNo": order_no,
+                    "totalAmount": "2.26",
+                    "payAmount": "2.26",
+                    "refundStatus": 2,
+                    "refundAmount": "1.10",
+                    "plateNo": "DO-NOT-LEAK",
+                },
             }
-        ).encode()
+        body = json.dumps({"code": 0, "msg": "success", "data": data}).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
@@ -747,6 +754,7 @@ def _start_gateway(
     service_content: str = "",
     knowledge_base: str = "",
     service_live_order: bool = False,
+    service_billing: bool = False,
 ) -> tuple[subprocess.Popen, str, dict[str, Any]]:
     """起真 Gateway（绑定表指向 Dify 路线），等它就绪。"""
     case = root / "gateway"
@@ -841,6 +849,7 @@ def _start_gateway(
                             **(
                                 {
                                     "live_order_status": service_live_order,
+                                    "live_billing_record": service_billing,
                                     "app_id": service_app_id,
                                     "agent_id": "agt_12345678",
                                     "agent_version_no": 1,

@@ -284,6 +284,7 @@ def verify_knowledge(root, base, env, setup, model, check):
             service_app_id=new["app_id"],
             service_content=str(content),
             service_live_order=True,
+            service_billing=True,
             knowledge_base=f"http://127.0.0.1:{kb.server_port}",
         )
         check("knowledge Gateway ready", not diag.get("error"))
@@ -383,6 +384,36 @@ def verify_knowledge(root, base, env, setup, model, check):
         check(
             "live order reads once without knowledge",
             len(stack.CpmsHandler.calls) == 1 and len(Knowledge.requests) == knowledge_calls,
+        )
+        code, bill = stack.http_json(
+            gateway_base + "/v1/assistant/questions",
+            "POST",
+            {"question": "查询我的最新订单退款记录"},
+            headers,
+        )
+        check("billing Chatflow admitted", code == 202)
+        deadline = time.monotonic() + 90
+        while time.monotonic() < deadline:
+            code, final = stack.http_json(
+                gateway_base + "/v1/assistant/questions/" + bill["qa_id"], headers=headers
+            )
+            if code != 200 or final.get("status") not in ["queued", "running"]:
+                break
+            time.sleep(0.1)
+        text = (final.get("result") or {}).get("blocks", [{}])[0].get("text", "")
+        check(
+            "billing returns record without claiming bank receipt",
+            code == 200
+            and final.get("status") == "completed"
+            and "部分退款记录" in text
+            and "1.10" in text
+            and "不证明银行到账" in text
+            and "未提供币种" in text
+            and "DO-NOT-LEAK" not in text,
+        )
+        check(
+            "billing reads once without knowledge",
+            len(stack.CpmsHandler.calls) == 2 and len(Knowledge.requests) == knowledge_calls,
         )
     finally:
         (root / "knowledge-model-requests.json").write_text(json.dumps(Model.requests, ensure_ascii=False))
