@@ -28,3 +28,17 @@ Feature: 原 App 的 C 端只读客服
       Given 前轮已过期或正文被改写
       When 继续反馈还是不行
       Then 拒绝续用前文且不调用知识或模型
+  Rule: 实时订单事实只来自本轮本人读取
+    Scenario: 本人实时状态
+      Given 已启用实时状态的WF01绑定与有效本人身份
+      When 在原App询问最新本人订单状态
+      Then Dify自己回调取得一次CPMS快照且原GET交付该单状态来源时间
+      And 不查询知识库或派发节点
+    Scenario: 实时读取后撤权
+      Given 业务读取中订单不再属于当前主体
+      When Dify请求本轮快照
+      Then 不交付快照或成功正文
+    Scenario: 单据记忆隔离
+      Given 已完成一次实时单据查询
+      When 同一Gateway会话再次提问
+      Then 不复用包含该单据的上游Dify会话

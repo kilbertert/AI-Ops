@@ -38,7 +38,7 @@ def current(runtime, caller, binding):
     return selected
 
 
-def start(runtime, caller, question, *, binding, conversation, registration, language):
+def start(runtime, caller, question, *, binding, conversation, registration, language, order_no=""):
     from aiops_diagnostics import consumer_knowledge
 
     current(runtime, caller, binding)
@@ -65,11 +65,15 @@ def start(runtime, caller, question, *, binding, conversation, registration, lan
             raise chat_execution.ChatRunUnavailable(
                 "CHATFLOW_NEW_CONVERSATION_REQUIRED", "start a new conversation", http_status=409
             )
+        require_result(runtime, caller, previous_qa)
         upstream = previous.upstream_conversation_id
         if not upstream:
             raise chat_execution.ChatRunUnavailable(
                 "CHATFLOW_EVIDENCE_UNAVAILABLE", "conversation evidence unavailable"
             )
+    # 单据轮次及其下一轮均不继承上游记忆，旧订单数据不会进入后续模型输入。
+    if order_no or (previous and previous.order_no):
+        upstream = ""
     run_id = "service_" + uuid.uuid4().hex
     qa = runtime.store.create_assistant_question(
         caller.scope_fingerprint,
@@ -84,7 +88,7 @@ def start(runtime, caller, question, *, binding, conversation, registration, lan
 
             token, grant = DataGrantStore(runtime.store.path).issue(
                 scope_fingerprint=caller.scope_fingerprint,
-                order_no="",
+                order_no=order_no,
                 environment=binding.environment,
                 tenant_id=caller.effective_tenant_id,
                 qa_id=qa["qa_id"],
@@ -96,7 +100,7 @@ def start(runtime, caller, question, *, binding, conversation, registration, lan
             scope_fingerprint=caller.scope_fingerprint,
             scope_json=scope_to_json(caller),
             binding_key=binding.key,
-            order_no="",
+            order_no=order_no,
             environment=binding.environment,
             tenant_id=caller.effective_tenant_id,
             app_id=binding.app_id,
@@ -176,6 +180,21 @@ def execute(runtime, caller, qa, question, binding, upstream, registration, lang
             or run.binding_digest != fingerprint(binding)
         ):
             raise ValueError("run is no longer active")
+        if run.order_no:
+            runtime._require_chat_order_visible(caller, run.order_no)
+            current(runtime, caller, binding)
+            run = store.get(run_id)
+            if (
+                run is None
+                or run.state != "running"
+                or not still_valid(run)
+                or registration.cancelled
+                or run.binding_digest != fingerprint(binding)
+            ):
+                raise ValueError("run ended during authorization")
+            live = (store.context(run_id) or {}).get("live_snapshot", {})
+            if live.get("order_no") != run.order_no:
+                raise ValueError("live snapshot missing or belongs to another order")
         if binding.content_file:
             from aiops_diagnostics.consumer_knowledge import final_answer, load_content
 
@@ -231,11 +250,19 @@ def require_result(runtime, caller, qa):
         raise chat_execution.ChatRunUnavailable(
             "CHATFLOW_BINDING_CHANGED", "chatflow binding changed", http_status=410
         )
+    if run.order_no:
+        runtime._require_chat_order_visible(caller, run.order_no)
     latest = runtime.dify_run_store.get(run.run_id)
     if latest is None or latest.state != "succeeded" or not still_valid(latest):
         raise chat_execution.ChatRunUnavailable(
             "CHATFLOW_RESULT_EXPIRED", "chatflow result expired", http_status=410
         )
     current(runtime, caller, binding)
+    if run.order_no:
+        from aiops_diagnostics.consumer_order_chat import status_answer
+
+        live = (runtime.dify_run_store.context(run.run_id) or {}).get("live_snapshot", {})
+        if live.get("order_no") != run.order_no or status_answer(live, run.language) != qa.get("result"):
+            raise chat_execution.ChatRunUnavailable("CHATFLOW_EVIDENCE_UNAVAILABLE", "live evidence differs")
     if runtime.dify_run_store.snapshot(run.run_id) != qa.get("result"):
         raise chat_execution.ChatRunUnavailable("CHATFLOW_EVIDENCE_UNAVAILABLE", "answer evidence differs")
