@@ -1,4 +1,13 @@
 Feature: 原 App 的 C 端只读客服
+  Rule: 执行地址与一次性回调凭据贯穿部署入口
+    Scenario: 远端Dify地址错误
+      Given 已配置远端HTTP执行地址
+      When Gateway校验启动配置
+      Then 拒绝启动而不是接收问答后失败
+    Scenario: Dify回调经过公网代理
+      Given 本次运行的一次性取数凭据
+      When Dify向精确知识回调路径提交请求
+      Then 网关收到原凭据且不接受客户端伪造的业务身份头
   Rule: 知识来源与业务状态可区分
     Scenario: 原始知识包完整进入内容基线
       Given 同一版本的工作簿、Markdown 和媒体清单

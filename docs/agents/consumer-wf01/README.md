@@ -39,6 +39,7 @@ API异常/越权、安全优先、真实可播放媒体、实际人工入口逐�
 ## 原提问接口的Chatflow接线（默认关闭）
 
 `AIOPS_GATEWAY_CONSUMER_CHATFLOW_ENABLED=1`启用服务端登记的`consumer_service`场景。
+远端`AIOPS_GATEWAY_DIFY_CHAT_BASE_URL`必须使用HTTPS，与执行客户端相同；不能直接沿用控制台HTTP地址。
 沿用`CHAT_EXECUTION_BINDINGS_FILE`，engine=dify，另需app_id、workflow_id、workflow_key_file、
 agent_id、agent_version_no及environment/tenant_id/entry=consumer；本人状态及账务记录可按下节显式启用；支付渠道到账仍待接入。
 首次POST返回conversation_id，客户端后续原样带回；它是Gateway会话，不是Dify会话ID。
@@ -55,6 +56,9 @@ agent_id、agent_version_no及environment/tenant_id/entry=consumer；本人状�
 
 Dify的HTTP节点自己带data_grant回调`POST /v1/internal/consumer-knowledge`；无图兼容空体，
 图片分支以有界纯文本body携带识图JSON，不允许自报租户/订单。
+API域名部署`ops/nginx/dify-consumer-callback.conf`精确POST转发，保留原Authorization，
+清空业务身份头；不能经过会替换App服务令牌的通用`/v1/`代理。先备份、`nginx -t`再reload，
+失败恢复原片段。可用已撤销验收凭据验证得到`GRANT_REVOKED`而非`GRANT_UNKNOWN`，不得重放有效凭据。
 模型只接收检索结果，不接收凭据；它只返回kind/faq_id，Gateway投影标准答案和来源。
 知识库需单FAQ文件，标题带KB-C-ID；本轮命中且发布内容里存在才允许选择。
 该路径没有启用元数据过滤，不要把不同地区/版本的未审内容混入同一个发布集。

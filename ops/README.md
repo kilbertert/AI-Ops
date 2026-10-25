@@ -194,6 +194,21 @@ Content-Type: application/json
 **运维侧的等价命令**仍是 `aiops admin sync-from-dify`（零参数，跑**全部**绑定）。
 两者调用**同一个函数**，所以不会漂。
 
+# WF01知识回调部署
+
+与[WF01配置](../docs/agents/consumer-wf01/README.md)一起部署的片段为
+`ops/nginx/dify-consumer-callback.conf`，目标位置：
+`/www/server/panel/vhost/nginx/extension/api.mall.qushiyun.com/dify-consumer-callback.conf`。
+它精确匹配`POST /v1/internal/consumer-knowledge`，保留Dify的一次性Authorization，清空业务身份头；
+不能放进消费者H5的服务令牌include，也不能经通用App `/v1/`代理替换凭据。
+
+从已合并提交取制品，先备份已有同名片段（不存在也记录），再用`dev-host cp 41 <制品> --dest <目标路径>
+--artifact-sha256 <摘要>`部署；保持0644。经`dev-host exec 41 --allow-service-exec --`执行
+`/www/server/nginx/sbin/nginx -t`，通过后同一二进制`-s reload`。
+失败时恢复原片段；原来不存在则只删除本次新增文件，重新检查并reload。
+回执分别记录制品摘要、配置校验、reload、回调结果，不能把上传成功当部署完成。
+用已撤销验收凭据只读复核`GRANT_REVOKED`而非`GRANT_UNKNOWN`；新有效凭据不得代发或重放。
+
 # 消费者 H5 的助手面转发（`ops/nginx/`）
 
 `ulink.h5.mall.qushiyun.com` 是个只有静态回退的站点：`/v1/` 下的请求不到网关，
