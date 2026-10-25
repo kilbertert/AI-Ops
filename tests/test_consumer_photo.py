@@ -29,6 +29,7 @@ class PhotoFlow(Client):
     env = None
     uploads = []
     readable = True
+    recognized_text = "Startup failed."
     photo_id = str(uuid.uuid4())
 
     def upload_photo(self, **kwargs):
@@ -47,7 +48,7 @@ class PhotoFlow(Client):
             "/v1/internal/consumer-knowledge",
             json={
                 "image_text": json.dumps(
-                    {"readable": self.readable, "text": "Startup failed." if self.readable else ""}
+                    {"readable": self.readable, "text": self.recognized_text if self.readable else ""}
                 )
                 if has_image
                 else "no"
@@ -66,6 +67,7 @@ def prepare(env, monkeypatch, tmp_path):
     PhotoFlow.env = env
     PhotoFlow.uploads = []
     PhotoFlow.readable = True
+    PhotoFlow.recognized_text = "Startup failed."
     monkeypatch.setattr("aiops_diagnostics.consumer_chat_service.DifyChatflowClient", PhotoFlow)
     return runtime, kb
 
@@ -234,3 +236,16 @@ def test_dify_template_sends_visual_text_in_the_actual_body_field():
     assert body["type"] == "raw-text"
     assert body["data"] == [{"type": "text", "value": "{{#photo_context.output#}}"}]
     assert "image_text" not in node["data"]["params"]
+
+
+@pytest.mark.parametrize("recognized", ["充电桩冒烟了", "electric shock"])
+def test_danger_recognized_in_photo_overrides_model_knowledge_selection(tmp_path, monkeypatch, recognized):
+    with dify_chat(tmp_path, monkeypatch, stub_base="http://127.0.0.1:1") as env:
+        _, kb = prepare(env, monkeypatch, tmp_path)
+        PhotoFlow.recognized_text = recognized
+        key = upload(env).json()["photo_id"]
+        result = done(env, ask(env, key).json()["qa_id"]).json()
+        assert result["status"] == "completed"
+        assert "远离设备" in result["result"]["blocks"][0]["text"]
+        assert "按设备提示启动" not in result["result"]["blocks"][0]["text"]
+        assert kb.calls == []

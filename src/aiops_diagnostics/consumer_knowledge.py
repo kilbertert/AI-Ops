@@ -312,6 +312,8 @@ def live_answer(snapshot, language):
 
 
 def final_answer(raw, context, language, content):
+    if (context or {}).get("status") == "safety":
+        return fallback("safety", language, content)
     if (context or {}).get("status") == "photo_unreadable":
         return fallback("photo_unreadable", language, content)
     if (context or {}).get("followup", {}).get("unresolved_count") == 1:
@@ -468,7 +470,9 @@ def callback_context(runtime, token, *, require_result, read_snapshot, image_tex
     if followup["unresolved_count"]:
         query = followup["topic"] + "\n" + query
     result = (
-        {"status": "photo_unreadable", "candidates": []}
+        {"status": "safety", "candidates": []}
+        if recognized and SAFETY.search(recognized["text"])
+        else {"status": "photo_unreadable", "candidates": []}
         if recognized and not recognized["readable"]
         else {
             "status": "live",
