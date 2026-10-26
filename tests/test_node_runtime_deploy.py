@@ -3,6 +3,7 @@
 import json
 import shutil
 import socket
+import ssl
 import subprocess
 import threading
 import time
@@ -40,6 +41,31 @@ def test_nginx_forwards_only_node_posts_with_original_credentials(tmp_path):
     nginx = shutil.which("nginx")
     if not nginx:
         pytest.skip("nginx 未安装；该环境不证明实际代理行为")
+    certificate = tmp_path / "tls/callback"
+    certificate.mkdir(parents=True)
+    subprocess.run(
+        [
+            "openssl",
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-days",
+            "1",
+            "-subj",
+            "/CN=callback.test",
+            "-addext",
+            "subjectAltName=IP:127.0.0.1",
+            "-keyout",
+            str(certificate / "server.key"),
+            "-out",
+            str(certificate / "server.crt"),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    context = ssl.create_default_context(cafile=str(certificate / "server.crt"))
     seen = []
 
     class Handler(BaseHTTPRequestHandler):
@@ -72,11 +98,12 @@ def test_nginx_forwards_only_node_posts_with_original_credentials(tmp_path):
     for key, value in {
         "AIOPS_NODE_BRIDGE": "127.0.0.1",
         "AIOPS_NODE_STATE": str(tmp_path),
+        "AIOPS_NODE_CONFIG": str(tmp_path),
         "AIOPS_PRODUCTION_GATEWAY": f"http://127.0.0.1:{upstream.server_port}",
     }.items():
         text = text.replace("${" + key + "}", value)
     config = tmp_path / "nginx.conf"
-    config.write_text(text.replace(":8788;", f":{port};"))
+    config.write_text(text.replace(":8788", f":{port}"))
     proc = subprocess.Popen(
         [nginx, "-e", "stderr", "-c", str(config), "-g", "daemon off;"], stderr=subprocess.PIPE
     )
@@ -88,11 +115,22 @@ def test_nginx_forwards_only_node_posts_with_original_credentials(tmp_path):
             except OSError:
                 assert proc.poll() is None, proc.stderr.read().decode()
                 time.sleep(0.02)
-        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=context)
+        )
+        path = "/v1/internal/charging-status/claims/run_test"
+        untrusted = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+        with pytest.raises(urllib.error.URLError) as error:
+            untrusted.open(f"https://127.0.0.1:{port}{path}", data=b"{}", timeout=2)
+        assert isinstance(error.value.reason, ssl.SSLCertVerificationError)
+        with pytest.raises(urllib.error.HTTPError) as error:
+            opener.open(f"http://127.0.0.1:{port}{path}", data=b"{}", timeout=2)
+        assert error.value.code == 400
+        assert seen == []
         for endpoint in ("claims", "completions", "execution-config"):
             path = f"/v1/internal/charging-status/{endpoint}/run_test"
             req = urllib.request.Request(
-                f"http://127.0.0.1:{port}{path}",
+                f"https://127.0.0.1:{port}{path}",
                 data=b"{}",
                 headers={"Authorization": "Bearer synthetic", "X-AI-Ops-Exec-Config": "digest"},
             )
@@ -106,7 +144,7 @@ def test_nginx_forwards_only_node_posts_with_original_credentials(tmp_path):
         ]:
             with pytest.raises(urllib.error.HTTPError) as error:
                 opener.open(
-                    urllib.request.Request(f"http://127.0.0.1:{port}{path}", method=method), timeout=2
+                    urllib.request.Request(f"https://127.0.0.1:{port}{path}", method=method), timeout=2
                 )
             assert error.value.code in (403, 404)
         assert len(seen) == 3
@@ -119,7 +157,7 @@ def test_nginx_forwards_only_node_posts_with_original_credentials(tmp_path):
             path = root + "/" + tail
             with opener.open(
                 urllib.request.Request(
-                    f"http://127.0.0.1:{port}{path}",
+                    f"https://127.0.0.1:{port}{path}",
                     data=b"{}",
                     headers={"Authorization": "Bearer node-token", "X-AI-Ops-Exec-Config": "manifest"},
                 ),
@@ -130,7 +168,7 @@ def test_nginx_forwards_only_node_posts_with_original_credentials(tmp_path):
         path = root + "/cpms/iotChargingDevice/getChargingMonitor/ORDER-1?current=1&size=50"
         with opener.open(
             urllib.request.Request(
-                f"http://127.0.0.1:{port}{path}", headers={"Authorization": "Bearer task-grant"}
+                f"https://127.0.0.1:{port}{path}", headers={"Authorization": "Bearer task-grant"}
             ),
             timeout=2,
         ) as res:
@@ -143,7 +181,7 @@ def test_nginx_forwards_only_node_posts_with_original_credentials(tmp_path):
         ]:
             with pytest.raises(urllib.error.HTTPError) as error:
                 opener.open(
-                    urllib.request.Request(f"http://127.0.0.1:{port}{path}", method=method), timeout=2
+                    urllib.request.Request(f"https://127.0.0.1:{port}{path}", method=method), timeout=2
                 )
             assert error.value.code in (403, 404)
         assert len(seen) == 7

@@ -10,6 +10,11 @@ Feature: 已发布 SOP 的正式节点执行
       Given 节点仅连接内部网络
       When 请求非回调路径或读取他人订单
       Then 请求被拒且没有业务正文
+    Scenario: 回调身份由TLS证书验证
+      Given 节点已信任项目CA且证书SAN匹配内部回调地址
+      When 节点通过HTTPS读取授权和提交证据
+      Then 原凭据和正文被送往Gateway
+      And 未信任证书或明文HTTP不能取得业务响应
   Rule: 退役保留恢复能力
     Scenario: 新链通过后退役试验配置
       Given 真实验收通过且已核对旧路径的运行引用

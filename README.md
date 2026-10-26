@@ -799,6 +799,7 @@ runbook §5/§6 明确禁止 CI 自证。所以 CD 通过最多报告 `merged_wa
 
 正式节点常驻运行与旧试验配置退役见[部署手册](deploy/node-runtime/README.md)；
 生产启用须按该手册完成真实页面验收，合并部署件本身不代表已启用。
+新部署的内部回调使用项目CA验证的HTTPS；既有HTTP部署须按手册同步迁移回调证书和节点URL。
 
 2026-10-25 正式节点状态路线已启用，原 H5 本人查询经发布 V18/真实节点/baoyun 完成并与
 SQL/CPMS 独立对照一致；旧试验配置已归档。范围与限制见[真实验收](docs/validation/2026-10-25-production-node-enabled.md)。

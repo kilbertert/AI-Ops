@@ -16,19 +16,23 @@
 | `AIOPS_NODE_PROXY_IMAGE` / `AIOPS_NODE_MYSQL_IMAGE` / `AIOPS_NODE_JAVA_IMAGE` | 已核对摘要的本地镜像 ID |
 | `AIOPS_NODE_BUILD` | 节点构建身份 |
 | `AIOPS_NODE_SUBNET` / `AIOPS_NODE_BRIDGE` | 在目标主机路由及 Docker 网络中核对无重叠后登记的内部网段/宿主网桥 |
-| `AIOPS_NODE_GATEWAY_URL` | 上述网桥的回调入口；不能使用节点不可达的其他网桥地址 |
+| `AIOPS_NODE_GATEWAY_URL` | 上述网桥的 HTTPS 回调入口；证书 SAN 必须匹配该地址，不能关闭验证 |
 | `AIOPS_NODE_PLATFORM_ADDRESS` | 内部网段中的固定平台地址；宿主直接用 HTTPS 访问 |
 | `AIOPS_MODEL_UPSTREAM` / `AIOPS_MODEL_BASE_PATH` | 已批准的固定 HTTPS 供应商及 API 前缀 |
 
 最小目录：`platform/application.properties`、`node/node.env`、`gateway/exec-manifest.json`、
-`model-proxy/{upstream_api_key,proxy_token}`、`secrets/mysql_root`、`tls/{platform,proxy,public}`。
+`model-proxy/{upstream_api_key,proxy_token}`、`secrets/mysql_root`、`tls/{platform,proxy,public}`，
+以及 `tls/callback/{server.crt,server.key}`（回调叶子证书和私钥）。
 仅复制所需配置与停稳后的平台数据库；不复制试验 Gateway、身份 fixture 或旧备份密钥。
 平台/节点无业务库凭据，模型出口只挂自己的凭据目录。
 
 把 `gateway-callback.conf.template` 中 **具名部署占位符**替换为本次配置：
-`AIOPS_NODE_BRIDGE`、`AIOPS_NODE_STATE`、`AIOPS_PRODUCTION_GATEWAY`（共三种名字），
+`AIOPS_NODE_BRIDGE`、`AIOPS_NODE_STATE`、`AIOPS_NODE_CONFIG`、`AIOPS_PRODUCTION_GATEWAY`（共四种名字），
 其中 STATE 出现多次。**不能无参数 envsubst**，否则会抹掉 nginx 的认证头变量。
 渲染到配置根的 `gateway-callback.conf`。创建项目身份可写的临时目录；入口仅监听内部网桥。
+回调使用 TLS 1.2/1.3；由节点已信任的项目 CA 签发叶子证书，SAN 包含实际网桥 IP，
+用途为 serverAuth。证书644、私钥600，所属身份与回调服务一致；不向节点挂载私钥。
+同一端口不再接受明文；项目运行配置和管家目标的 `proxy_base_url` 同步使用 HTTPS。
 若宿主防火墙默认拒绝 INPUT，须登记并允许**仅节点内部网段 → 回调网桥:8788/TCP**；
 使用现有防火墙管理器持久保存，禁止开放 `0.0.0.0/0`。先从节点网络空间做真实请求，
 无凭据必须被 Gateway 拒绝（不能只有宿主 curl 通）。恢复时删除本次精确规则。
@@ -72,6 +76,23 @@ Docker internal 网络的端口映射在本环境不生成宿主监听，不能�
 这不提供按人限流或自动证据清理。模型重试次数没有硬上限；失败不回落直读。
 
 ## 验收、退役和恢复
+
+### 既有 HTTP 回调迁移
+
+合并制品到位后先备份原回调配置与 `runtime.env`，准备证书并验证有效期、SAN及CA链，
+确认没有在飞任务。先用 `nginx -t` 校验渲染配置，再在同一变更窗口替换回调配置，
+执行 `systemctl restart aiops-node-callback.service` 并确认HTTPS实际可达；仅 `nginx -t`
+不会改变运行进程。随后更新 `AIOPS_NODE_GATEWAY_URL` 并重新创建节点容器；平台、数据库和模型出口保持原制品。
+节点仅挂已有公共信任库，增加叶子证书无需改它。
+
+从节点网络内验证HTTPS可达、无凭据拒绝、未知路径拒绝、节点重新在线；不能仅验宿主curl。
+失败先恢复原回调配置，执行 `systemctl restart aiops-node-callback.service` 并确认原HTTP可达，
+再恢复URL并重新创建节点，不恢复业务数据库。此迁移会短暂停顿节点派发，
+须在具体变更单中登记时间和恢复点；只合并本模板不会修改运行中的HTTP配置。
+
+语义依据：[nginx HTTPS配置](https://nginx.org/en/docs/http/configuring_https_servers.html)。
+
+### 业务验收
 
 执行 [qa-plan.md](qa-plan.md)。真实 H5 用 `status_probe.py --execution node`，
 页面完成之后仍须按 qa_id 核对唯一 run、succeeded/matched、发布版本及同轮快照，并独立对照 SQL/CPMS。

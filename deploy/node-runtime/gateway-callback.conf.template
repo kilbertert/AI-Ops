@@ -7,7 +7,10 @@ access_log off;
 client_body_temp_path ${AIOPS_NODE_STATE}/client-temp;
 proxy_temp_path ${AIOPS_NODE_STATE}/proxy-temp;
 server {
-    listen ${AIOPS_NODE_BRIDGE}:8788;
+    listen ${AIOPS_NODE_BRIDGE}:8788 ssl;
+    ssl_certificate ${AIOPS_NODE_CONFIG}/tls/callback/server.crt;
+    ssl_certificate_key ${AIOPS_NODE_CONFIG}/tls/callback/server.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
     server_name _;
     client_max_body_size 64k;
     location ~ ^/v1/internal/charging-status/(execution-config|claims|completions)/run_[A-Za-z0-9_-]+$ {
