@@ -86,6 +86,33 @@ Docker internal 网络的端口映射在本环境不生成宿主监听，不能�
 节点仅挂已有公共信任库，增加叶子证书无需改它。
 
 从节点网络内验证HTTPS可达、无凭据拒绝、未知路径拒绝、节点重新在线；不能仅验宿主curl。
+
+**探活必须等就绪，且必须自带超时。** 2026-10-26 在 41 实测两次失败都出在这两点上：
+
+- `systemctl restart` 返回只说明进程被拉起，不说明已在监听。重启之后**轮询**到
+  HTTPS 真的应答再判断，别在返回后的第一次探活就下结论。
+- 交互式命令（例如 `docker exec -it ... java`）没有自身超时，卡住会把整次切换拖成
+  "超时失败"，而链路其实已经通了。
+
+可复用的形状（Java 用**节点自己的**信任库，不是 `curl -k`）：
+
+```bash
+# 1) 等回调就绪（最多 30s），用证书校验，不用 -k
+for i in $(seq 30); do
+  curl -sS -o /dev/null -m 2 --cacert /etc/aiops-node-runtime/tls/callback/server.crt \
+    https://172.30.41.1:8788/v1/internal/operator-runs/probe/tools/cpms_order_detail/authorization \
+    && break; sleep 1
+done
+
+# 2) 节点容器内用现役 truststore 做真实握手；外部 timeout 兜底
+docker cp TlsProbe.class aiops-runtime-node:/tmp/
+timeout 45 docker exec aiops-runtime-node java -Xmx32m -cp /tmp TlsProbe \
+  https://172.30.41.1:8788/v1/internal/operator-runs/probe/tools/cpms_order_detail/authorization 403 POST
+```
+
+退出码 0 且打印 `TLS_CALLBACK_STATUS=403` 才算"连上了且按预期拒绝无凭据请求"；
+`403` 本身不是故障，`000`/超时才是。明文进同一端口应得 `400`（nginx 拒绝非 TLS 握手）。
+
 失败先恢复原回调配置，执行 `systemctl restart aiops-node-callback.service` 并确认原HTTP可达，
 再恢复URL并重新创建节点，不恢复业务数据库。此迁移会短暂停顿节点派发，
 须在具体变更单中登记时间和恢复点；只合并本模板不会修改运行中的HTTP配置。

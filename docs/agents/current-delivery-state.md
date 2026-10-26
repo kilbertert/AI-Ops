@@ -899,3 +899,18 @@ fixture、数据库检查或模型单次调用写成真实业务验收。
 > 知识、连续追问、图片放大、安全及人工导航已验证；官方联系方式仍空，不等于人工接通。
 > 照片关闭，原节点V18保留；原生APK/IPA、完整教程、支付到账及长期稳定性未验。
 > 详见[真实发布验收](../validation/2026-10-25-consumer-wf01-live-release.md)和[恢复手册](consumer-wf01/live-release.md)。
+
+> **2026-10-26 · 管家工具制品同步与 TLS 回调切换（现役执行）**：合并树 `ec62108b`
+> 的节点 JAR、HTTPS 内部回调、36 发布桥与登录代理已同步到 41/36。回调改为
+> `listen 172.30.41.1:8788 ssl` 并反代网关 `172.18.0.1:8788`，节点
+> `AIOPS_NODE_GATEWAY_URL` 改 HTTPS。复核：节点容器内 JAR `96eb3428…` 与锁一致；
+> 节点容器内**真实 Java** 用现役 truststore 握手得 `403`（无凭据被拒）、明文进该端口
+> 得 `400`、网关本体 `200`/`0.2.0+0179347e8ba0`；平台 `sai_client_node` 仍在心跳续期。
+> 切换失败两次（重启后立即探活、交互式探针无超时），均自动回滚并核到原摘要
+> （`runtime.env` `4d411c21…`、回调 `dd622be1…`、`current`→`releases/b7617324`），
+> 备份在 `/var/backups/aiops-41/operator-delivery-20261026-r{2,3}`。
+> **恢复点**：换回上述备份、`systemctl restart aiops-node-callback`、恢复
+> `AIOPS_NODE_GATEWAY_URL` 并重建节点；不恢复业务数据库。
+> **管家入口仍未开放**：operator 业务目标未登记、零处 `OPERATOR_TRIAL`，本轮无业务
+> POST、无模型消费。真实管家账号/UPMS/CPMS 权限、baoyun 实际调用、原管家页面验收、
+> 旧工具退役均未做。详见[现役同步验收](../validation/2026-10-26-operator-runtime-live-sync.md)。
