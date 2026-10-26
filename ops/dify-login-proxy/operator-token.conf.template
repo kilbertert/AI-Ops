@@ -1,4 +1,5 @@
 # 仅包含到HTTPS server；来源地址由私有部署记录渲染，不放到明文10008入口。
+# Gateway必须直达本入口；不能把CDN/LB/共享前置代理地址填入来源白名单。
 location = /__aiops/internal/operator-token {
     # 原始TCP对端不受继承的real_ip_header或请求自带转发头影响。
     if ($realip_remote_addr != "${AIOPS_OPERATOR_GATEWAY_SOURCE_IP}") { return 403; }

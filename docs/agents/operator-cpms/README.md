@@ -41,6 +41,8 @@
 
 HTTPS server 可包含 [operator-token.conf.template](../../../ops/dify-login-proxy/operator-token.conf.template) 渲染件：仅替换 `AIOPS_OPERATOR_GATEWAY_SOURCE_IP` 为经私有主机记录核对的单一网关出口 IP，保留 nginx 自有变量；不要包含到明文控制台入口。按原始 TCP 对端限制来源，不采信 `X-Real-IP` / `X-Forwarded-For`；允许来源仍需代理核验独立密钥和真实会话。先 `nginx -t` 再 reload，并分别从网关、非网关来源验证。恢复删除本次精确 include、回滚配置键，不覆盖问答库。
 
+此模板要求Gateway直达HTTPS入口，部署前用连接目标与入口访问记录共同核对；不得把CDN、负载均衡或共享前置代理的IP代填为Gateway来源。出现前置代理时停止启用并另行设计身份边界，不能仅扩大来源名单。
+
 管家 App 密码登录与 Dify 运营登录分开验收。公司管家客户端使用自己的 `tenant-app` 密码流程；不能把 Dify 页的图形验证码要求套到它，也不能自行给 Dify 会话缓存注入公司令牌。
 
 运营正常登录后，原试运行按钮携带其 Dify 会话交给 Gateway；草稿清单仅冻进试用 run，正式指针不变。无近期登录凭据时明确拒绝，不运行旧 Python 试用。发布与历史恢复继续使用原按钮；全部关闭工具能发布为空清单，新诊断拒绝。
