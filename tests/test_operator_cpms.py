@@ -524,6 +524,13 @@ def test_operator_trial_uses_draft_without_changing_publication(operator, monkey
             break
         time.sleep(0.01)
     assert result.json()["status"] == "completed", result.text
+    from aiops_diagnostics.dify_console_publish import _trial_report_text
+
+    panel = _trial_report_text(result.json(), "completed")
+    answer = f["ctx"].agent_run_store.by_qa(trial).snapshot["answer"]
+    for text in (answer["summary"], answer["probable_cause"], *answer["next_steps"], *answer["limitations"]):
+        assert text in panel
+    assert "cpms.orderDetail" in panel and "cpms.chargingMonitor" in panel
     assert "TRIAL_ONLY" in seen[0]
     current = chat_execution.select_binding(
         f["settings"], scope(), entry="operator", scenario=operator_cpms.SCENARIO

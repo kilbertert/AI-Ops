@@ -57,3 +57,11 @@ aiops --config <Gateway配置> admin ensure-node-provider \
 ```
 
 新 provider 名为 `cpms-node`，不保存共享业务凭据。定义指向真实 `/v1/operator-tools/{tool}` 受控端点；没有节点任务凭据时403，不返回固定说明冒充结果。正式执行仍由节点调用固定 CPMS GET 路径；Dify 编辑器用工具选择发布权限，试用按钮运行该节点。
+
+## 真实 Dify 隔离补验方法
+
+复用 `deploy/dify-chat/docker-compose.acceptance.yaml` 的一次性栈与 `verify_dify_chat_entry.py` 初始化方法；API仅动态映射到回环，其他服务共用临时容器网络。用 `DifyConsoleAdmin` 登记 `cpms-node`；导入 `agent-chat`，`model_config.agent_mode.tools` 中每项携带真实provider UUID、`provider_type: api`、工具名和enabled。模型provider使用官方插件及合成上游，保存配置需要可用模型。
+
+通过 `POST /console/api/apps/{app_id}/model-config` 保存双开、单开、全关；每次用真实 `DifyDslClient` 导出，经 `node_publication.candidate` 核对清单。将该应用接入临时Gateway发布登记，驱动原 `/v1/dify/publish`、`/trial`、`/retract`、`/restore`，使用 `verify_operator_cpms.py` 的真Java启动方式核对实际工具与CPMS请求。草稿只试用；正式指针不变。验收后 compose down，仅清本次数据卷与命名空间；不使用现役Dify配置。
+
+登录会话通过RFC 7519的随机jti区分同秒登录。新会话不会恢复已退出会话的公司令牌映射；不等于Dify全局会话撤销。原试运行面板展示完整合并文本，保留既有4000字符上限。
