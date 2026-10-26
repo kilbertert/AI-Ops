@@ -32,6 +32,25 @@ class Client:
 
 
 def configure(env, monkeypatch):
+    # 既有生命周期测试使用确定性分类替身；语义质量由独立真实模型语料验收。
+    from aiops_diagnostics.consumer_billing import is_billing_question
+    from aiops_diagnostics.consumer_order_chat import asks_latest_order, is_order_status_question
+
+    def classify(_runtime, question, **kwargs):
+        intent = (
+            "billing_record"
+            if is_billing_question(question)
+            else "order_status"
+            if is_order_status_question(question)
+            else "knowledge"
+        )
+        return {
+            "intent": intent,
+            "order_reference": "latest" if asks_latest_order(question) else "explicit",
+            "uses_context": bool(kwargs.get("previous_question")),
+        }
+
+    monkeypatch.setattr("aiops_diagnostics.gateway_runtime.GatewayRuntime.classify_consumer", classify)
     Client.calls = []
     Client.stops = []
     Client.before = None
@@ -172,8 +191,11 @@ def test_expired_result_is_not_delivered_from_qa_or_conversation(tmp_path, monke
         with sqlite3.connect(env["db"]) as connection:
             connection.execute("UPDATE chat_dify_runs SET expires_at='2000-01-01T00:00:00+00:00'")
         assert done(env, first["qa_id"]).status_code == 410
-        assert ask(env, conversation=first["conversation_id"]).status_code == 409
-        assert len(Client.calls) == 1
+        # 快照过期仍拒绝回读；独立新问题在同一会话重新执行，不传递失效记忆。
+        next_turn = ask(env, conversation=first["conversation_id"])
+        assert next_turn.status_code == 202
+        assert done(env, next_turn.json()["qa_id"]).json()["status"] == "completed"
+        assert len(Client.calls) == 2 and Client.calls[-1]["conversation_id"] == ""
         assert (
             env["client"].get("/v1/conversations/" + first["conversation_id"], headers=HEADERS).status_code
             == 410
