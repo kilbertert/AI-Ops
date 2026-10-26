@@ -4,7 +4,7 @@
 
 | ID | 环境/前提 | 操作 | 预期 | 清理 |
 |---|---|---|---|---|
-| NET | 开发机、nginx、合成接收端 | 执行 `test_node_runtime_deploy.py`，三路径 POST/GET、越界路径 | 仅三种 POST 到达上游；原认证头/正文一致 | 停临时 nginx/HTTP |
+| NET | 开发机、nginx、临时证书、合成接收端 | 执行 `test_node_runtime_deploy.py`，HTTPS状态/管家回调，越界路径、未信任证书及明文请求 | 仅允许路径到达上游；原认证头/正文一致；未信任或明文拒绝 | 停临时 nginx/HTTP，删除临时证书 |
 | UI | 开发机、Playwright | `replay_drive.py` | 直读/渐进/失败/异步接单四场景判据正确 | 关浏览器 |
 | START | 服务宿主、已合并制品及停稳的旧平台库 | 按 README 备份、复制、启动、核对身份与注册 | 服务 enabled/active；平台与节点真实就绪；从节点网络空间验证回调可达，其他宿主服务不因规则放行 | 失败恢复前配置 |
 | LIVE | START 通过、既有正常登录 A/B、A 本人单 | 先 B 查 A 单拒绝，再 A 真实 H5 提问；按 qa_id 核对运行，另读 SQL/CPMS | B 无正文/零 run；A 页面与同 run 快照一致、独立对照一致 | 正式路由保持 active；清理隧道 |
