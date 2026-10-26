@@ -2834,6 +2834,7 @@ def create_gateway_app(
             except chat_execution.ChatRunUnavailable as exc:
                 raise StandardAPIError(exc.http_status, exc.code, str(exc), retryable=exc.retryable) from exc
             if binding is not None:
+                _require_operator_company_token(request)
                 order = payload.order_no or _extract_order_no(payload.question)
                 if not order:
                     return _clarification(
@@ -7095,6 +7096,13 @@ def authenticated_operator_console(context, session):
     return context.operator_cpms.refresh_scope(caller), identity["token"]
 
 
+def _require_operator_company_token(request):
+    if request.headers.get("X-Third-Session") or request.headers.get("third-session"):
+        raise StandardAPIError(403, "OPERATOR_COMPANY_TOKEN_REQUIRED", "use the company operator login")
+    if request.headers.get("X-Business-Entry", "").strip().lower() != "operator":
+        raise StandardAPIError(403, "OPERATOR_COMPANY_TOKEN_REQUIRED", "use the company operator login")
+
+
 async def _operator_json(request):
     from aiops_diagnostics.operator_cpms import OperatorRefused
 
@@ -7135,6 +7143,7 @@ def _require_current_chat_order(context, caller, qa, request):
 
     if str(qa.get("internal_run_id") or "").startswith(operator_cpms.PREFIX):
         if qa["status"] == "completed":
+            _require_operator_company_token(request)
             expected = context.operator_cpms.authorize_readback(
                 caller, qa["qa_id"], request.headers.get("Authorization", "").removeprefix("Bearer ")
             )

@@ -559,3 +559,53 @@ def test_node_provider_without_task_cannot_read_any_business(operator):
         response = operator["client"].post("/v1/operator-tools/" + name, json={})
         assert response.status_code == 403 and response.headers["cache-control"] == "no-store"
     assert operator["state"]["calls"] == []
+
+
+@pytest.mark.parametrize("header", ["X-Third-Session", "third-session"])
+def test_operator_session_mode_is_refused_before_cpms_or_run(operator, header):
+    f = operator
+    response = f["client"].post(
+        "/v1/assistant/questions",
+        headers={**HEADERS, header: "legacy-session"},
+        json={"question": "诊断订单", "order_no": ORDER},
+    )
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "OPERATOR_COMPANY_TOKEN_REQUIRED"
+    assert f["state"]["calls"] == [] and f["ctx"].operator_cpms.tasks == {}
+
+
+def test_readback_reauthenticates_diagnosis_scope(operator, monkeypatch):
+    from aiops_diagnostics.caller_auth import CALLER_AUTH_FORBIDDEN, CallerAuthError
+
+    f = operator
+    monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", lambda _, cfg, run: node(f, run))
+    response = request(f["client"])
+    qa = response.json()["qa_id"]
+    assert terminal(f, qa).json()["status"] == "completed"
+    normal = f["resolver"].resolve
+    checked = []
+
+    def revoked(token, *, required_scope, **kwargs):
+        checked.append(required_scope)
+        if required_scope == "aiops:diagnoses:write":
+            raise CallerAuthError("revoked", code=CALLER_AUTH_FORBIDDEN)
+        return normal(token, required_scope=required_scope, **kwargs)
+
+    monkeypatch.setattr(f["resolver"], "resolve", revoked)
+    before = len(f["state"]["calls"])
+    response = f["client"].get("/v1/assistant/questions/" + qa, headers=HEADERS)
+    assert response.status_code == 403 and response.json()["error"]["code"] == "INSUFFICIENT_SCOPE"
+    assert "aiops:diagnoses:write" in checked and len(f["state"]["calls"]) == before
+
+
+@pytest.mark.parametrize("header", ["X-Third-Session", "third-session"])
+def test_readback_refuses_shared_session_before_cpms(operator, monkeypatch, header):
+    f = operator
+    monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", lambda _, cfg, run: node(f, run))
+    qa = request(f["client"]).json()["qa_id"]
+    assert terminal(f, qa).json()["status"] == "completed"
+    before = len(f["state"]["calls"])
+    response = f["client"].get("/v1/assistant/questions/" + qa, headers={**HEADERS, header: "legacy-session"})
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "OPERATOR_COMPANY_TOKEN_REQUIRED"
+    assert len(f["state"]["calls"]) == before

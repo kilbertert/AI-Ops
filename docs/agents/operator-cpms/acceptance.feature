@@ -2,6 +2,17 @@ Feature: 管家异常订单使用 CPMS 正式接口取证
   新工具只读 CPMS API，不调用旧 AI-Ops 诊断工具或直连业务库。
 
   Rule: 工具读取受当前任务和管家范围约束
+    Scenario: 旧共享会话不能充当个人公司令牌
+      Given 请求携带旧共享会话与服务令牌
+      When 请求命中已发布管家节点入口
+      Then 返回 OPERATOR_COMPANY_TOKEN_REQUIRED
+      And 不签发节点任务且不读取CPMS
+
+    Scenario: 历史回读重新认证
+      Given 管家诊断已经完成
+      When 认证来源拒绝诊断权限或使用旧共享会话回读
+      Then 历史正文不交付且不追加CPMS读取
+
     Scenario: 读取授权订单详情和有限监测样本
       Given 当前管家有权管理该订单站点且正式版本允许两个工具
       When Java 节点调用订单详情和充电监测工具
