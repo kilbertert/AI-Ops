@@ -50,6 +50,8 @@ def start(
     order_no="",
     data_kind="status",
     photo_id="",
+    uses_context=True,
+    expected_previous_qa_id=None,
 ):
     from aiops_diagnostics import consumer_knowledge
 
@@ -60,26 +62,45 @@ def start(
         conversation["conversation_id"], caller.scope_fingerprint
     )
     upstream = ""
+    if (
+        uses_context
+        and expected_previous_qa_id is not None
+        and (previous.qa_id if previous else "") != expected_previous_qa_id
+    ):
+        from aiops_diagnostics.consumer_intent import message
+
+        raise chat_execution.ChatRunUnavailable(
+            "CHATFLOW_NEW_CONVERSATION_REQUIRED", message("context", language), http_status=409
+        )
     if previous:
         previous_qa = runtime.store.get_assistant_question(previous.qa_id, caller.scope_fingerprint)
         if (
             previous_qa is None
             or previous_qa["status"] != "completed"
             or previous.state != "succeeded"
-            or not still_valid(previous)
             or previous.binding_digest != fingerprint(binding)
             or previous.workflow_id != binding.workflow_id
             or previous.route_revision != binding.route_revision
             or previous.agent_version_no != binding.agent_version_no
         ):
+            from aiops_diagnostics.consumer_intent import message
+
             raise chat_execution.ChatRunUnavailable(
-                "CHATFLOW_NEW_CONVERSATION_REQUIRED", "start a new conversation", http_status=409
+                "CHATFLOW_NEW_CONVERSATION_REQUIRED", message("conversation", language), http_status=409
             )
-        require_result(runtime, caller, previous_qa)
-        upstream = previous.upstream_conversation_id
-        if not upstream:
+        if still_valid(previous):
+            require_result(runtime, caller, previous_qa)
+            if uses_context:
+                upstream = previous.upstream_conversation_id
+                if not upstream:
+                    raise chat_execution.ChatRunUnavailable(
+                        "CHATFLOW_EVIDENCE_UNAVAILABLE", "conversation evidence unavailable"
+                    )
+        elif uses_context:
+            from aiops_diagnostics.consumer_intent import message
+
             raise chat_execution.ChatRunUnavailable(
-                "CHATFLOW_EVIDENCE_UNAVAILABLE", "conversation evidence unavailable"
+                "CHATFLOW_NEW_CONVERSATION_REQUIRED", message("context", language), http_status=409
             )
     # 单据轮次及其下一轮均不继承上游记忆，旧订单数据不会进入后续模型输入。
     if order_no or photo_id or (previous and (previous.order_no or previous.has_photo)):
@@ -311,3 +332,25 @@ def require_result(runtime, caller, qa):
             raise chat_execution.ChatRunUnavailable("CHATFLOW_EVIDENCE_UNAVAILABLE", "live evidence differs")
     if runtime.dify_run_store.snapshot(run.run_id) != qa.get("result"):
         raise chat_execution.ChatRunUnavailable("CHATFLOW_EVIDENCE_UNAVAILABLE", "answer evidence differs")
+
+
+def previous_context(runtime, caller, binding, conversation):
+    """过期结果不作语义上下文，但也不使整个会话失效。"""
+
+    if not conversation:
+        return None, ""
+    run = runtime.dify_run_store.latest_conversation_run(
+        conversation["conversation_id"], caller.scope_fingerprint
+    )
+    if (
+        not run
+        or run.state != "succeeded"
+        or not still_valid(run)
+        or run.binding_digest != fingerprint(binding)
+    ):
+        return None, ""
+    qa = runtime.store.get_assistant_question(run.qa_id, caller.scope_fingerprint)
+    if not qa or qa["status"] != "completed":
+        return None, ""
+    require_result(runtime, caller, qa)
+    return run, qa["question"]
