@@ -445,6 +445,19 @@ def verify_knowledge(root, base, env, setup, model, check):
 
         with sqlite3.connect(root / "knowledge-test/gateway/data/gateway.db") as connection:
             connection.execute("UPDATE chat_dify_runs SET expires_at='2000-01-01T00:00:00+00:00'")
+        before = len(Model.requests), len(Knowledge.requests), len(stack.CpmsHandler.calls)
+        code, feedback = stack.http_json(
+            gateway_base + "/v1/assistant/questions",
+            "POST",
+            {"question": "还是不行", "conversation_id": post["conversation_id"]},
+            headers,
+        )
+        check(
+            "expired feedback asks to restate without upstream calls",
+            code == 200
+            and feedback.get("code") == "CONSUMER_CONTEXT"
+            and before == (len(Model.requests), len(Knowledge.requests), len(stack.CpmsHandler.calls)),
+        )
         code, fresh = stack.http_json(
             gateway_base + "/v1/assistant/questions",
             "POST",

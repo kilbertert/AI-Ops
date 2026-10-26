@@ -2935,13 +2935,18 @@ def create_gateway_app(
                             else ""
                         )
                         if not local_kind and conversation is not None:
-                            followup = consumer_knowledge.followup_context(
-                                context.runtime,
-                                caller,
-                                payload.question,
-                                conversation["conversation_id"],
-                                require_result=consumer_chat_service.require_result,
-                            )
+                            try:
+                                followup = consumer_knowledge.followup_context(
+                                    context.runtime,
+                                    caller,
+                                    payload.question,
+                                    conversation["conversation_id"],
+                                    require_result=consumer_chat_service.require_result,
+                                )
+                            except chat_execution.ChatRunUnavailable as exc:
+                                if exc.code == "CHATFLOW_RESULT_EXPIRED":
+                                    return _consumer_intent_clarification("context", language)
+                                raise
                             if followup["unresolved_count"] >= 2:
                                 local_kind = "human"
                         if local_kind:
