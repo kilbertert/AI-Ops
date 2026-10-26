@@ -80,12 +80,14 @@ Docker internal 网络的端口映射在本环境不生成宿主监听，不能�
 ### 既有 HTTP 回调迁移
 
 合并制品到位后先备份原回调配置与 `runtime.env`，准备证书并验证有效期、SAN及CA链，
-确认没有在飞任务。先用 `nginx -t` 校验渲染配置，再在同一变更窗口替换回调配置、
-更新 `AIOPS_NODE_GATEWAY_URL` 并重新创建节点容器；平台、数据库和模型出口保持原制品。
+确认没有在飞任务。先用 `nginx -t` 校验渲染配置，再在同一变更窗口替换回调配置，
+执行 `systemctl restart aiops-node-callback.service` 并确认HTTPS实际可达；仅 `nginx -t`
+不会改变运行进程。随后更新 `AIOPS_NODE_GATEWAY_URL` 并重新创建节点容器；平台、数据库和模型出口保持原制品。
 节点仅挂已有公共信任库，增加叶子证书无需改它。
 
 从节点网络内验证HTTPS可达、无凭据拒绝、未知路径拒绝、节点重新在线；不能仅验宿主curl。
-失败恢复原回调配置及URL并重新创建节点，不恢复业务数据库。此迁移会短暂停顿节点派发，
+失败先恢复原回调配置，执行 `systemctl restart aiops-node-callback.service` 并确认原HTTP可达，
+再恢复URL并重新创建节点，不恢复业务数据库。此迁移会短暂停顿节点派发，
 须在具体变更单中登记时间和恢复点；只合并本模板不会修改运行中的HTTP配置。
 
 语义依据：[nginx HTTPS配置](https://nginx.org/en/docs/http/configuring_https_servers.html)。
