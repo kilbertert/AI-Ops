@@ -73,3 +73,9 @@ aiops --config <Gateway配置> admin ensure-node-provider \
 通过 `POST /console/api/apps/{app_id}/model-config` 保存双开、单开、全关；每次用真实 `DifyDslClient` 导出，经 `node_publication.candidate` 核对清单。将该应用接入临时Gateway发布登记，驱动原 `/v1/dify/publish`、`/trial`、`/retract`、`/restore`，使用 `verify_operator_cpms.py` 的真Java启动方式核对实际工具与CPMS请求。草稿只试用；正式指针不变。验收后 compose down，仅清本次数据卷与命名空间；不使用现役Dify配置。
 
 登录会话通过RFC 7519的随机jti区分同秒登录。新会话不会恢复已退出会话的公司令牌映射；不等于Dify全局会话撤销。原试运行面板展示完整合并文本，保留既有4000字符上限。
+
+## 现役窗口与回执
+
+执行记录见[真实历史回放](../../validation/2026-10-26-operator-real-history-replay.md)。先保存现役应用DSL和配置摘要，独立查询CPMS核对输入，用户令牌只通过受控输入交给请求进程；不以SQL或旧工具代替节点本次取证。发布后从原问答POST拿qa_id，再按qa_id回读唯一run与同轮快照，不能取最新一行。
+
+撤回使用原 `/v1/dify/retract` API。发布密钥由实际Gateway的 `GatewayServerSettings.from_env()` 读取，不能假定一定在 `/proc/<pid>/environ` 的同名键里；用服务虚拟环境、项目身份和实际进程环境运行，**不要构造第二个生产app**。恢复程序先独立验证配置读取和HTTP错误处理，再交给一次性systemd timer；手动finally与timer不能成为同一个未验证脚本的两份假保证。撤回200之后还须核对路由retracted及本人历史GET410，随后清理本次timer。任何失败都保留QA/run，不覆盖数据库旧副本。

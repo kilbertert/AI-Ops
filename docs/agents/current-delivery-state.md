@@ -914,3 +914,12 @@ fixture、数据库检查或模型单次调用写成真实业务验收。
 > **管家入口仍未开放**：operator 业务目标未登记、零处 `OPERATOR_TRIAL`，本轮无业务
 > POST、无模型消费。真实管家账号/UPMS/CPMS 权限、baoyun 实际调用、原管家页面验收、
 > 旧工具退役均未做。详见[现役同步验收](../validation/2026-10-26-operator-runtime-live-sync.md)。
+
+> **2026-10-26 · 管家真实历史订单节点API回放完成，已撤回**：#1097/CD `b5c84471`，
+> 公司管家密码登录→CPMS真实选单→Dify V22两工具→真实平台/Java/baoyun→GET completed；
+> POST342ms，观察终态45.459秒，唯一run succeeded/matched，独立CPMS字段与监测0条一致。
+> 新operator路由保持retracted/revision2，C端V18及WF01 V3/revision2未变；旧provider未删。
+> 交换路径已接线且拒绝门通过，真实Dify有效会话试用尚未验。原管家H5账号密码登录成功，
+> 聊天路由空白、无输入和API请求；下一步是公司源码完整构建与页面交付。
+> **未完成业务验收**：历史已处理样本不能证明当前故障准确率。初版自动撤回脚本取错密钥来源，
+> 手动修正并撤回成功，不声称timer动作可靠。证据与限制见[真实回放](../validation/2026-10-26-operator-real-history-replay.md)。
