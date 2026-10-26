@@ -83,6 +83,8 @@ class GatewayServerSettings:
     #: 这样"发布"不需要从任何地方读到密钥，也就不会把它写进表里。
     chat_dify_key_dir: str = ""
     chat_node_targets_file: str = ""
+    operator_trial_login_url: str = ""
+    operator_trial_key: str = field(repr=False, default="")
     consumer_chatflow_enabled: bool = False
     consumer_publication_targets_file: str = ""
     #: 管家端公司 OAuth2 令牌的校验入口与客户端凭据（#443 / ADR-0009）。三个键**全部缺省为空**，
@@ -374,6 +376,10 @@ class GatewayServerSettings:
             in {"1", "true", "yes", "on"},
             chat_node_targets_file=_env("AIOPS_GATEWAY_CHAT_NODE_TARGETS_FILE")
             or _file_value(file_values, "AIOPS_GATEWAY_CHAT_NODE_TARGETS_FILE"),
+            operator_trial_login_url=_env("AIOPS_GATEWAY_OPERATOR_TRIAL_LOGIN_URL")
+            or _file_value(file_values, "AIOPS_GATEWAY_OPERATOR_TRIAL_LOGIN_URL"),
+            operator_trial_key=_env("AIOPS_GATEWAY_OPERATOR_TRIAL_KEY")
+            or _file_value(file_values, "AIOPS_GATEWAY_OPERATOR_TRIAL_KEY"),
             chat_dify_key_dir=_env("AIOPS_GATEWAY_CHAT_DIFY_KEY_DIR")
             or _file_value(file_values, "AIOPS_GATEWAY_CHAT_DIFY_KEY_DIR"),
             company_check_token_url=_env("AIOPS_GATEWAY_COMPANY_CHECK_TOKEN_URL")
@@ -498,6 +504,12 @@ class GatewayServerSettings:
         )
 
     def validate(self) -> None:
+        if bool(self.operator_trial_login_url) != bool(self.operator_trial_key):
+            raise ValueError("operator trial login URL and key must be configured together")
+        if self.operator_trial_key:
+            if len(self.operator_trial_key) < 32:
+                raise ValueError("operator trial key must contain at least 32 characters")
+            canonical_gateway_url(self.operator_trial_login_url)
         # 部署身份在**启动时**校验（#879）：一个格式不对的环境标识如果活到请求路径上，
         # 它的表现是"某个租户的工作区有时找得到、有时找不到"，而不是"配置写错了"。
         #

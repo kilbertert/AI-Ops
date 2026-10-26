@@ -196,7 +196,7 @@ public final class ExecManifest {
 
     private static ExecManifest parse(JsonNode root, String id, Path real) {
         String schema = text(root, "schema");
-        if (!SUPPORTED_SCHEMA.equals(schema)) {
+        if (!SUPPORTED_SCHEMA.equals(schema) && !"operator-exec-config/1".equals(schema)) {
             throw new ExecConfigViolation("MANIFEST",
                     "不支持的 schema（" + schema + "），只接受 " + SUPPORTED_SCHEMA);
         }
@@ -217,6 +217,9 @@ public final class ExecManifest {
         }
         List<ToolDef> tools = new ArrayList<>();
         JsonNode toolsNode = root.get("tools");
+        if ("operator-exec-config/1".equals(schema) && (toolsNode == null || !toolsNode.isArray())) {
+            throw new ExecConfigViolation("MANIFEST", "管家工具清单必须显式声明数组");
+        }
         if (toolsNode != null && !toolsNode.isNull()) {
             if (!toolsNode.isArray()) {
                 throw new ExecConfigViolation("MANIFEST", "tools 必须是数组");
@@ -225,7 +228,7 @@ public final class ExecManifest {
                 tools.add(ToolDef.of(text(t, "name"), text(t, "description"), text(t, "input_schema")));
             }
         }
-        if (tools.isEmpty()) {
+        if (tools.isEmpty() && !"operator-exec-config/1".equals(schema)) {
             // 本片固定「唯一受控工具」。空工具集合**不是**拒绝手段，也不是合法期望值。
             throw new ExecConfigViolation("MANIFEST", "tools 不得为空：本片要求显式声明受控工具");
         }

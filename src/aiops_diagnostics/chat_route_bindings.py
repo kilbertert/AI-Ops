@@ -165,7 +165,8 @@ class ChatRouteBindingStore:
         if len(parts) != 3:
             return None
         scenario, environment, tenant_id = parts
-        return self.get(environment, tenant_id, "consumer", scenario)
+        entry = "operator" if scenario == "operator_order_diagnosis" else "consumer"
+        return self.get(environment, tenant_id, entry, scenario)
 
     def all(self) -> tuple[RouteBinding, ...]:
         with self._connection(write=False) as connection:

@@ -980,6 +980,8 @@ def submit_trial(
     initiator_headers = _initiator_headers_for(
         login_proxy_url, console_session=console_session, timeout=timeout
     )
+    if console_session is not None:
+        initiator_headers["X-AIOps-Console-Session"] = console_session.access_token
     http_status, answer = _request(
         gateway_base_url.rstrip("/") + TRIAL_PATH,
         method="POST",
@@ -1068,6 +1070,8 @@ def read_trial(
     initiator_headers = _initiator_headers_for(
         login_proxy_url, console_session=console_session, timeout=timeout
     )
+    if console_session is not None:
+        initiator_headers["X-AIOps-Console-Session"] = console_session.access_token
     http_status, answer = _request(
         gateway_base_url.rstrip("/") + f"{TRIAL_PATH}/{urllib.parse.quote(trial_id, safe='')}",
         method="GET",

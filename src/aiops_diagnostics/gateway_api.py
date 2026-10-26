@@ -951,23 +951,24 @@ def _publish_bound_app(
         raise StandardAPIError(409, "CONSUMER_TARGET_CONFLICT", "app has two execution targets")
     if console.chat_route_bindings_file and not node_target and not consumer_target:
         from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
+        from aiops_diagnostics.consumer_publication import route_scenario
 
         managed = ChatRouteBindingStore(Path(console.chat_route_bindings_file)).get(
             console.execution_environment,
             binding.tenant_id,
             binding.business_entry,
-            chat_execution.SCENARIO_OWN_ORDER_STATUS,
+            route_scenario(context.settings, binding),
         )
         if managed and managed.engine == "node":
             raise StandardAPIError(409, "NODE_TARGET_MISSING", "node target unavailable")
-    if node_target and (not console.chat_route_bindings_file or binding.business_entry != "consumer"):
+    if node_target and (not console.chat_route_bindings_file or binding.business_entry != node_target.entry):
         raise StandardAPIError(409, "NODE_ROUTE_UNAVAILABLE", "node route is not configured")
     if node_target and _declared_in_file(
         console,
         node_target.environment,
         binding.tenant_id,
-        "consumer",
-        chat_execution.SCENARIO_OWN_ORDER_STATUS,
+        node_target.entry,
+        node_target.scenario,
     ):
         raise StandardAPIError(409, "NODE_ROUTE_COLLISION", "node route is declared in both places")
     try:
@@ -1279,6 +1280,10 @@ def _workflow_trial_draft(
         target = target_for(context.settings, binding)
         if target is None:
             raise StandardAPIError(409, "NODE_TARGET_MISSING", "node target unavailable")
+        if target.entry == "operator":
+            raise StandardAPIError(
+                409, "OPERATOR_TRIAL_IDENTITY_REQUIRED", "operator trial requires company authorization"
+            )
         return NodeTrial(candidate(source, target), row)
     dsl = DifyDslClient(source).export_dsl()
     if row.scenario == chat_execution.SCENARIO_CONSUMER_SERVICE:
@@ -1594,6 +1599,19 @@ def create_gateway_app(
         lifespan=lifespan,
     )
     app.state.gateway = context
+    from aiops_diagnostics.operator_cpms import OperatorCpms, OperatorRefused
+
+    context.operator_cpms = OperatorCpms(context)
+
+    @app.exception_handler(OperatorRefused)
+    async def operator_refused_handler(request: Request, exc: OperatorRefused):
+        code = str(exc)
+        return JSONResponse(
+            status_code=410 if code == "OPERATOR_RESULT_RETRACTED" else 403,
+            content={"error": {"code": code, "message": "operator request unavailable", "retryable": False}},
+            headers={"Cache-Control": "no-store"},
+        )
+
     # One attributable line per consumer order-status request (#observability).
     # Installed as a raw ASGI middleware so it sees the status the app actually
     # sends; see `request_observation` for why this is a log line and not a
@@ -2176,6 +2194,7 @@ def create_gateway_app(
         settled: dict[str, Any] = {"settled_runs": []}
         with contextlib.suppress(Exception):
             settled = context.runtime.settle_retracted_runs(route=current)
+        context.operator_cpms.retract(current)
         _record_publish_audit(
             context,
             app_id=payload.app_id,
@@ -2465,6 +2484,7 @@ def create_gateway_app(
     @app.post("/v1/dify/trial", status_code=status.HTTP_202_ACCEPTED)
     def dify_trial(
         payload: DifyTrialRequest,
+        request: Request,
         _: None = Depends(dify_trial_credential),  # noqa: B008
         initiator: Annotated[str | None, Header(alias="X-AIOps-Initiator")] = None,
         initiator_tenant: Annotated[str | None, Header(alias="X-AIOps-Initiator-Tenant")] = None,
@@ -2481,6 +2501,59 @@ def create_gateway_app(
         用户字段一律不被读取（模型 ``extra="forbid"``，多一个就 400）。桥没给身份
         （缺 ``X-AIOps-Initiator`` 或 ``-Tenant``）⇒ 退回 #781 的固定调试租户行为。
         """
+        if payload.app_id:
+            from aiops_diagnostics.node_publication import target_for
+
+            bound = next(
+                (b for b in context.runtime.dify_app_registry.all() if b.app_id == payload.app_id), None
+            )
+            target = target_for(context.settings, bound) if bound is not None else None
+            if target is not None and target.entry == "operator":
+                from aiops_diagnostics import operator_cpms
+                from aiops_diagnostics.dify_dsl_pull import DifyDslSource
+                from aiops_diagnostics.node_publication import candidate
+
+                session = request.headers.get("X-AIOps-Console-Session", "")
+
+                def console_operator_identity():
+                    return authenticated_operator_console(context, session)
+
+                caller, bearer = console_operator_identity()
+                binding = chat_execution.select_binding(
+                    context.settings, caller, scenario=operator_cpms.SCENARIO, entry="operator"
+                )
+                if binding is None or binding.app_id != payload.app_id:
+                    raise OperatorRefused("OPERATOR_TRIAL_SCOPE_MISMATCH")
+                workspace = _workspace_for_tenant(context, caller.effective_tenant_id)
+                source = DifyDslSource(
+                    context.settings.dify_console_base_url,
+                    payload.app_id,
+                    context.settings.dify_console_api_key,
+                    workspace,
+                )
+                manifest = candidate(source, target)
+
+                def current_console_scope():
+                    current, token = console_operator_identity()
+                    if token != bearer:
+                        raise OperatorRefused("OPERATOR_TRIAL_LOGIN_CHANGED")
+                    return current
+
+                qa = context.runtime.start_operator_cpms(
+                    context.operator_cpms,
+                    caller,
+                    binding,
+                    payload.order_no,
+                    payload.question,
+                    bearer=bearer,
+                    authorize=current_console_scope,
+                    base=target.cpms_base_url,
+                    proxy=target.proxy_base_url,
+                    conversation_turn=None,
+                    language=language,
+                    trial_manifest=manifest,
+                )
+                return {"trial_id": qa["qa_id"], "status": qa["status"]}
         trial_initiator = TrialInitiator.from_headers(
             initiator, initiator_tenant, initiator_type, initiator_name
         )
@@ -2528,6 +2601,7 @@ def create_gateway_app(
     @app.get("/v1/dify/trial/{trial_id}")
     def get_dify_trial(
         trial_id: str,
+        request: Request,
         _: None = Depends(dify_trial_credential),  # noqa: B008
         initiator: Annotated[str | None, Header(alias="X-AIOps-Initiator")] = None,
         initiator_tenant: Annotated[str | None, Header(alias="X-AIOps-Initiator-Tenant")] = None,
@@ -2542,6 +2616,25 @@ def create_gateway_app(
         指纹与 ``trial_run_context()`` 的**不一样**，于是带发起人的提交会读不回来（404）。
         两个路由走同一个 ``_trial_run_context``，这条不可能漂。
         """
+        if trial_id.startswith("qa_"):
+            from aiops_diagnostics import operator_cpms
+
+            caller, bearer = authenticated_operator_console(
+                context, request.headers.get("X-AIOps-Console-Session", "")
+            )
+            qa = context.store.get_assistant_question(trial_id, caller.scope_fingerprint)
+            if qa is None or not str(qa.get("internal_run_id", "")).startswith(operator_cpms.PREFIX):
+                raise StandardAPIError(404, "TRIAL_NOT_FOUND", "trial not found")
+            result = None
+            if qa["status"] == "completed":
+                rendered = context.operator_cpms.authorize_readback(caller, trial_id, bearer)
+                result = {"report": {"summary": rendered["blocks"][0]["text"]}}
+            return {
+                "trial_id": trial_id,
+                "status": qa["status"],
+                "result": result,
+                "error_code": qa.get("error_code"),
+            }
         trial_initiator = TrialInitiator.from_headers(
             initiator, initiator_tenant, initiator_type, initiator_name
         )
@@ -2729,6 +2822,87 @@ def create_gateway_app(
         conversation: dict[str, Any] | None = None
         if payload.conversation_id:
             conversation = _resolve_conversation(context, caller, decision, payload.conversation_id)
+
+        if str(decision.platform) == "operator" and payload.shortcut_code in {None, "", "smart_diagnosis"}:
+            from aiops_diagnostics import operator_cpms
+            from aiops_diagnostics.node_publication import targets
+
+            try:
+                binding = chat_execution.select_binding(
+                    context.settings, caller, scenario=operator_cpms.SCENARIO, entry="operator"
+                )
+            except chat_execution.ChatRunUnavailable as exc:
+                raise StandardAPIError(exc.http_status, exc.code, str(exc), retryable=exc.retryable) from exc
+            if binding is not None:
+                order = payload.order_no or _extract_order_no(payload.question)
+                if not order:
+                    return _clarification(
+                        context,
+                        caller,
+                        decision,
+                        code=CLARIFY_ORDER_REQUIRED,
+                        question=payload.question,
+                        language=language,
+                    )
+                target = next(
+                    (
+                        r
+                        for r in targets(context.settings.chat_node_targets_file)
+                        if r.entry == "operator"
+                        and r.app_id == binding.app_id
+                        and _tenant_in_scope(r.tenant_id, caller.effective_tenant_id)
+                        and r.environment == binding.environment
+                    ),
+                    None,
+                )
+                if target is None:
+                    raise OperatorRefused("OPERATOR_TARGET_MISSING")
+                authorization = request.headers.get("Authorization")
+                source = request.headers.get(SOURCE_KEY_HEADER)
+
+                def authenticated_operator_task():
+                    authenticated = _authenticate_caller(
+                        context.caller_resolver,
+                        authorization,
+                        None,
+                        required_scope=STANDARD_DIAGNOSIS_SCOPE,
+                        platform_entry="operator",
+                        source_key=source,
+                    )
+                    return context.operator_cpms.refresh_scope(authenticated)
+
+                turn_no = _begin_conversation_turn(context, caller, conversation, "qa", payload.question)
+                try:
+                    qa = context.runtime.start_operator_cpms(
+                        context.operator_cpms,
+                        caller,
+                        binding,
+                        order,
+                        payload.question,
+                        bearer=(authorization or "").removeprefix("Bearer "),
+                        authorize=authenticated_operator_task,
+                        base=target.cpms_base_url,
+                        proxy=target.proxy_base_url,
+                        language=language,
+                        conversation_turn=(conversation["conversation_id"], caller.scope_fingerprint, turn_no)
+                        if conversation is not None and turn_no is not None
+                        else None,
+                    )
+                except Exception:
+                    _release_conversation_turn(context, conversation, turn_no)
+                    raise
+                return JSONResponse(
+                    status_code=202,
+                    headers={"Cache-Control": "no-store"},
+                    content={
+                        **_assistant_question_response(qa, language),
+                        **(
+                            {"conversation_id": conversation["conversation_id"], "turn_no": turn_no}
+                            if conversation
+                            else {}
+                        ),
+                    },
+                )
 
         if (
             selected_settings.consumer_chatflow_enabled
@@ -3503,6 +3677,7 @@ def create_gateway_app(
     @app.get("/v1/assistant/questions")
     def list_assistant_questions(
         response: Response,
+        request: Request,
         identity: tuple[ScopeContext, Any] = Depends(assistant_identity),  # noqa: B008
         language: str = Depends(request_language),  # noqa: B008
         limit: Annotated[int, Query(ge=1, le=200)] = 50,
@@ -3517,6 +3692,14 @@ def create_gateway_app(
             questions = context.runtime.list_assistant_qa(caller, limit=limit)
         except (ValueError, RuntimeError) as exc:
             raise _runtime_unavailable("QA_UNAVAILABLE", "general answer unavailable", exc) from exc
+        from aiops_diagnostics.operator_cpms import PREFIX, OperatorRefused
+
+        for qa in questions:
+            if str(qa.get("internal_run_id") or "").startswith(PREFIX):
+                try:
+                    _require_current_chat_order(context, caller, qa, request)
+                except (OperatorRefused, chat_execution.ChatRunUnavailable):
+                    qa["result"] = None
         response.headers["Cache-Control"] = "no-store"
         return {
             "type": "qa_list",
@@ -3849,6 +4032,9 @@ def create_gateway_app(
         """
         del payload  # 同上：请求体不参与任何决策
         response.headers["Cache-Control"] = "no-store"
+        existing = context.agent_run_store.peek(run_id)
+        if existing is not None and existing.operation == "operator_order_diagnosis":
+            raise StandardAPIError(403, "AGENT_RUN_OPERATION_MISMATCH", "agent run refused")
         # APP-RUNTIME-01：回调该用哪份配置，由**这条 run 自己**决定（聊天入口签发的用聊天
         # 绑定，委派入口签发的用委派绑定）。原来只看委派那个键，于是「只开聊天绑定」时
         # 节点永远领不到；两份配置不同时还会拿别人的绑定去认证。
@@ -4089,6 +4275,8 @@ def create_gateway_app(
         """已认证目标节点取得本次冻结清单；不交订单数据或供应商凭据。"""
         response.headers["Cache-Control"] = "no-store"
         run = context.agent_run_store.get(run_id)
+        if run is not None and run.operation == "operator_order_diagnosis":
+            return context.operator_cpms.publication(run_id, (authorization or "").removeprefix("Bearer "))
         if run is None or not run.execution_manifest:
             raise StandardAPIError(404, "NODE_PUBLICATION_NOT_FOUND", "node publication unavailable")
         config = chat_execution.callback_config(context.agent_run_store, run_id, context.settings)
@@ -4117,6 +4305,64 @@ def create_gateway_app(
         if manifest.identity != latest.expected_agent_version:
             raise StandardAPIError(503, "NODE_PUBLICATION_INVALID", "node publication invalid")
         return {"run_id": run_id, "manifest": latest.execution_manifest, "sha256": manifest.identity}
+
+    @app.post("/v1/operator-tools/{tool}")
+    def operator_tool_invoke(tool: str, payload: NodeClaimRequest, request: Request, response: Response):
+        response.headers["Cache-Control"] = "no-store"
+        return context.operator_cpms.invoke(
+            request.headers.get("Authorization", "").removeprefix("Bearer "), tool
+        )
+
+    @app.post("/v1/internal/operator-runs/{run_id}/tools/{tool}/authorization")
+    def operator_tool_authorization(
+        run_id: str, tool: str, payload: NodeClaimRequest, request: Request, response: Response
+    ):
+        response.headers["Cache-Control"] = "no-store"
+        return context.operator_cpms.grant(
+            run_id,
+            request.headers.get("Authorization", "").removeprefix("Bearer "),
+            request.headers.get("X-AI-Ops-Exec-Config", ""),
+            tool,
+        )
+
+    @app.post("/v1/internal/operator-runs/{run_id}/tools/{tool}/evidence")
+    async def operator_tool_evidence(run_id: str, tool: str, request: Request):
+        body = await _operator_json(request)
+        from starlette.concurrency import run_in_threadpool
+
+        result = await run_in_threadpool(
+            context.operator_cpms.record,
+            run_id,
+            request.headers.get("Authorization", "").removeprefix("Bearer "),
+            request.headers.get("X-AI-Ops-Exec-Config", ""),
+            tool,
+            body,
+        )
+        return JSONResponse(content=result, headers={"Cache-Control": "no-store"})
+
+    @app.get("/v1/internal/operator-runs/{run_id}/cpms/{path:path}")
+    def operator_cpms_proxy(run_id: str, path: str, request: Request, response: Response):
+        response.headers["Cache-Control"] = "no-store"
+        return context.operator_cpms.proxy(
+            run_id,
+            request.headers.get("Authorization", "").removeprefix("Bearer "),
+            "/" + path,
+            request.url.query,
+        )
+
+    @app.post("/v1/internal/operator-runs/{run_id}/completions")
+    async def operator_completion(run_id: str, request: Request):
+        body = await _operator_json(request)
+        from starlette.concurrency import run_in_threadpool
+
+        result = await run_in_threadpool(
+            context.operator_cpms.complete,
+            run_id,
+            request.headers.get("Authorization", "").removeprefix("Bearer "),
+            request.headers.get("X-AI-Ops-Exec-Config", ""),
+            body,
+        )
+        return JSONResponse(content=result, headers={"Cache-Control": "no-store"})
 
     @app.post("/v1/internal/consumer-knowledge")
     async def consumer_knowledge_context(
@@ -4260,6 +4506,13 @@ def create_gateway_app(
         """
         response.headers["Cache-Control"] = "no-store"
         # 与领取端点同一条判据：用**这条 run 自己**的绑定，而不是委派那个键。
+        existing = context.agent_run_store.peek(run_id)
+        if existing is not None and existing.operation == "operator_order_diagnosis":
+            if payload.status == "completed":
+                raise StandardAPIError(403, "AGENT_RUN_OPERATION_MISMATCH", "agent run refused")
+            return context.operator_cpms.complete(
+                run_id, (authorization or "").removeprefix("Bearer "), exec_config, {"status": "failed"}
+            )
         config = chat_execution.callback_config(context.agent_run_store, run_id, selected_settings)
         if config is None:
             raise StandardAPIError(404, "AGENT_RUN_DISABLED", "route not found")
@@ -6583,6 +6836,8 @@ NO_STORE_PATH_PREFIXES = (
     "/v1/dify/ops/",
     "/v1/orders/",
     "/v1/internal/charging-status/",
+    "/v1/internal/operator-runs/",
+    "/v1/operator-tools/",
 )
 
 
@@ -6821,6 +7076,46 @@ def _consumer_order_chat(context, caller, decision, payload, conversation, langu
         raise
 
 
+def authenticated_operator_console(context, session):
+    from aiops_diagnostics.operator_cpms import OperatorRefused
+
+    identity = context.operator_cpms.console_identity(session)
+    caller = _authenticate_caller(
+        context.caller_resolver,
+        "Bearer " + identity["token"],
+        None,
+        required_scope=STANDARD_DIAGNOSIS_SCOPE,
+        platform_entry="operator",
+        source_key=context.settings.company_source_key,
+    )
+    if caller.subject.b_user_id != identity["user_id"] or not _tenant_in_scope(
+        identity["tenant_id"], caller.effective_tenant_id
+    ):
+        raise OperatorRefused("OPERATOR_TRIAL_IDENTITY_MISMATCH")
+    return context.operator_cpms.refresh_scope(caller), identity["token"]
+
+
+async def _operator_json(request):
+    from aiops_diagnostics.operator_cpms import OperatorRefused
+
+    raw = bytearray()
+    try:
+        async with asyncio.timeout(15):
+            async for part in request.stream():
+                raw.extend(part)
+                if len(raw) > 262144:
+                    raise OperatorRefused("OPERATOR_BODY_TOO_LARGE")
+    except TimeoutError as exc:
+        raise OperatorRefused("OPERATOR_BODY_TIMEOUT") from exc
+    try:
+        body = json.loads(raw)
+    except (ValueError, UnicodeDecodeError) as exc:
+        raise OperatorRefused("OPERATOR_INVALID_BODY") from exc
+    if not isinstance(body, dict):
+        raise OperatorRefused("OPERATOR_INVALID_BODY")
+    return body
+
+
 def authenticated_chat_order_reader(context, caller, request):
     _require_consumer_self_order(caller, request.headers.get("X-Business-Entry"), "pending")
     reader = _authenticate_caller(
@@ -6836,6 +7131,16 @@ def authenticated_chat_order_reader(context, caller, request):
 
 
 def _require_current_chat_order(context, caller, qa, request):
+    from aiops_diagnostics import operator_cpms
+
+    if str(qa.get("internal_run_id") or "").startswith(operator_cpms.PREFIX):
+        if qa["status"] == "completed":
+            expected = context.operator_cpms.authorize_readback(
+                caller, qa["qa_id"], request.headers.get("Authorization", "").removeprefix("Bearer ")
+            )
+            if expected != qa.get("result"):
+                raise operator_cpms.OperatorRefused("OPERATOR_RESULT_MISMATCH")
+        return
     from aiops_diagnostics import consumer_chat_service
 
     if str(qa.get("internal_run_id") or "").startswith(consumer_chat_service.PREFIX):

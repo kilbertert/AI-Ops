@@ -20,5 +20,22 @@ server {
         proxy_buffering off;
     }
     location / { return 404; }
+    location ~ ^/v1/internal/operator-runs/run_[A-Za-z0-9_-]+/(completions|tools/(cpms_order_detail|cpms_charging_samples)/(authorization|evidence))$ {
+        limit_except POST { deny all; }
+        client_max_body_size 256k;
+        proxy_pass ${AIOPS_PRODUCTION_GATEWAY};
+        proxy_set_header Authorization $http_authorization;
+        proxy_set_header X-AI-Ops-Exec-Config $http_x_ai_ops_exec_config;
+        proxy_set_header Content-Type $http_content_type;
+        proxy_read_timeout 45s;
+        proxy_buffering off;
+    }
+    location ~ ^/v1/internal/operator-runs/run_[A-Za-z0-9_-]+/cpms/(chOrderInfo/getOrderInfoDetail|iotChargingDevice/getChargingMonitor)/[A-Za-z0-9_-]+$ {
+        limit_except GET { deny all; }
+        proxy_pass ${AIOPS_PRODUCTION_GATEWAY};
+        proxy_set_header Authorization $http_authorization;
+        proxy_read_timeout 45s;
+        proxy_buffering off;
+    }
 }
 }

@@ -1547,6 +1547,36 @@ class GatewayRuntime:
             language=language,
         )
 
+    def start_operator_cpms(
+        self,
+        service,
+        caller,
+        binding,
+        order,
+        question,
+        *,
+        bearer,
+        authorize,
+        base,
+        proxy,
+        conversation_turn,
+        language="zh",
+        trial_manifest=None,
+    ):
+        return service.start(
+            caller,
+            binding,
+            order,
+            question,
+            bearer=bearer,
+            authorize=authorize,
+            base=base,
+            proxy=proxy,
+            registration=JobRegistration(conversation_turn=conversation_turn, route_type="qa"),
+            language=language,
+            trial_manifest=trial_manifest,
+        )
+
     def start_chat_order_qa(
         self,
         context: ScopeContext,
