@@ -8,9 +8,9 @@
   },
   "node": {
     "artifact": "aiops-execution-node.jar",
-    "sha256": "82a5c238939441f8df9aa0f3319c2816b75e68340a2cc7e0495a33f197696101",
-    "bytes": 106269178,
-    "source_commit": "bbcd3c76e1180397722c150b6168c6694657d202",
+    "sha256": "96eb342864e77ce82e255fffa22b526f933db915d1c2d74c86e69e5ee261703e",
+    "bytes": 106287254,
+    "source_commit": "92bcc74487a0828ad4678b55f7fa631b4523c191",
     "build": "由本仓 tools/m2_close/node 构建（可复现：pom 固定 project.build.outputTimestamp，同一份源码两次构建得到同一摘要）；构建命令见 tools/README.md"
   },
   "base_images": {
