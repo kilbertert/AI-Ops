@@ -1525,6 +1525,8 @@ class GatewayRuntime:
         order_no="",
         data_kind="status",
         photo_id="",
+        uses_context=True,
+        expected_previous_qa_id=None,
     ):
         from aiops_diagnostics.consumer_chat_service import start
 
@@ -1537,6 +1539,8 @@ class GatewayRuntime:
             order_no=order_no,
             data_kind=data_kind,
             photo_id=photo_id,
+            uses_context=uses_context,
+            expected_previous_qa_id=expected_previous_qa_id,
             registration=JobRegistration(
                 conversation_turn=(
                     conversation["conversation_id"],
@@ -2077,6 +2081,24 @@ class GatewayRuntime:
             self._complete_conversation_turn(
                 registration.conversation_turn, question, answer, status_qa_id=qa_id
             )
+
+    def classify_consumer(
+        self, question, *, language, previous_question="", previous_order=False, selected_order=False
+    ):
+        from aiops_diagnostics.codex_runtime import resolve_provider_api_key
+        from aiops_diagnostics.consumer_intent import classify
+
+        settings = Settings.from_config(self.gateway_settings.server_config_file)
+        provider = settings.agent.select_provider(None)
+        return classify(
+            question,
+            provider=provider,
+            api_key=resolve_provider_api_key(settings.agent, provider=provider),
+            language=language,
+            previous_question=previous_question,
+            previous_order=previous_order,
+            selected_order=selected_order,
+        )
 
     def classify_lightweight(
         self,

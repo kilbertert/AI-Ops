@@ -2917,6 +2917,8 @@ def create_gateway_app(
                     context.settings, caller, scenario=chat_execution.SCENARIO_CONSUMER_SERVICE
                 )
                 if service_binding is not None:
+                    from aiops_diagnostics import consumer_knowledge
+
                     if payload.photo_id and (not service_binding.photo_enabled or payload.order_no):
                         raise StandardAPIError(
                             400, "PHOTO_NOT_ALLOWED", "photo input is unavailable for this request"
@@ -2933,13 +2935,18 @@ def create_gateway_app(
                             else ""
                         )
                         if not local_kind and conversation is not None:
-                            followup = consumer_knowledge.followup_context(
-                                context.runtime,
-                                caller,
-                                payload.question,
-                                conversation["conversation_id"],
-                                require_result=consumer_chat_service.require_result,
-                            )
+                            try:
+                                followup = consumer_knowledge.followup_context(
+                                    context.runtime,
+                                    caller,
+                                    payload.question,
+                                    conversation["conversation_id"],
+                                    require_result=consumer_chat_service.require_result,
+                                )
+                            except chat_execution.ChatRunUnavailable as exc:
+                                if exc.code == "CHATFLOW_RESULT_EXPIRED":
+                                    return _consumer_intent_clarification("context", language)
+                                raise
                             if followup["unresolved_count"] >= 2:
                                 local_kind = "human"
                         if local_kind:
@@ -2974,23 +2981,93 @@ def create_gateway_app(
                             question=payload.question,
                             language=language,
                         )
-                    from aiops_diagnostics.consumer_billing import is_billing_question
+                    from aiops_diagnostics import consumer_chat_service, consumer_intent
 
-                    live_order = ""
-                    data_kind = (
-                        "billing"
-                        if (service_binding.live_billing_record and is_billing_question(payload.question))
-                        else "status"
+                    if payload.order_no:
+                        _require_visible_order(context, caller, payload.order_no)
+                    previous, previous_question = consumer_chat_service.previous_context(
+                        context.runtime, caller, service_binding, conversation
                     )
-                    if payload.photo_id:
-                        data_kind = "status"
-                    if not payload.photo_id and (
-                        data_kind == "billing"
-                        or (service_binding.live_order_status and is_order_status_question(payload.question))
-                    ):
+                    selection = {"intent": "knowledge", "order_reference": "none", "uses_context": False}
+                    if not payload.photo_id:
+                        try:
+                            selection = consumer_intent.validate(
+                                context.runtime.classify_consumer(
+                                    payload.question,
+                                    language=language,
+                                    previous_question=previous_question,
+                                    previous_order=bool(previous and previous.order_no),
+                                    selected_order=bool(payload.order_no),
+                                )
+                            )
+                        except (ValueError, RuntimeError, OSError) as exc:
+                            raise _runtime_unavailable(
+                                "CONSUMER_INTENT_UNAVAILABLE",
+                                consumer_intent.message("unavailable", language),
+                                exc,
+                            ) from exc
+                    intent, reference = selection["intent"], selection["order_reference"]
+                    uses_context = selection["uses_context"] or reference == "previous"
+                    if previous and uses_context:
+                        refreshed, _ = consumer_chat_service.previous_context(
+                            context.runtime, caller, service_binding, conversation
+                        )
+                        if refreshed is None or refreshed.qa_id != previous.qa_id:
+                            return _consumer_intent_clarification("context", language)
+                        previous = refreshed
+                    if intent in {"write_request", "clarify"}:
+                        return _consumer_intent_clarification(intent, language)
+                    if intent in {"safety", "human", "unsupported_live"}:
+                        content = None
+                        with contextlib.suppress(ValueError, OSError, PrivatePathError):
+                            content = consumer_knowledge.binding_content(service_binding, caller)
+                        answer = consumer_knowledge.fallback(
+                            "realtime" if intent == "unsupported_live" else intent, language, content
+                        )
+                        return JSONResponse(
+                            status_code=200,
+                            headers={"Cache-Control": "no-store"},
+                            content={
+                                "type": "clarification",
+                                "missing_fields": [],
+                                "language": language,
+                                "message": answer["blocks"][0]["text"],
+                            },
+                        )
+                    if uses_context and previous is None:
+                        return _consumer_intent_clarification("context", language)
+                    observation = request_observation.observation_of(request)
+                    if observation is not None:
+                        observation.classify(candidate=intent == "order_status")
+                        request_observation.mark_tenant(request, caller.effective_tenant_id)
+                    live_order = ""
+                    data_kind = "billing" if intent == "billing_record" else "status"
+                    if intent in {"order_status", "billing_record"}:
+                        enabled = (
+                            service_binding.live_billing_record
+                            if data_kind == "billing"
+                            else service_binding.live_order_status
+                        )
+                        if not enabled:
+                            return _consumer_intent_clarification("disabled", language)
                         authenticated_chat_order_reader(context, caller, request)
-                        live_order = payload.order_no or _extract_order_no(payload.question)
-                        if live_order is None and asks_latest_order(payload.question):
+                        candidates = {
+                            token
+                            for match in _ORDER_TOKEN.finditer(payload.question)
+                            if (token := _extract_order_no(match.group(0)))
+                        }
+                        if reference in {"unclear", "none"} or len(candidates) > 1:
+                            return _consumer_intent_clarification("order", language)
+                        if candidates and reference != "explicit":
+                            return _consumer_intent_clarification("order", language)
+                        if payload.order_no and reference != "explicit":
+                            return _consumer_intent_clarification("order", language)
+                        if payload.order_no and candidates and candidates != {payload.order_no}:
+                            return _consumer_intent_clarification("order", language)
+                        live_order = payload.order_no or (
+                            next(iter(candidates), "") if reference == "explicit" else ""
+                        )
+                        if not live_order and reference == "latest":
                             with scoped_mysql_source(
                                 Settings.from_config(context.settings.server_config_file),
                                 resolve_query_scope(caller),
@@ -2999,19 +3076,12 @@ def create_gateway_app(
                             if not rows:
                                 raise StandardAPIError(404, "ORDER_NOT_FOUND", "order not found")
                             live_order = str(rows[0]["order_no"])
+                        elif not live_order and reference == "previous" and previous:
+                            live_order = previous.order_no
                         if not live_order:
-                            return _clarification(
-                                context,
-                                caller,
-                                decision,
-                                code=CLARIFY_ORDER_REQUIRED,
-                                question=payload.question,
-                                language=language,
-                            )
+                            return _consumer_intent_clarification("order", language)
                         _require_consumer_self_order(caller, "consumer", live_order)
                         _require_visible_order(context, caller, live_order)
-                    elif payload.order_no:
-                        _require_visible_order(context, caller, payload.order_no)
                     if conversation is None:
                         conversation = context.conversation_store.create(
                             scope_fingerprint=caller.scope_fingerprint,
@@ -3022,7 +3092,9 @@ def create_gateway_app(
                         service_binding
                     ):
                         raise StandardAPIError(
-                            409, "CHATFLOW_NEW_CONVERSATION_REQUIRED", "start a new conversation"
+                            409,
+                            "CHATFLOW_NEW_CONVERSATION_REQUIRED",
+                            consumer_intent.message("conversation", language),
                         )
                     turn_no = _begin_conversation_turn(context, caller, conversation, "qa", payload.question)
                     try:
@@ -3036,10 +3108,13 @@ def create_gateway_app(
                             order_no=live_order,
                             data_kind=data_kind,
                             photo_id=payload.photo_id or "",
+                            uses_context=uses_context,
+                            expected_previous_qa_id=previous.qa_id if previous else "",
                         )
                     except Exception:
                         _release_conversation_turn(context, conversation, turn_no)
                         raise
+                    request_observation.mark_qa(request, qa["qa_id"])
                     return JSONResponse(
                         status_code=202,
                         headers={"Cache-Control": "no-store"},
@@ -6945,6 +7020,22 @@ def _consumer_order_chat_via_node(
                 if conversation
                 else {}
             ),
+        },
+    )
+
+
+def _consumer_intent_clarification(code, language):
+    from aiops_diagnostics.consumer_intent import message
+
+    return JSONResponse(
+        status_code=200,
+        headers={"Cache-Control": "no-store"},
+        content={
+            "type": "clarification",
+            "code": "CONSUMER_" + code.upper(),
+            "missing_fields": ["order_no"] if code == "order" else [],
+            "message": message(code, language),
+            "language": language,
         },
     )
 

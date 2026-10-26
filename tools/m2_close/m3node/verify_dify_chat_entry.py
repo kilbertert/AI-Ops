@@ -766,6 +766,14 @@ def _start_gateway(
     (case / "data").mkdir(parents=True, exist_ok=True)
     settings_file = case / "config/production.env"
     settings_file.write_text("# synthetic\n")
+    if service_app_id:
+        settings_file.write_text(
+            "AIOPS_PROVIDERS=synthetic\n"
+            f"AIOPS_PROVIDER_SYNTHETIC_BASE_URL={model_url}\n"
+            "AIOPS_PROVIDER_SYNTHETIC_WIRE_API=chat\n"
+            "AIOPS_PROVIDER_SYNTHETIC_MODEL=synthetic\n"
+            "AIOPS_PROVIDER_SYNTHETIC_KEY_ENV=AIOPS_M2_MODEL_KEY\n"
+        )
     settings_file.chmod(0o600)
 
     orders = case / "data/orders.db"
@@ -877,6 +885,7 @@ def _start_gateway(
 
     env = {
         **os.environ,
+        "AIOPS_M2_MODEL_KEY": "synthetic-not-a-real-key",
         "AIOPS_DATA_HOME": str(case / "data"),
         "AIOPS_CONFIG_HOME": str(case / "config"),
         "AIOPS_GATEWAY_DATA_HOME": str(case / "data"),

@@ -62,7 +62,12 @@ def test_invalid_previous_answer_never_enters_followup(tmp_path, monkeypatch, da
             else:
                 con.execute("UPDATE assistant_questions SET result_json='{}'")
         response = ask(env, "还是不行", first["conversation_id"])
-        assert response.status_code == (410 if damage == "expiry" else 503)
+        if damage == "expiry":
+            assert response.status_code == 200 and response.json()["code"] == "CONSUMER_CONTEXT"
+            assert "之前的数据已失效" in response.json()["message"]
+            assert done(env, first["qa_id"]).status_code == 410
+        else:
+            assert response.status_code == 503
         assert len(Client.calls) == 1 and len(kb.calls) == 1
 
 

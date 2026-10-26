@@ -392,6 +392,7 @@ flowchart TB
 | `consumer_publication.py` | WF01发布目标与路由场景，冻结已审核内容及只读能力 |
 | `consumer_billing.py` | 本人订单账务记录的裁剪与保守展示，不把金额字段或退款记录当支付渠道回执 |
 | `consumer_knowledge.py` | WF01知识回调、本轮检索引用与已审核答案、安全/人工兜底；短期凭据不允许跨用途取数 |
+| `consumer_intent.py` | WF01普通文本按语义选择只读能力与订单指代；结构化模型决策不授予权限，失败显式拒绝 |
 | `consumer_chat_service.py` | WF01原提问/轮询/取消与用户会话接线，固定发布绑定、同轮结果和回读守卫，默认关闭 |
 | `dify_chatflow.py` | WF01 Chatflow Service API：固定发布版本和会话，核对消息与工作流双完成后返回答案；调用方负责授权和业务放行 |
 | `dify_workflow_trial.py` | **真 Dify 试用**（M3-01）：把这一轮冻结的草稿导入一个**临时 Dify 应用**、发布、跑一次，取真实 `workflow_run_id`/`task_id` 与同轮取数证据，然后删掉临时应用。**不动正式指针**、不产生 `agent_versions` —— 试用不是发布。临时应用的凭据与取数凭据都按 app/这一次隔离 |

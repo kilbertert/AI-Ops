@@ -61,6 +61,22 @@ class Model(BaseHTTPRequestHandler):
             )
         if any("仅识别图片" in str(m.get("content")) for m in messages):
             answer = json.dumps({"readable": True, "text": "Startup failed."})
+        if body.get("response_format", {}).get("json_schema", {}).get("name") == "consumer_intent":
+            # 固定合成输入只证明传输接线，语义质量由真实供应商语料另验。
+            query = json.loads(messages[-1]["content"])
+            question = query["question"]
+            intent, reference = {
+                "我上一个订单现在是什么情况": ("order_status", "latest"),
+                "帮我查看最新的订单的情况": ("order_status", "latest"),
+                "查询我的最新订单退款记录": ("billing_record", "latest"),
+            }.get(question, ("knowledge", "none"))
+            answer = json.dumps(
+                {
+                    "intent": intent,
+                    "order_reference": reference,
+                    "uses_context": bool(query["previous_question"]) and intent == "knowledge",
+                }
+            )
         if body.get("stream"):
             chunk = {
                 "id": "chatcmpl-test",
@@ -400,7 +416,7 @@ def verify_knowledge(root, base, env, setup, model, check):
         code, live = stack.http_json(
             gateway_base + "/v1/assistant/questions",
             "POST",
-            {"question": "check my latest order status", "conversation_id": post["conversation_id"]},
+            {"question": "我上一个订单现在是什么情况", "conversation_id": post["conversation_id"]},
             headers,
         )
         check("live order Chatflow admitted", code == 202)
@@ -424,6 +440,50 @@ def verify_knowledge(root, base, env, setup, model, check):
         check(
             "live order reads once without knowledge",
             len(stack.CpmsHandler.calls) == 1 and len(Knowledge.requests) == knowledge_calls,
+        )
+        import sqlite3
+
+        with sqlite3.connect(root / "knowledge-test/gateway/data/gateway.db") as connection:
+            connection.execute("UPDATE chat_dify_runs SET expires_at='2000-01-01T00:00:00+00:00'")
+        before = len(Model.requests), len(Knowledge.requests), len(stack.CpmsHandler.calls)
+        code, feedback = stack.http_json(
+            gateway_base + "/v1/assistant/questions",
+            "POST",
+            {"question": "还是不行", "conversation_id": post["conversation_id"]},
+            headers,
+        )
+        check(
+            "expired feedback asks to restate without upstream calls",
+            code == 200
+            and feedback.get("code") == "CONSUMER_CONTEXT"
+            and before == (len(Model.requests), len(Knowledge.requests), len(stack.CpmsHandler.calls)),
+        )
+        code, fresh = stack.http_json(
+            gateway_base + "/v1/assistant/questions",
+            "POST",
+            {"question": "帮我查看最新的订单的情况", "conversation_id": post["conversation_id"]},
+            headers,
+        )
+        check(
+            "expired previous run accepts independent new order query",
+            code == 202 and fresh["conversation_id"] == post["conversation_id"],
+        )
+        deadline = time.monotonic() + 90
+        while time.monotonic() < deadline:
+            code, final = stack.http_json(
+                gateway_base + "/v1/assistant/questions/" + fresh["qa_id"], headers=headers
+            )
+            if code != 200 or final.get("status") not in ["queued", "running"]:
+                break
+            time.sleep(0.1)
+        check(
+            "fresh query reads new CPMS snapshot",
+            code == 200 and final.get("status") == "completed" and len(stack.CpmsHandler.calls) == 2,
+        )
+        check(
+            "old expired answer still refused",
+            stack.http_json(gateway_base + "/v1/assistant/questions/" + live["qa_id"], headers=headers)[0]
+            == 410,
         )
         code, bill = stack.http_json(
             gateway_base + "/v1/assistant/questions",
@@ -453,7 +513,7 @@ def verify_knowledge(root, base, env, setup, model, check):
         )
         check(
             "billing reads once without knowledge",
-            len(stack.CpmsHandler.calls) == 2 and len(Knowledge.requests) == knowledge_calls,
+            len(stack.CpmsHandler.calls) == 3 and len(Knowledge.requests) == knowledge_calls,
         )
         import io
 
