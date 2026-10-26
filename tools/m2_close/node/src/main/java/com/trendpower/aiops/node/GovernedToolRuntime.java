@@ -46,13 +46,21 @@ class GovernedToolRuntime extends ToolRuntime {
 
     private final ControlledChargingStatusTool tool;
     private final GuardedChatModelFactory modelFactory;
+    private final CpmsReadTool.Authorization cpmsAuthorization;
 
     GovernedToolRuntime(ControlledChargingStatusTool tool, GuardedChatModelFactory modelFactory) {
+        this(tool, modelFactory, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    GovernedToolRuntime(ControlledChargingStatusTool tool, GuardedChatModelFactory modelFactory,
+                        CpmsGatewayAuthorization cpmsAuthorization) {
         // 父类构造要求四个解析器；传 null 是刻意的：本类**从不**调用 super.resolve，
         // 任何一次误用都会立刻 NPE，而不是悄悄把 shell 注册回模型。
         super(null, null, null, null);
         this.tool = tool;
         this.modelFactory = modelFactory;
+        this.cpmsAuthorization = cpmsAuthorization;
     }
 
     @Override
@@ -66,13 +74,31 @@ class GovernedToolRuntime extends ToolRuntime {
             // 绝不回退到框架的默认解析。
             return new ToolResolution(List.of(), null);
         }
+        List<org.springframework.ai.tool.ToolCallback> resolved = resolvedTools();
         if (modelFactory.enabled()) {
             modelFactory.requireRunConfig(dispatchRequest.getModelConfig());
             requireFixedInputMode(dispatchRequest);
-            requireOnlyResolvedTools(dispatchRequest);
+            requireOnlyResolvedTools(dispatchRequest, resolved);
         }
         scrubDispatchText(dispatchRequest, runId);
-        return new ToolResolution(List.of(tool), null);
+        return new ToolResolution(resolved, null);
+    }
+
+    private List<org.springframework.ai.tool.ToolCallback> resolvedTools() {
+        var manifest = modelFactory.manifest();
+        if (manifest == null) return List.of(tool);
+        var result = new java.util.ArrayList<org.springframework.ai.tool.ToolCallback>();
+        for (var declared : manifest.tools()) {
+            if (ControlledChargingStatusTool.TOOL_NAME.equals(declared.name())) result.add(tool);
+            else if (CpmsReadTool.NAMES.contains(declared.name()) && cpmsAuthorization != null)
+                result.add(new CpmsReadTool(declared.name(), cpmsAuthorization));
+            else throw new ExecConfigViolation("TOOLS", "发布清单包含未实现的工具");
+        }
+        if (result.stream().map(t -> t.getToolDefinition().name()).distinct().count() != result.size()
+                || (result.contains(tool) && result.size() != 1)) {
+            throw new ExecConfigViolation("TOOLS", "状态工具不能与管家CPMS工具混用或重复");
+        }
+        return List.copyOf(result);
     }
 
     /**
@@ -81,8 +107,9 @@ class GovernedToolRuntime extends ToolRuntime {
      * 而不是某个早期 DTO。清单启用时，任何多出来的工具（例如被后续扩展注册回来的 shell/HTTP）
      * 都会在这里被拒。
      */
-    private void requireOnlyResolvedTools(ChatDispatchRequest dispatchRequest) {
-        modelFactory.requireResolvedTools(List.of(tool));
+    private void requireOnlyResolvedTools(ChatDispatchRequest dispatchRequest,
+                                         List<org.springframework.ai.tool.ToolCallback> resolved) {
+        modelFactory.requireResolvedTools(resolved);
         if (dispatchRequest.getMcpServers() != null && !dispatchRequest.getMcpServers().isEmpty()) {
             throw new ExecConfigViolation("TOOLS",
                     "固定受控工具模式下不接受动态 MCP 服务器，实际 " + dispatchRequest.getMcpServers().size() + " 个");

@@ -1224,3 +1224,50 @@ def test_a_platform_account_still_needs_the_global_publish_code(stack) -> None:
         )
     assert _check_publish(base, session)["allowed"] is False
     assert _check_publish(base, session)["reason"] == "MISSING_PUBLISH_PERMISSION"
+
+
+def test_operator_token_endpoint_requires_separate_key_and_real_session(tmp_path, monkeypatch):
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    from aiops_diagnostics.dify_login_server import LoginProxyHandler
+
+    key = "separate-operator-trial-key-" + "a" * 32
+    settings = LoginProxySettings(
+        listen_host="127.0.0.1",
+        listen_port=0,
+        public_origin="https://console.example",
+        company=CompanyAuthSettings(base_url="http://127.0.0.1:1"),
+        dify=DifyConsoleSettings(
+            base_url="http://127.0.0.1:1", secret_key=SECRET_KEY, environment=ENVIRONMENT
+        ),
+        data_dir=str(tmp_path),
+        edit_permission=EDIT_PERMISSION,
+        operator_trial_key=key,
+    )
+    seen = []
+
+    def read(session):
+        seen.append(session)
+        return {"token": "company-private", "user_id": "u", "tenant_id": "t"} if session == "valid" else None
+
+    handler = type(
+        "OperatorLoginHandler",
+        (LoginProxyHandler,),
+        {"settings": settings, "service": SimpleNamespace(operator_token=read)},
+    )
+    server, base = _serve(handler)
+    try:
+        path = "/__aiops/internal/operator-token"
+        assert _call(base, path, {"session": "valid"})[0] == 403
+        assert seen == []
+        status, body, headers = _call(
+            base, path, {"session": "valid"}, headers={"Authorization": "Bearer " + key}
+        )
+        assert status == 200 and body["token"] == "company-private" and headers["cache-control"] == "no-store"
+        assert _call(base, path, {"session": "wrong"}, headers={"Authorization": "Bearer " + key})[0] == 403
+        handler.settings = replace(settings, operator_trial_key="")
+        assert _call(base, path, {"session": "valid"}, headers={"Authorization": "Bearer " + key})[0] == 403
+    finally:
+        server.shutdown()
+        server.server_close()

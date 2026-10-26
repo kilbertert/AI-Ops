@@ -47,6 +47,7 @@ import hmac
 import json
 import logging
 import re
+import secrets
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -296,8 +297,8 @@ def mint_console_session(
 ) -> ConsoleSession:
     """为 ``account_id`` 签一枚 Dify 会接受的控制台会话（#772 B / ADR-0023）。
 
-    载荷形状照抄 `AccountService.get_account_jwt_token_for_account_id`：
-    ``{user_id, exp, iss, sub}``。``iss`` 必须是部署版本（社区版即 ``COMMUNITY``）——
+    载荷沿用 `AccountService.get_account_jwt_token_for_account_id`，加 RFC 7519 的随机
+    ``jti`` 避免同秒重登复用已退出的凭据绑定。``iss`` 必须是部署版本（社区版即 ``COMMUNITY``）——
     写错不会立刻报错，但下一个读 `iss` 的地方会拒。
 
     ``cookie_prefix`` 默认 :data:`CONSOLE_COOKIE_PREFIX`：本部署的控制台入口是 https
@@ -306,7 +307,13 @@ def mint_console_session(
     now = int(time.time())
     exp = now + access_expire_minutes * 60
     access = sign_console_jwt(
-        {"user_id": account_id, "exp": exp, "iss": deployment_edition, "sub": "Console API Passport"},
+        {
+            "user_id": account_id,
+            "exp": exp,
+            "iss": deployment_edition,
+            "sub": "Console API Passport",
+            "jti": secrets.token_urlsafe(32),
+        },
         secret_key,
     )
     csrf = sign_console_jwt({"exp": exp, "sub": account_id}, secret_key)

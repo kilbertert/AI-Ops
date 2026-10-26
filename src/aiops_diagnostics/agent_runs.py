@@ -470,6 +470,7 @@ class AgentRunStore:
         chat_binding: str | None = None,
         execution_manifest: str | None = None,
         route_revision: int = 0,
+        operation: str = OPERATION_CHARGING_STATUS,
     ) -> AgentRun:
         # 32 字节随机；只作关联编号，不承载任何身份或范围。
         run_id = "run_" + secrets.token_urlsafe(32)
@@ -490,7 +491,7 @@ class AgentRunStore:
                     scope.scope_fingerprint,
                     scope_to_json(scope),
                     order_no,
-                    OPERATION_CHARGING_STATUS,
+                    operation,
                     config.environment,
                     config.snail_app_id,
                     str(config.snail_agent_id),

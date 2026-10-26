@@ -1213,6 +1213,41 @@ def ensure_ready_command(
     typer.echo(json.dumps(outcome.as_dict(), ensure_ascii=False, indent=2))
 
 
+@admin_app.command("ensure-node-provider")
+def ensure_node_provider_command(
+    ctx: typer.Context,
+    app_id: Annotated[str, typer.Option("--app-id")],
+    gateway_url: Annotated[str, typer.Option("--gateway-url")],
+    db: Annotated[Path, typer.Option("--db", exists=True, dir_okay=False)],
+) -> None:
+    """为已登记管家节点应用安装真实CPMS工具定义；不写业务凭据。"""
+    from aiops_diagnostics.dify_app_registry import DifyAppRegistry
+    from aiops_diagnostics.dify_console_admin import ConsoleApiSettings, DifyConsoleAdmin
+    from aiops_diagnostics.dify_workspaces import DifyWorkspaces
+    from aiops_diagnostics.node_publication import target_for
+    from aiops_diagnostics.ops_provider import ensure_node_provider
+
+    settings, database = _dify_console_and_db(ctx, db)
+    try:
+        binding = next(b for b in DifyAppRegistry(database).all() if b.app_id == app_id)
+        target = target_for(settings, binding)
+        if target is None or target.entry != "operator":
+            raise ValueError("operator node target missing")
+        workspace = DifyWorkspaces(database).resolve(binding.tenant_id, settings.environment)
+        result = ensure_node_provider(
+            DifyConsoleAdmin(
+                ConsoleApiSettings(settings.dify_console_base_url, settings.dify_console_api_key)
+            ),
+            workspace,
+            gateway_url,
+            json.loads(Path(target.manifest_file).read_text()),
+        )
+    except (ValueError, RuntimeError, OSError, StopIteration) as exc:
+        typer.secho("CPMS节点工具登记未完成，请核对目标、工作区和已有定义", err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(json.dumps(result, ensure_ascii=False))
+
+
 @admin_app.command("ensure-ops-provider")
 def ensure_ops_provider_command(
     ctx: typer.Context,

@@ -437,3 +437,36 @@ def test_a_single_workspace_deployment_keeps_the_global_gate(tmp_path: Path, mon
         service.login(username="boss", password="pw", random_str="r", code="c")
 
     assert caught.value.code == "MISSING_EDIT_PERMISSION"
+
+
+def test_operator_trial_token_is_opt_in_session_bound_and_expires(tmp_path, monkeypatch):
+    import hashlib
+    import time
+
+    _patch_company(monkeypatch, user_type="5")
+    service = _service(tmp_path, _Directory(WORKSPACE), _Inner())
+    session, _ = service.login(username="zhang", password="pw", random_str="r", code="c")
+    assert service.operator_token(session.access_token) is None
+    service.retain_operator_token = True
+    session, _ = service.login(username="zhang", password="pw", random_str="r", code="c")
+    value = service.operator_token(session.access_token)
+    assert value == {"token": "t", "user_id": "u-1", "tenant_id": TENANT}
+    assert service.operator_token(session.access_token + "x") is None
+    key = hashlib.sha256(session.access_token.encode()).hexdigest()
+    with service._operator_token_lock:
+        old = service._operator_tokens[key]
+        service._operator_tokens[key] = (time.time() - 1, *old[1:])
+    assert service.operator_token(session.access_token) is None
+    assert key not in service._operator_tokens
+
+
+def test_logout_then_same_second_login_does_not_reauthorize_old_session(tmp_path, monkeypatch):
+    monkeypatch.setattr("aiops_diagnostics.dify_login_proxy.time.time", lambda: 1800000000)
+    _patch_company(monkeypatch, user_type="5")
+    service = _service(tmp_path, _Directory(WORKSPACE), _Inner())
+    service.retain_operator_token = True
+    old, _ = service.login(username="zhang", password="pw", random_str="r", code="c")
+    service.forget_operator_token(old.access_token)
+    new, _ = service.login(username="zhang", password="pw", random_str="r", code="c")
+    assert service.operator_token(old.access_token) is None
+    assert service.operator_token(new.access_token) == {"token": "t", "user_id": "u-1", "tenant_id": TENANT}
