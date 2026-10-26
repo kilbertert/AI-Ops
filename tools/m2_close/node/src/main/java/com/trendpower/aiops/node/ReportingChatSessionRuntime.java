@@ -107,7 +107,9 @@ class ReportingChatSessionRuntime extends ChatSessionRuntime {
                 }
             }
             manifestId = manifestId();
-            super.execute(wrap(request, execution, manifestId));
+            boolean operator = modelFactory.manifest().tools().stream()
+                    .anyMatch(t -> CpmsReadTool.NAMES.contains(t.name()));
+            super.execute(wrap(request, execution, manifestId, operator));
         } catch (RuntimeException | Error failure) {
             // 构造期/派发期失败（含清单/工具漂移）：这是**本次执行**的终局失败，
             // 必须从 issued/running 落 failed，而不是留在 issued。
@@ -124,7 +126,7 @@ class ReportingChatSessionRuntime extends ChatSessionRuntime {
         }
     }
 
-    private ChatSessionRequest wrap(ChatSessionRequest request, RunExecution execution, String manifestId) {
+    private ChatSessionRequest wrap(ChatSessionRequest request, RunExecution execution, String manifestId, boolean operator) {
         String runId = execution.runId();
         return ChatSessionRequest.builder()
                 .dispatchRequest(request.getDispatchRequest())
@@ -138,7 +140,7 @@ class ReportingChatSessionRuntime extends ChatSessionRuntime {
                                 "model stream did not finish cleanly"));
                         return;
                     }
-                    if (!reportCompleted(runId, manifestId)) {
+                    if (!reportCompleted(runId, manifestId, operator ? result.fullText() : null)) {
                         // Gateway 未确认：**不能**把这次 run 报成成功。
                         forwardError(request, new CompletionNotConfirmed(
                                 "gateway did not confirm loop completion"));
@@ -177,12 +179,16 @@ class ReportingChatSessionRuntime extends ChatSessionRuntime {
      * `200 {"run_id":本run,"state":"failed"}` 都不能被记成成功 —— 一个认错记录的应答
      * 和一次拒绝在 HTTP 状态上无法区分。**不重试**（宁可少报成功，不伪造）。
      */
-    private boolean reportCompleted(String runId, String manifestId) {
+    private boolean reportCompleted(String runId, String manifestId, String answer) {
         JsonNode ack;
         try {
+            var body = new com.fasterxml.jackson.databind.ObjectMapper().createObjectNode();
+            body.put("status", "completed");
+            if (answer != null) body.put("answer", answer);
             ack = gateway.post(
-                    "/v1/internal/charging-status/completions/" + runId,
-                    "{\"status\":\"completed\"}",
+                    answer == null ? "/v1/internal/charging-status/completions/" + runId
+                            : "/v1/internal/operator-runs/" + runId + "/completions",
+                    body.toString(),
                     manifestId);
         } catch (RuntimeException e) {
             return false;

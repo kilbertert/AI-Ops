@@ -386,6 +386,7 @@ flowchart TB
 | `chat_data_grant.py` | **一次性取数凭据**（APP-RUNTIME-02）：Dify 的 HTTP 步骤要用它回调网关取本人那一单。≥256 bit 随机，库里**只存 sha256**；绑死 主体/订单/环境/租户/QA/workflow 与 180 秒有效期；只允许**一次**业务读取，重复回调只回同轮已存的快照；完成/失败/取消三种终态都立即撤销。它不是会话凭据、也不是整租户 key —— 那两个都会把「一个人、一次、一单」的授权放大成可长期复用的能力 |
 | `dify_chat_workflow.py` | **已发布的 Dify Workflow** 的最小调用面：`/v1/workflows/{workflow_id}/run`（streaming）与 `/v1/workflows/tasks/{task_id}/stop`，app service key 从 0600 文件读。开始事件即保存 `workflow_run_id` + `task_id` 并允许取消，最终事件核同一身份且 `succeeded`；运行时**不跑草稿**、不自动追最新版本 |
 | `node_publication.py` | 节点 SOP 发布与试用：从已登记编辑应用冻结提示词和可信执行清单，复用版本、正式路由、撤回与恢复；节点按 run 获取清单并实际核对，不转换任意 Dify Workflow 图 |
+| `operator_cpms.py` | 管家节点的任务授权、CPMS 固定只读 API 转发、证据和结果校验；公司令牌只保存在 Gateway 在飞任务内存中，未配置管家发布目标时不启用。实现与验收边界见 [管家 CPMS 工具](docs/agents/operator-cpms/README.md)。 |
 | `consumer_photo.py` | 本人短期图片输入、大小/像素校验与元数据清理，进程内一次性存储 |
 | `consumer_trial.py` | 在临时Chatflow执行WF01草稿，沿用源路由和试用范围，结束清理临时应用 |
 | `consumer_publication.py` | WF01发布目标与路由场景，冻结已审核内容及只读能力 |

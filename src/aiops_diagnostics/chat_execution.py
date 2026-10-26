@@ -69,6 +69,8 @@ BINDINGS_SCHEMA = "aiops-chat-execution/1"
 #: 一份写错场景名的绑定若被当成本场景，就是「配了一个不生效的开关」。
 SCENARIO_OWN_ORDER_STATUS = "consumer_own_order_status"
 SCENARIO_CONSUMER_SERVICE = "consumer_service"
+SCENARIO_OPERATOR_DIAGNOSIS = "operator_order_diagnosis"
+OPERATOR_TOOL_NAMES = ("cpms_order_detail", "cpms_charging_samples")
 
 #: 唯一允许的入口。operator/代查不走这条路线（它们的授权判据完全不同）。
 ENTRY_CONSUMER = "consumer"
@@ -461,7 +463,11 @@ def assert_no_binding_collision(settings: GatewayServerSettings) -> None:
 
 
 def select_binding(
-    settings: GatewayServerSettings, caller: ScopeContext, *, scenario: str = SCENARIO_OWN_ORDER_STATUS
+    settings: GatewayServerSettings,
+    caller: ScopeContext,
+    *,
+    scenario: str = SCENARIO_OWN_ORDER_STATUS,
+    entry: str = ENTRY_CONSUMER,
 ) -> ChatBinding | None:
     """这一条请求该用哪条绑定。**没有登记就是没有绑定**，不猜、不从别的开关推导。
 
@@ -478,7 +484,7 @@ def select_binding(
         if (
             binding.environment == environment
             and binding.tenant_id == tenant_id
-            and binding.entry == ENTRY_CONSUMER
+            and binding.entry == entry
             and binding.scenario == scenario
         ):
             return binding
@@ -487,7 +493,7 @@ def select_binding(
     #   * 被撤回过 ⇒ **拒绝**，绝不回落直读。
     # 撤回的目的是"停止交付"，而直读会照样给出一个答案——那是最难发现的一种失败：
     # 用户拿到了结果，只是它来自另一条路径。
-    if _retracted(settings, environment, tenant_id, scenario=scenario):
+    if _retracted(settings, environment, tenant_id, scenario=scenario, entry=entry):
         raise ChatRunUnavailable("CHAT_ROUTE_RETRACTED", "this version has been retracted", http_status=410)
     return None
 
@@ -498,6 +504,7 @@ def _retracted(
     tenant_id: str,
     *,
     scenario: str = SCENARIO_OWN_ORDER_STATUS,
+    entry: str = ENTRY_CONSUMER,
 ) -> bool:
     """这条（环境，入口，场景）在管理表里是不是 `retracted`。"""
     database = str(getattr(settings, "chat_route_bindings_file", "") or "")
@@ -509,7 +516,7 @@ def _retracted(
 
     try:
         row = ChatRouteBindingStore(Path(database).expanduser().absolute()).get(
-            environment, tenant_id, ENTRY_CONSUMER, scenario
+            environment, tenant_id, entry, scenario
         )
     except Exception as exc:  # noqa: BLE001 - 管理状态不可知，不能回落业务读取。
         raise ChatRunUnavailable(

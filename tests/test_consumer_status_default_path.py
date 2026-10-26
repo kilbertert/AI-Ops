@@ -401,10 +401,11 @@ def test_offline_drive_replay_passes_all_three_scenarios() -> None:
     assert payload["verdict"] == "pass", result.stdout
     assert payload["production_business_requests"] == 0
     scenarios = payload["scenarios"]
-    assert set(scenarios) == {"normal", "progressive", "failed"}
+    assert set(scenarios) == {"normal", "progressive", "failed", "node"}
     # 正常与逐步渲染：判据全过
     assert scenarios["normal"]["all_checks"] is True
     assert scenarios["progressive"]["all_checks"] is True
+    assert scenarios["node"]["all_checks"] is True
     # 错误 QA：判据必须至少有一项不过
     assert scenarios["failed"]["all_checks"] is False
     assert "get_completed" in scenarios["failed"]["failing"]

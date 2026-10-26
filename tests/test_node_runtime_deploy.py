@@ -43,6 +43,11 @@ def test_nginx_forwards_only_node_posts_with_original_credentials(tmp_path):
     seen = []
 
     class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):  # noqa: N802
+            seen.append((self.path, self.headers.get("Authorization"), None, b""))
+            self.send_response(204)
+            self.end_headers()
+
         def do_POST(self):  # noqa: N802
             seen.append(
                 (
@@ -105,6 +110,43 @@ def test_nginx_forwards_only_node_posts_with_original_credentials(tmp_path):
                 )
             assert error.value.code in (403, 404)
         assert len(seen) == 3
+        root = "/v1/internal/operator-runs/run_test"
+        for tail in (
+            "completions",
+            "tools/cpms_order_detail/authorization",
+            "tools/cpms_charging_samples/evidence",
+        ):
+            path = root + "/" + tail
+            with opener.open(
+                urllib.request.Request(
+                    f"http://127.0.0.1:{port}{path}",
+                    data=b"{}",
+                    headers={"Authorization": "Bearer node-token", "X-AI-Ops-Exec-Config": "manifest"},
+                ),
+                timeout=2,
+            ) as res:
+                assert res.status == 204
+            assert seen[-1] == (path, "Bearer node-token", "manifest", b"{}")
+        path = root + "/cpms/iotChargingDevice/getChargingMonitor/ORDER-1?current=1&size=50"
+        with opener.open(
+            urllib.request.Request(
+                f"http://127.0.0.1:{port}{path}", headers={"Authorization": "Bearer task-grant"}
+            ),
+            timeout=2,
+        ) as res:
+            assert res.status == 204
+        assert seen[-1] == (path, "Bearer task-grant", None, b"")
+        for path, method in [
+            (root + "/tools/shell/authorization", "POST"),
+            (root + "/cpms/chOrderInfo/stopCharging/ORDER-1", "GET"),
+            (root + "/cpms/chOrderInfo/getOrderInfoDetail/ORDER-1", "POST"),
+        ]:
+            with pytest.raises(urllib.error.HTTPError) as error:
+                opener.open(
+                    urllib.request.Request(f"http://127.0.0.1:{port}{path}", method=method), timeout=2
+                )
+            assert error.value.code in (403, 404)
+        assert len(seen) == 7
     finally:
         proc.terminate()
         proc.communicate(timeout=5)

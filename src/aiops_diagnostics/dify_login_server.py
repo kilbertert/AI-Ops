@@ -138,9 +138,12 @@ class LoginProxySettings:
     gateway_internal_token: str = field(repr=False, default="")
     inner_api_base_url: str = ""
     inner_api_key: str = field(repr=False, default="")
+    operator_trial_key: str = field(repr=False, default="")
 
     def __post_init__(self) -> None:
         assert_public_origin_is_https(self.public_origin)
+        if self.operator_trial_key and len(self.operator_trial_key) < 32:
+            raise ValueError("operator trial key must contain at least 32 characters")
         if not self.edit_permission:
             raise ValueError("AIOPS_LOGIN_PROXY_EDIT_PERMISSION is required")
         # 四个键成对（#883）：全配 ⇒ 按租户开户；全空 ⇒ 单一固定工作区。只配一半是
@@ -191,6 +194,7 @@ class LoginProxySettings:
             gateway_internal_token=os.environ.get("AIOPS_LOGIN_PROXY_GATEWAY_INTERNAL_TOKEN", "").strip(),
             inner_api_base_url=os.environ.get("AIOPS_LOGIN_PROXY_INNER_API_BASE_URL", "").strip().rstrip("/"),
             inner_api_key=os.environ.get("AIOPS_LOGIN_PROXY_INNER_API_KEY", "").strip(),
+            operator_trial_key=os.environ.get("AIOPS_LOGIN_PROXY_OPERATOR_TRIAL_KEY", "").strip(),
         )
 
 
@@ -285,6 +289,9 @@ class LoginProxyHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == PUBLISH_CHECK_ROUTE:
             self._publish_check()
+            return
+        if parsed.path == "/__aiops/internal/operator-token":
+            self._operator_token()
             return
         self._json(404, {"ok": False, "reason": "not found"})
 
@@ -456,7 +463,33 @@ class LoginProxyHandler(BaseHTTPRequestHandler):
             },
         )
 
+    def _operator_token(self) -> None:
+        import hmac
+
+        key = self.settings.operator_trial_key
+        presented = self.headers.get("Authorization", "").removeprefix("Bearer ")
+        if not key or not hmac.compare_digest(key.encode(), presented.encode()):
+            self._json(403, {"error": "refused"})
+            return
+        try:
+            body = self._read_json()
+            session = body.get("session", "")
+            result = self.service.operator_token(session) if isinstance(session, str) else None
+        except (ValueError, TypeError):
+            result = None
+        self._json(200 if result else 403, result or {"error": "login_required"})
+
     def _logout(self) -> None:
+        from http.cookies import SimpleCookie
+
+        cookies = SimpleCookie()
+        try:
+            cookies.load(self.headers.get("Cookie", ""))
+            for name in ("access_token", "__Host-access_token"):
+                if name in cookies:
+                    self.service.forget_operator_token(cookies[name].value)
+        except Exception:  # noqa: BLE001 - 畸形 cookie 不阻止退出。
+            pass
         # Dify 原生登出由前端调它自己的 `/console/api/logout`；代理这里只负责清掉
         # 我们下发的三枚 cookie，避免"退出后 cookie 还在"。
         #
@@ -579,6 +612,7 @@ def build_service(settings: LoginProxySettings) -> LoginService:
         owner_user_id=settings.owner_user_id,
         workspace_directory=directory,
         inner_api=inner,
+        retain_operator_token=bool(settings.operator_trial_key),
     )
 
 

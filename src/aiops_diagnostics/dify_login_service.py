@@ -373,6 +373,7 @@ class LoginService:
         #: 而不是在第一次登录时全部失败。
         workspace_directory: Any = None,
         inner_api: Any = None,
+        retain_operator_token: bool = False,
     ) -> None:
         self.company = company
         self.dify = dify
@@ -383,6 +384,9 @@ class LoginService:
         self.owner_user_id = owner_user_id
         self.workspace_directory = workspace_directory
         self.inner_api = inner_api
+        self.retain_operator_token = retain_operator_token
+        self._operator_tokens = {}
+        self._operator_token_lock = threading.RLock()
 
     def owner_session(self) -> ConsoleSession:
         return mint_console_session(
@@ -614,6 +618,20 @@ class LoginService:
             deployment_edition=self.dify.deployment_edition,
             access_expire_minutes=self.dify.access_expire_minutes,
         )
+        if self.retain_operator_token:
+            import hashlib
+            import time
+
+            with self._operator_token_lock:
+                now = time.time()
+                self._operator_tokens = {k: v for k, v in self._operator_tokens.items() if v[0] > now}
+                if len(self._operator_tokens) < 128:
+                    self._operator_tokens[hashlib.sha256(session.access_token.encode()).hexdigest()] = (
+                        now + 900,
+                        identity.token,
+                        identity.user_id,
+                        identity.tenant_id,
+                    )
         # 审计/日志只用**非敏感**摘要：没有公司密码、没有公司令牌、没有 Dify 会话。
         summary = {
             "company_user_id": identity.user_id,
@@ -628,6 +646,37 @@ class LoginService:
             len(permissions),
         )
         return session, summary
+
+    def operator_token(self, session: str):
+        import hashlib
+        import time
+
+        from aiops_diagnostics.dify_login_proxy import verify_console_jwt
+
+        claims = verify_console_jwt(session, self.dify.secret_key)
+        row = self.store.by_dify_account(str(claims.get("user_id", ""))) if claims else None
+        if row is None or row.get("status") != STATUS_ACTIVE:
+            return None
+        key = hashlib.sha256(session.encode()).hexdigest()
+        with self._operator_token_lock:
+            now = time.time()
+            self._operator_tokens = {k: v for k, v in self._operator_tokens.items() if v[0] > now}
+            cached = self._operator_tokens.get(key)
+            if (
+                cached is None
+                or cached[0] <= time.time()
+                or cached[2] != row["company_user_id"]
+                or cached[3] != row["tenant_id"]
+            ):
+                self._operator_tokens.pop(key, None)
+                return None
+            return {"token": cached[1], "user_id": cached[2], "tenant_id": cached[3]}
+
+    def forget_operator_token(self, session):
+        import hashlib
+
+        with self._operator_token_lock:
+            self._operator_tokens.pop(hashlib.sha256(session.encode()).hexdigest(), None)
 
 
 def _workspace_refusal(tenant_id: str, exc: Any) -> str:

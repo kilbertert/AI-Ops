@@ -88,6 +88,12 @@ def frozen_settings(target):
 
 
 def route_scenario(settings, binding):
+    if binding.business_entry == "operator":
+        from aiops_diagnostics.node_publication import target_for as node_target
+
+        target = node_target(settings, binding)
+        if target is not None:
+            return target.scenario
     if settings.chat_route_bindings_file:
         rows = [
             row

@@ -45,6 +45,7 @@ HANDOFFS = {
     # 它是异步的（POST 立即返回），所以答案只能由后台写在终态。
     "start_chat_order_qa": "conversation_turn_no",
     "start_consumer_chatflow": "conversation_turn_no",
+    "start_operator_cpms": "conversation_turn",
 }
 
 
