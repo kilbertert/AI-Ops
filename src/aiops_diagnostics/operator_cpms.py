@@ -16,6 +16,7 @@ from aiops_diagnostics.agent_runs import AgentRunConfig, SnailDispatcher
 from aiops_diagnostics.async_job_lifecycle import QUESTION
 from aiops_diagnostics.bounded_http import ErrorMapping, RequestSpec, request_json
 from aiops_diagnostics.query_scope import resolve_query_scope
+from aiops_diagnostics.scope_context import is_tenant_level_account
 
 SCENARIO = "operator_order_diagnosis"
 PREFIX = "operator-cpms-node:"
@@ -30,6 +31,17 @@ class OperatorRefused(RuntimeError):
     pass
 
 
+def operator_scope(caller):
+    if not caller.subject.b_user_id or caller.delegated or caller.data_scope.type not in {"all", "organ"}:
+        raise OperatorRefused("OPERATOR_SITE_SCOPE_REQUIRED")
+    scope = resolve_query_scope(caller)
+    if scope.site_ids == () or (
+        scope.site_ids is None and not is_tenant_level_account(caller.subject.user_type)
+    ):
+        raise OperatorRefused("OPERATOR_SITE_SCOPE_REQUIRED")
+    return scope
+
+
 @dataclass(repr=False)
 class ActiveTask:
     caller: object
@@ -38,6 +50,7 @@ class ActiveTask:
     bearer: str
     base_url: str
     proxy_url: str
+    order_site_id: str
     grant: str = field(default_factory=lambda: secrets.token_urlsafe(32))
     evidence: dict = field(default_factory=dict)
     delivered: set = field(default_factory=set)
@@ -97,13 +110,10 @@ class OperatorCpms:
 
         from aiops_diagnostics.scope_context import DataScope
 
+        if operator_scope(caller).site_ids is None:
+            return caller
         directory = getattr(self.context.runtime, "_trial_operator_scope", None)
-        if (
-            directory is None
-            or not caller.subject.b_user_id
-            or caller.delegated
-            or caller.data_scope.type != "organ"
-        ):
+        if directory is None:
             raise OperatorRefused("OPERATOR_SITE_SCOPE_REQUIRED")
         try:
             scope = directory.site_scope_by_b_user_id(caller.subject.b_user_id, caller.effective_tenant_id)
@@ -138,14 +148,17 @@ class OperatorCpms:
         )
         if target is None:
             raise OperatorRefused("OPERATOR_TARGET_MISSING")
+        body = cpms_get(
+            target.cpms_base_url + PATHS[TOOL_NAMES[0]] + run.order_no, bearer, caller.effective_tenant_id
+        )
         validate_body(
-            cpms_get(
-                target.cpms_base_url + PATHS[TOOL_NAMES[0]] + run.order_no, bearer, caller.effective_tenant_id
-            ),
+            body,
             caller,
             run.order_no,
             TOOL_NAMES[0],
         )
+        if body["data"]["siteId"] != run.snapshot["evidence"][TOOL_NAMES[0]]["data"]["siteId"]:
+            raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
         refreshed = self.refresh_scope(caller)
         if refreshed.scope_fingerprint != caller.scope_fingerprint:
             raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
@@ -169,9 +182,7 @@ class OperatorCpms:
         conversation_turn = registration.conversation_turn
         if not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", order):
             raise OperatorRefused("ORDER_INVALID")
-        scope = resolve_query_scope(caller)
-        if not scope.site_ids:
-            raise OperatorRefused("OPERATOR_SITE_SCOPE_REQUIRED")
+        operator_scope(caller)
         current = authorize()
         if current.scope_fingerprint != caller.scope_fingerprint:
             raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
@@ -183,12 +194,9 @@ class OperatorCpms:
         if TOOL_NAMES[0] not in manifest.tool_names or not set(manifest.tool_names).issubset(TOOL_NAMES):
             raise OperatorRefused("OPERATOR_DETAIL_TOOL_DISABLED")
         # 查询只用于确认当前订单归属，不把它冒充节点本轮取得的诊断证据。
-        validate_body(
-            cpms_get(base + PATHS[TOOL_NAMES[0]] + order, bearer, caller.effective_tenant_id),
-            current,
-            order,
-            TOOL_NAMES[0],
-        )
+        body = cpms_get(base + PATHS[TOOL_NAMES[0]] + order, bearer, caller.effective_tenant_id)
+        validate_body(body, current, order, TOOL_NAMES[0])
+        order_site_id = body["data"]["siteId"]
         current = authorize()
         if current.scope_fingerprint != caller.scope_fingerprint:
             raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
@@ -228,6 +236,7 @@ class OperatorCpms:
                 bearer,
                 base,
                 proxy,
+                order_site_id,
                 conversation_turn=conversation_turn,
                 question=question,
                 language=language,
@@ -352,16 +361,13 @@ class OperatorCpms:
         task, run, _ = self._current(run_id, node_token=token, manifest=manifest, tool=tool)
         if run.state == "issued" and not self.context.agent_run_store.claim(run_id):
             raise OperatorRefused("OPERATOR_CLAIM_CONFLICT")
-        scope = resolve_query_scope(task.caller)
-        if not scope.site_ids:
-            raise OperatorRefused("OPERATOR_SITE_SCOPE_REQUIRED")
         return {
             "run_id": run_id,
             "tool": tool,
             "manifest_id": run.expected_agent_version,
             "authorization_id": hashlib.sha256(task.grant.encode()).hexdigest(),
             "tenant_id": task.caller.effective_tenant_id,
-            "site_ids": list(scope.site_ids),
+            "site_ids": [task.order_site_id],
             "order_no": run.order_no,
             "base_url": task.proxy_url + "/v1/internal/operator-runs/" + run_id + "/cpms",
             "bearer": task.grant,
@@ -391,6 +397,9 @@ class OperatorCpms:
                 task.caller.effective_tenant_id,
             )
             validate_body(body, task.caller, run.order_no, tool)
+            rows = [body["data"]["chOrderInfoModel"]] if tool == TOOL_NAMES[0] else body["data"]["records"]
+            if any(row["siteId"] != task.order_site_id for row in rows):
+                raise OperatorRefused("CPMS_SCOPE_MISMATCH")
             self._current(run_id, tool=tool)
             # 只保存裁剪后的业务证据；不记录公司令牌和原响应中的个人信息。
             task.evidence[tool] = project_evidence(body, run.order_no, tool)
@@ -575,9 +584,9 @@ class OperatorCpms:
             )
         ):
             raise OperatorRefused("OPERATOR_NODE_CHANGED")
-        scope = resolve_query_scope(caller)
+        scope = operator_scope(caller)
         detail = run.snapshot["evidence"][TOOL_NAMES[0]]["data"]
-        if not scope.site_ids or detail["siteId"] not in scope.site_ids:
+        if scope.site_ids is not None and detail["siteId"] not in scope.site_ids:
             raise OperatorRefused("OPERATOR_SCOPE_CHANGED")
         answer = run.snapshot["answer"]
         validate_answer(answer, run.snapshot["evidence"])
@@ -660,7 +669,7 @@ def validate_body(body, caller, order, tool):
     ):
         raise OperatorRefused("CPMS_INVALID_RESPONSE")
     data = body["data"]
-    scope = resolve_query_scope(caller)
+    scope = operator_scope(caller)
     rows = [data.get("chOrderInfoModel")] if tool == TOOL_NAMES[0] else data.get("records")
     if not isinstance(rows, list) or len(rows) > 50:
         raise OperatorRefused("CPMS_INVALID_RESPONSE")
@@ -669,8 +678,9 @@ def validate_body(body, caller, order, tool):
             not isinstance(row, dict)
             or row.get("orderNo") != order
             or row.get("tenantId") != caller.effective_tenant_id
-            or not scope.site_ids
-            or row.get("siteId") not in scope.site_ids
+            or not isinstance(row.get("siteId"), str)
+            or not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", row["siteId"])
+            or (scope.site_ids is not None and row["siteId"] not in scope.site_ids)
         ):
             raise OperatorRefused("CPMS_SCOPE_MISMATCH")
     if tool == TOOL_NAMES[0]:

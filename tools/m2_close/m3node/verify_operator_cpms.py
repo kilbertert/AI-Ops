@@ -15,7 +15,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(ROOT / "tests"))
 from pytest import MonkeyPatch  # noqa: E402
-from test_operator_cpms import HEADERS, environment, request  # noqa: E402
+from test_operator_cpms import HEADERS, environment, request, tenant_owner  # noqa: E402
 
 from aiops_diagnostics import operator_cpms  # noqa: E402
 
@@ -80,6 +80,7 @@ class Model(BaseHTTPRequestHandler):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", required=True)
+    parser.add_argument("--tenant-owner", action="store_true", help="使用租户主账号的合成身份")
     args = parser.parse_args()
     out = Path(args.out).absolute()
     out.mkdir(parents=True, exist_ok=True)
@@ -144,6 +145,8 @@ def main():
             MonkeyPatch.context() as patch,
             environment(Path(root), patch) as f,
         ):
+            if args.tenant_owner:
+                f["resolver"].current = tenant_owner()
             raw = json.loads(f["manifest"].read_text())
             raw["model"] = {
                 "provider_key": "openai-compatible",
@@ -283,6 +286,7 @@ def main():
                 {
                     "cases": cases,
                     "model_calls": len(Model.calls),
+                    "identity": "tenant-owner" if args.tenant_owner else "site-employee",
                     "scope": "real Java and Gateway; synthetic upstreams",
                 },
                 ensure_ascii=False,

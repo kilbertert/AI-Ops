@@ -29,6 +29,8 @@
 
 新节点入口只接受个人公司令牌及 `X-Business-Entry: operator`，携带旧 `X-Third-Session` / `third-session` 时在签发或历史正文回读前拒绝，不能拿共享服务令牌访问 CPMS。历史回读复用既有 `assistant_identity` 的诊断认证，再核对当前站点与 CPMS 订单归属。公司解析器当前没有独立诊断权限码，`aiops:diagnoses:write` 是解析器接口参数，不是已核验的公司授权码；本轮不增加或虚构公司权限。可单独撤销该能力的解析器必须在回读时同样拒绝，真实公司边界仍需 LIVE-01 验证。
 
+租户主账号沿用公司的 `all` 范围，员工仍按当前站点集合；员工空集合、代查与主体类型不符的 `all` 均拒绝。签发时先用 CPMS 核对租户和订单，将该订单的一个站点冻结进节点凭据；节点不持有全租户站点通配权限。取证、完成和回读中订单站点变化均拒绝，不交旧站点报告。
+
 节点工具、Gateway 授权签发、Dify 发布和 App 页面是不同的交付项；只有实际接通并通过对应验收才计完成。旧工具目录及运行时在新链通过并核对实际引用后退役，历史记录保留。
 
 ## 配置与复跑
@@ -36,6 +38,10 @@
 沿用 `CHAT_NODE_TARGETS_FILE`，管家行增加 `entry: operator`、`cpms_base_url`（公司 CPMS HTTPS 基址）、`proxy_base_url`（节点可达的 Gateway HTTPS 基址）。节点清单模板仅包含 `cpms_order_detail`、`cpms_charging_samples` 的真实定义，见 Java 工具；不在模板或 Dify 配置中填写公司令牌。业务入口为原 `POST/GET /v1/assistant/questions`，必须是 operator 身份与显式订单。
 
 控制台试用额外配置：Gateway 的 `AIOPS_GATEWAY_OPERATOR_TRIAL_LOGIN_URL` 与 `AIOPS_GATEWAY_OPERATOR_TRIAL_KEY`；登录代理的 `AIOPS_LOGIN_PROXY_OPERATOR_TRIAL_KEY` 使用同一把独立高熵密钥，至少32字符。该链只在配置后开启，登录代理最多在内存保留128个近期会话对应公司令牌，15分钟到期；到期访问时清理，重启后丢失。内部令牌交换路径仅供已认证 Gateway，经已批准 HTTPS 转发暴露，不向浏览器返回令牌。
+
+HTTPS server 可包含 [operator-token.conf.template](../../../ops/dify-login-proxy/operator-token.conf.template) 渲染件：仅替换 `AIOPS_OPERATOR_GATEWAY_SOURCE_IP` 为经私有主机记录核对的单一网关出口 IP，保留 nginx 自有变量；不要包含到明文控制台入口。按原始 TCP 对端限制来源，不采信 `X-Real-IP` / `X-Forwarded-For`；允许来源仍需代理核验独立密钥和真实会话。先 `nginx -t` 再 reload，并分别从网关、非网关来源验证。恢复删除本次精确 include、回滚配置键，不覆盖问答库。
+
+管家 App 密码登录与 Dify 运营登录分开验收。公司管家客户端使用自己的 `tenant-app` 密码流程；不能把 Dify 页的图形验证码要求套到它，也不能自行给 Dify 会话缓存注入公司令牌。
 
 运营正常登录后，原试运行按钮携带其 Dify 会话交给 Gateway；草稿清单仅冻进试用 run，正式指针不变。无近期登录凭据时明确拒绝，不运行旧 Python 试用。发布与历史恢复继续使用原按钮；全部关闭工具能发布为空清单，新诊断拒绝。
 

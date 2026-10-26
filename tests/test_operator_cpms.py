@@ -4,6 +4,7 @@ import json
 import threading
 import time
 from contextlib import contextmanager
+from dataclasses import replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 
@@ -60,7 +61,7 @@ class Directory:
 
 @contextmanager
 def environment(tmp_path, monkeypatch):
-    state = {"calls": [], "site": "SITE-1", "hook": None}
+    state = {"calls": [], "site": "SITE-1", "tenant": "TENANT-A", "hook": None}
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
@@ -70,7 +71,7 @@ def environment(tmp_path, monkeypatch):
             state["calls"].append((self.path, self.headers.get("Authorization")))
             row = {
                 "orderNo": ORDER,
-                "tenantId": "TENANT-A",
+                "tenantId": state["tenant"],
                 "siteId": state["site"],
                 "status": 2,
                 "stoppedReasonContent": "Communication interrupted",
@@ -235,6 +236,7 @@ def node(f, run_id, *, tools=operator_cpms.TOOL_NAMES, before_complete=None):
         response = client.post(path + "/authorization", headers=head, json={})
         assert response.status_code == 200, response.text
         grant = response.json()
+        assert grant["site_ids"] == ["SITE-1"]
         url = grant["base_url"] + operator_cpms.PATHS[tool] + ORDER
         if tool == operator_cpms.TOOL_NAMES[1]:
             url += "?current=1&size=50"
@@ -616,3 +618,91 @@ def test_readback_refuses_shared_session_before_cpms(operator, monkeypatch, head
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "OPERATOR_COMPANY_TOKEN_REQUIRED"
     assert len(f["state"]["calls"]) == before
+
+
+def tenant_owner():
+    original = scope()
+    owner = replace(original.subject, user_type="1")
+    return replace(
+        original, caller=owner, subject=owner, data_scope=DataScope(type="all"), scope_fingerprint=""
+    )
+
+
+def test_tenant_owner_uses_only_selected_orders_site(operator, monkeypatch):
+    f = operator
+    f["resolver"].current = tenant_owner()
+    monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", lambda _, cfg, run: node(f, run))
+    submitted = request(f["client"])
+    assert submitted.status_code == 202, submitted.text
+    final = terminal(f, submitted.json()["qa_id"])
+    assert final.status_code == 200 and final.json()["status"] == "completed", final.text
+    assert len(f["state"]["calls"]) == 5
+    f["resolver"].current = replace(
+        tenant_owner(), subject=scope().subject, caller=scope().caller, scope_fingerprint=""
+    )
+    refused = f["client"].get("/v1/assistant/questions/" + submitted.json()["qa_id"], headers=HEADERS)
+    assert refused.status_code == 404
+
+
+def test_owner_readback_refuses_changed_order_site(operator, monkeypatch):
+    f = operator
+    f["resolver"].current = tenant_owner()
+    monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", lambda _, cfg, run: node(f, run))
+    qa = request(f["client"]).json()["qa_id"]
+    assert terminal(f, qa).json()["status"] == "completed"
+    snapshot = f["ctx"].agent_run_store.by_qa(qa).snapshot
+    f["state"]["site"] = "SITE-OTHER"
+    refused = f["client"].get("/v1/assistant/questions/" + qa, headers=HEADERS)
+    assert refused.status_code == 403 and refused.json()["error"]["code"] == "OPERATOR_SCOPE_CHANGED"
+    assert f["ctx"].agent_run_store.by_qa(qa).snapshot == snapshot
+
+
+def test_employee_with_several_sites_gets_one_site_in_task_grant(operator, monkeypatch):
+    f = operator
+    f["resolver"].current = replace(
+        scope(), data_scope=DataScope(type="organ", site_ids=("SITE-1", "SITE-OTHER")), scope_fingerprint=""
+    )
+    monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", lambda _, cfg, run: node(f, run))
+    submitted = request(f["client"])
+    assert submitted.status_code == 202
+    assert terminal(f, submitted.json()["qa_id"]).json()["status"] == "completed"
+
+
+@pytest.mark.parametrize("fault", ["other-tenant", "site-changed", "owner-demoted"])
+def test_tenant_owner_does_not_relax_task_scope(operator, monkeypatch, fault):
+    f = operator
+    f["resolver"].current = tenant_owner()
+    if fault == "other-tenant":
+        f["state"]["tenant"] = "TENANT-B"
+
+    def dispatch(_, cfg, run):
+        if fault == "site-changed":
+            f["state"]["site"] = "SITE-OTHER"
+        if fault == "owner-demoted":
+            f["resolver"].current = scope("SITE-OTHER")
+        return node(f, run)
+
+    monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
+    submitted = request(f["client"])
+    if fault == "other-tenant":
+        assert submitted.status_code == 403 and submitted.json()["error"]["code"] == "CPMS_SCOPE_MISMATCH"
+        assert f["ctx"].operator_cpms.tasks == {}
+    else:
+        assert submitted.status_code == 202, submitted.text
+        qa = submitted.json()["qa_id"]
+        future = f["ctx"].runtime._futures.get(qa)
+        if future:
+            future.result(timeout=5)
+        row = f["ctx"].store.get_assistant_question(qa, tenant_owner().scope_fingerprint)
+        assert row["status"] == "failed" and row["result"] is None
+
+
+@pytest.mark.parametrize(
+    "data_scope", [DataScope(type="all"), DataScope(type="organ"), DataScope(type="self")]
+)
+def test_non_owner_cannot_use_empty_or_all_scope(operator, data_scope):
+    f = operator
+    f["resolver"].current = replace(scope(), data_scope=data_scope, scope_fingerprint="")
+    submitted = request(f["client"])
+    assert submitted.status_code == 403, submitted.text
+    assert not f["state"]["calls"] and not f["ctx"].operator_cpms.tasks

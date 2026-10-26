@@ -1,0 +1,15 @@
+# 仅包含到HTTPS server；来源地址由私有部署记录渲染，不放到明文10008入口。
+location = /__aiops/internal/operator-token {
+    # 原始TCP对端不受继承的real_ip_header或请求自带转发头影响。
+    if ($realip_remote_addr != "${AIOPS_OPERATOR_GATEWAY_SOURCE_IP}") { return 403; }
+    limit_except POST { deny all; }
+    client_max_body_size 8k;
+    proxy_pass http://127.0.0.1:10119;
+    proxy_set_header Authorization $http_authorization;
+    proxy_set_header Content-Type $http_content_type;
+    proxy_read_timeout 10s;
+    proxy_buffering off;
+    proxy_cache off;
+    add_header Cache-Control no-store always;
+    access_log off;
+}
