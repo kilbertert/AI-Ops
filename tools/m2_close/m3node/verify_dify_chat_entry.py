@@ -271,6 +271,7 @@ def _compose(env: dict[str, str], *args: str, timeout: int = 900) -> subprocess.
             "compose",
             "-f",
             str(DIFY_DIR / "docker-compose.acceptance.yaml"),
+            *(["-f", env["DIFY_TEST_COMPOSE_OVERRIDE"]] if env.get("DIFY_TEST_COMPOSE_OVERRIDE") else []),
             "--env-file",
             str(Path(env["DIFY_TEST_ROOT"]) / "dify.env"),
             "-p",

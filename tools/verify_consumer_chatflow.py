@@ -170,6 +170,46 @@ def isolated(args):
         key = root / "volumes/plugin_daemon/catalogue-public.pem"
         key.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(args.plugin_public_key, key)
+        # 与现役相同的窄范围权限补丁；浏览器验收必须使用editor，而非owner。
+        import hashlib
+
+        original = subprocess.check_output(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--entrypoint",
+                "cat",
+                "langgenius/dify-api:1.17.1",
+                "/app/api/controllers/console/workspace/plugin.py",
+            ]
+        )
+        assert (
+            hashlib.sha256(original).hexdigest()
+            == "53367ae76ce6c6fd171308ae8adc4bba6ee7b29100fc26f4f478a3d991dc4536"
+        )
+        patched = root / "controllers/console/workspace/plugin.py"
+        patched.parent.mkdir(parents=True)
+        patched.write_bytes(original)
+        subprocess.run(
+            ["patch", "-p1", "--fuzz=0", "--batch", "-d", str(root)],
+            input=(
+                ROOT / "deploy/dify-36/patches/1.17.1/08-consumer-knowledge-editor-options.patch"
+            ).read_bytes(),
+            check=True,
+            capture_output=True,
+        )
+        patched.chmod(0o644)
+        (root / "editor-override.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "services": {
+                        name: {"volumes": [f"{patched}:/app/api/controllers/console/workspace/plugin.py:ro"]}
+                        for name in ("api", "worker")
+                    }
+                }
+            )
+        )
     name = "consumer-chatflow-" + secrets.token_hex(4)
     command = [
         "docker",
@@ -947,6 +987,7 @@ def main():
         network="unused",
     )
     if (root / "knowledge.signed.difypkg").exists():
+        env["DIFY_TEST_COMPOSE_OVERRIDE"] = str(root / "editor-override.yaml")
         with (root / "dify.env").open("a") as file:
             file.write(
                 "FORCE_VERIFYING_SIGNATURE=true\nTHIRD_PARTY_SIGNATURE_VERIFICATION_ENABLED=true\nTHIRD_PARTY_SIGNATURE_VERIFICATION_PUBLIC_KEYS=/app/storage/catalogue-public.pem\n"

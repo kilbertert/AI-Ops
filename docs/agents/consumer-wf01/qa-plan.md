@@ -64,3 +64,8 @@ KB-PICKER：隔离真Dify/Gateway、官方插件SDK、合成RAGFlow两库A/B及�
 原节点配置面实际打开多选框，选择B保存，原试用只读B；未发布App读A，发布后读B，恢复读A。
 核Dify工具执行、后端实际库ID/调用次数，空库/异租户/删除库/重放旧凭据/不一致参数拒绝。
 最后在现役应用和原App核同一操作；原发布目标文件摘要不变；只清本次临时栈/应用。
+
+KB-PICKER-EDITOR：原版Dify1.17.1以真实Account/editor角色调用dynamic-options，重现403同文案、目录零调用。
+修复后editor/owner/admin可读取本节点，normal/dataset_operator拒绝；错provider/action/parameter、私有或跨工作区
+credential_id拒绝。隔离栈将浏览器账号设为editor，再完整点击选库/保存/试用/发布/恢复，证明不依赖owner。
+线上只读核验现有editor的角色和目录返回；不升级账号角色、不改发布图。结束清理隔离栈。
