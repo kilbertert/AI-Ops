@@ -271,3 +271,45 @@ def test_only_cited_document_media_and_original_reference_are_delivered():
     assert [b["kind"] for b in result["blocks"]] == ["text", "reference", "video"]
     assert result["blocks"][1]["reference_id"] == "real-chunk-1"
     assert "资料B" not in str(result)
+
+
+def test_answer_may_repeat_only_links_from_its_cited_document():
+    from aiops_diagnostics.consumer_documents import answer_selection
+
+    video = "https://www.youtube.com/shorts/t57PMqSw7iE"
+    context = {
+        "mode": "documents",
+        "status": "found",
+        "sources": [
+            {
+                "reference_id": "source-1",
+                "retrieved_reference_id": "real-chunk",
+                "title": "资料",
+                "content": "观看：" + video,
+                "media": [],
+            },
+            {
+                "reference_id": "source-2",
+                "retrieved_reference_id": "other-chunk",
+                "title": "其他",
+                "content": "其他链接：https://example.org/other",
+                "media": [],
+            },
+        ],
+    }
+    value = {"kind": "knowledge", "answer": "观看：[视频](" + video + ")", "reference_ids": ["source-1"]}
+    _, answer = answer_selection(json.dumps(value), context)
+    assert video in answer["blocks"][0]["text"]
+    for prose in ["观看 (" + video + ")", "观看（" + video + "）"]:
+        _, answer = answer_selection(json.dumps({**value, "answer": prose}), context)
+        assert video in answer["blocks"][0]["text"]
+    for url in [
+        video + "?invented=1",
+        "https://example.org/other",
+        "http://www.youtube.com/shorts/t57PMqSw7iE",
+        video + "(unverified)",
+        "https://www.youtube.com(@evil.example)/shorts/t57PMqSw7iE",
+        "[视频](" + video + "(unverified))",
+    ]:
+        with pytest.raises(ChatRunUnavailable):
+            answer_selection(json.dumps({**value, "answer": url}), context)
