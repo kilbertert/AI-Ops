@@ -362,7 +362,9 @@ def final_answer(raw, context, language, content):
     return answer
 
 
-def callback_context(runtime, token, *, require_result, read_snapshot, image_text="", capability=None):
+def callback_context(
+    runtime, token, *, require_result, read_snapshot, image_text="", capability=None, knowledge_base_ids=None
+):
     from aiops_diagnostics import chat_data_grant, chat_execution
     from aiops_diagnostics.agent_runs import scope_from_json
     from aiops_diagnostics.dify_run_store import still_valid
@@ -398,10 +400,20 @@ def callback_context(runtime, token, *, require_result, read_snapshot, image_tex
     ):
         raise ChatRunUnavailable("CHATFLOW_BINDING_CHANGED", "knowledge binding changed", http_status=403)
     expected = run.data_kind if run.order_no else "knowledge"
-    if (binding.callback_version == 2 and capability != expected) or (
+    if (binding.callback_version >= 2 and capability != expected) or (
         binding.callback_version == 1 and capability is not None
     ):
         raise ChatRunUnavailable("GRANT_CAPABILITY_MISMATCH", "本轮授权与取数节点不一致", http_status=403)
+
+    if binding.callback_version == 3 and expected == "knowledge":
+        if knowledge_base_ids != list(binding.knowledge_base_ids):
+            raise ChatRunUnavailable(
+                "KNOWLEDGE_SELECTION_MISMATCH", "节点选库与本次发布版本不一致", http_status=403
+            )
+    elif knowledge_base_ids is not None:
+        raise ChatRunUnavailable(
+            "KNOWLEDGE_SELECTION_UNEXPECTED", "此版本不接受节点选库参数", http_status=400
+        )
 
     def require_current():
         if trial:
@@ -418,6 +430,10 @@ def callback_context(runtime, token, *, require_result, read_snapshot, image_tex
     require_current()
 
     def valid():
+        if not run.order_no:
+            from aiops_diagnostics.consumer_knowledge_selection import require_available
+
+            require_available(runtime, caller, binding)
         if run.order_no:
             enabled = binding.live_billing_record if run.data_kind == "billing" else binding.live_order_status
             if not enabled:

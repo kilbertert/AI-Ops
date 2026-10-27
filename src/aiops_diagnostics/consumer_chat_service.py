@@ -227,7 +227,7 @@ def execute(runtime, caller, qa, question, binding, upstream, registration, lang
                 "has_photo": "yes" if uploaded else "no",
                 **(
                     {"data_kind": latest.data_kind if latest.order_no else "knowledge"}
-                    if binding.callback_version == 2
+                    if binding.callback_version >= 2
                     else {}
                 ),
                 **({"data_grant": token} if token else {}),
@@ -236,6 +236,10 @@ def execute(runtime, caller, qa, question, binding, upstream, registration, lang
             conversation_id=upstream,
             on_started=started,
         )
+        if not latest.order_no:
+            from aiops_diagnostics.consumer_knowledge_selection import require_available
+
+            require_available(runtime, caller, binding)
         current(runtime, caller, binding)
         run = store.get(run_id)
         if (
@@ -318,6 +322,10 @@ def require_result(runtime, caller, qa):
         )
     if run.order_no:
         runtime._require_chat_order_visible(caller, run.order_no)
+    else:
+        from aiops_diagnostics.consumer_knowledge_selection import require_available
+
+        require_available(runtime, caller, binding)
     latest = runtime.dify_run_store.get(run.run_id)
     if latest is None or latest.state != "succeeded" or not still_valid(latest):
         raise chat_execution.ChatRunUnavailable(

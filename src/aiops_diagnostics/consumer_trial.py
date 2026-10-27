@@ -104,6 +104,10 @@ class ConsumerTrial:
             ):
                 raise ChatRunUnavailable("CHATFLOW_LIVE_DISABLED", message("disabled", language))
             runtime._require_chat_order_visible(scope, order)
+            if not live:
+                from aiops_diagnostics.consumer_knowledge_selection import require_available
+
+                require_available(runtime, scope, self.binding)
             self.require_current(runtime.gateway_settings)
             token, grant = grants.issue(
                 scope_fingerprint=scope.scope_fingerprint,
@@ -157,7 +161,7 @@ class ConsumerTrial:
                     "data_grant": token,
                     **(
                         {"data_kind": kind if live else "knowledge"}
-                        if self.binding.callback_version == 2
+                        if self.binding.callback_version >= 2
                         else {}
                     ),
                 },
