@@ -67,3 +67,15 @@ uv run python tools/upgrade_consumer_flow.py <原草稿.yml> --gateway <可信�
 核本轮库ID/引用/模型输入无凭据，且服务器发布目标文件摘要未变。使用原App登录验收方法见live-release.md。
 撤回和恢复用既有运营入口；异常恢复原发布版本，再恢复草稿；不覆盖业务数据库，不删运行审计。
 若旧版本仍在用插件，不能先卸载插件；先确认恢复原HTTP版本后再回退插件宿主配置。
+
+## 镜像与浏览器核验补充
+
+构建机启用containerd镜像存储时，`docker image inspect .Id`可能是OCI index摘要；服务端经典Docker返回config摘要。
+通过`docker save`包的manifest.json定位Config并计算SHA256，与服务端Image ID比较；同时核RootFS层和包摘要，
+不要只比较镜像标签，也不要将不同种类的摘要不相等判成制品漂移。
+
+编辑器有自动保存节流：浏览器改选后应等待携带目标库的草稿POST200，再GET草稿核库；不能固定等2秒就关闭页面。
+授权/图片线索使用生成工具的固定mixed模板，直接variable引用会被现版本编辑器清空。
+
+浏览器隧道用dev-host启动时，timeout/ssh可能另建进程组；清理应核子进程和本地端口，不能只kill包装shell的进程组。
+只终止本次记录的PID及子进程，避免影响其他会话。现役控制台需要正常公司登录；维护API凭据不等于浏览器个人登录态。
