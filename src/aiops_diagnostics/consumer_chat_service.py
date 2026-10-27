@@ -225,6 +225,11 @@ def execute(runtime, caller, qa, question, binding, upstream, registration, lang
             inputs={
                 "language": language,
                 "has_photo": "yes" if uploaded else "no",
+                **(
+                    {"data_kind": latest.data_kind if latest.order_no else "knowledge"}
+                    if binding.callback_version == 2
+                    else {}
+                ),
                 **({"data_grant": token} if token else {}),
             },
             **({"photo_id": uploaded} if uploaded else {}),

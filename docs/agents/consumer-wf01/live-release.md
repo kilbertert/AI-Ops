@@ -63,3 +63,26 @@ Dify运行ID对应模型节点usage可计量已观察调用；凭据验证调用
 `chat_dify_runs`、真实workflow_run_id及live_snapshot；用同主体SQL和CPMS独立对照订单与状态。
 等待最后一轮快照自然超过180秒，旧GET应410；“还是不行”应提示重述；随后明确查最新单
 应在原conversation_id成功。不要改线上数据库/时间制造过期。结束关闭本次浏览器与隧道。
+
+## 独立CPMS节点迁移
+
+1. 从已合并修订部署Gateway；旧发布版callback_version缺省1，仍走原回调。只读核对health、模块摘要、配置摘要。
+2. 导出当前草稿与确切已发布workflow_id的DSL，记录路由revision/version。两份都保存为0600私有原件。
+   使用`tools/upgrade_consumer_flow.py`从源草稿生成候选，保留模型/提示词/图片特性。并发编辑后不覆盖：
+   写入前重新导出与原草稿比对，使用GET `/console/api/apps/{app_id}/workflows/draft`取得的hash提交。
+3. API域名同步已合并`ops/nginx/dify-consumer-callback.conf`制品；原文件先备份，检查nginx再reload。
+   新三个路径只允许POST、保留data_grant、清空业务身份头。失败恢复原文件再检查/reload。
+4. Dify草稿POST只提交graph/features/hash/conversation_variables，以及
+   `environment_variable_patch: {environment_variables: [...], deleted_environment_variable_ids: []}`。
+   environment_variables不能直接放顶层；1.17.1会拒绝。原生保存不切Gateway正式版本。
+5. 从既有试用入口选择可见订单，确认“看看选定这单的情况”到临时应用的CPMS节点；权限按运营身份，
+   不把选单替换成模拟消费者。试用失败不能发布。随后调用既有“发布到AI-Ops”，核新workflow_id、
+   callback_version=2、开关与revision。不要直接写库推进指针。
+6. 原H5三问题验证：知识指导、本人状态、账务记录。每QA读取自己的workflow_run_id，并从Dify
+   workflow_node_executions核对仅对应knowledge/cpms_status/cpms_billing一个取数节点成功；
+   私有保存节点日志，公开只留计数，不泄露inputs中的凭据。
+7. 错节点/越权/取消/到期/停用与开关发布恢复先在隔离栈验证，避免对真实用户停服实验。
+   线上失败用既有restore接口恢复原版本，并按保存前hash恢复原草稿；保留新作业审计，不整库回滚。
+
+需要固定源草稿之外的最新编辑时先重新比对，不用旧导出覆盖产品进行中的修改。临时应用验收结束删除，
+原应用、原发布版本、备份和节点恢复路径继续保留。

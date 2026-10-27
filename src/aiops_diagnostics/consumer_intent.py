@@ -23,6 +23,11 @@ INTENTS = (
     "unsupported_live",
     "clarify",
 )
+TRIAL_MESSAGES = {
+    "CHATFLOW_LIVE_DISABLED": "disabled",
+    "TRIAL_ORDER_REQUIRED": "trial_order",
+    "TRIAL_CLARIFICATION_REQUIRED": "clarify",
+}
 REFERENCES = ("none", "latest", "explicit", "previous", "unclear")
 SCHEMA = {
     "type": "object",
@@ -161,6 +166,11 @@ def message(code, language):
             "请通过 App 对应入口操作，或联系官方客服。",
             "I can provide read-only information and guidance, but cannot issue refunds, stop charging "
             "or change orders. Use the app’s relevant option or official support.",
+        ),
+        "trial_order": (
+            "试用只查询页面选定的订单。请问“查询选定订单的状态”，或返回页面重新选择订单。",
+            "Trials only query the order selected on the page. Ask for the selected order’s status, "
+            "or select a different order on the page.",
         ),
         "order": (
             "请选择要查询的订单或提供订单号，也可以明确查询最近一笔订单。",

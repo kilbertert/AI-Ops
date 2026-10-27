@@ -1272,10 +1272,18 @@ class GatewayRuntime:
                     language=language,
                 )
         except Exception as exc:  # noqa: BLE001 - 逃出去就等于没有终态行
+            from aiops_diagnostics.chat_execution import ChatRunUnavailable
+            from aiops_diagnostics.consumer_intent import TRIAL_MESSAGES
+
+            code = (
+                exc.code
+                if isinstance(exc, ChatRunUnavailable) and exc.code in TRIAL_MESSAGES
+                else "TRIAL_FAILED"
+            )
             self.store.update_standard_diagnosis(
                 trial_id,
                 status="failed",
-                error_code="TRIAL_FAILED",
+                error_code=code,
                 error_message=f"{type(exc).__name__}: {exc}",
             )
             self._record_trial_metric(run_context, "failed", started_ms)

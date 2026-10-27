@@ -226,3 +226,7 @@ include，**只转发 H5 聊天页实际调用的 12 条路径**。清单的唯�
 
 宿主安装属于**产物部署**（CD 只管 `src/` 到 `/opt/aiops-41`），
 按 `deploy/manual-deploys.md` 留痕。回滚 = 删两个文件 + `nginx -t` + reload。
+
+新版WF01同一片段增加精确范围`/v1/internal/consumer-data/(knowledge|status|billing)`的POST转发，
+保留旧consumer-knowledge供旧发布版与显式恢复使用。新凭据在Gateway会拒绝旧回调，不能靠URL切换能力。
+Nginx仍清空消费者/运营身份头，只透传本次grant。未匹配的后缀不能落入此内部转发规则。

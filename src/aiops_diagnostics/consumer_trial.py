@@ -79,17 +79,30 @@ class ConsumerTrial:
                 route_revision=self.route.revision,
                 content_snapshot=self.content["content"],
                 knowledge_base_ids=tuple(self.content["knowledge_base_ids"]),
+                callback_version=self.content.get("callback_version", 1),
                 live_order_status=self.content["live_order_status"],
                 live_billing_record=self.content["live_billing_record"],
             )
             # 试用订单只用于既有试用身份授权；知识问题不向模型交出该单数据。
-            from aiops_diagnostics.consumer_billing import is_billing_question
-            from aiops_diagnostics.consumer_order_chat import is_order_status_question
+            from aiops_diagnostics.chat_execution import ChatRunUnavailable
+            from aiops_diagnostics.consumer_intent import message, validate
 
-            kind = "billing" if is_billing_question(self.question) else "status"
-            live = (kind == "billing" and self.binding.live_billing_record) or (
-                is_order_status_question(self.question) and self.binding.live_order_status
+            decision = validate(
+                runtime.classify_consumer(self.question, language=language, selected_order=True)
             )
+            intent = decision["intent"]
+            if intent not in {"knowledge", "order_status", "billing_record"} or decision["uses_context"]:
+                raise ChatRunUnavailable("TRIAL_CLARIFICATION_REQUIRED", message("clarify", language))
+            kind = "billing" if intent == "billing_record" else "status"
+            live = intent in {"order_status", "billing_record"}
+            if live and decision["order_reference"] != "explicit":
+                raise ChatRunUnavailable(
+                    "TRIAL_ORDER_REQUIRED", "试用查询请明确使用选定订单，不支持另选最新单"
+                )
+            if live and not (
+                self.binding.live_billing_record if kind == "billing" else self.binding.live_order_status
+            ):
+                raise ChatRunUnavailable("CHATFLOW_LIVE_DISABLED", message("disabled", language))
             runtime._require_chat_order_visible(scope, order)
             self.require_current(runtime.gateway_settings)
             token, grant = grants.issue(
@@ -138,7 +151,16 @@ class ConsumerTrial:
                 workflow_id=workflow_id,
                 user=user,
                 query=self.question,
-                inputs={"language": language, "has_photo": "no", "data_grant": token},
+                inputs={
+                    "language": language,
+                    "has_photo": "no",
+                    "data_grant": token,
+                    **(
+                        {"data_kind": kind if live else "knowledge"}
+                        if self.binding.callback_version == 2
+                        else {}
+                    ),
+                },
                 on_started=started,
             )
             runtime._require_chat_order_visible(scope, order)

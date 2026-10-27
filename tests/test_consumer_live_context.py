@@ -24,15 +24,16 @@ class Flow(Client):
         ids = [str(uuid.uuid4()) for _ in range(4)]
         kwargs["on_started"](*ids)
         Flow.token = kwargs["inputs"]["data_grant"]
+        path = (
+            "/v1/internal/consumer-data/" + kwargs["inputs"]["data_kind"]
+            if "data_kind" in kwargs["inputs"]
+            else "/v1/internal/consumer-knowledge"
+        )
         if not Flow.skip:
-            r = self.env["client"].post(
-                "/v1/internal/consumer-knowledge", headers={"Authorization": "Bearer " + self.token}
-            )
+            r = self.env["client"].post(path, headers={"Authorization": "Bearer " + self.token})
             assert r.status_code == 200, r.text
             context = r.json()
-            again = self.env["client"].post(
-                "/v1/internal/consumer-knowledge", headers={"Authorization": "Bearer " + self.token}
-            )
+            again = self.env["client"].post(path, headers={"Authorization": "Bearer " + self.token})
             assert again.json() == context
         else:
             context = {}
@@ -50,6 +51,7 @@ def wire(env, monkeypatch, tmp_path):
     runtime, kb, _ = setup(env, monkeypatch, tmp_path)
     doc = json.loads(env["bindings"].read_text())
     doc["bindings"][0]["live_order_status"] = True
+    doc["bindings"][0]["callback_version"] = 2
     env["bindings"].write_text(json.dumps(doc))
     Flow.env, Flow.after, Flow.skip = env, None, False
     monkeypatch.setattr("aiops_diagnostics.consumer_chat_service.DifyChatflowClient", Flow)

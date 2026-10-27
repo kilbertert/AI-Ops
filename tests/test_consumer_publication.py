@@ -149,11 +149,14 @@ def test_bad_draft_is_refused_without_replacing_published_content(tmp_path, monk
         assert done(env, ask(env).json()["qa_id"]).json()["status"] == "completed"
 
 
-@pytest.mark.parametrize("retract_during_trial", [False, True])
+@pytest.mark.parametrize(
+    "retract_during_trial,disabled", [(False, False), (True, False), (False, True), (False, "latest")]
+)
 def test_chatflow_trial_uses_temporary_app_and_leaves_formal_state_unchanged(
-    tmp_path, monkeypatch, retract_during_trial
+    tmp_path, monkeypatch, retract_during_trial, disabled
 ):
     import time
+    from pathlib import Path
 
     from test_app_runtime_node_entry import ORDER_A, _Resolver
     from test_consumer_knowledge_flow import Workflow
@@ -165,6 +168,20 @@ def test_chatflow_trial_uses_temporary_app_and_leaves_formal_state_unchanged(
         draft = json.loads(content.read_text())
         draft["entries"]["KB-C-007"]["answers"]["zh"] = "试用草稿指引。"
         content.write_text(json.dumps(draft))
+        if disabled:
+            target_path = Path(env["settings"].consumer_publication_targets_file)
+            targets = json.loads(target_path.read_text())
+            targets["targets"][0]["live_order_status"] = False
+            target_path.write_text(json.dumps(targets))
+            monkeypatch.setattr(
+                runtime,
+                "classify_consumer",
+                lambda *a, **k: {
+                    "intent": "order_status",
+                    "order_reference": "latest" if disabled == "latest" else "explicit",
+                    "uses_context": False,
+                },
+            )
         caller = _Resolver().resolve("token-a", required_scope="aiops:orders:read")
         monkeypatch.setattr(runtime, "trial_context_for", lambda *args: caller)
         monkeypatch.setattr(runtime, "trial_run_context", lambda *args: caller)
@@ -211,6 +228,22 @@ def test_chatflow_trial_uses_temporary_app_and_leaves_formal_state_unchanged(
             assert record["status"] == "cancelled", record
             assert record.get("result") is None
             assert deleted == ["99999999-9999-9999-9999-999999999999"]
+            return
+        if disabled:
+            assert record["status"] == "failed", record
+            read = env["client"].get(
+                "/v1/dify/trial/" + trial_id, headers={"Authorization": "Bearer trial-key"}
+            )
+            if disabled == "latest":
+                assert read.json()["error_code"] == "TRIAL_ORDER_REQUIRED"
+                assert (
+                    "页面选定" in read.json()["error_message"]
+                    and "最近一笔" not in read.json()["error_message"]
+                )
+            else:
+                assert read.json()["error_code"] == "CHATFLOW_LIVE_DISABLED"
+                assert "尚未开通" in read.json()["error_message"]
+            assert env["upstream"].calls == 0 and not kb.calls
             return
         assert record["status"] == "completed", record
         assert record["result"]["report"]["summary"] == "试用草稿指引。"
