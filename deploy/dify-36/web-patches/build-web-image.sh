@@ -54,6 +54,7 @@ check_sha() {
 check_sha web/app/components/datasets/external-knowledge-base/create/ExternalApiSelection.tsx 1cfcac7b934c7ae183e1361c790e1063fc944e70f4acc32e4f40bdec6cdbea10
 check_sha web/models/datasets.ts 7da7895349e90cc963c725b12826be71c4f45827d829b23cfe077a18fb492ac9
 check_sha web/service/datasets.ts e5277febabf43ffc3d54b8fa6ff52305e9fd5ef18052c1ee404e78f958425a01
+check_sha web/app/components/workflow/nodes/tool/panel.tsx 76b230b92e8aa95f75ed63d89578ea90d25817466aedbed97753c79a55e45f76
 
 echo "== 2. 打补丁（--fuzz=0：上下文对不上就失败）"
 # **先把工作树恢复干净。** 上一次构建留下的补丁产物会让 `patch` 停下来问

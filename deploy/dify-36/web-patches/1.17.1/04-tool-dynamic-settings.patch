@@ -1,0 +1,11 @@
+--- a/web/app/components/workflow/nodes/tool/panel.tsx
++++ b/web/app/components/workflow/nodes/tool/panel.tsx
+@@ -89,6 +89,8 @@
+                   schema={toolSettingSchema as any}
+                   value={toolSettingValue}
+                   onChange={setToolSettingValue}
++                  currentProvider={currCollection}
++                  currentTool={currTool}
+                 />
+               </OutputVars>
+               <Split />

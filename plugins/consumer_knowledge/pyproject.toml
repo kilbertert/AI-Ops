@@ -1,0 +1,5 @@
+[project]
+name = "consumer-knowledge"
+version = "0.0.1"
+requires-python = ">=3.12"
+dependencies = ["dify-plugin==0.10.2"]
