@@ -1,5 +1,7 @@
 """真实Dify权限装饰器必须允许知识库选择，且不授予通用插件权限。"""
 
+import hashlib
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -7,16 +9,21 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).parents[1]
-IMAGE = "langgenius/dify-api:1.17.1"
+IMAGE = "langgenius/dify-api@sha256:ceede5b903afaa20348f7ad80ebf847379dc56d886a99b9ec6a08913dacd7732"
 TARGET = "/app/api/controllers/console/workspace/plugin.py"
 
 
 def test_editor_knowledge_options_with_upstream_role_guards(tmp_path):
     if shutil.which("docker") is None:
+        assert not os.environ.get("CI"), "CI必须实际执行Dify角色回归"
         pytest.skip("需要本机Dify镜像")
     if subprocess.run(["docker", "image", "inspect", IMAGE], capture_output=True).returncode:
-        pytest.skip("需要本机Dify1.17.1镜像；隔离验收另执行")
+        subprocess.run(["docker", "pull", IMAGE], check=True, capture_output=True, timeout=300)
     source = subprocess.check_output(["docker", "run", "--rm", "--entrypoint", "cat", IMAGE, TARGET])
+    assert (
+        hashlib.sha256(source).hexdigest()
+        == "53367ae76ce6c6fd171308ae8adc4bba6ee7b29100fc26f4f478a3d991dc4536"
+    )
     file = tmp_path / "controllers/console/workspace/plugin.py"
     file.parent.mkdir(parents=True)
     file.write_bytes(source)
@@ -38,7 +45,7 @@ def test_editor_knowledge_options_with_upstream_role_guards(tmp_path):
             "--network",
             "none",
             "--user",
-            "1000:1000",
+            f"{os.getuid()}:{os.getgid()}",
             "--entrypoint",
             "/app/api/.venv/bin/python",
             "-e",

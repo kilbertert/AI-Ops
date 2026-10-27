@@ -20,3 +20,5 @@
 - 原镜像文件SHA核验、完整补丁apply和ruff/format/policy/repo-map通过。生产尚未应用，不宣称用户当前错误已消失。
 
 **未完成业务验收**：本片是编排编辑权限修复，不证明故障诊断准确率；上线后用户个人会话点选仍需复验。
+
+CI首轮4120 passed/11 skipped，因runner无Dify镜像多跳过一项而被门禁拒绝；回归改为固定镜像digest自动拉取，CI无Docker则失败，保持原跳过基线。
