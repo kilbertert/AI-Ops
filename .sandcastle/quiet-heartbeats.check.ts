@@ -176,8 +176,16 @@ const exitRun = spawnSync(
   ],
   { cwd: import.meta.dirname, encoding: "utf8", timeout: 10_000 },
 );
+// The summary reports BOTH numbers: how many frames were dropped and how many
+// console lines the filter actually judged. Without the second, "dropped 0"
+// cannot be told apart from a runner that logs to a file and never writes to
+// stdout — and that distinction is the whole diagnostic value of the line.
+// The count is EXACT, not `\d+`: the probe writes exactly one line, so `\d+`
+// would also accept a counter that never increments — the mutation "delete
+// `observed += 1`" was measured to survive `\d+`. A number the test knows must be
+// asserted as that number.
 assert(
-  /dropped 1 thinking-token frame/.test(exitRun.stderr),
+  /dropped 1 thinking-token frame\(s\) of 1 console line\(s\)/.test(exitRun.stderr),
   `the exit summary must reach a captured stderr (stderr: ${JSON.stringify(exitRun.stderr)})`,
 );
 // And it must NOT reach stdout — see the placement assertion below, which reads
@@ -299,6 +307,30 @@ assert(
 assert(
   !/writeSync\(\s*stream\.fd\s*,/.test(source),
   "the exit summary must not be written to stdout — main.ts's JSON result follows it",
+);
+
+// --- "0 of 0" is a different fact from "0 of N" (review finding 7) ----------
+//
+// `claudeProfile` installs the hook before it validates the profile, and a runner
+// using `logging: { type: "file" }` writes nothing to stdout. Its summary must
+// therefore be legible as "this run produced no console output", not as "the
+// filter never matched".
+const silentProbe = `
+  quietThinkingHeartbeats();
+`;
+const silentRun = spawnSync(
+  process.execPath,
+  [
+    "--experimental-strip-types",
+    "--input-type=module",
+    "-e",
+    `import { quietThinkingHeartbeats } from "./quiet-heartbeats.ts";${silentProbe}`,
+  ],
+  { cwd: import.meta.dirname, encoding: "utf8", timeout: 10_000 },
+);
+assert(
+  /dropped 0 thinking-token frame\(s\) of 0 console line\(s\)/.test(silentRun.stderr),
+  `a run with no console output must say "0 of 0" (stderr: ${JSON.stringify(silentRun.stderr)})`,
 );
 
 console.log("quiet-heartbeats check ok");
