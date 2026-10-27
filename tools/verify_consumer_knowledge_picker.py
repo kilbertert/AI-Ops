@@ -135,6 +135,64 @@ def verify_picker(root, base, env, setup, app, gateway, database, content, knowl
     first = published["version_no"]
     _, calls = ask()
     check("App searches selected A", len(calls) == 1 and "/kb-own/" in calls[0][0])
+    # 只改变一次性栈的测试账号角色；真实会话仍由Dify登录签发。
+    import uuid
+
+    def role(value):
+        assert value in {"normal", "dataset_operator", "editor", "owner"}
+        sql = f"UPDATE tenant_account_joins SET role='{value}' WHERE tenant_id='{uuid.UUID(workspace)}'"
+        result = stack._compose(
+            env,
+            "exec",
+            "-T",
+            "db_postgres",
+            "psql",
+            "-U",
+            env["DB_USERNAME"],
+            "-d",
+            env["DB_DATABASE"],
+            "-c",
+            sql,
+            timeout=20,
+        )
+        assert result.returncode == 0
+
+    options_url = (
+        base
+        + "/console/api/workspaces/current/plugin/parameters/dynamic-options?"
+        + urlencode(
+            {
+                "plugin_id": "trendpower/consumer_knowledge",
+                "provider": PROVIDER,
+                "action": "consumer_knowledge",
+                "parameter": "knowledge_base_ids",
+                "provider_type": "tool",
+            }
+        )
+    )
+    for denied_role in ("normal", "dataset_operator"):
+        role(denied_role)
+        check(
+            denied_role + " cannot list knowledge choices",
+            stack.http_json(options_url, headers=headers)[0] == 403,
+        )
+    role("editor")
+    code, choices = stack.http_json(options_url, headers=headers)
+    check("editor can list owned knowledge choices", code == 200 and len(choices["options"]) == 2)
+    check(
+        "editor cannot use foreign credential",
+        stack.http_json(options_url + "&credential_id=" + str(uuid.uuid4()), headers=headers)[0] == 403,
+    )
+    check(
+        "editor cannot manage provider credentials",
+        stack.http_json(
+            base + "/console/api/workspaces/current/tool-provider/builtin/" + PROVIDER + "/add",
+            "POST",
+            {"credentials": credential, "name": "not-allowed", "type": "api-key"},
+            headers,
+        )[0]
+        == 403,
+    )
     started_web = stack._compose(env, "up", "-d", "web", timeout=120)
     check("Dify editor ready for browser", started_web.returncode == 0)
     (root / "picker-browser-ready.json").write_text(json.dumps({"headers": headers, "app_id": app["app_id"]}))
@@ -150,6 +208,8 @@ def verify_picker(root, base, env, setup, app, gateway, database, content, knowl
         "browser selection persisted",
         actual_node["tool_configurations"]["knowledge_base_ids"]["value"] == ["kb-b"],
     )
+    # 管理API需要该隔离工作区原有owner；浏览器editor已完成选库/保存，不改变这条前提。
+    role("owner")
     _, calls = ask()
     check("draft B keeps published A", len(calls) == 1 and "/kb-own/" in calls[0][0])
     before = len(knowledge.requests)

@@ -79,3 +79,15 @@ uv run python tools/upgrade_consumer_flow.py <原草稿.yml> --gateway <可信�
 
 浏览器隧道用dev-host启动时，timeout/ssh可能另建进程组；清理应核子进程和本地端口，不能只kill包装shell的进程组。
 只终止本次记录的PID及子进程，避免影响其他会话。现役控制台需要正常公司登录；维护API凭据不等于浏览器个人登录态。
+
+## editor点开节点403的核验与交付
+
+Dify1.17.1默认将dynamic-options设为admin/owner。公司映射账号通常是editor，必须包含
+`patches/1.17.1/08-consumer-knowledge-editor-options.patch`，不能用提权账号来修界面。
+通过`tenant_account_joins`只读核对当前工作区角色，并只检索API日志的dynamic-options状态码，不输出Cookie。
+
+使用合并版本的`deploy/dify-36/patches/apply.sh`从固定原镜像核摘要、生成完整补丁树；六个文件在compose的api/worker
+逐个只读挂载。先保存原compose和完整旧补丁树，通过`dev-host cp --artifact-sha256`交付合并制品，检查配置后仅重建api/worker。
+保留.env、web、plugin_daemon及正式发布版，失败恢复原compose和旧补丁树后重建同两个服务。
+重新检查api健康、原发布V5不变，再用editor会话打开节点；库列表应返回200，不应出现权限弹窗。
+管理员API200只可作对照，不能代替这一项。浏览器完整回归已在隔离栈使用真实editor角色执行。

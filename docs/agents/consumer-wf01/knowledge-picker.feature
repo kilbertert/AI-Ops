@@ -1,4 +1,10 @@
 Feature: 在Chatflow知识节点直接选择本租户知识库
+  Scenario: 工作区编辑者加载选库而不获得插件管理权
+    Given 调用者是当前工作区editor且目录凭据允许本工作区成员使用
+    When 打开知识节点的知识库多选配置
+    Then 返回本租户库名称且没有权限错误
+    And 其他插件参数、个人私有凭据和跨工作区凭据仍被拒绝
+    And normal和dataset_operator不能借此加载选库
   Scenario: 节点显示可选库
     Given 运营位于已登记工作区且有本工作区只读目录凭据
     When 打开知识节点的知识库多选配置

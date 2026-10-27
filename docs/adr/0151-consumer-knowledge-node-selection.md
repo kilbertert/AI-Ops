@@ -26,3 +26,13 @@ CPMS分支不依赖知识目录。凭据无单独有效期，撤销工作区映�
 
 后果：每轮知识答案增加目录读取；删除库后旧答案也暂不可读。新库需召回现有审核清单中的KB-C-NNN，
 普通文档不会自动获得自由回答权限。Dify仍可能保存运行输入中的短期grant，终态撤销不能追回此前披露。
+
+## 工作区编辑者的选库权限（2026-10-27修复）
+
+现用Dify的dynamic-options接口要求admin/owner，但公司登录映射为editor。工作流可编辑不代表这个接口可用；
+此前owner隔离验收和管理员API遗漏了实际操作角色。只对已固定的consumer_knowledge工具/knowledge_base_ids
+读取放行owner/admin/editor，使用Dify原凭据可见性过滤并固定实际credential_id；其他插件请求和企业RBAC保持原管理判据。
+normal/dataset_operator仍拒绝，工作区取自会话，不接受请求另选租户。凭据修改/插件安装/发布权限不变。
+
+备选方案：将账号升级admin会附带插件管理权限；全局放开dynamic-options会扩大到其他工具；两者均不采用。
+回归必须含editor浏览器，不再以owner通过代替编辑者可用。
