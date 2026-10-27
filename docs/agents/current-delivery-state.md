@@ -948,3 +948,7 @@ fixture、数据库检查或模型单次调用写成真实业务验收。
 > 隔离编辑器选B→保存→试用→发布→恢复90/90，原H5正常登录三只读场景15/15、实际节点和CPMS独立对照通过。
 > 现役动态目录返回3库；运营个人控制台登录点选、现役第二库切换仍未验，不等于自由文档回答已开放。
 > [正式验收](../validation/2026-10-27-consumer-picker-production.md)，[安装/恢复方法](consumer-wf01/knowledge-picker-deploy.md)。
+
+> **2026-10-27 · 知识节点editor 403已修复部署**：#1108/69409638/v0.6.1，CI4121/10跳过，
+> Dify api/worker安装合并补丁。现役system/editor完整端点由403变200并返回3库，未提升账号角色，V5/revision4保持。
+> 隔离editor浏览器及后续管理整链95/95；用户个人浏览器刷新确认仍待反馈。[线上记录](../validation/2026-10-27-consumer-picker-editor-production.md)。
