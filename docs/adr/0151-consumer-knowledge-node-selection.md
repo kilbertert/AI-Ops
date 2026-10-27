@@ -18,6 +18,7 @@ CPMS分支不依赖知识目录。凭据无单独有效期，撤销工作区映�
 该版工具“设置”区未传currentProvider/currentTool，不会加载动态选项；补齐这两个属性沿用官方多选控件。
 不能移到form:llm输入区：现用Graphon执行器将constant数组转为字符串，与multiple校验冲突。
 参数保留form:form及tool_configurations常量数组，输出用knowledge.text汇入既有聚合。
+授权与图片线索使用固定mixed模板引用；直接variable引用会被该版编辑器保存为空，不能据API执行成功推断可编辑。
 
 备选方案未选原生knowledge-retrieval：现版本外接知识接口只带静态provider key与query/knowledge_id等字段，
 无法直接携带单轮data_grant。也不向网页注入选库按钮或把静态整租户密钥交给取数节点。

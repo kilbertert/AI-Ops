@@ -27,8 +27,8 @@ def picker_graph(ids):
                 "tool_node_version": "2",
                 "tool_configurations": {"knowledge_base_ids": {"type": "constant", "value": ids}},
                 "tool_parameters": {
-                    "data_grant": {"type": "variable", "value": ["start", "data_grant"]},
-                    "image_text": {"type": "variable", "value": ["photo_context", "output"]},
+                    "data_grant": {"type": "mixed", "value": "{{#start.data_grant#}}"},
+                    "image_text": {"type": "mixed", "value": "{{#photo_context.output#}}"},
                 },
             }
         if n["id"] == "data_context":

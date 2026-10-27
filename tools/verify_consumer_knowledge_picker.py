@@ -145,6 +145,7 @@ def verify_picker(root, base, env, setup, app, gateway, database, content, knowl
     check("browser selects B in knowledge node", browser.get("passed") is True)
     code, draft = stack.http_json(draft_url, headers=headers)
     actual_node = next(n["data"] for n in draft["graph"]["nodes"] if n["id"] == "knowledge")
+    (root / "picker-browser-node.json").write_text(json.dumps(actual_node))
     check(
         "browser selection persisted",
         actual_node["tool_configurations"]["knowledge_base_ids"]["value"] == ["kb-b"],

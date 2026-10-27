@@ -41,6 +41,15 @@ def run(root, namespace):
 
         context.route("http://127.0.0.1:5001/**", forward)
         page = context.new_page()
+        saved = []
+
+        def recorded(response):
+            if response.request.method == "POST" and response.url.endswith("/workflows/draft"):
+                body = response.request.post_data_json
+                node = next((n["data"] for n in body["graph"]["nodes"] if n["id"] == "knowledge"), {})
+                saved.append({"status": response.status, "config": node.get("tool_configurations")})
+
+        page.on("response", recorded)
         try:
             for _ in range(30):
                 try:
@@ -55,10 +64,16 @@ def run(root, namespace):
             page.get_by_text("FAQ B", exact=True).last.click()
             page.get_by_text("FAQ A", exact=True).last.click()
             page.keyboard.press("Escape")
-            page.wait_for_timeout(2500)
+            until = time.monotonic() + 30
+            expected = {"knowledge_base_ids": {"type": "constant", "value": ["kb-b"]}}
+            while not any(s == {"status": 200, "config": expected} for s in saved):
+                if time.monotonic() >= until:
+                    raise AssertionError("浏览器修改未收到草稿保存成功响应")
+                page.wait_for_timeout(200)
             page.screenshot(path=str(root / "picker-browser.png"), full_page=True)
             return {"passed": True}
         finally:
+            (root / "picker-browser-saves.json").write_text(json.dumps(saved))
             (root / "picker-browser-text.txt").write_text(page.locator("body").inner_text())
             page.screenshot(path=str(root / "picker-browser-final.png"), full_page=True)
             browser.close()

@@ -201,8 +201,8 @@ def publication_settings(
         require(
             n.get("tool_parameters")
             == {
-                "data_grant": {"type": "variable", "value": ["start", "data_grant"]},
-                "image_text": {"type": "variable", "value": ["photo_context", "output"]},
+                "data_grant": {"type": "mixed", "value": "{{#start.data_grant#}}"},
+                "image_text": {"type": "mixed", "value": "{{#photo_context.output#}}"},
             },
             "工具仅接受本轮授权与图片线索",
         )
