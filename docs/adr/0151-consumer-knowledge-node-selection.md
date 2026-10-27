@@ -19,7 +19,7 @@ CPMS分支不依赖知识目录。凭据无单独有效期，撤销工作区映�
 不能移到form:llm输入区：现用Graphon执行器将constant数组转为字符串，与multiple校验冲突。
 参数保留form:form及tool_configurations常量数组，输出用knowledge.text汇入既有聚合。
 
-未选原生knowledge-retrieval：现版本外接知识接口只带静态provider key与query/knowledge_id等字段，
+备选方案未选原生knowledge-retrieval：现版本外接知识接口只带静态provider key与query/knowledge_id等字段，
 无法直接携带单轮data_grant。也不向网页注入选库按钮或把静态整租户密钥交给取数节点。
 插件按项目签名安装，额外公钥与Dify官方公钥并存，FORCE_VERIFYING_SIGNATURE保持true。
 
