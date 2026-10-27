@@ -163,3 +163,24 @@ WF01普通文本先用现有provider做一次无工具的结构化分类，区�
 前轮过期后的明确新问题可继续，旧GET仍410；“那笔呢”等依赖失效前文的请求需要重述。
 失败/取消/换版仍拒绝续用。协议与取舍见[ADR-0149](../../adr/0149-consumer-semantic-routing.md)，
 回归步骤见[验收计划](qa-plan.md)。线上效果需合并部署后从原App另验。
+
+## 知识与CPMS独立节点
+
+新版模板将取数拆为三个真实HTTP节点：知识检索、CPMS本人订单状态、CPMS本人订单账务记录。
+Gateway注入data_kind=knowledge/status/billing，图中“本轮取数能力”直接分支；这里没有第二次意图分类。
+状态/账务节点调用时才读CPMS，知识路径不读业务；模型只见本轮裁剪结果，原App无需更新。
+
+运营在Dify右上角环境变量面板修改`cpms_status_enabled`或`cpms_billing_enabled`（字符串true/false）。
+值为false时对应能力关闭，true仍受服务器现有授权上限约束。节点提示词和布局可改；
+URL/凭据引用/分支契约不可绕过，删除必需节点会在“发布到AI-Ops”前显示中文拒绝原因。
+保存草稿只影响试用，发布才切App。试用使用已选订单的既有运营权限；“最新单”不替代选定订单。
+关能力的试用会明确失败并说明未开通，不发生业务读取；显式恢复历史版本可重新开启。
+
+新版回调为`POST /v1/internal/consumer-data/{knowledge|status|billing}`，Authorization直接绑定data_grant。
+状态/账务不接收请求体单号/租户/用户。每轮只兑现自己的能力，重复调用只读同轮缓存，
+取消/过期/撤权/换发布版仍拒绝。`callback_version=2`在发布时冻结，旧版本默认1并保留旧指纹。
+
+迁移先保留源草稿与已发布DSL，用`tools/upgrade_consumer_flow.py <源草稿.yml> --gateway <可信网关根地址>
+--out <新草稿.yml>`离线生成候选；保留源模型、提示词、应用特性和图片关闭设置。原图有自定义节点时
+应人工核对差异；工具只支持已登记WF01结构，不发布也不覆盖原文件。核对后按[发布手册](live-release.md)迁移。
+契约依据见[ADR-0150](../../adr/0150-consumer-cpms-workflow-nodes.md)。
