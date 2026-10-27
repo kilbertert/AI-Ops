@@ -99,6 +99,11 @@ jobs:
         run: npx --yes tsx .sandcastle/profile-network.check.ts
       - name: Verify sandbox MCP config
         run: npx --yes tsx .sandcastle/mcp-config.check.ts
+      # The heartbeat filter's two failure modes are both silent: too wide eats
+      # agent output, too narrow lets the flood back in with nothing reporting it.
+      # Neither shows up as a failed run, so the match is asserted here.
+      - name: Verify the console heartbeat filter
+        run: npx --yes tsx .sandcastle/quiet-heartbeats.check.ts
       # A stale map is read with the same confidence as the code, so it is
       # checked rather than trusted. `--check` regenerates to stdout and
       # compares — it never writes the file it is judging.
