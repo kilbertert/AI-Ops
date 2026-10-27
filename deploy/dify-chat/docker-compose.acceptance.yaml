@@ -9,6 +9,14 @@
 #
 # 用 `docker compose -f docker-compose.acceptance.yaml` 起，不要与 deploy/dify-36 混用。
 services:
+  web:
+    image: ${DIFY_TEST_WEB_IMAGE:-langgenius/dify-web:1.17.1}
+    environment:
+      CONSOLE_API_URL: http://127.0.0.1:5001
+      APP_API_URL: http://127.0.0.1:5001
+      HOSTNAME: "0.0.0.0"
+    network_mode: "container:${DIFY_TEST_NAMESPACE}"
+
   # 把存储目录属主交给 api 容器内的非 root 用户（1001）。**每次 up 都修**，不靠 flag 幂等：
   # 一个"记得修过了"的标记文件一旦先于 chown 生效，目录就永久留在 root，而 api 以 uid 1001
   # 跑 —— 症状是 setup 时报 `PermissionDenied ... privkeys/...private.pem`，看起来像密钥问题。
@@ -77,6 +85,7 @@ services:
     env_file: ["${DIFY_TEST_ROOT}/dify.env"]
     environment:
       MODE: api
+      SERVER_WORKER_CONNECTIONS: "100"
       PLUGIN_DAEMON_URL: http://127.0.0.1:5002
       PLUGIN_REMOTE_INSTALL_HOST: 127.0.0.1
       PLUGIN_REMOTE_INSTALL_PORT: "5003"
