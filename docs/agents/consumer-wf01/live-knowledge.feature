@@ -1,0 +1,22 @@
+Feature: 知识库资料完成索引后直接服务App
+  Scenario: 新文档不需要服务器审核登记
+    Given Chatflow已配置使用本租户知识库
+    When 向该库添加任意名称的文档并完成索引
+    Then App的新问题能根据该文档回答并显示本轮来源
+    And 不修改content.json也不重新发布Chatflow
+  Scenario: 更新与删除文档影响下一次检索
+    When 已索引文档内容被更新或删除
+    Then 新问题使用更新后的内容或明确未找到
+    And 不回退到旧审核包答案
+  Scenario: 文档中的视频直接呈现
+    Given 本轮召回文档正文包含具体视频链接
+    When App显示引用该文档的答案
+    Then 显示原文的视频链接或播放器
+    And 不需要media_ids或独立挂载表
+  Scenario: 每轮仍只使用已授权的来源
+    When 模型引用未召回的来源或编造视频地址
+    Then 不交付该答案或媒体
+    And 跨租户库、取消、过期、撤回仍拒绝
+  Scenario: 原有只读业务查询保持
+    When 用户查询本人订单状态或账务
+    Then 仍读取对应CPMS节点的本轮授权快照

@@ -105,10 +105,10 @@ def verify_picker(root, base, env, setup, app, gateway, database, content, knowl
 
     app_headers = {"Authorization": "Bearer " + stack.TOKEN, "X-Business-Entry": "consumer"}
 
-    def ask():
+    def ask(question="怎么开始充电？"):
         count = len(knowledge.requests)
         code, qa = stack.http_json(
-            gateway + "/v1/assistant/questions", "POST", {"question": "怎么开始充电？"}, app_headers
+            gateway + "/v1/assistant/questions", "POST", {"question": question}, app_headers
         )
         assert code == 202, qa
         until = time.monotonic() + 90
@@ -244,3 +244,67 @@ def verify_picker(root, base, env, setup, app, gateway, database, content, knowl
     check("restore A", action("restore", version_no=first)[0] == 200)
     _, calls = ask()
     check("restore searches A", len(calls) == 1 and "/kb-own/" in calls[0][0])
+    import hashlib
+
+    from upgrade_consumer_flow import live_documents
+
+    code, draft = stack.http_json(draft_url, headers=headers)
+    candidate = live_documents({"workflow": draft})["workflow"]
+    for variable in candidate["environment_variables"]:
+        if variable["name"] in {"cpms_status_enabled", "cpms_billing_enabled"}:
+            variable["value"] = "true"
+    body = {k: candidate[k] for k in ("graph", "features", "hash", "conversation_variables")}
+    body["environment_variable_patch"] = {
+        "environment_variables": candidate["environment_variables"],
+        "deleted_environment_variable_ids": [],
+    }
+    check("save live document flow", stack.http_json(draft_url, "POST", body, headers)[0] == 200)
+    code, published = action("publish")
+    check("publish live document flow", code == 200)
+    targets = root / "consumer-targets.json"
+    before = hashlib.sha256(targets.read_bytes()).hexdigest()
+    content.unlink()  # 新模式连文件都不需要存在，发布/试用不能再读它。
+    knowledge.document_rows = []
+    answer, _ = ask()
+    check("empty library has no old FAQ answer", answer["result"]["retrieval_status"] == "not_found")
+    video = "https://www.youtube.com/shorts/t57PMqSw7iE"
+    knowledge.document_rows = [
+        {
+            "doc_id": "new-document",
+            "chunk_id": "new-chunk",
+            "docnm_kwd": "新增兼容性资料.md",
+            "content": "新增资料：印尼项目需要协议集成测试。\n视频：" + video,
+            "score": 0.95,
+        }
+    ]
+    answer, _ = ask()
+    check("new unregistered document is answered", "新增资料" in str(answer) and video in str(answer))
+    check(
+        "video comes directly from retrieved document",
+        any(b["kind"] == "video" and b["media"]["url"] == video for b in answer["result"]["blocks"]),
+    )
+    knowledge.document_rows[0]["content"] = "更新后的兼容性资料已生效。"
+    answer, _ = ask()
+    check(
+        "document update works without publish",
+        "更新后的兼容性资料" in str(answer) and video not in str(answer),
+    )
+    knowledge.document_rows = []
+    answer, _ = ask()
+    check(
+        "deleted document does not fall back to old content",
+        answer["result"]["retrieval_status"] == "not_found",
+    )
+    code, current = action("publish")
+    check(
+        "document changes do not create workflow versions",
+        code == 200 and current["action"] == "unchanged" and current["version_no"] == published["version_no"],
+    )
+    check(
+        "server target unchanged and reviewed file absent",
+        hashlib.sha256(targets.read_bytes()).hexdigest() == before and not content.exists(),
+    )
+    answer, calls = ask("我上一个订单现在是什么情况")
+    check("live documents preserve CPMS status", "cpms.chargingInfo" in str(answer) and not calls)
+    answer, calls = ask("查询我的最新订单退款记录")
+    check("live documents preserve CPMS billing", "cpms.orderDetail" in str(answer) and not calls)

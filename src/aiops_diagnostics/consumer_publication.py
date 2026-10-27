@@ -32,17 +32,16 @@ def target_for(settings, binding):
     found = []
     keys = set()
     for row in body["targets"]:
-        if not isinstance(row, dict) or set(row) - {"photo_enabled"} != {
+        if not isinstance(row, dict) or set(row) - {"photo_enabled", "content_file"} != {
             "app_id",
             "tenant_id",
             "environment",
-            "content_file",
             "knowledge_base_ids",
             "live_order_status",
             "live_billing_record",
         }:
             raise ValueError("invalid consumer publication target")
-        for key in ("app_id", "tenant_id", "environment", "content_file"):
+        for key in ("app_id", "tenant_id", "environment"):
             if not isinstance(row[key], str) or not row[key].strip():
                 raise ValueError("invalid consumer target identity")
         if (
@@ -77,10 +76,21 @@ def target_for(settings, binding):
     return found[0] if found else None
 
 
-def frozen_settings(target):
+def frozen_settings(target, *, documents=False):
+    from aiops_diagnostics.consumer_documents import SCHEMA
+
+    if not documents and not target.get("content_file"):
+        raise ValueError("旧版FAQ流程缺少内容文件；请先升级为动态知识回答")
     return {
         "photo_enabled": target.get("photo_enabled", False),
-        "content": load_content(
+        "content": {
+            "schema": SCHEMA,
+            "state": "published",
+            "tenant_id": target["tenant_id"],
+            "environment": target["environment"],
+        }
+        if documents
+        else load_content(
             target["content_file"], tenant=target["tenant_id"], environment=target["environment"]
         ),
         **{key: target[key] for key in ("knowledge_base_ids", "live_order_status", "live_billing_record")},

@@ -1095,7 +1095,7 @@ def sync_workflow_from_dify(
             consumer_settings,
             consumer_callback_base,
             require_split=(previous.get("consumer_service") or {}).get("callback_version", 1) >= 2,
-            require_picker=(previous.get("consumer_service") or {}).get("callback_version") == 3,
+            require_picker=(previous.get("consumer_service") or {}).get("callback_version", 1) >= 3,
             owned_libraries=consumer_libraries,
         )
     previous_workflow = previous.get("workflow_id")

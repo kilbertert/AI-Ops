@@ -67,7 +67,7 @@ def owned_libraries(runtime, tenant):
 def require_available(runtime, caller, binding):
     from aiops_diagnostics.chat_execution import ChatRunUnavailable
 
-    if binding.callback_version != 3:
+    if binding.callback_version < 3:
         return
     try:
         require_owned(

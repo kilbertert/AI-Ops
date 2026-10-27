@@ -119,17 +119,20 @@ def binding_content(binding, caller):
 
 
 def validate_content(body, *, tenant, environment):
+    from aiops_diagnostics.consumer_documents import SCHEMA
+
     if not isinstance(body, dict):
         raise ValueError("invalid consumer content")
     if (
-        body.get("schema") != "aiops-consumer-reviewed/1"
+        body.get("schema") not in {"aiops-consumer-reviewed/1", SCHEMA}
         or body.get("state") != "published"
         or body.get("tenant_id") != tenant
         or body.get("environment") != environment
     ):
         raise ValueError("consumer content is not published for this scope")
-    entries = body.get("entries")
-    if not isinstance(entries, dict) or not entries:
+    documents = body.get("schema") == SCHEMA
+    entries = body.get("entries", {})
+    if not isinstance(entries, dict) or (not entries and not documents) or (documents and entries):
         raise ValueError("consumer content has no entries")
     for key, row in entries.items():
         if (
@@ -145,7 +148,7 @@ def validate_content(body, *, tenant, environment):
             if not isinstance(answer, str) or not answer.strip() or len(answer) > 8000:
                 raise ValueError("invalid consumer answer")
     media = body.get("media", {})
-    if not isinstance(media, dict) or len(media) > 100:
+    if not isinstance(media, dict) or len(media) > 100 or (documents and media):
         raise ValueError("invalid consumer media registry")
     for key, item in media.items():
         if not isinstance(item, dict) or item.get("state") != "approved":
@@ -260,7 +263,7 @@ def select_context(runtime, caller, binding, query, language, qa_id):
     guard = KnowledgeSearchGuard(
         runtime.kb_search_client.for_tenant(caller.effective_tenant_id),
         tenant_id=caller.effective_tenant_id,
-        agent_version=f"{binding.agent_id}#v{binding.agent_version_no}",
+        agent_version=f"consumer:{binding.agent_id}#v{binding.agent_version_no}",
         knowledge_base_ids=binding.knowledge_base_ids,
         media_signer=runtime.media_signer,
         session_id=qa_id,
@@ -268,6 +271,10 @@ def select_context(runtime, caller, binding, query, language, qa_id):
         max_calls=1,
     )
     result = guard.search(query)
+    if binding.callback_version == 4:
+        from aiops_diagnostics.consumer_documents import context_from_chunks
+
+        return context_from_chunks(result)
     candidates = {}
     for chunk in result.chunks:
         title_id = re.fullmatch(r"(KB-C-\d{3})(?:\.md)?", chunk.title or "")
@@ -322,6 +329,13 @@ def final_answer(raw, context, language, content):
         return fallback("photo_unreadable", language, content)
     if (context or {}).get("followup", {}).get("unresolved_count") == 1:
         return fallback("followup", language, content)
+    if (context or {}).get("mode") == "documents":
+        from aiops_diagnostics.consumer_documents import answer_selection
+
+        kind, answer = answer_selection(raw, context)
+        if answer is not None:
+            return answer
+        raw = json.dumps({"kind": kind, "faq_id": ""})
     try:
         selected = json.loads(raw)
     except (ValueError, TypeError) as exc:
@@ -405,7 +419,7 @@ def callback_context(
     ):
         raise ChatRunUnavailable("GRANT_CAPABILITY_MISMATCH", "本轮授权与取数节点不一致", http_status=403)
 
-    if binding.callback_version == 3 and expected == "knowledge":
+    if binding.callback_version >= 3 and expected == "knowledge":
         if knowledge_base_ids != list(binding.knowledge_base_ids):
             raise ChatRunUnavailable(
                 "KNOWLEDGE_SELECTION_MISMATCH", "节点选库与本次发布版本不一致", http_status=403
@@ -508,6 +522,8 @@ def callback_context(
         else select_context(runtime, caller, binding, query, run.language, run.qa_id)
     )
     result["followup"] = followup
+    if binding.callback_version == 4:
+        result["mode"] = "documents"
     valid()
     # 本轮检索期间前轮也可能到期，不能继续向模型披露失效的前文。
     followup_context(

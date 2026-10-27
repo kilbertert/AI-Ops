@@ -789,21 +789,25 @@ def _sync_bound_app(context: Any, binding: Any, source: Any, admin: Any) -> Any:
     所以这里先按 chat 走；只有它明确报"没有 model_config"时才改走 workflow ——
     **用结果判种类，不用猜测**。
     """
-    from aiops_diagnostics import consumer_publication
+    from aiops_diagnostics import consumer_documents, consumer_publication
     from aiops_diagnostics import dify_dsl_pull as pull
 
     target = consumer_publication.target_for(context.settings, binding)
     if not target and consumer_publication.route_scenario(context.settings, binding) == "consumer_service":
         raise ValueError("consumer publication target removed")
     if target:
-        if pull._dsl_kind(pull.DifyDslClient(source).export_dsl()) != "advanced-chat":
+        dsl = pull.DifyDslClient(source).export_dsl()
+        if pull._dsl_kind(dsl) != "advanced-chat":
             raise ValueError("consumer publication requires Chatflow")
         return pull.sync_workflow_from_dify(
             context.agent_manager,
             admin,
             binding,
             source,
-            consumer_settings=consumer_publication.frozen_settings(target),
+            consumer_settings=consumer_publication.frozen_settings(
+                target,
+                documents=consumer_documents.enabled(pull.workflow_content(dsl)),
+            ),
             consumer_callback_base=context.settings.public_base_url,
             consumer_libraries=lambda: consumer_knowledge_selection.owned_libraries(
                 context.runtime, binding.tenant_id
@@ -1308,6 +1312,7 @@ def _workflow_trial_draft(
         return NodeTrial(candidate(source, target), row)
     dsl = DifyDslClient(source).export_dsl()
     if row.scenario == chat_execution.SCENARIO_CONSUMER_SERVICE:
+        from aiops_diagnostics import consumer_documents
         from aiops_diagnostics.consumer_publication import frozen_settings, target_for
         from aiops_diagnostics.consumer_trial import ConsumerTrial
 
@@ -1328,10 +1333,10 @@ def _workflow_trial_draft(
         try:
             frozen = publication_settings(
                 workflow_content(dsl),
-                frozen_settings(target),
+                frozen_settings(target, documents=consumer_documents.enabled(workflow_content(dsl))),
                 context.settings.public_base_url,
                 require_split=(previous.get("consumer_service") or {}).get("callback_version", 1) >= 2,
-                require_picker=(previous.get("consumer_service") or {}).get("callback_version") == 3,
+                require_picker=(previous.get("consumer_service") or {}).get("callback_version", 1) >= 3,
                 owned_libraries=lambda: consumer_knowledge_selection.owned_libraries(
                     context.runtime, row.tenant_id
                 ),
