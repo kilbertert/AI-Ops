@@ -75,7 +75,7 @@ cleanup: still_listening=[]
 - **真实存在的他人订单被拒**（业务事项，另列）。
 - `status_probe.py` 的真实端到端仍需受控窗口。
 
-> 两项均已于 2026-10-23 完成，见本页顶部「真实跨用户拒绝」一节。
+> 两项均已于 2026-10-23 完成，见 [docs/validation/2026-10-23-real-cross-user-denial.md](validation/2026-10-23-real-cross-user-denial.md)（已迁出归档）。
 - 本片零生产写入、零业务请求、零模型调用。
 
 ## 2026-10-23 · 「跳转到 RAGFlow 的按钮又没了」—— 第一性原理定位（#1012）
@@ -213,7 +213,7 @@ curl -s https://dify.ranlei.work/__aiops/dify-knowledge-open.js | sha256sum
 
 ### 六、没有证明什么
 
-- **真实存在的他人订单被正确拒绝**仍未验证（**已于 2026-10-23 验收**，见本页顶部）。
+- **真实存在的他人订单被正确拒绝**仍未验证（**已于 2026-10-23 验收**，见 [迁出后的记录](validation/2026-10-23-real-cross-user-denial.md)）。
 - `status_probe.py` 的真实端到端（生产站点 + 真实会话）**未重跑**（后已重跑）——
   缺的是受控窗口，不是离线可验证性（离线驱动回放已证明）。
 - 存量文档里的账号/订单明文（`docs/adr/0090`、`docs/validation.md` 历史条目）
@@ -281,7 +281,7 @@ curl -s https://dify.ranlei.work/__aiops/dify-knowledge-open.js | sha256sum
 
 ### 七、没有证明什么
 
-- 真实存在的**他人订单被正确拒绝**仍未验证（**已于 2026-10-23 验收**，见本页顶部）。
+- 真实存在的**他人订单被正确拒绝**仍未验证（**已于 2026-10-23 验收**，见 [迁出后的记录](validation/2026-10-23-real-cross-user-denial.md)）。
 - `status_probe.py` 端到端（dev-host 校验 → 隧道 → 浏览器 → 判据）本片未重跑（后已重跑）。
 - 本片零生产写入、零模型调用、零新增查询作业。
 

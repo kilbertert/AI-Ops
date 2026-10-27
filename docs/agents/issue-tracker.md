@@ -22,5 +22,5 @@ PRDs use GitHub native sub-issues. Tickets use native issue dependencies when
 available; an issue is unblocked only when every blocker is closed. Do not
 replace these relationships with copied planning prose.
 
-See [`ticket-contract.md`](ticket-contract.md) for the bar a ticket has to clear
-before an AFK engine may run it.
+参见 [`ticket-contract.md`](ticket-contract.md)：其中列出了工单交给 AFK 自动执行引擎前
+必须满足的条件。
