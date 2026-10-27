@@ -4,57 +4,77 @@ ADR-0097 把 `docs/validation.md` 与 `docs/开发进度.md` 冻结为只读归�
 `docs/validation/<日期>-<短名>.md`。决定之后仍然有两次提交直接往归档文件追加了整节
 （#1014 / #1015）—— 因为当时**没有任何东西会失败**，只有事后人工比对才发现。
 
-这里的判据刻意不比对文件哈希：归档文档允许被订正（错别字、失效链接改指向）。
-它守的是那条真正会再犯的规则 —— **归档里不能出现冻结日期之后的新记录标题**。
+## 为什么按「标题集合」判，而不是按日期判
 
-## 为什么按标题判而不是按路径判
+第一版判据写的是「归档里不许出现晚于冻结日的标题」。它有洞，而且洞正好盖住了它要防的那次
+违规：#1015 的标题就是冻结当天（2026-10-23）的日期，`>` 判据放它过去；把条件改成 `>=`
+又会把归档里**本来就有的**那批 10-23 旧记录全部判红。
 
-一次追加的形态是「在文件顶部插入一个 `## <日期> · <标题>`」。只要那个日期晚于冻结日，
-无论作者写在哪一节、用了什么措辞，都是新记录。反过来，订正一个旧标题里的错别字不会
-让测试转红，因为日期没变。
+所以判据改成**基线集合**：`milestone_archive_headings.json` 记下冻结时两份归档的全部标题。
+
+- 出现基线里没有的标题 ⇒ **红**（无论日期是哪天，包括冻结当天）
+- 基线里有、现在没有的标题 ⇒ 允许（订正、合并、改措辞是归档的正当维护）
+
+这份基线只在**有意重写归档**时才更新，并要在对应 PR 里说明理由。为了让守卫变绿而往基线里
+塞一个新标题，等于取消这条规则。
 """
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
 import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+BASELINE = PROJECT_ROOT / "tests/milestone_archive_headings.json"
 
-#: ADR-0097 采纳日。归档里只允许出现**这一天及更早**的记录标题。
-FREEZE_DATE = "2026-10-23"
-
-ARCHIVES = ("docs/validation.md", "docs/开发进度.md")
-
-HEADING = re.compile(r"^##\s+(20\d{2}-\d{2}-\d{2})", re.MULTILINE)
+#: 记录标题的形态是 `## <日期> · <标题>`；只取整行，日期与正文都算身份的一部分。
+HEADING = re.compile(r"^##\s+20\d{2}-\d{2}-\d{2}[^\n]*", re.MULTILINE)
 
 
-def _headings(path: Path) -> list[str]:
-    return HEADING.findall(path.read_text(encoding="utf-8"))
+def _headings(relative: str) -> list[str]:
+    return HEADING.findall((PROJECT_ROOT / relative).read_text(encoding="utf-8"))
 
 
-@pytest.mark.parametrize("relative", ARCHIVES)
+@pytest.fixture(scope="module")
+def baseline() -> dict:
+    return json.loads(BASELINE.read_text(encoding="utf-8"))
+
+
+@pytest.mark.parametrize("relative", ("docs/validation.md", "docs/开发进度.md"))
 def test_the_archive_still_says_it_is_frozen(relative: str) -> None:
     """文件头必须留着冻结声明，否则后来的人看不出它只读。"""
-    text = (PROJECT_ROOT / relative).read_text(encoding="utf-8")
-    head = "\n".join(text.splitlines()[:8])
+    head = "\n".join((PROJECT_ROOT / relative).read_text(encoding="utf-8").splitlines()[:4])
     assert "只读归档" in head, f"{relative} 顶部缺少「只读归档」声明"
     assert "ADR-0097" in head, f"{relative} 顶部没有指向 ADR-0097"
 
 
-@pytest.mark.parametrize("relative", ARCHIVES)
-def test_no_record_newer_than_the_freeze_date(relative: str) -> None:
-    """冻结日之后的新记录必须写进 `docs/<目录>/<日期>-<短名>.md`，不能追加到归档。
+@pytest.mark.parametrize("relative", ("docs/validation.md", "docs/开发进度.md"))
+def test_no_heading_outside_the_frozen_baseline(relative: str, baseline: dict) -> None:
+    """归档只许少、不许多 —— 新增任何一节（含冻结当天的日期）都必须写进按日期的新文件。
 
-    转红时的修法：把那一节整段移到按日期的新文件里，归档里删掉。**不要**改
-    这里的 FREEZE_DATE 来让它变绿 —— 那等于取消这条规则。
+    转红时的修法：把那一节整段移到 `docs/<目录>/<日期>-<短名>.md`，归档里删掉。
+    **不要**把这个标题加进 `tests/milestone_archive_headings.json` 来让它变绿。
     """
-    dates = _headings(PROJECT_ROOT / relative)
-    assert dates, f"{relative} 里一个日期标题都没有，判据本身失效了"
-    too_new = sorted({d for d in dates if d > FREEZE_DATE})
-    assert not too_new, (
-        f"{relative} 里出现了 {FREEZE_DATE} 之后的记录标题：{too_new}。"
-        f"ADR-0097 要求新记录写成 docs/<目录>/<日期>-<短名>.md，不要追加到归档文件。"
+    frozen = set(baseline["archives"][relative])
+    current = _headings(relative)
+
+    assert current, f"{relative} 里一个记录标题都没有，判据本身失效了"
+
+    added = [h for h in current if h not in frozen]
+    assert not added, (
+        f"{relative} 新增了 {len(added)} 个不在冻结基线里的记录标题：\n  "
+        + "\n  ".join(added[:5])
+        + f"\nADR-0097 要求新记录写成 docs/<目录>/<日期>-<短名>.md（冻结日 {baseline['freeze_date']} "
+        "之后的算新记录，当天的追加也算）。不要改基线文件来绕过。"
     )
+
+
+def test_the_baseline_covers_both_archives(baseline: dict) -> None:
+    """基线本身要完整，否则缺的那一份等于没有守卫。"""
+    assert set(baseline["archives"]) == {"docs/validation.md", "docs/开发进度.md"}
+    for relative, headings in baseline["archives"].items():
+        assert len(headings) > 100, f"{relative} 的基线只有 {len(headings)} 条，像是不完整"
+        assert all(h.startswith("## ") for h in headings)
