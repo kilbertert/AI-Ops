@@ -42,3 +42,7 @@ uv run python tools/upgrade_consumer_flow.py <原草稿.yml> --gateway <可信�
 
 失败时通过原restore恢复V5，再按保存前hash恢复草稿；不整库覆盖、不删除新增QA/run、不改租户权限。
 仅保留旧文件和旧分支作为回滚兼容，不将旧FAQ答案作为动态检索失败时的自动回落。
+
+迁移草稿新增环境变量时，Dify可能补充空description和selector；候选显式提供这两个字段，保存后仍逐字段核对，
+不要直接忽略整组环境变量差异。视频验收先检查卡片，再点击进入原youtube/player页核videoId及iframe源；
+聊天页本身没有iframe不代表视频未交付。
