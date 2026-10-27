@@ -1058,6 +1058,7 @@ def sync_workflow_from_dify(
     source: DifyDslSource,
     *,
     consumer_settings: dict | None = None,
+    consumer_callback_base: str = "",
 ) -> SyncOutcome:
     """把一个**workflow**应用的当前内容冻结成新的已发布版本。
 
@@ -1085,6 +1086,15 @@ def sync_workflow_from_dify(
         existing.agent_id, existing.tenant_id, existing.published_version
     ).snapshot
     candidate = workflow_content(client.export_dsl())
+    if consumer_settings is not None:
+        from aiops_diagnostics.consumer_flow_contract import publication_settings
+
+        consumer_settings = publication_settings(
+            candidate,
+            consumer_settings,
+            consumer_callback_base,
+            require_split=(previous.get("consumer_service") or {}).get("callback_version") == 2,
+        )
     previous_workflow = previous.get("workflow_id")
     # **只有同一应用的历史版本才能参与去重。** 快照里的 `workflow_id` 属于**当时那个
     # 应用**；注册表把 agent 改绑到复制出来的新 app 之后，拿旧 id 到新 app 上导出会失败，

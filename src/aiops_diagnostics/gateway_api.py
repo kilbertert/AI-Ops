@@ -798,6 +798,7 @@ def _sync_bound_app(context: Any, binding: Any, source: Any, admin: Any) -> Any:
             binding,
             source,
             consumer_settings=consumer_publication.frozen_settings(target),
+            consumer_callback_base=context.settings.public_base_url,
         )
     try:
         return pull.sync_binding_from_dify(
@@ -893,6 +894,7 @@ def _publish_bound_app(
             status.HTTP_404_NOT_FOUND, "DIFY_APP_NOT_BOUND", "app is not a bound agent source"
         )
     from aiops_diagnostics.agent_manifest import admin_context
+    from aiops_diagnostics.consumer_flow_contract import ConsumerFlowError
     from aiops_diagnostics.dify_dsl_pull import DifyDslError, DifyDslSource
 
     console = context.settings
@@ -979,6 +981,16 @@ def _publish_bound_app(
             if node_target
             else _sync_bound_app(context, binding, source, admin_context(binding.tenant_id))
         )
+    except ConsumerFlowError as exc:
+        _record_publish_audit(
+            context,
+            app_id=app_id,
+            action="refused",
+            reason_code="CONSUMER_FLOW_INVALID",
+            binding=binding,
+            initiator=initiator,
+        )
+        raise StandardAPIError(409, "CONSUMER_FLOW_INVALID", str(exc)) from exc
     except DifyDslError as exc:
         # Dify 自己拒绝或不可达：带它自己的码转达，调用方要能区分「凭据被拒」与「服务挂了」。
         # 被拒的**尝试**一样入账；租户与 agent 名此刻是知道的（绑定查到了）。
@@ -1260,7 +1272,7 @@ def _is_managed_workflow_app(context: Any, app_id: str) -> bool:
 
 
 def _workflow_trial_draft(
-    context: Any, app_id: str, run_context: ScopeContext, question="check order status"
+    context: Any, app_id: str, run_context: ScopeContext, question="check order status", selected_order=""
 ):
     from aiops_diagnostics.dify_dsl_pull import DifyDslClient, DifyDslSource
     from aiops_diagnostics.dify_workflow_trial import WorkflowTrial
@@ -1293,7 +1305,27 @@ def _workflow_trial_draft(
         target = target_for(context.settings, binding)
         if target is None:
             raise StandardAPIError(409, "CONSUMER_TARGET_MISSING", "consumer trial target missing")
-        return ConsumerTrial(dsl, source, row, frozen_settings(target), question)
+        from aiops_diagnostics.consumer_flow_contract import publication_settings
+        from aiops_diagnostics.dify_dsl_pull import workflow_content
+
+        candidates = {
+            token for match in _ORDER_TOKEN.finditer(question) if (token := _extract_order_no(match.group(0)))
+        }
+        if candidates and candidates != {selected_order}:
+            raise StandardAPIError(400, "TRIAL_ORDER_MISMATCH", "试用问题与选定订单不一致")
+        previous = context.agent_manager.store.version(
+            row.agent_id, row.tenant_id, row.agent_version_no
+        ).snapshot
+        try:
+            frozen = publication_settings(
+                workflow_content(dsl),
+                frozen_settings(target),
+                context.settings.public_base_url,
+                require_split=(previous.get("consumer_service") or {}).get("callback_version") == 2,
+            )
+        except ValueError as exc:
+            raise StandardAPIError(409, "CONSUMER_FLOW_INVALID", str(exc)) from exc
+        return ConsumerTrial(dsl, source, row, frozen, question)
     return WorkflowTrial(dsl, source, row)
 
 
@@ -2569,7 +2601,9 @@ def create_gateway_app(
                 and context.settings.chat_route_bindings_file
                 and _is_managed_workflow_app(context, payload.app_id)
             ):
-                draft = _workflow_trial_draft(context, payload.app_id, run_context, payload.question)
+                draft = _workflow_trial_draft(
+                    context, payload.app_id, run_context, payload.question, payload.order_no
+                )
             else:
                 if payload.prompt is not None:
                     draft_payload = {"prompt": payload.prompt, "allowed_tools": payload.allowed_tools}
@@ -4441,6 +4475,7 @@ def create_gateway_app(
         return JSONResponse(content=result, headers={"Cache-Control": "no-store"})
 
     @app.post("/v1/internal/consumer-knowledge")
+    @app.post("/v1/internal/consumer-data/{capability}")
     async def consumer_knowledge_context(
         request: Request,
         response: Response,
@@ -4449,6 +4484,9 @@ def create_gateway_app(
         from aiops_diagnostics import chat_data_grant, consumer_chat_service, consumer_knowledge
 
         response.headers["Cache-Control"] = "no-store"
+        capability = request.path_params.get("capability")
+        if capability is not None and capability not in {"knowledge", "status", "billing"}:
+            raise StandardAPIError(404, "CONSUMER_CAPABILITY_UNKNOWN", "未知取数能力")
         if not authorization or not authorization.startswith("Bearer "):
             raise StandardAPIError(401, "GRANT_REQUIRED", "knowledge grant required")
         try:
@@ -4458,6 +4496,8 @@ def create_gateway_app(
                 if len(raw) > 6000:
                     raise StandardAPIError(413, "PHOTO_CONTEXT_INVALID", "image context too large")
             image_text = raw.decode("utf-8")
+            if capability in {"status", "billing"} and image_text.strip():
+                raise StandardAPIError(400, "CONSUMER_DATA_INPUT_INVALID", "订单与身份不能由节点参数指定")
             if request.headers.get("Content-Type", "").startswith("application/json"):
                 body = json.loads(image_text or "{}")
                 if not isinstance(body, dict) or set(body) - {"image_text"}:
@@ -4471,6 +4511,7 @@ def create_gateway_app(
                 authorization[7:],
                 require_result=consumer_chat_service.require_result,
                 image_text=image_text,
+                capability=capability,
                 read_snapshot=lambda caller, order, kind: _authorized_consumer_snapshot(
                     context.settings, caller, order, kind
                 ),

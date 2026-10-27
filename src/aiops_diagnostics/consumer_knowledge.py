@@ -191,8 +191,12 @@ def validate_content(body, *, tenant, environment):
 def _binding_identity(binding):
     from dataclasses import asdict
 
+    fields = asdict(binding)
+    # 旧发布版的指纹保持原值，代码升级不能让尚未换版的历史答案失效。
+    if fields.get("callback_version") == 1:
+        fields.pop("callback_version")
     return hashlib.sha256(
-        (json.dumps(asdict(binding), sort_keys=True) + digest(binding.content_file)).encode()
+        (json.dumps(fields, sort_keys=True) + digest(binding.content_file)).encode()
     ).hexdigest()
 
 
@@ -358,7 +362,7 @@ def final_answer(raw, context, language, content):
     return answer
 
 
-def callback_context(runtime, token, *, require_result, read_snapshot, image_text=""):
+def callback_context(runtime, token, *, require_result, read_snapshot, image_text="", capability=None):
     from aiops_diagnostics import chat_data_grant, chat_execution
     from aiops_diagnostics.agent_runs import scope_from_json
     from aiops_diagnostics.dify_run_store import still_valid
@@ -393,6 +397,11 @@ def callback_context(runtime, token, *, require_result, read_snapshot, image_tex
         or _binding_identity(binding) != run.binding_digest
     ):
         raise ChatRunUnavailable("CHATFLOW_BINDING_CHANGED", "knowledge binding changed", http_status=403)
+    expected = run.data_kind if run.order_no else "knowledge"
+    if (binding.callback_version == 2 and capability != expected) or (
+        binding.callback_version == 1 and capability is not None
+    ):
+        raise ChatRunUnavailable("GRANT_CAPABILITY_MISMATCH", "本轮授权与取数节点不一致", http_status=403)
 
     def require_current():
         if trial:
