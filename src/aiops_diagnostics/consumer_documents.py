@@ -2,8 +2,10 @@
 
 import json
 import re
+from urllib.parse import urlsplit
 
 from aiops_diagnostics.chat_execution import ChatRunUnavailable
+from aiops_diagnostics.knowledge_retrieval import _URL_PATTERN
 from aiops_diagnostics.redaction import redact_text
 
 SCHEMA = "aiops-consumer-live/1"
@@ -78,8 +80,20 @@ def answer_selection(raw, context):
         or context.get("status") != "found"
     ):
         raise ChatRunUnavailable("CHATFLOW_REFERENCE_INVALID", "answer did not cite this retrieval")
-    if not text.strip() or len(text) > 8000 or re.search(r"https?://|www\.", text, re.I):
+    urls = _URL_PATTERN.findall(text)
+    allowed = {url for ref in references for url in _URL_PATTERN.findall(sources[ref].get("content", ""))}
+    if not text.strip() or len(text) > 8000:
         raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "document answer must not generate links")
+    for url in urls:
+        try:
+            parts = urlsplit(url)
+            valid = url in allowed and parts.scheme == "https" and not parts.username and not parts.password
+        except ValueError:
+            valid = False
+        if not valid:
+            raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "link was not in cited documents")
+    if re.search(r"https?://|www\.", _URL_PATTERN.sub("", text), re.I):
+        raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "invalid document link")
     blocks = [{"kind": "text", "text": redact_text(text.strip())}]
     seen_media = set()
     for ref in references:
