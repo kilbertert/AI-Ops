@@ -304,6 +304,9 @@ def test_answer_may_repeat_only_links_from_its_cited_document():
         video + "?invented=1",
         "https://example.org/other",
         "http://www.youtube.com/shorts/t57PMqSw7iE",
+        video + "(unverified)",
+        "https://www.youtube.com(@evil.example)/shorts/t57PMqSw7iE",
+        "[视频](" + video + "(unverified))",
     ]:
         with pytest.raises(ChatRunUnavailable):
             answer_selection(json.dumps({**value, "answer": url}), context)

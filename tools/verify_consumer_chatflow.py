@@ -66,6 +66,9 @@ class Model(BaseHTTPRequestHandler):
             if re.search(r'"mode"\s*:\s*"documents"', last):
                 payload = json.loads(last.split("本轮取数结果：", 1)[1])
                 source = next(iter(payload.get("sources", [])), None)
+                text = source["content"].split("\n")[0] if source else ""
+                if source and source.get("media"):
+                    text += "\n[视频](" + source["media"][0]["url"] + ")"
                 answer = json.dumps(
                     {
                         "kind": "realtime"
@@ -73,7 +76,7 @@ class Model(BaseHTTPRequestHandler):
                         else "knowledge"
                         if source
                         else "not_found",
-                        "answer": source["content"].split("\n")[0] if source else "",
+                        "answer": text,
                         "reference_ids": [source["reference_id"]] if source else [],
                     },
                     ensure_ascii=False,
