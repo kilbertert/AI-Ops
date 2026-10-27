@@ -32,3 +32,9 @@ Dify草稿保存首次400：1.17.1的SyncDraftWorkflowPayload禁止顶层environ
 
 证据方法见[验收计划](../agents/consumer-wf01/qa-plan.md)和[发布手册](../agents/consumer-wf01/live-release.md)。
 本次标准依据与取舍见[ADR-0150](../adr/0150-consumer-cpms-workflow-nodes.md)。
+
+## PR #1102审查续办
+
+Devin两条成立：Nginx正则会被现役`^~ /v1/`截走；试用的关闭原因被worker与GET通用文案吞掉。
+回归先红4条（另3条通过）；改三条精确location，并将三个预期试用拒绝码映射到公开提示，
+补丁相关19 passed。未知异常仍不把内部错误正文交给运营。最终全量4096 passed/9 skipped（145.34秒），真Dify 73/73；关闭试用同时核对公开错误码和中文文案。

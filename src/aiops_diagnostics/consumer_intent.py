@@ -23,6 +23,11 @@ INTENTS = (
     "unsupported_live",
     "clarify",
 )
+TRIAL_MESSAGES = {
+    "CHATFLOW_LIVE_DISABLED": "disabled",
+    "TRIAL_ORDER_REQUIRED": "order",
+    "TRIAL_CLARIFICATION_REQUIRED": "clarify",
+}
 REFERENCES = ("none", "latest", "explicit", "previous", "unclear")
 SCHEMA = {
     "type": "object",

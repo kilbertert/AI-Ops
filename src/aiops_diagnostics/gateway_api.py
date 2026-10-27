@@ -2693,7 +2693,12 @@ def create_gateway_app(
             #
             # 这里是**按请求语言渲染**的那一类文案（与诊断面同一条规则：请求语言只渲染
             # 服务端此刻写的话，不改结果本身的 `language`）。
-            body["error_message"] = diagnosis_error_message(language, trial["error_code"])
+            from aiops_diagnostics.consumer_intent import TRIAL_MESSAGES, message
+
+            key = TRIAL_MESSAGES.get(trial["error_code"])
+            body["error_message"] = (
+                message(key, language) if key else diagnosis_error_message(language, trial["error_code"])
+            )
         return body
 
     @app.get("/health")

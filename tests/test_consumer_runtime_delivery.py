@@ -51,7 +51,7 @@ def test_callback_preserves_the_grant_and_rejects_other_methods(tmp_path, path):
         f"server {{ listen 127.0.0.1:{upstream}; location / {{ return 200 "
         "'$http_authorization|$http_x_third_session|$http_x_business_entry|$http_x_aiops_source_key'; } }\n"
         f"server {{ listen 127.0.0.1:{front}; {snippet}\n"
-        "location /v1/ { return 418 'APP-FALLBACK'; } } }\n"
+        "location ^~ /v1/ { return 418 'APP-FALLBACK'; } } }\n"
     )
     subprocess.run(["nginx", "-t", "-c", str(config)], check=True, capture_output=True)
     for item in sockets:

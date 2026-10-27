@@ -27,6 +27,8 @@ Dify官方[HTTP Request](https://docs.dify.ai/en/use-dify/nodes/http-request)、
 [Variable Aggregator](https://docs.dify.ai/en/use-dify/nodes/variable-aggregator)：互斥分支用聚合节点选本次已执行输出。
 按现用1.17.1镜像源码和隔离整链验证；环境变量随workflow发布复制，保存用environment_variable_patch，
 不能把environment_variables直接提交到草稿同步接口（extra字段会400）。
+Nginx三个新回调必须精确location，避免被现役`^~ /v1/`前缀截走并替换凭据。
+试用可预期的能力关闭/订单指代/澄清使用稳定码与公开文案，未知错误继续通用失败。
 
 ## 备选方案
 

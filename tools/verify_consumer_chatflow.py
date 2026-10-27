@@ -810,7 +810,10 @@ def verify_knowledge(root, base, env, setup, model, check):
             time.sleep(0.1)
         check(
             "disabled draft trial refuses without CPMS",
-            result.get("status") == "failed" and len(stack.CpmsHandler.calls) == count,
+            result.get("status") == "failed"
+            and result.get("error_code") == "CHATFLOW_LIVE_DISABLED"
+            and "尚未开通" in result.get("error_message", "")
+            and len(stack.CpmsHandler.calls) == count,
         )
         check("publish disabled capability", action("publish")[0] == 200)
         code, disabled = question("我上一个订单现在是什么情况")
