@@ -300,6 +300,9 @@ def test_answer_may_repeat_only_links_from_its_cited_document():
     value = {"kind": "knowledge", "answer": "观看：[视频](" + video + ")", "reference_ids": ["source-1"]}
     _, answer = answer_selection(json.dumps(value), context)
     assert video in answer["blocks"][0]["text"]
+    for prose in ["观看 (" + video + ")", "观看（" + video + "）"]:
+        _, answer = answer_selection(json.dumps({**value, "answer": prose}), context)
+        assert video in answer["blocks"][0]["text"]
     for url in [
         video + "?invented=1",
         "https://example.org/other",

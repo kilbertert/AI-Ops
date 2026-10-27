@@ -84,12 +84,17 @@ def answer_selection(raw, context):
     urls = []
     for match in ANSWER_URL.finditer(text):
         url = match.group(0)
-        # 仅剥掉明确Markdown链接的外层右括号，URL内部括号/后缀必须完整参与比较。
+        # 只剥紧邻URL的配对外层括号；URL内部括号/后缀必须完整参与比较。
         if (
-            text[: match.start()].endswith("](")
+            text[: match.start()].endswith("(")
             and url.endswith(")")
             and url.count(")") == 1
             and "(" not in url
+        ) or (
+            text[: match.start()].endswith("（")
+            and url.endswith("）")
+            and url.count("）") == 1
+            and "（" not in url
         ):
             url = url[:-1]
         urls.append(url)
