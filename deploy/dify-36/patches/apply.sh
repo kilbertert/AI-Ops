@@ -26,6 +26,7 @@ controllers/service_api/dataset/hit_testing.py 4d56e1bab4585a7b5f892557097d9525b
 services/external_knowledge_service.py 59afcc901649b2f64ecd4814f7b7d98fa1577371403578b4bb64e7227eb4f726
 controllers/console/datasets/external.py f24bdd52739cad6207ed2957e94258be22e5e144bd84d2758882d797fdd9b013
 services/dataset_service.py 93deb113f58ac79b1e3023257f7912c05196e23aa71a9626149c220904cf93e3
+controllers/console/workspace/plugin.py 53367ae76ce6c6fd171308ae8adc4bba6ee7b29100fc26f4f478a3d991dc4536
 "
 
 stage="$(mktemp -d)"
@@ -64,5 +65,5 @@ mkdir -p "$OUT"
 find "$OUT" -type f -exec chmod 0444 {} +
 echo "ok: $(find "$OUT" -type f | wc -l) 个文件就位（0444）"
 echo
-echo "下一步：确认 docker-compose.yaml 里这 5 个文件的挂载项与本目录补丁集一致"
+echo "下一步：确认 docker-compose.yaml 里的文件挂载项与本目录补丁集一致"
 echo "    （deploy/dify-36/check.sh 会断言此事），然后 docker compose up -d api worker"

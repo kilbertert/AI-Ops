@@ -49,6 +49,7 @@ x-patched-api-mounts:
   - &pm_service_hit_testing ./volumes/app/patched-api/controllers/service_api/dataset/hit_testing.py:/app/api/controllers/service_api/dataset/hit_testing.py:ro
   - &pm_external_knowledge ./volumes/app/patched-api/services/external_knowledge_service.py:/app/api/services/external_knowledge_service.py:ro
   - &pm_dataset_service ./volumes/app/patched-api/services/dataset_service.py:/app/api/services/dataset_service.py:ro
+  - &pm_plugin ./volumes/app/patched-api/controllers/console/workspace/plugin.py:/app/api/controllers/console/workspace/plugin.py:ro
 
 x-shared-api-worker: &shared-api-worker
   image: ${DIFY_REGISTRY:-docker.1panel.live}/langgenius/dify-api:1.17.1
@@ -123,6 +124,7 @@ services:
       - *pm_service_hit_testing
       - *pm_external_knowledge
       - *pm_dataset_service
+      - *pm_plugin
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:5001/health"]
       interval: 30s
@@ -155,6 +157,7 @@ services:
       - *pm_service_hit_testing
       - *pm_external_knowledge
       - *pm_dataset_service
+      - *pm_plugin
     healthcheck:
       test: ["CMD-SHELL", "celery -A celery_healthcheck.celery inspect ping"]
       interval: ${COMPOSE_WORKER_HEALTHCHECK_INTERVAL:-30s}
