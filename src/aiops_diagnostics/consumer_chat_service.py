@@ -102,7 +102,12 @@ def start(
                 "CHATFLOW_NEW_CONVERSATION_REQUIRED", message("context", language), http_status=409
             )
     # 单据轮次及其下一轮均不继承上游记忆，旧订单数据不会进入后续模型输入。
-    if order_no or photo_id or (previous and (previous.order_no or previous.has_photo)):
+    if (
+        binding.callback_version == 4
+        or order_no
+        or photo_id
+        or (previous and (previous.order_no or previous.has_photo))
+    ):
         upstream = ""
     image = (
         runtime.consumer_photos.take(photo_id, caller.scope_fingerprint, fingerprint(binding))

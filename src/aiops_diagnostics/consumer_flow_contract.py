@@ -48,9 +48,16 @@ def publication_settings(
     workflow, ceiling, public_base, *, require_split=False, require_picker=False, owned_libraries=None
 ):
     graph = workflow.get("graph", {})
+    from aiops_diagnostics import consumer_documents
+
+    documents = consumer_documents.enabled(workflow)
+    if "content" in ceiling and (ceiling["content"].get("schema") == consumer_documents.SCHEMA) != documents:
+        raise ConsumerFlowError("知识回答模式在准备期间发生变化，请重新试用或发布")
     nodes = {n.get("id"): n.get("data", {}) for n in graph.get("nodes", [])}
     variables = nodes.get("start", {}).get("variables", [])
     picker = nodes.get("knowledge", {}).get("type") == "tool"
+    if documents and not picker:
+        raise ConsumerFlowError("动态知识回答需要知识库选择节点")
     split = (
         require_split
         or require_picker
@@ -165,7 +172,15 @@ def publication_settings(
         "图片聚合仅允许图片线索，不允许凭据或其他输入",
     )
     require(nodes["end"].get("answer") == "{{#answer.text#}}", "答复引用错误")
-    require(nodes["disabled"].get("answer") == '{"kind":"unavailable","faq_id":""}', "关闭提示错误")
+    require(
+        nodes["disabled"].get("answer")
+        == (
+            '{"kind":"unavailable","answer":"","reference_ids":[]}'
+            if documents
+            else '{"kind":"unavailable","faq_id":""}'
+        ),
+        "关闭提示错误",
+    )
     for key, node in nodes.items():
         if node.get("type") == "llm":
             require("data_grant" not in str(node), key + "不得向模型传递凭据")
@@ -218,5 +233,10 @@ def publication_settings(
             require_owned(selected, owned_libraries() if callable(owned_libraries) else owned_libraries)
         except ValueError as exc:
             raise ConsumerFlowError(str(exc)) from exc
-        return {**ceiling, **flags, "knowledge_base_ids": list(selected), "callback_version": 3}
+        return {
+            **ceiling,
+            **flags,
+            "knowledge_base_ids": list(selected),
+            "callback_version": 4 if documents else 3,
+        }
     return {**ceiling, **flags, "callback_version": 2}

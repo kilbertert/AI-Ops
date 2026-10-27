@@ -1066,6 +1066,8 @@ def _external_video_link(content: str) -> tuple[str, str]:
             parts = urllib.parse.urlsplit(candidate)
         except ValueError:
             continue
+        if parts.scheme != "https" or parts.username or parts.password:
+            continue
         host = (parts.hostname or "").lower()
         embed = EXTERNAL_VIDEO_HOSTS.get(host)
         # Host AND path: a channel page on an allow-listed host is still not a

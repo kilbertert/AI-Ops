@@ -3,6 +3,8 @@
 日期：2026-10-27
 状态：已采纳
 
+2026-10-27更新：其中“仅审核FAQ、正文随内容包冻结”的决定由[ADR-0152](0152-knowledge-documents-are-the-live-answer-source.md)替代；选库与权限规则仍有效。
+
 用户确认保留已审核FAQ交付规则，要求在“检索当前用户适用知识”节点直接换库。
 采用Dify工具插件的dynamic-select/multiple参数，选库作为常量写入DSL，试用/发布核验当前租户目录，
 与图及审核内容一起冻结进原Agent不可变版本。callback_version=3使用节点选库；文件旧字段仅兼容v1/v2。
