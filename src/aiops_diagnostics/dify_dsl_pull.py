@@ -1059,6 +1059,7 @@ def sync_workflow_from_dify(
     *,
     consumer_settings: dict | None = None,
     consumer_callback_base: str = "",
+    consumer_libraries=None,
 ) -> SyncOutcome:
     """把一个**workflow**应用的当前内容冻结成新的已发布版本。
 
@@ -1093,7 +1094,9 @@ def sync_workflow_from_dify(
             candidate,
             consumer_settings,
             consumer_callback_base,
-            require_split=(previous.get("consumer_service") or {}).get("callback_version") == 2,
+            require_split=(previous.get("consumer_service") or {}).get("callback_version", 1) >= 2,
+            require_picker=(previous.get("consumer_service") or {}).get("callback_version") == 3,
+            owned_libraries=consumer_libraries,
         )
     previous_workflow = previous.get("workflow_id")
     # **只有同一应用的历史版本才能参与去重。** 快照里的 `workflow_id` 属于**当时那个

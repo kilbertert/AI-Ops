@@ -44,11 +44,20 @@ class ConsumerFlowError(ValueError):
     """可向运营展示的本地编排拒绝原因，不包含上游正文。"""
 
 
-def publication_settings(workflow, ceiling, public_base, *, require_split=False):
+def publication_settings(
+    workflow, ceiling, public_base, *, require_split=False, require_picker=False, owned_libraries=None
+):
     graph = workflow.get("graph", {})
     nodes = {n.get("id"): n.get("data", {}) for n in graph.get("nodes", [])}
     variables = nodes.get("start", {}).get("variables", [])
-    split = require_split or "data_route" in nodes or any(v.get("variable") == "data_kind" for v in variables)
+    picker = nodes.get("knowledge", {}).get("type") == "tool"
+    split = (
+        require_split
+        or require_picker
+        or picker
+        or "data_route" in nodes
+        or any(v.get("variable") == "data_kind" for v in variables)
+    )
     split = split or any("/consumer-data/" in n.get("url", "") for n in nodes.values())
     if not split:
         return ceiling
@@ -60,7 +69,9 @@ def publication_settings(workflow, ceiling, public_base, *, require_split=False)
     require(
         len(nodes) == len(graph.get("nodes", [])) and set(nodes) == set(TYPES), "必需节点缺失或存在未登记节点"
     )
-    require(all(n.get("type") == TYPES[key] for key, n in nodes.items()), "节点类型已改变")
+    expected_types = {**TYPES, **({"knowledge": "tool"} if picker else {})}
+    require(all(n.get("type") == expected_types[key] for key, n in nodes.items()), "节点类型已改变")
+    require(not require_picker or picker, "已启用选库节点，不允许普通发布退回服务器固定选库")
     edges = [(e.get("source"), e.get("sourceHandle"), e.get("target")) for e in graph.get("edges", [])]
     require(len(edges) == len(EDGES) and set(edges) == EDGES, "取数分支连线不符合契约")
     base = public_base.rstrip("/")
@@ -75,6 +86,8 @@ def publication_settings(workflow, ceiling, public_base, *, require_split=False)
     )
     for kind, node_id in [("knowledge", "knowledge"), ("status", "cpms_status"), ("billing", "cpms_billing")]:
         n = nodes[node_id]
+        if kind == "knowledge" and picker:
+            continue
         require(
             n.get("url") == base + PATHS[kind] and n.get("method", "").lower() == "post",
             node_id + "取数地址或方法错误",
@@ -140,7 +153,10 @@ def publication_settings(workflow, ceiling, public_base, *, require_split=False)
     )
     require(
         nodes["data_context"].get("variables")
-        == [[key, "body"] for key in ("knowledge", "cpms_status", "cpms_billing")],
+        == [
+            [key, "text" if picker and key == "knowledge" else "body"]
+            for key in ("knowledge", "cpms_status", "cpms_billing")
+        ],
         "本轮结果聚合错误",
     )
     require(nodes["data_context"].get("output_type") == "string", "结果必须为字符串")
@@ -166,4 +182,41 @@ def publication_settings(workflow, ceiling, public_base, *, require_split=False)
             "能力开关必须为true或false",
         )
         flags[setting] = ceiling[setting] and entry["value"] == "true"
+    if picker:
+        from aiops_diagnostics.consumer_knowledge_selection import (
+            PROVIDER,
+            TOOL,
+            require_owned,
+            selected_libraries,
+        )
+
+        n = nodes["knowledge"]
+        require(
+            n.get("provider_id") == PROVIDER
+            and n.get("tool_name") == TOOL
+            and n.get("provider_type") in {"builtin", "plugin"}
+            and n.get("tool_node_version") == "2",
+            "请选择受控知识检索工具",
+        )
+        require(
+            n.get("tool_parameters")
+            == {
+                "data_grant": {"type": "mixed", "value": "{{#start.data_grant#}}"},
+                "image_text": {"type": "mixed", "value": "{{#photo_context.output#}}"},
+            },
+            "工具仅接受本轮授权与图片线索",
+        )
+        require(set(n.get("tool_configurations", {})) == {"knowledge_base_ids"}, "工具配置仅允许知识库选择")
+        require(
+            not n.get("retry_config", {}).get("retry_enabled") and not n.get("error_strategy"),
+            "检索不允许自动重试或忽略失败",
+        )
+        try:
+            selected = selected_libraries(n)
+            if owned_libraries is None:
+                raise ValueError("无法核验租户知识库目录，请稍后再试")
+            require_owned(selected, owned_libraries() if callable(owned_libraries) else owned_libraries)
+        except ValueError as exc:
+            raise ConsumerFlowError(str(exc)) from exc
+        return {**ceiling, **flags, "knowledge_base_ids": list(selected), "callback_version": 3}
     return {**ceiling, **flags, "callback_version": 2}

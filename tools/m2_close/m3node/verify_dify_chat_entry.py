@@ -892,6 +892,7 @@ def _start_gateway(
         "AIOPS_GATEWAY_DATA_HOME": str(case / "data"),
         "AIOPS_GATEWAY_SERVER_CONFIG_FILE": str(settings_file),
         "AIOPS_GATEWAY_DATABASE_FILE": str(case / "data/gateway.db"),
+        "AIOPS_GATEWAY_INTERNAL_TOKEN_SECRET": "synthetic-catalogue-secret",
         "AIOPS_GATEWAY_PORT": str(port),
         "AIOPS_GATEWAY_PUBLIC_BASE_URL": f"http://127.0.0.1:{port}",
         "AIOPS_GATEWAY_CHARGING_STATUS_BASE_URL": f"{cpms_base}/charging-pile",

@@ -88,14 +88,13 @@ def start(
             raise chat_execution.ChatRunUnavailable(
                 "CHATFLOW_NEW_CONVERSATION_REQUIRED", message("conversation", language), http_status=409
             )
-        if still_valid(previous):
+        if still_valid(previous) and uses_context:
             require_result(runtime, caller, previous_qa)
-            if uses_context:
-                upstream = previous.upstream_conversation_id
-                if not upstream:
-                    raise chat_execution.ChatRunUnavailable(
-                        "CHATFLOW_EVIDENCE_UNAVAILABLE", "conversation evidence unavailable"
-                    )
+            upstream = previous.upstream_conversation_id
+            if not upstream:
+                raise chat_execution.ChatRunUnavailable(
+                    "CHATFLOW_EVIDENCE_UNAVAILABLE", "conversation evidence unavailable"
+                )
         elif uses_context:
             from aiops_diagnostics.consumer_intent import message
 
@@ -227,7 +226,7 @@ def execute(runtime, caller, qa, question, binding, upstream, registration, lang
                 "has_photo": "yes" if uploaded else "no",
                 **(
                     {"data_kind": latest.data_kind if latest.order_no else "knowledge"}
-                    if binding.callback_version == 2
+                    if binding.callback_version >= 2
                     else {}
                 ),
                 **({"data_grant": token} if token else {}),
@@ -236,6 +235,10 @@ def execute(runtime, caller, qa, question, binding, upstream, registration, lang
             conversation_id=upstream,
             on_started=started,
         )
+        if not latest.order_no:
+            from aiops_diagnostics.consumer_knowledge_selection import require_available
+
+            require_available(runtime, caller, binding)
         current(runtime, caller, binding)
         run = store.get(run_id)
         if (
@@ -318,6 +321,10 @@ def require_result(runtime, caller, qa):
         )
     if run.order_no:
         runtime._require_chat_order_visible(caller, run.order_no)
+    else:
+        from aiops_diagnostics.consumer_knowledge_selection import require_available
+
+        require_available(runtime, caller, binding)
     latest = runtime.dify_run_store.get(run.run_id)
     if latest is None or latest.state != "succeeded" or not still_valid(latest):
         raise chat_execution.ChatRunUnavailable(
@@ -357,5 +364,10 @@ def previous_context(runtime, caller, binding, conversation):
     qa = runtime.store.get_assistant_question(run.qa_id, caller.scope_fingerprint)
     if not qa or qa["status"] != "completed":
         return None, ""
-    require_result(runtime, caller, qa)
+    try:
+        require_result(runtime, caller, qa)
+    except chat_execution.ChatRunUnavailable as exc:
+        if exc.code == "KNOWLEDGE_SELECTION_UNAVAILABLE":
+            return None, ""
+        raise
     return run, qa["question"]

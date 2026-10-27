@@ -19,7 +19,13 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from aiops_diagnostics import __version__, chat_execution, execution_manifest, request_observation
+from aiops_diagnostics import (
+    __version__,
+    chat_execution,
+    consumer_knowledge_selection,
+    execution_manifest,
+    request_observation,
+)
 from aiops_diagnostics.agent_content import AGENT_STARTERS
 from aiops_diagnostics.agent_lifecycle import (
     AGENT_MANAGE_SCOPE,
@@ -799,6 +805,9 @@ def _sync_bound_app(context: Any, binding: Any, source: Any, admin: Any) -> Any:
             source,
             consumer_settings=consumer_publication.frozen_settings(target),
             consumer_callback_base=context.settings.public_base_url,
+            consumer_libraries=lambda: consumer_knowledge_selection.owned_libraries(
+                context.runtime, binding.tenant_id
+            ),
         )
     try:
         return pull.sync_binding_from_dify(
@@ -1321,7 +1330,11 @@ def _workflow_trial_draft(
                 workflow_content(dsl),
                 frozen_settings(target),
                 context.settings.public_base_url,
-                require_split=(previous.get("consumer_service") or {}).get("callback_version") == 2,
+                require_split=(previous.get("consumer_service") or {}).get("callback_version", 1) >= 2,
+                require_picker=(previous.get("consumer_service") or {}).get("callback_version") == 3,
+                owned_libraries=lambda: consumer_knowledge_selection.owned_libraries(
+                    context.runtime, row.tenant_id
+                ),
             )
         except ValueError as exc:
             raise StandardAPIError(409, "CONSUMER_FLOW_INVALID", str(exc)) from exc
@@ -4479,6 +4492,31 @@ def create_gateway_app(
         )
         return JSONResponse(content=result, headers={"Cache-Control": "no-store"})
 
+    @app.get("/v1/internal/consumer-knowledge/catalogue")
+    def consumer_knowledge_catalogue(
+        response: Response, authorization: Annotated[str | None, Header()] = None
+    ):
+        from aiops_diagnostics.consumer_knowledge_selection import catalogue_workspace
+        from aiops_diagnostics.dify_workspaces import DifyWorkspaceError
+
+        response.headers["Cache-Control"] = "no-store"
+        try:
+            workspace = catalogue_workspace(
+                (authorization or "").removeprefix("Bearer "),
+                context.settings.internal_token_secret,
+                context.settings.environment,
+            )
+            tenant = context.dify_workspaces.tenant_for_workspace(workspace, context.settings.environment)
+        except (ValueError, DifyWorkspaceError) as exc:
+            raise StandardAPIError(403, "KNOWLEDGE_CATALOGUE_FORBIDDEN", "知识目录凭据无效") from exc
+        try:
+            libraries = context.runtime.kb_search_client.for_tenant(tenant).list_knowledge_bases()
+        except (ValueError, RuntimeError, AttributeError) as exc:
+            raise _runtime_unavailable("KNOWLEDGE_CATALOGUE_UNAVAILABLE", "知识库目录暂不可用", exc) from exc
+        return {
+            "libraries": [{"knowledge_base_id": r["knowledge_base_id"], "name": r["name"]} for r in libraries]
+        }
+
     @app.post("/v1/internal/consumer-knowledge")
     @app.post("/v1/internal/consumer-data/{capability}")
     async def consumer_knowledge_context(
@@ -4501,13 +4539,18 @@ def create_gateway_app(
                 if len(raw) > 6000:
                     raise StandardAPIError(413, "PHOTO_CONTEXT_INVALID", "image context too large")
             image_text = raw.decode("utf-8")
+            knowledge_base_ids = None
             if capability in {"status", "billing"} and image_text.strip():
                 raise StandardAPIError(400, "CONSUMER_DATA_INPUT_INVALID", "订单与身份不能由节点参数指定")
             if request.headers.get("Content-Type", "").startswith("application/json"):
                 body = json.loads(image_text or "{}")
-                if not isinstance(body, dict) or set(body) - {"image_text"}:
+                allowed = (
+                    {"image_text", "knowledge_base_ids"} if capability == "knowledge" else {"image_text"}
+                )
+                if not isinstance(body, dict) or set(body) - allowed:
                     raise ValueError("unexpected knowledge input")
                 image_text = body.get("image_text", "")
+                knowledge_base_ids = body.get("knowledge_base_ids")
             from starlette.concurrency import run_in_threadpool
 
             return await run_in_threadpool(
@@ -4517,6 +4560,7 @@ def create_gateway_app(
                 require_result=consumer_chat_service.require_result,
                 image_text=image_text,
                 capability=capability,
+                knowledge_base_ids=knowledge_base_ids,
                 read_snapshot=lambda caller, order, kind: _authorized_consumer_snapshot(
                     context.settings, caller, order, kind
                 ),

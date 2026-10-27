@@ -1,0 +1,23 @@
+Feature: 在Chatflow知识节点直接选择本租户知识库
+  Scenario: 节点显示可选库
+    Given 运营位于已登记工作区且有本工作区只读目录凭据
+    When 打开知识节点的知识库多选配置
+    Then 显示当前租户RAGFlow库名称
+    And 其他租户的库不可见且目录凭据不能取知识正文
+  Scenario: 草稿换库发布后才生效
+    Given 正式节点选择库A
+    When 在节点改选库B并试用
+    Then 试用只检索库B而正式App仍只检索库A
+    When 发布
+    Then 原App只检索库B且不需要修改服务器发布目标文件
+    When 恢复原版本
+    Then 原App再次检索库A
+  Scenario: 无效库和伪造请求
+    When 节点选空库、已删除库或其他租户库
+    Then 试用与发布明确拒绝且不静默退回旧库
+    When 运行请求携带与已发布选择不同的库
+    Then 缓存回放与新检索都拒绝
+  Scenario: 回答与当前资料相符
+    When 当前库召回已审核FAQ
+    Then 回答引用本轮来源
+    And 没有本轮召回证据不能交付旧库答案
