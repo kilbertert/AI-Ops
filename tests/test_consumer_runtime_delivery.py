@@ -32,7 +32,10 @@ def test_remote_http_dify_is_refused_before_serving(tmp_path, managed):
     settings.validate()
 
 
-def test_callback_preserves_the_grant_and_rejects_other_methods(tmp_path):
+@pytest.mark.parametrize(
+    "path", ["consumer-knowledge", "consumer-data/knowledge", "consumer-data/status", "consumer-data/billing"]
+)
+def test_callback_preserves_the_grant_and_rejects_other_methods(tmp_path, path):
     if shutil.which("nginx") is None:
         pytest.skip("真实nginx不可用")
     sockets = [socket.socket(), socket.socket()]
@@ -61,7 +64,7 @@ def test_callback_preserves_the_grant_and_rejects_other_methods(tmp_path):
                     break
             except OSError:
                 time.sleep(0.1)
-        base = f"http://127.0.0.1:{front}/v1/internal/consumer-knowledge"
+        base = f"http://127.0.0.1:{front}/v1/internal/{path}"
         headers = {
             "Authorization": "Bearer one-request-grant",
             "X-Third-Session": "spoof",

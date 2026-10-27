@@ -46,12 +46,15 @@ class Model(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream" if body.get("stream") else "application/json")
         self.end_headers()
-        if any("本轮知识" in str(m.get("content")) for m in messages):
+        if any(
+            "本轮知识" in str(m.get("content")) or "本轮取数结果" in str(m.get("content")) for m in messages
+        ):
             last = str(
                 next(
                     m.get("content")
                     for m in reversed(messages)
-                    if m.get("role") == "user" and "本轮知识" in str(m.get("content"))
+                    if m.get("role") == "user"
+                    and ("本轮知识" in str(m.get("content")) or "本轮取数结果" in str(m.get("content")))
                 )
             )
             answer = json.dumps(
@@ -67,6 +70,7 @@ class Model(BaseHTTPRequestHandler):
             question = query["question"]
             intent, reference = {
                 "我上一个订单现在是什么情况": ("order_status", "latest"),
+                "看看选定这单的情况": ("order_status", "explicit"),
                 "帮我查看最新的订单的情况": ("order_status", "latest"),
                 "查询我的最新订单退款记录": ("billing_record", "latest"),
             }.get(question, ("knowledge", "none"))
@@ -270,6 +274,36 @@ class Knowledge(BaseHTTPRequestHandler):
 
 
 def verify_knowledge(root, base, env, setup, model, check):
+    import sqlite3
+    import uuid
+
+    def node_trace(qa_id, expected):
+        with sqlite3.connect(root / "knowledge-test/gateway/data/gateway.db") as connection:
+            run_id = connection.execute(
+                "SELECT workflow_run_id FROM chat_dify_runs WHERE qa_id=?", (qa_id,)
+            ).fetchone()[0]
+        uuid.UUID(run_id)
+        sql = (
+            f"SELECT node_id FROM workflow_node_executions WHERE workflow_run_id='{run_id}' "
+            "AND node_id IN ('knowledge','cpms_status','cpms_billing') AND status='succeeded'"
+        )
+        result = stack._compose(
+            env,
+            "exec",
+            "-T",
+            "db_postgres",
+            "psql",
+            "-U",
+            env["DB_USERNAME"],
+            "-d",
+            env["DB_DATABASE"],
+            "-At",
+            "-c",
+            sql,
+            timeout=30,
+        )
+        check("actual Dify node " + expected, result.returncode == 0 and result.stdout.strip() == expected)
+
     cpms = stack._serve(stack.CpmsHandler)
     kb = ThreadingHTTPServer(("127.0.0.1", 0), Knowledge)
     threading.Thread(target=kb.serve_forever, daemon=True).start()
@@ -277,10 +311,11 @@ def verify_knowledge(root, base, env, setup, model, check):
     try:
         port = stack._free_port()
         doc = yaml.safe_load((ROOT / "deploy/dify-chat/consumer-service.dsl.yml").read_text())
-        doc["workflow"]["graph"]["nodes"][1]["data"]["url"] = (
-            f"http://127.0.0.1:{port}/v1/internal/consumer-knowledge"
-        )
         for node in doc["workflow"]["graph"]["nodes"]:
+            if node["data"]["type"] == "http-request":
+                node["data"]["url"] = node["data"]["url"].replace(
+                    "http://gateway.invalid", f"http://127.0.0.1:{port}"
+                )
             if node["data"]["type"] == "llm":
                 node["data"]["model"]["name"] = "synthetic"
         stack._dsl_for = lambda _: yaml.safe_dump(doc, allow_unicode=True).encode()
@@ -369,7 +404,7 @@ def verify_knowledge(root, base, env, setup, model, check):
         )
         check(
             "model received knowledge without grant",
-            any("本轮知识" in json.dumps(m, ensure_ascii=False) for m in Model.requests)
+            any("本轮取数结果" in json.dumps(m, ensure_ascii=False) for m in Model.requests)
             and all("cdg_" not in json.dumps(m) for m in Model.requests),
         )
         code, followup = stack.http_json(
@@ -398,6 +433,7 @@ def verify_knowledge(root, base, env, setup, model, check):
             len(Knowledge.requests) == 2
             and Knowledge.requests[-1][2]["question"] == "怎么开始充电？\n还是不行",
         )
+        node_trace(post["qa_id"], "knowledge")
         calls = len(Model.requests), len(Knowledge.requests)
         code, escalated = stack.http_json(
             gateway_base + "/v1/assistant/questions",
@@ -441,8 +477,7 @@ def verify_knowledge(root, base, env, setup, model, check):
             "live order reads once without knowledge",
             len(stack.CpmsHandler.calls) == 1 and len(Knowledge.requests) == knowledge_calls,
         )
-        import sqlite3
-
+        node_trace(live["qa_id"], "cpms_status")
         with sqlite3.connect(root / "knowledge-test/gateway/data/gateway.db") as connection:
             connection.execute("UPDATE chat_dify_runs SET expires_at='2000-01-01T00:00:00+00:00'")
         before = len(Model.requests), len(Knowledge.requests), len(stack.CpmsHandler.calls)
@@ -515,6 +550,7 @@ def verify_knowledge(root, base, env, setup, model, check):
             "billing reads once without knowledge",
             len(stack.CpmsHandler.calls) == 3 and len(Knowledge.requests) == knowledge_calls,
         )
+        node_trace(bill["qa_id"], "cpms_billing")
         import io
 
         from PIL import Image
@@ -644,9 +680,9 @@ def verify_knowledge(root, base, env, setup, model, check):
                 publish_headers,
             )
 
-        def question():
+        def question(text="怎么开始充电？"):
             status, qa = stack.http_json(
-                gateway_base + "/v1/assistant/questions", "POST", {"question": "怎么开始充电？"}, headers
+                gateway_base + "/v1/assistant/questions", "POST", {"question": text}, headers
             )
             if status != 202:
                 return status, qa
@@ -713,6 +749,86 @@ def verify_knowledge(root, base, env, setup, model, check):
         )
         status, restored = action("restore", version_no=v1)
         check("operator restores V1", status == 200 and text_of(question()[1]) == "按设备提示启动。")
+        count = len(stack.CpmsHandler.calls)
+        code, trial = stack.http_json(
+            gateway_base + "/v1/dify/trial",
+            "POST",
+            {"app_id": new["app_id"], "order_no": stack.ORDER_LATEST, "question": "看看选定这单的情况"},
+            trial_headers,
+        )
+        check("semantic CPMS trial admitted", code == 202)
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            code, result = stack.http_json(
+                gateway_base + "/v1/dify/trial/" + trial["trial_id"], headers=trial_headers
+            )
+            if result.get("status") not in {"queued", "running"}:
+                break
+            time.sleep(0.1)
+        check(
+            "semantic CPMS trial runs real node",
+            code == 200
+            and result.get("status") == "completed"
+            and "cpms.chargingInfo" in result.get("result", {}).get("report", {}).get("summary", "")
+            and len(stack.CpmsHandler.calls) == count + 1,
+        )
+        # 草稿开关独立于服务器能力上限；发布才切实际App行为。
+        draft_url = base + "/console/api/apps/" + new["app_id"] + "/workflows/draft"
+        code, flow = stack.http_json(draft_url, headers=setup["console_headers"])
+        assert code == 200
+        for entry in flow["environment_variables"]:
+            if entry["name"] == "cpms_status_enabled":
+                entry["value"] = "false"
+        code, _ = stack.http_json(
+            draft_url,
+            "POST",
+            {key: flow[key] for key in ("graph", "features", "hash", "conversation_variables")}
+            | {"environment_variable_patch": {"environment_variables": flow["environment_variables"]}},
+            setup["console_headers"],
+        )
+        check("operator saves disabled draft", code == 200)
+        code, old = question("我上一个订单现在是什么情况")
+        check(
+            "saving flag does not disable published CPMS",
+            code == 200 and old.get("status") == "completed" and "cpms.chargingInfo" in text_of(old),
+        )
+        count = len(stack.CpmsHandler.calls)
+        code, trial = stack.http_json(
+            gateway_base + "/v1/dify/trial",
+            "POST",
+            {"app_id": new["app_id"], "order_no": stack.ORDER_LATEST, "question": "看看选定这单的情况"},
+            trial_headers,
+        )
+        check("disabled draft trial accepted", code == 202)
+        deadline = time.monotonic() + 60
+        while time.monotonic() < deadline:
+            code, result = stack.http_json(
+                gateway_base + "/v1/dify/trial/" + trial["trial_id"], headers=trial_headers
+            )
+            if result.get("status") not in {"queued", "running"}:
+                break
+            time.sleep(0.1)
+        check(
+            "disabled draft trial refuses without CPMS",
+            result.get("status") == "failed" and len(stack.CpmsHandler.calls) == count,
+        )
+        check("publish disabled capability", action("publish")[0] == 200)
+        code, disabled = question("我上一个订单现在是什么情况")
+        check(
+            "published flag disables live CPMS",
+            code == 200
+            and disabled.get("code") == "CONSUMER_DISABLED"
+            and len(stack.CpmsHandler.calls) == count,
+        )
+        check("restore capability version", action("restore", version_no=v1)[0] == 200)
+        code, restored = question("我上一个订单现在是什么情况")
+        check(
+            "restored version executes CPMS",
+            code == 200
+            and restored.get("status") == "completed"
+            and len(stack.CpmsHandler.calls) == count + 1,
+        )
+
     finally:
         import sqlite3
 
