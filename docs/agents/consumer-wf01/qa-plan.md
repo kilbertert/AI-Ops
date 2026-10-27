@@ -69,3 +69,9 @@ KB-PICKER-EDITOR：原版Dify1.17.1以真实Account/editor角色调用dynamic-op
 修复后editor/owner/admin可读取本节点，normal/dataset_operator拒绝；错provider/action/parameter、私有或跨工作区
 credential_id拒绝。隔离栈将浏览器账号设为editor，再完整点击选库/保存/试用/发布/恢复，证明不依赖owner。
 线上只读核验现有editor的角色和目录返回；不升级账号角色、不改发布图。结束清理隔离栈。
+
+KB-LIVE：本轮取消FAQ冻结清单，以知识库作为正文和文档媒体的唯一来源。
+隔离栈发布一次后，添加无KB编号新文档→App命中→更新正文→新QA反映更新→删除→新QA无旧答案，
+全程保持发布版本与服务器内容文件不变。使用KB-C-059原视频素材核视频地址来自召回正文，
+反例包含错库、假引用、模型编造链接、取消/撤回以及CPMS回归。真实上线后用现有资料和正常App登录核验，
+不为测试直接修改业务库；更新/删除主要在隔离栈进行，清理本次临时应用和数据根。

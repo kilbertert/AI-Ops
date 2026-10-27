@@ -60,6 +60,25 @@ def select_knowledge(source, libraries, plugin_identifier):
     return candidate
 
 
+def live_documents(source):
+    from aiops_diagnostics.consumer_documents import MODE_VARIABLE, PROMPT
+
+    candidate = copy.deepcopy(source)
+    nodes = {n["id"]: n["data"] for n in candidate["workflow"]["graph"]["nodes"]}
+    if set(nodes) != set(TYPES) or nodes["knowledge"].get("type") != "tool":
+        raise ValueError("动态知识需要现有WF01选库节点")
+    variables = candidate["workflow"].setdefault("environment_variables", [])
+    variables[:] = [v for v in variables if v.get("name") != MODE_VARIABLE]
+    variables.append(
+        {"id": MODE_VARIABLE, "name": MODE_VARIABLE, "value_type": "string", "value": "documents"}
+    )
+    prompts = nodes["answer"]["prompt_template"]
+    prompts[:] = [p for p in prompts if p.get("role") != "system"]
+    prompts.insert(0, {"role": "system", "text": PROMPT})
+    nodes["disabled"]["answer"] = '{"kind":"unavailable","answer":"","reference_ids":[]}'
+    return candidate
+
+
 def upgrade(source, public_base):
     candidate = copy.deepcopy(source)
     original = {n["id"]: n["data"] for n in source["workflow"]["graph"]["nodes"]}
@@ -102,10 +121,13 @@ def main():
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--knowledge-base", action="append")
     parser.add_argument("--knowledge-plugin")
+    parser.add_argument("--live-documents", action="store_true")
     args = parser.parse_args()
     os.umask(0o077)
     source = yaml.safe_load(args.source.read_text())
-    if args.knowledge_base or args.knowledge_plugin:
+    if args.live_documents:
+        result = live_documents(source)
+    elif args.knowledge_base or args.knowledge_plugin:
         if not args.knowledge_base or not args.knowledge_plugin:
             parser.error("选库迁移同时需要 --knowledge-base 与 --knowledge-plugin")
         result = select_knowledge(source, args.knowledge_base, args.knowledge_plugin)

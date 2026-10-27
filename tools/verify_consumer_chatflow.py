@@ -7,6 +7,7 @@ import argparse
 import base64
 import json
 import os
+import re
 import secrets
 import shutil
 import subprocess
@@ -62,6 +63,21 @@ class Model(BaseHTTPRequestHandler):
                 if "live_snapshot" in last
                 else {"kind": "knowledge", "faq_id": "KB-C-008" if "KB-C-008" in last else "KB-C-007"}
             )
+            if re.search(r'"mode"\s*:\s*"documents"', last):
+                payload = json.loads(last.split("本轮取数结果：", 1)[1])
+                source = next(iter(payload.get("sources", [])), None)
+                answer = json.dumps(
+                    {
+                        "kind": "realtime"
+                        if payload.get("live_snapshot")
+                        else "knowledge"
+                        if source
+                        else "not_found",
+                        "answer": source["content"].split("\n")[0] if source else "",
+                        "reference_ids": [source["reference_id"]] if source else [],
+                    },
+                    ensure_ascii=False,
+                )
         if any("仅识别图片" in str(m.get("content")) for m in messages):
             answer = json.dumps({"readable": True, "text": "Startup failed."})
         if body.get("response_format", {}).get("json_schema", {}).get("name") == "consumer_intent":
@@ -296,6 +312,7 @@ def isolated(args):
 
 class Knowledge(BaseHTTPRequestHandler):
     requests = []
+    document_rows = None
     image_bytes = base64.b64decode(
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="
     )
@@ -326,6 +343,13 @@ class Knowledge(BaseHTTPRequestHandler):
     def do_POST(self):
         raw = self.rfile.read(int(self.headers["Content-Length"]))
         self.requests.append((self.path, self.headers.get("tenant-id"), json.loads(raw)))
+        if self.document_rows is not None:
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(
+                json.dumps({"data": {"chunks": self.document_rows}}, ensure_ascii=False).encode()
+            )
+            return
         if self.path.startswith("/kb/knowledge-bases/kb-b/"):
             self.send_response(200)
             self.end_headers()

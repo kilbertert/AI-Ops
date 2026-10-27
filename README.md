@@ -5,6 +5,7 @@ WF01原App客服部署除工作流与审核知识外，还需API域名的[精确
 WF01已在目标租户原H5启用V3，真实29项与独立订单/账务对照通过；[发布与恢复](docs/agents/consumer-wf01/live-release.md)。
 原生安装包、照片输入、完整教程及人工接通仍未完成。
 知识节点选库需安装Dify编辑者目录权限补丁，避免editor打开节点403；见[部署核验](docs/agents/consumer-wf01/knowledge-picker-deploy.md)。
+动态知识版直接使用所选库中已索引文档的正文和视频链接，新增/更新资料无需维护审核副本或重新发布；见[日常维护与迁移](docs/agents/consumer-wf01/live-knowledge-deploy.md)。
 
 面向充电订单故障的**只读诊断系统**：把一句自然语言反馈变成一份有证据、可追溯、
 不改变任何生产数据的诊断报告。
@@ -393,6 +394,7 @@ flowchart TB
 | `consumer_publication.py` | WF01发布目标与路由场景，冻结已审核内容及只读能力 |
 | `consumer_billing.py` | 本人订单账务记录的裁剪与保守展示，不把金额字段或退款记录当支付渠道回执 |
 | `consumer_knowledge.py` | WF01知识回调、本轮检索引用与已审核答案、安全/人工兜底；短期凭据不允许跨用途取数 |
+| `consumer_documents.py` | 从本轮知识库文档组织回答与来源媒体，新增/更新资料无需重复登记审核包 |
 | `consumer_knowledge_selection.py` | 节点选库与本租户归属核验；目录凭据仅提供工作区知识库列表 |
 | `consumer_flow_contract.py` | WF01独立取数节点的发布契约，验证能力分支与受控回调并冻结开关 |
 | `consumer_intent.py` | WF01普通文本按语义选择只读能力与订单指代；结构化模型决策不授予权限，失败显式拒绝 |
