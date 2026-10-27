@@ -10,7 +10,17 @@ kind: app
 version: 0.3.0
 workflow:
   conversation_variables: []
-  environment_variables: []
+  environment_variables:
+  - id: cpms-status-enabled
+    name: cpms_status_enabled
+    value_type: string
+    value: 'true'
+    description: 本人订单状态查询：true启用，false关闭；发布后生效
+  - id: cpms-billing-enabled
+    name: cpms_billing_enabled
+    value_type: string
+    value: 'true'
+    description: 本人订单账务记录：true启用，false关闭；发布后生效
   features:
     file_upload:
       allowed_file_extensions:
@@ -41,31 +51,9 @@ workflow:
       voice: ''
   graph:
     edges:
-    - id: knowledge-answer
-      source: knowledge
-      target: answer
-      sourceHandle: source
-      targetHandle: target
-      type: custom
-      data:
-        sourceType: http-request
-        targetType: llm
-        isInIteration: false
-        isInLoop: false
-    - id: answer-end
-      source: answer
-      target: end
-      sourceHandle: source
-      targetHandle: target
-      type: custom
-      data:
-        sourceType: llm
-        targetType: answer
-        isInIteration: false
-        isInLoop: false
-    - id: start-photo_gate-source
+    - id: start-source-data_route
       source: start
-      target: photo_gate
+      target: data_route
       sourceHandle: source
       targetHandle: target
       type: custom
@@ -74,7 +62,84 @@ workflow:
         targetType: if-else
         isInIteration: false
         isInLoop: false
-    - id: photo_gate-photo-true
+    - id: data_route-status-status_enabled
+      source: data_route
+      target: status_enabled
+      sourceHandle: status
+      targetHandle: target
+      type: custom
+      data:
+        sourceType: if-else
+        targetType: if-else
+        isInIteration: false
+        isInLoop: false
+    - id: data_route-billing-billing_enabled
+      source: data_route
+      target: billing_enabled
+      sourceHandle: billing
+      targetHandle: target
+      type: custom
+      data:
+        sourceType: if-else
+        targetType: if-else
+        isInIteration: false
+        isInLoop: false
+    - id: data_route-false-photo_gate
+      source: data_route
+      target: photo_gate
+      sourceHandle: 'false'
+      targetHandle: target
+      type: custom
+      data:
+        sourceType: if-else
+        targetType: if-else
+        isInIteration: false
+        isInLoop: false
+    - id: status_enabled-true-cpms_status
+      source: status_enabled
+      target: cpms_status
+      sourceHandle: 'true'
+      targetHandle: target
+      type: custom
+      data:
+        sourceType: if-else
+        targetType: http-request
+        isInIteration: false
+        isInLoop: false
+    - id: status_enabled-false-disabled
+      source: status_enabled
+      target: disabled
+      sourceHandle: 'false'
+      targetHandle: target
+      type: custom
+      data:
+        sourceType: if-else
+        targetType: answer
+        isInIteration: false
+        isInLoop: false
+    - id: billing_enabled-true-cpms_billing
+      source: billing_enabled
+      target: cpms_billing
+      sourceHandle: 'true'
+      targetHandle: target
+      type: custom
+      data:
+        sourceType: if-else
+        targetType: http-request
+        isInIteration: false
+        isInLoop: false
+    - id: billing_enabled-false-disabled
+      source: billing_enabled
+      target: disabled
+      sourceHandle: 'false'
+      targetHandle: target
+      type: custom
+      data:
+        sourceType: if-else
+        targetType: answer
+        isInIteration: false
+        isInLoop: false
+    - id: photo_gate-true-photo
       source: photo_gate
       target: photo
       sourceHandle: 'true'
@@ -85,7 +150,7 @@ workflow:
         targetType: llm
         isInIteration: false
         isInLoop: false
-    - id: photo_gate-photo_context-false
+    - id: photo_gate-false-photo_context
       source: photo_gate
       target: photo_context
       sourceHandle: 'false'
@@ -96,7 +161,7 @@ workflow:
         targetType: variable-aggregator
         isInIteration: false
         isInLoop: false
-    - id: photo-photo_context-source
+    - id: photo-source-photo_context
       source: photo
       target: photo_context
       sourceHandle: source
@@ -107,7 +172,7 @@ workflow:
         targetType: variable-aggregator
         isInIteration: false
         isInLoop: false
-    - id: photo_context-knowledge-source
+    - id: photo_context-source-knowledge
       source: photo_context
       target: knowledge
       sourceHandle: source
@@ -118,9 +183,64 @@ workflow:
         targetType: http-request
         isInIteration: false
         isInLoop: false
+    - id: knowledge-source-data_context
+      source: knowledge
+      target: data_context
+      sourceHandle: source
+      targetHandle: target
+      type: custom
+      data:
+        sourceType: http-request
+        targetType: variable-aggregator
+        isInIteration: false
+        isInLoop: false
+    - id: cpms_status-source-data_context
+      source: cpms_status
+      target: data_context
+      sourceHandle: source
+      targetHandle: target
+      type: custom
+      data:
+        sourceType: http-request
+        targetType: variable-aggregator
+        isInIteration: false
+        isInLoop: false
+    - id: cpms_billing-source-data_context
+      source: cpms_billing
+      target: data_context
+      sourceHandle: source
+      targetHandle: target
+      type: custom
+      data:
+        sourceType: http-request
+        targetType: variable-aggregator
+        isInIteration: false
+        isInLoop: false
+    - id: data_context-source-answer
+      source: data_context
+      target: answer
+      sourceHandle: source
+      targetHandle: target
+      type: custom
+      data:
+        sourceType: variable-aggregator
+        targetType: llm
+        isInIteration: false
+        isInLoop: false
+    - id: answer-source-end
+      source: answer
+      target: end
+      sourceHandle: source
+      targetHandle: target
+      type: custom
+      data:
+        sourceType: llm
+        targetType: answer
+        isInIteration: false
+        isInLoop: false
     nodes:
     - data:
-        desc: 本次请求的输入。data_grant 是**一次性取数凭据**，只用于下面那一个 HTTP 步骤的 Authorization 头。
+        desc: Gateway注入本轮能力和一次性凭据。身份、订单与授权已绑定，不允许模型或节点更改。
         selected: false
         title: 开始
         type: start
@@ -146,14 +266,23 @@ workflow:
           required: false
           max_length: 8
           options: []
+        - label: 本轮能力（Gateway提供）
+          variable: data_kind
+          required: true
+          type: select
+          options:
+          - knowledge
+          - status
+          - billing
+          max_length: 16
       height: 160
       id: start
       position:
-        x: 80
-        y: 282
+        x: 0
+        y: 300
       positionAbsolute:
-        x: 80
-        y: 282
+        x: 0
+        y: 300
       selected: false
       sourcePosition: right
       targetPosition: left
@@ -168,7 +297,7 @@ workflow:
           data:
           - type: text
             value: '{{#photo_context.output#}}'
-        desc: 凭据由Gateway注入，仅本轮一次检索；请求不允许改租户、问题或语言。
+        desc: 仅检索本轮适用知识；不读取订单或账务。
         headers: 'Authorization: Bearer {{#start.data_grant#}}
 
           Content-Type: text/plain; charset=utf-8'
@@ -189,16 +318,16 @@ workflow:
           write: 0
         title: 检索当前用户适用知识
         type: http-request
-        url: http://gateway.invalid/v1/internal/consumer-knowledge
+        url: http://gateway.invalid/v1/internal/consumer-data/knowledge
         variables: []
       height: 132
       id: knowledge
       position:
-        x: 400
-        y: 282
+        x: 1600
+        y: 560
       positionAbsolute:
-        x: 400
-        y: 282
+        x: 1600
+        y: 560
       selected: false
       sourcePosition: right
       targetPosition: left
@@ -221,9 +350,9 @@ workflow:
         - role: user
           text: '用户问题：{{#sys.query#}}
 
-            本轮知识：{{#knowledge.body#}}'
+            本轮取数结果：{{#data_context.output#}}'
         selected: false
-        title: 判断用户需要的帮助
+        title: 选择答复类型与知识引用
         type: llm
         variables: []
         vision:
@@ -239,11 +368,11 @@ workflow:
       height: 132
       id: answer
       position:
-        x: 720
-        y: 282
+        x: 2240
+        y: 300
       positionAbsolute:
-        x: 720
-        y: 282
+        x: 2240
+        y: 300
       selected: false
       sourcePosition: right
       targetPosition: left
@@ -257,11 +386,11 @@ workflow:
       height: 132
       id: end
       position:
-        x: 1040
-        y: 282
+        x: 2560
+        y: 300
       positionAbsolute:
-        x: 1040
-        y: 282
+        x: 2560
+        y: 300
       selected: false
       sourcePosition: right
       targetPosition: left
@@ -291,11 +420,11 @@ workflow:
       height: 160
       id: photo_gate
       position:
-        x: 80
-        y: 282
+        x: 640
+        y: 560
       positionAbsolute:
-        x: 80
-        y: 282
+        x: 640
+        y: 560
       selected: false
       sourcePosition: right
       targetPosition: left
@@ -335,11 +464,11 @@ workflow:
       height: 132
       id: photo
       position:
-        x: 720
-        y: 282
+        x: 960
+        y: 700
       positionAbsolute:
-        x: 720
-        y: 282
+        x: 960
+        y: 700
       selected: false
       sourcePosition: right
       targetPosition: left
@@ -357,11 +486,230 @@ workflow:
       height: 160
       id: photo_context
       position:
-        x: 80
-        y: 282
+        x: 1280
+        y: 560
       positionAbsolute:
-        x: 80
-        y: 282
+        x: 1280
+        y: 560
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        authorization:
+          config: null
+          type: no-auth
+        body:
+          type: none
+          data: []
+        desc: 经Gateway授权读取本轮本人订单；节点不接收主体或单号参数。
+        headers: 'Authorization: Bearer {{#start.data_grant#}}
+
+          Content-Type: text/plain; charset=utf-8'
+        method: post
+        params: ''
+        retry_config:
+          retry_enabled: false
+          max_retries: 0
+          retry_interval: 0
+        selected: false
+        ssl_verify: null
+        timeout:
+          connect: 10
+          max_connect_timeout: 0
+          max_read_timeout: 0
+          max_write_timeout: 0
+          read: 60
+          write: 0
+        title: CPMS：查询本人订单状态
+        type: http-request
+        url: http://gateway.invalid/v1/internal/consumer-data/status
+        variables: []
+      height: 132
+      id: cpms_status
+      position:
+        x: 960
+        y: 0
+      positionAbsolute:
+        x: 960
+        y: 0
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        authorization:
+          config: null
+          type: no-auth
+        body:
+          type: none
+          data: []
+        desc: 经Gateway授权读取本轮本人订单；节点不接收主体或单号参数。
+        headers: 'Authorization: Bearer {{#start.data_grant#}}
+
+          Content-Type: text/plain; charset=utf-8'
+        method: post
+        params: ''
+        retry_config:
+          retry_enabled: false
+          max_retries: 0
+          retry_interval: 0
+        selected: false
+        ssl_verify: null
+        timeout:
+          connect: 10
+          max_connect_timeout: 0
+          max_read_timeout: 0
+          max_write_timeout: 0
+          read: 60
+          write: 0
+        title: CPMS：查询本人订单账务记录
+        type: http-request
+        url: http://gateway.invalid/v1/internal/consumer-data/billing
+        variables: []
+      height: 132
+      id: cpms_billing
+      position:
+        x: 960
+        y: 230
+      positionAbsolute:
+        x: 960
+        y: 230
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        type: if-else
+        title: 本轮取数能力
+        cases:
+        - case_id: status
+          logical_operator: and
+          conditions:
+          - id: data_route-status
+            variable_selector:
+            - start
+            - data_kind
+            comparison_operator: is
+            value: status
+            varType: string
+        - case_id: billing
+          logical_operator: and
+          conditions:
+          - id: data_route-billing
+            variable_selector:
+            - start
+            - data_kind
+            comparison_operator: is
+            value: billing
+            varType: string
+      height: 160
+      id: data_route
+      position:
+        x: 320
+        y: 300
+      positionAbsolute:
+        x: 320
+        y: 300
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        type: if-else
+        title: 订单状态能力是否启用
+        cases:
+        - case_id: 'true'
+          logical_operator: and
+          conditions:
+          - id: status_enabled-true
+            variable_selector:
+            - env
+            - cpms_status_enabled
+            comparison_operator: is
+            value: 'true'
+            varType: string
+      height: 160
+      id: status_enabled
+      position:
+        x: 640
+        y: 0
+      positionAbsolute:
+        x: 640
+        y: 0
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        type: if-else
+        title: 账务记录能力是否启用
+        cases:
+        - case_id: 'true'
+          logical_operator: and
+          conditions:
+          - id: billing_enabled-true
+            variable_selector:
+            - env
+            - cpms_billing_enabled
+            comparison_operator: is
+            value: 'true'
+            varType: string
+      height: 160
+      id: billing_enabled
+      position:
+        x: 640
+        y: 230
+      positionAbsolute:
+        x: 640
+        y: 230
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        type: variable-aggregator
+        title: 本轮取数结果
+        output_type: string
+        variables:
+        - - knowledge
+          - body
+        - - cpms_status
+          - body
+        - - cpms_billing
+          - body
+      height: 160
+      id: data_context
+      position:
+        x: 1920
+        y: 300
+      positionAbsolute:
+        x: 1920
+        y: 300
+      selected: false
+      sourcePosition: right
+      targetPosition: left
+      type: custom
+      width: 244
+    - data:
+        type: answer
+        title: 能力未开放
+        answer: '{"kind":"unavailable","faq_id":""}'
+        variables: []
+      height: 132
+      id: disabled
+      position:
+        x: 1280
+        y: -200
+      positionAbsolute:
+        x: 1280
+        y: -200
       selected: false
       sourcePosition: right
       targetPosition: left
