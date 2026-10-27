@@ -392,6 +392,7 @@ flowchart TB
 | `consumer_publication.py` | WF01发布目标与路由场景，冻结已审核内容及只读能力 |
 | `consumer_billing.py` | 本人订单账务记录的裁剪与保守展示，不把金额字段或退款记录当支付渠道回执 |
 | `consumer_knowledge.py` | WF01知识回调、本轮检索引用与已审核答案、安全/人工兜底；短期凭据不允许跨用途取数 |
+| `consumer_knowledge_selection.py` | 节点选库与本租户归属核验；目录凭据仅提供工作区知识库列表 |
 | `consumer_flow_contract.py` | WF01独立取数节点的发布契约，验证能力分支与受控回调并冻结开关 |
 | `consumer_intent.py` | WF01普通文本按语义选择只读能力与订单指代；结构化模型决策不授予权限，失败显式拒绝 |
 | `consumer_chat_service.py` | WF01原提问/轮询/取消与用户会话接线，固定发布绑定、同轮结果和回读守卫，默认关闭 |

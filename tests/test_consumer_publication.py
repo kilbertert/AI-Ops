@@ -150,7 +150,8 @@ def test_bad_draft_is_refused_without_replacing_published_content(tmp_path, monk
 
 
 @pytest.mark.parametrize(
-    "retract_during_trial,disabled", [(False, False), (True, False), (False, True), (False, "latest")]
+    "retract_during_trial,disabled",
+    [(False, False), (True, False), (False, True), (False, "latest"), (False, "delete-library")],
 )
 def test_chatflow_trial_uses_temporary_app_and_leaves_formal_state_unchanged(
     tmp_path, monkeypatch, retract_during_trial, disabled
@@ -168,7 +169,7 @@ def test_chatflow_trial_uses_temporary_app_and_leaves_formal_state_unchanged(
         draft = json.loads(content.read_text())
         draft["entries"]["KB-C-007"]["answers"]["zh"] = "试用草稿指引。"
         content.write_text(json.dumps(draft))
-        if disabled:
+        if disabled and disabled != "delete-library":
             target_path = Path(env["settings"].consumer_publication_targets_file)
             targets = json.loads(target_path.read_text())
             targets["targets"][0]["live_order_status"] = False
@@ -204,6 +205,24 @@ def test_chatflow_trial_uses_temporary_app_and_leaves_formal_state_unchanged(
         monkeypatch.setattr("aiops_diagnostics.consumer_trial.DifyConsoleAdmin", Admin)
         monkeypatch.setattr("aiops_diagnostics.consumer_trial.DifyDslClient", Console)
         monkeypatch.setattr("aiops_diagnostics.consumer_trial.DifyChatflowClient", Workflow)
+        if disabled == "delete-library":
+            from aiops_diagnostics.consumer_knowledge_selection import require_available
+
+            libraries = [{"knowledge_base_id": "kb-own"}]
+            checked = []
+            monkeypatch.setattr(kb, "list_knowledge_bases", lambda: libraries, raising=False)
+            Workflow.after = libraries.clear
+
+            def check_selected(runtime, scope, binding):
+                # 只改变试用版本；模型、回调、终态路径仍走真实生产装配。
+                from dataclasses import replace
+
+                checked.append(bool(libraries))
+                return require_available(runtime, scope, replace(binding, callback_version=3))
+
+            monkeypatch.setattr(
+                "aiops_diagnostics.consumer_knowledge_selection.require_available", check_selected
+            )
         if retract_during_trial:
             Workflow.after = lambda: env["client"].post(
                 "/v1/dify/retract", headers=PUBLISH, json={"app_id": APP}
@@ -234,6 +253,11 @@ def test_chatflow_trial_uses_temporary_app_and_leaves_formal_state_unchanged(
             read = env["client"].get(
                 "/v1/dify/trial/" + trial_id, headers={"Authorization": "Bearer trial-key"}
             )
+            if disabled == "delete-library":
+                assert checked[-1] is False and all(checked[:-1])
+                assert record.get("result") is None
+                assert len(kb.calls) == 1
+                return
             if disabled == "latest":
                 assert read.json()["error_code"] == "TRIAL_ORDER_REQUIRED"
                 assert (

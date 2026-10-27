@@ -1,0 +1,26 @@
+identity:
+  author: trendpower
+  name: consumer_knowledge
+  label: &id001
+    zh_Hans: 检索当前用户适用知识
+    en_US: Consumer knowledge retrieval
+  description: *id001
+  icon: icon.svg
+credentials_for_provider:
+  gateway_url:
+    type: text-input
+    required: true
+    label:
+      zh_Hans: 受控网关地址
+      en_US: Gateway URL
+  catalogue_token:
+    type: secret-input
+    required: true
+    label:
+      zh_Hans: 本工作区目录凭据（仅列库）
+      en_US: Workspace catalogue credential
+tools:
+- tools/consumer_knowledge.yaml
+extra:
+  python:
+    source: provider/consumer_knowledge.py

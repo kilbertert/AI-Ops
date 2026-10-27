@@ -1,0 +1,47 @@
+identity:
+  author: trendpower
+  name: consumer_knowledge
+  label: &id001
+    zh_Hans: 检索当前用户适用知识
+    en_US: Consumer knowledge retrieval
+description:
+  human: *id001
+  llm: Use the published library selection with this request grant.
+parameters:
+- name: knowledge_base_ids
+  type: dynamic-select
+  form: form
+  required: true
+  label:
+    zh_Hans: 检索知识库
+    en_US: Knowledge bases
+  human_description:
+    zh_Hans: 检索知识库
+    en_US: Knowledge bases
+  llm_description: Knowledge bases
+  multiple: true
+- name: data_grant
+  type: string
+  form: llm
+  required: true
+  label:
+    zh_Hans: 本轮授权（由网关注入）
+    en_US: Request grant
+  human_description:
+    zh_Hans: 本轮授权（由网关注入）
+    en_US: Request grant
+  llm_description: Request grant
+- name: image_text
+  type: string
+  form: llm
+  required: false
+  label:
+    zh_Hans: 图片线索
+    en_US: Image clue
+  human_description:
+    zh_Hans: 图片线索
+    en_US: Image clue
+  llm_description: Image clue
+extra:
+  python:
+    source: tools/consumer_knowledge.py

@@ -264,7 +264,7 @@ def _parse_binding(row: object) -> ChatBinding:
         if type(photo) is not bool or (photo and not content):
             raise ChatBindingError("photos require reviewed content")
         callback_version = row.get("callback_version", 1)
-        if type(callback_version) is not int or callback_version not in {1, 2}:
+        if type(callback_version) is not int or callback_version not in {1, 2, 3}:
             raise ChatBindingError("unsupported consumer callback version")
         return ChatBinding(
             callback_version=callback_version,
@@ -403,7 +403,7 @@ def _bindings_from_store(path: str | Path, key_dir: str = "") -> tuple[ChatBindi
                 or type(frozen.get("live_order_status")) is not bool
                 or type(frozen.get("live_billing_record")) is not bool
                 or type(frozen.get("callback_version", 1)) is not int
-                or frozen.get("callback_version", 1) not in {1, 2}
+                or frozen.get("callback_version", 1) not in {1, 2, 3}
             ):
                 raise ChatBindingError("consumer publication has no frozen content")
             binding = replace(

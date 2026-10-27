@@ -60,7 +60,7 @@ class Model(BaseHTTPRequestHandler):
             answer = json.dumps(
                 {"kind": "realtime", "faq_id": ""}
                 if "live_snapshot" in last
-                else {"kind": "knowledge", "faq_id": "KB-C-007"}
+                else {"kind": "knowledge", "faq_id": "KB-C-008" if "KB-C-008" in last else "KB-C-007"}
             )
         if any("仅识别图片" in str(m.get("content")) for m in messages):
             answer = json.dumps({"readable": True, "text": "Startup failed."})
@@ -165,6 +165,11 @@ def chatflow_dsl(_gateway: str) -> bytes:
 def isolated(args):
     root = Path(tempfile.mkdtemp(prefix="consumer-chatflow-"))
     root.chmod(0o700)
+    if args.knowledge_plugin:
+        shutil.copyfile(args.knowledge_plugin, root / "knowledge.signed.difypkg")
+        key = root / "volumes/plugin_daemon/catalogue-public.pem"
+        key.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(args.plugin_public_key, key)
     name = "consumer-chatflow-" + secrets.token_hex(4)
     command = [
         "docker",
@@ -184,6 +189,8 @@ def isolated(args):
         f"HOME={root}",
         "-e",
         f"PYTHONPATH={ROOT / 'src'}",
+        "-e",
+        f"DIFY_TEST_WEB_IMAGE={os.environ.get('DIFY_TEST_WEB_IMAGE', 'langgenius/dify-web:1.17.1')}",
         "-v",
         f"{ROOT}:{ROOT}:ro",
         "-v",
@@ -204,13 +211,30 @@ def isolated(args):
         "--out",
         str(root / "report.json"),
     ]
+    if args.knowledge_plugin:
+        command[2:2] = ["-p", "127.0.0.1::3000", "-p", "127.0.0.1::5001"]
     try:
-        result = subprocess.run(command, check=False)
+        process = subprocess.Popen(command)
+        browser_checked = False
+        while process.poll() is None:
+            if not browser_checked and (root / "picker-browser-ready.json").exists():
+                browser_checked = True
+                subprocess.run(
+                    [
+                        "/home/claude/miniconda3/bin/python",
+                        str(ROOT / "tools/verify_consumer_knowledge_browser.py"),
+                        str(root),
+                        name,
+                    ],
+                    check=False,
+                    timeout=180,
+                )
+            time.sleep(0.2)
         if (root / "report.json").exists():
             shutil.copyfile(root / "report.json", args.out)
             Path(args.out).chmod(0o600)
         print("private evidence:", root)
-        return result.returncode
+        return process.returncode
     finally:
         # 仅清本次创建的Dify状态卷；报告与日志保留。
         if (root / "volumes").exists():
@@ -237,6 +261,15 @@ class Knowledge(BaseHTTPRequestHandler):
     )
 
     def do_GET(self):
+        if self.path == "/kb/knowledge-bases":
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(
+                json.dumps(
+                    {"data": [{"id": "kb-own", "name": "FAQ A"}, {"id": "kb-b", "name": "FAQ B"}]}
+                ).encode()
+            )
+            return
         if self.path != "/kb/documents/images/accepted-image":
             self.send_response(404)
             self.end_headers()
@@ -253,6 +286,25 @@ class Knowledge(BaseHTTPRequestHandler):
     def do_POST(self):
         raw = self.rfile.read(int(self.headers["Content-Length"]))
         self.requests.append((self.path, self.headers.get("tenant-id"), json.loads(raw)))
+        if self.path.startswith("/kb/knowledge-bases/kb-b/"):
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(
+                json.dumps(
+                    {
+                        "data": [
+                            {
+                                "id": "chunk-b",
+                                "doc_id": "doc-b",
+                                "docnm_kwd": "KB-C-008.md",
+                                "content_with_weight": "审核后的B库指导",
+                                "score": 0.95,
+                            }
+                        ]
+                    }
+                ).encode()
+            )
+            return
         data = json.dumps(
             {
                 "data": [
@@ -832,6 +884,11 @@ def verify_knowledge(root, base, env, setup, model, check):
             and len(stack.CpmsHandler.calls) == count + 1,
         )
 
+        if (root / "knowledge.signed.difypkg").exists():
+            from verify_consumer_knowledge_picker import verify_picker
+
+            verify_picker(root, base, env, setup, new, gateway_base, database, content, Knowledge, check)
+
     finally:
         import sqlite3
 
@@ -872,6 +929,8 @@ def verify_knowledge(root, base, env, setup, model, check):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", required=True)
+    parser.add_argument("--knowledge-plugin")
+    parser.add_argument("--plugin-public-key")
     args = parser.parse_args()
     os.umask(0o077)
     if "DIFY_TEST_NAMESPACE" not in os.environ:
@@ -887,6 +946,11 @@ def main():
         project="wf01" + secrets.token_hex(4),
         network="unused",
     )
+    if (root / "knowledge.signed.difypkg").exists():
+        with (root / "dify.env").open("a") as file:
+            file.write(
+                "FORCE_VERIFYING_SIGNATURE=true\nTHIRD_PARTY_SIGNATURE_VERIFICATION_ENABLED=true\nTHIRD_PARTY_SIGNATURE_VERIFICATION_PUBLIC_KEYS=/app/storage/catalogue-public.pem\n"
+            )
     import aiops_diagnostics.dify_chatflow as transport
 
     event_reader = transport._events
