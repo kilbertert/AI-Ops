@@ -149,7 +149,9 @@ def test_bad_draft_is_refused_without_replacing_published_content(tmp_path, monk
         assert done(env, ask(env).json()["qa_id"]).json()["status"] == "completed"
 
 
-@pytest.mark.parametrize("retract_during_trial,disabled", [(False, False), (True, False), (False, True)])
+@pytest.mark.parametrize(
+    "retract_during_trial,disabled", [(False, False), (True, False), (False, True), (False, "latest")]
+)
 def test_chatflow_trial_uses_temporary_app_and_leaves_formal_state_unchanged(
     tmp_path, monkeypatch, retract_during_trial, disabled
 ):
@@ -176,7 +178,7 @@ def test_chatflow_trial_uses_temporary_app_and_leaves_formal_state_unchanged(
                 "classify_consumer",
                 lambda *a, **k: {
                     "intent": "order_status",
-                    "order_reference": "explicit",
+                    "order_reference": "latest" if disabled == "latest" else "explicit",
                     "uses_context": False,
                 },
             )
@@ -232,8 +234,15 @@ def test_chatflow_trial_uses_temporary_app_and_leaves_formal_state_unchanged(
             read = env["client"].get(
                 "/v1/dify/trial/" + trial_id, headers={"Authorization": "Bearer trial-key"}
             )
-            assert read.json()["error_code"] == "CHATFLOW_LIVE_DISABLED"
-            assert "尚未开通" in read.json()["error_message"]
+            if disabled == "latest":
+                assert read.json()["error_code"] == "TRIAL_ORDER_REQUIRED"
+                assert (
+                    "页面选定" in read.json()["error_message"]
+                    and "最近一笔" not in read.json()["error_message"]
+                )
+            else:
+                assert read.json()["error_code"] == "CHATFLOW_LIVE_DISABLED"
+                assert "尚未开通" in read.json()["error_message"]
             assert env["upstream"].calls == 0 and not kb.calls
             return
         assert record["status"] == "completed", record
