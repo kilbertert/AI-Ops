@@ -21,3 +21,6 @@ No. External pull requests are not feature requests in this repository.
 PRDs use GitHub native sub-issues. Tickets use native issue dependencies when
 available; an issue is unblocked only when every blocker is closed. Do not
 replace these relationships with copied planning prose.
+
+See [`ticket-contract.md`](ticket-contract.md) for the bar a ticket has to clear
+before an AFK engine may run it.
