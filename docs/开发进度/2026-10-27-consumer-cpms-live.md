@@ -8,5 +8,5 @@ PR #1102已合并、CD成功；精确回调已部署，原WF01发布为V4/revisi
 没有公司App改动或业务写操作。原图/原版本恢复材料保留。
 
 实现证据见[开发验收](../validation/2026-10-27-consumer-cpms-nodes.md)，正式结果见
-[真实交付记录](../validation/2026-10-27-consumer-cpms-live.md)。长期质量/准确率及任意流程编排仍不在结论内。
+[真实交付记录](../validation/2026-10-27-consumer-cpms-production.md)。长期质量/准确率及任意流程编排仍不在结论内。
 下一步由产品在现有应用查看节点并按手册试用/发布，不需要再导入一套应用。

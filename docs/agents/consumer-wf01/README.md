@@ -186,4 +186,4 @@ URL/凭据引用/分支契约不可绕过，删除必需节点会在“发布到
 契约依据见[ADR-0150](../../adr/0150-consumer-cpms-workflow-nodes.md)。
 
 2026-10-27：独立CPMS节点已在原WF01应用发布V4（revision3）。三个真实取数节点、能力开关、
-真实试用及原H5三条路径已核验；见[正式交付记录](../../validation/2026-10-27-consumer-cpms-live.md)。
+真实试用及原H5三条路径已核验；见[正式交付记录](../../validation/2026-10-27-consumer-cpms-production.md)。
