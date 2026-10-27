@@ -88,14 +88,13 @@ def start(
             raise chat_execution.ChatRunUnavailable(
                 "CHATFLOW_NEW_CONVERSATION_REQUIRED", message("conversation", language), http_status=409
             )
-        if still_valid(previous):
+        if still_valid(previous) and uses_context:
             require_result(runtime, caller, previous_qa)
-            if uses_context:
-                upstream = previous.upstream_conversation_id
-                if not upstream:
-                    raise chat_execution.ChatRunUnavailable(
-                        "CHATFLOW_EVIDENCE_UNAVAILABLE", "conversation evidence unavailable"
-                    )
+            upstream = previous.upstream_conversation_id
+            if not upstream:
+                raise chat_execution.ChatRunUnavailable(
+                    "CHATFLOW_EVIDENCE_UNAVAILABLE", "conversation evidence unavailable"
+                )
         elif uses_context:
             from aiops_diagnostics.consumer_intent import message
 
@@ -365,5 +364,10 @@ def previous_context(runtime, caller, binding, conversation):
     qa = runtime.store.get_assistant_question(run.qa_id, caller.scope_fingerprint)
     if not qa or qa["status"] != "completed":
         return None, ""
-    require_result(runtime, caller, qa)
+    try:
+        require_result(runtime, caller, qa)
+    except chat_execution.ChatRunUnavailable as exc:
+        if exc.code == "KNOWLEDGE_SELECTION_UNAVAILABLE":
+            return None, ""
+        raise
     return run, qa["question"]

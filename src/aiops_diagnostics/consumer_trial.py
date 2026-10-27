@@ -167,6 +167,8 @@ class ConsumerTrial:
                 },
                 on_started=started,
             )
+            if not live:
+                require_available(runtime, scope, self.binding)
             runtime._require_chat_order_visible(scope, order)
             self.require_current(runtime.gateway_settings)
             latest = runs.get(run_id)

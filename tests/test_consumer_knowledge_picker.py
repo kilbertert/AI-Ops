@@ -294,6 +294,7 @@ def test_plugin_never_redirects_credentials_and_uses_grant_for_content(monkeypat
     with pytest.raises(ValueError, match="知识目录或检索暂不可用"):
         module.call(credentials, "/v1/internal/consumer-data/knowledge", grant="round-test", body={})
     assert len(requests) == 1
+
     assert requests[0].get_header("Authorization") == "Bearer round-test"
     assert "catalogue-test" not in str(requests[0].headers)
     for url in [
@@ -305,3 +306,53 @@ def test_plugin_never_redirects_credentials_and_uses_grant_for_content(monkeypat
         with pytest.raises(ValueError):
             module.call({**credentials, "gateway_url": url}, "/v1/internal/consumer-knowledge/catalogue")
     assert len(requests) == 1
+
+
+def test_unavailable_previous_knowledge_does_not_block_new_order(tmp_path, monkeypatch):
+    from test_app_runtime_dify_entry import HEADERS
+    from test_consumer_live_context import ask as question
+    from test_consumer_live_context import wire
+
+    with dify_chat(tmp_path, monkeypatch, stub_base="http://127.0.0.1:1") as env:
+        runtime, kb = wire(env, monkeypatch, tmp_path)
+        doc = json.loads(env["bindings"].read_text())
+        doc["bindings"][0]["callback_version"] = 3
+        env["bindings"].write_text(json.dumps(doc))
+        libraries = [{"knowledge_base_id": "kb-own"}]
+        monkeypatch.setattr(kb, "list_knowledge_bases", lambda: libraries, raising=False)
+
+        class Flow(Client):
+            def run(self, **kwargs):
+                ids = [str(uuid.uuid4()) for _ in range(4)]
+                kwargs["on_started"](*ids)
+                kind = kwargs["inputs"]["data_kind"]
+                response = env["client"].post(
+                    "/v1/internal/consumer-data/" + kind,
+                    headers={"Authorization": "Bearer " + kwargs["inputs"]["data_grant"]},
+                    **({"json": {"knowledge_base_ids": ["kb-own"]}} if kind == "knowledge" else {}),
+                )
+                assert response.status_code == 200, response.text
+                if kind == "status":
+                    assert kwargs["conversation_id"] == ""
+                return ChatflowReply(
+                    *ids,
+                    json.dumps(
+                        {
+                            "kind": "knowledge" if kind == "knowledge" else "realtime",
+                            "faq_id": "KB-C-007" if kind == "knowledge" else "",
+                        }
+                    ),
+                    {},
+                )
+
+        monkeypatch.setattr("aiops_diagnostics.consumer_chat_service.DifyChatflowClient", Flow)
+        intro = question(env, "怎么开始充电？").json()
+        assert done(env, intro["qa_id"]).json()["status"] == "completed"
+        libraries.clear()
+        assert (
+            env["client"].get("/v1/assistant/questions/" + intro["qa_id"], headers=HEADERS).status_code == 503
+        )
+        response = question(env, "check my latest order status", intro["conversation_id"])
+        assert response.status_code == 202, response.text
+        assert done(env, response.json()["qa_id"]).json()["status"] == "completed"
+        assert env["upstream"].calls == 1 and len(kb.calls) == 1
