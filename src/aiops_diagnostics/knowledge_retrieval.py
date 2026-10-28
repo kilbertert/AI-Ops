@@ -1088,7 +1088,8 @@ def _image_mime(item: Mapping[str, Any], title: str | None) -> str | None:
     if value:
         return value if value in ALLOWED_IMAGE_TYPES else None
     guessed = mimetypes.guess_type(title or "")[0]
-    return guessed if guessed in ALLOWED_IMAGE_TYPES else None
+    # RAGFlow image2id stores embedded figures as JPEG; title names the parent document.
+    return guessed if guessed in ALLOWED_IMAGE_TYPES else "image/jpeg"
 
 
 def _video_mime(item: Mapping[str, Any], title: str | None) -> str | None:
