@@ -1,26 +1,50 @@
-# 管家端（operator）入口：前端联调交接说明
+# 管家端前端与测试交接
 
-> **读者**：前端组 / BFF。
-> **状态**：**分流已部署、公网已通**（2026-09-30）。**不要照本文 §1 的旧示例发** ——
-> 那是**客户端**那条链路的形状（服务令牌 + 会话），管家端发那一套仍然是 `401`。
-> **正确形状与可直接照抄的 curl 见 [operator-frontend-chain.md](operator-frontend-chain.md)。**
-> **一句话**：管家端与客户端**共用同一个助手入口**，靠请求头 `X-Business-Entry: operator`
-> 分流；入口动作已发布，两个按钮点下去的行为见 §3。
-> **先读**：[client-type-vs-business-entry.md](client-type-vs-business-entry.md) ——
-> 为什么**不是**用 `client-type` 区分。
->
-> ⚠️ **2026-09-29 更正（仍然有效）**：本文此前写的「已在 41 端到端验收通过」**范围过宽**。
-> 验收用的是**代造的会话行**，不是一次管家端真实登录；管家端 App 的登录链路
-> （`/upms/token/login` → OAuth2 令牌 → **不产生 thirdSession**）当时**没有被走到**。
-> 根因见 [butler-session-contract.md](butler-session-contract.md) 与
-> [company-platform-integration-baseline.md](company-platform-integration-baseline.md)。
->
-> 🛑 **2026-09-30 一条前置**：这条链**可以联调**，但**身份可信度未达标**（判据不看签名与
-> 有效期；外部判据只有来源密钥，而其注入主体目前是我们自己的 nginx）。
-> 因此**不对外宣称可用**。成因、口径与解除路径见
-> [operator-repair-blueprint.md](operator-repair-blueprint.md) §0.1。
+更新：2026-10-28。公司MR !145已合并到abroad_standard（20e0a1a6），完整594文件构建和7项合成浏览器检查通过。
+合并回执明确未部署；本页不声称正式H5已发版。真实节点API回放见[证据](../validation/2026-10-26-operator-real-history-replay.md)，
+当前范围见[测试交接](../testing-handoff.md)与[管家CPMS手册](operator-cpms/README.md)。
+
+## 身份与请求
+
+公司App正常密码登录取得个人Bearer，请求带`X-Business-Entry: operator`；不要携带consumer的third-session、
+共享AI-Ops服务令牌或模型凭据。Gateway按公司主体和当前授权范围判定；模型/前端不能自报更大范围。
+入口头是路由选择，不是权限。租户主账号的合法all范围与普通员工站点集合按公司既有规则区分。
+
+```http
+POST /v1/assistant/questions
+Authorization: Bearer <当前公司个人令牌>
+X-Business-Entry: operator
+Accept-Language: zh
+Content-Type: application/json
+
+{"question":"请检查选定订单","order_no":"<本人管理范围内的订单>"}
+```
+
+选单列表必须使用公司当前管家权限端点，不从消费者getOrderUserPage推导管理范围。
+收到202后只轮询本次qa_id；completed才渲染结果，failed/cancelled/retracted等终态保留真实提示，不自动重发。
+明确选择订单后交Java的cpms_order_detail/cpms_charging_samples；监测为空须提示缺证，不能推断设备正常。
+
+## 页面与配置
+
+快捷动作读取服务端列表，按jump_path导航、requires_order打开选择器，不把固定按钮当完整目录。
+新建/切换对话后迟到响应不能写回旧气泡；取消只操作当前作业。公司源码修改按公司流程构建发布，
+不得从开发候选目录直接覆盖正式静态文件。
+Dify试用使用运营个人会话与独立凭据交换，不等同App密码登录；没有有效会话时不能运行旧Python替身。
+
+## 发布后必须补的验收
+
+1. 确认公司构建修订、正式URL和实际静态文件一致，正常登录后能从首页进入聊天。
+2. 选择权限范围内历史订单，POST→真Java两工具→GET→页面报告，同一QA与快照对应。
+3. 另一主体/越权单、取消/撤回/过期拒交付，不把数据源缺失报成正常。
+4. 实际Dify保存/试用/发布/全关/恢复改变节点工具权限；再核旧provider引用及退役条件。
+
+[旧前端链排查](operator-frontend-chain.md)保留2026-09至10月的诊断证据，不能沿用其中旧登录失败或共享会话请求。
 
 ---
+
+# 历史联调与运营手顺（2026-09至10月）
+
+以下保留原章节编号供既有ADR/runbook定位；状态断言属于当时，当前接线与阶段以上文为准。
 
 ## 1. 与客户端唯一的差别：一个请求头
 

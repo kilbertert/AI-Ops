@@ -1,5 +1,8 @@
 # Codex-native Thin Harness
 
+> 2026-10-28适用范围：旧Python诊断内核，仍用于C端订单检测；不描述WF01/Java的全部执行路径。当前入口见[更新说明](system-architecture.md)。
+> 下文保留原时点事实；其中“当前”“未完成”不得覆盖后继已验收结果。
+
 ## 控制权反转
 
 `aiops diagnose --mode deterministic` 是确定性的已知 runbook 快速路径。

@@ -1,5 +1,8 @@
 # AI-Ops — Handoff Brief
 
+> 2026-10-28适用范围：2026-08-27交接快照；旧票图不代表当前待办。当前入口见[更新说明](testing-handoff.md)。
+> 下文保留原时点事实；其中“当前”“未完成”不得覆盖后继已验收结果。
+
 _Compact state + decisions for a Claude Code session driving the remaining AI-Ops tickets.
 Created 2026-08-27._
 

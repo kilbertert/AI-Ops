@@ -1,5 +1,8 @@
 # AI-Ops 客户端 / 管家端接口清单（产品测试用）
 
+> 2026-10-28适用范围：2026-10-19接口参考；新场景/验收范围按当前测试交接。当前入口见[更新说明](../testing-handoff.md)。
+> 下文保留原时点事实；其中“当前”“未完成”不得覆盖后继已验收结果。
+
 > **读者**：产品 / 测试。**目的**：不经 Android APK，直接用 HTTP 工具（curl / Postman / Apifox）
 > 验证客户端与管家端的功能是否可用。
 >
@@ -15,13 +18,14 @@
 基址：https://api.mall.qushiyun.com        （41 生产，公网）
 
 必带头：
-  third-session: <向运维索取>               ← 全小写连字符
+  consumer：third-session: <正常登录会话>
+  operator：Authorization: Bearer <公司个人令牌>，不携third-session
   X-Business-Entry: consumer | operator
   Content-Type: application/json           （POST 才有）
 
 Authorization 按入口不同（见 §0.1）：
   consumer  → 服务器注入，测试方【不要带】
-  operator  → 服务器【透传你带的那个】，必须由运维给
+  operator  → 服务器透传正常管家登录取得的个人Bearer
 ```
 
 > ⚠️ **两个入口的鉴权形状不一样**，这是本节最重要的一条。别把 consumer 的经验套到
@@ -37,16 +41,16 @@ Authorization 按入口不同（见 §0.1）：
 | 入口 | 上游 | `Authorization` 谁给 | `X-AIOps-Source-Key` |
 |---|---|---|---|
 | **consumer**（客户端） | 直连 AI-Ops 网关 | **nginx 注入服务令牌** —— 测试方**不要带** | 不需要 |
-| **operator**（管家端） | 先经**公司网关** → AI-Ops | **nginx 透传你带来的那个**（公司用户 JWT）—— **必须由运维提供** | **必须**，由公司网关那一跳注入 |
+| **operator**（管家端） | 先经**公司网关** → AI-Ops | **nginx 透传你带来的那个**（公司用户 JWT）—— **来自正常管家登录** | **必须**，由公司网关那一跳注入 |
 
 ⇒ **给测试方的实际含义：**
 
 - **测客户端**：只要一条 `third-session` 就能开工。**不要**带 `Authorization`。
-- **测管家端**：需要运维额外准备**两样**（公司用户 JWT + 那条链是否在测试环境可用）。
+- **测管家端**：使用正常管家密码登录获得个人令牌，并核对目标环境已交付对应节点路线。
   **这不是测试方自己能配的**，必须在开工前和运维确认。
 
 > 📌 **如果运维说「管家端这条链在测试环境还没打通」，那就先只测客户端。**
-> 管家端独有的面只有 `/v1/standard/analyses` 两个端点（§3.2），其余与客户端完全相同。
+> 管家新节点场景与C端WF01是不同执行链；其余旧接口以各自契约为准，不能仅凭共用URL判断能力相同。
 
 ### 为什么头名必须是 `third-session`（一句话说透）
 
@@ -277,7 +281,7 @@ curl -s -X POST 'https://api.mall.qushiyun.com/v1/assistant/questions' \
 |---|---|---|
 | `/v1/banner` 返回 `count: 0` | ❌ 不是 | **当前生产上没有已发布的横幅行**，路由是好的。空态是 200，不是 404。运营发布横幅后即非空 |
 | 管家端「客户案例」返回 `unavailable` | ⚠️ 看会话形状 | 该动作**已恢复**（§3.3）。若仍 `unavailable`，先确认会话是 operator 形状 —— `self` 形状拿不到站点范围，宣传路由会 fail-closed |
-| 泰语 / 高棉语提问得到 `type=clarification` | ❌ 不是 | `th`/`km` **可读不可问**：返回 `200` + `missing_fields:["language"]`，不建作业 |
+| 泰语 / 高棉语提示不支持语言 | ⚠️ 按路线判断 | 当前WF01与明确订单诊断不应拒绝；仅无明确订单的旧关键词路线保留该边界 |
 | 订单不存在 vs 无权查看，都返回 **404** | ❌ 不是 | 刻意不区分，避免泄露「这单存在」 |
 | 字段写错返回 **422** 不是 400 | ❌ 不是 | **请求体**校验一律 422（`extra="forbid"`）。⚠️ **路径参数**例外：`/v1/orders/{no}/access` 与 charging-status 的订单号形状非法返回 **400 `INVALID_ORDER_NO`** |
 | 多传一个字段就 422 | ❌ 不是 | `extra="forbid"`，严格拒绝 |
