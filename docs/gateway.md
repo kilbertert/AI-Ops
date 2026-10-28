@@ -32,6 +32,9 @@ Gateway同时承接C端WF01、管家Java节点和旧诊断接口，身份/范围
 
 `aiops-gateway` 提供：
 
+- `GET /v1/openapi.json`、`GET /v1/docs`：匿名可读的用户接口规范与中文查阅页，
+  仅按方法/路径列入[测试接口文档](testing-api-guide.md)中的23个操作。
+  不改变业务鉴权，不导出管理/内部接口；公网上的`third-session`与内部会话头由代理转换。
 - `GET /health`：非敏感健康检查。
 - `POST /v1/enroll`：兑换一次性高熵注册码，注册码只能使用一次。
 - `POST /v1/runs`：创建只读诊断 run，真实执行发生在 Gateway 所在服务器。

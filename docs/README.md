@@ -7,6 +7,7 @@
 
 | 读者/问题 | 当前入口 |
 |---|---|
+| 测试同事：接口地址、鉴权、请求/响应与用例 | [功能测试接口文档](testing-api-guide.md)（可单独转发） |
 | 产品、测试：交付什么、怎样反馈缺陷 | [测试交接](testing-handoff.md) |
 | 系统方向、M1–M4剩余范围 | [系统策略复核](system-strategy-audit.md) |
 | 工程：真实调用链与职责 | [系统架构](system-architecture.md)、[README模块索引](../README.md#三系统模块与依赖关系) |

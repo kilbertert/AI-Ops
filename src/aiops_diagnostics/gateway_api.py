@@ -6341,6 +6341,9 @@ def create_gateway_app(
             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
         )
 
+    from aiops_diagnostics.public_openapi import install_public_docs
+
+    install_public_docs(app)
     return app
 
 

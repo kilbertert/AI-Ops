@@ -28,6 +28,9 @@ WF01已在目标租户原H5启用V3，真实29项与独立订单/账务对照通
 这不是M1–M4全部完成。先读[测试交接](docs/testing-handoff.md)、[系统策略复核](docs/system-strategy-audit.md)、
 [文档导航](docs/README.md)与[当前交付状态](docs/agents/current-delivery-state.md)。
 
+接口提测见[功能测试接口文档](docs/testing-api-guide.md)。`public_openapi.py`从用户路由生成
+`GET /v1/openapi.json`（OpenAPI 3.1）与`GET /v1/docs`查阅页；不公开管理接口或内部回调。
+
 ## 目录
 
 - [一、这个仓库到底在做什么](#一这个仓库到底在做什么)
