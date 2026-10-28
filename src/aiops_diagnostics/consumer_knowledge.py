@@ -346,6 +346,22 @@ def final_answer(raw, context, language, content):
 
         kind, answer = answer_selection(raw, context)
         if answer is not None:
+            from aiops_diagnostics.answer_language import (
+                AnswerSurface,
+                answer_chinese_leak,
+                looks_like_asset_name,
+            )
+
+            titles = [b["title"] for b in answer["blocks"] if b["kind"] == "reference"]
+            prose = answer["blocks"][0]["text"]
+            for title in sorted(set(titles), key=len, reverse=True):
+                if looks_like_asset_name(title):
+                    prose = prose.replace(title, "")
+            surface = AnswerSurface.from_public_blocks(
+                [{"kind": "text", "text": prose}, *answer["blocks"][1:]], retrieved_titles=titles
+            )
+            if not any(char.isalpha() for char in prose) or answer_chinese_leak(surface, language):
+                raise ChatRunUnavailable("CHATFLOW_ANSWER_LANGUAGE_INVALID", "answer language differs")
             return answer
         raw = json.dumps({"kind": kind, "faq_id": ""})
     try:
