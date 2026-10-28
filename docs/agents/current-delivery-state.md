@@ -962,4 +962,4 @@ fixture、数据库检查或模型单次调用写成真实业务验收。
 > 原WF01 V8/revision7/active。原H5九语言21问答143项通过，12条实时快照独立CPMS一致；
 > 蒙古/高棉检测completed、泰语本语inconclusive，均不再语言拒绝。首轮知识中文泄漏已补修并重验。
 > 德/法仅后端及模型验证；原生手机、全域翻译/故障准确率未验，旧诊断币种表达与TDengine缺口不在本次完成结论。
-> [正式记录](../validation/2026-10-28-consumer-multilingual-production.md)。
+> [正式记录](../validation/2026-10-28-consumer-multilingual_02-production.md)。
