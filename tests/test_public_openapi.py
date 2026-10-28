@@ -116,6 +116,9 @@ def test_media_response_content_type_and_range_match_schema(tmp_path, mime):
     signed_id = _issue(signer, kind=mime.split("/")[0], mime=mime)
     with media_client(tmp_path, _Runtime(signer=signer, fetch=lambda _: b"synthetic-media")) as client:
         operation = client.get("/v1/openapi.json").json()["paths"]["/v1/media/{signed_id}"]["get"]
+        invalid = client.get("/v1/media/invalid-signature")
+        assert invalid.status_code == 403 and invalid.content == b""
+        assert "content" not in operation["responses"]["403"]
         for headers, code in [({}, 200), ({"Range": "bytes=0-2"}, 206), ({"Range": "bytes=100-200"}, 416)]:
             response = client.get(f"/v1/media/{signed_id}", headers=headers)
             assert response.status_code == code

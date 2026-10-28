@@ -257,8 +257,9 @@ def public_schema(app: FastAPI) -> dict[str, Any]:
                 {
                     "200": media,
                     "206": media,
+                    "403": {"description": "签名或授权失效；空正文"},
                     "416": {"description": "Range范围无效；空正文，Content-Range给出总长度"},
-                    "404": _response("ErrorEnvelope", "签名失效、不可见或资源不存在"),
+                    "404": {"description": "资源不存在或媒体未配置；可能为空正文或JSON错误信封"},
                 }
             )
         elif name == "Assistant":

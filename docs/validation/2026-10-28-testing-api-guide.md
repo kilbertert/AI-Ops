@@ -8,8 +8,8 @@
 
 | 检查 | 结果与范围 |
 |---|---|
-| 新增测试 | 4条：方法/路径公开边界、匿名文档不影响鉴权、两种个人身份/媒体/分析、参数与任务ID |
-| 相关回归 | `test_public_openapi`、FAQ、standard contract、assistant、conversation、cancel、README，共101 passed |
+| 新增测试 | 9条：4条公开范围/鉴权/参数契约，加5条媒体MIME与Range回归 |
+| 相关回归 | 修正后重跑`test_public_openapi`、FAQ、standard contract、assistant、conversation、cancel、README，共106 passed；媒体/规范/锁集合42 passed |
 | 规范 | `openapi-spec-validator`通过OpenAPI 3.1校验，JSON Schema验证9份合成HTTP响应 |
 | 中文指南 | 23个方法/路径与代码一致，11个JSON合法，13条curl语法/参数拦截检查，4个响应字段与采集结果一致 |
 | 临时Gateway | 真进程、临时根、动态回环端口；规范200、查阅页200、匿名FAQ/问答历史401、默认全量规范404 |
@@ -28,6 +28,7 @@ README模块索引首次漏记public_openapi，补齐后101项回归全绿。
 检索状态补记既有limited，健康报告移除未证实的details字段说明。
 Devin指出签名媒体仅声明octet-stream，会让真实图片/视频响应在测试工具误报；已复用
 媒体服务的五种MIME集合，并补5条HTTP回归，各覆盖200/206和416空正文。
+同一组用例另核对伪造签名403为空正文，规范不再将媒体失败一概描述为JSON。
 
 ## 实际环境与边界
 

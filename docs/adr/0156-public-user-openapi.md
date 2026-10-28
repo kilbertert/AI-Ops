@@ -14,6 +14,7 @@ apiKey请求头和管家个人HTTP Bearer两种替代方式，保留入口说明
 响应文档补充统一错误信封和异步任务ID；不改变运行时鉴权或序列化。
 媒体签名在URL里，操作级security为空；这不等于媒体资源无需授权。
 媒体200/206沿用媒体服务的允许MIME集合；非法Range为416空正文，不套JSON错误信封。
+签名拒绝403也为空正文；404可能来自空媒体响应或未配置的JSON错误，不强制为JSON。
 
 参考：[OpenAPI 3.1.0](https://spec.openapis.org/oas/v3.1.0.html)、
 [FastAPI扩展规范](https://fastapi.tiangolo.com/how-to/extending-openapi/)。

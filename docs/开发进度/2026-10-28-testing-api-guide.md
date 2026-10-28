@@ -14,7 +14,7 @@
 
 ## 验证与状态
 
-相关101项测试通过；独立OpenAPI 3.1校验通过，9份合成HTTP响应与schema一致。
+修复媒体MIME后相关106项测试通过；独立OpenAPI 3.1校验通过，9份合成HTTP响应与schema一致。
 文档23路由、11个JSON、13条curl与4个完整响应样例校对通过；ruff/格式、repo-map、
 workflow policy通过，wheel/sdist构建成功，Gateway构造上下文摘要已重算并核对。
 临时数据根真实Gateway：规范/查阅页200，无凭据业务401，默认全量规范404；临时进程已清理。
