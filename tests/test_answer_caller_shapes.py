@@ -302,11 +302,12 @@ def test_the_enumeration_covers_every_finalisation_point() -> None:
 
     assert {name for name, _ in sites} == {
         "agent_validator.py",
+        "consumer_knowledge.py",
         "gateway_runtime.py",
         "ops_analysis.py",
         "qa_rag.py",
     }
-    assert len(sites) == 4, sites
+    assert len(sites) == 5, sites
 
 
 # --------------------------------------------------------------------------
