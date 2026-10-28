@@ -62,3 +62,31 @@ Word 图片按 ZIP 的 `word/_rels/document.xml.rels` 解析；`Target=../NULL` 
 Gateway 图片提示 MIME 依部署版 RAGFlow `image2id` 的 JPEG 编码，实际响应继续由
 MediaProxy 字节识别决定，映射 [RFC 9110 §8.3](https://www.rfc-editor.org/rfc/rfc9110.html#section-8.3)。
 父文档扩展名不是图片媒体类型；显式不支持的类型仍拒绝。
+
+## 现场 API 细节与计数修复
+
+2026-10-28 复验：文档 PATCH 的 `enabled` 实际接收整数 `0/1`，布尔值会被拒绝。
+停用旧副本用 `PATCH /datasets/{kb}/documents/{old}`、`{"enabled":0}`，原文件和索引保留，
+恢复时传 1；确认新文档 DONE、图片和检索通过后才切换。
+
+`parser_config` 的扩展字段放在 `ext`，不能把数据库里的整个 JSON 原样塞回 API。
+新上传后只带 chunk_method 的更新可能补回 Raptor/GraphRAG 的默认 true，必须在提交解析前
+显式关闭未使用能力并回读：
+
+```json
+{"parser_config":{"raptor":{"use_raptor":false},"graphrag":{"use_graphrag":false},"chunk_token_num":512,"ext":{"image_context_size":512,"table_context_size":0,"llm_id":"deepseek-v4-flash@baoyun@OpenAI"}}}
+```
+
+旧排查直接清零文档计数而没有减库计数，会让知识库累计值虚增。仅修该目标库的显示计数：
+在 RAGFlow 容器 Python 中用 `api.db.db_models` 的 `DB.atomic()` 开事务，对目标
+Knowledgebase 和其 Document 行 `select().for_update()`；断言文档集合与已核对集合完全一致、
+每条 run=3/progress=1、对应 Task 无 `0<=progress<1`。备份原 `doc_num/chunk_num/token_num`
+到独占创建的 0600 文件，然后用 Document 的计数求和更新该库，where 同时比较原值，
+断言仅更新 1 行。此处计数包含停用但仍保留的文档，不能把启用数当总数。
+不触碰向量数据，不改其他库；有任何并发或集合变化则退出并重新取证。
+
+当前这次对账为总计 210（启用 66 + 停用保留 144）；不再显示历史重复累加的 582。
+恢复原计数只会重现虚增，通常不应回滚；如需审计原值，从该次受控备份读取。
+
+原 H5 复验复用 `docs/agents/consumer-wf01/live-release.md` 的正常登录会话与私有隧道。
+若提示 `access token validation failed`，记录未通过；不从 Redis 扫描另一个身份替代。
