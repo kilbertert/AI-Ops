@@ -18,7 +18,13 @@ def test_bridge_install_waits_for_new_routes_or_restores_all_files(tmp_path, fai
     bundle.mkdir()
     package = bundle / "aiops_diagnostics"
     package.mkdir()
-    for name in ("__init__", "dify_console_publish", "async_job_lifecycle", "bounded_http", "http_auth"):
+    for name in (
+        "__init__",
+        "dify_console_publish",
+        "async_job_lifecycle",
+        "bounded_http",
+        "http_auth",
+    ):
         shutil.copyfile(ROOT / "src/aiops_diagnostics" / f"{name}.py", package / f"{name}.py")
     for name in ("dify-publish-button.js", "dify-console-publish.conf"):
         shutil.copyfile(ROOT / "ops/dify-console-bridge" / name, bundle / name)

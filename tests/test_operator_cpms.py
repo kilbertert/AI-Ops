@@ -485,7 +485,8 @@ def test_publish_retract_restore_use_operator_route_via_http(operator, monkeypat
     assert f["state"]["calls"] == []
 
 
-def test_operator_trial_uses_draft_without_changing_publication(operator, monkeypatch):
+@pytest.mark.parametrize("native", [False, True])
+def test_operator_trial_uses_draft_without_changing_publication(operator, monkeypatch, native):
     from aiops_diagnostics.dify_workspaces import DifyWorkspaces
 
     f = operator
@@ -516,7 +517,16 @@ def test_operator_trial_uses_draft_without_changing_publication(operator, monkey
     monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
     f["candidate"]["prompt"] = "TRIAL_ONLY"
     head = {"Authorization": "Bearer trial-only", "X-AIOps-Console-Session": "valid-session"}
-    response = f["client"].post("/v1/dify/trial", headers=head, json={"app_id": APP, "order_no": ORDER})
+    payload = {"app_id": APP, "order_no": ORDER}
+    if native:
+        payload["operator_preview"] = {
+            "pre_prompt": "UNSAVED_NATIVE_DRAFT",
+            "tools": [
+                {"tool_name": name, "provider_id": "provider-id", "provider_type": "api", "enabled": True}
+                for name in operator_cpms.TOOL_NAMES
+            ],
+        }
+    response = f["client"].post("/v1/dify/trial", headers=head, json=payload)
     assert response.status_code == 202, response.text
     trial = response.json()["trial_id"]
     for _ in range(200):
@@ -533,7 +543,7 @@ def test_operator_trial_uses_draft_without_changing_publication(operator, monkey
     for text in (answer["summary"], answer["probable_cause"], *answer["next_steps"], *answer["limitations"]):
         assert text in panel
     assert "cpms.orderDetail" in panel and "cpms.chargingMonitor" in panel
-    assert "TRIAL_ONLY" in seen[0]
+    assert ("UNSAVED_NATIVE_DRAFT" if native else "TRIAL_ONLY") in seen[0]
     current = chat_execution.select_binding(
         f["settings"], scope(), entry="operator", scenario=operator_cpms.SCENARIO
     )
@@ -561,6 +571,90 @@ def test_node_provider_has_real_paths_and_no_shared_credentials():
     assert set(json.loads(payload["schema"])["paths"]) == {
         "/v1/operator-tools/" + name for name in operator_cpms.TOOL_NAMES
     }
+
+
+@pytest.mark.parametrize("fault", ["no-login", "foreign-tool", "injected-token"])
+def test_native_preview_rejects_before_business(operator, monkeypatch, fault):
+    f = operator
+    f["settings"].dify_trial_api_key = "trial-only"
+    draft = {
+        "pre_prompt": "preview",
+        "tools": [
+            {
+                "provider_id": "provider-id",
+                "provider_type": "api",
+                "tool_name": "cpms_order_detail",
+                "enabled": True,
+            }
+        ],
+    }
+    if fault == "foreign-tool":
+        draft["tools"][0]["tool_name"] = "refund"
+    if fault == "injected-token":
+        draft["tools"][0]["bearer"] = "supplied"
+    before = len(f["state"]["calls"])
+    response = f["client"].post(
+        "/v1/dify/trial",
+        headers={"Authorization": "Bearer trial-only"},
+        json={"app_id": APP, "order_no": ORDER, "operator_preview": draft},
+    )
+    assert response.status_code in {403, 422}
+    assert len(f["state"]["calls"]) == before
+
+
+def test_native_cancel_only_owns_trial_and_revokes_grants(operator, monkeypatch):
+    f = operator
+    f["settings"].dify_trial_api_key = "trial-only"
+    pending = threading.Event()
+    entered = threading.Event()
+
+    def dispatch(*args):
+        entered.set()
+        pending.wait(4)
+
+    monkeypatch.setattr(operator_cpms.SnailDispatcher, "dispatch", dispatch)
+    monkeypatch.setattr(
+        "aiops_diagnostics.gateway_api.authenticated_operator_console",
+        lambda ctx, session: (f["resolver"].current, "operator-private"),
+    )
+    try:
+        response = request(f["client"])
+        qa = response.json()["qa_id"]
+        assert entered.wait(2)
+        run = f["ctx"].agent_run_store.by_qa(qa)
+        head = {"Authorization": "Bearer trial-only", "X-AIOps-Console-Session": "valid"}
+        cancel = "/v1/dify/trial/" + qa + "/cancel"
+        assert f["client"].post(cancel, headers=head).status_code == 404  # 正式任务不是试用。
+        f["ctx"].operator_cpms.tasks[run.run_id].trial = True
+        original = f["resolver"].current
+        f["resolver"].current = scope(user="OTHER")
+        assert f["client"].post(cancel, headers=head).status_code == 404
+        f["resolver"].current = original
+        response = f["client"].post(cancel, headers=head)
+        assert response.status_code == 200 and response.json()["status"] == "cancelled"
+        assert f["ctx"].agent_run_store.get(run.run_id).state == "revoked"
+    finally:
+        pending.set()
+
+
+def test_native_draft_cannot_borrow_another_provider(operator):
+    f = operator
+    source = SimpleNamespace(workspace_id="workspace")
+    draft = {
+        "pre_prompt": "native",
+        "tools": [
+            {
+                "provider_id": "foreign-provider",
+                "provider_type": "api",
+                "tool_name": "cpms_order_detail",
+                "enabled": True,
+            }
+        ],
+    }
+    before = len(f["state"]["calls"])
+    with pytest.raises(ValueError, match="unimplemented tool"):
+        node_publication.candidate(source, f["target"], operator_preview=draft)
+    assert len(f["state"]["calls"]) == before
 
 
 def test_node_provider_without_task_cannot_read_any_business(operator):

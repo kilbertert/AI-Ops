@@ -379,6 +379,22 @@ class DifyRestoreRequest(DifyPublishRequest):
     version_no: int = Field(ge=1, strict=True)
 
 
+class OperatorPreviewTool(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider_id: str = Field(min_length=1, max_length=64)
+    provider_type: Literal["api"]
+    tool_name: Literal["cpms_order_detail", "cpms_charging_samples"]
+    enabled: bool = Field(default=True, strict=True)
+
+
+class OperatorPreviewDraft(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    pre_prompt: str = Field(min_length=1, max_length=8000)
+    tools: list[OperatorPreviewTool] = Field(max_length=2)
+
+
 class DifyTrialRequest(BaseModel):
     """一次试运行：订单号 + **草稿**。范围与发起人**都不在这里**（#772 F / #781）。
 
@@ -412,6 +428,7 @@ class DifyTrialRequest(BaseModel):
     app_id: str | None = Field(default=None, min_length=1, max_length=64, pattern=r"^[0-9a-fA-F-]{8,64}$")
     allowed_tools: list[str] = Field(default_factory=list, max_length=7)
     question: str = Field(default="check order status", min_length=1, max_length=4000)
+    operator_preview: OperatorPreviewDraft | None = None
 
     @model_validator(mode="after")
     def _exactly_one_draft_source(self) -> DifyTrialRequest:
@@ -422,6 +439,8 @@ class DifyTrialRequest(BaseModel):
         """
         has_prompt = bool(self.prompt)
         has_app = bool(self.app_id)
+        if self.operator_preview is not None and not has_app:
+            raise ValueError("operator preview requires app_id")
         if has_prompt and has_app:
             raise ValueError("给 prompt 与 app_id 二者只能有一个（草稿来源必须唯一）")
         if not has_prompt and not has_app:
@@ -2581,7 +2600,18 @@ def create_gateway_app(
                     context.settings.dify_console_api_key,
                     workspace,
                 )
-                manifest = candidate(source, target)
+                try:
+                    manifest = candidate(
+                        source,
+                        target,
+                        **(
+                            {"operator_preview": payload.operator_preview.model_dump()}
+                            if payload.operator_preview is not None
+                            else {}
+                        ),
+                    )
+                except ValueError as exc:
+                    raise StandardAPIError(400, "OPERATOR_PREVIEW_INVALID", "invalid operator draft") from exc
 
                 def current_console_scope():
                     current, token = console_operator_identity()
@@ -2604,6 +2634,8 @@ def create_gateway_app(
                     trial_manifest=manifest,
                 )
                 return {"trial_id": qa["qa_id"], "status": qa["status"]}
+        if payload.operator_preview is not None:
+            raise StandardAPIError(403, "OPERATOR_PREVIEW_UNBOUND", "operator preview target not registered")
         trial_initiator = TrialInitiator.from_headers(
             initiator, initiator_tenant, initiator_type, initiator_name
         )
@@ -2649,6 +2681,26 @@ def create_gateway_app(
                 retryable=True,
             )
         return {"trial_id": trial["diagnosis_id"], "status": trial["status"]}
+
+    @app.post("/v1/dify/trial/{trial_id}/cancel")
+    def cancel_operator_trial(
+        trial_id: str,
+        request: Request,
+        _: None = Depends(dify_trial_credential),  # noqa: B008
+    ):
+        caller, _bearer = authenticated_operator_console(
+            context, request.headers.get("X-AIOps-Console-Session", "")
+        )
+        run = context.agent_run_store.by_qa(trial_id)
+        task = context.operator_cpms.tasks.get(run.run_id) if run else None
+        if (
+            run is None
+            or run.scope_fingerprint != caller.scope_fingerprint
+            or not ((task and task.trial) or (run.snapshot or {}).get("trial"))
+        ):
+            raise StandardAPIError(404, "TRIAL_NOT_FOUND", "trial not found")
+        qa = context.runtime.cancel_assistant_qa(caller, trial_id)
+        return {"trial_id": trial_id, "status": qa["status"]}
 
     @app.get("/v1/dify/trial/{trial_id}")
     def get_dify_trial(

@@ -11,11 +11,12 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 git -C "$repo" archive "$revision" \
   src/aiops_diagnostics/{__init__,dify_console_publish,async_job_lifecycle,bounded_http,http_auth}.py \
-  ops/dify-console-bridge/{dify-publish-button.js,dify-console-publish.conf,deploy.sh} \
+  ops/dify-console-bridge/{dify-publish-button.js,operator-native-preview.js,dify-console-publish.conf,deploy.sh} \
   | tar -xf - -C "$work"
 mkdir "$work/bundle"
 mv "$work/src/aiops_diagnostics" "$work/bundle/"
 mv "$work/ops/dify-console-bridge/"* "$work/bundle/"
+cat "$work/bundle/operator-native-preview.js" >> "$work/bundle/dify-publish-button.js"
 printf '%s\n' "$revision" > "$work/bundle/REVISION"
 (
   cd "$work/bundle"

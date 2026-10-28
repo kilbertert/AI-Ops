@@ -256,7 +256,22 @@ def main():
             response = f["client"].post(
                 "/v1/dify/trial",
                 headers=headers,
-                json={"app_id": f["target"].app_id, "order_no": "ORDER-1001"},
+                json={
+                    "app_id": f["target"].app_id,
+                    "order_no": "ORDER-1001",
+                    "operator_preview": {
+                        "pre_prompt": "NATIVE_UNSAVED",
+                        "tools": [
+                            {
+                                "provider_id": "provider-id",
+                                "provider_type": "api",
+                                "tool_name": name,
+                                "enabled": True,
+                            }
+                            for name in operator_cpms.TOOL_NAMES
+                        ],
+                    },
+                },
             )
             assert response.status_code == 202, response.text
             trial = response.json()["trial_id"]
@@ -267,12 +282,12 @@ def main():
                     break
             assert result.status_code == 200 and result.json()["status"] == "completed", result.text
             trial_run = f["ctx"].agent_run_store.by_qa(trial)
-            assert "TRIAL_UNPUBLISHED" in trial_run.execution_manifest
+            assert "NATIVE_UNSAVED" in trial_run.execution_manifest
             assert trial_run.execution_manifest != current.manifest_text
             from aiops_diagnostics import chat_execution
 
             assert chat_execution.binding_for_key(f["settings"], current.key) == current
-            cases.append({"case": "java-draft-trial", "status": "completed-without-publishing"})
+            cases.append({"case": "java-native-draft-trial", "status": "completed-without-publishing"})
             f["candidate"]["enabled"] = []
             f["publish"](current.route_revision)
             denied = request(f["client"])
