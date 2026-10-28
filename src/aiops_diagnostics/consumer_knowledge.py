@@ -360,7 +360,7 @@ def final_answer(raw, context, language, content):
             surface = AnswerSurface.from_public_blocks(
                 [{"kind": "text", "text": prose}, *answer["blocks"][1:]], retrieved_titles=titles
             )
-            if answer_chinese_leak(surface, language):
+            if not any(char.isalpha() for char in prose) or answer_chinese_leak(surface, language):
                 raise ChatRunUnavailable("CHATFLOW_ANSWER_LANGUAGE_INVALID", "answer language differs")
             return answer
         raw = json.dumps({"kind": kind, "faq_id": ""})

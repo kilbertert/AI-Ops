@@ -103,6 +103,11 @@ def test_only_cited_resource_name_is_exempt_inside_translated_prose():
     text = "Дэлгэрэнгүйг 充电操作.md файлаас үзнэ үү."
     raw = {"kind": "knowledge", "answer": text, "reference_ids": ["source-1"]}
     assert final_answer(json.dumps(raw), context, "mn", {})["blocks"][0]["text"] == text
-    for bad in (text + " 未引用的中文。", "Дэлгэрэнгүйг 退款说明.md файлаас үзнэ үү."):
+    for bad in (
+        text + " 未引用的中文。",
+        "Дэлгэрэнгүйг 退款说明.md файлаас үзнэ үү.",
+        "充电操作.md",
+        "《充电操作.md》",
+    ):
         with pytest.raises(ChatRunUnavailable, match="answer language differs"):
             final_answer(json.dumps({**raw, "answer": bad}), context, "mn", {})
