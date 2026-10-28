@@ -21,6 +21,13 @@ WF01已在目标租户原H5启用V3，真实29项与独立订单/账务对照通
 
 ---
 
+## 当前交付阶段（2026-10-28）
+
+当前C端只读客服已上线并提测，工作重心转为测试验收、缺陷修复与稳定化。
+原H5的知识/实时查询/多语言已验证；管家节点API与公司前端代码已实现/合并，但正式页面交付与业务验收尚未证实。
+这不是M1–M4全部完成。先读[测试交接](docs/testing-handoff.md)、[系统策略复核](docs/system-strategy-audit.md)、
+[文档导航](docs/README.md)与[当前交付状态](docs/agents/current-delivery-state.md)。
+
 ## 目录
 
 - [一、这个仓库到底在做什么](#一这个仓库到底在做什么)
@@ -49,12 +56,14 @@ WF01已在目标租户原H5启用V3，真实29项与独立订单/账务对照通
 治理面产出的 PR 改的是产品面代码。本文档以产品面为主，治理面见
 [第八节](#八验证与交付纪律) 与 [docs/afk-workflow.md](docs/afk-workflow.md)。
 
-产品面的对外能力（Gateway 共 66 条路由）分四组：
+产品面的主要能力如下；接口随实现演进，不在概述中维护易过期的路由总数：
 
 - **诊断**：设备运行路径 `/v1/runs`（workspace 设备令牌）、标准 API
   `/v1/standard/diagnoses`（调用者身份委托）。
-- **客服问答**：统一助手入口 `/v1/assistant/questions`（分流到固定问答 / 通用问答 /
-  订单诊断 / 宣传案例）、固定问答 `/v1/faq/*`、知识库检索与媒体 `/v1/media/*`。
+- **客服问答**：统一助手入口 `/v1/assistant/questions`；现役C端普通问题走Dify WF01，
+  知识来自节点所选库，实时状态/账务来自单轮CPMS回调；订单检测仍走旧诊断。固定FAQ、宣传案例另有既有路径。
+- **管家节点**：个人公司身份与场景发布绑定，将指定订单交给Java两项CPMS工具；不复用旧七工具。
+  节点API回放与正式管家页面验收分别记录。
 - **充电健康报告**：`/v1/health-report-jobs`（确定性规则实时计算，非故障根因判断）。
 - **平台管理**：智能体与快捷动作的草稿/发布/停用生命周期、运行指标 `/v1/agent-metrics`。
 - **运营面**：产品快捷动作 `/v1/shortcuts`（按钮）与聊天页运营横幅 `/v1/banner`（带图卡片）。
@@ -102,7 +111,8 @@ WF01已在目标租户原H5启用V3，真实29项与独立订单/账务对照通
 > 它只保证模型的每个动作合法、有界、限定到租户与订单、进入日志、完成脱敏、可以恢复。**
 > 见 [docs/thin-harness.md](docs/thin-harness.md)。
 
-传统做法是「代码算出答案，模型负责措辞」；本项目反过来——**Codex 选择要哪些证据、
+以下描述旧诊断内核；WF01状态/账务继续由确定性代码渲染快照，知识和Java路线见[当前架构](docs/system-architecture.md)。
+在诊断内核中，**Codex 选择要哪些证据、
 如何组合证据、给出因果解释**，Python 侧只做它必须做的事。为什么？因为事实 3 里的
 "推理能力"是真能力，而事实 2 要求的跨五类证据的因果判断恰好是它的强项；
 用提示词去约束它则是无效的（提示词是请求，不是保证）。
@@ -154,21 +164,13 @@ agent 工具层、三个数据源——并且**已经漂移了**：同一个订�
 - 恢复时校验 provider endpoint 一致（拒绝把已存 key 重定向到别的上游）、
   校验 fixture 哈希（恢复不能悄悄读到变过的测试数据）。
 
-### 推论五：凭据不能到达客户端，所以有 Gateway
+### 推论五：凭据与授权由 Gateway 管理
 
-便携客户端不应该携带 MySQL、Redis、SSH 或 provider key。
-把凭据留在固定服务器、客户端只拿一个设备令牌——见
-[docs/gateway.md](docs/gateway.md)，以及 [ADR-0004](docs/adr/0004-bff-owns-frontend-api-boundary.md)。
-
-同一原理在**用户身份**上重复一次：设备令牌不能代表用户，裸 `user_id`/`tenant_id`
-不能作为授权依据。所以小程序侧由业务后端验证会话后签发一次性身份委托句柄，
-AI-Ops 用独立服务身份回查——见 [ADR-0003](docs/adr/0003-bff-delegated-user-identity.md)。
-
-> ⚠️ **上句描述的是目标形态，不是现状。** 实际落地是共享会话 Redis 直读，
-> 偏离记录见 [ADR-0008](docs/adr/0008-adr-0003-deviation-session-direct-read.md)；
-> 偏离的**根因**是站点位置（AI-Ops 不在 `cloud-gateway` 之后），
-> 现状、证据与目标态见
-> [docs/agents/company-platform-integration-baseline.md](docs/agents/company-platform-integration-baseline.md)。
+公司App/H5只携带其正常登录凭据，数据库、模型与节点服务密钥留在受控服务端。
+consumer/self与operator站点范围分别解析；Dify只得到本轮取数凭据，Java只得到已授权的任务工具范围。
+历史设备令牌属于另一接口面，不能代表个人身份；裸user_id/tenant_id不能授予权限。
+现有公司身份适配与目标体系的偏差见[身份基线](docs/agents/company-platform-integration-baseline.md)，
+实际新链形状见[架构](docs/system-architecture.md)与[管家手册](docs/agents/operator-cpms/README.md)。
 
 ### 推论六：成本与确定性要求保留一条不调用模型的路径
 
@@ -182,10 +184,9 @@ AI-Ops 用独立服务身份回查——见 [ADR-0003](docs/adr/0003-bff-delegat
 
 ### 3.1 分层
 
-**先说结论，再说例外。** 本包实测**无环**（全量 AST 导入分析，含函数内延迟导入），
-可以按下面的层理解；但它**不是严格的单向栈**——有 **6 条真实的向上依赖**，
-全部列在表里。README 不会假装它们是"架构违规"：它们是低层模块为了服务某个窄场景
-而引用高层的既有接缝，每条都有具体理由。
+本包导入图由test_readme_architecture持续检查，含函数内延迟导入。下面保留原诊断内核的分层理解，
+不声称新增WF01/Java发布模块都在旧图中或跨层引用总数不变；当前跨系统职责见[架构](docs/system-architecture.md)。
+它不是严格单向栈，典型跨层引用在下表说明。
 
 ```mermaid
 flowchart TB
@@ -217,7 +218,7 @@ flowchart TB
 **层内为主，向下为主。** 同层内的引用（如 `agent_runner → agent_engine`、
 `diagnostic_tools → sources`）是常态，不算异常。
 
-#### 6 条向上依赖（真实存在，逐条有理由）
+#### 原诊断分层的跨层引用示例
 
 | 引用方（层） | 被引用（层） | 理由 |
 |---|---|---|
@@ -547,7 +548,7 @@ gateway_api 路由 → CallerContextResolver.resolve → ScopeContext
 
 ```text
 src/aiops_diagnostics/    产品面 Python 全部代码（L0–L6）
-tests/                    77 个测试文件，按关注点平铺（无 conftest）
+tests/                    按关注点组织测试，共享装配见 conftest.py
 java/                     充电桩后端侧的 /diag/* 查询接口与审计切面工件 —— 见下方警告
 ops/                      TDengine 只读代理的 systemd 单元与环境清单
 packaging/                PyInstaller 规格与便携包构建 + 烟测
@@ -560,12 +561,12 @@ docs/                     架构、契约、ADR、运行手册（见第十节路
 AGENTS.md                 仓库级开发共识（中文文档、里程碑同步、业务边界）
 GLOSSARY.md                领域词汇表（术语 + 应避免的同义词）
 SOP.md / 充电桩问题排查SOP.md   业务规则来源（后端行为的中文说明）
-acceptance.feature        Gherkin 可执行验收约束（60 Feature / 157 Rule / 411 Scenario）
-qa-plan.md                QA 用例（158 个用例 ID，含环境/前置/数据/动作/预期/清理）
+acceptance.feature        Gherkin验收约束；新增场景另见 docs/acceptance/ 与 docs/agents/
+qa-plan.md                QA用例；当前提测范围见 docs/testing-handoff.md
 ```
 
 > ⚠️ **`java/` 是待落地工件，不是本仓库构建产物。**
-> 本仓库没有 JDK/Spring 工具链，这两个文件没有被编译、没有被部署。它们的生产归宿是
+> 此处指java/中的公司后端接口工件，不是tools/m2_close/node中的可构建Java执行节点。工件的生产归宿是
 > 充电桩后端仓库（见 [java/README.md](java/README.md)）。仓库内只有四个 Python 契约测试
 > 守护其对外形状，**这不等于真实验收**。
 
@@ -605,7 +606,7 @@ uv run python -m compileall -q src tests && uv pip check
 
 ```bash
 uv sync --locked --dev     # 唯一前提：它会装好包括调度器在内的一切
-uv run pytest              # 并行，约 47 s
+uv run pytest              # 仓库配置控制并发；耗时以当前环境为准
 uv run pytest -n 0         # 显式串行，约 245 s
 ./tools/test.sh            # 同上，外加一次 lockfile 一致性检查
 ```
@@ -700,12 +701,12 @@ runbook §5/§6 明确禁止 CI 自证。所以 CD 通过最多报告 `merged_wa
 
 ### 测试组织
 
-`tests/` 是 77 个平铺文件的集合，按关注点聚类：
+`tests/` 按关注点组织，收集范围以pytest和CI为准：
 `test_assistant_*`（助手面）、`test_standard_*`（标准 API 契约）、
 `test_diag_*_contract`（每个 `/diag/*` 端点的契约）、`test_*scope*`（权限栈）、
 `test_agent_*`（agent 运行时）、`test_readme_architecture.py`（**本文档自身的形状守护**——见下）。
-最新本地全量记录为 **1082 passed**；当前数字以
-[docs/validation.md](docs/validation.md) 为准。
+测试计数随修订变化；本次已部署语言修复的CI为4188 passed/10 skipped，
+证据见[正式验收](docs/validation/2026-10-28-consumer-multilingual_02-production.md)，跳过项不计通过。
 
 **README 自身有守护。** 本文件声称「每个模块都在这儿被解释」以及「包内无环」，
 两条都是可机检的，所以它们由 `tests/test_readme_architecture.py` 断言：
@@ -713,8 +714,7 @@ runbook §5/§6 明确禁止 CI 自证。所以 CD 通过最多报告 `merged_wa
 文档漂移会让 CI 变红——而不是等下一个接手者踩坑。
 （守护只查形状，不查措辞是否讲清楚了。）
 
-> 已知缺口：`admin_cli.py` 与 `gateway_server.py` 没有专门的测试文件——
-> `serve` 装配、注册码签发、设备管理、清单收敛命令未被单元测试覆盖。
+> 有单测不等于真实业务通过；服务启动/设备注册有隔离Gateway验证，真实身份、供应商和业务数据须另留证据。
 
 ### 文档与证据纪律
 
@@ -740,23 +740,15 @@ runbook §5/§6 明确禁止 CI 自证。所以 CD 通过最多报告 `merged_wa
 
 ## 九、当前边界与未验收事项
 
-**这个系统目前没有工程师确认的真实故障结论。** 自动化测试、生产只读回放、
-真实 provider 调用和便携制品验收只能证明**实现一致性**与**运行边界**，
-不能替代业务准确性验收。
+当前交付和剩余工作以[测试交接](docs/testing-handoff.md)为准。C端只读状态/账务、知识和多语言H5
+已有真实验证；这些结果不能证明复杂故障诊断准确率，也不能替代测试方完整回归。
 
-- 每个受支持的故障路径都需要至少 3 个工程师确认的真实故障案例，
-  逐项比对系统给出的摘要、分类、证据与下一步建议。**即使建议恰好正确，
-  一个错误的高置信度结论仍算失败。** 待验收路径清单见
-  [docs/validation.md](docs/validation.md) 的「业务验收待办」。
-- 已知未验收：41 公网停止链路与 `/v1/agent-metrics` 聚合面；
-  `health_report_jobs` / `standard_diagnoses` 的重启收敛；
-  五种语言的真实调用（en/de/fr/es/pt，等待可用 thirdSession）；
-  真实外部贡献者的 fork PR 执行路径。
-- 第一版**明确不支持**两轮车完整规则（标记 `unsupported_order_type` 并降低置信度）。
-- 业务动作面**关闭**：不提供重算、退款、补发、改单、改配置、消息重放、消费游标、重启服务。
-- Gateway 是**单节点 MVP**，适合内网与受控验收；公网生产前必须完成
-  TLS、OIDC/mTLS、Vault/KMS、PostgreSQL、速率限制、审计与撤销——
-  见 [docs/gateway.md](docs/gateway.md)。
+- 照片上传仍关闭；原生APK/IPA、官方人工接通、全部地区视频播放、长期稳定性尚未验收。
+- 管家公司前端代码已合并，正式页面部署与真人整链、有效Dify登录试用、旧工具整体退役仍缺证据。
+- 旧诊断有TDengine数据源缺口及币种表述问题；证据不足不能报高置信度结论。两轮车完整规则不支持。
+- 业务动作面关闭：不退款、停充、重算、补发、改单或自动建单。新增写能力独立设计权限、确认和审计。
+- 现役HTTPS服务是单节点有界交付；新客户内网部署、容量/限流、密钥治理与整体迁移继续按场景验收。
+  不将OIDC、Vault或PostgreSQL等候选演进方案写成已经实施，也不凭选型推翻已有的受控H5验收。
 
 ---
 
@@ -772,36 +764,31 @@ runbook §5/§6 明确禁止 CI 自证。所以 CD 通过最多报告 `merged_wa
 | 对外接口契约？ | 固定问答 [docs/faq-api.md](docs/faq-api.md)；健康报告与单问诊断 [docs/standard-api-contract.md](docs/standard-api-contract.md)（**冲突时以这两份为准**） |
 | 怎么跑起来？ | [docs/快速上手.md](docs/快速上手.md) |
 | 95 是哪台机、怎么连、里面有什么？ | [docs/agents/env-95-facts.md](docs/agents/env-95-facts.md)（另一套 AI-Ops 环境；与 41 数据面独立，当前只做只读核实） |
-| 系统架构简述？ | [docs/architecture.md](docs/architecture.md) |
+| 系统架构简述？ | [docs/architecture.md](docs/system-architecture.md) |
 | agent 运行时细节？ | [docs/thin-harness.md](docs/thin-harness.md) |
 | 多端部署？ | [docs/gateway.md](docs/gateway.md) |
-| 里程碑历史？ | [docs/开发进度.md](docs/开发进度.md) |
-| 多语言支持到什么程度了？ | [docs/reviews/2026-10-07-i18n-program-retrospective.md](docs/reviews/2026-10-07-i18n-program-retrospective.md)（完成度复盘）+ [docs/faq-api.md](docs/faq-api.md)（契约侧语言清单） |
+| 里程碑历史？ | [docs/开发进度/](docs/开发进度/)；旧汇总为只读归档 |
+| 多语言支持到什么程度了？ | [多语言正式验收](docs/validation/2026-10-28-consumer-multilingual_02-production.md) + [WF01手册](docs/agents/consumer-wf01/README.md) |
 | 怎么在生产上端到端验一次？ | `.claude/skills/verify-aiops-client-e2e/`（真用户会话驱动生产网关）+ `docs/agents/env-41-runbook.md` §5.5/§5.6 |
 | 数据生成/校验工具怎么用？ | [tools/README.md](tools/README.md) |
 
 **历史遗留文件（保留但不代表当前状态，不要据此判断）：**
 
-- `docs/handoff-brief.md`、`docs/afk-cutover/*` — 某次交切的会话快照，相关工作已完成。
+- `docs/handoff-brief.md`、`docs/afk-cutover/*` — 某次交切的会话快照，不能据其旧任务图判定当前待办。
 - `docs/qa-plan-real.md`、`docs/real-acceptance-results.md`、`docs/synthetic-acceptance-data.md`
-  — 某一时点的验收记录，已被 `docs/validation.md` 取代。
+  — 某一时点的验收记录，后续证据见 `docs/validation/`；旧汇总同样只读。
 - `docs/architecture/ai-ops-architecture.*` — 架构图快照；生成规格在同目录 `.json`。
 - `docs/原型/`、`docs/知识库材料/`、`docs/用户端.docx`、`docs/管家端.docx`、`scripts/`
   — 已被 `.gitignore` 忽略，不进入仓库。
 
-> 判断一份文档是否仍权威，看有没有**入链**：被 `AGENTS.md`、本 README 或
-> `current-delivery-state.md` 指向的是权威；孤立的多半是快照。
+> 被链接不等于最新。先看日期、适用入口和证据范围；历史快照也会被引用，不能因此变成当前操作说明。
 
 ---
 
 ## 架构图
 
-![AI-Ops 架构](docs/architecture/ai-ops-architecture.png)
-
-运行时架构可视化：[PNG](docs/architecture/ai-ops-architecture.png) ·
-[SVG](docs/architecture/ai-ops-architecture.svg) ·
-[可交互 HTML](docs/architecture/ai-ops-architecture.html)（含主题切换、平移缩放、视图聚焦、关系追溯）。
-生成规格见 [`docs/architecture/ai-ops-architecture.json`](docs/architecture/ai-ops-architecture.json)。
+当前C端、管家、Dify、Java与旧Python诊断的职责图见[系统架构](docs/system-architecture.md)。
+早期PNG/SVG/HTML只覆盖旧诊断内核，保留为[历史图快照](docs/architecture/README.md)，不作为当前系统全景。
 
 正式节点常驻运行与旧试验配置退役见[部署手册](deploy/node-runtime/README.md)；
 生产启用须按该手册完成真实页面验收，合并部署件本身不代表已启用。
@@ -810,9 +797,6 @@ runbook §5/§6 明确禁止 CI 自证。所以 CD 通过最多报告 `merged_wa
 2026-10-25 正式节点状态路线已启用，原 H5 本人查询经发布 V18/真实节点/baoyun 完成并与
 SQL/CPMS 独立对照一致；旧试验配置已归档。范围与限制见[真实验收](docs/validation/2026-10-25-production-node-enabled.md)。
 
-WF01发布可冻结审核内容、素材和只读能力，支持临时Chatflow试用及撤回恢复；详见[发布验收](docs/validation/2026-10-25-consumer-publication.md)。
-WF01已审核FAQ可关联图片/视频，素材随QA与绑定失效；详见[媒体验收](docs/validation/2026-10-25-consumer-media.md)。
-WF01可显式启用本人状态单轮读取，复用原授权与CPMS快照；实时轮次不进入后续模型记忆。
-C端明确未解决反馈已接入同会话主题检索与第二次人工渠道提示，详见[验收](docs/validation/2026-10-25-consumer-followup.md)。
-C端业务完善正在按[WF01](docs/agents/consumer-wf01/README.md)推进：原知识包先校验为
-可追溯草稿，再接Chatflow、原App连续会话、只读业务和多媒体；编译成功不代表已上线。
+WF01当前采用动态文档：所选库内资料索引完成即可检索，发布只控制图、选库和能力；
+当前操作说明见[WF01](docs/agents/consumer-wf01/README.md)，实际提测范围见[测试交接](docs/testing-handoff.md)。
+旧审核内容/媒体映射只在历史发布恢复中兼容，不能作为新增资料的前置。
