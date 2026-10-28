@@ -1,0 +1,10 @@
+{
+  "kb_adapter.py": {
+    "before": "c23b439002dbd784c6ff4852d5c70112e6be585a29ae9c19b951ff49ef1b96c2",
+    "after": "1b5426b6a75cc529e9c9050ba1648b55e79ff38b2a80ba37a889a5907a55464c"
+  },
+  "app.py": {
+    "before": "5c0fcc3e23a21be632441c9b59c85165c4cd91f597051e1973060a5710d7c63c",
+    "after": "bc496399251c096d28e690911a5803658019b3df0bd791b40be35c95224c99e3"
+  }
+}

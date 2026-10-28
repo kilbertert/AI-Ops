@@ -800,3 +800,5 @@ SQL/CPMS 独立对照一致；旧试验配置已归档。范围与限制见[真�
 WF01当前采用动态文档：所选库内资料索引完成即可检索，发布只控制图、选库和能力；
 当前操作说明见[WF01](docs/agents/consumer-wf01/README.md)，实际提测范围见[测试交接](docs/testing-handoff.md)。
 旧审核内容/媒体映射只在历史发布恢复中兼容，不能作为新增资料的前置。
+Word/PDF 内嵌图片按检索片段的 `image_id` 交付，父文档扩展名不用于拒绝图片；
+模型开户、既有租户修复与图文入库复核见 [KB 运维手册](deploy/kb-service/README.md)。
