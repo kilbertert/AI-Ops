@@ -7,6 +7,9 @@ const origin = 'https://console.example';
 globalThis.location = { origin };
 globalThis.window = {
   fetch: async (url, options) => {
+    if (url === '/console/api/workspaces/current/tool-providers?type=api') {
+      return Response.json([{name: 'cpms-node', id: 'uuid'}]);
+    }
     calls.push({ url, options });
     return new Response('data: {"event":"message_end"}\n\n', { headers: { 'Content-Type': 'text/event-stream' } });
   },
@@ -35,4 +38,8 @@ assert.equal(calls.length, 4);
 const abort = new AbortController();
 await window.fetch(url, { method: 'POST', headers, body, signal: abort.signal });
 assert.equal(calls[4].options.signal, abort.signal);
+const foreign = JSON.parse(body);
+foreign.model_config.agent_mode.tools[0].provider_id = 'another-provider';
+await window.fetch(url, { method: 'POST', headers, body: JSON.stringify(foreign) });
+assert.equal(calls[5].url, url);
 console.log('native preview, Request stop, ordinary preview, origin, files, abort: passed');

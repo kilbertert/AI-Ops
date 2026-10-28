@@ -1860,10 +1860,14 @@ def _native_order(query):
     if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", query.strip()) and any(c.isdigit() for c in query):
         return query.strip()
     explicit = re.findall(
-        r"(?:订单(?:号)?|order(?:\s+(?:id|no|number))?)\s*[:：#]?\s*([A-Za-z0-9_-]{1,64})(?![A-Za-z0-9_.:-])",
+        r"(?:订单(?:号)?|order(?:\s+(?:id|no|number))?)\s*[:：#]?\s*([A-Za-z0-9_.:-]+)",
         query,
         re.IGNORECASE,
     )
+    if any(
+        any(c.isdigit() for c in item) and not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", item) for item in explicit
+    ):
+        raise _Rejected(400, "订单号包含不支持的字符，请只提供一个完整有效的订单号")
     candidates = set(re.findall(r"(?<![A-Za-z0-9_.:-])[A-Za-z0-9_-]{6,64}(?![A-Za-z0-9_.:-])", query))
     candidates = {s for s in candidates if any(c.isdigit() for c in s) and (not s.isdigit() or len(s) >= 15)}
     candidates.update(s for s in explicit if any(c.isdigit() for c in s))

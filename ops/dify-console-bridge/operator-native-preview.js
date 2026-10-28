@@ -20,6 +20,18 @@
     if (!stop && !tools.some(function (t) { return t.provider_type === 'api' && (t.tool_name === 'cpms_order_detail' || t.tool_name === 'cpms_charging_samples'); })) {
       return originalFetch(input, options);
     }
+    if (!stop) {
+      var providersResponse = await originalFetch('/console/api/workspaces/current/tool-providers?type=api', {
+        credentials: 'same-origin', headers: (options && options.headers) || (request && request.headers),
+        signal: (options && options.signal) || (request && request.signal),
+      });
+      if (!providersResponse.ok) { return providersResponse; }
+      var providers = await providersResponse.json();
+      var provider = Array.isArray(providers) && providers.find(function (p) { return p.name === 'cpms-node'; });
+      if (!provider || !tools.some(function (t) { return t.provider_id === provider.id; })) {
+        return originalFetch(input, options);
+      }
+    }
     if (!stop && body.files && body.files.length) {
       return Promise.resolve(new Response(JSON.stringify({code: 'OPERATOR_PREVIEW_FILES_UNSUPPORTED', message: '管家预览仅支持明确订单，暂不接受附件'}), {status: 400, headers: {'Content-Type': 'application/json'}}));
     }

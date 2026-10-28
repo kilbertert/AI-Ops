@@ -129,6 +129,7 @@ def test_running_then_failed_does_not_deliver_report(bridge, upstream, monkeypat
         ("hello", None),
         ("订单 123456789012.12", None),
         ("订单 123456789012:12", None),
+        ("订单号: 1234.56，订单号: 9876", None),
     ],
 )
 def test_explicit_order_syntax_never_truncates(query, expected):

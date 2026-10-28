@@ -23,7 +23,8 @@ Status: Accepted
 ## 界面与失败语义
 
 在既有同源注入脚本中，按两项 CPMS 工具名识别候选 chat-messages POST，服务端再校验真实
-provider UUID 和应用归属；不依赖原生请求是否带 provider_name。普通预览走原请求。
+provider UUID 和应用归属；不依赖原生请求是否带 provider_name。浏览器先用同一会话读取
+当前工作区的工具目录并匹配 cpms-node UUID，其他提供方同名工具保留原请求。
 桥用 SSE 返回任务显示项、报告和 message_end；Agent 面板所需空 thought 仅是显示容器，
 不声称是模型推理。结果历史保留于 Gateway QA/run，原预览为单轮，不伪造 Dify 会话历史。
 
