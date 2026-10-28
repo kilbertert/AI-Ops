@@ -52,7 +52,7 @@ systemctl start "$service"
 "$nginx" -s reload
 systemctl is-active --quiet "$service"
 # 没有会话的请求必须由桥拒绝；若仍落进 Dify 的 HTML/404，部署不算成功。
-for route in retract restore versions; do
+for route in retract restore versions operator-preview operator-preview/cancel; do
   ready=false
   # reload 只发送信号：旧 worker 退出前仍可能返回旧路由的 HTML/404。
   for _attempt in {1..15}; do
@@ -60,8 +60,8 @@ for route in retract restore versions; do
       -X POST "http://127.0.0.1:10008/__aiops/$route" \
       -H 'Content-Type: application/json' --data '{}') || status=000
     if [ "$status" = 403 ] && python3 -c \
-      'import json,sys; b=json.load(open(sys.argv[1])); assert b["published"] is False and b["action"] == "" and b["reason"]' \
-      "$backup/probe.json" 2>/dev/null; then
+      'import json,sys; b=json.load(open(sys.argv[1])); assert (b.get("code")=="OPERATOR_PREVIEW_REJECTED" and b.get("message")) if sys.argv[2].startswith("operator-preview") else (b.get("published") is False and b.get("action")=="" and b.get("reason"))' \
+      "$backup/probe.json" "$route" 2>/dev/null; then
       ready=true
       break
     fi

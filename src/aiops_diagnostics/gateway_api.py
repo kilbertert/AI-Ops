@@ -395,6 +395,12 @@ class OperatorPreviewDraft(BaseModel):
     tools: list[OperatorPreviewTool] = Field(max_length=2)
 
 
+class OperatorTrialCancelRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    app_id: str = Field(min_length=1, max_length=64)
+
+
 class DifyTrialRequest(BaseModel):
     """一次试运行：订单号 + **草稿**。范围与发起人**都不在这里**（#772 F / #781）。
 
@@ -2685,6 +2691,7 @@ def create_gateway_app(
     @app.post("/v1/dify/trial/{trial_id}/cancel")
     def cancel_operator_trial(
         trial_id: str,
+        payload: OperatorTrialCancelRequest,
         request: Request,
         _: None = Depends(dify_trial_credential),  # noqa: B008
     ):
@@ -2693,9 +2700,16 @@ def create_gateway_app(
         )
         run = context.agent_run_store.by_qa(trial_id)
         task = context.operator_cpms.tasks.get(run.run_id) if run else None
+        binding = (
+            task.binding
+            if task
+            else (chat_execution.binding_for_key(context.settings, run.chat_binding) if run else None)
+        )
         if (
             run is None
             or run.scope_fingerprint != caller.scope_fingerprint
+            or binding is None
+            or binding.app_id != payload.app_id
             or not ((task and task.trial) or (run.snapshot or {}).get("trial"))
         ):
             raise StandardAPIError(404, "TRIAL_NOT_FOUND", "trial not found")

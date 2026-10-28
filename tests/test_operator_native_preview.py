@@ -119,6 +119,26 @@ def test_running_then_failed_does_not_deliver_report(bridge, upstream, monkeypat
     assert "message_end" not in body and len(reads) == 2
 
 
+@pytest.mark.parametrize(
+    "query,expected",
+    [
+        ("诊断订单 123456789012", "123456789012"),
+        ("1234", "1234"),
+        ("order ID: A-12", "A-12"),
+        ("我上一个订单是什么情况", None),
+        ("hello", None),
+        ("订单 123456789012.12", None),
+        ("订单 123456789012:12", None),
+    ],
+)
+def test_explicit_order_syntax_never_truncates(query, expected):
+    if expected is None:
+        with pytest.raises(preview._Rejected):
+            preview._native_order(query)
+    else:
+        assert preview._native_order(query) == expected
+
+
 @pytest.fixture
 def upstream():
     fixture = _Upstream()

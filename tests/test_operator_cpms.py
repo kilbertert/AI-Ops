@@ -624,13 +624,15 @@ def test_native_cancel_only_owns_trial_and_revokes_grants(operator, monkeypatch)
         run = f["ctx"].agent_run_store.by_qa(qa)
         head = {"Authorization": "Bearer trial-only", "X-AIOps-Console-Session": "valid"}
         cancel = "/v1/dify/trial/" + qa + "/cancel"
-        assert f["client"].post(cancel, headers=head).status_code == 404  # 正式任务不是试用。
+        body = {"app_id": APP}
+        assert f["client"].post(cancel, headers=head, json=body).status_code == 404  # 正式任务不是试用。
         f["ctx"].operator_cpms.tasks[run.run_id].trial = True
         original = f["resolver"].current
         f["resolver"].current = scope(user="OTHER")
-        assert f["client"].post(cancel, headers=head).status_code == 404
+        assert f["client"].post(cancel, headers=head, json=body).status_code == 404
         f["resolver"].current = original
-        response = f["client"].post(cancel, headers=head)
+        assert f["client"].post(cancel, headers=head, json={"app_id": "foreign-app"}).status_code == 404
+        response = f["client"].post(cancel, headers=head, json=body)
         assert response.status_code == 200 and response.json()["status"] == "cancelled"
         assert f["ctx"].agent_run_store.get(run.run_id).state == "revoked"
     finally:

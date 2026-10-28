@@ -28,3 +28,11 @@
 开发机磁盘满曾使首次写文件失败，仅清理本会话重复虚拟环境/可重建打包物后继续，业务服务未受改动。
 部署包原件、私有证据位于操作人的 `~/.cache/aiops-operator-native-preview/`，不入仓。
 复跑与恢复见 [手册](../agents/operator-cpms/native-preview.md)；本次实际运维方法须随生产回执更新。
+
+## PR审查补强
+
+- 工具候选按原生 tool_name/provider_type 识别，不要求 provider_name；服务端仍核真实 UUID。
+- 明确标注/纯输入的短订单号可用，Java 不支持的句点/冒号编号不截断；7项语法回归通过。
+- 取消请求绑定当前应用与本人 trial；跨应用不能取消。
+- 部署等待检查新增两条预览路由；仍支持失败原包恢复。
+- 审查后74项关联回归通过；浏览器以无 provider_name 的工具形状回放成功。最终全量4226 passed/9 skipped，158.68秒。

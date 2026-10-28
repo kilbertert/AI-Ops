@@ -16,7 +16,8 @@
     var config = body.model_config || {};
     var tools = (config.agent_mode || {}).tools || [];
     if (!Array.isArray(tools)) { return originalFetch(input, options); }
-    if (!stop && !tools.some(function (t) { return t.provider_name === 'cpms-node'; })) {
+    // 仅识别候选请求，provider UUID 和应用归属由 Gateway 校验。
+    if (!stop && !tools.some(function (t) { return t.provider_type === 'api' && (t.tool_name === 'cpms_order_detail' || t.tool_name === 'cpms_charging_samples'); })) {
       return originalFetch(input, options);
     }
     if (!stop && body.files && body.files.length) {

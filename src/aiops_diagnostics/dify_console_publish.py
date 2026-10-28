@@ -1857,8 +1857,16 @@ def _native_refusal(answer):
 
 def _native_order(query):
     # 首片不做“上一单”推断；多个订单也不擅自选第一张。
-    candidates = set(re.findall(r"(?<![A-Za-z0-9_-])[A-Za-z0-9_-]{6,64}(?![A-Za-z0-9_-])", query))
+    if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", query.strip()) and any(c.isdigit() for c in query):
+        return query.strip()
+    explicit = re.findall(
+        r"(?:订单(?:号)?|order(?:\s+(?:id|no|number))?)\s*[:：#]?\s*([A-Za-z0-9_-]{1,64})(?![A-Za-z0-9_.:-])",
+        query,
+        re.IGNORECASE,
+    )
+    candidates = set(re.findall(r"(?<![A-Za-z0-9_.:-])[A-Za-z0-9_-]{6,64}(?![A-Za-z0-9_.:-])", query))
     candidates = {s for s in candidates if any(c.isdigit() for c in s) and (not s.isdigit() or len(s) >= 15)}
+    candidates.update(s for s in explicit if any(c.isdigit() for c in s))
     if len(candidates) != 1:
         raise _Rejected(400, "请在本条消息中填写一个明确订单号；暂不支持“上一个订单”")
     return candidates.pop()
@@ -1975,7 +1983,9 @@ def _native_preview(handler):
         handler.close_connection = True
         if not finished:
             try:
-                cancelled, _ = _native_gateway(handler, session, "/" + trial_id + "/cancel", body={})
+                cancelled, _ = _native_gateway(
+                    handler, session, "/" + trial_id + "/cancel", body={"app_id": app_id}
+                )
                 if cancelled != 200:
                     handler.log_message("operator preview cancellation refused: %s", cancelled)
             except ConsolePublishError:
@@ -1983,13 +1993,13 @@ def _native_preview(handler):
 
 
 def _native_cancel(handler):
-    session, _app = _native_session(handler)
+    session, app_id = _native_session(handler)
     payload = handler._read_bounded_json(4096, frozenset({"task_id"}))
     task_id = payload.get("task_id")
     if not isinstance(task_id, str) or not re.fullmatch(r"aiops_qa_[a-zA-Z0-9]+", task_id):
         raise _Rejected(400, "预览任务无效")
     http_status, answer = _native_gateway(
-        handler, session, "/" + task_id.removeprefix(NATIVE_TASK_PREFIX) + "/cancel", body={}
+        handler, session, "/" + task_id.removeprefix(NATIVE_TASK_PREFIX) + "/cancel", body={"app_id": app_id}
     )
     handler._json(http_status, {"result": "success"} if http_status == 200 else _native_refusal(answer))
 

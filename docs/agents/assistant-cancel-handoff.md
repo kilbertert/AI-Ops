@@ -1,7 +1,7 @@
 # 助手入口等待态与取消：BFF / 前端交接契约
 
 管家 Dify 原生预览的取消走 `POST /v1/dify/trial/{trial_id}/cancel`：仅控制台桥持 trial
-服务凭据与当前公司会话调用，核对任务属于该主体且为 trial；不可取消正式任务。
+服务凭据与当前公司会话调用，body 为 `{"app_id":"当前应用"}`，核对任务属于该主体/应用且为 trial；不可取消正式任务。
 浏览器使用同源 `/__aiops/operator-preview/cancel`，不持服务 key。详见[原生预览](operator-cpms/native-preview.md)。
 
 > **读者**：BFF/Java 组 + 客服前端组。本文是「输入框锁定与复原」「用户停止」契约的唯一完整描述。

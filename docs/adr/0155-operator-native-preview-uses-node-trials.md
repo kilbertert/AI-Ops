@@ -22,12 +22,14 @@ Status: Accepted
 
 ## 界面与失败语义
 
-在既有同源注入脚本中，只接管包含 cpms-node 的 chat-messages POST；普通预览走原请求。
+在既有同源注入脚本中，按两项 CPMS 工具名识别候选 chat-messages POST，服务端再校验真实
+provider UUID 和应用归属；不依赖原生请求是否带 provider_name。普通预览走原请求。
 桥用 SSE 返回任务显示项、报告和 message_end；Agent 面板所需空 thought 仅是显示容器，
 不声称是模型推理。结果历史保留于 Gateway QA/run，原预览为单轮，不伪造 Dify 会话历史。
 
 停止按钮、超时和连接断开请求撤销本次 trial；Gateway 核对当前公司身份、任务归属及 trial
 标记后复用既有取消逻辑，不可用此入口取消正式任务。回读再次核对当前授权和正式版本。
+取消请求另带当前应用 ID，Gateway 必须与任务冻结绑定的应用逐项匹配，不能借另一应用取消。
 取数失败不回落共享账户、旧 Python 或无授权原生预览。
 
 ## 协议依据与代价

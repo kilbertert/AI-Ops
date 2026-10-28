@@ -14,7 +14,7 @@ globalThis.window = {
 vm.runInThisContext(fs.readFileSync(process.argv[2], 'utf8'));
 const app = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee';
 const url = `${origin}/console/api/apps/${app}/chat-messages`;
-const model_config = { pre_prompt: 'UNSAVED', agent_mode: { tools: [{ provider_name: 'cpms-node', provider_id: 'uuid', provider_type: 'api', tool_name: 'cpms_order_detail', enabled: true }] } };
+const model_config = { pre_prompt: 'UNSAVED', agent_mode: { tools: [{ provider_id: 'uuid', provider_type: 'api', tool_name: 'cpms_order_detail', enabled: true }] } };
 const headers = { 'X-CSRF-Token': 'own-csrf', 'Content-Type': 'application/json' };
 const body = JSON.stringify({ query: 'order 2115330675982561281', model_config });
 await window.fetch(url, { method: 'POST', headers, body });
