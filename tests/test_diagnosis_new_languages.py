@@ -1,15 +1,4 @@
-"""The diagnosis surface for the newly added languages (#541).
-
-Two different answers ship here, and the difference is the point:
-
-- **Vietnamese and Mongolian** can be PROMPTED — Latin and Cyrillic script with
-  word boundaries, so the matchers and the rule layer can back a claim to answer
-  in them. They work end to end.
-- **Thai and Khmer** cannot. No word boundaries means the deterministic matchers
-  degrade to verbatim lookup and the word-boundary regexes cannot be written for
-  them at all. A request in one of them is ROUTED as unsupported rather than
-  half-served, so the stored language never claims text it does not contain.
-"""
+"""已登记语言都能进入模型；未知语言仍归一化。"""
 
 from __future__ import annotations
 
@@ -23,11 +12,11 @@ from aiops_diagnostics.i18n import (
 )
 
 _PROMPTABLE = ("vi", "mn")
-_NOT_PROMPTABLE = ("th", "km")
+_FORMERLY_BLOCKED = ("th", "km")
 
 
 def test_the_four_new_languages_are_supported() -> None:
-    for language in _PROMPTABLE + _NOT_PROMPTABLE:
+    for language in _PROMPTABLE + _FORMERLY_BLOCKED:
         assert language in SUPPORTED_LANGUAGES, language
 
 
@@ -39,16 +28,10 @@ def test_vietnamese_and_mongolian_can_be_prompted(language: str) -> None:
     assert language_name(language) != language_name("zh")
 
 
-@pytest.mark.parametrize("language", _NOT_PROMPTABLE)
-def test_thai_and_khmer_cannot_be_prompted(language: str) -> None:
-    """Declared, not merely unimplemented.
-
-    `#534`'s capability split says these are read-only languages. Nothing
-    enforced it: the diagnosis prompt would have said "write in Thai" while the
-    routing layer cannot inspect Thai at all. This is the assertion that makes
-    the declaration real.
-    """
-    assert can_prompt_in(language) is False
+@pytest.mark.parametrize("language", _FORMERLY_BLOCKED)
+def test_thai_and_khmer_can_be_prompted(language: str) -> None:
+    """旧分词限制不能变成模型语言禁令。"""
+    assert can_prompt_in(language) is True
 
 
 def test_an_unknown_language_cannot_be_prompted() -> None:
@@ -56,7 +39,7 @@ def test_an_unknown_language_cannot_be_prompted() -> None:
     assert can_prompt_in("") is False
 
 
-@pytest.mark.parametrize("language", _NOT_PROMPTABLE)
+@pytest.mark.parametrize("language", _FORMERLY_BLOCKED)
 def test_a_non_promptable_request_is_normalised_at_job_creation(language: str) -> None:
     """The STORED language must be the one the answer is actually written in.
 
@@ -129,7 +112,7 @@ def test_traditional_chinese_arrived_with_its_own_ticket() -> None:
 
 
 def test_every_model_prompting_route_normalises_a_non_promptable_language() -> None:
-    """`prompting=False` must hold on EVERY route that reaches a model — not
+    """Unknown languages must be normalized on every route reaching a model — not
     just the one that happened to consume the flag first.
 
     The diagnosis face was the flag's first consumer; the assistant QA route and
@@ -151,17 +134,11 @@ def test_every_model_prompting_route_normalises_a_non_promptable_language() -> N
 
 
 def test_the_qa_response_boundary_reports_the_effective_language() -> None:
-    """The generator normalising is not enough — the REPORTING must match it.
-
-    For `Accept-Language: th` the QA worker now generates Chinese, but
-    `_assistant_question_response` still echoed `th`, so the payload claimed a
-    language its answer did not contain. Both ends read one definition
-    (`effective_language`), which is what keeps them from drifting apart again.
-    """
+    """新请求保留语言；运行记录提供语言时以记录为准。"""
     from aiops_diagnostics.gateway_api import _assistant_question_response
 
     row = {"qa_id": "qa_1", "question": "q", "status": "completed", "result": {"text": "答案"}}
-    for language in _NOT_PROMPTABLE:
-        assert _assistant_question_response(dict(row), language)["language"] == "zh", language
+    for language in _FORMERLY_BLOCKED:
+        assert _assistant_question_response(dict(row), language)["language"] == language, language
     for language in _PROMPTABLE:
         assert _assistant_question_response(dict(row), language)["language"] == language

@@ -282,18 +282,13 @@ def test_clarification_and_fallback_copy_cover_every_language(language: str) -> 
         assert table[language].strip(), f"{name}[{language}] 为空"
 
 
-def test_thai_and_khmer_declare_the_read_only_boundary() -> None:
-    """「能渲染，不能触发」是声明属性，不是从别处推断出来的 (#542 验收项).
-
-    The capability boundary has to be readable from the inventory, because a
-    surface that asks "may I prompt in this language" must not re-derive the
-    answer from a language list.
-    """
+def test_thai_and_khmer_keep_the_requested_prompt_language() -> None:
+    """旧分词限制不再决定已登记语言能否进入模型。"""
     from aiops_diagnostics.i18n import can_prompt_in, effective_language
 
     for language in ("th", "km"):
-        assert can_prompt_in(language) is False, f"{language} 不应可提示"
-        assert effective_language(language) != language, f"{language} 应退到可提示语言"
+        assert can_prompt_in(language) is True, f"{language} 应可提示"
+        assert effective_language(language) == language, f"{language} 应保持原语言"
     for language in LANGUAGES:
         if language in {"th", "km"}:
             continue

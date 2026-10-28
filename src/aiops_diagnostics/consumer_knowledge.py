@@ -97,6 +97,10 @@ MESSAGES = {
 
 
 def text_for(code, language):
+    from aiops_diagnostics.consumer_language import COPY
+
+    if language in COPY:
+        return COPY[language]["knowledge_" + code]
     return MESSAGES["zh" if language.startswith("zh") else "en"][code]
 
 
@@ -228,9 +232,11 @@ def digest(path):
 
 def fallback(code, language, content=None):
     text = text_for(code, language)
-    support = (content or {}).get("support", {}).get("zh" if language.startswith("zh") else "en")
+    routes = (content or {}).get("support", {})
+    support = routes.get(language) or routes.get("en") or routes.get("zh")
     if support:
-        text += "\n" + support["label"] + "：" + support["url"]
+        label = support["label"] + ": " if routes.get(language) is support else ""
+        text += "\n" + label + support["url"]
     return {"blocks": [{"kind": "text", "text": text}], "retrieval_status": "not_found"}
 
 
@@ -312,14 +318,20 @@ def select_context(runtime, caller, binding, query, language, qa_id):
     return {"status": status, "candidates": list(candidates.values())[:5]}
 
 
-def live_answer(snapshot, language):
+def live_answer(snapshot, language, *, localized=True):
+    if not localized:
+        language = (
+            ("zh" if language.startswith("zh") else "en")
+            if snapshot.get("source") == "cpms.orderDetail"
+            else (language if language in {"zh", "zh-Hant"} else "en")
+        )
     if snapshot.get("source") == "cpms.orderDetail":
         from aiops_diagnostics.consumer_billing import billing_answer
 
         return billing_answer(snapshot, language)
     from aiops_diagnostics.consumer_order_chat import status_answer
 
-    return status_answer(snapshot, language)
+    return status_answer(snapshot, language, localized=localized)
 
 
 def final_answer(raw, context, language, content):
@@ -346,7 +358,9 @@ def final_answer(raw, context, language, content):
     if (context or {}).get("live_snapshot"):
         if kind != "realtime" or selected["faq_id"]:
             raise ChatRunUnavailable("CHATFLOW_ANSWER_INVALID", "live answer kind differs")
-        return live_answer(context["live_snapshot"], language)
+        return live_answer(
+            context["live_snapshot"], language, localized=context.get("answer_language_version") == 2
+        )
     if kind == "knowledge":
         row = next(
             (r for r in (context or {}).get("candidates", []) if r["faq_id"] == selected["faq_id"]), None
@@ -522,6 +536,7 @@ def callback_context(
         else select_context(runtime, caller, binding, query, run.language, run.qa_id)
     )
     result["followup"] = followup
+    result["answer_language_version"] = 2
     if binding.callback_version == 4:
         result["mode"] = "documents"
     valid()

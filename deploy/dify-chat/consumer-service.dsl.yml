@@ -257,6 +257,14 @@ workflow:
           - zh
           - zh-Hant
           - en
+          - de
+          - fr
+          - es
+          - pt
+          - vi
+          - mn
+          - th
+          - km
           required: true
           type: select
           variable: language

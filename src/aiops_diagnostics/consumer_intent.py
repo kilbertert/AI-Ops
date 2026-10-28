@@ -147,6 +147,10 @@ def classify(question, *, provider, api_key, language, **context):
 
 
 def message(code, language):
+    from aiops_diagnostics.consumer_language import COPY
+
+    if language in COPY:
+        return COPY[language]["intent_" + code]
     texts = {
         "unavailable": (
             "暂时无法理解这次请求，请稍后重试。尚未查询您的订单。",

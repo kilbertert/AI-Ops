@@ -308,3 +308,16 @@ def verify_picker(root, base, env, setup, app, gateway, database, content, knowl
     check("live documents preserve CPMS status", "cpms.chargingInfo" in str(answer) and not calls)
     answer, calls = ask("查询我的最新订单退款记录")
     check("live documents preserve CPMS billing", "cpms.orderDetail" in str(answer) and not calls)
+
+    # 通过真实Dify校验start语言枚举；模型为合成，只证明协议与事实渲染。
+    for language in ("zh-Hant", "en", "de", "fr", "es", "pt", "vi", "mn", "th", "km"):
+        app_headers["Accept-Language"] = language
+        answer, calls = ask("我上一个订单现在是什么情况")
+        check(
+            "multilingual CPMS " + language,
+            answer.get("status") == "completed"
+            and answer.get("language") == language
+            and "cpms.chargingInfo" in str(answer)
+            and not calls,
+        )
+    app_headers.pop("Accept-Language")

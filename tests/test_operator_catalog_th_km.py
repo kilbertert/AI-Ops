@@ -1,13 +1,4 @@
-"""Thai and Khmer: readable, not askable (#530).
-
-These are the languages the capability split exists for. They can be RENDERED —
-the catalog and the system copy carry them — but they cannot be ROUTED: no word
-boundaries means the deterministic matchers degrade to verbatim lookup, and the
-high-risk order cues (a hand-written word-boundary regex) cannot be written for
-them at all. This ticket makes that boundary a FACT of the code rather than a
-sentence in a decision record, and reports the degradation instead of hiding it
-behind a 200.
-"""
+"""泰/高棉模型提示已开放；旧FAQ分词的反例与拒绝仍保留。"""
 
 from __future__ import annotations
 
@@ -37,10 +28,10 @@ def test_the_catalog_serves_the_language(language: str) -> None:
 
 
 @pytest.mark.parametrize("language", _READ_ONLY)
-def test_the_language_is_not_askable(language: str) -> None:
-    """Not askable: declared, and consumed by every model-prompting route."""
+def test_the_language_is_promptable(language: str) -> None:
+    """模型支持语言与旧分词能力分开。"""
     assert language in SUPPORTED_LANGUAGES, "读的语言也必须在受支持集里"
-    assert can_prompt_in(language) is False
+    assert can_prompt_in(language) is True
 
 
 @pytest.mark.parametrize("language", _READ_ONLY)
@@ -134,26 +125,15 @@ def test_the_free_text_boundary_runs_before_the_faq_match() -> None:
     from aiops_diagnostics.gateway_api import create_gateway_app
 
     source = inspect.getsource(create_gateway_app)
-    boundary = source.index("if not can_prompt_in(language):")
+    boundary = source.index("if not can_prompt_in(language)")
     faq_match = source.index("_faq_match(decision.platform")
     assert boundary < faq_match, "边界检查排在了 FAQ 匹配之后 —— 泰文会先被不可靠的匹配器选中"
 
 
-def test_every_assistant_route_refuses_a_read_only_language(tmp_path) -> None:
-    """Not just the generic path: the routes that START JOBS must refuse too.
-
-    A check placed after Route 1/Route 2 still returns a diagnosis or promo job
-    that generates Thai-labelled Chinese — the boundary has to be ahead of every
-    model-backed route, and "ahead of the one I was looking at" is not the same
-    thing. Exercised over the real HTTP surface, and asserting on the stub's own
-    record of what it was asked to do rather than on one call list.
-    """
+def test_legacy_keyword_route_refuses_thai_and_khmer_without_order(tmp_path) -> None:
+    """没有明确订单时仍不进入不可靠的旧FAQ分词。"""
     client, runtime = _client(tmp_path)
     for payload in (
-        # explicit order -> Route 1
-        {"question": "ตรวจสอบคำสั่งซื้อ", "order_no": "2096164064667852801"},
-        # embedded order in the text -> Route 1b
-        {"question": "ช่วยตรวจสอบคำสั่งซื้อ 2096164064667852801 ด้วย"},
         # no order -> generic QA (Route 3)
         {"question": "อากาศวันนี้เป็นอย่างไร"},
     ):

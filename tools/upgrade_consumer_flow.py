@@ -72,6 +72,10 @@ def live_documents(source):
     variables.append(
         {"id": MODE_VARIABLE, "name": MODE_VARIABLE, "value_type": "string", "value": "documents"}
     )
+    from aiops_diagnostics.i18n import SUPPORTED_LANGUAGES
+
+    language = next(v for v in nodes["start"]["variables"] if v["variable"] == "language")
+    language["options"] = list(SUPPORTED_LANGUAGES)
     prompts = nodes["answer"]["prompt_template"]
     prompts[:] = [p for p in prompts if p.get("role") != "system"]
     prompts.insert(0, {"role": "system", "text": PROMPT})

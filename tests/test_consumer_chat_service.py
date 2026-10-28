@@ -216,12 +216,12 @@ def test_failed_upstream_never_falls_back_or_reuses_failed_conversation(tmp_path
         assert len(Client.calls) == 1 and env["upstream"].calls == 0
 
 
-def test_unsupported_prompt_language_does_not_start_a_chatflow(tmp_path, monkeypatch):
+def test_thai_and_khmer_start_a_chatflow(tmp_path, monkeypatch):
     with dify_chat(tmp_path, monkeypatch, stub_base="http://127.0.0.1:1") as env:
         configure(env, monkeypatch)
         for language in ["th", "km"]:
             response = ask(env, headers={**HEADERS, "Accept-Language": language})
-            assert response.status_code == 200
-            assert response.json()["type"] == "clarification"
-        assert Client.calls == []
-        assert env["app"].state.gateway.store.count_assistant_questions() == 0
+            assert response.status_code == 202
+            assert done(env, response.json()["qa_id"]).json()["status"] == "completed"
+        assert len(Client.calls) == 2
+        assert env["app"].state.gateway.store.count_assistant_questions() == 2
