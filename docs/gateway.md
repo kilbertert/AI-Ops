@@ -1,24 +1,20 @@
 # AI-Ops Gateway 架构与部署
 
-## 目标
+## 当前职责与入口
 
-现有客户端聊天入口的本人订单状态查询可由 `AIOPS_GATEWAY_CONSUMER_ORDER_CHAT_ENABLED`
-显式启用，默认关闭；必须同时具备个人状态地址与逻辑执行环境。
-身份、部署/回退、证据留存与验收边界见[手册](agents/consumer-order-chat/README.md)。
+Gateway同时承接C端WF01、管家Java节点和旧诊断接口，身份/范围、版本绑定、任务状态及最终交付由它控制。
+当前启用范围见[交付状态](agents/current-delivery-state.md)，完整调用图见[系统架构](system-architecture.md)。
 
-便携包只负责客户端交互和进度显示。固定服务器上的 Gateway 才负责 `/diag/*` HTTP 查询、TDengine 直连代理、SSH 隧道、Codex provider、运行状态和事件存储。
+| 入口 | 实际执行与范围 | 手册 |
+|---|---|---|
+| C端普通问答 | WF01 Dify语义分流；本人CPMS快照或所选库动态资料 | [WF01](agents/consumer-wf01/README.md) |
+| C端订单检测 | 旧Python有界诊断，不能写业务数据 | [Thin Harness](thin-harness.md) |
+| 管家订单诊断 | 个人公司Bearer、站点/主账号范围；已登记Java CPMS工具 | [管家](agents/operator-cpms/README.md) |
+| 标准诊断、设备runs、固定FAQ、媒体和健康报告 | 各自原契约继续兼容，不视作同一种执行引擎 | 下方接口参考 |
 
-```mermaid
-flowchart LR
-    W[便携客户端] -->|HTTPS + 设备令牌| G[AI-Ops Gateway]
-    L[源码运行时] -->|HTTPS + 设备令牌| G
-    G --> H[/diag/* HTTP 只读接口/]
-    G --> T[(TDengine 严格只读代理)]
-    G --> C[Codex API]
-    G --> S[(run / event 持久存储)]
-```
-
-客户端永远不接触数据库密码、SSH 私钥或 provider API key。订单、费用、设备和 Redis 队列证据经 `/diag/*` HTTP 读取，TDengine 仍走严格只读代理；Phase 3a 后服务器私有 `production.env` 不再保存 MySQL / Redis 直连凭据。
+消费者初始直读状态入口及其默认关闭参数仍为兼容能力，不能用它的开关推断WF01生产状态。
+旧HTTP/数据库诊断源也仍存在；不能宣称Phase 3a已使服务端完全没有MySQL/Redis凭据。
+个人客户端不持有数据库/模型密钥，真实配置按受控运维记录读取。
 
 ## 行业依据
 
@@ -258,8 +254,7 @@ AIOPS_PROVIDER_GPT_PSYDO_KEY_SLOT=psydo-primary
 小程序继续调用 Java 业务后端，不需要获取 `cloud-auth JWT`。Java 验证 `thirdSession` 后调用
 AI-Ops，携带 `Authorization: Bearer <service-token>` 和 `third-session: <thirdSession>`（全小写，勿用 `X-Third-Session`）。
 Gateway 使用只读 Redis 读取 `app:3rd_session:<thirdSession>`；Java 序列化外壳内嵌的 JSON
-只被提取解析，不执行 Java 对象反序列化。截图 token `76ea8a54-12d7-4889-823e-edded054a7218`
-在测试业务 Redis 中不存在，判定为过期或其他环境 token，不能用于真实验收。
+只被提取解析，不执行 Java 对象反序列化。真实验收使用正常登录取得的当前会话，不复用过期截图凭据。
 
 ### 多环境与共享 KB 部署
 
@@ -270,7 +265,10 @@ Gateway 使用只读 Redis 读取 `app:3rd_session:<thirdSession>`；Java 序列
 或其他端口；41 Gateway 只配置 `AIOPS_GATEWAY_KB_SERVICE_BASE_URL=http://127.0.0.1:29380`。
 这保持单一知识库资产、租户映射和模型配置，同时让 41 的会话/订单/诊断数据源独立。
 
-### App 聊天交给 Dify：固定版本与运行中取消
+### Dify Workflow兼容路线：固定版本与运行中取消
+
+此节描述早期Workflow状态路线。现役WF01 advanced-chat使用`POST /v1/chat-messages`，
+请求携workflow_id、query、inputs和conversation_id；开始/完成事件核对固定发布版，详见[WF01](agents/consumer-wf01/README.md)。
 
 Dify 聊天绑定中的 `workflow_id` 通过版本专用 Service API
 `POST /v1/workflows/{workflow_id}/run` 执行。另发新版不会改变已有绑定；保存草稿也不影响它。
@@ -332,7 +330,7 @@ UPMS 的 `ROLE_AGENT_PUBLISHER`（尚未建）。
 **未自动化的部分**：`quick_commands` 不参与（Dify 无对应字段）；`opening_statement` /
 `suggested_questions` 的**草稿**不算数，只认已发布快照。
 
-## 工具白名单：Dify 声明，执行器强制（#577 / ADR-0019）
+## 旧诊断工具白名单：Dify 声明，Python执行器强制（#577 / ADR-0019）
 
 `AgentConfig.allowed_tools` 决定这个 agent 能跑哪几个工具。**强制点在执行器**
 （`DiagnosticToolExecutor.execute`），不在提示词：白名单外的工具记一条 `blocked` 证据、
@@ -427,19 +425,12 @@ aiops remote evidence RUN_ID
 - Gateway 只同步状态和证据 ID 等元数据，不同步 evidence payload、密码或内部绝对路径。
 - run 元数据中的用户反馈会在服务端持久化前脱敏；客户端 `show` 只得到诊断合同结果，不得到服务器证据正文。
 
-## 生产硬化要求
+## 部署与扩容边界
 
-当前代码是可运行的单节点 Gateway MVP，不应直接暴露到公网。正式部署前必须完成：
-
-1. 在 Nginx/Traefik 或云负载均衡后启用 TLS，Gateway 只监听 loopback 或内网地址。
-2. 把一次性注册码替换为企业 OIDC Device Flow；高安全环境增加 mTLS 或证书绑定 token。
-3. 用 Vault/KMS 管理服务端数据库和 provider key，数据库账号改为短期动态凭据；不把长期密码放在客户端环境变量。
-4. 将 SQLite/WAL 替换为 PostgreSQL，并为事件表、workspace、device、revocation 和审计日志建立备份与保留策略。
-5. 增加反暴力、速率限制、设备撤销、密钥轮换、审计导出和管理员审批。
-6. 需要跨节点 durable worker 时再引入 Temporal；第一版不把 Temporal 作为便携包运行时依赖。
-
-这些硬化完成前，Gateway 仅适合内网、测试和受控工程师验收，不宣称已经完成生产多租户认证。
-
+现役HTTPS与公司身份适配已有受控H5验收；新部署仍需核身份、授权、入口转发和恢复，不能把端口可达视作完成。
+SQLite/WAL是现有持久化；限流、容量、备份保留和密钥轮换按部署范围继续核验。
+OIDC/mTLS、Vault/KMS、PostgreSQL或跨节点任务调度是按需求评估的演进方案，本页不声称已采用。
+服务器访问、配置与重启规则见[环境手册](agents/env-41-runbook.md)，节点见[部署手册](../deploy/node-runtime/README.md)。
 
 ### M3 委派响应的本人充电快照
 
@@ -463,8 +454,10 @@ aiops remote evidence RUN_ID
 正式版本与撤回复用管理路由，原App接口不变；Java节点启用按run加载清单后，发布才改变实际SOP。
 详见[节点发布手册](agents/m3-node-publication.md)与ADR-0128；默认关闭。
 
-## WF01完整发布内容
+## WF01发布与动态知识
 
-C端Chatflow的目标、审核内容、只读能力和媒体按同一Agent版本冻结，原运营发布/试用/撤回/恢复
-入口控制consumer_service路线。配置与执行步骤见[WF01发布](agents/consumer-wf01/README.md)。
-修改草稿不影响已发布内容；实时数据仍逐次授权，不随内容快照冻结。功能默认关闭。
+C端工作流、模型提示、所选库和能力开关随不可变Agent版本绑定到consumer_service路线；
+原运营发布/试用/撤回/恢复入口控制生效版本。保存不影响正式图，撤回后不交正文，不自动回落其他引擎。
+库内资料是当前检索来源，索引更新不需要发布；每轮快照用于引用与一致性，实时CPMS逐次授权。
+旧审核content.json与media_ids仅用于旧发布兼容；配置与迁移见[WF01手册](agents/consumer-wf01/README.md)。
+配置模板默认关闭；现役是否启用见[当前状态](agents/current-delivery-state.md)，两者不是同一判断。
