@@ -6,6 +6,11 @@
 决定的论证在 **ADR-0021**；后端桥在 `src/aiops_diagnostics/dify_console_publish.py`。
 本目录只是**部署资产**。
 
+管家原生预览由同包的 `operator-native-preview.js` 接线，打包时拼入原注入脚本，无需改 Dify
+前端镜像。更新后的 Python 桥及两条 `/__aiops/operator-preview` 路由必须同版安装；
+其 SSE 禁止代理缓冲，200秒代理超时覆盖180秒预览上限。详见
+[原生预览手册](../../docs/agents/operator-cpms/native-preview.md)。
+
 ## M3 部署包与恢复
 
 Gateway 的 CD 不更新本桥。撤回、恢复和版本列表要求 **Python 桥、JS、nginx snippet**

@@ -102,9 +102,16 @@ def target_for(settings: Any, binding: Any) -> NodeTarget | None:
     )
 
 
-def candidate(source: Any, target: NodeTarget) -> str:
+def candidate(source: Any, target: NodeTarget, *, operator_preview: dict | None = None) -> str:
     """首片节点 SOP 只取 chat 应用的 pre_prompt；执行工具/模型由可信模板限定。"""
     document = yaml.safe_load(DifyDslClient(source).export_dsl())
+    if operator_preview is not None:
+        if target.entry != "operator":
+            raise ValueError("preview draft requires an operator target")
+        document["model_config"] = {
+            "pre_prompt": operator_preview["pre_prompt"],
+            "agent_mode": {"tools": operator_preview["tools"]},
+        }
     if document.get("app", {}).get("mode") not in {"chat", "agent-chat", "completion"}:
         raise ValueError("node SOP requires a chat/completion editor, not a workflow graph")
     prompt = document.get("model_config", {}).get("pre_prompt")

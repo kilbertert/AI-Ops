@@ -55,6 +55,7 @@ Dify/网关的错误码透出去。反过来，网关回 2xx 也**不等于**发
 
 from __future__ import annotations
 
+import contextlib
 import hmac
 import json
 import logging
@@ -1304,6 +1305,12 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler 的协议
         path = urllib.parse.urlsplit(self.path).path
         try:
+            if path == NATIVE_PREVIEW_ROUTE:
+                _native_preview(self)
+                return
+            if path == NATIVE_CANCEL_ROUTE:
+                _native_cancel(self)
+                return
             if path == _TRIAL_ROUTE:
                 self._post_trial()
                 return
@@ -1346,9 +1353,15 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
                 version_no=version_no,
             )
         except _Rejected as exc:
+            if path.startswith("/__aiops/operator-preview"):
+                self._json(exc.status, {"code": "OPERATOR_PREVIEW_REJECTED", "message": exc.reason})
+                return
             self._json(exc.status, {"published": False, "reason": exc.reason, "action": ""})
             return
         except ConsolePublishError as exc:
+            if path.startswith("/__aiops/operator-preview"):
+                self._json(502, {"code": "OPERATOR_PREVIEW_UNAVAILABLE", "message": "预览链路暂时不可用"})
+                return
             # 桥自己那一步没做成（网络/解码）。**不透出内部细节**，只记在服务端。
             self.log_message("console publish bridge failed: %s", exc)
             self._json(502, {"published": False, "reason": "发布链路暂时不可用，请稍后再试", "action": ""})
@@ -1499,6 +1512,10 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
             self._json(502, {"read": False, "reason": "试运行结果暂时读不到，请稍后再试"})
             return
         self._json(report.status, report.public())
+
+    def _sse(self, event: dict) -> None:
+        self.wfile.write(("data: " + json.dumps(event, ensure_ascii=False) + "\n\n").encode())
+        self.wfile.flush()
 
     def _single_header(self, name: str) -> str | None:
         """安全敏感头必须恰好一次；重复时拒绝，免得桥与代理对"取哪一个"理解不同。"""
@@ -1786,6 +1803,209 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt: str, *args: Any) -> None:
         # 不打印请求头（Cookie/CSRF 都是凭据）。只打我们自己给的那句。
         _LOGGER.info("console-publish-bridge: " + fmt, *args)
+
+
+NATIVE_PREVIEW_ROUTE = "/__aiops/operator-preview"
+NATIVE_CANCEL_ROUTE = NATIVE_PREVIEW_ROUTE + "/cancel"
+NATIVE_POLL_SECONDS = 1.0
+NATIVE_TIMEOUT_SECONDS = 180
+NATIVE_TASK_PREFIX = "aiops_"
+
+
+def _native_session(handler):
+    if not handler.settings.trial_key or not handler.settings.login_proxy_url:
+        raise _Rejected(404, "管家预览尚未启用")
+    session, referer = handler._check_browser_request()
+    app_id = app_id_from_referer(referer, console_origin=handler.settings.console_origin)
+    code, app = _request(
+        handler.settings.dify_base_url + "/console/api/apps/" + app_id,
+        headers=session.dify_headers(),
+        timeout=handler.settings.timeout,
+    )
+    if code != 200 or not isinstance(app, dict) or app.get("id") != app_id:
+        raise _Rejected(403, "当前会话无权预览此应用")
+    return session, app_id
+
+
+def _native_gateway(handler, session, path, *, body=None):
+    return _request(
+        handler.settings.gateway_base_url + "/v1/dify/trial" + path,
+        method="POST" if body is not None else "GET",
+        headers={
+            "Authorization": "Bearer " + handler.settings.trial_key,
+            "X-AIOps-Console-Session": session.access_token,
+            "Content-Type": "application/json",
+        },
+        body=body,
+        timeout=handler.settings.timeout,
+    )
+
+
+def _native_refusal(answer):
+    error = answer.get("error", {}) if isinstance(answer, dict) else {}
+    code = str(error.get("code") or "OPERATOR_PREVIEW_UNAVAILABLE")
+    if code.startswith("OPERATOR_TRIAL_LOGIN") or code == "OPERATOR_TRIAL_IDENTITY_MISMATCH":
+        message = "公司登录已失效或无法核验，请重新登录后重试"
+    elif code in {"ORDER_NOT_FOUND", "CPMS_SCOPE_MISMATCH", "OPERATOR_TRIAL_SCOPE_MISMATCH"}:
+        message = "订单不存在或不在当前账号可见范围内"
+    elif code == "CHAT_ROUTE_RETRACTED":
+        message = "管家节点路线已撤回，请联系管理员恢复"
+    else:
+        message = "管家预览未完成，请联系管理员核对节点与授权"
+    return {"event": "error", "code": code, "message": message}
+
+
+def _native_order(query):
+    # 首片不做“上一单”推断；多个订单也不擅自选第一张。
+    if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", query.strip()) and any(c.isdigit() for c in query):
+        return query.strip()
+    explicit = re.findall(
+        r"(?:订单(?:号)?|order(?:\s+(?:id|no|number))?)\s*[:：#]?\s*([A-Za-z0-9_.:-]+)",
+        query,
+        re.IGNORECASE,
+    )
+    if any(
+        any(c.isdigit() for c in item) and not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", item) for item in explicit
+    ):
+        raise _Rejected(400, "订单号包含不支持的字符，请只提供一个完整有效的订单号")
+    candidates = set(re.findall(r"(?<![A-Za-z0-9_.:-])[A-Za-z0-9_-]{6,64}(?![A-Za-z0-9_.:-])", query))
+    candidates = {s for s in candidates if any(c.isdigit() for c in s) and (not s.isdigit() or len(s) >= 15)}
+    candidates.update(s for s in explicit if any(c.isdigit() for c in s))
+    if len(candidates) != 1:
+        raise _Rejected(400, "请在本条消息中填写一个明确订单号；暂不支持“上一个订单”")
+    return candidates.pop()
+
+
+def _native_preview(handler):
+    session, app_id = _native_session(handler)
+    payload = handler._read_bounded_json(65536, frozenset({"app_id", "query", "pre_prompt", "tools"}))
+    if payload.get("app_id") != app_id:
+        raise _Rejected(403, "应用与当前页面不一致")
+    query = payload.get("query")
+    prompt, tools = payload.get("pre_prompt"), payload.get("tools")
+    if (
+        not isinstance(query, str)
+        or not 0 < len(query) <= 4000
+        or not isinstance(prompt, str)
+        or not 0 < len(prompt) <= 8000
+        or not isinstance(tools, list)
+        or len(tools) > 32
+    ):
+        raise _Rejected(400, "预览问题、提示词或工具配置无效")
+    order = _native_order(query)
+    http_status, answer = _native_gateway(
+        handler,
+        session,
+        "",
+        body={
+            "app_id": app_id,
+            "order_no": order,
+            "question": query,
+            "operator_preview": {"pre_prompt": prompt, "tools": tools},
+        },
+    )
+    trial_id = answer.get("trial_id") if isinstance(answer, dict) else None
+    # 桥的 _request 将所有成功响应归一为 200；任务形状仍须单独验证。
+    if http_status != 200 or not isinstance(trial_id, str) or not re.fullmatch(r"qa_[a-zA-Z0-9]+", trial_id):
+        error = _native_refusal(answer)
+        handler._json(http_status if 400 <= http_status < 500 else 502, error)
+        return
+    message_id = str(uuid.uuid4())
+    common = {
+        "id": message_id,
+        "message_id": message_id,
+        "conversation_id": "",
+        "task_id": NATIVE_TASK_PREFIX + trial_id,
+        "created_at": int(_time_module.time()),
+    }
+    finished = False
+    try:
+        handler.send_response(200)
+        handler.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        handler.send_header("Cache-Control", "no-store")
+        handler.send_header("X-Accel-Buffering", "no")
+        handler.end_headers()
+        handler._sse({**common, "event": "message", "answer": ""})
+        # Dify 的 agent-chat 把回答追加到当前 thought；这里只建立显示项，不伪造模型推理。
+        handler._sse(
+            {
+                **common,
+                "event": "agent_thought",
+                "position": 1,
+                "thought": "",
+                "tool": "",
+                "tool_input": "",
+                "observation": "",
+                "message_files": [],
+            }
+        )
+        deadline = _time_module.monotonic() + NATIVE_TIMEOUT_SECONDS
+        while _time_module.monotonic() < deadline:
+            http_status, result = _native_gateway(handler, session, "/" + trial_id)
+            if http_status != 200 or not isinstance(result, dict):
+                handler._sse(_native_refusal(result))
+                return
+            if result.get("status") in TRIAL_TERMINAL_STATUSES:
+                if result["status"] == "completed":
+                    handler._sse(
+                        {
+                            **common,
+                            "event": "message",
+                            "answer": "Java 节点试用（模型由节点平台配置）\n\n"
+                            + _trial_report_text(result, "completed"),
+                        }
+                    )
+                    handler._sse({**common, "event": "message_end", "metadata": {}})
+                else:
+                    handler._sse(
+                        {
+                            "event": "error",
+                            "code": result.get("error_code") or "OPERATOR_PREVIEW_FAILED",
+                            "message": _trial_report_text(result, result["status"]),
+                        }
+                    )
+                finished = True
+                return
+            handler.wfile.write(b": waiting\n\n")
+            handler.wfile.flush()
+            _time_module.sleep(NATIVE_POLL_SECONDS)
+        handler._sse(
+            {"event": "error", "code": "OPERATOR_PREVIEW_TIMEOUT", "message": "预览超时，任务已请求取消"}
+        )
+    except ConsolePublishError:
+        with contextlib.suppress(OSError):
+            handler._sse(
+                {
+                    "event": "error",
+                    "code": "OPERATOR_PREVIEW_UNAVAILABLE",
+                    "message": "预览结果读取失败，任务已请求取消",
+                }
+            )
+    except OSError:
+        pass
+    finally:
+        handler.close_connection = True
+        if not finished:
+            try:
+                cancelled, _ = _native_gateway(
+                    handler, session, "/" + trial_id + "/cancel", body={"app_id": app_id}
+                )
+                if cancelled != 200:
+                    handler.log_message("operator preview cancellation refused: %s", cancelled)
+            except ConsolePublishError:
+                handler.log_message("operator preview cancellation could not be confirmed")
+
+
+def _native_cancel(handler):
+    session, app_id = _native_session(handler)
+    payload = handler._read_bounded_json(4096, frozenset({"task_id"}))
+    task_id = payload.get("task_id")
+    if not isinstance(task_id, str) or not re.fullmatch(r"aiops_qa_[a-zA-Z0-9]+", task_id):
+        raise _Rejected(400, "预览任务无效")
+    http_status, answer = _native_gateway(
+        handler, session, "/" + task_id.removeprefix(NATIVE_TASK_PREFIX) + "/cancel", body={"app_id": app_id}
+    )
+    handler._json(http_status, {"result": "success"} if http_status == 200 else _native_refusal(answer))
 
 
 def make_server(settings: BridgeSettings) -> ThreadingHTTPServer:

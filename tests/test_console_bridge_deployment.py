@@ -18,7 +18,13 @@ def test_bridge_install_waits_for_new_routes_or_restores_all_files(tmp_path, fai
     bundle.mkdir()
     package = bundle / "aiops_diagnostics"
     package.mkdir()
-    for name in ("__init__", "dify_console_publish", "async_job_lifecycle", "bounded_http", "http_auth"):
+    for name in (
+        "__init__",
+        "dify_console_publish",
+        "async_job_lifecycle",
+        "bounded_http",
+        "http_auth",
+    ):
         shutil.copyfile(ROOT / "src/aiops_diagnostics" / f"{name}.py", package / f"{name}.py")
     for name in ("dify-publish-button.js", "dify-console-publish.conf"):
         shutil.copyfile(ROOT / "ops/dify-console-bridge" / name, bundle / name)
@@ -51,8 +57,10 @@ def test_bridge_install_waits_for_new_routes_or_restores_all_files(tmp_path, fai
         "sleep": "exit 0",
         "curl": 'if [ "$ROUTE_FAILURE" = permanent_route ] || [ -f "$OLD_ROUTE" ]; then '
         'rm -f "$OLD_ROUTE"; printf 404; exit 0; fi; '
+        'case "$*" in *operator-preview*) preview=yes;; *) preview=no;; esac; '
         'while [ "$1" != "-o" ]; do shift; done; '
-        'printf \'{"published":false,"action":"","reason":"refused"}\' > "$2"; printf 403',
+        'if [ "$preview" = yes ]; then printf \'{"code":"OPERATOR_PREVIEW_REJECTED","message":"refused"}\'; '
+        'else printf \'{"published":false,"action":"","reason":"refused"}\'; fi > "$2"; printf 403',
     }.items():
         path = bin_dir / name
         path.write_text("#!/bin/sh\n" + body + "\n")
