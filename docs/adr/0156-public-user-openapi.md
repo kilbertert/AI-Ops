@@ -13,6 +13,7 @@ FastAPI `get_openapi(routes=...)` 复用已注册路由和请求模型；明确�
 apiKey请求头和管家个人HTTP Bearer两种替代方式，保留入口说明，不照抄内部依赖的Header。
 响应文档补充统一错误信封和异步任务ID；不改变运行时鉴权或序列化。
 媒体签名在URL里，操作级security为空；这不等于媒体资源无需授权。
+媒体200/206沿用媒体服务的允许MIME集合；非法Range为416空正文，不套JSON错误信封。
 
 参考：[OpenAPI 3.1.0](https://spec.openapis.org/oas/v3.1.0.html)、
 [FastAPI扩展规范](https://fastapi.tiangolo.com/how-to/extending-openapi/)。

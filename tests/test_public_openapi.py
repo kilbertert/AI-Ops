@@ -4,10 +4,12 @@ import json
 import re
 from pathlib import Path
 
+import pytest
 from fastapi.openapi.models import OpenAPI
 from test_faq_gateway_api import _client
 
 from aiops_diagnostics.gateway_api import AssistantQuestionRequest
+from aiops_diagnostics.knowledge_retrieval import ALLOWED_MEDIA_TYPES, MediaResourceSigner
 
 
 def test_public_operations_match_testing_guide_and_exclude_management(tmp_path):
@@ -103,3 +105,23 @@ def test_request_constraints_examples_and_async_ids_follow_implementation(tmp_pa
     for path in ("/v1/assistant/questions/{qa_id}/cancel", "/v1/standard/diagnoses/{diagnosis_id}/cancel"):
         assert "requestBody" not in spec["paths"][path]["post"]
         assert "200" in spec["paths"][path]["post"]["responses"]
+
+
+@pytest.mark.parametrize("mime", sorted(ALLOWED_MEDIA_TYPES))
+def test_media_response_content_type_and_range_match_schema(tmp_path, mime):
+    from test_media_api import _client as media_client
+    from test_media_api import _issue, _Runtime
+
+    signer = MediaResourceSigner("isolated-test-secret", ttl_seconds=600)
+    signed_id = _issue(signer, kind=mime.split("/")[0], mime=mime)
+    with media_client(tmp_path, _Runtime(signer=signer, fetch=lambda _: b"synthetic-media")) as client:
+        operation = client.get("/v1/openapi.json").json()["paths"]["/v1/media/{signed_id}"]["get"]
+        for headers, code in [({}, 200), ({"Range": "bytes=0-2"}, 206), ({"Range": "bytes=100-200"}, 416)]:
+            response = client.get(f"/v1/media/{signed_id}", headers=headers)
+            assert response.status_code == code
+            documented = operation["responses"][str(code)]
+            if code == 416:
+                assert response.content == b"" and "content" not in documented
+            else:
+                assert response.headers["content-type"] == mime
+                assert mime in documented["content"]

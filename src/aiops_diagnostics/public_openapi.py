@@ -12,6 +12,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.routing import APIRoute
 
 from aiops_diagnostics.i18n import SUPPORTED_LANGUAGES
+from aiops_diagnostics.knowledge_retrieval import ALLOWED_MEDIA_TYPES
 
 # 方法也是边界：GET /shortcuts 是用户入口，POST 同路径却是管理接口。
 OPERATIONS = {
@@ -247,12 +248,16 @@ def public_schema(app: FastAPI) -> dict[str, Any]:
         if name == "Media":
             media = {
                 "description": "签名媒体字节；无需个人请求头",
-                "content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}},
+                "content": {
+                    mime: {"schema": {"type": "string", "format": "binary"}}
+                    for mime in sorted(ALLOWED_MEDIA_TYPES)
+                },
             }
             responses.update(
                 {
                     "200": media,
                     "206": media,
+                    "416": {"description": "Range范围无效；空正文，Content-Range给出总长度"},
                     "404": _response("ErrorEnvelope", "签名失效、不可见或资源不存在"),
                 }
             )
