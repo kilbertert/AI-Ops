@@ -27,6 +27,7 @@
 
 普通文字先做一次结构化语义分类：状态、账务、知识、人工、安全、写请求、无法核实的实时需求或澄清。
 分类器只能返回能力/订单指代/是否依赖前文，实际身份与单号由Gateway确定；多单或不一致先澄清。
+当前分类预算1024输出token、HTTP操作超时20秒，无应用自动重试；不把该超时当整个POST的硬截止。
 危险/人工的既有明确中英文快速提示不等待模型，其他自然表达依赖语义模型，不能承诺全语言离线识险。
 供应商故障返回CONSUMER_INTENT_UNAVAILABLE，不回落关键词或旧答案。见[ADR-0149](../../adr/0149-consumer-semantic-routing.md)。
 
@@ -36,7 +37,10 @@
 | 本人状态 | cpms_status HTTP | 同轮CPMS充电状态、来源、UTC观察时间；不等于故障根因 |
 | 本人账务 | cpms_billing HTTP | 原金额及退款记录；缺失不当零，不猜币种、不等于扣款或银行到账 |
 
-live_order_status/live_billing_record分别随发布版控制。最新/指定/可信前轮订单都需本人授权。
+live_order_status/live_billing_record分别随发布版控制。运营在Dify环境变量中配置
+cpms_status_enabled/cpms_billing_enabled（字符串true/false）；保存只影响草稿试用，发布才影响App。
+URL、凭据引用与能力分支是发布契约，删除必需节点或改错地址会拒绝发布。
+最新/指定/可信前轮订单都需本人授权。
 HTTP节点凭data_grant回调精确的`/v1/internal/consumer-data/{knowledge,status,billing}`；
 旧回调`/v1/internal/consumer-knowledge`继续兼容。模型不持公司凭据，也不选择回调地址/租户。
 回调读前读后、worker写前及历史回读核对授权、绑定、取消和TTL。失败不换引擎或直读。
@@ -84,7 +88,8 @@ Dify输入枚举与模型提示一致，状态/账务/安全/人工等固定文�
 
 photo_enabled只在完成保留/清理验收后启用。已有实现可上传JPEG/PNG，去元数据、有大小/像素/数量/TTL限制，
 photo_id一次性绑定主体与发布内容，不能与显式订单同时使用。识图只提供线索，不授予订单权限。
-Gateway内存清理不等于Dify上游文件被删除；原生文件读取、APK/IPA和完整真机验收仍未完成。
+当前实现上限4MiB/1200万像素，规范化至最大边1600；每主体2图、进程32图，未使用5分钟过期。
+这些是单进程限制；图片重启丢失，不能据此宣称跨进程持久化。Gateway内存清理不等于Dify上游文件被删除；原生文件读取、APK/IPA和完整真机验收仍未完成。
 
 ## 验证与旧版兼容
 

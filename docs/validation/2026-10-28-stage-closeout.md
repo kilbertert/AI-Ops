@@ -22,7 +22,7 @@
 
 - 既有README结构/相对链接/导入图、只读归档、取消交接与权限文档检查：27 passed / 1 skipped。
   跳过项为未配置AIOPS_GL_CA的公司GitLab复核，不计通过；公司前端合并状态引用已有受控回执与本地固定修订。
-- 修改文档相对文件链接308项，0断链；入向锚点检查无新增断链；formatter/static、repo-map、policy通过，最终CI待PR执行。
+- 修改文档相对文件链接308项，0断链；入向锚点检查无新增断链；formatter/static、repo-map、policy通过，CI结论以本PR最终提交检查记录为准，本地专项不替代CI。
 - 本轮无需新业务测试、真实Gateway、覆盖率或变异：没有改API、配置、可执行逻辑、测试规则或持久化格式。
   docs/architecture.md是CD运行时参考，当前全景新增system-architecture.md，避免仅整理文档触发生产重启。
   用既有文档契约测试与逐项证据核对验证本任务；不把前次4188项写成本次已跑的结果。
