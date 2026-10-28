@@ -10,6 +10,7 @@
 |---|---|---|
 | C端WF01 | Gateway 4c24ac0e/v0.7.3；原应用V8/revision7/active | [九语种H5](../validation/2026-10-28-consumer-multilingual_02-production.md)：21问答143项，12条独立CPMS一致；不代表母语全面准确率 |
 | 动态知识 | 节点选择RAGFlow库，索引完成即影响新问题，来源/视频来自资料 | [动态知识交付](../validation/2026-10-27-wf01-live-documents-production.md)；不再有人工审核副本/媒体挂载的前置 |
+| 知识库图文修复 | Gateway c76ff47d；34 租户模型默认值修复；恢复 Word 66 切片、25 图片均可下载 | [现场修复](../validation/2026-10-28-kb-recovery-production.md)：OCR 文字检索及 Gateway 签名图通过；原 H5 登录过期，本轮真人页面未验 |
 | C端订单检测 | 旧Python诊断仍被快捷入口调用，非WF01状态问答 | 同上语言验收：蒙古/高棉完成，泰语inconclusive；诊断准确率/币种表达与TDengine缺口未收口 |
 | 客户Java节点 | 常驻栈及HTTPS回调已交付，C端旧状态版本保留恢复 | [常驻节点](../validation/2026-10-25-production-node-enabled.md)、[TLS](../validation/2026-10-26-operator-runtime-live-sync.md)；不代表新客户内网已验 |
 | 管家API | cpms-node两工具、真实历史单节点回放通过；当次撤回后retracted/revision2 | [回放记录](../validation/2026-10-26-operator-real-history-replay.md)；本轮未重新探测生产，不宣称后来已常驻开放 |

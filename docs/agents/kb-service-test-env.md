@@ -1,5 +1,12 @@
 # kb-service 测试环境与协议样例（面向 #170 及后续票）
 
+> **2026-10-28 当前修复结果**：下文默认模型的历史状态不能代替现场状态。
+> 34 个原选 baoyun 的租户已统一使用自己的 OpenAI/baoyun 实例，默认 embedding 为
+> text-embedding-3-large、chat 为 deepseek-v4-flash、vision 为 gpt-4o-mini；
+> 新开户/新库默认值已部署修复。Word 图文与运维修复方法见
+> [当前手册](../../deploy/kb-service/README.md)，实测见
+> [现场验收](../validation/2026-10-28-kb-recovery-production.md)。不要按历史说明重建 maas 配置。
+
 > 状态：当前有效，**2026-09-18 修订**（KB 栈集中在移动云 36；41 经受限隧道复用，
 > **管理后台 `/kb/**` 亦已于本日归并到同一套 36**，见 §0；95 入口保持独立，见 §1）。
 > 读者：#170 实现者（Codex/AFK）、#171/#173 联调负责人。
