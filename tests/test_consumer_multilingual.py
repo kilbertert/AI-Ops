@@ -191,3 +191,34 @@ def test_older_context_keeps_original_rendering_on_readback(tmp_path, monkeypatc
         result = done(env, qa_id)
         assert result.status_code == 200, result.text
         assert result.json()["result"] == old
+
+
+@pytest.mark.parametrize("language,expected", [("th", "en"), ("km", "en"), ("zh-Hant", "zh")])
+def test_legacy_reviewed_answer_reports_its_actual_copy_language(tmp_path, monkeypatch, language, expected):
+    with dify_chat(tmp_path, monkeypatch, stub_base="http://127.0.0.1:1") as env:
+        runtime, _ = wire(env, monkeypatch, tmp_path)
+        semantic(runtime, monkeypatch, "knowledge", "none")
+        response = ask(env, "如何开始充电", headers={**HEADERS, "Accept-Language": language})
+        assert response.status_code == 202
+        answer = done(env, response.json()["qa_id"]).json()
+        assert answer["status"] == "completed"
+        assert answer["language"] == expected
+        assert answer["result"]["blocks"][0]["text"] == (
+            "按设备提示启动。" if expected == "zh" else "Follow the charger instructions."
+        )
+
+
+@pytest.mark.parametrize("configured", ["zh", "en", "fr"])
+def test_support_route_survives_missing_translation_without_foreign_label(configured):
+    from aiops_diagnostics.consumer_knowledge import fallback
+
+    support = {
+        configured: {
+            "label": "assistance" if configured == "fr" else "foreign label",
+            "url": "https://support.example.test/",
+        }
+    }
+    answer = fallback("human", "fr", {"support": support})
+    text = answer["blocks"][0]["text"]
+    assert "https://support.example.test/" in text
+    assert "foreign label" not in text

@@ -232,9 +232,11 @@ def digest(path):
 
 def fallback(code, language, content=None):
     text = text_for(code, language)
-    support = (content or {}).get("support", {}).get("zh" if language.startswith("zh") else "en")
+    routes = (content or {}).get("support", {})
+    support = routes.get(language) or routes.get("en") or routes.get("zh")
     if support:
-        text += "\n" + support["label"] + "：" + support["url"]
+        label = support["label"] + ": " if routes.get(language) is support else ""
+        text += "\n" + label + support["url"]
     return {"blocks": [{"kind": "text", "text": text}], "retrieval_status": "not_found"}
 
 

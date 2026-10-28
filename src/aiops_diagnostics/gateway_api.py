@@ -7305,6 +7305,21 @@ def _require_current_chat_order(context, caller, qa, request):
         run = context.dify_run_store.by_qa(qa["qa_id"])
         if run and run.scope_fingerprint == caller.scope_fingerprint:
             qa["language"] = run.language
+            result = qa.get("result") or {}
+            evidence = context.dify_run_store.context(run.run_id) or {}
+            # 旧审核FAQ原文只存中英文；新文档与本地化快照才使用所选语言。
+            if qa["status"] == "completed" and (
+                (
+                    evidence.get("candidates")
+                    and evidence.get("mode") != "documents"
+                    and result.get("retrieval_status") == "found"
+                    and not evidence.get("live_snapshot")
+                )
+                or (evidence.get("live_snapshot") and evidence.get("answer_language_version") != 2)
+            ):
+                qa["language"] = "zh" if run.language.startswith("zh") else "en"
+                if run.language == "zh-Hant" and run.data_kind == "status" and evidence.get("live_snapshot"):
+                    qa["language"] = "zh-Hant"
         if run and run.order_no:
             authenticated_chat_order_reader(context, caller, request)
         try:
