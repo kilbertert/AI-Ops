@@ -346,6 +346,10 @@ def final_answer(raw, context, language, content):
 
         kind, answer = answer_selection(raw, context)
         if answer is not None:
+            from aiops_diagnostics.answer_language import answer_chinese_leak
+
+            if answer_chinese_leak(answer["blocks"][0]["text"], language):
+                raise ChatRunUnavailable("CHATFLOW_ANSWER_LANGUAGE_INVALID", "answer language differs")
             return answer
         raw = json.dumps({"kind": kind, "faq_id": ""})
     try:

@@ -79,6 +79,9 @@ def live_documents(source):
     prompts = nodes["answer"]["prompt_template"]
     prompts[:] = [p for p in prompts if p.get("role") != "system"]
     prompts.insert(0, {"role": "system", "text": PROMPT})
+    nodes["answer"].setdefault("memory", {})["query_prompt_template"] = (
+        "{{#sys.query#}}\n回答语言必须使用 {{#start.language#}}；按系统说明的语言名称翻译资料后回答。"
+    )
     nodes["disabled"]["answer"] = '{"kind":"unavailable","answer":"","reference_ids":[]}'
     return candidate
 
