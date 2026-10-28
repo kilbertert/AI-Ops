@@ -1,0 +1,68 @@
+--- a/kb_adapter.py
++++ b/kb_adapter.py
+@@ -14,7 +14,7 @@
+ import requests
+ 
+ RAGFLOW_BASE = os.getenv("RAGFLOW_BASE", "http://127.0.0.1:19380/api/v1")
+-DEFAULT_EMBEDDING = "text-embedding-v3@Tongyi-Qianwen"
++DEFAULT_EMBEDDING = "text-embedding-3-large@baoyun@OpenAI"
+ 
+ 
+ class RagflowClient:
+@@ -244,13 +244,13 @@
+         return self._req("DELETE", f"/providers/{factory}/instances",
+                           json={"instances": instance_ids})
+ 
+-    def setup_default_models(self, factory: str = "Tongyi-Qianwen",
++    def setup_default_models(self, factory: str = "OpenAI",
+                              api_key: str = None, base_url: str = None,
+                              embedding: str = "text-embedding-3-large",
+                              chat: str = "deepseek-v4-flash",
+                              rerank: str | None = None,
+-                             vision: str = "qwen3-vl-plus",
+-                             instance_name: str = "maas") -> dict:
++                             vision: str = "gpt-4o-mini",
++                             instance_name: str = "baoyun") -> dict:
+         """给当前 tenant 配 provider + 实例 + 模型 + 设默认（幂等，可重入）.
+ 
+         重跑安全：先 GET instances，同名实例走 PUT 更新、绝不 POST 另建
+@@ -311,6 +311,8 @@
+         defaults: dict[str, str] = {}
+         models = self._req("GET", "/models") or []
+         for m in models:
++            if m.get("provider_name") != factory or m.get("instance_name") != instance_name:
++                continue
+             name, types = m.get("name"), (m.get("model_type") or [])
+             # 注册类型 → PATCH 类型：image2text 注册、vision 设默认，其余同名
+             pairs = [
+@@ -327,6 +329,10 @@
+                     self._req("PATCH", "/models/default",
+                               json={"model_type": patch_type, "model_id": m["model_id"]})
+                     defaults[patch_type] = m["model_id"]
++
++        expected = {"embedding", "chat", "vision"} | ({"rerank"} if rerank else set())
++        if set(defaults) != expected:
++            raise RuntimeError(f"model defaults incomplete: {sorted(expected - set(defaults))}")
+ 
+         return {
+             "factory": factory,
+--- a/app.py
++++ b/app.py
+@@ -177,7 +177,7 @@
+     name: str
+     description: str | None = None
+     chunk_method: str = "naive"          # naive / table / paper / ...
+-    embedding_model: str = "text-embedding-v3@Tongyi-Qianwen"
++    embedding_model: str = kb_adapter.DEFAULT_EMBEDDING
+ 
+ 
+ class KbUpdate(BaseModel):
+@@ -362,7 +362,7 @@
+     src_kb = src_client.get_kb(body.source_kb_id)
+     new_kb = dst_client.create_kb(
+         name=body.target_name or src_kb.get("name") or "cloned-kb",
+-        embedding_model=src_kb.get("embedding_model") or "text-embedding-v3@Tongyi-Qianwen",
++        embedding_model=src_kb.get("embedding_model") or kb_adapter.DEFAULT_EMBEDDING,
+         chunk_method=src_kb.get("chunk_method") or "naive",
+         parser_config=src_kb.get("parser_config"),
+         description=src_kb.get("description"),

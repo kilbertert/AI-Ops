@@ -30,6 +30,43 @@ def _signer() -> MediaResourceSigner:
     return MediaResourceSigner("test-secret", ttl_seconds=60)
 
 
+def test_docx_embedded_image_survives_search_and_media_fetch() -> None:
+    signer = _signer()
+    chunks = normalize_search_response(
+        {
+            "chunks": [
+                {
+                    "id": "chunk-1",
+                    "document_id": "doc-1",
+                    "dataset_id": "kb-a",
+                    "docnm_kwd": "用户端.docx",
+                    "doc_type_kwd": "text",
+                    "content": "充电启动失败界面",
+                    "image_id": "kb-a-chunk-1",
+                }
+            ]
+        },
+        tenant_id="tenant-a",
+        agent_version="agent-v1",
+        session_id="conversation-1",
+        knowledge_base_ids=("kb-a",),
+        media_signer=signer,
+    )
+    assert len(chunks[0].media) == 1
+    resource = chunks[0].media[0].resource
+    assert resource.kind == "image"
+    fetched = []
+
+    def fetch(grant, range_header=None):
+        fetched.append(grant.backend_id)
+        return b"\xff\xd8\xff" + b"x" * 20
+
+    result = MediaProxy(signer, fetch).serve_signed(resource.url.rsplit("/", 1)[-1])
+    assert fetched == ["kb-a-chunk-1"]
+    assert result.status_code == 200
+    assert result.headers["Content-Type"] == "image/jpeg"
+
+
 def test_knowledge_search_only_uses_bound_databases_and_caps_calls() -> None:
     client = _SearchClient(
         [
