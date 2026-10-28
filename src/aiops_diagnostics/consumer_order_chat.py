@@ -32,7 +32,11 @@ def asks_latest_order(question: str) -> bool:
     return bool(_LATEST.search(question))
 
 
-def status_answer(snapshot: dict[str, Any], language: str) -> dict[str, Any]:
+def status_answer(snapshot: dict[str, Any], language: str, *, localized=False) -> dict[str, Any]:
+    from aiops_diagnostics.consumer_language import COPY, live_answer
+
+    if localized and language in COPY:
+        return live_answer(snapshot, language, "status")
     label = "未知" if snapshot["status_role"] == "unknown" else status_label(snapshot["status_code"])
     if language == "zh":
         text = (

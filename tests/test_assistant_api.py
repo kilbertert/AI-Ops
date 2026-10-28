@@ -1554,30 +1554,18 @@ def test_a_localized_catalog_title_is_not_suppressed_by_its_wording(tmp_path: Pa
         assert body["question_id"] == expected, question
 
 
-def test_a_non_promptable_language_is_refused_before_any_job_starts(tmp_path: Path) -> None:
-    """Superseded #541's behaviour: no diagnosis job at all for Thai/Khmer.
-
-    #541 normalised the language so the row and every poll agreed — but it still
-    STARTED a model job, which then wrote Chinese under a Thai label. #530
-    replaced that with a refusal at the entry: for a language the pipeline
-    cannot route, a job is a Chinese answer in disguise, however consistently
-    labelled. This test used to assert the 202; the boundary is the better
-    answer and this is the record of the change.
-    """
+def test_explicit_order_in_thai_reaches_diagnosis(tmp_path: Path) -> None:
+    """显式订单不需要旧FAQ分词，语言不改变诊断语义。"""
     client, runtime = _client(tmp_path)
-    refused = client.post(
+    response = client.post(
         "/v1/assistant/questions",
         json={"question": "为什么充电突然停了", "order_no": "2096164064667852801"},
         headers={**_headers(), "Accept-Language": "th"},
     )
-    assert refused.status_code == 200
-    body = refused.json()
-    assert body["type"] == "clarification"
-    assert body["language"] == "th"
-    assert body["message"].strip() and "暂不支持" not in body["message"]
-    # No job, no turn, no model call: the stub records what it was asked to do.
-    assert runtime.calls == [], "边界之后仍然启动了作业"
-    assert not getattr(runtime, "stored_language", "")
+    assert response.status_code == 202
+    assert response.json()["type"] == "diagnosis"
+    assert response.json()["language"] == runtime.stored_language == "th"
+    assert len(runtime.calls) == 1
 
 
 def test_an_unowned_order_does_not_reveal_whether_it_exists(tmp_path: Path) -> None:

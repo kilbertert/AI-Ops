@@ -339,12 +339,14 @@ def require_result(runtime, caller, qa):
     if run.order_no:
         from aiops_diagnostics.consumer_knowledge import live_answer
 
-        live = (runtime.dify_run_store.context(run.run_id) or {}).get("live_snapshot", {})
+        context = runtime.dify_run_store.context(run.run_id) or {}
+        live = context.get("live_snapshot", {})
         if (
             live.get("order_no") != run.order_no
             or live.get("source")
             != ("cpms.orderDetail" if run.data_kind == "billing" else "cpms.chargingInfo")
-            or live_answer(live, run.language) != qa.get("result")
+            or live_answer(live, run.language, localized=context.get("answer_language_version") == 2)
+            != qa.get("result")
         ):
             raise chat_execution.ChatRunUnavailable("CHATFLOW_EVIDENCE_UNAVAILABLE", "live evidence differs")
     if runtime.dify_run_store.snapshot(run.run_id) != qa.get("result"):

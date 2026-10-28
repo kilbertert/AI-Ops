@@ -40,20 +40,6 @@ class LanguageSpec:
     tag: str
     name: str  # English display name, used in model prompts
     is_chinese: bool
-    #: Whether this language may be injected into a MODEL prompt.
-    #:
-    #: Not every language we can render is one we can ask in. Thai and Khmer
-    #: have no word boundaries, so the deterministic matchers degrade to
-    #: verbatim lookup and the word-boundary regexes cannot be written for them
-    #: at all — a request in one of them can be READ but not reliably ROUTED.
-    #: Letting the diagnosis prompt say "write in Thai" claims a capability the
-    #: rest of the pipeline cannot back.
-    #:
-    #: This is the ONE capability flag that came back after #527 removed four
-    #: of them for having no consumer. It comes back with its consumer: the
-    #: diagnosis surface (#541). The others stay deleted until they have one —
-    #: that is the rule #527 settled, not a permanent verdict on the idea.
-    prompting: bool = True
 
 
 # THE inventory. Adding a language is one entry here plus whatever its data
@@ -74,8 +60,8 @@ LANGUAGES: tuple[LanguageSpec, ...] = (
     LanguageSpec("pt", "Portuguese", is_chinese=False),
     LanguageSpec("vi", "Vietnamese", is_chinese=False),
     LanguageSpec("mn", "Mongolian", is_chinese=False),
-    LanguageSpec("th", "Thai", is_chinese=False, prompting=False),
-    LanguageSpec("km", "Khmer", is_chinese=False, prompting=False),
+    LanguageSpec("th", "Thai", is_chinese=False),
+    LanguageSpec("km", "Khmer", is_chinese=False),
 )
 
 # Must stay aligned with the i18n catalog shipped in faq_catalog.json (#200).
@@ -91,30 +77,11 @@ _BY_TAG = {spec.tag: spec for spec in LANGUAGES}
 
 
 def can_prompt_in(language: str) -> bool:
-    """Whether a model prompt may be written in ``language`` (#541).
-
-    The diagnosis surface asks this before injecting the target language. A
-    request in a language that cannot be prompted falls back to the default —
-    the same answer `resolve_language` gives an unsupported tag, because to the
-    model it is unsupported.
-    """
-    spec = _BY_TAG.get(language)
-    return bool(spec and spec.prompting)
+    """模型支持已声明的显示语言；旧关键词路由限制在其入口独立判断。"""
+    return language in _BY_TAG
 
 
-#: The reply a READ-ONLY language gets on the free-text path, in its own words.
-#:
-#: Thai and Khmer can be rendered but not ROUTED (no word boundaries — the
-#: deterministic matchers degrade to verbatim lookup and the word-boundary
-#: regexes cannot be written for them at all), so a free-text question in one of
-#: them cannot be answered in a way the pipeline can stand behind. The honest
-#: answer is to say so IN THAT LANGUAGE and point at the shortcuts — not to fall
-#: back to a Chinese model answer, which is the "looks like a reply, is not an
-#: answer" shape this workstream exists to remove.
-#:
-#: Present for every language so the message can be LOCALIZED even where the
-#: language itself is not promptable: the user reads their own language while
-#: the model is never asked to write in it.
+# 仅旧关键词入口仍可能拒绝无法分词的自由文本；模型/明确订单不受此限制。
 FREE_TEXT_UNAVAILABLE_MESSAGES: dict[str, str] = {
     "zh": "本入口暂不支持用该语言直接提问，请使用下方快捷问题。",
     "zh-Hant": "本入口暫不支援用該語言直接提問，請使用下方快捷問題。",
@@ -146,14 +113,7 @@ def free_text_unavailable_message(language: str) -> str:
 
 
 def effective_language(language: str | None) -> str:
-    """The language a model-backed answer will actually be written in.
-
-    One definition, used both where a job is created and where its response is
-    rendered. Splitting those two is how a `th` request came back reporting `th`
-    while the answer was Chinese: the generator normalised and the reporter did
-    not (#541 review). To the caller, "we cannot prompt in Thai" and "we did not
-    answer in Thai" are the same statement.
-    """
+    """保留已登记的模型显示语言，未知值使用默认语言。"""
     if language and can_prompt_in(language):
         return language
     return DEFAULT_LANGUAGE

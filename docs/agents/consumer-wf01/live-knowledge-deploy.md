@@ -47,3 +47,19 @@ uv run python tools/upgrade_consumer_flow.py <原草稿.yml> --gateway <可信�
 `description: ""`和`selector: [env, knowledge_answer_mode]`，再同步并逐字段核对；若保存后仍有差异，
 只接受已确认的这两个补充值，不直接忽略整组环境变量差异。视频验收先检查卡片，再点击进入原youtube/player页核videoId及iframe源；
 聊天页本身没有iframe不代表视频未交付。
+
+## 多语言修复迁移
+
+使用同一`--live-documents`命令从当前草稿生成候选，会同步start.language的11种选项，
+并让回答提示显式使用App传入的语言。保留当前模型参数、库选择和CPMS能力，不覆盖并行草稿修改。
+保存前后对照完整图，正常试用后发布；旧版本保留可恢复。新知识材料仍无需发布。
+
+原H5验收路径为`/shopPackage/pages/user/language-select/index`：点语言、页面确认，再点切换确认弹窗。
+只选条目不确认不会保存；刷新App首屏之前写localStorage也可能被初始化覆盖，不能用它证明点选行为。
+用真实请求的Accept-Language与响应language核对。现役9项对应zh-CN/en/portuguese/spanish/th/vi/mn/km/zh-HK；
+后端归一为zh/en/pt/es/th/vi/mn/km/zh-Hant。语言只控制展示，不改变本人订单授权。
+
+隔离栈须同时使用同一签名对的插件/公钥及当前页面镜像：
+`DIFY_TEST_WEB_IMAGE=aiops/dify-web-patched:knowledge-picker-20261027`，
+`--plugin-public-key plugins/consumer_knowledge/signing/public.pem`。
+错误公钥导致插件上传400；原版web不能渲染当前多选控件，不能据此判断语言修复失败。

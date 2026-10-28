@@ -3017,7 +3017,7 @@ def create_gateway_app(
                             content = None
                             with contextlib.suppress(ValueError, OSError, PrivatePathError):
                                 content = consumer_knowledge.binding_content(service_binding, caller)
-                            served_language = "zh" if language.startswith("zh") else "en"
+                            served_language = language
                             answer = consumer_knowledge.fallback(local_kind, served_language, content)
                             return JSONResponse(
                                 status_code=200,
@@ -3029,15 +3029,6 @@ def create_gateway_app(
                                     "language": served_language,
                                 },
                             )
-                    if not can_prompt_in(language):
-                        return _clarification(
-                            context,
-                            caller,
-                            decision,
-                            code=CLARIFY_LANGUAGE_UNROUTABLE,
-                            question=payload.question,
-                            language=language,
-                        )
                     from aiops_diagnostics import consumer_chat_service, consumer_intent
 
                     if payload.order_no:
@@ -3239,38 +3230,8 @@ def create_gateway_app(
                         language=language,
                     )
 
-        # A language we can RENDER but not ROUTE. Thai and Khmer have no word
-        # boundaries, so `_normalize_keywords` swallows a run into pseudo-tokens
-        # and the matcher stops matching: measured, an UNRELATED Thai sentence
-        # scores a hit against a real entry (false positive), and a reworded one
-        # does not (false negative). The high-risk order cues cannot be written
-        # for these scripts at all.
-        #
-        # This is checked FIRST — ahead of EVERY model-backed route (explicit
-        # order, embedded order, active-order follow-up, promotional, FAQ match
-        # and generic QA), not just the one below it. Two reasons, both load-
-        # bearing:
-        #
-        # 1. Those routes START JOBS. A check after them returns a diagnosis job
-        #    that generates Chinese under a Thai label — exactly the silent
-        #    fallback this boundary exists to prevent.
-        # 2. The FAQ matcher is not SOUND for these scripts (measured: an
-        #    unrelated Thai sentence hits a real entry), so letting one through
-        #    would answer from a catalog entry chosen by a broken matcher.
-        #
-        # An explicit order still gets its authorization checked before this —
-        # see the order-authorization block above — so a caller cannot use the
-        # boundary to probe whether an order exists.
-        #
-        # Placed before every job, turn claim and model call, so a refused
-        # question leaves no row.
-        # An explicit order is AUTHORIZED before the language boundary, not
-        # after it. Ordering these the other way changes the answer to two
-        # questions that have nothing to do with language: an order the caller
-        # does not own would stop being a 404 (so the boundary became a probe),
-        # and an authorization outage would stop being a retryable 503. The
-        # boundary answers "can this language be asked in", and it must not
-        # answer "does this order exist" on the way.
+        # 旧FAQ关键词分词仍不支持泰/高棉语；显式订单与WF01语义路线不依赖该分词。
+        # 先授权，不能借语言限制泄露订单是否存在。
         order_verdict_before_boundary = (
             _order_authorization(context, caller, payload.order_no) if payload.order_no else ""
         )
@@ -3293,7 +3254,9 @@ def create_gateway_app(
                 "order not found",
             )
 
-        if not can_prompt_in(language):
+        if not can_prompt_in(language) or (
+            language in {"th", "km"} and not (payload.order_no or _extract_order_no(payload.question))
+        ):
             # This branch recorded no metric of its own before #636 — one of the
             # reasons the metric dimension could not tell the branches apart.
             return _clarification(
@@ -6880,7 +6843,7 @@ def _assistant_question_response(qa: dict[str, Any], language: str) -> dict[str,
         # The EFFECTIVE language: a non-promptable request is answered in the
         # default, so reporting the raw request tag would describe text the
         # answer does not contain (#541 review).
-        "language": effective_language(language),
+        "language": qa.get("language") or effective_language(language),
         "qa_id": qa["qa_id"],
         "question": qa["question"],
         "status": status_value,
@@ -7340,6 +7303,8 @@ def _require_current_chat_order(context, caller, qa, request):
 
     if str(qa.get("internal_run_id") or "").startswith(consumer_chat_service.PREFIX):
         run = context.dify_run_store.by_qa(qa["qa_id"])
+        if run and run.scope_fingerprint == caller.scope_fingerprint:
+            qa["language"] = run.language
         if run and run.order_no:
             authenticated_chat_order_reader(context, caller, request)
         try:
