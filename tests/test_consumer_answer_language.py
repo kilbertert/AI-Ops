@@ -76,3 +76,33 @@ def test_translated_answer_keeps_original_chinese_reference_name(language, text)
     )
     assert result["blocks"][0]["text"] == text
     assert result["blocks"][1]["title"] == "充电操作.md"
+
+
+def test_only_cited_resource_name_is_exempt_inside_translated_prose():
+    from aiops_diagnostics.chat_execution import ChatRunUnavailable
+    from aiops_diagnostics.consumer_knowledge import final_answer
+
+    context = {
+        "mode": "documents",
+        "status": "found",
+        "sources": [
+            {
+                "reference_id": "source-1",
+                "retrieved_reference_id": "ref",
+                "title": "充电操作.md",
+                "content": "操作",
+            },
+            {
+                "reference_id": "source-2",
+                "retrieved_reference_id": "ref2",
+                "title": "退款说明.md",
+                "content": "退款",
+            },
+        ],
+    }
+    text = "Дэлгэрэнгүйг 充电操作.md файлаас үзнэ үү."
+    raw = {"kind": "knowledge", "answer": text, "reference_ids": ["source-1"]}
+    assert final_answer(json.dumps(raw), context, "mn", {})["blocks"][0]["text"] == text
+    for bad in (text + " 未引用的中文。", "Дэлгэрэнгүйг 退款说明.md файлаас үзнэ үү."):
+        with pytest.raises(ChatRunUnavailable, match="answer language differs"):
+            final_answer(json.dumps({**raw, "answer": bad}), context, "mn", {})
