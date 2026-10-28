@@ -13,8 +13,8 @@
 | 知识库图文修复 | Gateway c76ff47d；34 租户模型默认值修复；恢复 Word 66 切片、25 图片均可下载 | [现场修复](../validation/2026-10-28-kb-recovery-production.md)：OCR 文字检索及 Gateway 签名图通过；原 H5 登录过期，本轮真人页面未验 |
 | C端订单检测 | 旧Python诊断仍被快捷入口调用，非WF01状态问答 | 同上语言验收：蒙古/高棉完成，泰语inconclusive；诊断准确率/币种表达与TDengine缺口未收口 |
 | 客户Java节点 | 常驻栈及HTTPS回调已交付，C端旧状态版本保留恢复 | [常驻节点](../validation/2026-10-25-production-node-enabled.md)、[TLS](../validation/2026-10-26-operator-runtime-live-sync.md)；不代表新客户内网已验 |
-| 管家API | cpms-node两工具、真实历史单节点回放通过；当次撤回后retracted/revision2 | [回放记录](../validation/2026-10-26-operator-real-history-replay.md)；本轮未重新探测生产，不宣称后来已常驻开放 |
-| 管家 Dify 预览 | 已修正自定义模型 1000 上限与应用 4096 冲突，补齐流式工具能力；原配置预览正常结束 | [参数修复](../validation/2026-10-28-operator-model-parameter-recovery.md)：零业务工具调用，不替代订单整链 |
+| 管家API | 已按2026-10-28用户授权持续开放，active/revision3/版本22；Java节点在线 | [开放回执](../validation/2026-10-28-operator-preview-deployed.md)；此前真实历史单回放通过，当前真人指定订单复验待完成 |
+| 管家 Dify 预览 | 原生预览已接入单订单公司授权和Java试用，812757dd部署；保留明确订单号要求 | [接线回执](../validation/2026-10-28-operator-preview-deployed.md)：真人新登录指定订单尚待复验；节点模型仍由平台配置 |
 | 管家公司页面 | MR !145已合并20e0a1a6到abroad_standard；完整构建与合成浏览器通过 | [本轮补记](../validation/2026-10-28-stage-closeout.md)；回执明确未部署，正式H5/真人整链待证 |
 | SOP发布 | Dify与节点的保存/试用/发布/撤回/恢复已实现，WF01实际版本绑定已验 | [Dify手册](consumer-wf01/README.md)、[节点手册](m3-node-publication.md)；管家真人控制台链仍欠验收 |
 | 旧工具与执行器 | 新管家工具选择曾9→2；旧provider保留，Python诊断仍服务 | 不得写成全部退役；删除前核实际引用、调用及恢复路径 |
