@@ -48,10 +48,11 @@ public final class ExecManifest {
     private final List<String> systemMessages;
     private final List<ToolDef> tools;
     private final String historyPolicy;
+    private final boolean operatorOutput;
 
     private ExecManifest(String id, String name, String providerKey, String adapterKey, String modelKey,
                          String endpoint, ChatTuning tuning, List<String> systemMessages,
-                         List<ToolDef> tools, String historyPolicy) {
+                         List<ToolDef> tools, String historyPolicy, boolean operatorOutput) {
         this.id = id;
         this.name = name;
         this.providerKey = providerKey;
@@ -62,6 +63,7 @@ public final class ExecManifest {
         this.systemMessages = List.copyOf(systemMessages);
         this.tools = List.copyOf(tools);
         this.historyPolicy = historyPolicy;
+        this.operatorOutput = operatorOutput;
     }
 
     /** 版本身份：清单**原始字节**的 sha256（十六进制，小写）。 */
@@ -103,6 +105,10 @@ public final class ExecManifest {
 
     public String historyPolicy() {
         return historyPolicy;
+    }
+
+    public boolean operatorOutput() {
+        return operatorOutput;
     }
 
     /**
@@ -234,7 +240,7 @@ public final class ExecManifest {
         }
         return new ExecManifest(id, text(root, "name"), text(model, "provider_key"),
                 text(model, "adapter_key"), text(model, "model_key"), text(model, "endpoint"),
-                ChatTuning.of(options), system, tools, history);
+                ChatTuning.of(options), system, tools, history, "operator-exec-config/1".equals(schema));
     }
 
     private static JsonNode required(JsonNode parent, String field) {

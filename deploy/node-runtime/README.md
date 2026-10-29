@@ -2,6 +2,10 @@
 
 现役Java源码与构建入口位于[services/execution-node](../../services/execution-node/README.md)。
 仓内源码迁移不改变宿主jar安装目录、systemd和容器挂载。
+管家JSON输出契约修复位于节点jar；仅更新Gateway或Dify提示词不会生效。按原流程从合并
+修订构建/核对节点制品，变更窗口切换后分别验原生预览、AI-Ops试用与正式入口。
+既有`operator-exec-config/1`清单无需重发；恢复时切回原jar并核对节点在线。
+本地候选的验证与线上限制见[输出契约QA](../../docs/agents/operator-cpms/output-contract-qa.md)。
 模型出口源码位于[services/model-proxy](../../services/model-proxy/README.md)，新Compose与包含新路径的镜像必须成对发布。
 
 当前产品路径与交付状态见[当前说明](../../docs/agents/current-delivery-state.md)。本文件是部署/维护方法，配置默认关闭不代表现役全部关闭；

@@ -107,8 +107,8 @@ class ReportingChatSessionRuntime extends ChatSessionRuntime {
                 }
             }
             manifestId = manifestId();
-            boolean operator = modelFactory.manifest().tools().stream()
-                    .anyMatch(t -> CpmsReadTool.NAMES.contains(t.name()));
+            boolean operator = modelFactory.manifest().operatorOutput();
+            if (operator) execution.guard().captureAnswer();
             super.execute(wrap(request, execution, manifestId, operator));
         } catch (RuntimeException | Error failure) {
             // 构造期/派发期失败（含清单/工具漂移）：这是**本次执行**的终局失败，
@@ -140,7 +140,7 @@ class ReportingChatSessionRuntime extends ChatSessionRuntime {
                                 "model stream did not finish cleanly"));
                         return;
                     }
-                    if (!reportCompleted(runId, manifestId, operator ? result.fullText() : null)) {
+                    if (!reportCompleted(runId, manifestId, operator ? execution.guard().lastAnswer() : null)) {
                         // Gateway 未确认：**不能**把这次 run 报成成功。
                         forwardError(request, new CompletionNotConfirmed(
                                 "gateway did not confirm loop completion"));

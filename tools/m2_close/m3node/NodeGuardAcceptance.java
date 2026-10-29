@@ -130,6 +130,10 @@ public class NodeGuardAcceptance {
         try (ConfigurableApplicationContext ctx = boot(manifest)) {
             GuardedChatModelFactory factory = ctx.getBean(GuardedChatModelFactory.class);
             check("guard-enabled", factory.enabled(), "enabled=" + factory.enabled());
+            if (variant.startsWith("output-contract-")) {
+                outputContract(ctx, upstream, variant.endsWith("stream"));
+                return;
+            }
             if ("advisor-appends-system".equals(variant)) {
                 advisorAppendsSystem(ctx, upstream, true);
                 return;
@@ -168,6 +172,8 @@ public class NodeGuardAcceptance {
                         "model=" + upstream.lastModel());
                 check("upstream-tools", upstream.lastToolCount() == 1,
                         "tools=" + upstream.lastToolCount());
+                check("consumer-output-unchanged", upstream.chatRequests.stream()
+                        .noneMatch(r -> r.has("response_format")), "consumer has no JSON constraint");
                 check("upstream-temperature", "0.2".equals(upstream.lastTemperature()),
                         "temperature=" + upstream.lastTemperature());
                 check("upstream-path", SyntheticUpstream.CHAT_PATH.equals(upstream.chatPaths.get(0)),
@@ -381,6 +387,22 @@ public class NodeGuardAcceptance {
      * 生效（排在前面时 ToolCallingAdvisor 从自己那个位置重新进入链，改不到第二轮）。
      * 两条路径都跑：`call()` 与真实订阅的 `stream()`。
      */
+    private static void outputContract(ConfigurableApplicationContext ctx, SyntheticUpstream upstream,
+                                       boolean stream) {
+        var dispatch = dispatch(upstream, "exact");
+        var tools = ctx.getBean(ToolRuntime.class).resolve(dispatch);
+        var client = ctx.getBean(ChatClientFactory.class).build(ChatClientBuildRequest.builder()
+                .dispatchRequest(dispatch).tools(tools.getTools()).build());
+        var prompt = ctx.getBean(PromptFactory.class).build(dispatch);
+        var spec = client.prompt(prompt).advisors(s -> s.advisors(driftAdvisor("output-text")));
+        if (stream) spec.stream().content().collectList().block(java.time.Duration.ofSeconds(30));
+        else spec.call().content();
+        check("output-contract-rounds", upstream.chatCalls.get() == 2, "two real model turns");
+        check("output-contract-json", upstream.chatRequests.stream().allMatch(r ->
+                "json_object".equals(r.path("response_format").path("type").asText())),
+                "final boundary overrides text mode in " + (stream ? "stream" : "call"));
+    }
+
     private static void advisorDrift(ConfigurableApplicationContext ctx, SyntheticUpstream upstream,
                                      String drift, boolean stream) {
         ChatDispatchRequest d = dispatch(upstream, "exact");
@@ -465,6 +487,11 @@ public class NodeGuardAcceptance {
         if (options instanceof org.springframework.ai.model.tool.ToolCallingChatOptions toolOptions) {
             var builder = toolOptions.mutate();
             switch (drift) {
+                case "output-text" -> {
+                    return ((org.springframework.ai.openai.OpenAiChatOptions) toolOptions).mutate().responseFormat(
+                            org.springframework.ai.openai.OpenAiChatModel.ResponseFormat.builder().type(
+                                    org.springframework.ai.openai.OpenAiChatModel.ResponseFormat.Type.TEXT).build()).build();
+                }
                 case "model" -> builder.model("evil-model");
                 case "temperature" -> builder.temperature(0.9);
                 // R2：四种残余绕过。前两条是「有损比较」的产物，后两条走 extraBody 覆盖层。
@@ -875,7 +902,9 @@ public class NodeGuardAcceptance {
                     {"name": "%s", "description": "%s", "input_schema": "%s"}
                   ]
                 }
-                """.formatted(endpoint, TOOL_NAME, description, schema.replace("\"", "\\\""));
+                """.formatted(endpoint, TOOL_NAME, description, schema.replace("\"", "\\\""))
+                .replace("m3-exec-config/1", variant.startsWith("output-contract-")
+                        ? "operator-exec-config/1" : "m3-exec-config/1");
     }
 
     private static Path writeManifest(String json) throws Exception {
@@ -953,7 +982,7 @@ public class NodeGuardAcceptance {
         List<String> out = new ArrayList<>(List.of("exact", "system-drift", "model-drift",
                 "endpoint-drift", "options-drift", "tool-description-drift", "tool-schema-drift",
                 "history-drift", "media-drift", "memory-drift", "mcp-drift", "mid-loop-drift",
-                "advisor-appends-system", "cross-run"));
+                "advisor-appends-system", "cross-run", "output-contract-call", "output-contract-stream"));
         out.addAll(advisorDriftVariants());
         return List.copyOf(out);
     }

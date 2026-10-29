@@ -13,6 +13,11 @@ Dify 预览模型参数报错的当前修复与复跑方法见 [模型参数手�
 目标：Java 节点以 CPMS 正式只读 API 取证，旧七工具不作为新链依赖。
 流程与验收分别见 [acceptance.feature](acceptance.feature) 和 [qa-plan.md](qa-plan.md)。
 
+运营只维护业务SOP和工具选择。管家发布/试用自动追加输出要求，Java节点每轮启用JSON对象
+模式，并只把最后完整模型轮交给Gateway校验。页面显示可读报告，不要求运营手写JSON。
+遇到`OPERATOR_INVALID_ANSWER`时核对节点制品、输出模式和完成回合边界，不能通过放宽
+证据校验止错。详见[输出契约QA](output-contract-qa.md)与[决策](../../adr/0163-operator-output-is-a-runtime-contract.md)。
+
 ## 首片 API 契约
 
 | 操作 | CPMS 接口 | 首片消费与限制 |
