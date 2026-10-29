@@ -60,7 +60,7 @@ def _pick_session(runtime, settings, prefix: str, scope: str, entry: str) -> tup
     """
     import redis
 
-    from aiops_diagnostics.third_session_auth import (
+    from aiops_diagnostics.identity.third_session_auth import (
         RedisThirdSessionResolver,
         ThirdSessionSettings,
     )
