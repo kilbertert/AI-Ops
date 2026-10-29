@@ -127,7 +127,7 @@ def libraries_for(tenant_id: str, rows: Iterable[Mapping[str, Any]]) -> list[Lib
     ``knowledge_id`` 从这里派生、**只此一处**，且与检索侧共用 ``auto_knowledge_id`` ——
     两处各算一遍就会出现"同步成功、检索 404"。
     """
-    from aiops_diagnostics.knowledge_sources import auto_knowledge_id
+    from aiops_diagnostics.knowledge.knowledge_sources import auto_knowledge_id
 
     out: list[Library] = []
     for row in rows:
@@ -260,7 +260,7 @@ def _points_at_this_tenants_library(knowledge_id: str) -> bool:
     不是这个形状的一律不算孤儿：``tenant-<id>``（租户级合并形态，ADR-0095 明确保留）
     与人工登记的任意串（``kb-canary-2``）都是**合法但不由本命令管理**的来源。
     """
-    from aiops_diagnostics.knowledge_sources import parse_auto_knowledge_id
+    from aiops_diagnostics.knowledge.knowledge_sources import parse_auto_knowledge_id
 
     parsed = parse_auto_knowledge_id(knowledge_id)
     return parsed is not None and bool(parsed[1])

@@ -12,7 +12,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.routing import APIRoute
 
 from aiops_diagnostics.i18n import SUPPORTED_LANGUAGES
-from aiops_diagnostics.knowledge_retrieval import ALLOWED_MEDIA_TYPES
+from aiops_diagnostics.knowledge.knowledge_retrieval import ALLOWED_MEDIA_TYPES
 
 # 方法也是边界：GET /shortcuts 是用户入口，POST 同路径却是管理接口。
 OPERATIONS = {

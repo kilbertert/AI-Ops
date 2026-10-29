@@ -19,7 +19,7 @@ from aiops_diagnostics.bounded_http import (
     request_json,
     tenant_id_header,
 )
-from aiops_diagnostics.knowledge_retrieval import (
+from aiops_diagnostics.knowledge.knowledge_retrieval import (
     KnowledgeSearchUnavailable,
 )
 

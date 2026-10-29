@@ -24,7 +24,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from aiops_diagnostics.knowledge_retrieval import RetrievedChunk
+from aiops_diagnostics.knowledge.knowledge_retrieval import RetrievedChunk
 
 #: Dify appends ``/retrieval`` itself, so the operator's "API Endpoint" is our
 #: base path and this is the route it reaches.

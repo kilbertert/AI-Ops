@@ -103,7 +103,7 @@ def _searching_client():
     — the model call is stubbed at its own seam, and the fail-closed case
     returns before any search.
     """
-    from aiops_diagnostics.knowledge_retrieval import KbServiceClient
+    from aiops_diagnostics.knowledge.knowledge_retrieval import KbServiceClient
 
     class _Searching(KbServiceClient):
         def __init__(self):

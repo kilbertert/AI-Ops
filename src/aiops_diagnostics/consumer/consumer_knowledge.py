@@ -9,7 +9,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from aiops_diagnostics.chat_execution import ChatRunUnavailable
-from aiops_diagnostics.knowledge_retrieval import (
+from aiops_diagnostics.knowledge.knowledge_retrieval import (
     ALLOWED_IMAGE_TYPES,
     ALLOWED_VIDEO_TYPES,
     KnowledgeSearchGuard,

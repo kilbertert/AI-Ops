@@ -204,7 +204,7 @@ def test_document_mode_cannot_replace_cpms_snapshot_with_model_prose(kind):
 
 
 def test_document_media_never_accepts_credentials_or_plaintext_urls():
-    from aiops_diagnostics.knowledge_retrieval import MediaResourceSigner, normalize_search_response
+    from aiops_diagnostics.knowledge.knowledge_retrieval import MediaResourceSigner, normalize_search_response
 
     for url in [
         "http://www.youtube.com/shorts/t57PMqSw7iE",

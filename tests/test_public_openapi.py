@@ -9,7 +9,7 @@ from fastapi.openapi.models import OpenAPI
 from test_faq_gateway_api import _client
 
 from aiops_diagnostics.gateway_api import AssistantQuestionRequest
-from aiops_diagnostics.knowledge_retrieval import ALLOWED_MEDIA_TYPES, MediaResourceSigner
+from aiops_diagnostics.knowledge.knowledge_retrieval import ALLOWED_MEDIA_TYPES, MediaResourceSigner
 
 
 def test_public_operations_match_testing_guide_and_exclude_management(tmp_path):

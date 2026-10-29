@@ -137,11 +137,11 @@ from aiops_diagnostics.i18n import (
     free_text_unavailable_message,
     resolve_language,
 )
-from aiops_diagnostics.knowledge_retrieval import (
+from aiops_diagnostics.knowledge.knowledge_retrieval import (
     KnowledgeSearchUnavailable,
     normalize_search_response,
 )
-from aiops_diagnostics.knowledge_sources import KnowledgeSourceResolver
+from aiops_diagnostics.knowledge.knowledge_sources import KnowledgeSourceResolver
 from aiops_diagnostics.metrics_store import MetricsValidationError
 from aiops_diagnostics.order_visibility import tenant_matches
 from aiops_diagnostics.private_files import PrivatePathError, validate_private_file, write_private_text
@@ -4419,7 +4419,7 @@ def create_gateway_app(
         ``Domain``（见 ``ragflow_console_cookie_domain``），页面随后自己 ``location.href``
         跳过去时浏览器就会带上它。这也是「打开 RAGFlow」按钮唯一可行的形状。
         """
-        from aiops_diagnostics.ragflow_console import (
+        from aiops_diagnostics.knowledge.ragflow_console import (
             RAGFlowLoginClient,
             RAGFlowLoginError,
             open_console,
@@ -4653,7 +4653,7 @@ def create_gateway_app(
                 "KNOWLEDGE_OPEN_WORKSPACE_REQUIRED",
                 "workspace is required",
             )
-        from aiops_diagnostics.ragflow_console import (
+        from aiops_diagnostics.knowledge.ragflow_console import (
             DeclaredTenant,
             RAGFlowLoginClient,
             RAGFlowLoginError,
@@ -4757,7 +4757,7 @@ def create_gateway_app(
         一个能拿到票的人，最多在 60 秒内让**自己**得到一个该租户的会话 —— 而他本来
         就已经通过了桥的身份校验（票是他自己那一跳换来的）。
         """
-        from aiops_diagnostics.ragflow_console import (
+        from aiops_diagnostics.knowledge.ragflow_console import (
             DeclaredTenant,
             RAGFlowLoginClient,
             RAGFlowLoginError,

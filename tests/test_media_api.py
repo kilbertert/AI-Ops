@@ -18,7 +18,7 @@ from aiops_diagnostics.faq import FAQCatalog, PlatformIdentityResolver, Platform
 from aiops_diagnostics.gateway_api import create_gateway_app
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_store import GatewayStore
-from aiops_diagnostics.knowledge_retrieval import (
+from aiops_diagnostics.knowledge.knowledge_retrieval import (
     KbServiceClient,
     KnowledgeSearchUnavailable,
     MediaGrant,
@@ -359,7 +359,7 @@ def test_kb_client_maps_http_200_business_error_body_to_not_found(monkeypatch) -
     # code path, not about a loop that was short-circuited.
     naps: list[float] = []
     monkeypatch.setattr(
-        "aiops_diagnostics.knowledge_retrieval.time.sleep",
+        "aiops_diagnostics.knowledge.knowledge_retrieval.time.sleep",
         lambda seconds, _record=naps.append: _record(seconds),
     )
     try:

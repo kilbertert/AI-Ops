@@ -85,7 +85,7 @@ def _client(tmp_path: Path, per_tenant: dict[str, list[dict]], *, caller=None):
     from aiops_diagnostics.gateway_api import create_gateway_app
     from aiops_diagnostics.gateway_config import GatewayServerSettings
     from aiops_diagnostics.gateway_store import GatewayStore
-    from aiops_diagnostics.knowledge_retrieval import MediaResourceSigner
+    from aiops_diagnostics.knowledge.knowledge_retrieval import MediaResourceSigner
 
     os.chmod(tmp_path, 0o750)
     settings = GatewayServerSettings(

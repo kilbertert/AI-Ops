@@ -9,7 +9,7 @@ from aiops_diagnostics.chat_data_grant import DataGrantStore
 from aiops_diagnostics.chat_execution import ChatRunUnavailable
 from aiops_diagnostics.consumer import consumer_knowledge
 from aiops_diagnostics.dify_chatflow import ChatflowReply
-from aiops_diagnostics.knowledge_retrieval import KnowledgeSearchUnavailable, MediaResourceSigner
+from aiops_diagnostics.knowledge.knowledge_retrieval import KnowledgeSearchUnavailable, MediaResourceSigner
 from consumer.test_consumer_chat_service import Client, configure, done
 
 

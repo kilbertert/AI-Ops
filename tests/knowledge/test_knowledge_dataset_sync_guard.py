@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import threading
 
-from aiops_diagnostics.knowledge_dataset_sync_guard import KnowledgeDatasetSyncGuard
+from aiops_diagnostics.knowledge.knowledge_dataset_sync_guard import KnowledgeDatasetSyncGuard
 
 
 class _Result:

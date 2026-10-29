@@ -20,7 +20,7 @@ from aiops_diagnostics.faq import FAQCatalog, PlatformIdentityResolver, Platform
 from aiops_diagnostics.gateway_api import create_gateway_app
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_store import GatewayStore
-from aiops_diagnostics.knowledge_retrieval import (
+from aiops_diagnostics.knowledge.knowledge_retrieval import (
     KnowledgeSearchUnavailable,
     MediaResourceSigner,
 )

@@ -391,7 +391,7 @@ def test_a_name_too_long_for_the_update_route_is_refused_before_creating() -> No
 
 def test_the_knowledge_id_is_derived_by_the_shared_rule() -> None:
     """同步写的 id 必须就是检索认的那个 —— 两处各算一遍就会出现"同步成功、检索 404"。"""
-    from aiops_diagnostics.knowledge_sources import auto_knowledge_id
+    from aiops_diagnostics.knowledge.knowledge_sources import auto_knowledge_id
 
     libraries = libraries_for(TENANT, [{"knowledge_base_id": "kb-a", "name": "A"}])
 
