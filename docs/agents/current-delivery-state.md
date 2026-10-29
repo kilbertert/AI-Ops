@@ -1,11 +1,13 @@
 # 当前交付状态索引
 
-## 优链充管家副本准备（2026-10-29）
+## 优链充管家已部署、首个账号空范围拒绝（2026-10-29）
 
 目标租户独立 Dify 工作区和管家应用已创建，双 CPMS 工具与4096输出预算已回读核对。
 源应用与三条旧路由保持不变，跨工作区 app 读取及旧 provider 引用均被拒绝。
-本记录提交时 Gateway 新登记与 Java 路由尚未应用；真实公司登录订单验收待测试人提供样本。
-方法见[多租户复制](operator-cpms/multitenant.md)，证据见[准备回执](../validation/2026-10-29-youlian-operator-prepare.md)。
+PR #1136合并后已定点登记并发布：Java V2、active/revision1，重复发布unchanged。
+用户提供的首个账号正常验证码登录且属于优链充；原App选单诊断403，UPMS/站点归属确实为空，
+没有派发节点任务。用户选择更换有站点权限的账号，成功取数仍待验；Dify预览本轮由用户暂缓。
+方法见[多租户复制](operator-cpms/multitenant.md)，证据见[部署与App回执](../validation/2026-10-29-youlian-operator-live.md)。
 
 ## 运行时退役已部署（2026-10-29）
 

@@ -114,7 +114,7 @@ from pathlib import Path
 from aiops_diagnostics.dify_dsl_pull import DifyDslSource
 from aiops_diagnostics.dify_workspaces import DifyWorkspaces
 from aiops_diagnostics.gateway_server import GatewayServerSettings
-from aiops_diagnostics.node_publication import candidate, targets
+from aiops_diagnostics.execution.node_publication import candidate, targets
 
 apply = False
 settings = GatewayServerSettings.from_env()
@@ -167,8 +167,12 @@ else:
 from dataclasses import replace
 from pathlib import Path
 import yaml
-from aiops_diagnostics.agent_lifecycle import AgentManager, AgentStore, allowed_models_from_settings
-from aiops_diagnostics.agent_manifest import admin_context, load_manifest, reconcile_dify_registry
+from aiops_diagnostics.publication.agent_lifecycle import (
+    AgentManager,
+    AgentStore,
+    allowed_models_from_settings,
+)
+from aiops_diagnostics.publication.agent_manifest import admin_context, load_manifest, reconcile_dify_registry
 from aiops_diagnostics.config import Settings
 from aiops_diagnostics.dify_app_registry import DifyAppRegistry
 from aiops_diagnostics.dify_dsl_pull import DifyDslClient, DifyDslSource, _declared_dataset_ids
@@ -251,3 +255,77 @@ with urlopen(request, timeout=60) as response:
   不删除工作区、不恢复整库、不套用旧自动撤回定时器。恢复后按原 publish 流程复验。
 
 本次不扩展“上一单”查询，也不复制源租户知识库。真实订单成功不代表故障根因准确率验收。
+
+## 管家 App 验收与账号前置
+
+Dify 登录页当前是公司账号、密码、图形验证码；手机号短信码不能替代该登录方式。
+管家 App 的“验证码登录”调用公司 `/upms/token/loginByPhone`（41附 `grant_type=sms_login`），
+使用 App 现有 client-type 和租户配置。用户提供有效验证码时不额外发送短信。
+浏览器无公网可达性时，隧道的现役实现见
+[用户端浏览器驱动](../../../tools/consumer-status/status_probe.py)中的 `tunnel_argv`、
+`_wait_port` 和 `_terminate_tree`；通过 `dev-host exec 41` 建443转发并按端口和进程精确清理。
+管家复用该方法，只将浏览器目标换成管家域名：
+
+```python
+import importlib.util
+import os
+import socket
+import subprocess
+import sys
+from pathlib import Path
+from playwright.sync_api import sync_playwright
+
+path = Path("tools/consumer-status/status_probe.py")
+spec = importlib.util.spec_from_file_location("consumer_browser", path)
+module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
+spec.loader.exec_module(module)
+with socket.socket() as sock:
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+assert not module._wait_port(port, timeout=0.2)
+tunnel = subprocess.Popen(
+    module.tunnel_argv(target="41", port=port),
+    stdout=subprocess.DEVNULL,
+    stderr=subprocess.PIPE,
+    start_new_session=True,
+)
+pgid = os.getpgid(tunnel.pid)
+try:
+    assert module._wait_port(port, timeout=15)
+    assert module._listening_pids(port) & module._descendants(tunnel.pid)
+    with sync_playwright() as playwright:
+        rule = (
+            f"MAP ulinkmanage.h5.mall.qushiyun.com:443 127.0.0.1:{port},"
+            f"MAP api.mall.qushiyun.com:443 127.0.0.1:{port}"
+        )
+        browser = playwright.chromium.launch(headless=True, args=[f"--host-resolver-rules={rule}"])
+        try:
+            page = browser.new_page()
+            page.goto("https://ulinkmanage.h5.mall.qushiyun.com/", wait_until="domcontentloaded")
+            # 在这里按下述步骤使用正常公司登录和原页面。
+        finally:
+            browser.close()
+finally:
+    module._terminate_tree(tunnel, pgid=pgid, port=port)
+    assert not module._listening_pids(port)
+```
+
+只映射现役域名，保留HTTPS主机名与证书验证，不设置ignore_https_errors。
+
+1. 正常登录后读取公司 `/upms/user/info`，核 tenantId；用 Gateway 的现役
+   `_caller_resolver(settings).resolve(..., platform_entry='operator')` 核主体及站点范围。
+   token通过stdin或私有浏览器storage传递，不出现在日志、命令参数或提交。
+2. 租户主账号沿用既有all规则；普通/代理商账号的空站点范围不能用于成功取数正例。
+   再查 `_operator_site_scope(Settings.from_config(...)).site_scope_by_b_user_id(...)`
+   区分“权威目录明确空集合”和目录错误；不能把空集合改成all。
+3. 原首页“智能检测”→聊天页“订单检测”→原订单选择器→发送，记录本次POST响应。
+   成功需要202、QA completed、唯一Java run succeeded/matched、双工具及原页面完整报告。
+   单纯模型冒烟、订单列表200或路由active不能替代这些条件。
+4. 若列表有订单而诊断空范围403，分别记录公司列表、UPMS店铺集合和站点归属；
+   不以列表可见反推账号获得了业务授权。账号换成已有站点权限的测试人后再跑正例。
+
+2026-10-29首个测试账号复现上述差异：公司订单列表返回租户全部694条，UPMS店铺集合和
+两种站点归属均0；原页面诊断403、节点run为0。公司release源码的StaffSiteScopeService
+只对type=51加新范围约束，type=5仍沿用旧拦截逻辑；旧逻辑存在空集合不附加限制的分支。
+本任务不改变公司业务权限或修补公司仓；替换测试账号，保留该拒绝案例，不能据其宣称整链通过。
