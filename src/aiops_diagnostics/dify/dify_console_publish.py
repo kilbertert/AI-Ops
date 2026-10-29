@@ -137,16 +137,15 @@ _CONTENT_LENGTH_RE = re.compile(r"[0-9]{1,6}")
 
 _PUBLISH_ROUTE = "/__aiops/publish"
 
-#: 试运行（#781 / #782 的部署层）。与发布同源、同一套浏览器三门，但 body 要带订单号。
+#: 试运行与发布同源；输入问题或显式订单，执行要求由应用绑定决定。
 _TRIAL_ROUTE = "/__aiops/trial"
 
-#: 试运行请求体上限。它只带 ``{order_no}``（几十字节），但给足余量，免得一个异常的
-#: 调用方因为多带了一个字段而拿到一个看不懂的 400。**草稿不从这里进** —— 草稿由网关
+#: 试运行请求体上限，容纳业务问题。**草稿不从这里进** —— 草稿由网关
 #: 自己去 Dify 拉（见 ``_TRIAL_PAYLOAD_KEYS`` 的注释）。
 MAX_TRIAL_BODY_BYTES = 32 * 1024
 
 #: 试运行请求体**只允许**这几个键。``app_id`` 由 Referer 决定，不从 body 读。
-_TRIAL_PAYLOAD_KEYS = frozenset({"order_no"})
+_TRIAL_PAYLOAD_KEYS = frozenset({"order_no", "question"})
 
 #: 读试运行结果（本票新增）。与提交共用同一套浏览器三门，所以同样是 POST ——
 #: 浏览器的同源 GET **不发** ``Origin``，把这条做成 GET 就得为它单开一套更弱的门。
@@ -945,6 +944,7 @@ def submit_trial(
     trial_key: str,
     app_id: str,
     order_no: str,
+    question: str = "",
     login_proxy_url: str = "",
     console_session: ConsoleSession | None = None,
     timeout: float = 15.0,
@@ -993,7 +993,7 @@ def submit_trial(
             "Accept": "application/json",
             **initiator_headers,
         },
-        body={"app_id": app_id, "order_no": order_no},
+        body={"app_id": app_id, "order_no": order_no, **({"question": question} if question else {})},
         timeout=timeout,
     )
     # 名字用 ``http_status`` 与本文件其余部分一致（``publish_current_app`` 也是这么叫的）：
@@ -1458,15 +1458,23 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
         if app_id is None:  # pragma: no cover - _check_browser_request 已保证
             raise _Rejected(403, "无法确定当前是哪个智能体（请从编排页点这个按钮）")
         payload = self._read_bounded_json(MAX_TRIAL_BODY_BYTES, _TRIAL_PAYLOAD_KEYS)
-        order_no = payload.get("order_no")
-        if not isinstance(order_no, str) or not order_no.strip():
-            raise _Rejected(400, "请填写要试运行的订单号")
+        order_no, question = payload.get("order_no", ""), payload.get("question", "")
+        if (
+            not isinstance(order_no, str)
+            or not isinstance(question, str)
+            or len(question) > 4000
+            or not (order_no.strip() or question.strip())
+        ):
+            raise _Rejected(400, "请填写要试运行的问题或订单号")
+        if question.strip() and not order_no.strip():
+            order_no = _native_order(question)
         try:
             result = submit_trial(
                 gateway_base_url=self.settings.gateway_base_url,
                 trial_key=self.settings.trial_key,
                 app_id=app_id,
                 order_no=order_no.strip(),
+                question=question.strip(),
                 login_proxy_url=self.settings.login_proxy_url,
                 console_session=session,
                 timeout=self.settings.timeout,
@@ -1880,6 +1888,8 @@ def _native_order(query):
     candidates = set(re.findall(r"(?<![A-Za-z0-9_.:-])[A-Za-z0-9_-]{6,64}(?![A-Za-z0-9_.:-])", query))
     candidates = {s for s in candidates if any(c.isdigit() for c in s) and (not s.isdigit() or len(s) >= 15)}
     candidates.update(s for s in explicit if any(c.isdigit() for c in s))
+    if not candidates:
+        return ""
     if len(candidates) != 1:
         raise _Rejected(400, "请在本条消息中填写一个明确订单号；暂不支持“上一个订单”")
     return candidates.pop()

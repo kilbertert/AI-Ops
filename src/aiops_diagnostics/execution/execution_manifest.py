@@ -91,7 +91,7 @@ def from_text(text: str) -> ExecutionManifest:
 def _parse(payload: object, identity: str) -> ExecutionManifest:
     if not isinstance(payload, dict):
         raise ExecutionManifestError("execution manifest must be a JSON object")
-    if payload.get("schema") not in {SUPPORTED_SCHEMA, OPERATOR_SCHEMA}:
+    if payload.get("schema") not in {SUPPORTED_SCHEMA, OPERATOR_SCHEMA, "operator-conversation/1"}:
         raise ExecutionManifestError("unsupported execution manifest schema")
     if payload.get("history_policy") != FIXED_HISTORY_POLICY:
         raise ExecutionManifestError("unsupported history policy")
@@ -112,7 +112,11 @@ def _parse(payload: object, identity: str) -> ExecutionManifest:
     if not all(isinstance(item, str) and item for item in system_messages):
         raise ExecutionManifestError("execution manifest system messages are invalid")
     tools = payload.get("tools")
-    if not isinstance(tools, list) or (not tools and payload.get("schema") != OPERATOR_SCHEMA):
+    if (
+        not isinstance(tools, list)
+        or (not tools and payload.get("schema") not in {OPERATOR_SCHEMA, "operator-conversation/1"})
+        or (payload.get("schema") == "operator-conversation/1" and tools)
+    ):
         # 空工具集合不是合法期望，也不是拒绝手段（节点侧同一结论）。
         raise ExecutionManifestError("execution manifest declares no controlled tools")
     names: list[str] = []

@@ -11,6 +11,8 @@ Dify 预览模型参数报错的当前修复与复跑方法见 [模型参数手�
 本轮未重新探测现场，不据源码宣称后来已常驻启用。见[测试交接](../../testing-handoff.md)。
 
 目标：Java 节点以 CPMS 正式只读 API 取证，旧七工具不作为新链依赖。
+管家问答现区分无订单咨询/站点搜索与单订单诊断，订单不是聊天门槛；
+见[场景](conversation.feature)、[QA与限制](conversation-qa.md)。
 流程与验收分别见 [acceptance.feature](acceptance.feature) 和 [qa-plan.md](qa-plan.md)。
 
 运营只维护业务SOP和工具选择。管家发布/试用自动追加输出要求，Java节点每轮启用JSON对象

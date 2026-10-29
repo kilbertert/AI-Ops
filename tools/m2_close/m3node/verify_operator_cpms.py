@@ -27,6 +27,7 @@ class Model(BaseHTTPRequestHandler):
     fail = False
     truncate = False
     invalid = ""
+    conversation_kind = "general"
 
     def log_message(self, *args):
         pass
@@ -35,12 +36,21 @@ class Model(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", "0"))))
         type(self).calls.append(body)
         tools = [m for m in body.get("messages", []) if m.get("role") == "tool"]
+        conversation = not body.get("tools")
         if type(self).fail and tools:
             self.send_response(500)
             self.send_header("Content-Length", "0")
             self.end_headers()
             return
-        if len(tools) < 2:
+        if conversation:
+            answer = (
+                {"kind": "site_search", "text": "", "name": "", "address_terms": ["广州", "天河"]}
+                if type(self).conversation_kind == "sites"
+                else {"kind": "answer", "text": "状态3表示异常已处理。", "name": "", "address_terms": []}
+            )
+            delta = {"role": "assistant", "content": json.dumps(answer, ensure_ascii=False)}
+            finish = "stop"
+        elif len(tools) < 2:
             tool = operator_cpms.TOOL_NAMES[len(tools)]
             delta = {
                 "role": "assistant",
@@ -358,6 +368,32 @@ def main():
             assert chat_execution.binding_for_key(f["settings"], current.key) == current
             assert all(call.get("response_format") == {"type": "json_object"} for call in Model.calls)
             cases.append({"case": "java-saved-draft-trial", "status": "completed-without-publishing"})
+            for label, question in (
+                ("general", "订单状态3是什么意思"),
+                ("sites", "帮我找一下广州天河附近的充电站"),
+            ):
+                Model.conversation_kind = label
+                before = len(f["state"]["calls"])
+                response = f["client"].post(
+                    "/v1/assistant/questions", headers=HEADERS, json={"question": question}
+                )
+                assert response.status_code == 202, response.text
+                for _ in range(120):
+                    time.sleep(0.5)
+                    result = f["client"].get(
+                        "/v1/assistant/questions/" + response.json()["qa_id"], headers=HEADERS
+                    )
+                    if result.status_code != 200 or result.json()["status"] not in {"queued", "running"}:
+                        break
+                assert result.status_code == 200 and result.json()["status"] == "completed", result.text
+                if label == "general":
+                    assert len(f["state"]["calls"]) == before and "异常已处理" in result.text
+                else:
+                    assert len(f["state"]["calls"]) == before + 1 and "天河测试站" in result.text, result.text
+                    assert "PRIVATE-PHONE" not in result.text
+                assert not Model.calls[-1].get("tools")
+                assert Model.calls[-1]["response_format"] == {"type": "json_object"}
+                cases.append({"case": "java-no-order-" + label, "status": "completed"})
             f["candidate"]["enabled"] = []
             f["publish"](current.route_revision)
             denied = request(f["client"])

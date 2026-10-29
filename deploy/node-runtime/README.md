@@ -88,6 +88,11 @@ Docker internal 网络的端口映射在本环境不生成宿主监听，不能�
 
 ## 验收、退役和恢复
 
+无订单管家回合使用新增`operator-conversation/1`清单，先部署支持它的节点jar，再按既有CD部署
+Gateway，最后从同一合并修订构建/部署Dify控制台桥。旧节点会拒绝新协议，不存在降级执行。
+部署期间保留旧jar、Gateway源码及桥包；恢复先撤回新Gateway/桥，再恢复旧节点。
+现有已发布订单清单和路由无需重发。站点接口访问沿用当前用户公司Bearer，不新增凭据或公网暴露。
+
 ### 仅更新Java节点jar
 
 先在开发机从合并修订`git archive <merge> services/execution-node`解出干净源码，
