@@ -22,14 +22,21 @@ Dify 预览模型参数报错的当前修复与复跑方法见 [模型参数手�
 
 ## 首片 API 契约
 
+**报告必须回答用户问的那一点。** 答案的 `direct_answer` 为必填非空，且渲染在最前；
+没有它，任何提问都只能被概述一遍 —— 2026-10-29 反馈的「两个问题同一份报告」就是
+这个形状（[ADR-0171](../../adr/0171-operator-report-answers-the-question-asked.md)）。
+订单详情取证已覆盖金额、退款、额定功率与接口类型，问电费/功率不再只能答「未提供」。
+
 | 操作 | CPMS 接口 | 首片消费与限制 |
 | --- | --- | --- |
-| 订单详情 | `GET /chOrderInfo/getOrderInfoDetail/{orderNo}` | 校验外层与 `chOrderInfoModel` 的订单/站点，内层租户；只取诊断必需字段 |
-| 充电监测样本 | `GET /iotChargingDevice/getChargingMonitor/{orderNo}?current=1&size=50` | 逐条校验订单/租户/站点；只取第一页最多50条，明确非完整时间线、无排序保证 |
+| 订单详情 | `GET /chOrderInfo/getOrderInfoDetail/{orderNo}` | 校验外层与 `chOrderInfoModel` 的订单/站点，内层租户；取证字段见 `operator_cpms.DETAIL_FIELDS`（含金额、退款、SOC、额定功率），两侧必须逐项相同 |
+| 充电监测样本 | `GET /iotChargingDevice/getChargingMonitor/{orderNo}?current=1&size=50` | 逐条校验订单/租户/站点；只取第一页最多50条，明确非完整时间线、无排序保证；`samples_returned`/`absence` 区分「没上报」与「被截断」 |
 
 两接口统一使用 CPMS 的 `code=0,data` 信封，HTTP 200 不等于成功。
 源时间字段保留 CPMS 原文，不把没有时区的本地时间伪装成 UTC；取证时间另记 UTC。
 监测缺失是缺证，不能据此推断设备没有故障。认证凭据来自当前请求授权，不来自模型或工具参数。
+公司 `iot_power_runtime` 只保留 7 天（`CleanTableDataJob` 每日删 7 天前数据），
+超出窗口的历史单必然 0 条样本 —— 那是保留期，不是设备故障证据。
 
 本次 API-01 检查了公司 release 分支、控制器/DTO/查询实现及线上制品的对应类与映射；线上制品没有 Git 修订元数据，因此只记录制品摘要，不声称等于最新 release。原件与对应关系仅在私有验收根保留，方法沿用[公司源码规程](../company-code-recon-procedure.md)和[环境手册](../env-41-runbook.md)。
 

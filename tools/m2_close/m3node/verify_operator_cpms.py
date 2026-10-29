@@ -67,6 +67,7 @@ class Model(BaseHTTPRequestHandler):
             finish = "tool_calls"
         else:
             answer = {
+                "direct_answer": "订单以通信中断结束，现场网络需核查。",
                 "summary": "订单异常结束。",
                 "probable_cause": "通信中断线索，需现场核查。",
                 "next_steps": ["检查网络。"],
@@ -86,6 +87,10 @@ class Model(BaseHTTPRequestHandler):
                 delta["content"] = json.dumps(answer)
             elif type(self).invalid == "mutation-claim":
                 answer["summary"] = "已退款。"
+                delta["content"] = json.dumps(answer)
+            elif type(self).invalid == "unanswered":
+                # 问的是电费，交回的却是与提问无关的通用概述 —— 2026-10-29 反馈的形状。
+                answer["direct_answer"] = ""
                 delta["content"] = json.dumps(answer)
             elif type(self).invalid == "empty":
                 delta["content"] = ""
@@ -261,6 +266,9 @@ def main():
             assert all(
                 "evidence_tools" in call["messages"][0]["content"] for call in Model.calls
             )  # 系统已有五字段提示词；缺的是供应商输出模式与末轮边界。
+            assert all(
+                "direct_answer" in call["messages"][0]["content"] for call in Model.calls
+            )  # 报告必须有「回答本次提问」的位置；否则任何问题都只能被概述一遍。
             assert "正在读取订单证据" not in final.text
             messages = json.dumps(Model.calls)
             assert "operator-private" not in messages and "PRIVATE-PHONE" not in messages
@@ -273,6 +281,7 @@ def main():
                 "missing-field",
                 "forged-evidence",
                 "mutation-claim",
+                "unanswered",
                 "empty",
                 "oversized",
             ):
