@@ -48,11 +48,11 @@
   "gateway_image": {
     "_comment": "由 deploy/m2-live-03/build-image.sh 在开发机/runner 构建。这里记录**可复现**的内容身份：source_sha256（src+tools+requirements+Dockerfile 的归档摘要）与 uv_lock_sha256。image_id 每次构建都不同（构建时间戳进镜像元数据），所以它不写进仓库：它在宿主加载制品后由 build-image.sh 的 identity.json 记录，preflight 优先比对内容标签，identity.json 存在时再核对 image ID。",
     "image": "aiops-m2-live-03-gateway",
-    "image_id": "sha256:4c7cc48cc7708d1e8171e35db616dbe1a8f8ba761a31f0d24e2260be8e4c733f",
+    "image_id": "sha256:77034d302023968703800db365b9f4aca6d03c3bbb4cd7e3adaf7bb2b032dd88",
     "uv_lock_sha256": "5c2eb20c285dcbcdfc21b2449da7a562bf8c74415bb1708451149ebf7cacdb6f",
     "base_image": "python@sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f",
     "base_digest": "python@sha256:70729b46c69b4f1e97c4822c1af3df53a1476cf5ddc6c087c0c10bc3a5678c2f",
-    "source_sha256": "ad3904078399c5e992d300ef4b44884ef51471638f64bdacf08f055a0d13f5c2",
-    "built_at": "2026-10-29T03:10:39Z"
+    "source_sha256": "a1c75c98563adff9a9010fd1b5054594f9d96bd0d3615edd152c557bf1b565dd",
+    "built_at": "2026-10-29T03:33:09Z"
   }
 }

@@ -6,7 +6,7 @@ code:
 related:
   - src/aiops_diagnostics/health_report.py
   - src/aiops_diagnostics/charging_status.py
-  - src/aiops_diagnostics/knowledge_retrieval.py
+  - src/aiops_diagnostics/knowledge/knowledge_retrieval.py
 ---
 # l3-evidence
 

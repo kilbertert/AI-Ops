@@ -27,7 +27,7 @@ from aiops_diagnostics.health_report import (
 from aiops_diagnostics.i18n import (
     DEFAULT_LANGUAGE,
 )
-from aiops_diagnostics.knowledge_retrieval import (
+from aiops_diagnostics.knowledge.knowledge_retrieval import (
     KbServiceClient,
     KnowledgeSearchClient,
     KnowledgeSearchUnavailable,
@@ -204,7 +204,7 @@ class GatewayRuntime:
     ) -> GatewayRuntime:
         from aiops_diagnostics.agent_lifecycle import AgentStore
         from aiops_diagnostics.dify_workspaces import DifyWorkspaces
-        from aiops_diagnostics.knowledge_dataset_sync_guard import KnowledgeDatasetSyncGuard
+        from aiops_diagnostics.knowledge.knowledge_dataset_sync_guard import KnowledgeDatasetSyncGuard
 
         diagnostic_settings = Settings.from_config(gateway_settings.server_config_file)
         diagnostic_settings.agent.validate()

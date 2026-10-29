@@ -449,7 +449,7 @@ workflow YAML 不适用复杂度或 mutation 工具；安全状态机由模板�
 - 有序动作：执行结果规范化并读取 `blocks` 资源字段。
 - 预期结果：文本脱敏；返回不透明资源 ID、相对媒体地址、引用 ID 和允许 MIME；不暴露内部 image/object/token；无效分段不产生媒体。
 - 清理：释放内存 fake。
-- 结果：PASS（2026-09-09，pytest `tests/test_knowledge_retrieval.py`）。
+- 结果：PASS（2026-09-09，pytest `tests/knowledge/test_knowledge_retrieval.py`）。
 
 ### RAG-MEDIA-03 媒体授权、TTL 与 Range
 
@@ -459,7 +459,7 @@ workflow YAML 不适用复杂度或 mutation 工具；安全状态机由模板�
 - 有序动作：完整读取；请求 `bytes=2-5`；跨租户读取；过期读取；失效后读取。
 - 预期结果：完整读取 200；Range 返回 206、`video/mp4`、`Content-Range`、`Accept-Ranges` 和对应字节；越权/过期/失效返回 403 且 fetcher 不读取对象。
 - 清理：清空内存签发器。
-- 结果：PASS（2026-09-09，pytest `tests/test_knowledge_retrieval.py`）。
+- 结果：PASS（2026-09-09，pytest `tests/knowledge/test_knowledge_retrieval.py`）。
 
 ### RAG-MEDIA-04 依赖不可用降级
 
@@ -469,7 +469,7 @@ workflow YAML 不适用复杂度或 mutation 工具；安全状态机由模板�
 - 有序动作：调用 `knowledge_search`。
 - 预期结果：返回 `retrieval_status=unavailable`、空分段和空媒体；异常不泄露上游 token、URL 或堆栈。
 - 清理：释放 fake。
-- 结果：PASS（2026-09-09，pytest `tests/test_knowledge_retrieval.py`）。
+- 结果：PASS（2026-09-09，pytest `tests/knowledge/test_knowledge_retrieval.py`）。
 
 证据边界：RAG-MEDIA-01..04 是 AI-Ops 协议和安全边界的离线自动化验证；未连接生产
 `kb-service`、RAGFlow、真实租户或真实浏览器，因此**未完成业务媒体验收**。

@@ -1,0 +1,15 @@
+Feature: 知识业务归入独立Python包
+  Rule: 路径改变不改变知识权限与内容行为
+    Scenario: 分发与启动
+      Given 已安装新wheel或已部署新源码
+      When Gateway加载知识检索与开户模块
+      Then 新knowledge包可导入且旧根模块不存在
+      And 原知识页面路由仍有静态资源
+    Scenario: 真实知识问答
+      Given 用户正常登录且其知识库仍绑定并可检索
+      When 在原H5提出已有资料覆盖的问题
+      Then 本次QA完成并显示正文与引用
+    Scenario: 租户与同步边界
+      Given 两个租户的资料与工作空间不相同
+      When 执行知识绑定、同步或开户检查
+      Then 既有隔离和失败拒绝规则保持有效

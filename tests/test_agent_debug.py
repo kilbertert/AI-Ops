@@ -92,7 +92,7 @@ def test_resolver_names_parsing_and_failed_documents() -> None:
 
 
 def test_resolver_reports_missing_or_cross_tenant_base() -> None:
-    from aiops_diagnostics.knowledge_retrieval import KnowledgeSearchUnavailable
+    from aiops_diagnostics.knowledge.knowledge_retrieval import KnowledgeSearchUnavailable
 
     missing = _FakeKbClient(detail=KnowledgeSearchUnavailable("kb-service returned HTTP 502"))
     try:
@@ -104,7 +104,7 @@ def test_resolver_reports_missing_or_cross_tenant_base() -> None:
 
 
 def test_resolver_fails_closed_when_kb_service_unreachable() -> None:
-    from aiops_diagnostics.knowledge_retrieval import KnowledgeSearchUnavailable
+    from aiops_diagnostics.knowledge.knowledge_retrieval import KnowledgeSearchUnavailable
 
     down = _FakeKbClient(detail=KnowledgeSearchUnavailable("kb-service is unavailable"))
     try:

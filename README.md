@@ -60,7 +60,7 @@ flowchart LR
 | C端业务 | `consumer.consumer_billing.py`、`consumer.consumer_chat_service.py`、`consumer.consumer_documents.py`、`consumer.consumer_flow_contract.py`、`consumer.consumer_intent.py`、`consumer.consumer_knowledge.py`、`consumer.consumer_knowledge_selection.py`、`consumer.consumer_language.py`、`consumer.consumer_order_chat.py`、`consumer.consumer_photo.py`、`consumer.consumer_publication.py`、`consumer.consumer_trial.py`、`charging_status.py` |
 | 节点与试用 | `agent_runs.py`、`execution_manifest.py`、`chat_execution.py`、`chat_data_grant.py`、`chat_route_bindings.py`、`node_publication.py`、`operator_cpms.py`、`dify_trial.py`、`dify_workflow_trial.py` |
 | 管理与发布 | `admin_cli.py`、`agent_content.py`、`agent_lifecycle.py`、`agent_manifest.py`、`agent_debug.py`、`shortcut_lifecycle.py`、`shortcut_migration.py`、`ops_provider.py` |
-| 知识与会话 | `conversation_store.py`、`faq.py`、`qa_rag.py`、`clarification.py`、`knowledge_retrieval.py`、`knowledge_sources.py`、`knowledge_triple.py`、`knowledge_dataset_sync_guard.py`、`kb_onboarding.py`、`ragflow_console.py` |
+| 知识与会话 | `conversation_store.py`、`faq.py`、`qa_rag.py`、`clarification.py`、`knowledge.knowledge_retrieval.py`、`knowledge.knowledge_sources.py`、`knowledge.knowledge_triple.py`、`knowledge.knowledge_dataset_sync_guard.py`、`knowledge.kb_onboarding.py`、`knowledge.ragflow_console.py` |
 | 健康与分析 | `health_curves.py`、`health_metrics.py`、`health_report.py`、`health_report_copy.py`、`ops_analysis.py`、`ops_analysis_narrative.py`、`order_status.py`、`rules.py`、`sources.py`、`tdengine_proxy.py` |
 | 通用能力 | `config.py`、`model_request.py`、`bounded_http.py`、`private_files.py`、`redaction.py`、`i18n.py`、`answer_language.py`、`platform_paths.py`、`console_encoding.py`、`async_job_lifecycle.py`、`metrics_store.py` |
 | Dify集成 | `dify_app_registry.py`、`dify_chat_workflow.py`、`dify_chatflow.py`、`dify_console_admin.py`、`dify_console_publish.py`、`dify_debug_identity.py`、`dify_dsl_pull.py`、`dify_ensure_workspace.py`、`dify_inner_api.py`、`dify_knowledge_api.py`、`dify_knowledge_datasets.py`、`dify_knowledge_migration.py`、`dify_login_company.py`、`dify_login_provision.py`、`dify_login_proxy.py`、`dify_login_server.py`、`dify_login_service.py`、`dify_run_store.py`、`dify_tenant_access.py`、`dify_tools_catalog.py`、`dify_workspace_directory.py`、`dify_workspace_ready.py`、`dify_workspaces.py` |
@@ -78,6 +78,7 @@ flowchart LR
 | `services/execution-node/` | 现役 Java 节点源码、资源与 Maven 构建入口 |
 | `services/model-proxy/` | 现役固定目标模型代理 |
 | `tools/m2_live/` | 隔离栈探针与回环中继 |
+| `src/aiops_diagnostics/knowledge/`、`tests/knowledge/` | 知识检索、开户、绑定、同步守卫与对应测试 |
 | `tools/` | 内容生成、迁移和隔离验证 |
 | `plugins/` | Dify 知识插件及其原生打包布局 |
 | `deploy/`、`ops/` | 部署制品、环境声明、代理配置与操作手册 |

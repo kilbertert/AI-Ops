@@ -41,7 +41,7 @@ from aiops_diagnostics.bounded_http import (
     request_json_with_headers,
 )
 from aiops_diagnostics.gateway_store import GatewayStore
-from aiops_diagnostics.kb_onboarding import decrypt_credential
+from aiops_diagnostics.knowledge.kb_onboarding import decrypt_credential
 
 #: 四类拒绝，各自可区分。运营看到的不是"跳转失败"。
 NOT_ONBOARDED = "KNOWLEDGE_TENANT_NOT_ONBOARDED"

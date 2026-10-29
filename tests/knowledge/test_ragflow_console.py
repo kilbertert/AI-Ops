@@ -15,8 +15,8 @@ from typing import Any
 import pytest
 
 from aiops_diagnostics.gateway_store import GatewayStore
-from aiops_diagnostics.kb_onboarding import derive_email, encrypt_credential
-from aiops_diagnostics.ragflow_console import (
+from aiops_diagnostics.knowledge.kb_onboarding import derive_email, encrypt_credential
+from aiops_diagnostics.knowledge.ragflow_console import (
     LOGIN_REFUSED,
     NOT_ONBOARDED,
     UNREADABLE,
@@ -331,7 +331,7 @@ class _Directory:
 
 def test_a_browser_navigation_gets_303_and_the_session_cookie(tmp_path: Path, ragflow: Any) -> None:
     """顶层导航（``Accept: text/html``）：303 + Set-Cookie，由浏览器自己跟随。"""
-    from aiops_diagnostics.kb_onboarding import derive_email
+    from aiops_diagnostics.knowledge.kb_onboarding import derive_email
 
     client, _ = _gateway(tmp_path, ragflow)
     client.app.state.gateway.store.record_ragflow_tenant(  # type: ignore[attr-defined]
@@ -359,7 +359,7 @@ def test_the_page_gets_json_and_a_same_origin_cookie(tmp_path: Path, ragflow: An
     这是「打开 RAGFlow」按钮唯一可行的形状：跨源重定向上的 Set-Cookie 浏览器不会保存
     （2026-10-22 真浏览器实测），而同源应答上的会 —— 只要 Domain 覆盖目标源。
     """
-    from aiops_diagnostics.kb_onboarding import derive_email
+    from aiops_diagnostics.knowledge.kb_onboarding import derive_email
 
     client, _ = _gateway(tmp_path, ragflow)
     client.app.state.gateway.store.record_ragflow_tenant(  # type: ignore[attr-defined]
@@ -386,7 +386,7 @@ def test_the_cookie_carries_the_configured_domain(tmp_path: Path, ragflow: Any) 
     这一条钉住的是**真浏览器验收里唯一翻车的那处**：不是"有没有 cookie"，而是
     "浏览器会不会把它带到另一个源"。
     """
-    from aiops_diagnostics.kb_onboarding import derive_email
+    from aiops_diagnostics.knowledge.kb_onboarding import derive_email
 
     client, _ = _gateway(tmp_path, ragflow, ragflow_console_cookie_domain="mall.qushiyun.com")
     client.app.state.gateway.store.record_ragflow_tenant(  # type: ignore[attr-defined]
@@ -407,7 +407,7 @@ def test_the_cookie_carries_the_configured_domain(tmp_path: Path, ragflow: Any) 
 
 
 def test_the_route_records_a_granted_hop(tmp_path: Path, ragflow: Any) -> None:
-    from aiops_diagnostics.kb_onboarding import derive_email
+    from aiops_diagnostics.knowledge.kb_onboarding import derive_email
 
     client, _ = _gateway(tmp_path, ragflow)
     store = client.app.state.gateway.store  # type: ignore[attr-defined]

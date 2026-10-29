@@ -54,7 +54,7 @@ def require_owned(selected, rows):
 
 
 def owned_libraries(runtime, tenant):
-    from aiops_diagnostics.knowledge_retrieval import KnowledgeSearchUnavailable
+    from aiops_diagnostics.knowledge.knowledge_retrieval import KnowledgeSearchUnavailable
 
     try:
         if runtime.kb_search_client is None:

@@ -26,7 +26,7 @@ from typer.testing import CliRunner
 
 from aiops_diagnostics.admin_cli import admin_app
 from aiops_diagnostics.gateway_store import GatewayStore
-from aiops_diagnostics.kb_onboarding import (
+from aiops_diagnostics.knowledge.kb_onboarding import (
     KbAdminClient,
     OnboardError,
     decrypt_credential,
@@ -153,7 +153,7 @@ def test_derived_email_matches_the_shape_kb_service_lazily_registers() -> None:
 def test_first_onboarding_registers_repairs_and_marks_verified(
     tmp_path: Path, kb_service: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("aiops_diagnostics.kb_onboarding.verify_embedding", lambda **_k: 3072)
+    monkeypatch.setattr("aiops_diagnostics.knowledge.kb_onboarding.verify_embedding", lambda **_k: 3072)
     store = _store(tmp_path)
 
     outcome = onboard_tenant(
@@ -186,7 +186,7 @@ def test_first_onboarding_registers_repairs_and_marks_verified(
 def test_rerunning_is_idempotent_once_verified(
     tmp_path: Path, kb_service: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("aiops_diagnostics.kb_onboarding.verify_embedding", lambda **_k: 3072)
+    monkeypatch.setattr("aiops_diagnostics.knowledge.kb_onboarding.verify_embedding", lambda **_k: 3072)
     store = _store(tmp_path)
     kwargs = dict(
         tenant_id=TENANT,
@@ -225,7 +225,7 @@ def test_half_built_tenant_is_repaired_not_skipped(
         credential_ciphertext=encrypt_credential("old", CREDENTIAL_KEY),
         model_checked=False,
     )
-    monkeypatch.setattr("aiops_diagnostics.kb_onboarding.verify_embedding", lambda **_k: 3072)
+    monkeypatch.setattr("aiops_diagnostics.knowledge.kb_onboarding.verify_embedding", lambda **_k: 3072)
 
     onboard_tenant(
         tenant_id=TENANT,
@@ -250,7 +250,7 @@ def test_model_check_failure_names_the_step_and_leaves_no_check_timestamp(
             "EMBEDDING_KEY_REJECTED", "https://embed.example/v1 rejected (…test): 401", step="model-verify"
         )
 
-    monkeypatch.setattr("aiops_diagnostics.kb_onboarding.verify_embedding", _rejected)
+    monkeypatch.setattr("aiops_diagnostics.knowledge.kb_onboarding.verify_embedding", _rejected)
     store = _store(tmp_path)
 
     with pytest.raises(OnboardError) as caught:
@@ -408,22 +408,22 @@ def test_missing_credential_key_is_a_usage_error(monkeypatch, tmp_path):
 
 
 def test_model_check_failure_exits_one_with_the_step(monkeypatch, tmp_path):
-    from aiops_diagnostics.kb_onboarding import OnboardError
+    from aiops_diagnostics.knowledge.kb_onboarding import OnboardError
 
     runner = _runner(monkeypatch, tmp_path)
     monkeypatch.setattr(
-        "aiops_diagnostics.kb_onboarding.KbAdminClient.register_tenant",
+        "aiops_diagnostics.knowledge.kb_onboarding.KbAdminClient.register_tenant",
         lambda self, **kwargs: None,
     )
     monkeypatch.setattr(
-        "aiops_diagnostics.kb_onboarding.KbAdminClient.repair_models",
+        "aiops_diagnostics.knowledge.kb_onboarding.KbAdminClient.repair_models",
         lambda self, tenant_id: {"data": {}},
     )
 
     def _rejected(**_kwargs: Any) -> int:
         raise OnboardError("EMBEDDING_KEY_REJECTED", "rejected", step="model-verify")
 
-    monkeypatch.setattr("aiops_diagnostics.kb_onboarding.verify_embedding", _rejected)
+    monkeypatch.setattr("aiops_diagnostics.knowledge.kb_onboarding.verify_embedding", _rejected)
 
     result = runner.invoke(admin_app, ["onboard-tenant", "--tenant", TENANT, "--skip-workspace"])
 
@@ -511,7 +511,7 @@ def test_an_existing_upstream_account_is_rotated_not_registered(
         credential_ciphertext=encrypt_credential("old-password", CREDENTIAL_KEY),
         model_checked=False,
     )
-    monkeypatch.setattr("aiops_diagnostics.kb_onboarding.verify_embedding", lambda **_k: 3072)
+    monkeypatch.setattr("aiops_diagnostics.knowledge.kb_onboarding.verify_embedding", lambda **_k: 3072)
 
     onboard_tenant(
         tenant_id=TENANT,
@@ -629,7 +629,7 @@ def test_rotation_keeps_the_old_password_when_the_probe_cannot_prove_anything(
 
 
 def _adopt(kb_service: Any, store: Any, password: str = "fresh-from-out-of-band"):
-    from aiops_diagnostics.kb_onboarding import KbAdminClient, adopt_existing_account
+    from aiops_diagnostics.knowledge.kb_onboarding import KbAdminClient, adopt_existing_account
 
     return adopt_existing_account(
         tenant_id=TENANT,
@@ -643,7 +643,7 @@ def _adopt(kb_service: Any, store: Any, password: str = "fresh-from-out-of-band"
 
 def test_adopt_records_the_credential_only_after_the_upstream_accepts_it(tmp_path, kb_service):
     """验证在落盘之前：不接受就不写任何一行。"""
-    from aiops_diagnostics.kb_onboarding import decrypt_credential
+    from aiops_diagnostics.knowledge.kb_onboarding import decrypt_credential
 
     store = _store(tmp_path)
     _adopt(kb_service, store)
@@ -671,7 +671,7 @@ def test_adopt_refuses_and_writes_nothing_when_the_password_does_not_work(tmp_pa
 
 def test_adopt_refuses_a_tenant_that_already_has_a_stored_credential(tmp_path, kb_service):
     """已有凭据 ⇒ 走轮换，不要用接管覆盖（那会绕过"旧密码必须正确"这条判据）。"""
-    from aiops_diagnostics.kb_onboarding import encrypt_credential
+    from aiops_diagnostics.knowledge.kb_onboarding import encrypt_credential
 
     store = _store(tmp_path)
     store.record_ragflow_tenant(
