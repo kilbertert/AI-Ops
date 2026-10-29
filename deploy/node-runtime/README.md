@@ -88,6 +88,41 @@ Docker internal 网络的端口映射在本环境不生成宿主监听，不能�
 
 ## 验收、退役和恢复
 
+### 仅更新Java节点jar
+
+先在开发机从合并修订`git archive <merge> services/execution-node`解出干净源码，
+按[离线构建方法](../../docs/agents/operator-cpms/output-contract-qa.md)执行Maven package。
+不依赖旧target目录；缓存未预置clean插件时无需下载，使用新的归档目录即可。
+
+1. 通过`dev-host exec 41 --allow-service-exec`读取现役`current`真实路径、节点挂载、
+   `runtime.env`和jar摘要，记录其他三容器ID、全部发布路由；以只读SQLite确认
+   `agent_runs`的issued/running为0。配置快照留服务宿主0700备份目录，不传公开仓库。
+2. 用`dev-host cp ... --artifact-sha256 ...`传合并jar到`node_artifacts`声明的releases下。
+   现场核摘要。`cp -a --reflink=auto <old-release> <new-release>`创建独立发布目录，
+   只替换其中`node/aiops-execution-node.jar`，文件644、项目服务身份所有。
+   其余旧发布文件按字节继承，不把当前源码树的其他变更带入运行栈。
+3. 备份原`runtime.env`与`current`目标。原子替换env中的`AIOPS_NODE_DIST`和
+   `AIOPS_NODE_BUILD`，保留其余字段、属主与0600权限；原子切换`current`。
+   执行下列定点重建（服务宿主已有Compose），不启动或重建其他服务：
+
+   ```bash
+   docker compose --project-name aiops-node-runtime \
+     --env-file /etc/aiops-node-runtime/runtime.env \
+     -f <new-release>/deploy/node-runtime/compose.yaml \
+     up -d --no-deps --pull never --force-recreate node
+   ```
+
+4. 轮询到节点8081实际HTTP响应，确认gRPC注册及无重启/OOM。现役0.22 CPU配额实测
+   启动约62秒，首次40秒窗口误判且已自动恢复；等待上限用240秒，并给远端执行360秒硬上限。
+   再从容器内核jar摘要、构建标识、服务身份；对比其他容器ID未变及路由逐字段相等。
+5. 失败时保存本次节点启动日志，恢复原env字节和`current`目标，用相同定点命令重建旧node，
+   等旧节点就绪。真实业务验收失败也执行该回滚路径。保留新旧目录与业务QA，不回滚数据库。
+
+浏览器验收必须轮询作业终态，不能固定睡35秒就判失败。Dify SSE不依赖Playwright
+`Response.text()`（真实返回过resource unavailable）；从页面正文与本次请求/时间关联QA取证。
+普通试运行返回202表示已接收，回读completed才成功。正常登录、原H5选单和只读CPMS核对见
+[运行手册](../../docs/agents/runtime-retirement-operations.md)，原始截图/会话只保存在0700私有证据目录。
+
 ### 既有 HTTP 回调迁移
 
 合并制品到位后先备份原回调配置与 `runtime.env`，准备证书并验证有效期、SAN及CA链，
