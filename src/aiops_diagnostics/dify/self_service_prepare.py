@@ -136,3 +136,45 @@ def create_app(console, workspace_id, job_id, request, profile, provider_id):
     ):
         raise SetupRefused("SETUP_IMPORT_PENDING")
     return result["app_id"]
+
+
+def knowledge(context, tenant_id):
+    from aiops_diagnostics.knowledge.kb_onboarding import (
+        KbAdminClient,
+        OnboardError,
+        decrypt_credential,
+        onboard_tenant,
+    )
+
+    settings = context.settings
+    if not all(
+        (
+            settings.kb_service_base_url,
+            settings.ragflow_credential_key,
+            settings.ragflow_embedding_base_url,
+            settings.ragflow_embedding_api_key,
+        )
+    ):
+        raise SetupRefused("SETUP_KNOWLEDGE_CONFIG_REQUIRED")
+    try:
+        kb = KbAdminClient(settings.kb_service_base_url)
+        outcome = onboard_tenant(
+            tenant_id=tenant_id,
+            environment=settings.environment,
+            store=context.store,
+            kb=kb,
+            credential_key=settings.ragflow_credential_key,
+            embedding_base_url=settings.ragflow_embedding_base_url,
+            embedding_api_key=settings.ragflow_embedding_api_key,
+            embedding_model=settings.ragflow_embedding_model,
+            tenant_domain=settings.ragflow_tenant_domain,
+        )
+        stored = context.store.get_ragflow_tenant(tenant_id, settings.environment)
+        kb.verify_login(
+            tenant_id=tenant_id,
+            password=decrypt_credential(stored["credential_ciphertext"], settings.ragflow_credential_key),
+        )
+        if not outcome.model_verified:
+            raise SetupRefused("SETUP_KNOWLEDGE_FAILED")
+    except OnboardError as exc:
+        raise SetupRefused("SETUP_KNOWLEDGE_FAILED") from exc

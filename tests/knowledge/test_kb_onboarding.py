@@ -169,7 +169,7 @@ def test_first_onboarding_registers_repairs_and_marks_verified(
 
     assert outcome.model_verified is True
     assert outcome.workspace_state == "ready"
-    assert kb_service.paths() == ["/kb/tenants", "/kb/tenants/repair"]
+    assert kb_service.paths() == ["/kb/tenants", "/kb/tenants/verify-password", "/kb/tenants/repair"]
     assert all(call["tenant"] == TENANT for call in kb_service.calls[:1])
     register = kb_service.calls[0]["body"]
     assert register["biz_tenant_id"] == TENANT
@@ -411,6 +411,7 @@ def test_model_check_failure_exits_one_with_the_step(monkeypatch, tmp_path):
     from aiops_diagnostics.knowledge.kb_onboarding import OnboardError
 
     runner = _runner(monkeypatch, tmp_path)
+    monkeypatch.setattr(KbAdminClient, "verify_login", lambda *_, **__: None)
     monkeypatch.setattr(
         "aiops_diagnostics.knowledge.kb_onboarding.KbAdminClient.register_tenant",
         lambda self, **kwargs: None,
@@ -494,15 +495,10 @@ def test_a_bad_credential_key_fails_before_any_upstream_write(tmp_path: Path, kb
     assert kb_service.calls == [], "no upstream write may happen before the key is known good"
 
 
-def test_an_existing_upstream_account_is_rotated_not_registered(
+def test_an_existing_upstream_account_reuses_stored_password(
     tmp_path: Path, kb_service: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """kb-service 的 `create_tenant` 见到已有行就 `return dict(row)`，**不改密码**。
-
-    所以"注册成功"是假的：我们记下一把上游不认的密码，直到第一次登录才炸
-    （41 真机第三轮 `Email and password do not match!`）。已有账号的正确动作是
-    **带上旧密码改密码** —— 只有这样才能保证"我们记的那把 = 上游那把"。
-    """
+    """注册重试确认旧账号和同一密码；密码轮换属于独立操作。"""
     store = _store(tmp_path)
     store.record_ragflow_tenant(
         TENANT,
@@ -524,12 +520,11 @@ def test_an_existing_upstream_account_is_rotated_not_registered(
         ensure_workspace=lambda: _workspace(),
     )
 
-    assert "/kb/tenants" not in kb_service.paths(), "已有账号不能再走注册（它不会改密码）"
-    assert "/kb/tenants/rotate" in kb_service.paths()
-    rotate = next(c for c in kb_service.calls if c["path"] == "/kb/tenants/rotate")
-    assert rotate["body"]["old_password"] == "old-password", "必须用我们记的那把旧密码去改"
+    assert "/kb/tenants/rotate" not in kb_service.paths(), "重试不应轮换有效密码"
+    registration = next(c for c in kb_service.calls if c["path"] == "/kb/tenants")
+    assert registration["body"]["password"] == "old-password"
     row = store.get_ragflow_tenant(TENANT, ENVIRONMENT)
-    assert decrypt_credential(row["credential_ciphertext"], CREDENTIAL_KEY) == rotate["body"]["new_password"]
+    assert decrypt_credential(row["credential_ciphertext"], CREDENTIAL_KEY) == "old-password"
 
 
 def test_an_existing_account_whose_password_we_cannot_read_is_refused(
@@ -695,3 +690,39 @@ def test_adopt_rejects_an_empty_password_before_calling_upstream(tmp_path, kb_se
 
     assert caught.value.code == "CREDENTIAL_EMPTY"
     assert kb_service.paths() == []
+
+
+def test_registration_response_loss_reuses_persisted_password(tmp_path, kb_service, monkeypatch):
+    store = _store(tmp_path)
+    monkeypatch.setattr("aiops_diagnostics.knowledge.kb_onboarding.verify_embedding", lambda **_: 3072)
+    client = KbAdminClient(kb_service.base)
+    register = client.register_tenant
+    passwords = []
+
+    def lose_response(**kwargs):
+        passwords.append(kwargs["password"])
+        register(**kwargs)
+        if len(passwords) == 1:
+            raise OnboardError("KB_REGISTER_FAILED", "response lost", step="ragflow-tenant")
+
+    monkeypatch.setattr(client, "register_tenant", lose_response)
+    kwargs = dict(
+        tenant_id=TENANT,
+        environment=ENVIRONMENT,
+        store=store,
+        kb=client,
+        credential_key=CREDENTIAL_KEY,
+        embedding_base_url="https://embed.example/v1",
+        embedding_api_key="fixture",
+    )
+    with pytest.raises(OnboardError):
+        onboard_tenant(**kwargs)
+    first = store.get_ragflow_tenant(TENANT, ENVIRONMENT)
+    assert first and not first["model_checked_at"]
+    assert onboard_tenant(**kwargs).model_verified
+    assert len(passwords) == 2 and passwords[0] == passwords[1]
+    assert (
+        store.get_ragflow_tenant(TENANT, ENVIRONMENT)["credential_ciphertext"]
+        == first["credential_ciphertext"]
+    )
+    assert "/kb/tenants/rotate" not in kb_service.paths()

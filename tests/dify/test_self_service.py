@@ -20,6 +20,7 @@ from aiops_diagnostics.publication.agent_manifest import (
 )
 
 REAL_DEPENDENCIES = prepare.dependencies
+REAL_KNOWLEDGE = prepare.knowledge
 
 
 @pytest.fixture
@@ -75,6 +76,7 @@ def managed(operator, monkeypatch, tmp_path):
         ws.mark_created(tenant, settings.environment, "workspace-b")
         return "workspace-b"
 
+    monkeypatch.setattr(prepare, "knowledge", lambda *_: None)
     monkeypatch.setattr(prepare, "workspace", workspace)
     monkeypatch.setattr(prepare, "dependencies", lambda *_: "provider-id")
     mc = {
@@ -176,7 +178,7 @@ def test_failed_dependency_reuses_job_and_workspace(managed, monkeypatch):
 def test_cross_tenant_create_requires_platform(managed, monkeypatch):
     _, service, _, _, calls = managed
     monkeypatch.setattr(auth, "tenants", lambda *_: [])
-    with pytest.raises(auth.SetupRefused, match="TENANT_FORBIDDEN"):
+    with pytest.raises(auth.SetupRefused, match="PLATFORM_PERMISSION_REQUIRED"):
         service.create(auth.ManagerIdentity("tenant-user", "TENANT-A", False, "private"), request())
     assert calls == []
 
@@ -371,6 +373,7 @@ def test_bridge_real_http_preserves_identity_and_rejects_cross_origin(monkeypatc
             json={"action": "status", "app_id": APP},
         )
         assert response.status_code == 200, response.text
+        assert seen[-1][0].endswith("/v1/dify/management/status")
         assert seen[-1][1]["headers"]["X-AIOps-Console-Session"] == "session"
         count = len(seen)
         response = httpx.post(
@@ -572,3 +575,168 @@ def test_retry_after_lost_completion_does_not_restore_retracted_route(managed, m
     service.run(job["id"], "normal-session")
     assert public_job(service.store.get(job["id"]))["state"] == "completed"
     assert service.route("TENANT-B") == retracted
+
+
+def test_setup_cannot_complete_without_knowledge_space(managed, monkeypatch):
+    _, service, caller, _, _ = managed
+
+    def unavailable(*_):
+        raise auth.SetupRefused("SETUP_KNOWLEDGE_FAILED")
+
+    monkeypatch.setattr(prepare, "knowledge", unavailable, raising=False)
+    job = service.create(caller, request())
+    service.run(job["id"], "normal-session")
+    result = public_job(service.store.get(job["id"]))
+    assert result["state"] == "failed" and result["step"] == "knowledge"
+    assert service.route("TENANT-B") is None
+
+
+def test_legacy_completed_setup_becomes_retryable_without_losing_app(managed):
+    _, service, caller, _, _ = managed
+    job = service.create(caller, request())
+    service.run(job["id"], "normal-session")
+    before = public_job(service.store.get(job["id"]))
+    with service.store.connection() as db:
+        db.execute(
+            "UPDATE operator_setup_jobs SET resources_json=json_remove(resources_json,'$.knowledge_ready') "
+            "WHERE id=?",
+            (job["id"],),
+        )
+    service.store.recover()
+    result = public_job(service.store.get(job["id"]))
+    assert result["state"] == "failed" and result["step"] == "knowledge"
+    assert result["app_id"] == before["app_id"]
+    service.run(job["id"], "normal-session")
+    assert public_job(service.store.get(job["id"]))["state"] == "completed"
+
+
+def test_workspace_access_requires_own_tenant_or_platform_directory(managed):
+    f, service, caller, _, _ = managed
+    from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
+
+    ws = DifyWorkspaces(f["settings"].database_file)
+    ws.claim("TENANT-B", "verify", owner="test", lease_seconds=60)
+    ws.mark_created("TENANT-B", "verify", "workspace-b")
+    assert service.workspace(caller, "workspace-b") == "TENANT-B"
+    tenant = auth.ManagerIdentity("a", "TENANT-A", False, "token")
+    assert service.workspace(tenant, "workspace-a") == "TENANT-A"
+    with pytest.raises(auth.SetupRefused):
+        service.workspace(tenant, "workspace-b")
+
+
+def test_platform_member_join_rejects_another_dify_account(managed, monkeypatch):
+    f, _, caller, _, _ = managed
+    from aiops_diagnostics.dify import dify_console_publish, dify_tenant_access
+
+    f["settings"].dify_publish_api_key = "management-key"
+    monkeypatch.setattr(f["ctx"].self_service, "workspace", lambda *_: "TENANT-B")
+    monkeypatch.setattr(
+        dify_console_publish,
+        "_request",
+        lambda *_, **__: (
+            200,
+            {"company_user_id": caller.user_id, "dify_account_id": "aaaaaaaa-bbbb-cccc-dddd-aaaaaaaaaaaa"},
+        ),
+    )
+    joined = []
+    monkeypatch.setattr(dify_tenant_access, "grant_tenant_access", lambda **kw: joined.append(kw))
+    payload = {
+        "workspace_id": APP,
+        "account_id": "aaaaaaaa-bbbb-cccc-dddd-bbbbbbbbbbbb",
+        "email": "fixture@example.invalid",
+    }
+    headers = {"Authorization": "Bearer management-key", "X-AIOps-Console-Session": "normal-session"}
+    result = f["client"].post("/v1/dify/management/workspace/member", json=payload, headers=headers)
+    assert result.status_code == 403 and not joined
+    payload["account_id"] = "aaaaaaaa-bbbb-cccc-dddd-aaaaaaaaaaaa"
+    assert (
+        f["client"].post("/v1/dify/management/workspace/member", json=payload, headers=headers).status_code
+        == 200
+    )
+    assert joined[0]["tenant_id"] == "TENANT-B" and joined[0]["account_id"] == payload["account_id"]
+
+
+def test_knowledge_step_creates_verified_tenant_with_persistent_credential(managed, monkeypatch):
+    from aiops_diagnostics.knowledge import kb_onboarding
+
+    f, service, _, _, _ = managed
+    settings = f["settings"]
+    settings.kb_service_base_url = "https://kb.example"
+    settings.ragflow_credential_key = "x" * 32
+    settings.ragflow_embedding_base_url = "https://model.example/v1"
+    settings.ragflow_embedding_api_key = "synthetic"
+    seen = []
+    client = SimpleNamespace(
+        register_tenant=lambda **kw: seen.append(kw),
+        repair_models=lambda _: {},
+        verify_login=lambda **_: None,
+    )
+    monkeypatch.setattr(kb_onboarding, "KbAdminClient", lambda _: client)
+    monkeypatch.setattr(kb_onboarding, "verify_embedding", lambda **_: 3072)
+    # fixture为其余流程隔离过knowledge，直接使用模块原始函数。
+    REAL_KNOWLEDGE(service.context, "TENANT-B")
+    REAL_KNOWLEDGE(service.context, "TENANT-B")
+    row = f["ctx"].store.get_ragflow_tenant("TENANT-B", "verify")
+    assert row["model_checked_at"] and len(seen) == 1
+    assert seen[0]["tenant_id"] == "TENANT-B"
+    assert (
+        kb_onboarding.decrypt_credential(row["credential_ciphertext"], settings.ragflow_credential_key)
+        == seen[0]["password"]
+    )
+
+
+def test_workspace_bridge_uses_current_profile_and_switches_only_after_authorization(monkeypatch):
+    import threading
+
+    import httpx
+
+    from aiops_diagnostics.dify import dify_console_publish as bridge
+
+    seen = []
+
+    def upstream(url, **kw):
+        seen.append((url, kw))
+        if url.endswith("/summary"):
+            return 200, {"id": "platform", "role": "editor"}
+        if url.endswith("/management/workspace"):
+            return 200, {"workspace_id": APP, "platform": True}
+        if url.endswith("/account/profile"):
+            return 200, {"id": "account", "email": "current@example.invalid"}
+        if url.endswith("/workspaces"):
+            return 200, {"workspaces": []}
+        if url.endswith("/workspace/member"):
+            return 200, {"workspace_id": APP}
+        if url.endswith("/workspaces/switch"):
+            return 200, {"result": "success"}
+        raise AssertionError(url)
+
+    monkeypatch.setattr(bridge, "_request", upstream)
+    server = bridge.make_server(
+        bridge.BridgeSettings(
+            "127.0.0.1", 0, "http://dify", "http://gateway", "key", "https://console.example", "platform"
+        )
+    )
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        r = httpx.post(
+            f"http://127.0.0.1:{server.server_port}/__aiops/manage",
+            json={"action": "workspace", "workspace_id": APP},
+            headers={
+                "Origin": "https://console.example",
+                "Referer": "https://console.example/apps",
+                "Cookie": "access_token=session; csrf_token=csrf",
+                "X-CSRF-Token": "csrf",
+            },
+        )
+        assert r.status_code == 200, r.text
+        join = next(kw for url, kw in seen if url.endswith("/workspace/member"))
+        assert join["body"] == {
+            "workspace_id": APP,
+            "account_id": "account",
+            "email": "current@example.invalid",
+        }
+        assert seen[-1][0].endswith("/workspaces/switch")
+        assert seen[-1][1]["body"] == {"tenant_id": APP}
+    finally:
+        server.shutdown()
+        server.server_close()

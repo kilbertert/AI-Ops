@@ -83,6 +83,8 @@ def tenants(context, caller):
 
 
 def require_target(context, caller, tenant_id):
+    if not caller.platform:
+        raise SetupRefused("SETUP_PLATFORM_PERMISSION_REQUIRED")
     found = next((t for t in tenants(context, caller) if t["id"] == tenant_id), None)
     if found is None:
         raise SetupRefused("SETUP_TENANT_FORBIDDEN")

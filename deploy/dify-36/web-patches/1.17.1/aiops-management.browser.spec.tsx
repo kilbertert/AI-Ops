@@ -96,3 +96,28 @@ it('shows the model default when Java has no explicit output cap', async () => {
   )
   await expect.element(screen.getByText('输出上限：模型默认', { exact: false })).toBeVisible()
 })
+
+it('requires authorization before entering a customer workspace', async () => {
+  const requests: Record<string, unknown>[] = []
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (_url, options) => {
+      const body = JSON.parse(options.body)
+      requests.push(body)
+      if (body.action === 'catalogue')
+        return Response.json({
+          platform: true,
+          tenants: [],
+          sources: [],
+          operations: [],
+          workspaces: [{ workspace_id: 'ws-customer', tenant_id: 'customer', name: '客户甲' }],
+        })
+      return Response.json({ error: { code: 'SETUP_TENANT_FORBIDDEN' } }, { status: 403 })
+    }),
+  )
+  const screen = await render(<TenantSetup />)
+  await screen.getByRole('combobox', { name: '已开通客户' }).selectOptions('ws-customer')
+  await screen.getByRole('button', { name: '进入工作区', exact: true }).click()
+  await expect.element(screen.getByRole('alert')).toHaveTextContent('当前账号无权管理这个客户')
+  expect(requests.at(-1)).toEqual({ action: 'workspace', workspace_id: 'ws-customer' })
+})
