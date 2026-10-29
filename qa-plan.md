@@ -742,7 +742,7 @@ Java BFF 透传与前端 blocks[] 渲染属 #171/#173 及真实媒体验收范�
 - 有序动作：对枚举出的每条路由同法调用一次。
 - 预期结果：**每一条**都是 503 `ACCESS_TOKEN_VALIDATION_UNAVAILABLE` 且 `retryable: true`；无误报 401。
 - 清理：临时目录自动回收。
-- 结果：PASS（2026-09-30，`tests/test_caller_auth_mapping.py`）。
+- 结果：PASS（2026-09-30，`tests/identity/test_caller_auth_mapping.py`）。
 
 ### CALLER-02 映射只有一处（源码级）
 
@@ -1339,7 +1339,7 @@ PRD #428 的收口验收，**分两轨且不得混淆**。负向 + 回归轨道�
 | OP-ACCEPT-08 | 本地 dev | 三个站点：租户自有（无 `partner_b_id`）、悬空引用（`partner_b_id` 指向不存在的账号）、账号类型不符；后两者的 `partner_b_id` **命名调用者本人**。站点映射走真实 `MySQLSource` | 解析该运营商的站点集合，再查三处的订单 | PASS：集合只含租户自有站点；另两处的订单被拒（即使只挂在本人名下）。`ch_site.partner_b_id` 不构成授权依据，判据只由「调用者持有该店铺」决定 | `...::test_a_sites_partner_b_id_never_widens_the_operators_visibility` |
 | OP-ACCEPT-09 | 本地 dev | 消费者会话（无 B 端账号）；同时发布 consumer 与 operator 两个入口 | 读 consumer 动作列表；经 consumer 入口查本人订单与他人订单 | PASS：列表仍是消费者自己的三个动作；本人订单 202 `diagnosis`，他人订单 404 `ORDER_NOT_FOUND`——运营商维度没有把消费者入口放宽 | `...::test_the_consumer_entry_keeps_its_own_actions`、`...::test_the_consumer_entry_keeps_its_own_order_visibility` |
 | OP-ACCEPT-10 | 本地 dev | 对照组：集合内、挂在别人名下的订单 | 点击「订单检测」并带入该订单号 | PASS：202 `diagnosis`（`type=diagnosis`、`status=queued`）。证明拒绝不是「全部拒掉」，范围判据真的在放行该放行的那一单 | `tests/test_operator_entry_actions.py::test_clicked_order_diagnosis_with_a_visible_order_starts_the_diagnosis`（#427） |
-| OP-ACCEPT-11 | 本地 dev | 参数化的解析失败：上游不可达、响应形状不可识别、店铺/站点数量超界、充电库不可用、范围 ID 不可用 | 构造会话身份 | PASS：一律空集合 + `can_access=False` + 一行 `operator_scope_unavailable code=…`；不把授权故障变成 500，也不放行；日志不含 C/B 端 id、租户与凭据 | `tests/test_operator_order_authorization.py::test_every_operator_scope_failure_denies_instead_of_raising`（#426） |
+| OP-ACCEPT-11 | 本地 dev | 参数化的解析失败：上游不可达、响应形状不可识别、店铺/站点数量超界、充电库不可用、范围 ID 不可用 | 构造会话身份 | PASS：一律空集合 + `can_access=False` + 一行 `operator_scope_unavailable code=…`；不把授权故障变成 500，也不放行；日志不含 C/B 端 id、租户与凭据 | `tests/identity/test_operator_order_authorization.py::test_every_operator_scope_failure_denies_instead_of_raising`（#426） |
 | OP-ACCEPT-12 | 本地 dev | 参数化的实现退化（变异验证）：把运营商范围回落成 `self`；把店铺 id 直接当站点 id | 重跑上述用例集 | PASS：分别有 6 项与 12 项转红——证明负向断言不是恒真，退化会自己暴露 | 见 `docs/validation.md`「PRD #423 子票 #428」 |
 
 ### 二、正向轨道（待业务条件，本轮未执行）
@@ -1381,9 +1381,9 @@ PRD #428 的收口验收，**分两轨且不得混淆**。负向 + 回归轨道�
 
 ```text
 uv run pytest tests/test_assistant_api.py tests/test_conversation_api.py \
-  tests/test_shortcut_api.py tests/test_caller_auth.py \
-  tests/test_order_visibility.py tests/test_query_scope.py tests/test_scope_context.py \
-  tests/test_scope_context_http.py tests/test_scope_context_ds_fallback.py \
+  tests/test_shortcut_api.py tests/identity/test_caller_auth.py \
+  tests/identity/test_order_visibility.py tests/identity/test_query_scope.py tests/identity/test_scope_context.py \
+  tests/identity/test_scope_context_http.py tests/identity/test_scope_context_ds_fallback.py \
   tests/test_cross_entry_visibility.py tests/test_faq.py tests/test_routing.py \
   tests/test_mysql_scope.py
 ```
@@ -1421,7 +1421,7 @@ uv run pytest tests/test_assistant_api.py tests/test_conversation_api.py \
 
 | ID | 环境 | 前置 | 数据 | 动作 | 预期 | 清理 | 证据 |
 |---|---|---|---|---|---|---|---|
-| CT-ACCEPT-01 | 本地 dev | 校验入口替身返回带身份的应答 | 一条管家端令牌（`id`/`user_id`/`tenant_id`/`shop_ids`） | 经解析器解析 | B 端主体、C 端用户、租户与站点集合正确；产生范围指纹 | 无 | `tests/test_company_token_auth.py::test_a_valid_token_yields_the_operator_identity_and_site_scope` |
+| CT-ACCEPT-01 | 本地 dev | 校验入口替身返回带身份的应答 | 一条管家端令牌（`id`/`user_id`/`tenant_id`/`shop_ids`） | 经解析器解析 | B 端主体、C 端用户、租户与站点集合正确；产生范围指纹 | 无 | `tests/identity/test_company_token_auth.py::test_a_valid_token_yields_the_operator_identity_and_site_scope` |
 | CT-ACCEPT-02 | 本地 dev | 同上 | 店铺集合映射到两个站点 | 解析站点集合 | 站点经归属映射得到，**不把店铺 id 当站点 id** | 无 | `...::test_shop_ids_are_mapped_through_the_ownership_table_not_used_directly` |
 | CT-ACCEPT-03 | 本地 dev | 同上 | 令牌同时带 `tenant_id` 与 `tenant_ids` | 解析租户 | 取 `tenant_id`；可切换的 `tenant_ids` 不影响范围 | 无 | `...::test_the_tenant_comes_from_tenant_id_not_the_switchable_tenant_ids` |
 | CT-ACCEPT-04 | 本地 dev | 公司以「拒绝」形态应答，且**身份字段齐全** | 拒绝体（带拒绝标记） | 解析 | 拒绝；**不发起任何范围查询** | 无 | `...::test_the_company_refusal_is_judged_by_the_envelope_not_by_its_identity_fields` |
@@ -1468,7 +1468,7 @@ uv run pytest tests/test_assistant_api.py tests/test_conversation_api.py \
 
 | ID | 环境 | 前置 | 数据 | 动作 | 预期 | 清理 | 证据 |
 |---|---|---|---|---|---|---|---|
-| CT-GATE-01 | 本地 dev | 来源密钥已配置 | 带正确密钥的请求 | 经助手入口请求 | 走公司令牌链路：解析出 B 端身份与运营商站点集合（`202`） | 无 | `tests/test_company_token_auth.py::test_the_correct_source_key_routes_to_the_company_path`、`...::test_the_source_key_gate_decides_the_chain_through_the_real_app` |
+| CT-GATE-01 | 本地 dev | 来源密钥已配置 | 带正确密钥的请求 | 经助手入口请求 | 走公司令牌链路：解析出 B 端身份与运营商站点集合（`202`） | 无 | `tests/identity/test_company_token_auth.py::test_the_correct_source_key_routes_to_the_company_path`、`...::test_the_source_key_gate_decides_the_chain_through_the_real_app` |
 | CT-GATE-02 | 本地 dev | 来源密钥已配置 | 不带 / 带错 / 前缀 / 大小写 / 首尾空白 各种值 | 经助手入口请求 | 一律走既有链，且业务入口与会话值**原样透传**；公司解析器一次都没被调用 | 无 | `...::test_a_missing_or_wrong_source_key_falls_back_to_the_existing_chain`、`...::test_a_near_miss_source_key_is_not_accepted` |
 | CT-GATE-03 | 本地 dev | 来源密钥已配置而请求不带该头 | 既有客户端的请求形状（只有服务令牌 + 会话） | 经助手入口请求 | 行为一个字不变：既有链照常解析并放行（`200`） | 无 | `...::test_the_gate_is_inert_when_no_header_is_presented`、`...::test_the_source_key_gate_decides_the_chain_through_the_real_app` |
 | CT-GATE-04 | 本地 dev | 来源密钥缺省为空 | 带「正确」密钥的请求 | 经助手入口请求 | **新链路整体不参与**：按既有链被处理或拒绝，**不放行** | 无 | `...::test_the_company_path_is_not_built_without_the_source_key` |
@@ -1736,7 +1736,7 @@ uv run pytest tests/test_assistant_api.py tests/test_conversation_api.py \
   **未上 41** —— 该分支只改网关的回答面，可在部署窗口按本 SOP 复跑。
 - **前置**：`TestClient(create_gateway_app(...))`，授权器为测试替身（只有 `allowed_orders` 内的订单算拥有）。
 - **测试数据**：一个不在 `allowed_orders` 里的真实格式订单号 + 一个不存在的同格式订单号。
-- **动作**：`uv run pytest tests/test_assistant_api.py tests/test_operator_order_authorization.py -q`
+- **动作**：`uv run pytest tests/test_assistant_api.py tests/identity/test_operator_order_authorization.py -q`
 - **预期**：两次提问都返回 `200 type=clarification`、`missing_fields: []`、
   `message` 为该语言的 `not_yours`；除 `question` 外两响应逐字相同；不创建诊断作业。
 - **结果：PASS** —— 全量 `pytest` 通过。

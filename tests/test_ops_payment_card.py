@@ -16,6 +16,7 @@ from typing import Any
 
 from aiops_diagnostics.answer_language import answer_chinese_leak
 from aiops_diagnostics.config import Settings
+from aiops_diagnostics.identity.query_scope import QueryScope
 from aiops_diagnostics.ops_analysis import (
     REASON_NO_ORDERS,
     REASON_NO_PAYMENT_FAILURE_SOURCE,
@@ -24,7 +25,6 @@ from aiops_diagnostics.ops_analysis import (
     PaymentAggregate,
     build_payment_contract,
 )
-from aiops_diagnostics.query_scope import QueryScope
 from aiops_diagnostics.sources import MySQLSource
 
 WINDOW_START = datetime(2026, 10, 1, tzinfo=UTC)

@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 import pytest
 
 from aiops_diagnostics.config import UpmsSettings
-from aiops_diagnostics.scope_context import (
+from aiops_diagnostics.identity.scope_context import (
     SCOPE_ERROR_AUTH_FAILED,
     SCOPE_ERROR_UPMS_UNAVAILABLE,
     SCOPE_TYPE_ALL,

@@ -287,7 +287,7 @@ class _GatewaySettings:
 
 def _caller():
     """用**真实的 `ScopeContext`**，不手造属性形状。"""
-    from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
+    from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
     subject = SubjectRecord(b_user_id=None, c_user_id=C_USER, tenant_id=TENANT)
     return ScopeContext.build(

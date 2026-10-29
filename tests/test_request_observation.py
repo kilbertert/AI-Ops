@@ -28,11 +28,11 @@ from fastapi.testclient import TestClient
 
 from aiops_diagnostics import gateway_api
 from aiops_diagnostics import request_observation as ro
-from aiops_diagnostics.caller_auth import CallerAuthError
 from aiops_diagnostics.faq import FAQCatalog, PlatformIdentityResolver, PlatformRoleRecord
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_store import GatewayStore
-from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
+from aiops_diagnostics.identity.caller_auth import CallerAuthError
+from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
 ORDER = "2096164064667852801"
 HEADERS = {"Authorization": "Bearer verified", "X-Business-Entry": "consumer"}

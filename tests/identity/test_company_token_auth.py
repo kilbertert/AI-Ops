@@ -5,7 +5,7 @@
 
 两条纪律沿用既有先例：
 
-- **形状替身**（``_Response``）照 ``tests/test_caller_auth.py``：公司 check_token 的成功体是
+- **形状替身**（``_Response``）照 ``tests/identity/test_caller_auth.py``：公司 check_token 的成功体是
   **裸身份映射**（没有 ``code``/``data`` 信封）、失败体是 HTTP 200 + ``{"code":1,...}``，
   与 UPMS 的 ``{code:0,data:...}`` 信封不是一回事，因此不重用 ``FakeUpmsTransport``。
 - **范围替身**照 ``tests/operator_support.py`` 的纪律：替身内部走**真实**的
@@ -41,21 +41,21 @@ from operator_support import (
     order_queries,
 )
 
-from aiops_diagnostics.caller_auth import (
+from aiops_diagnostics.config import Settings
+from aiops_diagnostics.gateway_config import GatewayServerSettings
+from aiops_diagnostics.identity.caller_auth import (
     CALLER_AUTH_INVALID,
     CALLER_AUTH_UNAVAILABLE,
     CallerAuthError,
     ScopedOrderAuthorizer,
     SourceKeyCallerResolver,
 )
-from aiops_diagnostics.company_token_auth import (
+from aiops_diagnostics.identity.company_token_auth import (
     CompanyTokenCallerResolver,
     CompanyTokenSettings,
 )
-from aiops_diagnostics.config import Settings
-from aiops_diagnostics.gateway_config import GatewayServerSettings
-from aiops_diagnostics.query_scope import static_site_mapper
-from aiops_diagnostics.scope_context import (
+from aiops_diagnostics.identity.query_scope import static_site_mapper
+from aiops_diagnostics.identity.scope_context import (
     SCOPE_TYPE_ALL,
     SCOPE_TYPE_ORGAN,
     SCOPE_TYPE_SELF,
@@ -464,7 +464,7 @@ def test_a_non_json_body_is_a_retryable_upstream_fault(monkeypatch: pytest.Monke
 def test_every_scope_failure_denies_instead_of_raising(
     monkeypatch: pytest.MonkeyPatch, error: Exception, caplog: pytest.LogCaptureFixture
 ) -> None:
-    with caplog.at_level(logging.INFO, logger="aiops_diagnostics.company_token_auth"):
+    with caplog.at_level(logging.INFO, logger="aiops_diagnostics.identity.company_token_auth"):
         context = _resolve(monkeypatch, mapper=_Mapper(error=error))
 
     assert context.data_scope.type == SCOPE_TYPE_ORGAN
@@ -478,7 +478,7 @@ def test_the_two_empty_scope_causes_are_still_logged_apart(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """空集合的成因沿用共享解析的那两组原因：账号漏登记 vs 已登记店铺无站点。"""
-    with caplog.at_level(logging.INFO, logger="aiops_diagnostics.query_scope"):
+    with caplog.at_level(logging.INFO, logger="aiops_diagnostics.identity.query_scope"):
         _resolve(monkeypatch, payload={**CLAIMS, "shop_ids": []})
         caplog.clear()
         _resolve(monkeypatch, mapper=_Mapper({}))
@@ -547,8 +547,8 @@ SOURCE_KEY = "source-key-0123456789abcdef"
 
 def test_the_company_path_is_not_built_while_all_keys_are_empty(tmp_path: Path) -> None:
     """全空 ⇒ 与启用前同型（UPMS 兜底），这是「先合不启用」的机制保证（#443/#444 同一条）。"""
-    from aiops_diagnostics.caller_auth import UpmsCallerResolver
     from aiops_diagnostics.gateway_api import _caller_resolver
+    from aiops_diagnostics.identity.caller_auth import UpmsCallerResolver
 
     settings = _gateway_settings(tmp_path, "AIOPS_UPMS_BASE_URL=https://upms.example.test\n")
 
@@ -562,8 +562,8 @@ def test_the_company_path_is_not_built_without_the_source_key(tmp_path: Path) ->
     **没有**配置（41 之外的环境），而一旦它配置上，落在下面的会话那一级就会直接 return ——
     把这条断言与下一条放在一起读，才是本票真正的形状。
     """
-    from aiops_diagnostics.caller_auth import DisabledCallerResolver
     from aiops_diagnostics.gateway_api import _caller_resolver
+    from aiops_diagnostics.identity.caller_auth import DisabledCallerResolver
 
     resolver = _caller_resolver(_gateway_settings(tmp_path, **COMPANY_KEYS))
 
@@ -573,8 +573,8 @@ def test_the_company_path_is_not_built_without_the_source_key(tmp_path: Path) ->
 
 
 def test_the_source_key_gate_is_built_once_key_and_company_path_are_configured(tmp_path: Path) -> None:
-    from aiops_diagnostics.caller_auth import SourceKeyCallerResolver
     from aiops_diagnostics.gateway_api import _caller_resolver
+    from aiops_diagnostics.identity.caller_auth import SourceKeyCallerResolver
 
     resolver = _caller_resolver(_gateway_settings(tmp_path, company_source_key=SOURCE_KEY, **COMPANY_KEYS))
 
@@ -588,9 +588,9 @@ def test_the_gate_sits_in_front_of_the_session_level(tmp_path: Path) -> None:
     的请求会在第一级就被 401 —— 密钥配了也白配。因此断言两层：
     ``_fallback`` 仍是会话解析器（既有链没被动过），而**外层**是门。
     """
-    from aiops_diagnostics.caller_auth import SourceKeyCallerResolver
     from aiops_diagnostics.gateway_api import _caller_resolver
-    from aiops_diagnostics.third_session_auth import RedisThirdSessionResolver
+    from aiops_diagnostics.identity.caller_auth import SourceKeyCallerResolver
+    from aiops_diagnostics.identity.third_session_auth import RedisThirdSessionResolver
 
     resolver = _caller_resolver(
         _gateway_settings(
@@ -609,8 +609,8 @@ def test_the_gate_sits_in_front_of_the_session_level(tmp_path: Path) -> None:
 
 def test_the_gate_wraps_the_existing_chain_without_changing_its_choice(tmp_path: Path) -> None:
     """既有链的选择结果零变化：门只是**包在外面**，未命中密钥时原样委派。"""
-    from aiops_diagnostics.caller_auth import SourceKeyCallerResolver, UpmsCallerResolver
     from aiops_diagnostics.gateway_api import _caller_resolver
+    from aiops_diagnostics.identity.caller_auth import SourceKeyCallerResolver, UpmsCallerResolver
 
     settings = _gateway_settings(
         tmp_path,
@@ -921,7 +921,7 @@ def test_the_source_key_gate_decides_the_chain_through_the_real_app(
     # 唯一被替身顶掉的**内部**依赖：站点归属映射要连充电库。这条用例的对象是「header → 门 →
     # 哪条链」，不是映射本身（映射规则由 1–6 节覆盖）。顶在模块级而不是构造参数上，是因为
     # 解析器由真实配置链构造，没有注入点。
-    monkeypatch.setattr("aiops_diagnostics.company_token_auth.mysql_site_mapper", _Mapper())
+    monkeypatch.setattr("aiops_diagnostics.identity.company_token_auth.mysql_site_mapper", _Mapper())
 
     class _Redis:
         """既有链要的会话值（与 ``operator_support._Redis`` 同一形状）。"""
@@ -929,7 +929,7 @@ def test_the_source_key_gate_decides_the_chain_through_the_real_app(
         def get(self, _key: str) -> bytes:
             return java_session({"userId": C_USER_ID, "tenantId": TENANT_ID})
 
-    monkeypatch.setattr("aiops_diagnostics.third_session_auth.redis.Redis", lambda **_: _Redis())
+    monkeypatch.setattr("aiops_diagnostics.identity.third_session_auth.redis.Redis", lambda **_: _Redis())
     settings = _gateway_settings(
         tmp_path,
         "AIOPS_REDIS_PASSWORD=redis-secret\n",
@@ -1478,7 +1478,7 @@ def test_permission_codes_are_carried_into_the_scope_context(monkeypatch) -> Non
 
     不给这个映射，知识库四条路由与 ``/v1/agents`` 对真实运营永远是 403。
     """
-    from aiops_diagnostics.company_permissions import roles_from_permissions
+    from aiops_diagnostics.identity.company_permissions import roles_from_permissions
 
     roles = roles_from_permissions(["aiops:agent:edit"])
     context = _resolve_with_roles(monkeypatch, roles)
@@ -1493,7 +1493,7 @@ def test_no_permission_source_keeps_the_empty_role_set(monkeypatch) -> None:
 
 def test_publish_is_not_implied_by_edit(monkeypatch) -> None:
     """编辑权不蕴含发布权：两个码在公司里是分开建的两行菜单（ADR-0029）。"""
-    from aiops_diagnostics.company_permissions import roles_from_permissions
+    from aiops_diagnostics.identity.company_permissions import roles_from_permissions
 
     roles = roles_from_permissions(["aiops:agent:edit"])
     assert "ROLE_AGENT_PUBLISHER" not in roles
@@ -1502,8 +1502,8 @@ def test_publish_is_not_implied_by_edit(monkeypatch) -> None:
 
 def test_an_upstream_failure_yields_no_roles_rather_than_an_exception() -> None:
     """公司端点不可达 ⇒ 空角色集（fail closed），不是 500，也不是放行。"""
-    from aiops_diagnostics.company_permissions import CompanyPermissionSource
     from aiops_diagnostics.config import UpmsSettings
+    from aiops_diagnostics.identity.company_permissions import CompanyPermissionSource
 
     def boom(_settings, _token):
         raise OSError("upstream down")
@@ -1514,8 +1514,8 @@ def test_an_upstream_failure_yields_no_roles_rather_than_an_exception() -> None:
 
 def test_the_permission_lookup_is_memoised_per_token() -> None:
     """按**令牌**缓存：撤权最多拖到该令牌过期，而不是拖到用户缓存过期。"""
-    from aiops_diagnostics.company_permissions import CompanyPermissionSource
     from aiops_diagnostics.config import UpmsSettings
+    from aiops_diagnostics.identity.company_permissions import CompanyPermissionSource
 
     calls: list[str] = []
 
@@ -1532,8 +1532,8 @@ def test_the_permission_lookup_is_memoised_per_token() -> None:
 
 
 def test_an_unconfigured_upms_never_calls_the_upstream() -> None:
-    from aiops_diagnostics.company_permissions import CompanyPermissionSource
     from aiops_diagnostics.config import UpmsSettings
+    from aiops_diagnostics.identity.company_permissions import CompanyPermissionSource
 
     def fetcher(_settings, _token):  # pragma: no cover - 不应被调用
         raise AssertionError("must not call upstream without a base URL")

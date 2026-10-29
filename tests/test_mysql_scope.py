@@ -5,13 +5,13 @@ from typing import Any
 import pytest
 
 from aiops_diagnostics.config import Settings
-from aiops_diagnostics.order_visibility import (
+from aiops_diagnostics.identity.order_visibility import (
     TenantVisibility,
     VisibilityProfile,
     normalize_tenant,
     visible_orders,
 )
-from aiops_diagnostics.query_scope import QueryScope, ScopeError
+from aiops_diagnostics.identity.query_scope import QueryScope, ScopeError
 from aiops_diagnostics.sources import SITE_SCOPE_MAX_ROWS, MySQLSource
 
 TENANT = "TENANT-A"

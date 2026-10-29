@@ -36,7 +36,7 @@ def _runtime(tmp_path: Path):
 def _context():
     """The caller whose questions these are (and, for the cross-scope case,
     whose they are not)."""
-    from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
+    from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
     subject = SubjectRecord(b_user_id="c:C-1", c_user_id="C-1", tenant_id="T-1")
     return ScopeContext.build(
@@ -51,7 +51,7 @@ def _context():
 
 
 def _other_context():
-    from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
+    from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
     subject = SubjectRecord(b_user_id="c:C-2", c_user_id="C-2", tenant_id="T-2")
     return ScopeContext.build(

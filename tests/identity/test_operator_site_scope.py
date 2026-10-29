@@ -28,7 +28,7 @@ from operator_support import (
 )
 
 from aiops_diagnostics.config import UpmsSettings
-from aiops_diagnostics.query_scope import (
+from aiops_diagnostics.identity.query_scope import (
     MAX_SCOPE_IDS,
     OPERATOR_SCOPE_NO_SHOP_BINDING,
     OPERATOR_SCOPE_SHOP_WITHOUT_SITE,
@@ -38,7 +38,7 @@ from aiops_diagnostics.query_scope import (
     resolve_operator_site_scope,
     static_site_mapper,
 )
-from aiops_diagnostics.scope_context import (
+from aiops_diagnostics.identity.scope_context import (
     SCOPE_ERROR_UPMS_UNAVAILABLE,
     SHOP_USER_PATH,
 )
@@ -163,7 +163,7 @@ def test_unbound_shop_binding_is_logged_with_a_distinguishable_reason(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """空集合必须可与「站点本就无代理商」区分，供运营补登记绑定。"""
-    with caplog.at_level(logging.INFO, logger="aiops_diagnostics.query_scope"):
+    with caplog.at_level(logging.INFO, logger="aiops_diagnostics.identity.query_scope"):
         _resolve((), {})
 
     assert f"reason={OPERATOR_SCOPE_NO_SHOP_BINDING}" in caplog.text
@@ -175,7 +175,7 @@ def test_bound_shop_without_site_is_logged_as_a_different_reason(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """绑了店铺但站点表里查不到：与「未绑定店铺」是两种成因。"""
-    with caplog.at_level(logging.INFO, logger="aiops_diagnostics.query_scope"):
+    with caplog.at_level(logging.INFO, logger="aiops_diagnostics.identity.query_scope"):
         _resolve(("SHOP-1",), {})
 
     assert f"reason={OPERATOR_SCOPE_SHOP_WITHOUT_SITE}" in caplog.text
@@ -292,7 +292,7 @@ def test_credential_never_reaches_the_resolved_scope_or_the_log(
     directory, transport = _upms_shops([])
     patch_transport(monkeypatch, transport)
 
-    with caplog.at_level(logging.INFO, logger="aiops_diagnostics.query_scope"):
+    with caplog.at_level(logging.INFO, logger="aiops_diagnostics.identity.query_scope"):
         scope = resolve_operator_site_scope(B_USER_ID, TENANT, shops=directory, mapper=static_site_mapper())
 
     assert scope == QueryScope(tenant_id=TENANT, site_ids=(), user_id=None)

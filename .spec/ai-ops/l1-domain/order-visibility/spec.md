@@ -3,7 +3,7 @@ title: order-visibility
 desc: 租户可见性规则的唯一定义与它的三种渲染
 hue: 160
 code:
-  - src/aiops_diagnostics/order_visibility.py#visible_orders
+  - src/aiops_diagnostics/identity/order_visibility.py#visible_orders
 ---
 # order-visibility
 

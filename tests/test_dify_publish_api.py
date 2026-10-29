@@ -297,7 +297,7 @@ class _OperatorCaller:
     """一个会话解析器：交出运营租户的身份。入口由测试通过 header 声明。"""
 
     def resolve(self, token, *, required_scope, third_session=None, platform_entry=None, source_key=None):
-        from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
+        from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
         subject = SubjectRecord(b_user_id="c:T-1", c_user_id="T-1", tenant_id="T-1")
         return ScopeContext.build(

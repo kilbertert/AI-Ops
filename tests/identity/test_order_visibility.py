@@ -16,7 +16,7 @@ from pathlib import Path
 
 import pytest
 
-from aiops_diagnostics.order_visibility import (
+from aiops_diagnostics.identity.order_visibility import (
     UNKNOWN_TENANT,
     DeviceTenantError,
     TenantVisibility,
@@ -28,7 +28,7 @@ from aiops_diagnostics.order_visibility import (
     visible_orders,
 )
 
-SOURCE_ROOT = Path(__file__).parents[1] / "src" / "aiops_diagnostics"
+SOURCE_ROOT = Path(__file__).parents[2] / "src" / "aiops_diagnostics"
 
 
 def _visibility(profile: VisibilityProfile, allowed: set[str] | None) -> TenantVisibility:

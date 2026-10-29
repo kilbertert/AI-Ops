@@ -55,10 +55,10 @@ from operator_support import (
     upms_settings,
 )
 
-from aiops_diagnostics.caller_auth import ScopedOrderAuthorizer
 from aiops_diagnostics.config import Settings
-from aiops_diagnostics.query_scope import QueryScope, resolve_query_scope
-from aiops_diagnostics.scope_context import (
+from aiops_diagnostics.identity.caller_auth import ScopedOrderAuthorizer
+from aiops_diagnostics.identity.query_scope import QueryScope, resolve_query_scope
+from aiops_diagnostics.identity.scope_context import (
     SCOPE_ERROR_UPMS_UNAVAILABLE,
     SCOPE_TYPE_ALL,
     SCOPE_TYPE_ORGAN,
@@ -66,8 +66,8 @@ from aiops_diagnostics.scope_context import (
     DataScope,
     ScopeError,
 )
+from aiops_diagnostics.identity.third_session_auth import UpmsOperatorSiteScope
 from aiops_diagnostics.sources import SourceError
-from aiops_diagnostics.third_session_auth import UpmsOperatorSiteScope
 
 _OPERATOR_HEADERS = {"Authorization": "Bearer service", "X-Business-Entry": "operator"}
 
@@ -311,7 +311,7 @@ def test_every_operator_scope_failure_denies_instead_of_raising(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, error: Exception
 ) -> None:
     """链路上每一种逃逸方式都失败关闭为拒绝，不会把授权故障变成 500。"""
-    with caplog.at_level(logging.INFO, logger="aiops_diagnostics.third_session_auth"):
+    with caplog.at_level(logging.INFO, logger="aiops_diagnostics.identity.third_session_auth"):
         context, _ = operator_session(monkeypatch, error=error)
     authorizer = build_authorizer(monkeypatch, Connection())
 
@@ -328,7 +328,7 @@ def test_the_two_empty_scope_causes_are_logged_apart(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """两种成因相反的空集合分开记录：#425 的 no_shop_binding / shop_without_site。"""
-    with caplog.at_level(logging.INFO, logger="aiops_diagnostics.query_scope"):
+    with caplog.at_level(logging.INFO, logger="aiops_diagnostics.identity.query_scope"):
         operator_session(monkeypatch, shop_ids=())
         caplog.clear()
         operator_session(monkeypatch, shop_ids=("SHOP-1",), sites={})
@@ -343,7 +343,7 @@ def test_unbound_operator_account_is_logged_as_a_missing_binding(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     """账号漏登记（应补绑定）是它自己的原因，与「站点不在集合内」不能混。"""
-    with caplog.at_level(logging.INFO, logger="aiops_diagnostics.query_scope"):
+    with caplog.at_level(logging.INFO, logger="aiops_diagnostics.identity.query_scope"):
         operator_session(monkeypatch, shop_ids=())
 
     assert "reason=no_shop_binding" in caplog.text

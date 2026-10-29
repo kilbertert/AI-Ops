@@ -17,7 +17,7 @@ from aiops_diagnostics.agent_manifest import (
     reconcile,
     tools_from_dify,
 )
-from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
+from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 
 
 class _Knowledge:

@@ -13,11 +13,12 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
-from aiops_diagnostics.caller_auth import CALLER_AUTH_FORBIDDEN, CallerAuthError
 from aiops_diagnostics.faq import FAQCatalog, PlatformIdentityResolver, PlatformRoleRecord
 from aiops_diagnostics.gateway_api import create_gateway_app
 from aiops_diagnostics.gateway_config import GatewayServerSettings
 from aiops_diagnostics.gateway_store import GatewayStore
+from aiops_diagnostics.identity.caller_auth import CALLER_AUTH_FORBIDDEN, CallerAuthError
+from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 from aiops_diagnostics.knowledge.knowledge_retrieval import (
     KbServiceClient,
     KnowledgeSearchUnavailable,
@@ -27,7 +28,6 @@ from aiops_diagnostics.knowledge.knowledge_retrieval import (
     MediaResourceSigner,
     MediaResponse,
 )
-from aiops_diagnostics.scope_context import DataScope, ScopeContext, SubjectRecord
 
 
 class _Caller:
@@ -476,7 +476,7 @@ def test_runtime_serve_media_rechecks_published_agent_liveness(tmp_path: Path) -
     from aiops_diagnostics.agent_lifecycle import AgentConfig, AgentManager, AgentStore
     from aiops_diagnostics.config import Settings
     from aiops_diagnostics.gateway_runtime import GatewayRuntime
-    from aiops_diagnostics.scope_context import DataScope, SubjectRecord
+    from aiops_diagnostics.identity.scope_context import DataScope, SubjectRecord
 
     settings = GatewayServerSettings(
         data_home=tmp_path,
@@ -583,7 +583,7 @@ def test_runtime_serve_media_fetches_through_grant_tenant(tmp_path: Path) -> Non
     from aiops_diagnostics.agent_lifecycle import AgentConfig, AgentManager, AgentStore
     from aiops_diagnostics.config import Settings
     from aiops_diagnostics.gateway_runtime import GatewayRuntime
-    from aiops_diagnostics.scope_context import DataScope, SubjectRecord
+    from aiops_diagnostics.identity.scope_context import DataScope, SubjectRecord
 
     class _TenantRecordingClient:
         bound_tenant = "aiops"
@@ -683,7 +683,7 @@ def test_promo_media_grant_validates_against_its_own_agent(tmp_path: Path) -> No
     from aiops_diagnostics.agent_lifecycle import AgentConfig, AgentManager, AgentStore
     from aiops_diagnostics.config import Settings
     from aiops_diagnostics.gateway_runtime import GatewayRuntime
-    from aiops_diagnostics.scope_context import DataScope, SubjectRecord
+    from aiops_diagnostics.identity.scope_context import DataScope, SubjectRecord
 
     settings = GatewayServerSettings(
         data_home=tmp_path,
@@ -826,7 +826,7 @@ def test_serving_survives_the_agent_being_republished(tmp_path: Path) -> None:
     from aiops_diagnostics.agent_lifecycle import AgentConfig, AgentManager, AgentStore
     from aiops_diagnostics.config import Settings
     from aiops_diagnostics.gateway_runtime import GatewayRuntime
-    from aiops_diagnostics.scope_context import DataScope, SubjectRecord
+    from aiops_diagnostics.identity.scope_context import DataScope, SubjectRecord
 
     settings = GatewayServerSettings(
         data_home=tmp_path,
@@ -928,7 +928,7 @@ def test_republish_that_removes_the_knowledge_base_revokes_media(tmp_path: Path)
     from aiops_diagnostics.agent_lifecycle import AgentConfig, AgentManager, AgentStore
     from aiops_diagnostics.config import Settings
     from aiops_diagnostics.gateway_runtime import GatewayRuntime
-    from aiops_diagnostics.scope_context import DataScope, SubjectRecord
+    from aiops_diagnostics.identity.scope_context import DataScope, SubjectRecord
 
     settings = GatewayServerSettings(
         data_home=tmp_path,

@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 
 from aiops_diagnostics.config import Settings
-from aiops_diagnostics.order_visibility import caller_visibility, scope_where_sql
+from aiops_diagnostics.identity.order_visibility import caller_visibility, scope_where_sql
 from aiops_diagnostics.sources import (
     FixtureSources,
     MySQLSource,

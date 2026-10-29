@@ -151,7 +151,7 @@ def test_model_realtime_claim_without_business_read_cannot_complete(tmp_path, mo
 
 
 def test_order_read_scope_failure_prevents_any_workflow_or_business_read(tmp_path, monkeypatch):
-    from aiops_diagnostics.caller_auth import CallerAuthError
+    from aiops_diagnostics.identity.caller_auth import CallerAuthError
 
     with dify_chat(tmp_path, monkeypatch, stub_base="http://127.0.0.1:1") as env:
         _, kb = wire(env, monkeypatch, tmp_path)

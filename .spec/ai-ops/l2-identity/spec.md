@@ -3,12 +3,12 @@ title: l2-identity
 desc: 身份与范围——把授权输入收敛成不可变的 ScopeContext，全部 fail closed
 hue: 120
 code:
-  - src/aiops_diagnostics/scope_context.py
+  - src/aiops_diagnostics/identity/scope_context.py
 related:
-  - src/aiops_diagnostics/query_scope.py
-  - src/aiops_diagnostics/caller_auth.py
-  - src/aiops_diagnostics/third_session_auth.py
-  - src/aiops_diagnostics/company_token_auth.py
+  - src/aiops_diagnostics/identity/query_scope.py
+  - src/aiops_diagnostics/identity/caller_auth.py
+  - src/aiops_diagnostics/identity/third_session_auth.py
+  - src/aiops_diagnostics/identity/company_token_auth.py
   - src/aiops_diagnostics/agent_runs.py
 ---
 # l2-identity

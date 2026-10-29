@@ -3,7 +3,7 @@ title: scope-context
 desc: 把授权输入收敛成不可变 ScopeContext，且解析器不持有任何数据源
 hue: 120
 code:
-  - src/aiops_diagnostics/scope_context.py#ScopeContext
+  - src/aiops_diagnostics/identity/scope_context.py#ScopeContext
 ---
 # scope-context
 
