@@ -6,9 +6,9 @@ import time
 import uuid
 
 import pytest
+from execution.test_app_runtime_dify_entry import HEADERS, dify_chat
+from execution.test_app_runtime_node_entry import TOKENS
 from PIL import Image
-from test_app_runtime_dify_entry import HEADERS, dify_chat
-from test_app_runtime_node_entry import TOKENS
 
 from aiops_diagnostics.consumer.consumer_photo import PhotoStore, normalize_photo
 from aiops_diagnostics.dify_chatflow import ChatflowReply
@@ -144,7 +144,7 @@ def test_expired_photo_cannot_be_consumed():
     try:
         key = store.put("subject", "binding", b"jpeg")
         time.sleep(0.02)
-        from aiops_diagnostics.chat_execution import ChatRunUnavailable
+        from aiops_diagnostics.execution.chat_execution import ChatRunUnavailable
 
         with pytest.raises(ChatRunUnavailable):
             store.take(key, "subject", "binding")
@@ -170,7 +170,7 @@ def test_claimed_photos_still_count_against_memory_limit():
         first = store.put("subject", "binding", b"jpeg")
         store.take(first, "subject", "binding")
         store.put("subject", "binding", b"jpeg")
-        from aiops_diagnostics.chat_execution import ChatRunUnavailable
+        from aiops_diagnostics.execution.chat_execution import ChatRunUnavailable
 
         with pytest.raises(ChatRunUnavailable):
             store.put("subject", "binding", b"jpeg")

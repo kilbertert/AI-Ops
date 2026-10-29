@@ -3,7 +3,7 @@
 import sqlite3
 
 import pytest
-from test_app_runtime_dify_entry import dify_chat
+from execution.test_app_runtime_dify_entry import dify_chat
 
 from consumer.test_consumer_chat_service import Client, done
 from consumer.test_consumer_live_context import ask, wire
@@ -106,7 +106,7 @@ def test_classifier_outage_is_visible_and_never_reads_business_data(tmp_path, mo
 
 
 def test_classification_cannot_grant_access_to_other_users_order(tmp_path, monkeypatch):
-    from test_app_runtime_node_entry import ORDER_A
+    from execution.test_app_runtime_node_entry import ORDER_A
 
     with dify_chat(tmp_path, monkeypatch, stub_base="http://127.0.0.1:1") as env:
         runtime, kb = wire(env, monkeypatch, tmp_path)
@@ -193,8 +193,8 @@ def test_previous_reference_is_rechecked_at_submission_even_if_model_says_indepe
 
 
 def test_latest_reference_does_not_silently_use_page_selected_order(tmp_path, monkeypatch):
-    from test_app_runtime_dify_entry import HEADERS
-    from test_app_runtime_node_entry import ORDER_B
+    from execution.test_app_runtime_dify_entry import HEADERS
+    from execution.test_app_runtime_node_entry import ORDER_B
 
     with dify_chat(tmp_path, monkeypatch, stub_base="http://127.0.0.1:1") as env:
         runtime, kb = wire(env, monkeypatch, tmp_path)

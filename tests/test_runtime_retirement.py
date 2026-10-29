@@ -9,7 +9,7 @@ import pytest
 from consumer.test_consumer_chat_service import Client, configure, done
 from consumer.test_consumer_live_context import wire
 from consumer.test_consumer_semantic_routing import semantic
-from test_app_runtime_dify_entry import HEADERS, ORDER_A, dify_chat
+from execution.test_app_runtime_dify_entry import HEADERS, ORDER_A, dify_chat
 from test_dify_trial import ORDER, TRIAL_KEY, _client, _post
 
 

@@ -6,12 +6,12 @@ import uuid
 from pathlib import Path
 
 import pytest
-from test_app_runtime_dify_entry import dify_chat
+from execution.test_app_runtime_dify_entry import dify_chat
 
-from aiops_diagnostics.chat_execution import ChatRunUnavailable
 from aiops_diagnostics.consumer.consumer_documents import SCHEMA
 from aiops_diagnostics.consumer.consumer_knowledge import final_answer
 from aiops_diagnostics.dify_chatflow import ChatflowReply
+from aiops_diagnostics.execution.chat_execution import ChatRunUnavailable
 from consumer.test_consumer_chat_service import Client, done
 from consumer.test_consumer_knowledge_flow import ask, setup
 
@@ -79,7 +79,7 @@ def test_add_update_delete_indexed_document_without_content_edit_or_publish(tmp_
         assert result["blocks"][0]["text"] == "协议兼容性需要测试确认。"
         assert result["blocks"][1]["title"] == "印尼兼容性说明.md"
         rows[0]["content"] = "更新后的协议集成说明。"
-        from test_app_runtime_dify_entry import HEADERS
+        from execution.test_app_runtime_dify_entry import HEADERS
 
         followup = env["client"].post(
             "/v1/assistant/questions",

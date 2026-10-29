@@ -22,8 +22,8 @@ from pathlib import Path
 
 import pytest
 
-from aiops_diagnostics import chat_execution
-from aiops_diagnostics.chat_route_bindings import (
+from aiops_diagnostics.execution import chat_execution
+from aiops_diagnostics.execution.chat_route_bindings import (
     ChatRouteBindingStore,
     RouteBindingError,
 )
@@ -340,7 +340,7 @@ def test_publishing_requires_the_app_service_key_to_exist(tmp_path):
 
     那个症状离"发布"这一步很远，没人会想到是发布漏了。所以发布时就要拒绝。
     """
-    from aiops_diagnostics import chat_execution
+    from aiops_diagnostics.execution import chat_execution
 
     key_dir = tmp_path / "keys"
     key_dir.mkdir()

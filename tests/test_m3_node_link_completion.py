@@ -18,31 +18,31 @@ NODE_TOKEN = "node-token-alpha-0123456789"
 
 
 def _fixture(tmp_path, monkeypatch, *, manifest):
-    from test_m3_gateway_exec_config import _fixture as build
+    from execution.test_m3_gateway_exec_config import _fixture as build
 
     return build(tmp_path, monkeypatch, manifest=manifest)
 
 
 def _delegate(fixture):
-    from test_m3_gateway_exec_config import _delegate as delegate
+    from execution.test_m3_gateway_exec_config import _delegate as delegate
 
     return delegate(fixture)
 
 
 def _claim(fixture, run_id, **headers):
-    from test_m3_gateway_exec_config import _claim as claim
+    from execution.test_m3_gateway_exec_config import _claim as claim
 
     return claim(fixture, run_id, **headers)
 
 
 def _rows(fixture):
-    from test_m3_gateway_exec_config import _rows as rows
+    from execution.test_m3_gateway_exec_config import _rows as rows
 
     return rows(fixture["store"])
 
 
 def _run_id(fixture):
-    from test_m3_gateway_exec_config import _run_id as run_id
+    from execution.test_m3_gateway_exec_config import _run_id as run_id
 
     return run_id(fixture)
 
@@ -60,13 +60,13 @@ def _complete(fixture, run_id, *, status="completed", reason=None, identity=None
 
 
 def _write_manifest(tmp_path):
-    from test_m3_gateway_exec_config import _write_manifest as write
+    from execution.test_m3_gateway_exec_config import _write_manifest as write
 
     return write(tmp_path)
 
 
 def _identity(path):
-    from test_m3_gateway_exec_config import _identity as identity
+    from execution.test_m3_gateway_exec_config import _identity as identity
 
     return identity(path)
 
@@ -269,12 +269,12 @@ def test_retry_claim_after_snapshot_returns_the_same_snapshot_once(tmp_path, mon
     """新模式下的「已取数、等待确认」也必须走同一条重试语义：业务只读一次。"""
     manifest = _write_manifest(tmp_path)
     identity = _identity(manifest)
-    from test_m2_close_contract import cpms_stub
+    from execution.test_m2_close_contract import cpms_stub
 
     ctx = cpms_stub()
     upstream = ctx.__enter__()
     try:
-        from test_m2_close_contract import _app as build_app
+        from execution.test_m2_close_contract import _app as build_app
 
         fixture = build_app(tmp_path, monkeypatch=monkeypatch, upstream_base=upstream["base"])
         fixture["dispatcher"].claim = None
@@ -315,7 +315,7 @@ def test_completion_expiry_boundary_matches_the_claim_semantics(tmp_path, monkey
     """到期判据仍是 ``expires_at <= now``：到期前放行、**恰好到期**拒绝、明显过期拒绝。"""
     from datetime import timedelta
 
-    from aiops_diagnostics import agent_runs
+    from aiops_diagnostics.execution import agent_runs
 
     manifest = _write_manifest(tmp_path)
     fixture, run_id, identity = _claimed_with_snapshot(tmp_path, monkeypatch, manifest)
@@ -386,7 +386,7 @@ def test_failure_notice_after_expiry_does_not_overwrite_ttl_semantics(tmp_path, 
     """到期之后再来的失败通知不能把 expired 改写成 model_failed。"""
     from datetime import timedelta
 
-    from aiops_diagnostics import agent_runs
+    from aiops_diagnostics.execution import agent_runs
 
     manifest = _write_manifest(tmp_path)
     fixture, run_id, identity = _claimed_with_snapshot(tmp_path, monkeypatch, manifest)

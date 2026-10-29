@@ -9,7 +9,7 @@ import time
 
 from PIL import Image, ImageOps, UnidentifiedImageError
 
-from aiops_diagnostics.chat_execution import ChatRunUnavailable
+from aiops_diagnostics.execution.chat_execution import ChatRunUnavailable
 
 MAX_UPLOAD = 4 * 1024 * 1024
 

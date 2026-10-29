@@ -320,8 +320,8 @@ def main():
         operation("restore", version_no=first["version_no"])
         ask("SOP_VERSION_ONE")
         # 两条不同租户的已发布版本在同一 JVM 并发，取数/完成仍由真节点发出。
-        from aiops_diagnostics import chat_execution
-        from aiops_diagnostics.agent_runs import AgentRunStore
+        from aiops_diagnostics.execution import chat_execution
+        from aiops_diagnostics.execution.agent_runs import AgentRunStore
         from aiops_diagnostics.gateway_config import GatewayServerSettings
         from aiops_diagnostics.identity.scope_context import DataScope, ScopeContext, SubjectRecord
 

@@ -1,0 +1,14 @@
+Feature: 执行委派归入Python包
+  Rule: 原业务路线和完成通知不变
+    Scenario: 原业务QA
+      Given 正常用户使用已发布路线
+      When 提交可见订单并回读本次QA
+      Then 原Dify或Java路线完成且结果可读
+    Scenario: 授权及完成清单
+      Given 节点领取本次授权任务
+      When 版本不符或订单不可见
+      Then 既有守卫拒绝，不交付错误快照
+    Scenario: 分发包
+      Given 安装新的wheel或部署源码
+      When 加载执行与路由模块
+      Then execution包可导入，旧模块不存在

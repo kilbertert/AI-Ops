@@ -9,7 +9,7 @@ related:
   - src/aiops_diagnostics/identity/caller_auth.py
   - src/aiops_diagnostics/identity/third_session_auth.py
   - src/aiops_diagnostics/identity/company_token_auth.py
-  - src/aiops_diagnostics/agent_runs.py
+  - src/aiops_diagnostics/execution/agent_runs.py
 ---
 # l2-identity
 

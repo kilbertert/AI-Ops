@@ -7,16 +7,16 @@ import json
 import secrets
 from dataclasses import dataclass, replace
 
-from aiops_diagnostics.agent_runs import scope_to_json
-from aiops_diagnostics.chat_data_grant import DataGrantStore
-from aiops_diagnostics.chat_execution import ChatBinding
-from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
 from aiops_diagnostics.consumer.consumer_knowledge import _binding_identity, final_answer
 from aiops_diagnostics.dify_chatflow import DifyChatflowClient
 from aiops_diagnostics.dify_console_admin import ConsoleApiSettings, DifyConsoleAdmin
 from aiops_diagnostics.dify_dsl_pull import DifyDslClient, workflow_content
 from aiops_diagnostics.dify_run_store import still_valid
 from aiops_diagnostics.dify_trial import TrialResult
+from aiops_diagnostics.execution.agent_runs import scope_to_json
+from aiops_diagnostics.execution.chat_data_grant import DataGrantStore
+from aiops_diagnostics.execution.chat_execution import ChatBinding
+from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
 
 
 @dataclass
@@ -84,8 +84,8 @@ class ConsumerTrial:
                 live_billing_record=self.content["live_billing_record"],
             )
             # 试用订单只用于既有试用身份授权；知识问题不向模型交出该单数据。
-            from aiops_diagnostics.chat_execution import ChatRunUnavailable
             from aiops_diagnostics.consumer.consumer_intent import message, validate
+            from aiops_diagnostics.execution.chat_execution import ChatRunUnavailable
 
             decision = validate(
                 runtime.classify_consumer(self.question, language=language, selected_order=True)

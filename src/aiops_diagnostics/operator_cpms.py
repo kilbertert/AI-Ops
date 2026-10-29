@@ -11,10 +11,10 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from aiops_diagnostics import chat_execution, execution_manifest
-from aiops_diagnostics.agent_runs import AgentRunConfig, SnailDispatcher
 from aiops_diagnostics.async_job_lifecycle import QUESTION
 from aiops_diagnostics.bounded_http import ErrorMapping, RequestSpec, request_json
+from aiops_diagnostics.execution import chat_execution, execution_manifest
+from aiops_diagnostics.execution.agent_runs import AgentRunConfig, SnailDispatcher
 from aiops_diagnostics.identity.query_scope import resolve_query_scope
 from aiops_diagnostics.identity.scope_context import is_tenant_level_account
 
@@ -130,7 +130,7 @@ class OperatorCpms:
         run = self.context.agent_run_store.by_qa(qa_id)
         if run is None or run.scope_fingerprint != caller.scope_fingerprint:
             raise OperatorRefused("QA_NOT_FOUND")
-        from aiops_diagnostics.node_publication import targets
+        from aiops_diagnostics.execution.node_publication import targets
 
         binding = chat_execution.binding_for_key(self.context.settings, run.chat_binding)
         if binding is None or binding.route_revision != run.route_revision:
@@ -278,7 +278,7 @@ class OperatorCpms:
         binding = chat_execution.binding_for_key(self.context.settings, run.chat_binding)
         if binding is None or binding.entry != "operator" or binding.route_revision != run.route_revision:
             raise OperatorRefused("OPERATOR_PUBLICATION_CHANGED")
-        from aiops_diagnostics.node_publication import targets
+        from aiops_diagnostics.execution.node_publication import targets
 
         if not any(
             t.entry == "operator"

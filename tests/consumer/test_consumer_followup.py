@@ -3,7 +3,7 @@
 import sqlite3
 
 import pytest
-from test_app_runtime_dify_entry import HEADERS, dify_chat
+from execution.test_app_runtime_dify_entry import HEADERS, dify_chat
 
 from consumer.test_consumer_chat_service import Client, done
 from consumer.test_consumer_knowledge_flow import setup, wire

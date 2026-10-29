@@ -11,7 +11,7 @@ PROVIDER_PATH = "/console/api/workspaces/current/tool-provider/api"
 
 def ensure_node_provider(console, workspace, gateway_url, manifest):
     """从已实现的节点清单登记 CPMS 工具；提供方不持公司或整租户凭据。"""
-    from aiops_diagnostics.chat_execution import OPERATOR_TOOL_NAMES
+    from aiops_diagnostics.execution.chat_execution import OPERATOR_TOOL_NAMES
 
     tools = manifest["tools"]
     if not tools or any(t["name"] not in OPERATOR_TOOL_NAMES for t in tools):

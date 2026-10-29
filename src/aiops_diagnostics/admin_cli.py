@@ -1226,7 +1226,7 @@ def ensure_node_provider_command(
     from aiops_diagnostics.dify_app_registry import DifyAppRegistry
     from aiops_diagnostics.dify_console_admin import ConsoleApiSettings, DifyConsoleAdmin
     from aiops_diagnostics.dify_workspaces import DifyWorkspaces
-    from aiops_diagnostics.node_publication import target_for
+    from aiops_diagnostics.execution.node_publication import target_for
     from aiops_diagnostics.ops_provider import ensure_node_provider
 
     settings, database = _dify_console_and_db(ctx, db)

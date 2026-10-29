@@ -41,7 +41,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from aiops_diagnostics.agent_runs import (
+from aiops_diagnostics.execution.agent_runs import (
     SUCCEEDED,
     AgentRun,
     AgentRunConfig,
@@ -314,7 +314,7 @@ def _validate_binding_files(binding: ChatBinding) -> None:
 
     启动时校验一次，运行时每次选中再读一次 —— 撤销就是改这个文件，下一次请求立刻生效。
     """
-    from aiops_diagnostics import execution_manifest
+    from aiops_diagnostics.execution import execution_manifest
 
     try:
         config = AgentRunConfig.load(Path(binding.config_file))
@@ -352,7 +352,7 @@ def _bindings_from_store(path: str | Path, key_dir: str = "") -> tuple[ChatBindi
     但它仍然在表里留着 `retracted` 那一行，回答得了"这一版被撤回了"，而删行会让
     请求掉回直读。
     """
-    from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
+    from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
 
     store = ChatRouteBindingStore(Path(str(path)).expanduser().absolute())
     bindings: list[ChatBinding] = []
@@ -520,7 +520,7 @@ def _retracted(
         return False
     from pathlib import Path
 
-    from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
+    from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
 
     try:
         row = ChatRouteBindingStore(Path(database).expanduser().absolute()).get(
@@ -605,7 +605,7 @@ def issue_for_store(
     gateway_version: str,
 ) -> tuple[AgentRun, AgentRunConfig]:
     """签发一条**绑定在案**的 run，并返回本次使用的配置（派发需要它）。"""
-    from aiops_diagnostics import execution_manifest
+    from aiops_diagnostics.execution import execution_manifest
 
     if binding.environment != str(getattr(settings, "execution_environment", "") or ""):
         raise ChatRunUnavailable("AGENT_RUN_ENVIRONMENT_MISMATCH", "agent run unavailable", retryable=True)

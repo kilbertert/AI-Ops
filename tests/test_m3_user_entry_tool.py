@@ -510,7 +510,7 @@ def _cpms_stub():
 @contextmanager
 def _live_gateway(tmp_path, redis_port: int, cpms_base: str):
     """不传 caller_resolver；正式工厂构造真实 RedisThirdSessionResolver。"""
-    from test_m3_gateway_exec_config import _write_manifest
+    from execution.test_m3_gateway_exec_config import _write_manifest
 
     from aiops_diagnostics.gateway_api import create_gateway_app
     from aiops_diagnostics.gateway_config import GatewayServerSettings
@@ -568,7 +568,7 @@ def _live_gateway(tmp_path, redis_port: int, cpms_base: str):
             client = TestClient(app)
 
             def claim(run_id: str) -> None:
-                from aiops_diagnostics.agent_runs import AgentRunDispatchError
+                from aiops_diagnostics.execution.agent_runs import AgentRunDispatchError
 
                 response = client.post(
                     f"/v1/internal/charging-status/claims/{run_id}",

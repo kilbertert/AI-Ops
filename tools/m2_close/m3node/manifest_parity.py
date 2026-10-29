@@ -47,7 +47,7 @@ SEMANTIC_MODE = 0o600
 
 
 def python_verdict(path: Path) -> str:
-    from aiops_diagnostics import execution_manifest
+    from aiops_diagnostics.execution import execution_manifest
 
     try:
         manifest = execution_manifest.load(path)

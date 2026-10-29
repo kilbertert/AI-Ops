@@ -4,8 +4,8 @@ desc: 节点工具按当前任务清单授权
 code:
   - src/aiops_diagnostics/operator_cpms.py
 related:
-  - src/aiops_diagnostics/execution_manifest.py
-  - src/aiops_diagnostics/node_publication.py
+  - src/aiops_diagnostics/execution/execution_manifest.py
+  - src/aiops_diagnostics/execution/node_publication.py
 ---
 # tool-allowlist
 

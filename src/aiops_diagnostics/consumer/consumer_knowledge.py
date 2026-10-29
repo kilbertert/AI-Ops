@@ -8,7 +8,7 @@ import re
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from aiops_diagnostics.chat_execution import ChatRunUnavailable
+from aiops_diagnostics.execution.chat_execution import ChatRunUnavailable
 from aiops_diagnostics.knowledge.knowledge_retrieval import (
     ALLOWED_IMAGE_TYPES,
     ALLOWED_VIDEO_TYPES,
@@ -208,7 +208,7 @@ def _binding_identity(binding):
 
 
 def _require_binding(runtime, caller, binding):
-    from aiops_diagnostics import chat_execution
+    from aiops_diagnostics.execution import chat_execution
 
     if (
         not runtime.gateway_settings.consumer_chatflow_enabled
@@ -409,9 +409,9 @@ def final_answer(raw, context, language, content):
 def callback_context(
     runtime, token, *, require_result, read_snapshot, image_text="", capability=None, knowledge_base_ids=None
 ):
-    from aiops_diagnostics import chat_data_grant, chat_execution
-    from aiops_diagnostics.agent_runs import scope_from_json
     from aiops_diagnostics.dify_run_store import still_valid
+    from aiops_diagnostics.execution import chat_data_grant, chat_execution
+    from aiops_diagnostics.execution.agent_runs import scope_from_json
 
     grants = chat_data_grant.DataGrantStore(runtime.store.path)
     grant = chat_data_grant.usable(grants.by_token(token))

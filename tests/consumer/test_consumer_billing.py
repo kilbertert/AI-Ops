@@ -5,8 +5,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from threading import Thread
 
 import pytest
-from test_app_runtime_dify_entry import HEADERS, dify_chat
-from test_app_runtime_node_entry import ORDER_A
+from execution.test_app_runtime_dify_entry import HEADERS, dify_chat
+from execution.test_app_runtime_node_entry import ORDER_A
 
 from aiops_diagnostics.charging_status import ChargingStatusError
 from aiops_diagnostics.consumer.consumer_billing import (
@@ -112,7 +112,7 @@ def test_original_api_delivers_billing_and_reauthorizes_history(tmp_path, monkey
         run = runtime.dify_run_store.by_qa(first.json()["qa_id"])
         assert run.data_kind == "billing" and run.order_no == ORDER_A
         assert backend["calls"][0] == ("/chOrderInfo/getOrderInfoDetail/" + ORDER_A, "USER-A")
-        from test_app_runtime_node_entry import TOKENS
+        from execution.test_app_runtime_node_entry import TOKENS
 
         monkeypatch.setitem(TOKENS, "token-b", ("USER-B", "TENANT-A"))
         other = {**HEADERS, "Authorization": "Bearer token-b"}

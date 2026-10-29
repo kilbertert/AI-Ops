@@ -2,7 +2,7 @@
 title: ops-agents
 desc: 现役节点发布选择
 code:
-  - src/aiops_diagnostics/node_publication.py
+  - src/aiops_diagnostics/execution/node_publication.py
 ---
 # ops-agents
 

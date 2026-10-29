@@ -6,11 +6,11 @@ import hashlib
 import uuid
 from typing import Any
 
-from aiops_diagnostics import chat_execution
-from aiops_diagnostics.agent_runs import scope_to_json
 from aiops_diagnostics.dify_chat_workflow import DifyWorkflowError, load_workflow_key
 from aiops_diagnostics.dify_chatflow import DifyChatflowClient
 from aiops_diagnostics.dify_run_store import still_valid
+from aiops_diagnostics.execution import chat_execution
+from aiops_diagnostics.execution.agent_runs import scope_to_json
 
 PREFIX = "consumer-chatflow:"
 
@@ -128,7 +128,7 @@ def start(
     token = ""
     try:
         if binding.content_file or binding.content_snapshot is not None:
-            from aiops_diagnostics.chat_data_grant import DataGrantStore
+            from aiops_diagnostics.execution.chat_data_grant import DataGrantStore
 
             token, grant = DataGrantStore(runtime.store.path).issue(
                 scope_fingerprint=caller.scope_fingerprint,
@@ -185,7 +185,7 @@ def execute(runtime, caller, qa, question, binding, upstream, registration, lang
     if not runtime.store.update_assistant_question(qa["qa_id"], status="running"):
         store.cancel(run_id)
         if token:
-            from aiops_diagnostics.chat_data_grant import DataGrantStore
+            from aiops_diagnostics.execution.chat_data_grant import DataGrantStore
 
             DataGrantStore(runtime.store.path).revoke_for_qa(qa["qa_id"])
         runtime._release_conversation_turn(registration.conversation_turn)
@@ -296,7 +296,7 @@ def execute(runtime, caller, qa, question, binding, upstream, registration, lang
         runtime._release_conversation_turn(registration.conversation_turn)
     finally:
         if token:
-            from aiops_diagnostics.chat_data_grant import DataGrantStore
+            from aiops_diagnostics.execution.chat_data_grant import DataGrantStore
 
             DataGrantStore(runtime.store.path).revoke_for_qa(qa["qa_id"])
 

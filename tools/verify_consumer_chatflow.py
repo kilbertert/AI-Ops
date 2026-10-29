@@ -712,7 +712,7 @@ def verify_knowledge(root, base, env, setup, model, check):
             "Startup failed." in Knowledge.requests[-1][2]["question"],
         )
         # 原运营发布接口必须自己冻结内容并发布Dify图，验收不代做该步骤。
-        from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
+        from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
         from aiops_diagnostics.publication.agent_lifecycle import AgentConfig, AgentManager, AgentStore
         from aiops_diagnostics.publication.agent_manifest import admin_context
 

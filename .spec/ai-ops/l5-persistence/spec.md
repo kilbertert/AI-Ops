@@ -11,7 +11,7 @@ related:
   - src/aiops_diagnostics/publication/agent_lifecycle.py
   - src/aiops_diagnostics/publication/shortcut_lifecycle.py
   - src/aiops_diagnostics/dify_app_registry.py
-  - src/aiops_diagnostics/agent_runs.py
+  - src/aiops_diagnostics/execution/agent_runs.py
 ---
 # l5-persistence
 

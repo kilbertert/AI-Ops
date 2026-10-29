@@ -19,21 +19,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from aiops_diagnostics import __version__, chat_execution, execution_manifest, request_observation
-from aiops_diagnostics.agent_runs import (
-    EXPIRED,
-    FAILED,
-    REVOKED,
-    RUNNING,
-    SUCCEEDED,
-    AgentRun,
-    AgentRunConfig,
-    AgentRunConfigError,
-    AgentRunDispatchError,
-    AgentRunStore,
-    SnailDispatcher,
-    scope_from_json,
-)
+from aiops_diagnostics import __version__, request_observation
 from aiops_diagnostics.async_job_lifecycle import DIAGNOSIS, QUESTION
 from aiops_diagnostics.charging_status import ChargingStatusError, read_charging_status
 from aiops_diagnostics.clarification import (
@@ -71,6 +57,21 @@ from aiops_diagnostics.dify_run_store import DifyRunStore
 from aiops_diagnostics.dify_run_store import still_valid as dify_run_still_valid
 from aiops_diagnostics.dify_trial import TrialInitiator, TrialRefused
 from aiops_diagnostics.dify_workspaces import DifyWorkspaceError, DifyWorkspaces
+from aiops_diagnostics.execution import chat_execution, execution_manifest
+from aiops_diagnostics.execution.agent_runs import (
+    EXPIRED,
+    FAILED,
+    REVOKED,
+    RUNNING,
+    SUCCEEDED,
+    AgentRun,
+    AgentRunConfig,
+    AgentRunConfigError,
+    AgentRunDispatchError,
+    AgentRunStore,
+    SnailDispatcher,
+    scope_from_json,
+)
 from aiops_diagnostics.faq import (
     FAQ_NOT_FOUND,
     PLATFORM_AMBIGUOUS,
@@ -662,7 +663,7 @@ def _declared_in_file(settings: Any, environment: str, tenant_id: str, entry: st
     启动期查过一次冲突，但那之后文件可能被重新配上；而发布是唯一会把冲突**写进去**
     的动作，所以它也要查一次 —— 写进去之后再发现，故障是整表加载失败，波及所有租户。
     """
-    from aiops_diagnostics import chat_execution
+    from aiops_diagnostics.execution import chat_execution
 
     try:
         bindings = chat_execution.load_bindings(
@@ -679,8 +680,8 @@ def _key_ref_for(key_dir: str, app_id: str) -> str:
 
     发布只推路径、不读密钥；但一条指向不存在文件的路径等于"发布了也跑不起来"。
     """
-    from aiops_diagnostics import chat_execution
     from aiops_diagnostics.dify_chat_workflow import load_workflow_key
+    from aiops_diagnostics.execution import chat_execution
 
     if not key_dir:
         return ""
@@ -858,7 +859,7 @@ def _publish_bound_app(
 
     consumer_target = consumer_publication.target_for(context.settings, binding)
     if consumer_target and console.chat_route_bindings_file:
-        from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
+        from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
 
         other = ChatRouteBindingStore(console.chat_route_bindings_file).get(
             console.execution_environment,
@@ -873,14 +874,14 @@ def _publish_bound_app(
         binding,
         str(getattr(context.settings, "execution_environment", "") or ""),
     )
-    from aiops_diagnostics import node_publication
+    from aiops_diagnostics.execution import node_publication
 
     node_target = node_publication.target_for(context.settings, binding)
     if node_target and consumer_target:
         raise StandardAPIError(409, "CONSUMER_TARGET_CONFLICT", "app has two execution targets")
     if console.chat_route_bindings_file and not node_target and not consumer_target:
-        from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
         from aiops_diagnostics.consumer.consumer_publication import route_scenario
+        from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
 
         managed = ChatRouteBindingStore(Path(console.chat_route_bindings_file)).get(
             console.execution_environment,
@@ -996,7 +997,7 @@ def _current_route_revision(context: Any, binding: Any, environment: str) -> int
         return None
     from pathlib import Path
 
-    from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
+    from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
 
     try:
         store = ChatRouteBindingStore(Path(database).expanduser().absolute())
@@ -1051,7 +1052,7 @@ def _advance_route_binding(
         )
     from pathlib import Path
 
-    from aiops_diagnostics.chat_route_bindings import (
+    from aiops_diagnostics.execution.chat_route_bindings import (
         ChatRouteBindingStore,
         RouteBindingError,
     )
@@ -1132,8 +1133,8 @@ def _advance_route_binding(
 def _managed_app_route(context: Any, app_id: str):
     from pathlib import Path
 
-    from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
     from aiops_diagnostics.consumer.consumer_publication import route_scenario
+    from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
 
     binding = next((item for item in context.runtime.dify_app_registry.all() if item.app_id == app_id), None)
     if binding is None:
@@ -1185,7 +1186,7 @@ def _workflow_trial_draft(
         context.settings.dify_console_base_url, app_id, context.settings.dify_console_api_key, workspace
     )
     if row.engine == "node":
-        from aiops_diagnostics.node_publication import NodeTrial, candidate, target_for
+        from aiops_diagnostics.execution.node_publication import NodeTrial, candidate, target_for
 
         target = target_for(context.settings, binding)
         if target is None:
@@ -1239,7 +1240,7 @@ def _restore_bound_app(context: Any, app_id: str, version_no: int, initiator: tu
     version = context.agent_manager.store.version(row.agent_id, binding.tenant_id, version_no)
     snapshot = version.snapshot
     if row.engine == "node":
-        from aiops_diagnostics import node_publication
+        from aiops_diagnostics.execution import node_publication
 
         target = node_publication.target_for(context.settings, binding)
         if (
@@ -1324,7 +1325,7 @@ def create_gateway_app(
     selected_settings = settings or GatewayServerSettings.from_env()
     selected_settings.validate()
     if selected_settings.chat_node_targets_file:
-        from aiops_diagnostics.node_publication import targets
+        from aiops_diagnostics.execution.node_publication import targets
 
         targets(selected_settings.chat_node_targets_file)
         if (
@@ -1987,7 +1988,7 @@ def create_gateway_app(
             )
         from pathlib import Path
 
-        from aiops_diagnostics.chat_route_bindings import (
+        from aiops_diagnostics.execution.chat_route_bindings import (
             ChatRouteBindingStore,
             RouteBindingError,
         )
@@ -2241,7 +2242,7 @@ def create_gateway_app(
         （缺 ``X-AIOps-Initiator`` 或 ``-Tenant``）⇒ 退回 #781 的固定调试租户行为。
         """
         if payload.app_id:
-            from aiops_diagnostics.node_publication import target_for
+            from aiops_diagnostics.execution.node_publication import target_for
 
             bound = next(
                 (b for b in context.runtime.dify_app_registry.all() if b.app_id == payload.app_id), None
@@ -2250,7 +2251,7 @@ def create_gateway_app(
             if target is not None and target.entry == "operator":
                 from aiops_diagnostics import operator_cpms
                 from aiops_diagnostics.dify_dsl_pull import DifyDslSource
-                from aiops_diagnostics.node_publication import candidate
+                from aiops_diagnostics.execution.node_publication import candidate
 
                 session = request.headers.get("X-AIOps-Console-Session", "")
 
@@ -2647,7 +2648,7 @@ def create_gateway_app(
 
         if str(decision.platform) == "operator" and payload.shortcut_code != OPERATIONS_REVIEW_CODE:
             from aiops_diagnostics import operator_cpms
-            from aiops_diagnostics.node_publication import targets
+            from aiops_diagnostics.execution.node_publication import targets
 
             try:
                 binding = chat_execution.select_binding(
@@ -3738,8 +3739,8 @@ def create_gateway_app(
         response: Response,
         authorization: Annotated[str | None, Header()] = None,
     ):
-        from aiops_diagnostics import chat_data_grant
         from aiops_diagnostics.consumer import consumer_chat_service, consumer_knowledge
+        from aiops_diagnostics.execution import chat_data_grant
 
         response.headers["Cache-Control"] = "no-store"
         capability = request.path_params.get("capability")
@@ -3801,7 +3802,8 @@ def create_gateway_app(
         业务事实来自网关这一侧的读取，Dify 拿到的就是这份裁剪后的快照；重复回调只会
         拿回同一轮已存的快照，撤权之后连缓存也拒绝。
         """
-        from aiops_diagnostics import chat_data_grant, dify_run_store
+        from aiops_diagnostics import dify_run_store
+        from aiops_diagnostics.execution import chat_data_grant
 
         response.headers["Cache-Control"] = "no-store"
         token = (authorization or "").removeprefix("Bearer ").strip()
@@ -6173,7 +6175,7 @@ def _route_binding_state(context: Any, key: str | None) -> str:
         return ""
     from pathlib import Path
 
-    from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
+    from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
 
     try:
         row = ChatRouteBindingStore(Path(database).expanduser().absolute()).by_key(key)
@@ -6191,7 +6193,7 @@ def _require_dify_binding_current(context: Any, run) -> None:
 
     判据与回读守卫同一条：「按 `binding_key` 找回签发时那一条，并逐字比 `workflow_id`」。
     """
-    from aiops_diagnostics import chat_execution
+    from aiops_diagnostics.execution import chat_execution
 
     # **试用**：它的执行身份是**临时的** workflow，不是正式那一条。要求两者相等会
     # 让真实取数被拒（`CHARGING_STATUS_DISABLED`），试用永远完不成。
@@ -6323,7 +6325,7 @@ def _require_trial_source_route(context: Any, run) -> None:
     """
     from pathlib import Path
 
-    from aiops_diagnostics.chat_route_bindings import ChatRouteBindingStore
+    from aiops_diagnostics.execution.chat_route_bindings import ChatRouteBindingStore
 
     database = str(getattr(context.settings, "chat_route_bindings_file", "") or "")
     if not database:

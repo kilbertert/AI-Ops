@@ -1921,7 +1921,7 @@ CLI 段证明拒绝方向；成功段注入合成订单授权源。未完成业�
 
 前置：Linux、仓库锁定依赖；不需要网络、数据库服务或真实凭据。
 数据：测试内的 USER-A、ORDER-A、`node-a1` 与合成节点凭据（摘要写入临时配置文件，0600）。
-执行：`uv run pytest tests/test_agent_run_records.py`（33 项）。
+执行：`uv run pytest tests/execution/test_agent_run_records.py`（33 项）。
 每个用例自建临时 SQLite 文件与临时配置，结束后随 `tmp_path` 删除。
 
 | ID | 对应判据 / 动作 | 预期观察 | 本轮结果 |
@@ -1939,7 +1939,7 @@ CLI 段证明拒绝方向；成功段注入合成订单授权源。未完成业�
 | AR-REC-11 | 回执字段 | `agent_version` 为 null 且 `agent_version_gap=not_wired`；有快照时带 `result_sha256` | 通过 |
 
 追溯：`acceptance.feature` 的委托执行 Feature（本片只覆盖存储侧判据）→ 上述用例 →
-`tests/test_agent_run_records.py`。**本片不接 HTTP**：领取/委派路由与平台派发在下一片，
+`tests/execution/test_agent_run_records.py`。**本片不接 HTTP**：领取/委派路由与平台派发在下一片，
 因此这里没有任何一条证明"节点确实读到了业务数据"。真实执行节点、真实平台与跨主机
 行为均未验证。
 
@@ -1953,8 +1953,8 @@ CLI 段证明拒绝方向；成功段注入合成订单授权源。未完成业�
 
 前置：Linux、仓库锁定依赖、空闲回环端口；不得使用生产数据根或真实凭据。
 数据：测试内 USER-A/USER-B、ORDER-A/ORDER-B 与不存在订单；回环 CPMS 桩与合成绑定表。
-执行：`uv run pytest tests/test_m2_close_contract.py`（55 项）与
-`uv run pytest tests/test_agent_run_records.py`（34 项）。
+执行：`uv run pytest tests/execution/test_m2_close_contract.py`（55 项）与
+`uv run pytest tests/execution/test_agent_run_records.py`（34 项）。
 这些用例**不启动编排平台或执行节点**：平台与节点只以替身出现，用来触发「有节点来领一次」。
 
 | ID | 对应验收场景 | 预期观察 | 本轮结果 |
@@ -2145,7 +2145,7 @@ EXECCFG-TOOL-08）。此前"已在 manager 层可拒"的写法与实测相反，
 复跑（三条互不替代；第二条需要 JDK 与锁定依赖，第三条只读 Git 历史）：
 
 ```bash
-uv run pytest tests/test_m3_gateway_exec_config.py tests/test_m2_close_contract.py -o addopts='' -q
+uv run pytest tests/execution/test_m3_gateway_exec_config.py tests/execution/test_m2_close_contract.py -o addopts='' -q
 M3NODE_DEPS=… M3NODE_JDK_IMAGE=… uv run python tools/m2_close/m3node/manifest_parity.py
 uv run python tools/m2_close/m3node/verify_gateway_exec_config.py --out /tmp/exec-config-http.json
 uv run python tools/m2_close/m3node/verify_migration_rollback.py --out /tmp/migration.json
@@ -2193,7 +2193,7 @@ M3NODE_DEPS=… M3NODE_JDK_IMAGE=… uv run python tools/m2_close/m3node/verify_
 M3NODE_DEPS=… M3NODE_JDK_IMAGE=… bash tools/m2_close/m3node/m3link/run.sh
 
 # 3) 判据单测（状态机 + 端点 + 复核反例）
-uv run pytest tests/test_m3_node_link_state.py tests/test_m3_node_link_completion.py
+uv run pytest tests/execution/test_m3_node_link_state.py tests/test_m3_node_link_completion.py
 ```
 
 | 编号 | 前提与动作 | 预期可观察结果 | 本机结果 |

@@ -4,7 +4,7 @@ import json
 import uuid
 
 import pytest
-from test_app_runtime_dify_entry import dify_chat
+from execution.test_app_runtime_dify_entry import dify_chat
 
 from aiops_diagnostics.consumer.consumer_flow_contract import ConsumerFlowError, publication_settings
 from aiops_diagnostics.consumer.consumer_knowledge_selection import (
@@ -92,7 +92,7 @@ def test_malformed_selection_is_refused(selection):
 
 @pytest.mark.parametrize("phase", ["search", "finish", "readback"])
 def test_removing_library_refuses_delivery_at_each_boundary(tmp_path, monkeypatch, phase):
-    from test_app_runtime_dify_entry import HEADERS
+    from execution.test_app_runtime_dify_entry import HEADERS
 
     with dify_chat(tmp_path, monkeypatch, stub_base="http://127.0.0.1:1") as env:
         runtime, kb, _ = setup(env, monkeypatch, tmp_path)
@@ -313,7 +313,7 @@ def test_plugin_never_redirects_credentials_and_uses_grant_for_content(monkeypat
 
 
 def test_unavailable_previous_knowledge_does_not_block_new_order(tmp_path, monkeypatch):
-    from test_app_runtime_dify_entry import HEADERS
+    from execution.test_app_runtime_dify_entry import HEADERS
 
     from consumer.test_consumer_live_context import ask as question
     from consumer.test_consumer_live_context import wire

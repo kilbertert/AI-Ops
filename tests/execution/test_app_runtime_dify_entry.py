@@ -23,7 +23,17 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from test_app_runtime_node_entry import (
+
+from aiops_diagnostics.config import Settings
+from aiops_diagnostics.dify_run_store import DifyRunStore
+from aiops_diagnostics.execution import chat_data_grant, chat_execution
+from aiops_diagnostics.execution.agent_runs import AgentRunStore, scope_to_json
+from aiops_diagnostics.faq import FAQCatalog, PlatformIdentityResolver
+from aiops_diagnostics.gateway_api import create_gateway_app
+from aiops_diagnostics.gateway_config import GatewayServerSettings
+from aiops_diagnostics.gateway_runtime import GatewayRuntime
+from aiops_diagnostics.gateway_store import GatewayStore
+from execution.test_app_runtime_node_entry import (
     ORDER_A,
     ORDER_B,
     _bindings_file,
@@ -32,18 +42,8 @@ from test_app_runtime_node_entry import (
     _orders_source,
     _Resolver,
 )
-from test_m2_close_contract import Orders, _write_config
-from test_m3_gateway_exec_config import _write_manifest
-
-from aiops_diagnostics import chat_data_grant, chat_execution
-from aiops_diagnostics.agent_runs import AgentRunStore, scope_to_json
-from aiops_diagnostics.config import Settings
-from aiops_diagnostics.dify_run_store import DifyRunStore
-from aiops_diagnostics.faq import FAQCatalog, PlatformIdentityResolver
-from aiops_diagnostics.gateway_api import create_gateway_app
-from aiops_diagnostics.gateway_config import GatewayServerSettings
-from aiops_diagnostics.gateway_runtime import GatewayRuntime
-from aiops_diagnostics.gateway_store import GatewayStore
+from execution.test_m2_close_contract import Orders, _write_config
+from execution.test_m3_gateway_exec_config import _write_manifest
 
 HEADERS = {"Authorization": "Bearer token-a", "X-Business-Entry": "consumer"}
 LATEST = "check my latest order status"
