@@ -1876,6 +1876,8 @@ def _native_order(query):
     # 首片不做“上一单”推断；多个订单也不擅自选第一张。
     if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", query.strip()) and any(c.isdigit() for c in query):
         return query.strip()
+    if not re.search(r"订单|\border\b", query, re.IGNORECASE):
+        return ""
     explicit = re.findall(
         r"(?:订单(?:号)?|order(?:\s+(?:id|no|number))?)\s*[:：#]?\s*([A-Za-z0-9_.:-]+)",
         query,

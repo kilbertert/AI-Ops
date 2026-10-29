@@ -2696,7 +2696,12 @@ def create_gateway_app(
                 raise StandardAPIError(exc.http_status, exc.code, str(exc), retryable=exc.retryable) from exc
             if binding is not None:
                 _require_operator_company_token(request)
-                order = payload.order_no or _extract_order_no(payload.question) or ""
+                order_context = re.search(r"订单|\border\b", payload.question, re.IGNORECASE) or re.fullmatch(
+                    r"[A-Za-z0-9_-]{1,64}", payload.question.strip()
+                )
+                order = (
+                    payload.order_no or (_extract_order_no(payload.question) if order_context else "") or ""
+                )
                 target = next(
                     (
                         r

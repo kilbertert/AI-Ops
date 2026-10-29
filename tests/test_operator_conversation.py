@@ -273,3 +273,22 @@ def test_empty_scope_can_ask_general_questions(operator, monkeypatch):
     assert response.status_code == 202, response.text
     assert terminal(f, response.json()["qa_id"]).json()["status"] == "completed"
     assert not f["state"]["calls"]
+
+
+def test_site_name_with_date_is_not_an_order(operator, monkeypatch):
+    f = operator
+    monkeypatch.setattr(
+        operator_cpms.SnailDispatcher,
+        "dispatch",
+        lambda _, config, run: complete(
+            f, run, {"kind": "site_search", "text": "", "name": "TEST2026-10-29", "address_terms": []}
+        ),
+    )
+    response = f["client"].post(
+        "/v1/assistant/questions",
+        headers=HEADERS,
+        json={"question": "帮我查询充电站 TEST2026-10-29 03:00:09"},
+    )
+    assert response.status_code == 202, response.text
+    assert terminal(f, response.json()["qa_id"]).json()["status"] == "completed"
+    assert f["state"]["calls"] and all(p.startswith("/chSite/page?") for p, _ in f["state"]["calls"])
