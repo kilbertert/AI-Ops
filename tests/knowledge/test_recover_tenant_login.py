@@ -1,3 +1,4 @@
+import base64
 import importlib.util
 import json
 from pathlib import Path
@@ -20,7 +21,8 @@ def test_recovery_backs_up_before_changing_and_keeps_identity(tmp_path):
 
     def update(user_id, password):
         assert json.loads(backup.read_text())["password"] == "old-hash"
-        assert user_id == "original" and password == "new-secret" * 3
+        # RAGFlow 登录比对的是 base64(明文)，不是明文本身；存明文散列会让登录永远失败。
+        assert user_id == "original" and password == base64.b64encode(b"new-secret" * 3).decode()
         user.password = "new-hash"
 
     service = SimpleNamespace(query_user_by_email=lambda _: [user], update_user_password=update)
@@ -36,6 +38,21 @@ def test_recovery_backs_up_before_changing_and_keeps_identity(tmp_path):
             tenant_id="TENANT",
             password="new-secret" * 3,
             backup=backup,
+        )
+
+
+def test_recovery_refuses_when_written_hash_cannot_pass_login(tmp_path):
+    user = SimpleNamespace(id="u", password="old", access_token="s", is_superuser=False)
+    service = SimpleNamespace(query_user_by_email=lambda _: [user], update_user_password=lambda *_: None)
+    model = SimpleNamespace(get_by_id=lambda _: user)
+    with pytest.raises(ValueError, match="does not satisfy the login check"):
+        recovery.recover(
+            user_service=service,
+            user_model=model,
+            tenant_id="TENANT",
+            password="new-secret" * 3,
+            backup=tmp_path / "backup",
+            verify=lambda *_: False,
         )
 
 
