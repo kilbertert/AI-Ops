@@ -20,7 +20,8 @@
 详细边界见[退役说明](docs/runtime-retirement.md)，阶段与线上最后证据见
 [交付状态](docs/agents/current-delivery-state.md)和[测试交接](docs/testing-handoff.md)。
 目录迁移已完成Java节点、模型代理及consumer、knowledge、identity、publication、execution、dify八片，Gateway端已部署。
-管家有两次完成阶段间歇失败，补充诊断日志后当前复测成功，根因仍待定位。
+管家输出格式缺口已在隔离Java/Gateway链路复现并修复：节点强制JSON模式、只提交最后模型轮。
+当前为本地候选，生产恢复待节点制品部署后验证；见[输出契约](docs/adr/0163-operator-output-is-a-runtime-contract.md)。
 最新见[Dify上线回执](docs/validation/2026-10-29-z09b-dify-layout-live.md)，独立桥/登录服务仍运行原发布包。
 模型代理生产容器仍使用旧发布包，后续升级必须成对交付Compose和镜像；详见[迁移回执](docs/validation/2026-10-29-z03-directory-migration-live.md)。
 

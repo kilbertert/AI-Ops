@@ -9,6 +9,8 @@ import org.springframework.ai.chat.model.ChatResponse;
 import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.ai.chat.prompt.Prompt;
 import org.springframework.ai.model.tool.ToolCallingChatOptions;
+import org.springframework.ai.openai.OpenAiChatOptions;
+import org.springframework.ai.openai.OpenAiChatModel.ResponseFormat;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.definition.ToolDefinition;
 import reactor.core.publisher.Flux;
@@ -54,14 +56,24 @@ public final class GuardedChatModel implements ChatModel {
     @Override
     public ChatResponse call(Prompt prompt) {
         guard.verifyPrompt(prompt);
-        return delegate.call(prompt);
+        return delegate.call(outputContract(prompt));
     }
 
     @Override
     public Flux<ChatResponse> stream(Prompt prompt) {
         // 在**订阅之前**校验：漂移时上游一次都不会被调用（Flux 不创建、不订阅）。
         guard.verifyPrompt(prompt);
-        return delegate.stream(prompt);
+        return delegate.stream(outputContract(prompt));
+    }
+
+    private Prompt outputContract(Prompt prompt) {
+        if (!guard.enabled || !guard.manifest.operatorOutput()) return prompt;
+        if (!(prompt.getOptions() instanceof OpenAiChatOptions options)) {
+            throw new ExecConfigViolation("OUTPUT", "管家执行模型不支持JSON输出选项");
+        }
+        // 输出模式属于管家协议，在每轮最终发送点设置，不能被编辑器或advisor降回自由文本。
+        return new Prompt(prompt.getInstructions(), options.mutate().responseFormat(
+                ResponseFormat.builder().type(ResponseFormat.Type.JSON_OBJECT).build()).build());
     }
 
     @Override

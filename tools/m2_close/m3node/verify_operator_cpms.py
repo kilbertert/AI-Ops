@@ -9,6 +9,8 @@ import subprocess
 import sys
 import tempfile
 import threading
+from datetime import UTC, datetime
+from hashlib import sha256
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -24,6 +26,7 @@ class Model(BaseHTTPRequestHandler):
     calls = []
     fail = False
     truncate = False
+    invalid = ""
 
     def log_message(self, *args):
         pass
@@ -41,6 +44,7 @@ class Model(BaseHTTPRequestHandler):
             tool = operator_cpms.TOOL_NAMES[len(tools)]
             delta = {
                 "role": "assistant",
+                "content": "正在读取订单证据。",
                 "tool_calls": [
                     {
                         "index": 0,
@@ -60,6 +64,23 @@ class Model(BaseHTTPRequestHandler):
                 "evidence_tools": list(operator_cpms.TOOL_NAMES),
             }
             delta = {"role": "assistant", "content": json.dumps(answer, ensure_ascii=False)}
+            if body.get("response_format") != {"type": "json_object"}:
+                delta["content"] = "订单异常结束，通信中断线索仍需现场核查。"
+            if type(self).invalid == "free-text":
+                delta["content"] = "PRIVATE-ANSWER 订单异常结束。"
+            elif type(self).invalid == "missing-field":
+                del answer["limitations"]
+                delta["content"] = json.dumps(answer)
+            elif type(self).invalid == "forged-evidence":
+                answer["evidence_tools"].append("unread_tool")
+                delta["content"] = json.dumps(answer)
+            elif type(self).invalid == "mutation-claim":
+                answer["summary"] = "已退款。"
+                delta["content"] = json.dumps(answer)
+            elif type(self).invalid == "empty":
+                delta["content"] = ""
+            elif type(self).invalid == "oversized":
+                delta["content"] = "x" * 24001
             finish = "stop"
             if type(self).truncate:
                 finish = None
@@ -73,6 +94,13 @@ class Model(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.end_headers()
+        if "tool_calls" not in delta:
+            content = delta["content"]
+            split = len(content) // 2
+            for part in (content[:split], content[split:]):
+                chunk["choices"] = [{"index": 0, "delta": {"content": part}, "finish_reason": None}]
+                self.wfile.write(("data: " + json.dumps(chunk) + "\n\n").encode())
+            chunk["choices"] = [{"index": 0, "delta": {}, "finish_reason": finish}]
         self.wfile.write(("data: " + json.dumps(chunk) + "\n\ndata: [DONE]\n\n").encode())
         self.wfile.flush()
 
@@ -184,7 +212,15 @@ def main():
                         "--gateway=" + f["gateway_base"],
                         "--model=" + model_url,
                         "--scenario="
-                        + ("round2-500" if Model.fail else "truncated" if Model.truncate else "normal"),
+                        + (
+                            "round2-500"
+                            if Model.fail
+                            else "truncated"
+                            if Model.truncate
+                            else "claim-refused"
+                            if Model.invalid
+                            else "normal"
+                        ),
                         "--node-token=" + "node-token-alpha-0123456789",
                         "--managed-publication",
                     ],
@@ -211,13 +247,28 @@ def main():
             assert final.status_code == 200 and final.json()["status"] == "completed", final.text
             assert len(f["state"]["calls"]) == 5  # 节点取证2次，签发/完成/回读授权各1次。
             assert len(Model.calls) == 3
+            assert all(call.get("response_format") == {"type": "json_object"} for call in Model.calls)
+            assert all(
+                "evidence_tools" in call["messages"][0]["content"] for call in Model.calls
+            )  # 系统已有五字段提示词；缺的是供应商输出模式与末轮边界。
+            assert "正在读取订单证据" not in final.text
             messages = json.dumps(Model.calls)
             assert "operator-private" not in messages and "PRIVATE-PHONE" not in messages
             run = f["ctx"].agent_run_store.by_qa(qa)
             assert run.exec_config_confirmed and run.actual_node_id == run.expected_node_id
-            for label in ("supplier-error", "truncated"):
+            for label in (
+                "supplier-error",
+                "truncated",
+                "free-text",
+                "missing-field",
+                "forged-evidence",
+                "mutation-claim",
+                "empty",
+                "oversized",
+            ):
                 Model.fail = label == "supplier-error"
                 Model.truncate = label == "truncated"
+                Model.invalid = label if label not in {"supplier-error", "truncated"} else ""
                 response = request(f["client"])
                 assert response.status_code == 202, response.text
                 failed_qa = response.json()["qa_id"]
@@ -231,6 +282,7 @@ def main():
                 assert f["ctx"].agent_run_store.by_qa(failed_qa).state == "failed"
                 cases.append({"case": label, "status": "failed-without-answer"})
             Model.fail = Model.truncate = False
+            Model.invalid = ""
             from aiops_diagnostics.dify.dify_workspaces import DifyWorkspaces
 
             f["settings"].environment = "env-a"
@@ -281,6 +333,7 @@ def main():
                 if result.status_code != 200 or result.json()["status"] not in {"queued", "running"}:
                     break
             assert result.status_code == 200 and result.json()["status"] == "completed", result.text
+            assert all(call.get("response_format") == {"type": "json_object"} for call in Model.calls)
             trial_run = f["ctx"].agent_run_store.by_qa(trial)
             assert "NATIVE_UNSAVED" in trial_run.execution_manifest
             assert trial_run.execution_manifest != current.manifest_text
@@ -288,6 +341,23 @@ def main():
 
             assert chat_execution.binding_for_key(f["settings"], current.key) == current
             cases.append({"case": "java-native-draft-trial", "status": "completed-without-publishing"})
+            response = f["client"].post(
+                "/v1/dify/trial",
+                headers=headers,
+                json={"app_id": f["target"].app_id, "order_no": "ORDER-1001"},
+            )
+            assert response.status_code == 202, response.text
+            saved_trial = response.json()["trial_id"]
+            for _ in range(120):
+                time.sleep(0.5)
+                result = f["client"].get("/v1/dify/trial/" + saved_trial, headers=headers)
+                if result.status_code != 200 or result.json()["status"] not in {"queued", "running"}:
+                    break
+            assert result.status_code == 200 and result.json()["status"] == "completed", result.text
+            assert "TRIAL_UNPUBLISHED" in f["ctx"].agent_run_store.by_qa(saved_trial).execution_manifest
+            assert chat_execution.binding_for_key(f["settings"], current.key) == current
+            assert all(call.get("response_format") == {"type": "json_object"} for call in Model.calls)
+            cases.append({"case": "java-saved-draft-trial", "status": "completed-without-publishing"})
             f["candidate"]["enabled"] = []
             f["publish"](current.route_revision)
             denied = request(f["client"])
@@ -303,6 +373,19 @@ def main():
                     "model_calls": len(Model.calls),
                     "identity": "tenant-owner" if args.tenant_owner else "site-employee",
                     "scope": "real Java and Gateway; synthetic upstreams",
+                    "finished_at": datetime.now(UTC).isoformat(),
+                    "base_sha": subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
+                    "jdk_image": image,
+                    "dependencies_sha256": sha256(
+                        "\n".join(
+                            path.name + ":" + sha256(path.read_bytes()).hexdigest()
+                            for path in sorted((deps / "lib").glob("*.jar"))
+                        ).encode()
+                    ).hexdigest(),
+                    "sources": {
+                        str(path.relative_to(ROOT)): sha256(path.read_bytes()).hexdigest()
+                        for path in sorted((ROOT / "services/execution-node/src/main/java").rglob("*.java"))
+                    },
                 },
                 ensure_ascii=False,
                 indent=2,

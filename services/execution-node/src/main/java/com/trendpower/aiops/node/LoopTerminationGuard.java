@@ -26,7 +26,13 @@ public final class LoopTerminationGuard implements BaseAdvisor {
     public static final String FINISHED = "STOP";
 
     private final AtomicReference<String> lastFinishReason = new AtomicReference<>(null);
+    private final AtomicReference<String> lastAnswer = new AtomicReference<>("");
     private final AtomicReference<Integer> rounds = new AtomicReference<>(0);
+    private boolean captureAnswer;
+
+    public void captureAnswer() {
+        captureAnswer = true;
+    }
 
     @Override
     public String getName() {
@@ -40,16 +46,30 @@ public final class LoopTerminationGuard implements BaseAdvisor {
 
     @Override
     public ChatClientRequest before(ChatClientRequest request, AdvisorChain chain) {
+        lastAnswer.set("");
+        lastFinishReason.set(null);
         return request;
     }
 
     @Override
     public ChatClientResponse after(ChatClientResponse response, AdvisorChain chain) {
         String reason = null;
+        String answer = "";
         if (response != null && response.chatResponse() != null
                 && response.chatResponse().getResult() != null
                 && response.chatResponse().getResult().getMetadata() != null) {
             reason = response.chatResponse().getResult().getMetadata().getFinishReason();
+            var output = response.chatResponse().getResult().getOutput();
+            if (output != null && output.getText() != null) answer = output.getText();
+        }
+        if (captureAnswer) {
+            String chunk = answer;
+            lastAnswer.updateAndGet(previous -> {
+                if (previous.length() + chunk.length() > 24000) {
+                    throw new com.trendpower.aiops.node.exec.ExecConfigViolation("OUTPUT", "模型单轮正文超长");
+                }
+                return previous + chunk;
+            });
         }
         lastFinishReason.set(reason);
         rounds.updateAndGet(n -> n == null ? 1 : n + 1);
@@ -64,6 +84,11 @@ public final class LoopTerminationGuard implements BaseAdvisor {
     public int rounds() {
         Integer value = rounds.get();
         return value == null ? 0 : value;
+    }
+
+    /** 最后模型轮的正文；框架的 fullText 还含工具轮的进度文字，不能作为JSON报告。 */
+    public String lastAnswer() {
+        return lastAnswer.get();
     }
 
     /** 最后一轮是否被明确标记为正常结束。 */
