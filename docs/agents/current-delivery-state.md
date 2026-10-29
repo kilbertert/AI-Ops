@@ -1,13 +1,15 @@
 # 当前交付状态索引
 
-## 管家输出契约本地修复，线上恢复待验证（2026-10-29）
+## 管家输出契约已部署，ulink三入口通过（2026-10-29）
 
 已通过真实Java/Gateway隔离链路复现两种`json_parse`：未启用JSON输出模式，以及工具轮进度
 与最终JSON被拼接。业务草稿本来就会自动追加五字段要求，不是运营漏写格式。
 节点现在每轮强制JSON对象模式，只提交最后一个正常结束的模型轮，Gateway校验保持严格。
-正式入口、原生预览、普通AI-Ops试用的合成整链通过；本地分支`fix/operator-output-contract`。
-当前进入PR交付，尚未合并或部署，不覆盖下方生产版本记录；必须部署新节点jar后实测ulink。
-证据见[输出契约验收](../validation/2026-10-29-z10-operator-output-contract.md)。
+PR #1149合并`acc3d948`，Java节点已部署`acc3d948-e38da6f0556a`；Gateway仍为`f58e86d6`。
+ulink正常登录后原H5、原生Dify预览和普通AI-Ops试运行均完成；5次run全部succeeded/matched，
+双工具业务字段与独立CPMS一致，4条正式路由未变。第一次就绪窗口太短已自动回滚，延长后成功。
+本次输出故障恢复验收通过，故障根因准确率及长期稳定性未完成业务验收。
+见[真实回执](../validation/2026-10-29-z10b-operator-output-live.md)与[本地验收](../validation/2026-10-29-z10-operator-output-contract.md)。
 
 ## Dify自助开通已同版部署（2026-10-29）
 
