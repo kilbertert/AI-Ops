@@ -15,6 +15,8 @@
 - 管家单订单请求与原生 Dify 试用走公司身份和 Java 节点的两项 CPMS 工具。
 - 管家没有指定订单时可咨询操作、解释状态或搜索当前账号可见站点；需要查具体订单时才请求单号。
   站点名称/地址来自CPMS，未定位时不按距离排序；见[无订单对话](docs/agents/operator-cpms/conversation-qa.md)。
+  无订单能力已上线并经ulink真实页面核验；[最新回执](docs/validation/2026-10-29-z14-operator-conversation-verified.md)
+  另保留订单诊断偶发JSON失败的未完成项。
 - Dify 试用只接受已登记 `app_id`，按绑定运行 Dify/Java 草稿；不接受裸 prompt/旧工具白名单。
 - 未配置业务路线时返回 `CHAT_ROUTE_UNAVAILABLE`，不回落 Python、通用问答或旧 FAQ 匹配。
 - 固定 FAQ API、健康报告、确定性聚合、知识库与发布管理继续保留。
