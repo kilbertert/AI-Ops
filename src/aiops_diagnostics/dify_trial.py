@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from aiops_diagnostics.scope_context import ScopeContext, SubjectRecord
+from aiops_diagnostics.identity.scope_context import ScopeContext, SubjectRecord
 
 
 class TrialRefused(RuntimeError):
@@ -74,7 +74,7 @@ def build_trial_scope(initiator: TrialInitiator, *, operator_scope: Any) -> Scop
     ``operator_scope`` 就是网关**已有**的那条链（``UpmsOperatorSiteScope``：UPMS
     ``/shopuser/getShops`` + 既有隧道上的站点归属映射），不新开连接路径。
     """
-    from aiops_diagnostics.scope_context import (
+    from aiops_diagnostics.identity.scope_context import (
         SCOPE_TYPE_ALL,
         SCOPE_TYPE_ORGAN,
         SCOPE_TYPE_SELF,

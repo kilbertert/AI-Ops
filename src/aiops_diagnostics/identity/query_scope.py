@@ -43,7 +43,7 @@ from aiops_diagnostics.bounded_http import (
     request_json,
 )
 from aiops_diagnostics.config import DisSettings, UpmsSettings
-from aiops_diagnostics.scope_context import (
+from aiops_diagnostics.identity.scope_context import (
     SCOPE_ERROR_EMPTY_SCOPE,
     SCOPE_TYPE_ALL,
     SCOPE_TYPE_SELF,

@@ -27,6 +27,9 @@ from aiops_diagnostics.health_report import (
 from aiops_diagnostics.i18n import (
     DEFAULT_LANGUAGE,
 )
+from aiops_diagnostics.identity.order_visibility import tenant_matches
+from aiops_diagnostics.identity.query_scope import resolve_query_scope
+from aiops_diagnostics.identity.scope_context import SCOPE_TYPE_ALL, DataScope, ScopeContext, SubjectRecord
 from aiops_diagnostics.knowledge.knowledge_retrieval import (
     KbServiceClient,
     KnowledgeSearchClient,
@@ -58,10 +61,7 @@ from aiops_diagnostics.ops_analysis import (
 from aiops_diagnostics.ops_analysis import (
     RULE_VERSION as OPS_ANALYSIS_RULE_VERSION,
 )
-from aiops_diagnostics.order_visibility import tenant_matches
-from aiops_diagnostics.query_scope import resolve_query_scope
 from aiops_diagnostics.redaction import redact_text
-from aiops_diagnostics.scope_context import SCOPE_TYPE_ALL, DataScope, ScopeContext, SubjectRecord
 from aiops_diagnostics.sources import SourceError, scoped_live_sources
 
 _LOGGER = logging.getLogger("aiops.gateway_runtime")
