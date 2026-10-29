@@ -297,6 +297,66 @@ def test_reconcile_dify_registry_prune_is_opt_in(tmp_path: Path) -> None:
     assert registry.lookup(TENANT, "operator") is None
 
 
+def test_a_page_managed_entry_freezes_the_whole_manifest(tmp_path: Path) -> None:
+    """页面开通过的 `(租户, operator)`，清单不得再声明 —— 而且**整份**清单都会被拦住。
+
+    这不是"某个租户不收敛"：守卫在第一条写之前抛，所以其他租户的登记也一个都不会写。
+    2026-10-29 在 41 上实测到这一点（优链充被页面切到另一份 app 后，对该清单跑 reconcile
+    会整份中止），本测试把它钉住。
+
+    修复方向是**删掉清单那一行**（交还管理权），不是让守卫放行：放行等于允许一份文件
+    覆盖运营在页面上的选择，而这正是 `reconcile_dify_registry` 那句守卫要防的事。
+    """
+    from aiops_diagnostics.dify.self_service_store import SelfServiceStore
+
+    registry = DifyAppRegistry(tmp_path / "gateway.db")
+    registry.put(DifyAppBinding("T-other", "consumer", "other-app", "别的客服"))
+    SelfServiceStore(tmp_path / "gateway.db").register(
+        app_id="dify-app-page",
+        tenant_id=TENANT,
+        workspace_id="ws-1",
+        agent_name="operator-dify-app-page",
+        profile_id="default",
+        actor="actor-1",
+    )
+    registry.put(DifyAppBinding(TENANT, "operator", "dify-app-page", "operator-dify-app-page"))
+
+    # 走真实装载路径：绑定 Dify 的 agent 不写 prompt，正文由 Dify 拥有。
+    entry = tmp_path / "env.toml"
+    entry.write_text(
+        textwrap.dedent(
+            f"""
+            [[agents]]
+            tenant_id = "{TENANT}"
+            name = "operator-dify-app-page"
+            agent_type = "customer"
+            knowledge_base_ids = ["kb-a"]
+            model = "aiops-api"
+
+            [[dify_apps]]
+            tenant_id = "{TENANT}"
+            business_entry = "operator"
+            app_id = "dify-app-1"
+            agent_name = "operator-dify-app-page"
+            """
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ManifestError, match="页面管理的管家不能由环境清单覆盖"):
+        reconcile_dify_registry(registry, load_manifest(entry))
+
+    # 同一张表里，别的租户的行没有被写：守卫是"写入前中止"，不是"跳过这一行"。
+    assert registry.lookup("T-other", "consumer").app_id == "other-app"
+    assert registry.lookup(TENANT, "operator").app_id == "dify-app-page", "页面选择未被覆盖"
+
+    # 清单里不再声明这一对之后，同一份注册表可以正常收敛。
+    declarations = EnvironmentManifest(agents=())
+    assert registry.lookup(TENANT, "operator") is not None
+    reports = reconcile_dify_registry(registry, declarations, prune=True)
+    assert registry.lookup(TENANT, "operator") is not None, "页面管理的行不被 --prune 删除"
+    assert [report.action for report in reports] == ["removed"]
+
+
 def test_reconcile_dify_registry_dry_run_writes_nothing(tmp_path: Path) -> None:
     registry = DifyAppRegistry(tmp_path / "gateway.db")
     reports = reconcile_dify_registry(registry, _manifest_with_binding(), dry_run=True)

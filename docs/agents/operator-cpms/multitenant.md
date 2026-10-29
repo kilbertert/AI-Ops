@@ -76,6 +76,13 @@ settings.dify_console_api_key))`，下称 `console`。
 经 PR/CI 合并后再传摘要制品；CD 不自动更新现场 ops 清单。以下只处理新租户，
 禁止为了新增一行对所有 agent 跑整份 reconcile。
 
+**若该客户改用 Dify 页面“复制并开通”，则反向操作**：开通后该 `(租户, operator)` 进入
+`operator_apps`、成为页面管理的受管应用，清单**必须删掉它的 `[[dify_apps]]`**（乃至 `[[agents]]`）。
+两份声明同时存在时，`reconcile_dify_registry` 会按“页面管理的管家不能由环境清单覆盖”
+**在写入前中止整份清单**——不是只跳过这一个租户。删掉是交还管理权，不是撤回：
+库里的 agent 与 `agent_versions` 保留，`--prune` 也跳过页面管理的行。
+2026-10-29 优链充即此情形（清单已对齐，见同期验收回执）。
+
 1. `node_publication.targets(settings.chat_node_targets_file)` 找源管家目标；
    `dataclasses.replace(source_target, app_id=new_app, tenant_id=new_tenant)` 产生新目标。
    复用现役 config_file、manifest_file、CPMS 地址及回调，不新开端口、不更换平台模型。
