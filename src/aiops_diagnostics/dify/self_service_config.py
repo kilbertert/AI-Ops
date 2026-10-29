@@ -1,0 +1,59 @@
+"""平台维护连接一次，业务应用只保存其引用；配置中不接受浏览器路径。"""
+
+import json
+import re
+from pathlib import Path
+
+from aiops_diagnostics.private_files import validate_private_file
+
+from .self_service_store import SelfServiceStore
+
+
+def profiles(settings):
+    path = Path(settings.operator_profiles_file)
+    validate_private_file(path)
+    if path.stat().st_size > 262144:
+        raise ValueError("operator profiles too large")
+    body = json.loads(path.read_text())
+    if body.get("schema") != "operator-profiles/1" or not isinstance(body.get("profiles"), list):
+        raise ValueError("invalid operator profiles")
+    result = {}
+    for row in body["profiles"]:
+        key = row["id"]
+        if not re.fullmatch(r"[a-z0-9_-]{1,48}", key) or key in result:
+            raise ValueError("invalid profile identity")
+        target = row["target"]
+        if target["entry"] != "operator" or target["environment"] != settings.execution_environment:
+            raise ValueError("profile environment mismatch")
+        from aiops_diagnostics.execution import execution_manifest
+
+        node_config = Path(target["config_file"])
+        validate_private_file(node_config)
+        if json.loads(node_config.read_text())["environment"] != target["environment"]:
+            raise ValueError("node profile environment mismatch")
+        if execution_manifest.load(target["manifest_file"]) is None:
+            raise ValueError("profile manifest missing")
+        model = row["model"]
+        if not all(model.get(k) for k in ("plugin", "provider", "name", "credential_file")):
+            raise ValueError("profile model missing")
+        credential = Path(model["credential_file"])
+        validate_private_file(credential)
+        values = json.loads(credential.read_text())
+        if not values.get("api_key") or values.get("function_calling_type") != "tool_call":
+            raise ValueError("profile credentials missing tool capability")
+        if int(values["max_tokens_to_sample"]) < int(model["completion_params"]["max_tokens"]):
+            raise ValueError("profile output budget invalid")
+        result[key] = row
+    if not result:
+        raise ValueError("operator profiles empty")
+    return result
+
+
+def app_binding(settings, app_id):
+    from .dify_app_registry import DifyAppBinding, DifyAppRegistry
+
+    if getattr(settings, "operator_profiles_file", ""):
+        row = SelfServiceStore(settings.database_file).app(app_id)
+        if row:
+            return DifyAppBinding(row["tenant_id"], "operator", app_id, row["agent_name"])
+    return next((b for b in DifyAppRegistry(settings.database_file).all() if b.app_id == app_id), None)

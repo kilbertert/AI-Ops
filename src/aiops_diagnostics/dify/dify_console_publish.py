@@ -1305,6 +1305,13 @@ class ConsolePublishBridgeHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler 的协议
         path = urllib.parse.urlsplit(self.path).path
         try:
+            if path == "/__aiops/manage":
+                import sys
+
+                from .self_service_bridge import handle
+
+                handle(self, sys.modules[__name__])
+                return
             if path == NATIVE_PREVIEW_ROUTE:
                 _native_preview(self)
                 return
@@ -1848,6 +1855,8 @@ def _native_refusal(answer):
         message = "公司登录已失效或无法核验，请重新登录后重试"
     elif code in {"ORDER_NOT_FOUND", "CPMS_SCOPE_MISMATCH", "OPERATOR_TRIAL_SCOPE_MISMATCH"}:
         message = "订单不存在或不在当前账号可见范围内"
+    elif code == "OPERATOR_SITE_SCOPE_REQUIRED":
+        message = "当前账号未分配可诊断场站，请联系公司管理员分配或切换账号"
     elif code == "CHAT_ROUTE_RETRACTED":
         message = "管家节点路线已撤回，请联系管理员恢复"
     else:

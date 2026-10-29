@@ -1,0 +1,143 @@
+'use client'
+
+import { useEffect, useState } from 'react'
+
+export type Status = {
+  published_prompt: string
+  published_tools: string[]
+  app_id: string
+  managed: boolean
+  platform: boolean
+  model: string
+  profile: string
+  model_options: { max_tokens?: number }
+  version_no?: number
+  route_revision: number
+  published: boolean
+}
+export const messages: Record<string, string> = {
+  SETUP_PLATFORM_PERMISSION_REQUIRED: '当前账号没有平台开通权限',
+  SETUP_TENANT_FORBIDDEN: '当前账号无权管理这个客户',
+  SETUP_TENANT_BUSY: '这个客户已有开通任务，请查看下方进度',
+  SETUP_DRAFT_CHANGED: '草稿已被修改，请刷新确认后重新发布',
+  SETUP_SOURCE_CHANGED: '来源正式版本已变化，请刷新后重新选择',
+  SETUP_ROUTE_CHANGED: '正式版本已变化，请刷新确认后重新发布',
+  SETUP_MODEL_CONFLICT: '模型配置与平台模板不一致，请联系平台管理员',
+  SETUP_IMPORT_UPGRADE_REQUIRED: '平台导入服务尚未升级，请联系平台管理员',
+  SETUP_STEP_FAILED: '当前步骤未完成，可以重试；持续失败请联系平台管理员',
+  OPERATOR_SITE_SCOPE_REQUIRED: '当前账号未分配可诊断场站，请联系公司管理员分配或切换账号',
+  OPERATOR_TRIAL_LOGIN_REQUIRED: '公司登录已过期，请重新登录后继续',
+}
+export const steps: Record<string, string> = {
+  workspace: '准备工作区',
+  dependencies: '配置模型和工具',
+  application: '创建智能体',
+  register: '登记应用',
+  publish: '开通管家',
+  complete: '配置完成',
+}
+
+export async function manage(action: string, payload: Record<string, unknown> = {}) {
+  const cookie = document.cookie
+    .split(';')
+    .map((x) => x.trim())
+    .find((x) => x.startsWith('__Host-csrf_token=') || x.startsWith('csrf_token='))
+  const response = await fetch('/__aiops/manage', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-CSRF-Token': cookie ? decodeURIComponent(cookie.slice(cookie.indexOf('=') + 1)) : '',
+    },
+    body: JSON.stringify({ action, ...payload }),
+  })
+  const body = await response.json()
+  if (!response.ok)
+    throw new Error(
+      messages[body.error?.code] || body.reason || '管理操作未完成，请重新登录或联系平台管理员',
+    )
+  return body
+}
+
+export async function publishManaged(
+  appId: string,
+  config: { pre_prompt?: string; agent_mode?: unknown },
+  revision: number,
+) {
+  if (!Number.isInteger(revision) || revision < 0) throw new Error('请刷新后重新发布')
+  // 与后端共享规范化JSON；不让另一个标签页修改的草稿被无感发布。
+  const canonical = (v: unknown): unknown =>
+    Array.isArray(v)
+      ? v.map(canonical)
+      : v && typeof v === 'object'
+        ? Object.fromEntries(
+            Object.keys(v)
+              .sort()
+              .map((k) => [k, canonical((v as Record<string, unknown>)[k])]),
+          )
+        : v
+  const bytes = new TextEncoder().encode(
+    JSON.stringify(
+      canonical({
+        pre_prompt: config.pre_prompt,
+        tools: (
+          (
+            config.agent_mode as {
+              tools?: {
+                provider_id?: string
+                provider_type?: string
+                tool_name?: string
+                enabled?: boolean
+              }[]
+            }
+          )?.tools || []
+        ).map((t) => ({
+          provider_id: t.provider_id,
+          provider_type: t.provider_type,
+          tool_name: t.tool_name,
+          enabled: t.enabled !== false,
+        })),
+      }),
+    ),
+  )
+  const digest = await crypto.subtle.digest('SHA-256', bytes)
+  const draft = Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('')
+  const result = await manage('publish', { app_id: appId, revision, draft })
+  window.dispatchEvent(new CustomEvent('aiops-published', { detail: appId }))
+  return result
+}
+
+export function useManagedApp(appId: string) {
+  const [status, setStatus] = useState<Status | null>(null)
+  const [error, setError] = useState('')
+  const [readiness, setReadiness] = useState('')
+  useEffect(() => {
+    let active = true
+    const load = () =>
+      manage('status', { app_id: appId })
+        .then((r) => {
+          if (active) {
+            setStatus(r)
+            setError('')
+            if (r.managed)
+              manage('readiness', { app_id: appId })
+                .then((v) => {
+                  if (active) setReadiness(v.reason)
+                })
+                .catch((e) => {
+                  if (active) setReadiness(e.message)
+                })
+          }
+        })
+        .catch((e) => {
+          if (active) setError(e.message)
+        })
+    load()
+    window.addEventListener('aiops-published', load)
+    return () => {
+      active = false
+      window.removeEventListener('aiops-published', load)
+    }
+  }, [appId])
+  return { status: status?.app_id === appId ? status : null, error, readiness }
+}

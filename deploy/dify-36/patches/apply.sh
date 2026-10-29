@@ -21,6 +21,7 @@ OUT="volumes/app/patched-api"
 # 上游文件 → 期望 sha256（tag 1.17.1 = 8387590ace4a094de812b7847fc6a4c3a27cd52b）。
 # 换镜像时这些值必须一起换，否则本脚本拒绝执行 —— 这正是它的用处。
 PINNED="
+controllers/console/app/app_import.py 6e25dc4b1563a495e3cb9ab54dbf98a5524090005dd9bfbb91616f650bd10229
 controllers/console/datasets/hit_testing_base.py de59a1cd2390a8d04015b04320d0af4ffce564c13ba1635f111f4e8a53810004
 controllers/service_api/dataset/hit_testing.py 4d56e1bab4585a7b5f892557097d9525b8b144d8cec22e6d999e02f569068cbd
 services/external_knowledge_service.py 59afcc901649b2f64ecd4814f7b7d98fa1577371403578b4bb64e7227eb4f726

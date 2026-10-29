@@ -191,6 +191,7 @@ class ChatRouteBindingStore:
         node_config_file: str = "",
         expected_revision: int | None = None,
         updated_by: str = "",
+        source_agent_name: str = "",
     ) -> RouteBinding:
         """把正式指针推进到这一版。
 
@@ -277,6 +278,13 @@ class ChatRouteBindingStore:
             # 没写中 ⇒ 有人在这期间改过这一行。不覆盖对方。
             if cursor.rowcount != 1:
                 raise RouteBindingError("ROUTE_BINDING_CONFLICT", "route binding moved")
+            if source_agent_name:
+                connection.execute(
+                    "INSERT INTO dify_app_registry(tenant_id,business_entry,app_id,agent_name,updated_at) "
+                    "VALUES(?,?,?,?,?) ON CONFLICT(tenant_id,business_entry) DO UPDATE SET "
+                    "app_id=excluded.app_id,agent_name=excluded.agent_name,updated_at=excluded.updated_at",
+                    (tenant_id, entry, app_id, source_agent_name, now),
+                )
         record = self.get(environment, tenant_id, entry, scenario)
         if record is None:  # pragma: no cover - 刚写完就读不到只可能是文件被换掉
             raise RouteBindingError("ROUTE_BINDING_MISSING", "route binding vanished")

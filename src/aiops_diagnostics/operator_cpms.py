@@ -131,7 +131,7 @@ class OperatorCpms:
         run = self.context.agent_run_store.by_qa(qa_id)
         if run is None or run.scope_fingerprint != caller.scope_fingerprint:
             raise OperatorRefused("QA_NOT_FOUND")
-        from aiops_diagnostics.execution.node_publication import targets
+        from aiops_diagnostics.execution.node_publication import all_targets
 
         binding = chat_execution.binding_for_key(self.context.settings, run.chat_binding)
         if binding is None or binding.route_revision != run.route_revision:
@@ -139,7 +139,7 @@ class OperatorCpms:
         target = next(
             (
                 t
-                for t in targets(self.context.settings.chat_node_targets_file)
+                for t in all_targets(self.context.settings)
                 if t.entry == "operator"
                 and t.app_id == binding.app_id
                 and t.tenant_id == caller.effective_tenant_id
@@ -279,7 +279,7 @@ class OperatorCpms:
         binding = chat_execution.binding_for_key(self.context.settings, run.chat_binding)
         if binding is None or binding.entry != "operator" or binding.route_revision != run.route_revision:
             raise OperatorRefused("OPERATOR_PUBLICATION_CHANGED")
-        from aiops_diagnostics.execution.node_publication import targets
+        from aiops_diagnostics.execution.node_publication import all_targets
 
         if not any(
             t.entry == "operator"
@@ -288,7 +288,7 @@ class OperatorCpms:
             and t.environment == run.environment
             and t.cpms_base_url.rstrip("/") == task.base_url
             and t.proxy_base_url.rstrip("/") == task.proxy_url
-            for t in targets(self.context.settings.chat_node_targets_file)
+            for t in all_targets(self.context.settings)
         ):
             raise OperatorRefused("OPERATOR_TARGET_CHANGED")
         config = AgentRunConfig.load(Path(binding.config_file))

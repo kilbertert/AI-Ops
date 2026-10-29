@@ -44,6 +44,7 @@
 # 写成 x- 键下的逐项锚点，是因为 api 与 worker 各自的 `volumes:` 会覆盖共享锚点里的
 # 同名键（YAML 合并键按整键覆盖）—— 整段复制成两份比现在更糟。
 x-patched-api-mounts:
+  - &pm_app_import ./volumes/app/patched-api/controllers/console/app/app_import.py:/app/api/controllers/console/app/app_import.py:ro
   - &pm_hit_testing_base ./volumes/app/patched-api/controllers/console/datasets/hit_testing_base.py:/app/api/controllers/console/datasets/hit_testing_base.py:ro
   - &pm_external ./volumes/app/patched-api/controllers/console/datasets/external.py:/app/api/controllers/console/datasets/external.py:ro
   - &pm_service_hit_testing ./volumes/app/patched-api/controllers/service_api/dataset/hit_testing.py:/app/api/controllers/service_api/dataset/hit_testing.py:ro
@@ -119,6 +120,7 @@ services:
         condition: service_healthy
     volumes:
       - ./volumes/app/storage:/app/api/storage
+      - *pm_app_import
       - *pm_hit_testing_base
       - *pm_external
       - *pm_service_hit_testing
@@ -152,6 +154,7 @@ services:
         condition: service_healthy
     volumes:
       - ./volumes/app/storage:/app/api/storage
+      - *pm_app_import
       - *pm_hit_testing_base
       - *pm_external
       - *pm_service_hit_testing

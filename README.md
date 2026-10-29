@@ -94,6 +94,11 @@ flowchart LR
 | `.spec/` | 受维护行为与规格映射 |
 | `.github/`、`.sandcastle/` | 开发交付治理 |
 
+Dify自助开通：`dify.self_service`组织业务流程，`dify.self_service_api`提供固定管理端点，
+`dify.self_service_bridge`校验同源会话，`dify.self_service_identity`读取公司管理权限，
+`dify.self_service_config`解析平台连接，`dify.self_service_prepare`准备依赖与应用，
+`dify.self_service_store`保存幂等任务和受管草稿。
+
 ## 五、本地运行与验证
 
 ```bash
@@ -114,6 +119,7 @@ Gateway 使用私有 `production.env` 和明确的 `AIOPS_GATEWAY_ENVIRONMENT`�
 
 - [文档导航](docs/README.md)、[Gateway](docs/gateway.md)、[快速上手](docs/快速上手.md)。
 - [C端 WF01](docs/agents/consumer-wf01/README.md)、[管家 CPMS](docs/agents/operator-cpms/README.md)。
+- [Dify客户管家自助开通](docs/agents/operator-cpms/self-service.md)：平台开通、租户预览与发布。
 - [节点部署](deploy/node-runtime/README.md)、[Dify 部署](deploy/dify-36/README.md)、[运维说明](ops/README.md)。
 - [验收记录](docs/validation/)、[进度记录](docs/开发进度/)、[ADR](docs/adr/)、[术语](GLOSSARY.md)。
 

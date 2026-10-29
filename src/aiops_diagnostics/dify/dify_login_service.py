@@ -563,8 +563,7 @@ class LoginService:
                 # 里"是我们上一次登录亲眼确认过的事实。
                 workspace_joined = True
             else:
-                # join 不阻断登录（设计明写）：workspace 已经在，失败只是这个人打开控制台
-                # 看到空列表。失败写日志 + 审计，下一次登录会再试一次。
+                # 成员加入失败不能伪装登录成功；保留映射供下一次重试。
                 from aiops_diagnostics.dify.dify_workspace_directory import join_account
 
                 outcome = join_account(
@@ -611,6 +610,11 @@ class LoginService:
                 dify_account_id=account_id,
                 action="provisioned",
                 reason_code="FIRST_LOGIN",
+            )
+        if workspace_id and not workspace_joined:
+            raise PermissionDenied(
+                "DIFY_WORKSPACE_JOIN_FAILED",
+                "暂时未能进入你的工作区，请稍后重新登录；持续失败请联系平台管理员。",
             )
         session = mint_console_session(
             account_id,
@@ -680,21 +684,10 @@ class LoginService:
 
 
 def _workspace_refusal(tenant_id: str, exc: Any) -> str:
-    """把"解析不到 workspace"翻成**运营能做的那一件事**（#883）。
-
-    三种结局三种下一步，合成一句就把区别丢了：
-
-    * ``CREATING`` —— 别人正在建，**稍后重试**；
-    * ``FAILED`` / ``UNKNOWN`` —— 在 41 上重跑一次 ``ensure-workspace``（它会先对账）；
-    * ``UNRESOLVED`` —— 从来没有建过，同样那条命令，但这是第一次。
-    """
-    command = f"aiops-admin ensure-workspace --tenant {tenant_id}"
+    """用户的下一步是平台开通，不是维护服务器。"""
     if getattr(exc, "code", "") == "DIFY_WORKSPACE_CREATING":
         return "你的工作区正在创建，请一两分钟后重新登录。"
-    return (
-        f"你的工作区还没有准备好（{getattr(exc, 'code', 'DIFY_WORKSPACE_UNRESOLVED')}）。"
-        f"请联系管理员在网关所在主机执行：{command}"
-    )
+    return "你的工作区尚未准备好，请联系平台运营在Dify中开通或重试客户管家。"
 
 
 def utc_iso() -> str:
