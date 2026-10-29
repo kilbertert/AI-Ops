@@ -89,3 +89,10 @@ it('publishes with the loaded route revision and reports concurrent publication 
   expect(calls[0]).toMatchObject({ action: 'publish', app_id: 'app', revision: 3 })
   expect(calls[0]?.draft).toMatch(/^[a-f0-9]{64}$/)
 })
+
+it('shows the model default when Java has no explicit output cap', async () => {
+  const screen = await render(
+    <ManagedPublish status={{ ...status, model_options: {} }} save={async () => true} />,
+  )
+  await expect.element(screen.getByText('输出上限：模型默认', { exact: false })).toBeVisible()
+})

@@ -45,8 +45,11 @@ export function ManagedPublish({ status, save }: { status: Status; save: () => P
       className="flex items-center gap-2 text-sm"
     >
       <span>
-        {status.model} · {status.model_options.max_tokens} token ·{' '}
-        {status.published ? `正式 V${status.version_no}` : '尚未发布'}
+        {status.model} ·{' '}
+        {status.model_options.max_tokens
+          ? `${status.model_options.max_tokens} token`
+          : '输出上限：模型默认'}{' '}
+        · {status.published ? `正式 V${status.version_no}` : '尚未发布'}
       </span>
       <button
         type="button"
