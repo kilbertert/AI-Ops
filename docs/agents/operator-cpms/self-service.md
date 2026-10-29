@@ -110,3 +110,10 @@ max_tokens_to_sample、function_calling_type=tool_call、stream_function_calling
 剥离后按明确订单试用；非空上下文拒绝。若Java清单max_tokens缺省，界面显示“输出上限：模型默认”，
 Dify凭据里的输出预算不能当成Java显式上限。租户账号可验证自己工作区的复制/预览/发布；
 平台跨客户开通必须使用公司type=-1且具有平台管理权限的账号，优链充可以作为目标客户。
+
+
+2026-10-29原生预览修复制品：桥`f58e86d6`，备份目录
+`/opt/aiops-self-service-f58e86d6-bridge-backup`；web旧.env备份
+`/opt/aiops-self-service-f58e86d6-web-env-backup`，回退镜像为`self-service-b86be95f`。
+真实租户复制出来的验收草稿app为`65255300-e932-4589-bf06-4bb8ba7598cd`，保持未发布。
+从原应用的“发布到管家”验证相同内容后，仍为V2/revision1；不能把原生Duplicate当作平台跨租户开通。
