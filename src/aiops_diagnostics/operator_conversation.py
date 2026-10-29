@@ -73,8 +73,10 @@ def validate(answer, question):
     ):
         raise OperatorRefused("OPERATOR_INVALID_SEARCH")
     if answer["kind"] == "site_search":
-        if not terms or answer["text"]:
+        if not terms:
             raise OperatorRefused("OPERATOR_INVALID_SEARCH")
+        # 搜索正文由CPMS生成，模型进度说明既不交付也不持久化。
+        answer["text"] = ""
     elif terms or not answer["text"].strip() or EXECUTED_MUTATION.search(answer["text"]):
         raise OperatorRefused("OPERATOR_INVALID_ANSWER")
 
