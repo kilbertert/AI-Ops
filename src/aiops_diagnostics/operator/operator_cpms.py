@@ -887,6 +887,7 @@ def search_sites(answer, caller, base, bearer, authorize):
     scope = operator_scope(caller, allow_empty=True)
     rows, seen = [], set()
     limited = False
+    total = 0
     if scope.site_ids != ():
         for page in range(1, 5):
             current = authorize()
@@ -941,6 +942,7 @@ def search_sites(answer, caller, base, bearer, authorize):
                     seen.add(selected["id"])
                     rows.append(selected)
             more = page * 50 < data["total"]
+            total = max(total, data["total"])
             if len(rows) >= 10 or not more or not data["records"]:
                 limited = more or len(rows) > 10
                 break
@@ -953,4 +955,9 @@ def search_sites(answer, caller, base, bearer, authorize):
         "sites": rows[:10],
         "limited": limited,
         "empty_scope": scope.site_ids == (),
+        # 列举问法要回答"我有多少个"，只给前 10 条等于没回答。``total`` 是 CPMS 对
+        # 这次查询自己的计数；``scope_limited`` 说明它是否还经过站点集合过滤 ——
+        # 员工账号的 total 是租户口径，不能直接当成"你有多少个"。
+        "total": total,
+        "scope_limited": scope.site_ids is not None,
     }

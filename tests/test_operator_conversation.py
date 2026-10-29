@@ -168,6 +168,81 @@ def test_model_search_cannot_invent_conditions_or_results(value):
         conversation.validate(value, "找广州天河充电站%")
 
 
+def test_asking_what_sites_i_have_is_a_roster_not_an_error():
+    """「我当前有哪些站点？」四个字段全空，是**列举**，不是非法搜索。
+
+    这里曾经要求关键词非空，于是这个最自然的问题被判 ``OPERATOR_INVALID_SEARCH``，
+    外面再包成 ``OPERATOR_DIAGNOSIS_FAILED`` —— 用户看到"诊断失败"，而它既不是诊断，
+    也不是失败。关键词只用来防模型编造搜索条件；空关键词什么都没编。
+    """
+    answer = {"kind": "site_search", "text": "", "name": "", "address_terms": []}
+    conversation.validate(answer, "我当前有哪些站点？")
+    assert answer["text"] == ""
+
+
+@pytest.mark.parametrize(
+    "sites, needle, forbidden",
+    [
+        (
+            {"total": 152, "scope_limited": False, "sites": [{"name": "站A", "address": "地址A"}]},
+            "共 152 个",
+            None,
+        ),
+        (
+            {"total": 152, "scope_limited": True, "sites": [{"name": "站A", "address": "地址A"}]},
+            "显示前 1 个",
+            "共 152",
+        ),
+        (
+            {"total": 1, "scope_limited": False, "sites": [{"name": "站A", "address": "地址A"}]},
+            "站A",
+            "共 1 个",
+        ),
+        # 数字看着"对得上"也必须不信：员工看到 1 条、CPMS 说 total=1，那 1 是**租户**
+        # 的计数，不是他这 1 个站点。只有断言"不能出现总数"能区分这两句文案。
+        (
+            {"total": 1, "scope_limited": True, "sites": [{"name": "站A", "address": "地址A"}]},
+            "显示前 1 个",
+            "共 1",
+        ),
+    ],
+)
+def test_listing_reports_the_count_only_when_it_is_trustworthy(sites, needle, forbidden):
+    """列举要回答"我有多少个"；员工的 total 是租户口径，不能冒充他自己的站点数。"""
+    roster = {
+        "source": "cpms.sitePage",
+        "observed_at": "2026-10-29T00:00:00+00:00",
+        "limited": sites["total"] > 1,
+        "empty_scope": False,
+        **sites,
+    }
+    text = conversation.render(
+        {"kind": "site_search", "text": "", "name": "", "address_terms": []}, roster, "zh-CN"
+    )["blocks"][0]["text"]
+    assert needle in text
+    if forbidden:
+        assert forbidden not in text
+
+
+def test_a_search_that_finds_nothing_still_says_try_another_place():
+    """搜索没命中与列举为空是两件事，提示不能混用。"""
+    empty = {
+        "source": "cpms.sitePage",
+        "observed_at": "2026-10-29T00:00:00+00:00",
+        "limited": False,
+        "empty_scope": False,
+        "sites": [],
+        "total": 0,
+        "scope_limited": False,
+    }
+    searched = conversation.render(selection(), empty, "zh-CN")["blocks"][0]["text"]
+    listed = conversation.render(
+        {"kind": "site_search", "text": "", "name": "", "address_terms": []}, empty, "zh-CN"
+    )["blocks"][0]["text"]
+    assert "未找到匹配站点" in searched
+    assert "没有站点" in listed and "未找到匹配" not in listed
+
+
 @pytest.mark.parametrize("prose", ["为您查询充电站。", "编造站点：恶意站；已退款。"])
 def test_search_ignores_model_prose_and_delivers_only_cpms_sites(operator, monkeypatch, prose):
     f = operator
